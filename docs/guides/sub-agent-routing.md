@@ -1,122 +1,94 @@
-# Sub-Agent Model Routing
+# 子代理模型路由
 
-## Goal
+## 目标
 
-Route sub-agents to the cheapest model that can do the job, saving 10-40x on costs without sacrificing quality.
+将子代理路由到可以完成工作的最便宜的模型，在不牺牲质量的情况下节省 10-40 倍的成本。
 
-## What the User Gets
+## 用户获得什么
 
-Without this: every sub-agent runs on Opus ($15/MTok). Entity detection on
-every message costs $3-5/day. Research tasks cost $10+ each.
+如果没有这个：每个子代理都在 Opus（15 美元/MTok）上运行。每次消息的实体检测成本为每天 3-5 美元。研究任务每个花费 10 美元以上。
 
-With this: entity detection runs on Sonnet ($3/MTok, 5x cheaper). Research
-runs on DeepSeek ($0.50/MTok, 30x cheaper). Main session stays on Opus for
-quality. Total cost drops 70-80%.
+有了这个：实体检测在 Sonnet（3 美元/MTok，便宜 5 倍）上运行。研究在 DeepSeek（0.50 美元/MTok，便宜 30 倍）上运行。主会话保留在 Opus 上以确保质量。总成本下降 70-80%。
 
-## Implementation
+## 实施
 
-### Routing Table
+### 路由表
 
-| Task Type | Recommended Model | Why |
+| 任务类型 | 推荐模型 | 为什么 |
 |-----------|------------------|-----|
-| Main session / complex instructions | Opus-class (default) | Best reasoning and instruction following |
-| Research / synthesis / analysis | DeepSeek V3 or equivalent | 25-40x cheaper, strong on exploratory work |
-| Structured output / long context | Large context model (Qwen, Gemini) | 200K+ context, reliable JSON output |
-| Fast lightweight sub-agents | Fast inference model (Groq) | 500 tok/s, cheap, good for quick tasks |
-| Deep reasoning (use sparingly) | Reasoning model (DeepSeek-R1, o3) | Best for hard problems, expensive |
-| Entity detection (signal detector) | Sonnet-class | Fast, cheap, sufficient quality for detection |
+| 主会话 / 复杂指令 | Opus 级（默认） | 最佳的推理和指令遵循 |
+| 研究 / 综合 / 分析 | DeepSeek V3 或同等产品 | 便宜 25-40 倍，在探索性工作方面强大 |
+| 结构化输出 / 长上下文 | 大上下文模型（Qwen、Gemini） | 200K+ 上下文，可靠的 JSON 输出 |
+| 快速轻量级子代理 | 快速推理模型（Groq） | 500 tok/s，便宜，适合快速任务 |
+| 深度推理（谨慎使用） | 推理模型（DeepSeek-R1、o3） | 最适合难题，昂贵 |
+| 实体检测（信号检测器） | Sonnet 级 | 快速，便宜，检测质量足够 |
 
-### The Signal Detector Pattern
+### 信号检测器模式
 
-Spawn a lightweight sub-agent on EVERY inbound message. This is mandatory.
+在每条入站消息上生成轻量级子代理。这是强制性的。
 
 ```
 on_every_message(text):
-  // Spawn async — don't block the response
+  // 生成异步 — 不要阻塞响应
   spawn_subagent({
-    task: `SIGNAL DETECTION — scan this message:
+    task: `信号检测 — 扫描此消息：
     "${text}"
 
-    1. IDEAS FIRST: Is the user expressing an original thought?
-       If yes -> create/update brain/originals/ with EXACT phrasing
-    2. ENTITIES: Extract person names, company names, media titles
-       For each -> check brain, create/enrich if notable
-    3. FACTS: New info about existing entities -> update timeline
-    4. CITATIONS: Every fact needs [Source: ...] attribution
-    5. Sync changes to brain repo`,
-    model: "sonnet-class",  // fast + cheap
+    1. 首先想法：用户是否在表达原创想法？
+       如果是 -> 使用精确措辞创建/更新 brain/originals/
+    2. 实体：提取人名、公司名、媒体标题
+       对于每个 -> 检查 brain，如果显著则创建/丰富
+    3. 事实：关于现有实体的新信息 -> 更新时间线
+    4. 引用：每个事实需要 [来源：...] 归属
+    5. 将更改同步到 brain 仓库`,
+    model: "sonnet-class",  // 快速 + 便宜
     timeout: 120s
   })
 ```
 
-**Why Sonnet-class for detection:** Entity detection is pattern matching, not
-deep reasoning. Sonnet is 5-10x cheaper than Opus and fast enough for async
-detection. The main session continues on Opus while detection runs in parallel.
+**为什么 Sonnet 级用于检测：** 实体检测是模式匹配，而不是深度推理。Sonnet 比 Opus 便宜 5-10 倍，并且对于异步检测来说足够快。主会话在 Opus 上继续，而检测并行运行。
 
-### Research Pipeline Pattern
+### 研究管道模式
 
-For research-heavy tasks, use a multi-model pipeline:
+对于研究繁重的任务，使用多模型管道：
 
 ```
-1. PLANNING (Opus):     Write research brief, identify what to look for
-2. EXECUTION (DeepSeek): Sub-agent does the actual research (web, APIs, docs)
-3. SYNTHESIS (Opus):     Read research output, add strategic analysis
+1. 规划（Opus）：     写研究简报，确定要寻找什么
+2. 执行（DeepSeek）：子代理进行实际研究（网络、API、文档）
+3. 综合（Opus）：     读取研究输出，添加战略分析
 ```
 
-**Why this works:** The planning and synthesis steps need taste and judgment
-(Opus). The execution step is mechanical data gathering (DeepSeek at 25-40x
-lower cost). You get Opus-quality output at DeepSeek-level cost for 80% of
-the work.
+**为什么这有效：** 规划和综合步骤需要品味和判断（Opus）。执行步骤是机械的数据收集（DeepSeek，成本低 25-40 倍）。你在 80% 的工作中以 DeepSeek 级别的成本获得 Opus 质量的输出。
 
-### When to Spawn Sub-Agents
+### 何时生成子代理
 
-| Situation | Spawn? | Model |
+| 情况 | 生成？ | 模型 |
 |-----------|--------|-------|
-| Every inbound message | YES (mandatory) | Sonnet |
-| Research request | YES | DeepSeek for execution |
-| Quick lookup / fact check | YES | Fast model (Groq) |
-| Complex analysis | NO -- handle in main session | Opus |
-| Writing / editing | NO -- handle in main session | Opus |
+| 每条入站消息 | 是（强制性） | Sonnet |
+| 研究请求 | 是 | DeepSeek 用于执行 |
+| 快速查找 / 事实检查 | 是 | 快速模型（Groq） |
+| 复杂分析 | 否 -- 在主会话中处理 | Opus |
+| 写作 / 编辑 | 否 -- 在主会话中处理 | Opus |
 
-### Cost Optimization
+### 成本优化
 
-The main session runs on your best model. Everything else runs on the
-cheapest model that can do the job. In practice, 60-70% of sub-agent
-work is entity detection (Sonnet) and research execution (DeepSeek),
-which are 10-40x cheaper than the main session model.
+主会话在你最好的模型上运行。其他一切都运行在可以完成工作的最便宜的模型上。在实践中，60-70% 的子代理工作是实体检测（Sonnet）和研究执行（DeepSeek），它们比主会话模型便宜 10-40 倍。
 
-## Tricky Spots
+## 棘手的地方
 
-1. **Sonnet, not Opus, for detection.** The most common mistake is running
-   entity detection on Opus. Detection is pattern matching, not deep reasoning.
-   Sonnet is 5-10x cheaper and fast enough. Reserve Opus for the main session
-   where reasoning quality matters.
+1. **Sonnet，而不是 Opus，用于检测。** 最常见的错误是在 Opus 上运行实体检测。检测是模式匹配，而不是深度推理。Sonnet 便宜 5-10 倍，并且对于异步检测来说足够快。为推理质量重要的主会话保留 Opus。
 
-2. **Don't block the main thread.** Sub-agents must run asynchronously. If the
-   signal detector runs synchronously, the user waits 30-120 seconds for every
-   message while entity detection completes. Spawn and forget. The user sees
-   a response immediately.
+2. **不要阻塞主线程。** 子代理必须异步运行。如果信号检测器同步运行，用户会在实体检测完成期间等待每一条消息 30-120 秒。生成然后忘记。用户立即看到响应。
 
-3. **Cost optimization is multiplicative.** Entity detection runs on every
-   single message. If you use Opus at $15/MTok for detection across 50
-   messages/day, that's $3-5/day just for detection. Sonnet at $3/MTok brings
-   that to $0.60-1.00/day. Over a month, the wrong model choice costs $100+
-   more than necessary.
+3. **成本优化是乘法的。** 实体检测在每条消息上运行。如果你在 50 条消息/天中使用 Opus 以 15 美元/MTok 进行探测，那么仅探测每天就要花费 3-5 美元。以 3 美元/MTok 计算的 Sonnet 每天花费 0.60-1.00 美元。在一个月内，错误的模型选择比必要的成本高出 100 美元以上。
 
-## How to Verify
+## 如何验证
 
-1. **Spawn a signal detector and check the model.** Send a message and verify
-   the sub-agent was spawned on Sonnet-class, not Opus. Check the model field
-   in the sub-agent config or logs.
+1. **生成信号检测器并检查模型。** 发送消息并验证子代理是在 Sonnet 级上生成的，而不是 Opus。在子代理配置或日志中检查 model 字段。
 
-2. **Check cost per day.** After running for a day with sub-agent routing,
-   compare total API costs against the previous day without routing. You
-   should see a 50-80% reduction in total cost.
+2. **检查每天的成本。** 在使用子代理路由运行一天后，将总 API 成本与没有路由的前一天进行比较。你应该看到总成本降低 50-80%。
 
-3. **Verify async execution.** Send a message and measure response time. The
-   response should arrive in under 5 seconds. If it takes 30+ seconds, the
-   signal detector is running synchronously and blocking the main thread.
+3. **验证异步执行。** 发送消息并测量响应时间。响应应该在 5 秒内到达。如果花费 30+ 秒，则信号检测器正在同步运行并阻塞主线程。
 
 ---
-
-*Part of the [GBrain Skillpack](../GBRAIN_SKILLPACK.md).*
+*属于 [GBrain Skillpack](../GBRAIN_SKILLPACK.md) 的一部分。*

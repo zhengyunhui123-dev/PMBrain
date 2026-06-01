@@ -1,122 +1,121 @@
-# Agents working on GBrain
+# 在 GBrain 上工作的代理
 
-This is your install + operating protocol. Claude Code reads `./CLAUDE.md` automatically.
-Everyone else (Codex, Cursor, OpenClaw, Aider, Continue, or an LLM fetching via URL):
-start here.
+这是你的安装 + 操作协议。Claude Code 会自动读取 `./CLAUDE.md`。
+其他所有人（Codex、Cursor、OpenClaw、Aider、Continue，或通过 URL 获取的 LLM）：
+从这里开始。
 
-## Install (5 min)
+## 安装（5 分钟）
 
-1. Install gbrain via Bun (the canonical path):
+1. 通过 Bun 安装 gbrain（规范路径）：
    ```bash
    curl -fsSL https://bun.sh/install | bash
    export PATH="$HOME/.bun/bin:$PATH"
    bun install -g github:garrytan/gbrain
    ```
-   If `bun install -g` aborts or `gbrain doctor` reports `schema_version: 0`,
-   the CLI prints a recovery hint pointing at [#218](https://github.com/garrytan/gbrain/issues/218).
-   Run `gbrain apply-migrations --yes` to recover, or fall back to the
-   deterministic install: `git clone https://github.com/garrytan/gbrain.git ~/gbrain && cd ~/gbrain && bun install && bun link`.
-2. Init the brain: `gbrain init` (defaults to PGLite, zero-config). For 1000+ files or
-   multi-machine sync, init suggests Postgres + pgvector via Supabase.
-3. **STOP — ask the user about search mode.** `gbrain init` auto-applied a
-   default but printed a 9-cell cost matrix (mode × downstream model)
-   preceded by `[AGENT]` markers. You MUST relay the matrix to the operator
-   and confirm their choice before continuing. Cost spread between corners
-   is 25x — silent acceptance is the wrong default. See
-   [`./INSTALL_FOR_AGENTS.md`](./INSTALL_FOR_AGENTS.md) Step 3.5 for the
-   exact ask-the-user protocol. Same banner fires on `gbrain post-upgrade`
-   for existing users (search modes were added in v0.32.3).
-4. Read [`./INSTALL_FOR_AGENTS.md`](./INSTALL_FOR_AGENTS.md) for the full 9-step flow
-   (API keys, identity, cron, verification).
+   如果 `bun install -g` 中止或 `gbrain doctor` 报告 `schema_version: 0`，
+   CLI 会打印指向 [#218](https://github.com/garrytan/gbrain/issues/218) 的恢复提示。
+   运行 `gbrain apply-migrations --yes` 来恢复，或者回退到
+   确定性安装：`git clone https://github.com/garrytan/gbrain.git ~/gbrain && cd ~/gbrain && bun install && bun link`。
+2. 初始化大脑：`gbrain init`（默认为 PGLite，零配置）。对于 1000+ 文件或
+   多机器同步，init 会通过 Supabase 建议 Postgres + pgvector。
+3. **停止 — 询问用户搜索模式。** `gbrain init` 自动应用了
+   默认值，但打印了一个 9 单元格成本矩阵（模式 × 下游模型），
+   前面有 `[AGENT]` 标记。你必须将矩阵传达给操作员，
+   并在继续之前确认他们的选择。角点之间的成本差异是 25 倍 —
+   静默接受是错误的默认行为。参见
+   [`./INSTALL_FOR_AGENTS.md`](./INSTALL_FOR_AGENTS.md) 步骤 3.5 了解
+   确切的询问用户协议。现有用户在 `gbrain post-upgrade` 时也会看到相同的横幅
+   （搜索模式是在 v0.32.3 中添加的）。
+4. 阅读 [`./INSTALL_FOR_AGENTS.md`](./INSTALL_FOR_AGENTS.md) 了解完整的 9 步流程
+   （API 密钥、身份、cron、验证）。
 
-## Read this order
+## 阅读顺序
 
-1. `./AGENTS.md` (this file) — install + operating protocol.
-2. [`./CLAUDE.md`](./CLAUDE.md) — architecture reference, key files, trust boundaries,
-   test layout.
+1. `./AGENTS.md`（本文件）— 安装 + 操作协议。
+2. [`./CLAUDE.md`](./CLAUDE.md) — 架构参考、关键文件、信任边界、
+   测试布局。
 3. [`./docs/architecture/brains-and-sources.md`](./docs/architecture/brains-and-sources.md)
-   — the two-axis mental model (brain = which DB, source = which repo in the DB). Every
-   query routes on both axes. Read before writing anything that touches brain ops.
+   — 双轴思维模型（brain = 哪个数据库，source = 数据库中的哪个仓库）。每个
+   查询都在两个轴上路由。在编写任何涉及 brain 操作的代码之前阅读。
 4. [`./skills/conventions/brain-routing.md`](./skills/conventions/brain-routing.md) —
-   agent-facing decision table: when to switch brain, when to switch source, how
-   cross-brain federation works (latent-space only; the agent decides).
-5. [`./skills/RESOLVER.md`](./skills/RESOLVER.md) — skill dispatcher. Read before any task.
+   面向代理的决策表：何时切换 brain，何时切换 source，如何
+   实现跨 brain 联邦（仅潜在空间；由代理决定）。
+5. [`./skills/RESOLVER.md`](./skills/RESOLVER.md) — skill 调度器。在任何任务之前阅读。
 
-## Trust boundary (critical)
+## 信任边界（关键）
 
-GBrain distinguishes **trusted local CLI callers** (`OperationContext.remote = false`,
-set by `src/cli.ts`) from **untrusted agent-facing callers** (`remote = true`, set by
-`src/mcp/server.ts`). Security-sensitive operations like `file_upload` tighten filesystem
-confinement when `remote = true` and default to strict behavior when unset. If you are
-writing or reviewing an operation, consult `src/core/operations.ts` for the contract.
+GBrain 区分**可信本地 CLI 调用者**（`OperationContext.remote = false`，
+由 `src/cli.ts` 设置）和**不可信的面向代理的调用者**（`remote = true`，由
+`src/mcp/server.ts` 设置）。当 `remote = true` 时，安全敏感操作（如 `file_upload`）会
+加强文件系统限制，当未设置时默认为严格行为。如果你
+正在编写或审查操作，请查阅 `src/core/operations.ts` 了解契约。
 
-## Common tasks
+## 常见任务
 
-- **Configure:** [`docs/ENGINES.md`](./docs/ENGINES.md),
+- **配置：** [`docs/ENGINES.md`](./docs/ENGINES.md),
   [`docs/guides/live-sync.md`](./docs/guides/live-sync.md),
   [`docs/mcp/DEPLOY.md`](./docs/mcp/DEPLOY.md).
-- **Debug:** [`docs/GBRAIN_VERIFY.md`](./docs/GBRAIN_VERIFY.md),
+- **调试：** [`docs/GBRAIN_VERIFY.md`](./docs/GBRAIN_VERIFY.md),
   [`docs/guides/minions-fix.md`](./docs/guides/minions-fix.md), `gbrain doctor --fix`.
-- **Migrate / upgrade:** `gbrain upgrade` (binary self-update + schema migrations + post-upgrade prompts),
+- **迁移 / 升级：** `gbrain upgrade`（二进制自更新 + 模式迁移 + 升级后提示），
   [`docs/UPGRADING_DOWNSTREAM_AGENTS.md`](./docs/UPGRADING_DOWNSTREAM_AGENTS.md),
-  [`skills/migrations/`](./skills/migrations/), `gbrain apply-migrations --yes` (manual schema-only).
-- **Eval retrieval changes:** capture is off by default. To benchmark a
-  retrieval change against real captured queries, set
-  `GBRAIN_CONTRIBUTOR_MODE=1`, then `gbrain eval export --since 7d > base.ndjson`
-  and `gbrain eval replay --against base.ndjson`. For public benchmark
-  coverage (LongMemEval, ground-truth scoring), `gbrain eval longmemeval
-  <dataset.jsonl>` (v0.28.8) runs against an isolated in-memory PGLite
-  per question — your `~/.gbrain` is never opened. Full guide:
+  [`skills/migrations/`](./skills/migrations/), `gbrain apply-migrations --yes`（手动仅模式）。
+- **评估检索变更：** 捕获默认关闭。要根据真实捕获的查询基准测试
+  检索变更，请设置
+  `GBRAIN_CONTRIBUTOR_MODE=1`，然后 `gbrain eval export --since 7d > base.ndjson`
+  和 `gbrain eval replay --against base.ndjson`。对于公共基准测试
+  覆盖（LongMemEval、ground-truth 评分），`gbrain eval longmemeval
+  <dataset.jsonl>`（v0.28.8）针对每个问题在隔离的内存 PGLite 中运行 —
+  你的 `~/.gbrain` 永远不会被打开。完整指南：
   [`docs/eval-bench.md`](./docs/eval-bench.md).
-- **Drive the brain to a target health score (v0.36.4.0):** the one-command
-  loop. `gbrain doctor --remediation-plan --json` previews what would be
-  fixed; `gbrain doctor --remediate --yes --target-score 90 --max-usd 5`
-  walks a dependency-ordered plan (sync before extract, embed after
-  consolidate), re-checking score between every step, refusing to spend
-  past the cost cap. Empty brains (no entity pages) or unconfigured embedding
-  keys hit a `max_reachable_score` ceiling and bail with what's missing.
-  Three phase handlers (synthesize / patterns / consolidate) are
-  PROTECTED — only trusted local callers can submit them; MCP cannot.
-  Reference: [`docs/architecture/topologies.md`](./docs/architecture/topologies.md)
-  and the CHANGELOG entry for v0.36.4.0.
-- **Track a founder/company over time (v0.35.7):** when an entity has
-  typed metric claims in its `## Facts` fence (`metric: mrr`, `value: 50000`,
-  `unit: USD`, `period: monthly` columns), run
-  `gbrain eval trajectory <entity-slug>` for the chronological history
-  with regressions auto-flagged, or `gbrain founder scorecard <entity-slug>`
-  for a four-signal JSON rollup (claim_accuracy / consistency /
-  growth_trajectory / red_flags). MCP op `find_trajectory` exposes the
-  same data — read scope, visibility-filtered for remote callers. **v0.40.2.0:**
-  `gbrain think` now uses this substrate automatically on temporal /
-  knowledge_update intent (default ON; flip `think.trajectory_enabled=false`
-  to opt out). Migration v82 added `facts.event_type` so non-metric event
-  rows (`meeting`, `job_change`, `location_change`) ride through the same
-  pipeline; pass `kind: 'event'` or `'all'` to `find_trajectory` to query
-  them.
-- **Everything else:** [`./llms.txt`](./llms.txt) is the full documentation map.
-  [`./llms-full.txt`](./llms-full.txt) is the same map with core docs inlined for
-  single-fetch ingestion.
+- **将大脑驱动到目标健康分数 (v0.36.4.0)：** 单命令
+  循环。`gbrain doctor --remediation-plan --json` 预览将要
+  修复的内容；`gbrain doctor --remediate --yes --target-score 90 --max-usd 5`
+  执行依赖有序的计划（同步 before 提取，嵌入 after
+  合并），在每个步骤之间重新检查分数，拒绝花费
+  超过成本上限。空大脑（无实体页面）或未配置的嵌入
+  密钥达到 `max_reachable_score` 上限并因缺少的内容而退出。
+  三个阶段处理程序（synthesize / patterns / consolidate）是
+  受保护的 — 只有可信的本地调用者可以提交它们；MCP 不能。
+  参考：[`docs/architecture/topologies.md`](./docs/architecture/topologies.md)
+  和 v0.36.4.0 的 CHANGELOG 条目。
+- **随时间跟踪创始人/公司 (v0.35.7)：** 当实体在
+  其 `## Facts` 围栏中具有类型化指标声明（`metric: mrr`, `value: 50000`,
+  `unit: USD`, `period: monthly` 列），运行
+  `gbrain eval trajectory <entity-slug>` 获取按时间顺序的历史记录，
+  自动标记回归，或 `gbrain founder scorecard <entity-slug>`
+  获取四信号 JSON 汇总（claim_accuracy / consistency /
+  growth_trajectory / red_flags）。MCP 操作 `find_trajectory` 暴露了
+  相同的数据 — 读取范围，对远程调用者进行可见性过滤。**v0.40.2.0：**
+  `gbrain think` 现在在 temporal /
+  knowledge_update 意图上自动使用此基底（默认开启；翻转 `think.trajectory_enabled=false`
+  以退出）。迁移 v82 添加了 `facts.event_type`，因此非指标事件
+  行（`meeting`、`job_change`、`location_change`）通过相同的
+  管道传输；将 `kind: 'event'` 或 `'all'` 传递给 `find_trajectory` 以查询
+  它们。
+- **其他所有内容：** [`./llms.txt`](./llms.txt) 是完整的文档地图。
+  [`./llms-full.txt`](./llms-full.txt) 是相同的地图，核心文档内联用于
+  单次获取摄取。
 
-## Before shipping
+## 发布前
 
-Easiest path: `bun run ci:local` runs the full CI gate inside Docker (gitleaks,
-unit tests with `DATABASE_URL` unset, then all 29 E2E files sequentially against a
-fresh pgvector container) and tears down. Use `bun run ci:local:diff` for the
-diff-aware subset during fast iteration on a focused branch. Requires Docker
-(Docker Desktop / OrbStack / Colima) and `gitleaks` (`brew install gitleaks`).
+最简单的方法：`bun run ci:local` 在 Docker 内运行完整的 CI 门禁（gitleaks、
+未设置 `DATABASE_URL` 的单元测试，然后针对新的 pgvector 容器按顺序运行所有 29 个 E2E 文件）并拆除。在专注于某个分支的快速迭代期间，使用 `bun run ci:local:diff` 获取
+感知差异的子集。需要 Docker
+（Docker Desktop / OrbStack / Colima）和 `gitleaks`（`brew install gitleaks`）。
 
-Manual path: `bun test` plus the E2E lifecycle described in `./CLAUDE.md` (spin
-up the test Postgres container, run `bun run test:e2e`, tear it down).
+手动路径：`bun test` 加上 `./CLAUDE.md` 中描述的 E2E 生命周期（启动
+测试 Postgres 容器，运行 `bun run test:e2e`，拆除它）。
 
-Ship via the `/ship` skill, not by hand.
+通过 `/ship` skill 发布，不要手动发布。
 
-## Privacy
+## 隐私
 
-Never commit real names of people, companies, or funds into public artifacts. See the
-Privacy rule in `./CLAUDE.md`. GBrain pages reference real contacts; public docs must
-use generic placeholders (`alice-example`, `acme-example`, `fund-a`).
+永远不要将人员、公司或基金会的真实姓名提交到公共制品中。请参阅
+`./CLAUDE.md` 中的隐私规则。GBrain 页面引用真实联系人；公共文档必须
+使用通用占位符（`alice-example`、`acme-example`、`fund-a`）。
 
-## Forks
+## 分支
 
-If you are a fork, regenerate `llms.txt` + `llms-full.txt` with your own URL base before
-publishing: `LLMS_REPO_BASE=https://raw.githubusercontent.com/your-org/your-fork/main bun run build:llms`.
+如果你是分支版本，在发布前使用你自己的 URL 基础重新生成 `llms.txt` + `llms-full.txt`：
+`LLMS_REPO_BASE=https://raw.githubusercontent.com/your-org/your-fork/main bun run build:llms`。

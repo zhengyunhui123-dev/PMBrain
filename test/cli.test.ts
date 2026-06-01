@@ -104,7 +104,7 @@ describe('CLI dispatch integration', () => {
     });
     const stderr = await new Response(proc.stderr).text();
     const exitCode = await proc.exited;
-    expect(stderr).toContain('Unknown command: notacommand');
+    expect(stderr).toContain('未知命令：notacommand');
     expect(exitCode).toBe(1);
   });
 
@@ -116,7 +116,7 @@ describe('CLI dispatch integration', () => {
     });
     const stdout = await new Response(proc.stdout).text();
     const exitCode = await proc.exited;
-    expect(stdout).toContain('Usage: gbrain get');
+    expect(stdout).toContain('用法：gbrain get');
     expect(exitCode).toBe(0);
   });
 
@@ -128,7 +128,7 @@ describe('CLI dispatch integration', () => {
     });
     const stdout = await new Response(proc.stdout).text();
     const exitCode = await proc.exited;
-    expect(stdout).toContain('Usage: gbrain upgrade');
+    expect(stdout).toContain('用法：gbrain upgrade');
     expect(exitCode).toBe(0);
   });
 
@@ -149,7 +149,7 @@ describe('CLI dispatch integration', () => {
       const stdout = await new Response(proc.stdout).text();
       const stderr = await new Response(proc.stderr).text();
       const exitCode = await proc.exited;
-      expect(stdout).toContain('Usage: gbrain sync');
+      expect(stdout).toContain('用法：gbrain sync');
       // D.4 regression: the user-visible flag that the bug report wanted
       // surfaced. Pre-v0.37 this string was unreachable.
       expect(stdout).toContain('--no-embed');
@@ -175,7 +175,7 @@ describe('CLI dispatch integration', () => {
       const stdout = await new Response(proc.stdout).text();
       const stderr = await new Response(proc.stderr).text();
       const exitCode = await proc.exited;
-      expect(stdout).toContain('Usage: gbrain doctor');
+      expect(stdout).toContain('用法：gbrain doctor');
       expect(stdout).not.toContain('resolver_health');
       expect(stderr).not.toContain('No brain configured');
       expect(exitCode).toBe(0);
@@ -195,7 +195,7 @@ describe('CLI dispatch integration', () => {
       });
       const stdout = await new Response(proc.stdout).text();
       const exitCode = await proc.exited;
-      expect(stdout).toContain('Usage: gbrain init');
+      expect(stdout).toContain('用法');
       expect(existsSync(join(home, '.gbrain', 'config.json'))).toBe(false);
       expect(exitCode).toBe(0);
     } finally {
@@ -211,8 +211,8 @@ describe('CLI dispatch integration', () => {
     });
     const stdout = await new Response(proc.stdout).text();
     const exitCode = await proc.exited;
-    expect(stdout).toContain('USAGE');
-    expect(stdout).toContain('gbrain <command>');
+    expect(stdout).toContain('用法');
+    expect(stdout).toContain('gbrain <命令>');
     expect(exitCode).toBe(0);
   });
 

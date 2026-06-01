@@ -2,25 +2,25 @@
 id: calendar-to-brain
 name: Calendar-to-Brain
 version: 0.7.0
-description: Google Calendar events become searchable brain pages. Daily files with attendees, locations, and meeting prep context.
+description: Google Calendar 事件变为可搜索的大脑页面。每日文件包含与会者、地点和会议准备上下文。
 category: sense
 requires: [credential-gateway]
 secrets:
   - name: CLAWVISOR_URL
-    description: ClawVisor gateway URL (Option A — recommended, handles OAuth for you)
-    where: https://clawvisor.com — create an agent, activate Google Calendar service
+    description: ClawVisor 网关 URL（选项 A — 推荐，为您处理 OAuth）
+    where: https://clawvisor.com — 创建一个代理，激活 Google Calendar 服务
   - name: CLAWVISOR_AGENT_TOKEN
-    description: ClawVisor agent token (Option A)
-    where: https://clawvisor.com — agent settings, copy the agent token
+    description: ClawVisor 代理令牌（选项 A）
+    where: https://clawvisor.com — 代理设置，复制代理令牌
   - name: GOOGLE_CLIENT_ID
-    description: Google OAuth2 client ID (Option B — direct API access, you manage tokens)
-    where: https://console.cloud.google.com/apis/credentials — create OAuth 2.0 Client ID
+    description: Google OAuth2 客户端 ID（选项 B — 直接 API 访问，您管理令牌）
+    where: https://console.cloud.google.com/apis/credentials — 创建 OAuth 2.0 客户端 ID
   - name: GOOGLE_CLIENT_SECRET
-    description: Google OAuth2 client secret (Option B)
-    where: https://console.cloud.google.com/apis/credentials — same page as client ID
+    description: Google OAuth2 客户端密钥（选项 B）
+    where: https://console.cloud.google.com/apis/credentials — 与客户端 ID 同一页面
 health_checks:
   - type: any_of
-    label: "Auth provider"
+    label: "认证提供者"
     checks:
       - type: http
         url: "$CLAWVISOR_URL/health"
@@ -29,276 +29,274 @@ health_checks:
         name: GOOGLE_CLIENT_ID
         label: "Google OAuth"
 setup_time: 20 min
-cost_estimate: "$0 (both options are free)"
+cost_estimate: "$0（两个选项都是免费的）"
 ---
 
-# Calendar-to-Brain: Your Schedule Becomes Searchable Memory
+# Calendar-to-Brain：您的日程表变为可搜索的记忆
 
-Every calendar event becomes a searchable brain page. Your agent knows who you're
-meeting tomorrow, what you discussed last time, and what context matters. Meeting
-prep happens automatically because the brain already has the history.
+每个日历事件都变为可搜索的大脑页面。您的代理知道您明天与谁会面、上次讨论了什么以及什么上下文很重要。会议准备自动进行，因为大脑已经有了历史记录。
 
-## IMPORTANT: Instructions for the Agent
+## 重要：给代理的说明
 
-**You are the installer.** Follow these steps precisely.
+**您是安装程序。** 请精确按照这些步骤操作。
 
-**Why this matters:** Calendar data is the richest source of relationship history.
-13 years of calendar data tells you who you've met with, how often, where, and
-with whom. When someone emails you, the brain already knows your meeting history.
-When you have a meeting tomorrow, the agent pulls attendee dossiers automatically.
+**为什么这很重要：** 日历数据是关系历史最丰富的来源。
+13 年的日历数据告诉您与谁会面、频率如何、在哪里以及和谁一起。
+当有人给您发电子邮件时，大脑已经知道您的会面历史。
+当您明天有会议时，代理会自动提取与会者档案。
 
-**The output is daily markdown files:** One file per day at
-`brain/daily/calendar/{YYYY}/{YYYY-MM-DD}.md` with all events, attendees, and
-locations. These files are the foundation for meeting prep, relationship tracking,
-and pattern detection.
+**输出是每日 markdown 文件：** 每天一个文件，位于
+`brain/daily/calendar/{YYYY}/{YYYY-MM-DD}.md`，包含所有事件、与会者和
+地点。这些文件是会议准备、关系跟踪和
+模式检测的基础。
 
-**Do not skip steps. Verify after each step.**
+**不要跳过步骤。在每个步骤后验证。**
 
-## Architecture
+## 架构
 
 ```
-Google Calendar (multiple accounts)
-  ↓ (ClawVisor credential gateway, paginated)
-Calendar Sync Script (deterministic Node.js)
-  ↓ Outputs:
-  ├── brain/daily/calendar/{YYYY}/{YYYY-MM-DD}.md   (daily event files)
-  ├── brain/daily/calendar/.raw/events-{range}.json  (raw API responses)
-  └── brain/daily/calendar/INDEX.md                  (date ranges + monthly summary)
+Google Calendar（多个账户）
+  ↓（ClawVisor 凭证网关，分页）
+Calendar Sync Script（确定性 Node.js）
+  ↓ 输出：
+  ├── brain/daily/calendar/{YYYY}/{YYYY-MM-DD}.md   （每日事件文件）
+  ├── brain/daily/calendar/.raw/events-{range}.json  （原始 API 响应）
+  └── brain/daily/calendar/INDEX.md                  （日期范围 + 月度摘要）
   ↓
-Agent reads daily files
-  ↓ Judgment calls:
-  ├── Attendee enrichment (create/update brain pages for people)
-  ├── Meeting prep (pull context before tomorrow's meetings)
-  └── Pattern detection (meeting frequency, relationship temperature)
+Agent 读取每日文件
+  ↓ 判断调用：
+  ├── 与会者丰富（为人员创建/更新大脑页面）
+  ├── 会议准备（在明天的会议之前提取上下文）
+  └── 模式检测（会议频率、关系温度）
 ```
 
-## Opinionated Defaults
+## 固执己见的默认设置
 
-**Multiple calendar accounts:**
-- Work calendar (company domain)
-- Personal calendar (gmail.com)
-- Previous company calendars (if still accessible)
+**多个日历账户：**
+- 工作日历（公司域名）
+- 个人日历（gmail.com）
+- 以前的公司日历（如果仍可访问）
 
-**Daily file format:**
+**每日文件格式：**
 ```markdown
-# 2026-04-10 (Thursday)
+# 2026-04-10（星期四）
 
-- 09:00-09:30 **Team standup** (Work) — with Alice, Bob, Carol
-- 10:00-11:00 **Board meeting** (Work) 📍 Office — with Diana, Eduardo, Fiona
-- 12:00-13:00 **Lunch with Pedro** (Personal) 📍 Chez Panisse — with Pedro Franceschi
-- 14:00-14:30 **1:1 with Jordan** (Work) — with Jordan Lee
+- 09:00-09:30 **团队站会**（工作）— 与 Alice、Bob、Carol
+- 10:00-11:00 **董事会会议**（工作）📍 办公室 — 与 Diana、Eduardo、Fiona
+- 12:00-13:00 **与 Pedro 共进午餐**（个人）📍 Chez Panisse — 与 Pedro Franceschi
+- 14:00-14:30 **与 Jordan 的 1:1**（工作）— 与 Jordan Lee
 ```
 
-All-day events listed first. Timed events sorted by start time.
-Cancelled events are skipped. Attendee names extracted (no email addresses in output).
-Calendar label in parentheses. Location with 📍 emoji.
+全天的事件首先列出。定时事件按开始时间排序。
+取消的事件被跳过。提取与会者姓名（输出中无电子邮件地址）。
+括号内的日历标签。带有 📍 emoji 的地点。
 
-**Historical backfill:** Sync years of calendar data, not just recent. Common ranges:
-- Work: 2020-present
-- Personal: 2014-present
-This builds the full relationship graph from day one.
+**历史回填：** 同步多年的日历数据，而不仅仅是最近的。
+常见范围：
+- 工作：2020 年至今
+- 个人：2014 年至今
+这从第一天开始就建立了完整的关系图。
 
-## Prerequisites
+## 先决条件
 
-1. **GBrain installed and configured** (`gbrain doctor` passes)
-2. **Node.js 18+** (for the sync script)
-3. **Google Calendar access** via ONE of:
-   - **Option A: ClawVisor** (recommended, handles OAuth for you, no token management)
-   - **Option B: Google OAuth2 directly** (you manage tokens, no extra service needed)
+1. **GBrain 已安装并配置**（`gbrain doctor` 通过）
+2. **Node.js 18+**（用于同步脚本）
+3. **通过以下之一访问 Google Calendar：**
+   - **选项 A：ClawVisor**（推荐，处理 OAuth，无令牌管理）
+   - **选项 B：Google OAuth2 直接**（您管理令牌，无需额外服务）
 
-## Setup Flow
+## 设置流程
 
-### Step 1: Choose and Configure Calendar Access
+### 步骤 1：选择并配置日历访问
 
-Ask the user: "How do you want to connect to Google Calendar?
+询问用户："您想如何连接到 Google Calendar？"
 
-**Option A: ClawVisor (recommended)**
-ClawVisor handles OAuth, token refresh, and encryption. You never touch Google
-credentials directly. If you already use ClawVisor for email, this uses the same setup.
+**选项 A：ClawVisor（推荐）**
+ClawVisor 处理 OAuth、令牌刷新和加密。您永远不会直接接触 Google
+凭证。如果您已经将 ClawVisor 用于电子邮件，则使用相同的设置。
 
-**Option B: Google OAuth2 directly**
-Connect to Google Calendar API directly. No extra service needed, but you manage
-OAuth tokens yourself. Good if you don't want another dependency."
+**选项 B：Google OAuth2 直接**
+直接连接到 Google Calendar API。无需额外服务，但您自己管理
+OAuth 令牌。如果您不想要另一个依赖项，这很好。"
 
-#### Option A: ClawVisor Setup
+#### 选项 A：ClawVisor 设置
 
-Tell the user:
-"I need your ClawVisor URL and agent token.
-1. Go to https://clawvisor.com
-2. Create an agent (or use existing)
-3. Activate the **Google Calendar** service
-4. Create a standing task with purpose: 'Full calendar access for historical
-   backfill and ongoing sync. List events, read event details, search across
-   all calendars.'
-   IMPORTANT: Be EXPANSIVE in the task purpose. Narrow purposes block requests.
-5. Copy the gateway URL and agent token"
+告诉用户：
+"我需要您的 ClawVisor URL 和代理令牌。
+1. 转到 https://clawvisor.com
+2. 创建一个代理（或使用现有的）
+3. 激活 **Google Calendar** 服务
+4. 创建一个常设任务，目的为：'完全访问日历以进行历史
+   回填和持续同步。列出事件、读取事件详细信息、搜索
+   所有日历。'
+   重要提示：任务目的要**宽泛**。狭窄的目的会阻止请求。
+5. 复制网关 URL 和代理令牌"
 
-Validate:
+验证：
 ```bash
-curl -sf "$CLAWVISOR_URL/health" && echo "PASS: ClawVisor reachable" || echo "FAIL"
+curl -sf "$CLAWVISOR_URL/health" && echo "通过：ClawVisor 可达" || echo "失败"
 ```
 
-**STOP until ClawVisor validates.**
+**停止直到 ClawVisor 验证通过。**
 
-#### Option B: Google OAuth2 Setup
+#### 选项 B：Google OAuth2 设置
 
-Tell the user:
-"I need Google OAuth2 credentials. Here's exactly how to set them up:
+告诉用户：
+"我需要 Google OAuth2 凭证。具体操作如下：
 
-1. Go to https://console.cloud.google.com/apis/credentials
-   (create a Google Cloud project if you don't have one)
-2. Click **'+ CREATE CREDENTIALS'** at the top, select **'OAuth client ID'**
-3. If prompted, configure the OAuth consent screen first:
-   - User type: **External** (or Internal if you have Google Workspace)
-   - App name: anything (e.g., 'GBrain Calendar')
-   - Scopes: add **'Google Calendar API .../auth/calendar.readonly'**
-   - Test users: add your own email
-4. Back on Credentials, create the OAuth client ID:
-   - Application type: **Desktop app**
-   - Name: anything (e.g., 'GBrain')
-5. Click **'Create'**. You'll see the Client ID and Client Secret.
-6. Copy both and paste them to me.
+1. 转到 https://console.cloud.google.com/apis/credentials
+   （如果您没有 Google Cloud 项目，请创建一个）
+2. 点击顶部的 **'+ CREATE CREDENTIALS'**，选择 **'OAuth client ID'**
+3. 如果提示，首先配置 OAuth 同意屏幕：
+   - 用户类型：**外部**（或者如果您有 Google Workspace，则选择内部）
+   - 应用名称：任意（例如，'GBrain Calendar'）
+   - 范围：添加 **'Google Calendar API .../auth/calendar.readonly'**
+   - 测试用户：添加您自己的电子邮件
+4. 返回凭据，创建 OAuth 客户端 ID：
+   - 应用程序类型：**桌面应用**
+   - 名称：任意（例如，'GBrain'）
+5. 点击 **'创建'**。您将看到客户端 ID 和客户端密钥。
+6. 复制两者并粘贴给我。
 
-Also enable the Calendar API:
-7. Go to https://console.cloud.google.com/apis/library/calendar-json.googleapis.com
-8. Click **'Enable'**"
+同时启用 Calendar API：
+7. 转到 https://console.cloud.google.com/apis/library/calendar-json.googleapis.com
+8. 点击 **'启用'**"
 
-Validate the credentials are set:
+验证凭证已设置：
 ```bash
 [ -n "$GOOGLE_CLIENT_ID" ] && [ -n "$GOOGLE_CLIENT_SECRET" ] \
-  && echo "PASS: Google OAuth credentials set" \
-  || echo "FAIL: Missing GOOGLE_CLIENT_ID or GOOGLE_CLIENT_SECRET"
+  && echo "通过：Google OAuth 凭证已设置" \
+  || echo "失败：缺少 GOOGLE_CLIENT_ID 或 GOOGLE_CLIENT_SECRET"
 ```
 
-Then run the OAuth flow to get an access token:
+然后运行 OAuth 流程以获取访问令牌：
 ```bash
-# The sync script should handle the OAuth flow:
-# 1. Open browser to Google auth URL with calendar.readonly scope
-# 2. User grants access
-# 3. Script receives auth code, exchanges for access + refresh token
-# 4. Stores tokens in ~/.gbrain/google-tokens.json
-# 5. Auto-refreshes on expiry
+# 同步脚本应处理 OAuth 流程：
+# 1. 打开浏览器到具有 calendar.readonly 范围的 Google 授权 URL
+# 2. 用户授予访问权限
+# 3. 脚本接收授权代码，交换为访问 + 刷新令牌
+# 4. 将令牌存储在 ~/.gbrain/google-tokens.json 中
+# 5. 到期时自动刷新
 ```
 
-**STOP until OAuth flow completes and tokens are stored.**
+**停止直到 OAuth 流程完成并且令牌已存储。**
 
-### Step 2: Identify Calendar Accounts
+### 步骤 2：识别日历账户
 
-Ask the user: "Which Google Calendar accounts should I sync? Common setup:
-- Work email (e.g., you@company.com)
-- Personal email (e.g., you@gmail.com)
-- Any previous company emails with calendar history"
+询问用户："我应该同步哪些 Google Calendar 账户？常见设置：
+- 工作电子邮件（例如，you@company.com）
+- 个人电子邮件（例如，you@gmail.com）
+- 任何具有日历历史记录的以前的公司电子邮件"
 
-For each account, note:
-- Email address
-- Start year (how far back to sync)
-- Label (Work, Personal, etc.)
+对于每个账户，注意：
+- 电子邮件地址
+- 起始年份（回溯同步多远）
+- 标签（工作、个人等）
 
-### Step 3: Set Up the Calendar Sync Script
+### 步骤 3：设置日历同步脚本
 
-Create the sync directory:
+创建同步目录：
 ```bash
 mkdir -p calendar-sync
 cd calendar-sync
 npm init -y
 ```
 
-The sync script needs these capabilities:
+同步脚本需要这些功能：
 
-1. **Paginated event retrieval** — Google Calendar API returns max 50 events per
-   request. The script must paginate through large date ranges. Use monthly chunks
-   for sparse periods, weekly for dense ones.
-2. **Daily markdown generation** — group events by date, format as markdown with
-   times, attendees, locations, calendar labels
-3. **Merge with existing files** — if a daily file already has manual notes, preserve
-   them when updating calendar data
-4. **Index generation** — create INDEX.md with date ranges, event counts, monthly summary
-5. **Raw JSON preservation** — save raw API responses to `.raw/` for provenance
+1. **分页事件检索** —— Google Calendar API 每个请求最多返回 50 个事件。
+   脚本必须通过大日期范围进行分页。对稀疏期使用每月块，
+   对密集期使用每周块。
+2. **每日 markdown 生成** —— 按日期对事件进行分组，格式化为带有
+   时间、与会者、地点、日历标签的 markdown
+3. **与现有文件合并** —— 如果每日文件已有手动笔记，请在更新日历数据时保留它们
+4. **索引生成** —— 创建 INDEX.md，包含日期范围、事件计数、月度摘要
+5. **原始 JSON 保存** —— 将原始 API 响应保存到 `.raw/` 以用于来源
 
-### Step 4: Run Historical Backfill
+### 步骤 4：运行历史回填
 
-This is the big initial sync. It may take 10-30 minutes depending on how many
-years of calendar data you have.
+这是大型初始同步。根据您拥有多少
+年的日历数据，可能需要 10-30 分钟。
 
 ```bash
 node calendar-sync.mjs --start 2020-01-01 --end $(date +%Y-%m-%d)
 ```
 
-Tell the user: "Syncing calendar history from [start year]. This creates one
-markdown file per day. For 4 years of data, expect ~1,400 daily files."
+告诉用户："从 [起始年份] 同步日历历史。这将为每天创建一个
+markdown 文件。对于 4 年的数据，预计约有 1,400 个每日文件。"
 
-Verify:
+验证：
 ```bash
 ls brain/daily/calendar/2026/ | head -10
 ```
 
-Should show daily files like `2026-04-01.md`, `2026-04-02.md`, etc.
+应显示每日文件，如 `2026-04-01.md`、`2026-04-02.md` 等。
 
-### Step 5: Import Calendar Data to GBrain
+### 步骤 5：将日历数据导入 GBrain
 
 ```bash
 gbrain import brain/daily/calendar/ --no-embed
 gbrain embed --stale
 ```
 
-Verify:
+验证：
 ```bash
 gbrain search "meeting" --limit 3
 ```
 
-Should return calendar pages with event details.
+应返回带有事件详细信息的日历页面。
 
-### Step 6: Attendee Enrichment
+### 步骤 6：与会者丰富
 
-This is YOUR job (the agent). For each person who appears in calendar events:
+这是**您的工作**（代理）。对于日历事件中出现的每个人：
 
-1. **Check brain**: `gbrain search "attendee name"` — do they have a page?
-2. **Create page if missing**: notable attendees (appears 3+ times) get a brain page
-3. **Update existing pages**: add meeting history to timeline:
-   `- YYYY-MM-DD | Meeting: {event title} [Source: Google Calendar]`
-4. **Relationship tracking**: note meeting frequency in compiled truth:
-   "Met 12 times in last 6 months. Regular 1:1 cadence."
+1. **检查大脑**：`gbrain search "attendee name"` —— 他们有页面吗？
+2. **如果缺失则创建页面**：显着与会者（出现 3+ 次）获得大脑页面
+3. **更新现有页面**：将会议历史添加到时间线：
+   `- YYYY-MM-DD | 会议：{事件标题} [来源：Google Calendar]`
+4. **关系跟踪**：在编译的真相中注意会议频率：
+   "在过去 6 个月中会面 12 次。定期 1:1 节奏。"
 
-### Step 7: Set Up Weekly Sync
+### 步骤 7：设置每周同步
 
-The calendar should sync weekly to stay current:
+日历应每周同步以保持最新：
 ```bash
-# Cron: every Sunday at 10 AM
+# Cron：每周日上午 10 点
 0 10 * * 0 cd /path/to/calendar-sync && node calendar-sync.mjs --start $(date -v-7d +%Y-%m-%d) --end $(date +%Y-%m-%d)
 ```
 
-After sync, import new data:
+同步后，导入新数据：
 ```bash
 gbrain sync --no-pull --no-embed && gbrain embed --stale
 ```
 
-### Step 8: Log Setup Completion
+### 步骤 8：记录设置完成
 
 ```bash
 mkdir -p ~/.gbrain/integrations/calendar-to-brain
 echo '{"ts":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'","event":"setup_complete","source_version":"0.7.0","status":"ok","details":{"accounts":"ACCOUNT_COUNT","start_year":"YYYY"}}' >> ~/.gbrain/integrations/calendar-to-brain/heartbeat.jsonl
 ```
 
-Tell the user: "Calendar-to-brain is set up. You have [N] days of calendar history
-indexed. I can now prep you for meetings by pulling attendee context from the brain.
-Weekly sync keeps it current."
+告诉用户："Calendar-to-brain 已设置。您有 [N] 天的日历历史
+已索引。我现在可以通过从大脑中提取与会者上下文来为您准备会议。
+每周同步保持其最新。"
 
-## Implementation Guide
+## 实施指南
 
-These are production-tested patterns from syncing 13 years of calendar data.
+这些是从同步 13 年日历数据中产生的生产测试模式。
 
-### Smart Chunking (Monthly vs Weekly)
+### 智能分块（每月 vs 每周）
 
 ```
-generate_chunks(start, end, dense_after='2023-01-01'):
+generate_chunks(start, end, dense_after='2023-01-01')：
   chunks = []
   current = start
 
   while current < end:
     if current < dense_after:
-      next = current + 1_MONTH    // sparse period: monthly
+      next = current + 1_MONTH    // 稀疏期：每月
     else:
-      next = current + 7_DAYS     // dense period: weekly
+      next = current + 7_DAYS     // 密集期：每周
 
     chunks.append({from: current, to: min(next, end)})
     current = next
@@ -306,25 +304,25 @@ generate_chunks(start, end, dense_after='2023-01-01'):
   return chunks
 ```
 
-**Why:** Monthly chunks for sparse years (2014-2023) = ~96 API calls for 8 years.
-Weekly for everything would be ~600+ calls. Per-calendar `startYear` avoids
-pulling empty months (e.g., don't query 2014-2020 for a calendar created in 2020).
+**为什么：** 稀疏年份（2014-2023）的每月块 = 8 年约 96 次 API 调用。
+每周处理所有内容将是 600+ 次调用。每个日历的 `startYear` 避免
+拉取空月份（例如，不要为 2020 年创建的日历查询 2014-2020 年）。
 
-### Attendee Filtering
+### 与会者过滤
 
 ```
 filter_attendees(attendees):
   return attendees.filter(a =>
-    !a.email?.includes('@resource.calendar.google.com') AND  // conference rooms
-    !a.email?.includes('@group.calendar.google.com') AND     // mailing lists
-    !a.name?.startsWith('YC-SF-')                            // internal distros
+    !a.email?.includes('@resource.calendar.google.com') AND  // 会议室
+    !a.email?.includes('@group.calendar.google.com') AND     // 邮件列表
+    !a.name?.startsWith('YC-SF-')                            // 内部通讯组
   )
 ```
 
-Without this, your attendee list is polluted with "Conference Room A" and
-"engineering-all@company.com". You want actual people.
+没有这个，您的与会者列表会被"会议室 A"和
+"engineering-all@company.com"污染。您需要实际的人。
 
-### Merge with Existing Files (Preserve Manual Notes)
+### 与现有文件合并（保留手动笔记）
 
 ```
 write_daily_file(date, events, dir):
@@ -334,9 +332,9 @@ write_daily_file(date, events, dir):
   if file_exists(path):
     existing = read(path)
     if '## Calendar' in existing:
-      // Replace ONLY the calendar section, keep everything else
+      // 仅替换 Calendar 部分，保留其他所有内容
       before = existing.split('## Calendar')[0]
-      after_match = regex_search(existing, /## [A-Z](?!alendar)/)  // next section
+      after_match = regex_search(existing, /## [A-Z](?!alendar)/)  // 下一部分
       after = after_match ? existing[match_index:] : ''
       write(path, f'{before}## Calendar\n\n{calendar_md}\n{after}')
     else:
@@ -345,60 +343,63 @@ write_daily_file(date, events, dir):
     write(path, calendar_md)
 ```
 
-**Critical:** Only touch `## Calendar`. Everything else is preserved. If you
-manually added `## Notes` to a daily file, it survives re-sync.
+**关键：** 仅触及 `## Calendar`。其他所有内容都保留。如果您
+手动向每日文件添加了 `## Notes`，它会在重新同步后保留。
 
-### Date/Time Parsing Edge Cases
+### 日期/时间解析边缘情况
 
 ```
 parse_event_date(event):
-  // All-day: event.start = "2024-01-15" (no T)
-  // Timed: event.start = "2024-01-15T10:00:00-08:00" (with T)
+  // 全天：event.start = "2024-01-15"（无 T）
+  // 定时：event.start = "2024-01-15T10:00:00-08:00"（带 T）
   if 'T' in event.start:
-    return event.start[0:10]    // extract date from datetime
-  return event.start            // already a date
+    return event.start[0:10]    // 从日期时间提取日期
+  return event.start            // 已经是日期
 
 format_time(iso_str):
   if not iso_str or 'T' not in iso_str: return 'all-day'
-  // Extract hours:minutes, convert to 12-hour
-  // Edge: 00:00 = 12:00 AM, 12:00 = 12:00 PM, 13:00 = 1:00 PM
+  // 提取小时：分钟，转换为 12 小时制
+  // 边缘：00:00 = 12:00 AM，12:00 = 12:00 PM，13:00 = 1:00 PM
 ```
 
-### What the Agent Should Test After Setup
+### 设置后代理应测试的内容
 
-1. **Monthly vs weekly:** Run from 2014 with dense_after=2023. Verify pre-2023
-   makes ~12 API calls per year, post-2023 makes ~4 per month.
-2. **Attendee filtering:** Create a meeting with a conference room and a mailing
-   list. Sync. Verify neither appears in the daily file.
-3. **Merge preservation:** Add `## Notes` to a daily file manually. Sync calendar.
-   Verify notes are preserved.
-4. **All-day events:** Create an all-day event and a timed event on the same day.
-   Verify all-day appears first, timed events sorted by start time.
-5. **Cancelled events:** Cancel a meeting. Sync. Verify it doesn't appear.
-6. **Per-calendar startYear:** Sync a calendar created in 2022 with startYear=2022.
-   Verify no API calls for years before 2022.
+1. **每月 vs 每周：** 从 2014 年开始运行，dense_after=2023。验证 2023 年之前
+   每年约进行 12 次 API 调用，2023 年之后每月约进行 4 次。
+2. **与会者过滤：** 创建带有会议室和邮件列表的会议。
+   同步。验证两者都未出现在每日文件中。
+3. **合并保留：** 手动向每日文件添加 `## Notes`。同步日历。
+   验证笔记已保留。
+4. **全天事件：** 在同一天创建全天事件和定时事件。
+   验证全天事件首先出现，定时事件按开始时间排序。
+5. **取消的事件：** 取消会议。同步。验证它未出现。
+6. **每个日历 startYear：** 使用 startYear=2022 同步 2022 年创建的日历。
+   验证 2022 年之前没有 API 调用。
 
-## Cost Estimate
+## 成本估算
 
-| Component | Monthly Cost |
+| 组件 | 月成本 |
 |-----------|-------------|
-| ClawVisor (free tier) | $0 |
-| Google Calendar API | $0 (within free quota) |
-| **Total** | **$0** |
+| ClawVisor（免费层） | $0 |
+| Google Calendar API | $0（在免费配额内） |
+| **总计** | **$0** |
 
-## Troubleshooting
+## 故障排除
 
-**No events returned:**
-- Check the calendar account email is correct
-- Check ClawVisor has Google Calendar service activated
-- Check the standing task purpose is expansive enough
-- Some calendars may be empty for the requested date range
+**未返回事件：**
+- 检查日历账户电子邮件是否正确
+- 检查 ClawVisor 是否已激活 Google Calendar 服务
+- 检查常设任务目的是否足够宽泛
+- 某些日历在请求的日期范围内可能为空
 
-**Attendee names missing:**
-- Google Calendar sometimes returns email addresses instead of display names
-- The sync script should extract the display name from the attendee object
-- If no display name, use the email prefix (before @)
+**缺少与会者姓名：**
+- Google Calendar 有时会返回电子邮件地址而不是显示名称
+- 同步脚本应从与会者对象中提取显示名称
+- 如果没有显示名称，请使用电子邮件前缀（@ 之前）
 
-**Duplicate events:**
-- The sync script should be idempotent (same date range = same output)
-- If running multiple times, existing daily files are overwritten (not appended)
+**重复事件：**
+- 同步脚本应是幂等的（相同日期范围 = 相同输出）
+- 如果运行多次，现有的每日文件将被覆盖（不追加）
+
+---
+*GBrain Skillpack 的一部分。另请参阅：[Email-to-Brain](email-to-brain.md)、[Calendar-to-Brain](calendar-to-brain.md)*

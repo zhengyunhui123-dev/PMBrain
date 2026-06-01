@@ -1970,50 +1970,36 @@ export async function runSync(engine: BrainEngine, args: string[]) {
   // passed. Pre-fix this was unreachable because the dispatcher's generic
   // CLI-only short-circuit fired first; sync is now in CLI_ONLY_SELF_HELP.
   if (args.includes('--help') || args.includes('-h')) {
-    console.log(`Usage: gbrain sync [options]
+    console.log(`用法：gbrain sync [选项]
 
-Sync the brain repo's text content into the engine, then embed.
+将大脑仓库中的文本内容同步到存储引擎，然后生成向量嵌入。
 
-Options:
-  --no-embed           Skip the embed step. Use this when the embed
-                       provider is misconfigured or you want to defer
-                       embedding (run 'gbrain embed --stale' later).
-  --workers N          Run the import phase with N parallel workers
-                       (alias: --concurrency). Default: 4 when the
-                       diff is >100 files, else serial.
-  --source <id>        Scope sync to a single source. Defaults to the
-                       brain's default source.
-  --repo <path>        Path to the brain repo. Defaults to the path
-                       saved by 'gbrain init'.
-  --full               Force a full re-sync (rare; usually incremental).
-  --dry-run            Show what would be synced without writing.
-  --skip-failed        Acknowledge previously-recorded sync failures so
-                       the bookmark can advance past unparseable files.
-  --retry-failed       Re-attempt previously-failed files; clear on success.
-  --watch              Re-sync continuously on an interval.
-  --interval N         Watch-mode interval in seconds (default 60).
-  --no-pull            Skip 'git pull' before the sync (useful for tests).
-  --all                Sync every registered source instead of just the
-                       default (multi-source brains).
-  --parallel N         (with --all) Run up to N sources concurrently.
-                       Default: min(sourceCount, --workers, 4). Each
-                       source takes its own per-source DB lock
-                       (gbrain-sync:<source_id>) so independent sources
-                       sync without contending. Total live Postgres
-                       connections per wave ≈ parallel × workers × 2
-                       (per-file pool) + parent pool. Pass --parallel 1
-                       to force serial.
-  --json               Emit a structured JSON envelope on stdout
-                       ({schema_version: 1, sources, parallel,
-                       ok_count, error_count}). Human banners route to
-                       stderr so '--json | jq' parses cleanly.
-                       Exit codes: 0 = all sources ok, 1 = any error,
-                       2 = cost-prompt-not-confirmed.
-  --yes                Accept any interactive prompts (CI / non-TTY).
+选项：
+  --no-embed           跳过向量嵌入步骤。适用于嵌入服务配置错误，
+                       或希望稍后运行 'gbrain embed --stale' 的场景。
+  --workers N          导入阶段并行工作进程数（别名：--concurrency）。
+                       文件差异超过 100 个时默认为 4，否则串行执行。
+  --source <id>        仅同步指定来源，默认使用大脑的默认来源。
+  --repo <path>        大脑仓库路径，默认使用 'gbrain init' 保存的路径。
+  --full               强制完整重新同步，通常无需使用。
+  --dry-run            仅预览将同步的内容，不写入数据。
+  --skip-failed        确认之前记录的同步失败，让书签跳过无法解析的文件。
+  --retry-failed       重试之前失败的文件，成功后清除失败记录。
+  --watch              按间隔持续重新同步。
+  --interval N         watch 模式间隔秒数，默认 60。
+  --no-pull            同步前跳过 'git pull'，适用于测试。
+  --all                同步全部已注册来源，而不是默认来源。
+  --parallel N         与 --all 配合使用，最多并发同步 N 个来源。
+                       默认值为 min(sourceCount, --workers, 4)。
+                       每个来源使用独立数据库锁。传入 --parallel 1 可强制串行。
+  --json               向 stdout 输出结构化 JSON。普通提示输出到 stderr，
+                       便于 '--json | jq' 正常解析。
+                       退出码：0=全部成功，1=存在错误，2=成本提示未确认。
+  --yes                自动接受交互式提示，适用于 CI 或非 TTY 环境。
 
-See also:
-  gbrain embed --stale    Re-embed all stale chunks (post --no-embed).
-  gbrain doctor           Diagnose dim mismatches and other sync issues.
+相关命令：
+  gbrain embed --stale    重新嵌入全部过期分块。
+  gbrain doctor           诊断维度不匹配和其他同步问题。
 `);
     return;
   }

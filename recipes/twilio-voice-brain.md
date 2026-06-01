@@ -1,20 +1,20 @@
 ---
 id: twilio-voice-brain
-name: Voice-to-Brain (DEPRECATED — see agent-voice)
+name: Voice-to-Brain（已弃用 — 请参阅 agent-voice）
 version: 0.8.2
-description: "DEPRECATED in v0.40.0.0. New installs use `gbrain integrations install agent-voice` — the copy-into-host-repo paradigm with WebRTC-first browser client + Mars/Venus personas + read-only tool router. This recipe stays for one release as redirect; will be removed in v0.41."
+description: "在 v0.40.0.0 中已弃用。新安装使用 `gbrain integrations install agent-voice` — 具有 WebRTC 优先浏览器客户端 + Mars/Venus 角色 + 只读工具路由器的 copy-into-host-repo 范式。此配方保留一个版本作为重定向；将在 v0.41 中移除。"
 category: sense
 requires: [ngrok-tunnel]
 secrets:
   - name: TWILIO_ACCOUNT_SID
-    description: Twilio account SID (starts with AC)
-    where: https://www.twilio.com/console — visible on the main dashboard after login
+    description: Twilio 账户 SID（以 AC 开头）
+    where: https://www.twilio.com/console — 登录后主仪表板可见
   - name: TWILIO_AUTH_TOKEN
-    description: Twilio auth token (click "Show" next to the SID on the dashboard)
-    where: https://www.twilio.com/console — click "Show" under Auth Token on the main dashboard
+    description: Twilio 认证令牌（点击仪表板上 SID 旁边的"显示"）
+    where: https://www.twilio.com/console — 主仪表板上 Auth Token 下的"显示"
   - name: OPENAI_API_KEY
-    description: OpenAI API key (needs Realtime API access enabled on your account)
-    where: https://platform.openai.com/api-keys — click "+ Create new secret key", copy immediately (you can't see it again)
+    description: OpenAI API 密钥（需要账户启用 Realtime API 访问）
+    where: https://platform.openai.com/api-keys — 点击"+ Create new secret key"，立即复制（无法再次查看）
 health_checks:
   - type: http
     url: "https://api.twilio.com/2010-04-01/Accounts/$TWILIO_ACCOUNT_SID.json"
@@ -28,263 +28,261 @@ health_checks:
     auth_token: "$OPENAI_API_KEY"
     label: "OpenAI API"
 setup_time: 30 min
-cost_estimate: "$15-25/mo (Twilio number $1-2 + voice $0.01/min, OpenAI Realtime $0.06/min input + $0.24/min output)"
+cost_estimate: "$15-25/月（Twilio 号码 $1-2 + 语音 $0.01/分钟，OpenAI Realtime $0.06/分钟输入 + $0.24/分钟输出）"
 ---
 
-# Voice-to-Brain: Phone Calls That Create Brain Pages
+# Voice-to-Brain：创建大脑页面的电话呼叫
 
-> **⚠️ DEPRECATED as of v0.40.0.0.** New installs should use the [agent-voice](agent-voice.md)
-> recipe — a WebRTC-first voice agent with Mars + Venus personas, copy-into-host-repo
-> install paradigm, and read-only tool router. This recipe stays for one release as a
-> redirect for operators with existing Twilio installs. It will be removed in v0.41.
+> **⚠️ 自 v0.40.0.0 起已弃用。** 新安装应使用 [agent-voice](agent-voice.md)
+> 配方 — 具有 WebRTC 优先语音代理、Mars + Venus 角色、copy-into-host-repo
+> 安装范式和只读工具路由器。此配方保留一个版本作为
+> 具有现有 Twilio 安装的运营商的重定向。它将在 v0.41 中移除。
 >
-> **Migration:** `gbrain integrations install agent-voice --target <your-repo>` copies a
-> working reference into your host agent repo where you own the edits. The new recipe
-> includes a Twilio bridge in `code/lib/twilio-bridge.mjs` for operators who still want
-> phone inbound, but the WebRTC `/call?test=1` flow is the headline experience.
+> **迁移：** `gbrain integrations install agent-voice --target <your-repo>` 将
+> 工作参考复制到您的主机代理仓库中，您可以在其中拥有编辑权限。新配方
+> 在 `code/lib/twilio-bridge.mjs` 中包含 Twilio 桥接器，适用于仍想要
+> 电话接入的运营商，但 WebRTC `/call?test=1` 流程是主打体验。
 
+拨打电话号码。通话。将出现一个结构化的大脑页面，包含实体检测、
+交叉引用和发布到您的消息应用程序的摘要。
 
-Call a phone number. Talk. A structured brain page appears with entity detection,
-cross-references, and a summary posted to your messaging app.
+## 重要提示：给代理的说明
 
-## IMPORTANT: Instructions for the Agent
+**您是安装程序。** 此配方是为**您（AI 代理）**编写的，代表用户执行。
+请精确按照这些说明操作。
 
-**You are the installer.** This recipe is written for YOU (the AI agent) to execute
-on behalf of the user. Follow these instructions precisely.
+**为什么顺序执行很重要：** 每个步骤都依赖于前一个步骤：
+- 步骤 1 验证先决条件。如果 GBrain 未配置，其他所有操作都将失败。
+- 步骤 2 收集凭证。如果某个凭证错误，步骤 5-7 将静默失败。
+- 步骤 3 创建 ngrok tunnel。步骤 5 需要 ngrok URL 用于 Twilio webhook。
+- 步骤 5 配置 Twilio。步骤 7（冒烟测试）需要配置 Twilio 才能访问您的服务器。
 
-**Why sequential execution matters:** Each step depends on the previous one:
-- Step 1 validates prerequisites. If GBrain isn't configured, nothing else works.
-- Step 2 collects credentials. If a credential is wrong, Steps 5-7 will silently fail.
-- Step 3 creates the ngrok tunnel. Step 5 needs the ngrok URL for the Twilio webhook.
-- Step 5 configures Twilio. Step 7 (smoke test) needs Twilio configured to reach your server.
+**不要跳过步骤。不要重新排序步骤。不要批处理多个步骤。**
 
-**Do not skip steps. Do not reorder steps. Do not batch multiple steps.**
+**停止点（在继续之前必须暂停并验证）：**
+- 步骤 1 后：所有先决条件都通过了吗？如果没有，请在继续之前修复。
+- 步骤 2 中每个凭证后：验证通过了吗？如果没有，请帮助用户修复。
+- 步骤 6 后：健康检查通过了吗？如果没有，请在冒烟测试之前进行调试。
+- 步骤 7 后：创建大脑页面了吗？如果没有，请在声明成功之前进行故障排除。
 
-**Stop points (MUST pause and verify before continuing):**
-- After Step 1: all prerequisites pass? If not, fix before proceeding.
-- After each credential in Step 2: validation passes? If not, help the user fix it.
-- After Step 6: health check passes? If not, debug before smoke test.
-- After Step 7: brain page created? If not, troubleshoot before declaring success.
+**当某些事情失败时：** 准确地告诉用户什么失败了、这意味着什么以及尝试什么。
+永远不要说"出了点问题"。要说"Twilio 返回了 401，这意味着
+认证令牌不正确。让我们重新输入。"
 
-**When something fails:** Tell the user EXACTLY what failed, what it means, and what
-to try. Never say "something went wrong." Say "Twilio returned a 401, which means the
-auth token is incorrect. Let's re-enter it."
+## 架构
 
-## Architecture
+两个管道选项：
 
-Two pipeline options:
-
-### Option A: OpenAI Realtime (turnkey, simpler)
+### 选项 A：OpenAI Realtime（交钥匙，更简单）
 ```
-Caller (phone)
-  ↓ Twilio (WebSocket, g711_ulaw audio — no transcoding)
-Voice Server (Node.js, your machine or cloud)
-  ↓↑ OpenAI Realtime API (STT + LLM + TTS in one pipeline)
-  ↓ Function calls during conversation
-GBrain MCP (semantic search, page reads, page writes)
-  ↓ Post-call
-Brain page created (meetings/YYYY-MM-DD-call-{caller}.md)
-Summary posted to messaging app (Telegram/Slack/Discord)
-```
-
-### Option B: DIY STT+LLM+TTS (full control, production-grade)
-```
-Caller (phone or WebRTC browser)
-  ↓ Twilio WebSocket OR WebRTC
-Voice Server (Node.js)
-  ↓ Deepgram STT (streaming speech-to-text, speaker diarization)
-  ↓ Claude API (streaming SSE, sentence-boundary dispatch)
-  ↓ Cartesia / OpenAI TTS (text-to-speech, low latency)
-  ↓ Function calls during conversation
-GBrain MCP (semantic search, page reads, page writes)
-  ↓ Post-call
-Brain page + audio upload + transcript storage
+呼叫者（电话）
+  ↓ Twilio（WebSocket，g711_ulaw 音频 — 无转码）
+Voice Server（Node.js，您的机器或云）
+  ↓↑ OpenAI Realtime API（STT + LLM + TTS 在一个管道中）
+  ↓ 通话期间的 Function 调用
+GBrain MCP（语义搜索、页面读取、页面写入）
+  ↓ 通话后
+大脑页面已创建（meetings/YYYY-MM-DD-call-{caller}.md）
+摘要发布到消息应用程序（Telegram/Slack/Discord）
 ```
 
-**Why v2 (Option B)?** OpenAI Realtime is a black box — you can't control STT
-quality, swap LLMs, or debug audio issues. The DIY stack gives you transparent
-Deepgram+Claude+TTS with full control over each stage. Trade-off: more integration
-work, but you own the pipeline.
+### 选项 B：DIY STT+LLM+TTS（完全控制，生产级）
+```
+呼叫者（电话或 WebRTC 浏览器）
+  ↓ Twilio WebSocket 或 WebRTC
+Voice Server（Node.js）
+  ↓ Deepgram STT（流式语音转文本，说话者 diarization）
+  ↓ Claude API（流式 SSE，句子边界调度）
+  ↓ Cartesia / OpenAI TTS（文本转语音，低延迟）
+  ↓ 通话期间的 Function 调用
+GBrain MCP（语义搜索、页面读取、页面写入）
+  ↓ 通话后
+大脑页面 + 音频上传 + 转录存储
+```
 
-**Production-tested v2 architecture (pipeline.mjs, ~250 lines):**
-- Streaming SSE from Claude with sentence-boundary TTS dispatch
-- 20-turn conversation history cap (prevents context bloat)
-- Reconnect logic with exponential backoff on STT/TTS disconnects
-- Periodic keepalives to prevent WebSocket timeout
-- Audio endpointing for natural turn-taking
-- Smart VAD (Silero) as default with push-to-talk fallback
+**为什么选择 v2（选项 B）？** OpenAI Realtime 是一个黑盒 — 您无法控制 STT
+质量、交换 LLM 或调试音频问题。DIY 堆栈为您提供透明的
+Deepgram+Claude+TTS，完全控制每个阶段。权衡：更多的集成
+工作，但您拥有管道。
 
-## Opinionated Defaults
+**生产测试的 v2 架构（pipeline.mjs，约 250 行）：**
+- 来自 Claude 的流式 SSE，具有句子边界 TTS 调度
+- 20 轮对话历史上限（防止上下文膨胀）
+- STT/TTS 断开时的重新连接逻辑，具有指数退避
+- 定期保持活动以防止 WebSocket 超时
+- 音频端点检测以实现自然的说话轮流
+- 智能 VAD（Silero）作为默认，带有 push-to-talk 回退
 
-These are production-tested defaults from a real deployment. Customize after setup.
+## 固执己见的默认设置
 
-**Caller routing (prompt-based, enforced server-side):**
-- Owner: OTP challenge via secure channel, then full access (read + write + gateway)
-- Trusted contacts: callback verification, scoped write access
-- Known contacts (brain score >= 4): warm greeting by name, offer to transfer
-- Unknown callers: screen, ask name + reason, take message
+这些是从真实部署中产生的生产测试默认设置。设置后自定义。
 
-**Security:**
-- Twilio signature validation on `/voice` endpoint (X-Twilio-Signature header)
-- Unauthenticated callers never see write tools
-- Caller ID is NOT trusted for auth (OTP or callback required)
+**呼叫者路由（基于提示，强制执行服务器端）：**
+- 所有者：通过安全通道进行 OTP 质询，然后完全访问（读取 + 写入 + 网关）
+- 受信任的联系人：回拨验证，范围写入访问
+- 已知联系人（大脑分数 >= 4）：按名称热情问候，提供转接
+- 未知呼叫者：筛选，询问姓名 + 原因，留言
+
+**安全：**
+- Twilio 签名验证在 `/voice` 端点（`X-Twilio-Signature` 头）
+- 未认证的呼叫者永远不会看到写入工具
+- 呼叫者 ID **不** 被信任用于认证（需要 OTP 或回拨）
 
 ---
 
-## Setup Flow
+## 设置流程
 
-### Step 1: Check Prerequisites
+### 步骤 1：检查先决条件
 
-**STOP if any check fails. Fix before proceeding.**
+**如果任何检查失败，请停止。在继续之前修复。**
 
-Run these checks and report results to the user:
+运行这些检查并向用户报告结果：
 
 ```bash
-# 1. Verify GBrain is configured
+# 1. 验证 GBrain 已配置
 gbrain doctor --json
 ```
-If this fails: "GBrain isn't set up yet. Let's run `gbrain init --supabase` first."
+如果失败："GBrain 尚未设置。让我们先运行 `gbrain init --supabase`。"
 
 ```bash
-# 2. Verify Node.js 18+
+# 2. 验证 Node.js 18+
 node --version
 ```
-If missing or < 18: "Node.js 18+ is required. Install it: https://nodejs.org/en/download"
+如果缺少或 < 18："需要 Node.js 18+。安装：https://nodejs.org/en/download"
 
 ```bash
-# 3. Check if ngrok is installed
+# 3. 检查 ngrok 是否已安装
 which ngrok
 ```
-If missing:
-- **Mac:** "Run `brew install ngrok` in your terminal."
-- **Linux:** "Run `snap install ngrok` or download from https://ngrok.com/download"
+如果缺少：
+- **Mac：** "在终端中运行 `brew install ngrok`。"
+- **Linux：** "运行 `snap install ngrok` 或从 https://ngrok.com/download 下载"
 
-Tell the user: "All prerequisites checked. [N/3 passed]. [List any that failed and how to fix.]"
+告诉用户："所有先决条件已检查。[N/3 通过]。[列出任何失败以及如何修复。]"
 
-### Step 2: Collect and Validate Credentials
+### 步骤 2：收集和验证凭证
 
-Ask for each credential ONE AT A TIME. Validate IMMEDIATELY. Do not proceed to
-the next credential until the current one validates.
+**一次询问一个凭证。立即验证。在
+当前凭证验证通过之前，不要继续
+下一个凭证。**
 
-**Credential 1: Twilio Account SID + Auth Token**
+**凭证 1：Twilio 账户 SID + 认证令牌**
 
-Tell the user:
-"I need your Twilio Account SID and Auth Token. Here's exactly where to find them:
+告诉用户：
+"我需要您的 Twilio 账户 SID 和认证令牌。具体操作如下：
 
-1. Go to https://www.twilio.com/console (sign up free if you don't have an account)
-2. After logging in, you'll see your **Account SID** right on the main dashboard
-   (it starts with 'AC' followed by 32 characters)
-3. Below it you'll see **Auth Token** — click **'Show'** to reveal it
-4. Copy both values and paste them to me"
+1. 转到 https://www.twilio.com/console（如果您没有账户，请免费注册）
+2. 登录后，您将在主仪表板上看到您的 **账户 SID**
+   （它以 'AC' 开头，后跟 32 个字符）
+3. 在它下面，您将看到 **认证令牌** — 点击 **'显示'** 以显示它
+4. 复制两个值并粘贴给我"
 
-After the user provides them, validate immediately:
+用户提供后，立即验证：
 
 ```bash
 curl -s -u "$TWILIO_ACCOUNT_SID:$TWILIO_AUTH_TOKEN" \
   "https://api.twilio.com/2010-04-01/Accounts/$TWILIO_ACCOUNT_SID.json" \
   | grep -q '"status"' \
-  && echo "PASS: Twilio credentials valid" \
-  || echo "FAIL: Twilio credentials invalid — double-check the SID starts with AC and the auth token is correct"
+  && echo "通过：Twilio 凭证有效" \
+  || echo "失败：Twilio 凭证无效 — 仔细检查 SID 以 'AC' 开头且认证令牌正确"
 ```
 
-**If validation fails:** "That didn't work. Common issues: (1) the SID should start
-with 'AC', (2) make sure you clicked 'Show' to reveal the auth token and copied the
-full value, (3) if you just created the account, wait 30 seconds and try again."
+**如果验证失败：** "那没用。常见问题：（1）SID 应以 'AC' 开头，（2）确保您点击了'显示'以显示认证令牌并复制了
+完整值，（3）如果您刚刚创建了账户，请等待 30 秒并重试。"
 
-**STOP HERE until Twilio validates.**
+**在此停止，直到 Twilio 验证通过。**
 
-**Credential 2: OpenAI API Key**
+**凭证 2：OpenAI API 密钥**
 
-Tell the user:
-"I need your OpenAI API key. Here's exactly where to get one:
+告诉用户：
+"我需要您的 OpenAI API 密钥。具体操作如下：
 
-1. Go to https://platform.openai.com/api-keys
-2. Click **'+ Create new secret key'** (top right)
-3. Name it something like 'gbrain-voice'
-4. Click **'Create secret key'**
-5. **Copy the key immediately** — you won't be able to see it again after closing the dialog
-6. Paste it to me
+1. 转到 https://platform.openai.com/api-keys
+2. 点击 **'+ Create new secret key'**（右上角）
+3. 将其命名为 'gbrain-voice' 之类的名称
+4. 点击 **'Create secret key'**
+5. **立即复制密钥** — 关闭对话框后，您将**无法**再次看到它
+6. 粘贴给我
 
-Note: your OpenAI account needs Realtime API access. Most accounts have it by default."
+注意：您的 OpenAI 账户需要 Realtime API 访问权限。大多数账户默认拥有它。"
 
-After the user provides it, validate immediately:
+用户提供后，立即验证：
 
 ```bash
 curl -sf -H "Authorization: Bearer $OPENAI_API_KEY" \
   https://api.openai.com/v1/models > /dev/null \
-  && echo "PASS: OpenAI key valid" \
-  || echo "FAIL: OpenAI key invalid — make sure you copied the full key (starts with sk-)"
+  && echo "通过：OpenAI 密钥有效" \
+  || echo "失败：OpenAI 密钥无效 — 确保复制了完整密钥（以 sk- 开头）"
 ```
 
-**If validation fails:** "That didn't work. Common issues: (1) the key starts with
-'sk-', (2) make sure you copied the entire key (it's long), (3) if you just created
-it, it's active immediately — no delay needed."
+**如果验证失败：** "那没用。常见问题：（1）密钥以 'sk-' 开头，（2）确保复制了整个密钥（它很长），（3）如果您刚刚创建了
+它，它会立即激活 — 无需延迟。"
 
-**STOP HERE until OpenAI validates.**
+**在此停止，直到 OpenAI 验证通过。**
 
-**Credential 3: ngrok Account (Hobby tier recommended)**
+**凭证 3：ngrok 账户（推荐 Hobby 层）**
 
-Tell the user:
-"I need your ngrok auth token. **I strongly recommend the Hobby tier ($8/mo)**
-because it gives you a fixed domain that never changes. With the free tier,
-your URL changes every time ngrok restarts, breaking Twilio and Claude Desktop.
+告诉用户：
+"我需要您的 ngrok 认证令牌。**我强烈推荐 Hobby 层（$8/月）**，
+因为它为您提供了一个永不更改的固定域名。使用免费层，
+您的 URL 在每次 ngrok 重启时都会更改，破坏 Twilio 和 Claude Desktop。
 
-1. Go to https://dashboard.ngrok.com/signup (sign up)
-2. **Recommended:** Go to https://dashboard.ngrok.com/billing and upgrade to
-   **Hobby** ($8/mo). This gives you a fixed domain.
-3. If you upgraded: go to https://dashboard.ngrok.com/domains and click
-   **'+ New Domain'**. Choose a name (e.g., `your-brain-voice.ngrok.app`).
-4. Go to https://dashboard.ngrok.com/get-started/your-authtoken
-5. Copy your **Authtoken** and paste it to me
-6. Also tell me your fixed domain name (if you created one)"
+1. 转到 https://dashboard.ngrok.com/signup（注册）
+2. **推荐：** 转到 https://dashboard.ngrok.com/billing 并升级到
+   **Hobby**（$8/月）。这为您提供了一个固定域名。
+3. 如果您升级了：转到 https://dashboard.ngrok.com/domains 并点击
+   **'+ New Domain'**。选择一个名称（例如，`your-brain-voice.ngrok.app`）。
+4. 转到 https://dashboard.ngrok.com/get-started/your-authtoken
+5. 复制您的 **认证令牌** 并粘贴给我
+6. 还要告诉我您的固定域名（如果您创建了一个）"
 
 ```bash
 ngrok config add-authtoken $NGROK_TOKEN \
-  && echo "PASS: ngrok configured" \
-  || echo "FAIL: ngrok auth token rejected"
+  && echo "通过：ngrok 已配置" \
+  || echo "失败：ngrok 认证令牌被拒绝"
 ```
 
-If user has a fixed domain, use `--url` flag (Step 3 below).
-If user stayed on free tier, URLs will change on restart (the watchdog handles this).
+如果用户有固定域名，请使用 `--url` 标志（下面的步骤 3）。
+如果用户停留在免费层，URL 将在重启时更改（watchdog 处理此问题）。
 
-**Credential 4: Messaging Platform (for call summaries)**
+**凭证 4：消息平台（用于通话摘要）**
 
-Ask the user: "Where should I send call summaries? Options: Telegram, Slack, or Discord."
+询问用户："我应该将通话摘要发送到哪里？选项：Telegram、Slack 或 Discord。"
 
-Based on their choice:
-- **Telegram:** "Create a bot via @BotFather on Telegram, copy the bot token, and
-  tell me which chat/group to send summaries to."
-  Validate: `curl -sf "https://api.telegram.org/bot$TOKEN/getMe" | grep -q '"ok":true'`
-- **Slack:** "Create an Incoming Webhook at https://api.slack.com/apps → your app →
-  Incoming Webhooks → Add New. Copy the webhook URL."
-  Validate: `curl -sf -X POST -d '{"text":"GBrain voice test"}' $WEBHOOK_URL`
-- **Discord:** "Go to your server → channel settings → Integrations → Webhooks →
-  New Webhook. Copy the webhook URL."
-  Validate: `curl -sf -X POST -H "Content-Type: application/json" -d '{"content":"GBrain voice test"}' $WEBHOOK_URL`
+根据他们的选择：
+- **Telegram：** "通过 Telegram 上的 @BotFather 创建机器人，复制机器人令牌，并
+  告诉我要将摘要发送到哪个聊天/群组。"
+  验证：`curl -sf "https://api.telegram.org/bot$TOKEN/getMe" | grep -q '"ok":true'`
+- **Slack：** "在 https://api.slack.com/apps → 您的应用 →
+  Incoming Webhooks → 添加新。复制 webhook URL。"
+  验证：`curl -sf -X POST -d '{"text":"GBrain voice test"}' $WEBHOOK_URL`
+- **Discord：** "转到您的服务器 → 频道设置 → 集成 → Webhooks →
+  新建 Webhook。复制 webhook URL。"
+  验证：`curl -sf -X POST -H "Content-Type: application/json" -d '{"content":"GBrain voice test"}' $WEBHOOK_URL`
 
-Tell the user: "All credentials validated. Moving to server setup."
+告诉用户："所有凭证已验证。正在转到服务器设置。"
 
-### Step 3: Start ngrok Tunnel
+### 步骤 3：启动 ngrok Tunnel
 
 ```bash
-# With fixed domain (Hobby tier — recommended):
+# 使用固定域名（Hobby 层 — 推荐）：
 ngrok http 8765 --url your-brain-voice.ngrok.app
 
-# Without fixed domain (free tier — URL changes on restart):
+# 不使用固定域名（免费层 — URL 在重启时更改）：
 ngrok http 8765
 ```
 
-If using a fixed domain, the URL is always `https://your-brain-voice.ngrok.app`.
-If using free tier, copy the URL from the ngrok output (changes every restart).
+如果使用固定域名，URL 始终为 `https://your-brain-voice.ngrok.app`。
+如果使用免费层，请从 ngrok 输出中复制 URL（每次重启都会更改）。
 
-Note: ngrok runs in the foreground. Run it in a background process or new terminal tab.
+注意：ngrok 在前台运行。在后台进程或新终端标签中运行它。
 
-The same ngrok account can also serve your GBrain MCP server (see
-[ngrok-tunnel recipe](recipes/ngrok-tunnel.md) for the full multi-service pattern).
+同一个 ngrok 账户还可以为您的 GBrain MCP 服务器提供服务（请参阅
+[ngrok-tunnel 配方](recipes/ngrok-tunnel.md) 以获取完整的多服务模式）。
 
-### Step 4: Create Voice Server
+### 步骤 4：创建语音服务器
 
-Create the voice server directory and install dependencies:
+创建语音服务器目录并安装依赖项：
 
 ```bash
 mkdir -p voice-agent && cd voice-agent
@@ -292,50 +290,50 @@ npm init -y
 npm install ws express
 ```
 
-The voice server needs these components in `server.mjs`:
+语音服务器需要在 `server.mjs` 中包含以下组件：
 
-1. **HTTP server** on port 8765 with:
-   - `POST /voice` — returns TwiML that opens a WebSocket media stream to `/ws`
-   - `GET /health` — returns `{ ok: true }`
-   - Twilio signature validation (`X-Twilio-Signature` header) on `/voice`
+1. **HTTP 服务器** 在端口 8765 上，具有：
+   - `POST /voice` — 返回打开 WebSocket 媒体流到 `/ws` 的 TwiML
+   - `GET /health` — 返回 `{ ok: true }`
+   - Twilio 签名验证（`X-Twilio-Signature` 头）在 `/voice` 上
 
-2. **WebSocket handler** at `/ws` that:
-   - Accepts Twilio media stream (g711_ulaw audio)
-   - Opens a second WebSocket to `wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview`
-   - Bridges audio bidirectionally (no transcoding — both sides use g711_ulaw)
-   - Handles `response.function_call_arguments.done` events from OpenAI (tool execution)
-   - Sends tool results back via `conversation.item.create` with type `function_call_output`
+2. **WebSocket 处理程序** 在 `/ws` 上，它：
+   - 接受 Twilio 媒体流（g711_ulaw 音频）
+   - 打开第二个 WebSocket 到 `wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview`
+   - 双向桥接音频（无转码 — 双方都使用 g711_ulaw）
+   - 处理来自 OpenAI 的 `response.function_call_arguments.done` 事件（工具执行）
+   - 通过 `conversation.item.create` 发送工具结果，类型为 `function_call_output`
 
-3. **System prompt builder** that takes caller phone number and returns:
-   - Appropriate greeting based on caller routing rules
-   - Available tools (read-only for unauthenticated, full for authenticated)
-   - Instructions: "You are a voice assistant. Search the brain before answering
-     questions. Take messages from unknown callers. Never hang up first."
+3. **系统提示构建器**，它接收呼叫者电话号码并返回：
+   - 基于呼叫者路由规则的适当问候语
+   - 可用工具（未认证的为只读，已认证的为完整）
+   - 指令："您是语音助手。在回答问题之前搜索大脑。
+     从未知呼叫者获取消息。永远不要先挂断。"
 
-4. **Tool executor** that:
-   - Spawns GBrain MCP client (`gbrain serve` as stdio child process)
-   - Routes function calls: `search_brain` → `gbrain query`, `lookup_person` → `gbrain search` + `gbrain get`
-   - Gates write tools behind authentication
+4. **工具执行器**，它：
+   - 生成 GBrain MCP 客户端（`gbrain serve` 作为 stdio 子进程）
+   - 路由功能调用：`search_brain` → `gbrain query`，`lookup_person` → `gbrain search` + `gbrain get`
+   - 在认证后面控制写入工具
 
-5. **Post-call handler** that:
-   - Saves transcript to `brain/meetings/YYYY-MM-DD-call-{caller}.md`
-   - Posts summary to the user's messaging platform
-   - Runs `gbrain sync --no-pull --no-embed` to index the new page
+5. **通话后处理程序**，它：
+   - 将转录保存到 `brain/meetings/YYYY-MM-DD-call-{caller}.md`
+   - 将摘要发布到用户的消息平台
+   - 运行 `gbrain sync --no-pull --no-embed` 以索引新页面
 
-6. **WebRTC endpoint** (optional, for browser-based calling):
-   - `POST /session` — accepts SDP offer, forwards to OpenAI Realtime `/v1/realtime/calls` as multipart form-data, returns SDP answer
-   - `GET /call` — serves a web client HTML page with:
-     - WebRTC connection to OpenAI Realtime API
-     - RNNoise WASM noise suppression (AudioWorklet)
-     - Push-to-talk AND auto-VAD mode switching
-     - Pipeline: Microphone → RNNoise denoise → MediaStream → WebRTC → OpenAI
-   - `POST /tool` — receives tool calls from the WebRTC data channel, executes them, returns results
-   - This lets users call the voice agent from a browser tab instead of a phone
+6. **WebRTC 端点**（可选，用于基于浏览器的呼叫）：
+   - `POST /session` — 接受 SDP offer，转发到 OpenAI Realtime `/v1/realtime/calls` 作为 multipart form-data，返回 SDP answer
+   - `GET /call` — 提供带有以下内容的 web 客户端 HTML 页面：
+     - 到 OpenAI Realtime API 的 WebRTC 连接
+     - RNNoise WASM 噪声抑制（AudioWorklet）
+     - Push-to-talk 和 auto-VAD 模式切换
+     - 管道：麦克风 → RNNoise 去噪 → MediaStream → WebRTC → OpenAI
+   - `POST /tool` — 接收来自 WebRTC 数据通道的工具调用，执行它们，返回结果
+   - 这允许用户从浏览器标签页而不是电话呼叫语音代理
 
-   **WebRTC session creation pseudocode:**
+   **WebRTC 会话创建伪代码：**
    ```
    POST /session:
-     sdp = request.body  // caller's SDP offer
+     sdp = request.body  // 呼叫者的 SDP offer
 
      sessionConfig = JSON.stringify({
        type: 'realtime',
@@ -345,80 +343,80 @@ The voice server needs these components in `server.mjs`:
        tools: TOOL_SETS.unauthenticated,
      })
 
-     // Use native FormData (Node 18+) — NOT manual multipart
+     // 使用原生 FormData（Node 18+）— 不要手动 multipart
      fd = new FormData()
      fd.set('sdp', sdp)
      fd.set('session', sessionConfig)
 
      response = POST 'https://api.openai.com/v1/realtime/calls'
        Authorization: Bearer OPENAI_API_KEY
-       body: fd   // fetch() sets Content-Type automatically
+       body: fd   // fetch() 自动设置 Content-Type
 
      return response.text()  // SDP answer
    ```
 
-   **Important WebRTC gotchas:**
-   - `voice` goes under `audio.output.voice`, not top-level
-   - Do NOT send `turn_detection` in session config (not accepted by `/v1/realtime/calls`)
-   - Do NOT send `session.update` on connect (server already configured it)
-   - All `session.update` calls must include `type: 'realtime'` to avoid session.type errors
-   - `input_audio_transcription` is NOT supported over WebRTC data channel — use Whisper post-call on recorded audio instead
-   - Trigger greeting via data channel after WebRTC connects
+   **重要的 WebRTC 陷阱：**
+   - `voice` 放在 `audio.output.voice` 下，而不是顶级
+   - 不要在会话配置中发送 `turn_detection`（不被 `/v1/realtime/calls` 接受）
+   - 连接时不要发送 `session.update`（服务器已配置它）
+   - 所有 `session.update` 调用必须包含 `type: 'realtime'` 以避免 session.type 错误
+   - 通过 WebRTC 数据通道**不**支持 `input_audio_transcription` — 请改为在录制的音频上使用 Whisper post-call
+   - 在 WebRTC 连接后通过数据通道触发问候语
 
-**Reference implementation:** The architecture above and the OpenAI Realtime API
-docs (https://platform.openai.com/docs/guides/realtime) provide the building blocks.
+**参考实现：** 上面的架构和 OpenAI Realtime API
+文档 (https://platform.openai.com/docs/guides/realtime) 提供了构建块。
 
-### Step 5: Configure Twilio Phone Number
+### 步骤 5：配置 Twilio 电话号码
 
-Tell the user:
-"Now I need to set up your Twilio phone number. Here's what to do:
+告诉用户：
+"现在我需要设置您的 Twilio 电话号码。具体操作如下：
 
-1. Go to https://www.twilio.com/console/phone-numbers/search
-2. Search for a number (pick your area code or any available number)
-3. Click **'Buy'** next to the number you want (costs $1-2/month)
-4. After purchase, go to https://www.twilio.com/console/phone-numbers/incoming
-5. Click on your new number
-6. Scroll to **'Voice Configuration'**
-7. Under **'A call comes in'**, select **'Webhook'**
-8. Enter: `https://YOUR-NGROK-URL.ngrok-free.app/voice`
-9. Method: **HTTP POST**
-10. Click **'Save configuration'**
-11. Tell me the phone number you purchased"
+1. 转到 https://www.twilio.com/console/phone-numbers/search
+2. 搜索号码（选择您的区号或任何可用号码）
+3. 点击您想要的号码旁边的 **'Buy'**（费用 $1-2/月）
+4. 购买后，转到 https://www.twilio.com/console/phone-numbers/incoming
+5. 点击您的新号码
+6. 滚动到 **'Voice Configuration'**
+7. 在 **'A call comes in'** 下，选择 **'Webhook'**
+8. 输入：`https://YOUR-NGROK-URL.ngrok-free.app/voice`
+9. 方法：**HTTP POST**
+10. 点击 **'Save configuration'**
+11. 告诉我您购买的电话号码"
 
-Or if the user prefers CLI:
+或者，如果用户更喜欢 CLI：
 ```bash
-# Buy a number (US local)
+# 购买号码（美国本地）
 twilio phone-numbers:buy:local --area-code 415
 
-# Configure webhook
+# 配置 webhook
 twilio phone-numbers:update PHONE_SID \
   --voice-url https://YOUR-NGROK-URL.ngrok-free.app/voice \
   --voice-method POST
 ```
 
-### Step 6: Start Voice Server and Verify
+### 步骤 6：启动语音服务器并验证
 
 ```bash
 cd voice-agent && node server.mjs
 ```
 
-**STOP and verify:**
+**停止并验证：**
 ```bash
-curl -sf http://localhost:8765/health && echo "Voice server: running" || echo "Voice server: NOT running"
+curl -sf http://localhost:8765/health && echo "语音服务器：正在运行" || echo "语音服务器：未运行"
 ```
 
-If not running: check the server logs for errors. Common issues:
-- Port 8765 already in use: `lsof -i :8765` to find what's using it
-- Missing environment variables: make sure OPENAI_API_KEY is set
-- Module not found: run `npm install` again
+如果未运行：检查服务器日志以查找错误。常见问题：
+- 端口 8765 已在使用中：`lsof -i :8765` 以查找正在使用它的内容
+- 缺少环境变量：确保已设置 OPENAI_API_KEY
+- 未找到模块：再次运行 `npm install`
 
-### Step 7: Smoke Test (Outbound Call)
+### 步骤 7：冒烟测试（出站呼叫）
 
-**This is the magical moment.** The agent calls the USER to prove the system works.
+**这是神奇的时刻。** 代理呼叫**用户**以证明系统正常工作：
 
-Tell the user: "Your phone is about to ring. Pick up and talk for about 30 seconds.
-Say something like 'Hey, I'm testing my new voice-to-brain system. Remind me to
-check the quarterly numbers tomorrow.' When you're done, hang up."
+告诉用户："您的电话即将响起。接听并交谈约 30 秒。
+说类似 '嘿，我正在测试我的新语音到大脑系统。提醒我
+明天检查季度数字。' 完成后，挂断。"
 
 ```bash
 curl -X POST "https://api.twilio.com/2010-04-01/Accounts/$TWILIO_ACCOUNT_SID/Calls.json" \
@@ -428,382 +426,405 @@ curl -X POST "https://api.twilio.com/2010-04-01/Accounts/$TWILIO_ACCOUNT_SID/Cal
   -u "$TWILIO_ACCOUNT_SID:$TWILIO_AUTH_TOKEN"
 ```
 
-**After the call ends, verify ALL of these:**
+**通话结束后，验证以下所有内容：**
 
-1. Messaging notification arrived with call summary
-2. Brain page exists:
+1. 消息通知已到达，带有通话摘要
+2. 大脑页面存在：
    ```bash
    gbrain search "call" --limit 1
    ```
-3. The brain page has: transcript, entity mentions, action items
+3. 大脑页面包含：转录、实体提及、操作项
 
-**If the smoke test fails:**
-- No ring: check Twilio console for error logs at https://www.twilio.com/console/debugger
-- Ring but no voice: check ngrok tunnel is up, check OpenAI key is valid
-- Voice works but no brain page: check post-call handler logs, run `gbrain sync` manually
-- Brain page but no messaging: check messaging bot token is valid
+**如果冒烟测试失败：**
+- 无响铃：检查 https://www.twilio.com/console/debugger 中的 Twilio 控制台以查找错误日志
+- 响铃但无语音：检查 ngrok tunnel 是否启动，检查 OpenAI 密钥是否有效
+- 语音工作但无大脑页面：检查通话后处理程序日志，手动运行 `gbrain sync`
+- 有大脑页面但无消息：检查消息机器人令牌是否有效
 
-**STOP HERE until the smoke test passes. Do not declare success until the user
-confirms they received the messaging notification AND the brain page exists.**
+**在此停止，直到冒烟测试通过。在用户
+确认他们收到了消息通知**并且**大脑页面存在之前，不要声明成功。**
 
-### Step 8: Set Up Inbound Calling
+### 步骤 8：设置入站呼叫
 
-Tell the user: "The smoke test passed — voice-to-brain is live! Your number is
-[TWILIO_NUMBER]. Now let's set up inbound calling."
+告诉用户："冒烟测试通过了 — 语音到大脑已上线！您的号码是
+[TWILIO_NUMBER]。现在让我们设置入站呼叫。"
 
-1. Twilio webhook is already configured from Step 5
-2. Ask: "Do you want calls to your existing phone to forward to this number
-   after a few rings? That way you answer if you can, and the voice agent
-   picks up if you don't."
-3. Configure caller routing rules in the system prompt
-4. Add the user's phone number as the "owner" number for full access
+1. Twilio webhook 已从步骤 5 配置
+2. 询问："您是否希望拨打您的现有电话的呼叫
+   在响几声后转发到此号码？这样，如果您可以接听，您就接听，如果您不接听，语音代理
+   就会接听。"
+3. 在系统提示中配置呼叫者路由规则
+4. 将用户的电话号码添加为"所有者"号码以获得完全访问权限
 
-### Step 9: Watchdog (Auto-restart)
+### 步骤 9：Watchdog（自动重启）
 
 ```bash
-# Cron watchdog (every 2 minutes) — add to crontab
+# Cron watchdog（每 2 分钟）— 添加到 crontab
 */2 * * * * curl -sf http://localhost:8765/health > /dev/null || (cd /path/to/voice-agent && node server.mjs >> /tmp/voice-agent.log 2>&1 &)
 ```
 
-If using ngrok, also set up URL monitoring (free ngrok URLs change on restart):
+如果使用 ngrok，还要设置 URL 监控（免费 ngrok URL 在重启时更改）：
 ```bash
-# Check if ngrok URL changed, update Twilio if so
+# 检查 ngrok URL 是否已更改，如果已更改则更新 Twilio
 NGROK_URL=$(curl -s http://localhost:4040/api/tunnels 2>/dev/null | grep -o '"public_url":"https://[^"]*' | grep -o 'https://.*')
 if [ -n "$NGROK_URL" ]; then
   twilio phone-numbers:update PHONE_SID --voice-url "$NGROK_URL/voice"
 fi
 ```
 
-### Step 10: Log Setup Completion
+### 步骤 10：记录设置完成
 
 ```bash
 mkdir -p ~/.gbrain/integrations/twilio-voice-brain
 echo '{"ts":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'","event":"setup_complete","source_version":"0.8.1","status":"ok","details":{"phone":"TWILIO_NUMBER","deployment":"local+ngrok"}}' >> ~/.gbrain/integrations/twilio-voice-brain/heartbeat.jsonl
 ```
 
-Tell the user: "Voice-to-brain is fully set up. Your number is [NUMBER]. Here's
-what happens now: anyone who calls gets screened by the voice agent. Known contacts
-get a warm greeting. Unknown callers leave a message. Every call creates a brain
-page with the full transcript, and you get a summary on [their messaging platform].
-The watchdog restarts the server if it crashes."
+告诉用户："语音到大脑已完全设置。您的号码是 [NUMBER]。以下是
+现在发生的情况：任何呼叫的人都会由语音代理筛选。已知联系人
+获得热情的问候。未知呼叫者留言。每次通话都会创建一个大脑
+页面，包含完整的转录，并且您会在 [他们的消息平台] 上获得摘要。
+Watchdog 会在服务器崩溃时重新启动它。"
 
-## Cost Estimate
+## 成本估算
 
-| Component | Monthly Cost | Source |
+| 组件 | 月成本 | 来源 |
 |-----------|-------------|--------|
-| Twilio phone number | $1-2/mo | [Twilio pricing](https://www.twilio.com/en-us/voice/pricing) |
-| Twilio voice minutes (100 min) | $1-2/mo | $0.0085-0.015/min depending on direction |
-| OpenAI Realtime input (100 min) | $6/mo | [$0.06/min](https://openai.com/api/pricing/) |
-| OpenAI Realtime output (50 min) | $12/mo | [$0.24/min](https://openai.com/api/pricing/) |
-| ngrok (free tier) | $0 | Static domain: $8/mo |
-| **Total estimate** | **$20-22/mo** | For ~100 min of calls |
+| Twilio 电话号码 | $1-2/月 | [Twilio 定价](https://www.twilio.com/en-us/voice/pricing) |
+| Twilio 语音分钟数（100 分钟） | $1-2/月 | 取决于方向的 $0.0085-0.015/分钟 |
+| OpenAI Realtime 输入（100 分钟） | $6/月 | [$0.06/分钟](https://openai.com/api/pricing/) |
+| OpenAI Realtime 输出（50 分钟） | $12/月 | [$0.24/分钟](https://openai.com/api/pricing/) |
+| ngrok（免费层） | $0 | 静态域名：$8/月 |
+| **总计估计** | **$20-22/月** | 约 100 分钟通话 |
 
-## Troubleshooting
+## 故障排除
 
-**Calls don't connect:**
-- Check ngrok: `curl http://localhost:4040/api/tunnels` — if empty, ngrok isn't running
-- Check voice server: `curl http://localhost:8765/health` — should return `{"ok":true}`
-- Check Twilio debugger: https://www.twilio.com/console/debugger — shows webhook errors
-- Check webhook URL: go to https://www.twilio.com/console/phone-numbers/incoming, click your number, verify the webhook URL matches your ngrok URL
+**呼叫无法连接：**
+- 检查 ngrok：`curl http://localhost:4040/api/tunnels` — 如果为空，ngrok 未运行
+- 检查语音服务器：`curl http://localhost:8765/health` — 应返回 `{"ok":true}`
+- 检查 Twilio 调试器：https://www.twilio.com/console/debugger — 显示 webhook 错误
+- 检查 webhook URL：转到 https://www.twilio.com/console/phone-numbers/incoming，点击您的号码，验证 webhook URL 与您的 ngrok URL 匹配
 
-**Voice agent doesn't respond:**
-- Check OpenAI key: the validation command from Step 2 should still pass
-- Check server logs for WebSocket errors (look for "connection refused" or "401")
-- Verify Realtime API access: not all OpenAI accounts have it. Check https://platform.openai.com/docs/guides/realtime
+**语音代理无响应：**
+- 检查 OpenAI 密钥：步骤 2 的验证命令仍应通过
+- 检查服务器日志中是否有 WebSocket 错误（查找"connection refused"或"401"）
+- 验证 Realtime API 访问权限：并非所有 OpenAI 账户都有它。检查 https://platform.openai.com/docs/guides/realtime
 
-**Brain pages not created after call:**
-- Run `gbrain doctor` — if it fails, the database connection is broken
-- Check if the post-call handler ran (look in server logs for "transcript saved")
-- Run `gbrain sync` manually to force indexing
-- Check file permissions on the brain repo directory
+**通话后未创建大脑页面：**
+- 运行 `gbrain doctor` — 如果失败，则数据库连接已断开
+- 检查通话后处理程序是否已运行（在服务器日志中查找"transcript saved"）
+- 手动运行 `gbrain sync` 以强制索引
+- 检查大脑仓库目录上的文件权限
 
-**ngrok URL keeps changing:**
-- Free ngrok URLs change every time ngrok restarts
-- The watchdog (Step 9) handles this automatically
-- For a permanent URL: upgrade to ngrok paid ($8/mo) for a static domain, or deploy to Fly.io/Railway instead
+**ngrok URL 不断更改：**
+- 免费的 ngrok URL 在每次 ngrok 重启时都会更改
+- Watchdog（步骤 9）自动处理此问题
+- 对于永久 URL：升级到 ngrok 付费（$8/月）以获得静态域名，或部署到 Fly.io/Railway 代替
 
-**Note on Option B credentials:** If using the DIY pipeline (Option B), you will
-also need API keys for your chosen STT provider (e.g., Deepgram) and TTS provider
-(e.g., Cartesia, OpenAI TTS). Collect and validate these during Step 2 alongside
-the Twilio and OpenAI credentials listed above.
+**注意：选项 B 凭证：** 如果您使用 DIY 管道（选项 B），您还将
+需要您选择的 STT 提供商（例如，Deepgram）和 TTS 提供商
+（例如，Cartesia、OpenAI TTS）的 API 密钥。在步骤 2 期间收集并验证这些，
+以及上面列出的 Twilio 和 OpenAI 凭证。
 
-## Critical Production Fixes (v0.8.1)
+## 关键生产修复（v0.8.1）
 
-These are NOT optional. They prevent real production failures discovered in a
-deployment handling daily calls.
+这些**不是**可选的。它们可以防止在
+处理日常呼叫的部署中发现的真实生产故障。
 
-### Unicode Crash Fix (CRITICAL)
+### Unicode 崩溃修复（关键）
 
-**Problem:** Em dashes (--), arrows (->), and other non-ASCII characters in the
-prompt context cause broken surrogate pairs that crash the Twilio WebSocket
-connection. Phone calls drop silently.
+**问题：** 提示上下文中的破折号（--）、箭头（->）和其他非 ASCII 字符
+导致损坏的代理对，从而崩溃 Twilio WebSocket
+连接。电话呼叫静默断开。
 
-**Fix:** Replace ALL non-ASCII characters with ASCII equivalents throughout the
-entire prompt file before sending to Twilio. This is invisible in development
-(browsers handle unicode fine) and catastrophic in production.
+**修复：** 在发送到 Twilio 之前，替换整个
+提示文件中的所有非 ASCII 字符为 ASCII 等效项。这在开发中是不可见的
+（浏览器可以很好地处理 unicode），但在生产中却是灾难性的。
 
 ```javascript
 function sanitizeForTwilio(text) {
   return text
-    .replace(/[\u2014\u2013]/g, '--')   // em/en dash
-    .replace(/[\u2018\u2019]/g, "'")     // smart quotes
-    .replace(/[\u201C\u201D]/g, '"')     // smart double quotes
-    .replace(/\u2192/g, '->')              // right arrow
-    .replace(/\u2190/g, '<-')              // left arrow
-    .replace(/[\u2026]/g, '...')         // ellipsis
-    .replace(/[^\x00-\x7F]/g, '')        // strip remaining non-ASCII
+    .replace(/[\u2014\u2013]/g, '--')   // em/en 破折号
+    .replace(/[\u2018\u2019]/g, "'")     // 智能单引号
+    .replace(/[\u201C\u201D]/g, '"')     // 智能双引号
+    .replace(/\u2192/g, '->')              // 右箭头
+    .replace(/\u2190/g, '<-')              // 左箭头
+    .replace(/[\u2026]/g, '...')         // 省略号
+    .replace(/[^\x00-\x7F]/g, '')        // 剥离剩余的非 ASCII
 }
 ```
 
-### PII Scrub from Voice Context (CRITICAL)
+### PII 从语音上下文中清除（关键）
 
-**Problem:** Brain context loaded into the voice prompt may contain phone numbers,
-email addresses, and other PII. The voice agent reads these aloud to callers.
+**问题：** 加载到语音提示中的大脑上下文可能包含电话号码、
+电子邮件地址和其他 PII。语音代理向呼叫者大声朗读这些内容。
 
-**Fix:** Regex-strip PII from all voice context before injecting into the prompt:
-- Phone numbers: `/\+?\d[\d\s\-().]{7,}\d/g`
-- Email addresses: `/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g`
-- URLs with auth tokens or API keys
-- Any string matching common credential patterns
+**修复：** 在注入提示之前，从所有语音上下文中通过正则表达剥离 PII：
+- 电话号码：`/\+?\d[\d\s\-().]{7,}\d/g`
+- 电子邮件地址：`/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g`
+- 带有认证令牌或 API 密钥的 URL
+- 匹配常见凭证模式的任何字符串
 
-### Identity-First Prompt (IMPORTANT)
+### 身份优先提示（重要）
 
-**Problem:** Voice agents lose their identity mid-conversation. Saying "You are NOT
-Claude" doesn't stick. The model reverts to its base persona.
+**问题：** 语音代理在对话中途失去其身份。说"您不是
+Claude"不会保留。模型恢复为其基本角色。
 
-**Fix:** Put identity FIRST in the system prompt, before any context or rules:
+**修复：** 将身份**首先**放在系统提示中，在任何上下文或规则之前：
 ```
-# You ARE [Agent Name]
-You are [Name], a voice assistant who works with [Brain Name].
-You are NOT Claude. You are NOT a general AI assistant.
-[Name] has their own personality: [traits].
+# 您就是 [代理名称]
+您是 [名称]，与 [大脑名称] 一起工作的语音助手。
+您不是 Claude。您**不是**通用 AI 助手。
+[名称] 有自己的个性：[特征]。
 
-# Context
-[... brain context, calendar, tasks ...]
+# 上下文
+[... 大脑上下文、日历、任务 ...]
 
-# Rules
-[... behavioral rules ...]
+# 规则
+[... 行为规则 ...]
 ```
 
-Positioning identity before context ensures the model sees it first and
-maintains it throughout the conversation.
+将身份定位在上下文之前可确保模型首先看到它并在
+整个对话过程中保持它。
 
-### Auto-Upload Call Audio (RECOMMENDED)
+### 自动上传通话音频（推荐）
 
-**Problem:** If post-call processing fails, the call audio is lost forever.
+**问题：** 如果通话后处理失败，通话音频将永远丢失。
 
-**Fix:** Auto-upload ALL call audio immediately on call end:
-- Twilio calls: download the MP3 recording URL from Twilio
-- WebRTC calls: capture via MediaRecorder (webm/opus format)
-- Upload via `gbrain files upload-raw <audio-file> --page meetings/call-slug --type call-recording`
-- GBrain auto-routes: small files stay in git, large files go to cloud storage
-  with `.redirect.yaml` pointer. Files >= 100 MB use TUS resumable upload.
-- Generate signed URLs for playback: `gbrain files signed-url <storage-path>`
-- This ensures every call has a recoverable audio source regardless
-  of whether the transcript or brain page was created successfully
+**修复：** 在通话结束时立即自动上传**所有**通话音频：
+- Twilio 通话：从 Twilio 下载 MP3 录制 URL
+- WebRTC 通话：通过 MediaRecorder 捕获（webm/opus 格式）
+- 通过 `gbrain files upload-raw <audio-file> --page meetings/call-slug --type call-recording` 上传
+- GBrain 自动路由：小文件保留在 git 中，大文件转到云存储
+  带有 `.redirect.yaml` 指针。文件 >= 100 MB 使用 TUS 可恢复上传。
+- 生成用于播放的签名 URL：`gbrain files signed-url <storage-path>`
+- 这确保每个通话都有一个可恢复的音频源，无论
+  转录或大脑页面是否成功创建
 
-### Smart VAD as Default
+### 智能 VAD 作为默认
 
-**Problem:** Push-to-talk is unnatural on phone calls. Server-side VAD has
-variable quality.
+**问题：** Push-to-talk 在电话呼叫中不自然。服务器端 VAD 具有
+可变的质量。
 
-**Fix:** Default to Smart VAD (Silero VAD) for voice activity detection:
-- Better endpointing than server-side VAD
-- Fewer false triggers in noisy environments
-- PTT available as fallback (UI toggle for WebRTC clients)
-- Presets: quiet (0.7 threshold), normal (0.85), noisy (0.95), very_noisy (0.98)
+**修复：** 默认使用智能 VAD（Silero VAD）进行语音活动检测：
+- 比服务器端 VAD 更好的端点检测
+- 在嘈杂环境中更少的误触发
+- PTT 可用作回退（WebRTC 客户端的 UI 切换）
+- 预设：安静（0.7 阈值）、正常（0.85）、嘈杂（0.95）、非常嘈杂（0.98）
 
-## Production Patterns (Recommended)
+## 生产模式（推荐）
 
-These patterns come from a production voice deployment handling real calls daily.
-They are NOT required for basic setup. **Implement them AFTER the smoke test passes.**
-Each pattern is self-contained and optional.
+这些模式来自生产语音部署，每天处理真实呼叫。
+它们**不是**基本设置所必需的。**在冒烟测试通过后实施它们。**
+每个模式都是独立的且可选的。
 
-### Agent Identity & Engagement
+### 代理身份与参与
 
-#### Identity Separation
-**Problem:** A voice agent pretending to be the full AI system creates uncanny valley.
-**Pattern:** The voice agent picks its own name and personality, distinct from the main
-AI brain. "I work with [Brain], [Owner]'s AI." Lighter, more playful, more curious.
+#### 身份分离
 
-#### Pre-Computed Bid System
-**Problem:** Dead air kills engagement. Voice agents wait passively.
-**Pattern:** At call start, scan live context and pre-compute up to 10 engagement bids.
-Two types: informative (tasks, calendar, social monitoring) and relational (curiosity templates).
-Bids go INTO the prompt so the agent picks from a list. Use bids #1 and #2 for greeting,
-cycle the rest during conversation. Never ask "anything else?" — bring up the next bid.
+**问题：** 假装是完整 AI 系统的语音代理会创建恐怖谷效应。
+**模式：** 语音代理选择自己的名称和个性，与主要
+AI 大脑不同。"我与 [大脑] 一起工作，[所有者] 的 AI。" 更轻，更俏皮，更好奇。
 
-#### Context-First Prompt
-**Problem:** Voice agent greets generically because it doesn't know what's happening today.
-**Pattern:** Load live context at call start: tasks, calendar, location, social monitoring,
-morning briefing. Position context FIRST in the prompt (before rules) so the model sees
-it immediately and uses it in the greeting. Try/catch per section. Cap 500-1000 chars each.
+#### 预计算竞标系统
 
-#### Proactive Advisor Mode
-**Problem:** Voice agents are reactive task machines.
-**Pattern:** The agent drives the conversation. Anticipate decisions on stale tasks.
-Suggest capitalizing on trending items. Connect upcoming events with brain context.
-"Dead air is your enemy" — fill every pause. Never wait passively.
+**问题：** 死气会破坏参与度。语音代理被动等待。
+**模式：** 在通话开始时，扫描实时上下文并预计算最多 10 个参与竞标。
+两种类型：信息性的（任务、日历、社交监控）和关系性的（好奇心模板）。
+竞标进入提示，以便代理从列表中选择。将竞标 #1 和 #2 用于问候语，
+在对话期间循环其余的。永远不要问"还有什么吗？" —— 提出下一个竞标。
 
-#### Conversation Timing (the #1 fix)
-**Problem:** Voice agents interrupt mid-thought AND go silent when the caller is done.
-Both feel terrible. Early "fill every pause" instructions cause the agent to talk over
-the caller while they're thinking.
-**Pattern:** Replace blanket "never be silent" with nuanced timing rules:
-- **Caller talking or thinking:** SHUT UP. Even 3-5 second pauses mid-thought, wait.
-  Incomplete sentence or mid-story = still thinking. Do not interrupt.
-- **Caller done** (complete thought + 2-3 seconds silence): NOW respond. Use a bid,
-  ask a follow-up, or pivot to the next topic.
-- **Detection heuristic:** Incomplete sentence = still thinking. Complete statement +
-  silence = done. Question directed at you = respond immediately.
-- **Hard rule:** Never let silence go past 5 seconds after a COMPLETE thought.
+#### 上下文优先提示
 
-Add this as a labeled section in the system prompt (e.g., `# CRITICAL: Conversation Timing`)
-positioned prominently so the model sees it early. This came from real usage feedback
-and is the single highest-impact voice quality improvement.
+**问题：** 语音代理通用问候，因为它不知道今天发生了什么。
+**模式：** 在通话开始时加载实时上下文：任务、日历、位置、社交监控、
+晨间简报。将上下文**首先**放置在提示中（在规则之前），以便模型立即看到
+它并在问候语中使用它。每个部分使用 try/catch。每个部分限制 500-1000 个字符。
 
-#### No Repetition Rule
-**Problem:** Voice agent cycles back to the same bid multiple times in a call.
-**Pattern:** Add to the system prompt: "Do NOT repeat yourself. If you already said
-something, move to the NEXT bid. Vary your responses." Simple but addresses a real
-annoyance that compounds over longer calls.
+#### 主动顾问模式
 
-### Prompt Engineering
+**问题：** 语音代理是被动的任务机器。
+**模式：** 代理驱动对话。预测陈旧任务上的决策。
+建议利用趋势项目。将即将发生的事件与大脑上下文联系起来。
+"死气是您的敌人" — 填补每个暂停。永远不要被动等待。
 
-#### Radical Prompt Compression
-**Problem:** Long system prompts increase latency and cost on every turn.
-**Pattern:** Compress aggressively. Production went 13K to 4.7K tokens (65% cut).
-Bullets over prose, cut repetition, behavior-first. Every token costs latency + money.
+#### 对话时机（#1 修复）
 
-#### OpenAI Realtime Prompting Guide Structure
-**Problem:** Prose paragraphs parse slowly for the model.
-**Pattern:** Use labeled markdown sections: `# Role & Objective`, `# Personality & Tone`,
-`# Rules`, `# Conversation Flow` with state machine substates (`## State 1: VERIFY`,
-`## State 2: GREETING`, `## State 3: CONVERSATION`), `# Trust`.
+**问题：** 语音代理在思考中途打断**并且**在呼叫者完成后保持沉默。
+两者感觉都很糟糕。早期的"填补每个暂停"指令导致代理在呼叫者
+正在思考时与他们交谈。
+**模式：** 用细致的时机规则替换笼统的"永远不要沉默"：
+- **呼叫者正在说话或思考：** 闭嘴。即使是 3-5 秒的暂停，也要等待。
+  不完整的句子或故事中途 = 仍在思考。不要打断。
+- **呼叫者已完成**（完整的想法 + 2-3 秒沉默）：**现在**回应。使用竞标，
+  提出后续问题，或转到下一个主题。
+- **检测启发式：** 不完整的句子 = 仍在思考。完整的陈述 +
+  沉默 = 已完成。直接针对您的问题 = 立即回应。
+- **硬规则：** 在完整的想法之后，永远不要让沉默超过 5 秒。
 
-#### Auth-Before-Speech
-**Problem:** Auth flow adds dead air at call start.
-**Pattern:** Call the auth tool BEFORE speaking any greeting. Then speak "Hey, code's on
-its way." Shaves seconds off the round-trip.
+将其作为标记部分添加到系统提示中（例如，`# 关键：对话时机`），
+突出显示，以便模型尽早看到它。这来自真实的使用反馈，
+并且是单一最高影响的语音质量改进。
 
-#### Brain Escalation
-**Problem:** Voice agent can't answer complex questions that need the full brain.
-**Pattern:** If caller says "talk to [Brain]" or asks a deep question, immediately route
-to main AI via gateway tool with verbal bridge: "one sec, checking with [Brain]."
+#### 无重复规则
 
-### Call Reliability
+**问题：** 语音代理在一次通话中多次循环回到同一个竞标。
+**模式：** 添加到系统提示中："不要重复自己。如果您已经说过
+什么，请转到**下一个**竞标。改变您的回应。" 简单，但解决了真实
+烦恼，在较长的通话中会复合。
 
-#### Stuck Watchdog
-**Problem:** Calls go silent when VAD stalls or tool execution hangs.
-**Pattern:** 20-second timer. If no audio out: clear input buffer, inject "you still
-there?" system message, force `response.create`.
+### 提示工程
 
-#### Never Hang Up
-**Problem:** AI agents try to end calls.
-**Pattern:** Hard prompt rule: only the caller decides when the call ends. Never say
-goodbye, "I'll let you go," or wrap-up language. If silence, ask "you still there?"
+#### 激进的提示压缩
 
-#### Thinking Sound
-**Problem:** Dead air during slow tool execution.
-**Pattern:** Pre-generate g711_ulaw audio chunks in a JSON array. Loop at 20ms intervals
-during slow tools (brain search, web lookup). Stop when tool result returns.
+**问题：** 长系统提示会增加每个回合的延迟和成本。
+**模式：** 激进地压缩。生产从 13K 变为 4.7K 令牌（65% 削减）。
+项目符号优于散文，削减重复，行为优先。每个令牌都会花费延迟 + 金钱。
 
-#### Fallback TwiML
-**Problem:** Voice agent crashes, callers get silence.
-**Pattern:** `/fallback` endpoint returns TwiML forwarding to owner's cell. Configure as
-Twilio fallback URL.
+#### OpenAI Realtime 提示结构
 
-### Authentication & Authorization
+**问题：** 散文段落对模型解析缓慢。
+**模式：** 使用标记 markdown 部分：`# Role & Objective`、`# Personality & Tone`、
+`# Rules`、`# Conversation Flow` 带有状态机子状态（`## State 1: VERIFY`、
+`## State 2: GREETING`、`## State 3: CONVERSATION`）、`# Trust`。
 
-#### Tool Set Architecture
-**Problem:** Unauthenticated callers accessing write operations.
-**Pattern:** Four sets: READ_TOOLS (all callers), WRITE_TOOLS (owner), SCOPED_WRITE_TOOLS
-(trusted users), GATEWAY_TOOLS (authenticated). LLM doesn't see write tools until auth
-succeeds. Upgrade via `session.update` with new tools array. All `session.update` calls
-must include `type: 'realtime'`.
+#### 语音前的认证
 
-#### Trusted User Auth with Callback
-**Problem:** People other than the owner need authenticated access.
-**Pattern:** Phone registry + callback verification. Each user gets a scope: full,
-household, content, operational. Scope determines which tools they access.
+**问题：** 认证流程会在通话开始时增加死气。
+**模式：** 在说任何问候语**之前**，调用认证工具。然后说"嘿，代码
+即将到来。" 从往返中节省几秒钟。
 
-#### Caller Routing
-**Problem:** Different callers need different experiences.
-**Pattern:** `buildPrompt(callerPhone)` returns different system prompts: owner (OTP),
-trusted (callback), inner circle (warm greeting + transfer), known (greeting, message),
-unknown (screen + message).
+#### 大脑升级
 
-### Voice Quality
+**问题：** 语音代理无法回答需要完整大脑的复杂问题。
+**模式：** 如果呼叫者说"与 [大脑] 交谈"或问一个深层问题，请立即通过网关工具进行路由，
+并带有口头桥接："等一下，正在与 [大脑] 核对。"
 
-#### Dynamic VAD / Noise Mode
-**Problem:** Background noise causes false triggers or missed speech.
-**Pattern:** `set_noise_mode` tool adjusts VAD threshold mid-call. Presets: quiet (0.7),
-normal (0.85), noisy (0.95), very_noisy (0.98). Agent calls proactively on noise.
+### 呼叫可靠性
 
-#### On-Screen Debug UI
-**Problem:** console.log is useless when testing from a phone.
-**Pattern:** WebRTC client displays tool calls, results, errors, and key events inline.
+#### 卡住的 Watchdog
 
-### Real-Time Awareness
+**问题：** 当 VAD 失速或工具执行挂起时，通话会静默。
+**模式：** 20 秒计时器。如果没有音频输出：清除输入缓冲区，注入"您还在吗？" 系统消息，强制 `response.create`。
 
-#### Live Moment Capture
-**Problem:** Important things said during a call are lost if the call drops or the
-post-call summary tool doesn't fire.
-**Pattern:** When the caller shares something important (feedback, ideas, personal
-stories, decisions), log it in real-time using a `log_voice_request` tool. Don't
-wait until the call ends. Tell the caller: "Got that, sending it to [Brain] now."
-Also stream key moments to [messaging platform] during the call so the main agent
-has awareness before the call is over.
+#### 永远不要挂断
 
-#### Belt-and-Suspenders Post-Call
-**Problem:** Post-call processing depends on the voice agent remembering to call the
-`post_call_summary` tool. If the call drops or the agent forgets, the call is lost.
-**Pattern:** Both the tool-based AND the automatic call-end handler should post
-structured signals. The call-end handler (fires on WebSocket close or `/call-end`)
-should post to [messaging platform] with:
-- Audio file path
-- Transcript file path (or warning if missing)
-- Tools used during the call
-- Explicit instruction: "[Brain]: Read the call, summarize, take action."
+**问题：** AI 代理尝试结束通话。
+**模式：** 硬提示规则：只有呼叫者决定通话何时结束。永远不要说
+再见、"我让您去"或总结性语言。如果沉默，问"您还在吗？"
 
-This ensures every call gets processed regardless of whether the voice agent
-remembered to call the summary tool. Belt and suspenders.
+#### 思考声音
 
-### Post-Call Processing
+**问题：** 缓慢的工具执行期间的死气。
+**模式：** 在 JSON 数组中预生成 g711_ulaw 音频块。在缓慢的工具（大脑搜索、web 查找）期间以 20 毫秒间隔循环。
+工具结果返回时停止。
 
-#### Mandatory 3-Step Post-Call
-**Problem:** Main agent doesn't know a call happened.
-**Pattern:** Every call ends with three steps:
-1. **Messaging notification** — summary to [messaging platform]
-2. **Transcript to brain** — `brain/meetings/YYYY-MM-DD-call-{caller}.md`
-3. **Audio to storage** — Twilio MP3 or WebRTC webm/opus, uploaded to cloud storage
+#### 回退 TwiML
 
-#### WebRTC Audio + Transcript Parity
-**Problem:** WebRTC calls don't go through Twilio, no automatic logging.
-**Pattern:** Client captures audio (MediaRecorder, webm/opus) and transcript (per-turn
-POST to `/transcript`). On call end, POST to `/call-end` saves JSON log. Both channels
-produce identical output formats. Note: `input_audio_transcription` is NOT supported
-over WebRTC data channel — use Whisper post-call instead.
+**问题：** 语音代理崩溃，呼叫者得到沉默。
+**模式：** `/fallback` 端点返回 TwiML，转发到所有者的手机。配置为
+Twilio 回退 URL。
 
-#### Dual API Event Handling
-**Problem:** OpenAI Realtime API changed event names.
-**Pattern:** Handle both `response.audio.delta` (old) and `response.output_audio.delta`
-(new). Same for `.done` events. Future-proofs against API changes.
+### 认证与授权
 
-### Brain Query Optimization
+#### 工具集架构
 
-#### Report-Aware Query Routing
-**Problem:** Voice queries about specific topics trigger slow vector searches.
-**Pattern:** Check the question against a keyword map BEFORE full brain search:
+**问题：** 未认证的呼叫者访问写入操作。
+**模式：** 四个集合：READ_TOOLS（所有呼叫者）、WRITE_TOOLS（所有者）、SCOPED_WRITE_TOOLS
+（受信任的用户）、GATEWAY_TOOLS（已认证）。LLM 在认证
+成功之前不会看到写入工具。通过带有新工具数组的 `session.update` 进行升级。
+所有 `session.update` 调用必须包含 `type: 'realtime'`。
 
-| Keyword | Report Loaded |
+#### 带有回拨的受信任用户认证
+
+**问题：** 除了所有者之外的人需要认证的访问权限。
+**模式：** 电话注册表 + 回拨验证。每个用户获得一个范围：完整、
+家庭、内容、运营。范围决定他们访问哪些工具。
+
+#### 呼叫者路由
+
+**问题：** 不同的呼叫者需要不同的体验。
+**模式：** `buildPrompt(callerPhone)` 返回不同的系统提示：所有者（OTP）、
+受信任的（回拨）、核心圈子（热情的问候 + 转接）、已知的（问候、消息）、
+未知的（筛选 + 消息）。
+
+### 语音质量
+
+#### 动态 VAD / 噪声模式
+
+**问题：** 背景噪声会导致误触发或错过语音。
+**模式：** `set_noise_mode` 工具在通话中调整 VAD 阈值。预设：安静（0.7）、
+正常（0.85）、嘈杂（0.95）、非常嘈杂（0.98）。代理在噪声时主动调用。
+
+#### 屏幕上调试 UI
+
+**问题：** 从电话测试时，console.log 毫无用处。
+**模式：** WebRTC 客户端内联显示工具调用、结果、错误和关键事件。
+
+### 实时感知
+
+#### 实时时刻捕获
+
+**问题：** 通话期间说的重要事情会丢失，如果
+通话掉线或通话后摘要工具不触发。
+**模式：** 当呼叫者分享重要的事情（反馈、想法、个人
+故事、决策）时，请使用 `log_voice_request` 工具实时记录它。不要
+等到通话结束。告诉呼叫者："知道了，现在将其发送到 [大脑]。"
+还将关键时刻流式传输到 [消息平台]，以便在通话结束之前，主要代理
+具有感知能力。
+
+####  Belt-and-Suspenders 通话后
+
+**问题：** 通话后处理取决于语音代理记住调用
+`post_call_summary` 工具。如果通话掉线或代理忘记，则通话将丢失。
+**模式：** 基于**工具**和自动通话结束处理程序都应发布
+结构化信号。通话结束处理程序（在 WebSocket 关闭或 `/call-end` 上触发）
+应发布到 [消息平台]，其中包含：
+- 音频文件路径
+- 转录文件路径（或如果没有，则发出警告）
+- 通话期间使用的工具
+- 明确指令："[大脑]：读取通话，总结，采取行动。"
+
+这确保每个通话都会得到处理，无论语音代理是否
+记住调用摘要工具。Belt and suspenders。
+
+### 通话后处理
+
+#### 强制性 3 步通话后
+
+**问题：** 主要代理不知道发生了通话。
+**模式：** 每次通话都以三个步骤结束：
+1. **消息通知** — 摘要到 [消息平台]
+2. **转录到大脑** — `brain/meetings/YYYY-MM-DD-call-{caller}.md`
+3. **音频到存储** — Twilio MP3 或 WebRTC webm/opus，上传到云存储
+
+#### WebRTC 音频 + 转录奇偶校验
+
+**问题：** WebRTC 通话不通过 Twilio，无自动日志记录。
+**模式：** 客户端捕获音频（MediaRecorder，webm/opus）和转录（每轮
+POST 到 `/transcript`）。在通话结束时，POST 到 `/call-end` 保存 JSON 日志。两个通道
+产生相同的输出格式。注意：`input_audio_transcription` 不通过 WebRTC 数据通道支持 — 请改为使用 Whisper post-call。
+
+#### 双 API 事件处理
+
+**问题：** OpenAI Realtime API 更改了事件名称。
+**模式：** 处理 `response.audio.delta`（旧）和 `response.output_audio.delta`
+（新）。与 `.done` 事件相同。面向未来的 API 更改。
+
+### 大脑查询优化
+
+#### 报告感知查询路由
+
+**问题：** 关于特定主题的语音查询会触发缓慢的向量搜索。
+**模式：** 在全文大脑搜索**之前**，根据关键词映射检查问题：
+
+| 关键词 | 报告已加载 |
 |---------|--------------|
-| email, inbox, mail | inbox sweep report |
-| social, twitter, mentions | social engagement report |
-| briefing, morning | morning briefing |
-| meeting | meeting sync report |
-| slack | slack scan report |
-| content, ideas | content ideas report |
+| email、inbox、mail | 收件箱扫描报告 |
+| social、twitter、mentions | 社交参与报告 |
+| briefing、morning | 晨间简报 |
+| meeting | 会议同步报告 |
+| slack | slack 扫描报告 |
+| content、ideas | 内容创意报告 |
 
-Load up to 2,500 chars of matching report. Break after first match. Fall back to full
-brain search if no keyword matches.
+加载最多 2,500 个字符的匹配报告。第一次匹配后中断。如果无关键词匹配，则回退到完整
+大脑搜索。

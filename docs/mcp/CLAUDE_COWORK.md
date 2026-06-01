@@ -1,33 +1,33 @@
-# Connect GBrain to Claude Cowork
+# 将 GBrain 连接到 Claude Cowork
 
-Two ways to get GBrain into Cowork sessions:
+有两种方式可以将 GBrain 接入 Cowork 会话：
 
-## Option 1: Remote (via self-hosted server + tunnel)
+## 选项 1：远程（通过自托管服务器 + 隧道）
 
-For Team/Enterprise plans, an org Owner adds the connector:
+对于 Team/Enterprise 计划，组织所有者添加连接器：
 
-1. Go to **Organization Settings > Connectors**
-2. Add a new connector with the MCP server URL:
+1. 前往 **组织设置 > 连接器**
+2. 使用 MCP 服务器 URL 添加新连接器：
    ```
    https://YOUR-DOMAIN.ngrok.app/mcp
    ```
-3. Add Bearer token authentication in Advanced Settings
-   (create one with `gbrain auth create "cowork"`)
-4. Save
+3. 在高级设置中添加 Bearer token 认证
+   （使用 `gbrain auth create "cowork"` 创建一个）
+4. 保存
 
-Note: Cowork connects from Anthropic's cloud, not your device. Your server
-must be publicly reachable (ngrok, Tailscale Funnel, or cloud-hosted).
+注意：Cowork 从 Anthropic 的云连接，而不是你的设备。你的服务器
+必须可从公共网络访问（ngrok、Tailscale Funnel 或云托管）。
 
-## Option 2: Local Bridge (via Claude Desktop)
+## 选项 2：本地桥接（通过 Claude Desktop）
 
-If you already have GBrain configured in Claude Desktop (via `gbrain serve`
-stdio or a remote integration), Cowork gets access automatically. Claude
-Desktop bridges local MCP servers into Cowork via its SDK layer.
+如果你已经在 Claude Desktop 中配置了 GBrain（通过 `gbrain serve`
+stdio 或远程集成），Cowork 会自动获得访问权限。Claude
+Desktop 通过其 SDK 层将本地 MCP 服务器桥接到 Cowork。
 
-This means: if `gbrain serve` is running and configured in Claude Desktop,
-you don't need a separate server for Cowork.
+这意味着：如果 `gbrain serve` 正在运行并且在 Claude Desktop 中已配置，
+你不需要为 Cowork 单独设置服务器。
 
-## Which to use?
+## 使用哪一个？
 
-- **Remote server:** works even when your laptop is closed, available to all org members
-- **Local Bridge:** zero extra setup if Claude Desktop already has GBrain, but requires your machine to be running
+- **远程服务器：** 即使你的笔记本电脑已关闭也能工作，可供所有组织成员使用
+- **本地桥接：** 如果 Claude Desktop 已有 GBrain 则无需额外设置，但需要你的机器正在运行

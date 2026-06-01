@@ -1,41 +1,39 @@
 # ZeroEntropy — zembed-1 + zerank-2
 
-[ZeroEntropy](https://zeroentropy.dev) ships two specialized small models
-for retrieval pipelines:
+[ZeroEntropy](https://zeroentropy.dev) 提供两个专门用于
+检索管道的小型模型：
 
-- **`zembed-1`** — multilingual embedding distilled from zerank-2.
-  Flexible Matryoshka dims (2560/1280/640/320/160/80/40), 32K context,
-  asymmetric `input_type: query|document` encoding. $0.025/1M tokens
-  (sale) / $0.05 regular.
-- **`zerank-2`** — SOTA multilingual cross-encoder reranker.
-  $0.025/1M tokens (~50% cheaper than Cohere/Voyage rerankers).
-  Plus `zerank-1` and `zerank-1-small` for legacy / open-source needs.
+- **`zembed-1`** — 从 zerank-2 蒸馏的多语言嵌入。
+  灵活的 Matryoshka 维度 (2560/1280/640/320/160/80/40)，32K 上下文，
+  非对称 `input_type: query|document` 编码。$0.025/1M token
+  （促销价）/ $0.05 常规价。
+- **`zerank-2`** — SOTA 多语言交叉编码器重排序器。
+  $0.025/1M token（比 Cohere/Voyage 重排序器便宜约 50%）。
+  另外还有 `zerank-1` 和 `zerank-1-small` 用于旧版 / 开源需求。
 
-Both land in gbrain v0.35.0.0 behind the openai-compatible recipe path,
-alongside OpenAI and Voyage.
+两者都在 gbrain v0.35.0.0 中通过开放式 AI 兼容的配方路径落地，
+与 OpenAI 和 Voyage 并列。
 
-## Setup
+## 设置
 
-1. Get an API key at
-   [dashboard.zeroentropy.dev](https://dashboard.zeroentropy.dev).
-2. Export it:
+1. 在 [dashboard.zeroentropy.dev](https://dashboard.zeroentropy.dev) 获取 API 密钥。
+2. 导出它：
    ```bash
    export ZEROENTROPY_API_KEY=<your-key>
    ```
 
-## Embedding switch — zembed-1
+## 嵌入切换 — zembed-1
 
-**Important:** `gbrain config set embedding_model …` is NOT a live
-gateway switch. `embedding_model` and `embedding_dimensions` size the
-schema and must be stable across engine connects, so they only resolve
-from the **file plane** (`~/.gbrain/config.json`) and the **env plane**
-(`GBRAIN_EMBEDDING_MODEL` / `GBRAIN_EMBEDDING_DIMENSIONS`). The DB plane
-is intentionally ignored for these two keys (same posture as today's
-Voyage setup).
+**重要提示：** `gbrain config set embedding_model …` 不是
+实时网关切换。`embedding_model` 和 `embedding_dimensions` 会调整
+schema，并且必须在引擎连接之间保持稳定，因此它们只从
+**文件平面**（`~/.gbrain/config.json`）和 **环境变量平面**
+（`GBRAIN_EMBEDDING_MODEL` / `GBRAIN_EMBEDDING_DIMENSIONS`）解析。对于这两个键，数据库平面
+被有意忽略（与当今的 Voyage 设置姿态相同）。
 
-### Option A — file plane (recommended for stable installs)
+### 选项 A — 文件平面（推荐用于稳定安装）
 
-Edit `~/.gbrain/config.json`:
+编辑 `~/.gbrain/config.json`：
 
 ```json
 {
@@ -44,130 +42,132 @@ Edit `~/.gbrain/config.json`:
 }
 ```
 
-Valid dims: `2560` (default), `1280`, `640`, `320`, `160`, `80`, `40`.
-Matryoshka-style — smaller trades quality for storage monotonically.
-Pick the largest that fits your column width.
+有效维度：`2560`（默认）、`1280`、`640`、`320`、`160`、`80`、`40`。
+Matryoshka 风格 — 较小的维度会单调地权衡质量以换取存储。
+选择适合你列宽的最大维度。
 
-### Option B — env plane (CI / Docker)
+### 选项 B — 环境变量平面（CI / Docker）
 
 ```bash
 export GBRAIN_EMBEDDING_MODEL=zeroentropyai:zembed-1
 export GBRAIN_EMBEDDING_DIMENSIONS=2560
 ```
 
-### Re-embed
+### 重新嵌入
 
-Switching embedding models invalidates the vector index. Re-embed:
+切换嵌入模型会使向量索引失效。重新嵌入：
 
 ```bash
-gbrain embed --stale --limit 50    # smoke a small batch
-gbrain embed --stale               # full re-embed
+gbrain embed --stale --limit 50    # 先小规模测试
+gbrain embed --stale               # 完整重新嵌入
 ```
 
-### Verify
+### 验证
 
 ```bash
 gbrain models doctor --json | jq '.probes[] | select(.touchpoint=="embedding_config")'
 ```
 
-Expected: `status: "ok"`. Invalid dims (e.g. `1024`, `1536`, `3072`)
-surface as `status: "config"` with a paste-ready
-`gbrain config set embedding_dimensions <one of 2560|1280|640|320|160|80|40>` fix hint.
+预期：`status: "ok"`。无效维度（例如 `1024`、`1536`、`3072`）
+会显示为 `status: "config"`，并带有可直接粘贴的
+`gbrain config set embedding_dimensions <2560|1280|640|320|160|80|40>` 修复提示。
 
-## Reranker switch — zerank-2
+## 重排序器切换 — zerank-2
 
-The reranker is the bigger story: gbrain had no cross-encoder reranker
-stage before v0.35.0.0. It slots between RRF dedup and token-budget
-enforcement in hybrid search.
+重排序器是更重要的部分：gbrain 在 v0.35.0.0 之前没有交叉编码器重排序器
+阶段。它位于混合搜索中 RRF 去重和 token 预算
+强制执行之间。
 
-### Default-on with `tokenmax` mode
+### 默认启用（使用 `tokenmax` 模式）
 
-`tokenmax` mode now defaults `search.reranker.enabled = true` with
-`zerank-2`. If you already use `tokenmax` AND have `ZEROENTROPY_API_KEY`
-set, reranker fires automatically. Without the key, every rerank call
-fails-open (audit-logged) and search returns RRF order — same UX as
-before, just with an observable failure surfaced via `gbrain doctor`.
+`tokenmax` 模式现在默认 `search.reranker.enabled = true`，使用
+`zerank-2`。如果你已经使用 `tokenmax` 并且设置了 `ZEROENTROPY_API_KEY`，
+重排序器会自动触发。没有密钥时，每次重排序调用
+都会失败开放（记录到审计日志）并且搜索返回 RRF 顺序 — 与
+之前相同的用户体验，只是在 `gbrain doctor` 中会显示一个可观察的失败。
 
-### Opt-in on `conservative` or `balanced` mode
+### 在 `conservative` 或 `balanced` 模式中选择加入
 
 ```bash
 gbrain config set search.reranker.enabled true
 ```
 
-The override sits above the mode-bundle default; opt-out is one flip.
+覆盖位于模式包默认值之上；选择退出只需一次翻转。
 
-### Cost anchor
+### 成本锚定
 
-At 30 candidates × ~400 tokens/chunk × $0.025/1M = **~$0.0003/query**.
-Rounding error against the `tokenmax + Opus` pairing's ~$700/mo at
-single-user volume per the CLAUDE.md cost matrix.
+30 个候选 × ~400 token/块 × $0.025/1M = **约 $0.0003/查询**。
+根据 CLAUDE.md 成本矩阵，在单用户量下，
+与 `tokenmax + Opus` 配对的约 $700/月相比，这是舍入误差。
 
-### Verify
+### 验证
 
 ```bash
 gbrain models doctor --json | jq '.probes[] | select(.touchpoint=="reranker_config")'
 ```
 
-Two probes run for reranker:
-- `reranker_config` (zero-network) — validates the model resolves
-  through the recipe registry and is in the touchpoint's allowlist.
-- A reachability probe sends a minimal `{query: "probe", documents:
-  ["probe"]}` rerank to verify auth + URL.
+为重排序器运行两个探测：
 
-## Knobs reference
+- `reranker_config`（零网络）— 验证模型通过
+  配方注册表解析并且在端点的允许列表中。
+- 可达性探测发送一个最小化的 `{query: "probe", documents:
+  ["probe"]}` 重排序以验证认证 + URL。
 
-| Config key | Default | Notes |
+## 旋钮参考
+
+| 配置键 | 默认值 | 说明 |
 |---|---|---|
-| `search.reranker.enabled` | `true` for tokenmax, `false` for others | One-flip opt-in/out |
-| `search.reranker.model` | `zeroentropyai:zerank-2` | Try `zerank-1` (older SOTA) or `zerank-1-small` (Apache-2.0 open) |
-| `search.reranker.top_n_in` | `30` | Candidates sent to reranker (caps API spend) |
-| `search.reranker.top_n_out` | `null` (no truncate) | Truncate reranked output to this many; `null` preserves full length |
-| `search.reranker.timeout_ms` | `5000` | HTTP timeout; long stalls degrade UX worse than RRF fallback |
+| `search.reranker.enabled` | `tokenmax` 为 `true`，其他为 `false` | 一键选择加入/退出 |
+| `search.reranker.model` | `zeroentropyai:zerank-2` | 尝试 `zerank-1`（较旧的 SOTA）或 `zerank-1-small`（Apache-2.0 开源） |
+| `search.reranker.top_n_in` | `30` | 发送到重排序器的候选数（限制 API 支出） |
+| `search.reranker.top_n_out` | `null`（不截断） | 将重排序后的输出截断到此数量；`null` 保留完整长度 |
+| `search.reranker.timeout_ms` | `5000` | HTTP 超时；长时间的停滞比 RRF 回退更损害用户体验 |
 
-## Failure observability
+## 失败可观察性
 
-Reranker is fail-open by construction: every error class (auth, rate-limit,
-network, timeout, payload-too-large, unknown) returns the original RRF
-order unchanged. Failures log to
-`~/.gbrain/audit/rerank-failures-YYYY-Www.jsonl` (ISO-week rotation).
+重排序器在构造上是失败开放的：每个错误类别（认证、速率限制、
+网络、超时、负载过大、未知）都会返回原始 RRF
+顺序不变。失败记录到
+`~/.gbrain/audit/rerank-failures-YYYY-Www.jsonl`（ISO 周轮换）。
 
-`gbrain doctor` reads the audit and surfaces:
-- **auth failures** — any single one warns (config-time problem doctor's
-  own probe should have caught)
-- **payload-too-large** — any single one warns (workload-mismatch signal)
-- **transient (network/timeout/rate_limit)** — warns at >=5 in 7 days
+`gbrain doctor` 读取审计并显露：
 
-Query text is SHA-256 hashed in the audit; never logged raw.
+- **认证失败** — 任何一个都会警告（配置时问题，doctor 的
+  自身探测应该已经捕获）
+- **负载过大** — 任何一个都会警告（工作负载不匹配信号）
+- **瞬时（网络/超时/速率限制）** — 7 天内 >=5 次时警告
 
-## Asymmetric input_type
+查询文本在审计中进行 SHA-256 哈希；永远不会以原始形式记录。
 
-ZE zembed-1 (and Voyage v3+) use asymmetric query/document encoding for
-better retrieval. The gateway's `embedQuery(text)` companion threads
-`input_type: 'query'`; standard `embed(texts)` defaults to
-`'document'`. Hybrid search's two query-side embed sites use
-`embedQuery()` automatically; all ingest paths use `embed()`.
+## 非对称 input_type
 
-Symmetric providers (OpenAI text-embedding-3, fixed-dim Voyage models)
-ignore the field — no behavior change.
+ZE zembed-1（和 Voyage v3+）使用非对称查询/文档编码以获得
+更好的检索效果。网关的 `embedQuery(text)` 配套方法传递
+`input_type: 'query'`；标准 `embed(texts)` 默认为
+`'document'`。混合搜索的两个查询侧嵌入位置自动使用
+`embedQuery()`；所有摄取路径使用 `embed()`。
 
-## Cache key versioning
+对称提供程序（OpenAI text-embedding-3、固定维度 Voyage 模型）
+忽略此字段 — 行为不变。
 
-v0.35.0.0 bumped `KNOBS_HASH_VERSION` 1 → 2 to fold reranker config into
-the `query_cache.knobs_hash` column. During a rolling deploy:
+## 缓存键版本控制
 
-- Expect a temporary cache hit-rate dip (~1 hour at default
-  `cache.ttl_seconds = 3600s`)
-- Hot queries may briefly double their cache row count (one row per
-  version)
+v0.35.0.0 将 `KNOBS_HASH_VERSION` 从 1 提升到 2，以将重排序器配置
+折叠到 `query_cache.knobs_hash` 列中。在滚动部署期间：
 
-Both clear naturally; no operator action required.
+- 预期缓存命中率暂时下降（约 1 小时，默认
+  `cache.ttl_seconds = 3600s`）
+- 热查询可能会短暂地使其缓存行计数加倍（每个
+  版本一行）
 
-## Troubleshooting
+两者都会自然清除；不需要操作员操作。
 
-| Symptom | Likely cause | Fix |
+## 故障排除
+
+| 症状 | 可能原因 | 修复 |
 |---|---|---|
-| `embedding_config` probe says invalid dim | Defaulting to 1536 (OpenAI default) | Set `embedding_dimensions` to one of 2560/1280/640/320/160/80/40 |
-| `reranker_config` probe says model not in allowlist | Typo in `search.reranker.model` | Use one of `zerank-2` / `zerank-1` / `zerank-1-small` |
-| `reranker_health` doctor warns about auth | `ZEROENTROPY_API_KEY` not set or invalid | Re-export the env var; `gbrain models doctor` to verify |
-| `reranker_health` doctor warns about transient failures | Upstream flake or rate limit | Reranker fails open to RRF; check ZE status page if persistent |
-| Cache hit rate dipped after upgrade | Expected during rolling deploy | Clears within `cache.ttl_seconds` (default 3600s) |
+| `embedding_config` 探测显示无效维度 | 默认为 1536（OpenAI 默认值） | 将 `embedding_dimensions` 设置为 2560/1280/640/320/160/80/40 之一 |
+| `reranker_config` 探测显示模型不在允许列表中 | `search.reranker.model` 中有拼写错误 | 使用 `zerank-2` / `zerank-1` / `zerank-1-small` 之一 |
+| `reranker_health` doctor 警告认证问题 | 未设置或无效 `ZEROENTROPY_API_KEY` | 重新导出环境变量；运行 `gbrain models doctor` 以验证 |
+| `reranker_health` doctor 警告瞬时失败 | 上游故障或速率限制 | 重排序器失败开放到 RRF；如果持续存在，请检查 ZE 状态页面 |
+| 升级后缓存命中率下降 | 滚动部署期间预期 | 在 `cache.ttl_seconds`（默认 3600 秒）内清除 |

@@ -364,7 +364,7 @@ describe('runDream — --source / --source-id (v0.41.13)', () => {
       throw new Error('--help with --source should NOT exit; got: ' + e.message);
     }
     expect(exitSpy).not.toHaveBeenCalled();
-    expect(logSpy.mock.calls.flat().join(' ')).toMatch(/Usage: gbrain dream/);
+    expect(logSpy.mock.calls.flat().join(' ')).toMatch(/用法：gbrain dream/);
     exitSpy.mockRestore();
     logSpy.mockRestore();
   });

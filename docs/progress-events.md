@@ -1,23 +1,19 @@
-# Progress events
+# 进度事件
 
-Canonical reference for the JSONL progress stream that `gbrain` writes to
-`stderr` when a bulk command runs with `--progress-json`. Stable from
-v0.15.2. Additive changes only; no renames or removals without a major
-version bump.
+`gbrain`在批量命令运行时使用`--progress-json`写入`stderr`的JSONL进度流的规范参考。从v0.15.2开始稳定。仅 additive 更改；没有重命名或删除，除非是主要版本升级。
 
-Most humans won't read this page. Agents parsing progress will.
+大多数人类不会阅读此页面。解析进度的代理会。
 
-## When do I get these events?
+## 何时会收到这些事件？
 
-Any of these commands stream events when `--progress-json` is set:
+当设置`--progress-json`时，以下任何命令都会流式传输事件：
 
-- `gbrain doctor` (DB checks, JSONB integrity, markdown body completeness,
-  integrity sample)
+- `gbrain doctor` (DB检查, JSONB完整性, markdown body完整性, 完整性采样)
 - `gbrain orphans`
 - `gbrain embed`
 - `gbrain files sync`
 - `gbrain export`
-- `gbrain extract [links|timeline|all]` (fs or db source)
+- `gbrain extract [links|timeline|all]` (fs或db源)
 - `gbrain import`
 - `gbrain sync`
 - `gbrain migrate --to …`
@@ -26,83 +22,72 @@ Any of these commands stream events when `--progress-json` is set:
 - `gbrain lint`
 - `gbrain integrity auto`
 - `gbrain eval`
-- `gbrain apply-migrations` (the orchestrator + every child command)
+- `gbrain apply-migrations` (编排器 + 每个子命令)
 
-Non-bulk commands (`stats`, `graph-query`, `get`, `put`, etc.) don't emit
-events — they return in under a second.
+非批量命令（`stats`, `graph-query`, `get`, `put`等）不发出事件 — 它们在不到一秒内返回。
 
-## Channel
+## 通道
 
-- Progress events: **`stderr`**, one JSON object per line, `\n`-terminated.
-- Data results (`--json` payloads from each command): **`stdout`**.
-- Final human summaries: **`stdout`**.
+- 进度事件：**`stderr`**，每行一个JSON对象，`\n`终止。
+- 数据结果（来自每个命令的`--json`负载）：**`stdout`**。
+- 最终人类摘要：**`stdout`**。
 
-Agents can safely capture stdout for their result parsing and read stderr
-separately for progress.
+代理可以安全地捕获stdout用于其结果解析，并单独读取stderr以获取进度。
 
-## Flags
+## 标志
 
-| Flag | Behavior |
+| 标志 | 行为 |
 |---|---|
-| *(none)* | Auto. TTY: `\r`-rewriting single line. Non-TTY: plain line-per-event on stderr. |
-| `--progress-json` | Force JSON-lines mode on stderr (this doc). |
-| `--quiet` | Suppress progress entirely. Warnings and final output still print. |
-| `--progress-interval=<ms>` | Override the minimum interval between tick emits (default 1000). |
+| *(无)* | 自动。TTY：`\r`重写单行。非TTY：stderr上每行事件。 |
+| `--progress-json` | 强制stderr上的JSON行模式（本文档）。 |
+| `--quiet` | 完全抑制进度。警告和最终输出仍然打印。 |
+| `--progress-interval=<ms>` | 覆盖tick发射之间的最小间隔（默认1000）。 |
 
-Global flags: parsed by `src/core/cli-options.ts` before command dispatch,
-so `gbrain --progress-json doctor` works the same as
-`gbrain doctor --progress-json` (the latter also works — per-command
-parsers see the flag via the shared `CliOptions` singleton).
+全局标志：在命令调度之前由`src/core/cli-options.ts`解析，因此`gbrain --progress-json doctor`与`gbrain doctor --progress-json`的工作方式相同（后者也工作 — 每命令解析器通过共享的`CliOptions`单例看到标志）。
 
-## Event types
+## 事件类型
 
-Every event is a single-line JSON object with these common fields:
+每个事件都是一个单行JSON对象，具有这些公共字段：
 
-| Field | Type | Notes |
+| 字段 | 类型 | 备注 |
 |---|---|---|
-| `event` | string | One of: `start`, `tick`, `heartbeat`, `finish`, `abort`. |
-| `phase` | string | Machine-stable snake_case, dot-separated. See "Phase names" below. |
-| `ts` | ISO 8601 UTC string | Event emission time. |
-| `elapsed_ms` | number | Ms since the phase started. Present on `tick`/`heartbeat`/`finish`/`abort`. |
+| `event` | string | 以下之一：`start`, `tick`, `heartbeat`, `finish`, `abort`。 |
+| `phase` | string | 机器稳定的snake_case，点分隔。参见下面的"阶段名称"。 |
+| `ts` | ISO 8601 UTC字符串 | 事件发射时间。 |
+| `elapsed_ms` | number | 阶段开始以来的毫秒数。出现在`tick`/`heartbeat`/`finish`/`abort`上。 |
 
 ### `start`
 
-Emitted when a phase begins.
+阶段开始时发射。
 
 ```json
 {"event":"start","phase":"doctor.db_checks","ts":"2026-04-20T12:34:56.789Z"}
 {"event":"start","phase":"import.files","total":52000,"ts":"2026-04-20T12:34:56.789Z"}
 ```
 
-Optional fields:
+可选字段：
 
-- `total` — the total item count if known at start.
+- `total` — 开始时已知的项目总数。
 
 ### `tick`
 
-Emitted periodically during iteration. Time- and item-gated: the reporter
-won't emit more often than `minIntervalMs` (default 1000) and
-`minItems` (default `max(10, ceil(total/100))`).
+迭代期间定期发射。时间和项目门控：报告器不会比`minIntervalMs`（默认1000）和`minItems`（默认`max(10, ceil(total/100))`）更频繁地发射。
 
 ```json
 {"event":"tick","phase":"orphans.scan","done":15000,"total":52000,"pct":28.8,"elapsed_ms":4200,"eta_ms":10300,"ts":"..."}
 ```
 
-Fields:
+字段：
 
-- `done` — items completed in this phase.
-- `total` — total items, if known. Omitted when the scan doesn't have a
-  total up front (e.g. a streaming iterator).
-- `pct` — `done/total * 100`, one decimal. Omitted when `total` is unknown.
-- `eta_ms` — projected ms until `done === total`, from the observed rate.
-  Omitted when `total` is unknown.
-- `note` — optional string with the current item (e.g. a slug or filename).
+- `done` — 此阶段完成的项目。
+- `total` — 总项目数，如果已知。当前置扫描没有前置总数（例如流式迭代器）时省略。
+- `pct` — `done/total * 100`，一位小数。当`total`未知时省略。
+- `eta_ms` — 从观察到的速率到`done === total`的预计毫秒数。当`total`未知时省略。
+- `note` — 当前项目的可选字符串（例如slug或文件名）。
 
 ### `heartbeat`
 
-Emitted for long-running single operations that don't iterate
-(e.g. `SELECT` against a 50K-row table). No `done`, no `total` — just a
-signal that work is still happening.
+为不迭代的长期运行的单个操作发射（例如针对50K行表的`SELECT`）。没有`done`，没有`total` — 只是一个工作仍在进行中的信号。
 
 ```json
 {"event":"heartbeat","phase":"doctor.markdown_body_completeness","note":"scanning pages for truncation…","elapsed_ms":1000,"ts":"..."}
@@ -110,7 +95,7 @@ signal that work is still happening.
 
 ### `finish`
 
-Emitted when a phase completes normally.
+阶段正常完成时发射。
 
 ```json
 {"event":"finish","phase":"import.files","done":52000,"total":52000,"elapsed_ms":187000,"ts":"..."}
@@ -118,22 +103,19 @@ Emitted when a phase completes normally.
 
 ### `abort`
 
-Emitted by a single process-level SIGINT/SIGTERM handler that tracks every
-live phase. After `abort`, no further events emit for that phase.
+由跟踪每个活动阶段的单个进程级SIGINT/SIGTERM处理程序发射。在`abort`之后，该阶段不再发射事件。
 
 ```json
 {"event":"abort","phase":"doctor.markdown_body_completeness","reason":"SIGINT","elapsed_ms":5300,"ts":"..."}
 ```
 
-## Phase names
+## 阶段名称
 
-Phases use `snake_case.dot.path` naming. A fresh reporter starts at the
-root; `child()` composition appends to the parent's current phase, so a
-sync that calls import emits `sync.import.<file>`, not `import.<file>`.
+阶段使用`snake_case.dot.path`命名。新的报告器从根开始；`child()`组合附加到父级的当前阶段，因此调用import的sync会发射`sync.import.<file>`，而不是`import.<file>`。
 
-Stable phase names shipped in v0.15.2:
+v0.15.2中发布的稳定阶段名称：
 
-- `doctor.db_checks` (umbrella for all DB-side doctor checks)
+- `doctor.db_checks` (所有DB端doctor检查的总括)
 - `orphans.scan`
 - `embed.pages`
 - `extract.links_fs`, `extract.timeline_fs`, `extract.links_db`, `extract.timeline_db`
@@ -148,44 +130,27 @@ Stable phase names shipped in v0.15.2:
 - `export.pages`
 - `files.sync`
 
-Sub-phases exposed via `child()`:
+通过`child()`公开子阶段：
 
-- `sync.import.files` — nested inside a sync
-- `apply_migrations.v0_12_2.jsonb_repair` — nested inside the orchestrator
+- `sync.import.files` — sync内嵌套
+- `apply_migrations.v0_12_2.jsonb_repair` — 嵌套在编排器内
 
-## Subprocess inheritance
+## 子进程继承
 
-When a parent CLI spawns `gbrain …` child processes (mostly in
-`src/commands/migrations/*`), global flags (`--quiet`, `--progress-json`,
-`--progress-interval`) are propagated to the child's argv via the
-`childGlobalFlags()` helper in `src/core/cli-options.ts`. Child stderr
-passes straight through `stdio: 'inherit'` so the event stream is one
-merged JSONL feed on the parent's stderr.
+当父CLI生成`gbrain …`子进程时（主要在`src/commands/migrations/*`中），全局标志（`--quiet`, `--progress-json`, `--progress-interval`）通过`src/core/cli-options.ts`中的`childGlobalFlags()`帮助程序传播到子进程的argv。子进程stderr直接通过`stdio: 'inherit'`传递，因此事件流是父进程stderr上的一个合并的JSONL流。
 
-One exception: the orchestrator phase in `migrations/v0_12_2.ts` that
-captures child stdout (`repair-jsonb --dry-run --json` for verification)
-does not pass `--progress-json` to avoid any risk of stdout pollution
-breaking the orchestrator's `JSON.parse`. Its stdio is explicit:
-`['ignore', 'pipe', 'inherit']` so stderr still flows through.
+一个例外：`migrations/v0_12_2.ts`中捕获子进程stdout（`repair-jsonb --dry-run --json`用于验证）的编排器阶段不会传递`--progress-json`以避免任何stdout污染破坏编排器的`JSON.parse`的风险。它的stdio是显式的：`['ignore', 'pipe', 'inherit']`因此stderr仍然流过。
 
-## Minion jobs
+## Minion作业
 
-`gbrain jobs work` (the Minion worker daemon) keeps progress in the DB,
-not on stderr. Each Minion handler that runs a bulk core (embed, sync,
-extract, import, backlinks) calls `job.updateProgress({done, total,
-…})` per iteration. Agents read per-job progress via the
-`get_job_progress` MCP operation or `gbrain jobs get <id>`.
+`gbrain jobs work`（Minion工作守护程序）将进度保留在DB中，而不是stderr上。每个运行批量核心（embed, sync, extract, import, backlinks）的Minion处理程序在每次迭代时调用`job.updateProgress({done, total, …})`。代理通过`get_job_progress` MCP操作或`gbrain jobs get <id>`读取每作业进度。
 
-The `jobs work` daemon itself emits coarse one-line-per-job stderr output
-for liveness only. Per-page detail lives in the DB.
+`jobs work`守护程序本身仅为活跃度发出粗略的单行每作业stderr输出。每页细节存在于DB中。
 
-## Compatibility
+## 兼容性
 
-- **Added**: only. A new event type, a new field, a new phase name — all
-  safe. Agents must ignore unknown fields and unknown event types.
-- **Removed/renamed**: never without a major version bump.
-- **Schema changes**: announced in `CHANGELOG.md` and in
-  `skills/migrations/v<next>.md`.
+- **仅添加**。新的事件类型，新的字段，新的阶段名称 — 都是安全的。代理必须忽略未知字段和未知事件类型。
+- **删除/重命名**：永远不会没有主要版本升级。
+- **模式更改**：在`CHANGELOG.md`和`skills/migrations/v<next>.md`中宣布。
 
-If your agent depends on this schema and something surprises you, open
-an issue with the event you received and what you expected.
+如果您的代理依赖于此模式，并且有些东西让您感到惊讶，请打开一个带有您收到的事件以及您期望的问题。

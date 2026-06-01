@@ -1,32 +1,27 @@
-# Agent onboarding — what to do with the files in this directory
+# 智能体入门 — 如何处理本目录中的文件
 
-You (the agent) are running on a host that scaffolded gbrain skills here. This
-file is the operating contract. Read it on every cold start. It is short on
-purpose.
+您（智能体）运行在一个已在此部署 gbrain 技能的宿主机上。本文件是操作契约。每次冷启动时阅读它。它刻意保持简短。
 
-## What lives in this directory
+## 本目录中有什么
 
 ```
 skills/
-  _AGENT_README.md          ← you are here
-  _brain-filing-rules.md    ← where to file brain pages (read on every write)
-  _output-rules.md          ← output quality standards (no LLM slop, exact phrasing)
-  _friction-protocol.md     ← log friction the user hits to ~/.gstack/friction/
-  conventions/              ← cross-cutting rules every skill defers to
+  _AGENT_README.md          ← 您在这里
+  _brain-filing-rules.md    ← 大脑页面的存放位置规则（每次写入时阅读）
+  _output-rules.md          ← 输出质量标准（禁止 LLM 套话，精确保留原始措辞）
+  _friction-protocol.md     ← 将用户遇到的摩擦记录到 ~/.gstack/friction/
+  conventions/              ← 每个技能都遵循的跨领域规则
   <skill-name>/
-    SKILL.md                ← the skill's contract + workflow
-    routing-eval.jsonl      ← (optional) test fixtures for routing-eval
-    script.ts               ← (optional) deterministic code, if any
+    SKILL.md                ← 技能的契约和工作流
+    routing-eval.jsonl      ← （可选）路由评估的测试夹具
+    script.ts               ← （可选）确定性代码（如有）
 ```
 
-Other files in the host repo's `src/`, `docs/`, `recipes/` etc. are owned by the
-host, not by gbrain. Don't treat them as gbrain artifacts.
+宿主仓库中的 `src/`、`docs/`、`recipes/` 等其他文件由宿主拥有，而非 gbrain。不要将它们视为 gbrain 制品。
 
-## Routing — your first job
+## 路由 — 您的首要任务
 
-Discover skills at runtime by walking every `skills/<slug>/SKILL.md` here and
-parsing the YAML frontmatter. Each skill declares one or more `triggers:`
-strings; they are the user-facing phrases that route to that skill.
+在运行时通过遍历此处的每个 `skills/<slug>/SKILL.md` 并解析 YAML 前置元数据来发现技能。每个技能声明一个或多个 `triggers:` 字符串；它们是路由到该技能的用户面向短语。
 
 ```yaml
 ---
@@ -38,87 +33,58 @@ triggers:
 ---
 ```
 
-On every user message, match the message against every skill's `triggers:`
-array. Substring match is the baseline. Semantic similarity (embedding or
-keyword expansion) is fine on top. When a trigger matches strongly, invoke the
-skill — read its SKILL.md body in full and follow the workflow described there.
+每收到一条用户消息时，将消息与每个技能的 `triggers:` 数组进行匹配。子字符串匹配是基线。在此之上可以使用语义相似度（嵌入或关键词扩展）。当触发器强烈匹配时，调用该技能——完整阅读其 `SKILL.md` 正文并遵循其中描述的工作流。
 
-**Do NOT** look for a managed-block table inside `RESOLVER.md` or `AGENTS.md`.
-That pattern was retired in gbrain v0.36. Routing lives in frontmatter now.
+**不要**在 `RESOLVER.md` 或 `AGENTS.md` 中查找托管块表。该模式在 gbrain v0.36 中已弃用。路由现在位于前置元数据中。
 
-## When the user invokes a skill
+## 当用户调用技能时
 
-Read the entire `skills/<slug>/SKILL.md` file. Follow its `## Phases`,
-`## Workflow`, or equivalent step-by-step section. If the skill has a
-`mutating: true` frontmatter and declares `writes_pages:` / `writes_to:`,
-those are the brain-side write surfaces — consult `_brain-filing-rules.md`
-to confirm the file path is sanctioned.
+完整阅读 `skills/<slug>/SKILL.md` 文件。遵循其 `## Phases`、`## Workflow` 或等效的分步章节。如果 SKILL.md 前置元数据声明了 `mutating: true` 并声明了 `writes_pages:` / `writes_to:`，这些是大脑侧的写入面——查阅 `_brain-filing-rules.md` 确认文件路径是被认可的。
 
-If the SKILL.md frontmatter declares `sources:` (paired source files), those
-live at their mirror path in the host repo (e.g. `src/commands/<slug>.ts`).
-They are reference code that the gbrain CLI calls. You do not run them
-directly unless the SKILL.md tells you to.
+如果 SKILL.md 前置元数据声明了 `sources:`（配对的源文件），它们位于宿主仓库中的镜像路径（例如 `src/commands/<slug>.ts`）。它们是 gbrain CLI 调用的参考代码。除非 SKILL.md 告诉您，否则不要直接运行它们。
 
-## Updates — when gbrain ships a new version
+## 更新 — 当 gbrain 发布新版本时
 
-The user runs `gbrain upgrade`. Skill files DO NOT change automatically.
-gbrain becomes a reference library you compare against.
+用户运行 `gbrain upgrade`。技能文件不会自动更改。gbrain 变成您用来比较的参考库。
 
-On every cold start, or any time the user mentions an upgrade, run:
+每次冷启动时，或用户提到升级时，运行：
 
 ```bash
 gbrain skillpack reference --all
 ```
 
-That sweeps every bundled skill and reports per-skill `identical / differs /
-missing` counts. For each `differs`:
+这会扫描每个内置技能并报告每个技能的 `identical / differs / missing` 计数。对于每个 `differs`：
 
 ```bash
 gbrain skillpack reference <slug>
 ```
 
-This prints a unified diff between gbrain's bundle and the local file. Read
-it, then decide per file:
+这会打印 gbrain 的包与本地文件之间的统一差异。阅读它，然后逐个文件决定：
 
-- **Local edit was intentional.** Keep your version. gbrain is reference, not
-  law.
-- **Local edit was accidental drift** (e.g. you wrote stale content into the
-  skill body). Either patch by hand, or run
-  `gbrain skillpack reference <slug> --apply-clean-hunks` (read the WARNING
-  about two-way merge below first).
-- **Genuinely new gbrain change in a section you don't care about.** Skip or
-  apply per your judgment.
+- **本地编辑是有意为之。** 保留您的版本。gbrain 是参考，而非规范。
+- **本地编辑是意外偏移**（例如您将过时内容写入了技能正文）。手动修补，或运行 `gbrain skillpack reference <slug> --apply-clean-hunks`（请先阅读下面关于双向合并的警告）。
+- **确实是在您不关心的部分中 gbrain 的新变更。** 跳过或按您的判断应用。
 
-For `missing` files (gbrain added a new bundled skill since you scaffolded),
-run `gbrain skillpack scaffold <new-slug>` to bring it in.
+对于 `missing` 文件（gbrain 自您部署以来添加了新的内置技能），运行 `gbrain skillpack scaffold <new-slug>` 来引入它。
 
-### `reference --apply-clean-hunks` — two-way merge warning
+### `reference --apply-clean-hunks` — 双向合并警告
 
-This command does a two-way diff against gbrain's current bundle. It does
-NOT have access to the version you originally scaffolded. Consequence: if
-the user's local file differs from gbrain in ANY section (including
-intentional user edits), those sections WILL be aligned to gbrain.
+此命令对 gbrain 当前的包执行双向差异比较。它无法访问您最初部署时的版本。后果：如果用户的本地文件在任何部分与 gbrain 不同（包括有意的用户编辑），这些部分将被对齐到 gbrain。
 
-Always run plain `gbrain skillpack reference <slug>` first to inspect.
-Use `--apply-clean-hunks` only when you're confident the local edits were
-accidental or you want to fully reset to gbrain's current bundle.
+始终先运行普通的 `gbrain skillpack reference <slug>` 进行检查。仅当您确信本地编辑是意外的或您想完全重置为 gbrain 当前包时，才使用 `--apply-clean-hunks`。
 
-## Removing a scaffolded skill
+## 移除已部署的技能
 
-There is no `uninstall` command in v0.36. The files are yours.
+v0.36 中没有 `uninstall` 命令。文件属于您。
 
 ```bash
 rm -rf skills/<slug>
-# if the skill declared paired source files:
+# 如果技能声明了配对的源文件：
 rm src/commands/<slug>.ts
 ```
 
-Consult the skill's frontmatter `sources:` array for the full paired-file
-list before deleting.
+删除前请查阅技能前置元数据中的 `sources:` 数组以获取完整的配对文件列表。
 
-## When in doubt
+## 有疑问时
 
-The single source of truth for the model is
-`docs/guides/skillpacks-as-scaffolding.md` in the gbrain repo. The skill
-files you scaffolded are the source of truth for individual skill behavior.
-This file (`_AGENT_README.md`) is the routing contract — keep it short.
+模型的唯一事实来源是 gbrain 仓库中的 `docs/guides/skillpacks-as-scaffolding.md`。您部署的技能文件是各个技能行为的事实来源。本文件（`_AGENT_README.md`）是路由契约——保持简短。

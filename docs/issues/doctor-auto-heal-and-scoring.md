@@ -1,20 +1,20 @@
-# Doctor Auto-Heal and Scoring Improvements
+# Doctor 自动修复和评分改进
 
-## Summary
+## 摘要
 
-The `gbrain doctor` health score system has several false-positive patterns and missing auto-heal capabilities. After the crash classification fix (shipped in this PR), these are the remaining improvements ranked by impact.
+`gbrain doctor` 健康评分系统有几个误报模式和缺失的自动修复能力。在崩溃分类修复（在此 PR 中发布）之后，这些是按影响排名的剩余改进。
 
 ---
 
-## 1. Frontmatter severity levels
+## 1. Frontmatter 严重级别
 
-### Problem
+### 问题
 
-`NESTED_QUOTES` warnings dominate the frontmatter check (6,900+ of ~7,100 total issues). These are cosmetic YAML style issues — values like `title: "foo"` where the quotes are technically unnecessary. They don't affect sync, search, embedding, or any functionality.
+`NESTED_QUOTES` 警告在 frontmatter 检查中占主导地位（约 7,100 个总问题中的 6,900+）。这些是表面化的 YAML 样式问题 — 像 `title: "foo"` 这样的值在技术上是不必要的。它们不影响同步、搜索、嵌入或任何功能。
 
-By counting them the same as `YAML_PARSE` (actual parse failures) or `MISSING_OPEN` (missing frontmatter delimiters), the frontmatter check is perpetually WARN and the real issues are lost.
+通过将其与 `YAML_PARSE`（实际解析失败）或 `MISSING_OPEN`（缺少 frontmatter 分隔符）相同计数，frontmatter 检查永久是 WARN，真正的问题丢失了。
 
-### Evidence
+### 证据
 
 ```
 frontmatter_integrity: 7131 issues across 3 sources
@@ -23,73 +23,73 @@ frontmatter_integrity: 7131 issues across 3 sources
   zion-brain: 103 (MISSING_OPEN=14, NESTED_QUOTES=89)
 ```
 
-Only 280 of 7,131 issues are real problems. 96% are cosmetic noise.
+7,131 个问题中只有 280 个是真正的问题。96% 是表面噪声。
 
-### Proposed Fix
+### 提议的修复
 
-- Introduce severity levels: `error` (YAML_PARSE, MISSING_OPEN) vs `info` (NESTED_QUOTES)
-- Doctor WARN/FAIL only on error-level issues
-- Report info-level in the message text but don't affect check status
-- Optional `--pedantic` flag includes info-level in status
+- 引入严重级别：`error`（`YAML_PARSE`、`MISSING_OPEN`）与 `info`（`NESTED_QUOTES`）
+- Doctor WARN/FAIL 仅针对错误级别的问题
+- 在消息文本中报告信息级别但不影响检查状态
+- 可选的 `--pedantic` 标志在状态中包括信息级别
 
-### Test Cases
+### 测试用例
 
-| Frontmatter issues | Severity breakdown | Expected status |
+| Frontmatter 问题 | 严重级别分解 | 预期状态 |
 |---|---|---|
-| 0 issues | n/a | OK |
-| 50 NESTED_QUOTES only | 0 error, 50 info | OK (with note) |
-| 3 YAML_PARSE | 3 error | WARN |
-| 6900 NESTED_QUOTES + 3 YAML_PARSE | 3 error, 6900 info | WARN (mentions 3 errors) |
+| 0 个问题 | 不适用 | OK |
+| 仅 50 个 NESTED_QUOTES | 0 错误，50 信息 | OK（带注释） |
+| 3 个 YAML_PARSE | 3 错误 | WARN |
+| 6900 个 NESTED_QUOTES + 3 个 YAML_PARSE | 3 错误，6900 信息 | WARN（提及 3 个错误） |
 
 ---
 
-## 2. Temporal contradiction awareness
+## 2. 时间矛盾感知
 
-### Problem
+### 问题
 
-The contradiction probe flags temporal evolutions as contradictions. Example:
+矛盾探测将时间演变标记为矛盾。示例：
 
-- Page A (April): "Considering option X"
-- Page B (May): "Decided on option Y"
+- 页面 A（4 月）："正在考虑选项 X"
+- 页面 B（5 月）："决定选项 Y"
 
-These aren't contradictions — they're the same topic evolving over time. The probe has no time awareness.
+这些不是矛盾 — 它们是同一主题随时间演变。探测没有时间感知。
 
-### Evidence
+### 证据
 
-From a probe run on 50 queries with top-k=15:
-- 120 contradictions detected (112 high, 8 medium)
-- After manual review: ~60% were temporal evolutions, not real conflicts
-- Pages have `effective_date` or `created` timestamps that could disambiguate
+从在 50 个查询上的探测运行，top-k=15：
+- 检测到 120 个矛盾（112 个高，8 个中等）
+- 人工审查后：约 60% 是时间演变，不是真正的冲突
+- 页面具有可用于消除歧义的 `effective_date` 或 `created` 时间戳
 
-### Proposed Fix
+### 提议的修复
 
-- Pass `effective_date` / `created` to the judge prompt
-- Add verdict: `temporal_supersession` (later claim supersedes earlier)
-- When both pages have dates and claims overlap, bias toward temporal interpretation
-- Already designed in PR #993
+- 将 `effective_date` / `created` 传递给评判提示
+- 添加裁决：`temporal_suppression`（后来的声明取代较早的）
+- 当两个页面都有日期并且声明重叠时，偏向时间解释
+- 已在 PR #993 中设计
 
-### Test Cases
+### 测试用例
 
-| Page A date | Page A claim | Page B date | Page B claim | Expected verdict |
+| 页面 A 日期 | 页面 A 声明 | 页面 B 日期 | 页面 B 声明 | 预期裁决 |
 |---|---|---|---|---|
-| 2026-04 | "Considering X" | 2026-05 | "Chose Y" | temporal_supersession |
-| 2026-04 | "Revenue is $1M" | 2026-04 | "Revenue is $500K" | contradiction |
-| null | "X is true" | null | "X is false" | contradiction |
-| 2025-01 | "CEO of Company" | 2026-01 | "Former CEO" | temporal_supersession |
+| 2026-04 | "正在考虑 X" | 2026-05 | "选择了 Y" | temporal_suppression |
+| 2026-04 | "收入是 $1M" | 2026-04 | "收入是 $500K" | contradiction |
+| null | "X 是真的" | null | "X 是假的" | contradiction |
+| 2025-01 | "CEO of Company" | 2026-01 | "前 CEO" | temporal_suppression |
 
 ---
 
-## 3. Multi-source drift baseline
+## 3. 多源漂移基线
 
-### Problem
+### 问题
 
-4,791 pages show "multi-source drift" due to a pre-v0.30.3 `putPage` routing bug. These pages exist at the `default` source but should be at a named source. The `sources rehome` command to fix this hasn't shipped yet.
+由于 pre-v0.30.3 `putPage` 路由 bug，4,791 个页面显示"多源漂移"。这些页面存在于 `default` 源中，但应该在命名的源中。修复此问题的 `sources rehome` 命令尚未发布。
 
-Every doctor run shows WARN for ~4,800 pages nobody can fix.
+每次 doctor 运行都显示约 4,800 个页面的 WARN，没人能修复。
 
-### Proposed Fix
+### 提议的修复
 
-Allow `doctor.baselines` config to acknowledge known-unfixable counts:
+允许 `doctor.baselines` 配置确认已知无法修复的计数：
 
 ```yaml
 doctor:
@@ -97,9 +97,9 @@ doctor:
     multi_source_drift: 4800
 ```
 
-When actual drift ≤ baseline: OK. When drift exceeds baseline: WARN (new drift).
+当实际漂移 ≤ 基线时：OK。当漂移超过基线时：WARN（新的漂移）。
 
-Store in `.gbrain/doctor-baselines.json` so it works without config too:
+存储在 `.gbrain/doctor-baselines.json` 中，因此它在没有配置的情况下也能工作：
 
 ```json
 {
@@ -107,56 +107,56 @@ Store in `.gbrain/doctor-baselines.json` so it works without config too:
 }
 ```
 
-### Test Cases
+### 测试用例
 
-| Actual drift | Baseline | Expected |
+| 实际漂移 | 基线 | 预期 |
 |---|---|---|
 | 4791 | 4800 | OK |
-| 4900 | 4800 | WARN ("100 new drift beyond baseline") |
-| 4791 | 0 (no baseline) | WARN (current behavior) |
+| 4900 | 4800 | WARN（"基线之外 100 个新漂移"） |
+| 4791 | 0（无基线） | WARN（当前行为） |
 
 ---
 
-## 4. Image assets acknowledgment
+## 4. 图像资产确认
 
-### Problem
+### 问题
 
-When image files are missing from disk (stored externally, purged from git), the check permanently warns. No way to say "these are intentionally external."
+当图像文件从磁盘丢失（存储在外部，从 git 清除）时，检查永久警告。无法说"这些是有意外部的。"
 
-### Proposed Fix
+### 提议的修复
 
-- `doctor --acknowledge image_assets` marks current missing count as accepted
-- Stored in `.gbrain/doctor-baselines.json`
-- WARN only for NEW missing images beyond acknowledged count
-- Optional `image_assets.external_storage: true` config to skip disk check entirely
+- `doctor --acknowledge image_assets` 将当前缺失计数标记为已接受
+- 存储在 `.gbrain/doctor-baselines.json` 中
+- 仅针对超出确认计数的新缺失图像发出 WARN
+- 可选的 `image_assets.external_storage: true` 配置以完全跳过磁盘检查
 
 ---
 
-## 5. Auto-heal mode
+## 5. 自动修复模式
 
-### Problem
+### 问题
 
-Many doctor warnings have known fixes that are safe to auto-apply:
+许多 doctor 警告都有已知的安全自动应用的修复：
 
-| Warning | Auto-fix |
+| 警告 | 自动修复 |
 |---|---|
-| Supervisor not running | Start supervisor |
-| Stale embeddings | Submit `embed --stale` job |
-| Extract coverage < 70% | Submit `extract all --skip-existing` job |
-| Stale sync | Submit sync job |
-| Effective date drift | Run `reindex-frontmatter` |
+| Supervisor not running | 启动 supervisor |
+| Stale embeddings | 提交 `embed --stale` 作业 |
+| Extract coverage < 70% | 提交 `extract all --skip-existing` 作业 |
+| Stale sync | 提交 sync 作业 |
+| Effective date drift | 运行 `reindex-frontmatter` |
 
-### Proposed Fix
+### 提议的修复
 
-`doctor --auto-heal` mode:
+`doctor --auto-heal` 模式：
 
-1. Run all checks
-2. For fixable WARNs: submit fix as a job (not inline — via job queue)
-3. Report what was fixed vs needs manual attention
-4. Idempotent: check queue first, don't submit duplicates
-5. Safety gate: never auto-heals FAILs, only WARNs
+1. 运行所有检查
+2. 对于可修复的 WARN：提交修复作为作业（不是内联的 — 通过作业队列）
+3. 报告已修复的内容 vs 需要手动关注的内容
+4. 幂等：首先检查队列，不要提交重复项
+5. 安全网关：绝不自动修复 FAIL，仅 WARN
 
-Config:
+配置：
 
 ```yaml
 doctor:
@@ -168,57 +168,57 @@ doctor:
       - multi_source_drift
 ```
 
-### Test Cases
+### 测试用例
 
-| Check status | Auto-heal enabled | Job already queued | Expected |
+| 检查状态 | 自动修复启用 | 作业已排队 | 预期 |
 |---|---|---|---|
-| WARN: stale embeds | yes | no | Submit embed job |
-| WARN: stale embeds | yes | yes | Skip (idempotent) |
-| FAIL: max_crashes | yes | n/a | Don't auto-fix FAILs |
-| WARN: stale embeds | no | n/a | Report only |
-| WARN: image_assets | yes (but skipped) | n/a | Report only |
+| WARN：stale embeds | 是 | 否 | 提交 embed 作业 |
+| WARN：stale embeds | 是 | 是 | 跳过（幂等） |
+| FAIL：max_crashes | 是 | 不适用 | 不要自动修复 FAIL |
+| WARN：stale embeds | 否 | 不适用 | 仅报告 |
+| WARN：image_assets | 是（但已跳过） | 不适用 | 仅报告 |
 
 ---
 
-## 6. Score delta tracking
+## 6. 分数增量跟踪
 
-### Problem
+### 问题
 
-No history — each `doctor` run is a snapshot. Can't tell if score is improving or degrading.
+没有历史 — 每次 `doctor` 运行都是一个快照。无法判断分数是在改善还是在退化。
 
-### Proposed Fix
+### 提议的修复
 
-- Write each run to `.gbrain/doctor-history.jsonl`:
+- 将每次运行写入 `.gbrain/doctor-history.jsonl`：
   ```json
   {"ts":"2026-05-15T12:00:00Z","score":60,"brain_score":79,"checks":{"supervisor":"ok","embeddings":"ok",...}}
   ```
-- `doctor --trend` shows last N scores with deltas
-- `doctor --json` includes `previous_score` and `delta` fields
+- `doctor --trend` 显示最后 N 个分数及增量
+- `doctor --json` 包括 `previous_score` 和 `delta` 字段
 
 ---
 
-## 7. Weighted scoring
+## 7. 加权评分
 
-### Problem
+### 问题
 
-Going from 99% → 100% embed coverage weighs the same as 50% → 51%. But the last percent is the hardest (oversized pages, rate limits).
+从 99% → 100% 嵌入覆盖率与 50% → 51% 的权重相同。但最后一个百分比是最难的（超大页面、速率限制）。
 
-### Proposed Fix
+### 提议的修复
 
-Threshold-based scoring:
-- 100% = full points
-- ≥95% = 90% of points
-- ≥80% = 70% of points
-- <80% = proportional
+基于阈值的评分：
+- 100% = 满分
+- ≥95% = 90% 的分数
+- ≥80% = 70% 的分数
+- <80% = 按比例
 
 ---
 
-## Priority Order
+## 优先级顺序
 
-1. Frontmatter severity levels (highest noise reduction)
-2. Temporal contradiction awareness (highest false positive reduction, already designed)
-3. Auto-heal mode (biggest long-term value)
-4. Score delta tracking (enables monitoring)
-5. Multi-source drift baseline (quality of life)
-6. Image assets acknowledgment (quality of life)
-7. Weighted scoring (nice to have)
+1. Frontmatter 严重级别（最高噪声减少）
+2. 时间矛盾感知（最高误报减少，已设计）
+3. 自动修复模式（最大的长期价值）
+4. 分数增量跟踪（启用监控）
+5. 多源漂移基线（生活质量）
+6. 图像资产确认（生活质量）
+7. 加权评分（ nice to have）

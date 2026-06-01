@@ -2,25 +2,25 @@
 id: email-to-brain
 name: Email-to-Brain
 version: 0.7.0
-description: Gmail messages flow into brain pages. Deterministic collector pulls emails, agent analyzes and enriches entities.
+description: Gmail 消息流入大脑页面。确定性收集器提取电子邮件，代理分析并丰富实体。
 category: sense
 requires: [credential-gateway]
 secrets:
   - name: CLAWVISOR_URL
-    description: ClawVisor gateway URL (Option A — recommended, handles OAuth for you)
-    where: https://clawvisor.com — create an agent, activate Gmail service
+    description: ClawVisor 网关 URL（选项 A — 推荐，为您处理 OAuth）
+    where: https://clawvisor.com — 创建一个代理，激活 Gmail 服务
   - name: CLAWVISOR_AGENT_TOKEN
-    description: ClawVisor agent token (Option A)
-    where: https://clawvisor.com — agent settings, copy the agent token
+    description: ClawVisor 代理令牌（选项 A）
+    where: https://clawvisor.com — 代理设置，复制代理令牌
   - name: GOOGLE_CLIENT_ID
-    description: Google OAuth2 client ID (Option B — direct Gmail API access)
-    where: https://console.cloud.google.com/apis/credentials — create OAuth 2.0 Client ID
+    description: Google OAuth2 客户端 ID（选项 B — 直接 Gmail API 访问）
+    where: https://console.cloud.google.com/apis/credentials — 创建 OAuth 2.0 客户端 ID
   - name: GOOGLE_CLIENT_SECRET
-    description: Google OAuth2 client secret (Option B)
-    where: https://console.cloud.google.com/apis/credentials — same page as client ID
+    description: Google OAuth2 客户端密钥（选项 B）
+    where: https://console.cloud.google.com/apis/credentials — 与客户端 ID 同一页面
 health_checks:
   - type: any_of
-    label: "Auth provider"
+    label: "认证提供者"
     checks:
       - type: http
         url: "$CLAWVISOR_URL/health"
@@ -29,155 +29,155 @@ health_checks:
         name: GOOGLE_CLIENT_ID
         label: "Google OAuth"
 setup_time: 20 min
-cost_estimate: "$0 (both options are free)"
+cost_estimate: "$0（两个选项都是免费的）"
 ---
 
-# Email-to-Brain: Gmail Messages That Update Your Brain
+# Email-to-Brain：更新您大脑的 Gmail 消息
 
-Emails arrive. Brain pages get smarter. The agent reads your inbox, detects
-entities, updates person and company pages, extracts action items, and files
-everything with source attribution.
+电子邮件到达。大脑页面变得更智能。代理读取您的收件箱，检测
+实体，更新人员和公司页面，提取操作项，并
+使用来源归属归档所有内容。
 
-## IMPORTANT: Instructions for the Agent
+## 重要：给代理的说明
 
-**You are the installer.** Follow these steps precisely.
+**您是安装程序。** 请精确按照这些步骤操作。
 
-**The core pattern: code for data, LLMs for judgment.**
-Email collection is split into two layers:
-1. DETERMINISTIC: code pulls emails, generates Gmail links, detects noise/signatures.
-   This never fails. Links are always correct. Timestamps are always accurate.
-2. LATENT: you (the agent) read the collected emails and make judgment calls.
-   Who is important? What entities are mentioned? What action items exist?
+**核心模式：代码用于数据，LLM 用于判断。**
+电子邮件收集分为两层：
+1. 确定性：代码提取电子邮件，生成 Gmail 链接，检测噪音/签名。
+   这永远不会失败。链接始终是正确的。时间戳始终准确。
+2. 潜在：您（代理）读取收集的电子邮件并做出判断。
+   谁很重要？提到了哪些实体？存在哪些操作项？
 
-**Do not try to pull emails yourself.** Use the collector script. It handles
-pagination, deduplication, Gmail link generation, and noise filtering. If you
-try to do this via raw API calls, you WILL forget links, miss emails, or break
-pagination. The collector exists because LLMs kept failing at this.
+**不要尝试自己提取电子邮件。** 使用收集器脚本。它处理
+分页、去重、Gmail 链接生成和噪音过滤。如果您
+尝试通过原始 API 调用执行此操作，您**将**忘记链接、错过电子邮件或破坏
+分页。收集器存在是因为 LLM 在此方面一直失败。
 
-**Why sequential execution matters:**
-- Step 1 validates the credential gateway. Without it, nothing connects to Gmail.
-- Step 2 sets up the collector. Without it, you have no emails to analyze.
-- Step 3 does the first collection. Without data, Step 4 can't enrich.
-- Step 4 is YOUR job: read the digest, update brain pages.
+**为什么顺序执行很重要：**
+- 步骤 1 验证凭证网关。没有它，什么都无法连接到 Gmail。
+- 步骤 2 设置收集器。没有它，您没有要分析的数据。
+- 步骤 3 进行首次收集。没有数据，步骤 4 无法丰富。
+- 步骤 4 是**您的工作**：读取摘要，更新大脑页面。
 
-## Architecture
+## 架构
 
 ```
-Gmail Account(s)
-  ↓ (ClawVisor E2E encrypted gateway)
-Email Collector (deterministic Node.js script)
-  ↓ Outputs:
-  ├── messages/{YYYY-MM-DD}.json     (structured email data)
-  ├── digests/{YYYY-MM-DD}.md        (markdown digest for agent)
-  └── state.json                     (pagination state, known IDs)
+Gmail 账户
+  ↓（ClawVisor E2E 加密网关）
+Email Collector（确定性 Node.js 脚本）
+  ↓ 输出：
+  ├── messages/{YYYY-MM-DD}.json     （结构化电子邮件数据）
+  ├── digests/{YYYY-MM-DD}.md        （供代理使用的 markdown 摘要）
+  └── state.json                     （分页状态、已知 ID）
   ↓
-Agent reads digest
-  ↓ Judgment calls:
-  ├── Entity detection (people, companies mentioned)
-  ├── Brain page updates (timeline entries, compiled truth)
-  ├── Action item extraction
-  └── Priority classification (urgent / normal / noise)
+Agent 读取摘要
+  ↓ 判断调用：
+  ├── 实体检测（人员、提到的公司）
+  ├── 大脑页面更新（时间线条目、编译的真相）
+  ├── 操作项提取
+  └── 优先级分类（紧急 / 正常 / 噪音）
 ```
 
-## Opinionated Defaults
+## 固执己见的默认设置
 
-**Noise filtering (deterministic, in collector):**
-- Skip: noreply@, notifications@, calendar-notification@
-- Flag: DocuSign, Dropbox Sign, HelloSign, PandaDoc (signatures needing action)
-- Keep: everything else
+**噪音过滤（确定性，在收集器中）：**
+- 跳过：noreply@、notifications@、calendar-notification@
+- 标记：DocuSign、Dropbox Sign、HelloSign、PandaDoc（需要操作的签名）
+- 保留：其他所有内容
 
-**Email accounts:** Configure multiple accounts. Common setup:
-- Work email (company domain)
-- Personal email (gmail.com)
+**电子邮件账户：** 配置多个账户。常见设置：
+- 工作电子邮件（公司域名）
+- 个人电子邮件（gmail.com）
 
-**Digest format:** Daily markdown with sections:
-- Signatures pending (DocuSign etc. needing action)
-- Messages to triage (real emails from real people)
-- Noise (filtered, available if needed)
+**摘要格式：** 带有部分的每日 markdown：
+- 待处理签名（等需要操作的 DocuSign 等）
+- 待分类消息（来自真实人员的真实电子邮件）
+- 噪音（已过滤，如果需要则可用）
 
-Every email gets a baked-in Gmail link: `[Open in Gmail](https://mail.google.com/mail/u/?authuser=ACCOUNT#inbox/MESSAGE_ID)` — these are generated by code, never by the LLM, so they are always correct.
+每封电子邮件都获得一个内置的 Gmail 链接：`[在 Gmail 中打开](https://mail.google.com/mail/u/?authuser=ACCOUNT#inbox/MESSAGE_ID)` —— 这些由代码生成，从不是由 LLM 生成，因此它们始终是正确的。
 
-## Prerequisites
+## 先决条件
 
-1. **GBrain installed and configured** (`gbrain doctor` passes)
-2. **Node.js 18+** (for the collector script)
-3. **Gmail access** via one of:
-   - ClawVisor (recommended: E2E encrypted credential gateway)
-   - Google OAuth credentials (direct API access)
-   - Hermes Gateway (built-in Gmail connector)
+1. **GBrain 已安装并配置**（`gbrain doctor` 通过）
+2. **Node.js 18+**（用于收集器脚本）
+3. **通过以下之一访问 Gmail：**
+   - ClawVisor（推荐：E2E 加密凭证网关）
+   - Google OAuth 凭证（直接 API 访问）
+   - Hermes Gateway（内置 Gmail 连接器）
 
-## Setup Flow
+## 设置流程
 
-### Step 1: Validate Credential Gateway
+### 步骤 1：验证凭证网关
 
-Ask the user: "How do you access Gmail programmatically? Options:
-1. ClawVisor (recommended, handles OAuth and encryption)
-2. Google OAuth credentials (you manage tokens yourself)
-3. Hermes Gateway (if you're using Hermes Agent)"
+询问用户："您如何以编程方式访问 Gmail？选项：
+1. ClawVisor（推荐，处理 OAuth 和加密）
+2. Google OAuth 凭证（您自己管理令牌）
+3. Hermes Gateway（如果您使用 Hermes Agent）"
 
-#### Option A: ClawVisor (recommended)
+#### 选项 A：ClawVisor（推荐）
 
-Tell the user:
-"I need your ClawVisor URL and agent token.
-1. Go to https://clawvisor.com
-2. Create an agent (or use existing)
-3. Activate the Gmail service
-4. Create a standing task with purpose: 'Full executive assistant email management
-   including inbox triage, searching by any criteria, reading emails, tracking threads'
-   IMPORTANT: Be EXPANSIVE in the task purpose. Narrow purposes like 'email triage'
-   will cause legitimate requests to fail verification.
-5. Copy the gateway URL and agent token"
+告诉用户：
+"我需要您的 ClawVisor URL 和代理令牌。
+1. 转到 https://clawvisor.com
+2. 创建一个代理（或使用现有的）
+3. 激活 Gmail 服务
+4. 创建一个目的为：'完全执行助理电子邮件管理
+   包括收件箱分类、按任何条件搜索、读取电子邮件、跟踪对话'
+   重要提示：任务目的要**宽泛**。诸如 'email triage' 之类的
+   狭窄目的将导致合法请求验证失败。
+5. 复制网关 URL 和代理令牌"
 
-Validate:
+验证：
 ```bash
-curl -sf "$CLAWVISOR_URL/health" && echo "PASS: ClawVisor reachable" || echo "FAIL"
+curl -sf "$CLAWVISOR_URL/health" && echo "通过：ClawVisor 可达" || echo "失败"
 ```
 
-**STOP until ClawVisor validates.**
+**停止直到 ClawVisor 验证通过。**
 
-#### Option B: Google OAuth2 directly
+#### 选项 B：Google OAuth2 直接
 
-Tell the user:
-"I need Google OAuth2 credentials for Gmail access. Here's how:
+告诉用户：
+"我需要用于 Gmail 访问的 Google OAuth2 凭证。具体操作如下：
 
-1. Go to https://console.cloud.google.com/apis/credentials
-   (create a Google Cloud project if you don't have one)
-2. Click **'+ CREATE CREDENTIALS'** > **'OAuth client ID'**
-3. If prompted, configure the OAuth consent screen:
-   - User type: **External** (or Internal for Google Workspace)
-   - App name: 'GBrain Email' (anything works)
-   - Scopes: add **'Gmail API .../auth/gmail.readonly'**
-   - Test users: add your own email address
-4. Create the OAuth client ID:
-   - Application type: **Desktop app**
-   - Name: 'GBrain'
-5. Copy the **Client ID** and **Client Secret**
-6. Also enable the Gmail API:
-   Go to https://console.cloud.google.com/apis/library/gmail.googleapis.com
-   Click **'Enable'**"
+1. 转到 https://console.cloud.google.com/apis/credentials
+   （如果您没有 Google Cloud 项目，请创建一个）
+2. 点击 **'+ CREATE CREDENTIALS'** > **'OAuth client ID'**
+3. 如果提示，配置 OAuth 同意屏幕：
+   - 用户类型：**外部**（或者内部用于 Google Workspace）
+   - 应用名称：'GBrain Email'（任何名称都可以）
+   - 范围：添加 **'Gmail API .../auth/gmail.readonly'**
+   - 测试用户：添加您自己的电子邮件地址
+4. 创建 OAuth 客户端 ID：
+   - 应用程序类型：**桌面应用**
+   - 名称：'GBrain'
+5. 复制**客户端 ID** 和**客户端密钥**
+6. 还要启用 Gmail API：
+   转到 https://console.cloud.google.com/apis/library/gmail.googleapis.com
+   点击 **'启用'**"
 
-Validate:
+验证：
 ```bash
 [ -n "$GOOGLE_CLIENT_ID" ] && [ -n "$GOOGLE_CLIENT_SECRET" ] \
-  && echo "PASS: Google OAuth credentials set" \
-  || echo "FAIL: Missing GOOGLE_CLIENT_ID or GOOGLE_CLIENT_SECRET"
+  && echo "通过：Google OAuth 凭证已设置" \
+  || echo "失败：缺少 GOOGLE_CLIENT_ID 或 GOOGLE_CLIENT_SECRET"
 ```
 
-Then run the OAuth flow to get tokens:
+然后运行 OAuth 流程以获取令牌：
 ```bash
-# The collector script handles the OAuth flow:
-# 1. Opens browser to Google consent URL with gmail.readonly scope
-# 2. User grants access
-# 3. Script receives auth code, exchanges for access + refresh token
-# 4. Stores tokens in ~/.gbrain/google-tokens.json
-# 5. Auto-refreshes on expiry
+# 收集器脚本处理 OAuth 流程：
+# 1. 打开浏览器到具有 gmail.readonly 范围的 Google 同意 URL
+# 2. 用户授予访问权限
+# 3. 脚本接收授权代码，交换为访问 + 刷新令牌
+# 4. 将令牌存储在 ~/.gbrain/google-tokens.json 中
+# 5. 到期时自动刷新
 ```
 
-**STOP until OAuth flow completes and tokens are stored.**
+**停止直到 OAuth 流程完成并且令牌已存储。**
 
-### Step 2: Set Up the Email Collector
+### 步骤 2：设置电子邮件收集器
 
-Create the collector directory and script:
+创建收集器目录和脚本：
 
 ```bash
 mkdir -p email-collector/data/{messages,digests}
@@ -185,63 +185,63 @@ cd email-collector
 npm init -y
 ```
 
-The collector script needs these capabilities:
-1. **collect** — pull emails from Gmail via credential gateway, deduplicate by message ID, store as JSON with Gmail links baked in
-2. **digest** — generate a markdown digest from collected emails, grouped by: signatures pending, messages to triage, noise
-3. **state tracking** — remember last collection timestamp and known message IDs to avoid re-processing
+收集器脚本需要这些功能：
+1. **collect** —— 通过凭证网关从 Gmail 提取电子邮件，按消息 ID 去重，存储为内置 Gmail 链接的 JSON
+2. **digest** —— 从收集的电子邮件生成 markdown 摘要，按以下分组：待处理签名、待分类消息、噪音
+3. **状态跟踪** —— 记住最后一次收集时间戳和已知消息 ID 以避免重新处理
 
-Key design rules for the collector:
-- Gmail links are generated by CODE, not by the LLM. Format: `[Open in Gmail](https://mail.google.com/mail/u/?authuser=ACCOUNT#inbox/MESSAGE_ID)`
-- Noise filtering is deterministic: noreply, notifications, calendar invites
-- Signature detection uses known patterns: DocuSign envelope, Dropbox Sign, HelloSign, PandaDoc
-- All state persisted to `data/state.json` (last collect timestamp, known message IDs)
-- Output is structured JSON (machine-readable) AND markdown digest (agent-readable)
+收集器的关键设计规则：
+- Gmail 链接由**代码**生成，而不是由 LLM 生成。格式：`[在 Gmail 中打开](https://mail.google.com/mail/u/?authuser=ACCOUNT#inbox/MESSAGE_ID)`
+- 噪音过滤是确定性的：noreply、通知、日历邀请
+- 签名检测使用已知模式：DocuSign envelope、Dropbox Sign、HelloSign、PandaDoc
+- 所有状态都持久化到 `data/state.json`（最后一次收集时间戳、已知消息 ID）
+- 输出是结构化 JSON（机器可读）和 markdown 摘要（代理可读）
 
-### Step 3: Run First Collection
+### 步骤 3：运行首次收集
 
 ```bash
 node email-collector.mjs collect
 node email-collector.mjs digest
 ```
 
-Verify: `ls data/digests/` should show today's digest file.
-Read the digest. Confirm it contains real emails with working Gmail links.
+验证：`ls data/digests/` 应显示今天的摘要文件。
+读取摘要。确认它包含带有可用 Gmail 链接的真实电子邮件。
 
-### Step 4: Enrich Brain Pages
+### 步骤 4：丰富大脑页面
 
-This is YOUR job (the agent). Read the digest. For each email:
+这是**您的工作**（代理）。读取摘要。对于每封电子邮件：
 
-1. **Detect entities**: who sent it? Who is mentioned? What companies?
-2. **Check the brain**: `gbrain search "sender name"` — do we have a page?
-3. **Update brain pages**: if sender has a brain page, append a timeline entry:
-   `- YYYY-MM-DD | Email from {sender}: {subject} [Source: Gmail, {date}]`
-4. **Create new pages**: if sender is notable and has no page, create one
-5. **Extract action items**: if the email requires a response or action, log it
-6. **Sync**: run `gbrain sync --no-pull --no-embed` to index changes
+1. **检测实体**：谁发送的？提到了谁？哪些公司？
+2. **检查大脑**：`gbrain search "sender name"` —— 我们有页面吗？
+3. **更新大脑页面**：如果发送者有一个大脑页面，附加一个时间线条目：
+   `- YYYY-MM-DD | 来自 {发送者} 的电子邮件：{主题} [来源：Gmail，{日期}]`
+4. **创建新页面**：如果发送者显着且没有页面，创建一个
+5. **提取操作项**：如果电子邮件需要回复或操作，记录它
+6. **同步**：运行 `gbrain sync --no-pull --no-embed` 以索引更改
 
-### Step 5: Set Up Cron
+### 步骤 5：设置 Cron
 
-The collector should run every 30 minutes:
+收集器应每 30 分钟运行一次：
 
 ```bash
 */30 * * * * cd /path/to/email-collector && node email-collector.mjs collect && node email-collector.mjs digest
 ```
 
-The agent should read the digest on a schedule (e.g., 3x/day: 9 AM, 12 PM, 3 PM)
-and run the enrichment flow from Step 4.
+代理应按计划读取摘要（例如，每天 3 次：上午 9 点、下午 12 点、下午 3 点）
+并运行步骤 4 中的丰富流程。
 
-### Step 6: Log Setup Completion
+### 步骤 6：记录设置完成
 
 ```bash
 mkdir -p ~/.gbrain/integrations/email-to-brain
 echo '{"ts":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'","event":"setup_complete","source_version":"0.7.0","status":"ok"}' >> ~/.gbrain/integrations/email-to-brain/heartbeat.jsonl
 ```
 
-## Implementation Guide
+## 实施指南
 
-These are production-tested patterns. Follow them exactly.
+这些是经过生产测试的模式。精确遵循它们。
 
-### Noise Filtering (Deterministic)
+### 噪音过滤（确定性）
 
 ```
 NOISE_SENDERS = ['noreply', 'no-reply', 'notifications@', 'calendar-notification',
@@ -249,13 +249,13 @@ NOISE_SENDERS = ['noreply', 'no-reply', 'notifications@', 'calendar-notification
 
 is_noise(email):
   from = email.from.toLowerCase()
-  return NOISE_SENDERS.some(p => from.includes(p))  // substring match
+  return NOISE_SENDERS.some(p => from.includes(p))  // 子字符串匹配
 ```
 
-Simple substring matching, not regex. `notifications@slack.com` matches because
-`notifications@` is in the pattern list. Order doesn't matter.
+简单的子字符串匹配，而不是正则表达式。`notifications@slack.com` 匹配因为
+`notifications@` 在模式列表中。顺序无关紧要。
 
-### Signature Detection
+### 签名检测
 
 ```
 SIGNATURE_PATTERNS = [
@@ -270,21 +270,21 @@ is_signature(email):
   return SIGNATURE_PATTERNS.some(p => p.test(subject) || p.test(from))
 ```
 
-Test BOTH subject AND from. Signature requests come from services that have
-"docusign" in the sender address, not just the subject.
+测试**主题和发件人**。签名请求来自
+在发件人地址中具有 "docusign" 的服务，而不仅仅是主题。
 
-### Gmail Link Generation (CRITICAL)
+### Gmail 链接生成（关键）
 
 ```
 gmail_link(messageId, authuser):
   return `https://mail.google.com/mail/u/?authuser=${authuser}#inbox/${messageId}`
 ```
 
-The `authuser` parameter is CRITICAL. Without it, the link opens in the default
-Gmail account, not the right one. Each email record stores its account separately.
-Generate these in CODE, never by the LLM. Links must be 100% reliable.
+`authuser` 参数**至关重要**。没有它，链接将在默认
+Gmail 账户中打开，而不是正确的账户。每个电子邮件记录单独存储其账户。
+在**代码中**生成这些，从不是由 LLM 生成。链接必须 100% 可靠。
 
-### Deduplication
+### 去重
 
 ```
 collect():
@@ -294,48 +294,51 @@ collect():
   for account in accounts:
     inbox = gmail.list(query=since, max=50)
     for msg in inbox:
-      if msg.id in state.knownMessageIds: continue  // already seen
+      if msg.id in state.knownMessageIds: continue  // 已看到
       record = build_record(msg)
       state.knownMessageIds[msg.id] = record
 
-    // ALSO pull sent mail to detect replies
+    // 还要提取已发送的邮件以检测回复
     sent = gmail.list(query=`from:${account.email} ${since}`, max=30)
     for msg in sent:
       state.knownMessageIds[msg.id] = {is_sent: true}
 ```
 
-**Why sent mail matters:** Without it, the digest shows "awaiting response" on
-threads you already replied to. Sent mail acts as a negative filter.
+**为什么已发送的邮件很重要：** 没有它，摘要显示"等待回复"
+在您已经回复的对话上。已发送的邮件充当负面过滤器。
 
-### What the Agent Should Test After Setup
+### 设置后代理应测试的内容
 
-1. **Noise filtering:** Send a test email from `noreply@test.com`. Run collect.
-   Verify it appears in noise section, not triage section.
-2. **Gmail links:** Click a link from the digest. Verify it opens the correct
-   account (not the default one).
-3. **Deduplication:** Run collect twice in 1 minute. Verify no duplicate messages.
-4. **Sent mail:** Reply to an email manually. Run collect. Verify the thread is
-   marked as replied-to in the digest.
+1. **噪音过滤：** 从 `noreply@test.com` 发送测试电子邮件。运行收集。
+   验证它出现在噪音部分，而不是分类部分。
+2. **Gmail 链接：** 从摘要中点击链接。验证它打开了正确的
+   账户（不是默认账户）。
+3. **去重：** 在 1 分钟内运行收集两次。验证没有重复的消息。
+4. **已发送的邮件：** 手动回复电子邮件。运行收集。验证对话
+   在摘要中标记为已回复。
 
-## Cost Estimate
+## 成本估算
 
-| Component | Monthly Cost |
+| 组件 | 月成本 |
 |-----------|-------------|
-| ClawVisor (free tier) | $0 |
-| Gmail API | $0 (within free quota) |
-| **Total** | **$0** |
+| ClawVisor（免费层） | $0 |
+| Gmail API | $0（在免费配额内） |
+| **总计** | **$0** |
 
-## Troubleshooting
+## 故障排除
 
-**No emails collected:**
-- Check ClawVisor health: `curl $CLAWVISOR_URL/health`
-- Check standing task is active and has Gmail service enabled
-- Check task purpose is expansive enough (narrow purposes block requests)
+**未收集电子邮件：**
+- 检查 ClawVisor 运行状况：`curl $CLAWVISOR_URL/health`
+- 检查常设任务是否处于活动状态并且已启用 Gmail 服务
+- 检查任务目的是否足够宽泛（窄目的阻止请求）
 
-**Gmail links don't work:**
-- Verify the `authuser` parameter matches the account email
-- Gmail links require being logged into the correct Google account
+**Gmail 链接不起作用：**
+- 验证 `authuser` 参数与账户电子邮件匹配
+- Gmail 链接需要登录到正确的 Google 账户
 
-**Digest is empty but collection ran:**
-- Check `data/messages/` for JSON files
-- All emails might be filtered as noise — check noise filtering rules
+**摘要为空但收集已运行：**
+- 检查 `data/messages/` 中是否有 JSON 文件
+- 所有电子邮件可能都被过滤为噪音 —— 检查噪音过滤规则
+
+---
+*GBrain Skillpack 的一部分。另请参阅：[Credential Gateway](credential-gateway.md)、[Calendar-to-Brain](calendar-to-brain.md)*

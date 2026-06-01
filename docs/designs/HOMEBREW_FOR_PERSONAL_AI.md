@@ -1,64 +1,63 @@
-# Homebrew for Personal AI Infrastructure
+# 个人 AI 基础设施的 Homebrew
 
-The 10-star vision for GBrain's integration system. Ship Approach B (v0.7.0),
-build toward this over subsequent releases.
+GBrain 集成的 10 星愿景。发布方法 B（v0.7.0），
+在后续版本中向此方向构建。
 
-## The Vision
+## 愿景
 
-GBrain becomes a personal infrastructure operating system where every signal in
-your life flows through the brain automatically. Integrations are **senses**
-(data inputs) and **reflexes** (automated responses to patterns). Users subscribe
-to the creator's actual operating system, then customize it.
+GBrain 成为个人基础设施操作系统，您生活中的每个信号都自动流经 brain。集成是 **感官**
+（数据输入）和 **反射**（对模式的自动化响应）。用户订阅
+创建者的实际操作系统，然后自定义它。
 
 ```
 $ gbrain integrations
 
-  SENSES (data inputs)                          STATUS
+  SENSES (数据输入)                          STATUS
   -------------------------------------------------------
-  voice-to-brain    Phone calls -> brain pages  ACTIVE    last call: 2h ago
-  email-to-brain    Gmail -> entity updates     ACTIVE    47 emails today
-  x-to-brain        Twitter -> media pages      ACTIVE    312 tweets tracked
-  calendar-to-brain Google Cal -> meeting prep  ACTIVE    3 meetings tomorrow
-  photos-to-brain   Camera roll -> visual mem   AVAILABLE
-  slack-to-brain    Slack -> conversation index  AVAILABLE
-  rss-to-brain      RSS feeds -> media pages     AVAILABLE
+  voice-to-brain    电话呼叫 -> brain 页面  活跃    上次呼叫：2小时前
+  email-to-brain    Gmail -> 实体更新     活跃    今天 47 封电子邮件
+  x-to-brain        Twitter -> 媒体页面      活跃    跟踪了 312 条推文
+  calendar-to-brain Google Cal -> 会议准备  活跃    明天 3 个会议
+  photos-to-brain   相机胶卷 -> 视觉记忆   可用
+  slack-to-brain    Slack -> 对话索引      可用
+  rss-to-brain      RSS 订阅 -> 媒体页面   可用
 
-  REFLEXES (automated responses)                STATUS
+  REFLEXES (自动化响应)                STATUS
   -------------------------------------------------------
-  meeting-prep      Brief me before meetings    ACTIVE    next: 9am tomorrow
-  entity-enrich     Auto-enrich new contacts    ACTIVE    12 enriched today
-  dream-cycle       Overnight brain maintenance ACTIVE    last run: 3am
-  deal-tracker      Alert on deal changes       AVAILABLE
-  follow-up-nudge   Remind on stale threads     AVAILABLE
+  meeting-prep      会议前向我简要介绍    活跃    下次：明天上午 9 点
+  entity-enrich     自动丰富新联系人    活跃    今天丰富了 12 个
+  dream-cycle       夜间 brain 维护       活跃    上次运行：凌晨 3 点
+  deal-tracker      交易变更警报         可用
+  follow-up-nudge  提醒 stale 线程       可用
 
-  This week: 1,247 signals ingested. Top: email (47%), voice (23%), X (18%).
-  34 new entity pages created. 7 calls transcribed.
+  本周：摄入了 1,247 个信号。顶部：电子邮件 (47%)、语音 (23%)、X (18%)。
+  创建了 34 个新实体页面。转录了 7 次呼叫。
 
-  Run 'gbrain integrations show <id>' for setup details.
+  运行 'gbrain integrations show <id>' 以获取设置详细信息。
 ```
 
-The user feels: "My brain is alive. It's watching everything I care about, and
-it's getting smarter every day. I didn't have to write any code. I just said yes
-when the agent asked."
+用户感觉："我的 brain 还活着。它在关注我关心的一切，
+并且每天都在变得更聪明。我不需要写任何代码。我只是
+在代理询问时说 yes。"
 
-## Architecture: Senses & Reflexes
+## 架构：感官与反射
 
-### Recipe Format (YAML frontmatter + markdown body)
+### 配方格式（YAML 前置元信息 + markdown 正文）
 
 ```yaml
 ---
 id: voice-to-brain
 name: Voice-to-Brain
 version: 0.7.0
-description: Phone calls create brain pages via Twilio + OpenAI Realtime + GBrain MCP
+description: 电话呼叫通过 Twilio + OpenAI Realtime + GBrain MCP 创建 brain 页面
 category: sense
 requires: [credential-gateway]
 secrets:
   - name: TWILIO_ACCOUNT_SID
-    description: Twilio account SID
+    description: Twilio 账户 SID
     where: https://console.twilio.com
   - name: OPENAI_API_KEY
-    description: OpenAI API key (for Realtime voice)
+    description: OpenAI API 密钥（用于 Realtime 语音）
     where: https://platform.openai.com/api-keys
 health_checks:
   - curl -s https://api.twilio.com/2010-04-01 > /dev/null
@@ -66,49 +65,50 @@ health_checks:
 setup_time: 30 min
 ---
 
-[Opinionated setup instructions the agent executes...]
+[代理执行的有主见的设置说明...]
 ```
 
-### Dependency Graph
+### 依赖关系图
 
-Recipes declare `requires` in frontmatter. The CLI resolves dependencies before
-setup. If voice-to-brain requires credential-gateway, the agent sets up
-credential-gateway first.
+配方在前置元信息中声明 `requires`。CLI 在
+设置之前解析依赖关系。
+如果 voice-to-brain 需要 credential-gateway，代理会
+首先设置 credential-gateway。
 
 ```
 credential-gateway
-  ├── voice-to-brain (requires credentials for Twilio)
-  ├── email-to-brain (requires credentials for Gmail)
-  └── calendar-to-brain (requires credentials for Google Calendar)
+  ├── voice-to-brain（需要 Twilio 的凭证）
+  ├── email-to-brain（需要 Gmail 的凭证）
+  └── calendar-to-brain（需要 Google Calendar 的凭证）
 
-x-to-brain (standalone, uses X API directly)
+x-to-brain（独立，直接使用 X API）
 ```
 
-### Health Dashboard
+### 健康仪表板
 
-`gbrain integrations doctor` runs health_checks from every configured recipe:
+`gbrain integrations doctor` 从每个已配置的配方运行 health_checks：
 ```
 $ gbrain integrations doctor
-  voice-to-brain:   ✓ Twilio reachable  ✓ OpenAI key valid  ✓ ngrok tunnel up
-  email-to-brain:   ✓ Gmail auth valid   ✗ No emails in 48h (check cron)
-  OVERALL: 1 warning
+  voice-to-brain:   ✓ Twilio 可达  ✓ OpenAI 密钥有效  ✓ ngrok 隧道启动
+  email-to-brain:   ✓ Gmail 认证有效   ✗ 48 小时内无电子邮件（检查 cron）
+  OVERALL: 1 个警告
 ```
 
-### Sense Analytics
+### 感官分析
 
-`gbrain integrations stats` aggregates heartbeat data:
+`gbrain integrations stats` 聚合心跳数据：
 ```
 $ gbrain integrations stats
-  This week: 1,247 signals ingested
-  Top sources: email (47%), voice (23%), X (18%), calendar (12%)
-  34 new entity pages created
-  7 calls transcribed
-  Brain growth: 12,400 → 12,834 pages (+434)
+  本周：摄入了 1,247 个信号
+  顶部来源：电子邮件 (47%)、语音 (23%)、X (18%)、日历 (12%)
+  创建了 34 个新实体页面
+  转录了 7 次呼叫
+  Brain 增长：12,400 → 12,834 页面 (+434)
 ```
 
-### Reflex Rules Engine (future)
+### 反射规则引擎（未来）
 
-Reflexes are recipes that trigger on brain state changes:
+反射是在 brain 状态更改时触发的配方：
 
 ```yaml
 ---
@@ -122,33 +122,33 @@ triggers:
 action: alert
 ---
 
-When a deal page's status changes or a new email mentions a deal,
-alert the user with context from the brain.
+当交易页面的状态更改或新电子邮件提及交易时，
+使用来自 brain 的上下文提醒用户。
 ```
 
-## Roadmap
+## 路线图
 
-| Version | What Ships | Key Recipe |
+| 版本 | 发布内容 | 关键配方 |
 |---------|-----------|------------|
-| v0.7.0 | Recipe format, CLI, SKILLPACK breakout | voice-to-brain |
-| v0.8.0 | 3 more senses, reflex format | email, X, calendar |
-| v0.9.0 | Community recipes, install executor | community submissions |
-| v1.0.0 | Full senses/reflexes, health dashboard | meeting-prep, dream-cycle |
+| v0.7.0 | 配方格式、CLI、SKILLPACK 拆分 | voice-to-brain |
+| v0.8.0 | 另外 3 个感官、反射格式 | 电子邮件、X、日历 |
+| v0.9.0 | 社区配方、安装执行器 | 社区提交 |
+| v1.0.0 | 完整感官/反射、健康仪表板 | meeting-prep、dream-cycle |
 
-## Key Design Decisions
+## 关键设计决策
 
-1. **GBrain is deterministic infrastructure.** Cross-sense correlation, pattern
-   detection, and intelligent responses are the agent's job (OpenClaw/Hermes).
-   GBrain provides the plumbing.
+1. **GBrain 是确定性基础设施。** 跨感官关联、
+   检测和智能响应是代理的工作（OpenClaw/Hermes）。
+   GBrain 提供管道。
 
-2. **Agents ARE the runtime.** No npm packages, Docker images, or deterministic
-   scripts. The recipe markdown IS the installer. The agent reads it and does
-   the work.
+2. **代理就是运行时。** 没有 npm 包、Docker 镜像或确定性
+   脚本。配方 markdown 就是安装程序。代理读取它并
+   完成工作。
 
-3. **Very opinionated defaults.** Ship the creator's exact production setup as
-   the default. Users customize from there. Unknown callers get screened. Quiet
-   hours are enforced. Brain-first lookup happens on every call.
+3. **非常有主见的默认值。** 将创建者的确切生产设置作为
+   默认发布。用户从那里自定义。未知呼叫者被筛选。安静
+   时间被强制执行。每次呼叫时进行 Brain 优先查找。
 
-4. **Agent-readable outputs.** All CLI output must be parseable by agents (--json
-   flag). Migration files include agent instructions. The agent is the primary
-   consumer, not the human.
+4. **代理可读输出。** 所有 CLI 输出必须可由代理解析（--json
+   标志）。迁移文件包括代理指令。代理是主要
+   消费者，而不是人类。

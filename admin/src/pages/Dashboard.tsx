@@ -10,6 +10,10 @@ interface FeedEvent {
   timestamp: string;
 }
 
+function statusLabel(status: string): string {
+  return status === 'success' ? '成功' : status === 'error' ? '错误' : status;
+}
+
 export function DashboardPage() {
   const [stats, setStats] = useState({ connected_agents: 0, requests_today: 0, active_tokens: 0 });
   const [health, setHealth] = useState({ expiring_soon: 0, error_rate: '0%' });
@@ -27,7 +31,7 @@ export function DashboardPage() {
     es.onmessage = (e) => {
       try {
         const event = JSON.parse(e.data) as FeedEvent;
-        setEvents(prev => [event, ...prev].slice(0, 50));
+        setEvents((prev) => [event, ...prev].slice(0, 50));
       } catch {}
     };
     es.onerror = () => {
@@ -49,67 +53,67 @@ export function DashboardPage() {
 
   const timeAgo = (ts: string) => {
     const diff = Date.now() - new Date(ts).getTime();
-    if (diff < 60000) return `${Math.floor(diff / 1000)}s ago`;
-    if (diff < 3600000) return `${Math.floor(diff / 60000)} min ago`;
-    return `${Math.floor(diff / 3600000)}h ago`;
+    if (diff < 60000) return `${Math.floor(diff / 1000)} 秒前`;
+    if (diff < 3600000) return `${Math.floor(diff / 60000)} 分钟前`;
+    return `${Math.floor(diff / 3600000)} 小时前`;
   };
 
   return (
     <>
-      <h1 className="page-title">Dashboard</h1>
+      <h1 className="page-title">仪表盘</h1>
 
       <div style={{ display: 'flex', gap: 24 }}>
         <div style={{ flex: 1 }}>
           <div className="metrics">
             <div className="metric">
               <div className="metric-value">{stats.connected_agents}</div>
-              <div className="metric-label">Connected Agents</div>
+              <div className="metric-label">已连接 Agent</div>
             </div>
             <div className="metric">
               <div className="metric-value">{stats.requests_today}</div>
-              <div className="metric-label">Requests Today</div>
+              <div className="metric-label">今日请求数</div>
             </div>
             <div className="metric">
               <div className="metric-value">{stats.active_tokens}</div>
-              <div className="metric-label">Active Tokens</div>
+              <div className="metric-label">有效令牌数</div>
             </div>
           </div>
 
           <h2 className="section-title">
-            Live Activity
+            实时活动
             <span style={{ marginLeft: 8, fontSize: 10, color: sseStatus === 'connected' ? 'var(--success)' : sseStatus === 'connecting' ? 'var(--warning)' : 'var(--error)' }}>
-              {sseStatus === 'connected' ? '● connected' : sseStatus === 'connecting' ? '● connecting...' : '● disconnected'}
+              {sseStatus === 'connected' ? '● 已连接' : sseStatus === 'connecting' ? '● 连接中...' : '● 已断开'}
             </span>
           </h2>
 
           <div className="feed">
             {events.length === 0 ? (
               <div className="feed-empty">
-                {sseStatus === 'connected' ? 'No requests yet. Agents will appear when they connect.' : 'Connecting...'}
+                {sseStatus === 'connected' ? '暂无请求。Agent 连接后会显示在这里。' : '正在连接...'}
               </div>
             ) : (
               <table>
                 <thead>
                   <tr>
                     <th>Agent</th>
-                    <th>Operation</th>
-                    <th>Scopes</th>
-                    <th>Latency</th>
-                    <th>Status</th>
-                    <th>Time</th>
+                    <th>操作</th>
+                    <th>权限范围</th>
+                    <th>延迟</th>
+                    <th>状态</th>
+                    <th>时间</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {events.map((e, i) => (
-                    <tr key={i}>
-                      <td className="mono">{e.agent}</td>
-                      <td className="mono">{e.operation}</td>
-                      <td>{e.scopes.split(',').map(s => (
-                        <span key={s} className={`badge badge-${s.trim()}`} style={{ marginRight: 4 }}>{s.trim()}</span>
+                  {events.map((event, index) => (
+                    <tr key={index}>
+                      <td className="mono">{event.agent}</td>
+                      <td className="mono">{event.operation}</td>
+                      <td>{event.scopes.split(',').map((scope) => (
+                        <span key={scope} className={`badge badge-${scope.trim()}`} style={{ marginRight: 4 }}>{scope.trim()}</span>
                       ))}</td>
-                      <td className="mono">{e.latency_ms} ms</td>
-                      <td><span className={`badge badge-${e.status}`}>{e.status}</span></td>
-                      <td style={{ color: 'var(--text-secondary)' }}>{timeAgo(e.timestamp)}</td>
+                      <td className="mono">{event.latency_ms} ms</td>
+                      <td><span className={`badge badge-${event.status}`}>{statusLabel(event.status)}</span></td>
+                      <td style={{ color: 'var(--text-secondary)' }}>{timeAgo(event.timestamp)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -119,14 +123,14 @@ export function DashboardPage() {
         </div>
 
         <div style={{ width: 220 }}>
-          <h2 className="section-title">Token Health</h2>
+          <h2 className="section-title">令牌状态</h2>
           <div className="health-panel">
             <div className="health-row">
-              <span style={{ color: 'var(--warning)' }}>Expiring Soon</span>
+              <span style={{ color: 'var(--warning)' }}>即将过期</span>
               <span className="mono">{health.expiring_soon}</span>
             </div>
             <div className="health-row">
-              <span style={{ color: 'var(--error)' }}>Error Rate</span>
+              <span style={{ color: 'var(--error)' }}>错误率</span>
               <span className="mono">{health.error_rate}</span>
             </div>
           </div>

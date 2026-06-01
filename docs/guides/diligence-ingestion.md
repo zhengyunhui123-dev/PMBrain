@@ -1,151 +1,124 @@
-# Diligence Ingestion: Data Room to Brain Pages
+# 尽职调查摄取：数据室到 Brain 页面
 
-## Goal
+## 目标
 
-Turn pitch decks, financial models, and data room materials into searchable, cross-referenced brain pages with bull/bear analysis.
+将 pitch deck、财务模型和数据室材料转换为可搜索、交叉引用的 brain 页面，并带有牛市/熊市分析。
 
-## What the User Gets
+## 用户获得什么
 
-Without this: pitch decks sit in email attachments. Financial models in Google
-Drive. No cross-reference to the company brain page. You can't search "what
-were the key metrics from Acme Corp's Series A deck?"
+没有它：pitch deck 位于电子邮件附件中。财务模型在 Google Drive 中。没有到公司 brain 页面的交叉引用。你无法搜索"Acme Corp 的 A 轮 deck 中的关键指标是什么？"
 
-With this: every data room document is extracted, diarized, cross-referenced to
-the company page, and searchable. Index.md gives you the bull/bear case at a
-glance. `gbrain query "Acme Corp revenue growth"` finds the exact chart.
+有了它：每个数据室文档都被提取、日记化、交叉引用到公司页面，并且可搜索。Index.md 让你一眼就能看到牛市/熊市案例。`gbrain query "Acme Corp 收入增长"` 找到确切的图表。
 
-## Implementation
+## 实现
 
-Recognize data room materials by PDF filenames containing "Data Deck", "Intro
-Deck", "Data Room", "Cap Table", "Financial Model", "Investor Memo", "Pitch
-Deck", or series round names. Spreadsheet tabs with Revenue, Retention, Cohorts,
-CAC, Gross Margin, Unit Economics, ARR. User language like "data room",
-"diligence", "deck", "pitch", "fundraise materials".
+通过包含 "Data Deck"、"Intro Deck"、"Data Room"、"Cap Table"、"Financial Model"、"Investor Memo"、"Pitch Deck" 或系列轮名称的 PDF 文件名来识别数据室材料。带有 Revenue、Retention、Cohorts、CAC、Gross Margin、Unit Economics、ARR 选项卡的电子表格。用户语言如 "data room"、"diligence"、"deck"、"pitch"、"fundraise materials"。
 
-### The 9-Step Pipeline
+### 9 步管道
 
-**Step 1: Identify the Company.**
-From the document content or filename, identify the company name.
-Check if `brain/companies/{slug}.md` exists.
+**步骤 1：识别公司。**
+从文档内容或文件名中，识别公司名称。
+检查 `brain/companies/{slug}.md` 是否存在。
 
-**Step 2: Create Diligence Directory.**
+**步骤 2：创建尽职调查目录。**
 
 ```bash
 mkdir -p brain/diligence/{company-slug}/.raw
 ```
 
-**Step 3: Extract Content.**
+**步骤 3：提取内容。**
 
-- **PDFs:** Use PDF extraction tool. For scanned/image-heavy PDFs,
-  use OCR (e.g., Mistral OCR or similar).
-- **Spreadsheets:** Export each sheet as CSV. For Google Sheets:
+- **PDF：** 使用 PDF 提取工具。对于扫描的/图像密集的 PDF，使用 OCR（例如，Mistral OCR 或类似的）。
+- **电子表格：** 将每个工作表导出为 CSV。对于 Google Sheets：
   ```
   https://docs.google.com/spreadsheets/d/{ID}/gviz/tq?tqx=out:csv&sheet={Sheet Name}
   ```
 
-**Step 4: Diarize and Save.**
-Write extracted content to `brain/diligence/{company}/{doc-name}.md`:
-- Document title and type
-- Section-by-section breakdown with key metrics
-- Notable footnotes or caveats
-- Raw data tables where relevant
+**步骤 4：日记化并保存。**
+将提取的内容写入 `brain/diligence/{company}/{doc-name}.md`：
+- 文档标题和类型
+- 逐部分分解，带有关键指标
+- 值得注意的脚注或警告
+- 相关处的原始数据表
 
-**Step 5: Save Raw Files.**
-Copy original PDFs/files to `brain/diligence/{company}/.raw/`
-Preserve originals for reference. The diarized version is for search.
+**步骤 5：保存原始文件。**
+将原始 PDF/文件复制到 `brain/diligence/{company}/.raw/`
+保留原始文件以供参考。日记化版本用于搜索。
 
-**Step 6: Create or Update index.md.**
-Every diligence directory needs an `index.md`:
+**步骤 6：创建或更新 index.md。**
+每个尽职调查目录都需要一个 `index.md`：
 
 ```markdown
-# {Company Name} — Diligence
+# {Company Name} — 尽职调查
 
-## Round Details
-- Stage: Series A
-- Amount: $10M
-- Date: 2026-04
+## 轮次详情
+- 阶段：A 轮
+- 金额：$10M
+- 日期：2026-04
 
-## Document Inventory
-- [Pitch Deck](pitch-deck.md) — 25 slides, company overview + traction
-- [Financial Model](financial-model.md) — 5 tabs, 3-year projections
-- [Cap Table](cap-table.md) — current ownership + option pool
+## 文档清单
+- [Pitch Deck](pitch-deck.md) — 25 张幻灯片，公司概述 + 牵引力
+- [Financial Model](financial-model.md) — 5 个选项卡，3 年预测
+- [Cap Table](cap-table.md) — 当前所有权 + 期权池
 
-## Key Findings
-- Revenue growing 30% MoM for last 6 months
-- CAC payback period: 4 months
-- Net retention: 135%
+## 关键发现
+- 过去 6 个月收入增长 30% MoM
+- CAC 投资回收期：4 个月
+- 净保留率：135%
 
-## Bull Case
-- Strong product-market fit signal (NPS 72)
-- Expanding into adjacent vertical
+## 牛市案例
+- 强大的产品市场契合度信号（NPS 72）
+- 扩展到相邻垂直领域
 
-## Bear Case
-- Single customer represents 40% of revenue
-- Burn rate increased 3x last quarter
+## 熊市案例
+- 单个客户占收入的 40%
+- 上次季度燃烧率增加了 3 倍
 
-## Open Questions
-- What's the path to profitability?
-- How defensible is the moat?
+## 未解决的问题
+- 盈利能力的路径是什么？
+- 护城河的可防御性如何？
 ```
 
-**Step 7: Enrich Company Brain Page.**
-Update `brain/companies/{slug}.md`:
-- Add document sources to frontmatter
-- Update compiled truth with key findings
-- Add "See Also" link to diligence directory
-- If no company page exists, create one via the enrich skill
+**步骤 7：丰富公司 Brain 页面。**
+更新 `brain/companies/{slug}.md`：
+- 将文档来源添加到 frontmatter
+- 用关键发现更新编译真相
+- 添加"另请参阅"链接到尽职调查目录
+- 如果没有公司页面，通过丰富 skill 创建一个
 
-**Step 8: Commit.**
+**步骤 8：提交。**
 
 ```bash
 cd brain/ && git add -A && git commit -m "diligence: {Company} — {doc type} ingestion" && git push
 ```
 
-**Step 9: Publish (if asked).**
-When the user wants a shareable brief, create a password-protected
-published version. Strip internal notes and raw assessment language.
+**步骤 9：发布（如果被要求）。**
+当用户想要可共享的简报时，创建一个受密码保护的发布版本。删除内部笔记和原始评估语言。
 
-### Quality Bar
+### 质量门槛
 
-A good diligence page reads like an intelligence assessment:
-- **What they say** vs **what the data shows** (the gap is the insight)
-- Explicit bull/bear case (not just a summary)
-- Key metrics highlighted, not buried
-- Open questions that need answers before decision
+一个好的尽职调查页面读起来像情报评估：
+- **他们说的** vs **数据显示的**（差距就是洞察力）
+- 明确的牛市/熊市案例（不仅仅是摘要）
+- 突出显示的关键指标，而不是埋没
+- 在决策之前需要答案的未解决问题
 
-## Tricky Spots
+## 棘手的地方
 
-1. **PDF extraction is lossy.** Scanned decks and image-heavy PDFs lose
-   tables and charts during extraction. Always check the diarized output
-   against the original `.raw/` file. If key metrics are missing, re-extract
-   with OCR or transcribe manually.
+1. **PDF 提取是有损的。** 扫描的 deck 和图像密集的 PDF 在提取过程中会丢失表格和图表。始终根据原始 `.raw/` 文件检查日记化输出。如果关键指标丢失，请使用 OCR 重新提取或手动转录。
 
-2. **Idempotency on re-ingestion.** If the user sends an updated deck for
-   the same company, don't create a duplicate directory. Check for an existing
-   `brain/diligence/{company-slug}/` and update in place. Append a version
-   suffix to the document file if the old version should be preserved.
+2. **重新摄取时的幂等性。** 如果用户为同一家公司发送更新的 deck，不要创建重复的目录。检查现有的 `brain/diligence/{company-slug}/` 并在适当位置更新。如果应该保留旧版本，请在文档文件名后附加版本后缀。
 
-3. **index.md completeness.** The index.md is the entry point for the entire
-   diligence package. If it's missing the bull/bear case or open questions,
-   the diligence is incomplete. Always generate all sections even if some
-   require judgment calls -- flag uncertain assessments explicitly.
+3. **index.md 的完整性。** index.md 是整个尽职调查包的入口点。如果它缺少牛市/熊市案例或未解决的问题，尽职调查就不完整。即使某些部分需要判断调用，也要始终生成所有部分 — 明确地标记不确定的评估。
 
-## How to Verify
+## 如何验证
 
-1. **Search for key metrics.** After ingestion, run
-   `gbrain search "revenue growth"` or `gbrain search "{company name} CAC"`.
-   The diarized content should appear in results. If it doesn't, the sync
-   or embedding step was missed.
+1. **搜索关键指标。** 摄取后，运行 `gbrain search "revenue growth"` 或 `gbrain search "{company name} CAC"`。日记化内容应该出现在结果中。如果没有，则跳过了同步或嵌入步骤。
 
-2. **Check the company page cross-reference.** Open
-   `brain/companies/{slug}.md` and verify it links to the diligence directory.
-   The compiled truth section should include key findings from the deck.
+2. **检查公司页面交叉引用。** 打开 `brain/companies/{slug}.md` 并验证它链接到尽职调查目录。编译真相部分应该包括来自 deck 的关键发现。
 
-3. **Verify index.md has all sections.** Open
-   `brain/diligence/{company}/index.md` and confirm it has Round Details,
-   Document Inventory, Key Findings, Bull Case, Bear Case, and Open Questions.
-   Missing sections mean the pipeline stopped early.
+3. **验证 index.md 具有所有部分。** 打开 `brain/diligence/{company}/index.md` 并确认它具有轮次详情、文档清单、关键发现、牛市案例、熊市案例和未解决的问题。缺少的部分意味着管道提前停止。
 
 ---
 
-*Part of the [GBrain Skillpack](../GBRAIN_SKILLPACK.md).*
+*是 [GBrain Skillpack](../GBRAIN_SKILLPACK.md) 的一部分。*

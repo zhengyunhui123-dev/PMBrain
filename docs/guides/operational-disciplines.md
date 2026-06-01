@@ -1,21 +1,21 @@
-# Operational Disciplines
+# 操作纪律
 
-## Goal
-Five non-negotiable rules that separate a production brain from a demo -- signal detection, brain-first lookup, sync after every write, daily heartbeat, and nightly dream cycle.
+## 目标
+五个不容谈判的规则，用于区分生产级 brain 和演示版 — 信号检测、brain-first 查找、每次写入后同步、每日心跳和夜间梦境循环。
 
-## What the User Gets
-Without this: the agent misses signals in conversation, wastes money on external APIs when the brain already has the answer, leaves search results stale after writes, and lets the brain rot quietly. With this: every message is scanned for entities, the brain is always consulted first, search is always current, health is monitored daily, and the brain compounds overnight.
+## 用户获得什么
+没有它：代理在对话中错过信号，在 brain 已有答案时浪费外部 API 费用，写入后搜索结果过时，并且让 brain 悄然腐烂。有了它：每条消息都会扫描实体，brain 始终首先被查询，搜索始终是最新的，健康状况每天被监控，并且 brain 在夜间复合增长。
 
-## Implementation
+## 实现
 
 ```
-# DISCIPLINE 1: Signal Detection on Every Message (MANDATORY)
+# 纪律 1：每条消息上的信号检测（强制性）
 on every_inbound_message(message):
-    # No exceptions. If the user thinks out loud and the brain doesn't
-    # capture it, the system is broken. This is the #1 discipline.
+    # 没有例外。如果用户大声思考而 brain 没有
+    # 捕获它，系统就被破坏了。这是 #1 纪律。
 
     entities = detect_entities(message)
-    #   people, companies, deals, original ideas
+    #   人员、公司、交易、原创想法
 
     for entity in entities:
         existing = gbrain search "{entity.name}"
@@ -23,98 +23,98 @@ on every_inbound_message(message):
             gbrain add_timeline_entry <entity_slug> \
                 --entry "{what_was_said}" \
                 --source "User, direct message, {timestamp}"
-        # else: flag for enrichment if important enough
+        # 否则：如果足够重要，标记为丰富
 
     originals = detect_original_thinking(message)
     for idea in originals:
         gbrain put originals/{slug} --content "{user's exact phrasing}"
 
-# DISCIPLINE 2: Brain-First Lookup Before External APIs (MANDATORY)
+# 纪律 2：在外部 API 之前 Brain-First 查找（强制性）
 on information_needed(topic):
-    # ALWAYS check the brain before reaching for the web
+    # 始终在接触网络之前检查 brain
     brain_result = gbrain search "{topic}"
     if brain_result:
         page = gbrain get <slug>
-        # Use brain data first. External APIs FILL GAPS, not replace.
+        # 首先使用 brain 数据。外部 API 填补空白，不替换。
     else:
-        # Brain has nothing -- now use external APIs
+        # Brain 没有内容 -- 现在使用外部 API
         external_result = brave_search("{topic}")
 
-    # An agent that reaches for the web before checking its own brain
-    # is wasting money and giving worse answers.
+    # 在检查自己的 brain 之前就接触网络的代理
+    # 是在浪费金钱并提供更差的答案。
 
-# DISCIPLINE 3: Sync After Every Write (MANDATORY)
+# 纪律 3：每次写入后同步（强制性）
 on brain_write_complete():
     gbrain sync
-    # Without this, search results are stale.
-    # The page you just wrote won't appear in gbrain search or gbrain query
-    # until sync runs. Skipping this means the next lookup misses the
-    # most recent data.
+    # 没有这个，搜索结果会过时。
+    # 你刚刚写入的页面不会出现在 gbrain search 或 gbrain query 中
+    # 直到同步运行。跳过这个意味着下次查找会错过
+    # 最近的数据。
 
-# DISCIPLINE 4: Daily Heartbeat Check
+# 纪律 4：每日心跳检查
 on daily_schedule("09:00"):
     gbrain doctor
-    # Checks: database connectivity, embedding health, sync status,
-    # page count, stale pages, broken links
-    # If doctor reports issues, fix them before doing anything else.
+    # 检查：数据库连接性、嵌入健康状况、同步状态、
+    # 页面计数、过时页面、损坏的链接
+    # 如果 doctor 报告问题，在做什么其他事情之前修复它们。
 
-# DISCIPLINE 5: Nightly Dream Cycle
+# 纪律 5：夜间梦境循环
 on nightly_schedule("02:00"):
-    # The dream cycle is the most important discipline.
-    # The brain COMPOUNDS overnight.
+    # 梦境循环是最重要的纪律。
+    # Brain 在夜间复合增长。
 
-    # 5a: Entity sweep -- find unlinked mentions
+    # 5a：实体扫描 -- 查找未链接的提及
     pages = gbrain list_pages
     for page in pages:
         mentions = extract_entity_mentions(page.content)
         existing_links = gbrain get_links <page.slug>
         for mention in mentions:
             if mention not in existing_links:
-                gbrain add_link <page.slug> <mention_slug>  # fix broken graph
+                gbrain add_link <page.slug> <mention_slug>  # 修复损坏的图形
 
-    # 5b: Citation audit -- find facts without sources
+    # 5b：引用审计 -- 查找没有来源的事实
     for page in pages:
         facts_without_sources = audit_citations(page.content)
         if facts_without_sources:
             flag_for_remediation(page, facts_without_sources)
 
-    # 5c: Memory consolidation -- update compiled truth from timeline
+    # 5c：记忆巩固 -- 从时间线更新编译真相
     for page in stale_pages(older_than="7d"):
         timeline = gbrain get_timeline <page.slug>
         if timeline.has_new_entries_since_last_consolidation:
-            # Re-synthesize compiled truth from accumulated timeline
+            # 从累积的时间线重新综合编译真相
             updated_truth = consolidate(page.compiled_truth, timeline.new_entries)
             gbrain put <page.slug> --content updated_truth
 
-    # 5d: Sync everything
+    # 5d：同步所有内容
     gbrain sync
 
-# BONUS: Durable Skills Over One-Off Work
-# If you do something twice, make it a skill + cron.
-#   1. Concept the process
-#   2. Run it manually for 3-10 items
-#   3. Revise -- iterate on quality
-#   4. Codify into a skill
-#   5. Add to cron -- automate it
-# Each entity type and signal source has exactly one owner skill.
-# Two skills creating the same page = coverage violation.
+# 奖励：持久技能优于一次性工作
+# 如果你做了两次，就把它变成技能和 cron。
+#   1. 概念化过程
+#   2. 手动运行 3-10 个项目
+#   3. 修订 -- 迭代质量
+#   4. 编入技能
+#   5. 添加到 cron -- 自动化它
+# 每种实体类型和信号源都恰好有一个所有者技能。
+# 两个技能创建同一个页面 = 覆盖违规。
 ```
 
-## Tricky Spots
+## 棘手的地方
 
-1. **The dream cycle is the most important discipline.** Brains compound overnight. Entity sweeps fix broken graphs, citation audits catch sourceless facts, and memory consolidation keeps compiled truth current. Skip the dream cycle and the brain slowly rots.
-2. **Skipping Discipline 3 (sync after write) means stale search results.** You write a page, then immediately search for it -- and get nothing back. The page exists but isn't indexed. Always sync after writes.
-3. **Signal detection must fire on EVERY message.** Not just messages that look important. The user says "I talked to Pedro yesterday about the board seat" in passing -- that's a timeline entry on Pedro's page, a potential update to his State section, and a signal about the board. If the agent doesn't catch it, the system is broken.
-4. **Brain-first saves money AND gives better answers.** The brain has context that external APIs don't: relationship history, meeting notes, the user's own assessment. An API lookup for "Pedro Franceschi" returns a LinkedIn profile. The brain returns the full picture including private context.
-5. **`gbrain doctor` catches silent failures.** Embedding pipelines can stall, sync can fail silently, database connections can drop. The daily heartbeat catches these before they compound into data loss.
+1. **梦境循环是最重要的纪律。** Brains 在夜间复合增长。实体扫描修复损坏的图形，引用审计捕获无来源的事实，记忆巩固保持编译真相的最新状态。跳过梦境循环，brain 会慢慢腐烂。
+2. **跳过纪律 3（写入后同步）意味着过时的搜索结果。** 你写入一个页面，然后立即搜索它 -- 什么也找不到。页面存在但未被索引。始终在写入后同步。
+3. **信号检测必须在每条消息上触发。** 不仅仅是在看起来重要的消息上。用户顺便说"我昨天和 Pedro 讨论了董事会席位" -- 那是 Pedro 页面上的时间线条目，他的状态部分的潜在更新，以及关于董事会的信号。如果代理没有捕获它，系统就被破坏了。
+4. **Brain-first 节省金钱并提供更好的答案。** Brain 拥有外部 API 所没有的上下文：关系历史、会议记录、用户自己的评估。对"Pedro Franceschi"的 API 查找返回 LinkedIn 个人资料。Brain 返回完整的画面，包括私人上下文。
+5. **`gbrain doctor` 捕获静默失败。** 嵌入管道可能停滞，同步可能静默失败，数据库连接可能断开。每日心跳在它们复合造成数据丢失之前捕获这些。
 
-## How to Verify
+## 如何验证
 
-1. Send a message mentioning a person with a brain page. Confirm the agent detects the entity and adds a timeline entry to their page (`gbrain get_timeline <slug>`).
-2. Ask the agent about someone in the brain. Confirm it runs `gbrain search` or `gbrain get` BEFORE reaching for external APIs (check the tool call order).
-3. Write a new page with `gbrain put`, then immediately run `gbrain search` for it. Confirm it appears in results (verifies sync ran).
-4. Run `gbrain doctor`. Confirm it returns a health report with database status, page count, and any flagged issues.
-5. After a dream cycle runs, check a page that had unlinked entity mentions. Confirm new links were added (`gbrain get_links <slug>`).
+1. 发送提及有 brain 页面的人的消息。确认代理检测到实体并将其添加到他们页面的时间线条目（`gbrain get_timeline <slug>`）。
+2. 询问代理关于 brain 中的某人。确认它在接触外部 API 之前运行 `gbrain search` 或 `gbrain get`（检查工具调用顺序）。
+3. 使用 `gbrain put` 写入新页面，然后立即运行 `gbrain search` 来搜索它。确认它出现在结果中（验证同步运行）。
+4. 运行 `gbrain doctor`。确认它返回包含数据库状态、页面计数和任何标记问题的健康报告。
+5. 梦境循环运行后，检查具有未链接实体提及的页面。确认添加了新链接（`gbrain get_links <slug>`）。
 
 ---
-*Part of the [GBrain Skillpack](../GBRAIN_SKILLPACK.md).*
+*是 [GBrain Skillpack](../GBRAIN_SKILLPACK.md) 的一部分。*

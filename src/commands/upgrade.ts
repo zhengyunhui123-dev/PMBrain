@@ -7,7 +7,7 @@ const GBRAIN_GITHUB_REPO = 'garrytan/gbrain';
 
 export async function runUpgrade(args: string[]) {
   if (args.includes('--help') || args.includes('-h')) {
-    console.log('Usage: gbrain upgrade\n\nSelf-update the CLI.\n\nDetects install method (bun, binary, clawhub) and runs the appropriate update.\nAfter upgrading, shows what\'s new and offers to set up new features.');
+    console.log('用法：gbrain upgrade\n\n更新 CLI 自身。\n\n检测安装方式（bun、binary、clawhub）并执行对应更新。\n更新完成后显示新内容，并提示配置新增功能。');
     return;
   }
 
@@ -236,7 +236,7 @@ function saveUpgradeState(oldVersion: string, newVersion: string) {
  */
 export async function runPostUpgrade(args: string[] = []): Promise<void> {
   if (args.includes('--help') || args.includes('-h')) {
-    console.log('Usage: gbrain post-upgrade');
+    console.log('用法：gbrain post-upgrade');
     console.log('Prints feature pitches for new migrations and runs apply-migrations.');
     console.log('Idempotent — safe to re-run any time.');
     return;

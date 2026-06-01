@@ -1,75 +1,82 @@
-# Brain vs Memory vs Session
+# Brain vs 记忆 vs 会话
 
-## Goal
-Know what goes in GBrain, what goes in agent memory, and what stays in session context -- so every piece of information lands in the right layer.
+## 目标
 
-## What the User Gets
-Without this: people dossiers get stored in agent memory (lost on agent reset), user preferences get stored in GBrain (cluttering knowledge pages), and the agent re-asks questions it already knows the answer to. With this: world knowledge persists in the brain, operational state persists in agent memory, and the agent never puts information in the wrong layer.
+知道什么进入 GBrain，什么进入 agent 记忆，以及什么停留在会话上下文中 — 以便每条信息都落在正确的层。
 
-## Implementation
+## 用户获得什么
+
+没有它：人员档案存储在 agent 记忆中（在 agent 重置时丢失），用户偏好存储在 GBrain 中（混乱知识页面），并且 agent 重新询问它已经知道答案的问题。有了它：世界知识持久化在 brain 中，操作状态持久化在 agent 记忆中，并且 agent 永远不会将信息放在错误的层。
+
+## 实现
 
 ```
 on new_information(info):
-    # Three layers, three purposes -- route to the right one
+    # 三个层，三个目的 — 路由到正确的那个
 
     if info.is_about_the_world:
-        # GBRAIN: people, companies, deals, meetings, concepts, ideas
-        # This is world knowledge -- facts about entities external to the agent
+        # GBRAIN：人员、公司、交易、会议、概念、想法
+        # 这是世界知识 — 关于 agent 外部实体的事实
         gbrain put <slug> --content "..."
-        # Examples:
-        #   "Pedro is CEO of Brex"           -> gbrain (person page)
-        #   "Brex raised Series D at $12B"   -> gbrain (company page)
-        #   "Tuesday's meeting covered Q2"   -> gbrain (meeting page)
-        #   "The meatsuit maintenance tax"   -> gbrain (originals page)
+        # 示例：
+        #   "Pedro 是 Brex 的 CEO"           -> gbrain（人员页面）
+        #   "Brex 以 $12B 完成了 D 轮融资"   -> gbrain（公司页面）
+        #   "周二的会议涵盖了 Q2"   -> gbrain（会议页面）
+        #   "肉类套装维护税"   -> gbrain（原创页面）
 
     elif info.is_about_operations:
-        # AGENT MEMORY: preferences, decisions, tool config, session continuity
-        # This is how the agent operates -- not facts about the world
+        # AGENT MEMORY：偏好、决策、工具配置、会话连续性
+        # 这是 agent 如何操作的 — 不是关于世界的事实
         memory_write(info)
-        # Examples:
-        #   "User prefers concise formatting"      -> agent memory
-        #   "Deploy to staging before prod"        -> agent memory
-        #   "Use dark mode in code blocks"         -> agent memory
-        #   "API key for Crustdata goes in .env"   -> agent memory
+        # 示例：
+        #   "用户更喜欢简洁的格式"      -> agent 记忆
+        #   "在 prod 之前部署到 staging"        -> agent 记忆
+        #   "在代码块中使用暗黑模式"         -> agent 记忆
+        #   "Crustdata 的 API 密钥放在 .env 中"   -> agent 记忆
 
     elif info.is_current_conversation:
-        # SESSION CONTEXT: what was just said, current task, immediate state
-        # This is automatic -- already in the conversation window
-        # No storage action needed
-        # Examples:
-        #   "We were just discussing the board deck"  -> session
-        #   "You asked me to review this PR"          -> session
-        #   "The file I just shared"                  -> session
+        # SESSION CONTEXT：刚才说了什么，当前任务，即时状态
+        # 这是自动的 — 已经在会话窗口中
+        # 不需要存储操作
+        # 示例：
+        #   "我们刚才在讨论 board deck"  -> session
+        #   "你要求我审查这个 PR"          -> session
+        #   "我刚刚分享的文件"                  -> session
 
-# Lookup routing:
+# 查找路由：
 on user_asks(question):
     if question.about_person or question.about_company or question.about_meeting:
-        gbrain search "{entity}"    # -> world knowledge
+        gbrain search "{entity}"    # -> 世界知识
         gbrain get <slug>
 
     elif question.about_preference or question.about_how_to_operate:
-        memory_search("{topic}")    # -> operational state
+        memory_search("{topic}")    # -> 操作状态
 
     elif question.about_current_context:
-        # Already in session -- just reference conversation history
+        # 已经在 session 中 — 只引用会话历史
         pass
 ```
 
-## Tricky Spots
+## 棘手的地方
 
-1. **Don't store people in agent memory.** "Pedro prefers email over Slack" feels like a preference, but it's a fact about Pedro -- it goes in GBrain on Pedro's page. Agent memory is for the agent's own operational state, not facts about people in the world.
-2. **Don't store user preferences in GBrain.** "User likes bullet points over paragraphs" is about how the agent should behave, not about the world. It goes in agent memory. GBrain pages are for entities, not for agent configuration.
-3. **Synthesis of external ideas goes in GBrain.** "User's take on Peter Thiel's zero-to-one framework" is the user's original thinking -- it goes in GBrain under originals/, not in agent memory.
-4. **Agent memory doesn't survive agent resets on some platforms.** Critical world knowledge MUST be in GBrain, which is durable. If the agent loses memory, the brain still has everything.
-5. **When in doubt, ask: is this about the world or about how to operate?** World -> GBrain. Operations -> agent memory. Current conversation -> session.
+1. **不要将人员存储在 agent 记忆中。** "Pedro 更喜欢电子邮件而不是 Slack" 感觉像是偏好，但它是关于 Pedro 的事实 — 它放在 GBrain 中 Pedro 的页面上。Agent 记忆用于 agent 自己的操作状态，而不是关于世界上人员的事实。
 
-## How to Verify
+2. **不要将用户偏好存储在 GBrain 中。** "用户喜欢项目符号而不是段落" 是关于 agent 应该如何行为的，而不是关于世界的。它放在 agent 记忆中。GBrain 页面用于实体，不用于 agent 配置。
 
-1. Ask the agent "Who is Pedro?" -- confirm it runs `gbrain search` or `gbrain get`, not `memory_search`. Person lookup should hit GBrain.
-2. Ask the agent "How should I format responses?" -- confirm it checks agent memory, not GBrain. Preferences are operational state.
-3. Check that no person or company pages exist in agent memory storage. Run `memory_search "person"` -- it should return preferences, not dossiers.
-4. Check that GBrain doesn't contain pages about agent behavior. Run `gbrain search "user prefers"` -- it should return nothing (preferences belong in agent memory).
-5. After an agent reset, confirm GBrain knowledge is still accessible. Run `gbrain get <any_slug>` -- world knowledge should survive the reset.
+3. **外部想法的综合放在 GBrain 中。** "用户对 Peter Thiel 的从零到一框架的看法" 是用户的原创想法 — 它放在 GBrain 中 originals/ 下，而不是在 agent 记忆中。
+
+4. **Agent 记忆在一些平台上不会在 agent 重置后幸存。** 关键的世界知识必须放在 GBrain 中，它是持久的。如果 agent 丢失了记忆，brain 仍然拥有所有东西。
+
+5. **当有疑问时，问：这是关于世界的还是关于如何操作的？** 世界 -> GBrain。操作 -> agent 记忆。当前对话 -> session。
+
+## 如何验证
+
+1. 询问 agent "谁是 Pedro？" — 确认它运行了 `gbrain search` 或 `gbrain get`，而不是 `memory_search`。人员查找应该命中 GBrain。
+2. 询问 agent "我应该如何格式化响应？" — 确认它检查 agent 记忆，而不是 GBrain。偏好是操作状态。
+3. 检查 agent 记忆存储中不存在任何人员或公司页面。运行 `memory_search "person"` — 它应该返回偏好，而不是档案。
+4. 检查 GBrain 不包含关于 agent 行为的页面。运行 `gbrain search "user prefers"` — 它应该不返回任何内容（偏好属于 agent 记忆）。
+5. 在 agent 重置后，确认 GBrain 知识仍然可访问。运行 `gbrain get <any_slug>` — 世界知识应该在重置后幸存。
 
 ---
-*Part of the [GBrain Skillpack](../GBRAIN_SKILLPACK.md).*
+
+*是 [GBrain Skillpack](../GBRAIN_SKILLPACK.md) 的一部分。*

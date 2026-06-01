@@ -1458,45 +1458,45 @@ export function reportModStatus(): void {
 
 function printInitHelp() {
   console.log(`
-gbrain init — initialize a brain (PGLite or Supabase Postgres)
+gbrain init - 初始化知识库（PGLite 或 Supabase Postgres）
 
-USAGE
+用法
   gbrain init [flags]
 
-ENGINE SELECTION (mutually exclusive)
-  --pglite              Use embedded PGLite (zero-config, default for <1000 .md files)
-  --supabase            Use Supabase Postgres (recommended for 1000+ files)
-  --url <URL>           Use a manual Postgres connection string
-  --mcp-only            Thin-client mode: connect to a remote gbrain MCP, no local engine
+引擎选择（互斥）
+  --pglite              使用内嵌 PGLite（零配置，少于 1000 个 .md 文件时默认）
+  --supabase            使用 Supabase Postgres（1000 个以上文件时推荐）
+  --url <URL>           使用手动填写的 Postgres 连接字符串
+  --mcp-only            轻客户端模式：连接远程 gbrain MCP，不使用本地引擎
 
-OPTIONS
-  --force               Overwrite an existing config (gated by default)
-  --non-interactive     Don't prompt; use defaults
-  --migrate-only        Apply pending schema migrations against the configured engine
-                        without re-saving config (used by post-upgrade and orchestrators)
-  --json                JSON output for status reporting
-  --path <DIR>          Override default brain path (PGLite only)
-  --key <APIKEY>        Provide an API key non-interactively (Supabase only)
+选项
+  --force               覆盖现有配置（默认禁止）
+  --non-interactive     不询问，直接使用默认值
+  --migrate-only        对已配置引擎应用待执行的结构迁移，不重新保存配置
+                        （用于升级后处理和编排器）
+  --json                使用 JSON 输出状态
+  --path <DIR>          覆盖默认知识库路径（仅 PGLite）
+  --key <APIKEY>        非交互式提供 API 密钥（仅 Supabase）
   --embedding-model <PROVIDER:MODEL>
-                        e.g. openai:text-embedding-3-large, voyage:voyage-multimodal-3
-  --model <PROVIDER>    Shorthand: pick recipe default for a provider
+                        例如 openai:text-embedding-3-large、voyage:voyage-multimodal-3
+  --model <PROVIDER>    简写：选用提供商配方中的默认模型
   --embedding-dimensions <N>
-                        Embedding dimensions (must match the model)
+                        向量维度（必须与模型匹配）
   --expansion-model <PROVIDER:MODEL>
-                        Model for query expansion (default: anthropic:claude-haiku)
+                        查询扩展模型（默认：anthropic:claude-haiku）
   --chat-model <PROVIDER:MODEL>
-                        Default subagent driver (v0.27+)
+                        默认子代理驱动模型（v0.27+）
 
-EXAMPLES
-  gbrain init --pglite                      # Local-only, no API keys
-  gbrain init --supabase                    # Interactive Supabase setup
-  gbrain init --url postgresql://...        # Use a custom Postgres
-  gbrain init --mcp-only --url https://...  # Thin-client mode
+示例
+  gbrain init --pglite                      # 仅本地使用，无需 API 密钥
+  gbrain init --supabase                    # 交互式配置 Supabase
+  gbrain init --url postgresql://...        # 使用自定义 Postgres
+  gbrain init --mcp-only --url https://...  # 轻客户端模式
 
-NOTES
-  - Bare \`gbrain init\` in a directory with 1000+ .md files defaults to Supabase
-    interactive setup. With <1000 files (or with --pglite explicitly), defaults
-    to PGLite at ~/.gbrain/brain.pglite.
-  - Existing config is preserved unless --force is passed.
+说明
+  - 在含 1000 个以上 .md 文件的目录中直接运行 \`gbrain init\`，默认进入 Supabase
+    交互式配置。文件少于 1000 个时（或显式使用 --pglite），默认使用
+    ~/.gbrain/brain.pglite 中的 PGLite。
+  - 除非传入 --force，否则保留现有配置。
 `.trim());
 }

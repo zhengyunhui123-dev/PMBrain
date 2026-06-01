@@ -2,25 +2,25 @@
 id: credential-gateway
 name: Credential Gateway
 version: 0.7.0
-description: Secure access to Gmail, Google Calendar, and other Google services. ClawVisor (recommended) or direct Google OAuth.
+description: 对 Gmail、Google Calendar 和其他 Google 服务的安全访问。ClawVisor（推荐）或直接 Google OAuth。
 category: infra
 requires: []
 secrets:
   - name: CLAWVISOR_URL
-    description: ClawVisor gateway URL (Option A — recommended)
-    where: https://clawvisor.com — create an agent, copy the gateway URL
+    description: ClawVisor 网关 URL（选项 A — 推荐）
+    where: https://clawvisor.com — 创建一个代理，复制网关 URL
   - name: CLAWVISOR_AGENT_TOKEN
-    description: ClawVisor agent token (Option A)
-    where: https://clawvisor.com — agent settings, copy the agent token
+    description: ClawVisor 代理令牌（选项 A）
+    where: https://clawvisor.com — 代理设置，复制代理令牌
   - name: GOOGLE_CLIENT_ID
-    description: Google OAuth2 client ID (Option B — direct API)
-    where: https://console.cloud.google.com/apis/credentials — create OAuth 2.0 Client ID
+    description: Google OAuth2 客户端 ID（选项 B — 直接 API）
+    where: https://console.cloud.google.com/apis/credentials — 创建 OAuth 2.0 客户端 ID
   - name: GOOGLE_CLIENT_SECRET
-    description: Google OAuth2 client secret (Option B)
-    where: https://console.cloud.google.com/apis/credentials — same page as client ID
+    description: Google OAuth2 客户端密钥（选项 B）
+    where: https://console.cloud.google.com/apis/credentials — 与客户端 ID 同一页面
 health_checks:
   - type: any_of
-    label: "Auth provider"
+    label: "认证提供者"
     checks:
       - type: http
         url: "$CLAWVISOR_URL/health"
@@ -29,160 +29,158 @@ health_checks:
         name: GOOGLE_CLIENT_ID
         label: "Google OAuth"
 setup_time: 15 min
-cost_estimate: "$0 (both options are free)"
+cost_estimate: "$0（两个选项都是免费的）"
 ---
 
-# Credential Gateway: Secure Access to Google Services
+# Credential Gateway：对 Google 服务的安全访问
 
-Gmail, Google Calendar, Google Contacts, and other services require OAuth
-credentials. This recipe sets up secure access that email-to-brain and
-calendar-to-brain depend on.
+Gmail、Google Calendar、Google Contacts 和其他服务需要 OAuth
+凭证。此配方设置 email-to-brain 和
+calendar-to-brain 所依赖的安全访问。
 
-## IMPORTANT: Instructions for the Agent
+## 重要：给代理的说明
 
-**You are the installer.** Other recipes depend on this one. If the user wants
-email-to-brain or calendar-to-brain, set up credential-gateway FIRST.
+**您是安装程序。** 其他配方依赖于此配方。如果用户想要
+email-to-brain 或 calendar-to-brain，请**首先**设置 credential-gateway。
 
-**Two options, both free:**
-- **Option A: ClawVisor** — handles OAuth, token refresh, and encryption for you.
-  No token management. If you use multiple Google services, set up ClawVisor once
-  and all recipes use it.
-- **Option B: Google OAuth directly** — no extra service, but you manage tokens
-  yourself. Good if you don't want another dependency.
+**两个选项，都是免费的：**
+- **选项 A：ClawVisor** —— 为您处理 OAuth、令牌刷新和加密。
+  无令牌管理。如果您使用多个 Google 服务，请设置 ClawVisor 一次，
+  所有配方都使用它。
+- **选项 B：Google OAuth 直接** —— 无额外服务，但您自己管理令牌。
+  如果您不想要另一个依赖项，这很好。
 
-**Do not skip steps. Verify after each step.**
+**不要跳过步骤。在每个步骤后验证。**
 
-## Setup Flow
+## 设置流程
 
-### Step 1: Choose Your Gateway
+### 步骤 1：选择您的网关
 
-Ask the user: "How do you want to connect to Google services (Gmail, Calendar)?
+询问用户："您想如何连接到 Google 服务（Gmail、Calendar）？"
 
-**Option A: ClawVisor (recommended)**
-ClawVisor handles OAuth, token refresh, and encryption. Set it up once and
-email-to-brain, calendar-to-brain, and any future Google service recipes
-all use the same credentials. No token management on your end.
+**选项 A：ClawVisor（推荐）**
+ClawVisor 处理 OAuth、令牌刷新和加密。设置一次，
+email-to-brain、calendar-to-brain 和任何未来的 Google 服务配方
+都使用相同的凭证。您端无需令牌管理。
 
-**Option B: Google OAuth2 directly**
-Connect to Google APIs directly. No extra service. But you manage OAuth
-tokens yourself (they expire, need refresh)."
+**选项 B：Google OAuth2 直接**
+直接连接到 Google API。无额外服务。但您自己管理 OAuth
+令牌（它们会过期，需要刷新）。"
 
-#### Option A: ClawVisor Setup
+#### 选项 A：ClawVisor 设置
 
-Tell the user:
-"1. Go to https://clawvisor.com and create an account
-2. Create an agent (or use existing one)
-3. Activate the services you need:
-   - **Gmail** (for email-to-brain)
-   - **Google Calendar** (for calendar-to-brain)
-   - **Google Contacts** (for enrichment)
-4. Create a standing task with a broad purpose. CRITICAL: be EXPANSIVE.
+告诉用户：
+"1. 转到 https://clawvisor.com 并创建账户
+2. 创建一个代理（或使用现有的）
+3. 激活您需要的服务：
+   - **Gmail**（用于 email-to-brain）
+   - **Google Calendar**（用于 calendar-to-brain）
+   - **Google Contacts**（用于丰富）
+4. 创建一个目的宽泛的常设任务。关键：要**宽泛**。
 
-   Good purpose: 'Full executive assistant access to Gmail, Calendar, and
-   Contacts including inbox triage, event listing, contact lookup, and
-   historical data access for all connected Google accounts.'
+   好的目的：'完全访问 Gmail、Calendar 和
+   Contacts，包括收件箱分类、事件列表、联系人查找和
+   所有连接的 Google 账户的历史数据访问。'
 
-   Bad purpose: 'email triage' — too narrow, blocks legitimate requests.
+   不好的目的：'email triage' —— 太窄，阻止合法请求。
 
-5. Copy the **Gateway URL** and **Agent Token** and paste them to me"
+5. 复制**网关 URL** 和**代理令牌**并粘贴给我"
 
-Validate:
+验证：
 ```bash
 curl -sf "$CLAWVISOR_URL/health" \
-  && echo "PASS: ClawVisor reachable" \
-  || echo "FAIL: ClawVisor not reachable — check the URL"
+  && echo "通过：ClawVisor 可达" \
+  || echo "失败：ClawVisor 不可达 — 检查 URL"
 ```
 
-**STOP until ClawVisor validates.**
+**停止直到 ClawVisor 验证通过。**
 
-#### Option B: Google OAuth2 Setup
+#### 选项 B：Google OAuth2 设置
 
-Tell the user:
-"I need Google OAuth2 credentials. Here's exactly how:
+告诉用户：
+"我需要 Google OAuth2 凭证。具体操作如下：
 
-1. Go to https://console.cloud.google.com/apis/credentials
-   (create a Google Cloud project if you don't have one — it's free)
-2. Click **'+ CREATE CREDENTIALS'** at the top > **'OAuth client ID'**
-3. If prompted to configure the consent screen:
-   - User type: **External** (or Internal for Google Workspace)
-   - App name: 'GBrain' (anything works)
-   - Scopes: add the ones you need:
-     - Gmail: `https://www.googleapis.com/auth/gmail.readonly`
-     - Calendar: `https://www.googleapis.com/auth/calendar.readonly`
-     - Contacts: `https://www.googleapis.com/auth/contacts.readonly`
-   - Test users: add your own email address
-4. Create the OAuth client ID:
-   - Application type: **Desktop app**
-   - Name: 'GBrain'
-5. Click **'Create'** — copy the **Client ID** and **Client Secret**
-6. Enable the APIs you need:
-   - Gmail: https://console.cloud.google.com/apis/library/gmail.googleapis.com
-   - Calendar: https://console.cloud.google.com/apis/library/calendar-json.googleapis.com
-   Click **'Enable'** on each one.
+1. 转到 https://console.cloud.google.com/apis/credentials
+   （如果您没有 Google Cloud 项目，请创建一个 — 免费）
+2. 点击顶部的 **'+ CREATE CREDENTIALS'** > **'OAuth client ID'**
+3. 如果提示配置同意屏幕：
+   - 用户类型：**外部**（或者内部用于 Google Workspace）
+   - 应用名称：'GBrain'（任何名称都可以）
+   - 范围：添加您需要的那些：
+     - Gmail：`https://www.googleapis.com/auth/gmail.readonly`
+     - Calendar：`https://www.googleapis.com/auth/calendar.readonly`
+     - Contacts：`https://www.googleapis.com/auth/contacts.readonly`
+   - 测试用户：添加您自己的电子邮件地址
+4. 创建 OAuth 客户端 ID：
+   - 应用程序类型：**桌面应用**
+   - 名称：'GBrain'
+5. 点击 **'创建'** — 复制**客户端 ID** 和**客户端密钥**
+6. 启用您需要的 API：
+   - Gmail：https://console.cloud.google.com/apis/library/gmail.googleapis.com
+   - Calendar：https://console.cloud.google.com/apis/library/calendar-json.googleapis.com
+   在每个上面点击 **'启用'**。
 
-Paste the Client ID and Client Secret to me."
+将客户端 ID 和客户端密钥粘贴给我。"
 
-Validate:
+验证：
 ```bash
 [ -n "$GOOGLE_CLIENT_ID" ] && [ -n "$GOOGLE_CLIENT_SECRET" ] \
-  && echo "PASS: Google OAuth credentials set" \
-  || echo "FAIL: Missing GOOGLE_CLIENT_ID or GOOGLE_CLIENT_SECRET"
+  && echo "通过：Google OAuth 凭证已设置" \
+  || echo "失败：缺少 GOOGLE_CLIENT_ID 或 GOOGLE_CLIENT_SECRET"
 ```
 
-Then run the OAuth flow:
+然后运行 OAuth 流程：
 ```
-// The first time a recipe uses these credentials, it will:
-// 1. Open a browser to the Google consent URL
-// 2. User grants access
-// 3. Script receives auth code, exchanges for access + refresh token
-// 4. Stores tokens in ~/.gbrain/google-tokens.json
-// 5. Auto-refreshes when tokens expire (refresh token is long-lived)
+// 配方首次使用这些凭证时，它将：
+// 1. 打开浏览器到 Google 同意 URL
+// 2. 用户授予访问权限
+// 3. 脚本接收授权代码，交换为访问 + 刷新令牌
+// 4. 将令牌存储在 ~/.gbrain/google-tokens.json 中
+// 5. 令牌过期时自动刷新（刷新令牌是长期有效的）
 ```
 
-**STOP until OAuth credentials validate.**
+**停止直到 OAuth 凭证验证通过。**
 
-### Step 2: Log Setup Completion
+### 步骤 2：记录设置完成
 
 ```bash
 mkdir -p ~/.gbrain/integrations/credential-gateway
 echo '{"ts":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'","event":"setup_complete","source_version":"0.7.0","status":"ok","details":{"type":"CLAWVISOR_OR_GOOGLE"}}' >> ~/.gbrain/integrations/credential-gateway/heartbeat.jsonl
 ```
 
-Tell the user: "Credential gateway is set up. Email-to-brain and calendar-to-brain
-can now access your Google services."
+告诉用户："Credential gateway 已设置。Email-to-brain 和 calendar-to-brain
+现在可以访问您的 Google 服务。"
 
-## Tricky Spots
+## 棘手的地方
 
-1. **ClawVisor task purpose must be EXPANSIVE.** "Email triage" is too narrow and
-   blocks legitimate requests. Use a broad purpose that covers everything you
-   might want to do with email. The intent verification model checks each
-   request against the purpose. Narrow = blocked.
+1. **ClawVisor 任务目的必须**宽泛**。""Email triage" 太窄，
+   会阻止合法请求。使用涵盖您可能想要做的所有事情的宽泛目的
+   与电子邮件。意图验证模型根据目的检查每个
+   请求。窄 = 被阻止。
 
-2. **Google OAuth tokens expire.** Access tokens last ~1 hour. The refresh token
-   is long-lived but can be revoked. Store both in `~/.gbrain/google-tokens.json`
-   with 0600 permissions. The script should auto-refresh on 401.
+2. **Google OAuth 令牌过期。** 访问令牌持续约 1 小时。刷新令牌
+   是长期有效的，但可以被撤销。将两者都存储在 `~/.gbrain/google-tokens.json` 中，
+   权限为 0600。脚本应在 401 时自动刷新。
 
-3. **Google consent screen in "Testing" mode** limits to 100 users and tokens
-   expire weekly. For personal use this is fine. For production, publish the app.
+3. **处于"测试"模式的 Google 同意屏幕**限制为 100 个用户，令牌
+   每周过期。对于个人使用，这没问题。对于生产，发布应用。
 
-4. **Multiple Google accounts.** If you have work + personal Gmail, you need to
-   authorize each one separately in the OAuth flow. ClawVisor handles this
-   automatically.
+4. **多个 Google 账户。** 如果您有工作 + 个人 Gmail，您需要在
+   OAuth 流程中单独授权每个账户。ClawVisor 自动处理此问题。
 
-## How to Verify
+## 如何验证
 
-1. **ClawVisor:** `curl $CLAWVISOR_URL/health` returns OK.
-2. **Google OAuth:** Tokens exist at `~/.gbrain/google-tokens.json`.
-3. **Gmail access:** Run the email collector — it should pull recent messages.
-4. **Calendar access:** Run the calendar sync — it should pull today's events.
+1. **ClawVisor：** `curl $CLAWVISOR_URL/health` 返回 OK。
+2. **Google OAuth：** 令牌存在于 `~/.gbrain/google-tokens.json`。
+3. **Gmail 访问：** 运行电子邮件收集器 — 它应拉取最近的消息。
+4. **Calendar 访问：** 运行日历同步 — 它应拉取今天的事件。
 
-## Cost Estimate
+## 成本估算
 
-| Component | Monthly Cost |
+| 组件 | 月成本 |
 |-----------|-------------|
-| ClawVisor | $0 (free tier) |
-| Google OAuth | $0 (free, no billing needed for personal use) |
+| ClawVisor | $0（免费层） |
+| Google OAuth | $0（免费，个人使用无需计费） |
 
 ---
-
-*Part of the [GBrain Skillpack](../docs/GBRAIN_SKILLPACK.md). See also: [Email-to-Brain](email-to-brain.md), [Calendar-to-Brain](calendar-to-brain.md)*
+*GBrain Skillpack 的一部分。另请参阅：[Email-to-Brain](email-to-brain.md)、[Calendar-to-Brain](calendar-to-brain.md)*

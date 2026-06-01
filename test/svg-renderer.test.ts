@@ -23,7 +23,7 @@ describe('escapeXml', () => {
 describe('renderBrierTrend', () => {
   test('empty series → empty-state SVG with placeholder text', () => {
     const out = renderBrierTrend({ series: [] });
-    expect(out).toContain('No Brier-trend data yet');
+    expect(out).toContain('暂无 Brier 趋势数据');
     expect(out).toContain('<svg');
   });
 
@@ -81,7 +81,7 @@ describe('renderBrierTrend', () => {
 describe('renderDomainBars', () => {
   test('empty bars → empty-state SVG', () => {
     const out = renderDomainBars({ bars: [] });
-    expect(out).toContain('No per-domain scorecard data');
+    expect(out).toContain('暂无各领域计分卡数据');
   });
 
   test('renders one row per bar with accuracy label + n sample size', () => {
@@ -125,7 +125,7 @@ describe('renderDomainBars', () => {
 describe('renderAbandonedThreadsCard', () => {
   test('empty threads → empty-state SVG', () => {
     const out = renderAbandonedThreadsCard([]);
-    expect(out).toContain('clean slate');
+    expect(out).toContain('没有已放弃的高确信度线程');
   });
 
   test('renders one row per thread with claim + meta + revisit link', () => {
@@ -139,9 +139,9 @@ describe('renderAbandonedThreadsCard', () => {
       },
     ]);
     expect(out).toContain('Marketplaces with cold-start liquidity');
-    expect(out).toContain('17 months silent');
-    expect(out).toContain('conviction 0.85');
-    expect(out).toContain('revisit now');
+    expect(out).toContain('已沉默 17 个月');
+    expect(out).toContain('确信度 0.85');
+    expect(out).toContain('立即重访');
     // Default revisitHref points at the take id.
     expect(out).toContain('/admin/calibration/revisit/42');
   });
@@ -178,7 +178,7 @@ describe('renderAbandonedThreadsCard', () => {
 describe('renderPatternStatementsCard', () => {
   test('empty statements → empty-state SVG', () => {
     const out = renderPatternStatementsCard([]);
-    expect(out).toContain('No active patterns');
+    expect(out).toContain('暂无活跃模式');
   });
 
   test('renders one anchor (drill-down link) per statement (D29 / TD3)', () => {

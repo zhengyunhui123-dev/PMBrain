@@ -1,224 +1,207 @@
-# Embedder Shootout — May 2026 Eval Plan
+# 嵌入模型对决 — 2026年5月评估计划
 
-**Status:** approved, ready to execute
-**Owner:** Garry
-**Plan source:** `~/.claude/plans/system-instruction-you-are-working-linear-origami.md` (review log)
-**Target wallclock:** ~2 weeks
-**Target API spend:** ~$525 (hard cap $700)
+**状态：** 已批准，准备执行
+**负责人：** Garry
+**计划来源：** `~/.claude/plans/system-instruction-you-are-working-linear-origami.md`（审查日志）
+**目标耗时：** ~2周
+**目标API开销：** ~$525（硬上限 $700）
 
-## What this is
+## 本文内容
 
-A head-to-head A/B/C comparison of three embedding providers under v0.35.0.0's new
-multi-vendor gateway routing:
+这是 v0.35.0.0 新多供应商网关路由下，三个嵌入提供商的正面 A/B/C 对比：
 
-- **OpenAI** `text-embedding-3-large` @ 1536 dims
-- **Voyage** `voyage-4-large` @ 2048 dims
-- **ZeroEntropy** `zembed-1` @ 2560 dims (also 1280 in a Matryoshka ablation)
+- **OpenAI** `text-embedding-3-large` @ 1536 维
+- **Voyage** `voyage-4-large` @ 2048 维
+- **ZeroEntropy** `zembed-1` @ 2560 维（另加 1280 维 Matryoshka 消融实验）
 
-Each tested with and without the `zerank-2` reranker. Two corpora: public LongMemEval
-(500q) and BrainBench in-house (145 relational queries + 50 newly-curated Cat 13
-embedder-sensitive queries).
+每个配置都测试是否使用 `zerank-2` 重排序器。使用两个语料库：公开 LongMemEval（500题）和内部 BrainBench（145条关系查询 + 50条新策划的 Cat 13 嵌入器敏感查询）。
 
-The goal: produce a publishable comparison report that answers "which embedder wins,
-and does zerank-2 carry the win for ZeroEntropy" with bootstrap p-values, suitable
-for a v0.35.2.0 release-note headline.
+目标：生成可发布的对比报告，回答"哪个嵌入器胜出，zerank-2 是否为 ZeroEntropy 带来了胜利"，并附带 bootstrap p 值，适合作为 v0.35.2.0 发行说明的标题。
 
-## Why this design
+## 设计原因
 
-Locked decisions from the planning review (see plan file + `GSTACK REVIEW REPORT` at
-the bottom of the linked plan):
+来自规划审查的锁定决策（见计划文件 + 链接计划底部的 `GSTACK REVIEW REPORT`）：
 
-- **Synthetic-only** — LongMemEval (public) + BrainBench (in-house). No `~/.gbrain` data.
-- **Answer-gen mode** — `gbrain eval longmemeval` runs the default answer-gen path
-  (Anthropic Sonnet), then feeds the resulting hypothesis JSONL to LongMemEval's
-  published `evaluate_qa.py` (OpenAI gpt-4o judge) for real correctness numbers.
-  `--retrieval-only` is NOT used (would produce an attackable headline; the judge
-  expects answer text, not retrieval text).
-- **`tokenmax` search mode** pinned across all cells (expansion + reranker slot active).
-- **Serial execution** in one workspace. Clean rate-limit profile; first-contact run on
-  ZE wants debuggable signal.
-- **7-cell matrix** (no matched-dim cross-vendor row — no shared dim exists across
-  all three vendors; honest framing is "each vendor at marketed sweet spot").
+- **仅合成数据** — LongMemEval（公开）+ BrainBench（内部）。不使用 `~/.gbrain` 数据。
+- **答案生成模式** — `gbrain eval longmemeval` 运行默认的答案生成路径（Anthropic Sonnet），然后将生成的假设 JSONL 传递给 LongMemEval 已发布的 `evaluate_qa.py`（OpenAI gpt-4o 评判）以获得真实正确性分数。
+  `--retrieval-only` 不使用（会产生可被攻击的标题；评判期望答案文本，而非检索文本）。
+- **`tokenmax` 搜索模式** 在所有单元格中固定（扩展 + 重排序器槽位激活）。
+- **串行执行**，在一个工作区中。干净的速率限制配置文件；首次接触 ZE 时需要可调试的信号。
+- **7单元格矩阵**（没有跨供应商的匹配维度行 — 三个供应商之间不存在共享维度；诚实的框架是"每个供应商在其营销的甜蜜点"）。
 
-## Architectural facts that constrain the plan
+## 约束计划的结构性事实
 
-- `content_chunks.embedding vector(N)` dim is fixed per brain. Per-question PGLite in
-  LongMemEval makes this free; BrainBench needs separate brain per cell.
-- pgvector HNSW caps at **2000 dims** (`PGVECTOR_HNSW_VECTOR_MAX_DIMS` in
-  `src/core/vector-index.ts:19`). Voyage 2048 and ZE 2560 fall back to exact vector
-  scan. Helps quality (no HNSW approximation) but adds latency. Footnoted in writeup.
-- Reranker disable key is **`search.reranker.enabled false`**, NOT `reranker_model none`.
-  `tokenmax` mode defaults reranker=true.
-- `gbrain/ai/gateway` is NOT exported in v0.35.0.0. PR α exposes it.
+- `content_chunks.embedding vector(N)` 维度在每个 brain 中固定。LongMemEval 中的按问题 PGLite 使这免费；BrainBench 需要每个单元格一个独立的 brain。
+- pgvector HNSW 上限为 **2000 维**（`src/core/vector-index.ts:19` 中的 `PGVECTOR_HNSW_VECTOR_MAX_DIMS`）。Voyage 2048 和 ZE 2560 回退到精确向量扫描。有助于质量（无 HNSW 近似）但增加延迟。在撰写时作为脚注。
+- 重排序器禁用键是 **`search.reranker.enabled false`**，而非 `reranker_model none`。
+  `tokenmax` 模式默认 reranker=true。
+- `gbrain/ai/gateway` 在 v0.35.0.0 中未导出。PR α 暴露它。
 
-## Matrix
+## 矩阵
 
-| Cell | Embedder | Dim | HNSW | Reranker | Notes |
+| 单元格 | 嵌入器 | 维度 | HNSW | 重排序器 | 备注 |
 |---|---|---|---|---|---|
-| A0 | `openai:text-embedding-3-large` | 1536 | yes | none | OpenAI baseline |
-| A1 | `openai:text-embedding-3-large` | 1536 | yes | `zerank-2` | mixed-vendor |
-| B0 | `voyage:voyage-4-large` | 2048 | no (exact) | none | Voyage solo |
-| B1 | `voyage:voyage-4-large` | 2048 | no (exact) | `zerank-2` | mixed-vendor |
-| C0 | `zeroentropyai:zembed-1` | 2560 | no (exact) | none | ZE embedder solo |
-| C1 | `zeroentropyai:zembed-1` | 2560 | no (exact) | `zerank-2` | **ZE full stack** |
-| C2 | `zeroentropyai:zembed-1` | 1280 | yes | `zerank-2` | ZE-Matryoshka ablation |
+| A0 | `openai:text-embedding-3-large` | 1536 | 是 | 无 | OpenAI 基线 |
+| A1 | `openai:text-embedding-3-large` | 1536 | 是 | `zerank-2` | 混合供应商 |
+| B0 | `voyage:voyage-4-large` | 2048 | 否（精确） | 无 | Voyage 单独 |
+| B1 | `voyage:voyage-4-large` | 2048 | 否（精确） | `zerank-2` | 混合供应商 |
+| C0 | `zeroentropyai:zembed-1` | 2560 | 否（精确） | 无 | ZE 嵌入器单独 |
+| C1 | `zeroentropyai:zembed-1` | 2560 | 否（精确） | `zerank-2` | **ZE 全栈** |
+| C2 | `zeroentropyai:zembed-1` | 1280 | 是 | `zerank-2` | ZE-Matryoshka 消融 |
 
-## PR structure — as few as possible
+## PR 结构 — 尽可能少
 
-**PR α — gbrain repo: v0.35.1.0 infra.** All gbrain changes bundled. Lands first.
-Bisect-friendly commits inside, ship at the very end.
+**PR α — gbrain 仓库：v0.35.1.0 基础设施。** 所有 gbrain 更改打包在一起。首先落地。
+内部二分友好提交，最后整体发布。
 
-**PR β — gbrain-evals repo: adapter + smoke + curation + eval receipts + writeup.** The
-big one. Includes the full eval-run output committed alongside the code that produced
-it, plus the comparison writeup. Lands when everything is done.
+**PR β — gbrain-evals 仓库：适配器 + 冒烟测试 + 策划 + 评估收据 + 撰写。** 较大的一个。
+包括与生成它的代码一起提交的完整评估运行输出，以及对比撰写。在所有事情完成后落地。
 
-**PR γ (optional) — gbrain repo: v0.35.2.0 release** that cross-links the gbrain-evals
-benchmark in CHANGELOG. Small commit; no code changes.
+**PR γ（可选）— gbrain 仓库：v0.35.2.0 发行**
+交叉链接 gbrain-evals 基准测试的 CHANGELOG。小提交；无代码更改。
 
-Total: 2 substantive PRs + 1 optional release commit. **No mid-stream ships.**
+总计：2个实质性 PR + 1个可选发行提交。**没有中途发布。**
 
-## Conductor sessions
+## 指挥者会话
 
-Each section below is a self-contained brief. Copy-paste into a fresh Conductor session
-to hand off. Each session ends with a clean deliverable.
+下面的每个部分都是一个独立的简要说明。复制粘贴到新的指挥者会话中以移交。每个会话以一个干净的可交付成果结束。
 
 ---
 
-## Session 1 — PR α: gbrain infra (v0.35.1.0)
+## 会话 1 — PR α：gbrain 基础设施（v0.35.1.0）
 
-**Repo:** `/Users/garrytan/conductor/workspaces/gbrain/<NEW-WORKSPACE>` (fresh from `master`)
-**Branch:** `garrytan/v0.35.1.0-infra`
-**Wallclock:** ~2h
-**API spend:** $0
+**仓库：** `/Users/garrytan/conductor/workspaces/gbrain/<新建工作区>`（从 `master` 新建）
+**分支：** `garrytan/v0.35.1.0-infra`
+**时钟时间：** ~2h
+**API 开销：** $0
 
-### What this session ships
-Three changes in one PR, bundled so the embedder shootout in gbrain-evals (PR β) has a
-clean prereq baseline:
+### 本会话发布的内容
 
-1. Add `voyage:voyage-4-large` ($0.18/M) and `zeroentropyai:zembed-1` ($0.05/M) to the
-   embedding pricing table. Patch the `gbrain models doctor` cost estimator + test.
-2. Expose `gbrain/ai/gateway` in `package.json` exports map so the gbrain-evals
-   adapters can call `configureGateway({embedding_model, embedding_dimensions, reranker_model})`
-   from outside the gbrain process.
-3. Add `--resume-from <jsonl>` to `gbrain eval longmemeval` so a mid-run abort
-   (rate-limit, cost-cap, OS interrupt) doesn't lose the cells we already paid for.
+一个 PR 中的三项更改，打包在一起，以便 gbrain-evals（PR β）中的嵌入器对决有一个干净的前置基线：
 
-Ships at the end as v0.35.1.0.
+1. 将 `voyage:voyage-4-large` ($0.18/M) 和 `zeroentropyai:zembed-1` ($0.05/M) 添加到嵌入定价表。修补 `gbrain models doctor` 成本估算器 + 测试。
+2. 在 `package.json` 导出映射中暴露 `gbrain/ai/gateway`，以便 gbrain-evals 适配器可以外部调用 `configureGateway({embedding_model, embedding_dimensions, reranker_model})`。
+3. 向 `gbrain eval longmemeval` 添加 `--resume-from <jsonl>`，以便中途运行中止（速率限制、成本上限、操作系统中断）不会丢失我们已经付费的单元格。
 
-### Prereqs (verify before starting)
-- On gbrain master at v0.35.0.0 baseline. `cat VERSION` shows `0.35.0.0`.
-- `bun test` and `bun run verify` both pass on master.
+最后作为 v0.35.1.0 发布。
 
-### Commits (bisect-friendly, one feature per commit)
+### 前置条件（开始前验证）
+
+- 在 v0.35.0.0 基线上的 gbrain master。`cat VERSION` 显示 `0.35.0.0`。
+- `bun test` 和 `bun run verify` 都在 master 上通过。
+
+### 提交（二分友好，每个提交一个功能）
 
 ```
-1. feat(pricing): add voyage-4-large + zembed-1 to EMBEDDING_PRICING
-   - src/core/embedding-pricing.ts: add both entries
-   - test/embedding-pricing.test.ts: pin both with $0.18 and $0.05
-   - Verify: bun test test/embedding-pricing.test.ts
+1. feat(pricing): 将 voyage-4-large + zembed-1 添加到 EMBEDDING_PRICING
+   - src/core/embedding-pricing.ts: 添加两个条目
+   - test/embedding-pricing.test.ts: 用 $0.18 和 $0.05 固定两者
+   - 验证：bun test test/embedding-pricing.test.ts
 
-2. feat(exports): expose gbrain/ai/gateway with canary test
-   - package.json: add "./ai/gateway" to exports map
-   - test/public-exports.test.ts: add canary for configureGateway + embed
+2. feat(exports): 用金丝雀测试暴露 gbrain/ai/gateway
+   - package.json: 向导出映射添加 "./ai/gateway"
+   - test/public-exports.test.ts: 为 configureGateway + embed 添加金丝雀
    - scripts/check-exports-count.sh: 17 -> 18
-   - Verify: bun run verify
+   - 验证：bun run verify
 
-3. feat(eval): add --resume-from <jsonl> to longmemeval
-   - src/commands/eval-longmemeval.ts: parse flag, skip questions already in input JSONL
-   - test/eval-longmemeval.test.ts: simulated mid-run abort + resume regression
-   - Verify: bun test test/eval-longmemeval.test.ts
+3. feat(eval): 向 longmemeval 添加 --resume-from <jsonl>
+   - src/commands/eval-longmemeval.ts: 解析标志，跳过输入 JSONL 中已存在的问题
+   - test/eval-longmemeval.test.ts: 模拟中途运行中止 + 恢复回归
+   - 验证：bun test test/eval-longmemeval.test.ts
 
 4. chore: v0.35.1.0
    - VERSION: 0.35.1.0
    - package.json: 0.35.1.0
-   - CHANGELOG.md: new entry
-   - bun install (refresh lockfile)
+   - CHANGELOG.md: 新条目
+   - bun install（刷新锁文件）
 ```
 
-### Verify before /ship
+### 在 /ship 之前验证
+
 ```bash
 bun run typecheck
 bun run verify
 bun test test/embedding-pricing.test.ts test/public-exports.test.ts test/eval-longmemeval.test.ts
 ```
 
-### Ship
+### 发布
+
 ```bash
 /ship
 ```
 
-### Deliverable
-- `master` of gbrain at v0.35.1.0
-- `gbrain/ai/gateway` reachable from external consumers (verified by canary test)
-- `git tag eval-run-v0.35.1.0-baseline` (annotated, names this exact commit)
-- `gbrain --version` prints `0.35.1.0`
+### 可交付成果
 
-### Hand-off to Session 2
-- gbrain-evals can now `bun update gbrain` to v0.35.1.0
-- The tag preserves the exact commit for any future reproducibility need
+- gbrain 的 `master` 在 v0.35.1.0
+- 外部消费者可以访问 `gbrain/ai/gateway`（通过金丝雀测试验证）
+- `git tag eval-run-v0.35.1.0-baseline`（带注释，命名此确切提交）
+- `gbrain --version` 打印 `0.35.1.0`
+
+### 移交给会话 2
+
+- gbrain-evals 现在可以 `bun update gbrain` 到 v0.35.1.0
+- 标签保留了确切的提交，以备将来任何再现性需求
 
 ---
 
-## Session 2 — PR β setup: gbrain-evals adapter + smoke + subset flag
+## 会话 2 — PR β 设置：gbrain-evals 适配器 + 冒烟测试 + 子集标志
 
-**Repo:** `/Users/garrytan/git/gbrain-evals` (or a fresh Conductor workspace cloned from it)
-**Branch:** `garrytan/embedder-shootout`
-**Wallclock:** ~3-4h
-**API spend:** ~$0.10 (smoke verification calls only)
+**仓库：** `/Users/garrytan/git/gbrain-evals`（或从中克隆的新指挥者工作区）
+**分支：** `garrytan/embedder-shootout`
+**时钟时间：** ~3-4h
+**API 开销：** ~$0.10（仅冒烟验证调用）
 
-### What this session ships into PR β (does NOT merge yet)
-Wire the harness to drive 3 embedding providers via the newly-exposed gbrain gateway:
+### 本会话发布到 PR β 的内容（尚不合并）
 
-1. New typed `EvalAdapterConfig {embedder, dim, reranker?}` passed into each adapter.
-2. Rewrite `vector.ts` + `hybrid-rrf.ts` to call `configureGateway()` from
-   `gbrain/ai/gateway` instead of the hardcoded `gbrain/embedding` import.
-3. Critical: hybrid adapter must also route `search.reranker.enabled` (true/false) and
-   `search.mode` (tokenmax) — codex flagged that the existing hybrid never sets these.
-4. New 3-phase smoke harness: wiring (5 queries × embed roundtrip + dim check) +
-   long-haystack (1 query × 50K-token synthetic haystack) + rerank-payload (1 query
-   × `topNIn=30`). Exit code is the gate.
-5. New `--include-subset <name>` flag on the BrainBench runner (Cat 13 wiring; subset
-   itself comes in Session 3).
+通过新暴露的 gbrain 网关连接 harness 以驱动 3 个嵌入提供商：
 
-### Prereqs
-- Session 1 done. gbrain master at v0.35.1.0.
-- API keys present: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `VOYAGE_API_KEY`,
-  `ZEROENTROPY_API_KEY`. Smoke fails-loud on missing key.
+1. 新的类型化 `EvalAdapterConfig {embedder, dim, reranker?}` 传递到每个适配器。
+2. 重写 `vector.ts` + `hybrid-rrf.ts` 以从 `gbrain/ai/gateway` 调用 `configureGateway()`，而不是硬编码的 `gbrain/embedding` 导入。
+3. 关键：混合适配器还必须路由 `search.reranker.enabled`（true/false）和 `search.mode`（tokenmax）— codex 标记现有混合从不设置这些。
+4. 新的 3 阶段冒烟 harness：布线（5个查询 × 嵌入往返 + 维度检查）+ long-haystack（1个查询 × 50K-token 合成 haystack）+ rerank-payload（1个查询 × `topNIn=30`）。退出代码是网关。
+5. BrainBench 运行器上的新 `--include-subset <name>` 标志（Cat 13 布线；子集本身来自会话 3）。
 
-### Commits
+### 前置条件
+
+- 会话 1 完成。gbrain master 在 v0.35.1.0。
+- API 密钥存在：`OPENAI_API_KEY`、`ANTHROPIC_API_KEY`、`VOYAGE_API_KEY`、
+  `ZEROENTROPY_API_KEY`。缺少密钥时冒烟失败大声。
+
+### 提交
 
 ```
-1. chore(deps): bump gbrain pin to v0.35.1.0
+1. chore(deps): 将 gbrain pin 提升到 v0.35.1.0
    - package.json + bun.lock
-   - Verify: bun install && bun run typecheck
+   - 验证：bun install && bun run typecheck
 
-2. feat(adapter): typed EvalAdapterConfig + gateway swap
-   - NEW: eval/runner/eval-adapter-config.ts (the type)
-   - eval/runner/adapters/vector.ts: constructor takes EvalAdapterConfig,
-     calls configureGateway({embedding_model, embedding_dimensions})
-   - Drop hardcoded gbrain/embedding import
-   - Verify: existing vector adapter unit tests still pass
+2. feat(adapter): 类型化 EvalAdapterConfig + 网关交换
+   - 新建：eval/runner/eval-adapter-config.ts（类型）
+   - eval/runner/adapters/vector.ts: 构造函数接受 EvalAdapterConfig，
+     调用 configureGateway({embedding_model, embedding_dimensions})
+   - 删除硬编码的 gbrain/embedding 导入
+   - 验证：现有向量适配器单元测试仍然通过
 
-3. feat(adapter): hybrid-rrf wires reranker_enabled + search.mode
-   - eval/runner/adapters/hybrid-rrf.ts: constructor takes EvalAdapterConfig,
-     plumbs search.reranker.enabled + search.mode = tokenmax through
-   - Verify: bun test eval/
+3. feat(adapter): hybrid-rrf 布线 reranker_enabled + search.mode
+   - eval/runner/adapters/hybrid-rrf.ts: 构造函数接受 EvalAdapterConfig，
+     通过 search.reranker.enabled + search.mode = tokenmax 布线
+   - 验证：bun test eval/
 
-4. feat(smoke): 3-phase smoke harness
-   - NEW: eval/runner/smoke.ts (CLI entry: bun run eval:smoke -- --embedder X --dim Y [--reranker Z])
-   - Phase 1: 5 queries × embed roundtrip, assert vector dim matches config
-   - Phase 2: 1 query × synthetic 50K-token haystack, assert no token-limit error
-   - Phase 3: 1 query × topNIn=30 documents, assert no 5MB payload cap hit
-   - Non-zero exit on any failure
-   - Verify: bun run eval:smoke -- --embedder openai:text-embedding-3-large --dim 1536
+4. feat(smoke): 3阶段冒烟 harness
+   - 新建：eval/runner/smoke.ts（CLI 入口：bun run eval:smoke -- --embedder X --dim Y [--reranker Z]）
+   - 阶段1：5个查询 × 嵌入往返，断言向量维度与配置匹配
+   - 阶段2：1个查询 × 合成 50K-token haystack，断言无 token 限制错误
+   - 阶段3：1个查询 × topNIn=30 文档，断言没有 5MB payload 上限命中
+   - 任何失败非零退出
+   - 验证：bun run eval:smoke -- --embedder openai:text-embedding-3-large --dim 1536
 
-5. feat(runner): --include-subset flag for BrainBench
-   - eval/runner/multi-adapter.ts: parse flag, filter queries by subset tag
-   - Subset itself comes in next commit (Session 3)
-   - Verify: bun run eval:run -- --include-subset cat13-embedder (errors politely because subset file doesn't exist yet)
+5. feat(runner): BrainBench 的 --include-subset 标志
+   - eval/runner/multi-adapter.ts: 解析标志，按子集标签过滤查询
+   - 子集本身来自下一个提交（会话 3）
+   - 验证：bun run eval:run -- --include-subset cat13-embedder（礼貌地错误，因为子集文件尚不存在）
 ```
 
-### Smoke verification (run manually before opening PR)
+### 冒烟验证（在打开 PR 之前手动运行）
+
 ```bash
 bun run eval:smoke -- --embedder openai:text-embedding-3-large --dim 1536
 bun run eval:smoke -- --embedder voyage:voyage-4-large --dim 2048
@@ -226,73 +209,74 @@ bun run eval:smoke -- --embedder zeroentropyai:zembed-1 --dim 2560
 bun run eval:smoke -- --embedder zeroentropyai:zembed-1 --dim 2560 --reranker zeroentropyai:zerank-2
 ```
 
-All four MUST exit 0. Reports should print the observed vector dim, matching the
-configured dim.
+所有四个必须退出 0。报告应打印观察到的向量维度，与配置的维度匹配。
 
-### Open PR β
+### 打开 PR β
+
 ```bash
 gh pr create --base main --title "feat: embedder shootout (adapter + smoke + Cat 13 + eval receipts)" --body "$(cat <<'EOF'
-## Summary
-v0.35.0.0 shipped ZeroEntropy zembed-1 + zerank-2 reranker support. This PR runs a head-to-head A/B/C comparison across OpenAI, Voyage, and ZeroEntropy under the new gateway routing.
+## 摘要
+v0.35.0.0 发布了 ZeroEntropy zembed-1 + zerank-2 重排序器支持。此 PR 在新网关路由下运行 OpenAI、Voyage 和 ZeroEntropy 的正面 A/B/C 对比。
 
-This first commit batch lands the harness. Cat 13 curation, Phase 1+2 evals, and the
-writeup follow in subsequent commits to this same PR.
+这第一个提交批次落地 harness。Cat 13 策划、阶段1+2 评估和
+撰写跟随此同一 PR 中的后续提交。
 
-## Test plan
-- [x] Adapter unit tests pass
-- [x] Smoke harness exits 0 against all 3 providers
-- [ ] Cat 13 subset committed (Session 3)
-- [ ] LongMemEval x 7 cells run (Session 4)
-- [ ] BrainBench x 7 cells run (Session 5)
-- [ ] Writeup committed (Session 5)
+## 测试计划
+- [x] 适配器单元测试通过
+- [x] 冒烟 harness 对所有 3 个提供商退出 0
+- [ ] Cat 13 子集已提交（会话 3）
+- [ ] LongMemEval × 7 单元格运行（会话 4）
+- [ ] BrainBench × 7 单元格运行（会话 5）
+- [ ] 撰写已提交（会话 5）
 
-🤖 Generated with [Claude Code](https://claude.com/claude-code)
+🤖 使用 [Claude Code](https://claude.com/claude-code) 生成
 EOF
 )"
 ```
 
-### Deliverable
-- PR β open against gbrain-evals `main`, green CI
-- Smoke verified against all 3 providers (paste the smoke output in the PR body)
-- Branch ready for Session 3 (Cat 13 curation)
+### 可交付成果
 
-### Hand-off to Session 3
-- Branch `garrytan/embedder-shootout` exists on origin
-- The `--include-subset cat13-embedder` flag is wired but the subset file doesn't exist
-  yet — that's Session 3
+- PR β 针对 gbrain-evals `main` 打开，绿色 CI
+- 针对所有 3 个提供商验证的冒烟测试（将冒烟输出粘贴到 PR 正文中）
+- 准备好会话 3 的分支（Cat 13 策划）
+
+### 移交给会话 3
+
+- 分支 `garrytan/embedder-shootout` 存在于 origin
+- `--include-subset cat13-embedder` 标志已布线，但子集文件尚不存在
+   — 那是会话 3
 
 ---
 
-## Session 3 — PR β: Cat 13 conceptual-recall curation
+## 会话 3 — PR β：Cat 13 概念回忆策划
 
-**Repo:** `/Users/garrytan/git/gbrain-evals`, branch `garrytan/embedder-shootout` (same as Session 2)
-**Wallclock:** ~3-4h (heavily user-interactive; AI proposes, you review each)
-**API spend:** $0
+**仓库：** `/Users/garrytan/git/gbrain-evals`，分支 `garrytan/embedder-shootout`（与会话 2 相同）
+**时钟时间：** ~3-4h（重度用户交互；AI 提议，你逐个审查）
+**API 开销：** $0
 
-### What this session ships into PR β
-Hand-curated 50 embedder-sensitive queries from BrainBench's Cat 13 (conceptual recall)
-corpus. These are the queries where a graph/keyword adapter would likely miss but a
-semantic adapter would find.
+### 本会话发布到 PR β 的内容
 
-Codex flagged the existing 145-query relational corpus as graph/keyword-dominated and
-weak for embedder claims. Cat 13 is closer to the embedder-sensitive workload but
-needs hand-selection.
+从 BrainBench 的 Cat 13（概念回忆）语料库手工策划的 50 个对嵌入器敏感的查询。这些查询是图/关键词适配器可能会遗漏但语义适配器会找到的查询。
 
-### Prereqs
-- Session 2 done. PR β open with adapter + smoke + subset flag.
+Codex 标记现有 145 题关系语料库以图/关键词为主，对嵌入器声明来说很弱。Cat 13 更接近嵌入器敏感的工作负载，但需要手工选择。
 
-### Workflow
-Interactive: Claude proposes queries in batches of 10, you accept/reject/edit each.
+### 前置条件
 
-1. Claude reads the existing Cat 13 raw query pool:
+- 会话 2 完成。PR β 打开了适配器 + 冒烟测试 + Cat 13 子集标志。
+
+### 工作流
+
+交互式：Claude 分批提议查询，每批 10 个，你接受/拒绝/编辑每个。
+
+1. Claude 读取现有 Cat 13 原始查询池：
    ```bash
    ls eval/data/raw/ | grep -i cat13
    cat eval/data/raw/cat13-*.json | jq '.'
    ```
-2. Claude proposes 10 candidate queries per batch, each tagged with the inclusion
-   reasoning ("would a graph adapter miss this?")
-3. User accepts/rejects/edits inline. Target: 50 queries × ~5 batches.
-4. Claude commits to `eval/data/gold/brainbench-cat13-embedder-subset.json`:
+2. Claude 每批提议 10 个候选查询，每个都标记包含
+   理由（"图适配器会错过这个吗？"）。
+3. 用户接受/拒绝/内联编辑。目标：50个查询 × ~5批。
+4. Claude 提交到 `eval/data/gold/brainbench-cat13-embedder-subset.json`：
    ```json
    {
      "schema_version": 1,
@@ -302,78 +286,86 @@ Interactive: Claude proposes queries in batches of 10, you accept/reject/edit ea
          "id": "cat13-emb-001",
          "query": "...",
          "relevant_chunk_ids": ["..."],
-         "inclusion_reason": "paraphrase relationship; graph adapter wouldn't catch the synonym"
+         "inclusion_reason": "释义关系；图适配器不会捕获同义词"
        }
-       // ... 49 more
+       // ... 另外49个
      ]
    }
    ```
 
-### Commit
+### 提交
 
 ```
-feat(eval): curate Cat 13 conceptual-recall subset (50 embedder-sensitive queries)
-- NEW: eval/data/gold/brainbench-cat13-embedder-subset.json
-- Each query tagged with inclusion_reason for future audit
+feat(eval): 策划 Cat 13 概念回忆子集（50个嵌入器敏感查询）
+- 新建：eval/data/gold/brainbench-cat13-embedder-subset.json
+- 每个查询都标记了 inclusion_reason 以备将来审计
 ```
 
-### Spot-check before commit
-- Pick 5 random queries, run them against a hypothetical graph adapter (e.g. grep on
-  the relevant terms) and verify they would NOT surface the right chunk.
-- Run the same 5 against the existing hybrid adapter and verify they DO.
+### 提交前抽查
 
-### Deliverable
-- `eval/data/gold/brainbench-cat13-embedder-subset.json` committed to PR β
-- Exactly 50 queries
-- Spot-check evidence in the commit message
+- 挑选 5 个随机查询，针对假设的图适配器运行它们（例如对
+   相关术语进行 grep）并验证它们不会呈现正确的块。
+- 针对现有混合适配器运行相同的 5 个，并验证它们会。
 
-### Hand-off to Session 4
-- PR β now has: adapter + smoke + Cat 13 subset
-- Ready for the actual eval runs
+### 可交付成果
+
+- `eval/data/gold/brainbench-cat13-embedder-subset.json` 提交到 PR β
+- 恰好 50 个查询
+- 提交消息中的抽查证据
+
+### 移交给会话 4
+
+- PR β 现在有：适配器 + 冒烟测试 + Cat 13 子集
+- 准备好实际评估运行
 
 ---
 
-## Session 4 — PR β Phase 1: LongMemEval × 7 cells (overnight)
+## 会话 4 — PR β 阶段1：LongMemEval × 7 单元格（夜间）
 
-**Repo:** Same gbrain-evals branch
-**Wallclock:** ~10.5h (mostly hands-off, kick off and walk away)
-**API spend:** ~$476 (LongMemEval-heavy; 7 × $68/cell)
+**仓库：** 相同的 gbrain-evals 分支
+**时钟时间：** ~10.5h（主要非接触式，启动然后离开）
+**API 开销：** ~$476（LongMemEval 重的；7 × $68/单元格）
 
-### What this session ships into PR β
-7 LongMemEval scored receipts (one per matrix cell). Each is a JSONL of 500
-hypotheses + a JSON file of correctness scores from `evaluate_qa.py`.
+### 本会话发布到 PR β 的内容
 
-### Prereqs
-- Sessions 1+2+3 done. PR β has adapter + smoke + Cat 13.
-- LongMemEval dataset downloaded (gated HuggingFace; one-time setup).
-- `evaluate_qa.py` checked out somewhere (from
-  https://github.com/xiaowu0162/LongMemEval) with its own venv set up.
-- API keys: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `VOYAGE_API_KEY`,
-  `ZEROENTROPY_API_KEY`.
+7 个 LongMemEval 评分收据（每个矩阵单元格一个）。每个都是 500 个
+假设的 JSONL + 来自 `evaluate_qa.py` 的正确性分数 JSON 文件。
 
-### Wrapper script
-Claude writes `scripts/run-shootout-phase1.sh` in the gbrain-evals branch. Single
-entry point that loops the 7 cells serially with smoke gating + cost-cap aborts.
+### 前置条件
+
+- 会话 1+2+3 完成。PR β 有适配器 + 冒烟测试 + Cat 13。
+- LongMemEval 数据集已下载（受门控的 HuggingFace；一次性设置）。
+- `evaluate_qa.py` 在某处检出（来自
+  https://github.com/xiaowu0162/LongMemEval）并设置了它自己的 venv。
+- API 密钥：`OPENAI_API_KEY`、`ANTHROPIC_API_KEY`、`VOYAGE_API_KEY`、
+  `ZEROENTROPY_API_KEY`。
+
+### 包装脚本
+
+Claude 在 gbrain-evals 分支中编写 `scripts/run-shootout-phase1.sh`。单个
+入口点，串行循环 7 个单元格，带有冒烟网关 + 成本上限中止。
 
 ```
-NEW: scripts/run-shootout-phase1.sh
-- Per cell: gbrain config set (embedder, dim, reranker, search.reranker.enabled, search.mode=tokenmax)
-- Per cell: bun run eval:smoke (abort cell on non-zero)
-- Per cell: gbrain eval longmemeval ... --output results/longmemeval-{cell}.jsonl
-- Per cell: cost-cap check ($90/cell hard stop)
-- Per cell: --resume-from existing results/longmemeval-{cell}.jsonl if present
-- Logs to results/phase1-run-log.txt
+新建：scripts/run-shootout-phase1.sh
+- 每单元格：gbrain config set（嵌入器、维度、重排序器、search.reranker.enabled、search.mode=tokenmax）
+- 每单元格：bun run eval:smoke（单元格非零时中止）
+- 每单元格：gbrain eval longmemeval ... --output results/longmemeval-{cell}.jsonl
+- 每单元格：成本上限检查（$90/单元格硬停止）
+- 每单元格：如果存在则 --resume-from 现有 results/longmemeval-{cell}.jsonl
+- 日志到 results/phase1-run-log.txt
 ```
 
-### Run
+### 运行
+
 ```bash
-# Kick off in background; check back in 10-12h
+# 在后台启动；10-12小时后回来查看
 bash scripts/run-shootout-phase1.sh 2>&1 | tee results/phase1-run-log.txt &
 ```
 
-Use `run_in_background: true` if running through Claude. Check back periodically.
+如果使用 Claude 运行，请使用 `run_in_background: true`。定期回来查看。
 
-### Scoring (after all 7 cells done)
+### 评分（所有 7 个单元格完成后）
+
 ```bash
 for cell in A0 A1 B0 B1 C0 C1 C2; do
   python evaluate_qa.py \
@@ -382,199 +374,212 @@ for cell in A0 A1 B0 B1 C0 C1 C2; do
 done
 ```
 
-Each scored file has correctness %.
+每个评分文件都有正确性 %。
 
-### Commits
+### 提交
 
 ```
-1. feat(scripts): Phase 1 LongMemEval wrapper with smoke gating + cost cap
-   - NEW: scripts/run-shootout-phase1.sh
+1. feat(scripts): 带冒烟网关 + 成本上限的阶段1 LongMemEval 包装器
+   - 新建：scripts/run-shootout-phase1.sh
 
-2. data(phase1): 7 LongMemEval cells (raw hypothesis JSONL)
+2. data(phase1): 7个 LongMemEval 单元格（原始假设 JSONL）
    - results/longmemeval-{A0,A1,B0,B1,C0,C1,C2}.jsonl
-   - results/phase1-run-log.txt (run timing + cost ledger)
+   - results/phase1-run-log.txt（运行计时 + 成本分类账）
 
-3. data(phase1): evaluate_qa.py scoring results
+3. data(phase1): evaluate_qa.py 评分结果
    - results/longmemeval-{cell}-scored.json × 7
 ```
 
-### Verify
-- Each `longmemeval-{cell}.jsonl` has exactly 500 lines
-- Each `hypothesis` field is non-empty AND is actual answer text (NOT retrieval text)
-- Each `scored.json` has a `correctness_score` field
+### 验证
 
-### Deliverable
-- 7 scored LongMemEval receipts committed to PR β
-- Real cost ledger committed alongside (compare against estimate)
+- 每个 `longmemeval-{cell}.jsonl` 恰好有 500 行
+- 每个 `hypothesis` 字段非空且是实际答案文本（不是检索文本）
+- 每个 `scored.json` 都有一个 `correctness_score` 字段
 
-### Hand-off to Session 5
-- Phase 1 done. Phase 2 (BrainBench, ~3.5h) and writeup remaining.
+### 可交付成果
+
+- 7 个评分的 LongMemEval 收据提交到 PR β
+- 真实成本分类账与估计一起提交（与估计对比）
+
+### 移交给会话 5
+
+- 阶段1完成。阶段2（BrainBench，~3.5h）和撰写剩余。
 
 ---
 
-## Session 5 — PR β Phase 2 + writeup + ship
+## 会话 5 — PR β 阶段2 + 撰写 + 发布
 
-**Repo:** Same gbrain-evals branch
-**Wallclock:** ~7h (3.5h BrainBench + 3h writeup + /ship)
-**API spend:** ~$56 (BrainBench is cheap)
+**仓库：** 相同的 gbrain-evals 分支
+**时钟时间：** ~7h（3.5h BrainBench + 3h 撰写 + /ship）
+**API 开销：** ~$56（BrainBench 便宜）
 
-### What this session ships into PR β
-- 7 BrainBench cells (relational corpus + Cat 13 subset)
-- Final comparison writeup
-- PR β merged
+### 本会话发布到 PR β 的内容
 
-### Prereqs
-- Session 4 done. PR β has Phase 1 receipts.
+- 7 个 BrainBench 单元格（关系语料库 + Cat 13 子集）
+- 最终对比撰写
+- PR β 合并
 
-### Phase 2 wrapper script
+### 前置条件
+
+- 会话 4 完成。PR β 有阶段1收据。
+
+### 阶段2包装脚本
+
 ```
-NEW: scripts/run-shootout-phase2.sh
-- Per cell: configure provider (same as Phase 1)
-- Per cell: bun run eval:run -- --N 10 --include-subset cat13-embedder
+新建：scripts/run-shootout-phase2.sh
+- 每单元格：配置提供商（与阶段1相同）
+- 每单元格：bun run eval:run -- --N 10 --include-subset cat13-embedder
   --output docs/benchmarks/2026-05-22-{cell}.md
-- Cost-cap check
+- 成本上限检查
 ```
 
-### Run
+### 运行
+
 ```bash
 bash scripts/run-shootout-phase2.sh 2>&1 | tee results/phase2-run-log.txt
 ```
 
-### Writeup
-`docs/benchmarks/2026-05-22-embedder-shootout.md`. Structure:
+### 撰写
 
-1. **Headline table** — 7 cells × {LongMemEval correctness %, BrainBench relational MRR + P@5, Cat 13 correctness %, total cost}
-2. **Two questions answered:**
-   - Which embedder wins solo? (A0 vs B0 vs C0)
-   - Does zerank-2 carry ZE's win? (C0 vs C1 vs A1 vs B1)
-   - Bonus: does dim matter for ZE? (C1 vs C2)
-3. **Paired-bootstrap p-values** per headline pair (methodology in
-   `gbrain/docs/eval/SEARCH_MODE_METHODOLOGY.md`)
-4. **HNSW footnote** — Voyage 2048 and ZE 2560 used exact vector scan; OpenAI 1536
-   and ZE 1280 used HNSW. Quality is primary, latency is secondary
-5. **What this does NOT prove** — synthetic-only, tokenmax-only, no real-brain replay
-6. **Recommendation:** explicit NON-recommendation to change `gbrain init` default;
-   defer to a v0.36.x evidence pass with real-brain replay data
+`docs/benchmarks/2026-05-22-embedder-shootout.md`。结构：
 
-### Commits
+1. **标题表格** — 7个单元格 × {LongMemEval 正确性 %, BrainBench 关系 MRR + P@5, Cat 13 正确性 %, 总成本}
+2. **回答两个问题：**
+   - 哪个嵌入器单独胜出？（A0 vs B0 vs C0）
+   - zerank-2 是否为 ZE 带来了胜利？（C0 vs C1 vs A1 vs B1）
+   - 奖励：维度对 ZE 重要吗？（C1 vs C2）
+3. **成对 bootstrap p 值** 每对标题（方法在
+   `gbrain/docs/eval/SEARCH_MODE_METHODOLOGY.md` 中）
+4. **HNSW 脚注** — Voyage 2048 和 ZE 2560 使用精确向量扫描；OpenAI 1536
+   和 ZE 1280 使用 HNSW。质量是主要的，延迟是次要的
+5. **这不能证明什么** — 仅合成数据，仅 tokenmax，无真实 brain 重放
+6. **建议：** 明确不建议更改 `gbrain init` 默认值；
+   推迟到 v0.36.x 证据通行证，使用真实 brain 重放数据
+
+### 提交
 
 ```
-1. feat(scripts): Phase 2 BrainBench wrapper
-   - NEW: scripts/run-shootout-phase2.sh
+1. feat(scripts): 阶段2 BrainBench 包装器
+   - 新建：scripts/run-shootout-phase2.sh
 
-2. data(phase2): 7 BrainBench cells
+2. data(phase2): 7个 BrainBench 单元格
    - docs/benchmarks/2026-05-22-{cell}.md × 7
 
-3. docs(benchmark): embedder shootout comparison writeup
-   - NEW: docs/benchmarks/2026-05-22-embedder-shootout.md
-   - Bootstrap p-values, HNSW footnote, NOT-in-scope section
+3. docs(benchmark): 嵌入器对决对比撰写
+   - 新建：docs/benchmarks/2026-05-22-embedder-shootout.md
+   - Bootstrap p 值，HNSW 脚注，NOT-in-scope 部分
 ```
 
-### Ship
+### 发布
+
 ```bash
-# Merge PR β to gbrain-evals main
+# 合并 PR β 到 gbrain-evals main
 gh pr merge --squash --auto
-# Or non-auto if reviewing one more time:
+# 或者如果再审查一次：
 gh pr merge --squash
 ```
 
-### Deliverable
-- PR β merged to gbrain-evals `main`
-- Comparison report public at
+### 可交付成果
+
+- PR β 合并到 gbrain-evals `main`
+- 对比报告公开在
   `gbrain-evals/docs/benchmarks/2026-05-22-embedder-shootout.md`
 
-### Hand-off to Session 6 (optional)
-- gbrain-evals master has the full data + writeup
-- Ready for a v0.35.2.0 gbrain release that cross-links it
+### 移交给会话 6（可选）
+
+- gbrain-evals master 有完整数据 + 撰写
+- 准备好交叉链接它的 v0.35.2.0 gbrain 发行
 
 ---
 
-## Session 6 (optional) — PR γ: gbrain v0.35.2.0 release
+## 会话 6（可选）— PR γ：gbrain v0.35.2.0 发行
 
-**Repo:** `/Users/garrytan/conductor/workspaces/gbrain/<NEW-WORKSPACE>` (fresh from master)
-**Branch:** `garrytan/v0.35.2.0-benchmark-release`
-**Wallclock:** ~30min
-**API spend:** $0
+**仓库：** `/Users/garrytan/conductor/workspaces/gbrain/<新建工作区>`（从 master 新建）
+**分支：** `garrytan/v0.35.2.0-benchmark-release`
+**时钟时间：** ~30min
+**API 开销：** $0
 
-### What this session ships
-A release-notes-only PR that bumps gbrain to v0.35.2.0 with a CHANGELOG entry
-cross-linking the embedder shootout benchmark. Optional — could be folded into the
-next routine release if no rush.
+### 本会话发布的内容
 
-### Prereqs
-- Session 5 done. gbrain-evals merged with the comparison writeup.
+一个仅发行说明的 PR，将 gbrain 提升到 v0.35.2.0，并带有交叉链接嵌入器对决基准测试的 CHANGELOG 条目。可选 — 如果不急，可以折叠到下一个常规发行中。
 
-### Commits
+### 前置条件
+
+- 会话 5 完成。gbrain-evals 与对比撰写合并。
+
+### 提交
 
 ```
-1. docs(benchmark): mirror embedder shootout summary
-   - NEW: docs/benchmarks/2026-05-22-embedder-shootout.md (slim mirror)
-   - Cross-link to gbrain-evals canonical version
+1. docs(benchmark): 镜像嵌入器对决摘要
+   - 新建：docs/benchmarks/2026-05-22-embedder-shootout.md（精简镜像）
+   - 交叉链接到 gbrain-evals 规范版本
 
 2. chore: v0.35.2.0
    - VERSION: 0.35.2.0
    - package.json: 0.35.2.0
-   - CHANGELOG.md: new entry with the GStack-voice release summary
-     + "numbers that matter" table from the benchmark
+   - CHANGELOG.md: 带有 GStack 声音发行摘要的新条目
+     + 来自基准测试的"重要的数字"表格
 ```
 
-### Ship
+### 发布
+
 ```bash
 /ship
 ```
 
-### Deliverable
-- gbrain v0.35.2.0 on master
-- CHANGELOG entry that drives the release-note headline
+### 可交付成果
+
+- master 上的 gbrain v0.35.2.0
+- 驱动发行说明标题的 CHANGELOG 条目
 
 ---
 
-## Cost ledger (revised, post-review)
+## 成本分类账（修订后，审查后）
 
-| Component | Per cell | × 7 cells |
+| 组件 | 每单元格 | × 7 单元格 |
 |---|---|---|
-| LongMemEval embed | <$0.05 | <$0.35 |
-| LongMemEval Sonnet answer-gen (500q × 2K tokens × $3/M) | $18 | $126 |
-| LongMemEval gpt-4o judge (500q × $0.10/q) | $50 | $350 |
-| BrainBench relational embed | $0.05-0.18 | <$1 |
-| BrainBench Cat 13 answer-gen + judge (50q × $0.14) | $7 | $49 |
-| Smoke harness (30 calls/cell) | <$0.10 | <$1 |
-| **Total** | **~$75/cell** | **~$525** |
+| LongMemEval 嵌入 | <$0.05 | <$0.35 |
+| LongMemEval Sonnet 答案生成（500q × 2K tokens × $3/M） | $18 | $126 |
+| LongMemEval gpt-4o 评判（500q × $0.10/q） | $50 | $350 |
+| BrainBench 关系嵌入 | $0.05-0.18 | <$1 |
+| BrainBench Cat 13 答案生成 + 评判（50q × $0.14） | $7 | $49 |
+| 冒烟 harness（30 次调用/单元格） | <$0.10 | <$1 |
+| **总计** | **~$75/单元格** | **~$525** |
 
-**Hard cap: $700.** Per-cell hard cap: $90 (wrapper aborts cell if exceeded; partial
-JSONL preserved for resume).
+**硬上限：$700。** 每单元格硬上限：$90（如果超过，包装器中止单元格；部分
+JSONL 保留用于恢复）。
 
-## Failure modes and recovery
+## 失败模式和恢复
 
-| Failure | Recovery |
+| 失败 | 恢复 |
 |---|---|
-| Voyage/ZE 429 rate-limit mid-cell | `gateway._shrinkState` halves safety_factor and retries. Cell continues. |
-| ZE 5MB rerank payload cap hit | `applyReranker` fail-opens, returns un-reranked results. Stderr warn. |
-| Mid-cell OS interrupt / cost-cap abort | Re-run with `gbrain eval longmemeval --resume-from results/longmemeval-{cell}.jsonl`. Picks up where it left off. |
-| `evaluate_qa.py` auth fail | OPENAI_API_KEY check in wrapper aborts before any spend. |
-| Adapter typo (bad dim) | `EvalAdapterConfig` runtime assertion at constructor throws AIConfigError. Cell aborts before API call. |
+| Voyage/ZE 429 速率限制中途单元格 | `gateway._shrinkState` 减半 safety_factor 并重试。单元格继续。 |
+| ZE 5MB 重排序 payload 上限命中 | `applyReranker` 失败打开，返回未重排序的结果。Stderr 警告。 |
+| 中途操作系统中断 / 成本上限中止 | 使用 `gbrain eval longmemeval --resume-from results/longmemeval-{cell}.jsonl` 重新运行。从它离开的地方拿起。 |
+| `evaluate_qa.py` 认证失败 | 包装器中的 OPENAI_API_KEY 检查在任何开销之前中止。 |
+| 适配器拼写错误（错误维度） | `EvalAdapterConfig` 构造函数中的运行时断言抛出 AIConfigError。单元格在任何 API 调用之前中止。 |
 
-## NOT in scope (deliberate)
+## 范围外（故意）
 
-- **Real `~/.gbrain` replay** — adds 6-12h wallclock + $40-80 embed. Filed as v0.36.x.
-- **All 3 search modes** — pinned to tokenmax. `conservative` + `balanced` are v0.35.3.0
-  follow-ups if reviewers push back.
-- **Matched-dim cross-vendor row** — no shared dim exists across all 3 vendors.
-  Permanently out.
-- **`gbrain eval whoknows` / `cross-modal` / `takes-quality`** — embedding-invariant;
-  rerunning across embedders produces noise.
-- **`gbrain eval code-retrieval`** — code corpus, separate concern.
-- **`gbrain eval suspected-contradictions`** — wants a real brain.
-- **`gbrain init --recommended` default change** — codex correctly flagged the evidence
-  base as insufficient. Defer to v0.36.x with real-brain replay data.
+- **真实 `~/.gbrain` 重放** — 增加 6-12h 时钟时间 + $40-80 嵌入。归档为 v0.36.x。
+- **所有 3 种搜索模式** — 固定到 tokenmax。`conservative` + `balanced` 是 v0.35.3.0
+  如果审阅者回推，则跟进。
+- **匹配维度跨供应商行** — 所有 3 个供应商之间不存在共享维度。
+  永久退出。
+- **`gbrain eval whoknows` / `cross-modal` / `takes-quality`** — 嵌入不变；
+  跨嵌入器重新运行会产生噪音。
+- **`gbrain eval code-retrieval`** — 代码语料库，单独关注。
+- **`gbrain eval suspected-contradictions`** — 需要真实的 brain。
+- **`gbrain init --recommended` 默认更改** — codex 正确标记证据
+  库不足。推迟到 v0.36.x 使用真实 brain 重放数据。
 
-## What already exists (reused, not rebuilt)
+## 已存在的内容（重用，不重建）
 
-- `gbrain eval longmemeval` CLI (in-tree, answer-gen mode default)
-- gbrain-evals BrainBench runner (`eval:run`) — needs adapter parameterization but
-  per-cell test plumbing is reused
-- Gateway routing for Voyage + ZE (shipped v0.35.0.0)
-- Reranker pipeline (`src/core/search/rerank.ts`, fail-open)
-- Pricing table (extended, not rebuilt)
-- Paired-bootstrap methodology (`docs/eval/SEARCH_MODE_METHODOLOGY.md`)
-- LongMemEval published `evaluate_qa.py` (invoked externally, not bundled)
+- `gbrain eval longmemeval` CLI（树内，答案生成模式默认）
+- gbrain-evals BrainBench 运行器（`eval:run`）— 需要适配器参数化但是
+  每单元格测试管道是重用的
+- Voyage + ZE 的网关路由（发布了 v0.35.0.0）
+- 重排序器管道（`src/core/search/rerank.ts`，失败打开）
+- 定价表（扩展，不重建）
+- 成对 bootstrap 方法（`docs/eval/SEARCH_MODE_METHODOLOGY.md`）
+- LongMemEval 已发布的 `evaluate_qa.py`（外部调用，不打包）

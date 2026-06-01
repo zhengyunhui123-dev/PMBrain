@@ -1,29 +1,29 @@
-# Origin story
+# 起源故事
 
-GBrain came out of building OpenClaw — Garry's personal AI agent fork. The first version had skills and a brain, but the brain was a flat directory of markdown files. Search was ripgrep. Memory was vibes.
+GBrain 来自构建 OpenClaw — Garry 的个人 AI agent fork。第一个版本有 skills 和 brain，但 brain 是一个扁平的 markdown 文件目录。搜索是 ripgrep。记忆是 vibes。
 
-Two problems surfaced almost immediately.
+两个问题几乎立即浮出水面。
 
-First, the agent forgot things between conversations. Every new session re-asked basic questions. Names of people Garry had introduced last week were gone. Decisions made on Tuesday didn't survive to Thursday. The brain existed but the agent couldn't actually use it.
+首先，agent 在对话之间忘记了事情。每个新会话都重新询问基本问题。上周 Garry 介绍的人的名字消失了。周二做的决定没有存活到周四。Brain 存在，但 agent 实际上无法使用它。
 
-Second, the agent kept duplicating work. Two different signals about the same company became two different people pages. Three meetings with the same person became three uncorrelated timeline entries. The signal-to-noise ratio decayed in real time.
+其次，agent 不断重复工作。关于同一家公司的两个不同信号变成了两个不同的人员页面。与同一个人的三次会议变成了三个不相关的的时间线条目。信噪比实时衰减。
 
-GBrain is what you build when you decide both of those are unacceptable.
+GBrain 是当你决定这两个都不可接受时构建的东西。
 
-The fix wasn't one big idea. It was many small ones layered together:
+修复不是一个大想法。它是许多小想法分层在一起：
 
-- Brain-first lookup before any external API call.
-- Auto-linking on every page write so the graph grows for free.
-- Typed edges so "who works at Acme AI?" actually returns something.
-- Hybrid search because vector alone underdelivers.
-- Reranker on top because hybrid alone is locally optimal but globally suboptimal.
-- Nightly cron to dedup, enrich, fix citations, surface contradictions.
-- An agent that reads `skills/RESOLVER.md` once and knows what to do.
+- 在任何外部 API 调用之前的 Brain-first 查找。
+- 每个页面写入时的自动链接，因此图形免费增长。
+- 类型化边，因此"谁在 Acme AI 工作？"实际上返回一些东西。
+- 混合搜索，因为单独向量交付不足。
+- 上的 Reranker，因为单独混合是局部最优但全局次优。
+- 夜间 cron 去重、丰富、修复引用、表面矛盾。
+- 一个读取 `skills/RESOLVER.md` 一次并知道该做什么的 agent。
 
-None of those are novel ideas. The contribution is shipping all of them together, on Postgres + pgvector that runs in WASM (no server), with skills that are markdown (not code), routed by a small text file (not a router LLM).
+这些都不是新颖的想法。贡献是将它们全部一起发布，在 Postgres + pgvector 上运行在 WASM 中（无服务器），具有是 markdown（而不是代码）的 skills，由小文本文件（而不是路由器 LLM）路由。
 
-The production brain has been running for months now. 17,888 pages. 4,383 people. 723 companies. 21 cron jobs running autonomously. It wakes Garry up smarter than the day before.
+生产 brain 已经运行了几个月。17,888 个页面。4,383 个人。723 家公司。21 个 cron 作业自主运行。它比前一天更聪明地唤醒 Garry。
 
-GBrain is what happens when you write the brain you actually wanted to have.
+GBrain 是你写你真正想要拥有的 brain 时发生的事情。
 
-The reason the brain is worth building is `gbrain think`. Without it, the brain is just a place that holds your notes. With it, the brain is a thing you can query about itself: what does it know, what does it not know yet, where does it contradict itself, where are the holes. The 24/7 cron cycle keeps the brain sharp. `think` is what makes a sharp brain useful.
+Brain 值得构建的原因是 `gbrain think`。没有它，brain 只是持有你的笔记的地方。有了它，brain 是一个你可以查询自身的东西：它知道什么，它还不知道什么，它在哪里自相矛盾，洞在哪里。24/7 cron 循环保持 brain 敏锐。`think` 是使敏锐的 brain 有用。

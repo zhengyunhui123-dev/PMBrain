@@ -1,7 +1,7 @@
 ---
 type: essay
-title: "Homebrew for Personal AI"
-subtitle: "Why Markdown is Code and Your Agent is a Package Manager"
+title: "个人 AI 的 Homebrew"
+subtitle: "为什么 Markdown 是代码，而你的 Agent 是包管理器"
 author: Garry Tan
 created: 2026-04-11
 updated: 2026-04-11
@@ -10,20 +10,20 @@ status: draft-v2
 prior: "Thin Harness, Fat Skills"
 ---
 
-# Homebrew for Personal AI
+# 个人 AI 的 Homebrew
 
-`brew install` gives you someone else's binary. `npm install` gives you someone else's source code. Both require you to understand the tool, configure it, integrate it, maintain it.
+`brew install` 给你别人的二进制文件。`npm install` 给你别人的源代码。两者都要求你理解工具、配置它、集成它、维护它。
 
-What if software distribution worked differently? What if you could describe a capability in plain English, hand that description to an AI agent, and the agent built a native implementation tailored to your setup?
+如果软件分发方式不同呢？如果你可以用 plain English 描述一个能力，将该描述交给 AI agent，然后 agent 构建一个针对你的设置量身定制的原生实现呢？
 
-That's what happens when markdown is code.
+这就是当 markdown 是代码时发生的事情。
 
-## Markdown is code
+## Markdown 是代码
 
-Here's a real skill file. This one teaches an AI agent to screen phone calls:
+这是一个真实的 skill 文件。这个教 AI agent 筛选电话：
 
 ```markdown
-# Voice Agent — Your Phone Number
+# Voice Agent — 你的电话号码
 
 Caller → Twilio → <Stream> WebSocket → Voice Server (port 8765)
                                             ↕ audio
@@ -33,156 +33,156 @@ Caller → Twilio → <Stream> WebSocket → Voice Server (port 8765)
 
 ## Call Routing
 
-Every inbound call routes based on caller phone number + brain lookup:
+每个入站呼叫基于呼叫者电话号码 + brain 查找进行路由：
 
-### Owner → Authenticated Mode
-- Send crypto-random 6-digit code to secure channel
-- Caller reads it back
-- Match → full assistant mode (brain, calendar, scheduling)
-- No match → treated as unknown caller
+### Owner → 认证模式
+- 发送加密随机 6 位代码到安全通道
+- 呼叫者读回
+- 匹配 → 完整助手模式（brain、日历、调度）
+- 不匹配 → 视为未知呼叫者
 
-### Known Person, Inner Circle (brain score ≥ 4) → Forward
-- Greet by name with brain context
-- Transfer to cell
-- If no answer (30s timeout), take message
-- Text Telegram with who called and context
+### 已知人员，内圈（brain score ≥ 4）→ 转发
+- 用 brain 上下文按名称问候
+- 转移到手机
+- 如果没有应答（30 秒超时），留言
+- 用谁打电话和上下文发 Telegram
 
-### Unknown Caller → Screen
-- Get their name, look them up in brain
-- If inner circle → offer to transfer
-- Otherwise → take message
-- Create brain entry with phone number (marked UNVERIFIED)
+### 未知呼叫者 → 筛选
+- 获取他们的姓名，在 brain 中查找他们
+- 如果是内圈 → 提供转移
+- 否则 → 留言
+- 用电话号码创建 brain 条目（标记为 UNVERIFIED）
 ```
 
-That's not pseudocode. That's not documentation. That's a working specification that a model like Claude Opus 4.6 with a million-token context window can read and implement. The architecture diagram tells it the components. The routing table tells it the logic. The security model tells it the constraints. The agent reads this file, understands it, and builds the Twilio integration, the WebSocket server, the Telegram bot hooks, the brain lookup, all of it, shaped to whatever infrastructure the user already has.
+那不是伪代码。那不是文档。那是一个工作规范，像 Claude Opus 4.6 这样具有百万 token 上下文窗口的模型可以读取并实现。架构图告诉它组件。路由表告诉它逻辑。安全模型告诉它约束。Agent 读取这个文件，理解它，并构建 Twilio 集成、WebSocket 服务器、Telegram bot hooks、brain 查找，所有这些，都根据你的用户已有的基础设施来塑造。
 
-A skill file is a method call. It takes parameters (your phone number, your brain, your preferred messaging app). Same skill, different arguments, different implementation. The procedure is the package. The model is the runtime.
+Skill 文件是一个方法调用。它接受参数（你的电话号码、你的 brain、你首选的消息应用程序）。相同的 skill，不同的参数，不同的实现。过程就是包。模型就是运行时。
 
-## The distribution mechanism
+## 分发机制
 
-Traditional package managers distribute artifacts: compiled binaries, source tarballs, container images. The consumer runs someone else's code.
+传统的包管理器分发制品：编译的二进制文件、源代码 tarball、容器镜像。消费者运行别人的代码。
 
-GBrain distributes recipes: markdown files that describe capabilities with enough specificity that an AI agent can implement them from scratch. The consumer gets a native implementation. No dependency hell. No version conflicts. No transitive vulnerability chains. Because there is no upstream code. There's a description of what to build and why.
+GBrain 分发配方：markdown 文件，用足够的特异性描述能力，使 AI agent 可以从头实现它们。消费者获得原生实现。没有依赖地狱。没有版本冲突。没有传递漏洞链。因为没有上游代码。只有关于构建什么和为什么的描述。
 
-Here's how it works:
+它是这样工作的：
 
-1. **Build a feature.** Implement a voice agent, meeting ingestion pipeline, email triage system, investment diligence workflow, whatever.
+1. **构建功能。** 实现语音 agent、会议摄取管道、电子邮件分类系统、投资尽职调查工作流， whatever。
 
-2. **GBrain captures the recipe.** Not just the code. The architecture, the integration points, the failure modes, the judgment calls. A markdown file that encodes the full capability.
+2. **GBrain 捕获配方。** 不仅仅是代码。架构、集成点、故障模式、判断调用。一个编码完整能力的 markdown 文件。
 
-3. **Push to the repo.** Open source. Anyone can read it.
+3. **推送到仓库。** 开源。任何人都可以读取它。
 
-4. **Someone else's agent pulls the recipe.** Reads the markdown. Says: "New recipe available: AI voice agent with caller screening. Want it?" User says yes. The agent reads the spec and builds it.
+4. **别人的 agent 拉取配方。** 读取 markdown。说："新配方可用：带有呼叫者筛选的 AI 语音 agent。要吗？" 用户说是。Agent 读取规范并构建它。
 
-No installation. No configuration wizard. No README. The agent read a document and figured it out.
+无安装。无配置向导。无 README。Agent 读取文档并弄清楚了。
 
-## Why this works now
+## 为什么现在有效
 
-This didn't work two years ago. Two things changed.
+两年前这不起作用。两件事改变了。
 
-**Context windows hit a million tokens.** A real skill file for meeting ingestion is 200+ lines. The enrichment skill that calls it references a brain schema, a resolver, a citation standard, five external APIs, and a cross-linking protocol. An agent implementing this recipe needs to hold all of that in working memory simultaneously while also understanding the user's existing setup. At 8K tokens, impossible. At 128K, marginal. At 1M, comfortable.
+**上下文窗口达到百万 token。** 一个真实的会议摄取 skill 文件是 200+ 行。调用它的 enrichment skill 引用 brain schema、解析器、引用标准、五个外部 API 和交叉链接协议。实现此配方的 agent 需要同时将所有这些保持在工作内存中，同时也要理解用户现有的设置。在 8K token 时，不可能。在 128K 时，边际。在 1M 时，舒适。
 
-**Models crossed the judgment threshold.** Here's a snippet from a real enrichment recipe:
+**模型跨越了判断阈值。** 这是来自真实 enrichment 配方的一个片段：
 
 ```markdown
 ## Philosophy
 
-A brain page should read like an intelligence dossier crossed
-with a therapist's notes, not a LinkedIn scrape. We want:
+brain 页面应该读起来像情报档案与
+治疗师笔记的交叉，而不是 LinkedIn 抓取。我们想要：
 
-- What they believe — ideology, worldview, first principles
-- What they're building — current projects, what's next
-- What motivates them — ambition drivers, career arc
-- What makes them emotional — angry, excited, defensive, proud
-- Their trajectory — ascending, plateauing, pivoting, declining?
-- Hard facts — role, company, funding, location, contact info
+- 他们相信什么 — 意识形态、世界观、第一性原理
+- 他们正在构建什么 — 当前项目，下一步是什么
+- 什么激励他们 — 雄心驱动力、职业弧线
+- 什么让他们情绪化 — 愤怒、兴奋、防御、自豪
+- 他们的轨迹 — 上升、平台期、转向、下降？
+- 硬事实 — 角色、公司、资金、位置、联系信息
 
-Facts are table stakes. Texture is the value.
+事实是桌面筹码。纹理是价值。
 ```
 
-A model implementing this recipe has to understand the difference between a LinkedIn scrape and an intelligence dossier. That's a judgment call about what information is worth capturing and how to weight it. GPT-3 couldn't do this. GPT-4 could sort of do it. Opus 4.6 does it well. The enabling technology is models that are smart enough to interpret intent, not just follow instructions.
+实现此配方的模型必须理解 LinkedIn 抓取和情报档案之间的区别。这是关于什么信息值得捕获以及如何权衡它的判断调用。GPT-3 无法做到这一点。GPT-4 可以某种程度上做到。Opus 4.6 做得很好。使能技术是足够聪明的模型来解释意图，而不仅仅是遵循指令。
 
-## What a recipe actually contains
+## 配方实际包含什么
 
-A good recipe has five sections:
+一个好的配方有五个部分：
 
-**Architecture.** The component diagram. What talks to what, over what protocol, with what data flow. This is the skeleton the agent builds first.
+**架构。** 组件图。什么与什么交谈，通过什么协议，有什么数据流。这是 agent 首先构建的骨架。
 
-**Routing logic.** The decision tree. When X happens, do Y. When Z fails, fall back to W. This is where domain knowledge lives. A voice agent recipe encodes call routing. A diligence recipe encodes how to process pitch decks vs. financial models vs. cap tables. A meeting ingestion recipe encodes how to turn a raw transcript into actionable intelligence.
+**路由逻辑。** 决策树。当 X 发生时，做 Y。当 Z 失败时，回退到 W。这是领域知识所在。语音 agent 配方编码呼叫路由。尽职调查配方编码如何处理 pitch deck vs. 财务模型 vs. 股权表。会议摄取配方编码如何将原始转录转换为可操作的情报。
 
-**Integration points.** What external systems does this touch? Twilio, Telegram, Gmail, Circleback, Slack, GitHub, Supabase, whatever. The recipe names the integrations; the agent figures out how to connect them given what the user already has configured.
+**集成点。** 这个触摸什么外部系统？Twilio、Telegram、Gmail、Circleback、Slack、GitHub、Supabase，whatever。配方命名集成；agent 根据用户的配置弄清楚如何连接它们。
 
-**Judgment calls.** The hard part. Not "send an email" but "decide whether this email is worth surfacing to the user based on sender importance, time sensitivity, and whether it requires a decision." Recipes that skip the judgment calls produce shallow implementations. The judgment calls are the actual value.
+**判断调用。** 困难的部分。不是"发送电子邮件"而是"根据发件人重要性、时间敏感性和是否需要决策来决定此电子邮件是否值得呈现给用户。"跳过判断调用的配方产生浅层实现。判断调用是实际价值。
 
-**Failure modes.** What goes wrong and what to do about it. "If Circleback token expires, message the user and ask them to reconnect. Don't silently skip." "If caller ID is spoofed, never trust it for authentication. Use a challenge-response code via a separate channel." Recipes without failure modes produce brittle systems.
+**故障模式。** 什么出错以及如何处理。"如果 Circleback token 过期，消息用户并要求他们重新连接。不要静默跳过。""如果呼叫者 ID 被欺骗，永远不要信任它进行身份验证。通过单独通道使用质询-响应代码。"没有故障模式的配方产生脆弱系统。
 
-Here's a real example. This is the diligence recipe's detection logic:
+这是一个真实的例子。这是尽职调查配方的检测逻辑：
 
 ```markdown
 ## Detection
 
-Recognize data room materials by:
-- PDF filenames: "Data Deck", "Intro Deck", "Cap Table",
-  "Financial Model", "Pitch Deck", "Series [A-D]"
-- Spreadsheets with tabs: Revenue, Retention, Cohorts,
-  CAC, Gross Margin, Unit Economics, ARR
-- User saying: "data room", "diligence", "deck", "pitch"
-- Context: shared in the Diligence topic
+通过以下方式识别数据室材料：
+- PDF 文件名："Data Deck"、"Intro Deck"、"Cap Table"、
+  "Financial Model"、"Pitch Deck"、"Series [A-D]"
+- 带有选项卡的电子表格：Revenue、Retention、Cohorts、
+  CAC、Gross Margin、Unit Economics、ARR
+- 用户说："data room"、"diligence"、"deck"、"pitch"
+- 上下文：在 Diligence 主题中共享
 ```
 
-That's a pattern matcher expressed in English. An agent reads this and knows how to classify incoming documents. No regex. No file type configuration. Just a description of the pattern and the model's judgment about whether a given document matches.
+这是用英语表达的模式匹配器。Agent 读取这个并知道如何对传入文档进行分类。无正则表达式。无文件类型配置。只是对模式的描述和模型关于给定文档是否匹配的判断。
 
-## Pick and choose
+## 挑选和选择
 
-GBrain is not monolithic. Recipes are independent. Take what you want:
+GBrain 不是单片。配方是独立的。取你想要的：
 
-- **Voice agent** — phone screening, caller ID, brain lookup, message routing
-- **Meeting ingestion** — transcript processing, entity extraction, action item capture, timeline updates
-- **Email triage** — inbox sweep, priority classification, draft replies, scheduling extraction
-- **Enrichment pipeline** — people and company research from multiple data sources, diarized into brain pages
-- **Diligence processing** — data room ingestion, PDF extraction, financial model analysis
-- **Social monitoring** — X/Twitter timeline analysis, mention tracking, narrative detection
-- **Content pipeline** — idea capture, link ingestion, article summarization
+- **Voice agent** — 电话筛选、呼叫者 ID、brain 查找、消息路由
+- **Meeting ingestion** — 转录处理、实体提取、行动项捕获、时间线更新
+- **Email triage** — 收件箱扫描、优先级分类、草稿回复、调度提取
+- **Enrichment pipeline** — 来自多个数据源的人员和公司研究，日记化到 brain 页面
+- **Diligence processing** — 数据室摄取、PDF 提取、财务模型分析
+- **Social monitoring** — X/Twitter 时间线分析、提及跟踪、叙事检测
+- **Content pipeline** — 想法捕获、链接摄取、文章摘要
 
-Each recipe is self-contained. Your agent knows what you already have. GBrain pings daily: "Three new recipes since last sync. Want any?" You pick. It builds.
+每个配方都是独立的。你的 agent 知道你已经拥有了什么。GBrain 每天 ping："自上次同步以来有 3 个新配方。要吗？" 你挑选。它构建。
 
-And because the source code is English, forking is trivial. Don't like how the voice agent handles unknown callers? Edit the markdown. Change "take a message" to "ask three screening questions first." The behavior changes because the spec changed.
+因为源代码是英语，fork 是微不足道的。不喜欢语音 agent 处理未知呼叫者的方式？编辑 markdown。将"留言"更改为"首先问三个筛选问题。" 行为改变是因为规范改变了。
 
-## The thin harness, fat skills connection
+## 薄 harness、胖 skills 连接
 
-This essay is a sequel. The prequel was "Thin Harness, Fat Skills," which argued that the secret to 100x AI productivity isn't better models but better context management. Keep the harness thin (the program running the model). Make the skills fat (markdown procedures encoding judgment and process).
+这篇文章是续集。前传是"Thin Harness, Fat Skills"，它认为 100x AI 生产力的秘密不是更好的模型，而是更好的上下文管理。保持 harness 薄（运行模型的程序）。使 skills 胖（编码判断和过程的 markdown 过程）。
 
-"Markdown is code" is the distribution corollary. If the skills are fat markdown files, and if models are smart enough to implement from markdown, then the skills are distributable software. The skill file is simultaneously:
+"Markdown 是代码"是分发推论。如果 skills 是胖 markdown 文件，并且如果模型足够聪明可以从 markdown 实现，那么 skills 就是可分发的软件。Skill 文件同时是：
 
-- **Documentation** for humans reading it
-- **Specification** for the implementing agent
-- **Package** for the distribution system
-- **Source code** for the resulting capability
+- **文档** 供人类阅读
+- **规范** 供实现 agent
+- **包** 供分发系统
+- **源代码** 供结果能力
 
-Four artifacts collapsed into one. That's why this is different from every previous package manager. `brew install` separates the formula from the binary from the docs from the source. GBrain collapses them. The markdown is all four.
+四件制品折叠成一件。这就是为什么这与以前的所有包管理器都不同。`brew install` 将 formula 与二进制文件与文档与源代码分开。GBrain 折叠它们。Markdown 是所有四个。
 
-## The architecture underneath
+## 底层架构
 
-Three layers, same as the talk:
+三层，与谈话相同：
 
-**Fat skills** on top. Markdown recipes encoding judgment, process, failure modes, and domain knowledge. This is where 90% of the value lives. This is what gets distributed.
+**Fat skills** 在顶部。编码判断、过程、故障模式和领域知识的 Markdown 配方。这是 90% 的价值所在。这是被分发的。
 
-**Thin harness** in the middle. The program running the model. File operations, tool dispatch, context management, safety enforcement. About 200 lines. OpenClaw or any equivalent. The less the harness constrains, the more the recipes can express.
+**Thin harness** 在中间。运行模型的程序。文件操作、工具调度、上下文管理、安全执行。大约 200 行。OpenClaw 或任何等效的。harness 约束越少，配方可以表达的越多。
 
-**Deterministic foundation** on the bottom. Databases, APIs, CLIs. Same input, same output, every time. SQL queries, HTTP calls, file reads. The skills describe WHEN to call these; the harness executes them.
+**Deterministic foundation** 在底部。数据库、API、CLI。相同的输入，相同的输出，每次。SQL 查询、HTTP 调用、文件读取。Skills 描述何时调用这些；harness 执行它们。
 
-Push intelligence UP into skills. Push execution DOWN into deterministic tooling. Distribute the skills. That's the whole system.
+将智能向上推入 skills。将执行向下推入确定性工具。分发 skills。这就是整个系统。
 
-## What this means
+## 这意味着什么
 
-When implementation cost approaches zero, the bottleneck shifts. It's no longer "can we build this?" It's "should we build this?" and "what exactly should it do?"
+当实现成本接近零时，瓶颈转移。不再是"我们可以构建这个吗？" 而是"我们应该构建这个吗？"和"它到底应该做什么？"
 
-Taste, vision, and domain knowledge become the scarce resources. The person who deeply understands call screening and writes a precise recipe creates more value than the person who can implement a Twilio integration from scratch. The recipe IS the implementation.
+品味、愿景和领域知识成为稀缺资源。深度理解呼叫筛选并编写精确配方的人比可以从头实现 Twilio 集成的人创造更多价值。配方就是实现。
 
-This also means the best AI agent setups will be open source by default. Closed, proprietary agent configurations are competing against a world where someone publishes a recipe and a thousand agents implement it overnight. The recipe propagates at the speed of a git push. The moat is taste, not code.
+这也意味着最好的 AI agent 设置默认将是开源的。封闭的、专有的 agent 配置正在与一个人发布配方并且一千个 agents 在一夜之间实现它的世界竞争。配方以 git push 的速度传播。护城河是品味，而不是代码。
 
-Software distribution reimagined: the package is a markdown file, the runtime is a sufficiently smart model, the package manager is your AI agent, and the app store is a git repo.
+软件分发重新构想：包是一个 markdown 文件，运行时是一个足够聪明的模型，包管理器是你的 AI agent，应用商店是一个 git 仓库。
 
 `gbrain install voice-agent`
 
-That's it.
+就这样。

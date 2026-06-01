@@ -1,114 +1,114 @@
-# Pluggable Engine Architecture
+# 可插拔引擎架构
 
-## The idea
+## 理念
 
-Every GBrain operation goes through `BrainEngine`. The engine is the contract between "what the brain can do" and "how it's stored." Swap the engine, keep everything else.
+每个 GBrain 操作都通过 `BrainEngine`。引擎是"brain 能做什么"和"它如何存储"之间的契约。换掉引擎，保留其他一切。
 
-v0 shipped `PostgresEngine` backed by Supabase. v0.7 adds `PGLiteEngine` -- embedded Postgres 17.5 via WASM (@electric-sql/pglite), zero-config default. The interface is designed so a `DuckDBEngine`, `TursoEngine`, or any custom backend could slot in without touching the CLI, MCP server, skills, or any consumer code.
+v0 发布了由 Supabase 支持的 `PostgresEngine`。v0.7 增加了 `PGLiteEngine` — 通过 WASM 嵌入的 Postgres 17.5（`@electric-sql/pglite`），零配置默认。接口的设计使得 `DuckDBEngine`、`TursoEngine` 或任何自定义后端都可以插入，而无需触及 CLI、MCP 服务器、技能或任何消费者代码。
 
-## Why this matters
+## 为什么这很重要
 
-Different users have different constraints:
+不同用户有不同的约束：
 
-| User | Needs | Best engine |
+| 用户 | 需求 | 最佳引擎 |
 |------|-------|-------------|
-| Getting started | Zero-config, no accounts, no server | PGLiteEngine (default since v0.7) |
-| Power user (you) | World-class search, 7K+ pages, zero-ops | PostgresEngine + Supabase |
-| Open source hacker | Single file, no server, git-friendly | PGLiteEngine |
-| Team/enterprise | Multi-user, RLS, audit trail | PostgresEngine + self-hosted |
-| Researcher | Analytics, bulk exports, embeddings | DuckDBEngine (someday) |
-| Edge/mobile | Offline-first, sync later | PGLiteEngine + sync (someday) |
+| 入门者 | 零配置，无账户，无服务器 | PGLiteEngine（v0.7 起默认） |
+| 高级用户（你） | 世界级搜索，7K+ 页面，零运维 | PostgresEngine + Supabase |
+| 开源黑客 | 单文件，无服务器，git 友好 | PGLiteEngine |
+| 团队/企业 | 多用户，RLS，审计跟踪 | PostgresEngine + 自托管 |
+| 研究员 | 分析，批量导出，嵌入 | DuckDBEngine（将来某天） |
+| 边缘/移动 | 离线优先，稍后同步 | PGLiteEngine + 同步（将来某天） |
 
-The engine interface means we don't have to choose. PGLite is the zero-friction default. Supabase is the production scale path. `gbrain migrate --to supabase/pglite` moves between them.
+引擎接口意味着我们不必选择。PGLite 是零摩擦默认值。Supabase 是生产规模路径。`gbrain migrate --to supabase/pglite` 在它们之间移动。
 
-## The interface
+## 接口
 
 ```typescript
 // src/core/engine.ts
 
 export interface BrainEngine {
-  // Lifecycle
+  // 生命周期
   connect(config: EngineConfig): Promise<void>;
   disconnect(): Promise<void>;
   initSchema(): Promise<void>;
   transaction<T>(fn: (engine: BrainEngine) => Promise<T>): Promise<T>;
 
-  // Pages CRUD
+  // 页面 CRUD
   getPage(slug: string): Promise<Page | null>;
   putPage(slug: string, page: PageInput): Promise<Page>;
   deletePage(slug: string): Promise<void>;
   listPages(filters: PageFilters): Promise<Page[]>;
 
-  // Search
+  // 搜索
   searchKeyword(query: string, opts?: SearchOpts): Promise<SearchResult[]>;
   searchVector(embedding: Float32Array, opts?: SearchOpts): Promise<SearchResult[]>;
 
-  // Chunks
+  // 块
   upsertChunks(slug: string, chunks: ChunkInput[]): Promise<void>;
   getChunks(slug: string): Promise<Chunk[]>;
 
-  // Links
+  // 链接
   addLink(from: string, to: string, context?: string, linkType?: string): Promise<void>;
   removeLink(from: string, to: string): Promise<void>;
   getLinks(slug: string): Promise<Link[]>;
   getBacklinks(slug: string): Promise<Link[]>;
   traverseGraph(slug: string, depth?: number): Promise<GraphNode[]>;
 
-  // Tags
+  // 标签
   addTag(slug: string, tag: string): Promise<void>;
   removeTag(slug: string, tag: string): Promise<void>;
   getTags(slug: string): Promise<string[]>;
 
-  // Timeline
+  // 时间线
   addTimelineEntry(slug: string, entry: TimelineInput): Promise<void>;
   getTimeline(slug: string, opts?: TimelineOpts): Promise<TimelineEntry[]>;
 
-  // Raw data
+  // 原始数据
   putRawData(slug: string, source: string, data: object): Promise<void>;
   getRawData(slug: string, source?: string): Promise<RawData[]>;
 
-  // Versions
+  // 版本
   createVersion(slug: string): Promise<PageVersion>;
   getVersions(slug: string): Promise<PageVersion[]>;
   revertToVersion(slug: string, versionId: number): Promise<void>;
 
-  // Stats + health
+  // 统计 + 健康
   getStats(): Promise<BrainStats>;
   getHealth(): Promise<BrainHealth>;
 
-  // Ingest log
+  // 摄取日志
   logIngest(entry: IngestLogInput): Promise<void>;
   getIngestLog(opts?: IngestLogOpts): Promise<IngestLogEntry[]>;
 
-  // Config
+  // 配置
   getConfig(key: string): Promise<string | null>;
   setConfig(key: string, value: string): Promise<void>;
 
-  // Migration + advanced (added v0.7)
+  // 迁移 + 高级（v0.7 添加）
   runMigration(sql: string): Promise<void>;
   getChunksWithEmbeddings(slug: string): Promise<ChunkWithEmbedding[]>;
 }
 ```
 
-### Key design choices
+### 关键设计选择
 
-**Slug-based API, not ID-based.** Every method takes slugs, not numeric IDs. The engine resolves slugs to IDs internally. This keeps the interface portable... slugs are strings, IDs are database-specific.
+**基于 slug 的 API，而非基于 ID。** 每个方法都接受 slug，而非数字 ID。引擎在内部将 slug 解析为 ID。这使得接口可移植... slug 是字符串，ID 是特定于数据库的。
 
-**Embedding is NOT in the engine.** The engine stores embeddings and searches by vector, but it doesn't generate embeddings. `src/core/embedding.ts` handles that. This is intentional: embedding is an external API call (OpenAI), not a storage concern. All engines share the same embedding service.
+**嵌入不在引擎中。** 引擎存储嵌入并通过向量搜索，但它不生成嵌入。`src/core/embedding.ts` 处理这个。这是故意的：嵌入是外部 API 调用（OpenAI），而非存储问题。所有引擎共享相同的嵌入服务。
 
-**Chunking is NOT in the engine.** Same logic. `src/core/chunkers/` handles chunking. The engine stores and retrieves chunks. All engines share the same chunkers.
+**分块不在引擎中。** 同样的逻辑。`src/core/chunkers/` 处理分块。引擎存储和检索块。所有引擎共享相同的分块器。
 
-**Search returns `SearchResult[]`, not raw rows.** The engine is responsible for its own search implementation (tsvector vs FTS5, pgvector vs sqlite-vss) but must return a uniform result type. RRF fusion and dedup happen above the engine, in `src/core/search/hybrid.ts`.
+**搜索返回 `SearchResult[]`，而非原始行。** 引擎负责自己的搜索实现（tsvector vs FTS5，pgvector vs sqlite-vss），但必须返回统一的结果类型。RRF 融合和去重在引擎之上，在 `src/core/search/hybrid.ts` 中。
 
-**`traverseGraph` exists but is engine-specific.** Postgres uses recursive CTEs. SQLite would use a loop with depth tracking. The interface is the same: give me a slug and max depth, return the graph.
+**`traverseGraph` 存在但是特定于引擎的。** Postgres 使用递归 CTE。SQLite 会使用带深度跟踪的循环。接口是相同的：给我一个 slug 和最大深度，返回图。
 
-## How search works across engines
+## 搜索如何跨引擎工作
 
 ```
                         +-------------------+
                         |  hybrid.ts        |
-                        |  (RRF fusion +    |
-                        |   dedup, shared)  |
+                        |  (RRF 融合 +    |
+                        |   去重, 共享)  |
                         +--------+----------+
                                  |
                     +------------+------------+
@@ -129,57 +129,59 @@ export interface BrainEngine {
 +---------------+  +-----------+   +-----------+  +-------------+
 ```
 
-RRF fusion, multi-query expansion, and 4-layer dedup are engine-agnostic. They operate on `SearchResult[]` arrays. Only the raw keyword and vector searches are engine-specific.
+RRF 融合、多查询扩展和 4 层去重是与引擎无关的。它们对 `SearchResult[]` 数组进行操作。只有原始关键字和向量搜索是特定于引擎的。
 
-## PostgresEngine (v0, ships)
+## PostgresEngine（v0，已发布）
 
-**Dependencies:** `postgres` (porsager/postgres), `pgvector`
+**依赖项：** `postgres`（porsager/postgres）、`pgvector`
 
-**Postgres-specific features used:**
-- `tsvector` + `GIN` index for full-text search with `ts_rank` weighting
-- `pgvector` HNSW index for cosine similarity vector search
-- `pg_trgm` + `GIN` for fuzzy slug resolution
-- Recursive CTEs for graph traversal
-- Trigger-based search_vector (spans pages + timeline_entries)
-- JSONB for frontmatter with GIN index
-- Connection pooling via Supabase Supavisor (port 6543)
+**使用的 Postgres 特定功能：**
 
-**Hosting:** Supabase Pro ($25/mo). Zero-ops. Managed Postgres with pgvector built in.
+- `tsvector` + `GIN` 索引用于全文搜索，带 `ts_rank` 权重
+- `pgvector` HNSW 索引用于余弦相似度向量搜索
+- `pg_trgm` + `GIN` 用于模糊 slug 解析
+- 用于图遍历的递归 CTE
+- 基于触发器的 search_vector（跨 pages + timeline_entries）
+- 带 GIN 索引的 JSONB 用于前置事务
+- 通过 Supabase Supavisor 的连接池（端口 6543）
 
-**Why not self-hosted for v0:** The brain should be infrastructure agents use, not something you maintain. Self-hosted Postgres with Docker is a welcome community PR, but v0 optimizes for zero ops.
+**托管：** Supabase Pro（25 美元/月）。零运维。托管 Postgres，内置 pgvector。
 
-## PGLiteEngine (v0.7, ships)
+**为什么 v0 不自托管：** brain 应该是 AI 代理使用的基础设施，而不是你维护的东西。带 Docker 的自托管 Postgres 是受欢迎的社区 PR，但 v0 针对零运维进行了优化。
 
-**Dependencies:** `@electric-sql/pglite` (v0.4.4+)
+## PGLiteEngine（v0.7，已发布）
 
-**What it is:** Embedded Postgres 17.5 compiled to WASM via ElectricSQL's PGLite. Runs in-process, no server, no Docker, no accounts. Same SQL as PostgresEngine -- not a separate dialect. All 37 BrainEngine methods implemented.
+**依赖项：** `@electric-sql/pglite`（v0.4.4+）
 
-**PGLite-specific details:**
-- Uses `pglite-schema.ts` for DDL (pgvector extension, pg_trgm, triggers, indexes)
-- Parameterized queries throughout (shared utilities in `src/core/utils.ts`)
-- `hybridSearch` keyword-only fallback when `OPENAI_API_KEY` is not set
-- Data stored at `~/.gbrain/brain.db` (configurable)
-- pgvector HNSW index for cosine similarity vector search (same as Postgres)
-- tsvector + ts_rank for full-text search (same as Postgres)
-- pg_trgm for fuzzy slug resolution (same as Postgres)
+**它是什么：** 通过 ElectricSQL 的 PGLite 编译为 WASM 的嵌入式 Postgres 17.5。在进程中运行，无服务器，无 Docker，无账户。与 PostgresEngine 相同的 SQL — 不是单独的方言。所有 37 个 BrainEngine 方法都已实现。
 
-**When to use PGLite vs Postgres:**
+**PGLite 特定细节：**
 
-| Factor | PGLite | PostgresEngine + Supabase |
+- 使用 `pglite-schema.ts` 用于 DDL（pgvector 扩展、pg_trgm、触发器、索引）
+- 贯穿的参数化查询（在 `src/core/utils.ts` 中的共享实用程序）
+- 当 `OPENAI_API_KEY` 未设置时的 `hybridSearch` 仅关键字回退
+- 数据存储在 `~/.gbrain/brain.db`（可配置）
+- 用于余弦相似度向量搜索的 pgvector HNSW 索引（与 Postgres 相同）
+- 用于全文搜索的 tsvector + ts_rank（与 Postgres 相同）
+- 用于模糊 slug 解析的 pg_trgm（与 Postgres 相同）
+
+**何时使用 PGLite vs Postgres：**
+
+| 因素 | PGLite | PostgresEngine + Supabase |
 |--------|--------|--------------------------|
-| Setup | `gbrain init` (zero-config) | Account + connection string |
-| Scale | Good for < 1,000 files | Production-proven at 10K+ |
-| Multi-device | Single machine only | Any device via remote MCP |
-| Cost | Free | Supabase Pro ($25/mo) |
-| Concurrency | Single process | Connection pooling |
-| Backups | Manual (file copy) | Managed by Supabase |
+| 设置 | `gbrain init`（零配置） | 账户 + 连接字符串 |
+| 规模 | < 1,000 个文件时良好 | 10K+ 时已验证用于生产 |
+| 多设备 | 仅单机器 | 任何设备通过远程 MCP |
+| 成本 | 免费 | Supabase Pro（25 美元/月） |
+| 并发 | 单进程 | 连接池 |
+| 备份 | 手动（文件复制） | 由 Supabase 管理 |
 
-**Migration:** `gbrain migrate --to supabase` exports everything (pages, chunks, embeddings, links, tags, timeline) and imports into Supabase. `gbrain migrate --to pglite` goes the other direction. Bidirectional, lossless.
+**迁移：** `gbrain migrate --to supabase` 导出所有内容（页面、块、嵌入、链接、标签、时间线）并导入到 Supabase。`gbrain migrate --to pglite` 则相反方向。双向，无损。
 
-## Adding a new engine
+## 添加新引擎
 
-1. Create `src/core/<name>-engine.ts` implementing `BrainEngine`
-2. Add to engine factory in `src/core/engine-factory.ts`:
+1. 创建实现 `BrainEngine` 的 `src/core/<name>-engine.ts`
+2. 在 `src/core/engine-factory.ts` 中添加引擎工厂：
    ```typescript
    export function createEngine(type: string): BrainEngine {
      switch (type) {
@@ -190,45 +192,45 @@ RRF fusion, multi-query expansion, and 4-layer dedup are engine-agnostic. They o
      }
    }
    ```
-   The factory uses dynamic imports so engines are only loaded when selected.
-3. Store engine type in `~/.gbrain/config.json`: `{ "engine": "myengine", ... }`
-4. Add tests. The test suite should be engine-agnostic where possible... same test cases, different engine constructor.
-5. Document in this file + add a design doc in `docs/`
+   工厂使用动态导入，因此引擎仅在选中时加载。
+3. 在 `~/.gbrain/config.json` 中存储引擎类型：`{ "engine": "myengine", ... }`
+4. 添加测试。测试套件应尽可能与引擎无关... 相同的测试用例，不同的引擎构造函数。
+5. 在此文件中记录并添加 `docs/` 中的设计文档。
 
-### What you DON'T need to touch
+### 你不需要触碰的东西
 
-- `src/cli.ts` (dispatches to engine, doesn't know which one)
-- `src/mcp/server.ts` (same)
-- `src/core/chunkers/*` (shared across engines)
-- `src/core/embedding.ts` (shared across engines)
-- `src/core/search/hybrid.ts`, `expansion.ts`, `dedup.ts` (shared, operate on SearchResult[])
-- `skills/*` (fat markdown, engine-agnostic)
+- `src/cli.ts`（分派到引擎，不知道是哪一个）
+- `src/mcp/server.ts`（相同）
+- `src/core/chunkers/*`（跨引擎共享）
+- `src/core/embedding.ts`（跨引擎共享）
+- `src/core/search/hybrid.ts`、`expansion.ts`、`dedup.ts`（共享，对 SearchResult[] 进行操作）
+- `skills/*`（胖 markdown，与引擎无关）
 
-### What you DO need to implement
+### 你确实需要实现的东西
 
-Every method in `BrainEngine`. The full interface. No optional methods, no feature flags. If your engine can't do vector search (e.g., a pure-text engine), implement `searchVector` to return `[]` and document the limitation.
+`BrainEngine` 中的每个方法。完整接口。没有可选方法，没有特性标志。如果你的引擎不能进行向量搜索（例如，纯文本引擎），实现 `searchVector` 返回 `[]` 并记录限制。
 
-## Capability matrix
+## 能力矩阵
 
-| Capability | PostgresEngine | PGLiteEngine | Notes |
+| 能力 | PostgresEngine | PGLiteEngine | 备注 |
 |-----------|---------------|-------------|-------|
-| CRUD | Full | Full | Same SQL |
-| Keyword search | tsvector + ts_rank | tsvector + ts_rank | Identical (real Postgres) |
-| Vector search | pgvector HNSW | pgvector HNSW | Identical (real Postgres) |
-| Fuzzy slug | pg_trgm | pg_trgm | Identical (real Postgres) |
-| Graph traversal | Recursive CTE | Recursive CTE | Same SQL |
-| Transactions | Full ACID | Full ACID | Both support this |
-| JSONB queries | GIN index | GIN index | Identical |
-| Concurrent access | Connection pooling | Single process | PGLite limitation |
-| Hosting | Supabase, self-hosted, Docker | Local file | |
-| Migration methods | runMigration, getChunksWithEmbeddings | Same | Added v0.7 |
+| CRUD | 完整 | 完整 | 相同的 SQL |
+| 关键字搜索 | tsvector + ts_rank | tsvector + ts_rank | 相同（真正的 Postgres） |
+| 向量搜索 | pgvector HNSW | pgvector HNSW | 相同（真正的 Postgres） |
+| 模糊 slug | pg_trgm | pg_trgm | 相同（真正的 Postgres） |
+| 图遍历 | 递归 CTE | 递归 CTE | 相同的 SQL |
+| 事务 | 完整 ACID | 完整 ACID | 两者都支持这个 |
+| JSONB 查询 | GIN 索引 | GIN 索引 | 相同 |
+| 并发访问 | 连接池 | 单进程 | PGLite 限制 |
+| 托管 | Supabase、自托管、Docker | 本地文件 | |
+| 迁移方法 | runMigration、getChunksWithEmbeddings | 相同 | v0.7 添加 |
 
-## Future engine ideas
+## 未来的引擎想法
 
-**TursoEngine.** libSQL (SQLite fork) with embedded replicas and HTTP edge access. Would give SQLite's simplicity with cloud sync. Interesting for mobile/edge use cases.
+**TursoEngine。** 带有嵌入式副本和 HTTP 边缘访问的 libSQL（SQLite 分支）。将提供 SQLite 的简单性以及云同步。对于移动/边缘用例很有趣。
 
-**DuckDBEngine.** Analytical workloads. Bulk exports, embedding analysis, brain-wide statistics. Not for OLTP. Could be a secondary engine for analytics alongside Postgres for operations.
+**DuckDBEngine。** 分析工作负载。批量导出、嵌入分析、brain 范围的统计。不适用于 OLTP。可以作为用于分析的次级引擎， alongside Postgres 用于操作。
 
-**Custom/Remote.** The interface is clean enough that someone could build an engine backed by any storage: Firestore, DynamoDB, a REST API, even a flat file system. The interface doesn't assume SQL.
+**自定义/远程。** 接口足够干净，有人可以构建由任何存储支持的引擎：Firestore、DynamoDB、REST API，甚至平面文件系统。接口不假设 SQL。
 
-Note: The original SQLite engine plan (`docs/SQLITE_ENGINE.md`) was superseded by PGLite. PGLite uses the same SQL as Postgres, eliminating the need for a separate SQLite dialect with FTS5/sqlite-vss translation.
+注意：原始的 SQLite 引擎计划（`docs/SQLITE_ENGINE.md`）已被 PGLite 取代。PGLite 使用与 Postgres 相同的 SQL，消除了对带有 FTS5/sqlite-vss 翻译的单独 SQLite 方言的需求。

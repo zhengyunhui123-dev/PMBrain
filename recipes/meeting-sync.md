@@ -2,13 +2,13 @@
 id: meeting-sync
 name: Meeting Sync
 version: 0.7.0
-description: Meeting transcripts from Circleback auto-import into brain pages with attendee detection and entity propagation.
+description: Circleback 的会议记录自动导入大脑页面，包含与会者检测和实体传播。
 category: sense
 requires: []
 secrets:
   - name: CIRCLEBACK_TOKEN
-    description: Circleback API token for meeting data access
-    where: https://app.circleback.ai — Settings > API > generate token
+    description: Circleback API 令牌，用于访问会议数据
+    where: https://app.circleback.ai — 设置 > API > 生成令牌
 health_checks:
   - type: http
     url: "https://app.circleback.ai/api/mcp"
@@ -19,64 +19,64 @@ health_checks:
     body: '{"jsonrpc":"2.0","method":"tools/list","id":1}'
     label: "Circleback API"
 setup_time: 15 min
-cost_estimate: "$0-17/mo (Circleback free for 10 meetings/mo, Pro $17/mo unlimited)"
+cost_estimate: "$0-17/月（Circleback 免费层 10 次会议/月，Pro $17/月 无限制）"
 ---
 
-# Meeting Sync: Transcripts That Become Brain Pages
+# Meeting Sync：变为大脑页面的会议记录
 
-Every meeting is automatically recorded, transcribed, and imported into your brain
-with attendee detection, entity propagation, and action item extraction. You never
-take notes again. The brain remembers what was said, who said it, and what needs
-to happen next.
+每个会议都会自动录制、转录并导入您的大脑，
+包含与会者检测、实体传播和操作项提取。您再也不需要
+记笔记。大脑会记住说了什么、谁说的以及接下来需要
+做什么。
 
-## IMPORTANT: Instructions for the Agent
+## 重要：给代理的说明
 
-**You are the installer.** Follow these steps precisely.
+**您是安装程序。** 请精确按照这些步骤操作。
 
-**Why this is high-value:** Meeting transcripts are the richest signal source.
-A 30-minute meeting mentions 5-10 people, 3-5 companies, and generates 2-3 action
-items. Each one should propagate to the relevant brain pages. Without this recipe,
-meetings are black holes. With it, every meeting compounds the brain.
+**为什么这是高价值的：** 会议记录是最丰富的信号来源。
+一个 30 分钟的会议会提到 5-10 个人、3-5 家公司，并生成 2-3 个操作
+项。每一个都应该传播到相关的大脑页面。没有这个配方，
+会议就是黑洞。有了它，每一次会议都会增强大脑。
 
-**The flow:**
-1. Circleback records and transcribes the meeting (automatic, no user action)
-2. The sync script pulls completed meetings from Circleback API
-3. Each meeting becomes a brain page at `brain/meetings/{YYYY-MM-DD}-{slug}.md`
-4. YOU (the agent) propagate entities to people/company pages
+**流程：**
+1. Circleback 录制并转录会议（自动，无需用户操作）
+2. 同步脚本从 Circleback API 提取已完成的会议
+3. 每个会议在 `brain/meetings/{YYYY-MM-DD}-{slug}.md` 变为一个大脑页面
+4. **您（代理）** 将实体传播到人员/公司页面
 
-**Do not skip steps. Verify after each step.**
+**不要跳过步骤。在每个步骤后验证。**
 
-## Architecture
+## 架构
 
 ```
-Video Call (Zoom, Google Meet, Teams)
-  ↓ Circleback bot joins automatically
-Circleback (recording + transcription + AI summary)
-  ↓ API (JSONRPC 2.0 over HTTP, SSE responses)
-Meeting Sync Script (deterministic Node.js)
-  ↓ Outputs:
+视频通话（Zoom、Google Meet、Teams）
+  ↓ Circleback 机器人自动加入
+Circleback（录制 + 转录 + AI 摘要）
+  ↓ API（JSONRPC 2.0 over HTTP，SSE 响应）
+Meeting Sync Script（确定性 Node.js）
+  ↓ 输出：
   └── brain/meetings/{YYYY-MM-DD}-{slug}.md
-      - Frontmatter: source_id, date, duration, attendees, location
-      - Transcript with speaker labels and timestamps
-      - Tags inferred from title
+      - 前置元数据：source_id、date、duration、attendees、location
+      - 带有说话者标签和时间戳的转录
+      - 从标题推断的标签
   ↓
-Agent reads meeting page
-  ↓ Judgment calls:
-  ├── Entity detection (people, companies, topics)
-  ├── Propagate to attendee brain pages (timeline entries)
-  ├── Action item extraction
-  └── Cross-reference with calendar data
+Agent 读取会议页面
+  ↓ 判断调用：
+  ├── 实体检测（人员、公司、主题）
+  ├── 传播到与会者大脑页面（时间线条目）
+  ├── 操作项提取
+  └── 与日历数据交叉引用
 ```
 
-## Opinionated Defaults
+## 固执己见的默认设置
 
-**Meeting page format:**
+**会议页面格式：**
 ```markdown
 ---
 type: meeting
 source_id: cb_abc123
 source_type: circleback
-title: Weekly Team Sync
+title: 每周团队同步
 date: 2026-04-10
 duration: 32 min
 attendees: [Alice Chen, Bob Park, Carol Wu]
@@ -84,73 +84,73 @@ location: Google Meet
 tags: [team, weekly, sync]
 ---
 
-## Key Points
-- Discussed Q2 roadmap priorities
-- Alice is blocked on the API migration
-- Bob's prototype is ready for review
+## 关键点
+- 讨论了 Q2 路线图优先级
+- Alice 被 API 迁移阻塞
+- Bob 的原型已准备好审查
 
-## Action Items
-- [ ] Alice: unblock API migration by Friday
-- [ ] Bob: share prototype link in Slack
-- [ ] Carol: schedule design review for next week
+## 操作项
+- [ ] Alice：周五前解除 API 迁移阻塞
+- [ ] Bob：在 Slack 中分享原型链接
+- [ ] Carol：安排下周的设计审查
 
 ---
 
-## Transcript
+## 转录
 
-**Alice Chen** (00:00): Let's start with the roadmap update...
-**Bob Park** (02:15): The prototype is basically done...
-**Carol Wu** (05:30): I have some design feedback on the new flow...
+**Alice Chen** (00:00): 让我们从路线图更新开始...
+**Bob Park** (02:15): 原型基本上完成了...
+**Carol Wu** (05:30): 我对新流程有一些设计反馈...
 ```
 
-**Attendee filtering:**
-- Skip calendar resources (e.g., "YC-SF Conference Room")
-- Skip group addresses (e.g., "team@company.com")
-- Extract display names, not email addresses
+**与会者过滤：**
+- 跳过日历资源（例如，"YC-SF 会议室"）
+- 跳过群组地址（例如，"team@company.com"）
+- 提取显示名称，而不是电子邮件地址
 
-**Idempotent by source_id:** If a meeting with the same `source_id` already exists
-in the brain, skip it. No duplicates.
+**通过 source_id 幂等：** 如果具有相同 `source_id` 的会议已经
+在大脑中存在，跳过它。无重复。
 
-## Prerequisites
+## 先决条件
 
-1. **GBrain installed and configured** (`gbrain doctor` passes)
-2. **Node.js 18+** (for the sync script)
-3. **Circleback account** (https://circleback.ai) with meetings recorded
+1. **GBrain 已安装并配置**（`gbrain doctor` 通过）
+2. **Node.js 18+**（用于同步脚本）
+3. **Circleback 账户**（https://circleback.ai）并录制了会议
 
-## Setup Flow
+## 设置流程
 
-### Step 1: Get Circleback API Token
+### 步骤 1：获取 Circleback API 令牌
 
-Tell the user:
-"I need your Circleback API token. Here's where to find it:
+告诉用户：
+"我需要您的 Circleback API 令牌。具体位置如下：
 
-1. Go to https://app.circleback.ai
-2. Click your profile icon (top right) > Settings
-3. Go to the API section
-4. Generate a new API token (or copy existing)
-5. Paste it to me
+1. 转到 https://app.circleback.ai
+2. 点击您的个人资料图标（右上角）> 设置
+3. 转到 API 部分
+4. 生成新的 API 令牌（或复制现有的）
+5. 粘贴给我
 
-Note: Circleback's free tier records up to 10 meetings/month. Pro ($17/mo)
-is unlimited. You need at least one recorded meeting for the sync to work."
+注意：Circleback 的免费层每月最多录制 10 次会议。Pro（$17/月）
+无限制。您至少需要一次录制的会议才能同步工作。"
 
-Validate immediately:
+立即验证：
 ```bash
 curl -sf -H "Authorization: Bearer $CIRCLEBACK_TOKEN" \
   "https://app.circleback.ai/api/mcp" \
   -X POST -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","method":"tools/list","id":1}' \
   | grep -q '"result"' \
-  && echo "PASS: Circleback API connected" \
-  || echo "FAIL: Circleback token invalid"
+  && echo "通过：Circleback API 已连接" \
+  || echo "失败：Circleback 令牌无效"
 ```
 
-**If validation fails:** "That didn't work. Common issues: (1) make sure you copied
-the full token, (2) tokens are long hex strings, (3) check that your Circleback
-account is active."
+**如果验证失败：** "那没用。常见问题：（1）确保复制了
+完整的令牌，（2）令牌是长十六进制字符串，（3）检查您的 Circleback
+账户是否处于活动状态。"
 
-**STOP until Circleback validates.**
+**停止直到 Circleback 验证通过。**
 
-### Step 2: Set Up the Meeting Sync Script
+### 步骤 2：设置会议同步脚本
 
 ```bash
 mkdir -p meeting-sync
@@ -158,91 +158,91 @@ cd meeting-sync
 npm init -y
 ```
 
-The sync script needs these capabilities:
+同步脚本需要这些功能：
 
-1. **List meetings** — call Circleback API `list_meetings` with date range
-   (SSE response format, parse streaming events)
-2. **Extract meeting data** — title, attendees, transcript, duration, date
-3. **Slugify title** — "Weekly Team Sync" → `weekly-team-sync`
-4. **Check for existing** — skip if `brain/meetings/{date}-{slug}.md` exists
-5. **Format as markdown** — frontmatter + key points + action items + transcript
-6. **Filter attendees** — remove calendar resources, groups, extract display names
-7. **Infer tags** — from title keywords (e.g., "board" → board, "1:1" → 1-on-1)
+1. **列出会议** —— 使用日期范围调用 Circleback API `list_meetings`
+   （SSE 响应格式，解析流式事件）
+2. **提取会议数据** —— 标题、与会者、转录、持续时间、日期
+3. **Slugify 标题** —— "Weekly Team Sync" → `weekly-team-sync`
+4. **检查现有** —— 如果 `brain/meetings/{date}-{slug}.md` 存在则跳过
+5. **格式化为 markdown** —— 前置元数据 + 关键点 + 操作项 + 转录
+6. **过滤与会者** —— 移除日历资源、群组，提取显示名称
+7. **推断标签** —— 从标题关键词（例如，"board" → board，"1:1" → 1-on-1）
 
-### Step 3: Run First Sync
+### 步骤 3：运行首次同步
 
 ```bash
 node meeting-sync.mjs --days 7
 ```
 
-This syncs the last 7 days of meetings. For a full backfill:
+这将同步过去 7 天的会议。对于完整回填：
 ```bash
 node meeting-sync.mjs --start 2026-01-01 --end $(date +%Y-%m-%d)
 ```
 
-Verify:
+验证：
 ```bash
 ls brain/meetings/ | head -10
 ```
 
-Should show files like `2026-04-10-weekly-team-sync.md`.
+应显示类似 `2026-04-10-weekly-team-sync.md` 的文件。
 
-Tell the user: "Found and synced N meetings. Here are the most recent: [list 3]."
+告诉用户："找到并同步了 N 次会议。以下是最新的：[列出 3 个]。"
 
-### Step 4: Import to GBrain
+### 步骤 4：导入到 GBrain
 
 ```bash
 gbrain import brain/meetings/ --no-embed
 gbrain embed --stale
 ```
 
-Verify:
+验证：
 ```bash
 gbrain search "meeting" --limit 3
 ```
 
-### Step 5: Propagate to Entity Pages
+### 步骤 5：传播到实体页面
 
-This is YOUR job (the agent). For each meeting:
+这是**您的工作**（代理）。对于每个会议：
 
-1. **Read the meeting page** — understand who attended and what was discussed
-2. **For each attendee**, check brain: `gbrain search "attendee name"`
-   - If page exists: append timeline entry:
-     `- YYYY-MM-DD | Meeting: {title}. Discussed: {key points relevant to this person} [Source: Circleback]`
-   - If no page and person is notable: create a brain page
-3. **For each company mentioned**: update company page timeline
-4. **Action items**: if the meeting has action items, ensure they're tracked
-5. **Cross-reference with calendar**: link meeting page to the calendar event
-6. **Sync**: `gbrain sync --no-pull --no-embed`
+1. **读取会议页面** —— 了解谁参加了以及讨论了什么
+2. **对于每个与会者**，检查大脑：`gbrain search "attendee name"`
+   - 如果页面存在：附加时间线条目：
+     `- YYYY-MM-DD | 会议：{标题}。讨论了：{与此人相关的关键点} [来源：Circleback]`
+   - 如果没有页面且人物显着：创建一个大脑页面
+3. **对于每个提到的公司**：更新公司页面时间线
+4. **操作项**：如果会议有操作项，确保它们被跟踪
+5. **与日历交叉引用**：将会议页面链接到日历事件
+6. **同步**：`gbrain sync --no-pull --no-embed`
 
-### Step 6: Set Up Cron
+### 步骤 6：设置 Cron
 
-Sync 3x daily on weekdays:
+在工作日每天 3 次同步：
 ```bash
-# 10 AM, 4 PM, 9 PM PT on weekdays
+# 工作日上午 10 点、下午 4 点、晚上 9 点 PT
 0 10,16,21 * * 1-5 cd /path/to/meeting-sync && node meeting-sync.mjs >> /tmp/meeting-sync.log 2>&1
 ```
 
-Default (no flags): syncs yesterday and today.
+默认（无标志）：同步昨天和今天。
 
-### Step 7: Log Setup Completion
+### 步骤 7：记录设置完成
 
 ```bash
 mkdir -p ~/.gbrain/integrations/meeting-sync
 echo '{"ts":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'","event":"setup_complete","source_version":"0.7.0","status":"ok"}' >> ~/.gbrain/integrations/meeting-sync/heartbeat.jsonl
 ```
 
-Tell the user: "Meeting sync is set up. Every meeting recorded by Circleback
-automatically becomes a searchable brain page. Attendee pages get updated with
-meeting history. Action items are extracted. Sync runs 3x daily on weekdays."
+告诉用户："会议同步已设置。Circleback 录制的每一次会议
+都会自动变为可搜索的大脑页面。与会者页面会随
+会议历史更新。操作项被提取。同步在工作日每天运行 3 次。"
 
-## Implementation Guide
+## 实施指南
 
-These are production-tested patterns from syncing 280+ meeting transcripts.
+这些是从同步 280+ 会议记录中产生的生产测试模式：
 
-### SSE Response Parsing
+### SSE 响应解析
 
-Circleback returns JSONRPC 2.0 over SSE (Server-Sent Events):
+Circleback 通过 SSE（Server-Sent Events）返回 JSONRPC 2.0：
 ```
 call_circleback(tool_name, args):
   body = {jsonrpc: '2.0', id: next_id(), method: 'tools/call',
@@ -253,39 +253,39 @@ call_circleback(tool_name, args):
 
   text = res.text()
   for line in text.split('\n'):
-    if line.startsWith('data: '):
-      json = JSON.parse(line[6:])             // strip "data: "
+    if line.startswith('data: '):
+      json = JSON.parse(line[6:])             // 剥离 "data: "
       if json.result?.content?.[0]?.text:
-        return JSON.parse(json.result.content[0].text)  // double-parse
+        return JSON.parse(json.result.content[0].text)  // 双重解析
       if json.error:
         throw json.error
 ```
 
-**Non-obvious:** The response is JSON inside SSE inside JSONRPC. You have to:
-1. Strip `data: ` prefix
-2. Parse the SSE line as JSON
-3. Drill into `result.content[0].text`
-4. Parse THAT as JSON again (it's a string containing JSON)
+**不明显的：** 响应是 SSE 内的 JSON，在 JSONRPC 内。您必须：
+1. 剥离 `data: ` 前缀
+2. 将 SSE 行解析为 JSON
+3. 钻取到 `result.content[0].text`
+4. 将**其**解析为 JSON  again（它是包含 JSON 的字符串）
 
-### Idempotency (Double-Check)
+### 幂等性（双重检查）
 
 ```
 meeting_exists(source_id):
-  // Method 1: grep all meeting files for source_id
+  // 方法 1：grep 所有会议文件的 source_id
   result = shell(f'grep -rl "source_id: {source_id}" {MEETINGS_DIR}/')
   if result: return true
 
-  // Method 2: check filename (backup)
+  // 方法 2：检查文件名（备份）
   slug = slugify(meeting.name)
   if file_exists(f'{MEETINGS_DIR}/{date}-{slug}.md'): return true
 
   return false
 ```
 
-**Why double-check:** grep catches source_id matches even if the filename changed.
-File existence catches cases where grep fails (e.g., permission issues).
+**为什么双重检查：** grep 捕获 source_id 匹配，即使文件名已更改。
+文件存在捕获 grep 失败的情况（例如，权限问题）。
 
-### Auto-Tagging from Meeting Name
+### 从会议名称自动标记
 
 ```
 auto_tag(meeting_name):
@@ -300,11 +300,11 @@ auto_tag(meeting_name):
   return tags
 ```
 
-### Meeting Page Structure
+### 会议页面结构
 
 ```
 ---
-title: "Weekly Team Sync"
+title: "每周团队同步"
 type: meeting
 date: 2026-04-10
 duration: 32 min
@@ -316,27 +316,27 @@ attendees:
 tags: [sync]
 ---
 
-# Weekly Team Sync
+# 每周团队同步
 
-## Summary
-[Circleback AI summary]
+## 摘要
+[Circleback AI 摘要]
 
-## Attendees
+## 与会者
 - Alice Chen
 - Bob Park
 
-## Action Items
-- [ ] Alice: unblock API migration by Friday
+## 操作项
+- [ ] Alice：周五前解除 API 迁移阻塞
 
 ---
 
-## Transcript
+## 转录
 
-**Alice Chen** (00:00): Let's start with the roadmap...
-**Bob Park** (02:15): The prototype is basically done...
+**Alice Chen** (00:00): 让我们从路线图开始...
+**Bob Park** (02:15): 原型基本上完成了...
 ```
 
-### Git Commit After Sync
+### Git 在同步后提交
 
 ```
 if new_meetings_created > 0:
@@ -346,42 +346,45 @@ if new_meetings_created > 0:
   shell('git push', cwd=BRAIN_DIR)
 ```
 
-The sync script commits and pushes automatically. This triggers GBrain's
-live sync to index the new pages.
+同步脚本自动提交并推送。这会触发 GBrain 的
+实时同步以索引新页面。
 
-### What the Agent Should Test After Setup
+### 设置后代理应测试的内容
 
-1. **SSE parsing:** Verify `SearchMeetings` returns parseable data (the double-JSON
-   parsing is the most common failure point).
-2. **Idempotency:** Sync a meeting, add a note to the file manually, sync again.
-   Verify the meeting is skipped (not re-created or overwritten).
-3. **Attendee filtering:** Sync a meeting that includes a conference room in attendees.
-   Verify the room doesn't appear in the attendee list.
-4. **Auto-tagging:** Sync a meeting named "1:1 with Sarah". Verify tag is `1on1`.
-5. **Transcript formatting:** Verify speaker names and timestamps are formatted
-   correctly (speaker bold, timestamp in parentheses).
-6. **Git commit:** Sync 2+ meetings. Verify the git commit message includes the count.
+1. **SSE 解析：** 验证 `SearchMeetings` 返回可解析的数据（双重 JSON
+   解析是最常见的失败点）。
+2. **幂等性：** 同步一次会议，手动向文件添加注释，再次同步。
+   验证会议被跳过（未重新创建或覆盖）。
+3. **与会者过滤：** 同步在与会者中包含会议室的会议。
+   验证会议室未出现在与会者列表中。
+4. **自动标记：** 同步名为 "1:1 with Sarah" 的会议。验证标签是 `1on1`。
+5. **转录格式：** 验证说话者姓名和时间戳格式
+   正确（说话者粗体，时间戳在括号内）。
+6. **Git 提交：** 同步 2+ 次会议。验证 git 提交消息包含计数。
 
-## Cost Estimate
+## 成本估算
 
-| Component | Monthly Cost |
+| 组件 | 月成本 |
 |-----------|-------------|
-| Circleback Free tier | $0 (10 meetings/mo) |
-| Circleback Pro | $17/mo (unlimited) |
-| **Recommended** | **$17/mo (Pro)** |
+| Circleback 免费层 | $0（10 次会议/月） |
+| Circleback Pro | $17/月（无限制） |
+| **推荐** | **$17/月（Pro）** |
 
-## Troubleshooting
+## 故障排除
 
-**No meetings found:**
-- Check that Circleback has recorded meetings (open the Circleback dashboard)
-- The Circleback bot must join the meeting for recording to work
-- Check the date range: `--days 30` to widen the search
+**未找到会议：**
+- 检查 Circleback 是否已录制会议（打开 Circleback 仪表板）
+- Circleback 机器人必须加入会议才能录制工作
+- 检查日期范围：`--days 30` 以扩大搜索
 
-**Transcript is empty:**
-- Some meetings may not have transcripts (e.g., no audio, bot was removed)
-- Check the Circleback dashboard for the specific meeting's status
+**转录为空：**
+- 某些会议可能没有转录（例如，无音频，机器人被移除）
+- 检查特定会议的 Circleback 仪表板状态
 
-**Duplicate meetings:**
-- The sync script checks for existing files by source_id
-- If duplicates appear, the idempotency check may be failing
-- Delete duplicates manually and re-run sync
+**重复会议：**
+- 同步脚本通过 source_id 检查现有文件
+- 如果出现重复，幂等性检查可能失败
+- 手动删除重复项并重新运行同步
+
+---
+*GBrain Skillpack 的一部分。另请参阅：[Email-to-Brain](email-to-brain.md)、[Calendar-to-Brain](calendar-to-brain.md)*

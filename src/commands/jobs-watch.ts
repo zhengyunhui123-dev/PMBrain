@@ -65,17 +65,17 @@ export function renderSnapshot(s: WatchSnapshot, opts: { useAnsi?: boolean } = {
   const a = opts.useAnsi !== false;
   const c = (color: string) => (a ? color : '');
   const lines: string[] = [];
-  lines.push(`${c(ANSI.bold)}gbrain jobs watch${c(ANSI.reset)}    ${c(ANSI.dim)}q to quit | ${new Date(s.ts_ms).toLocaleTimeString()}${c(ANSI.reset)}`);
+  lines.push(`${c(ANSI.bold)}gbrain jobs watch${c(ANSI.reset)}    ${c(ANSI.dim)}按 q 退出 | ${new Date(s.ts_ms).toLocaleTimeString()}${c(ANSI.reset)}`);
   lines.push('');
 
   // Queue health panel.
-  lines.push(`${c(ANSI.bold)}Queue${c(ANSI.reset)}    waiting=${s.queue_health.waiting}  active=${s.queue_health.active}  stalled=${s.queue_health.stalled}`);
+  lines.push(`${c(ANSI.bold)}队列${c(ANSI.reset)}    等待=${s.queue_health.waiting}  活跃=${s.queue_health.active}  停滞=${s.queue_health.stalled}`);
   lines.push('');
 
   // Per-type breakdown.
   if (s.by_type.length > 0) {
-    lines.push(`${c(ANSI.bold)}By type (24h)${c(ANSI.reset)}`);
-    lines.push(`  ${'name'.padEnd(20)} ${'total'.padStart(6)} ${'done'.padStart(6)} ${'fail'.padStart(6)} ${'dead'.padStart(6)}`);
+    lines.push(`${c(ANSI.bold)}按类型统计（24 小时）${c(ANSI.reset)}`);
+    lines.push(`  ${'名称'.padEnd(20)} ${'总数'.padStart(6)} ${'完成'.padStart(6)} ${'失败'.padStart(6)} ${'失效'.padStart(6)}`);
     for (const t of s.by_type.slice(0, 6)) {
       lines.push(
         `  ${t.name.padEnd(20)} ${String(t.total).padStart(6)} ${String(t.completed).padStart(6)} ${String(t.failed).padStart(6)} ${String(t.dead).padStart(6)}`,
@@ -88,12 +88,12 @@ export function renderSnapshot(s: WatchSnapshot, opts: { useAnsi?: boolean } = {
   const lpColor = s.lease_pressure_1h === 0
     ? c(ANSI.green)
     : s.lease_pressure_1h >= 100 ? c(ANSI.red) : c(ANSI.yellow);
-  lines.push(`${c(ANSI.bold)}Lease pressure (1h)${c(ANSI.reset)}  ${lpColor}${s.lease_pressure_1h} bounce${s.lease_pressure_1h === 1 ? '' : 's'}${c(ANSI.reset)}`);
+  lines.push(`${c(ANSI.bold)}租约压力（1 小时）${c(ANSI.reset)}  ${lpColor}${s.lease_pressure_1h} 次退避${c(ANSI.reset)}`);
   lines.push('');
 
   // Top errors clustered.
   if (s.top_errors.length > 0) {
-    lines.push(`${c(ANSI.bold)}Top errors (24h)${c(ANSI.reset)}`);
+    lines.push(`${c(ANSI.bold)}主要错误（24 小时）${c(ANSI.reset)}`);
     for (const e of s.top_errors.slice(0, 5)) {
       lines.push(`  ${String(e.count).padStart(4)} × ${e.cluster}`);
     }
@@ -102,11 +102,11 @@ export function renderSnapshot(s: WatchSnapshot, opts: { useAnsi?: boolean } = {
 
   // Budget panel.
   if (s.budget_owners.length > 0) {
-    lines.push(`${c(ANSI.bold)}Budget owners${c(ANSI.reset)}`);
+    lines.push(`${c(ANSI.bold)}预算所有者${c(ANSI.reset)}`);
     for (const b of s.budget_owners.slice(0, 5)) {
       const remaining = `$${(b.remaining_cents / 100).toFixed(2)}`;
       const spent = `$${(b.total_spent_cents / 100).toFixed(2)}`;
-      lines.push(`  owner=${b.owner_id}  spent=${spent}  remaining=${remaining}`);
+      lines.push(`  所有者=${b.owner_id}  已用=${spent}  剩余=${remaining}`);
     }
     lines.push('');
   }

@@ -59,7 +59,7 @@ function ChartSvg({ type, ariaLabel }: ChartSvgProps) {
         if (!cancelled) setMarkup(svg);
       })
       .catch(err => {
-        if (!cancelled) setError(err.message ?? 'fetch failed');
+        if (!cancelled) setError(err.message ?? '获取失败');
       });
     return () => {
       cancelled = true;
@@ -74,7 +74,7 @@ function ChartSvg({ type, ariaLabel }: ChartSvgProps) {
     );
   }
   if (!markup) {
-    return <div style={{ padding: 16, color: 'var(--text-muted)' }}>{ariaLabel} loading...</div>;
+    return <div style={{ padding: 16, color: 'var(--text-muted)' }}>{ariaLabel}加载中...</div>;
   }
   return <TrustedSVG markup={markup} />;
 }
@@ -92,27 +92,27 @@ export function CalibrationPage() {
         setLoading(false);
       })
       .catch(err => {
-        setError(err.message ?? 'fetch failed');
+        setError(err.message ?? '获取失败');
         setLoading(false);
       });
   }, []);
 
   if (loading) {
-    return <div style={{ padding: 24, color: 'var(--text-secondary)' }}>Loading calibration profile…</div>;
+    return <div style={{ padding: 24, color: 'var(--text-secondary)' }}>正在加载校准档案...</div>;
   }
   if (error) {
     return (
       <div style={{ padding: 24, color: 'var(--error)' }} role="alert">
-        Could not load calibration profile: {error}
+        无法加载校准档案：{error}
       </div>
     );
   }
   if (!profile) {
     return (
       <div style={{ padding: 24, maxWidth: 700 }}>
-        <h1 style={{ marginBottom: 16 }}>Calibration</h1>
+        <h1 style={{ marginBottom: 16 }}>校准</h1>
         <p style={{ color: 'var(--text-secondary)' }}>
-          No calibration profile yet. Builds after 5+ resolved takes.
+          暂无校准档案。解决 5 条以上 take 后会生成。
         </p>
         <pre
           style={{
@@ -135,38 +135,38 @@ export function CalibrationPage() {
 
   return (
     <div style={{ padding: 32, maxWidth: 720 }}>
-      <h1 style={{ marginBottom: 8 }}>Calibration</h1>
+      <h1 style={{ marginBottom: 8 }}>校准</h1>
       <div style={{ color: 'var(--text-muted)', fontSize: 13, marginBottom: 24 }}>
-        Holder: {profile.holder}
+        持有人：{profile.holder}
         {' · '}
-        Updated {generatedAgo === 0 ? 'today' : `${generatedAgo}d ago`}
-        {profile.published && ' · published'}
-        {profile.grade_completion < 0.9 && ` · ~${Math.round(profile.grade_completion * 100)}% graded`}
-        {!profile.voice_gate_passed && ' · voice gate fell back to template'}
+        更新于{generatedAgo === 0 ? '今天' : `${generatedAgo} 天前`}
+        {profile.published && ' · 已发布'}
+        {profile.grade_completion < 0.9 && ` · 约 ${Math.round(profile.grade_completion * 100)}% 已评分`}
+        {!profile.voice_gate_passed && ' · 语音门控已回退到模板'}
       </div>
 
       <section style={{ marginBottom: 32 }}>
-        <ChartSvg type="brier-trend" ariaLabel="Brier trend" />
+        <ChartSvg type="brier-trend" ariaLabel="Brier 趋势" />
       </section>
 
       <section style={{ marginBottom: 32 }}>
         <h2 style={{ fontSize: 14, color: 'var(--text-secondary)', marginBottom: 12, fontWeight: 400 }}>
-          Pattern statements
+          模式陈述
         </h2>
-        <ChartSvg type="pattern-statements" ariaLabel="Pattern statements" />
+        <ChartSvg type="pattern-statements" ariaLabel="模式陈述" />
       </section>
 
       <section style={{ marginBottom: 32 }}>
-        <ChartSvg type="domain-bars" ariaLabel="Per-domain accuracy" />
+        <ChartSvg type="domain-bars" ariaLabel="各领域准确率" />
       </section>
 
       <section style={{ marginBottom: 32 }}>
-        <ChartSvg type="abandoned-threads" ariaLabel="Abandoned threads" />
+        <ChartSvg type="abandoned-threads" ariaLabel="已放弃线程" />
       </section>
 
       {profile.active_bias_tags.length > 0 && (
         <section style={{ marginBottom: 32, color: 'var(--text-muted)', fontSize: 13 }}>
-          Active bias tags: {profile.active_bias_tags.join(', ')}
+          活跃偏差标签：{profile.active_bias_tags.join(', ')}
         </section>
       )}
     </div>

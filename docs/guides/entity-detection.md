@@ -1,190 +1,170 @@
-# Entity Detection: Run It on Every Message
+# 实体检测：在每个消息上运行它
 
-## Goal
+## 目标
 
-Every inbound message gets scanned for original thinking AND entity mentions so the brain grows on every conversation, automatically.
+每个入站消息都会被扫描以查找原创想法和实体提及，以便 brain 在每次对话中自动增长。
 
-## What the User Gets
+## 用户获得什么
 
-Without this: the agent answers questions but forgets everything. You mention
-Pedro in a meeting, and next week the agent doesn't know who Pedro is.
+没有它：agent 回答问题但会忘记所有内容。你在会议上提到 Pedro，下周 agent 就不知道 Pedro 是谁。
 
-With this: every person, company, and idea mentioned in conversation gets a
-brain page. Next time Pedro comes up, the agent already has context. The
-brain compounds.
+有了它：对话中提到的每个人、公司和想法都会获得一个 brain 页面。下次提到 Pedro 时，agent 已经拥有上下文。Brain 会复合增长。
 
-## Implementation
+## 实现
 
-Spawn a lightweight sub-agent on EVERY inbound message. Do NOT wait for it
-to finish before responding. It runs in parallel.
+在**每个**入站消息上生成一个轻量级子 agent。不要等待它完成后再响应。它并行运行。
 
 ```
 on_every_message(message_text, source_context):
 
-  // 1. SPAWN ASYNC — don't block the response
+  # 1. 生成异步 — 不要阻塞响应
   spawn_subagent({
-    model: "sonnet-class",     // cheap + fast, not opus
-    timeout: 120,              // seconds
+    model: "sonnet-class",     // 便宜 + 快速，不是 opus
+    timeout: 120,              // 秒
     task: build_detection_prompt(message_text, source_context)
   })
 
-  // 2. RESPOND TO USER NORMALLY
-  // The sub-agent runs in the background
+  # 2. 正常响应用户
+  # 子 agent 在后台运行
 ```
 
-### The Detection Prompt
+### 检测提示
 
 ```
 build_detection_prompt(text, source):
   return `
-SIGNAL DETECTION — scan this message for ideas AND entities:
+信号检测 — 扫描此消息以查找想法和实体：
 
-Message: "${text}"
-Source: [Source: User, ${source.topic}, ${source.platform}, ${source.timestamp}]
+消息："${text}"
+来源：[来源：用户、${source.topic}、${source.platform}、${source.timestamp}]
 
-STEP 1 — IDEAS FIRST (highest priority):
-Is the user expressing an original thought, observation, thesis, or framework?
+步骤 1 — 首先想法（最高优先级）：
+用户是否在表达原创想法、观察、论文或框架？
 
-If yes:
-  - Create or update brain/originals/{slug}.md
-  - Use the user's EXACT phrasing (the language IS the insight)
-  - "The ambition-to-lifespan ratio has never been more broken" is better
-    than "tension between ambition and mortality"
-  - Include [Source: ...] citation with full context
+如果是：
+  - 创建或更新 brain/originals/{slug}.md
+  - 使用用户的确切措辞（语言就是洞察力）
+  - "雄心与寿命之比从未如此破碎" 比
+    "雄心与死亡之间的张力" 更好
+  - 包含带有完整上下文的 [来源：...] 引用
 
-If the idea references a world concept: brain/concepts/{slug}.md
-If it's a product/business idea: brain/ideas/{slug}.md
+如果想法引用世界概念：brain/concepts/{slug}.md
+如果它是产品或商业想法：brain/ideas/{slug}.md
 
-STEP 2 — ENTITIES:
-Extract all person names, company names, media titles.
+步骤 2 — 实体：
+提取所有人员姓名、公司名称、媒体标题。
 
-For each entity:
-  a. Run: gbrain search "{name}"
-  b. If page exists AND new info: append timeline entry
-     Format: - YYYY-MM-DD | {what happened} [Source: {who}, {context}, {date}]
-  c. If no page AND entity is notable: create page with web enrichment
-  d. If page is thin (< 5 lines compiled truth): spawn background enrichment
+对于每个实体：
+  a. 运行：gbrain search "{name}"
+  b. 如果页面存在且有新信息：附加时间线条目
+    格式：- YYYY-MM-DD | {发生了什么} [来源：{谁}、{上下文}、{日期}]
+  c. 如果不是页面且实体值得注意：创建带有网络丰富的页面
+  d. 如果页面单薄（< 5 行编译真相）：生成后台丰富
 
-STEP 3 — BACK-LINKING (mandatory):
-For every entity mentioned, add a back-link FROM their page TO this source.
-An unlinked mention is a broken brain.
-Format: - **YYYY-MM-DD** | Referenced in [{page title}]({path}) — {context}
+步骤 3 — 反向链接（强制性）：
+对于提到的每个实体，从其实体页面到此来源添加反向链接。
+未链接的提及是损坏的 brain。
+格式：**YYYY-MM-DD** | 在 [{页面标题}]({路径}) 中引用 — {上下文}
 
-STEP 4 — SYNC:
-Run: gbrain sync --no-pull --no-embed
+步骤 4 — 同步：
+运行：gbrain sync --no-pull --no-embed
 
-If nothing to capture, reply "No signals detected" and exit.
+如果没有可捕获的内容，回复 "未检测到信号" 并退出。
 `
 ```
 
-### Notability Filtering
+### 重要性过滤
 
-Before creating a new entity page, check notability:
+在创建新实体页面之前，检查重要性：
 
 ```
 is_notable(entity):
-  // CREATE a page for:
-  - People the user knows or discusses with specificity
-  - Companies the user is evaluating, working with, or investing in
-  - Media the user mentions with personal reaction
-  - Anyone the user has explicitly engaged with
+  # 为以下创建页面：
+  - 用户认识或以特定性讨论的人员
+  - 用户正在评估、合作或投资的企业
+  - 用户提及带有个人反应媒体
+  - 用户明确参与的任何人员
 
-  // DON'T create a page for:
-  - Generic references or passing examples
-  - Low-engagement accounts who mentioned the user once
-  - Pure metaphors ("like the Roman Empire...")
-  - One-off encounters with no follow-up
+  # 不要为以下创建页面：
+  - 通用引用或经过示例
+  - 提及用户一次低参与度帐户
+  - 纯隐喻（"就像罗马帝国..."）
+  - 没有后续的一次性相遇
 
-  // If notable AND no page: create FULL page (not a stub)
-  // If not notable: skip silently
+  # 如果重要且不是页面：创建完整页面（不是存根）
+  # 如果不重要：静默跳过
 ```
 
-### What Counts as Original Thinking
+### 什么算作原创想法
 
-| Capture | Don't Capture |
+| 捕获 | 不要捕获 |
 |---------|---------------|
-| Original observations about how the world works | "ok", "do it", "sure" |
-| Novel connections between disparate things | Pure questions without observations |
-| Frameworks and mental models | Echoing back what the agent said |
-| Pattern recognition ("I keep seeing X in every Y") | Acknowledgments and reactions |
-| Hot takes with reasoning | Routine operational messages |
-| Metaphors that reveal new angles | Requests without embedded insight |
+| 关于世界如何运作的原创观察 | "ok"、"做它"、"确定" |
+| 不同事物之间的新颖连接 | 没有观察的纯问题 |
+| 框架和心理模型 | 回响 agent 所说的 |
+| 模式识别（"我不断在每 Y 中看到 X"） | 确认和反应 |
+| 带有推理的热门话题 | 常规操作消息 |
+| 揭示新角度的隐喻 | 没有嵌入洞察力的请求 |
 
-### Filing Rules
+### 归档规则
 
-| Signal | Destination |
+| 信号 | 目的地 |
 |--------|-------------|
-| User generated the idea | `brain/originals/{slug}.md` |
-| User's synthesis of others' ideas | `brain/originals/` (the synthesis is original) |
-| World concept someone else coined | `brain/concepts/{slug}.md` |
-| Product or business idea | `brain/ideas/{slug}.md` |
-| Person mentioned | `brain/people/{slug}.md` |
-| Company mentioned | `brain/companies/{slug}.md` |
-| Media referenced | `brain/media/{type}/{slug}.md` |
+| 用户生成的想法 | `brain/originals/{slug}.md` |
+| 用户对他人想法的综合 | `brain/originals/`（综合是原创的） |
+| 别人创造的世界概念 | `brain/concepts/{slug}.md` |
+| 产品或商业想法 | `brain/ideas/{slug}.md` |
+| 提及的人员 | `brain/people/{slug}.md` |
+| 提及的公司 | `brain/companies/{slug}.md` |
+| 引用的媒体 | `brain/media/{type}/{slug}.md` |
 
-### The Iron Law of Back-Linking
+### 反向链接的铁律
 
-Every entity mention MUST create a back-link FROM the entity page TO the
-source. This is not optional.
+每个实体提及**必须**从实体页面到此来源创建反向链接。这不是可选的。
 
 ```
-// When message mentions "Pedro" and creates a meeting page:
+// 当消息提及 "Pedro" 并创建会议页面时：
 
-// 1. Update the meeting page (normal)
-brain/meetings/2026-04-10-board-sync.md:
-  - Pedro presented Q1 numbers
+// 1. 更新会议页面（正常）
+brain/meetings/2026-04-10-board-sync.md：
+  - Pedro 介绍了 Q1 数字
 
-// 2. ALSO update Pedro's page (back-link)
-brain/people/pedro-franceschi.md:
-  ## Timeline
-  - **2026-04-10** | Presented Q1 numbers at board sync
-    [Source: User, board meeting, 2026-04-10]
+// 2. 也更新 Pedro 的页面（反向链接）
+brain/people/pedro-franceschi.md：
+  ## 时间线
+  - **2026-04-10** | 在董事会同步中介绍 Q1 数字
+    [来源：用户、董事会会议、2026-04-10]
 ```
 
-Without back-links, you can't traverse the graph. "Show me everything related
-to Pedro" only works if Pedro's page links back to every mention.
+没有反向链接，你无法遍历图形。"向我展示与 Pedro 相关的所有内容" 仅在 Pedro 的页面链接回每个提及时才有效。
 
-## Tricky Spots
+## 棘手的地方
 
-1. **Don't block the conversation.** Entity detection runs async. The user
-   should see a response immediately, not wait 2 minutes while the sub-agent
-   enriches 5 entity pages.
+1. **不要阻塞对话。** 实体检测异步运行。用户应该立即看到响应，而不是等待 2 分钟，而子 agent 正在丰富 5 个实体页面。
 
-2. **Sonnet, not Opus.** Entity detection is pattern matching, not deep
-   reasoning. Sonnet is 5-10x cheaper and fast enough. Use Opus for the
-   main conversation.
+2. **Sonnet，不是 Opus。** 实体检测是模式匹配，不是深度推理。Sonnet 便宜 5-10 倍且足够快。将 Opus 用于主要对话。
 
-3. **Exact phrasing matters.** "Markdown is actually code" is an insight.
-   "Markdown can be used as code" is a summary. Capture the first version.
+3. **确切措辞很重要。** "Markdown 实际上是代码" 是一个洞察力。
+   "Markdown 可以用作代码" 是一个摘要。捕获第一个版本。
 
-4. **Don't create stubs.** If you create a page, make it good. Run a web
-   search, build out the compiled truth, add context. A stub page with just
-   a name is worse than no page (it gives false confidence).
+4. **不要创建存根。** 如果你创建一个页面，请把它做好。运行网络搜索，构建编译真相，添加上下文。只有一个名称的存根页面比没有页面更糟糕（它给虚假信心）。
 
-5. **Dedup before creating.** Always `gbrain search` before creating a page.
-   Variant spellings, nicknames, and company abbreviations cause duplicates.
-   "Pedro Franceschi" and "Pedro" might be the same person.
+5. **在创建之前去重。** 在创建页面之前始终 `gbrain search`。变体拼写、昵称和公司缩写会导致重复。
+   "Pedro" 和 "Pedro Franceschi" 可能是同一个人。
 
-## How to Verify
+## 如何验证
 
-1. **Send a message mentioning a person.** Say "I had coffee with Sarah Chen
-   from Acme Corp today." Verify: brain/people/sarah-chen.md was created or
-   updated, brain/companies/acme-corp.md was created or updated, both have
-   timeline entries with today's date.
+1. **发送提及某个人的消息。** 说 "我今天与 Acme Corp 的 Sarah Chen 一起喝了咖啡。" 验证：brain/people/sarah-chen.md 已创建或更新，brain/companies/acme-corp.md 已创建或更新，两者都有带有今天日期的时间线条目。
 
-2. **Send a message with an original idea.** Say "What if we could distribute
-   software as markdown files that agents execute?" Verify:
-   brain/originals/{slug}.md was created with your exact phrasing.
+2. **发送带有原创想法的消息。** 说 "如果我们能够将软件作为 markdown 文件分发会怎样？" 验证：
+   brain/originals/{slug}.md 已使用你的确切措辞创建。
 
-3. **Check back-links.** Open Sarah Chen's page. It should have a timeline
-   entry linking back to today's conversation. Open Acme Corp's page. Same.
+3. **检查反向链接。** 打开 Sarah Chen 的页面。它应该有一个链接回今天对话的时间线条目。打开 Acme Corp 的页面。相同。
 
-4. **Send a boring message.** Say "ok sounds good." Verify: nothing was
-   created. The detector should report "No signals detected."
+4. **发送无聊的消息。** 说 "ok 听起来不错。" 验证：没有创建任何内容。检测器应该报告 "未检测到信号。"
 
-5. **Check for duplicates.** Mention "Pedro" then later "Pedro Franceschi."
-   Verify: one page, not two.
+5. **检查重复。** 提及 "Pedro" 然后稍后 "Pedro Franceschi。" 验证：一个页面，不是两个。
 
 ---
 
-*Part of the [GBrain Skillpack](../GBRAIN_SKILLPACK.md).*
+*是 [GBrain Skillpack](../GBRAIN_SKILLPACK.md) 的一部分。另请参阅：[Brain-First 查找](brain-first-lookup.md)、[搜索模式](search-modes.md)*

@@ -1,66 +1,67 @@
-# Minions fix — repairing a half-migrated install
+# Minions 修复 — 修复半迁移的安装
 
-**tl;dr:** on v0.11.1+ everything should self-heal. If Minions is partially
-set up (no `~/.gbrain/preferences.json`, autopilot still inline, cron jobs
-still on `agentTurn`), run:
+**tl;dr：** 在 v0.11.1+ 上，一切都应该自我修复。如果 Minions 是部分
+设置的（没有 `~/.gbrain/preferences.json`，autopilot 仍在内联，cron 作业
+仍在 `agentTurn` 上），请运行：
 
 ```bash
 gbrain apply-migrations --yes
 ```
 
-It's idempotent. On v0.11.1 installs that already migrated it's a cheap
-no-op.
+它是幂等的。在已经迁移的 v0.11.1 安装上，它是一个廉价的
+无操作。
 
-## Context
+## 上下文
 
-v0.11.0 shipped the Minions schema, queue, worker, and migration skill —
-but the migration skill itself never fired on upgrade. `runPostUpgrade`
-printed the feature pitch and stopped. v0.11.0 was never released
-publicly; v0.11.1 is the first public Minions ship and fixes the
-mega-bug (migration fires automatically on `gbrain upgrade` and via
-the `postinstall` hook).
+v0.11.0 发布了 Minions schema、队列和迁移 skill —
+但迁移 skill 本身在升级时从未触发。`runPostUpgrade`
+打印了功能宣传并停止了。v0.11.0 从未
+公开发布；v0.11.1 是第一个公共 Minions 版本，并修复了
+巨型错误（迁移在 `gbrain upgrade` 时自动触发，并通过
+`postinstall` hook）。
 
-If you're on a pre-v0.11.1 branch build (e.g. running the
-`minions-jobs` branch before v0.11.1 tagged), Minions may be installed
-but not wired: schema is v7, but no `~/.gbrain/preferences.json`,
-autopilot still runs inline, cron jobs still call `agentTurn`.
+如果你在 v0.11.1 之前的分支构建（例如，在 v0.11.1 标记之前运行
+`minions-jobs` 分支），则 Minions 可能已安装
+但未连接：schema 是 v7，但没有 `~/.gbrain/preferences.json`，
+autopilot 仍在内联运行，cron 作业仍在调用 `agentTurn`。
 
-This guide covers both paths: the canonical v0.11.1+ fix, and the
-stopgap for pre-v0.11.1 binaries that don't have `apply-migrations`.
+本指南涵盖了两种路径：规范的 v0.11.1+ 修复，以及
+没有 `apply-migrations` 的 v0.11.1 之前二进制文件的
+停止缺口。
 
-## Detecting the half-migrated state
+## 检测半迁移状态
 
 ```bash
 gbrain doctor
 ```
 
-If the install is half-migrated, you'll see:
+如果安装是半迁移的，你将看到：
 
 ```
 [FAIL] minions_migration: MINIONS HALF-INSTALLED (partial migration: 0.11.0). Run: gbrain apply-migrations --yes
 ```
 
-or
+或
 
 ```
 [FAIL] minions_config: MINIONS HALF-INSTALLED (schema v7+ but no ~/.gbrain/preferences.json). Run: gbrain apply-migrations --yes
 ```
 
-For a machine-readable report (cron-friendly):
+对于机器可读的报告（cron 友好）：
 
 ```bash
 gbrain skillpack-check --quiet && echo healthy || echo needs_action
-gbrain skillpack-check | jq -r '.actions[]'    # prints the exact commands to run
+gbrain skillpack-check | jq -r '.actions[]'    # 打印要运行的确切命令
 ```
 
-## The fix (v0.11.1 or later)
+## 修复（v0.11.1 或更高版本）
 
 ```bash
 gbrain apply-migrations --yes
 ```
 
-Reads `~/.gbrain/migrations/completed.jsonl`, diffs against the TS
-migration registry, runs whatever's pending. Seven phases:
+读取 `~/.gbrain/migrations/completed.jsonl`，与 TS
+迁移注册表进行比较，并运行任何挂起的内容。七个阶段：
 
 ```
 A. Schema        gbrain init --migrate-only
@@ -68,92 +69,92 @@ B. Smoke         gbrain jobs smoke
 C. Mode          prompt (or --yes default pain_triggered)
 D. Prefs         write ~/.gbrain/preferences.json
 E. Host          AGENTS.md marker injection + cron rewrites for gbrain
-                 builtins; JSONL TODOs for host-specific handlers
+                  builtins; JSONL TODOs for host-specific handlers
 F. Install       gbrain autopilot --install (env-aware)
 G. Record        append completed.jsonl status:"complete"
 ```
 
-If Phase E emits TODOs for host-specific handlers (e.g. your OpenClaw's
-~29 non-gbrain crons), the migration finishes with `status: "partial"`.
-Your host agent walks the TODOs using `skills/migrations/v0.11.0.md` +
-`docs/guides/plugin-handlers.md`, ships handler registrations in the
-host repo, then re-runs `gbrain apply-migrations --yes`. Newly
-registerable cron entries get rewritten and the JSONL rows mark
-`status: "complete"`.
+如果阶段 E 发出主机特定处理程序（例如，你的 OpenClaw 的
+~29 个非 gbrain crons）的 TODO，则迁移以 `status: "partial"` 完成。
+你的主机 agent 使用 `skills/migrations/v0.11.0.md` +
+`docs/guides/plugin-handlers.md` 来运送处理程序注册，然后重新运行
+`gbrain apply-migrations --yes`。新
+注册表可捕获的 cron 条目将被重写，并且 JSONL 行将标记
+`status: "complete"`。
 
-## The stopgap (pre-v0.11.1 binary, no apply-migrations yet)
+## 停止缺口（v0.11.1 之前的二进制文件，还没有 apply-migrations）
 
-If you're stuck on a branch build that doesn't have `apply-migrations`:
+如果你被困在具有 `apply-migrations` 的
+分支构建上：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/garrytan/gbrain/v0.11.1/scripts/fix-v0.11.0.sh | bash
 ```
 
-This bash script does what apply-migrations does from a shell environment:
+此 bash 脚本执行 apply-migrations 从 shell 环境执行的操作：
 
-1. `gbrain init --migrate-only` — schema v7.
-2. `gbrain jobs smoke` — verify Minions health.
-3. Prompt for `minion_mode` (defaults `pain_triggered` on non-TTY).
-4. Write `~/.gbrain/preferences.json` atomically.
-5. Append `~/.gbrain/migrations/completed.jsonl` with `status: "partial"`
-   and `apply_migrations_pending: true`. That partial record is the
-   signal to v0.11.1's `apply-migrations` to pick up remaining phases
-   after the user upgrades.
-6. Detect host agent repos and PRINT rewrite instructions (never
-   auto-edits from a curl-piped script).
-7. Print the next step: `Run: gbrain autopilot --install`.
+1. `gbrain init --migrate-only` — schema v7。
+2. `gbrain jobs smoke` — 验证 Minions 运行状况。
+3. Prompt for `minion_mode`（非 TTY 上的默认 `pain_triggered`）。
+4. 原子地写入 `~/.gbrain/preferences.json`。
+5. 附加 `~/.gbrain/migrations/completed.jsonl`，其 `status: "partial"`
+   和 `apply_migrations_pending: true`。该部分记录是
+   用于在用户升级后由 v0.11.1 的 `apply-migrations` 选取以完成剩余阶段的
+   信号。
+6. 检测主机 agent 仓库并打印重写说明（永远不要
+   从 curl 管道化的脚本自动编辑）。
+7. 打印下一步："运行：gbrain autopilot --install"。
 
-Once v0.11.1 is installed, re-run `gbrain apply-migrations --yes` to
-finish the remaining phases (host rewrites + autopilot install). The
-stopgap's `status: "partial"` record is designed to resume cleanly
-(it doesn't poison the permanent migration path).
+一旦安装了 v0.11.1，请重新运行 `gbrain apply-migrations --yes` 以
+完成剩余阶段（主机重写 + autopilot 安装）。停止缺口的
+`status: "partial"` 记录旨在干净地恢复（它不会
+毒化永久迁移路径）。
 
-## Verify the fix landed
+## 验证修复已落地
 
 ```bash
-# 1. Preferences exist and are readable
+# 1. 首选项存在并且可读
 cat ~/.gbrain/preferences.json
 
-# 2. Migration recorded
+# 2. 迁移已记录
 cat ~/.gbrain/migrations/completed.jsonl
 
-# 3. Autopilot is supervising a Minions worker child
+# 3. Autopilot 正在监督 Minions worker
 gbrain autopilot --status
 ps aux | grep 'jobs work'
 
-# 4. Jobs show up in the queue
+# 4. 作业显示在队列中
 gbrain jobs list
 
-# 5. Any host-specific TODOs still pending
+# 5. 任何主机特定的 TODO 仍待处理
 cat ~/.gbrain/migrations/pending-host-work.jsonl 2>/dev/null || echo "(none — all host work is done)"
 
-# 6. Doctor + skillpack-check should both be clean
+# 6. Doctor + skillpack-check 都应该干净
 gbrain doctor
 gbrain skillpack-check --quiet && echo ok
 ```
 
-## If the fix fails
+## 如果修复失败
 
-Each phase is idempotent. Re-running is safe. Common failure modes:
+每个阶段都是幂等的。重新运行是安全的。常见失败模式：
 
-- **Phase B smoke fails:** the schema didn't apply. Check
-  `~/.gbrain/config.json` has a valid `database_url` (or `database_path`
-  for PGLite). Run `gbrain init --migrate-only` directly and look at
-  the error.
-- **Phase F install fails:** your host environment doesn't match any
-  detected target. Pass `--target <macos|linux-systemd|ephemeral-container|linux-cron>`
-  explicitly.
-- **Pending host work never clears:** your host agent hasn't shipped
-  handler registrations yet. Read
-  `~/.gbrain/migrations/pending-host-work.jsonl`, open
-  `skills/migrations/v0.11.0.md`, and follow the host-agent instruction
-  manual.
+- **阶段 B smoke 失败：** schema 不会应用。检查
+  `~/.gbrain/config.json` 是否具有有效的 `database_url`（或 `database_path`
+  用于 PGLite）。直接运行 `gbrain init --migrate-only` 并查看
+  错误。
+- **阶段 F install 失败：** 你的主机环境不匹配
+  检测到的目标。显式传递 `--target <macos|linux-systemd|ephemeral-container|linux-cron>`。
+- **挂起的主机工作永远不会清除：** 你的主机 agent 还没有运送
+  处理程序注册。读取
+  `~/.gbrain/migrations/pending-host-work.jsonl`，打开
+  `skills/migrations/v0.11.0.md`，并按照主机 agent 说明手动
+  操作。
 
-## Related
+## 相关
 
-- `skills/migrations/v0.11.0.md` — full migration skill for host agents.
-- `skills/skillpack-check/SKILL.md` — when and how to run the health check.
-- `docs/guides/plugin-handlers.md` — plugin contract for host-specific
-  handlers.
-- `skills/conventions/cron-via-minions.md` — the canonical cron rewrite
-  pattern.
+- `skills/migrations/v0.11.0.md` — 主机 agents 的完整迁移 skill。
+- `skills/skillpack-check/SKILL.md` — 何时以及如何运行运行状况检查。
+- `docs/guides/plugin-handlers.md` — 主机特定的
+  处理程序合约。
+- `skills/conventions/cron-via-minions.md` — 规范 cron 重写
+  模式。

@@ -47,10 +47,10 @@ describe('WARN-5 — `gbrain capture --help` reaches the detailed HELP constant'
   test('output is NOT the generic short-circuit fallback', () => {
     const { stdout } = runCli(['capture', '--help']);
     // Pre-fix output was: "Usage: gbrain capture\n\ngbrain capture - run gbrain --help ..."
-    // Post-fix HELP is much longer and includes Examples.
-    expect(stdout).toContain('Examples:');
+    // Post-fix HELP is much longer and includes examples.
+    expect(stdout).toContain('示例：');
     expect(stdout.split('\n').length).toBeGreaterThan(10);
-    expect(stdout).not.toMatch(/^Usage: gbrain capture\s*$/m);
+    expect(stdout).not.toMatch(/^用法：gbrain capture\s*$/m);
   });
 
   test('-h short flag also works', () => {
@@ -70,11 +70,11 @@ describe('WARN-6 — main `gbrain --help` lists capture/brainstorm/lsd', () => {
     expect(stdout).toMatch(/^\s*lsd\s/m);
   });
 
-  test('BRAIN section heading is present and groups the three commands', () => {
+  test('大脑 section heading is present and groups the three commands', () => {
     const { stdout } = runCli(['--help']);
-    expect(stdout).toContain('BRAIN');
+    expect(stdout).toContain('大脑');
     // The 3 commands should appear AFTER the BRAIN heading in textual order.
-    const brainIdx = stdout.indexOf('BRAIN');
+    const brainIdx = stdout.indexOf('大脑');
     expect(brainIdx).toBeGreaterThan(-1);
     expect(stdout.indexOf('capture', brainIdx)).toBeGreaterThan(brainIdx);
     expect(stdout.indexOf('brainstorm', brainIdx)).toBeGreaterThan(brainIdx);

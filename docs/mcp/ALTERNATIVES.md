@@ -1,67 +1,57 @@
-# Remote MCP Deployment Options
+# 远程 MCP 部署选项
 
-GBrain's MCP server runs via `gbrain serve` (stdio transport). To make it
-accessible from other devices and AI clients, run `gbrain serve --http`
-(built-in HTTP transport with bearer auth, Postgres-only ... see
-[DEPLOY.md](DEPLOY.md)) behind a public tunnel. Here are your tunnel options.
+GBrain 的 MCP 服务器通过 `gbrain serve`（stdio 传输）运行。若要从其他设备和 AI 客户端访问它，可以在公共隧道后面运行 `gbrain serve --http`（内置 HTTP 传输，支持 Bearer 认证，仅支持 Postgres……详见 [DEPLOY.md](DEPLOY.md)）。以下是可用的隧道选项。
 
-## ngrok (recommended)
+## ngrok（推荐）
 
-[ngrok](https://ngrok.com) provides instant public tunnels. The Hobby tier
-($8/mo) gives you a fixed domain that never changes.
+[ngrok](https://ngrok.com) 提供即时公共隧道。Hobby 套餐（$8/月）为你提供永久固定的域名，不会变更。
 
 ```bash
-# 1. Install ngrok
+# 1. 安装 ngrok
 brew install ngrok
 
-# 2. Start the built-in HTTP transport
+# 2. 启动内置 HTTP 传输
 gbrain serve --http --port 8787
-# See docs/mcp/DEPLOY.md for token setup
+# 详见 docs/mcp/DEPLOY.md 了解 token 设置
 
-# 3. Expose via ngrok
+# 3. 通过 ngrok 暴露服务
 ngrok http 8787 --url your-brain.ngrok.app
 ```
 
-See the [ngrok-tunnel recipe](../../recipes/ngrok-tunnel.md) for full setup
-including auth token configuration and fixed domain setup.
+查看 [ngrok-tunnel 配方](../../recipes/ngrok-tunnel.md) 获取完整设置指南，包括认证 token 配置和固定域名设置。
 
 ## Tailscale Funnel
 
-[Tailscale Funnel](https://tailscale.com/kb/1223/tailscale-funnel) gives you
-a permanent public HTTPS URL with automatic TLS. Free tier available. Best for
-private networks where you control both endpoints.
+[Tailscale Funnel](https://tailscale.com/kb/1223/tailscale-funnel) 为你提供永久公共 HTTPS URL，并自动配置 TLS。提供免费套餐。最适合你同时控制两端的私有网络。
 
 ```bash
-# 1. Install Tailscale
+# 1. 安装 Tailscale
 brew install tailscale
 
-# 2. Expose your MCP server
+# 2. 暴露你的 MCP 服务器
 tailscale funnel 8787
-# Your brain is now at https://your-machine.ts.net
+# 你的大脑现在位于 https://your-machine.ts.net
 ```
 
-## Fly.io / Railway (always-on)
+## Fly.io / Railway（始终在线）
 
-For production deployments that need to run 24/7 without your machine:
+对于需要 7×24 小时运行而不依赖你本地机器的生产环境部署：
 
-- **Fly.io:** $5-10/mo, global edge, `fly deploy`
-- **Railway:** $5/mo, git push deploy
+- **Fly.io：** $5-10/月，全球边缘节点，`fly deploy` 部署
+- **Railway：** $5/月，git push 部署
 
-Both run Bun natively. No bundling, no Deno, no cold start, no timeout limits.
+两者都原生支持 Bun。无需打包，无需 Deno，无冷启动，无超时限制。
 
-## Comparison
+## 对比
 
 | | ngrok | Tailscale | Fly.io/Railway |
 |--|---|---|---|
-| Cost | $8/mo (Hobby) | Free | $5-10/mo |
-| Fixed URL | Yes (Hobby) | Yes | Yes |
-| Works when laptop is off | No | No | Yes |
-| Cold start | None | None | None |
-| Timeout limits | None | None | None |
-| All 30 operations | Yes | Yes | Yes |
-| Setup time | 5 min | 10 min | 15 min |
+| 费用 | $8/月（Hobby） | 免费 | $5-10/月 |
+| 固定 URL | 是（Hobby） | 是 | 是 |
+| 笔记本关机后可用 | 否 | 否 | 是 |
+| 冷启动 | 无 | 无 | 无 |
+| 超时限制 | 无 | 无 | 无 |
+| 全部 30 个操作 | 是 | 是 | 是 |
+| 设置时间 | 5 分钟 | 10 分钟 | 15 分钟 |
 
-**Note:** `gbrain serve --http` is the built-in HTTP transport (v0.22.7+). Bearer auth
-against the `access_tokens` table, default-deny CORS, two-bucket rate limit, body cap,
-per-request audit log. Postgres-only by design (PGLite is local-only). See
-[DEPLOY.md](DEPLOY.md) and [SECURITY.md](../../SECURITY.md) for env vars and tunables.
+**注意：** `gbrain serve --http` 是内置 HTTP 传输（v0.22.7+）。通过对 `access_tokens` 表进行 Bearer 认证，默认拒绝 CORS，双桶限流，请求体大小限制，逐请求审计日志。设计上仅支持 Postgres（PGLite 仅限本地）。详见 [DEPLOY.md](DEPLOY.md) 和 [SECURITY.md](../../SECURITY.md) 了解环境变量和可调参数。

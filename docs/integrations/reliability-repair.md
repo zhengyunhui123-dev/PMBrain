@@ -1,66 +1,66 @@
-# Reliability repair (v0.12.2)
+# 可靠性修复（v0.12.2）
 
-If you ran v0.12.0 on real Postgres or Supabase, two bugs may have corrupted
-data already in your brain. v0.12.1 fixed the code going forward.
-v0.12.2 adds detection in `gbrain doctor` and a standalone `gbrain repair-jsonb`
-command for the mechanically fixable class. PGLite users are not affected.
+如果你在真正的 Postgres 或 Supabase 上运行 v0.12.0，两个 bug 可能已经损坏了你的 brain 中的数据。v0.12.1 修复了后续代码。
+v0.12.2 在 `gbrain doctor` 中添加了检测，并为机械可修复的类添加了独立的 `gbrain repair-jsonb` 命令。PGLite 用户不受影响。
 
-## What got corrupted
+## 什么被损坏了
 
-**JSONB double-encode.** Four write sites used
-`${JSON.stringify(x)}::jsonb` with postgres.js, which stored a JSONB
-*string literal* instead of an object. `frontmatter ->> 'key'` returns NULL;
-GIN indexes are ineffective. Affected: `pages.frontmatter`,
-`raw_data.data`, `ingest_log.pages_updated`, `files.metadata`.
+**JSONB 双重编码。** 四个写入站点使用
+`${JSON.stringify(x)}::jsonb` 和 postgres.js，它存储了 JSONB
+*字符串字面量*而不是对象。`frontmatter ->> 'key'` 返回 NULL；
+GIN 索引无效。受影响：`pages.frontmatter`、
+`raw_data.data`、`ingest_log.pages_updated`、`files.metadata`。
 
-**Markdown body truncation.** `splitBody()` treated `---` horizontal rules
-as a body/timeline delimiter, dropping everything after the first rule.
-Wiki-style pages with multiple `##`/`###` sections lost the bulk of their
-content at import time.
+**Markdown 正文截断。** `splitBody()` 将 `---` 水平规则
+视为正文/时间线分隔符，丢弃第一个规则后的所有内容。
+带有多个 `##`/`###` 部分的 Wiki 风格页面在导入时丢失了大部分
+内容。
 
-## Detect
+## 检测
 
 ```
 gbrain doctor
 ```
 
-Reports two new checks:
+报告两个新检查：
 
-- `jsonb_integrity` — counts double-encoded rows per table and points you
-  at `gbrain repair-jsonb`.
-- `markdown_body_completeness` — heuristic for pages whose `compiled_truth`
-  is suspiciously short compared to `raw_data.data ->> 'content'`.
+- `jsonb_integrity` — 计算每个表的双重编码行数并指向你
+  在 `gbrain repair-jsonb`。
+- `markdown_body_completeness` — 启发式，页面的 `compiled_truth`
+  与 `raw_data.data ->> 'content'` 相比 suspiciously 短。
 
-## Repair
+## 修复
 
-For JSONB (mechanically fixable):
+对于 JSONB（机械可修复）：
 
 ```
 gbrain repair-jsonb
 ```
 
-Runs `UPDATE <table> SET <col> = (<col>#>>'{}')::jsonb WHERE jsonb_typeof(<col>) = 'string'`
-across every affected column. Idempotent. Second run reports 0 rows. Use
-`--dry-run` to preview, `--json` for structured output. The `v0_12_2`
-migration runs this automatically on `gbrain upgrade`.
+运行 `UPDATE <table> SET <col> = (<col>#>>'{}')::jsonb WHERE jsonb_typeof(<col>) = 'string'`
+跨越每个受影响的列。幂等。第二次运行报告 0 行。使用
+`--dry-run` 预览，`--json` 用于结构化输出。`v0_12_2`
+迁移在 `gbrain upgrade` 时自动运行此。
 
-For truncated markdown bodies (source-dependent):
+对于截断的 markdown 正文（取决于源）：
 
 ```
 gbrain sync --force
-# or per-page
+# 或每页
 gbrain import <slug> --force
 ```
 
-v0.12.2 cannot recover content that was already lost if you no longer have
-the source markdown file. `gbrain doctor` tells you which pages look short;
-you decide whether to re-import from source or accept the truncation.
+如果你不再有源 markdown 文件，v0.12.2 无法恢复已经丢失的内容。`gbrain doctor` 告诉你哪些页面看起来很短；
+你决定是否从源重新导入或接受截断。
 
-## Verify
+## 验证
 
 ```
 gbrain doctor
 ```
 
-All four `jsonb_integrity` rows should read zero. `markdown_body_completeness`
-should match your expectations for the corpus.
+所有四个 `jsonb_integrity` 行应读取零。`markdown_body_completeness`
+应与你对语料库的期望相匹配。
+
+---
+*是 [GBrain 文档](../../README.md) 的一部分。*

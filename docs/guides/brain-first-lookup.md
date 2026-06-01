@@ -1,85 +1,69 @@
-# Brain-First Lookup Protocol
+# Brain-First 查找协议
 
-## Goal
+## 目标
 
-Check the brain before calling ANY external API. The brain almost always has
-something. External APIs fill gaps, they don't start from scratch.
+在调用任何外部 API 之前检查 brain。Brain 几乎总是有一些东西。外部 API 填补空白，它们不是从零开始的。
 
-## What the User Gets
+## 用户获得什么
 
-Without this: the agent calls Brave Search for someone you've had 12 meetings with.
-You get a LinkedIn summary instead of your relationship history.
+没有它：agent 为你与之会面 12 次的人调用 Brave Search。你得到 LinkedIn 摘要，而不是你的关系历史。
 
-With this: the agent pulls your compiled truth, recent timeline entries, and
-shared context before doing anything else. External APIs only fill gaps.
+有了它：agent 在执行任何其他操作之前提取你的编译真相、最近时间线条目和共享上下文。外部 API 只填补空白。
 
-## Implementation
+## 实现
 
 ```
 lookup(name_or_topic):
-  // STEP 1: Keyword search (fast, works day one, no embeddings needed)
+  // 步骤 1：关键词搜索（快速，第一天就有效，不需要嵌入）
   results = gbrain search "{name_or_topic}"
   if results.length > 0:
     page = gbrain get {results[0].slug}
-    return page  // done, brain had it
+    return page  // 完成，brain 有它
 
-  // STEP 2: Hybrid search (needs embeddings, finds semantic matches)
-  results = gbrain query "what do we know about {name_or_topic}"
+  // 步骤 2：混合搜索（需要嵌入，找到语义匹配）
+  results = gbrain query "我们对 {name_or_topic} 了解什么"
   if results.length > 0:
     page = gbrain get {results[0].slug}
     return page
 
-  // STEP 3: Direct slug (if you know or can guess the slug)
+  // 步骤 3：直接 slug（如果你知道或可以猜测 slug）
   page = gbrain get "people/{slugify(name_or_topic)}"
   if page: return page
 
-  // STEP 4: External API (FALLBACK ONLY)
-  // Only reach here if brain has nothing
+  // 步骤 4：外部 API（仅后备）
+  // 只有到达这里，brain 才没有任何东西
   return external_search(name_or_topic)
 ```
 
-**This is mandatory.** An agent that calls Brave Search before checking the brain
-is wasting money and giving worse answers.
+**这是强制性的。** 在检查 brain 之前调用 Brave Search 的 agent 是在浪费金钱并提供更差的答案。
 
-## Why Brain First
+## 为什么 Brain First
 
-The brain has context no external API can provide:
-- Relationship history (how you know them, what you discussed)
-- Your own assessments (what you think of them, not their LinkedIn bio)
-- Meeting transcripts (what was said, what was decided)
-- Cross-references (who they know, what companies they're connected to)
-- Timeline (what changed recently, what's trending)
+Brain 拥有外部 API 无法提供的上下文：
+- 关系历史（你如何认识他们，你们讨论了什么）
+- 你自己的评估（你对他们的看法，而不是他们的 LinkedIn 简介）
+- 会议转录（说了什么，决定了什么）
+- 交叉引用（他们认识谁，他们连接到什么公司）
+- 时间线（最近发生了什么变化，什么正在趋势）
 
-A LinkedIn scrape gives you their job title. The brain gives you: "co-founded
-Brex, you had coffee with him 3 times, last discussed the payments infrastructure
-thesis, he's interested in your take on AI agents."
+LinkedIn 抓取给你他们的工作标题。Brain 给你："共同创立了 Brex，你和他一起喝过 3 次咖啡，上次讨论了支付基础设施论文，他对你对 AI agents 的看法感兴趣。"
 
-## Tricky Spots
+## 棘手的地方
 
-1. **Try keyword first, then hybrid.** Keyword search works without embeddings
-   (day one). Hybrid search needs embeddings but finds semantic matches. Try
-   both in sequence.
+1. **先尝试关键词，然后尝试混合。** 关键词搜索在没有嵌入的情况下工作（第一天）。混合搜索需要嵌入，但找到语义匹配。按顺序尝试两者。
 
-2. **Fuzzy slug matching.** `gbrain get` supports fuzzy matching. If the exact
-   slug doesn't exist, it suggests alternatives. Use this for name variants
-   ("Pedro" → "pedro-franceschi").
+2. **模糊 slug 匹配。** `gbrain get` 支持模糊匹配。如果确切的 slug 不存在，它会建议替代方案。将其用于名称变体（"Pedro" → "pedro-franceschi"）。
 
-3. **Don't skip for "simple" questions.** Even "what's Acme Corp's address?"
-   should check the brain first. The brain might have it, and the lookup adds
-   no latency (< 100ms for keyword search).
+3. **不要为"简单"问题跳过。** 即使 "Acme Corp 的地址是什么？" 也应该首先检查 brain。Brain 可能有它，查找不会增加延迟（关键词搜索 < 100ms）。
 
-4. **Load compiled truth + recent timeline.** The compiled truth gives you the
-   state of play in 30 seconds. The timeline gives you what changed recently.
-   Both together = full context.
+4. **加载编译的真相 + 最近时间线。** 编译的真相让你在 30 秒内了解现状。时间线让你了解最近发生了什么变化。两者一起 = 完整上下文。
 
-## How to Verify
+## 如何验证
 
-1. Ask about someone in the brain. Verify the agent searched the brain FIRST
-   (check tool call order in the response).
-2. Ask about someone NOT in the brain. Verify the agent searched the brain,
-   found nothing, THEN fell back to external search.
-3. Ask the same question twice. Second time should be instant (brain has it).
+1. 询问 brain 中的某人。验证 agent 首先搜索了 brain（检查响应中的工具调用顺序）。
+2. 询问不在 brain 中的某人。验证 agent 搜索了 brain，一无所获，然后回退到外部搜索。
+3. 两次询问相同的问题。第二次应该立即（brain 有它）。
 
 ---
 
-*Part of the [GBrain Skillpack](../GBRAIN_SKILLPACK.md). See also: [Brain-Agent Loop](brain-agent-loop.md), [Search Modes](search-modes.md)*
+*是 [GBrain Skillpack](../GBRAIN_SKILLPACK.md) 的一部分。另请参阅：[Brain-Agent 循环](brain-agent-loop.md)、[搜索模式](search-modes.md)*

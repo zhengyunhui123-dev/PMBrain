@@ -32,11 +32,11 @@ describe('renderSnapshot', () => {
   test('renders header + queue panel even when nothing is happening', () => {
     const out = renderSnapshot(emptySnap(), { useAnsi: false });
     expect(out).toContain('gbrain jobs watch');
-    expect(out).toContain('q to quit');
-    expect(out).toContain('Queue');
-    expect(out).toContain('waiting=0');
-    expect(out).toContain('Lease pressure (1h)');
-    expect(out).toContain('0 bounces');
+    expect(out).toContain('按 q 退出');
+    expect(out).toContain('队列');
+    expect(out).toContain('等待=0');
+    expect(out).toContain('租约压力（1 小时）');
+    expect(out).toContain('0 次退避');
   });
 
   test('useAnsi=false strips color escapes (CI log safety)', () => {
@@ -69,7 +69,7 @@ describe('renderSnapshot', () => {
       }),
       { useAnsi: false },
     );
-    expect(out).toContain('By type (24h)');
+    expect(out).toContain('按类型统计（24 小时）');
     expect(out).toContain('subagent');
     expect(out).toContain('50');
     expect(out).toContain('shell');
@@ -89,7 +89,7 @@ describe('renderSnapshot', () => {
       }),
       { useAnsi: false },
     );
-    const errIdx = out.indexOf('Top errors');
+    const errIdx = out.indexOf('主要错误');
     const rest = out.slice(errIdx);
     expect(rest).toContain('rate_lease_full');
     expect(rest).toContain('http_5xx');
@@ -97,14 +97,14 @@ describe('renderSnapshot', () => {
     // Quick scan: the panel should have only 5 entries between the header
     // and the next blank line.
     const lines = rest.split('\n');
-    const headerIdx = lines.findIndex(l => l.includes('Top errors'));
+    const headerIdx = lines.findIndex(l => l.includes('主要错误'));
     const blankIdx = lines.findIndex((l, i) => i > headerIdx && l.trim() === '');
     expect(blankIdx - headerIdx - 1).toBe(5); // 5 entry rows between header and blank
   });
 
   test('budget panel renders when owners present; suppressed when empty', () => {
     const empty = renderSnapshot(emptySnap(), { useAnsi: false });
-    expect(empty).not.toContain('Budget owners');
+    expect(empty).not.toContain('预算所有者');
 
     const withBudget = renderSnapshot(
       emptySnap({
@@ -114,8 +114,8 @@ describe('renderSnapshot', () => {
       }),
       { useAnsi: false },
     );
-    expect(withBudget).toContain('Budget owners');
-    expect(withBudget).toContain('owner=42');
+    expect(withBudget).toContain('预算所有者');
+    expect(withBudget).toContain('所有者=42');
     expect(withBudget).toContain('$2.80'); // remaining (280¢)
     expect(withBudget).toContain('$1.20'); // spent  (120¢)
   });

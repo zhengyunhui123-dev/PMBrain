@@ -1,27 +1,27 @@
-# GBrain v0: Postgres-Native Personal Knowledge Brain
+# GBrain v0：原生 Postgres 个人知识 Brain
 
-> **Historical design doc.** This is the original v0 spec from before PGLite landed. Several
-> forward-looking sections — most notably the SQLite engine plan — were superseded by
-> PGLite (embedded Postgres via WASM), which uses the same SQL dialect as Postgres and
-> eliminates the need for a separate FTS5/sqlite-vss translation layer. Kept here for
-> historical context; see [`ENGINES.md`](ENGINES.md) for the current engine architecture and
-> the [`CHANGELOG.md`](../CHANGELOG.md) for the actual implementation history.
+> **历史设计文档。** 这是来自 PGLite 落地之前的原始 v0 规范。几个
+> 前瞻性部分 — 最值得注意的是 SQLite 引擎计划 — 被
+> PGLite（通过 WASM 嵌入的 Postgres 17）取代，它使用与 Postgres 相同的 SQL 方言并
+> 消除对单独的 FTS5/sqlite-vss 翻译层的需求。此处保留用于
+> 历史上下文；有关当前引擎架构，请参见 [`ENGINES.md`](ENGINES.md) 以及
+> 实际实现历史的 [`CHANGELOG.md`](../CHANGELOG.md)。
 
-## What this is
+## 这是什么
 
-GBrain is a compiled intelligence system. Not a note-taking app. Not "chat with your notes."
+GBrain 是一个编译智能系统。不是笔记应用。不是"与你的笔记聊天。"
 
-Every page is an intelligence assessment. Above the line: compiled truth (your current best understanding, rewritten when evidence changes). Below the line: timeline (append-only evidence trail). AI agents maintain the brain. MCP clients query it. The intelligence lives in fat markdown skills, not application code.
+每个页面都是情报评估。线上方：编译的真相（你当前的最佳理解，在新证据到达时重写）。线下方：时间线（仅追加证据轨迹）。AI 代理维护 brain。MCP 客户端查询它。智能存在于胖 markdown 技能中，而不是应用程序代码中。
 
-The core insight: personal knowledge at scale is an intelligence problem, not a storage problem.
+核心见解：规模化的个人知识是一个智能问题，而不是存储问题。
 
-## Why it exists
+## 为什么它存在
 
-A 7,471-file / 2.3GB markdown wiki is choking git. Git doesn't scale past ~5K files for wiki-style use. The compiled truth + timeline model (Karpathy-style knowledge pages) is right, but it needs a real database underneath.
+一个 7,471 文件 / 2.3GB markdown wiki 正在窒息 git。Git 在 ~5K 文件后无法扩展以用于 wiki 风格的使用。编译的真相 + 时间线模型（Karpathy 风格的知识页面）是正确的，但它需要在下面有一个真实的数据库。
 
-There's already a production-grade RAG system (Ruby on Rails, Postgres + pgvector) with 3-tier chunking, hybrid search with RRF, multi-query expansion, and 4-layer dedup. GBrain ports these proven patterns to a standalone Bun + TypeScript tool.
+已经有一个生产级 RAG 系统（Ruby on Rails、Postgres + pgvector），具有 3 层分块、带 RRF 的混合搜索、多查询扩展和 4 层去重。GBrain 将这些经过验证的模式移植到独立的 Bun + TypeScript 工具。
 
-## The knowledge model
+## 知识模型
 
 ```
 +--------------------------------------------------+
@@ -51,7 +51,7 @@ There's already a production-grade RAG system (Ruby on Rails, Postgres + pgvecto
    compiled truth)       for timeline)
           |                    |
           v                    v
-     [Embeddings: text-embedding-3-large, 1536 dims]
+  [Embeddings: text-embedding-3-large, 1536 dims]
           |
           v
   [HNSW index + tsvector + pg_trgm]
@@ -60,35 +60,35 @@ There's already a production-grade RAG system (Ruby on Rails, Postgres + pgvecto
   [Hybrid search: vector + keyword + RRF fusion]
 ```
 
-## Architecture decisions
+## 架构决策
 
-### v0 stack
+### v0 技术栈
 
-| Layer | Choice | Why |
+| 层 | 选择 | 为什么 |
 |-------|--------|-----|
-| Database | Postgres + pgvector | Proven RAG patterns, production-tested. World-class hybrid search. |
-| Hosting | Supabase Pro ($25/mo) | Zero-ops. Managed Postgres, pgvector, connection pooling. 8GB storage. |
-| Runtime | Bun + TypeScript | Consistent with GStack ecosystem. Fast. Compiles to single binary. |
-| Embeddings | OpenAI text-embedding-3-large | 1536 dims (reduced from 3072 via dimensions API). ~$0.13/1M tokens. |
-| LLM (chunking/expansion) | Claude Haiku | Cheapest model for topic boundary detection and query expansion. |
-| Background jobs | Trigger.dev | Serverless. Embed backfill, stale detection, orphan audit, tag consistency. |
-| Distribution | npm package + compiled binary + MCP server | Library for OpenClaw, CLI for humans, MCP for agents. |
+| 数据库 | Postgres + pgvector | 经过验证的 RAG 模式，生产测试。世界级混合搜索。 |
+| 托管 | Supabase Pro（$25/月） | 零运维。托管 Postgres，pgvector，连接池。8GB 存储。 |
+| 运行时 | Bun + TypeScript | 与 GStack 生态系统一致。快速。编译为单个二进制文件。 |
+| 嵌入 | OpenAI text-embedding-3-large | 1536 维（通过 dimensions API 从 3072 减少）。约 $0.13/1M 令牌。 |
+| LLM（分块/扩展） | Claude Haiku | 用于主题边界检测和查询扩展的最便宜模型。 |
+| 后台作业 | Trigger.dev | 无服务器。嵌入回填、陈旧检测、孤儿审计、标签一致性。 |
+| 分发 | npm 包 + 编译二进制文件 + MCP 服务器 | 用于 OpenClaw 的库、用于人类的 CLI、用于代理的 MCP。 |
 
-### What we chose and why
+### 我们的选择以及为什么
 
-**Postgres over SQLite.** We have 3+ years of proven RAG patterns running on Postgres. tsvector for full-text search, pgvector HNSW for semantic search, pg_trgm for fuzzy slug matching. Porting these to SQLite would mean reimplementing search from scratch. SQLite is a future pluggable engine for lightweight open source users (see `docs/ENGINES.md`).
+**Postgres 优于 SQLite。** 我们有 3+ 年经过验证的 RAG 模式在 Postgres 上运行。用于全文搜索的 tsvector、用于语义搜索的 pgvector HNSW、用于模糊 slug 匹配的 pg_trgm。将这些移植到 SQLite 意味着从头重新实现搜索。SQLite 是未来用于轻量级开源用户的插件式引擎（参见 `docs/ENGINES.md`）。
 
-**Supabase over self-hosted.** Zero maintenance. The brain should be infrastructure that AI agents use, not something you administer. Free tier has pgvector but only 500MB (not enough for 7K+ pages with embeddings, which need ~750MB). Pro tier at $25/mo gives 8GB. No Docker, no self-hosted Postgres in v1.
+**Supabase 优于自托管。** 零维护。Brain 应该是 AI 代理使用的基础设施，而不是你管理东西。免费层有 pgvector 但只有 500MB（对于具有嵌入的 7K+ 页面来说不够，需要约 750MB）。Pro 层 at $25/月 给出 8GB。v1 中没有 Docker、没有自托管 Postgres。
 
-**Full port over minimal viable.** The patterns are proven. The port is mechanical. Shipping the full 3-tier chunking + hybrid search + 4-layer dedup means world-class RAG from day one. "We'll add that later" means rebuilding everything later.
+**完整移植优于最低可行。** 模式是经过验证的。移植是机械性的。从第一天开始提供世界级的 RAG，带有完整的 3 层分块 + 混合搜索 + 4 层去重。"我们稍后会添加那个"意味着稍后重建一切。
 
-**Library-first distribution.** gbrain is an npm package. OpenClaw installs it as a dependency (`bun add gbrain`), imports the engine directly. Zero-overhead function calls, shared connection pool, TypeScript types. The CLI and MCP server are thin wrappers over the same engine.
+**库优先分发。** gbrain 是一个 npm 包。OpenClaw 将其作为依赖项安装（`bun add gbrain`），直接导入引擎。零开销函数调用、共享连接池、TypeScript 类型。CLI 和 MCP 服务器是同一引擎上的瘦包装器。
 
-**Trigger-based tsvector (not generated column).** To include timeline_entries content in full-text search, the tsvector needs to span multiple tables. Generated columns can't do cross-table references. A trigger on pages + timeline_entries updates the search_vector.
+**基于触发器的 tsvector（不是生成的列）。** 要在全文搜索中包含 timeline_entries 内容，tsvector 需要跨越多个表。生成的列不能做跨表引用。页面 + timeline_entries 上的触发器更新 search_vector。
 
-**Auto-embed during import.** No separate embed step. `gbrain import` chunks and embeds in one pass. Progress bar shows status. `--no-embed` flag for users who want to defer. `embedded_at` column enables `gbrain embed --stale` for backfill.
+**导入期间自动嵌入。** 没有单独的嵌入步骤。`gbrain import` 在一次传递中分块和嵌入。进度条显示状态。`--no-embed` 标志用于想要延迟的用户。`embedded_at` 列启用 `gbrain embed --stale` 以进行回填。
 
-## Distribution model
+## 分发模型
 
 ```
 +-------------------+     +-------------------+     +-------------------+
@@ -106,11 +106,11 @@ There's already a production-grade RAG system (Ruby on Rails, Postgres + pgvecto
          |                         |                         |
          +-------------------------+-------------------------+
                                    |
-                          +--------v--------+
-                          |  BrainEngine    |
-                          |  (pluggable     |
-                          |   interface)    |
-                          +-----------------+
+                            +--------v--------+
+                            |  BrainEngine    |
+                            |  (pluggable     |
+                            |   interface)    |
+                            +-----------------+
                                    |
                      +-------------+-------------+
                      |                           |
@@ -122,68 +122,68 @@ There's already a production-grade RAG system (Ruby on Rails, Postgres + pgvecto
                                          +---------------+
 ```
 
-package.json exports:
-- Library: `src/core/index.ts` (BrainEngine interface, PostgresEngine, types)
-- CLI binary: `src/cli.ts`
+package.json 导出：
+- 库：`src/core/index.ts`（BrainEngine 接口、PostgresEngine、类型）
+- CLI 二进制文件：`src/cli.ts`
 
-## First-time experience
+## 首次体验
 
-### Path 1: OpenClaw user (primary)
+### 路径 1：OpenClaw 用户（主要）
 
-OpenClaw is the AI orchestrator that uses gbrain as its knowledge backend. This is the most common install path.
+OpenClaw 是使用 gbrain 作为其知识后端的 AI 编排器。这是最常见的安装路径。
 
 ```bash
-# 1. Install gbrain as a ClawHub skill
+# 1. 将 gbrain 安装为 ClawHub 技能
 clawhub install gbrain
 
-# 2. The skill runs guided setup on first use:
-#    - Detects if Supabase CLI is available
-#    - If yes: auto-provisions a new Supabase project
-#    - If no: prompts for connection URL
-#    - Runs schema migration
-#    - Scans for markdown repos and imports user's content
-#    - Shows live entity/edge extraction animation
-#    - Brain is ready
+# 2. 技能在首次使用时运行引导式设置：
+#    - 检测 Supabase CLI 是否可用
+#    - 如果是：自动配置新的 Supabase 项目
+#    - 如果否：提示输入连接 URL
+#    - 运行模式迁移
+#    - 扫描 markdown 仓库并导入用户的内容
+#    - 显示实时实体/边缘提取动画
+#    - Brain 准备就绪
 
-# 3. From OpenClaw, brain tools are now available:
+# 3. 从 OpenClaw，brain 工具现在可用：
 #    "Search the brain for [topic from your data]"
 #    "Ingest my meeting notes from today"
 #    "How many pages are in the brain?"
 ```
 
-Behind the scenes, `clawhub install gbrain`:
-1. Installs the `gbrain` npm package
-2. Ships SKILL.md files (ingest, query, maintain, enrich, briefing, migrate)
-3. Registers brain tools with the orchestrator
-4. Runs `gbrain init --supabase` on first use (guided wizard)
+在幕后，`clawhub install gbrain`：
+1. 安装 `gbrain` npm 包
+2. 提供 SKILL.md 文件（摄取、查询、维护、丰富、简报、迁移）
+3. 向编排器注册 brain 工具
+4. 在首次使用时运行 `gbrain init --supabase`（引导式向导）
 
-### Path 2: CLI user (standalone)
+### 路径 2：CLI 用户（独立）
 
 ```bash
-# 1. Install
+# 1. 安装
 npm install -g gbrain
-# or: download binary from GitHub Releases
+# 或：从 GitHub Releases 下载二进制文件
 
-# 2. Initialize with Supabase
+# 2. 使用 Supabase 初始化
 gbrain init --supabase
-# Guided wizard:
-#   Try 1: Supabase CLI auto-provision (npx supabase)
-#   Try 2: If CLI not installed or not logged in, fallback:
+# 引导式向导：
+#   Try 1: Supabase CLI 自动配置 (npx supabase)
+#   Try 2: 如果 CLI 未安装或未登录，回退：
 #          "Enter your Supabase connection URL:"
-#   Then: runs schema migration, verifies pgvector extension
-#   Then: verifies database is ready for import
-#   Output: "Brain ready. Run: gbrain import <your-repo>"
+#   然后：运行模式迁移，验证 pgvector 扩展
+#   然后：验证数据库已准备好导入
+#   输出："Brain ready. Run: gbrain import <your-repo>"
 
-# 3. Import your data
+# 3. 导入你的数据
 gbrain import /path/to/markdown/wiki/
-# Progress bar: 7,471 files, auto-chunk, auto-embed
-# ~30s for text import, ~10-15 min for embedding
+# 进度条：7,471 个文件，自动分块，自动嵌入
+# ~30s 用于文本导入，~10-15 分钟用于嵌入
 
-# 4. Query
+# 4. 查询
 gbrain query "what does PG say about doing things that don't scale?"
 ```
 
-### Path 3: MCP user (Claude Code, Cursor)
+### 路径 3：MCP 用户（Claude Code、Cursor）
 
 ```json
 // ~/.config/claude/mcp.json
@@ -197,11 +197,11 @@ gbrain query "what does PG say about doing things that don't scale?"
 }
 ```
 
-Then in Claude Code: "Search my brain for people who know about robotics"
+然后在 Claude Code 中："Search my brain for people who know about robotics"
 
-### The init wizard in detail
+### 详细信息中的初始化向导
 
-`gbrain init --supabase` runs through these steps:
+`gbrain init --supabase` 通过这些步骤运行：
 
 ```
 Step 1: Database Setup
@@ -242,9 +242,9 @@ Step 5: First Query
   └── "Try: gbrain query 'what does PG say about doing things that don't scale?'"
 ```
 
-Every error follows the style guide: problem + cause + fix + docs link.
+每个错误都遵循样式指南：问题 + 原因 + 修复 + 文档链接。
 
-## CLI commands
+## CLI 命令
 
 ```
 gbrain init [--supabase|--url <conn>]     # create brain
@@ -275,11 +275,11 @@ gbrain version                             # version info
 gbrain config [get|set] <key> [value]     # brain config
 ```
 
-CLI and MCP expose identical operations. Drift tests assert identical results for all operations across both interfaces.
+CLI 和 MCP 公开相同的操作。Drift 测试断言跨两个接口的所有操作的相同结果。
 
-## Database schema
+## 数据库模式
 
-9 tables in Postgres + pgvector:
+Postgres + pgvector 中的 9 个表：
 
 ```
 +------------------+     +-------------------+     +------------------+
@@ -300,24 +300,23 @@ CLI and MCP expose identical operations. Drift tests assert identical results fo
        +-----> +--------------------+               | tag              |
        |       | timeline_entries   |               +------------------+
        |       |--------------------|
-       |       | id (PK)            |               +------------------+
-       |       | page_id (FK)       |               |   page_versions  |
-       |       | date               |               |------------------|
-       |       | source             |               | id (PK)          |
-       |       | summary            |               | page_id (FK)     |
-       |       | detail (markdown)  |               | compiled_truth   |
-       |       +--------------------+               | frontmatter      |
-       |                                            | snapshot_at      |
-       +-----> +--------------------+               +------------------+
-       |       |    raw_data        |
-       |       |--------------------|               +------------------+
-       |       | id (PK)            |               |    config        |
-       |       | page_id (FK)       |               |------------------|
-       |       | source             |               | key (PK)         |
-       |       | data (JSONB)       |               | value            |
-       |       +--------------------+               +------------------+
+       |       | id (PK)            |
+       |       | page_id (FK)       |
+       |       | date               |
+       |       | source             |
+       |       | summary            |
+       |       | detail (markdown)  |
+       |       +--------------------+
        |
-       +-----> +--------------------+
+       +-----> +--------------------+               +------------------+
+       |       |   raw_data        |               |   page_versions  |
+       |       |--------------------|               |------------------|
+       |       | id (PK)            |               | id (PK)          |
+       |       | page_id (FK)       |               | page_id (FK)     |
+       |       | source             |               | compiled_truth   |
+       |       | data (JSONB)       |               | frontmatter      |
+       |       +--------------------+               | snapshot_at      |
+       +-----> +--------------------+               +------------------+
                |   ingest_log       |
                |--------------------|
                | id (PK)            |
@@ -328,19 +327,19 @@ CLI and MCP expose identical operations. Drift tests assert identical results fo
                +--------------------+
 ```
 
-Indexes:
-- `pages.slug`: UNIQUE constraint (implicit B-tree)
-- `pages.type`: B-tree
-- `pages.search_vector`: GIN (full-text search)
-- `pages.frontmatter`: GIN (JSONB queries)
-- `pages.title`: GIN with pg_trgm (fuzzy slug resolution)
-- `content_chunks.embedding`: HNSW with cosine ops (vector search)
-- `content_chunks.page_id`: B-tree
-- `links.from_page_id`, `links.to_page_id`: B-tree
-- `tags.tag`, `tags.page_id`: B-tree
-- `timeline_entries.page_id`, `timeline_entries.date`: B-tree
+索引：
+- `pages.slug`：UNIQUE 约束（隐式 B 树）
+- `pages.type`：B 树
+- `pages.search_vector`：GIN（全文搜索）
+- `pages.frontmatter`：GIN（JSONB 查询）
+- `pages.title`：带有 pg_trgm 的 GIN（模糊 slug 解析）
+- `content_chunks.embedding`：带有余弦运算的 HNSW（向量搜索）
+- `content_chunks.page_id`：B 树
+- `links.from_page_id`、`links.to_page_id`：B 树
+- `tags.tag`、`tags.page_id`：B 树
+- `timeline_entries.page_id`、`timeline_entries.date`：B 树
 
-## Search architecture
+## 搜索架构
 
 ```
 Query: "when should you ignore conventional wisdom?"
@@ -358,18 +357,6 @@ Query: "when should you ignore conventional wisdom?"
      |   |   |
      +---+---+
          |
-    +----+----+
-    |         |
-    v         v
-+--------+ +--------+
-| Vector | | Keyword|
-| Search | | Search |
-| (HNSW  | | (tsv + |
-| cosine)| | ts_rank)|
-+--------+ +--------+
-    |         |
-    +----+----+
-         |
          v
 +------------------+
 | RRF Fusion       |
@@ -379,7 +366,7 @@ Query: "when should you ignore conventional wisdom?"
          |
          v
 +------------------+
-| 4-Layer Dedup    |
+| 4-Layer Dedupe |
 | 1. By source     |
 | 2. Cosine > 0.85 |
 | 3. Type cap 60%  |
@@ -398,90 +385,91 @@ Query: "when should you ignore conventional wisdom?"
      [Results]
 ```
 
-## Chunking strategies
+## 分块策略
 
-| Strategy | Input | Algorithm | When to use |
+| 策略 | 输入 | 算法 | 何时使用 |
 |----------|-------|-----------|-------------|
-| Recursive | Any text | 5-level delimiter hierarchy (paragraphs > lines > sentences > clauses > whitespace). 300-word chunks, 50-word overlap. | Timeline (predictable format), bulk import |
-| Semantic | Quality text | Embed each sentence, Savitzky-Golay filter for topic boundaries, cosine similarity minima. Falls back to recursive. | Compiled truth (intelligence assessments) |
-| LLM-guided | High-value text | Pre-split to 128-word candidates, Claude Haiku finds topic shifts in sliding windows. 3 retries per window. | Explicitly requested via `--chunker llm` |
+| 递归 | 任何文本 | 5 级分隔符层次结构（段落 > 行 > 句子 > 子句 > 空白）。300 字块，50 字重叠。 | 时间线（可预测的格式）、批量导入 |
+| 语义 | 质量文本 | 嵌入每个句子，Savitzky-Golay 过滤器用于主题边界，余弦相似度最小值。回退到递归。 | 编译的真相（智能评估） |
+| LLM 引导 | 高价值文本 | 预分割为 128 字候选，Claude Haiku 在滑动窗口中查找主题偏移。每个窗口 3 次重试。 | 通过 `--chunker llm` 显式请求 |
 
-Dispatch: compiled_truth gets semantic chunker. Timeline gets recursive chunker. Override with `--chunker` flag or `chunk_strategy` in frontmatter.
+调度：编译的真相获取语义分块器。时间线获取递归分块器。用 `--chunker` 标志或前置事务中的 `chunk_strategy` 覆盖。
 
-## Skills (fat markdown, no code)
+## 技能（胖 markdown，无代码）
 
-Each skill is a markdown file that AI agents (Claude Code, OpenClaw) read and follow. The skill contains the workflow, heuristics, and quality rules. No skill logic is in the binary.
+每个技能都是 AI 代理（Claude Code、OpenClaw）读取并遵循的 markdown 文件。技能包含工作流、启发式和Quality 规则。二进制文件中没有技能逻辑。
 
-| Skill | What it does |
+| 技能 | 它做什么 |
 |-------|-------------|
-| `skills/ingest/SKILL.md` | Ingest meetings, docs, articles. Update compiled truth, append timeline, create links. |
-| `skills/query/SKILL.md` | 3-layer search (FTS + vector + structured). Synthesize answer with citations. |
-| `skills/maintain/SKILL.md` | Find contradictions, stale info, orphans, dead links, tag inconsistency. |
-| `skills/enrich/SKILL.md` | Enrich from external APIs (Crustdata, Happenstance, Exa). Store raw data, distill to compiled truth. |
-| `skills/briefing/SKILL.md` | Daily briefing: meetings with context, active deals, open threads. |
-| `skills/migrate/SKILL.md` | Universal migration from Obsidian, Notion, Logseq, plain markdown, CSV, JSON, Roam. |
+| `skills/ingest/SKILL.md` | 摄取会议、文档、文章。更新编译的真相、追加时间线、创建链接。 |
+| `skills/query/SKILL.md` | 3 层搜索（FTS + 向量 + 结构化）。用引用综合答案。 |
+| `skills/maintain/SKILL.md` | 查找矛盾、陈旧信息、孤儿、死链接、标签不一致。 |
+| `skills/enrich/SKILL.md` | 从外部 API 丰富（Crustdata、Happenstance、Exa）。存储原始数据，提炼为编译的真相。 |
+| `skills/briefing/SKILL.md` | 每日简报：带有上下文的会议、活跃交易、开放线程。 |
+| `skills/migrate/SKILL.md` | 从 Obsidian、Notion、Logseq、纯 markdown、CSV、JSON、Roam 通用迁移。 |
 
-## CEO scope expansions (accepted for v0)
+## CEO 范围扩展（为 v0 接受）
 
-1. **CLI/MCP parity with drift tests.** Both interfaces are thin wrappers over the engine. Tests assert identical output.
-2. **Smart slug resolution.** Fuzzy matching via pg_trgm for reads. Writes require exact slugs. `gbrain get "dont scale"` resolves to `concepts/do-things-that-dont-scale`.
-3. **Brain health dashboard.** `gbrain health` shows page count, embed coverage, stale pages, orphans, dead links.
-4. **Normalized timeline.** `timeline_entries` table only (no TEXT column). `detail` field supports markdown.
-5. **Page version control.** `page_versions` table stores full snapshots (compiled_truth + frontmatter + links + tags). `gbrain history`, `gbrain diff`, `gbrain revert` commands. Revert re-chunks and re-embeds.
-6. **Typed links + graph traversal.** `link_type` column (knows, invested_in, works_at, etc.). `gbrain graph` uses recursive CTE with max depth (default 5, configurable via `--depth`).
-7. **Trigger.dev data cleanup jobs.** Daily embed backfill, weekly stale detection + orphan audit + tag consistency.
-8. **Stale alert annotations.** Search results flag pages where compiled_truth is older than latest timeline entry.
-9. **Timeline merge on ingest.** Same event created across all mentioned entities.
+1. **CLI/MCP 奇偶校验与漂移测试。** 两个接口都是引擎上的瘦包装器。测试断言相同的输出。
+2. **智能 slug 解析。** 用于读取的通过 pg_trgm 的模糊匹配。写入需要精确 slug。`gbrain get "dont scale"` 解析为 `concepts/do-things-that-dont-scale`。
+3. **Brain 健康仪表板。** `gbrain health` 显示页面计数、嵌入覆盖率、陈旧页面、孤儿、死链接。
+4. **规范化时间线。** 仅 `timeline_entries` 表（无 TEXT 列）。`detail` 字段支持 markdown。
+5. **页面版本控制。** `page_versions` 表存储完整快照（compiled_truth + frontmatter + 链接）。`gbrain history`、`gbrain diff`、`gbrain revert` 命令。还原重新分块并重新嵌入。
+6. **类型化链接 + 图遍历。** `link_type` 列（knows、invested_in、works_at 等）。`gbrain graph` 使用带有最大深度（默认 5，可通过 `--depth` 配置）的递归 CTE。
+7. **Trigger.dev 数据清理作业。** 每日嵌入回填、每周陈旧检测 + 孤儿审计 + 标签一致性。
+8. **陈旧警报注释。** 搜索结果标记编译的真相比最新时间线条目更陈旧的页面。
+9. **摄取时时间线合并。** 跨所有提及的实体的相同事件创建。
 
-## Security model (v0)
+## 安全模型（v0）
 
-Single-user, local-only:
-- Supabase service role key in `~/.gbrain/config.json` (0600 permissions)
-- MCP stdio transport is inherently local (client spawns `gbrain serve` as subprocess)
-- No multi-user, no RLS, no OAuth in v0
-- Multi-user path (future): Supabase RLS + per-user API keys
+单用户，仅本地：
 
-## Upgrade mechanism
+- Supabase 服务角色密钥在 `~/.gbrain/config.json` 中（0600 权限）
+- MCP stdio 传输本质上是本地的（客户端生成 `gbrain serve` 作为子进程）
+- v0 中没有多用户、没有 RLS、没有 OAuth
+- 多用户路径（将来）：Supabase RLS + 每用户 API 密钥
 
-`gbrain upgrade` detects the installation method and updates accordingly:
+## 升级机制
 
-| Path | How |
+`gbrain upgrade` 检测安装方法并相应地更新：
+
+| 路径 | 如何 |
 |------|-----|
-| npm | `bun update gbrain` (or npm equivalent) |
-| Compiled binary | Download new binary to temp dir, atomic rename swap, exec new process |
+| npm | `bun update gbrain`（或 npm 等效项） |
+| 编译二进制文件 | 将新二进制文件下载到临时目录，原子重命名交换，执行新进程 |
 | ClawHub | `clawhub update gbrain` |
 
-Version check: compare local version against latest GitHub release tag.
+版本检查：将本地版本与最新的 GitHub 发布标签进行比较。
 
-## Storage and cost estimates
+## 存储和成本估算
 
-### Storage (~750MB for 7,471 pages)
+### 存储（约 750MB 用于 7,471 个页面）
 
-| Component | Size |
+| 组件 | 大小 |
 |-----------|------|
-| Page text (compiled_truth + timeline) | ~150MB |
-| JSONB frontmatter | ~20MB |
-| tsvector + GIN indexes | ~50MB |
-| Content chunks (~22K, text) | ~80MB |
-| Embeddings (22K x 1536 floats x 4 bytes) | ~134MB |
-| HNSW index overhead (~2x embeddings) | ~270MB |
-| Links, tags, timeline, raw_data, versions | ~50MB |
-| **Total** | **~750MB** |
+| 页面文本（compiled_truth + 时间线） | ~150MB |
+| JSONB 前置事务 | ~20MB |
+| tsvector + GIN 索引 | ~50MB |
+| 内容块（~22K，文本） | ~80MB |
+| 嵌入（22K x 1536 浮点数 x 4 字节） | ~134MB |
+| HNSW 索引开销（~2x 嵌入） | ~270MB |
+| 链接、标签、时间线、raw_data、版本 | ~50MB |
+| **总计** | **~750MB** |
 
-Supabase free tier (500MB) won't fit. Supabase Pro ($25/mo, 8GB) is the starting point.
+Supabase 免费层（500MB）不适合。Supabase Pro（$25/月，8GB）是起点。
 
-### Embedding cost (~$4-5 for initial import)
+### 嵌入成本（约 $4-5 用于初始导入）
 
-| Step | Cost |
+| 步骤 | 成本 |
 |------|------|
-| Semantic chunker sentence embeddings (~374K sentences) | ~$1 |
-| Chunk embeddings (~22K chunks) | ~$0.30 |
-| Query expansion (per query, ~3 embeds) | negligible |
-| **Total initial import** | **~$4-5** |
+| 语义分块器句子嵌入（~374K 句子） | ~$1 |
+| 块嵌入（~22K 块） | ~$0.30 |
+| 查询扩展（每个查询，~3 个嵌入） | 可忽略 |
+| **总初始导入** | **~$4-5** |
 
-Budget alternative: `gbrain import --chunker recursive` skips sentence-level embeddings, then `gbrain embed --rechunk --chunker semantic` upgrades later.
+预算替代方案：`gbrain import --chunker recursive` 跳过句子级嵌入，然后 `gbrain embed --rechunk --chunker semantic` 稍后升级。
 
-## Serverless operations stack
+## 无服务器操作堆栈
 
 ```
 +------------------+     +------------------+     +------------------+
@@ -497,55 +485,55 @@ Budget alternative: `gbrain import --chunker recursive` skips sentence-level emb
 +------------------+     +------------------+     +------------------+
 ```
 
-The CLI connects directly to Supabase Postgres. Trigger.dev and Vercel are for async/scheduled work. The CLI works without them.
+CLI 直接连接到 Supabase Postgres。Trigger.dev 和 Vercel 用于异步/计划工作。没有它们，CLI 也可以工作。
 
-## Verification checklist
+## 验证检查清单
 
-1. `gbrain import /data/brain/` migrates all 7,471 files losslessly
-2. `gbrain export` round-trips to semantically identical markdown
-3. `gbrain query "what does PG say about doing things that don't scale?"` returns relevant hybrid search results
-4. `gbrain serve` starts MCP server connectable by Claude Code
-5. All 3 chunkers produce correct output with test fixtures
-6. `gbrain init --supabase` works end-to-end
-7. `bun test` passes all tests
-8. `clawhub install gbrain` installs the skill and runs guided setup
-9. `bun add gbrain` + `import { PostgresEngine } from 'gbrain'` works in external project
-10. Drift tests pass: CLI and MCP produce identical results
-11. `gbrain health` outputs accurate brain health metrics
-12. Migration skill successfully imports an Obsidian vault
+1. `gbrain import /data/brain/` 无损耗地迁移所有 7,471 个文件
+2. `gbrain export` 往返到语义相同的 markdown
+3. `gbrain query "what does PG say about doing things that don't scale?"` 返回相关的混合搜索结果
+4. `gbrain serve` 启动 MCP 服务器，可由 Claude Code 连接
+5. 所有 3 个分块器都使用测试夹具产生正确的输出
+6. `gbrain init --supabase` 端到端工作
+7. `bun test` 通过所有测试
+8. `clawhub install gbrain` 安装技能并运行引导式设置
+9. `bun add gbrain` + `import { PostgresEngine } from 'gbrain'` 在外部项目中工作
+10. 漂移测试通过：CLI 和 MCP 产生相同的结果
+11. `gbrain health` 输出准确的 brain 健康指标
+12. 迁移技能成功导入 Obsidian 保险库
 
-## Future plans
+## 未来计划
 
-See `docs/ENGINES.md` for the pluggable engine architecture and future backend plans.
+有关可插拔引擎架构以及未来的后端计划，请参见 `docs/ENGINES.md`。
 
-### v1 candidates (deferred from v0)
+### v1 候选（从 v0 延期）
 
-- **`gbrain ask` natural language CLI alias.** Trivial to add. P1 TODO.
-- **Intelligence compiler.** Treat every fact as a first-class claim with source span, entity links, validity window, confidence, and contradiction status. "What changed, why, and what evidence would flip it again?" From Codex review. Builds on compiled truth model.
-- **Active skills via Trigger.dev.** Application-specific briefings, meeting prep. Belongs in OpenClaw, not generic brain infra.
-- **Multi-user access.** Supabase RLS + per-user API keys. v0 is single-user.
-- **SQLite engine.** Superseded by PGLite (embedded Postgres 17 via WASM) before v1. See [`ENGINES.md`](ENGINES.md) for the current engine architecture.
-- **Docker Compose for self-hosted Postgres.** Community PRs welcome.
-- **Web UI.** Optional Vercel-hosted dashboard for browsing brain pages.
+- **`gbrain ask` 自然语言 CLI 别名。** 添加起来微不足道。P1 TODO。
+- **智能编译器。** 将每个事实视为具有来源跨度、实体链接、有效时间窗口、置信度和矛盾状态的一级声明。"什么改变了，为什么，以及什么证据会再次翻转它？" 来自 Codex 评论。建立在编译的真相模型上。
+- **通过 Trigger.dev 的活跃技能。** 特定于应用程序的简报、会议准备。属于 OpenClaw，而不是通用 brain 基础设施。
+- **多用户访问。** Supabase RLS + 每用户 API 密钥。v0 是单用户。
+- **SQLite 引擎。** 在 v1 之前被 PGLite（通过 WASM 嵌入的 Postgres 17）取代。有关当前的引擎架构，请参见 [`ENGINES.md`](ENGINES.md)。
+- **用于自托管 Postgres 的 Docker Compose。** 社区 PR 受欢迎。
+- **Web UI。** 可选的 Vercel 托管仪表板，用于浏览 brain 页面。
 
-### Interface abstraction principle
+### 接口抽象原则
 
-All operations go through `BrainEngine`. The engine interface is the contract. Postgres-specific features (tsvector, pgvector HNSW, pg_trgm, recursive CTEs) are implementation details inside `PostgresEngine`. The interface exposes capabilities, not SQL.
+所有操作都通过 `BrainEngine`。引擎接口是契约。Postgres 特定的功能（tsvector、pgvector HNSW、pg_trgm、递归 CTE）是 `PostgresEngine` 内部的实现细节。接口公开功能，而不是 SQL。
 
-This means:
-- A SQLite engine can implement `searchKeyword` using FTS5 instead of tsvector
-- A SQLite engine can implement `searchVector` using sqlite-vss instead of pgvector
-- A future DuckDB engine could implement analytics-heavy workloads
-- The CLI, MCP server, and library consumers never know which engine runs underneath
+这意味着：
+- SQLite 引擎可以使用 FTS5 而不是 tsvector 实现 `searchKeyword`
+- SQLite 引擎可以使用 sqlite-vss 而不是 pgvector 实现 `searchVector`
+- 未来的 DuckDB 引擎可以实现分析繁重的工作负载
+- CLI、MCP 服务器和库消费者永远不会知道下面运行哪个引擎
 
-See [`ENGINES.md`](ENGINES.md) for the full interface spec. (The original SQLite engine plan was superseded by PGLite; the contract-first `BrainEngine` interface made that swap clean.)
+请参见 [`ENGINES.md`](ENGINES.md) 以获取完整的接口规范。（原始的 SQLite 引擎计划被 PGLite 取代；契约优先的 `BrainEngine` 接口使该交换干净。）
 
-## Review history
+## 审查历史
 
-| Review | Runs | Status | Key findings |
+| 审查 | 运行 | 状态 | 关键发现 |
 |--------|------|--------|-------------|
-| /office-hours | 1 | APPROVED | Builder mode. Full port approach chosen. |
-| /plan-ceo-review | 1 | CLEAR | 11 proposals, 10 accepted, 1 deferred. SCOPE EXPANSION mode. |
-| /codex review | 1 | issues_found | 24 points challenged, 3 accepted (fuzzy slug, revert spec, tsvector). |
-| /plan-eng-review | 2 | CLEAR | 3 issues (upgrade paths, import guardrails, init wizard), 0 critical gaps. |
-| /plan-devex-review | 1 | CLEAR | DX score 5/10 to 7/10. TTHW 25min to 90s. Champion tier. |
+| /office-hours | 1 | 已批准 | 构建器模式。选择完整移植方法。 |
+| /plan-ceo-review | 1 | 已清除 | 11 个提案，10 个接受，1 个延期。SCOPE EXPANSION 模式。 |
+| /codex review | 1 | 已发现 issues | 24 个点受到挑战，3 个接受（模糊 slug、还原规范、tsvector）。 |
+| /plan-eng-review | 2 | 已清除 | 3 个问题（升级路径、导入护栏、init 向导），0 个关键差距。 |
+| /plan-devex-review | 1 | 已清除 | DX 分数 5/10 到 7/10。TTHW 25 分钟到 90 秒。冠军层级。 |

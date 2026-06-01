@@ -1,7 +1,7 @@
 ---
 type: essay
-title: "Thin Harness, Fat Skills"
-subtitle: "How to Make AI Agents Actually Understand Your Data"
+title: "薄 Harness，胖 Skills"
+subtitle: "如何让 AI Agents 真正理解你的数据"
 author: Garry Tan
 created: 2026-04-09
 updated: 2026-04-11
@@ -11,199 +11,199 @@ talk: "YC Spring 2026 -- Thin Harness, Fat Skills"
 thread: https://x.com/garrytan/status/2042925773300908103
 ---
 
-# Thin Harness, Fat Skills
+# 薄 Harness，胖 Skills
 
-Steve Yegge says people using AI coding agents are "10x to 100x as productive as engineers using Cursor and chat today, and roughly 1000x as productive as Googlers were back in 2005."
+Steve Yegge 说使用 AI 编码 agents 的人"比今天使用 Cursor 和聊天的工程师生产力高 10 倍到 100 倍，比 2005 年 Googlers 大约高 1000 倍。"
 
-That's a real number. I've seen it. I've lived it. But when people hear 100x, they think: better models. Smarter Claude. More parameters.
+这是一个真实数字。我见过它。我经历过它。但当人们听到 100 倍时，他们会想：更好的模型。更聪明的 Claude。更多参数。
 
-That's the wrong frame entirely. The 2x people and the 100x people are using the same models. The difference is five concepts that fit on an index card.
+这是完全错误的框架。2 倍的人和 100 倍的人使用相同的模型。区别在于适合索引卡的五个概念。
 
-## The harness is the secret sauce
+## Harness 是秘密武器
 
-On March 31, 2026, Anthropic accidentally shipped the entire source code for Claude Code to the npm registry. 512,000 lines. When I read it, it confirmed everything I'd been teaching at YC. The secret sauce isn't the model. It's the thing wrapping the model: the harness. Live repo context. Prompt caching. Purpose-built tools. Context bloat minimization. Structured session memory. Parallel sub-agents.
+2026 年 3 月 31 日，Anthropic 意外地将 Claude Code 的整个源代码发布到 npm 注册表。512,000 行。当我读取它时，它证实了我一直在 YC 教的一切。秘密武器不是模型。它是包装模型的东西：harness。实时仓库上下文。Prompt 缓存。专门构建的工具。上下文膨胀最小化。结构化会话记忆。并行子 agents。
 
-None of that is about making the model smarter. All of it is about giving the model the right context, at the right time, without drowning it in noise.
+这些都不是关于使模型更聪明。所有这些都是关于在正确的时间给模型正确的上下文，而不会将其淹没在噪音中。
 
-That's the only question that matters. And the answer has a specific shape. I call it **thin harness, fat skills**.
+这是唯一重要的问题。答案有一个特定的形状。我称之为**薄 harness，胖 skills**。
 
-## Five definitions
+## 五个定义
 
-The bottleneck is never the model's intelligence. The bottleneck is whether the model understands your schema. Models already know how to reason, synthesize, and write code. They fail because they don't know your data. Five definitions fix this.
+瓶颈从来不是模型的智能。瓶颈是模型是否理解你的 schema。模型已经知道如何推理、综合和编写代码。它们失败是因为它们不知道你的数据。五个定义修复了这个问题。
 
-### Definition 1: Skill File
+### 定义 1：Skill 文件
 
-A skill file is a reusable markdown procedure that teaches the model HOW to do something. Not WHAT to do. The user supplies the specifics. The skill supplies the process.
+Skill 文件是一个可重用的 markdown 过程，教模型如何做某事。不是做什么。用户提供细节。Skill 提供过程。
 
-**Markdown is actually code.** A skill file is a more perfect encapsulation of capability than rigid source code, because it describes process, judgment, and context in the language the model already thinks in.
+**Markdown 实际上是代码。** Skill 文件是比刚性源代码更完美的能力封装，因为它用模型已经在其中思考的语言描述过程、判断和上下文。
 
-On the left is a skill called `/investigate`. Seven steps: scope the dataset, build a timeline, diarize every document, synthesize, argue both sides, cite sources. It takes three parameters: TARGET, QUESTION, and DATASET.
+左边是一个叫做 `/investigate` 的 skill。七个步骤：范围数据集、构建时间线、日记化每个文档、综合、争论双方、引用来源。它需要三个参数：TARGET、QUESTION 和 DATASET。
 
-On the right are two completely different invocations of the same skill. One points at Dr. Sarah Chen and 2.1 million discovery emails, asking whether a safety scientist was silenced. The other points at Pacific Corporate Services and FEC filings, asking whether shell companies are coordinating campaign donations.
+右边是同一个 skill 的两个完全不同的调用。一个指向 Dr. Sarah Chen 和 210 万发现电子邮件，询问安全科学家是否被沉默。另一个指向 Pacific Corporate Services 和 FEC 文件，询问空壳公司是否正在协调竞选捐款。
 
-Same skill. Same seven steps. Same markdown file. In one case it's a medical research analyst. In the other it's a forensic investigator. The skill describes a process of judgment. The invocation supplies the world.
+相同的 skill。相同的七个步骤。相同的 markdown 文件。在一种情况下，它是医疗研究分析师。在另一种情况下，它是法医调查员。Skill 描述判断过程。调用提供世界。
 
-**This is the key insight most people miss: a skill file works like a method call.** It takes parameters. You invoke it with different arguments. The same procedure produces radically different capabilities depending on what you pass in. This is not prompt engineering. This is software design, using markdown as the programming language and human judgment as the runtime.
+**这是大多数人错过的关健洞察：skill 文件像方法调用一样工作。** 它接受参数。你用不同的参数调用它。根据传入的内容，相同的过程产生根本不同的能力。这不是 prompt 工程。这是软件设计，使用 markdown 作为编程语言，使用人类判断作为运行时。
 
-### Definition 2: Harness
+### 定义 2：Harness
 
-The harness is the program that runs the LLM. It does four things: runs the model in a loop, reads and writes your files, manages context, and enforces safety. That's the "thin."
+Harness 是运行 LLM 的程序。它做四件事：在循环中运行模型、读取和写入你的文件、管理上下文和执行安全。这就是"薄"。
 
-The anti-pattern is a fat harness with thin skills: 40+ tool definitions eating half the context window. God tools with 2 to 5 second MCP round-trips. REST API wrappers that turn every endpoint into a tool. 3x the tokens, 3x the latency, 3x the failure rate.
+反模式是具有薄 skills 的胖 harness：40+ 工具定义吃掉一半的上下文窗口。具有 2 到 5 秒 MCP 往返的 God 工具。将每个端点变成工具的 REST API 包装器。3 倍的 token，3 倍的延迟，3 倍的失败率。
 
-What you should build instead: a Playwright CLI that does each browser operation in 100 milliseconds. Compare: Chrome MCP takes 15 seconds for screenshot + find + click + wait + read. Playwright CLI takes 200 milliseconds for screenshot + assert. 75x faster. Software doesn't have to be precious anymore. Build exactly what you need.
+你应该构建什么：一个 Playwright CLI，在 100 毫秒内完成每个浏览器操作。比较：Chrome MCP 需要 15 秒进行截图 + 查找 + 点击 + 等待 + 读取。Playwright CLI 需要 200 毫秒进行截图 + 断言。快 75 倍。软件不再必须是珍贵的。准确构建你需要的东西。
 
-### Definition 3: Resolver
+### 定义 3：Resolver
 
-A resolver is a routing table for context. When task type X appears, load document Y first.
+Resolver 是上下文的路由表。当任务类型 X 出现时，首先加载文档 Y。
 
-Skills say HOW. Resolvers say WHAT to load WHEN. A developer changes a prompt. Without the resolver, they ship it. With the resolver, the model reads `docs/EVALS.md` first, which says: run the eval suite, compare scores, if accuracy drops more than 2%, revert and investigate. The developer didn't know the eval suite existed. The resolver loaded the right context at the right moment.
+Skills 说如何。Resolvers 说什么时候加载什么。开发人员更改 prompt。没有 resolver，他们发布它。使用 resolver，模型首先读取 `docs/EVALS.md`，它说：运行评估套件，比较分数，如果准确性下降超过 2%，还原并调查。开发人员不知道评估套件存在。Resolver 在正确的时刻加载正确的上下文。
 
-Claude Code has a built-in resolver. Every skill has a description field, and the model matches user intent to skill descriptions automatically. You never have to remember `/ship` exists. The description IS the resolver. It's like Clippy. Except it actually works.
+Claude Code 有一个内置的 resolver。每个 skill 都有一个描述字段，模型自动将用户意图与 skill 描述匹配。你永远不必记住 `/ship` 存在。描述就是 resolver。它就像 Clippy。除了它实际上工作。
 
-A confession: my CLAUDE.md was 20,000 lines. Every single thing I ran across went in there. Every quirk, every pattern, every lesson. Completely ridiculous. The model's attention degraded. Claude Code literally told me to cut it back. The fix: about 200 lines. Just pointers to documents. The resolver loads the right one when it matters.
+一个供认：我的 CLAUDE.md 是 20,000 行。我运行的每一件事都进入了那里。每一个怪癖、每一个模式、每一个教训。完全荒谬。模型的注意力退化。Claude Code 字面告诉我削减它。修复：大约 200 行。只是指向文档的指针。Resolver 在重要时加载正确的一个。
 
-### Definition 4: Latent vs. Deterministic
+### 定义 4：Latent vs. Deterministic
 
-Every step in your system is one or the other.
+你的系统中的每一步都是一个或另一个。
 
-**Latent space** is where intelligence lives. The model reads, interprets, decides. Judgment. Synthesis. Pattern recognition.
+**Latent space** 是智能所在。模型读取、解释、决定。判断。综合。模式识别。
 
-**Deterministic** is where trust lives. Same input, same output. Every time. SQL. Code. Numbers.
+**Deterministic** 是信任所在。相同的输入，相同的输出。每次。SQL。代码。数字。
 
-An LLM can seat 8 people at a dinner table. Ask it to seat 800 and it will hallucinate a seating chart that looks plausible but is completely wrong. That's a deterministic problem forced into latent space. The worst systems put the wrong work on the wrong side.
+LLM 可以让 8 个人坐在餐桌旁。要求它让 800 人入座，它会幻觉一个看起来合理但完全错误的座位图。这是一个被迫进入 latent space 的确定性问题。最糟糕的系统将错误的工作放在错误的侧。
 
-### Definition 5: Diarization
+### 定义 5：Diarization
 
-The model reads everything about a subject and writes a structured profile. Read 50 documents, produce 1 page of judgment.
+模型读取关于主题的所有内容并写入结构化配置文件。读取 50 个文档，产生 1 页判断。
 
-No SQL query produces this. No RAG pipeline produces this. The model has to actually read, hold contradictions in mind, notice what changed and when, and write structured intelligence. This is what makes AI useful for real knowledge work.
+没有 SQL 查询产生这个。没有 RAG 管道产生这个。模型必须实际读取、在脑海中保持矛盾、注意什么改变和什么时候，并写入结构化智能。这就是使 AI 对真实知识工作有用。
 
-## The architecture
+## 架构
 
-Three layers:
+三层：
 
-**Fat skills** on top. Markdown procedures that encode judgment, process, and domain knowledge. This is where 90% of the value lives.
+**Fat skills** 在顶部。编码判断、过程和领域知识的 Markdown 过程。这是 90% 的价值所在。
 
-**Thin CLI harness** in the middle. About 200 lines. JSON in, text out. Read-only by default. CLI first, add MCP later.
+**Thin CLI harness** 在中间。大约 200 行。JSON 输入，文本输出。默认只读。CLI 优先，稍后添加 MCP。
 
-**Your app** on the bottom. QueryDB. ReadDoc. Search. Timeline. The deterministic foundation.
+**你的应用** 在底部。QueryDB。ReadDoc。搜索。时间线。确定性基础。
 
-Push intelligence UP into skills. Push execution DOWN into deterministic tooling. Keep the harness THIN.
+将智能向上推入 skills。将执行向下推入确定性工具。保持 harness 薄。
 
-## The system that learns: YC Startup School
+## 学习的系统：YC Startup School
 
-Let me show you all five definitions working together. Not in theory. In an actual system we're building at YC.
+让我向你展示所有五个定义一起工作。不是在理论中。在我们正在 YC 构建的实际系统中。
 
-Chase Center. July 2026. 6,000 founders. Each one has a structured application, questionnaire answers, transcripts from 1:1 advisor chats, and public signals: X posts, GitHub commits, Claude Code transcripts showing how fast they ship.
+Chase Center。2026 年 7 月。6,000 个创始人。每一个都有结构化的申请、问卷答案、来自 1:1 顾问聊天的转录，以及公共信号：X 帖子、GitHub 提交、显示他们发货速度的 Claude Code 转录。
 
-The traditional approach: a program team of 15 reads applications, makes gut calls, updates a spreadsheet. It works at 200 founders. It breaks at 6,000.
+传统方法：一个由 15 人组成的项目团队读取申请，做出直觉调用，更新电子表格。它在 200 个创始人时工作。它在 6,000 时破裂。
 
-No human can hold 6,000 profiles in working memory and notice that the three best candidates for the infrastructure-for-AI-agents cohort are a dev tools founder in Lagos, a compliance founder in Singapore, and a CLI-tooling founder in Brooklyn who all described the same pain point in different words during their 1:1 chats.
+没有人可以在工作记忆中保持 6,000 个配置文件，并注意到 AI agents 基础设施队列的三个最佳候选人是 Lagos 的开发工具创始人、新加坡的合规创始人和 Brooklyn 的 CLI 工具化创始人，他们都在他们的 1:1 聊天中用不同的词描述了相同的痛点。
 
-The model can.
+模型可以。
 
-**Step 1: Enrich every founder.**
+**步骤 1：丰富每个创始人。**
 
-The `/enrich-founder` skill: pull all sources, run enrichments, diarize, highlight what they SAY vs what they're ACTUALLY BUILDING. On the right, the deterministic calls: SQL to find stale profiles, GitHub stats, browser test on the demo URL, social signal pulls, CrustData for company intel.
+`/enrich-founder` skill：拉取所有来源，运行丰富，日记化，突出显示他们说什么 vs 他们实际在构建什么。在右边，确定性调用：SQL 查找过时配置文件、GitHub 统计、演示 URL 上的浏览器测试、社交信号拉取、CrustData 获取公司情报。
 
-Cron runs nightly at 2am. 6,000 profiles, every night, always fresh.
+Cron 每晚 2 点运行。6,000 个配置文件，每个晚上，总是新鲜的。
 
-The diarization output catches things no keyword search would find:
+日记化输出捕获任何关键字搜索都找不到的东西：
 
 ```
 FOUNDER: Maria Santos
 COMPANY: Contrail (contrail.dev)
-SAYS: "Datadog for AI agents"
-ACTUALLY BUILDING: 80% of commits are in billing module.
-  She's building a FinOps tool disguised as observability.
+SAYS: "AI agents 的 Datadog"
+实际在构建：80% 的提交在计费模块中。
+  她正在构建伪装成可观察性的 FinOps 工具。
 ```
 
-"SAYS" vs "ACTUALLY BUILDING." That requires reading the GitHub commit history, the application, and the advisor transcript and holding all three in mind at once.
+"说什么" vs "实际在构建"。这需要读取 GitHub 提交历史、申请和顾问转录，并立即将所有三个保持在脑海中。
 
-**Step 2: Match 6,000 founders. Make judgment calls.**
+**步骤 2：匹配 6,000 个创始人。做出判断调用。**
 
-This is where skill-as-method-call really shines. Three invocations:
+这是 skill-as-method-call 真正发光的地方。三个调用：
 
-`/match-breakout`: 1,200 founders, cluster by sector affinity, 30 per room. Embed + deterministic assign.
+`/match-breakout`：1,200 个创始人，按部门亲和力聚类，每个房间 30 个。嵌入 + 确定性分配。
 
-`/match-lunch`: 600 founders, serendipity matching (cross-sector), 8 per table, no repeats. The LLM invents the themes, then assigns.
+`/match-lunch`：600 个创始人，意外匹配（跨部门），每个桌子 8 个，不重复。LLM 发明主题，然后分配。
 
-`/match-live`: whoever is in the zone, nearest-neighbor embedding, real-time at 200ms, 1:1 pairs, not already met.
+`/match-live`：无论谁在区域中，最近邻嵌入，实时在 200 毫秒，1:1 对，尚未见面。
 
-Same skill. Three invocations. Three completely different matching strategies. Different parameters, different strategies, different group sizes. The skill describes the process. The arguments shape the output.
+相同的 skill。三个调用。三种完全不同的匹配策略。不同的参数、不同的策略、不同的组大小。Skill 描述过程。参数塑造输出。
 
-And the model's judgment calls: "Santos and Oram are both AI infra, but they're not competitors. Santos is cost attribution, Oram is orchestration. Put them in the same group." And: "Kim applied as 'developer tools' but his 1:1 transcript reveals he's building compliance automation for SOC2. Move him to FinTech/RegTech."
+模型的判断调用："Santos 和 Oram 都是 AI 基础设施，但他们不是竞争对手。Santos 是成本归属，Oram 是编排。把他们放在同一个组中。" 而且："Kim 申请为'开发工具'，但他的 1:1 转录显示他正在构建 SOC2 的合规自动化。将他移动到 FinTech/RegTech。"
 
-No embedding captures the Kim reclassification. No algorithm can do it. The model has to read the entire profile.
+没有嵌入捕获 Kim 重新分类。没有算法可以做到。模型必须读取整个配置文件。
 
-**Step 3: The self-learning loop.**
+**步骤 3：自学习循环。**
 
-After the event, the `/improve` skill reads NPS surveys, diarizes the "OK" responses (not the bad ones, the mediocre ones), and extracts patterns. Then it proposes new rules and writes them back into the matching skills:
+活动后，`/improve` skill 读取 NPS 调查，日记化"OK"响应（不是坏的那个，是 mediocre 的那个），并提取模式。然后它提出新规则并将它们写回匹配 skills：
 
 ```
-When attendee says "AI infrastructure"
-    but startup is 80%+ billing code:
-    -> Classify as FinTech, not AI Infra.
+当参加者说"AI 基础设施"
+    但初创公司是 80%+ 计费代码：
+    -> 分类为 FinTech，而不是 AI Infra。
 
-When two attendees in same group
-    already know each other:
-    -> Penalize proximity.
-       Prioritize novel introductions.
+当两个参加者在同一组中
+    已经互相认识：
+    -> 惩罚邻近性。
+       优先考虑新颖的介绍。
 ```
 
-These rules get written back into the skill file. Next run uses them automatically. The skill rewrites itself.
+这些规则被写回 skill 文件。下一次运行自动使用它们。Skill 重写自己。
 
-July event: 12% "OK" ratings. Next event: 4%. The skill file learned what "OK" actually meant.
+7 月活动：12% 的"OK"评级。下一次活动：4%。Skill 文件了解了"OK"实际意味着什么。
 
-Same pattern as every other domain: retrieve, read, diarize, count, synthesize. Then: survey, investigate, diarize, rewrite the skill. It transfers everywhere.
+与每个其他领域相同的模式：检索、读取、日记化、计数、综合。然后：调查、调查、日记化、重写 skill。它无处不在。
 
-## OpenClaw: where the skills live
+## OpenClaw：skills 居住的地方
 
-I want to tell you about one more harness. Not for coding. For everything else.
+我想告诉你关于一个更多的 harness。不是为了编码。为了其他一切。
 
-I run a personal AI agent on OpenClaw. It has a persona, knows who I am, and maintains a knowledge base of thousands of interconnected files. But the thing that makes it work is the exact same principle. Thin harness, fat skills.
+我在 OpenClaw 上运行个人 AI agent。它有一个 persona，知道我是谁，并维护一个由数千个互连文件组成的知识库。但使它可以工作的东西是完全相同的原则。薄 harness，胖 skills。
 
-I tweeted about this a few days ago:
+几天前我在推特上说了这个：
 
-> *You are not allowed to do one-off work. If I ask you to do something and it's the kind of thing that will need to happen again, you must: do it manually the first time on 3 to 10 items. Show me the output. If I approve, codify it into a skill file. If it should run automatically, put it on a cron.*
+> *不允许你做一次性工作。如果我要求你做某事，并且这是需要再次发生的事情，你必须：第一次在 3 到 10 个项目上手动做。向我展示输出。如果我批准，将其编入 skill 文件。如果它应该自动运行，将其放在 cron 上。*
 
-> *The test: if I have to ask you for something twice, you failed.*
+> *测试：如果我不得不要求你做某事两次，你就失败了。*
 
-That resonated: a thousand likes, twenty-five hundred bookmarks. People thought it was a prompt engineering trick. It's not. It's the same architecture.
+这引起了共鸣：一千个赞，两千五百个书签。人们认为这是一个 prompt 工程技巧。它不是。它是相同的架构。
 
-Claude Code is the best harness for coding. OpenClaw is the best harness for everything else: email, calendar, meetings, people, research, alerts. Same principle. Thin harness. Fat skills. The skills are method calls. The parameters change. The process stays.
+Claude Code 是编码的最佳 harness。OpenClaw 是其他一切的最佳 harness：电子邮件、日历、会议、人员、研究、警报。相同的原则。薄 harness。胖 skills。Skills 是方法调用。参数改变。过程保持不变。
 
-Every skill I write is a permanent upgrade. It never degrades. It never forgets. It runs at 3 AM while I sleep. And when the next model drops, every skill instantly gets better, because the judgment in the latent steps improves while the deterministic steps stay perfectly reliable.
+我写的每个 skill 都是永久升级。它永远不会降级。它永远不会忘记。它在凌晨 3 点运行，而我正在睡觉。当下一个模型下降时，每个 skill 立即变得更好，因为 latent 步骤中的判断得到改善，而确定性步骤保持完全可靠。
 
-That's how you get Yegge's 10x to 100x. Not a smarter model. Fat skills, thin harness, and the discipline to codify everything.
+这就是你如何获得 Yegge 的 10 倍到 100 倍。不是一个更聪明的模型。胖 skills、薄 harness 和将一切编入代码的纪律。
 
-The system compounds. Build it once. It runs forever.
+系统复合。构建一次。它永远运行。
 
-Five definitions. Three layers. One principle. Thin harness, fat skills.
+五个定义。三层。一个原则。薄 harness，胖 skills。
 
 ---
 
-## Agent Decision Guide: Skill or Code?
+## Agent 决策指南：Skill 还是代码？
 
-When building GBrain features, use this decision guide:
+构建 GBrain 功能时，使用此决策指南：
 
-| Question | If YES | If NO |
+| 问题 | 如果是 | 如果否 |
 |----------|--------|-------|
-| Does the agent need to think, adapt, or ask questions? | **Skill** (recipe markdown) | Code |
-| Same input always produces same output? | **Code** (CLI command) | Skill |
-| Does it require judgment about the user's environment? | **Skill** | Code |
-| Is it a lookup, list, or status check? | **Code** | Probably skill |
-| Does it change behavior based on conversation context? | **Skill** | Code |
+| Agent 是否需要思考、适应或提出问题？ | **Skill**（配方 markdown） | 代码 |
+| 相同的输入总是产生相同的输出？ | **代码**（CLI 命令） | Skill |
+| 是否需要关于用户环境的判断？ | **Skill** | 代码 |
+| 它是查找、列表还是状态检查？ | **代码** | 可能是 skill |
+| 它是否根据对话上下文改变行为？ | **Skill** | 代码 |
 
-**GBrain examples:**
-- `gbrain integrations list` = **Code** (reads files, checks env vars, deterministic)
-- `gbrain integrations status` = **Code** (checks env vars + heartbeat, deterministic)
-- `gbrain integrations doctor` = **Code** (runs health checks, deterministic)
-- `gbrain integrations stats` = **Code** (aggregates JSONL, deterministic)
-- Recipe setup flow = **Skill** (asks for API keys, adapts to environment, validates)
-- Recipe changelog surfacing = **Skill** (agent describes changes conversationally)
-- Entity detection = **Skill** (reads message, decides what's important, creates pages)
-- Meeting ingestion = **Skill** (reads transcript, extracts entities, updates pages)
+**GBrain 示例：**
+- `gbrain integrations list` = **代码**（读取文件、检查环境变量、确定性）
+- `gbrain integrations status` = **代码**（检查环境变量 + 心跳、确定性）
+- `gbrain integrations doctor` = **代码**（运行健康检查、确定性）
+- `gbrain integrations stats` = **代码**（聚合 JSONL、确定性）
+- 配方设置流程 = **Skill**（询问 API 密钥、适应环境、验证）
+- 配方变更日志表面 = **Skill**（agent 以对话方式描述更改）
+- 实体检测 = **Skill**（读取消息、决定什么重要、创建页面）
+- 会议摄取 = **Skill**（读取转录、提取实体、更新页面）
 
-**The rule:** If it's a lookup table, it's code. If the agent needs to think, it's a skill.
+**规则：** 如果它是查找表，它就是代码。如果 agent 需要思考，那就是 skill。

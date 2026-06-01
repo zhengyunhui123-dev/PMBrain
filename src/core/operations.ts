@@ -26,6 +26,7 @@ import { bumpLastRetrievedAt } from './last-retrieved.ts';
 import { CJK_SLUG_CHARS } from './cjk.ts';
 import * as db from './db.ts';
 import { VERSION } from '../version.ts';
+import { generateReport } from './generate-report.ts';
 import {
   GET_RECENT_SALIENCE_DESCRIPTION,
   FIND_ANOMALIES_DESCRIPTION,
@@ -1212,8 +1213,8 @@ const search: Operation = {
   description: SEARCH_DESCRIPTION,
   params: {
     query: { type: 'string', required: true },
-    limit: { type: 'number', description: 'Max results (default 20)' },
-    offset: { type: 'number', description: 'Skip first N results (for pagination)' },
+    limit: { type: 'number', description: '最大结果数（默认 20）' },
+    offset: { type: 'number', description: '跳过前 N 条结果（用于分页）' },
   },
   handler: async (ctx, p) => {
     const startedAt = Date.now();
@@ -4345,6 +4346,25 @@ const run_onboard: Operation = {
   },
 };
 
+const generate_report: Operation = {
+  name: 'generate_report',
+  description: 'Generate a PMBrain project report. Admin scope required because it can write report files.',
+  params: {
+    type: { type: 'string', description: "'weekly', 'monthly', or 'custom'", enum: ['weekly', 'monthly', 'custom'] },
+    title: { type: 'string', description: 'Custom report title when type=custom' },
+    outputDir: { type: 'string', description: 'Output directory for the generated report' },
+    dryRun: { type: 'boolean', description: 'Preview report generation without writing files' },
+  },
+  mutating: true,
+  scope: 'admin',
+  handler: async (ctx, p) => generateReport(ctx.engine, ctx, {
+    type: p.type as 'weekly' | 'monthly' | 'custom' | undefined,
+    title: p.title as string | undefined,
+    outputDir: p.outputDir as string | undefined,
+    dryRun: p.dryRun as boolean | undefined,
+  }),
+};
+
 export const operations: Operation[] = [
   // Page CRUD
   get_page, put_page, delete_page, list_pages,
@@ -4417,6 +4437,8 @@ export const operations: Operation[] = [
   schema_apply_mutations, reload_schema_pack,
   // v0.41.18.0 (T16, A7, codex #5)
   run_onboard,
+  // v0.42 PMBrain: generate project report
+  generate_report,
 ];
 
 export const operationsByName = Object.fromEntries(

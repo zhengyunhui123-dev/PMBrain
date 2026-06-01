@@ -1,158 +1,130 @@
-# Two-Repo Architecture: Agent Behavior vs World Knowledge
+# 双仓库架构：代理行为与世界知识
 
-## Goal
+## 目标
+将代理行为（可替换）与世界知识（永久性）分离到具有严格边界的两个仓库中。
 
-Separate agent behavior (replaceable) from world knowledge (permanent) into two repos with strict boundaries.
+## 用户获得什么
+没有它：代理配置和世界知识混合在一起。切换代理，你就会丢失知识。切换知识工具，你就会丢失代理设置。
 
-## What the User Gets
+有了它：你的 brain（14,700+ 份关于人员、公司、会议、想法的文件）在任何代理交换中都会存活。你的代理配置在任何知识工具交换中都会存活。
 
-Without this: agent config and world knowledge are mixed together. Switch agents
-and you lose your knowledge. Switch knowledge tools and you lose your agent setup.
+## 实现
 
-With this: your brain (14,700+ files of people, companies, meetings, ideas)
-survives any agent swap. Your agent config survives any knowledge tool swap.
+### 边界测试
 
-## Implementation
+**"这是关于代理如何操作的，还是关于世界的知识？"**
 
-### The Boundary Test
-
-**"Is this about how the agent operates, or is this knowledge about the world?"**
-
-| Question | If YES -> Agent Repo | If YES -> Brain Repo |
+| 问题 | 如果是 → 代理仓库 | 如果是 → Brain 仓库 |
 |----------|---------------------|---------------------|
-| Would this file transfer if you switched AI agents? | YES | -- |
-| Would this file transfer if you switched to a different person? | -- | YES |
-| Is this about how the agent behaves? | YES | -- |
-| Is this about a person, company, deal, meeting, or idea? | -- | YES |
+| 如果你切换 AI 代理，此文件是否会传输？ | 是 | -- |
+| 如果你切换到不同的人，此文件是否会传输？ | -- | 是 |
+| 这是关于代理如何行为的吗？ | 是 | -- |
+| 这是关于人员、公司、交易、会议或想法的吗？ | -- | 是 |
 
-### Quick Decision Tree
+### 快速决策树
 
 ```
-New file to create?
-  |-- About a person, company, deal, project, meeting, idea? -> brain/
-  |-- A spec, research doc, or strategic analysis? -> brain/
-  |-- An original idea or observation? -> brain/originals/
-  |-- A daily session log or heartbeat state? -> agent-repo/
-  |-- A skill, config, cron, or ops file? -> agent-repo/
-  |-- A task or todo? -> agent-repo/tasks/
+要创建的新文件？
+  |-- 关于人员、公司、交易、项目、会议、想法？ -> brain/
+  |-- 规格、研究文档或战略分析？ -> brain/
+  |-- 原创想法或观察？ -> brain/originals/
+  |-- 每日会话日志或心跳状态？ -> agent-repo/
+  |-- 技能、配置、cron 或操作文件？ -> agent-repo/
+  |-- 任务或待办事项？ -> agent-repo/tasks/
 ```
 
-### Agent Repo (operational config)
+### 代理仓库（操作配置）
 
-How the agent works. Identity, configuration, operational state.
+代理如何工作。身份、配置、操作状态。
 
 ```
 agent-repo/
-├── AGENTS.md              # Agent identity + operational rules
-├── SOUL.md                # Persona, voice, values
-├── USER.md                # User preferences + context
-├── HEARTBEAT.md           # Daily ops flow
-├── TOOLS.md               # Available tools + credentials
-├── MEMORY.md              # Operational memory (preferences, decisions)
-├── skills/                # Agent capabilities (SKILL.md files)
+├── AGENTS.md              # 代理身份 + 操作规则
+├── SOUL.md                # 人格、声音、价值观
+├── USER.md                # 用户偏好 + 上下文
+├── HEARTBEAT.md           # 每日操作流程
+├── TOOLS.md               # 可用工具 + 凭据
+├── MEMORY.md              # 操作记忆（偏好、决策）
+├── skills/                # 代理能力（SKILL.md 文件）
 │   ├── ingest/SKILL.md
 │   ├── query/SKILL.md
 │   ├── enrich/SKILL.md
 │   └── ...
-├── cron/                  # Scheduled jobs
+├── cron/                  # 计划作业
 │   └── jobs.json
-├── tasks/                 # Current task list
+├── tasks/                 # 当前任务列表
 │   └── current.md
-├── hooks/                 # Event hooks + transforms
-├── scripts/               # Operational scripts (collectors, gates)
-└── memory/                # Session logs, state files
+├── hooks/                 # 事件钩子 + 转换
+├── scripts/               # 操作脚本（收集器、门控）
+└── memory/                # 会话日志、状态文件
     ├── heartbeat-state.json
-    └── YYYY-MM-DD.md      # Daily session logs
+    └── YYYY-MM-DD.md      # 每日会话日志
 ```
 
-### Brain Repo (world knowledge)
+### Brain 仓库（世界知识）
 
-What you know. People, companies, deals, meetings, ideas, media.
-This is the repo GBrain indexes.
+你所知道的。人员、公司、交易、会议、想法、媒体。这是 GBrain 索引的仓库。
 
 ```
 brain/
-├── people/                # Person dossiers (compiled truth + timeline)
-├── companies/             # Company profiles
-├── deals/                 # Deal tracking
-├── meetings/              # Meeting transcripts + analysis
-├── originals/             # YOUR original thinking (highest value)
-├── concepts/              # World concepts and frameworks
-├── ideas/                 # Product and business ideas
-├── media/                 # Video transcripts, books, articles
+├── people/                # 人员档案（编译真相 + 时间线）
+├── companies/             # 公司资料
+├── deals/                 # 交易跟踪
+├── meetings/              # 会议转录 + 分析
+├── originals/             # 你的原创想法（最高价值）
+├── concepts/              # 世界概念和框架
+├── ideas/                 # 产品和商业想法
+├── media/                 # 视频转录、书籍、文章
 │   ├── youtube/
 │   ├── podcasts/
 │   └── articles/
-├── sources/               # Source material summaries
-├── daily/                 # Daily data (calendar, logs)
+├── sources/               # 来源材料摘要
+├── daily/                 # 每日数据（日历、日志）
 │   └── calendar/
 │       └── YYYY/
 │           └── YYYY-MM-DD.md
-├── projects/              # Project specs and docs
-├── writing/               # Essays, drafts, published work
-├── diligence/             # Investment diligence materials
+├── projects/              # 项目规格和文档
+├── writing/               # 文章、草稿、已发布作品
+├── diligence/             # 投资尽职调查材料
 │   └── company-name/
 │       ├── index.md
 │       ├── pitch-deck.md
-│       └── .raw/          # Original PDFs/files
-└── Apple Notes/           # Imported Apple Notes archive
+│       └── .raw/          # 原始 PDF/文件
+└── Apple Notes/           # 导入的 Apple Notes 存档
 ```
 
-### The Hard Rule
+### 硬性规则
 
-**Never write knowledge to the agent repo.** If a skill, sub-agent, or cron
-job needs to create a file about a person, company, deal, meeting, project,
-or idea, it MUST write to the brain repo, never to the agent repo.
+**永远不要将知识写入代理仓库。** 如果技能、子代理或 cron 作业需要创建关于人员、公司、交易、会议、项目或想法的文件，它必须写入 brain 仓库，永远不要写入代理仓库。
 
-The brain is the permanent record. The agent repo is replaceable.
+Brain 是永久记录。代理仓库是可替换的。
 
-### Why Two Repos
+### 为什么需要两个仓库
 
-**Independence.** You can switch AI agents (OpenClaw -> Hermes -> custom) without
-losing your knowledge. You can switch knowledge tools (GBrain -> something else)
-without losing your agent setup.
+**独立性。** 你可以切换 AI 代理（OpenClaw -> Hermes -> 自定义）而不会丢失知识。你可以切换知识工具（GBrain -> 其他）而不会丢失代理设置。
 
-**Scale.** The brain grows large (10,000+ files). The agent repo stays small
-(< 100 files). Different backup strategies, different sync cadences.
+**规模。** Brain 会变大（10,000+ 文件）。代理仓库保持小规模（< 100 个文件）。不同的备份策略，不同的同步节奏。
 
-**Privacy.** The brain contains sensitive information (people, deals, personal
-notes). The agent repo contains operational config. Different access controls.
+**隐私。** Brain 包含敏感信息（人员、交易、个人笔记）。代理仓库包含操作配置。不同的访问控制。
 
-**GBrain indexes the brain repo.** Run `gbrain sync --repo ~/brain/` to keep
-the search index current. The agent repo is never indexed by GBrain.
+**GBrain 索引 brain 仓库。** 运行 `gbrain sync --repo ~/brain/` 以保持搜索索引为最新。代理仓库永远不会被 GBrain 索引。
 
-## Tricky Spots
+## 棘手的地方
 
-1. **Never write knowledge to the agent repo.** This is the most common
-   violation. A skill that creates a person page, a cron job that saves
-   meeting notes, a sub-agent that captures an idea -- all of these MUST
-   write to the brain repo. If it's about the world, it goes in the brain.
+1. **永远不要将知识写入代理仓库。** 这是最常见的违规。创建人员页面的技能、保存会议记录的 cron 作业、捕获想法的子代理 — 所有这些都必须写入 brain 仓库。如果是关于世界的，它就属于 brain。
 
-2. **The brain is the permanent record.** When in doubt, ask: "Would this
-   file survive switching to a completely different AI agent?" If yes, it
-   belongs in the brain. Agent configs, skills, cron jobs, and operational
-   state are replaceable. People, companies, ideas, and meetings are not.
+2. **Brain 是永久记录。** 如有疑问，请问："如果我切换到完全不同的 AI 代理，此文件会存活吗？" 如果是，它就属于 brain。代理配置、技能、cron 作业和操作状态是可替换的。人员、公司、想法和会议则不是。
 
-3. **Don't index the agent repo.** GBrain indexes the brain repo only.
-   Running `gbrain sync` against the agent repo pollutes search results
-   with operational config instead of world knowledge.
+3. **不要索引代理仓库。** GBrain 仅索引 brain 仓库。针对代理仓库运行 `gbrain sync` 会用操作配置污染搜索结果，而不是世界知识。
 
-## How to Verify
+## 如何验证
 
-1. **Check file placement.** After any skill or cron job creates a file,
-   verify it landed in the correct repo. Person/company/idea/meeting files
-   should be in `brain/`. Skill/config/cron/state files should be in the
-   agent repo. Any knowledge file in the agent repo is a boundary violation.
+1. **检查文件放置。** 任何技能或 cron 作业创建文件后，验证它落在正确的仓库中。人员/公司/想法/会议文件应该在 `brain/` 中。技能/配置/cron/状态文件应该在代理仓库中。代理仓库中的任何知识文件都是边界违规。
 
-2. **Run the boundary test.** Pick 5 recently created files and ask: "Would
-   this transfer if I switched AI agents?" and "Would this transfer if I
-   switched to a different person?" If the answers don't match the file's
-   location, it's in the wrong repo.
+2. **运行边界测试。** 选择 5 个最近创建的文件并询问："如果我切换 AI 代理，此文件会传输吗？" 和 "如果我切换到不同的人，此文件会传输吗？" 如果答案与文件的位置不匹配，它就放在错误的仓库中。
 
-3. **Verify GBrain only indexes brain.** Run `gbrain stats` and check the
-   indexed paths. None should point to the agent repo directory. If agent
-   config files appear in search results, the sync target is misconfigured.
+3. **验证 GBrain 仅索引 brain。** 运行 `gbrain stats` 并检查索引路径。没有指向代理仓库目录的路径。如果代理配置文件出现在搜索结果中，则同步目标配置错误。
 
 ---
 
-*Part of the [GBrain Skillpack](../GBRAIN_SKILLPACK.md).*
+*是 [GBrain Skillpack](../GBRAIN_SKILLPACK.md) 的一部分。*

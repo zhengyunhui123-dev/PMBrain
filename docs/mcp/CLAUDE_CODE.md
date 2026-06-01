@@ -1,18 +1,16 @@
-# Connect GBrain to Claude Code
+# 将 GBrain 连接到 Claude Code
 
-## Option 1: Local (recommended, zero server needed)
+## 选项 1：本地（推荐，无需服务器）
 
 ```bash
 claude mcp add gbrain -- gbrain serve
 ```
 
-That's it. Claude Code spawns `gbrain serve` as a stdio subprocess. No server, no
-tunnel, no token needed. Works with both PGLite and Supabase engines.
+就这样。Claude Code 会生成 `gbrain serve` 作为 stdio 子进程。无需服务器、隧道或令牌。适用于 PGLite 和 Supabase 引擎。
 
-## Option 2: Remote (access from any machine)
+## 选项 2：远程（从任何机器访问）
 
-If you have GBrain running on a server with a public tunnel (see
-[ngrok-tunnel recipe](../../recipes/ngrok-tunnel.md)):
+如果你在带有公共隧道的服务器上运行 GBrain（参见 [ngrok-tunnel 配方](../../recipes/ngrok-tunnel.md)）：
 
 ```bash
 claude mcp add gbrain -t http \
@@ -20,20 +18,19 @@ claude mcp add gbrain -t http \
   -H "Authorization: Bearer YOUR_TOKEN"
 ```
 
-Replace `YOUR-DOMAIN` with your ngrok domain and `YOUR_TOKEN` with a token
-from `gbrain auth create "claude-code"`.
+将 `YOUR-DOMAIN` 替换为你的 ngrok 域名，将 `YOUR_TOKEN` 替换为来自 `gbrain auth create "claude-code"` 的令牌。
 
-## Verify
+## 验证
 
-In Claude Code, try:
+在 Claude Code 中，尝试：
 
 ```
-search for [any topic in your brain]
+搜索 [你大脑中的任何主题]
 ```
 
-You should see results from your GBrain knowledge base.
+你应该会看到来自 GBrain 知识库的结果。
 
-## Remove
+## 移除
 
 ```bash
 claude mcp remove gbrain

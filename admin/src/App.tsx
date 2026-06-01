@@ -24,9 +24,9 @@ export function App() {
     return () => window.removeEventListener('hashchange', onHash);
   }, []);
 
-  const navigate = (p: Page) => {
-    window.location.hash = p;
-    setPage(p);
+  const navigate = (target: Page) => {
+    window.location.hash = target;
+    setPage(target);
   };
 
   if (page === 'login') {
@@ -34,13 +34,13 @@ export function App() {
   }
 
   const handleSignOutEverywhere = async () => {
-    if (!confirm('Sign out every active admin session, including other browsers and tabs? Each one will need to re-authenticate via a fresh magic link.')) {
+    if (!confirm('退出所有管理员会话，包括其他浏览器和标签页？每个会话都需要使用新的登录链接重新验证。')) {
       return;
     }
     try {
       await api.signOutEverywhere();
     } catch {
-      // Even if the call fails, push to login — cookie is likely already invalid.
+      // Even if the call fails, push to login; the cookie is likely already invalid.
     }
     navigate('login');
   };
@@ -51,15 +51,15 @@ export function App() {
         <div className="sidebar-logo">GBrain</div>
         <div className="sidebar-nav">
           <a className={`nav-item ${page === 'dashboard' ? 'active' : ''}`}
-             onClick={() => navigate('dashboard')}>Dashboard</a>
+             onClick={() => navigate('dashboard')}>仪表盘</a>
           <a className={`nav-item ${page === 'agents' ? 'active' : ''}`}
-             onClick={() => navigate('agents')}>Agents</a>
+             onClick={() => navigate('agents')}>Agent 管理</a>
           <a className={`nav-item ${page === 'log' ? 'active' : ''}`}
-             onClick={() => navigate('log')}>Request Log</a>
+             onClick={() => navigate('log')}>请求日志</a>
           <a className={`nav-item ${page === 'calibration' ? 'active' : ''}`}
-             onClick={() => navigate('calibration')}>Calibration</a>
+             onClick={() => navigate('calibration')}>校准</a>
           <a className={`nav-item ${page === 'jobs' ? 'active' : ''}`}
-             onClick={() => navigate('jobs')}>Jobs Watch</a>
+             onClick={() => navigate('jobs')}>任务监控</a>
         </div>
         <div style={{ marginTop: 'auto', padding: '16px 12px', borderTop: '1px solid var(--border)' }}>
           <button
@@ -74,9 +74,9 @@ export function App() {
               cursor: 'pointer',
               width: '100%',
             }}
-            title="Revoke every active admin session — every browser, every tab"
+            title="撤销所有浏览器和标签页中的管理员会话"
           >
-            Sign out everywhere
+            退出所有会话
           </button>
         </div>
       </nav>

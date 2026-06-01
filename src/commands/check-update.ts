@@ -119,7 +119,7 @@ export function extractChangelogBetween(changelog: string, from: string, to: str
 
 export async function runCheckUpdate(args: string[]) {
   if (args.includes('--help') || args.includes('-h')) {
-    console.log('Usage: gbrain check-update [--json]\n\nCheck for new GBrain versions.\n\nOnly reports minor/major version bumps (v0.X.0), not patches.\nFails silently on network errors.');
+    console.log('用法：gbrain check-update [--json]\n\n检查新的 GBrain 版本。\n\n仅报告次版本或主版本更新（v0.X.0），不报告补丁版本。\n网络错误时静默失败。');
     return;
   }
 

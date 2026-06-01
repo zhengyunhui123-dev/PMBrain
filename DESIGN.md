@@ -1,148 +1,115 @@
 # DESIGN.md
 
-The design system source of truth for gbrain. Born from the de facto tokens
-that landed in `admin/src/index.css` during the v0.26.0 admin SPA work and
-formalized during the v0.36.1.0 Hindsight calibration wave's design review.
+gbrain 的设计系统源文档。源于 v0.26.0 管理后台 SPA 工作期间落在 `admin/src/index.css` 中的事实代币，并在 v0.36.1.0 Hindsight 校准波次的设计评审期间正式确定。
 
-This doc is the calibration target for `/plan-design-review` and `/design-review`.
-When a question is "does this UI fit the system?", the answer is here.
+本文档是 `/plan-design-review` 和 `/design-review` 的校准目标。当问题是"这个 UI 是否符合系统？"时，答案就在这里。
 
-## Voice
+## 语气风格
 
-GBrain talks like a smart friend who knows your past, not a clinical scoring
-system. Every user-facing string passes through this filter:
+Gbrain 说话像一个了解你过去的聪明朋友，而不是临床评分系统。每个面向用户的字符串都要通过这个过滤器：
 
-- Second person, contractions allowed.
-- Grounded in concrete data the user can verify ("2 of 3 missed" beats
-  "Brier 0.31").
-- Never preachy. Never "we recommend." Never "according to your data."
-- Short. Under 25 words for narrative; under one line for status.
-- Numbers grounded in real outcomes, never abstract metrics without
-  translation.
+- 第二人称，允许缩写形式。
+- 基于用户可以验证的具体数据（"3 个中错过 2 个"胜过"Brier 0.31"）。
+- 绝不说教。绝不"我们推荐。"绝不"根据你的数据。"
+- 简短。叙述性内容少于 25 个单词；状态信息少于一行。
+- 数字基于真实结果，绝不没有翻译的抽象指标。
 
-Five surfaces use this voice (v0.36.1.0+):
-`pattern_statement`, `nudge`, `forecast_blurb`, `dashboard_caption`,
-`morning_pulse`. All five pass through `gateVoice()` in
-`src/core/calibration/voice-gate.ts` with mode-specific rubrics. A Haiku
-judge rejects academic-sounding candidates; up to 2 regens; then fall
-back to a hand-written template from `src/core/calibration/templates.ts`.
+五个表面使用这种语气（v0.36.1.0+）：
+`pattern_statement`、`nudge`、`forecast_blurb`、`dashboard_caption`、
+`morning_pulse`。所有五个都通过 `src/core/calibration/voice-gate.ts` 中的 `gateVoice()` 传递，使用特定模式的评分标准。Haiku 评判者拒绝听起来学术的候选者；最多 2 次重新生成；然后回退到 `src/core/calibration/templates.ts` 中手写的模板。
 
-## Color tokens
+## 颜色代币
 
-CSS variables in `admin/src/index.css`. SVG renderer inlines literals
-matching these tokens (`src/core/calibration/svg-renderer.ts`).
+`admin/src/index.css` 中的 CSS 变量。SVG 渲染器内联与这些代币匹配的字面量（`src/core/calibration/svg-renderer.ts`）。
 
-| Token              | Value     | Use                                       |
+| 代币               | 值        | 用途                                       |
 |--------------------|-----------|-------------------------------------------|
-| `--bg-primary`     | `#0a0a0f` | Page background                           |
-| `--bg-secondary`   | `#14141f` | Sidebar, cards                            |
-| `--bg-tertiary`    | `#1e1e2e` | Subtle surfaces, borders                  |
-| `--text-primary`   | `#e0e0e0` | Body text                                 |
-| `--text-secondary` | `#888`    | Headings, labels                          |
-| `--text-muted`     | `#777`    | Tertiary text — TD2 bumped from #555 for WCAG AA contrast (~5.5:1) |
-| `--accent`         | `#3b82f6` | Active states, links, primary CTAs        |
-| `--success`        | `#22c55e` | Healthy / ok status                       |
-| `--warning`        | `#f59e0b` | Doctor warnings                           |
-| `--error`          | `#ef4444` | Failures, destructive confirmations       |
+| `--bg-primary`     | `#0a0a0f` | 页面背景                           |
+| `--bg-secondary`   | `#14141f` | 侧边栏、卡片                            |
+| `--bg-tertiary`    | `#1e1e2e` | 细微表面、边框                  |
+| `--text-primary`   | `#e0e0e0` | 正文文本                                 |
+| `--text-secondary` | `#888`    | 标题、标签                          |
+| `--text-muted`     | `#777`    | 三级文本 — TD2 从 #555 提升以获得 WCAG AA 对比度（约 5.5:1） |
+| `--accent`         | `#3b82f6` | 活动状态、链接、主要行动按钮        |
+| `--success`        | `#22c55e` | 健康 / 正常状态                       |
+| `--warning`        | `#f59e0b` | 医生警告                           |
+| `--error`          | `#ef4444` | 失败、破坏性确认       |
 
-Dark theme is the only theme. No light mode toggle planned — admin is an
-operator tool, not a marketing surface. Users live in the terminal with a
-dark theme already.
+深色主题是唯一的主题。不计划浅色模式切换 — 管理后台是操作员工具，不是营销表面。用户已经在使用深色主题的终端中工作。
 
-WCAG contrast:
-- Body text (#e0e0e0 on #0a0a0f) → ~14:1, AAA
-- Muted text (#777 on #0a0a0f) → ~5.5:1, AA (was 4.0 / fail before TD2)
-- Accent links (#3b82f6 on #0a0a0f) → ~5.7:1, AA
+WCAG 对比度：
+- 正文文本（#e0e0e0 在 #0a0a0f 上）→ ~14:1，AAA
+- 静音文本（#777 在 #0a0a0f 上）→ ~5.5:1，AA（TD2 之前为 4.0 / 失败）
+- 强调链接（#3b82f6 在 #0a0a0f 上）→ ~5.7:1，AA
 
-## Typography
+## 排版
 
-| Variable           | Value                       | Use                            |
+| 变量           | 值                       | 用途                            |
 |--------------------|-----------------------------|---------------------------------|
-| `--font-sans`      | `Inter, system-ui, sans-serif` | UI text, headings, body         |
-| `--font-mono`      | `JetBrains Mono, monospace` | Numbers, slugs, code, terminal-ish data |
+| `--font-sans`      | `Inter, system-ui, sans-serif` | UI 文本、标题、正文         |
+| `--font-mono`      | `JetBrains Mono, monospace` | 数字、slug、代码、类终端数据 |
 
-Type scale (de facto, not formalized yet):
-- 18px: sidebar logo / page title
-- 14px: body
-- 13px: nav items
-- 12px: chart captions, secondary labels
-- 11px: tertiary labels in dense charts
+类型比例（事实上的，尚未正式确定）：
+- 18px：侧边栏徽标 / 页面标题
+- 14px：正文
+- 13px：导航项目
+- 12px：图表说明、次要标签
+- 11px：密集图表中的三级标签
 
-Numbers in tables and metrics use JetBrains Mono so column alignment is
-mechanical. Avoid mixing Inter and JetBrains Mono in the same line.
+表格和指标中的数字使用 JetBrains Mono，因此列对齐是机械的。避免在同一行中混合 Inter 和 JetBrains Mono。
 
-## Spacing scale
+## 间距比例
 
-4 / 8 / 16 / 24 / 32px. Linear-app-style density: 24-32px between major
-sections, 16px between row groups, 8px within a row. The Calibration tab
-(approved variant-B mockup) is the canonical example.
+4 / 8 / 16 / 24 / 32px。Linear 应用风格的密度：主要部分之间 24-32px，行组之间 16px，行内 8px。校准标签页（批准的变体 B 模型）是规范示例。
 
-## Layout
+## 布局
 
-- Sidebar 200px on the left. Active item gets a 3px left-border in `--accent`.
-- Main content area uses the remaining width.
-- Max content width: 720px for text-heavy pages (Calibration), 960px for
-  data tables (Request Log).
-- No 3-column feature grids. No icons in colored circles. No decorative blobs.
-- Cards earn their existence — heading + content works without a card frame
-  in most cases.
+- 左侧 200px 侧边栏。活动项目在 `--accent` 中获得 3px 左边框。
+- 主内容区域使用剩余宽度。
+- 最大内容宽度：文本密集型页面（校准）720px，数据表（请求日志）960px。
+- 没有 3 列功能网格。彩色圆圈中没有图标。没有装饰性斑点。
+- 卡片证明其存在的合理性 — 在大多数情况下，标题 + 内容在没有卡片框架的情况下也能工作。
 
-## Charts
+## 图表
 
-Server-rendered SVG via `src/core/calibration/svg-renderer.ts`. Pure
-functions: data → SVG string. No DOM, no React component, no chart library.
+通过 `src/core/calibration/svg-renderer.ts` 的服务器端渲染 SVG。纯函数：数据 → SVG 字符串。没有 DOM，没有 React 组件，没有图表库。
 
-XSS posture: server-side `escapeXml()` on every caller-controlled string.
-Numeric inputs `.toFixed()`-coerced. Admin SPA renders via
-`<TrustedSVG>` wrapper with `dangerouslySetInnerHTML`. Endpoint gated by
-`requireAdmin` middleware.
+XSS 立场：在每个调用者控制的字符串上使用服务器端 `escapeXml()`。数字输入 `.toFixed()` 强制转换。管理后台 SPA 通过带有 `dangerouslySetInnerHTML` 的 `<TrustedSVG>` 包装器渲染。端点由 `requireAdmin` 中间件保护。
 
-Why server-rendered SVG (per D23):
-- Chart logic stays close to the data math.
-- Zero new client-side chart-library dep.
-- SVG is accessible (text labels), scalable, copy-paste-friendly to PR
-  descriptions and docs.
-- Sets the precedent for future admin charts (contradictions trend, takes
-  scorecard, etc.).
+为什么是服务器端渲染的 SVG（根据 D23）：
+- 图表逻辑靠近数据数学。
+- 零个新的客户端图表库依赖。
+- SVG 是可访问的（文本标签）、可缩放的、对 PR 描述和文档友好的复制粘贴。
+- 为未来的管理后台图表（矛盾趋势、takes 记分卡等）设定先例。
 
-Four chart renderers in v0.36.1.0:
-- `renderBrierTrend({ series })` — sparkline + baseline reference at 0.25
-- `renderDomainBars({ bars })` — horizontal accuracy bars
-- `renderAbandonedThreadsCard(threads)` — text rows + "revisit now" links
-- `renderPatternStatementsCard(statements)` — clickable drill-down anchors
+v0.36.1.0 中的四个图表渲染器：
+- `renderBrierTrend({ series })` — 火花线 + 0.25 的基线参考
+- `renderDomainBars({ bars })` — 水平准确度条
+- `renderAbandonedThreadsCard(threads)` — 文本行 + "立即重新访问"链接
+- `renderPatternStatementsCard(statements)` — 可点击的钻取锚点
 
-## Interaction patterns
+## 交互模式
 
-- Keyboard navigation is REQUIRED for all CLI interaction surfaces. The
-  propose-queue review uses J/K/space/u/q shortcuts (gmail-style).
-- Loading states: "Loading...". Don't show spinners on sub-200ms operations.
-- Empty states ARE features: warmth + primary action + context. Cold-brain
-  Calibration page tells the user EXACTLY how to build a profile, not
-  "no data available."
-- Error states: name what failed + name the next step. Never "an error
-  occurred — please try again."
+- 所有 CLI 交互表面都需要键盘导航。propose-queue 审查使用 J/K/空格/u/q 快捷键（gmail 风格）。
+- 加载状态："加载中..."。不要在 200 毫秒以下的操作上显示旋转器。
+- 空状态是功能：温暖 + 主要操作 + 上下文。冷 brain 校准页面告诉用户如何构建配置文件，而不是"没有可用数据。"
+- 错误状态：命名失败的内容 + 命名下一步。绝不"发生错误 — 请重试。"
 
-## What's NOT here yet (v0.37+ roadmap)
+## 这里还没有的内容（v0.37+ 路线图）
 
-- Type scale formalization (current values are de facto, not enforced)
-- Animation tokens (admin SPA has zero animations on purpose; v0.37 may
-  add subtle progress / loading transitions)
-- Print stylesheet
-- Light mode (NOT planned — see "Dark theme is the only theme" above)
-- Component library extraction (the React components live inline in admin/src/pages/;
-  no `<Button>` / `<Card>` abstraction layer yet)
+- 类型比例正式化（当前值是事实上的，未强制执行）
+- 动画代币（管理后台 SPA  purposely 有零个动画；v0.37 可能添加细微的进度 / 加载过渡）
+- 打印样式表
+- 浅色模式（不计划 — 请参阅上面的"深色主题是唯一的主题"）
+- 组件库提取（React 组件内联存在于 admin/src/pages/ 中；还没有 `<Button>` / `<Card>` 抽象层）
 
-## How to use this document
+## 如何使用本文档
 
-When adding a new UI surface to gbrain:
+向 gbrain 添加新的 UI 表面时：
 
-1. Pick existing tokens before introducing new ones. New tokens go through
-   `/plan-design-review`.
-2. Match the voice rules. Run candidates through `gateVoice()` before
-   shipping any user-facing string in the calibration surfaces.
-3. Match the spacing scale and density. Linear-calm-clarity over
-   dashboard-card-mosaic.
-4. Match the typography: Inter for UI, JetBrains Mono for numbers.
+1. 在引入新代币之前选择现有代币。新代币通过 `/plan-design-review`。
+2. 匹配语气规则。在校准表面中发布任何面向用户的字符串之前，通过 `gateVoice()` 运行候选者。
+3. 匹配间距比例和密度。Linear-冷静-清晰胜过仪表板-卡片-马赛克。
+4. 匹配排版：UI 用 Inter，数字用 JetBrains Mono。
 
-When updating this document: it's a living target, not a frozen spec.
-Major changes go through `/plan-design-review` to keep the system coherent.
+更新本文档时：它是一个活的目标，不是冻结的规范。重大更改通过 `/plan-design-review` 以保持系统连贯性。

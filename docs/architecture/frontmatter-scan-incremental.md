@@ -1,44 +1,45 @@
-# Frontmatter scan: DB-backed incremental state (Phase 2 design sketch)
+# Frontmatter 扫描：基于数据库增量状态（Phase 2 设计草图）
 
-**Status:** Designed, not built. Captured here as the starting point for the
-follow-up PR after v0.38.2.0.
+**状态：** 已设计，未构建。在此处捕获为
+v0.38.2.0 之后后续 PR 的起始点。
 
-## Why this exists
+## 为什么存在这个
 
-v0.38.2.0 fixed the load-bearing bug class that caused `gbrain doctor` to
-hang on large brains: the disk walker descended into `node_modules/`, `.git/`,
-and other vendor trees on every tick. After that fix doctor completes in
-seconds on most brains, and bounded wall-clock (default 30s, with honest
-partial-state surfacing) on any brain.
+v0.38.2.0 修复了导致 `gbrain doctor` 在大型大脑上
+挂起的承重错误类：磁盘遍历器在每个时钟周期都会 descend 到 `node_modules/`、`.git/` 和
+其他供应商树中。在该修复之后，在大多数大脑上，doctor 会在
+几秒钟内完成，并且在任何大脑上都有界挂钟时间（默认 30 秒，具有诚实的
+部分状态 surfacing）。
 
-But the steady-state cost of `frontmatter_integrity` is still O(N) in real
-syncable pages: every doctor tick re-walks the filesystem and re-parses
-every `.md` file. For users with 200K+ pages the steady-state cost is in
-the seconds even after Fix 1. For sub-second steady-state doctor (the
-right shape for cron-monitored health checks), the scan needs to become
-incremental.
+但是 `frontmatter_integrity` 的稳定状态成本在真实
+可同步页面中仍然是 O(N)：每个 doctor 时钟周期都会重新遍历文件系统并重新解析
+每个 `.md` 文件。对于拥有 200K+ 页面的用户，即使在修复 1 之后，
+稳定状态成本也在数秒内。
+为了达到亚秒级稳定状态 doctor（正确的形状，用于
+cron 监控的运行状况检查），扫描需要变得
+是增量的。
 
-This document captures the Phase 2 design before the follow-up PR starts,
-so the implementer doesn't have to re-derive it.
+本文档在后续 PR 启动之前捕获 Phase 2 设计，
+因此实现者不必重新推导它。
 
-## Goal
+## 目标
 
-Doctor's `frontmatter_integrity` check completes in O(1) SQL queries
-regardless of brain size, with the same per-source breakdown and partial-
-state semantics as v0.38.2.0's bounded-walk approach. Incremental refresh
-runs as a sync-side write + an autopilot cycle phase, so the steady-state
-work is amortized across the workflow that already touches each file.
+Doctor 的 `frontmatter_integrity` 检查在 O(1) SQL 查询中完成，
+无论大脑大小如何，都具有与 v0.38.2.0 的有界遍历方法相同的每来源细分和 partial-
+state 语义。增量刷新
+作为同步端写入 + 自动驾驶循环阶段运行，因此稳定状态
+工作被摊销到已经接触每个文件的工作流中。
 
 ## Schema
 
-New table:
+新表：
 
 ```sql
 CREATE TABLE frontmatter_scan_state (
   source_id    TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
-  path         TEXT NOT NULL,  -- relative to source.local_path
+  path         TEXT NOT NULL,  -- 相对于 source.local_path
   mtime_ms     BIGINT NOT NULL,
-  content_hash TEXT NOT NULL,  -- sha256 of file content at scan time
+  content_hash TEXT NOT NULL,  -- 扫描时文件内容的 sha256
   codes        JSONB NOT NULL DEFAULT '[]'::jsonb,  -- ParseValidationCode[]
   last_scanned_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (source_id, path)
@@ -49,28 +50,28 @@ CREATE INDEX frontmatter_scan_state_has_issues_idx
   WHERE codes != '[]'::jsonb;
 ```
 
-Why these columns:
-- `mtime_ms` + `content_hash`: incremental check picks one. mtime is faster
-  (no read); content_hash is the truth (defeats touch-without-change cases).
-  The incremental walker uses mtime as a fast gate and content_hash as the
-  fallback when mtime suggests change.
-- `codes` JSONB: per-row error code list, NULL/`[]` means clean. Doctor
-  aggregates with `jsonb_array_length(codes) > 0`.
-- Partial index on `WHERE codes != '[]'::jsonb`: doctor's aggregate query
-  only walks rows with issues, which is a small fraction of pages.
+为什么是这些列：
 
-This follows the canonical `applyForwardReferenceBootstrap` pattern in
-`src/core/pglite-engine.ts` (and `postgres-engine.ts`) — the new column /
-table additions go into the bootstrap probe set per CLAUDE.md so old brains
-walking forward through the schema chain don't wedge on the table not
-existing.
+- `mtime_ms` + `content_hash`：增量检查选择其中一个。mtime 更快
+  （无读取）；content_hash 是事实（击败无更改的 touch 情况）。
+  增量遍历器使用 mtime 作为快速门控，并在 mtime 表明已更改时使用 content_hash 作为
+  回退。
+- `codes` JSONB：每行错误代码列表，NULL/`[]` 表示干净。Doctor
+  使用 `jsonb_array_length(codes) > 0` 进行聚合。
+- 在 `WHERE codes != '[]'::jsonb` 上的部分索引：doctor 的聚合查询
+  仅遍历有问题的行，这只是页面的一小部分。
 
-## Migration shape
+这遵循 `src/core/pglite-engine.ts`（和 `postgres-engine.ts`）中的规范 `applyForwardReferenceBootstrap` 模式 — 新列 /
+表添加进入引导探测集，根据 CLAUDE.md，以便旧大脑
+在 schema 链中向前遍历时不会因为表
+不存在而卡住。
+
+## 迁移形状
 
 ```ts
-// src/core/migrate.ts — append after the v80 entry
+// src/core/migrate.ts — 在 v80 条目之后追加
 const migrations = [
-  // ...existing v1-v80...
+  // ...现有 v1-v80...
   {
     version: 81,
     name: 'frontmatter_scan_state',
@@ -82,37 +83,37 @@ const migrations = [
 ];
 ```
 
-Plus the forward-reference probe entries in both engine bootstraps. Plus
-the `REQUIRED_BOOTSTRAP_COVERAGE` extension in
-`test/schema-bootstrap-coverage.test.ts`.
+加上两个引擎引导程序中的前向引用探测条目。加上
+`test/schema-bootstrap-coverage.test.ts` 中的 `REQUIRED_BOOTSTRAP_COVERAGE` 扩展。
 
-## Writers
+## 写入器
 
-Two paths write rows:
+两条路径写入行：
 
-1. **Sync-side write** (canonical). `src/core/sync.ts:performSync` already
-   parses every file it touches. After the existing `parseMarkdown` call,
-   `UPSERT` into `frontmatter_scan_state` with the file's path / mtime /
-   content_hash / codes. Cost: one row per file synced. Zero extra parse
-   work — the parse already happened.
+1. **同步端写入**（规范性）。`src/core/sync.ts:performSync` 已经
+   解析它接触的每个文件。在现有 `parseMarkdown` 调用之后，
+   `UPSERT` 到 `frontmatter_scan_state` 以及文件的路径 / mtime /
+   content_hash / codes。成本：每个同步的文件有一行。零额外解析
+   工作 — 解析已经发生了。
 
-2. **Incremental scan** (`gbrain frontmatter scan --incremental`). Walks
-   the disk via `walkBrainTree`, for each file checks `mtime > last_scanned_at`
-   OR `content_hash != stored`, only re-parses changed files. Most ticks:
-   zero work after the first full backfill. Also exposed as an autopilot
-   cycle phase (`frontmatter_scan`) so it runs alongside the other periodic
-   maintenance phases.
+2. **增量扫描**（`gbrain frontmatter scan --incremental`）。通过 `walkBrainTree` 遍历
+   磁盘，对于每个文件，检查 `mtime > last_scanned_at`
+   OR `content_hash != stored`，仅重新解析已更改的文件。大多数时钟周期：
+   第一次完整回填后零工作。也作为自动驾驶
+   循环阶段（`frontmatter_scan`）公开，因此它与其他周期性
+   维护阶段一起运行。
 
-The incremental walker handles two cases sync misses:
-- Files edited outside sync (user opens an editor, saves, never `git
-  commit`s).
-- Sources whose `local_path` isn't a git repo (sync only sees git-touched
-  files).
+增量遍历器处理同步遗漏的两种情况：
 
-## Doctor reader
+- 在同步之外编辑的文件（用户打开编辑器、保存、从不 `git
+  提交`）。
+- 其 `local_path` 不是 git 仓库的来源（同步仅看到 git 触及的
+  文件）。
+
+## Doctor 读取器
 
 ```ts
-// src/commands/doctor.ts:frontmatter_integrity (Phase 2 shape)
+// src/commands/doctor.ts:frontmatter_integrity (Phase 2 形状)
 const rows = await engine.executeRaw<{ source_id: string; issues: number }>(
   `SELECT source_id, count(*) FILTER (WHERE jsonb_array_length(codes) > 0)::int AS issues
    FROM frontmatter_scan_state
@@ -120,81 +121,81 @@ const rows = await engine.executeRaw<{ source_id: string; issues: number }>(
 );
 ```
 
-One SQL query, constant time regardless of brain size. The partial-state
-surfacing from v0.38.2.0 stays — when `frontmatter_scan_state` is stale
-(no rows for a registered source, or `last_scanned_at` >24h old for any
-source), doctor warns about freshness rather than reporting potentially-
-stale data as authoritative.
+一个 SQL 查询，恒定时间，无论大脑大小如何。来自
+v0.38.2.0 的 partial-state
+surfacing 保持不变 — 当 `frontmatter_scan_state` 过时
+（对于已注册的来源没有行，或者对于任何
+来源，`last_scanned_at` > 24 小时旧）时，doctor 会警告新鲜度，而不是将潜在-
+过时数据报告为权威数据。
 
-## Sequencing concerns
+## 排序问题
 
-1. **First-ever scan.** A fresh upgrade has no rows in
-   `frontmatter_scan_state`. Two options:
-   - Lazy: doctor reports "no scan state yet; run `gbrain frontmatter scan
-     --incremental` once" (operator-driven).
-   - Eager: the migration that creates the table also enqueues an autopilot
-     cycle job to do the first full scan.
+1. **首次扫描。** 全新升级在
+   `frontmatter_scan_state` 中没有行。两个选项：
+   - 惰性：doctor 报告"尚未扫描状态；运行 `gbrain frontmatter scan
+     --incremental` 一次"（操作员驱动）。
+   - 急切：创建表的迁移也会将自动驾驶
+     循环作业排队以进行首次完整扫描。
 
-   Recommendation: lazy, with a clear hint. The autopilot path is heavier
-   surface (must add the new `frontmatter_scan` phase to the existing
-   cycle.ts machinery + the doctor-routed background job system).
+   建议：惰性，并带有明确的提示。自动驾驶路径是较重的
+   surface（必须将新的 `frontmatter_scan` 阶段添加到现有
+   cycle.ts 机制和 doctor 路由的后台作业系统）。
 
-2. **Source archival / deletion.** `frontmatter_scan_state` has `ON DELETE
-   CASCADE` on `sources(id)`, so soft-delete + 72h TTL + purge already
-   clean it up. No additional logic needed.
+2. **来源归档 / 删除。** `frontmatter_scan_state` 在 `sources(id)` 上具有 `ON DELETE
+   CASCADE`，因此软删除 + 72 小时 TTL + 清除已经
+   清理它。不需要额外的逻辑。
 
-3. **Path renames inside a source.** Sync would `DELETE` the old row by
-   path (via a periodic reconcile step) and `INSERT` the new row. Without
-   that step, the table accumulates stale path rows. Either:
-   - A reconcile step in the incremental scanner: any path-row not seen
-     during the walk gets deleted.
-   - Or: doctor reports "N stale rows in frontmatter_scan_state" as a
-     freshness signal, with `gbrain frontmatter scan --reconcile` as the
-     remediation.
+3. **来源内的路径重命名。** 同步会通过
+   路径（通过周期性协调步骤）`DELETE` 旧行并 `INSERT` 新行。如果没有
+   该步骤，表会累积过时的路径行。要么：
+   - 增量扫描器中的协调步骤：在遍历期间未看到的任何路径行都会
+     被删除。
+   - 或者：doctor 将"frontmatter_scan_state 中的 N 个过时行"报告为
+     新鲜度信号，并将 `gbrain frontmatter scan --reconcile` 作为
+     修复措施。
 
-## Cost estimate
+## 成本估算
 
-- One UPSERT per file synced. Negligible vs the parse + DB write that sync
-  already does.
-- Incremental refresh runtime: dominated by mtime stats. ~ms per 1000 files
-  on SSD.
-- Doctor read: one indexed SQL query. Sub-100ms on any brain size.
+- 每个同步的文件一次 UPSERT。与同步已经执行的解析 + 数据库写入相比，
+  可以忽略不计。
+- 增量刷新运行时间：主要受 mtime 统计信息支配。在 SSD 上，每 1000 个文件约需 ~ms。
+- Doctor 读取：一个索引化 SQL 查询。在任何大脑大小下都低于 100 毫秒。
 
-## What this design deliberately does NOT do
+## 此设计特意不做什么
 
-- **Replace v0.38.2.0's bounded-walk safety net.** Phase 2 makes the
-  steady-state cheap, but the disk walker (with its deadline check) stays
-  as the source-of-truth fallback for sources whose scan state is missing
-  or stale. Belt-and-suspenders.
-- **Introduce a separate frontmatter validation rule set.** Reuses
-  `parseMarkdown(..., {validate: true})` and the existing
-  `ParseValidationCode` enum. Single source of truth.
-- **Add a new background daemon.** Wires into the existing
-  `autopilot-cycle` Minion handler as a new phase, alongside sync /
-  extract / embed / etc.
+- **替换 v0.38.2.0 的有界遍历安全网。** Phase 2 使
+  稳定状态变得便宜，但磁盘遍历器（带有其截止时间检查）保持
+  作为扫描状态缺失或
+  过时的来源的真相源回退。万无一失。
+- **引入单独的 frontmatter 验证规则集。** 重用
+  `parseMarkdown(..., {validate: true})` 和现有的
+  `ParseValidationCode` 枚举。单一真相源。
+- **添加新的后台守护程序。** 连接到现有的
+  `autopilot-cycle` Minion 处理程序作为新阶段，以及同步 /
+  提取 / 嵌入 / 等。
 
-## Open questions for the implementer
+## 给实现者的开放性问题
 
-1. **Path normalization.** `pages.source_path` and the disk walker's
-   relative path computation are similar but not identical (slashes,
-   leading `./`, etc.). The incremental scanner needs to match what sync
-   stores so UPSERTs key correctly. Audit before writing.
-2. **Soft-delete interaction.** A page that gets soft-deleted in the DB
-   (v0.26.5) still has a file on disk. Should the incremental scan
-   continue to track its frontmatter state? Probably yes (so a future
-   `restore_page` doesn't surprise with stale frontmatter), but worth
-   confirming with the soft-delete owner.
-3. **Two-phase rollout.** Land the table + writes first, let it backfill
-   for a release cycle, then switch the doctor reader. Avoids the
-   "Phase 2 ships but the table is empty" case where doctor regresses to
-   reporting "no scan state."
+1. **路径规范化。** `pages.source_path` 和磁盘遍历器的
+   相对路径计算相似但不完全相同（斜杠、
+   前导 `./` 等）。增量扫描器需要匹配同步
+   存储的内容，以便 UPSERT 键正确。在写入之前进行审核。
+2. **软删除交互。** 在数据库中软删除的页面
+   （v0.26.5）在磁盘上仍然有文件。增量扫描是否应该
+   继续跟踪其 frontmatter 状态？可能是的（因此未来的
+   `restore_page` 不会因过时的 frontmatter 而感到惊讶），但值得
+   与软删除所有者确认。
+3. **两阶段推出。** 首先落地表和写入，让它回填
+   一个发布周期，然后切换 doctor 读取器。避免
+   "Phase 2 已发布但表为空"的情况，即 doctor 回归到
+   报告"无扫描状态"。
 
-## TODO file entry
+## TODO 文件条目
 
 ```
-- [ ] Implement Phase 2: DB-backed frontmatter scan state.
-      Design lives at docs/architecture/frontmatter-scan-incremental.md.
-      Schema migration v81 + sync-side UPSERT + incremental scan command
-      + autopilot cycle phase + doctor reader. Two-phase rollout: ship
-      table + writes first; flip the reader one release later.
+- [ ] 实施 Phase 2：基于数据库的 frontmatter 扫描状态。
+      设计位于 docs/architecture/frontmatter-scan-incremental.md。
+      迁移 v81 + 同步端 UPSERT + 增量扫描命令
+      + 自动驾驶循环阶段 + doctor 读取器。两阶段推出：首先落地
+      表 + 写入；一个发布后翻转读取器。
 ```

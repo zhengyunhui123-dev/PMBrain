@@ -13,6 +13,10 @@ interface LogEntry {
   created_at: string;
 }
 
+function statusLabel(status: string): string {
+  return status === 'success' ? '成功' : status === 'error' ? '错误' : status;
+}
+
 export function RequestLogPage() {
   const [data, setData] = useState<{ rows: LogEntry[]; total: number; page: number; pages: number }>({
     rows: [], total: 0, page: 1, pages: 1,
@@ -30,9 +34,9 @@ export function RequestLogPage() {
 
   const timeAgo = (ts: string) => {
     const diff = Date.now() - new Date(ts).getTime();
-    if (diff < 60000) return `${Math.floor(diff / 1000)}s ago`;
-    if (diff < 3600000) return `${Math.floor(diff / 60000)} min ago`;
-    if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
+    if (diff < 60000) return `${Math.floor(diff / 1000)} 秒前`;
+    if (diff < 3600000) return `${Math.floor(diff / 60000)} 分钟前`;
+    if (diff < 86400000) return `${Math.floor(diff / 3600000)} 小时前`;
     return new Date(ts).toLocaleDateString();
   };
 
@@ -46,7 +50,7 @@ export function RequestLogPage() {
     if (slug) parts.push(slug);
     if (partial) parts.push(`~${partial}`);
     if (limit) parts.push(`limit=${limit}`);
-    if (Object.keys(rest).length > 0) parts.push(`+${Object.keys(rest).length} params`);
+    if (Object.keys(rest).length > 0) parts.push(`+${Object.keys(rest).length} 个参数`);
     return parts.join(' ');
   };
 
@@ -57,29 +61,29 @@ export function RequestLogPage() {
   return (
     <>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
-        <h1 className="page-title" style={{ marginBottom: 0 }}>Request Log</h1>
+        <h1 className="page-title" style={{ marginBottom: 0 }}>请求日志</h1>
         <select value={agentFilter} onChange={e => { setAgentFilter(e.target.value); setPage(1); }}
           style={{ background: 'var(--bg-secondary)', color: 'var(--text-primary)', border: '1px solid var(--border)', borderRadius: 6, padding: '4px 8px', fontSize: 13 }}>
-          <option value="all">All agents</option>
+          <option value="all">全部 Agent</option>
           {[...agentMap.entries()].map(([id, name]) => <option key={id} value={id}>{name}</option>)}
         </select>
       </div>
 
       {data.rows.length === 0 ? (
         <div style={{ textAlign: 'center', padding: 48, color: 'var(--text-muted)' }}>
-          No requests yet.
+          暂无请求。
         </div>
       ) : (
         <>
           <table>
             <thead>
               <tr>
-                <th>Time</th>
+                <th>时间</th>
                 <th>Agent</th>
-                <th>Operation</th>
-                <th>Params</th>
-                <th>Latency</th>
-                <th>Status</th>
+                <th>操作</th>
+                <th>参数</th>
+                <th>延迟</th>
+                <th>状态</th>
               </tr>
             </thead>
             <tbody>
@@ -99,23 +103,23 @@ export function RequestLogPage() {
                       {formatParams(r.params)}
                     </td>
                     <td className="mono">{r.latency_ms}ms</td>
-                    <td><span className={`badge badge-${r.status}`}>{r.status}</span></td>
+                    <td><span className={`badge badge-${r.status}`}>{statusLabel(r.status)}</span></td>
                   </tr>
                   {expandedRow === r.id && (
                     <tr>
                       <td colSpan={6} style={{ background: 'var(--bg-secondary, #0f0f1a)', padding: 16 }}>
                         <div style={{ display: 'grid', gridTemplateColumns: '100px 1fr', gap: '6px 12px', fontSize: 13 }}>
-                          <span style={{ color: 'var(--text-muted)' }}>Time</span>
+                          <span style={{ color: 'var(--text-muted)' }}>时间</span>
                           <span>{new Date(r.created_at).toLocaleString()}</span>
                           <span style={{ color: 'var(--text-muted)' }}>Agent</span>
                           <span className="mono">{r.token_name}</span>
-                          <span style={{ color: 'var(--text-muted)' }}>Operation</span>
+                          <span style={{ color: 'var(--text-muted)' }}>操作</span>
                           <span className="mono">{r.operation}</span>
-                          <span style={{ color: 'var(--text-muted)' }}>Latency</span>
+                          <span style={{ color: 'var(--text-muted)' }}>延迟</span>
                           <span>{r.latency_ms}ms</span>
                           {r.params && (
                             <>
-                              <span style={{ color: 'var(--text-muted)' }}>Params</span>
+                              <span style={{ color: 'var(--text-muted)' }}>参数</span>
                               <pre className="mono" style={{ margin: 0, whiteSpace: 'pre-wrap', fontSize: 12 }}>
                                 {JSON.stringify(r.params, null, 2)}
                               </pre>
@@ -123,7 +127,7 @@ export function RequestLogPage() {
                           )}
                           {r.error_message && (
                             <>
-                              <span style={{ color: 'var(--error, #ff6b6b)' }}>Error</span>
+                              <span style={{ color: 'var(--error, #ff6b6b)' }}>错误</span>
                               <span style={{ color: 'var(--error, #ff6b6b)' }}>{r.error_message}</span>
                             </>
                           )}
@@ -137,10 +141,10 @@ export function RequestLogPage() {
           </table>
 
           <div className="pagination">
-            <span>Page {data.page} of {data.pages} ({data.total} total)</span>
+            <span>第 {data.page} / {data.pages} 页（共 {data.total} 条）</span>
             <div style={{ display: 'flex', gap: 8 }}>
-              <button disabled={data.page <= 1} onClick={() => setPage(p => p - 1)}>Previous</button>
-              <button disabled={data.page >= data.pages} onClick={() => setPage(p => p + 1)}>Next</button>
+              <button disabled={data.page <= 1} onClick={() => setPage(p => p - 1)}>上一页</button>
+              <button disabled={data.page >= data.pages} onClick={() => setPage(p => p + 1)}>下一页</button>
             </div>
           </div>
         </>

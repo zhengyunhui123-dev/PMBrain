@@ -1,227 +1,201 @@
-# Minions shell jobs — move deterministic crons off the gateway
+# Minions shell 作业 — 将确定性 crons 从网关移开
 
-## 30 seconds
+## 30 秒
 
 ```bash
-# Run your first shell job:
+# 运行你的第一个 shell 作业：
 GBRAIN_ALLOW_SHELL_JOBS=1 gbrain jobs submit shell \
   --params '{"cmd":"echo hello","cwd":"/tmp"}' --follow
 # → exit_code: 0, stdout_tail: "hello\n", duration_ms: 43
 ```
 
-That's it. Your cron scripts now have a home with retry, backoff, DLQ, and
-`gbrain jobs list` visibility, without each one booting a full LLM session.
+就是这样。你的 cron 脚本现在有一个家，具有重试、退避、DLQ 和
+`gbrain jobs list` 可见性，而无需每个都引导完整的 LLM 会话。
 
-**PGLite users:** `gbrain jobs work` does not run on PGLite (exclusive file
-lock). Every crontab invocation must use `--follow` for inline execution.
-Postgres users can run a persistent worker; see recipes below.
-
----
-
-## Why it exists
-
-If your agent runs deterministic scripts from cron (token refresh, API fetch,
-scrape + write), each one pays the cost of a full LLM session on the gateway.
-Fourteen simultaneous fires on a Series A deployment pin CPU at 100% and block
-live messages. None of those scripts need reasoning. They need a shell.
-
-Shell jobs move them to the Minions worker: one deterministic-script execution
-per cron, zero LLM tokens, unified visibility and retry.
+**PGLite 用户：** `gbrain jobs work` 不会在 PGLite 上运行（独占文件
+锁）。每个 crontab 调用都必须使用 `--follow` 进行内联执行。
+Postgres 用户可以运行持久 worker；请参阅下面的配方。
 
 ---
 
-## Security model (read this)
+## 为什么它存在
 
-Shell exec is a large blast radius. We ship two independent gates, both must
-pass:
+如果你的 agent 从 cron 运行确定性脚本（token 刷新、API 提取、
+抓取 + 写入），则每个都会支付网关上完整 LLM 会话的成本。
+同时触发 14 个会在 A 轮部署上将 CPU 固定在 100% 并阻塞
+实时消息。这些脚本都不需要推理。它们需要一个 shell。
 
-1. **MCP boundary.** `submit_job` with `name: 'shell'` is rejected when
-   `ctx.remote === true` (MCP callers). Independent of the env flag. Remote
-   agents can never submit shell jobs. `MinionQueue.add('shell', ...)` has its
-   own guard too, so an in-process handler can't programmatically bypass this.
-2. **Env flag.** The worker only registers the shell handler when
-   `GBRAIN_ALLOW_SHELL_JOBS=1` is set on the worker process. Default: off. Your
-   agent opts in per-host.
-
-**What the env allowlist does AND does not do.** Shell jobs run with a minimal
-env: `PATH, HOME, USER, LANG, TZ, NODE_ENV`. Your secrets like `OPENAI_API_KEY`
-and `DATABASE_URL` are NOT passed to the child. You opt-in additional keys per
-job via `env: { ... }` (non-secret values only — see "Secrets" below) or via
-`inherit: ["database_url"]` (recommended for secrets — names only in the row,
-values resolved at child-spawn from `gbrain config set`). This stops accidental
-`$OPENAI_API_KEY` interpolation in a user-authored script. It does **not**
-sandbox filesystem reads: a shell script can `cat ~/.env` or any file the
-worker process can read. The operator picks a safe `cwd`. That is the trust
-boundary.
-
-**Audit trail, not forensic insurance.** Every submission writes a JSONL line
-to `~/.gbrain/audit/shell-jobs-YYYY-Www.jsonl` (ISO-week rotation; override
-with `GBRAIN_AUDIT_DIR`). Failures log to stderr and don't block submission, so
-a disk-full adversary could silently disable the trail. Good for "what did
-this cron submit last Tuesday", not for security-critical forensics.
-
-**The command text is logged as-is.** If you embed a secret in `cmd`
-(`curl -H 'Authorization: Bearer ...'`), it shows up in the audit file. Put
-secrets in `env:` instead.
+Shell 作业将它们移动到 Minions worker：每个 cron 一次确定性脚本执行，
+零 LLM token，统一的可见性和重试。
 
 ---
 
-## Migrate a cron
+## 安全模型（阅读此内容）
 
-### Postgres worker (recommended)
+Shell exec 是一个大型爆破半径。我们发布了两个独立的门，都必须
+通过：
 
-On one terminal, start a persistent worker:
+1. **MCP 边界。** 当 `ctx.remote === true`（MCP 调用程序）时，`submit_job` 和 `{'name': 'shell'}` 被拒绝。独立于 env 标志。Remote
+   agents 永远无法提交 shell 作业。`MinionQueue.add('shell', ...)` 具有
+   它自己的保护程序，因此进程内处理程序无法以编程方式绕过此操作。
+2. **Env 标志。** 仅当
+   `GBRAIN_ALLOW_SHELL_JOBS=1` 设置在 worker 进程上时，worker 才会注册 shell 处理程序。默认值：关闭。你的
+   agent 按主机选择加入。
+
+**env 允许列表的作用和不作用。** Shell 作业使用最少的
+env 运行：`PATH`、`HOME`、`USER`、`LANG`、`TZ`、`NODE_ENV`。你的密钥（如 `OPENAI_API_KEY`
+和 `DATABASE_URL`）不会传递到子级。你可以通过 `env: { ... }` 选择加入其他密钥
+（仅限非密钥值 — 请参阅下面的"密钥"），或通过
+`inherit: ["database_url"]`（推荐用于密钥 — 名称仅在行中，
+值在从 `gbrain config set` 生成时从 worker 的配置中解析）。这会阻止
+偶然的 `$OPENAI_API_KEY` 插值在用户创作的脚本中。它**不会**
+沙盒文件系统读取：shell 脚本可以 `cat ~/.env` 或 worker 进程可以读取的
+任何文件。操作员选择一个安全的 `cwd`。那就是信任
+边界。
+
+**审计跟踪，不是取证保证。** 每次提交都会将 JSONL 行写入
+`~/.gbrain/audit/shell-jobs-YYYY-Www.jsonl`（ISO 周轮换；使用 `GBRAIN_AUDIT_DIR` 覆盖）。失败会记录到 stderr，但不会阻止提交，因此
+磁盘已满的对手可以静默地禁用跟踪。善于"上周二这个 cron 提交了什么"，而不是
+用于安全关键的取证。
+
+**命令文本按原样记录。** 如果你在 `cmd` 中嵌入密钥，
+（ `curl -H 'Authorization: Bearer ...'`），它会显示在审计文件中。将
+密钥放在 `env:` 中而不是。
+
+---
+
+## 迁移 cron
+
+### Postgres worker（推荐）
+
+在一个终端上，启动持久 worker：
 
 ```bash
 GBRAIN_ALLOW_SHELL_JOBS=1 gbrain jobs work
 ```
 
-Rewrite crontab to submit shell jobs (no `--follow`):
+重写 crontab 以提交 shell 作业（没有 `--follow`）：
 
 ```cron
-# Before (LLM gateway):
-#   OpenClaw cron: x-garrytan-unified
-# After (Minions worker):
+# 之前（LLM 网关）：
+#   OpenClaw cron：x-garrytan-unified
+
+# 之后（Minions worker）：
 3 13,16,19,22,1,4,7,10 * * * \
   gbrain jobs submit shell \
     --params '{"cmd":"node scripts/x-garrytan-daily.mjs","cwd":"/data/.openclaw/workspace"}' \
     --max-attempts 3 --timeout-ms 300000
 ```
 
-Worker claims the job on next poll, runs it, records `exit_code` +
-`stdout_tail` + `stderr_tail` in the result. Failures retry per
-`--max-attempts` with exponential backoff.
+Worker 在下次轮询时认领作业，运行它，在结果中记录 `exit_code` +
+`stdout_tail` + `stderr_tail`。失败会根据
+`--max-attempts` 和指数退避重试。
 
-### PGLite (inline execution)
+### PGLite（内联执行）
 
-PGLite doesn't support the persistent worker daemon. Every crontab invocation
-uses `--follow` to run inline:
+PGLite 不支持持久 worker 守护程序。每个 crontab 调用
+使用 `--follow` 进行内联运行：
 
 ```cron
-# Each cron tick spawns a short-lived worker that runs the job inline.
+# 每个 cron 刻度生成一个短寿命的 worker，该 worker 内联运行作业。
 3 13,16,19,22,1,4,7,10 * * * \
   GBRAIN_ALLOW_SHELL_JOBS=1 gbrain jobs submit shell \
     --params '{"cmd":"node scripts/x-garrytan-daily.mjs","cwd":"/data/.openclaw/workspace"}' \
     --follow --timeout-ms 300000
 ```
 
-Note: `--follow` blocks the crontab slot until the job finishes. If 14 shell
-crons land at the same minute and each takes 30s, they serialize through
-crontab's spawning limits. Postgres + persistent worker scales better.
+注意：`--follow` 会阻塞 crontab 插槽，直到作业完成。如果 14 个 shell
+cron 在同一分钟触发，并且每个都需要 30 秒，则它们会序列化通过
+crontab 的生成限制。Postgres + 持久 worker 扩展得更好。
 
-### Calling `gbrain` itself from a shell job — use `inherit:` for DATABASE_URL {#secrets}
+### 从 shell 作业调用 `gbrain` 本身 — 对 DATABASE_URL 使用 `inherit:` {#secrets}
 
-A common pattern is submitting shell jobs that run `gbrain` CLI commands:
+一个常见的模式是提交运行 `gbrain` CLI 命令的 shell 作业：
 
 ```bash
 gbrain jobs submit shell --params '{
   "cmd": "gbrain sync --skip-failed && gbrain embed --stale",
-  "cwd": "/data/gbrain",
+  "cwd": "/data/brain",
   "inherit": ["database_url"]
 }'
 ```
 
-`inherit: ["database_url"]` tells the worker to look up `database_url` from its
-own `loadConfig()` (file + env merged) and inject the value into the child's
-env as `GBRAIN_DATABASE_URL`. The job row in `minion_jobs.data` stores
-`inherit: ["database_url"]` — **names only, never values**. The shell-audit
-JSONL records the same. Pre-enqueue validation rejects the submission if the
-worker can't resolve the requested key, with a paste-ready
-`gbrain config set database_url <value>` hint.
+`inherit: ["database_url"]` 告诉 worker 从其自己的 `loadConfig()` 中查找 `database_url`（文件 + env 合并），并将值作为 `GBRAIN_DATABASE_URL` 注入到子级的环境中。`minion_jobs.data` 中的数据库行仅携带名称 — `inherit: ["database_url"]` — 永远不会携带值。请参阅
+完整的验证规则和错误目录。
 
-**Why not just write the URL into `env:` directly?** Pre-v0.36.5.0 callers
-wrote things like:
+**为什么不直接将 URL 写入 `env:`？** v0.36.5.0 之前的调用者
+写了如下内容：
 
 ```jsonc
-// ❌ Deprecated as of v0.36.5.0 — REJECTED at submit time.
+// v0.36.5.0 之前：有效，但 URL 以明文形式持久化在 minion_jobs.data 中。
 {
-  "cmd": "gbrain stats",
-  "cwd": "/data/gbrain",
+  "cmd": "gbrain sync --skip-failed",
+  "cwd": "/data/brain",
   "env": { "GBRAIN_DATABASE_URL": "postgresql://..." }
 }
 ```
 
-This planted plaintext secrets in `minion_jobs.data` (DB row) and in the
-shell-audit JSONL. Anyone with read access to the brain DB (or a brain dump,
-or a shared brain via the mounts feature) saw the URL. v0.36.5.0 doesn't
-forbid that pattern — the validator trusts the agent — but **prefer
-`inherit:`** for any secret you want kept out of the row. Names land in the
-row; values resolve at child-spawn from the worker's config.
+这会将 URL 以明文形式放在 `minion_jobs.data` 和 shell-audit
+JSONL 中。任何具有 brain-DB 读取访问权限的人（或通过挂载的共享 brain）都会看到该 URL。从 v0.36.5.0 开始，这在入队前验证时被拒绝。错误消息将 `inherit: ["database_url"]` 命名为
+替代方案。
 
-**Scope:** v0.36.5.0 `inherit:` is **free-form**. Pass any snake_case
-config-key name and the worker resolves the value from `loadConfig()` at
-child-spawn time:
+**范围：** v0.36.5.0 `inherit:` 是**自由格式**。传递 worker 上的任何 snake_case
+配置键名称 — `database_url`、`anthropic_api_key`、`openai_api_key`、
+`voyage_api_key`、`groq_api_key`、`zeroentropy_api_key`，或你填入 `~/.gbrain/config.json` 的任何自定义字段。Agent 选择它需要的内容。
 
-- `inherit: ["database_url"]` → child env `GBRAIN_DATABASE_URL`
-- `inherit: ["anthropic_api_key"]` → child env `ANTHROPIC_API_KEY`
-- `inherit: ["openai_api_key"]` → child env `OPENAI_API_KEY`
-- `inherit: ["voyage_api_key"]` → child env `VOYAGE_API_KEY`
-- `inherit: ["groq_api_key", "zeroentropy_api_key"]` → both injected
-- Or any arbitrary config-key your worker has (`my_custom_field` →
-  `MY_CUSTOM_FIELD`)
+**输出侧泄漏（阅读此内容）。** `inherit:` 允许列表可防止
+密钥登陆 JOB ROW INPUT 字段（`data.cmd`、`data.argv`、
+`data.env`）。默认情况下，它**不会**清除输出字段 — 如果你的
+脚本将密钥打印到 stdout 或 stderr（`echo "$GBRAIN_DATABASE_URL"`、
+`psql "$GBRAIN_DATABASE_URL"` 在错误时回显 URL），则该值会
+以明文形式落在 `result.stdout_tail` / `result.stderr_tail` / `error_text` 中，
+并从那里进入 brain DB 行。
 
-The env-key name is derived by uppercasing the config-key name. The one
-override is `database_url` → `GBRAIN_DATABASE_URL` (plain `DATABASE_URL` is
-ambiguous in most Postgres-app contexts).
-
-Pre-enqueue validation fail-fasts if the worker can't resolve a requested
-name. The validator does NOT police which secrets you choose to inherit —
-the agent submitting the minion is in the same uid as the worker, so it's
-your call.
-
-**Output-side leakage (read this).** The `inherit:` allowlist prevents
-secrets from landing in the JOB ROW INPUT fields (`data.cmd`, `data.argv`,
-`data.env`). By default it does NOT scrub the OUTPUT fields — if your
-script prints the secret to stdout or stderr (`echo "$GBRAIN_DATABASE_URL"`,
-`psql "$GBRAIN_DATABASE_URL"` echoing the URL on error), the value lands
-plaintext in `result.stdout_tail` / `result.stderr_tail` / `error_text`,
-and from there into the brain DB row.
-
-**`redact_secrets: true` opts into output-side scrubbing.** Set it per-job
-(or pass `--redact-secrets` on the CLI):
+`redact_secrets: true` 选择启用输出侧清除。按作业设置
+（或在 CLI 上传递 `--redact-secrets`）：
 
 ```bash
 gbrain jobs submit shell --params '{
   "cmd": "gbrain sync --skip-failed",
-  "cwd": "/data/gbrain",
+  "cwd": "/data/brain",
   "inherit": ["database_url"],
   "redact_secrets": true
 }'
 
-# Or, equivalently:
+# 或，等效地：
 gbrain jobs submit shell \
-  --params '{"cmd":"gbrain sync --skip-failed","cwd":"/data/gbrain","inherit":["database_url"]}' \
+  --params '{"cmd":"gbrain sync --skip-failed","cwd":"/data/brain","inherit":["database_url"]}' \
   --redact-secrets
 ```
 
-When `redact_secrets: true`, the worker resolves each name in `inherit:` to
-a value, runs the child, then string-replaces every occurrence of those
-values in `stdout_tail` / `stderr_tail` (and in the `error_text` derived from
-`stderr_tail` on non-zero exit) with `<REDACTED:name>` before persistence.
-Only `inherit:`-resolved values are scrubbed; caller-supplied `env:` values
-are not (those are the "I'm fine with this in the row" channel by design).
+当 `redact_secrets: true` 时，worker 会将 `inherit:` 中的每个名称解析为
+值，运行子级，然后将那些
+值中的所有匹配项替换为 `stdout_tail` / `stderr_tail`（以及
+从 `stderr_tail` 派生的 `error_text` 中）
+`<REDACTED:name>` 在持久化之前。仅清除 `inherit:`-解析的值；
+调用者提供的 `env:` 值不会（那些是"我同意此行中"
+通道设计的）。
 
-**Heuristic, not perfect.** The redactor uses literal string-replace. A
-script that base64-encodes the secret before printing, or that emits it
-one character at a time, will bypass the scrub. Those are adversarial
-shapes — the agent + the script are in the same trust domain, so this
-layer defends against accidental echo (the common case), not deliberate
-exfiltration.
+**启发式，不是完美的。** 清除程序使用文字字符串替换。在打印之前对密钥进行 base64 编码的
+脚本，或逐个字符发出的脚本，将绕过清除程序。那些是
+对抗性形状 — agent + 脚本位于相同的信任域中，因此此
+层可防止偶然的 echo（常见情况），而不是故意的
+过滤。
 
-**Three rules for shell-job authors who deal with secrets:**
+**编写处理密钥的 shell 作业的三个规则：**
 
-- **Prefer not to echo secrets at all.** Even with `redact_secrets`, less
-  output means less risk if the redactor ever has an edge-case miss.
-- **Wrap noisy CLI tools to suppress URLs on error.** `psql --quiet`,
-  `pg_dump --quiet`, or pipe through
-  `2>&1 | sed 's|postgresql://[^@]*@|postgresql://REDACTED@|g'`.
-- **Inspect with `gbrain jobs get <id>` after a failure** to verify what
-  actually persisted.
+- **更喜欢根本不 echo 密钥。** 即使使用 `redact_secrets`，较少的
+  输出意味着如果清除程序遇到边缘情况未命中，则风险较低。
+- **包装嘈杂的 CLI 工具以在错误时抑制 URL。** `psql --quiet`、
+  `pg_dump --quiet`，或通过
+  `2>&1 | sed 's|postgresql://[^@]*@|postgresql://REDACTED@|g'`。
+- **失败后使用 `gbrain jobs get <id>` 进行检查。** 验证什么
+  实际上持久化了。
 
-### Submitting with `argv` (no shell interpolation)
+### 使用 `argv` 提交（没有 shell 插值）
 
-For programmatic callers assembling commands from JSON, use `argv` instead of
-`cmd`. No shell, no injection surface:
+对于从 JSON 组装命令的编程调用程序，请使用 `argv` 而不是
+`cmd`。没有 shell，没有注入表面：
 
 ```bash
 gbrain jobs submit shell \
@@ -231,54 +205,55 @@ gbrain jobs submit shell \
 
 ---
 
-## Debug a failed job
+## 调试失败作业
 
 ```bash
-# List dead shell jobs
+# 列出死信 shell 作业
 gbrain jobs list --status dead
 
-# Inspect one
+# 检查一个
 gbrain jobs get 42
-# → error_text, stacktrace, result.stdout_tail, result.stderr_tail
+# → error_text、stacktrace、result.stdout_tail、result.stderr_tail
 
-# Submission audit log (operator trail, not forensic)
+# 提交审计日志（操作员跟踪，不是取证）
 cat ~/.gbrain/audit/shell-jobs-*.jsonl | jq '.'
 
-# First-time failure mode: submitted without env flag on the worker
+# 首次失败模式：在没有 worker 上的 env 标志的情况下提交
 gbrain jobs list --status waiting --name shell
-# If rows pile up here, no worker with GBRAIN_ALLOW_SHELL_JOBS=1 is running.
+# 如果行堆积在此处，则没有运行 GBRAIN_ALLOW_SHELL_JOBS=1 的 worker。
 ```
 
 ---
 
-## Limitations
+## 限制
 
-- **Filesystem reads are not sandboxed.** See "Security model" above. Don't
-  point `cwd` at a directory full of secrets.
-- **Audit log is advisory.** Disk-full or EACCES silently disables it.
-- **Cancel latency is lock-renewal-bounded** (~7-15 s by default). A cancelled
-  child keeps running until the next lock-renewal tick fails.
-- **`--follow` claim order** is by priority/created_at. If another job is
-  waiting in the same queue at the time of `--follow`, that one runs first.
-- **`cwd` symlink TOCTOU.** The absolute-path check doesn't guard against
-  symlinks pointing elsewhere at execution time. Operator-scope concern.
+- **文件系统读取不是沙盒的。** 请参阅上面的"安全模型"。不要
+  将 `cwd` 指向充满密钥的目录。
+- **审计日志是建议性的。** 磁盘已满或 EACCES 会静默禁用它。
+- **取消延迟是锁定续期边界**（~7-15 秒，默认）。取消的
+  子级会继续运行，直到下一个锁续期 tick 失败。
+- **`--follow` 认领顺序** 是按 priority/created_at 的。如果在
+  `--follow` 时另一个作业正在
+  同一队列中等待，则该作业首先运行。
+- **`cwd` 符号链接 TOCTOU。** 绝对路径检查不会在
+  执行时防止指向其他位置的符号链接。操作员范围的关注点。
 
 ---
 
-## Errors {#errors}
+## 错误 {#errors}
 
-| Error | What it means | Fix |
+| 错误 | 含义 | 修复 |
 |---|---|---|
-| `shell: specify exactly one of cmd or argv` | `cmd` and `argv` are mutually exclusive. Both absent is also invalid. | Choose one. `cmd` for shell-interpolated strings; `argv` for structured args. |
-| `shell: cwd is required and must be an absolute path` | `cwd` must be a string starting with `/`. | Set `cwd` in `--params` to an absolute path. |
-| `shell: argv must be an array of strings` | `argv` has a non-string entry or isn't an array. | Pass `argv: ["bin","arg1","arg2"]`. |
-| `shell: env values must all be strings` | `env` has a number/bool/object value. | Stringify: `"env":{"COUNT":"3"}` not `"env":{"COUNT":3}`. |
-| `shell: inherit must be an array of config-key names` | `inherit` wasn't an array. | Pass `"inherit": ["database_url", ...]`. |
-| `shell: inherit entries must be non-empty strings` | An element of `inherit` was empty, non-string, or null. | Use snake_case config-key names like `database_url`, `anthropic_api_key`. |
-| `shell: inherit name "<X>" must match [a-z][a-z0-9_]*` | Name failed snake_case regex (uppercase, leading digit/underscore, special char). | Use the config-key name verbatim — `database_url`, not `DATABASE_URL`. |
-| `shell: inherit requested "<X>" but worker has no <X> configured` | Worker can't resolve the requested name from `loadConfig()`. | Run `gbrain config set <X> <value>` on the worker host, OR check the config file at `~/.gbrain/config.json`. |
-| `shell: redact_secrets must be a boolean if set` | Caller passed a non-boolean for `redact_secrets`. | Pass `true` or `false` (or omit). The CLI `--redact-secrets` flag sets it automatically. |
-| `permission_denied: shell jobs cannot be submitted over MCP` | An MCP client tried to submit a shell job. By design CLI-only. | Submit from CLI or via a trusted operation handler (`ctx.remote === false`). |
-| `protected job name 'shell' requires CLI or operation-local submitter` | A caller invoked `MinionQueue.add('shell', ...)` without the `trusted` opt-in. | Pass `{ allowProtectedSubmit: true }` as the 4th arg. CLI and `submit_job` do this automatically. |
-| `aborted: timeout` / `aborted: cancel` / `aborted: shutdown` / `aborted: lock-lost` | The worker's abort signal fired mid-execution. Child got SIGTERM, 5s grace, then SIGKILL. | Expected: timeout / user cancel / deploy restart / stall. Inspect `gbrain jobs get` to see which. |
-| `exit N: <stderr_tail_500>` | Script exited non-zero. | Read `stderr_tail` in `gbrain jobs get`. |
+| `shell: specify exactly one of cmd or argv` | `cmd` 和 `argv` 是互斥的。两者都不在也是无效的。 | 选择一个。`cmd` 用于 shell 插值字符串；`argv` 用于结构化参数。 |
+| `shell: cwd is required and must be an absolute path` | `cwd` 必须是以后斜杠开头的字符串。 | 在 `--params` 中将 `cwd` 设置为绝对路径。 |
+| `shell: argv must be an array of strings` | `argv` 具有非字符串条目或不是数组。 | 传递 `argv: ["bin","arg1","arg2"]`。 |
+| `shell: env values must all be strings` | `env` 具有数字/布尔值/对象值。 | 字符串化：`"env":{"COUNT":"3"}` 而不是 `"env":{"COUNT":3}`。 |
+| `shell: inherit must be an array of config-key names` | `inherit` 不是数组。 | 传递 `"inherit": ["database_url", ...]`。 |
+| `shell: inherit entries must be non-empty strings` | `inherit` 的元素为空、非字符串或 null。 | 使用 snake_case 配置键名称，如 `database_url`、`anthropic_api_key`。 |
+| `shell: inherit name "<X>" must match [a-z][a-z0-9_]*` | 名称未通过 snake_case 正则表达式（大写、前导数字/下划线、特殊字符）。 | 逐字使用配置键名称 — `database_url`，而不是 `DATABASE_URL`。 |
+| `shell: inherit requested "<X>" but worker has no <X> configured` | Worker 无法从 `loadConfig()` 解析请求的名称。 | 在 worker 主机上运行 `gbrain config set <X> <value>`，或检查 `~/.gbrain/config.json` 中的配置文件。 |
+| `shell: redact_secrets must be a boolean if set` | 调用程序为 `redact_secrets` 传递了非布尔值。 | 传递 `true` 或 `false`（或省略）。CLI `--redact-secrets` 标志会自动设置它。 |
+| `permission_denied: shell jobs cannot be submitted over MCP` | MCP 客户端尝试提交 shell 作业。按设计，仅 CLI。 | 从 CLI 或通过受信任的操作处理程序（`ctx.remote === false`）提交。 |
+| `protected job name 'shell' requires CLI or operation-local submitter` | 调用程序在没有 `trusted` 选择加入的情况下调用了 `MinionQueue.add('shell', ...)`。 | 将 `{ allowProtectedSubmit: true }` 作为第 4 个参数传递。CLI 和 `submit_job` 会自动执行此操作。 |
+| `aborted: timeout` / `aborted: cancel` / `aborted: shutdown` / `aborted: lock-lost` | Worker 的中止信号在 mid-execution 时触发。子级获得 SIGTERM、5 秒宽限，然后 SIGKILL。 | 预期：超时 / 用户取消 / 部署重新启动 / 失速。使用 `gbrain jobs get` 进行检查以查看哪个。 |
+| `exit N: <stderr_tail_500>` | 脚本以非零退出。 | 在 `gbrain jobs get` 中读取 `stderr_tail`。 |

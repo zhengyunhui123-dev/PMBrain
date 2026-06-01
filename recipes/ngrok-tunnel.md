@@ -2,13 +2,13 @@
 id: ngrok-tunnel
 name: Public Tunnel
 version: 0.7.0
-description: Fixed public URL for your brain (MCP server, voice agent, any service). One ngrok account, never changes.
+description: 您的大脑的固定公共 URL（MCP 服务器、语音代理、任何服务）。一个 ngrok 账户，永不更改。
 category: infra
 requires: []
 secrets:
   - name: NGROK_AUTHTOKEN
-    description: ngrok auth token (Hobby tier recommended for fixed domain)
-    where: https://dashboard.ngrok.com/get-started/your-authtoken — sign up, then copy your authtoken
+    description: ngrok 认证令牌（推荐 Hobby 层以获得固定域名）
+    where: https://dashboard.ngrok.com/get-started/your-authtoken — 注册，然后复制您的 authtoken
 health_checks:
   - type: command
     argv: ["pgrep", "-f", "ngrok.*http"]
@@ -17,118 +17,118 @@ health_checks:
     url: "http://localhost:4040/api/tunnels"
     label: "ngrok API"
 setup_time: 10 min
-cost_estimate: "$8/mo for Hobby tier (fixed domain). Free tier works but URLs change on restart."
+cost_estimate: "$8/月 for Hobby 层（固定域名）。免费层可以工作，但 URL 在重启时更改。"
 ---
 
-# Public Tunnel: Fixed URL for Your Brain
+# Public Tunnel：您的大脑的固定 URL
 
-Your GBrain MCP server and voice agent need public URLs so Claude Desktop,
-Perplexity, and Twilio can reach them. ngrok gives you a fixed domain that
-never changes.
+您的 GBrain MCP 服务器和语音代理需要公共 URL，以便 Claude Desktop、
+Perplexity 和 Twilio 可以访问它们。ngrok 为您提供一个
+永不更改的固定域名。
 
-## IMPORTANT: Instructions for the Agent
+## 重要：给代理的说明
 
-**You are the installer.** This is foundational infrastructure. Other recipes
-(voice-to-brain, remote MCP) depend on this. Set it up first.
+**您是安装程序。** 这是基础架构。其他配方
+（voice-to-brain、remote MCP）依赖于此。首先设置它。
 
-**Why this matters:**
-- Voice-to-brain needs a public URL for Twilio webhooks
-- Remote MCP needs a public URL for Claude Desktop and Perplexity
-- Free ngrok URLs change on every restart, breaking all integrations
-- Hobby tier ($8/mo) gives a fixed domain. Set it once, never touch it again.
+**为什么这很重要：**
+- Voice-to-brain 需要公共 URL 用于 Twilio webhook
+- Remote MCP 需要公共 URL 用于 Claude Desktop 和 Perplexity
+- 免费的 ngrok URL 在每次重启时都会更改，破坏所有集成
+- Hobby 层（$8/月）提供固定域名。设置一次，再也不碰它。
 
-**Do not skip steps. Verify after each step.**
+**不要跳过步骤。在每个步骤后验证。**
 
-## Architecture
+## 架构
 
 ```
-Local services (your machine)
-  ├── GBrain MCP server (port 3000)    gbrain serve
-  └── Voice agent (port 8765)          node server.mjs
+本地服务（您的机器）
+  ├── GBrain MCP 服务器（端口 3000）    gbrain serve
+  └── 语音代理（端口 8765）          node server.mjs
          │
          ▼
-ngrok tunnel (fixed domain)
+ngrok tunnel（固定域名）
   └── https://your-brain.ngrok.app
          │
-         ├── /mcp   → Claude Desktop, Claude Code, Perplexity
+         ├── /mcp   → Claude Desktop、Claude Code、Perplexity
          └── /voice  → Twilio webhooks
 ```
 
-## Setup Flow
+## 设置流程
 
-### Step 1: Create ngrok Account + Get Hobby Tier
+### 步骤 1：创建 ngrok 账户 + 获取 Hobby 层
 
-Tell the user:
-"I need you to create an ngrok account. I strongly recommend Hobby tier ($8/mo)
-for a fixed domain that never changes. Without it, every restart breaks your
-Twilio webhooks and Claude Desktop connection.
+告诉用户：
+"我需要您创建一个 ngrok 账户。我强烈推荐 Hobby 层（$8/月）
+以获得一个永不更改的固定域名。没有它，每次重启都会破坏您的
+Twilio webhook 和 Claude Desktop 连接。
 
-1. Go to https://dashboard.ngrok.com/signup (sign up)
-2. Go to https://dashboard.ngrok.com/billing and upgrade to **Hobby** ($8/mo)
-3. Go to https://dashboard.ngrok.com/get-started/your-authtoken
-4. Copy your **Authtoken** and paste it to me"
+1. 转到 https://dashboard.ngrok.com/signup（注册）
+2. 转到 https://dashboard.ngrok.com/billing 并升级到 **Hobby**（$8/月）
+3. 转到 https://dashboard.ngrok.com/get-started/your-authtoken
+4. 复制您的 **Authtoken** 并粘贴给我"
 
-Validate:
+验证：
 ```bash
 ngrok config add-authtoken $NGROK_AUTHTOKEN \
-  && echo "PASS: ngrok configured" \
-  || echo "FAIL: ngrok auth token rejected"
+  && echo "通过：ngrok 已配置" \
+  || echo "失败：ngrok 认证令牌被拒绝"
 ```
 
-If ngrok is not installed:
-- **Mac:** `brew install ngrok`
-- **Linux:** `curl -sL https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz | tar xz -C /usr/local/bin`
+如果未安装 ngrok：
+- **Mac：** `brew install ngrok`
+- **Linux：** `curl -sL https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz | tar xz -C /usr/local/bin`
 
-**STOP until ngrok validates.**
+**停止直到 ngrok 验证通过。**
 
-### Step 2: Claim a Fixed Domain
+### 步骤 2：声明固定域名
 
-Tell the user:
-"1. Go to https://dashboard.ngrok.com/domains
-2. Click **'+ New Domain'**
-3. Choose a name (e.g., `your-brain.ngrok.app`)
-4. Click **'Create'**
-5. Tell me the domain name you chose"
+告诉用户：
+"1. 转到 https://dashboard.ngrok.com/domains
+2. 点击 **'+ New Domain'**
+3. 选择一个名称（例如，`your-brain.ngrok.app`）
+4. 点击 **'Create'**
+5. 告诉我您选择的域名"
 
-If user stayed on free tier (no fixed domain), note that URLs will change on
-restart and the watchdog will need to update Twilio. Recommend upgrading later.
+如果用户停留在免费层（无固定域名），请注意 URL 将在
+重启时更改，watchdog 将需要更新 Twilio。建议稍后升级。
 
-### Step 3: Start the Tunnel
+### 步骤 3：启动 Tunnel
 
 ```bash
-# With fixed domain (Hobby):
+# 使用固定域名（Hobby）：
 ngrok http 8765 --url your-brain.ngrok.app
 
-# Without fixed domain (free):
+# 不使用固定域名（免费）：
 ngrok http 8765
 ```
 
-Verify:
+验证：
 ```bash
 curl -sf http://localhost:4040/api/tunnels \
-  && echo "PASS: ngrok tunnel active" \
-  || echo "FAIL: ngrok not running"
+  && echo "通过：ngrok tunnel 活动" \
+  || echo "失败：ngrok 未运行"
 ```
 
-### Step 4: Set Up Watchdog
+### 步骤 4：设置 Watchdog
 
-The tunnel must auto-restart if it dies. Create a watchdog:
+tunnel 必须在死机时自动重启。创建一个 watchdog：
 
 ```bash
 #!/bin/bash
-# ngrok-watchdog.sh — run via cron every 2 minutes
+# ngrok-watchdog.sh — 每 2 分钟通过 cron 运行
 
-# Check if ngrok is running
+# 检查 ngrok 是否正在运行
 if ! pgrep -f "ngrok.*http" > /dev/null 2>&1; then
-  echo "[watchdog] ngrok not running — starting..."
+  echo "[watchdog] ngrok 未运行 — 正在启动..."
 
-  # Install if missing
+  # 如果缺少则安装
   if ! command -v ngrok > /dev/null 2>&1; then
-    echo "[watchdog] ngrok not installed"
+    echo "[watchdog] ngrok 未安装"
     exit 1
   fi
 
-  # Start with fixed domain (if configured) or free
+  # 使用固定域名启动（如果已配置）或免费
   if [ -n "$NGROK_DOMAIN" ]; then
     nohup ngrok http 8765 --url "$NGROK_DOMAIN" > /dev/null 2>&1 &
   else
@@ -136,7 +136,7 @@ if ! pgrep -f "ngrok.*http" > /dev/null 2>&1; then
   fi
   sleep 5
 
-  # If no fixed domain, update Twilio webhook with new URL
+  # 如果没有固定域名，使用新 URL 更新 Twilio webhook
   if [ -z "$NGROK_DOMAIN" ] && [ -n "$TWILIO_ACCOUNT_SID" ]; then
     NGROK_URL=$(curl -s http://localhost:4040/api/tunnels 2>/dev/null \
       | grep -o '"public_url":"https://[^"]*' | grep -o 'https://.*')
@@ -144,106 +144,105 @@ if ! pgrep -f "ngrok.*http" > /dev/null 2>&1; then
       curl -s -X POST -u "$TWILIO_ACCOUNT_SID:$TWILIO_AUTH_TOKEN" \
         "https://api.twilio.com/2010-04-01/Accounts/$TWILIO_ACCOUNT_SID/IncomingPhoneNumbers/$TWILIO_NUMBER_SID.json" \
         -d "VoiceUrl=${NGROK_URL}/voice" > /dev/null
-      echo "[watchdog] Twilio updated: $NGROK_URL"
+      echo "[watchdog] Twilio 已更新：$NGROK_URL"
     fi
   fi
 
-  echo "[watchdog] ngrok started"
+  echo "[watchdog] ngrok 已启动"
 else
-  echo "[watchdog] ngrok running"
+  echo "[watchdog] ngrok 正在运行"
 fi
 ```
 
-Add to crontab:
+添加到 crontab：
 ```bash
 */2 * * * * NGROK_DOMAIN=your-brain.ngrok.app /path/to/ngrok-watchdog.sh >> /tmp/ngrok-watchdog.log 2>&1
 ```
 
-### Step 5: Log Setup Completion
+### 步骤 5：记录设置完成
 
 ```bash
 mkdir -p ~/.gbrain/integrations/ngrok-tunnel
 echo '{"ts":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'","event":"setup_complete","source_version":"0.7.0","status":"ok","details":{"domain":"NGROK_DOMAIN","tier":"hobby"}}' >> ~/.gbrain/integrations/ngrok-tunnel/heartbeat.jsonl
 ```
 
-## Connecting AI Clients (after tunnel is running)
+## 连接 AI 客户端（tunnel 运行后）
 
-**Claude Code:**
+**Claude Code：**
 ```bash
-claude mcp add gbrain -t http https://your-brain.ngrok.app/mcp \
-  -H "Authorization: Bearer YOUR_GBRAIN_TOKEN"
-```
+   claude mcp add gbrain -t http https://your-brain.ngrok.app/mcp \
+     -H "Authorization: Bearer YOUR_GBRAIN_TOKEN"
+   ```
 
-**Claude Desktop:**
-Go to Settings > Integrations > Add. Enter:
+**Claude Desktop：**
+转到设置 > 集成 > 添加。输入：
 `https://your-brain.ngrok.app/mcp`
 
-IMPORTANT: Claude Desktop does NOT support remote MCP via JSON config.
-You MUST use Settings > Integrations in the GUI. This is the #1 setup failure.
+重要提示：Claude Desktop **不**支持通过 JSON 配置远程 MCP。
+您**必须**在 GUI 中使用设置 > 集成。这是 #1 设置失败原因。
 
-**Perplexity Computer:**
-Settings > Connectors > Add Remote MCP.
-URL: `https://your-brain.ngrok.app/mcp`
+**Perplexity Computer：**
+设置 > 连接器 > 添加远程 MCP。
+URL：`https://your-brain.ngrok.app/mcp`
 
-## Implementation Guide
+## 实施指南
 
-### The Watchdog Pattern (from production)
+### Watchdog 模式（来自生产）
 
 ```
 watchdog():
-  // Check: is ngrok running?
+  // 检查：ngrok 正在运行吗？
   if not process_running("ngrok.*http"):
     start_ngrok()
     sleep(5)
 
-    // If no fixed domain, must update Twilio
+    // 如果没有固定域名，必须更新 Twilio
     if no_fixed_domain AND twilio_configured:
-      new_url = get_ngrok_url()  // from localhost:4040/api/tunnels
+      new_url = get_ngrok_url()  // 来自 localhost:4040/api/tunnels
       update_twilio_webhook(new_url + "/voice")
 
-  // Check: is the service behind ngrok running?
+  // 检查：ngrok 后面的服务正在运行吗？
   if not curl_succeeds("http://localhost:PORT/health"):
     restart_service()
 ```
 
-### ngrok Inspect Dashboard
+### ngrok 检查仪表板
 
-`http://localhost:4040` shows all requests flowing through the tunnel. Use this
-to debug MCP connection issues (see request/response headers, latency, errors).
+`http://localhost:4040` 显示通过 tunnel 流动的所有请求。使用此功能
+调试 MCP 连接问题（请参阅请求/响应头、延迟、错误）。
 
-## Tricky Spots
+## 棘手的地方
 
-1. **Claude Desktop requires GUI setup.** Adding remote MCP servers via
-   `claude_desktop_config.json` does NOT work. It silently fails with no error.
-   You MUST use Settings > Integrations.
+1. **Claude Desktop 需要 GUI 设置。** 通过
+   `claude_desktop_config.json` 添加远程 MCP 服务器**不**工作。它静默失败，没有错误。
+   您**必须**使用设置 > 集成。
 
-2. **Free tier URLs are ephemeral.** They change on every ngrok restart. The
-   watchdog handles Twilio, but Claude Desktop and Perplexity must be manually
-   reconfigured. This is why Hobby ($8/mo) is worth it.
+2. **免费层 URL 是短暂的。** 它们在每次 ngrok 重启时都会更改。
+   watchdog 处理 Twilio，但 Claude Desktop 和 Perplexity 必须手动
+   重新配置。这就是为什么 Hobby（$8/月）值得。
 
-3. **One domain, multiple services.** Hobby gives 1 free domain. Route by path
-   (`/mcp`, `/voice`) on one domain, or pay $8/mo more for a second domain.
+3. **一个域名，多个服务。** Hobby 提供 1 个免费域名。通过路径
+   路由（`/mcp`、`/voice`）在一个域名上，或者每月支付 $8 以获得第二个域名。
 
-4. **The watchdog must run on startup.** If the machine reboots, ngrok won't
-   auto-start unless you have a watchdog cron or systemd service.
+4. **Watchdog 必须在启动时运行。** 如果机器重新启动，ngrok 不会
+   自动启动，除非您有 watchdog cron 或 systemd 服务。
 
-## How to Verify
+## 如何验证
 
-1. Start tunnel. Visit `https://your-brain.ngrok.app` in a browser.
-   You should see a response (health check or default page).
-2. From Claude Desktop, run `gbrain search "test"`. Results should come back.
-3. Kill ngrok. Wait 2 minutes. Check the watchdog restarted it.
-4. From a different device (phone), access the same URL. Verify it works.
+1. 启动 tunnel。在浏览器中访问 `https://your-brain.ngrok.app`。
+   您应该看到响应（健康检查或默认页面）。
+2. 从 Claude Desktop，运行 `gbrain search "test"`。应返回结果。
+3. 终止 ngrok。等待 2 分钟。检查 watchdog 是否重新启动它。
+4. 从不同的设备（电话），访问相同的 URL。验证它可以工作。
 
-## Cost Estimate
+## 成本估算
 
-| Component | Monthly Cost |
+| 组件 | 月成本 |
 |-----------|-------------|
-| ngrok Free | $0 (ephemeral URLs, change on restart) |
-| ngrok Hobby | $8/mo (1 fixed domain, enough for MCP + voice) |
-| ngrok Pro | $20/mo (2+ domains, IP restrictions) |
-| **Recommended** | **$8/mo (Hobby)** |
+| ngrok 免费 | $0（短暂 URL，重启时更改） |
+| ngrok Hobby | $8/月（1 个固定域名，足以满足 MCP + 语音） |
+| ngrok Pro | $20/月（2+ 个域名，IP 限制） |
+| **推荐** | **$8/月（Hobby）** |
 
 ---
-
-*Part of the [GBrain Skillpack](../docs/GBRAIN_SKILLPACK.md). See also: [Voice-to-Brain](twilio-voice-brain.md), [Remote MCP Deployment](../docs/mcp/DEPLOY.md)*
+*GBrain Skillpack 的一部分。另请参阅：[Voice-to-Brain](twilio-voice-brain.md)、[Remote MCP Deployment](../docs/mcp/DEPLOY.md)*

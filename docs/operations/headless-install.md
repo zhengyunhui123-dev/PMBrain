@@ -1,27 +1,27 @@
-# Headless install: Docker, CI, postinstall
+# 无头安装：Docker、CI、postinstall
 
-As of v0.37, `gbrain init --pglite` in a non-TTY context (Docker `RUN`, CI step, postinstall hook) exits 1 when no embedding-provider API key is present in the environment. This is a deliberate fail-loud — the alternative was the v0.36 silent-broken-state class where init succeeded with a default that didn't match any real key.
+从 v0.37 开始，在非 TTY 上下文中（Docker `RUN`、CI 步骤、postinstall 钩子），当环境中没有 embedding-provider API 密钥时，`gbrain init --pglite` 退出代码 1。这是一种故意的 fail-loud 设计 — 替代方案是 v0.36 的 silent-broken-state 类，其中 init 成功但使用了与任何真实密钥都不匹配的默认值。
 
-Two patterns work for headless installs. Pick whichever fits your image lifecycle.
+两种模式适用于无头安装。选择适合你镜像生命周期的一种：
 
-## Pattern 1: Provider key available at image build time
+## 模式 1：构建时可用 provider 密钥
 
-If your CI / Docker pipeline can inject the API key as a build-time env var, set it before `gbrain init`:
+如果你的 CI / Docker pipeline 可以在构建时通过 build-time env var 注入 API 密钥，在 `gbrain init` 之前设置它：
 
 ```dockerfile
-# Multi-stage Dockerfile sketch
+# 多阶段 Dockerfile 示例
 FROM oven/bun:1 AS builder
 
-# Inject key at build via --build-arg or `--env` from CI.
+# 通过 --build-arg 或 `--env` 从 CI 注入密钥。
 ARG OPENAI_API_KEY
 ENV OPENAI_API_KEY=$OPENAI_API_KEY
 
 RUN bun install -g github:garrytan/gbrain
-RUN gbrain init --pglite  # auto-picks OpenAI, persists config
+RUN gbrain init --pglite  # 自动选择 OpenAI，持久化配置
 ```
 
 ```yaml
-# GitHub Actions equivalent
+# GitHub Actions 等效
 - name: Initialize gbrain
   env:
     OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -30,58 +30,57 @@ RUN gbrain init --pglite  # auto-picks OpenAI, persists config
     gbrain init --pglite
 ```
 
-Init writes `~/.gbrain/config.json` with the resolved `embedding_model` + `embedding_dimensions`. Subsequent runs (in the same image / runner) read from that config and don't re-resolve.
+Init 将解析的 `embedding_model` + `embedding_dimensions` 写入 `~/.gbrain/config.json`。后续运行（在相同镜像 / runner 中）从该配置读取，不会重新解析。
 
-## Pattern 2: Provider key only at runtime (deferred-setup)
+## 模式 2：仅运行时可用 provider 密钥（延迟设置）
 
-If the API key is a runtime secret (Kubernetes secret, runtime env injection, end-user-supplied), use `--no-embedding` at build time and configure the provider when the container actually runs:
+如果 API 密钥是运行时秘密（Kubernetes secret、运行时 env 注入、最终用户提供的），在构建时使用 `--no-embedding`，并在容器实际运行时配置 provider：
 
 ```dockerfile
 FROM oven/bun:1
 RUN bun install -g github:garrytan/gbrain
 
-# Build the brain shape without a provider — schema lands at the default
-# width, but no embed callsite will actually run until runtime config.
+# 在没有 provider 的情况下构建 brain shape — schema 以默认宽度着陆，但不会有实际的 embed callsite 运行，直到运行时配置。
 RUN gbrain init --pglite --no-embedding
 
-# At container start (entrypoint), provide the real provider:
+# 在容器启动时（entrypoint），提供真实的 provider：
 ENTRYPOINT ["/bin/sh", "-c", "\
   gbrain config set embedding_model openai:text-embedding-3-large \
   && gbrain init --force --pglite \
   && exec gbrain serve"]
 ```
 
-The `gbrain init --no-embedding` opt-in writes `embedding_disabled: true` to config. Every embed callsite (`gbrain import`, `gbrain embed`, the `runEmbedCore` library entry point) checks this and refuses cleanly with a `gbrain config set embedding_model <id>` hint rather than proceeding with a silent default.
+`gbrain init --no-embedding` 选择写入 `embedding_disabled: true` 到配置。每个 embed callsite（`gbrain import`、`gbrain embed`、`runEmbedCore` 库入口点）都会检查这一点，并干净地拒绝，并提示 `gbrain config set embedding_model <id>`，而不是继续使用静默默认值。
 
-The runtime `gbrain init --force` re-runs the init flow against the now-populated env, which:
+运行时 `gbrain init --force` 针对现在已填充的 env 重新运行 init 流程，这会：
 
-- Removes `embedding_disabled` from config.
-- Resolves the provider via env detection.
-- Re-templates the PGLite schema if dim differs from the build-time default.
+- 从配置中移除 `embedding_disabled`。
+- 通过 env 检测解析 provider。
+- 如果 dim 与构建时默认值不同，重新模板化 PGLite schema。
 
-## What WON'T work
+## 什么**不会**工作
 
 ```dockerfile
-# Don't do this — silent default leaves you with vector(1280) ZE column
-# and 1536d OpenAI provider at runtime, mismatched.
+# 不要这样做 — 静默默认值会让你得到 vector(1280) ZE 列
+# 和运行时 1536d OpenAI provider，不匹配。
 RUN gbrain init --pglite
 ```
 
-If you upgrade from a pre-v0.37 image that used this pattern, `gbrain doctor` will surface the mismatch on first run after upgrade and print a paste-ready repair command (`gbrain init --force --embedding-model …` for empty brains, `gbrain retrieval-upgrade --reindex` for non-empty).
+如果你从使用此模式的前 v0.37 镜像升级，`gbrain doctor` 会在升级后首次运行时发现它，并打印可粘贴的修复命令（对于空 brains 使用 `gbrain init --force --embedding-model …`，对于非空 brains 使用 `gbrain retrieval-upgrade --reindex`）。
 
-## Verifying a headless install
+## 验证无头安装
 
-After init, run `gbrain doctor --json` to verify state:
+Init 后，运行 `gbrain doctor --json` 验证状态：
 
 ```bash
 gbrain doctor --json | jq '.checks[] | select(.name=="embedding_provider")'
 ```
 
-The `embedding_provider` check returns `status: 'ok'` when:
+当满足以下条件时，`embedding_provider` 检查返回 `status: 'ok'`：
 
-- Config has a persisted `embedding_model`.
-- Config has a persisted `embedding_dimensions`.
-- Live provider probe returns the configured dim.
-- DB column width matches.
+- 配置有持久化的 `embedding_model`。
+- 配置有持久化的 `embedding_dimensions`。
+- 实时 provider probe 返回配置的 dim。
+- DB 列宽度匹配。
 
-If you used Pattern 2's deferred-setup path, the check shows `Skipped (no provider credentials)` until the runtime config is populated. That's expected.
+如果你使用了模式 2 的延迟设置路径，在运行时配置填充之前，检查会显示 `Skipped (no provider credentials)`。这是预期的。

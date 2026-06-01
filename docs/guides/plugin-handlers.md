@@ -1,98 +1,76 @@
-# Plugin handlers — registering host-specific Minion handlers
+# 插件处理程序 — 注册主机特定的 Minion 处理程序
 
-GBrain's Minion worker ships with seven built-in handlers: `sync`,
-`embed`, `lint`, `import`, `extract`, `backlinks`, `autopilot-cycle`.
-These cover every background operation the gbrain CLI itself performs.
+GBrain 的 Minion worker 附带七个内置处理程序：`sync`、`embed`、`lint`、`import`、`extract`、`backlinks`、`autopilot-cycle`。这些覆盖了 gbrain CLI 本身执行的每个后台操作。
 
-Host platforms (OpenClaw deployments, future hosts) register their own
-handlers via a plugin bootstrap that imports
-`gbrain/minions`. No `handlers.json`-style data file — handlers are
-code, loaded by the worker, with the same trust model as any other
-code in the host's repo.
+主机平台（OpenClaw 部署、将来的主机）通过导入 `gbrain/minions` 的插件引导注册它们自己的处理程序。没有 `handlers.json` 风格的数据文件 — 处理程序是代码，由 worker 加载，具有与主机仓库中任何其他代码相同的信任模型。
 
-## Why code, not data
+## 为什么是代码，而不是数据
 
-An earlier design draft shipped `~/.claude/gbrain-handlers.json` where
-each entry was a shell command the worker would exec on job claim.
-Codex flagged this as a durable RCE surface: an agent-writable data
-file that spawns arbitrary shell. We dropped the data-file approach;
-handlers are code that the host imports explicitly and ships through
-code review.
+一个早期的设计草案附带了 `~/.claude/gbrain-handlers.json`，其中每个条目都是 worker 在认领作业时会执行的 shell 命令。Codex 将其标记为持久的 RCE 表面：一个代理可写的文件，会生成任意 shell。我们放弃了数据文件方法；处理程序是主机显式导入并通过代码审查发布的代码。
 
-## The plugin contract
+## 插件合约
 
-A host worker bootstrap looks like this (TypeScript):
+主机 worker 引导看起来像这样（TypeScript）：
 
 ```ts
 import { MinionQueue, MinionWorker } from 'gbrain/minions';
 import type { BrainEngine } from 'gbrain/engine';
 
 async function main() {
-  const engine: BrainEngine = /* your engine setup */;
+  const engine: BrainEngine = /* 你的引擎设置 */;
   await engine.connect({});
 
   const worker = new MinionWorker(engine, { queue: 'default' });
 
-  // Register every host-specific handler the host's cron manifest references.
-  // Each handler returns a plain object (serialized as the job result).
-  // Throw on failure — the worker catches and retries per max_attempts.
+  // 注册主机特定的每个处理程序，主机的 cron 清单会引用这些处理程序。
+  // 每个处理程序返回一个普通对象（序列化为作业结果）。
+  // 失败时抛出 — worker 会根据 max_attempts 捕获并重试。
 
   worker.register('ea-inbox-sweep', async (ctx) => {
     const slot = ctx.data.slot ?? new Date().toISOString();
-    // Host-specific agent turn: call your LLM, scan the inbox, write
-    // brain pages, return a summary. ctx.signal.aborted indicates the
-    // worker wants you to cooperate with shutdown — honor it.
+    // 主机特定的代理回合：调用你的 LLM，扫描收件箱，写入
+    // brain 页面，返回摘要。ctx.signal.aborted 指示
+    // worker 希望你配合关闭 — 尊重它。
     return { swept: true, slot };
   });
 
   worker.register('morning-briefing', async (ctx) => {
-    /* host logic */
+    /* 主机逻辑 */
     return { briefed: true };
   });
 
-  // Call start() AFTER every handler is registered. The worker's
-  // stall-detector ignores jobs whose name is not in the registered set.
+  // 在注册每个处理程序后调用 start()。worker 的
+  // 失速检测器会忽略名称不在已注册集合中的作业。
   await worker.start();
 }
 
 main().catch(err => { console.error(err); process.exit(1); });
 ```
 
-Ship this as a separate binary in the host repo (e.g. `your-openclaw-worker`)
-or as a side-effect module that the stock `gbrain jobs work` command
-auto-loads on startup (configurable via a host-provided entry point).
+将其作为单独的可执行文件发布在主机仓库中（例如 `your-openclaw-worker`），或者作为 stock `gbrain jobs work` 命令在启动时自动加载的副作用模块（通过主机提供的入口点可配置）。
 
-## Handler contract
+## 处理程序合约
 
-Every handler receives a `MinionJobContext`:
+每个处理程序接收一个 `MinionJobContext`：
 
 ```ts
 interface MinionJobContext {
-  data: Record<string, unknown>;   // job params (whatever the cron submit passed)
-  job: MinionJob;                   // full job row (id, queue, attempts, etc.)
-  signal: AbortSignal;              // set to aborted when the worker is shutting down
-  inbox: MinionInbox;               // read messages sent to this job while it runs
+  data: Record<string, unknown>;   // 作业参数（无论 cron 提交传递了什么）
+  job: MinionJob;                   // 完整的作业行（id、队列、尝试等）
+  signal: AbortSignal;              // 当 worker 关闭时设置为中止
+  inbox: MinionInbox;               // 读取此作业运行时发送给它的消息
 }
 ```
 
-Return a serializable object on success. Throw on failure (the worker
-will log + retry per `max_attempts`).
+成功时返回可序列化对象。失败时抛出（worker 会根据 `max_attempts` 记录 + 重试）。
 
-**Abort cooperation.** When `ctx.signal.aborted` becomes true, finish
-gracefully. The worker will wait 30s for you to return before SIGKILL.
-Long-running LLM calls should pass the signal through to whatever
-network library they use.
+**中止配合。** 当 `ctx.signal.aborted` 变为 true 时，请优雅地完成。worker 会在 SIGKILL 之前等待 30 秒让你返回。长时间运行的 LLM 调用应该将信号传递给它们使用的任何网络库。
 
-**Idempotency.** The queue enforces unique `idempotency_key` at the DB
-layer, so you don't need to worry about double-submits from a cron that
-fires while the previous invocation is still running.
+**幂等性。** 队列在数据库层强制执行唯一的 `idempotency_key`，所以你不需要担心 cron 在前一次调用仍在运行时触发的双重提交。
 
-## Gbrain's migration flow
+## Gbrain 的迁移流程
 
-The v0.11.0 migration orchestrator (run by `gbrain apply-migrations`)
-detects cron entries whose handler name is NOT in GBrain's builtin set
-and emits a structured TODO to `~/.gbrain/migrations/pending-host-work.jsonl`.
-Each TODO has shape:
+v0.11.0 迁移编排器（由 `gbrain apply-migrations` 运行）检测处理程序名称不在 GBrain 内置集合中的 cron 条目，并向 `~/.gbrain/migrations/pending-host-work.jsonl` 发出结构化 TODO。每个 TODO 的形状为：
 
 ```json
 {
@@ -100,38 +78,24 @@ Each TODO has shape:
   "handler": "ea-inbox-sweep",
   "cron_schedule": "0 */30 * * *",
   "manifest_path": "/path/to/cron/jobs.json",
-  "current_cmd": "agentTurn ea-inbox-sweep",
   "recommendation": "Add a handler registration for `ea-inbox-sweep` in your host worker bootstrap per docs/guides/plugin-handlers.md. Once registered, re-run `gbrain apply-migrations` to auto-rewrite this entry.",
   "status": "pending"
 }
 ```
 
-The host agent walks these entries using `skills/migrations/v0.11.0.md`:
+主机代理使用 `skills/migrations/v0.11.0.md` 遍历这些条目：
 
-1. Read `~/.gbrain/migrations/pending-host-work.jsonl`.
-2. For each `cron-handler-needs-host-registration` row, ship a handler
-   registration in the host's worker bootstrap following the pattern
-   above.
-3. Deploy the updated worker.
-4. Re-run `gbrain apply-migrations --yes`. The orchestrator now
-   recognizes the newly-registerable handler (worker writes the
-   registered names to a discovery file on startup) and rewrites the
-   cron entry to use `gbrain jobs submit`. The JSONL row is marked
-   `status: "complete"`.
+1. 读取 `~/.gbrain/migrations/pending-host-work.jsonl`。
+2. 对于每个 `cron-handler-needs-host-registration` 行，请按照上面的模式在主机 worker 引导中发布处理程序注册。
+3. 部署更新的 worker。
+4. 重新运行 `gbrain apply-migrations --yes`。编排器现在会识别新可注册的处理程序（worker 在启动时将注册的名称写入发现文件）并重写 cron 条目以使用 `gbrain jobs submit`。JSONL 行被标记为 `status: "complete"`。
 
-## Trust boundary
+## 信任边界
 
-Handler code runs inside the worker process with the same privileges
-as the rest of the host binary. There is no elevation. But there is
-also no runtime sandbox — handlers can read + write anywhere the
-worker user can. Review handler PRs the same way you review any other
-code that touches production data.
+处理程序代码在 worker 进程内运行，具有与主机可执行文件其余部分相同的特权。没有提权。但也有没有运行时沙箱 — 处理程序可以读取 + 写入 worker 用户可以访问的任何位置。像审查任何其他触及生产数据的代码一样审查处理程序 PR。
 
-## Related
+## 相关
 
-- `skills/conventions/cron-via-minions.md` — the rewrite convention
-  for cron manifests.
-- `skills/migrations/v0.11.0.md` — how the migration orchestrator
-  drives the host agent through this work.
-- `skills/minion-orchestrator/SKILL.md` — patterns for submitting,
-  monitoring, steering, and replaying jobs once the handler is live.
+- `skills/conventions/cron-via-minions.md` — cron 清单的重写约定。
+- `skills/migrations/v0.11.0.md` — 迁移编排器如何驱动主机代理完成此工作。
+- `skills/minion-orchestrator/SKILL.md` — 处理程序上线后提交、监控、引导重放作业的模式。

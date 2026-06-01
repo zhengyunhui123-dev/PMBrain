@@ -1,69 +1,62 @@
-# Quiet Hours and Timezone-Aware Delivery
+# 安静时间与感知时区的消息推送
 
-## Goal
+## 目标
+在睡眠时间内暂停所有通知，将保留的消息合并到晨间简报中，并在用户旅行时自动调整。
 
-Hold all notifications during sleep hours, merge held messages into the morning briefing, and adjust automatically when the user travels.
+## 用户获得什么
+没有它： cron 作业在凌晨 3 点 ping。一次糟糕的通知，用户就会禁用整个系统。
 
-## What the User Gets
+有了它：brain 在夜间工作（梦境循环、收集器、丰富），但通知会保留到早晨。旅行到东京？系统会根据你的日历自动调整，无需更改配置。
 
-Without this: 3 AM pings from cron jobs. One bad notification and the user
-disables the entire system.
+## 实现
 
-With this: the brain works overnight (dream cycle, collectors, enrichment)
-but notifications are held until morning. Travel to Tokyo? The system adjusts
-automatically from your calendar, no config change needed.
+### 安静时间门控
 
-## Implementation
-
-### Quiet Hours Gate
-
-Every cron job that sends notifications must check quiet hours FIRST.
+每个发送通知的 cron 作业必须首先检查安静时间。
 
 ```
-QUIET_START = 23  // 11 PM local time
-QUIET_END = 8     // 8 AM local time
+QUIET_START = 23  // 当地时间晚上 11 点
+QUIET_END = 8     // 当地时间早上 8 点
 
 is_quiet(local_hour):
   return local_hour >= QUIET_START OR local_hour < QUIET_END
 ```
 
-**Before sending any notification:**
-1. Determine user's current timezone (from config or heartbeat state)
-2. Convert current UTC time to local time
-3. If quiet hours: hold the message, don't send
+**在发送任何通知之前：**
+1. 确定用户的当前时区（来自配置或心跳状态）
+2. 将当前 UTC 时间转换为本地时间
+3. 如果是安静时间：保留消息，不要发送
 
-### Held Messages
+### 保留的消息
 
-During quiet hours, output goes to a held directory instead of being sent:
+在安静时间内，输出会转到保留目录而不是发送：
 
 ```
 if is_quiet():
   mkdir -p /tmp/cron-held/
   write("/tmp/cron-held/{job-name}.md", output)
-  exit  // don't send
+  exit  // 不要发送
 else:
   send(output)
 ```
 
-The morning briefing picks up held messages:
+晨间简报会接收保留的消息：
 
 ```
 morning_briefing():
   held_files = list("/tmp/cron-held/*.md")
   if held_files:
-    briefing += "## Overnight Updates\n\n"
+    briefing += "## 夜间更新\n\n"
     for file in held_files:
       briefing += read(file)
       delete(file)
 ```
 
-This way nothing is lost. Overnight cron results get folded into the
-first thing the user sees in the morning.
+这样什么都不会丢失。夜间 cron 结果会被折叠到用户早晨看到的第一件事中。
 
-### Timezone Awareness
+### 时区感知
 
-The agent should know what timezone the user is in. Store it in
-the agent's operational state:
+代理应该知道用户在哪个时区。将其存储在代理的操作状态中：
 
 ```json
 {
@@ -74,48 +67,48 @@ the agent's operational state:
 }
 ```
 
-**Update the timezone when:**
-- Calendar shows the user flying somewhere (check for airline/hotel events)
-- User mentions being in a different city
-- User's active hours shift (they're responding at 3 AM PT = they're probably traveling)
+**在以下情况下更新时区：**
+- 日历显示用户飞往某地（检查航空公司/酒店活动）
+- 用户提到身处不同城市
+- 用户的活跃时间发生变化（他们在太平洋时间凌晨 3 点回复 = 他们可能在旅行）
 
-**All times shown to the user should be in their LOCAL timezone.** Never
-show UTC or a timezone the user isn't in.
+**显示给用户的所有时间都应该是他们的本地时区。** 永远不要显示 UTC 或用户不在的时区。
 
-### Shell Implementation
+### Shell 实现
 
 ```bash
 #!/bin/bash
-# quiet-hours-gate.sh — run before any notification
+# quiet-hours-gate.sh — 在任何通知之前运行
 
 TIMEZONE="${USER_TIMEZONE:-US/Pacific}"
 LOCAL_HOUR=$(TZ="$TIMEZONE" date +%H)
 
 if [ "$LOCAL_HOUR" -ge 23 ] || [ "$LOCAL_HOUR" -lt 8 ]; then
   echo "QUIET_HOURS=true"
-  exit 1  # don't send
+  exit 1  # 不要发送
 fi
 
 echo "QUIET_HOURS=false"
-exit 0  # ok to send
+exit 0  # 可以发送
 ```
 
-**In cron job scripts:**
+**在 cron 作业脚本中：**
+
 ```bash
-# Check quiet hours first
+# 首先检查安静时间
 if ! bash scripts/quiet-hours-gate.sh; then
   mkdir -p /tmp/cron-held
   echo "$OUTPUT" > /tmp/cron-held/$(basename "$0" .sh).md
   exit 0
 fi
 
-# Not quiet hours — send normally
+# 不是安静时间 — 正常发送
 send_notification "$OUTPUT"
 ```
 
-### Configurable Hours
+### 可配置时间
 
-Some users want different quiet hours. Store the config:
+一些用户想要不同的安静时间。存储配置：
 
 ```json
 {
@@ -127,39 +120,24 @@ Some users want different quiet hours. Store the config:
 }
 ```
 
-Set `enabled: false` to disable quiet hours entirely (e.g., for 24/7 monitoring).
+设置 `enabled: false` 以完全禁用安静时间（例如，用于 24/7 监控）。
 
-## Tricky Spots
+## 棘手的地方
 
-1. **Gate on EVERY job.** The quiet hours check must run before every single
-   cron job that produces notifications. If even one job skips the gate, the
-   user gets a 3 AM ping and loses trust in the entire system. No exceptions.
+1. **在每个作业上进行门控。** 安静时间检查必须在每个产生通知的 cron 作业之前运行。即使一个作业跳过了门控，用户也会在凌晨 3 点收到 ping 并且对整个系统失去信任。没有例外。
 
-2. **Held messages MUST be picked up.** If the morning briefing doesn't read
-   `/tmp/cron-held/`, overnight results vanish silently. Verify the briefing
-   skill reads and clears the held directory. Orphaned held files mean the
-   pickup integration is broken.
+2. **必须接收保留的消息。** 如果晨间简报没有读取 `/tmp/cron-held/`，夜间结果会静默消失。验证简报技能读取并清除保留目录。或者，孤立的保留文件意味着接收集成已损坏。
 
-3. **Timezone auto-detection is fragile.** Calendar-based timezone detection
-   relies on the user having airline/hotel events with location data. If the
-   user books travel without calendar entries, the system won't detect the
-   move. Fall back to activity-hour analysis (responding at 3 AM PT = probably
-   not in PT anymore) and ask the user if uncertain.
+3. **时区自动检测是脆弱的。** 基于日历的时区检测依赖于用户具有带位置数据的航空公司/酒店活动。如果用户在没有日历条目的情况下预订旅行，系统将无法检测到移动。回退到活动时间分析（在太平洋时间凌晨 3 点回复 = 可能不再在太平洋时间）并在不确定时询问用户。
 
-## How to Verify
+## 如何验证
 
-1. **Set quiet hours to the current hour.** Temporarily set `QUIET_START` to
-   one hour before now and `QUIET_END` to one hour after. Trigger a cron job.
-   Verify the output goes to `/tmp/cron-held/` instead of being sent.
+1. **将安静时间设置为当前小时。** 暂时将 `QUIET_START` 设置为当前小时前 1 小时，将 `QUIET_END` 设置为当前小时后 1 小时。触发 cron 作业。验证输出转到 `/tmp/cron-held/` 而不是被发送。
 
-2. **Check held message pickup.** After step 1, run or simulate the morning
-   briefing. Verify the held message appears in the "Overnight Updates"
-   section and the file is deleted from `/tmp/cron-held/`.
+2. **检查保留消息接收。** 在步骤 1 之后，运行或模拟晨间简报。验证保留的消息出现在"夜间更新"部分，并且文件从 `/tmp/cron-held/` 中删除。
 
-3. **Verify timezone adjustment.** Change the timezone config to a zone where
-   it's currently quiet hours. Trigger a notification. Verify it's held. Change
-   back to your real timezone during active hours. Trigger again. Verify it sends.
+3. **验证时区调整。** 将时区配置更改为当前处于安静时间的时区。触发通知。验证它被保留。将时区更改回你的真实时区（处于活跃时间）。再次触发。验证它被发送。
 
 ---
 
-*Part of the [GBrain Skillpack](../GBRAIN_SKILLPACK.md).*
+*是 [GBrain Skillpack](../GBRAIN_SKILLPACK.md) 的一部分。*

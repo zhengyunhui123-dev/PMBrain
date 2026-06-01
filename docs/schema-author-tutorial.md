@@ -1,26 +1,26 @@
-# Tutorial: Build your first schema pack
+# 教程：构建您的第一个schema pack
 
-You'll fork the bundled `gbrain-base` pack, add a custom `researcher` page type, import a handful of placeholder researcher pages, backfill their `page.type` column with one command, then prove the wiring works by running `gbrain whoknows` and seeing your new type surface in results. End state: a forked-and-active pack on disk, ~5 pages typed as `researcher`, and a query that proves the pack-aware routing fires end-to-end.
+您将fork捆绑的`gbrain-base` pack，添加一个自定义`researcher`页面类型，导入几个占位符researcher页面，用一个命令回填它们的`page.type`列，然后通过运行`gbrain whoknows`并看到您的新类型在结果中出现来证明接线工作正常。结束状态：磁盘上fork并激活的pack，~5个类型为`researcher`的页面，以及证明pack感知路由端到端触发的查询。
 
-**Want the WHY before the HOW?** Read [`what-schemas-unlock.md`](what-schemas-unlock.md) first — 7 concrete use cases (4000 invisible meetings, the founder ops brain, the research brain, the legal brain, the team brain, agent-as-co-curator) plus the structural argument for why types matter at query time. Then come back here for the 5-minute walkthrough.
+**想要在HOW之前了解WHY？** 先阅读[`what-schemas-unlock.md`](what-schemas-unlock.md) — 7个具体使用案例（4000个不可见会议，创始人ops brain，研究brain，法律brain，团队brain，agent作为共同策展人）加上为什么类型在查询时间很重要的结构性论证。然后回到这里进行5分钟演练。
 
-The whole walkthrough takes about 5 minutes. You'll see something working by step 3.
+整个演练大约需要5分钟。您将在步骤3看到一些工作的东西。
 
-## What you'll need
+## 您需要什么
 
-- gbrain v0.40.7.0 or later (`gbrain --version` to check)
-- A brain that's been initialized (`gbrain init` already run; either PGLite or Postgres is fine)
-- A terminal you can paste commands into
+- gbrain v0.40.7.0或更高版本（`gbrain --version`检查）
+- 已初始化的brain（`gbrain init`已运行；PGLite或Postgres都可以）
+- 您可以粘贴命令的终端
 
-That's it. No API keys required for this tutorial — every step works against the bundled pack and local-only commands.
+就这样。本教程不需要API密钥 — 每个步骤都针对捆绑pack和仅本地命令工作。
 
-## Step 1: See what pack is active today
+## 步骤1：查看今天激活的pack
 
 ```bash
 gbrain schema active --json
 ```
 
-You'll see something like:
+您会看到类似：
 
 ```json
 {
@@ -32,33 +32,33 @@ You'll see something like:
 }
 ```
 
-`source_tier: "default"` means you haven't customized anything — you're on the bundled pack. `page_types_count: 22` is the universal starter (person, company, meeting, note, etc.).
+`source_tier: "default"`意味着您没有自定义任何东西 — 您使用的是捆绑pack。`page_types_count: 22`是通用启动器（person, company, meeting, note等）。
 
-**You can't mutate bundled packs directly.** Step 2 forks it so you have something writable.
+**您无法直接修改捆绑pack。** 步骤2fork它，以便您有可写的东西。
 
-## Step 2: Fork the bundled pack
+## 步骤2：Fork捆绑pack
 
 ```bash
 gbrain schema fork gbrain-base mine
 ```
 
-Output: `Forked 'gbrain-base' → 'mine' at ~/.gbrain/schema-packs/mine/pack.json`.
+输出：`Forked 'gbrain-base' → 'mine' at ~/.gbrain/schema-packs/mine/pack.json`。
 
-The fork is a byte-for-byte copy of `gbrain-base` living at `~/.gbrain/schema-packs/mine/pack.json`. Now you have a writable pack you can mutate.
+fork是`gbrain-base`的逐字节副本，位于`~/.gbrain/schema-packs/mine/pack.json`。现在您有一个可以变异的可写pack。
 
-## Step 3: Activate the fork
+## 步骤3：激活fork
 
 ```bash
 gbrain schema use mine
 ```
 
-Output: `Pack: mine (json) ... Active.`
+输出：`Pack: mine (json) ... Active.`
 
-Run `gbrain schema active --json` again to confirm `pack_name` is now `mine` and `source_tier` is `home-config` (read from `~/.gbrain/config.json`).
+再次运行`gbrain schema active --json`以确认`pack_name`现在是`mine`，`source_tier`是`home-config`（从`~/.gbrain/config.json`读取）。
 
-**You've already accomplished something visible** — the active pack changed, and any future query will route through your fork. The next four steps add a custom type and prove it works.
+**您已经完成了一些可见的事情** — 活动pack已更改，任何未来的查询都将通过您的fork路由。接下来的四个步骤添加自定义类型并证明其工作。
 
-## Step 4: Add a researcher type
+## 步骤4：添加researcher类型
 
 ```bash
 gbrain schema add-type researcher \
@@ -68,24 +68,24 @@ gbrain schema add-type researcher \
   --expert
 ```
 
-Output: `Pack: mine (json)` + `Sha8: <prev> → <new>`.
+输出：`Pack: mine (json)` + `Sha8: <prev> → <new>`。
 
-What just happened:
-- The mutation went through `withMutation`'s 8-step skeleton: bundled-guard → per-pack lock → read → mutate → file-plane lint validation → atomic write → audit log → cache invalidation.
-- The pack now declares `researcher` as an entity primitive bound to `people/researchers/`, marked `extractable: true` (eligible for facts extraction) and `expert_routing: true` (surfaces in `whoknows` queries).
-- An audit row landed in `~/.gbrain/audit/schema-mutations-YYYY-Www.jsonl` with your type name SHA-8-redacted and the prefix's first segment only (`people`) for privacy.
+刚刚发生了什么：
+- 变异通过`withMutation`的8步骨架：捆绑保护 → 每pack锁 → 读取 → 变异 → 文件平面lint验证 → 原子写入 → 审计日志 → 缓存失效。
+- pack现在将`researcher`声明为绑定到`people/researchers/`的实体原语，标记为`extractable: true`（符合事实提取条件）和`expert_routing: true`（在`whoknows`查询中出现）。
+- 审计行落在`~/.gbrain/audit/schema-mutations-YYYY-Www.jsonl`中，您的类型名称SHA-8编辑和前缀的第一段 only（`people`）用于隐私。
 
-Verify the type is in the pack:
+验证类型是否在pack中：
 
 ```bash
 gbrain schema explain researcher
 ```
 
-You'll see the resolved settings printed back.
+您将看到解析的设置打印回来。
 
-## Step 5: Import some placeholder researcher pages
+## 步骤5：导入一些占位符researcher页面
 
-You need pages under `people/researchers/` for the next step to do anything. If your brain repo already has them, skip ahead. If not, drop 3-5 placeholder markdown files into `<your-brain-repo>/people/researchers/` and import:
+您需要在`people/researchers/`下的页面，以便下一步做任何事情。如果您的brain仓库已经有它们，请跳过。如果没有，请将3-5个占位符markdown文件放到`<your-brain-repo>/people/researchers/`中并导入：
 
 ```bash
 mkdir -p people/researchers
@@ -116,27 +116,27 @@ EOF
 gbrain sync
 ```
 
-The sync imports the new files. They'll be stored in the database but their `type` column will still be empty — the new type was added to the pack AFTER these pages already existed (the typical real-world scenario for an agent walking into an existing brain).
+同步导入新文件。它们将存储在数据库中，但它们的`type`列仍将为空 — 在这些页面已经存在之后（代理走进现有brain的典型现实场景），新类型被添加到pack中。
 
-## Step 6: See the gap with `stats`
+## 步骤6：使用`stats`查看差距
 
 ```bash
 gbrain schema stats --json | jq '.aggregate, .dead_prefixes'
 ```
 
-You'll see `untyped_pages: 3` (or however many you just imported) and `dead_prefixes: []` — your new prefix has 3 matching pages, so it's not dead.
+您将看到`untyped_pages: 3`（或您刚刚导入的任意数量）和`dead_prefixes: []` — 您的新前缀有3个匹配页面，因此它没有死。
 
-The 3 researcher pages are "orphaned" by type even though they live in the right directory. The next step backfills them.
+3个researcher页面按类型"孤立"，即使它们位于正确的目录中。下一步回填它们。
 
-## Step 7: Backfill with `sync --apply`
+## 步骤7：使用`sync --apply`回填
 
-First dry-run to see what would happen:
+首先干运行以查看会发生什么：
 
 ```bash
 gbrain schema sync --json
 ```
 
-You'll see something like:
+您会看到类似：
 
 ```json
 {
@@ -156,37 +156,37 @@ You'll see something like:
 }
 ```
 
-`would_apply: 3` is what you'd touch. `sample_slugs` is the agent's drilldown signal — if those slugs look wrong, abort. They look right, so apply:
+`would_apply: 3`是您将触及的。`sample_slugs`是代理的drilldown信号 — 如果那些slug看起来不对，中止。它们看起来对，所以应用：
 
 ```bash
 gbrain schema sync --apply
 ```
 
-You'll see per-batch progress lines on stderr and a final `total_applied: 3`. The UPDATE ran in chunks of 1000 (yours fit in one chunk) and never wedged any concurrent writer.
+您将在stderr上看到每批次进度行和最终的`total_applied: 3`。UPDATE以1000为块运行（您的适合一个块），永远不会阻塞任何并发写入器。
 
-## Step 8: Prove the wiring works
+## 步骤8：证明接线工作
 
 ```bash
 gbrain whoknows "machine learning"
 ```
 
-If your researcher pages contain ML-related content, they'll surface in the ranked results — even though they're typed `researcher`, not `person` or `company`.
+如果您的researcher页面包含ML相关内容，它们将在排名结果中出现 — 即使它们类型为`researcher`，而不是`person`或`company`。
 
-**This is the load-bearing demonstration of T1.5 wiring.** Pre-v0.40.7.0, `whoknows` hardcoded `['person', 'company']` as the eligible types and would have ignored your `researcher` pages entirely. The v0.40.7.0 wiring consults the active pack's `expert_routing: true` types via `expertTypesFromPack(pack.manifest)`, so your custom type now routes through expert search.
+**这是T1.5接线的重要演示。** 在v0.40.7.0之前，`whoknows`硬编码`['person', 'company']`作为符合资格的类型，并会完全忽略您的`researcher`页面。v0.40.7.0接线通过`expertTypesFromPack(pack.manifest)`咨询活动pack的`expert_routing: true`类型，因此您的自定义类型现在通过专家搜索路由。
 
-## What you built
+## 您构建了什么
 
-You now have:
-- A fork of `gbrain-base` named `mine` at `~/.gbrain/schema-packs/mine/pack.json`, active in your brain via `~/.gbrain/config.json`.
-- A `researcher` page type registered in the pack with `entity` primitive, `people/researchers/` prefix, `extractable: true`, `expert_routing: true`.
-- 3 pages typed as `researcher` (backfilled from disk via `gbrain schema sync --apply`).
-- A query path that routes through the new type: `gbrain whoknows` reads the pack and includes `researcher` in its type filter.
+您现在拥有：
+- 名为`mine`的`gbrain-base`fork，位于`~/.gbrain/schema-packs/mine/pack.json`，通过`~/.gbrain/config.json`在您的brain中激活。
+- 在pack中注册的`researcher`页面类型，具有`entity`原语，`people/researchers/`前缀，`extractable: true`，`expert_routing: true`。
+- 3个类型为`researcher`的页面（通过`gbrain schema sync --apply`从磁盘回填）。
+- 通过新类型路由的查询路径：`gbrain whoknows`读取pack并在其类型过滤器中包含`researcher`。
 
-You also exercised the full mutation skeleton: bundled-pack guard, per-pack lock, validation gate, atomic write, audit log, cache invalidation. Every step was idempotent — re-running any of them is a no-op.
+您还演练了完整的变异骨架：捆绑pack保护，每pack锁，验证门，原子写入，审计日志，缓存失效。每个步骤都是幂等的 — 重新运行任何步骤都是无操作。
 
-## Next steps
+## 下一步
 
-**Add a link verb.** A `researcher` can `author` a `paper`. To model that:
+**添加链接动词。** 一个`researcher`可以`author`一个`paper`。要建模：
 
 ```bash
 gbrain schema add-type paper --primitive annotation --prefix research/papers/ --extractable
@@ -194,31 +194,31 @@ gbrain schema add-link-type authored --page-type researcher --target-type paper
 gbrain schema graph
 ```
 
-The graph now shows `researcher --(authored)--> paper`.
+图现在显示`researcher --(authored)--> paper`。
 
-**Add aliases for query closure.** If you want `gbrain query researcher` to also surface `person` rows (because researchers ARE people):
+**为查询闭包添加别名。** 如果您希望`gbrain query researcher`也显示`person`行（因为researchers就是people）：
 
 ```bash
 gbrain schema add-alias researcher person
 ```
 
-Read [`skills/conventions/schema-evolution.md`](../skills/conventions/schema-evolution.md) for the decision tree on when to add types vs aliases vs prefixes. The short version: <20 pages → don't pack-codify; 20-100 → alias on existing type; 100+ → first-class type.
+阅读[`skills/conventions/schema-evolution.md`](../skills/conventions/schema-evolution.md)以获取何时添加类型vs别名vs前缀的决策树。简短版本：<20页 → 不要pack编码；20-100 → 现有类型上的别名；100+ → 一级类型。
 
-**Lint your pack before shipping.** The 11-rule lint surface (with the optional `--with-db` flag for DB-aware checks) catches dangling references, prefix collisions, and dead-corpus warnings:
+**在发布前lint您的pack。** 11规则lint表面（带有用于DB感知检查的`--with-db`标志）捕获悬空引用，前缀冲突和dead-corpus警告：
 
 ```bash
 gbrain schema lint --with-db
 ```
 
-**Commit your pack to source control.** If `~/.gbrain/schema-packs/mine/` is a git repo, commit `pack.json` and push. Your pack survives across machines, and the `mutation_count_anomaly` lint rule will nudge you when you hit >50 mutations in a week (the "you should be committing this" signal).
+**将您的pack提交到源代码控制。** 如果`~/.gbrain/schema-packs/mine/`是git仓库，请提交`pack.json`并推送。您的pack跨机器生存，`mutation_count_anomaly` lint规则将在您一周内点击>50个变异时提示您（"您应该提交这个"信号）。
 
-**For agents (MCP):** the same operations are reachable over HTTPS MCP via 9 new ops. Register an admin-scope OAuth client and `schema_apply_mutations` lets a remote agent compose multi-step refactors as one atomic batch. The batched MCP op + per-pack lock + audit log are the load-bearing primitives that make remote schema authoring safe. See [`skills/schema-author/SKILL.md`](../skills/schema-author/SKILL.md) for the agent dispatcher.
+**对于代理（MCP）：** 相同的操作可通过9个新操作通过HTTPS MCP访问。注册管理员范围OAuth客户端，`schema_apply_mutations`允许远程代理将多步重构编写为一个原子批次。批处理MCP操作 + 每pack锁 + 审计日志是使远程schema编写安全的重要原语。参见[`skills/schema-author/SKILL.md`](../skills/schema-author/SKILL.md)以获取代理调度程序。
 
-**Undo a mistake.** Every mutation primitive has an inverse (`remove-type`, `remove-alias`, `remove-prefix`, `remove-link-type`, `set-extractable false`, etc.). If you fork twice and want to revert, `gbrain schema downgrade` restores the previous active pack from `~/.gbrain/schema-pack-history.jsonl`.
+**撤消错误。** 每个变异原语都有一个逆操作（`remove-type`, `remove-alias`, `remove-prefix`, `remove-link-type`, `set-extractable false`等）。如果您fork两次并想要还原，`gbrain schema downgrade`从`~/.gbrain/schema-pack-history.jsonl`恢复先前的活动pack。
 
-## Related docs
+## 相关文档
 
-- **Reference:** `gbrain schema --help` for the full 22-verb CLI surface; CLAUDE.md's "Schema Cathedral v3 (v0.40.7.0)" section for the module-by-module architecture.
-- **How-to:** [`skills/schema-author/SKILL.md`](../skills/schema-author/SKILL.md) — the agent dispatcher with the 7-phase workflow (brain → assess → propose → apply → sync → verify → commit).
-- **Explanation:** [`skills/conventions/schema-evolution.md`](../skills/conventions/schema-evolution.md) — when to add a type vs alias vs prefix.
-- **Plan + decisions:** the original design captured 21 decisions including the bundled-pack guard rationale (D6), the empty-filter fallback contract (D4), and the MCP non-localOnly trust posture (D2). Lives in `~/.claude/plans/system-instruction-you-are-working-recursive-thacker.md` (private).
+- **参考：** `gbrain schema --help`获取完整的22动词CLI表面；CLAUDE.md的"Schema Cathedral v3 (v0.40.7.0)"部分获取逐模块架构。
+- **操作指南：** [`skills/schema-author/SKILL.md`](../skills/schema-author/SKILL.md) — 带有7阶段工作流的代理调度程序（brain → 评估 → 提议 → 应用 → 同步 → 验证 → 提交）。
+- **解释：** [`skills/conventions/schema-evolution.md`](../skills/conventions/schema-evolution.md) — 何时添加类型vs别名vs前缀。
+- **计划 + 决策：** 原始设计捕获了21个决策，包括捆绑pack保护基本原理（D6），空过滤器回退合同（D4）和MCP非localOnly信任姿态（D2）。位于`~/.claude/plans/system-instruction-you-are-working-recursive-thacker.md`（私有）。

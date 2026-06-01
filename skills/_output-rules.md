@@ -1,40 +1,37 @@
-# Output Rules
+# 输出规则
 
-Cross-cutting output quality standards for all brain-writing skills.
+所有大脑撰写技能的跨领域输出质量标准。
 
-## Deterministic Links
+## 确定性链接
 
-All links in brain pages MUST be deterministic (built from actual data, not composed
-by the LLM). Never guess a URL or path. Build it from the slug, the commit hash, or
-the API response.
+大脑页面中的所有链接必须是确定性的（基于实际数据构建，而非由 LLM 拼凑）。永远不要猜测 URL 或路径。从 slug、提交哈希或 API 响应构建链接。
 
-- Brain page links: `[page title](type/slug.md)`
-- Commit links: `[abc1234](https://github.com/{owner}/{repo}/commit/abc1234)`
-- External links: use the actual URL from the source, never reconstruct it
+- 大脑页面链接: `[page title](type/slug.md)`
+- 提交链接: `[abc1234](https://github.com/{owner}/{repo}/commit/abc1234)`
+- 外部链接: 使用来源中的实际 URL，不要重构
 
-## No Slop
+## 禁止套话
 
-Brain pages are not chat output. They are durable knowledge artifacts.
+大脑页面不是聊天输出，而是持久的知识制品。
 
-- No filler phrases ("It's worth noting that...", "Interestingly...")
-- No hedging when facts are cited ("According to the source, X is true" not "X might be true")
-- No LLM preamble ("I've created...", "Here's the updated...", "Certainly!")
-- No placeholder dates ("YYYY-MM-DD", "recently", "in the near future")
-- Short paragraphs. Concrete facts. Inline citations.
+- 不要使用填充短语（"值得注意的是……"、"有趣的是……"）
+- 引用事实时不要含糊其辞（用"根据来源，X 是事实"而非"X 可能是事实"）
+- 不要使用 LLM 开场白（"我已创建……"、"以下是更新后的……"、"当然！"）
+- 不要使用占位日期（"YYYY-MM-DD"、"最近"、"在不久的将来"）
+- 段落要简短。用具体事实。使用行内引用。
 
-## Exact Phrasing Preservation
+## 精确保留原始措辞
 
-When capturing someone's original thinking, use their exact words. Don't paraphrase.
-Don't clean up grammar. The language IS the insight.
+在捕获某人的原始想法时，使用他们的原话。不要转述。不要润色语法。语言本身就是洞见。
 
-- Direct quotes: preserve verbatim in quote blocks
-- Ideas and frameworks: use the person's own terminology for slugs and titles
-- Observations: capture the phrasing, not a sanitized version
+- 直接引用：在引用块中逐字保留
+- 想法和框架：使用当事人自己的术语作为 slug 和标题
+- 观察：捕获措辞本身，而非净化后的版本
 
-## Title Quality
+## 标题质量
 
-Page titles should be:
-- Descriptive enough to identify the page from a search result
-- Short enough to scan in a list (under 60 characters)
-- NOT sentences ("Meeting with Pedro" not "Meeting with Pedro about the new deal structure")
-- NOT generic ("Pedro Franceschi" not "Person Page")
+页面标题应该：
+- 足够详细，能在搜索结果中识别该页面
+- 足够简短，能在列表中快速浏览（不超过 60 个字符）
+- 不要是句子（"与 Pedro 的会面"而非"关于新交易结构的与 Pedro 的会面"）
+- 不要是泛称（"Pedro Franceschi"而非"人物页面"）

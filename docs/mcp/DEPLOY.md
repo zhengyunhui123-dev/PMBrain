@@ -1,30 +1,30 @@
-# Deploy GBrain Remote MCP Server
+# 部署 GBrain 远程 MCP 服务器
 
-> **v0.26.0+:** `gbrain serve --http` ships full OAuth 2.1 (client credentials,
-> auth code + PKCE, refresh rotation, optional DCR), an embedded React admin
-> dashboard at `/admin`, scoped operations, and a live SSE activity feed.
-> Pre-v0.26 legacy bearer tokens still work — `verifyAccessToken` falls back
-> to the `access_tokens` table and grandfathers tokens to `read+write+admin`.
-> Postgres-only for the legacy fallback (the `access_tokens` table is Postgres-only);
-> OAuth tables work on both PGLite and Postgres. See [SECURITY.md](../../SECURITY.md)
-> for env vars and tunable defaults.
+> **v0.26.0+：** `gbrain serve --http` 附带完整的 OAuth 2.1（客户端凭证、
+> 授权码 + PKCE、刷新轮换、可选的 DCR）、嵌入式的 React 管理
+> 仪表板（位于 `/admin`）、作用域操作以及实时 SSE 活动流。
+> v0.26 之前的旧版 bearer token 仍然有效 — `verifyAccessToken` 会回退到
+> `access_tokens` 表，并将旧 token 沿用为 `read+write+admin` 权限。
+> 旧版回退仅支持 Postgres（因为 `access_tokens` 表仅在 Postgres 中存在）；
+> OAuth 表在 PGLite 和 Postgres 上均可工作。参见 [SECURITY.md](../../SECURITY.md)
+> 了解环境变量和可调的默认值。
 
-Access your brain from any device, any AI client. GBrain ships two transports:
-`gbrain serve` (stdio) for local agents, and `gbrain serve --http` (v0.26.0+)
-for remote clients over OAuth 2.1.
+从任何设备、任何 AI 客户端访问你的大脑。GBrain 提供两种传输方式：
+`gbrain serve`（stdio）用于本地代理，以及 `gbrain serve --http`（v0.26.0+）
+用于通过 OAuth 2.1 连接的远程客户端。
 
-## Three Paths
+## 三种路径
 
-### Local stdio (zero setup)
+### 本地 stdio（零设置）
 
 ```bash
 gbrain serve
 ```
 
-Works with Claude Code, Cursor, Windsurf, and any MCP client that supports stdio.
-No server, no tunnel, no token needed. Works on both PGLite and Postgres engines.
+适用于 Claude Code、Cursor、Windsurf 以及任何支持 stdio 的 MCP 客户端。
+无需服务器、隧道或令牌。适用于 PGLite 和 Postgres 引擎。
 
-### Remote over OAuth 2.1 (recommended, v0.26.0+)
+### 通过 OAuth 2.1 远程访问（推荐，v0.26.0+）
 
 ```bash
 gbrain serve --http --port 3131
@@ -32,84 +32,84 @@ ngrok http 3131 --url your-brain.ngrok.app
 gbrain serve --http --port 3131 --public-url https://your-brain.ngrok.app
 ```
 
-Built-in HTTP transport with OAuth 2.1, scoped operations, an admin dashboard
-at `/admin`, and a live SSE activity feed. Zero external dependencies. This is
-the only path that works with ChatGPT (OAuth 2.1 + PKCE is required by the
-ChatGPT MCP connector). Pass `--public-url` whenever the server is reachable
-at anything other than `http://localhost:<port>` so the OAuth issuer in
-discovery metadata matches what clients hit (RFC 8414 §3.3).
+内置 HTTP 传输，支持 OAuth 2.1、作用域操作、位于 `/admin` 的
+管理仪表板以及实时 SSE 活动流。零外部依赖。这是
+唯一适用于 ChatGPT 的路径（ChatGPT MCP 连接器要求 OAuth 2.1 + PKCE）。
+只要服务器可通过 `http://localhost:<端口>` 以外的地址访问，
+就必须传递 `--public-url` 参数，以便 OAuth 颁发者在
+发现元数据中与客户端的访问地址匹配（RFC 8414 §3.3）。
 
-Supported clients:
-- **ChatGPT** — requires OAuth 2.1 + PKCE. Works natively with `--http`.
-- **Claude Desktop / Cowork** — OAuth 2.1 or legacy bearer tokens.
-- **Perplexity** — OAuth 2.1 client credentials grant.
-- **Claude Code, Cursor, Windsurf** — can use OAuth or legacy bearer.
+支持的客户端：
+- **ChatGPT** — 要求 OAuth 2.1 + PKCE。原生支持 `--http`。
+- **Claude Desktop / Cowork** — OAuth 2.1 或旧版 bearer token。
+- **Perplexity** — OAuth 2.1 客户端凭证授予。
+- **Claude Code、Cursor、Windsurf** — 可使用 OAuth 或旧版 bearer。
 
-See the [OAuth 2.1 setup](#oauth-21-setup-v100) section below.
+参见下面的 [OAuth 2.1 设置](#oauth-21-setup-v100) 部分。
 
-### Remote with legacy bearer tokens (pre-v0.26 deployments) — Postgres only
+### 使用旧版 bearer token 远程访问（v0.26 之前的部署）— 仅限 Postgres
 
 ```
-Your AI client (Claude Desktop, Perplexity, etc.)
-  → ngrok tunnel (https://YOUR-DOMAIN.ngrok.app)
-  → gbrain serve --http  (built-in transport with bearer auth)
-  → Postgres (pooler connection or self-hosted)
+你的 AI 客户端（Claude Desktop、Perplexity 等）
+  → ngrok 隧道 (https://YOUR-DOMAIN.ngrok.app)
+  → gbrain serve --http（内置传输，带 bearer 认证）
+  → Postgres（连接池或自托管）
 ```
 
-This requires:
-1. A Postgres-backed brain (the `access_tokens` table only exists on Postgres;
-   running `gbrain serve --http` against a PGLite install fails fast at startup)
-2. A machine running `gbrain serve --http`
-3. A public tunnel (ngrok, Tailscale, or cloud host)
-4. A bearer token created via `gbrain auth create <name>`
+这需要：
+1. 一个 Postgres 支持的大脑（`access_tokens` 表仅存在于 Postgres 中；
+   对 PGLite 安装运行 `gbrain serve --http` 会在启动时快速失败）
+2. 一台运行 `gbrain serve --http` 的机器
+3. 一个公共隧道（ngrok、Tailscale 或云主机）
+4. 通过 `gbrain auth create <名称>` 创建的 bearer token
 
-Pre-v1.0 tokens are grandfathered as `read+write+admin` scopes when you upgrade
-to the HTTP server, so no migration is required.
+升级到 HTTP 服务器时，v1.0 之前的 token 会被沿用为 `read+write+admin` 作用域，
+因此无需迁移。
 
-## OAuth 2.1 Setup (v0.26.0+)
+## OAuth 2.1 设置（v0.26.0+）
 
-### 1. Start the HTTP server
+### 1. 启动 HTTP 服务器
 
 ```bash
 gbrain serve --http --port 3131
 ```
 
-On first start, the server prints an **admin bootstrap token** to stderr:
+首次启动时，服务器会将一个 **管理员引导 token** 打印到 stderr：
 
 ```
-Admin bootstrap token: 3a1f9c...
-Open http://localhost:3131/admin and paste it to log in.
+管理员引导 token：3a1f9c...
+打开 http://localhost:3131/admin 并粘贴它以登录。
 ```
 
-Save this token. Open `http://localhost:3131/admin` and paste it to access the
-dashboard. The dashboard shows live activity, registered clients, request logs,
-and per-client config export.
+保存此 token。打开 `http://localhost:3131/admin` 并粘贴它以访问
+仪表板。仪表板显示实时活动、已注册的客户端、请求日志以及
+每个客户端的配置导出。
 
-> **v0.26.9+:** `mcp_request_log.params` and the live SSE activity feed default
-> to a redacted summary `{redacted, kind, declared_keys, unknown_key_count, approx_bytes}`.
-> Declared param keys are kept (intersected against the operation's spec); unknown
-> keys are counted but never named, and byte sizes round up to 1KB so size-probe
-> attacks can't binary-search secret content. Operators on a personal laptop who
-> want raw payloads back can pass `gbrain serve --http --log-full-params` (loud
-> stderr warning fires at startup). Multi-tenant deployments should leave it on
-> the redacted default.
+> **v0.26.9+：** `mcp_request_log.params` 和实时 SSE 活动流默认
+> 显示为编校后的摘要 `{redacted, kind, declared_keys, unknown_key_count, approx_bytes}`。
+> 已声明参数键会被保留（与操作的规范取交集）；未知的
+> 键会被计数但永远不会显示名称，字节大小向上取整到 1KB，以便大小探测
+> 攻击无法通过二分搜索找到秘密内容。在个人笔记本电脑上操作且希望
+> 看到原始负载的用户，可以传递 `gbrain serve --http --log-full-params`（启动时
+> 会触发响亮的 stderr 警告）。多租户部署应保留
+> 编校后的默认设置。
 
-### 2. Register OAuth clients
+### 2. 注册 OAuth 客户端
 
-Register clients from the **`/admin` dashboard**:
+从 **`/admin` 仪表板** 注册客户端：
 
-1. Click **Register client**.
-2. Enter a name (e.g. `perplexity`, `chatgpt`).
-3. Pick scopes: `read`, `write`, `admin` (checkboxes).
-4. Pick grant type: `client_credentials` for machine-to-machine (Perplexity,
-   Claude Desktop bearer mode) or `authorization_code` for browser-based
-   clients with PKCE (ChatGPT).
-5. For `authorization_code` clients, paste the redirect URI.
-6. Hit **Register**. The credential-reveal modal shows the `client_id` (and
-   `client_secret` for confidential clients) once. Copy or Download JSON
-   immediately — secrets are hashed on storage and never shown again.
+1. 点击 **注册客户端**。
+2. 输入名称（例如 `perplexity`、`chatgpt`）。
+3. 选择作用域：`read`、`write`、`admin`（复选框）。
+4. 选择授予类型：机器对机器（Perplexity、
+   Claude Desktop bearer 模式）使用 `client_credentials`，或
+   基于浏览器的客户端使用带 PKCE 的 `authorization_code`（ChatGPT）。
+5. 对于 `authorization_code` 客户端，粘贴重定向 URI。
+6. 点击 **注册**。凭证显示模态框会显示一次 `client_id`（以及
+   机密客户端的 `client_secret`）。立即复制或下载 JSON
+   — 密钥在存储时会进行哈希处理，永远不会再次显示。
 
-Or from the CLI — faster for scripting:
+或者通过 CLI — 更适合脚本编写：
 
 ```bash
 gbrain auth register-client perplexity \
@@ -117,9 +117,9 @@ gbrain auth register-client perplexity \
   --scopes "read write"
 ```
 
-**v0.34 — source-scoped clients.** Multi-source brains can scope a client's
-write authority to one source and its read scope to a curated set with the
-new `--source` and `--federated-read` flags:
+**v0.34 — 源作用域客户端。** 多源大脑可以使用新的 `--source` 和
+`--federated-read` 标志，将客户端的写入权限
+限定到一个源，并将其读取作用域限定到一个精选集合：
 
 ```bash
 gbrain auth register-client dept-x-agent \
@@ -129,39 +129,39 @@ gbrain auth register-client dept-x-agent \
   --federated-read dept-x,shared,parent-canon
 ```
 
-`--source` controls the write authority — `put_page` / `add_link` / etc only
-land in `dept-x`. `--federated-read` controls the read axis independently;
-queries return rows from any of the listed sources. Omit both flags for the
-v0.33-compatible super-client shape. Pre-v0.34 clients are backfilled to
-`source_id='default'` on `gbrain upgrade`.
+`--source` 控制写入权限 — `put_page` / `add_link` / 等仅
+落到 `dept-x` 中。`--federated-read` 独立控制读取轴；
+查询返回来自任何所列源的行列。省略这两个标志可获得
+兼容 v0.33 的超级客户端形态。v0.34 之前的客户端会在
+`gbrain upgrade` 时回填为 `source_id='default'`。
 
-Host-repo wrappers can register programmatically:
+宿主仓库包装器可以通过编程方式注册：
 
 ```ts
 await oauthProvider.registerClientManual(
   'perplexity',
   ['client_credentials'],
   'read write',
-  [],  // redirect_uris, empty for CC
+  [],  // redirect_uris，CC 为空
 );
 ```
 
-For self-service client registration (Dynamic Client Registration, RFC 7591),
-start the server with `--enable-dcr`. DCR is off by default.
+对于自助客户端注册（动态客户端注册，RFC 7591），
+使用 `--enable-dcr` 启动服务器。DCR 默认关闭。
 
-### 3. Expose the server
+### 3. 暴露服务器
 
-**v0.34 — bind explicitly.** `gbrain serve --http` defaults to `127.0.0.1`.
-To accept connections from the ngrok tunnel (or any non-loopback source),
-restart with `--bind`:
+**v0.34 — 显式绑定。** `gbrain serve --http` 默认为 `127.0.0.1`。
+要接受来自 ngrok 隧道（或任何非回环来源）的连接，
+请使用 `--bind` 重新启动：
 
 ```bash
 gbrain serve --http --port 3131 --bind 0.0.0.0 --public-url https://your-brain.ngrok.app
 ```
 
-When `--public-url` is set without `--bind`, a stderr WARN fires at
-startup so the misconfiguration ("the tunnel is up but my agent gets
-ECONNREFUSED") is loud.
+当设置了 `--public-url` 但没有设置 `--bind` 时，启动时会在
+stderr 触发 WARN，以便配置错误（"隧道已启动但我的代理收到
+ECONNREFUSED"）变得明显。
 
 ```bash
 brew install ngrok
@@ -169,64 +169,64 @@ ngrok config add-authtoken YOUR_TOKEN
 ngrok http 3131 --url your-brain.ngrok.app
 ```
 
-Your OAuth issuer URL becomes `https://your-brain.ngrok.app`. The MCP SDK's
-router exposes the spec-compliant discovery endpoint at
-`/.well-known/oauth-authorization-server`.
+你的 OAuth 颁发者 URL 变为 `https://your-brain.ngrok.app`。MCP SDK 的
+路由器在 `/.well-known/oauth-authorization-server` 暴露符合规范的
+发现端点。
 
-### 4. Scopes and localOnly
+### 4. 作用域和 localOnly
 
-Every operation is tagged `read | write | admin`. Four operations are
-`localOnly` and rejected over HTTP regardless of scope: `sync_brain`,
-`file_upload`, `file_list`, `file_url`. Remote agents cannot reach local
-filesystem surface area.
+每个操作都标记为 `read | write | admin`。四个操作是
+`localOnly`，无论作用域如何都会通过 HTTP 拒绝：`sync_brain`、
+`file_upload`、`file_list`、`file_url`。远程代理无法访问本地
+文件系统表面区域。
 
-| Scope | What it allows |
+| 作用域 | 允许的操作 |
 |-------|---------------|
-| `read` | `search`, `query`, `get_page`, `list_pages`, graph traversal |
-| `write` | `put_page`, `delete_page`, `add_link`, `add_timeline_entry` |
-| `admin` | Client management, token revocation, sweep, local-only ops |
+| `read` | `search`、`query`、`get_page`、`list_pages`、图遍历 |
+| `write` | `put_page`、`delete_page`、`add_link`、`add_timeline_entry` |
+| `admin` | 客户端管理、token 吊销、清理、仅本地操作 |
 
-## Legacy Bearer Token Setup
+## 旧版 Bearer Token 设置
 
-Keep using pre-v0.26 bearer tokens if you aren't ready to migrate. They
-grandfather to `read+write+admin` scopes on the HTTP server.
+如果你尚未准备好迁移，可以继续使用 v0.26 之前的 bearer token。它们在 HTTP 服务器上
+会被沿用为 `read+write+admin` 作用域。
 
-### 1. Set up the tunnel
+### 1. 设置隧道
 
-See the [ngrok-tunnel recipe](../../recipes/ngrok-tunnel.md) for full setup.
-Quick version:
+完整设置参见 [ngrok-tunnel 配方](../../recipes/ngrok-tunnel.md)。
+快速版本：
 
 ```bash
 brew install ngrok
 ngrok config add-authtoken YOUR_TOKEN
-ngrok http 8787 --url your-brain.ngrok.app  # Hobby tier for fixed domain
+ngrok http 8787 --url your-brain.ngrok.app  # Hobby 套餐可获得固定域名
 ```
 
-### 2. Create access tokens
+### 2. 创建访问 token
 
 ```bash
-# Create a token for each client
+# 为每个客户端创建一个 token
 gbrain auth create "claude-desktop"
 
-# List all tokens
+# 列出所有 token
 gbrain auth list
 
-# Revoke a token
+# 吊销 token
 gbrain auth revoke "claude-desktop"
 ```
 
-Tokens are per-client. Create one for each device/app. Revoke individually
-if compromised. Tokens are stored SHA-256 hashed in your database.
+Token 是按客户端创建的。为每个设备/应用创建一个。如果泄露，
+可单独吊销。Token 以其 SHA-256 哈希形式存储在数据库中。
 
-### 3. Connect your AI client
+### 3. 连接你的 AI 客户端
 
-- **ChatGPT:** [setup guide](CHATGPT.md) (OAuth 2.1 + PKCE, requires `gbrain serve --http`)
-- **Claude Code:** [setup guide](CLAUDE_CODE.md)
-- **Claude Desktop:** [setup guide](CLAUDE_DESKTOP.md) (must use GUI, not JSON config)
-- **Claude Cowork:** [setup guide](CLAUDE_COWORK.md)
-- **Perplexity:** [setup guide](PERPLEXITY.md)
+- **ChatGPT：** [设置指南](CHATGPT.md)（OAuth 2.1 + PKCE，要求 `gbrain serve --http`）
+- **Claude Code：** [设置指南](CLAUDE_CODE.md)
+- **Claude Desktop：** [设置指南](CLAUDE_DESKTOP.md)（必须使用 GUI，而非 JSON 配置）
+- **Claude Cowork：** [设置指南](CLAUDE_COWORK.md)
+- **Perplexity：** [设置指南](PERPLEXITY.md)
 
-### 4. Verify
+### 4. 验证
 
 ```bash
 gbrain auth test \
@@ -234,51 +234,51 @@ gbrain auth test \
   --token YOUR_TOKEN
 ```
 
-## Operations
+## 操作
 
-All 30 GBrain operations are available remotely, including `sync_brain` and
-`file_upload` (no timeout limits with self-hosted server).
+所有 30 个 GBrain 操作均可远程使用，包括 `sync_brain` 和
+`file_upload`（使用自托管服务器无超时限制）。
 
-**Security note on `file_upload`:** remote MCP callers are confined to the working
-directory where `gbrain serve` was launched. Symlinks, `..` traversal, and absolute
-paths outside cwd are rejected. Page slugs and filenames are allowlist-validated
-(alphanumeric + hyphens; no control chars, RTL overrides, or backslashes). Local
-CLI callers (`gbrain file upload ...`) keep unrestricted filesystem access since
-the user owns the machine.
+**关于 `file_upload` 的安全说明：** 远程 MCP 调用者被限制在启动
+`gbrain serve` 时所在的工作目录中。符号链接、`..` 遍历以及
+cwd 之外的绝对路径都会被拒绝。页面别名和文件名会通过
+允许列表进行验证（字母数字 + 连字符；无控制字符、RTL 覆盖或反斜杠）。本地
+CLI 调用者（`gbrain file upload ...`）保留不受限制的文件系统访问权限，因为
+用户拥有该机器。
 
-## Deployment Options
+## 部署选项
 
-See [ALTERNATIVES.md](ALTERNATIVES.md) for a comparison of ngrok, Tailscale
-Funnel, and cloud hosts (Fly.io, Railway).
+参见 [ALTERNATIVES.md](ALTERNATIVES.md) 了解 ngrok、Tailscale
+Funnel 和云主机（Fly.io、Railway）的对比。
 
-## Troubleshooting
+## 故障排除
 
-**"missing_auth" error**
-Include the Authorization header: `Authorization: Bearer YOUR_TOKEN`
+**"missing_auth" 错误**
+包含 Authorization 头：`Authorization: Bearer YOUR_TOKEN`
 
-**"invalid_token" error**
-Run `gbrain auth list` to see active tokens.
+**"invalid_token" 错误**
+运行 `gbrain auth list` 查看活跃的 token。
 
-**"service_unavailable" error**
-Database connection failed. Check your Supabase dashboard for outages.
+**"service_unavailable" 错误**
+数据库连接失败。检查你的 Supabase 仪表板是否有中断。
 
-**Claude Desktop doesn't connect**
-Remote servers must be added via Settings > Integrations, NOT
-`claude_desktop_config.json`. See [CLAUDE_DESKTOP.md](CLAUDE_DESKTOP.md).
+**Claude Desktop 无法连接**
+远程服务器必须通过设置 > 集成添加，而不是通过
+`claude_desktop_config.json`。参见 [CLAUDE_DESKTOP.md](CLAUDE_DESKTOP.md)。
 
-## Expected Latencies
+## 预期延迟
 
-| Operation | Typical Latency | Notes |
+| 操作 | 典型延迟 | 说明 |
 |-----------|----------------|-------|
-| get_page | < 100ms | Single DB query |
-| list_pages | < 200ms | DB query with filters |
-| search (keyword) | 100-300ms | Full-text search |
-| query (hybrid) | 1-3s | Embedding + vector + keyword + RRF |
-| put_page | 100-500ms | Write + trigger search_vector update |
-| get_stats | < 100ms | Aggregate query |
+| get_page | < 100ms | 单次数据库查询 |
+| list_pages | < 200ms | 带过滤器的数据库查询 |
+| search（关键词） | 100-300ms | 全文搜索 |
+| query（混合） | 1-3s | 嵌入 + 向量 + 关键词 + RRF |
+| put_page | 100-500ms | 写入 + 触发 search_vector 更新 |
+| get_stats | < 100ms | 聚合查询 |
 
-**Note:** `gbrain serve --http` shipped in v0.26.0 with OAuth 2.1 + admin
-dashboard baked into the binary. The custom HTTP wrapper pattern (see
-[voice recipe](../../recipes/twilio-voice-brain.md)) is still supported for
-teams that need bespoke middleware, but for most remote deployments the
-built-in server is the recommended path.
+**注意：** `gbrain serve --http` 在 v0.26.0 中发布，OAuth 2.1 + 管理
+仪表板已内置到二进制文件中。自定义 HTTP 包装器模式（参见
+[语音配方](../../recipes/twilio-voice-brain.md)）仍然支持，适用于
+需要定制中间件的团队，但对于大多数远程部署，
+内置服务器是推荐的路径。

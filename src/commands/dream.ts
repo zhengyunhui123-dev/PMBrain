@@ -234,62 +234,56 @@ async function resolveBrainDir(
 }
 
 function printHelp() {
-  console.log(`Usage: gbrain dream [options]
+  console.log(`用法：gbrain dream [选项]
 
-Run one brain maintenance cycle. Eight phases:
+运行一次大脑维护周期。八个阶段：
   lint -> backlinks -> sync -> synthesize -> extract -> patterns -> embed -> orphans
 
-The synthesize + patterns phases (v0.21) consolidate yesterday's
-conversation transcripts into reflections, originals, and cross-session
-pattern pages. Designed for cron (exits when done).
+其中 synthesize 和 patterns 阶段会将昨天的对话转录整理为反思、
+原创内容和跨会话模式页面。适合通过 cron 定时执行，完成后自动退出。
 
-Options:
-  --dry-run           Preview all fixes without writing. Note: synthesize
-                      runs the cheap Haiku significance filter (caches
-                      verdicts), but skips the Sonnet synthesis pass.
-                      "--dry-run" does NOT mean "zero LLM calls."
-  --json              Emit the CycleReport as JSON (agent-readable)
-  --phase <name>      Run a single phase: ${ALL_PHASES.join(' | ')}
-  --pull              git pull the brain repo before syncing (default: no pull)
-  --dir <path>        Brain directory (default: configured brain)
+选项：
+  --dry-run           仅预览修复，不写入内容。注意：synthesize 仍会运行
+                      低成本的 Haiku 重要性过滤并缓存结果，但跳过 Sonnet
+                      综合步骤。"--dry-run" 不代表完全不调用 LLM。
+  --json              以 JSON 输出 CycleReport，供 Agent 读取
+  --phase <name>      仅运行单个阶段：${ALL_PHASES.join(' | ')}
+  --pull              同步前对大脑仓库执行 git pull，默认不执行
+  --dir <path>        大脑目录，默认使用已配置目录
 
-  --source <id>       Scope the cycle to one source so doctor's
-                      cycle_freshness check sees a fresh stamp on
-                      completion. Without this, gbrain dream's
-                      timestamp never lands and federated brains
-                      see "stale cycle" forever.
-  --source-id <id>    Alias for --source. Matches the v0.37.7.0+
-                      naming used by import/extract/graph-query.
+  --source <id>       将周期限定到指定来源，让 doctor 的 cycle_freshness
+                      检查在完成后看到新时间戳。否则联邦大脑可能持续显示
+                      "stale cycle"。
+  --source-id <id>    --source 的别名，与 import/extract/graph-query 命名一致。
 
-  --input <file>      Synthesize a specific transcript file (implies
-                      --phase synthesize). Bypasses corpus-dir scan.
-  --date YYYY-MM-DD   Synthesize transcripts dated for one specific day.
-  --from YYYY-MM-DD   Backfill range start (use with --to).
-  --to   YYYY-MM-DD   Backfill range end.
+  --input <file>      综合指定转录文件，隐含 --phase synthesize。
+                      跳过 corpus-dir 扫描。
+  --date YYYY-MM-DD   综合指定日期的转录文本。
+  --from YYYY-MM-DD   回填范围开始日期，与 --to 配合使用。
+  --to   YYYY-MM-DD   回填范围结束日期。
 
   --unsafe-bypass-dream-guard
-                      Disable the self-consumption guard. Use only when you
-                      know the input file is NOT dream-cycle output but the
-                      guard is firing. Loud stderr warning + cost reminder
-                      fires every run.
+                      禁用自消费保护。仅在确定输入文件不是 dream 周期产物、
+                      但保护仍被触发时使用。每次运行都会向 stderr 输出醒目
+                      警告和成本提醒。
 
-  --help, -h          Show this help
+  --help, -h          显示此帮助
 
-Examples:
+示例：
   gbrain dream
   gbrain dream --dry-run --json
   gbrain dream --phase lint
   gbrain dream --phase synthesize --input ~/transcripts/2026-04-25.txt
   gbrain dream --phase synthesize --from 2026-04-01 --to 2026-04-25
-  0 2 * * * gbrain dream --json         # nightly via cron
+  0 2 * * * gbrain dream --json         # 每晚通过 cron 执行
 
-Configure synthesize:
+配置 synthesize：
   gbrain config set dream.synthesize.session_corpus_dir /path/to/transcripts
   gbrain config set dream.synthesize.session_corpus_dir /path/to/transcripts
 
-Related:
-  gbrain autopilot --install            # continuous maintenance as a daemon
-  gbrain autopilot                      # same maintenance cycle, scheduled
+相关命令：
+  gbrain autopilot --install            # 安装持续维护守护进程
+  gbrain autopilot                      # 按计划执行同一维护周期
 `);
 }
 

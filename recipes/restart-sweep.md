@@ -2,112 +2,110 @@
 id: restart-sweep
 name: Restart Sweep
 version: 0.1.0
-description: Detect Telegram messages dropped during OpenClaw gateway restarts. Reads OpenClaw session state, alerts on aborted-mid-run sessions and (opt-in) suspicious silence gaps. Cooldown-gated so repeat detections don't spam.
+description: 检测 OpenClaw 网关重启期间丢弃的 Telegram 消息。读取 OpenClaw 会话状态，在中止的运行中会话和（可选）可疑静默间隙上发出警报。Cooldown 门控，因此重复检测不会垃圾邮件。
 category: reflex
 requires: []
 secrets:
   - name: OPENCLAW_OWNER_IDS
-    description: Comma-separated user IDs that own this brain instance
-    where: openclaw config — your own user IDs from the platforms you connect
+    description: 拥有此大脑实例的用户 ID 的逗号分隔列表
+    where: openclaw config — 您连接的平台的自己的用户 ID
   - name: OPENCLAW_TELEGRAM_GROUP
-    description: Target Telegram group ID for restart alerts (negative number for groups)
-    where: forward a message from the group to @userinfobot, copy the chat.id
+    description: 重启警报的目标 Telegram 组 ID（组的负数）
+    where: 将来自组的消息转发到 @userinfobot，复制 chat.id
 health_checks:
   - type: env_exists
     name: OPENCLAW_OWNER_IDS
-    label: Owner IDs configured
+    label: 所有者 ID 已配置
   - type: env_exists
     name: OPENCLAW_TELEGRAM_GROUP
-    label: Telegram group configured
+    label: Telegram 组已配置
   - type: command
     argv: [openclaw, sessions, --json]
-    label: OpenClaw CLI reachable
+    label: OpenClaw CLI 可达
 setup_time: 10 min
-cost_estimate: "$0 (no per-call cost; runs locally on cron)"
+cost_estimate: "$0（无每次调用成本；在 cron 上本地运行）"
 ---
 
-# Restart Sweep: Detect Dropped Messages After Gateway Restarts
+# Restart Sweep：检测网关重启后丢弃的消息
 
-When the OpenClaw gateway restarts, webhook-delivered Telegram messages
-that haven't been processed yet get dropped permanently. Long-poll bots
-can replay missed updates via `getUpdates`. Webhook bots cannot. This
-recipe detects the gap by reading OpenClaw's session state and alerting
-when a session was active just before a restart but silent afterward.
+当 OpenClaw 网关重新启动时，尚未处理的 webhook 传递的 Telegram 消息
+会永久丢弃。长轮询机器人
+可以通过 `getUpdates` 重放错过的更新。Webhook 机器人不能。此
+配方通过读取 OpenClaw 的会话状态并发出警报来检测间隔，
+当会话在重启前处于活动状态但之后静默时。
 
-## IMPORTANT: Instructions for the Agent
+## 重要：给代理的说明
 
-**You are the installer.** This recipe is written for YOU (the AI agent)
-to execute on behalf of the user. Follow these steps precisely.
+**您是安装程序。** 此配方是为**您（AI 代理）**编写的
+代表用户执行。请精确按照这些步骤操作。
 
-**Stop points (MUST pause and verify before continuing):**
-- After Step 1: prerequisites pass? If not, fix before proceeding.
-- After Step 4: dry run produces sensible output? If not, debug before
-  wiring cron.
-- After Step 5: cron entry created and visible in `crontab -l`? If not,
-  cron isn't installed.
+**停止点（在继续之前必须暂停并验证）：**
+- 步骤 1 后：先决条件通过？如果没有，请在继续之前修复。
+- 步骤 4 后：空运行产生合理的输出？如果没有，请在
+   连接 cron 之前调试。
+- 步骤 5 后：cron 条目已创建并且在 `crontab -l` 中可见？如果没有，
+   cron 未安装。
 
-**When something fails:** Tell the user EXACTLY what failed, what it
-means, and what to try. Never say "something went wrong."
+**当某些事情失败时：** 准确地告诉用户什么失败了，它
+意味着什么，以及尝试什么。永远不要说"出了点问题。"
 
-## What this does
+## 这是做什么的
 
-1. Reads `/tmp/bootstrap-services.log` (or `$OPENCLAW_BOOTSTRAP_LOG`)
-   to find when the gateway last restarted. Falls back to `now() - 30
-   minutes` if the log isn't readable.
-2. Runs `openclaw sessions --json` to enumerate all live sessions.
-3. Filters to Telegram group sessions matching `$OPENCLAW_TELEGRAM_GROUP`.
-4. Flags sessions with `abortedLastRun: true` (strong signal of a
-   dropped message). Optionally flags sessions that were active in the
-   5 minutes before restart but silent in the 10 minutes after — gated
-   behind `OPENCLAW_RESTART_SWEEP_AGGRESSIVE=1` because the timing
-   heuristic produces false positives during quiet periods.
-5. Cooldown layer: each sessionKey alerted gets stamped with a
-   `lastAlertedAt` timestamp. Re-alerting on the same sessionKey is
-   suppressed for 6 hours regardless of whether the synthesized restart
-   time matches. This prevents the "missing bootstrap log →
-   re-alert-every-5-minutes-forever" failure mode.
-6. Sends one alert per cycle to Telegram (or stdout if no Telegram
-   config), then records the alert in
-   `~/.gbrain/integrations/restart-sweep/alerted.json`.
+1. 读取 `/tmp/bootstrap-services.log`（或 `$OPENCLAW_BOOTSTRAP_LOG`）
+   以查找网关最后重新启动的时间。如果日志不可读，则回退到 `now() - 30
+   分钟`。
+2. 运行 `openclaw sessions --json` 以枚举所有实时会话。
+3. 过滤到匹配 `$OPENCLAW_TELEGRAM_GROUP` 的 Telegram 组会话。
+4. 标记带有 `abortedLastRun: true` 的会话（丢弃的
+   消息的强信号）。可选地标记在重启前 5 分钟处于活动状态但在重启后 10 分钟
+   内静默的会话 — 隐藏在 `OPENCLAW_RESTART_SWEEP_AGGRESSIVE=1` 后面，因为时序
+   启发式在安静期间产生误报。
+5. Cooldown 层：每个 alerted 的 sessionKey 都会加盖
+   `lastAlertedAt` 时间戳。无论综合重启
+   时间是否匹配，相同的 sessionKey 上的重新警报
+   都会被抑制 6 小时。这可以防止"缺少引导日志 →
+   永远每 5 分钟重新警报"的失败模式。
+6. 每个周期发送一个警报到 Telegram（如果没有 Telegram
+   配置，则发送到 stdout），然后将警报记录到
+   `~/.gbrain/integrations/restart-sweep/alerted.json`。
 
-## Prerequisites
+## 先决条件
 
-- OpenClaw running with Telegram in webhook mode (long-poll mode
-  doesn't need this — `getUpdates` recovers missed messages on restart)
-- The `openclaw` CLI on PATH (or you'll provide an absolute path in
-  Step 5)
-- Telegram bot token already configured in OpenClaw, group ID and
-  optional topic ID known
-- Cron available on the host (this recipe schedules a 5-minute job;
-  systemd timers, launchd, or any other scheduler also work — adapt
-  Step 5 accordingly)
+- OpenClaw 在 webhook 模式下运行（长轮询模式
+   不需要这个 — `getUpdates` 在重启时恢复错过的消息）
+- PATH 上的 `openclaw` CLI（或者您将在步骤 5 中提供绝对路径）
+- Telegram 机器人令牌已在 OpenClaw 中配置，组 ID 和
+   可选的主题 ID 已知
+- 主机上的 Cron 可用（此配方安排一个 5 分钟的作业；
+   systemd 计时器、launchd 或任何其他调度程序也可以 — 相应地
+   调整步骤 5）
 
-## Step 1: Verify prerequisites
+## 步骤 1：验证先决条件
 
 ```bash
 openclaw sessions --json | head -40
 ```
 
-Should print JSON with a `sessions` array. If it errors, fix
-`openclaw` reachability before continuing.
+应打印带有 `sessions` 数组的 JSON。如果出错，请修复
+在继续之前的 `openclaw` 可达性。
 
-Decide a host-repo install path. The recipe assumes
-`~/openclaw/scripts/restart-sweep.mjs` and the user's `.env` lives at
-`~/openclaw/.env`. Adapt to your repo layout.
+确定主机仓库安装路径。配方假设
+`~/openclaw/scripts/restart-sweep.mjs` 和用户的 `.env` 位于
+`~/openclaw/.env`。调整您的仓库布局。
 
-## Step 2: Collect the secrets
+## 步骤 2：收集秘密
 
-Confirm with the user:
+与用户确认：
 
-- `OPENCLAW_OWNER_IDS` — comma-separated user IDs (e.g. `123456789,987654321`)
-- `OPENCLAW_TELEGRAM_GROUP` — the target group ID (negative number for
-  group chats, e.g. `-1001234567890`). Forward a message from the
-  group to `@userinfobot` to get it.
-- `OPENCLAW_ALERT_TOPIC` — optional, the topic/thread ID for forum
-  groups. Open the topic in Telegram, the URL ends with the thread ID.
+- `OPENCLAW_OWNER_IDS` — 逗号分隔的用户 ID（例如 `123456789,987654321`）
+- `OPENCLAW_TELEGRAM_GROUP` — 目标组 ID（对于
+  群组聊天为负数，例如 `-1001234567890`）。将
+  来自组的消息转发到 `@userinfobot` 以获取它。
+- `OPENCLAW_ALERT_TOPIC` — 可选，论坛的主题/线程 ID
+  组。在 Telegram 中打开主题，URL 以线程 ID 结尾。
 
-Add these three lines to the host's `.env` (or wherever the host loads
-env from):
+将这三行添加到主机的 `.env`（或主机从中加载
+env 的任何位置）：
 
 ```bash
 OPENCLAW_OWNER_IDS=...
@@ -115,24 +113,23 @@ OPENCLAW_TELEGRAM_GROUP=...
 OPENCLAW_ALERT_TOPIC=...
 ```
 
-Optional tuning:
+可选调整：
 
 ```bash
-# Set to 1 to enable the timing-based heuristic (active before restart,
-# silent after). Off by default because it false-positives during quiet
-# periods.
+# 设置为 1 以启用基于时序的启发式（重启前活动，
+# 重启后静默）。默认关闭，因为它在安静期间产生误报。
 OPENCLAW_RESTART_SWEEP_AGGRESSIVE=1
 
-# Override the bootstrap log path (default /tmp/bootstrap-services.log)
+# 覆盖引导日志路径（默认 /tmp/bootstrap-services.log）
 OPENCLAW_BOOTSTRAP_LOG=/var/log/openclaw/bootstrap.log
 ```
 
-## Step 3: Write the script to the host repo
+## 步骤 3：将脚本写入主机仓库
 
-Write the script content from the next section to
-`~/openclaw/scripts/restart-sweep.mjs` (or wherever the user picks).
-The script is self-contained — no npm install needed, just Node 18+
-or Bun.
+将下一节中的脚本内容写入
+`~/openclaw/scripts/restart-sweep.mjs`（或用户选择的任何位置）。
+脚本是自包含的 — 不需要 npm install，只需要 Node 18+
+或 Bun。
 
 <!-- restart-sweep:script -->
 ```javascript
@@ -141,13 +138,13 @@ or Bun.
 /**
  * Restart Message Sweep Script
  *
- * Detects Telegram messages dropped during OpenClaw gateway restarts.
- * Webhook-delivered messages can't be replayed via getUpdates, so we
- * read OpenClaw's session state and look for sessions that show signs
- * of dropped processing.
+ * 检测 OpenClaw 网关重启期间丢弃的 Telegram 消息。
+ * Webhook 传递的消息无法通过 getUpdates 重放，因此我们
+ * 读取 OpenClaw 的会话状态并查找显示
+ * 处理丢弃迹象的会话。
  *
- * Runs under Node 18+ or Bun. Copy this file into your host repo and
- * wire it to a 5-minute cron.
+ * 在 Node 18+ 或 Bun 下运行。将此文件复制到您的主机仓库并
+ * 将其连接到 5 分钟 cron。
  */
 
 import fs from 'node:fs';
@@ -159,20 +156,20 @@ import { promisify } from 'node:util';
 
 const execP = promisify(exec);
 
-// Module-level constants (no env reads here — env is read at construct time)
-const RESTART_THRESHOLD_MINUTES = 30;  // Fallback restart-time window when bootstrap log is missing
-const COOLDOWN_HOURS = 6;              // Re-alert suppression per sessionKey
-const STALE_DAYS = 30;                 // Prune alerted.json entries older than this
+// 模块级常量（此处无 env 读取 — env 在构造时读取）
+const RESTART_THRESHOLD_MINUTES = 30;  // 缺少引导日志时的回退重启时间窗口
+const COOLDOWN_HOURS = 6;              // 每个 sessionKey 的重新警报抑制
+const STALE_DAYS = 30;                 // 修剪早于此的 alerted.json 条目
 const PRE_RESTART_WINDOW_MS = 5 * 60 * 1000;
 const POST_RESTART_WINDOW_MS = 10 * 60 * 1000;
 
 class MessageSweepDetector {
     /**
      * @param {{ execFile?: typeof execFile, runOpenclawSessions?: () => Promise<any[]> }} [deps]
-     *   Optional dependency injection for tests. Production: leave undefined.
+     *   测试的可选依赖注入。生产：保留未定义。
      */
     constructor(deps = {}) {
-        // Constructor-time env reads (C2): tests can mutate process.env per construction
+        // 构造时的 env 读取（C2）：测试可以每个构造改变 process.env
         const ownerEnv = process.env.OPENCLAW_OWNER_IDS ?? '';
         this.OWNER_IDS = ownerEnv.split(',').map(s => s.trim()).filter(Boolean);
         this.TELEGRAM_GROUP_ID = process.env.OPENCLAW_TELEGRAM_GROUP ?? '';
@@ -185,14 +182,14 @@ class MessageSweepDetector {
         this.ALERTED_PATH = path.join(this.STATE_DIR, 'alerted.json');
         this.BOOTSTRAP_LOG = process.env.OPENCLAW_BOOTSTRAP_LOG ?? '/tmp/bootstrap-services.log';
 
-        // DI hooks (default to real implementations)
+        // DI 钩子（默认为实际实现）
         this._execFile = deps.execFile ?? execFile;
         this._runOpenclawSessions = deps.runOpenclawSessions ?? null;
 
         this.sessions = null;
         this.restartTime = null;
         this.alertMode = this.determineAlertMode();
-        this.alerted = new Map();  // populated in run() / loadAlerted()
+        this.alerted = new Map();  // 在 run() / loadAlerted() 中填充
     }
 
     determineAlertMode() {
@@ -203,45 +200,45 @@ class MessageSweepDetector {
 
     async run() {
         try {
-            console.log('🔍 Starting restart message sweep detection...');
+            console.log('🔍 正在启动重启消息扫描检测...');
 
             if (this.OWNER_IDS.length === 0) {
-                console.warn('⚠️  No OPENCLAW_OWNER_IDS configured. Set this environment variable.');
+                console.warn('⚠️  未配置 OPENCLAW_OWNER_IDS。设置此环境变量。');
             }
             if (!this.TELEGRAM_GROUP_ID) {
-                console.warn('⚠️  No OPENCLAW_TELEGRAM_GROUP configured. Alerts will only go to stdout.');
+                console.warn('⚠️  未配置 OPENCLAW_TELEGRAM_GROUP。警报将仅转到 stdout。');
             }
 
             fs.mkdirSync(this.STATE_DIR, { recursive: true });
             this.alerted = await this.loadAlerted();
 
             this.restartTime = await this.getLastRestartTime();
-            console.log(`📅 Last restart detected at: ${new Date(this.restartTime).toISOString()}`);
+            console.log(`📅 检测到的最后重启时间：${new Date(this.restartTime).toISOString()}`);
 
             this.sessions = await this.getSessionState();
-            console.log(`📊 Found ${this.sessions.length} total sessions`);
+            console.log(`📊 找到 ${this.sessions.length} 个总会话`);
 
             const telegramSessions = this.filterTelegramSessions(this.sessions);
-            console.log(`📱 Found ${telegramSessions.length} Telegram sessions`);
+            console.log(`📱 找到 ${telegramSessions.length} 个 Telegram 会话`);
 
             const droppedMessages = await this.detectDroppedMessages(telegramSessions);
             const newDrops = droppedMessages.filter(m => !this.isInCooldown(m.sessionKey));
             const suppressedCount = droppedMessages.length - newDrops.length;
 
             if (newDrops.length > 0) {
-                const tail = suppressedCount > 0 ? ` (${suppressedCount} suppressed by cooldown)` : '';
-                console.log(`⚠️  Found ${newDrops.length} potentially dropped message(s)${tail}`);
+                const tail = suppressedCount > 0 ? `（${suppressedCount} 个被 cooldown 抑制）` : '';
+                console.log(`⚠️  找到 ${newDrops.length} 个可能丢弃的消息${tail}`);
                 await this.recordAndAlert(newDrops);
             } else if (suppressedCount > 0) {
-                console.log(`✅ All ${suppressedCount} candidate(s) suppressed by cooldown`);
+                console.log(`✅ 所有 ${suppressedCount} 个候选者都被 cooldown 抑制`);
             } else {
-                console.log('✅ No dropped messages detected');
+                console.log('✅ 未检测到丢弃的消息');
             }
 
             await this.logResults(droppedMessages);
 
         } catch (error) {
-            console.error('❌ Error in message sweep:', error);
+            console.error('❌ 消息扫描中的错误：', error);
             await this.logError(error);
         }
     }
@@ -260,7 +257,7 @@ class MessageSweepDetector {
             }
             return Date.now() - (RESTART_THRESHOLD_MINUTES * 60 * 1000);
         } catch (error) {
-            console.warn('⚠️  Could not determine restart time from logs, using fallback');
+            console.warn('⚠️  无法从日志确定重启时间，使用回退');
             return Date.now() - (RESTART_THRESHOLD_MINUTES * 60 * 1000);
         }
     }
@@ -274,7 +271,7 @@ class MessageSweepDetector {
             const sessionData = JSON.parse(stdout);
             return sessionData.sessions || [];
         } catch (error) {
-            console.error('❌ Failed to get session state:', error);
+            console.error('❌ 无法获取会话状态：', error);
             throw error;
         }
     }
@@ -297,7 +294,7 @@ class MessageSweepDetector {
             try {
                 const sessionUpdated = session.updatedAt;
 
-                // Primary: aborted last run is the strong signal
+                // 主要：中止的最后一次运行是强信号
                 if (session.abortedLastRun) {
                     const topic = this._extractTopic(session.key);
                     droppedMessages.push({
@@ -306,12 +303,12 @@ class MessageSweepDetector {
                         lastUpdate: new Date(sessionUpdated).toISOString(),
                         sessionId: session.sessionId,
                         abortedLastRun: true,
-                        reason: 'Session aborted on last run',
+                        reason: '会话在最后一次运行时中止',
                     });
                     continue;
                 }
 
-                // Secondary: timing-based gap detection — opt-in only (false-positive prone)
+                // 次要：基于时序的间隔检测 — 仅选择加入（易于误报）
                 if (!this.AGGRESSIVE) continue;
 
                 if (sessionUpdated >= recentRestartWindow &&
@@ -325,11 +322,11 @@ class MessageSweepDetector {
                         timeSinceUpdate: Math.floor((Date.now() - sessionUpdated) / 1000 / 60),
                         sessionId: session.sessionId,
                         suspiciousGap: true,
-                        reason: 'Active before restart, silent after',
+                        reason: '重启前活动，重启后静默',
                     });
                 }
             } catch (error) {
-                console.warn(`⚠️  Error analyzing session ${session.key}:`, error);
+                console.warn(`⚠️  分析会话 ${session.key} 时出错：`, error);
             }
         }
         return droppedMessages;
@@ -341,10 +338,9 @@ class MessageSweepDetector {
     }
 
     /**
-     * Cooldown layer (C1): suppresses re-alerts on the same sessionKey
-     * for COOLDOWN_HOURS, regardless of whether the synthesized
-     * restartTime matches. Cooldown wins when the bootstrap log is
-     * missing and restartTime is unstable.
+     * Cooldown 层（C1）：抑制同一 sessionKey 上的重新警报
+     * 对于 COOLDOWN_HOURS，无论综合的重启时间是否
+     * 匹配。当引导日志丢失且 restartTime 不稳定时，Cooldown 获胜。
      */
     isInCooldown(sessionKey) {
         const entry = this.alerted.get(sessionKey);
@@ -370,7 +366,7 @@ class MessageSweepDetector {
             return map;
         } catch (err) {
             if (err && err.code === 'ENOENT') return new Map();
-            console.warn(`⚠️  Failed to load ${this.ALERTED_PATH}: ${err && err.message}; starting with empty state`);
+            console.warn(`⚠️  无法加载 ${this.ALERTED_PATH}：${err && err.message}；从空状态开始`);
             return new Map();
         }
     }
@@ -379,11 +375,10 @@ class MessageSweepDetector {
         const obj = Object.fromEntries(this.alerted);
         const json = JSON.stringify(obj, null, 2);
         const tmp = this.ALERTED_PATH + '.tmp';
-        // Atomic on POSIX: write tmp, then rename. Note: this prevents
-        // file corruption only — concurrent cron runs can still both
-        // read old state, both decide to alert, both rename. Given
-        // 5-min cadence and 2-5s runtime, overlap is rare and a
-        // duplicate alert is preferable to a missed one.
+        // 在 POSIX 上是原子的：先写 tmp，然后重命名。注意：这仅防止
+        // 文件损坏 — 并发 cron 运行仍然可以读取旧状态，都决定发出警报，都重命名。给定
+        // 5 分钟节奏和 2-5 秒运行时间，重叠很少，并且
+        // 重复警报比错过的警报更可取。
         await fsp.writeFile(tmp, json);
         await fsp.rename(tmp, this.ALERTED_PATH);
     }
@@ -394,7 +389,7 @@ class MessageSweepDetector {
             await this.alertOnDroppedMessages(droppedMessages);
             alertSent = true;
         } catch (err) {
-            console.error('❌ Failed to send alert (will retry next cycle):', err && err.message);
+            console.error('❌ 无法发送警报（将在下一个周期重试）：', err && err.message);
         }
         if (!alertSent) return;
 
@@ -409,20 +404,20 @@ class MessageSweepDetector {
         try {
             await this.saveAlerted();
         } catch (err) {
-            console.warn('⚠️  Failed to save alerted state:', err && err.message);
+            console.warn('⚠️  无法保存 alerted 状态：', err && err.message);
         }
     }
 
     async alertOnDroppedMessages(droppedMessages) {
-        let alertText = `⚠️ Found ${droppedMessages.length} unprocessed message(s) after restart:\n\n`;
+        let alertText = `⚠️ 在重启后找到 ${droppedMessages.length} 个未处理的消息：\n\n`;
         for (const msg of droppedMessages.slice(0, 10)) {
-            alertText += `• Topic ${msg.topic}: ${msg.reason} (last update: ${msg.lastUpdate})\n`;
+            alertText += `• 主题 ${msg.topic}：${msg.reason}（最后更新：${msg.lastUpdate}）\n`;
             if (msg.timeSinceUpdate) {
-                alertText += `  ${msg.timeSinceUpdate} minutes ago\n`;
+                alertText += `  ${msg.timeSinceUpdate} 分钟前\n`;
             }
         }
         if (droppedMessages.length > 10) {
-            alertText += `\n... and ${droppedMessages.length - 10} more`;
+            alertText += `\n... 还有 ${droppedMessages.length - 10} 个`;
         }
 
         switch (this.alertMode) {
@@ -430,18 +425,18 @@ class MessageSweepDetector {
                 await this.sendTelegramAlert(alertText);
                 break;
             case 'telegram_stdout':
-                console.log('📢 Would send Telegram alert, but no topic configured:');
+                console.log('📢 将发送 Telegram 警报，但未配置主题：');
                 console.log(alertText);
                 break;
             default:
-                console.log('📢 Alert:');
+                console.log('📢 警报：');
                 console.log(alertText);
         }
     }
 
     async sendTelegramAlert(alertText) {
-        // execFile (not exec): argv array, no shell interpretation,
-        // shell metachars in env vars cannot inject commands.
+        // execFile（不是 exec）：argv 数组，无 shell 解释，
+        // shell 元字符在 env vars 中不能注入命令。
         const argv = [
             'message', 'send',
             '--channel', 'telegram',
@@ -459,7 +454,7 @@ class MessageSweepDetector {
                 }
             });
         });
-        console.log('📢 Alert sent to Telegram');
+        console.log('📢 警报已发送到 Telegram');
     }
 
     async logResults(droppedMessages) {
@@ -472,7 +467,7 @@ class MessageSweepDetector {
         try {
             await fsp.appendFile(this.LOG_PATH, JSON.stringify(logEntry) + '\n');
         } catch (error) {
-            console.warn('⚠️  Failed to write log file:', error && error.message);
+            console.warn('⚠️  无法写入日志文件：', error && error.message);
         }
     }
 
@@ -485,12 +480,12 @@ class MessageSweepDetector {
         try {
             await fsp.appendFile(this.LOG_PATH, 'ERROR: ' + JSON.stringify(errorEntry) + '\n');
         } catch (logError) {
-            console.error('Failed to log error:', logError && logError.message);
+            console.error('无法记录错误：', logError && logError.message);
         }
     }
 }
 
-// Run if executed directly
+// 如果直接执行则运行
 if (import.meta.url === `file://${process.argv[1]}`) {
     const detector = new MessageSweepDetector();
     detector.run().catch(console.error);
@@ -499,38 +494,37 @@ if (import.meta.url === `file://${process.argv[1]}`) {
 export default MessageSweepDetector;
 ```
 
-## Step 4: Dry-run
+## 步骤 4：空运行
 
-Run the script once manually with the env loaded, before wiring cron:
+在连接 cron 之前，使用加载的 env 手动运行脚本一次：
 
 ```bash
 set -a; source ~/openclaw/.env; set +a
 node ~/openclaw/scripts/restart-sweep.mjs
 ```
 
-Expected output (no drops):
+预期输出（无丢弃）：
 
 ```
-🔍 Starting restart message sweep detection...
-📅 Last restart detected at: 2026-05-06T12:53:45.000Z
-📊 Found 48 total sessions
-📱 Found 39 Telegram sessions
-✅ No dropped messages detected
+🔍 正在启动重启消息扫描检测...
+📅 检测到的最后重启时间：2026-05-06T12:53:45.000Z
+📊 找到 48 个总会话
+📱 找到 39 个 Telegram 会话
+✅ 未检测到丢弃的消息
 ```
 
-If you want to see the alert path, manually edit a session in OpenClaw
-to set `abortedLastRun: true` and re-run. After the alert fires, check
-`~/.gbrain/integrations/restart-sweep/alerted.json` — the sessionKey
-should be there with a `lastAlertedAt` timestamp. Re-running within 6
-hours suppresses the alert.
+如果您想查看警报路径，请手动编辑 OpenClaw
+中的会话以设置 `abortedLastRun: true` 并重新运行。警报触发后，检查
+`~/.gbrain/integrations/restart-sweep/alerted.json` — sessionKey
+应该在那里带有 `lastAlertedAt` 时间戳。在 6 小时内重新运行会抑制警报。
 
-## Step 5: Wire 5-minute cron
+## 步骤 5：连接 5 分钟 cron
 
-Cron does NOT inherit your shell environment. `openclaw` and `node` may
-not be on cron's stripped PATH. `.env` files don't auto-load. Use the
-wrapper-script pattern below to handle both.
+Cron **不**继承您的 shell 环境。`openclaw` 和 `node` 可能
+不在 cron 的精简 PATH 上。`.env` 文件不会自动加载。使用
+以下包装脚本模式来同时处理这两者：
 
-Create `~/openclaw/scripts/restart-sweep-wrapper.sh`:
+创建 `~/openclaw/scripts/restart-sweep-wrapper.sh`：
 
 ```bash
 #!/usr/bin/env bash
@@ -545,110 +539,110 @@ exec /usr/local/bin/node ~/openclaw/scripts/restart-sweep.mjs
 chmod +x ~/openclaw/scripts/restart-sweep-wrapper.sh
 ```
 
-Adjust `/usr/local/bin/node` to wherever your `node` actually lives
-(`which node` to find it). Same for `openclaw` if the wrapper needs to
-add it to PATH explicitly:
+调整 `/usr/local/bin/node` 到您的 `node` 实际所在的位置
+（`which node` 以查找它）。如果包装器需要
+显式地将其添加到 PATH，则相同用于 `openclaw`：
 
 ```bash
 export PATH=/usr/local/bin:/usr/bin:/bin:$PATH
 ```
 
-Add to crontab via `crontab -e`:
+通过 `crontab -e` 添加到 crontab：
 
 ```cron
 PATH=/usr/local/bin:/usr/bin:/bin
 */5 * * * * /bin/bash ~/openclaw/scripts/restart-sweep-wrapper.sh >> ~/.gbrain/integrations/restart-sweep/cron.log 2>&1
 ```
 
-Verify with `crontab -l`. Wait 5 minutes, then check the cron log to
-confirm it ran:
+使用 `crontab -l` 验证。等待 5 分钟，然后检查 cron 日志以
+确认它已运行：
 
 ```bash
 tail -20 ~/.gbrain/integrations/restart-sweep/cron.log
 ```
 
-## Step 6: Verification
+## 步骤 6：验证
 
-1. `gbrain integrations doctor restart-sweep` — should pass all three
-   health checks
-2. `~/.gbrain/integrations/restart-sweep/sweep.log.jsonl` exists and
-   gets a new entry every 5 minutes
-3. `~/.gbrain/integrations/restart-sweep/cron.log` shows successful
-   invocations (no PATH errors, no `command not found`)
-4. After a real OpenClaw restart with a stuck session, the Telegram
-   alert fires once, then the cooldown layer suppresses repeats for 6h
+1. `gbrain integrations doctor restart-sweep` — 应该通过所有三个
+   健康检查
+2. `~/.gbrain/integrations/restart-sweep/sweep.log.jsonl` 存在并且
+   每 5 分钟获得一个新条目
+3. `~/.gbrain/integrations/restart-sweep/cron.log` 显示成功的
+   调用（无 PATH 错误，无 `command not found`）
+4. 在具有卡住会话的真实 OpenClaw 重启后，Telegram
+   警报触发一次，然后 cooldown 层在 6 小时内抑制重复
 
-## Tuning
+## 调整
 
-`OPENCLAW_RESTART_SWEEP_AGGRESSIVE=1` — enables the secondary
-"active-before-restart, silent-after" heuristic. Off by default because
-during normal quiet periods (overnight, weekends) it false-positives.
-Enable if you want maximum sensitivity AND you've established that your
-group is consistently active.
+`OPENCLAW_RESTART_SWEEP_AGGRESSIVE=1` — 启用次要的
+"重启前活动，重启后静默"启发式。默认关闭，因为
+在正常的安静期间（夜间、周末）它会产生误报。
+如果您想要最大灵敏度**并且**您已经确定您的
+组始终处于活动状态，请启用。
 
-The cooldown threshold (6 hours) is a constant in the script. Edit
-`COOLDOWN_HOURS` if you need different behavior — e.g. 24 hours if your
-group's normal cadence is daily.
+cooldown 阈值（6 小时）是脚本中的常量。如果您需要不同的行为，请编辑
+`COOLDOWN_HOURS` — 例如，如果您的
+组的正常节奏是每天，则为 24 小时。
 
-## Troubleshooting
+## 故障排除
 
-### Alerts firing repeatedly on the same session
+### 在同一会话上重复触发警报
 
-Check `~/.gbrain/integrations/restart-sweep/alerted.json`. If the
-sessionKey is missing or `lastAlertedAt` is recent, the cooldown should
-suppress. If it's not suppressing:
+检查 `~/.gbrain/integrations/restart-sweep/alerted.json`。如果
+sessionKey 丢失或 `lastAlertedAt` 是最近的，则 cooldown 应该
+抑制。如果没有抑制：
 
-- The state file may not be writable. Check `ls -ld
-  ~/.gbrain/integrations/restart-sweep/`.
-- `GBRAIN_HOME` may be set to a different path under cron than under
-  your shell. Check the wrapper script's env loading.
-- The script's `STATE_DIR` resolution prints in stderr if mkdir fails.
-  Check the cron log.
+- 状态文件可能不可写。检查 `ls -ld
+  ~/.gbrain/integrations/restart-sweep/`。
+- `GBRAIN_HOME` 可能设置为与 cron 下的路径不同
+  在您的 shell 中。检查包装器的 env 加载。
+- 如果 mkdir 失败，脚本的 `STATE_DIR` 解析会在 stderr 中打印。
+  检查 cron 日志。
 
-### Telegram alert fails silently
+### Telegram 警报静默失败
 
-The script logs `❌ Failed to send alert (will retry next cycle)` to
-stderr when `openclaw message send` returns non-zero. Common causes:
+当 `openclaw message send` 返回非零时，脚本会将 `❌ 无法发送警报（将在下一个周期重试）` 记录到
+stderr。常见原因：
 
-- `openclaw` not on cron's PATH (use absolute path in the wrapper)
-- Telegram bot token expired or rate-limited
-- Wrong group/topic ID (try `openclaw message send --channel telegram
-  --target $OPENCLAW_TELEGRAM_GROUP --message test` manually)
+- cron 的 PATH 上没有 `openclaw`（在包装器中使用绝对路径）
+- Telegram 机器人令牌已过期或受速率限制
+- 错误的组/主题 ID（尝试手动 `openclaw message send --channel telegram
+  --target $OPENCLAW_TELEGRAM_GROUP --message test`）
 
-When the send fails, state is NOT updated, so next cycle retries.
+当发送失败时，状态**不**会更新，因此下一个周期会重试。
 
-### Bootstrap log missing
+### 引导日志丢失
 
-If `/tmp/bootstrap-services.log` (or `$OPENCLAW_BOOTSTRAP_LOG`) doesn't
-exist, the script falls back to `now() - 30 minutes` for restartTime.
-The cooldown layer keeps this from spamming. If you want a stable
-restart anchor, point `OPENCLAW_BOOTSTRAP_LOG` at OpenClaw's actual
-startup log (whatever your deployment uses).
+如果 `/tmp/bootstrap-services.log`（或 `$OPENCLAW_BOOTSTRAP_LOG`）不存在，
+脚本会回退到 `now() - 30 分钟` 作为 restartTime。
+Cooldown 层可以防止这种情况发送垃圾邮件。如果您想要稳定的
+重启锚点，请将 `OPENCLAW_BOOTSTRAP_LOG` 指向 OpenClaw 的实际
+启动日志（无论您的部署使用什么）。
 
-### Cron environment
+### Cron 环境
 
-The wrapper script in Step 5 handles 80% of cron-day-one failures, but
-two more knobs:
+步骤 5 中的包装器脚本处理了 80% 的 cron 首日失败，但是
+还有两个旋钮：
 
-- **Locale:** if your script ever interpolates user-provided text into
-  log lines, set `LANG=en_US.UTF-8` in the cron entry to avoid mojibake.
-- **Working directory:** cron starts in `$HOME` by default. The script
-  uses absolute paths everywhere, so this shouldn't matter, but if you
-  ever add a relative-path dependency, `cd ~/openclaw` in the wrapper.
+- **区域设置：** 如果您的脚本曾经将用户提供的文本插值到
+  日志行中，请在 cron 条目中设置 `LANG=en_US.UTF-8` 以避免乱码。
+- **工作目录：** cron 默认在 `$HOME` 中启动。脚本
+  在任何地方都使用绝对路径，所以这应该不重要，但如果您
+  曾经添加相对路径依赖项，请在包装器中执行 `cd ~/openclaw`。
 
-## Future upgrade path
+## 未来升级路径
 
-This recipe is the v1 shape: a script copied into the host repo and
-wired to cron. The v2 shape is a plugin Minion handler registered in
-the OpenClaw repo against `gbrain/minions` (see
-`docs/guides/plugin-handlers.md`). Plugin-handler advantages:
+此配方是 v1 形态：复制到主机仓库并
+连接到 cron 的脚本。v2 形态是在
+OpenClaw 仓库中针对 `gbrain/minions` 注册的插件 Minion 处理程序（请参阅
+`docs/guides/plugin-handlers.md`）。插件处理程序优势：
 
-- Built-in queue idempotency (no cooldown layer needed)
-- Submit via `gbrain jobs submit restart-sweep` from any cron / agent /
-  manual trigger
-- Centralized retry / backoff / lock management
-- One less host script to maintain
+- 内置队列幂等性（不需要 cooldown 层）
+- 从任何 cron / 代理 /
+  手动触发器提交 `gbrain jobs submit restart-sweep`
+- 集中式重试 / 退避 / 锁定管理
+- 少一个要维护的主机脚本
 
-When this becomes the right tradeoff (multiple deployments, multiple
-cron schedules, or just enough complexity to justify the move), promote
-to the plugin-handler shape and deprecate this recipe.
+当这成为正确的权衡（多个部署、
+多个 cron 计划，或者只是足够的复杂性来证明移动是合理的）时，提升
+到插件处理程序形态并弃用此配方。

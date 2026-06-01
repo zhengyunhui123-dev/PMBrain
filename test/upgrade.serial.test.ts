@@ -16,8 +16,8 @@ describe('upgrade command', () => {
     });
     const stdout = await new Response(proc.stdout).text();
     const exitCode = await proc.exited;
-    expect(stdout).toContain('Usage: gbrain upgrade');
-    expect(stdout).toContain('Detects install method');
+    expect(stdout).toContain('用法：gbrain upgrade');
+    expect(stdout).toContain('检测安装方式');
     expect(exitCode).toBe(0);
   });
 
@@ -29,7 +29,7 @@ describe('upgrade command', () => {
     });
     const stdout = await new Response(proc.stdout).text();
     const exitCode = await proc.exited;
-    expect(stdout).toContain('Usage: gbrain upgrade');
+    expect(stdout).toContain('用法：gbrain upgrade');
     expect(exitCode).toBe(0);
   });
 });
@@ -212,6 +212,6 @@ describe('post-upgrade behavior (post v0.12.0 merge)', () => {
     const stdout = await new Response(proc.stdout).text();
     const exitCode = await proc.exited;
     expect(exitCode).toBe(0);
-    expect(stdout).toContain('Usage: gbrain post-upgrade');
+    expect(stdout).toContain('用法：gbrain post-upgrade');
   });
 });

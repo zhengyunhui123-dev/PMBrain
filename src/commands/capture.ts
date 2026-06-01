@@ -89,44 +89,38 @@ function parseArgs(args: string[]): RunOpts | { help: true; positional: string |
   return opts;
 }
 
-const HELP = `Usage: gbrain capture [content] [options]
+const HELP = `用法：gbrain capture [内容] [选项]
 
-The single entrypoint for getting content into the brain. One command,
-local OR thin-client, synchronous receipt with the resulting page slug.
+将内容写入大脑的统一入口。支持本地或瘦客户端调用，并同步返回页面 slug。
 
-Modes (mutually exclusive — first match wins):
-  gbrain capture "thought"          inline content
-  gbrain capture --file PATH        read content from a file
-  gbrain capture --stdin            read content from stdin (piped)
+模式（互斥，按第一个匹配项执行）：
+  gbrain capture "想法"             直接写入文本
+  gbrain capture --file PATH        从文件读取内容
+  gbrain capture --stdin            从 stdin 管道读取内容
 
-Options:
-  --slug SLUG          Override the default inbox/YYYY-MM-DD-<hash6> slug
-  --type TYPE          Override the page type (default: note)
-  --source ID          Multi-source brains: write under a non-default source.
-                       Resolution: --source flag > GBRAIN_SOURCE env >
-                       .gbrain-source dotfile (walk-up) > local_path >
-                       brain_default > 'default'. NOT supported on
-                       thin-client installs (server-side OAuth client
-                       registration scopes the source).
-  --quiet, -q          Print just the slug on stdout (for shell pipelines)
-  --json               JSON output for agents
-  --help, -h           Show this help
+选项：
+  --slug SLUG          覆盖默认的 inbox/YYYY-MM-DD-<hash6> slug
+  --type TYPE          覆盖页面类型，默认为 note
+  --source ID          多来源大脑：写入非默认来源。
+                       解析顺序：--source > GBRAIN_SOURCE 环境变量 >
+                       .gbrain-source 文件 > local_path >
+                       brain_default > 'default'。
+                       瘦客户端不支持该参数，来源由服务端 OAuth 注册范围决定。
+  --quiet, -q          仅向 stdout 输出 slug，适用于 shell 管道
+  --json               输出供 Agent 使用的 JSON
+  --help, -h           显示此帮助
 
-Notes:
-  - Binary files (image/audio/video/pdf, anything with NUL bytes in the
-    first 8KB) are rejected with a friendly error. Use a content-type
-    processor skillpack for those when available.
-  - Capturing identical text twice produces the same slug and the same
-    content_hash (whitespace + line endings + Unicode form are normalized
-    before hashing). The daemon's 24h LRU dedup uses this hash.
-  - source_kind in the DB is ALWAYS 'capture-cli' for invocations of this
-    command. --source maps to the source_id DB column, NOT to source_kind.
-    Different --type values write to the SAME slug for the same content
-    (slug = content hash), so a later capture with a different --type
-    overwrites the prior page.
+说明：
+  - 二进制文件会被拒绝，包括图片、音频、视频、PDF，以及前 8KB
+    中含 NUL 字节的文件。存在对应处理器时请使用内容处理 skillpack。
+  - 两次写入相同文本会得到相同 slug 和 content_hash。计算哈希前会
+    统一空白、换行和 Unicode 形式，守护进程会基于该哈希执行 24 小时去重。
+  - 本命令写入数据库时，source_kind 始终为 'capture-cli'。
+    --source 对应 source_id，而不是 source_kind。相同内容使用不同
+    --type 时仍写入同一 slug，后写入的页面会覆盖之前的页面。
 
-Examples:
-  gbrain capture "remember to follow up on the X deal"
+示例：
+  gbrain capture "记得跟进 X 项目"
   echo "from a pipe" | gbrain capture --stdin
   gbrain capture --file ./notes/today.md --slug daily/2026-05-20
   JOB=$(gbrain capture "..." --quiet)

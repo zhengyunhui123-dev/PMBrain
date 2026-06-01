@@ -1,143 +1,131 @@
 <!-- skillpack-version: 0.7.0 -->
 <!-- source: https://raw.githubusercontent.com/garrytan/gbrain/master/docs/GBRAIN_SKILLPACK.md -->
-# GBrain Skillpack: Reference Architecture for AI Agents
+# GBrain Skillpack：AI 代理的参考架构
 
-This is a reference architecture for how a production AI agent uses gbrain as its
-knowledge backbone. Based on patterns from a real deployment with 14,700+ brain
-files, 40+ skills, and 20+ cron jobs running continuously.
+这是生产级 AI 代理如何使用 gbrain 作为其知识骨干的参考架构。基于具有 14,700+ brain 文件、40+ 技能和 20+ cron 作业持续运行的真实部署模式。
 
-**The memex vision, realized.** Vannevar Bush imagined a device where an individual
-stores everything, mechanized so it may be consulted with exceeding speed. GBrain is
-that device, except the memex builds itself. The agent detects entities, enriches
-pages, creates cross-references, and maintains compiled truth automatically.
+**Memex 愿景，已实现。** Vannevar Bush 想象了一个设备，个人存储一切，机械化以便可以以超过速度的速度查阅。GBrain 就是那个设备，只不过 memex 自己构建自己。代理检测实体、丰富页面、创建交叉引用，并自动维护编译的真相。
 
-Each section below is a standalone guide. Click through to the full content.
+下面的每个部分都是一个独立的指南。点击进入完整内容。
 
 ---
 
-## Core Patterns
+## 核心模式
 
-The foundational read-write loop and data model.
+基础读写循环和数据模型。
 
-| Guide | What It Covers |
+| 指南 | 涵盖内容 |
 |-------|---------------|
-| [The Brain-Agent Loop](guides/brain-agent-loop.md) | The read-write cycle that makes the brain compound over time |
-| [Entity Detection](guides/entity-detection.md) | Run it on every message. Capture original thinking + entity mentions |
-| [The Originals Folder](guides/originals-folder.md) | Capturing WHAT YOU THINK, not just what you found |
-| [Brain-First Lookup](guides/brain-first-lookup.md) | Check the brain before calling any external API |
-| [Compiled Truth + Timeline](guides/compiled-truth.md) | Above the line: current synthesis. Below: append-only evidence |
-| [Source Attribution](guides/source-attribution.md) | Every fact needs a citation. Format and hierarchy |
+| [Brain-Agent 循环](guides/brain-agent-loop.md) | 使 brain 随时间复合的读写周期 |
+| [实体检测](guides/entity-detection.md) | 在每条消息上运行它。捕获原创想法 + 实体提及 |
+| [Originals 文件夹](guides/originals-folder.md) | 捕获你的想法，而不仅仅是你发现的 |
+| [Brain-First 查找](guides/brain-first-lookup.md) | 在调用任何外部 API 之前检查 brain |
+| [编译的真相 + 时间线](guides/compiled-truth.md) | 线上方：当前综合。线下方：仅追加证据 |
+| [来源归属](guides/source-attribution.md) | 每个事实都需要引用。格式和层次结构 |
 
-## Data Pipelines
+## 数据管道
 
-Getting data in and keeping it current.
+获取数据并保持最新。
 
-| Guide | What It Covers |
+| 指南 | 涵盖内容 |
 |-------|---------------|
-| [Enrichment Pipeline](guides/enrichment-pipeline.md) | 7-step protocol, tier system (Tier 1/2/3 by importance) |
-| [Meeting Ingestion](guides/meeting-ingestion.md) | Always pull complete transcript, propagate to all entity pages |
-| [Content & Media Ingestion](guides/content-media.md) | YouTube, social media bundles, PDFs/documents |
-| [Diligence Ingestion](guides/diligence-ingestion.md) | Data room materials: pitch decks, financial models, cap tables |
-| [Deterministic Collectors](guides/deterministic-collectors.md) | Code for data, LLMs for judgment. The collector pattern |
-| [Idea Capture & Originals](guides/idea-capture.md) | Depth test, originality distribution, deep cross-linking |
-| [Getting Data In](integrations/README.md) | Integration recipes: voice, email, X, calendar |
+| [丰富管道](guides/enrichment-pipeline.md) | 7 步协议，层级系统（按重要性分 Tier1/2/3） |
+| [会议摄取](guides/meeting-ingestion.md) | 始终拉取完整记录，传播到所有实体页面 |
+| [内容和媒体摄取](guides/content-media.md) | YouTube、社交媒体包、PDF/文档 |
+| [尽职调查摄取](guides/diligence-ingestion.md) | 数据室材料：推介资料包、财务模型、股权结构表 |
+| [确定性收集器](guides/deterministic-collectors.md) | 用于数据的代码，用于判断的 LLM。收集器模式 |
+| [想法捕获和 Originals](guides/idea-capture.md) | 深度测试、原创性分布、深度交叉链接 |
+| [获取数据进入](integrations/README.md) | 集成配方：语音、电子邮件、X、日历 |
 
-## Operations
+## 操作
 
-Running a production brain.
+运行生产级 brain。
 
-| Guide | What It Covers |
+| 指南 | 涵盖内容 |
 |-------|---------------|
-| [Reference Cron Schedule](guides/cron-schedule.md) | 20+ recurring jobs, quiet hours, dream cycle |
-| [Cron via Minions](../skills/conventions/cron-via-minions.md) | Why scheduled work runs as Minion jobs, not `agentTurn`. Auto-applied by v0.11.0 migration for built-in handlers; host-specific handlers use the plugin contract below. |
-| [Plugin Handlers](guides/plugin-handlers.md) | Registering host-specific Minion handlers via code (no data-file exec surface). |
-| [Minions fix](guides/minions-fix.md) | Repairing a half-migrated v0.11.0 install. |
-| [Shell jobs (v0.14.0+)](guides/minions-shell-jobs.md) | Move deterministic crons (API fetch, token refresh, scrape+write) off the LLM gateway. Zero tokens per fire, ~60% gateway headroom. Follow `skills/migrations/v0.14.0.md` for the adoption playbook. |
-| [Quiet Hours & Timezone](guides/quiet-hours.md) | Hold notifications during sleep, timezone-aware delivery |
-| [Executive Assistant Pattern](guides/executive-assistant.md) | Email triage, meeting prep, scheduling |
-| [Operational Disciplines](guides/operational-disciplines.md) | Signal detection, brain-first, sync-after-write, heartbeat, dream cycle |
-| [Skill Development Cycle](guides/skill-development.md) | 5-step cycle: concept, prototype, evaluate, codify, cron |
+| [参考 Cron 计划](guides/cron-schedule.md) | 20+ 重复作业、安静时间、梦想周期 |
+| [通过 Minions 的 Cron](../skills/conventions/cron-via-minions.md) | 为什么计划的工作作为 Minion 作业运行，而不是 `agentTurn`。由 v0.11.0 迁移为内置处理程序自动应用；特定于主机的处理程序使用下面的插件契约。 |
+| [插件处理程序](guides/plugin-handlers.md) | 通过代码注册特定于主机的 Minion 处理程序（无数据文件 exec 表面）。 |
+| [Minions 修复](guides/minions-fix.md) | 修复半迁移的 v0.11.0 安装。 |
+| [Shell 作业 (v0.14.0+)](guides/minions-shell-jobs.md) | 将确定性 cron（API 获取、令牌刷新、抓取+写入）从 LLM 网关移开。每次触发零令牌，~60% 网关净空。遵循 `skills/migrations/v0.14.0.md` 以获取采用演练。 |
+| [安静时间和时区](guides/quiet-hours.md) | 在睡眠期间保持通知，感知时区的传递 |
+| [执行助理模式](guides/executive-assistant.md) | 电子邮件分类、会议准备、日程安排 |
+| [操作纪律](guides/operational-disciplines.md) | 信号检测、brain-first、写入后同步、心跳、梦想周期 |
+| [技能开发周期](guides/skill-development.md) | 5 步周期：构思、原型、评估、编目、cron |
 
-**Subagent routing (v0.11.0+):** agents that dispatch background work should route through
-`skills/conventions/subagent-routing.md` — it reads `~/.gbrain/preferences.json#minion_mode`
-and branches between native subagents and Minion jobs. The v0.11.0 migration auto-injects
-a marker into AGENTS.md pointing at this convention.
+**子代理路由 (v0.11.0+)：** 分派后台工作的代理应该通过 `skills/conventions/subagent-routing.md` 路由 — 它读取 `~/.gbrain/preferences.json#minion_mode` 并在原生子代理和 Minion 作业之间分支。v0.11.0 迁移自动将标记注入指向此约定的 AGENTS.md。
 
-**Cron routing (v0.11.0+):** scheduled work goes through Minions, not OpenClaw's `agentTurn`.
-See `skills/conventions/cron-via-minions.md` for the rewrite pattern. The v0.11.0 migration
-auto-rewrites entries whose handler is a gbrain builtin; host-specific handlers (e.g.
-`ea-inbox-sweep`) need a code-level registration per `docs/guides/plugin-handlers.md`.
+**Cron 路由 (v0.11.0+)：** 计划的工作通过 Minions 进行，而不是 OpenClaw 的 `agentTurn`。有关重写模式，请参见 `skills/conventions/cron-via-minions.md`。v0.11.0 迁移自动重写处理程序是 gbrain 内置的条目；特定于主机的处理程序（例如 `ea-inbox-sweep`）需要根据 `docs/guides/plugin-handlers.md` 进行代码级注册。
 
-## Architecture
+## 架构
 
-How to structure your system.
+如何构建你的系统。
 
-| Guide | What It Covers |
+| 指南 | 涵盖内容 |
 |-------|---------------|
-| [Two-Repo Architecture](guides/repo-architecture.md) | Agent repo vs brain repo, boundary rules, decision tree |
-| [Sub-Agent Model Routing](guides/sub-agent-routing.md) | Which model for which task, signal detector pattern, cost optimization |
-| [The Three Search Modes](guides/search-modes.md) | Keyword, hybrid, direct. When to use each |
-| [Brain vs Agent Memory](guides/brain-vs-memory.md) | 3 layers: GBrain (world knowledge), agent memory, session |
+| [双仓库架构](guides/repo-architecture.md) | 代理仓库 vs brain 仓库、边界规则、决策树 |
+| [子代理模型路由](guides/sub-agent-routing.md) | 哪个任务使用哪个模型、信号检测器模式、成本优化 |
+| [三种搜索模式](guides/search-modes.md) | 关键字、混合、直接。何时使用每种模式 |
+| [Brain vs 代理内存](guides/brain-vs-memory.md) | 3 层：GBrain（世界知识）、代理内存、会话 |
 
-## Integrations
+## 集成
 
-Wiring up your life.
+连接你的生活。
 
-| Guide | What It Covers |
+| 指南 | 涵盖内容 |
 |-------|---------------|
-| [Credential Gateway](integrations/credential-gateway.md) | ClawVisor / Hermes for Gmail, Calendar, Contacts |
-| [Meeting & Call Webhooks](integrations/meeting-webhooks.md) | Circleback transcripts + Quo/OpenPhone SMS/calls |
-| [Voice-to-Brain](../recipes/twilio-voice-brain.md) | Phone calls + WebRTC browser calls create brain pages. 25 production patterns: identity separation, bid system, conversation timing, proactive advisor, prompt compression, caller routing, dynamic VAD, real-time logging, belt-and-suspenders post-call |
-| [Email-to-Brain](../recipes/email-to-brain.md) | Gmail messages flow into entity pages via deterministic collector |
-| [X-to-Brain](../recipes/x-to-brain.md) | Twitter monitoring with deletion detection + engagement velocity |
-| [Calendar-to-Brain](../recipes/calendar-to-brain.md) | Google Calendar events become searchable daily brain pages |
-| [Meeting Sync](../recipes/meeting-sync.md) | Circleback transcripts auto-import with attendee propagation |
+| [凭证网关](integrations/credential-gateway.md) | ClawVisor / Hermes 用于 Gmail、日历、联系人 |
+| [会议和通话 Webhook](integrations/meeting-webhooks.md) | Circleback 记录 + Quo/OpenPhone SMS/通话 |
+| [语音到 Brain](../recipes/twilio-voice-brain.md) | 电话通话 + WebRTC 浏览器通话创建 brain 页面。25 个生产模式：身份分离、竞标系统、对话计时、主动顾问、提示压缩、呼叫者路由、动态 VAD、实时日志记录、皮带和吊带事后通话 |
+| [电子邮件到 Brain](../recipes/email-to-brain.md) | Gmail 消息通过确定性收集器流入实体页面 |
+| [X 到 Brain](../recipes/x-to-brain.md) | Twitter 监控，带删除检测和参与度速度 |
+| [日历到 Brain](../recipes/calendar-to-brain.md) | Google 日历事件变为可搜索的每日 brain 页面 |
+| [会议同步](../recipes/meeting-sync.md) | Circleback 记录自动导入，带与会者传播 |
 
-## Administration
+## 管理
 
-Keeping it running and up to date.
+保持运行并更新。
 
-| Guide | What It Covers |
+| 指南 | 涵盖内容 |
 |-------|---------------|
-| [Upgrades & Auto-Update](guides/upgrades-auto-update.md) | check-update, agent notifications, migration files |
-| [Live Sync](guides/live-sync.md) | Keep the index current: cron, --watch, webhook approaches |
+| [升级和自动更新](guides/upgrades-auto-update.md) | check-update、代理通知、迁移文件 |
+| [实时同步](guides/live-sync.md) | 保持索引最新：cron、--watch、webhook 方法 |
 
-## Getting Started
+## 入门
 
-After setup, the brain is empty. The cold-start skill sequences the highest-leverage
-data sources to populate it:
+设置后，brain 是空的。冷启动技能排序最高价值的数据源以填充它：
 
-| Guide | What It Covers |
+| 指南 | 涵盖内容 |
 |-------|---------------|
-| [Cold Start](../skills/cold-start/SKILL.md) | Day-one bootstrapping: contacts, calendar, email, conversations, social, archives. Uses ClawVisor for safe credential handling — agents never hold raw API keys. |
-| [Ask User](../skills/ask-user/SKILL.md) | Choice-gate pattern for human input at decision points. Used by cold-start and other skills. |
+| [冷启动](../skills/cold-start/SKILL.md) | 第一天引导：联系人、日历、电子邮件、对话、社交、档案。使用 ClawVisor 进行安全凭证处理 — 代理从不持有原始 API 密钥。 |
+| [询问用户](../skills/ask-user/SKILL.md) | 决策点用于人工输入的选项门模式。由冷启动和其他技能使用。 |
 
 ---
 
-## Appendix: GBrain CLI Quick Reference
+## 附录：GBrain CLI 快速参考
 
-| Command | Purpose |
+| 命令 | 用途 |
 |---------|---------|
-| `gbrain search "term"` | Keyword search across all brain pages |
-| `gbrain query "question"` | Hybrid search (vector + keyword + RRF) |
-| `gbrain get <slug>` | Read a specific brain page by slug |
-| `gbrain sync` | Sync local markdown repo to gbrain index |
-| `gbrain import <path>` | Import files into the brain |
-| `gbrain embed --stale` | Re-embed pages with stale or missing embeddings |
-| `gbrain integrations` | Manage integration recipes (senses + reflexes) |
-| `gbrain stats` | Show brain statistics (page count, last sync, etc.) |
-| `gbrain doctor` | Diagnose brain health issues |
-| `gbrain check-update` | Check for new versions and integration recipes |
+| `gbrain search "term"` | 跨所有 brain 页面的关键字搜索 |
+| `gbrain query "question"` | 混合搜索（向量 + 关键字 + RRF） |
+| `gbrain get <slug>` | 通过 slug 读取特定的 brain 页面 |
+| `gbrain sync` | 将本地 markdown 仓库同步到 gbrain 索引 |
+| `gbrain import <path>` | 将文件导入 brain |
+| `gbrain embed --stale` | 重新嵌入具有陈旧或缺失嵌入的页面 |
+| `gbrain integrations` | 管理集成配方（感知 + 反射） |
+| `gbrain stats` | 显示 brain 统计信息（页面计数、上次同步等） |
+| `gbrain doctor` | 诊断 brain 健康问题 |
+| `gbrain check-update` | 检查新版本和集成配方 |
 
-Run `gbrain --help` for the full command reference.
+运行 `gbrain --help` 获取完整的命令参考。
 
 ---
 
-## Architecture & Philosophy
+## 架构和哲学
 
-- [Infrastructure Layer](architecture/infra-layer.md) — Import pipeline, chunking, embedding, search
-- [Thin Harness, Fat Skills](ethos/THIN_HARNESS_FAT_SKILLS.md) — Architecture philosophy
-- [Markdown Skills as Recipes](ethos/MARKDOWN_SKILLS_AS_RECIPES.md) — Why markdown is code and your agent is a package manager
-- [Homebrew for Personal AI](designs/HOMEBREW_FOR_PERSONAL_AI.md) — The 10-star vision
-- [Recommended Schema](GBRAIN_RECOMMENDED_SCHEMA.md) — Directory structure for your brain repo
-- [Verification Runbook](GBRAIN_VERIFY.md) — End-to-end installation verification
+- [基础设施层](architecture/infra-layer.md) — 导入管道、分块、嵌入、搜索
+- [瘦工具包，胖技能](ethos/THIN_HARNESS_FAT_SKILLS.md) — 架构哲学
+- [Markdown 技能作为配方](ethos/MARKDOWN_SKILLS_AS_RECIPES.md) — 为什么 markdown 是代码，而你的代理是包管理器
+- [个人 AI 的家酿](designs/HOMEBREW_FOR_PERSONAL_AI.md) — 10 星愿景
+- [推荐模式](GBRAIN_RECOMMENDED_SCHEMA.md) — 你的 brain 仓库的目录结构
+- [验证运行手册](GBRAIN_VERIFY.md) — 端到端安装验证

@@ -2,122 +2,122 @@
 id: agent-voice
 name: Voice Personas (Mars + Venus)
 version: 0.1.0
-description: WebRTC-first voice agent reference (Mars + Venus personas, optional Twilio adapter). Skillpack-as-reference paradigm — the install-time agent COPIES code into your host agent repo where it becomes user-owned and mutable, NOT a runtime gbrain dependency.
+description: WebRTC 优先的语音代理参考实现（Mars + Venus 角色，可选 Twilio 适配器）。采用 skillpack-as-reference 范式 —— 安装时代理将代码复制到您的主机代理仓库中，成为用户拥有并可修改的代码，而非运行时 gbrain 依赖。
 category: voice
 install_kind: copy-into-host-repo
 requires: []
 secrets:
   - name: OPENAI_API_KEY
-    description: OpenAI API key with Realtime API access enabled
-    where: https://platform.openai.com/api-keys — click "+ Create new secret key", copy immediately
+    description: OpenAI API 密钥（需启用 Realtime API 访问权限）
+    where: https://platform.openai.com/api-keys — 点击"+ Create new secret key"，立即复制
   - name: TWILIO_ACCOUNT_SID
-    description: (optional) Twilio Account SID — only if wiring inbound Twilio calls
+    description: （可选）Twilio 账户 SID —— 仅当需要接入 Twilio 来电时使用
     where: https://www.twilio.com/console
   - name: TWILIO_AUTH_TOKEN
-    description: (optional) Twilio auth token — only if wiring inbound Twilio calls
+    description: （可选）Twilio 认证令牌 —— 仅当需要接入 Twilio 来电时使用
     where: https://www.twilio.com/console
 health_checks:
   - type: env_exists
     var: OPENAI_API_KEY
-    label: OPENAI_API_KEY present
+    label: OPENAI_API_KEY 存在
 setup_time: 10 min
-cost_estimate: "$0.06-0.24/min OpenAI Realtime, optional $1-2/mo Twilio number"
+cost_estimate: "$0.06-0.24/分钟 OpenAI Realtime，可选 $1-2/月 Twilio 号码"
 ---
 
-# Voice Personas: Mars + Venus
+# 语音角色：Mars + Venus
 
-A reference voice agent (WebRTC-first; OpenAI Realtime) shipped as **copy-into-your-repo** content rather than runtime gbrain skills. The install-time agent reads this recipe, copies the bundle into your host agent repo (e.g. `~/git/your-agent-repo/`), wires the resolver, and starts the voice server. From there, the code lives in YOUR repo, on YOUR cadence, with YOUR edits.
+一个参考级语音代理（WebRTC 优先；OpenAI Realtime）以**复制到您的仓库**的方式提供，而非运行时 gbrain skill。安装时代理读取此配方，将捆绑包复制到您的主机代理仓库（例如 `~/git/your-agent-repo/`），接入解析器，并启动语音服务器。从此，代码存在于**您的仓库中，按您的节奏，由您编辑**。
 
-## What ships in the bundle
+## 捆绑包内容
 
-- **Two personas** — Mars (introspective thought partner; voice `Orus`) and Venus (sharp executive assistant; voice `Aoede`).
-- **WebRTC browser client** at `/call?test=1` for the production-grade voice loop. Production load installs zero test instrumentation; `?test=1` enables Web Audio API tee → MediaRecorder capture for the E2E.
-- **Tool router** with a read-only allow-list by default (search, query, get_page, list_pages, find_experts, get_recent_salience, get_recent_transcripts, read_article). Write ops are denylisted; operators opt in to a bounded set via local override.
-- **Persona-aware prompt builder** with identity-first composition + Unicode sanitization for Realtime API safety.
-- **Optional Twilio adapter** (`/voice` TwiML, WSS bridge) for phone inbound. Skip if you only want browser voice.
-- **Three skills** for resolver routing: `voice-persona-mars`, `voice-persona-venus`, `voice-post-call`.
-- **Unit + E2E tests** that ride with the copy. PII-shape regex guards every prompt, classifier triages upstream vs plumbing failures.
+- **两个角色** —— Mars（内省思考伙伴；语音 `Orus`）和 Venus（敏锐的执行助理；语音 `Aoede`）。
+- **WebRTC 浏览器客户端**位于 `/call?test=1`，用于生产级语音循环。生产部署不安装测试工具；`?test=1` 启用 Web Audio API tee → MediaRecorder 捕获用于端到端测试。
+- **工具路由器**，默认使用只读允许列表（search、query、get_page、list_pages、find_experts、get_recent_salience、get_recent_transcripts、read_article）。写操作被拒绝；操作员可通过本地覆盖选择加入有限集合。
+- **角色感知提示构建器**，采用身份优先组合 + Unicode 清理以确保 Realtime API 安全。
+- **可选 Twilio 适配器**（`/voice` TwiML、WSS 桥接）用于电话接入。如果只需要浏览器语音，可跳过。
+- **三个 skill** 用于解析器路由：`voice-persona-mars`、`voice-persona-venus`、`voice-post-call`。
+- **单元测试 + 端到端测试**随复制一起提供。PII 形状正则守卫每个提示，分类器分流上游与管道故障。
 
-## The skillpack-as-reference paradigm
+## Skillpack 作为参考范式
 
-Earlier gbrain skillpacks installed to `~/.gbrain/skills/<name>/` as managed-block-canonical first-class skills. The user's local edits drifted from the canonical and updates were either "overwrite local" or "skip update" — neither is what an operator wants on code they've extended.
+早期的 gbrain skillpack 安装到 `~/.gbrain/skills/<name>/` 作为受管块规范的一等 skill。用户的本地编辑与规范漂移，更新要么是"覆盖本地"要么是"跳过更新" —— 都不是操作员在扩展代码时想要的。
 
-This recipe ships a different shape: gbrain holds the up-to-date REFERENCE, and `gbrain integrations install agent-voice --target <host-repo>` COPIES it into the operator's repo. The code now lives in the host repo, on the operator's release cadence, with the operator's edits. Subsequent `--refresh` invocations diff host-side files against gbrain's reference and propose changes; the operator picks per-file (keep mine / take theirs / merge).
+此配方提供不同的形态：gbrain 持有最新的**参考**，而 `gbrain integrations install agent-voice --target <host-repo>` 将**其复制到操作员的仓库中**。代码现在存在于主机仓库中，按操作员的发布节奏，带着操作员的编辑。后续的 `--refresh` 调用将主机端文件与 gbrain 的参考进行差异比较并提出更改；操作员逐文件选择（保留我的 / 接受他们的 / 合并）。
 
-The shipped reference does NOT contain personal names, hardcoded private paths, or upstream-agent codenames. A CI guard (`scripts/check-no-pii-in-agent-voice.sh`) blocks any drift back; a deterministic import script (`scripts/import-from-upstream.sh`) refreshes the gbrain reference from an upstream voice-agent source.
+ shipped 参考**不包含个人姓名、硬编码私有路径或上游代理代号**。CI 守卫（`scripts/check-no-pii-in-agent-voice.sh`）阻止任何漂移；确定性导入脚本（`scripts/import-from-upstream.sh`）从上游语音代理源刷新 gbrain 参考。
 
-## Install
+## 安装
 
 ```bash
-# 1. Detect target repo
-export TARGET_REPO=$OPENCLAW_WORKSPACE     # or your agent repo path
+# 1. 检测目标仓库
+export TARGET_REPO=$OPENCLAW_WORKSPACE     # 或您的代理仓库路径
 
-# 2. Install
+# 2. 安装
 gbrain integrations install agent-voice --target $TARGET_REPO
 
-# 3. Set env vars in $TARGET_REPO/.env (NOT in gbrain)
+# 3. 在 $TARGET_REPO/.env 中设置环境变量（不在 gbrain 中）
 echo "OPENAI_API_KEY=sk-..." >> $TARGET_REPO/.env
 echo "DEFAULT_PERSONA=venus" >> $TARGET_REPO/.env
 
-# 4. Implement context builder (optional but recommended)
-# Replace $TARGET_REPO/services/voice-agent/code/lib/context-builder.example.mjs
-# with your operator-specific implementation. See the contract at:
+# 4. 实现上下文构建器（可选但推荐）
+# 替换 $TARGET_REPO/services/voice-agent/code/lib/context-builder.example.mjs
+# 使用您的操作员特定实现。参见合约：
 #   $TARGET_REPO/services/voice-agent/code/lib/personas/context-builder.contract.md
 
-# 5. Run host-side tests
+# 5. 运行主机端测试
 cd $TARGET_REPO/services/voice-agent && bun install && bun run test
-# OR if your repo uses npm: npm install && npm test
+# 或者如果您的仓库使用 npm：npm install && npm test
 
-# 6. Start the voice server
+# 6. 启动语音服务器
 cd $TARGET_REPO/services/voice-agent && bun run start
-# Voice agent listens on http://localhost:8765
+# 语音代理监听 http://localhost:8765
 ```
 
-Open `http://localhost:8765/call` and click Connect. The browser asks for mic permission; once granted, it does an SDP exchange via `POST /session`, the OpenAI Realtime API returns the SDP answer, and audio flows bidirectionally over WebRTC.
+打开 `http://localhost:8765/call` 并点击连接。浏览器请求麦克风权限；授予后，通过 `POST /session` 进行 SDP 交换，OpenAI Realtime API 返回 SDP 应答，音频通过 WebRTC 双向流动。
 
-For test-mode roundtrip checks, append `?test=1` to the URL — that enables the `window._gbrainTest` instrumentation namespace + MediaRecorder capture of the response audio.
+对于测试模式往返检查，在 URL 后附加 `?test=1` —— 这将启用 `window._gbrainTest` 工具命名空间 + 响应音频的 MediaRecorder 捕获。
 
-## Update (refresh from gbrain)
+## 更新（从 gbrain 刷新）
 
 ```bash
-# Pull latest gbrain → re-run the install with --refresh
-git -C $(which gbrain | xargs -I{} dirname {})/.. pull   # or your gbrain update path
+# 拉取最新 gbrain → 使用 --refresh 重新运行安装
+git -C $(which gbrain | xargs -I{} dirname {})/.. pull   # 或您的 gbrain 更新路径
 gbrain integrations install agent-voice --target $TARGET_REPO --refresh
 ```
 
-`--refresh` reads the `.gbrain-source.json` manifest written by the original install, re-computes per-file SHA-256 against gbrain's current reference, and classifies each file:
+`--refresh` 读取原始安装写入的 `.gbrain-source.json` 清单，针对 gbrain 当前参考重新计算每个文件的 SHA-256，并对每个文件分类：
 
-- **unchanged-identical** — host file matches gbrain reference; skip.
-- **unchanged-stale** — host file matches the recorded SHA but reference moved; offer to update.
-- **locally-modified** — host file diverges from the recorded SHA; show diff, offer three options (keep mine / take theirs / merge).
-- **source-deleted** — gbrain reference removed a file; offer cleanup.
-- **source-renamed** — detected via path-mapping; offer to follow.
+- **unchanged-identical** —— 主机文件与 gbrain 参考匹配；跳过。
+- **unchanged-stale** —— 主机文件与记录的 SHA 匹配但参考已移动；提供更新。
+- **locally-modified** —— 主机文件与记录的 SHA 偏离；显示差异，提供三个选项（保留我的 / 接受他们的 / 合并）。
+- **source-deleted** —— gbrain 参考删除了文件；提供清理。
+- **source-renamed** —— 通过路径映射检测；提供跟随。
 
-A transaction journal at `<target>/services/voice-agent/.gbrain-source.refresh.log` allows partial-apply recovery if the refresh is interrupted.
+`<target>/services/voice-agent/.gbrain-source.refresh.log` 中的事务日志允许在刷新被中断时恢复部分应用。
 
-## Architecture
+## 架构
 
 ```
                 Browser (call.html)
                        │
-                       │  WebRTC (mic + remote audio + data channel)
+                       │  WebRTC (麦克风 + 远程音频 + 数据通道)
                        ▼
               ┌─────────────────────┐
               │   server.mjs (8765) │
               │   ─────────────     │
    ┌──────────┤  GET  /call         │      POST /session
    │ static   │  GET  /health        ├──────────────────▶  api.openai.com/v1/realtime/calls
-   │ files    │  POST /session       │       (SDP exchange via FormData)
+   │ files    │  POST /session       │       (通过 FormData 的 SDP 交换)
    └──────────┤  POST /tool          │
               │  POST /voice  (Twi.) │
               │  WSS  /ws     (Twi.) │
               └──────────┬───────────┘
-                         │  /tool dispatches through tools.mjs allow-list
+                         │  /tool 通过 tools.mjs 允许列表分发
                          ▼
               ┌─────────────────────┐
-              │  tools.mjs router    │
-              │  ─────────────       │   denylist: put_page, submit_job, file_upload, ...
-              │  READ_ONLY_OPS only  │   allow-list: 8 read ops; operator extends optional ops via override
+              │  tools.mjs 路由器    │
+              │  ─────────────       │   拒绝列表：put_page、submit_job、file_upload、...
+              │  仅只读操作          │   允许列表：8 个读取操作；操作员通过覆盖扩展可选操作
               └──────────┬───────────┘
                          │
                          ▼  stdio JSON-RPC
@@ -126,36 +126,36 @@ A transaction journal at `<target>/services/voice-agent/.gbrain-source.refresh.l
               └─────────────────────┘
 ```
 
-## Production checklist
+## 生产检查清单
 
-Reference code ships intentionally minimal. Before public deployment:
+参考代码 intentionally 最简。在公开部署之前：
 
-- **Twilio signature validation** on `/voice` — currently absent; add `X-Twilio-Signature` header validation.
-- **Rate limiting** on `/session` and `/tool` — currently absent.
-- **CORS allowlist** — currently `*`; restrict to your deployed origins.
-- **Auth on /tool** — voice-side tool calls currently trust the in-process connection; if you expose `/tool` publicly, gate it behind a session token.
-- **HTTPS** — required for browser mic access in production. Use ngrok / Caddy / Cloudflare Tunnel.
-- **Twilio fallback URL** — `/fallback` is a TwiML stub; wire to your operator's cell for crash recovery.
-- **PII scrub at context-builder** — the shipped `context-builder.example.mjs` includes phone/email regex scrubs, but operators should extend per their brain's PII pattern set.
+- **Twilio 签名验证**在 `/voice` 上 —— 当前缺失；添加 `X-Twilio-Signature` 头验证。
+- **速率限制**在 `/session` 和 `/tool` 上 —— 当前缺失。
+- **CORS 允许列表** —— 当前为 `*`；限制到您的部署源。
+- **/tool 认证** —— 语音端工具调用当前信任进程内连接；如果您公开 `/tool`，应通过会话令牌对其进行网关保护。
+- **HTTPS** —— 生产环境中浏览器麦克风访问需要。使用 ngrok / Caddy / Cloudflare Tunnel。
+- **Twilio 回退 URL** —— `/fallback` 是 TwiML 存根；连接到操作员的手机用于崩溃恢复。
+- **上下文构建器中的 PII 清理** —— shipped `context-builder.example.mjs` 包含电话/电子邮件正则清理，但操作员应根据其大脑的 PII 模式集进行扩展。
 
-## Tests
+## 测试
 
 ```bash
 cd $TARGET_REPO/services/voice-agent
-bun run test                   # host-side unit tests (5 suites, ~100 cases)
-AGENT_VOICE_E2E=1 bun run test:e2e             # WebRTC roundtrip (~$0.10/run)
-AGENT_VOICE_FULL_E2E=1 bun run test:full-flow  # openclaw-driven install + roundtrip (~$1-2/run)
+bun run test                   # 主机端单元测试（5 个套件，约 100 个用例）
+AGENT_VOICE_E2E=1 bun run test:e2e             # WebRTC 往返（约 $0.10/运行）
+AGENT_VOICE_FULL_E2E=1 bun run test:full-flow  # openclaw 驱动的安装有往返（约 $1-2/运行）
 ```
 
-The full-flow E2E is **friction-discovery**, not a ship-gate. Pre-ship gates on host-side unit tests and the PII guard; flakes in the live OpenAI Realtime path soft-fail with `STATUS: skipped_upstream_degraded` and log to the friction channel.
+完整流程端到端测试是**摩擦发现**，而非发布门控。发布前门控在主机端单元测试和 PII 守卫；实时 OpenAI Realtime 路径中的片状失败以 `STATUS: skipped_upstream_degraded` 软失败并记录到摩擦通道。
 
-## What's deferred
+## 延迟项目
 
-- DIY STT+LLM+TTS pipeline (`pipeline.mjs`, `pipeline-v3.mjs` for Gemini Live) — recipe Option A (WebRTC direct to OpenAI Realtime) ships now; Option B (Deepgram + Claude + Cartesia) is a follow-up wave.
-- Multilingual Mars — the persona drops the multilingual claim until a multilingual eval lands; restoring it is gated on the eval.
-- Live cross-call memory between sessions — the persona is session-scoped today.
-- Pre-computed engagement-bid system (the "Bid System" pattern from production deployments) — would belong in `prompt.mjs`.
-- Smart VAD presets (quiet/normal/noisy/very_noisy) — uses Realtime API's default VAD today.
-- WebRTC `/session` does not yet ship MediaRecorder fallback for environments where the WebAudio-tee fails.
+- 自建 STT+LLM+TTS 管道（`pipeline.mjs`、`pipeline-v3.mjs` 用于 Gemini Live） —— 配方选项 A（直接连接到 OpenAI Realtime 的 WebRTC）现在提供；选项 B（Deepgram + Claude + Cartesia）是后续浪潮。
+- 多语言 Mars —— 在 multilingual eval 落地之前，角色放弃多语言声明；恢复受 eval 门控。
+- 会话间实时跨调用记忆 —— 角色当前是会话作用域的。
+- 预计算参与竞标系统（生产部署中的"竞标系统"模式） —— 将属于 `prompt.mjs`。
+- 智能 VAD 预设（安静/正常/嘈杂/非常嘈杂） —— 今天使用 Realtime API 的默认 VAD。
+- WebRTC `/session` 尚未提供 MediaRecorder 回退用于 WebAudio-tee 失败的环境。
 
-Each of the deferred items is filed as a TODO in the gbrain repo's `TODOS.md`.
+每个延迟项目都作为 TODO 归档在 gbrain 仓库的 `TODOS.md` 中。

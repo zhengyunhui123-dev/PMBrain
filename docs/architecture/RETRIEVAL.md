@@ -1,130 +1,131 @@
-# Why the hybrid + graph stack works
+# 混合 + 图堆栈为何有效
 
-Vector search alone underdelivers on real personal-knowledge queries. This doc explains why gbrain layers four strategies together and how they compound.
+单独的向量搜索在真实的个人知识查询上表现不足。本文档解释了 gbrain 为何将四种策略分层组合在一起，以及它们如何复合。
 
-## The four strategies in concert
+## 协同工作的四种策略
 
-1. **Vector (HNSW on pgvector)** — semantic similarity. Catches "who works on retrieval quality at YC?" → pages mentioning "Garry Tan + retrieval" even when the user never typed "YC".
-2. **BM25 keyword** — lexical match. Catches names, exact phrases, code identifiers, anything where the user remembers the literal token. Survives the cases where vector search drifts into thematic neighbors.
-3. **Reciprocal-rank fusion (RRF)** — merges vector + keyword rankings without weighting one over the other globally. Each strategy gets to vote.
-4. **Knowledge graph traversal** — follows typed edges. Catches "what did Bob invest in this quarter?" by walking `bob ── invested_in ──> company ── dated ──> Q1`. Vector search can't see causal chains; the graph can.
+1. **向量 (HNSW on pgvector)** — 语义相似度。捕获"谁在 YC 从事检索质量工作？"→ 即使从未键入"YC"，也会提及"Garry Tan + retrieval"的页面。
+2. **BM25 关键词** — 词汇匹配。捕获名称、精确短语、代码标识符，以及用户记住字面 token 的任何情况。在向量搜索漂移到主题邻居的情况下幸存下来。
+3. **互惠排名融合 (RRF)** — 合并向量 + 关键词排名，而不全局加权一个胜过另一个。每个策略都可以投票。
+4. **知识图谱遍历** — 遵循类型化边。通过遍历 `bob ── invested_in ──> company ── dated ──> Q1` 来捕获"Bob 本季度投资了什么？"。向量搜索看不到因果链；图谱可以。
 
-## Why each one alone fails
+## 为何每种单独都会失败
 
-**Vector only.** Returns chunks semantically close to the query. Misses any factual relationship not directly encoded in the embedding. "Companies in Garry's portfolio" returns essays about portfolios, not company pages.
+**仅向量。** 返回与查询语义接近的块。遗漏任何未直接在嵌入中编码的事实关系。"Garry 投资组合中的公司"返回关于投资组合的文章，而不是公司页面。
 
-**Keyword only (ripgrep-style).** Brittle to phrasing. "Who works on retrieval?" misses pages that say "search ranking" instead of "retrieval." Garbage on synonyms, near-misses, or paraphrases.
+**仅关键词 (ripgrep 风格)。** 对措辞脆弱。"谁从事检索工作？"遗漏了说"搜索排名"而不是"retrieval"的页面。同义词、近似未命中或释义的垃圾。
 
-**Graph only.** Excellent at "neighbors of Alice" but blind to anything not yet linked. Sparse on fresh pages until backlinks accumulate.
+**仅图谱。** 在"Alice 的邻居"方面表现出色，但对尚未链接的任何内容都视而不见。在反向链接累积之前，在新鲜页面上稀疏。
 
-**Hybrid (vector + keyword + RRF), no graph.** Decent at "what is X?" type queries. Fails on "what is Y's relationship to X?" — those are graph queries and no amount of embedding tuning recovers them.
+**混合（向量 + 关键词 + RRF），无图谱。** 在"X 是什么？"类型查询上表现不错。在"X 与 Y 的关系是什么？"上失败 — 那些是图谱查询，无论嵌入调整如何都无法恢复它们。
 
-## The benchmark
+## 基准
 
-BrainBench (corpus + harness in the sibling [gbrain-evals](https://github.com/garrytan/gbrain-evals) repo) measures retrieval P@5, R@5, MRR, nDCG@5 on a 240-page Opus-generated rich-prose corpus.
+BrainBench（兄弟仓库 [gbrain-evals](https://github.com/garrytan/gbrain-evals) 中的语料库 + 工具）在 240 页 Opus 生成的富散文语料库上测量检索 P@5、R@5、MRR、nDCG@5。
 
-| Strategy | P@5 | R@5 | Notes |
+| 策略 | P@5 | R@5 | 说明 |
 |---|---|---|---|
-| ripgrep BM25 only | ~18 | ~75 | Lexical-only baseline |
-| vector-only RAG | ~18 | ~80 | Standard RAG implementation |
-| gbrain graph-disabled (hybrid + RRF, no graph traversal) | ~18 | ~85 | Hybrid alone |
-| **gbrain default (full stack)** | **49.1** | **97.9** | Graph + extract-quality lift |
+| ripgrep BM25 only | ~18 | ~75 | 仅词汇基线 |
+| vector-only RAG | ~18 | ~80 | 标准 RAG 实现 |
+| gbrain graph-disabled (hybrid + RRF, no graph traversal) | ~18 | ~85 | 仅混合 |
+| **gbrain default (full stack)** | **49.1** | **97.9** | 图谱 + 提取质量提升 |
 
-**+31 P@5 points** from the graph + extract quality work. The graph isn't a marginal feature; it's the load-bearing wall.
+从图谱 + 提取质量工作中获得 **+31 P@5 点**。图谱不是一个边缘特征；它是承重墙。
 
-## Auto-link: why zero-LLM-call edge extraction works
+## 自动链接：零 LLM 调用边提取的工作原理
 
-Every `put_page` runs `extractEntityRefs` on the markdown body. It matches:
+每个 `put_page` 都会在 markdown 正文上运行 `extractEntityRefs`。它匹配：
 
-- Standard markdown links: `[Garry Tan](wiki/people/garry-tan)`
-- Obsidian wikilinks: `[[wiki/people/garry-tan|Garry Tan]]`
-- Typed-link blockquotes: `> **Convention:** see [path](path).`
+- 标准 markdown 链接：`[Garry Tan](wiki/people/garry-tan)`
+- Obsidian wikilinks：`[[wiki/people/garry-tan|Garry Tan]]`
+- 类型化链接块引用：`> **Convention:** see [path](path).`
 
-Three regexes, zero LLM tokens, single SQL `addLinksBatch` call with `INSERT ... SELECT FROM unnest(...) JOIN pages ON CONFLICT DO NOTHING RETURNING 1`. The graph grows on every write at near-zero cost. On a 17K-page brain, full graph extract completes in seconds.
+三个正则表达式，零 LLM token，带有 `INSERT ... SELECT FROM unnest(...) JOIN pages ON CONFLICT DO NOTHING RETURNING 1` 的单个 SQL `addLinksBatch` 调用。图谱在每次写入时以接近零的成本增长。在 17K 页面大脑上，完整图谱提取在几秒钟内完成。
 
-Heuristic link-type inference (`attended`, `works_at`, `invested_in`, `founded`, `advises`) fires from surrounding sentence context — also LLM-free. Power users who want richer types add them via the typed-link blockquote convention.
+启发式链接类型推断（`attended`、`works_at`、`invested_in`、`founded`、`advises`）从周围的句子上下文触发 — 也是无 LLM 的。有权限的用户可以通过类型化链接块引用约定添加它们。
 
-## ZeroEntropy as reranker: 60% top-1 reshuffle
+## ZeroEntropy 作为重排序器：60% top-1 重新洗牌
 
-v0.36.0.0 ships ZeroEntropy's `zerank-2` as the default reranker (on for the `balanced` mode bundle). On a real-corpus benchmark across 20 queries, zerank-2 reshuffles **60% of top-1 results** after the hybrid + RRF + graph stack. That's the headline number.
+v0.36.0.0 发布 ZeroEntropy 的 `zerank-2` 作为默认重排序器（针对 `balanced` 模式捆绑包开启）。在跨 20 个查询的真实语料库基准上，zerank-2 在混合 + RRF + 图谱堆栈之后重新洗牌 **60% 的 top-1 结果**。这就是标题数字。
 
-The mechanical reason: hybrid ranking is locally optimal per strategy but globally suboptimal. A cross-encoder reranker reads the query + each candidate document jointly, with full attention. It catches the cases where the vector + keyword + graph signals all agreed on a document that's semantically related but topically wrong.
+机械原因：混合排名在每个策略方面是局部最优的，但在全局方面是次优的。交叉编码器重排序器通过完整注意力共同读取查询 + 每个候选文档。它捕获向量 + 关键词 + 图谱信号都同意某个文档的情况，该文档在语义上相关，但在主题上是错误的。
 
-The cost: +150ms p50 latency, ~$0.025/M tokens. Disabled with `gbrain config set search.reranker.enabled false`. For agent loops that do downstream LLM work after retrieval, the latency is invisible.
+成本：+150 毫秒 p50 延迟，约 $0.025/百万 token。使用 `gbrain config set search.reranker.enabled false` 禁用。对于在检索后执行下游 LLM 工作的代理循环，延迟是不可见的。
 
-## Source-aware ranking
+## 来源感知排名
 
-Hybrid search applies a source-factor CASE expression at the SQL layer (lives in `src/core/search/sql-ranking.ts`). Curated content like `originals/`, `concepts/`, `writing/` outranks bulk content like `your-openclaw/chat/`, `daily/`, `media/x/`. Hard-exclude prefixes (`test/`, `archive/`, `attachments/`, `.raw/`) filter at retrieval, not post-rank.
+混合搜索在 SQL 层应用来源因子 CASE 表达式（存在于 `src/core/search/sql-ranking.ts` 中）。策划的内容（如 `originals/`、`concepts/`、`writing/`）的排名高于批量内容（如 `your-openclaw/chat/`、`daily/`、`media/x/`）。硬排除前缀（`test/`、`archive/`、`attachments/`、`.raw/`）在检索时过滤，而不是在排名后过滤。
 
-The boost map is configurable via `GBRAIN_SOURCE_BOOST` env var or per-call `SearchOpts.exclude_slug_prefixes`. Temporal queries (`detail: 'high'`) bypass the boost so chat pages re-surface for time-sensitive lookups.
+提升映射可通过 `GBRAIN_SOURCE_BOOST` 环境变量或每调用 `SearchOpts.exclude_slug_prefixes` 进行配置。临时查询（`detail: 'high'`）绕过提升，以便聊天页面重新显示在
+对时间敏感的查找上。
 
-## Intent-aware query rewriting
+## 意图感知查询重写
 
-`src/core/search/intent.ts` classifies queries into `entity`, `temporal`, `event`, or `general`. Each routes through different ranking knobs:
+`src/core/search/intent.ts` 将查询分类为 `entity`、`temporal`、`event` 或 `general`。每个都通过不同的排名旋钮路由：
 
-- **Entity** queries ("who works at X?") apply a higher graph-traversal weight.
-- **Temporal** queries ("what happened last week?") bypass source-boost so chat/daily pages surface.
-- **Event** queries ("Acme AI Series A") engage the timeline index.
-- **General** queries hit the standard hybrid stack.
+- **实体**查询（"谁在 X 工作？"）应用更高的图谱遍历权重。
+- **临时**查询（"上周发生了什么？"）绕过来源提升，以便聊天/每日页面显示。
+- **事件**查询（"Acme AI Series A"）使用时间线索引。
+- **常规**查询命中标准混合堆栈。
 
-The classifier is deterministic (no LLM call). Wrong classification degrades gracefully — the hybrid stack still works without it.
+分类器是确定性的（无 LLM 调用）。错误分类会优雅地降级 — 混合堆栈仍然可以在没有它的情况下工作。
 
-## Multi-query expansion
+## 多查询扩展
 
-For `detail: 'high'` searches, `src/core/search/expansion.ts` runs a Haiku-class LLM call to produce 2-3 query variants. Each variant runs through the full hybrid stack; results merge via RRF. Catches synonym misses without recall loss.
+对于 `detail: 'high'` 搜索，`src/core/search/expansion.ts` 运行 Haiku 类 LLM 调用以生成 2-3 个查询变体。每个变体都通过完整混合堆栈运行；结果通过 RRF 合并。捕获同义词未命中，而不会丢失召回率。
 
-Expansion is opt-in per mode bundle (`tokenmax` on by default; `balanced` + `conservative` off). Default off in the cheap tiers because the LLM call adds ~$0.001/query and ~200ms — real money at scale.
+扩展是按模式捆绑包选择加入的（`tokenmax` 默认开启；`balanced` + `conservative` 关闭）。在廉价层级中默认关闭，因为 LLM 调用会增加约 $0.001/查询和约 200 毫秒 — 规模上的真实资金。
 
-## Putting it together
+## 综合起来
 
-The full pipeline for a `query` op:
+`query` 操作的完整管道：
 
 ```
-intent classify
+意图分类
        │
        ▼
-expansion (if enabled)
+扩展（如果启用）
        │
        ▼
-hybrid search:
-   ├── vector  (HNSW on chunk embeddings)
-   ├── keyword (BM25 via tsvector)
-   ├── source-aware re-rank (CASE in SQL)
-   └── RRF fusion → top 30
+混合搜索：
+   ├── 向量（块嵌入上的 HNSW）
+   ├── 关键词（通过 tsvector 的 BM25）
+   ├── 来源感知重新排名（SQL 中的 CASE）
+   └── RRF 融合 → 前 30 个
        │
        ▼
-graph augment (typed-edge traversal from any seed)
+图谱增强（来自任何种子的类型化边遍历）
        │
        ▼
-reranker (zerank-2 cross-encoder, top 30 → reordered)
+重排序器（zerank-2 交叉编码器，前 30 → 重新排序）
        │
        ▼
-token-budget enforcement (per mode bundle)
+token 预算强制执行（每模式捆绑包）
        │
        ▼
-deduplication (same slug, different chunks → keep best)
+去重（相同的 slug，不同的块 → 保留最佳）
        │
        ▼
-results
+结果
 ```
 
-Each stage is testable in isolation. Each stage is replaceable. The whole pipeline is < 1ms of orchestration cost; the latency budget goes to the upstream HTTP calls (embedding, rerank) and the index scans.
+每个阶段都可以隔离测试。每个阶段都是可替换的。整个管道的编排成本 < 1 毫秒；延迟预算用于上游 HTTP 调用（嵌入、重排序）和索引扫描。
 
-## How to verify on your own brain
+## 如何在你自己的大脑上验证
 
 ```bash
-# Run the public LongMemEval benchmark
+# 运行公共 LongMemEval 基准
 gbrain eval longmemeval datasets/longmemeval_s.jsonl
 
-# Capture your own queries and replay against retrieval changes
+# 捕获你自己的查询并针对检索更改重放
 export GBRAIN_CONTRIBUTOR_MODE=1
-# ... use gbrain normally ...
+# ... 正常使用 gbrain ...
 gbrain eval export > before.ndjson
-# ... change something ...
+# ... 更改某些内容 ...
 gbrain eval replay --against before.ndjson
 
-# A/B retrieval strategies on a labeled fixture
+# 在标记的夹具上进行 A/B 检索策略
 gbrain eval --qrels labels.tsv --config balanced.json
 ```
 
-Methodology + metric glossary in [`docs/eval/SEARCH_MODE_METHODOLOGY.md`](../eval/SEARCH_MODE_METHODOLOGY.md).
+方法论 + 指标词汇表在 [`docs/eval/SEARCH_MODE_METHODOLOGY.md`](../eval/SEARCH_MODE_METHODOLOGY.md) 中。

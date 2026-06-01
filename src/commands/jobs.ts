@@ -117,17 +117,17 @@ export async function runJobs(engine: BrainEngine, args: string[]): Promise<void
   const sub = args[0];
 
   if (!sub || sub === '--help' || sub === '-h') {
-    console.log(`gbrain jobs — Minions job queue
+    console.log(`gbrain jobs — Minions 任务队列
 
-USAGE
+用法
   gbrain jobs submit <name> [--params JSON] [--follow] [--priority N]
                             [--delay Nms] [--max-attempts N] [--max-stalled N]
                             [--max-waiting N]
                             [--backoff-type fixed|exponential] [--backoff-delay Nms]
                             [--backoff-jitter 0..1] [--timeout-ms Nms]
                             [--idempotency-key K] [--queue Q] [--dry-run]
-                            [--redact-secrets]   (shell only; scrubs inherit
-                                                  values from stdout/stderr)
+                            [--redact-secrets]   （仅 shell；从 stdout/stderr
+                                                  清除继承的敏感值）
   gbrain jobs list [--status S] [--queue Q] [--limit N]
   gbrain jobs get <id>
   gbrain jobs cancel <id>
@@ -146,47 +146,46 @@ USAGE
   gbrain jobs supervisor status [--json] [--pid-file PATH]
   gbrain jobs supervisor stop [--json] [--pid-file PATH]
 
-    Auto-restarting wrapper around 'gbrain jobs work'. Spawns the worker
-    as a child process and restarts on crash with exponential backoff
-    (1s -> 60s cap). Writes a PID file to ~/.gbrain/supervisor.pid by
-    default (override via --pid-file or GBRAIN_SUPERVISOR_PID_FILE env).
-    Lifecycle events are appended to
+    对 'gbrain jobs work' 的自动重启封装。将工作进程作为子进程启动，
+    崩溃后按指数退避自动重启（1 秒起步，最多 60 秒）。默认将 PID
+    写入 ~/.gbrain/supervisor.pid，可通过 --pid-file 或环境变量
+    GBRAIN_SUPERVISOR_PID_FILE 覆盖。生命周期事件会追加到
       \${GBRAIN_AUDIT_DIR:-~/.gbrain/audit}/supervisor-YYYY-Www.jsonl
 
-    SUBCOMMANDS
-      start        (default) Launch the supervisor. --detach returns a
-                   JSON {event, supervisor_pid, pid_file} payload on
-                   stdout and forks; omit for foreground.
-      status       Read PID file + audit log, report running / last_start
-                   / crashes_24h / max_crashes_exceeded as JSON or human.
-                   Exits 0 if running, 1 if not.
-      stop         Send SIGTERM to the supervisor, wait up to 40s for
-                   graceful drain, report outcome. Exits 0 on clean stop.
+    子命令
+      start        （默认）启动 supervisor。--detach 会向 stdout 返回
+                   JSON {event, supervisor_pid, pid_file} 并转入后台；
+                   省略时以前台模式运行。
+      status       读取 PID 文件和审计日志，以 JSON 或普通文本报告
+                   running / last_start / crashes_24h / max_crashes_exceeded。
+                   正在运行时退出码为 0，否则为 1。
+      stop         向 supervisor 发送 SIGTERM，最多等待 40 秒完成优雅退出，
+                   并报告结果。正常停止时退出码为 0。
 
-    EXIT CODES (start)
-      0  clean shutdown (SIGTERM/SIGINT received, worker drained)
-      1  max crashes exceeded (worker kept dying)
-      2  another supervisor holds the PID lock
-      3  PID file unwritable (permission / path error)
+    退出码（start）
+      0  正常退出（收到 SIGTERM/SIGINT，工作进程已清空）
+      1  超过最大崩溃次数
+      2  另一个 supervisor 持有 PID 锁
+      3  PID 文件不可写（权限或路径错误）
 
-    EXAMPLES
-      gbrain jobs supervisor --concurrency 4         # foreground (Ctrl-C stops)
-      gbrain jobs supervisor start --detach --json   # agent-friendly: fork + return JSON
-      gbrain jobs supervisor status --json           # machine-readable health check
-      gbrain jobs supervisor stop                    # graceful stop
-      gbrain jobs supervisor --json --allow-shell-jobs  # JSONL events + shell-exec on
+    示例
+      gbrain jobs supervisor --concurrency 4         # 前台运行，按 Ctrl-C 停止
+      gbrain jobs supervisor start --detach --json   # 后台运行并返回 JSON
+      gbrain jobs supervisor status --json           # 机器可读的健康检查
+      gbrain jobs supervisor stop                    # 优雅停止
+      gbrain jobs supervisor --json --allow-shell-jobs  # 输出 JSONL 并允许 shell 执行
 
-HANDLER TYPES (built in)
-  sync              Pull and embed new pages from the repo
-  embed             (Re-)embed pages; --params '{"slug":...}' or '{"all":true}'
-  lint              Run page linter; --params '{"dir":"...","fix":true}'
-  import            Bulk import markdown; --params '{"dir":"..."}'
-  extract           Extract links + timeline entries; '{"mode":"all"}'
-  backlinks         Check or fix back-links; '{"action":"fix"}'
-  autopilot-cycle   One autopilot pass (sync+extract+embed+backlinks)
-  shell             Run a command or argv. Requires GBRAIN_ALLOW_SHELL_JOBS=1
-                    on the worker. Params: {cmd?, argv?, cwd, env?}.
-                    See: docs/guides/minions-shell-jobs.md
+内置处理器类型
+  sync              从仓库拉取新页面并生成向量嵌入
+  embed             重新嵌入页面；--params '{"slug":...}' 或 '{"all":true}'
+  lint              运行页面检查器；--params '{"dir":"...","fix":true}'
+  import            批量导入 Markdown；--params '{"dir":"..."}'
+  extract           提取链接和时间线条目；'{"mode":"all"}'
+  backlinks         检查或修复反向链接；'{"action":"fix"}'
+  autopilot-cycle   执行一次 autopilot 周期
+  shell             执行命令或 argv。工作进程需要设置 GBRAIN_ALLOW_SHELL_JOBS=1。
+                    参数：{cmd?, argv?, cwd, env?}。
+                    参考：docs/guides/minions-shell-jobs.md
 `);
     return;
   }

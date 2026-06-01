@@ -74,7 +74,7 @@ export function renderBrierTrend(opts: BrierTrendOpts): string {
   const plotH = h - padT - padB;
 
   if (opts.series.length === 0) {
-    return svgEmpty(w, h, 'No Brier-trend data yet (need 5+ resolved takes)');
+    return svgEmpty(w, h, '暂无 Brier 趋势数据（需要至少 5 条已解决 take）');
   }
 
   // y-axis: Brier in [0, 0.4]. 0 = perfect; 0.25 = always-50% baseline.
@@ -107,9 +107,9 @@ export function renderBrierTrend(opts: BrierTrendOpts): string {
     );
   }
 
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" role="img" aria-label="Brier trend">
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" role="img" aria-label="Brier 趋势">
   <rect width="${w}" height="${h}" fill="${TOKEN.bgPrimary}"/>
-  <text x="${padL}" y="14" font-size="12" fill="${TOKEN.textSecondary}">Brier (lower is better)</text>
+  <text x="${padL}" y="14" font-size="12" fill="${TOKEN.textSecondary}">Brier（越低越好）</text>
   <line x1="${padL}" y1="${baselineY}" x2="${w - padR}" y2="${baselineY}" stroke="${TOKEN.textMuted}" stroke-dasharray="2,3" stroke-width="1"/>
   <polyline points="${points}" fill="none" stroke="${TOKEN.accent}" stroke-width="2"/>
   ${labels.join('\n  ')}
@@ -143,7 +143,7 @@ export function renderDomainBars(opts: DomainBarsOpts): string {
   const h = padT + opts.bars.length * rowH + 12;
 
   if (opts.bars.length === 0) {
-    return svgEmpty(w, 60, 'No per-domain scorecard data yet');
+    return svgEmpty(w, 60, '暂无各领域计分卡数据');
   }
 
   const plotW = w - padL - padR;
@@ -158,9 +158,9 @@ export function renderDomainBars(opts: DomainBarsOpts): string {
   <text x="${padL + plotW + 6}" y="${y + 18}" font-size="11" fill="${TOKEN.textMuted}">${accPct} · n=${bar.n}</text>`;
   });
 
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" role="img" aria-label="Per-domain accuracy">
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" role="img" aria-label="各领域准确率">
   <rect width="${w}" height="${h}" fill="${TOKEN.bgPrimary}"/>
-  <text x="${padL - 8}" y="${padT - 8}" font-size="12" fill="${TOKEN.textSecondary}" text-anchor="end">Per-domain accuracy</text>${rows.join('')}
+  <text x="${padL - 8}" y="${padT - 8}" font-size="12" fill="${TOKEN.textSecondary}" text-anchor="end">各领域准确率</text>${rows.join('')}
 </svg>`;
 }
 
@@ -183,7 +183,7 @@ export function renderAbandonedThreadsCard(threads: AbandonedThread[], width = 6
   const h = padT + Math.max(threads.length, 1) * rowH + 12;
 
   if (threads.length === 0) {
-    return svgEmpty(width, 80, 'No abandoned high-conviction threads — clean slate');
+    return svgEmpty(width, 80, '没有已放弃的高确信度线程');
   }
 
   const rows = threads.map((t, i) => {
@@ -192,17 +192,17 @@ export function renderAbandonedThreadsCard(threads: AbandonedThread[], width = 6
     // (admin SPA renders the SVG, then layers HTML tooltips). Server side
     // can't measure text width so we cap at 70 chars.
     const claim = t.claim.length > 70 ? t.claim.slice(0, 70) + '…' : t.claim;
-    const meta = `conviction ${t.conviction.toFixed(2)} · ${t.monthsSilent} months silent`;
+    const meta = `确信度 ${t.conviction.toFixed(2)} · 已沉默 ${t.monthsSilent} 个月`;
     const href = t.revisitHref ?? `/admin/calibration/revisit/${t.takeId}`;
     return `
   <text x="16" y="${y + 16}" font-size="13" fill="${TOKEN.textPrimary}">${escapeXml(claim)}</text>
   <text x="16" y="${y + 32}" font-size="11" fill="${TOKEN.textMuted}">${escapeXml(meta)}</text>
-  <a href="${escapeXml(href)}"><text x="${width - 16}" y="${y + 24}" font-size="11" fill="${TOKEN.accent}" text-anchor="end">revisit now</text></a>`;
+  <a href="${escapeXml(href)}"><text x="${width - 16}" y="${y + 24}" font-size="11" fill="${TOKEN.accent}" text-anchor="end">立即重访</text></a>`;
   });
 
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${h}" viewBox="0 0 ${width} ${h}" role="img" aria-label="Abandoned threads">
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${h}" viewBox="0 0 ${width} ${h}" role="img" aria-label="已放弃线程">
   <rect width="${width}" height="${h}" fill="${TOKEN.bgPrimary}"/>
-  <text x="16" y="${padT - 8}" font-size="12" fill="${TOKEN.textSecondary}">You committed to these and never revisited</text>${rows.join('')}
+  <text x="16" y="${padT - 8}" font-size="12" fill="${TOKEN.textSecondary}">你曾承诺处理，但从未重访</text>${rows.join('')}
 </svg>`;
 }
 
@@ -222,7 +222,7 @@ export function renderPatternStatementsCard(
   const rowH = 36;
   const h = padT + Math.max(statements.length, 1) * rowH + 12;
   if (statements.length === 0) {
-    return svgEmpty(width, 60, 'No active patterns yet');
+    return svgEmpty(width, 60, '暂无活跃模式');
   }
   const rows = statements.map((s, i) => {
     const y = padT + i * rowH;
@@ -231,16 +231,16 @@ export function renderPatternStatementsCard(
     return `
   <a href="${escapeXml(href)}"><text x="16" y="${y + 22}" font-size="14" fill="${TOKEN.textPrimary}">${escapeXml(txt)}</text></a>`;
   });
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${h}" viewBox="0 0 ${width} ${h}" role="img" aria-label="Calibration pattern statements">
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${h}" viewBox="0 0 ${width} ${h}" role="img" aria-label="校准模式陈述">
   <rect width="${width}" height="${h}" fill="${TOKEN.bgPrimary}"/>
-  <text x="16" y="${padT - 8}" font-size="12" fill="${TOKEN.textSecondary}">Active patterns (click to drill down)</text>${rows.join('')}
+  <text x="16" y="${padT - 8}" font-size="12" fill="${TOKEN.textSecondary}">活跃模式（点击查看详情）</text>${rows.join('')}
 </svg>`;
 }
 
 // ─── helpers ────────────────────────────────────────────────────────
 
 function svgEmpty(w: number, h: number, message: string): string {
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" role="img" aria-label="Empty chart">
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" role="img" aria-label="空图表">
   <rect width="${w}" height="${h}" fill="${TOKEN.bgPrimary}"/>
   <text x="${w / 2}" y="${h / 2}" font-size="12" fill="${TOKEN.textMuted}" text-anchor="middle">${escapeXml(message)}</text>
 </svg>`;

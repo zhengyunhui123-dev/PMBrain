@@ -1,63 +1,54 @@
-# Meeting & Call Webhooks
+# 会议和通话 Webhooks
 
-### 14b. Circleback -- Meeting Ingestion via Webhooks
+### 14b. Circleback — 通过 Webhooks 进行会议摄取
 
-[Circleback](https://circleback.ai) records meetings, generates transcripts with
-speaker diarization, and fires webhooks on completion.
+[Circleback](https://circleback.ai) 记录会议，生成带有发言人日记化的记录，并在完成时触发 webhooks。
 
-**Webhook setup:**
+**Webhook 设置：**
 
-1. In Circleback dashboard -> Automations -> add webhook
-2. URL: `{your_agent_gateway}/hooks/circleback-meetings`
-3. Circleback provides a signing secret for HMAC-SHA256 signature verification
-4. Store the signing secret in your webhook transform for verification
+1. 在 Circleback 仪表板 -> 自动化 -> 添加 webhook
+2. URL：`{your_agent_gateway}/hooks/circleback-meetings`
+3. Circleback 提供用于 HMAC-SHA256 签名验证的签名密钥
+4. 将签名密钥存储在你的 webhook 转换器中以进行验证
 
-**Webhook payload:** Meeting JSON with id, name, attendees, notes, action items, full
-transcript, calendar event context.
+**Webhook 负载：** 带有 id、名称、参会者、笔记、行动项、完整记录、日历事件上下文的会议 JSON。
 
-**Signature verification:** Header `X-Circleback-Signature` contains `sha256=<hex>`.
-Verify with `HMAC-SHA256(body, signing_secret)`. Reject unverified webhooks.
+**签名验证：** 标头 `X-Circleback-Signature` 包含 `sha256=<hex>`。使用 `HMAC-SHA256(body, signing_secret)` 进行验证。拒绝未验证的 webhooks。
 
-**OAuth for API access:** Circleback uses dynamic client registration (OAuth 2.0).
-Access tokens expire in ~24h, auto-refresh via refresh token. Store credentials in
-agent memory.
+**API 访问的 OAuth：** Circleback 使用动态客户端注册（OAuth 2.0）。访问令牌在约 24 小时后过期，通过刷新令牌自动刷新。将凭证存储在 agent 内存中。
 
-**Flow:** Webhook fires -> transform validates signature + normalizes -> agent wakes ->
-pulls full transcript via API -> creates brain meeting page -> propagates to entity
-pages -> commits to brain repo -> `gbrain sync`.
+**流程：** Webhook 触发 -> 转换验证签名 + 规范化 -> agent 唤醒 -> 通过 API 拉取完整记录 -> 创建 brain 会议页面 -> 传播到实体页面 -> 提交到 brain 仓库 -> `gbrain sync`。
 
-### 14c. Quo (OpenPhone) -- SMS and Call Integration
+### 14c. Quo（OpenPhone）— SMS 和通话集成
 
-[Quo](https://openphone.com) (formerly OpenPhone) provides business phone numbers with
-SMS, calls, voicemail, and AI transcripts.
+[Quo](https://openphone.com)（以前称 OpenPhone）提供带有 SMS、通话、语音邮件和 AI 记录的业务电话号码。
 
-**Webhook setup:**
+**Webhook 设置：**
 
-1. In Quo dashboard -> Integrations -> Webhooks
-2. Register webhooks for: `message.received`, `call.completed`, `call.summary.completed`, `call.transcript.completed`
-3. Point all to: `{your_agent_gateway}/hooks/quo-events`
-4. Store registered webhook IDs in agent memory
+1. 在 Quo 仪表板 -> 集成 -> Webhooks
+2. 为以下注册 webhooks：`message.received`、`call.completed`、`call.summary.completed`、`call.transcript.completed`
+3. 将所有指向：`{your_agent_gateway}/hooks/quo-events`
+4. 在 agent 内存中存储已注册的 webhook ID
 
-**How inbound texts work:**
+**入站文本的工作方式：**
 
-- Webhook fires with sender phone, message text, conversation context
-- Agent looks up sender in brain by phone number
-- Surfaces to user's messaging platform with sender identity + brain context
-- Drafts reply for approval (never auto-replies without explicit permission)
+- Webhook 触发，包含发件人电话、消息文本、对话上下文
+- Agent 通过电话号码在 brain 中查找发件人
+- 向用户的消息平台展示发件人身份 + brain 上下文
+- 起草回复以供批准（未经明确许可绝不自动回复）
 
-**How inbound calls work:**
+**入站通话的工作方式：**
 
-- `call.completed` fires -> if duration > 30s, fetch transcript + AI summary via API
-- Ingest to brain (meeting-style page at `meetings/`)
-- Update relevant people and company pages
+- `call.completed` 触发 -> 如果持续时间 > 30 秒，通过 API 获取记录和 AI 摘要
+- 摄取到 brain（位于 `meetings/` 的会议风格页面）
+- 更新相关人员和公司页面
 
-**API auth:** Bare API key in `Authorization` header (no Bearer prefix).
+**API 身份验证：** `Authorization` 标头中的裸 API 密钥（无 Bearer 前缀）。
 
-**Key endpoints:** `POST /v1/messages` (send SMS), `GET /v1/messages` (list),
-`GET /v1/call-transcripts/{id}`, `GET /v1/conversations`.
+**关键端点：** `POST /v1/messages`（发送 SMS）、`GET /v1/messages`（列表）、`GET /v1/call-transcripts/{id}`、`GET /v1/conversations`。
 
 ---
 
 ---
 
-*Part of the [GBrain Skillpack](../GBRAIN_SKILLPACK.md). See also: [Getting Data In](README.md)*
+*是 [GBrain Skillpack](../GBRAIN_SKILLPACK.md) 的一部分。另请参阅：[数据输入](README.md)*

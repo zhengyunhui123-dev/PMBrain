@@ -69,12 +69,11 @@ export const QUERY_DESCRIPTION =
   "mean impressive — they often mean difficult or emotionally charged.";
 
 export const SEARCH_DESCRIPTION =
-  "Keyword search using full-text search. For personal/emotional questions, " +
-  "prefer get_recent_salience or find_anomalies — they surface activity bursts " +
-  "without needing a search term. " +
-  "For code-symbol questions (callers, callees, definitions, blast radius), use " +
-  "code_callers / code_callees / code_def / code_refs instead — those return " +
-  "structural graph data, not text chunks.";
+  "使用全文检索进行关键词搜索。对于个人或情绪相关问题，" +
+  "优先使用 get_recent_salience 或 find_anomalies，它们无需搜索词即可呈现活动高峰。" +
+  "对于代码符号问题（调用方、被调用方、定义、影响范围），请改用 " +
+  "code_callers / code_callees / code_def / code_refs；这些操作返回结构化图数据，" +
+  "而不是文本片段。";
 
 // ──────────────────────────────────────────────────────────────────────────────
 // v0.32.6 — contradiction probe MCP surface (M3)

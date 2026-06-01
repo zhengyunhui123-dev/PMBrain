@@ -1,31 +1,31 @@
-# Connect GBrain to Perplexity Computer
+# 将 GBrain 连接到 Perplexity Computer
 
-Perplexity Computer supports remote MCP servers with bearer token authentication.
+Perplexity Computer 支持带 bearer token 认证的远程 MCP 服务器。
 
-## Setup
+## 设置
 
-1. Open Perplexity (requires Pro subscription)
-2. Go to **Settings > Connectors** (or **MCP Servers**)
-3. Add a new remote connector:
-   - **URL:** `https://YOUR-DOMAIN.ngrok.app/mcp`
-   - **Authentication:** API Key / Bearer Token
-   - **Token:** your GBrain access token
-     (create one with `gbrain auth create "perplexity"`)
-4. Save
+1. 打开 Perplexity（需要 Pro 订阅）
+2. 前往 **设置 > 连接器**（或 **MCP 服务器**）
+3. 添加新的远程连接器：
+   - **URL：** `https://YOUR-DOMAIN.ngrok.app/mcp`
+   - **认证方式：** API Key / Bearer Token
+   - **Token：** 你的 GBrain 访问 token
+     （使用 `gbrain auth create "perplexity"` 创建一个）
+4. 保存
 
-Replace `YOUR-DOMAIN` with your ngrok domain (see
-[ngrok-tunnel recipe](../../recipes/ngrok-tunnel.md) for setup).
+将 `YOUR-DOMAIN` 替换为你的 ngrok 域名（设置方法参见
+[ngrok-tunnel 配方](../../recipes/ngrok-tunnel.md)）。
 
-## Verify
+## 验证
 
-In a Perplexity conversation, ask it to use your brain:
+在 Perplexity 对话中，让它使用你的大脑：
 
 ```
-Use my GBrain to search for [topic]
+使用我的 GBrain 搜索 [主题]
 ```
 
-## Notes
+## 注意事项
 
-- Perplexity Computer is available to Pro subscribers
-- Both the Perplexity Mac app and web version support MCP connectors
-- The Mac app also supports local MCP servers if you prefer `gbrain serve` (stdio)
+- Perplexity Computer 对 Pro 订阅用户开放
+- Perplexity Mac 应用和网页版均支持 MCP 连接器
+- 如果你更喜欢 `gbrain serve`（stdio），Mac 应用也支持本地 MCP 服务器

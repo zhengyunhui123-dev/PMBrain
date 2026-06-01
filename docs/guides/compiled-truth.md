@@ -1,22 +1,18 @@
-# Compiled Truth + Timeline Pattern
+# 编译真相 + 时间线模式
 
-## Goal
+## 目标
 
-Every brain page has two zones: compiled truth (current synthesis, rewritten as
-evidence changes) and timeline (append-only evidence trail, never edited).
+每个 brain 页面都有两个区域：编译真相（当前综合，随着证据变化而重写）和时间线（仅附加证据线索，从不编辑）。
 
-## What the User Gets
+## 用户获得什么
 
-Without this: brain pages are append-only logs. To understand a person, you read
-200 timeline entries. The answer is buried in entry #147.
+没有它：brain 页面是仅附加日志。要理解一个人，你读取 200 个时间线条目。答案埋在第 147 个条目中。
 
-With this: the compiled truth gives you the state of play in 30 seconds. The
-timeline is the proof. Six months of entries compress into a one-paragraph
-assessment that's always current.
+有了它：编译真相让你在 30 秒内了解现状。时间线是证据。六个月的条目压缩成一个段落评估，始终是最新的。
 
-## Implementation
+## 实现
 
-### Page Structure
+### 页面结构
 
 ```markdown
 ---
@@ -25,113 +21,97 @@ title: Sarah Chen
 tags: [engineering, acme-corp]
 ---
 
-## Executive Summary
-One paragraph. How you know them, why they matter.
+## 执行摘要
+一个段落。你如何认识他们，为什么他们重要。
 
-## State
-VP Engineering at Acme Corp. Managing 45-person team. Reports to CEO.
+## 状态
+Acme Corp 的工程副总裁。管理 45 人团队。向 CEO 汇报。
 
-## What They Believe
-Strong opinions on test coverage. "Ship it when the tests pass, not before."
+## 他们的信念
+对测试覆盖率有强烈意见。"测试通过时就发布，而不是在此之前。"
 
-## What They're Building
-Leading the API migration from REST to GraphQL. Target: Q3 completion.
+## 他们在构建什么
+领导从 REST 到 GraphQL 的 API 迁移。目标：Q3 完成。
 
-## Assessment
-Sharp technical leader. Under-appreciated internally. Watch for signs of burnout.
+## 评估
+敏锐的技术领导者。内部被低估。注意倦怠迹象。
 
-## Trajectory
-Ascending. Likely CTO track if the migration succeeds.
+## 轨迹
+上升。如果迁移成功，可能是 CTO 轨道。
 
-## Relationship
-Met through Pedro. Had coffee 3x. Last: discussed API architecture thesis.
+## 关系
+通过 Pedro 介绍认识。一起喝过 3 次咖啡。上次：讨论了 API 架构论文。
 
-## Contact
+## 联系方式
 sarah@acmecorp.com | @sarahchen | linkedin.com/in/sarahchen
 
 ---
 
-## Timeline
+## 时间线
 
-- **2026-04-07** | Met at team sync. Discussed API migration timeline.
-  Seemed energized about GraphQL pivot.
-  [Source: Meeting notes, 2026-04-07 2:00 PM PT]
-- **2026-04-03** | Mentioned in email re Q2 planning. Taking lead on ops.
-  [Source: Gmail, sarah@acmecorp.com, 2026-04-03 10:30 AM PT]
-- **2026-03-15** | First meeting. Intro from Pedro. Strong technical background.
-  [Source: User, direct conversation, 2026-03-15 3:00 PM PT]
+- **2026-04-07** | 在团队同步会议上见面。讨论了 API 迁移时间线。
+  看起来对 GraphQL 转型充满能量。
+  [来源：会议笔记，2026-04-07 2:00 PM PT]
+- **2026-04-03** | 在关于 Q2 规划的电子邮件中提及。负责运营。
+  [来源：Gmail，sarah@acmecorp.com，2026-04-03 10:30 AM PT]
+- **2026-03-15** | 第一次会议。Pedro 介绍。强大的技术背景。
+  [来源：用户，直接对话，2026-03-15 3:00 PM PT]
 ```
 
-### Updating a Page
+### 更新页面
 
 ```
 update_brain_page(slug, new_info, source):
   page = gbrain get {slug}
 
-  // TIMELINE: always APPEND (never edit existing entries)
+  # 时间线：始终附加（永远不会编辑现有条目）
   gbrain add_timeline_entry {slug} {
     date: today,
     summary: new_info.summary,
     detail: new_info.detail,
-    source: format_source(source)  // [Source: who, channel, date time tz]
+    source: format_source(source)  // [来源：谁、渠道、日期时间]
   }
 
-  // COMPILED TRUTH: REWRITE (not append)
-  // Read the existing compiled truth
-  // Integrate new information
-  // Write the updated synthesis
+  # 编译真相：重写（不是附加）
+  # 读取现有的编译真相
+  # 整合新信息
+  # 写入更新的综合
   updated_truth = rewrite_compiled_truth(page.compiled_truth, new_info)
   gbrain put {slug} {
     compiled_truth: updated_truth,
-    // timeline is NOT passed — it's managed by add_timeline_entry
+    # 时间线不传递 — 它由 add_timeline_entry 管理
   }
 ```
 
-### The Rules
+### 规则
 
-| Zone | Action | Explanation |
+| 区域 | 操作 | 解释 |
 |------|--------|-------------|
-| Compiled truth | **REWRITE** | Current synthesis. Changes when evidence changes. |
-| Timeline | **APPEND** | Evidence trail. Never edited, only added to. |
+| 编译真相 | **重写** | 当前综合。当证据变化时改变。 |
+| 时间线 | **附加** | 证据线索。从不编辑，只能添加。 |
 
-**Every compiled truth claim must trace to timeline entries.** If the Assessment
-says "under-appreciated internally," there should be timeline entries that
-support that claim.
+**每个编译真相声明必须追溯到时间线条目。** 如果评估说 "内部被低估"，应该有支持该声明的时间线条目。
 
-## Tricky Spots
+## 棘手的地方
 
-1. **REWRITE means rewrite, not append.** Don't add a new paragraph to compiled
-   truth. Rewrite the entire section with the new information integrated. Old
-   assessments that are no longer accurate should be updated, not kept alongside
-   contradictory new ones.
+1. **重写意味着重写，不是附加。** 不要向编译真相添加新段落。用整合了新信息的更新版本重写整个部分。不再准确的旧评估应该被更新，而不是与矛盾的新评估一起保留。
 
-2. **Timeline entries are immutable.** Never edit a timeline entry. If information
-   turns out to be wrong, add a NEW entry correcting it:
-   `- 2026-04-10 | Correction: Sarah is VP Eng, not CTO. Previous entry was wrong.`
+2. **时间线条目是不可变的。** 永远不要编辑时间线条目。如果信息结果是错误的，添加一个新的条目来纠正它：
+   `- 2026-04-10 | 更正：Sarah 是工程副总裁，不是 CTO。以前的条目是错误的。`
 
-3. **GBrain search weights compiled truth higher.** `gbrain query` returns compiled
-   truth chunks with higher relevance than timeline chunks. This means the freshest
-   synthesis surfaces first in search results.
+3. **GBrain 搜索对编译真相的权重更高。** `gbrain query` 返回编译真相块的权重高于时间线块。这意味着最新的综合首先出现在搜索结果中。
 
-4. **The --- separator matters.** GBrain uses the first standalone `---` after
-   frontmatter to split compiled_truth from timeline. Everything above is compiled
-   truth, everything below is timeline.
+4. **`---` 分隔符很重要。** GBrain 使用 frontmatter 之后的第一个独立 `---` 来将 compiled_truth 与时间线分开。上面的所有内容都是编译真相，下面的所有内容都是时间线。
 
-5. **Don't skip the Assessment section.** The assessment is the value. "Strong
-   technical leader" is something no API can provide. It's YOUR read on this
-   person. That's what makes the brain page better than LinkedIn.
+5. **不要跳过评估部分。** 评估是有价值的东西。没有 API 能提供 "敏锐的技术领导者"。这是你对这个人的解读。这就是使 brain 页面比 LinkedIn 更好的原因。
 
-## How to Verify
+## 如何验证
 
-1. **Update a person page.** Add new meeting info. Check: compiled truth was
-   REWRITTEN (not appended), timeline has new entry at the top.
-2. **Search for the person.** `gbrain query "Sarah Chen"`. The compiled truth
-   (current synthesis) should appear first, not a random timeline entry.
-3. **Check traceability.** Every claim in compiled truth should have a
-   corresponding timeline entry. Read both sections and verify.
-4. **Check immutability.** After update, old timeline entries should be unchanged.
-   Dates, sources, and content should match the originals exactly.
+1. **更新人员页面。** 添加新的会议信息。检查：编译真相被重写（不是附加），时间线在顶部有新的条目。
+2. **搜索此人。** `gbrain query "Sarah Chen"`。编译真相（当前综合）应该首先出现，而不是随机的时间线条目。
+3. **检查可追溯性。** 编译真相中的每个声明都应该有相应的时间线条目。读取两个部分并验证。
+4. **检查不变性。** 更新后，旧的时间线条目应该保持不变。日期、来源和内容应该与原始内容完全匹配。
 
 ---
 
-*Part of the [GBrain Skillpack](../GBRAIN_SKILLPACK.md). See also: [Source Attribution](source-attribution.md), [Entity Detection](entity-detection.md)*
+*是 [GBrain Skillpack](../GBRAIN_SKILLPACK.md) 的一部分。另请参阅：[来源归属](source-attribution.md)、[实体检测](entity-detection.md)*

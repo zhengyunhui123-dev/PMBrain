@@ -4,10 +4,14 @@ import { ALLOWED_SCOPES_LIST, type Scope } from '../lib/scope-constants';
 
 function timeAgo(date: Date): string {
   const s = Math.floor((Date.now() - date.getTime()) / 1000);
-  if (s < 60) return 'just now';
-  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
-  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
-  return `${Math.floor(s / 86400)}d ago`;
+  if (s < 60) return '刚刚';
+  if (s < 3600) return `${Math.floor(s / 60)} 分钟前`;
+  if (s < 86400) return `${Math.floor(s / 3600)} 小时前`;
+  return `${Math.floor(s / 86400)} 天前`;
+}
+
+function statusLabel(status: string): string {
+  return status === 'active' ? '活跃' : status === 'revoked' ? '已撤销' : status;
 }
 
 interface Agent {
@@ -50,13 +54,13 @@ export function AgentsPage() {
   return (
     <>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
-        <h1 className="page-title" style={{ marginBottom: 0 }}>Agents</h1>
+        <h1 className="page-title" style={{ marginBottom: 0 }}>Agent 管理</h1>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <label style={{ fontSize: 13, color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
-            <input type="checkbox" checked={hideRevoked} onChange={e => setHideRevoked(e.target.checked)} /> Hide revoked
+            <input type="checkbox" checked={hideRevoked} onChange={e => setHideRevoked(e.target.checked)} /> 隐藏已撤销项
           </label>
           <button className="btn btn-secondary" onClick={() => setShowApiKeyCreate(true)}>+ API Key</button>
-          <button className="btn btn-primary" onClick={() => setShowRegister(true)}>+ OAuth Client</button>
+          <button className="btn btn-primary" onClick={() => setShowRegister(true)}>+ OAuth 客户端</button>
         </div>
       </div>
 
@@ -69,14 +73,14 @@ export function AgentsPage() {
         if (agents.length === 0) {
           return (
             <div style={{ textAlign: 'center', padding: 48, color: 'var(--text-muted)' }}>
-              No agents registered. Register your first agent to get started.
+              暂无已注册 Agent。请先注册第一个 Agent。
             </div>
           );
         }
         if (visibleAgents.length === 0) {
           return (
             <div style={{ textAlign: 'center', padding: 48, color: 'var(--text-muted)' }}>
-              All agents are revoked. Uncheck "Hide revoked" to view them.
+              所有 Agent 均已撤销。取消勾选“隐藏已撤销项”即可查看。
             </div>
           );
         }
@@ -85,12 +89,12 @@ export function AgentsPage() {
           <table>
             <thead>
               <tr>
-                <th>Name</th>
-                <th>Type</th>
-                <th>Scopes</th>
-                <th>Status</th>
-                <th>Requests</th>
-                <th>Last Used</th>
+                <th>名称</th>
+                <th>类型</th>
+                <th>权限范围</th>
+                <th>状态</th>
+                <th>请求数</th>
+                <th>最近使用</th>
               </tr>
             </thead>
             <tbody>
@@ -109,21 +113,21 @@ export function AgentsPage() {
                     ))}
                   </td>
                   <td>
-                    <span className={`badge ${a.status === 'active' ? 'badge-success' : 'badge-danger'}`}>{a.status}</span>
+                    <span className={`badge ${a.status === 'active' ? 'badge-success' : 'badge-danger'}`}>{statusLabel(a.status)}</span>
                   </td>
                   <td>
                     <span style={{ fontWeight: 500 }}>{a.requests_today || 0}</span>
                     <span style={{ color: 'var(--text-muted)', fontSize: 12 }}> / {a.total_requests || 0}</span>
                   </td>
                   <td style={{ color: 'var(--text-secondary)' }}>
-                    {a.last_used_at ? timeAgo(new Date(a.last_used_at)) : 'Never'}
+                    {a.last_used_at ? timeAgo(new Date(a.last_used_at)) : '从未使用'}
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
           <div style={{ color: 'var(--text-muted)', fontSize: 13, marginTop: 12 }}>
-            {agents.filter(a => a.status === 'active').length} active / {agents.length} total
+            {agents.filter(a => a.status === 'active').length} 个活跃 / 共 {agents.length} 个
           </div>
         </>
         );
@@ -171,33 +175,33 @@ function ApiKeyCreateModal({ onClose, onCreated }: {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name.trim()) { setError('Name required'); return; }
+    if (!name.trim()) { setError('请输入名称'); return; }
     setLoading(true);
     try {
       const data = await api.createApiKey(name.trim());
       onCreated({ name: data.name, token: data.token });
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed');
+      setError(err instanceof Error ? err.message : '创建失败');
     } finally { setLoading(false); }
   };
 
   return (
     <div className="modal-overlay" onClick={onClose}>
       <form className="modal" onClick={e => e.stopPropagation()} onSubmit={handleSubmit}>
-        <div className="modal-title">Create API Key</div>
+        <div className="modal-title">创建 API Key</div>
         <p style={{ color: 'var(--text-secondary)', fontSize: 13, marginBottom: 16 }}>
-          API keys use simple bearer token auth. They grant full read+write+admin access.
-          For scoped access, use OAuth clients instead.
+          API Key 使用简单的 Bearer Token 认证，并授予完整的 read、write、admin 权限。
+          如需限制权限范围，请改用 OAuth 客户端。
         </p>
         <div style={{ marginBottom: 16 }}>
-          <label>Key Name</label>
-          <input placeholder="e.g. claude-code-local" value={name} onChange={e => setName(e.target.value)} autoFocus />
+          <label>Key 名称</label>
+          <input placeholder="例如 claude-code-local" value={name} onChange={e => setName(e.target.value)} autoFocus />
         </div>
         {error && <div style={{ color: 'var(--error)', fontSize: 13, marginBottom: 12 }}>{error}</div>}
         <div style={{ display: 'flex', gap: 12, justifyContent: 'flex-end' }}>
-          <button type="button" className="btn btn-secondary" onClick={onClose}>Cancel</button>
+          <button type="button" className="btn btn-secondary" onClick={onClose}>取消</button>
           <button type="submit" className="btn btn-primary" disabled={loading}>
-            {loading ? 'Creating...' : 'Create Key'}
+            {loading ? '正在创建...' : '创建 Key'}
           </button>
         </div>
       </form>
@@ -216,29 +220,29 @@ function ApiKeyTokenModal({ token, onClose }: {
       <div className="modal" style={{ maxWidth: 560 }}>
         <div style={{ textAlign: 'center', marginBottom: 16 }}>
           <div style={{ fontSize: 36, color: 'var(--success)', marginBottom: 8 }}>&#10003;</div>
-          <div style={{ fontSize: 20, fontWeight: 600 }}>API Key Created</div>
+          <div style={{ fontSize: 20, fontWeight: 600 }}>API Key 已创建</div>
         </div>
         <div style={{ marginBottom: 12 }}>
-          <label style={{ fontSize: 12 }}>Name</label>
+          <label style={{ fontSize: 12 }}>名称</label>
           <div className="code-block"><span>{token.name}</span></div>
         </div>
         <div style={{ marginBottom: 12 }}>
           <label style={{ fontSize: 12 }}>Bearer Token</label>
           <div className="code-block">
             <span>{token.token}</span>
-            <button className="copy-btn" onClick={() => copy(token.token)}>Copy</button>
+            <button className="copy-btn" onClick={() => copy(token.token)}>复制</button>
           </div>
         </div>
         <div style={{ marginBottom: 12 }}>
-          <label style={{ fontSize: 12 }}>Usage</label>
+          <label style={{ fontSize: 12 }}>用法</label>
           <div className="code-block">
             <pre style={{ whiteSpace: 'pre-wrap', margin: 0, fontSize: 12 }}>{`Authorization: Bearer ${token.token}`}</pre>
-            <button className="copy-btn" onClick={() => copy(`Authorization: Bearer ${token.token}`)}>Copy</button>
+            <button className="copy-btn" onClick={() => copy(`Authorization: Bearer ${token.token}`)}>复制</button>
           </div>
         </div>
-        <div className="warning-bar">Save this token now. It will not be shown again.</div>
+        <div className="warning-bar">请立即保存此令牌，之后不会再次显示。</div>
         <div style={{ display: 'flex', gap: 12, justifyContent: 'flex-end', marginTop: 20 }}>
-          <button className="btn btn-primary" onClick={onClose}>Done</button>
+          <button className="btn btn-primary" onClick={onClose}>完成</button>
         </div>
       </div>
     </div>
@@ -261,17 +265,17 @@ function RegisterModal({ onClose, onRegistered }: {
   const [error, setError] = useState('');
 
   const ttlOptions = [
-    { label: '1 hour', value: '3600' },
-    { label: '24 hours', value: '86400' },
-    { label: '7 days', value: '604800' },
-    { label: '30 days', value: '2592000' },
-    { label: '1 year', value: '31536000' },
-    { label: 'No expiry', value: '0' },
+    { label: '1 小时', value: '3600' },
+    { label: '24 小时', value: '86400' },
+    { label: '7 天', value: '604800' },
+    { label: '30 天', value: '2592000' },
+    { label: '1 年', value: '31536000' },
+    { label: '永不过期', value: '0' },
   ];
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name.trim()) { setError('Name required'); return; }
+    if (!name.trim()) { setError('请输入名称'); return; }
     setLoading(true);
     setError('');
     try {
@@ -283,11 +287,11 @@ function RegisterModal({ onClose, onRegistered }: {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: name.trim(), scopes: selectedScopes, tokenTtl: ttl === '0' ? 315360000 : Number(ttl) }),
       });
-      if (!res.ok) throw new Error('Registration failed');
+      if (!res.ok) throw new Error('注册失败');
       const data = await res.json();
       onRegistered({ clientId: data.clientId, clientSecret: data.clientSecret, name: name.trim() });
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Registration failed');
+      setError(err instanceof Error ? err.message : '注册失败');
     } finally {
       setLoading(false);
     }
@@ -296,13 +300,13 @@ function RegisterModal({ onClose, onRegistered }: {
   return (
     <div className="modal-overlay" onClick={onClose}>
       <form className="modal" onClick={e => e.stopPropagation()} onSubmit={handleSubmit}>
-        <div className="modal-title">Register Agent</div>
+        <div className="modal-title">注册 Agent</div>
         <div style={{ marginBottom: 16 }}>
-          <label>Agent Name</label>
-          <input placeholder="e.g. perplexity-production" value={name} onChange={e => setName(e.target.value)} autoFocus />
+          <label>Agent 名称</label>
+          <input placeholder="例如 perplexity-production" value={name} onChange={e => setName(e.target.value)} autoFocus />
         </div>
         <div style={{ marginBottom: 16 }}>
-          <label>Scopes</label>
+          <label>权限范围</label>
           <div className="checkbox-group">
             {ALLOWED_SCOPES_LIST.map(s => (
               <label key={s} className="checkbox-label">
@@ -313,7 +317,7 @@ function RegisterModal({ onClose, onRegistered }: {
           </div>
         </div>
         <div style={{ marginBottom: 20 }}>
-          <label>Token Lifetime</label>
+          <label>令牌有效期</label>
           <select value={ttl} onChange={e => setTtl(e.target.value)}
             style={{ width: '100%', background: 'var(--bg-secondary)', color: 'var(--text-primary)', border: '1px solid var(--border)', borderRadius: 6, padding: '6px 10px', fontSize: 14 }}>
             {ttlOptions.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
@@ -321,9 +325,9 @@ function RegisterModal({ onClose, onRegistered }: {
         </div>
         {error && <div style={{ color: 'var(--error)', fontSize: 13, marginBottom: 12 }}>{error}</div>}
         <div style={{ display: 'flex', gap: 12, justifyContent: 'flex-end' }}>
-          <button type="button" className="btn btn-secondary" onClick={onClose}>Cancel</button>
+          <button type="button" className="btn btn-secondary" onClick={onClose}>取消</button>
           <button type="submit" className="btn btn-primary" disabled={loading}>
-            {loading ? 'Registering...' : 'Register'}
+            {loading ? '正在注册...' : '注册'}
           </button>
         </div>
       </form>
@@ -349,32 +353,32 @@ function CredentialsModal({ credentials, onClose }: {
       <div className="modal" style={{ maxWidth: 560 }}>
         <div style={{ textAlign: 'center', marginBottom: 16 }}>
           <div style={{ fontSize: 36, color: 'var(--success)', marginBottom: 8 }}>&#10003;</div>
-          <div style={{ fontSize: 20, fontWeight: 600 }}>Agent Registered</div>
+          <div style={{ fontSize: 20, fontWeight: 600 }}>Agent 已注册</div>
         </div>
 
         <div style={{ marginBottom: 12 }}>
           <label style={{ fontSize: 12 }}>Client ID</label>
           <div className="code-block">
             <span>{credentials.clientId}</span>
-            <button className="copy-btn" onClick={() => copy(credentials.clientId)}>Copy</button>
+            <button className="copy-btn" onClick={() => copy(credentials.clientId)}>复制</button>
           </div>
         </div>
 
         <div style={{ marginBottom: 12 }}>
-          <label style={{ fontSize: 12 }}>Client Secret</label>
+          <label style={{ fontSize: 12 }}>客户端密钥</label>
           <div className="code-block">
             <span>{credentials.clientSecret}</span>
-            <button className="copy-btn" onClick={() => copy(credentials.clientSecret)}>Copy</button>
+            <button className="copy-btn" onClick={() => copy(credentials.clientSecret)}>复制</button>
           </div>
         </div>
 
         <div className="warning-bar">
-          Save this secret now. It will not be shown again.
+          请立即保存此密钥，之后不会再次显示。
         </div>
 
         <div style={{ display: 'flex', gap: 12, justifyContent: 'flex-end', marginTop: 20 }}>
-          <button className="btn btn-secondary" onClick={downloadJson}>Download as JSON</button>
-          <button className="btn btn-primary" onClick={onClose}>Done</button>
+          <button className="btn btn-secondary" onClick={downloadJson}>下载 JSON</button>
+          <button className="btn btn-primary" onClick={onClose}>完成</button>
         </div>
       </div>
     </div>
@@ -396,13 +400,13 @@ function AgentDrawer({ agent, onClose, onRevoked }: { agent: Agent; onClose: () 
   const configSnippets: Record<string, string> = {
     'claude-code': isOAuth
       ? [
-        `The user wants to connect GBrain MCP to your context. Here's how.`,
+        `用户希望将 GBrain MCP 连接到你的上下文。请按以下步骤操作。`,
         ``,
-        `# Step 1 — read the client secret from the operator without putting it in shell history.`,
-        `# read -s suppresses the echo; export keeps it scoped to this shell session.`,
+        `# 第 1 步：读取客户端密钥，不要将其写入 shell 历史。`,
+        `# read -s 会禁止回显；export 仅让变量在当前 shell 会话中生效。`,
         `read -rs -p "Client Secret: " GBRAIN_CS && echo`,
         ``,
-        `# Step 2 — mint a token and register GBrain in one go.`,
+        `# 第 2 步：生成令牌并注册 GBrain。`,
         `claude mcp add --transport http gbrain ${serverUrl}/mcp \\`,
         `  --header "Authorization: Bearer $(curl -s -X POST ${serverUrl}/token \\`,
         `    -d 'grant_type=client_credentials' \\`,
@@ -410,14 +414,14 @@ function AgentDrawer({ agent, onClose, onRevoked }: { agent: Agent; onClose: () 
         `    --data-urlencode "client_secret=$GBRAIN_CS" \\`,
         `    -d 'scope=${agent.scope || 'read write'}' | jq -r .access_token)"`,
         ``,
-        `# Step 3 — clear the secret from this shell.`,
+        `# 第 3 步：从当前 shell 清除密钥。`,
         `unset GBRAIN_CS`,
         ``,
-        `The token will last ${agent.token_ttl ? (agent.token_ttl >= 86400 ? Math.floor(agent.token_ttl / 86400) + ' days' : Math.floor(agent.token_ttl / 3600) + ' hours') : '1 hour (default)'}.`,
+        `令牌有效期：${agent.token_ttl ? (agent.token_ttl >= 86400 ? Math.floor(agent.token_ttl / 86400) + ' 天' : Math.floor(agent.token_ttl / 3600) + ' 小时') : '1 小时（默认）'}。`,
         ``,
-        `─── Fallback: 2-step curl + paste ───`,
+        `─── 备用方案：分两步执行 curl 并粘贴令牌 ───`,
         ``,
-        `If your shell doesn't support read -s, mint the token first, then paste:`,
+        `如果 shell 不支持 read -s，请先生成令牌，再粘贴：`,
         ``,
         `curl -s -X POST ${serverUrl}/token \\`,
         `  -d 'grant_type=client_credentials' \\`,
@@ -428,54 +432,54 @@ function AgentDrawer({ agent, onClose, onRevoked }: { agent: Agent; onClose: () 
         `claude mcp add --transport http gbrain ${serverUrl}/mcp \\`,
         `  --header "Authorization: Bearer PASTE_TOKEN_FROM_ABOVE"`,
         ``,
-        `# Then run: history -d $((HISTCMD-1))   # zsh: print -s -- '' && fc -p`,
+        `# 然后执行：history -d $((HISTCMD-1))   # zsh: print -s -- '' && fc -p`,
       ].join('\n')
       : [
-        `The user wants to connect GBrain MCP to your context. Here's how.`,
+        `用户希望将 GBrain MCP 连接到你的上下文。请按以下步骤操作。`,
         ``,
-        `Run this command in terminal to register GBrain:`,
+        `在终端中运行以下命令注册 GBrain：`,
         ``,
         `claude mcp add --transport http gbrain ${serverUrl}/mcp \\`,
         `  --header "Authorization: Bearer PASTE_YOUR_API_KEY_HERE"`,
         ``,
-        `Replace PASTE_YOUR_API_KEY_HERE with the API key shown when "${agentName}" was created.`,
-        `API keys never expire.`,
+        `将 PASTE_YOUR_API_KEY_HERE 替换为创建“${agentName}”时显示的 API Key。`,
+        `API Key 永不过期。`,
       ].join('\n'),
 
     'chatgpt': [
-      `The user wants to connect GBrain MCP to ChatGPT.`,
+      `用户希望将 GBrain MCP 连接到 ChatGPT。`,
       ``,
-      `1. Open ChatGPT > Settings > Tools & Integrations > Add MCP Server`,
-      `2. Enter this URL — ChatGPT will auto-discover the OAuth configuration:`,
+      `1. 打开 ChatGPT > Settings > Tools & Integrations > Add MCP Server`,
+      `2. 输入以下 URL，ChatGPT 会自动发现 OAuth 配置：`,
       ``,
       `   ${serverUrl}/.well-known/oauth-authorization-server`,
       ``,
-      `3. When prompted for credentials:`,
+      `3. 根据提示输入凭据：`,
       `   Client ID: ${cid}`,
-      `   Client Secret: (the secret from agent registration)`,
-      `   Grant Type: client_credentials`,
-      `   Scope: ${agent.scope || 'read write'}`,
+      `   客户端密钥：（注册 Agent 时获得的密钥）`,
+      `   授权类型：client_credentials`,
+      `   权限范围：${agent.scope || 'read write'}`,
     ].join('\n'),
 
     'claude-cowork': [
-      `The user wants to connect GBrain MCP to Claude.ai.`,
+      `用户希望将 GBrain MCP 连接到 Claude.ai。`,
       ``,
-      `1. Open claude.ai > Settings > Connected Apps > Add MCP Server`,
-      `2. Server URL: ${serverUrl}/mcp`,
-      `3. When prompted for auth:`,
-      `   Token endpoint: ${serverUrl}/token`,
+      `1. 打开 claude.ai > Settings > Connected Apps > Add MCP Server`,
+      `2. 服务器 URL：${serverUrl}/mcp`,
+      `3. 根据提示输入认证信息：`,
+      `   令牌端点：${serverUrl}/token`,
       `   Client ID: ${cid}`,
-      `   Client Secret: (the secret from agent registration)`,
-      `   Scope: ${agent.scope || 'read write'}`,
+      `   客户端密钥：（注册 Agent 时获得的密钥）`,
+      `   权限范围：${agent.scope || 'read write'}`,
       ``,
-      `Discovery URL: ${serverUrl}/.well-known/oauth-authorization-server`,
+      `发现 URL：${serverUrl}/.well-known/oauth-authorization-server`,
     ].join('\n'),
 
     cursor: isOAuth
       ? [
-        `The user wants to connect GBrain MCP to Cursor.`,
+        `用户希望将 GBrain MCP 连接到 Cursor。`,
         ``,
-        `Cursor supports OAuth for remote MCP. Add to .cursor/mcp.json:`,
+        `Cursor 支持远程 MCP 的 OAuth。请添加到 .cursor/mcp.json：`,
         ``,
         `{`,
         `  "mcpServers": {`,
@@ -486,15 +490,15 @@ function AgentDrawer({ agent, onClose, onRevoked }: { agent: Agent; onClose: () 
         `  }`,
         `}`,
         ``,
-        `Cursor will auto-discover OAuth via:`,
+        `Cursor 会通过以下地址自动发现 OAuth：`,
         `${serverUrl}/.well-known/oauth-authorization-server`,
         ``,
-        `When prompted: Client ID ${cid}, use the secret from registration.`,
+        `出现提示时，Client ID 填写 ${cid}，密钥使用注册时获得的值。`,
       ].join('\n')
       : [
-        `The user wants to connect GBrain MCP to Cursor.`,
+        `用户希望将 GBrain MCP 连接到 Cursor。`,
         ``,
-        `Add to .cursor/mcp.json:`,
+        `请添加到 .cursor/mcp.json：`,
         ``,
         `{`,
         `  "mcpServers": {`,
@@ -508,16 +512,16 @@ function AgentDrawer({ agent, onClose, onRevoked }: { agent: Agent; onClose: () 
         `  }`,
         `}`,
         ``,
-        `Replace PASTE_YOUR_API_KEY_HERE with the API key shown when "${agentName}" was created.`,
+        `将 PASTE_YOUR_API_KEY_HERE 替换为创建“${agentName}”时显示的 API Key。`,
       ].join('\n'),
 
     perplexity: [
-      `The user wants to connect GBrain MCP to Perplexity.`,
+      `用户希望将 GBrain MCP 连接到 Perplexity。`,
       ``,
-      `1. Go to Settings > Connectors > Add MCP`,
-      `2. Server URL: ${serverUrl}/mcp`,
+      `1. 打开 Settings > Connectors > Add MCP`,
+      `2. 服务器 URL：${serverUrl}/mcp`,
       `3. Client ID: ${cid}`,
-      `4. Client Secret: (the secret from agent registration)`,
+      `4. 客户端密钥：（注册 Agent 时获得的密钥）`,
     ].join('\n'),
 
     json: JSON.stringify({
@@ -537,20 +541,20 @@ function AgentDrawer({ agent, onClose, onRevoked }: { agent: Agent; onClose: () 
       <div className="drawer">
         <button className="drawer-close" onClick={onClose}>&#10005;</button>
         <div style={{ fontSize: 18, fontWeight: 600, marginBottom: 4 }}>{agent.name || agent.client_name}</div>
-        <span className={`badge ${agent.status === 'active' ? 'badge-success' : 'badge-danger'}`}>{agent.status}</span>
+        <span className={`badge ${agent.status === 'active' ? 'badge-success' : 'badge-danger'}`}>{statusLabel(agent.status)}</span>
 
-        <div className="section-title">Details</div>
+        <div className="section-title">详情</div>
         <div style={{ display: 'grid', gridTemplateColumns: '100px 1fr', gap: '6px 12px', fontSize: 13 }}>
           <span style={{ color: 'var(--text-secondary)' }}>Client ID</span>
           <span className="mono">{(agent.id || agent.id || agent.client_id || '').substring(0, 24)}...</span>
-          <span style={{ color: 'var(--text-secondary)' }}>Scopes</span>
+          <span style={{ color: 'var(--text-secondary)' }}>权限范围</span>
           <span>{(agent.scope || '').split(' ').filter(Boolean).map(s => (
             <span key={s} className={`badge badge-${s}`} style={{ marginRight: 4 }}>{s}</span>
           ))}</span>
-          <span style={{ color: 'var(--text-secondary)' }}>Registered</span>
+          <span style={{ color: 'var(--text-secondary)' }}>注册时间</span>
           <span>{new Date(agent.created_at).toLocaleDateString()}</span>
           <span style={{ color: 'var(--text-secondary)' }}>Token TTL</span>
-          <span>{agent.token_ttl ? (agent.token_ttl >= 31536000 ? 'No expiry' : agent.token_ttl >= 86400 ? `${Math.floor(agent.token_ttl / 86400)}d` : agent.token_ttl >= 3600 ? `${Math.floor(agent.token_ttl / 3600)}h` : `${agent.token_ttl}s`) : '1h (default)'}</span>
+          <span>{agent.token_ttl ? (agent.token_ttl >= 31536000 ? '永不过期' : agent.token_ttl >= 86400 ? `${Math.floor(agent.token_ttl / 86400)} 天` : agent.token_ttl >= 3600 ? `${Math.floor(agent.token_ttl / 3600)} 小时` : `${agent.token_ttl} 秒`) : '1 小时（默认）'}</span>
         </div>
 
         {/*
@@ -567,7 +571,7 @@ function AgentDrawer({ agent, onClose, onRevoked }: { agent: Agent; onClose: () 
           Claude Code + Cursor snippets along with the broken ones.
           (D5=C in the eng review.)
         */}
-        <div className="section-title">Config Export</div>
+        <div className="section-title">配置导出</div>
         <div className="tabs" style={{ flexWrap: 'wrap' }}>
           <div className={`tab ${tab === 'claude-code' ? 'active' : ''}`} onClick={() => setTab('claude-code')}>Claude Code</div>
           <div className={`tab ${tab === 'chatgpt' ? 'active' : ''}`} onClick={() => setTab('chatgpt')}>ChatGPT</div>
@@ -592,16 +596,16 @@ function AgentDrawer({ agent, onClose, onRevoked }: { agent: Agent; onClose: () 
                 color: 'var(--text-secondary)',
               }}>
                 <div style={{ fontWeight: 600, color: 'var(--text-primary)', marginBottom: 6 }}>
-                  {clientName} requires an OAuth client
+                  {clientName} 需要 OAuth 客户端
                 </div>
-                {clientName} only supports OAuth 2.0 (client_credentials). API keys use raw bearer tokens, which {clientName} does not accept. Register a separate OAuth client and use that to connect this AI.
+                {clientName} 仅支持 OAuth 2.0（client_credentials）。API Key 使用原始 Bearer Token，{clientName} 不接受这种方式。请单独注册 OAuth 客户端后再连接。
               </div>
             );
           }
           return (
             <div className="code-block">
               <pre style={{ whiteSpace: 'pre-wrap', margin: 0 }}>{configSnippets[tab]}</pre>
-              <button className="copy-btn" onClick={() => copy(configSnippets[tab])}>Copy</button>
+              <button className="copy-btn" onClick={() => copy(configSnippets[tab])}>复制</button>
             </div>
           );
         })()}
@@ -609,7 +613,7 @@ function AgentDrawer({ agent, onClose, onRevoked }: { agent: Agent; onClose: () 
         <div style={{ marginTop: 32 }}>
           {agent.status === 'active' && (
             <button className="btn btn-danger" onClick={async () => {
-              if (!confirm(`Revoke ${agent.name || agent.client_name}? All active tokens will be invalidated.`)) return;
+              if (!confirm(`撤销 ${agent.name || agent.client_name}？所有活跃令牌都会失效。`)) return;
               try {
                 if (agent.auth_type === 'oauth') {
                   await api.revokeClient(agent.id || agent.client_id || '');
@@ -619,12 +623,12 @@ function AgentDrawer({ agent, onClose, onRevoked }: { agent: Agent; onClose: () 
                 onRevoked();
                 onClose();
               } catch (e) {
-                alert('Revoke failed: ' + (e instanceof Error ? e.message : 'unknown error'));
+                alert('撤销失败：' + (e instanceof Error ? e.message : '未知错误'));
               }
-            }}>Revoke Agent</button>
+            }}>撤销 Agent</button>
           )}
           {agent.status === 'revoked' && (
-            <span style={{ color: 'var(--text-muted)', fontSize: 13 }}>This agent has been revoked.</span>
+            <span style={{ color: 'var(--text-muted)', fontSize: 13 }}>此 Agent 已撤销。</span>
           )}
         </div>
       </div>

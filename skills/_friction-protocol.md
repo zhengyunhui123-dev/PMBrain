@@ -1,29 +1,29 @@
-# Friction protocol — convention
+# 摩擦协议 — 约定
 
-> Cross-cutting rule shared by skills the claw-test harness exercises (setup,
-> brain-ops, query, ingest, smoke-test, migrations). Reference via
-> `> **Convention:** see [skills/_friction-protocol.md](_friction-protocol.md).`
+> 被 claw-test 测试工具覆盖的技能共享的跨领域规则（setup、brain-ops、query、
+> ingest、smoke-test、migrations）。通过
+> `> **Convention:** see [skills/_friction-protocol.md](_friction-protocol.md).` 引用。
 
-When you encounter friction running gbrain — anything confusing, missing, surprising, or wrong — log it via `gbrain friction log` so maintainers can see it without you writing a bug report. Friction reports drive the claw-test feedback loop (the harness collects, renders, and re-runs).
+当您在运行 gbrain 时遇到摩擦——任何令人困惑、缺失、意外或错误的情况——通过 `gbrain friction log` 记录，以便维护者无需您撰写错误报告即可看到。摩擦报告驱动 claw-test 反馈循环（工具收集、渲染并重新运行）。
 
-## When to log
+## 何时记录
 
-Log friction when any of these happens:
+当以下任一情况发生时记录摩擦：
 
-- A command failed with a non-actionable error message
-- A doc said one thing and the tool did another
-- You couldn't find the next step
-- A setup command needed a manual workaround
-- A flag exists but isn't documented in `--help`
-- A success condition was unclear (you couldn't tell if the command worked)
+- 命令因不可操作的错误消息而失败
+- 文档说的是一回事，工具做的是另一回事
+- 找不到下一步操作
+- 设置命令需要手动变通
+- 存在某个标志但未在 `--help` 中记录
+- 成功条件不明确（无法判断命令是否成功）
 
-Log delight (positive signal) when:
+当出现以下情况时记录正向反馈（积极信号）：
 
-- Something worked on the first try and the docs were exactly right
-- An error message handed you the fix
-- A flag you guessed at turned out to exist with the obvious name
+- 某功能第一次就成功了，且文档完全准确
+- 错误消息直接给出了解决方案
+- 您猜测的标志确实存在且名称显而易见
 
-## How to log
+## 如何记录
 
 ```
 gbrain friction log \
@@ -33,28 +33,28 @@ gbrain friction log \
   [--hint "<one-line-what-could-be-better>"]
 ```
 
-For delight, add `--kind delight` and pick any severity.
+对于正向反馈，添加 `--kind delight` 并选择任意严重级别。
 
-The CLI auto-fills `ts`, `cwd`, `gbrain_version`, and resolves `run_id` from `$GBRAIN_FRICTION_RUN_ID` (set by the harness) or falls back to `standalone.jsonl`. So you can call this anywhere — inside a harness run, manually during normal use, or from a scripted test.
+CLI 会自动填充 `ts`、`cwd`、`gbrain_version`，并从 `$GBRAIN_FRICTION_RUN_ID`（由工具设置）解析 `run_id`，或回退到 `standalone.jsonl`。因此您可以在任何地方调用——在工具运行期间、正常使用期间手动调用，或从脚本化测试中调用。
 
-## Severity guide
+## 严重级别指南
 
-| severity   | meaning |
-|------------|---------|
-| `blocker`  | Couldn't proceed at all. Hard stop. |
-| `error`    | Command failed unexpectedly. |
-| `confused` | Docs/tool mismatch, ambiguity, missing pointer. |
-| `nit`      | Polish opportunity. Cosmetic or low-impact. |
+| severity   | 含义 |
+|------------|------|
+| `blocker`  | 完全无法继续。硬性阻断。 |
+| `error`    | 命令意外失败。 |
+| `confused` | 文档/工具不匹配、歧义、缺少指引。 |
+| `nit`      | 打磨机会。外观性或低影响。 |
 
-Be specific: "doctor says `schema_version=0` and points at apply-migrations, but apply-migrations exits 0 with no output" beats "doctor was confusing."
+要具体："'doctor 显示 `schema_version=0` 并指向 apply-migrations，但 apply-migrations 以退出码 0 退出且无输出"比"doctor 令人困惑"好得多。
 
-## Inspecting reports
+## 查看报告
 
 ```
-gbrain friction list                      # recent runs with counts
-gbrain friction render --run-id <id>      # markdown report (default)
+gbrain friction list                      # 最近的运行及计数
+gbrain friction render --run-id <id>      # Markdown 报告（默认）
 gbrain friction render --run-id <id> --json
-gbrain friction summary --run-id <id>     # friction + delight side-by-side
+gbrain friction summary --run-id <id>     # 摩擦与正向反馈并排展示
 ```
 
-`render` defaults to `--redact` for markdown (strips `$HOME`/`$CWD` to `<HOME>`/`<CWD>` placeholders) so reports paste safely into PRs and issues.
+`render` 默认使用 `--redact` 生成 Markdown（将 `$HOME`/`$CWD` 替换为 `<HOME>`/`<CWD>` 占位符），以便报告可以安全地粘贴到 PR 和 Issue 中。

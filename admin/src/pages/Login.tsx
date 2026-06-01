@@ -29,7 +29,7 @@ export function LoginPage({ onLogin }: { onLogin: () => void }) {
       setToken('');
       onLogin();
     } catch (err) {
-      setError('Invalid token.');
+      setError('令牌无效，请检查后重试。');
     } finally {
       setLoading(false);
     }
@@ -51,9 +51,9 @@ export function LoginPage({ onLogin }: { onLogin: () => void }) {
           color: 'var(--text-secondary)',
         }}>
           <div style={{ fontWeight: 600, color: 'var(--text-primary)', marginBottom: 6 }}>
-            🔒 This is a protected dashboard
+            此管理后台受保护
           </div>
-          Ask your AI agent for the admin login link:
+          你可以向 AI Agent 索取管理员登录链接：
           <div style={{
             background: 'rgba(0,0,0,0.3)',
             borderRadius: 6,
@@ -64,28 +64,28 @@ export function LoginPage({ onLogin }: { onLogin: () => void }) {
             color: '#88aaff',
             wordBreak: 'break-all',
           }}>
-            "Give me the GBrain admin login link"
+            “请给我 GBrain 管理员登录链接”
           </div>
           <div style={{ marginTop: 8, fontSize: 12, color: 'var(--text-muted)' }}>
-            Each link is single-use. Your agent generates a fresh one each time.
+            每个链接仅限使用一次。Agent 每次都会生成一个新链接。
           </div>
         </div>
 
         <details style={{ marginBottom: 16 }}>
           <summary style={{ cursor: 'pointer', fontSize: 13, color: 'var(--text-muted)' }}>
-            Or paste bootstrap token manually
+            或手动粘贴管理员初始令牌
           </summary>
           <form onSubmit={handleSubmit} style={{ marginTop: 12 }}>
             <div style={{ marginBottom: 12 }}>
               <input
                 type="password"
-                placeholder="Admin Token"
+                placeholder="管理员令牌"
                 value={token}
                 onChange={e => setToken(e.target.value)}
               />
             </div>
             <button className="btn btn-primary" style={{ width: '100%' }} disabled={loading}>
-              {loading ? 'Authenticating...' : 'Submit'}
+              {loading ? '正在验证...' : '登录'}
             </button>
             {error && <div className="login-error">{error}</div>}
           </form>

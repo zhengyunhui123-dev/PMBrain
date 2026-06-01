@@ -1,131 +1,111 @@
-# Skill Development Cycle
+# 技能开发周期
 
-## Goal
+## 目标
 
-Turn every repeating task into a durable, automated skill so that if you ask twice, it should already be running on a cron.
+将每个重复任务转变为持久的、自动化的技能，这样如果你问两次，它应该已经在 cron 上运行了。
 
-## What the User Gets
+## 用户获得什么
 
-Without this: ad-hoc work that the agent forgets how to do. You ask "enrich
-this person" and the agent invents a new process each time. Quality varies.
+如果没有这个：代理忘记如何做的临时工作。你问"丰富这个人"，代理每次都会发明一个新过程。质量各不相同。
 
-With this: every capability is codified, tested, and scheduled. Enrichment
-runs the same way every time. New patterns get skill-ified within a day.
+有了这个：每个能力都被编目、测试并安排好。丰富每次都以相同的方式运行。新模式在一天内被技能化。
 
-## Implementation
+## 实施
 
-**The Rule:** If you have to ask your agent for something twice, it should
-already be a skill running on a cron. First time is discovery. Second time
-is system failure.
+**规则：** 如果你不得不向代理要求某事两次，它应该已经是在 cron 上运行的技能了。第一次是发现。第二次是系统故障。
 
-### The 5-Step Cycle
+### 5 步周期
 
-**Step 1: Concept the Process.**
-Describe what needs to happen in plain language:
-- What's the input? What's the output? What triggers it?
-- What data sources does it touch?
-- How often should it run?
+**第1步：构思过程。**
+用普通语言描述需要发生什么：
+- 输入是什么？输出是什么？是什么触发了它？
+- 它触及哪些数据源？
+- 它应该运行多少次？
 
-**Step 2: Run Manually for 3-10 Items.**
-Actually do the work by hand on a small batch. This is the prototype phase.
-Do NOT write a SKILL.md yet. Just do the work and observe:
-- What does the output actually look like?
-- What edge cases appear?
-- What quality bar is right?
+**第2步：手动运行 3-10 个项目。**
+实际上在一小批上手工做工作。这是原型阶段。
+还不要写 SKILL.md。只是做工作并观察：
+- 输出实际上看起来像什么？
+- 出现了什么边缘情况？
+- 什么质量标准是正确的？
 
-**Step 3: Evaluate Output.**
-Show the user the results. Get feedback.
-- Does output look good? Is quality right?
-- Did you miss anything? Over-engineer?
-- Revise the process based on what you learned.
+**第3步：评估输出。**
+向用户展示结果。获得反馈。
+- 输出看起来好吗？质量正确吗？
+- 你错过了什么吗？过度设计了吗？
+- 根据你学到的东西修改过程。
 
-**Step 4: Codify into a Skill.**
-Write the SKILL.md. Either:
-- **New skill** -- genuinely new capability
-- **Add to existing skill** -- variation of something that exists (parameterize it)
+**第4步：编目成技能。**
+编写 SKILL.md。要么：
+- **新技能** — 真正的新能力
+- **添加到现有技能** — 现有东西的变体（参数化它）
 
-The skill must be:
-- **Durable** -- works tomorrow, next week, next month without manual intervention
-- **MECE** -- doesn't overlap with other skills (see below)
-- **Parameterized** -- handles variations through parameters, not separate skills
+技能必须是：
+- **持久的** — 明天、下周、下个月无需人工干预即可工作
+- **MECE** — 不与其他技能重叠（见下文）
+- **参数化的** — 通过参数处理变化，而不是单独的技能
 
-**Step 5: Add to Cron (if recurring).**
-If the process should run automatically:
-- Add to existing cron job if it fits naturally
-- Create new cron job if it has a distinct scheduling concern
-- Monitor the first 2-3 automated runs for quality
-- Fix issues that emerge at scale
+**第5步：添加到 Cron（如果是重复的）。**
+如果过程应该自动运行：
+- 如果它自然地适合，添加到现有 cron 作业
+- 如果它有独特的调度问题，创建新的 cron 作业
+- 监控前 2-3 个自动化运行以确保质量
+- 修复在规模上出现的问题
 
-### MECE Discipline
+### MECE 纪律
 
-Skills should be **Mutually Exclusive, Collectively Exhaustive**:
-- Each entity type has exactly ONE owner skill
-- Each signal source has exactly ONE owner skill
-- Two skills creating the same brain page = MECE violation
+技能应该是**相互排斥，集体详尽**的：
+- 每种实体类型正好有一个所有者技能
+- 每个信号源正好有一个所有者技能
+- 两个技能创建同一个 brain 页面 = MECE 违规
 
-**Example ownership (no overlap):**
+**所有权示例（无重叠）：**
 
-| Signal Source | Owner Skill | Creates |
+| 信号源 | 所有者技能 | 创建 |
 |--------------|-------------|---------|
-| Meeting transcripts | meeting-ingestion | brain/meetings/ pages |
-| Email messages | executive-assistant | brain/people/ timeline entries |
-| X/Twitter posts | x-collector | brain/media/ pages |
-| Person enrichment | enrich | brain/people/ compiled truth |
-| Calendar events | calendar-sync | brain/daily/calendar/ pages |
-| Video/podcast content | media-ingest | brain/media/ pages |
+| 会议记录 | meeting-ingestion | brain/meetings/ 页面 |
+| 电子邮件消息 | executive-assistant | brain/people/ 时间线条目 |
+| X/Twitter 帖子 | x-collector | brain/media/ 页面 |
+| 人员丰富 | enrich | brain/people/ 编译的真相 |
+| 日历事件 | calendar-sync | brain/daily/calendar/ 页面 |
+| 视频/播客内容 | media-ingest | brain/media/ 页面 |
 
-### Quality Bar Checklist
+### 质量标准检查清单
 
-A skill is ready when:
+技能在以下情况下准备就绪：
 
-- [ ] Ran successfully on 3-10 real items with good output
-- [ ] User reviewed output and approved
-- [ ] SKILL.md is under 500 lines (use references for overflow)
-- [ ] Checks notability before creating brain pages (don't create pages for nobodies)
-- [ ] Has citation enforcement (every fact has a source)
-- [ ] Doesn't overlap with existing skills (MECE)
-- [ ] If recurring: on a cron with appropriate schedule
-- [ ] If it creates brain pages: checks notability first
+- [ ] 在 3-10 个真实项目上成功运行，输出良好
+- [ ] 用户审查了输出并批准
+- [ ] SKILL.md 少于 500 行（溢出使用引用）
+- [ ] 在创建 brain 页面之前检查显著性（不要为无名小卒创建页面）
+- [ ] 有引用执行（每个事实都有一个来源）
+- [ ] 不与现有技能重叠（MECE）
+- [ ] 如果是重复的：在具有适当计划的 cron 上
+- [ ] 如果它创建 brain 页面：首先检查显著性
 
-### What This Means in Practice
+### 这在实践中意味着什么
 
-- Don't do ad-hoc brain enrichment, use the enrich skill
-- Don't manually check social media, use an automated cron
-- Don't manually ingest meeting notes, use the meeting-sync recipe
-- Don't manually create entity pages, use the entity detector
-- If a new pattern emerges, prototype it, skill-ify it, cron-ify it
+- 不要做临时 brain 丰富，使用丰富技能
+- 不要手动检查社交媒体，使用自动化 cron
+- 不要手动摄入会议记录，使用 meeting-sync 配方
+- 不要手动创建实体页面，使用实体检测器
+- 如果出现新模式，原型化它，技能化它，cron 化它
 
-## Tricky Spots
+## 棘手的地方
 
-1. **MECE violations compound silently.** Two skills that both create
-   `brain/people/` pages will produce duplicates and conflicting data.
-   Before creating a new skill, check the ownership table. If an existing
-   skill already owns that entity type, extend it with parameters instead
-   of creating a new skill.
+1. **MECE 违规悄无声息地复合。** 两个技能都创建 `brain/people/` 页面将产生重复和冲突的数据。在创建新技能之前，检查所有权表。如果现有技能已经拥有该实体类型，请使用参数扩展它，而不是创建新技能。
 
-2. **The quality bar is real.** Don't ship a skill that hasn't been tested
-   on 3-10 real items with user approval. A skill that produces bad output
-   is worse than no skill -- it creates bad brain pages at scale on a cron.
+2. **质量标准是真实的。** 不要发布尚未在 3-10 个真实项目上进行测试并获得用户批准的技能。产生糟糕输出的技能比没有技能更糟糕 — 它在 cron 上大规模创建糟糕的 brain 页面。
 
-3. **Don't create stubs.** A SKILL.md with "TODO: implement" is not a skill.
-   Every skill must be complete enough to run end-to-end on real data. If
-   you can't finish it, don't create the file. Keep it as manual work until
-   you can do it right.
+3. **不要创建存根。** 带有 "TODO: implement" 的 SKILL.md 不是技能。每个技能必须足够完整以在真实数据上端到端运行。如果你无法完成它，不要创建文件。保持它为手动工作，直到你可以正确地做它。
 
-## How to Verify
+## 如何验证
 
-1. **Run the skill on 3 real items.** Execute the skill against live data
-   (not test data). Check that the output matches the quality bar: citations
-   present, notability checked, no stubs created.
+1. **在 3 个真实项目上运行技能。** 针对实时数据执行技能（不是测试数据）。检查输出是否符合质量标准：存在引用，检查了显著性，没有创建存根。
 
-2. **Check MECE against existing skills.** Review the ownership table. Does
-   this new skill create pages in a directory already owned by another skill?
-   If yes, it's a MECE violation. Merge or parameterize instead.
+2. **针对现有技能检查 MECE。** 审查所有权表。这个新技能是否在已经被另一个技能拥有的目录中创建页面？如果是，这是 MECE 违规。合并或参数化代替。
 
-3. **Verify the quality bar checklist.** Walk through every item in the
-   Quality Bar Checklist above. If any item is unchecked, the skill isn't
-   ready for cron deployment.
+3. **验证质量标准检查清单。** 遍历上面质量标准检查清单中的每一项。如果任何项目未选中，该技能还没有准备好用于 cron 部署。
 
 ---
-
-*Part of the [GBrain Skillpack](../GBRAIN_SKILLPACK.md).*
+*属于 [GBrain Skillpack](../GBRAIN_SKILLPACK.md) 的一部分。*

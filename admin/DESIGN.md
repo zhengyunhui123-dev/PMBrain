@@ -1,158 +1,158 @@
-# Design System — GBrain Admin Dashboard
+# 设计系统 — GBrain 管理后台
 
-## Product Context
-- **What this is:** Admin dashboard for GBrain MCP server — manage OAuth agents, API keys, monitor requests
-- **Who it's for:** GBrain operators managing multi-agent access to their brain
-- **Space/industry:** Developer infrastructure (peers: Supabase dashboard, Vercel, Railway)
-- **Project type:** Dense utilitarian admin panel — Steve Krug "Don't Make Me Think"
+## 产品背景
+- **这是什么：** GBrain MCP 服务器的管理后台 — 管理 OAuth 代理、API 密钥、监控请求
+- **面向谁：** 管理多代理访问其大脑的 GBrain 运维人员
+- **领域/行业：** 开发者基础设施（同类产品：Supabase 后台、Vercel、Railway）
+- **项目类型：** 高密度实用型管理面板 — Steve Krug 的"别让我思考"
 
-## Aesthetic Direction
-- **Direction:** Industrial/Utilitarian — function-first, data-dense, zero decoration
-- **Decoration level:** None — every pixel earns its place with information
-- **Mood:** Ops dashboard for someone who builds. Not a marketing site. Not a consumer app. A cockpit.
-- **Reference:** Supabase dashboard (dark + dense), Linear (restrained), Grafana (data-forward)
+## 美学方向
+- **方向：** 工业/实用型 — 功能优先，数据密集，零装饰
+- **装饰程度：** 无 — 每个像素都通过信息证明其存在价值
+- **风格：** 为构建者使用的运维后台。不是营销网站。不是消费级应用。而是驾驶舱。
+- **参考：** Supabase 后台（深色 + 密集）、Linear（克制）、Grafana（数据导向）
 
-## Alignment
-- **Text alignment:** Left-align everything. No centered text in tables, cards, forms, or labels.
-- **Headings:** Left-aligned
-- **Table data:** Left-aligned (including numbers — contextual readability over columnar alignment)
-- **Form labels:** Left-aligned above inputs
-- **Buttons in forms:** Right-aligned (action flows left-to-right: Cancel → Submit)
-- **Modal titles:** Left-aligned
-- **Page titles:** Left-aligned
-- **Only exception:** Empty states and the login page lock icon can center for visual weight
+## 对齐方式
+- **文本对齐：** 全部左对齐。表格、卡片、表单或标签中无居中文本。
+- **标题：** 左对齐
+- **表格数据：** 左对齐（包括数字 — 上下文可读性优于列对齐）
+- **表单标签：** 左对齐，位于输入框上方
+- **表单按钮：** 右对齐（操作流从左到右：取消 → 提交）
+- **模态框标题：** 左对齐
+- **页面标题：** 左对齐
+- **唯一例外：** 空状态和登录页面锁图标可以居中以增加视觉重量
 
-## Typography
-- **Display/Headings:** Inter (Semibold 600) — clean, neutral, disappears into the content
-- **Body/UI:** Inter (Regular 400 / Medium 500)
-- **Data/Tables/Code:** JetBrains Mono (Regular 400 / Medium 500) — monospace for anything the user might copy, any ID, any token, any technical value
-- **Loading:** Google Fonts. `display=swap`.
-- **Scale:**
-  - Page title: 24px / Inter Semibold
-  - Section title: 14px / Inter Semibold, uppercase, letter-spacing 0.5px
-  - Table header: 12px / Inter Medium, uppercase, letter-spacing 1px, muted color
-  - Body: 14px / Inter Regular
-  - Small/Caption: 13px
-  - Micro: 12px (badges, timestamps)
-  - Code/Data: 13px / JetBrains Mono
+## 排版
+- **展示/标题：** Inter（Semibold 600）— 干净、中性，融入内容
+- **正文/UI：** Inter（Regular 400 / Medium 500）
+- **数据/表格/代码：** JetBrains Mono（Regular 400 / Medium 500）— 等宽字体用于用户可能复制的任何内容、任何 ID、任何令牌、任何技术值
+- **加载：** Google Fonts。`display=swap`。
+- **尺寸：**
+  - 页面标题：24px / Inter Semibold
+  - 章节标题：14px / Inter Semibold，大写，字母间距 0.5px
+  - 表头：12px / Inter Medium，大写，字母间距 1px， muted 颜色
+  - 正文：14px / Inter Regular
+  - 小号/说明：13px
+  - 微型：12px（徽章、时间戳）
+  - 代码/数据：13px / JetBrains Mono
 
-## Color
-- **Approach:** Monochrome base + semantic color only. No primary brand color. Color means something.
-- **Background:**
-  - Base: #0a0a0f (near-black with blue undertone)
-  - Surface/cards: #12121a
-  - Hover: #1a1a2a
-  - Input/code blocks: #0f0f1a
-- **Borders:** #1e1e2e (default), #3a3a5a (hover/active)
-- **Text:**
-  - Primary: #e0e0e0
-  - Secondary: #888888
-  - Muted: #555555
-  - Link: #88aaff
-- **Semantic (badges only):**
-  - Success/active: #34a853
-  - Error/danger: #ff6b6b
-  - Warning: #f5a623
-  - Read scope: #3b82f6
-  - Write scope: #f59e0b
-  - Admin scope: #ef4444
-- **No accent color.** The data IS the interface. Badges carry all the color.
+## 颜色
+- **方法：** 单色基础 + 仅语义颜色。无主品牌色。颜色意味着某种含义。
+- **背景：**
+  - 基础：#0a0a0f（近黑色，带蓝色底调）
+  - 表面/卡片：#12121a
+  - 悬停：#1a1a2a
+  - 输入框/代码块：#0f0f1a
+- **边框：** #1e1e2e（默认），#3a3a5a（悬停/激活）
+- **文本：**
+  - 主要：#e0e0e0
+  - 次要：#888888
+  - 静音：#555555
+  - 链接：#88aaff
+- **语义（仅徽章）：**
+  - 成功/激活：#34a853
+  - 错误/危险：#ff6b6b
+  - 警告：#f5a623
+  - 读取范围：#3b82f6
+  - 写入范围：#f59e0b
+  - 管理员范围：#ef4444
+- **无强调色。** 数据就是界面。徽章承载所有颜色。
 
-## Spacing
-- **Base unit:** 4px
-- **Density:** Dense — this is an ops tool, not a landing page
-- **Scale:** 4px, 8px, 12px, 16px, 20px, 24px, 32px, 48px
-- **Table row padding:** 10px 16px
-- **Card padding:** 24px
-- **Modal padding:** 24px
-- **Section gaps:** 24px between sections, 12px between related elements
+## 间距
+- **基础单位：** 4px
+- **密度：** 密集 — 这是运维工具，不是落地页
+- **比例：** 4px, 8px, 12px, 16px, 20px, 24px, 32px, 48px
+- **表格行内边距：** 10px 16px
+- **卡片内边距：** 24px
+- **模态框内边距：** 24px
+- **章节间距：** 章节之间 24px，相关元素之间 12px
 
-## Layout
-- **Sidebar:** Fixed left, 200px wide, dark (#0a0a0f)
-- **Main content:** Fluid, max-width none (fills available space)
-- **Grid:** Single column for tables (full width), 2-column for stats cards
-- **Border radius:**
-  - Cards/panels: 16px
-  - Buttons/inputs: 8px
-  - Badges: 9999px (pill)
-  - Tables: 0 (sharp edges — data is rectangular)
+## 布局
+- **侧边栏：** 固定左侧，宽 200px，深色 (#0a0a0f)
+- **主内容：** 流式，最大宽度无限制（填充可用空间）
+- **网格：** 表格为单列（全宽），统计卡片为 2 列
+- **边框半径：**
+  - 卡片/面板：16px
+  - 按钮/输入框：8px
+  - 徽章：9999px（药丸形）
+  - 表格：0（尖边 — 数据是矩形的）
 
-## Components
+## 组件
 
-### Tables
-- Full-width, no outer border
-- Header row: uppercase, letter-spaced, muted color, no background
-- Data rows: subtle hover (#1a1a2a), pointer cursor when clickable
-- All text left-aligned
-- Monospace for IDs, tokens, latency values
+### 表格
+- 全宽，无外边框
+- 表头行：大写，字母间距，静音颜色，无背景
+- 数据行：微妙悬停 (#1a1a2a)，可点击时显示指针光标
+- 所有文本左对齐
+- ID、令牌、延迟值使用等宽字体
 
-### Badges
-- Pill shape (border-radius: 9999px)
-- Padding: 2px 8px
-- Font: 12px
-- Scoped to semantic meaning: `success`, `danger`, `read`, `write`, `admin`
+### 徽章
+- 药丸形状（边框半径：9999px）
+- 内边距：2px 8px
+- 字体：12px
+- 限定为语义含义：`success`、`danger`、`read`、`write`、`admin`
 
-### Buttons
-- Primary: white text on #3a3a5a, hover brightens
-- Secondary: muted text on transparent, border #1e1e2e
-- Danger: white text on #ff6b6b background
-- Size: 13px font, 6px 14px padding
+### 按钮
+- 主要：白色文本 on #3a3a5a，悬停时变亮
+- 次要：静音文本 on 透明，边框 #1e1e2e
+- 危险：白色文本 on #ff6b6b 背景
+- 尺寸：13px 字体，6px 14px 内边距
 
-### Modals
-- Overlay: rgba(0,0,0,0.7)
-- Card: #12121a, border #1e1e2e, border-radius 16px, max-width 480px
-- Title: 18px Semibold, left-aligned
-- Close: top-right ✕ button
+### 模态框
+- 叠加层：rgba(0,0,0,0.7)
+- 卡片：#12121a，边框 #1e1e2e，边框半径 16px，最大宽度 480px
+- 标题：18px Semibold，左对齐
+- 关闭：右上角 ✕ 按钮
 
-### Drawers
-- Right-side panel, 400px wide
-- Slide in from right
-- Dark overlay behind
-- Close button top-right
-- Sections separated by section titles (uppercase, muted)
+### 抽屉
+- 右侧面板，宽 400px
+- 从右侧滑入
+- 后面有深色叠加层
+- 关闭按钮在右上角
+- 章节由章节标题分隔（大写，静音）
 
-### Tabs
-- Inline horizontal, wrapping allowed
-- Active: white text, bottom border
-- Inactive: muted text, no border
-- No background color on tabs
+### 标签页
+- 内联水平，允许换行
+- 激活：白色文本，底部边框
+- 非激活：静音文本，无边框
+- 标签页上无背景颜色
 
-### Code blocks
-- Background: rgba(0,0,0,0.3)
-- Border-radius: 8px
-- Padding: 10px 14px
-- Font: JetBrains Mono 12px
-- Copy button: right-aligned, subtle
+### 代码块
+- 背景：rgba(0,0,0,0.3)
+- 边框半径：8px
+- 内边距：10px 14px
+- 字体：JetBrains Mono 12px
+- 复制按钮：右对齐，微妙
 
-### Empty states
-- Centered text (only exception to left-align rule)
-- Muted color
-- Suggest next action
+### 空状态
+- 居中文本（左对齐规则的唯一例外）
+- 静音颜色
+- 建议下一步操作
 
-## Motion
-- **Approach:** Minimal — transitions for hover states only
-- **Duration:** 150ms for hovers, 200ms for drawer slide
-- **No loading spinners** — show stale data until fresh arrives
-- **SSE live feed:** Real-time, no animation on new entries (just prepend)
+## 动效
+- **方法：** 最少 — 仅悬停状态的过渡
+- **持续时间：** 悬停 150ms，抽屉滑动 200ms
+- **无加载旋转器** — 显示过时数据，直到新鲜数据到达
+- **SSE 实时订阅：** 实时，新条目无动画（只是前置）
 
-## Anti-Patterns (do NOT do these)
-- ❌ Center-aligned table data
-- ❌ Center-aligned headings or labels (except empty states)
-- ❌ Gradient backgrounds
-- ❌ Shadows (the dark theme IS the depth model)
-- ❌ Rounded table corners
-- ❌ Icons as navigation (use text labels)
-- ❌ Loading skeletons (show real data or nothing)
-- ❌ Confirmation toasts (action → result is immediate and visible)
-- ❌ Color for decoration (every color means something)
+## 反模式（请勿执行这些操作）
+- ❌ 居中对齐的表格数据
+- ❌ 居中对齐的标题或标签（空状态除外）
+- ❌ 渐变背景
+- ❌ 阴影（深色主题就是深度模型）
+- ❌ 圆角表格角落
+- ❌ 图标作为导航（使用文本标签）
+- ❌ 加载骨架屏（显示真实数据或无）
+- ❌ 确认祝酒词（操作 → 结果即时可见）
+- ❌ 装饰性颜色（每种颜色都有含义）
 
-## Decisions Log
-| Date | Decision | Rationale |
-|------|----------|-----------|
-| 2026-05-01 | Dark theme only | Ops dashboard. No light mode needed. |
-| 2026-05-01 | Steve Krug lens | Zero happy talk, mindless choices, scannable tables, billboard-speed comprehension. |
-| 2026-05-01 | JetBrains Mono for data | Anything copyable or technical should be monospace. |
-| 2026-05-03 | Left-align everything | Garry preference. Centered text is a design crutch. Left-align forces hierarchy through typography weight and spacing, not position. |
-| 2026-05-03 | Incorporate GStack design DNA | Same family: Inter + JetBrains Mono, dark base, semantic-only color. Diverges on accent (GStack: amber; GBrain: none — data is the color). |
-| 2026-05-03 | Per-client config export tabs | Claude Code, ChatGPT, Claude.ai, Cursor, Perplexity, JSON. Every agent has a copy-paste setup path. |
-| 2026-05-03 | Magic link auth | Login page tells you to ask your agent. No pasting hex strings into forms. |
+## 决策日志
+| 日期 | 决策 | 理由 |
+|------|------|------|
+| 2026-05-01 | 仅深色主题 | 运维后台。不需要浅色模式。 |
+| 2026-05-01 | Steve Krug 镜头 | 零废话、无脑选择、可扫描表格、广告牌速度理解。 |
+| 2026-05-01 | JetBrains Mono 用于数据 | 任何可复制或技术性的内容都应该是等宽字体。 |
+| 2026-05-03 | 全部左对齐 | Garry 偏好。居中文本是设计拐杖。左对齐通过排版权重和间距强制层次结构，而不是位置。 |
+| 2026-05-03 | 融入 GStack 设计 DNA | 同一家族：Inter + JetBrains Mono、深色基础、仅语义颜色。在强调色上分歧（GStack：琥珀色；GBrain：无 — 数据就是颜色）。 |
+| 2026-05-03 | 每客户端配置导出标签页 | Claude Code、ChatGPT、Claude.ai、Cursor、Perplexity、JSON。每个代理都有复制粘贴设置路径。 |
+| 2026-05-03 | 魔法链接认证 | 登录页面告诉您询问您的代理。无需将十六进制字符串粘贴到表单中。 |

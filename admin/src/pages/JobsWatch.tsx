@@ -61,14 +61,14 @@ export function JobsWatchPage() {
   if (err) {
     return (
       <div style={{ padding: 24, color: 'var(--accent-danger, #f85149)' }}>
-        <h2>Jobs Watch — error</h2>
+        <h2>任务监控：错误</h2>
         <pre style={{ whiteSpace: 'pre-wrap' }}>{err}</pre>
       </div>
     );
   }
 
   if (!snap) {
-    return <div style={{ padding: 24, color: 'var(--text-muted, #777)' }}>Loading jobs watch…</div>;
+    return <div style={{ padding: 24, color: 'var(--text-muted, #777)' }}>正在加载任务监控...</div>;
   }
 
   const ts = new Date(snap.ts_ms).toLocaleTimeString();
@@ -76,18 +76,18 @@ export function JobsWatchPage() {
   return (
     <div style={{ padding: 24, fontFamily: 'var(--font-mono, "JetBrains Mono", monospace)' }}>
       <h1 style={{ fontSize: 18, marginBottom: 4 }}>
-        Jobs Watch
+        任务监控
         <span style={{ marginLeft: 12, color: 'var(--text-muted, #777)', fontSize: 12, fontWeight: 'normal' }}>
-          updated {ts}
+          更新于 {ts}
         </span>
       </h1>
 
       <section style={{ marginTop: 24 }}>
-        <h2 style={{ fontSize: 14, marginBottom: 8 }}>Queue</h2>
+        <h2 style={{ fontSize: 14, marginBottom: 8 }}>队列</h2>
         <div>
-          waiting=<b>{snap.queue_health.waiting}</b>{'  '}
-          active=<b>{snap.queue_health.active}</b>{'  '}
-          stalled=<b style={{ color: snap.queue_health.stalled > 0 ? 'var(--accent-warn, #d29922)' : undefined }}>
+          等待=<b>{snap.queue_health.waiting}</b>{'  '}
+          活跃=<b>{snap.queue_health.active}</b>{'  '}
+          停滞=<b style={{ color: snap.queue_health.stalled > 0 ? 'var(--accent-warn, #d29922)' : undefined }}>
             {snap.queue_health.stalled}
           </b>
         </div>
@@ -95,15 +95,15 @@ export function JobsWatchPage() {
 
       {snap.by_type.length > 0 && (
         <section style={{ marginTop: 24 }}>
-          <h2 style={{ fontSize: 14, marginBottom: 8 }}>By type (24h)</h2>
+          <h2 style={{ fontSize: 14, marginBottom: 8 }}>按类型统计（24 小时）</h2>
           <table style={{ borderCollapse: 'collapse' }}>
             <thead>
               <tr style={{ color: 'var(--text-muted, #777)', fontSize: 12 }}>
-                <th style={{ textAlign: 'left', padding: '4px 12px 4px 0' }}>name</th>
-                <th style={{ textAlign: 'right', padding: '4px 12px' }}>total</th>
-                <th style={{ textAlign: 'right', padding: '4px 12px' }}>done</th>
-                <th style={{ textAlign: 'right', padding: '4px 12px' }}>fail</th>
-                <th style={{ textAlign: 'right', padding: '4px 12px' }}>dead</th>
+                <th style={{ textAlign: 'left', padding: '4px 12px 4px 0' }}>名称</th>
+                <th style={{ textAlign: 'right', padding: '4px 12px' }}>总数</th>
+                <th style={{ textAlign: 'right', padding: '4px 12px' }}>完成</th>
+                <th style={{ textAlign: 'right', padding: '4px 12px' }}>失败</th>
+                <th style={{ textAlign: 'right', padding: '4px 12px' }}>失效</th>
               </tr>
             </thead>
             <tbody>
@@ -122,15 +122,15 @@ export function JobsWatchPage() {
       )}
 
       <section style={{ marginTop: 24 }}>
-        <h2 style={{ fontSize: 14, marginBottom: 8 }}>Lease pressure (1h)</h2>
+        <h2 style={{ fontSize: 14, marginBottom: 8 }}>租约压力（1 小时）</h2>
         <div style={{ color: leasePressureColor(snap.lease_pressure_1h) }}>
-          {snap.lease_pressure_1h} bounce{snap.lease_pressure_1h === 1 ? '' : 's'}
+          {snap.lease_pressure_1h} 次退避
         </div>
       </section>
 
       {snap.top_errors.length > 0 && (
         <section style={{ marginTop: 24 }}>
-          <h2 style={{ fontSize: 14, marginBottom: 8 }}>Top errors (24h)</h2>
+          <h2 style={{ fontSize: 14, marginBottom: 8 }}>主要错误（24 小时）</h2>
           <table style={{ borderCollapse: 'collapse' }}>
             <tbody>
               {snap.top_errors.slice(0, 5).map(e => (
@@ -148,13 +148,13 @@ export function JobsWatchPage() {
 
       {snap.budget_owners.length > 0 && (
         <section style={{ marginTop: 24 }}>
-          <h2 style={{ fontSize: 14, marginBottom: 8 }}>Budget owners</h2>
+          <h2 style={{ fontSize: 14, marginBottom: 8 }}>预算所有者</h2>
           <table style={{ borderCollapse: 'collapse' }}>
             <thead>
               <tr style={{ color: 'var(--text-muted, #777)', fontSize: 12 }}>
-                <th style={{ textAlign: 'left', padding: '4px 12px 4px 0' }}>owner</th>
-                <th style={{ textAlign: 'right', padding: '4px 12px' }}>spent</th>
-                <th style={{ textAlign: 'right', padding: '4px 12px' }}>remaining</th>
+                <th style={{ textAlign: 'left', padding: '4px 12px 4px 0' }}>所有者</th>
+                <th style={{ textAlign: 'right', padding: '4px 12px' }}>已用</th>
+                <th style={{ textAlign: 'right', padding: '4px 12px' }}>剩余</th>
               </tr>
             </thead>
             <tbody>

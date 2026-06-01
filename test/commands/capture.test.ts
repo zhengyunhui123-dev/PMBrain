@@ -233,6 +233,6 @@ describe('capture — help', () => {
     } finally {
       console.log = origLog;
     }
-    expect(logCaptured.join('\n')).toContain('Usage: gbrain capture');
+    expect(logCaptured.join('\n')).toContain('用法：gbrain capture');
   });
 });

@@ -1,109 +1,109 @@
-# Executive Assistant Pattern
+# 执行助理模式
 
-## Goal
-Email triage, meeting prep, and scheduling powered by brain context -- so every interaction is informed by the full history of the relationship.
+## 目标
+利用 brain 上下文实现电子邮件分类、会议准备和日程安排 — 让每次互动都能获得完整的关系历史。
 
-## What the User Gets
-Without this: the agent triages email mechanically ("you have 12 unread"), preps for meetings with generic LinkedIn bios, and schedules without relationship context. With this: the agent knows who every sender is before reading their email, surfaces shared history before every meeting, and nudges scheduling based on relationship temperature and open threads.
+## 用户获得什么
+没有它：代理机械地分类电子邮件（"你有 12 封未读"），使用通用的 LinkedIn 简介准备会议，并且在没有上下文的情况下安排日程。有了它：代理在读取电子邮件之前就知道每个发件人是谁，在每次会议前展示共享历史，并根据关系温度和开放线程提示日程安排。
 
-## Implementation
+## 实现
 
 ```
-# WORKFLOW 1: Email Triage
+# 工作流 1：电子邮件分类
 on email_batch(emails):
     for email in emails:
-        # Step 1: Search sender BEFORE reading the email body
-        #   Brain context makes triage 10x better
+        # 步骤 1：在读取电子邮件正文之前搜索发件人
+        #   Brain 上下文使分类效果提升 10 倍
         sender_page = gbrain search "{email.sender_name}"
         if sender_page:
             context = gbrain get <sender_slug>
-            #   Now you know: who they are, relationship history,
-            #   what they care about, open threads
+            #   现在你知道：他们是谁，关系历史，
+            #   他们关心什么，开放的线程
 
-        # Step 2: Read the email WITH brain context loaded
-        #   Classification is now informed, not mechanical
+        # 步骤 2：加载 brain 上下文后读取电子邮件
+        #   分类现在是基于信息的，而不是机械的
 
-        # Step 3: Classify with context
+        # 步骤 3：根据上下文分类
         if context.relationship == "inner_circle" or context.has_open_threads:
             priority = "urgent"
         elif context.is_known_entity:
             priority = "normal"
         else:
-            priority = "noise"  # unknown sender, no brain page
+            priority = "noise"  # 未知发件人，没有 brain 页面
 
-        # Step 4: Draft reply with relationship context
+        # 步骤 4：使用关系上下文起草回复
         if needs_reply(email):
             draft = compose_reply(
                 email,
-                context=context,           # their brain page
-                open_threads=context.open_threads,  # what you're working on together
-                relationship=context.relationship   # tone calibration
+                context=context,           # 他们的 brain 页面
+                open_threads=context.open_threads,  # 你们正在一起做什么
+                relationship=context.relationship   # 语气校准
             )
 
-# WORKFLOW 2: Meeting Prep
+# 工作流 2：会议准备
 on upcoming_meeting(meeting):
     briefing = {}
     for attendee in meeting.attendees:
-        # Search brain for each attendee
+        # 为每个参会者搜索 brain
         results = gbrain search "{attendee.name}"
         if results:
             page = gbrain get <attendee_slug>
             briefing[attendee] = {
                 "compiled_truth": page.compiled_truth,
-                "last_interaction": page.timeline[0],     # most recent
+                "last_interaction": page.timeline[0],     # 最近的一次
                 "open_threads": page.open_threads,
                 "relationship_temperature": page.relationship,
                 "relevant_deals": gbrain get_links <attendee_slug>,
             }
         else:
-            briefing[attendee] = "No brain page -- consider enriching"
+            briefing[attendee] = "没有 brain 页面 -- 考虑丰富"
 
-    # Surface: shared history, what to follow up on, what to watch for
-    # "Last time you discussed the Series B timeline. Pedro was concerned
-    #  about burn rate. Here's the latest from his company page."
+    # 展示：共享历史，需要跟进的内容，需要注意的内容
+    # "上次你讨论了 B 轮时间表。Pedro 担心
+    #  燃烧率。这是他公司页面的最新信息。"
 
-# WORKFLOW 3: Post-Inbox Brain Updates
+# 工作流 3：收件箱后的 Brain 更新
 on inbox_cleared():
     for email in processed_emails:
         if email.contained_new_information:
-            # Update the sender's brain page with new signal
+            # 使用新信号更新发件人的 brain 页面
             gbrain add_timeline_entry <sender_slug> \
-                --entry "Email re: {subject}. Key info: {extracted_signal}" \
-                --source "email from {sender} re {subject}, {date}"
+                --entry "电子邮件回复：{subject}。关键信息：{extracted_signal}" \
+                --source "来自 {sender} 的电子邮件，关于 {subject}，{date}"
 
-            # Update any mentioned entity pages too
+            # 也更新任何提到的实体页面
             for entity in email.mentioned_entities:
                 gbrain add_timeline_entry <entity_slug> \
                     --entry "{what_was_said_about_them}" \
-                    --source "email from {sender}, {date}"
+                    --source "来自 {sender} 的电子邮件，{date}"
 
-# WORKFLOW 4: Scheduling Nudges
+# 工作流 4：日程安排提示
 on schedule_request(meeting):
     for attendee in meeting.attendees:
         page = gbrain get <attendee_slug>
         if page.last_interaction > 6_weeks_ago:
-            nudge("You haven't met with {attendee} in {weeks} weeks")
+            nudge("你已经 {weeks} 周没有与 {attendee} 会面了")
         if page.has_open_threads:
-            nudge("{attendee} has an open thread about {topic}")
+            nudge("{attendee} 有一个关于 {topic} 的开放线程")
         if page.relationship_temperature == "cooling":
-            nudge("Relationship with {attendee} may need attention")
+            nudge("与 {attendee} 的关系可能需要关注")
 ```
 
-## Tricky Spots
+## 棘手的地方
 
-1. **Search sender BEFORE reading the email.** This is counterintuitive but critical. Loading brain context first means you know who they are, what you're working on together, and what they care about -- before you even see the subject line. The triage is informed, not mechanical.
-2. **Unknown senders with no brain page are almost always noise.** If `gbrain search` returns nothing for a sender, they're probably not important. Classify as low priority unless the email content signals otherwise.
-3. **Meeting prep is the highest-leverage EA workflow.** The user walks into every meeting already briefed on each attendee: last interaction, open threads, relationship history. This is the difference between "you have a meeting at 3" and "you have a meeting at 3 with Pedro -- last time you discussed the Series B, he was concerned about burn rate."
-4. **Post-inbox brain updates are where the brain compounds.** Every email is signal. If you clear the inbox without updating brain pages, the information is lost. This is the step most agents skip.
-5. **Scheduling nudges require timeline data.** "You haven't met with Diana in 6 weeks" only works if meeting pages have been ingested with proper entity propagation (see meeting-ingestion guide).
+1. **在读取电子邮件之前搜索发件人。** 这是反直觉的但至关重要。首先加载 brain 上下文意味着你知道他们是谁，你们一起在做什么，以及他们关心什么 — 甚至在看到主题行之前。分类是基于信息的，而不是机械的。
+2. **没有 brain 页面的未知发件人几乎总是噪音。** 如果 `gbrain search` 对发件人返回空，他们可能不重要。分类为低优先级，除非电子邮件内容发出其他信号。
+3. **会议准备是投资回报率最高的 EA 工作流。** 用户走进每次会议时都已经了解了每个参会者：上次互动，开放线程，关系历史。这就是"你 3 点有会议"和"你 3 点有会议与 Pedro — 上次你讨论了 B 轮，他担心燃烧率"之间的区别。
+4. **收件箱后的 brain 更新是 brain 复合的地方。** 每封电子邮件都是信号。如果你在不更新 brain 页面的情况下清除收件箱，信息就会丢失。这是大多数代理跳过的一步。
+5. **日程安排提示需要时间线数据。** "你已经 6 周没有与 Diana 会面了"只有在会议页面已经通过适当的实体传播被摄取时才有效（参见会议摄取指南）。
 
-## How to Verify
+## 如何验证
 
-1. Run meeting prep for tomorrow's calendar. For each attendee, confirm the agent ran `gbrain search` and loaded their brain page before generating the briefing.
-2. Triage 5 emails. Confirm the agent searched for each sender in the brain before classifying the email.
-3. After clearing an inbox, check 2 sender brain pages with `gbrain get <slug>`. Confirm new timeline entries were added with information from the emails.
-4. Check a scheduling suggestion. Confirm the agent referenced the attendee's brain page (last interaction date, open threads) in the nudge.
-5. Send a test email from someone with a brain page. Confirm the triage response references their relationship context, not just the email content.
+1. 为明天的日历运行会议准备。对于每个参会者，确认代理在生成简报之前运行了 `gbrain search` 并加载了他们的 brain 页面。
+2. 分类 5 封电子邮件。确认代理在对电子邮件进行分类之前在 brain 中搜索了每个发件人。
+3. 清除收件箱后，使用 `gbrain get <slug>` 检查 2 个发件人的 brain 页面。确认使用来自电子邮件的信息添加了新的时间线条目。
+4. 检查日程安排建议。确认代理在提示中引用了参会者的 brain 页面（上次互动日期，开放线程）。
+5. 从有 brain 页面的人那里发送测试电子邮件。确认分类响应引用了他们的关系上下文，而不仅仅是电子邮件内容。
 
 ---
-*Part of the [GBrain Skillpack](../GBRAIN_SKILLPACK.md).*
+*是 [GBrain Skillpack](../GBRAIN_SKILLPACK.md) 的一部分。*
