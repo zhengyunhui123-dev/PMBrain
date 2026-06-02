@@ -1,0 +1,43 @@
+import type { Recipe } from '../types.ts';
+
+/**
+ * MIMO (小米开放平台). OpenAI-compatible API endpoint.
+ * Supports chat and embedding via OpenAI-compatible format.
+ */
+export const mimo: Recipe = {
+  id: 'mimo',
+  name: 'MIMO (小米开放平台)',
+  tier: 'openai-compat',
+  implementation: 'openai-compatible',
+  base_url_default: 'https://api.xiaomimimo.com/v1',
+  auth_env: {
+    required: ['OPENAI_API_KEY'],
+    setup_url: 'https://platform.xiaomimimo.com',
+  },
+  touchpoints: {
+    embedding: {
+      models: ['text-embedding-3-large', 'text-embedding-3-small'],
+      default_dims: 1536,
+      dims_options: [256, 512, 768, 1024, 1536, 3072],
+      cost_per_1m_tokens_usd: 0.13,
+      price_last_verified: '2026-06-02',
+      max_batch_tokens: 100_000,
+    },
+    expansion: {
+      models: ['gpt-5.2', 'gpt-4o-mini', 'mimo-v2.5-pro', 'mimo-v2-pro'],
+      cost_per_1m_tokens_usd: 0.15,
+      price_last_verified: '2026-06-02',
+    },
+    chat: {
+      models: ['gpt-5.2', 'gpt-4o-mini', 'mimo-v2.5-pro', 'mimo-v2-pro', 'mimo-v2-flash', 'mimo-v2-omni'],
+      supports_tools: true,
+      supports_subagent_loop: false,
+      supports_prompt_cache: false,
+      max_context_tokens: 128000,
+      cost_per_1m_input_usd: 1.25,
+      cost_per_1m_output_usd: 10.0,
+      price_last_verified: '2026-06-02',
+    },
+  },
+  setup_hint: 'Get an API key at https://platform.xiaomimimo.com, then `export OPENAI_API_KEY=sk-...`',
+};

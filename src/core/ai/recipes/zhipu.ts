@@ -33,6 +33,23 @@ export const zhipu: Recipe = {
       dims_options: [256, 512, 1024, 2048],
       max_batch_tokens: 8192,
       chars_per_token: 2,
+      cost_per_1m_tokens_usd: 0.01,
+      price_last_verified: '2026-06-02',
+    },
+    expansion: {
+      models: ['glm-4-plus', 'glm-4-air', 'glm-4-flash'],
+      cost_per_1m_tokens_usd: 0.02,
+      price_last_verified: '2026-06-02',
+    },
+    chat: {
+      models: ['glm-4-plus', 'glm-4-air', 'glm-4-flash', 'glm-4v-plus'],
+      supports_tools: true,
+      supports_subagent_loop: false,
+      supports_prompt_cache: false,
+      max_context_tokens: 128000,
+      cost_per_1m_input_usd: 0.05,
+      cost_per_1m_output_usd: 0.15,
+      price_last_verified: '2026-06-02',
     },
   },
   setup_hint:
