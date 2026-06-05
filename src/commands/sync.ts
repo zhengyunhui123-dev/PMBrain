@@ -16,6 +16,7 @@ import {
   acknowledgeSyncFailures,
   formatCodeBreakdown,
 } from '../core/sync.ts';
+import { importOfficeFile, isOfficeFilePath } from '../core/office-import.ts';
 import { estimateTokens, CHUNKER_VERSION } from '../core/chunkers/code.ts';
 import { EMBEDDING_MODEL, estimateEmbeddingCostUsd } from '../core/embedding.ts';
 import { errorFor, serializeError } from '../core/errors.ts';
@@ -101,7 +102,7 @@ function estimateSyncAllCost(sources: Array<{ local_path: string | null; config:
 
   for (const src of sources) {
     if (!src.local_path) continue;
-    const cfg = (src.config || {}) as { syncEnabled?: boolean; strategy?: 'markdown' | 'code' | 'auto' };
+    const cfg = (src.config || {}) as { syncEnabled?: boolean; strategy?: 'markdown' | 'code' | 'auto'; includeOffice?: boolean };
     if (cfg.syncEnabled === false) continue;
     activeSources++;
     let sourceTokens = 0;
@@ -112,7 +113,10 @@ function estimateSyncAllCost(sources: Array<{ local_path: string | null; config:
       // walkSyncableFiles used statSync (followed symlinks). New walker
       // uses lstat + inode-cycle + max-depth so the preview matches
       // what the real sync will actually walk.
-      const files = collectSyncableFiles(src.local_path, { strategy: cfg.strategy ?? 'markdown' });
+      const files = collectSyncableFiles(src.local_path, {
+        strategy: cfg.strategy ?? 'markdown',
+        includeOffice: cfg.includeOffice === true,
+      });
       for (const fullPath of files) {
         try {
           const stat = statSync(fullPath);
@@ -171,6 +175,8 @@ export interface SyncOpts {
   sourceId?: string;
   /** Multi-repo: sync strategy override (markdown, code, auto). */
   strategy?: 'markdown' | 'code' | 'auto';
+  /** Include Word-like Office files alongside markdown in import/sync. */
+  includeOffice?: boolean;
   /**
    * Number of parallel workers for the import phase. When > 1, each worker
    * gets its own small Postgres connection pool and files are dispatched via
@@ -1117,7 +1123,9 @@ async function performSyncInner(engine: BrainEngine, opts: SyncOpts): Promise<Sy
   }
 
   // Filter to syncable files (strategy-aware)
-  const syncOpts = opts.strategy ? { strategy: opts.strategy } : undefined;
+  const syncOpts = (opts.strategy || opts.includeOffice)
+    ? { strategy: opts.strategy, includeOffice: opts.includeOffice }
+    : undefined;
   const filtered: SyncManifest = {
     added: manifest.added.filter(p => isSyncable(p, syncOpts)),
     modified: manifest.modified.filter(p => isSyncable(p, syncOpts)),
@@ -1443,7 +1451,9 @@ async function performSyncInner(engine: BrainEngine, opts: SyncOpts): Promise<Sy
       // Reimport at new path (picks up content changes)
       const filePath = join(repoPath, to);
       if (existsSync(filePath)) {
-        const result = await importFile(engine, filePath, to, { noEmbed, sourceId: opts.sourceId, activePack: syncActivePack });
+        const result = opts.includeOffice && isOfficeFilePath(to)
+          ? await importOfficeFile(engine, filePath, to, { noEmbed, sourceId: opts.sourceId, activePack: syncActivePack })
+          : await importFile(engine, filePath, to, { noEmbed, sourceId: opts.sourceId, activePack: syncActivePack });
         if (result.status === 'imported') chunksCreated += result.chunks;
       }
       pagesAffected.push(newSlug);
@@ -1510,7 +1520,9 @@ async function performSyncInner(engine: BrainEngine, opts: SyncOpts): Promise<Sy
         // / addLink) target (sourceId, slug). Pre-fix the schema DEFAULT
         // 'default' was applied even for non-default sources, fabricating
         // duplicate rows that crashed bare-slug subqueries with Postgres 21000.
-        const result = await importFile(eng, filePath, path, { noEmbed, sourceId: opts.sourceId, activePack: syncActivePack });
+        const result = opts.includeOffice && isOfficeFilePath(path)
+          ? await importOfficeFile(eng, filePath, path, { noEmbed, sourceId: opts.sourceId, activePack: syncActivePack })
+          : await importFile(eng, filePath, path, { noEmbed, sourceId: opts.sourceId, activePack: syncActivePack });
         if (result.status === 'imported') {
           chunksCreated += result.chunks;
           pagesAffected.push(result.slug);
@@ -1830,7 +1842,10 @@ async function performFullSync(
   // code --dry-run` always reported zero files even when ~1500 code
   // files were waiting.
   if (opts.dryRun) {
-    const allFiles = collectSyncableFiles(repoPath, { strategy: opts.strategy ?? 'markdown' });
+    const allFiles = collectSyncableFiles(repoPath, {
+      strategy: opts.strategy ?? 'markdown',
+      includeOffice: opts.includeOffice,
+    });
     slog(
       `Full-sync dry run (strategy=${opts.strategy ?? 'markdown'}): ` +
       `${allFiles.length} file(s) would be imported ` +
@@ -1861,6 +1876,7 @@ async function performFullSync(
   const { runImport } = await import('./import.ts');
   const importArgs = [repoPath];
   if (opts.noEmbed) importArgs.push('--no-embed');
+  if (opts.includeOffice) importArgs.push('--include-office');
   if (fullConcurrency > 1) importArgs.push('--workers', String(fullConcurrency));
   // v0.31.2: thread strategy through so code-strategy first sync
   // actually enumerates code files (closes bug 1).
@@ -2123,6 +2139,7 @@ export async function runSync(engine: BrainEngine, args: string[]) {
     process.exit(1);
   }
   const strategyArg = args.find((a, i) => args[i - 1] === '--strategy') as SyncOpts['strategy'] | undefined;
+  const includeOffice = args.includes('--include-office');
   const concurrencyStr = args.find((a, i) => args[i - 1] === '--concurrency' || args[i - 1] === '--workers');
   const parallelStr = args.find((a, i) => args[i - 1] === '--parallel');
   // v0.22.13 (PR #490 Q2): parseWorkers throws on '0', '-3', 'foo', '1.5' instead
@@ -2326,7 +2343,7 @@ export async function runSync(engine: BrainEngine, args: string[]) {
     const perSourceResults: PerSourceResult[] = [];
 
     const runOne = async (src: typeof sources[number]): Promise<SyncResult> => {
-      const cfg = (src.config || {}) as { strategy?: 'markdown' | 'code' | 'auto' };
+      const cfg = (src.config || {}) as { strategy?: 'markdown' | 'code' | 'auto'; includeOffice?: boolean };
       // D18: parallel path defers embed; auto-enqueue embed-backfill after.
       const effectiveNoEmbed = v2Enabled && !serialFlag && !noEmbed ? true : noEmbed;
       // v0.41.13.0 (T6 / D-V3-3 / D-V4-mech-6) — per-source AbortController.
@@ -2358,6 +2375,7 @@ export async function runSync(engine: BrainEngine, args: string[]) {
         skipFailed, retryFailed,
         sourceId: src.id,
         strategy: cfg.strategy,
+        includeOffice: includeOffice || cfg.includeOffice === true,
         concurrency,
         signal: controller?.signal,
       };
@@ -2557,7 +2575,7 @@ export async function runSync(engine: BrainEngine, args: string[]) {
   singleSourceTimer?.unref?.();
   const opts: SyncOpts = {
     repoPath, dryRun, full, noPull, noEmbed, skipFailed, retryFailed, sourceId,
-    strategy: strategyArg, concurrency,
+    strategy: strategyArg, includeOffice, concurrency,
     signal: singleSourceController?.signal,
   };
 
@@ -2715,10 +2733,11 @@ export async function syncOneSource(
     noEmbed: boolean;
     skipFailed: boolean;
     retryFailed: boolean;
+    includeOffice?: boolean;
     concurrency: number | undefined;
   },
 ): Promise<{ result: SyncResult; log: string }> {
-  const cfg = (src.config || {}) as { strategy?: 'markdown' | 'code' | 'auto' };
+  const cfg = (src.config || {}) as { strategy?: 'markdown' | 'code' | 'auto'; includeOffice?: boolean };
   const log = `\n--- Syncing source: ${src.name} ---\n`;
   const repoOpts: SyncOpts = {
     repoPath: src.local_path!,
@@ -2730,6 +2749,7 @@ export async function syncOneSource(
     retryFailed: shared.retryFailed,
     sourceId: src.id,
     strategy: cfg.strategy,
+    includeOffice: shared.includeOffice || cfg.includeOffice === true,
     concurrency: shared.concurrency,
     // lockId defaults to `gbrain-sync:${src.id}` via the invariant in
     // performSync (no explicit override needed — sourceId triggers it).

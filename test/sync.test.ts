@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeAll, afterAll, beforeEach, afterEach } from 'bun:test';
-import { buildSyncManifest, isSyncable, pathToSlug, pruneDir, isCodeFilePath } from '../src/core/sync.ts';
+import { buildSyncManifest, isSyncable, pathToSlug, pruneDir, isCodeFilePath, isOfficeFilePath } from '../src/core/sync.ts';
 import { buildAutoEmbedArgs, buildGitInvocation } from '../src/commands/sync.ts';
 import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from 'fs';
 import { join } from 'path';
@@ -74,6 +74,14 @@ describe('isSyncable', () => {
     expect(isSyncable('people/photo.jpg')).toBe(false);
     expect(isSyncable('config.json')).toBe(false);
     expect(isSyncable('src/cli.ts')).toBe(false);
+  });
+
+  test('accepts Word-like Office files only when includeOffice is enabled', () => {
+    expect(isSyncable('docs/proposal.docx')).toBe(false);
+    expect(isSyncable('docs/proposal.docx', { includeOffice: true })).toBe(true);
+    expect(isSyncable('docs/legacy.doc', { includeOffice: true })).toBe(true);
+    expect(isSyncable('docs/note.wps', { includeOffice: true })).toBe(true);
+    expect(isSyncable('docs/slides.pptx', { includeOffice: true })).toBe(false);
   });
 
   test('rejects files in hidden directories', () => {
@@ -173,6 +181,16 @@ describe('isCodeFilePath', () => {
     expect(isCodeFilePath('src/foo.ts')).toBe(true);
     expect(isCodeFilePath('src/bar.py')).toBe(true);
     expect(isCodeFilePath('config.toml')).toBe(true);
+  });
+});
+
+describe('isOfficeFilePath', () => {
+  test('recognizes first-wave Word-like Office extensions', () => {
+    expect(isOfficeFilePath('docs/proposal.docx')).toBe(true);
+    expect(isOfficeFilePath('docs/legacy.DOC')).toBe(true);
+    expect(isOfficeFilePath('docs/note.wps')).toBe(true);
+    expect(isOfficeFilePath('docs/slides.pptx')).toBe(false);
+    expect(isOfficeFilePath('docs/sheet.xlsx')).toBe(false);
   });
 });
 

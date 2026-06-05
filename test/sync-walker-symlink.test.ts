@@ -16,7 +16,7 @@
  */
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
 import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync } from 'fs';
-import { join } from 'path';
+import { basename, join } from 'path';
 import { tmpdir } from 'os';
 import { collectSyncableFiles } from '../src/commands/import.ts';
 import { withEnv } from './helpers/with-env.ts';
@@ -159,6 +159,20 @@ describe('collectSyncableFiles symlink + cycle hardening', () => {
       expect(first.map(f => f.replace(tmp, ''))).toEqual([
         '/a.md', '/b.md', '/sub/c.md',
       ]);
+    });
+  });
+
+  test('8. includeOffice admits Word files alongside markdown', async () => {
+    await withEnv({ GBRAIN_EMBEDDING_MULTIMODAL: undefined }, () => {
+      writeFileSync(join(tmp, 'a.md'), 'a\n');
+      writeFileSync(join(tmp, 'proposal.docx'), Buffer.from([0x50, 0x4b, 0x03, 0x04]));
+      writeFileSync(join(tmp, 'slides.pptx'), Buffer.from([0x50, 0x4b, 0x03, 0x04]));
+
+      const off = collectSyncableFiles(tmp, { strategy: 'markdown' });
+      const on = collectSyncableFiles(tmp, { strategy: 'markdown', includeOffice: true });
+
+      expect(off.map(f => basename(f)).sort()).toEqual(['a.md']);
+      expect(on.map(f => basename(f)).sort()).toEqual(['a.md', 'proposal.docx']);
     });
   });
 });

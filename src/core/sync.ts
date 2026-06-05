@@ -35,6 +35,7 @@ export type SyncStrategy = 'markdown' | 'code' | 'auto';
 
 interface SyncableOptions {
   strategy?: SyncStrategy;
+  includeOffice?: boolean;
   include?: string[];
   exclude?: string[];
 }
@@ -174,17 +175,29 @@ export function isMarkdownFilePath(path: string): boolean {
   return path.endsWith('.md') || path.endsWith('.mdx');
 }
 
+const OFFICE_EXTENSIONS = new Set(['.docx', '.doc', '.wps']);
+
+export function isOfficeFilePath(path: string): boolean {
+  const lower = path.toLowerCase();
+  for (const ext of OFFICE_EXTENSIONS) {
+    if (lower.endsWith(ext)) return true;
+  }
+  return false;
+}
+
 function isMultimodalEnabled(): boolean {
   return process.env.GBRAIN_EMBEDDING_MULTIMODAL === 'true';
 }
 
-function isAllowedByStrategy(path: string, strategy: SyncStrategy): boolean {
-  if (strategy === 'markdown') return isMarkdownFilePath(path);
+function isAllowedByStrategy(path: string, strategy: SyncStrategy, includeOffice = false): boolean {
+  const officeAllowed = includeOffice && isOfficeFilePath(path);
+  if (strategy === 'markdown') return isMarkdownFilePath(path) || officeAllowed;
   if (strategy === 'code') return isCodeFilePath(path);
   // 'auto' / default: markdown + code, plus images when multimodal is on.
   return (
     isMarkdownFilePath(path) ||
     isCodeFilePath(path) ||
+    officeAllowed ||
     (isMultimodalEnabled() && isImageFilePath(path))
   );
 }
@@ -328,7 +341,7 @@ export const SYNC_SKIP_FILES = ['schema.md', 'index.md', 'log.md', 'README.md'] 
 function classifySync(path: string, opts: SyncableOptions = {}): SyncableReason | null {
   const strategy = opts.strategy || 'markdown';
 
-  if (!isAllowedByStrategy(path, strategy)) return 'strategy';
+  if (!isAllowedByStrategy(path, strategy, opts.includeOffice)) return 'strategy';
 
   // Skip every path segment that pruneDir would block walkers from descending
   // into. Catches hidden dirs (`.git`, `.obsidian`), `.raw/` sidecars,

@@ -4,6 +4,7 @@ import { join, relative } from 'path';
 import { cpus, totalmem } from 'os';
 import type { BrainEngine } from '../core/engine.ts';
 import { importFile, importImageFile, isImageFilePath } from '../core/import-file.ts';
+import { importOfficeFile, isOfficeFilePath } from '../core/office-import.ts';
 import { loadConfig, gbrainPath } from '../core/config.ts';
 import { createProgress } from '../core/progress.ts';
 import { getCliOptions, cliOptsToProgressOptions } from '../core/cli-options.ts';
@@ -49,6 +50,7 @@ export async function runImport(
   const noEmbed = args.includes('--no-embed');
   const fresh = args.includes('--fresh');
   const jsonOutput = args.includes('--json');
+  const includeOffice = args.includes('--include-office');
 
   // T7 (D9): refuse cleanly when init persisted the deferred-setup sentinel,
   // unless the user is explicitly skipping embedding via `--no-embed` (in
@@ -163,7 +165,7 @@ export async function runImport(
   const dirArg = args.find((a, i) => !a.startsWith('--') && !flagValues.has(i));
 
   if (!dirArg) {
-    console.error('Usage: gbrain import <dir> [--no-embed] [--workers N] [--fresh] [--source-id <id>] [--json]');
+    console.error('Usage: gbrain import <dir> [--no-embed] [--workers N] [--fresh] [--source-id <id>] [--include-office] [--json]');
     process.exit(1);
   }
   const dir: string = dirArg;  // narrowed; survives closure capture
@@ -175,7 +177,7 @@ export async function runImport(
   const strategy: SyncStrategy = opts.strategy ?? 'markdown';
   const _walkT0 = Date.now();
   console.error(`[gbrain phase] import.collect_files start dir=${dir} strategy=${strategy}`);
-  const allFiles = collectSyncableFiles(dir, { strategy });
+  const allFiles = collectSyncableFiles(dir, { strategy, includeOffice });
   console.error(
     `[gbrain phase] import.collect_files done ${Date.now() - _walkT0}ms files=${allFiles.length}`,
   );
@@ -238,6 +240,8 @@ export async function runImport(
       // unreachable when the gate is off; defense-in-depth check anyway.
       const result = isImageFilePath(relativePath) && process.env.GBRAIN_EMBEDDING_MULTIMODAL === 'true'
         ? await importImageFile(eng, filePath, relativePath, { noEmbed, sourceId })
+        : includeOffice && isOfficeFilePath(relativePath)
+          ? await importOfficeFile(eng, filePath, relativePath, { noEmbed, sourceId, activePack: importActivePack })
         : await importFile(eng, filePath, relativePath, { noEmbed, sourceId, activePack: importActivePack });
       const _fileMs = Date.now() - _fileT0;
       if (_fileMs > 5000) {
@@ -480,6 +484,7 @@ function resolveMaxWalkDepth(): number {
 
 interface CollectOpts {
   strategy?: SyncStrategy;
+  includeOffice?: boolean;
 }
 
 /**
@@ -493,16 +498,19 @@ function isCollectibleForWalker(
   path: string,
   strategy: SyncStrategy,
   multimodalOn: boolean,
+  includeOffice: boolean,
 ): boolean {
+  const officeAllowed = includeOffice && isOfficeFilePath(path);
   switch (strategy) {
     case 'code':
       return isCodeFilePath(path);
     case 'markdown':
-      return isMarkdownFilePath(path) || (multimodalOn && isImageFilePathFromSync(path));
+      return isMarkdownFilePath(path) || officeAllowed || (multimodalOn && isImageFilePathFromSync(path));
     case 'auto':
       return (
         isMarkdownFilePath(path) ||
         isCodeFilePath(path) ||
+        officeAllowed ||
         (multimodalOn && isImageFilePathFromSync(path))
       );
   }
@@ -527,6 +535,7 @@ function isCollectibleForWalker(
  */
 export function collectSyncableFiles(dir: string, opts: CollectOpts = {}): string[] {
   const strategy: SyncStrategy = opts.strategy ?? 'markdown';
+  const includeOffice = opts.includeOffice === true;
   const multimodalOn = process.env.GBRAIN_EMBEDDING_MULTIMODAL === 'true';
   const maxDepth = resolveMaxWalkDepth();
   const visitedInodes = new Map<string, true>();
@@ -573,7 +582,7 @@ export function collectSyncableFiles(dir: string, opts: CollectOpts = {}): strin
         visitedInodes.set(inodeKey, true);
         walk(full, depth + 1);
       } else if (stat.isFile()) {
-        if (!isCollectibleForWalker(entry, strategy, multimodalOn)) continue;
+        if (!isCollectibleForWalker(entry, strategy, multimodalOn, includeOffice)) continue;
         files.push(full);
       }
     }
