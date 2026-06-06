@@ -2,111 +2,88 @@
 
 PMBrain 是一个**纯本地、开箱即用**的项目管理知识大脑。把你的项目文档、会议纪要、需求文档、合同文件放进一个文件夹，AI 就能自动构建知识图谱、追踪进度、预警风险、生成报告。
 
-基于 GBrain（Y Combinator 总裁 Garry Tan 开发的开源个人知识大脑）改造，保留完整知识管理能力，增加项目管理增强层。
+基于 GBrain（Y Combinator 总裁 Garry Tan 开发的开源个人知识大脑）深度改造，保留完整知识管理能力，做了大量国产化修改，更符合国人的使用习惯。
 
 ---
 
-## 特色
+## 核心能力
 
-### 对话上下文总结，知识不遗漏
+PMBrain 集成了 GBrain 的核心能力，安装后相当于给你的 AI 工具装了一个**有记忆的大脑**。
 
-你在 CodeBuddy 或其他 AI 工具里聊过的所有内容——技术方案讨论、决策过程、问题排查——PMBrain 的 **`capture`** 命令一键存入知识库。
+你的 AI 工具（CodeBuddy、Codex、Cursor、Claude Code 等）原本每一次对话都是独立的，聊完就忘。有了 PMBrain，AI 可以搜索你存过的所有文档、笔记、对话记录，回答问题时带着历史上下文。
 
-```powershell
-bun src/cli.ts capture "把刚才的讨论记下来"
-```
+- **混合搜索引擎**：向量搜索 + 关键词 + 知识图谱三重融合，搜索质量远高于单纯的关键词匹配
+- **知识图谱**：自动从文档中提取人物、公司、项目之间的关联关系
+- **MCP 接口**：CodeBuddy、Codex、Cursor、Claude Code 等 AI 工具在对话中直接调用知识库
+- **数据本地化**：知识库存储在你自己的电脑或服务器上，不会上传到第三方云端，确保公司机密和个人隐私不泄露
+- **双引擎架构**：支持本地 PGLite 和 Docker Postgres 两种部署方式
 
-AI 对话是碎片化的，PMBrain 把它们变成可持续检索的知识。以后再搜"那个方案为什么选 A 不选 B"，答案就在那里。
+## 特色功能
 
-### 导入功能扩展（支持常见办公文档）
+### 导入即用，无需转换格式
 
-原本只支持 Markdown，现扩展支持国人常用的办公文档格式，无需手动转换：
+支持国人常用的办公文档格式，直接导入，无需手动转换：
 
 | 格式 | 说明 |
 |------|------|
-| `.md` | Markdown 笔记（原生支持） |
-| `.docx` | Word 文档（`--include-office`） |
-| `.pdf` | PDF 文档（`--include-office`） |
-| `.xlsx` / `.xls` | Excel 表格（`--include-office`） |
-| `.csv` | 表格数据（`--include-office`） |
-| `.mp3` / `.wav` / `.m4a` / `.ogg` / `.flac` | 音频文件（自动转写为文字） |
+| `.md` | Markdown 笔记 |
+| `.docx` | Word 文档 |
+| `.pdf` | PDF 文档 |
+| `.xlsx` / `.xls` | Excel 表格 |
+| `.csv` | 表格数据 |
+| `.mp3` / `.wav` / `.m4a` | 音频文件（自动转写） |
 
 ```powershell
-# 导入整个项目文件夹
-bun src/cli.ts import "D:\项目文件夹" --include-office
+bun src/cli.ts import "D:\项目文档" --include-office
+```
 
-# 注册为 source，后续增量同步
-bun src/cli.ts sources add my-project --path "D:\项目文件夹"
+### 增量同步
+
+注册文件夹为 source 后，每次启动自动同步更新的文件。
+
+```powershell
+bun src/cli.ts sources add my-project --path "D:\项目文档"
 bun src/cli.ts sync --source my-project
 ```
 
-> doc 格式（旧版 Word）、视频导入正在研究中。
+### 搜索可视化 + 可溯源
 
-### 增量同步，每天开机自动更新
-
-注册为 source 的文件夹，每次启动自动增量同步，只处理新增和修改的文件：
+每个搜索结果可以查看评分是怎么来的：
 
 ```powershell
-# 启动时一键同步所有 source
-bun src/cli.ts sync --all
-bun src/cli.ts embed --stale
+gbrain search "项目进度" --explain
 ```
-
-已经提供了一个 `start-pmbrain.ps1` 启动脚本，一键完成同步 + 嵌入。
-
-### 混合搜索（可视化 + 可溯源）
-
-PMBrain 的搜索不是黑盒。每个搜索结果都可以查看**分阶段评分归属**：
-
-```powershell
-bun src/cli.ts search "项目进度" --explain
-```
-
-输出示例：
-
-```
-1. projects/alpha (score=12.4)
-   base=10.2 (rrf+cosine)
-   + backlink ×1.08
-   + adjacency ×1.05 (hits=3)
-   = final 12.4
-```
-
-搜索融合了四种信号：**向量搜索**（语义匹配）+ **关键词搜索**（精确匹配）+ **知识图谱**（实体关联）+ **重排序**（精排优化）。每一步都可解释、可溯源。
-
-### 自动化维护
-
-PMBrain 每晚自动跑一次维护周期：修复链接 → 提取事实 → 检测模式 → 补全嵌入 → 项目健康评估 → 风险检测 → 报告生成。
-
-```powershell
-bun src/cli.ts dream
-```
-
-### 项目管理增强
-
-在知识管理能力之上，新增面向项目经理的功能：
-
-- **项目健康度评估**：自动分析项目状态
-- **风险检测**：识别潜在风险
-- **报告生成**：自动生成项目周报
-- **PM 模式包**：7 种项目管理页面类型（project / task / milestone / risk / decision / meeting / stakeholder）
-
-### 两种部署方式
-
-**PGLite（本地嵌入式）**：不需要安装 Docker，一条命令初始化。但在 Windows 上 PGLite 的 WASM 运行时有兼容性问题，部分环境可能初始化失败。
-
-**Docker + Postgres（推荐）**：更稳定，适合生产环境。Windows 用户推荐优先使用此方式。
 
 ### 多模型支持（国内可用）
 
 内置 18 家 AI 提供商，国内可直接使用：
 
-| 提供商 | 用途 | 配置 Key |
-|--------|------|---------|
-| **智谱 BigModel**（`zhipu:embedding-3`） | 向量嵌入 | `zhipu_api_key` |
-| **MIMO 小米**（`mimo:mimo-v2.5-pro`） | 搜索扩展、对话 | `mimo_api_key` |
-| **DeepSeek** | 对话（备用） | `deepseek_api_key` |
-| OpenAI / Anthropic / Ollama / 更多 | 嵌入/对话/重排序 | 对应 API Key |
+| 提供商 | 用途 |
+|--------|------|
+| 智谱 BigModel | 向量嵌入、对话 |
+| MIMO 小米 | 搜索扩展、对话 |
+| DeepSeek | 对话 |
+| OpenAI / Anthropic / Ollama | 嵌入/对话/重排序 |
+
+## 使用场景
+
+### 个人知识库
+
+- **对话沉淀**：把你和 AI 的每一次讨论保存下来。不管在 CodeBuddy、Codex、Cursor 还是 Claude Code，所有工具的知识沉淀到同一个地方
+- **文档归集**：日常文档、办公文件、笔记直接导入，支持 Word、PDF、Excel、Markdown、音频等格式
+- **增量同步**：注册文件夹后每次开机自动更新，只处理新增和修改的文件
+
+### 项目经理
+
+把项目文档、会议纪要、需求文件放入一个文件夹，AI 自动构建知识图谱，追踪进度，预警风险，生成周报。
+
+### 团队协作
+
+PMBrain 作为团队的共享知识库，MCP 接入 AI 工具后，每个人在对话中直接调取知识。新成员加入可以搜索历史讨论和决策记录。
+
+### AI 编程辅助
+
+在 CodeBuddy、Codex、Cursor 中开发时，PMBrain 作为知识库后端，AI 可以搜索技术方案、查看历史决策，回答更准确。
 
 ---
 
@@ -294,6 +271,34 @@ MCP 配置如下：
 
 ---
 
+## 配置说明
+
+### API Key 配置
+
+PMBrain 需要调用 AI 接口来生成向量和回答，Key 配置在 `~/.gbrain/config.json` 中：
+
+```json
+{
+  "zhipu_api_key": "你的智谱Key",
+  "mimo_api_key": "你的MIMO Key",
+  "openai_api_key": "sk-xxx"
+}
+```
+
+| 功能 | 推荐提供商 | 模型 | 是否需要 Key |
+|------|-----------|------|-------------|
+| 向量化（必需） | 智谱 BigModel | `zhipu:embedding-3` | ✅ `zhipu_api_key` |
+| 对话/搜索扩展（可选） | MIMO 小米 | `mimo:mimo-v2.5-pro` | ✅ `mimo_api_key` |
+| 对话备用（可选） | DeepSeek | `deepseek:deepseek-chat` | ✅ `deepseek_api_key` |
+
+> **向量化是搜索的基础**，配置了 `zhipu_api_key` 才能让搜索生效。智谱的向量模型 `embedding-3` 效果好、价格低（每百万 token 仅 0.01 美元），国内可直接访问 [open.bigmodel.cn](https://open.bigmodel.cn) 申请 Key。
+
+### 模型切换
+
+编辑 `~/.gbrain/config.json` 中的 `embedding_model`、`chat_model` 字段即可切换。
+
+---
+
 ## 项目结构
 
 ```
@@ -316,10 +321,10 @@ PMBrain/
 
 ## 待实现
 
-- [ ] **视频导入**：视频文件提取音轨转写
+- [ ] **国内视频网站导入**：B站等国内视频平台内容直接导入知识库
 - [ ] **全程可视化可溯源**：类似 UltraRAG 的搜索链路可视化
+- [ ] **知识库可视化页面**：图形化展示知识库内容，方便浏览和管理
 - [ ] **本地数据库安装简化**：让非技术用户也能一键部署
-- [ ] **doc 格式支持**：旧版 Word 文档导入
 
 ## 许可证
 
