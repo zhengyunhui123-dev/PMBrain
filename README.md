@@ -74,20 +74,13 @@ bun src/cli.ts search "项目进度" --explain
 
 搜索融合了四种信号：**向量搜索**（语义匹配）+ **关键词搜索**（精确匹配）+ **知识图谱**（实体关联）+ **重排序**（精排优化）。每一步都可解释、可溯源。
 
-### Dream 周期（自动维护）
+### 自动化维护
 
-每天晚上自动跑一次，做这些事：
-
-```
-自动修复链接 → 提取事实 → 提取概念 → 检测模式 →
-补全嵌入 → 合并重复 → 项目健康评估 → 风险检测 → 报告生成
-```
+PMBrain 每晚自动跑一次维护周期：修复链接 → 提取事实 → 检测模式 → 补全嵌入 → 项目健康评估 → 风险检测 → 报告生成。
 
 ```powershell
 bun src/cli.ts dream
 ```
-
-不需要手动整理，大脑自己维护自己。
 
 ### 项目管理增强
 
@@ -98,15 +91,11 @@ bun src/cli.ts dream
 - **报告生成**：自动生成项目周报
 - **PM 模式包**：7 种项目管理页面类型（project / task / milestone / risk / decision / meeting / stakeholder）
 
-### 纯本地部署，不需要 Docker
+### 两种部署方式
 
-PMBrain 使用 **PGLite**（嵌入式 Postgres，通过 WASM 运行），不需要安装 Docker，不需要配置数据库，一条命令初始化：
+**PGLite（本地嵌入式）**：不需要安装 Docker，一条命令初始化。但在 Windows 上 PGLite 的 WASM 运行时有兼容性问题，部分环境可能初始化失败。
 
-```powershell
-bun src/cli.ts init --pglite
-```
-
-也支持 Docker Postgres 模式用于生产环境，但**开箱即用不需要**。
+**Docker + Postgres（推荐）**：更稳定，适合生产环境。Windows 用户推荐优先使用此方式。
 
 ### 多模型支持（国内可用）
 
@@ -119,62 +108,18 @@ bun src/cli.ts init --pglite
 | **DeepSeek** | 对话（备用） | `deepseek_api_key` |
 | OpenAI / Anthropic / Ollama / 更多 | 嵌入/对话/重排序 | 对应 API Key |
 
-### MCP 接入
-
-PMBrain 通过 MCP 协议暴露 30+ 工具，可接入 CodeBuddy、Cursor、Claude Code 等 AI 编程工具，让 AI 在对话中直接搜索和写入知识库。
-
 ---
 
 ## 安装
 
-### 方式一：全局安装（推荐，不下载源码）
+### 方式一：Docker + Postgres（推荐，Windows 优先）
+
+PGLite 在 Windows 上有 WASM 兼容性问题，推荐优先使用 Docker：
 
 ```powershell
-# 1. 安装 Bun
-powershell -c "irm bun.sh/install.ps1 | iex"
+# 1. 安装 Docker Desktop
 
-# 2. 全局安装（从 GitHub 直接装）
-bun install -g github:zhengyunhui123-dev/PMBrain
-
-# 3. 配置 API Key（编辑 ~/.gbrain/config.json）
-# {
-#   "engine": "pglite",
-#   "embedding_model": "zhipu:embedding-3",
-#   "embedding_dimensions": 1024,
-#   "zhipu_api_key": "你的智谱Key"
-# }
-
-# 4. 初始化本地大脑
-gbrain init --pglite
-
-# 5. 验证
-gbrain doctor
-```
-
-> 安装后 CLI 命令是 `gbrain`。后续操作不再需要源码目录，任何路径下直接 `gbrain <命令>` 即可。
-
-```powershell
-git clone <你的仓库地址>
-cd PMBrain
-bun install
-bun src/cli.ts init --pglite
-```
-
-如果愿意自己管理代码，也可以手动下载：
-
-```powershell
-git clone <你的仓库地址>
-cd PMBrain
-bun install
-bun src/cli.ts init --pglite
-```
-
-### 方式三：Docker + Postgres（生产环境）
-
-适合多用户、大容量数据、需要远程访问的场景：
-
-```powershell
-# 1. 启动 Postgres
+# 2. 启动 Postgres（含 pgvector 插件）
 docker run -d --name gbrain-pg ^
   -e POSTGRES_USER=postgres ^
   -e POSTGRES_PASSWORD=postgres ^
@@ -182,34 +127,69 @@ docker run -d --name gbrain-pg ^
   -p 5433:5432 ^
   pgvector/pgvector:pg16
 
-# 2. 下载项目、装依赖、配 Key（同上）
-git clone <你的仓库地址>
-cd PMBrain
-bun install
+# 3. 安装 Bun
+powershell -c "irm bun.sh/install.ps1 | iex"
 
-# 3. 配置 config.json
+# 4. 全局安装 PMBrain
+bun install -g github:zhengyunhui123-dev/PMBrain
+
+# 5. 配置（编辑 ~/.gbrain/config.json）
 # {
 #   "engine": "postgres",
 #   "database_url": "postgresql://postgres:postgres@localhost:5433/gbrain",
-#   ...
+#   "embedding_model": "zhipu:embedding-3",
+#   "embedding_dimensions": 1024,
+#   "zhipu_api_key": "你的智谱Key"
 # }
 
-# 4. 初始化
-bun src/cli.ts init
+# 6. 初始化
+gbrain init
 
-# 5. 从 PGLite 迁移到 Docker（可选）
-bun src/cli.ts migrate --to supabase --url postgresql://postgres:postgres@localhost:5433/gbrain
+# 7. 验证
+gbrain doctor
 ```
 
-### 方式三：Supabase 托管数据库
+### 方式二：PGLite 本地安装（macOS / Linux 推荐）
+
+Windows 上 PGLite WASM 运行时可能存在兼容性问题，如果遇到 `PGLite failed to initialize` 错误，请改用 Docker 方式。
+
+```powershell
+# 1. 安装 Bun
+powershell -c "irm bun.sh/install.ps1 | iex"
+
+# 2. 全局安装
+bun install -g github:zhengyunhui123-dev/PMBrain
+
+# 3. 配置（编辑 ~/.gbrain/config.json）
+# { "engine": "pglite", ... }
+
+# 4. 初始化
+gbrain init --pglite
+
+# 5. 验证
+gbrain doctor
+```
+
+> 安装后 CLI 命令是 `gbrain`，任何路径下直接 `gbrain <命令>` 即可。
+
+### 方式三：从源码安装
+
+```powershell
+git clone https://github.com/zhengyunhui123-dev/PMBrain.git
+cd PMBrain
+bun install
+bun src/cli.ts init --pglite
+```
+
+### 方式四：Supabase 托管数据库
 
 适合不想自己管理服务器的团队。详见[原版文档](docs/INSTALL.md)。
 
-### 方式四：MCP 瘦客户端
+### 方式五：MCP 瘦客户端
 
 远程连接到已有的 PMBrain 服务器，本地不需要数据库。详见[MCP 接入指南](docs/mcp/)。
 
-### 方式五：AI 智能体自动安装
+### 方式六：AI 智能体自动安装
 
 让 Claude Code、Codex 等 AI 智能体自动完成安装。详见[原版安装协议](INSTALL_FOR_AGENTS.md)。
 
@@ -240,14 +220,76 @@ bun src/cli.ts sync --all
 bun src/cli.ts embed --stale
 ```
 
-### 启动 MCP 接入 AI 工具
+---
 
-```powershell
-# stdio 模式（给 Cursor、Claude Code 用）
-bun src/cli.ts serve
+## MCP 接入 AI 工具
 
-# HTTP 模式（带管理后台 http://localhost:3131/admin）
-bun src/cli.ts serve --http
+安装好 PMBrain 后，可以通过 MCP 协议让 AI 编程工具直接调用知识库。
+
+### 本地安装的配置方式
+
+直接在 AI 工具的 MCP 配置文件（`mcp.json`）中添加：
+
+```json
+{
+  "mcpServers": {
+    "pmbrain": {
+      "command": "gbrain",
+      "args": ["serve"]
+    }
+  }
+}
+```
+
+### HTTP 模式（带管理后台）
+
+```json
+{
+  "mcpServers": {
+    "pmbrain": {
+      "command": "gbrain",
+      "args": ["serve", "--http", "--port", "3131"]
+    }
+  }
+}
+```
+
+启动后浏览器打开 `http://localhost:3131/admin` 可查看管理后台。
+
+### 在线/远程服务器的配置方式
+
+如果 PMBrain 部署在远程服务器上，使用 HTTP 模式并配置地址：
+
+```json
+{
+  "mcpServers": {
+    "pmbrain": {
+      "command": "gbrain",
+      "args": ["serve", "--http", "--port", "3131", "--bind", "0.0.0.0"]
+    }
+  }
+}
+```
+
+> 远程部署需要配置 OAuth 认证，详见 [MCP 部署指南](docs/mcp/)。
+
+### 让 AI 帮你配置
+
+把下面这段发给你的 AI 编程工具，它就会自动帮你配好 MCP：
+
+```
+请帮我配置 PMBrain 的 MCP 服务。
+PMBrain 安装在当前电脑。
+MCP 配置如下：
+{
+  "mcpServers": {
+    "pmbrain": {
+      "command": "gbrain",
+      "args": ["serve"]
+    }
+  }
+}
+请把它添加到当前工具的 MCP 配置文件中。
 ```
 
 ---
