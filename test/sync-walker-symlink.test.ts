@@ -162,17 +162,19 @@ describe('collectSyncableFiles symlink + cycle hardening', () => {
     });
   });
 
-  test('8. includeOffice admits Word files alongside markdown', async () => {
+  test('8. includeOffice admits document files alongside markdown', async () => {
     await withEnv({ GBRAIN_EMBEDDING_MULTIMODAL: undefined }, () => {
       writeFileSync(join(tmp, 'a.md'), 'a\n');
       writeFileSync(join(tmp, 'proposal.docx'), Buffer.from([0x50, 0x4b, 0x03, 0x04]));
+      writeFileSync(join(tmp, 'report.pdf'), Buffer.from('%PDF-1.4'));
+      writeFileSync(join(tmp, 'sheet.xlsx'), Buffer.from([0x50, 0x4b, 0x03, 0x04]));
       writeFileSync(join(tmp, 'slides.pptx'), Buffer.from([0x50, 0x4b, 0x03, 0x04]));
 
       const off = collectSyncableFiles(tmp, { strategy: 'markdown' });
       const on = collectSyncableFiles(tmp, { strategy: 'markdown', includeOffice: true });
 
       expect(off.map(f => basename(f)).sort()).toEqual(['a.md']);
-      expect(on.map(f => basename(f)).sort()).toEqual(['a.md', 'proposal.docx']);
+      expect(on.map(f => basename(f)).sort()).toEqual(['a.md', 'proposal.docx', 'report.pdf', 'sheet.xlsx']);
     });
   });
 });

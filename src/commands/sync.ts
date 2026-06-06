@@ -175,7 +175,7 @@ export interface SyncOpts {
   sourceId?: string;
   /** Multi-repo: sync strategy override (markdown, code, auto). */
   strategy?: 'markdown' | 'code' | 'auto';
-  /** Include Word-like Office files alongside markdown in import/sync. */
+  /** Include document files (Word/PDF/Excel) alongside markdown in import/sync. */
   includeOffice?: boolean;
   /**
    * Number of parallel workers for the import phase. When > 1, each worker

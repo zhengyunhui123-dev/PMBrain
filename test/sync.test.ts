@@ -76,11 +76,14 @@ describe('isSyncable', () => {
     expect(isSyncable('src/cli.ts')).toBe(false);
   });
 
-  test('accepts Word-like Office files only when includeOffice is enabled', () => {
+  test('accepts document files only when includeOffice is enabled', () => {
     expect(isSyncable('docs/proposal.docx')).toBe(false);
     expect(isSyncable('docs/proposal.docx', { includeOffice: true })).toBe(true);
     expect(isSyncable('docs/legacy.doc', { includeOffice: true })).toBe(true);
     expect(isSyncable('docs/note.wps', { includeOffice: true })).toBe(true);
+    expect(isSyncable('docs/report.pdf', { includeOffice: true })).toBe(true);
+    expect(isSyncable('docs/sheet.xlsx', { includeOffice: true })).toBe(true);
+    expect(isSyncable('docs/sheet.xls', { includeOffice: true })).toBe(true);
     expect(isSyncable('docs/slides.pptx', { includeOffice: true })).toBe(false);
   });
 
@@ -185,12 +188,15 @@ describe('isCodeFilePath', () => {
 });
 
 describe('isOfficeFilePath', () => {
-  test('recognizes first-wave Word-like Office extensions', () => {
+  test('recognizes supported document extensions', () => {
     expect(isOfficeFilePath('docs/proposal.docx')).toBe(true);
     expect(isOfficeFilePath('docs/legacy.DOC')).toBe(true);
     expect(isOfficeFilePath('docs/note.wps')).toBe(true);
+    expect(isOfficeFilePath('docs/report.PDF')).toBe(true);
+    expect(isOfficeFilePath('docs/sheet.xlsx')).toBe(true);
+    expect(isOfficeFilePath('docs/sheet.xlsm')).toBe(true);
+    expect(isOfficeFilePath('docs/sheet.xls')).toBe(true);
     expect(isOfficeFilePath('docs/slides.pptx')).toBe(false);
-    expect(isOfficeFilePath('docs/sheet.xlsx')).toBe(false);
   });
 });
 
