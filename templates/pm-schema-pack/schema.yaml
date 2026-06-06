@@ -1,0 +1,29 @@
+name: pm-schema-pack
+description: 项目管理领域模型 — 7 种页面类型 + 6 种关系
+version: 1.0.0
+
+page_types:
+  - project
+  - milestone
+  - task
+  - risk
+  - decision
+  - meeting
+  - stakeholder
+
+link_types:
+  - belongs_to      # 里程碑/任务/风险/决策/会议 → 项目
+  - blocks          # 任务阻塞任务
+  - assigned_to     # 任务 → 干系人
+  - raised_in       # 风险 → 会议
+  - decided_in      # 决策 → 会议
+  - affects         # 风险 → 项目/里程碑/任务
+
+filing_rules:
+  project: projects/
+  milestone: projects/{project}/milestones/
+  task: projects/{project}/tasks/
+  risk: projects/{project}/risks/
+  decision: projects/{project}/decisions/
+  meeting: projects/{project}/meetings/
+  stakeholder: stakeholders/

@@ -127,22 +127,21 @@ PMBrain 通过 MCP 协议暴露 30+ 工具，可接入 CodeBuddy、Cursor、Clau
 
 ## 安装
 
-### 方式一：全局安装（不下载源码，上传 GitHub 后可用）
-
-上传到 GitHub 后，用户一条命令安装，不需要手动 git clone：
+### 方式一：全局安装（推荐，不下载源码）
 
 ```powershell
 # 1. 安装 Bun
 powershell -c "irm bun.sh/install.ps1 | iex"
 
-# 2. 全局安装（从 GitHub 直接装，不下载源码）
-bun install -g github:<你的用户名>/PMBrain
+# 2. 全局安装（从 GitHub 直接装）
+bun install -g github:zhengyunhui123-dev/PMBrain
 
 # 3. 配置 API Key（编辑 ~/.gbrain/config.json）
 # {
 #   "engine": "pglite",
 #   "embedding_model": "zhipu:embedding-3",
-#   ...
+#   "embedding_dimensions": 1024,
+#   "zhipu_api_key": "你的智谱Key"
 # }
 
 # 4. 初始化本地大脑
@@ -152,7 +151,7 @@ gbrain init --pglite
 gbrain doctor
 ```
 
-### 方式二：本地 PGLite（从源码安装）
+> 安装后 CLI 命令是 `gbrain`。后续操作不再需要源码目录，任何路径下直接 `gbrain <命令>` 即可。
 
 ```powershell
 git clone <你的仓库地址>

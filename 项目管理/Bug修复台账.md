@@ -1,0 +1,91 @@
+# Bug 修复台账
+
+## 2026-06-02 PGLite WASM 在 Windows 下崩溃
+
+- 时间：2026-06-02
+- 标题：PGLite WASM 初始化失败（Aborted()）
+- 描述：在 Windows + Bun 1.3.14 环境下执行 `gbrain init --pglite` 报错 `PGLite failed to initialize its WASM runtime. Original error: Aborted(). Build with -sASSERTIONS for more info.`。尝试升级 `@electric-sql/pglite` 从 0.4.3 到 0.4.6 无效。Bun 已是最新版本（1.3.14）。
+- 根因：Bun on Windows 与 `@electric-sql/pglite` WASM 有已知兼容性问题。
+- 解决方案：改用 Docker Postgres 引擎（`pgvector/pgvector:pg16` 容器 + `gbrain init --url`），绕过 PGLite 路径。
+- 是否完成：是
+- 最终结果：Docker Postgres 方案成功运行，Schema 107 版全部迁移通过。
+
+## 2026-06-02 Docker Desktop 启动失败
+
+- 时间：2026-06-02
+- 标题：Docker Desktop 无法启动（WSL 未安装）
+- 描述：执行 `docker run` 报错 `failed to connect to the docker API at npipe:////./pipe/dockerDesktopLinuxEngine`，Docker 服务状态为 Stopped。`wsl -l -v` 报错（WSL 未安装）。
+- 根因：Windows 未安装 WSL2，Docker Desktop 依赖的 Linux 容器后端缺失。
+- 解决方案：通过 Docker Desktop 设置启用 WSL2 后端（启动时自动提示安装），等待约 10 秒后 Docker 就绪。
+- 是否完成：是
+- 最终结果：Docker Desktop 正常启动，`docker ps` 返回正常。
+
+## 2026-06-02 Embed 命令报"嵌入模型未配置"
+
+- 时间：2026-06-02
+- 标题：embed --stale 提示 deferred setup 未配置嵌入模型
+- 描述：执行 `embed --stale` 报错 `This brain was initialized with --no-embedding (deferred setup)`。原因是首次 `gbrain init` 时用了 `--no-embedding`，导致 `~/.gbrain/config.json` 中残留 `embedding_disabled: true`。
+- 根因：`--no-embedding` 初始化标记未在后续配置中被清除。
+- 解决方案：手动编辑 `~/.gbrain/config.json` 删除 `embedding_disabled` 字段，添加 `embedding_model` 和 `embedding_dimensions`。
+- 是否完成：是
+- 最终结果：配置文件修复后 `embed --stale` 正常执行。
+
+## 2026-06-02 嵌入维度不匹配（1280 vs 1536）
+
+- 时间：2026-06-02
+- 标题：嵌入列维度不匹配导致 embed 拒绝执行
+- 描述：初始 schema 使用 ZeroEntropy 默认（1280d），后来改为 OpenAI 的 1536d，数据库列宽不匹配。报错 `Refusing to silently re-template existing brain. Existing column: vector(1280), Requested: vector(1536)`。
+- 根因：首次初始化时 schema 按默认嵌入模型（ZeroEntropy）建了 1280d 列，切换模型后维度冲突。
+- 解决方案：在 Docker Postgres 中执行 SQL 修改列宽（`ALTER TABLE content_chunks ALTER COLUMN embedding TYPE vector(N)`），后续更换模型时重复此步骤。
+- 是否完成：是
+- 最终结果：列宽修改后嵌入正常。后续每次换嵌入模型需同步修改列宽。
+
+## 2026-06-02 Embed 连接 OpenAI API 失败
+
+- 时间：2026-06-02
+- 标题：OpenAI API 无法连接（国内网络限制）
+- 描述：`embed` 报错 `Cannot connect to API: Unable to connect. Is the computer able to access the url?`，但 `Bun.fetch` 直接测试 OpenAI 正常。
+- 根因：`provider_base_urls` 配置对 `native` 类型的 OpenAI recipe 无效，SDK 仍走官方端点。
+- 解决方案：创建自定义 `mimo` recipe（`openai-compatible` 类型），通过 `base_url_default` 指向 MIMO API 端点。后改用智谱 `embedding-3`（国内直连）。
+- 是否完成：是
+- 最终结果：改用智谱 embedding-3（国内直连）后嵌入成功。
+
+## 2026-06-02 MCP 服务连接失败
+
+- 时间：2026-06-02
+- 标题：MCP 报错 Connection closed / Module not found
+- 描述：CodeBuddy 连接 MCP 报错 `MCP error -32000: Connection closed` 和 `error: Module not found "src/cli.ts"`。
+- 根因：MCP 启动时当前工作目录不是 PMBrain 目录，相对路径 `src/cli.ts` 找不到。
+- 解决方案：在 MCP 启动命令中加入 `cd d:\cursor-claude\PMBrain`。
+- 是否完成：是
+- 最终结果：MCP 连接正常，AI 可正常调用 PMBrain 工具。
+
+## 2026-06-02 PowerShell 编码问题导致 load-env.ps1 报错
+
+- 时间：2026-06-02
+- 标题：load-env.ps1 报"字符串缺少终止符"
+- 描述：执行 `. .\load-env.ps1` 报错 `ParserError: 字符串缺少终止符: "`。
+- 根因：`write_to_file` 工具写入的 .ps1 文件编码与 PowerShell 不兼容。
+- 解决方案：用 `Set-Content -Encoding UTF8` 重新写入文件，简化脚本内容避免特殊字符。
+- 是否完成：是
+- 最终结果：`load-env.ps1` 可正常执行。
+
+## 2026-06-06 legacy .doc 导入不可用
+
+- 时间：2026-06-06
+- 标题：修复 legacy .doc 文档导入依赖缺失时不可用
+- 描述：Office 导入已识别 .doc 扩展名，但在未安装 LibreOffice/soffice 的 Windows 环境下无法抽取正文。
+- 根因：legacy .doc 仅依赖 LibreOffice 转换为 docx，缺少 Microsoft Word 本机环境的只读抽取兜底。
+- 解决方案：为 .doc/.wps 导入增加 Windows Word COM 只读文本抽取 fallback，并补充常见 LibreOffice 安装路径检测。
+- 是否完成：是
+- 最终结果：未安装 LibreOffice 时，Windows 可通过已安装的 Microsoft Word 只读打开 legacy .doc 并直接导入知识库；原文档不被修改。
+
+## 2026-06-06 本地数据库无法连接
+
+- 时间：2026-06-06
+- 标题：PMBrain 本地数据库无法连接
+- 描述：执行 PMBrain 命令时 PGLite 报 `PGLite failed to initialize its WASM runtime. Original error: Aborted().`，本地 HTTP 服务也无法连接。
+- 根因：当前 Windows + Bun 环境下 PGLite WASM 不稳定；项目此前已验证可行路径是 Docker Postgres，但 Docker Desktop 和 `gbrain-pg` 容器处于停止状态，配置又被切回了 PGLite。
+- 解决方案：启动 Docker Desktop，恢复 `gbrain-pg` 容器，配置统一切回 `postgresql://postgres:postgres@localhost:5433/gbrain`，并清理失败运行遗留的 cycle lock。
+- 是否完成：是
+- 最终结果：Docker Postgres 正常运行，`stats` 可读取 525 页、10036 chunks 且全部 embedded；HTTP 服务 `http://localhost:3131/admin/` 和 `/health` 均返回 200，`/health` 显示 `engine=postgres`。
