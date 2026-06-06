@@ -1741,6 +1741,9 @@ export function buildGatewayConfig(c: GBrainConfig): AIGatewayConfig {
   // launchd-spawned subprocesses that don't propagate ~/.zshrc-sourced keys.
   const envFromConfig: Record<string, string> = {};
   if (c.openai_api_key) envFromConfig.OPENAI_API_KEY = c.openai_api_key;
+  if (c.mimo_api_key) envFromConfig.MIMO_API_KEY = c.mimo_api_key;
+  if (c.zhipu_api_key) envFromConfig.ZHIPUAI_API_KEY = c.zhipu_api_key;
+  if (c.deepseek_api_key) envFromConfig.DEEPSEEK_API_KEY = c.deepseek_api_key;
   if (c.anthropic_api_key) envFromConfig.ANTHROPIC_API_KEY = c.anthropic_api_key;
   // v0.37 fix wave (CDX2-5+6): ZE became the default provider in v0.36 but
   // the env-mapping at this seam never picked it up. `gbrain config set

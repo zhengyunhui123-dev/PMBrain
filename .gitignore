@@ -44,3 +44,6 @@ reports/network-intelligence/
 
 # Local env config — contains real API keys
 load-env.ps1
+
+# Local gbrain config — contains API keys and local DB path
+.gbrain/

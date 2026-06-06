@@ -17,6 +17,10 @@ describe('KNOWN_CONFIG_KEYS', () => {
     expect(KNOWN_CONFIG_KEYS).toContain('embedding_disabled');  // v0.37 D9
     expect(KNOWN_CONFIG_KEYS).toContain('expansion_model');
     expect(KNOWN_CONFIG_KEYS).toContain('chat_model');
+    expect(KNOWN_CONFIG_KEYS).toContain('mimo_api_key');
+    expect(KNOWN_CONFIG_KEYS).toContain('zhipu_api_key');
+    expect(KNOWN_CONFIG_KEYS).toContain('deepseek_api_key');
+    expect(KNOWN_CONFIG_KEYS).toContain('zeroentropy_api_key');
   });
 
   test('contains the search-mode keys (v0.32.3)', () => {

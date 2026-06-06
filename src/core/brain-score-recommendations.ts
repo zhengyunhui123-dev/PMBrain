@@ -11,20 +11,17 @@ import { parseModelId } from './ai/model-resolver.ts';
  * RecommendationContext (doctor + autopilot) use this to build a sync
  * `resolveKey` closure without re-parsing recipes.
  *
- * Only OPENAI_API_KEY and ZEROENTROPY_API_KEY appear here because those are the
- * only embedding keys `buildGatewayConfig` (src/cli.ts) folds from config into
- * the gateway env. VOYAGE_API_KEY / GOOGLE_GENERATIVE_AI_API_KEY are deliberately
- * absent: their config fields are NOT threaded to the gateway today, so the
- * producer closures fall through to checking `process.env` ONLY for them. That
- * matches what the gateway can actually use (the recipes read those keys from
- * env). Counting a config-plane voyage_api_key/google_api_key here would be a
- * false positive: doctor/autopilot would call the provider "configured" and
- * dispatch an embed.stale job that then fails auth at the gateway. When a future
- * change threads voyage_api_key/google_api_key into buildGatewayConfig (the open
- * voyage-config-mapping work), re-add the matching entry here in the same change.
+ * Keep this list in sync with `buildGatewayConfig` (src/cli.ts). A provider
+ * belongs here only when its file-plane key is folded into the gateway env.
+ * VOYAGE_API_KEY / GOOGLE_GENERATIVE_AI_API_KEY are deliberately absent:
+ * their config fields are NOT threaded to the gateway today, so producers
+ * should fall through to checking `process.env` only for them.
  */
 export const HOSTED_EMBED_KEY_CONFIG: Record<string, string> = {
   OPENAI_API_KEY: 'openai_api_key',
+  MIMO_API_KEY: 'mimo_api_key',
+  ZHIPUAI_API_KEY: 'zhipu_api_key',
+  DEEPSEEK_API_KEY: 'deepseek_api_key',
   ZEROENTROPY_API_KEY: 'zeroentropy_api_key',
 };
 

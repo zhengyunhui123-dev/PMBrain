@@ -30,6 +30,9 @@ export interface GBrainConfig {
   database_url?: string;
   database_path?: string;
   openai_api_key?: string;
+  mimo_api_key?: string;
+  zhipu_api_key?: string;
+  deepseek_api_key?: string;
   anthropic_api_key?: string;
   /**
    * ZeroEntropy API key. v0.37 fix wave (CDX2-5+6): ZE became the default
@@ -332,6 +335,9 @@ export function loadConfig(): GBrainConfig | null {
     ...(dbUrl ? { database_url: dbUrl } : {}),
     ...(dbUrl ? { database_path: undefined } : {}),
     ...(process.env.OPENAI_API_KEY ? { openai_api_key: process.env.OPENAI_API_KEY } : {}),
+    ...(process.env.MIMO_API_KEY ? { mimo_api_key: process.env.MIMO_API_KEY } : {}),
+    ...(process.env.ZHIPUAI_API_KEY ? { zhipu_api_key: process.env.ZHIPUAI_API_KEY } : {}),
+    ...(process.env.DEEPSEEK_API_KEY ? { deepseek_api_key: process.env.DEEPSEEK_API_KEY } : {}),
     ...(process.env.ANTHROPIC_API_KEY ? { anthropic_api_key: process.env.ANTHROPIC_API_KEY } : {}),
     ...(process.env.ZEROENTROPY_API_KEY ? { zeroentropy_api_key: process.env.ZEROENTROPY_API_KEY } : {}),
     ...(process.env.GBRAIN_EMBEDDING_MODEL ? { embedding_model: process.env.GBRAIN_EMBEDDING_MODEL } : {}),
@@ -595,7 +601,11 @@ export const KNOWN_CONFIG_KEYS: readonly string[] = [
   'database_url',
   'database_path',
   'openai_api_key',
+  'mimo_api_key',
+  'zhipu_api_key',
+  'deepseek_api_key',
   'anthropic_api_key',
+  'zeroentropy_api_key',
   'embedding_model',
   'embedding_dimensions',
   'embedding_disabled',
@@ -643,6 +653,8 @@ export const KNOWN_CONFIG_KEYS: readonly string[] = [
   'models.dream.synthesize',
   'models.dream.patterns',
   'models.dream.synthesize_verdict',
+  'models.propose_takes',
+  'models.grade_takes',
   'models.drift',
   'models.auto_think',
   'models.think',

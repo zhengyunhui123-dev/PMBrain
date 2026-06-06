@@ -527,6 +527,21 @@ async function acquireDbCycleLock(engine: BrainEngine, sourceId?: string): Promi
   };
 }
 
+async function ensureEngineConnected(engine: BrainEngine): Promise<void> {
+  try {
+    await engine.executeRaw('SELECT 1');
+    return;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (!/connect\(\) has not been called|No database connection/i.test(msg)) {
+      throw err;
+    }
+    const reconnect = (engine as unknown as { reconnect?: () => Promise<void> }).reconnect;
+    if (!reconnect) throw err;
+    await reconnect.call(engine);
+  }
+}
+
 /**
  * Acquire the file-based cycle lock (used when engine === null).
  * Returns a LockHandle on success, or null if a live holder has it.
@@ -1828,7 +1843,11 @@ export async function runCycle(
       if (engine) {
         const cfgMod = await import('./config.ts');
         const calibrationConfig = cfgMod.loadConfig() ?? ({} as ReturnType<typeof cfgMod.loadConfig> & object);
+        await ensureEngineConnected(engine);
         const calibrationSourceId = await resolveSourceForDir(engine, opts.brainDir);
+        const { resolveModel } = await import('./model-config.ts');
+        const calibrationChatFallback =
+          (calibrationConfig as { chat_model?: string }).chat_model ?? 'anthropic:claude-sonnet-4-6';
         const calibrationCtx = {
           engine,
           config: calibrationConfig,
@@ -1842,7 +1861,12 @@ export async function runCycle(
           checkAborted(opts.signal);
           progress.start('cycle.propose_takes');
           const { runPhaseProposeTakes } = await import('./cycle/propose-takes.ts');
-          const { result, duration_ms } = await timePhase(() => runPhaseProposeTakes(calibrationCtx, { repoPath: opts.brainDir }) as Promise<PhaseResult>);
+          const model = await resolveModel(engine, {
+            configKey: 'models.propose_takes',
+            tier: 'reasoning',
+            fallback: calibrationChatFallback,
+          });
+          const { result, duration_ms } = await timePhase(() => runPhaseProposeTakes(calibrationCtx, { repoPath: opts.brainDir, model }) as Promise<PhaseResult>);
           result.duration_ms = duration_ms;
           phaseResults.push(result);
           progress.finish();
@@ -1853,7 +1877,12 @@ export async function runCycle(
           checkAborted(opts.signal);
           progress.start('cycle.grade_takes');
           const { runPhaseGradeTakes } = await import('./cycle/grade-takes.ts');
-          const { result, duration_ms } = await timePhase(() => runPhaseGradeTakes(calibrationCtx, {}) as Promise<PhaseResult>);
+          const model = await resolveModel(engine, {
+            configKey: 'models.grade_takes',
+            tier: 'reasoning',
+            fallback: calibrationChatFallback,
+          });
+          const { result, duration_ms } = await timePhase(() => runPhaseGradeTakes(calibrationCtx, { model }) as Promise<PhaseResult>);
           result.duration_ms = duration_ms;
           phaseResults.push(result);
           progress.finish();

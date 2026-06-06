@@ -59,6 +59,9 @@ describe('embeddingProviderConfigured (recipe-aware helper)', () => {
   // would make the provider look "configured" and dispatch a doomed embed job.
   test('HOSTED_EMBED_KEY_CONFIG only maps gateway-propagated config keys', () => {
     expect(HOSTED_EMBED_KEY_CONFIG.OPENAI_API_KEY).toBe('openai_api_key');
+    expect(HOSTED_EMBED_KEY_CONFIG.MIMO_API_KEY).toBe('mimo_api_key');
+    expect(HOSTED_EMBED_KEY_CONFIG.ZHIPUAI_API_KEY).toBe('zhipu_api_key');
+    expect(HOSTED_EMBED_KEY_CONFIG.DEEPSEEK_API_KEY).toBe('deepseek_api_key');
     expect(HOSTED_EMBED_KEY_CONFIG.ZEROENTROPY_API_KEY).toBe('zeroentropy_api_key');
     // Not propagated to the gateway today → must NOT be backed by a config field
     // (producer closures fall through to process.env only for these).

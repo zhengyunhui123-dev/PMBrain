@@ -1,4 +1,5 @@
 import type { Recipe } from '../types.ts';
+import { AIConfigError } from '../errors.ts';
 
 /**
  * MIMO (小米开放平台). OpenAI-compatible API endpoint.
@@ -11,8 +12,19 @@ export const mimo: Recipe = {
   implementation: 'openai-compatible',
   base_url_default: 'https://api.xiaomimimo.com/v1',
   auth_env: {
-    required: ['OPENAI_API_KEY'],
+    required: ['MIMO_API_KEY'],
+    optional: ['OPENAI_API_KEY'],
     setup_url: 'https://platform.xiaomimimo.com',
+  },
+  resolveAuth(env) {
+    const key = env.MIMO_API_KEY || env.OPENAI_API_KEY;
+    if (!key) {
+      throw new AIConfigError(
+        'MIMO requires MIMO_API_KEY.',
+        'Add `mimo_api_key` to ~/.gbrain/config.json or set MIMO_API_KEY.',
+      );
+    }
+    return { headerName: 'Authorization', token: `Bearer ${key}` };
   },
   touchpoints: {
     embedding: {
@@ -39,5 +51,5 @@ export const mimo: Recipe = {
       price_last_verified: '2026-06-02',
     },
   },
-  setup_hint: 'Get an API key at https://platform.xiaomimimo.com, then `export OPENAI_API_KEY=sk-...`',
+  setup_hint: 'Get an API key at https://platform.xiaomimimo.com, then add `mimo_api_key` to ~/.gbrain/config.json or set MIMO_API_KEY.',
 };

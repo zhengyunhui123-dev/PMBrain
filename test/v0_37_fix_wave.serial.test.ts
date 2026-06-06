@@ -195,16 +195,22 @@ describe('v0.37 Lane B — init paths', () => {
   });
 });
 
-// Lane C.3 — ZE key plumbing
-describe('v0.37 Lane C.3 — ZE key reaches buildGatewayConfig', () => {
-  test('CDX2-5+6: buildGatewayConfig maps zeroentropy_api_key into env dict', async () => {
+// Lane C.3 — provider key plumbing
+describe('v0.37 Lane C.3 — provider keys reach buildGatewayConfig', () => {
+  test('CDX2-5+6: buildGatewayConfig maps file-plane provider keys into env dict', async () => {
     // process.env wins over config (intentional — operator escape hatch).
     // Unset the env key so the test exercises the config-only path.
     const savedZe = process.env.ZEROENTROPY_API_KEY;
     const savedOai = process.env.OPENAI_API_KEY;
+    const savedMimo = process.env.MIMO_API_KEY;
+    const savedZhipu = process.env.ZHIPUAI_API_KEY;
+    const savedDeepseek = process.env.DEEPSEEK_API_KEY;
     const savedAnth = process.env.ANTHROPIC_API_KEY;
     delete process.env.ZEROENTROPY_API_KEY;
     delete process.env.OPENAI_API_KEY;
+    delete process.env.MIMO_API_KEY;
+    delete process.env.ZHIPUAI_API_KEY;
+    delete process.env.DEEPSEEK_API_KEY;
     delete process.env.ANTHROPIC_API_KEY;
     try {
       const { buildGatewayConfig } = await import('../src/cli.ts');
@@ -212,16 +218,24 @@ describe('v0.37 Lane C.3 — ZE key reaches buildGatewayConfig', () => {
         engine: 'pglite' as const,
         zeroentropy_api_key: 'test-ze-key',
         openai_api_key: 'test-oai',
+        mimo_api_key: 'test-mimo',
+        zhipu_api_key: 'test-zhipu',
+        deepseek_api_key: 'test-deepseek',
         anthropic_api_key: 'test-anth',
       };
       const gwCfg = buildGatewayConfig(cfg as any);
       expect(gwCfg.env?.ZEROENTROPY_API_KEY).toBe('test-ze-key');
-      // Regression on the existing two keys.
       expect(gwCfg.env?.OPENAI_API_KEY).toBe('test-oai');
+      expect(gwCfg.env?.MIMO_API_KEY).toBe('test-mimo');
+      expect(gwCfg.env?.ZHIPUAI_API_KEY).toBe('test-zhipu');
+      expect(gwCfg.env?.DEEPSEEK_API_KEY).toBe('test-deepseek');
       expect(gwCfg.env?.ANTHROPIC_API_KEY).toBe('test-anth');
     } finally {
       if (savedZe !== undefined) process.env.ZEROENTROPY_API_KEY = savedZe;
       if (savedOai !== undefined) process.env.OPENAI_API_KEY = savedOai;
+      if (savedMimo !== undefined) process.env.MIMO_API_KEY = savedMimo;
+      if (savedZhipu !== undefined) process.env.ZHIPUAI_API_KEY = savedZhipu;
+      if (savedDeepseek !== undefined) process.env.DEEPSEEK_API_KEY = savedDeepseek;
       if (savedAnth !== undefined) process.env.ANTHROPIC_API_KEY = savedAnth;
     }
   });
@@ -240,7 +254,7 @@ describe('v0.37 Lane C.3 — ZE key reaches buildGatewayConfig', () => {
     }
   });
 
-  test('GBrainConfig type includes zeroentropy_api_key field (TS compile guard)', async () => {
+  test('GBrainConfig type includes provider api key fields (TS compile guard)', async () => {
     const { type } = await import('../src/core/config.ts').then(m => ({ type: undefined }));
     // The type-level assertion happens at compile time. If this file
     // compiles, the field exists. Body of the test is a runtime no-op.

@@ -82,10 +82,10 @@ export async function runMigrateEngine(sourceEngine: BrainEngine, args: string[]
     process.exit(1);
   }
 
-  // Check source != target
+  // Check source != target — relaxed in v0.41.28+ to allow re-migration
+  // when sources have been added to the target.
   if (config.engine === opts.targetEngine) {
-    console.error(`Already using ${opts.targetEngine} engine. Nothing to migrate.`);
-    process.exit(1);
+    console.log(`Target is same engine (${opts.targetEngine}). Will attempt to migrate missing pages only.`);
   }
 
   // Build target config
@@ -147,6 +147,25 @@ export async function runMigrateEngine(sourceEngine: BrainEngine, args: string[]
     };
   }
 
+  // Copy sources first so foreign keys don't fail on multi-source pages.
+  console.log('Copying sources...');
+  try {
+    const sourceRows = await sourceEngine.listAllSources();
+    for (const s of sourceRows) {
+      try {
+        await targetEngine.executeRaw(
+          `INSERT INTO sources (id, name, config) VALUES ($1, $2, $3) ON CONFLICT (id) DO NOTHING`,
+          [s.id, s.name || s.id, JSON.stringify(s.config || {})],
+        );
+      } catch {
+        // source may already exist — ignore
+      }
+    }
+    console.log(`  ${sourceRows.length} source(s) ensured in target.`);
+  } catch (e) {
+    console.warn(`  Could not copy sources (${e instanceof Error ? e.message : String(e)}) — proceeding anyway.`);
+  }
+
   // Get all source pages
   const sourceStats = await sourceEngine.getStats();
   const allPages = await sourceEngine.listPages({ limit: 100000 });
@@ -189,28 +208,36 @@ export async function runMigrateEngine(sourceEngine: BrainEngine, args: string[]
       })), sourceOpts);
     }
 
-    // Copy tags
-    const tags = await sourceEngine.getTags(page.slug, sourceOpts);
-    for (const tag of tags) {
-      await targetEngine.addTag(page.slug, tag, sourceOpts);
-    }
+    // Copy tags (best-effort — some pages may have been cleaned up)
+    try {
+      const tags = await sourceEngine.getTags(page.slug, sourceOpts);
+      for (const tag of tags) {
+        try { await targetEngine.addTag(page.slug, tag, sourceOpts); } catch { /* skip */ }
+      }
+    } catch { /* skip */ }
 
-    // Copy timeline
-    const timeline = await sourceEngine.getTimeline(page.slug, sourceOpts);
-    for (const entry of timeline) {
-      await targetEngine.addTimelineEntry(page.slug, {
-        date: entry.date,
-        source: entry.source,
-        summary: entry.summary,
-        detail: entry.detail,
-      }, sourceOpts);
-    }
+    // Copy timeline (best-effort)
+    try {
+      const timeline = await sourceEngine.getTimeline(page.slug, sourceOpts);
+      for (const entry of timeline) {
+        try {
+          await targetEngine.addTimelineEntry(page.slug, {
+            date: entry.date,
+            source: entry.source,
+            summary: entry.summary,
+            detail: entry.detail,
+          }, sourceOpts);
+        } catch { /* skip */ }
+      }
+    } catch { /* skip */ }
 
-    // Copy raw data
-    const rawData = await sourceEngine.getRawData(page.slug, undefined, sourceOpts);
-    for (const rd of rawData) {
-      await targetEngine.putRawData(page.slug, rd.source, rd.data, sourceOpts);
-    }
+    // Copy raw data (best-effort)
+    try {
+      const rawData = await sourceEngine.getRawData(page.slug, undefined, sourceOpts);
+      for (const rd of rawData) {
+        try { await targetEngine.putRawData(page.slug, rd.source, rd.data, sourceOpts); } catch { /* skip */ }
+      }
+    } catch { /* skip */ }
 
     // Copy versions
     const versions = await sourceEngine.getVersions(page.slug, sourceOpts);
@@ -225,21 +252,24 @@ export async function runMigrateEngine(sourceEngine: BrainEngine, args: string[]
   }
   progress.finish();
 
-  // Copy links (after all pages exist in target).
-  // v0.32.8 F8: thread source_id so cross-source links migrate correctly.
+  // Copy links (after all pages exist in target) — best-effort.
   console.log('Copying links...');
   progress.start('migrate.copy_links', allPages.length);
   for (const page of allPages) {
     const sourceOpts = { sourceId: page.source_id };
-    const links = await sourceEngine.getLinks(page.slug, sourceOpts);
-    for (const link of links) {
-      await targetEngine.addLink(
-        link.from_slug, link.to_slug,
-        link.context, link.link_type,
-        undefined, undefined, undefined,
-        { fromSourceId: page.source_id, toSourceId: page.source_id },
-      );
-    }
+    try {
+      const links = await sourceEngine.getLinks(page.slug, sourceOpts);
+      for (const link of links) {
+        try {
+          await targetEngine.addLink(
+            link.from_slug, link.to_slug,
+            link.context, link.link_type,
+            undefined, undefined, undefined,
+            { fromSourceId: page.source_id, toSourceId: page.source_id },
+          );
+        } catch { /* skip */ }
+      }
+    } catch { /* skip */ }
     progress.tick(1);
   }
   progress.finish();

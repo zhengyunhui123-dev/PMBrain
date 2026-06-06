@@ -39,6 +39,7 @@ export const INHERIT_NAME_RE = /^[a-z][a-z0-9_]*$/;
  */
 const ENV_KEY_OVERRIDES: Readonly<Record<string, string>> = Object.freeze({
   database_url: 'GBRAIN_DATABASE_URL',
+  zhipu_api_key: 'ZHIPUAI_API_KEY',
 });
 
 /**
