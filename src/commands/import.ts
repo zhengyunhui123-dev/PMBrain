@@ -1,6 +1,6 @@
 import { readdirSync, lstatSync, existsSync } from 'fs';
 import { execFileSync } from 'child_process';
-import { join, relative } from 'path';
+import { dirname, join, relative } from 'path';
 import { cpus, totalmem } from 'os';
 import type { BrainEngine } from '../core/engine.ts';
 import { importFile, importImageFile, isImageFilePath } from '../core/import-file.ts';
@@ -168,7 +168,8 @@ export async function runImport(
     console.error('Usage: gbrain import <dir> [--no-embed] [--workers N] [--fresh] [--source-id <id>] [--include-office] [--json]');
     process.exit(1);
   }
-  const dir: string = dirArg;  // narrowed; survives closure capture
+  let dir: string = dirArg;  // narrowed; survives closure capture
+  let sourceType: 'directory' | 'file' = 'directory';
 
   // v0.31.2: collect under the right strategy. Pre-fix this called
   // collectMarkdownFiles unconditionally — code-strategy first sync
@@ -176,8 +177,22 @@ export async function runImport(
   // enumeration (codex C11 confirms dispatch was correct; bug was here).
   const strategy: SyncStrategy = opts.strategy ?? 'markdown';
   const _walkT0 = Date.now();
-  console.error(`[gbrain phase] import.collect_files start dir=${dir} strategy=${strategy}`);
-  const allFiles = collectSyncableFiles(dir, { strategy, includeOffice });
+  console.error(`[gbrain phase] import.collect_files start target=${dirArg} strategy=${strategy}`);
+  let allFiles: string[];
+  try {
+    const stat = lstatSync(dirArg);
+    if (stat.isFile()) {
+      sourceType = 'file';
+      dir = dirname(dirArg);
+      allFiles = isCollectibleForWalker(dirArg, strategy, process.env.GBRAIN_EMBEDDING_MULTIMODAL === 'true', includeOffice)
+        ? [dirArg]
+        : [];
+    } else {
+      allFiles = collectSyncableFiles(dir, { strategy, includeOffice });
+    }
+  } catch {
+    allFiles = collectSyncableFiles(dir, { strategy, includeOffice });
+  }
   console.error(
     `[gbrain phase] import.collect_files done ${Date.now() - _walkT0}ms files=${allFiles.length}`,
   );
@@ -423,8 +438,8 @@ export async function runImport(
 
   // Log the ingest
   await engine.logIngest({
-    source_type: 'directory',
-    source_ref: dir,
+    source_type: sourceType,
+    source_ref: sourceType === 'file' ? dirArg : dir,
     pages_updated: importedSlugs,
     summary: `Imported ${imported} pages, ${skipped} skipped, ${chunksCreated} chunks`,
   });
