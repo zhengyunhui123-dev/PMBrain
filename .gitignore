@@ -47,3 +47,6 @@ load-env.ps1
 
 # Local gbrain config — contains API keys and local DB path
 .gbrain/
+
+# Local MCP server config — contains real auth tokens
+.mcp.json

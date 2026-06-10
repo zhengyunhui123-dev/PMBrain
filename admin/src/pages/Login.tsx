@@ -38,7 +38,7 @@ export function LoginPage({ onLogin }: { onLogin: () => void }) {
   return (
     <div className="login-page">
       <div className="login-box">
-        <div className="login-logo">GBrain</div>
+        <div className="login-logo">PMBrain</div>
 
         <div style={{
           background: 'rgba(136, 170, 255, 0.08)',
@@ -53,21 +53,24 @@ export function LoginPage({ onLogin }: { onLogin: () => void }) {
           <div style={{ fontWeight: 600, color: 'var(--text-primary)', marginBottom: 6 }}>
             此管理后台受保护
           </div>
-          你可以向 AI Agent 索取管理员登录链接：
+          你可以向 AI Agent 索取一次性管理员登录链接。Agent 会返回一个 URL，直接在浏览器打开即可登录：
           <div style={{
-            background: 'rgba(0,0,0,0.3)',
+            background: '#ffffff',
+            border: '1px solid #b8c7ff',
             borderRadius: 6,
             padding: '8px 12px',
             marginTop: 8,
             fontFamily: 'var(--font-mono)',
             fontSize: 12,
-            color: '#88aaff',
+            color: '#2443b8',
+            fontWeight: 700,
             wordBreak: 'break-all',
           }}>
-            “请给我 GBrain 管理员登录链接”
+            “请给我 PMBrain 管理员登录链接”
           </div>
           <div style={{ marginTop: 8, fontSize: 12, color: 'var(--text-muted)' }}>
-            每个链接仅限使用一次。Agent 每次都会生成一个新链接。
+            登录链接不是粘贴到下面输入框的。下面输入框只用于粘贴终端里打印的 Admin Token。
+            如果服务重启，原来的登录会话会失效，需要重新打开一次性登录链接或重新粘贴当前 Admin Token。
           </div>
         </div>
 

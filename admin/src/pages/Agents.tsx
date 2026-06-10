@@ -38,7 +38,15 @@ interface ApiKey {
   status: 'active' | 'revoked';
 }
 
-export function AgentsPage() {
+export function AgentsPage({
+  title = 'Agent 管理',
+  description,
+  titleHelp,
+}: {
+  title?: string;
+  description?: React.ReactNode;
+  titleHelp?: React.ReactNode;
+}) {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [hideRevoked, setHideRevoked] = useState(true);
   const [showRegister, setShowRegister] = useState(false);
@@ -53,8 +61,14 @@ export function AgentsPage() {
 
   return (
     <>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
-        <h1 className="page-title" style={{ marginBottom: 0 }}>Agent 管理</h1>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 18, marginBottom: 24 }}>
+        <div>
+          <h1 className="page-title title-with-info" style={{ marginBottom: description ? 6 : 0 }}>
+            {title}
+            {titleHelp}
+          </h1>
+          {description && <p className="pm-section-desc">{description}</p>}
+        </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <label style={{ fontSize: 13, color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
             <input type="checkbox" checked={hideRevoked} onChange={e => setHideRevoked(e.target.checked)} /> 隐藏已撤销项

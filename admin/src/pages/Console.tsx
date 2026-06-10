@@ -1,0 +1,868 @@
+import React, { useEffect, useMemo, useState } from 'react';
+import { api } from '../api';
+import { AgentsPage } from './Agents';
+
+interface SourceSummary {
+  id: string;
+  name: string;
+  local_path: string | null;
+  federated: boolean;
+  page_count: number;
+  last_sync_at: string | null;
+  archived?: boolean;
+}
+
+interface BrainOverview {
+  version: string;
+  engine: string;
+  schema_pack: string;
+  chat_model: string | null;
+  embedding_model: string | null;
+  embedding_dimensions: number | null;
+  expansion_model: string | null;
+  stats: {
+    page_count: number;
+    chunk_count: number;
+    embedded_count: number;
+    link_count: number;
+    tag_count: number;
+    timeline_entry_count: number;
+    pages_by_type: Record<string, number>;
+  };
+  embedding_coverage: number;
+  pending_embeddings: number;
+  recent_write_at: string | null;
+  sources: SourceSummary[];
+  federated_source_count: number;
+  provider_status: {
+    providers: Record<string, boolean>;
+    chat: { enabled: boolean; chat_model: string | null; provider: string | null; missing: string[] };
+  };
+  llm_enabled: boolean;
+  config: Record<string, unknown>;
+}
+
+interface BrainPageRow {
+  id: number;
+  slug: string;
+  title: string | null;
+  source_id: string;
+  type: string;
+  updated_at: string;
+  chunk_count: number;
+  embedded_chunks: number;
+  tag_count: number;
+  frontmatter: unknown;
+  preview: string;
+}
+
+interface BrainPageChunk {
+  id: number;
+  chunk_index: number;
+  chunk_text: string;
+  chunk_source: string;
+  token_count: number | null;
+  embedded: boolean;
+}
+
+interface IntentPreview {
+  previewId: string;
+  intent: string;
+  confidence: number;
+  slots: Record<string, unknown>;
+  proposedAction: string;
+  riskLevel: 'read' | 'write' | 'maintenance';
+  requiresConfirmation: boolean;
+  clarification?: string;
+}
+
+interface ConsoleRun {
+  id: string;
+  kind: string;
+  status: 'queued' | 'running' | 'completed' | 'failed';
+  command: string[];
+  stdout: string;
+  stderr: string;
+  exitCode: number | null;
+  error: string | null;
+  startedAt: string;
+  completedAt: string | null;
+  durationMs: number | null;
+}
+
+function formatDate(value: string | null): string {
+  if (!value) return '无记录';
+  return new Date(value).toLocaleString();
+}
+
+function pct(value: number): string {
+  return `${Number.isFinite(value) ? value.toFixed(value % 1 === 0 ? 0 : 1) : '0'}%`;
+}
+
+function MetricCard({ label, value, hint }: { label: string; value: React.ReactNode; hint?: React.ReactNode }) {
+  return (
+    <div className="pm-card pm-metric">
+      <div className="pm-muted">{label}</div>
+      <div className="pm-metric-value">{value}</div>
+      {hint && <div className="pm-hint">{hint}</div>}
+    </div>
+  );
+}
+
+function LoadingBlock({ text = '正在读取 PMBrain 状态...' }: { text?: string }) {
+  return <div className="pm-card pm-empty">{text}</div>;
+}
+
+function InfoIcon({ title, children }: { title: string; children: React.ReactNode }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <span className="info-popover-wrap">
+      <button className="info-icon" onClick={() => setOpen(value => !value)} aria-label={`${title}说明`}>?</button>
+      {open && (
+        <span className="info-popover">
+          <b>{title}</b>
+          <span>{children}</span>
+        </span>
+      )}
+    </span>
+  );
+}
+
+function useOverview() {
+  const [overview, setOverview] = useState<BrainOverview | null>(null);
+  const [error, setError] = useState('');
+
+  const load = async () => {
+    try {
+      setOverview(await api.brainOverview() as BrainOverview);
+      setError('');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  useEffect(() => { void load(); }, []);
+  return { overview, error, reload: load };
+}
+
+function OverviewStrip({ overview }: { overview: BrainOverview }) {
+  return (
+    <div className="pm-status-strip">
+      <span>Engine <b>{overview.engine}</b></span>
+      <span>Version <b>{overview.version}</b></span>
+      <span>Schema <b>{overview.schema_pack}</b></span>
+      <span>Chat <b>{overview.chat_model ?? '未配置'}</b></span>
+      <span>Embedding <b>{overview.embedding_model ?? '未配置'}</b></span>
+      <span className={overview.llm_enabled ? 'pm-ok' : 'pm-warn'}>
+        自然语言 {overview.llm_enabled ? '已启用' : '未配置'}
+      </span>
+    </div>
+  );
+}
+
+export function KnowledgeWorkbenchPage({ onNavigate }: { onNavigate?: (page: string) => void }) {
+  const { overview, error, reload } = useOverview();
+
+  if (error) return <div className="pm-card pm-error">{error}</div>;
+  if (!overview) return <LoadingBlock />;
+
+  const sourceMax = Math.max(...overview.sources.map(s => s.page_count), 1);
+  const typeEntries = Object.entries(overview.stats.pages_by_type).sort((a, b) => b[1] - a[1]);
+
+  return (
+    <div className="pm-page">
+      <OverviewStrip overview={overview} />
+      <section className="pm-hero">
+        <div>
+          <div className="pm-eyebrow">PMBrain Console</div>
+          <h1>项目管理知识大脑</h1>
+          <p>把知识库状态、数据导入、MCP 接入、模型配置和自然语言任务执行放到一个清晰的工作台里。</p>
+        </div>
+        <NaturalLanguagePanel compact onNavigate={onNavigate} />
+      </section>
+
+      <div className="pm-grid metrics-grid">
+        <MetricCard label="Pages" value={overview.stats.page_count} hint="知识库页面总量" />
+        <MetricCard label="Chunks" value={overview.stats.chunk_count} hint={`${overview.stats.embedded_count} 已向量化`} />
+        <MetricCard label="Embedding 覆盖率" value={pct(overview.embedding_coverage)} hint={`${overview.pending_embeddings} 待处理`} />
+        <MetricCard label="Sources" value={overview.sources.length} hint={`${overview.federated_source_count} federated`} />
+        <MetricCard label="MCP/API" value={overview.llm_enabled ? '可用' : '待配置'} hint={overview.provider_status.chat.chat_model ?? '未设置 chat_model'} />
+      </div>
+
+      <div className="pm-grid two-col">
+        <div className="pm-card">
+          <div className="pm-section-head">
+            <h2>页面类型分布</h2>
+            <button className="pm-ghost" onClick={() => onNavigate?.('data')}>浏览数据</button>
+          </div>
+          <div className="pm-bars">
+            {typeEntries.length === 0 && <div className="pm-empty">暂无类型数据</div>}
+            {typeEntries.map(([type, count]) => (
+              <div className="pm-bar-row" key={type}>
+                <span>{type}</span>
+                <div><i style={{ width: `${Math.max(4, count / Math.max(overview.stats.page_count, 1) * 100)}%` }} /></div>
+                <b>{count}</b>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="pm-card">
+          <div className="pm-section-head">
+            <h2>数据源分布</h2>
+            <button className="pm-ghost" onClick={() => onNavigate?.('import')}>导入数据</button>
+          </div>
+          <div className="pm-source-list">
+            {overview.sources.map(source => (
+              <div className="pm-source-row" key={source.id}>
+                <div>
+                  <b>{source.name || source.id}</b>
+                  <span>{source.id} · {source.federated ? 'federated' : 'isolated'}</span>
+                </div>
+                <div className="pm-mini-bar"><i style={{ width: `${source.page_count / sourceMax * 100}%` }} /></div>
+                <strong>{source.page_count}</strong>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div className="pm-grid two-col">
+        <div className="pm-card">
+          <h2>运行状态</h2>
+          <div className="pm-kv"><span>最近写入</span><b>{formatDate(overview.recent_write_at)}</b></div>
+          <div className="pm-kv"><span>Links</span><b>{overview.stats.link_count}</b></div>
+          <div className="pm-kv"><span>Tags</span><b>{overview.stats.tag_count}</b></div>
+          <div className="pm-kv"><span>Timeline</span><b>{overview.stats.timeline_entry_count}</b></div>
+        </div>
+        <div className="pm-card">
+          <h2>模型与 API</h2>
+          <div className="pm-kv"><span>Chat model</span><b>{overview.chat_model ?? '未配置'}</b></div>
+          <div className="pm-kv"><span>Embedding model</span><b>{overview.embedding_model ?? '未配置'}</b></div>
+          <div className="pm-kv"><span>Dimensions</span><b>{overview.embedding_dimensions ?? '-'}</b></div>
+          <div className="pm-kv"><span>Expansion</span><b>{overview.expansion_model ?? '-'}</b></div>
+        </div>
+      </div>
+
+      <button className="pm-secondary-action" onClick={() => void reload()}>刷新状态</button>
+    </div>
+  );
+}
+
+function NaturalLanguagePanel({ compact = false, onNavigate }: { compact?: boolean; onNavigate?: (page: string) => void }) {
+  const [text, setText] = useState('');
+  const [preview, setPreview] = useState<IntentPreview | null>(null);
+  const [run, setRun] = useState<ConsoleRun | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  const submitPreview = async () => {
+    if (!text.trim()) return;
+    setLoading(true);
+    setError('');
+    setPreview(null);
+    setRun(null);
+    try {
+      setPreview(await api.previewIntent(text) as IntentPreview);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const execute = async (confirmed: boolean) => {
+    if (!preview) return;
+    setLoading(true);
+    setError('');
+    try {
+      const res = await api.executeIntent(preview.previewId, confirmed) as { runId: string };
+      const first = await api.run(res.runId) as ConsoleRun;
+      setRun(first);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!run || run.status !== 'running') return;
+    const timer = setInterval(async () => {
+      try {
+        setRun(await api.run(run.id) as ConsoleRun);
+      } catch {}
+    }, 1200);
+    return () => clearInterval(timer);
+  }, [run]);
+
+  return (
+    <div className={`pm-card nl-card ${compact ? 'compact' : ''}`}>
+      <div className="pm-section-head">
+        <h2>自然语言任务</h2>
+        {compact && <button className="pm-ghost" onClick={() => onNavigate?.('natural')}>完整视图</button>}
+      </div>
+      <textarea
+        value={text}
+        onChange={e => setText(e.target.value)}
+        placeholder="例如：把这段话记下来；导入 D:\\项目资料；同步所有知识库；查一下陆海新通道项目资料"
+        rows={compact ? 4 : 6}
+      />
+      <div className="pm-actions">
+        <button className="pm-primary" onClick={() => void submitPreview()} disabled={loading || !text.trim()}>
+          {loading ? '识别中...' : '识别意图'}
+        </button>
+        <button className="pm-ghost" onClick={() => setText('现在知识库里有哪些数据？')}>示例</button>
+      </div>
+      {error && <div className="pm-error-text">{error}</div>}
+      {preview && (
+        <div className="intent-preview">
+          <div className="pm-kv"><span>意图</span><b>{preview.intent}</b></div>
+          <div className="pm-kv"><span>置信度</span><b>{Math.round(preview.confidence * 100)}%</b></div>
+          <div className="pm-kv"><span>风险</span><b>{preview.riskLevel}</b></div>
+          <p>{preview.clarification || preview.proposedAction}</p>
+          <pre>{JSON.stringify(preview.slots, null, 2)}</pre>
+          {!preview.clarification && (
+            <button className="pm-primary" onClick={() => void execute(preview.requiresConfirmation)}>
+              {preview.requiresConfirmation ? '确认并执行' : '执行'}
+            </button>
+          )}
+        </div>
+      )}
+      {run && <RunOutput run={run} />}
+    </div>
+  );
+}
+
+function RunOutput({ run }: { run: ConsoleRun }) {
+  return (
+    <div className="run-output">
+      <div className="pm-kv"><span>状态</span><b className={`run-${run.status}`}>{run.status}</b></div>
+      <div className="pm-kv"><span>命令</span><b>{run.command.join(' ')}</b></div>
+      {run.error && <div className="pm-error-text">{run.error}</div>}
+      {run.stdout && <pre>{run.stdout}</pre>}
+      {run.stderr && <pre className="stderr">{run.stderr}</pre>}
+    </div>
+  );
+}
+
+export function ImportDataPage() {
+  const { overview, error, reload } = useOverview();
+  const [path, setPath] = useState('');
+  const [sourceId, setSourceId] = useState('');
+  const [sourceName, setSourceName] = useState('');
+  const [federated, setFederated] = useState(true);
+  const [includeOffice, setIncludeOffice] = useState(true);
+  const [autoEmbed, setAutoEmbed] = useState(true);
+  const [workers, setWorkers] = useState(1);
+  const [run, setRun] = useState<ConsoleRun | null>(null);
+  const [submitError, setSubmitError] = useState('');
+
+  useEffect(() => {
+    if (!run || run.status !== 'running') return;
+    const timer = setInterval(async () => {
+      try {
+        const next = await api.run(run.id) as ConsoleRun;
+        setRun(next);
+        if (next.status !== 'running') void reload();
+      } catch {}
+    }, 1500);
+    return () => clearInterval(timer);
+  }, [run, reload]);
+
+  const start = async () => {
+    setSubmitError('');
+    try {
+      const res = await api.startImportRun({ path, sourceId: sourceId || undefined, includeOffice, autoEmbed, workers }) as { runId: string };
+      setRun(await api.run(res.runId) as ConsoleRun);
+    } catch (e) {
+      setSubmitError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const addSource = async () => {
+    setSubmitError('');
+    try {
+      const res = await api.addSource({ id: sourceId, path, name: sourceName || undefined, federated }) as { runId: string };
+      setRun(await api.run(res.runId) as ConsoleRun);
+    } catch (e) {
+      setSubmitError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  return (
+    <div className="pm-page">
+      <h1>原始数据导入</h1>
+      {error && <div className="pm-card pm-error">{error}</div>}
+      {!overview ? <LoadingBlock /> : (
+        <div className="pm-grid two-col">
+          <div className="pm-card">
+            <h2>注册数据源</h2>
+            <table>
+              <thead><tr><th>Source</th><th>路径</th><th>页面</th><th>同步</th></tr></thead>
+              <tbody>
+                {overview.sources.map(source => (
+                  <tr key={source.id}>
+                    <td><b>{source.id}</b><div className="pm-muted">{source.federated ? 'federated' : 'isolated'}</div></td>
+                    <td className="mono">{source.local_path ?? '-'}</td>
+                    <td>{source.page_count}</td>
+                    <td>{formatDate(source.last_sync_at)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className="pm-card">
+            <h2>启动导入</h2>
+            <label>本地文件或文件夹路径</label>
+            <input value={path} onChange={e => setPath(e.target.value)} placeholder="D:\\项目资料" />
+            <label>Source ID（可选）</label>
+            <input value={sourceId} onChange={e => setSourceId(e.target.value)} placeholder="例如 project-docs" />
+            <label>Source 名称（注册 source 时可选）</label>
+            <input value={sourceName} onChange={e => setSourceName(e.target.value)} placeholder="例如 项目资料库" />
+            <div className="pm-form-row">
+              <label><input type="checkbox" checked={includeOffice} onChange={e => setIncludeOffice(e.target.checked)} /> 包含 Office/PDF/Excel</label>
+              <label><input type="checkbox" checked={autoEmbed} onChange={e => setAutoEmbed(e.target.checked)} /> 导入时向量化</label>
+              <label><input type="checkbox" checked={federated} onChange={e => setFederated(e.target.checked)} /> 参与跨源搜索</label>
+            </div>
+            <label>Workers</label>
+            <input type="number" min={1} max={8} value={workers} onChange={e => setWorkers(Number(e.target.value))} />
+            <div className="pm-actions">
+              <button className="pm-primary" onClick={() => void start()} disabled={!path.trim()}>开始导入</button>
+              <button className="pm-ghost" onClick={() => void addSource()} disabled={!path.trim() || !sourceId.trim()}>注册 source</button>
+            </div>
+            {submitError && <div className="pm-error-text">{submitError}</div>}
+            {run && <RunOutput run={run} />}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function BrainDataPage() {
+  const { overview } = useOverview();
+  const [rows, setRows] = useState<BrainPageRow[]>([]);
+  const [meta, setMeta] = useState({ total: 0, page: 1, pages: 1, limit: 10 });
+  const [selected, setSelected] = useState<BrainPageRow | null>(null);
+  const [chunks, setChunks] = useState<BrainPageChunk[]>([]);
+  const [selectedChunkIndex, setSelectedChunkIndex] = useState(0);
+  const [chunksLoading, setChunksLoading] = useState(false);
+  const [chunksError, setChunksError] = useState('');
+  const [filters, setFilters] = useState({ source: 'all', type: 'all', embedded: 'all', q: '', page: 1, pageSize: 10 });
+  const [gotoPage, setGotoPage] = useState('1');
+
+  useEffect(() => {
+    const qs = new URLSearchParams();
+    qs.set('page', String(filters.page));
+    qs.set('limit', String(filters.pageSize));
+    if (filters.source !== 'all') qs.set('source', filters.source);
+    if (filters.type !== 'all') qs.set('type', filters.type);
+    if (filters.embedded !== 'all') qs.set('embedded', filters.embedded);
+    if (filters.q.trim()) qs.set('q', filters.q.trim());
+    api.brainPages(`?${qs.toString()}`).then((data: any) => {
+      setRows(data.rows as BrainPageRow[]);
+      setMeta({ total: data.total, page: data.page, pages: data.pages, limit: data.limit ?? filters.pageSize });
+    }).catch(() => {});
+  }, [filters]);
+
+  useEffect(() => {
+    if (!selected) {
+      setChunks([]);
+      setSelectedChunkIndex(0);
+      setChunksError('');
+      return;
+    }
+    setChunks([]);
+    setSelectedChunkIndex(0);
+    setChunksError('');
+    setChunksLoading(true);
+    api.brainPageChunks(selected.source_id, selected.slug)
+      .then((data: any) => setChunks(data.rows as BrainPageChunk[]))
+      .catch(e => setChunksError(e instanceof Error ? e.message : String(e)))
+      .finally(() => setChunksLoading(false));
+  }, [selected]);
+
+  const types = useMemo(() => Object.keys(overview?.stats.pages_by_type ?? {}).sort(), [overview]);
+  const chunkBlocks = useMemo(() => {
+    if (chunks.length > 0) return chunks.map(chunk => ({ index: chunk.chunk_index, embedded: chunk.embedded }));
+    if (!selected) return [];
+    return Array.from({ length: selected.chunk_count }, (_, index) => ({
+      index,
+      embedded: index < selected.embedded_chunks,
+    }));
+  }, [chunks, selected]);
+  const selectedChunk = useMemo(
+    () => chunks.find(chunk => chunk.chunk_index === selectedChunkIndex) ?? chunks[0] ?? null,
+    [chunks, selectedChunkIndex],
+  );
+  const pageButtons = useMemo(() => {
+    const pages = new Set<number>([1, meta.pages, meta.page - 1, meta.page, meta.page + 1]);
+    if (meta.page <= 4) [2, 3, 4, 5].forEach(p => pages.add(p));
+    if (meta.page >= meta.pages - 3) [meta.pages - 4, meta.pages - 3, meta.pages - 2, meta.pages - 1].forEach(p => pages.add(p));
+    const valid = [...pages].filter(p => p >= 1 && p <= meta.pages).sort((a, b) => a - b);
+    const out: Array<number | 'ellipsis'> = [];
+    valid.forEach((page, index) => {
+      if (index > 0 && page - valid[index - 1] > 1) out.push('ellipsis');
+      out.push(page);
+    });
+    return out;
+  }, [meta.page, meta.pages]);
+  const goToPage = (page: number) => {
+    const next = Math.min(meta.pages, Math.max(1, page));
+    setFilters(f => ({ ...f, page: next }));
+    setGotoPage(String(next));
+  };
+  const renderPagination = () => (
+    <div className="pagination">
+      <span className="pagination-total">共 {meta.total} 条</span>
+      <select value={filters.pageSize} onChange={e => setFilters(f => ({ ...f, pageSize: Number(e.target.value), page: 1 }))}>
+        <option value={10}>10条/页</option>
+        <option value={20}>20条/页</option>
+        <option value={40}>40条/页</option>
+      </select>
+      <div className="pagination-pages">
+        <button className="page-arrow" disabled={meta.page <= 1} onClick={() => goToPage(meta.page - 1)}>{'<'}</button>
+        {pageButtons.map((page, index) => (
+          page === 'ellipsis'
+            ? <span className="page-ellipsis" key={`ellipsis-${index}`}>...</span>
+            : (
+              <button
+                key={page}
+                className={`page-number ${page === meta.page ? 'active' : ''}`}
+                onClick={() => goToPage(page)}
+              >
+                {page}
+              </button>
+            )
+        ))}
+        <button className="page-arrow" disabled={meta.page >= meta.pages} onClick={() => goToPage(meta.page + 1)}>{'>'}</button>
+      </div>
+      <form className="pagination-jump" onSubmit={e => { e.preventDefault(); goToPage(Number(gotoPage) || 1); }}>
+        <span>前往</span>
+        <input value={gotoPage} onChange={e => setGotoPage(e.target.value.replace(/\D/g, '').slice(0, 4))} />
+        <span>页</span>
+      </form>
+    </div>
+  );
+
+  useEffect(() => {
+    setGotoPage(String(meta.page));
+  }, [meta.page]);
+
+  return (
+    <div className="pm-page">
+      <h1>知识库数据浏览</h1>
+      <div className="pm-card">
+        <div className="filter-bar">
+          <input value={filters.q} onChange={e => setFilters(f => ({ ...f, q: e.target.value, page: 1 }))} placeholder="搜索 slug 或标题" />
+          <select value={filters.source} onChange={e => setFilters(f => ({ ...f, source: e.target.value, page: 1 }))}>
+            <option value="all">全部 source</option>
+            {overview?.sources.map(s => <option key={s.id} value={s.id}>{s.id}</option>)}
+          </select>
+          <select value={filters.type} onChange={e => setFilters(f => ({ ...f, type: e.target.value, page: 1 }))}>
+            <option value="all">全部类型</option>
+            {types.map(t => <option key={t} value={t}>{t}</option>)}
+          </select>
+          <select value={filters.embedded} onChange={e => setFilters(f => ({ ...f, embedded: e.target.value, page: 1 }))}>
+            <option value="all">向量化不限</option>
+            <option value="yes">已向量化</option>
+            <option value="no">未完成向量化</option>
+          </select>
+        </div>
+        <table>
+          <thead><tr><th>标题</th><th>Source</th><th>类型</th><th>Chunks</th><th>Embedding</th><th>更新</th></tr></thead>
+          <tbody>
+            {rows.map(row => (
+              <tr key={`${row.source_id}:${row.slug}`} onClick={() => setSelected(row)}>
+                <td><b>{row.title || row.slug}</b><div className="pm-muted mono">{row.slug}</div></td>
+                <td>{row.source_id}</td>
+                <td><span className="pm-pill">{row.type}</span></td>
+                <td>{row.chunk_count}</td>
+                <td>{row.embedded_chunks}/{row.chunk_count}</td>
+                <td>{formatDate(row.updated_at)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {renderPagination()}
+      </div>
+      {selected && (
+        <>
+          <div className="drawer-overlay" onClick={() => setSelected(null)} />
+          <div className="drawer light-drawer">
+            <button className="drawer-close" onClick={() => setSelected(null)}>×</button>
+            <h2>{selected.title || selected.slug}</h2>
+            <div className="page-detail-summary">
+              <div><span>Source</span><b>{selected.source_id}</b></div>
+              <div><span>类型</span><b>{selected.type}</b></div>
+              <div><span>Chunk</span><b>{selected.embedded_chunks}/{selected.chunk_count}</b></div>
+              <div><span>更新</span><b>{formatDate(selected.updated_at)}</b></div>
+            </div>
+            <h3>Chunk 状态</h3>
+            <p className="pm-hint">点击任意 chunk 方块，下方会显示该块对应的正文。深色表示已向量化，浅色表示尚未向量化。</p>
+            <div className="chunk-blocks">
+              {chunkBlocks.map(block => (
+                <button
+                  key={block.index}
+                  className={`${block.embedded ? 'embedded' : ''} ${block.index === selectedChunkIndex ? 'active' : ''}`}
+                  onClick={() => setSelectedChunkIndex(block.index)}
+                  title={`Chunk ${block.index + 1}: ${block.embedded ? '已向量化' : '未向量化'}`}
+                >
+                  {block.index + 1}
+                </button>
+              ))}
+            </div>
+            <div className="chunk-content-head">
+              <h3>Chunk {selectedChunk ? selectedChunk.chunk_index + 1 : selectedChunkIndex + 1} 内容</h3>
+              {selectedChunk && (
+                <span>{selectedChunk.chunk_source}{selectedChunk.token_count ? ` · ${selectedChunk.token_count} tokens` : ''}</span>
+              )}
+            </div>
+            {chunksLoading && <div className="pm-empty compact-empty">正在读取 chunk 内容...</div>}
+            {chunksError && <div className="pm-error-text">{chunksError}</div>}
+            {!chunksLoading && !chunksError && (
+              <p className="pm-preview chunk-preview">
+                {selectedChunk?.chunk_text || selected.preview || '无正文预览'}
+              </p>
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+export function NaturalLanguagePage() {
+  const { overview } = useOverview();
+  return (
+    <div className="pm-page">
+      <h1>自然语言任务</h1>
+      {overview && !overview.llm_enabled && (
+        <div className="pm-card pm-warning">
+          当前未启用自然语言能力。请先在私有配置中设置 chat_model 和对应 API key，例如 MIMO。
+        </div>
+      )}
+      <NaturalLanguagePanel />
+    </div>
+  );
+}
+
+export function ConnectionCenterPage() {
+  const { overview } = useOverview();
+  const origin = window.location.origin;
+  const [showCodeBuddyGuide, setShowCodeBuddyGuide] = useState(false);
+  const codeBuddyConfig = useMemo(() => JSON.stringify({
+    mcpServers: {
+      pmbrain: {
+        type: 'http',
+        url: `${origin}/mcp`,
+        headers: {
+          Authorization: 'Bearer PASTE_PMBrain_API_KEY_HERE',
+        },
+      },
+    },
+  }, null, 2), [origin]);
+  const copyCodeBuddyConfig = () => navigator.clipboard.writeText(codeBuddyConfig);
+  return (
+    <div className="pm-page">
+      <div className="pm-section-head">
+        <div>
+          <h1 className="title-with-info">
+            MCP 接入
+            <InfoIcon title="MCP 接入">
+              MCP 接入负责告诉外部 AI 工具服务地址和认证方式。下方 Agent 凭证管理用于创建可连接 PMBrain 的身份凭证。
+            </InfoIcon>
+          </h1>
+          <p className="pm-page-intro">
+            把 PMBrain 作为 MCP Server 接入 CodeBuddy、Cursor、Claude 等 AI 工具，让它们可以安全读取、检索和写入你的本地知识库。
+          </p>
+        </div>
+        <button className="pm-primary" onClick={() => setShowCodeBuddyGuide(true)}>MCP 接入教程</button>
+      </div>
+      <div className="pm-card mcp-guide-strip compact-guide">
+        <div className="mcp-guide-steps">
+          <span>1 创建 Agent</span>
+          <span>2 复制配置</span>
+          <span>3 重启/刷新 AI 工具</span>
+          <span>4 让 Agent 搜索 PMBrain</span>
+        </div>
+      </div>
+      <div className="pm-grid three-col">
+        <MetricCard label="MCP Server" value={`${origin}/mcp`} />
+        <MetricCard label="OAuth Discovery" value={`${origin}/.well-known/oauth-authorization-server`} />
+        <MetricCard label="Token URL" value={`${origin}/token`} />
+      </div>
+      <AgentsPage
+        title="Agent 凭证管理"
+        titleHelp={(
+          <InfoIcon title="Agent 凭证管理">
+            这里就是原来的 Agent 管理。外部工具访问 PMBrain 必须携带一个 Agent 凭证，最简单方式是新建 API Key，然后把它填入教程里的 Authorization: Bearer。
+          </InfoIcon>
+        )}
+        description="为 CodeBuddy、Cursor、Claude 等外部工具创建专用 API Key 或 OAuth 客户端。每个工具建议使用独立 Agent 凭证，后续可以单独撤销、审计请求日志和控制权限。"
+      />
+      {overview && (
+        <div className="pm-card">
+          <h2>连接状态</h2>
+          <div className="pm-kv"><span>今日请求</span><b>见请求日志</b></div>
+          <div className="pm-kv"><span>LLM</span><b>{overview.llm_enabled ? '已配置' : '未配置'}</b></div>
+        </div>
+      )}
+      {showCodeBuddyGuide && (
+        <div className="modal-overlay" onClick={() => setShowCodeBuddyGuide(false)}>
+          <div className="modal mcp-tutorial-modal" onClick={e => e.stopPropagation()}>
+            <button className="drawer-close" onClick={() => setShowCodeBuddyGuide(false)}>&#10005;</button>
+            <div className="modal-title">MCP 接入教程</div>
+            <div className="mcp-tutorial-body">
+              <section>
+                <h3>准备工作</h3>
+                <ol>
+                  <li>保持 PMBrain HTTP 服务运行，当前 MCP 地址是 <code>{origin}/mcp</code>。</li>
+                  <li>在本页下方点击 <b>+ API Key</b>，创建一个给 CodeBuddy 使用的 Agent。</li>
+                  <li>复制创建时显示的 API Key。离开弹窗后不会再次显示完整密钥。</li>
+                </ol>
+              </section>
+              <section>
+                <h3>CodeBuddy 配置</h3>
+                <p>把下面内容保存到用户级 <code>~/.codebuddy/.mcp.json</code>，或当前项目根目录的 <code>.mcp.json</code>。</p>
+                <div className="code-block">
+                  <pre>{codeBuddyConfig}</pre>
+                  <button className="copy-btn" onClick={copyCodeBuddyConfig}>复制</button>
+                </div>
+                <p className="pm-hint">把 <code>PASTE_PMBrain_API_KEY_HERE</code> 替换成刚创建的 API Key，只替换这段占位符。</p>
+              </section>
+              <section>
+                <h3>验证连接</h3>
+                <ol>
+                  <li>保存配置后重启 CodeBuddy，或执行它的重新加载插件/刷新 MCP 操作。</li>
+                  <li>在 CodeBuddy 中询问：<code>用 PMBrain 搜索一下最近的项目资料</code>。</li>
+                  <li>回到本页的请求日志，确认出现来自 CodeBuddy 的 MCP 请求。</li>
+                </ol>
+              </section>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function ModelConfigPage() {
+  const { overview } = useOverview();
+  if (!overview) return <LoadingBlock />;
+  return (
+    <div className="pm-page">
+      <h1>API 与模型配置</h1>
+      <div className="pm-grid two-col">
+        <div className="pm-card">
+          <h2>模型路由</h2>
+          <div className="pm-kv"><span>Chat</span><b>{overview.chat_model ?? '未配置'}</b></div>
+          <div className="pm-kv"><span>Embedding</span><b>{overview.embedding_model ?? '未配置'}</b></div>
+          <div className="pm-kv"><span>Dimensions</span><b>{overview.embedding_dimensions ?? '-'}</b></div>
+          <div className="pm-kv"><span>Expansion</span><b>{overview.expansion_model ?? '-'}</b></div>
+        </div>
+        <div className="pm-card">
+          <h2>Provider Key 状态</h2>
+          {Object.entries(overview.provider_status.providers).map(([name, ok]) => (
+            <div className="pm-kv" key={name}>
+              <span>{name}</span>
+              <b className={ok ? 'pm-ok' : 'pm-warn'}>{ok ? '已配置' : '未配置'}</b>
+            </div>
+          ))}
+        </div>
+      </div>
+      <div className="pm-card">
+        <h2>脱敏配置</h2>
+        <pre>{JSON.stringify(overview.config, null, 2)}</pre>
+      </div>
+    </div>
+  );
+}
+
+export function SystemDiagnosticPage() {
+  const { overview, reload } = useOverview();
+  const [run, setRun] = useState<ConsoleRun | null>(null);
+  const [doctorRuns, setDoctorRuns] = useState<ConsoleRun[]>([]);
+  const [error, setError] = useState('');
+
+  const loadDoctorRuns = async () => {
+    const data = await api.runs() as { rows: ConsoleRun[] };
+    const rows = data.rows.filter(row => row.kind === 'doctor_check');
+    setDoctorRuns(rows);
+    if (!run && rows.length > 0) setRun(rows[0]);
+  };
+
+  useEffect(() => {
+    loadDoctorRuns().catch(e => setError(e instanceof Error ? e.message : String(e)));
+  }, []);
+
+  useEffect(() => {
+    if (!run || (run.status !== 'running' && run.status !== 'queued')) return;
+    let alive = true;
+    const timer = setInterval(async () => {
+      try {
+        const next = await api.run(run.id) as ConsoleRun;
+        if (!alive) return;
+        setRun(next);
+        if (next.status !== 'running' && next.status !== 'queued') {
+          await loadDoctorRuns();
+        }
+      } catch (e) {
+        if (alive) setError(e instanceof Error ? e.message : String(e));
+      }
+    }, 1000);
+    return () => {
+      alive = false;
+      clearInterval(timer);
+    };
+  }, [run?.id, run?.status]);
+
+  const runDoctor = async () => {
+    setError('');
+    try {
+      const res = await api.startActionRun('doctor_check') as { runId: string };
+      setRun(await api.run(res.runId) as ConsoleRun);
+      await loadDoctorRuns();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  return (
+    <div className="pm-page">
+      <h1>系统诊断</h1>
+      {overview && (
+        <div className="pm-grid metrics-grid">
+          <MetricCard label="数据库" value={overview.engine} hint={overview.recent_write_at ? '可读取' : '无最近写入'} />
+          <MetricCard label="Embedding" value={pct(overview.embedding_coverage)} hint={`${overview.pending_embeddings} pending`} />
+          <MetricCard label="Sources" value={overview.sources.length} hint={`${overview.federated_source_count} federated`} />
+          <MetricCard label="LLM" value={overview.llm_enabled ? '已配置' : '未配置'} />
+        </div>
+      )}
+      <div className="pm-card">
+        <div className="pm-actions">
+          <button className="pm-primary" onClick={() => void runDoctor()}>运行 doctor --fast</button>
+          <button className="pm-ghost" onClick={() => void reload()}>刷新状态</button>
+        </div>
+        {error && <div className="pm-error-text">{error}</div>}
+        {doctorRuns.length > 0 && (
+          <div className="diagnostic-history">
+            <h2>本次服务运行记录</h2>
+            {doctorRuns.slice(0, 5).map(item => (
+              <button
+                key={item.id}
+                className={run?.id === item.id ? 'active' : ''}
+                onClick={() => setRun(item)}
+              >
+                <span>{new Date(item.startedAt).toLocaleString()}</span>
+                <b className={`run-${item.status}`}>{item.status}</b>
+              </button>
+            ))}
+          </div>
+        )}
+        {run && <RunOutput run={run} />}
+      </div>
+    </div>
+  );
+}

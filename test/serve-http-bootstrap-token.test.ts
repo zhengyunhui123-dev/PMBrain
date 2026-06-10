@@ -7,7 +7,7 @@
  * the rule can't drift without the suite catching it.
  */
 import { describe, test, expect } from 'bun:test';
-import { resolveBootstrapToken } from '../src/commands/serve-http.ts';
+import { renderAdminTokenFooter, resolveBootstrapToken } from '../src/commands/serve-http.ts';
 
 describe('resolveBootstrapToken (v0.36.1.x #1024)', () => {
   test('unset env → generates a fresh token via the injected RNG', () => {
@@ -70,5 +70,21 @@ describe('resolveBootstrapToken (v0.36.1.x #1024)', () => {
   test('31 chars (one short) → error', () => {
     const r = resolveBootstrapToken('0123456789abcdef0123456789abcde'); // 31
     expect(r.kind).toBe('error');
+  });
+});
+
+describe('renderAdminTokenFooter', () => {
+  test('prints generated admin token as one raw copyable line', () => {
+    const token = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
+    const footer = renderAdminTokenFooter({
+      suppressBootstrapPrint: false,
+      bootstrapFromEnv: false,
+      bootstrapToken: token,
+    });
+
+    const lines = footer.split('\n');
+    expect(lines).toContain(token);
+    expect(lines).not.toContain(`║  ${token.slice(0, 50)}  ║`);
+    expect(lines).not.toContain(`║  ${token.slice(50).padEnd(50)}  ║`);
   });
 });

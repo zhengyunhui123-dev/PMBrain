@@ -4,7 +4,7 @@
       "type": "http",
       "url": "http://localhost:3131/mcp",
       "headers": {
-        "Authorization": "Bearer gbrain_f25ca949288f8fb29ec1e7202b77d207b3b997f6af9b8f528e6ab4f3cfe6ce55"
+        "Authorization": "Bearer YOUR_GBRAIN_TOKEN_HERE"
       }
     }
   }

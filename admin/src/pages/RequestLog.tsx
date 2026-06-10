@@ -17,6 +17,21 @@ function statusLabel(status: string): string {
   return status === 'success' ? '成功' : status === 'error' ? '错误' : status;
 }
 
+function InfoIcon({ title, children }: { title: string; children: React.ReactNode }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <span className="info-popover-wrap">
+      <button className="info-icon" onClick={() => setOpen(value => !value)} aria-label={`${title}说明`}>?</button>
+      {open && (
+        <span className="info-popover">
+          <b>{title}</b>
+          <span>{children}</span>
+        </span>
+      )}
+    </span>
+  );
+}
+
 export function RequestLogPage() {
   const [data, setData] = useState<{ rows: LogEntry[]; total: number; page: number; pages: number }>({
     rows: [], total: 0, page: 1, pages: 1,
@@ -61,7 +76,12 @@ export function RequestLogPage() {
   return (
     <>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
-        <h1 className="page-title" style={{ marginBottom: 0 }}>请求日志</h1>
+        <h1 className="page-title title-with-info" style={{ marginBottom: 0 }}>
+          请求日志
+          <InfoIcon title="请求日志">
+            记录外部 Agent 通过 MCP 调用 PMBrain 的时间、操作、参数、延迟和状态。用它排查 CodeBuddy 等工具是否接入成功。
+          </InfoIcon>
+        </h1>
         <select value={agentFilter} onChange={e => { setAgentFilter(e.target.value); setPage(1); }}
           style={{ background: 'var(--bg-secondary)', color: 'var(--text-primary)', border: '1px solid var(--border)', borderRadius: 6, padding: '4px 8px', fontSize: 13 }}>
           <option value="all">全部 Agent</option>

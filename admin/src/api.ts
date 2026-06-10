@@ -37,6 +37,21 @@ export const api = {
   login: (token: string) => apiFetch('/admin/login', { method: 'POST', body: JSON.stringify({ token }) }),
   signOutEverywhere: () => apiFetch('/admin/api/sign-out-everywhere', { method: 'POST' }),
   stats: () => apiFetch('/admin/api/stats'),
+  brainOverview: () => apiFetch('/admin/api/brain/overview'),
+  brainPages: (qs = '') => apiFetch(`/admin/api/brain/pages${qs}`),
+  brainPageChunks: (sourceId: string, slug: string) =>
+    apiFetch(`/admin/api/brain/pages/${encodeURIComponent(sourceId)}/${encodeURIComponent(slug)}/chunks`),
+  llmStatus: () => apiFetch('/admin/api/llm/status'),
+  previewIntent: (text: string) => apiFetch('/admin/api/intent/preview', { method: 'POST', body: JSON.stringify({ text }) }),
+  executeIntent: (previewId: string, confirmed = false) =>
+    apiFetch('/admin/api/intent/execute', { method: 'POST', body: JSON.stringify({ previewId, confirmed }) }),
+  runs: () => apiFetch('/admin/api/runs'),
+  run: (id: string) => apiFetch(`/admin/api/runs/${encodeURIComponent(id)}`),
+  startActionRun: (action: string) => apiFetch('/admin/api/runs/action', { method: 'POST', body: JSON.stringify({ action }) }),
+  startImportRun: (body: { path: string; sourceId?: string; includeOffice: boolean; autoEmbed: boolean; workers: number }) =>
+    apiFetch('/admin/api/import-runs', { method: 'POST', body: JSON.stringify(body) }),
+  addSource: (body: { id: string; path: string; name?: string; federated: boolean }) =>
+    apiFetch('/admin/api/sources', { method: 'POST', body: JSON.stringify(body) }),
   health: () => apiFetch('/admin/api/health-indicators'),
   agents: () => apiFetch('/admin/api/agents'),
   requests: (page = 1, qs = '') => apiFetch(`/admin/api/requests?page=${page}${qs}`),

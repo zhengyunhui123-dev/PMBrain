@@ -74,28 +74,45 @@ export function JobsWatchPage() {
   const ts = new Date(snap.ts_ms).toLocaleTimeString();
 
   return (
-    <div style={{ padding: 24, fontFamily: 'var(--font-mono, "JetBrains Mono", monospace)' }}>
-      <h1 style={{ fontSize: 18, marginBottom: 4 }}>
-        任务监控
-        <span style={{ marginLeft: 12, color: 'var(--text-muted, #777)', fontSize: 12, fontWeight: 'normal' }}>
-          更新于 {ts}
-        </span>
-      </h1>
-
-      <section style={{ marginTop: 24 }}>
-        <h2 style={{ fontSize: 14, marginBottom: 8 }}>队列</h2>
+    <div className="pm-page jobs-page">
+      <div className="pm-section-head">
         <div>
+          <h1>任务监控</h1>
+          <p className="pm-page-intro">
+            用来观察 PMBrain 后台队列是否健康：导入、同步、向量化、自然语言执行等长任务都会进入这里。等待和活跃表示当前负载，停滞和退避用于发现任务卡住或数据库竞争。
+          </p>
+        </div>
+        <span className="pm-pill">更新于 {ts}</span>
+      </div>
+
+      <div className="pm-grid three-col">
+        <div className="pm-card">
+          <h2>队列</h2>
+          <div className="jobs-health-line">
           等待=<b>{snap.queue_health.waiting}</b>{'  '}
           活跃=<b>{snap.queue_health.active}</b>{'  '}
           停滞=<b style={{ color: snap.queue_health.stalled > 0 ? 'var(--accent-warn, #d29922)' : undefined }}>
             {snap.queue_health.stalled}
           </b>
+          </div>
+          <p className="pm-hint">正常情况下等待和停滞应接近 0。</p>
         </div>
-      </section>
+        <div className="pm-card">
+          <h2>租约压力（1 小时）</h2>
+          <div className="jobs-big-number" style={{ color: leasePressureColor(snap.lease_pressure_1h) }}>
+            {snap.lease_pressure_1h}
+          </div>
+          <p className="pm-hint">退避次数升高通常表示并发锁竞争或任务执行受阻。</p>
+        </div>
+        <div className="pm-card">
+          <h2>主要用途</h2>
+          <p className="jobs-desc">判断后台任务有没有堆积、卡死、失败，以及预算或外部模型调用是否出现异常。</p>
+        </div>
+      </div>
 
       {snap.by_type.length > 0 && (
-        <section style={{ marginTop: 24 }}>
-          <h2 style={{ fontSize: 14, marginBottom: 8 }}>按类型统计（24 小时）</h2>
+        <section className="pm-card">
+          <h2>按类型统计（24 小时）</h2>
           <table style={{ borderCollapse: 'collapse' }}>
             <thead>
               <tr style={{ color: 'var(--text-muted, #777)', fontSize: 12 }}>
@@ -121,16 +138,9 @@ export function JobsWatchPage() {
         </section>
       )}
 
-      <section style={{ marginTop: 24 }}>
-        <h2 style={{ fontSize: 14, marginBottom: 8 }}>租约压力（1 小时）</h2>
-        <div style={{ color: leasePressureColor(snap.lease_pressure_1h) }}>
-          {snap.lease_pressure_1h} 次退避
-        </div>
-      </section>
-
       {snap.top_errors.length > 0 && (
-        <section style={{ marginTop: 24 }}>
-          <h2 style={{ fontSize: 14, marginBottom: 8 }}>主要错误（24 小时）</h2>
+        <section className="pm-card">
+          <h2>主要错误（24 小时）</h2>
           <table style={{ borderCollapse: 'collapse' }}>
             <tbody>
               {snap.top_errors.slice(0, 5).map(e => (
@@ -147,8 +157,8 @@ export function JobsWatchPage() {
       )}
 
       {snap.budget_owners.length > 0 && (
-        <section style={{ marginTop: 24 }}>
-          <h2 style={{ fontSize: 14, marginBottom: 8 }}>预算所有者</h2>
+        <section className="pm-card">
+          <h2>预算所有者</h2>
           <table style={{ borderCollapse: 'collapse' }}>
             <thead>
               <tr style={{ color: 'var(--text-muted, #777)', fontSize: 12 }}>

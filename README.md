@@ -15,6 +15,7 @@ PMBrain 集成了 GBrain 的核心能力，安装后相当于给你的 AI 工具
 - **混合搜索引擎**：向量搜索 + 关键词 + 知识图谱三重融合，搜索质量远高于单纯的关键词匹配
 - **知识图谱**：自动从文档中提取人物、公司、项目之间的关联关系
 - **MCP 接口**：CodeBuddy、Codex、Cursor、Claude Code 等 AI 工具在对话中直接调用知识库
+- **GUI 管理控制台**：通过浏览器导入资料、浏览知识库、运行自然语言任务、配置 MCP 接入、查看任务监控和系统诊断
 - **数据本地化**：知识库存储在你自己的电脑或服务器上，不会上传到第三方云端，确保公司机密和个人隐私不泄露
 - **双引擎架构**：支持本地 PGLite 和 Docker Postgres 两种部署方式
 
@@ -46,13 +47,32 @@ bun src/cli.ts sources add my-project --path "D:\项目文档"
 bun src/cli.ts sync --source my-project
 ```
 
-### 搜索可视化 + 可溯源
+### 原始数据和知识库数据可视化
 
-每个搜索结果可以查看评分是怎么来的：
+启动 Admin Console 后，可以在浏览器里查看原始数据导入、知识库页面、数据源分布、向量化覆盖率、MCP 接入状态和后台任务健康情况。
+
+```powershell
+gbrain serve --http --port 3131
+```
+
+浏览器打开 `http://localhost:3131/admin`，即可进入 PMBrain 知识控制台。
+
+CLI 仍然支持可溯源搜索，每个搜索结果可以查看评分来源：
 
 ```powershell
 gbrain search "项目进度" --explain
 ```
+
+### 自然语言 AI 控制台
+
+Admin Console 不是传统后台，而是面向 AI Agent 的本地控制台。你可以直接输入自然语言任务：
+
+- `导入 D:\项目文档\需求.md`
+- `同步所有知识库`
+- `查一下陆海新通道项目资料`
+- `运行系统诊断`
+
+系统会调用已配置的对话模型识别意图，校验后映射到 PMBrain 允许的操作。
 
 ### 多模型支持（国内可用）
 
@@ -124,7 +144,12 @@ gbrain init
 
 # 7. 验证
 gbrain doctor
+
+# 8. 启动 GUI 管理控制台
+gbrain serve --http --port 3131
 ```
+
+启动后浏览器打开 `http://localhost:3131/admin`。首次登录需要使用终端打印的 Admin Token，或让 AI Agent 生成一次性管理员登录链接。
 
 ### 方式二：PGLite 本地安装（macOS / Linux 推荐）
 
@@ -145,6 +170,9 @@ gbrain init --pglite
 
 # 5. 验证
 gbrain doctor
+
+# 6. 启动 GUI 管理控制台
+gbrain serve --http --port 3131
 ```
 
 > 安装后 CLI 命令是 `gbrain`，任何路径下直接 `gbrain <命令>` 即可。
@@ -156,6 +184,13 @@ git clone https://github.com/zhengyunhui123-dev/PMBrain.git
 cd PMBrain
 bun install
 bun src/cli.ts init --pglite
+bun src/cli.ts serve --http --port 3131
+```
+
+如果修改了 Admin Console 前端代码，先运行：
+
+```powershell
+bun run build:admin
 ```
 
 ### 方式四：Supabase 托管数据库
@@ -195,7 +230,12 @@ bun src/cli.ts search "关键词"
 # 3. 同步增量
 bun src/cli.ts sync --all
 bun src/cli.ts embed --stale
+
+# 4. 打开 GUI 管理控制台
+bun src/cli.ts serve --http --port 3131
 ```
+
+浏览器访问 `http://localhost:3131/admin` 后，可以通过图形界面完成导入、浏览、MCP 接入、任务监控和系统诊断。
 
 ---
 
@@ -232,6 +272,13 @@ bun src/cli.ts embed --stale
 ```
 
 启动后浏览器打开 `http://localhost:3131/admin` 可查看管理后台。
+
+如果希望每次重启后管理员初始令牌保持不变，可以设置环境变量：
+
+```powershell
+$env:GBRAIN_ADMIN_BOOTSTRAP_TOKEN="至少32位的安全随机字符串"
+gbrain serve --http --port 3131
+```
 
 ### 在线/远程服务器的配置方式
 
@@ -303,6 +350,7 @@ PMBrain 需要调用 AI 接口来生成向量和回答，Key 配置在 `~/.gbrai
 
 ```
 PMBrain/
+├── admin/                  # Admin Console 前端源码
 ├── src/                    # 源代码
 │   ├── cli.ts              # CLI 入口
 │   ├── core/               # 核心引擎、搜索、AI 网关、梦境周期
@@ -311,7 +359,7 @@ PMBrain/
 │   │   ├── search/         # 混合搜索
 │   │   ├── ai/             # AI 网关 + 18 个提供商配方
 │   │   └── cycle/          # Dream 周期各阶段
-│   ├── commands/           # CLI 命令
+│   ├── commands/           # CLI 命令和 HTTP Admin Console 后端
 │   └── mcp/                # MCP 服务器
 ├── skills/                 # AI 智能体技能（43 个）
 ├── templates/              # 模式包模板
@@ -323,7 +371,6 @@ PMBrain/
 
 - [ ] **国内视频网站导入**：B站等国内视频平台内容直接导入知识库
 - [ ] **全程可视化可溯源**：类似 UltraRAG 的搜索链路可视化
-- [ ] **知识库可视化页面**：图形化展示知识库内容，方便浏览和管理
 - [ ] **本地数据库安装简化**：让非技术用户也能一键部署
 
 ## 许可证

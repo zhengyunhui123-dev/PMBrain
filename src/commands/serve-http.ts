@@ -43,6 +43,19 @@ import {
   type IngestionContentType,
   type IngestionEvent,
 } from '../core/ingestion/types.ts';
+import {
+  executePreview,
+  getAdminBrainOverview,
+  getAdminBrainPageChunks,
+  getAdminLlmStatus,
+  getRun,
+  listAdminBrainPages,
+  listRuns,
+  previewIntent,
+  startActionRun,
+  startImportRun,
+  startSourceAddRun,
+} from './admin-console.ts';
 
 /**
  * /health endpoint timeout. 3s rather than 5s: Fly.io's default
@@ -88,6 +101,20 @@ export function resolveBootstrapToken(
     };
   }
   return { kind: 'ok', token: trimmed, fromEnv: true };
+}
+
+export function renderAdminTokenFooter(opts: {
+  suppressBootstrapPrint: boolean;
+  bootstrapFromEnv: boolean;
+  bootstrapToken: string;
+}): string {
+  if (opts.suppressBootstrapPrint) {
+    return '║  Admin Token: suppressed (--suppress-bootstrap-token) ║\n╚══════════════════════════════════════════════════════╝';
+  }
+  if (opts.bootstrapFromEnv) {
+    return '║  Admin Token: from $GBRAIN_ADMIN_BOOTSTRAP_TOKEN     ║\n╚══════════════════════════════════════════════════════╝';
+  }
+  return `║  Admin Token (copy next line into /admin login)     ║\n${opts.bootstrapToken}\n╚══════════════════════════════════════════════════════╝`;
 }
 
 export type ProbeHealthResult =
@@ -798,7 +825,7 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
     if (!isValid) {
       res.status(401).send(`<!DOCTYPE html>
 <html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>GBrain</title>
+<title>PMBrain</title>
 <style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:'Inter',-apple-system,BlinkMacSystemFont,sans-serif;background:#0a0a0f;color:#e0e0e0;min-height:100vh;display:flex;align-items:center;justify-content:center}
 .box{max-width:400px;padding:32px;text-align:left}
 .logo{font-size:28px;font-weight:600;margin-bottom:24px}
@@ -807,10 +834,10 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
 .hint b{color:#e0e0e0}
 .prompt{background:rgba(0,0,0,0.3);border-radius:6px;padding:8px 12px;margin-top:8px;font-family:monospace;font-size:12px;color:#88aaff}
 </style></head><body><div class="box">
-<div class="logo">GBrain</div>
+<div class="logo">PMBrain</div>
 <div class="msg">⚠️ This admin link has expired, was already used, or the server has restarted.</div>
-<div class="hint"><b>Get a fresh link from your AI agent:</b>
-<div class="prompt">&ldquo;Give me the GBrain admin login link&rdquo;</div>
+<div class="hint"><b>Get a fresh link from your AI agent, then open the returned URL in your browser:</b>
+<div class="prompt">&ldquo;Give me the PMBrain admin login link&rdquo;</div>
 </div></div></body></html>`);
       return;
     }
@@ -954,6 +981,135 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
       const msg = e instanceof Error ? e.message : String(e);
       res.status(500).json({ error: msg });
     }
+  });
+
+  app.get('/admin/api/brain/overview', requireAdmin, async (_req: Request, res: Response) => {
+    try {
+      res.json(await getAdminBrainOverview(engine, config, VERSION));
+    } catch (e) {
+      res.status(500).json({ error: e instanceof Error ? e.message : 'overview_failed' });
+    }
+  });
+
+  app.get('/admin/api/brain/pages', requireAdmin, async (req: Request, res: Response) => {
+    try {
+      res.json(await listAdminBrainPages(engine, {
+        source: req.query.source as string | undefined,
+        type: req.query.type as string | undefined,
+        q: req.query.q as string | undefined,
+        embedded: req.query.embedded as string | undefined,
+        page: req.query.page as string | undefined,
+        limit: req.query.limit as string | undefined,
+      }));
+    } catch (e) {
+      res.status(500).json({ error: e instanceof Error ? e.message : 'pages_failed' });
+    }
+  });
+
+  app.get('/admin/api/brain/pages/:sourceId/:slug/chunks', requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const sourceId = Array.isArray(req.params.sourceId) ? req.params.sourceId[0] : req.params.sourceId;
+      const slug = Array.isArray(req.params.slug) ? req.params.slug[0] : req.params.slug;
+      if (!sourceId || !slug) {
+        res.status(400).json({ error: 'missing_page_identity' });
+        return;
+      }
+      res.json(await getAdminBrainPageChunks(engine, sourceId, slug));
+    } catch (e) {
+      res.status(500).json({ error: e instanceof Error ? e.message : 'chunks_failed' });
+    }
+  });
+
+  app.get('/admin/api/llm/status', requireAdmin, (_req: Request, res: Response) => {
+    res.json(getAdminLlmStatus(config));
+  });
+
+  app.post('/admin/api/intent/preview', requireAdmin, express.json({ limit: '64kb' }), async (req: Request, res: Response) => {
+    try {
+      const text = typeof req.body?.text === 'string' ? req.body.text : '';
+      const preview = await previewIntent(text, config);
+      res.json(preview);
+    } catch (e) {
+      res.status(400).json({ error: e instanceof Error ? e.message : 'intent_preview_failed' });
+    }
+  });
+
+  app.post('/admin/api/intent/execute', requireAdmin, express.json(), (req: Request, res: Response) => {
+    try {
+      const previewId = typeof req.body?.previewId === 'string' ? req.body.previewId : '';
+      const confirmed = req.body?.confirmed === true;
+      const run = executePreview(previewId, confirmed, process.cwd());
+      res.json({ runId: run.id, status: run.status });
+    } catch (e) {
+      res.status(400).json({ error: e instanceof Error ? e.message : 'intent_execute_failed' });
+    }
+  });
+
+  app.get('/admin/api/runs', requireAdmin, (_req: Request, res: Response) => {
+    res.json({ rows: listRuns() });
+  });
+
+  app.get('/admin/api/runs/:id', requireAdmin, (req: Request, res: Response) => {
+    const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const run = id ? getRun(id) : null;
+    if (!run) {
+      res.status(404).json({ error: 'run_not_found' });
+      return;
+    }
+    res.json(run);
+  });
+
+  app.post('/admin/api/runs/action', requireAdmin, express.json(), (req: Request, res: Response) => {
+    try {
+      const action = req.body?.action;
+      if (!['doctor_check', 'show_sources', 'show_stats', 'embed_stale', 'sync_all'].includes(action)) {
+        res.status(400).json({ error: 'unsupported_action' });
+        return;
+      }
+      const run = startActionRun(action, process.cwd());
+      res.json({ runId: run.id, status: run.status });
+    } catch (e) {
+      res.status(400).json({ error: e instanceof Error ? e.message : 'action_run_failed' });
+    }
+  });
+
+  app.post('/admin/api/import-runs', requireAdmin, express.json({ limit: '16kb' }), (req: Request, res: Response) => {
+    try {
+      const run = startImportRun({
+        path: typeof req.body?.path === 'string' ? req.body.path : '',
+        sourceId: typeof req.body?.sourceId === 'string' ? req.body.sourceId : undefined,
+        includeOffice: req.body?.includeOffice === true,
+        noEmbed: req.body?.autoEmbed === false,
+        workers: Number(req.body?.workers ?? 1),
+      }, process.cwd());
+      res.json({ runId: run.id, status: run.status });
+    } catch (e) {
+      res.status(400).json({ error: e instanceof Error ? e.message : 'import_run_failed' });
+    }
+  });
+
+  app.post('/admin/api/sources', requireAdmin, express.json({ limit: '16kb' }), (req: Request, res: Response) => {
+    try {
+      const run = startSourceAddRun({
+        id: typeof req.body?.id === 'string' ? req.body.id : '',
+        path: typeof req.body?.path === 'string' ? req.body.path : '',
+        name: typeof req.body?.name === 'string' ? req.body.name : undefined,
+        federated: req.body?.federated !== false,
+      }, process.cwd());
+      res.json({ runId: run.id, status: run.status });
+    } catch (e) {
+      res.status(400).json({ error: e instanceof Error ? e.message : 'source_add_failed' });
+    }
+  });
+
+  app.get('/admin/api/import-runs/:id', requireAdmin, (req: Request, res: Response) => {
+    const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const run = id ? getRun(id) : null;
+    if (!run) {
+      res.status(404).json({ error: 'run_not_found' });
+      return;
+    }
+    res.json(run);
   });
 
   // v0.36.1.0 (T15 / E6 / D23) — Calibration tab data endpoints.
@@ -2074,11 +2230,7 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
 ║  MCP:       http://localhost:${port}/mcp${' '.repeat(Math.max(0, 21 - String(port).length))}║
 ║  Health:    http://localhost:${port}/health${' '.repeat(Math.max(0, 18 - String(port).length))}║
 ╠══════════════════════════════════════════════════════╣
-${suppressBootstrapPrint
-  ? '║  Admin Token: suppressed (--suppress-bootstrap-token) ║\n╚══════════════════════════════════════════════════════╝'
-  : bootstrapFromEnv
-    ? '║  Admin Token: from $GBRAIN_ADMIN_BOOTSTRAP_TOKEN     ║\n╚══════════════════════════════════════════════════════╝'
-    : `║  Admin Token (paste into /admin login):              ║\n║  ${bootstrapToken.substring(0, 50)}  ║\n║  ${bootstrapToken.substring(50).padEnd(50)}  ║\n╚══════════════════════════════════════════════════════╝`}
+${renderAdminTokenFooter({ suppressBootstrapPrint, bootstrapFromEnv, bootstrapToken })}
 `);
   });
 }

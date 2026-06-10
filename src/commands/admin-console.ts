@@ -186,10 +186,11 @@ export async function getAdminBrainOverview(engine: BrainEngine, config: GBrainC
 
 export async function listAdminBrainPages(
   engine: BrainEngine,
-  query: { source?: string; type?: string; q?: string; embedded?: string; page?: string },
+  query: { source?: string; type?: string; q?: string; embedded?: string; page?: string; limit?: string },
 ) {
   const page = Math.max(1, Number.parseInt(query.page ?? '1', 10) || 1);
-  const limit = 40;
+  const requestedLimit = Number.parseInt(query.limit ?? '10', 10) || 10;
+  const limit = [10, 20, 40].includes(requestedLimit) ? requestedLimit : 10;
   const offset = (page - 1) * limit;
   const filters: string[] = ['p.deleted_at IS NULL'];
   const params: (string | number)[] = [];
@@ -243,7 +244,7 @@ export async function listAdminBrainPages(
             COALESCE(cc.embedded_chunks, 0)::int AS embedded_chunks,
             (SELECT COUNT(*)::int FROM tags t WHERE t.page_id = p.id) AS tag_count,
             p.frontmatter,
-            LEFT(p.compiled_truth, 800) AS preview
+            LEFT(p.compiled_truth, 8000) AS preview
        ${baseSql}
       ORDER BY p.updated_at DESC, p.slug
       LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
@@ -258,8 +259,36 @@ export async function listAdminBrainPages(
     rows,
     total: count?.total ?? 0,
     page,
+    limit,
     pages: Math.max(1, Math.ceil((count?.total ?? 0) / limit)),
   };
+}
+
+export async function getAdminBrainPageChunks(engine: BrainEngine, sourceId: string, slug: string) {
+  const rows = await engine.executeRaw<{
+    id: number;
+    chunk_index: number;
+    chunk_text: string;
+    chunk_source: string;
+    token_count: number | null;
+    embedded: boolean;
+  }>(
+    `SELECT c.id,
+            c.chunk_index::int AS chunk_index,
+            c.chunk_text,
+            c.chunk_source,
+            c.token_count::int AS token_count,
+            (c.embedding IS NOT NULL) AS embedded
+       FROM pages p
+       JOIN content_chunks c ON c.page_id = p.id
+      WHERE p.source_id = $1
+        AND p.slug = $2
+        AND p.deleted_at IS NULL
+      ORDER BY c.chunk_index ASC`,
+    [sourceId, slug],
+  );
+
+  return { rows };
 }
 
 function getProviderStatus(config: GBrainConfig | null) {
