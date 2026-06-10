@@ -38,6 +38,7 @@ export const api = {
   signOutEverywhere: () => apiFetch('/admin/api/sign-out-everywhere', { method: 'POST' }),
   stats: () => apiFetch('/admin/api/stats'),
   brainOverview: () => apiFetch('/admin/api/brain/overview'),
+  docs: () => apiFetch('/admin/api/docs'),
   brainPages: (qs = '') => apiFetch(`/admin/api/brain/pages${qs}`),
   brainPageChunks: (sourceId: string, slug: string) =>
     apiFetch(`/admin/api/brain/pages/${encodeURIComponent(sourceId)}/${encodeURIComponent(slug)}/chunks`),

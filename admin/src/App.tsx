@@ -11,6 +11,7 @@ import {
   KnowledgeWorkbenchPage,
   ModelConfigPage,
   NaturalLanguagePage,
+  DocumentationPage,
   SystemDiagnosticPage,
 } from './pages/Console';
 import { api } from './api';
@@ -20,6 +21,7 @@ type Page =
   | 'dashboard'
   | 'import'
   | 'data'
+  | 'docs'
   | 'natural'
   | 'mcp'
   | 'config'
@@ -32,14 +34,14 @@ type Page =
 
 function getPage(): Page {
   const hash = window.location.hash.replace('#', '') || 'dashboard';
-  if (['login', 'dashboard', 'import', 'data', 'natural', 'mcp', 'config', 'agents', 'log', 'calibration', 'jobs', 'diagnostics', 'settings'].includes(hash)) return hash as Page;
+  if (['login', 'dashboard', 'import', 'data', 'docs', 'natural', 'mcp', 'config', 'agents', 'log', 'calibration', 'jobs', 'diagnostics', 'settings'].includes(hash)) return hash as Page;
   return 'dashboard';
 }
 
 export function App() {
   const [page, setPage] = useState<Page>(getPage);
   const [helpOpen, setHelpOpen] = useState(false);
-  const [supportPanel, setSupportPanel] = useState<'docs' | 'faq' | 'wecom' | null>(null);
+  const [supportPanel, setSupportPanel] = useState<'wecom' | null>(null);
   const wecomQrSrc = `${import.meta.env.BASE_URL}wecom-helper.jpg`;
   const navGroups: Array<{ title: string; items: Array<{ page: Page; label: string }> }> = [
     {
@@ -134,8 +136,8 @@ export function App() {
           </button>
           {helpOpen && (
             <div className="support-submenu">
-              <button onClick={() => setSupportPanel('docs')}>使用文档</button>
-              <button onClick={() => setSupportPanel('faq')}>常见问题</button>
+              <button onClick={() => { sessionStorage.setItem('pmbrain.docs.article', 'readme'); navigate('docs'); }}>使用文档</button>
+              <button onClick={() => { sessionStorage.setItem('pmbrain.docs.article', 'faq'); navigate('docs'); }}>常见问题</button>
             </div>
           )}
           <button className="support-link" onClick={() => setSupportPanel('wecom')}>
@@ -155,6 +157,7 @@ export function App() {
         {page === 'dashboard' && <KnowledgeWorkbenchPage onNavigate={(p) => navigate(p as Page)} />}
         {page === 'import' && <ImportDataPage />}
         {page === 'data' && <BrainDataPage />}
+        {page === 'docs' && <DocumentationPage />}
         {page === 'natural' && <NaturalLanguagePage />}
         {page === 'mcp' && <ConnectionCenterPage />}
         {page === 'config' && <ModelConfigPage />}
@@ -169,32 +172,6 @@ export function App() {
         <div className="modal-overlay" onClick={() => setSupportPanel(null)}>
           <div className="modal support-modal" onClick={e => e.stopPropagation()}>
             <button className="drawer-close" onClick={() => setSupportPanel(null)}>&#10005;</button>
-            {supportPanel === 'docs' && (
-              <>
-                <div className="modal-title">使用文档</div>
-                <div className="support-content">
-                  <p>按工作流使用 PMBrain：先导入原始资料，再检查向量化覆盖率，最后通过自然语言任务或 MCP Agent 检索知识库。</p>
-                  <ol>
-                    <li>原始数据导入：导入 Markdown、Office、PDF、Excel 或文件夹。</li>
-                    <li>MCP 接入：创建 API Key 后，把 MCP Server 配置到 CodeBuddy 等 AI 工具。</li>
-                    <li>自然语言任务：直接输入“导入这个 md”“同步所有知识库”“查一下某个项目资料”。</li>
-                  </ol>
-                </div>
-              </>
-            )}
-            {supportPanel === 'faq' && (
-              <>
-                <div className="modal-title">常见问题</div>
-                <div className="support-content">
-                  <h3>登录链接打不开？</h3>
-                  <p>管理员登录链接是一次性的，5 分钟内有效；过期、打开过一次或服务重启后都需要重新生成。</p>
-                  <h3>MCP 接入后没有响应？</h3>
-                  <p>先确认服务地址是当前端口，再检查 API Key 是否完整复制到 Authorization Bearer 头。</p>
-                  <h3>导入后搜索不到？</h3>
-                  <p>检查向量化覆盖率和待处理 chunk 数，必要时执行 stale embedding 任务。</p>
-                </div>
-              </>
-            )}
             {supportPanel === 'wecom' && (
               <>
                 <div className="modal-title">企微助手</div>

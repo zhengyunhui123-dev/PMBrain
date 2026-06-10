@@ -90,6 +90,22 @@ interface ConsoleRun {
   durationMs: number | null;
 }
 
+interface DocsArticle {
+  id: string;
+  title: string;
+  category: string;
+  markdown: string;
+}
+
+interface NaturalTaskHistoryItem {
+  id: string;
+  text: string;
+  createdAt: string;
+  preview?: IntentPreview;
+  run?: ConsoleRun;
+  error?: string;
+}
+
 function formatDate(value: string | null): string {
   if (!value) return '无记录';
   return new Date(value).toLocaleString();
@@ -249,12 +265,40 @@ export function KnowledgeWorkbenchPage({ onNavigate }: { onNavigate?: (page: str
   );
 }
 
+const NATURAL_HISTORY_KEY = 'pmbrain.natural.history';
+
+function loadNaturalHistory(): NaturalTaskHistoryItem[] {
+  try {
+    const raw = localStorage.getItem(NATURAL_HISTORY_KEY);
+    if (!raw) return [];
+    const rows = JSON.parse(raw);
+    return Array.isArray(rows) ? rows.slice(0, 30) as NaturalTaskHistoryItem[] : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveNaturalHistory(rows: NaturalTaskHistoryItem[]) {
+  localStorage.setItem(NATURAL_HISTORY_KEY, JSON.stringify(rows.slice(0, 30)));
+}
+
 function NaturalLanguagePanel({ compact = false, onNavigate }: { compact?: boolean; onNavigate?: (page: string) => void }) {
   const [text, setText] = useState('');
   const [preview, setPreview] = useState<IntentPreview | null>(null);
   const [run, setRun] = useState<ConsoleRun | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [history, setHistory] = useState<NaturalTaskHistoryItem[]>(() => loadNaturalHistory());
+  const [activeHistoryId, setActiveHistoryId] = useState<string | null>(null);
+
+  const upsertHistory = (item: NaturalTaskHistoryItem) => {
+    setHistory(current => {
+      const next = [item, ...current.filter(row => row.id !== item.id)].slice(0, 30);
+      saveNaturalHistory(next);
+      return next;
+    });
+    setActiveHistoryId(item.id);
+  };
 
   const submitPreview = async () => {
     if (!text.trim()) return;
@@ -262,10 +306,20 @@ function NaturalLanguagePanel({ compact = false, onNavigate }: { compact?: boole
     setError('');
     setPreview(null);
     setRun(null);
+    const historyItem: NaturalTaskHistoryItem = {
+      id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      text: text.trim(),
+      createdAt: new Date().toISOString(),
+    };
+    setActiveHistoryId(historyItem.id);
     try {
-      setPreview(await api.previewIntent(text) as IntentPreview);
+      const nextPreview = await api.previewIntent(text) as IntentPreview;
+      setPreview(nextPreview);
+      upsertHistory({ ...historyItem, preview: nextPreview });
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      const message = e instanceof Error ? e.message : String(e);
+      setError(message);
+      upsertHistory({ ...historyItem, error: message });
     } finally {
       setLoading(false);
     }
@@ -279,6 +333,16 @@ function NaturalLanguagePanel({ compact = false, onNavigate }: { compact?: boole
       const res = await api.executeIntent(preview.previewId, confirmed) as { runId: string };
       const first = await api.run(res.runId) as ConsoleRun;
       setRun(first);
+      if (activeHistoryId) {
+        const current = history.find(item => item.id === activeHistoryId);
+        upsertHistory({
+          id: activeHistoryId,
+          text: text.trim(),
+          createdAt: current?.createdAt ?? new Date().toISOString(),
+          preview,
+          run: first,
+        });
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -290,46 +354,95 @@ function NaturalLanguagePanel({ compact = false, onNavigate }: { compact?: boole
     if (!run || run.status !== 'running') return;
     const timer = setInterval(async () => {
       try {
-        setRun(await api.run(run.id) as ConsoleRun);
+        const nextRun = await api.run(run.id) as ConsoleRun;
+        setRun(nextRun);
+        if (activeHistoryId) {
+          const current = history.find(item => item.id === activeHistoryId);
+          if (current) upsertHistory({ ...current, run: nextRun });
+        }
       } catch {}
     }, 1200);
     return () => clearInterval(timer);
-  }, [run]);
+  }, [run, activeHistoryId, history]);
 
   return (
-    <div className={`pm-card nl-card ${compact ? 'compact' : ''}`}>
-      <div className="pm-section-head">
-        <h2>自然语言任务</h2>
-        {compact && <button className="pm-ghost" onClick={() => onNavigate?.('natural')}>完整视图</button>}
+    <div className={`nl-shell ${compact ? 'compact' : ''}`}>
+      <div className={`pm-card nl-card ${compact ? 'compact' : ''}`}>
+        <div className="pm-section-head">
+          <h2>自然语言任务</h2>
+          {compact && <button className="pm-ghost" onClick={() => onNavigate?.('natural')}>完整视图</button>}
+        </div>
+        <textarea
+          value={text}
+          onChange={e => setText(e.target.value)}
+          placeholder="例如：把这段话记下来；导入 D:\\项目资料；同步所有知识库；查一下陆海新通道项目资料"
+          rows={compact ? 4 : 6}
+        />
+        <div className="pm-actions">
+          <button className="pm-primary" onClick={() => void submitPreview()} disabled={loading || !text.trim()}>
+            {loading ? '识别中...' : '识别意图'}
+          </button>
+          <button className="pm-ghost" onClick={() => setText('现在知识库里有哪些数据？')}>示例</button>
+        </div>
+        {error && <div className="pm-error-text">{error}</div>}
+        {preview && (
+          <div className="intent-preview">
+            <div className="pm-kv"><span>意图</span><b>{preview.intent}</b></div>
+            <div className="pm-kv"><span>置信度</span><b>{Math.round(preview.confidence * 100)}%</b></div>
+            <div className="pm-kv"><span>风险</span><b>{preview.riskLevel}</b></div>
+            <p>{preview.clarification || preview.proposedAction}</p>
+            <pre>{JSON.stringify(preview.slots, null, 2)}</pre>
+            {!preview.clarification && (
+              <button className="pm-primary" onClick={() => void execute(preview.requiresConfirmation)}>
+                {preview.requiresConfirmation ? '确认并执行' : '执行'}
+              </button>
+            )}
+          </div>
+        )}
+        {run && <RunOutput run={run} />}
       </div>
-      <textarea
-        value={text}
-        onChange={e => setText(e.target.value)}
-        placeholder="例如：把这段话记下来；导入 D:\\项目资料；同步所有知识库；查一下陆海新通道项目资料"
-        rows={compact ? 4 : 6}
-      />
-      <div className="pm-actions">
-        <button className="pm-primary" onClick={() => void submitPreview()} disabled={loading || !text.trim()}>
-          {loading ? '识别中...' : '识别意图'}
-        </button>
-        <button className="pm-ghost" onClick={() => setText('现在知识库里有哪些数据？')}>示例</button>
-      </div>
-      {error && <div className="pm-error-text">{error}</div>}
-      {preview && (
-        <div className="intent-preview">
-          <div className="pm-kv"><span>意图</span><b>{preview.intent}</b></div>
-          <div className="pm-kv"><span>置信度</span><b>{Math.round(preview.confidence * 100)}%</b></div>
-          <div className="pm-kv"><span>风险</span><b>{preview.riskLevel}</b></div>
-          <p>{preview.clarification || preview.proposedAction}</p>
-          <pre>{JSON.stringify(preview.slots, null, 2)}</pre>
-          {!preview.clarification && (
-            <button className="pm-primary" onClick={() => void execute(preview.requiresConfirmation)}>
-              {preview.requiresConfirmation ? '确认并执行' : '执行'}
-            </button>
+      {!compact && (
+        <div className="pm-card nl-history">
+          <div className="pm-section-head">
+            <h2>历史记录</h2>
+            {history.length > 0 && (
+              <button
+                className="pm-ghost"
+                onClick={() => {
+                  saveNaturalHistory([]);
+                  setHistory([]);
+                  setActiveHistoryId(null);
+                }}
+              >
+                清空
+              </button>
+            )}
+          </div>
+          {history.length === 0 ? (
+            <div className="pm-empty compact-empty">暂无历史记录。每次识别意图后会自动保留在这里。</div>
+          ) : (
+            <div className="nl-history-list">
+              {history.map(item => (
+                <button
+                  key={item.id}
+                  className={item.id === activeHistoryId ? 'active' : ''}
+                  onClick={() => {
+                    setText(item.text);
+                    setPreview(item.preview ?? null);
+                    setRun(item.run ?? null);
+                    setError(item.error ?? '');
+                    setActiveHistoryId(item.id);
+                  }}
+                >
+                  <span>{new Date(item.createdAt).toLocaleString()}</span>
+                  <b>{item.preview?.intent ?? item.run?.status ?? (item.error ? '失败' : '已记录')}</b>
+                  <em>{item.text}</em>
+                </button>
+              ))}
+            </div>
           )}
         </div>
       )}
-      {run && <RunOutput run={run} />}
     </div>
   );
 }
@@ -644,6 +757,150 @@ export function NaturalLanguagePage() {
         </div>
       )}
       <NaturalLanguagePanel />
+    </div>
+  );
+}
+
+function slugifyHeading(text: string, index: number): string {
+  return `${text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '-').replace(/^-|-$/g, '') || 'section'}-${index}`;
+}
+
+function extractHeadings(markdown: string) {
+  return markdown
+    .split('\n')
+    .map((line, index) => {
+      const match = /^(#{1,3})\s+(.+)$/.exec(line);
+      if (!match) return null;
+      return { level: match[1].length, text: match[2].trim(), id: slugifyHeading(match[2].trim(), index) };
+    })
+    .filter(Boolean) as Array<{ level: number; text: string; id: string }>;
+}
+
+function MarkdownArticle({ markdown }: { markdown: string }) {
+  const blocks: React.ReactNode[] = [];
+  const lines = markdown.split('\n');
+  let list: string[] = [];
+  let code: string[] = [];
+  let inCode = false;
+
+  const flushList = () => {
+    if (list.length === 0) return;
+    blocks.push(<ul key={`list-${blocks.length}`}>{list.map((item, index) => <li key={index}>{item}</li>)}</ul>);
+    list = [];
+  };
+
+  const flushCode = () => {
+    if (code.length === 0) return;
+    blocks.push(<pre key={`code-${blocks.length}`}>{code.join('\n')}</pre>);
+    code = [];
+  };
+
+  lines.forEach((line, index) => {
+    if (line.startsWith('```')) {
+      if (inCode) {
+        flushCode();
+        inCode = false;
+      } else {
+        flushList();
+        inCode = true;
+      }
+      return;
+    }
+    if (inCode) {
+      code.push(line);
+      return;
+    }
+    const heading = /^(#{1,3})\s+(.+)$/.exec(line);
+    if (heading) {
+      flushList();
+      const id = slugifyHeading(heading[2].trim(), index);
+      const level = heading[1].length;
+      if (level === 1) blocks.push(<h1 id={id} key={id}>{heading[2].trim()}</h1>);
+      if (level === 2) blocks.push(<h2 id={id} key={id}>{heading[2].trim()}</h2>);
+      if (level === 3) blocks.push(<h3 id={id} key={id}>{heading[2].trim()}</h3>);
+      return;
+    }
+    const bullet = /^[-*]\s+(.+)$/.exec(line);
+    if (bullet) {
+      list.push(bullet[1]);
+      return;
+    }
+    flushList();
+    if (line.trim()) blocks.push(<p key={`p-${index}`}>{line}</p>);
+  });
+  flushList();
+  flushCode();
+  return <div className="docs-markdown">{blocks}</div>;
+}
+
+export function DocumentationPage() {
+  const [articles, setArticles] = useState<DocsArticle[]>([]);
+  const [selectedId, setSelectedId] = useState(() => sessionStorage.getItem('pmbrain.docs.article') || 'readme');
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    api.docs()
+      .then((data: any) => {
+        const rows = Array.isArray(data.articles) ? data.articles as DocsArticle[] : [];
+        setArticles(rows);
+        if (rows.length > 0 && !rows.some(row => row.id === selectedId)) setSelectedId(rows[0].id);
+      })
+      .catch(e => setError(e instanceof Error ? e.message : String(e)));
+  }, []);
+
+  useEffect(() => {
+    sessionStorage.setItem('pmbrain.docs.article', selectedId);
+  }, [selectedId]);
+
+  const selected = articles.find(article => article.id === selectedId) ?? articles[0] ?? null;
+  const headings = useMemo(() => extractHeadings(selected?.markdown ?? ''), [selected?.markdown]);
+  const groups = useMemo(() => {
+    const map = new Map<string, DocsArticle[]>();
+    articles.forEach(article => {
+      map.set(article.category, [...(map.get(article.category) ?? []), article]);
+    });
+    return [...map.entries()];
+  }, [articles]);
+
+  if (error) return <div className="pm-card pm-error">{error}</div>;
+  if (!selected) return <LoadingBlock text="正在读取 PMBrain 使用文档..." />;
+
+  return (
+    <div className="pm-page docs-page">
+      <div className="docs-layout">
+        <aside className="docs-index">
+          <div className="docs-breadcrumb">文档</div>
+          {groups.map(([category, rows]) => (
+            <div className="docs-group" key={category}>
+              <h2>{category}</h2>
+              {rows.map(article => (
+                <button
+                  key={article.id}
+                  className={article.id === selected.id ? 'active' : ''}
+                  onClick={() => setSelectedId(article.id)}
+                >
+                  {article.title}
+                </button>
+              ))}
+            </div>
+          ))}
+        </aside>
+        <article className="docs-content">
+          <MarkdownArticle markdown={selected.markdown} />
+        </article>
+        <aside className="docs-toc">
+          <h2>目录</h2>
+          {headings.map(heading => (
+            <button
+              key={heading.id}
+              className={`level-${heading.level}`}
+              onClick={() => document.getElementById(heading.id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+            >
+              {heading.text}
+            </button>
+          ))}
+        </aside>
+      </div>
     </div>
   );
 }

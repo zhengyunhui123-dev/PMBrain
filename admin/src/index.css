@@ -46,6 +46,7 @@ body {
   flex-direction: column;
   position: sticky;
   top: 0;
+  overflow-y: auto;
 }
 
 .sidebar-logo {
@@ -80,9 +81,6 @@ body {
   display: flex;
   flex-direction: column;
   gap: 14px;
-  min-height: 0;
-  overflow-y: auto;
-  padding-right: 2px;
 }
 
 .nav-group {
@@ -977,6 +975,70 @@ label { display: block; font-size: 13px; font-weight: 500; margin-bottom: 6px; }
   min-height: 118px;
 }
 
+.nl-shell {
+  display: grid;
+  grid-template-columns: minmax(420px, 1fr) minmax(300px, 0.42fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.nl-shell.compact {
+  display: block;
+}
+
+.nl-history {
+  position: sticky;
+  top: 0;
+}
+
+.nl-history-list {
+  display: grid;
+  gap: 8px;
+  max-height: calc(100vh - 210px);
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.nl-history-list button {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 4px 10px;
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #f8fafc;
+  padding: 10px 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.nl-history-list button:hover,
+.nl-history-list button.active {
+  border-color: #c8d4ff;
+  background: #eef2ff;
+}
+
+.nl-history-list span {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.nl-history-list b {
+  color: var(--accent);
+  font-size: 12px;
+}
+
+.nl-history-list em {
+  grid-column: 1 / -1;
+  color: var(--text-primary);
+  font-style: normal;
+  line-height: 1.5;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
 .intent-preview,
 .run-output {
   margin-top: 14px;
@@ -1294,14 +1356,156 @@ pre {
   max-width: 320px;
 }
 
+.docs-page {
+  max-width: none;
+}
+
+.docs-layout {
+  display: grid;
+  grid-template-columns: 230px minmax(0, 1fr) 230px;
+  gap: 34px;
+  align-items: start;
+}
+
+.docs-index,
+.docs-toc {
+  position: sticky;
+  top: 0;
+}
+
+.docs-breadcrumb {
+  color: var(--text-secondary);
+  font-size: 13px;
+  margin-bottom: 24px;
+}
+
+.docs-group {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 22px;
+}
+
+.docs-group h2,
+.docs-toc h2 {
+  margin: 0 0 8px;
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.docs-group button,
+.docs-toc button {
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  text-align: left;
+  cursor: pointer;
+  border-radius: 7px;
+}
+
+.docs-group button {
+  padding: 8px 10px;
+  font-size: 13px;
+}
+
+.docs-group button:hover,
+.docs-group button.active {
+  color: var(--accent);
+  background: #eef2ff;
+}
+
+.docs-content {
+  max-width: 920px;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 42px 52px;
+  box-shadow: 0 10px 26px rgba(34, 45, 72, 0.06);
+}
+
+.docs-markdown {
+  color: var(--text-secondary);
+  font-size: 15px;
+  line-height: 1.85;
+}
+
+.docs-markdown h1 {
+  color: var(--text-primary);
+  font-size: 34px;
+  line-height: 1.2;
+  margin: 0 0 34px;
+}
+
+.docs-markdown h2 {
+  color: var(--text-primary);
+  font-size: 26px;
+  margin: 42px 0 14px;
+  padding-top: 8px;
+}
+
+.docs-markdown h3 {
+  color: var(--text-primary);
+  font-size: 18px;
+  margin: 28px 0 10px;
+}
+
+.docs-markdown p {
+  margin: 0 0 16px;
+}
+
+.docs-markdown ul {
+  margin: 0 0 18px;
+  padding-left: 20px;
+}
+
+.docs-markdown li {
+  margin: 6px 0;
+}
+
+.docs-markdown pre {
+  margin: 14px 0 20px;
+  white-space: pre-wrap;
+}
+
+.docs-toc {
+  display: grid;
+  gap: 8px;
+  padding-top: 2px;
+}
+
+.docs-toc button {
+  padding: 3px 0;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.docs-toc button:hover {
+  color: var(--accent);
+}
+
+.docs-toc .level-2 {
+  padding-left: 12px;
+}
+
+.docs-toc .level-3 {
+  padding-left: 24px;
+  color: var(--text-muted);
+}
+
 @media (max-width: 1180px) {
   .metrics-grid,
   .three-col {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
   .pm-hero,
-  .two-col {
+  .two-col,
+  .nl-shell,
+  .docs-layout {
     grid-template-columns: 1fr;
+  }
+  .docs-index,
+  .docs-toc,
+  .nl-history {
+    position: static;
   }
 }
 
@@ -1324,5 +1528,8 @@ pre {
   .mcp-difference-card,
   .wecom-panel {
     grid-template-columns: 1fr;
+  }
+  .docs-content {
+    padding: 24px;
   }
 }
