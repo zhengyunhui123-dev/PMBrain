@@ -48,7 +48,7 @@ describe('admin console intent planning', () => {
         type: 'tool-call',
         toolCallId: 'call-1',
         toolName: 'pmbrain_action',
-        input: { intent: 'search_brain', query: '陆海新通道' },
+        input: { intent: 'search_brain', query: '项目文档' },
       }],
       stopReason: 'tool_calls',
       usage: { input_tokens: 1, output_tokens: 1, cache_read_tokens: 0, cache_creation_tokens: 0 },
@@ -56,12 +56,12 @@ describe('admin console intent planning', () => {
       providerId: 'zhipu',
     }));
 
-    const preview = await previewIntent('查一下陆海新通道项目资料', {
+    const preview = await previewIntent('查一下项目文档', {
       chat_model: 'zhipu:glm-4.5',
       zhipu_api_key: 'test-key',
     } as any);
 
     expect(preview.intent).toBe('search_brain');
-    expect(preview.slots.query).toBe('陆海新通道');
+    expect(preview.slots.query).toBe('项目文档');
   });
 });
