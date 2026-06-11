@@ -12,6 +12,7 @@
 
 import express from 'express';
 import type { Request, Response, NextFunction } from 'express';
+import type { Server as HttpServer } from 'node:http';
 import cookieParser from 'cookie-parser';
 import cors from 'cors';
 import rateLimit from 'express-rate-limit';
@@ -172,6 +173,88 @@ export async function probeHealth(
     // the timer already fired (we're in the timeout-rejection catch block).
     if (timer !== null) clearTimeout(timer);
   }
+}
+
+function waitForHttpServerClose(server: HttpServer, engine: BrainEngine): Promise<void> {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+
+    const cleanup = () => {
+      server.off('error', onError);
+      server.off('close', onClose);
+      process.off('SIGINT', onSigint);
+      process.off('SIGTERM', onSigterm);
+    };
+
+    const finish = async (err?: Error) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      try {
+        await engine.disconnect();
+      } catch (disconnectErr) {
+        if (!err) {
+          reject(disconnectErr);
+          return;
+        }
+      }
+      if (err) reject(err);
+      else resolve();
+    };
+
+    const shutdown = (signal: string) => {
+      console.error(`PMBrain HTTP server: graceful shutdown (${signal})`);
+      server.close((err) => {
+        if (err) void finish(err);
+        else void finish();
+      });
+    };
+
+    const onError = (err: Error) => { void finish(err); };
+    const onClose = () => { void finish(); };
+    const onSigint = () => shutdown('SIGINT');
+    const onSigterm = () => shutdown('SIGTERM');
+
+    server.on('error', onError);
+    server.on('close', onClose);
+    process.once('SIGINT', onSigint);
+    process.once('SIGTERM', onSigterm);
+  });
+}
+
+function listenHttpServer(
+  app: express.Express,
+  port: number,
+  bind: string,
+  onListening: () => void,
+): Promise<HttpServer> {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const server = app.listen(port, bind);
+
+    const cleanup = () => {
+      server.off('error', onError);
+      server.off('listening', onListeningEvent);
+    };
+
+    const onError = (err: Error) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(err);
+    };
+
+    const onListeningEvent = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      onListening();
+      resolve(server);
+    };
+
+    server.once('error', onError);
+    server.once('listening', onListeningEvent);
+  });
 }
 
 /**
@@ -1088,11 +1171,11 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
     }
   });
 
-  app.post('/admin/api/intent/execute', requireAdmin, express.json(), (req: Request, res: Response) => {
+  app.post('/admin/api/intent/execute', requireAdmin, express.json(), async (req: Request, res: Response) => {
     try {
       const previewId = typeof req.body?.previewId === 'string' ? req.body.previewId : '';
       const confirmed = req.body?.confirmed === true;
-      const run = executePreview(previewId, confirmed, process.cwd());
+      const run = await executePreview(engine, previewId, confirmed, process.cwd());
       res.json({ runId: run.id, status: run.status });
     } catch (e) {
       res.status(400).json({ error: e instanceof Error ? e.message : 'intent_execute_failed' });
@@ -1127,9 +1210,9 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
     }
   });
 
-  app.post('/admin/api/import-runs', requireAdmin, express.json({ limit: '16kb' }), (req: Request, res: Response) => {
+  app.post('/admin/api/import-runs', requireAdmin, express.json({ limit: '16kb' }), async (req: Request, res: Response) => {
     try {
-      const run = startImportRun({
+      const run = await startImportRun(engine, {
         path: typeof req.body?.path === 'string' ? req.body.path : '',
         sourceId: typeof req.body?.sourceId === 'string' ? req.body.sourceId : undefined,
         includeOffice: req.body?.includeOffice === true,
@@ -2267,7 +2350,7 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
   // ---------------------------------------------------------------------------
   const clientCount = await sql`SELECT count(*)::int as count FROM oauth_clients`;
 
-  app.listen(port, bind, () => {
+  const httpServer = await listenHttpServer(app, port, bind, () => {
     console.error(`
 ╔══════════════════════════════════════════════════════╗
 ║  PMBrain MCP Server v${VERSION.padEnd(36)}║
@@ -2287,4 +2370,6 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
 ${renderAdminTokenFooter({ suppressBootstrapPrint, bootstrapFromEnv, bootstrapToken })}
 `);
   });
+
+  await waitForHttpServerClose(httpServer, engine);
 }

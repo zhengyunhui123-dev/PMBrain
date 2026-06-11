@@ -88,6 +88,12 @@ interface SourceListEntry {
   last_sync_at: string | null;
 }
 
+interface IngestLogPathRow {
+  id: number;
+  source_ref: string;
+  pages_updated: unknown;
+}
+
 // ── Helpers ─────────────────────────────────────────────────
 
 // v0.40 (D7): shared helpers — re-exported as local names for back-compat
@@ -110,6 +116,22 @@ async function countPages(engine: BrainEngine, sourceId: string): Promise<number
     [sourceId],
   );
   return rows[0]?.n ?? 0;
+}
+
+function normalizeSourceRef(value: string): string {
+  return value.trim().replace(/[\\/]+/g, '/').replace(/\/+$/g, '').toLowerCase();
+}
+
+function readPagesUpdated(value: unknown): string[] {
+  if (Array.isArray(value)) return value.filter((item): item is string => typeof item === 'string');
+  if (typeof value === 'string') {
+    try {
+      return readPagesUpdated(JSON.parse(value));
+    } catch {
+      return [];
+    }
+  }
+  return [];
 }
 
 // ── Subcommand: add ─────────────────────────────────────────
@@ -178,6 +200,118 @@ async function runAdd(engine: BrainEngine, args: string[]): Promise<void> {
 }
 
 // ── Subcommand: list ────────────────────────────────────────
+
+async function runAdopt(engine: BrainEngine, args: string[]): Promise<void> {
+  const id = args[0];
+  if (!id) {
+    console.error('Usage: pmbrain sources adopt <id> --path <path> [--from-source default] [--dry-run] [--yes]');
+    process.exit(2);
+  }
+  validateSourceId(id);
+
+  let path: string | undefined;
+  let fromSource = 'default';
+  const dryRun = args.includes('--dry-run');
+  const yes = args.includes('--yes');
+  for (let i = 1; i < args.length; i++) {
+    const a = args[i];
+    if (a === '--path') { path = args[++i]; continue; }
+    if (a === '--from-source') { fromSource = args[++i] ?? ''; continue; }
+    if (a === '--dry-run' || a === '--yes') continue;
+    console.error(`Unknown flag: ${a}`);
+    process.exit(2);
+  }
+  validateSourceId(fromSource);
+
+  const target = await fetchSource(engine, id);
+  if (!target) {
+    console.error(`Source "${id}" not found. Register it first with: pmbrain sources add ${id} --path <path>`);
+    process.exit(4);
+  }
+
+  const sourcePath = path?.trim() || target.local_path || '';
+  if (!sourcePath) {
+    console.error('Usage: pmbrain sources adopt <id> --path <path> [--from-source default] [--dry-run] [--yes]');
+    process.exit(2);
+  }
+
+  const rows = await engine.executeRaw<IngestLogPathRow>(
+    `SELECT id, source_ref, pages_updated
+       FROM ingest_log
+      WHERE source_id = $1
+      ORDER BY created_at ASC`,
+    [fromSource],
+  );
+  const wantRef = normalizeSourceRef(sourcePath);
+  const matchedLogIds: number[] = [];
+  const slugSet = new Set<string>();
+  for (const row of rows) {
+    if (normalizeSourceRef(row.source_ref) !== wantRef) continue;
+    matchedLogIds.push(row.id);
+    for (const slug of readPagesUpdated(row.pages_updated)) slugSet.add(slug);
+  }
+
+  const slugs = [...slugSet].sort();
+  if (slugs.length === 0) {
+    console.log(`No import history found for ${sourcePath} in source "${fromSource}". Nothing to adopt.`);
+    return;
+  }
+
+  const conflicts = await engine.executeRaw<{ slug: string }>(
+    `SELECT slug
+       FROM pages
+      WHERE source_id = $1 AND slug = ANY($2::text[])
+      ORDER BY slug
+      LIMIT 20`,
+    [id, slugs],
+  );
+  if (conflicts.length > 0) {
+    console.error(`Refusing to adopt: target source "${id}" already has ${conflicts.length} matching slug(s).`);
+    console.error(conflicts.map(row => `  - ${row.slug}`).join('\n'));
+    process.exit(5);
+  }
+
+  const moving = await engine.executeRaw<{ id: number; slug: string }>(
+    `SELECT id, slug
+       FROM pages
+      WHERE source_id = $1 AND slug = ANY($2::text[])
+      ORDER BY slug`,
+    [fromSource, slugs],
+  );
+  if (moving.length === 0) {
+    console.log(`Import history matched ${slugs.length} slug(s), but no current pages remain in source "${fromSource}".`);
+    return;
+  }
+
+  console.log(`Adopt plan: ${moving.length} page(s) from "${fromSource}" to "${id}" for ${sourcePath}`);
+  if (dryRun) {
+    for (const row of moving.slice(0, 20)) console.log(`  - ${row.slug}`);
+    if (moving.length > 20) console.log(`  ... ${moving.length - 20} more`);
+    console.log('(dry-run; no changes written)');
+    return;
+  }
+  if (!yes) {
+    console.error('Refusing to write without --yes. Re-run with --dry-run to preview or --yes to adopt.');
+    process.exit(5);
+  }
+
+  const pageIds = moving.map(row => row.id);
+  await engine.executeRaw(
+    `UPDATE pages SET source_id = $1, updated_at = now() WHERE id = ANY($2::int[])`,
+    [id, pageIds],
+  );
+  await engine.executeRaw(
+    `UPDATE files SET source_id = $1 WHERE page_id = ANY($2::int[])`,
+    [id, pageIds],
+  );
+  if (matchedLogIds.length > 0) {
+    await engine.executeRaw(
+      `UPDATE ingest_log SET source_id = $1 WHERE id = ANY($2::int[])`,
+      [id, matchedLogIds],
+    );
+  }
+  console.log(`Adopted ${moving.length} page(s) into source "${id}". Future imports can use --source-id ${id}.`);
+}
 
 async function runList(engine: BrainEngine, args: string[]): Promise<void> {
   const json = args.includes('--json');
@@ -1103,6 +1237,7 @@ export async function runSources(engine: BrainEngine, args: string[]): Promise<v
 
   switch (sub) {
     case 'add':        return runAdd(engine, rest);
+    case 'adopt':      return runAdopt(engine, rest);
     case 'list':       return runList(engine, rest);
     case 'remove':     return runRemove(engine, rest);
     case 'rename':     return runRename(engine, rest);
@@ -1146,6 +1281,8 @@ function printHelp(): void {
 Subcommands:
   add <id> --path <p> [--name <n>] [--federated|--no-federated]
                                     Register a new source.
+  adopt <id> --path <p> [--from-source default] [--dry-run] [--yes]
+                                    Move pages previously imported from a path into a source.
   list [--json]                     List registered sources with page counts.
   remove <id> [--confirm-destructive] [--dry-run]
                                     Permanently delete a source and all its data.

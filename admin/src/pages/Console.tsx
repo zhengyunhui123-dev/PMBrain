@@ -496,7 +496,7 @@ export function ImportDataPage() {
   const addSource = async () => {
     setSubmitError('');
     try {
-      const res = await api.addSource({ id: sourceId, path, name: sourceName || undefined, federated }) as { runId: string };
+      const res = await api.addSource({ id: sourceId || undefined, path, name: sourceName || undefined, federated }) as { runId: string };
       setRun(await api.run(res.runId) as ConsoleRun);
     } catch (e) {
       setSubmitError(e instanceof Error ? e.message : String(e));
@@ -542,7 +542,7 @@ export function ImportDataPage() {
             <input type="number" min={1} max={8} value={workers} onChange={e => setWorkers(Number(e.target.value))} />
             <div className="pm-actions">
               <button className="pm-primary" onClick={() => void start()} disabled={!path.trim()}>开始导入</button>
-              <button className="pm-ghost" onClick={() => void addSource()} disabled={!path.trim() || !sourceId.trim()}>注册 source</button>
+              <button className="pm-ghost" onClick={() => void addSource()} disabled={!path.trim()}>注册 source</button>
             </div>
             {submitError && <div className="pm-error-text">{submitError}</div>}
             {run && <RunOutput run={run} />}

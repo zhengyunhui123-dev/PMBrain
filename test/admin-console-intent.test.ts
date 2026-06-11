@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { previewIntent } from '../src/commands/admin-console.ts';
+import { deriveSourceIdFromPath, previewIntent, resolveImportSourceIdForPath } from '../src/commands/admin-console.ts';
 import { __setChatTransportForTests, resetGateway } from '../src/core/ai/gateway.ts';
 
 describe('admin console intent planning', () => {
@@ -63,5 +63,54 @@ describe('admin console intent planning', () => {
 
     expect(preview.intent).toBe('search_brain');
     expect(preview.slots.query).toBe('项目文档');
+  });
+
+  test('import path resolves registered source by local_path prefix', async () => {
+    const engine = {
+      executeRaw: async () => [
+        { id: 'default', name: 'default', local_path: null, last_commit: null, last_sync_at: null, config: {}, created_at: new Date() },
+        { id: 'dingdan-qingdan', name: 'dingdan-qingdan', local_path: 'D:\\duwu\\youdao\\订单+清单项目', last_commit: null, last_sync_at: null, config: {}, created_at: new Date() },
+      ],
+    } as any;
+
+    const sourceId = await resolveImportSourceIdForPath(engine, 'D:\\duwu\\youdao\\订单+清单项目\\项目管理.md');
+
+    expect(sourceId).toBe('dingdan-qingdan');
+  });
+
+  test('import source resolver preserves explicit source id', async () => {
+    const engine = {
+      executeRaw: async () => [
+        { id: 'matched-source', name: 'matched-source', local_path: 'D:\\duwu', last_commit: null, last_sync_at: null, config: {}, created_at: new Date() },
+      ],
+    } as any;
+
+    const sourceId = await resolveImportSourceIdForPath(engine, 'D:\\duwu\\youdao\\x.md', 'manual-source');
+
+    expect(sourceId).toBe('manual-source');
+  });
+
+  test('import source resolver returns undefined when no source local_path matches', async () => {
+    const engine = {
+      executeRaw: async () => [
+        { id: 'other-source', name: 'other-source', local_path: 'D:\\other', last_commit: null, last_sync_at: null, config: {}, created_at: new Date() },
+      ],
+    } as any;
+
+    const sourceId = await resolveImportSourceIdForPath(engine, 'D:\\duwu\\youdao\\x.md');
+
+    expect(sourceId).toBeUndefined();
+  });
+
+  test('source id derivation uses readable ascii folder names', () => {
+    expect(deriveSourceIdFromPath('D:\\duwu\\youdao\\Project Docs')).toBe('project-docs');
+  });
+
+  test('source id derivation falls back to stable hash for non-ascii folder names', () => {
+    const first = deriveSourceIdFromPath('D:\\duwu\\youdao\\重庆保供项目');
+    const second = deriveSourceIdFromPath('D:/duwu/youdao/重庆保供项目');
+
+    expect(first).toMatch(/^source-[a-f0-9]{8}$/);
+    expect(second).toMatch(/^source-[a-f0-9]{8}$/);
   });
 });

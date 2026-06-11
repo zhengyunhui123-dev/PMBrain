@@ -1,6 +1,7 @@
 import { spawn } from 'child_process';
-import { randomUUID } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import { lstatSync } from 'fs';
+import { isAbsolute, relative, resolve } from 'path';
 import type { BrainEngine } from '../core/engine.ts';
 import type { GBrainConfig } from '../core/config.ts';
 import { isSensitiveConfigKey, redactConfigValue } from './config.ts';
@@ -453,6 +454,53 @@ function inferPathType(path: string): 'file' | 'directory' | 'unknown' {
   return /\.mdx?$/i.test(path.trim()) ? 'file' : 'unknown';
 }
 
+function pathContains(basePath: string, candidatePath: string): boolean {
+  const base = resolve(basePath);
+  const candidate = resolve(candidatePath);
+  const rel = relative(base, candidate);
+  return rel === '' || (rel.length > 0 && !rel.startsWith('..') && !isAbsolute(rel));
+}
+
+export function deriveSourceIdFromPath(inputPath: string): string {
+  const trimmedPath = inputPath.trim();
+  if (!trimmedPath) return '';
+  const parts = trimmedPath.replace(/[\\/]+$/g, '').split(/[\\/]+/).filter(Boolean);
+  const basename = parts[parts.length - 1] ?? trimmedPath;
+  const ascii = basename
+    .normalize('NFKD')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .replace(/-{2,}/g, '-')
+    .slice(0, 32)
+    .replace(/-+$/g, '');
+  if (/^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$/.test(ascii)) return ascii;
+  return `source-${createHash('sha1').update(trimmedPath).digest('hex').slice(0, 8)}`;
+}
+
+export async function resolveImportSourceIdForPath(
+  engine: BrainEngine,
+  importPath: string,
+  explicitSourceId?: unknown,
+): Promise<string | undefined> {
+  if (typeof explicitSourceId === 'string' && explicitSourceId.trim()) {
+    return explicitSourceId.trim();
+  }
+  const trimmedPath = importPath.trim();
+  if (!trimmedPath) return undefined;
+  const sources = await loadAllSources(engine);
+  let best: { id: string; pathLen: number } | null = null;
+  for (const source of sources) {
+    if (!source.local_path) continue;
+    if (!pathContains(source.local_path, trimmedPath)) continue;
+    const pathLen = resolve(source.local_path).length;
+    if (!best || pathLen > best.pathLen) {
+      best = { id: source.id, pathLen };
+    }
+  }
+  return best?.id;
+}
+
 function normalizeIntentPreview(obj: Record<string, unknown>): IntentPreview {
   const rawIntent = String(obj.intent ?? obj.action ?? obj.type ?? '').trim();
   if (!INTENTS.has(rawIntent as ConsoleIntent)) throw new Error(`Unsupported intent: ${rawIntent}`);
@@ -652,41 +700,46 @@ export function listRuns(): ConsoleRun[] {
   return [...runs.values()].sort((a, b) => b.startedAt.localeCompare(a.startedAt)).slice(0, 30);
 }
 
-export function executePreview(previewId: string, confirmed: boolean, cwd: string): ConsoleRun {
+export async function executePreview(engine: BrainEngine, previewId: string, confirmed: boolean, cwd: string): Promise<ConsoleRun> {
   const preview = previews.get(previewId);
   if (!preview) throw new Error('Preview not found or expired');
   if (preview.clarification) throw new Error(preview.clarification);
   if (preview.requiresConfirmation && !confirmed) throw new Error('Confirmation required');
+  if (preview.intent === 'import_path' && typeof preview.slots.path === 'string') {
+    preview.slots.sourceId = await resolveImportSourceIdForPath(engine, preview.slots.path, preview.slots.sourceId);
+  }
   return startRun(preview.intent, commandForPreview(preview), cwd);
 }
 
-export function startImportRun(input: {
+export async function startImportRun(engine: BrainEngine, input: {
   path: string;
   sourceId?: string;
   includeOffice?: boolean;
   noEmbed?: boolean;
   workers?: number;
-}, cwd: string): ConsoleRun {
+}, cwd: string): Promise<ConsoleRun> {
   if (!input.path.trim()) throw new Error('Path is required');
   const cmd = ['bun', 'src/cli.ts', 'import', input.path.trim()];
   if (input.includeOffice) cmd.push('--include-office');
   if (input.noEmbed) cmd.push('--no-embed');
-  if (input.sourceId?.trim()) cmd.push('--source-id', input.sourceId.trim());
+  const sourceId = await resolveImportSourceIdForPath(engine, input.path, input.sourceId);
+  if (sourceId) cmd.push('--source-id', sourceId);
   if (input.workers && input.workers > 1) cmd.push('--workers', String(Math.min(8, Math.floor(input.workers))));
   return startRun('import_path', cmd, cwd);
 }
 
 export function startSourceAddRun(input: {
-  id: string;
+  id?: string;
   path: string;
   name?: string;
   federated?: boolean;
 }, cwd: string): ConsoleRun {
-  if (!/^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$/.test(input.id.trim())) {
+  if (!input.path.trim()) throw new Error('Path is required');
+  const sourceId = input.id?.trim() || deriveSourceIdFromPath(input.path);
+  if (!/^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$/.test(sourceId)) {
     throw new Error('Source ID must be lowercase alphanumeric with optional dashes');
   }
-  if (!input.path.trim()) throw new Error('Path is required');
-  const cmd = ['bun', 'src/cli.ts', 'sources', 'add', input.id.trim(), '--path', input.path.trim()];
+  const cmd = ['bun', 'src/cli.ts', 'sources', 'add', sourceId, '--path', input.path.trim()];
   if (input.name?.trim()) cmd.push('--name', input.name.trim());
   cmd.push(input.federated === false ? '--no-federated' : '--federated');
   return startRun('source_add', cmd, cwd);

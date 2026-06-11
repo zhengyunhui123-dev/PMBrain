@@ -128,3 +128,19 @@
 - 描述：系统诊断页点击“运行 doctor --fast”后只读取一次 run 状态，长任务尚未完成时页面不会继续刷新；切换页面再回来也不会拉取本次服务内已有 doctor 运行记录。
 - 是否完成：是
 - 最终结果：系统诊断页新增运行状态轮询，并在页面加载时从 `/admin/api/runs` 恢复最近 doctor 记录；切页回来后仍可查看本次服务运行记录和输出。
+
+## 2026-06-11 HTTP 服务启动后立即退出
+
+- 时间：2026-06-11
+- 标题：修复 `serve --http` 打印启动信息后立即返回命令行
+- 描述：执行 `bun run src/cli.ts serve --http` 后，终端打印 PMBrain MCP Server banner 和 Admin Token，但马上回到 PowerShell 提示符，HTTP 服务随即掉线。根因是 `runServeHttp` 只调用 `app.listen(...)`，没有保存 HTTP server 并等待其关闭，导致 async 函数返回后 CLI 生命周期结束。
+- 是否完成：是
+- 最终结果：`runServeHttp` 现在保存 HTTP server，并等待 server close/error 或 SIGINT/SIGTERM；关闭时走统一清理并断开 engine。二次复查发现“下方终端仍起不来”的直接原因是 3131 已有后台 PMBrain 服务占用；同时修正 listen 时序，只有端口真正监听成功后才打印 banner/token，端口冲突时不再误导性显示启动成功。按版本规则将 PMBrain 从 `1.0.0` 更新到 `1.0.2`。已通过 `serve-http-bootstrap-token` 测试、端口冲突复现验证、临时端口真实启动保持存活验证。
+
+## 2026-06-11 Admin 自然语言导入 source 解析错误
+
+- 时间：2026-06-11
+- 标题：修复 Admin 自然语言导入已注册 source 路径时落到 default
+- 描述：从 Admin 自然语言任务导入 `D:\duwu\youdao\订单+清单项目` 时，命令生成为 `bun src/cli.ts import ... --include-office`，没有带 `--source-id dingdan-qingdan`。该目录已注册为 source `dingdan-qingdan`，但执行层解析为 `default`，导致已存在页面建版本快照时报 `createVersion failed: page "项目管理" (source=default) not found`。
+- 是否完成：是
+- 最终结果：Admin 执行 import_path 时会根据导入路径匹配 sources.local_path 的最长前缀，自动补齐正确 `--source-id`；显式传入 sourceId 时仍优先使用用户指定值。按版本规则将 PMBrain 从 `1.0.2` 更新为 `1.0.3`。

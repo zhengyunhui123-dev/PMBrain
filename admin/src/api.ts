@@ -51,7 +51,7 @@ export const api = {
   startActionRun: (action: string) => apiFetch('/admin/api/runs/action', { method: 'POST', body: JSON.stringify({ action }) }),
   startImportRun: (body: { path: string; sourceId?: string; includeOffice: boolean; autoEmbed: boolean; workers: number }) =>
     apiFetch('/admin/api/import-runs', { method: 'POST', body: JSON.stringify(body) }),
-  addSource: (body: { id: string; path: string; name?: string; federated: boolean }) =>
+  addSource: (body: { id?: string; path: string; name?: string; federated: boolean }) =>
     apiFetch('/admin/api/sources', { method: 'POST', body: JSON.stringify(body) }),
   health: () => apiFetch('/admin/api/health-indicators'),
   agents: () => apiFetch('/admin/api/agents'),
