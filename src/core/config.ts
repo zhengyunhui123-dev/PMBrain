@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, mkdirSync, chmodSync, existsSync } from 'fs';
+﻿import { readFileSync, writeFileSync, mkdirSync, chmodSync, existsSync } from 'fs';
 import { isAbsolute, join } from 'path';
 import { homedir } from 'os';
 import type { EngineConfig, EmbeddingColumnConfig } from './types.ts';
@@ -13,6 +13,7 @@ import type { EngineConfig, EmbeddingColumnConfig } from './types.ts';
  * null only when NO source provides a URL at all.
  */
 export type DbUrlSource =
+  | 'env:PMBRAIN_DATABASE_URL'
   | 'env:GBRAIN_DATABASE_URL'
   | 'env:DATABASE_URL'
   | 'config-file'
@@ -24,6 +25,10 @@ export type DbUrlSource =
 // GBRAIN_HOME is honored uniformly. Lazy: never call homedir() at module scope.
 function getConfigDir() { return configDir(); }
 function getConfigPath() { return configPath(); }
+
+function envCompat(primary: string, legacy: string): string | undefined {
+  return process.env[primary] ?? process.env[legacy];
+}
 
 export interface GBrainConfig {
   engine: 'postgres' | 'pglite';
@@ -314,7 +319,7 @@ export function loadConfig(): GBrainConfig | null {
   } catch { /* no config file */ }
 
   // Try env vars
-  const dbUrl = process.env.GBRAIN_DATABASE_URL || process.env.DATABASE_URL;
+  const dbUrl = envCompat('PMBRAIN_DATABASE_URL', 'GBRAIN_DATABASE_URL') || process.env.DATABASE_URL;
 
   if (!fileConfig && !dbUrl) return null;
 
@@ -340,48 +345,51 @@ export function loadConfig(): GBrainConfig | null {
     ...(process.env.DEEPSEEK_API_KEY ? { deepseek_api_key: process.env.DEEPSEEK_API_KEY } : {}),
     ...(process.env.ANTHROPIC_API_KEY ? { anthropic_api_key: process.env.ANTHROPIC_API_KEY } : {}),
     ...(process.env.ZEROENTROPY_API_KEY ? { zeroentropy_api_key: process.env.ZEROENTROPY_API_KEY } : {}),
-    ...(process.env.GBRAIN_EMBEDDING_MODEL ? { embedding_model: process.env.GBRAIN_EMBEDDING_MODEL } : {}),
-    ...(process.env.GBRAIN_EMBEDDING_DIMENSIONS ? { embedding_dimensions: parseInt(process.env.GBRAIN_EMBEDDING_DIMENSIONS, 10) } : {}),
-    ...(process.env.GBRAIN_EXPANSION_MODEL ? { expansion_model: process.env.GBRAIN_EXPANSION_MODEL } : {}),
-    ...(process.env.GBRAIN_CHAT_MODEL ? { chat_model: process.env.GBRAIN_CHAT_MODEL } : {}),
-    ...(process.env.GBRAIN_CHAT_FALLBACK_CHAIN
-      ? { chat_fallback_chain: process.env.GBRAIN_CHAT_FALLBACK_CHAIN.split(',').map(s => s.trim()).filter(Boolean) }
+    ...(envCompat('PMBRAIN_EMBEDDING_MODEL', 'GBRAIN_EMBEDDING_MODEL') ? { embedding_model: envCompat('PMBRAIN_EMBEDDING_MODEL', 'GBRAIN_EMBEDDING_MODEL') } : {}),
+    ...(envCompat('PMBRAIN_EMBEDDING_DIMENSIONS', 'GBRAIN_EMBEDDING_DIMENSIONS') ? { embedding_dimensions: parseInt(envCompat('PMBRAIN_EMBEDDING_DIMENSIONS', 'GBRAIN_EMBEDDING_DIMENSIONS')!, 10) } : {}),
+    ...(envCompat('PMBRAIN_EXPANSION_MODEL', 'GBRAIN_EXPANSION_MODEL') ? { expansion_model: envCompat('PMBRAIN_EXPANSION_MODEL', 'GBRAIN_EXPANSION_MODEL') } : {}),
+    ...(envCompat('PMBRAIN_CHAT_MODEL', 'GBRAIN_CHAT_MODEL') ? { chat_model: envCompat('PMBRAIN_CHAT_MODEL', 'GBRAIN_CHAT_MODEL') } : {}),
+    ...(envCompat('PMBRAIN_CHAT_FALLBACK_CHAIN', 'GBRAIN_CHAT_FALLBACK_CHAIN')
+      ? { chat_fallback_chain: envCompat('PMBRAIN_CHAT_FALLBACK_CHAIN', 'GBRAIN_CHAT_FALLBACK_CHAIN')!.split(',').map(s => s.trim()).filter(Boolean) }
       : {}),
-    ...(process.env.GBRAIN_EMBEDDING_MULTIMODAL
-      ? { embedding_multimodal: process.env.GBRAIN_EMBEDDING_MULTIMODAL === 'true' }
+    ...(envCompat('PMBRAIN_EMBEDDING_MULTIMODAL', 'GBRAIN_EMBEDDING_MULTIMODAL')
+      ? { embedding_multimodal: envCompat('PMBRAIN_EMBEDDING_MULTIMODAL', 'GBRAIN_EMBEDDING_MULTIMODAL') === 'true' }
       : {}),
-    ...(process.env.GBRAIN_EMBEDDING_IMAGE_OCR
-      ? { embedding_image_ocr: process.env.GBRAIN_EMBEDDING_IMAGE_OCR === 'true' }
+    ...(envCompat('PMBRAIN_EMBEDDING_IMAGE_OCR', 'GBRAIN_EMBEDDING_IMAGE_OCR')
+      ? { embedding_image_ocr: envCompat('PMBRAIN_EMBEDDING_IMAGE_OCR', 'GBRAIN_EMBEDDING_IMAGE_OCR') === 'true' }
       : {}),
-    ...(process.env.GBRAIN_EMBEDDING_MULTIMODAL_MODEL
-      ? { embedding_multimodal_model: process.env.GBRAIN_EMBEDDING_MULTIMODAL_MODEL }
+    ...(envCompat('PMBRAIN_EMBEDDING_MULTIMODAL_MODEL', 'GBRAIN_EMBEDDING_MULTIMODAL_MODEL')
+      ? { embedding_multimodal_model: envCompat('PMBRAIN_EMBEDDING_MULTIMODAL_MODEL', 'GBRAIN_EMBEDDING_MULTIMODAL_MODEL') }
       : {}),
-    ...(process.env.GBRAIN_EMBEDDING_IMAGE_OCR_MODEL
-      ? { embedding_image_ocr_model: process.env.GBRAIN_EMBEDDING_IMAGE_OCR_MODEL }
+    ...(envCompat('PMBRAIN_EMBEDDING_IMAGE_OCR_MODEL', 'GBRAIN_EMBEDDING_IMAGE_OCR_MODEL')
+      ? { embedding_image_ocr_model: envCompat('PMBRAIN_EMBEDDING_IMAGE_OCR_MODEL', 'GBRAIN_EMBEDDING_IMAGE_OCR_MODEL') }
       : {}),
-    ...(process.env.GBRAIN_REMOTE_CLIENT_SECRET && fileConfig?.remote_mcp
-      ? { remote_mcp: { ...fileConfig.remote_mcp, oauth_client_secret: process.env.GBRAIN_REMOTE_CLIENT_SECRET } }
+    ...(envCompat('PMBRAIN_REMOTE_CLIENT_SECRET', 'GBRAIN_REMOTE_CLIENT_SECRET') && fileConfig?.remote_mcp
+      ? { remote_mcp: { ...fileConfig.remote_mcp, oauth_client_secret: envCompat('PMBRAIN_REMOTE_CLIENT_SECRET', 'GBRAIN_REMOTE_CLIENT_SECRET') } }
       : {}),
   };
 
   // v0.41 content-sanity env overrides. Built up as a sparse object so
   // env presence wins over file/DB only for the specific keys set,
   // matching the precedence pattern used elsewhere in loadConfig.
-  // The env vars use natural names (GBRAIN_NO_SANITY=1 is more
-  // operator-friendly than GBRAIN_CONTENT_SANITY_DISABLED=true).
+  // The env vars use natural names (PMBRAIN_NO_SANITY=1 is more
+  // operator-friendly than PMBRAIN_CONTENT_SANITY_DISABLED=true). Legacy
+  // GBRAIN_* names remain accepted for existing installs.
   const envContentSanity: GBrainConfig['content_sanity'] = {};
-  if (process.env.GBRAIN_PAGE_WARN_BYTES) {
-    const n = parseInt(process.env.GBRAIN_PAGE_WARN_BYTES, 10);
+  const pageWarnBytes = envCompat('PMBRAIN_PAGE_WARN_BYTES', 'GBRAIN_PAGE_WARN_BYTES');
+  if (pageWarnBytes) {
+    const n = parseInt(pageWarnBytes, 10);
     if (Number.isFinite(n) && n > 0) envContentSanity.bytes_warn = n;
   }
-  if (process.env.GBRAIN_PAGE_BLOCK_BYTES) {
-    const n = parseInt(process.env.GBRAIN_PAGE_BLOCK_BYTES, 10);
+  const pageBlockBytes = envCompat('PMBRAIN_PAGE_BLOCK_BYTES', 'GBRAIN_PAGE_BLOCK_BYTES');
+  if (pageBlockBytes) {
+    const n = parseInt(pageBlockBytes, 10);
     if (Number.isFinite(n) && n > 0) envContentSanity.bytes_block = n;
   }
-  if (process.env.GBRAIN_NO_JUNK_PATTERNS === '1') {
+  if (envCompat('PMBRAIN_NO_JUNK_PATTERNS', 'GBRAIN_NO_JUNK_PATTERNS') === '1') {
     envContentSanity.junk_patterns_enabled = false;
   }
-  if (process.env.GBRAIN_NO_SANITY === '1') {
+  if (envCompat('PMBRAIN_NO_SANITY', 'GBRAIN_NO_SANITY') === '1') {
     envContentSanity.disabled = true;
   }
   // Only attach the field when at least one env var was set, so the
@@ -762,7 +770,7 @@ export function ensureGitignore(): void {
   } catch (e) {
     // Best-effort: log to stderr, never block the caller.
     const msg = e instanceof Error ? e.message : String(e);
-    process.stderr.write(`[gbrain] ensureGitignore failed (${msg}); continuing\n`);
+    process.stderr.write(`[pmbrain] ensureGitignore failed (${msg}); continuing\n`);
   }
 }
 
@@ -774,23 +782,33 @@ export function toEngineConfig(config: GBrainConfig): EngineConfig {
   };
 }
 
-export function configDir(): string {
-  // Allow override for tests, Docker, and multi-tenant deployments.
-  // GBRAIN_HOME is a parent dir; we always append '.gbrain' ourselves so
-  // setting GBRAIN_HOME=/tmp/x yields configDir() === '/tmp/x/.gbrain'.
-  // Validates the override: must be absolute, no '..' segments.
-  const override = process.env.GBRAIN_HOME;
-  if (override && override.trim()) {
-    const trimmed = override.trim();
-    if (!isAbsolute(trimmed)) {
-      throw new Error(`GBRAIN_HOME must be an absolute path; got: ${trimmed}`);
-    }
-    if (trimmed.split(/[\\/]/).includes('..')) {
-      throw new Error(`GBRAIN_HOME must not contain '..' segments; got: ${trimmed}`);
-    }
-    return join(trimmed, '.gbrain');
+function validateHomeOverride(name: string, override: string, childDir: '.pmbrain' | '.gbrain'): string {
+  const trimmed = override.trim();
+  if (!isAbsolute(trimmed)) {
+    throw new Error(`${name} must be an absolute path; got: ${trimmed}`);
   }
-  return join(homedir(), '.gbrain');
+  if (trimmed.split(/[\\/]/).includes('..')) {
+    throw new Error(`${name} must not contain '..' segments; got: ${trimmed}`);
+  }
+  return join(trimmed, childDir);
+}
+
+export function configDir(): string {
+  const pmOverride = process.env.PMBRAIN_HOME;
+  if (pmOverride && pmOverride.trim()) return validateHomeOverride('PMBRAIN_HOME', pmOverride, '.pmbrain');
+
+  const legacyOverride = process.env.GBRAIN_HOME;
+  if (legacyOverride && legacyOverride.trim()) return validateHomeOverride('GBRAIN_HOME', legacyOverride, '.gbrain');
+
+  const pmbrainDir = join(homedir(), '.pmbrain');
+  const legacyDir = join(homedir(), '.gbrain');
+  if (existsSync(pmbrainDir)) return pmbrainDir;
+  if (existsSync(legacyDir)) return legacyDir;
+  return pmbrainDir;
+}
+
+export function pmbrainPath(...segments: string[]): string {
+  return join(configDir(), ...segments);
 }
 
 export function configPath(): string {
@@ -798,10 +816,9 @@ export function configPath(): string {
 }
 
 /**
- * Sugar for joining paths under the active gbrain home. Use this anywhere you
- * would otherwise write `join(homedir(), '.gbrain', ...rest)`. Honors
- * GBRAIN_HOME, validates input, and centralizes the convention so future
- * audits stay simple.
+ * Sugar for joining paths under the active PMBrain home. Use this anywhere you
+ * would otherwise write `join(homedir(), '.pmbrain', ...rest)`. Honors
+ * PMBRAIN_HOME and legacy GBRAIN_HOME.
  */
 export function gbrainPath(...segments: string[]): string {
   return join(configDir(), ...segments);
@@ -812,6 +829,7 @@ export function gbrainPath(...segments: string[]): string {
  * Never throws, never connects. Env vars take precedence (matches loadConfig).
  */
 export function getDbUrlSource(): DbUrlSource {
+  if (process.env.PMBRAIN_DATABASE_URL) return 'env:PMBRAIN_DATABASE_URL';
   if (process.env.GBRAIN_DATABASE_URL) return 'env:GBRAIN_DATABASE_URL';
   if (process.env.DATABASE_URL) return 'env:DATABASE_URL';
   if (!existsSync(configPath())) return null;

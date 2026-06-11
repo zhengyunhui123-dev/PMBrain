@@ -3,8 +3,9 @@
  *
  * Resolution priority (highest first):
  *   1. Explicit --source <id> flag (caller passes this as `explicit`)
- *   2. GBRAIN_SOURCE env var
- *   3. .gbrain-source dotfile in CWD or any ancestor directory
+ *   2. PMBRAIN_SOURCE env var (legacy GBRAIN_SOURCE accepted)
+ *   3. .pmbrain-source dotfile in CWD or any ancestor directory
+ *      (legacy .gbrain-source accepted)
  *   4. Registered source whose local_path contains CWD
  *   5. Brain-level default via `gbrain sources default <id>`
  *   6. Literal 'default' (backward compat for pre-v0.17 brains)
@@ -14,11 +15,11 @@
  */
 
 import { readFileSync, existsSync } from 'fs';
-import { join, dirname, resolve } from 'path';
+import { join, dirname, resolve, relative, isAbsolute } from 'path';
 import type { BrainEngine } from './engine.ts';
 import { SOURCE_ID_RE, isValidSourceId } from './source-id.ts';
 
-const DOTFILE = '.gbrain-source';
+const DOTFILES = ['.pmbrain-source', '.gbrain-source'];
 // Canonical SOURCE_ID_RE imported from `source-id.ts` (single source of truth).
 // Re-exported below as `__testing.SOURCE_ID_RE` for legacy test imports.
 // Two validator shapes per codex r2 P1-F:
@@ -33,8 +34,9 @@ function readDotfileWalk(startDir: string): string | null {
   let dir = resolve(startDir);
   // Guard against infinite loops on malformed paths.
   for (let i = 0; i < 50; i++) {
-    const candidate = join(dir, DOTFILE);
-    if (existsSync(candidate)) {
+    for (const dotfile of DOTFILES) {
+      const candidate = join(dir, dotfile);
+      if (!existsSync(candidate)) continue;
       try {
         const content = readFileSync(candidate, 'utf8').trim().split('\n')[0].trim();
         // Silent-fallback tier per codex P1-F: invalid dotfile content
@@ -52,6 +54,13 @@ function readDotfileWalk(startDir: string): string | null {
     dir = parent;
   }
   return null;
+}
+
+function pathContains(basePath: string, candidatePath: string): boolean {
+  const base = resolve(basePath);
+  const candidate = resolve(candidatePath);
+  const rel = relative(base, candidate);
+  return rel === '' || (rel.length > 0 && !rel.startsWith('..') && !isAbsolute(rel));
 }
 
 /**
@@ -83,16 +92,17 @@ export async function resolveSourceId(
   }
 
   // 2. Env var.
-  const env = process.env.GBRAIN_SOURCE;
+  const envName = process.env.PMBRAIN_SOURCE ? 'PMBRAIN_SOURCE' : 'GBRAIN_SOURCE';
+  const env = process.env.PMBRAIN_SOURCE || process.env.GBRAIN_SOURCE;
   if (env && env.length > 0) {
     if (!SOURCE_ID_RE.test(env)) {
-      throw new Error(`Invalid GBRAIN_SOURCE value "${env}". Must match [a-z0-9-]{1,32}.`);
+      throw new Error(`Invalid ${envName} value "${env}". Must match [a-z0-9-]{1,32}.`);
     }
     await assertSourceExists(engine, env);
     return env;
   }
 
-  // 3. .gbrain-source dotfile walk-up.
+  // 3. .pmbrain-source / .gbrain-source dotfile walk-up.
   const dotfile = readDotfileWalk(cwd);
   if (dotfile) {
     await assertSourceExists(engine, dotfile);
@@ -109,7 +119,7 @@ export async function resolveSourceId(
   let best: { id: string; pathLen: number } | null = null;
   for (const r of registered) {
     const p = resolve(r.local_path);
-    if (cwdResolved === p || cwdResolved.startsWith(p + '/')) {
+    if (pathContains(p, cwdResolved)) {
       if (!best || p.length > best.pathLen) {
         best = { id: r.id, pathLen: p.length };
       }
@@ -197,8 +207,8 @@ async function assertSourceExists(engine: BrainEngine, id: string): Promise<void
   if (rows.length === 0) {
     throw new Error(
       `Source "${id}" not found. Available sources: ` +
-      `run \`gbrain sources list\` to see registered sources, ` +
-      `or \`gbrain sources add ${id}\` to create it.`,
+      `run \`pmbrain sources list\` to see registered sources, ` +
+      `or \`pmbrain sources add ${id}\` to create it.`,
     );
   }
 }
@@ -283,20 +293,21 @@ export async function resolveSourceWithTier(
   }
 
   // 2. Env var.
-  const env = process.env.GBRAIN_SOURCE;
+  const envName = process.env.PMBRAIN_SOURCE ? 'PMBRAIN_SOURCE' : 'GBRAIN_SOURCE';
+  const env = process.env.PMBRAIN_SOURCE || process.env.GBRAIN_SOURCE;
   if (env && env.length > 0) {
     if (!SOURCE_ID_RE.test(env)) {
-      throw new Error(`Invalid GBRAIN_SOURCE value "${env}". Must match [a-z0-9-]{1,32}.`);
+      throw new Error(`Invalid ${envName} value "${env}". Must match [a-z0-9-]{1,32}.`);
     }
     await assertSourceExists(engine, env);
-    return { source_id: env, tier: 'env', detail: `GBRAIN_SOURCE=${env}` };
+    return { source_id: env, tier: 'env', detail: `${envName}=${env}` };
   }
 
-  // 3. .gbrain-source dotfile walk-up.
+  // 3. .pmbrain-source / .gbrain-source dotfile walk-up.
   const dotfile = readDotfileWalk(cwd);
   if (dotfile) {
     await assertSourceExists(engine, dotfile);
-    return { source_id: dotfile, tier: 'dotfile', detail: `.gbrain-source` };
+    return { source_id: dotfile, tier: 'dotfile', detail: `.pmbrain-source` };
   }
 
   // 4. Registered source whose local_path contains CWD.
@@ -307,7 +318,7 @@ export async function resolveSourceWithTier(
   let best: { id: string; path: string; pathLen: number } | null = null;
   for (const r of registered) {
     const p = resolve(r.local_path);
-    if (cwdResolved === p || cwdResolved.startsWith(p + '/')) {
+    if (pathContains(p, cwdResolved)) {
       if (!best || p.length > best.pathLen) {
         best = { id: r.id, path: p, pathLen: p.length };
       }

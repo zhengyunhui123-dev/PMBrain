@@ -131,12 +131,16 @@ function envInt(name: string, fallback: number): number {
   return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
+function envIntCompat(primary: string, legacy: string, fallback: number): number {
+  return envInt(primary, envInt(legacy, fallback));
+}
+
 /** Build limiters from env. Keep this lazy — tests can construct RateLimiter directly. */
 export function buildDefaultLimiters(clock: Clock = Date.now): { ip: RateLimiter; token: RateLimiter } {
-  const lruCap = envInt('GBRAIN_HTTP_RATE_LIMIT_LRU', 10000);
+  const lruCap = envIntCompat('PMBRAIN_HTTP_RATE_LIMIT_LRU', 'GBRAIN_HTTP_RATE_LIMIT_LRU', 10000);
   const windowMs = 60_000;
   return {
-    ip: new RateLimiter({ limit: envInt('GBRAIN_HTTP_RATE_LIMIT_IP', 30), windowMs, lruCap }, clock),
-    token: new RateLimiter({ limit: envInt('GBRAIN_HTTP_RATE_LIMIT_TOKEN', 60), windowMs, lruCap }, clock),
+    ip: new RateLimiter({ limit: envIntCompat('PMBRAIN_HTTP_RATE_LIMIT_IP', 'GBRAIN_HTTP_RATE_LIMIT_IP', 30), windowMs, lruCap }, clock),
+    token: new RateLimiter({ limit: envIntCompat('PMBRAIN_HTTP_RATE_LIMIT_TOKEN', 'GBRAIN_HTTP_RATE_LIMIT_TOKEN', 60), windowMs, lruCap }, clock),
   };
 }

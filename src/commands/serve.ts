@@ -108,7 +108,7 @@ export async function runServe(
     const bind = bindIdx >= 0 ? args[bindIdx + 1] : undefined;
 
     // v0.36.x #1024: suppress the printed admin bootstrap token. Pair with
-    // GBRAIN_ADMIN_BOOTSTRAP_TOKEN for production deployments that don't
+    // PMBRAIN_ADMIN_BOOTSTRAP_TOKEN for production deployments that don't
     // want the value leaking into log aggregators on every supervisor
     // restart.
     const suppressBootstrapToken = args.includes('--suppress-bootstrap-token');
@@ -123,7 +123,7 @@ export async function runServe(
   // trigger graceful release of the PGLite write lock held by `engine`.
   // The HTTP / OAuth path above has its own lifecycle in serve-http.ts
   // and is intentionally NOT wired into this stdio plumbing.
-  console.error('Starting GBrain MCP server (stdio)...');
+  console.error('Starting PMBrain MCP server (stdio)...');
 
   installStdioLifecycle(engine, args, opts);
 
@@ -177,7 +177,7 @@ function installStdioLifecycle(
       parentWatchdog = null;
     }
 
-    deps.log(`GBrain MCP server: graceful exit (${reason})`);
+    deps.log(`PMBrain MCP server: graceful exit (${reason})`);
 
     // Race the cleanup against a deadline. engine.disconnect() does a
     // PGLite WASM close + a synchronous rmSync on the lock dir; both
@@ -187,7 +187,7 @@ function installStdioLifecycle(
     // (process.kill(pid, 0) → ESRCH) will reclaim it.
     const deadline = setTimeout(() => {
       deps.log(
-        `GBrain MCP server: cleanup deadline (${CLEANUP_DEADLINE_MS}ms) exceeded — forcing exit`,
+        `PMBrain MCP server: cleanup deadline (${CLEANUP_DEADLINE_MS}ms) exceeded — forcing exit`,
       );
       deps.exit(0);
     }, CLEANUP_DEADLINE_MS);
@@ -197,7 +197,7 @@ function installStdioLifecycle(
       .then(() => engine.disconnect())
       .catch((err: unknown) => {
         const msg = err instanceof Error ? err.message : String(err);
-        deps.log(`GBrain MCP server: cleanup error: ${msg}`);
+        deps.log(`PMBrain MCP server: cleanup error: ${msg}`);
       })
       .finally(() => {
         clearTimeout(deadline);
@@ -301,7 +301,7 @@ function installStdioLifecycle(
     // here, but every JSON-RPC frame causes a 'data' event on stdin, so
     // chunk-level granularity is sufficient.
     deps.stdin.on('data', armIdle);
-    deps.log(`GBrain MCP server: stdio idle timeout = ${idleTimeoutSec}s`);
+    deps.log(`PMBrain MCP server: stdio idle timeout = ${idleTimeoutSec}s`);
   }
 }
 

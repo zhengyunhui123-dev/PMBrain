@@ -129,7 +129,7 @@ export async function runImport(
   // brain_default → sole_non_default → seed_default. The nudge fires only
   // when the resolver returns tier='sole_non_default', so explicit users
   // see no behavior change.
-  if (!sourceId && process.env.GBRAIN_SOURCE) {
+  if (!sourceId && (process.env.PMBRAIN_SOURCE || process.env.GBRAIN_SOURCE)) {
     const { resolveSourceId } = await import('../core/source-resolver.ts');
     sourceId = await resolveSourceId(engine, null);
   } else if (!sourceId) {
@@ -184,7 +184,12 @@ export async function runImport(
     if (stat.isFile()) {
       sourceType = 'file';
       dir = dirname(dirArg);
-      allFiles = isCollectibleForWalker(dirArg, strategy, process.env.GBRAIN_EMBEDDING_MULTIMODAL === 'true', includeOffice)
+      allFiles = isCollectibleForWalker(
+        dirArg,
+        strategy,
+        (process.env.PMBRAIN_EMBEDDING_MULTIMODAL ?? process.env.GBRAIN_EMBEDDING_MULTIMODAL) === 'true',
+        includeOffice,
+      )
         ? [dirArg]
         : [];
     } else {
@@ -194,7 +199,7 @@ export async function runImport(
     allFiles = collectSyncableFiles(dir, { strategy, includeOffice });
   }
   console.error(
-    `[gbrain phase] import.collect_files done ${Date.now() - _walkT0}ms files=${allFiles.length}`,
+    `[pmbrain phase] import.collect_files done ${Date.now() - _walkT0}ms files=${allFiles.length}`,
   );
   const fileTypeLabel = strategy === 'code' ? 'code'
     : strategy === 'auto' ? 'syncable' : 'markdown';
@@ -253,14 +258,14 @@ export async function runImport(
       // multimodal is enabled. The walker (collectMarkdownFiles) only picks
       // up images when GBRAIN_EMBEDDING_MULTIMODAL=true so this branch is
       // unreachable when the gate is off; defense-in-depth check anyway.
-      const result = isImageFilePath(relativePath) && process.env.GBRAIN_EMBEDDING_MULTIMODAL === 'true'
+      const result = isImageFilePath(relativePath) && (process.env.PMBRAIN_EMBEDDING_MULTIMODAL ?? process.env.GBRAIN_EMBEDDING_MULTIMODAL) === 'true'
         ? await importImageFile(eng, filePath, relativePath, { noEmbed, sourceId })
         : includeOffice && isOfficeFilePath(relativePath)
           ? await importOfficeFile(eng, filePath, relativePath, { noEmbed, sourceId, activePack: importActivePack })
         : await importFile(eng, filePath, relativePath, { noEmbed, sourceId, activePack: importActivePack });
       const _fileMs = Date.now() - _fileT0;
       if (_fileMs > 5000) {
-        console.error(`[gbrain phase] import.process_file slow ${_fileMs}ms ${relativePath}`);
+        console.error(`[pmbrain phase] import.process_file slow ${_fileMs}ms ${relativePath}`);
       }
       if (result.status === 'imported') {
         imported++;

@@ -1,4 +1,4 @@
-﻿storage:
+storage:
   # Directories that are version-controlled — human-curated, edited by hand.
   db_tracked:
     - people/
@@ -16,4 +16,3 @@
     - media/x/
     - media/articles/
     - meetings/transcripts/
-

@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+﻿#!/usr/bin/env bun
 
 import { installSigchldHandler } from './core/zombie-reap.ts';
 installSigchldHandler();
@@ -90,7 +90,7 @@ async function main() {
   }
 
   if (command === '--version' || command === 'version') {
-    console.log(`gbrain ${VERSION}`);
+    console.log(`pmbrain ${VERSION}`);
     return;
   }
 
@@ -130,7 +130,7 @@ async function main() {
   const op = cliOps.get(command);
   if (!op) {
     console.error(`未知命令：${command}`);
-    console.error('运行 gbrain --help 查看可用命令。');
+    console.error('运行 pmbrain --help 查看可用命令。');
     process.exit(1);
   }
 
@@ -171,7 +171,7 @@ async function main() {
       const cliName = op.cliHints?.name || op.name;
       const positional = op.cliHints?.positional || [];
       const usage = positional.map(p => `<${p}>`).join(' ');
-      console.error(`用法：gbrain ${cliName} ${usage}`);
+      console.error(`用法：pmbrain ${cliName} ${usage}`);
       process.exit(1);
     }
   }
@@ -289,9 +289,9 @@ function hasHelpFlag(args: string[]): boolean {
 }
 
 function printCliOnlyHelp(command: string) {
-  console.log(`用法：gbrain ${command}`);
+  console.log(`用法：pmbrain ${command}`);
   console.log('');
-  console.log(`gbrain ${command} - 运行 gbrain --help 查看完整命令列表。`);
+  console.log(`pmbrain ${command} - 运行 pmbrain --help 查看完整命令列表。`);
 }
 
 /**
@@ -353,16 +353,16 @@ async function runThinClientRouted(
           break;
         case 'discovery':
           console.error(`OAuth discovery failed at ${cfg.remote_mcp!.issuer_url}.`);
-          console.error('Run `gbrain remote doctor` for details.');
+          console.error('Run `pmbrain remote doctor` for details.');
           break;
         case 'auth':
           console.error('OAuth auth failed.');
           console.error('On the host, re-register your client:');
-          console.error('  gbrain auth register-client <name> --grant-types client_credentials --scopes read,write,admin');
+          console.error('  pmbrain auth register-client <name> --grant-types client_credentials --scopes read,write,admin');
           break;
         case 'auth_after_refresh':
           console.error('OAuth auth failed after token refresh. Credentials may have been revoked.');
-          console.error('Run `gbrain remote doctor` to confirm.');
+          console.error('Run `pmbrain remote doctor` to confirm.');
           break;
         case 'network':
           if (e.detail?.kind === 'timeout') {
@@ -373,21 +373,21 @@ async function runThinClientRouted(
             process.off('SIGINT', onSigint);
             process.exit(130);
           } else {
-            console.error(`Cannot reach ${url}. Run \`gbrain remote doctor\` for details.`);
+            console.error(`Cannot reach ${url}. Run \`pmbrain remote doctor\` for details.`);
           }
           break;
         case 'tool_error':
           if (e.detail?.code === 'missing_scope') {
             console.error('Missing OAuth scope on this client.');
             console.error('On the host, re-register the client with broader scopes:');
-            console.error('  gbrain auth register-client <name> --grant-types client_credentials --scopes read,write,admin');
+            console.error('  pmbrain auth register-client <name> --grant-types client_credentials --scopes read,write,admin');
           } else {
             console.error(e.message);
-            console.error('Run `gbrain remote doctor` if this persists.');
+            console.error('Run `pmbrain remote doctor` if this persists.');
           }
           break;
         case 'parse':
-          console.error('Server response was malformed. Run `gbrain remote doctor`.');
+          console.error('Server response was malformed. Run `pmbrain remote doctor`.');
           break;
         default: {
           // Exhaustive switch sentinel (TS `never` — fails to build if a
@@ -449,9 +449,9 @@ export function _clearIdentityCacheForTest(): void {
 
 export function bannerSuppressed(cliOpts: CliOptions): boolean {
   if (cliOpts.quiet) return true;
-  if (process.env.GBRAIN_NO_BANNER === '1') return true;
+  if ((process.env.PMBRAIN_NO_BANNER ?? process.env.GBRAIN_NO_BANNER) === '1') return true;
   // Non-TTY default is suppressed (clean pipes); explicit env-flag overrides.
-  if (!process.stderr.isTTY && process.env.GBRAIN_BANNER !== '1') return true;
+  if (!process.stderr.isTTY && (process.env.PMBRAIN_BANNER ?? process.env.GBRAIN_BANNER) !== '1') return true;
   return false;
 }
 
@@ -784,16 +784,16 @@ const THIN_CLIENT_REFUSED_COMMANDS = new Set([
  * place during code review.
  */
 const THIN_CLIENT_REFUSE_HINTS: Record<string, string> = {
-  sync: 'sync runs on the host. Trigger a remote cycle with `gbrain remote ping` (queues an autopilot-cycle job).',
-  embed: 'embed runs on the host as part of the autopilot cycle. `gbrain remote ping` triggers a full cycle including embed.',
-  extract: 'extract runs on the host. Use `gbrain remote ping` to trigger a cycle including extract.',
+  sync: 'sync runs on the host. Trigger a remote cycle with `pmbrain remote ping` (queues an autopilot-cycle job).',
+  embed: 'embed runs on the host as part of the autopilot cycle. `pmbrain remote ping` triggers a full cycle including embed.',
+  extract: 'extract runs on the host. Use `pmbrain remote ping` to trigger a cycle including extract.',
   'extract-conversation-facts': 'extract-conversation-facts runs on the host (requires local engine + chat gateway). Run on the host machine.',
   migrate: "migrate runs on the host's local engine. Run on the host machine.",
   'apply-migrations': 'schema migrations run on the host. SSH and run there.',
   'repair-jsonb': 'repair-jsonb operates on the local DB only.',
   integrity: 'integrity scans local files. Run on the host machine.',
   serve: 'serve starts a server. Run on the host, not the thin client.',
-  dream: 'dream runs the autopilot cycle on the host. `gbrain remote ping` queues one. (Native `gbrain dream` thin-client routing planned for v0.31.2.)',
+  dream: 'dream runs the autopilot cycle on the host. `pmbrain remote ping` queues one. (Native `pmbrain dream` thin-client routing planned for v0.31.2.)',
   orphans: "orphans needs the host's brain. Run on the host or use the `find_orphans` MCP tool from your agent.",
   transcripts: 'transcripts is server-private (raw chat exports stay on the host). Read transcripts on the host machine.',
   storage: 'storage operates on the local repo on disk. Run on the host.',
@@ -801,8 +801,8 @@ const THIN_CLIENT_REFUSE_HINTS: Record<string, string> = {
   sources: 'sources commands manage local DB + config rows. Per-subcommand thin-client routing lands in v0.31.x. For now: use `sources_list` / `sources_status` MCP tools, or run on the host.',
   // v0.32 audit additions
   pages: '`pages purge-deleted` is admin+localOnly (hard-deletes from the local DB). Run on the host.',
-  files: '`files list` and `files url` MCP ops are localOnly (paths live on the host filesystem). Use `gbrain files` on the host machine.',
-  eval: '`eval` export/prune/replay touch the local engine and have no MCP equivalents. Run `gbrain eval` on the host.',
+  files: '`files list` and `files url` MCP ops are localOnly (paths live on the host filesystem). Use `pmbrain files` on the host machine.',
+  eval: '`eval` export/prune/replay touch the local engine and have no MCP equivalents. Run `pmbrain eval` on the host.',
   'code-def': '`code-def` needs symbol-aware lookup that has no MCP op yet. Run on the host or use `search` from your agent with a symbol-shaped query.',
   'code-refs': '`code-refs` has no MCP op yet. Run on the host.',
   'code-callers': '`code-callers` has no MCP op yet. Run on the host.',
@@ -818,11 +818,11 @@ const THIN_CLIENT_REFUSE_HINTS: Record<string, string> = {
 function refuseThinClient(command: string, mcpUrl: string): never {
   const hint = THIN_CLIENT_REFUSE_HINTS[command];
   if (hint) {
-    console.error(`\`gbrain ${command}\` is not routable. ${hint}`);
+    console.error(`\`pmbrain ${command}\` is not routable. ${hint}`);
     console.error(`(thin-client of ${mcpUrl})`);
   } else {
     console.error(
-      `\`gbrain ${command}\` requires a local engine. This install is a thin client of ${mcpUrl}.\n` +
+      `\`pmbrain ${command}\` requires a local engine. This install is a thin client of ${mcpUrl}.\n` +
       `Run \`${command}\` on the remote host, or use the corresponding MCP tool from your agent.`,
     );
   }
@@ -1143,9 +1143,9 @@ async function handleCliOnly(command: string, args: string[]) {
     const { runEvalLongMemEval } = await import('./commands/eval-longmemeval.ts');
     if (!(args.length > 1 && (args[1] === '--help' || args[1] === '-h'))) {
       const config = loadConfig() ?? ({
-        embedding_model: process.env.GBRAIN_EMBEDDING_MODEL,
-        embedding_dimensions: process.env.GBRAIN_EMBEDDING_DIMENSIONS
-          ? Number(process.env.GBRAIN_EMBEDDING_DIMENSIONS) : undefined,
+        embedding_model: process.env.PMBRAIN_EMBEDDING_MODEL ?? process.env.GBRAIN_EMBEDDING_MODEL,
+        embedding_dimensions: (process.env.PMBRAIN_EMBEDDING_DIMENSIONS ?? process.env.GBRAIN_EMBEDDING_DIMENSIONS)
+          ? Number(process.env.PMBRAIN_EMBEDDING_DIMENSIONS ?? process.env.GBRAIN_EMBEDDING_DIMENSIONS) : undefined,
       } as GBrainConfig);
       const { configureGateway } = await import('./core/ai/gateway.ts');
       configureGateway(buildGatewayConfig(config));
@@ -1267,7 +1267,7 @@ async function handleCliOnly(command: string, args: string[]) {
 
   if (readOnlyTimeoutMs !== null) {
     const { withTimeout, OperationTimeoutError } = await import('./core/timeout.ts');
-    const label = `gbrain ${command}`;
+    const label = `pmbrain ${command}`;
     let engine: BrainEngine;
     try {
       engine = await withTimeout(connectEngine(), readOnlyTimeoutMs, `${label}: connect`);
@@ -1691,7 +1691,7 @@ async function handleCliOnly(command: string, args: string[]) {
         // couldn't participate in federation / RLS / multi-tenancy. We
         // keep the alias so scripts like `gbrain repos add .` keep
         // working, with a nudge toward the canonical command.
-        console.error('[gbrain] Note: "repos" is an alias for "sources" as of v0.19.0. Prefer `gbrain sources <subcommand>`.');
+        console.error('[pmbrain] Note: "repos" is an alias for "sources" as of v0.19.0. Prefer `pmbrain sources <subcommand>`.');
         const { runSources } = await import('./commands/sources.ts');
         await runSources(engine, args);
         break;
@@ -1785,7 +1785,7 @@ export function buildGatewayConfig(c: GBrainConfig): AIGatewayConfig {
 async function connectEngine(opts?: { probeOnly?: boolean }): Promise<BrainEngine> {
   const config = loadConfig();
   if (!config) {
-    console.error('No brain configured. Run: gbrain init');
+    console.error('No brain configured. Run: pmbrain init');
     process.exit(1);
   }
 
@@ -1825,20 +1825,20 @@ async function connectEngine(opts?: { probeOnly?: boolean }): Promise<BrainEngin
         'but the migration didn\'t complete within the retry window. This is usually transient.',
       );
       console.warn('  If it persists:');
-      console.warn('    1. Check `gbrain doctor` for stale locks or stuck advisory locks.');
-      console.warn('    2. Check `gbrain jobs supervisor status` for crashed migration workers.');
-      console.warn('    3. Re-run: `gbrain apply-migrations --yes`');
+      console.warn('    1. Check `pmbrain doctor` for stale locks or stuck advisory locks.');
+      console.warn('    2. Check `pmbrain jobs supervisor status` for crashed migration workers.');
+      console.warn('    3. Re-run: `pmbrain apply-migrations --yes`');
     } else if (result.status === 'error') {
       // Non-deadlock error during initSchema. Surface the message and continue;
       // subsequent operations will resurface the real schema error in context.
       console.warn(`  Schema probe failed: ${result.error.message}`);
-      console.warn('  Re-run: `gbrain apply-migrations --yes`');
+      console.warn('  Re-run: `pmbrain apply-migrations --yes`');
     }
     // 'ok', 'not_needed', 'race_resolved' → silent (the common-case outcomes).
   } catch (err) {
     // Last-resort defense in case the helper itself throws unexpectedly.
     console.warn(`  Schema probe failed (unexpected): ${(err as Error).message}`);
-    console.warn('  Re-run: `gbrain apply-migrations --yes`');
+    console.warn('  Re-run: `pmbrain apply-migrations --yes`');
   }
 
   // v0.27.1 (F3 fix): re-merge DB-plane config now that the engine is up.
@@ -1885,7 +1885,7 @@ async function connectEngine(opts?: { probeOnly?: boolean }): Promise<BrainEngin
 function printOpHelp(op: Operation) {
   const positional = (op.cliHints?.positional || []).map(p => `<${p}>`).join(' ');
   const name = op.cliHints?.name || op.name;
-  console.log(`用法：gbrain ${name} ${positional} [选项]\n`);
+  console.log(`用法：pmbrain ${name} ${positional} [选项]\n`);
   console.log(op.description + '\n');
   const entries = Object.entries(op.params);
   if (entries.length > 0) {
@@ -1904,10 +1904,13 @@ function printHelp() {
   const cliNames = Array.from(cliOps.entries())
     .map(([name, op]) => ({ name, desc: op.description }));
 
-  console.log(`gbrain ${VERSION} -- 个人知识大脑
+  console.log(`pmbrain ${VERSION} -- 项目管理知识大脑
 
 用法
-  gbrain <命令> [选项]
+  pmbrain <命令> [选项]
+
+兼容
+  gbrain <命令> [选项]                旧版命令别名，建议新配置使用 pmbrain
 
 初始化
   init [--pglite|--supabase|--url]   创建大脑（默认使用 PGLite，无需服务器）
@@ -2030,7 +2033,7 @@ function printHelp() {
   version                            查看版本信息
   --tools-json                       查看工具发现信息（JSON）
 
-运行 gbrain <命令> --help 可查看对应命令的帮助。
+运行 pmbrain <命令> --help 可查看对应命令的帮助。
 `);
 }
 
@@ -2038,3 +2041,4 @@ main().catch(e => {
   console.error(e.message || e);
   process.exit(1);
 });
+

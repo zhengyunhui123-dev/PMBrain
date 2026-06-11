@@ -101,8 +101,9 @@ export function __resetSdkLoadStateForTests(): void {
   _buildMemorySystemPromptAddition = undefined;
 }
 
-export const ENGINE_ID = 'gbrain-context';
-export const ENGINE_NAME = 'GBrain Context Engine';
+export const ENGINE_ID = 'pmbrain-context';
+export const LEGACY_ENGINE_ID = 'gbrain-context';
+export const ENGINE_NAME = 'PMBrain Context Engine';
 /**
  * Engine contract version — bumps when the engine's public method shape
  * changes (ContextEngine interface, AssembleResult fields, etc), NOT when
@@ -494,7 +495,7 @@ function formatEventShort(evt: CalendarEvent, tz: string): string {
 
 function formatContextBlock(ctx: LiveContext): string {
   const lines: string[] = [
-    `## Live Context (deterministic, injected by gbrain-context engine)`,
+    `## Live Context (deterministic, injected by pmbrain-context engine)`,
   ];
 
   // Time/Day vs Timezone-unavailable branch.

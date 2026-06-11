@@ -1,10 +1,10 @@
 {
   "mcpServers": {
-    "gbrain": {
+    "pmbrain": {
       "type": "http",
       "url": "http://localhost:3131/mcp",
       "headers": {
-        "Authorization": "Bearer YOUR_GBRAIN_TOKEN_HERE"
+        "Authorization": "Bearer YOUR_PMBRAIN_TOKEN_HERE"
       }
     }
   }

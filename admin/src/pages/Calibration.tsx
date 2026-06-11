@@ -124,7 +124,7 @@ export function CalibrationPage() {
             fontFamily: 'var(--font-mono)',
           }}
         >
-          gbrain dream --phase calibration_profile
+          pmbrain dream --phase calibration_profile
         </pre>
       </div>
     );

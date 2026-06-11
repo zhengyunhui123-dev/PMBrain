@@ -10,7 +10,7 @@ import { getBrainHotMemoryMeta } from '../core/facts/meta-hook.ts';
 
 export async function startMcpServer(engine: BrainEngine) {
   const server = new Server(
-    { name: 'gbrain', version: VERSION },
+    { name: 'pmbrain', version: VERSION },
     { capabilities: { tools: {} } },
   );
 
@@ -38,8 +38,8 @@ export async function startMcpServer(engine: BrainEngine) {
       takesHoldersAllowList: ['world'],
       // v0.31: source defaults to 'default' for stdio (no per-token scope).
       // Operators who want a different source on stdio MCP should set
-      // GBRAIN_SOURCE in the env or use --source via `gbrain call`.
-      sourceId: process.env.GBRAIN_SOURCE || 'default',
+      // PMBRAIN_SOURCE in the env or use --source via `pmbrain call`.
+      sourceId: process.env.PMBRAIN_SOURCE || process.env.GBRAIN_SOURCE || 'default',
       // v0.31 (eD3): _meta.brain_hot_memory injection so Claude Desktop /
       // Code see the brain's relevant hot memory automatically alongside
       // every tool-call response. Best-effort; absorbs errors.
@@ -57,7 +57,7 @@ export async function startMcpServer(engine: BrainEngine) {
   const shutdown = (reason: string, code = 0) => {
     if (shuttingDown) return;
     shuttingDown = true;
-    process.stderr.write(`[gbrain-serve] shutdown: ${reason}\n`);
+    process.stderr.write(`[pmbrain-serve] shutdown: ${reason}\n`);
     Promise.resolve(engine.disconnect?.())
       .catch(() => {})
       .finally(() => process.exit(code));

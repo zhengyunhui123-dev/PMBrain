@@ -375,7 +375,7 @@ function NaturalLanguagePanel({ compact = false, onNavigate }: { compact?: boole
         <textarea
           value={text}
           onChange={e => setText(e.target.value)}
-          placeholder="例如：把这段话记下来；导入 D:\\项目资料；同步所有知识库；查一下陆海新通道项目资料"
+          placeholder="例如：把这段话记下来；导入文件夹路径；同步所有知识库；查一下项目相关资料"
           rows={compact ? 4 : 6}
         />
         <div className="pm-actions">
@@ -528,7 +528,7 @@ export function ImportDataPage() {
           <div className="pm-card">
             <h2>启动导入</h2>
             <label>本地文件或文件夹路径</label>
-            <input value={path} onChange={e => setPath(e.target.value)} placeholder="D:\\项目资料" />
+            <input value={path} onChange={e => setPath(e.target.value)} placeholder="C:\\MyData" />
             <label>Source ID（可选）</label>
             <input value={sourceId} onChange={e => setSourceId(e.target.value)} placeholder="例如 project-docs" />
             <label>Source 名称（注册 source 时可选）</label>
@@ -753,7 +753,7 @@ export function NaturalLanguagePage() {
       <h1>自然语言任务</h1>
       {overview && !overview.llm_enabled && (
         <div className="pm-card pm-warning">
-          当前未启用自然语言能力。请先在私有配置中设置 chat_model 和对应 API key，例如 MIMO。
+          当前未启用自然语言能力。请先在私有配置中设置 chat_model 和对应 API key。
         </div>
       )}
       <NaturalLanguagePanel />
@@ -915,7 +915,7 @@ export function ConnectionCenterPage() {
         type: 'http',
         url: `${origin}/mcp`,
         headers: {
-          Authorization: 'Bearer PASTE_PMBrain_API_KEY_HERE',
+          Authorization: 'Bearer PASTE_PMBRAIN_API_KEY_HERE',
         },
       },
     },
@@ -987,7 +987,7 @@ export function ConnectionCenterPage() {
                   <pre>{codeBuddyConfig}</pre>
                   <button className="copy-btn" onClick={copyCodeBuddyConfig}>复制</button>
                 </div>
-                <p className="pm-hint">把 <code>PASTE_PMBrain_API_KEY_HERE</code> 替换成刚创建的 API Key，只替换这段占位符。</p>
+                <p className="pm-hint">把 <code>PASTE_PMBRAIN_API_KEY_HERE</code> 替换成刚创建的 API Key，只替换这段占位符。</p>
               </section>
               <section>
                 <h3>验证连接</h3>

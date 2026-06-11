@@ -505,24 +505,25 @@ async function runDefault(engine: BrainEngine, args: string[]): Promise<void> {
 function runAttach(args: string[]): void {
   const id = args[0];
   if (!id) {
-    console.error('Usage: gbrain sources attach <id>');
+    console.error('Usage: pmbrain sources attach <id>');
     process.exit(2);
   }
   validateSourceId(id);
-  const dotfile = join(process.cwd(), '.gbrain-source');
+  const dotfile = join(process.cwd(), '.pmbrain-source');
   writeFileSync(dotfile, id + '\n', 'utf8');
-  console.log(`Attached ${process.cwd()} to source "${id}" via .gbrain-source.`);
+  console.log(`Attached ${process.cwd()} to source "${id}" via .pmbrain-source.`);
   console.log(`Commands run from this directory (or any subdirectory) will default to this source.`);
 }
 
 function runDetach(): void {
-  const dotfile = join(process.cwd(), '.gbrain-source');
-  if (!existsSync(dotfile)) {
-    console.log(`No .gbrain-source file in ${process.cwd()}.`);
+  const dotfiles = [join(process.cwd(), '.pmbrain-source'), join(process.cwd(), '.gbrain-source')];
+  const existing = dotfiles.filter(existsSync);
+  if (existing.length === 0) {
+    console.log(`No .pmbrain-source or .gbrain-source file in ${process.cwd()}.`);
     return;
   }
-  unlinkSync(dotfile);
-  console.log(`Detached ${process.cwd()} (removed .gbrain-source).`);
+  for (const dotfile of existing) unlinkSync(dotfile);
+  console.log(`Detached ${process.cwd()} (removed source dotfile).`);
 }
 
 // ── Subcommand: federate / unfederate ───────────────────────
@@ -1164,8 +1165,8 @@ Subcommands:
                                     With <id>: force-purge (requires --confirm-destructive).
   rename <id> <new-name>            Rename display name (id is immutable).
   default <id>                      Set the brain-level default source.
-  attach <id>                       Write .gbrain-source in CWD (like kubectl context).
-  detach                            Remove .gbrain-source from CWD.
+  attach <id>                       Write .pmbrain-source in CWD (like kubectl context).
+  detach                            Remove .pmbrain-source/.gbrain-source from CWD.
   current [--source <id>] [--json]  Echo the resolved source id + which tier
                                     won (flag/env/dotfile/local_path/
                                     brain_default/seed_default). Run this

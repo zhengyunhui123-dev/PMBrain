@@ -1,4 +1,4 @@
-# PMBrain 配置指南
+﻿# PMBrain 配置指南
 
 ## 环境概览
 
@@ -7,7 +7,7 @@
 | 操作系统 | Windows |
 | 运行时 | Bun 1.3.14 |
 | 数据库 | 本地 PGLite |
-| 数据库路径 | `D:\cursor-claude\PMBrain\.gbrain\brain.pglite` |
+| 数据库路径 | `D:\cursor-claude\PMBrain\\.pmbrain\brain.pglite` |
 | 默认 Dream / sync 目录 | `D:\Obsidian\Valut\PMGbrain` |
 | MCP 配置文件 | `C:\Users\zhengyunhui\.codebuddy\mcp.json` |
 
@@ -23,8 +23,8 @@
 
 私有配置文件：
 
-- `C:\Users\zhengyunhui\.gbrain\config.json`
-- `D:\cursor-claude\PMBrain\.gbrain\config.json`
+- `C:\Users\zhengyunhui\\.pmbrain\config.json`
+- `D:\cursor-claude\PMBrain\\.pmbrain\config.json`
 
 仓库内 `.env` 不保存真实 key。`load-env.ps1` 只负责从私有 `config.json` 导出当前进程环境变量，用于兼容仍读取 `process.env` 的旧入口。
 
@@ -64,4 +64,5 @@ bun run src/cli.ts dream --source default
 - `D:\Obsidian\Valut\PMGbrain` 当前只有 `.git`，没有 Markdown 文件和首个 commit；Dream 的 sync 阶段会提示 `No commits in repo`。先添加内容并提交一次即可。
 - 当前数据库已有 546 pages、7574 chunks、7574 embedded，旧数据和向量化结果可读。
 - `bun run typecheck` 当前仍有既有类型错误，集中在 `cycle project_health/risk_detect/report_gen` 和 `search.ts`，不属于 API key 治理改动。
+
 

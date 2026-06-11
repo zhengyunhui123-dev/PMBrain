@@ -1,4 +1,4 @@
-# PMBrain — 项目管理知识大脑
+﻿# PMBrain — 项目管理知识大脑
 
 PMBrain 是一个**纯本地、开箱即用**的项目管理知识大脑。把你的项目文档、会议纪要、需求文档、合同文件放进一个文件夹，AI 就能自动构建知识图谱、追踪进度、预警风险、生成报告。
 
@@ -52,7 +52,7 @@ bun src/cli.ts sync --source my-project
 启动 Admin Console 后，可以在浏览器里查看原始数据导入、知识库页面、数据源分布、向量化覆盖率、MCP 接入状态和后台任务健康情况。
 
 ```powershell
-gbrain serve --http --port 3131
+pmbrain serve --http --port 3131
 ```
 
 浏览器打开 `http://localhost:3131/admin`，即可进入 PMBrain 知识控制台。
@@ -60,16 +60,16 @@ gbrain serve --http --port 3131
 CLI 仍然支持可溯源搜索，每个搜索结果可以查看评分来源：
 
 ```powershell
-gbrain search "项目进度" --explain
+pmbrain search "项目进度" --explain
 ```
 
 ### 自然语言 AI 控制台
 
 Admin Console 不是传统后台，而是面向 AI Agent 的本地控制台。你可以直接输入自然语言任务：
 
-- `导入 D:\项目文档\需求.md`
+- `导入文件夹路径\需求.md`
 - `同步所有知识库`
-- `查一下陆海新通道项目资料`
+- `查一下项目相关资料`
 - `运行系统诊断`
 
 系统会调用已配置的对话模型识别意图，校验后映射到 PMBrain 允许的操作。
@@ -117,10 +117,10 @@ PGLite 在 Windows 上有 WASM 兼容性问题，推荐优先使用 Docker：
 # 1. 安装 Docker Desktop
 
 # 2. 启动 Postgres（含 pgvector 插件）
-docker run -d --name gbrain-pg ^
+docker run -d --name pmbrain-pg ^
   -e POSTGRES_USER=postgres ^
   -e POSTGRES_PASSWORD=postgres ^
-  -e POSTGRES_DB=gbrain ^
+  -e POSTGRES_DB=pmbrain ^
   -p 5433:5432 ^
   pgvector/pgvector:pg16
 
@@ -130,23 +130,23 @@ powershell -c "irm bun.sh/install.ps1 | iex"
 # 4. 全局安装 PMBrain
 bun install -g github:zhengyunhui123-dev/PMBrain
 
-# 5. 配置（编辑 ~/.gbrain/config.json）
+# 5. 配置（编辑 ~/.pmbrain/config.json）
 # {
 #   "engine": "postgres",
-#   "database_url": "postgresql://postgres:postgres@localhost:5433/gbrain",
+#   "database_url": "postgresql://postgres:postgres@localhost:5433/pmbrain",
 #   "embedding_model": "zhipu:embedding-3",
 #   "embedding_dimensions": 1024,
 #   "zhipu_api_key": "你的智谱Key"
 # }
 
 # 6. 初始化
-gbrain init
+pmbrain init
 
 # 7. 验证
-gbrain doctor
+pmbrain doctor
 
 # 8. 启动 GUI 管理控制台
-gbrain serve --http --port 3131
+pmbrain serve --http --port 3131
 ```
 
 启动后浏览器打开 `http://localhost:3131/admin`。首次登录需要使用终端打印的 Admin Token，或让 AI Agent 生成一次性管理员登录链接。
@@ -162,20 +162,20 @@ powershell -c "irm bun.sh/install.ps1 | iex"
 # 2. 全局安装
 bun install -g github:zhengyunhui123-dev/PMBrain
 
-# 3. 配置（编辑 ~/.gbrain/config.json）
+# 3. 配置（编辑 ~/.pmbrain/config.json）
 # { "engine": "pglite", ... }
 
 # 4. 初始化
-gbrain init --pglite
+pmbrain init --pglite
 
 # 5. 验证
-gbrain doctor
+pmbrain doctor
 
 # 6. 启动 GUI 管理控制台
-gbrain serve --http --port 3131
+pmbrain serve --http --port 3131
 ```
 
-> 安装后 CLI 命令是 `gbrain`，任何路径下直接 `gbrain <命令>` 即可。
+> 安装后 CLI 命令是 `pmbrain`，任何路径下直接 `pmbrain <命令>` 即可。旧版 `gbrain` 命令会继续作为兼容别名保留一段时间。
 
 ### 方式三：从源码安装
 
@@ -251,7 +251,7 @@ bun src/cli.ts serve --http --port 3131
 {
   "mcpServers": {
     "pmbrain": {
-      "command": "gbrain",
+      "command": "pmbrain",
       "args": ["serve"]
     }
   }
@@ -264,7 +264,7 @@ bun src/cli.ts serve --http --port 3131
 {
   "mcpServers": {
     "pmbrain": {
-      "command": "gbrain",
+      "command": "pmbrain",
       "args": ["serve", "--http", "--port", "3131"]
     }
   }
@@ -276,8 +276,8 @@ bun src/cli.ts serve --http --port 3131
 如果希望每次重启后管理员初始令牌保持不变，可以设置环境变量：
 
 ```powershell
-$env:GBRAIN_ADMIN_BOOTSTRAP_TOKEN="至少32位的安全随机字符串"
-gbrain serve --http --port 3131
+$env:PMBRAIN_ADMIN_BOOTSTRAP_TOKEN="至少32位的安全随机字符串"
+pmbrain serve --http --port 3131
 ```
 
 ### 在线/远程服务器的配置方式
@@ -288,7 +288,7 @@ gbrain serve --http --port 3131
 {
   "mcpServers": {
     "pmbrain": {
-      "command": "gbrain",
+      "command": "pmbrain",
       "args": ["serve", "--http", "--port", "3131", "--bind", "0.0.0.0"]
     }
   }
@@ -308,7 +308,7 @@ MCP 配置如下：
 {
   "mcpServers": {
     "pmbrain": {
-      "command": "gbrain",
+      "command": "pmbrain",
       "args": ["serve"]
     }
   }
@@ -322,7 +322,7 @@ MCP 配置如下：
 
 ### API Key 配置
 
-PMBrain 需要调用 AI 接口来生成向量和回答，Key 配置在 `~/.gbrain/config.json` 中：
+PMBrain 需要调用 AI 接口来生成向量和回答，Key 配置在 `~/.pmbrain/config.json` 中：
 
 ```json
 {
@@ -342,7 +342,7 @@ PMBrain 需要调用 AI 接口来生成向量和回答，Key 配置在 `~/.gbrai
 
 ### 模型切换
 
-编辑 `~/.gbrain/config.json` 中的 `embedding_model`、`chat_model` 字段即可切换。
+编辑 `~/.pmbrain/config.json` 中的 `embedding_model`、`chat_model` 字段即可切换。
 
 ---
 
@@ -376,3 +376,4 @@ PMBrain/
 ## 许可证
 
 MIT License。基于 [GBrain](https://github.com/garrytan/gbrain) 改造。
+

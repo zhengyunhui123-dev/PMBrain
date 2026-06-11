@@ -1,5 +1,5 @@
 {
-  "name": "gbrain",
+  "name": "pmbrain",
   "version": "0.32.3.0",
   "description": "Personal knowledge brain with Postgres + pgvector hybrid search",
   "family": "bundle-plugin",
@@ -22,8 +22,8 @@
     }
   },
   "mcpServers": {
-    "gbrain": {
-      "command": "./bin/gbrain",
+    "pmbrain": {
+      "command": "./bin/pmbrain",
       "args": [
         "serve"
       ]
@@ -86,6 +86,7 @@
   },
   "contracts": {
     "contextEngines": [
+      "pmbrain-context",
       "gbrain-context"
     ]
   }

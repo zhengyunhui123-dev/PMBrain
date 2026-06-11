@@ -279,7 +279,7 @@ export function _versionDescCompare(a: string, b: string): number {
 }
 
 function buildResolutionInput(input: LoadActivePackInput): ResolutionInput {
-  const envVar = process.env.GBRAIN_SCHEMA_PACK?.trim() || undefined;
+  const envVar = (process.env.PMBRAIN_SCHEMA_PACK ?? process.env.GBRAIN_SCHEMA_PACK)?.trim() || undefined;
   // tier-6: ~/.gbrain/config.json schema_pack field
   const homeConfig = input.cfg?.schema_pack?.trim() || undefined;
   return {

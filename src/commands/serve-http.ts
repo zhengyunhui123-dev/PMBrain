@@ -1,5 +1,5 @@
 /**
- * GBrain HTTP MCP server with OAuth 2.1.
+ * PMBrain HTTP MCP server with OAuth 2.1.
  *
  * Combines:
  * - MCP SDK's mcpAuthRouter (OAuth endpoints: /authorize, /token, /register, /revoke)
@@ -58,6 +58,10 @@ import {
   startSourceAddRun,
 } from './admin-console.ts';
 
+function envCompat(primary: string, legacy: string): string | undefined {
+  return process.env[primary] ?? process.env[legacy];
+}
+
 /**
  * /health endpoint timeout. 3s rather than 5s: Fly.io's default
  * health-check timeout is 5s, so returning 503 right at the orchestrator
@@ -96,7 +100,7 @@ export function resolveBootstrapToken(
     return {
       kind: 'error',
       message:
-        'GBRAIN_ADMIN_BOOTSTRAP_TOKEN must be at least 32 chars and match [A-Za-z0-9_-]+.\n' +
+        'PMBRAIN_ADMIN_BOOTSTRAP_TOKEN must be at least 32 chars and match [A-Za-z0-9_-]+.\n' +
         '  Refusing to start with a weak admin bootstrap token. Generate one with:\n' +
         '    head -c 32 /dev/urandom | base64 | tr -d "+/=" | head -c 48',
     };
@@ -113,7 +117,7 @@ export function renderAdminTokenFooter(opts: {
     return '║  Admin Token: suppressed (--suppress-bootstrap-token) ║\n╚══════════════════════════════════════════════════════╝';
   }
   if (opts.bootstrapFromEnv) {
-    return '║  Admin Token: from $GBRAIN_ADMIN_BOOTSTRAP_TOKEN     ║\n╚══════════════════════════════════════════════════════╝';
+    return '║  Admin Token: from $PMBRAIN_ADMIN_BOOTSTRAP_TOKEN    ║\n╚══════════════════════════════════════════════════════╝';
   }
   return `║  Admin Token (copy next line into /admin login)     ║\n${opts.bootstrapToken}\n╚══════════════════════════════════════════════════════╝`;
 }
@@ -255,7 +259,7 @@ export function resolveTrustProxy(env: string | undefined): string | number | bo
  * already takes).
  */
 export function parseCorsAllowlistOAuth(): Set<string> | null {
-  const v = process.env.GBRAIN_HTTP_CORS_ORIGIN;
+  const v = envCompat('PMBRAIN_HTTP_CORS_ORIGIN', 'GBRAIN_HTTP_CORS_ORIGIN');
   if (!v) return null;
   const origins = v.split(',').map(s => s.trim()).filter(Boolean);
   return origins.length === 0 ? null : new Set(origins);
@@ -459,7 +463,7 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
   // — otherwise refuse to start. Logging the bootstrap-token value every
   // restart is the original gripe; with `GBRAIN_ADMIN_BOOTSTRAP_TOKEN` set
   // and `--suppress-bootstrap-token`, no value reaches the log.
-  const resolved = resolveBootstrapToken(process.env.GBRAIN_ADMIN_BOOTSTRAP_TOKEN);
+  const resolved = resolveBootstrapToken(envCompat('PMBRAIN_ADMIN_BOOTSTRAP_TOKEN', 'GBRAIN_ADMIN_BOOTSTRAP_TOKEN'));
   if (resolved.kind === 'error') {
     console.error(resolved.message);
     process.exit(1);
@@ -490,7 +494,7 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
   // real client IP for rate-limiting and req.secure detection. The legacy
   // transport already reads this env var (src/mcp/http-transport.ts:111)
   // for the same purpose; T8 makes the Express path agree.
-  app.set('trust proxy', resolveTrustProxy(process.env.GBRAIN_HTTP_TRUST_PROXY));
+  app.set('trust proxy', resolveTrustProxy(envCompat('PMBRAIN_HTTP_TRUST_PROXY', 'GBRAIN_HTTP_TRUST_PROXY')));
 
   // ---------------------------------------------------------------------------
   // Cookie parsing — required for /admin auth (express 5 has no built-in)
@@ -515,7 +519,7 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
   const corsAllowlistOAuth = parseCorsAllowlistOAuth();
   if (!corsAllowlistOAuth && bind === '0.0.0.0') {
     console.error(
-      '[serve-http] WARNING: --bind 0.0.0.0 is set but GBRAIN_HTTP_CORS_ORIGIN is unset. OAuth endpoints will reject ALL cross-origin requests until you set the env var (comma-separated origins).',
+      '[serve-http] WARNING: --bind 0.0.0.0 is set but PMBRAIN_HTTP_CORS_ORIGIN is unset. OAuth endpoints will reject ALL cross-origin requests until you set the env var (comma-separated origins).',
     );
   }
   const corsOAuthOptions: cors.CorsOptions = {
@@ -680,7 +684,7 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
     // users_admin via /.well-known/oauth-authorization-server. The legacy
     // ['read','write','admin'] list left those new scopes invisible.
     scopesSupported: [...ALLOWED_SCOPES_LIST],
-    resourceName: 'GBrain MCP Server',
+    resourceName: 'PMBrain MCP Server',
   };
 
   // F12: DCR disable lives on the provider's constructor option above. The
@@ -740,7 +744,7 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
     const expiresAt = Date.now() + 24 * 60 * 60 * 1000; // 24 hours
     adminSessions.set(sessionId, expiresAt);
 
-    res.cookie('gbrain_admin', sessionId, adminCookie(req, 24 * 60 * 60 * 1000));
+    res.cookie('pmbrain_admin', sessionId, adminCookie(req, 24 * 60 * 60 * 1000));
     res.json({ status: 'authenticated' });
   });
 
@@ -851,13 +855,14 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
     const sessionExpiresAt = Date.now() + 7 * 24 * 60 * 60 * 1000; // 7 days for magic link
     adminSessions.set(sessionId, sessionExpiresAt);
 
-    res.cookie('gbrain_admin', sessionId, adminCookie(req, 7 * 24 * 60 * 60 * 1000));
+    res.cookie('pmbrain_admin', sessionId, adminCookie(req, 7 * 24 * 60 * 60 * 1000));
     res.redirect('/admin/');
   });
 
   // Admin auth middleware
   function requireAdmin(req: express.Request, res: express.Response, next: express.NextFunction) {
-    const sessionId = (req.cookies as Record<string, string>)?.gbrain_admin;
+    const cookies = req.cookies as Record<string, string>;
+    const sessionId = cookies?.pmbrain_admin || cookies?.gbrain_admin;
     if (!sessionId || !adminSessions.has(sessionId)) {
       res.status(401).json({ error: 'Admin authentication required' });
       return;
@@ -1018,7 +1023,7 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
               '',
               '## 为什么启动后每次都要 token？',
               '',
-              'Admin Console 使用本地管理员会话保护敏感操作。默认 token 是本次服务启动时生成的 bootstrap token，服务重启后会变化；配置固定 `GBRAIN_ADMIN_BOOTSTRAP_TOKEN` 后可以保持稳定。',
+              'Admin Console 使用本地管理员会话保护敏感操作。默认 token 是本次服务启动时生成的 bootstrap token，服务重启后会变化；配置固定 `PMBRAIN_ADMIN_BOOTSTRAP_TOKEN` 后可以保持稳定。',
               '',
               '## MCP 接入后没有响应？',
               '',
@@ -1376,7 +1381,7 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
       const { name } = req.body;
       if (!name) { res.status(400).json({ error: 'Name required' }); return; }
       const { generateToken, hashToken } = await import('../core/utils.ts');
-      const token = generateToken('gbrain_');
+      const token = generateToken('pmbrain_');
       const hash = hashToken(token);
       const id = (await import('crypto')).randomUUID();
       await sql`INSERT INTO access_tokens (id, name, token_hash) VALUES (${id}, ${name}, ${hash})`;
@@ -1585,7 +1590,7 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
 
     // Create a fresh MCP server per request (stateless)
     const server = new Server(
-      { name: 'gbrain', version: VERSION },
+      { name: 'pmbrain', version: VERSION },
       { capabilities: { tools: {} } },
     );
 
@@ -1892,7 +1897,7 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
 
   // Maximum payload bytes for POST /ingest. Configurable via env. Default 1 MB.
   const ingestMaxBytes = (() => {
-    const fromEnv = process.env.GBRAIN_INGEST_MAX_BYTES;
+    const fromEnv = envCompat('PMBRAIN_INGEST_MAX_BYTES', 'GBRAIN_INGEST_MAX_BYTES');
     if (!fromEnv) return 1_048_576;
     const n = parseInt(fromEnv, 10);
     return Number.isFinite(n) && n > 0 ? n : 1_048_576;
@@ -1967,10 +1972,10 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
         return;
       }
 
-      // Detect content_type. Caller can override via the X-Gbrain-Content-Type
+      // Detect content_type. Caller can override via the X-PMBrain-Content-Type
       // header for the JSON case (since the request's Content-Type would say
       // application/json but the user might intend the body to be markdown).
-      const declared = (req.header('x-gbrain-content-type') || req.header('content-type') || '').toLowerCase();
+      const declared = (req.header('x-pmbrain-content-type') || req.header('x-gbrain-content-type') || req.header('content-type') || '').toLowerCase();
       let contentType: IngestionContentType;
       if (declared.startsWith('text/markdown')) {
         contentType = 'text/markdown';
@@ -2003,9 +2008,9 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
 
       const content = body.toString('utf8');
       const contentHash = computeContentHash(content);
-      const sourceUri = (req.header('x-gbrain-source-uri') || `mcp-webhook:${authInfo.clientId}:${Date.now()}`).slice(0, 1024);
-      const sourceId = (req.header('x-gbrain-source-id') || `webhook-${authInfo.clientId}`).slice(0, 256);
-      const callerSlug = req.header('x-gbrain-slug');
+      const sourceUri = (req.header('x-pmbrain-source-uri') || req.header('x-gbrain-source-uri') || `mcp-webhook:${authInfo.clientId}:${Date.now()}`).slice(0, 1024);
+      const sourceId = (req.header('x-pmbrain-source-id') || req.header('x-gbrain-source-id') || `webhook-${authInfo.clientId}`).slice(0, 256);
+      const callerSlug = req.header('x-pmbrain-slug') || req.header('x-gbrain-slug');
 
       const event: IngestionEvent = {
         source_id: sourceId,
@@ -2211,7 +2216,7 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
 
       const secret = cfg.webhook_secret;
       if (!secret || typeof secret !== 'string') {
-        res.status(401).json({ error: 'webhook_not_configured', message: 'Run: gbrain sources webhook set ' + source.id });
+        res.status(401).json({ error: 'webhook_not_configured', message: 'Run: pmbrain sources webhook set ' + source.id });
         return;
       }
 
@@ -2265,7 +2270,7 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
   app.listen(port, bind, () => {
     console.error(`
 ╔══════════════════════════════════════════════════════╗
-║  GBrain MCP Server v${VERSION.padEnd(37)}║
+║  PMBrain MCP Server v${VERSION.padEnd(36)}║
 ╠══════════════════════════════════════════════════════╣
 ║  Port:      ${String(port).padEnd(40)}║
 ║  Bind:      ${bind.padEnd(40)}║

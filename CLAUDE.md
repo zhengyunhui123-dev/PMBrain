@@ -1,4 +1,4 @@
-# GBrain - Claude Code 工作手册
+﻿# PMBrain - Claude Code 工作手册
 
 > 给 Claude Code / Codex 使用的项目规则文档，非人读文档。
 > 聚焦：不要怎么改 → 为什么要这样 → 去哪找东西
@@ -16,11 +16,11 @@
 
 ### Brain / Source 双轴模型
 
-**Brain** = 哪个数据库（个人 brain 是 `host`，可 `gbrain mounts add` 挂载额外 brain）
+**Brain** = 哪个数据库（个人 brain 是 `host`，可 `pmbrain mounts add` 挂载额外 brain）
 **Source** = 数据库内的哪个仓库（wiki, gstack, openclaw, essays...）
 
-路由解析（6 层）：`--brain` / `GBRAIN_BRAIN_ID` / `.gbrain-mount` dotfile
-路由解析（6 层）：`--source` / `GBRAIN_SOURCE` / `.gbrain-source` dotfile
+路由解析（6 层）：`--brain` / `PMBRAIN_BRAIN_ID` / `.pmbrain-mount` dotfile（兼容 `.gbrain-mount`）
+路由解析（6 层）：`--source` / `PMBRAIN_SOURCE` / `.pmbrain-source` dotfile（兼容 `.gbrain-source`）
 
 ### Trust Boundary
 
@@ -111,18 +111,18 @@
 ## 常用命令
 
 ```bash
-gbrain init                              # 初始化（默认 PGLite）
-gbrain migrate --to supabase            # 迁移到 Supabase
-gbrain search "query"                   # 基本搜索
-gbrain search --mode conservative       # 保守模式
-gbrain search --mode balanced           # 平衡模式（默认）
-gbrain search --mode tokenmax          # Token 最大化
-gbrain sync                             # 同步 brain repo
-gbrain import <file>                   # 导入单个文件
-gbrain jobs work                        # 启动后台任务进程
+pmbrain init                              # 初始化（默认 PGLite）
+pmbrain migrate --to supabase            # 迁移到 Supabase
+pmbrain search "query"                   # 基本搜索
+pmbrain search --mode conservative       # 保守模式
+pmbrain search --mode balanced           # 平衡模式（默认）
+pmbrain search --mode tokenmax          # Token 最大化
+pmbrain sync                             # 同步 brain repo
+pmbrain import <file>                   # 导入单个文件
+pmbrain jobs work                        # 启动后台任务进程
 ```
 
-**详细命令参数：** 运行 `gbrain --help` 查看
+**详细命令参数：** 运行 `pmbrain --help` 查看
 
 ---
 
@@ -158,3 +158,4 @@ gbrain jobs work                        # 启动后台任务进程
 
 *本压缩文档生成于 2026-06-01，基于 GBrain 项目 CLAUDE.md，经过三轮压缩（~2000 行 → ~250 行 → ~100 行 → ~130 行）*
 *最终版本定位：Claude Code 工作手册（90+ 分）*
+

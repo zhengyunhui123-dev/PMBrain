@@ -41,14 +41,14 @@ function hashToken(token: string): string {
 }
 
 function envInt(name: string, fallback: number): number {
-  const v = process.env[name];
+  const v = process.env[name] ?? (name.startsWith('PMBRAIN_') ? process.env[name.replace(/^PMBRAIN_/, 'GBRAIN_')] : undefined);
   if (!v) return fallback;
   const n = parseInt(v, 10);
   return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
 function parseCorsAllowlist(): Set<string> | null {
-  const v = process.env.GBRAIN_HTTP_CORS_ORIGIN;
+  const v = process.env.PMBRAIN_HTTP_CORS_ORIGIN ?? process.env.GBRAIN_HTTP_CORS_ORIGIN;
   if (!v) return null;
   return new Set(v.split(',').map(s => s.trim()).filter(Boolean));
 }
@@ -108,9 +108,9 @@ async function readBodyWithCap(req: Request, cap: number): Promise<string | null
   return new TextDecoder().decode(merged);
 }
 
-/** Resolve client IP. Honors X-Forwarded-For only when GBRAIN_HTTP_TRUST_PROXY=1. */
+/** Resolve client IP. Honors X-Forwarded-For only when PMBRAIN_HTTP_TRUST_PROXY=1. */
 function resolveClientIp(req: Request, server: { requestIP: (r: Request) => { address: string } | null }): string {
-  if (process.env.GBRAIN_HTTP_TRUST_PROXY === '1') {
+  if ((process.env.PMBRAIN_HTTP_TRUST_PROXY ?? process.env.GBRAIN_HTTP_TRUST_PROXY) === '1') {
     const xff = req.headers.get('x-forwarded-for');
     if (xff) {
       const first = xff.split(',')[0]?.trim();
@@ -133,7 +133,7 @@ export async function startHttpTransport(opts: HttpTransportOptions) {
   const sql = sqlQueryForEngine(engine);
 
   const limiters = opts.limiters || buildDefaultLimiters();
-  const bodyCap = envInt('GBRAIN_HTTP_MAX_BODY_BYTES', DEFAULT_BODY_CAP);
+  const bodyCap = envInt('PMBRAIN_HTTP_MAX_BODY_BYTES', DEFAULT_BODY_CAP);
   const corsAllowlist = parseCorsAllowlist();
   const tools = buildToolDefs(operations);
 
@@ -287,7 +287,7 @@ export async function startHttpTransport(opts: HttpTransportOptions) {
       if (!auth.ok) {
         logRequest(null, 'unknown', 'auth_failed', Date.now() - startedMs);
         return Response.json(
-          { error: 'invalid_token', message: 'Bearer token required. Create one: gbrain auth create <name>' },
+          { error: 'invalid_token', message: 'Bearer token required. Create one: pmbrain auth create <name>' },
           { status: 401, headers: corsHeaders(origin) },
         );
       }
@@ -326,7 +326,7 @@ export async function startHttpTransport(opts: HttpTransportOptions) {
           {
             result: {
               protocolVersion: '2025-03-26',
-              serverInfo: { name: 'gbrain', version: VERSION },
+              serverInfo: { name: 'pmbrain', version: VERSION },
               capabilities: { tools: {} },
             },
             jsonrpc: '2.0',
@@ -379,18 +379,18 @@ export async function startHttpTransport(opts: HttpTransportOptions) {
     },
   });
 
-  console.error(`GBrain HTTP MCP server running on port ${port}`);
+  console.error(`PMBrain HTTP MCP server running on port ${port}`);
   console.error(`  Health: http://localhost:${port}/health`);
   console.error(`  MCP:    http://localhost:${port}/mcp`);
-  console.error(`  Auth:   Bearer token required (create with: gbrain auth create <name>)`);
+  console.error(`  Auth:   Bearer token required (create with: pmbrain auth create <name>)`);
   if (!corsAllowlist) {
-    console.error('  CORS:   default-deny. Set GBRAIN_HTTP_CORS_ORIGIN=https://your.app to allow browser clients.');
+    console.error('  CORS:   default-deny. Set PMBRAIN_HTTP_CORS_ORIGIN=https://your.app to allow browser clients.');
   } else {
     console.error(`  CORS:   allowlist = ${[...corsAllowlist].join(', ')}`);
   }
   console.error('');
   console.error('⚠️  Do NOT use open OAuth registration for remote MCP access.');
-  console.error('   Tokens are managed via: gbrain auth create/list/revoke');
+  console.error('   Tokens are managed via: pmbrain auth create/list/revoke');
 
   return server;
 }

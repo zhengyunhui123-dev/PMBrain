@@ -186,7 +186,7 @@ async function resolveSourceForRecall(
 ): Promise<string> {
   if (thinClient) {
     if (flagValue !== 'default') return flagValue;
-    const env = process.env.GBRAIN_SOURCE;
+    const env = process.env.PMBRAIN_SOURCE || process.env.GBRAIN_SOURCE;
     if (env && env.length > 0 && SOURCE_ID_RE.test(env)) return env;
     return 'default';
   }

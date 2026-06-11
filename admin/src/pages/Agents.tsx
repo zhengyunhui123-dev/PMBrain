@@ -414,22 +414,22 @@ function AgentDrawer({ agent, onClose, onRevoked }: { agent: Agent; onClose: () 
   const configSnippets: Record<string, string> = {
     'claude-code': isOAuth
       ? [
-        `用户希望将 GBrain MCP 连接到你的上下文。请按以下步骤操作。`,
+        `用户希望将 PMBrain MCP 连接到你的上下文。请按以下步骤操作。`,
         ``,
         `# 第 1 步：读取客户端密钥，不要将其写入 shell 历史。`,
         `# read -s 会禁止回显；export 仅让变量在当前 shell 会话中生效。`,
-        `read -rs -p "Client Secret: " GBRAIN_CS && echo`,
+        `read -rs -p "Client Secret: " PMBRAIN_CS && echo`,
         ``,
-        `# 第 2 步：生成令牌并注册 GBrain。`,
-        `claude mcp add --transport http gbrain ${serverUrl}/mcp \\`,
+        `# 第 2 步：生成令牌并注册 PMBrain。`,
+        `claude mcp add --transport http pmbrain ${serverUrl}/mcp \\`,
         `  --header "Authorization: Bearer $(curl -s -X POST ${serverUrl}/token \\`,
         `    -d 'grant_type=client_credentials' \\`,
         `    -d 'client_id=${cid}' \\`,
-        `    --data-urlencode "client_secret=$GBRAIN_CS" \\`,
+        `    --data-urlencode "client_secret=$PMBRAIN_CS" \\`,
         `    -d 'scope=${agent.scope || 'read write'}' | jq -r .access_token)"`,
         ``,
         `# 第 3 步：从当前 shell 清除密钥。`,
-        `unset GBRAIN_CS`,
+        `unset PMBRAIN_CS`,
         ``,
         `令牌有效期：${agent.token_ttl ? (agent.token_ttl >= 86400 ? Math.floor(agent.token_ttl / 86400) + ' 天' : Math.floor(agent.token_ttl / 3600) + ' 小时') : '1 小时（默认）'}。`,
         ``,
@@ -443,17 +443,17 @@ function AgentDrawer({ agent, onClose, onRevoked }: { agent: Agent; onClose: () 
         `  -d 'client_secret=PASTE_YOUR_CLIENT_SECRET_HERE' \\`,
         `  -d 'scope=${agent.scope || 'read write'}' | jq -r .access_token`,
         ``,
-        `claude mcp add --transport http gbrain ${serverUrl}/mcp \\`,
+        `claude mcp add --transport http pmbrain ${serverUrl}/mcp \\`,
         `  --header "Authorization: Bearer PASTE_TOKEN_FROM_ABOVE"`,
         ``,
         `# 然后执行：history -d $((HISTCMD-1))   # zsh: print -s -- '' && fc -p`,
       ].join('\n')
       : [
-        `用户希望将 GBrain MCP 连接到你的上下文。请按以下步骤操作。`,
+        `用户希望将 PMBrain MCP 连接到你的上下文。请按以下步骤操作。`,
         ``,
-        `在终端中运行以下命令注册 GBrain：`,
+        `在终端中运行以下命令注册 PMBrain：`,
         ``,
-        `claude mcp add --transport http gbrain ${serverUrl}/mcp \\`,
+        `claude mcp add --transport http pmbrain ${serverUrl}/mcp \\`,
         `  --header "Authorization: Bearer PASTE_YOUR_API_KEY_HERE"`,
         ``,
         `将 PASTE_YOUR_API_KEY_HERE 替换为创建“${agentName}”时显示的 API Key。`,
@@ -461,7 +461,7 @@ function AgentDrawer({ agent, onClose, onRevoked }: { agent: Agent; onClose: () 
       ].join('\n'),
 
     'chatgpt': [
-      `用户希望将 GBrain MCP 连接到 ChatGPT。`,
+      `用户希望将 PMBrain MCP 连接到 ChatGPT。`,
       ``,
       `1. 打开 ChatGPT > Settings > Tools & Integrations > Add MCP Server`,
       `2. 输入以下 URL，ChatGPT 会自动发现 OAuth 配置：`,
@@ -476,7 +476,7 @@ function AgentDrawer({ agent, onClose, onRevoked }: { agent: Agent; onClose: () 
     ].join('\n'),
 
     'claude-cowork': [
-      `用户希望将 GBrain MCP 连接到 Claude.ai。`,
+      `用户希望将 PMBrain MCP 连接到 Claude.ai。`,
       ``,
       `1. 打开 claude.ai > Settings > Connected Apps > Add MCP Server`,
       `2. 服务器 URL：${serverUrl}/mcp`,
@@ -491,13 +491,13 @@ function AgentDrawer({ agent, onClose, onRevoked }: { agent: Agent; onClose: () 
 
     cursor: isOAuth
       ? [
-        `用户希望将 GBrain MCP 连接到 Cursor。`,
+        `用户希望将 PMBrain MCP 连接到 Cursor。`,
         ``,
         `Cursor 支持远程 MCP 的 OAuth。请添加到 .cursor/mcp.json：`,
         ``,
         `{`,
         `  "mcpServers": {`,
-        `    "gbrain": {`,
+        `    "pmbrain": {`,
         `      "url": "${serverUrl}/mcp",`,
         `      "transport": "sse"`,
         `    }`,
@@ -510,13 +510,13 @@ function AgentDrawer({ agent, onClose, onRevoked }: { agent: Agent; onClose: () 
         `出现提示时，Client ID 填写 ${cid}，密钥使用注册时获得的值。`,
       ].join('\n')
       : [
-        `用户希望将 GBrain MCP 连接到 Cursor。`,
+        `用户希望将 PMBrain MCP 连接到 Cursor。`,
         ``,
         `请添加到 .cursor/mcp.json：`,
         ``,
         `{`,
         `  "mcpServers": {`,
-        `    "gbrain": {`,
+        `    "pmbrain": {`,
         `      "url": "${serverUrl}/mcp",`,
         `      "transport": "sse",`,
         `      "headers": {`,
@@ -530,7 +530,7 @@ function AgentDrawer({ agent, onClose, onRevoked }: { agent: Agent; onClose: () 
       ].join('\n'),
 
     perplexity: [
-      `用户希望将 GBrain MCP 连接到 Perplexity。`,
+      `用户希望将 PMBrain MCP 连接到 Perplexity。`,
       ``,
       `1. 打开 Settings > Connectors > Add MCP`,
       `2. 服务器 URL：${serverUrl}/mcp`,

@@ -3130,10 +3130,11 @@ const whoami: Operation = {
           'or set ctx.remote === false.',
       );
     }
-    // OAuth tokens have client_id starting with 'gbrain_cl_'; legacy
+    // OAuth tokens have client_id starting with 'pmbrain_cl_' (or legacy
+    // 'gbrain_cl_'); legacy
     // access_tokens reuse `name` as both clientId and clientName (verifyAccessToken
     // at oauth-provider.ts:417-430). Detect by inspecting the prefix.
-    const isOauth = ctx.auth.clientId.startsWith('gbrain_cl_');
+    const isOauth = ctx.auth.clientId.startsWith('pmbrain_cl_') || ctx.auth.clientId.startsWith('gbrain_cl_');
     if (isOauth) {
       return {
         transport: 'oauth',

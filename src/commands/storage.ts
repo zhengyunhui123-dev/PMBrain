@@ -171,8 +171,8 @@ export function formatStorageStatusHuman(result: StorageStatusResult): string {
   lines.push('');
 
   if (!result.config) {
-    lines.push('No gbrain.yml configuration found.');
-    if (result.repoPath) lines.push(`Checked: ${result.repoPath}/gbrain.yml`);
+    lines.push('No pmbrain.yml configuration found.');
+    if (result.repoPath) lines.push(`Checked: ${result.repoPath}/pmbrain.yml (legacy gbrain.yml also supported)`);
     lines.push('');
     lines.push('All pages are stored in git by default.');
     lines.push(`Total pages: ${result.totalPages}`);

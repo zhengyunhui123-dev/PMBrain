@@ -10,6 +10,10 @@ import { saveConfig, loadConfig, loadConfigFileOnly, toEngineConfig, gbrainPath,
 import { createEngine } from '../core/engine-factory.ts';
 import { discoverOAuth, mintClientCredentialsToken, smokeTestMcp } from '../core/remote-mcp-probe.ts';
 
+function envCompat(primary: string, legacy: string): string | undefined {
+  return process.env[primary] ?? process.env[legacy];
+}
+
 export async function runInit(args: string[]) {
   // Help guard: cli.ts only routes --help to printOpHelp() for shared-op
   // commands; CLI_ONLY commands (init, embed, etc.) fall through to their
@@ -62,7 +66,7 @@ export async function runInit(args: string[]) {
     const url = existing!.remote_mcp!.mcp_url;
     const msg = `Thin-client config already present at ${configPath()} (remote_mcp.mcp_url=${url}).\n` +
       `Re-init would create a local engine and conflict with the remote MCP setup.\n` +
-      `Use --force to overwrite, or \`gbrain init --mcp-only --force\` to refresh thin-client config.`;
+      `Use --force to overwrite, or \`pmbrain init --mcp-only --force\` to refresh thin-client config.`;
     if (jsonOutput) {
       console.log(JSON.stringify({ status: 'error', reason: 'thin_client_config_present', mcp_url: url, message: msg }));
     } else {
@@ -114,8 +118,8 @@ export async function runInit(args: string[]) {
         console.log(`Found ~${fileCount} .md files. For a brain this size, Supabase gives faster`);
         console.log('search and remote access ($25/mo). PGLite works too but search will be slower at scale.');
         console.log('');
-        console.log('  gbrain init --supabase   Set up with Supabase (recommended for large brains)');
-        console.log('  gbrain init --pglite     Use local PGLite anyway');
+        console.log('  pmbrain init --supabase   Set up with Supabase (recommended for large brains)');
+        console.log('  pmbrain init --pglite     Use local PGLite anyway');
         console.log('');
         // Default to PGLite, let the user choose Supabase if they want
       }
@@ -129,11 +133,11 @@ export async function runInit(args: string[]) {
   if (manualUrl) {
     databaseUrl = manualUrl;
   } else if (isNonInteractive) {
-    const envUrl = process.env.GBRAIN_DATABASE_URL || process.env.DATABASE_URL;
+    const envUrl = envCompat('PMBRAIN_DATABASE_URL', 'GBRAIN_DATABASE_URL') || process.env.DATABASE_URL;
     if (envUrl) {
       databaseUrl = envUrl;
     } else {
-      console.error('--non-interactive requires --url <connection_string> or GBRAIN_DATABASE_URL env var');
+      console.error('--non-interactive requires --url <connection_string> or PMBRAIN_DATABASE_URL env var');
       process.exit(1);
     }
   } else {
@@ -580,10 +584,10 @@ async function initRemoteMcp(opts: {
     const i = args.indexOf(flag);
     return i !== -1 ? args[i + 1] : null;
   };
-  const issuerUrl = (arg('--issuer-url') ?? process.env.GBRAIN_REMOTE_ISSUER_URL ?? '').trim();
-  const mcpUrl = (arg('--mcp-url') ?? process.env.GBRAIN_REMOTE_MCP_URL ?? '').trim();
-  const clientId = (arg('--oauth-client-id') ?? process.env.GBRAIN_REMOTE_CLIENT_ID ?? '').trim();
-  const clientSecret = (arg('--oauth-client-secret') ?? process.env.GBRAIN_REMOTE_CLIENT_SECRET ?? '').trim();
+  const issuerUrl = (arg('--issuer-url') ?? envCompat('PMBRAIN_REMOTE_ISSUER_URL', 'GBRAIN_REMOTE_ISSUER_URL') ?? '').trim();
+  const mcpUrl = (arg('--mcp-url') ?? envCompat('PMBRAIN_REMOTE_MCP_URL', 'GBRAIN_REMOTE_MCP_URL') ?? '').trim();
+  const clientId = (arg('--oauth-client-id') ?? envCompat('PMBRAIN_REMOTE_CLIENT_ID', 'GBRAIN_REMOTE_CLIENT_ID') ?? '').trim();
+  const clientSecret = (arg('--oauth-client-secret') ?? envCompat('PMBRAIN_REMOTE_CLIENT_SECRET', 'GBRAIN_REMOTE_CLIENT_SECRET') ?? '').trim();
 
   function fail(reason: string, message: string, extra: Record<string, unknown> = {}): never {
     if (jsonOutput) {
@@ -594,10 +598,10 @@ async function initRemoteMcp(opts: {
     process.exit(1);
   }
 
-  if (!issuerUrl) fail('missing_issuer_url', '--issuer-url is required (or set GBRAIN_REMOTE_ISSUER_URL). Example: --issuer-url https://brain-host.local:3001');
-  if (!mcpUrl) fail('missing_mcp_url', '--mcp-url is required (or set GBRAIN_REMOTE_MCP_URL). Example: --mcp-url https://brain-host.local:3001/mcp');
-  if (!clientId) fail('missing_client_id', '--oauth-client-id is required (or set GBRAIN_REMOTE_CLIENT_ID). Get it from `gbrain auth register-client` on the host.');
-  if (!clientSecret) fail('missing_client_secret', '--oauth-client-secret is required (or set GBRAIN_REMOTE_CLIENT_SECRET). Get it from `gbrain auth register-client` on the host.');
+  if (!issuerUrl) fail('missing_issuer_url', '--issuer-url is required (or set PMBRAIN_REMOTE_ISSUER_URL). Example: --issuer-url https://brain-host.local:3001');
+  if (!mcpUrl) fail('missing_mcp_url', '--mcp-url is required (or set PMBRAIN_REMOTE_MCP_URL). Example: --mcp-url https://brain-host.local:3001/mcp');
+  if (!clientId) fail('missing_client_id', '--oauth-client-id is required (or set PMBRAIN_REMOTE_CLIENT_ID). Get it from `pmbrain auth register-client` on the host.');
+  if (!clientSecret) fail('missing_client_secret', '--oauth-client-secret is required (or set PMBRAIN_REMOTE_CLIENT_SECRET). Get it from `pmbrain auth register-client` on the host.');
 
   // Re-run guard for --mcp-only specifically: refuse without --force to
   // avoid silently rotating credentials on a working install.
@@ -624,7 +628,7 @@ async function initRemoteMcp(opts: {
     fail(
       `discovery_${disco.reason}`,
       `Pre-flight failed: OAuth discovery on ${issuerUrl} — ${disco.message}\n` +
-      `Hint: confirm the issuer_url, that the host is reachable, and that \`gbrain serve --http\` is running there.`,
+      `Hint: confirm the issuer_url, that the host is reachable, and that \`pmbrain serve --http\` is running there.`,
       { detail: disco.message, ...(disco.status ? { status: disco.status } : {}) },
     );
   }
@@ -636,7 +640,7 @@ async function initRemoteMcp(opts: {
     fail(
       `token_${tokenRes.reason}`,
       `Pre-flight failed: OAuth /token — ${tokenRes.message}\n` +
-      `Hint: the host operator can run \`gbrain auth register-client <name> --grant-types client_credentials --scopes read,write,admin\` to mint fresh credentials.`,
+      `Hint: the host operator can run \`pmbrain auth register-client <name> --grant-types client_credentials --scopes read,write,admin\` to mint fresh credentials.`,
       { detail: tokenRes.message, ...(tokenRes.status ? { status: tokenRes.status } : {}) },
     );
   }
@@ -674,7 +678,7 @@ async function initRemoteMcp(opts: {
       // Only persist the secret to disk if it didn't come from the env var.
       // Env-var-supplied secrets stay in env; on-disk copy is opt-in via
       // the --oauth-client-secret flag (or absent env var).
-      ...(process.env.GBRAIN_REMOTE_CLIENT_SECRET === clientSecret
+      ...(envCompat('PMBRAIN_REMOTE_CLIENT_SECRET', 'GBRAIN_REMOTE_CLIENT_SECRET') === clientSecret
         ? {}
         : { oauth_client_secret: clientSecret }),
     },

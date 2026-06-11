@@ -2,7 +2,7 @@ import { readFileSync, existsSync } from 'fs';
 import { join } from 'path';
 
 /**
- * Storage tier configuration loaded from gbrain.yml.
+ * Storage tier configuration loaded from pmbrain.yml (legacy gbrain.yml supported).
  *
  * The canonical key names are `db_tracked` and `db_only` (engine-agnostic).
  * The deprecated keys `git_tracked` and `supabase_only` are still read for
@@ -182,11 +182,19 @@ function normalizeStorageConfig(raw: RawStorage): StorageConfig {
  */
 let _missingStorageWarned = false;
 
+function resolveStorageConfigPath(repoPath: string): string | null {
+  const canonical = join(repoPath, 'pmbrain.yml');
+  if (existsSync(canonical)) return canonical;
+  const legacy = join(repoPath, 'gbrain.yml');
+  if (existsSync(legacy)) return legacy;
+  return null;
+}
+
 export function loadStorageConfig(repoPath?: string | null): StorageConfig | null {
   if (!repoPath) return null;
 
-  const yamlPath = join(repoPath, 'gbrain.yml');
-  if (!existsSync(yamlPath)) return null;
+  const yamlPath = resolveStorageConfigPath(repoPath);
+  if (!yamlPath) return null;
 
   // Read failure is a real error (not a "feature not configured" signal).
   // Throwing here lets the caller decide whether to crash or fall back.
@@ -197,7 +205,7 @@ export function loadStorageConfig(repoPath?: string | null): StorageConfig | nul
     raw = parseStorageYaml(content);
   } catch (error) {
     console.warn(
-      `Warning: Failed to parse gbrain.yml: ${error instanceof Error ? error.message : String(error)}`,
+      `Warning: Failed to parse ${yamlPath}: ${error instanceof Error ? error.message : String(error)}`,
     );
     return null;
   }
@@ -209,7 +217,7 @@ export function loadStorageConfig(repoPath?: string | null): StorageConfig | nul
       console.warn(
         `Warning: ${yamlPath} exists but has no storage configuration. ` +
           `Add a "storage:" section with db_tracked / db_only arrays, ` +
-          `or remove gbrain.yml to suppress this warning.`,
+          `or remove pmbrain.yml/gbrain.yml to suppress this warning.`,
       );
     }
     return null;
@@ -224,7 +232,7 @@ export function loadStorageConfig(repoPath?: string | null): StorageConfig | nul
       console.warn(
         `Warning: ${yamlPath} exists but has no storage configuration. ` +
           `Add a "storage:" section with db_tracked / db_only arrays, ` +
-          `or remove gbrain.yml to suppress this warning.`,
+          `or remove pmbrain.yml/gbrain.yml to suppress this warning.`,
       );
     }
     return merged;

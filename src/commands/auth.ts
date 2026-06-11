@@ -30,7 +30,7 @@ function hashToken(token: string): string {
 }
 
 function generateToken(): string {
-  return 'gbrain_' + randomBytes(32).toString('hex');
+  return 'pmbrain_' + randomBytes(32).toString('hex');
 }
 
 /**
@@ -44,7 +44,7 @@ async function withConfiguredSql<T>(
 ): Promise<T> {
   const config = loadConfig();
   if (!config) {
-    console.error('No GBrain config found. Run `gbrain init` first, or set DATABASE_URL / GBRAIN_DATABASE_URL.');
+    console.error('No PMBrain config found. Run `pmbrain init` first, or set DATABASE_URL / PMBRAIN_DATABASE_URL.');
     process.exit(1);
   }
   const engineConfig = toEngineConfig(config);

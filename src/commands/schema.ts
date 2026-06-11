@@ -154,7 +154,7 @@ Pass --force to bypass per-pack lock contention on writes.
 
 Resolution chain (7-tier, tier 1 trust-gated):
   1. Per-call --schema-pack flag (CLI only)
-  2. GBRAIN_SCHEMA_PACK env var
+  2. PMBRAIN_SCHEMA_PACK env var (legacy GBRAIN_SCHEMA_PACK accepted)
   3. Per-source DB config schema_pack.source.<id>
   4. Brain-wide DB config schema_pack
   5. gbrain.yml schema: section
