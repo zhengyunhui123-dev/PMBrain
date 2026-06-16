@@ -144,3 +144,19 @@
 - 描述：从 Admin 自然语言任务导入 `D:\duwu\youdao\订单+清单项目` 时，命令生成为 `bun src/cli.ts import ... --include-office`，没有带 `--source-id dingdan-qingdan`。该目录已注册为 source `dingdan-qingdan`，但执行层解析为 `default`，导致已存在页面建版本快照时报 `createVersion failed: page "项目管理" (source=default) not found`。
 - 是否完成：是
 - 最终结果：Admin 执行 import_path 时会根据导入路径匹配 sources.local_path 的最长前缀，自动补齐正确 `--source-id`；显式传入 sourceId 时仍优先使用用户指定值。按版本规则将 PMBrain 从 `1.0.2` 更新为 `1.0.3`。
+## 2026-06-16 Dream MIMO 价格配置缺失
+
+- 时间：2026-06-16
+- 版本号：1.0.5
+- 标题：修复 Dream propose_takes 使用 MIMO 时提示价格未配置
+- 描述：`pmbrain dream` 在 `propose_takes` 阶段使用 `mimo:mimo-v2.5-pro` 时，旧 Dream budget meter 只读取 Anthropic 价格表，导致 `BUDGET_METER_NO_PRICING` 并让预算计量失效；新 `BudgetTracker` 也缺少通用 provider recipe 价格读取。
+- 是否完成：是
+- 最终结果：预算计量器现在会读取 provider recipe 中的 chat 输入/输出单价，MIMO 按 `$1.25/$10.00 per 1M tokens` 计入预算；`models.propose_takes` 与 `models.grade_takes` 已确认均为 `mimo:mimo-v2.5-pro`，本地 HTTP 服务已启动并通过 `/health` 检查。
+## 2026-06-16 全局 pmbrain 命令入口修复
+
+- 时间：2026-06-16
+- 版本号：1.0.7
+- 标题：修复全局 pmbrain 入口版本不一致和 help 误报失败
+- 描述：系统 PATH 中的 `pmbrain`/`gbrain` 仍指向旧全局安装版本，直接执行 `pmbrain dream` 会绕过当前 PMBrain 源码修复；同时 `embed --help` 与 `config --help` 虽打印 Usage 但返回错误码 1，容易被自动化判断为命令不可执行。
+- 是否完成：是
+- 最终结果：全局 `pmbrain.cmd`/`gbrain.cmd` 已转发到当前项目源码；`pmbrain --version` 与 `gbrain --version` 均返回当前版本；`embed --help` 和 `config --help` 改为正常返回。

@@ -64,4 +64,10 @@ describe('estimateMaxCostUsd', () => {
       expect(estimateMaxCostUsd(`anthropic/${key}`, 1_000_000, 0)).not.toBeNull();
     }
   });
+
+  test('recipe-priced provider model hits chat pricing', () => {
+    // MIMO recipe: $1.25 input / $10 output per MTok.
+    const cost = estimateMaxCostUsd('mimo:mimo-v2.5-pro', 100_000, 50_000);
+    expect(cost).toBeCloseTo(0.625, 5);
+  });
 });

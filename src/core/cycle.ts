@@ -1859,17 +1859,15 @@ export async function runCycle(
 
         if (phases.includes('propose_takes')) {
           checkAborted(opts.signal);
-          progress.start('cycle.propose_takes');
           const { runPhaseProposeTakes } = await import('./cycle/propose-takes.ts');
           const model = await resolveModel(engine, {
             configKey: 'models.propose_takes',
             tier: 'reasoning',
             fallback: calibrationChatFallback,
           });
-          const { result, duration_ms } = await timePhase(() => runPhaseProposeTakes(calibrationCtx, { repoPath: opts.brainDir, model }) as Promise<PhaseResult>);
+          const { result, duration_ms } = await timePhase(() => runPhaseProposeTakes(calibrationCtx, { repoPath: opts.brainDir, model, reporter: progress }) as Promise<PhaseResult>);
           result.duration_ms = duration_ms;
           phaseResults.push(result);
-          progress.finish();
           await safeYield(opts.yieldBetweenPhases);
         }
 

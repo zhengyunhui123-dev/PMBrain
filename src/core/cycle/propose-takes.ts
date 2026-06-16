@@ -165,6 +165,11 @@ export function contentHash(pageBody: string): string {
   return createHash('sha256').update(pageBody).digest('hex');
 }
 
+function progressNote(done: number, total: number, status: string, slug: string): string {
+  const pct = total > 0 ? Math.floor((done / total) * 100) : 0;
+  return `${status} ${done}/${total} (${pct}%) ${slug}`;
+}
+
 /**
  * Detect whether a page already has a complete `<!-- gbrain:takes:begin -->`
  * fence. We DO propose against pages with fences (F2 dedup) but the operator
@@ -327,17 +332,25 @@ class ProposeTakesPhase extends BaseCyclePhase {
     const pages: Page[] = await engine.listPages(pageFilters);
 
     if (opts.reporter) {
-      opts.reporter.start('propose_takes.pages' as never, pages.length);
+      opts.reporter.start('propose_takes.pages', pages.length);
     }
 
-    for (const page of pages) {
+    for (let i = 0; i < pages.length; i++) {
+      const page = pages[i]!;
+      const pageNo = i + 1;
       result.pages_scanned += 1;
-      this.tick(opts);
+      opts.reporter?.heartbeat(progressNote(pageNo, pages.length, 'processing', page.slug));
 
       // Skip pages that have NO prose body (e.g. metadata-only entity stubs).
       const body = page.compiled_truth ?? '';
-      if (body.trim().length === 0) continue;
-      if (skipPagesWithFence && hasCompleteFence(body)) continue;
+      if (body.trim().length === 0) {
+        this.tick(opts, progressNote(pageNo, pages.length, 'skipped empty', page.slug));
+        continue;
+      }
+      if (skipPagesWithFence && hasCompleteFence(body)) {
+        this.tick(opts, progressNote(pageNo, pages.length, 'skipped fence', page.slug));
+        continue;
+      }
 
       const ch = contentHash(body);
       const existingTakes = extractExistingTakesForDedup(body);
@@ -353,6 +366,7 @@ class ProposeTakesPhase extends BaseCyclePhase {
       );
       if (cached.length > 0) {
         result.cache_hits += 1;
+        this.tick(opts, progressNote(pageNo, pages.length, 'cache hit', page.slug));
         continue;
       }
       result.cache_misses += 1;
@@ -368,6 +382,7 @@ class ProposeTakesPhase extends BaseCyclePhase {
         result.warnings.push(
           `budget exhausted at page ${result.pages_scanned}/${pages.length} (cumulative $${budget.cumulativeCostUsd.toFixed(4)} / cap $${budget.budgetUsd.toFixed(2)})`,
         );
+        this.tick(opts, progressNote(pageNo, pages.length, 'budget exhausted', page.slug));
         break;
       }
 
@@ -383,6 +398,7 @@ class ProposeTakesPhase extends BaseCyclePhase {
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         result.warnings.push(`extractor failed on ${page.slug}: ${msg}`);
+        this.tick(opts, progressNote(pageNo, pages.length, 'failed', page.slug));
         continue;
       }
 
@@ -413,6 +429,7 @@ class ProposeTakesPhase extends BaseCyclePhase {
         );
         result.proposals_inserted += 1;
       }
+      this.tick(opts, progressNote(pageNo, pages.length, `done +${proposals.length}`, page.slug));
     }
 
     if (opts.reporter) opts.reporter.finish();

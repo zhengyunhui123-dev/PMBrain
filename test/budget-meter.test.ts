@@ -60,6 +60,23 @@ describe('BudgetMeter', () => {
     expect(meter.unpricedSubmits).toBe(2);
   });
 
+  test('recipe-priced chat provider uses real cost instead of unpriced bypass', () => {
+    const meter = new BudgetMeter({ budgetUsd: 1.0, phase: 'propose_takes', auditPath });
+    const r = meter.check({
+      modelId: 'mimo:mimo-v2.5-pro',
+      estimatedInputTokens: 1500,
+      maxOutputTokens: 500,
+      label: 'extractor',
+    });
+    expect(r.allowed).toBe(true);
+    expect(r.unpriced).toBeUndefined();
+    expect(r.estimatedCostUsd).toBeCloseTo(0.006875, 8);
+    expect(meter.unpricedSubmits).toBe(0);
+    const lines = readLedger();
+    expect(lines[0].event).toBe('submit');
+    expect(lines[0].estimated_cost_usd).toBeCloseTo(0.006875, 8);
+  });
+
   test('ledger captures every submit (allowed + denied + unpriced)', () => {
     const meter = new BudgetMeter({ budgetUsd: 0.001, phase: 'auto_think', auditPath });
     meter.check({ modelId: 'claude-opus-4-7', estimatedInputTokens: 5000, maxOutputTokens: 4000, label: 'a' });

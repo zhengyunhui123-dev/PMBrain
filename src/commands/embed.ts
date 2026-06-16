@@ -211,6 +211,11 @@ export async function runEmbedCore(engine: BrainEngine, opts: EmbedOpts): Promis
 }
 
 export async function runEmbed(engine: BrainEngine, args: string[]): Promise<EmbedResult | undefined> {
+  if (args.includes('--help') || args.includes('-h')) {
+    console.log('Usage: gbrain embed [<slug>|--all|--stale|--slugs s1 s2 ...] [--dry-run] [--batch-size N] [--priority recent] [--catch-up]');
+    return;
+  }
+
   // v0.36+ T7: --background submits via Minion queue, returns job_id to
   // stdout, exits. Same semantics in TTY and cron (D9).
   if (args.includes('--background')) {

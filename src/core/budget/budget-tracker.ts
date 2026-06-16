@@ -35,6 +35,7 @@ import { ANTHROPIC_PRICING, type ModelPricing } from '../anthropic-pricing.ts';
 import { EMBEDDING_PRICING, lookupEmbeddingPrice } from '../embedding-pricing.ts';
 import { splitProviderModelId } from '../model-id.ts';
 import { isoWeekFilename, resolveAuditDir } from '../audit-week-file.ts';
+import { getRecipe } from '../ai/recipes/index.ts';
 
 export type BudgetKind = 'chat' | 'embed' | 'rerank';
 
@@ -193,6 +194,18 @@ function lookupPricing(modelId: string, kind: BudgetKind): ModelPricing | null {
   if (modelTail) {
     const tailHit = ANTHROPIC_PRICING[modelTail];
     if (tailHit) return tailHit;
+  }
+  if (kind === 'chat' && providerId) {
+    const chat = getRecipe(providerId)?.touchpoints.chat;
+    if (
+      typeof chat?.cost_per_1m_input_usd === 'number' &&
+      typeof chat?.cost_per_1m_output_usd === 'number'
+    ) {
+      return {
+        input: chat.cost_per_1m_input_usd,
+        output: chat.cost_per_1m_output_usd,
+      };
+    }
   }
   // v0.40.6.1: zero-price local-inference rerank providers so the budget
   // tracker's TX2 hard-fail doesn't trip on `llama-server-reranker:<model>`

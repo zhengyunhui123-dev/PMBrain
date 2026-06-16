@@ -38,6 +38,12 @@ export function redactConfigValue(key: string, value: string): string {
 export async function runConfig(engine: BrainEngine, args: string[]) {
   const action = args[0];
 
+  if (!action || action === '--help' || action === '-h') {
+    console.log('Usage: gbrain config [show|get|set|unset] <key> [value]');
+    console.log('       gbrain config unset --pattern <prefix>');
+    return;
+  }
+
   if (action === 'show') {
     const config = loadConfig();
     if (!config) {

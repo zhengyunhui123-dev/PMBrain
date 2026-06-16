@@ -59,4 +59,3 @@ _import_code.cjs
 imports/
 temp-sections/
 temp_doc_reader.py
-{console.error(e)

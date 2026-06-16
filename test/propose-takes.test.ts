@@ -332,6 +332,32 @@ New prose appended here.`;
     expect((details.warnings as string[])[0]).toContain('LLM timeout');
   });
 
+  test('reports per-page progress with percent and slug', async () => {
+    const pages = [
+      buildPage({ slug: 'wiki/a', body: 'page A prose' }),
+      buildPage({ slug: 'wiki/b', body: 'page B prose' }),
+    ];
+    const { engine } = buildMockEngine({ pages });
+    const events: Array<{ type: string; phase?: string; total?: number; note?: string }> = [];
+    const reporter = {
+      start: (phase: string, total?: number) => events.push({ type: 'start', phase, total }),
+      tick: (_n?: number, note?: string) => events.push({ type: 'tick', note }),
+      heartbeat: (note: string) => events.push({ type: 'heartbeat', note }),
+      finish: () => events.push({ type: 'finish' }),
+      child: () => reporter,
+    };
+    const extractor: ProposeTakesExtractor = async () => [];
+
+    await runPhaseProposeTakes(buildCtx(engine), { extractor, reporter });
+
+    expect(events).toContainEqual({ type: 'start', phase: 'propose_takes.pages', total: 2 });
+    expect(events.some(e => e.type === 'heartbeat' && e.note === 'processing 1/2 (50%) wiki/a')).toBe(true);
+    expect(events.some(e => e.type === 'tick' && e.note === 'done +0 1/2 (50%) wiki/a')).toBe(true);
+    expect(events.some(e => e.type === 'heartbeat' && e.note === 'processing 2/2 (100%) wiki/b')).toBe(true);
+    expect(events.some(e => e.type === 'tick' && e.note === 'done +0 2/2 (100%) wiki/b')).toBe(true);
+    expect(events.at(-1)?.type).toBe('finish');
+  });
+
   test('pages with empty compiled_truth are skipped silently (no extractor call)', async () => {
     const pages = [
       buildPage({ slug: 'wiki/empty', body: '' }),

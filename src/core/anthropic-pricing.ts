@@ -6,10 +6,9 @@
  * pricing — the JSON in `~/.gbrain/audit/dream-budget-*.jsonl` carries the
  * snapshot per call so historical estimates stay reproducible.
  *
- * Codex P1 #10 fold: non-Anthropic models (gemini, gpt, anything not in
- * this map) bypass the budget gate with a `BUDGET_METER_NO_PRICING` warn
- * once per process. The cycle still runs unbounded for those models.
- * Future: per-provider pricing modules.
+ * Codex P1 #10 fold: models without pricing bypass the budget gate with a
+ * `BUDGET_METER_NO_PRICING` warn once per process. The cycle still runs
+ * unbounded for those models.
  */
 
 export interface ModelPricing {
@@ -34,6 +33,7 @@ export const ANTHROPIC_PRICING: Record<string, ModelPricing> = {
 };
 
 import { splitProviderModelId } from './model-id.ts';
+import { getRecipe } from './ai/recipes/index.ts';
 
 /**
  * Estimate the upper-bound USD cost of a single submit.
@@ -41,8 +41,8 @@ import { splitProviderModelId } from './model-id.ts';
  * The maxOutputTokens upper-bounds the output cost — actual completions
  * usually return less.
  *
- * Returns null when the model isn't in the pricing map. Callers warn-once
- * and treat as zero-cost (the cycle runs unbounded for that submit).
+ * Returns null when the model isn't in a pricing map. Callers warn-once and
+ * treat as zero-cost (the cycle runs unbounded for that submit).
  *
  * Accepts bare (`claude-opus-4-7`), colon-prefixed (`anthropic:claude-opus-4-7`),
  * and slash-prefixed (`anthropic/claude-opus-4-7`) ids. Routes through
@@ -58,8 +58,20 @@ export function estimateMaxCostUsd(
 ): number | null {
   let p: ModelPricing | undefined = ANTHROPIC_PRICING[modelId];
   if (!p) {
-    const { model: tail } = splitProviderModelId(modelId);
+    const { provider, model: tail } = splitProviderModelId(modelId);
     if (tail) p = ANTHROPIC_PRICING[tail];
+    if (!p && provider) {
+      const chat = getRecipe(provider)?.touchpoints.chat;
+      if (
+        typeof chat?.cost_per_1m_input_usd === 'number' &&
+        typeof chat?.cost_per_1m_output_usd === 'number'
+      ) {
+        p = {
+          input: chat.cost_per_1m_input_usd,
+          output: chat.cost_per_1m_output_usd,
+        };
+      }
+    }
   }
   if (!p) return null;
   return (

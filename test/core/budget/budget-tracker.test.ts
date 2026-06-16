@@ -170,6 +170,21 @@ describe('BudgetTracker.reserve', () => {
     ).not.toThrow();
   });
 
+  test('recipe-priced chat provider under --max-cost does NOT no_pricing throw', () => {
+    const t = new BudgetTracker({ maxCostUsd: 10.0, label: 'test', auditPath });
+    expect(() =>
+      t.reserve({
+        modelId: 'mimo:mimo-v2.5-pro',
+        estimatedInputTokens: 1000,
+        maxOutputTokens: 1000,
+        kind: 'chat',
+      }),
+    ).not.toThrow();
+    const audit = readAudit();
+    expect(audit[0].event).toBe('reserve');
+    expect(audit[0].projected_cost_usd).toBeCloseTo(0.01125, 8);
+  });
+
   test('no cap + unknown pricing: warns once per process, no throw', () => {
     const t = new BudgetTracker({ label: 'test', auditPath });
     expect(() =>
@@ -335,6 +350,20 @@ describe('BudgetTracker.record', () => {
     expect(audit[0].event).toBe('record');
     expect(audit[0].schema_version).toBe(1);
     expect(audit[0].actual_cost_usd).toBeCloseTo(0.0035, 6);
+  });
+
+  test('records recipe-priced chat provider usage', () => {
+    const t = new BudgetTracker({ maxCostUsd: 1.0, label: 'test', auditPath });
+    t.record({
+      modelId: 'mimo:mimo-v2.5-pro',
+      inputTokens: 1000,
+      outputTokens: 500,
+      kind: 'chat',
+    } as any);
+    expect(t.totalSpent).toBeCloseTo(0.00625, 8);
+    const audit = readAudit();
+    expect(audit[0].event).toBe('record');
+    expect(audit[0].actual_cost_usd).toBeCloseTo(0.00625, 8);
   });
 
   test('unpriced record: no throw, audited as record_unpriced', () => {
