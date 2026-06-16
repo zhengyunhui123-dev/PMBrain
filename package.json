@@ -32,7 +32,7 @@
   "scripts": {
     "dev": "bun run src/cli.ts",
     "build": "bun build --compile --outfile bin/pmbrain src/cli.ts && bun build --compile --outfile bin/gbrain src/cli.ts",
-    "build:all": "bun build --compile --target=bun-darwin-arm64 --outfile bin/pmbrain-darwin-arm64 src/cli.ts && bun build --compile --target=bun-linux-x64 --outfile bin/pmbrain-linux-x64 src/cli.ts && bun build --compile --target=bun-darwin-arm64 --outfile bin/gbrain-darwin-arm64 src/cli.ts && bun build --compile --target=bun-linux-x64 --outfile bin/gbrain-linux-x64 src/cli.ts",
+    "build:all": "bun build --compile --target=bun-darwin-arm64 --outfile bin/pmbrain-darwin-arm64 src/cli.ts && bun build --compile --target=bun-linux-x64 --outfile bin/pmbrain-linux-x64 src/cli.ts && bun build --compile --target=bun-windows-x64 --outfile bin/pmbrain-windows-x64 src/cli.ts && bun build --compile --target=bun-darwin-arm64 --outfile bin/gbrain-darwin-arm64 src/cli.ts && bun build --compile --target=bun-linux-x64 --outfile bin/gbrain-linux-x64 src/cli.ts && bun build --compile --target=bun-windows-x64 --outfile bin/gbrain-windows-x64 src/cli.ts",
     "build:admin": "cd admin && bun run build && cd .. && bun run scripts/build-admin-embedded.ts",
     "build:admin-embedded": "bun run scripts/build-admin-embedded.ts",
     "build:schema": "bash scripts/build-schema.sh",

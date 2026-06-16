@@ -1,10 +1,9 @@
 /**
  * `gbrain reinit-pglite` — wipe-and-reinit PGLite brain in one command.
  *
- * v0.37 fix wave (deferred TODO, shipped end-of-wave): the canonical path
- * for switching embedding models / dimensions on PGLite is wipe-and-reinit
- * (PGLite cannot `ALTER COLUMN TYPE vector(N)` — pgvector ships as WASM).
- * The recipe is 3 commands by hand:
+ * The canonical path for switching embedding models / dimensions on PGLite:
+ * wipe-and-reinit (PGLite cannot `ALTER COLUMN TYPE vector(N)` — pgvector
+ * ships as WASM). The recipe is 3 commands by hand:
  *
  *   mv ~/.gbrain/brain.pglite ~/.gbrain/brain.pglite.bak
  *   gbrain init --pglite --embedding-model X --embedding-dimensions N

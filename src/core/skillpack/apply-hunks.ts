@@ -1,6 +1,6 @@
 /**
  * skillpack/apply-hunks.ts — pure-JS unified-diff parser + clean-hunk
- * applier (D15, TODO-3 folded).
+ * applier.
  *
  * Used by `gbrain skillpack reference --apply-clean-hunks`. For each
  * hunk in a diff between gbrain's bundle and the user's local file,

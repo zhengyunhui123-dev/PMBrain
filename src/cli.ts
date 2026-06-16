@@ -59,10 +59,6 @@ const CLI_ONLY_SELF_HELP = new Set([
   // short-circuit fired before runSync could print its own usage block.
   // Adding `sync` here routes `gbrain sync --help` into runSync.
   'sync',
-  // v0.37 fix wave (deferred TODO, shipped): reinit-pglite has its
-  // own --help in runReinitPglite. Routing through SELF_HELP avoids
-  // the generic short-circuit so the destructive-action warning text
-  // reaches the user.
   'reinit-pglite',
   // v0.40.6.0 Schema Cathedral v3 — `gbrain schema --help` should hit
   // schema.ts printHelp() with the full 22+ verb taxonomy, not the
@@ -852,8 +848,6 @@ async function handleCliOnly(command: string, args: string[]) {
     await runInit(args);
     return;
   }
-  // v0.37 fix wave (deferred TODO, shipped): one-command wipe-and-reinit.
-  // Spawns its own engine internally so no pre-bound engine needed.
   if (command === 'reinit-pglite') {
     const { runReinitPglite } = await import('./commands/reinit-pglite.ts');
     await runReinitPglite(args);

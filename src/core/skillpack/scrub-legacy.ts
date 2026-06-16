@@ -1,6 +1,5 @@
 /**
  * skillpack/scrub-legacy.ts — `gbrain skillpack scrub-legacy-fence-rows`
- * (TODO-2 folded into v0.33).
  *
  * Opt-in companion to `migrate-fence`. After the agent confirms it
  * walks frontmatter `triggers:` for routing, this command removes the

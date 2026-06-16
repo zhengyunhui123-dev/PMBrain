@@ -1,29 +1,64 @@
+api_version: gbrain-schema-pack-v1
 name: pm-schema-pack
-description: 项目管理领域模型 — 7 种页面类型 + 6 种关系
+description: 项目管理领域模型 — 7 种页面类型
 version: 1.0.0
+gbrain_min_version: 0.41.0
+extends: gbrain-base-v2
+borrow_from: []
+takes_kinds:
+  - fact
+  - take
+  - bet
+  - hunch
 
 page_types:
-  - project
-  - milestone
-  - task
-  - risk
-  - decision
-  - meeting
-  - stakeholder
+  - name: project
+    primitive: entity
+    path_prefixes:
+      - projects/
+    extractable: true
+    expert_routing: true
 
-link_types:
-  - belongs_to      # 里程碑/任务/风险/决策/会议 → 项目
-  - blocks          # 任务阻塞任务
-  - assigned_to     # 任务 → 干系人
-  - raised_in       # 风险 → 会议
-  - decided_in      # 决策 → 会议
-  - affects         # 风险 → 项目/里程碑/任务
+  - name: milestone
+    primitive: temporal
+    path_prefixes:
+      - milestones/
+    extractable: false
+    expert_routing: false
 
-filing_rules:
-  project: projects/
-  milestone: projects/{project}/milestones/
-  task: projects/{project}/tasks/
-  risk: projects/{project}/risks/
-  decision: projects/{project}/decisions/
-  meeting: projects/{project}/meetings/
-  stakeholder: stakeholders/
+  - name: task
+    primitive: entity
+    path_prefixes:
+      - tasks/
+    extractable: true
+    expert_routing: true
+
+  - name: risk
+    primitive: entity
+    path_prefixes:
+      - risks/
+    extractable: true
+    expert_routing: true
+
+  - name: decision
+    primitive: entity
+    path_prefixes:
+      - decisions/
+    extractable: false
+    expert_routing: false
+
+  - name: meeting
+    primitive: temporal
+    path_prefixes:
+      - meetings/
+    extractable: false
+    expert_routing: false
+
+  - name: stakeholder
+    primitive: entity
+    path_prefixes:
+      - stakeholders/
+    extractable: true
+    expert_routing: true
+
+link_types: []

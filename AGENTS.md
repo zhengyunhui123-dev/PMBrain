@@ -32,3 +32,4 @@ Agent 不允许：
 * 优先更新 Wiki
 * 不修改原始资料
 * 保持知识链接完整
+* 不要读取 TODOS.md 和 CHANGELOG.md（GBrain 上游历史文档，与 PMBrain 日常使用和开发无关）

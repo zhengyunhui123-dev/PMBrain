@@ -151,3 +151,9 @@
 ### pm-task
 - triggers: ["任务", "分配", "创建任务", "更新任务", "task"]
 - handler: skills/pm-task/SKILL.md
+
+## Uncategorized
+
+| Trigger | Skill |
+|---------|-------|
+| "培训会议通知" | `skills/training-meeting-notice/SKILL.md` |

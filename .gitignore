@@ -50,3 +50,13 @@ load-env.ps1
 
 # Local MCP server config — contains real auth tokens
 .mcp.json
+
+# Local context / brain dump — not for git
+context/
+
+# Temp/generated artifacts — not project code
+_import_code.cjs
+imports/
+temp-sections/
+temp_doc_reader.py
+{console.error(e)

@@ -130,7 +130,7 @@ export function runReferenceAll(opts: Omit<ReferenceOptions, 'skillSlug'>): Refe
 }
 
 // ---------------------------------------------------------------------------
-// `reference --apply-clean-hunks` (D15, TODO-3 folded)
+// `reference --apply-clean-hunks`
 // ---------------------------------------------------------------------------
 
 export interface ReferenceApplyOptions extends ReferenceOptions {
