@@ -157,3 +157,7 @@
 | Trigger | Skill |
 |---------|-------|
 | "培训会议通知" | `skills/training-meeting-notice/SKILL.md` |
+
+| "\"公文" | `skills/gongwengeshi/SKILL.md` |
+
+| "开发文档字体" | `skills/kaifawendangguifan/SKILL.md` |
