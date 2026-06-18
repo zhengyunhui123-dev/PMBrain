@@ -1153,6 +1153,151 @@ pre {
   padding: 42px;
 }
 
+.take-page {
+  max-width: 1120px;
+}
+
+.take-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 18px 0;
+}
+
+.take-filter {
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: #fff;
+  color: var(--text-secondary);
+  padding: 8px 12px;
+  font-size: 13px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.take-filter.active {
+  border-color: #c8d4ff;
+  background: #eef2ff;
+  color: var(--accent);
+}
+
+.take-list {
+  display: grid;
+  gap: 12px;
+}
+
+.take-card {
+  display: grid;
+  gap: 14px;
+}
+
+.take-card-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.take-card h2 {
+  margin-top: 6px;
+  font-size: 16px;
+  line-height: 1.45;
+  font-weight: 750;
+}
+
+.take-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.take-meta span,
+.take-status {
+  display: inline-flex;
+  min-height: 24px;
+  align-items: center;
+  padding: 3px 8px;
+  border-radius: 7px;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.take-status.pending {
+  background: #fff7ed;
+  color: #b45309;
+}
+
+.take-status.accepted {
+  background: #ecfdf5;
+  color: #047857;
+}
+
+.take-status.rejected {
+  background: #fef2f2;
+  color: #b91c1c;
+}
+
+.take-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.take-detail-grid div {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 9px 10px;
+  background: #f8fafc;
+}
+
+.take-page-link {
+  display: block;
+  width: 100%;
+  border: 1px solid #c8d4ff;
+  border-radius: 8px;
+  padding: 9px 10px;
+  background: #f8faff;
+  color: var(--text-primary);
+  text-align: left;
+  cursor: pointer;
+}
+
+.take-page-link:hover {
+  border-color: var(--accent);
+  background: #eef2ff;
+}
+
+.take-detail-grid span {
+  display: block;
+  color: var(--text-muted);
+  font-size: 12px;
+  margin-bottom: 4px;
+}
+
+.take-detail-grid b {
+  overflow-wrap: anywhere;
+}
+
+.take-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.pm-ghost.danger {
+  color: var(--error);
+  background: #fff1f2;
+}
+
+.take-source-drawer {
+  width: min(780px, 100vw);
+}
+
+.take-source-chunk {
+  margin-top: 14px;
+}
+
 .pm-bars {
   display: grid;
   gap: 10px;
@@ -1527,6 +1672,12 @@ pre {
   .mcp-guide-strip,
   .mcp-difference-card,
   .wecom-panel {
+    grid-template-columns: 1fr;
+  }
+  .take-card-head {
+    display: grid;
+  }
+  .take-detail-grid {
     grid-template-columns: 1fr;
   }
   .docs-content {

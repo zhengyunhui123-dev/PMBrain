@@ -53,7 +53,7 @@ import type { PhaseStatus, CyclePhase } from '../cycle.ts';
  * verdicts in `take_proposals` (composite key includes prompt_version) stay
  * valid as audit history; new runs re-spend LLM tokens on every page.
  */
-export const PROPOSE_TAKES_PROMPT_VERSION = 'v0.36.1.0-tuned-cat15';
+export const PROPOSE_TAKES_PROMPT_VERSION = 'v0.36.1.1-tuned-cat15-cn';
 
 /**
  * Tuned extractor prompt, validated against the hand-labeled synthetic
@@ -98,12 +98,17 @@ NOT gradeable (do NOT extract these):
 - Restatements of an earlier claim in the same page
 
 For each gradeable claim, output a JSON object with:
-- claim_text   (string, <=200 chars, paraphrase or near-verbatim from prose)
+- claim_text   (Chinese string, <=200 chars, paraphrase the claim in Chinese even when the source prose is English)
 - kind         ('prediction' | 'judgment' | 'bet')
 - holder       ('world' | 'people/<slug>' | 'companies/<slug>' | 'brain' — default 'brain' when author asserts the claim)
 - weight       (number 0..1 inferred from hedging language: 'I bet'/'strong conviction'=0.7-0.85,
                 'I think'/'moderate conviction'=0.5-0.7, 'maybe'/'I'd guess'=0.3-0.5)
 - domain       (short tag — e.g. 'tactics', 'macro', 'hiring', 'geography', 'pricing')
+
+Language rule:
+- claim_text MUST be Chinese. Do not output English claim_text.
+- domain SHOULD be Chinese whenever possible, e.g. '策略', '宏观趋势', '招聘', '地域', '定价', '用户体验'.
+- Keep source-specific names as-is, but translate the judgment/prediction itself into Chinese.
 
 Output ONLY a JSON array of these objects. No prose. No commentary. If no
 gradeable claims, return [].
@@ -152,6 +157,7 @@ export interface ProposeTakesResult {
   cache_hits: number;
   cache_misses: number;
   proposals_inserted: number;
+  dry_run_no_llm?: boolean;
   budget_exhausted: boolean;
   warnings: string[];
 }
@@ -371,6 +377,12 @@ class ProposeTakesPhase extends BaseCyclePhase {
       }
       result.cache_misses += 1;
 
+      if (opts.dryRun) {
+        result.dry_run_no_llm = true;
+        this.tick(opts, progressNote(pageNo, pages.length, 'dry-run no-llm', page.slug));
+        continue;
+      }
+
       // Budget pre-check before the LLM call. Estimate: ~1500 input tokens + 500 output.
       const budget = this.checkBudget({
         modelId: opts.model ?? 'claude-sonnet-4-6',
@@ -463,7 +475,9 @@ class ProposeTakesPhase extends BaseCyclePhase {
     });
 
     return {
-      summary: `propose_takes: scanned ${result.pages_scanned} pages, ${result.cache_hits} cached, ${result.proposals_inserted} new proposals (run ${proposalRunId})`,
+      summary: opts.dryRun
+        ? `propose_takes: dry-run scanned ${result.pages_scanned} pages, ${result.cache_hits} cached, ${result.cache_misses} would need LLM, 0 proposals written (run ${proposalRunId})`
+        : `propose_takes: scanned ${result.pages_scanned} pages, ${result.cache_hits} cached, ${result.proposals_inserted} new proposals (run ${proposalRunId})`,
       details: { ...result, proposal_run_id: proposalRunId, prompt_version: promptVersion },
       status: result.budget_exhausted ? 'warn' : 'ok',
     };

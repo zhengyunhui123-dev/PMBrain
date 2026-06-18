@@ -11,6 +11,7 @@ import { describe, test, expect } from 'bun:test';
 import { readFileSync } from 'fs';
 
 const dreamSrc = readFileSync(new URL('../src/commands/dream.ts', import.meta.url), 'utf-8');
+const cycleSrc = readFileSync(new URL('../src/core/cycle.ts', import.meta.url), 'utf-8');
 
 describe('dream CLI flag wiring', () => {
   test('declares --input flag with file argument', () => {
@@ -54,9 +55,11 @@ describe('dream CLI flag wiring', () => {
     expect(dreamSrc).toContain('patterns=');
   });
 
-  test('help text documents dry-run synthesis semantics (Codex finding #8)', () => {
-    expect(dreamSrc).toContain('skips the Sonnet');
-    expect(dreamSrc.toLowerCase()).toContain('zero llm calls');
+  test('help text documents current dry-run and approval semantics', () => {
+    expect(dreamSrc).toContain('propose_takes 在 dry-run 下只统计');
+    expect(dreamSrc).toContain('不调用 LLM');
+    expect(dreamSrc).toContain('观点审批');
+    expect(dreamSrc).toContain('take_proposals');
   });
 
   // v0.41.13: --source / --source-id flag wiring (supersedes PR #1559).
@@ -74,6 +77,10 @@ describe('dream CLI flag wiring', () => {
       // The runCycle call must pass sourceId; gate name "sourceId"
       // not "source" because CycleOpts.sourceId is the contract.
       expect(dreamSrc).toMatch(/sourceId:\s*resolvedSourceId/);
+    });
+
+    test('calibration phases prefer explicit sourceId over brainDir inference', () => {
+      expect(cycleSrc).toContain('const calibrationSourceId = opts.sourceId ?? await resolveSourceForDir(engine, opts.brainDir)');
     });
 
     test('imports resolveSourceId from canonical source-resolver helper', () => {

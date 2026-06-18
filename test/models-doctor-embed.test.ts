@@ -47,4 +47,12 @@ describe('models doctor — embedding reachability probe (v0.40.x)', () => {
     expect(slice).toContain('const embeddingConfig = await probeEmbeddingConfig()');
     expect(slice).toMatch(/embeddingConfig\.status === 'ok'[\s\S]*probeEmbeddingReachability\(\)/);
   });
+
+  test('runModels treats args[0] doctor as doctor mode', () => {
+    const runIdx = src.indexOf('export async function runModels');
+    expect(runIdx).toBeGreaterThan(0);
+    const slice = src.slice(runIdx, runIdx + 700);
+    expect(slice).toContain("const subArg = args[0] === 'models' ? args[1] : args[0]");
+    expect(slice).toContain("subArg === 'doctor' ? 'doctor'");
+  });
 });

@@ -17,6 +17,16 @@ export interface RiskItem {
   status: string;
 }
 
+function riskLevel(value: unknown): RiskItem['probability'] {
+  return value === 'low' || value === 'medium' || value === 'high' || value === 'very_high'
+    ? value
+    : 'medium';
+}
+
+function optionalString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
 export async function runRiskDetect(
   engine: BrainEngine,
   opts: { dryRun?: boolean } = {},
@@ -44,14 +54,14 @@ export async function runRiskDetect(
     // 4. 按项目分组风险统计
     const riskByProject = new Map<string, RiskItem[]>();
     for (const risk of activeRisks) {
-      const project = risk.project || 'unassigned';
+      const project = optionalString(risk.project) || 'unassigned';
       const list = riskByProject.get(project) || [];
       list.push({
-        title: risk.title,
-        probability: risk.probability,
-        impact: risk.impact,
-        mitigation: risk.mitigation,
-        status: risk.status,
+        title: String(risk.title),
+        probability: riskLevel(risk.probability),
+        impact: riskLevel(risk.impact),
+        mitigation: optionalString(risk.mitigation),
+        status: String(risk.status ?? 'unknown'),
       });
       riskByProject.set(project, list);
     }

@@ -489,6 +489,125 @@ export async function queryAgentClientSpend(engine: BrainEngine): Promise<AgentC
   }));
 }
 
+export interface AdminTakeProposalRow {
+  id: number;
+  source_id: string;
+  page_slug: string;
+  status: string;
+  claim_text: string;
+  kind: string;
+  holder: string;
+  weight: number;
+  domain: string | null;
+  model_id: string;
+  proposed_at: string;
+  acted_at: string | null;
+  acted_by: string | null;
+  promoted_row_num: number | null;
+  existing_take_count: number;
+}
+
+const TAKE_PROPOSAL_STATUSES = new Set(['pending', 'accepted', 'rejected', 'superseded', 'all']);
+
+function normalizeTakeProposalStatus(status: unknown): string {
+  const raw = typeof status === 'string' && status.trim() ? status.trim() : 'pending';
+  return TAKE_PROPOSAL_STATUSES.has(raw) ? raw : 'pending';
+}
+
+export async function listAdminTakeProposals(
+  engine: BrainEngine,
+  opts: { status?: string; limit?: number } = {},
+): Promise<AdminTakeProposalRow[]> {
+  const status = normalizeTakeProposalStatus(opts.status);
+  const limit = Math.max(1, Math.min(200, Math.floor(opts.limit ?? 50)));
+  return await engine.executeRaw<AdminTakeProposalRow>(
+    `SELECT tp.id::int AS id, tp.source_id, tp.page_slug, tp.status, tp.claim_text, tp.kind, tp.holder,
+            tp.weight, tp.domain, tp.model_id, tp.proposed_at, tp.acted_at, tp.acted_by,
+            tp.promoted_row_num::int AS promoted_row_num,
+            COALESCE(tc.n, 0)::int AS existing_take_count
+       FROM take_proposals tp
+       LEFT JOIN pages p ON p.source_id = tp.source_id AND p.slug = tp.page_slug
+       LEFT JOIN LATERAL (
+         SELECT COUNT(*)::int AS n FROM takes t WHERE t.page_id = p.id
+       ) tc ON true
+      WHERE ($1 = 'all' OR tp.status = $1)
+      ORDER BY tp.proposed_at DESC, tp.id DESC
+      LIMIT $2`,
+    [status, limit],
+  );
+}
+
+export async function acceptAdminTakeProposal(
+  engine: BrainEngine,
+  id: number,
+  actedBy = 'admin',
+): Promise<AdminTakeProposalRow> {
+  return await engine.transaction(async tx => {
+    const rows = await tx.executeRaw<AdminTakeProposalRow & { page_id: number; next_row_num: number }>(
+      `SELECT tp.id::int AS id, tp.source_id, tp.page_slug, tp.status, tp.claim_text, tp.kind, tp.holder,
+              tp.weight, tp.domain, tp.model_id, tp.proposed_at, tp.acted_at, tp.acted_by,
+              tp.promoted_row_num::int AS promoted_row_num, p.id::int AS page_id,
+              (COALESCE((SELECT MAX(row_num) FROM takes WHERE page_id = p.id), 0) + 1)::int AS next_row_num,
+              COALESCE((SELECT COUNT(*) FROM takes WHERE page_id = p.id), 0)::int AS existing_take_count
+         FROM take_proposals tp
+         JOIN pages p ON p.source_id = tp.source_id AND p.slug = tp.page_slug
+        WHERE tp.id = $1
+        FOR UPDATE OF tp`,
+      [id],
+    );
+    const proposal = rows[0];
+    if (!proposal) throw new Error('take proposal not found');
+    if (proposal.status !== 'pending') throw new Error(`take proposal is already ${proposal.status}`);
+
+    await tx.addTakesBatch([{
+      page_id: proposal.page_id,
+      row_num: proposal.next_row_num,
+      claim: proposal.claim_text,
+      kind: proposal.kind,
+      holder: proposal.holder,
+      weight: proposal.weight,
+      source: `take_proposal:${proposal.id}`,
+      active: true,
+    }]);
+
+    const updated = await tx.executeRaw<AdminTakeProposalRow>(
+      `UPDATE take_proposals
+          SET status = 'accepted',
+              acted_at = now(),
+              acted_by = $2,
+              promoted_row_num = $3
+        WHERE id = $1
+        RETURNING id::int AS id, source_id, page_slug, status, claim_text, kind, holder, weight,
+                  domain, model_id, proposed_at, acted_at, acted_by, promoted_row_num::int AS promoted_row_num,
+                  $4::int AS existing_take_count`,
+      [id, actedBy, proposal.next_row_num, proposal.existing_take_count + 1],
+    );
+    return updated[0]!;
+  });
+}
+
+export async function rejectAdminTakeProposal(
+  engine: BrainEngine,
+  id: number,
+  actedBy = 'admin',
+): Promise<AdminTakeProposalRow> {
+  return await engine.transaction(async tx => {
+    const updated = await tx.executeRaw<AdminTakeProposalRow>(
+      `UPDATE take_proposals
+          SET status = 'rejected',
+              acted_at = now(),
+              acted_by = $2
+        WHERE id = $1 AND status = 'pending'
+        RETURNING id::int AS id, source_id, page_slug, status, claim_text, kind, holder, weight,
+                  domain, model_id, proposed_at, acted_at, acted_by, promoted_row_num::int AS promoted_row_num,
+                  0::int AS existing_take_count`,
+      [id, actedBy],
+    );
+    if (!updated[0]) throw new Error('take proposal not found or already acted');
+    return updated[0];
+  });
+}
+
 export async function runServeHttp(engine: BrainEngine, options: ServeHttpOptions) {
   const { port, tokenTtl, enableDcr, publicUrl, logFullParams } = options;
   // v0.34.1 (#864, D11): default bind flipped from 0.0.0.0 to 127.0.0.1.
@@ -1393,6 +1512,47 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
     }
   });
 
+  app.get('/admin/api/take-proposals', requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const limit = req.query.limit ? Number(req.query.limit) : undefined;
+      const proposals = await listAdminTakeProposals(engine, {
+        status: typeof req.query.status === 'string' ? req.query.status : 'pending',
+        limit,
+      });
+      res.json({ proposals });
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : 'unknown' });
+    }
+  });
+
+  app.post('/admin/api/take-proposals/:id/accept', requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0) {
+        res.status(400).json({ error: 'invalid proposal id' });
+        return;
+      }
+      const proposal = await acceptAdminTakeProposal(engine, id, 'admin');
+      res.json({ proposal });
+    } catch (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : 'unknown' });
+    }
+  });
+
+  app.post('/admin/api/take-proposals/:id/reject', requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0) {
+        res.status(400).json({ error: 'invalid proposal id' });
+        return;
+      }
+      const proposal = await rejectAdminTakeProposal(engine, id, 'admin');
+      res.json({ proposal });
+    } catch (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : 'unknown' });
+    }
+  });
+
   app.get('/admin/api/requests', requireAdmin, async (req: Request, res: Response) => {
     try {
       const page = parseInt(req.query.page as string) || 1;
@@ -1603,6 +1763,13 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
   const fs = await import('fs');
   const adminDistPath = path.join(process.cwd(), 'admin', 'dist');
   const useDevPath = fs.existsSync(adminDistPath);
+  app.get('/admin', (req: Request, res: Response, next: NextFunction) => {
+    if (req.path === '/admin') {
+      res.redirect('/admin/');
+      return;
+    }
+    next();
+  });
   if (useDevPath) {
     app.use('/admin', express.static(adminDistPath));
     app.get('/admin/{*path}', (req: Request, res: Response, next: NextFunction) => {

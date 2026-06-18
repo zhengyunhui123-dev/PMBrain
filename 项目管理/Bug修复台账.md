@@ -160,3 +160,20 @@
 - 描述：系统 PATH 中的 `pmbrain`/`gbrain` 仍指向旧全局安装版本，直接执行 `pmbrain dream` 会绕过当前 PMBrain 源码修复；同时 `embed --help` 与 `config --help` 虽打印 Usage 但返回错误码 1，容易被自动化判断为命令不可执行。
 - 是否完成：是
 - 最终结果：全局 `pmbrain.cmd`/`gbrain.cmd` 已转发到当前项目源码；`pmbrain --version` 与 `gbrain --version` 均返回当前版本；`embed --help` 和 `config --help` 改为正常返回。
+## 2026-06-18 Dream 校准阶段 source 作用域修复
+
+- 时间：2026-06-18 09:14:45
+- 版本号：1.0.11
+- 标题：修复 dream 校准三阶段忽略显式 source 的问题
+- 描述：执行 `dream --source <id>` 时，`propose_takes`、`grade_takes`、`calibration_profile` 已经通过命令行解析得到 `opts.sourceId`，但校准上下文仍按 `brainDir` 重新推断 source，导致显式 source 可能被覆盖，进而扫描错误的数据范围。
+- 是否完成：是
+- 最终结果：校准三阶段现在优先使用 `opts.sourceId`，仅在未传入 source 时才回退到 `resolveSourceForDir(engine, opts.brainDir)`；新增结构回归测试防止该路径回退。
+
+## 2026-06-18 Dream dry-run、模型诊断与帮助文案修复
+
+- 时间：2026-06-18 09:23:47
+- 版本号：1.0.12
+- 标题：修复 dream dry-run 卡 LLM、models doctor 参数解析、PM 阶段 dry-run 与帮助文案过期
+- 描述：`propose_takes --dry-run` 仍会调用 LLM，容易长时间卡住；`models doctor` 因子命令参数下标判断错误，直接执行时只显示模型路由表；`project_health`、`risk_detect` 未收到 dry-run 参数；`dream --help` 仍描述旧阶段和旧审批流程。
+- 是否完成：是
+- 最终结果：`propose_takes` dry-run 现在只扫描并统计需要 LLM 的页面，不调用 LLM、不写候选观点；`models doctor` 正常进入探针模式；PM 三阶段 dry-run 参数已传递；`dream --help` 更新为真实阶段列表和“候选观点 -> 观点审批 -> takes -> 校准画像”流程说明。

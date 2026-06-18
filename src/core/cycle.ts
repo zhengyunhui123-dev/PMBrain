@@ -85,7 +85,8 @@ export type CyclePhase =
   // see comment above PHASE_SCOPE). Wraps the per-source loop in ONE
   // brain-wide BudgetTracker and passes it through opts.budgetTracker
   // so the core's auto-wrap doesn't REPLACE it.
-  | 'conversation_facts_backfill';
+  | 'conversation_facts_backfill'
+  | 'project_health' | 'risk_detect' | 'report_gen';
 
 export const ALL_PHASES: CyclePhase[] = [
   'lint',
@@ -1835,8 +1836,10 @@ export async function runCycle(
     //
     //    The three phases construct an OperationContext on the fly. The
     //    cycle is a trusted-workspace caller (operator CLI / autopilot
-    //    daemon), so `remote: false` is the correct trust tier. sourceId
-    //    is resolved via the same `resolveSourceForDir` helper sync uses.
+    //    daemon), so `remote: false` is the correct trust tier. When the
+    //    caller passed --source, keep that explicit source instead of
+    //    guessing from brainDir; legacy callers still fall back to the
+    //    same `resolveSourceForDir` helper sync uses.
     if (phases.includes('propose_takes') ||
         phases.includes('grade_takes') ||
         phases.includes('calibration_profile')) {
@@ -1844,7 +1847,7 @@ export async function runCycle(
         const cfgMod = await import('./config.ts');
         const calibrationConfig = cfgMod.loadConfig() ?? ({} as ReturnType<typeof cfgMod.loadConfig> & object);
         await ensureEngineConnected(engine);
-        const calibrationSourceId = await resolveSourceForDir(engine, opts.brainDir);
+        const calibrationSourceId = opts.sourceId ?? await resolveSourceForDir(engine, opts.brainDir);
         const { resolveModel } = await import('./model-config.ts');
         const calibrationChatFallback =
           (calibrationConfig as { chat_model?: string }).chat_model ?? 'anthropic:claude-sonnet-4-6';
@@ -1865,7 +1868,7 @@ export async function runCycle(
             tier: 'reasoning',
             fallback: calibrationChatFallback,
           });
-          const { result, duration_ms } = await timePhase(() => runPhaseProposeTakes(calibrationCtx, { repoPath: opts.brainDir, model, reporter: progress }) as Promise<PhaseResult>);
+          const { result, duration_ms } = await timePhase(() => runPhaseProposeTakes(calibrationCtx, { repoPath: opts.brainDir, model, reporter: progress, dryRun }) as Promise<PhaseResult>);
           result.duration_ms = duration_ms;
           phaseResults.push(result);
           await safeYield(opts.yieldBetweenPhases);
@@ -1880,7 +1883,7 @@ export async function runCycle(
             tier: 'reasoning',
             fallback: calibrationChatFallback,
           });
-          const { result, duration_ms } = await timePhase(() => runPhaseGradeTakes(calibrationCtx, { model }) as Promise<PhaseResult>);
+          const { result, duration_ms } = await timePhase(() => runPhaseGradeTakes(calibrationCtx, { model, dryRun }) as Promise<PhaseResult>);
           result.duration_ms = duration_ms;
           phaseResults.push(result);
           progress.finish();
@@ -1891,7 +1894,7 @@ export async function runCycle(
           checkAborted(opts.signal);
           progress.start('cycle.calibration_profile');
           const { runPhaseCalibrationProfile } = await import('./cycle/calibration-profile.ts');
-          const { result, duration_ms } = await timePhase(() => runPhaseCalibrationProfile(calibrationCtx, {}) as Promise<PhaseResult>);
+          const { result, duration_ms } = await timePhase(() => runPhaseCalibrationProfile(calibrationCtx, { dryRun }) as Promise<PhaseResult>);
           result.duration_ms = duration_ms;
           phaseResults.push(result);
           progress.finish();
@@ -2068,7 +2071,7 @@ export async function runCycle(
       } else {
         progress.start('cycle.project_health');
         const { result, duration_ms } = await timePhase(() => 
-          import('./cycle/project-health.js').then(m => m.runProjectHealth(engine, { progress }))
+          import('./cycle/project-health.js').then(m => m.runProjectHealth(engine, { dryRun }))
         );
         result.duration_ms = duration_ms;
         phaseResults.push(result);
@@ -2091,7 +2094,7 @@ export async function runCycle(
       } else {
         progress.start('cycle.risk_detect');
         const { result, duration_ms } = await timePhase(() => 
-          import('./cycle/risk-detect.js').then(m => m.runRiskDetect(engine, { progress }))
+          import('./cycle/risk-detect.js').then(m => m.runRiskDetect(engine, { dryRun }))
         );
         result.duration_ms = duration_ms;
         phaseResults.push(result);
@@ -2114,7 +2117,7 @@ export async function runCycle(
       } else {
         progress.start('cycle.report_gen');
         const { result, duration_ms } = await timePhase(() => 
-          import('./cycle/report-gen.js').then(m => m.runReportGen(engine, { progress, dryRun }))
+          import('./cycle/report-gen.js').then(m => m.runReportGen(engine, { dryRun }))
         );
         result.duration_ms = duration_ms;
         phaseResults.push(result);

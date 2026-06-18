@@ -66,6 +66,12 @@ export const api = {
     apiFetch(`/admin/api/calibration/profile${holder ? `?holder=${encodeURIComponent(holder)}` : ''}`),
   calibrationChart: (type: string, holder?: string) =>
     apiFetchText(`/admin/api/calibration/charts/${encodeURIComponent(type)}${holder ? `?holder=${encodeURIComponent(holder)}` : ''}`),
+  takeProposals: (status = 'pending') =>
+    apiFetch(`/admin/api/take-proposals?status=${encodeURIComponent(status)}`),
+  acceptTakeProposal: (id: number) =>
+    apiFetch(`/admin/api/take-proposals/${encodeURIComponent(String(id))}/accept`, { method: 'POST' }),
+  rejectTakeProposal: (id: number) =>
+    apiFetch(`/admin/api/take-proposals/${encodeURIComponent(String(id))}/reject`, { method: 'POST' }),
   // v0.41 D2 — live minion-jobs dashboard snapshot.
   jobsWatch: () => apiFetch('/admin/api/jobs/watch'),
 };

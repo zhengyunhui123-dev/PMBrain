@@ -287,6 +287,28 @@ describe('runPhaseProposeTakes — phase integration', () => {
     expect(captured.filter(c => c.sql.includes('INSERT INTO take_proposals'))).toHaveLength(0);
   });
 
+  test('dry-run does not call extractor or write proposals', async () => {
+    const pages = [buildPage({ slug: 'wiki/dry-run', body: 'This page would need LLM extraction.' })];
+    const { engine, captured } = buildMockEngine({ pages });
+    let extractorCalled = false;
+    const extractor: ProposeTakesExtractor = async () => {
+      extractorCalled = true;
+      return [{ claim_text: 'should not be written', kind: 'take', holder: 'brain', weight: 0.5 }];
+    };
+
+    const result = await runPhaseProposeTakes(buildCtx(engine), { extractor, dryRun: true });
+
+    expect(extractorCalled).toBe(false);
+    expect(result.status).toBe('ok');
+    expect(result.summary).toContain('dry-run');
+    const details = result.details as Record<string, unknown>;
+    expect(details.pages_scanned).toBe(1);
+    expect(details.cache_misses).toBe(1);
+    expect(details.dry_run_no_llm).toBe(true);
+    expect(details.proposals_inserted).toBe(0);
+    expect(captured.filter(c => c.sql.includes('INSERT INTO take_proposals'))).toHaveLength(0);
+  });
+
   test('passes existing fence rows to extractor as dedup context (F2 fix)', async () => {
     const body = `# Page
 

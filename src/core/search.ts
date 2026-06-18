@@ -19,7 +19,7 @@ export async function searchPages(
   });
 
   return pages
-    .map((page) => ({ ...page, ...page.frontmatter }))
+    .map((page): SearchPage => ({ ...page, ...page.frontmatter }))
     .filter((page) => {
       if (filters.project && page.project !== filters.project) return false;
       return true;

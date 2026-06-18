@@ -4,6 +4,7 @@ import { AgentsPage } from './pages/Agents';
 import { RequestLogPage } from './pages/RequestLog';
 import { CalibrationPage } from './pages/Calibration';
 import { JobsWatchPage } from './pages/JobsWatch';
+import { TakeProposalsPage } from './pages/TakeProposals';
 import {
   BrainDataPage,
   ConnectionCenterPage,
@@ -21,6 +22,7 @@ type Page =
   | 'dashboard'
   | 'import'
   | 'data'
+  | 'takes'
   | 'docs'
   | 'natural'
   | 'mcp'
@@ -34,7 +36,7 @@ type Page =
 
 function getPage(): Page {
   const hash = window.location.hash.replace('#', '') || 'dashboard';
-  if (['login', 'dashboard', 'import', 'data', 'docs', 'natural', 'mcp', 'config', 'agents', 'log', 'calibration', 'jobs', 'diagnostics', 'settings'].includes(hash)) return hash as Page;
+  if (['login', 'dashboard', 'import', 'data', 'takes', 'docs', 'natural', 'mcp', 'config', 'agents', 'log', 'calibration', 'jobs', 'diagnostics', 'settings'].includes(hash)) return hash as Page;
   return 'dashboard';
 }
 
@@ -56,6 +58,7 @@ export function App() {
       items: [
         { page: 'import', label: '原始数据导入' },
         { page: 'data', label: '知识库数据浏览' },
+        { page: 'takes', label: '观点审批' },
       ],
     },
     {
@@ -157,6 +160,7 @@ export function App() {
         {page === 'dashboard' && <KnowledgeWorkbenchPage onNavigate={(p) => navigate(p as Page)} />}
         {page === 'import' && <ImportDataPage />}
         {page === 'data' && <BrainDataPage />}
+        {page === 'takes' && <TakeProposalsPage />}
         {page === 'docs' && <DocumentationPage />}
         {page === 'natural' && <NaturalLanguagePage />}
         {page === 'mcp' && <ConnectionCenterPage />}

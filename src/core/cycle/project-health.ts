@@ -35,13 +35,14 @@ export async function runProjectHealth(
 
     // 2. 对每个项目评估健康度
     for (const project of projects) {
-      const tasks = await searchPages(engine, { type: 'task', project: project.title });
+      const projectTitle = String(project.title);
+      const tasks = await searchPages(engine, { type: 'task', project: projectTitle });
       const total = tasks.length;
       const done = tasks.filter(t => t.status === 'done').length;
       const blocked = tasks.filter(t => t.status === 'blocked').length;
       const overdue = tasks.filter(t => {
         if (!t.deadline) return false;
-        return new Date(t.deadline) < new Date() && t.status !== 'done';
+        return new Date(String(t.deadline)) < new Date() && t.status !== 'done';
       }).length;
 
       // 判断健康度
@@ -54,7 +55,7 @@ export async function runProjectHealth(
       }
 
       results.push({
-        project: project.title,
+        project: projectTitle,
         health,
         taskStats: { total, done, blocked, overdue },
         progress: total > 0 ? Math.round((done / total) * 100) : 0,

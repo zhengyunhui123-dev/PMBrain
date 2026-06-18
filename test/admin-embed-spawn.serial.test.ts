@@ -27,9 +27,10 @@ import { describe, test, expect } from 'bun:test';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import { fileURLToPath } from 'url';
 import type { Subprocess } from 'bun';
 
-const REPO = new URL('..', import.meta.url).pathname.replace(/\/$/, '');
+const REPO = fileURLToPath(new URL('..', import.meta.url)).replace(/[\\/]$/, '');
 
 interface ServeProc {
   proc: Subprocess;
@@ -68,7 +69,7 @@ async function spawnServer(): Promise<ServeProc> {
   // bundled assets via Bun's `with { type: 'file' }` import resolution.
   const proc = Bun.spawn(
     [
-      'bun',
+      process.execPath,
       'run',
       `${REPO}/src/cli.ts`,
       'serve',
@@ -136,6 +137,23 @@ async function spawnServer(): Promise<ServeProc> {
 }
 
 describe('admin embed E2E — /admin served from embedded manifest (v0.36.1.x #1090)', () => {
+  test('GET /admin redirects to the embedded SPA shell instead of 404', async () => {
+    const s = await spawnServer();
+    try {
+      const res = await fetch(`http://127.0.0.1:${s.port}/admin`, {
+        signal: AbortSignal.timeout(5000),
+      });
+      expect(res.status).toBe(200);
+      expect(res.redirected).toBe(true);
+      expect(new URL(res.url).pathname).toBe('/admin/');
+      const html = await res.text();
+      expect(html).toContain('PMBrain 管理后台');
+      expect(html).toContain('<div id="root">');
+    } finally {
+      await s.cleanup();
+    }
+  }, 90_000);
+
   test('GET /admin/ returns 200 with the React SPA shell HTML', async () => {
     const s = await spawnServer();
     try {
@@ -144,10 +162,10 @@ describe('admin embed E2E — /admin served from embedded manifest (v0.36.1.x #1
       });
       expect(res.status).toBe(200);
       const html = await res.text();
-      // The actual admin/dist/index.html declares <title>GBrain Admin</title>
+      // The actual admin/dist/index.html declares the PMBrain title
       // and mounts the SPA on <div id="root">. Both must be present, otherwise
       // we're not serving the embedded asset.
-      expect(html).toContain('GBrain Admin');
+      expect(html).toContain('PMBrain 管理后台');
       expect(html).toContain('<div id="root">');
       // Content-Type is text/html, not application/octet-stream (which would
       // mean the mime lookup in ADMIN_ASSETS regressed).
@@ -165,7 +183,7 @@ describe('admin embed E2E — /admin served from embedded manifest (v0.36.1.x #1
       });
       expect(res.status).toBe(200);
       const html = await res.text();
-      expect(html).toContain('GBrain Admin');
+      expect(html).toContain('PMBrain 管理后台');
     } finally {
       await s.cleanup();
     }
@@ -181,7 +199,7 @@ describe('admin embed E2E — /admin served from embedded manifest (v0.36.1.x #1
       const html = await res.text();
       // SPA fallback: any unmatched /admin/* path serves index.html so
       // client-side routing takes over.
-      expect(html).toContain('GBrain Admin');
+      expect(html).toContain('PMBrain 管理后台');
       expect(html).toContain('<div id="root">');
     } finally {
       await s.cleanup();
