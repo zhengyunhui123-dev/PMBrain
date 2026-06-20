@@ -63,6 +63,7 @@ import {
   buildChatGptTunnelProfile,
   chatGptTunnelPaths,
   defaultTunnelClientBinary,
+  detectTunnelHttpProxy,
   getChatGptTunnelStatus,
   runTunnelDoctor,
   startTunnelClient,
@@ -391,6 +392,15 @@ export function filterMcpOperationsByScopes<T extends { scope?: string }>(
 
 export function isLoopbackAddress(address: string | undefined): boolean {
   return address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1';
+}
+
+export function buildMcpProtectedResourceMetadata(issuerUrl: URL) {
+  return {
+    resource: new URL('/mcp', issuerUrl).toString(),
+    authorization_servers: [issuerUrl.toString()],
+    scopes_supported: [...ALLOWED_SCOPES_LIST],
+    resource_name: 'PMBrain MCP Server',
+  };
 }
 
 interface ServeHttpOptions {
@@ -933,6 +943,12 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
       };
     }
     next();
+  });
+
+  // RFC 9728 path-aware PRMD endpoint. The SDK exposes the root metadata
+  // route, while tunnel-client probes the MCP resource-specific variant.
+  app.get('/.well-known/oauth-protected-resource/mcp', (_req, res) => {
+    res.json(buildMcpProtectedResourceMetadata(issuerUrl));
   });
 
   app.use(authRouter);
@@ -1780,6 +1796,7 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
         mcpUrl: `http://127.0.0.1:${port}/mcp`,
         runtimeKeyFile: paths.runtimeKeyFile,
         authorizationHeaderFile: paths.authorizationHeaderFile,
+        httpProxy: detectTunnelHttpProxy(),
       });
       writeChatGptTunnelProfile(paths.profileFile, profile);
       res.json({
@@ -1797,12 +1814,12 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
     }
   });
 
-  app.post('/admin/api/chatgpt-tunnel/doctor', requireAdmin, requireLocalAdmin, express.json(), (req: Request, res: Response) => {
+  app.post('/admin/api/chatgpt-tunnel/doctor', requireAdmin, requireLocalAdmin, express.json(), async (req: Request, res: Response) => {
     try {
       const binaryPath = typeof req.body?.binaryPath === 'string' && req.body.binaryPath.trim()
         ? req.body.binaryPath.trim()
         : defaultTunnelClientBinary();
-      res.json(runTunnelDoctor(binaryPath));
+      res.json(await runTunnelDoctor(binaryPath));
     } catch (e) {
       res.status(500).json({ error: e instanceof Error ? e.message : 'Tunnel doctor failed' });
     }
@@ -1813,7 +1830,7 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
       const binaryPath = typeof req.body?.binaryPath === 'string' && req.body.binaryPath.trim()
         ? req.body.binaryPath.trim()
         : defaultTunnelClientBinary();
-      const doctor = runTunnelDoctor(binaryPath);
+      const doctor = await runTunnelDoctor(binaryPath);
       if (!doctor.ok) {
         res.status(409).json({ error: 'Tunnel doctor must pass before start', doctor });
         return;

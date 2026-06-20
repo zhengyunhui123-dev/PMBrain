@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, openSync, readFileSync, writeFileSync, closeSync } from 'node:fs';
-import { spawn, spawnSync } from 'node:child_process';
+import { execFile, spawn, spawnSync } from 'node:child_process';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { gbrainPath } from './config.ts';
@@ -30,6 +30,34 @@ export interface ChatGptTunnelStatus {
   pid?: number;
   processRunning: boolean;
   healthUrl: string;
+}
+
+export function normalizeTunnelHttpProxy(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) return undefined;
+  const entries = trimmed.includes('=')
+    ? Object.fromEntries(trimmed.split(';').map(entry => entry.split('=', 2)).filter(parts => parts.length === 2))
+    : null;
+  const candidate = entries?.https || entries?.http || trimmed;
+  return /^[a-z][a-z0-9+.-]*:\/\//i.test(candidate) ? candidate : `http://${candidate}`;
+}
+
+export function detectTunnelHttpProxy(): string | undefined {
+  const configured = normalizeTunnelHttpProxy(
+    process.env.PMBRAIN_TUNNEL_HTTP_PROXY || process.env.HTTPS_PROXY || process.env.HTTP_PROXY,
+  );
+  if (configured || process.platform !== 'win32') return configured;
+
+  const registryKey = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings';
+  const enabled = spawnSync('reg.exe', ['query', registryKey, '/v', 'ProxyEnable'], {
+    encoding: 'utf8', windowsHide: true,
+  });
+  if (enabled.status !== 0 || !/ProxyEnable\s+REG_DWORD\s+0x1\b/i.test(enabled.stdout)) return undefined;
+  const server = spawnSync('reg.exe', ['query', registryKey, '/v', 'ProxyServer'], {
+    encoding: 'utf8', windowsHide: true,
+  });
+  if (server.status !== 0) return undefined;
+  return normalizeTunnelHttpProxy(server.stdout.match(/ProxyServer\s+REG_SZ\s+(.+)$/im)?.[1]);
 }
 
 function slashPath(path: string): string {
@@ -68,13 +96,15 @@ export function buildChatGptTunnelProfile(input: {
   mcpUrl: string;
   runtimeKeyFile: string;
   authorizationHeaderFile: string;
+  httpProxy?: string;
 }): string {
   const keyRef = `file:${slashPath(input.runtimeKeyFile)}`;
-  const headerRef = `Authorization: file:${slashPath(input.authorizationHeaderFile)}`;
+  const headerValueRef = `file:${slashPath(input.authorizationHeaderFile)}`;
   return [
     'config_version: 1',
     'control_plane:',
     '  base_url: "https://api.openai.com"',
+    ...(input.httpProxy ? [`  http_proxy: ${yamlString(input.httpProxy)}`] : []),
     `  tunnel_id: ${yamlString(input.tunnelId)}`,
     `  api_key: ${yamlString(keyRef)}`,
     'health:',
@@ -89,9 +119,9 @@ export function buildChatGptTunnelProfile(input: {
     '    - channel: main',
     `      url: ${yamlString(input.mcpUrl)}`,
     '  extra_headers:',
-    `    - ${yamlString(headerRef)}`,
+    `    Authorization: ${yamlString(headerValueRef)}`,
     '  discovery_extra_headers:',
-    `    - ${yamlString(headerRef)}`,
+    `    Authorization: ${yamlString(headerValueRef)}`,
     '',
   ].join('\n');
 }
@@ -186,22 +216,27 @@ export function getChatGptTunnelStatus(binaryPath = defaultTunnelClientBinary())
   };
 }
 
-export function runTunnelDoctor(binaryPath = defaultTunnelClientBinary()): {
+export function runTunnelDoctor(binaryPath = defaultTunnelClientBinary()): Promise<{
   ok: boolean;
   exitCode: number | null;
   output: string;
-} {
+}> {
   const { profileFile } = chatGptTunnelPaths();
-  const result = spawnSync(binaryPath, ['doctor', '--profile-file', profileFile, '--explain'], {
-    encoding: 'utf8',
-    windowsHide: true,
-    timeout: 30_000,
+  return new Promise(resolve => {
+    execFile(binaryPath, ['doctor', '--profile-file', profileFile, '--explain'], {
+      encoding: 'utf8',
+      windowsHide: true,
+      timeout: 30_000,
+    }, (error, stdout, stderr) => {
+      const rawCode = (error as (Error & { code?: string | number }) | null)?.code;
+      const errorCode = typeof rawCode === 'number' ? rawCode : null;
+      resolve({
+        ok: !error,
+        exitCode: error ? errorCode : 0,
+        output: `${stdout || ''}${stderr || ''}`.trim(),
+      });
+    });
   });
-  return {
-    ok: result.status === 0,
-    exitCode: result.status,
-    output: `${result.stdout || ''}${result.stderr || ''}`.trim(),
-  };
 }
 
 export function startTunnelClient(binaryPath = defaultTunnelClientBinary()): number {

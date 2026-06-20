@@ -32,6 +32,7 @@ Admin Console 会自动：
 - 生成独立 `pmbrain-chatgpt.yaml`，其中只保存 `file:` 引用，不写明文密钥；
 - 给普通 MCP 请求和 discovery 请求注入同一个本地 Authorization Header；
 - 将 tunnel-client 健康页面限制在 `127.0.0.1:8080`。
+- Windows 已启用系统代理时，自动把代理地址写入 profile 的 `control_plane.http_proxy`；仅 OpenAI control-plane 走代理，本地 MCP 保持直连。
 
 旧的 `pmbrain.yaml` 和 `pmbrain-noauth.yaml` 不会被覆盖。
 

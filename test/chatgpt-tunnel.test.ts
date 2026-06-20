@@ -1,7 +1,15 @@
 import { describe, expect, test } from 'bun:test';
-import { buildChatGptTunnelProfile, parseTunnelId } from '../src/core/chatgpt-tunnel.ts';
+import {
+  buildChatGptTunnelProfile,
+  normalizeTunnelHttpProxy,
+  parseTunnelId,
+} from '../src/core/chatgpt-tunnel.ts';
 import { legacyAccessTokenScopes } from '../src/core/oauth-provider.ts';
-import { filterMcpOperationsByScopes, isLoopbackAddress } from '../src/commands/serve-http.ts';
+import {
+  buildMcpProtectedResourceMetadata,
+  filterMcpOperationsByScopes,
+  isLoopbackAddress,
+} from '../src/commands/serve-http.ts';
 
 describe('ChatGPT Secure MCP Tunnel', () => {
   test('legacy keys keep full access unless scopes are explicit', () => {
@@ -28,18 +36,36 @@ describe('ChatGPT Secure MCP Tunnel', () => {
     expect(isLoopbackAddress('192.168.1.20')).toBe(false);
   });
 
+  test('publishes path-aware protected-resource metadata for the MCP endpoint', () => {
+    const metadata = buildMcpProtectedResourceMetadata(new URL('http://localhost:3132'));
+    expect(metadata.resource).toBe('http://localhost:3132/mcp');
+    expect(metadata.authorization_servers).toEqual(['http://localhost:3132/']);
+    expect(metadata.scopes_supported).toContain('read');
+  });
+
   test('generated profile keeps both control-plane and MCP secrets as file references', () => {
     const profile = buildChatGptTunnelProfile({
       tunnelId: 'tunnel_example123',
       mcpUrl: 'http://127.0.0.1:3132/mcp',
       runtimeKeyFile: 'C:\\Users\\alice\\.pmbrain\\runtime.key',
       authorizationHeaderFile: 'C:\\Users\\alice\\.pmbrain\\authorization.header',
+      httpProxy: 'http://127.0.0.1:7897',
     });
+    expect(profile).toContain('control_plane:\n  base_url: "https://api.openai.com"\n  http_proxy: "http://127.0.0.1:7897"');
+    expect(profile).not.toMatch(/^http_proxy:/m);
     expect(profile).toContain('api_key: "file:C:/Users/alice/.pmbrain/runtime.key"');
-    expect(profile).toContain('Authorization: file:C:/Users/alice/.pmbrain/authorization.header');
-    expect(profile).toContain('discovery_extra_headers:');
+    expect(profile).toContain('extra_headers:\n    Authorization: "file:C:/Users/alice/.pmbrain/authorization.header"');
+    expect(profile).toContain('discovery_extra_headers:\n    Authorization: "file:C:/Users/alice/.pmbrain/authorization.header"');
+    expect(profile).not.toContain('- "Authorization:');
     expect(profile).not.toContain('sk-');
     expect(profile).not.toContain('Bearer pmbrain_');
     expect(parseTunnelId(profile)).toBe('tunnel_example123');
+  });
+
+  test('normalizes Windows proxy settings for tunnel-client', () => {
+    expect(normalizeTunnelHttpProxy('127.0.0.1:7897')).toBe('http://127.0.0.1:7897');
+    expect(normalizeTunnelHttpProxy('http=127.0.0.1:8080;https=127.0.0.1:7897'))
+      .toBe('http://127.0.0.1:7897');
+    expect(normalizeTunnelHttpProxy(undefined)).toBeUndefined();
   });
 });

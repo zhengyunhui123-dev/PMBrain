@@ -177,3 +177,12 @@
 - 描述：`propose_takes --dry-run` 仍会调用 LLM，容易长时间卡住；`models doctor` 因子命令参数下标判断错误，直接执行时只显示模型路由表；`project_health`、`risk_detect` 未收到 dry-run 参数；`dream --help` 仍描述旧阶段和旧审批流程。
 - 是否完成：是
 - 最终结果：`propose_takes` dry-run 现在只扫描并统计需要 LLM 的页面，不调用 LLM、不写候选观点；`models doctor` 正常进入探针模式；PM 三阶段 dry-run 参数已传递；`dream --help` 更新为真实阶段列表和“候选观点 -> 观点审批 -> takes -> 校准画像”流程说明。
+
+## 2026-06-20 ChatGPT Tunnel Header YAML 格式修复
+
+- 时间：2026-06-20
+- 版本号：1.0.18 / 0.41.29.2
+- 标题：修复 ChatGPT Tunnel profile 无法通过 Doctor 解析
+- 描述：Admin Console 生成的 `mcp.extra_headers` 与 `mcp.discovery_extra_headers` 使用了 YAML 序列，但 tunnel-client 0.0.9 要求 `map[string]string`，导致 `profile_load` 报 `cannot unmarshal !!seq into map[string]string`。
+- 是否完成：是
+- 最终结果：两组 Header 改为 `Authorization: file:...` 映射格式，保留仓库外私密引用；补充 tunnel-client 所需的 `/.well-known/oauth-protected-resource/mcp` 路径型元数据；Doctor 子进程改为异步执行，避免 Admin 请求阻塞 PMBrain 自身的元数据探测；Windows 已启用系统代理时自动写入 `control_plane.http_proxy`，避免 OpenAI 直连超时且不代理本地 MCP；增加回归断言防止再次生成列表格式。
