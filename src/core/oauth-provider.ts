@@ -24,9 +24,26 @@ import type { OAuthRegisteredClientsStore } from '@modelcontextprotocol/sdk/serv
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 import { InvalidTokenError } from '@modelcontextprotocol/sdk/server/auth/errors.js';
 import { hashToken, generateToken, isUndefinedColumnError } from './utils.ts';
-import { hasScope, assertAllowedScopes, parseScopeString, InvalidScopeError } from './scope.ts';
+import { hasScope, assertAllowedScopes, parseScopeString, InvalidScopeError, isScope } from './scope.ts';
 import type { SqlQuery, SqlValue } from './sql-query.ts';
 export type { SqlQuery, SqlValue };
+
+const LEGACY_FULL_ACCESS_SCOPES = ['read', 'write', 'admin'] as const;
+
+/**
+ * Legacy API keys predate scoped OAuth tokens. Preserve their historical full
+ * access unless an operator explicitly stores a valid permissions.scopes
+ * array. The ChatGPT tunnel setup uses that opt-in shape for a read-only key.
+ */
+export function legacyAccessTokenScopes(permissions: unknown): string[] {
+  if (!permissions || typeof permissions !== 'object') return [...LEGACY_FULL_ACCESS_SCOPES];
+  const raw = (permissions as { scopes?: unknown }).scopes;
+  if (!Array.isArray(raw) || raw.length === 0) return [...LEGACY_FULL_ACCESS_SCOPES];
+  if (!raw.every(scope => typeof scope === 'string' && isScope(scope))) {
+    return [...LEGACY_FULL_ACCESS_SCOPES];
+  }
+  return Array.from(new Set(raw as string[]));
+}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -633,10 +650,21 @@ export class GBrainOAuthProvider implements OAuthServerProvider {
     }
 
     // Fallback: legacy access_tokens table (backward compat)
-    const legacyRows = await this.sql`
-      SELECT name FROM access_tokens
-      WHERE token_hash = ${tokenHash} AND revoked_at IS NULL
-    `;
+    let legacyRows: Array<Record<string, unknown>>;
+    try {
+      legacyRows = await this.sql`
+        SELECT name, permissions FROM access_tokens
+        WHERE token_hash = ${tokenHash} AND revoked_at IS NULL
+      ` as Array<Record<string, unknown>>;
+    } catch (err) {
+      // Some pre-migration databases do not have access_tokens.permissions yet.
+      // Preserve the historical full-access behavior until migrations catch up.
+      if (!isUndefinedColumnError(err, 'permissions')) throw err;
+      legacyRows = await this.sql`
+        SELECT name FROM access_tokens
+        WHERE token_hash = ${tokenHash} AND revoked_at IS NULL
+      ` as Array<Record<string, unknown>>;
+    }
 
     if (legacyRows.length > 0) {
       // Legacy tokens get full admin access (grandfather in).
@@ -650,7 +678,7 @@ export class GBrainOAuthProvider implements OAuthServerProvider {
         token,
         clientId: name,
         clientName: name,
-        scopes: ['read', 'write', 'admin'],
+        scopes: legacyAccessTokenScopes(legacyRows[0].permissions),
         expiresAt: Math.floor(Date.now() / 1000) + 365 * 24 * 3600, // Legacy tokens never expire — set 1yr future
         // v0.34.1 (#861, D13): legacy bearer tokens default to 'default'
         // source — matches the pre-v0.34 effective behavior where the

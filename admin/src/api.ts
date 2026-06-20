@@ -76,4 +76,13 @@ export const api = {
     apiFetch(`/admin/api/take-proposals/${encodeURIComponent(String(id))}/reject`, { method: 'POST' }),
   // v0.41 D2 — live minion-jobs dashboard snapshot.
   jobsWatch: () => apiFetch('/admin/api/jobs/watch'),
+  chatGptTunnelStatus: (binaryPath?: string) =>
+    apiFetch(`/admin/api/chatgpt-tunnel/status${binaryPath ? `?binaryPath=${encodeURIComponent(binaryPath)}` : ''}`),
+  setupChatGptTunnel: (body: { tunnelId: string; runtimeApiKey?: string; binaryPath: string }) =>
+    apiFetch('/admin/api/chatgpt-tunnel/setup', { method: 'POST', body: JSON.stringify(body) }),
+  doctorChatGptTunnel: (binaryPath: string) =>
+    apiFetch('/admin/api/chatgpt-tunnel/doctor', { method: 'POST', body: JSON.stringify({ binaryPath }) }),
+  startChatGptTunnel: (binaryPath: string) =>
+    apiFetch('/admin/api/chatgpt-tunnel/start', { method: 'POST', body: JSON.stringify({ binaryPath }) }),
+  stopChatGptTunnel: () => apiFetch('/admin/api/chatgpt-tunnel/stop', { method: 'POST' }),
 };

@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { api } from '../api';
 import { AgentsPage } from './Agents';
+import { ChatGptTunnelPanel } from './ChatGptTunnel';
 
 interface SourceSummary {
   id: string;
@@ -952,6 +953,7 @@ export function ConnectionCenterPage() {
         <MetricCard label="OAuth Discovery" value={`${origin}/.well-known/oauth-authorization-server`} />
         <MetricCard label="Token URL" value={`${origin}/token`} />
       </div>
+      <ChatGptTunnelPanel />
       <AgentsPage
         title="Agent 凭证管理"
         titleHelp={(

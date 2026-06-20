@@ -354,16 +354,16 @@ pmbrain serve --http --port 3131
 }
 ```
 
-### ChatGPT 接入计划（待实现）
+### ChatGPT Secure MCP Tunnel
 
-PMBrain 当前已经可以通过本地 MCP HTTP 服务暴露知识库能力。下一步计划是通过 tunnel 将本地 `http://127.0.0.1:3131/mcp` 暴露为可被 ChatGPT 访问的 HTTPS 地址，再让 ChatGPT 通过 MCP 读取和使用 PMBrain 知识库。
+PMBrain 支持通过 OpenAI Secure MCP Tunnel 接入 ChatGPT，无需开放公网端口或配置公网域名。进入 Admin Console 的 **MCP 接入** 页面，填写 Tunnel ID 和 Runtime API Key，即可生成独立的 `pmbrain-chatgpt` profile、只读本地凭证并运行 Doctor、启动或停止 tunnel-client。
 
-这一能力尚未作为稳定配置写入默认流程，计划目标是：
+- ChatGPT 连接方式选择 **Tunnel**，身份验证选择 **无身份验证**
+- tunnel-client 会在本机请求中注入只读 Bearer Token，ChatGPT 无法看到 Token
+- ChatGPT 只发现读取工具，写入和管理工具仍由服务端拒绝
+- PMBrain 与 tunnel-client 均由用户手动启停，不创建 Windows 服务或开机任务
 
-- 本地 PMBrain 继续保存知识库和权限控制
-- tunnel 只负责把 MCP HTTP 入口安全暴露给 ChatGPT
-- ChatGPT 通过 MCP 工具读取知识库、搜索页面、引用上下文
-- Admin Console 提供接入状态和配置说明
+完整步骤见 [ChatGPT 接入指南](docs/mcp/CHATGPT.md)。
 
 ### 在线/远程服务器的配置方式
 

@@ -27,7 +27,7 @@ import { requireBearerAuth } from '@modelcontextprotocol/sdk/server/auth/middlew
 import type { BrainEngine } from '../core/engine.ts';
 import { operations, OperationError } from '../core/operations.ts';
 import type { OperationContext, AuthInfo } from '../core/operations.ts';
-import { GBrainOAuthProvider, validateTokenEndpointAuthMethod } from '../core/oauth-provider.ts';
+import { GBrainOAuthProvider, legacyAccessTokenScopes, validateTokenEndpointAuthMethod } from '../core/oauth-provider.ts';
 import type { SqlQuery } from '../core/oauth-provider.ts';
 import { hasScope, ALLOWED_SCOPES_LIST, normalizeScopesInput } from '../core/scope.ts';
 import { summarizeMcpParams, dispatchToolCall } from '../mcp/dispatch.ts';
@@ -59,6 +59,17 @@ import {
   startImportRun,
   startSourceAddRun,
 } from './admin-console.ts';
+import {
+  buildChatGptTunnelProfile,
+  chatGptTunnelPaths,
+  defaultTunnelClientBinary,
+  getChatGptTunnelStatus,
+  runTunnelDoctor,
+  startTunnelClient,
+  stopTunnelClient,
+  writeChatGptTunnelProfile,
+  writePrivateFile,
+} from '../core/chatgpt-tunnel.ts';
 
 function envCompat(primary: string, legacy: string): string | undefined {
   return process.env[primary] ?? process.env[legacy];
@@ -369,6 +380,17 @@ export function resolveCorsOrigin(allowlist: Set<string> | null): cors.CorsOptio
     if (!origin) return cb(null, true);
     cb(null, allowlist.has(origin));
   };
+}
+
+export function filterMcpOperationsByScopes<T extends { scope?: string }>(
+  list: readonly T[],
+  scopes: readonly string[],
+): T[] {
+  return list.filter(op => hasScope(scopes, op.scope || 'read'));
+}
+
+export function isLoopbackAddress(address: string | undefined): boolean {
+  return address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1';
 }
 
 interface ServeHttpOptions {
@@ -1107,14 +1129,18 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
       `;
       const legacyKeys = await sql`
         SELECT a.id, a.name, 'api_key' as auth_type,
-          '{"bearer"}' as grant_types, 'read write admin' as scope, a.created_at, null as token_ttl,
+          '{"bearer"}' as grant_types, a.permissions, a.created_at, null as token_ttl,
           CASE WHEN a.revoked_at IS NOT NULL THEN 'revoked' ELSE 'active' END as status,
           a.last_used_at,
           (SELECT count(*)::int FROM mcp_request_log WHERE token_name = a.name) as total_requests,
           (SELECT count(*)::int FROM mcp_request_log WHERE token_name = a.name AND created_at > now() - interval '24 hours') as requests_today
         FROM access_tokens a ORDER BY a.created_at DESC
       `;
-      res.json([...oauthClients, ...legacyKeys]);
+      const scopedLegacyKeys = legacyKeys.map(({ permissions, ...key }) => ({
+        ...key,
+        scope: legacyAccessTokenScopes(permissions).join(' '),
+      }));
+      res.json([...oauthClients, ...scopedLegacyKeys]);
     } catch (e) {
       res.status(503).json({ error: 'service_unavailable' });
     }
@@ -1642,14 +1668,24 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
 
   app.post('/admin/api/api-keys', requireAdmin, express.json(), async (req: Request, res: Response) => {
     try {
-      const { name } = req.body;
+      const { name, scopes: rawScopes } = req.body;
       if (!name) { res.status(400).json({ error: 'Name required' }); return; }
+      const scopeString = rawScopes == null
+        ? 'admin read write'
+        : normalizeScopesInput(rawScopes);
+      const scopes = scopeString.split(' ');
       const { generateToken, hashToken } = await import('../core/utils.ts');
       const token = generateToken('pmbrain_');
       const hash = hashToken(token);
       const id = (await import('crypto')).randomUUID();
-      await sql`INSERT INTO access_tokens (id, name, token_hash) VALUES (${id}, ${name}, ${hash})`;
-      res.json({ name, token, id });
+      await executeRawJsonb(
+        engine,
+        `INSERT INTO access_tokens (id, name, token_hash, permissions)
+         VALUES ($1, $2, $3, $4::jsonb)`,
+        [id, name, hash],
+        [{ takes_holders: ['world'], scopes }],
+      );
+      res.json({ name, token, id, scopes });
     } catch (e) {
       res.status(500).json({ error: e instanceof Error ? e.message : 'Failed to create API key' });
     }
@@ -1663,6 +1699,138 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
       res.json({ revoked: true });
     } catch (e) {
       res.status(500).json({ error: e instanceof Error ? e.message : 'Revoke failed' });
+    }
+  });
+
+  const readTunnelHealth = async () => {
+    const probe = async (path: '/healthz' | '/readyz') => {
+      try {
+        const response = await fetch(`http://127.0.0.1:8080${path}`, {
+          signal: AbortSignal.timeout(1500),
+        });
+        return { ok: response.ok, status: response.status };
+      } catch {
+        return { ok: false, status: null };
+      }
+    };
+    const [health, ready] = await Promise.all([probe('/healthz'), probe('/readyz')]);
+    return { health, ready };
+  };
+
+  const requireLocalAdmin = (req: Request, res: Response, next: NextFunction) => {
+    if (!isLoopbackAddress(req.socket.remoteAddress)) {
+      res.status(403).json({ error: 'local_admin_required' });
+      return;
+    }
+    next();
+  };
+
+  app.get('/admin/api/chatgpt-tunnel/status', requireAdmin, requireLocalAdmin, async (req: Request, res: Response) => {
+    try {
+      const binaryPath = typeof req.query.binaryPath === 'string'
+        ? req.query.binaryPath
+        : defaultTunnelClientBinary();
+      const status = getChatGptTunnelStatus(binaryPath);
+      res.json({ ...status, ...(await readTunnelHealth()), localMcpUrl: `http://127.0.0.1:${port}/mcp` });
+    } catch (e) {
+      res.status(500).json({ error: e instanceof Error ? e.message : 'Failed to read tunnel status' });
+    }
+  });
+
+  app.post('/admin/api/chatgpt-tunnel/setup', requireAdmin, requireLocalAdmin, express.json(), async (req: Request, res: Response) => {
+    const tunnelId = typeof req.body?.tunnelId === 'string' ? req.body.tunnelId.trim() : '';
+    const runtimeApiKey = typeof req.body?.runtimeApiKey === 'string' ? req.body.runtimeApiKey.trim() : '';
+    const binaryPath = typeof req.body?.binaryPath === 'string' && req.body.binaryPath.trim()
+      ? req.body.binaryPath.trim()
+      : defaultTunnelClientBinary();
+    if (!/^tunnel_[A-Za-z0-9_-]+$/.test(tunnelId)) {
+      res.status(400).json({ error: 'A valid OpenAI tunnel_id is required' });
+      return;
+    }
+    const status = getChatGptTunnelStatus(binaryPath);
+    if (!status.binaryFound) {
+      res.status(400).json({ error: `tunnel-client was not found at ${binaryPath}` });
+      return;
+    }
+    const paths = chatGptTunnelPaths();
+    if (!runtimeApiKey && !status.runtimeKeyConfigured) {
+      res.status(400).json({ error: 'OpenAI Runtime API Key is required for first-time setup' });
+      return;
+    }
+
+    const { generateToken, hashToken } = await import('../core/utils.ts');
+    const token = generateToken('pmbrain_');
+    const hash = hashToken(token);
+    const id = (await import('crypto')).randomUUID();
+    let inserted = false;
+    try {
+      if (runtimeApiKey) writePrivateFile(paths.runtimeKeyFile, runtimeApiKey);
+      writePrivateFile(paths.authorizationHeaderFile, `Bearer ${token}`);
+      await sql`UPDATE access_tokens SET revoked_at = now() WHERE name = ${'chatgpt-secure-tunnel'} AND revoked_at IS NULL`;
+      await executeRawJsonb(
+        engine,
+        `INSERT INTO access_tokens (id, name, token_hash, permissions)
+         VALUES ($1, $2, $3, $4::jsonb)`,
+        [id, 'chatgpt-secure-tunnel', hash],
+        [{ takes_holders: ['world'], scopes: ['read'] }],
+      );
+      inserted = true;
+      const profile = buildChatGptTunnelProfile({
+        tunnelId,
+        mcpUrl: `http://127.0.0.1:${port}/mcp`,
+        runtimeKeyFile: paths.runtimeKeyFile,
+        authorizationHeaderFile: paths.authorizationHeaderFile,
+      });
+      writeChatGptTunnelProfile(paths.profileFile, profile);
+      res.json({
+        configured: true,
+        profileFile: paths.profileFile,
+        tunnelId,
+        localMcpUrl: `http://127.0.0.1:${port}/mcp`,
+        scopes: ['read'],
+      });
+    } catch (e) {
+      if (inserted) {
+        try { await sql`UPDATE access_tokens SET revoked_at = now() WHERE token_hash = ${hash}`; } catch { /* best effort */ }
+      }
+      res.status(500).json({ error: e instanceof Error ? e.message : 'Failed to configure tunnel' });
+    }
+  });
+
+  app.post('/admin/api/chatgpt-tunnel/doctor', requireAdmin, requireLocalAdmin, express.json(), (req: Request, res: Response) => {
+    try {
+      const binaryPath = typeof req.body?.binaryPath === 'string' && req.body.binaryPath.trim()
+        ? req.body.binaryPath.trim()
+        : defaultTunnelClientBinary();
+      res.json(runTunnelDoctor(binaryPath));
+    } catch (e) {
+      res.status(500).json({ error: e instanceof Error ? e.message : 'Tunnel doctor failed' });
+    }
+  });
+
+  app.post('/admin/api/chatgpt-tunnel/start', requireAdmin, requireLocalAdmin, express.json(), async (req: Request, res: Response) => {
+    try {
+      const binaryPath = typeof req.body?.binaryPath === 'string' && req.body.binaryPath.trim()
+        ? req.body.binaryPath.trim()
+        : defaultTunnelClientBinary();
+      const doctor = runTunnelDoctor(binaryPath);
+      if (!doctor.ok) {
+        res.status(409).json({ error: 'Tunnel doctor must pass before start', doctor });
+        return;
+      }
+      const pid = startTunnelClient(binaryPath);
+      await new Promise(resolve => setTimeout(resolve, 750));
+      res.json({ started: true, pid, ...(await readTunnelHealth()) });
+    } catch (e) {
+      res.status(500).json({ error: e instanceof Error ? e.message : 'Failed to start tunnel-client' });
+    }
+  });
+
+  app.post('/admin/api/chatgpt-tunnel/stop', requireAdmin, requireLocalAdmin, (_req: Request, res: Response) => {
+    try {
+      res.json({ stopped: stopTunnelClient() });
+    } catch (e) {
+      res.status(500).json({ error: e instanceof Error ? e.message : 'Failed to stop tunnel-client' });
     }
   });
 
@@ -1889,7 +2057,8 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
         timestamp: new Date().toISOString(),
       });
       return {
-        tools: mcpOperations.map(op => ({
+        tools: filterMcpOperationsByScopes(mcpOperations, authInfo.scopes)
+          .map(op => ({
           name: op.name,
           description: op.description,
           inputSchema: {
@@ -1899,7 +2068,7 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
             ),
             required: Object.entries(op.params).filter(([, v]) => v.required).map(([k]) => k),
           },
-        })),
+          })),
       };
     });
 

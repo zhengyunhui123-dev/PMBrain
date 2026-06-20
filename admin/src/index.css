@@ -901,6 +901,224 @@ label { display: block; font-size: 13px; font-weight: 500; margin-bottom: 6px; }
   font-weight: 650;
 }
 
+.tunnel-shell {
+  --tunnel-ink: #10221d;
+  --tunnel-green: #18a56f;
+  --tunnel-mint: #c9f5df;
+  margin: 22px 0 28px;
+  color: var(--tunnel-ink);
+}
+
+.tunnel-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 170px;
+  gap: 24px;
+  align-items: end;
+  padding: 28px;
+  border: 1px solid #bcd8cc;
+  border-radius: 12px 12px 0 0;
+  background:
+    linear-gradient(135deg, rgba(201, 245, 223, 0.82), rgba(247, 252, 249, 0.96) 58%),
+    repeating-linear-gradient(90deg, transparent 0 31px, rgba(16, 34, 29, 0.04) 32px);
+}
+
+.tunnel-kicker {
+  display: block;
+  margin-bottom: 9px;
+  color: #08764d;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.16em;
+}
+
+.tunnel-hero h2 {
+  margin: 0 0 8px;
+  font-size: 24px;
+  letter-spacing: -0.025em;
+}
+
+.tunnel-hero p {
+  max-width: 720px;
+  margin: 0;
+  color: #49675d;
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.tunnel-signal {
+  display: grid;
+  gap: 4px;
+  justify-items: end;
+  padding-left: 18px;
+  border-left: 1px solid #9fc9b8;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+.tunnel-signal span {
+  color: var(--tunnel-green);
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0.12em;
+}
+
+.tunnel-signal strong { font-size: 13px; }
+
+.tunnel-status-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 12px 16px;
+  border: solid #bcd8cc;
+  border-width: 0 1px 1px;
+  background: #f8fcfa;
+}
+
+.tunnel-pill {
+  display: inline-flex;
+  gap: 7px;
+  align-items: center;
+  padding: 5px 9px;
+  border: 1px solid #d2dfda;
+  border-radius: 999px;
+  color: #668078;
+  background: #fff;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.tunnel-pill i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #a9b8b3;
+}
+
+.tunnel-pill.is-ok { color: #08764d; border-color: #a8ddc6; }
+.tunnel-pill.is-ok i { background: var(--tunnel-green); box-shadow: 0 0 0 3px rgba(24, 165, 111, 0.12); }
+
+.tunnel-layout {
+  display: grid;
+  grid-template-columns: minmax(340px, 0.92fr) minmax(420px, 1.08fr);
+  gap: 14px;
+  margin-top: 14px;
+}
+
+.tunnel-config-card,
+.tunnel-ops-card,
+.tunnel-connect-note {
+  border: 1px solid #d7e2dd;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 10px 28px rgba(20, 62, 48, 0.07);
+}
+
+.tunnel-config-card,
+.tunnel-ops-card { padding: 20px; }
+
+.tunnel-card-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  align-items: flex-start;
+  margin-bottom: 18px;
+}
+
+.tunnel-card-head > div { display: flex; gap: 9px; align-items: center; }
+.tunnel-card-head span,
+.tunnel-connect-note > span {
+  color: var(--tunnel-green);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 11px;
+  font-weight: 900;
+}
+.tunnel-card-head h3,
+.tunnel-connect-note h3 { margin: 0; font-size: 15px; }
+.tunnel-card-head small { max-width: 210px; color: #7b8f88; font-size: 10px; text-align: right; line-height: 1.45; }
+
+.tunnel-field { display: grid; gap: 6px; margin-bottom: 13px; }
+.tunnel-field span { color: #516a61; font-size: 11px; font-weight: 800; }
+.tunnel-field input {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid #cbdad4;
+  border-radius: 7px;
+  padding: 10px 11px;
+  background: #fbfdfc;
+  color: var(--tunnel-ink);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 12px;
+}
+.tunnel-field input:focus { outline: 2px solid rgba(24, 165, 111, 0.2); border-color: var(--tunnel-green); }
+
+.tunnel-scope-lock {
+  display: grid;
+  grid-template-columns: auto auto 1fr;
+  gap: 8px 12px;
+  align-items: center;
+  padding: 12px;
+  margin: 16px 0;
+  border: 1px dashed #9dcdb9;
+  border-radius: 8px;
+  background: #f3fbf7;
+}
+.tunnel-scope-lock span { color: #668078; font-size: 11px; }
+.tunnel-scope-lock b { color: #08764d; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 11px; }
+.tunnel-scope-lock p { grid-column: 1 / -1; margin: 0; color: #567168; font-size: 11px; line-height: 1.55; }
+.tunnel-wide-button { width: 100%; }
+
+.tunnel-route {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  padding: 11px;
+  margin-bottom: 14px;
+  border-radius: 7px;
+  background: #10221d;
+  color: #d5f7e7;
+  font-size: 10px;
+}
+.tunnel-route code { color: inherit; }
+.tunnel-route i { color: #5ee0a7; font-style: normal; }
+
+.tunnel-facts { margin: 0; }
+.tunnel-facts > div {
+  display: grid;
+  grid-template-columns: 112px minmax(0, 1fr);
+  gap: 12px;
+  padding: 9px 0;
+  border-bottom: 1px solid #edf2ef;
+}
+.tunnel-facts dt { color: #71857e; font-size: 11px; }
+.tunnel-facts dd { overflow: hidden; margin: 0; color: #253f36; font-size: 11px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
+.tunnel-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+.tunnel-message { margin-top: 12px; padding: 9px 11px; border-radius: 6px; font-size: 11px; }
+.tunnel-message.ok { color: #08764d; background: #eaf8f1; }
+.tunnel-message.error { color: #9b2c2c; background: #fff0f0; }
+.tunnel-doctor {
+  max-height: 220px;
+  overflow: auto;
+  padding: 12px;
+  margin: 12px 0 0;
+  border-radius: 7px;
+  background: #0e1a16;
+  color: #cae9dc;
+  font-size: 10px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+.tunnel-doctor.error { color: #ffd0c8; }
+
+.tunnel-connect-note {
+  display: grid;
+  grid-template-columns: 28px 1fr;
+  gap: 8px;
+  padding: 17px 20px;
+  margin-top: 14px;
+}
+.tunnel-connect-note p { margin: 5px 0 0; color: #5e756d; font-size: 12px; line-height: 1.6; }
+
 .mcp-difference-card {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -1697,6 +1915,7 @@ pre {
   .nl-history {
     position: static;
   }
+  .tunnel-layout { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 760px) {
@@ -1731,4 +1950,10 @@ pre {
   .docs-content {
     padding: 24px;
   }
+  .tunnel-hero { grid-template-columns: 1fr; padding: 20px; }
+  .tunnel-signal { justify-items: start; padding: 12px 0 0; border-left: 0; border-top: 1px solid #9fc9b8; }
+  .tunnel-card-head { display: grid; }
+  .tunnel-card-head small { max-width: none; text-align: left; }
+  .tunnel-facts > div { grid-template-columns: 86px minmax(0, 1fr); }
+  .tunnel-actions > button { flex: 1 1 120px; }
 }
