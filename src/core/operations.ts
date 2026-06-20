@@ -10,7 +10,8 @@ import { clampSearchLimit } from './engine.ts';
 import type { GBrainConfig } from './config.ts';
 import type { PageType } from './types.ts';
 import { importFromContent } from './import-file.ts';
-import { serializePageToMarkdown, resolvePageFilePath } from './markdown.ts';
+import { serializePageToMarkdown } from './markdown.ts';
+import { resolvePolicyPageFilePath, resolveWritePolicyForPath } from './write-policy.ts';
 import { mkdirSync, writeFileSync, existsSync, statSync } from 'fs';
 import { dirname } from 'path';
 import { hybridSearch, hybridSearchCached } from './search/hybrid.ts';
@@ -735,7 +736,8 @@ const put_page: Operation = {
                 source_kind: provenanceVia,
               },
             });
-            const filePath = resolvePageFilePath(repoPath as string, result.slug, sourceId);
+            const writePolicy = await resolveWritePolicyForPath(ctx.engine, repoPath as string, sourceId);
+            const filePath = resolvePolicyPageFilePath(repoPath as string, result.slug, sourceId, writePolicy, 'note');
             mkdirSync(dirname(filePath), { recursive: true });
             writeFileSync(filePath, md, 'utf8');
             writeThrough = { written: true, path: filePath };
@@ -3850,7 +3852,7 @@ const search_by_image: Operation = {
 
     return results;
   },
-  cliHints: { name: 'search-by-image' },
+  cliHints: { name: 'search-by-image', positional: ['image_path'] },
 };
 
 async function getDailyImageBudgetUsd(engine: BrainEngine): Promise<number> {

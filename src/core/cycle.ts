@@ -410,6 +410,11 @@ export interface CycleOpts {
   synthFrom?: string;
   synthTo?: string;
   /**
+   * Optional page cap for the propose_takes phase. CLI/Admin use this to
+   * batch expensive LLM proposal runs without changing the phase default.
+   */
+  proposeTakesPageLimit?: number;
+  /**
    * v0.23.2: explicit opt-in to disable the synthesize self-consumption guard.
    * Wired from `gbrain dream --unsafe-bypass-dream-guard`. Never auto-applied
    * for `--input` because that would let any caller silently re-trigger the
@@ -1236,6 +1241,13 @@ async function runPhasePurge(engine: BrainEngine, dryRun: boolean): Promise<Phas
     } catch {
       // Non-fatal.
     }
+    let purgedLockRenewalAuditFiles = 0;
+    try {
+      const { pruneOldLockRenewalAuditFiles } = await import('./audit/lock-renewal-audit.ts');
+      purgedLockRenewalAuditFiles = pruneOldLockRenewalAuditFiles(30).removed;
+    } catch {
+      // Non-fatal.
+    }
     return {
       phase: 'purge',
       status: 'ok',
@@ -1244,7 +1256,8 @@ async function runPhasePurge(engine: BrainEngine, dryRun: boolean): Promise<Phas
         `purged ${purgedSources.length} source(s), ${purgedPages.count} page(s), ` +
         `${purgedClones.count} orphan clone temp dir(s), ${purgedCheckpoints} stale op_checkpoint(s), ` +
         `${purgedBrainstormCheckpoints} stale brainstorm checkpoint(s), ` +
-        `and ${purgedBatchRetryAuditFiles} stale batch-retry audit file(s)`,
+        `${purgedBatchRetryAuditFiles} stale batch-retry audit file(s), ` +
+        `and ${purgedLockRenewalAuditFiles} stale lock-renewal audit file(s)`,
       details: {
         purged_sources_count: purgedSources.length,
         purged_pages_count: purgedPages.count,
@@ -1255,6 +1268,7 @@ async function runPhasePurge(engine: BrainEngine, dryRun: boolean): Promise<Phas
         purged_checkpoints_count: purgedCheckpoints,
         purged_brainstorm_checkpoints_count: purgedBrainstormCheckpoints,
         purged_batch_retry_audit_files_count: purgedBatchRetryAuditFiles,
+        purged_lock_renewal_audit_files_count: purgedLockRenewalAuditFiles,
       },
     };
   } catch (e) {
@@ -1868,7 +1882,13 @@ export async function runCycle(
             tier: 'reasoning',
             fallback: calibrationChatFallback,
           });
-          const { result, duration_ms } = await timePhase(() => runPhaseProposeTakes(calibrationCtx, { repoPath: opts.brainDir, model, reporter: progress, dryRun }) as Promise<PhaseResult>);
+          const { result, duration_ms } = await timePhase(() => runPhaseProposeTakes(calibrationCtx, {
+            repoPath: opts.brainDir,
+            model,
+            reporter: progress,
+            dryRun,
+            pageLimit: opts.proposeTakesPageLimit,
+          }) as Promise<PhaseResult>);
           result.duration_ms = duration_ms;
           phaseResults.push(result);
           await safeYield(opts.yieldBetweenPhases);

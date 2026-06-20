@@ -32,11 +32,15 @@ PMBrain 集成了 GBrain 的核心能力，安装后相当于给你的 AI 工具
 | `.pdf` | PDF 文档 |
 | `.xlsx` / `.xlsm` / `.xls` | Excel 表格 |
 | `.csv` | 表格数据 |
+| `.png` / `.jpg` / `.jpeg` / `.gif` / `.webp` / `.heic` / `.heif` / `.avif` | 图片和扫描件 |
 | `.mp3` / `.wav` / `.m4a` | 音频文件（自动转写） |
 
 ```powershell
 pmbrain import "D:\项目文档" --include-office
+pmbrain import "D:\扫描件" --include-images
 ```
+
+支持图片/扫描件导入；如需文字搜图、以图搜图，需要额外配置支持图片向量化的多模态 embedding 模型。
 
 ### 全量中文化
 
@@ -91,7 +95,7 @@ pmbrain dream --help
 安全预览推荐先运行 dry-run：
 
 ```powershell
-pmbrain dream --phase propose_takes --dry-run --json --source pmgbrain
+pmbrain dream --phase propose_takes --dry-run --json --source pmgbrain --max-pages 25
 ```
 
 dry-run 模式下 `propose_takes` 只统计哪些页面需要调用 LLM，不调用 LLM，也不写入候选观点，避免误扫大库或长时间阻塞。
@@ -438,11 +442,7 @@ PMBrain/
 - [ ] **国内视频网站导入**：B站等国内视频平台内容直接导入知识库
 - [ ] **Electron 桌面版**：Windows 一键安装包，无需手动安装 Bun / 打开终端
 - [ ] **本地数据库安装简化**：让非技术用户也能一键部署
-- [ ] **断连审计锁定**：定位 mid-process disconnect 根因并修复
-- [ ] **锁续期健康检查**：doctor 增加 `lock_renewal_health` 检查项
-- [ ] **Dream 处理量控制**：支持 `dream --max-pages <n>` 等参数限制非 dry-run 周期处理量
 - [ ] **Surrogate-pair 安全截断**：修复 emoji / 4 字节 CJK 字符切半导致的 JSON 解析错误
-- [ ] **多模态资料入库**：图片 OCR、扫描件识别等
 
 ---
 
@@ -463,9 +463,12 @@ PMBrain/
 |------|------|
 | **全量中文化** | Admin Console 所有页面、CLI 帮助、仪表盘、文档页已全部中文化 |
 | **Office 文档直接导入** | `.docx/.pdf/.xlsx/.csv/.wps` 无需转 Markdown，直接导入知识库 |
+| **图片/扫描件入口** | 支持图片/扫描件导入；图片检索需配置支持图片向量化的多模态 embedding 模型 |
 | **AI 提供商扩展** | 新增 MIMO 小米 Recipe，智谱支持对话，DeepSeek 支持扩展 |
 | **Admin Console 大幅升级** | 侧边栏分组导航、文档页、自然语言任务历史、系统诊断持久化 |
 | **观点审批流程** | `propose_takes` 产生候选观点后进入 Admin Console 审批，可查看原文依据后接受或拒绝 |
+| **Dream 分批处理** | `pmbrain dream --phase propose_takes --max-pages <n>` 和 Admin 观点审批页均可限制单次处理页数 |
+| **锁续期诊断** | `doctor` 已包含 `lock_renewal_health`，并继续在 `batch_retry_health` 中汇总断连审计线索 |
 | **Dream dry-run no-LLM** | `propose_takes --dry-run` 只统计需 LLM 的页面，不调用模型、不写候选观点 |
 | **模型诊断修复** | `models doctor` 已能真实探针对话、扩展和向量化模型可用性 |
 | **品牌统一为 PMBrain** | CLI 命令、MCP 标识、配置目录已全面切换为 `pmbrain` |

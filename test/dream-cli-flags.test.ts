@@ -49,6 +49,14 @@ describe('dream CLI flag wiring', () => {
     expect(dreamSrc).toContain('synthTo');
   });
 
+  test('declares and forwards --max-pages to propose_takes page limit', () => {
+    expect(dreamSrc).toContain("'--max-pages'");
+    expect(dreamSrc).toContain('maxPages');
+    expect(dreamSrc).toContain('proposeTakesPageLimit');
+    expect(cycleSrc).toContain('proposeTakesPageLimit?: number');
+    expect(cycleSrc).toContain('pageLimit: opts.proposeTakesPageLimit');
+  });
+
   test('totals line includes synth + patterns counters', () => {
     expect(dreamSrc).toContain('synth_transcripts');
     expect(dreamSrc).toContain('synth_pages');

@@ -55,6 +55,7 @@ import {
   listRuns,
   previewIntent,
   startActionRun,
+  startDreamRun,
   startImportRun,
   startSourceAddRun,
 } from './admin-console.ts';
@@ -1335,12 +1336,32 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
         path: typeof req.body?.path === 'string' ? req.body.path : '',
         sourceId: typeof req.body?.sourceId === 'string' ? req.body.sourceId : undefined,
         includeOffice: req.body?.includeOffice === true,
+        includeImages: req.body?.includeImages === true,
         noEmbed: req.body?.autoEmbed === false,
         workers: Number(req.body?.workers ?? 1),
       }, process.cwd());
       res.json({ runId: run.id, status: run.status });
     } catch (e) {
       res.status(400).json({ error: e instanceof Error ? e.message : 'import_run_failed' });
+    }
+  });
+
+  app.post('/admin/api/dream-runs', requireAdmin, express.json({ limit: '16kb' }), (req: Request, res: Response) => {
+    try {
+      const rawMaxPages = req.body?.maxPages;
+      const maxPages = rawMaxPages === undefined || rawMaxPages === null || rawMaxPages === ''
+        ? undefined
+        : Number(rawMaxPages);
+      const phase = req.body?.phase === 'propose_takes' ? 'propose_takes' : undefined;
+      const run = startDreamRun({
+        phase,
+        sourceId: typeof req.body?.sourceId === 'string' ? req.body.sourceId : undefined,
+        maxPages,
+        dryRun: req.body?.dryRun === true,
+      }, process.cwd());
+      res.json({ runId: run.id, status: run.status });
+    } catch (e) {
+      res.status(400).json({ error: e instanceof Error ? e.message : 'dream_run_failed' });
     }
   });
 

@@ -1164,6 +1164,51 @@ pre {
   margin: 18px 0;
 }
 
+.take-dream-runner {
+  display: grid;
+  gap: 14px;
+  margin-top: 16px;
+}
+
+.take-dream-runner h2 {
+  margin: 0 0 4px;
+  font-size: 17px;
+}
+
+.take-dream-controls {
+  display: grid;
+  grid-template-columns: minmax(120px, 160px) minmax(180px, 1fr) auto auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.take-dream-controls label {
+  display: grid;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--text-muted);
+  font-weight: 700;
+}
+
+.take-dream-controls input[type="number"],
+.take-dream-controls input[type="text"],
+.take-dream-controls input:not([type]) {
+  min-height: 38px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  color: var(--text-primary);
+}
+
+.take-dream-checkbox {
+  display: flex !important;
+  grid-template-columns: none !important;
+  flex-direction: row;
+  align-items: center;
+  min-height: 38px;
+  color: var(--text-secondary) !important;
+}
+
 .take-filter {
   border: 1px solid var(--border);
   border-radius: 7px;
@@ -1676,6 +1721,9 @@ pre {
   }
   .take-card-head {
     display: grid;
+  }
+  .take-dream-controls {
+    grid-template-columns: 1fr;
   }
   .take-detail-grid {
     grid-template-columns: 1fr;

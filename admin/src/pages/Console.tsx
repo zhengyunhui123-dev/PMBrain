@@ -466,6 +466,7 @@ export function ImportDataPage() {
   const [sourceName, setSourceName] = useState('');
   const [federated, setFederated] = useState(true);
   const [includeOffice, setIncludeOffice] = useState(true);
+  const [includeImages, setIncludeImages] = useState(false);
   const [autoEmbed, setAutoEmbed] = useState(true);
   const [workers, setWorkers] = useState(1);
   const [run, setRun] = useState<ConsoleRun | null>(null);
@@ -486,7 +487,7 @@ export function ImportDataPage() {
   const start = async () => {
     setSubmitError('');
     try {
-      const res = await api.startImportRun({ path, sourceId: sourceId || undefined, includeOffice, autoEmbed, workers }) as { runId: string };
+      const res = await api.startImportRun({ path, sourceId: sourceId || undefined, includeOffice, includeImages, autoEmbed, workers }) as { runId: string };
       setRun(await api.run(res.runId) as ConsoleRun);
     } catch (e) {
       setSubmitError(e instanceof Error ? e.message : String(e));
@@ -535,6 +536,7 @@ export function ImportDataPage() {
             <input value={sourceName} onChange={e => setSourceName(e.target.value)} placeholder="例如 项目资料库" />
             <div className="pm-form-row">
               <label><input type="checkbox" checked={includeOffice} onChange={e => setIncludeOffice(e.target.checked)} /> 包含 Office/PDF/Excel</label>
+              <label><input type="checkbox" checked={includeImages} onChange={e => setIncludeImages(e.target.checked)} /> 包含图片/扫描件</label>
               <label><input type="checkbox" checked={autoEmbed} onChange={e => setAutoEmbed(e.target.checked)} /> 导入时向量化</label>
               <label><input type="checkbox" checked={federated} onChange={e => setFederated(e.target.checked)} /> 参与跨源搜索</label>
             </div>

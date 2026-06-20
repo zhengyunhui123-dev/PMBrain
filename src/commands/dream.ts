@@ -66,6 +66,11 @@ interface DreamArgs {
    * until a follow-up CLI cleanup picks one. Supersedes PR #1559.
    */
   source: string | null;
+  /**
+   * Limits how many pages propose_takes scans in this dream run.
+   * Forwarded to runCycle as proposeTakesPageLimit.
+   */
+  maxPages: number | null;
 }
 
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -179,6 +184,26 @@ function parseArgs(args: string[]): DreamArgs {
   }
   const source = uniqSource[0] ?? uniqSourceId[0] ?? null;
 
+  const maxPagesValues = collectFlagValues(args, '--max-pages');
+  if (maxPagesValues === null) {
+    console.error('--max-pages <n>: missing value. Usage: gbrain dream --phase propose_takes --max-pages 25');
+    process.exit(2);
+  }
+  const uniqMaxPages = Array.from(new Set(maxPagesValues));
+  if (uniqMaxPages.length > 1) {
+    console.error(`specify --max-pages once; got [${uniqMaxPages.map(v => `"${v}"`).join(', ')}]`);
+    process.exit(2);
+  }
+  let maxPages: number | null = null;
+  if (uniqMaxPages.length === 1) {
+    const parsed = Number(uniqMaxPages[0]);
+    if (!Number.isInteger(parsed) || parsed <= 0) {
+      console.error(`--max-pages must be a positive integer; got "${uniqMaxPages[0]}"`);
+      process.exit(2);
+    }
+    maxPages = parsed;
+  }
+
   return {
     json: args.includes('--json'),
     dryRun: args.includes('--dry-run'),
@@ -192,6 +217,7 @@ function parseArgs(args: string[]): DreamArgs {
     to,
     bypassDreamGuard: args.includes('--unsafe-bypass-dream-guard'),
     source,
+    maxPages,
   };
 }
 
@@ -257,6 +283,7 @@ function printHelp() {
   --source <id>       将周期限定到指定来源；propose_takes、grade_takes、
                       calibration_profile 也会使用这个 source。
   --source-id <id>    --source 的别名。
+  --max-pages <n>     限制 propose_takes 最多处理的页面数，适合分批执行。
 
   --input <file>      综合指定转录文件，隐含 --phase synthesize。
   --date YYYY-MM-DD   综合指定日期的转录文本。
@@ -272,7 +299,7 @@ function printHelp() {
 示例：
   gbrain dream --dry-run --json
   gbrain dream --phase propose_takes --dry-run --source pmgbrain
-  gbrain dream --phase propose_takes --source pmgbrain
+  gbrain dream --phase propose_takes --source pmgbrain --max-pages 25
   gbrain dream --phase calibration_profile --source pmgbrain
   gbrain dream --phase synthesize --input ~/transcripts/2026-04-25.txt
 
@@ -422,6 +449,7 @@ export async function runDream(engine: BrainEngine | null, args: string[]): Prom
     synthFrom: opts.from ?? undefined,
     synthTo: opts.to ?? undefined,
     synthBypassDreamGuard: opts.bypassDreamGuard,
+    proposeTakesPageLimit: opts.maxPages ?? undefined,
   });
 
   if (opts.json) {

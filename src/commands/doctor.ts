@@ -645,6 +645,7 @@ export async function doctorReportRemote(engine: BrainEngine): Promise<DoctorRep
   // Surfaces Supavisor circuit-breaker incidents over MCP so remote operators
   // see the same signal local doctor surfaces.
   checks.push(await checkBatchRetryHealth(engine));
+  checks.push(await checkLockRenewalHealth(engine));
 
   // v0.41.2.1 — embedding_env_override (cross-surface parity with
   // buildChecks). Surfaces when GBRAIN_EMBEDDING_* env vars disagree
@@ -1251,6 +1252,73 @@ export async function checkBatchRetryHealth(_engine: BrainEngine): Promise<Check
       name: 'batch_retry_health',
       status: 'warn',
       message: `Could not check batch_retry audit: ${msg}`,
+    };
+  }
+}
+
+export async function checkLockRenewalHealth(_engine: BrainEngine): Promise<Check> {
+  try {
+    const { readRecentLockRenewalEvents } = await import('../core/audit/lock-renewal-audit.ts');
+    const result = readRecentLockRenewalEvents(24);
+
+    if (result.files_unreadable > 0) {
+      return {
+        name: 'lock_renewal_health',
+        status: 'warn',
+        message: `${result.files_unreadable} lock-renewal audit file(s) unreadable. Fix: check ~/.gbrain/audit/ (or $GBRAIN_AUDIT_DIR if set).`,
+      };
+    }
+
+    const counts = new Map<string, number>();
+    for (const event of result.events) {
+      counts.set(event.outcome, (counts.get(event.outcome) ?? 0) + 1);
+    }
+    const failures = counts.get('failure') ?? 0;
+    const recovered = counts.get('success_after_failure') ?? 0;
+    const gaveUp = counts.get('gave_up') ?? 0;
+    const rejected = counts.get('executeJob_rejected') ?? 0;
+    const latest = result.events.slice().sort((a, b) => String(b.ts).localeCompare(String(a.ts)))[0];
+    const latestNote = latest
+      ? ` Latest: ${latest.job_name ?? 'unknown'}#${latest.job_id ?? '?'} outcome=${latest.outcome}.`
+      : '';
+    const corruptNote = result.corrupted_lines > 0
+      ? ` ${result.corrupted_lines} corrupt JSONL line(s) skipped.`
+      : '';
+
+    if (gaveUp > 0 || rejected > 0) {
+      return {
+        name: 'lock_renewal_health',
+        status: 'fail',
+        message: `${gaveUp} job(s) gave up renewing lock and ${rejected} executeJob rejection(s) in last 24h.${latestNote}${corruptNote}`,
+      };
+    }
+
+    if (failures >= 10 || result.corrupted_lines > 0) {
+      return {
+        name: 'lock_renewal_health',
+        status: 'warn',
+        message: `${failures} lock-renewal failure(s) and ${recovered} recovery event(s) in last 24h.${latestNote}${corruptNote}`,
+      };
+    }
+
+    if (failures > 0) {
+      return {
+        name: 'lock_renewal_health',
+        status: 'ok',
+        message: `${failures} transient lock-renewal failure(s) in last 24h (below warn threshold); ${recovered} recovered.${latestNote}`,
+      };
+    }
+
+    return {
+      name: 'lock_renewal_health',
+      status: 'ok',
+      message: `No lock-renewal failures in last 24h.${recovered > 0 ? ` ${recovered} transient renewal(s) recovered.` : ''}${corruptNote}`,
+    };
+  } catch (e) {
+    return {
+      name: 'lock_renewal_health',
+      status: 'warn',
+      message: `Could not check lock-renewal audit: ${e instanceof Error ? e.message : String(e)}`,
     };
   }
 }
@@ -5851,6 +5919,8 @@ export async function buildChecks(
     // surfacing via the batch-retry audit JSONL. Codex H-9 thresholds.
     progress.heartbeat('batch_retry_health');
     checks.push(await checkBatchRetryHealth(engine));
+    progress.heartbeat('lock_renewal_health');
+    checks.push(await checkLockRenewalHealth(engine));
     // v0.40.4 graph_signals_coverage — global inbound-link density when
     // graph_signals is enabled in the active mode bundle.
     progress.heartbeat('graph_signals_coverage');

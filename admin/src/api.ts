@@ -49,8 +49,10 @@ export const api = {
   runs: () => apiFetch('/admin/api/runs'),
   run: (id: string) => apiFetch(`/admin/api/runs/${encodeURIComponent(id)}`),
   startActionRun: (action: string) => apiFetch('/admin/api/runs/action', { method: 'POST', body: JSON.stringify({ action }) }),
-  startImportRun: (body: { path: string; sourceId?: string; includeOffice: boolean; autoEmbed: boolean; workers: number }) =>
+  startImportRun: (body: { path: string; sourceId?: string; includeOffice: boolean; includeImages: boolean; autoEmbed: boolean; workers: number }) =>
     apiFetch('/admin/api/import-runs', { method: 'POST', body: JSON.stringify(body) }),
+  startDreamRun: (body: { phase: 'propose_takes'; sourceId?: string; maxPages?: number; dryRun: boolean }) =>
+    apiFetch('/admin/api/dream-runs', { method: 'POST', body: JSON.stringify(body) }),
   addSource: (body: { id?: string; path: string; name?: string; federated: boolean }) =>
     apiFetch('/admin/api/sources', { method: 'POST', body: JSON.stringify(body) }),
   health: () => apiFetch('/admin/api/health-indicators'),

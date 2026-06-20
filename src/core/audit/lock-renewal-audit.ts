@@ -38,9 +38,9 @@
  * propagate up to the IIFE's surrounding catch and re-introduce the
  * unhandledRejection bug class via a new path.
  *
- * Doctor wiring + dream-purge wiring are filed as v0.41.22+ follow-up
- * TODOs in TODOS.md. For v0.41.22.2 the operator surface is
- * `tail -F ~/.gbrain/audit/lock-renewal-*.jsonl`.
+ * Operator surfaces: `gbrain doctor` / remote doctor expose
+ * `lock_renewal_health`, dream purge prunes old files, and raw tailing
+ * remains available via `tail -F ~/.gbrain/audit/lock-renewal-*.jsonl`.
  */
 
 import * as fs from 'fs';

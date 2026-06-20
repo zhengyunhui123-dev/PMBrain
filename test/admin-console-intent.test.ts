@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { deriveSourceIdFromPath, previewIntent, resolveImportSourceIdForPath } from '../src/commands/admin-console.ts';
+import { buildDreamCommand, deriveSourceIdFromPath, previewIntent, resolveImportSourceIdForPath } from '../src/commands/admin-console.ts';
 import { __setChatTransportForTests, resetGateway } from '../src/core/ai/gateway.ts';
 
 describe('admin console intent planning', () => {
@@ -29,7 +29,7 @@ describe('admin console intent planning', () => {
           }],
         },
       }],
-    }), { status: 200, headers: { 'content-type': 'application/json' } })) as typeof fetch;
+    }), { status: 200, headers: { 'content-type': 'application/json' } })) as unknown as typeof fetch;
 
     const preview = await previewIntent('导入这个md', {
       chat_model: 'mimo:mimo-v2.5-pro',
@@ -112,5 +112,25 @@ describe('admin console intent planning', () => {
 
     expect(first).toMatch(/^source-[a-f0-9]{8}$/);
     expect(second).toMatch(/^source-[a-f0-9]{8}$/);
+  });
+
+  test('dream run command forwards source and max-pages', () => {
+    expect(buildDreamCommand({
+      phase: 'propose_takes',
+      sourceId: 'pmgbrain',
+      maxPages: 25,
+      dryRun: true,
+    })).toEqual([
+      'bun',
+      'src/cli.ts',
+      'dream',
+      '--phase',
+      'propose_takes',
+      '--source',
+      'pmgbrain',
+      '--max-pages',
+      '25',
+      '--dry-run',
+    ]);
   });
 });

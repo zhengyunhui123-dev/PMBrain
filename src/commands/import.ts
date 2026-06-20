@@ -51,6 +51,7 @@ export async function runImport(
   const fresh = args.includes('--fresh');
   const jsonOutput = args.includes('--json');
   const includeOffice = args.includes('--include-office');
+  const includeImages = args.includes('--include-images');
 
   // T7 (D9): refuse cleanly when init persisted the deferred-setup sentinel,
   // unless the user is explicitly skipping embedding via `--no-embed` (in
@@ -165,7 +166,7 @@ export async function runImport(
   const dirArg = args.find((a, i) => !a.startsWith('--') && !flagValues.has(i));
 
   if (!dirArg) {
-    console.error('Usage: gbrain import <dir> [--no-embed] [--workers N] [--fresh] [--source-id <id>] [--include-office] [--json]');
+    console.error('Usage: gbrain import <dir> [--no-embed] [--workers N] [--fresh] [--source-id <id>] [--include-office] [--include-images] [--json]');
     process.exit(1);
   }
   let dir: string = dirArg;  // narrowed; survives closure capture
@@ -187,16 +188,16 @@ export async function runImport(
       allFiles = isCollectibleForWalker(
         dirArg,
         strategy,
-        (process.env.PMBRAIN_EMBEDDING_MULTIMODAL ?? process.env.GBRAIN_EMBEDDING_MULTIMODAL) === 'true',
+        includeImages || (process.env.PMBRAIN_EMBEDDING_MULTIMODAL ?? process.env.GBRAIN_EMBEDDING_MULTIMODAL) === 'true',
         includeOffice,
       )
         ? [dirArg]
         : [];
     } else {
-      allFiles = collectSyncableFiles(dir, { strategy, includeOffice });
+      allFiles = collectSyncableFiles(dir, { strategy, includeOffice, includeImages });
     }
   } catch {
-    allFiles = collectSyncableFiles(dir, { strategy, includeOffice });
+    allFiles = collectSyncableFiles(dir, { strategy, includeOffice, includeImages });
   }
   console.error(
     `[pmbrain phase] import.collect_files done ${Date.now() - _walkT0}ms files=${allFiles.length}`,
@@ -258,7 +259,8 @@ export async function runImport(
       // multimodal is enabled. The walker (collectMarkdownFiles) only picks
       // up images when GBRAIN_EMBEDDING_MULTIMODAL=true so this branch is
       // unreachable when the gate is off; defense-in-depth check anyway.
-      const result = isImageFilePath(relativePath) && (process.env.PMBRAIN_EMBEDDING_MULTIMODAL ?? process.env.GBRAIN_EMBEDDING_MULTIMODAL) === 'true'
+      const imageImportEnabled = includeImages || (process.env.PMBRAIN_EMBEDDING_MULTIMODAL ?? process.env.GBRAIN_EMBEDDING_MULTIMODAL) === 'true';
+      const result = isImageFilePath(relativePath) && imageImportEnabled
         ? await importImageFile(eng, filePath, relativePath, { noEmbed, sourceId })
         : includeOffice && isOfficeFilePath(relativePath)
           ? await importOfficeFile(eng, filePath, relativePath, { noEmbed, sourceId, activePack: importActivePack })
@@ -505,6 +507,7 @@ function resolveMaxWalkDepth(): number {
 interface CollectOpts {
   strategy?: SyncStrategy;
   includeOffice?: boolean;
+  includeImages?: boolean;
 }
 
 /**
@@ -556,7 +559,8 @@ function isCollectibleForWalker(
 export function collectSyncableFiles(dir: string, opts: CollectOpts = {}): string[] {
   const strategy: SyncStrategy = opts.strategy ?? 'markdown';
   const includeOffice = opts.includeOffice === true;
-  const multimodalOn = process.env.GBRAIN_EMBEDDING_MULTIMODAL === 'true';
+  const multimodalOn = opts.includeImages === true
+    || (process.env.PMBRAIN_EMBEDDING_MULTIMODAL ?? process.env.GBRAIN_EMBEDDING_MULTIMODAL) === 'true';
   const maxDepth = resolveMaxWalkDepth();
   const visitedInodes = new Map<string, true>();
   const files: string[] = [];

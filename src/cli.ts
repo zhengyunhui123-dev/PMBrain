@@ -663,6 +663,13 @@ function formatResult(opName: string, result: unknown): string {
         `[${r.score?.toFixed(4) || '?'}] ${r.slug} -- ${r.chunk_text?.slice(0, 100) || ''}${r.stale ? ' (stale)' : ''}`,
       ).join('\n') + '\n';
     }
+    case 'search_by_image': {
+      const results = result as any[];
+      if (results.length === 0) return 'No results.\n';
+      return results.map(r =>
+        `[${r.score?.toFixed(4) || '?'}] ${r.slug} -- ${r.chunk_text?.slice(0, 100) || ''}${r.stale ? ' (stale)' : ''}`,
+      ).join('\n') + '\n';
+    }
     case 'get_tags': {
       const tags = result as string[];
       return tags.length > 0 ? tags.join(', ') + '\n' : 'No tags.\n';
@@ -1923,10 +1930,14 @@ function printHelp() {
 搜索
   search <query>                     关键词搜索
   query <question> [--no-expand]     混合搜索
+  query <question> --cross-modal image
+                                      用文字搜索已导入图片/扫描件
+  search-by-image <image>             用图片搜索相似图片/扫描件
   ask <question> [--no-expand]       query 的别名
 
 导入与导出
   import <dir> [--no-embed]          导入 Markdown 目录
+  import <dir> --include-images       导入图片/扫描件
   sync [--repo <path>] [flags]       从 Git 增量同步到大脑
   sync --watch [--interval N]        持续同步
   sync --install-cron                安装持久同步服务

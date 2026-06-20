@@ -68,6 +68,7 @@ const INTENT_SLOT_KEYS = new Set([
   'path',
   'pathType',
   'includeOffice',
+  'includeImages',
   'sourceId',
 ]);
 
@@ -89,6 +90,7 @@ const PMBRAIN_ACTION_TOOL = {
         path: { type: 'string' },
         pathType: { type: 'string', enum: ['file', 'directory', 'unknown'] },
         includeOffice: { type: 'boolean' },
+        includeImages: { type: 'boolean' },
         sourceId: { type: 'string' },
         slots: {
           type: 'object',
@@ -99,6 +101,7 @@ const PMBRAIN_ACTION_TOOL = {
             path: { type: 'string' },
             pathType: { type: 'string', enum: ['file', 'directory', 'unknown'] },
             includeOffice: { type: 'boolean' },
+            includeImages: { type: 'boolean' },
             sourceId: { type: 'string' },
           },
         },
@@ -672,6 +675,7 @@ function commandForPreview(preview: IntentPreview): string[] {
     case 'import_path': {
       const cmd = ['bun', 'src/cli.ts', 'import', String(s.path ?? '')];
       if (s.includeOffice !== false) cmd.push('--include-office');
+      if (s.includeImages === true) cmd.push('--include-images');
       if (typeof s.sourceId === 'string' && s.sourceId.trim()) cmd.push('--source-id', s.sourceId.trim());
       return cmd;
     }
@@ -715,12 +719,14 @@ export async function startImportRun(engine: BrainEngine, input: {
   path: string;
   sourceId?: string;
   includeOffice?: boolean;
+  includeImages?: boolean;
   noEmbed?: boolean;
   workers?: number;
 }, cwd: string): Promise<ConsoleRun> {
   if (!input.path.trim()) throw new Error('Path is required');
   const cmd = ['bun', 'src/cli.ts', 'import', input.path.trim()];
   if (input.includeOffice) cmd.push('--include-office');
+  if (input.includeImages) cmd.push('--include-images');
   if (input.noEmbed) cmd.push('--no-embed');
   const sourceId = await resolveImportSourceIdForPath(engine, input.path, input.sourceId);
   if (sourceId) cmd.push('--source-id', sourceId);
@@ -743,6 +749,35 @@ export function startSourceAddRun(input: {
   if (input.name?.trim()) cmd.push('--name', input.name.trim());
   cmd.push(input.federated === false ? '--no-federated' : '--federated');
   return startRun('source_add', cmd, cwd);
+}
+
+export function buildDreamCommand(input: {
+  phase?: 'propose_takes';
+  sourceId?: string;
+  maxPages?: number;
+  dryRun?: boolean;
+}): string[] {
+  const phase = input.phase ?? 'propose_takes';
+  const cmd = ['bun', 'src/cli.ts', 'dream', '--phase', phase];
+  if (input.sourceId?.trim()) cmd.push('--source', input.sourceId.trim());
+  if (input.maxPages !== undefined) {
+    const maxPages = Math.floor(Number(input.maxPages));
+    if (!Number.isInteger(maxPages) || maxPages <= 0) {
+      throw new Error('Max pages must be a positive integer');
+    }
+    cmd.push('--max-pages', String(maxPages));
+  }
+  if (input.dryRun) cmd.push('--dry-run');
+  return cmd;
+}
+
+export function startDreamRun(input: {
+  phase?: 'propose_takes';
+  sourceId?: string;
+  maxPages?: number;
+  dryRun?: boolean;
+}, cwd: string): ConsoleRun {
+  return startRun('dream_propose_takes', buildDreamCommand(input), cwd);
 }
 
 export function startActionRun(action: 'doctor_check' | 'show_sources' | 'show_stats' | 'embed_stale' | 'sync_all', cwd: string): ConsoleRun {

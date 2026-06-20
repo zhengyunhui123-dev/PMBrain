@@ -27,6 +27,20 @@ interface BrainPageChunk {
   embedded: boolean;
 }
 
+interface ConsoleRun {
+  id: string;
+  kind: string;
+  status: 'queued' | 'running' | 'completed' | 'failed';
+  command: string[];
+  stdout: string;
+  stderr: string;
+  exitCode: number | null;
+  error: string | null;
+  startedAt: string;
+  completedAt: string | null;
+  durationMs: number | null;
+}
+
 const statusOptions = [
   { value: 'pending', label: '待审' },
   { value: 'accepted', label: '已接受' },
@@ -87,6 +101,11 @@ export function TakeProposalsPage() {
   const [sourceChunks, setSourceChunks] = useState<BrainPageChunk[]>([]);
   const [sourceLoading, setSourceLoading] = useState(false);
   const [sourceError, setSourceError] = useState('');
+  const [dreamMaxPages, setDreamMaxPages] = useState(25);
+  const [dreamSourceId, setDreamSourceId] = useState('');
+  const [dreamDryRun, setDreamDryRun] = useState(true);
+  const [dreamRun, setDreamRun] = useState<ConsoleRun | null>(null);
+  const [dreamError, setDreamError] = useState('');
 
   const pendingCount = useMemo(
     () => proposals.filter(item => item.status === 'pending').length,
@@ -109,6 +128,20 @@ export function TakeProposalsPage() {
   useEffect(() => {
     void load();
   }, [status]);
+
+  useEffect(() => {
+    if (!dreamRun || dreamRun.status !== 'running') return;
+    const timer = setInterval(async () => {
+      try {
+        const next = await api.run(dreamRun.id) as ConsoleRun;
+        setDreamRun(next);
+        if (next.status !== 'running') void load();
+      } catch (err) {
+        setDreamError(err instanceof Error ? err.message : String(err));
+      }
+    }, 1500);
+    return () => clearInterval(timer);
+  }, [dreamRun?.id, dreamRun?.status]);
 
   const act = async (id: number, action: 'accept' | 'reject') => {
     setActingId(id);
@@ -147,6 +180,21 @@ export function TakeProposalsPage() {
     setSourceError('');
   };
 
+  const startDream = async () => {
+    setDreamError('');
+    try {
+      const res = await api.startDreamRun({
+        phase: 'propose_takes',
+        sourceId: dreamSourceId.trim() || undefined,
+        maxPages: dreamMaxPages,
+        dryRun: dreamDryRun,
+      }) as { runId: string };
+      setDreamRun(await api.run(res.runId) as ConsoleRun);
+    } catch (err) {
+      setDreamError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
   return (
     <div className="pm-page take-page">
       <div className="pm-section-head">
@@ -163,6 +211,46 @@ export function TakeProposalsPage() {
         <span>当前筛选 <b>{statusOptions.find(item => item.value === status)?.label}</b></span>
         <span>列表数量 <b>{proposals.length}</b></span>
         <span>待审 <b>{pendingCount}</b></span>
+      </div>
+
+      <div className="pm-card take-dream-runner">
+        <div>
+          <h2>Dream propose_takes</h2>
+          <p className="pm-muted">Run candidate-take extraction in a small batch.</p>
+        </div>
+        <div className="take-dream-controls">
+          <label>
+            <span>Max pages</span>
+            <input
+              type="number"
+              min={1}
+              step={1}
+              value={dreamMaxPages}
+              onChange={(event) => setDreamMaxPages(Math.max(1, Number(event.target.value) || 1))}
+            />
+          </label>
+          <label>
+            <span>Source ID</span>
+            <input
+              value={dreamSourceId}
+              onChange={(event) => setDreamSourceId(event.target.value)}
+              placeholder="optional"
+            />
+          </label>
+          <label className="take-dream-checkbox">
+            <input
+              type="checkbox"
+              checked={dreamDryRun}
+              onChange={(event) => setDreamDryRun(event.target.checked)}
+            />
+            <span>Dry run</span>
+          </label>
+          <button className="pm-primary" onClick={() => void startDream()} disabled={dreamRun?.status === 'running'}>
+            Run
+          </button>
+        </div>
+        {dreamError && <div className="pm-error-text">{dreamError}</div>}
+        {dreamRun && <RunOutput run={dreamRun} />}
       </div>
 
       <div className="take-toolbar">
@@ -263,6 +351,18 @@ export function TakeProposalsPage() {
           </div>
         </>
       )}
+    </div>
+  );
+}
+
+function RunOutput({ run }: { run: ConsoleRun }) {
+  return (
+    <div className="run-output">
+      <div className="pm-kv"><span>Status</span><b className={`run-${run.status}`}>{run.status}</b></div>
+      <div className="pm-kv"><span>Command</span><b>{run.command.join(' ')}</b></div>
+      {run.error && <div className="pm-error-text">{run.error}</div>}
+      {run.stdout && <pre>{run.stdout}</pre>}
+      {run.stderr && <pre className="stderr">{run.stderr}</pre>}
     </div>
   );
 }
