@@ -34,6 +34,14 @@ export interface GBrainConfig {
   engine: 'postgres' | 'pglite';
   database_url?: string;
   database_path?: string;
+  /** Stable local-admin secret used by the desktop shell and direct HTTP serve. */
+  admin_bootstrap_token?: string;
+  /** Desktop-only preferences. Core runtime ignores these fields. */
+  desktop?: {
+    knowledge_directory?: string;
+    knowledge_source_id?: string;
+    last_migrated_version?: string;
+  };
   openai_api_key?: string;
   mimo_api_key?: string;
   zhipu_api_key?: string;
@@ -607,6 +615,7 @@ export const KNOWN_CONFIG_KEYS: readonly string[] = [
   // File-plane (GBrainConfig static fields)
   'engine',
   'database_url',
+  'admin_bootstrap_token',
   'database_path',
   'openai_api_key',
   'mimo_api_key',

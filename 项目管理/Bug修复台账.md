@@ -186,3 +186,12 @@
 - 描述：Admin Console 生成的 `mcp.extra_headers` 与 `mcp.discovery_extra_headers` 使用了 YAML 序列，但 tunnel-client 0.0.9 要求 `map[string]string`，导致 `profile_load` 报 `cannot unmarshal !!seq into map[string]string`。
 - 是否完成：是
 - 最终结果：两组 Header 改为 `Authorization: file:...` 映射格式，保留仓库外私密引用；补充 tunnel-client 所需的 `/.well-known/oauth-protected-resource/mcp` 路径型元数据；Doctor 子进程改为异步执行，避免 Admin 请求阻塞 PMBrain 自身的元数据探测；Windows 已启用系统代理时自动写入 `control_plane.http_proxy`，避免 OpenAI 直连超时且不代理本地 MCP；增加回归断言防止再次生成列表格式。
+
+## 2026-06-23 Windows 桌面安装包运行时与窗口唤醒修复
+
+- 时间：2026-06-23
+- 版本号：1.0.22
+- 标题：修复安装后缺少 PGLite 模块、图标无法唤醒窗口及失败状态误报
+- 描述：1.0.21 构建目录包含 PGLite，但 electron-builder 在宽泛复制 `extraResources` 时过滤了嵌套 `node_modules`，安装后 sidecar 无法解析 `@electric-sql/pglite/vector`；同时桌面窗口仅依赖 `ready-to-show`，单实例事件不能重建或强制显示窗口，服务失败时只要带端口又会被错误显示为“服务已就绪”。
+- 是否完成：是
+- 最终结果：PGLite package、vector 导出和 WASM/data 资源改为显式写入安装包，并新增构建后硬校验；窗口加载完成后强制显示，二次启动会显示、恢复、聚焦或重建窗口，所有窗口关闭后退出进程；失败状态不再误报就绪，老用户启动失败进入独立恢复页，正常启动仍直接进入管理台。新增桌面版安装与首次使用文档，版本更新为 1.0.22。

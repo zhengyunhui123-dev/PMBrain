@@ -16,6 +16,10 @@ supabase/.temp/
 # `import path from 'admin/dist/index.html' with { type: 'file' }`).
 # Build via: cd admin && bun install && bun run build.
 admin/node_modules/
+desktop/node_modules/
+desktop/out/
+desktop/dist/
+desktop/build/extraResources/*.exe
 .idea
 eval/reports/
 eval/data/world-v1/world.html
@@ -59,3 +63,7 @@ _import_code.cjs
 imports/
 temp-sections/
 temp_doc_reader.py
+
+# Generated PMBrain desktop runtime and installers
+desktop/build/extraResources/
+desktop/dist/

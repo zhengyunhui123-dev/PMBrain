@@ -560,7 +560,7 @@ function AgentDrawer({ agent, onClose, onRevoked }: { agent: Agent; onClose: () 
         <div className="section-title">详情</div>
         <div style={{ display: 'grid', gridTemplateColumns: '100px 1fr', gap: '6px 12px', fontSize: 13 }}>
           <span style={{ color: 'var(--text-secondary)' }}>Client ID</span>
-          <span className="mono">{(agent.id || agent.id || agent.client_id || '').substring(0, 24)}...</span>
+          <span className="mono">{(agent.id || agent.client_id || '').substring(0, 24)}...</span>
           <span style={{ color: 'var(--text-secondary)' }}>权限范围</span>
           <span>{(agent.scope || '').split(' ').filter(Boolean).map(s => (
             <span key={s} className={`badge badge-${s}`} style={{ marginRight: 4 }}>{s}</span>
