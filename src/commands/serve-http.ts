@@ -698,7 +698,10 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
   // — otherwise refuse to start. Logging the bootstrap-token value every
   // restart is the original gripe; with `GBRAIN_ADMIN_BOOTSTRAP_TOKEN` set
   // and `--suppress-bootstrap-token`, no value reaches the log.
-  const resolved = resolveBootstrapToken(envCompat('PMBRAIN_ADMIN_BOOTSTRAP_TOKEN', 'GBRAIN_ADMIN_BOOTSTRAP_TOKEN'));
+  const resolved = resolveBootstrapToken(
+    envCompat('PMBRAIN_ADMIN_BOOTSTRAP_TOKEN', 'GBRAIN_ADMIN_BOOTSTRAP_TOKEN')
+      ?? config.admin_bootstrap_token,
+  );
   if (resolved.kind === 'error') {
     console.error(resolved.message);
     process.exit(1);

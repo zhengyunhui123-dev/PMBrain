@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { api } from '../api';
+import { InfoIcon } from '../lib/shared';
 
 interface LogEntry {
   id: number;
@@ -15,21 +16,6 @@ interface LogEntry {
 
 function statusLabel(status: string): string {
   return status === 'success' ? '成功' : status === 'error' ? '错误' : status;
-}
-
-function InfoIcon({ title, children }: { title: string; children: React.ReactNode }) {
-  const [open, setOpen] = useState(false);
-  return (
-    <span className="info-popover-wrap">
-      <button className="info-icon" onClick={() => setOpen(value => !value)} aria-label={`${title}说明`}>?</button>
-      {open && (
-        <span className="info-popover">
-          <b>{title}</b>
-          <span>{children}</span>
-        </span>
-      )}
-    </span>
-  );
 }
 
 export function RequestLogPage() {
@@ -54,8 +40,6 @@ export function RequestLogPage() {
     if (diff < 86400000) return `${Math.floor(diff / 3600000)} 小时前`;
     return new Date(ts).toLocaleDateString();
   };
-
-
 
   const formatParams = (params: Record<string, unknown> | null) => {
     if (!params) return null;

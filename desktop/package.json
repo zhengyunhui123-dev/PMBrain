@@ -1,0 +1,29 @@
+{
+  "name": "pmbrain-desktop",
+  "productName": "PMBrain Desktop",
+  "version": "1.0.22",
+  "private": true,
+  "author": "PMBrain",
+  "description": "PMBrain Windows desktop shell",
+  "main": "out/main/index.js",
+  "type": "module",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "build:sidecar": "bun run scripts/build-sidecar.ts",
+    "build:win": "bun run build && bun run build:sidecar && electron-builder --win nsis && bun run verify:package",
+    "verify:package": "bun run scripts/verify-package.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "electron": "^36.5.0",
+    "electron-builder": "^26.0.12",
+    "electron-vite": "^3.1.0",
+    "typescript": "^5.8.3"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.9"
+  }
+}

@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { api } from '../api';
 import { AgentsPage } from './Agents';
 import { ChatGptTunnelPanel } from './ChatGptTunnel';
+import { RunOutput, InfoIcon, formatDate, type ConsoleRun, type BrainPageChunk } from '../lib/shared';
 
 interface SourceSummary {
   id: string;
@@ -57,15 +58,6 @@ interface BrainPageRow {
   preview: string;
 }
 
-interface BrainPageChunk {
-  id: number;
-  chunk_index: number;
-  chunk_text: string;
-  chunk_source: string;
-  token_count: number | null;
-  embedded: boolean;
-}
-
 interface IntentPreview {
   previewId: string;
   intent: string;
@@ -75,20 +67,6 @@ interface IntentPreview {
   riskLevel: 'read' | 'write' | 'maintenance';
   requiresConfirmation: boolean;
   clarification?: string;
-}
-
-interface ConsoleRun {
-  id: string;
-  kind: string;
-  status: 'queued' | 'running' | 'completed' | 'failed';
-  command: string[];
-  stdout: string;
-  stderr: string;
-  exitCode: number | null;
-  error: string | null;
-  startedAt: string;
-  completedAt: string | null;
-  durationMs: number | null;
 }
 
 interface DocsArticle {
@@ -107,11 +85,6 @@ interface NaturalTaskHistoryItem {
   error?: string;
 }
 
-function formatDate(value: string | null): string {
-  if (!value) return '无记录';
-  return new Date(value).toLocaleString();
-}
-
 function pct(value: number): string {
   return `${Number.isFinite(value) ? value.toFixed(value % 1 === 0 ? 0 : 1) : '0'}%`;
 }
@@ -128,21 +101,6 @@ function MetricCard({ label, value, hint }: { label: string; value: React.ReactN
 
 function LoadingBlock({ text = '正在读取 PMBrain 状态...' }: { text?: string }) {
   return <div className="pm-card pm-empty">{text}</div>;
-}
-
-function InfoIcon({ title, children }: { title: string; children: React.ReactNode }) {
-  const [open, setOpen] = useState(false);
-  return (
-    <span className="info-popover-wrap">
-      <button className="info-icon" onClick={() => setOpen(value => !value)} aria-label={`${title}说明`}>?</button>
-      {open && (
-        <span className="info-popover">
-          <b>{title}</b>
-          <span>{children}</span>
-        </span>
-      )}
-    </span>
-  );
 }
 
 function useOverview() {
@@ -202,7 +160,7 @@ export function KnowledgeWorkbenchPage({ onNavigate }: { onNavigate?: (page: str
         <MetricCard label="Pages" value={overview.stats.page_count} hint="知识库页面总量" />
         <MetricCard label="Chunks" value={overview.stats.chunk_count} hint={`${overview.stats.embedded_count} 已向量化`} />
         <MetricCard label="Embedding 覆盖率" value={pct(overview.embedding_coverage)} hint={`${overview.pending_embeddings} 待处理`} />
-        <MetricCard label="Sources" value={overview.sources.length} hint={`${overview.federated_source_count} federated`} />
+        <MetricCard label="Sources" value={overview.sources.filter((s: {archived?: boolean}) => !s.archived).length} hint={`${overview.federated_source_count} federated`} />
         <MetricCard label="MCP/API" value={overview.llm_enabled ? '可用' : '待配置'} hint={overview.provider_status.chat.chat_model ?? '未设置 chat_model'} />
       </div>
 
@@ -230,7 +188,7 @@ export function KnowledgeWorkbenchPage({ onNavigate }: { onNavigate?: (page: str
             <button className="pm-ghost" onClick={() => onNavigate?.('import')}>导入数据</button>
           </div>
           <div className="pm-source-list">
-            {overview.sources.map(source => (
+            {overview.sources.filter(s => !s.archived).map(source => (
               <div className="pm-source-row" key={source.id}>
                 <div>
                   <b>{source.name || source.id}</b>
@@ -448,20 +406,9 @@ function NaturalLanguagePanel({ compact = false, onNavigate }: { compact?: boole
   );
 }
 
-function RunOutput({ run }: { run: ConsoleRun }) {
-  return (
-    <div className="run-output">
-      <div className="pm-kv"><span>状态</span><b className={`run-${run.status}`}>{run.status}</b></div>
-      <div className="pm-kv"><span>命令</span><b>{run.command.join(' ')}</b></div>
-      {run.error && <div className="pm-error-text">{run.error}</div>}
-      {run.stdout && <pre>{run.stdout}</pre>}
-      {run.stderr && <pre className="stderr">{run.stderr}</pre>}
-    </div>
-  );
-}
-
 export function ImportDataPage() {
   const { overview, error, reload } = useOverview();
+  const [showArchived, setShowArchived] = useState(false);
   const [path, setPath] = useState('');
   const [sourceId, setSourceId] = useState('');
   const [sourceName, setSourceName] = useState('');
@@ -512,11 +459,17 @@ export function ImportDataPage() {
       {!overview ? <LoadingBlock /> : (
         <div className="pm-grid two-col">
           <div className="pm-card">
-            <h2>注册数据源</h2>
+            <div className="pm-section-head">
+              <h2>注册数据源</h2>
+              <label className="checkbox-label" style={{ fontSize: 12, fontWeight: 400, cursor: 'pointer' }}>
+                <input type="checkbox" checked={showArchived} onChange={e => setShowArchived(e.target.checked)} />
+                显示已归档
+              </label>
+            </div>
             <table>
               <thead><tr><th>Source</th><th>路径</th><th>页面</th><th>同步</th></tr></thead>
               <tbody>
-                {overview.sources.map(source => (
+                {overview.sources.filter(s => showArchived || !s.archived).map(source => (
                   <tr key={source.id}>
                     <td><b>{source.id}</b><div className="pm-muted">{source.federated ? 'federated' : 'isolated'}</div></td>
                     <td className="mono">{source.local_path ?? '-'}</td>
