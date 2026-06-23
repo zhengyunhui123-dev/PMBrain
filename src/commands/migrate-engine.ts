@@ -14,6 +14,7 @@ import type { EngineConfig } from '../core/types.ts';
 import { writeFileSync, readFileSync, existsSync, unlinkSync } from 'fs';
 import { createProgress } from '../core/progress.ts';
 import { getCliOptions, cliOptsToProgressOptions } from '../core/cli-options.ts';
+import { redactSourceConfig } from '../core/source-config-redact.ts';
 
 interface MigrateOpts {
   targetEngine: 'postgres' | 'pglite';
@@ -155,7 +156,7 @@ export async function runMigrateEngine(sourceEngine: BrainEngine, args: string[]
       try {
         await targetEngine.executeRaw(
           `INSERT INTO sources (id, name, config) VALUES ($1, $2, $3) ON CONFLICT (id) DO NOTHING`,
-          [s.id, s.name || s.id, JSON.stringify(s.config || {})],
+          [s.id, s.name || s.id, JSON.stringify(redactSourceConfig(s.config))],
         );
       } catch {
         // source may already exist — ignore

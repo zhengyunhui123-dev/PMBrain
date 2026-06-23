@@ -1,6 +1,6 @@
 appId: com.pmbrain.desktop
 productName: PMBrain
-artifactName: PMBrain-Setup-${version}.${ext}
+artifactName: PMBrain-Windows-x64-Setup-${version}.${ext}
 compression: store
 electronDist: node_modules/electron/dist
 directories:

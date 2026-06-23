@@ -60,8 +60,8 @@ jobs:
         with:
           name: pmbrain-desktop-windows
           path: |
-            desktop/dist/PMBrain-Setup-*.exe
-            desktop/dist/PMBrain-Setup-*.exe.blockmap
+            desktop/dist/PMBrain-Windows-x64-Setup-*.exe
+            desktop/dist/PMBrain-Windows-x64-Setup-*.exe.blockmap
             desktop/dist/latest.yml
 
   release:
@@ -77,7 +77,7 @@ jobs:
           files: |
             artifacts/gbrain-darwin-arm64/gbrain-darwin-arm64
             artifacts/gbrain-linux-x64/gbrain-linux-x64
-            artifacts/pmbrain-desktop-windows/PMBrain-Setup-*.exe
-            artifacts/pmbrain-desktop-windows/PMBrain-Setup-*.exe.blockmap
+            artifacts/pmbrain-desktop-windows/PMBrain-Windows-x64-Setup-*.exe
+            artifacts/pmbrain-desktop-windows/PMBrain-Windows-x64-Setup-*.exe.blockmap
             artifacts/pmbrain-desktop-windows/latest.yml
           generate_release_notes: true

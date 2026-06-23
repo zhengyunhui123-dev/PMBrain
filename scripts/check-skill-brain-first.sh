@@ -44,25 +44,35 @@ GBRAIN_SKILLS_DIR="$ROOT/skills" bun run src/cli.ts doctor --fast --json >"$TMPO
 # Extract the skill_brain_first check status. Use python3 (already a
 # repo-wide dependency via image-decoders + admin tooling) so we don't
 # add jq to the verify chain.
-STATUS=$(python3 -c "
+PYTHON_BIN=""
+if python3 -c "import sys" >/dev/null 2>&1; then
+  PYTHON_BIN="python3"
+elif python -c "import sys" >/dev/null 2>&1; then
+  PYTHON_BIN="python"
+else
+  echo "ERROR: Python is required to parse doctor --json output." >&2
+  exit 2
+fi
+
+STATUS=$("$PYTHON_BIN" -c "
 import json, sys
-with open('$TMPOUT') as fp:
-    for line in fp:
-        line = line.strip()
-        if not (line.startswith('{') and line.endswith('}')):
-            continue
-        try:
-            report = json.loads(line)
-        except Exception:
-            continue
-        for c in report.get('checks', []):
-            if c.get('name') == 'skill_brain_first':
-                print(c.get('status', 'missing'))
-                sys.exit(0)
-        print('missing')
-        sys.exit(0)
+sys.stdin.reconfigure(encoding='utf-8-sig')
+for line in sys.stdin:
+    line = line.strip().lstrip('\ufeff')
+    if not (line.startswith('{') and line.endswith('}')):
+        continue
+    try:
+        report = json.loads(line)
+    except Exception:
+        continue
+    for c in report.get('checks', []):
+        if c.get('name') == 'skill_brain_first':
+            print(c.get('status', 'missing'))
+            sys.exit(0)
+    print('missing')
+    sys.exit(0)
 print('parse_error')
-" 2>/dev/null || echo "parse_error")
+" <"$TMPOUT" 2>/dev/null || echo "parse_error")
 
 case "$STATUS" in
   ok)

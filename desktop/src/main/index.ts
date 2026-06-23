@@ -60,6 +60,7 @@ async function startSidecar(openAdmin: boolean): Promise<void> {
       ...runtime(),
       port,
       bootstrapToken,
+      clientVersion: app.getVersion(),
       logger,
       onState: (state) => {
         sendState(state);
