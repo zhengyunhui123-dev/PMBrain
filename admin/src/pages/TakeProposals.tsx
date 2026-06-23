@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { api } from '../api';
+import { RunOutput, formatDate, type ConsoleRun, type BrainPageChunk } from '../lib/shared';
 
 interface TakeProposal {
   id: number;
@@ -17,30 +18,6 @@ interface TakeProposal {
   promoted_row_num: number | null;
   existing_take_count: number;
 }
-
-interface BrainPageChunk {
-  id: number;
-  chunk_index: number;
-  chunk_text: string;
-  chunk_source: string;
-  token_count: number | null;
-  embedded: boolean;
-}
-
-interface ConsoleRun {
-  id: string;
-  kind: string;
-  status: 'queued' | 'running' | 'completed' | 'failed';
-  command: string[];
-  stdout: string;
-  stderr: string;
-  exitCode: number | null;
-  error: string | null;
-  startedAt: string;
-  completedAt: string | null;
-  durationMs: number | null;
-}
-
 const statusOptions = [
   { value: 'pending', label: '待审' },
   { value: 'accepted', label: '已接受' },
@@ -76,11 +53,6 @@ const domainLabels: Record<string, string> = {
   pricing: '定价',
   market: '市场',
 };
-
-function formatDate(value: string | null): string {
-  if (!value) return '-';
-  return new Date(value).toLocaleString();
-}
 
 function weightLabel(value: number): string {
   return Number.isFinite(value) ? value.toFixed(2) : '-';
@@ -293,7 +265,7 @@ export function TakeProposalsPage() {
               </button>
               <div><span>持有者</span><b>{item.holder}</b></div>
               <div><span>已有观点</span><b>{item.existing_take_count}</b></div>
-              <div><span>提出时间</span><b>{formatDate(item.proposed_at)}</b></div>
+              <div><span>提出时间</span><b>{formatDate(item.proposed_at, '-')}</b></div>
               {item.promoted_row_num !== null && (
                 <div><span>正式行号</span><b>#{item.promoted_row_num}</b></div>
               )}
@@ -330,7 +302,7 @@ export function TakeProposalsPage() {
               <div><span>Source</span><b>{sourceProposal.source_id}</b></div>
               <div><span>候选观点</span><b>#{sourceProposal.id}</b></div>
               <div><span>状态</span><b>{labelFrom(statusLabels, sourceProposal.status)}</b></div>
-              <div><span>提出时间</span><b>{formatDate(sourceProposal.proposed_at)}</b></div>
+              <div><span>提出时间</span><b>{formatDate(sourceProposal.proposed_at, '-')}</b></div>
             </div>
             <h3>原文依据</h3>
             <p className="pm-hint">这个候选观点就是从下方页面正文中抽取出来的。可以先阅读原文，再回到卡片接受或拒绝。</p>
@@ -351,18 +323,6 @@ export function TakeProposalsPage() {
           </div>
         </>
       )}
-    </div>
-  );
-}
-
-function RunOutput({ run }: { run: ConsoleRun }) {
-  return (
-    <div className="run-output">
-      <div className="pm-kv"><span>Status</span><b className={`run-${run.status}`}>{run.status}</b></div>
-      <div className="pm-kv"><span>Command</span><b>{run.command.join(' ')}</b></div>
-      {run.error && <div className="pm-error-text">{run.error}</div>}
-      {run.stdout && <pre>{run.stdout}</pre>}
-      {run.stderr && <pre className="stderr">{run.stderr}</pre>}
     </div>
   );
 }

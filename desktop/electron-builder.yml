@@ -1,0 +1,28 @@
+appId: com.pmbrain.desktop
+productName: PMBrain
+artifactName: PMBrain-Setup-${version}.${ext}
+compression: store
+electronDist: node_modules/electron/dist
+directories:
+  output: dist
+files:
+  - out/**/*
+extraResources:
+  - from: build/extraResources/pmbrain-runtime
+    to: pmbrain-runtime
+  # Broad file sets omit nested node_modules, so PGLite must be copied explicitly.
+  - from: ../node_modules/@electric-sql/pglite
+    to: pmbrain-runtime/node_modules/@electric-sql/pglite
+win:
+  target:
+    - nsis
+  executableName: PMBrain
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+publish:
+  provider: github
+  owner: zhengyunhui123-dev
+  repo: PMBrain

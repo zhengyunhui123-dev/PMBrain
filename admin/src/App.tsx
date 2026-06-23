@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { LoginPage } from './pages/Login';
 import { AgentsPage } from './pages/Agents';
 import { RequestLogPage } from './pages/RequestLog';
@@ -17,27 +17,16 @@ import {
 } from './pages/Console';
 import { api } from './api';
 
-type Page =
-  | 'login'
-  | 'dashboard'
-  | 'import'
-  | 'data'
-  | 'takes'
-  | 'docs'
-  | 'natural'
-  | 'mcp'
-  | 'config'
-  | 'agents'
-  | 'log'
-  | 'calibration'
-  | 'jobs'
-  | 'diagnostics'
-  | 'settings';
+const PAGES = [
+  'login', 'dashboard', 'import', 'data', 'takes', 'docs', 'natural',
+  'mcp', 'config', 'agents', 'log', 'calibration', 'jobs', 'diagnostics', 'settings',
+] as const;
+
+type Page = typeof PAGES[number];
 
 function getPage(): Page {
   const hash = window.location.hash.replace('#', '') || 'dashboard';
-  if (['login', 'dashboard', 'import', 'data', 'takes', 'docs', 'natural', 'mcp', 'config', 'agents', 'log', 'calibration', 'jobs', 'diagnostics', 'settings'].includes(hash)) return hash as Page;
-  return 'dashboard';
+  return PAGES.includes(hash as Page) ? hash as Page : 'dashboard';
 }
 
 export function App() {
@@ -45,7 +34,7 @@ export function App() {
   const [helpOpen, setHelpOpen] = useState(false);
   const [supportPanel, setSupportPanel] = useState<'wecom' | null>(null);
   const wecomQrSrc = `${import.meta.env.BASE_URL}wecom-helper.jpg`;
-  const navGroups: Array<{ title: string; items: Array<{ page: Page; label: string }> }> = [
+  const navGroups: Array<{ title: string; items: Array<{ page: Page; label: string }> }> = useMemo(() => [
     {
       title: '工作台',
       items: [
@@ -77,7 +66,7 @@ export function App() {
         { page: 'settings', label: '设置' },
       ],
     },
-  ];
+  ], []);
 
   useEffect(() => {
     const onHash = () => setPage(getPage());

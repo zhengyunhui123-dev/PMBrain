@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self'; script-src 'self'" />
+    <title>PMBrain 桌面设置</title>
+  </head>
+  <body>
+    <main class="app-shell">
+      <aside class="rail">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></div>
+          <div><b>PMBrain</b><small>DESKTOP</small></div>
+        </div>
+        <nav aria-label="配置步骤">
+          <button class="rail-item active" data-target="setup"><span>01</span>基础配置</button>
+          <button class="rail-item" data-target="integrations"><span>02</span>MCP 接入</button>
+          <button class="rail-item" data-target="updates"><span>03</span>软件更新</button>
+        </nav>
+        <div class="service-status">
+          <i id="service-dot"></i>
+          <div><b id="service-label">等待配置</b><small id="service-detail">LOCAL</small></div>
+        </div>
+      </aside>
+
+      <section class="workspace">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow" id="page-eyebrow">FIRST RUN</p>
+            <h1 id="page-title">把 PMBrain 安顿在这台电脑上</h1>
+          </div>
+          <div class="top-actions">
+            <button class="ghost" id="open-logs">日志</button>
+            <button class="solid" id="open-admin" disabled>进入管理台</button>
+          </div>
+        </header>
+
+        <div class="notice error" id="global-error" hidden></div>
+        <div class="notice success" id="global-success" hidden></div>
+
+        <section class="panel active" id="panel-setup">
+          <div class="existing-config" id="existing-config" hidden>
+            <span>LOCAL CONFIG</span>
+            <div><b>已自动接入本机配置</b><small>数据库与 API Key 均沿用现有值；留空不会清除原配置。</small></div>
+          </div>
+          <div class="section-heading">
+            <div><span class="index">01</span><h2>数据库</h2></div>
+            <p>PGLite 无需外部服务；Docker 模式连接你已有的 Postgres。</p>
+          </div>
+          <div class="mode-grid" role="radiogroup" aria-label="数据库模式">
+            <label class="mode-card selected" id="mode-pglite-card">
+              <input type="radio" name="engine" value="pglite" checked />
+              <span class="mode-icon">P</span>
+              <span><b>PGLite 零配置</b><small>数据库随安装包提供，数据保存在本机用户目录。</small></span>
+              <em>推荐</em>
+            </label>
+            <label class="mode-card" id="mode-postgres-card">
+              <input type="radio" name="engine" value="postgres" />
+              <span class="mode-icon docker">D</span>
+              <span><b>Docker Postgres</b><small>适合已有 pgvector 容器或更大规模知识库。</small></span>
+            </label>
+          </div>
+          <div class="field-group" id="pglite-fields">
+            <label for="database-path">PGLite 数据库路径</label>
+            <div class="input-action"><input id="database-path" spellcheck="false" /><button class="ghost choose" data-input="database-path">选择</button></div>
+          </div>
+          <div class="field-group" id="postgres-fields" hidden>
+            <label for="database-url">Postgres 连接地址</label>
+            <input id="database-url" type="password" spellcheck="false" placeholder="postgresql://postgres:postgres@127.0.0.1:5433/pmbrain" />
+            <small id="postgres-status">桌面端只连接数据库，不会自动安装或启动 Docker。</small>
+          </div>
+
+          <div class="section-heading separated">
+            <div><span class="index">02</span><h2>知识库目录</h2></div>
+            <p>完成后注册为可归档、可恢复的独立 Source。</p>
+          </div>
+          <div class="field-group">
+            <label for="knowledge-directory">本地资料目录</label>
+            <div class="input-action"><input id="knowledge-directory" spellcheck="false" /><button class="ghost choose" data-input="knowledge-directory">选择</button></div>
+          </div>
+
+          <div class="section-heading separated">
+            <div><span class="index">03</span><h2>模型密钥</h2></div>
+            <p>可只填一个。留空会保留已有值；未配置时先关闭向量化。</p>
+          </div>
+          <div class="key-grid">
+            <label>MIMO<input id="key-mimo" type="password" autocomplete="off" /><small data-key-status="mimo"></small></label>
+            <label>智谱 AI<input id="key-zhipu" type="password" autocomplete="off" /><small data-key-status="zhipu"></small></label>
+            <label>DeepSeek<input id="key-deepseek" type="password" autocomplete="off" /><small data-key-status="deepseek"></small></label>
+            <label>OpenAI<input id="key-openai" type="password" autocomplete="off" /><small data-key-status="openai"></small></label>
+            <label>Anthropic<input id="key-anthropic" type="password" autocomplete="off" /><small data-key-status="anthropic"></small></label>
+            <label>ZeroEntropy<input id="key-zeroentropy" type="password" autocomplete="off" /><small data-key-status="zeroentropy"></small></label>
+          </div>
+          <div class="form-footer">
+            <p id="config-path"></p>
+            <button class="primary" id="save-setup"><span>保存配置并启动</span><i></i></button>
+          </div>
+        </section>
+
+        <section class="panel" id="panel-integrations">
+          <div class="section-heading">
+            <div><span class="index">04</span><h2>MCP / API 配置助手</h2></div>
+            <p>为每个客户端创建独立凭证，写入前自动备份并执行 MCP smoke test。</p>
+          </div>
+          <div class="credential-switch">
+            <label><input type="radio" name="credential" value="api_key" checked /> API Key + Bearer（自动接入）</label>
+            <label><input type="radio" name="credential" value="oauth" /> OAuth client_credentials（只生成凭证）</label>
+          </div>
+          <div class="integration-grid" id="integration-grid"></div>
+          <div class="result-console" id="result-console" hidden>
+            <div><b id="result-title">配置结果</b><button class="ghost" id="copy-result">复制</button></div>
+            <pre id="result-content"></pre>
+            <p id="result-meta"></p>
+          </div>
+          <div class="finish-bar">
+            <div><b>配置完成后</b><small>重启对应 AI 客户端，让它重新加载 MCP 配置。</small></div>
+            <button class="primary" id="finish-open-admin">进入 PMBrain 管理台</button>
+          </div>
+        </section>
+
+        <section class="panel" id="panel-updates">
+          <div class="section-heading">
+            <div><span class="index">05</span><h2>软件更新</h2></div>
+            <p>自动从 GitHub Releases 检查并下载桌面版更新。</p>
+          </div>
+          <article class="update-card">
+            <div class="update-version"><span>CURRENT</span><b id="update-current">—</b></div>
+            <div class="update-copy"><b id="update-title">等待检查更新</b><p id="update-message">PMBrain 会在启动后自动检查，此处也可以手动检查。</p></div>
+            <button class="primary" id="update-action"><span>检查更新</span><i></i></button>
+          </article>
+          <div class="update-progress" id="update-progress" hidden><i></i></div>
+          <div class="update-safety">
+            <span>SAFE UPDATE</span>
+            <p>安装前自动停止 sidecar；更新后自动执行数据库迁移，再启动服务并完成健康检查。你的现有数据库、API Key 和知识库目录不会被覆盖。</p>
+          </div>
+        </section>
+
+        <section class="panel recovery-panel" id="panel-recovery">
+          <div class="recovery-code">STARTUP / INTERRUPTED</div>
+          <h2>本机配置已保留，PMBrain 服务没有成功启动</h2>
+          <p id="recovery-message">请重试启动；如果仍然失败，可以打开日志查看原因。无需重新填写数据库或 API Key。</p>
+          <div class="recovery-actions">
+            <button class="primary" id="recovery-retry"><span>重新启动服务</span><i></i></button>
+            <button class="ghost" id="recovery-logs">打开日志</button>
+            <button class="ghost" id="recovery-settings">修改配置</button>
+          </div>
+          <div class="recovery-note"><b>配置安全</b><span>故障恢复不会清空或重建现有 config.json。</span></div>
+        </section>
+      </section>
+    </main>
+    <script type="module" src="/src.ts"></script>
+  </body>
+</html>
