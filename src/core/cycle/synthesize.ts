@@ -892,8 +892,8 @@ Two reasons max, one phrase each.`;
       } catch { /* fall through */ }
     }
   }
-  // Couldn't parse — default to NOT processing (cheap fallback).
-  return { worth_processing: false, reasons: ['judge response unparseable'] };
+  // Couldn't parse — default to processing (lenient fallback for non-Anthropic models).
+  return { worth_processing: true, reasons: ['defaulted to process (unparseable verdict)'] };
 }
 
 // ── Subagent prompt ──────────────────────────────────────────────────

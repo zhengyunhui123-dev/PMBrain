@@ -187,7 +187,7 @@ function listTextFiles(dir: string): string[] {
           // skipped at descent time.
           if (!pruneDir(name, d)) continue;
           walk(full);
-        } else if (st.isFile() && (name.endsWith('.txt') || name.endsWith('.md'))) {
+        } else if (st.isFile() && (name.endsWith('.txt') || name.endsWith('.md') || name.endsWith('.jsonl'))) {
           out.push(full);
         }
       } catch {
