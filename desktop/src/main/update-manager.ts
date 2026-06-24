@@ -47,6 +47,7 @@ const CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
 export class UpdateManager {
   private readonly options: UpdateManagerOptions;
+  private initialTimer: NodeJS.Timeout | null = null;
   private timer: NodeJS.Timeout | null = null;
   private checking = false;
   private downloading = false;
@@ -69,13 +70,18 @@ export class UpdateManager {
   start(): void {
     this.emit(this.state);
     if (!this.options.packaged) return;
-    const initial = setTimeout(() => void this.check(), 5_000);
-    initial.unref();
+    this.initialTimer = setTimeout(() => {
+      this.initialTimer = null;
+      void this.check();
+    }, 5_000);
+    this.initialTimer.unref();
     this.timer = setInterval(() => void this.check(), CHECK_INTERVAL_MS);
     this.timer.unref();
   }
 
   stop(): void {
+    if (this.initialTimer) clearTimeout(this.initialTimer);
+    this.initialTimer = null;
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
   }

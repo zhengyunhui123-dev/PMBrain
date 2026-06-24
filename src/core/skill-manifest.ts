@@ -46,7 +46,7 @@ export interface ManifestLoadResult {
  */
 function parseSkillName(skillMdPath: string): string | null {
   try {
-    const content = readFileSync(skillMdPath, 'utf-8');
+    const content = readFileSync(skillMdPath, 'utf-8').replace(/\r\n?/g, '\n');
     const fmMatch = content.match(/^---\n([\s\S]*?)\n---/);
     if (!fmMatch) return null;
     const fm = fmMatch[1];
