@@ -18,6 +18,7 @@ export type SidecarState =
 interface SidecarManagerOptions extends CliRuntime {
   port: number;
   bootstrapToken: string;
+  clientVersion: string;
   logger: DesktopLogger;
   onState?: (state: SidecarState) => void;
 }
@@ -41,7 +42,13 @@ export class SidecarManager {
     this.stopping = false;
     this.options.onState?.({ phase: 'starting', port: this.port });
     this.spawnProcess();
-    await this.waitUntilHealthy();
+    try {
+      await this.waitUntilHealthy();
+    } catch (error) {
+      this.stopping = true;
+      await this.terminateChild();
+      throw error;
+    }
     const adminUrl = await this.issueMagicLink();
     this.options.onState?.({ phase: 'ready', port: this.port, adminUrl });
     return adminUrl;
@@ -100,7 +107,7 @@ export class SidecarManager {
       return payloads.find((item) => item.id === id) ?? payloads[0] ?? {};
     };
     await call('initialize', {
-      protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'pmbrain-desktop', version: '1.0.22' },
+      protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'pmbrain-desktop', version: this.options.clientVersion },
     }, 1);
     const tools = await call('tools/list', {}, 2);
     const stats = await call('tools/call', { name: 'get_stats', arguments: {} }, 3);
@@ -109,6 +116,11 @@ export class SidecarManager {
 
   async stop(): Promise<void> {
     this.stopping = true;
+    await this.terminateChild();
+    this.options.onState?.({ phase: 'stopped', port: this.port });
+  }
+
+  private async terminateChild(): Promise<void> {
     const child = this.child;
     this.child = null;
     if (!child || child.exitCode !== null) return;
@@ -124,7 +136,6 @@ export class SidecarManager {
         resolveDone();
       });
     });
-    this.options.onState?.({ phase: 'stopped', port: this.port });
   }
 
   private spawnProcess(): void {
@@ -187,6 +198,7 @@ export class SidecarManager {
         } catch (error) {
           failure = error instanceof Error ? error.message : String(error);
           this.options.logger.write('desktop', `Recovery attempt failed: ${failure}`);
+          await this.terminateChild();
         }
       }
     } finally {
