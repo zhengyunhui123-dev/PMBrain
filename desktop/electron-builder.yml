@@ -3,6 +3,7 @@ productName: PMBrain
 artifactName: PMBrain-Windows-x64-Setup-${version}.${ext}
 compression: store
 electronDist: node_modules/electron/dist
+electronVersion: 36.5.0
 directories:
   output: dist
 files:

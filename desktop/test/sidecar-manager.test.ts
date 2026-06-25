@@ -11,7 +11,7 @@ describe('desktop sidecar manager', () => {
       resourcesPath: '',
       port: 3131,
       bootstrapToken: 'test-bootstrap-token',
-      clientVersion: '1.0.23',
+      clientVersion: '1.0.24',
       logger,
     });
     let terminated = false;

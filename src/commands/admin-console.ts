@@ -1,7 +1,7 @@
 import { spawn } from 'child_process';
 import { createHash, randomUUID } from 'crypto';
 import { lstatSync } from 'fs';
-import { isAbsolute, relative, resolve } from 'path';
+import { basename, isAbsolute, relative, resolve } from 'path';
 import type { BrainEngine } from '../core/engine.ts';
 import type { GBrainConfig } from '../core/config.ts';
 import { isSensitiveConfigKey, redactConfigValue } from './config.ts';
@@ -665,34 +665,53 @@ async function callIntentModel(config: GBrainConfig, text: string, attempt: numb
   return extractIntentObjectFromChatResult(result);
 }
 
+/**
+ * 解析当前运行环境下的 CLI 入口命令前缀。
+ * - 如果当前进程是用 pmbrain-sidecar.js 启动的（生产环境打包），
+ *   返回 ['bun', '<pmbrain-sidecar.js 的绝对路径>']。
+ * - 如果当前进程是用 src/cli.ts 启动的（开发环境），
+ *   返回 ['bun', 'run', 'src/cli.ts']。
+ */
+function resolveCliEntry(): string[] {
+  const arg1 = process.argv[1] ?? '';
+  const entryName = basename(arg1);
+  if (entryName === 'pmbrain-sidecar.js') {
+    // 生产环境：sidecar 已编译为单个 JS 文件
+    return ['bun', arg1];
+  }
+  // 开发环境：直接用 bun run src/cli.ts
+  return ['bun', 'run', 'src/cli.ts'];
+}
+
 function commandForPreview(preview: IntentPreview): string[] {
   const s = preview.slots;
+  const prefix = resolveCliEntry();
   switch (preview.intent) {
     case 'capture_memory':
-      return ['bun', 'src/cli.ts', 'capture', String(s.content ?? '')];
+      return [...prefix, 'capture', String(s.content ?? '')];
     case 'search_brain':
-      return ['bun', 'src/cli.ts', 'search', String(s.query ?? '')];
+      return [...prefix, 'search', String(s.query ?? '')];
     case 'import_path': {
-      const cmd = ['bun', 'src/cli.ts', 'import', String(s.path ?? '')];
+      const cmd = [...prefix, 'import', String(s.path ?? '')];
       if (s.includeOffice !== false) cmd.push('--include-office');
       if (s.includeImages === true) cmd.push('--include-images');
       if (typeof s.sourceId === 'string' && s.sourceId.trim()) cmd.push('--source-id', s.sourceId.trim());
       return cmd;
     }
     case 'sync_source':
-      return ['bun', 'src/cli.ts', 'sync', '--source', String(s.sourceId ?? '')];
+      return [...prefix, 'sync', '--source', String(s.sourceId ?? '')];
     case 'sync_all':
-      return ['bun', 'src/cli.ts', 'sync', '--all'];
+      return [...prefix, 'sync', '--all'];
     case 'embed_stale':
-      return ['bun', 'src/cli.ts', 'embed', '--stale'];
+      return [...prefix, 'embed', '--stale'];
     case 'show_sources':
-      return ['bun', 'src/cli.ts', 'sources', 'list', '--json'];
+      return [...prefix, 'sources', 'list', '--json'];
     case 'show_stats':
-      return ['bun', 'src/cli.ts', 'stats'];
+      return [...prefix, 'stats'];
     case 'show_config':
-      return ['bun', 'src/cli.ts', 'config', 'show'];
+      return [...prefix, 'config', 'show'];
     case 'doctor_check':
-      return ['bun', 'src/cli.ts', 'doctor', '--fast'];
+      return [...prefix, 'doctor', '--fast'];
   }
 }
 
@@ -724,7 +743,8 @@ export async function startImportRun(engine: BrainEngine, input: {
   workers?: number;
 }, cwd: string): Promise<ConsoleRun> {
   if (!input.path.trim()) throw new Error('Path is required');
-  const cmd = ['bun', 'src/cli.ts', 'import', input.path.trim()];
+  const prefix = resolveCliEntry();
+  const cmd = [...prefix, 'import', input.path.trim()];
   if (input.includeOffice) cmd.push('--include-office');
   if (input.includeImages) cmd.push('--include-images');
   if (input.noEmbed) cmd.push('--no-embed');
@@ -745,7 +765,8 @@ export function startSourceAddRun(input: {
   if (!/^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$/.test(sourceId)) {
     throw new Error('Source ID must be lowercase alphanumeric with optional dashes');
   }
-  const cmd = ['bun', 'src/cli.ts', 'sources', 'add', sourceId, '--path', input.path.trim()];
+  const prefix = resolveCliEntry();
+  const cmd = [...prefix, 'sources', 'add', sourceId, '--path', input.path.trim()];
   if (input.name?.trim()) cmd.push('--name', input.name.trim());
   cmd.push(input.federated === false ? '--no-federated' : '--federated');
   return startRun('source_add', cmd, cwd);
@@ -758,7 +779,8 @@ export function buildDreamCommand(input: {
   dryRun?: boolean;
 }): string[] {
   const phase = input.phase ?? 'propose_takes';
-  const cmd = ['bun', 'src/cli.ts', 'dream', '--phase', phase];
+  const prefix = resolveCliEntry();
+  const cmd = [...prefix, 'dream', '--phase', phase];
   if (input.sourceId?.trim()) cmd.push('--source', input.sourceId.trim());
   if (input.maxPages !== undefined) {
     const maxPages = Math.floor(Number(input.maxPages));
