@@ -204,3 +204,12 @@
 - 描述：全项目基线检查发现数据库切换会原样序列化 Source 配置，桌面 sidecar 启动超时或恢复失败时可能遗留子进程，技能路由与 frontmatter 解析器在 Windows CRLF 文件上会产生大面积误报；安装包名称也未明确标注 Windows 平台。
 - 是否完成：是
 - 最终结果：Source 配置迁移统一经过敏感字段脱敏；sidecar 启动失败及每次恢复失败后均会终止当前子进程；自动更新的首次检查定时器可随退出清理；MCP 客户端版本改为读取应用版本；技能路由、frontmatter 与 manifest 解析兼容 CRLF；安装包更名为 `PMBrain-Windows-x64-Setup-1.0.23.exe`，发布工作流与用户文档同步更新。
+
+## 2026-06-25 Windows 桌面端 Office/PDF 导入运行时缺失
+
+- 时间：2026-06-25 09:04:39
+- 版本号：1.0.25
+- 标题：修复桌面端打包后导入 Office/PDF 时缺少 @napi-rs/canvas
+- 描述：安装版执行 `import ... --include-office` 时，sidecar 能启动命令但在解析 `pdf-parse` 依赖时找不到 `@napi-rs/canvas`，随后 DOMMatrix/ImageData/Path2D polyfill 失败并报 `DOMMatrix is not defined`。
+- 是否完成：是
+- 最终结果：sidecar runtime 组装脚本显式复制 `@napi-rs/canvas` 与 Windows 原生包 `@napi-rs/canvas-win32-x64-msvc`，打包校验同步检查 canvas JS 与 `.node` 原生文件，版本更新为 1.0.25。

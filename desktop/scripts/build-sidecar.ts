@@ -4,8 +4,19 @@ import { dirname, join, resolve } from 'node:path';
 const desktopRoot = resolve(import.meta.dir, '..');
 const projectRoot = resolve(desktopRoot, '..');
 const outputDirectory = join(desktopRoot, 'build', 'extraResources', 'pmbrain-runtime');
-const pgliteSource = join(projectRoot, 'node_modules', '@electric-sql', 'pglite');
-const pgliteTarget = join(outputDirectory, 'node_modules', '@electric-sql', 'pglite');
+
+const runtimePackages = [
+  ['@electric-sql', 'pglite'],
+  ['@napi-rs', 'canvas'],
+  ['@napi-rs', 'canvas-win32-x64-msvc'],
+] as const;
+
+async function copyRuntimePackage(parts: readonly string[]): Promise<void> {
+  const source = join(projectRoot, 'node_modules', ...parts);
+  const target = join(outputDirectory, 'node_modules', ...parts);
+  await mkdir(dirname(target), { recursive: true });
+  await cp(source, target, { recursive: true });
+}
 
 await rm(outputDirectory, { recursive: true, force: true });
 await mkdir(outputDirectory, { recursive: true });
@@ -30,7 +41,8 @@ if (await build.exited !== 0) {
 }
 
 await cp(process.execPath, join(outputDirectory, 'bun.exe'));
-await mkdir(dirname(pgliteTarget), { recursive: true });
-await cp(pgliteSource, pgliteTarget, { recursive: true });
+for (const runtimePackage of runtimePackages) {
+  await copyRuntimePackage(runtimePackage);
+}
 
 console.log(`PMBrain runtime assembled at ${outputDirectory}`);

@@ -14,6 +14,10 @@ extraResources:
   # Broad file sets omit nested node_modules, so PGLite must be copied explicitly.
   - from: ../node_modules/@electric-sql/pglite
     to: pmbrain-runtime/node_modules/@electric-sql/pglite
+  - from: ../node_modules/@napi-rs/canvas
+    to: pmbrain-runtime/node_modules/@napi-rs/canvas
+  - from: ../node_modules/@napi-rs/canvas-win32-x64-msvc
+    to: pmbrain-runtime/node_modules/@napi-rs/canvas-win32-x64-msvc
 win:
   target:
     - nsis
