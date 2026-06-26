@@ -4920,6 +4920,35 @@ export const MIGRATIONS: Migration[] = [
         EXECUTE FUNCTION bump_page_generation_clock_fn();
     `,
   },
+  {
+    version: 108,
+    name: 'op_checkpoints_completed_keys_array_check',
+    // v1.0.31 / upstream 9bf96db8 adaptation: completed_keys is JSONB but
+    // semantically must be an array. Repair any pre-existing scalar to []
+    // and add a named CHECK so future out-of-band writes cannot corrupt
+    // checkpoint resume state.
+    idempotent: true,
+    sql: `
+      LOCK TABLE op_checkpoints IN SHARE ROW EXCLUSIVE MODE;
+
+      UPDATE op_checkpoints
+         SET completed_keys = '[]'::jsonb, updated_at = now()
+       WHERE jsonb_typeof(completed_keys) <> 'array';
+
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint
+           WHERE conname = 'op_checkpoints_completed_keys_array'
+             AND conrelid = 'op_checkpoints'::regclass
+        ) THEN
+          ALTER TABLE op_checkpoints
+            ADD CONSTRAINT op_checkpoints_completed_keys_array
+            CHECK (jsonb_typeof(completed_keys) = 'array');
+        END IF;
+      END $$;
+    `,
+  },
 ];
 
 export const LATEST_VERSION = MIGRATIONS.length > 0

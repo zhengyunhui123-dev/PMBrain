@@ -69,12 +69,18 @@ export async function loadOpCheckpoint(
   key: OpCheckpointKey,
 ): Promise<string[]> {
   try {
-    const rows = await engine.executeRaw<{ completed_keys: unknown }>(
-      `SELECT completed_keys FROM op_checkpoints
+    const rows = await engine.executeRaw<{ completed_keys: unknown; completed_kind: string | null }>(
+      `SELECT completed_keys, jsonb_typeof(completed_keys) AS completed_kind FROM op_checkpoints
        WHERE op = $1 AND fingerprint = $2`,
       [key.op, key.fingerprint],
     );
     if (rows.length === 0) return [];
+    if (rows[0]?.completed_kind !== 'array') {
+      console.error(
+        `[op-checkpoint] WARNING: op_checkpoints.completed_keys for (${key.op}, ${key.fingerprint}) is a non-array and was skipped. This implies schema drift, a disabled CHECK constraint, or an out-of-band writer.`,
+      );
+      return [];
+    }
     const raw = rows[0]?.completed_keys;
     // postgres.js returns JSONB as JS arrays; PGLite returns strings. Handle both.
     const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;

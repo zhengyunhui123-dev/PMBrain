@@ -635,7 +635,10 @@ CREATE INDEX IF NOT EXISTS idx_mcp_log_agent_time ON mcp_request_log(agent_name,
 CREATE TABLE IF NOT EXISTS op_checkpoints (
   op             TEXT NOT NULL,
   fingerprint    TEXT NOT NULL,
-  completed_keys JSONB NOT NULL DEFAULT '[]'::jsonb,
+  -- completed_keys must stay a JSONB array. The loader expects array-shaped
+  -- resume state; a scalar indicates schema drift or an out-of-band writer.
+  completed_keys JSONB NOT NULL DEFAULT '[]'::jsonb
+    CONSTRAINT op_checkpoints_completed_keys_array CHECK (jsonb_typeof(completed_keys) = 'array'),
   updated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (op, fingerprint)
 );
