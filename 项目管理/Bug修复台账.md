@@ -9,6 +9,15 @@
 - 是否完成：是
 - 最终结果：超时被 `handleTimeouts()` 直接 dead-letter 的长任务现在会显示真实消耗 1 次尝试；已补充单元测试和 E2E 断言；版本号更新为 1.0.28。
 
+## 2026-06-26 sync 导入阶段停滞中止修复
+
+- 时间：2026-06-26 22:00:00
+- 版本号：1.0.29
+- 标题：修复同步进程存活但导入无进度时无法自动释放的风险
+- 描述：同步进程可能仍在刷新 per-source DB lock heartbeat，但导入阶段长时间没有文件完成，界面和状态会显示仍在 running。移植上游 #1950 的 progress-aware stall watchdog，并按 PMBrain 环境变量前缀适配。
+- 是否完成：是
+- 最终结果：导入阶段无进度超过阈值会触发 abort，返回 `partial` 且 reason 为 `stall_timeout`，不推进 `last_commit`；下次同步可从原 checkpoint 继续。
+
 ## 2026-06-02 PGLite WASM 在 Windows 下崩溃
 
 - 时间：2026-06-02

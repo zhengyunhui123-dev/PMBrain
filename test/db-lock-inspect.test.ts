@@ -21,6 +21,8 @@ import {
   inspectLock,
   listStaleLocks,
   deleteLockRow,
+  liveSyncStatus,
+  syncLockId,
 } from '../src/core/db-lock.ts';
 
 let engine: PGLiteEngine;
@@ -183,3 +185,29 @@ describe('deleteLockRow', () => {
     await handle!.release();
   });
 });
+
+describe('liveSyncStatus', () => {
+  test('returns null when a source holds no sync lock', async () => {
+    expect(await liveSyncStatus(engine, 'idle-source')).toBeNull();
+  });
+
+  test('returns holder info for a live per-source sync lock', async () => {
+    const handle = await tryAcquireDbLock(engine, syncLockId('busy-source'));
+    expect(handle).not.toBeNull();
+    const live = await liveSyncStatus(engine, 'busy-source');
+    expect(live).not.toBeNull();
+    expect(live!.holder_pid).toBe(process.pid);
+    expect(live!.holder_host.length).toBeGreaterThan(0);
+    await handle!.release();
+  });
+
+  test('returns null for an expired sync lock', async () => {
+    await (engine as any).db.query(
+      `INSERT INTO gbrain_cycle_locks (id, holder_pid, holder_host, acquired_at, ttl_expires_at)
+       VALUES ($1, $2, $3, NOW() - INTERVAL '2 hours', NOW() - INTERVAL '1 hour')`,
+      [syncLockId('expired-source'), 31337, 'old-host'],
+    );
+    expect(await liveSyncStatus(engine, 'expired-source')).toBeNull();
+  });
+}
+);
