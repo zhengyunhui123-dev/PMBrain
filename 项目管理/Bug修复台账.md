@@ -1,5 +1,14 @@
 # Bug 修复台账
 
+## 2026-06-26 minion 超时尝试次数计数修复
+
+- 时间：2026-06-26 21:20:00
+- 版本号：1.0.28
+- 标题：修复 handleTimeouts 超时任务未计入 attempts_made 的问题
+- 描述：按 `PMBrain-local-upstream-fusion-plan.md` 的后台任务稳定性组，移植 GBrain `bb2e88c4` 中 #1737 的关键 diff。PMBrain 的超时处理逻辑内联在 `src/core/minions/queue.ts`，因此只在现有 SQL 中补充 `attempts_made = attempts_made + 1`，不新增第二套 handler-timeouts 文件。
+- 是否完成：是
+- 最终结果：超时被 `handleTimeouts()` 直接 dead-letter 的长任务现在会显示真实消耗 1 次尝试；已补充单元测试和 E2E 断言；版本号更新为 1.0.28。
+
 ## 2026-06-02 PGLite WASM 在 Windows 下崩溃
 
 - 时间：2026-06-02

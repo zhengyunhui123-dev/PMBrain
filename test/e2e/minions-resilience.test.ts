@@ -138,6 +138,7 @@ describeE2E('E2E: Minions resilience (OpenClaw real-world patterns)', () => {
 
       const final = await queue.getJob(job.id);
       expect(final?.error_text).toMatch(/timeout exceeded/i);
+      expect(final?.attempts_made).toBe(1);
     } finally {
       await a.disconnect();
       await b.disconnect();
