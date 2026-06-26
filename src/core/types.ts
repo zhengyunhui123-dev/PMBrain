@@ -330,6 +330,8 @@ export interface PageFilters {
 export interface GetPageOpts {
   /** Filter to a specific source. When omitted, getPage returns the first slug match across sources (pre-existing semantics). */
   sourceId?: string;
+  /** Federated read grant. Takes precedence over sourceId when non-empty. */
+  sourceIds?: string[];
   /** Include soft-deleted pages. Default false. See PageFilters.includeDeleted. */
   includeDeleted?: boolean;
 }
@@ -1047,6 +1049,7 @@ export interface TimelineOpts {
    * (pre-v0.31.8 behavior; preserved by the two-branch query in both engines).
    */
   sourceId?: string;
+  sourceIds?: string[];
 }
 
 // Raw data

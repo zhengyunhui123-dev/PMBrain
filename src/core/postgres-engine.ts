@@ -815,13 +815,19 @@ export class PostgresEngine implements BrainEngine {
   }
 
   // Pages CRUD
-  async getPage(slug: string, opts?: { sourceId?: string; includeDeleted?: boolean }): Promise<Page | null> {
+  async getPage(slug: string, opts?: { sourceId?: string; sourceIds?: string[]; includeDeleted?: boolean }): Promise<Page | null> {
     const sql = this.sql;
     const includeDeleted = opts?.includeDeleted === true;
     const sourceId = opts?.sourceId;
+    const sourceIds = opts?.sourceIds;
     // v0.26.5: default hides soft-deleted rows. Compose with optional sourceId
     // filter via fragment chaining (postgres.js supports sql`` composition).
-    const sourceCondition = sourceId ? sql`AND source_id = ${sourceId}` : sql``;
+    const sourceCondition =
+      sourceIds && sourceIds.length > 0
+        ? sql`AND source_id = ANY(${sourceIds}::text[])`
+        : sourceId
+          ? sql`AND source_id = ${sourceId}`
+          : sql``;
     const deletedCondition = includeDeleted ? sql`` : sql`AND deleted_at IS NULL`;
     const rows = await sql`
       SELECT id, source_id, slug, type, title, compiled_truth, timeline, frontmatter, content_hash, created_at, updated_at, deleted_at,
@@ -2399,8 +2405,22 @@ export class PostgresEngine implements BrainEngine {
     }
   }
 
-  async getLinks(slug: string, opts?: { sourceId?: string }): Promise<Link[]> {
+  async getLinks(slug: string, opts?: { sourceId?: string; sourceIds?: string[] }): Promise<Link[]> {
     const sql = this.sql;
+    if (opts?.sourceIds && opts.sourceIds.length > 0) {
+      const ids = opts.sourceIds;
+      const rows = await sql`
+        SELECT f.slug as from_slug, t.slug as to_slug,
+               l.link_type, l.context, l.link_source,
+               o.slug as origin_slug, l.origin_field
+        FROM links l
+        JOIN pages f ON f.id = l.from_page_id
+        JOIN pages t ON t.id = l.to_page_id
+        LEFT JOIN pages o ON o.id = l.origin_page_id AND o.source_id = ANY(${ids}::text[])
+        WHERE f.slug = ${slug} AND f.source_id = ANY(${ids}::text[]) AND t.source_id = ANY(${ids}::text[])
+      `;
+      return rows as unknown as Link[];
+    }
     // v0.31.8 (D16): two-branch query. Without opts.sourceId, no source filter
     // (preserves pre-v0.31.8 cross-source semantics). With opts.sourceId,
     // scope the from-page lookup. See pglite-engine.ts:getLinks for context.
@@ -2430,8 +2450,22 @@ export class PostgresEngine implements BrainEngine {
     return rows as unknown as Link[];
   }
 
-  async getBacklinks(slug: string, opts?: { sourceId?: string }): Promise<Link[]> {
+  async getBacklinks(slug: string, opts?: { sourceId?: string; sourceIds?: string[] }): Promise<Link[]> {
     const sql = this.sql;
+    if (opts?.sourceIds && opts.sourceIds.length > 0) {
+      const ids = opts.sourceIds;
+      const rows = await sql`
+        SELECT f.slug as from_slug, t.slug as to_slug,
+               l.link_type, l.context, l.link_source,
+               o.slug as origin_slug, l.origin_field
+        FROM links l
+        JOIN pages f ON f.id = l.from_page_id
+        JOIN pages t ON t.id = l.to_page_id
+        LEFT JOIN pages o ON o.id = l.origin_page_id AND o.source_id = ANY(${ids}::text[])
+        WHERE t.slug = ${slug} AND t.source_id = ANY(${ids}::text[]) AND f.source_id = ANY(${ids}::text[])
+      `;
+      return rows as unknown as Link[];
+    }
     // v0.31.8 (D16): two-branch query, mirrors getLinks above.
     if (opts?.sourceId) {
       const rows = await sql`
@@ -2910,8 +2944,17 @@ export class PostgresEngine implements BrainEngine {
     `;
   }
 
-  async getTags(slug: string, opts?: { sourceId?: string }): Promise<string[]> {
+  async getTags(slug: string, opts?: { sourceId?: string; sourceIds?: string[] }): Promise<string[]> {
     const sql = this.sql;
+    if (opts?.sourceIds && opts.sourceIds.length > 0) {
+      const ids = opts.sourceIds;
+      const rows = await sql`
+        SELECT DISTINCT tag FROM tags
+        WHERE page_id IN (SELECT id FROM pages WHERE slug = ${slug} AND source_id = ANY(${ids}::text[]))
+        ORDER BY tag
+      `;
+      return rows.map((r) => r.tag as string);
+    }
     const sourceId = opts?.sourceId ?? 'default';
     const rows = await sql`
       SELECT tag FROM tags
@@ -2981,9 +3024,31 @@ export class PostgresEngine implements BrainEngine {
     // branches on after/before. Mirrors pglite-engine but stays in postgres.js
     // template-literal idiom (which doesn't compose fragment WHERE chains
     // cleanly).
+    const sourceIds = opts?.sourceIds;
     const sourceId = opts?.sourceId;
     let rows;
-    if (sourceId) {
+    if (sourceIds && sourceIds.length > 0) {
+      if (opts?.after && opts?.before) {
+        rows = await sql`SELECT te.* FROM timeline_entries te JOIN pages p ON p.id = te.page_id
+          WHERE p.slug = ${slug} AND p.source_id = ANY(${sourceIds}::text[])
+            AND te.date >= ${opts.after}::date AND te.date <= ${opts.before}::date
+          ORDER BY te.date DESC LIMIT ${limit}`;
+      } else if (opts?.after) {
+        rows = await sql`SELECT te.* FROM timeline_entries te JOIN pages p ON p.id = te.page_id
+          WHERE p.slug = ${slug} AND p.source_id = ANY(${sourceIds}::text[])
+            AND te.date >= ${opts.after}::date
+          ORDER BY te.date DESC LIMIT ${limit}`;
+      } else if (opts?.before) {
+        rows = await sql`SELECT te.* FROM timeline_entries te JOIN pages p ON p.id = te.page_id
+          WHERE p.slug = ${slug} AND p.source_id = ANY(${sourceIds}::text[])
+            AND te.date <= ${opts.before}::date
+          ORDER BY te.date DESC LIMIT ${limit}`;
+      } else {
+        rows = await sql`SELECT te.* FROM timeline_entries te JOIN pages p ON p.id = te.page_id
+          WHERE p.slug = ${slug} AND p.source_id = ANY(${sourceIds}::text[])
+          ORDER BY te.date DESC LIMIT ${limit}`;
+      }
+    } else if (sourceId) {
       if (opts?.after && opts?.before) {
         rows = await sql`SELECT te.* FROM timeline_entries te JOIN pages p ON p.id = te.page_id
           WHERE p.slug = ${slug} AND p.source_id = ${sourceId}
