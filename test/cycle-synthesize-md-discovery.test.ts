@@ -50,6 +50,52 @@ describe('C8: #708 .md transcript discovery', () => {
     expect(out).toHaveLength(2);
   });
 
+  test('discovers Codex JSONL sessions as readable user/assistant transcript text', () => {
+    const file = join(tmpDir, 'rollout-2026-06-06T14-45-57-example.jsonl');
+    const rows = [
+      { type: 'session_meta', payload: { base_instructions: { text: 'do not include system prompt' } } },
+      {
+        type: 'response_item',
+        payload: {
+          type: 'message',
+          role: 'user',
+          content: [{ type: 'input_text', text: 'Please summarize this project context.' }],
+        },
+      },
+      {
+        type: 'response_item',
+        payload: {
+          type: 'message',
+          role: 'assistant',
+          content: [{ type: 'output_text', text: 'The project needs an import workflow.' }],
+        },
+      },
+    ];
+    writeFileSync(file, rows.map(r => JSON.stringify(r)).join('\n'));
+
+    const out = discoverTranscripts({ corpusDir: tmpDir, minChars: 10 });
+
+    expect(out).toHaveLength(1);
+    expect(out[0].basename).toBe('rollout-2026-06-06T14-45-57-example');
+    expect(out[0].inferredDate).toBe('2026-06-06');
+    expect(out[0].content).toContain('USER:\nPlease summarize this project context.');
+    expect(out[0].content).toContain('ASSISTANT:\nThe project needs an import workflow.');
+    expect(out[0].content).not.toContain('do not include system prompt');
+  });
+
+  test('decodes GB18030 meeting transcript text instead of UTF-8 mojibake', () => {
+    const file = join(tmpDir, '20260514_172756_476.txt');
+    // GB18030 bytes for "线上", followed by ASCII so the fixture stays small.
+    writeFileSync(file, Buffer.from([0xcf, 0xdf, 0xc9, 0xcf, 0x20, 0x6d, 0x65, 0x65, 0x74, 0x69, 0x6e, 0x67]));
+
+    const out = discoverTranscripts({ corpusDir: tmpDir, minChars: 1 });
+
+    expect(out).toHaveLength(1);
+    expect(out[0].basename).toBe('20260514_172756_476');
+    expect(out[0].inferredDate).toBe('2026-05-14');
+    expect(out[0].content).toBe('线上 meeting');
+  });
+
   test('skips other extensions (.pdf, .doc, .json) — only .txt + .md ingest', () => {
     writeTranscript('2026-04-25-pdf.pdf', 'a'.repeat(3000));
     writeTranscript('2026-04-25-doc.doc', 'b'.repeat(3000));

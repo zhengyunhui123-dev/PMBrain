@@ -10,7 +10,7 @@
  */
 
 import { readFileSync, readdirSync, statSync } from 'node:fs';
-import { join, basename } from 'node:path';
+import { join, basename, extname } from 'node:path';
 import { createHash } from 'node:crypto';
 import { pruneDir } from '../sync.ts';
 
@@ -50,8 +50,9 @@ export interface DiscoverOpts {
   bypassGuard?: boolean;
 }
 
-const DATE_RE = /^(\d{4}-\d{2}-\d{2})/;
+const DATE_RE = /(?:^|[^\d])(\d{4})[-_]?(\d{2})[-_]?(\d{2})(?!\d)/;
 const WORD_BOUNDARY_HEURISTIC = /^[a-zA-Z][a-zA-Z0-9_-]*$/;
+const TRANSCRIPT_EXTENSIONS = new Set(['.txt', '.md', '.jsonl']);
 
 /**
  * Self-consumption guard: identity-marker check against `dream_generated: true`
@@ -161,6 +162,76 @@ function matchesAnyExclude(text: string, patterns: RegExp[]): boolean {
   return false;
 }
 
+function decodeTextBuffer(buf: Buffer): string {
+  const utf8 = new TextDecoder('utf-8').decode(buf);
+  let gb18030: string | null = null;
+  try {
+    gb18030 = new TextDecoder('gb18030').decode(buf);
+  } catch {
+    // Some runtimes may not ship the legacy decoder; UTF-8 remains the default.
+  }
+  if (!gb18030) return utf8;
+  return decodeBadness(gb18030) < decodeBadness(utf8) ? gb18030 : utf8;
+}
+
+function decodeBadness(text: string): number {
+  const replacementChars = (text.match(/\uFFFD/g) ?? []).length * 10;
+  return replacementChars;
+}
+
+function extractTextContent(filePath: string): string {
+  const raw = decodeTextBuffer(readFileSync(filePath));
+  return filePath.endsWith('.jsonl') ? extractCodexJsonlTranscript(raw) : raw;
+}
+
+function extractCodexJsonlTranscript(raw: string): string {
+  const turns: string[] = [];
+  for (const line of raw.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    let row: unknown;
+    try {
+      row = JSON.parse(trimmed);
+    } catch {
+      continue;
+    }
+    const event = row as { type?: unknown; payload?: unknown };
+    if (event.type !== 'response_item' || !event.payload || typeof event.payload !== 'object') {
+      continue;
+    }
+    const payload = event.payload as { type?: unknown; role?: unknown; content?: unknown };
+    if (payload.type !== 'message' || (payload.role !== 'user' && payload.role !== 'assistant')) {
+      continue;
+    }
+    const text = extractMessageText(payload.content).trim();
+    if (!text) continue;
+    turns.push(`${String(payload.role).toUpperCase()}:\n${text}`);
+  }
+  return turns.join('\n\n---\n\n');
+}
+
+function extractMessageText(content: unknown): string {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  const parts: string[] = [];
+  for (const block of content) {
+    if (!block || typeof block !== 'object') continue;
+    const b = block as { type?: unknown; text?: unknown };
+    if (
+      (b.type === 'input_text' || b.type === 'output_text' || b.type === 'text') &&
+      typeof b.text === 'string'
+    ) {
+      parts.push(b.text);
+    }
+  }
+  return parts.join('\n');
+}
+
+function inferDateFromBasename(baseName: string): string | null {
+  const dateMatch = DATE_RE.exec(baseName);
+  return dateMatch ? `${dateMatch[1]}-${dateMatch[2]}-${dateMatch[3]}` : null;
+}
+
 function listTextFiles(dir: string): string[] {
   // Recursive walk with descent-time pruning (closes codex C12/C13 spec gap).
   // Accepts BOTH .txt and .md per transcript-discovery's domain rules — does
@@ -187,7 +258,7 @@ function listTextFiles(dir: string): string[] {
           // skipped at descent time.
           if (!pruneDir(name, d)) continue;
           walk(full);
-        } else if (st.isFile() && (name.endsWith('.txt') || name.endsWith('.md') || name.endsWith('.jsonl'))) {
+        } else if (st.isFile() && TRANSCRIPT_EXTENSIONS.has(extname(name).toLowerCase())) {
           out.push(full);
         }
       } catch {
@@ -203,7 +274,7 @@ function listTextFiles(dir: string): string[] {
  * Discover transcripts from the configured corpus dirs, applying filters.
  *
  * Skips files that:
- *  - aren't `.txt`
+ *  - aren't `.txt`, `.md`, or `.jsonl`
  *  - have date-prefixed basenames outside the requested window
  *  - have content shorter than `minChars`
  *  - carry the `dream_generated: true` self-consumption marker (unless `bypassGuard`)
@@ -222,15 +293,14 @@ export function discoverTranscripts(opts: DiscoverOpts): DiscoveredTranscript[] 
   const results: DiscoveredTranscript[] = [];
   for (const dir of dirs) {
     for (const filePath of listTextFiles(dir)) {
-      const ext = filePath.endsWith('.md') ? '.md' : '.txt';
+      const ext = extname(filePath).toLowerCase();
       const baseName = basename(filePath, ext);
-      const dateMatch = DATE_RE.exec(baseName);
-      const inferredDate = dateMatch ? dateMatch[1] : null;
+      const inferredDate = inferDateFromBasename(baseName);
       if (!isInDateRange(inferredDate, opts)) continue;
 
       let content: string;
       try {
-        content = readFileSync(filePath, 'utf8');
+        content = extractTextContent(filePath);
       } catch {
         continue;
       }
@@ -269,27 +339,26 @@ export function readSingleTranscript(
   const excludeRes = compileExcludePatterns(opts.excludePatterns);
   let content: string;
   try {
-    content = readFileSync(filePath, 'utf8');
+    content = extractTextContent(filePath);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     throw new Error(`could not read transcript at ${filePath}: ${msg}`);
   }
   if (content.length < minChars) return null;
   if (isDreamOutput(content, bypass)) {
-    const ext = filePath.endsWith('.md') ? '.md' : '.txt';
-      const baseName = basename(filePath, ext);
+    const ext = extname(filePath).toLowerCase();
+    const baseName = basename(filePath, ext);
     process.stderr.write(`[dream] readSingleTranscript skipped ${baseName}: dream_generated marker (self-consumption guard)\n`);
     return null;
   }
   if (matchesAnyExclude(content, excludeRes)) return null;
-  const ext = filePath.endsWith('.md') ? '.md' : '.txt';
-      const baseName = basename(filePath, ext);
-  const dateMatch = DATE_RE.exec(baseName);
+  const ext = extname(filePath).toLowerCase();
+  const baseName = basename(filePath, ext);
   return {
     filePath,
     contentHash: hashContent(content),
     content,
     basename: baseName,
-    inferredDate: dateMatch ? dateMatch[1] : null,
+    inferredDate: inferDateFromBasename(baseName),
   };
 }

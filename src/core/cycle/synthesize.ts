@@ -75,6 +75,8 @@ const MIN_PROMPT_TOKENS = 100_000;
 const DEFAULT_MAX_CHUNKS = 24;
 /** Conservative default budget when model is unknown (200K × HEADROOM_RATIO). */
 const UNKNOWN_MODEL_BUDGET_TOKENS = 180_000;
+/** Bound the cheap verdict probe so a slow chat provider cannot stall discovery. */
+const VERDICT_TIMEOUT_MS = 15_000;
 
 /**
  * Compute per-chunk character budget for the resolved model + config override.
@@ -775,12 +777,20 @@ export function makeJudgeClient(verdictModel: string): JudgeClient | null {
             ? params.system.map(b => ('text' in b ? b.text : '')).join('')
             : undefined);
 
-      const result: ChatResult = await gatewayChat({
-        model: modelStr,
-        system,
-        messages,
-        maxTokens: params.max_tokens,
-      });
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(new Error('verdict timed out')), VERDICT_TIMEOUT_MS);
+      let result: ChatResult;
+      try {
+        result = await gatewayChat({
+          model: modelStr,
+          system,
+          messages,
+          maxTokens: params.max_tokens,
+          abortSignal: controller.signal,
+        });
+      } finally {
+        clearTimeout(timeout);
+      }
 
       // Map gateway.ChatResult → Anthropic.Message shape. judgeSignificance
       // reads `.content[0].type === 'text'` and `.content[0].text`; other

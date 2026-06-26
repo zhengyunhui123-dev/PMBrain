@@ -213,3 +213,12 @@
 - 描述：安装版执行 `import ... --include-office` 时，sidecar 能启动命令但在解析 `pdf-parse` 依赖时找不到 `@napi-rs/canvas`，随后 DOMMatrix/ImageData/Path2D polyfill 失败并报 `DOMMatrix is not defined`。
 - 是否完成：是
 - 最终结果：sidecar runtime 组装脚本显式复制 `@napi-rs/canvas` 与 Windows 原生包 `@napi-rs/canvas-win32-x64-msvc`，打包校验同步检查 canvas JS 与 `.node` 原生文件，版本更新为 1.0.25。
+
+## 2026-06-26 Dream synthesize 读取 Codex 会话与会议记录修复
+
+- 时间：2026-06-26
+- 版本号：1.0.26
+- 标题：修复 Dream synthesize 无法直接读取 Codex JSONL 会话和中文会议记录
+- 描述：`dream.synthesize.session_corpus_dir` 指向 Codex sessions、`dream.synthesize.meeting_transcripts_dir` 指向会议目录时，Codex `.jsonl` 会被当作原始事件流文本处理，会议 `.txt` 在 GB18030 编码下会被 UTF-8 误读成乱码，导致后续摘要页面无法基于真实正文生成。
+- 是否完成：是
+- 最终结果：Dream transcript discovery 现在递归识别 `.txt`、`.md`、`.jsonl`，Codex JSONL 会抽取 user/assistant 文本消息，会议文本会在 UTF-8 与 GB18030 间择优解码，并支持 `20260514`、`rollout-2026-06-06` 等日期形态。已用用户提供的最小目录验证可发现 2 条 Codex 会话和会议记录，版本更新为 1.0.26。

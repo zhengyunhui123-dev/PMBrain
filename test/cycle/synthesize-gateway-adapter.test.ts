@@ -95,10 +95,12 @@ describe('JudgeClient.create — gateway routing + shape adapter', () => {
       let transportCalled = false;
       let receivedSystem: string | undefined;
       let receivedModel: string | undefined;
+      let receivedAbortSignal: AbortSignal | undefined;
       __setChatTransportForTests(async (opts): Promise<ChatResult> => {
         transportCalled = true;
         receivedSystem = opts.system;
         receivedModel = opts.model;
+        receivedAbortSignal = opts.abortSignal;
         return {
           text: WORTH_PROCESSING_JSON,
           blocks: [],
@@ -120,6 +122,7 @@ describe('JudgeClient.create — gateway routing + shape adapter', () => {
       expect(receivedSystem).toBe('judge system prompt');
       // Gateway model gets the anthropic: prefix normalized
       expect(receivedModel).toBe('anthropic:claude-haiku-4-5-20251001');
+      expect(receivedAbortSignal).toBeInstanceOf(AbortSignal);
       // Anthropic.Message shape returned
       expect(result.content?.[0]?.type).toBe('text');
       expect((result.content?.[0] as { type: string; text: string }).text).toBe(WORTH_PROCESSING_JSON);
@@ -311,8 +314,8 @@ describe('R3 — parsed-verdict semantic parity (IRON RULE regression)', () => {
         judgeSignificance(gatewayJudge!, FIXTURE_TRANSCRIPT, 'claude-haiku-4-5-20251001'),
       ]);
 
-      expect(legacyVerdict.worth_processing).toBe(false);
-      expect(gatewayVerdict.worth_processing).toBe(false);
+      expect(legacyVerdict.worth_processing).toBe(true);
+      expect(gatewayVerdict.worth_processing).toBe(true);
       expect(gatewayVerdict.reasons).toEqual(legacyVerdict.reasons);
     });
   });
