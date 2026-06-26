@@ -699,6 +699,14 @@ export const KNOWN_CONFIG_KEYS: readonly string[] = [
   'content_sanity.bytes_block',
   'content_sanity.junk_patterns_enabled',
   'content_sanity.disabled',
+  // Spend controls. Registered so `pmbrain config set` accepts these without
+  // --force; `spend.posture` itself is validated by the config command.
+  'spend.posture',
+  'sync.cost_gate_min_usd',
+  'sync.federated_v2',
+  'embed.backfill_cooldown_min',
+  'embed.backfill_max_usd_per_source_24h',
+  'embed.backfill_max_usd',
   // Misc
   'artifacts_sync_mode',
   'cross_project_learnings',
