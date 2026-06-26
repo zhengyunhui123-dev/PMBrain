@@ -131,7 +131,7 @@ export interface CloneOpts {
 
 export class GitOperationError extends Error {
   constructor(
-    public op: 'clone' | 'pull' | 'remote_get_url',
+    public op: 'clone' | 'pull' | 'fetch' | 'remote_get_url',
     message: string,
     public cause?: unknown,
   ) {
@@ -140,13 +140,18 @@ export class GitOperationError extends Error {
   }
 }
 
-const GIT_ENV = {
+export const GIT_ENV = {
   // Confine to the gbrain SSRF model — no credential helpers, no SSH askpass,
   // no GUI prompts. Inherit PATH so git itself is findable.
   GIT_TERMINAL_PROMPT: '0',
   GCM_INTERACTIVE: 'never',
   GIT_ASKPASS: '/bin/false',
   SSH_ASKPASS: '/bin/false',
+} as const;
+
+export const GIT_ENV_AUTH = {
+  GIT_TERMINAL_PROMPT: '0',
+  GCM_INTERACTIVE: 'never',
 } as const;
 
 /**
@@ -261,4 +266,179 @@ export function validateRepoState(
     return 'url-drift';
   }
   return 'healthy';
+}
+
+function durableSsrfFlags(): string[] {
+  const fileAllow =
+    process.env.PMBRAIN_GIT_ALLOW_FILE_TRANSPORT === '1' ||
+    process.env.GBRAIN_GIT_ALLOW_FILE_TRANSPORT === '1'
+      ? 'always'
+      : 'never';
+  return [
+    '-c', 'http.followRedirects=false',
+    '-c', `protocol.file.allow=${fileAllow}`,
+    '-c', 'protocol.ext.allow=never',
+  ];
+}
+
+function runGit(
+  repoPath: string,
+  globalFlags: readonly string[],
+  subcommand: string,
+  subArgs: readonly string[],
+  op: GitOperationError['op'],
+  opts: { timeoutMs?: number; env?: Record<string, string> } = {},
+): string {
+  try {
+    const out = execFileSync(
+      'git',
+      ['-C', repoPath, ...globalFlags, subcommand, ...subArgs],
+      {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        timeout: opts.timeoutMs ?? 120_000,
+        env: { ...process.env, ...(opts.env ?? GIT_ENV) },
+      },
+    );
+    return out.toString().trim();
+  } catch (e) {
+    throw new GitOperationError(op, `git ${subcommand} failed in ${repoPath}: ${(e as Error).message}`, e);
+  }
+}
+
+export function isWorkingTreeDirty(repoPath: string): boolean {
+  const out = runGit(repoPath, [], 'status', ['--porcelain'], 'pull', { timeoutMs: 30_000 });
+  return out.length > 0;
+}
+
+export function detectDefaultBranch(repoPath: string): string {
+  try {
+    const sym = execFileSync('git', ['-C', repoPath, 'symbolic-ref', '--short', 'refs/remotes/origin/HEAD'], {
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: 10_000,
+      env: { ...process.env, ...GIT_ENV },
+    }).toString().trim();
+    if (sym.startsWith('origin/')) return sym.slice('origin/'.length);
+    if (sym) return sym;
+  } catch {
+    // Fall through to current branch.
+  }
+  try {
+    const cur = execFileSync('git', ['-C', repoPath, 'rev-parse', '--abbrev-ref', 'HEAD'], {
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: 10_000,
+      env: { ...process.env, ...GIT_ENV },
+    }).toString().trim();
+    if (cur && cur !== 'HEAD') return cur;
+  } catch {
+    // Detached head or not a repo.
+  }
+  return 'main';
+}
+
+function rebaseInProgress(repoPath: string): boolean {
+  for (const name of ['rebase-merge', 'rebase-apply']) {
+    try {
+      const p = execFileSync('git', ['-C', repoPath, 'rev-parse', '--git-path', name], {
+        stdio: ['ignore', 'pipe', 'ignore'],
+        timeout: 10_000,
+        env: { ...process.env, ...GIT_ENV },
+      }).toString().trim();
+      const abs = p.startsWith('/') || /^[A-Za-z]:[\\/]/.test(p) ? p : join(repoPath, p);
+      if (existsSync(abs)) return true;
+    } catch {
+      // Ignore per-path lookup failures.
+    }
+  }
+  return false;
+}
+
+export type PullOutcome =
+  | { status: 'up_to_date' }
+  | { status: 'advanced'; from: string; to: string }
+  | { status: 'skipped_dirty' }
+  | { status: 'conflict_aborted'; detail: string };
+
+export function divergenceSafePull(
+  repoPath: string,
+  branch: string,
+  opts: { timeoutMs?: number } = {},
+): PullOutcome {
+  const timeoutMs = opts.timeoutMs ?? 300_000;
+
+  if (isWorkingTreeDirty(repoPath)) return { status: 'skipped_dirty' };
+
+  const before = runGit(repoPath, [], 'rev-parse', ['HEAD'], 'pull', { timeoutMs: 10_000 });
+  const ssrf = durableSsrfFlags();
+
+  runGit(repoPath, ssrf, 'fetch', [...GIT_SSRF_SUBCOMMAND_FLAGS, 'origin', branch], 'fetch', {
+    timeoutMs,
+    env: { ...GIT_ENV_AUTH },
+  });
+
+  try {
+    runGit(repoPath, ssrf, 'pull', [...GIT_SSRF_SUBCOMMAND_FLAGS, '--rebase', 'origin', branch], 'pull', {
+      timeoutMs,
+      env: { ...GIT_ENV_AUTH },
+    });
+  } catch (e) {
+    try {
+      execFileSync('git', ['-C', repoPath, 'rebase', '--abort'], {
+        stdio: 'ignore',
+        timeout: 30_000,
+        env: { ...process.env, ...GIT_ENV },
+      });
+    } catch {
+      // Best effort.
+    }
+    if (rebaseInProgress(repoPath)) {
+      try {
+        execFileSync('git', ['-C', repoPath, 'rebase', '--abort'], {
+          stdio: 'ignore',
+          timeout: 30_000,
+          env: { ...process.env, ...GIT_ENV },
+        });
+      } catch {
+        // Best effort.
+      }
+    }
+    return {
+      status: 'conflict_aborted',
+      detail: `pull --rebase on ${branch} conflicted; rebase aborted; manual attention needed (${(e as Error).message.slice(0, 120)})`,
+    };
+  }
+
+  const after = runGit(repoPath, [], 'rev-parse', ['HEAD'], 'pull', { timeoutMs: 10_000 });
+  return before === after ? { status: 'up_to_date' } : { status: 'advanced', from: before, to: after };
+}
+
+export type PushProbeResult =
+  | { ok: true }
+  | { ok: false; reason: 'auth' | 'protected' | 'unreachable' | 'other'; detail: string };
+
+export function pushProbe(
+  repoPath: string,
+  branch: string,
+  opts: { timeoutMs?: number; redactDetail?: (s: string) => string } = {},
+): PushProbeResult {
+  const redact = opts.redactDetail ?? ((s: string) => s);
+  try {
+    execFileSync(
+      'git',
+      ['-C', repoPath, ...durableSsrfFlags(), 'push', ...GIT_SSRF_SUBCOMMAND_FLAGS, '--dry-run', 'origin', `HEAD:${branch}`],
+      {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        timeout: opts.timeoutMs ?? 60_000,
+        env: { ...process.env, ...GIT_ENV_AUTH },
+      },
+    );
+    return { ok: true };
+  } catch (e) {
+    const raw = redact((e as Error).message || '');
+    const low = raw.toLowerCase();
+    let reason: 'auth' | 'protected' | 'unreachable' | 'other' = 'other';
+    if (low.includes('authentication') || low.includes('403') || low.includes('permission') || low.includes('could not read')) reason = 'auth';
+    else if (low.includes('protected') || low.includes('pre-receive') || low.includes('hook declined')) reason = 'protected';
+    else if (low.includes('could not resolve') || low.includes('unable to access') || low.includes('timed out') || low.includes('network')) reason = 'unreachable';
+    return { ok: false, reason, detail: raw.slice(0, 200) };
+  }
 }

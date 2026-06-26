@@ -1260,6 +1260,9 @@ export async function runSources(engine: BrainEngine, args: string[]): Promise<v
     case 'status':     return runStatus(engine, rest);
     case 'webhook':    return runWebhook(engine, rest);
     case 'tracked-branch': return runTrackedBranch(engine, rest);
+    case 'harden':     { const { runHarden } = await import('./sources-harden.ts'); return runHarden(engine, rest); }
+    case 'pull':       { const { runPull } = await import('./sources-harden.ts'); return runPull(engine, rest); }
+    case 'unharden':   { const { runUnharden } = await import('./sources-harden.ts'); return runUnharden(engine, rest); }
     // v0.40.3.0 contextual retrieval (from master)
     case 'set-cr-mode': return runSetCrMode(engine, rest);
     case 'audit':      return runAudit(engine, rest);
@@ -1276,7 +1279,7 @@ export async function runSources(engine: BrainEngine, args: string[]): Promise<v
 }
 
 function printHelp(): void {
-  console.log(`gbrain sources — manage multi-source brain configuration (v0.26.5)
+  console.log(`pmbrain sources — manage multi-source brain configuration (v0.26.5)
 
 Subcommands:
   add <id> --path <p> [--name <n>] [--federated|--no-federated]
@@ -1316,6 +1319,11 @@ Subcommands:
                                     override (v0.40.3.0). Pass "unset" or
                                     "default" to clear (NULL falls through
                                     to the global search.mode bundle).
+  harden <id|--all> [--pat-file p] [--branch b]
+                                    Enable optional git durability for Git sources.
+  pull <id> | --path <dir> [--branch b]
+                                    Safely pull a Git source; --path is DB-free.
+  unharden <id>                     Remove local hook/credential/cron durability wiring.
 
 Source id: [a-z0-9-]{1,32}. Immutable citation key.
 

@@ -68,6 +68,7 @@ const CLI_ONLY_SELF_HELP = new Set([
   // describing segment splitting + checkpointing + budget caps + the
   // unified types config story. Route around the generic short-circuit.
   'extract-conversation-facts',
+  'sources',
 ]);
 
 async function main() {
@@ -114,6 +115,13 @@ async function main() {
       printCliOnlyHelp(command);
       return;
     }
+  }
+
+  // CLI-only commands
+  if (command === 'sources' && subArgs[0] === 'pull' && subArgs.includes('--path')) {
+    const { runPull } = await import('./commands/sources-harden.ts');
+    await runPull(null, subArgs.slice(1));
+    return;
   }
 
   // CLI-only commands
