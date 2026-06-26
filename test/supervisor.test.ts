@@ -4,7 +4,7 @@ import { spawn } from 'child_process';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { readSupervisorEvents, computeSupervisorAuditFilename } from '../src/core/minions/handlers/supervisor-audit.ts';
-import { calculateBackoffMs } from '../src/core/minions/supervisor.ts';
+import { calculateBackoffMs, resolveHardStopMaxCrashes } from '../src/core/minions/supervisor.ts';
 
 const TEST_PID_FILE = '/tmp/gbrain-supervisor-test.pid';
 
@@ -58,6 +58,10 @@ function spawnSupervisor(h: IntegrationHarness, overrides: Record<string, string
     SUP_HEALTH_INTERVAL_MS: '999999',   // effectively off
     ...overrides,
   };
+  if (env.PMBRAIN_SUPERVISOR_HARD_STOP_CRASHES === undefined &&
+      env.GBRAIN_SUPERVISOR_HARD_STOP_CRASHES === undefined) {
+    env.PMBRAIN_SUPERVISOR_HARD_STOP_CRASHES = env.SUP_MAX_CRASHES;
+  }
 
   const child = spawn('bun', [join(import.meta.dir, 'fixtures/supervisor-runner.ts')], {
     env,
@@ -104,6 +108,30 @@ async function waitFor(pred: () => boolean, timeoutMs: number, tickMs = 20): Pro
 }
 
 describe('MinionSupervisor', () => {
+  describe('resolveHardStopMaxCrashes', () => {
+    it('defaults to maxCrashes times 10', () => {
+      expect(resolveHardStopMaxCrashes(3, {})).toBe(30);
+      expect(resolveHardStopMaxCrashes(10, {})).toBe(100);
+    });
+
+    it('PMBRAIN env wins over GBRAIN compatibility env', () => {
+      expect(resolveHardStopMaxCrashes(10, {
+        PMBRAIN_SUPERVISOR_HARD_STOP_CRASHES: '5',
+        GBRAIN_SUPERVISOR_HARD_STOP_CRASHES: '7',
+      })).toBe(5);
+    });
+
+    it('honors GBRAIN env and treats 0 as disabled', () => {
+      expect(resolveHardStopMaxCrashes(10, { GBRAIN_SUPERVISOR_HARD_STOP_CRASHES: '0' })).toBe(0);
+      expect(resolveHardStopMaxCrashes(10, { GBRAIN_SUPERVISOR_HARD_STOP_CRASHES: '8' })).toBe(8);
+    });
+
+    it('ignores invalid overrides', () => {
+      expect(resolveHardStopMaxCrashes(10, { PMBRAIN_SUPERVISOR_HARD_STOP_CRASHES: '-1' })).toBe(100);
+      expect(resolveHardStopMaxCrashes(10, { PMBRAIN_SUPERVISOR_HARD_STOP_CRASHES: 'nope' })).toBe(100);
+    });
+  });
+
   describe('calculateBackoffMs', () => {
     it('returns ~1s for first crash', () => {
       const backoff = calculateBackoffMs(0);

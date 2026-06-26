@@ -50,6 +50,7 @@ async function runUntilTerminal(
   h: Harness,
   overrides: Partial<{
     maxCrashes: number;
+    hardStopMaxCrashes: number;
     _backoffFloorMs: number;
     cleanRestartBudget: number;
     cleanRestartWindowMs: number;
@@ -68,6 +69,7 @@ async function runUntilTerminal(
     cliPath: h.workerScript,
     args: [],
     maxCrashes: overrides.maxCrashes ?? 3,
+    hardStopMaxCrashes: overrides.hardStopMaxCrashes ?? overrides.maxCrashes ?? 3,
     _backoffFloorMs: overrides._backoffFloorMs ?? 5,
     cleanRestartBudget: overrides.cleanRestartBudget,
     cleanRestartWindowMs: overrides.cleanRestartWindowMs,
@@ -402,6 +404,55 @@ esac
           expect(typeof e.runDurationMs).toBe('number');
           expect(e.likelyCause).toBe('clean_exit');
         }
+      } finally {
+        h.cleanup();
+      }
+    });
+  });
+
+  describe('degraded crash retry', () => {
+    it('crossing the soft crash budget warns and keeps retrying until the hard ceiling', async () => {
+      const h = makeHarness('degraded-softbudget', 'exit 1');
+      try {
+        const res = await runUntilTerminal(h, {
+          maxCrashes: 3,
+          hardStopMaxCrashes: 6,
+          _backoffFloorMs: 1,
+          stopAfterEvents: 200,
+        });
+
+        expect(res.maxCrashesFired).not.toBeNull();
+        expect(res.maxCrashesFired!.count).toBe(6);
+        expect(res.maxCrashesFired!.max).toBe(6);
+
+        const degraded = res.events.filter(
+          (e): e is Extract<ChildSupervisorEvent, { kind: 'health_warn' }> =>
+            e.kind === 'health_warn' && e.reason === 'crash_budget_degraded',
+        );
+        expect(degraded.length).toBeGreaterThanOrEqual(1);
+        expect(degraded[0].max).toBe(3);
+        expect(degraded[0].count).toBeGreaterThanOrEqual(3);
+      } finally {
+        h.cleanup();
+      }
+    });
+
+    it('hardStopMaxCrashes=0 disables permanent give-up', async () => {
+      const h = makeHarness('degraded-no-hard-stop', 'exit 1');
+      try {
+        const res = await runUntilTerminal(h, {
+          maxCrashes: 3,
+          hardStopMaxCrashes: 0,
+          _backoffFloorMs: 1,
+          stopAfterEvents: 40,
+        });
+
+        expect(res.maxCrashesFired).toBeNull();
+        const crashes = res.events.filter(
+          (e): e is Extract<ChildSupervisorEvent, { kind: 'worker_exited' }> =>
+            e.kind === 'worker_exited' && e.code === 1,
+        );
+        expect(crashes.length).toBeGreaterThan(3);
       } finally {
         h.cleanup();
       }

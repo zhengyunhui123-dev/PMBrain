@@ -60,9 +60,10 @@ export type ChildSupervisorEvent =
     }
   | {
       kind: 'health_warn';
-      reason: 'clean_restart_budget_exceeded';
+      reason: 'clean_restart_budget_exceeded' | 'crash_budget_degraded';
       count: number;
-      windowMs: number;
+      windowMs?: number;
+      max?: number;
     };
 
 export interface ChildWorkerSupervisorOpts {
@@ -72,8 +73,10 @@ export interface ChildWorkerSupervisorOpts {
   args: string[];
   /** Child env. Defaults to a clone of process.env. */
   env?: NodeJS.ProcessEnv;
-  /** Give up after this many consecutive code != 0 exits. */
+  /** Soft crash budget; crossing it enters degraded retry mode. */
   maxCrashes: number;
+  /** Permanent give-up ceiling. Defaults to maxCrashes * 10. Set 0 to disable. */
+  hardStopMaxCrashes?: number;
   /** Stable-run reset window: code != 0 after this duration resets crashCount to 1. Default 5 min. */
   stableRunResetMs?: number;
 
@@ -115,6 +118,8 @@ const DEFAULTS = {
   cleanRestartWindowMs: 60_000,
   cleanRestartBudgetBackoffMs: 1_000,
 } as const;
+
+export const HARD_STOP_CRASH_MULTIPLIER = 10;
 
 export class ChildWorkerSupervisor {
   private readonly opts: ChildWorkerSupervisorOpts;
@@ -198,19 +203,36 @@ export class ChildWorkerSupervisor {
   }
 
   /**
-   * Run the spawn-and-respawn loop. Resolves when:
-   *   1. composer.isStopping() returns true, OR
-   *   2. crashCount reaches maxCrashes (after firing onMaxCrashesExceeded).
+   * Run the spawn-and-respawn loop. Resolves when the composer stops or the
+   * hard crash ceiling fires. Crossing maxCrashes enters degraded retry mode.
    */
   async run(): Promise<void> {
-    while (!this.opts.isStopping() && this._crashCount < this.opts.maxCrashes) {
+    const hardStop = this.opts.hardStopMaxCrashes ??
+      this.opts.maxCrashes * HARD_STOP_CRASH_MULTIPLIER;
+    let degradedAnnounced = false;
+
+    while (!this.opts.isStopping()) {
       await this.spawnOnce();
 
       if (this.opts.isStopping()) return;
 
-      if (this._crashCount >= this.opts.maxCrashes) {
-        this.opts.onMaxCrashesExceeded(this._crashCount, this.opts.maxCrashes);
+      if (hardStop > 0 && this._crashCount >= hardStop) {
+        this.opts.onMaxCrashesExceeded(this._crashCount, hardStop);
         return;
+      }
+
+      if (this._crashCount >= this.opts.maxCrashes) {
+        if (!degradedAnnounced) {
+          degradedAnnounced = true;
+          this.opts.onEvent({
+            kind: 'health_warn',
+            reason: 'crash_budget_degraded',
+            count: this._crashCount,
+            max: this.opts.maxCrashes,
+          });
+        }
+      } else {
+        degradedAnnounced = false;
       }
 
       await this.applyBackoff();

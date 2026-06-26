@@ -18,6 +18,15 @@
 - 是否完成：是
 - 最终结果：导入阶段无进度超过阈值会触发 abort，返回 `partial` 且 reason 为 `stall_timeout`，不推进 `last_commit`；下次同步可从原 checkpoint 继续。
 
+## 2026-06-26 supervisor crash storm 永久停摆修复
+
+- 时间：2026-06-26 22:35:00
+- 版本号：1.0.30
+- 标题：修复 supervisor 达到软 crash 预算后永久停止的问题
+- 描述：原 supervisor 达到 `maxCrashes` 后直接触发永久停止，临时数据库或连接池故障可能导致后台队列无人恢复。移植上游 #1994 的 degraded retry：软预算只告警和退避，硬上限才永久停止。
+- 是否完成：是
+- 最终结果：默认硬上限为 `maxCrashes * 10`，可用 `PMBRAIN_SUPERVISOR_HARD_STOP_CRASHES` 覆盖，设置 `0` 表示不自动永久停止。
+
 ## 2026-06-02 PGLite WASM 在 Windows 下崩溃
 
 - 时间：2026-06-02
