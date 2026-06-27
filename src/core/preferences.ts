@@ -1,48 +1,26 @@
 /**
- * ~/.gbrain/preferences.json — user-facing agent-behavior flags (minion_mode, etc.).
+ * PMBrain preferences.json — user-facing agent-behavior flags (minion_mode, etc.).
  *
  * Separate from src/core/config.ts (engine config), written to its own file so
  * engine config and agent preferences can evolve independently. Atomic writes
  * via mktemp + rename; 0o600 perms; forward-compatible (preserves unknown keys).
  *
- * Also houses ~/.gbrain/migrations/completed.jsonl append helper.
+ * Also houses migrations/completed.jsonl append helper.
  */
 
 import { readFileSync, writeFileSync, renameSync, chmodSync, mkdtempSync, rmSync, existsSync, mkdirSync, appendFileSync } from 'fs';
 import { join } from 'path';
-import { homedir } from 'os';
-
-function home(): string {
-  // `os.homedir()` in Bun caches its initial value and ignores later
-  // `process.env.HOME` mutations, which breaks test isolation and any
-  // workflow that needs to run against a specific $HOME (CI, scripted installs).
-  // Prefer the env var; fall back to the cached OS value. Matches the existing
-  // `src/commands/upgrade.ts` pattern.
-  //
-  // NOTE: prefsDir() and migrationsDir() route through gbrainPath() (which
-  // honors GBRAIN_HOME), so this fallback is only used by code paths that
-  // want $HOME directly (none in this file as of v0.30.3).
-  return process.env.HOME || homedir();
-}
+import { configDir } from './config.ts';
 
 /**
- * GBRAIN_HOME-aware override for the .gbrain directory. When the env var
- * is set, this returns it directly (so the directory is GBRAIN_HOME itself,
- * matching the convention `src/core/config.ts:gbrainPath` enforces).
- * When unset, falls back to `<home>/.gbrain` so legacy callers and the
- * doctor's filesystem-only checks keep working.
- *
- * Without this, `~/.gbrain/migrations/completed.jsonl` is the only path
- * doctor reads on filesystem checks — the test isolation contract that
- * `gbrainPath()` provides for everywhere else doesn't extend here.
+ * Resolve the active PMBrain home with the same precedence as config.ts:
+ * PMBRAIN_HOME/.pmbrain, explicit GBRAIN_HOME/.gbrain, existing .pmbrain,
+ * existing legacy .gbrain, then new .pmbrain. Keeping preferences and the
+ * migration ledger on the same home prevents fresh PMBrain desktop installs
+ * from inheriting stale legacy .gbrain partial records.
  */
-function gbrainDir(): string {
-  const override = process.env.GBRAIN_HOME;
-  if (override) {
-    const trimmed = override.trim();
-    if (trimmed) return trimmed;
-  }
-  return join(home(), '.gbrain');
+function pmbrainDir(): string {
+  return configDir();
 }
 
 export type MinionMode = 'always' | 'pain_triggered' | 'off';
@@ -79,13 +57,12 @@ export interface CompletedMigrationEntry {
 
 const VALID_MODES: ReadonlyArray<MinionMode> = ['always', 'pain_triggered', 'off'];
 
-// Route preferences + migration ledger paths through gbrainDir() so they
-// honor GBRAIN_HOME for hermetic test isolation. Pre-v0.30.3 these used
-// `$HOME/.gbrain` directly, which leaked the developer's local migration
-// ledger into E2E tests and CI runs even when GBRAIN_HOME was set.
-function prefsDir(): string { return gbrainDir(); }
+// Route preferences + migration ledger paths through configDir() so PMBrain
+// desktop and CLI use one state root instead of mixing .pmbrain config with a
+// stale .gbrain migration ledger.
+function prefsDir(): string { return pmbrainDir(); }
 function prefsPath(): string { return join(prefsDir(), 'preferences.json'); }
-function migrationsDir(): string { return join(gbrainDir(), 'migrations'); }
+function migrationsDir(): string { return join(pmbrainDir(), 'migrations'); }
 function completedJsonlPath(): string { return join(migrationsDir(), 'completed.jsonl'); }
 
 /** Validate that a value is a recognized minion mode. Throws with the allowed list. */
@@ -134,7 +111,7 @@ export function savePreferences(prefs: Preferences): void {
 }
 
 /**
- * Append one line to ~/.gbrain/migrations/completed.jsonl. Creates the
+ * Append one line to migrations/completed.jsonl. Creates the
  * directory if missing. Does not read existing lines (append is cheap and
  * the reader tolerates malformed lines by skipping them).
  *

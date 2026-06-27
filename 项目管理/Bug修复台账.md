@@ -258,3 +258,10 @@
 - 描述：`op_checkpoints.completed_keys` 语义上必须是字符串数组，但数据库层此前没有 CHECK 约束；外部脚本或旧二进制若写入 JSONB 标量，读取端可能进入解析失败路径，导致本轮 checkpoint 恢复状态被丢弃。
 - 是否完成：是
 - 最终结果：fresh schema 与 migration v108 均添加 `op_checkpoints_completed_keys_array` 约束；迁移会把已有非数组值修复为空数组；读取端对非数组值给出专门 warning 并跳过。
+## 2026-06-27 Windows 桌面首装迁移与 Admin Token 输出修复
+- 时间：2026-06-27
+- 版本号：1.0.36 / Desktop 1.0.26
+- 标题：修复 Windows 全新用户首次安装出现 WEDGED 与 gbrain 命令缺失，并修复 Admin Token 不显示明文
+- 描述：全新 Windows 桌面安装时，迁移 ledger 与偏好路径仍可能落到旧 `.gbrain`，v0.11.0 migration 还会在 PGLite 首装链路中执行 `gbrain` 子命令；手动 `pmbrain serve --http` 时，来自环境变量或配置的 Admin Token 只显示来源不显示可复制 token。
+- 是否完成：是
+- 最终结果：迁移状态和偏好统一走 PMBrain active home；桌面 `save-setup` 调用迁移时使用内置 sidecar 并跳过 host autopilot；PGLite v0.11.0 schema 初始化改为进程内执行且不再依赖 `gbrain.exe`；WEDGED 和迁移帮助文案改为 PMBrain；Admin Token 在非 suppress 场景下输出明文；版本更新为 PMBrain 1.0.36、Desktop 1.0.26，并重新生成 Windows 安装包。

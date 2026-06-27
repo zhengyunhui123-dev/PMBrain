@@ -18,20 +18,20 @@ import { tmpdir } from 'os';
 
 let tmpHome: string;
 const originalHome = process.env.HOME;
+const originalPmbrainHome = process.env.PMBRAIN_HOME;
 const originalGbrainHome = process.env.GBRAIN_HOME;
 
 beforeEach(() => {
-  tmpHome = mkdtempSync(join(tmpdir(), 'gbrain-migration-resume-'));
-  // preferences.ts's gbrainDir() returns `$HOME/.gbrain` when GBRAIN_HOME
-  // is unset. Set HOME only; clear any inherited GBRAIN_HOME so the test
-  // body matches the migrations dir at `$tmpHome/.gbrain/migrations/`.
-  process.env.HOME = tmpHome;
+  tmpHome = mkdtempSync(join(tmpdir(), 'pmbrain-migration-resume-'));
+  process.env.PMBRAIN_HOME = tmpHome;
   delete process.env.GBRAIN_HOME;
 });
 
 afterEach(() => {
   if (originalHome) process.env.HOME = originalHome;
   else delete process.env.HOME;
+  if (originalPmbrainHome) process.env.PMBRAIN_HOME = originalPmbrainHome;
+  else delete process.env.PMBRAIN_HOME;
   if (originalGbrainHome) process.env.GBRAIN_HOME = originalGbrainHome;
   else delete process.env.GBRAIN_HOME;
   try { rmSync(tmpHome, { recursive: true, force: true }); } catch { /* ignore */ }
@@ -148,6 +148,13 @@ describe('Bug 3 — orchestrator no longer writes the ledger directly', () => {
     // Import statement should not reference appendCompletedMigration; the
     // old call site is replaced with a comment.
     expect(source).not.toMatch(/import .*appendCompletedMigration.*from/);
+  });
+
+  test('v0_11_0 PGLite desktop path does not shell out to gbrain', async () => {
+    const source = await Bun.file(new URL('../src/commands/migrations/v0_11_0.ts', import.meta.url)).text();
+    expect(source).not.toMatch(/^\s*execSync\('gbrain/m);
+    expect(source).toContain("cfg?.engine === 'pglite'");
+    expect(source).toContain('pglite local desktop flow does not install host autopilot');
   });
 
   test('apply-migrations.ts runner writes the ledger', async () => {

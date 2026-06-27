@@ -28,6 +28,7 @@ let logger: DesktopLogger | null = null;
 let currentState: SidecarState | null = null;
 let updateManager: UpdateManager | null = null;
 let quitting = false;
+const DESKTOP_MIGRATION_ARGS = ['apply-migrations', '--yes', '--non-interactive', '--no-autopilot-install'];
 
 function runtime(): CliRuntime {
   return {
@@ -85,7 +86,7 @@ async function stopSidecar(): Promise<void> {
 async function migrateConfiguredInstallation(): Promise<void> {
   if (!needsDesktopMigration(app.getVersion())) return;
   logger?.write('desktop', `Applying migrations for desktop ${app.getVersion()}`);
-  await runCliChecked(runtime(), ['apply-migrations', '--yes', '--non-interactive']);
+  await runCliChecked(runtime(), DESKTOP_MIGRATION_ARGS);
   markDesktopMigration(app.getVersion());
 }
 
@@ -94,7 +95,7 @@ async function applySetup(payload: SetupPayload) {
   await stopSidecar();
   const saved = saveSetup(payload);
   try {
-    await runCliChecked(runtime(), ['apply-migrations', '--yes', '--non-interactive']);
+    await runCliChecked(runtime(), DESKTOP_MIGRATION_ARGS);
     const knowledgeDirectory = saved.config.desktop?.knowledge_directory;
     const sourceId = saved.config.desktop?.knowledge_source_id;
     if (knowledgeDirectory && sourceId) {

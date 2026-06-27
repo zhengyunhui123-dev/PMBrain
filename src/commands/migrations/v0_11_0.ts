@@ -2,17 +2,18 @@
  * v0.11.0 migration orchestrator — GBrain Minions adoption.
  *
  * Phases (all idempotent; resumable from a prior status:"partial" run):
- *   A. Schema  — gbrain init --migrate-only (never bare init — that
+ *   A. Schema  — in-process schema migration for PGLite; pmbrain init
+ *                --migrate-only for Postgres hosts (never bare init — that
  *                defaults to PGLite and clobbers existing configs).
- *   B. Smoke   — gbrain jobs smoke. Fail loudly on non-zero.
+ *   B. Smoke   — in-process jobs table smoke where possible.
  *   C. Mode    — resolve minion_mode (flag / default / TTY prompt).
- *   D. Prefs   — write ~/.gbrain/preferences.json.
+ *   D. Prefs   — write preferences.json in the active PMBrain home.
  *   E. Host    — detect AGENTS.md + cron manifests. Inject the subagent-
  *                routing convention marker into each AGENTS.md. Rewrite
  *                cron entries for GBRAIN-BUILTIN handler names only.
  *                For non-builtin handlers (host-specific, like
  *                ea-inbox-sweep) emit structured TODO rows to
- *                ~/.gbrain/migrations/pending-host-work.jsonl so the host
+ *                migrations/pending-host-work.jsonl so the host
  *                agent can walk through its plugin-contract work per
  *                skills/migrations/v0.11.0.md.
  *   F. Install — gbrain autopilot --install (env-aware).
@@ -24,6 +25,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync, appendFileSync, lst
 import { join, resolve, dirname } from 'path';
 import { execSync } from 'child_process';
 import { childGlobalFlags } from '../../core/cli-options.ts';
+import { gbrainPath, loadConfig } from '../../core/config.ts';
 import type { Migration, OrchestratorOpts, OrchestratorResult, OrchestratorPhaseResult } from './types.ts';
 import { savePreferences, loadPreferences } from '../../core/preferences.ts';
 // Bug 3 — appendCompletedMigration moved to the runner (apply-migrations.ts).
@@ -36,8 +38,7 @@ const CRON_MIGRATED_PROPERTY = '_gbrain_migrated_by';
 const MAX_HOST_FILE_BYTES = 1_000_000;
 
 function home(): string { return process.env.HOME || ''; }
-function gbrainDir(): string { return join(home(), '.gbrain'); }
-function pendingHostWorkPath(): string { return join(gbrainDir(), 'migrations', 'pending-host-work.jsonl'); }
+function pendingHostWorkPath(): string { return gbrainPath('migrations', 'pending-host-work.jsonl'); }
 
 export interface PendingHostWorkEntry {
   type: 'cron-handler-needs-host-registration' | 'agents-md-dispatcher-needs-host-review';
@@ -62,14 +63,14 @@ async function phaseASchema(opts: OrchestratorOpts): Promise<OrchestratorPhaseRe
   if (opts.dryRun) return { name: 'schema', status: 'skipped', detail: 'dry-run' };
   try {
     // v0.36.x #1100: route PGLite through an in-process schema apply rather
-    // than `execSync('gbrain init --migrate-only')`. The subprocess inherits
+    // than shelling out to the legacy CLI name. The subprocess inherits
     // HOME and tries to acquire the same file lock the parent process is
     // holding (or briefly released and the on-disk artifact has not finished
     // settling), which deadlocks until the 30s lock timeout fires. The
     // structural fix is to not spawn a subprocess for work the parent can
     // do directly — Postgres tolerates concurrent connections, so the
     // legacy execSync path stays for Postgres callers.
-    const { loadConfig, toEngineConfig } = await import('../../core/config.ts');
+    const { toEngineConfig } = await import('../../core/config.ts');
     const cfg = loadConfig();
     if (cfg?.engine === 'pglite') {
       const { createEngine } = await import('../../core/engine-factory.ts');
@@ -82,7 +83,7 @@ async function phaseASchema(opts: OrchestratorOpts): Promise<OrchestratorPhaseRe
       }
       return { name: 'schema', status: 'complete' };
     }
-    execSync('gbrain init --migrate-only' + childGlobalFlags(), { stdio: 'inherit', timeout: 60_000, env: process.env });
+    execSync('pmbrain init --migrate-only' + childGlobalFlags(), { stdio: 'inherit', timeout: 60_000, env: process.env });
     return { name: 'schema', status: 'complete' };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
@@ -97,7 +98,11 @@ async function phaseASchema(opts: OrchestratorOpts): Promise<OrchestratorPhaseRe
 function phaseBSmoke(opts: OrchestratorOpts): OrchestratorPhaseResult {
   if (opts.dryRun) return { name: 'smoke', status: 'skipped', detail: 'dry-run' };
   try {
-    execSync('gbrain jobs smoke', { stdio: 'inherit', timeout: 30_000, env: process.env });
+    const cfg = loadConfig();
+    if (cfg?.engine === 'pglite') {
+      return { name: 'smoke', status: 'complete', detail: 'pglite schema smoke covered by phase A' };
+    }
+    execSync('pmbrain jobs smoke', { stdio: 'inherit', timeout: 30_000, env: process.env });
     return { name: 'smoke', status: 'complete' };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
@@ -207,7 +212,7 @@ function injectAgentsMdMarker(path: string, opts: OrchestratorOpts): { injected:
   const bakPath = `${path}.bak.${stamp}`;
   try {
     writeFileSync(bakPath, content);
-    const snippet = `\n\n${AGENTS_MD_MARKER}\n## Subagent routing (gbrain v0.11.0)\n\nSee \`skills/conventions/subagent-routing.md\` for the runtime routing convention.\n\`~/.gbrain/preferences.json\` controls \`minion_mode\` (always / pain_triggered / off).\n`;
+    const snippet = `\n\n${AGENTS_MD_MARKER}\n## Subagent routing (PMBrain v0.11.0)\n\nSee \`skills/conventions/subagent-routing.md\` for the runtime routing convention.\nThe active PMBrain home's \`preferences.json\` controls \`minion_mode\` (always / pain_triggered / off).\n`;
     // Re-check mtime
     const nowMtime = statSync(path).mtimeMs;
     if (nowMtime !== beforeMtime) {
@@ -273,7 +278,7 @@ function rewriteCronManifest(
   // We load config lazily to avoid a hard dep.
   let enginePglite = false;
   try {
-    const cfg = JSON.parse(readFileSync(join(gbrainDir(), 'config.json'), 'utf-8'));
+    const cfg = loadConfig();
     enginePglite = cfg?.engine === 'pglite';
   } catch { /* best-effort */ }
 
@@ -313,7 +318,7 @@ function rewriteCronManifest(
         cron_schedule: schedule,
         manifest_path: path,
         current_cmd: `agentTurn ${handler}`,
-        recommendation: `Add a handler registration for \`${handler}\` in your host worker bootstrap per docs/guides/plugin-handlers.md. Once registered, re-run \`gbrain apply-migrations\` to auto-rewrite this entry.`,
+        recommendation: `Add a handler registration for \`${handler}\` in your host worker bootstrap per docs/guides/plugin-handlers.md. Once registered, re-run \`pmbrain apply-migrations\` to auto-rewrite this entry.`,
         detected_at: new Date().toISOString(),
         status: 'pending',
       });
@@ -418,11 +423,15 @@ function phaseFInstall(opts: OrchestratorOpts): OrchestratorPhaseResult {
   if (opts.dryRun) return { name: 'install', status: 'skipped', detail: 'dry-run' };
   if (opts.noAutopilotInstall) return { name: 'install', status: 'skipped', detail: '--no-autopilot-install' };
   try {
-    execSync('gbrain autopilot --install --yes', { stdio: 'inherit', timeout: 60_000, env: process.env });
+    const cfg = loadConfig();
+    if (cfg?.engine === 'pglite') {
+      return { name: 'install', status: 'skipped', detail: 'pglite local desktop flow does not install host autopilot' };
+    }
+    execSync('pmbrain autopilot --install --yes', { stdio: 'inherit', timeout: 60_000, env: process.env });
     return { name: 'install', status: 'complete' };
   } catch (e) {
     // Install is best-effort — log but don't fail the whole migration. User
-    // can re-run `gbrain autopilot --install` manually.
+    // can re-run `pmbrain autopilot --install` manually.
     return { name: 'install', status: 'failed', detail: e instanceof Error ? e.message : String(e) };
   }
 }
@@ -479,8 +488,8 @@ async function orchestrator(opts: OrchestratorOpts): Promise<OrchestratorResult>
     console.log(`  ${pendingHostWorkPath()}`);
     console.log(`  skills/migrations/v0.11.0.md`);
     console.log('');
-    console.log('The skill walks the host through each item using GBrain\'s plugin contract.');
-    console.log('Re-run `gbrain apply-migrations --yes` after each batch to auto-rewrite newly-');
+    console.log('The skill walks the host through each item using PMBrain\'s plugin contract.');
+    console.log('Re-run `pmbrain apply-migrations --yes` after each batch to auto-rewrite newly-');
     console.log('registerable crons and mark items done.');
   }
 

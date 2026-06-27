@@ -87,4 +87,29 @@ describe('renderAdminTokenFooter', () => {
     expect(lines).not.toContain(`║  ${token.slice(0, 50)}  ║`);
     expect(lines).not.toContain(`║  ${token.slice(50).padEnd(50)}  ║`);
   });
+
+  test('prints env/config admin token as one raw copyable line', () => {
+    const token = 'envtoken0123456789abcdef0123456789abcdef';
+    const footer = renderAdminTokenFooter({
+      suppressBootstrapPrint: false,
+      bootstrapFromEnv: true,
+      bootstrapToken: token,
+    });
+
+    expect(footer).toContain('env/config');
+    expect(footer.split('\n')).toContain(token);
+    expect(footer).not.toContain('from $PMBRAIN_ADMIN_BOOTSTRAP_TOKEN');
+  });
+
+  test('suppression still hides the admin token', () => {
+    const token = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
+    const footer = renderAdminTokenFooter({
+      suppressBootstrapPrint: true,
+      bootstrapFromEnv: true,
+      bootstrapToken: token,
+    });
+
+    expect(footer).toContain('suppressed');
+    expect(footer).not.toContain(token);
+  });
 });
