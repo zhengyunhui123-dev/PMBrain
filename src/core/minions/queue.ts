@@ -595,6 +595,7 @@ export class MinionQueue {
           error_text = 'timeout exceeded',
           lock_token = NULL,
           lock_until = NULL,
+          attempts_made = attempts_made + 1,
           finished_at = now(),
           updated_at = now()
          WHERE status = 'active'

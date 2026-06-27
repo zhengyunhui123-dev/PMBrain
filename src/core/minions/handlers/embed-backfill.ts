@@ -35,7 +35,9 @@ import { tryAcquireDbLock } from '../../db-lock.ts';
 import { BudgetTracker, BudgetExhausted } from '../../budget/budget-tracker.ts';
 import { withBudgetTracker } from '../../ai/gateway.ts';
 import { embedStaleForSource } from '../../embed-stale.ts';
+import { type DbPacer, createDbPacer, createNoopPacer } from '../../db-pacer.ts';
 import type { BrainEngine } from '../../engine.ts';
+import { loadPaceModeConfig, readPaceEnv, resolvePaceMode } from '../../pace-mode.ts';
 import type { MinionJobContext } from '../types.ts';
 
 const DEFAULT_MAX_USD_PER_JOB = 10;
@@ -63,6 +65,23 @@ export interface EmbedBackfillResult {
 /** Compose the lock id for embed-backfill, namespaced like sync's. */
 function embedBackfillLockId(sourceId: string): string {
   return `gbrain-embed-backfill:${sourceId}`;
+}
+
+async function resolveBackfillPacer(engine: BrainEngine): Promise<{ pacer: DbPacer; concurrency?: number }> {
+  try {
+    const cfg = await loadPaceModeConfig(engine);
+    const { envMode, envOverrides } = readPaceEnv();
+    const knobs = resolvePaceMode({
+      mode: cfg.mode,
+      configOverrides: cfg.configOverrides,
+      envMode,
+      envOverrides,
+    });
+    if (!knobs.enabled) return { pacer: createNoopPacer() };
+    return { pacer: createDbPacer({ bundle: knobs }), concurrency: knobs.maxConcurrency };
+  } catch {
+    return { pacer: createNoopPacer() };
+  }
 }
 
 /** Read embed.backfill_max_usd config or default. */
@@ -117,11 +136,14 @@ export function makeEmbedBackfillHandler(engine: BrainEngine) {
       maxCostUsd: capUsd,
       label: `embed-backfill:${sourceId}`,
     });
+    const { pacer, concurrency } = await resolveBackfillPacer(engine);
 
     try {
       const result = await withBudgetTracker(tracker, async () =>
         embedStaleForSource(engine, sourceId, {
           batchSize,
+          pacer,
+          ...(concurrency !== undefined ? { concurrency } : {}),
           signal: job.signal,
           onProgress: ({ embedded, chunksProcessed, cursor }) => {
             // Fire-and-forget; updateProgress returns a Promise but the
@@ -170,6 +192,7 @@ export function makeEmbedBackfillHandler(engine: BrainEngine) {
       }
       throw err;
     } finally {
+      pacer.dispose();
       // ALWAYS release. Aborts, throws, budget-exhaust — all paths unwind here.
       try {
         await lock.release();

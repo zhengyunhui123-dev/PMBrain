@@ -20,6 +20,7 @@
 import type { BrainEngine } from './engine.ts';
 import type { ChunkInput } from './types.ts';
 import { embedBatchWithBackoff } from '../commands/embed.ts';
+import { AbortError, type DbPacer, createNoopPacer, observed } from './db-pacer.ts';
 
 /** Last visited (page_id, chunk_index) for keyset-resume across runs. */
 export interface StaleCursor {
@@ -51,6 +52,12 @@ export interface EmbedStaleOpts {
    * the gateway. Production callers leave it unset.
    */
   embedFn?: (texts: string[], opts: { abortSignal?: AbortSignal }) => Promise<Float32Array[]>;
+  /**
+   * Optional DB-contention pacer. The caller should also pass `concurrency`
+   * from the resolved pace bundle; this loop observes DB latency and sleeps
+   * cooperatively between per-page embedding writes.
+   */
+  pacer?: DbPacer;
 }
 
 export interface EmbedStaleResult {
@@ -95,6 +102,7 @@ export async function embedStaleForSource(
   const batchSize = opts.batchSize ?? 2000;
   const concurrency = opts.concurrency ?? 20;
   const signal = opts.signal;
+  const pacer = opts.pacer ?? createNoopPacer();
   const embedFn = opts.embedFn ?? ((texts, fnOpts) =>
     embedBatchWithBackoff(texts, { abortSignal: fnOpts.abortSignal }));
 
@@ -116,12 +124,14 @@ export async function embedStaleForSource(
       return result;
     }
 
-    const batch = await engine.listStaleChunks({
-      batchSize,
-      afterPageId,
-      afterChunkIndex,
-      sourceId,
-    });
+    const batch = await observed(pacer, () =>
+      engine.listStaleChunks({
+        batchSize,
+        afterPageId,
+        afterChunkIndex,
+        sourceId,
+      }),
+    );
     if (batch.length === 0) {
       result.done = true;
       return result;
@@ -157,7 +167,7 @@ export async function embedStaleForSource(
           stale.map((c) => c.chunk_text),
           { abortSignal: signal },
         );
-        const existing = await engine.getChunks(slug, { sourceId: keySourceId });
+        const existing = await observed(pacer, () => engine.getChunks(slug, { sourceId: keySourceId }));
         const staleIdxToEmbedding = new Map<number, Float32Array>();
         for (let j = 0; j < stale.length; j++) {
           staleIdxToEmbedding.set(stale[j].chunk_index, embeddings[j]);
@@ -169,7 +179,7 @@ export async function embedStaleForSource(
           embedding: staleIdxToEmbedding.get(c.chunk_index) ?? undefined,
           token_count: c.token_count || Math.ceil(c.chunk_text.length / 4),
         }));
-        await engine.upsertChunks(slug, merged, { sourceId: keySourceId });
+        await observed(pacer, () => engine.upsertChunks(slug, merged, { sourceId: keySourceId }));
         result.embedded += stale.length;
         result.pagesProcessed += 1;
       } catch (e: unknown) {
@@ -188,6 +198,12 @@ export async function embedStaleForSource(
       while (nextIdx < keys.length && !signal?.aborted) {
         const idx = nextIdx++;
         await embedOneKey(keys[idx]);
+        try {
+          await pacer.pace(signal);
+        } catch (e) {
+          if (e instanceof AbortError) return;
+          throw e;
+        }
       }
     }
 

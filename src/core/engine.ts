@@ -1056,12 +1056,12 @@ export interface BrainEngine {
    * engines). When set, the from-page filter becomes
    * `WHERE f.slug = $1 AND f.source_id = $X`.
    */
-  getLinks(slug: string, opts?: { sourceId?: string }): Promise<Link[]>;
+  getLinks(slug: string, opts?: { sourceId?: string; sourceIds?: string[] }): Promise<Link[]>;
   /**
    * v0.31.8 (D12 + D16): same `opts.sourceId` semantics as `getLinks`,
    * applied to the to-page side of the join.
    */
-  getBacklinks(slug: string, opts?: { sourceId?: string }): Promise<Link[]>;
+  getBacklinks(slug: string, opts?: { sourceId?: string; sourceIds?: string[] }): Promise<Link[]>;
   /**
    * Fuzzy-match a display name to a page slug using pg_trgm similarity.
    * Zero embedding cost, zero LLM cost — designed for the v0.13 resolver used
@@ -1184,7 +1184,7 @@ export interface BrainEngine {
    */
   addTag(slug: string, tag: string, opts?: { sourceId?: string }): Promise<void>;
   removeTag(slug: string, tag: string, opts?: { sourceId?: string }): Promise<void>;
-  getTags(slug: string, opts?: { sourceId?: string }): Promise<string[]>;
+  getTags(slug: string, opts?: { sourceId?: string; sourceIds?: string[] }): Promise<string[]>;
 
   // Timeline
   /**

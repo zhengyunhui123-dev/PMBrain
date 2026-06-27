@@ -142,6 +142,84 @@ describe('loadOpCheckpoint / recordCompleted / clearOpCheckpoint', () => {
   });
 });
 
+describe('completed_keys array-shape guard', () => {
+  const CONSTRAINT = 'op_checkpoints_completed_keys_array';
+
+  test('schema has one named CHECK and rejects scalar completed_keys', async () => {
+    const c = await engine.executeRaw<{ n: number }>(
+      `SELECT count(*)::int AS n
+       FROM pg_constraint
+       WHERE conname = $1 AND conrelid = 'op_checkpoints'::regclass`,
+      [CONSTRAINT],
+    );
+    expect(Number(c[0]?.n ?? 0)).toBe(1);
+
+    let threw = false;
+    try {
+      await engine.executeRaw(
+        `INSERT INTO op_checkpoints (op, fingerprint, completed_keys, updated_at)
+         VALUES ('embed', 'fp-reject', '"not-an-array"'::jsonb, now())`,
+      );
+    } catch {
+      threw = true;
+    }
+    expect(threw).toBe(true);
+  });
+
+  test('loader skips scalar parent with a specific warning instead of parse failure', async () => {
+    const key = { op: 'embed', fingerprint: 'fp-scalar-skip' };
+    const originalError = console.error;
+    const errors: string[] = [];
+    console.error = (...args: unknown[]) => {
+      errors.push(args.map(String).join(' '));
+    };
+
+    await engine.executeRaw(`ALTER TABLE op_checkpoints DROP CONSTRAINT ${CONSTRAINT}`);
+    try {
+      await engine.executeRaw(
+        `INSERT INTO op_checkpoints (op, fingerprint, completed_keys, updated_at)
+         VALUES ('embed', 'fp-scalar-skip', '"corrupt-scalar"'::jsonb, now())`,
+      );
+      await expect(loadOpCheckpoint(engine, key)).resolves.toEqual([]);
+      expect(errors.some((line) => line.includes('non-array') && line.includes('was skipped'))).toBe(true);
+      expect(errors.some((line) => line.includes('load failed'))).toBe(false);
+    } finally {
+      console.error = originalError;
+      await engine.executeRaw(
+        `UPDATE op_checkpoints SET completed_keys = '[]'::jsonb WHERE jsonb_typeof(completed_keys) <> 'array'`,
+      );
+      await engine.executeRaw(
+        `ALTER TABLE op_checkpoints ADD CONSTRAINT ${CONSTRAINT} CHECK (jsonb_typeof(completed_keys) = 'array')`,
+      );
+    }
+  });
+
+  test('migration repair statement converts scalar parent to empty array', async () => {
+    await engine.executeRaw(`ALTER TABLE op_checkpoints DROP CONSTRAINT ${CONSTRAINT}`);
+    try {
+      await engine.executeRaw(
+        `INSERT INTO op_checkpoints (op, fingerprint, completed_keys, updated_at)
+         VALUES ('embed', 'fp-repair', '"scalar"'::jsonb, now())`,
+      );
+      await engine.executeRaw(
+        `UPDATE op_checkpoints
+           SET completed_keys = '[]'::jsonb, updated_at = now()
+         WHERE jsonb_typeof(completed_keys) <> 'array'`,
+      );
+      const typ = await engine.executeRaw<{ t: string }>(
+        `SELECT jsonb_typeof(completed_keys) AS t
+         FROM op_checkpoints
+         WHERE op = 'embed' AND fingerprint = 'fp-repair'`,
+      );
+      expect(typ[0]?.t).toBe('array');
+    } finally {
+      await engine.executeRaw(
+        `ALTER TABLE op_checkpoints ADD CONSTRAINT ${CONSTRAINT} CHECK (jsonb_typeof(completed_keys) = 'array')`,
+      );
+    }
+  });
+});
+
 describe('resumeFilter (pure)', () => {
   test('empty completed returns all', () => {
     expect(resumeFilter(['a', 'b', 'c'], [])).toEqual(['a', 'b', 'c']);

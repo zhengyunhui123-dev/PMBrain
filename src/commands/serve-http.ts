@@ -130,10 +130,8 @@ export function renderAdminTokenFooter(opts: {
   if (opts.suppressBootstrapPrint) {
     return '║  Admin Token: suppressed (--suppress-bootstrap-token) ║\n╚══════════════════════════════════════════════════════╝';
   }
-  if (opts.bootstrapFromEnv) {
-    return '║  Admin Token: from $PMBRAIN_ADMIN_BOOTSTRAP_TOKEN    ║\n╚══════════════════════════════════════════════════════╝';
-  }
-  return `║  Admin Token (copy next line into /admin login)     ║\n${opts.bootstrapToken}\n╚══════════════════════════════════════════════════════╝`;
+  const source = opts.bootstrapFromEnv ? 'env/config' : 'generated';
+  return `║  Admin Token (${source}; copy next line into /admin login) ║\n${opts.bootstrapToken}\n╚══════════════════════════════════════════════════════╝`;
 }
 
 export type ProbeHealthResult =

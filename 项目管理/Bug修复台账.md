@@ -1,5 +1,32 @@
 # Bug 修复台账
 
+## 2026-06-26 minion 超时尝试次数计数修复
+
+- 时间：2026-06-26 21:20:00
+- 版本号：1.0.28
+- 标题：修复 handleTimeouts 超时任务未计入 attempts_made 的问题
+- 描述：按 `PMBrain-local-upstream-fusion-plan.md` 的后台任务稳定性组，移植 GBrain `bb2e88c4` 中 #1737 的关键 diff。PMBrain 的超时处理逻辑内联在 `src/core/minions/queue.ts`，因此只在现有 SQL 中补充 `attempts_made = attempts_made + 1`，不新增第二套 handler-timeouts 文件。
+- 是否完成：是
+- 最终结果：超时被 `handleTimeouts()` 直接 dead-letter 的长任务现在会显示真实消耗 1 次尝试；已补充单元测试和 E2E 断言；版本号更新为 1.0.28。
+
+## 2026-06-26 sync 导入阶段停滞中止修复
+
+- 时间：2026-06-26 22:00:00
+- 版本号：1.0.29
+- 标题：修复同步进程存活但导入无进度时无法自动释放的风险
+- 描述：同步进程可能仍在刷新 per-source DB lock heartbeat，但导入阶段长时间没有文件完成，界面和状态会显示仍在 running。移植上游 #1950 的 progress-aware stall watchdog，并按 PMBrain 环境变量前缀适配。
+- 是否完成：是
+- 最终结果：导入阶段无进度超过阈值会触发 abort，返回 `partial` 且 reason 为 `stall_timeout`，不推进 `last_commit`；下次同步可从原 checkpoint 继续。
+
+## 2026-06-26 supervisor crash storm 永久停摆修复
+
+- 时间：2026-06-26 22:35:00
+- 版本号：1.0.30
+- 标题：修复 supervisor 达到软 crash 预算后永久停止的问题
+- 描述：原 supervisor 达到 `maxCrashes` 后直接触发永久停止，临时数据库或连接池故障可能导致后台队列无人恢复。移植上游 #1994 的 degraded retry：软预算只告警和退避，硬上限才永久停止。
+- 是否完成：是
+- 最终结果：默认硬上限为 `maxCrashes * 10`，可用 `PMBRAIN_SUPERVISOR_HARD_STOP_CRASHES` 覆盖，设置 `0` 表示不自动永久停止。
+
 ## 2026-06-02 PGLite WASM 在 Windows 下崩溃
 
 - 时间：2026-06-02
@@ -222,3 +249,19 @@
 - 描述：`dream.synthesize.session_corpus_dir` 指向 Codex sessions、`dream.synthesize.meeting_transcripts_dir` 指向会议目录时，Codex `.jsonl` 会被当作原始事件流文本处理，会议 `.txt` 在 GB18030 编码下会被 UTF-8 误读成乱码，导致后续摘要页面无法基于真实正文生成。
 - 是否完成：是
 - 最终结果：Dream transcript discovery 现在递归识别 `.txt`、`.md`、`.jsonl`，Codex JSONL 会抽取 user/assistant 文本消息，会议文本会在 UTF-8 与 GB18030 间择优解码，并支持 `20260514`、`rollout-2026-06-06` 等日期形态。已用用户提供的最小目录验证可发现 2 条 Codex 会话和会议记录，版本更新为 1.0.26。
+
+## 2026-06-26 op_checkpoints.completed_keys 非数组值破坏恢复进度
+
+- 时间：2026-06-26 23:10:00
+- 版本号：1.0.31
+- 标题：修复 checkpoint JSONB 标量值导致恢复状态不可用
+- 描述：`op_checkpoints.completed_keys` 语义上必须是字符串数组，但数据库层此前没有 CHECK 约束；外部脚本或旧二进制若写入 JSONB 标量，读取端可能进入解析失败路径，导致本轮 checkpoint 恢复状态被丢弃。
+- 是否完成：是
+- 最终结果：fresh schema 与 migration v108 均添加 `op_checkpoints_completed_keys_array` 约束；迁移会把已有非数组值修复为空数组；读取端对非数组值给出专门 warning 并跳过。
+## 2026-06-27 Windows 桌面首装迁移与 Admin Token 输出修复
+- 时间：2026-06-27
+- 版本号：1.0.36 / Desktop 1.0.26
+- 标题：修复 Windows 全新用户首次安装出现 WEDGED 与 gbrain 命令缺失，并修复 Admin Token 不显示明文
+- 描述：全新 Windows 桌面安装时，迁移 ledger 与偏好路径仍可能落到旧 `.gbrain`，v0.11.0 migration 还会在 PGLite 首装链路中执行 `gbrain` 子命令；手动 `pmbrain serve --http` 时，来自环境变量或配置的 Admin Token 只显示来源不显示可复制 token。
+- 是否完成：是
+- 最终结果：迁移状态和偏好统一走 PMBrain active home；桌面 `save-setup` 调用迁移时使用内置 sidecar 并跳过 host autopilot；PGLite v0.11.0 schema 初始化改为进程内执行且不再依赖 `gbrain.exe`；WEDGED 和迁移帮助文案改为 PMBrain；Admin Token 在非 suppress 场景下输出明文；版本更新为 PMBrain 1.0.36、Desktop 1.0.26，并重新生成 Windows 安装包。

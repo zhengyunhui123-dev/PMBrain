@@ -14,24 +14,24 @@ import {
 } from '../src/core/preferences.ts';
 
 let origHome: string | undefined;
+let origPmbrainHome: string | undefined;
 let origGbrainHome: string | undefined;
 let tmp: string;
 
 beforeEach(() => {
   origHome = process.env.HOME;
+  origPmbrainHome = process.env.PMBRAIN_HOME;
   origGbrainHome = process.env.GBRAIN_HOME;
-  tmp = mkdtempSync(join(tmpdir(), 'gbrain-prefs-test-'));
-  // preferences.ts's gbrainDir() returns `$HOME/.gbrain` when GBRAIN_HOME
-  // is unset. Test fixtures write to `$tmp/.gbrain/...`, so set HOME only
-  // and clear GBRAIN_HOME — setting GBRAIN_HOME would route prefs to $tmp
-  // directly (no .gbrain suffix), which doesn't match the fixture layout.
-  process.env.HOME = tmp;
+  tmp = mkdtempSync(join(tmpdir(), 'pmbrain-prefs-test-'));
+  process.env.PMBRAIN_HOME = tmp;
   delete process.env.GBRAIN_HOME;
 });
 
 afterEach(() => {
   if (origHome === undefined) delete process.env.HOME;
   else process.env.HOME = origHome;
+  if (origPmbrainHome === undefined) delete process.env.PMBRAIN_HOME;
+  else process.env.PMBRAIN_HOME = origPmbrainHome;
   if (origGbrainHome === undefined) delete process.env.GBRAIN_HOME;
   else process.env.GBRAIN_HOME = origGbrainHome;
   try { rmSync(tmp, { recursive: true, force: true }); } catch { /* best-effort */ }
@@ -61,17 +61,17 @@ describe('loadPreferences', () => {
   });
 
   test('parses existing JSON file', () => {
-    mkdirSync(join(tmp, '.gbrain'), { recursive: true });
+    mkdirSync(join(tmp, '.pmbrain'), { recursive: true });
     writeFileSync(
-      join(tmp, '.gbrain', 'preferences.json'),
+      join(tmp, '.pmbrain', 'preferences.json'),
       JSON.stringify({ minion_mode: 'always', set_in_version: '0.11.0' }),
     );
     expect(loadPreferences()).toEqual({ minion_mode: 'always', set_in_version: '0.11.0' });
   });
 
   test('throws on malformed JSON so callers can surface it', () => {
-    mkdirSync(join(tmp, '.gbrain'), { recursive: true });
-    writeFileSync(join(tmp, '.gbrain', 'preferences.json'), '{not json');
+    mkdirSync(join(tmp, '.pmbrain'), { recursive: true });
+    writeFileSync(join(tmp, '.pmbrain', 'preferences.json'), '{not json');
     expect(() => loadPreferences()).toThrow();
   });
 });
@@ -81,6 +81,7 @@ describe('savePreferences', () => {
     savePreferences({ minion_mode: 'pain_triggered' });
     const path = preferencesPaths.file();
     expect(existsSync(path)).toBe(true);
+    if (process.platform === 'win32') return;
     const mode = statSync(path).mode & 0o777;
     expect(mode).toBe(0o600);
   });
@@ -101,11 +102,10 @@ describe('savePreferences', () => {
     expect(() => savePreferences({ minion_mode: 'bogus' as any })).toThrow();
   });
 
-  test('creates ~/.gbrain directory if missing', () => {
-    // Confirm .gbrain doesn't exist yet
-    expect(existsSync(join(tmp, '.gbrain'))).toBe(false);
+  test('creates .pmbrain directory if missing', () => {
+    expect(existsSync(join(tmp, '.pmbrain'))).toBe(false);
     savePreferences({ minion_mode: 'off' });
-    expect(existsSync(join(tmp, '.gbrain'))).toBe(true);
+    expect(existsSync(join(tmp, '.pmbrain'))).toBe(true);
   });
 
   test('concurrent save + load: reader never sees a half-written file', () => {
@@ -122,7 +122,7 @@ describe('savePreferences', () => {
 
   test('cleans up temp directory used for atomic write', () => {
     savePreferences({ minion_mode: 'off' });
-    const gbrainDir = join(tmp, '.gbrain');
+    const gbrainDir = join(tmp, '.pmbrain');
     // Walk children; nothing should remain except preferences.json (plus maybe subdirs
     // created by other code, but for this test the only thing we wrote is prefs).
     const { readdirSync } = require('fs');
@@ -193,7 +193,7 @@ describe('loadCompletedMigrations', () => {
   });
 
   test('tolerates malformed lines with a warning, continuing past them', () => {
-    const dir = join(tmp, '.gbrain', 'migrations');
+    const dir = join(tmp, '.pmbrain', 'migrations');
     mkdirSync(dir, { recursive: true });
     // Write a file with a good line, a malformed line, and another good line.
     writeFileSync(
@@ -209,5 +209,25 @@ describe('loadCompletedMigrations', () => {
     expect(entries.length).toBe(2);
     expect(entries[0].version).toBe('0.10.0');
     expect(entries[1].version).toBe('0.11.0');
+  });
+
+  test('PMBRAIN_HOME ignores stale legacy .gbrain partial ledger', async () => {
+    const legacyDir = join(tmp, '.gbrain', 'migrations');
+    mkdirSync(legacyDir, { recursive: true });
+    writeFileSync(
+      join(legacyDir, 'completed.jsonl'),
+      [
+        JSON.stringify({ version: '0.11.0', status: 'partial' }),
+        JSON.stringify({ version: '0.11.0', status: 'partial' }),
+        JSON.stringify({ version: '0.11.0', status: 'partial' }),
+        '',
+      ].join('\n'),
+    );
+
+    expect(loadCompletedMigrations()).toEqual([]);
+    const { __testing } = await import('../src/commands/apply-migrations.ts');
+    const plan = __testing.buildPlan(__testing.indexCompleted(loadCompletedMigrations()), '1.0.36', '0.11.0');
+    expect(plan.wedged).toEqual([]);
+    expect(plan.pending.map(m => m.version)).toEqual(['0.11.0']);
   });
 });

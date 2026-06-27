@@ -29,6 +29,7 @@
 import { detectTini } from './spawn-helpers.ts';
 import {
   ChildWorkerSupervisor,
+  HARD_STOP_CRASH_MULTIPLIER,
   type ChildSupervisorEvent,
 } from './child-worker-supervisor.ts';
 import {
@@ -115,6 +116,18 @@ export function calculateBackoffMs(crashCount: number): number {
   const base = Math.min(1000 * Math.pow(2, Math.max(crashCount, 0)), 60_000);
   // Add 10% jitter
   return base + Math.random() * base * 0.1;
+}
+
+export function resolveHardStopMaxCrashes(
+  maxCrashes: number,
+  env: Record<string, string | undefined> = process.env,
+): number {
+  const raw = env.PMBRAIN_SUPERVISOR_HARD_STOP_CRASHES ?? env.GBRAIN_SUPERVISOR_HARD_STOP_CRASHES;
+  if (raw !== undefined && raw !== '') {
+    const n = Number(raw);
+    if (Number.isInteger(n) && n >= 0) return n;
+  }
+  return maxCrashes * HARD_STOP_CRASH_MULTIPLIER;
 }
 
 /** Check if a PID is alive. */
@@ -431,6 +444,7 @@ export class MinionSupervisor {
       args: workerArgs,
       env,
       maxCrashes: this.opts.maxCrashes,
+      hardStopMaxCrashes: resolveHardStopMaxCrashes(this.opts.maxCrashes),
       _backoffFloorMs: this.opts._backoffFloorMs,
       isStopping: () => this.stopping,
       onMaxCrashesExceeded: (count, max) => {
@@ -501,6 +515,7 @@ export class MinionSupervisor {
           reason: event.reason,
           count: event.count,
           window_ms: event.windowMs,
+          ...(event.max !== undefined ? { max_crashes: event.max } : {}),
           queue: this.opts.queue,
         });
         return;

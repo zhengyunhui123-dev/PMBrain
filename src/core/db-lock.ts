@@ -268,6 +268,25 @@ export async function inspectLock(engine: BrainEngine, lockId: string): Promise<
   };
 }
 
+export function isLockHolderLive(snap: LockSnapshot): boolean {
+  return !snap.ttl_expired;
+}
+
+export async function liveSyncStatus(
+  engine: BrainEngine,
+  sourceId: string,
+): Promise<{ holder_pid: number; holder_host: string } | null> {
+  try {
+    const snap = await inspectLock(engine, syncLockId(sourceId));
+    if (snap && isLockHolderLive(snap)) {
+      return { holder_pid: snap.holder_pid, holder_host: snap.holder_host };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * v0.41.6.0 D3: list every lock whose TTL has expired. Used by gbrain
  * doctor's `stale_locks` check. The query reuses the same canonical

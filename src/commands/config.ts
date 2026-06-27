@@ -187,6 +187,18 @@ export async function runConfig(engine: BrainEngine, args: string[]) {
     const coverageOverride =
       args.includes('--coverage-override') || args.includes('--yes');
 
+    if (key === 'spend.posture') {
+      const { isValidSpendPosture } = await import('../core/spend-posture.ts');
+      if (!isValidSpendPosture(value)) {
+        console.error(
+          `[config] spend.posture must be 'gated' or 'tokenmax' (got '${value}').\n` +
+          `[config]   pmbrain config set spend.posture tokenmax   # cost gates become informational\n` +
+          `[config]   pmbrain config set spend.posture gated      # default: gates enforce`,
+        );
+        process.exit(1);
+      }
+    }
+
     if (key === 'embedding_columns') {
       try {
         const parsed = JSON.parse(value);

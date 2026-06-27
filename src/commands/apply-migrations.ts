@@ -1,13 +1,13 @@
 /**
- * `gbrain apply-migrations` — migration runner CLI.
+ * `pmbrain apply-migrations` — migration runner CLI.
  *
- * Reads ~/.gbrain/migrations/completed.jsonl, diffs against the TS migration
+ * Reads migrations/completed.jsonl in the active PMBrain home, diffs against the TS migration
  * registry, runs any pending orchestrators. Resumes `status: "partial"`
  * entries (stopgap bash script writes these). Idempotent: rerunning is
  * cheap when nothing is pending.
  *
  * Invoked from:
- *   - `gbrain upgrade` → runPostUpgrade() tail (Lane A-5)
+ *   - `pmbrain upgrade` → runPostUpgrade() tail (Lane A-5)
  *   - package.json `postinstall` (Lane A-5)
  *   - explicit user / host-agent after registering new handlers (Lane C-1)
  */
@@ -75,28 +75,28 @@ function parseArgs(args: string[]): ApplyMigrationsArgs {
 }
 
 function printHelp(): void {
-  console.log(`gbrain apply-migrations — run pending migration orchestrators.
+  console.log(`pmbrain apply-migrations — run pending migration orchestrators.
 
 Usage:
-  gbrain apply-migrations                Run all pending migrations interactively.
-  gbrain apply-migrations --yes          Non-interactive; uses default mode (pain_triggered).
-  gbrain apply-migrations --dry-run      Print the plan; take no action.
-  gbrain apply-migrations --list         Show applied + pending migrations.
-  gbrain apply-migrations --migration vX.Y.Z
+  pmbrain apply-migrations                Run all pending migrations interactively.
+  pmbrain apply-migrations --yes          Non-interactive; uses default mode (pain_triggered).
+  pmbrain apply-migrations --dry-run      Print the plan; take no action.
+  pmbrain apply-migrations --list         Show applied + pending migrations.
+  pmbrain apply-migrations --migration vX.Y.Z
                                          Force-run a specific migration by version.
-  gbrain apply-migrations --force-retry vX.Y.Z
+  pmbrain apply-migrations --force-retry vX.Y.Z
                                          Clear a wedged migration (3+ consecutive
                                          partials). Writes a 'retry' marker so the
                                          next run treats it as fresh.
-  gbrain apply-migrations --force-orchestrator
+  pmbrain apply-migrations --force-orchestrator
                                          Reset every wedged orchestrator migration
                                          in one shot (writes 'retry' for each).
-  gbrain apply-migrations --force-schema
+  pmbrain apply-migrations --force-schema
                                          Reset schema-version drift; re-runs
                                          runMigrations from current config.version.
-  gbrain apply-migrations --force        (alias --force-all) Apply both
+  pmbrain apply-migrations --force        (alias --force-all) Apply both
                                          --force-orchestrator and --force-schema.
-  gbrain apply-migrations --skip-verify  Bypass post-condition verify hooks on
+  pmbrain apply-migrations --skip-verify  Bypass post-condition verify hooks on
                                          non-idempotent migrations (D6 escape hatch).
 
 Flags:
@@ -225,7 +225,7 @@ function printList(plan: Plan, installed: string): void {
   if (needsWork === 0) {
     console.log('All migrations up to date.');
   } else {
-    console.log(`${needsWork} migration(s) need action. Run \`gbrain apply-migrations --yes\` to apply.`);
+    console.log(`${needsWork} migration(s) need action. Run \`pmbrain apply-migrations --yes\` to apply.`);
   }
 }
 
@@ -290,22 +290,22 @@ export async function runApplyMigrations(args: string[]): Promise<void> {
   }
 
   // Bug 3 — --force-retry: write an explicit reset marker for a wedged
-  // migration, then return. User re-runs `gbrain apply-migrations --yes`
+  // migration, then return. User re-runs `pmbrain apply-migrations --yes`
   // to actually re-attempt.
   if (cli.forceRetry) {
     const target = migrations.find(m => m.version === cli.forceRetry);
     if (!target) {
-      console.error(`No migration registered with version "${cli.forceRetry}". Run \`gbrain apply-migrations --list\`.`);
+      console.error(`No migration registered with version "${cli.forceRetry}". Run \`pmbrain apply-migrations --list\`.`);
       process.exit(2);
     }
     appendCompletedMigration({ version: cli.forceRetry, status: 'retry' });
-    console.log(`Wrote 'retry' marker for v${cli.forceRetry}. Run \`gbrain apply-migrations --yes\` to re-attempt.`);
+    console.log(`Wrote 'retry' marker for v${cli.forceRetry}. Run \`pmbrain apply-migrations --yes\` to re-attempt.`);
     return;
   }
 
   // v0.30.1 (codex T5): --force-orchestrator OR --force-all writes a 'retry'
   // marker for EVERY wedged orchestrator migration in one shot. User re-runs
-  // `gbrain apply-migrations --yes` to actually re-attempt.
+  // `pmbrain apply-migrations --yes` to actually re-attempt.
   if (cli.forceOrchestrator || cli.forceAll) {
     const completed = loadCompletedMigrations();
     const idx = indexCompleted(completed);
@@ -321,7 +321,7 @@ export async function runApplyMigrations(args: string[]): Promise<void> {
     if (resetCount === 0) {
       console.log('No wedged orchestrator migrations found.');
     } else {
-      console.log(`\nReset ${resetCount} wedged orchestrator migration(s). Run \`gbrain apply-migrations --yes\` to re-attempt.`);
+      console.log(`\nReset ${resetCount} wedged orchestrator migration(s). Run \`pmbrain apply-migrations --yes\` to re-attempt.`);
     }
     if (!cli.forceAll) return; // --force-schema continues below if --force-all is set
   }
@@ -401,16 +401,16 @@ export async function runApplyMigrations(args: string[]): Promise<void> {
     for (const m of plan.wedged) {
       console.error(
         `\nMigration v${m.version} is WEDGED (${MAX_CONSECUTIVE_PARTIALS}+ consecutive partials with no completion). ` +
-        `Check ~/.gbrain/upgrade-errors.jsonl for the last failure reasons, fix the underlying issue, then run:\n` +
-        `  gbrain apply-migrations --force-retry ${m.version}\n` +
-        `Then re-run \`gbrain apply-migrations --yes\`.`,
+        `Check the active PMBrain home's upgrade-errors.jsonl for the last failure reasons, fix the underlying issue, then run:\n` +
+        `  pmbrain apply-migrations --force-retry ${m.version}\n` +
+        `Then re-run \`pmbrain apply-migrations --yes\`.`,
       );
     }
     // Don't exit — applied/partial/pending are still worth reporting and running.
   }
 
   if (cli.specificMigration && plan.applied.length + plan.partial.length + plan.pending.length + plan.skippedFuture.length === 0) {
-    console.error(`No migration registered with version "${cli.specificMigration}". Run \`gbrain apply-migrations --list\` to see registered versions.`);
+    console.error(`No migration registered with version "${cli.specificMigration}". Run \`pmbrain apply-migrations --list\` to see registered versions.`);
     process.exit(2);
   }
 
@@ -478,7 +478,7 @@ export async function runApplyMigrations(args: string[]): Promise<void> {
       }
 
       if (result.status === 'partial') {
-        console.log(`Migration v${m.version} finished as PARTIAL. Re-run \`gbrain apply-migrations --yes\` after resolving any pending host-work items.`);
+        console.log(`Migration v${m.version} finished as PARTIAL. Re-run \`pmbrain apply-migrations --yes\` after resolving any pending host-work items.`);
       } else {
         console.log(`Migration v${m.version} complete.`);
       }

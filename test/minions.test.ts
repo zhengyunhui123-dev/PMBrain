@@ -1205,6 +1205,8 @@ describe('MinionQueue: handleTimeouts', () => {
     const dead = await queue.getJob(job.id);
     expect(dead!.status).toBe('dead');
     expect(dead!.error_text).toBe('timeout exceeded');
+    expect(timedOut[0].attempts_made).toBe(1);
+    expect(dead!.attempts_made).toBe(1);
   });
 
   test('handleTimeouts ignores stalled jobs (lock_until > now guard)', async () => {

@@ -75,7 +75,7 @@ export interface SyncResult {
    * cron operators can disambiguate timeout vs pull-timeout in monitoring.
    */
   filesImported?: number;
-  reason?: 'timeout' | 'pull_timeout';
+  reason?: 'timeout' | 'pull_timeout' | 'stall_timeout';
 }
 
 /**
@@ -821,6 +821,36 @@ function formatAgeHuman(ms: number): string {
   return `${d}d${h % 24}h`;
 }
 
+export const DEFAULT_SYNC_STALL_ABORT_SEC = 900;
+
+export function resolveStallAbortSeconds(
+  env: Record<string, string | undefined> = process.env,
+): number {
+  const raw = env.PMBRAIN_SYNC_STALL_ABORT_SECONDS ?? env.GBRAIN_SYNC_STALL_ABORT_SECONDS;
+  if (raw === undefined || raw === '') return DEFAULT_SYNC_STALL_ABORT_SEC;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return DEFAULT_SYNC_STALL_ABORT_SEC;
+  return n;
+}
+
+export function composeAbortSignals(
+  a: AbortSignal | undefined,
+  b: AbortSignal,
+): AbortSignal {
+  if (!a) return b;
+  const anyFn = (AbortSignal as unknown as { any?: (signals: AbortSignal[]) => AbortSignal }).any;
+  if (typeof anyFn === 'function') return anyFn([a, b]);
+  const controller = new AbortController();
+  const abort = (signal: AbortSignal) => {
+    if (!controller.signal.aborted) controller.abort(signal.reason);
+  };
+  if (a.aborted) abort(a);
+  if (b.aborted) abort(b);
+  a.addEventListener('abort', () => abort(a), { once: true });
+  b.addEventListener('abort', () => abort(b), { once: true });
+  return controller.signal;
+}
+
 /**
  * v0.41.13.0 — build a SyncResult { status: 'partial' } envelope.
  *
@@ -840,7 +870,7 @@ function buildPartialResult(opts: {
   modified: number;
   deleted: number;
   renamed: number;
-  reason: 'timeout' | 'pull_timeout';
+  reason: 'timeout' | 'pull_timeout' | 'stall_timeout';
 }): SyncResult {
   return {
     status: 'partial',
@@ -1235,7 +1265,7 @@ async function performSyncInner(engine: BrainEngine, opts: SyncOpts): Promise<Sy
   // D-V3-1 invariant: callable ONLY in pre-bookmark phases (pull, delete,
   // rename, import). After the bookmark write at writeSyncAnchor('last_commit'),
   // partial is impossible because extract + embed run to completion.
-  const partial = (reason: 'timeout' | 'pull_timeout'): SyncResult =>
+  const partial = (reason: 'timeout' | 'pull_timeout' | 'stall_timeout'): SyncResult =>
     buildPartialResult({
       fromCommit: lastCommit,
       toCommit: headCommit,
@@ -1495,6 +1525,26 @@ async function performSyncInner(engine: BrainEngine, opts: SyncOpts): Promise<Sy
 
   if (addsAndMods.length > 0) {
     progress.start('sync.imports', addsAndMods.length);
+    const stallSeconds = resolveStallAbortSeconds();
+    const progressAt = { last: Date.now() };
+    let stallAborted = false;
+    let stallTimer: ReturnType<typeof setInterval> | undefined;
+    if (stallSeconds > 0) {
+      const stallMs = stallSeconds * 1000;
+      const stallController = new AbortController();
+      stallTimer = setInterval(() => {
+        if (Date.now() - progressAt.last >= stallMs) {
+          serr(
+            `[sync] no import progress for ${stallSeconds}s; aborting this sync. ` +
+            `The per-source lock will release and the next run resumes from the checkpoint.`,
+          );
+          stallAborted = true;
+          stallController.abort(new Error('sync_stall_timeout'));
+        }
+      }, Math.min(5000, stallMs));
+      (stallTimer as unknown as { unref?: () => void }).unref?.();
+      opts = { ...opts, signal: composeAbortSignals(opts.signal, stallController.signal) };
+    }
 
     // Core import logic shared by serial and parallel paths.
     // repoPath is validated non-null at the top of performSyncInner; narrow for TS.
@@ -1511,6 +1561,7 @@ async function performSyncInner(engine: BrainEngine, opts: SyncOpts): Promise<Sy
           path,
           error: 'file vanished mid-sync (working tree drifted from headCommit)',
         });
+        progressAt.last = Date.now();
         progress.tick(1, `skip:${path}`);
         return;
       }
@@ -1538,10 +1589,12 @@ async function performSyncInner(engine: BrainEngine, opts: SyncOpts): Promise<Sy
         serr(`  Warning: skipped ${path}: ${msg}`);
         failedFiles.push({ path, error: msg });
       }
+      progressAt.last = Date.now();
       progress.tick(1, path);
     }
 
-    if (runParallel) {
+    try {
+      if (runParallel) {
       // A1 (v0.22.13): use engine.kind discriminator instead of config?.engine
       // string compare or constructor.name sniff. Q3: belt-and-suspenders fall
       // back to serial when database_url is unset, so we never crash on a null
@@ -1553,7 +1606,7 @@ async function performSyncInner(engine: BrainEngine, opts: SyncOpts): Promise<Sy
           // serial fallback inside the parallel branch (database_url unset).
           if (opts.signal?.aborted) {
             progress.finish();
-            return partial('timeout');
+            return partial(stallAborted ? 'stall_timeout' : 'timeout');
           }
           await importOnePath(engine, path);
         }
@@ -1610,17 +1663,20 @@ async function performSyncInner(engine: BrainEngine, opts: SyncOpts): Promise<Sy
           );
         }
       }
-    } else {
-      // Serial path (small auto diffs or explicit --workers 1).
-      for (const path of addsAndMods) {
-        // v0.41.13.0 (T2 / D-V3-2): per-iteration abort check at the
-        // primary serial site.
-        if (opts.signal?.aborted) {
-          progress.finish();
-          return partial('timeout');
+      } else {
+        // Serial path (small auto diffs or explicit --workers 1).
+        for (const path of addsAndMods) {
+          // v0.41.13.0 (T2 / D-V3-2): per-iteration abort check at the
+          // primary serial site.
+          if (opts.signal?.aborted) {
+            progress.finish();
+            return partial(stallAborted ? 'stall_timeout' : 'timeout');
+          }
+          await importOnePath(engine, path);
         }
-        await importOnePath(engine, path);
       }
+    } finally {
+      if (stallTimer) clearInterval(stallTimer);
     }
 
     progress.finish();
@@ -1632,7 +1688,7 @@ async function performSyncInner(engine: BrainEngine, opts: SyncOpts): Promise<Sy
     // the bookmark write below. By returning partial here, we preserve
     // the D-V3-1 invariant that abort means "never advance last_commit."
     if (opts.signal?.aborted) {
-      return partial('timeout');
+      return partial(stallAborted ? 'stall_timeout' : 'timeout');
     }
   }
 

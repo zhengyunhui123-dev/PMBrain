@@ -423,6 +423,14 @@ export function sourceScopeOpts(ctx: OperationContext): { sourceId?: string; sou
   return {};
 }
 
+export function linkReadScopeOpts(ctx: OperationContext): { sourceId?: string; sourceIds?: string[] } {
+  const scope = sourceScopeOpts(ctx);
+  if (ctx.remote !== false && scope.sourceId && !scope.sourceIds) {
+    return { sourceIds: [scope.sourceId] };
+  }
+  return scope;
+}
+
 export interface Operation {
   name: string;
   description: string;
@@ -468,7 +476,7 @@ const get_page: Operation = {
     // resolves to no source), the engine two-branch query falls through to
     // the cross-source view, preserving pre-v0.31.8 behavior. MCP callers
     // (stdio + HTTP) populate ctx.sourceId via the transport layer.
-    const sourceOpts = ctx.sourceId ? { sourceId: ctx.sourceId } : {};
+    const sourceOpts = sourceScopeOpts(ctx);
     // v0.41.13 #1436: fuzzy resolveSlugs ALSO needs source scope — pre-fix
     // it was unscoped, so a remote `get_page` with `fuzzy: true` could
     // return candidates from sources outside ctx.auth.allowedSources /
@@ -501,7 +509,7 @@ const get_page: Operation = {
     // inside bumpLastRetrievedAt (D2).
     bumpLastRetrievedAt(ctx.engine, [page.id]);
 
-    const tags = await ctx.engine.getTags(page.slug, sourceOpts);
+    const tags = await ctx.engine.getTags(page.slug, { sourceId: page.source_id });
     // Privacy boundary for the per-token allow-list (v0.28.6 for takes,
     // v0.32.2 for facts).
     //
@@ -1684,8 +1692,7 @@ const get_tags: Operation = {
     slug: { type: 'string', required: true },
   },
   handler: async (ctx, p) => {
-    // v0.31.8 (D20): thread ctx.sourceId for read-side ops on multi-source brains.
-    const sourceOpts = ctx.sourceId ? { sourceId: ctx.sourceId } : {};
+    const sourceOpts = sourceScopeOpts(ctx);
     return ctx.engine.getTags(p.slug as string, sourceOpts);
   },
   scope: 'read',
@@ -1751,9 +1758,7 @@ const get_links: Operation = {
     slug: { type: 'string', required: true },
   },
   handler: async (ctx, p) => {
-    // v0.31.8 (D16): thread ctx.sourceId. When unset, engine falls through
-    // to cross-source view (back-compat).
-    const sourceOpts = ctx.sourceId ? { sourceId: ctx.sourceId } : {};
+    const sourceOpts = linkReadScopeOpts(ctx);
     return ctx.engine.getLinks(p.slug as string, sourceOpts);
   },
   scope: 'read',
@@ -1766,7 +1771,7 @@ const get_backlinks: Operation = {
     slug: { type: 'string', required: true },
   },
   handler: async (ctx, p) => {
-    const sourceOpts = ctx.sourceId ? { sourceId: ctx.sourceId } : {};
+    const sourceOpts = linkReadScopeOpts(ctx);
     return ctx.engine.getBacklinks(p.slug as string, sourceOpts);
   },
   scope: 'read',
@@ -1869,9 +1874,7 @@ const get_timeline: Operation = {
     slug: { type: 'string', required: true },
   },
   handler: async (ctx, p) => {
-    // v0.31.8 (D20): thread ctx.sourceId.
-    const sourceId = ctx.sourceId;
-    return ctx.engine.getTimeline(p.slug as string, sourceId ? { sourceId } : undefined);
+    return ctx.engine.getTimeline(p.slug as string, sourceScopeOpts(ctx));
   },
   scope: 'read',
   cliHints: { name: 'timeline', positional: ['slug'] },
