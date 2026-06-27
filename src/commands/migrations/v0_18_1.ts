@@ -16,27 +16,20 @@
  * fires on upgrade, because doctor + connectEngine never call initSchema().
  */
 
-import { execSync } from 'child_process';
 import type { Migration, OrchestratorOpts, OrchestratorResult, OrchestratorPhaseResult } from './types.ts';
+import { runSchemaMigration } from './helpers.ts';
 
 // ── Phase A — Schema ────────────────────────────────────────
 
-function phaseASchema(opts: OrchestratorOpts): OrchestratorPhaseResult {
-  if (opts.dryRun) return { name: 'schema', status: 'skipped', detail: 'dry-run' };
-  try {
-    execSync('gbrain init --migrate-only', { stdio: 'inherit', timeout: 600_000, env: process.env });
-    return { name: 'schema', status: 'complete' };
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    return { name: 'schema', status: 'failed', detail: msg };
-  }
+async function phaseASchema(opts: OrchestratorOpts): Promise<OrchestratorPhaseResult> {
+  return runSchemaMigration(opts);
 }
 
 // ── Orchestrator ────────────────────────────────────────────
 
 async function orchestrator(opts: OrchestratorOpts): Promise<OrchestratorResult> {
   const phases: OrchestratorPhaseResult[] = [];
-  phases.push(phaseASchema(opts));
+  phases.push(await phaseASchema(opts));
 
   const anyFailed = phases.some(p => p.status === 'failed');
   const status: OrchestratorResult['status'] = anyFailed ? 'partial' : 'complete';
@@ -59,7 +52,7 @@ export const v0_18_1: Migration = {
       'v0.18.1 fixes a latent security gap: 10 gbrain-managed public tables ' +
       'shipped without RLS. On Supabase, they were reachable by the anon key. ' +
       'Migration v24 backfills RLS on existing brains automatically when ' +
-      '`gbrain apply-migrations` runs. `gbrain doctor` now scans every ' +
+      '`pmbrain apply-migrations` runs. `pmbrain doctor` now scans every ' +
       'public table (no hardcoded allowlist) and exits 1 on gaps. For tables ' +
       'that should stay anon-readable on purpose, operators set a ' +
       '`GBRAIN:RLS_EXEMPT reason=<why>` comment via psql. See ' +

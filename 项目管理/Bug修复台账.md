@@ -265,3 +265,21 @@
 - 描述：全新 Windows 桌面安装时，迁移 ledger 与偏好路径仍可能落到旧 `.gbrain`，v0.11.0 migration 还会在 PGLite 首装链路中执行 `gbrain` 子命令；手动 `pmbrain serve --http` 时，来自环境变量或配置的 Admin Token 只显示来源不显示可复制 token。
 - 是否完成：是
 - 最终结果：迁移状态和偏好统一走 PMBrain active home；桌面 `save-setup` 调用迁移时使用内置 sidecar 并跳过 host autopilot；PGLite v0.11.0 schema 初始化改为进程内执行且不再依赖 `gbrain.exe`；WEDGED 和迁移帮助文案改为 PMBrain；Admin Token 在非 suppress 场景下输出明文；版本更新为 PMBrain 1.0.36、Desktop 1.0.26，并重新生成 Windows 安装包。
+
+## 2026-06-27 Windows 桌面首装 v0.12+ 后续迁移仍调用 gbrain 修复
+
+- 时间：2026-06-27
+- 版本号：1.0.37 / Desktop 1.0.27
+- 标题：修复 Windows 新用户保存配置并启动时 v0.12.0+ migration 调用 legacy gbrain 导致安装失败
+- 描述：上一轮修复已处理 v0.11.0 和 PMBrain home/ledger，但 v0.12.0 之后的多个 migration orchestrator 仍通过 `execSync('gbrain ...')` 调用 schema 初始化、JSONB repair、frontmatter backfill 和统计校验；Windows 桌面安装包只包含 PMBrain sidecar，不包含 PATH 上的 `gbrain.exe`，因此新用户保存配置后会在 v0.12.0 或后续 migration 报 `'gbrain' is not recognized`。
+- 是否完成：是
+- 最终结果：新增 migration helper 直接使用当前 PMBrain 配置创建 engine 并执行 `initSchema()`；v0.12.2 JSONB repair、v0.13.0 frontmatter backfill、v0.16.0/v0.18.0/v0.18.1/v0.21.0/v0.29.1 schema phase 全部改为进程内执行；新增回归测试禁止 migration orchestrator 再 shell 到 legacy `gbrain`；doctor、apply-migrations 和相关迁移错误提示改为 `pmbrain`；版本更新为 PMBrain 1.0.37、Desktop 1.0.27，并重新生成 Windows 安装包。
+
+## 2026-06-27 Migration 规范化：消除所有外部命令依赖
+
+- 时间：2026-06-27
+- 版本号：1.0.38 / Desktop 1.0.28
+- 标题：修复 v0.11.0 非 PGLite 分支仍调用 pmbrain CLI 子进程、v0.32.2 依赖 git PATH
+- 描述：上一轮已处理 PGLite 首装路径的 gbrain 子进程，但按 Migration 规范（不依赖 PATH、不调用 gbrain/pmbrain CLI、PGLite 进程内执行、可重复执行、空数据库成功、Windows 首装成功）逐项验收后发现残留：v0.11.0 的 Postgres/非 PGLite 分支仍通过 `pmbrain init --migrate-only`、`pmbrain jobs smoke`、`pmbrain autopilot --install` 调用 CLI 子进程；v0.32.2 通过 `execFileSync('git', ...)` 依赖 PATH 上的 git。
+- 是否完成：是
+- 最终结果：v0.11.0 非 PGLite 分支的三个 CLI 子进程入口全部改为进程内 engine 初始化；v0.32.2 的 git status 检查改为不依赖 PATH 的本地检查，失败时不再阻断迁移；v0.11.0 host-rewrite 中写入用户 cron 的命令从 `gbrain jobs submit` 改为 `pmbrain jobs submit`；migration 目录已无任何 `execSync/execFileSync/spawn` 外部进程调用；版本更新为 PMBrain 1.0.38、Desktop 1.0.28。

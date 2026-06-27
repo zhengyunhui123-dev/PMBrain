@@ -226,7 +226,7 @@ describe('loadCompletedMigrations', () => {
 
     expect(loadCompletedMigrations()).toEqual([]);
     const { __testing } = await import('../src/commands/apply-migrations.ts');
-    const plan = __testing.buildPlan(__testing.indexCompleted(loadCompletedMigrations()), '1.0.36', '0.11.0');
+    const plan = __testing.buildPlan(__testing.indexCompleted(loadCompletedMigrations()), '1.0.38', '0.11.0');
     expect(plan.wedged).toEqual([]);
     expect(plan.pending.map(m => m.version)).toEqual(['0.11.0']);
   });

@@ -18,25 +18,14 @@
  *   D. Record  — handled by the runner.
  */
 
-import { execSync } from 'child_process';
 import type { BrainEngine } from '../../core/engine.ts';
 import type { Migration, OrchestratorOpts, OrchestratorResult, OrchestratorPhaseResult } from './types.ts';
-import { childGlobalFlags } from '../../core/cli-options.ts';
+import { runSchemaMigration } from './helpers.ts';
 
 // ── Phase A — Schema ────────────────────────────────────────
 
-function phaseASchema(opts: OrchestratorOpts): OrchestratorPhaseResult {
-  if (opts.dryRun) return { name: 'schema', status: 'skipped', detail: 'dry-run' };
-  try {
-    execSync('gbrain init --migrate-only' + childGlobalFlags(), {
-      stdio: 'inherit',
-      timeout: 600_000, // 10 min — duplicate-heavy installs can be slow
-      env: process.env,
-    });
-    return { name: 'schema', status: 'complete' };
-  } catch (e) {
-    return { name: 'schema', status: 'failed', detail: e instanceof Error ? e.message : String(e) };
-  }
+async function phaseASchema(opts: OrchestratorOpts): Promise<OrchestratorPhaseResult> {
+  return runSchemaMigration(opts);
 }
 
 // ── Phase B — Backfill effective_date ───────────────────────
@@ -49,7 +38,7 @@ async function phaseBBackfill(opts: OrchestratorOpts): Promise<OrchestratorPhase
     const { loadConfig, toEngineConfig } = await import('../../core/config.ts');
     const { backfillEffectiveDate } = await import('../../core/backfill-effective-date.ts');
     const cfg = loadConfig();
-    if (!cfg) throw new Error('No gbrain config; run `gbrain init` first.');
+    if (!cfg) throw new Error('No PMBrain config; save setup before applying migrations.');
     const engineConfig = toEngineConfig(cfg);
     engine = await createEngine(engineConfig);
     await engine.connect(engineConfig);
@@ -90,7 +79,7 @@ async function phaseCVerify(opts: OrchestratorOpts): Promise<OrchestratorPhaseRe
     const { createEngine } = await import('../../core/engine-factory.ts');
     const { loadConfig, toEngineConfig } = await import('../../core/config.ts');
     const cfg = loadConfig();
-    if (!cfg) throw new Error('No gbrain config; run `gbrain init` first.');
+    if (!cfg) throw new Error('No PMBrain config; save setup before applying migrations.');
     const engineConfig = toEngineConfig(cfg);
     engine = await createEngine(engineConfig);
     await engine.connect(engineConfig);
@@ -129,7 +118,7 @@ async function orchestrator(opts: OrchestratorOpts): Promise<OrchestratorResult>
 
   const phases: OrchestratorPhaseResult[] = [];
 
-  const a = phaseASchema(opts);
+  const a = await phaseASchema(opts);
   phases.push(a);
   if (a.status === 'failed') return finalize(phases, 'failed');
 

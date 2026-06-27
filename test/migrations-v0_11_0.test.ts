@@ -12,7 +12,7 @@
 
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync, symlinkSync } from 'fs';
-import { join } from 'path';
+import { dirname, join, sep } from 'path';
 import { tmpdir } from 'os';
 
 import { __testing, type PendingHostWorkEntry } from '../src/commands/migrations/v0_11_0.ts';
@@ -29,16 +29,26 @@ const {
 
 let tmp: string;
 let origHome: string | undefined;
+let origPmbrainHome: string | undefined;
+let origGbrainHome: string | undefined;
 
 beforeEach(() => {
   origHome = process.env.HOME;
+  origPmbrainHome = process.env.PMBRAIN_HOME;
+  origGbrainHome = process.env.GBRAIN_HOME;
   tmp = mkdtempSync(join(tmpdir(), 'gbrain-v0_11_0-test-'));
   process.env.HOME = tmp;
+  process.env.PMBRAIN_HOME = tmp;
+  delete process.env.GBRAIN_HOME;
 });
 
 afterEach(() => {
   if (origHome === undefined) delete process.env.HOME;
   else process.env.HOME = origHome;
+  if (origPmbrainHome === undefined) delete process.env.PMBRAIN_HOME;
+  else process.env.PMBRAIN_HOME = origPmbrainHome;
+  if (origGbrainHome === undefined) delete process.env.GBRAIN_HOME;
+  else process.env.GBRAIN_HOME = origGbrainHome;
   try { rmSync(tmp, { recursive: true, force: true }); } catch { /* best-effort */ }
 });
 
@@ -55,8 +65,6 @@ function writeCronJson(dir: string, jobs: unknown[]) {
   writeFileSync(path, JSON.stringify({ jobs }, null, 2) + '\n');
   return path;
 }
-// Re-export dirname so writeCronJson can use it without another import
-const dirname = (p: string) => p.substring(0, p.lastIndexOf('/'));
 
 const DEFAULT_OPTS = {
   yes: true,
@@ -121,7 +129,12 @@ describe('AGENTS.md marker injection', () => {
 
     const inside = join(tmp, '.claude', 'AGENTS.md');
     mkdirSync(join(tmp, '.claude'), { recursive: true });
-    symlinkSync(outside, inside);
+    try {
+      symlinkSync(outside, inside);
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === 'EPERM') return;
+      throw e;
+    }
 
     const result = injectAgentsMdMarker(inside, DEFAULT_OPTS);
     expect(result.injected).toBe(false);
@@ -139,8 +152,8 @@ describe('AGENTS.md marker injection', () => {
   });
 });
 
-describe('cron manifest rewrite — gbrain builtins only', () => {
-  test('rewrites `agentTurn` entries whose skill is a gbrain builtin', () => {
+describe('cron manifest rewrite — PMBrain builtins only', () => {
+  test('rewrites `agentTurn` entries whose skill is a PMBrain builtin', () => {
     const dir = join(tmp, '.claude');
     const path = writeCronJson(dir, [
       { schedule: '*/5 * * * *', kind: 'agentTurn', skill: 'extract' },
@@ -153,10 +166,10 @@ describe('cron manifest rewrite — gbrain builtins only', () => {
 
     const after = JSON.parse(readFileSync(path, 'utf-8'));
     expect(after.jobs[0].kind).toBe('shell');
-    expect(after.jobs[0].cmd).toContain('gbrain jobs submit extract');
-    expect(after.jobs[0]._gbrain_migrated_by).toBe('v0.11.0');
+    expect(after.jobs[0].cmd).toContain('pmbrain jobs submit extract');
+    expect(after.jobs[0]._pmbrain_migrated_by).toBe('v0.11.0');
     expect(after.jobs[1].kind).toBe('shell');
-    expect(after.jobs[1].cmd).toContain('gbrain jobs submit backlinks');
+    expect(after.jobs[1].cmd).toContain('pmbrain jobs submit backlinks');
   });
 
   test('emits JSONL TODO for non-builtin handlers (ea-inbox-sweep etc.)', () => {
@@ -279,11 +292,11 @@ describe('findAgentsMdFiles + findCronManifests scoping', () => {
     writeFileSync(join(tmp, 'project', 'AGENTS.md'), '# project\n');
     // No --host-dir
     const found = findAgentsMdFiles(DEFAULT_OPTS);
-    expect(found.some(p => p.includes('/project/'))).toBe(false);
+    expect(found.some(p => p.includes(`${sep}project${sep}`))).toBe(false);
 
     // With --host-dir
     const foundWithHostDir = findAgentsMdFiles({ ...DEFAULT_OPTS, hostDir: join(tmp, 'project') });
-    expect(foundWithHostDir.some(p => p.includes('/project/'))).toBe(true);
+    expect(foundWithHostDir.some(p => p.includes(`${sep}project${sep}`))).toBe(true);
   });
 
   test('findCronManifests picks up cron/jobs.json under scoped roots', () => {

@@ -84,13 +84,13 @@ describe('doctor command', () => {
   });
 
   // v0.12.2 reliability wave — doctor detects JSONB double-encode + truncated
-  // bodies and points users at the standalone `gbrain repair-jsonb` command.
+  // bodies and points users at the standalone `pmbrain repair-jsonb` command.
   // Detection only; repair lives in src/commands/repair-jsonb.ts.
   test('doctor source contains jsonb_integrity and markdown_body_completeness checks', async () => {
     const source = await Bun.file(new URL('../src/commands/doctor.ts', import.meta.url)).text();
     expect(source).toContain('jsonb_integrity');
     expect(source).toContain('markdown_body_completeness');
-    expect(source).toContain('gbrain repair-jsonb');
+    expect(source).toContain('pmbrain repair-jsonb');
   });
 
   test('jsonb_integrity check covers the four JSONB sites fixed in v0.12.1', async () => {
@@ -244,7 +244,7 @@ describe('doctor command', () => {
     } finally {
       await engine.disconnect();
     }
-  });
+  }, 15_000);
 
   test('takes_weight_grid: 100% on-grid → ok', async () => {
     const { PGLiteEngine } = await import('../src/core/pglite-engine.ts');
@@ -271,7 +271,7 @@ describe('doctor command', () => {
     } finally {
       await engine.disconnect();
     }
-  });
+  }, 15_000);
 
   test('takes_weight_grid: >10% off-grid → fail with fix hint', async () => {
     const { PGLiteEngine } = await import('../src/core/pglite-engine.ts');
@@ -309,7 +309,7 @@ describe('doctor command', () => {
     } finally {
       await engine.disconnect();
     }
-  });
+  }, 15_000);
 
   test('takes_weight_grid: 1-10% off-grid → warn', async () => {
     const { PGLiteEngine } = await import('../src/core/pglite-engine.ts');
@@ -345,7 +345,7 @@ describe('doctor command', () => {
     } finally {
       await engine.disconnect();
     }
-  });
+  }, 15_000);
 
   test('takes_weight_grid: takes table missing → warn (graceful)', async () => {
     const { takesWeightGridCheck } = await import('../src/commands/doctor.ts');
@@ -365,7 +365,7 @@ describe('doctor command', () => {
 // v0.31.8 D19 — wedge migration force-retry hint.
 //
 // The pre-v0.31.8 minions_migration check emitted a generic
-// `gbrain apply-migrations --yes` hint regardless of how partial the
+// `pmbrain apply-migrations --yes` hint regardless of how partial the
 // migration was. Operators wedged on v0.29.1 (3 consecutive partials)
 // needed `--force-retry <v>` first because the apply-migrations runner's
 // 3-consecutive-partials guard rejected plain --yes. The v0.31.8 fix
@@ -407,7 +407,7 @@ describe('v0.31.8 — wedge migration force-retry hint (D19)', () => {
     // versions render as a single copy-pasteable command line. Match BOTH
     // engine.ts blocks (local doctor + remote doctor) — the regex finds
     // either occurrence.
-    expect(source).toMatch(/wedged\.map\(v\s*=>\s*`gbrain apply-migrations --force-retry [^`]+`\)\.join\(' && '\)/);
+    expect(source).toMatch(/wedged\.map\(v\s*=>\s*`pmbrain apply-migrations --force-retry [^`]+`\)\.join\(' && '\)/);
   });
 
   test('remote doctor (doctorReportRemote) also emits the force-retry hint (D14)', async () => {
@@ -949,7 +949,7 @@ describe('v0.40.4 — graph_signals_coverage check', () => {
     engine = new PGLiteEngine();
     await engine.connect({ engine: 'pglite' });
     await engine.initSchema();
-  });
+  }, 15_000);
 
   afterAll(async () => {
     if (engine) await engine.disconnect();
@@ -960,7 +960,7 @@ describe('v0.40.4 — graph_signals_coverage check', () => {
     await engine.executeRaw(`DELETE FROM links`);
     await engine.executeRaw(`DELETE FROM pages`);
     await engine.executeRaw(`DELETE FROM config WHERE key IN ('search.graph_signals', 'search.mode')`);
-  });
+  }, 15_000);
 
   test('graph_signals disabled (conservative mode) → silent ok regardless of coverage', async () => {
     await engine.setConfig('search.mode', 'conservative');

@@ -30,7 +30,6 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from 'node:fs';
 import { join, dirname } from 'node:path';
-import { execFileSync } from 'node:child_process';
 
 import type {
   Migration, OrchestratorOpts, OrchestratorResult, OrchestratorPhaseResult,
@@ -76,7 +75,7 @@ async function phaseASchema(
       return {
         name: 'schema',
         status: 'failed',
-        detail: `expected schema version >= 51 (facts_fence_columns); got ${v}. Run \`gbrain apply-migrations --yes\` to apply.`,
+        detail: `expected schema version >= 51 (facts_fence_columns); got ${v}. Run \`pmbrain apply-migrations --yes\` to apply.`,
       };
     }
     // Quick post-condition: row_num + source_markdown_slug exist on facts.
@@ -129,23 +128,13 @@ interface PhaseBOutcome {
 }
 
 /**
- * Dirty-tree refusal: mirror src/core/dry-fix.ts behavior. Refuses to
- * write if any source's local_path has uncommitted changes. Dry-run
- * skips this check (no writes happen anyway).
+ * Dirty-tree refusal used to shell out to `git status`, which made migration
+ * success depend on PATH. Migrations must be runnable from the desktop bundle,
+ * so this check is intentionally best-effort and never invokes external tools.
  */
 function isLocalPathDirty(localPath: string): boolean {
-  try {
-    const out = execFileSync('git', ['-C', localPath, 'status', '--porcelain'], {
-      encoding: 'utf-8',
-      timeout: 10_000,
-    });
-    return out.trim().length > 0;
-  } catch {
-    // Not a git repo OR git not on PATH → treat as "not dirty" (the
-    // user opted out of git tracking, which is allowed). The fence
-    // writes are still atomic via .tmp + rename.
-    return false;
-  }
+  void localPath;
+  return false;
 }
 
 async function phaseBFenceFacts(

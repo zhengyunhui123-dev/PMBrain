@@ -145,7 +145,7 @@ Windows 桌面端目前仍属于内测版本，安装或使用过程中可能会
 
 完整的新用户前置条件、首次配置、老用户升级和故障处理请阅读：[PMBrain 桌面版安装与首次使用](docs/desktop/安装与首次使用.md)。
 
-运行 `PMBrain-Windows-x64-Setup-1.0.26.exe` 后，桌面端会优先读取现有 `.pmbrain/config.json`，并兼容读取旧版 `.gbrain/config.json`；已有数据库和 API Key 会直接沿用，只有本机没有配置时才打开首次配置向导。首次配置时，用户只需选择 PGLite 本地数据库或 Docker Postgres、填写所需模型 API Key，并选择知识库目录；桌面端会生成 `config.json`、初始化数据库、注册知识库 Source，并固定本机管理员 bootstrap token。
+运行 `PMBrain-Windows-x64-Setup-1.0.28.exe` 后，桌面端会优先读取现有 `.pmbrain/config.json`，并兼容读取旧版 `.gbrain/config.json`；已有数据库和 API Key 会直接沿用，只有本机没有配置时才打开首次配置向导。首次配置时，用户只需选择 PGLite 本地数据库或 Docker Postgres、填写所需模型 API Key，并选择知识库目录；桌面端会生成 `config.json`、初始化数据库、注册知识库 Source，并固定本机管理员 bootstrap token。
 
 安装包已内置 Bun 运行时、PGLite 数据库及其 WASM 资源，选择 PGLite 时不需要另装 Bun、Docker 或 Postgres。首次安装会使用安装包内置的 PMBrain sidecar 自动创建数据库并执行迁移，不依赖系统 PATH、`gbrain.exe` 或用户手动命令。配置完成后可在桌面端生成 CodeBuddy、Cursor、Claude Code、Codex 的 MCP 接入配置，并在写入前备份原配置、合并 `pmbrain` 节点和执行 MCP smoke test。数据库模式可在配置页中切换；切换失败时会恢复原配置。
 
@@ -473,7 +473,7 @@ PMBrain/
 
 | 更新 | 说明 |
 |------|------|
-| **Windows 桌面端 1.0.26** | 修复全新 Windows 首次安装时误读旧 `.gbrain` 迁移状态导致 WEDGED 的问题；PGLite 首装迁移不再依赖 PATH 或 `gbrain.exe`，安装向导可自动初始化数据库并进入管理台 |
+| **Windows 桌面端 1.0.28** | 继续修复全新 Windows 首次安装链路：所有 migration orchestrator 禁止再调用 PATH 上的 `gbrain.exe`、`pmbrain.exe` 或 `git`；v0.11.0、v0.12+、v0.32.2 等安装相关迁移均改为进程内执行或可延后处理；doctor 与迁移错误提示改为 PMBrain 命令 |
 | **Admin Token 输出优化** | `pmbrain serve --http` 在未显式隐藏 token 时会直接打印可复制的 Admin Token，方便手动登录 Admin Console |
 | **Dream 自动读取优化** | Dream synthesize 支持直接读取 Codex `.jsonl` 对话和中文会议转写，会议文本会在 UTF-8 / GB18030 间自动选择正确解码 |
 | **运行稳定性增强** | `op_checkpoints.completed_keys` 增加数组形态保护，避免异常 JSONB 值破坏恢复进度；新增 `pmbrain advisor` 只读诊断入口和 Git source durability 命令 |

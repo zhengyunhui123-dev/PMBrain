@@ -25,25 +25,13 @@
  * All phases are idempotent and safe to re-run.
  */
 
-import { execSync } from 'child_process';
 import type { Migration, OrchestratorOpts, OrchestratorResult, OrchestratorPhaseResult } from './types.ts';
-import { childGlobalFlags } from '../../core/cli-options.ts';
+import { runSchemaMigration } from './helpers.ts';
 
 // ── Phase A — Schema ────────────────────────────────────────
 
-function phaseASchema(opts: OrchestratorOpts): OrchestratorPhaseResult {
-  if (opts.dryRun) return { name: 'schema', status: 'skipped', detail: 'dry-run' };
-  try {
-    execSync('gbrain init --migrate-only' + childGlobalFlags(), {
-      stdio: 'inherit',
-      timeout: 600_000,
-      env: process.env,
-    });
-    return { name: 'schema', status: 'complete' };
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    return { name: 'schema', status: 'failed', detail: msg };
-  }
+async function phaseASchema(opts: OrchestratorOpts): Promise<OrchestratorPhaseResult> {
+  return runSchemaMigration(opts);
 }
 
 // ── Phase B — Backfill prompt ───────────────────────────────
@@ -61,12 +49,12 @@ function phaseBBackfillPrompt(opts: OrchestratorOpts): OrchestratorPhaseResult {
   console.log('');
   console.log('Two ways to roll the new chunker over existing code pages:');
   console.log('');
-  console.log('  1. AUTOMATIC (recommended): next `gbrain sync` detects the version');
+  console.log('  1. AUTOMATIC (recommended): next `pmbrain sync` detects the version');
   console.log('     mismatch via sources.chunker_version and forces a full re-walk.');
   console.log('     No action needed.');
   console.log('');
-  console.log('  2. IMMEDIATE: `gbrain reindex-code --dry-run` to preview cost, then');
-  console.log('     `gbrain reindex-code --yes` to reindex every code page now.');
+  console.log('  2. IMMEDIATE: `pmbrain reindex-code --dry-run` to preview cost, then');
+  console.log('     `pmbrain reindex-code --yes` to reindex every code page now.');
   console.log('');
   console.log('Either way, the new chunker ships: qualified symbol identity, chunk-grain');
   console.log('FTS with doc_comment Weight A, parent scope capture (Layer 6 pending),');
@@ -102,7 +90,7 @@ async function orchestrator(opts: OrchestratorOpts): Promise<OrchestratorResult>
 
   const phases: OrchestratorPhaseResult[] = [];
 
-  const a = phaseASchema(opts);
+  const a = await phaseASchema(opts);
   phases.push(a);
   if (a.status === 'failed') return finalizeResult(phases, 'failed');
 

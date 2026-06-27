@@ -77,7 +77,7 @@ export async function repairJsonb(opts: RepairOpts = { dryRun: false }): Promise
   if (!engineCfg) {
     const config = loadConfig();
     if (!config) {
-      throw new Error('No brain configured. Run: gbrain init');
+      throw new Error('No PMBrain config found. Save setup or run: pmbrain init');
     }
     engineCfg = toEngineConfig(config);
   }

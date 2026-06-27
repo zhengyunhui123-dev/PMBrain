@@ -2,39 +2,37 @@
  * v0.11.0 migration orchestrator — GBrain Minions adoption.
  *
  * Phases (all idempotent; resumable from a prior status:"partial" run):
- *   A. Schema  — in-process schema migration for PGLite; pmbrain init
- *                --migrate-only for Postgres hosts (never bare init — that
- *                defaults to PGLite and clobbers existing configs).
- *   B. Smoke   — in-process jobs table smoke where possible.
+ *   A. Schema  — in-process schema migration for all engines. Never shells
+ *                out to pmbrain/gbrain; desktop installers cannot rely on PATH.
+ *   B. Smoke   — in-process jobs table smoke.
  *   C. Mode    — resolve minion_mode (flag / default / TTY prompt).
  *   D. Prefs   — write preferences.json in the active PMBrain home.
  *   E. Host    — detect AGENTS.md + cron manifests. Inject the subagent-
  *                routing convention marker into each AGENTS.md. Rewrite
- *                cron entries for GBRAIN-BUILTIN handler names only.
+ *                cron entries for PMBrain built-in handler names only.
  *                For non-builtin handlers (host-specific, like
  *                ea-inbox-sweep) emit structured TODO rows to
  *                migrations/pending-host-work.jsonl so the host
  *                agent can walk through its plugin-contract work per
  *                skills/migrations/v0.11.0.md.
- *   F. Install — gbrain autopilot --install (env-aware).
+ *   F. Install — intentionally skipped; migrations must not invoke CLI tools.
  *   G. Record  — append completed.jsonl (status: complete unless any
  *                pending-host-work items remain).
  */
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync, appendFileSync, lstatSync, statSync, realpathSync } from 'fs';
 import { join, resolve, dirname } from 'path';
-import { execSync } from 'child_process';
-import { childGlobalFlags } from '../../core/cli-options.ts';
 import { gbrainPath, loadConfig } from '../../core/config.ts';
 import type { Migration, OrchestratorOpts, OrchestratorResult, OrchestratorPhaseResult } from './types.ts';
 import { savePreferences, loadPreferences } from '../../core/preferences.ts';
 // Bug 3 — appendCompletedMigration moved to the runner (apply-migrations.ts).
 import { promptLine } from '../../core/cli-util.ts';
 import { VERSION } from '../../version.ts';
+import { createMigrationEngine, closeMigrationEngine, runSchemaMigration } from './helpers.ts';
 
 const BUILTIN_HANDLERS = new Set(['sync', 'embed', 'lint', 'import', 'extract', 'backlinks', 'autopilot-cycle']);
-const AGENTS_MD_MARKER = '<!-- gbrain:subagent-routing v0.11.0 -->';
-const CRON_MIGRATED_PROPERTY = '_gbrain_migrated_by';
+const AGENTS_MD_MARKER = '<!-- pmbrain:subagent-routing v0.11.0 -->';
+const CRON_MIGRATED_PROPERTY = '_pmbrain_migrated_by';
 const MAX_HOST_FILE_BYTES = 1_000_000;
 
 function home(): string { return process.env.HOME || ''; }
@@ -60,53 +58,37 @@ export interface PendingHostWorkEntry {
 // -----------------------------------------------------------------------
 
 async function phaseASchema(opts: OrchestratorOpts): Promise<OrchestratorPhaseResult> {
-  if (opts.dryRun) return { name: 'schema', status: 'skipped', detail: 'dry-run' };
-  try {
-    // v0.36.x #1100: route PGLite through an in-process schema apply rather
-    // than shelling out to the legacy CLI name. The subprocess inherits
-    // HOME and tries to acquire the same file lock the parent process is
-    // holding (or briefly released and the on-disk artifact has not finished
-    // settling), which deadlocks until the 30s lock timeout fires. The
-    // structural fix is to not spawn a subprocess for work the parent can
-    // do directly — Postgres tolerates concurrent connections, so the
-    // legacy execSync path stays for Postgres callers.
-    const { toEngineConfig } = await import('../../core/config.ts');
-    const cfg = loadConfig();
-    if (cfg?.engine === 'pglite') {
-      const { createEngine } = await import('../../core/engine-factory.ts');
-      const eng = await createEngine(toEngineConfig(cfg));
-      try {
-        await eng.connect(toEngineConfig(cfg));
-        await eng.initSchema();
-      } finally {
-        try { await eng.disconnect(); } catch { /* best-effort */ }
-      }
-      return { name: 'schema', status: 'complete' };
-    }
-    execSync('pmbrain init --migrate-only' + childGlobalFlags(), { stdio: 'inherit', timeout: 60_000, env: process.env });
-    return { name: 'schema', status: 'complete' };
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    return { name: 'schema', status: 'failed', detail: msg };
-  }
+  return runSchemaMigration(opts);
 }
 
 // -----------------------------------------------------------------------
 // Phase B — Smoke
 // -----------------------------------------------------------------------
 
-function phaseBSmoke(opts: OrchestratorOpts): OrchestratorPhaseResult {
+async function phaseBSmoke(opts: OrchestratorOpts): Promise<OrchestratorPhaseResult> {
   if (opts.dryRun) return { name: 'smoke', status: 'skipped', detail: 'dry-run' };
+  let eng: Awaited<ReturnType<typeof createMigrationEngine>> | null = null;
   try {
-    const cfg = loadConfig();
-    if (cfg?.engine === 'pglite') {
-      return { name: 'smoke', status: 'complete', detail: 'pglite schema smoke covered by phase A' };
+    eng = await createMigrationEngine();
+    await eng.executeRaw(`SELECT 1`);
+    const tables = await eng.executeRaw<{ table_name: string }>(
+      `SELECT table_name FROM information_schema.tables
+       WHERE table_schema = 'public' AND table_name IN ('jobs', 'job_events')`,
+    );
+    const names = new Set(tables.map(t => t.table_name));
+    if (!names.has('jobs')) {
+      return { name: 'smoke', status: 'failed', detail: 'jobs table missing after schema migration' };
     }
-    execSync('pmbrain jobs smoke', { stdio: 'inherit', timeout: 30_000, env: process.env });
-    return { name: 'smoke', status: 'complete' };
+    return {
+      name: 'smoke',
+      status: 'complete',
+      detail: names.has('job_events') ? 'jobs tables reachable' : 'jobs table reachable',
+    };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     return { name: 'smoke', status: 'failed', detail: msg };
+  } finally {
+    if (eng) await closeMigrationEngine(eng);
   }
 }
 
@@ -130,7 +112,7 @@ async function phaseCMode(opts: OrchestratorOpts): Promise<{
 
   // --yes / non-TTY: explicit pain_triggered default with a visible print.
   if (opts.yes || !process.stdin.isTTY) {
-    console.log('Defaulting minion_mode=pain_triggered (non-interactive). Change with `gbrain config set minion_mode <always|off>`.');
+    console.log('Defaulting minion_mode=pain_triggered (non-interactive). Change with `pmbrain config set minion_mode <always|off>`.');
     return { phase: { name: 'mode', status: 'complete', detail: 'mode=pain_triggered (default)' }, mode: 'pain_triggered' };
   }
 
@@ -297,13 +279,13 @@ function rewriteCronManifest(
     if (!handler) continue;
 
     if (BUILTIN_HANDLERS.has(handler)) {
-      // Rewrite to shell + gbrain jobs submit.
+      // Rewrite to shell + pmbrain jobs submit.
       let cmd: string;
       if (enginePglite) {
-        cmd = `gbrain jobs submit ${handler} --params '{}' --follow`;
+        cmd = `pmbrain jobs submit ${handler} --params '{}' --follow`;
       } else {
         // slot computed via date(1). Host scheduler evaluates shell.
-        cmd = `gbrain jobs submit ${handler} --params '{"slot":"$(date -u +%Y-%m-%dT%H:%M)"}' --idempotency-key ${handler}:$(date -u +%Y-%m-%dT%H:%M)`;
+        cmd = `pmbrain jobs submit ${handler} --params '{"slot":"$(date -u +%Y-%m-%dT%H:%M)"}' --idempotency-key ${handler}:$(date -u +%Y-%m-%dT%H:%M)`;
       }
       entry.kind = 'shell';
       entry.cmd = cmd;
@@ -422,18 +404,7 @@ async function phaseEHost(opts: OrchestratorOpts): Promise<{
 function phaseFInstall(opts: OrchestratorOpts): OrchestratorPhaseResult {
   if (opts.dryRun) return { name: 'install', status: 'skipped', detail: 'dry-run' };
   if (opts.noAutopilotInstall) return { name: 'install', status: 'skipped', detail: '--no-autopilot-install' };
-  try {
-    const cfg = loadConfig();
-    if (cfg?.engine === 'pglite') {
-      return { name: 'install', status: 'skipped', detail: 'pglite local desktop flow does not install host autopilot' };
-    }
-    execSync('pmbrain autopilot --install --yes', { stdio: 'inherit', timeout: 60_000, env: process.env });
-    return { name: 'install', status: 'complete' };
-  } catch (e) {
-    // Install is best-effort — log but don't fail the whole migration. User
-    // can re-run `pmbrain autopilot --install` manually.
-    return { name: 'install', status: 'failed', detail: e instanceof Error ? e.message : String(e) };
-  }
+  return { name: 'install', status: 'skipped', detail: 'host autopilot install is not run from migrations' };
 }
 
 // -----------------------------------------------------------------------
@@ -450,7 +421,7 @@ async function orchestrator(opts: OrchestratorOpts): Promise<OrchestratorResult>
     return { version: '0.11.0', status: 'failed', phases };
   }
 
-  const b = phaseBSmoke(opts);
+  const b = await phaseBSmoke(opts);
   phases.push(b);
   if (b.status === 'failed') {
     console.error(`Phase B (smoke) failed: ${b.detail}. Aborting; re-run after fixing.`);

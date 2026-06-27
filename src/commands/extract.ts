@@ -1052,7 +1052,7 @@ export async function extractTimelineForSlugs(
 // no local checkout (e.g. live MCP servers). Uses the typed link inference and
 // timeline parser from src/core/link-extraction.ts.
 
-async function extractLinksFromDB(
+export async function extractLinksFromDB(
   engine: BrainEngine,
   dryRun: boolean,
   jsonMode: boolean,
@@ -1240,7 +1240,7 @@ async function extractLinksFromDB(
   return { created, pages: processed, unresolved };
 }
 
-async function extractTimelineFromDB(
+export async function extractTimelineFromDB(
   engine: BrainEngine,
   dryRun: boolean,
   jsonMode: boolean,

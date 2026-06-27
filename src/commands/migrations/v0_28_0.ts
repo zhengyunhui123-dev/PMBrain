@@ -66,7 +66,7 @@ async function phaseASchema(
       return {
         name: 'schema',
         status: 'failed',
-        detail: `expected schema version >= 38 (takes + access_tokens.permissions); got ${v}. Run \`gbrain apply-migrations --yes\` to apply.`,
+        detail: `expected schema version >= 38 (takes + access_tokens.permissions); got ${v}. Run \`pmbrain apply-migrations --yes\` to apply.`,
       };
     }
     // Quick post-condition: takes + synthesis_evidence tables exist

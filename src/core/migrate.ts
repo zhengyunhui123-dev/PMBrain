@@ -1825,7 +1825,7 @@ export const MIGRATIONS: Migration[] = [
           throw new Error(
             `Migration v39 requires the pgvector extension. Install it via\n` +
             `  CREATE EXTENSION vector;\n` +
-            `then re-run \`gbrain apply-migrations --yes\`.`
+            `then re-run \`pmbrain apply-migrations --yes\`.`
           );
         }
         const version = rows[0].extversion;
@@ -1836,7 +1836,7 @@ export const MIGRATIONS: Migration[] = [
           throw new Error(
             `Migration v39 requires pgvector >= 0.5.0 (HNSW partial indexes).\n` +
             `Found pgvector ${version}.\n\n` +
-            `Fix: ALTER EXTENSION vector UPDATE; then re-run \`gbrain apply-migrations --yes\`.\n` +
+            `Fix: ALTER EXTENSION vector UPDATE; then re-run \`pmbrain apply-migrations --yes\`.\n` +
             `If your Postgres provider doesn't ship pgvector >= 0.5, request\n` +
             `an upgrade or migrate to PGLite for v0.27.1 multimodal support.`
           );
@@ -2243,7 +2243,7 @@ export const MIGRATIONS: Migration[] = [
             throw new Error(
               `Migration v40 (facts hot memory) requires the pgvector extension. ` +
               `Install it via\n  CREATE EXTENSION vector;\n` +
-              `then re-run \`gbrain apply-migrations --yes\`.`,
+              `then re-run \`pmbrain apply-migrations --yes\`.`,
             );
           }
           const v = vrows[0].extversion;
@@ -3107,7 +3107,7 @@ export const MIGRATIONS: Migration[] = [
           WHERE source_id IS NOT NULL
             AND NOT (source_id = ANY(federated_read));
         IF bad_count > 0 THEN
-          RAISE EXCEPTION 'oauth_clients has % rows where source_id is not in federated_read after v62 backfill. This is a bug in v62 — re-run gbrain apply-migrations --force-retry 62.', bad_count;
+          RAISE EXCEPTION 'oauth_clients has % rows where source_id is not in federated_read after v62 backfill. This is a bug in v62 - re-run pmbrain apply-migrations --force-retry 62.', bad_count;
         END IF;
       END $$;
     `,
@@ -5332,7 +5332,7 @@ export async function runMigrations(engine: BrainEngine): Promise<{ applied: num
             console.error('   Fix:');
             console.error('     1. gbrain doctor --locks    # find idle-in-transaction blockers');
             console.error('     2. Terminate blocker(s) shown by step 1 via pg_terminate_backend(<pid>)');
-            console.error('     3. gbrain apply-migrations --yes  # re-run from the version that failed');
+            console.error('     3. pmbrain apply-migrations --yes  # re-run from the version that failed');
             console.error('');
           }
           console.error('   Verify:');

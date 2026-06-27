@@ -316,14 +316,14 @@ export async function takesWeightGridCheck(engine: BrainEngine): Promise<Check> 
       return {
         name: 'takes_weight_grid',
         status: 'fail',
-        message: `${offGrid}/${total} takes off the 0.05 grid (${(ratio * 100).toFixed(1)}%). Fix: gbrain apply-migrations --yes`,
+        message: `${offGrid}/${total} takes off the 0.05 grid (${(ratio * 100).toFixed(1)}%). Fix: pmbrain apply-migrations --yes`,
       };
     }
     if (ratio > 0.01) {
       return {
         name: 'takes_weight_grid',
         status: 'warn',
-        message: `${offGrid}/${total} takes off the 0.05 grid (${(ratio * 100).toFixed(1)}%). Fix: gbrain apply-migrations --yes`,
+        message: `${offGrid}/${total} takes off the 0.05 grid (${(ratio * 100).toFixed(1)}%). Fix: pmbrain apply-migrations --yes`,
       };
     }
     return {
@@ -469,13 +469,13 @@ export async function doctorReportRemote(engine: BrainEngine): Promise<DoctorRep
       checks.push({
         name: 'schema_version',
         status: 'fail',
-        message: `No schema version recorded. Migrations never ran. Run \`gbrain apply-migrations --yes\` on the host.`,
+        message: `No schema version recorded. Migrations never ran. Run \`pmbrain apply-migrations --yes\` on the host.`,
       });
     } else {
       checks.push({
         name: 'schema_version',
         status: 'warn',
-        message: `Version ${version}, latest is ${LATEST_VERSION}. Run \`gbrain apply-migrations --yes\` on the host.`,
+        message: `Version ${version}, latest is ${LATEST_VERSION}. Run \`pmbrain apply-migrations --yes\` on the host.`,
       });
     }
   } catch {
@@ -526,7 +526,7 @@ export async function doctorReportRemote(engine: BrainEngine): Promise<DoctorRep
       if (partialCount >= 3) wedged.push(v);
     }
     if (wedged.length > 0) {
-      const cmd = wedged.map(v => `gbrain apply-migrations --force-retry ${v}`).join(' && ');
+      const cmd = wedged.map(v => `pmbrain apply-migrations --force-retry ${v}`).join(' && ');
       checks.push({
         name: 'minions_migration',
         status: 'fail',
@@ -536,7 +536,7 @@ export async function doctorReportRemote(engine: BrainEngine): Promise<DoctorRep
       checks.push({
         name: 'minions_migration',
         status: 'fail',
-        message: `MINIONS HALF-INSTALLED on brain host: ${stuck.join(', ')}. Run on the host: gbrain apply-migrations --yes`,
+        message: `MINIONS HALF-INSTALLED on brain host: ${stuck.join(', ')}. Run on the host: pmbrain apply-migrations --yes`,
       });
     }
   } catch {
@@ -1467,7 +1467,7 @@ export async function checkBrainstormHealth(engine: BrainEngine): Promise<Check>
       return {
         name: 'brainstorm_health',
         status: 'warn',
-        message: `pages.last_retrieved_at column missing. LSD stale-bias degraded to corpus-sampling. Fix: \`gbrain apply-migrations --yes\``,
+        message: `pages.last_retrieved_at column missing. LSD stale-bias degraded to corpus-sampling. Fix: \`pmbrain apply-migrations --yes\``,
       };
     }
   } catch (e) {
@@ -1635,7 +1635,7 @@ export async function checkEmbeddingWidthConsistency(engine: BrainEngine): Promi
       return {
         name: 'embedding_width_consistency',
         status: 'warn',
-        message: 'content_chunks.embedding column not found. Fix: run `gbrain init --migrate-only` or check schema.',
+        message: 'content_chunks.embedding column not found. Fix: run `pmbrain init --migrate-only` or check schema.',
       };
     }
     if (existing.dims === null) {
@@ -3295,7 +3295,7 @@ export async function buildChecks(
     // wedge condition). The `stuck` filter above already excludes
     // forward-progress-superseded versions, so we only count actual unresolved
     // partials per version. A version with >=3 trailing partials needs
-    // `gbrain apply-migrations --force-retry <v>` once before plain --yes
+    // `pmbrain apply-migrations --force-retry <v>` once before plain --yes
     // will succeed (the 3-consecutive-partials guard in apply-migrations.ts
     // is still active). Without this hint, operators wedged on v0.29.1 (and
     // any future migration that hits the same guard) get "run --yes" advice
@@ -3313,7 +3313,7 @@ export async function buildChecks(
       // version is also stuck. Surface the force-retry hint instead of the
       // generic --yes hint; chained with `&&` when multiple versions are
       // wedged so the operator can copy-paste a single line.
-      const cmd = wedged.map(v => `gbrain apply-migrations --force-retry ${v}`).join(' && ');
+      const cmd = wedged.map(v => `pmbrain apply-migrations --force-retry ${v}`).join(' && ');
       checks.push({
         name: 'minions_migration',
         status: 'fail',
@@ -3323,7 +3323,7 @@ export async function buildChecks(
       checks.push({
         name: 'minions_migration',
         status: 'fail',
-        message: `MINIONS HALF-INSTALLED (partial migration: ${stuck.join(', ')}). Run: gbrain apply-migrations --yes`,
+        message: `MINIONS HALF-INSTALLED (partial migration: ${stuck.join(', ')}). Run: pmbrain apply-migrations --yes`,
       });
     }
     // Note: the "no preferences.json but schema is v7+" case is detected
@@ -4120,14 +4120,14 @@ export async function buildChecks(
       checks.push({
         name: 'schema_version',
         status: 'fail',
-        message: `No schema version recorded. Migrations never ran. Fix: gbrain apply-migrations --yes. ` +
+        message: `No schema version recorded. Migrations never ran. Fix: pmbrain apply-migrations --yes. ` +
                  `If you installed via 'bun install -g github:...', see https://github.com/garrytan/gbrain/issues/218.`,
       });
     } else {
       checks.push({
         name: 'schema_version',
         status: 'warn',
-        message: `Version ${schemaVersion}, latest is ${LATEST_VERSION}. Fix: gbrain apply-migrations --yes`,
+        message: `Version ${schemaVersion}, latest is ${LATEST_VERSION}. Fix: pmbrain apply-migrations --yes`,
       });
     }
   } catch {
@@ -4171,7 +4171,7 @@ export async function buildChecks(
           status: 'warn',
           message:
             'Auto-RLS event trigger missing. New tables created outside gbrain may not get RLS. ' +
-            'Fix: gbrain apply-migrations --force-retry 35',
+            'Fix: pmbrain apply-migrations --force-retry 35',
         });
       } else if (rows[0].evtenabled !== 'O' && rows[0].evtenabled !== 'A') {
         checks.push({
@@ -4741,7 +4741,7 @@ export async function buildChecks(
       checks.push({
         name: 'jsonb_integrity',
         status: 'warn',
-        message: `${totalBad} row(s) double-encoded (${breakdown.join(', ')}). Fix: gbrain repair-jsonb`,
+        message: `${totalBad} row(s) double-encoded (${breakdown.join(', ')}). Fix: pmbrain repair-jsonb`,
       });
     }
   } catch {
@@ -5443,7 +5443,7 @@ export async function buildChecks(
       checks.push({
         name: 'facts_extraction_health',
         status: 'ok',
-        message: 'Skipped (ingest_log.source_id unavailable — run `gbrain apply-migrations --yes`).',
+        message: 'Skipped (ingest_log.source_id unavailable - run `pmbrain apply-migrations --yes`).',
       });
     } else if (code === '42501') {
       checks.push({
@@ -5516,7 +5516,7 @@ export async function buildChecks(
     const code = (err as { code?: string } | null)?.code;
     if (code === '42703') {
       // column doesn't exist — pre-v0.29.1 brain
-      checks.push({ name: 'effective_date_health', status: 'ok', message: 'Skipped (effective_date column unavailable — run gbrain apply-migrations)' });
+      checks.push({ name: 'effective_date_health', status: 'ok', message: 'Skipped (effective_date column unavailable - run pmbrain apply-migrations)' });
     } else {
       checks.push({ name: 'effective_date_health', status: 'warn', message: `Could not read pages: ${(err as Error)?.message ?? String(err)}` });
     }
@@ -6342,7 +6342,7 @@ async function runLocksCheck(engine: BrainEngine | null, jsonOutput: boolean): P
     console.log('');
   }
   console.log('These connections may block ALTER TABLE DDL during migration.');
-  console.log('After terminating, retry: gbrain apply-migrations --yes');
+  console.log('After terminating, retry: pmbrain apply-migrations --yes');
   process.exit(1);
 }
 

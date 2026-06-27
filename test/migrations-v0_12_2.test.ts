@@ -32,7 +32,7 @@ describe('v0.12.2 — JSONB double-encode repair migration', () => {
     expect(desc).toContain('ingest_log.pages_updated');
     expect(desc).toContain('files.metadata');
     expect(desc).toContain('page_versions.frontmatter');
-    expect(desc).toContain('gbrain sync --full');
+    expect(desc).toContain('pmbrain sync --full');
   });
 
   test('phase functions exported for unit testing', async () => {

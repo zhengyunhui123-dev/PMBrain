@@ -45,12 +45,12 @@ async function phaseASchema(
     // Column shape (v47 adds notability column + CHECK) is enforced by that
     // migration alone — see MIGRATIONS[v47]. The orchestrator does not need
     // to gate on column shape; v47 is idempotent and runs as part of the
-    // same `gbrain apply-migrations --yes` invocation.
+    // same `pmbrain apply-migrations --yes` invocation.
     if (v < 45) {
       return {
         name: 'schema',
         status: 'failed',
-        detail: `expected schema version >= 45 (facts hot memory); got ${v}. Run \`gbrain apply-migrations --yes\` to apply.`,
+        detail: `expected schema version >= 45 (facts hot memory); got ${v}. Run \`pmbrain apply-migrations --yes\` to apply.`,
       };
     }
     // Post-condition: facts table exists.

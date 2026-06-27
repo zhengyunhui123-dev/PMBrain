@@ -279,13 +279,13 @@ export async function runApplyMigrations(args: string[]): Promise<void> {
 
   const installed = VERSION.replace(/^v/, '').trim() || '0.0.0';
 
-  // First-install guard (postinstall hook calls us even on `bun add gbrain`
-  // before the user has run `gbrain init`). No config = no brain = nothing
+  // First-install guard (postinstall hook calls us before the user has saved
+  // setup). No config = no brain = nothing
   // to migrate. Exit silently for --yes / --non-interactive so postinstall
   // stays quiet; mention the init step when invoked interactively.
   if (!loadConfig()) {
-    if (cli.list) console.log('No brain configured. Run `gbrain init` to set one up.');
-    else if (cli.dryRun) console.log('No brain configured (run `gbrain init` first). Nothing to migrate.');
+    if (cli.list) console.log('No PMBrain config found. Save setup or run `pmbrain init` to set one up.');
+    else if (cli.dryRun) console.log('No PMBrain config found (save setup or run `pmbrain init` first). Nothing to migrate.');
     return;
   }
 
@@ -366,11 +366,10 @@ export async function runApplyMigrations(args: string[]): Promise<void> {
     if (cfg) {
       // v0.36.x #1100: skip the pre-flight warning on PGLite. The probe
       // briefly holds the single-writer lock; if a downstream orchestrator
-      // phase spawns `gbrain init --migrate-only` as a subprocess (the
-      // legacy v0.11.0 phase A path), the child can race the parent's
-      // lock release and hit a 30s timeout. The orchestrators handle
-      // schema lifecycle internally on PGLite (phase A routes in-process),
-      // so the warning here adds no information for PGLite users.
+      // phase starts another schema pass as a subprocess, the child can race
+      // the parent's lock release and hit a timeout. The orchestrators handle
+      // schema lifecycle internally on PGLite (phase A routes in-process), so
+      // the warning here adds no information for PGLite users.
       const skipPreflight = cfg.engine === 'pglite';
       if (!skipPreflight) {
         const eng = await createEngine(toEngineConfig(cfg));
@@ -382,7 +381,7 @@ export async function runApplyMigrations(args: string[]): Promise<void> {
           console.warn(
             `\n⚠️  Schema version ${schemaVer} is behind latest ${LATEST_VERSION}.\n` +
             `   Schema migrations run automatically on next connectEngine() / initSchema().\n` +
-            `   To run them now: gbrain init --migrate-only\n`,
+            `   To run them now: pmbrain init --migrate-only\n`,
           );
         }
       }

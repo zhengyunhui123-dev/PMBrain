@@ -12,7 +12,7 @@
  */
 
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
-import { mkdtempSync, rmSync, readFileSync, writeFileSync } from 'fs';
+import { mkdtempSync, rmSync, readFileSync, writeFileSync, readdirSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
@@ -150,11 +150,26 @@ describe('Bug 3 — orchestrator no longer writes the ledger directly', () => {
     expect(source).not.toMatch(/import .*appendCompletedMigration.*from/);
   });
 
-  test('v0_11_0 PGLite desktop path does not shell out to gbrain', async () => {
+  test('v0_11_0 migration path does not shell out to CLI commands', async () => {
     const source = await Bun.file(new URL('../src/commands/migrations/v0_11_0.ts', import.meta.url)).text();
-    expect(source).not.toMatch(/^\s*execSync\('gbrain/m);
-    expect(source).toContain("cfg?.engine === 'pglite'");
-    expect(source).toContain('pglite local desktop flow does not install host autopilot');
+    expect(source).not.toMatch(/from ['"]child_process['"]/);
+    expect(source).not.toMatch(/\bexec(?:File)?Sync\(/);
+    expect(source).not.toMatch(/\bspawn(?:Sync)?\(/);
+    expect(source).toContain('runSchemaMigration(opts)');
+    expect(source).toContain('host autopilot install is not run from migrations');
+  });
+
+  test('desktop migration orchestrators do not shell out to CLI executables', () => {
+    const dir = join(process.cwd(), 'src', 'commands', 'migrations');
+    const files = readdirSync(dir).filter(name => /^v.*\.ts$/.test(name));
+    const offenders: string[] = [];
+    for (const file of files) {
+      const source = readFileSync(join(dir, file), 'utf-8');
+      if (/\bexec(?:File)?Sync\(/.test(source) || /\bspawn(?:Sync)?\(/.test(source)) {
+        offenders.push(file);
+      }
+    }
+    expect(offenders).toEqual([]);
   });
 
   test('apply-migrations.ts runner writes the ledger', async () => {
