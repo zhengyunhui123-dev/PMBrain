@@ -31,7 +31,9 @@ h1 { margin: 0; font-size: 30px; line-height: 1.2; font-weight: 590; letter-spac
 button { min-height: 38px; padding: 0 16px; border: 1px solid #46534c; color: #dbe4dd; background: transparent; }
 button:hover:not(:disabled) { border-color: #78877e; background: #1c221f; }
 button:disabled { opacity: .45; cursor: not-allowed; }
-button.solid { color: #111512; border-color: #b4bfb7; background: #dfe7e1; font-weight: 650; }
+button.solid { color: #111512; border-color: #97e66c; background: #97e66c; font-weight: 650; }
+button.solid:disabled { border-color: #b4bfb7; background: #dfe7e1; }
+button.solid:hover:not(:disabled) { border-color: #7cd44d; background: #7cd44d; }
 button.primary { min-height: 44px; color: #101411; border-color: #97e66c; background: #97e66c; font-weight: 700; }
 button.busy i { display: inline-block; width: 12px; height: 12px; margin-left: 10px; border: 2px solid #294122; border-top-color: transparent; border-radius: 50%; animation: spin .8s linear infinite; }
 .notice { margin-top: 20px; padding: 13px 16px; border-left: 3px solid; font-size: 13px; line-height: 1.5; }
