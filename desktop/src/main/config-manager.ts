@@ -8,6 +8,11 @@ export interface SetupPayload {
   databasePath?: string;
   databaseUrl?: string;
   knowledgeDirectory?: string;
+  modelConfig?: {
+    chatModel?: string;
+    embeddingModel?: string;
+    embeddingDimensions?: number;
+  };
   keys?: Partial<Record<'mimo' | 'zhipu' | 'deepseek' | 'openai' | 'anthropic' | 'zeroentropy', string>>;
 }
 
@@ -20,7 +25,11 @@ export interface SetupInfo {
     databasePath?: string;
     databaseConfigured: boolean;
     knowledgeDirectory?: string;
+    chatModel?: string;
+    embeddingModel?: string;
+    embeddingDimensions?: number;
     keyStatus: Record<string, boolean>;
+    keyValues: Record<string, string | undefined>;
     lastMigratedVersion?: string;
   };
 }
@@ -45,6 +54,10 @@ function preferredHome(): string {
   return join(homedir(), '.pmbrain');
 }
 
+export function preferredConfigDirectory(): string {
+  return preferredHome();
+}
+
 export function activeConfigDirectory(): string {
   const preferred = preferredHome();
   if (process.env.PMBRAIN_HOME?.trim()) return preferred;
@@ -59,6 +72,21 @@ export function activeConfigDirectory(): string {
 
 export function desktopConfigPath(): string {
   return join(activeConfigDirectory(), 'config.json');
+}
+
+export function normalizePgliteDatabasePath(input: string): string {
+  const trimmed = input.trim();
+  if (!trimmed) return trimmed;
+  return basename(trimmed).toLowerCase().endsWith('.pglite')
+    ? trimmed
+    : join(trimmed, 'brain.pglite');
+}
+
+function desktopWriteConfigPath(): string {
+  if (process.env.GBRAIN_HOME?.trim() && !process.env.PMBRAIN_HOME?.trim()) {
+    return desktopConfigPath();
+  }
+  return join(preferredConfigDirectory(), 'config.json');
 }
 
 function readConfig(path = desktopConfigPath()): RawConfig | null {
@@ -101,12 +129,15 @@ export function getSetupInfo(): SetupInfo {
   const path = desktopConfigPath();
   const config = readConfig(path);
   const dir = activeConfigDirectory();
+  const pgliteDefaultDir = config?.engine === 'pglite' && config.database_path
+    ? dir
+    : preferredConfigDirectory();
   const desktop = config?.desktop;
   return {
     needsSetup: !config,
     configPath: path,
     defaults: {
-      databasePath: join(dir, 'brain.pglite'),
+      databasePath: join(pgliteDefaultDir, 'brain.pglite'),
       knowledgeDirectory: join(homedir(), 'Documents', 'PMBrain'),
     },
     current: {
@@ -114,6 +145,9 @@ export function getSetupInfo(): SetupInfo {
       databasePath: config?.database_path,
       databaseConfigured: Boolean(config?.database_url || config?.database_path),
       knowledgeDirectory: desktop?.knowledge_directory,
+      chatModel: typeof config?.chat_model === 'string' ? config.chat_model : undefined,
+      embeddingModel: typeof config?.embedding_model === 'string' ? config.embedding_model : undefined,
+      embeddingDimensions: typeof config?.embedding_dimensions === 'number' ? config.embedding_dimensions : undefined,
       keyStatus: {
         mimo: Boolean(config?.mimo_api_key),
         zhipu: Boolean(config?.zhipu_api_key),
@@ -121,6 +155,14 @@ export function getSetupInfo(): SetupInfo {
         openai: Boolean(config?.openai_api_key),
         anthropic: Boolean(config?.anthropic_api_key),
         zeroentropy: Boolean(config?.zeroentropy_api_key),
+      },
+      keyValues: {
+        mimo: typeof config?.mimo_api_key === 'string' ? config.mimo_api_key : undefined,
+        zhipu: typeof config?.zhipu_api_key === 'string' ? config.zhipu_api_key : undefined,
+        deepseek: typeof config?.deepseek_api_key === 'string' ? config.deepseek_api_key : undefined,
+        openai: typeof config?.openai_api_key === 'string' ? config.openai_api_key : undefined,
+        anthropic: typeof config?.anthropic_api_key === 'string' ? config.anthropic_api_key : undefined,
+        zeroentropy: typeof config?.zeroentropy_api_key === 'string' ? config.zeroentropy_api_key : undefined,
       },
       lastMigratedVersion: desktop?.last_migrated_version,
     },
@@ -189,13 +231,22 @@ function selectModelDefaults(config: RawConfig): void {
 }
 
 export function saveSetup(payload: SetupPayload): { config: RawConfig; snapshot: ConfigSnapshot; backup: string | null } {
-  const path = desktopConfigPath();
-  const snapshot = snapshotConfig();
-  const existing = readConfig(path) ?? {};
+  const readPath = desktopConfigPath();
+  const path = desktopWriteConfigPath();
+  const snapshot: ConfigSnapshot = {
+    path,
+    existed: existsSync(path),
+    content: existsSync(path) ? readFileSync(path, 'utf8') : undefined,
+  };
+  const existing = readConfig(readPath) ?? {};
   const config: RawConfig = { ...existing, engine: payload.engine };
 
   if (payload.engine === 'pglite') {
-    const databasePath = payload.databasePath?.trim() || join(activeConfigDirectory(), 'brain.pglite');
+    const preferredDefault = join(preferredConfigDirectory(), 'brain.pglite');
+    const requested = payload.databasePath?.trim();
+    const databasePath = normalizePgliteDatabasePath(
+      requested || (typeof existing.database_path === 'string' ? existing.database_path : preferredDefault),
+    );
     if (!isAbsolute(databasePath)) throw new Error('PGLite 数据库路径必须是绝对路径。');
     config.database_path = databasePath;
     delete config.database_url;
@@ -216,6 +267,20 @@ export function saveSetup(payload: SetupPayload): { config: RawConfig; snapshot:
     if (value?.trim()) config[keyMap[provider]] = value.trim();
   }
   selectModelDefaults(config);
+  const chatModel = payload.modelConfig?.chatModel?.trim();
+  if (chatModel) {
+    config.chat_model = chatModel;
+    config.expansion_model = chatModel;
+  }
+  const embeddingModel = payload.modelConfig?.embeddingModel?.trim();
+  if (embeddingModel) {
+    config.embedding_model = embeddingModel;
+    delete config.embedding_disabled;
+  }
+  const embeddingDimensions = payload.modelConfig?.embeddingDimensions;
+  if (typeof embeddingDimensions === 'number' && Number.isInteger(embeddingDimensions) && embeddingDimensions > 0) {
+    config.embedding_dimensions = embeddingDimensions;
+  }
 
   config.admin_bootstrap_token = typeof existing.admin_bootstrap_token === 'string'
     && /^[A-Za-z0-9_-]{32,}$/.test(existing.admin_bootstrap_token)

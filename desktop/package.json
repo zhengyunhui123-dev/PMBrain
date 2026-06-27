@@ -1,7 +1,7 @@
 {
   "name": "pmbrain-desktop",
   "productName": "PMBrain Desktop",
-  "version": "1.0.28",
+  "version": "1.0.31",
   "private": true,
   "author": "PMBrain",
   "description": "PMBrain Windows desktop shell",
@@ -12,6 +12,7 @@
     "build": "electron-vite build",
     "build:sidecar": "bun run scripts/build-sidecar.ts",
     "build:win": "bun run build && bun run build:sidecar && electron-builder --win nsis && bun run verify:package",
+    "preview:renderer": "bun run scripts/preview-renderer.ts",
     "verify:package": "bun run scripts/verify-package.ts",
     "typecheck": "tsc --noEmit",
     "test": "bun test"

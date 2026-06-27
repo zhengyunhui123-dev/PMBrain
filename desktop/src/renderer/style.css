@@ -59,14 +59,29 @@ h2 { margin: 0; font-size: 18px; font-weight: 650; }
 .mode-card small { margin-top: 6px; color: #859189; font-size: 12px; line-height: 1.45; }
 .mode-card em { align-self: start; padding: 4px 7px; color: #b9eea4; border: 1px solid #416037; font: normal 10px Consolas, monospace; }
 .field-group { margin-top: 18px; }
-.field-group > label, .key-grid > label { display: block; margin-bottom: 8px; color: #aeb9b2; font-size: 12px; font-weight: 600; }
+.field-group > label, .key-grid > label, .model-fields > label { display: block; margin-bottom: 8px; color: #aeb9b2; font-size: 12px; font-weight: 600; }
 input { width: 100%; height: 42px; padding: 0 12px; border: 1px solid #37423c; outline: none; color: #edf3ee; background: #131715; }
 input:focus { border-color: #83b96d; box-shadow: 0 0 0 2px rgba(151,230,108,.08); }
 .input-action input { flex: 1; }
 .field-group > small { display: block; margin-top: 7px; color: #738078; font-size: 11px; }
+.model-stack { display: grid; gap: 14px; }
+.model-card { padding: 18px; border: 1px solid #354039; background: #151a17; }
+.model-card-heading { display: flex; justify-content: space-between; align-items: baseline; gap: 16px; margin-bottom: 14px; }
+.model-card-heading b { color: #eef4ef; font-size: 17px; }
+.model-card-heading small { color: #8d9992; font-size: 12px; overflow-wrap: anywhere; text-align: right; }
+.model-fields { display: grid; gap: 12px; }
+.model-fields.chat-fields { grid-template-columns: 180px minmax(220px, 1fr) minmax(280px, 1.1fr); }
+.model-fields.embedding-fields { grid-template-columns: 160px minmax(210px, 1fr) 130px minmax(260px, 1.1fr); }
+.model-fields label { margin: 0; }
+.model-fields span:not(.secret-input) { display: block; margin-bottom: 8px; color: #c6d0c9; font-size: 12px; font-weight: 700; }
+.model-card p { margin: 12px 0 0; color: #738078; font-size: 12px; line-height: 1.55; }
 .key-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; }
 .key-grid label { margin: 0; }
 .key-grid small { display: block; min-height: 16px; margin-top: 5px; color: #69766e; font-weight: 400; }
+.secret-input { display: grid; grid-template-columns: 1fr 42px; align-items: center; }
+.secret-input input { border-right: 0; }
+.secret-toggle { width: 42px; min-height: 42px; padding: 0; border-color: #37423c; color: #9ba7a0; background: #131715; }
+.secret-toggle:hover { color: #eef4ef; }
 .form-footer { justify-content: space-between; margin-top: 34px; padding-top: 24px; border-top: 1px solid #2b332f; }
 .form-footer p { max-width: 65%; margin: 0; color: #68756d; font: 10px Consolas, monospace; overflow-wrap: anywhere; }
 .credential-switch { display: flex; gap: 24px; padding: 14px 16px; border: 1px solid #303a34; background: #151a17; }
@@ -120,7 +135,7 @@ input:focus { border-color: #83b96d; box-shadow: 0 0 0 2px rgba(151,230,108,.08)
 @media (max-width: 680px) {
   .topbar, .section-heading, .form-footer, .finish-bar { align-items: flex-start; flex-direction: column; }
   .section-heading p { text-align: left; }
-  .mode-grid, .key-grid, .integration-grid { grid-template-columns: 1fr; }
+  .mode-grid, .model-fields.chat-fields, .model-fields.embedding-fields, .key-grid, .integration-grid { grid-template-columns: 1fr; }
   .update-card { grid-template-columns: 1fr; }
   .update-version { padding: 0 0 14px; border-right: 0; border-bottom: 1px solid #313b35; }
   .credential-switch { align-items: flex-start; flex-direction: column; gap: 10px; }

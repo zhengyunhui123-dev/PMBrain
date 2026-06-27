@@ -25,6 +25,7 @@ const {
   BUILTIN_HANDLERS,
   AGENTS_MD_MARKER,
   loadPendingHostWork,
+  evaluateJobsTableSmoke,
 } = __testing;
 
 let tmp: string;
@@ -149,6 +150,25 @@ describe('AGENTS.md marker injection', () => {
     const result = injectAgentsMdMarker(path, DEFAULT_OPTS);
     expect(result.injected).toBe(false);
     expect(result.skipReason).toMatch(/1000000|bytes/);
+  });
+});
+
+describe('Phase B smoke table detection', () => {
+  test('accepts the current minion_jobs table name', () => {
+    const result = evaluateJobsTableSmoke(['minion_jobs']);
+    expect(result.status).toBe('complete');
+    expect(result.detail).toContain('minion_jobs');
+  });
+
+  test('keeps legacy jobs table compatibility', () => {
+    const result = evaluateJobsTableSmoke(['jobs']);
+    expect(result.status).toBe('complete');
+  });
+
+  test('fails only when neither current nor legacy jobs table exists', () => {
+    const result = evaluateJobsTableSmoke(['pages']);
+    expect(result.status).toBe('failed');
+    expect(result.detail).toContain('minion_jobs');
   });
 });
 

@@ -35,6 +35,13 @@ describe('classifyPgliteInitError', () => {
     expect(classifyPgliteInitError(msg)).toBe('macos-26-3');
   });
 
+  test('Windows Aborted() does not route to the macOS hint', () => {
+    const msg = 'Aborted(). Build with -sASSERTIONS for more info.';
+    const verdict = classifyPgliteInitError(msg);
+    if (process.platform === 'win32') expect(verdict).toBe('windows-aborted');
+    else expect(verdict).not.toBe('bunfs');
+  });
+
   test('unknown verdict for generic / unrecognized errors', () => {
     const msg = 'TypeError: cannot read property of undefined at PGlite.create';
     expect(classifyPgliteInitError(msg)).toBe('unknown');
@@ -73,15 +80,23 @@ describe('buildPgliteInitErrorMessage — hint routing', () => {
     expect(msg).not.toContain('Bun vfs');
   });
 
-  test('unknown verdict surfaces the doctor + #223 fallback AND original error', () => {
+  test('windows-aborted verdict surfaces a local desktop recovery hint', () => {
+    const msg = buildPgliteInitErrorMessage('windows-aborted', original);
+    expect(msg).toContain('On Windows');
+    expect(msg).toContain('.pmbrain\\brain.pglite');
+    expect(msg).toContain(original);
+    expect(msg).not.toContain('macOS 26.3');
+  });
+
+  test('unknown verdict surfaces pmbrain doctor AND original error', () => {
     const msg = buildPgliteInitErrorMessage('unknown', original);
-    expect(msg).toContain('gbrain doctor');
-    expect(msg).toContain('issues/223');
+    expect(msg).toContain('pmbrain doctor');
+    expect(msg).not.toContain('issues/223');
     expect(msg).toContain(original);
   });
 
   test('all verdicts produce the canonical header line', () => {
-    for (const v of ['bunfs', 'macos-26-3', 'unknown'] as const) {
+    for (const v of ['bunfs', 'windows-aborted', 'macos-26-3', 'unknown'] as const) {
       const msg = buildPgliteInitErrorMessage(v, original);
       expect(msg.startsWith('PGLite failed to initialize its WASM runtime.')).toBe(true);
     }

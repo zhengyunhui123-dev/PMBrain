@@ -54,6 +54,46 @@ function renderEngine(): void {
   $('#mode-postgres-card').classList.toggle('selected', engine === 'postgres');
 }
 
+function normalizePglitePathForDisplay(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed || /[\\/]?brain\.pglite$/i.test(trimmed)) return trimmed;
+  const separator = trimmed.endsWith('\\') || trimmed.endsWith('/') ? '' : '\\';
+  return `${trimmed}${separator}brain.pglite`;
+}
+
+function parsePositiveInteger(value: string): number | undefined {
+  const parsed = Number.parseInt(value.trim(), 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function splitModelId(value?: string): { provider: string; model: string } {
+  if (!value) return { provider: '', model: '' };
+  const index = value.indexOf(':');
+  if (index <= 0) return { provider: '', model: value };
+  return { provider: value.slice(0, index), model: value.slice(index + 1) };
+}
+
+function normalizeProviderForModel(provider: string): string {
+  const trimmed = provider.trim();
+  return trimmed === 'zeroentropy' ? 'zeroentropyai' : trimmed;
+}
+
+function providerKeyId(provider: string): keyof NonNullable<SetupPayload['keys']> | null {
+  const normalized = normalizeProviderForModel(provider);
+  if (normalized === 'zeroentropyai') return 'zeroentropy';
+  if (['mimo', 'zhipu', 'deepseek', 'openai', 'anthropic'].includes(normalized)) {
+    return normalized as keyof NonNullable<SetupPayload['keys']>;
+  }
+  return null;
+}
+
+function composeModelId(provider: string, model: string): string {
+  const normalizedProvider = normalizeProviderForModel(provider);
+  const trimmedModel = model.trim();
+  if (!normalizedProvider || !trimmedModel) return '';
+  return `${normalizedProvider}:${trimmedModel}`;
+}
+
 function renderService(service: SidecarState | null, port?: number): void {
   const dot = $('#service-dot');
   dot.className = service?.phase ?? (port ? 'ready' : '');
@@ -101,14 +141,25 @@ function populate(next: DesktopSetupState): void {
   if (radio) radio.checked = true;
   ($<HTMLInputElement>('#database-path')).value = setup.current.databasePath || setup.defaults.databasePath;
   ($<HTMLInputElement>('#knowledge-directory')).value = setup.current.knowledgeDirectory || setup.defaults.knowledgeDirectory;
+  const chat = splitModelId(setup.current.chatModel);
+  const embedding = splitModelId(setup.current.embeddingModel);
+  ($<HTMLInputElement>('#chat-provider')).value = chat.provider;
+  ($<HTMLInputElement>('#chat-model-name')).value = chat.model;
+  ($<HTMLInputElement>('#embedding-provider')).value = embedding.provider === 'zeroentropyai' ? 'zeroentropy' : embedding.provider;
+  ($<HTMLInputElement>('#embedding-model-name')).value = embedding.model;
+  ($<HTMLInputElement>('#embedding-dimensions')).value = String(setup.current.embeddingDimensions ?? 1024);
+  const chatKey = providerKeyId(chat.provider);
+  const embeddingKey = providerKeyId(embedding.provider);
+  ($<HTMLInputElement>('#chat-api-key')).value = chatKey ? setup.current.keyValues[chatKey] || '' : '';
+  ($<HTMLInputElement>('#chat-api-key')).type = 'password';
+  ($<HTMLInputElement>('#embedding-api-key')).value = embeddingKey ? setup.current.keyValues[embeddingKey] || '' : '';
+  ($<HTMLInputElement>('#embedding-api-key')).type = 'password';
+  $('#chat-model-effective').textContent = setup.current.chatModel ? `当前生效：${setup.current.chatModel}` : '当前未配置';
+  $('#embedding-model-effective').textContent = setup.current.embeddingModel ? `当前生效：${setup.current.embeddingModel}` : '当前未配置';
   $('#config-path').textContent = `配置写入：${setup.configPath}`;
   $('#postgres-status').textContent = setup.current.engine === 'postgres' && setup.current.databaseConfigured
     ? '已读取本机 Postgres 连接；留空会继续使用现有地址。'
     : '桌面端只连接数据库，不会自动安装或启动 Docker。';
-  Object.entries(setup.current.keyStatus).forEach(([key, configured]) => {
-    const element = document.querySelector<HTMLElement>(`[data-key-status="${key}"]`);
-    if (element) element.textContent = configured ? '已配置，留空保留' : '未配置';
-  });
   renderEngine();
   renderIntegrations(next.integrations);
   renderService(null, next.port);
@@ -139,14 +190,24 @@ async function save(): Promise<void> {
   setNotice('error'); setNotice('success');
   setBusy(button, true, '正在初始化数据库…');
   const keys: SetupPayload['keys'] = {};
-  for (const provider of ['mimo', 'zhipu', 'deepseek', 'openai', 'anthropic', 'zeroentropy'] as const) {
-    keys[provider] = ($<HTMLInputElement>(`#key-${provider}`)).value;
-  }
+  const chatProvider = ($<HTMLInputElement>('#chat-provider')).value;
+  const embeddingProvider = ($<HTMLInputElement>('#embedding-provider')).value;
+  const chatModel = composeModelId(chatProvider, ($<HTMLInputElement>('#chat-model-name')).value);
+  const embeddingModel = composeModelId(embeddingProvider, ($<HTMLInputElement>('#embedding-model-name')).value);
+  const chatKey = providerKeyId(chatProvider);
+  const embeddingKey = providerKeyId(embeddingProvider);
+  if (chatKey) keys[chatKey] = ($<HTMLInputElement>('#chat-api-key')).value;
+  if (embeddingKey) keys[embeddingKey] = ($<HTMLInputElement>('#embedding-api-key')).value;
   const payload: SetupPayload = {
     engine: selectedEngine(),
     databasePath: ($<HTMLInputElement>('#database-path')).value,
     databaseUrl: ($<HTMLInputElement>('#database-url')).value,
     knowledgeDirectory: ($<HTMLInputElement>('#knowledge-directory')).value,
+    modelConfig: {
+      chatModel,
+      embeddingModel,
+      embeddingDimensions: parsePositiveInteger(($<HTMLInputElement>('#embedding-dimensions')).value),
+    },
     keys,
   };
   try {
@@ -195,7 +256,16 @@ document.querySelectorAll<HTMLButtonElement>('.rail-item').forEach((button) => b
 document.querySelectorAll<HTMLButtonElement>('.choose').forEach((button) => button.addEventListener('click', async () => {
   const input = $<HTMLInputElement>(`#${button.dataset.input}`);
   const selected = await window.pmbrainDesktop.chooseDirectory(input.value);
-  if (selected) input.value = selected;
+  if (selected) input.value = button.dataset.input === 'database-path'
+    ? normalizePglitePathForDisplay(selected)
+    : selected;
+}));
+document.querySelectorAll<HTMLButtonElement>('.secret-toggle').forEach((button) => button.addEventListener('click', () => {
+  const input = $<HTMLInputElement>(`#${button.dataset.secret}`);
+  const shouldShow = input.type === 'password';
+  input.type = shouldShow ? 'text' : 'password';
+  button.classList.toggle('active', shouldShow);
+  button.setAttribute('aria-label', shouldShow ? '隐藏 API Key' : '显示 API Key');
 }));
 $('#save-setup').addEventListener('click', () => void save());
 $('#open-logs').addEventListener('click', () => void window.pmbrainDesktop.openLogs());

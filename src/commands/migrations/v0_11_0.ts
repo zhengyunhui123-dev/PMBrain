@@ -65,6 +65,18 @@ async function phaseASchema(opts: OrchestratorOpts): Promise<OrchestratorPhaseRe
 // Phase B — Smoke
 // -----------------------------------------------------------------------
 
+function evaluateJobsTableSmoke(tableNames: Iterable<string>): OrchestratorPhaseResult {
+  const names = new Set(tableNames);
+  if (!names.has('minion_jobs') && !names.has('jobs')) {
+    return { name: 'smoke', status: 'failed', detail: 'minion_jobs table missing after schema migration' };
+  }
+  return {
+    name: 'smoke',
+    status: 'complete',
+    detail: names.has('minion_jobs') ? 'minion_jobs table reachable' : 'legacy jobs table reachable',
+  };
+}
+
 async function phaseBSmoke(opts: OrchestratorOpts): Promise<OrchestratorPhaseResult> {
   if (opts.dryRun) return { name: 'smoke', status: 'skipped', detail: 'dry-run' };
   let eng: Awaited<ReturnType<typeof createMigrationEngine>> | null = null;
@@ -73,17 +85,9 @@ async function phaseBSmoke(opts: OrchestratorOpts): Promise<OrchestratorPhaseRes
     await eng.executeRaw(`SELECT 1`);
     const tables = await eng.executeRaw<{ table_name: string }>(
       `SELECT table_name FROM information_schema.tables
-       WHERE table_schema = 'public' AND table_name IN ('jobs', 'job_events')`,
+       WHERE table_schema = 'public' AND table_name IN ('minion_jobs', 'jobs', 'job_events')`,
     );
-    const names = new Set(tables.map(t => t.table_name));
-    if (!names.has('jobs')) {
-      return { name: 'smoke', status: 'failed', detail: 'jobs table missing after schema migration' };
-    }
-    return {
-      name: 'smoke',
-      status: 'complete',
-      detail: names.has('job_events') ? 'jobs tables reachable' : 'jobs table reachable',
-    };
+    return evaluateJobsTableSmoke(tables.map(t => t.table_name));
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     return { name: 'smoke', status: 'failed', detail: msg };
@@ -499,4 +503,5 @@ export const __testing = {
   AGENTS_MD_MARKER,
   loadPendingHostWork,
   pendingHostWorkPath,
+  evaluateJobsTableSmoke,
 };

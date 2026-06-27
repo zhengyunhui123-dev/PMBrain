@@ -81,17 +81,97 @@
           </div>
 
           <div class="section-heading separated">
-            <div><span class="index">03</span><h2>模型密钥</h2></div>
-            <p>可只填一个。留空会保留已有值；未配置时先关闭向量化。</p>
+            <div><span class="index">03</span><h2>模型配置</h2></div>
+            <p>普通模型和向量模型各配置一组；厂商、模型名和 API Key 会写入本机配置。</p>
           </div>
-          <div class="key-grid">
-            <label>MIMO<input id="key-mimo" type="password" autocomplete="off" /><small data-key-status="mimo"></small></label>
-            <label>智谱 AI<input id="key-zhipu" type="password" autocomplete="off" /><small data-key-status="zhipu"></small></label>
-            <label>DeepSeek<input id="key-deepseek" type="password" autocomplete="off" /><small data-key-status="deepseek"></small></label>
-            <label>OpenAI<input id="key-openai" type="password" autocomplete="off" /><small data-key-status="openai"></small></label>
-            <label>Anthropic<input id="key-anthropic" type="password" autocomplete="off" /><small data-key-status="anthropic"></small></label>
-            <label>ZeroEntropy<input id="key-zeroentropy" type="password" autocomplete="off" /><small data-key-status="zeroentropy"></small></label>
+          <div class="model-stack">
+            <section class="model-card">
+              <div class="model-card-heading">
+                <b>普通模型</b>
+                <small id="chat-model-effective">当前未配置</small>
+              </div>
+              <div class="model-fields chat-fields">
+                <label>
+                  <span>厂商</span>
+                  <input id="chat-provider" list="chat-provider-options" spellcheck="false" placeholder="mimo" />
+                </label>
+                <label>
+                  <span>模型名称</span>
+                  <input id="chat-model-name" list="chat-model-options" spellcheck="false" placeholder="mimo-v2.5-pro" />
+                </label>
+                <label>
+                  <span>API Key</span>
+                  <span class="secret-input"><input id="chat-api-key" type="password" autocomplete="off" /><button type="button" class="secret-toggle" data-secret="chat-api-key" aria-label="显示普通模型 API Key">&#128065;</button></span>
+                </label>
+              </div>
+              <p>用于问答、扩展、总结等普通 LLM 调用。厂商和模型名都可手动输入。</p>
+            </section>
+            <section class="model-card">
+              <div class="model-card-heading">
+                <b>向量化模型</b>
+                <small id="embedding-model-effective">当前未配置</small>
+              </div>
+              <div class="model-fields embedding-fields">
+                <label>
+                  <span>厂商</span>
+                  <input id="embedding-provider" list="embedding-provider-options" spellcheck="false" placeholder="zhipu" />
+                </label>
+                <label>
+                  <span>模型名称</span>
+                  <input id="embedding-model-name" list="embedding-model-options" spellcheck="false" placeholder="embedding-3" />
+                </label>
+                <label>
+                  <span>向量维度</span>
+                  <input id="embedding-dimensions" list="embedding-dimension-options" inputmode="numeric" spellcheck="false" placeholder="1024" />
+                </label>
+                <label>
+                  <span>API Key</span>
+                  <span class="secret-input"><input id="embedding-api-key" type="password" autocomplete="off" /><button type="button" class="secret-toggle" data-secret="embedding-api-key" aria-label="显示向量化模型 API Key">&#128065;</button></span>
+                </label>
+              </div>
+              <p>用于知识库切片向量化和搜索召回。维度需与所选模型实际输出一致。</p>
+            </section>
           </div>
+          <datalist id="chat-provider-options">
+            <option value="mimo"></option>
+            <option value="zhipu"></option>
+            <option value="deepseek"></option>
+            <option value="openai"></option>
+            <option value="anthropic"></option>
+          </datalist>
+          <datalist id="embedding-provider-options">
+            <option value="zhipu"></option>
+            <option value="zeroentropy"></option>
+            <option value="mimo"></option>
+            <option value="openai"></option>
+          </datalist>
+          <datalist id="chat-model-options">
+            <option value="mimo-v2.5-pro"></option>
+            <option value="mimo-v2-pro"></option>
+            <option value="glm-4-plus"></option>
+            <option value="glm-4-flash"></option>
+            <option value="deepseek-chat"></option>
+            <option value="deepseek-reasoner"></option>
+            <option value="claude-sonnet-4-6"></option>
+            <option value="gpt-5.2"></option>
+          </datalist>
+          <datalist id="embedding-model-options">
+            <option value="embedding-3"></option>
+            <option value="embedding-2"></option>
+            <option value="zembed-1"></option>
+            <option value="text-embedding-3-small"></option>
+            <option value="text-embedding-3-large"></option>
+          </datalist>
+          <datalist id="embedding-dimension-options">
+            <option value="1024"></option>
+            <option value="1280"></option>
+            <option value="1536"></option>
+            <option value="2048"></option>
+            <option value="3072"></option>
+            <option value="768"></option>
+            <option value="512"></option>
+            <option value="256"></option>
+          </datalist>
           <div class="form-footer">
             <p id="config-path"></p>
             <button class="primary" id="save-setup"><span>保存配置并启动</span><i></i></button>

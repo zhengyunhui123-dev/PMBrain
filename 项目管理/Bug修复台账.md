@@ -283,3 +283,22 @@
 - 描述：上一轮已处理 PGLite 首装路径的 gbrain 子进程，但按 Migration 规范（不依赖 PATH、不调用 gbrain/pmbrain CLI、PGLite 进程内执行、可重复执行、空数据库成功、Windows 首装成功）逐项验收后发现残留：v0.11.0 的 Postgres/非 PGLite 分支仍通过 `pmbrain init --migrate-only`、`pmbrain jobs smoke`、`pmbrain autopilot --install` 调用 CLI 子进程；v0.32.2 通过 `execFileSync('git', ...)` 依赖 PATH 上的 git。
 - 是否完成：是
 - 最终结果：v0.11.0 非 PGLite 分支的三个 CLI 子进程入口全部改为进程内 engine 初始化；v0.32.2 的 git status 检查改为不依赖 PATH 的本地检查，失败时不再阻断迁移；v0.11.0 host-rewrite 中写入用户 cron 的命令从 `gbrain jobs submit` 改为 `pmbrain jobs submit`；migration 目录已无任何 `execSync/execFileSync/spawn` 外部进程调用；版本更新为 PMBrain 1.0.38、Desktop 1.0.28。
+
+## 2026-06-27 Windows 桌面端 PGLite legacy 路径与 WASM 报错修复
+
+- 时间：2026-06-27
+- 版本号：1.0.39 / Desktop 1.0.29
+- 标题：修复从旧 GBrain 配置切换 PGLite 时默认复用 `.gbrain\brain.pglite` 并误报 macOS WASM 问题
+- 描述：桌面端兼容读取旧 `.gbrain/config.json` 时，配置页会把旧 `.gbrain\brain.pglite` 当作 PGLite 默认路径；Windows 用户从 Postgres 或旧配置切换到 PGLite 后，可能尝试打开旧的或忙碌的 PGLite 数据目录，并把 `Aborted()` 误提示为 macOS 26.3 WASM bug。
+- 是否完成：是
+- 最终结果：桌面端仍可读取旧 `.gbrain` 配置以保留 API Key 和数据库信息，但切换到 PGLite 时默认写入 `.pmbrain/config.json` 并使用 `.pmbrain\brain.pglite`；Windows 上的 PGLite `Aborted()` 初始化失败改为提示旧库、忙碌目录或运行时重开失败，并建议关闭其他 PMBrain/GBrain 进程、选择新的 `.pmbrain` PGLite 路径或使用 Docker Postgres；补充桌面配置迁移和 PGLite 错误分类回归测试。
+
+补充：PGLite 数据库路径现在会对用户选择的普通目录自动追加 `brain.pglite` 后缀，例如选择 `D:\PMBrainTest` 会保存为 `D:\PMBrainTest\brain.pglite`；已经是 `brain.pglite` 的路径不会重复追加。
+## 2026-06-27 桌面端切库启动失败修复
+
+- 时间：2026-06-27 22:15:00
+- 版本号：1.0.41
+- 标题：修复 Docker/PGLite 切换后 v0.11.0 smoke 误判任务表缺失
+- 描述：桌面端保存配置后执行初始化检查时，v0.11.0 迁移 smoke 仍检查旧表名 `jobs`，当前 schema 使用 `minion_jobs`，导致 Docker 和 PGLite 均被误判为 `jobs table missing after schema migration`。
+- 是否完成：是
+- 最终结果：v0.11.0 smoke 同时兼容当前 `minion_jobs` 与旧 `jobs` 表名，并新增回归测试；切换 Docker/PGLite 不再被旧表名检查阻断。

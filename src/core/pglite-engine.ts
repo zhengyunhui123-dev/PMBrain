@@ -151,11 +151,15 @@ export function computeSnapshotSchemaHash(
  * errors). Match the literal `$$bunfs` marker OR ENOENT+pglite.data
  * co-occurrence.
  */
-export type PgliteInitFailure = 'bunfs' | 'macos-26-3' | 'unknown';
+export type PgliteInitFailure = 'bunfs' | 'windows-aborted' | 'macos-26-3' | 'unknown';
 
 export function classifyPgliteInitError(message: string): PgliteInitFailure {
   if (/\$\$bunfs|ENOENT[\s\S]*pglite\.data/i.test(message)) return 'bunfs';
-  if (/abort.*runtime|macos.*26\.3|wasm.*runtime/i.test(message)) {
+  if (/macos.*26\.3/i.test(message)) return 'macos-26-3';
+  if (process.platform === 'win32' && /aborted\(\)|abort/i.test(message)) {
+    return 'windows-aborted';
+  }
+  if (/abort.*runtime|wasm.*runtime/i.test(message)) {
     return 'macos-26-3';
   }
   return 'unknown';
@@ -173,8 +177,16 @@ export function buildPgliteInitErrorMessage(
         '  This looks like a Bun vfs issue: `/$$bunfs/root` is read-only on\n' +
         '  your system, so PGLite cannot extract its pglite.data WASM payload.\n' +
         '  Fix: `bun upgrade` (newer Bun mounts the vfs writable). If that\n' +
-        '  does not help, run via Node: `node src/cli.ts` or install gbrain\n' +
+        '  does not help, run via Node: `node src/cli.ts` or install pmbrain\n' +
         '  using the Node-based path. See #1340 for details.';
+      break;
+    case 'windows-aborted':
+      hint =
+        '  On Windows this usually means the selected PGLite directory is an\n' +
+        '  existing or busy database, or the embedded runtime could not reopen\n' +
+        '  it cleanly. Close other PMBrain/GBrain processes and retry, or choose\n' +
+        '  a fresh .pmbrain\\brain.pglite path. Docker Postgres is the safer\n' +
+        '  option for existing large brains.';
       break;
     case 'macos-26-3':
       hint =
@@ -184,9 +196,8 @@ export function buildPgliteInitErrorMessage(
     case 'unknown':
     default:
       hint =
-        '  Most common cause: the macOS 26.3 WASM bug\n' +
-        '  (https://github.com/garrytan/gbrain/issues/223).\n' +
-        '  Run `gbrain doctor` for a full diagnosis.';
+        '  Run `pmbrain doctor` for a full diagnosis. If this happened in the\n' +
+        '  desktop setup wizard, choose Docker Postgres or a fresh PGLite path.';
       break;
   }
   return `${header}\n${hint}\n  Original error: ${original}`;

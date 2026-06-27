@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   activeConfigDirectory, desktopConfigPath, getSetupInfo, markDesktopMigration, needsDesktopMigration,
-  restoreConfig, saveSetup, writeJsonConfig,
+  normalizePgliteDatabasePath, preferredConfigDirectory, restoreConfig, saveSetup, writeJsonConfig,
 } from '../src/main/config-manager.js';
 
 const originalHome = process.env.PMBRAIN_HOME;
@@ -27,6 +27,12 @@ function isolatedHome(): string {
 }
 
 describe('desktop config manager', () => {
+  test('normalizes selected PGLite directories to a brain.pglite data directory', () => {
+    const root = join(tmpdir(), 'pmbrain-selected-dir');
+    expect(normalizePgliteDatabasePath(root)).toBe(join(root, 'brain.pglite'));
+    expect(normalizePgliteDatabasePath(join(root, 'brain.pglite'))).toBe(join(root, 'brain.pglite'));
+  });
+
   test('reads a legacy local config without rewriting database or API keys', () => {
     const root = mkdtempSync(join(tmpdir(), 'pmbrain-desktop-legacy-'));
     roots.push(root);
@@ -51,18 +57,36 @@ describe('desktop config manager', () => {
 
   test('creates secure PGLite config and preserves keys on a later switch', () => {
     const root = isolatedHome();
-    const pglite = join(root, 'brain.pglite');
+    const pgliteParent = join(root, 'selected-db-parent');
+    const pglite = join(pgliteParent, 'brain.pglite');
     const first = saveSetup({
-      engine: 'pglite', databasePath: pglite, knowledgeDirectory: join(root, 'knowledge'), keys: { zhipu: 'zhipu-test' },
+      engine: 'pglite',
+      databasePath: pgliteParent,
+      knowledgeDirectory: join(root, 'knowledge'),
+      keys: { zhipu: 'zhipu-test' },
+      modelConfig: {
+        chatModel: 'zhipu:glm-4-plus',
+        embeddingModel: 'zhipu:embedding-3',
+        embeddingDimensions: 1024,
+      },
     });
     const path = desktopConfigPath();
     const config = JSON.parse(readFileSync(path, 'utf8'));
     expect(config.engine).toBe('pglite');
     expect(config.database_path).toBe(pglite);
     expect(config.zhipu_api_key).toBe('zhipu-test');
+    expect(config.chat_model).toBe('zhipu:glm-4-plus');
+    expect(config.expansion_model).toBe('zhipu:glm-4-plus');
+    expect(config.embedding_model).toBe('zhipu:embedding-3');
+    expect(config.embedding_dimensions).toBe(1024);
     expect(config.admin_bootstrap_token).toMatch(/^[A-Za-z0-9_-]{32,}$/);
     expect(config.desktop.knowledge_source_id).toMatch(/^desktop-[0-9a-f]{8}$/);
-    expect(getSetupInfo().needsSetup).toBe(false);
+    const setupInfo = getSetupInfo();
+    expect(setupInfo.needsSetup).toBe(false);
+    expect(setupInfo.current.chatModel).toBe('zhipu:glm-4-plus');
+    expect(setupInfo.current.embeddingModel).toBe('zhipu:embedding-3');
+    expect(setupInfo.current.embeddingDimensions).toBe(1024);
+    expect(setupInfo.current.keyValues.zhipu).toBe('zhipu-test');
     expect(needsDesktopMigration('1.0.21')).toBe(true);
     markDesktopMigration('1.0.21');
     expect(needsDesktopMigration('1.0.21')).toBe(false);
@@ -76,5 +100,49 @@ describe('desktop config manager', () => {
 
     restoreConfig(first.snapshot);
     expect(existsSync(path)).toBe(false);
+  });
+
+  test('switching from discovered legacy config to PGLite honors the selected local path', () => {
+    const root = mkdtempSync(join(tmpdir(), 'pmbrain-desktop-legacy-switch-'));
+    roots.push(root);
+    const oldUserProfile = process.env.USERPROFILE;
+    const oldHome = process.env.HOME;
+    delete process.env.PMBRAIN_HOME;
+    delete process.env.GBRAIN_HOME;
+    process.env.USERPROFILE = root;
+    process.env.HOME = root;
+
+    try {
+      const legacyPath = join(root, '.gbrain', 'config.json');
+      writeJsonConfig(legacyPath, {
+        engine: 'postgres',
+        database_url: 'postgresql://local:secret@127.0.0.1:5432/pmbrain',
+        zhipu_api_key: 'existing-key',
+      });
+      const info = getSetupInfo();
+      const legacyDefault = join(root, '.gbrain', 'brain.pglite');
+      expect(activeConfigDirectory()).toBe(join(root, '.gbrain'));
+      expect(preferredConfigDirectory()).toBe(join(root, '.pmbrain'));
+      expect(info.defaults.databasePath).toBe(join(root, '.pmbrain', 'brain.pglite'));
+
+      saveSetup({
+        engine: 'pglite',
+        databasePath: legacyDefault,
+        knowledgeDirectory: join(root, 'knowledge'),
+        keys: {},
+      });
+
+      const pmbrainConfigPath = join(root, '.pmbrain', 'config.json');
+      const saved = JSON.parse(readFileSync(pmbrainConfigPath, 'utf8'));
+      expect(saved.engine).toBe('pglite');
+      expect(saved.database_path).toBe(legacyDefault);
+      expect(saved.zhipu_api_key).toBe('existing-key');
+      expect(existsSync(legacyPath)).toBe(true);
+    } finally {
+      if (oldUserProfile === undefined) delete process.env.USERPROFILE;
+      else process.env.USERPROFILE = oldUserProfile;
+      if (oldHome === undefined) delete process.env.HOME;
+      else process.env.HOME = oldHome;
+    }
   });
 });
