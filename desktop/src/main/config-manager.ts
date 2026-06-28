@@ -13,7 +13,11 @@ export interface SetupPayload {
     embeddingModel?: string;
     embeddingDimensions?: number;
   };
-  keys?: Partial<Record<'mimo' | 'zhipu' | 'deepseek' | 'openai' | 'anthropic' | 'zeroentropy', string>>;
+  keys?: Partial<Record<
+    'mimo' | 'zhipu' | 'deepseek' | 'openai' | 'anthropic' | 'zeroentropy' |
+    'google' | 'voyage' | 'groq' | 'together' | 'openrouter' | 'minimax' | 'dashscope',
+    string
+  >>;
 }
 
 export interface SetupInfo {
@@ -155,6 +159,13 @@ export function getSetupInfo(): SetupInfo {
         openai: Boolean(config?.openai_api_key),
         anthropic: Boolean(config?.anthropic_api_key),
         zeroentropy: Boolean(config?.zeroentropy_api_key),
+        google: Boolean(config?.google_api_key),
+        voyage: Boolean(config?.voyage_api_key),
+        groq: Boolean(config?.groq_api_key),
+        together: Boolean(config?.together_api_key),
+        openrouter: Boolean(config?.openrouter_api_key),
+        minimax: Boolean(config?.minimax_api_key),
+        dashscope: Boolean(config?.dashscope_api_key),
       },
       keyValues: {
         mimo: typeof config?.mimo_api_key === 'string' ? config.mimo_api_key : undefined,
@@ -163,6 +174,13 @@ export function getSetupInfo(): SetupInfo {
         openai: typeof config?.openai_api_key === 'string' ? config.openai_api_key : undefined,
         anthropic: typeof config?.anthropic_api_key === 'string' ? config.anthropic_api_key : undefined,
         zeroentropy: typeof config?.zeroentropy_api_key === 'string' ? config.zeroentropy_api_key : undefined,
+        google: typeof config?.google_api_key === 'string' ? config.google_api_key : undefined,
+        voyage: typeof config?.voyage_api_key === 'string' ? config.voyage_api_key : undefined,
+        groq: typeof config?.groq_api_key === 'string' ? config.groq_api_key : undefined,
+        together: typeof config?.together_api_key === 'string' ? config.together_api_key : undefined,
+        openrouter: typeof config?.openrouter_api_key === 'string' ? config.openrouter_api_key : undefined,
+        minimax: typeof config?.minimax_api_key === 'string' ? config.minimax_api_key : undefined,
+        dashscope: typeof config?.dashscope_api_key === 'string' ? config.dashscope_api_key : undefined,
       },
       lastMigratedVersion: desktop?.last_migrated_version,
     },
@@ -227,6 +245,58 @@ function selectModelDefaults(config: RawConfig): void {
     delete config.embedding_disabled;
     return;
   }
+  if (config.openai_api_key) {
+    config.chat_model ??= 'openai:gpt-5.2';
+    config.expansion_model ??= 'openai:gpt-5.2';
+    config.embedding_model ??= 'openai:text-embedding-3-small';
+    config.embedding_dimensions ??= 1536;
+    delete config.embedding_disabled;
+    return;
+  }
+  if (config.anthropic_api_key) {
+    config.chat_model ??= 'anthropic:claude-sonnet-4-6';
+    config.expansion_model ??= 'anthropic:claude-sonnet-4-6';
+    delete config.embedding_disabled;
+    return;
+  }
+  if (config.google_api_key) {
+    config.chat_model ??= 'google:gemini-2.0-flash';
+    config.expansion_model ??= 'google:gemini-2.0-flash';
+    config.embedding_model ??= 'google:text-embedding-004';
+    config.embedding_dimensions ??= 768;
+    delete config.embedding_disabled;
+    return;
+  }
+  if (config.groq_api_key) {
+    config.chat_model ??= 'groq:llama-3.3-70b-versatile';
+    config.expansion_model ??= 'groq:llama-3.3-70b-versatile';
+    delete config.embedding_disabled;
+    return;
+  }
+  if (config.together_api_key) {
+    config.chat_model ??= 'together:meta-llama/Llama-3.3-70B-Instruct-Turbo';
+    config.expansion_model ??= 'together:meta-llama/Llama-3.3-70B-Instruct-Turbo';
+    delete config.embedding_disabled;
+    return;
+  }
+  if (config.openrouter_api_key) {
+    config.chat_model ??= 'openrouter:openai/gpt-5.2';
+    config.expansion_model ??= 'openrouter:openai/gpt-5.2';
+    delete config.embedding_disabled;
+    return;
+  }
+  if (config.minimax_api_key) {
+    config.embedding_model ??= 'minimax:embo-01';
+    config.embedding_dimensions ??= 1536;
+    delete config.embedding_disabled;
+    return;
+  }
+  if (config.dashscope_api_key) {
+    config.embedding_model ??= 'dashscope:text-embedding-v3';
+    config.embedding_dimensions ??= 1024;
+    delete config.embedding_disabled;
+    return;
+  }
   if (!config.embedding_model) config.embedding_disabled = true;
 }
 
@@ -262,6 +332,9 @@ export function saveSetup(payload: SetupPayload): { config: RawConfig; snapshot:
   const keyMap: Record<string, string> = {
     mimo: 'mimo_api_key', zhipu: 'zhipu_api_key', deepseek: 'deepseek_api_key',
     openai: 'openai_api_key', anthropic: 'anthropic_api_key', zeroentropy: 'zeroentropy_api_key',
+    google: 'google_api_key', voyage: 'voyage_api_key', groq: 'groq_api_key',
+    together: 'together_api_key', openrouter: 'openrouter_api_key',
+    minimax: 'minimax_api_key', dashscope: 'dashscope_api_key',
   };
   for (const [provider, value] of Object.entries(payload.keys ?? {})) {
     if (value?.trim()) config[keyMap[provider]] = value.trim();

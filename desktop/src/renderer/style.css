@@ -62,8 +62,9 @@ h2 { margin: 0; font-size: 18px; font-weight: 650; }
 .mode-card em { align-self: start; padding: 4px 7px; color: #b9eea4; border: 1px solid #416037; font: normal 10px Consolas, monospace; }
 .field-group { margin-top: 18px; }
 .field-group > label, .key-grid > label, .model-fields > label { display: block; margin-bottom: 8px; color: #aeb9b2; font-size: 12px; font-weight: 600; }
-input { width: 100%; height: 42px; padding: 0 12px; border: 1px solid #37423c; outline: none; color: #edf3ee; background: #131715; }
-input:focus { border-color: #83b96d; box-shadow: 0 0 0 2px rgba(151,230,108,.08); }
+input, select { width: 100%; height: 42px; padding: 0 12px; border: 1px solid #37423c; outline: none; color: #edf3ee; background: #131715; }
+input:focus, select:focus { border-color: #83b96d; box-shadow: 0 0 0 2px rgba(151,230,108,.08); }
+select { cursor: pointer; appearance: auto; -webkit-appearance: auto; }
 .input-action input { flex: 1; }
 .field-group > small { display: block; margin-top: 7px; color: #738078; font-size: 11px; }
 .model-stack { display: grid; gap: 14px; }

@@ -78,11 +78,18 @@ function normalizeProviderForModel(provider: string): string {
   return trimmed === 'zeroentropy' ? 'zeroentropyai' : trimmed;
 }
 
-function providerKeyId(provider: string): keyof NonNullable<SetupPayload['keys']> | null {
+function providerKeyId(provider: string): string | null {
   const normalized = normalizeProviderForModel(provider);
+  // 本地 provider，不需要 API Key
+  if (['ollama', 'llama-server', 'litellm', 'llama-server-reranker'].includes(normalized)) {
+    return '__none__';
+  }
   if (normalized === 'zeroentropyai') return 'zeroentropy';
-  if (['mimo', 'zhipu', 'deepseek', 'openai', 'anthropic'].includes(normalized)) {
-    return normalized as keyof NonNullable<SetupPayload['keys']>;
+  if (['mimo', 'zhipu', 'deepseek', 'openai', 'anthropic',
+    'google', 'voyage', 'groq', 'together', 'openrouter',
+    'minimax', 'dashscope',
+  ].includes(normalized)) {
+    return normalized;
   }
   return null;
 }
@@ -143,16 +150,24 @@ function populate(next: DesktopSetupState): void {
   ($<HTMLInputElement>('#knowledge-directory')).value = setup.current.knowledgeDirectory || setup.defaults.knowledgeDirectory;
   const chat = splitModelId(setup.current.chatModel);
   const embedding = splitModelId(setup.current.embeddingModel);
-  ($<HTMLInputElement>('#chat-provider')).value = chat.provider;
+  ($<HTMLSelectElement>('#chat-provider')).value = chat.provider;
   ($<HTMLInputElement>('#chat-model-name')).value = chat.model;
-  ($<HTMLInputElement>('#embedding-provider')).value = embedding.provider === 'zeroentropyai' ? 'zeroentropy' : embedding.provider;
+  ($<HTMLSelectElement>('#embedding-provider')).value = embedding.provider === 'zeroentropyai' ? 'zeroentropy' : embedding.provider;
   ($<HTMLInputElement>('#embedding-model-name')).value = embedding.model;
   ($<HTMLInputElement>('#embedding-dimensions')).value = String(setup.current.embeddingDimensions ?? 1024);
   const chatKey = providerKeyId(chat.provider);
   const embeddingKey = providerKeyId(embedding.provider);
-  ($<HTMLInputElement>('#chat-api-key')).value = chatKey ? setup.current.keyValues[chatKey] || '' : '';
+  if (chatKey && chatKey !== '__none__') {
+    ($<HTMLInputElement>('#chat-api-key')).value = setup.current.keyValues[chatKey] || '';
+  } else {
+    ($<HTMLInputElement>('#chat-api-key')).value = '';
+  }
   ($<HTMLInputElement>('#chat-api-key')).type = 'password';
-  ($<HTMLInputElement>('#embedding-api-key')).value = embeddingKey ? setup.current.keyValues[embeddingKey] || '' : '';
+  if (embeddingKey && embeddingKey !== '__none__') {
+    ($<HTMLInputElement>('#embedding-api-key')).value = setup.current.keyValues[embeddingKey] || '';
+  } else {
+    ($<HTMLInputElement>('#embedding-api-key')).value = '';
+  }
   ($<HTMLInputElement>('#embedding-api-key')).type = 'password';
   $('#chat-model-effective').textContent = setup.current.chatModel ? `当前生效：${setup.current.chatModel}` : '当前未配置';
   $('#embedding-model-effective').textContent = setup.current.embeddingModel ? `当前生效：${setup.current.embeddingModel}` : '当前未配置';
@@ -188,16 +203,73 @@ function renderUpdate(update: UpdateState | null): void {
 async function save(): Promise<void> {
   const button = $<HTMLButtonElement>('#save-setup');
   setNotice('error'); setNotice('success');
+
+  // 校验：Chat 厂商不能为空
+  const chatProvider = ($<HTMLSelectElement>('#chat-provider')).value;
+  if (!chatProvider) {
+    setNotice('error', '请选择普通模型厂商');
+    return;
+  }
+  // 校验：Embedding 厂商不能为空
+  const embeddingProvider = ($<HTMLSelectElement>('#embedding-provider')).value;
+  if (!embeddingProvider) {
+    setNotice('error', '请选择向量化模型厂商');
+    return;
+  }
+
+  // 校验：模型名不能为空
+  const chatModelName = ($<HTMLInputElement>('#chat-model-name')).value.trim();
+  if (!chatModelName) {
+    setNotice('error', '请填写普通模型名称');
+    return;
+  }
+  const embeddingModelName = ($<HTMLInputElement>('#embedding-model-name')).value.trim();
+  if (!embeddingModelName) {
+    setNotice('error', '请填写向量化模型名称');
+    return;
+  }
+
+  // 检测向量化模型是否变更（非首次配置）
+  if (!state?.setup?.needsSetup && state?.setup?.current?.embeddingModel) {
+    const newEmbeddingModel = composeModelId(embeddingProvider, embeddingModelName);
+    const oldEmbeddingModel = state.setup.current.embeddingModel;
+    if (newEmbeddingModel && oldEmbeddingModel && newEmbeddingModel !== oldEmbeddingModel) {
+      if (!confirm(
+        `⚠️ 向量化模型已从 "${oldEmbeddingModel}" 改为 "${newEmbeddingModel}"。\n\n` +
+        `所有已有知识库内容需要重新向量化（耗时数小时，需消耗 API 费用）。\n` +
+        `现有 brain 将被备份后重建。\n\n` +
+        `确认更改？`
+      )) {
+        return;
+      }
+    }
+  }
+
   setBusy(button, true, '正在初始化数据库…');
   const keys: SetupPayload['keys'] = {};
-  const chatProvider = ($<HTMLInputElement>('#chat-provider')).value;
-  const embeddingProvider = ($<HTMLInputElement>('#embedding-provider')).value;
-  const chatModel = composeModelId(chatProvider, ($<HTMLInputElement>('#chat-model-name')).value);
-  const embeddingModel = composeModelId(embeddingProvider, ($<HTMLInputElement>('#embedding-model-name')).value);
+  const chatModel = composeModelId(chatProvider, chatModelName);
+  const embeddingModel = composeModelId(embeddingProvider, embeddingModelName);
   const chatKey = providerKeyId(chatProvider);
   const embeddingKey = providerKeyId(embeddingProvider);
-  if (chatKey) keys[chatKey] = ($<HTMLInputElement>('#chat-api-key')).value;
-  if (embeddingKey) keys[embeddingKey] = ($<HTMLInputElement>('#embedding-api-key')).value;
+  // 需要 Key 的厂商才保存 Key
+  if (chatKey && chatKey !== '__none__') {
+    const chatKeyValue = ($<HTMLInputElement>('#chat-api-key')).value.trim();
+    if (!chatKeyValue) {
+      setNotice('error', `厂商 ${chatProvider} 需要填写 API Key`);
+      setBusy(button, false, '保存配置并启动');
+      return;
+    }
+    (keys as Record<string, string>)[chatKey] = chatKeyValue;
+  }
+  if (embeddingKey && embeddingKey !== '__none__') {
+    const embeddingKeyValue = ($<HTMLInputElement>('#embedding-api-key')).value.trim();
+    if (!embeddingKeyValue) {
+      setNotice('error', `厂商 ${embeddingProvider} 需要填写 API Key`);
+      setBusy(button, false, '保存配置并启动');
+      return;
+    }
+    (keys as Record<string, string>)[embeddingKey] = embeddingKeyValue;
+  }
   const payload: SetupPayload = {
     engine: selectedEngine(),
     databasePath: ($<HTMLInputElement>('#database-path')).value,
