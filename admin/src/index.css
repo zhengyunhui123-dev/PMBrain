@@ -1266,6 +1266,55 @@ label { display: block; font-size: 13px; font-weight: 500; margin-bottom: 6px; }
   background: #f8faff;
 }
 
+.nl-proposed-action {
+  margin-bottom: 10px;
+  line-height: 1.6;
+  color: var(--text-primary);
+}
+
+.nl-result {
+  margin-top: 14px;
+}
+
+.nl-summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  background: #f0f7ff;
+  border: 1px solid #d4e2ff;
+  border-radius: 8px;
+  line-height: 1.6;
+  color: var(--text-primary);
+  font-size: 14px;
+}
+
+.run-pill {
+  font-size: 11px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.nl-details {
+  margin-top: 8px;
+}
+
+.nl-details summary {
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 12px;
+  padding: 6px 0;
+  user-select: none;
+}
+
+.nl-details summary:hover {
+  color: var(--accent);
+}
+
+.nl-details pre {
+  margin-top: 8px;
+}
+
 pre {
   max-width: 100%;
   overflow: auto;

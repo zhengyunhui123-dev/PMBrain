@@ -210,6 +210,44 @@ async function fetchSourceRow(engine: BrainEngine, id: string): Promise<SourceRo
   return { ...r, config: parseConfig(r.config) };
 }
 
+/**
+ * v0.40.x: When a source id already exists, decide whether the new
+ * AddSourceOpts describes the *same* source (same local path or same
+ * remote URL). If so, addSource becomes idempotent — it returns the
+ * existing row instead of throwing source_id_taken. This lets the setup
+ * wizard / admin console "save" flow succeed when the user re-saves an
+ * already-registered knowledge directory without manually removing it
+ * first.
+ *
+ * Comparison is done on resolved (realpath) paths so that case / trailing
+ * separator differences on Windows don't cause false negatives. Falls
+ * back to plain string compare if realpath fails (path missing).
+ */
+function isSameSourceSpec(existing: SourceRow, opts: AddSourceOpts): boolean {
+  // Remote-URL source: compare remote_url in config with opts.remoteUrl.
+  if (opts.remoteUrl) {
+    const existingUrl = getRemoteUrl(existing.config);
+    if (!existingUrl) return false;
+    return existingUrl === opts.remoteUrl;
+  }
+  // Local-path source: compare resolved local_path with opts.localPath.
+  if (opts.localPath && existing.local_path) {
+    const a = realpathSafe(opts.localPath);
+    const b = realpathSafe(existing.local_path);
+    return a === b;
+  }
+  return false;
+}
+
+/** realpath with fallback to the input string if the path doesn't exist. */
+function realpathSafe(p: string): string {
+  try {
+    return realpathSync(p);
+  } catch {
+    return resolvePath(p);
+  }
+}
+
 async function countPages(engine: BrainEngine, id: string): Promise<number> {
   const rows = await engine.executeRaw<{ n: number }>(
     `SELECT COUNT(*)::int AS n FROM pages WHERE source_id = $1`,
@@ -266,9 +304,20 @@ export async function addSource(
     [opts.id],
   );
   if (existing.length > 0) {
+    // Idempotent re-add: if the existing source has the same local path
+    // or remote URL, return the existing row instead of throwing. This
+    // makes "save knowledge directory" flows idempotent — re-saving an
+    // already-registered directory should succeed, not error out.
+    const existingRow = await fetchSourceRow(engine, opts.id);
+    if (existingRow && isSameSourceSpec(existingRow, opts)) {
+      return existingRow;
+    }
+    const where = existingRow?.local_path
+      ? ` at "${existingRow.local_path}"`
+      : '';
     throw new SourceOpError(
       'source_id_taken',
-      `Source id "${opts.id}" is already registered. ` +
+      `Source id "${opts.id}" is already registered${where}. ` +
         `Use 'gbrain sources remove ${opts.id} --confirm-destructive' first, then re-add.`,
     );
   }
@@ -299,6 +348,13 @@ export async function addSource(
     for (const other of others) {
       const a = finalPath;
       const b = other.local_path;
+      // Idempotent re-add with a different id but the exact same path:
+      // return the existing source row instead of erroring. Only true
+      // parent/child containment overlaps remain errors.
+      if (realpathSafe(a) === realpathSafe(b)) {
+        const existingRow = await fetchSourceRow(engine, other.id);
+        if (existingRow) return existingRow;
+      }
       if (a === b || a.startsWith(b + '/') || b.startsWith(a + '/')) {
         throw new SourceOpError(
           'overlapping_path',

@@ -1,0 +1,229 @@
+import { existsSync, readFileSync, writeFileSync, mkdtempSync, statSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
+
+const VALID_PANELS = ['setup', 'integrations', 'updates', 'recovery'] as const;
+type Panel = (typeof VALID_PANELS)[number];
+
+const root = process.cwd();
+const rendererHtml = join(root, 'out', 'renderer', 'index.html');
+
+const panelArg = process.argv.find((arg) => arg.startsWith('--panel='));
+const panel: Panel = panelArg
+  ? (panelArg.slice('--panel='.length) as Panel)
+  : 'setup';
+if (!VALID_PANELS.includes(panel)) {
+  throw new Error(`Invalid panel "${panel}". Valid values: ${VALID_PANELS.join(', ')}`);
+}
+
+const outputArg = process.argv.find((arg) => arg.startsWith('--out='));
+const output = outputArg
+  ? outputArg.slice('--out='.length)
+  : join(root, 'out', `renderer-preview-${panel}.png`);
+
+function chromePath(): string | null {
+  const candidates = [
+    process.env.CHROME_PATH,
+    'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+    'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+    'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
+    'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
+  ].filter(Boolean) as string[];
+  return candidates.find((candidate) => existsSync(candidate)) ?? null;
+}
+
+if (!existsSync(rendererHtml)) {
+  throw new Error('Renderer build not found. Run `bun run build` once, then rerun `bun run preview:renderer`.');
+}
+
+const browser = chromePath();
+if (!browser) {
+  throw new Error('Chrome or Edge was not found. Set CHROME_PATH to a browser executable.');
+}
+
+// 按 --panel 参数切换到指定面板，并滚动到对应区域
+// panelScrollMap 和 switchPanel 逻辑已内联到 mock 脚本中
+const panelScrollTarget: Record<Panel, string> = {
+  setup: '#chat-provider',
+  integrations: '#integration-grid',
+  updates: '#update-current',
+  recovery: '#recovery-message',
+};
+const scrollTarget = panelScrollTarget[panel];
+
+const mockApi = `
+<script>
+window.pmbrainDesktop = {
+  getSetup: async () => ({
+    setup: {
+      needsSetup: false,
+      configPath: 'C:\\\\Users\\\\zhengyunhui\\\\.pmbrain\\\\config.json',
+      defaults: {
+        databasePath: 'C:\\\\Users\\\\zhengyunhui\\\\.pmbrain\\\\brain.pglite',
+        knowledgeDirectory: 'C:\\\\Users\\\\zhengyunhui\\\\Documents\\\\PMBrain'
+      },
+      current: {
+        engine: 'pglite',
+        databasePath: 'D:\\\\tmp\\\\brain.pglite',
+        databaseConfigured: true,
+        knowledgeDirectory: 'C:\\\\Users\\\\zhengyunhui\\\\Documents\\\\PMBrain',
+        chatModel: 'mimo:mimo-v2.5-pro',
+        embeddingModel: 'zhipu:embedding-3',
+        embeddingDimensions: 1024,
+        keyStatus: { mimo: true, zhipu: true, deepseek: true, openai: false, anthropic: false, zeroentropy: false },
+        keyValues: {
+          mimo: 'mimo-sk-abcdefghijklmnopqrstuvwxyz123456',
+          zhipu: 'zhipu-sk-abcdefghijklmnopqrstuvwxyz123456',
+          deepseek: 'deepseek-sk-old-unused'
+        }
+      }
+    },
+    integrations: [
+      { id: 'codebuddy', name: 'CodeBuddy', path: 'C:\\Users\\zhengyunhui\\.codebuddy\\mcp.json', configured: true, automatic: true },
+      { id: 'cursor', name: 'Cursor', path: 'C:\\Users\\zhengyunhui\\.cursor\\mcp.json', configured: true, automatic: true },
+      { id: 'claude', name: 'Claude', path: null, configured: false, automatic: false },
+      { id: 'codex', name: 'Codex', path: 'C:\\Users\\zhengyunhui\\.codex\\config.toml', configured: false, automatic: true },
+    ],
+    port: 3132
+  }),
+  getState: async () => ({ phase: 'ready', port: 3132 }),
+  getUpdateState: async () => null,
+  onState: () => () => {},
+  onUpdateState: () => () => {},
+  onShowUpdates: () => () => {},
+  chooseDirectory: async () => null,
+  saveSetup: async () => window.pmbrainDesktop.getSetup(),
+  configureIntegration: async () => ({}),
+  copy: async () => {},
+  openAdmin: async () => {},
+  checkUpdates: async () => null,
+  installUpdate: async () => {},
+  retry: async () => {},
+  openLogs: async () => '',
+  quit: async () => {}
+};
+console.log('PMBrain mock injected: panel=${panel}, integrations count=4');
+// HTML 初始状态已在 Node.js 侧修改，无需 setTimeout 切换面板
+// 等 DOM 渲染后滚动到目标区域
+setTimeout(() => {
+  const el = document.querySelector('${scrollTarget}');
+  if (el) el.scrollIntoView({ block: 'center' });
+}, 200);
+</script>
+`;
+
+const tempDir = mkdtempSync(join(tmpdir(), 'pmbrain-renderer-preview-'));
+const previewHtml = join(tempDir, 'preview.html');
+let html = readFileSync(rendererHtml, 'utf8');
+
+// 移除 CSP 限制
+html = html.replace(/<meta http-equiv="Content-Security-Policy"[^>]+ \/>/, '');
+
+// 注入 mock API（插到 </head> 前），提供 JS 降级
+html = html.replace('</head>', `${mockApi}\n</head>`);
+
+// ===== 静态 HTML 修改（不依赖 JS 执行） =====
+
+// 1. rail-item：去掉所有 active，只激活目标面板按钮
+html = html.replace(/class="rail-item active"/g, 'class="rail-item"');
+html = html.replace(
+  new RegExp(`class="rail-item" data-target="${panel}"`),
+  `class="rail-item active" data-target="${panel}"`
+);
+
+// 2. panel section：去掉所有 active，只激活目标面板
+html = html.replace(/class="panel active"/g, 'class="panel"');
+html = html.replace(
+  new RegExp(`(class="panel)" id="panel-${panel}">`),
+  `class="panel active" id="panel-${panel}">`
+);
+
+// 3. 页眉标题按面板调整
+const panelTitles: Record<Panel, { eyebrow: string; title: string }> = {
+  setup:       { eyebrow: 'DESKTOP SETTINGS', title: '配置数据库与 AI 接入' },
+  integrations:{ eyebrow: 'INTEGRATIONS',     title: 'MCP / API 配置助手' },
+  updates:     { eyebrow: 'SOFTWARE UPDATES', title: '软件更新' },
+  recovery:    { eyebrow: 'RECOVERY',         title: '恢复 PMBrain 本地服务' },
+};
+const t = panelTitles[panel];
+html = html.replace(/(id="page-eyebrow">)[^<]+(<\/p>)/, `$1${t.eyebrow}$2`);
+html = html.replace(/(id="page-title">)[^<]+(<\/h1>)/, `$1${t.title}$2`);
+
+// 4. 集成面板：预生成卡片 HTML 注入到 integration-grid
+interface MockIntegration {
+  id: string; name: string; path: string | null; configured: boolean; automatic: boolean;
+}
+const mockIntegrations: MockIntegration[] = [
+  { id: 'codebuddy', name: 'CodeBuddy', path: 'C:\\Users\\zhengyunhui\\.codebuddy\\mcp.json', configured: true, automatic: true },
+  { id: 'cursor', name: 'Cursor', path: 'C:\\Users\\zhengyunhui\\.cursor\\mcp.json', configured: true, automatic: true },
+  { id: 'claude', name: 'Claude', path: null, configured: false, automatic: false },
+  { id: 'codex', name: 'Codex', path: 'C:\\Users\\zhengyunhui\\.codex\\config.toml', configured: false, automatic: true },
+];
+const cardsHtml = mockIntegrations.map((item) => {
+  const badgeClass = item.configured ? 'configured badge' : 'badge';
+  const badgeText = item.configured ? '已配置' : '未配置';
+  const pathText = item.path ?? '通过 Claude CLI / GUI 接入';
+  const noteText = item.automatic ? '自动备份并合并现有配置' : '生成可复制的接入命令';
+  const btnText = item.automatic ? '创建并写入' : '生成接入命令';
+  return `<article class="integration-card"><span class="${badgeClass}">${badgeText}</span><h3>${item.name}</h3><p>${pathText}</p><small>${noteText}</small><button class="solid">${btnText}</button></article>`;
+}).join('\n          ');
+html = html.replace(
+  '<div class="integration-grid" id="integration-grid"></div>',
+  `<div class="integration-grid" id="integration-grid">\n          ${cardsHtml}\n        </div>`
+);
+
+// 5. 服务状态（左侧栏底部）
+html = html.replace(
+  /(<i id="service-dot"><\/i>\s*<div>)\s*<b id="service-label">[^<]*<\/b>\s*<small id="service-detail">[^<]*<\/small>\s*<\/div>/,
+  `$1<b id="service-label">服务已就绪</b><small id="service-detail">127.0.0.1:3132</small></div>`
+);
+html = html.replace('id="service-dot"', 'id="service-dot" class="ready"');
+
+// 6. 已存在配置标记
+html = html.replace(
+  /(<div class="existing-config" id="existing-config") hidden/,
+  '$1'
+);
+
+// 7. 配置路径
+html = html.replace(
+  /(<p id="config-path"><\/p>)/,
+  '<p id="config-path">配置写入：C:\\Users\\zhengyunhui\\.pmbrain\\config.json</p>'
+);
+
+// 8. 当前模型显示
+html = html.replace(
+  /(<small id="chat-model-effective">)[^<]*(<\/small>)/,
+  '$1当前生效：mimo:mimo-v2.5-pro$2'
+);
+html = html.replace(
+  /(<small id="embedding-model-effective">)[^<]*(<\/small>)/,
+  '$1当前生效：zhipu:embedding-3$2'
+);
+
+// 9. "进入管理台"按钮启用
+html = html.replace('id="open-admin" disabled', 'id="open-admin"');
+html = html.replace('id="finish-open-admin"', 'id="finish-open-admin" disabled');
+
+writeFileSync(previewHtml, html, 'utf8');
+
+writeFileSync(previewHtml, html, 'utf8');
+
+const fileUrl = `file:///${previewHtml.replace(/\\/g, '/')}`;
+const result = spawnSync(browser, [
+  '--headless=new',
+  '--disable-gpu',
+  '--allow-file-access-from-files',
+  '--window-size=1440,3000',
+  '--virtual-time-budget=2500',
+  `--screenshot=${output}`,
+  fileUrl,
+], { stdio: 'inherit' });
+
+if (result.status !== 0) {
+  throw new Error(`Browser screenshot failed with exit code ${result.status ?? 'unknown'}`);
+}
+
+const size = statSync(output).size;
+console.log(`[${new Date().toISOString()}] Preview: panel=${panel}, output=${output}, mock integrations count=4`);

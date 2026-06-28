@@ -302,3 +302,21 @@
 - 描述：桌面端保存配置后执行初始化检查时，v0.11.0 迁移 smoke 仍检查旧表名 `jobs`，当前 schema 使用 `minion_jobs`，导致 Docker 和 PGLite 均被误判为 `jobs table missing after schema migration`。
 - 是否完成：是
 - 最终结果：v0.11.0 smoke 同时兼容当前 `minion_jobs` 与旧 `jobs` 表名，并新增回归测试；切换 Docker/PGLite 不再被旧表名检查阻断。
+
+## 2026-06-28 Docker/PGLite 切换 Source 注册冲突与 PGLite 锁冲突修复
+
+- 时间：2026-06-28 12:00:00
+- 版本号：1.0.44 / Desktop 1.0.34
+- 标题：修复数据库切换时 source 已注册报错阻断切换，以及 PGLite 模式下 admin 导入锁超时
+- 描述：从 PGLite 切回 Docker 时，`applySetup` 尝试重新注册 source ID，但目标数据库中该 source 已存在，`sources add` 报 `already registered`，而 `desktop/src/main/index.ts` 的忽略正则只匹配 `already exists|duplicate|已存在`，未覆盖 `already registered`，导致错误被抛出、配置回滚、切换失败。同时，PGLite 模式下 admin 控制台导入功能通过 `startRun` spawn 子进程执行 `import` 命令，子进程调用 `connectEngine()` → `acquireLock()` 获取 PGLite 锁，而 sidecar 主进程已持有同一数据目录的锁，子进程等待 30 秒后超时报 `Timed out waiting for PGLite lock`。PostgreSQL 模式无文件锁，此前未暴露此问题。
+- 是否完成：是
+- 最终结果：`index.ts` 的 source 注册忽略正则扩展为 `already exists|duplicate|已存在|already registered`，切换时 source 已存在不再阻断；`startRun` 改为 async 并增加 `RunHooks` 回调（`beforeSpawn`/`afterComplete`），PGLite 模式下 `serve-http.ts` 在 spawn 子进程前 `engine.disconnect()` 释放锁、子进程完成后 `engine.connect()` 重获锁；`api.ts` 所有 run starter 函数改为 async 并透传 hooks；版本更新为 PMBrain 1.0.44、Desktop 1.0.34。
+
+## 2026-06-28 配置页面重新保存已注册知识库目录报错修复
+
+- 时间：2026-06-28 12:38:00
+- 版本号：1.0.45
+- 标题：修复配置页面保存已注册的知识库目录时报 source_id_taken / overlapping_path 错误
+- 描述：配置页面保存知识库目录时，如果该目录已经注册为 source，`addSource` 会抛 `source_id_taken`（id 相同）或 `overlapping_path`（id 不同但路径相同）错误，阻断保存流程。所有入口（桌面端 applySetup、管理后台 POST /admin/api/sources、CLI、MCP）最终都调用 `addSource`，因此问题影响面广。之前的桌面端修复靠正则匹配错误信息兜底，但 `overlapping_path` 的关键词 `overlaps` 不在正则中，且正则兜底本身脆弱。
+- 是否完成：是
+- 最终结果：在 `src/core/sources-ops.ts` 的 `addSource` 函数中新增 `isSameSourceSpec` 和 `realpathSafe` 辅助函数；当 source id 已存在且路径/URL 完全一致时，直接返回已有 source 行（幂等）；当 id 不同但路径完全相同时（realpath 比较），也返回已有 source 行；真正的子目录/父目录重叠仍抛 `overlapping_path` 错误。所有入口（CLI、MCP、HTTP admin、桌面端）统一受益，不再依赖正则兜底。Q4 pre-flight collision 测试全部通过。版本更新为 1.0.45。

@@ -1,0 +1,181 @@
+import { createHash, randomUUID } from 'crypto';
+import { isAbsolute, relative, resolve } from 'path';
+import type { BrainEngine } from '../../core/engine.ts';
+import type { GBrainConfig } from '../../core/config.ts';
+import { loadAllSources } from '../../core/sources-load.ts';
+import type { ConsoleRun, IntentPreview } from './types.ts';
+import { normalizeIntentPreview, describeAction } from './normalize.ts';
+import { callIntentModel, getAdminLlmStatus } from './llm.ts';
+import { commandForPreview, resolveCliEntry } from './commands.ts';
+import { previews, runs, startRun, type RunHooks } from './executor.ts';
+
+// ---------------------------------------------------------------------------
+// Import-path helpers
+// ---------------------------------------------------------------------------
+
+function pathContains(basePath: string, candidatePath: string): boolean {
+  const base = resolve(basePath);
+  const candidate = resolve(candidatePath);
+  const rel = relative(base, candidate);
+  return rel === '' || (rel.length > 0 && !rel.startsWith('..') && !isAbsolute(rel));
+}
+
+export function deriveSourceIdFromPath(inputPath: string): string {
+  const trimmedPath = inputPath.trim();
+  if (!trimmedPath) return '';
+  const parts = trimmedPath.replace(/[\\/]+$/g, '').split(/[\\/]+/).filter(Boolean);
+  const basename = parts[parts.length - 1] ?? trimmedPath;
+  const ascii = basename
+    .normalize('NFKD')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .replace(/-{2,}/g, '-')
+    .slice(0, 32)
+    .replace(/-+$/g, '');
+  if (/^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$/.test(ascii)) return ascii;
+  return `source-${createHash('sha1').update(trimmedPath).digest('hex').slice(0, 8)}`;
+}
+
+export async function resolveImportSourceIdForPath(
+  engine: BrainEngine,
+  importPath: string,
+  explicitSourceId?: unknown,
+): Promise<string | undefined> {
+  if (typeof explicitSourceId === 'string' && explicitSourceId.trim()) {
+    return explicitSourceId.trim();
+  }
+  const trimmedPath = importPath.trim();
+  if (!trimmedPath) return undefined;
+  const sources = await loadAllSources(engine);
+  let best: { id: string; pathLen: number } | null = null;
+  for (const source of sources) {
+    if (!source.local_path) continue;
+    if (!pathContains(source.local_path, trimmedPath)) continue;
+    const pathLen = resolve(source.local_path).length;
+    if (!best || pathLen > best.pathLen) {
+      best = { id: source.id, pathLen };
+    }
+  }
+  return best?.id;
+}
+
+// ---------------------------------------------------------------------------
+// High-level API: previewIntent / executePreview
+// ---------------------------------------------------------------------------
+
+export async function previewIntent(text: string, config: GBrainConfig | null): Promise<IntentPreview> {
+  if (!text.trim()) throw new Error('Text is required');
+  const llm = getAdminLlmStatus(config);
+  if (!llm.enabled) {
+    throw new Error(`LLM is not configured: ${llm.missing.join(', ') || 'missing chat model or key'}`);
+  }
+  let lastError: Error | null = null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const obj = await callIntentModel(config!, text, attempt);
+      const preview = normalizeIntentPreview(obj);
+      previews.set(preview.previewId, preview);
+      return preview;
+    } catch (e) {
+      lastError = e instanceof Error ? e : new Error(String(e));
+    }
+  }
+  throw lastError ?? new Error('Intent preview failed');
+}
+
+export async function executePreview(engine: BrainEngine, previewId: string, confirmed: boolean, cwd: string, hooks?: RunHooks): Promise<ConsoleRun> {
+  const preview = previews.get(previewId);
+  if (!preview) throw new Error('Preview not found or expired');
+  if (preview.clarification) throw new Error(preview.clarification);
+  if (preview.requiresConfirmation && !confirmed) throw new Error('Confirmation required');
+  if (preview.intent === 'import_path' && typeof preview.slots.path === 'string') {
+    preview.slots.sourceId = await resolveImportSourceIdForPath(engine, preview.slots.path, preview.slots.sourceId);
+  }
+  return await startRun(preview.intent, commandForPreview(preview), cwd, hooks);
+}
+
+// ---------------------------------------------------------------------------
+// Direct run starters (non-LLM entry points)
+// ---------------------------------------------------------------------------
+
+export async function startImportRun(engine: BrainEngine, input: {
+  path: string;
+  sourceId?: string;
+  includeOffice?: boolean;
+  includeImages?: boolean;
+  noEmbed?: boolean;
+  workers?: number;
+}, cwd: string, hooks?: RunHooks): Promise<ConsoleRun> {
+  if (!input.path.trim()) throw new Error('Path is required');
+  const prefix = resolveCliEntry();
+  const cmd = [...prefix, 'import', input.path.trim()];
+  if (input.includeOffice) cmd.push('--include-office');
+  if (input.includeImages) cmd.push('--include-images');
+  if (input.noEmbed) cmd.push('--no-embed');
+  const sourceId = await resolveImportSourceIdForPath(engine, input.path, input.sourceId);
+  if (sourceId) cmd.push('--source-id', sourceId);
+  if (input.workers && input.workers > 1) cmd.push('--workers', String(Math.min(8, Math.floor(input.workers))));
+  return await startRun('import_path', cmd, cwd, hooks);
+}
+
+export async function startSourceAddRun(input: {
+  id?: string;
+  path: string;
+  name?: string;
+  federated?: boolean;
+}, cwd: string, hooks?: RunHooks): Promise<ConsoleRun> {
+  if (!input.path.trim()) throw new Error('Path is required');
+  const sourceId = input.id?.trim() || deriveSourceIdFromPath(input.path);
+  if (!/^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$/.test(sourceId)) {
+    throw new Error('Source ID must be lowercase alphanumeric with optional dashes');
+  }
+  const prefix = resolveCliEntry();
+  const cmd = [...prefix, 'sources', 'add', sourceId, '--path', input.path.trim()];
+  if (input.name?.trim()) cmd.push('--name', input.name.trim());
+  cmd.push(input.federated === false ? '--no-federated' : '--federated');
+  return await startRun('source_add', cmd, cwd, hooks);
+}
+
+export function buildDreamCommand(input: {
+  phase?: 'propose_takes';
+  sourceId?: string;
+  maxPages?: number;
+  dryRun?: boolean;
+}): string[] {
+  const phase = input.phase ?? 'propose_takes';
+  const prefix = resolveCliEntry();
+  const cmd = [...prefix, 'dream', '--phase', phase];
+  if (input.sourceId?.trim()) cmd.push('--source', input.sourceId.trim());
+  if (input.maxPages !== undefined) {
+    const maxPages = Math.floor(Number(input.maxPages));
+    if (!Number.isInteger(maxPages) || maxPages <= 0) {
+      throw new Error('Max pages must be a positive integer');
+    }
+    cmd.push('--max-pages', String(maxPages));
+  }
+  if (input.dryRun) cmd.push('--dry-run');
+  return cmd;
+}
+
+export async function startDreamRun(input: {
+  phase?: 'propose_takes';
+  sourceId?: string;
+  maxPages?: number;
+  dryRun?: boolean;
+}, cwd: string, hooks?: RunHooks): Promise<ConsoleRun> {
+  return await startRun('dream_propose_takes', buildDreamCommand(input), cwd, hooks);
+}
+
+export async function startActionRun(action: 'doctor_check' | 'show_sources' | 'show_stats' | 'embed_stale' | 'sync_all', cwd: string, hooks?: RunHooks): Promise<ConsoleRun> {
+  const preview: IntentPreview = {
+    previewId: randomUUID(),
+    intent: action,
+    confidence: 1,
+    slots: {},
+    proposedAction: describeAction(action, {}),
+    riskLevel: action === 'embed_stale' || action === 'sync_all' ? 'maintenance' : 'read',
+    requiresConfirmation: false,
+  };
+  return await startRun(action, commandForPreview(preview), cwd, hooks);
+}

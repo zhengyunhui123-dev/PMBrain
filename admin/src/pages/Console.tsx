@@ -241,6 +241,75 @@ function saveNaturalHistory(rows: NaturalTaskHistoryItem[]) {
   localStorage.setItem(NATURAL_HISTORY_KEY, JSON.stringify(rows.slice(0, 30)));
 }
 
+function summarizeRunResult(intent: string, run: ConsoleRun): string {
+  if (run.status === 'running') return '任务正在执行中，请稍候...';
+  if (run.status === 'queued') return '任务已排队，等待执行...';
+  if (run.status === 'failed') {
+    const reason = run.error || run.stderr || '未知错误';
+    return `任务执行失败：${reason}`;
+  }
+
+  const out = run.stdout || '';
+  const lower = out.toLowerCase();
+
+  switch (intent) {
+    case 'show_stats': {
+      const pageMatch = out.match(/(\d+)\s*page/i);
+      const chunkMatch = out.match(/(\d+)\s*chunk/i);
+      const embedMatch = out.match(/(\d+)\s*(?:embedded|embedded_chunk)/i);
+      const parts: string[] = [];
+      if (pageMatch) parts.push(`${pageMatch[1]} 个页面`);
+      if (chunkMatch) parts.push(`${chunkMatch[1]} 个片段`);
+      if (embedMatch) parts.push(`${embedMatch[1]} 个已向量化`);
+      return parts.length > 0
+        ? `知识库当前共有 ${parts.join('、')}。`
+        : '已获取知识库统计信息，请查看详情。';
+    }
+    case 'show_sources': {
+      const sourceLines = out.split('\n').filter(l => l.trim() && !l.startsWith('-') && !l.startsWith('source'));
+      const count = sourceLines.length;
+      return `当前有 ${count} 个数据源，请在详情中查看各数据源详情。`;
+    }
+    case 'search_brain': {
+      const resultLines = out.split('\n').filter(l => l.trim() && !l.startsWith('===') && !l.startsWith('search'));
+      const count = resultLines.length;
+      return count > 0
+        ? `搜索完成，找到 ${count} 条相关结果。${count > 0 ? '请在详情中查看具体内容。' : ''}`
+        : '搜索完成，未找到相关结果。';
+    }
+    case 'capture_memory':
+      return '已成功将内容保存到知识库。';
+    case 'import_path': {
+      const pageMatch = out.match(/(\d+)\s*page/i);
+      const fileMatch = out.match(/(\d+)\s*file/i);
+      const parts: string[] = [];
+      if (pageMatch) parts.push(`${pageMatch[1]} 个页面`);
+      if (fileMatch) parts.push(`${fileMatch[1]} 个文件`);
+      return parts.length > 0
+        ? `导入完成，共处理 ${parts.join('、')}。`
+        : '导入完成。';
+    }
+    case 'sync_source': {
+      const nameMatch = out.match(/syncing source[：:]\s*(\S+)/i) || out.match(/source[：:]\s*(\S+)/i);
+      const name = nameMatch ? nameMatch[1] : '';
+      return name ? `数据源「${name}」同步完成。` : '数据源同步完成。';
+    }
+    case 'sync_all':
+      return '所有数据源已同步完成。';
+    case 'embed_stale':
+      return '补齐向量化完成，所有待处理片段已处理。';
+    case 'doctor_check': {
+      if (lower.includes('ok') || lower.includes('passed') || lower.includes('通过')) return '系统诊断完成，各项检查通过。';
+      if (lower.includes('warn') || lower.includes('warning') || lower.includes('failed') || lower.includes('失败')) return '系统诊断完成，发现一些问题，请在详情中查看。';
+      return '系统诊断完成。';
+    }
+    case 'show_config':
+      return '当前配置信息已获取，请在详情中查看。';
+    default:
+      return out ? `任务已完成。${out.slice(0, 80)}${out.length > 80 ? '…' : ''}` : '任务已完成。';
+  }
+}
+
 function NaturalLanguagePanel({ compact = false, onNavigate }: { compact?: boolean; onNavigate?: (page: string) => void }) {
   const [text, setText] = useState('');
   const [preview, setPreview] = useState<IntentPreview | null>(null);
@@ -324,6 +393,8 @@ function NaturalLanguagePanel({ compact = false, onNavigate }: { compact?: boole
     return () => clearInterval(timer);
   }, [run, activeHistoryId, history]);
 
+  const summary = preview && run ? summarizeRunResult(preview.intent, run) : null;
+
   return (
     <div className={`nl-shell ${compact ? 'compact' : ''}`}>
       <div className={`pm-card nl-card ${compact ? 'compact' : ''}`}>
@@ -339,18 +410,14 @@ function NaturalLanguagePanel({ compact = false, onNavigate }: { compact?: boole
         />
         <div className="pm-actions">
           <button className="pm-primary" onClick={() => void submitPreview()} disabled={loading || !text.trim()}>
-            {loading ? '识别中...' : '识别意图'}
+            {loading ? '正在理解...' : '发送'}
           </button>
           <button className="pm-ghost" onClick={() => setText('现在知识库里有哪些数据？')}>示例</button>
         </div>
         {error && <div className="pm-error-text">{error}</div>}
         {preview && (
           <div className="intent-preview">
-            <div className="pm-kv"><span>意图</span><b>{preview.intent}</b></div>
-            <div className="pm-kv"><span>置信度</span><b>{Math.round(preview.confidence * 100)}%</b></div>
-            <div className="pm-kv"><span>风险</span><b>{preview.riskLevel}</b></div>
-            <p>{preview.clarification || preview.proposedAction}</p>
-            <pre>{JSON.stringify(preview.slots, null, 2)}</pre>
+            <p className="nl-proposed-action">{preview.clarification || preview.proposedAction}</p>
             {!preview.clarification && (
               <button className="pm-primary" onClick={() => void execute(preview.requiresConfirmation)}>
                 {preview.requiresConfirmation ? '确认并执行' : '执行'}
@@ -358,7 +425,22 @@ function NaturalLanguagePanel({ compact = false, onNavigate }: { compact?: boole
             )}
           </div>
         )}
-        {run && <RunOutput run={run} />}
+        {run && (
+          <div className="nl-result">
+            <div className="nl-summary">
+              {summary}
+              <span className={`pm-pill run-pill run-${run.status}`}>
+                {run.status === 'completed' ? '已完成' : run.status === 'failed' ? '失败' : run.status === 'running' ? '执行中' : '排队中'}
+              </span>
+            </div>
+            <details className="nl-details">
+              <summary>查看执行详情</summary>
+              {run.error && <div className="pm-error-text">{run.error}</div>}
+              {run.stdout && <pre>{run.stdout}</pre>}
+              {run.stderr && <pre className="stderr">{run.stderr}</pre>}
+            </details>
+          </div>
+        )}
       </div>
       {!compact && (
         <div className="pm-card nl-history">
@@ -378,7 +460,7 @@ function NaturalLanguagePanel({ compact = false, onNavigate }: { compact?: boole
             )}
           </div>
           {history.length === 0 ? (
-            <div className="pm-empty compact-empty">暂无历史记录。每次识别意图后会自动保留在这里。</div>
+            <div className="pm-empty compact-empty">暂无历史记录。每次发送任务后会自动保留在这里。</div>
           ) : (
             <div className="nl-history-list">
               {history.map(item => (
@@ -394,7 +476,7 @@ function NaturalLanguagePanel({ compact = false, onNavigate }: { compact?: boole
                   }}
                 >
                   <span>{new Date(item.createdAt).toLocaleString()}</span>
-                  <b>{item.preview?.intent ?? item.run?.status ?? (item.error ? '失败' : '已记录')}</b>
+                  <b>{item.preview?.proposedAction?.slice(0, 20) ?? item.run?.status ?? (item.error ? '失败' : '已记录')}</b>
                   <em>{item.text}</em>
                 </button>
               ))}

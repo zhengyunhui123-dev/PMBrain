@@ -33,7 +33,7 @@ import { hasScope, ALLOWED_SCOPES_LIST, normalizeScopesInput } from '../core/sco
 import { summarizeMcpParams, dispatchToolCall } from '../mcp/dispatch.ts';
 import { paramDefToSchema } from '../mcp/tool-defs.ts';
 import { getBrainHotMemoryMeta } from '../core/facts/meta-hook.ts';
-import { loadConfig } from '../core/config.ts';
+import { loadConfig, toEngineConfig, type GBrainConfig } from '../core/config.ts';
 import { buildError, serializeError } from '../core/errors.ts';
 import { VERSION } from '../version.ts';
 import * as db from '../core/db.ts';
@@ -650,6 +650,15 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
   // than silently binding loopback only.
   const bind = options.bind ?? '127.0.0.1';
   const config = loadConfig() || { engine: 'pglite' as const };
+
+  // PGLite lock coordination: release the engine lock before spawning a child
+  // process (import/sync/etc.) so the child can acquire it; reconnect after.
+  const runHooks = engine.kind === 'pglite' && config
+    ? {
+        beforeSpawn: () => engine.disconnect(),
+        afterComplete: () => engine.connect(toEngineConfig(config as GBrainConfig)),
+      }
+    : undefined;
 
   if (logFullParams) {
     console.error(
@@ -1338,7 +1347,7 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
     try {
       const previewId = typeof req.body?.previewId === 'string' ? req.body.previewId : '';
       const confirmed = req.body?.confirmed === true;
-      const run = await executePreview(engine, previewId, confirmed, process.cwd());
+      const run = await executePreview(engine, previewId, confirmed, process.cwd(), runHooks);
       res.json({ runId: run.id, status: run.status });
     } catch (e) {
       res.status(400).json({ error: e instanceof Error ? e.message : 'intent_execute_failed' });
@@ -1359,14 +1368,14 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
     res.json(run);
   });
 
-  app.post('/admin/api/runs/action', requireAdmin, express.json(), (req: Request, res: Response) => {
+  app.post('/admin/api/runs/action', requireAdmin, express.json(), async (req: Request, res: Response) => {
     try {
       const action = req.body?.action;
       if (!['doctor_check', 'show_sources', 'show_stats', 'embed_stale', 'sync_all'].includes(action)) {
         res.status(400).json({ error: 'unsupported_action' });
         return;
       }
-      const run = startActionRun(action, process.cwd());
+      const run = await startActionRun(action, process.cwd(), runHooks);
       res.json({ runId: run.id, status: run.status });
     } catch (e) {
       res.status(400).json({ error: e instanceof Error ? e.message : 'action_run_failed' });
@@ -1382,40 +1391,40 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
         includeImages: req.body?.includeImages === true,
         noEmbed: req.body?.autoEmbed === false,
         workers: Number(req.body?.workers ?? 1),
-      }, process.cwd());
+      }, process.cwd(), runHooks);
       res.json({ runId: run.id, status: run.status });
     } catch (e) {
       res.status(400).json({ error: e instanceof Error ? e.message : 'import_run_failed' });
     }
   });
 
-  app.post('/admin/api/dream-runs', requireAdmin, express.json({ limit: '16kb' }), (req: Request, res: Response) => {
+  app.post('/admin/api/dream-runs', requireAdmin, express.json({ limit: '16kb' }), async (req: Request, res: Response) => {
     try {
       const rawMaxPages = req.body?.maxPages;
       const maxPages = rawMaxPages === undefined || rawMaxPages === null || rawMaxPages === ''
         ? undefined
         : Number(rawMaxPages);
       const phase = req.body?.phase === 'propose_takes' ? 'propose_takes' : undefined;
-      const run = startDreamRun({
+      const run = await startDreamRun({
         phase,
         sourceId: typeof req.body?.sourceId === 'string' ? req.body.sourceId : undefined,
         maxPages,
         dryRun: req.body?.dryRun === true,
-      }, process.cwd());
+      }, process.cwd(), runHooks);
       res.json({ runId: run.id, status: run.status });
     } catch (e) {
       res.status(400).json({ error: e instanceof Error ? e.message : 'dream_run_failed' });
     }
   });
 
-  app.post('/admin/api/sources', requireAdmin, express.json({ limit: '16kb' }), (req: Request, res: Response) => {
+  app.post('/admin/api/sources', requireAdmin, express.json({ limit: '16kb' }), async (req: Request, res: Response) => {
     try {
-      const run = startSourceAddRun({
+      const run = await startSourceAddRun({
         id: typeof req.body?.id === 'string' ? req.body.id : '',
         path: typeof req.body?.path === 'string' ? req.body.path : '',
         name: typeof req.body?.name === 'string' ? req.body.name : undefined,
         federated: req.body?.federated !== false,
-      }, process.cwd());
+      }, process.cwd(), runHooks);
       res.json({ runId: run.id, status: run.status });
     } catch (e) {
       res.status(400).json({ error: e instanceof Error ? e.message : 'source_add_failed' });

@@ -103,7 +103,7 @@ async function applySetup(payload: SetupPayload) {
         'sources', 'add', sourceId, '--path', knowledgeDirectory,
         '--name', '桌面知识库', '--federated',
       ]);
-      if (add.code !== 0 && !/already exists|duplicate|已存在/i.test(`${add.stderr}\n${add.stdout}`)) {
+      if (add.code !== 0 && !/already exists|duplicate|已存在|already registered/i.test(`${add.stderr}\n${add.stdout}`)) {
         throw new Error((add.stderr || add.stdout).trim());
       }
     }
