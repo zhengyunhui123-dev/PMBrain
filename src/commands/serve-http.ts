@@ -49,6 +49,7 @@ import {
   executePreview,
   getAdminBrainOverview,
   getAdminBrainPageChunks,
+  getAdminDreamOverview,
   getAdminLlmStatus,
   getRun,
   listAdminBrainPages,
@@ -1252,6 +1253,14 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
     }
   });
 
+  app.get('/admin/api/dream/overview', requireAdmin, async (_req: Request, res: Response) => {
+    try {
+      res.json(await getAdminDreamOverview(engine, config, VERSION));
+    } catch (e) {
+      res.status(500).json({ error: e instanceof Error ? e.message : 'dream_overview_failed' });
+    }
+  });
+
   app.get('/admin/api/docs', requireAdmin, async (_req: Request, res: Response) => {
     try {
       const readme = await readFile(new URL('../../README.md', import.meta.url), 'utf8');
@@ -1404,12 +1413,15 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
       const maxPages = rawMaxPages === undefined || rawMaxPages === null || rawMaxPages === ''
         ? undefined
         : Number(rawMaxPages);
-      const phase = req.body?.phase === 'propose_takes' ? 'propose_takes' : undefined;
       const run = await startDreamRun({
-        phase,
+        phase: typeof req.body?.phase === 'string' ? req.body.phase : undefined,
         sourceId: typeof req.body?.sourceId === 'string' ? req.body.sourceId : undefined,
         maxPages,
         dryRun: req.body?.dryRun === true,
+        input: typeof req.body?.input === 'string' ? req.body.input : undefined,
+        date: typeof req.body?.date === 'string' ? req.body.date : undefined,
+        from: typeof req.body?.from === 'string' ? req.body.from : undefined,
+        to: typeof req.body?.to === 'string' ? req.body.to : undefined,
       }, process.cwd(), runHooks);
       res.json({ runId: run.id, status: run.status });
     } catch (e) {

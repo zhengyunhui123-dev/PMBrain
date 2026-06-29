@@ -10,6 +10,8 @@ import type { BrainEngine } from '../core/engine.ts';
 import type { GBrainConfig } from '../core/config.ts';
 import { isSensitiveConfigKey, redactConfigValue } from './config.ts';
 import { loadAllSources, isSourceFederated } from '../core/sources-load.ts';
+import { ALL_PHASES } from '../core/cycle.ts';
+import { listRuns } from './natural-lang/index.ts';
 
 // ---------------------------------------------------------------------------
 // Facade: re-export natural-language task module
@@ -197,6 +199,254 @@ export async function getAdminBrainPageChunks(engine: BrainEngine, sourceId: str
   );
 
   return { rows };
+}
+
+// ---------------------------------------------------------------------------
+// Dream workbench aggregate
+// ---------------------------------------------------------------------------
+
+async function optionalRows<T>(
+  engine: BrainEngine,
+  sql: string,
+  params: Array<string | number | boolean | null> = [],
+): Promise<T[]> {
+  try {
+    return await engine.executeRaw<T>(sql, params);
+  } catch {
+    return [];
+  }
+}
+
+async function optionalOne<T>(
+  engine: BrainEngine,
+  sql: string,
+  params: Array<string | number | boolean | null> = [],
+): Promise<T | null> {
+  const rows = await optionalRows<T>(engine, sql, params);
+  return rows[0] ?? null;
+}
+
+export async function getAdminDreamOverview(engine: BrainEngine, config: GBrainConfig | null, version: string) {
+  const [overview, healthResult] = await Promise.allSettled([
+    getAdminBrainOverview(engine, config, version),
+    engine.getHealth(),
+  ]);
+  const overviewValue = overview.status === 'fulfilled' ? overview.value : null;
+  const health = healthResult.status === 'fulfilled' ? healthResult.value : null;
+
+  const [
+    locks,
+    proposalStatus,
+    takeSummary,
+    gradeSummary,
+    latestCalibration,
+    calibrationHistory,
+    embeddingBySource,
+    topWeightedPages,
+    knowledgeTypes,
+    ingestSummary,
+    lifecycleSummary,
+    recentJobs,
+    jobStatus,
+    qualityRuns,
+    contradictionRuns,
+  ] = await Promise.all([
+    optionalRows(engine, `
+      SELECT id,
+             holder_pid::int AS holder_pid,
+             holder_host,
+             acquired_at::text AS acquired_at,
+             ttl_expires_at::text AS ttl_expires_at,
+             last_refreshed_at::text AS last_refreshed_at,
+             (ttl_expires_at > now()) AS active
+        FROM gbrain_cycle_locks
+       ORDER BY ttl_expires_at DESC
+       LIMIT 5
+    `),
+    optionalRows(engine, `
+      SELECT status, COUNT(*)::int AS count
+        FROM take_proposals
+       GROUP BY status
+       ORDER BY status
+    `),
+    optionalOne(engine, `
+      SELECT COUNT(*)::int AS total,
+             COUNT(*) FILTER (WHERE active)::int AS active,
+             COUNT(*) FILTER (WHERE active AND resolved_at IS NOT NULL)::int AS resolved,
+             COUNT(*) FILTER (WHERE active AND resolved_at IS NULL)::int AS unresolved,
+             COUNT(*) FILTER (WHERE active AND embedding IS NOT NULL)::int AS embedded,
+             COALESCE(AVG(weight) FILTER (WHERE active), 0)::float AS avg_weight,
+             COALESCE(MAX(weight) FILTER (WHERE active), 0)::float AS max_weight
+        FROM takes
+    `),
+    optionalOne(engine, `
+      SELECT COUNT(*)::int AS total,
+             COUNT(*) FILTER (WHERE applied)::int AS applied,
+             COALESCE(AVG(confidence), 0)::float AS avg_confidence,
+             MAX(graded_at)::text AS latest_graded_at
+        FROM take_grade_cache
+    `),
+    optionalOne(engine, `
+      SELECT source_id,
+             holder,
+             generated_at::text AS generated_at,
+             total_resolved::int AS total_resolved,
+             brier,
+             accuracy,
+             partial_rate,
+             grade_completion,
+             active_bias_tags,
+             voice_gate_passed,
+             voice_gate_attempts::int AS voice_gate_attempts,
+             model_id
+        FROM calibration_profiles
+       ORDER BY generated_at DESC
+       LIMIT 1
+    `),
+    optionalRows(engine, `
+      SELECT id::int AS id,
+             source_id,
+             holder,
+             generated_at::text AS generated_at,
+             total_resolved::int AS total_resolved,
+             brier,
+             accuracy,
+             grade_completion
+        FROM calibration_profiles
+       ORDER BY generated_at DESC
+       LIMIT 8
+    `),
+    optionalRows(engine, `
+      SELECT p.source_id,
+             COUNT(c.id)::int AS chunks,
+             COUNT(c.id) FILTER (WHERE c.embedding IS NOT NULL)::int AS embedded,
+             COUNT(c.id) FILTER (WHERE c.embedding IS NULL)::int AS pending
+        FROM pages p
+        LEFT JOIN content_chunks c ON c.page_id = p.id
+       WHERE p.deleted_at IS NULL
+       GROUP BY p.source_id
+       ORDER BY pending DESC, chunks DESC
+       LIMIT 20
+    `),
+    optionalRows(engine, `
+      SELECT source_id,
+             slug,
+             title,
+             type,
+             emotional_weight,
+             updated_at::text AS updated_at
+        FROM pages
+       WHERE deleted_at IS NULL
+       ORDER BY emotional_weight DESC, updated_at DESC
+       LIMIT 12
+    `),
+    optionalRows(engine, `
+      SELECT type, COUNT(*)::int AS count
+        FROM pages
+       WHERE deleted_at IS NULL
+       GROUP BY type
+       ORDER BY count DESC
+       LIMIT 24
+    `),
+    optionalOne(engine, `
+      SELECT COUNT(*)::int AS total,
+             COUNT(*) FILTER (WHERE created_at > now() - interval '24 hours')::int AS last_24h,
+             MAX(created_at)::text AS latest_at
+        FROM ingest_log
+    `),
+    optionalOne(engine, `
+      SELECT COUNT(*) FILTER (WHERE deleted_at IS NOT NULL)::int AS soft_deleted_pages,
+             COUNT(*) FILTER (WHERE deleted_at IS NOT NULL AND deleted_at < now() - interval '72 hours')::int AS purge_ready_pages,
+             (SELECT COUNT(*)::int FROM sources WHERE archived = true) AS archived_sources,
+             (SELECT COUNT(*)::int FROM links l LEFT JOIN pages p ON p.id = l.to_page_id WHERE p.id IS NULL) AS dead_links
+        FROM pages
+    `),
+    optionalRows(engine, `
+      SELECT id::int AS id,
+             name,
+             queue,
+             status,
+             attempts_made::int AS attempts_made,
+             max_attempts::int AS max_attempts,
+             created_at::text AS created_at,
+             updated_at::text AS updated_at,
+             error_text
+        FROM minion_jobs
+       WHERE name IN ('autopilot-cycle','embed-backfill','sync','extract','project-health','risk-detect','report-gen')
+          OR name LIKE '%dream%'
+          OR name LIKE '%project%'
+          OR name LIKE '%risk%'
+       ORDER BY updated_at DESC
+       LIMIT 12
+    `),
+    optionalRows(engine, `
+      SELECT status, COUNT(*)::int AS count
+        FROM minion_jobs
+       GROUP BY status
+       ORDER BY status
+    `),
+    optionalRows(engine, `
+      SELECT id::int AS id,
+             verdict,
+             overall_score,
+             cost_usd,
+             created_at::text AS created_at
+        FROM eval_takes_quality_runs
+       ORDER BY created_at DESC
+       LIMIT 6
+    `),
+    optionalRows(engine, `
+      SELECT run_id,
+             ran_at::text AS ran_at,
+             queries_evaluated::int AS queries_evaluated,
+             queries_with_contradiction::int AS queries_with_contradiction,
+             total_contradictions_flagged::int AS total_contradictions_flagged,
+             judge_errors_total::int AS judge_errors_total
+        FROM eval_contradictions_runs
+       ORDER BY ran_at DESC
+       LIMIT 6
+    `),
+  ]);
+
+  const runs = listRuns()
+    .filter(row => row.kind.startsWith('dream_') || row.kind === 'embed_stale' || row.kind === 'sync_all' || row.kind === 'doctor_check')
+    .slice(0, 20);
+
+  return {
+    phase_catalog: ALL_PHASES,
+    overview: overviewValue,
+    health,
+    locks,
+    runs,
+    proposals: proposalStatus,
+    takes: takeSummary,
+    grades: gradeSummary,
+    calibration: {
+      latest: latestCalibration,
+      history: calibrationHistory,
+    },
+    embeddings: {
+      by_source: embeddingBySource,
+      coverage: overviewValue?.embedding_coverage ?? health?.embed_coverage ?? null,
+      pending: overviewValue?.pending_embeddings ?? health?.missing_embeddings ?? null,
+    },
+    weights: {
+      top_pages: topWeightedPages,
+    },
+    knowledge: {
+      types: knowledgeTypes,
+      ingest: ingestSummary,
+    },
+    lifecycle: lifecycleSummary,
+    jobs: {
+      recent: recentJobs,
+      status: jobStatus,
+    },
+    quality: {
+      takes_quality_runs: qualityRuns,
+      contradiction_runs: contradictionRuns,
+    },
+  };
 }
 
 // ---------------------------------------------------------------------------

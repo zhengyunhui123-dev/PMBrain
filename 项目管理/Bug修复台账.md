@@ -320,3 +320,42 @@
 - 描述：配置页面保存知识库目录时，如果该目录已经注册为 source，`addSource` 会抛 `source_id_taken`（id 相同）或 `overlapping_path`（id 不同但路径相同）错误，阻断保存流程。所有入口（桌面端 applySetup、管理后台 POST /admin/api/sources、CLI、MCP）最终都调用 `addSource`，因此问题影响面广。之前的桌面端修复靠正则匹配错误信息兜底，但 `overlapping_path` 的关键词 `overlaps` 不在正则中，且正则兜底本身脆弱。
 - 是否完成：是
 - 最终结果：在 `src/core/sources-ops.ts` 的 `addSource` 函数中新增 `isSameSourceSpec` 和 `realpathSafe` 辅助函数；当 source id 已存在且路径/URL 完全一致时，直接返回已有 source 行（幂等）；当 id 不同但路径完全相同时（realpath 比较），也返回已有 source 行；真正的子目录/父目录重叠仍抛 `overlapping_path` 错误。所有入口（CLI、MCP、HTTP admin、桌面端）统一受益，不再依赖正则兜底。Q4 pre-flight collision 测试全部通过。版本更新为 1.0.45。
+## 2026-06-29 Admin Console 原始数据导入表格溢出修复
+
+- 时间：2026-06-29 11:05:00
+- 版本号：1.0.46
+- 标题：修复 Admin Console 原始数据导入页字段超出列表
+- 描述：原始数据导入页在中等宽度窗口下，注册数据源表格的“页面”等列会越过左侧列表区域，视觉上压到右侧“启动导入”面板，影响 PC 端浏览和操作。
+- 是否完成：是
+- 最终结果：为导入页两列布局增加专属宽度约束，注册数据源表格增加滚动容器、固定关键列宽和路径换行规则；PC 端不再与右侧面板重叠，窄屏继续按已有响应式规则单列显示。PMBrain 版本更新为 1.0.46。
+## 2026-06-29 Admin Console 自然语言任务交互与首页占位修复
+
+- 时间：2026-06-29 11:40:00
+- 版本号：1.0.47
+- 标题：修复自然语言任务按钮状态、执行结果摘要和首页占位过高
+- 描述：自然语言任务页的“发送”和“确认并执行”按钮点击后缺少已点击状态；确认执行期间仍可能重复触发；失败结果直接展示长日志，难以判断完成、跳过和失败情况；知识库总览首页复用自然语言任务卡片，占用首屏空间过多。
+- 是否完成：是
+- 最终结果：发送按钮和确认执行按钮点击后显示浅色已点击态；执行中确认按钮禁用，执行完成后恢复可点击并保留浅色状态；失败或导入结果会汇总文件总数、已导入、跳过、错误、完成阶段和主要问题，原始日志仍保留在详情中；知识库总览首页移除自然语言任务快捷卡并压缩 hero 高度。PMBrain 版本更新为 1.0.47。
+
+## 2026-06-29 Admin Dream 启动与输入控制修复
+
+- 时间：2026-06-29 15:13:00
+- 版本号：1.0.49
+- 标题：修复 Admin 选择"整轮 cycle"时未执行以及 propose_takes 不支持 --input 时仍显示输入框的问题
+- 描述：Admin 页面 Phase 下拉选择"整轮 cycle"（value="all"）时，`buildDreamCommand` 中 `"all"` 被转为 `undefined` 导致 CLI 命令缺少 `--phase` 参数，整轮未执行；此外 `propose_takes`、`grade_takes`、`calibration` 等 phase 不支持 `--input`，但前端仍显示 Input file 输入框，用户填入文件路径后不生效。
+- 是否完成：是
+- 最终结果：`buildDreamCommand` 中 `"all"` 改为正确转为 `"cycle"`，整轮 cycle 可正常启动；Admin 页面中，当选择的 phase 不支持 `--input` 时，Input file 输入框自动禁用并显示提示文字"仅 synthesize 支持单文件，已禁用"，避免用户误填。PMBrain 版本更新为 1.0.49。
+## 2026-06-29 Heavy tests 缺少 embedding provider 失败修复
+- 时间：2026-06-29 17:35:00
+- 版本号：1.0.50
+- 标题：修复 frontmatter wallclock heavy test 在无 embedding provider 环境失败
+- 描述：Heavy tests 中 `frontmatter_scan_wallclock.sh` 在隔离 HOME 下执行 `gbrain init --pglite --yes`，但当前 init 逻辑要求显式 embedding provider 或 `--no-embedding`，导致 GitHub Actions 在未配置模型 Key 时失败。
+- 是否完成：是
+- 最终结果：测试脚本改为 `init --pglite --no-embedding --yes`，该测试只验证 doctor frontmatter 扫描性能，不依赖向量化能力；同时将 source 注册步骤从 `bun run -e` 改为 `bun -e`，确保内联脚本在当前 Bun 中真实执行；版本号更新为 1.0.50。
+## 2026-06-29 Admin Vite 调试代理返回 HTML 修复
+- 时间：2026-06-29 18:10:00
+- 版本号：1.0.53
+- 标题：修复 Admin 调试页 API 请求返回 Vite HTML 导致 JSON 解析失败
+- 描述：Admin Vite 调试服务使用 `base: /admin/` 时，`/admin/api` 代理规则未命中，Import 页面读取 PMBrain 状态时拿到 Vite 的 `index.html`，前端按 JSON 解析后报 `Unexpected token '<'`。
+- 是否完成：是
+- 最终结果：`admin/vite.config.ts` 的代理规则改为正则 `^/admin/(api|auth|events|login)`，确认 `http://127.0.0.1:5173/admin/api/brain/overview` 返回后端 JSON 401 而不是 HTML；版本号更新为 1.0.53。

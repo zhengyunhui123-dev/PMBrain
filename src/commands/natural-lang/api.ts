@@ -8,6 +8,7 @@ import { normalizeIntentPreview, describeAction } from './normalize.ts';
 import { callIntentModel, getAdminLlmStatus } from './llm.ts';
 import { commandForPreview, resolveCliEntry } from './commands.ts';
 import { previews, runs, startRun, type RunHooks } from './executor.ts';
+import { ALL_PHASES, type CyclePhase } from '../../core/cycle.ts';
 
 // ---------------------------------------------------------------------------
 // Import-path helpers
@@ -138,14 +139,22 @@ export async function startSourceAddRun(input: {
 }
 
 export function buildDreamCommand(input: {
-  phase?: 'propose_takes';
+  phase?: CyclePhase | 'all' | string;
   sourceId?: string;
   maxPages?: number;
   dryRun?: boolean;
+  input?: string;
+  date?: string;
+  from?: string;
+  to?: string;
 }): string[] {
-  const phase = input.phase ?? 'propose_takes';
   const prefix = resolveCliEntry();
-  const cmd = [...prefix, 'dream', '--phase', phase];
+  const cmd = [...prefix, 'dream'];
+  const phase = input.phase === 'all' ? undefined : (input.phase || undefined);
+  if (phase) {
+    if (!(ALL_PHASES as readonly string[]).includes(phase)) throw new Error(`Unsupported dream phase: ${phase}`);
+    cmd.push('--phase', phase);
+  }
   if (input.sourceId?.trim()) cmd.push('--source', input.sourceId.trim());
   if (input.maxPages !== undefined) {
     const maxPages = Math.floor(Number(input.maxPages));
@@ -154,17 +163,26 @@ export function buildDreamCommand(input: {
     }
     cmd.push('--max-pages', String(maxPages));
   }
+  if (input.input?.trim()) cmd.push('--input', input.input.trim());
+  if (input.date?.trim()) cmd.push('--date', input.date.trim());
+  if (input.from?.trim()) cmd.push('--from', input.from.trim());
+  if (input.to?.trim()) cmd.push('--to', input.to.trim());
   if (input.dryRun) cmd.push('--dry-run');
   return cmd;
 }
 
 export async function startDreamRun(input: {
-  phase?: 'propose_takes';
+  phase?: CyclePhase | 'all' | string;
   sourceId?: string;
   maxPages?: number;
   dryRun?: boolean;
+  input?: string;
+  date?: string;
+  from?: string;
+  to?: string;
 }, cwd: string, hooks?: RunHooks): Promise<ConsoleRun> {
-  return await startRun('dream_propose_takes', buildDreamCommand(input), cwd, hooks);
+  const phase = input.phase && input.phase !== 'all' ? input.phase : 'cycle';
+  return await startRun(`dream_${phase}`, buildDreamCommand(input), cwd, hooks);
 }
 
 export async function startActionRun(action: 'doctor_check' | 'show_sources' | 'show_stats' | 'embed_stale' | 'sync_all', cwd: string, hooks?: RunHooks): Promise<ConsoleRun> {

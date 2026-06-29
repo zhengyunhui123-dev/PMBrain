@@ -63,7 +63,13 @@ function labelFrom(map: Record<string, string>, value: string | null): string | 
   return map[value] ?? value;
 }
 
-export function TakeProposalsPage() {
+export function TakeProposalsPage({
+  title = '观点审批',
+  intro = 'dream 的 propose_takes 会从单个页面正文中抽取候选观点。点击“页面”卡片可查看原文依据，再决定接受或拒绝。',
+}: {
+  title?: string;
+  intro?: string;
+}) {
   const [status, setStatus] = useState('pending');
   const [proposals, setProposals] = useState<TakeProposal[]>([]);
   const [loading, setLoading] = useState(true);
@@ -78,6 +84,13 @@ export function TakeProposalsPage() {
   const [dreamDryRun, setDreamDryRun] = useState(true);
   const [dreamRun, setDreamRun] = useState<ConsoleRun | null>(null);
   const [dreamError, setDreamError] = useState('');
+  const [sources, setSources] = useState<Array<{ id: string; name: string; page_count: number; archived?: boolean }>>([]);
+
+  useEffect(() => {
+    api.dreamOverview().then((data: any) => {
+      setSources((data.overview?.sources ?? []).filter((s: any) => !s.archived));
+    }).catch(() => { /* 静默失败，Source ID 回退到输入框 */ });
+  }, []);
 
   const pendingCount = useMemo(
     () => proposals.filter(item => item.status === 'pending').length,
@@ -171,9 +184,9 @@ export function TakeProposalsPage() {
     <div className="pm-page take-page">
       <div className="pm-section-head">
         <div>
-          <h1 className="page-title">观点审批</h1>
+          <h1 className="page-title">{title}</h1>
           <p className="pm-muted">
-            dream 的 propose_takes 会从单个页面正文中抽取候选观点。点击“页面”卡片可查看原文依据，再决定接受或拒绝。
+            {intro}
           </p>
         </div>
         <button className="pm-ghost" onClick={() => void load()} disabled={loading}>刷新</button>
@@ -203,11 +216,12 @@ export function TakeProposalsPage() {
           </label>
           <label>
             <span>Source ID</span>
-            <input
-              value={dreamSourceId}
-              onChange={(event) => setDreamSourceId(event.target.value)}
-              placeholder="optional"
-            />
+            <select value={dreamSourceId} onChange={(event) => setDreamSourceId(event.target.value)}>
+              <option value="">全部 source</option>
+              {sources.map(s => (
+                <option key={s.id} value={s.id}>{s.name || s.id}（{s.page_count} 页）</option>
+              ))}
+            </select>
           </label>
           <label className="take-dream-checkbox">
             <input

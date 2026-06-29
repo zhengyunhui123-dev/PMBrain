@@ -147,13 +147,12 @@ export function KnowledgeWorkbenchPage({ onNavigate }: { onNavigate?: (page: str
   return (
     <div className="pm-page">
       <OverviewStrip overview={overview} />
-      <section className="pm-hero">
+      <section className="pm-hero workbench-hero">
         <div>
           <div className="pm-eyebrow">PMBrain Console</div>
           <h1>项目管理知识大脑</h1>
           <p>把知识库状态、数据导入、MCP 接入、模型配置和自然语言任务执行放到一个清晰的工作台里。</p>
         </div>
-        <NaturalLanguagePanel compact onNavigate={onNavigate} />
       </section>
 
       <div className="pm-grid metrics-grid">
@@ -245,8 +244,7 @@ function summarizeRunResult(intent: string, run: ConsoleRun): string {
   if (run.status === 'running') return '任务正在执行中，请稍候...';
   if (run.status === 'queued') return '任务已排队，等待执行...';
   if (run.status === 'failed') {
-    const reason = run.error || run.stderr || '未知错误';
-    return `任务执行失败：${reason}`;
+    return summarizeRunLog(run, '任务执行失败');
   }
 
   const out = run.stdout || '';
@@ -280,6 +278,9 @@ function summarizeRunResult(intent: string, run: ConsoleRun): string {
     case 'capture_memory':
       return '已成功将内容保存到知识库。';
     case 'import_path': {
+      if (run.error || run.stderr || /imported=\d+\s+skipped=\d+\s+errors=\d+/.test(out)) {
+        return summarizeRunLog(run, '导入完成');
+      }
       const pageMatch = out.match(/(\d+)\s*page/i);
       const fileMatch = out.match(/(\d+)\s*file/i);
       const parts: string[] = [];
@@ -287,7 +288,7 @@ function summarizeRunResult(intent: string, run: ConsoleRun): string {
       if (fileMatch) parts.push(`${fileMatch[1]} 个文件`);
       return parts.length > 0
         ? `导入完成，共处理 ${parts.join('、')}。`
-        : '导入完成。';
+        : summarizeRunLog(run, '导入完成');
     }
     case 'sync_source': {
       const nameMatch = out.match(/syncing source[：:]\s*(\S+)/i) || out.match(/source[：:]\s*(\S+)/i);
@@ -310,11 +311,42 @@ function summarizeRunResult(intent: string, run: ConsoleRun): string {
   }
 }
 
+function summarizeRunLog(run: ConsoleRun, fallback: string): string {
+  const text = [run.error, run.stderr, run.stdout].filter(Boolean).join('\n');
+  if (!text.trim()) return fallback;
+
+  const latestProgress = Array.from(text.matchAll(/imported=(\d+)\s+skipped=(\d+)\s+errors=(\d+)/g)).pop();
+  const totalMatch = text.match(/files=(\d+)/);
+  const warningCount = (text.match(/Warning:/g) ?? []).length;
+  const completedPhases = Array.from(text.matchAll(/\[pmbrain phase\]\s+([^\n]+?)\s+done/g)).map(match => match[1].trim());
+  const failedLines = text
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(line => /error|failed|cannot access|warning:/i.test(line))
+    .slice(0, 2)
+    .map(line => line.replace(/\s+/g, ' ').slice(0, 120));
+
+  const parts: string[] = [];
+  if (totalMatch) parts.push(`共发现 ${totalMatch[1]} 个文件`);
+  if (latestProgress) {
+    parts.push(`已导入 ${latestProgress[1]} 个`);
+    parts.push(`跳过 ${latestProgress[2]} 个`);
+    parts.push(`错误 ${latestProgress[3]} 个`);
+  }
+  if (completedPhases.length > 0) parts.push(`已完成阶段：${completedPhases.slice(0, 3).join('、')}`);
+  if (warningCount > 0) parts.push(`警告 ${warningCount} 条`);
+  if (failedLines.length > 0) parts.push(`主要问题：${failedLines.join('；')}`);
+
+  return parts.length > 0 ? `${fallback}。${parts.join('；')}。` : fallback;
+}
+
 function NaturalLanguagePanel({ compact = false, onNavigate }: { compact?: boolean; onNavigate?: (page: string) => void }) {
   const [text, setText] = useState('');
   const [preview, setPreview] = useState<IntentPreview | null>(null);
   const [run, setRun] = useState<ConsoleRun | null>(null);
   const [loading, setLoading] = useState(false);
+  const [submitClicked, setSubmitClicked] = useState(false);
+  const [executeClicked, setExecuteClicked] = useState(false);
   const [error, setError] = useState('');
   const [history, setHistory] = useState<NaturalTaskHistoryItem[]>(() => loadNaturalHistory());
   const [activeHistoryId, setActiveHistoryId] = useState<string | null>(null);
@@ -330,6 +362,8 @@ function NaturalLanguagePanel({ compact = false, onNavigate }: { compact?: boole
 
   const submitPreview = async () => {
     if (!text.trim()) return;
+    setSubmitClicked(true);
+    setExecuteClicked(false);
     setLoading(true);
     setError('');
     setPreview(null);
@@ -355,6 +389,7 @@ function NaturalLanguagePanel({ compact = false, onNavigate }: { compact?: boole
 
   const execute = async (confirmed: boolean) => {
     if (!preview) return;
+    setExecuteClicked(true);
     setLoading(true);
     setError('');
     try {
@@ -394,6 +429,7 @@ function NaturalLanguagePanel({ compact = false, onNavigate }: { compact?: boole
   }, [run, activeHistoryId, history]);
 
   const summary = preview && run ? summarizeRunResult(preview.intent, run) : null;
+  const isRunActive = run?.status === 'queued' || run?.status === 'running';
 
   return (
     <div className={`nl-shell ${compact ? 'compact' : ''}`}>
@@ -404,12 +440,20 @@ function NaturalLanguagePanel({ compact = false, onNavigate }: { compact?: boole
         </div>
         <textarea
           value={text}
-          onChange={e => setText(e.target.value)}
+          onChange={e => {
+            setText(e.target.value);
+            setSubmitClicked(false);
+            setExecuteClicked(false);
+          }}
           placeholder="例如：把这段话记下来；导入文件夹路径；同步所有知识库；查一下项目相关资料"
           rows={compact ? 4 : 6}
         />
         <div className="pm-actions">
-          <button className="pm-primary" onClick={() => void submitPreview()} disabled={loading || !text.trim()}>
+          <button
+            className={`pm-primary ${submitClicked ? 'pm-clicked' : ''}`}
+            onClick={() => void submitPreview()}
+            disabled={loading || !text.trim()}
+          >
             {loading ? '正在理解...' : '发送'}
           </button>
           <button className="pm-ghost" onClick={() => setText('现在知识库里有哪些数据？')}>示例</button>
@@ -419,7 +463,11 @@ function NaturalLanguagePanel({ compact = false, onNavigate }: { compact?: boole
           <div className="intent-preview">
             <p className="nl-proposed-action">{preview.clarification || preview.proposedAction}</p>
             {!preview.clarification && (
-              <button className="pm-primary" onClick={() => void execute(preview.requiresConfirmation)}>
+              <button
+                className={`pm-primary ${executeClicked && !isRunActive ? 'pm-clicked' : ''}`}
+                onClick={() => void execute(preview.requiresConfirmation)}
+                disabled={loading || isRunActive}
+              >
                 {preview.requiresConfirmation ? '确认并执行' : '执行'}
               </button>
             )}
@@ -539,8 +587,8 @@ export function ImportDataPage() {
       <h1>原始数据导入</h1>
       {error && <div className="pm-card pm-error">{error}</div>}
       {!overview ? <LoadingBlock /> : (
-        <div className="pm-grid two-col">
-          <div className="pm-card">
+        <div className="pm-grid two-col import-layout">
+          <div className="pm-card import-sources-card">
             <div className="pm-section-head">
               <h2>注册数据源</h2>
               <label className="checkbox-label" style={{ fontSize: 12, fontWeight: 400, cursor: 'pointer' }}>
@@ -548,6 +596,7 @@ export function ImportDataPage() {
                 显示已归档
               </label>
             </div>
+            <div className="import-sources-table">
             <table>
               <thead><tr><th>Source</th><th>路径</th><th>页面</th><th>同步</th></tr></thead>
               <tbody>
@@ -561,6 +610,7 @@ export function ImportDataPage() {
                 ))}
               </tbody>
             </table>
+            </div>
           </div>
           <div className="pm-card">
             <h2>启动导入</h2>

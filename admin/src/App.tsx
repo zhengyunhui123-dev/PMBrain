@@ -4,7 +4,15 @@ import { AgentsPage } from './pages/Agents';
 import { RequestLogPage } from './pages/RequestLog';
 import { CalibrationPage } from './pages/Calibration';
 import { JobsWatchPage } from './pages/JobsWatch';
-import { TakeProposalsPage } from './pages/TakeProposals';
+import {
+  DreamCalibrationPage,
+  DreamExecutePage,
+  DreamInsightsPage,
+  DreamKnowledgePage,
+  DreamOverviewPage,
+  DreamScoringPage,
+  DreamTakesPage,
+} from './pages/Dream';
 import {
   BrainDataPage,
   ConnectionCenterPage,
@@ -18,7 +26,9 @@ import {
 import { api } from './api';
 
 const PAGES = [
-  'login', 'dashboard', 'import', 'data', 'takes', 'docs', 'natural',
+  'login', 'dashboard', 'natural',
+  'dream', 'dream-execute', 'dream-knowledge', 'dream-takes', 'dream-scoring', 'dream-calibration', 'dream-insights',
+  'import', 'data', 'docs',
   'mcp', 'config', 'agents', 'log', 'calibration', 'jobs', 'diagnostics', 'settings',
 ] as const;
 
@@ -33,32 +43,44 @@ export function App() {
   const [page, setPage] = useState<Page>(getPage);
   const [helpOpen, setHelpOpen] = useState(false);
   const [supportPanel, setSupportPanel] = useState<'wecom' | null>(null);
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const wecomQrSrc = `${import.meta.env.BASE_URL}wecom-helper.jpg`;
   const navGroups: Array<{ title: string; items: Array<{ page: Page; label: string }> }> = useMemo(() => [
     {
-      title: '工作台',
+      title: '总控制室',
       items: [
         { page: 'dashboard', label: '知识库总览' },
         { page: 'natural', label: '自然语言任务' },
       ],
     },
     {
-      title: '知识数据',
+      title: '知识收集',
       items: [
         { page: 'import', label: '原始数据导入' },
         { page: 'data', label: '知识库数据浏览' },
-        { page: 'takes', label: '观点审批' },
       ],
     },
     {
-      title: 'AI 接入',
+      title: '知识加工',
+      items: [
+        { page: 'dream', label: 'Dream 总览' },
+        { page: 'dream-execute', label: '阶段执行' },
+        { page: 'dream-knowledge', label: '知识沉淀' },
+        { page: 'dream-takes', label: '观点生产线' },
+        { page: 'dream-scoring', label: '权重与评分' },
+        { page: 'dream-calibration', label: '校准画像' },
+        { page: 'dream-insights', label: '项目洞察' },
+      ],
+    },
+    {
+      title: '知识调用',
       items: [
         { page: 'mcp', label: 'MCP 接入' },
         { page: 'log', label: '请求日志' },
       ],
     },
     {
-      title: '运维设置',
+      title: '基础信息',
       items: [
         { page: 'jobs', label: '任务监控' },
         { page: 'diagnostics', label: '系统诊断' },
@@ -77,6 +99,26 @@ export function App() {
   const navigate = (target: Page) => {
     window.location.hash = target;
     setPage(target);
+  };
+
+  // 根据当前 page 自动展开所在分组
+  const currentGroup = navGroups.find(g => g.items.some(i => i.page === page));
+  useEffect(() => {
+    if (currentGroup) {
+      setExpandedGroups(prev => new Set(prev).add(currentGroup.title));
+    }
+  }, [page]);
+
+  const toggleGroup = (title: string) => {
+    setExpandedGroups(prev => {
+      const next = new Set(prev);
+      if (next.has(title)) {
+        next.delete(title);
+      } else {
+        next.add(title);
+      }
+      return next;
+    });
   };
 
   if (page === 'login') {
@@ -107,8 +149,11 @@ export function App() {
         </div>
         <div className="sidebar-nav">
           {navGroups.map(group => (
-            <div className="nav-group" key={group.title}>
-              <div className="nav-group-title">{group.title}</div>
+            <div className={`nav-group ${expandedGroups.has(group.title) ? 'expanded' : ''}`} key={group.title}>
+              <div className="nav-group-title" onClick={() => toggleGroup(group.title)}>
+                <span className="nav-arrow">{expandedGroups.has(group.title) ? '▾' : '▸'}</span>
+                {group.title}
+              </div>
               {group.items.map(item => (
                 <a
                   key={item.page}
@@ -147,9 +192,15 @@ export function App() {
       </nav>
       <main className="main">
         {page === 'dashboard' && <KnowledgeWorkbenchPage onNavigate={(p) => navigate(p as Page)} />}
+        {page === 'dream' && <DreamOverviewPage />}
+        {page === 'dream-execute' && <DreamExecutePage />}
+        {page === 'dream-knowledge' && <DreamKnowledgePage />}
+        {page === 'dream-takes' && <DreamTakesPage />}
+        {page === 'dream-scoring' && <DreamScoringPage />}
+        {page === 'dream-calibration' && <DreamCalibrationPage />}
+        {page === 'dream-insights' && <DreamInsightsPage />}
         {page === 'import' && <ImportDataPage />}
         {page === 'data' && <BrainDataPage />}
-        {page === 'takes' && <TakeProposalsPage />}
         {page === 'docs' && <DocumentationPage />}
         {page === 'natural' && <NaturalLanguagePage />}
         {page === 'mcp' && <ConnectionCenterPage />}
