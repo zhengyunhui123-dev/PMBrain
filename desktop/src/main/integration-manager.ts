@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path';
 import { backupFile } from './config-manager.js';
 import type { SidecarManager } from './sidecar-manager.js';
 
-export type IntegrationClient = 'codebuddy' | 'cursor' | 'claude' | 'codex';
+export type IntegrationClient = 'codebuddy' | 'workbuddy' | 'cursor' | 'claude' | 'codex';
 export type CredentialKind = 'api_key' | 'oauth';
 
 export interface IntegrationInfo {
@@ -30,6 +30,7 @@ export interface IntegrationResult {
 
 const CLIENT_META: Record<IntegrationClient, { name: string; path: () => string | null; automatic: boolean }> = {
   codebuddy: { name: 'CodeBuddy', path: () => join(homedir(), '.codebuddy', 'mcp.json'), automatic: true },
+  workbuddy: { name: 'Workbuddy', path: () => join(homedir(), '.workbuddy', '.mcp.json'), automatic: true },
   cursor: { name: 'Cursor', path: () => join(homedir(), '.cursor', 'mcp.json'), automatic: true },
   claude: { name: 'Claude', path: () => null, automatic: false },
   codex: { name: 'Codex', path: () => join(homedir(), '.codex', 'config.toml'), automatic: true },
@@ -182,7 +183,7 @@ export async function configureIntegration(
   let backup: string | null = null;
   let configured = false;
 
-  if (client === 'codebuddy' || client === 'cursor') {
+  if (client === 'codebuddy' || client === 'workbuddy' || client === 'cursor') {
     backup = writeJsonIntegration(path!, sidecar.mcpUrl, token);
     configured = true;
   } else if (client === 'codex') {

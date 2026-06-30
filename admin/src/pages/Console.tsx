@@ -12,6 +12,8 @@ interface SourceSummary {
   page_count: number;
   last_sync_at: string | null;
   archived?: boolean;
+  archived_at?: string | null;
+  archive_expires_at?: string | null;
 }
 
 interface BrainOverview {
@@ -549,6 +551,7 @@ export function ImportDataPage() {
   const [workers, setWorkers] = useState(1);
   const [run, setRun] = useState<ConsoleRun | null>(null);
   const [submitError, setSubmitError] = useState('');
+  const [sourceActionId, setSourceActionId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!run || run.status !== 'running') return;
@@ -582,6 +585,42 @@ export function ImportDataPage() {
     }
   };
 
+  const archiveSource = async (source: SourceSummary) => {
+    const message = [
+      `确认归档数据源 "${source.id}"？`,
+      '',
+      `当前页面数：${source.page_count}`,
+      '归档后该数据源会从搜索、同步和默认展示中隐藏。',
+      '数据会保留 72 小时，期间可以恢复；超过 72 小时后可能被物理删除。',
+      '本地原始文件夹不会被删除。',
+    ].join('\n');
+    if (!confirm(message)) return;
+    setSubmitError('');
+    setSourceActionId(source.id);
+    try {
+      await api.archiveSource(source.id);
+      setShowArchived(true);
+      await reload();
+    } catch (e) {
+      setSubmitError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSourceActionId(null);
+    }
+  };
+
+  const restoreSource = async (source: SourceSummary) => {
+    setSubmitError('');
+    setSourceActionId(source.id);
+    try {
+      await api.restoreSource(source.id);
+      await reload();
+    } catch (e) {
+      setSubmitError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSourceActionId(null);
+    }
+  };
+
   return (
     <div className="pm-page">
       <h1>原始数据导入</h1>
@@ -602,10 +641,29 @@ export function ImportDataPage() {
               <tbody>
                 {overview.sources.filter(s => showArchived || !s.archived).map(source => (
                   <tr key={source.id}>
-                    <td><b>{source.id}</b><div className="pm-muted">{source.federated ? 'federated' : 'isolated'}</div></td>
+                    <td>
+                      <b>{source.id}</b>
+                      <div className="pm-muted">{source.archived ? 'archived' : source.federated ? 'federated' : 'isolated'}</div>
+                      {source.archived && (
+                        <div className="pm-hint">可恢复至 {formatDate(source.archive_expires_at)}</div>
+                      )}
+                    </td>
                     <td className="mono">{source.local_path ?? '-'}</td>
                     <td>{source.page_count}</td>
                     <td>{formatDate(source.last_sync_at)}</td>
+                    <td>
+                      {source.archived ? (
+                        <button className="pm-ghost" onClick={() => void restoreSource(source)} disabled={sourceActionId === source.id}>
+                          {sourceActionId === source.id ? '恢复中' : '恢复'}
+                        </button>
+                      ) : source.id === 'default' ? (
+                        <span className="pm-muted">-</span>
+                      ) : (
+                        <button className="pm-ghost" onClick={() => void archiveSource(source)} disabled={sourceActionId === source.id}>
+                          {sourceActionId === source.id ? '归档中' : '归档'}
+                        </button>
+                      )}
+                    </td>
                   </tr>
                 ))}
               </tbody>

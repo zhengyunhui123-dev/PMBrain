@@ -35,6 +35,7 @@ import { paramDefToSchema } from '../mcp/tool-defs.ts';
 import { getBrainHotMemoryMeta } from '../core/facts/meta-hook.ts';
 import { loadConfig, toEngineConfig, type GBrainConfig } from '../core/config.ts';
 import { buildError, serializeError } from '../core/errors.ts';
+import { assessDestructiveImpact, softDeleteSource, restoreSource } from '../core/destructive-guard.ts';
 import { VERSION } from '../version.ts';
 import * as db from '../core/db.ts';
 import { sqlQueryForEngine, executeRawJsonb } from '../core/sql-query.ts';
@@ -52,6 +53,7 @@ import {
   getAdminDreamOverview,
   getAdminLlmStatus,
   getRun,
+  cancelRun,
   listAdminBrainPages,
   listRuns,
   previewIntent,
@@ -1377,6 +1379,16 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
     res.json(run);
   });
 
+  app.post('/admin/api/runs/:id/cancel', requireAdmin, async (req: Request, res: Response) => {
+    const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const run = id ? await cancelRun(id) : null;
+    if (!run) {
+      res.status(404).json({ error: 'run_not_found' });
+      return;
+    }
+    res.json(run);
+  });
+
   app.post('/admin/api/runs/action', requireAdmin, express.json(), async (req: Request, res: Response) => {
     try {
       const action = req.body?.action;
@@ -1440,6 +1452,51 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
       res.json({ runId: run.id, status: run.status });
     } catch (e) {
       res.status(400).json({ error: e instanceof Error ? e.message : 'source_add_failed' });
+    }
+  });
+
+  app.post('/admin/api/sources/:id/archive', requireAdmin, async (req: Request, res: Response) => {
+    const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    if (!id) {
+      res.status(400).json({ error: 'source_id_required' });
+      return;
+    }
+    if (id === 'default') {
+      res.status(400).json({ error: 'default_source_cannot_be_archived' });
+      return;
+    }
+    try {
+      const impact = await assessDestructiveImpact(engine, id);
+      if (!impact) {
+        res.status(404).json({ error: 'source_not_found' });
+        return;
+      }
+      const archived = await softDeleteSource(engine, id);
+      if (!archived) {
+        res.status(409).json({ error: 'source_already_archived_or_missing' });
+        return;
+      }
+      res.json({ archived, impact });
+    } catch (e) {
+      res.status(400).json({ error: e instanceof Error ? e.message : 'source_archive_failed' });
+    }
+  });
+
+  app.post('/admin/api/sources/:id/restore', requireAdmin, async (req: Request, res: Response) => {
+    const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    if (!id) {
+      res.status(400).json({ error: 'source_id_required' });
+      return;
+    }
+    try {
+      const restored = await restoreSource(engine, id);
+      if (!restored) {
+        res.status(404).json({ error: 'source_not_found_or_not_archived' });
+        return;
+      }
+      res.json({ id, restored: true });
+    } catch (e) {
+      res.status(400).json({ error: e instanceof Error ? e.message : 'source_restore_failed' });
     }
   });
 

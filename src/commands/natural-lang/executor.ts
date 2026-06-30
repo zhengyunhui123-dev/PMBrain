@@ -1,10 +1,11 @@
-import { spawn } from 'child_process';
+import { spawn, type ChildProcess } from 'child_process';
 import { randomUUID } from 'crypto';
 import type { ConsoleRun } from './types.ts';
 
 // In-memory stores (module-level singletons, shared across all importers)
 export const previews = new Map<string, import('./types.ts').IntentPreview>();
 export const runs = new Map<string, ConsoleRun>();
+const children = new Map<string, ChildProcess>();
 
 export function sanitizeOutput(text: string): string {
   return text
@@ -19,6 +20,36 @@ export function getRun(id: string): ConsoleRun | null {
 
 export function listRuns(): ConsoleRun[] {
   return [...runs.values()].sort((a, b) => b.startedAt.localeCompare(a.startedAt)).slice(0, 30);
+}
+
+function killProcessTree(child: ChildProcess): void {
+  if (process.platform === 'win32' && child.pid) {
+    const killer = spawn('taskkill', ['/PID', String(child.pid), '/T', '/F'], {
+      windowsHide: true,
+      stdio: 'ignore',
+    });
+    killer.on('error', () => child.kill());
+    return;
+  }
+  child.kill('SIGTERM');
+  setTimeout(() => {
+    if (!child.killed) child.kill('SIGKILL');
+  }, 3000).unref?.();
+}
+
+export async function cancelRun(id: string): Promise<ConsoleRun | null> {
+  const run = runs.get(id);
+  if (!run) return null;
+  if (run.status !== 'running' && run.status !== 'queued') return run;
+
+  run.status = 'cancelled';
+  run.error = 'Run cancelled by admin user';
+  run.completedAt = new Date().toISOString();
+  run.durationMs = Date.parse(run.completedAt) - Date.parse(run.startedAt);
+
+  const child = children.get(id);
+  if (child) killProcessTree(child);
+  return run;
 }
 
 export interface RunHooks {
@@ -64,32 +95,44 @@ export async function startRun(kind: string, command: string[], cwd: string, hoo
     windowsHide: true,
     env: process.env,
   });
+  children.set(id, child);
   const cap = 120_000;
   const append = (key: 'stdout' | 'stderr', chunk: Buffer) => {
     run[key] = sanitizeOutput((run[key] + chunk.toString('utf8')).slice(-cap));
   };
-  child.stdout?.on('data', (chunk: Buffer) => append('stdout', chunk));
-  child.stderr?.on('data', (chunk: Buffer) => append('stderr', chunk));
-  child.on('error', (err) => {
-    run.status = 'failed';
-    run.error = sanitizeOutput(err.message);
-    run.completedAt = new Date().toISOString();
-    run.durationMs = Date.now() - started;
-  });
-  child.on('close', (code) => {
+  let finished = false;
+  let timeout: ReturnType<typeof setTimeout> | null = null;
+  const finish = (status: ConsoleRun['status'], code: number | null, error?: string) => {
+    if (finished) return;
+    finished = true;
+    if (timeout) clearTimeout(timeout);
+    children.delete(id);
     run.exitCode = code;
-    run.status = code === 0 ? 'completed' : 'failed';
+    run.status = status;
+    if (error) run.error = sanitizeOutput(error);
     run.completedAt = new Date().toISOString();
     run.durationMs = Date.now() - started;
     if (hooks?.afterComplete) {
       hooks.afterComplete().catch(() => undefined);
     }
+  };
+
+  child.stdout?.on('data', (chunk: Buffer) => append('stdout', chunk));
+  child.stderr?.on('data', (chunk: Buffer) => append('stderr', chunk));
+  child.on('error', (err) => {
+    finish(run.status === 'cancelled' ? 'cancelled' : 'failed', null, err.message);
   });
-  setTimeout(() => {
+  child.on('close', (code) => {
+    if (run.status === 'cancelled') {
+      finish('cancelled', code);
+    } else {
+      finish(code === 0 ? 'completed' : 'failed', code);
+    }
+  });
+  timeout = setTimeout(() => {
     if (run.status === 'running') {
-      run.status = 'failed';
-      run.error = 'Command timed out after 10 minutes';
-      child.kill();
+      finish('failed', null, 'Command timed out after 10 minutes');
+      killProcessTree(child);
     }
   }, 10 * 60 * 1000).unref?.();
 

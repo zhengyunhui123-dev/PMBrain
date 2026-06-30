@@ -359,3 +359,20 @@
 - 描述：Admin Vite 调试服务使用 `base: /admin/` 时，`/admin/api` 代理规则未命中，Import 页面读取 PMBrain 状态时拿到 Vite 的 `index.html`，前端按 JSON 解析后报 `Unexpected token '<'`。
 - 是否完成：是
 - 最终结果：`admin/vite.config.ts` 的代理规则改为正则 `^/admin/(api|auth|events|login)`，确认 `http://127.0.0.1:5173/admin/api/brain/overview` 返回后端 JSON 401 而不是 HTML；版本号更新为 1.0.53。
+## 2026-06-30 Dream MIMO Gateway 工具调用执行失败修复
+
+- 时间：2026-06-30 15:20:00
+- 版本号：1.0.56
+- 标题：修复 Dream 使用 MIMO 执行 subagent 工具调用时卡住或 dead-letter 的问题
+- 描述：Dream synthesize 阶段使用 `mimo:mimo-v2.5-pro` 时，subagent worker 需要走 gateway-native loop；同时 AI SDK v6 对工具 schema、消息角色和工具结果消息有更严格校验，旧 gateway 适配会导致 `schema is not a function`、`ModelMessage[] schema`、`Tool results are missing` 等错误，进而让 Admin 页面长期显示 running。
+- 是否完成：是
+- 最终结果：启用 `agent.use_gateway_loop=true`，修复 gateway 工具 JSON Schema 包装方式；将 tool-result 消息转换为 AI SDK v6 需要的 `tool` 消息；为 gateway loop 增加工具结果回合落库，避免 retry 历史断链；重启 jobs worker 后，重新执行同一 Dream 输入，`cycle.synthesize` 可正常完成。PMBrain 版本更新为 1.0.56。
+
+## 2026-06-30 Dream 运行结果可解释性与中止能力修复
+
+- 时间：2026-06-30 16:05:00
+- 版本号：1.0.57
+- 标题：修复 Dream 运行完成后缺少自然语言结果、无法中止、切页后状态丢失和失败子任务复用问题
+- 描述：Admin 阶段执行页只展示原始 stdout/stderr，用户难以判断 dry-run、locked、completed、failed 分别代表什么，也看不到是否生成知识点；运行中没有中止入口；切换页面后当前 run 状态不保留；Dream synthesize 的固定 idempotency key 会复用历史 failed/dead/cancelled 子任务，导致手动重跑同一输入仍然没有新知识页；DeepSeek/MIMO 等非 Claude 模型未读取 recipe 上下文窗口，可能使用过大的 fallback 切块预算。
+- 是否完成：是
+- 最终结果：Admin Dream run 改为读取 JSON 报告并生成“做了什么/产出结果/明细”自然语言摘要，原始日志收进折叠区；新增运行中“中止”按钮和 `/admin/api/runs/:id/cancel`，可结束 Admin 启动的子进程树并显示 cancelled 总结；前端用 localStorage 保留最近 run，切页回来继续轮询，浏览器刷新/关闭时提示；synthesize 对 failed/dead/cancelled 的历史子任务生成 retry idempotency key，成功任务仍保持幂等；cycle lock 遇到同主机已死亡 PID 时会自动清理后重试获取，避免死进程残留锁继续阻塞；模型上下文预算改为优先读取 recipe `max_context_tokens`，MIMO 标记为支持 subagent loop，DeepSeek 可按工具调用路径运行。PMBrain 版本更新为 1.0.57。

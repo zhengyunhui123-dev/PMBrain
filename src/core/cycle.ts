@@ -45,11 +45,12 @@
 
 import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync, statSync } from 'fs';
 import { join } from 'path';
+import { hostname } from 'os';
 import { gbrainPath } from './config.ts';
 import type { BrainEngine } from './engine.ts';
 import { createProgress, type ProgressReporter } from './progress.ts';
 import { getCliOptions, cliOptsToProgressOptions } from './cli-options.ts';
-import { tryAcquireDbLock, type DbLockHandle } from './db-lock.ts';
+import { deleteLockRow, inspectLock, tryAcquireDbLock, type DbLockHandle } from './db-lock.ts';
 import { assertValidSourceId } from './source-id.ts';
 
 // ─── Types ─────────────────────────────────────────────────────────
@@ -525,12 +526,34 @@ export function cycleLockIdFor(sourceId?: string): string {
  */
 async function acquireDbCycleLock(engine: BrainEngine, sourceId?: string): Promise<LockHandle | null> {
   const lockId = cycleLockIdFor(sourceId);
-  const handle: DbLockHandle | null = await tryAcquireDbLock(engine, lockId, LOCK_TTL_MINUTES);
+  let handle: DbLockHandle | null = await tryAcquireDbLock(engine, lockId, LOCK_TTL_MINUTES);
+  if (handle === null && await clearDeadLocalCycleLock(engine, lockId)) {
+    handle = await tryAcquireDbLock(engine, lockId, LOCK_TTL_MINUTES);
+  }
   if (handle === null) return null;
   return {
     refresh: handle.refresh,
     release: handle.release,
   };
+}
+
+function isLocalPidDead(pid: number): boolean {
+  if (!Number.isFinite(pid) || pid <= 0 || pid === process.pid) return false;
+  try {
+    process.kill(pid, 0);
+    return false;
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === 'ESRCH';
+  }
+}
+
+async function clearDeadLocalCycleLock(engine: BrainEngine, lockId: string): Promise<boolean> {
+  const snap = await inspectLock(engine, lockId).catch(() => null);
+  if (!snap || snap.ttl_expired) return false;
+  const sameHost = !snap.holder_host || snap.holder_host === hostname();
+  if (!sameHost || !isLocalPidDead(snap.holder_pid)) return false;
+  const result = await deleteLockRow(engine, lockId, snap.holder_pid);
+  return result.deleted;
 }
 
 async function ensureEngineConnected(engine: BrainEngine): Promise<void> {

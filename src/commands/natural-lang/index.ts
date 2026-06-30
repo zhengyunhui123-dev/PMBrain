@@ -18,7 +18,7 @@ export { normalizeIntentPreview, validateSlots, describeAction } from './normali
 export { commandForPreview, resolveCliEntry } from './commands.ts';
 
 // Executor
-export { startRun, getRun, listRuns, sanitizeOutput, type RunHooks } from './executor.ts';
+export { startRun, getRun, listRuns, cancelRun, sanitizeOutput, type RunHooks } from './executor.ts';
 
 // High-level API
 export {

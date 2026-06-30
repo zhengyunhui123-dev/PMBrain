@@ -784,6 +784,13 @@ async function runSubagentViaGateway(args: GatewayRunArgs): Promise<SubagentResu
     role: m.role as 'user' | 'assistant',
     content: adaptContentBlocksToChatBlocks(m.content_blocks),
   }));
+  await appendCompletedToolResultsOnReplay({
+    engine,
+    jobId: ctx.id,
+    priorMessages,
+    priorChatMessages,
+    priorTools,
+  });
 
   // Initial seed message if no prior state.
   const initialMessages: ChatMessage[] = priorChatMessages.length === 0
@@ -904,6 +911,18 @@ async function runSubagentViaGateway(args: GatewayRunArgs): Promise<SubagentResu
         [errorMsg, gbrainToolUseId],
       );
     },
+    onToolResultTurn: async (_turnIdx, messageIdx, blocks) => {
+      await persistMessage(engine, ctx.id, {
+        message_idx: messageIdx,
+        role: 'user',
+        content_blocks: blocks as unknown as ContentBlock[],
+        tokens_in: null,
+        tokens_out: null,
+        tokens_cache_read: null,
+        tokens_cache_create: null,
+        model: null,
+      });
+    },
     onHeartbeat: heartbeat,
   });
 
@@ -1016,6 +1035,9 @@ function adaptContentBlocksToChatBlocks(blocks: unknown): ChatBlock[] | string {
 
 interface PriorToolV2Row {
   stableKey: string;
+  messageIdx: number;
+  toolUseId: string;
+  toolName: string;
   status: 'pending' | 'complete' | 'failed';
   output: unknown;
   error: string | null;
@@ -1051,6 +1073,9 @@ async function loadPriorToolsV2(engine: BrainEngine, jobId: number): Promise<Pri
       : `legacy:${jobId}:${r.message_idx}:${r.tool_use_id}:${r.tool_name}`;
     return {
       stableKey,
+      messageIdx: Number(r.message_idx),
+      toolUseId: String(r.tool_use_id ?? ''),
+      toolName: String(r.tool_name ?? ''),
       status: r.status as 'pending' | 'complete' | 'failed',
       output: r.output,
       error: (r.error as string | null) ?? null,
@@ -1059,6 +1084,70 @@ async function loadPriorToolsV2(engine: BrainEngine, jobId: number): Promise<Pri
 }
 
 // ── Internal: persistence ───────────────────────────────────
+
+async function appendCompletedToolResultsOnReplay(args: {
+  engine: BrainEngine;
+  jobId: number;
+  priorMessages: PersistedMessage[];
+  priorChatMessages: ChatMessage[];
+  priorTools: PriorToolV2Row[];
+}): Promise<void> {
+  const { engine, jobId, priorMessages, priorChatMessages, priorTools } = args;
+  const lastIdx = priorChatMessages.length - 1;
+  const last = priorChatMessages[lastIdx];
+  if (!last || last.role !== 'assistant' || !Array.isArray(last.content)) return;
+
+  const calls = last.content.filter(
+    (b): b is { type: 'tool-call'; toolCallId: string; toolName: string; input: unknown } =>
+      b.type === 'tool-call',
+  );
+  if (calls.length === 0) return;
+
+  const assistantMessageIdx = priorMessages[lastIdx]?.message_idx;
+  if (assistantMessageIdx === undefined) return;
+
+  const resultBlocks: ChatBlock[] = [];
+  for (const call of calls) {
+    const prior = priorTools.find(row =>
+      row.messageIdx === assistantMessageIdx &&
+      row.toolUseId === call.toolCallId &&
+      row.toolName === call.toolName,
+    );
+    if (!prior || prior.status === 'pending') return;
+    resultBlocks.push({
+      type: 'tool-result',
+      toolCallId: call.toolCallId,
+      toolName: call.toolName,
+      output: prior.status === 'complete' ? prior.output : (prior.error ?? 'tool failed'),
+      isError: prior.status === 'failed',
+    });
+  }
+
+  const messageIdx = priorMessages.length === 0
+    ? 0
+    : Math.max(...priorMessages.map(m => m.message_idx)) + 1;
+  await persistMessage(engine, jobId, {
+    message_idx: messageIdx,
+    role: 'user',
+    content_blocks: resultBlocks as unknown as ContentBlock[],
+    tokens_in: null,
+    tokens_out: null,
+    tokens_cache_read: null,
+    tokens_cache_create: null,
+    model: null,
+  });
+  priorChatMessages.push({ role: 'user', content: resultBlocks });
+  priorMessages.push({
+    message_idx: messageIdx,
+    role: 'user',
+    content_blocks: resultBlocks,
+    tokens_in: null,
+    tokens_out: null,
+    tokens_cache_read: null,
+    tokens_cache_create: null,
+    model: null,
+  });
+}
 
 async function loadPriorMessages(engine: BrainEngine, jobId: number): Promise<PersistedMessage[]> {
   const rows = await engine.executeRaw<Record<string, unknown>>(

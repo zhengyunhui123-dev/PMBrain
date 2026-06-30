@@ -241,6 +241,15 @@
         </section>
       </section>
     </main>
+    <div class="wait-overlay" id="setup-wait" hidden role="status" aria-live="polite">
+      <div class="wait-dialog">
+        <div class="wait-spinner" aria-hidden="true"></div>
+        <div>
+          <b id="setup-wait-title">正在保存配置</b>
+          <p id="setup-wait-message">第一次配置会比较慢，请耐心等待。请不要关闭窗口或重复点击按钮。</p>
+        </div>
+      </div>
+    </div>
     <script type="module" src="/src.ts"></script>
   </body>
 </html>

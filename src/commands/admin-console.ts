@@ -49,6 +49,10 @@ export async function getAdminBrainOverview(engine: BrainEngine, config: GBrainC
       `SELECT COUNT(*)::int AS page_count FROM pages WHERE source_id = $1`,
       [source.id],
     );
+    const [archive] = await engine.executeRaw<{ archived_at: string | null; archive_expires_at: string | null }>(
+      `SELECT archived_at::text, archive_expires_at::text FROM sources WHERE id = $1`,
+      [source.id],
+    );
     return {
       id: source.id,
       name: source.name,
@@ -57,6 +61,8 @@ export async function getAdminBrainOverview(engine: BrainEngine, config: GBrainC
       page_count: count?.page_count ?? 0,
       last_sync_at: source.last_sync_at ? new Date(source.last_sync_at).toISOString() : null,
       archived: source.archived === true,
+      archived_at: archive?.archived_at ?? null,
+      archive_expires_at: archive?.archive_expires_at ?? null,
     };
   }));
 

@@ -21,7 +21,7 @@
  *     rotation (via configureGateway()) invalidates stale entries.
  */
 
-import { embed as aiEmbed, embedMany, generateObject, generateText } from 'ai';
+import { embed as aiEmbed, embedMany, generateObject, generateText, jsonSchema } from 'ai';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { listRecipes } from './recipes/index.ts';
 import { createOpenAI } from '@ai-sdk/openai';
@@ -2205,6 +2205,42 @@ export interface ChatOpts {
   cacheSystem?: boolean;
 }
 
+function toSdkToolOutput(output: unknown): { type: 'text'; value: string } | { type: 'json'; value: unknown } {
+  if (typeof output === 'string') return { type: 'text', value: output };
+  return { type: 'json', value: output };
+}
+
+function toSdkMessages(messages: ChatMessage[]): any[] {
+  return messages.map(message => {
+    if (typeof message.content === 'string') return message;
+
+    const hasOnlyToolResults = message.content.length > 0 &&
+      message.content.every(block => block.type === 'tool-result');
+    const content = message.content.map(block => {
+      if (block.type === 'text') return block;
+      if (block.type === 'tool-call') {
+        return {
+          type: 'tool-call',
+          toolCallId: block.toolCallId,
+          toolName: block.toolName,
+          input: block.input,
+        };
+      }
+      return {
+        type: 'tool-result',
+        toolCallId: block.toolCallId,
+        toolName: block.toolName,
+        output: toSdkToolOutput(block.output),
+      };
+    });
+    return {
+      ...message,
+      role: hasOnlyToolResults ? 'tool' : message.role,
+      content,
+    };
+  });
+}
+
 async function resolveChatProvider(modelStr: string): Promise<{ model: any; recipe: Recipe; modelId: string }> {
   const { parsed, recipe } = resolveRecipe(modelStr);
   assertTouchpoint(recipe, 'chat', parsed.modelId, getExtendedModelsForProvider(parsed.providerId));
@@ -2357,7 +2393,7 @@ export async function chat(opts: ChatOpts): Promise<ChatResult> {
   const tools = (opts.tools ?? []).reduce((acc, t) => {
     acc[t.name] = {
       description: t.description,
-      inputSchema: { jsonSchema: t.inputSchema } as any,
+      inputSchema: jsonSchema(t.inputSchema as any),
     };
     return acc;
   }, {} as Record<string, any>);
@@ -2387,7 +2423,7 @@ export async function chat(opts: ChatOpts): Promise<ChatResult> {
     const result = await generateText({
       model,
       system: opts.system,
-      messages: opts.messages as any,
+      messages: toSdkMessages(opts.messages),
       tools: opts.tools && opts.tools.length > 0 ? tools : undefined,
       maxOutputTokens: opts.maxTokens ?? 4096,
       abortSignal: opts.abortSignal,
@@ -2538,6 +2574,7 @@ export interface ToolLoopOpts {
   ) => Promise<{ gbrainToolUseId: string }>;
   onToolCallComplete?: (gbrainToolUseId: string, output: unknown) => Promise<void>;
   onToolCallFailed?: (gbrainToolUseId: string, error: string) => Promise<void>;
+  onToolResultTurn?: (turnIdx: number, messageIdx: number, blocks: ChatBlock[]) => Promise<void>;
 
   /** Optional per-call heartbeat for observability. */
   onHeartbeat?: (event: string, data: Record<string, unknown>) => void;
@@ -2750,7 +2787,7 @@ export async function toolLoop(opts: ToolLoopOpts): Promise<ToolLoopResult> {
 
     // Feed all tool results back as a single user message.
     const userMessageIdx = messageIdx++;
-    void userMessageIdx;
+    await opts.onToolResultTurn?.(turnIdx, userMessageIdx, toolResultBlocks);
     messages.push({ role: 'user', content: toolResultBlocks });
 
     turnIdx++;

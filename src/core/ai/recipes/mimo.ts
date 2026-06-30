@@ -43,7 +43,7 @@ export const mimo: Recipe = {
     chat: {
       models: ['gpt-5.2', 'gpt-4o-mini', 'mimo-v2.5-pro', 'mimo-v2-pro', 'mimo-v2-flash', 'mimo-v2-omni'],
       supports_tools: true,
-      supports_subagent_loop: false,
+      supports_subagent_loop: true,
       supports_prompt_cache: false,
       max_context_tokens: 128000,
       cost_per_1m_input_usd: 1.25,

@@ -98,12 +98,28 @@ function computeChunkCharBudget(
   if (configMaxPromptTokens !== null) {
     return Math.floor(configMaxPromptTokens * CHARS_PER_TOKEN);
   }
-  const ctx = MODEL_CONTEXT_TOKENS[model];
+  const ctx = resolveModelContextTokens(model);
   if (ctx === undefined) {
     warnUnknownModelOnce(model);
     return Math.floor(UNKNOWN_MODEL_BUDGET_TOKENS * CHARS_PER_TOKEN);
   }
   return Math.floor(ctx * HEADROOM_RATIO * CHARS_PER_TOKEN);
+}
+
+function resolveModelContextTokens(model: string): number | undefined {
+  const direct = MODEL_CONTEXT_TOKENS[model];
+  if (direct !== undefined) return direct;
+  const normalized = model.includes(':')
+    ? model
+    : model.toLowerCase().startsWith('claude-')
+      ? `anthropic:${model}`
+      : model;
+  try {
+    const { recipe } = resolveRecipe(normalized);
+    return recipe.touchpoints.chat?.max_context_tokens;
+  } catch {
+    return undefined;
+  }
 }
 
 const _unknownModelWarned = new Set<string>();
@@ -473,9 +489,14 @@ export async function runPhaseSynthesize(
         //     transcripts on upgrade).
         //   - multi-chunk → `<legacy>:c<i>of<n>` per chunk; durable across
         //     runs because D9 splitTranscriptByBudget is hash-deterministic.
-        const idempotency_key = isChunked
+        const baseIdempotencyKey = isChunked
           ? `dream:synth:${t.filePath}:${hash16}:c${i}of${chunks.length}`
           : `dream:synth:${t.filePath}:${hash16}`;
+        const idempotency_key = await retryableSynthesisIdempotencyKey(
+          engine,
+          baseIdempotencyKey,
+          start,
+        );
         const submitOpts: Partial<MinionJobInput> = {
           max_stalled: 3,
           on_child_fail: 'continue',
@@ -571,6 +592,22 @@ export async function runPhaseSynthesize(
 }
 
 // ── Config ────────────────────────────────────────────────────────────
+
+async function retryableSynthesisIdempotencyKey(
+  engine: BrainEngine,
+  baseKey: string,
+  runNonce: number,
+): Promise<string> {
+  const rows = await engine.executeRaw<{ status: string }>(
+    `SELECT status FROM minion_jobs WHERE idempotency_key = $1 LIMIT 1`,
+    [baseKey],
+  );
+  const status = rows[0]?.status;
+  if (status === 'failed' || status === 'dead' || status === 'cancelled') {
+    return `${baseKey}:retry:${runNonce}`;
+  }
+  return baseKey;
+}
 
 interface SynthConfig {
   enabled: boolean;

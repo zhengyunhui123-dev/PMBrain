@@ -26,6 +26,23 @@ describe('desktop integration config merging', () => {
     expect(result.mcpServers.pmbrain.headers.Authorization).toBe('Bearer secret');
   });
 
+  test('preserves Workbuddy connector proxy config', () => {
+    const path = tempFile('.mcp.json');
+    writeFileSync(path, JSON.stringify({
+      mcpServers: {
+        'connector-proxy': {
+          command: 'workbuddy-connector-proxy',
+          args: ['--profile', 'default'],
+        },
+      },
+    }));
+    writeJsonIntegration(path, 'http://127.0.0.1:3131/mcp', 'secret', dirname(path));
+    const result = JSON.parse(readFileSync(path, 'utf8'));
+    expect(result.mcpServers['connector-proxy'].command).toBe('workbuddy-connector-proxy');
+    expect(result.mcpServers['connector-proxy'].args).toEqual(['--profile', 'default']);
+    expect(result.mcpServers.pmbrain.url).toBe('http://127.0.0.1:3131/mcp');
+  });
+
   test('replaces only the managed Codex block', () => {
     const path = tempFile('config.toml');
     writeFileSync(path, 'model = "gpt-test"\n');

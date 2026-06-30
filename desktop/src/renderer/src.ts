@@ -32,6 +32,17 @@ function setBusy(button: HTMLButtonElement, busy: boolean, text?: string): void 
   if (span && text) span.textContent = text;
 }
 
+function saveButtonText(): string {
+  return state?.setup.needsSetup === false ? '保存修改并重启' : '保存配置并启动';
+}
+
+function setSetupWait(visible: boolean, title = '', message = ''): void {
+  const overlay = $('#setup-wait');
+  overlay.hidden = !visible;
+  if (title) $('#setup-wait-title').textContent = title;
+  if (message) $('#setup-wait-message').textContent = message;
+}
+
 type Panel = 'setup' | 'integrations' | 'updates' | 'recovery';
 
 function switchPanel(target: Panel): void {
@@ -178,7 +189,7 @@ function populate(next: DesktopSetupState): void {
   renderEngine();
   renderIntegrations(next.integrations);
   renderService(null, next.port);
-  $('#save-setup').querySelector('span')!.textContent = setup.needsSetup ? '保存配置并启动' : '保存修改并重启';
+  $('#save-setup').querySelector('span')!.textContent = saveButtonText();
 }
 
 function renderUpdate(update: UpdateState | null): void {
@@ -245,7 +256,6 @@ async function save(): Promise<void> {
     }
   }
 
-  setBusy(button, true, '正在初始化数据库…');
   const keys: SetupPayload['keys'] = {};
   const chatModel = composeModelId(chatProvider, chatModelName);
   const embeddingModel = composeModelId(embeddingProvider, embeddingModelName);
@@ -256,7 +266,6 @@ async function save(): Promise<void> {
     const chatKeyValue = ($<HTMLInputElement>('#chat-api-key')).value.trim();
     if (!chatKeyValue) {
       setNotice('error', `厂商 ${chatProvider} 需要填写 API Key`);
-      setBusy(button, false, '保存配置并启动');
       return;
     }
     (keys as Record<string, string>)[chatKey] = chatKeyValue;
@@ -265,7 +274,6 @@ async function save(): Promise<void> {
     const embeddingKeyValue = ($<HTMLInputElement>('#embedding-api-key')).value.trim();
     if (!embeddingKeyValue) {
       setNotice('error', `厂商 ${embeddingProvider} 需要填写 API Key`);
-      setBusy(button, false, '保存配置并启动');
       return;
     }
     (keys as Record<string, string>)[embeddingKey] = embeddingKeyValue;
@@ -282,6 +290,15 @@ async function save(): Promise<void> {
     },
     keys,
   };
+  const firstSetup = state?.setup.needsSetup ?? true;
+  setSetupWait(
+    true,
+    firstSetup ? '正在完成首次配置' : '正在保存并重启服务',
+    firstSetup
+      ? '第一次配置需要初始化数据库、执行迁移并启动服务，可能会比较慢，请耐心等待。请不要关闭窗口或重复点击按钮。'
+      : '正在保存配置、执行必要检查并重启 PMBrain，请耐心等待。',
+  );
+  setBusy(button, true, firstSetup ? '正在首次配置…' : '正在保存并重启…');
   try {
     const next = await window.pmbrainDesktop.saveSetup(payload);
     populate(next);
@@ -290,7 +307,8 @@ async function save(): Promise<void> {
   } catch (error) {
     setNotice('error', error instanceof Error ? error.message : String(error));
   } finally {
-    setBusy(button, false, '保存配置并启动');
+    setSetupWait(false);
+    setBusy(button, false, saveButtonText());
   }
 }
 

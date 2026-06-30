@@ -24,7 +24,7 @@ export interface IntentPreview {
 export interface ConsoleRun {
   id: string;
   kind: string;
-  status: 'queued' | 'running' | 'completed' | 'failed';
+  status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
   command: string[];
   stdout: string;
   stderr: string;

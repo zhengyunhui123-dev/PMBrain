@@ -81,6 +81,7 @@ window.pmbrainDesktop = {
     },
     integrations: [
       { id: 'codebuddy', name: 'CodeBuddy', path: 'C:\\Users\\zhengyunhui\\.codebuddy\\mcp.json', configured: true, automatic: true },
+      { id: 'workbuddy', name: 'Workbuddy', path: 'C:\\Users\\zhengyunhui\\.workbuddy\\.mcp.json', configured: false, automatic: true },
       { id: 'cursor', name: 'Cursor', path: 'C:\\Users\\zhengyunhui\\.cursor\\mcp.json', configured: true, automatic: true },
       { id: 'claude', name: 'Claude', path: null, configured: false, automatic: false },
       { id: 'codex', name: 'Codex', path: 'C:\\Users\\zhengyunhui\\.codex\\config.toml', configured: false, automatic: true },
@@ -103,7 +104,7 @@ window.pmbrainDesktop = {
   openLogs: async () => '',
   quit: async () => {}
 };
-console.log('PMBrain mock injected: panel=${panel}, integrations count=4');
+console.log('PMBrain mock injected: panel=${panel}, integrations count=5');
 // HTML 初始状态已在 Node.js 侧修改，无需 setTimeout 切换面板
 // 等 DOM 渲染后滚动到目标区域
 setTimeout(() => {
@@ -156,6 +157,7 @@ interface MockIntegration {
 }
 const mockIntegrations: MockIntegration[] = [
   { id: 'codebuddy', name: 'CodeBuddy', path: 'C:\\Users\\zhengyunhui\\.codebuddy\\mcp.json', configured: true, automatic: true },
+  { id: 'workbuddy', name: 'Workbuddy', path: 'C:\\Users\\zhengyunhui\\.workbuddy\\.mcp.json', configured: false, automatic: true },
   { id: 'cursor', name: 'Cursor', path: 'C:\\Users\\zhengyunhui\\.cursor\\mcp.json', configured: true, automatic: true },
   { id: 'claude', name: 'Claude', path: null, configured: false, automatic: false },
   { id: 'codex', name: 'Codex', path: 'C:\\Users\\zhengyunhui\\.codex\\config.toml', configured: false, automatic: true },
@@ -226,4 +228,4 @@ if (result.status !== 0) {
 }
 
 const size = statSync(output).size;
-console.log(`[${new Date().toISOString()}] Preview: panel=${panel}, output=${output}, mock integrations count=4`);
+console.log(`[${new Date().toISOString()}] Preview: panel=${panel}, output=${output}, mock integrations count=5`);

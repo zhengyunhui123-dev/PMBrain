@@ -48,6 +48,7 @@ export const api = {
     apiFetch('/admin/api/intent/execute', { method: 'POST', body: JSON.stringify({ previewId, confirmed }) }),
   runs: () => apiFetch('/admin/api/runs'),
   run: (id: string) => apiFetch(`/admin/api/runs/${encodeURIComponent(id)}`),
+  cancelRun: (id: string) => apiFetch(`/admin/api/runs/${encodeURIComponent(id)}/cancel`, { method: 'POST' }),
   startActionRun: (action: string) => apiFetch('/admin/api/runs/action', { method: 'POST', body: JSON.stringify({ action }) }),
   startImportRun: (body: { path: string; sourceId?: string; includeOffice: boolean; includeImages: boolean; autoEmbed: boolean; workers: number }) =>
     apiFetch('/admin/api/import-runs', { method: 'POST', body: JSON.stringify(body) }),
@@ -56,6 +57,10 @@ export const api = {
     apiFetch('/admin/api/dream-runs', { method: 'POST', body: JSON.stringify(body) }),
   addSource: (body: { id?: string; path: string; name?: string; federated: boolean }) =>
     apiFetch('/admin/api/sources', { method: 'POST', body: JSON.stringify(body) }),
+  archiveSource: (id: string) =>
+    apiFetch(`/admin/api/sources/${encodeURIComponent(id)}/archive`, { method: 'POST' }),
+  restoreSource: (id: string) =>
+    apiFetch(`/admin/api/sources/${encodeURIComponent(id)}/restore`, { method: 'POST' }),
   health: () => apiFetch('/admin/api/health-indicators'),
   agents: () => apiFetch('/admin/api/agents'),
   requests: (page = 1, qs = '') => apiFetch(`/admin/api/requests?page=${page}${qs}`),

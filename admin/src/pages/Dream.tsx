@@ -283,6 +283,201 @@ function PhaseRail({ active }: { active?: string }) {
   );
 }
 
+const DREAM_LAST_RUN_KEY = 'pmbrain.dream.lastRunId';
+
+interface DreamPhaseReport {
+  phase: string;
+  status: string;
+  summary?: string;
+  details?: Record<string, unknown>;
+  error?: { class?: string; code?: string; message?: string; hint?: string };
+}
+
+interface DreamCycleReport {
+  status: string;
+  reason?: string;
+  duration_ms?: number;
+  phases?: DreamPhaseReport[];
+  totals?: Record<string, number>;
+}
+
+function parseDreamReport(run: ConsoleRun): DreamCycleReport | null {
+  const text = run.stdout.trim();
+  if (!text) return null;
+  try {
+    return JSON.parse(text) as DreamCycleReport;
+  } catch {
+    const start = text.indexOf('{');
+    const end = text.lastIndexOf('}');
+    if (start < 0 || end <= start) return null;
+    try {
+      return JSON.parse(text.slice(start, end + 1)) as DreamCycleReport;
+    } catch {
+      return null;
+    }
+  }
+}
+
+function asArray(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
+}
+
+function asStringArray(value: unknown): string[] {
+  return asArray(value).filter((item): item is string => typeof item === 'string');
+}
+
+function firstErrorText(run: ConsoleRun, report: DreamCycleReport | null): string {
+  const phaseError = report?.phases?.find(phase => phase.error)?.error;
+  if (phaseError?.message) return phaseError.message;
+  if (run.error) return run.error;
+  const text = `${run.stderr}\n${run.stdout}`;
+  const line = text.split('\n').map(item => item.trim()).find(item =>
+    /error|failed|Invalid prompt|timeout|dead/i.test(item),
+  );
+  return line ?? '';
+}
+
+function describeDreamRun(run: ConsoleRun): {
+  headline: string;
+  diagnosis: string;
+  actions: string[];
+  outputs: string[];
+  details: string[];
+  slugs: string[];
+} {
+  const report = parseDreamReport(run);
+  const text = `${run.stdout}\n${run.stderr}`;
+  const synth = report?.phases?.find(phase => phase.phase === 'synthesize');
+  const synthDetails = synth?.details ?? {};
+  const totals = report?.totals ?? {};
+  const writtenSlugs = asStringArray(synthDetails.written_slugs);
+  const childOutcomes = asArray(synthDetails.child_outcomes) as Array<{ status?: string; jobId?: number }>;
+  const failedChildren = childOutcomes.filter(item => item.status && item.status !== 'completed').length;
+  const isDryRun = run.command.includes('--dry-run') || synthDetails.dryRun === true;
+  const locked = report?.reason === 'cycle_already_running' || /already running|locked/i.test(text);
+  const duration = report?.duration_ms ?? run.durationMs ?? 0;
+  const phaseCount = report?.phases?.length ?? 0;
+  const pagesWritten = Number(totals.synth_pages_written ?? synthDetails.pages_written ?? 0);
+  const transcriptsProcessed = Number(totals.transcripts_processed ?? synthDetails.transcripts_processed ?? 0);
+  const transcriptsDiscovered = Number(synthDetails.transcripts_discovered ?? 0);
+
+  if (run.status === 'running' || run.status === 'queued') {
+    return {
+      headline: 'Dream 正在后台执行',
+      diagnosis: '离开本页不会主动停止后台进程；返回后会继续读取同一个 run 的状态。需要停下时点“中止”。',
+      actions: ['正在等待命令完成，已保留当前 run id。'],
+      outputs: ['运行结束后这里会显示产出的知识点、跳过原因和失败明细。'],
+      details: [`run id: ${run.id}`, `命令: ${run.command.join(' ')}`],
+      slugs: [],
+    };
+  }
+
+  if (run.status === 'cancelled') {
+    return {
+      headline: '本次 Dream 已中止',
+      diagnosis: '中止会结束 Admin 启动的 Dream 子进程；已经完成的阶段会保留，未开始或未完成的阶段不会继续写入。',
+      actions: report?.phases?.map(phase => `${phase.phase}: ${phase.summary ?? phase.status}`) ?? ['进程已被用户中止。'],
+      outputs: pagesWritten > 0 ? [`中止前已写入 ${pagesWritten} 个知识页。`] : ['中止前没有检测到新的知识页写入。'],
+      details: [`耗时约 ${(duration / 1000).toFixed(1)} 秒`, `run id: ${run.id}`],
+      slugs: writtenSlugs,
+    };
+  }
+
+  if (locked) {
+    return {
+      headline: '本次没有执行：Dream 锁正在保护另一轮运行',
+      diagnosis: 'Dream 对会写库的阶段使用单周期锁，避免同步、抽取、向量化、综合写入同时改同一批数据。通常等上一轮结束后再跑即可；如果上一轮异常退出，刷新后仍长期 locked 再处理锁。',
+      actions: ['没有进入 phase 执行。'],
+      outputs: ['没有生成新的知识点，也没有写入页面。'],
+      details: [`状态: ${run.status}`, `run id: ${run.id}`],
+      slugs: [],
+    };
+  }
+
+  const actions = report?.phases?.map(phase => `${phase.phase}: ${phase.summary ?? phase.status}`) ?? [];
+  const details: string[] = [
+    `检查阶段: ${phaseCount}`,
+    `耗时约 ${(duration / 1000).toFixed(1)} 秒`,
+  ];
+  if (transcriptsDiscovered > 0) details.push(`发现 transcript: ${transcriptsDiscovered}`);
+  if (transcriptsProcessed > 0 || synth) details.push(`进入综合处理: ${transcriptsProcessed}`);
+  if (childOutcomes.length > 0) {
+    details.push(`子任务: ${childOutcomes.length} 个，其中 ${failedChildren} 个失败/超时/取消`);
+  }
+  if (/MODEL_CONTEXT_TOKENS/i.test(text)) {
+    details.push('模型上下文预算提示：这是预算降级提醒，不等于执行失败。');
+  }
+  if (/deepseek/i.test(text) || run.command.some(part => part.includes('deepseek'))) {
+    details.push('DeepSeek 路径：当前配方支持 chat/tools/subagent loop；若失败通常看 API key、模型名或网关返回。');
+  }
+
+  let headline = isDryRun ? 'Dry run 已完成：只是预演，没有写入知识点' : 'Dream 已完成';
+  let diagnosis = isDryRun
+    ? 'dry-run 会检查影响范围和部分判定逻辑，但不会提交综合写入，所以“没有新知识点”是预期结果。'
+    : '命令已结束，需要看下面的产出和子任务结果判断是否真的沉淀成功。';
+  const outputs: string[] = [];
+
+  if (!isDryRun && pagesWritten > 0) {
+    outputs.push(`生成 ${pagesWritten} 个知识页。`);
+    headline = `Dream 已生成 ${pagesWritten} 个知识点/页面`;
+  } else if (!isDryRun && synth) {
+    outputs.push('没有生成新的知识页。');
+    if (failedChildren > 0) {
+      diagnosis = '这不是操作方式问题，而是综合阶段的子任务失败、超时或被取消，导致没有可收集的 put_page 写入。';
+    } else if (transcriptsProcessed === 0) {
+      diagnosis = '本次没有进入可写综合：可能是没有输入、显著性过滤认为不需要处理，或处于冷却/跳过状态。';
+    }
+  } else if (isDryRun && synth) {
+    const verdicts = asArray(synthDetails.verdicts) as Array<{ worth?: boolean }>;
+    outputs.push(`预演发现 ${transcriptsDiscovered} 份输入，其中 ${verdicts.filter(v => v?.worth === true).length} 份可能需要综合。`);
+  }
+
+  if (run.status === 'failed') {
+    headline = 'Dream 执行失败';
+    diagnosis = firstErrorText(run, report) || diagnosis;
+  }
+
+  if (writtenSlugs.length > 0) {
+    outputs.push(`页面 slug: ${writtenSlugs.slice(0, 8).join(', ')}${writtenSlugs.length > 8 ? ' ...' : ''}`);
+  }
+  if (outputs.length === 0) outputs.push('没有检测到新的知识页写入。');
+
+  return {
+    headline,
+    diagnosis,
+    actions: actions.length > 0 ? actions : ['没有结构化 phase 明细；请查看原始日志。'],
+    outputs,
+    details,
+    slugs: writtenSlugs,
+  };
+}
+
+function DreamRunNarrative({ run }: { run: ConsoleRun }) {
+  const summary = describeDreamRun(run);
+  return (
+    <div className="dream-run-narrative">
+      <div className="dream-run-headline">
+        <b>{summary.headline}</b>
+        <span className={`run-${run.status}`}>{run.status}</span>
+      </div>
+      <p>{summary.diagnosis}</p>
+      <div className="dream-result-grid">
+        <section>
+          <h3>做了什么</h3>
+          <ul>{summary.actions.slice(0, 12).map((item, index) => <li key={index}>{item}</li>)}</ul>
+        </section>
+        <section>
+          <h3>产出结果</h3>
+          <ul>{summary.outputs.map((item, index) => <li key={index}>{item}</li>)}</ul>
+        </section>
+      </div>
+      <div className="dream-detail-chips">
+        {summary.details.map((item, index) => <span key={index}>{item}</span>)}
+      </div>
+    </div>
+  );
+}
+
 function DreamRunPanel({
   defaultPhase = 'all',
   compact = false,
@@ -304,6 +499,7 @@ function DreamRunPanel({
   const [dryRun, setDryRun] = useState(true);
   const [run, setRun] = useState<ConsoleRun | null>(null);
   const [error, setError] = useState('');
+  const running = run?.status === 'running' || run?.status === 'queued';
 
   const activeSources = useMemo(
     () => (sources ?? []).filter(s => !s.archived),
@@ -314,6 +510,29 @@ function DreamRunPanel({
   const hasDateRangeConflict = !!(date && (from || to));
   const hasFromToConflict = !!(from && to && from > to);
   const hasConflict = hasInputDateConflict || hasDateRangeConflict || hasFromToConflict;
+
+  useEffect(() => {
+    const lastRunId = window.localStorage.getItem(DREAM_LAST_RUN_KEY);
+    if (!lastRunId) return;
+    void api.run(lastRunId)
+      .then(value => setRun(value as ConsoleRun))
+      .catch(() => window.localStorage.removeItem(DREAM_LAST_RUN_KEY));
+  }, []);
+
+  useEffect(() => {
+    if (!run) return;
+    window.localStorage.setItem(DREAM_LAST_RUN_KEY, run.id);
+  }, [run?.id]);
+
+  useEffect(() => {
+    if (!running) return;
+    const warn = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [running]);
 
   useEffect(() => {
     if (!run || (run.status !== 'running' && run.status !== 'queued')) return;
@@ -327,7 +546,7 @@ function DreamRunPanel({
       }
     }, 1400);
     return () => clearInterval(timer);
-  }, [run?.id, run?.status]);
+  }, [run?.id, run?.status, onDone]);
 
   const start = async () => {
     setError('');
@@ -346,13 +565,24 @@ function DreamRunPanel({
         from: from.trim() || undefined,
         to: to.trim() || undefined,
       }) as { runId: string };
+      window.localStorage.setItem(DREAM_LAST_RUN_KEY, res.runId);
       setRun(await api.run(res.runId) as ConsoleRun);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
   };
 
-  const running = run?.status === 'running' || run?.status === 'queued';
+  const cancel = async () => {
+    if (!run || !running) return;
+    setError('');
+    try {
+      const next = await api.cancelRun(run.id) as ConsoleRun;
+      setRun(next);
+      onDone?.();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
 
   return (
     <div className={`pm-card dream-run-panel ${compact ? 'compact' : ''}`}>
@@ -361,9 +591,15 @@ function DreamRunPanel({
           <h2>运行控制</h2>
           <p className="pm-muted">支持整轮 Dream 或单个 phase。默认 dry-run，先看影响范围再执行。</p>
         </div>
-        <button className="pm-primary" onClick={() => void start()} disabled={running}>
-          {running ? '执行中' : '启动'}
-        </button>
+        <div className="dream-run-actions">
+          <button className="pm-primary" onClick={() => void start()} disabled={running}>
+            {running ? '执行中' : '启动'}
+          </button>
+          {running && <button className="pm-ghost danger" onClick={() => void cancel()}>中止</button>}
+        </div>
+      </div>
+      <div className="pm-hint dream-run-persist-note">
+        离开本页不会主动停止后台执行；返回后会继续显示同一个 run 的状态。关闭或刷新浏览器时会提示确认。
       </div>
       <div className="dream-run-grid">
         <label>
@@ -426,7 +662,15 @@ function DreamRunPanel({
         </label>
       </div>
       {error && <div className="pm-error-text">{error}</div>}
-      {run && <RunOutput run={run} />}
+      {run && (
+        <>
+          <DreamRunNarrative run={run} />
+          <details className="nl-details">
+            <summary>原始日志与命令</summary>
+            <RunOutput run={run} />
+          </details>
+        </>
+      )}
     </div>
   );
 }

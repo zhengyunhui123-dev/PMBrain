@@ -39,6 +39,12 @@ button.busy i { display: inline-block; width: 12px; height: 12px; margin-left: 1
 .notice { margin-top: 20px; padding: 13px 16px; border-left: 3px solid; font-size: 13px; line-height: 1.5; }
 .notice.error { color: #ffc2b8; border-color: #ff735c; background: #2a1b18; }
 .notice.success { color: #ccefc0; border-color: #97e66c; background: #19251a; }
+.wait-overlay { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; padding: 24px; background: rgba(9, 12, 10, .68); }
+.wait-overlay[hidden] { display: none; }
+.wait-dialog { display: grid; grid-template-columns: 34px 1fr; align-items: center; gap: 16px; width: min(420px, 100%); padding: 22px; border: 1px solid #3d4a43; background: #151a17; box-shadow: 0 18px 48px rgba(0,0,0,.36); }
+.wait-dialog b { display: block; color: #eef4ef; font-size: 16px; }
+.wait-dialog p { margin: 7px 0 0; color: #95a29a; font-size: 13px; line-height: 1.65; }
+.wait-spinner { width: 28px; height: 28px; border: 3px solid #304035; border-top-color: #97e66c; border-radius: 50%; animation: spin .8s linear infinite; }
 .existing-config { display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 16px; margin-bottom: 28px; padding: 16px 18px; border: 1px solid #3b513e; background: #172019; }
 .existing-config > span, .update-safety > span { color: #97e66c; font: 10px Consolas, monospace; letter-spacing: .1em; }
 .existing-config b, .existing-config small { display: block; }
