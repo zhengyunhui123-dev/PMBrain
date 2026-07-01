@@ -42,7 +42,7 @@ interface DreamArgs {
   phase: CyclePhase | null;
   dir: string | null;
   help: boolean;
-  /** v0.21: ad-hoc transcript file path; implies --phase synthesize. */
+  /** v0.21: ad-hoc transcript file or directory path; implies --phase synthesize. */
   inputFile: string | null;
   /** v0.21: restrict synthesize to a single date (YYYY-MM-DD). */
   date: string | null;
@@ -137,8 +137,8 @@ function parseArgs(args: string[]): DreamArgs {
     process.exit(2);
   }
 
-  // --input + --date / --from / --to is incoherent: --input is a single
-  // file, the date filters scan a directory.
+  // --input + --date / --from / --to is incoherent: --input targets a specific
+  // file or directory, the date filters scan the configured corpus dir.
   if (inputFile && (date || from || to)) {
     console.error('--input cannot be combined with --date / --from / --to');
     process.exit(2);
@@ -285,7 +285,7 @@ function printHelp() {
   --source-id <id>    --source 的别名。
   --max-pages <n>     限制 propose_takes 最多处理的页面数，适合分批执行。
 
-  --input <file>      综合指定转录文件，隐含 --phase synthesize。
+  --input <path>      综合指定转录文件或文件夹，隐含 --phase synthesize。
   --date YYYY-MM-DD   综合指定日期的转录文本。
   --from YYYY-MM-DD   回填范围开始日期，与 --to 配合使用。
   --to   YYYY-MM-DD   回填范围结束日期。
@@ -302,6 +302,7 @@ function printHelp() {
   gbrain dream --phase propose_takes --source pmgbrain --max-pages 25
   gbrain dream --phase calibration_profile --source pmgbrain
   gbrain dream --phase synthesize --input ~/transcripts/2026-04-25.txt
+  gbrain dream --phase synthesize --input ~/transcripts/
 
 审批入口：
   启动服务后打开 http://localhost:3131/admin ，进入“观点审批”。

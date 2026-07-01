@@ -7,7 +7,7 @@ export default defineConfig({
   server: {
     proxy: {
       '^/admin/(api|auth|events|login)': {
-        target: 'http://127.0.0.1:3132',
+        target: 'http://127.0.0.1:3131',
         changeOrigin: false,
       },
     },

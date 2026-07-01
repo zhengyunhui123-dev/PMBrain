@@ -182,9 +182,10 @@ export async function startDreamRun(input: {
   date?: string;
   from?: string;
   to?: string;
+  timeoutMs?: number;
 }, cwd: string, hooks?: RunHooks): Promise<ConsoleRun> {
   const phase = input.phase && input.phase !== 'all' ? input.phase : 'cycle';
-  return await startRun(`dream_${phase}`, buildDreamCommand({ ...input, json: true }), cwd, hooks);
+  return await startRun(`dream_${phase}`, buildDreamCommand({ ...input, json: true }), cwd, hooks, input.timeoutMs);
 }
 
 export async function startActionRun(action: 'doctor_check' | 'show_sources' | 'show_stats' | 'embed_stale' | 'sync_all', cwd: string, hooks?: RunHooks): Promise<ConsoleRun> {

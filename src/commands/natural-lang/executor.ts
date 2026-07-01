@@ -57,7 +57,7 @@ export interface RunHooks {
   afterComplete?: () => Promise<void>;
 }
 
-export async function startRun(kind: string, command: string[], cwd: string, hooks?: RunHooks): Promise<ConsoleRun> {
+export async function startRun(kind: string, command: string[], cwd: string, hooks?: RunHooks, timeoutMs?: number): Promise<ConsoleRun> {
   const id = randomUUID();
   const started = Date.now();
   const run: ConsoleRun = {
@@ -131,10 +131,10 @@ export async function startRun(kind: string, command: string[], cwd: string, hoo
   });
   timeout = setTimeout(() => {
     if (run.status === 'running') {
-      finish('failed', null, 'Command timed out after 10 minutes');
+      finish('failed', null, 'Command timed out after ' + ((timeoutMs ?? 600000) / 1000 / 60).toFixed(0) + ' minutes');
       killProcessTree(child);
     }
-  }, 10 * 60 * 1000).unref?.();
+  }, timeoutMs ?? 10 * 60 * 1000).unref?.();
 
   return run;
 }

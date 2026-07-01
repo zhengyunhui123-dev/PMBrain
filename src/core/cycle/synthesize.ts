@@ -27,7 +27,7 @@
  */
 
 import type Anthropic from '@anthropic-ai/sdk';
-import { readFileSync, existsSync, writeFileSync, mkdirSync } from 'node:fs';
+import { readFileSync, existsSync, writeFileSync, mkdirSync, statSync } from 'node:fs';
 import { chat as gatewayChat, type ChatResult } from '../ai/gateway.ts';
 import { resolveRecipe } from '../ai/model-resolver.ts';
 import { AIConfigError } from '../ai/errors.ts';
@@ -1264,6 +1264,15 @@ function loadAdHocTranscript(
   excludePatterns: string[],
   bypassGuard?: boolean,
 ): DiscoveredTranscript[] {
+  if (statSync(filePath).isDirectory()) {
+    const { discoverTranscripts } = require('./transcript-discovery.ts') as typeof import('./transcript-discovery.ts');
+    return discoverTranscripts({
+      corpusDir: filePath,
+      minChars,
+      excludePatterns,
+      bypassGuard,
+    });
+  }
   const { readSingleTranscript } = require('./transcript-discovery.ts') as typeof import('./transcript-discovery.ts');
   const t = readSingleTranscript(filePath, { minChars, excludePatterns, bypassGuard });
   return t ? [t] : [];

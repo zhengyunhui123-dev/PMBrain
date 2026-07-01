@@ -2122,6 +2122,23 @@ pre {
   font-size: 12px;
 }
 
+.dream-run-grid .dream-input-disabled span {
+  color: var(--text-muted);
+}
+
+.dream-run-grid .dream-input-disabled input,
+.dream-run-grid .dream-input-disabled select {
+  opacity: 0.5;
+  background: #f5f5f5;
+  cursor: not-allowed;
+  border-color: #e0e0e0;
+}
+
+.dream-run-grid .dream-input-disabled input::placeholder,
+.dream-run-grid .dream-input-disabled select::placeholder {
+  color: #aaa;
+}
+
 .dream-check {
   display: inline-flex;
   align-items: center;

@@ -497,6 +497,9 @@ function DreamRunPanel({
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
   const [dryRun, setDryRun] = useState(true);
+  const [timeoutMinutes, setTimeoutMinutes] = useState('120');
+
+  const isAllPhase = phase === 'all';
   const [run, setRun] = useState<ConsoleRun | null>(null);
   const [error, setError] = useState('');
   const running = run?.status === 'running' || run?.status === 'queued';
@@ -604,7 +607,11 @@ function DreamRunPanel({
       <div className="dream-run-grid">
         <label>
           <span>Phase</span>
-          <select value={phase} onChange={event => setPhase(event.target.value)}>
+          <select value={phase} onChange={event => {
+            const newPhase = event.target.value;
+            setPhase(newPhase);
+            if (newPhase === 'all') setSourceId('');
+          }}>
             <option value="all">整轮 cycle</option>
             {PHASE_GROUPS.map(group => (
               <optgroup key={group.key} label={group.title}>
@@ -618,9 +625,10 @@ function DreamRunPanel({
             </div>
           )}
         </label>
-        <label>
+        <label className={isAllPhase ? 'dream-input-disabled' : ''}>
           <span>Source ID</span>
-          <select value={sourceId} onChange={event => setSourceId(event.target.value)}>
+          <select value={sourceId} onChange={event => setSourceId(event.target.value)} disabled={isAllPhase}
+            title={isAllPhase ? '整轮 cycle 不支持按 source 过滤，部分 phase（embed/orphans/purge 等）始终全局执行。如需指定 source 请先选择单个 phase。' : ''}>
             <option value="">全部 source</option>
             {activeSources.map(s => (
               <option key={s.id} value={s.id}>{s.name || s.id}（{s.page_count} 页）</option>
@@ -639,23 +647,30 @@ function DreamRunPanel({
                 placeholder={phase !== 'all' && phase !== 'synthesize' ? '仅 synthesize 支持单文件，已禁用' : '~/transcripts/2026-04-25.txt，可选'}
                 disabled={phase !== 'all' && phase !== 'synthesize'} />
             </label>
-            <label>
+            <label className={phase !== 'all' && phase !== 'synthesize' ? 'dream-input-disabled' : ''}>
               <span>Date</span>
-              <input type="date" value={date} onChange={event => setDate(event.target.value)} />
+              <input type="date" value={date} onChange={event => setDate(event.target.value)}
+                disabled={phase !== 'all' && phase !== 'synthesize'} />
             </label>
-            <label>
+            <label className={phase !== 'all' && phase !== 'synthesize' ? 'dream-input-disabled' : ''}>
               <span>From</span>
-              <input type="date" value={from} onChange={event => setFrom(event.target.value)} />
+              <input type="date" value={from} onChange={event => setFrom(event.target.value)}
+                disabled={phase !== 'all' && phase !== 'synthesize'} />
             </label>
-            <label>
+            <label className={phase !== 'all' && phase !== 'synthesize' ? 'dream-input-disabled' : ''}>
               <span>To</span>
-              <input type="date" value={to} onChange={event => setTo(event.target.value)} />
+              <input type="date" value={to} onChange={event => setTo(event.target.value)}
+                disabled={phase !== 'all' && phase !== 'synthesize'} />
             </label>
             {hasInputDateConflict && <div className="pm-warning" style={{ gridColumn: '1 / -1', marginTop: 4 }}>⚠ Input file 与日期筛选 (Date/From/To) 互斥，不能同时使用</div>}
             {hasDateRangeConflict && <div className="pm-warning" style={{ gridColumn: '1 / -1', marginTop: 4 }}>⚠ Date 与 From/To 互斥，请只使用其中一种筛选方式</div>}
             {hasFromToConflict && <div className="pm-warning" style={{ gridColumn: '1 / -1', marginTop: 4 }}>⚠ From 不能晚于 To</div>}
           </>
         )}
+        <label>
+          <span>超时(分钟)</span>
+          <input value={timeoutMinutes} onChange={event => setTimeoutMinutes(event.target.value)} placeholder="120" inputMode="numeric" />
+        </label>
         <label className="dream-check">
           <input type="checkbox" checked={dryRun} onChange={event => setDryRun(event.target.checked)} />
           <span>Dry run</span>
