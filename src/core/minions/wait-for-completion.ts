@@ -36,6 +36,8 @@ export interface WaitOpts {
   pollMs?: number;
   /** Optional AbortSignal — on abort, the poll loop exits early (no TimeoutError). */
   signal?: AbortSignal;
+  /** Optional poll hook for callers that need to renew related leases while waiting. */
+  onPoll?: (job: MinionJob) => Promise<void> | void;
 }
 
 export async function waitForCompletion(
@@ -50,6 +52,7 @@ export async function waitForCompletion(
   // Fast-path first read (don't wait pollMs just to learn it's already done).
   let job = await queue.getJob(jobId);
   if (!job) throw new Error(`job ${jobId} not found`);
+  await opts.onPoll?.(job);
   if (TERMINAL_SET.has(job.status)) return job;
 
   while (true) {
@@ -69,6 +72,7 @@ export async function waitForCompletion(
 
     job = await queue.getJob(jobId);
     if (!job) throw new Error(`job ${jobId} disappeared mid-wait`);
+    await opts.onPoll?.(job);
     if (TERMINAL_SET.has(job.status)) return job;
   }
 }

@@ -36,6 +36,7 @@ import { getBrainHotMemoryMeta } from '../core/facts/meta-hook.ts';
 import { loadConfig, toEngineConfig, type GBrainConfig } from '../core/config.ts';
 import { buildError, serializeError } from '../core/errors.ts';
 import { assessDestructiveImpact, softDeleteSource, restoreSource } from '../core/destructive-guard.ts';
+import { deleteLockRow } from '../core/db-lock.ts';
 import { VERSION } from '../version.ts';
 import * as db from '../core/db.ts';
 import { sqlQueryForEngine, executeRawJsonb } from '../core/sql-query.ts';
@@ -57,6 +58,7 @@ import {
   listAdminBrainPages,
   listRuns,
   previewIntent,
+  resolveCliEntry,
   startActionRun,
   startDreamRun,
   startImportRun,
@@ -77,6 +79,21 @@ import {
 
 function envCompat(primary: string, legacy: string): string | undefined {
   return process.env[primary] ?? process.env[legacy];
+}
+
+async function adminWorkerPidFile(): Promise<string> {
+  const { join } = await import('path');
+  return join(process.cwd(), '.gbrain', 'admin-worker.pid');
+}
+
+function isPidAlive(pid: number): boolean {
+  if (!Number.isFinite(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -1260,6 +1277,104 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
       res.json(await getAdminDreamOverview(engine, config, VERSION));
     } catch (e) {
       res.status(500).json({ error: e instanceof Error ? e.message : 'dream_overview_failed' });
+    }
+  });
+
+  app.post('/admin/api/dream/locks/:id/break', requireAdmin, express.json({ limit: '4kb' }), async (req: Request, res: Response) => {
+    const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const holderPid = Number(req.body?.holderPid);
+    if (!id || !Number.isFinite(holderPid) || holderPid <= 0) {
+      res.status(400).json({ error: 'lock_id_and_holder_pid_required' });
+      return;
+    }
+    try {
+      res.json(await deleteLockRow(engine, id, holderPid));
+    } catch (e) {
+      res.status(400).json({ error: e instanceof Error ? e.message : 'break_lock_failed' });
+    }
+  });
+
+  app.post('/admin/api/jobs/:id/cancel', requireAdmin, async (req: Request, res: Response) => {
+    const id = Number(Array.isArray(req.params.id) ? req.params.id[0] : req.params.id);
+    if (!Number.isInteger(id) || id <= 0) {
+      res.status(400).json({ error: 'job_id_required' });
+      return;
+    }
+    try {
+      const queue = new MinionQueue(engine);
+      await queue.ensureSchema();
+      const job = await queue.cancelJob(id);
+      if (!job) {
+        res.status(409).json({ error: 'job_not_cancellable' });
+        return;
+      }
+      res.json({ cancelled: true, job });
+    } catch (e) {
+      res.status(400).json({ error: e instanceof Error ? e.message : 'job_cancel_failed' });
+    }
+  });
+
+  app.post('/admin/api/jobs/supervisor/start', requireAdmin, async (_req: Request, res: Response) => {
+    try {
+      const { spawn } = await import('child_process');
+      const { mkdirSync, readFileSync, writeFileSync } = await import('fs');
+      const { dirname } = await import('path');
+      const pidFile = await adminWorkerPidFile();
+      try {
+        const existingPid = parseInt(readFileSync(pidFile, 'utf8').trim().split('\n')[0] ?? '', 10);
+        if (isPidAlive(existingPid)) {
+          res.json({ event: 'already_running', worker_pid: existingPid, pid_file: pidFile, mode: 'direct-worker' });
+          return;
+        }
+      } catch {
+        // no usable direct worker pid file
+      }
+      const command = [...resolveCliEntry(), 'jobs', 'work', '--concurrency', '2'];
+      const child = spawn(command[0], command.slice(1), {
+        cwd: process.cwd(),
+        shell: false,
+        windowsHide: true,
+        detached: true,
+        stdio: 'ignore',
+        env: process.env,
+      });
+      child.unref();
+      mkdirSync(dirname(pidFile), { recursive: true });
+      writeFileSync(pidFile, `${child.pid ?? 0}\n`, 'utf8');
+      res.json({ event: 'started', worker_pid: child.pid, pid_file: pidFile, mode: 'direct-worker' });
+    } catch (e) {
+      res.status(400).json({ error: e instanceof Error ? e.message : 'supervisor_start_failed' });
+    }
+  });
+
+  app.post('/admin/api/jobs/supervisor/stop', requireAdmin, async (_req: Request, res: Response) => {
+    try {
+      const { existsSync, readFileSync, unlinkSync } = await import('fs');
+      const { spawn } = await import('child_process');
+      const pidFile = await adminWorkerPidFile();
+      if (!existsSync(pidFile)) {
+        res.json({ stopped: false, reason: 'pid_file_missing', pid_file: pidFile });
+        return;
+      }
+      const pid = parseInt(readFileSync(pidFile, 'utf8').trim().split('\n')[0] ?? '', 10);
+      if (!Number.isFinite(pid) || pid <= 0) {
+        unlinkSync(pidFile);
+        res.json({ stopped: false, reason: 'pid_file_corrupt', pid_file: pidFile });
+        return;
+      }
+      if (process.platform === 'win32') {
+        const killer = spawn('taskkill', ['/PID', String(pid), '/T', '/F'], {
+          windowsHide: true,
+          stdio: 'ignore',
+        });
+        await new Promise(resolve => killer.on('close', resolve));
+      } else {
+        try { process.kill(pid, 'SIGTERM'); } catch { /* already gone */ }
+      }
+      try { unlinkSync(pidFile); } catch { /* best-effort */ }
+      res.json({ stopped: true, worker_pid: pid, mode: 'direct-worker' });
+    } catch (e) {
+      res.status(400).json({ error: e instanceof Error ? e.message : 'supervisor_stop_failed' });
     }
   });
 

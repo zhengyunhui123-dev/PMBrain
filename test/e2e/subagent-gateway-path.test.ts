@@ -23,7 +23,7 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'bun:test';
 import { PGLiteEngine } from '../../src/core/pglite-engine.ts';
 import { resetPgliteState } from '../helpers/reset-pglite.ts';
-import { makeSubagentHandler } from '../../src/core/minions/handlers/subagent.ts';
+import { makeSubagentHandler, __testing as subagentTesting } from '../../src/core/minions/handlers/subagent.ts';
 import type { MinionJobContext, ToolDef, ToolCtx } from '../../src/core/minions/types.ts';
 import {
   __setChatTransportForTests,
@@ -158,6 +158,24 @@ function buildHandler(toolRegistry: ToolDef[]) {
 
 describe('runSubagentViaGateway (v0.38 Slice 1 — full handler path through gateway.toolLoop)', () => {
   afterAll(() => clearGateway());
+
+  it('adapts stringified persisted content_blocks before gateway replay', () => {
+    const blocks = [
+      { type: 'tool_use', id: 'legacy-tc', name: 'search', input: { q: 'dream' } },
+      { type: 'tool_result', tool_use_id: 'legacy-tc', content: [{ type: 'text', text: 'ok' }] },
+    ];
+    const raw = JSON.stringify(blocks);
+    const doubleEncoded = JSON.stringify(raw);
+
+    expect(subagentTesting.adaptContentBlocksToChatBlocks(raw)).toEqual([
+      { type: 'tool-call', toolCallId: 'legacy-tc', toolName: 'search', input: { q: 'dream' } },
+      { type: 'tool-result', toolCallId: 'legacy-tc', toolName: '__legacy__', output: [{ type: 'text', text: 'ok' }], isError: false },
+    ]);
+    expect(subagentTesting.adaptContentBlocksToChatBlocks(doubleEncoded)).toEqual([
+      { type: 'tool-call', toolCallId: 'legacy-tc', toolName: 'search', input: { q: 'dream' } },
+      { type: 'tool-result', toolCallId: 'legacy-tc', toolName: '__legacy__', output: [{ type: 'text', text: 'ok' }], isError: false },
+    ]);
+  });
 
   it('happy path 1-turn: gateway returns text, handler returns SubagentResult', async () => {
     __setChatTransportForTests(async () => ({

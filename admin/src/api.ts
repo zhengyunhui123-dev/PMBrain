@@ -55,6 +55,14 @@ export const api = {
   dreamOverview: () => apiFetch('/admin/api/dream/overview'),
   startDreamRun: (body: { phase?: string; sourceId?: string; maxPages?: number; dryRun: boolean; input?: string; date?: string; from?: string; to?: string; timeoutMs?: number }) =>
     apiFetch('/admin/api/dream-runs', { method: 'POST', body: JSON.stringify(body) }),
+  breakDreamLock: (id: string, holderPid: number) =>
+    apiFetch(`/admin/api/dream/locks/${encodeURIComponent(id)}/break`, { method: 'POST', body: JSON.stringify({ holderPid }) }),
+  cancelJob: (id: number) =>
+    apiFetch(`/admin/api/jobs/${encodeURIComponent(String(id))}/cancel`, { method: 'POST' }),
+  startSupervisor: () =>
+    apiFetch('/admin/api/jobs/supervisor/start', { method: 'POST' }),
+  stopSupervisor: () =>
+    apiFetch('/admin/api/jobs/supervisor/stop', { method: 'POST' }),
   addSource: (body: { id?: string; path: string; name?: string; federated: boolean }) =>
     apiFetch('/admin/api/sources', { method: 'POST', body: JSON.stringify(body) }),
   archiveSource: (id: string) =>

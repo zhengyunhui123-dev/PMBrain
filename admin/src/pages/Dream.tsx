@@ -129,6 +129,14 @@ interface DreamData {
       error_text: string | null;
     }>;
     status: Array<{ status: string; count: number }>;
+    subagent_status: Array<{ status: string; count: number }>;
+    subagent_queue: { waiting: number; active: number; stalled_active: number } | null;
+  };
+  supervisor: {
+    running: boolean;
+    supervisor_pid: number | null;
+    pid_file: string;
+    mode?: 'supervisor' | 'direct-worker' | 'none';
   };
   quality: {
     takes_quality_runs: Array<{ id: number; verdict: string; overall_score: number; cost_usd: number; created_at: string }>;
@@ -478,15 +486,131 @@ function DreamRunNarrative({ run }: { run: ConsoleRun }) {
   );
 }
 
+function isNonTerminalJobStatus(status: string): boolean {
+  return ['waiting', 'active', 'delayed', 'waiting-children', 'paused'].includes(status);
+}
+
+function DreamOpsDiagnostics({
+  locks,
+  jobs,
+  supervisor,
+  onChanged,
+}: {
+  locks?: DreamData['locks'];
+  jobs?: DreamData['jobs'];
+  supervisor?: DreamData['supervisor'];
+  onChanged?: () => void;
+}) {
+  const [busy, setBusy] = useState('');
+  const [error, setError] = useState('');
+  const latestLock = locks?.[0] ?? null;
+  const activeLock = locks?.find(lock => lock.active) ?? null;
+  const lock = activeLock ?? latestLock;
+  const subagent = jobs?.subagent_status ?? [];
+  const queue = jobs?.subagent_queue ?? null;
+  const cancellableJobs = (jobs?.recent ?? []).filter(job => isNonTerminalJobStatus(job.status)).slice(0, 5);
+  const latestError = (jobs?.recent ?? []).find(job => job.error_text)?.error_text ?? '';
+  const waiting = countBy(subagent, 'waiting');
+  const active = countBy(subagent, 'active');
+  const dead = countBy(subagent, 'dead');
+  const failed = countBy(subagent, 'failed');
+  const stuckReason = !supervisor?.running && waiting > 0
+    ? 'Worker 未运行，subagent 只会排队等待。'
+    : queue && queue.stalled_active > 0
+      ? '存在锁已过期的 active 子任务，需要取消或等待 Worker 回收。'
+      : lock && !lock.active
+        ? 'cycle lock 已过期但仍留在表中，可以解除后重试。'
+        : '';
+
+  const runAction = async (name: string, action: () => Promise<unknown>) => {
+    setBusy(name);
+    setError('');
+    try {
+      await action();
+      onChanged?.();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy('');
+    }
+  };
+
+  return (
+    <div className="dream-ops-diagnostics">
+      <div className="dream-ops-head">
+        <div>
+          <h3>运行诊断</h3>
+          {stuckReason ? <p className="pm-warning">{stuckReason}</p> : <p className="pm-hint">Worker、锁和 subagent 队列状态会在这里同步显示。</p>}
+        </div>
+        <div className="dream-run-actions">
+          {supervisor?.running ? (
+            <button className="pm-ghost danger" disabled={!!busy} onClick={() => void runAction('stop-supervisor', () => api.stopSupervisor())}>停止 Worker</button>
+          ) : (
+            <button className="pm-ghost" disabled={!!busy} onClick={() => void runAction('start-supervisor', () => api.startSupervisor())}>启动 Worker</button>
+          )}
+        </div>
+      </div>
+      <div className="dream-ops-grid">
+        <section>
+          <h4>Worker</h4>
+          <div className="pm-kv"><span>状态</span><b>{supervisor?.running ? 'running' : 'stopped'}</b></div>
+          <div className="pm-kv"><span>PID</span><b>{supervisor?.supervisor_pid ?? '-'}</b></div>
+          <div className="pm-kv"><span>模式</span><b>{supervisor?.mode ?? '-'}</b></div>
+        </section>
+        <section>
+          <h4>Cycle lock</h4>
+          <div className="pm-kv"><span>状态</span><b>{lock ? (lock.active ? 'active' : 'expired') : 'none'}</b></div>
+          <div className="pm-kv"><span>持有者</span><b>{lock ? `${lock.holder_host ?? 'host'}:${lock.holder_pid}` : '-'}</b></div>
+          <div className="pm-kv"><span>最近刷新</span><b>{formatDate(lock?.last_refreshed_at ?? null, '-')}</b></div>
+          {lock && (
+            <button className="pm-ghost danger dream-inline-action" disabled={!!busy}
+              onClick={() => void runAction('break-lock', () => api.breakDreamLock(lock.id, lock.holder_pid))}>
+              解除锁
+            </button>
+          )}
+        </section>
+        <section>
+          <h4>Subagent 队列</h4>
+          <div className="dream-detail-chips">
+            <span>waiting {queue?.waiting ?? waiting}</span>
+            <span>active {queue?.active ?? active}</span>
+            <span>stalled {queue?.stalled_active ?? 0}</span>
+            <span>failed {failed}</span>
+            <span>dead {dead}</span>
+          </div>
+          {latestError && <p className="dream-job-error">{latestError}</p>}
+        </section>
+      </div>
+      {cancellableJobs.length > 0 && (
+        <div className="dream-cancel-list">
+          {cancellableJobs.map(job => (
+            <button key={job.id} className="pm-ghost danger" disabled={!!busy}
+              onClick={() => void runAction(`cancel-${job.id}`, () => api.cancelJob(job.id))}>
+              取消 #{job.id} {job.name} / {job.status}
+            </button>
+          ))}
+        </div>
+      )}
+      {error && <div className="pm-error-text">{error}</div>}
+    </div>
+  );
+}
+
 function DreamRunPanel({
   defaultPhase = 'all',
   compact = false,
   sources,
+  locks,
+  jobs,
+  supervisor,
   onDone,
 }: {
   defaultPhase?: string;
   compact?: boolean;
   sources?: Array<{ id: string; name: string; page_count: number; archived?: boolean }>;
+  locks?: DreamData['locks'];
+  jobs?: DreamData['jobs'];
+  supervisor?: DreamData['supervisor'];
   onDone?: () => void;
 }) {
   const [phase, setPhase] = useState(defaultPhase);
@@ -557,6 +681,11 @@ function DreamRunPanel({
       setError('存在字段冲突，请先解决后再运行');
       return;
     }
+    const timeoutMs = timeoutMinutes.trim() ? Math.floor(Number(timeoutMinutes) * 60_000) : undefined;
+    if (timeoutMs !== undefined && (!Number.isFinite(timeoutMs) || timeoutMs <= 0)) {
+      setError('超时时间必须是正数分钟');
+      return;
+    }
     try {
       const res = await api.startDreamRun({
         phase,
@@ -567,6 +696,7 @@ function DreamRunPanel({
         date: date.trim() || undefined,
         from: from.trim() || undefined,
         to: to.trim() || undefined,
+        timeoutMs,
       }) as { runId: string };
       window.localStorage.setItem(DREAM_LAST_RUN_KEY, res.runId);
       setRun(await api.run(res.runId) as ConsoleRun);
@@ -677,6 +807,7 @@ function DreamRunPanel({
         </label>
       </div>
       {error && <div className="pm-error-text">{error}</div>}
+      <DreamOpsDiagnostics locks={locks} jobs={jobs} supervisor={supervisor} onChanged={onDone} />
       {run && (
         <>
           <DreamRunNarrative run={run} />
@@ -724,7 +855,7 @@ export function DreamOverviewPage() {
       </div>
       <PhaseRail />
       <div className="pm-grid two-col">
-        <DreamRunPanel compact sources={data.overview?.sources} onDone={() => void reload()} />
+        <DreamRunPanel compact sources={data.overview?.sources} locks={data.locks} jobs={data.jobs} supervisor={data.supervisor} onDone={() => void reload()} />
         <div className="pm-card">
           <h2>Checkpoint / 锁 / 恢复</h2>
           <div className="pm-kv"><span>活跃锁</span><b>{activeLock ? activeLock.id : '无'}</b></div>
@@ -750,7 +881,7 @@ export function DreamExecutePage() {
       {loading && <Loading />}
       {data && (
         <>
-          <DreamRunPanel sources={data.overview?.sources} onDone={() => void reload()} />
+          <DreamRunPanel sources={data.overview?.sources} locks={data.locks} jobs={data.jobs} supervisor={data.supervisor} onDone={() => void reload()} />
           <PhaseRail />
           <div className="pm-card">
             <h2>队列与重试</h2>

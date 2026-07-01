@@ -42,6 +42,25 @@ describe('waitForCompletion terminal states', () => {
     expect(Date.now() - t0).toBeLessThan(300); // no full poll cycle
   });
 
+  test('calls onPoll while waiting and before returning terminal state', async () => {
+    const j = await queue.add('t', {});
+    const seen: string[] = [];
+    const p = waitForCompletion(queue, j.id, {
+      pollMs: 25,
+      timeoutMs: 5000,
+      onPoll: (job) => { seen.push(job.status); },
+    });
+    setTimeout(async () => {
+      const claimed = await queue.claim('tok', 30000, 'default', ['t']);
+      await queue.completeJob(claimed!.id, 'tok', { ok: true });
+    }, 60);
+
+    const res = await p;
+    expect(res.status).toBe('completed');
+    expect(seen).toContain('waiting');
+    expect(seen).toContain('completed');
+  });
+
   test('returns when job transitions to failed mid-wait', async () => {
     const j = await queue.add('t', {});
     const p = waitForCompletion(queue, j.id, { pollMs: 25, timeoutMs: 5000 });

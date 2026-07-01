@@ -8,10 +8,64 @@
 
 import type { BrainEngine } from '../core/engine.ts';
 import type { GBrainConfig } from '../core/config.ts';
+import { join } from 'path';
 import { isSensitiveConfigKey, redactConfigValue } from './config.ts';
 import { loadAllSources, isSourceFederated } from '../core/sources-load.ts';
 import { ALL_PHASES } from '../core/cycle.ts';
 import { listRuns } from './natural-lang/index.ts';
+
+async function getSupervisorStatus(): Promise<{
+  running: boolean;
+  supervisor_pid: number | null;
+  pid_file: string;
+  mode: 'supervisor' | 'direct-worker' | 'none';
+}> {
+  const [{ DEFAULT_PID_FILE }, { existsSync, readFileSync }] = await Promise.all([
+    import('../core/minions/supervisor.ts'),
+    import('fs'),
+  ]);
+  let supervisorPid: number | null = null;
+  let running = false;
+  if (existsSync(DEFAULT_PID_FILE)) {
+    try {
+      const line = readFileSync(DEFAULT_PID_FILE, 'utf8').trim().split('\n')[0];
+      const parsed = parseInt(line ?? '', 10);
+      if (Number.isFinite(parsed) && parsed > 0) {
+        supervisorPid = parsed;
+        try {
+          process.kill(parsed, 0);
+          running = true;
+        } catch {
+          running = false;
+        }
+      }
+    } catch {
+      supervisorPid = null;
+      running = false;
+    }
+  }
+  if (running) return { running, supervisor_pid: supervisorPid, pid_file: DEFAULT_PID_FILE, mode: 'supervisor' };
+
+  const directPidFile = join(process.cwd(), '.gbrain', 'admin-worker.pid');
+  if (existsSync(directPidFile)) {
+    try {
+      const line = readFileSync(directPidFile, 'utf8').trim().split('\n')[0];
+      const parsed = parseInt(line ?? '', 10);
+      if (Number.isFinite(parsed) && parsed > 0) {
+        supervisorPid = parsed;
+        try {
+          process.kill(parsed, 0);
+          return { running: true, supervisor_pid: supervisorPid, pid_file: directPidFile, mode: 'direct-worker' };
+        } catch {
+          // stale direct worker pid file; report stopped below.
+        }
+      }
+    } catch {
+      // unreadable direct worker pid file; report stopped below.
+    }
+  }
+  return { running: false, supervisor_pid: supervisorPid, pid_file: directPidFile, mode: 'none' };
+}
 
 // ---------------------------------------------------------------------------
 // Facade: re-export natural-language task module
@@ -254,6 +308,9 @@ export async function getAdminDreamOverview(engine: BrainEngine, config: GBrainC
     lifecycleSummary,
     recentJobs,
     jobStatus,
+    subagentStatus,
+    stalledQueue,
+    supervisorStatus,
     qualityRuns,
     contradictionRuns,
   ] = await Promise.all([
@@ -378,12 +435,12 @@ export async function getAdminDreamOverview(engine: BrainEngine, config: GBrainC
              updated_at::text AS updated_at,
              error_text
         FROM minion_jobs
-       WHERE name IN ('autopilot-cycle','embed-backfill','sync','extract','project-health','risk-detect','report-gen')
+       WHERE name IN ('subagent','autopilot-cycle','embed-backfill','sync','extract','project-health','risk-detect','report-gen')
           OR name LIKE '%dream%'
           OR name LIKE '%project%'
           OR name LIKE '%risk%'
        ORDER BY updated_at DESC
-       LIMIT 12
+       LIMIT 20
     `),
     optionalRows(engine, `
       SELECT status, COUNT(*)::int AS count
@@ -391,6 +448,21 @@ export async function getAdminDreamOverview(engine: BrainEngine, config: GBrainC
        GROUP BY status
        ORDER BY status
     `),
+    optionalRows(engine, `
+      SELECT status, COUNT(*)::int AS count
+        FROM minion_jobs
+       WHERE name = 'subagent'
+       GROUP BY status
+       ORDER BY status
+    `),
+    optionalOne(engine, `
+      SELECT COUNT(*) FILTER (WHERE status = 'active' AND lock_until < now())::int AS stalled_active,
+             COUNT(*) FILTER (WHERE status = 'waiting')::int AS waiting,
+             COUNT(*) FILTER (WHERE status = 'active')::int AS active
+        FROM minion_jobs
+       WHERE name = 'subagent'
+    `),
+    getSupervisorStatus().catch(() => ({ running: false, supervisor_pid: null, pid_file: '' })),
     optionalRows(engine, `
       SELECT id::int AS id,
              verdict,
@@ -447,7 +519,10 @@ export async function getAdminDreamOverview(engine: BrainEngine, config: GBrainC
     jobs: {
       recent: recentJobs,
       status: jobStatus,
+      subagent_status: subagentStatus,
+      subagent_queue: stalledQueue,
     },
+    supervisor: supervisorStatus,
     quality: {
       takes_quality_runs: qualityRuns,
       contradiction_runs: contradictionRuns,

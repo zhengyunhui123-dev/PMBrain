@@ -524,6 +524,11 @@ export async function runPhaseSynthesize(
         const job = await waitForCompletion(queue, jobId, {
           timeoutMs: 35 * 60 * 1000,
           pollMs: 5 * 1000,
+          onPoll: opts.yieldDuringPhase
+            ? async () => {
+                try { await opts.yieldDuringPhase?.(); } catch { /* best-effort */ }
+              }
+            : undefined,
         });
         childOutcomes.push({ jobId, status: job.status });
       } catch (e) {

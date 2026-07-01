@@ -986,10 +986,11 @@ export function stripProviderPrefix(modelString: string): string {
  * (the JSONB column accepts both shapes; v2 writes carry the new vocabulary).
  */
 function adaptContentBlocksToChatBlocks(blocks: unknown): ChatBlock[] | string {
-  if (typeof blocks === 'string') return blocks;
-  if (!Array.isArray(blocks)) return [];
+  const normalized = parsePersistedContentBlocks(blocks);
+  if (typeof normalized === 'string') return normalized;
+  if (!Array.isArray(normalized)) return [];
   const out: ChatBlock[] = [];
-  for (const b of blocks) {
+  for (const b of normalized) {
     if (!b || typeof b !== 'object') continue;
     const block = b as Record<string, unknown>;
     const t = block.type;
@@ -1031,6 +1032,21 @@ function adaptContentBlocksToChatBlocks(blocks: unknown): ChatBlock[] | string {
     }
   }
   return out;
+}
+
+function parsePersistedContentBlocks(blocks: unknown): unknown {
+  let current = blocks;
+  for (let i = 0; i < 2; i++) {
+    if (typeof current !== 'string') return current;
+    const trimmed = current.trim();
+    if (!trimmed.startsWith('[') && !trimmed.startsWith('{') && !trimmed.startsWith('"')) return current;
+    try {
+      current = JSON.parse(trimmed);
+    } catch {
+      return current;
+    }
+  }
+  return current;
 }
 
 interface PriorToolV2Row {

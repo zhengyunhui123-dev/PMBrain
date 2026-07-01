@@ -294,6 +294,15 @@
 - 最终结果：桌面端仍可读取旧 `.gbrain` 配置以保留 API Key 和数据库信息，但切换到 PGLite 时默认写入 `.pmbrain/config.json` 并使用 `.pmbrain\brain.pglite`；Windows 上的 PGLite `Aborted()` 初始化失败改为提示旧库、忙碌目录或运行时重开失败，并建议关闭其他 PMBrain/GBrain 进程、选择新的 `.pmbrain` PGLite 路径或使用 Docker Postgres；补充桌面配置迁移和 PGLite 错误分类回归测试。
 
 补充：PGLite 数据库路径现在会对用户选择的普通目录自动追加 `brain.pglite` 后缀，例如选择 `D:\PMBrainTest` 会保存为 `D:\PMBrainTest\brain.pglite`；已经是 `brain.pglite` 的路径不会重复追加。
+## 2026-07-01 Admin Dream 阶段执行卡住与诊断控制修复
+
+- 时间：2026-07-01 15:50:11
+- 版本号：1.0.61
+- 标题：修复 Admin Dream synthesize 长时间 running、锁过期不可见和 Worker 队列不可控问题
+- 描述：Admin 阶段执行页面启动 Dream synthesize 后，子任务进入 minions subagent 队列但 Worker 未运行或旧任务重放失败时，页面只显示 running，无法区分是 cycle lock、Worker 还是子任务队列问题；同时 synthesize 等待子任务期间没有持续刷新 cycle lock，5 分钟 TTL 可能过期；数据库驱动返回字符串化 content_blocks 时，gateway 重放会把工具调用历史当作普通字符串，触发 ModelMessage schema 错误；页面的超时分钟输入未传给后端，实际仍按默认 10 分钟超时。
+- 是否完成：是
+- 最终结果：subagent 历史消息读取时会先解析字符串化 JSON content_blocks，再适配为 gateway ChatBlock；waitForCompletion 增加 onPoll 钩子，synthesize 等待子任务时持续执行 yieldDuringPhase 以刷新 cycle lock；Admin Dream 概览返回 supervisor、subagent 队列和 stalled active 诊断数据，阶段执行页面显示运行诊断，并提供启动/停止 Worker、解除 cycle lock、取消非终态 job 的控制入口；启动 Dream 时会把超时分钟转换为 timeoutMs 传给后端；补充 waitForCompletion 续锁钩子和 subagent content_blocks 字符串化回放回归测试；PMBrain 版本更新为 1.0.61。
+
 ## 2026-06-27 桌面端切库启动失败修复
 
 - 时间：2026-06-27 22:15:00

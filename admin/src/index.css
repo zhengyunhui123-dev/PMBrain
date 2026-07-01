@@ -2238,6 +2238,70 @@ pre {
   overflow-wrap: anywhere;
 }
 
+.dream-ops-diagnostics {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid #dce6f4;
+  border-radius: 8px;
+  background: #fbfdff;
+}
+
+.dream-ops-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+  margin-bottom: 10px;
+}
+
+.dream-ops-head h3,
+.dream-ops-grid h4 {
+  margin: 0 0 6px;
+  color: var(--text-primary);
+}
+
+.dream-ops-head p {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 7px;
+  font-size: 12px;
+}
+
+.dream-ops-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.dream-ops-grid section {
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.dream-inline-action {
+  margin-top: 8px;
+}
+
+.dream-job-error {
+  max-height: 58px;
+  overflow: auto;
+  margin: 8px 0 0;
+  color: var(--error);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.dream-cancel-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
 .dream-run-list > div,
 .dream-weight-list > div {
   display: grid;
@@ -2291,6 +2355,9 @@ pre {
   .dream-run-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+  .dream-ops-grid {
+    grid-template-columns: 1fr;
+  }
   .pm-hero,
   .two-col,
   .nl-shell,
@@ -2324,10 +2391,12 @@ pre {
   }
   .dream-phase-rail,
   .dream-run-grid,
+  .dream-ops-grid,
   .dream-result-grid {
     grid-template-columns: 1fr;
   }
   .dream-run-headline,
+  .dream-ops-head,
   .dream-run-actions {
     align-items: flex-start;
     flex-direction: column;
