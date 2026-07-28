@@ -124,10 +124,11 @@ describe('applyExactMatchBoost — attribution', () => {
     expect(results[0].score).toBe(1.0);
   });
 
-  test('boost = 1.0 (no-op intent) → no stamp', () => {
+  test('literal match keeps the 1.25 floor when intent boost is 1.0', () => {
     const results = [r('people/alice', 1.0, 1)];
     applyExactMatchBoost(results, 'alice', { exactMatchBoost: 1.0 } as any);
-    expect(results[0].exact_match_boost).toBeUndefined();
+    expect(results[0].exact_match_boost).toBe(1.25);
+    expect(results[0].score).toBe(1.25);
   });
 });
 

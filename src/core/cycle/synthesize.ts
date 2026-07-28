@@ -1225,7 +1225,9 @@ function findLegacyCompletion(
   filePath: string,
   hash16: string,
 ): 'single' | 'chunked' | null {
-  const filename = basename(filePath);
+  // Legacy keys may contain paths written on a different OS. Normalize
+  // separators before basename() so Windows paths still match on Linux/macOS.
+  const filename = basename(filePath.replace(/\\/g, '/'));
   const hashSuffix = `:${hash16}`;
   const chunkSets = new Map<number, Set<number>>();
   for (const key of successfulKeys) {
@@ -1233,7 +1235,7 @@ function findLegacyCompletion(
     const base = chunk ? key.slice(0, -chunk[0].length) : key;
     if (!base.endsWith(hashSuffix)) continue;
     const historicalPath = base.slice('dream:synth:'.length, -hashSuffix.length);
-    if (basename(historicalPath) !== filename) continue;
+    if (basename(historicalPath.replace(/\\/g, '/')) !== filename) continue;
     if (!chunk) return 'single';
     const index = Number(chunk[1]);
     const count = Number(chunk[2]);

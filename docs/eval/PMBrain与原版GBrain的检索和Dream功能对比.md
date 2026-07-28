@@ -2,7 +2,7 @@
 
 维护日期：2026-07-28
 
-PMBrain 基线：1.1.74，`codex/Gbrain-pull` 工作树
+PMBrain 基线：1.1.75，`master` 合并结果
 
 GBrain 基线：`D:\cursor-claude\gbrain` 的最新 `origin/master`，commit `ddd66e1d`，VERSION `0.42.66.1`
 

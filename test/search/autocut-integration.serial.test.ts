@@ -76,8 +76,9 @@ function rerankerWithScores(scores: number[]) {
     input.documents.map((_, i) => ({ index: i, relevanceScore: scores[i] ?? 0.01 }));
 }
 
-// balanced mode (the default) has autocut ON. We pass opts.reranker to stub
-// the cross-encoder; resolvedMode.autocut stays true (no search.mode config).
+// PMBrain's balanced mode intentionally keeps autocut OFF because it has no
+// default reranker dependency. Autocut scenarios therefore enable it per call
+// while opts.reranker supplies a deterministic cross-encoder signal.
 function rerankerOpts(scores: number[]): SearchOpts['reranker'] {
   return {
     enabled: true,
@@ -91,6 +92,7 @@ describe('autocut — fires on a real cliff', () => {
   test('cliff after rank 2 → result set trimmed to 2', async () => {
     const out = await hybridSearch(engine, 'alpha keyword', {
       limit: 10,
+      autocut: true,
       reranker: rerankerOpts([0.95, 0.9, 0.2, 0.15, 0.1]),
     });
     expect(out.length).toBe(2);
@@ -100,6 +102,7 @@ describe('autocut — fires on a real cliff', () => {
   test('cliff after rank 1 → single obvious answer', async () => {
     const out = await hybridSearch(engine, 'alpha keyword', {
       limit: 10,
+      autocut: true,
       reranker: rerankerOpts([0.98, 0.12, 0.1, 0.08, 0.05]),
     });
     expect(out.length).toBe(1);
@@ -111,6 +114,7 @@ describe('autocut — declines on a flat curve', () => {
     const baseline = await hybridSearch(engine, 'alpha keyword', { limit: 10 });
     const out = await hybridSearch(engine, 'alpha keyword', {
       limit: 10,
+      autocut: true,
       reranker: rerankerOpts([0.9, 0.88, 0.86, 0.84, 0.82]),
     });
     expect(out.length).toBe(baseline.length);
@@ -123,6 +127,7 @@ describe('autocut — no-op without a reranker (the load-bearing gate)', () => {
     const baseline = await hybridSearch(engine, 'alpha keyword', { limit: 10 });
     const out = await hybridSearch(engine, 'alpha keyword', {
       limit: 10,
+      autocut: true,
       reranker: { enabled: false, topNIn: 30, topNOut: null, rerankerFn: rerankerWithScores([0.95, 0.1]) },
     });
     // No rerank scores were stamped → autocut sees <2 finite scores → no-op.
@@ -133,6 +138,7 @@ describe('autocut — no-op without a reranker (the load-bearing gate)', () => {
     const baseline = await hybridSearch(engine, 'alpha keyword', { limit: 10 });
     const out = await hybridSearch(engine, 'alpha keyword', {
       limit: 10,
+      autocut: true,
       reranker: {
         enabled: true,
         topNIn: 30,
@@ -164,6 +170,7 @@ describe('autocut — composes with adaptive-return (never-empty holds)', () => 
     const out = await hybridSearch(engine, 'alpha keyword', {
       limit: 10,
       adaptiveReturn: true,
+      autocut: true,
       reranker: rerankerOpts([0.95, 0.9, 0.2, 0.15, 0.1]),
     });
     expect(out.length).toBeGreaterThanOrEqual(1);
