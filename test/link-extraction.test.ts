@@ -7,6 +7,7 @@ import {
   inferLinkType,
   makeResolver,
   parseTimelineEntries,
+  deriveTimelineAnchor,
   isAutoLinkEnabled,
   FRONTMATTER_LINK_MAP,
   type SlugResolver,
@@ -108,6 +109,35 @@ describe('extractEntityRefs', () => {
     const refs = extractEntityRefs('See [Standup](meetings/2026-01-15-standup).');
     expect(refs.length).toBe(1);
     expect(refs[0].dir).toBe('meetings');
+  });
+
+  test('extracts exact path wikilinks from Unicode knowledge-base directories', () => {
+    const refs = extractEntityRefs(
+      '关联 [[wiki/重庆保供项目/项目-重庆保供项目]] 和 [[youdao/随写漫谈/项目/pmbrain拉取gbrain更新|更新记录]]。',
+    );
+    expect(refs).toEqual([
+      {
+        name: 'wiki/重庆保供项目/项目-重庆保供项目',
+        slug: 'wiki/重庆保供项目/项目-重庆保供项目',
+        dir: 'wiki',
+        exactPath: true,
+      },
+      {
+        name: '更新记录',
+        slug: 'youdao/随写漫谈/项目/pmbrain拉取gbrain更新',
+        dir: 'youdao',
+        exactPath: true,
+      },
+    ]);
+  });
+
+  test('does not double-emit whitelisted wikilinks in the any-path pass', () => {
+    const refs = extractEntityRefs('See [[people/alice]] and [[wiki/中文/页面]].');
+    expect(refs.map(ref => ref.slug)).toEqual(['people/alice', 'wiki/中文/页面']);
+  });
+
+  test('ignores any-path wikilinks inside code blocks', () => {
+    expect(extractEntityRefs('`[[wiki/中文/页面]]`')).toEqual([]);
   });
 });
 
@@ -237,6 +267,32 @@ describe('inferLinkType', () => {
 
   test('default -> mentions', () => {
     expect(inferLinkType('person', 'Random context with no relationship verbs.')).toBe('mentions');
+  });
+
+  test('emits an exact-path wikilink only when the target exists', async () => {
+    const resolver: SlugResolver = {
+      resolve: async () => null,
+      slugExists: async slug => slug === 'wiki/重庆保供项目/项目-重庆保供项目',
+    };
+    const { candidates, unresolved } = await extractPageLinks(
+      'notes/x',
+      '参见 [[wiki/重庆保供项目/项目-重庆保供项目]] 和 [[wiki/不存在/页面]]。',
+      {},
+      'note',
+      resolver,
+    );
+    expect(candidates.map(candidate => candidate.targetSlug)).toEqual([
+      'wiki/重庆保供项目/项目-重庆保供项目',
+    ]);
+    expect(unresolved).toEqual([{ field: 'wikilink', name: 'wiki/不存在/页面' }]);
+  });
+
+  test('Chinese relationship verbs map to typed links', () => {
+    expect(inferLinkType('person', '张三创立了星河科技。')).toBe('founded');
+    expect(inferLinkType('person', '李四投资了星河科技。')).toBe('invested_in');
+    expect(inferLinkType('person', '王五担任顾问。')).toBe('advises');
+    expect(inferLinkType('person', '赵六任职于星河科技。')).toBe('works_at');
+    expect(inferLinkType('concept', '本文引用了纳瓦尔的观点。')).toBe('cited');
   });
 
   test('precedence: founded beats works_at', () => {
@@ -402,6 +458,21 @@ describe('parseTimelineEntries', () => {
     expect(entries.map(e => e.date)).toEqual(['2026-01-15', '2026-02-20', '2026-03-10']);
   });
 
+  test('parses and normalizes Chinese date lines', () => {
+    const entries = parseTimelineEntries([
+      '- 2026年7月28日 | 修复中文检索',
+      '- **2026年8月2日** — 完成知识串联',
+    ].join('\n'));
+    expect(entries).toEqual([
+      { date: '2026-07-28', summary: '修复中文检索', detail: '' },
+      { date: '2026-08-02', summary: '完成知识串联', detail: '' },
+    ]);
+  });
+
+  test('does not broaden timeline parsing to non-bold ASCII dates', () => {
+    expect(parseTimelineEntries('- 2026-07-28 - should remain prose')).toEqual([]);
+  });
+
   test('skips invalid dates (2026-13-45)', () => {
     const entries = parseTimelineEntries('- **2026-13-45** | Bad date');
     expect(entries.length).toBe(0);
@@ -426,6 +497,44 @@ More prose here.
 - **2026-02-20** | Another event`;
     const entries = parseTimelineEntries(content);
     expect(entries.length).toBe(2);
+  });
+});
+
+describe('deriveTimelineAnchor', () => {
+  test('uses a frontmatter content date and page title', () => {
+    expect(deriveTimelineAnchor({
+      slug: 'meetings/2026-07-28-rag',
+      title: 'RAG 复盘',
+      effectiveDate: new Date('2026-07-28T09:00:00Z'),
+      effectiveDateSource: 'event_date',
+    })).toEqual({ date: '2026-07-28', summary: 'RAG 复盘', detail: '' });
+  });
+
+  test('accepts filename date and falls back to slug basename', () => {
+    expect(deriveTimelineAnchor({
+      slug: 'daily/2026-07-28-search',
+      title: ' ',
+      effectiveDate: '2026-07-28',
+      effectiveDateSource: 'filename',
+    })).toEqual({ date: '2026-07-28', summary: '2026-07-28-search', detail: '' });
+  });
+
+  test('rejects updated_at fallback and missing/invalid dates', () => {
+    expect(deriveTimelineAnchor({
+      slug: 'notes/stale',
+      effectiveDate: '2026-07-28',
+      effectiveDateSource: 'fallback',
+    })).toBeNull();
+    expect(deriveTimelineAnchor({
+      slug: 'notes/missing',
+      effectiveDate: null,
+      effectiveDateSource: 'date',
+    })).toBeNull();
+    expect(deriveTimelineAnchor({
+      slug: 'notes/invalid',
+      effectiveDate: 'not-a-date',
+      effectiveDateSource: 'published',
+    })).toBeNull();
   });
 });
 
@@ -664,6 +773,7 @@ describe('makeResolver — fallback chain', () => {
   ): BrainEngine {
     const lookup = new Set(slugs);
     let getPageCalls = 0;
+    let getAllSlugsCalls = 0;
     let fuzzyCalls = 0;
     let searchCalls = 0;
     const engine = {
@@ -679,8 +789,12 @@ describe('makeResolver — fallback chain', () => {
         searchCalls++;
         return [];
       },
+      async getAllSlugs() {
+        getAllSlugsCalls++;
+        return new Set(lookup);
+      },
     } as unknown as BrainEngine;
-    (engine as any)._counts = () => ({ getPageCalls, fuzzyCalls, searchCalls });
+    (engine as any)._counts = () => ({ getPageCalls, getAllSlugsCalls, fuzzyCalls, searchCalls });
     return engine;
   }
 
@@ -721,13 +835,85 @@ describe('makeResolver — fallback chain', () => {
     await r.resolve('people/pedro');
     await r.resolve('people/pedro');
     const counts = (engine as any)._counts();
-    expect(counts.getPageCalls).toBe(1);
+    expect(counts.getAllSlugsCalls).toBe(1);
   });
 
   test('unresolvable → null (no dead link written)', async () => {
     const engine = makeFakeEngine([]);
     const r = makeResolver(engine, { mode: 'batch' });
     expect(await r.resolve('Nonexistent Person', 'people')).toBeNull();
+  });
+
+  test('derives_from creates the reciprocal evidence_of edge', async () => {
+    const sourceAwareResolver: SlugResolver = {
+      resolve: async name => name,
+      resolveTarget: async name => ({
+        slug: name,
+        sourceId: 'duwu',
+        resolutionType: 'unqualified',
+      }),
+    };
+    const { candidates } = await extractFrontmatterLinks(
+      'concepts/search-accuracy',
+      'concept' as never,
+      { derives_from: ['youdao/notes/rag-review'] },
+      sourceAwareResolver,
+    );
+    expect(candidates).toEqual([
+      expect.objectContaining({
+        fromSlug: 'concepts/search-accuracy',
+        targetSlug: 'youdao/notes/rag-review',
+        targetSourceId: 'duwu',
+        linkType: 'derives_from',
+      }),
+      expect.objectContaining({
+        fromSlug: 'youdao/notes/rag-review',
+        fromSourceId: 'duwu',
+        targetSlug: 'concepts/search-accuracy',
+        linkType: 'evidence_of',
+      }),
+    ]);
+  });
+
+  test('source-local exact match wins and default is the only implicit fallback', async () => {
+    const slugsBySource = new Map([
+      ['project-a', new Set(['people/alice'])],
+      ['default', new Set(['people/shared'])],
+      ['project-b', new Set(['people/bob'])],
+    ]);
+    const engine = {
+      async getAllSlugs(opts?: { sourceId?: string }) {
+        return slugsBySource.get(opts?.sourceId ?? 'default') ?? new Set<string>();
+      },
+      async getPage() { return null; },
+      async findByTitleFuzzy() { return null; },
+      async searchKeyword() { return []; },
+    } as unknown as BrainEngine;
+    const resolver = makeResolver(engine, { mode: 'batch', sourceId: 'project-a' });
+
+    expect(await resolver.resolveExact?.('people/alice')).toEqual({
+      slug: 'people/alice',
+      sourceId: 'project-a',
+      resolutionType: 'unqualified',
+    });
+    expect(await resolver.resolveExact?.('people/shared')).toEqual({
+      slug: 'people/shared',
+      sourceId: 'default',
+      resolutionType: 'unqualified',
+    });
+    expect(await resolver.resolveExact?.('people/bob')).toBeNull();
+    expect(await resolver.resolveExact?.('people/bob', 'project-b')).toEqual({
+      slug: 'people/bob',
+      sourceId: 'project-b',
+      resolutionType: 'qualified',
+    });
+  });
+
+  test('slugExists uses an exact slug snapshot', async () => {
+    const engine = makeFakeEngine(['wiki/重庆保供项目/项目-重庆保供项目']);
+    const r = makeResolver(engine, { mode: 'batch' });
+    expect(await r.slugExists?.('wiki/重庆保供项目/项目-重庆保供项目')).toBe(true);
+    expect(await r.slugExists?.('wiki/重庆保供项目')).toBe(false);
   });
 });
 

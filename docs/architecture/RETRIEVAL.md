@@ -44,13 +44,13 @@ BrainBench（兄弟仓库 [gbrain-evals](https://github.com/garrytan/gbrain-eval
 
 启发式链接类型推断（`attended`、`works_at`、`invested_in`、`founded`、`advises`）从周围的句子上下文触发 — 也是无 LLM 的。有权限的用户可以通过类型化链接块引用约定添加它们。
 
-## ZeroEntropy 作为重排序器：60% top-1 重新洗牌
+## 可选重排序器：高级配置，而非普通模式依赖
 
-v0.36.0.0 发布 ZeroEntropy 的 `zerank-2` 作为默认重排序器（针对 `balanced` 模式捆绑包开启）。在跨 20 个查询的真实语料库基准上，zerank-2 在混合 + RRF + 图谱堆栈之后重新洗牌 **60% 的 top-1 结果**。这就是标题数字。
+ZeroEntropy 的 `zerank-2` 在一组 20 查询真实语料库基准里曾在混合 + RRF + 图谱堆栈之后重新洗牌 **60% 的 top-1 结果**。这个历史结果说明交叉编码器可能有价值，但不能证明它适合每个用户，也不能让普通模式依赖单独的服务密钥。因此 `balanced` 默认关闭专用重排序器；只有 `tokenmax` 或用户显式配置时才启用。
 
 机械原因：混合排名在每个策略方面是局部最优的，但在全局方面是次优的。交叉编码器重排序器通过完整注意力共同读取查询 + 每个候选文档。它捕获向量 + 关键词 + 图谱信号都同意某个文档的情况，该文档在语义上相关，但在主题上是错误的。
 
-成本：+150 毫秒 p50 延迟，约 $0.025/百万 token。使用 `gbrain config set search.reranker.enabled false` 禁用。对于在检索后执行下游 LLM 工作的代理循环，延迟是不可见的。
+启用云重排序器会把查询和候选片段发送给对应服务。高级用户可用 `gbrain config set search.reranker.enabled true` 加上 `search.reranker.model` 显式启用，也可以配置本地 `llama-server-reranker`。普通用户只配置普通模型和向量模型即可完成检索。
 
 ## 来源感知排名
 

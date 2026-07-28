@@ -22,6 +22,9 @@ import { hybridSearch } from '../search/hybrid.ts';
 import {
   computeExpectedTop1Hit,
   computeFirstRelevantHit,
+  computeNdcgAtK,
+  computePrecisionAtK,
+  computeReciprocalRank,
   computeRecallAtK,
   DEFAULT_QRELS_THRESHOLDS,
   refKey,
@@ -37,16 +40,25 @@ export interface CorrectnessGateOpts {
    * Tests inject a stub to drive deterministic per-query behavior without
    * a real brain.
    */
-  searchFn?: (engine: BrainEngine, query: string, opts: { limit: number }) => Promise<Array<{ source_id?: string; slug: string }>>;
+  searchFn?: (
+    engine: BrainEngine,
+    query: string,
+    opts: { limit: number; sourceId?: string },
+  ) => Promise<Array<{ source_id?: string; slug: string }>>;
 }
 
 export interface PerQueryResult {
   query_id: string;
   query: string;
   recall_at_k: number;
+  precision_at_k: number;
+  ndcg_at_k: number;
+  reciprocal_rank: number;
   first_relevant_hit: 0 | 1;
   expected_top1_hit?: 0 | 1;
   retrieved_count: number;
+  /** Source-aware page refs in rank order after page-level deduplication. */
+  retrieved: string[];
   /** When the query throws, recorded as a per-query failure. */
   errored?: true;
   error_message?: string;
@@ -58,6 +70,9 @@ export interface CorrectnessSummary {
   queries_run: number; // queries_total - queries_errored
   queries_errored: number;
   mean_recall_at_k: number;
+  mean_precision_at_k: number;
+  mean_ndcg_at_k: number;
+  mean_reciprocal_rank: number;
   first_relevant_hit_rate: number;
   /** Denominator = queries with expected_top1 SET (not total queries). */
   expected_top1_hit_rate: number;
@@ -71,7 +86,7 @@ export interface CorrectnessResult {
 
 /** Build the canonical `${source_id}::${slug}` set for a SearchResult-like array. */
 function toRefKeySet(results: Array<{ source_id?: string; slug: string }>): string[] {
-  return results.map(r => `${r.source_id ?? 'default'}::${r.slug}`);
+  return [...new Set(results.map(r => `${r.source_id ?? 'default'}::${r.slug}`))];
 }
 
 async function runOneQuery(
@@ -82,15 +97,22 @@ async function runOneQuery(
 ): Promise<PerQueryResult> {
   let retrieved: string[];
   try {
-    const raw = await searchFn(engine, entry.query, { limit: k });
+    const raw = await searchFn(engine, entry.query, {
+      limit: k,
+      ...(entry.source_id ? { sourceId: entry.source_id } : {}),
+    });
     retrieved = toRefKeySet(raw);
   } catch (err) {
     return {
       query_id: entry.query_id,
       query: entry.query,
       recall_at_k: 0,
+      precision_at_k: 0,
+      ndcg_at_k: 0,
+      reciprocal_rank: 0,
       first_relevant_hit: 0,
       retrieved_count: 0,
+      retrieved: [],
       errored: true,
       error_message: (err as Error).message,
     };
@@ -98,14 +120,19 @@ async function runOneQuery(
 
   const relevant = entry.relevant.map(refKey);
   const recall = computeRecallAtK(retrieved, relevant, k);
+  const reciprocalRank = computeReciprocalRank(retrieved, relevant);
   const firstRelevant = computeFirstRelevantHit(retrieved, relevant);
 
   const out: PerQueryResult = {
     query_id: entry.query_id,
     query: entry.query,
     recall_at_k: recall,
+    precision_at_k: computePrecisionAtK(retrieved, relevant, k),
+    ndcg_at_k: computeNdcgAtK(retrieved, relevant, k),
+    reciprocal_rank: reciprocalRank,
     first_relevant_hit: firstRelevant,
     retrieved_count: retrieved.length,
+    retrieved,
   };
 
   if (entry.expected_top1) {
@@ -132,7 +159,10 @@ export async function runCorrectnessGate(
   }
   const k = opts.k ?? DEFAULT_QRELS_THRESHOLDS.k;
   const searchFn = opts.searchFn ?? (async (e, q, o) => {
-    const results = await hybridSearch(e, q, { limit: o.limit });
+    const results = await hybridSearch(e, q, {
+      limit: o.limit,
+      ...(o.sourceId ? { sourceId: o.sourceId } : {}),
+    });
     return results.map(r => ({ source_id: r.source_id, slug: r.slug }));
   });
 
@@ -148,6 +178,15 @@ export async function runCorrectnessGate(
   const meanRecall = nonErrored.length === 0
     ? 0
     : nonErrored.reduce((s, p) => s + p.recall_at_k, 0) / nonErrored.length;
+  const meanReciprocalRank = nonErrored.length === 0
+    ? 0
+    : nonErrored.reduce((s, p) => s + p.reciprocal_rank, 0) / nonErrored.length;
+  const meanPrecision = nonErrored.length === 0
+    ? 0
+    : nonErrored.reduce((s, p) => s + p.precision_at_k, 0) / nonErrored.length;
+  const meanNdcg = nonErrored.length === 0
+    ? 0
+    : nonErrored.reduce((s, p) => s + p.ndcg_at_k, 0) / nonErrored.length;
   const firstRelevantRate = nonErrored.length === 0
     ? 0
     : nonErrored.reduce((s, p) => s + p.first_relevant_hit, 0) / nonErrored.length;
@@ -164,6 +203,9 @@ export async function runCorrectnessGate(
       queries_run: run,
       queries_errored: errored,
       mean_recall_at_k: meanRecall,
+      mean_precision_at_k: meanPrecision,
+      mean_ndcg_at_k: meanNdcg,
+      mean_reciprocal_rank: meanReciprocalRank,
       first_relevant_hit_rate: firstRelevantRate,
       expected_top1_hit_rate: expectedTop1Rate,
       expected_top1_denominator: withExpectedTop1.length,

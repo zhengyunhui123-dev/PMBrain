@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import {
   ADVANCED_MODEL_PHASES,
   ADVANCED_PHASE_CONFIG_KEYS,
+  ADVANCED_PHASE_TIERS,
   parseModelsJson,
   suppliedAdvancedModelPhases,
   suppliedAdvancedModelTiers,
@@ -33,12 +34,30 @@ describe('desktop advanced model config', () => {
 
   test('maps Dream phases to the CLI config keys used by resolveModel', () => {
     expect(ADVANCED_MODEL_PHASES).toEqual([
+      'synthesize',
+      'synthesize_verdict',
+      'patterns',
+      'extract_atoms',
+      'synthesize_concepts',
+      'consolidate',
+      'conversation_facts_backfill',
       'propose_takes',
       'grade_takes',
       'calibration_profile',
     ]);
+    expect(ADVANCED_PHASE_CONFIG_KEYS.synthesize).toBe('models.dream.synthesize');
+    expect(ADVANCED_PHASE_CONFIG_KEYS.extract_atoms).toBe('models.dream.extract_atoms');
+    expect(ADVANCED_PHASE_CONFIG_KEYS.synthesize_concepts).toBe('models.dream.synthesize_concepts');
+    expect(ADVANCED_PHASE_CONFIG_KEYS.consolidate).toBe('models.dream.consolidate');
     expect(ADVANCED_PHASE_CONFIG_KEYS.propose_takes).toBe('models.propose_takes');
     expect(ADVANCED_PHASE_CONFIG_KEYS.grade_takes).toBe('models.grade_takes');
     expect(ADVANCED_PHASE_CONFIG_KEYS.calibration_profile).toBe('models.calibration_profile');
+  });
+
+  test('inherits each Dream phase from its actual runtime tier', () => {
+    expect(ADVANCED_PHASE_TIERS.synthesize).toBe('subagent');
+    expect(ADVANCED_PHASE_TIERS.synthesize_verdict).toBe('utility');
+    expect(ADVANCED_PHASE_TIERS.patterns).toBe('subagent');
+    expect(ADVANCED_PHASE_TIERS.extract_atoms).toBe('reasoning');
   });
 });

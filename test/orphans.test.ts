@@ -54,6 +54,18 @@ describe('shouldExclude', () => {
     expect(shouldExclude('output/2026-q1')).toBe(true);
   });
 
+  test('excludes generated cycle summaries and original-source namespaces', () => {
+    expect(shouldExclude('dream-cycle-summaries/2026-07-28')).toBe(true);
+    expect(shouldExclude('wiki/originals/imported-note')).toBe(true);
+    expect(shouldExclude('youdao/随写漫谈/手机记录/2026-07-12')).toBe(true);
+  });
+
+  test('excludes raw Office and PDF attachments in any directory', () => {
+    expect(shouldExclude('资料/项目复盘.PDF')).toBe(true);
+    expect(shouldExclude('wiki/files/预算.xlsx')).toBe(true);
+    expect(shouldExclude('imports/slides/deck.pptx')).toBe(true);
+  });
+
   test('excludes deny-prefix: dashboards/', () => {
     expect(shouldExclude('dashboards/metrics')).toBe(true);
   });
@@ -95,6 +107,24 @@ describe('shouldExclude', () => {
   test('does NOT exclude a page ending with log-like text that is not /log', () => {
     expect(shouldExclude('devlog')).toBe(false);
     expect(shouldExclude('changelog')).toBe(false);
+  });
+
+  test('excludes generated Dream, daily, inbox and descriptor pages', () => {
+    expect(shouldExclude('dreaming/patterns/weekly')).toBe(true);
+    expect(shouldExclude('daily/2026-07-28')).toBe(true);
+    expect(shouldExclude('projects/acme/daily/2026-07-28')).toBe(true);
+    expect(shouldExclude('inbox/mail-2026-07-28')).toBe(true);
+    expect(shouldExclude('projects/acme/readme')).toBe(true);
+    expect(shouldExclude('2026-07-28-notes')).toBe(true);
+  });
+
+  test('supports per-brain exclusion overrides', () => {
+    expect(shouldExclude('private/archive/item', {
+      excludePrefixes: ['private/archive/'],
+    })).toBe(true);
+    expect(shouldExclude('one-off-page', {
+      excludeSlugs: ['one-off-page'],
+    })).toBe(true);
   });
 });
 
@@ -288,6 +318,38 @@ describe('findOrphans (engine-injected)', () => {
     expect(result.orphans).toEqual([]);
     expect(result.total_orphans).toBe(0);
     expect(result.total_pages).toBe(0);
+  });
+
+  test('source scope limits orphan candidates and fixes the linkable denominator', async () => {
+    await engine.executeRaw(
+      `INSERT INTO sources (id, name, config)
+       VALUES ('second', 'second', '{}'::jsonb)
+       ON CONFLICT DO NOTHING`,
+    );
+    await engine.putPage('people/default-orphan', {
+      type: 'person', title: 'Default Orphan', compiled_truth: '', timeline: '',
+    }, { sourceId: 'default' });
+    await engine.putPage('templates/default-linked', {
+      type: 'concept', title: 'Template', compiled_truth: '', timeline: '',
+    }, { sourceId: 'default' });
+    await engine.putPage('people/second-linker', {
+      type: 'person', title: 'Second Linker', compiled_truth: '', timeline: '',
+    }, { sourceId: 'second' });
+    await engine.addLink(
+      'people/second-linker',
+      'templates/default-linked',
+      '',
+      'mentions',
+      'markdown',
+      undefined,
+      undefined,
+      { fromSourceId: 'second', toSourceId: 'default' },
+    );
+
+    const scoped = await findOrphans(engine, { sourceId: 'default' });
+    expect(scoped.orphans.map(page => page.slug)).toEqual(['people/default-orphan']);
+    expect(scoped.total_pages).toBe(2);
+    expect(scoped.total_linkable).toBe(1);
   });
 
   // ────────────────────────────────────────────────────────────────

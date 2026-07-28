@@ -23,6 +23,8 @@ import {
   isAvailable,
   getChatModel,
   getChatFallbackChain,
+  chat,
+  __setChatTransportForTests,
 } from '../../src/core/ai/gateway.ts';
 import { parseModelId, resolveRecipe, assertTouchpoint } from '../../src/core/ai/model-resolver.ts';
 import { AIConfigError } from '../../src/core/ai/errors.ts';
@@ -230,5 +232,66 @@ describe('chat touchpoint — chat() smoke + stop-reason mapping (Codex D8)', ()
     // body is just a runtime touch.
     const mod = await import('../../src/core/ai/gateway.ts');
     expect(mod).toBeDefined();
+  });
+});
+
+describe('chat touchpoint — provider-neutral ordinary-model fallback', () => {
+  beforeEach(() => resetGateway());
+
+  test('advanced auth/config failure falls back to the configured ordinary model', async () => {
+    configureGateway({
+      chat_model: 'openai:gpt-5.2',
+      chat_fallback_chain: ['deepseek:deepseek-v4-flash'],
+      env: {},
+    });
+    const attempted: string[] = [];
+    __setChatTransportForTests(async (opts) => {
+      attempted.push(opts.model ?? '');
+      if (opts.model === 'openai:gpt-5.2') {
+        throw new AIConfigError('401 invalid API key', 'Check your API key.');
+      }
+      return {
+        text: 'ok',
+        blocks: [{ type: 'text', text: 'ok' }],
+        stopReason: 'end',
+        usage: {
+          input_tokens: 1,
+          output_tokens: 1,
+          cache_read_tokens: 0,
+          cache_creation_tokens: 0,
+        },
+        model: opts.model!,
+        providerId: 'deepseek',
+      };
+    });
+
+    const result = await chat({ messages: [{ role: 'user', content: 'test' }] });
+    expect(attempted).toEqual(['openai:gpt-5.2', 'deepseek:deepseek-v4-flash']);
+    expect(result.model).toBe('deepseek:deepseek-v4-flash');
+  });
+
+  test('structural refusal falls back without string heuristics', async () => {
+    configureGateway({
+      chat_model: 'openai:gpt-5.2',
+      chat_fallback_chain: ['deepseek:deepseek-v4-flash'],
+      env: {},
+    });
+    __setChatTransportForTests(async (opts) => ({
+      text: opts.model === 'openai:gpt-5.2' ? '' : 'answered',
+      blocks: [],
+      stopReason: opts.model === 'openai:gpt-5.2' ? 'refusal' : 'end',
+      usage: {
+        input_tokens: 1,
+        output_tokens: 1,
+        cache_read_tokens: 0,
+        cache_creation_tokens: 0,
+      },
+      model: opts.model!,
+      providerId: opts.model!.split(':')[0]!,
+    }));
+
+    const result = await chat({ messages: [{ role: 'user', content: 'test' }] });
+    expect(result.text).toBe('answered');
+    expect(result.model).toBe('deepseek:deepseek-v4-flash');
   });
 });

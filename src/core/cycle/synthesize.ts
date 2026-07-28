@@ -32,7 +32,7 @@ import { chat as gatewayChat, type ChatResult } from '../ai/gateway.ts';
 import { resolveRecipe } from '../ai/model-resolver.ts';
 import { AIConfigError } from '../ai/errors.ts';
 import { loadConfig } from '../config.ts';
-import { join, dirname, isAbsolute, resolve } from 'node:path';
+import { basename, join, dirname, isAbsolute, resolve } from 'node:path';
 import { resolveDreamOutputRoot } from './dream-output.ts';
 export { resolveDreamOutputRoot } from './dream-output.ts';
 import type { BrainEngine } from '../engine.ts';
@@ -497,6 +497,10 @@ export async function runPhaseSynthesize(
     const skipReports: Array<{ filePath: string; reason: string }> = [];
 
     const maxCharsPerChunk = computeChunkCharBudget(config.model, config.maxPromptTokens);
+    const successfulLegacyKeys = await loadSuccessfulLegacySynthesisKeys(
+      engine,
+      opts.sourceId ?? 'default',
+    );
 
     for (const t of worthProcessing) {
       const hash16 = t.contentHash.slice(0, 16);
@@ -507,10 +511,17 @@ export async function runPhaseSynthesize(
       // synthesized and skip. Prevents duplicate writes when a transcript
       // that was previously single-chunk now multi-chunks (because budget
       // shrank or model changed).
-      if (await hasLegacySingleChunkCompletion(engine, t.filePath, hash16)) {
+      const legacyCompletion = findLegacyCompletion(
+        successfulLegacyKeys,
+        t.filePath,
+        hash16,
+      );
+      if (legacyCompletion) {
         skipReports.push({
           filePath: t.filePath,
-          reason: 'already_synthesized_legacy_single_chunk',
+          reason: legacyCompletion === 'chunked'
+            ? 'already_synthesized_legacy_chunked'
+            : 'already_synthesized_legacy_single_chunk',
         });
         continue;
       }
@@ -552,15 +563,13 @@ export async function runPhaseSynthesize(
           allowed_slug_prefixes: allowedSlugPrefixes,
           ...(opts.sourceId ? { source_id: opts.sourceId } : {}),
         };
-        // Idempotency key parity:
-        //   - single-chunk → legacy `dream:synth:<filePath>:<hash16>` (byte-
-        //     equivalent across versions; preserves dedup for unchanged
-        //     transcripts on upgrade).
-        //   - multi-chunk → `<legacy>:c<i>of<n>` per chunk; durable across
-        //     runs because D9 splitTranscriptByBudget is hash-deterministic.
+        // Keep producer identity stable when the corpus directory moves.
+        const synthesisKey =
+          `dream:synth-v2:${encodeURIComponent(opts.sourceId ?? 'default')}` +
+          `:filename:${encodeURIComponent(basename(t.filePath))}:${hash16}`;
         const baseIdempotencyKey = isChunked
-          ? `dream:synth:${t.filePath}:${hash16}:c${i}of${chunks.length}`
-          : `dream:synth:${t.filePath}:${hash16}`;
+          ? `${synthesisKey}:c${i}of${chunks.length}`
+          : synthesisKey;
         const idempotency_key = await retryableSynthesisIdempotencyKey(
           engine,
           baseIdempotencyKey,
@@ -1168,7 +1177,7 @@ async function collectChildPutPageSlugs(
   // product behavior. Threading the source_id through reverseWriteRefs
   // guarantees getPage targets the correct (source, slug) row instead of
   // the first DB match.
-  const rows = await engine.executeRaw<{ job_id: number; slug: string }>(
+  const rows = await engine.executeRaw<{ job_id: number | bigint; slug: string }>(
     `SELECT job_id,
             COALESCE(input->>'slug', (input #>> '{}')::jsonb->>'slug') AS slug
        FROM subagent_tool_executions
@@ -1180,7 +1189,7 @@ async function collectChildPutPageSlugs(
   const rewritten = new Set<string>();
   for (const r of rows) {
     if (typeof r.slug !== 'string' || r.slug.length === 0) continue;
-    const ci = chunkInfo.get(r.job_id);
+    const ci = chunkInfo.get(Number(r.job_id));
     rewritten.add(ci ? rewriteChunkedSlug(r.slug, ci.hash6, ci.idx) : r.slug);
   }
   return Array.from(rewritten).sort().map(slug => ({ slug, source_id: sourceId }));
@@ -1195,21 +1204,48 @@ async function collectChildPutPageSlugs(
  * Reuses the existing `minion_jobs.idempotency_key` index — no schema
  * additions. One indexed lookup per worth-processing transcript.
  */
-async function hasLegacySingleChunkCompletion(
+async function loadSuccessfulLegacySynthesisKeys(
   engine: BrainEngine,
+  sourceId: string,
+): Promise<string[]> {
+  const rows = await engine.executeRaw<{ idempotency_key: string }>(
+    `SELECT idempotency_key
+       FROM minion_jobs
+      WHERE name = 'subagent'
+        AND status = 'completed'
+        AND COALESCE(NULLIF(data->>'source_id', ''), 'default') = $1
+        AND idempotency_key LIKE 'dream:synth:%'`,
+    [sourceId],
+  );
+  return rows.map(row => row.idempotency_key);
+}
+
+function findLegacyCompletion(
+  successfulKeys: string[],
   filePath: string,
   hash16: string,
-): Promise<boolean> {
-  const legacyKey = `dream:synth:${filePath}:${hash16}`;
-  const rows = await engine.executeRaw<{ status: string }>(
-    `SELECT status
-       FROM minion_jobs
-      WHERE idempotency_key = $1
-        AND status = 'completed'
-      LIMIT 1`,
-    [legacyKey],
-  );
-  return rows.length > 0;
+): 'single' | 'chunked' | null {
+  const filename = basename(filePath);
+  const hashSuffix = `:${hash16}`;
+  const chunkSets = new Map<number, Set<number>>();
+  for (const key of successfulKeys) {
+    const chunk = /:c(\d+)of(\d+)$/.exec(key);
+    const base = chunk ? key.slice(0, -chunk[0].length) : key;
+    if (!base.endsWith(hashSuffix)) continue;
+    const historicalPath = base.slice('dream:synth:'.length, -hashSuffix.length);
+    if (basename(historicalPath) !== filename) continue;
+    if (!chunk) return 'single';
+    const index = Number(chunk[1]);
+    const count = Number(chunk[2]);
+    if (count < 1 || index < 0 || index >= count) continue;
+    let seen = chunkSets.get(count);
+    if (!seen) chunkSets.set(count, seen = new Set());
+    seen.add(index);
+  }
+  for (const [count, seen] of chunkSets) {
+    if (seen.size === count) return 'chunked';
+  }
+  return null;
 }
 
 // ── Reverse-write DB rows → markdown files ───────────────────────────
@@ -1443,6 +1479,7 @@ function makeError(cls: string, code: string, message: string, hint?: string): P
 // double-encoded jsonb regression). Not part of the runtime contract.
 export const __testing = {
   collectChildPutPageSlugs,
+  findLegacyCompletion,
   stampDreamProvenance,
   reverseWriteRefs,
 };

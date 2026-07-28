@@ -9,6 +9,7 @@ import {
   formatSharedIntegrationSnippet,
   getSharedAccessContext,
   integrationConfigPath,
+  listIntegrations,
   probeQwenPawConnectionState,
   qwenPawDriverIsConfigured,
   qwenPawIntegrationPath,
@@ -279,6 +280,16 @@ describe('desktop integration config merging', () => {
     const path = integrationConfigPath('workbuddy');
     expect(path).toEndWith(join('.workbuddy', 'mcp.json'));
     expect(path).not.toEndWith(join('.workbuddy', '.mcp.json'));
+  });
+
+  test('offers Hermes and OpenClaw as manual MCP integration targets', () => {
+    const integrations = listIntegrations();
+    expect(integrations.find(item => item.id === 'hermes')).toMatchObject({
+      name: 'Hermes', path: null, automatic: false, configured: false,
+    });
+    expect(integrations.find(item => item.id === 'openclaw')).toMatchObject({
+      name: 'OpenClaw', path: null, automatic: false, configured: false,
+    });
   });
 
   test('uses legacy QwenPaw config before 2.x and the DriverCard path for 2.x', () => {

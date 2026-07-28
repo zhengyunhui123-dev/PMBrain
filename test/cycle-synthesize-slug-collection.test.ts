@@ -21,7 +21,7 @@ import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
 import { PGLiteEngine } from '../src/core/pglite-engine.ts';
 import { __testing } from '../src/core/cycle/synthesize.ts';
 
-const { collectChildPutPageSlugs } = __testing;
+const { collectChildPutPageSlugs, findLegacyCompletion } = __testing;
 
 let engine: PGLiteEngine;
 
@@ -102,5 +102,45 @@ describe('C6: collectChildPutPageSlugs survives double-encoded jsonb (#745)', ()
     const refs = await collectChildPutPageSlugs(engine as any, [1003], new Map());
     // Function silently drops rows whose slug resolves to null/empty.
     expect(refs.map((r: { slug: string }) => r.slug)).not.toContain('no-slug');
+  });
+
+  test('normalizes bigint receipt ids before chunk metadata lookup', async () => {
+    const bigintEngine = {
+      executeRaw: async () => [{
+        job_id: 1001n,
+        slug: 'wiki/agents/test/bigint-job-abc123',
+      }],
+    };
+    const refs = await collectChildPutPageSlugs(
+      bigintEngine as any,
+      [1001],
+      new Map([[1001, { idx: 2, hash6: 'abc123' }]]),
+    );
+    expect(refs).toEqual([{
+      slug: 'wiki/agents/test/bigint-job-abc123-c2',
+      source_id: 'default',
+    }]);
+  });
+});
+
+describe('legacy synthesis completion matching', () => {
+  const hash16 = '1234567890abcdef';
+  const currentPath = 'D:\\new-corpus\\2026-07-28-session.txt';
+
+  test('matches a single completion by filename and hash after root move', () => {
+    expect(findLegacyCompletion([
+      `dream:synth:D:\\old-corpus\\2026-07-28-session.txt:${hash16}`,
+    ], currentPath, hash16)).toBe('single');
+  });
+
+  test('requires a complete legacy chunk family', () => {
+    const base = `dream:synth:D:\\old-corpus\\2026-07-28-session.txt:${hash16}`;
+    expect(findLegacyCompletion([
+      `${base}:c0of2`,
+      `${base}:c1of2`,
+    ], currentPath, hash16)).toBe('chunked');
+    expect(findLegacyCompletion([
+      `${base}:c0of2`,
+    ], currentPath, hash16)).toBeNull();
   });
 });

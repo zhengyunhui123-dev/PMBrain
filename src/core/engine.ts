@@ -152,6 +152,8 @@ export interface LinkBatchInput {
   from_source_id?: string;
   to_source_id?: string;
   origin_source_id?: string;
+  /** How the target source was selected during extraction. */
+  resolution_type?: 'qualified' | 'unqualified';
   /**
    * v0.41.18.0 (A10, codex finding #12): distinguishes "plain body mention"
    * (NULL or 'plain') from "verb-pattern-derived typed NER" ('typed_ner')
@@ -1038,7 +1040,12 @@ export interface BrainEngine {
     linkSource?: string,
     originSlug?: string,
     originField?: string,
-    opts?: { fromSourceId?: string; toSourceId?: string; originSourceId?: string },
+    opts?: {
+      fromSourceId?: string;
+      toSourceId?: string;
+      originSourceId?: string;
+      resolutionType?: 'qualified' | 'unqualified';
+    },
   ): Promise<void>;
   /**
    * Bulk insert links via a single multi-row INSERT...SELECT FROM (VALUES) JOIN pages
@@ -1105,6 +1112,7 @@ export interface BrainEngine {
     name: string,
     dirPrefix?: string,
     minSimilarity?: number,
+    opts?: { sourceId?: string },
   ): Promise<{ slug: string; similarity: number } | null>;
   /**
    * v0.34.1 (#861 — P0 leak seal): `opts.sourceId` / `opts.sourceIds`
@@ -1207,7 +1215,10 @@ export interface BrainEngine {
    * The caller filters pseudo-pages + derives display domain.
    * Used by `gbrain orphans` and `runCycle`'s orphan sweep phase.
    */
-  findOrphanPages(): Promise<Array<{ slug: string; title: string; domain: string | null }>>;
+  findOrphanPages(opts?: {
+    sourceId?: string;
+    sourceIds?: string[];
+  }): Promise<Array<{ slug: string; title: string; domain: string | null }>>;
 
   // Tags
   /**

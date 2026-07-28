@@ -44,11 +44,22 @@ export interface SourceSlugRef {
 export interface QrelsEntry {
   query_id: string;
   query: string;
+  /**
+   * Optional retrieval scope for this query. This prevents same-slug pages
+   * from unrelated sources competing with the labeled result.
+   */
+  source_id?: string;
   /** Normalized to {source_id, slug} pairs. Plain strings auto-promote to source_id='default'. */
   relevant: SourceSlugRef[];
   /** If set, retrieved[0] MUST equal this exact pair (strict top-1 metric). */
   expected_top1?: SourceSlugRef;
   label?: string;
+  /** Human-readable answer target used by review/model-comparison reports. */
+  expected_answer?: string;
+  /** Required facts or citation properties for manual/LLM answer grading. */
+  answer_criteria?: string[];
+  category?: string;
+  difficulty?: 'easy' | 'medium' | 'hard';
   /** Pass-through fields from the existing fixture shape (kept for forward compat). */
   embedding_dim?: number;
 }
@@ -177,8 +188,28 @@ export function parseQrelsFile(content: string): QrelsFile {
     }
 
     const out: QrelsEntry = { query_id, query: entry.query, relevant };
+    if (entry.source_id !== undefined) {
+      if (typeof entry.source_id !== 'string' || entry.source_id.trim() === '') {
+        throw new QrelsParseError(`Entry ${i} (${query_id}) source_id must be a non-empty string`, i);
+      }
+      out.source_id = entry.source_id;
+    }
     if (expected_top1) out.expected_top1 = expected_top1;
     if (typeof entry.label === 'string') out.label = entry.label;
+    if (typeof entry.expected_answer === 'string') out.expected_answer = entry.expected_answer;
+    if (entry.answer_criteria !== undefined) {
+      if (!Array.isArray(entry.answer_criteria) || entry.answer_criteria.some(item => typeof item !== 'string')) {
+        throw new QrelsParseError(`Entry ${i} (${query_id}) answer_criteria must be a string array`, i);
+      }
+      out.answer_criteria = entry.answer_criteria as string[];
+    }
+    if (typeof entry.category === 'string') out.category = entry.category;
+    if (entry.difficulty !== undefined) {
+      if (!['easy', 'medium', 'hard'].includes(String(entry.difficulty))) {
+        throw new QrelsParseError(`Entry ${i} (${query_id}) difficulty must be easy, medium, or hard`, i);
+      }
+      out.difficulty = entry.difficulty as QrelsEntry['difficulty'];
+    }
     if (typeof entry.embedding_dim === 'number') out.embedding_dim = entry.embedding_dim;
     // The cast is safe: we built `out` from validated fields. The pass-through
     // shape may carry additional unknown keys we want to surface to consumers
@@ -209,6 +240,28 @@ export function computeRecallAtK(retrieved: string[], relevant: string[], k: num
   return hits / relevant.length;
 }
 
+/** precision_at_k = relevant hits in retrieved[:k] / k. */
+export function computePrecisionAtK(retrieved: string[], relevant: string[], k: number): number {
+  if (k <= 0 || relevant.length === 0) return 0;
+  const relevantSet = new Set(relevant);
+  return retrieved.slice(0, k).filter(ref => relevantSet.has(ref)).length / k;
+}
+
+/** Binary-relevance nDCG@k for source-aware qrels. */
+export function computeNdcgAtK(retrieved: string[], relevant: string[], k: number): number {
+  if (k <= 0 || relevant.length === 0) return 0;
+  const relevantSet = new Set(relevant);
+  let dcg = 0;
+  for (let index = 0; index < Math.min(k, retrieved.length); index++) {
+    if (relevantSet.has(retrieved[index]!)) dcg += 1 / Math.log2(index + 2);
+  }
+  let ideal = 0;
+  for (let index = 0; index < Math.min(k, relevantSet.size); index++) {
+    ideal += 1 / Math.log2(index + 2);
+  }
+  return ideal === 0 ? 0 : dcg / ideal;
+}
+
 /**
  * first_relevant_hit = 1 if retrieved[0] in relevant else 0.
  * Empty retrieved → 0.
@@ -217,6 +270,16 @@ export function computeFirstRelevantHit(retrieved: string[], relevant: string[])
   if (retrieved.length === 0) return 0;
   const relevantSet = new Set(relevant);
   return relevantSet.has(retrieved[0]!) ? 1 : 0;
+}
+
+/**
+ * reciprocal_rank = 1 / rank of the first relevant result (1-based).
+ * Returns 0 when no relevant result appears.
+ */
+export function computeReciprocalRank(retrieved: string[], relevant: string[]): number {
+  const relevantSet = new Set(relevant);
+  const index = retrieved.findIndex(ref => relevantSet.has(ref));
+  return index < 0 ? 0 : 1 / (index + 1);
 }
 
 /**

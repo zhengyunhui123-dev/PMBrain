@@ -8,6 +8,7 @@ import {
   buildOAuthJsonConfig,
   MCP_CLIENTS,
 } from '../admin/src/lib/mcp-config.ts';
+import { normalizeReadSources, normalizeSourceOptions } from '../admin/src/pages/Agents.tsx';
 
 describe('Admin MCP handoff content', () => {
   test('matches the desktop-supported client list and names the generic option clearly', () => {
@@ -99,6 +100,18 @@ describe('Admin MCP handoff content', () => {
     const server = readFileSync(join(process.cwd(), 'src/commands/serve-http.ts'), 'utf8');
     expect(server).toContain("import { isIP } from 'node:net'");
     expect(server).toContain('isIP(configuredSharedIp) === 4');
+  });
+
+  test('deduplicates the default source alias from MCP write and read source choices', () => {
+    expect(normalizeSourceOptions([
+      { id: 'default', name: 'default' },
+      { id: 'duwu', name: 'duwu' },
+      { id: 'other', name: '其他知识库' },
+    ], 'duwu')).toEqual([
+      { id: 'duwu', name: 'duwu' },
+      { id: 'other', name: '其他知识库' },
+    ]);
+    expect(normalizeReadSources(['default', 'duwu'], 'default', 'duwu')).toEqual(['duwu']);
   });
 
   test('keeps API Key and OAuth creation controls aligned with equivalent MCP options', () => {

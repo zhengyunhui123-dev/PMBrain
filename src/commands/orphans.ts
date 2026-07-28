@@ -15,6 +15,11 @@
 import type { BrainEngine } from '../core/engine.ts';
 import { createProgress, startHeartbeat } from '../core/progress.ts';
 import { getCliOptions, cliOptsToProgressOptions } from '../core/cli-options.ts';
+import {
+  loadOrphanPolicyOverrides,
+  shouldExcludeFromOrphanReporting,
+  type OrphanPolicyOverrides,
+} from '../core/orphan-policy.ts';
 
 // --- Types ---
 
@@ -32,57 +37,14 @@ export interface OrphanResult {
   excluded: number;
 }
 
-// --- Filter constants ---
-
-/** Slug suffixes that are always auto-generated root files */
-const AUTO_SUFFIX_PATTERNS = ['/_index', '/log'];
-
-/** Page slugs that are pseudo-pages by convention */
-const PSEUDO_SLUGS = new Set(['_atlas', '_index', '_stats', '_orphans', '_scratch', 'claude']);
-
-/** Slug segment that marks raw sources */
-const RAW_SEGMENT = '/raw/';
-
-/** Slug prefixes where no inbound links is expected */
-const DENY_PREFIXES = [
-  'output/',
-  'dashboards/',
-  'scripts/',
-  'templates/',
-  'openclaw/config/',
-];
-
-/** First slug segments where no inbound links is expected */
-const FIRST_SEGMENT_EXCLUSIONS = new Set(['scratch', 'thoughts', 'catalog', 'entities']);
-
 // --- Filter logic ---
 
 /**
  * Returns true if a slug should be excluded from orphan reporting by default.
  * These are pages where having no inbound links is expected / not a content problem.
  */
-export function shouldExclude(slug: string): boolean {
-  // Pseudo-pages (exact match)
-  if (PSEUDO_SLUGS.has(slug)) return true;
-
-  // Auto-generated suffix patterns
-  for (const suffix of AUTO_SUFFIX_PATTERNS) {
-    if (slug.endsWith(suffix)) return true;
-  }
-
-  // Raw source slugs
-  if (slug.includes(RAW_SEGMENT)) return true;
-
-  // Deny-prefix slugs
-  for (const prefix of DENY_PREFIXES) {
-    if (slug.startsWith(prefix)) return true;
-  }
-
-  // First-segment exclusions
-  const firstSegment = slug.split('/')[0];
-  if (FIRST_SEGMENT_EXCLUSIONS.has(firstSegment)) return true;
-
-  return false;
+export function shouldExclude(slug: string, overrides?: OrphanPolicyOverrides): boolean {
+  return shouldExcludeFromOrphanReporting(slug, overrides);
 }
 
 /**
@@ -127,9 +89,11 @@ export async function queryOrphanPages(
  */
 export async function findOrphans(
   engine: BrainEngine,
-  opts: { includePseudo?: boolean } = {},
+  opts: { includePseudo?: boolean; sourceId?: string; sourceIds?: string[] } = {},
 ): Promise<OrphanResult> {
   const includePseudo = !!opts.includePseudo;
+  const sourceId = opts.sourceId;
+  const sourceIds = opts.sourceIds && opts.sourceIds.length > 0 ? opts.sourceIds : undefined;
   // The NOT EXISTS anti-join over pages × links can take seconds on 50K-page
   // brains. Heartbeat every second so agents see the scan is alive. Keyset
   // pagination was considered and rejected: without an index on
@@ -140,20 +104,36 @@ export async function findOrphans(
   const stopHb = startHeartbeat(progress, 'scanning pages for missing inbound links…');
   let allOrphans: { slug: string; title: string; domain: string | null }[];
   let total: number;
+  let excludedAll: number;
+  const overrides = includePseudo ? undefined : await loadOrphanPolicyOverrides(engine);
   try {
-    allOrphans = await engine.findOrphanPages();
-    // Count total pages in DB for the summary line
-    const stats = await engine.getStats();
-    total = stats.page_count;
+    allOrphans = await engine.findOrphanPages(
+      sourceIds ? { sourceIds } : sourceId ? { sourceId } : undefined,
+    );
+    let scopeClause = '';
+    const params: unknown[] = [];
+    if (sourceIds) {
+      params.push(sourceIds);
+      scopeClause = ` AND source_id = ANY($${params.length}::text[])`;
+    } else if (sourceId) {
+      params.push(sourceId);
+      scopeClause = ` AND source_id = $${params.length}`;
+    }
+    const liveRows = await engine.executeRaw<{ slug: string }>(
+      `SELECT slug FROM pages WHERE deleted_at IS NULL${scopeClause}`,
+      params,
+    );
+    total = liveRows.length;
+    excludedAll = includePseudo
+      ? 0
+      : liveRows.reduce((count, row) => count + (shouldExclude(row.slug, overrides) ? 1 : 0), 0);
   } finally {
     stopHb();
     progress.finish();
   }
-  const _totalPages = allOrphans.length; // pages with no inbound links (preserved for ref)
-
   const filtered = includePseudo
     ? allOrphans
-    : allOrphans.filter(row => !shouldExclude(row.slug));
+    : allOrphans.filter(row => !shouldExclude(row.slug, overrides));
 
   const orphans: OrphanPage[] = filtered.map(row => ({
     slug: row.slug,
@@ -166,7 +146,7 @@ export async function findOrphans(
   return {
     orphans,
     total_orphans: orphans.length,
-    total_linkable: filtered.length + (total - allOrphans.length),
+    total_linkable: total - excludedAll,
     total_pages: total,
     excluded,
   };
@@ -224,6 +204,12 @@ export async function runOrphans(engine: BrainEngine, args: string[]) {
   const json = args.includes('--json');
   const count = args.includes('--count');
   const includePseudo = args.includes('--include-pseudo');
+  let sourceId: string | undefined;
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--source' && i + 1 < args.length) {
+      sourceId = args[++i] || undefined;
+    }
+  }
 
   if (args.includes('--help') || args.includes('-h')) {
     console.log(`Usage: gbrain orphans [options]
@@ -234,6 +220,7 @@ Options:
   --json            Output as JSON (for agent consumption)
   --count           Output just the number of orphans
   --include-pseudo  Include auto-generated and pseudo pages in results
+  --source <id>     Scope the scan to one brain source (default: brain-wide)
   --help, -h        Show this help
 
 Output (default): grouped by domain, sorted alphabetically within each group
@@ -242,7 +229,7 @@ Summary line: N orphans out of M linkable pages (K total; K-M excluded)
     return;
   }
 
-  const result = await findOrphans(engine, { includePseudo });
+  const result = await findOrphans(engine, { includePseudo, sourceId });
 
   if (count) {
     console.log(String(result.total_orphans));

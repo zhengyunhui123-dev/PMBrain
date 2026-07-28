@@ -732,6 +732,10 @@ export interface SearchResult {
    *  (RRF + boosts). v0.42.3.0 autocut cuts on this — the trustworthy
    *  separatrix — never on RRF/cosine. */
   rerank_score?: number;
+  /** Retrieval-path diagnostics stamped by query/search operations. */
+  retrieval_vector_status?: 'applied' | 'unavailable';
+  retrieval_reranker_status?: 'applied' | 'failed' | 'disabled';
+  retrieval_reranker_reason?: string;
   /**
    * v0.42 (T19, plan D6) — multiplier applied by applyAliasResolvedBoost
    * (1.0 = unchanged; default 1.05x). Fires when the result's slug is
@@ -1151,6 +1155,11 @@ export interface Link {
    * 'investors'). Used for debug output and the `unresolved` response list.
    */
   origin_field?: string | null;
+  /** Source ids are returned so reconciliation can distinguish same-slug endpoints. */
+  from_source_id?: string;
+  to_source_id?: string;
+  origin_source_id?: string | null;
+  resolution_type?: 'qualified' | 'unqualified' | null;
 }
 
 export interface GraphNode {
@@ -1440,6 +1449,12 @@ export interface HybridSearchMeta {
   detail_resolved: 'low' | 'medium' | 'high' | null;
   /** True iff multi-query expansion (Haiku) actually fired and produced variants. */
   expansion_applied: boolean;
+  /** True when the resolved search mode requested a reranker call. */
+  reranker_requested?: boolean;
+  /** True only when a reranker response was actually applied. */
+  reranker_applied?: boolean;
+  /** Explicit fail-open reason when a requested reranker did not apply. */
+  reranker_failure_reason?: string;
   /**
    * v0.32.x (search-lite): the intent the zero-LLM classifier inferred for
    * this query. Surfaced for debugging — agents and the `gbrain query`

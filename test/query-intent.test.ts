@@ -50,6 +50,12 @@ describe('classifyQuery — entity / canonical queries → both axes off', () =>
     expect(r.suggestedRecency).toBe('off');
     expect(r.suggestedSalience).toBe('off');
   });
+
+  test('Chinese canonical lookup is classified as entity', () => {
+    const r = classifyQuery('PMBrain是什么');
+    expect(r.intent).toBe('entity');
+    expect(r.suggestedRecency).toBe('off');
+  });
 });
 
 describe('classifyQuery — current-state queries → both axes on', () => {
@@ -82,6 +88,13 @@ describe('classifyQuery — current-state queries → both axes on', () => {
     expect(r.suggestedRecency).toBe('on');
     expect(r.suggestedSalience).toBe('on');
   });
+
+  test('Chinese project progress query enables recency without emotional salience', () => {
+    const r = classifyQuery('重庆保供项目近期进展');
+    expect(r.intent).toBe('temporal');
+    expect(r.suggestedRecency).toBe('on');
+    expect(r.suggestedSalience).toBe('off');
+  });
 });
 
 describe('classifyQuery — recency-only patterns (no salience signal)', () => {
@@ -108,6 +121,11 @@ describe('classifyQuery — strong recency ("today" / "right now")', () => {
   test('"right now what is the status" → strong', () => {
     const r = classifyQuery('right now what is the status of the deal');
     // "what is" canonical fires; but "right now" is a temporal bound
+    expect(r.suggestedRecency).toBe('strong');
+  });
+
+  test('Chinese strong recency marker is recognized', () => {
+    const r = classifyQuery('今天项目发生了什么');
     expect(r.suggestedRecency).toBe('strong');
   });
 });

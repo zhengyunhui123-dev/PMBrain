@@ -45,13 +45,14 @@ export interface SynthesizeConceptsOpts {
   /** Test seam: alternative chat function. */
   _chat?: typeof gatewayChat;
   /** Test seam: skip DB query; cluster these atoms directly. */
-  _atoms?: Array<{ slug: string; concept_refs: string[]; body: string; title: string }>;
+  _atoms?: Array<{ slug: string; source_id?: string; concept_refs: string[]; body: string; title: string }>;
 }
 
 interface AtomGroup {
   conceptSlug: string;
   atomTitles: string[];
   atomBodies: string[];
+  atomRefs: Array<{ slug: string; source_id: string }>;
   tier: 'T1' | 'T2' | 'T3' | 'T4';
 }
 
@@ -76,11 +77,12 @@ export async function runPhaseSynthesizeConcepts(
     try {
       const rows = await engine.executeRaw<{
         slug: string;
+        source_id: string;
         title: string;
         compiled_truth: string;
         frontmatter: { concepts?: string[]; imported_from?: string };
       }>(
-        `SELECT slug, title, compiled_truth, frontmatter
+        `SELECT slug, source_id, title, compiled_truth, frontmatter
            FROM pages
           WHERE type = 'atom'
             AND deleted_at IS NULL
@@ -90,6 +92,7 @@ export async function runPhaseSynthesizeConcepts(
         .filter((r) => Array.isArray(r.frontmatter?.concepts) && r.frontmatter.concepts.length > 0)
         .map((r) => ({
           slug: r.slug,
+          source_id: r.source_id,
           title: r.title,
           body: r.compiled_truth,
           concept_refs: r.frontmatter!.concepts!,
@@ -110,12 +113,17 @@ export async function runPhaseSynthesizeConcepts(
   }
 
   // 2. Group atoms by concept slug
-  const groups = new Map<string, { titles: string[]; bodies: string[] }>();
+  const groups = new Map<string, {
+    titles: string[];
+    bodies: string[];
+    refs: Array<{ slug: string; source_id: string }>;
+  }>();
   for (const atom of atoms) {
     for (const conceptSlug of atom.concept_refs) {
-      const existing = groups.get(conceptSlug) ?? { titles: [], bodies: [] };
+      const existing = groups.get(conceptSlug) ?? { titles: [], bodies: [], refs: [] };
       existing.titles.push(atom.title);
       existing.bodies.push(atom.body);
+      existing.refs.push({ slug: atom.slug, source_id: atom.source_id ?? 'default' });
       groups.set(conceptSlug, existing);
     }
   }
@@ -131,6 +139,7 @@ export async function runPhaseSynthesizeConcepts(
       conceptSlug,
       atomTitles: data.titles,
       atomBodies: data.bodies,
+      atomRefs: data.refs,
       tier,
     });
   }
@@ -233,9 +242,42 @@ export async function runPhaseSynthesizeConcepts(
           composite_score: group.atomTitles.length,
           synthesized_at: new Date().toISOString(),
           synthesized_by: 'synthesize_concepts-v0.41',
+          derives_from: group.atomRefs.map(ref => ({
+            slug: ref.slug,
+            source_id: ref.source_id,
+          })),
         },
         timeline: '',
       });
+      const relationshipRows = group.atomRefs.flatMap(ref => [
+        {
+          from_slug: outputSlug,
+          to_slug: ref.slug,
+          link_type: 'derives_from',
+          context: `Dream concept synthesis: ${outputSlug} derives from ${ref.slug}`,
+          link_source: 'frontmatter',
+          origin_slug: outputSlug,
+          origin_field: 'derives_from',
+          from_source_id: 'default',
+          to_source_id: ref.source_id,
+          origin_source_id: 'default',
+          resolution_type: 'qualified' as const,
+        },
+        {
+          from_slug: ref.slug,
+          to_slug: outputSlug,
+          link_type: 'evidence_of',
+          context: `Dream concept evidence: ${ref.slug} supports ${outputSlug}`,
+          link_source: 'frontmatter',
+          origin_slug: outputSlug,
+          origin_field: 'derives_from',
+          from_source_id: ref.source_id,
+          to_source_id: 'default',
+          origin_source_id: 'default',
+          resolution_type: 'qualified' as const,
+        },
+      ]);
+      await engine.addLinksBatch(relationshipRows, { auditSite: 'extract.links_db' }); // gbrain-allow-direct-insert: Dream concept evidence is written inside the cycle reconcile path.
       conceptSlugs.push(outputSlug);
     }
     conceptsWritten++;

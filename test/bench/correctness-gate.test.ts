@@ -29,6 +29,9 @@ describe('correctness-gate: per-query iteration + aggregate math', () => {
       ],
     });
     expect(result.summary.mean_recall_at_k).toBe(1);
+    expect(result.summary.mean_precision_at_k).toBeCloseTo(0.2);
+    expect(result.summary.mean_ndcg_at_k).toBe(1);
+    expect(result.summary.mean_reciprocal_rank).toBe(1);
     expect(result.summary.first_relevant_hit_rate).toBe(1);
     expect(result.summary.expected_top1_hit_rate).toBe(1);
     expect(result.summary.queries_errored).toBe(0);
@@ -144,5 +147,41 @@ describe('correctness-gate: per-query iteration + aggregate math', () => {
     // 1 of 1 query with expected_top1 matched (q1).
     expect(result.summary.expected_top1_denominator).toBe(1);
     expect(result.summary.expected_top1_hit_rate).toBe(1);
+  });
+
+  test('threads per-query source_id into the search function', async () => {
+    const qrels = makeQrels([{
+      query_id: 'q1',
+      query: 'alice',
+      source_id: 'project-a',
+      relevant: [{ source_id: 'project-a', slug: 'people/alice' }],
+    }]);
+    let seenSourceId: string | undefined;
+    await runCorrectnessGate(fakeEngine, qrels, {
+      searchFn: async (_engine, _query, opts) => {
+        seenSourceId = opts.sourceId;
+        return [{ source_id: 'project-a', slug: 'people/alice' }];
+      },
+    });
+    expect(seenSourceId).toBe('project-a');
+  });
+
+  test('deduplicates multiple chunks from the same page before scoring', async () => {
+    const qrels = makeQrels([{
+      query_id: 'q1',
+      query: 'page chunks',
+      relevant: [{ source_id: 'default', slug: 'a' }],
+    }]);
+    const result = await runCorrectnessGate(fakeEngine, qrels, {
+      k: 10,
+      searchFn: async () => [
+        { source_id: 'default', slug: 'a' },
+        { source_id: 'default', slug: 'a' },
+        { source_id: 'default', slug: 'b' },
+      ],
+    });
+    expect(result.per_query[0]!.recall_at_k).toBe(1);
+    expect(result.per_query[0]!.retrieved).toEqual(['default::a', 'default::b']);
+    expect(result.per_query[0]!.retrieved_count).toBe(2);
   });
 });

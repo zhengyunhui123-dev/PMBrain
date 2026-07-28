@@ -970,8 +970,14 @@ export async function hybridSearch(
       model: resolvedMode.reranker_model,
       timeoutMs: resolvedMode.reranker_timeout_ms,
     };
+    let noEmbedRerankerStatus: { state: 'applied' | 'failed'; reason?: string } | undefined;
     const noEmbedReranked = noEmbedRerankerOpts.enabled
-      ? await applyReranker(query, noEmbedDeduped, noEmbedRerankerOpts as any)
+      ? await applyReranker(query, noEmbedDeduped, {
+          ...noEmbedRerankerOpts,
+          onStatus: (status: { state: 'applied' | 'failed'; reason?: string }) => {
+            noEmbedRerankerStatus = status;
+          },
+        } as any)
       : noEmbedDeduped;
     const noEmbedHopped = await applyAliasHop(engine, noEmbedReranked, query, {
       sourceId: opts?.sourceId,
@@ -1013,6 +1019,11 @@ export async function hybridSearch(
       vector_enabled: false,
       detail_resolved: detailResolved,
       expansion_applied: false,
+      reranker_requested: noEmbedRerankerOpts.enabled,
+      reranker_applied: noEmbedRerankerStatus?.state === 'applied',
+      ...(noEmbedRerankerStatus?.state === 'failed' && noEmbedRerankerStatus.reason
+        ? { reranker_failure_reason: noEmbedRerankerStatus.reason }
+        : {}),
       intent: suggestions.intent,
       mode: resolvedMode.resolved_mode,
       embedding_column: resolvedCol.name,
@@ -1236,8 +1247,14 @@ export async function hybridSearch(
       model: resolvedMode.reranker_model,
       timeoutMs: resolvedMode.reranker_timeout_ms,
     };
+    let kwRerankerStatus: { state: 'applied' | 'failed'; reason?: string } | undefined;
     const kwReranked = kwRerankerOpts.enabled
-      ? await applyReranker(query, kwDeduped, kwRerankerOpts as any)
+      ? await applyReranker(query, kwDeduped, {
+          ...kwRerankerOpts,
+          onStatus: (status: { state: 'applied' | 'failed'; reason?: string }) => {
+            kwRerankerStatus = status;
+          },
+        } as any)
       : kwDeduped;
     const kwHopped = await applyAliasHop(engine, kwReranked, query, {
       sourceId: opts?.sourceId,
@@ -1279,6 +1296,11 @@ export async function hybridSearch(
       vector_enabled: false,
       detail_resolved: detailResolved,
       expansion_applied: expansionApplied,
+      reranker_requested: kwRerankerOpts.enabled,
+      reranker_applied: kwRerankerStatus?.state === 'applied',
+      ...(kwRerankerStatus?.state === 'failed' && kwRerankerStatus.reason
+        ? { reranker_failure_reason: kwRerankerStatus.reason }
+        : {}),
       intent: suggestions.intent,
       mode: resolvedMode.resolved_mode,
       embedding_column: resolvedCol.name,
@@ -1359,11 +1381,10 @@ export async function hybridSearch(
   // both, or neither fires depending on resolved modes.
   if (fused.length > 0) {
     await runPostFusionStages(engine, fused, postFusionOpts);
-    // v0.32.x search-lite: intent exact-match boost (entity/event intents).
-    // No-op when boost factor is 1.0 (general intent or weighting disabled).
-    if (intentWeights.exactMatchBoost !== 1.0) {
-      applyExactMatchBoost(fused, query, intentWeights);
-    }
+    // Exact literal slug/title matches are always checked. Intent weighting
+    // may increase the multiplier, but a chosen exact name must not lose just
+    // because the zero-LLM classifier labeled a Chinese lookup as `general`.
+    applyExactMatchBoost(fused, query, intentWeights);
     fused.sort((a, b) => b.score - a.score);
   }
 
@@ -1441,8 +1462,14 @@ export async function hybridSearch(
     model: resolvedMode.reranker_model,
     timeoutMs: resolvedMode.reranker_timeout_ms,
   };
+  let rerankerStatus: { state: 'applied' | 'failed'; reason?: string } | undefined;
   const reranked = rerankerOpts.enabled
-    ? await applyReranker(query, deduped, rerankerOpts as any)
+    ? await applyReranker(query, deduped, {
+        ...rerankerOpts,
+        onStatus: (status: { state: 'applied' | 'failed'; reason?: string }) => {
+          rerankerStatus = status;
+        },
+      } as any)
     : deduped;
 
   // T3 — free-text alias hop. Runs AFTER rerank so a query that is a page's
@@ -1516,6 +1543,11 @@ export async function hybridSearch(
     vector_enabled: true,
     detail_resolved: detailResolved,
     expansion_applied: expansionApplied,
+    reranker_requested: rerankerOpts.enabled,
+    reranker_applied: rerankerStatus?.state === 'applied',
+    ...(rerankerStatus?.state === 'failed' && rerankerStatus.reason
+      ? { reranker_failure_reason: rerankerStatus.reason }
+      : {}),
     intent: suggestions.intent,
     mode: resolvedMode.resolved_mode,
     embedding_column: resolvedCol.name,
@@ -1697,6 +1729,11 @@ export async function hybridSearchCached(
         vector_enabled: hit.meta?.vector_enabled ?? true,
         detail_resolved: hit.meta?.detail_resolved ?? null,
         expansion_applied: hit.meta?.expansion_applied ?? false,
+        reranker_requested: hit.meta?.reranker_requested ?? false,
+        reranker_applied: hit.meta?.reranker_applied ?? false,
+        ...(hit.meta?.reranker_failure_reason
+          ? { reranker_failure_reason: hit.meta.reranker_failure_reason }
+          : {}),
         intent: hit.meta?.intent,
         cache: {
           status: 'hit',
@@ -1751,6 +1788,11 @@ export async function hybridSearchCached(
     vector_enabled: innerMeta?.vector_enabled ?? false,
     detail_resolved: innerMeta?.detail_resolved ?? null,
     expansion_applied: innerMeta?.expansion_applied ?? false,
+    reranker_requested: innerMeta?.reranker_requested ?? false,
+    reranker_applied: innerMeta?.reranker_applied ?? false,
+    ...(innerMeta?.reranker_failure_reason
+      ? { reranker_failure_reason: innerMeta.reranker_failure_reason }
+      : {}),
     intent: innerMeta?.intent,
     cache: { status: cacheStatus },
     ...(innerMeta?.mode ? { mode: innerMeta.mode } : {}),

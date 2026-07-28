@@ -44,6 +44,13 @@ const advancedProviderModels: Record<AdvancedModelTier, string[]> = {
   subagent: [],
 };
 const advancedPhaseProviderModels: Record<AdvancedModelPhase, string[]> = {
+  synthesize: [],
+  synthesize_verdict: [],
+  patterns: [],
+  extract_atoms: [],
+  synthesize_concepts: [],
+  consolidate: [],
+  conversation_facts_backfill: [],
   propose_takes: [],
   grade_takes: [],
   calibration_profile: [],
@@ -179,11 +186,25 @@ const ADVANCED_TIER_LABELS: Record<AdvancedModelTier, string> = {
   subagent: '子代理任务',
 };
 const ADVANCED_PHASES = [
+  'synthesize',
+  'synthesize_verdict',
+  'patterns',
+  'extract_atoms',
+  'synthesize_concepts',
+  'consolidate',
+  'conversation_facts_backfill',
   'propose_takes',
   'grade_takes',
   'calibration_profile',
 ] as const satisfies readonly AdvancedModelPhase[];
 const ADVANCED_PHASE_LABELS: Record<AdvancedModelPhase, string> = {
+  synthesize: '知识页生成',
+  synthesize_verdict: '生成结果判定',
+  patterns: '模式发现',
+  extract_atoms: '知识原子抽取',
+  synthesize_concepts: '概念合成',
+  consolidate: '知识合并',
+  conversation_facts_backfill: '对话事实回填',
   propose_takes: '观点提炼',
   grade_takes: '观点评价',
   calibration_profile: '校准画像',
@@ -547,7 +568,7 @@ async function saveAdvancedModels(): Promise<void> {
     const provider = ($<HTMLSelectElement>(`#${prefix}-provider`)).value;
     const model = ($<HTMLInputElement>(`#${prefix}-model-name`)).value.trim();
     if ((provider && !model) || (!provider && model)) {
-      status.textContent = `${ADVANCED_PHASE_LABELS[phase]}需要同时选择供应商和填写模型名称，或点击“跟随推理任务”。`;
+      status.textContent = `${ADVANCED_PHASE_LABELS[phase]}需要同时选择供应商和填写模型名称，或点击“跟随任务层级”。`;
       return;
     }
     const next = composeModelId(provider, model);
@@ -622,13 +643,17 @@ function renderIntegrations(integrations: IntegrationInfo[]): void {
       badge.textContent = '已配置';
     }
     const title = document.createElement('h3'); title.textContent = item.name;
-    const path = document.createElement('p'); path.textContent = item.path ?? '通过 Claude CLI / GUI 接入';
+    const path = document.createElement('p');
+    path.textContent = item.path
+      ?? (item.id === 'claude' ? '通过 Claude CLI / GUI 接入' : '通过客户端 MCP 配置接入');
     const note = document.createElement('small');
     note.textContent = item.id === 'qwenpaw'
       ? item.connectionState === 'saved'
         ? '配置已写入；尚未连通，请让代理绕过 localhost/127.0.0.1 后重试'
         : '通过本机 API 写入 Bearer 并验证，不使用 OAuth'
-      : item.automatic ? '自动备份并合并现有配置' : '生成可复制的接入命令';
+      : item.automatic
+        ? '自动备份并合并现有配置'
+        : item.id === 'claude' ? '生成可复制的接入命令' : '生成可复制的接入配置';
     const button = document.createElement('button');
     button.className = 'solid';
     if (item.automatic) {
@@ -636,7 +661,7 @@ function renderIntegrations(integrations: IntegrationInfo[]): void {
         ? '重试连接'
         : item.configured ? '更新' : '创建并写入';
     } else {
-      button.textContent = '生成接入命令';
+      button.textContent = item.id === 'claude' ? '生成接入命令' : '生成接入配置';
     }
     button.addEventListener('click', () => void configure(item.id, button));
     article.append(badge, title, path, note, button);
@@ -1289,7 +1314,7 @@ document.querySelectorAll<HTMLButtonElement>('.advanced-phase-inherit').forEach(
   const input = $<HTMLInputElement>(`#${prefix}-model-name`);
   input.value = '';
   input.disabled = true;
-  $<HTMLElement>(`#${prefix}-model-status`).textContent = '已恢复跟随推理任务 / 普通模型。';
+  $<HTMLElement>(`#${prefix}-model-status`).textContent = '已恢复跟随任务层级 / 普通模型。';
 }));
 $('#save-advanced-models').addEventListener('click', () => void saveAdvancedModels());
 document.querySelectorAll<HTMLButtonElement>('.choose').forEach((button) => button.addEventListener('click', async () => {

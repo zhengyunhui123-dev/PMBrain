@@ -83,8 +83,7 @@ describe('SEARCH_MODES + MODE_BUNDLES canonical shape', () => {
   });
 
   test('balanced bundle values are canonical', () => {
-    // v0.36.0.0 (D6): reranker_enabled flipped from false → true. The 60%
-    // top-1 reshuffle reaches the 80% of installs that stay on `balanced`.
+    // Ordinary balanced search must not require a dedicated reranker key.
     expect(MODE_BUNDLES.balanced).toEqual({
       cache_enabled: true,
       cache_similarity_threshold: 0.92,
@@ -93,7 +92,7 @@ describe('SEARCH_MODES + MODE_BUNDLES canonical shape', () => {
       tokenBudget: 12000,
       expansion: false,
       searchLimit: 25,
-      reranker_enabled: true,
+      reranker_enabled: false,
       reranker_model: 'zeroentropyai:zerank-2',
       // v0.42.3.0 D4: topNIn = searchLimit (25), was 30.
       reranker_top_n_in: 25,
@@ -105,8 +104,8 @@ describe('SEARCH_MODES + MODE_BUNDLES canonical shape', () => {
       graph_signals: true,
       ...CR_DISABLED_DEFAULT,
       contextual_retrieval: 'title',
-      // v0.42.3.0 — autocut ON.
-      autocut: true,
+      // Autocut follows the reranker-off default.
+      autocut: false,
       relationalRetrieval: true,
       relational_retrieval_depth: 2,
       autocut_jump: 0.2,
@@ -566,9 +565,9 @@ describe('v0.42.3.0 — autocut knobs', () => {
     expect(KNOBS_HASH_VERSION).toBe(9);
   });
 
-  test('bundle defaults: conservative off, balanced/tokenmax on @0.20', () => {
+  test('bundle defaults: conservative/balanced off, tokenmax on @0.20', () => {
     expect(MODE_BUNDLES.conservative.autocut).toBe(false);
-    expect(MODE_BUNDLES.balanced.autocut).toBe(true);
+    expect(MODE_BUNDLES.balanced.autocut).toBe(false);
     expect(MODE_BUNDLES.tokenmax.autocut).toBe(true);
     for (const m of ['conservative', 'balanced', 'tokenmax'] as const) {
       expect(MODE_BUNDLES[m].autocut_jump).toBe(0.2);
@@ -607,8 +606,8 @@ describe('v0.42.3.0 — autocut knobs', () => {
   });
 
   test('knobsHash includes ac= / acj= — autocut-on vs off differ', () => {
-    const on = knobsHash(resolveSearchMode({ mode: 'balanced' })); // autocut true
-    const off = knobsHash(resolveSearchMode({ mode: 'balanced', perCall: { autocut: false } }));
+    const on = knobsHash(resolveSearchMode({ mode: 'balanced', perCall: { autocut: true } }));
+    const off = knobsHash(resolveSearchMode({ mode: 'balanced' })); // autocut false
     expect(on).not.toBe(off);
   });
 

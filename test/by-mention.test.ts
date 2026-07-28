@@ -57,7 +57,7 @@ beforeEach(async () => {
 
 // Tiny gazetteer builder for pure-fn cases that don't need engine.
 function gazetteerFromEntries(entries: Omit<GazetteerEntry, 'tokens'>[]): Gazetteer {
-  const TOKEN_RE = /[a-zA-Z0-9]+/g;
+  const TOKEN_RE = /[a-zA-Z0-9]+|[\u3400-\u4dbf\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af]/gu;
   const tokenize = (s: string): string[] => {
     TOKEN_RE.lastIndex = 0;
     const out: string[] = [];
@@ -257,6 +257,31 @@ describe('findMentionedEntities — pure cases', () => {
     expect(mentions).toHaveLength(1); // first-mention-only cap
     expect(mentions[0]!.slug).toBe('companies/acme');
   });
+
+  test('CJK entity name is matched through the normal maximal-munch path', () => {
+    const g = gazetteerFromEntries([
+      { slug: 'people/naval', source_id: 'default', title: '纳瓦尔' },
+    ]);
+    const mentions = findMentionedEntities('我最近读了纳瓦尔的书。', g, {
+      fromSlug: 'writing/reading-notes', fromSourceId: 'default',
+    });
+    expect(mentions).toHaveLength(1);
+    expect(mentions[0]).toMatchObject({
+      slug: 'people/naval',
+      name: '纳瓦尔',
+      offset: 5,
+    });
+  });
+
+  test('mixed ASCII and CJK entity title preserves token order', () => {
+    const g = gazetteerFromEntries([
+      { slug: 'projects/pmbrain-project', source_id: 'default', title: 'PMBrain 项目' },
+    ]);
+    const mentions = findMentionedEntities('继续优化 PMBrain 项目的检索。', g, {
+      fromSlug: 'writing/status', fromSourceId: 'default',
+    });
+    expect(mentions.map(mention => mention.slug)).toEqual(['projects/pmbrain-project']);
+  });
 });
 
 // ============================================================
@@ -359,6 +384,25 @@ describe('buildGazetteer — engine integration', () => {
     // But title "John" IS the entity title — existingTitles.has('John') is true.
     // Per CK12 rule, gazetteer presence wins → John IS still in.
     expect(g2.has('john')).toBe(true);
+  });
+
+  test('CJK entity titles with at least two CJK characters enter gazetteer', async () => {
+    await engine.putPage('people/naval', {
+      type: 'person', title: '纳瓦尔', compiled_truth: 'b', timeline: '', frontmatter: {},
+    });
+    const g = await buildGazetteer(engine);
+    expect(g.get('纳')?.[0]).toMatchObject({
+      slug: 'people/naval',
+      tokens: ['纳', '瓦', '尔'],
+    });
+  });
+
+  test('single-character CJK title stays excluded to limit false positives', async () => {
+    await engine.putPage('entities/ma', {
+      type: 'entity', title: '马', compiled_truth: 'b', timeline: '', frontmatter: {},
+    });
+    const g = await buildGazetteer(engine);
+    expect(g.has('马')).toBe(false);
   });
 
   test('LINKABLE_ENTITY_TYPES exposes the hardcoded contract', () => {

@@ -183,15 +183,25 @@ describe('addLink rewrites the cross-product into a source-qualified JOIN', () =
     // Add an edge under testsrc only.
     await engine.addLink(
       FROM_SLUG, TO_SLUG, 'testsrc edge', 'documents', 'markdown', undefined, undefined,
-      { fromSourceId: 'testsrc', toSourceId: 'testsrc', originSourceId: 'testsrc' },
+      {
+        fromSourceId: 'testsrc',
+        toSourceId: 'testsrc',
+        originSourceId: 'testsrc',
+        resolutionType: 'qualified',
+      },
     );
 
     // Verify the link's endpoints both point at the testsrc rows, not the
     // default rows. Pre-fix, the cross-product `FROM pages f, pages t` would
     // pick whichever order Postgres returned; the source filter eliminates
     // that fan-out.
-    const rows = await engine.executeRaw<{ from_src: string; to_src: string; context: string }>(
-      `SELECT f.source_id AS from_src, t.source_id AS to_src, l.context
+    const rows = await engine.executeRaw<{
+      from_src: string;
+      to_src: string;
+      context: string;
+      resolution_type: string;
+    }>(
+      `SELECT f.source_id AS from_src, t.source_id AS to_src, l.context, l.resolution_type
          FROM links l
          JOIN pages f ON f.id = l.from_page_id
          JOIN pages t ON t.id = l.to_page_id
@@ -200,6 +210,7 @@ describe('addLink rewrites the cross-product into a source-qualified JOIN', () =
     expect(rows.length).toBe(1);
     expect(rows[0].from_src).toBe('testsrc');
     expect(rows[0].to_src).toBe('testsrc');
+    expect(rows[0].resolution_type).toBe('qualified');
   });
 
   test('addLink with no opts defaults to source=default (back-compat)', async () => {

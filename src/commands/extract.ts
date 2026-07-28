@@ -34,7 +34,7 @@ import type { BrainEngine, LinkBatchInput, TimelineBatchInput } from '../core/en
 import type { PageType } from '../core/types.ts';
 import { parseMarkdown } from '../core/markdown.ts';
 import {
-  extractPageLinks, parseTimelineEntries, inferLinkType, makeResolver,
+  extractPageLinks, parseTimelineEntries, deriveTimelineAnchor, inferLinkType, makeResolver,
   extractFrontmatterLinks,
   type UnresolvedFrontmatterRef,
 } from '../core/link-extraction.ts';
@@ -501,6 +501,9 @@ export async function runExtract(engine: BrainEngine, args: string[]) {
   // v0.41.18.0 (A11, T8): --from-meetings extracts timeline entries from
   // meeting pages onto each discussed entity. Timeline subcommand only.
   const fromMeetings = args.includes('--from-meetings');
+  // For DB pages with no explicit timeline line, optionally derive one anchor
+  // from a trustworthy frontmatter/filename effective date. Never updated_at.
+  const inferDates = args.includes('--infer-dates');
   // v0.41.17.0 (T7, D9): --workers N parsed via the shared validator.
   // Honored on the fs-walk inner loops only; DB-source paths stay
   // serial in v0.41.17.0 (see ExtractOpts.workers doc).
@@ -696,7 +699,7 @@ Status (v0.42):
           result.pages_processed = r.pages;
         }
         if (subcommand === 'timeline' || subcommand === 'all') {
-          const r = await extractTimelineFromDB(engine, dryRun, jsonMode, typeFilter, since, { sourceIdFilter });
+          const r = await extractTimelineFromDB(engine, dryRun, jsonMode, typeFilter, since, { sourceIdFilter, inferDates });
           result.timeline_entries_created = r.created;
           result.pages_processed = Math.max(result.pages_processed, r.pages);
         }
@@ -1066,11 +1069,15 @@ export async function extractLinksFromDB(
   // N-thousand API call trap on 46K-page brains. Resolver has a per-run
   // cache so duplicate names (same person appearing on many pages) resolve
   // once, not once per mention.
-  const resolver = makeResolver(engine, { mode: 'batch' });
-  const unresolved: UnresolvedFrontmatterRef[] = [];
-  const nullResolver = {
-    resolve: async () => null as string | null,
+  const resolvers = new Map<string, ReturnType<typeof makeResolver>>();
+  const resolverForSource = (sourceId: string) => {
+    const cached = resolvers.get(sourceId);
+    if (cached) return cached;
+    const resolver = makeResolver(engine, { mode: 'batch', sourceId });
+    resolvers.set(sourceId, resolver);
+    return resolver;
   };
+  const unresolved: UnresolvedFrontmatterRef[] = [];
   // v0.32.8: listAllPageRefs enumerates (slug, source_id) so we can thread
   // sourceId to getPage AND build a cross-source resolution map for link
   // disambiguation. Pre-fix used getAllSlugs() which collapsed
@@ -1143,7 +1150,14 @@ export async function extractLinksFromDB(
     // --include-frontmatter default OFF in v0.13 (codex tension 5, back-compat).
     // Migration orchestrator explicitly enables it for the one-time backfill;
     // user-invoked `gbrain extract links` stays outgoing-only.
-    const activeResolver = includeFrontmatter ? resolver : nullResolver;
+    const sourceResolver = resolverForSource(source_id);
+    const activeResolver = includeFrontmatter
+      ? sourceResolver
+      : {
+          resolve: async () => null as string | null,
+          resolveExact: sourceResolver.resolveExact,
+          slugExists: sourceResolver.slugExists,
+        };
     const extracted = await extractPageLinks(
       slug, fullContent, page.frontmatter, page.type, activeResolver,
     );
@@ -1163,11 +1177,18 @@ export async function extractLinksFromDB(
       // to_source_id = priority: origin's source > 'default' > skip (don't
       // silently push a wrong-source edge).
       const fromSources = slugToSources.get(fromSlug) ?? [];
-      const fromSourceId = fromSources.includes(source_id) ? source_id
-        : (fromSources.includes('default') ? 'default' : fromSources[0]);
+      const fromSourceId = c.fromSourceId
+        ?? (fromSources.includes(source_id)
+          ? source_id
+          : (fromSources.includes('default') ? 'default' : ''));
+      if (!fromSourceId) continue;
       const targetSources = slugToSources.get(c.targetSlug) ?? [];
       let toSourceId: string;
-      if (targetSources.includes(fromSourceId)) {
+      if (c.targetSourceId && targetSources.includes(c.targetSourceId)) {
+        toSourceId = c.targetSourceId;
+      } else if (targetSources.includes(source_id)) {
+        toSourceId = source_id;
+      } else if (targetSources.includes(fromSourceId)) {
         toSourceId = fromSourceId;
       } else if (targetSources.includes('default')) {
         toSourceId = 'default';
@@ -1209,6 +1230,7 @@ export async function extractLinksFromDB(
           from_source_id: fromSourceId,
           to_source_id: toSourceId,
           origin_source_id: source_id,
+          resolution_type: c.resolutionType,
         });
         if (batch.length >= BATCH_SIZE) await flush();
       }
@@ -1246,7 +1268,7 @@ export async function extractTimelineFromDB(
   jsonMode: boolean,
   typeFilter: PageType | undefined,
   since: string | undefined,
-  opts?: { sourceIdFilter?: string },
+  opts?: { sourceIdFilter?: string; inferDates?: boolean },
 ): Promise<{ created: number; pages: number }> {
   // v0.32.8: listAllPageRefs enumerates (slug, source_id) pairs so we can
   // thread sourceId to getPage and addTimelineEntriesBatch. Pre-fix used
@@ -1255,6 +1277,7 @@ export async function extractTimelineFromDB(
   // v0.37.7.0 #1204: when sourceIdFilter is set, scope the walk to one
   // source so federated brain users can extract per-source.
   const sourceIdFilter = opts?.sourceIdFilter;
+  const inferDates = opts?.inferDates ?? false;
   const allRefs = sourceIdFilter
     ? (await engine.listAllPageRefs()).filter(r => r.source_id === sourceIdFilter)
     : await engine.listAllPageRefs();
@@ -1294,7 +1317,16 @@ export async function extractTimelineFromDB(
     }
 
     const fullContent = page.compiled_truth + '\n' + page.timeline;
-    const entries = parseTimelineEntries(fullContent);
+    let entries = parseTimelineEntries(fullContent);
+    if (entries.length === 0 && inferDates) {
+      const anchor = deriveTimelineAnchor({
+        slug,
+        title: page.title,
+        effectiveDate: page.effective_date,
+        effectiveDateSource: page.effective_date_source,
+      });
+      if (anchor) entries = [anchor];
+    }
 
     for (const entry of entries) {
       if (dryRunSeen) {

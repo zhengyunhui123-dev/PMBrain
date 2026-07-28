@@ -7,7 +7,10 @@ import {
   refKey,
   parseQrelsFile,
   computeRecallAtK,
+  computePrecisionAtK,
+  computeNdcgAtK,
   computeFirstRelevantHit,
+  computeReciprocalRank,
   computeExpectedTop1Hit,
 } from '../../src/core/bench/qrels-file.ts';
 
@@ -55,6 +58,25 @@ describe('qrels-file: parser', () => {
     // Multi-source: same slug, different source_id, both treated as distinct.
     expect(refKey(parsed.queries[0]!.relevant[0]!)).toBe('host::people/alice');
     expect(refKey(parsed.queries[0]!.relevant[1]!)).toBe('team-a::people/alice');
+  });
+
+  test('preserves structured expected-answer review fields', () => {
+    const parsed = parseQrelsFile(JSON.stringify({
+      schema_version: 1,
+      queries: [{
+        query_id: 'q1',
+        query: 'what changed',
+        relevant: [{ source_id: 'host', slug: 'updates/latest' }],
+        expected_answer: 'The latest update enabled source-scoped retrieval.',
+        answer_criteria: ['mentions source scope', 'cites updates/latest'],
+        category: 'recent-update',
+        difficulty: 'medium',
+      }],
+    }));
+    expect(parsed.queries[0]!.expected_answer).toContain('source-scoped');
+    expect(parsed.queries[0]!.answer_criteria).toHaveLength(2);
+    expect(parsed.queries[0]!.category).toBe('recent-update');
+    expect(parsed.queries[0]!.difficulty).toBe('medium');
   });
 
   test('rejects bare JSON array (must be object with schema_version)', () => {
@@ -105,6 +127,12 @@ describe('qrels-file: math', () => {
     expect(computeRecallAtK(['a'], [], 10)).toBe(0);
   });
 
+  test('computePrecisionAtK and computeNdcgAtK report ordering quality', () => {
+    expect(computePrecisionAtK(['x', 'a', 'b'], ['a', 'b'], 3)).toBeCloseTo(2 / 3);
+    expect(computeNdcgAtK(['a', 'b', 'x'], ['a', 'b'], 3)).toBe(1);
+    expect(computeNdcgAtK(['x', 'a', 'b'], ['a', 'b'], 3)).toBeLessThan(1);
+  });
+
   test('computeFirstRelevantHit retrieved[0] in relevant', () => {
     expect(computeFirstRelevantHit(['a', 'b'], ['a', 'c'])).toBe(1);
   });
@@ -115,6 +143,24 @@ describe('qrels-file: math', () => {
 
   test('computeFirstRelevantHit empty retrieved = 0', () => {
     expect(computeFirstRelevantHit([], ['a'])).toBe(0);
+  });
+
+  test('parses an optional per-query source scope', () => {
+    const parsed = parseQrelsFile(JSON.stringify({
+      schema_version: 1,
+      queries: [{
+        query_id: 'q1',
+        query: 'shared entity',
+        source_id: 'project-a',
+        relevant: [{ source_id: 'project-a', slug: 'people/alice' }],
+      }],
+    }));
+    expect(parsed.queries[0]!.source_id).toBe('project-a');
+  });
+
+  test('computeReciprocalRank uses the first relevant result', () => {
+    expect(computeReciprocalRank(['x', 'b', 'a'], ['a', 'b'])).toBe(0.5);
+    expect(computeReciprocalRank(['x'], ['a'])).toBe(0);
   });
 
   test('computeExpectedTop1Hit exact match = 1', () => {

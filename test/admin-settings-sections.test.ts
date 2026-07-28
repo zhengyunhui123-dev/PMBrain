@@ -8,13 +8,12 @@ const styles = readFileSync(join(process.cwd(), 'admin/src/index.css'), 'utf8');
 const desktopRenderer = readFileSync(join(process.cwd(), 'desktop/src/renderer/src.ts'), 'utf8');
 
 describe('Admin settings information architecture', () => {
-  test('Admin settings are split into five service-focused sections', () => {
+  test('Admin settings are split into four useful service-focused sections', () => {
     for (const label of [
       '常规设置',
       '知识库设置',
       '知识整理设置',
       '导入与向量化',
-      '模型配置',
     ]) {
       expect(consoleSource).toContain(`label: '${label}'`);
     }
@@ -24,12 +23,13 @@ describe('Admin settings information architecture', () => {
     expect(appSource).toContain("'settings-knowledge'");
     expect(appSource).toContain("'settings-dream'");
     expect(appSource).toContain("'settings-import'");
-    expect(appSource).toContain("'settings-models'");
+    expect(appSource).not.toContain("'settings-models'");
+    expect(consoleSource).not.toContain("label: '模型配置'");
     expect(consoleSource).not.toContain('className="settings-menu"');
     expect(consoleSource).toContain("section === 'knowledge'");
     expect(consoleSource).toContain("section === 'dream'");
     expect(consoleSource).toContain("section === 'import'");
-    expect(consoleSource).toContain("section === 'models'");
+    expect(consoleSource).not.toContain("section === 'models'");
     expect(consoleSource).not.toContain("section === 'system'");
     expect(consoleSource).not.toContain('<h2>系统与更新</h2>');
   });
@@ -55,5 +55,8 @@ describe('Admin settings information architecture', () => {
     expect(styles).toContain('.nav-subitem');
     expect(styles).toContain('.settings-content-standalone');
     expect(styles).not.toContain('.settings-menu');
+    expect(styles).toContain('.sidebar::-webkit-scrollbar');
+    expect(styles).toContain('scrollbar-width: none');
+    expect(styles).toContain('flex-wrap: nowrap');
   });
 });

@@ -1,8 +1,8 @@
 /**
- * v0.36.0.0 (D6 + C2) — balanced mode bundle now defaults reranker_enabled=true.
+ * Balanced mode keeps dedicated rerankers optional.
  *
  * Pins:
- *  - MODE_BUNDLES.balanced.reranker_enabled === true (the flip)
+ *  - MODE_BUNDLES.balanced.reranker_enabled === false (ordinary-model path)
  *  - applyReranker honors the flag (calls injected rerankerFn)
  *  - Fail-open contract: missing key / network error returns input unchanged
  *  - rerankerFn is called with input_type-equivalent shape for the query path
@@ -15,8 +15,8 @@ import type { SearchResult } from '../src/core/types.ts';
 import { RerankError } from '../src/core/ai/gateway.ts';
 
 describe('Mode bundle defaults (D6)', () => {
-  test('balanced.reranker_enabled is true (the v0.36.0.0 flip)', () => {
-    expect(MODE_BUNDLES.balanced.reranker_enabled).toBe(true);
+  test('balanced.reranker_enabled is false (no hidden provider dependency)', () => {
+    expect(MODE_BUNDLES.balanced.reranker_enabled).toBe(false);
   });
 
   test('balanced reranker model is zeroentropyai:zerank-2', () => {
