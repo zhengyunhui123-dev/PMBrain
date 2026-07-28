@@ -129,10 +129,12 @@ describe('computeAllSourceMetrics', () => {
 
   test('aggregates pages + chunks + embedding coverage per source', async () => {
     // Two pages with chunks, half embedded
+    const embeddingDimensions = Number(await engine.getConfig('embedding_dimensions'));
+    expect(embeddingDimensions).toBeGreaterThan(0);
     await engine.putPage('a', { type: 'note', title: 'a', compiled_truth: 'a' });
     await engine.putPage('b', { type: 'note', title: 'b', compiled_truth: 'b' });
     await engine.upsertChunks('a', [
-      { chunk_index: 0, chunk_text: 'one', chunk_source: 'compiled_truth', token_count: 1, embedding: new Float32Array(1536) },
+      { chunk_index: 0, chunk_text: 'one', chunk_source: 'compiled_truth', token_count: 1, embedding: new Float32Array(embeddingDimensions) },
       { chunk_index: 1, chunk_text: 'two', chunk_source: 'compiled_truth', token_count: 1, embedding: undefined },
     ]);
     await engine.upsertChunks('b', [
