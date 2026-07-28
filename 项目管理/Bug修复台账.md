@@ -35,15 +35,23 @@
 - 描述：桌面端原先把 Ollama 已安装模型与内置常用目录合并，且未区分 completion/embedding 能力，导致普通模型与向量模型互相混入、未安装模型也出现在下拉中；MCP 接入缺少 Hermes、OpenClaw。Admin 概览在指定 PC 窗口宽度下会把版本号挤到第二行，侧栏显示系统滚动条，设置仍保留无实际操作价值的模型快照二级菜单；Agent 来源范围又把 `default` 主源别名和真实主源同时渲染，造成写入源、读取源出现两个同名项。
 - 是否完成：是
 - 最终结果：Ollama 下拉只显示本机 `/api/tags` 已安装且 `/api/show` 明确声明对应能力的模型，本机实测普通模型仅显示 `qwen3.6:latest`、向量模型仅显示 `qwen3-embedding:0.6b`；离线或能力无法确认时不再展示不可用候选。桌面 MCP 栅格增加 Hermes 与 OpenClaw 的手动配置入口，不擅自写入第三方配置文件。Admin 版本状态保持在首行并对长模型名省略显示，侧栏仍可滚动但隐藏滚动条，设置移除模型配置二级页，MCP 读写来源将 `default` 归一为真实主源后去重。Desktop 141 项完整测试、Admin 15 项定向测试、两端 TypeScript 检查、Admin 生产构建、内嵌资源同步、Sidecar 打包前资源构建和 Windows 运行时校验通过；Bash 版内嵌资源检查因本机没有 `/bin/bash` 无法执行，已用生成前后 SHA-256 等价核验确认同步。未修改 CLI、核心数据逻辑、知识库或原始资料；Windows 安装包仍由用户执行 `bun run build:win`。
+## 2026-07-28 修复向量配置权威源、环境覆盖与诊断盲区
+
+- 时间：2026-07-28
+- 版本号：PMBrain 1.1.71；PMBrain Desktop 1.0.87
+- 标题：统一升级规划与实际向量化配置，阻止环境变量静默漂移
+- 描述：向量升级规划错误地从数据库配置表读取模型并回退到已过期的 OpenAI 默认值，而实际运行以 `config.json` 为权威源；升级应用、恢复与撤销也仍写旧数据库配置面，可能造成迁移结果与运行时模型分裂。普通 `embed`、导入、同步和 MCP 写入继续接受 `PMBRAIN_*` / `GBRAIN_*` 向量环境变量，却不会在其与持久化配置冲突时停止；Doctor 又只检查旧 `GBRAIN_*` 名称和数据库值，存在监控盲区。
+- 是否完成：是
+- 最终结果：规划、成本估算、应用、恢复和撤销统一优先读写 `config.json`，当前默认模型与维度统一为 `zeroentropyai:zembed-1 / 1280`，文件写入成功后清理旧数据库重复项；无配置文件的老用户及 headless/SDK 场景继续兼容旧数据库或纯环境变量配置。所有主要写时向量入口在发现环境变量与权威文件不一致时，于凭证调用和数据写入前明确停止；Doctor 同时识别 `PMBRAIN_*` 与 `GBRAIN_*`，并按文件、旧数据库、默认值的顺序报告来源。相邻审查还修复升级提示、成本建议、Autopilot 与修复建议中的过期默认值或错误回退。未修改向量 schema、已有向量、知识页面、知识库文件或原始资料；核心定向测试 108 项、环境与升级串行回归 64 项、MCP 写入与信任边界 73 项、Autopilot/修复上下文 56 项、同步 63 项、Desktop 完整测试 139 项、847 文件测试隔离门禁、根项目/Admin/Desktop 类型检查、Admin 生产构建、Desktop 普通构建和 Sidecar 资源生成均通过。导入回归 28 项通过，另 1 项仅因 Windows 当前进程无符号链接创建权限在测试准备阶段报 `EPERM`，与本次业务改动无关；聚合验证 26/29 通过，剩余为 Windows 隐私扫描 300 秒超时和既有 WASM 符号检查失败。Windows 安装包仍由用户执行 `bun run build:win`。
 
 ## 2026-07-26 修复 GitHub Actions CI 失败（verify / test / serial / desktop-runtime）
 
 - 时间：2026-07-26
-- 版本号：PMBrain 1.1.68；PMBrain Desktop 1.0.87
+- 版本号：PMBrain 1.1.69；PMBrain Desktop 1.0.87
 - 标题：修复 Actions 上 Test 工作流多项失败直至绿灯
-- 描述：第一轮：`verify`（test-isolation / eval-glossary / operations allowlist）、`findTrajectory` 1280 维、hybrid 融合前 type-diversity 双重截断、桌面 HOME 发现与 Windows 路径 basename。第二轮：内容安全默认 quarantine 与 hard-block 测试对齐、`buildVisibilityClause` 含 quarantine 过滤、MCP search mock 补 `getConfig`（keyword-only）、同步 `llms.txt`。
-- 是否完成：进行中
-- 最终结果：待 PR #19 Actions 全绿后更新。
+- 描述：verify（test-isolation / eval-glossary / operations allowlist）、findTrajectory 1280 维、hybrid 融合前 type-diversity 双重截断、桌面 HOME/basename、内容安全 hard-block 测试、quarantine visibility、MCP search mock、llms 同步、PHASE_SCOPE 22、drift judge stub、verify-package skill 路径、sql.begin(tx) 形式。
+- 是否完成：是
+- 最终结果：PR #19 的 Test / E2E / Heavy Tests 全绿；已合并进 master。
 
 
 ## 2026-07-26 修复 Dream 无感清空旧向量与桌面模型路由未生效
