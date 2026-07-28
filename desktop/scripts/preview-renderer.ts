@@ -103,6 +103,8 @@ window.pmbrainDesktop = {
       { id: 'claude', name: 'Claude', path: null, configured: false, automatic: false },
       { id: 'codex', name: 'Codex', path: 'C:\\\\Users\\\\zhengyunhui\\\\.codex\\\\config.toml', configured: false, automatic: true },
       { id: 'qwenpaw', name: 'QwenPaw', path: 'C:\\\\Users\\\\zhengyunhui\\\\.qwenpaw\\\\workspaces\\\\default\\\\drivers\\\\mcp\\\\pmbrain.yaml', configured: true, automatic: true, connectionState: 'connected' },
+      { id: 'hermes', name: 'Hermes', path: null, configured: false, automatic: false },
+      { id: 'openclaw', name: 'OpenClaw', path: null, configured: false, automatic: false },
     ],
     port: 3132
   }),
@@ -267,17 +269,23 @@ const mockIntegrations: MockIntegration[] = [
   { id: 'claude', name: 'Claude', path: null, configured: false, automatic: false },
   { id: 'codex', name: 'Codex', path: 'C:\\Users\\zhengyunhui\\.codex\\config.toml', configured: false, automatic: true },
   { id: 'qwenpaw', name: 'QwenPaw', path: 'C:\\Users\\zhengyunhui\\.qwenpaw\\workspaces\\default\\drivers\\mcp\\pmbrain.yaml', configured: true, automatic: true, connectionState: 'connected' },
+  { id: 'hermes', name: 'Hermes', path: null, configured: false, automatic: false },
+  { id: 'openclaw', name: 'OpenClaw', path: null, configured: false, automatic: false },
 ];
 const cardsHtml = mockIntegrations.map((item) => {
   const badgeClass = item.configured ? 'configured badge' : 'badge';
   const badgeText = item.id === 'qwenpaw' && item.connectionState === 'connected'
     ? '已连接'
     : item.configured ? '已配置' : '未配置';
-  const pathText = item.path ?? '通过 Claude CLI / GUI 接入';
+  const pathText = item.path ?? (item.id === 'claude' ? '通过 Claude CLI / GUI 接入' : '通过客户端 MCP 配置接入');
   const noteText = item.id === 'qwenpaw'
     ? '通过本机 API 写入 Bearer 并验证，不使用 OAuth'
-    : item.automatic ? '自动备份并合并现有配置' : '生成可复制的接入命令';
-  const btnText = item.automatic ? item.configured ? '更新' : '创建并写入' : '生成接入命令';
+    : item.automatic
+      ? '自动备份并合并现有配置'
+      : item.id === 'claude' ? '生成可复制的接入命令' : '生成可复制的接入配置';
+  const btnText = item.automatic
+    ? item.configured ? '更新' : '创建并写入'
+    : item.id === 'claude' ? '生成接入命令' : '生成接入配置';
   return `<article class="integration-card"><span class="${badgeClass}">${badgeText}</span><h3>${item.name}</h3><p>${pathText}</p><small>${noteText}</small><button class="solid">${btnText}</button></article>`;
 }).join('\n          ');
 html = html.replace(

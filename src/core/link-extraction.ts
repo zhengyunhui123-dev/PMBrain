@@ -12,7 +12,7 @@
  */
 
 import type { BrainEngine } from './engine.ts';
-import type { PageType } from './types.ts';
+import type { EffectiveDateSource, PageType } from './types.ts';
 
 // ─── Entity references ──────────────────────────────────────────
 
@@ -31,6 +31,11 @@ export interface EntityRef {
    *   - sourceId null  → 'unqualified'
    */
   sourceId?: string | null;
+  /**
+   * The wikilink used a path outside the historical directory whitelist.
+   * The literal path must exist exactly before an edge is emitted.
+   */
+  exactPath?: boolean;
 }
 
 /** v0.17.0: how a link's target source was pinned at extraction time. */
@@ -74,6 +79,15 @@ const WIKILINK_RE = new RegExp(
 );
 
 /**
+ * Path-shaped wikilinks outside DIR_PATTERN. Unlike basename resolution,
+ * exact-path matching is safe to enable by default: the resolver verifies
+ * the literal slug exists before an edge is emitted. This intentionally
+ * accepts Unicode and spaces because imported Chinese knowledge bases keep
+ * their original directory and page names in slugs.
+ */
+const WIKILINK_ANY_PATH_RE = /\[\[([^|\]#\r\n]+\/[^|\]#\r\n]+?)(?:#[^|\]]*?)?(?:\|([^\]]+?))?\]\]/g;
+
+/**
  * v0.17.0: qualified wikilink `[[source-id:dir/slug]]` or
  * `[[source-id:dir/slug|Display Text]]`. The source-id segment pins the
  * target to a specific sources(id) row, overriding the local-first
@@ -85,10 +99,8 @@ const WIKILINK_RE = new RegExp(
  * the unqualified regex (the source prefix would not satisfy DIR_PATTERN
  * anyway, but the two-pass approach keeps intent crystal-clear).
  */
-const QUALIFIED_WIKILINK_RE = new RegExp(
-  `\\[\\[([a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?):(${DIR_PATTERN}\\/[^|\\]#]+?)(?:#[^|\\]]*?)?(?:\\|([^\\]]+?))?\\]\\]`,
-  'g',
-);
+const QUALIFIED_WIKILINK_RE =
+  /\[\[([a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?):([^|\]#\r\n]+\/[^|\]#\r\n]+?)(?:#[^|\]]*?)?(?:\|([^\]]+?))?\]\]/g;
 
 /**
  * Strip fenced code blocks (```...```) and inline code (`...`) from markdown,
@@ -264,6 +276,7 @@ export function extractEntityRefs(content: string): EntityRef[] {
   // 2b. Unqualified Obsidian wikilinks: [[path]] or [[path|Display Text]]
   //     Same shape rule: omit sourceId when unqualified.
   const unmasked = maskRanges(stripped, qualifiedRanges);
+  const unqualifiedRanges: Array<[number, number]> = [];
   const wikiPattern = new RegExp(WIKILINK_RE.source, WIKILINK_RE.flags);
   while ((match = wikiPattern.exec(unmasked)) !== null) {
     let slug = match[1].trim();
@@ -273,6 +286,20 @@ export function extractEntityRefs(content: string): EntityRef[] {
     const displayName = (match[2] || slug).trim();
     const dir = slug.split('/')[0];
     refs.push({ name: displayName, slug, dir });
+    unqualifiedRanges.push([match.index, match.index + match[0].length]);
+  }
+
+  // 2c. Path-shaped wikilinks with any directory prefix. Whitelisted
+  // matches are masked above so they retain their established behavior.
+  const anyPathMasked = maskRanges(stripped, [...qualifiedRanges, ...unqualifiedRanges]);
+  const anyPathPattern = new RegExp(WIKILINK_ANY_PATH_RE.source, WIKILINK_ANY_PATH_RE.flags);
+  while ((match = anyPathPattern.exec(anyPathMasked)) !== null) {
+    let slug = match[1].trim();
+    if (!slug || slug.includes('://') || slug.includes(':')) continue;
+    if (slug.endsWith('.md')) slug = slug.slice(0, -3);
+    const displayName = (match[2] || slug).trim();
+    const dir = slug.split('/')[0];
+    refs.push({ name: displayName, slug, dir, exactPath: true });
   }
 
   return refs;
@@ -304,8 +331,12 @@ export interface LinkCandidate {
    * fromSlug is `people/pedro-franceschi`, not the company.
    */
   fromSlug?: string;
+  /** Source containing fromSlug. Omitted means the current page source. */
+  fromSourceId?: string;
   /** Target page slug (no .md, no ../). */
   targetSlug: string;
+  /** Source containing targetSlug. Omitted means the current page source. */
+  targetSourceId?: string;
   /** Inferred relationship type. */
   linkType: string;
   /** Surrounding text (up to ~80 chars) used for inference + storage. */
@@ -322,8 +353,12 @@ export interface LinkCandidate {
    * created (never touching edges other pages authored).
    */
   originSlug?: string;
+  /** Source containing originSlug. Omitted means the current page source. */
+  originSourceId?: string;
   /** Frontmatter field name (e.g. 'key_people'), for debug + unresolved report. */
   originField?: string;
+  /** Whether the target source came from an explicit qualifier or local/default resolution. */
+  resolutionType?: LinkResolutionType;
 }
 
 /**
@@ -363,9 +398,29 @@ export async function extractPageLinks(
   resolver: SlugResolver,
 ): Promise<PageLinksResult> {
   const candidates: LinkCandidate[] = [];
+  const wikilinkUnresolved: UnresolvedFrontmatterRef[] = [];
+  const wikilinkUnresolvedSeen = new Set<string>();
 
   // 1. Markdown entity refs.
   for (const ref of extractEntityRefs(content)) {
+    const resolvedExact = typeof resolver.resolveExact === 'function'
+      ? await resolver.resolveExact(ref.slug, ref.sourceId ?? undefined)
+      : null;
+    const exactVerified = typeof resolver.resolveExact === 'function'
+      ? resolvedExact !== null
+      : typeof resolver.slugExists === 'function'
+        ? await resolver.slugExists(ref.slug, ref.sourceId ?? undefined)
+        : true;
+    if (
+      (ref.exactPath || ref.sourceId)
+      && !exactVerified
+    ) {
+      if (!wikilinkUnresolvedSeen.has(ref.slug)) {
+        wikilinkUnresolvedSeen.add(ref.slug);
+        wikilinkUnresolved.push({ field: 'wikilink', name: ref.slug });
+      }
+      continue;
+    }
     const idx = content.indexOf(ref.name);
     // Wider context window (240 chars vs original 80) catches verbs that
     // appear at sentence-or-paragraph distance from the slug — common in
@@ -373,7 +428,9 @@ export async function extractPageLinks(
     // then portfolio companies are listed in subsequent sentences.
     const context = idx >= 0 ? excerpt(content, idx, 240) : ref.name;
     candidates.push({
-      targetSlug: ref.slug,
+      targetSlug: resolvedExact?.slug ?? ref.slug,
+      ...(resolvedExact?.sourceId ? { targetSourceId: resolvedExact.sourceId } : {}),
+      resolutionType: ref.sourceId ? 'qualified' : 'unqualified',
       linkType: inferLinkType(pageType, context, content, ref.slug),
       context,
       linkSource: 'markdown',
@@ -412,12 +469,12 @@ export async function extractPageLinks(
   const seen = new Set<string>();
   const result: LinkCandidate[] = [];
   for (const c of candidates) {
-    const key = `${c.fromSlug ?? ''}\u0000${c.targetSlug}\u0000${c.linkType}\u0000${c.linkSource ?? ''}`;
+    const key = `${c.fromSourceId ?? ''}\u0000${c.fromSlug ?? ''}\u0000${c.targetSourceId ?? ''}\u0000${c.targetSlug}\u0000${c.linkType}\u0000${c.linkSource ?? ''}`;
     if (seen.has(key)) continue;
     seen.add(key);
     result.push(c);
   }
-  return { candidates: result, unresolved: fm.unresolved };
+  return { candidates: result, unresolved: [...wikilinkUnresolved, ...fm.unresolved] };
 }
 
 /** Excerpt a window of `width` chars around `idx`, collapsed to one line. */
@@ -487,6 +544,14 @@ const FOUNDED_RE = /\b(?:founded|co-?founded|started the company|incorporated|fo
 //     "security advisor to|at", "product advisor to|at", "industry advisor".
 const ADVISES_RE = /\b(?:advises|advised|advisor (?:to|at|for|of)|advisory (?:board|role|position|capacity|engagement|partnership|contract|relationship|work)|board advisor|on .{0,20} advisory board|joined .{0,20} advisory board|in an? advisory (?:capacity|role|position)|as an? (?:advisor|security advisor|technical advisor|strategic advisor|industry advisor|product advisor|board advisor|senior advisor)|(?:strategic|technical|security|product|industry|senior|board) advisor (?:to|at|for|of)|consults for|consulting role (?:at|with))\b/i;
 
+// Chinese relationship verbs. Entity-name matching supports CJK scripts in
+// by-mention.ts; relationship typing here is intentionally scoped to Chinese.
+const ZH_FOUNDED_RE = /(?:创立|创办|成立|创建|建立|开创|发起)(?:了|的)/;
+const ZH_INVESTED_RE = /(?:投资|入股|融资|注资|参股)(?:了|的|了?于)/;
+const ZH_ADVISES_RE = /(?:顾问|咨询|指导)(?:了|的)?/;
+const ZH_WORKS_AT_RE = /(?:任职|就职|担任|供职|在.{0,10}(?:工作|上班|负责))(?:于|在|的)?/;
+const ZH_CITED_RE = /(?:引用|援引|提到|提及|转述|摘录)(?:了|的|自)?/;
+
 // Page-role detection: if the source page describes a partner/investor at
 // page level, that's a strong prior for outbound company refs being
 // invested_in even when per-edge context lacks explicit investment verbs.
@@ -540,6 +605,11 @@ export function inferLinkType(pageType: PageType, context: string, globalContext
   if (INVESTED_RE.test(context)) return 'invested_in';
   if (ADVISES_RE.test(context)) return 'advises';
   if (WORKS_AT_RE.test(context)) return 'works_at';
+  if (ZH_FOUNDED_RE.test(context)) return 'founded';
+  if (ZH_INVESTED_RE.test(context)) return 'invested_in';
+  if (ZH_ADVISES_RE.test(context)) return 'advises';
+  if (ZH_WORKS_AT_RE.test(context)) return 'works_at';
+  if (ZH_CITED_RE.test(context)) return 'cited';
   // Page-role prior: only fires for person -> company links. Concept pages
   // about VC topics naturally contain "venture capital" in their text, but
   // their company refs are mentions, not investments. Partner pages mentioning
@@ -627,6 +697,8 @@ export const FRONTMATTER_LINK_MAP: FrontmatterFieldMapping[] = [
   // Any page type
   { fields: ['sources'], type: 'discussed_in', direction: 'incoming', dirHint: ['source', 'media'] },
   { fields: ['source'], type: 'source', direction: 'outgoing', dirHint: '' /* already slug-shaped */ },
+  { fields: ['derives_from', 'derived_from', 'evidence'], type: 'derives_from', direction: 'outgoing', dirHint: '' },
+  { fields: ['evidence_for'], type: 'evidence_of', direction: 'outgoing', dirHint: '' },
   { fields: ['related', 'see_also'], type: 'related_to', direction: 'outgoing', dirHint: '' },
 ];
 
@@ -640,6 +712,18 @@ export interface SlugResolver {
    * extract/put_page summary so the user can see the gap.
    */
   resolve(name: string, dirHint?: string | string[]): Promise<string | null>;
+  /** Source-aware display-name resolution for multi-source brains. */
+  resolveTarget?(
+    name: string,
+    dirHint?: string | string[],
+  ): Promise<{ slug: string; sourceId: string; resolutionType: LinkResolutionType } | null>;
+  /** Exact path resolution; requestedSourceId pins a qualified wikilink. */
+  resolveExact?(
+    slug: string,
+    requestedSourceId?: string,
+  ): Promise<{ slug: string; sourceId: string; resolutionType: LinkResolutionType } | null>;
+  /** Backward-compatible exact existence check. */
+  slugExists?(slug: string, requestedSourceId?: string): Promise<boolean>;
 }
 
 /**
@@ -659,14 +743,58 @@ export interface SlugResolver {
  */
 export function makeResolver(
   engine: BrainEngine,
-  opts: { mode: 'batch' | 'live' } = { mode: 'live' },
+  opts: { mode: 'batch' | 'live'; sourceId?: string } = { mode: 'live' },
 ): SlugResolver {
-  const cache = new Map<string, string | null>();
+  type ResolvedTarget = {
+    slug: string;
+    sourceId: string;
+    resolutionType: LinkResolutionType;
+  };
+  const currentSourceId = opts.sourceId ?? 'default';
+  const sourceOrder = currentSourceId === 'default'
+    ? ['default']
+    : [currentSourceId, 'default'];
+  const cache = new Map<string, ResolvedTarget | null>();
+  const slugSnapshots = new Map<string, Set<string>>();
+
+  async function ensureSlugSnapshot(sourceId: string): Promise<Set<string>> {
+    const cached = slugSnapshots.get(sourceId);
+    if (cached) return cached;
+    try {
+      const snapshot = await engine.getAllSlugs({ sourceId });
+      slugSnapshots.set(sourceId, snapshot);
+      return snapshot;
+    } catch {
+      const empty = new Set<string>();
+      slugSnapshots.set(sourceId, empty);
+      return empty;
+    }
+  }
+
+  async function resolveExact(
+    slug: string,
+    requestedSourceId?: string,
+  ): Promise<ResolvedTarget | null> {
+    if (!slug || typeof slug !== 'string') return null;
+    const sources = requestedSourceId ? [requestedSourceId] : sourceOrder;
+    for (const sourceId of sources) {
+      if ((await ensureSlugSnapshot(sourceId)).has(slug)) {
+        return {
+          slug,
+          sourceId,
+          resolutionType: requestedSourceId ? 'qualified' : 'unqualified',
+        };
+      }
+    }
+    return null;
+  }
 
   const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9\s-]/g, '').trim().replace(/\s+/g, '-');
 
-  return {
-    async resolve(name: string, dirHint?: string | string[]): Promise<string | null> {
+  async function resolveTarget(
+    name: string,
+    dirHint?: string | string[],
+  ): Promise<ResolvedTarget | null> {
       if (!name || typeof name !== 'string') return null;
       const trimmed = name.trim();
       if (!trimmed) return null;
@@ -677,23 +805,26 @@ export function makeResolver(
       const hints = Array.isArray(dirHint) ? dirHint : (dirHint ? [dirHint] : []);
 
       // Step 1: already a slug? (dir/name shape, lowercase, hyphenated)
-      if (/^[a-z][a-z0-9-]*\/[a-z0-9][a-z0-9-]*$/.test(trimmed)) {
-        const page = await engine.getPage(trimmed);
-        if (page) {
-          cache.set(cacheKey, trimmed);
-          return trimmed;
+    if (/^[^:/\s]+\/.+$/.test(trimmed)) {
+        const exact = await resolveExact(trimmed);
+        if (exact) {
+          cache.set(cacheKey, exact);
+          return exact;
         }
       }
 
       // Step 2: dir-hint + slugify → exact getPage
       const slugified = norm(trimmed);
-      for (const hint of hints) {
-        if (!hint) continue;
-        const candidate = `${hint}/${slugified}`;
-        const page = await engine.getPage(candidate);
-        if (page) {
-          cache.set(cacheKey, candidate);
-          return candidate;
+      for (const sourceId of sourceOrder) {
+        for (const hint of hints) {
+          if (!hint) continue;
+          const candidate = `${hint}/${slugified}`;
+          const page = await engine.getPage(candidate, { sourceId });
+          if (page) {
+            const resolved = { slug: candidate, sourceId, resolutionType: 'unqualified' as const };
+            cache.set(cacheKey, resolved);
+            return resolved;
+          }
         }
       }
 
@@ -701,11 +832,14 @@ export function makeResolver(
       // order; first hint with a ≥0.55 similarity match wins. If no hints,
       // try the whole pages table.
       const searchHints = hints.length > 0 ? hints : [undefined];
-      for (const hint of searchHints) {
-        const match = await engine.findByTitleFuzzy(trimmed, hint, 0.55);
-        if (match) {
-          cache.set(cacheKey, match.slug);
-          return match.slug;
+      for (const sourceId of sourceOrder) {
+        for (const hint of searchHints) {
+          const match = await engine.findByTitleFuzzy(trimmed, hint, 0.55, { sourceId });
+          if (match) {
+            const resolved = { slug: match.slug, sourceId, resolutionType: 'unqualified' as const };
+            cache.set(cacheKey, resolved);
+            return resolved;
+          }
         }
       }
 
@@ -713,24 +847,39 @@ export function makeResolver(
       // is MANDATORY (see operations-query-hidden-haiku learning). Batch
       // mode skips this step entirely to keep migration deterministic.
       if (opts.mode === 'live') {
-        try {
-          const results = await engine.searchKeyword(trimmed, { limit: 3 });
-          if (results.length > 0 && results[0].score >= 0.8) {
-            // Filter by dir hint if provided.
-            const top = hints.length > 0
-              ? results.find(r => hints.some(h => r.slug.startsWith(`${h}/`)))
-              : results[0];
-            if (top) {
-              cache.set(cacheKey, top.slug);
-              return top.slug;
+        for (const sourceId of sourceOrder) {
+          try {
+            const results = await engine.searchKeyword(trimmed, { limit: 3, sourceId });
+            if (results.length > 0 && results[0].score >= 0.8) {
+              // Filter by dir hint if provided.
+              const top = hints.length > 0
+                ? results.find(r => hints.some(h => r.slug.startsWith(`${h}/`)))
+                : results[0];
+              if (top) {
+                const resolved = { slug: top.slug, sourceId, resolutionType: 'unqualified' as const };
+                cache.set(cacheKey, resolved);
+                return resolved;
+              }
             }
+          } catch {
+            // Search errors are non-fatal; try default or fall through to null.
           }
-        } catch { /* search errors are non-fatal; fall through to null */ }
+        }
       }
 
       // Null = unresolvable. Caller records for the unresolved report.
       cache.set(cacheKey, null);
       return null;
+  }
+
+  return {
+    resolveExact,
+    resolveTarget,
+    async slugExists(slug: string, requestedSourceId?: string): Promise<boolean> {
+      return (await resolveExact(slug, requestedSourceId)) !== null;
+    },
+    async resolve(name: string, dirHint?: string | string[]): Promise<string | null> {
+      return (await resolveTarget(name, dirHint))?.slug ?? null;
     },
   };
 }
@@ -777,6 +926,7 @@ export async function extractFrontmatterLinks(
         // Extract the name to resolve. Strings pass through; objects use
         // the `name` / `slug` / `title` field in that preference order.
         let name: string | null = null;
+        let requestedSourceId: string | undefined;
         let contextExtra = '';
         if (typeof entry === 'string') {
           name = entry;
@@ -785,6 +935,9 @@ export async function extractFrontmatterLinks(
           const n = obj.name ?? obj.slug ?? obj.title;
           if (typeof n === 'string') {
             name = n;
+            if (typeof obj.source_id === 'string' && obj.source_id.trim() !== '') {
+              requestedSourceId = obj.source_id.trim();
+            }
             // Carry interesting object fields (role, title) into the context.
             const extras: string[] = [];
             if (typeof obj.role === 'string') extras.push(obj.role);
@@ -794,7 +947,15 @@ export async function extractFrontmatterLinks(
         }
         if (!name) continue;   // skip numbers, nulls, malformed objects
 
-        const resolved = await resolver.resolve(name, mapping.dirHint);
+        const resolvedTarget = requestedSourceId && typeof resolver.resolveExact === 'function'
+          ? await resolver.resolveExact(name, requestedSourceId)
+          : typeof resolver.resolveTarget === 'function'
+            ? await resolver.resolveTarget(name, mapping.dirHint)
+            : null;
+        const resolved = (requestedSourceId && typeof resolver.resolveExact === 'function')
+          || typeof resolver.resolveTarget === 'function'
+          ? resolvedTarget?.slug ?? null
+          : await resolver.resolve(name, mapping.dirHint);
         if (!resolved) {
           unresolved.push({ field, name });
           continue;
@@ -807,15 +968,40 @@ export async function extractFrontmatterLinks(
         // and search snippets instead of bare `frontmatter.key_people`.
         const context = `frontmatter.${field}: ${name}${contextExtra}`;
 
-        candidates.push({
+        const candidate: LinkCandidate = {
           fromSlug,
+          ...(mapping.direction === 'incoming' && resolvedTarget?.sourceId
+            ? { fromSourceId: resolvedTarget.sourceId }
+            : {}),
           targetSlug: toSlug,
+          ...(mapping.direction === 'outgoing' && resolvedTarget?.sourceId
+            ? { targetSourceId: resolvedTarget.sourceId }
+            : {}),
           linkType: mapping.type,
           context,
           linkSource: 'frontmatter',
           originSlug: slug,       // the page whose frontmatter created this edge
           originField: field,
-        });
+          resolutionType: resolvedTarget?.resolutionType ?? 'unqualified',
+        };
+        candidates.push(candidate);
+
+        // A synthesis hub derived from evidence must also receive an inbound
+        // edge from that evidence page. This is what prevents pattern/concept
+        // hubs from remaining graph orphans after Dream creates them.
+        if (mapping.type === 'derives_from' && mapping.direction === 'outgoing') {
+          candidates.push({
+            fromSlug: resolved,
+            ...(resolvedTarget?.sourceId ? { fromSourceId: resolvedTarget.sourceId } : {}),
+            targetSlug: slug,
+            linkType: 'evidence_of',
+            context,
+            linkSource: 'frontmatter',
+            originSlug: slug,
+            originField: field,
+            resolutionType: resolvedTarget?.resolutionType ?? 'unqualified',
+          });
+        }
       }
     }
   }
@@ -837,6 +1023,7 @@ export interface TimelineCandidate {
 // Match: `- **YYYY-MM-DD** | summary` or `- **YYYY-MM-DD** -- summary`
 // or `- **YYYY-MM-DD** - summary` or just `**YYYY-MM-DD** | summary`.
 const TIMELINE_LINE_RE = /^\s*-?\s*\*\*(\d{4}-\d{2}-\d{2})\*\*\s*[|\-–—]+\s*(.+?)\s*$/;
+const TIMELINE_LINE_RE_CN = /^\s*-?\s*(?:\*\*)?(\d{4})年(\d{1,2})月(\d{1,2})日?(?:\*\*)?\s*[|\-–—]+\s*(.+?)\s*$/;
 
 /**
  * Parse timeline entries from content. Looks at:
@@ -854,12 +1041,20 @@ export function parseTimelineEntries(content: string): TimelineCandidate[] {
   let i = 0;
   while (i < lines.length) {
     const m = TIMELINE_LINE_RE.exec(lines[i]);
-    if (!m) {
-      i++;
-      continue;
+    let date: string;
+    let summary: string;
+    if (m) {
+      date = m[1];
+      summary = m[2].trim();
+    } else {
+      const cnMatch = TIMELINE_LINE_RE_CN.exec(lines[i]);
+      if (!cnMatch) {
+        i++;
+        continue;
+      }
+      date = `${cnMatch[1]}-${cnMatch[2].padStart(2, '0')}-${cnMatch[3].padStart(2, '0')}`;
+      summary = cnMatch[4].trim();
     }
-    const date = m[1];
-    const summary = m[2].trim();
     if (!isValidDate(date) || summary.length === 0) {
       i++;
       continue;
@@ -870,7 +1065,7 @@ export function parseTimelineEntries(content: string): TimelineCandidate[] {
     let j = i + 1;
     while (j < lines.length) {
       const next = lines[j];
-      if (TIMELINE_LINE_RE.test(next)) break;
+      if (TIMELINE_LINE_RE.test(next) || TIMELINE_LINE_RE_CN.test(next)) break;
       if (/^#{1,6}\s/.test(next)) break;
       if (next.trim().length === 0 && detailLines.length === 0) {
         // skip leading blank line; if we hit a blank after detail content
@@ -902,6 +1097,34 @@ function isValidDate(s: string): boolean {
   // Use Date object as final check (catches 2026-02-30 etc.)
   const dt = new Date(Date.UTC(y, mo - 1, d));
   return dt.getUTCFullYear() === y && dt.getUTCMonth() === mo - 1 && dt.getUTCDate() === d;
+}
+
+export interface TimelineAnchorInput {
+  slug: string;
+  title?: string | null;
+  effectiveDate?: Date | string | null;
+  effectiveDateSource?: EffectiveDateSource | null;
+}
+
+/**
+ * Build one page-level timeline anchor from a trustworthy content date.
+ *
+ * This is deliberately opt-in at the command layer and rejects the
+ * `fallback` source because that value comes from updated_at, not from the
+ * event itself. Callers use it only when the page body yielded no timeline
+ * entry, so an inferred anchor never replaces an explicit date.
+ */
+export function deriveTimelineAnchor(input: TimelineAnchorInput): TimelineCandidate | null {
+  const { slug, title, effectiveDate, effectiveDateSource } = input;
+  if (!effectiveDate || effectiveDateSource == null || effectiveDateSource === 'fallback') {
+    return null;
+  }
+  const parsed = typeof effectiveDate === 'string' ? new Date(effectiveDate) : effectiveDate;
+  if (!(parsed instanceof Date) || Number.isNaN(parsed.getTime())) return null;
+  const date = parsed.toISOString().slice(0, 10);
+  if (!isValidDate(date)) return null;
+  const summary = (title ?? '').trim() || slug.split('/').pop() || slug;
+  return { date, summary, detail: '' };
 }
 
 // ─── Auto-link config ───────────────────────────────────────────

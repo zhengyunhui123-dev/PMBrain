@@ -43,6 +43,18 @@ beforeAll(async () => {
 afterAll(() => resetGateway());
 
 describe('applyReranker — happy path', () => {
+  test('reports that reranker output was actually applied', async () => {
+    let state: string | undefined;
+    await applyReranker('q', [makeResult('a', 1, 'doc a')], {
+      enabled: true,
+      topNIn: 10,
+      topNOut: null,
+      rerankerFn: async () => [{ index: 0, relevanceScore: 0.9 }],
+      onStatus: status => { state = status.state; },
+    });
+    expect(state).toBe('applied');
+  });
+
   test('reorders top-N by reranker relevance score', async () => {
     const results = [
       makeResult('a', 1.0, 'doc a'),

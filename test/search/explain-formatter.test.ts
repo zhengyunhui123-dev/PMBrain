@@ -155,6 +155,17 @@ describe('formatResultExplain — multi-stage stacking', () => {
 });
 
 describe('formatResultsExplain — list rendering', () => {
+  test('prepends vector and reranker execution status', () => {
+    const out = formatResultsExplain([
+      r('a/b', 1.2, {
+        retrieval_vector_status: 'applied',
+        retrieval_reranker_status: 'failed',
+        retrieval_reranker_reason: 'auth',
+      }),
+    ]);
+    expect(out).toContain('retrieval: vector=applied, reranker=failed (auth)');
+  });
+
   test('empty list', () => {
     expect(formatResultsExplain([])).toBe('No results.\n');
   });

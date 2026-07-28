@@ -12,6 +12,9 @@
 //   - dry-run mode counts but doesn't write
 
 import { describe, test, expect, beforeAll, afterAll, beforeEach } from 'bun:test';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { PGLiteEngine } from '../../src/core/pglite-engine.ts';
 import { runPhaseExtractAtoms, parseAtomsResponse } from '../../src/core/cycle/extract-atoms.ts';
 import { runPhaseSynthesizeConcepts } from '../../src/core/cycle/synthesize-concepts.ts';
@@ -19,8 +22,12 @@ import { resetPgliteState } from '../helpers/reset-pglite.ts';
 import type { ChatResult, ChatOpts } from '../../src/core/ai/gateway.ts';
 
 let engine: PGLiteEngine;
+const originalPmbrainHome = process.env.PMBRAIN_HOME;
+let configHome: string;
 
 beforeAll(async () => {
+  configHome = mkdtempSync(join(tmpdir(), 'pmbrain-extract-concepts-'));
+  process.env.PMBRAIN_HOME = configHome;
   engine = new PGLiteEngine();
   await engine.connect({});
   await engine.initSchema();
@@ -28,6 +35,9 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await engine.disconnect();
+  if (originalPmbrainHome === undefined) delete process.env.PMBRAIN_HOME;
+  else process.env.PMBRAIN_HOME = originalPmbrainHome;
+  rmSync(configHome, { recursive: true, force: true });
 });
 
 beforeEach(async () => {
@@ -358,5 +368,88 @@ describe('v0.41 T6: runPhaseSynthesizeConcepts via stubbed chat', () => {
       `SELECT compiled_truth FROM pages WHERE slug = 'concepts/theme'`,
     );
     expect(rows[0].compiled_truth).toContain('Custom synthesized narrative');
+  });
+
+  test('writes source-qualified derives_from and evidence_of relationships', async () => {
+    await engine.executeRaw(
+      `INSERT INTO sources (id, name)
+       VALUES ('dream-a', 'dream-a'), ('dream-b', 'dream-b')
+       ON CONFLICT (id) DO NOTHING`,
+    );
+    await engine.putPage('atoms/a', {
+      title: 'Atom A',
+      type: 'atom',
+      compiled_truth: 'Evidence A.',
+      frontmatter: { concepts: ['shared-theme'] },
+      timeline: '',
+    }, { sourceId: 'dream-a' });
+    await engine.putPage('atoms/b', {
+      title: 'Atom B',
+      type: 'atom',
+      compiled_truth: 'Evidence B.',
+      frontmatter: { concepts: ['shared-theme'] },
+      timeline: '',
+    }, { sourceId: 'dream-b' });
+
+    const result = await runPhaseSynthesizeConcepts(engine);
+    expect(result.status).toBe('ok');
+
+    const rows = await engine.executeRaw<{
+      from_slug: string;
+      from_source_id: string;
+      to_slug: string;
+      to_source_id: string;
+      link_type: string;
+      link_source: string;
+      resolution_type: string;
+    }>(
+      `SELECT f.slug AS from_slug, f.source_id AS from_source_id,
+              t.slug AS to_slug, t.source_id AS to_source_id,
+              l.link_type, l.link_source, l.resolution_type
+         FROM links l
+         JOIN pages f ON f.id = l.from_page_id
+         JOIN pages t ON t.id = l.to_page_id
+        WHERE (f.slug = 'concepts/shared-theme' OR t.slug = 'concepts/shared-theme')
+        ORDER BY l.link_type, f.source_id, t.source_id`,
+    );
+
+    expect(rows).toEqual([
+      {
+        from_slug: 'concepts/shared-theme',
+        from_source_id: 'default',
+        to_slug: 'atoms/a',
+        to_source_id: 'dream-a',
+        link_type: 'derives_from',
+        link_source: 'frontmatter',
+        resolution_type: 'qualified',
+      },
+      {
+        from_slug: 'concepts/shared-theme',
+        from_source_id: 'default',
+        to_slug: 'atoms/b',
+        to_source_id: 'dream-b',
+        link_type: 'derives_from',
+        link_source: 'frontmatter',
+        resolution_type: 'qualified',
+      },
+      {
+        from_slug: 'atoms/a',
+        from_source_id: 'dream-a',
+        to_slug: 'concepts/shared-theme',
+        to_source_id: 'default',
+        link_type: 'evidence_of',
+        link_source: 'frontmatter',
+        resolution_type: 'qualified',
+      },
+      {
+        from_slug: 'atoms/b',
+        from_source_id: 'dream-b',
+        to_slug: 'concepts/shared-theme',
+        to_source_id: 'default',
+        link_type: 'evidence_of',
+        link_source: 'frontmatter',
+        resolution_type: 'qualified',
+      },
+    ]);
   });
 });

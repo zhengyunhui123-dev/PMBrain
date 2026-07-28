@@ -126,9 +126,14 @@ export function formatResultsExplain(
 ): string {
   if (results.length === 0) return 'No results.\n';
   const body = results.map((r, i) => formatResultExplain(r, i + 1)).join('\n\n') + '\n';
+  const first = results[0]!;
+  const retrievalLine = first.retrieval_vector_status
+    ? `retrieval: vector=${first.retrieval_vector_status}, reranker=${first.retrieval_reranker_status ?? 'disabled'}${first.retrieval_reranker_reason ? ` (${first.retrieval_reranker_reason})` : ''}`
+    : null;
   // v0.42.3.0 — prepend the autocut summary when meta carries a decision.
   const autocutLine = formatAutocutSummary(meta?.autocut);
-  return autocutLine ? `${autocutLine}\n\n${body}` : body;
+  const summaries = [retrievalLine, autocutLine].filter((line): line is string => !!line);
+  return summaries.length > 0 ? `${summaries.join('\n')}\n\n${body}` : body;
 }
 
 /**

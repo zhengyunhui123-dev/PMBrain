@@ -212,6 +212,25 @@ describe('runSubagentViaGateway (v0.38 Slice 1 — full handler path through gat
     expect(messages[1].message_idx).toBe(1);
   });
 
+  it('rejects an empty first turn with no tool calls instead of reporting false success', async () => {
+    __setChatTransportForTests(async () => ({
+      text: '',
+      blocks: [] as ChatBlock[],
+      stopReason: 'end',
+      usage: { input_tokens: 12, output_tokens: 0, cache_read_tokens: 0, cache_creation_tokens: 0 },
+      model: 'deepseek:deepseek-v4-flash',
+      providerId: 'deepseek',
+    } satisfies ChatResult));
+
+    const handler = buildHandler(makeStubTools([]));
+    const { ctx } = await makeFakeJob({
+      prompt: 'find recurring patterns and write them',
+      model: 'deepseek:deepseek-v4-flash',
+    });
+
+    await expect(handler(ctx)).rejects.toThrow('empty first turn without calling a tool');
+  });
+
   it('happy path 2-turn with tool: dispatches, persists v2 stable ID, returns final text', async () => {
     let turn = 0;
     __setChatTransportForTests(async () => {

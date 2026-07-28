@@ -412,8 +412,8 @@ export function KnowledgeWorkbenchPage({ onNavigate }: { onNavigate?: (page: str
             </Tooltip.Root>
           </Tooltip.Provider>
           <span className="overview-meta-pill"><OverviewIcon name="database" />数据库 {engineLabel}</span>
-          <span className="overview-meta-pill"><OverviewIcon name="model" />模型 {overview.chat_model ?? '未配置'}</span>
-          <span className="overview-meta-pill"><OverviewIcon name="agent" />版本 v{overview.version}</span>
+          <span className="overview-meta-pill overview-model-pill"><OverviewIcon name="model" /><span>模型 {overview.chat_model ?? '未配置'}</span></span>
+          <span className="overview-meta-pill overview-version-pill"><OverviewIcon name="agent" />版本 v{overview.version}</span>
           <button type="button" className="overview-refresh" onClick={() => void reload()} aria-label="刷新概览" title="刷新概览"><OverviewIcon name="refresh" /></button>
         </div>
       </header>
@@ -2690,7 +2690,7 @@ function ImportVectorizationSettings() {
   );
 }
 
-export type SettingsSection = 'general' | 'knowledge' | 'dream' | 'import' | 'models';
+export type SettingsSection = 'general' | 'knowledge' | 'dream' | 'import';
 
 const SETTINGS_SECTIONS: Array<{
   key: SettingsSection;
@@ -2701,7 +2701,6 @@ const SETTINGS_SECTIONS: Array<{
   { key: 'knowledge', label: '知识库设置', description: '主源、数据源与导出' },
   { key: 'dream', label: '知识整理设置', description: '整理规则与定时任务' },
   { key: 'import', label: '导入与向量化', description: '文件限制与切片上限' },
-  { key: 'models', label: '模型配置', description: '模型状态与路由核对' },
 ];
 
 function AppearanceSettings({
@@ -2731,40 +2730,6 @@ function AppearanceSettings({
           </button>
         ))}
       </div>
-    </section>
-  );
-}
-
-function ModelSnapshotSettings({ overview }: { overview: BrainOverview }) {
-  const advancedModelEntries = Object.entries(overview.config)
-    .filter(([key]) => key.startsWith('models.') || ['chat_model', 'embedding_model', 'embedding_dimensions', 'expansion_model'].includes(key));
-  return (
-    <section className="pm-card model-snapshot-card settings-panel">
-      <div className="pm-section-head settings-panel-head">
-        <div className="settings-panel-title">
-          <span className="settings-panel-icon"><Cpu /></span>
-          <div><h2>桌面端模型配置</h2><p className="pm-hint">这里用于核对当前配置。修改模型和 API Key 请回到 PMBrain 桌面端“模型配置”。</p></div>
-        </div>
-      </div>
-      <div className="pm-grid two-col model-snapshot-grid">
-        <div>
-          <div className="pm-kv"><span>普通模型</span><b>{overview.chat_model ?? '未配置'}</b></div>
-          <div className="pm-kv"><span>向量模型</span><b>{overview.embedding_model ?? '未配置'}</b></div>
-          <div className="pm-kv"><span>向量维度</span><b>{overview.embedding_dimensions ?? '-'}</b></div>
-          <div className="pm-kv"><span>搜索扩展</span><b>{overview.expansion_model ?? '-'}</b></div>
-        </div>
-        <div>
-          {Object.entries(overview.provider_status.providers).map(([name, configured]) => (
-            <div className="pm-kv" key={name}><span>{name}</span><b className={configured ? 'pm-ok' : 'pm-muted'}>{configured ? '已配置' : '未配置'}</b></div>
-          ))}
-        </div>
-      </div>
-      <details className="advanced-config-details">
-        <summary>查看高级模型路由（脱敏）</summary>
-        {advancedModelEntries.length > 0
-          ? <pre>{JSON.stringify(Object.fromEntries(advancedModelEntries), null, 2)}</pre>
-          : <div className="pm-empty compact-empty">当前没有额外的高级模型覆盖。</div>}
-      </details>
     </section>
   );
 }
@@ -2815,7 +2780,6 @@ export function SettingsPage({
           </div>
         )}
         {section === 'import' && <ImportVectorizationSettings />}
-        {section === 'models' && <ModelSnapshotSettings overview={overview} />}
       </div>
     </div>
   );

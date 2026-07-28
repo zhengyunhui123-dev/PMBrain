@@ -845,6 +845,7 @@ export class PGLiteEngine implements BrainEngine {
     }
     const { rows } = await this.db.query(
       `SELECT id, source_id, slug, type, title, compiled_truth, timeline, frontmatter, content_hash, created_at, updated_at, deleted_at,
+              effective_date, effective_date_source,
               source_kind, source_uri, ingested_via, ingested_at
        FROM pages WHERE ${where.join(' AND ')} LIMIT 1`,
       params
@@ -2413,7 +2414,12 @@ export class PGLiteEngine implements BrainEngine {
     linkSource?: string,
     originSlug?: string,
     originField?: string,
-    opts?: { fromSourceId?: string; toSourceId?: string; originSourceId?: string },
+    opts?: {
+      fromSourceId?: string;
+      toSourceId?: string;
+      originSourceId?: string;
+      resolutionType?: 'qualified' | 'unqualified';
+    },
   ): Promise<void> {
     const fromSrc = opts?.fromSourceId ?? 'default';
     const toSrc = opts?.toSourceId ?? 'default';
@@ -2434,17 +2440,18 @@ export class PGLiteEngine implements BrainEngine {
     // Mirror addLinksBatch's VALUES + composite JOIN shape. The old cross-
     // product over pages f/t fanned out across sources containing the slugs.
     await this.db.query(
-      `INSERT INTO links (from_page_id, to_page_id, link_type, context, link_source, origin_page_id, origin_field)
-       SELECT f.id, t.id, v.link_type, v.context, v.link_source, o.id, v.origin_field
-       FROM (VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10))
-         AS v(from_slug, to_slug, link_type, context, link_source, origin_slug, origin_field, from_source_id, to_source_id, origin_source_id)
+      `INSERT INTO links (from_page_id, to_page_id, link_type, context, link_source, origin_page_id, origin_field, resolution_type)
+       SELECT f.id, t.id, v.link_type, v.context, v.link_source, o.id, v.origin_field, v.resolution_type
+       FROM (VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11))
+         AS v(from_slug, to_slug, link_type, context, link_source, origin_slug, origin_field, from_source_id, to_source_id, origin_source_id, resolution_type)
        JOIN pages f ON f.slug = v.from_slug AND f.source_id = v.from_source_id
        JOIN pages t ON t.slug = v.to_slug AND t.source_id = v.to_source_id
        LEFT JOIN pages o ON o.slug = v.origin_slug AND o.source_id = v.origin_source_id
        ON CONFLICT (from_page_id, to_page_id, link_type, link_source, origin_page_id) DO UPDATE SET
-         context = EXCLUDED.context,
-         origin_field = EXCLUDED.origin_field`,
-      [from, to, linkType || '', context || '', src, originSlug ?? null, originField ?? null, fromSrc, toSrc, originSrc]
+          context = EXCLUDED.context,
+          origin_field = EXCLUDED.origin_field,
+          resolution_type = EXCLUDED.resolution_type`,
+      [from, to, linkType || '', context || '', src, originSlug ?? null, originField ?? null, fromSrc, toSrc, originSrc, opts?.resolutionType ?? null]
     );
   }
 
@@ -2473,19 +2480,20 @@ export class PGLiteEngine implements BrainEngine {
     const fromSourceIds = links.map(l => l.from_source_id || 'default');
     const toSourceIds = links.map(l => l.to_source_id || 'default');
     const originSourceIds = links.map(l => l.origin_source_id || 'default');
+    const resolutionTypes = links.map(l => l.resolution_type ?? null);
     // v0.41.18.0 (A10): link_kind column (v98). NULL = legacy/plain.
     const linkKinds = links.map(l => l.link_kind ?? null);
     const result = await this.db.query(
-      `INSERT INTO links (from_page_id, to_page_id, link_type, context, link_source, link_kind, origin_page_id, origin_field)
-       SELECT f.id, t.id, v.link_type, v.context, v.link_source, v.link_kind, o.id, v.origin_field
-       FROM unnest($1::text[], $2::text[], $3::text[], $4::text[], $5::text[], $6::text[], $7::text[], $8::text[], $9::text[], $10::text[], $11::text[])
-         AS v(from_slug, to_slug, link_type, context, link_source, origin_slug, origin_field, from_source_id, to_source_id, origin_source_id, link_kind)
+      `INSERT INTO links (from_page_id, to_page_id, link_type, context, link_source, link_kind, origin_page_id, origin_field, resolution_type)
+       SELECT f.id, t.id, v.link_type, v.context, v.link_source, v.link_kind, o.id, v.origin_field, v.resolution_type
+       FROM unnest($1::text[], $2::text[], $3::text[], $4::text[], $5::text[], $6::text[], $7::text[], $8::text[], $9::text[], $10::text[], $11::text[], $12::text[])
+         AS v(from_slug, to_slug, link_type, context, link_source, origin_slug, origin_field, from_source_id, to_source_id, origin_source_id, link_kind, resolution_type)
        JOIN pages f ON f.slug = v.from_slug AND f.source_id = v.from_source_id
        JOIN pages t ON t.slug = v.to_slug AND t.source_id = v.to_source_id
        LEFT JOIN pages o ON o.slug = v.origin_slug AND o.source_id = v.origin_source_id
        ON CONFLICT (from_page_id, to_page_id, link_type, link_source, origin_page_id) DO NOTHING
        RETURNING 1`,
-      [fromSlugs, toSlugs, linkTypes, contexts, linkSources, originSlugs, originFields, fromSourceIds, toSourceIds, originSourceIds, linkKinds]
+      [fromSlugs, toSlugs, linkTypes, contexts, linkSources, originSlugs, originFields, fromSourceIds, toSourceIds, originSourceIds, linkKinds, resolutionTypes]
     );
     return result.rows.length;
   }
@@ -2540,8 +2548,9 @@ export class PGLiteEngine implements BrainEngine {
     if (opts?.sourceIds && opts.sourceIds.length > 0) {
       const { rows } = await this.db.query(
         `SELECT f.slug as from_slug, t.slug as to_slug,
-                l.link_type, l.context, l.link_source,
-                o.slug as origin_slug, l.origin_field
+                f.source_id as from_source_id, t.source_id as to_source_id,
+                l.link_type, l.context, l.link_source, l.resolution_type,
+                o.slug as origin_slug, o.source_id as origin_source_id, l.origin_field
          FROM links l
          JOIN pages f ON f.id = l.from_page_id
          JOIN pages t ON t.id = l.to_page_id
@@ -2554,8 +2563,9 @@ export class PGLiteEngine implements BrainEngine {
     if (opts?.sourceId) {
       const { rows } = await this.db.query(
         `SELECT f.slug as from_slug, t.slug as to_slug,
-                l.link_type, l.context, l.link_source,
-                o.slug as origin_slug, l.origin_field
+                f.source_id as from_source_id, t.source_id as to_source_id,
+                l.link_type, l.context, l.link_source, l.resolution_type,
+                o.slug as origin_slug, o.source_id as origin_source_id, l.origin_field
          FROM links l
          JOIN pages f ON f.id = l.from_page_id
          JOIN pages t ON t.id = l.to_page_id
@@ -2567,8 +2577,9 @@ export class PGLiteEngine implements BrainEngine {
     }
     const { rows } = await this.db.query(
       `SELECT f.slug as from_slug, t.slug as to_slug,
-              l.link_type, l.context, l.link_source,
-              o.slug as origin_slug, l.origin_field
+              f.source_id as from_source_id, t.source_id as to_source_id,
+              l.link_type, l.context, l.link_source, l.resolution_type,
+              o.slug as origin_slug, o.source_id as origin_source_id, l.origin_field
        FROM links l
        JOIN pages f ON f.id = l.from_page_id
        JOIN pages t ON t.id = l.to_page_id
@@ -2583,8 +2594,9 @@ export class PGLiteEngine implements BrainEngine {
     if (opts?.sourceIds && opts.sourceIds.length > 0) {
       const { rows } = await this.db.query(
         `SELECT f.slug as from_slug, t.slug as to_slug,
-                l.link_type, l.context, l.link_source,
-                o.slug as origin_slug, l.origin_field
+                f.source_id as from_source_id, t.source_id as to_source_id,
+                l.link_type, l.context, l.link_source, l.resolution_type,
+                o.slug as origin_slug, o.source_id as origin_source_id, l.origin_field
          FROM links l
          JOIN pages f ON f.id = l.from_page_id
          JOIN pages t ON t.id = l.to_page_id
@@ -2597,8 +2609,9 @@ export class PGLiteEngine implements BrainEngine {
     if (opts?.sourceId) {
       const { rows } = await this.db.query(
         `SELECT f.slug as from_slug, t.slug as to_slug,
-                l.link_type, l.context, l.link_source,
-                o.slug as origin_slug, l.origin_field
+                f.source_id as from_source_id, t.source_id as to_source_id,
+                l.link_type, l.context, l.link_source, l.resolution_type,
+                o.slug as origin_slug, o.source_id as origin_source_id, l.origin_field
          FROM links l
          JOIN pages f ON f.id = l.from_page_id
          JOIN pages t ON t.id = l.to_page_id
@@ -2610,8 +2623,9 @@ export class PGLiteEngine implements BrainEngine {
     }
     const { rows } = await this.db.query(
       `SELECT f.slug as from_slug, t.slug as to_slug,
-              l.link_type, l.context, l.link_source,
-              o.slug as origin_slug, l.origin_field
+              f.source_id as from_source_id, t.source_id as to_source_id,
+              l.link_type, l.context, l.link_source, l.resolution_type,
+              o.slug as origin_slug, o.source_id as origin_source_id, l.origin_field
        FROM links l
        JOIN pages f ON f.id = l.from_page_id
        JOIN pages t ON t.id = l.to_page_id
@@ -2649,6 +2663,7 @@ export class PGLiteEngine implements BrainEngine {
     name: string,
     dirPrefix?: string,
     minSimilarity: number = 0.55,
+    opts?: { sourceId?: string },
   ): Promise<{ slug: string; similarity: number } | null> {
     // Inline threshold comparison instead of `SET LOCAL pg_trgm.similarity_threshold`.
     // The GUC only scopes to the current transaction and pglite auto-commits each
@@ -2656,14 +2671,18 @@ export class PGLiteEngine implements BrainEngine {
     // directly gives predictable behavior. Tie-breaker: sort by slug so re-runs
     // pick the same winner.
     const prefixPattern = dirPrefix ? `${dirPrefix}/%` : '%';
+    const sourceFilter = opts?.sourceId ? 'AND source_id = $4' : '';
+    const params: unknown[] = [name, prefixPattern, minSimilarity];
+    if (opts?.sourceId) params.push(opts.sourceId);
     const { rows } = await this.db.query(
       `SELECT slug, similarity(title, $1) AS sim
        FROM pages
        WHERE similarity(title, $1) >= $3
          AND slug LIKE $2
+         ${sourceFilter}
        ORDER BY sim DESC, slug ASC
        LIMIT 1`,
-      [name, prefixPattern, minSimilarity]
+      params,
     );
     if (rows.length === 0) return null;
     const row = rows[0] as { slug: string; sim: number };
@@ -3129,12 +3148,24 @@ export class PGLiteEngine implements BrainEngine {
     return out;
   }
 
-  async findOrphanPages(): Promise<Array<{ slug: string; title: string; domain: string | null }>> {
+  async findOrphanPages(opts?: {
+    sourceId?: string;
+    sourceIds?: string[];
+  }): Promise<Array<{ slug: string; title: string; domain: string | null }>> {
     // Soft-delete filter on BOTH sides:
     //   - candidate: p.deleted_at IS NULL — soft-deleted pages aren't orphan candidates
     //   - link source: src.deleted_at IS NULL — links FROM soft-deleted pages don't count as inbound
     // Without the link-source filter, a live page can hide from orphan results purely
     // because a soft-deleted page links to it. v0.26.5 invariant; codex C11.
+    let sourceFilter = '';
+    const params: unknown[] = [];
+    if (opts?.sourceIds && opts.sourceIds.length > 0) {
+      params.push(opts.sourceIds);
+      sourceFilter = `AND p.source_id = ANY($${params.length}::text[])`;
+    } else if (opts?.sourceId) {
+      params.push(opts.sourceId);
+      sourceFilter = `AND p.source_id = $${params.length}`;
+    }
     const { rows } = await this.db.query(
       `SELECT
          p.slug,
@@ -3142,6 +3173,7 @@ export class PGLiteEngine implements BrainEngine {
          p.frontmatter->>'domain' AS domain
        FROM pages p
        WHERE p.deleted_at IS NULL
+         ${sourceFilter}
          AND NOT EXISTS (
            SELECT 1
            FROM links l
@@ -3149,7 +3181,8 @@ export class PGLiteEngine implements BrainEngine {
            WHERE l.to_page_id = p.id
              AND src.deleted_at IS NULL
          )
-       ORDER BY p.slug`
+       ORDER BY p.slug`,
+      params,
     );
     return rows as Array<{ slug: string; title: string; domain: string | null }>;
   }

@@ -45,7 +45,12 @@ import type {
   TouchpointKind,
 } from './types.ts';
 import { resolveRecipe, assertTouchpoint, parseModelId } from './model-resolver.ts';
-import { resolveModel, TIER_DEFAULTS } from '../model-config.ts';
+import {
+  readOrdinaryModel,
+  resolveAlias,
+  resolveModel,
+  TIER_DEFAULTS,
+} from '../model-config.ts';
 import type { BrainEngine } from '../engine.ts';
 import { dimsProviderOptions } from './dims.ts';
 import { AIConfigError, AITransientError, normalizeAIError } from './errors.ts';
@@ -439,6 +444,10 @@ export function configureGateway(config: AIGatewayConfig): void {
  */
 export async function reconfigureGatewayWithEngine(engine: BrainEngine): Promise<AIGatewayConfig> {
   const cfg = requireConfig();
+  const ordinaryRaw = await readOrdinaryModel(engine);
+  const ordinaryResolved = ordinaryRaw
+    ? await resolveAlias(engine, ordinaryRaw)
+    : (cfg.chat_model ?? DEFAULT_CHAT_MODEL);
   // Resolve expansion (utility tier) and chat (reasoning tier). Embedding is
   // intentionally NOT re-resolved here — switching embedding models invalidates
   // the vector index. Out of scope per v0.31.12 plan ("Embedding tier knob").
@@ -459,8 +468,20 @@ export async function reconfigureGatewayWithEngine(engine: BrainEngine): Promise
   // came from a `provider:model` override and we use it as-is.
   const expansionFull = newExpansion.includes(':') ? newExpansion : prefixWithProviderFrom(cfg.expansion_model ?? DEFAULT_EXPANSION_MODEL, newExpansion);
   const chatFull = newChat.includes(':') ? newChat : prefixWithProviderFrom(cfg.chat_model ?? DEFAULT_CHAT_MODEL, newChat);
+  const ordinaryFull = ordinaryResolved.includes(':')
+    ? ordinaryResolved
+    : prefixWithProviderFrom(cfg.chat_model ?? DEFAULT_CHAT_MODEL, ordinaryResolved);
+  const fallbackChain = [
+    ...(cfg.chat_fallback_chain ?? []),
+    ...(ordinaryFull !== chatFull ? [ordinaryFull] : []),
+  ].filter((model, index, models) => model !== chatFull && models.indexOf(model) === index);
 
-  _config = { ...cfg, expansion_model: expansionFull, chat_model: chatFull };
+  _config = {
+    ...cfg,
+    expansion_model: expansionFull,
+    chat_model: chatFull,
+    chat_fallback_chain: fallbackChain,
+  };
   _modelCache.clear();
   _shrinkState.clear();
   _extendedModels.clear();
@@ -2267,40 +2288,121 @@ export interface ChatOpts {
   cacheSystem?: boolean;
 }
 
-function toSdkToolOutput(output: unknown): { type: 'text'; value: string } | { type: 'json'; value: unknown } {
-  if (typeof output === 'string') return { type: 'text', value: output };
-  return { type: 'json', value: output };
+/** Stringify a tool result without letting BigInt/circular values kill a job. */
+function safeStringify(value: unknown): string {
+  if (typeof value === 'string') return value;
+  try {
+    return JSON.stringify(value ?? null);
+  } catch {
+    return String(value);
+  }
 }
 
-function toSdkMessages(messages: ChatMessage[]): any[] {
-  return messages.map(message => {
-    if (typeof message.content === 'string') return message;
+/**
+ * Convert provider/DB values into AI SDK JSONValue-compatible data.
+ * PostgreSQL timestamps arrive as Date instances; the JSON round-trip turns
+ * those into ISO strings recursively and removes undefined object fields.
+ */
+function toJsonSafe(value: unknown): unknown {
+  try {
+    return JSON.parse(JSON.stringify(value ?? null));
+  } catch {
+    return safeStringify(value);
+  }
+}
 
-    const hasOnlyToolResults = message.content.length > 0 &&
-      message.content.every(block => block.type === 'tool-result');
-    const content = message.content.map(block => {
-      if (block.type === 'text') return block;
-      if (block.type === 'tool-call') {
-        return {
-          type: 'tool-call',
-          toolCallId: block.toolCallId,
-          toolName: block.toolName,
-          input: block.input,
-        };
-      }
+/**
+ * Convert PMBrain's provider-neutral transcript to AI SDK v6 ModelMessage[].
+ * Tool results require a dedicated `tool` role and structured output values.
+ */
+export function toModelMessages(messages: ChatMessage[]): unknown[] {
+  return messages.map((message) => {
+    if (typeof message.content === 'string') {
+      return { role: message.role, content: message.content };
+    }
+    const blocks = message.content;
+    if (blocks.some((block) => block.type === 'tool-result')) {
       return {
-        type: 'tool-result',
-        toolCallId: block.toolCallId,
-        toolName: block.toolName,
-        output: toSdkToolOutput(block.output),
+        role: 'tool' as const,
+        content: blocks
+          .filter((block): block is Extract<ChatBlock, { type: 'tool-result' }> =>
+            block.type === 'tool-result')
+          .map((block) => ({
+            type: 'tool-result' as const,
+            toolCallId: block.toolCallId,
+            toolName: block.toolName,
+            output: block.isError
+              ? { type: 'error-text' as const, value: safeStringify(block.output) }
+              : (typeof block.output === 'string'
+                ? { type: 'text' as const, value: block.output }
+                : { type: 'json' as const, value: toJsonSafe(block.output) as never }),
+          })),
       };
-    });
+    }
     return {
-      ...message,
-      role: hasOnlyToolResults ? 'tool' : message.role,
-      content,
+      role: message.role,
+      content: blocks
+        .filter((block) => block.type !== 'text' || typeof block.text === 'string')
+        .map((block) => {
+          if (block.type === 'text') return { type: 'text' as const, text: block.text };
+          if (block.type === 'tool-call') {
+            return {
+              type: 'tool-call' as const,
+              toolCallId: block.toolCallId,
+              toolName: block.toolName,
+              input: block.input,
+            };
+          }
+          return block;
+        }),
     };
   });
+}
+
+/**
+ * Back-fill missing tool results after an interrupted or partially persisted
+ * turn. AI SDK v6 requires every assistant tool call to be answered by the
+ * immediately following tool-result message.
+ */
+export function repairToolPairing(messages: ChatMessage[]): ChatMessage[] {
+  const out: ChatMessage[] = [];
+  for (let i = 0; i < messages.length; i++) {
+    const message = messages[i]!;
+    out.push(message);
+    if (typeof message.content === 'string' || message.role !== 'assistant') continue;
+
+    const calls = message.content.filter(
+      (block): block is Extract<ChatBlock, { type: 'tool-call' }> =>
+        block.type === 'tool-call',
+    );
+    if (calls.length === 0) continue;
+
+    const next = messages[i + 1];
+    const nextBlocks = next && typeof next.content !== 'string' ? next.content : [];
+    const resolved = new Set(
+      nextBlocks
+        .filter((block): block is Extract<ChatBlock, { type: 'tool-result' }> =>
+          block.type === 'tool-result')
+        .map((block) => block.toolCallId),
+    );
+    const missing = calls.filter((call) => !resolved.has(call.toolCallId));
+    if (missing.length === 0) continue;
+
+    const stubs: ChatBlock[] = missing.map((call) => ({
+      type: 'tool-result',
+      toolCallId: call.toolCallId,
+      toolName: call.toolName,
+      output: 'tool result unavailable (recovered after interrupted run)',
+      isError: true,
+    }));
+    if (resolved.size > 0) {
+      out.push({ role: next!.role, content: [...nextBlocks, ...stubs] });
+      i++;
+    } else {
+      out.push({ role: 'user', content: stubs });
+    }
+  }
+  return out;
 }
 
 async function resolveChatProvider(modelStr: string): Promise<{ model: any; recipe: Recipe; modelId: string }> {
@@ -2379,7 +2481,7 @@ function mapStopReason(
  * Crash-resumable replay is the caller's responsibility (subagent.ts persists
  * blocks via the provider-neutral schema landing in commit 2a).
  */
-export async function chat(opts: ChatOpts): Promise<ChatResult> {
+async function chatOnce(opts: ChatOpts): Promise<ChatResult> {
   const tracker = __budgetStore.getStore() ?? null;
   const modelStrEarly = opts.model ?? getChatModel();
   const estimatedInputTokens = estimateChatInputTokens(opts);
@@ -2488,7 +2590,7 @@ export async function chat(opts: ChatOpts): Promise<ChatResult> {
     const result = await generateText({
       model,
       system: opts.system,
-      messages: toSdkMessages(opts.messages),
+      messages: toModelMessages(repairToolPairing(opts.messages)) as any,
       tools: opts.tools && opts.tools.length > 0 ? tools : undefined,
       maxOutputTokens: opts.maxTokens ?? 4096,
       abortSignal: opts.abortSignal,
@@ -2558,6 +2660,58 @@ export async function chat(opts: ChatOpts): Promise<ChatResult> {
     _recordBudget(`${recipe.id}:${modelId}`, fallback.inputTokens, fallback.outputTokens);
     throw normalizeAIError(err, `chat(${recipe.id}:${modelId})`);
   }
+}
+
+function isChatFallbackEligible(err: unknown, signal?: AbortSignal): boolean {
+  if (signal?.aborted) return false;
+  const name = err instanceof Error ? err.name : '';
+  if (name === 'AbortError' || name === 'BudgetExhausted' || name === 'BudgetExceededError') {
+    return false;
+  }
+  const normalized = normalizeAIError(err);
+  if (normalized instanceof AITransientError) return true;
+  if (!(normalized instanceof AIConfigError)) return false;
+  const detail = `${normalized.message} ${normalized.fix ?? ''}`.toLowerCase();
+  return /api[ _-]?key|auth|unauthor|forbidden|401|403|model|provider|base url|not found|404|access/.test(detail);
+}
+
+/**
+ * Run a chat completion with a provider-neutral fallback chain.
+ *
+ * The explicitly resolved advanced model is attempted first. If it is
+ * unreachable, misconfigured, rate-limited, or returns a structural refusal,
+ * PMBrain tries the configured chain. `reconfigureGatewayWithEngine()` always
+ * appends the ordinary `models.default`/`chat_model` model, so an optional
+ * advanced override can never make the ordinary installation unusable.
+ */
+export async function chat(opts: ChatOpts): Promise<ChatResult> {
+  const primary = opts.model ?? getChatModel();
+  const candidates = [
+    primary,
+    ...getChatFallbackChain(),
+  ].filter((model, index, models) => model.trim() !== '' && models.indexOf(model) === index);
+
+  let lastError: unknown;
+  for (let index = 0; index < candidates.length; index++) {
+    const model = candidates[index]!;
+    try {
+      const result = await chatOnce({ ...opts, model });
+      const shouldFallback = result.stopReason === 'refusal' || result.stopReason === 'content_filter';
+      if (!shouldFallback || index === candidates.length - 1) return result;
+      process.stderr.write(
+        `[models] chat model "${model}" returned ${result.stopReason}; trying fallback "${candidates[index + 1]}".\n`,
+      );
+    } catch (err) {
+      lastError = err;
+      if (index === candidates.length - 1 || !isChatFallbackEligible(err, opts.abortSignal)) {
+        throw err;
+      }
+      process.stderr.write(
+        `[models] chat model "${model}" is unavailable; trying fallback "${candidates[index + 1]}".\n`,
+      );
+    }
+  }
+  throw lastError;
 }
 
 // ---- Tool loop (v0.38 — D11 + D6/D7 gateway-native subagent path) ----
@@ -2983,7 +3137,15 @@ export async function rerank(input: RerankInput): Promise<RerankResult[]> {
   // whose request/response shape differs from ZE/llama.cpp (e.g. Voyage with
   // `top_k` / `data[]`) needs separate adapter hooks in a follow-up plan.
   const url = `${compat.baseURL.replace(/\/$/, '')}${tp.path ?? '/models/rerank'}`;
-  const auth = applyResolveAuth(recipe, cfg, 'reranker');
+  let auth: ReturnType<typeof applyResolveAuth>;
+  try {
+    auth = applyResolveAuth(recipe, cfg, 'reranker');
+  } catch (err) {
+    throw new RerankError(
+      err instanceof Error ? err.message : String(err),
+      'auth',
+    );
+  }
   // applyResolveAuth returns { apiKey } for Bearer-style auth (SDK's native
   // path) or { headers } for custom-header providers (Azure). v0.37.6.0:
   // recipes can ALSO declare default_headers (attribution etc.) which flow

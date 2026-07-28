@@ -210,8 +210,64 @@
               </article>
             </div>
             <p class="advanced-section-title">Dream 阶段模型（可选覆盖）</p>
-            <div class="advanced-copy advanced-copy-compact">以下三项优先级高于上方「推理任务」。留空则跟随推理任务 / 普通模型。历史配置里的 MIMO 等覆盖会在这里显示，可修改或点「跟随推理任务」清除。</div>
+            <div class="advanced-copy advanced-copy-compact">以下各阶段可单独覆盖任务层级。留空会按该阶段实际使用的轻量、推理或子代理层级继续继承普通模型；高级模型不可用时运行时也会回退到普通模型。</div>
             <div class="advanced-model-grid advanced-phase-grid">
+              <article class="advanced-task-card">
+                <div class="advanced-task-heading"><div><b>知识页生成</b><small>Dream synthesize</small></div><button type="button" class="text-button advanced-phase-inherit" data-advanced-phase="synthesize">跟随任务层级</button></div>
+                <div class="advanced-task-fields">
+                  <label><span>供应商</span><select id="advanced-phase-synthesize-provider"><option value="">跟随任务层级</option><option value="mimo">mimo</option><option value="zhipu">zhipu</option><option value="deepseek">deepseek</option><option value="openai">openai</option><option value="anthropic">anthropic</option><option value="google">google</option><option value="openrouter">openrouter</option></select></label>
+                  <label><span>模型名称</span><span class="model-picker"><input id="advanced-phase-synthesize-model-name" spellcheck="false" placeholder="先选择供应商，也可输入自定义模型" autocomplete="off" /><button type="button" class="advanced-model-picker-trigger" data-advanced-phase="synthesize" aria-label="展开知识页生成模型列表">⌄</button><ul class="model-dropdown" id="advanced-phase-synthesize-model-dropdown" hidden></ul></span><small class="advanced-task-status" id="advanced-phase-synthesize-model-status"></small></label>
+                </div>
+                <small class="advanced-task-effective" id="advanced-phase-synthesize-effective">尚未读取</small>
+              </article>
+              <article class="advanced-task-card">
+                <div class="advanced-task-heading"><div><b>生成结果判定</b><small>Dream synthesize_verdict</small></div><button type="button" class="text-button advanced-phase-inherit" data-advanced-phase="synthesize_verdict">跟随任务层级</button></div>
+                <div class="advanced-task-fields">
+                  <label><span>供应商</span><select id="advanced-phase-synthesize_verdict-provider"><option value="">跟随任务层级</option><option value="mimo">mimo</option><option value="zhipu">zhipu</option><option value="deepseek">deepseek</option><option value="openai">openai</option><option value="anthropic">anthropic</option><option value="google">google</option><option value="openrouter">openrouter</option></select></label>
+                  <label><span>模型名称</span><span class="model-picker"><input id="advanced-phase-synthesize_verdict-model-name" spellcheck="false" placeholder="先选择供应商，也可输入自定义模型" autocomplete="off" /><button type="button" class="advanced-model-picker-trigger" data-advanced-phase="synthesize_verdict" aria-label="展开生成结果判定模型列表">⌄</button><ul class="model-dropdown" id="advanced-phase-synthesize_verdict-model-dropdown" hidden></ul></span><small class="advanced-task-status" id="advanced-phase-synthesize_verdict-model-status"></small></label>
+                </div>
+                <small class="advanced-task-effective" id="advanced-phase-synthesize_verdict-effective">尚未读取</small>
+              </article>
+              <article class="advanced-task-card">
+                <div class="advanced-task-heading"><div><b>模式发现</b><small>Dream patterns</small></div><button type="button" class="text-button advanced-phase-inherit" data-advanced-phase="patterns">跟随任务层级</button></div>
+                <div class="advanced-task-fields">
+                  <label><span>供应商</span><select id="advanced-phase-patterns-provider"><option value="">跟随任务层级</option><option value="mimo">mimo</option><option value="zhipu">zhipu</option><option value="deepseek">deepseek</option><option value="openai">openai</option><option value="anthropic">anthropic</option><option value="google">google</option><option value="openrouter">openrouter</option></select></label>
+                  <label><span>模型名称</span><span class="model-picker"><input id="advanced-phase-patterns-model-name" spellcheck="false" placeholder="先选择供应商，也可输入自定义模型" autocomplete="off" /><button type="button" class="advanced-model-picker-trigger" data-advanced-phase="patterns" aria-label="展开模式发现模型列表">⌄</button><ul class="model-dropdown" id="advanced-phase-patterns-model-dropdown" hidden></ul></span><small class="advanced-task-status" id="advanced-phase-patterns-model-status"></small></label>
+                </div>
+                <small class="advanced-task-effective" id="advanced-phase-patterns-effective">尚未读取</small>
+              </article>
+              <article class="advanced-task-card">
+                <div class="advanced-task-heading"><div><b>知识原子抽取</b><small>Dream extract_atoms</small></div><button type="button" class="text-button advanced-phase-inherit" data-advanced-phase="extract_atoms">跟随任务层级</button></div>
+                <div class="advanced-task-fields">
+                  <label><span>供应商</span><select id="advanced-phase-extract_atoms-provider"><option value="">跟随任务层级</option><option value="mimo">mimo</option><option value="zhipu">zhipu</option><option value="deepseek">deepseek</option><option value="openai">openai</option><option value="anthropic">anthropic</option><option value="google">google</option><option value="openrouter">openrouter</option></select></label>
+                  <label><span>模型名称</span><span class="model-picker"><input id="advanced-phase-extract_atoms-model-name" spellcheck="false" placeholder="先选择供应商，也可输入自定义模型" autocomplete="off" /><button type="button" class="advanced-model-picker-trigger" data-advanced-phase="extract_atoms" aria-label="展开知识原子抽取模型列表">⌄</button><ul class="model-dropdown" id="advanced-phase-extract_atoms-model-dropdown" hidden></ul></span><small class="advanced-task-status" id="advanced-phase-extract_atoms-model-status"></small></label>
+                </div>
+                <small class="advanced-task-effective" id="advanced-phase-extract_atoms-effective">尚未读取</small>
+              </article>
+              <article class="advanced-task-card">
+                <div class="advanced-task-heading"><div><b>概念合成</b><small>Dream synthesize_concepts</small></div><button type="button" class="text-button advanced-phase-inherit" data-advanced-phase="synthesize_concepts">跟随任务层级</button></div>
+                <div class="advanced-task-fields">
+                  <label><span>供应商</span><select id="advanced-phase-synthesize_concepts-provider"><option value="">跟随任务层级</option><option value="mimo">mimo</option><option value="zhipu">zhipu</option><option value="deepseek">deepseek</option><option value="openai">openai</option><option value="anthropic">anthropic</option><option value="google">google</option><option value="openrouter">openrouter</option></select></label>
+                  <label><span>模型名称</span><span class="model-picker"><input id="advanced-phase-synthesize_concepts-model-name" spellcheck="false" placeholder="先选择供应商，也可输入自定义模型" autocomplete="off" /><button type="button" class="advanced-model-picker-trigger" data-advanced-phase="synthesize_concepts" aria-label="展开概念合成模型列表">⌄</button><ul class="model-dropdown" id="advanced-phase-synthesize_concepts-model-dropdown" hidden></ul></span><small class="advanced-task-status" id="advanced-phase-synthesize_concepts-model-status"></small></label>
+                </div>
+                <small class="advanced-task-effective" id="advanced-phase-synthesize_concepts-effective">尚未读取</small>
+              </article>
+              <article class="advanced-task-card">
+                <div class="advanced-task-heading"><div><b>知识合并</b><small>Dream consolidate</small></div><button type="button" class="text-button advanced-phase-inherit" data-advanced-phase="consolidate">跟随任务层级</button></div>
+                <div class="advanced-task-fields">
+                  <label><span>供应商</span><select id="advanced-phase-consolidate-provider"><option value="">跟随任务层级</option><option value="mimo">mimo</option><option value="zhipu">zhipu</option><option value="deepseek">deepseek</option><option value="openai">openai</option><option value="anthropic">anthropic</option><option value="google">google</option><option value="openrouter">openrouter</option></select></label>
+                  <label><span>模型名称</span><span class="model-picker"><input id="advanced-phase-consolidate-model-name" spellcheck="false" placeholder="先选择供应商，也可输入自定义模型" autocomplete="off" /><button type="button" class="advanced-model-picker-trigger" data-advanced-phase="consolidate" aria-label="展开知识合并模型列表">⌄</button><ul class="model-dropdown" id="advanced-phase-consolidate-model-dropdown" hidden></ul></span><small class="advanced-task-status" id="advanced-phase-consolidate-model-status"></small></label>
+                </div>
+                <small class="advanced-task-effective" id="advanced-phase-consolidate-effective">尚未读取</small>
+              </article>
+              <article class="advanced-task-card">
+                <div class="advanced-task-heading"><div><b>对话事实回填</b><small>Dream conversation_facts_backfill</small></div><button type="button" class="text-button advanced-phase-inherit" data-advanced-phase="conversation_facts_backfill">跟随任务层级</button></div>
+                <div class="advanced-task-fields">
+                  <label><span>供应商</span><select id="advanced-phase-conversation_facts_backfill-provider"><option value="">跟随任务层级</option><option value="mimo">mimo</option><option value="zhipu">zhipu</option><option value="deepseek">deepseek</option><option value="openai">openai</option><option value="anthropic">anthropic</option><option value="google">google</option><option value="openrouter">openrouter</option></select></label>
+                  <label><span>模型名称</span><span class="model-picker"><input id="advanced-phase-conversation_facts_backfill-model-name" spellcheck="false" placeholder="先选择供应商，也可输入自定义模型" autocomplete="off" /><button type="button" class="advanced-model-picker-trigger" data-advanced-phase="conversation_facts_backfill" aria-label="展开对话事实回填模型列表">⌄</button><ul class="model-dropdown" id="advanced-phase-conversation_facts_backfill-model-dropdown" hidden></ul></span><small class="advanced-task-status" id="advanced-phase-conversation_facts_backfill-model-status"></small></label>
+                </div>
+                <small class="advanced-task-effective" id="advanced-phase-conversation_facts_backfill-effective">尚未读取</small>
+              </article>
               <article class="advanced-task-card">
                 <div class="advanced-task-heading"><div><b>观点提炼</b><small>Dream propose_takes</small></div><button type="button" class="text-button advanced-phase-inherit" data-advanced-phase="propose_takes">跟随推理任务</button></div>
                 <div class="advanced-task-fields">

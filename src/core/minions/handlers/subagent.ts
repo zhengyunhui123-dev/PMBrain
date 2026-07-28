@@ -920,6 +920,16 @@ async function runSubagentViaGateway(args: GatewayRunArgs): Promise<SubagentResu
     onHeartbeat: heartbeat,
   });
 
+  // A provider can terminate a reasoning-only turn with no text and no tool
+  // calls. Treating that as "completed" makes Dream report success while
+  // patterns/reflections were never written. Throw a retryable error instead;
+  // jobs that executed at least one tool keep their existing completion rules.
+  if (result.totalTurns === 0 && result.finalText.trim() === '') {
+    throw new Error(
+      `subagent returned an empty first turn without calling a tool (${model}); retry with the configured fallback`,
+    );
+  }
+
   // Map gateway stop reason to SubagentStopReason. SubagentStopReason has
   // {end_turn, max_turns, refusal, error}; aborted maps to error.
   const stopReason: SubagentStopReason = result.stopReason === 'end'

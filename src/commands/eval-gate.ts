@@ -80,6 +80,7 @@ interface GateResult {
     ran: boolean;
     qrels_path?: string;
     summary?: CorrectnessResult['summary'];
+    per_query?: CorrectnessResult['per_query'];
     thresholds?: {
       recall_at_k: number;
       first_relevant_hit: number;
@@ -366,6 +367,7 @@ function runCorrectnessGateDispatch(
       ran: true,
       qrels_path: qrelsPath,
       summary: result.summary,
+      per_query: result.per_query,
       thresholds,
       ...(breaches.length > 0 ? { breaches } : {}),
     };
@@ -408,6 +410,7 @@ function printHumanOutput(result: GateResult): void {
     if (c.summary) {
       console.log(`  queries_run:           ${c.summary.queries_run}/${c.summary.queries_total} (${c.summary.queries_errored} errored)`);
       console.log(`  mean_recall@${c.summary.k}:        ${c.summary.mean_recall_at_k.toFixed(3)} (floor ${c.thresholds?.recall_at_k ?? '?'})`);
+      console.log(`  mean_reciprocal_rank: ${c.summary.mean_reciprocal_rank.toFixed(3)}`);
       console.log(`  first_relevant_hit:    ${(c.summary.first_relevant_hit_rate * 100).toFixed(1)}% (floor ${(((c.thresholds?.first_relevant_hit ?? 0)) * 100).toFixed(0)}%)`);
       if (c.summary.expected_top1_denominator > 0) {
         console.log(`  expected_top1_hit:     ${(c.summary.expected_top1_hit_rate * 100).toFixed(1)}% over ${c.summary.expected_top1_denominator} queries (floor ${(((c.thresholds?.expected_top1 ?? 0)) * 100).toFixed(0)}%)`);

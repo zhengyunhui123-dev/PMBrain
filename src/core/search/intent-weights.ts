@@ -114,8 +114,10 @@ export function effectiveRrfK(baseK: number, weight: number): number {
 /**
  * Apply exact-match boost in place. Mutates each result's score by
  * `weights.exactMatchBoost` when the result's slug or title (lowercased,
- * trimmed) matches the lowercased query exactly. No-op when the boost
- * is 1.0. Caller re-sorts after.
+ * trimmed) matches the lowercased query exactly. A literal full match keeps
+ * a 1.25 floor even for `general` intent: imported Chinese notes often have
+ * generic titles while their exact user-facing name survives in the slug.
+ * Caller re-sorts after.
  *
  * Normalization: slug is matched as-is (slugs are already canonicalized
  * lowercase-kebab); title is lowercased + trimmed. The query is
@@ -126,19 +128,19 @@ export function applyExactMatchBoost(
   query: string,
   weights: IntentWeights,
 ): void {
-  if (weights.exactMatchBoost === 1.0) return;
   const q = query.toLowerCase().trim();
   if (!q) return;
+  const exactLiteralBoost = Math.max(1.25, weights.exactMatchBoost);
   // Pre-compute the kebab form for slug-style matches like "garry tan" → "garry-tan".
   const qKebab = q.replace(/\s+/g, '-');
   for (const r of results) {
     const slug = (r.slug ?? '').toLowerCase();
     const title = (r.title ?? '').toLowerCase().trim();
     if (slug === q || slug === qKebab || slug.endsWith(`/${qKebab}`) || title === q) {
-      r.score *= weights.exactMatchBoost;
+      r.score *= exactLiteralBoost;
       // v0.40.4 attribution stamp (D12=A) — formatter reads this for
       // --explain output. Only stamped when boost actually fires.
-      r.exact_match_boost = weights.exactMatchBoost;
+      r.exact_match_boost = exactLiteralBoost;
     }
   }
 }

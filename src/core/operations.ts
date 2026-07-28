@@ -485,6 +485,25 @@ function stampEvidenceSafe(results: SearchResult[]): void {
   }
 }
 
+function stampRetrievalDiagnostics(
+  results: SearchResult[],
+  meta: HybridSearchMeta,
+): void {
+  const rerankerStatus: SearchResult['retrieval_reranker_status'] =
+    !meta.reranker_requested
+      ? 'disabled'
+      : meta.reranker_applied
+        ? 'applied'
+        : 'failed';
+  for (const result of results) {
+    result.retrieval_vector_status = meta.vector_enabled ? 'applied' : 'unavailable';
+    result.retrieval_reranker_status = rerankerStatus;
+    if (meta.reranker_failure_reason) {
+      result.retrieval_reranker_reason = meta.reranker_failure_reason;
+    }
+  }
+}
+
 function maybeCaptureSearch(
   ctx: OperationContext,
   queryText: string,
@@ -1033,16 +1052,11 @@ async function runAutoLink(
   // inserts. opts.sourceId is set when caller knows the source (put_page from
   // a multi-source-aware handler); when omitted, every read returns the
   // pre-v0.31.8 cross-source view (back-compat for any existing caller).
-  const sourceOpts = opts?.sourceId ? { sourceId: opts.sourceId } : {};
-  const linkSourceOpts = opts?.sourceId
-    ? { fromSourceId: opts.sourceId, toSourceId: opts.sourceId, originSourceId: opts.sourceId }
-    : {};
-  const removeSourceOpts = opts?.sourceId
-    ? { fromSourceId: opts.sourceId, toSourceId: opts.sourceId }
-    : {};
+  const currentSourceId = opts?.sourceId ?? 'default';
+  const sourceOpts = { sourceId: currentSourceId };
 
   // Live-mode resolver: per-put throwaway cache, pg_trgm + optional search.
-  const resolver = makeResolver(engine, { mode: 'live' });
+  const resolver = makeResolver(engine, { mode: 'live', sourceId: opts?.sourceId });
   const { candidates, unresolved } = await extractPageLinks(
     slug, fullContent, parsed.frontmatter, parsed.type, resolver,
   );
@@ -1051,9 +1065,18 @@ async function runAutoLink(
   // violation churn in addLink). One getAllSlugs call upfront, O(1) lookup.
   // v0.31.8 (D12): scoped to the source when opts.sourceId is set so wikilink
   // resolution doesn't span unrelated sources.
-  const allSlugs = await engine.getAllSlugs(sourceOpts);
+  const candidateSourceIds = new Set<string>([currentSourceId]);
+  for (const candidate of candidates) {
+    candidateSourceIds.add(candidate.fromSourceId ?? currentSourceId);
+    candidateSourceIds.add(candidate.targetSourceId ?? currentSourceId);
+  }
+  const slugSnapshots = new Map<string, Set<string>>();
+  await Promise.all([...candidateSourceIds].map(async sourceId => {
+    slugSnapshots.set(sourceId, await engine.getAllSlugs({ sourceId }));
+  }));
   const valid = candidates.filter(c =>
-    allSlugs.has(c.targetSlug) && (!c.fromSlug || allSlugs.has(c.fromSlug))
+    slugSnapshots.get(c.targetSourceId ?? currentSourceId)?.has(c.targetSlug)
+    && (!c.fromSlug || slugSnapshots.get(c.fromSourceId ?? currentSourceId)?.has(c.fromSlug))
   );
 
   // Split candidates by direction. Outgoing (fromSlug === slug or unset) are
@@ -1063,8 +1086,10 @@ async function runAutoLink(
   // but SCOPED to the frontmatter edges this page authored via
   // (link_source='frontmatter' AND origin_slug = slug). We never touch
   // frontmatter edges authored by OTHER pages.
-  const out = valid.filter(c => !c.fromSlug || c.fromSlug === slug);
-  const inc = valid.filter(c => c.fromSlug && c.fromSlug !== slug);
+  const out = valid.filter(c =>
+    !c.fromSlug || (c.fromSlug === slug && (c.fromSourceId ?? currentSourceId) === currentSourceId)
+  );
+  const inc = valid.filter(c => !out.includes(c));
 
   // Run getLinks + addLink/removeLink loops inside a single transaction so that
   // concurrent put_page calls on the same slug can't race the reconciliation:
@@ -1088,21 +1113,25 @@ async function runAutoLink(
     // Non-frontmatter and other-page frontmatter edges survive untouched.
     const existingInRaw = await tx.getBacklinks(slug, sourceOpts);
     const existingIn = existingInRaw.filter(
-      l => l.link_source === 'frontmatter' && l.origin_slug === slug,
+      l => l.link_source === 'frontmatter'
+        && l.origin_slug === slug
+        && (l.origin_source_id ?? currentSourceId) === currentSourceId,
     );
 
     // Reconcilable outgoing edges: markdown + our own frontmatter edges.
     // Manual edges (link_source='manual') are NEVER touched by reconciliation.
     const reconcilableOut = existingOut.filter(
       l => l.link_source === 'markdown' || l.link_source == null ||
-           (l.link_source === 'frontmatter' && l.origin_slug === slug),
+           (l.link_source === 'frontmatter'
+             && l.origin_slug === slug
+             && (l.origin_source_id ?? currentSourceId) === currentSourceId),
     );
 
     const outKeys = new Set(out.map(c =>
-      `${c.targetSlug}\u0000${c.linkType}\u0000${c.linkSource ?? 'markdown'}`
+      `${c.targetSourceId ?? currentSourceId}\u0000${c.targetSlug}\u0000${c.linkType}\u0000${c.linkSource ?? 'markdown'}`
     ));
     const incKeys = new Set(inc.map(c =>
-      `${c.fromSlug}\u0000${c.linkType}`
+      `${c.fromSourceId ?? currentSourceId}\u0000${c.fromSlug}\u0000${c.linkType}`
     ));
 
     let created = 0, removed = 0, errors = 0;
@@ -1113,11 +1142,16 @@ async function runAutoLink(
         await tx.addLink(
           slug, c.targetSlug, c.context, c.linkType,
           c.linkSource, c.originSlug, c.originField,
-          linkSourceOpts,
+          {
+            fromSourceId: currentSourceId,
+            toSourceId: c.targetSourceId ?? currentSourceId,
+            originSourceId: c.originSourceId ?? currentSourceId,
+            resolutionType: c.resolutionType,
+          },
         );
-        const existKey = `${c.targetSlug}\u0000${c.linkType}\u0000${c.linkSource ?? 'markdown'}`;
+        const existKey = `${c.targetSourceId ?? currentSourceId}\u0000${c.targetSlug}\u0000${c.linkType}\u0000${c.linkSource ?? 'markdown'}`;
         const exists = reconcilableOut.some(l =>
-          `${l.to_slug}\u0000${l.link_type}\u0000${l.link_source ?? 'markdown'}` === existKey
+          `${l.to_source_id ?? currentSourceId}\u0000${l.to_slug}\u0000${l.link_type}\u0000${l.link_source ?? 'markdown'}` === existKey
         );
         if (!exists) created++;
       } catch {
@@ -1131,11 +1165,16 @@ async function runAutoLink(
         await tx.addLink(
           c.fromSlug!, c.targetSlug, c.context, c.linkType,
           'frontmatter', c.originSlug, c.originField,
-          linkSourceOpts,
+          {
+            fromSourceId: c.fromSourceId ?? currentSourceId,
+            toSourceId: c.targetSourceId ?? currentSourceId,
+            originSourceId: c.originSourceId ?? currentSourceId,
+            resolutionType: c.resolutionType,
+          },
         );
-        const existKey = `${c.fromSlug}\u0000${c.linkType}`;
+        const existKey = `${c.fromSourceId ?? currentSourceId}\u0000${c.fromSlug}\u0000${c.linkType}`;
         const exists = existingIn.some(l =>
-          `${l.from_slug}\u0000${l.link_type}` === existKey
+          `${l.from_source_id ?? currentSourceId}\u0000${l.from_slug}\u0000${l.link_type}` === existKey
         );
         if (!exists) created++;
       } catch {
@@ -1145,10 +1184,13 @@ async function runAutoLink(
 
     // Remove stale outgoing (markdown or our-frontmatter, not in desired set).
     for (const l of reconcilableOut) {
-      const key = `${l.to_slug}\u0000${l.link_type}\u0000${l.link_source ?? 'markdown'}`;
+      const key = `${l.to_source_id ?? currentSourceId}\u0000${l.to_slug}\u0000${l.link_type}\u0000${l.link_source ?? 'markdown'}`;
       if (!outKeys.has(key)) {
         try {
-          await tx.removeLink(slug, l.to_slug, l.link_type, l.link_source ?? undefined, removeSourceOpts);
+          await tx.removeLink(slug, l.to_slug, l.link_type, l.link_source ?? undefined, {
+            fromSourceId: currentSourceId,
+            toSourceId: l.to_source_id ?? currentSourceId,
+          });
           removed++;
         } catch {
           errors++;
@@ -1158,10 +1200,13 @@ async function runAutoLink(
 
     // Remove stale incoming (our frontmatter → slug, not in desired set).
     for (const l of existingIn) {
-      const key = `${l.from_slug}\u0000${l.link_type}`;
+      const key = `${l.from_source_id ?? currentSourceId}\u0000${l.from_slug}\u0000${l.link_type}`;
       if (!incKeys.has(key)) {
         try {
-          await tx.removeLink(l.from_slug, slug, l.link_type, 'frontmatter', removeSourceOpts);
+          await tx.removeLink(l.from_slug, slug, l.link_type, 'frontmatter', {
+            fromSourceId: l.from_source_id ?? currentSourceId,
+            toSourceId: currentSourceId,
+          });
           removed++;
         } catch {
           errors++;
@@ -1390,6 +1435,14 @@ const search: Operation = {
       stampEvidenceSafe(results);
       await stampContentFlags(ctx.engine, results);
     }
+    const retrievalMeta = capturedMeta ?? {
+      vector_enabled: !keywordOnly,
+      detail_resolved: null,
+      expansion_applied: false,
+      reranker_requested: false,
+      reranker_applied: false,
+    };
+    stampRetrievalDiagnostics(results, retrievalMeta);
     const latency_ms = Date.now() - startedAt;
 
     // v0.37.0 (D11): op-layer last_retrieved_at write-back. Fire-and-forget;
@@ -1407,7 +1460,7 @@ const search: Operation = {
           tool_name: 'search',
           query: queryText,
           results,
-          meta: capturedMeta ?? { vector_enabled: !keywordOnly, detail_resolved: null, expansion_applied: false },
+          meta: retrievalMeta,
           latency_ms,
           remote: ctx.remote ?? false,
           expand_enabled: false,
@@ -1626,6 +1679,14 @@ const query: Operation = {
       relationalRetrieval: typeof p.relational === 'boolean' ? (p.relational as boolean) : undefined,
     });
     const latency_ms = Date.now() - startedAt;
+    const retrievalMeta: HybridSearchMeta = capturedMeta ?? {
+      vector_enabled: false,
+      detail_resolved: detail ?? null,
+      expansion_applied: false,
+      reranker_requested: false,
+      reranker_applied: false,
+    };
+    stampRetrievalDiagnostics(results, retrievalMeta);
 
     // v0.37.0 (D11): op-layer last_retrieved_at write-back. Same shape as the
     // search handler — fire-and-forget, internal callers bypass this path.
@@ -1636,16 +1697,13 @@ const query: Operation = {
     // key" from "keyword-only fallback" and "expansion fired" from
     // "expansion requested + silently fell back."
     if (isEvalCaptureEnabled(ctx.config)) {
-      const meta: HybridSearchMeta = capturedMeta ?? {
-        vector_enabled: false, detail_resolved: detail ?? null, expansion_applied: false,
-      };
       void captureEvalCandidate(
         ctx.engine,
         {
           tool_name: 'query',
           query: queryText,
           results,
-          meta,
+          meta: retrievalMeta,
           latency_ms,
           remote: ctx.remote ?? false,
           expand_enabled: expand,
@@ -3004,7 +3062,10 @@ const find_orphans: Operation = {
   scope: 'read',
   handler: async (ctx, p) => {
     const { findOrphans } = await import('../commands/orphans.ts');
-    return findOrphans(ctx.engine, { includePseudo: (p.include_pseudo as boolean) || false });
+    return findOrphans(ctx.engine, {
+      includePseudo: (p.include_pseudo as boolean) || false,
+      ...sourceScopeOpts(ctx),
+    });
   },
   cliHints: { name: 'orphans', hidden: true },
 };

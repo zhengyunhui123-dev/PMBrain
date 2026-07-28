@@ -5,6 +5,13 @@ export type AdvancedModelTier = typeof ADVANCED_MODEL_TIERS[number];
 
 /** Dream 阶段级覆盖：优先级高于 models.tier.* 与 models.default */
 export const ADVANCED_MODEL_PHASES = [
+  'synthesize',
+  'synthesize_verdict',
+  'patterns',
+  'extract_atoms',
+  'synthesize_concepts',
+  'consolidate',
+  'conversation_facts_backfill',
   'propose_takes',
   'grade_takes',
   'calibration_profile',
@@ -12,9 +19,29 @@ export const ADVANCED_MODEL_PHASES = [
 export type AdvancedModelPhase = typeof ADVANCED_MODEL_PHASES[number];
 
 export const ADVANCED_PHASE_CONFIG_KEYS: Record<AdvancedModelPhase, string> = {
+  synthesize: 'models.dream.synthesize',
+  synthesize_verdict: 'models.dream.synthesize_verdict',
+  patterns: 'models.dream.patterns',
+  extract_atoms: 'models.dream.extract_atoms',
+  synthesize_concepts: 'models.dream.synthesize_concepts',
+  consolidate: 'models.dream.consolidate',
+  conversation_facts_backfill: 'models.dream.conversation_facts_backfill',
   propose_takes: 'models.propose_takes',
   grade_takes: 'models.grade_takes',
   calibration_profile: 'models.calibration_profile',
+};
+
+export const ADVANCED_PHASE_TIERS: Record<AdvancedModelPhase, AdvancedModelTier> = {
+  synthesize: 'subagent',
+  synthesize_verdict: 'utility',
+  patterns: 'subagent',
+  extract_atoms: 'reasoning',
+  synthesize_concepts: 'reasoning',
+  consolidate: 'reasoning',
+  conversation_facts_backfill: 'reasoning',
+  propose_takes: 'reasoning',
+  grade_takes: 'reasoning',
+  calibration_profile: 'reasoning',
 };
 
 export interface AdvancedModelRouteState {
@@ -97,12 +124,11 @@ export async function readAdvancedModelConfig(runtime: CliRuntime): Promise<Adva
     };
   }
 
-  // Dream 阶段默认挂在 reasoning tier；无阶段覆盖时展示继承解析结果。
-  const reasoningResolved = tiers.reasoning.resolved;
-  const reasoningSource = tiers.reasoning.source || 'models.tier.reasoning';
   const phases = {} as Record<AdvancedModelPhase, AdvancedModelRouteState>;
   for (const phase of ADVANCED_MODEL_PHASES) {
     const key = ADVANCED_PHASE_CONFIG_KEYS[phase];
+    const inheritedTier = ADVANCED_PHASE_TIERS[phase];
+    const inherited = tiers[inheritedTier];
     const override = await readConfigOverride(runtime, key);
     if (override) {
       phases[phase] = {
@@ -113,8 +139,8 @@ export async function readAdvancedModelConfig(runtime: CliRuntime): Promise<Adva
     } else {
       phases[phase] = {
         override: '',
-        resolved: reasoningResolved,
-        source: reasoningSource ? `${reasoningSource}（继承）` : '继承推理任务/普通模型',
+        resolved: inherited.resolved,
+        source: inherited.source ? `${inherited.source}（继承 ${inheritedTier}）` : '继承任务层级/普通模型',
       };
     }
   }

@@ -40,6 +40,7 @@ export const LINKABLE_ENTITY_TYPES = ['person', 'company', 'organization', 'enti
  * types in.
  */
 const MIN_NAME_LENGTH = 4;
+const MIN_CJK_NAME_LENGTH = 2;
 
 /**
  * Built-in ignore list — common ambiguous tokens whose body-text mentions
@@ -104,18 +105,17 @@ export interface FindMentionsOpts {
 // ============================================================
 
 /**
- * Token-only tokenizer. Returns `[token, offset]` pairs for every
- * `[a-zA-Z0-9]+` run, lowercased. Non-ASCII (CJK, accented) is
- * deliberately not tokenized in v1 — entity gazetteer is English-dominant
- * in production today. Widening to `\p{L}+` is a future option once a
- * real CJK entity catalog appears (filed under TODO-1 + a TODO for
- * Unicode-aware tokenization).
+ * Token-only tokenizer. ASCII runs stay whole while each CJK character is
+ * emitted as one token. Character-level CJK tokens let the existing
+ * maximal-munch matcher handle Chinese/Japanese/Korean entity names without
+ * an O(pages × entities × body length) substring pass.
  *
  * Possessive "Acme's" tokenizes as ['acme', 's'] (single-quote breaks the
  * run) — single-word "Acme" lookup succeeds at offset 0; the trailing 's'
  * is harmless noise.
  */
-const TOKEN_RE = /[a-zA-Z0-9]+/g;
+const TOKEN_RE = /[a-zA-Z0-9]+|[\u3400-\u4dbf\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af]/gu;
+const CJK_RE = /[\u3400-\u4dbf\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af]/gu;
 
 interface ScannedToken {
   text: string;       // lowercase
@@ -139,6 +139,11 @@ function tokenizeTitle(title: string): string[] {
   let m: RegExpExecArray | null;
   while ((m = TOKEN_RE.exec(title)) !== null) tokens.push(m[0].toLowerCase());
   return tokens;
+}
+
+function cjkCharCount(text: string): number {
+  CJK_RE.lastIndex = 0;
+  return Array.from(text.matchAll(CJK_RE)).length;
 }
 
 /**
@@ -175,7 +180,10 @@ export async function buildGazetteer(
 
   const gazetteer: Gazetteer = new Map();
   for (const row of rows) {
-    if (!row.title || row.title.length < MIN_NAME_LENGTH) continue;
+    if (!row.title) continue;
+    const cjkCount = cjkCharCount(row.title);
+    if (cjkCount === 0 && row.title.length < MIN_NAME_LENGTH) continue;
+    if (cjkCount > 0 && cjkCount < MIN_CJK_NAME_LENGTH) continue;
     if (ignoreSet.has(row.title) && !existingTitles.has(row.title)) continue;
 
     const tokens = tokenizeTitle(row.title);

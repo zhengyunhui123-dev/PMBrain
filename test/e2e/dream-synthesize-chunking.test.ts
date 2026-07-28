@@ -8,10 +8,10 @@
  * Coverage:
  *   - D5 cap-hit: chunks > maxChunks → log + skip with no minion_jobs row
  *     and no dream_verdicts cache write (closes the poison-pill class).
- *   - D8 legacy single-chunk migration: pre-seed a `completed` legacy job
- *     for the same content hash → next synthesize skips submission.
+ *   - D8 legacy migration: completed single or full chunk families suppress
+ *     duplicate synthesis after a corpus-root move.
  *   - Chunked path: fat transcript spawns N children with chunk-suffixed
- *     idempotency keys; single-chunk path keeps the legacy key shape.
+ *     path-independent idempotency keys.
  *
  * Run: bun test test/e2e/dream-synthesize-chunking.test.ts
  */
@@ -168,9 +168,10 @@ describe('E2E synthesize chunking — D5 cap hit', () => {
   }, 30_000);
 });
 
-describe('E2E synthesize chunking — D8 legacy single-chunk migration', () => {
-  test('completed legacy idempotency key → skip submission entirely', async () => {
+describe('E2E synthesize chunking — D8 legacy-key migration', () => {
+  test('completed legacy idempotency key survives a corpus-root move', async () => {
     const rig = await setupRig();
+    const oldCorpusDir = mkdtempSync(join(tmpdir(), 'gbrain-chunk-old-corpus-'));
     try {
       await rig.engine.setConfig('dream.synthesize.enabled', 'true');
       await rig.engine.setConfig('dream.synthesize.session_corpus_dir', rig.corpusDir);
@@ -181,8 +182,9 @@ describe('E2E synthesize chunking — D8 legacy single-chunk migration', () => {
       writeFileSync(filePath, content);
       const contentHash = await seedVerdict(rig.engine, filePath, content);
 
-      // Pre-seed a completed `subagent` job at the legacy idempotency key.
-      const legacyKey = `dream:synth:${filePath}:${contentHash.slice(0, 16)}`;
+      // Pre-seed a completed job under the same filename/hash but an old root.
+      const oldFilePath = corpusPath(oldCorpusDir, basename);
+      const legacyKey = `dream:synth:${oldFilePath}:${contentHash.slice(0, 16)}`;
       await rig.engine.executeRaw(
         `INSERT INTO minion_jobs (name, queue, status, idempotency_key, finished_at)
          VALUES ('subagent', 'default', 'completed', $1, now())`,
@@ -209,13 +211,14 @@ describe('E2E synthesize chunking — D8 legacy single-chunk migration', () => {
       );
       expect(Number(jobs[0].cnt)).toBe(1);
     } finally {
+      rmSync(oldCorpusDir, { recursive: true, force: true });
       await rig.cleanup();
     }
   }, 30_000);
 });
 
 describe('E2E synthesize chunking — fan-out shape', () => {
-  test('single-chunk transcript uses legacy idempotency key (parity on upgrade)', async () => {
+  test('single-chunk transcript key excludes the corpus root', async () => {
     const rig = await setupRig();
     try {
       await rig.engine.setConfig('dream.synthesize.enabled', 'true');
@@ -239,13 +242,14 @@ describe('E2E synthesize chunking — fan-out shape', () => {
         });
       });
 
-      const expectedKey = `dream:synth:${filePath}:${contentHash.slice(0, 16)}`;
+      const expectedKey =
+        `dream:synth-v2:default:filename:${encodeURIComponent(basename)}:${contentHash.slice(0, 16)}`;
       const rows = await rig.engine.executeRaw<{ idempotency_key: string }>(
         `SELECT idempotency_key FROM minion_jobs WHERE name = 'subagent' ORDER BY id`,
       );
       expect(rows).toHaveLength(1);
       expect(rows[0].idempotency_key).toBe(expectedKey);
-      // Specifically: legacy key shape has NO ":c<idx>of<n>" suffix.
+      // Single-chunk keys have no ":c<idx>of<n>" suffix.
       expect(rows[0].idempotency_key).not.toMatch(/:c\d+of\d+$/);
     } finally {
       await rig.cleanup();
@@ -283,10 +287,11 @@ describe('E2E synthesize chunking — fan-out shape', () => {
         `SELECT idempotency_key FROM minion_jobs WHERE name = 'subagent' ORDER BY id`,
       );
       expect(rows.length).toBeGreaterThan(1);
-      // Every key matches the chunked shape `dream:synth:<path>:<hash16>:c<i>of<N>`.
+      const baseKey =
+        `dream:synth-v2:default:filename:${encodeURIComponent(basename)}:${hash16}`;
       for (const r of rows) {
         expect(r.idempotency_key).toMatch(
-          new RegExp(`^dream:synth:${escapeRe(filePath)}:${hash16}:c\\d+of\\d+$`),
+          new RegExp(`^${escapeRe(baseKey)}:c\\d+of\\d+$`),
         );
       }
       // Chunk indices are unique 0..N-1.

@@ -38,11 +38,16 @@ import {
 } from '../core/model-config.ts';
 
 const TIERS: ModelTier[] = ['utility', 'reasoning', 'deep', 'subagent'];
+const MODEL_DOCTOR_CHAT_TIMEOUT_MS = 15_000;
 
 const PER_TASK_KEYS: Array<{ key: string; tier: ModelTier; description: string }> = [
   { key: 'models.dream.synthesize',         tier: 'subagent',  description: 'Dream synthesis (conversation → brain pages)' },
   { key: 'models.dream.synthesize_verdict', tier: 'utility',   description: 'Dream synthesis verdict (Haiku judge)' },
   { key: 'models.dream.patterns',           tier: 'subagent',  description: 'Pattern discovery (cross-take themes)' },
+  { key: 'models.dream.extract_atoms',      tier: 'reasoning', description: 'Dream atom extraction' },
+  { key: 'models.dream.synthesize_concepts', tier: 'reasoning', description: 'Dream concept synthesis' },
+  { key: 'models.dream.consolidate',        tier: 'reasoning', description: 'Dream knowledge consolidation' },
+  { key: 'models.dream.conversation_facts_backfill', tier: 'reasoning', description: 'Dream conversation facts backfill' },
   { key: 'models.drift',                    tier: 'reasoning', description: 'Drift LLM judge (v0.29 scaffold)' },
   { key: 'models.auto_think',               tier: 'deep',      description: 'Auto-think question answering' },
   { key: 'models.think',                    tier: 'deep',      description: '`pmbrain think` synthesis op' },
@@ -487,9 +492,13 @@ async function probeModel(modelStr: string, touchpoint: 'chat' | 'expansion'): P
   const start = Date.now();
   try {
     const { chat } = await import('../core/ai/gateway.ts');
-    // Use AbortController so the 5s timeout doesn't hang on a stuck network.
+    // Ordinary OpenAI-compatible providers can take longer than 5s on a cold
+    // request. Keep the doctor bounded without falsely marking them unavailable.
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(new Error('probe timed out after 5s')), 5000);
+    const timeoutId = setTimeout(
+      () => controller.abort(new Error(`probe timed out after ${MODEL_DOCTOR_CHAT_TIMEOUT_MS / 1000}s`)),
+      MODEL_DOCTOR_CHAT_TIMEOUT_MS,
+    );
     try {
       await chat({
         model: modelStr,
@@ -548,7 +557,7 @@ Configure routing:
   pmbrain config set models.tier.<tier> <model>       # per-tier (utility/reasoning/deep/subagent)
   pmbrain config set models.aliases.<name> <model>    # custom alias
 
-Tiers: utility (haiku-class) | reasoning (sonnet) | deep (opus) | subagent (Anthropic-only)
+Tiers: utility (fast/low-cost) | reasoning (balanced) | deep (high-capability) | subagent (tool-capable)
 `);
     return;
   }

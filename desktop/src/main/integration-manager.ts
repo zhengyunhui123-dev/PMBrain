@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { backupFile } from './config-manager.js';
 import type { SidecarManager } from './sidecar-manager.js';
 
-export type IntegrationClient = 'codebuddy' | 'workbuddy' | 'cursor' | 'trae' | 'claude' | 'codex' | 'qwenpaw';
+export type IntegrationClient = 'codebuddy' | 'workbuddy' | 'cursor' | 'trae' | 'claude' | 'codex' | 'qwenpaw' | 'hermes' | 'openclaw';
 export type CredentialKind = 'api_key' | 'oauth';
 
 export interface IntegrationInfo {
@@ -92,6 +92,8 @@ const CLIENT_META: Record<IntegrationClient, { name: string; path: () => string 
   claude: { name: 'Claude', path: () => null, automatic: false },
   codex: { name: 'Codex', path: () => join(homedir(), '.codex', 'config.toml'), automatic: true },
   qwenpaw: { name: 'QwenPaw', path: () => qwenPawIntegrationPath(), automatic: true },
+  hermes: { name: 'Hermes', path: () => null, automatic: false },
+  openclaw: { name: 'OpenClaw', path: () => null, automatic: false },
 };
 
 interface QwenPawPaths {

@@ -37,6 +37,22 @@ export interface RerankerOpts {
    * Production must NEVER set this.
    */
   rerankerFn?: (input: RerankInput) => Promise<RerankResult[]>;
+  /** Best-effort status callback used by search diagnostics. */
+  onStatus?: (status: {
+    state: 'applied' | 'failed';
+    reason?: RerankFailureReason | 'malformed_response';
+  }) => void;
+}
+
+function emitStatus(
+  opts: RerankerOpts,
+  status: { state: 'applied' | 'failed'; reason?: RerankFailureReason | 'malformed_response' },
+): void {
+  try {
+    opts.onStatus?.(status);
+  } catch {
+    // Diagnostics callbacks must never break retrieval.
+  }
 }
 
 /** SHA-256 prefix (8 chars) of the query text for privacy-preserving audit. */
@@ -97,11 +113,15 @@ export async function applyReranker(
     } catch {
       // Audit logging must never break search.
     }
+    emitStatus(opts, { state: 'failed', reason });
     return results;
   }
 
   // Defensive: if the reranker returned a malformed shape, pass through.
-  if (!Array.isArray(reranked) || reranked.length === 0) return results;
+  if (!Array.isArray(reranked) || reranked.length === 0) {
+    emitStatus(opts, { state: 'failed', reason: 'malformed_response' });
+    return results;
+  }
 
   // Build the reordered head. We keep ONLY indices the reranker returned
   // (so a top_n response with fewer items than head.length naturally
@@ -132,6 +152,7 @@ export async function applyReranker(
   }
 
   const combined = [...reorderedHead, ...tail];
+  emitStatus(opts, { state: 'applied' });
   return opts.topNOut !== null && opts.topNOut > 0
     ? combined.slice(0, opts.topNOut)
     : combined;

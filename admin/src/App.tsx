@@ -34,7 +34,7 @@ import {
 } from './lib/theme';
 import {
   BookOpenText, Bot, BrainCircuit, Cable,
-  Cpu, Database, FileClock, FolderKanban, HeartHandshake, LayoutDashboard,
+  Database, FileClock, FolderKanban, HeartHandshake, LayoutDashboard,
   MonitorCog, Sparkles, Upload, type LucideIcon,
 } from 'lucide-react';
 
@@ -44,7 +44,7 @@ const PAGES = [
   'import', 'data', 'docs',
   'mcp', 'config', 'agents', 'log', 'calibration',
   'settings', 'settings-general', 'settings-knowledge', 'settings-dream',
-  'settings-import', 'settings-models',
+  'settings-import',
 ] as const;
 
 type Page = typeof PAGES[number];
@@ -57,7 +57,7 @@ function getPage(): Page {
 type NavIconName =
   | 'overview' | 'workspace' | 'database' | 'organize' | 'mcp' | 'log' | 'assistant'
   | 'settings-general' | 'settings-knowledge' | 'settings-dream'
-  | 'settings-import' | 'settings-models';
+  | 'settings-import';
 
 const NAV_ICONS: Record<NavIconName, LucideIcon> = {
   overview: LayoutDashboard,
@@ -71,7 +71,6 @@ const NAV_ICONS: Record<NavIconName, LucideIcon> = {
   'settings-knowledge': Database,
   'settings-dream': Sparkles,
   'settings-import': Upload,
-  'settings-models': Cpu,
 };
 
 const SETTINGS_NAV_ITEMS: Array<{
@@ -84,7 +83,6 @@ const SETTINGS_NAV_ITEMS: Array<{
   { page: 'settings-knowledge', section: 'knowledge', label: '知识库设置', icon: 'settings-knowledge' },
   { page: 'settings-dream', section: 'dream', label: '知识整理设置', icon: 'settings-dream' },
   { page: 'settings-import', section: 'import', label: '导入与向量化', icon: 'settings-import' },
-  { page: 'settings-models', section: 'models', label: '模型配置', icon: 'settings-models' },
 ];
 
 const SETTINGS_PAGE_SECTIONS: Partial<Record<Page, SettingsSection>> = {

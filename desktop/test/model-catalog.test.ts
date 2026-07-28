@@ -16,23 +16,35 @@ describe('desktop provider model catalog', () => {
     }
   });
 
-  test('loads installed Ollama models for chat and embedding from the local tags endpoint', async () => {
-    const fakeFetch = (async (url: string) => {
-      expect(url).toEndWith('/api/tags');
-      return new Response(JSON.stringify({ models: [{ name: 'bge-m3:latest' }, { model: 'nomic-embed-text:latest' }] }));
+  test('shows only installed Ollama models that match the requested capability', async () => {
+    const fakeFetch = (async (url: string | URL | Request, init?: RequestInit) => {
+      const value = String(url);
+      if (value.endsWith('/api/tags')) {
+        return new Response(JSON.stringify({
+          models: [{ name: 'qwen3.6:latest' }, { model: 'qwen3-embedding:0.6b' }],
+        }));
+      }
+      expect(value).toEndWith('/api/show');
+      const model = JSON.parse(String(init?.body)).model;
+      return new Response(JSON.stringify({
+        capabilities: model === 'qwen3.6:latest'
+          ? ['completion', 'tools']
+          : ['embedding'],
+      }));
     }) as typeof fetch;
-    for (const touchpoint of ['chat', 'embedding'] as const) {
-      const result = await listDesktopProviderModels('ollama', touchpoint, fakeFetch);
-      expect(result.source).toBe('ollama');
-      expect(result.models).toContain('bge-m3:latest');
-      expect(result.models).toContain('nomic-embed-text:latest');
-    }
+
+    const chat = await listDesktopProviderModels('ollama', 'chat', fakeFetch);
+    const embedding = await listDesktopProviderModels('ollama', 'embedding', fakeFetch);
+
+    expect(chat).toEqual({ models: ['qwen3.6:latest'], source: 'ollama' });
+    expect(embedding).toEqual({ models: ['qwen3-embedding:0.6b'], source: 'ollama' });
   });
 
-  test('falls back to common Ollama embedding models when the service is offline', async () => {
+  test('does not show uninstalled catalog models when Ollama is offline', async () => {
     const fakeFetch = (async () => { throw new Error('offline'); }) as typeof fetch;
     const result = await listDesktopProviderModels('ollama', 'embedding', fakeFetch);
-    expect(result.models).toContain('nomic-embed-text');
+    expect(result.models).toEqual([]);
+    expect(result.source).toBe('ollama');
     expect(result.warning).toContain('未连接到本机 Ollama');
   });
 
@@ -40,7 +52,7 @@ describe('desktop provider model catalog', () => {
     const fakeFetch = (async () => { throw new Error('offline'); }) as typeof fetch;
     const result = await listDesktopProviderModels('ollama', 'chat', fakeFetch);
     expect(result.models).toEqual([]);
-    expect(result.warning).toContain('手动输入已安装的模型名称');
+    expect(result.warning).toContain('无法读取已安装的普通模型');
   });
 
   test('explains an empty local Ollama chat catalog', async () => {
@@ -48,5 +60,17 @@ describe('desktop provider model catalog', () => {
     const result = await listDesktopProviderModels('ollama', 'chat', fakeFetch);
     expect(result.models).toEqual([]);
     expect(result.warning).toContain('没有已安装的普通模型');
+  });
+
+  test('hides installed models whose Ollama capabilities cannot be confirmed', async () => {
+    const fakeFetch = (async (url: string | URL | Request) => {
+      if (String(url).endsWith('/api/tags')) {
+        return new Response(JSON.stringify({ models: [{ name: 'unknown:latest' }] }));
+      }
+      return new Response(JSON.stringify({}), { status: 200 });
+    }) as typeof fetch;
+    const result = await listDesktopProviderModels('ollama', 'embedding', fakeFetch);
+    expect(result.models).toEqual([]);
+    expect(result.warning).toContain('无法确认能力');
   });
 });

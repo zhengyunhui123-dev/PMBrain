@@ -55,4 +55,10 @@ describe('models doctor — embedding reachability probe (v0.40.x)', () => {
     expect(slice).toContain("const subArg = args[0] === 'models' ? args[1] : args[0]");
     expect(slice).toMatch(/subArg === 'doctor'\s*\?\s*'doctor'/);
   });
+
+  test('chat probes allow ordinary-model cold starts without an Anthropic-only label', () => {
+    expect(src).toContain('const MODEL_DOCTOR_CHAT_TIMEOUT_MS = 15_000');
+    expect(src).toContain('subagent (tool-capable)');
+    expect(src).not.toContain('subagent (Anthropic-only)');
+  });
 });

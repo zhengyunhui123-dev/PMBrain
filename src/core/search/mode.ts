@@ -245,8 +245,8 @@ export interface ModeBundle {
 
   /**
    * v0.42.3.0 — autocut (score-discontinuity result-sizing). Default OFF for
-   * conservative (no reranker → no trustworthy cliff signal; would no-op
-   * anyway), ON for balanced + tokenmax. When on AND a reranker scored ≥2
+   * conservative + balanced (no reranker → no trustworthy cliff signal;
+   * would no-op anyway), ON for tokenmax. When on AND a reranker scored ≥2
    * items, hybridSearch cuts the ranked set at the largest cross-encoder
    * rerank-score gap (instead of returning the full top-K). No-op without a
    * reranker. Override path: per-call SearchOpts.autocut → `search.autocut`
@@ -325,15 +325,11 @@ export const MODE_BUNDLES: Readonly<Record<SearchMode, Readonly<ModeBundle>>> = 
     tokenBudget: 12000,
     expansion: false,
     searchLimit: 25,
-    // v0.36.0.0 (D6): reranker flipped ON for `balanced` mode bundle. The
-    // real-corpus benchmark shows zerank-2 reshuffles 60% of top-1 results
-    // — the headline ZE quality story reaches the 80% of installs that
-    // stay on `balanced`. Per-query rerank cost ~$0.025/M tokens, ~150ms
-    // p50 added latency. Missing ZEROENTROPY_API_KEY is handled via
-    // src/core/search/rerank.ts fail-open contract: log to audit JSONL,
-    // return input order unchanged. Opt out with
-    // `gbrain config set search.reranker.enabled false`.
-    reranker_enabled: true,
+    // The ordinary balanced path must work with only the user's normal model
+    // and embedding model. A dedicated cross-encoder is an optional advanced
+    // optimization, not a hidden ZeroEntropy dependency. Users can opt in via
+    // `gbrain config set search.reranker.enabled true` plus a reranker model.
+    reranker_enabled: false,
     reranker_model: 'zeroentropyai:zerank-2',
     // v0.42.3.0 D4: topNIn = searchLimit (25) so the cross-encoder scores
     // every result the limit slice will return — no unscored tail for autocut
@@ -367,8 +363,9 @@ export const MODE_BUNDLES: Readonly<Record<SearchMode, Readonly<ModeBundle>>> = 
     // per the cost-tier philosophy.
     contextual_retrieval: 'title' as CRMode,
     contextual_retrieval_disabled: false,
-    // v0.42.3.0 — autocut ON (reranker fires; cliff signal is trustworthy).
-    autocut: true,
+    // Autocut requires calibrated cross-encoder scores, so it follows the
+    // balanced bundle's reranker-off default. Explicit overrides still work.
+    autocut: false,
     relationalRetrieval: true,
     relational_retrieval_depth: 2,
     autocut_jump: 0.2,
@@ -814,9 +811,7 @@ export function knobsHash(
     `tib=${knobs.title_boost === undefined ? 'none' : knobs.title_boost.toFixed(4)}`,
     // v=8 additions (v0.42.3.0, append-only): autocut. An autocut-on write
     // (trimmed result set) must not be served to an autocut-off lookup, and a
-    // sensitivity change (jumpRatio) shifts where the cut lands. Conservative
-    // (autocut off) hashes differently from balanced/tokenmax (autocut on),
-    // which is correct — the result sets differ.
+    // sensitivity change (jumpRatio) shifts where the cut lands.
     `ac=${knobs.autocut ? 1 : 0}`,
     // `?? 0.2` mirrors the module's defensive read of other knobs (graph_signals
     // etc.) so a partial-knobs caller (tests passing a minimal literal) can't

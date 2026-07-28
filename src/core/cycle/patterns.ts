@@ -201,6 +201,10 @@ function buildPatternsPrompt(reflections: ReflectionRef[], minEvidence: number):
 OUTPUT POLICY
 - Only name a pattern if it appears in at least ${minEvidence} DISTINCT reflections.
 - Each pattern page MUST cite the reflections that constitute its evidence (use [[wiki/personal/reflections/...]] wikilinks).
+- Each pattern page MUST use type \`pattern\` and include a YAML frontmatter
+  \`derives_from:\` list containing those exact reflection slugs. PMBrain turns
+  this into pattern -> reflection \`derives_from\` and reflection -> pattern
+  \`evidence_of\` edges; do not use display names in this field.
 - Use \`search\` to check whether a similar pattern page already exists; if yes, update it (use the same slug). If no, create a new one.
 - Pattern slug format: \`wiki/personal/patterns/<topic-slug>\` (lowercase alphanumeric + hyphens; no underscores, no extension, no date).
 - A "pattern" is a recurring theme, anxiety, decision pattern, relationship dynamic, or self-knowledge motif. NOT a single insight. NOT a list of unrelated topics.

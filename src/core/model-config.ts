@@ -10,9 +10,10 @@
  *      — read with stderr deprecation warning, one-per-process
  *   4. Tier config (models.tier.*)
  *   5. Global default (models.default)
- *   6. Env var (process.env[envVar] or GBRAIN_MODEL)
- *   7. Tier default
- *   8. Hardcoded fallback (caller-supplied)
+ *   6. Legacy/simple-mode `chat_model`
+ *   7. Env var (process.env[envVar] or GBRAIN_MODEL)
+ *   8. Tier default
+ *   9. Hardcoded fallback (caller-supplied)
  *
  * Aliases (`opus`, `sonnet`, `haiku`, `gemini`, `gpt`) resolve at the end so any
  * tier can use a short name. Unknown alias passes through unchanged so users can
@@ -155,6 +156,19 @@ export async function readModelConfigValue(
   return normalized;
 }
 
+/**
+ * Canonical ordinary-model setting used as the safe fallback for advanced
+ * routing. `models.default` is the current key; `chat_model` keeps older
+ * Desktop/CLI installations working without silently selecting a vendor
+ * tier default.
+ */
+export async function readOrdinaryModel(engine: BrainEngine | null): Promise<string | null> {
+  const canonical = await readModelConfigValue(engine, 'models.default');
+  if (canonical?.trim()) return canonical.trim();
+  const legacy = await readModelConfigValue(engine, 'chat_model');
+  return legacy?.trim() || null;
+}
+
 function emitDeprecationWarning(oldKey: string, newKey: string, ignored: boolean): void {
   if (_deprecationWarningsEmitted.has(oldKey)) return;
   _deprecationWarningsEmitted.add(oldKey);
@@ -183,7 +197,12 @@ export async function resolveModelDetailed(
 
   const finish = async (candidate: string, source: string, tier = opts.tier): Promise<ResolvedModel> => {
     const requested = await resolveAlias(engine, candidate);
-    const model = enforceSubagentCapable(requested, tier, source);
+    let ordinaryFallback: string | undefined;
+    if (engine && tier === 'subagent') {
+      const ordinary = await readOrdinaryModel(engine);
+      if (ordinary) ordinaryFallback = await resolveAlias(engine, ordinary);
+    }
+    const model = enforceSubagentCapable(requested, tier, source, ordinaryFallback);
     const parsed = splitProviderModelId(model);
     const fallbackUsed = model !== requested;
     return {
@@ -246,21 +265,29 @@ export async function resolveModelDetailed(
     if (def && def.trim()) {
       return finish(def.trim(), 'models.default');
     }
+
+    // 6. Older/simple installations may only have `chat_model`. Treat it as
+    // the ordinary model for every unset task instead of falling through to
+    // the built-in Anthropic tier defaults.
+    const simple = await readModelConfigValue(engine, 'chat_model');
+    if (simple && simple.trim()) {
+      return finish(simple.trim(), 'chat_model');
+    }
   }
 
-  // 6. Env var
+  // 7. Env var
   const env = process.env[envVar];
   if (env && env.trim()) {
     return finish(env.trim(), `env:${envVar}`);
   }
 
-  // 7. Tier default (v0.31.12 — when no override beats us, the tier's
+  // 8. Tier default (v0.31.12 — when no override beats us, the tier's
   //    canonical model wins over caller-supplied fallback)
   if (opts.tier && TIER_DEFAULTS[opts.tier]) {
     return finish(TIER_DEFAULTS[opts.tier], `tier_default:${opts.tier}`);
   }
 
-  // 8. Hardcoded fallback (caller-supplied)
+  // 9. Hardcoded fallback (caller-supplied)
   return finish(opts.fallback, 'fallback');
 }
 
@@ -299,7 +326,12 @@ export async function resolveModel(
  * Once-per-(source, model) warn seam preserved from v0.31.12 (same Set, same
  * suppression key) so doctor + first-call surfaces don't double-warn.
  */
-function enforceSubagentCapable(resolved: string, tier: ModelTier | undefined, source: string): string {
+function enforceSubagentCapable(
+  resolved: string,
+  tier: ModelTier | undefined,
+  source: string,
+  ordinaryFallback?: string,
+): string {
   if (tier !== 'subagent') return resolved;
 
   // Lazy import keeps capabilities.ts out of model-config's eager-load surface
@@ -323,6 +355,18 @@ function enforceSubagentCapable(resolved: string, tier: ModelTier | undefined, s
 
   const key = `${source}:${resolved}`;
   if (verdict === 'unusable:no_tools' || verdict === 'unknown') {
+    let fallback = TIER_DEFAULTS.subagent;
+    if (ordinaryFallback && ordinaryFallback !== resolved) {
+      try {
+        const cap = require('./ai/capabilities.ts') as typeof import('./ai/capabilities.ts');
+        const ordinaryVerdict = cap.classifyCapabilities(ordinaryFallback);
+        if (ordinaryVerdict !== 'unusable:no_tools' && ordinaryVerdict !== 'unknown') {
+          fallback = ordinaryFallback;
+        }
+      } catch {
+        // Preserve the legacy safe fallback if capability inspection fails.
+      }
+    }
     if (!_subagentTierWarningsEmitted.has(key)) {
       _subagentTierWarningsEmitted.add(key);
       const reason = verdict === 'unusable:no_tools'
@@ -330,11 +374,11 @@ function enforceSubagentCapable(resolved: string, tier: ModelTier | undefined, s
         : `is an unrecognized provider`;
       process.stderr.write(
         `[models] tier.subagent resolved to "${resolved}" via "${source}", which ${reason}. ` +
-        `The subagent tool loop cannot run on this model — falling back to ${TIER_DEFAULTS.subagent}. ` +
+        `The subagent tool loop cannot run on this model — falling back to ${fallback}. ` +
         `Fix: pmbrain config set models.tier.subagent <provider>:<model-with-tools>\n`,
       );
     }
-    return TIER_DEFAULTS.subagent;
+    return fallback;
   }
 
   if (verdict === 'degraded:no_caching') {
@@ -343,7 +387,7 @@ function enforceSubagentCapable(resolved: string, tier: ModelTier | undefined, s
       process.stderr.write(
         `[models] tier.subagent resolved to "${resolved}" via "${source}" — provider does not support prompt caching. ` +
         `The loop will run hot (cost scales linearly with conversation length). ` +
-        `For lower cost on long loops, set models.tier.subagent to an Anthropic model.\n`,
+        `For lower cost on long loops, optionally set models.tier.subagent to any configured model with prompt-cache support.\n`,
       );
     }
   }

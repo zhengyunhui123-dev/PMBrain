@@ -859,6 +859,7 @@ export class PostgresEngine implements BrainEngine {
     const deletedCondition = includeDeleted ? sql`` : sql`AND deleted_at IS NULL`;
     const rows = await sql`
       SELECT id, source_id, slug, type, title, compiled_truth, timeline, frontmatter, content_hash, created_at, updated_at, deleted_at,
+             effective_date, effective_date_source,
              source_kind, source_uri, ingested_via, ingested_at
       FROM pages
       WHERE slug = ${slug} ${sourceCondition} ${deletedCondition}
@@ -2479,7 +2480,12 @@ export class PostgresEngine implements BrainEngine {
     linkSource?: string,
     originSlug?: string,
     originField?: string,
-    opts?: { fromSourceId?: string; toSourceId?: string; originSourceId?: string },
+    opts?: {
+      fromSourceId?: string;
+      toSourceId?: string;
+      originSourceId?: string;
+      resolutionType?: 'qualified' | 'unqualified';
+    },
   ): Promise<void> {
     const sql = this.sql;
     const fromSrc = opts?.fromSourceId ?? 'default';
@@ -2505,16 +2511,17 @@ export class PostgresEngine implements BrainEngine {
     // pointing at the wrong pages.
     const src = linkSource ?? 'markdown';
     await sql`
-      INSERT INTO links (from_page_id, to_page_id, link_type, context, link_source, origin_page_id, origin_field)
-      SELECT f.id, t.id, v.link_type, v.context, v.link_source, o.id, v.origin_field
-      FROM (VALUES (${from}, ${to}, ${linkType || ''}, ${context || ''}, ${src}, ${originSlug ?? null}, ${originField ?? null}, ${fromSrc}, ${toSrc}, ${originSrc}))
-        AS v(from_slug, to_slug, link_type, context, link_source, origin_slug, origin_field, from_source_id, to_source_id, origin_source_id)
+      INSERT INTO links (from_page_id, to_page_id, link_type, context, link_source, origin_page_id, origin_field, resolution_type)
+      SELECT f.id, t.id, v.link_type, v.context, v.link_source, o.id, v.origin_field, v.resolution_type
+      FROM (VALUES (${from}, ${to}, ${linkType || ''}, ${context || ''}, ${src}, ${originSlug ?? null}, ${originField ?? null}, ${fromSrc}, ${toSrc}, ${originSrc}, ${opts?.resolutionType ?? null}))
+        AS v(from_slug, to_slug, link_type, context, link_source, origin_slug, origin_field, from_source_id, to_source_id, origin_source_id, resolution_type)
       JOIN pages f ON f.slug = v.from_slug AND f.source_id = v.from_source_id
       JOIN pages t ON t.slug = v.to_slug AND t.source_id = v.to_source_id
       LEFT JOIN pages o ON o.slug = v.origin_slug AND o.source_id = v.origin_source_id
       ON CONFLICT (from_page_id, to_page_id, link_type, link_source, origin_page_id) DO UPDATE SET
         context = EXCLUDED.context,
-        origin_field = EXCLUDED.origin_field
+        origin_field = EXCLUDED.origin_field,
+        resolution_type = EXCLUDED.resolution_type
     `;
   }
 
@@ -2543,17 +2550,18 @@ export class PostgresEngine implements BrainEngine {
     const fromSourceIds = links.map(l => l.from_source_id || 'default');
     const toSourceIds = links.map(l => l.to_source_id || 'default');
     const originSourceIds = links.map(l => l.origin_source_id || 'default');
+    const resolutionTypes = links.map(l => l.resolution_type ?? null);
     // v0.41.18.0 (A10): link_kind column (v98). NULL = legacy/plain.
     const linkKinds = links.map(l => l.link_kind ?? null);
     const result = await sql`
-      INSERT INTO links (from_page_id, to_page_id, link_type, context, link_source, link_kind, origin_page_id, origin_field)
-      SELECT f.id, t.id, v.link_type, v.context, v.link_source, v.link_kind, o.id, v.origin_field
+      INSERT INTO links (from_page_id, to_page_id, link_type, context, link_source, link_kind, origin_page_id, origin_field, resolution_type)
+      SELECT f.id, t.id, v.link_type, v.context, v.link_source, v.link_kind, o.id, v.origin_field, v.resolution_type
       FROM unnest(
         ${fromSlugs}::text[], ${toSlugs}::text[], ${linkTypes}::text[],
         ${contexts}::text[], ${linkSources}::text[], ${originSlugs}::text[],
         ${originFields}::text[], ${fromSourceIds}::text[], ${toSourceIds}::text[],
-        ${originSourceIds}::text[], ${linkKinds}::text[]
-      ) AS v(from_slug, to_slug, link_type, context, link_source, origin_slug, origin_field, from_source_id, to_source_id, origin_source_id, link_kind)
+        ${originSourceIds}::text[], ${linkKinds}::text[], ${resolutionTypes}::text[]
+      ) AS v(from_slug, to_slug, link_type, context, link_source, origin_slug, origin_field, from_source_id, to_source_id, origin_source_id, link_kind, resolution_type)
       JOIN pages f ON f.slug = v.from_slug AND f.source_id = v.from_source_id
       JOIN pages t ON t.slug = v.to_slug AND t.source_id = v.to_source_id
       LEFT JOIN pages o ON o.slug = v.origin_slug AND o.source_id = v.origin_source_id
@@ -2614,8 +2622,9 @@ export class PostgresEngine implements BrainEngine {
       const ids = opts.sourceIds;
       const rows = await sql`
         SELECT f.slug as from_slug, t.slug as to_slug,
-               l.link_type, l.context, l.link_source,
-               o.slug as origin_slug, l.origin_field
+               f.source_id as from_source_id, t.source_id as to_source_id,
+               l.link_type, l.context, l.link_source, l.resolution_type,
+               o.slug as origin_slug, o.source_id as origin_source_id, l.origin_field
         FROM links l
         JOIN pages f ON f.id = l.from_page_id
         JOIN pages t ON t.id = l.to_page_id
@@ -2630,8 +2639,9 @@ export class PostgresEngine implements BrainEngine {
     if (opts?.sourceId) {
       const rows = await sql`
         SELECT f.slug as from_slug, t.slug as to_slug,
-               l.link_type, l.context, l.link_source,
-               o.slug as origin_slug, l.origin_field
+               f.source_id as from_source_id, t.source_id as to_source_id,
+               l.link_type, l.context, l.link_source, l.resolution_type,
+               o.slug as origin_slug, o.source_id as origin_source_id, l.origin_field
         FROM links l
         JOIN pages f ON f.id = l.from_page_id
         JOIN pages t ON t.id = l.to_page_id
@@ -2642,8 +2652,9 @@ export class PostgresEngine implements BrainEngine {
     }
     const rows = await sql`
       SELECT f.slug as from_slug, t.slug as to_slug,
-             l.link_type, l.context, l.link_source,
-             o.slug as origin_slug, l.origin_field
+             f.source_id as from_source_id, t.source_id as to_source_id,
+             l.link_type, l.context, l.link_source, l.resolution_type,
+             o.slug as origin_slug, o.source_id as origin_source_id, l.origin_field
       FROM links l
       JOIN pages f ON f.id = l.from_page_id
       JOIN pages t ON t.id = l.to_page_id
@@ -2659,8 +2670,9 @@ export class PostgresEngine implements BrainEngine {
       const ids = opts.sourceIds;
       const rows = await sql`
         SELECT f.slug as from_slug, t.slug as to_slug,
-               l.link_type, l.context, l.link_source,
-               o.slug as origin_slug, l.origin_field
+               f.source_id as from_source_id, t.source_id as to_source_id,
+               l.link_type, l.context, l.link_source, l.resolution_type,
+               o.slug as origin_slug, o.source_id as origin_source_id, l.origin_field
         FROM links l
         JOIN pages f ON f.id = l.from_page_id
         JOIN pages t ON t.id = l.to_page_id
@@ -2673,8 +2685,9 @@ export class PostgresEngine implements BrainEngine {
     if (opts?.sourceId) {
       const rows = await sql`
         SELECT f.slug as from_slug, t.slug as to_slug,
-               l.link_type, l.context, l.link_source,
-               o.slug as origin_slug, l.origin_field
+               f.source_id as from_source_id, t.source_id as to_source_id,
+               l.link_type, l.context, l.link_source, l.resolution_type,
+               o.slug as origin_slug, o.source_id as origin_source_id, l.origin_field
         FROM links l
         JOIN pages f ON f.id = l.from_page_id
         JOIN pages t ON t.id = l.to_page_id
@@ -2685,8 +2698,9 @@ export class PostgresEngine implements BrainEngine {
     }
     const rows = await sql`
       SELECT f.slug as from_slug, t.slug as to_slug,
-             l.link_type, l.context, l.link_source,
-             o.slug as origin_slug, l.origin_field
+             f.source_id as from_source_id, t.source_id as to_source_id,
+             l.link_type, l.context, l.link_source, l.resolution_type,
+             o.slug as origin_slug, o.source_id as origin_source_id, l.origin_field
       FROM links l
       JOIN pages f ON f.id = l.from_page_id
       JOIN pages t ON t.id = l.to_page_id
@@ -2723,6 +2737,7 @@ export class PostgresEngine implements BrainEngine {
     name: string,
     dirPrefix?: string,
     minSimilarity: number = 0.55,
+    opts?: { sourceId?: string },
   ): Promise<{ slug: string; similarity: number } | null> {
     const sql = this.sql;
     // Use the `similarity()` function directly with an explicit threshold
@@ -2736,11 +2751,15 @@ export class PostgresEngine implements BrainEngine {
     // same winner when multiple pages score equally (prevents churn
     // in put_page auto-link reconciliation).
     const prefixPattern = dirPrefix ? `${dirPrefix}/%` : '%';
+    const sourceFilter = opts?.sourceId
+      ? sql`AND source_id = ${opts.sourceId}`
+      : sql``;
     const rows = await sql`
       SELECT slug, similarity(title, ${name}) AS sim
       FROM pages
       WHERE similarity(title, ${name}) >= ${minSimilarity}
         AND slug LIKE ${prefixPattern}
+        ${sourceFilter}
       ORDER BY sim DESC, slug ASC
       LIMIT 1
     `;
@@ -3225,8 +3244,17 @@ export class PostgresEngine implements BrainEngine {
     return out;
   }
 
-  async findOrphanPages(): Promise<Array<{ slug: string; title: string; domain: string | null }>> {
+  async findOrphanPages(opts?: {
+    sourceId?: string;
+    sourceIds?: string[];
+  }): Promise<Array<{ slug: string; title: string; domain: string | null }>> {
     const sql = this.sql;
+    const sourceFilter =
+      opts?.sourceIds && opts.sourceIds.length > 0
+        ? sql`AND p.source_id = ANY(${opts.sourceIds}::text[])`
+        : opts?.sourceId
+          ? sql`AND p.source_id = ${opts.sourceId}`
+          : sql``;
     // Soft-delete filter on BOTH sides:
     //   - candidate: p.deleted_at IS NULL — soft-deleted pages aren't orphan candidates
     //   - link source: src.deleted_at IS NULL — links FROM soft-deleted pages don't count as inbound
@@ -3239,6 +3267,7 @@ export class PostgresEngine implements BrainEngine {
         p.frontmatter->>'domain' AS domain
       FROM pages p
       WHERE p.deleted_at IS NULL
+        ${sourceFilter}
         AND NOT EXISTS (
           SELECT 1
           FROM links l

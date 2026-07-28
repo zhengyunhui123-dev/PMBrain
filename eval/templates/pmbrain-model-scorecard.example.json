@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "run_id": "replace-with-stable-id",
+  "ran_at": "2026-07-28T00:00:00.000Z",
+  "pmbrain_version": "1.1.74",
+  "commit": "working-tree",
+  "dataset": {
+    "name": "pmbrain-private-real",
+    "version": "1",
+    "queries": 30,
+    "source_ids": ["duwu"]
+  },
+  "configuration": {
+    "ordinary_model": "deepseek:deepseek-v4-flash",
+    "advanced_overrides": {},
+    "embedding_model": "ollama:qwen3-embedding:0.6b",
+    "embedding_dimensions": 1024,
+    "search_mode": "balanced",
+    "reranker_enabled": false,
+    "reranker_model": null
+  },
+  "rag": {
+    "hit_at_1": null,
+    "mrr": null,
+    "recall_at_5": null,
+    "recall_at_10": null,
+    "ndcg_at_10": null,
+    "citation_accuracy": null,
+    "source_isolation_accuracy": null,
+    "query_error_rate": null,
+    "weighted_score": null
+  },
+  "dream": {
+    "factual_fidelity": null,
+    "evidence_relation_validity": null,
+    "entity_concept_linkage": null,
+    "linkable_orphan_reduction": null,
+    "deduplication_quality": null,
+    "source_rule_accuracy": null,
+    "actionability": null,
+    "weighted_score": null
+  },
+  "runtime": {
+    "latency_p50_ms": null,
+    "latency_p95_ms": null,
+    "estimated_cost_usd": null,
+    "errors": []
+  },
+  "verdict": "not-run",
+  "recommendation": "",
+  "limitations": []
+}

@@ -43,7 +43,7 @@
  * trigger lock acquisition.
  */
 
-import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync, statSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync, statSync, realpathSync } from 'fs';
 import { join } from 'path';
 import { hostname } from 'os';
 import { gbrainPath } from './config.ts';
@@ -847,7 +847,32 @@ async function resolveSourceForDir(
       `SELECT id FROM sources WHERE local_path = $1 LIMIT 1`,
       [brainDir],
     );
-    return rows[0]?.id;
+    if (rows[0]) return rows[0].id;
+
+    // The registered source and --dir can name the same directory through
+    // different symlink/junction spellings. Retry on canonical paths only
+    // after the indexed exact lookup misses; ambiguous aliases fail closed.
+    let realDir: string;
+    try {
+      realDir = realpathSync(brainDir);
+    } catch {
+      return undefined;
+    }
+    const candidates = await engine.executeRaw<{ id: string; local_path: string }>(
+      `SELECT id, local_path
+       FROM sources
+       WHERE local_path IS NOT NULL AND archived = false
+       ORDER BY (id = 'default') DESC, id`,
+    );
+    const matches: string[] = [];
+    for (const candidate of candidates) {
+      try {
+        if (realpathSync(candidate.local_path) === realDir) matches.push(candidate.id);
+      } catch {
+        // A stale/unreadable registered path cannot be the active directory.
+      }
+    }
+    return matches.length === 1 ? matches[0] : undefined;
   } catch {
     // sources table might not exist on very old brains — fall through.
     return undefined;

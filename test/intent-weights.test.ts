@@ -5,7 +5,7 @@
  *   - weightsForIntent returns the expected per-intent factors
  *   - effectiveRrfK scales correctly with the weight
  *   - applyExactMatchBoost only fires on exact slug/title matches
- *   - general intent is a no-op (preserves pre-v0.32 behavior)
+ *   - literal slug/title matches retain a floor even for general intent
  */
 
 import { describe, test, expect } from 'bun:test';
@@ -77,10 +77,14 @@ describe('effectiveRrfK', () => {
 });
 
 describe('applyExactMatchBoost', () => {
-  test('boost=1.0 is a no-op', () => {
-    const results = [makeResult({ slug: 'foo', score: 1.0 })];
-    applyExactMatchBoost(results, 'foo', weightsForIntent('general'));
-    expect(results[0].score).toBe(1.0);
+  test('general intent still boosts a literal exact slug', () => {
+    const results = [
+      makeResult({ slug: 'youdao/项目/pmbrain拉取gbrain更新', score: 1.0 }),
+      makeResult({ slug: 'youdao/项目/其他页面', score: 1.0 }),
+    ];
+    applyExactMatchBoost(results, 'pmbrain拉取gbrain更新', weightsForIntent('general'));
+    expect(results[0].score).toBe(1.25);
+    expect(results[1].score).toBe(1.0);
   });
 
   test('exact slug match gets boosted (entity intent)', () => {

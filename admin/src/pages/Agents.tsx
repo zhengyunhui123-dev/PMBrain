@@ -94,20 +94,41 @@ interface ApiKey {
   status: 'active' | 'revoked';
 }
 
-function normalizeReadSources(readSources: string[] | null | undefined, sourceId: string) {
+function effectiveSourceId(sourceId: string, mainSourceId: string) {
+  return sourceId === 'default' ? mainSourceId : sourceId;
+}
+
+export function normalizeReadSources(
+  readSources: string[] | null | undefined,
+  sourceId: string,
+  mainSourceId = sourceId,
+) {
   const values = Array.isArray(readSources) ? readSources.filter(Boolean) : [];
-  return Array.from(new Set(values.length > 0 ? values : [sourceId]));
+  return Array.from(new Set((values.length > 0 ? values : [sourceId]).map(id => effectiveSourceId(id, mainSourceId))));
+}
+
+export function normalizeSourceOptions(sources: SourceOption[], mainSourceId: string) {
+  const normalized = new Map<string, SourceOption>();
+  for (const source of sources) {
+    if (source.archived) continue;
+    const effectiveId = effectiveSourceId(source.id, mainSourceId);
+    const existing = normalized.get(effectiveId);
+    if (!existing || source.id === effectiveId) {
+      normalized.set(effectiveId, { ...source, id: effectiveId });
+    }
+  }
+  return [...normalized.values()];
 }
 
 function sourceLabel(sourceId: string, sources: SourceOption[], mainSourceId: string) {
-  const effectiveId = sourceId === 'default' ? mainSourceId : sourceId;
+  const effectiveId = effectiveSourceId(sourceId, mainSourceId);
   const source = sources.find(item => item.id === effectiveId);
   return source?.name || effectiveId;
 }
 
 function SourceScopeBadges({ agent, mainSourceId }: { agent: Agent; mainSourceId: string }) {
-  const writeSource = agent.source_id || mainSourceId;
-  const reads = normalizeReadSources(agent.federated_read, writeSource).map(id => id === 'default' ? mainSourceId : id);
+  const writeSource = effectiveSourceId(agent.source_id || mainSourceId, mainSourceId);
+  const reads = normalizeReadSources(agent.federated_read, writeSource, mainSourceId);
   return (
     <span className="source-scope-badges">
       {reads.slice(0, 3).map(id => <span key={id} className="badge badge-read">{id}</span>)}
@@ -117,7 +138,7 @@ function SourceScopeBadges({ agent, mainSourceId }: { agent: Agent; mainSourceId
 }
 
 function SourceOptionName({ sourceId, sources, mainSourceId }: { sourceId: string; sources: SourceOption[]; mainSourceId: string }) {
-  const effectiveId = sourceId === 'default' ? mainSourceId : sourceId;
+  const effectiveId = effectiveSourceId(sourceId, mainSourceId);
   const source = sources.find(item => item.id === effectiveId);
   return (
     <>
@@ -324,8 +345,10 @@ export function AgentsPage({
   };
   const loadOverview = () => {
     api.brainOverview().then((overview: any) => {
-      setMainSourceId(typeof overview?.main_source_id === 'string' ? overview.main_source_id : 'default');
-      setSources(Array.isArray(overview?.sources) ? overview.sources.filter((source: SourceOption) => !source.archived) : []);
+      const nextMainSourceId = typeof overview?.main_source_id === 'string' ? overview.main_source_id : 'default';
+      const nextSources = Array.isArray(overview?.sources) ? overview.sources as SourceOption[] : [];
+      setMainSourceId(nextMainSourceId);
+      setSources(normalizeSourceOptions(nextSources, nextMainSourceId));
     }).catch(() => {});
   };
 
@@ -777,8 +800,8 @@ function AgentDrawer({
 }) {
   const [configTab, setConfigTab] = useState<ConfigTab>('json');
   const [editingSource, setEditingSource] = useState(false);
-  const [sourceId, setSourceId] = useState(agent.source_id || mainSourceId);
-  const [readSources, setReadSources] = useState<string[]>(normalizeReadSources(agent.federated_read, agent.source_id || mainSourceId));
+  const [sourceId, setSourceId] = useState(effectiveSourceId(agent.source_id || mainSourceId, mainSourceId));
+  const [readSources, setReadSources] = useState<string[]>(normalizeReadSources(agent.federated_read, agent.source_id || mainSourceId, mainSourceId));
   const [sourceSaving, setSourceSaving] = useState(false);
   const [sourceError, setSourceError] = useState('');
   const serverUrl = window.location.origin;
@@ -787,9 +810,9 @@ function AgentDrawer({
   const agentName = agent.name || agent.client_name || 'unknown';
 
   useEffect(() => {
-    const nextSourceId = agent.source_id || mainSourceId;
+    const nextSourceId = effectiveSourceId(agent.source_id || mainSourceId, mainSourceId);
     setSourceId(nextSourceId);
-    setReadSources(normalizeReadSources(agent.federated_read, nextSourceId));
+    setReadSources(normalizeReadSources(agent.federated_read, nextSourceId, mainSourceId));
   }, [agent.id, agent.source_id, agent.federated_read, mainSourceId]);
 
   const saveSourceScope = async () => {
@@ -981,7 +1004,7 @@ function AgentDrawer({
               </div>
               <div>
                 <span>读取源</span>
-                <b>{normalizeReadSources(agent.federated_read, agent.source_id || mainSourceId).map(id => sourceLabel(id, sources, mainSourceId)).join('、')}</b>
+                <b>{normalizeReadSources(agent.federated_read, agent.source_id || mainSourceId, mainSourceId).map(id => sourceLabel(id, sources, mainSourceId)).join('、')}</b>
               </div>
               <button className="btn btn-secondary" onClick={() => setEditingSource(true)}>修改</button>
             </>

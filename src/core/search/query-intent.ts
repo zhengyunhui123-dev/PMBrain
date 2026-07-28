@@ -73,6 +73,7 @@ const TEMPORAL_PATTERNS = [
   /\bhow\s+long\s+(ago|since)\b/i,
   /\b\d{4}[-/]\d{2}\b/i,
   /\blast\s+(week|month|quarter|year)\b/i,
+  /(什么时候|哪天|最近|近期|最新|上次|上周|上个月|时间线|近期进展|最新进展)/,
 ];
 
 const EVENT_PATTERNS = [
@@ -85,6 +86,7 @@ const EVENT_PATTERNS = [
   /\bmerge[drs]?\b/i,
   /\bnews\b/i,
   /\bhappened?\b/i,
+  /(宣布|发布|上线|融资|收购|合并|发生了什么|新闻)/,
 ];
 
 const ENTITY_PATTERNS = [
@@ -97,6 +99,7 @@ const ENTITY_PATTERNS = [
   /\bbackground\b/i,
   /\bprofile\b/i,
   /\bwhat\s+do\s+(you|we)\s+know\b/i,
+  /(谁是|是什么|介绍一下|讲讲|概述|背景|档案|总结一下)/,
 ];
 
 const FULL_CONTEXT_PATTERNS = [
@@ -126,6 +129,7 @@ const CANONICAL_PATTERNS = [
   /::|->|\.\w+\(/,
   /\b(function|class|method|module)\s+\w+/i,
   /\b(graph|traversal|backlinks?|inbound|outbound)\b/i,
+  /(谁是|是什么|定义|解释一下|介绍一下|背景|概述|知识图谱|反向链接)/,
 ];
 
 // Aggressive recency: "today", "right now", "this morning", "just now".
@@ -134,6 +138,7 @@ const STRONG_RECENCY_PATTERNS = [
   /\bright\s+now\b/i,
   /\bthis\s+morning\b/i,
   /\bjust\s+now\b/i,
+  /(今天|现在|此刻|刚刚|今早|今天早上)/,
 ];
 
 // Moderate recency: "what's going on", "latest", "recent", "this week",
@@ -148,6 +153,7 @@ const RECENCY_ON_PATTERNS = [
   /\bcatch(es|ing)?\b[\s\w]{0,15}\bup\b/i,  // "catch up", "catch me up", "catching X up"
   /\bremind\s+me\s+(what|about|of)\b/i,
   /\b(update|status|progress)\s+(on|with|from)\b/i,
+  /(最近|近期|最新|当前|目前|这周|本周|上周|近期进展|最新进展|当前进展|项目进展|项目状态)/,
 ];
 
 // Per D6: explicit temporal bounds override canonical-wins. "Who is X today"
@@ -159,6 +165,7 @@ const EXPLICIT_TEMPORAL_BOUND_PATTERNS = [
   /\bthis\s+week\b/i,
   /\bsince\s+(launch|last|the|\d)/i,
   /\blast\s+\d+\s+(day|days|week|weeks|month|months)\b/i,
+  /(今天|现在|此刻|今早|这周|本周|最近\d+[天周月]|近\d+[天周月])/,
 ];
 
 // v0.29.1 — salience-axis patterns
@@ -178,6 +185,7 @@ const SALIENCE_ON_PATTERNS = [
   /\b(update|status|progress)\s+(on|with|from)\b/i,
   /\bwhat\s+matters\b/i,
   /\bwhat'?s\s+important\b/i,
+  /(最近怎么样|现在怎么样|重要的事)/,
 ];
 
 // v0.36 cross-modal wave — modality-axis patterns (D6).

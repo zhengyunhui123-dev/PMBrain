@@ -124,6 +124,17 @@ describe('resolveModel — 6-tier precedence', () => {
     expect(m).toBe(DEFAULT_ALIASES.opus);
   });
 
+  test('legacy chat_model is the ordinary fallback when models.default is absent', async () => {
+    stub.set('chat_model', 'deepseek:deepseek-v4-flash');
+    const resolved = await resolveModelDetailed(stub as never, {
+      configKey: 'models.dream.synthesize_concepts',
+      tier: 'reasoning',
+      fallback: 'sonnet',
+    });
+    expect(resolved.model).toBe('deepseek:deepseek-v4-flash');
+    expect(resolved.source).toBe('chat_model');
+  });
+
   test('env var used when no config set', async () => {
     process.env.GBRAIN_MODEL = 'haiku';
     const m = await resolveModel(stub as never, {
@@ -271,6 +282,17 @@ describe('resolveModel — PMBrain tier system', () => {
     });
     expect(m).toBe(TIER_DEFAULTS.subagent);
     expect(stderrCapture).toContain('tier.subagent');
+  });
+
+  test('subagent capability failure falls back to the ordinary model before a vendor default', async () => {
+    stub.set('models.default', 'deepseek:deepseek-v4-flash');
+    stub.set('models.tier.subagent', 'madeup-provider:weird-model');
+    const m = await resolveModel(stub as never, {
+      tier: 'subagent',
+      fallback: 'sonnet',
+    });
+    expect(m).toBe('deepseek:deepseek-v4-flash');
+    expect(stderrCapture).toContain('falling back to deepseek:deepseek-v4-flash');
   });
 
   test('tier.subagent accepts explicit Anthropic override', async () => {

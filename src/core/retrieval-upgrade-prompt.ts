@@ -4,7 +4,7 @@
  * Wires the RetrievalUpgradePlanner to a TTY prompt that:
  *   - Shows the comparison numbers from the v0.36.0.0 wave
  *   - Presents a two-line cost split (D10): schema change + re-embed
- *   - Includes the privacy callout (C2) when balanced-mode reranker flips on
+ *   - Explains that cloud reranking is a separate, explicit opt-in
  *   - Honors TTY detection (non-TTY = skip, informational stderr line)
  *   - Default-on-Enter = STAY (safest); explicit 's' = switch, 'l' = later,
  *     'n' = never ask again
@@ -226,11 +226,11 @@ export function formatBanner(plan: RetrievalUpgradeState): string {
   lines.push(`Re-embed:      ~${plan.est_minutes}min and ${dollars} for ${pages.toLocaleString()} pages`);
   lines.push('               (runs via `gbrain embed --stale` or autopilot — you can walk away)');
 
-  // C2: privacy callout for the balanced-mode reranker flip.
+  // Cloud reranking is optional: embedding migration must not silently opt in.
   lines.push('');
-  lines.push('Heads-up: reranking on this default sends your query and top-30');
-  lines.push('search snippets to api.zeroentropy.dev. Disable any time with');
-  lines.push('`gbrain config set search.reranker.enabled false`.');
+  lines.push('Reranking remains OFF in balanced mode. If you explicitly enable a');
+  lines.push('cloud reranker later, your query and candidate snippets are sent to');
+  lines.push('that provider; local rerankers remain available for advanced users.');
 
   lines.push('');
   lines.push('Options:');

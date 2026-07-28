@@ -3140,6 +3140,14 @@ export async function buildChecks(
   // covers `whoknows_health` (the one DB-dependent skill check) where it's
   // invoked later in the function.
   const scope: 'all' | 'brain' = args.includes('--scope=brain') ? 'brain' : 'all';
+  // Explicit-only: a bare doctor remains brain-wide, while `--source <id>`
+  // asks for the orphan ratio of that source.
+  let orphanRatioSourceId: string | undefined;
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--source' && i + 1 < args.length) {
+      orphanRatioSourceId = args[++i] || undefined;
+    }
+  }
 
   const checks: Check[] = [];
   let autoFixReport: AutoFixReport | null = null;
@@ -4607,19 +4615,28 @@ export async function buildChecks(
   progress.heartbeat('orphan_ratio');
   try {
     const { getOrphansData } = await import('./orphans.ts');
+    const sourceId = orphanRatioSourceId;
+    const sourceLabel = sourceId ? ` in source '${sourceId}'` : '';
     const entityCount = (await engine.executeRaw<{ count: number }>(
-      "SELECT COUNT(*)::int AS count FROM pages WHERE type IN ('entity', 'person', 'company', 'organization') AND deleted_at IS NULL",
+      `SELECT COUNT(*)::int AS count
+       FROM pages
+       WHERE type IN ('entity', 'person', 'company', 'organization')
+         AND deleted_at IS NULL${sourceId ? ' AND source_id = $1' : ''}`,
+      sourceId ? [sourceId] : [],
     ))[0]?.count ?? 0;
-    if (entityCount < 100) {
+    if (entityCount < 100 && !sourceId) {
       checks.push({
         name: 'orphan_ratio',
         status: 'ok',
         message: `Vacuous: ${entityCount} entity pages (<100). Orphan ratio not meaningful at this scale.`,
       });
     } else {
-      const data = await getOrphansData(engine, { includePseudo: false });
+      const data = await getOrphansData(engine, { includePseudo: false, sourceId });
       const ratio = data.total_linkable > 0 ? data.total_orphans / data.total_linkable : 0;
       const pct = (ratio * 100).toFixed(0);
+      const caveat = entityCount < 100
+        ? ` — low scale (${entityCount} entity pages <100), interpret with caution`
+        : '';
       const hint =
         'Run: gbrain extract links --by-mention   (auto-links entity mentions in body text). ' +
         'Run gbrain orphans for the list.';
@@ -4627,19 +4644,19 @@ export async function buildChecks(
         checks.push({
           name: 'orphan_ratio',
           status: 'fail',
-          message: `Orphan ratio ${pct}% (${data.total_orphans}/${data.total_linkable} linkable pages have no inbound links). ${hint}`,
+          message: `Orphan ratio ${pct}%${sourceLabel} (${data.total_orphans}/${data.total_linkable} linkable pages have no inbound links)${caveat}. ${hint}`,
         });
       } else if (ratio > 0.5) {
         checks.push({
           name: 'orphan_ratio',
           status: 'warn',
-          message: `Orphan ratio ${pct}% (${data.total_orphans}/${data.total_linkable} linkable pages have no inbound links). ${hint}`,
+          message: `Orphan ratio ${pct}%${sourceLabel} (${data.total_orphans}/${data.total_linkable} linkable pages have no inbound links)${caveat}. ${hint}`,
         });
       } else {
         checks.push({
           name: 'orphan_ratio',
           status: 'ok',
-          message: `Orphan ratio ${pct}% (${data.total_orphans}/${data.total_linkable} linkable pages)`,
+          message: `Orphan ratio ${pct}%${sourceLabel} (${data.total_orphans}/${data.total_linkable} linkable pages)${caveat}`,
         });
       }
     }
