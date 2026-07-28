@@ -2,7 +2,7 @@
   "schema_version": 1,
   "run_id": "replace-with-stable-id",
   "ran_at": "2026-07-28T00:00:00.000Z",
-  "pmbrain_version": "1.1.74",
+  "pmbrain_version": "1.1.75",
   "commit": "working-tree",
   "dataset": {
     "name": "pmbrain-private-real",
