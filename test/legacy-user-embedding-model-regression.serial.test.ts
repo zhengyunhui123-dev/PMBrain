@@ -7,9 +7,10 @@
  * 3. embed --stale / Dream 只补 embedding IS NULL
  * 4. 后台路径不得调用 invalidateMismatchedEmbeddingModels
  */
-import { describe, expect, test, mock, beforeEach } from 'bun:test';
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { describe, expect, test, mock, beforeEach, beforeAll, afterAll } from 'bun:test';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import type { BrainEngine } from '../src/core/engine.ts';
 
 let activeEmbedCalls = 0;
@@ -26,6 +27,28 @@ mock.module('../src/core/embedding.ts', () => ({
 const { runEmbedCore } = await import('../src/commands/embed.ts');
 const { __setEmbedTransportForTests, configureGateway, resetGateway } = await import('../src/core/ai/gateway.ts');
 __setEmbedTransportForTests(async () => ({ embeddings: [], usage: { tokens: 0 } } as any));
+
+let embeddingConfigHome: string;
+let previousPmbrainHome: string | undefined;
+
+beforeAll(() => {
+  embeddingConfigHome = mkdtempSync(join(tmpdir(), 'pmbrain-legacy-embed-config-'));
+  previousPmbrainHome = process.env.PMBRAIN_HOME;
+  process.env.PMBRAIN_HOME = embeddingConfigHome;
+  const configDir = join(embeddingConfigHome, '.pmbrain');
+  mkdirSync(configDir, { recursive: true });
+  writeFileSync(join(configDir, 'config.json'), JSON.stringify({
+    engine: 'pglite',
+    embedding_model: 'ollama:qwen3-embedding:0.6b',
+    embedding_dimensions: 1536,
+  }));
+});
+
+afterAll(() => {
+  if (previousPmbrainHome === undefined) delete process.env.PMBRAIN_HOME;
+  else process.env.PMBRAIN_HOME = previousPmbrainHome;
+  rmSync(embeddingConfigHome, { recursive: true, force: true });
+});
 
 function mockEngine(overrides: Partial<Record<string, any>> = {}): BrainEngine {
   return new Proxy({} as any, {

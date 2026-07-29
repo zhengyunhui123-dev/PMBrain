@@ -10,6 +10,9 @@
  */
 
 import { describe, test, expect, mock, beforeEach, beforeAll, afterAll, afterEach } from 'bun:test';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 // ─── Mocks ──────────────────────────────────────────────────────────
 // Track what each phase was called with so tests can assert.
@@ -130,8 +133,20 @@ async function truncateCycleLocks(engine: InstanceType<typeof PGLiteEngine>) {
 // to hit beforeAll timeouts. truncateCycleLocks between tests keeps
 // state clean.
 let sharedEngine: InstanceType<typeof PGLiteEngine>;
+let embeddingConfigHome: string;
+let previousPmbrainHome: string | undefined;
 
 beforeAll(async () => {
+  embeddingConfigHome = mkdtempSync(join(tmpdir(), 'pmbrain-cycle-config-'));
+  previousPmbrainHome = process.env.PMBRAIN_HOME;
+  process.env.PMBRAIN_HOME = embeddingConfigHome;
+  const configDir = join(embeddingConfigHome, '.pmbrain');
+  mkdirSync(configDir, { recursive: true });
+  writeFileSync(join(configDir, 'config.json'), JSON.stringify({
+    engine: 'pglite',
+    embedding_model: 'ollama:qwen3-embedding:0.6b',
+    embedding_dimensions: 1536,
+  }));
   sharedEngine = new PGLiteEngine();
   await sharedEngine.connect({});
   await sharedEngine.initSchema();
@@ -139,6 +154,9 @@ beforeAll(async () => {
 
 afterAll(async () => {
   if (sharedEngine) await sharedEngine.disconnect();
+  if (previousPmbrainHome === undefined) delete process.env.PMBRAIN_HOME;
+  else process.env.PMBRAIN_HOME = previousPmbrainHome;
+  rmSync(embeddingConfigHome, { recursive: true, force: true });
 }, 60_000);
 
 beforeEach(() => {

@@ -1,4 +1,7 @@
-import { describe, test, expect, mock, beforeEach, afterEach } from 'bun:test';
+import { describe, test, expect, mock, beforeEach, afterEach, beforeAll, afterAll } from 'bun:test';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { BrainEngine } from '../src/core/engine.ts';
 
 // Mock the embedding module BEFORE importing runEmbed, so runEmbed picks up
@@ -44,6 +47,28 @@ const { runEmbed } = await import('../src/commands/embed.ts');
 // flags the preflight as ok without touching real env vars.
 const { __setEmbedTransportForTests } = await import('../src/core/ai/gateway.ts');
 __setEmbedTransportForTests(async () => ({ embeddings: [], usage: { tokens: 0 } } as any));
+
+let embeddingConfigHome: string;
+let previousPmbrainHome: string | undefined;
+
+beforeAll(() => {
+  embeddingConfigHome = mkdtempSync(join(tmpdir(), 'pmbrain-embed-config-'));
+  previousPmbrainHome = process.env.PMBRAIN_HOME;
+  process.env.PMBRAIN_HOME = embeddingConfigHome;
+  const configDir = join(embeddingConfigHome, '.pmbrain');
+  mkdirSync(configDir, { recursive: true });
+  writeFileSync(join(configDir, 'config.json'), JSON.stringify({
+    engine: 'pglite',
+    embedding_model: 'ollama:qwen3-embedding:0.6b',
+    embedding_dimensions: 1536,
+  }));
+});
+
+afterAll(() => {
+  if (previousPmbrainHome === undefined) delete process.env.PMBRAIN_HOME;
+  else process.env.PMBRAIN_HOME = previousPmbrainHome;
+  rmSync(embeddingConfigHome, { recursive: true, force: true });
+});
 
 // Proxy-based mock engine that matches test/import-file.test.ts pattern.
 function mockEngine(overrides: Partial<Record<string, any>> = {}): BrainEngine {
