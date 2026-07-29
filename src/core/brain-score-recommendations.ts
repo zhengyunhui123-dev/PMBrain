@@ -6,7 +6,6 @@ import { getRecipe } from './ai/recipes/index.ts';
 import { parseModelId } from './ai/model-resolver.ts';
 import {
   DEFAULT_EMBEDDING_DIMENSIONS,
-  DEFAULT_EMBEDDING_MODEL,
 } from './ai/defaults.ts';
 
 /**
@@ -214,9 +213,13 @@ export function computeRecommendations(
   // ---------------------------------------------------------------------
   // embed.stale — missing embeddings. Critical: invisible to vector search
   // ---------------------------------------------------------------------
-  if (health.missing_embeddings > 0 && ctx.embeddingProviderConfigured !== false) {
+  if (
+    health.missing_embeddings > 0
+    && ctx.embeddingProviderConfigured === true
+    && ctx.embeddingModel
+  ) {
     const params = { stale: true, sourceId: ctx.sourceId };
-    const embedModel = ctx.embeddingModel ?? DEFAULT_EMBEDDING_MODEL;
+    const embedModel = ctx.embeddingModel;
     const embedDims = ctx.embeddingDimensions ?? DEFAULT_EMBEDDING_DIMENSIONS;
     // Rough char estimate per chunk ~ 1.5k chars (chunker target).
     const estChars = health.missing_embeddings * 1500;

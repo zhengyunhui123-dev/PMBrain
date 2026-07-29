@@ -5045,6 +5045,15 @@ export const MIGRATIONS: Migration[] = [
         ON take_proposals (source_id, page_slug, content_hash, prompt_version, md5(claim_text));
     `,
   },
+  {
+    version: 113,
+    name: 'embedding_model_provenance_nullable',
+    idempotent: true,
+    sql: `
+      ALTER TABLE content_chunks ALTER COLUMN model DROP DEFAULT;
+      ALTER TABLE content_chunks ALTER COLUMN model DROP NOT NULL;
+    `,
+  },
 ];
 
 export const LATEST_VERSION = MIGRATIONS.length > 0

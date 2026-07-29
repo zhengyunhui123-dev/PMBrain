@@ -9,6 +9,7 @@ import { chunkCodeText, chunkCodeTextFull, detectCodeLanguage, CHUNKER_VERSION }
 import { findChunkForOffset } from './chunkers/edge-extractor.ts';
 import { extractCodeRefs, imageOfCandidates } from './link-extraction.ts';
 import { embedBatch, embedMultimodal } from './embedding.ts';
+import { getEmbeddingModel } from './ai/gateway.ts';
 import { slugifyPath, slugifyCodePath, isCodeFilePath } from './sync.ts';
 import type { ChunkInput, PageInput, PageType } from './types.ts';
 import { computeEffectiveDate } from './effective-date.ts';
@@ -641,8 +642,10 @@ export async function importFromContent(
       ? chunks.map((c) => wrapChunkForEmbedding(c.chunk_text, prefix, c.chunk_source))
       : chunks.map((c) => c.chunk_text);
     const embeddings = await embedBatch(wrappedTexts);
+    const embeddingModel = getEmbeddingModel();
     for (let i = 0; i < chunks.length; i++) {
       chunks[i].embedding = embeddings[i];
+      chunks[i].model = embeddingModel;
       // token_count tracks the wrapped string length so cost reporting
       // reflects what we actually sent to the embedder.
       chunks[i].token_count = Math.ceil(wrappedTexts[i].length / 4);
@@ -1031,6 +1034,7 @@ export async function importCodeFile(
     if (matched && matched.embedding) {
       // Reuse the existing embedding verbatim. No API call, no cost.
       chunks[i]!.embedding = matched.embedding as Float32Array;
+      chunks[i]!.model = matched.model ?? undefined;
       chunks[i]!.token_count = matched.token_count ?? undefined;
     } else {
       needsEmbedIndexes.push(i);
@@ -1042,9 +1046,11 @@ export async function importCodeFile(
     try {
       const textsToEmbed = needsEmbedIndexes.map((i) => chunks[i]!.chunk_text);
       const embeddings = await embedBatch(textsToEmbed);
+      const embeddingModel = getEmbeddingModel();
       for (let j = 0; j < needsEmbedIndexes.length; j++) {
         const i = needsEmbedIndexes[j]!;
         chunks[i]!.embedding = embeddings[j]!;
+        chunks[i]!.model = embeddingModel;
         chunks[i]!.token_count = Math.ceil(chunks[i]!.chunk_text.length / 4);
       }
     } catch (e: unknown) {

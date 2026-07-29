@@ -1173,6 +1173,27 @@ async function runPhaseResolveSymbolEdges(
 
 async function runPhaseEmbed(engine: BrainEngine, dryRun: boolean): Promise<PhaseResult> {
   try {
+    const { loadConfig } = await import('./config.ts');
+    const cfg = loadConfig();
+    const embeddingModel = cfg?.embedding_model?.trim();
+    const embeddingDimensions = Number(cfg?.embedding_dimensions);
+    if (
+      cfg?.embedding_disabled
+      || !embeddingModel
+      || !Number.isInteger(embeddingDimensions)
+      || embeddingDimensions <= 0
+    ) {
+      return {
+        phase: 'embed',
+        status: 'skipped',
+        duration_ms: 0,
+        summary: '未配置向量模型，Dream 已跳过向量化阶段',
+        details: {
+          reason: 'embedding_not_configured',
+          dryRun,
+        },
+      };
+    }
     const { runEmbedCore } = await import('../commands/embed.ts');
     const result = await runEmbedCore(engine, { stale: true, dryRun });
     const embeddedCount = dryRun ? result.would_embed : result.embedded;

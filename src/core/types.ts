@@ -558,7 +558,8 @@ export interface Chunk {
   chunk_text: string;
   chunk_source: 'compiled_truth' | 'timeline' | 'fenced_code' | 'office_child';
   embedding: Float32Array | null;
-  model: string;
+  /** Exact provider:model provenance; null until a text embedding exists. */
+  model: string | null;
   token_count: number | null;
   embedded_at: Date | null;
   /** v0.19.0 code metadata (NULL for markdown chunks). */

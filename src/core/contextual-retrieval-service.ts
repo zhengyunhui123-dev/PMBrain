@@ -42,6 +42,7 @@
 import { createHash } from 'crypto';
 import * as fs from 'node:fs';
 import { embedBatch } from './embedding.ts';
+import { getEmbeddingModel } from './ai/gateway.ts';
 import { resolveContextualRetrievalMode } from './contextual-retrieval-resolver.ts';
 import {
   buildContextualPrefix,
@@ -74,21 +75,11 @@ import type { SourceRow } from './sources-ops.ts';
 export const TITLE_WRAPPER_VERSION = 1;
 
 /**
- * Embedding model placeholder. The actual model name lands here from
- * `gateway.getEmbeddingModelName()` at runtime; for hash composition we
- * just need the SAME string the gateway threads into embedBatch.
+ * The exact configured model participates in the corpus hash and is stored
+ * beside every vector. An unconfigured gateway throws before any write.
  */
 function getEmbeddingModelTag(): string {
-  // Lazy — keeps the hash composition pure-ish without forcing the
-  // gateway init at module load. Falls back to a sentinel when the
-  // gateway hasn't been configured (test paths).
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const { getEmbeddingModelName } = require('./ai/gateway.ts');
-    return String(getEmbeddingModelName() ?? 'unknown');
-  } catch {
-    return 'unknown';
-  }
+  return getEmbeddingModel();
 }
 
 /**
@@ -405,6 +396,7 @@ async function tryBuildPhase1(opts: {
           ...c,
           chunk_text: c.chunk_text, // canonical, NOT the wrapped string (D20-T1)
           embedding: embeddings[i],
+          model: getEmbeddingModel(),
           token_count: Math.ceil(wrappedTexts[i].length / 4),
         })),
       };
@@ -502,6 +494,7 @@ async function tryBuildPhase1(opts: {
         ...c,
         chunk_text: c.chunk_text, // canonical (D20-T1)
         embedding: embeddings[i],
+        model: getEmbeddingModel(),
         token_count: Math.ceil(wrappedTexts[i].length / 4),
       })),
     };

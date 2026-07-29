@@ -126,7 +126,7 @@ describe('desktop config manager', () => {
     expect(getSetupInfo().current.theme).toBe('light');
   });
 
-  test('derives new-install model defaults from the CLI recipe registry', () => {
+  test('provider API key configures chat only and leaves embedding disabled', () => {
     const root = isolatedHome();
     saveSetup({
       engine: 'pglite',
@@ -136,7 +136,24 @@ describe('desktop config manager', () => {
     const config = JSON.parse(readFileSync(desktopConfigPath(), 'utf8'));
     expect(config.chat_model).toBe(`google:${getRecipe('google')!.touchpoints.chat!.models[0]}`);
     expect(config.expansion_model).toBe(`google:${getRecipe('google')!.touchpoints.expansion!.models[0]}`);
-    expect(config.embedding_model).toBe(`google:${getRecipe('google')!.touchpoints.embedding!.models[0]}`);
+    expect(config.embedding_model).toBeUndefined();
+    expect(config.embedding_dimensions).toBeUndefined();
+    expect(config.embedding_disabled).toBe(true);
+  });
+
+  test('DeepSeek ordinary model never activates a default embedding provider', () => {
+    const root = isolatedHome();
+    saveSetup({
+      engine: 'pglite',
+      databasePath: join(root, 'brain.pglite'),
+      keys: { deepseek: 'deepseek-test' },
+      modelConfig: { chatModel: 'deepseek:deepseek-v4' },
+    });
+
+    const config = JSON.parse(readFileSync(desktopConfigPath(), 'utf8'));
+    expect(config.chat_model).toBe('deepseek:deepseek-v4');
+    expect(config.embedding_model).toBeUndefined();
+    expect(config.embedding_disabled).toBe(true);
   });
 
   test('normalizes selected PGLite directories to a brain.pglite data directory', () => {

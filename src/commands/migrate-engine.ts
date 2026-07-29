@@ -204,7 +204,7 @@ export async function runMigrateEngine(sourceEngine: BrainEngine, args: string[]
         chunk_text: c.chunk_text,
         chunk_source: c.chunk_source,
         embedding: c.embedding || undefined,
-        model: c.model,
+        model: c.model ?? undefined,
         token_count: c.token_count || undefined,
       })), sourceOpts);
     }

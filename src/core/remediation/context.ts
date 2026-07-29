@@ -41,13 +41,18 @@ export async function loadRecommendationContext(
     embeddingModel = gw.getEmbeddingModel();
     embeddingDimensions = gw.getEmbeddingDimensions();
   } catch {
-    // Gateway unconfigured — prefer canonical file config, then retain the
-    // legacy DB fallback for headless/older brains without config.json.
-    const dbModel = await engine.getConfig('embedding_model');
-    const dbDims = await engine.getConfig('embedding_dimensions');
-    embeddingModel = fileCfg?.embedding_model ?? dbModel ?? undefined;
-    embeddingDimensions = fileCfg?.embedding_dimensions
-      ?? (dbDims ? Number(dbDims) : undefined);
+    // An existing canonical file is authoritative even when embedding is
+    // intentionally absent. Only truly headless legacy brains may use the
+    // DB plane; this prevents old schema seed rows from reviving ZE.
+    if (fileCfg) {
+      embeddingModel = fileCfg.embedding_model;
+      embeddingDimensions = fileCfg.embedding_dimensions;
+    } else {
+      const dbModel = await engine.getConfig('embedding_model');
+      const dbDims = await engine.getConfig('embedding_dimensions');
+      embeddingModel = dbModel ?? undefined;
+      embeddingDimensions = dbDims ? Number(dbDims) : undefined;
+    }
   }
   // v0.40.x: recipe-aware provider check, shared with autopilot.ts via
   // embeddingProviderConfigured(). Local providers (ollama, llama-server —

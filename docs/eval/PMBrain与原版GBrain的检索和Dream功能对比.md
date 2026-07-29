@@ -1,10 +1,10 @@
 # PMBrain 与原版 GBrain 的检索和 Dream 功能对比
 
-维护日期：2026-07-28
+维护日期：2026-07-29
 
-PMBrain 基线：1.1.75，`master` 合并结果
+PMBrain 基线：1.1.76，本次 Embedding 安全修复结果
 
-GBrain 基线：`D:\cursor-claude\gbrain` 的最新 `origin/master`，commit `ddd66e1d`，VERSION `0.42.66.1`
+GBrain 基线：`D:\cursor-claude\gbrain` 的最新本地 `master`，commit `faf5cdba`，VERSION `0.42.66.1`
 
 > 两个项目采用不同版本规则，版本号不能直接比较大小。本对比以实际代码、阶段顺序、配置解析和测试入口为准，不以版本号推断能力。
 
@@ -14,7 +14,7 @@ PMBrain 不是重新实现了一套 RAG 和 Dream：
 
 - RAG 的混合召回、搜索模式、排序增强、图谱召回、缓存、遥测和评测底座主要沿用 GBrain。
 - Dream 的阶段顺序、锁、Source 作用域、知识抽取、概念合成、观点与校准等主流程主要沿用 GBrain。
-- PMBrain 的新增集中在中文与项目管理检索、普通模型统一兜底、桌面与 Admin 产品化、Source 安全实体解析、知识关系回填、孤儿治理和面向真实用户的质量评分。
+- PMBrain 的新增集中在中文与项目管理检索、普通模型统一兜底、无默认 Embedding 安全契约、桌面与 Admin 产品化、Source 安全实体解析、知识关系回填、孤儿治理和面向真实用户的质量评分。
 - PMBrain 也存在尚未同步的上游更新，不能把这些差异误称为产品创新。查询向量超时、最新缓存隔离、部分会话解析、原子任务排空等应继续评估移植；SkillOpt、Chronicle 等仍按产品边界暂缓。
 
 后续维护原则仍是：
@@ -58,6 +58,9 @@ PMBrain 不是重新实现了一套 RAG 和 Dream：
 | 完整排序指标 | 在上游 Recall/Top1 基础上增加 MRR、Precision、nDCG、逐题返回页和页面级去重 | 同一页多个 chunk 不能重复增加 Recall |
 | 公开与私有双层评测 | 公开固定题集用于 CI；私人真实问题存放在忽略目录 | 同时约束所有用户的公共质量和个人真实措辞 |
 | 中文质量规范与模型评分 | 固定预计回答、答案条件、引用准确率、Source 隔离和模型 A/B 规则 | 模型推荐必须来自同题集实测，而不是主观印象 |
+| 无默认 Embedding | 新安装、普通模型 API Key 和 Dream 模型都不会自动选择向量供应商；必须显式配置模型和维度 | 防止未授权的云端调用、混合向量空间和错误模型标签 |
+| 向量 provenance 一致性 | 只有非空向量才记录实际 `provider:model`；无向量分块为 `NULL`，no-embed 重写保留原向量标签 | 修复 Ollama 向量被错误标成 ZeroEntropy 的统计和冲突更新问题 |
+| Keyword-only 明确降级 | 未配置 Embedding 时 vector 状态为 unavailable，关键词、标题和关系检索仍可工作 | 所有用户都能理解实际执行链路，不把未启用误认为模型效果差 |
 
 ## 4. Dream：沿用原版 GBrain 的能力
 
@@ -105,6 +108,7 @@ lint → backlinks → sync → synthesize → extract → extract_facts
 | 历史关系安全回填 | 写入前导出完整 links 备份，回填后统计关系类型、缺失端点与跨 Source 目标 | `scripts/backup-links.ts`、`scripts/report-link-quality.ts` |
 | Admin 与桌面 Dream 产品层 | 一键整理、定时运行、阶段摘要、成果明细、后台无窗口运行和高级模型配置 | `admin/`、`desktop/` |
 | 面向发布的 Dream 评分 | 事实保真、证据有效、实体串联、孤儿改善、去重、Source 规则和行动价值分开评分 | `docs/eval/PMBrain检索与Dream质量评测规范.md` |
+| 未配置向量时跳过 embed | Dream 返回 `embedding_not_configured` 的 skipped 阶段，不会选择 ZE，也不会把普通模型当向量模型 | `src/core/cycle.ts`、`src/core/embedding-dim-check.ts` |
 
 ## 6. 当前尚未同步或明确暂缓的上游能力
 
@@ -113,6 +117,7 @@ lint → backlinks → sync → synthesize → extract → extract_facts
 | 上游能力 | PMBrain 状态 | 建议 |
 |---|---|---|
 | Query embedding 共享 deadline | 尚未同步；GBrain 有 `makeQueryEmbedDeadline()`，PMBrain 当前没有 | 高优先级评估移植，避免向量服务卡住缓存查询和主搜索两次 |
+| Dream embed 的 AbortSignal 与 quiet 输出 | 最新 GBrain 已接入，PMBrain 当前仅完成“未配置则跳过”和不回退 | 后续移植中止信号与安静输出，不改变现有阶段数据语义 |
 | Query cache 最新隔离 | GBrain `KNOBS_HASH_VERSION=13`，已纳入 embedding provider 与 hard-exclude；PMBrain 当前为 9 | 高优先级移植，防止模型切换或排除规则变化后误用旧缓存 |
 | Provider-agnostic embedding migration 命令 | GBrain 有独立 `migrate-embeddings.ts`；PMBrain 仍使用自己的受保护重嵌入流程 | 与老用户向量保护规则对照后移植，不能直接清空索引 |
 | Global basename Wikilink 解析 | PMBrain 未采用上游跨目录 basename 开关 | 暂不直接移植；当前 Source-local → default 策略更符合多 Source 安全边界 |
@@ -123,7 +128,22 @@ lint → backlinks → sync → synthesize → extract → extract_facts
 | 最新会话解析模式 | GBrain 当前 17 个 built-in，PMBrain 为 12 个 | 建议补齐 Slack/会议等新增格式，并使用现有 conversation parser 测试验证 |
 | `extract --stale` 与 global-basename 相关修复 | PMBrain 尚未完整同步 | 只移植与 Source 安全策略兼容的增量水位、失败回显和中止处理 |
 
-## 7. 如何判断后续功能属于哪一层
+## 7. 本次 Embedding 差异结论
+
+最新 GBrain 仍保留 `zeroentropyai:zembed-1` 运行时默认值，因此这一点不沿用。
+GBrain 已把部分分块 provenance 从硬编码 ZE 改为 Gateway 当前模型，这个方向沿用，
+但 PMBrain 进一步要求“没有实际向量就不写模型”。
+
+PMBrain 本次新增并固定以下行为：
+
+1. `config.json` 没有完整的 `embedding_model + embedding_dimensions` 时不调用任何向量服务。
+2. DeepSeek、MIMO、智谱等普通模型/API Key 只影响 Chat 和推理，不自动启用 Embedding。
+3. Ollama 或其他显式模型失败时保留原错误，不切换到 ZE 或其他供应商。
+4. Fresh schema 不写 `embedding_model`；1280 只作为未配置时的向量列存储宽度。
+5. 导入、Dream、后台补全和两种数据库引擎共享 provenance 规则。
+6. 历史上已被错误标记的行不自动批量改写；需另行取得授权并以可验证证据回填。
+
+## 8. 如何判断后续功能属于哪一层
 
 满足以下任一条件，优先视为 GBrain 核心层：
 

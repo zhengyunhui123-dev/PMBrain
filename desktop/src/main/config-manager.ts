@@ -443,7 +443,7 @@ export function restoreConfig(snapshot: ConfigSnapshot): void {
   }
 }
 
-function recipeDefault(provider: string, touchpoint: 'chat' | 'expansion' | 'embedding'): string {
+function recipeDefault(provider: string, touchpoint: 'chat' | 'expansion'): string {
   const model = getRecipe(provider)?.touchpoints[touchpoint]?.models[0];
   if (!model) throw new Error(`PMBrain recipe ${provider} 没有可用的 ${touchpoint} 默认模型。`);
   return `${provider}:${model}`;
@@ -453,80 +453,33 @@ function selectModelDefaults(config: RawConfig): void {
   if (config.mimo_api_key) {
     config.chat_model ??= recipeDefault('mimo', 'chat');
     config.expansion_model ??= recipeDefault('mimo', 'expansion');
-    config.embedding_model ??= recipeDefault('mimo', 'embedding');
-    config.embedding_dimensions ??= 1536;
-    delete config.embedding_disabled;
-    return;
-  }
-  if (config.zhipu_api_key) {
+  } else if (config.zhipu_api_key) {
     config.chat_model ??= recipeDefault('zhipu', 'chat');
     config.expansion_model ??= recipeDefault('zhipu', 'expansion');
-    config.embedding_model ??= recipeDefault('zhipu', 'embedding');
-    config.embedding_dimensions ??= 1024;
-    delete config.embedding_disabled;
-    return;
-  }
-  if (config.deepseek_api_key) {
+  } else if (config.deepseek_api_key) {
     config.chat_model ??= recipeDefault('deepseek', 'chat');
     config.expansion_model ??= recipeDefault('deepseek', 'expansion');
-    config.embedding_model ??= recipeDefault('deepseek', 'embedding');
-    config.embedding_dimensions ??= 1536;
-    delete config.embedding_disabled;
-    return;
-  }
-  if (config.openai_api_key) {
+  } else if (config.openai_api_key) {
     config.chat_model ??= recipeDefault('openai', 'chat');
     config.expansion_model ??= recipeDefault('openai', 'expansion');
-    config.embedding_model ??= recipeDefault('openai', 'embedding');
-    config.embedding_dimensions ??= 1536;
-    delete config.embedding_disabled;
-    return;
-  }
-  if (config.anthropic_api_key) {
+  } else if (config.anthropic_api_key) {
     config.chat_model ??= recipeDefault('anthropic', 'chat');
     config.expansion_model ??= recipeDefault('anthropic', 'expansion');
-    delete config.embedding_disabled;
-    return;
-  }
-  if (config.google_api_key) {
+  } else if (config.google_api_key) {
     config.chat_model ??= recipeDefault('google', 'chat');
     config.expansion_model ??= recipeDefault('google', 'expansion');
-    config.embedding_model ??= recipeDefault('google', 'embedding');
-    config.embedding_dimensions ??= 768;
-    delete config.embedding_disabled;
-    return;
-  }
-  if (config.groq_api_key) {
+  } else if (config.groq_api_key) {
     config.chat_model ??= recipeDefault('groq', 'chat');
     config.expansion_model ??= recipeDefault('groq', 'chat');
-    delete config.embedding_disabled;
-    return;
-  }
-  if (config.together_api_key) {
+  } else if (config.together_api_key) {
     config.chat_model ??= recipeDefault('together', 'chat');
     config.expansion_model ??= recipeDefault('together', 'chat');
-    delete config.embedding_disabled;
-    return;
-  }
-  if (config.openrouter_api_key) {
+  } else if (config.openrouter_api_key) {
     config.chat_model ??= recipeDefault('openrouter', 'chat');
     config.expansion_model ??= recipeDefault('openrouter', 'chat');
-    delete config.embedding_disabled;
-    return;
   }
-  if (config.minimax_api_key) {
-    config.embedding_model ??= recipeDefault('minimax', 'embedding');
-    config.embedding_dimensions ??= 1536;
-    delete config.embedding_disabled;
-    return;
-  }
-  if (config.dashscope_api_key) {
-    config.embedding_model ??= recipeDefault('dashscope', 'embedding');
-    config.embedding_dimensions ??= 1024;
-    delete config.embedding_disabled;
-    return;
-  }
-  if (!config.embedding_model) config.embedding_disabled = true;
+  if (config.embedding_model?.trim()) delete config.embedding_disabled;
+  else config.embedding_disabled = true;
 }
 
 export function saveSetup(payload: SetupPayload): {
@@ -619,11 +572,12 @@ export function saveSetup(payload: SetupPayload): {
     config.embedding_dimensions = embeddingDimensions;
   }
 
-  // Dimensions are internal desktop configuration. Legacy values remain
-  // untouched unless the user actively selects a different model.
-  if (typeof config.embedding_dimensions !== 'number'
+  // Dimensions are required only after the user explicitly selects an
+  // embedding model. Ordinary chat credentials never activate embedding.
+  if (config.embedding_model && (
+      typeof config.embedding_dimensions !== 'number'
       || !Number.isInteger(config.embedding_dimensions)
-      || config.embedding_dimensions <= 0) {
+      || config.embedding_dimensions <= 0)) {
     throw new Error('请填写有效的向量化维度。');
   }
 

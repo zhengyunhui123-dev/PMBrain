@@ -501,9 +501,13 @@ export async function runAutopilot(engine: BrainEngine, args: string[]) {
           const gw = await import('../core/ai/gateway.ts');
           embeddingModel = gw.getEmbeddingModel();
         } catch {
-          embeddingModel = loadConfigFileOnly()?.embedding_model
-            ?? (await engine.getConfig('embedding_model'))
-            ?? undefined;
+          const fileConfig = loadConfigFileOnly();
+          // An existing canonical file is authoritative even when it
+          // intentionally contains no embedding model. Only truly headless
+          // legacy brains without config.json may use DB-plane metadata.
+          embeddingModel = fileConfig
+            ? fileConfig.embedding_model
+            : ((await engine.getConfig('embedding_model')) ?? undefined);
         }
         const embedKeyCfg: Record<string, string | null> = {};
         for (const field of Object.values(HOSTED_EMBED_KEY_CONFIG)) {

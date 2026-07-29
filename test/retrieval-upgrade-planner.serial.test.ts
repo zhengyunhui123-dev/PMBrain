@@ -18,10 +18,6 @@ import {
   saveConfig,
 } from '../src/core/config.ts';
 import {
-  DEFAULT_EMBEDDING_DIMENSIONS,
-  DEFAULT_EMBEDDING_MODEL,
-} from '../src/core/ai/defaults.ts';
-import {
   planRetrievalUpgrade,
   applyRetrievalUpgrade,
   resumeRetrievalUpgrade,
@@ -105,16 +101,12 @@ describe('planRetrievalUpgrade — C3 eligibility', () => {
     expect(plan.pages_pending_dim).toBe(101);
   });
 
-  test('missing file values use current ZE defaults, not legacy OpenAI defaults', async () => {
+  test('missing file model refuses to invent a provider default', async () => {
     saveConfig({ engine: 'pglite' });
     await engine.setConfig('embedding_model', 'openai:text-embedding-3-large');
     await engine.setConfig('embedding_dimensions', '1536');
 
-    const plan = await planRetrievalUpgrade(engine);
-
-    expect(plan.current_embedding_model).toBe(DEFAULT_EMBEDDING_MODEL);
-    expect(plan.current_dim).toBe(DEFAULT_EMBEDDING_DIMENSIONS);
-    expect(plan.ze_switch_offered).toBe(false);
+    await expect(planRetrievalUpgrade(engine)).rejects.toThrow('Embedding model is not configured');
   });
 
   test('fresh brain on legacy default with > 100 pages: offered = true', async () => {
@@ -474,12 +466,14 @@ describe('resumeRetrievalUpgrade — crash recovery', () => {
   });
 
   test('applied=true: idempotent (returns skipped_already_applied)', async () => {
+    await setLegacyDefaultConfig();
     await engine.setConfig(KEY_APPLIED, 'true');
     const result = await resumeRetrievalUpgrade(engine);
     expect(result.status).toBe('skipped_already_applied');
   });
 
   test('requested=false: nothing to resume', async () => {
+    await setLegacyDefaultConfig();
     const result = await resumeRetrievalUpgrade(engine);
     expect(result.status).toBe('skipped_no_work');
   });

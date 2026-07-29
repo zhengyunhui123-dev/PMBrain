@@ -1047,12 +1047,7 @@ async function save(): Promise<void> {
     setNotice('error', '请选择普通模型供应商');
     return;
   }
-  // 校验：Embedding 供应商不能为空
   const embeddingProvider = ($<HTMLSelectElement>('#embedding-provider')).value;
-  if (!embeddingProvider) {
-    setNotice('error', '请选择向量化模型供应商');
-    return;
-  }
   const missingCustomTarget = chatProvider === 'custom-openai' && !customProviderDraft?.baseUrls?.chat
     ? 'chat'
     : embeddingProvider === 'custom-openai' && !customProviderDraft?.baseUrls?.embedding
@@ -1071,8 +1066,8 @@ async function save(): Promise<void> {
     return;
   }
   const embeddingModelName = ($<HTMLInputElement>('#embedding-model-name')).value.trim();
-  if (!embeddingModelName) {
-    setNotice('error', '请填写向量化模型名称');
+  if (Boolean(embeddingProvider) !== Boolean(embeddingModelName)) {
+    setNotice('error', '向量模型为可选项；如需启用，请同时填写供应商和模型名称');
     return;
   }
 
@@ -1108,7 +1103,7 @@ async function save(): Promise<void> {
     }
     if (chatKeyValue) (keys as Record<string, string>)[chatKey] = chatKeyValue;
   }
-  if (embeddingKey && embeddingKey !== '__none__') {
+  if (embeddingProvider && embeddingKey && embeddingKey !== '__none__') {
     const embeddingKeyValue = ($<HTMLInputElement>('#embedding-api-key')).value.trim();
     if (!embeddingKeyValue && embeddingProvider !== 'custom-openai') {
       setNotice('error', `供应商 ${embeddingProvider} 需要填写 API Key`);
@@ -1130,7 +1125,7 @@ async function save(): Promise<void> {
       || knowledgeSourceId.trim() !== loadedKnowledgeSourceId,
     modelConfig: {
       chatModel,
-      embeddingModel,
+      ...(embeddingModel ? { embeddingModel } : {}),
     },
     customProvider: customProviderDraft ?? undefined,
     keys,

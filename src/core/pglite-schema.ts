@@ -22,7 +22,7 @@
  */
 
 import { applyChunkEmbeddingIndexPolicy } from './vector-index.ts';
-import { DEFAULT_EMBEDDING_MODEL, DEFAULT_EMBEDDING_DIMENSIONS } from './ai/defaults.ts';
+import { DEFAULT_EMBEDDING_DIMENSIONS } from './ai/defaults.ts';
 
 const PGLITE_SCHEMA_SQL_TEMPLATE = `
 -- GBrain PGLite schema (local embedded Postgres)
@@ -195,7 +195,8 @@ CREATE TABLE IF NOT EXISTS content_chunks (
   chunk_text      TEXT    NOT NULL,
   chunk_source    TEXT    NOT NULL DEFAULT 'compiled_truth',
   embedding       vector(__EMBEDDING_DIMS__),
-  model           TEXT    NOT NULL DEFAULT '__EMBEDDING_MODEL__',
+  -- Provenance is present only when embedding is present.
+  model           TEXT,
   token_count     INTEGER,
   embedded_at     TIMESTAMPTZ,
   created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -392,7 +393,6 @@ CREATE TABLE IF NOT EXISTS config (
 INSERT INTO config (key, value) VALUES
   ('version', '1'),
   ('engine', 'pglite'),
-  ('embedding_model', '__EMBEDDING_MODEL__'),
   ('embedding_dimensions', '__EMBEDDING_DIMS__'),
   ('chunk_strategy', 'semantic')
 ON CONFLICT (key) DO NOTHING;
@@ -1022,26 +1022,21 @@ CREATE INDEX IF NOT EXISTS page_aliases_slug_idx
 `;
 
 /**
- * Return the PGLite schema SQL with embedding vector dim + model name substituted.
- * Defaults come from the AI gateway (v0.36+: zeroentropyai:zembed-1 / 1280d).
- *
- * v0.37.x fix wave: defaults track gateway constants instead of stale v0.13
- * OpenAI literals so the pre-computed `PGLITE_SCHEMA_SQL` constant doesn't
- * size the column to 1536 while the runtime default model emits 1280.
+ * Return the PGLite schema SQL with the storage vector width substituted.
+ * The optional second parameter is retained for source compatibility only;
+ * fresh schemas never persist or activate an embedding model.
  */
 export function getPGLiteSchema(
   dims: number = DEFAULT_EMBEDDING_DIMENSIONS,
-  model: string = DEFAULT_EMBEDDING_MODEL,
+  _model?: string,
 ): string {
   const parsedDims = Number(dims);
   if (!Number.isInteger(parsedDims) || parsedDims <= 0) {
     throw new Error(`Invalid embedding dimensions: ${dims}`);
   }
-  const sanitizedModel = String(model).replace(/'/g, "''");
   return applyChunkEmbeddingIndexPolicy(PGLITE_SCHEMA_SQL_TEMPLATE, parsedDims)
-    .replace(/__EMBEDDING_DIMS__/g, String(parsedDims))
-    .replace(/__EMBEDDING_MODEL__/g, sanitizedModel);
+    .replace(/__EMBEDDING_DIMS__/g, String(parsedDims));
 }
 
-/** Back-compat: pre-computed default-1536 schema for existing callers. */
+/** Pre-computed schema using the storage-only placeholder dimension. */
 export const PGLITE_SCHEMA_SQL = getPGLiteSchema();

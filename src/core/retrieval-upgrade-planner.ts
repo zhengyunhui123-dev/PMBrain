@@ -71,7 +71,6 @@ import {
 } from './config.ts';
 import {
   DEFAULT_EMBEDDING_DIMENSIONS,
-  DEFAULT_EMBEDDING_MODEL,
 } from './ai/defaults.ts';
 import { existsSync } from 'fs';
 
@@ -624,10 +623,14 @@ async function resolveCurrentEmbeddingConfig(
 ): Promise<{ model: string; dimensions: number }> {
   const fileConfig = loadConfigFileOnly();
   if (fileConfig) {
+    const model = typeof fileConfig.embedding_model === 'string'
+      ? fileConfig.embedding_model.trim()
+      : '';
+    if (!model) {
+      throw new Error('Embedding model is not configured; configure one before planning a vector upgrade.');
+    }
     return {
-      model: typeof fileConfig.embedding_model === 'string' && fileConfig.embedding_model.trim()
-        ? fileConfig.embedding_model.trim()
-        : DEFAULT_EMBEDDING_MODEL,
+      model,
       dimensions: parsePositiveDimension(fileConfig.embedding_dimensions)
         ?? DEFAULT_EMBEDDING_DIMENSIONS,
     };
@@ -641,8 +644,11 @@ async function resolveCurrentEmbeddingConfig(
   // stale DB rows to override an existing canonical file.
   const dbModel = (await engine.getConfig('embedding_model'))?.trim();
   const dbDimensions = parsePositiveDimension(await engine.getConfig('embedding_dimensions'));
+  if (!dbModel) {
+    throw new Error('Embedding model is not configured; configure one before planning a vector upgrade.');
+  }
   return {
-    model: dbModel || DEFAULT_EMBEDDING_MODEL,
+    model: dbModel,
     dimensions: dbDimensions ?? DEFAULT_EMBEDDING_DIMENSIONS,
   };
 }

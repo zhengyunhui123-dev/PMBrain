@@ -15,17 +15,16 @@ import { join } from 'path';
 
 // Lane A — defaults sweep
 describe('v0.37 Lane A — defaults sweep', () => {
-  test('A.0: gateway re-exports DEFAULT_EMBEDDING_MODEL + DEFAULT_EMBEDDING_DIMENSIONS', async () => {
-    // CDX2-1: these were file-private const; Lane A consumers (schema
-    // helpers, registry) need them exported. Importing here is the test.
-    const { DEFAULT_EMBEDDING_MODEL, DEFAULT_EMBEDDING_DIMENSIONS } = await import('../src/core/ai/gateway.ts');
-    expect(DEFAULT_EMBEDDING_MODEL).toBe('zeroentropyai:zembed-1');
+  test('A.0: gateway exports only a storage placeholder dimension', async () => {
+    const { DEFAULT_EMBEDDING_DIMENSIONS, getEmbeddingModel, configureGateway } = await import('../src/core/ai/gateway.ts');
     expect(DEFAULT_EMBEDDING_DIMENSIONS).toBe(1280);
+    configureGateway({ env: {} });
+    expect(() => getEmbeddingModel()).toThrow();
   });
 
-  test('A.0: ai/defaults.ts is the canonical source (leaf module, no SDK pulls)', async () => {
+  test('A.0: ai/defaults.ts contains no provider default', async () => {
     const defaults = await import('../src/core/ai/defaults.ts');
-    expect(defaults.DEFAULT_EMBEDDING_MODEL).toBe('zeroentropyai:zembed-1');
+    expect('DEFAULT_EMBEDDING_MODEL' in defaults).toBe(false);
     expect(defaults.DEFAULT_EMBEDDING_DIMENSIONS).toBe(1280);
   });
 
@@ -49,20 +48,17 @@ describe('v0.37 Lane A — defaults sweep', () => {
     const sql = getPostgresSchema(2048, 'voyage:voyage-4-large');
     expect(sql).toContain('vector(2048)');
     expect(sql).not.toContain('vector(1280)');
-    expect(sql).toContain('voyage:voyage-4-large');
+    expect(sql).not.toContain('voyage:voyage-4-large');
   });
 
-  test('A.5: embedding-column registry builtin defaults to ZE/1280 on empty config + gateway', async () => {
-    // The registry's resolution chain is cfg > gateway > DEFAULT. With
-    // no cfg AND no gateway, it should fall through to the canonical
-    // default (ZE/1280). Reset gateway first to exercise that path.
+  test('A.5: embedding-column registry has no provider on empty config + gateway', async () => {
     const { resetGateway } = await import('../src/core/ai/gateway.ts');
     const { getEmbeddingColumnRegistry } = await import('../src/core/search/embedding-column.ts');
     resetGateway();
     try {
       const reg = getEmbeddingColumnRegistry({ engine: 'pglite' } as any);
       expect(reg['embedding']).toBeDefined();
-      expect(reg['embedding'].provider).toBe('zeroentropyai:zembed-1');
+      expect(reg['embedding'].provider).toBe('');
       expect(reg['embedding'].dimensions).toBe(1280);
     } finally {
       // Re-apply legacy preload defaults so the rest of the file's tests

@@ -19,9 +19,11 @@ import {
   configureGateway,
   resetGateway,
   __setEmbedTransportForTests,
-  DEFAULT_EMBEDDING_MODEL,
   DEFAULT_EMBEDDING_DIMENSIONS,
 } from '../../src/core/ai/gateway.ts';
+
+const EXPLICIT_EMBEDDING_MODEL = 'ollama:nomic-embed-text';
+const EXPLICIT_EMBEDDING_DIMS = 768;
 
 describe('E2E: fresh gbrain init --pglite → import → embed works end-to-end', () => {
   let tmpHome: string;
@@ -65,20 +67,8 @@ describe('E2E: fresh gbrain init --pglite → import → embed works end-to-end'
     });
   });
 
-  test('bare `init --pglite`: schema sized to gateway defaults (ZE/1280)', async () => {
-    // Reset gateway so init.ts has to resolve defaults from
-    // ai/defaults.ts. This is the actual production code path for a
-    // fresh install: bare `gbrain init --pglite` with no env or file
-    // config.
+  test('bare `init --pglite`: provider API key does not activate embedding', async () => {
     resetGateway();
-
-    // Stub embed transport to return synthetic 1280-dim vectors. The
-    // bug fix is dimension alignment — actual provider correctness is
-    // tested elsewhere.
-    const synthVec = Array.from({ length: DEFAULT_EMBEDDING_DIMENSIONS }, () => 0.01);
-    __setEmbedTransportForTests(async (args: any) => ({
-      embeddings: args.values.map(() => synthVec),
-    }) as any);
 
     const { runInit } = await import('../../src/commands/init.ts');
 
@@ -104,18 +94,15 @@ describe('E2E: fresh gbrain init --pglite → import → embed works end-to-end'
     }
 
     const allOut = stdoutBuf.join('\n');
+    expect(allOut).toContain('deferred setup');
 
-    // Init prints the resolved embedding choice (B.1).
-    expect(allOut).toContain(DEFAULT_EMBEDDING_MODEL);
-    expect(allOut).toContain(`(${DEFAULT_EMBEDDING_DIMENSIONS}d)`);
-
-    // config.json contains the saved resolved defaults (B.4 + CDX-3).
+    // The API key is retained, but no embedding provider is selected.
     const cfgPath = join(tmpHome, '.gbrain', 'config.json');
     expect(existsSync(cfgPath)).toBe(true);
     const cfg = JSON.parse(readFileSync(cfgPath, 'utf-8'));
     expect(cfg.engine).toBe('pglite');
-    expect(cfg.embedding_model).toBe(DEFAULT_EMBEDDING_MODEL);
-    expect(cfg.embedding_dimensions).toBe(DEFAULT_EMBEDDING_DIMENSIONS);
+    expect(cfg.embedding_disabled).toBe(true);
+    expect(cfg.embedding_model).toBeUndefined();
 
     // The actual schema column dim matches.
     const { PGLiteEngine } = await import('../../src/core/pglite-engine.ts');
@@ -131,9 +118,9 @@ describe('E2E: fresh gbrain init --pglite → import → embed works end-to-end'
     }
   }, 30000);
 
-  test('init → seed page → embed: chunks have non-null embeddings, no dim mismatch', async () => {
+  test('explicit model init → seed page → embed works without provider fallback', async () => {
     resetGateway();
-    const synthVec = Array.from({ length: DEFAULT_EMBEDDING_DIMENSIONS }, (_, i) => i === 0 ? 1 : 0.01);
+    const synthVec = Array.from({ length: EXPLICIT_EMBEDDING_DIMS }, (_, i) => i === 0 ? 1 : 0.01);
     __setEmbedTransportForTests(async (args: any) => ({
       embeddings: args.values.map(() => synthVec),
     }) as any);
@@ -146,7 +133,14 @@ describe('E2E: fresh gbrain init --pglite → import → embed works end-to-end'
 
     try {
       const { runInit } = await import('../../src/commands/init.ts');
-      await runInit(['--pglite', '--non-interactive']);
+      await runInit([
+        '--pglite',
+        '--non-interactive',
+        '--embedding-model',
+        EXPLICIT_EMBEDDING_MODEL,
+        '--embedding-dimensions',
+        String(EXPLICIT_EMBEDDING_DIMS),
+      ]);
     } finally {
       console.log = origLog;
       console.warn = origWarn;
@@ -177,11 +171,12 @@ describe('E2E: fresh gbrain init --pglite → import → embed works end-to-end'
       expect(result.embedded).toBeGreaterThan(0);
 
       // Chunks now have non-null embeddings.
-      const rows = await engine.executeRaw<{ has_emb: boolean }>(
-        `SELECT embedding IS NOT NULL AS has_emb FROM content_chunks WHERE chunk_index = 0`,
+      const rows = await engine.executeRaw<{ has_emb: boolean; model: string | null }>(
+        `SELECT embedding IS NOT NULL AS has_emb, model FROM content_chunks WHERE chunk_index = 0`,
       );
       expect(rows.length).toBeGreaterThan(0);
       expect(rows[0].has_emb).toBe(true);
+      expect(rows[0].model).toBe(EXPLICIT_EMBEDDING_MODEL);
     } finally {
       await engine.disconnect();
     }

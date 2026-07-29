@@ -8,14 +8,14 @@
 
 ## 1. 配置契约
 
-普通模式只要求两个模型：
+普通模式至少需要一个普通模型；向量模型是独立可选项：
 
 1. 普通模型：`models.default`，兼容旧键 `chat_model`。RAG 查询扩展、回答生成、Dream、事实抽取和后台 Agent 在没有高级覆盖时都跟随它。
-2. 向量模型：`embedding_model` 与固定维度。更换后必须重建向量。
+2. 向量模型：只有显式设置 `embedding_model` 与 `embedding_dimensions` 后才启用。未设置时使用关键词、标题和关系检索，不生成向量。
 
 高级模式可以单独覆盖 `utility`、`reasoning`、`deep`、`subagent` 四个任务层级，以及 Dream 的 `synthesize`、`synthesize_verdict`、`patterns`、`extract_atoms`、`synthesize_concepts`、`consolidate`、`conversation_facts_backfill` 等阶段。
 
-高级模型属于可选优化。高级模型出现密钥错误、模型不存在、限流、网络故障或结构化拒答时，必须尝试普通模型。`balanced` 搜索不依赖 ZeroEntropy 或其他专用重排序器；云端或本地 reranker 只能显式启用。
+高级 Chat/Dream 模型属于可选优化。它们出现密钥错误、模型不存在、限流、网络故障或结构化拒答时，可以按配置回退普通 Chat 模型。Embedding 不参与这套回退：本地或云端向量模型失败时必须保留失败，不能切换到 ZeroEntropy 或任何默认模型。`balanced` 搜索不依赖专用重排序器；云端或本地 reranker 只能显式启用。
 
 ## 2. 三层题集
 

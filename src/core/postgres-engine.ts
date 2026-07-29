@@ -57,26 +57,20 @@ import { logConnectionEvent } from './connection-audit.ts';
 import { validateSlug, contentHash, rowToPage, rowToChunk, rowToSearchResult, parseEmbedding, tryParseEmbedding, takeRowToTake, isUndefinedTableError, warnOncePerProcess } from './utils.ts';
 import { resolveBoostMap, resolveHardExcludes } from './search/source-boost.ts';
 import { buildSourceFactorCase, buildHardExcludeClause, buildVisibilityClause, buildRecencyComponentSql, buildBestPerPagePoolCte, buildOrFallbackWebsearchQuery } from './search/sql-ranking.ts';
-import { DEFAULT_EMBEDDING_MODEL, DEFAULT_EMBEDDING_DIMENSIONS } from './ai/defaults.ts';
+import { DEFAULT_EMBEDDING_DIMENSIONS } from './ai/defaults.ts';
 import { DELETE_BATCH_SIZE } from './engine-constants.ts';
 import { hasCJK } from './cjk.ts';
 
-function escapeSqlStringLiteral(value: string): string {
-  return value.replace(/'/g, "''");
-}
-
 export function getPostgresSchema(
   dims: number = DEFAULT_EMBEDDING_DIMENSIONS,
-  model: string = DEFAULT_EMBEDDING_MODEL,
+  _model?: string,
 ): string {
   const parsedDims = Number(dims);
   if (!Number.isInteger(parsedDims) || parsedDims <= 0) {
     throw new Error(`Invalid embedding dimensions: ${dims}`);
   }
-  const sanitizedModel = escapeSqlStringLiteral(String(model));
   return applyChunkEmbeddingIndexPolicy(SCHEMA_SQL, parsedDims)
     .replace(/vector\(1536\)/g, `vector(${parsedDims})`)
-    .replace(/'text-embedding-3-large'/g, `'${sanitizedModel}'`)
     .replace(/\('embedding_dimensions', '1536'\)/g, `('embedding_dimensions', '${parsedDims}')`);
 }
 
@@ -239,20 +233,15 @@ export class PostgresEngine implements BrainEngine {
       ? await this.connectionManager.ddl()
       : this.sql;
 
-    // Resolve the embedding dim/model from the gateway. v0.37 fix wave:
-    // fallbacks track the canonical defaults in `ai/defaults.ts` instead of
-    // stale v0.13 OpenAI literals, AND we store the full `provider:model`
-    // string in the DB config table — consumers like ze-switch and doctor
-    // expect the provider prefix. (Round-1 CDX-4 + A.8.)
+    // Resolve only the storage vector width from the gateway. A fresh schema
+    // never stores or activates an embedding provider.
     let dims: number = DEFAULT_EMBEDDING_DIMENSIONS;
-    let model: string = DEFAULT_EMBEDDING_MODEL;
     try {
       const gw = await import('./ai/gateway.ts');
       dims = gw.getEmbeddingDimensions();
-      model = gw.getEmbeddingModel() || model;
-    } catch { /* gateway not yet configured — use defaults */ }
+    } catch { /* gateway not yet configured — use storage placeholder */ }
 
-    const sqlText = getPostgresSchema(dims, model);
+    const sqlText = getPostgresSchema(dims);
 
     // Advisory lock prevents concurrent initSchema() calls from deadlocking
     // on DDL statements (DROP TRIGGER + CREATE TRIGGER acquire AccessExclusiveLock).
@@ -2228,7 +2217,7 @@ export class PostgresEngine implements BrainEngine {
       if (embeddingImageStr) params.push(embeddingImageStr);
       params.push(
         pageId, chunk.chunk_index, chunk.chunk_text, chunk.chunk_source,
-        chunk.model || DEFAULT_EMBEDDING_MODEL, chunk.token_count || null,
+        chunk.embedding ? (chunk.model?.trim() || null) : null, chunk.token_count || null,
         chunk.language || null, chunk.symbol_name || null, chunk.symbol_type || null,
         chunk.start_line ?? null, chunk.end_line ?? null,
         parentPath, chunk.doc_comment || null, chunk.symbol_name_qualified || null,
@@ -2267,7 +2256,16 @@ export class PostgresEngine implements BrainEngine {
                 THEN EXCLUDED.embedding
            ELSE content_chunks.embedding
          END,
-         model = COALESCE(EXCLUDED.model, content_chunks.model),
+         model = CASE
+           WHEN EXCLUDED.chunk_text != content_chunks.chunk_text THEN
+             CASE WHEN EXCLUDED.embedding IS NULL THEN NULL ELSE EXCLUDED.model END
+           WHEN content_chunks.embedding IS NULL THEN
+             CASE WHEN EXCLUDED.embedding IS NULL THEN NULL ELSE EXCLUDED.model END
+           WHEN EXCLUDED.embedded_at IS NOT NULL
+                AND (content_chunks.embedded_at IS NULL OR EXCLUDED.embedded_at > content_chunks.embedded_at)
+                THEN EXCLUDED.model
+           ELSE content_chunks.model
+         END,
          token_count = EXCLUDED.token_count,
          embedded_at = CASE
            WHEN EXCLUDED.chunk_text != content_chunks.chunk_text AND EXCLUDED.embedding IS NULL THEN NULL

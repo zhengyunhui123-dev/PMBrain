@@ -128,6 +128,22 @@ describe('validateEmbeddingCreds', () => {
       expect(e.diagnosis.reason).toBe('no_gateway_config');
     }
   });
+
+  test('throws no_model_configured when gateway has no explicit embedding model', () => {
+    configureGateway(baseConfig({
+      embedding_model: undefined,
+      embedding_dimensions: undefined,
+      env: {},
+    }));
+    let caught: unknown;
+    try { validateEmbeddingCreds(); } catch (e) { caught = e; }
+    expect(caught).toBeInstanceOf(EmbeddingCredentialError);
+    const e = caught as EmbeddingCredentialError;
+    expect(e.diagnosis.ok).toBe(false);
+    if (!e.diagnosis.ok) {
+      expect(e.diagnosis.reason).toBe('no_model_configured');
+    }
+  });
 });
 
 describe('formatEmbeddingCredsError', () => {

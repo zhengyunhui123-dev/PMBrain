@@ -2,7 +2,6 @@ import { execSync, execFileSync } from 'child_process';
 import { existsSync, readFileSync, writeFileSync, mkdirSync, appendFileSync, realpathSync } from 'fs';
 import { basename, join, dirname, resolve } from 'path';
 import { VERSION } from '../version.ts';
-import { DEFAULT_EMBEDDING_MODEL } from '../core/ai/defaults.ts';
 
 const GBRAIN_GITHUB_REPO = 'garrytan/gbrain';
 
@@ -363,12 +362,14 @@ export async function runPostUpgrade(args: string[] = []): Promise<void> {
         try {
           const { runPostUpgradeReembedPrompt } = await import('../core/post-upgrade-reembed.ts');
           const { getEmbeddingModel } = await import('../core/ai/gateway.ts');
-          let modelString = DEFAULT_EMBEDDING_MODEL;
-          try { modelString = getEmbeddingModel(); } catch { /* gateway not configured — keep default */ }
-          const promptResult = await runPostUpgradeReembedPrompt(engine, modelString);
-          if (promptResult.proceeded) {
-            const { runReindex } = await import('./reindex.ts');
-            await runReindex(engine, ['--markdown']);
+          let modelString: string | null = null;
+          try { modelString = getEmbeddingModel(); } catch { /* no explicit embedding config */ }
+          if (modelString) {
+            const promptResult = await runPostUpgradeReembedPrompt(engine, modelString);
+            if (promptResult.proceeded) {
+              const { runReindex } = await import('./reindex.ts');
+              await runReindex(engine, ['--markdown']);
+            }
           }
         } catch (re) {
           const msg = re instanceof Error ? re.message : String(re);

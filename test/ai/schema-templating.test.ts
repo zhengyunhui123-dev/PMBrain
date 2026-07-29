@@ -3,15 +3,11 @@ import { getPGLiteSchema, PGLITE_SCHEMA_SQL } from '../../src/core/pglite-schema
 import { getPostgresSchema } from '../../src/core/postgres-engine.ts';
 
 describe('getPGLiteSchema', () => {
-  test('default produces gateway-default schema (v0.37+: 1280d + zeroentropyai:zembed-1)', () => {
-    // v0.37 fix wave Lane A.1 + CDX2-1: defaults now track the canonical
-    // gateway constants in `ai/defaults.ts` instead of the stale v0.13
-    // OpenAI literals (1536 / text-embedding-3-large). Fixes the
-    // headline bug where bare `gbrain init --pglite` produced a 1536
-    // schema while the ZE default model emitted 1280-dim vectors.
+  test('default creates storage width without activating an embedding model', () => {
     const sql = getPGLiteSchema();
     expect(sql).toMatch(/vector\(1280\)/);
-    expect(sql).toMatch(/'zeroentropyai:zembed-1'/);
+    expect(sql).not.toMatch(/\('embedding_model',/);
+    expect(sql).toMatch(/model\s+TEXT,/);
     expect(sql).not.toMatch(/__EMBEDDING_DIMS__/);
     expect(sql).not.toMatch(/__EMBEDDING_MODEL__/);
   });
@@ -19,8 +15,8 @@ describe('getPGLiteSchema', () => {
   test('Gemini 768d substitution', () => {
     const sql = getPGLiteSchema(768, 'gemini-embedding-001');
     expect(sql).toMatch(/vector\(768\)/);
-    expect(sql).toMatch(/'gemini-embedding-001'/);
-    expect(sql).toMatch(/\('embedding_model', 'gemini-embedding-001'\)/);
+    expect(sql).not.toMatch(/'gemini-embedding-001'/);
+    expect(sql).not.toMatch(/\('embedding_model',/);
     expect(sql).toMatch(/\('embedding_dimensions', '768'\)/);
     expect(sql).not.toMatch(/vector\(1536\)/);
   });
@@ -28,8 +24,8 @@ describe('getPGLiteSchema', () => {
   test('Voyage 1024d substitution', () => {
     const sql = getPGLiteSchema(1024, 'voyage-3-large');
     expect(sql).toMatch(/vector\(1024\)/);
-    expect(sql).toMatch(/'voyage-3-large'/);
-    expect(sql).toMatch(/\('embedding_model', 'voyage-3-large'\)/);
+    expect(sql).not.toMatch(/'voyage-3-large'/);
+    expect(sql).not.toMatch(/\('embedding_model',/);
     expect(sql).toMatch(/\('embedding_dimensions', '1024'\)/);
     expect(sql).toContain('idx_chunks_embedding ON content_chunks USING hnsw');
   });
@@ -37,7 +33,7 @@ describe('getPGLiteSchema', () => {
   test('Voyage 2048d skips unsupported HNSW index but keeps vector column', () => {
     const sql = getPGLiteSchema(2048, 'voyage-4-large');
     expect(sql).toMatch(/vector\(2048\)/);
-    expect(sql).toMatch(/'voyage-4-large'/);
+    expect(sql).not.toMatch(/'voyage-4-large'/);
     expect(sql).toMatch(/\('embedding_dimensions', '2048'\)/);
     expect(sql).not.toContain('idx_chunks_embedding ON content_chunks USING hnsw');
     expect(sql).toContain('exact vector scans remain available');
@@ -49,17 +45,16 @@ describe('getPGLiteSchema', () => {
 });
 
 describe('getPostgresSchema', () => {
-  test('Voyage 2048d updates vector column and seeded config but skips HNSW', () => {
+  test('Voyage 2048d updates storage width without seeding a provider', () => {
     const sql = getPostgresSchema(2048, 'voyage-4-large');
     expect(sql).toMatch(/vector\(2048\)/);
-    expect(sql).toMatch(/\('embedding_model', 'voyage-4-large'\)/);
+    expect(sql).not.toMatch(/\('embedding_model',/);
     expect(sql).toMatch(/\('embedding_dimensions', '2048'\)/);
     expect(sql).not.toContain('idx_chunks_embedding ON content_chunks USING hnsw');
   });
 
-  test('escapes configured model before inserting into schema SQL literals', () => {
+  test('does not insert a configured model into fresh schema SQL', () => {
     const sql = getPostgresSchema(1024, "voyage-weird'quoted");
-    expect(sql).toContain("'voyage-weird''quoted'");
-    expect(sql).not.toContain("'voyage-weird'quoted'");
+    expect(sql).not.toContain('voyage-weird');
   });
 });

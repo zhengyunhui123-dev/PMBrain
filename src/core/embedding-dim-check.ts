@@ -63,14 +63,27 @@ export class EmbeddingDisabledError extends Error {
   }
 }
 
-export function assertEmbeddingEnabled(cfg: { embedding_disabled?: boolean } | null): void {
-  if (cfg?.embedding_disabled) {
+export function assertEmbeddingEnabled(
+  cfg: {
+    embedding_disabled?: boolean;
+    embedding_model?: string;
+    embedding_dimensions?: number;
+  } | null,
+): void {
+  const model = cfg?.embedding_model?.trim();
+  const dimensions = Number(cfg?.embedding_dimensions);
+  if (
+    cfg?.embedding_disabled
+    || !model
+    || !Number.isInteger(dimensions)
+    || dimensions <= 0
+  ) {
     throw new EmbeddingDisabledError(
-      'This brain was initialized with `--no-embedding` (deferred setup).\n' +
-      'Configure an embedding provider before running embed / import:\n' +
-      '  gbrain config set embedding_model <provider>:<model>\n' +
-      '  gbrain config set embedding_dimensions <N>\n' +
-      '  gbrain init --force --embedding-model <provider>:<model>   # re-init to size schema\n',
+      'PMBrain 未配置完整的向量模型，因此不会执行向量化。\n' +
+      '请先显式配置模型和维度：\n' +
+      '  pmbrain config set embedding_model <provider>:<model>\n' +
+      '  pmbrain config set embedding_dimensions <N>\n' +
+      '如果只想导入原文和分块，请使用 --no-embed。\n',
     );
   }
 }

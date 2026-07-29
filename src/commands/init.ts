@@ -173,18 +173,15 @@ interface ResolvedAIOptions {
  * Precedence (per touchpoint, top wins):
  *   1. Explicit flag (--embedding-model / --expansion-model / --chat-model)
  *   2. Shorthand flag (--model PROVIDER) for embedding only
- *   3. Env detection: walk env-ready recipes, group by provider id (D1-D4, D10).
- *      - Exactly one provider ready AND has the touchpoint → auto-pick + stderr notice.
- *      - Multiple ready → for embedding: TTY → picker (D1), non-TTY → fail loud (D3).
- *        For chat/expansion: leave default (gateway falls back at call time, D10).
- *      - Zero ready → for embedding: TTY → picker offers env-ready recipes
- *        OR setup hint with typo detection (D13); non-TTY → fail loud (D3).
+ *   3. Existing config or explicit PMBRAIN_EMBEDDING_MODEL env override.
+ * Provider API keys alone never select an embedding model. Chat/expansion
+ * may still use provider-key discovery because they do not write vectors.
  *
  * --no-embedding (D9) opt-in: skips embedding tier resolution entirely;
  * persists nulls; embed callsites refuse with a config-set hint.
  */
 async function resolveAIOptions(opts: ResolveAIOptionsArgs): Promise<ResolvedAIOptions> {
-  const { verbose, shorthand, dimsArg, expansion, chat, noEmbedding, nonInteractive } = opts;
+  const { verbose, shorthand, dimsArg, expansion, chat, noEmbedding } = opts;
   const out: ResolvedAIOptions = {};
 
   // --- D5: persisted config wins on re-init -----------------------------------
@@ -218,6 +215,7 @@ async function resolveAIOptions(opts: ResolveAIOptionsArgs): Promise<ResolvedAIO
 
   if (verbose) {
     out.embedding_model = verbose;
+    delete out.noEmbedding;
   } else if (shorthand) {
     const { getRecipe } = await import('../core/ai/recipes/index.ts');
     const recipe = getRecipe(shorthand);
@@ -244,6 +242,7 @@ async function resolveAIOptions(opts: ResolveAIOptionsArgs): Promise<ResolvedAIO
     }
     out.embedding_model = `${shorthand}:${firstModel}`;
     out.embedding_dimensions = recipe.touchpoints.embedding!.default_dims;
+    delete out.noEmbedding;
   }
 
   if (dimsArg !== null && !Number.isNaN(dimsArg) && dimsArg > 0) {
@@ -285,14 +284,10 @@ async function resolveAIOptions(opts: ResolveAIOptionsArgs): Promise<ResolvedAIO
     delete out.embedding_dimensions;
   }
 
-  // --- Tier 3: env detection ------------------------------------------------
-  // Fires per touchpoint, only when no explicit flag was passed for that
-  // tier. Embedding is the critical path (column width); chat/expansion are
-  // best-effort (gateway falls back gracefully at call time, D10).
-
-  if (!out.noEmbedding && !out.embedding_model) {
-    await resolveEmbeddingByEnv(out, nonInteractive);
-  }
+  // --- Tier 3: provider-key detection ---------------------------------------
+  // A provider API key is not permission to create vectors. With no explicit
+  // embedding_model, persist deferred mode and keep imports keyword-only.
+  if (!out.embedding_model) out.noEmbedding = true;
   if (!out.expansion_model) {
     await resolveExpansionByEnv(out);
   }
@@ -422,18 +417,7 @@ async function resolveEmbeddingByEnv(out: ResolvedAIOptions, nonInteractive: boo
     if (Array.isArray(tp.models) && tp.models.length > 0) {
       const model = tp.models[0];
       const fullModel = `${r.id}:${model}`;
-      // When the resolved provider matches the canonical default model
-      // (DEFAULT_EMBEDDING_MODEL), use the gateway's
-      // DEFAULT_EMBEDDING_DIMENSIONS instead of the recipe's `default_dims`
-      // (which is the recipe's "largest sensible" tier). This keeps
-      // fresh-install schema width aligned with the v0.37.11.0 system
-      // default — for ZE that means 1280 (the Matryoshka step closest to
-      // legacy OpenAI 1536), not the recipe's 2560.
-      const { DEFAULT_EMBEDDING_MODEL, DEFAULT_EMBEDDING_DIMENSIONS } =
-        await import('../core/ai/defaults.ts');
-      const dims = fullModel === DEFAULT_EMBEDDING_MODEL
-        ? DEFAULT_EMBEDDING_DIMENSIONS
-        : tp.default_dims;
+      const dims = tp.default_dims;
       out.embedding_model = fullModel;
       out.embedding_dimensions = dims;
       console.error(
@@ -849,10 +833,8 @@ async function initPGLite(opts: {
     resolvedDim = pre.dim;
     resolvedModel = pre.model;
   }
-  // If neither --no-embedding nor an embedding_model is resolved, resolveAIOptions
-  // already exited 1 with the fail-loud setup hint (T5). Reaching here without
-  // either means we have a user-passed combination the previous step accepted —
-  // typically `--embedding-model` flag without env detection running.
+  // Without an explicit embedding model, resolveAIOptions selects deferred
+  // mode. The schema still has a storage vector width but no provider runs.
 
   // v0.37.10.0 T6 + v0.37.11.0 Lane B.1: ALWAYS configureGateway BEFORE
   // initSchema. Schema substitution at pglite-schema.ts:833 and the runtime

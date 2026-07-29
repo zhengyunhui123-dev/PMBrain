@@ -56,22 +56,10 @@ import { dimsProviderOptions } from './dims.ts';
 import { AIConfigError, AITransientError, normalizeAIError } from './errors.ts';
 
 const MAX_CHARS = 8000;
-// v0.36.0.0 (D3 + D4): ZeroEntropy zembed-1 at 1280d via Matryoshka is the
-// new default for embedding. Real-corpus benchmark across 20 queries:
-//   - ZE wins 11/20 (OpenAI 6, Voyage 4)
-//   - 442ms avg vs OpenAI 973ms (2.2x faster)
-//   - $0.05/M tokens vs OpenAI $0.13/M (2.6x cheaper at regular pricing)
-// ZE valid Matryoshka steps are {2560, 1280, 640, 320, 160, 80, 40}; 1280 is
-// the closest analog to current OpenAI 1536d (smaller -> smaller HNSW index
-// -> faster queries) while staying in the high-recall zone of the Matryoshka
-// curve. 1024 (Voyage's step) is NOT a valid ZE dim — see
-// src/core/ai/dims.ts:ZEROENTROPY_VALID_DIMS.
-// New installs without ZEROENTROPY_API_KEY size for 1280d anyway — the
-// AIConfigError surfaces at first embed with a paste-ready setup hint.
-// Re-exported from the leaf `defaults.ts` so heavy schema/registry modules
-// don't transitively load every provider SDK just to read the defaults.
-export { DEFAULT_EMBEDDING_MODEL, DEFAULT_EMBEDDING_DIMENSIONS } from './defaults.ts';
-import { DEFAULT_EMBEDDING_MODEL, DEFAULT_EMBEDDING_DIMENSIONS } from './defaults.ts';
+// The dimension constant is a storage-schema placeholder only. It never
+// selects a provider or enables vectorization.
+export { DEFAULT_EMBEDDING_DIMENSIONS } from './defaults.ts';
+import { DEFAULT_EMBEDDING_DIMENSIONS } from './defaults.ts';
 const DEFAULT_EXPANSION_MODEL = 'anthropic:claude-haiku-4-5-20251001';
 const DEFAULT_CHAT_MODEL = 'anthropic:claude-sonnet-4-6';
 // v0.35.0.0+: reranker default. Used only when search.reranker.enabled is set
@@ -379,17 +367,17 @@ export function applyOpenAICompatConfig(
 
 /** Configure the gateway. Called by cli.ts#connectEngine. Clears cached models. */
 export function configureGateway(config: AIGatewayConfig): void {
+  const embeddingModel = config.embedding_model?.trim() || undefined;
   // 当用户显式配置了 embedding_model 但未指定 embedding_dimensions 时，
-  // 不要静默回退到默认 1280 维 — 直接报错，防止维度不匹配导致数据导入失败。
-  // 只有当 embedding_model 也未设置（embedding 被禁用或未配置）时才走默认值。
-  if (config.embedding_model && config.embedding_dimensions === undefined) {
+  // 不要静默回退到占位 schema 维度 — 直接报错，防止维度不匹配。
+  if (embeddingModel && config.embedding_dimensions === undefined) {
     throw new AIConfigError(
-      `embedding_model "${config.embedding_model}" 已配置，但 embedding_dimensions 未指定。`,
+      `embedding_model "${embeddingModel}" 已配置，但 embedding_dimensions 未指定。`,
       `请在 config.json 中设置 embedding_dimensions，或在桌面端配置界面填写正确的向量化维度。`,
     );
   }
   _config = {
-    embedding_model: config.embedding_model ?? DEFAULT_EMBEDDING_MODEL,
+    embedding_model: embeddingModel,
     embedding_dimensions: config.embedding_dimensions ?? DEFAULT_EMBEDDING_DIMENSIONS,
     embedding_multimodal_model: config.embedding_multimodal_model,
     expansion_model: config.expansion_model ?? DEFAULT_EXPANSION_MODEL,
@@ -608,8 +596,19 @@ function requireConfig(): AIGatewayConfig {
 }
 
 /** Public config accessors (for schema setup, doctor, etc.). */
+export function getConfiguredEmbeddingModel(): string | undefined {
+  return requireConfig().embedding_model?.trim() || undefined;
+}
+
 export function getEmbeddingModel(): string {
-  return requireConfig().embedding_model ?? DEFAULT_EMBEDDING_MODEL;
+  const model = getConfiguredEmbeddingModel();
+  if (!model) {
+    throw new AIConfigError(
+      'PMBrain 未配置向量模型，因此不会执行向量化。',
+      '请先显式设置 embedding_model 和 embedding_dimensions；如暂不需要向量化，可继续仅导入原文和分块。',
+    );
+  }
+  return model;
 }
 
 export function getEmbeddingDimensions(): number {
@@ -675,19 +674,18 @@ export type EmbeddingDiagnosis =
   | { ok: false; reason: 'missing_env'; model: string; provider: string; recipeId: string; missingEnvVars: string[] };
 
 export function diagnoseEmbedding(modelOverride?: string): EmbeddingDiagnosis {
+  if (!_config && !modelOverride) return { ok: false, reason: 'no_gateway_config' };
+
+  const modelStr = modelOverride?.trim() || _config?.embedding_model?.trim();
+  if (!modelStr) return { ok: false, reason: 'no_model_configured' };
+
   // Test-transport fast path: matches the `if (touchpoint === 'chat' &&
   // _chatTransport) return true` shortcut in isAvailable() so tests that
   // install an embed transport stub also pass the preflight without
   // having to configure real provider env vars.
   if (_embedTransportInstalled) {
-    const modelStr = modelOverride ?? _config?.embedding_model ?? DEFAULT_EMBEDDING_MODEL;
     return { ok: true, model: modelStr, provider: '<test-transport>', recipeId: '<test-transport>' };
   }
-
-  if (!_config) return { ok: false, reason: 'no_gateway_config' };
-
-  const modelStr = modelOverride ?? _config.embedding_model ?? DEFAULT_EMBEDDING_MODEL;
-  if (!modelStr) return { ok: false, reason: 'no_model_configured' };
 
   let parsed;
   let recipe;
@@ -1617,10 +1615,16 @@ export async function embedMultimodal(
   const cfg = requireConfig();
   // Prefer embedding_multimodal_model when set, so brains using OpenAI for
   // text embeddings can route multimodal to Voyage without changing the
-  // primary embedding_model. Falls back to embedding_model for single-model setups.
+  // primary embedding_model. A single-model setup may explicitly reuse
+  // embedding_model, but an unconfigured brain never receives a provider default.
   const modelStr = cfg.embedding_multimodal_model
-    ?? cfg.embedding_model
-    ?? DEFAULT_EMBEDDING_MODEL;
+    ?? cfg.embedding_model;
+  if (!modelStr) {
+    throw new AIConfigError(
+      'PMBrain 未配置多模态或文本向量模型，因此不会执行图片向量化。',
+      '请显式设置 embedding_multimodal_model，或先配置 embedding_model 和 embedding_dimensions。',
+    );
+  }
   const { parsed, recipe } = resolveRecipe(modelStr);
   const touchpoint = recipe.touchpoints.embedding;
   if (!touchpoint?.supports_multimodal) {

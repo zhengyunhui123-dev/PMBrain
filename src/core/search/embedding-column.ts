@@ -68,7 +68,7 @@ import type {
   SearchOpts,
 } from '../types.ts';
 import type { GBrainConfig } from '../config.ts';
-import { DEFAULT_EMBEDDING_MODEL, DEFAULT_EMBEDDING_DIMENSIONS } from '../ai/defaults.ts';
+import { DEFAULT_EMBEDDING_DIMENSIONS } from '../ai/defaults.ts';
 
 // ---- Constants ---------------------------------------------------------
 
@@ -279,10 +279,9 @@ export function buildVectorCastFragment(resolved: ResolvedColumn): {
  *
  * Throws if any user entry fails D12 validation. Built-ins are
  * derived live from the broader config (embedding_model,
- * embedding_dimensions, embedding_multimodal_model), so a missing
- * embedding_model produces a default 'embedding' entry pointing at the
- * gateway default. The doctor check catches mismatches against actual
- * DB column shape.
+ * embedding_dimensions, embedding_multimodal_model). A missing model keeps
+ * the builtin descriptor provider blank, which makes vector search
+ * unavailable while preserving keyword-only retrieval.
  */
 export function getEmbeddingColumnRegistry(
   cfg: GBrainConfig,
@@ -295,9 +294,8 @@ export function getEmbeddingColumnRegistry(
 
   // Builtin: 'embedding' — derived from primary config keys.
   //
-  // v0.37 fix wave (Lane A.5 + CDX2-3): resolution chain is
-  // `cfg.embedding_model > gateway resolved model > DEFAULT_EMBEDDING_MODEL`.
-  // The middle tier matters because callers that configure the gateway
+  // Resolution chain is `cfg.embedding_model > gateway resolved model`.
+  // The gateway tier matters because callers that configure the gateway
   // (init paths, tests, programmatic SDK consumers) expect the registry
   // to reflect the gateway state — they didn't write the field into
   // `~/.gbrain/config.json`. Falling straight from `cfg.embedding_model`
@@ -315,10 +313,9 @@ export function getEmbeddingColumnRegistry(
     gwModel = gw.getEmbeddingModel();
     gwDims = gw.getEmbeddingDimensions();
   } catch {
-    // Gateway unconfigured or import cycle — fall through to the
-    // canonical default in `ai/defaults.ts`.
+    // Gateway unconfigured or import cycle — leave the provider blank.
   }
-  const embedModel = cfg.embedding_model ?? gwModel ?? DEFAULT_EMBEDDING_MODEL;
+  const embedModel = cfg.embedding_model?.trim() || gwModel?.trim() || '';
   const embedDims =
     typeof cfg.embedding_dimensions === 'number' && cfg.embedding_dimensions > 0
       ? cfg.embedding_dimensions
@@ -333,7 +330,7 @@ export function getEmbeddingColumnRegistry(
   // Hardcoded 1024d / vector because that's the committed schema shape
   // (see src/schema.sql:158). If the user runs a different multimodal
   // model they can override via the user registry.
-  const mmModel = cfg.embedding_multimodal_model ?? 'voyage:voyage-multimodal-3';
+  const mmModel = cfg.embedding_multimodal_model?.trim() || '';
   out['embedding_image'] = {
     provider: mmModel,
     dimensions: 1024,
@@ -467,10 +464,10 @@ export function isDefaultColumn(resolved: ResolvedColumn): boolean {
  * Cache-safety criteria:
  *   1. Column name is `embedding` (the cache table only knows about
  *      this column; non-default columns always skip).
- *   2. Resolved dimensions match `cfg.embedding_dimensions` (or
- *      DEFAULT_EMBEDDING_DIMENSIONS from `ai/defaults.ts` when unset).
- *   3. Resolved provider matches `cfg.embedding_model` (or
- *      DEFAULT_EMBEDDING_MODEL). The model is the "embedding space
+ *   2. Resolved dimensions match `cfg.embedding_dimensions` (or the
+ *      storage placeholder when unset).
+ *   3. Resolved provider matches an explicitly configured embedding model.
+ *      The model is the "embedding space
  *      identifier" — two models produce non-interchangeable vectors
  *      even at the same dim count.
  *
@@ -479,19 +476,20 @@ export function isDefaultColumn(resolved: ResolvedColumn): boolean {
  */
 export function isCacheSafe(resolved: ResolvedColumn, cfg: GBrainConfig): boolean {
   if (resolved.name !== DEFAULT_COLUMN_NAME) return false;
-  // v0.37 fix wave: same resolution chain as the registry — cfg > gateway > default.
+  // Same resolution chain as the registry — cfg > gateway, with no provider default.
   let gwModel: string | undefined;
   let gwDims: number | undefined;
   try {
     const gw = require('../ai/gateway.ts') as typeof import('../ai/gateway.ts');
     gwModel = gw.getEmbeddingModel();
     gwDims = gw.getEmbeddingDimensions();
-  } catch { /* gateway unconfigured — fall through to constants */ }
+  } catch { /* gateway unconfigured — vector cache is unsafe */ }
   const cfgDims = (typeof cfg.embedding_dimensions === 'number' && cfg.embedding_dimensions > 0)
     ? cfg.embedding_dimensions
     : (typeof gwDims === 'number' && gwDims > 0 ? gwDims : DEFAULT_EMBEDDING_DIMENSIONS);
   if (resolved.dimensions !== cfgDims) return false;
-  const cfgModel = cfg.embedding_model ?? gwModel ?? DEFAULT_EMBEDDING_MODEL;
+  const cfgModel = cfg.embedding_model?.trim() || gwModel?.trim();
+  if (!cfgModel) return false;
   if (resolved.embeddingModel !== cfgModel) return false;
   return true;
 }

@@ -2,10 +2,6 @@
 import { isAbsolute, join } from 'path';
 import { homedir } from 'os';
 import type { EngineConfig, EmbeddingColumnConfig } from './types.ts';
-import {
-  DEFAULT_EMBEDDING_DIMENSIONS,
-  DEFAULT_EMBEDDING_MODEL,
-} from './ai/defaults.ts';
 
 /**
  * Where is the active DB URL coming from? Pure introspection, no connection
@@ -106,7 +102,7 @@ export interface GBrainConfig {
    * merge → buildGatewayConfig env dict → recipe reads ZEROENTROPY_API_KEY.
    */
   zeroentropy_api_key?: string;
-  /** AI gateway config (v0.14+). v0.36+ default: "zeroentropyai:zembed-1" / 1280 / "anthropic:claude-haiku-4-5-20251001". */
+  /** AI gateway config. Embedding has no provider default; model + dimensions must both be explicit. */
   embedding_model?: string;
   embedding_dimensions?: number;
   /**
@@ -408,18 +404,16 @@ export function assertNoEmbeddingEnvConfigDrift(
   const persistedModel = typeof fileConfig.embedding_model === 'string'
     && fileConfig.embedding_model.trim()
     ? fileConfig.embedding_model.trim()
-    : DEFAULT_EMBEDDING_MODEL;
+    : null;
   const configuredDim = Number(fileConfig.embedding_dimensions);
   const persistedDimensions = Number.isInteger(configuredDim) && configuredDim > 0
     ? configuredDim
-    : persistedModel === DEFAULT_EMBEDDING_MODEL
-      ? DEFAULT_EMBEDDING_DIMENSIONS
-      : null;
+    : null;
   const mismatches: string[] = [];
 
   if (overrides.model && overrides.model.value !== persistedModel) {
     mismatches.push(
-      `${overrides.model.name}=${overrides.model.value}（config.json=${persistedModel}）`,
+      `${overrides.model.name}=${overrides.model.value}（config.json=${persistedModel ?? '未设置'}）`,
     );
   }
   if (overrides.dimensions) {

@@ -27,14 +27,13 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { PGLiteEngine } from '../src/core/pglite-engine.ts';
 import { configureGateway, resetGateway, __setEmbedTransportForTests } from '../src/core/ai/gateway.ts';
+import { saveConfig } from '../src/core/config.ts';
 import { withEnv } from './helpers/with-env.ts';
 
 // ─────────────────────────────────────────────────────────────────────
-// Lane A.7 — Chunk-row INSERT model default tracks defaults.ts constant
-// (not stale OpenAI literal). Pre-fix `chunk.model || 'text-embedding-3-large'`
-// in both engines; post-fix `chunk.model || DEFAULT_EMBEDDING_MODEL`.
+// Lane A.7 — A chunk without a vector has no model provenance.
 // ─────────────────────────────────────────────────────────────────────
-describe('Lane A.7 — chunk-row INSERT default tracks ai/defaults.ts constant', () => {
+describe('Lane A.7 — chunk-row model provenance follows embedding presence', () => {
   let engine: PGLiteEngine;
 
   beforeAll(async () => {
@@ -47,28 +46,24 @@ describe('Lane A.7 — chunk-row INSERT default tracks ai/defaults.ts constant',
     await engine.disconnect();
   });
 
-  test('upsertChunks without explicit model: row stores DEFAULT_EMBEDDING_MODEL', async () => {
-    const { DEFAULT_EMBEDDING_MODEL } = await import('../src/core/ai/defaults.ts');
+  test('upsertChunks without an embedding stores NULL model provenance', async () => {
     await engine.putPage('test/a7', { type: 'note', title: 'A.7', compiled_truth: 'hello' });
     await engine.upsertChunks('test/a7', [
       { chunk_index: 0, chunk_text: 'hello', chunk_source: 'compiled_truth' },
     ]);
 
-    const rows = await engine.executeRaw<{ model: string }>(
+    const rows = await engine.executeRaw<{ model: string | null }>(
       `SELECT model FROM content_chunks WHERE chunk_index = 0 LIMIT 1`,
     );
-    expect(rows[0]?.model).toBe(DEFAULT_EMBEDDING_MODEL);
-    // CDX2-4 regression: would have been 'text-embedding-3-large'
-    // (a literal pre-fix; production write site that was never tested).
-    expect(rows[0]?.model).not.toBe('text-embedding-3-large');
+    expect(rows[0]?.model).toBeNull();
   });
 });
 
 // ─────────────────────────────────────────────────────────────────────
-// Lane A.8 — Schema seed stores provider:model (was prefix-stripped)
+// Lane A.8 — Fresh schema does not seed a provider.
 // ─────────────────────────────────────────────────────────────────────
-describe('Lane A.8 — schema seed stores full provider:model in DB config', () => {
-  test('fresh init with ZE model stores `zeroentropyai:zembed-1`, not `zembed-1`', async () => {
+describe('Lane A.8 — schema seed has no embedding provider', () => {
+  test('fresh init does not store a runtime embedding model in DB config', async () => {
     // Independent engine + gateway so the assertion is unambiguous.
     configureGateway({
       embedding_model: 'zeroentropyai:zembed-1',
@@ -80,9 +75,7 @@ describe('Lane A.8 — schema seed stores full provider:model in DB config', () 
     try {
       await engine.initSchema();
       const stored = await engine.getConfig('embedding_model');
-      expect(stored).toBe('zeroentropyai:zembed-1');
-      // CDX-4 regression: would have been 'zembed-1' under the strip.
-      expect(stored).not.toBe('zembed-1');
+      expect(stored).toBeNull();
     } finally {
       await engine.disconnect();
       configureGateway({
@@ -213,11 +206,21 @@ describe('Lane C.3 — env ZEROENTROPY_API_KEY merges into loadConfig', () => {
 // ─────────────────────────────────────────────────────────────────────
 describe('Lane D.2 — embed pre-flight catches dim mismatch before worker pool', () => {
   let engine: PGLiteEngine;
+  let tmpHome: string;
+  let origHome: string | undefined;
 
   // Fully self-contained: configure gateway EXPLICITLY so schema dim is
   // deterministic regardless of earlier tests' state. resetGateway() at
   // teardown so we don't poison downstream tests.
   beforeAll(async () => {
+    tmpHome = mkdtempSync(join(tmpdir(), 'pmbrain-dim-preflight-'));
+    origHome = process.env.GBRAIN_HOME;
+    process.env.GBRAIN_HOME = tmpHome;
+    saveConfig({
+      engine: 'pglite',
+      embedding_model: 'openai:text-embedding-3-large',
+      embedding_dimensions: 1536,
+    });
     configureGateway({
       embedding_model: 'openai:text-embedding-3-large',
       embedding_dimensions: 1536,
@@ -240,6 +243,9 @@ describe('Lane D.2 — embed pre-flight catches dim mismatch before worker pool'
       embedding_dimensions: 1536,
       env: { ...process.env },
     });
+    if (origHome === undefined) delete process.env.GBRAIN_HOME;
+    else process.env.GBRAIN_HOME = origHome;
+    rmSync(tmpHome, { recursive: true, force: true });
   });
 
   test('schema=1536 + gateway=ZE/1280 → runEmbedCore throws EmbeddingDimMismatchError before transport fires', async () => {

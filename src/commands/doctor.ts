@@ -29,10 +29,6 @@ import {
   loadConfigFileOnly,
   resolveEmbeddingEnvOverrides,
 } from '../core/config.ts';
-import {
-  DEFAULT_EMBEDDING_DIMENSIONS,
-  DEFAULT_EMBEDDING_MODEL,
-} from '../core/ai/defaults.ts';
 import { dirname, isAbsolute, join, resolve as resolvePath } from 'path';
 import { fileURLToPath } from 'url';
 import { existsSync, readFileSync, readdirSync, statSync } from 'fs';
@@ -1570,7 +1566,7 @@ export async function checkZeEmbeddingHealth(engine: BrainEngine): Promise<Check
       return {
         name: 'ze_embedding_health',
         status: 'ok',
-        message: `Configured embedding model "${model || 'default'}" is not ZeroEntropy — skip.`,
+        message: `Configured embedding model "${model || '未配置'}" is not ZeroEntropy — skip.`,
       };
     }
     const envKey = process.env.ZEROENTROPY_API_KEY;
@@ -2241,30 +2237,30 @@ async function checkEmbeddingEnvOverride(engine: BrainEngine): Promise<Check> {
     };
   }
 
-  let configuredModel: string;
-  let configuredDim: number;
-  let source: 'config-file' | 'database' | 'default';
+  let configuredModel: string | null;
+  let configuredDim: number | null;
+  let source: 'config-file' | 'database' | 'unconfigured';
   if (fileConfig) {
     configuredModel = typeof fileConfig.embedding_model === 'string'
       && fileConfig.embedding_model.trim()
       ? fileConfig.embedding_model.trim()
-      : DEFAULT_EMBEDDING_MODEL;
+      : null;
     const parsedDim = Number(fileConfig.embedding_dimensions);
     configuredDim = Number.isInteger(parsedDim) && parsedDim > 0
       ? parsedDim
-      : DEFAULT_EMBEDDING_DIMENSIONS;
+      : null;
     source = 'config-file';
   } else {
     try {
       const dbModel = (await engine.getConfig('embedding_model'))?.trim();
       const dbDim = Number(await engine.getConfig('embedding_dimensions'));
-      configuredModel = dbModel || DEFAULT_EMBEDDING_MODEL;
+      configuredModel = dbModel || null;
       configuredDim = Number.isInteger(dbDim) && dbDim > 0
         ? dbDim
-        : DEFAULT_EMBEDDING_DIMENSIONS;
+        : null;
       const hasDbEmbeddingConfig = Boolean(dbModel)
         || (Number.isInteger(dbDim) && dbDim > 0);
-      source = hasDbEmbeddingConfig ? 'database' : 'default';
+      source = hasDbEmbeddingConfig ? 'database' : 'unconfigured';
     } catch (err) {
       return {
         name: 'embedding_env_override',
@@ -2285,8 +2281,8 @@ async function checkEmbeddingEnvOverride(engine: BrainEngine): Promise<Check> {
     mismatches.push({
       key: overrides.model.name,
       env: overrides.model.value,
-      db: configuredModel,
-      configured: configuredModel,
+      db: configuredModel ?? '未设置',
+      configured: configuredModel ?? '未设置',
       source,
     });
   }
@@ -2296,8 +2292,8 @@ async function checkEmbeddingEnvOverride(engine: BrainEngine): Promise<Check> {
       mismatches.push({
         key: overrides.dimensions.name,
         env: overrides.dimensions.value,
-        db: String(configuredDim),
-        configured: String(configuredDim),
+        db: configuredDim === null ? '未设置' : String(configuredDim),
+        configured: configuredDim === null ? '未设置' : String(configuredDim),
         source,
       });
     }
