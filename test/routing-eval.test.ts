@@ -68,6 +68,9 @@ describe('normalizeText', () => {
   it('handles unicode punctuation', () => {
     expect(normalizeText('search — fast!')).toBe('search fast');
   });
+  it('preserves CJK letters while stripping punctuation', () => {
+    expect(normalizeText('写一篇AI教程！')).toBe('写一篇ai教程');
+  });
   it('empty input → empty', () => {
     expect(normalizeText('')).toBe('');
     expect(normalizeText('   !!  ')).toBe('');
@@ -159,6 +162,20 @@ describe('structuralRouteMatch', () => {
     const r = structuralRouteMatch('every inbound message lookup', index);
     expect(r.matched).toContain('query');
     expect(r.matched).toContain('signal-detector');
+    expect(r.ambiguous).toBe(false);
+  });
+  it('does not collapse a mixed CJK trigger into a generic English word', () => {
+    const cjkIndex = indexResolverTriggers(
+      makeResolver([
+        { trigger: 'Word排版', skill: 'document-formatting' },
+        { trigger: 'voice note', skill: 'voice-note-ingest' },
+      ]),
+    );
+    const r = structuralRouteMatch(
+      'This voice note should be preserved word-for-word',
+      cjkIndex,
+    );
+    expect(r.matched).toEqual(['voice-note-ingest']);
     expect(r.ambiguous).toBe(false);
   });
 });

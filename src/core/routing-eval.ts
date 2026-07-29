@@ -97,7 +97,7 @@ export interface RoutingCaseResult {
  */
 export function normalizeText(s: string): string {
   if (!s) return '';
-  return s.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  return s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
 }
 
 /**
