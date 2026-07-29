@@ -737,6 +737,46 @@ describe('embedAllStale wall-clock budget end-to-end (D3 + D3a)', () => {
     // workers to drain (1 worker × 80ms latency). Generous upper bound: 1500ms.
     expect(elapsed).toBeLessThan(1500);
   });
+
+  test('--catch-up disables the timer without overflowing the Windows timeout range', async () => {
+    const { runEmbedCore } = await import('../src/commands/embed.ts');
+    const originalSetTimeout = globalThis.setTimeout;
+    const scheduledDelays: number[] = [];
+    globalThis.setTimeout = ((handler: TimerHandler, delay?: number, ...args: unknown[]) => {
+      scheduledDelays.push(Number(delay ?? 0));
+      return originalSetTimeout(handler, delay, ...args);
+    }) as typeof globalThis.setTimeout;
+    let listCalls = 0;
+    const stale = [{
+      slug: 'catch-up-page',
+      chunk_index: 0,
+      chunk_text: 'catch-up text',
+      chunk_source: 'compiled_truth' as const,
+      model: null,
+      token_count: 1,
+      source_id: 'default',
+      page_id: 1,
+    }];
+    const engine = mockEngine({
+      countStaleChunks: async () => 1,
+      listStaleChunks: async () => listCalls++ === 0 ? stale : [],
+      getChunks: async () => stale.map((row) => ({
+        ...row,
+        embedded_at: null,
+      })),
+      upsertChunks: async () => {},
+    });
+
+    try {
+      const result = await runEmbedCore(engine, { stale: true, catchUp: true });
+
+      expect(result.embedded).toBe(1);
+      expect(result.pages_processed).toBe(1);
+      expect(scheduledDelays.every((delay) => delay <= 2_147_483_647)).toBe(true);
+    } finally {
+      globalThis.setTimeout = originalSetTimeout;
+    }
+  });
 });
 
 describe('embedAllStale --source threading (D7)', () => {

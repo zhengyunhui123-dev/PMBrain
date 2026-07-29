@@ -25,7 +25,18 @@ describe('embedding model switch contract', () => {
     expect(cycle).toContain('runEmbedCore(engine, { stale: true, dryRun })');
     const embed = readFileSync(resolve('src/commands/embed.ts'), 'utf8');
     expect(embed).toContain('preflightEmbeddingModelChange(engine, !!opts.dryRun)');
+    expect(embed).toMatch(/FROM content_chunks c\s+JOIN pages p ON p\.id = c\.page_id\s+WHERE c\.embedding IS NOT NULL\s+AND p\.deleted_at IS NULL/);
     expect(embed).not.toContain('invalidateMismatchedEmbeddingModels(engine, getEmbeddingModel())');
     expect(embed).toContain('Dream、同步或普通向量补全时自动清空已有向量');
+  });
+
+  test('both database engines exclude soft-deleted pages from stale embedding queries', () => {
+    for (const path of ['src/core/postgres-engine.ts', 'src/core/pglite-engine.ts']) {
+      const source = readFileSync(resolve(path), 'utf8');
+      const staleQueries = source.match(
+        /WHERE cc\.embedding IS NULL\s+AND p\.deleted_at IS NULL/g,
+      ) ?? [];
+      expect(staleQueries.length).toBe(8);
+    }
   });
 });

@@ -2318,6 +2318,7 @@ export class PostgresEngine implements BrainEngine {
         FROM content_chunks cc
         JOIN pages p ON p.id = cc.page_id
         WHERE cc.embedding IS NULL
+          AND p.deleted_at IS NULL
           AND NOT (COALESCE(p.frontmatter, '{}'::jsonb) ? 'embed_skip')
       `;
       return Number((row as { count?: number } | undefined)?.count ?? 0);
@@ -2327,6 +2328,7 @@ export class PostgresEngine implements BrainEngine {
       FROM content_chunks cc
       JOIN pages p ON p.id = cc.page_id
       WHERE cc.embedding IS NULL
+        AND p.deleted_at IS NULL
         AND p.source_id = ${opts.sourceId}
         AND NOT (COALESCE(p.frontmatter, '{}'::jsonb) ? 'embed_skip')
     `;
@@ -2366,6 +2368,7 @@ export class PostgresEngine implements BrainEngine {
           FROM content_chunks cc
           JOIN pages p ON p.id = cc.page_id
           WHERE cc.embedding IS NULL
+            AND p.deleted_at IS NULL
             AND NOT (COALESCE(p.frontmatter, '{}'::jsonb) ? 'embed_skip')
           ORDER BY p.updated_at DESC NULLS LAST, p.id ASC, cc.chunk_index ASC
           LIMIT ${limit}
@@ -2376,6 +2379,7 @@ export class PostgresEngine implements BrainEngine {
           FROM content_chunks cc
           JOIN pages p ON p.id = cc.page_id
           WHERE cc.embedding IS NULL
+            AND p.deleted_at IS NULL
             AND NOT (COALESCE(p.frontmatter, '{}'::jsonb) ? 'embed_skip')
             AND (
               p.updated_at < ${afterUpdated}::timestamptz
@@ -2394,6 +2398,7 @@ export class PostgresEngine implements BrainEngine {
         FROM content_chunks cc
         JOIN pages p ON p.id = cc.page_id
         WHERE cc.embedding IS NULL
+          AND p.deleted_at IS NULL
           AND p.source_id = ${opts.sourceId}
           AND NOT (COALESCE(p.frontmatter, '{}'::jsonb) ? 'embed_skip')
         ORDER BY p.updated_at DESC NULLS LAST, p.id ASC, cc.chunk_index ASC
@@ -2405,6 +2410,7 @@ export class PostgresEngine implements BrainEngine {
         FROM content_chunks cc
         JOIN pages p ON p.id = cc.page_id
         WHERE cc.embedding IS NULL
+          AND p.deleted_at IS NULL
           AND p.source_id = ${opts.sourceId}
           AND NOT (COALESCE(p.frontmatter, '{}'::jsonb) ? 'embed_skip')
           AND (
@@ -2438,6 +2444,7 @@ export class PostgresEngine implements BrainEngine {
         FROM content_chunks cc
         JOIN pages p ON p.id = cc.page_id
         WHERE cc.embedding IS NULL
+          AND p.deleted_at IS NULL
           AND NOT (COALESCE(p.frontmatter, '{}'::jsonb) ? 'embed_skip')
           AND (cc.page_id, cc.chunk_index) > (${afterPid}, ${afterIdx})
         ORDER BY cc.page_id, cc.chunk_index
@@ -2451,6 +2458,7 @@ export class PostgresEngine implements BrainEngine {
       FROM content_chunks cc
       JOIN pages p ON p.id = cc.page_id
       WHERE cc.embedding IS NULL
+        AND p.deleted_at IS NULL
         AND p.source_id = ${opts.sourceId}
         AND NOT (COALESCE(p.frontmatter, '{}'::jsonb) ? 'embed_skip')
         AND (cc.page_id, cc.chunk_index) > (${afterPid}, ${afterIdx})

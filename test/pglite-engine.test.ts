@@ -432,6 +432,19 @@ describe('PGLiteEngine: stale chunk pagination (D7 + REGRESSION)', () => {
     expect(await engine.countStaleChunks()).toBe(1);
   });
 
+  test('soft-deleted pages are excluded from stale embedding work', async () => {
+    await engine.putPage('test/deleted-stale', testPage);
+    await engine.upsertChunks('test/deleted-stale', [
+      { chunk_index: 0, chunk_text: 'deleted stale chunk', chunk_source: 'compiled_truth' },
+    ]);
+    await engine.executeRaw(
+      `UPDATE pages SET deleted_at = now() WHERE source_id = 'default' AND slug = 'test/deleted-stale'`,
+    );
+
+    expect(await engine.countStaleChunks()).toBe(0);
+    expect(await engine.listStaleChunks({ batchSize: 100 })).toHaveLength(0);
+  });
+
   test('listStaleChunks: cursor pagination across page boundaries', async () => {
     // Seed 3 pages × 3 chunks = 9 stale rows; walk with batchSize=2.
     for (const slug of ['c-a', 'c-b', 'c-c']) {

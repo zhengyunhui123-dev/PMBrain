@@ -169,10 +169,12 @@ async function preflightEmbeddingModelChange(engine: BrainEngine, dryRun: boolea
   if (dryRun) return;
   const configuredModel = getEmbeddingModel();
   const rows = await engine.executeRaw<{ model: string | null; count: string | number }>(
-    `SELECT model, COUNT(*)::bigint AS count
-       FROM content_chunks
-      WHERE embedding IS NOT NULL
-      GROUP BY model`,
+    `SELECT c.model, COUNT(*)::bigint AS count
+       FROM content_chunks c
+       JOIN pages p ON p.id = c.page_id
+      WHERE c.embedding IS NOT NULL
+        AND p.deleted_at IS NULL
+      GROUP BY c.model`,
   );
   const conflicts = (Array.isArray(rows) ? rows : [])
     .filter((row) => typeof row.model === 'string'
@@ -628,14 +630,16 @@ async function embedAllStale(
 
   // D3 + D3a + D8: wall-clock budget. 30 min default; env override.
   // v0.41.18.0 (A13): --catch-up removes the wall-clock cap entirely so the
-  // handler runs until countStaleChunks() returns 0. Use Number.MAX_SAFE_INTEGER
-  // (effectively unbounded) instead of the 30-min default. The AbortController
-  // still wraps for SIGINT propagation; just the timer never fires.
-  const BUDGET_MS = staleOpts?.catchUp
-    ? Number.MAX_SAFE_INTEGER
+  // handler runs until countStaleChunks() returns 0. Do not emulate infinity
+  // with Number.MAX_SAFE_INTEGER: Windows/Bun timers clamp it to 1ms and abort
+  // the run immediately. A null budget means no timer is installed.
+  const budgetMs = staleOpts?.catchUp
+    ? null
     : parseInt(process.env.GBRAIN_EMBED_TIME_BUDGET_MS || `${30 * 60 * 1000}`, 10);
   const budgetController = new AbortController();
-  const budgetTimer = setTimeout(() => budgetController.abort(), BUDGET_MS);
+  const budgetTimer = budgetMs === null
+    ? null
+    : setTimeout(() => budgetController.abort(), budgetMs);
   const budgetSignal = budgetController.signal;
 
   // v0.41.18.0 (A13): --priority recent threads orderBy='updated_desc' to
@@ -658,7 +662,7 @@ async function embedAllStale(
     while (true) {
       if (budgetSignal.aborted) {
         if (!budgetExitNotified) {
-          serr(`\n  [embed] wall-clock budget (${BUDGET_MS}ms) exceeded; exiting cleanly. Re-run picks up via partial index.`);
+          serr(`\n  [embed] wall-clock budget (${budgetMs}ms) exceeded; exiting cleanly. Re-run picks up via partial index.`);
           budgetExitNotified = true;
         }
         break;
@@ -754,7 +758,7 @@ async function embedAllStale(
       if (batch.length < PAGE_SIZE) break;
     }
   } finally {
-    clearTimeout(budgetTimer);
+    if (budgetTimer !== null) clearTimeout(budgetTimer);
   }
 
   slog(`Embedded ${result.embedded} chunks across ${totalProcessedPages} pages`);
