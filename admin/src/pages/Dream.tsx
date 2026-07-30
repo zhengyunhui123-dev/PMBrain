@@ -1217,16 +1217,6 @@ function DreamRunPanel({
   }, [run?.id]);
 
   useEffect(() => {
-    if (!running) return;
-    const warn = (event: BeforeUnloadEvent) => {
-      event.preventDefault();
-      event.returnValue = '';
-    };
-    window.addEventListener('beforeunload', warn);
-    return () => window.removeEventListener('beforeunload', warn);
-  }, [running]);
-
-  useEffect(() => {
     if (!run || (run.status !== 'running' && run.status !== 'queued')) return;
     const timer = setInterval(async () => {
       try {

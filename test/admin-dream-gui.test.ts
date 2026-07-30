@@ -32,6 +32,13 @@ describe('Dream GUI product contract', () => {
     expect(app).not.toContain("{ page: 'dream-insights', label: '项目洞察' }");
   });
 
+  test('a running Dream keeps its reconnect state without blocking desktop navigation', () => {
+    expect(dream).toContain('window.localStorage.getItem(DREAM_LAST_RUN_KEY)');
+    expect(dream).toContain('window.localStorage.setItem(DREAM_LAST_RUN_KEY, run.id)');
+    expect(dream).not.toContain("window.addEventListener('beforeunload'");
+    expect(dream).not.toContain('event.returnValue');
+  });
+
   test('meeting mode calls the canonical CLI preset instead of synthesize-only', () => {
     expect(dream).toContain("preset: runMode === 'meeting'");
     expect(dream).toContain("? 'meeting'");
