@@ -39,6 +39,7 @@ describe('Admin scheduled one-click organization', () => {
     expect(serveSource).toContain("engine.setConfig(ADMIN_DREAM_SCHEDULE_ENABLED_KEY");
     expect(serveSource).toContain("preset: 'full'");
     expect(serveSource).toContain('drainProposals: true');
+    expect(serveSource).toContain("engine.kind !== 'pglite'");
     expect(serveSource).toContain('await ensureAdminWorkerStarted()');
     expect(serveSource).toContain('const dreamScheduleTimer = setInterval(');
   });
