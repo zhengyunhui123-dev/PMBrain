@@ -19,8 +19,6 @@ import { join } from 'path';
 
 const LOCK_DIR_NAME = '.gbrain-lock';
 const LOCK_FILE = 'lock';
-const STALE_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutes — embed jobs can be long
-
 export interface LockHandle {
   lockDir: string;
   acquired: boolean;
@@ -73,18 +71,15 @@ export async function acquireLock(dataDir: string | undefined, opts?: { timeoutM
       try {
         const lockData = JSON.parse(readFileSync(lockPath, 'utf-8'));
         const lockPid = lockData.pid as number;
-        const lockTime = lockData.acquired_at as number;
 
         // Is the locking process still alive?
         if (!isProcessAlive(lockPid)) {
           // Stale lock — clean it up
           try { rmSync(lockDir, { recursive: true, force: true }); } catch { /* race condition, try again */ }
-        } else if (Date.now() - lockTime > STALE_THRESHOLD_MS) {
-          // Lock held for too long — assume stale (e.g., process hung)
-          // Still alive but probably stuck — force remove
-          try { rmSync(lockDir, { recursive: true, force: true }); } catch { /* race condition */ }
         } else {
-          // Lock is held by a live process — wait and retry
+          // A long-running sidecar legitimately holds this lock for its whole
+          // lifetime. Age alone must never make a live lock stale: removing it
+          // lets a second PGLite process open the same directory and abort.
           await new Promise(r => setTimeout(r, 1000));
           continue;
         }

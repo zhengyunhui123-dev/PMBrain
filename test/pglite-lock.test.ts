@@ -65,6 +65,20 @@ describe('pglite-lock', () => {
     await releaseLock(lock);
   });
 
+  test('never removes an old lock while its owning process is still alive', async () => {
+    const lockDir = join(TEST_DIR, '.gbrain-lock');
+    mkdirSync(lockDir);
+    writeFileSync(join(lockDir, 'lock'), JSON.stringify({
+      pid: process.pid,
+      acquired_at: Date.now() - 60 * 60 * 1000,
+      command: 'long-running-pmbrain-sidecar',
+    }));
+
+    await expect(acquireLock(TEST_DIR, { timeoutMs: 100 })).rejects.toThrow(/Timed out/);
+    expect(existsSync(lockDir)).toBe(true);
+    expect(JSON.parse(readFileSync(join(lockDir, 'lock'), 'utf-8')).pid).toBe(process.pid);
+  });
+
   test('skips lock for in-memory (undefined dataDir)', async () => {
     const lock = await acquireLock(undefined);
     expect(lock.acquired).toBe(true);

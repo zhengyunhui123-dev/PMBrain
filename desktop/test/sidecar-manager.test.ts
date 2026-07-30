@@ -5,6 +5,55 @@ import { SidecarManager } from '../src/main/sidecar-manager.js';
 const logger = { write() {}, close() {}, directory: '', filePath: '' } as any;
 
 describe('desktop sidecar manager', () => {
+  test('reports the last sidecar stderr instead of a generic health-check failure', async () => {
+    const manager = new SidecarManager({
+      packaged: false,
+      appPath: '',
+      resourcesPath: '',
+      port: 3131,
+      bootstrapToken: 'test-bootstrap-token',
+      clientVersion: '1.0.91',
+      logger,
+    });
+    (manager as any).lastExitMessage =
+      'Sidecar exited (code 1). PGLite failed to initialize its WASM runtime. Original error: Aborted().';
+
+    await expect((manager as any).waitUntilHealthy()).rejects.toThrow(
+      'PGLite failed to initialize its WASM runtime',
+    );
+  });
+
+  test('times out administrator-session creation instead of leaving startup waiting forever', async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = ((_input: RequestInfo | URL, init?: RequestInit) => new Promise((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => reject(new Error('request aborted')), { once: true });
+    })) as typeof fetch;
+    const manager = new SidecarManager({
+      packaged: false,
+      appPath: '',
+      resourcesPath: '',
+      port: 3131,
+      bootstrapToken: 'test-bootstrap-token',
+      clientVersion: '1.0.91',
+      adminRequestTimeoutMs: 25,
+      logger,
+    });
+
+    try {
+      const outcome = await Promise.race([
+        (manager as any).issueMagicLink().then(
+          () => 'resolved',
+          (error: unknown) => error instanceof Error ? error.message : String(error),
+        ),
+        new Promise<string>(resolve => setTimeout(() => resolve('still waiting'), 200)),
+      ]);
+      expect(outcome).not.toBe('still waiting');
+      expect(outcome).toContain('administrator session');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test('terminates the child when startup health checks fail', async () => {
     const manager = new SidecarManager({
       packaged: false,

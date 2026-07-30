@@ -16,6 +16,8 @@ const STOP_TIMEOUT_MS = 5_000;
 const RESTART_WINDOW_MS = 30_000;
 const MAX_RESTARTS = 3;
 const MCP_BEARER_VERIFY_TIMEOUT_MS = 3_000;
+const ADMIN_REQUEST_TIMEOUT_MS = 5_000;
+const STDERR_TAIL_LIMIT = 4_000;
 
 export type SidecarState =
   | { phase: 'starting'; port: number }
@@ -27,6 +29,7 @@ interface SidecarManagerOptions extends CliRuntime {
   port: number;
   bootstrapToken: string;
   clientVersion: string;
+  adminRequestTimeoutMs?: number;
   logger: DesktopLogger;
   onState?: (state: SidecarState) => void;
 }
@@ -42,6 +45,8 @@ export class SidecarManager {
   private lifecycleQueue: Promise<void> = Promise.resolve();
   private adminCookie: string | null = null;
   private adminCookieRequest: Promise<string> | null = null;
+  private recentStderr = '';
+  private lastExitMessage: string | null = null;
 
   constructor(options: SidecarManagerOptions) {
     this.options = options;
@@ -226,6 +231,8 @@ export class SidecarManager {
   private spawnProcess(): void {
     this.adminCookie = null;
     this.adminCookieRequest = null;
+    this.recentStderr = '';
+    this.lastExitMessage = null;
     const root = projectRoot(this.options);
     const workingDirectory = this.options.packaged ? packagedRuntimeRoot(this.options) : root;
     const runtimeContract = this.options.packaged ? getDesktopRuntimeContract() : null;
@@ -248,11 +255,20 @@ export class SidecarManager {
     });
     this.child = child;
     child.stdout?.on('data', (value) => this.options.logger.write('sidecar:stdout', value));
-    child.stderr?.on('data', (value) => this.options.logger.write('sidecar:stderr', value));
-    child.once('error', (error) => this.handleCrash(`Sidecar failed to start: ${error.message}`));
+    child.stderr?.on('data', (value) => {
+      const text = String(value);
+      this.recentStderr = `${this.recentStderr}${text}`.slice(-STDERR_TAIL_LIMIT);
+      this.options.logger.write('sidecar:stderr', value);
+    });
+    child.once('error', (error) => {
+      this.lastExitMessage = `Sidecar failed to start: ${error.message}`;
+      this.handleCrash(this.lastExitMessage);
+    });
     child.once('exit', (code, signal) => {
+      const stderr = this.recentStderr.trim();
+      this.lastExitMessage = `Sidecar exited (${formatProcessExit(code, signal)}).${stderr ? ` ${stderr}` : ''}`;
       if (this.child === child) this.child = null;
-      if (!this.stopping) this.handleCrash(`Sidecar exited (${formatProcessExit(code, signal)}).`);
+      if (!this.stopping) this.handleCrash(this.lastExitMessage);
     });
   }
 
@@ -301,7 +317,7 @@ export class SidecarManager {
     let lastError = 'PMBrain did not report healthy.';
     while (Date.now() < deadline) {
       if (this.stopping) throw new Error('PMBrain sidecar startup was stopped.');
-      if (!this.child) throw new Error('PMBrain sidecar exited before it became healthy.');
+      if (!this.child) throw new Error(this.lastExitMessage ?? 'PMBrain sidecar exited before it became healthy.');
       try {
         const response = await fetch(`http://127.0.0.1:${this.port}/health`, {
           signal: AbortSignal.timeout(2_000),
@@ -317,10 +333,19 @@ export class SidecarManager {
   }
 
   private async issueMagicLink(): Promise<string> {
-    const response = await fetch(`http://127.0.0.1:${this.port}/admin/api/issue-magic-link`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${this.bootstrapToken}` },
-    });
+    let response: Response;
+    try {
+      response = await fetch(`http://127.0.0.1:${this.port}/admin/api/issue-magic-link`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${this.bootstrapToken}` },
+        signal: AbortSignal.timeout(this.options.adminRequestTimeoutMs ?? ADMIN_REQUEST_TIMEOUT_MS),
+      });
+    } catch (error) {
+      throw new Error(
+        `Could not create an administrator session within ${this.options.adminRequestTimeoutMs ?? ADMIN_REQUEST_TIMEOUT_MS} ms.`,
+        { cause: error },
+      );
+    }
     if (!response.ok) throw new Error(`Could not create an administrator session (HTTP ${response.status}).`);
     const body = await response.json() as { url?: string };
     if (!body.url) throw new Error('PMBrain returned an invalid administrator link.');
