@@ -184,6 +184,21 @@ describe('runDream 鈥?--phase <name> restricts the cycle', () => {
     spy.mockRestore();
     errSpy.mockRestore();
   });
+
+  test('--preset meeting is rejected clearly on PGLite', async () => {
+    const exitSpy = spyOn(process, 'exit').mockImplementation(() => { throw new Error('EXIT'); });
+    const errSpy = spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      await runDream(engine, ['--dir', repo, '--preset', 'meeting', '--input', repo]);
+    } catch (e: any) {
+      expect(e.message).toBe('EXIT');
+    }
+    expect(exitSpy).toHaveBeenCalledWith(2);
+    expect(errSpy.mock.calls.flat().join(' ')).toContain('PGLite');
+    expect(errSpy.mock.calls.flat().join(' ')).toContain('会议与会话');
+    exitSpy.mockRestore();
+    errSpy.mockRestore();
+  });
 });
 
 // 鈹€鈹€鈹€ Output format 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€

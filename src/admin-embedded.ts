@@ -1,6 +1,6 @@
 // AUTO-GENERATED — do not edit by hand.
 // Run `bun run scripts/build-admin-embedded.ts` to regenerate.
-// Source: admin/dist/ at 2026-07-28.
+// Source: admin/dist/ at 2026-07-30.
 //
 // Bun resolves the file: imports to a path that works at runtime even
 // inside a compiled binary (`bun build --compile`). The manifest maps
@@ -9,7 +9,7 @@
 // @ts-ignore — type: 'file' is Bun ESM, not in lib.d.ts
 import A_0_assets_charts_BO6HVfrh_js from '../admin/dist/assets/charts-BO6HVfrh.js' with { type: 'file' };
 // @ts-ignore — type: 'file' is Bun ESM, not in lib.d.ts
-import A_1_assets_index_DjzPHvGB_js from '../admin/dist/assets/index-DjzPHvGB.js' with { type: 'file' };
+import A_1_assets_index_BsbY_ro6_js from '../admin/dist/assets/index-BsbY_ro6.js' with { type: 'file' };
 // @ts-ignore — type: 'file' is Bun ESM, not in lib.d.ts
 import A_2_assets_index_DvqiSf_c_css from '../admin/dist/assets/index-DvqiSf_c.css' with { type: 'file' };
 // @ts-ignore — type: 'file' is Bun ESM, not in lib.d.ts
@@ -30,7 +30,7 @@ export interface AdminAsset {
 
 export const ADMIN_ASSETS: Record<string, AdminAsset> = {
   "/admin/assets/charts-BO6HVfrh.js": { path: A_0_assets_charts_BO6HVfrh_js as unknown as string, mime: "application/javascript; charset=utf-8" },
-  "/admin/assets/index-DjzPHvGB.js": { path: A_1_assets_index_DjzPHvGB_js as unknown as string, mime: "application/javascript; charset=utf-8" },
+  "/admin/assets/index-BsbY_ro6.js": { path: A_1_assets_index_BsbY_ro6_js as unknown as string, mime: "application/javascript; charset=utf-8" },
   "/admin/assets/index-DvqiSf_c.css": { path: A_2_assets_index_DvqiSf_c_css as unknown as string, mime: "text/css; charset=utf-8" },
   "/admin/assets/react-LdaKN5mt.js": { path: A_3_assets_react_LdaKN5mt_js as unknown as string, mime: "application/javascript; charset=utf-8" },
   "/admin/assets/ui-D9xECtl0.js": { path: A_4_assets_ui_D9xECtl0_js as unknown as string, mime: "application/javascript; charset=utf-8" },

@@ -71,6 +71,17 @@ describe('dream CLI flag wiring', () => {
     expect(dreamSrc).toContain("forcePackPhases: opts.preset === 'meeting' ? ['extract_atoms']");
   });
 
+  test('PGLite meeting preset is rejected before starting the cycle', () => {
+    expect(dreamSrc).toContain("engine.kind === 'pglite'");
+    expect(dreamSrc).toContain("opts.preset === 'meeting'");
+    expect(dreamSrc).toContain('PGLite 暂不支持“会议与会话”整理');
+  });
+
+  test('human report exposes PGLite phase coverage', () => {
+    expect(dreamSrc).toContain('PGLite 阶段覆盖');
+    expect(dreamSrc).toContain('pglite_worker_unavailable');
+  });
+
   test('--from > --to range validation', () => {
     expect(dreamSrc).toContain('empty range');
   });

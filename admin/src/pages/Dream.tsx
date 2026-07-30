@@ -430,6 +430,10 @@ export function describeDreamRun(run: ConsoleRun): {
     || (!report && /(?:cycle[_ ]already[_ ]running|could not acquire cycle lock)/i.test(text));
   const duration = report?.duration_ms ?? run.durationMs ?? 0;
   const phaseCount = report?.phases?.length ?? 0;
+  const pgliteWorkerSkipped = report?.phases?.filter(
+    phase => phase.status === 'skipped' && phase.details?.reason === 'pglite_worker_unavailable',
+  ) ?? [];
+  const pgliteAvailablePhaseCount = phaseCount - pgliteWorkerSkipped.length;
   const pagesWritten = Number(totals.synth_pages_written ?? synthDetails.pages_written ?? 0);
   const patternsWritten = Number(totals.patterns_written ?? 0);
   const pagesSynced = Number(totals.pages_synced ?? 0);
@@ -487,6 +491,9 @@ export function describeDreamRun(run: ConsoleRun): {
     `耗时约 ${(duration / 1000).toFixed(1)} 秒`,
     `run id: ${run.id}`,
   ];
+  if (pgliteWorkerSkipped.length > 0) {
+    details.push(`PGLite 阶段覆盖: ${pgliteAvailablePhaseCount}/${phaseCount}`);
+  }
   if (transcriptsDiscovered > 0) details.push(`发现 transcript: ${transcriptsDiscovered}`);
   if (transcriptsProcessed > 0 || synth) details.push(`进入综合处理: ${transcriptsProcessed}`);
   if (childOutcomes.length > 0) {
@@ -544,6 +551,12 @@ export function describeDreamRun(run: ConsoleRun): {
       ? 'Dream 已部分完成，成果与待处理项如下'
       : 'Dream 只完成了部分检查';
     diagnosis = '部分阶段已成功并保留实际成果，仍有未处理内容；下方会据实显示写入数量和失败原因。';
+  }
+
+  if (run.status === 'completed' && pgliteWorkerSkipped.length > 0 && report?.status !== 'failed') {
+    headline = `PGLite 深度整理已完成 ${pgliteAvailablePhaseCount}/${phaseCount} 个阶段`;
+    diagnosis = 'PGLite 已按当前能力范围完成整理；synthesize、patterns 依赖独立 Worker，本次已明确跳过，其余阶段继续执行。';
+    outputs.unshift(`已完成 ${pgliteAvailablePhaseCount}/${phaseCount} 个阶段；synthesize、patterns 未执行。`);
   }
 
   if (run.status === 'failed') {
@@ -873,6 +886,9 @@ export function phaseSummaryZh(phase: DreamPhaseReport): string {
   const baseAction = PHASE_USER_ACTIONS[phase.phase] ?? PHASE_LABELS[phase.phase] ?? '完成本阶段处理';
 
   if (phase.status === 'skipped') {
+    if (details.reason === 'pglite_worker_unavailable') {
+      return `PGLite 当前不支持独立 Worker，本轮已安全跳过“${phase.phase}”；其他阶段继续执行。`;
+    }
     if (/active pack does not declare/i.test(phase.summary ?? '')) {
       return `当前启用的 Skill 包未开放“${PHASE_LABELS[phase.phase] ?? phase.phase}”，本轮已安全跳过。`;
     }
@@ -984,16 +1000,19 @@ function formatDreamJobError(errorText: string): string {
 }
 
 function DreamOpsDiagnostics({
+  engine,
   locks,
   jobs,
   supervisor,
   onChanged,
 }: {
+  engine?: string;
   locks?: DreamData['locks'];
   jobs?: DreamData['jobs'];
   supervisor?: DreamData['supervisor'];
   onChanged?: () => void;
 }) {
+  const isPglite = engine === 'pglite';
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
   const latestLock = locks?.[0] ?? null;
@@ -1009,7 +1028,7 @@ function DreamOpsDiagnostics({
   const failed = countBy(subagent, 'failed');
   const hasLiveQueueProblem = waiting > 0 || active > 0 || failed > 0 || (queue?.stalled_active ?? 0) > 0;
   const latestError = latestErrorJob && hasLiveQueueProblem ? formatDreamJobError(latestErrorJob.error_text ?? '') : '';
-  const stuckReason = !supervisor?.worker_running && waiting > 0
+  const stuckReason = !isPglite && !supervisor?.worker_running && waiting > 0
     ? 'Worker 未运行，subagent 只会排队等待。'
     : queue && queue.stalled_active > 0
       ? '存在锁已过期的 active 子任务，需要取消或等待 Worker 回收。'
@@ -1037,23 +1056,25 @@ function DreamOpsDiagnostics({
           <h3>运行诊断</h3>
           {stuckReason
             ? <p className="pm-warning">{stuckReason}</p>
-            : <p className="pm-hint">一键整理和会议整理会在需要时自动启动 Worker，通常不需要手动操作。这里用于故障诊断和恢复。</p>}
+            : isPglite
+              ? <p className="pm-hint">PGLite 不启动独立 Worker；深度整理会明确跳过 synthesize、patterns，其余阶段照常执行。</p>
+              : <p className="pm-hint">一键整理和会议整理会在需要时自动启动 Worker，通常不需要手动操作。这里用于故障诊断和恢复。</p>}
         </div>
-        <div className="dream-run-actions">
+        {!isPglite && <div className="dream-run-actions">
           {supervisor?.running ? (
             <button className="pm-ghost danger" disabled={!!busy} onClick={() => void runAction('stop-supervisor', () => api.stopSupervisor())}>停止 Worker</button>
           ) : (
             <button className="pm-ghost" disabled={!!busy} onClick={() => void runAction('start-supervisor', () => api.startSupervisor())}>启动 Worker</button>
           )}
-        </div>
+        </div>}
       </div>
       <div className="dream-ops-grid">
         <section>
           <h4>Worker</h4>
-          <div className="pm-kv"><span>状态</span><b>{supervisor?.worker_running ? 'ready' : supervisor?.running ? 'starting' : 'stopped'}</b></div>
+          <div className="pm-kv"><span>状态</span><b>{isPglite ? '不适用' : supervisor?.worker_running ? 'ready' : supervisor?.running ? 'starting' : 'stopped'}</b></div>
           <div className="pm-kv"><span>Supervisor PID</span><b>{supervisor?.supervisor_pid ?? '-'}</b></div>
-          <div className="pm-kv"><span>Worker</span><b>{supervisor?.worker_running ? `PID ${supervisor.worker_pid}` : supervisor?.readiness_error ?? 'not ready'}</b></div>
-          <div className="pm-kv"><span>模式</span><b>{supervisor?.mode ?? '-'}</b></div>
+          <div className="pm-kv"><span>Worker</span><b>{isPglite ? '不适用' : supervisor?.worker_running ? `PID ${supervisor.worker_pid}` : supervisor?.readiness_error ?? 'not ready'}</b></div>
+          <div className="pm-kv"><span>模式</span><b>{isPglite ? 'pglite' : supervisor?.mode ?? '-'}</b></div>
         </section>
         <section>
           <h4>Cycle lock</h4>
@@ -1099,6 +1120,7 @@ function DreamRunPanel({
   defaultPhase = 'all',
   defaultSourceId,
   compact = false,
+  engine,
   phaseCatalog = [],
   sources,
   locks,
@@ -1109,6 +1131,7 @@ function DreamRunPanel({
   defaultPhase?: string;
   defaultSourceId?: string;
   compact?: boolean;
+  engine?: string;
   phaseCatalog?: string[];
   sources?: Array<{ id: string; name: string; page_count: number; archived?: boolean }>;
   locks?: DreamData['locks'];
@@ -1116,6 +1139,7 @@ function DreamRunPanel({
   supervisor?: DreamData['supervisor'];
   onDone?: () => void;
 }) {
+  const isPglite = engine === 'pglite';
   const [phase, setPhase] = useState(defaultPhase);
   const [sourceId, setSourceId] = useState('');
   const [maxPages, setMaxPages] = useState('25');
@@ -1127,6 +1151,7 @@ function DreamRunPanel({
   const [timeoutMinutes, setTimeoutMinutes] = useState('');
   const [runMode, setRunMode] = useState<DreamRunMode>(() => {
     const saved = window.localStorage.getItem(DREAM_RUN_MODE_KEY);
+    if (saved === 'meeting' && isPglite) return 'cycle';
     return saved === 'quick' || saved === 'meeting' || saved === 'cycle' || saved === 'advanced'
       ? saved
       : defaultPhase === 'all' ? 'cycle' : 'advanced';
@@ -1154,6 +1179,10 @@ function DreamRunPanel({
 
   const applyRunMode = (mode: DreamRunMode) => {
     setError('');
+    if (mode === 'meeting' && isPglite) {
+      setError('PGLite 暂不支持会议与会话整理；深度整理可继续执行其余 20/22 个阶段。');
+      return;
+    }
     setRunMode(mode);
     window.localStorage.setItem(DREAM_RUN_MODE_KEY, mode);
     if (mode === 'meeting') {
@@ -1214,6 +1243,10 @@ function DreamRunPanel({
   const start = async (dryRunOverride?: boolean) => {
     if (busy) return;
     setError('');
+    if (runMode === 'meeting' && isPglite) {
+      setError('PGLite 暂不支持会议与会话整理；请改用深度整理或快速维护。');
+      return;
+    }
     if (runMode === 'meeting' && !input.trim()) {
       setError('请选择需要整理的会议记录文件或文件夹');
       return;
@@ -1230,7 +1263,7 @@ function DreamRunPanel({
     setStarting(true);
     try {
       const effectiveDryRun = dryRunOverride ?? dryRun;
-      const needsSubagentWorker = !effectiveDryRun && (
+      const needsSubagentWorker = !isPglite && !effectiveDryRun && (
         runMode === 'cycle'
         || runMode === 'meeting'
         || (runMode === 'advanced' && (phase === 'synthesize' || phase === 'patterns'))
@@ -1295,7 +1328,9 @@ function DreamRunPanel({
     },
     cycle: {
       title: '让知识库完整整理一遍',
-      description: '检查变化、补全关系、沉淀观点、合并重复信息，并更新搜索能力。',
+      description: isPglite
+        ? 'PGLite 将执行 20/22 个阶段；synthesize、patterns 会明确跳过，其余阶段照常整理。'
+        : '检查变化、补全关系、沉淀观点、合并重复信息，并更新搜索能力。',
       action: '开始深度整理',
     },
     meeting: {
@@ -1320,7 +1355,7 @@ function DreamRunPanel({
         </div>
         <div className="dream-run-actions">
           <button className="pm-primary dream-primary-action" onClick={() => void start(runMode === 'advanced' ? undefined : false)} disabled={busy}>
-            {running ? '正在整理…' : starting ? '正在准备 Worker…' : modeCopy[runMode].action}
+            {running ? '正在整理…' : starting ? (isPglite ? '正在准备…' : '正在准备 Worker…') : modeCopy[runMode].action}
           </button>
           {!running && runMode !== 'advanced' && (
             <button className="pm-ghost" disabled={starting} onClick={() => void start(true)}>先预览会发生什么</button>
@@ -1337,9 +1372,10 @@ function DreamRunPanel({
           <strong>深度整理</strong>
           <span>完整 Dream · 最全面</span>
         </button>
-        <button type="button" className={runMode === 'meeting' ? 'active' : ''} onClick={() => applyRunMode('meeting')}>
+        <button type="button" className={runMode === 'meeting' ? 'active' : ''} onClick={() => applyRunMode('meeting')}
+          disabled={isPglite} title={isPglite ? 'PGLite 暂不支持会议与会话整理' : undefined}>
           <strong>会议与会话</strong>
-          <span>指定文件 · 专项提炼</span>
+          <span>{isPglite ? '需要 Postgres Worker' : '指定文件 · 专项提炼'}</span>
         </button>
         <button type="button" className={runMode === 'advanced' ? 'active' : ''} onClick={() => applyRunMode('advanced')}>
           <strong>高级设置</strong>
@@ -1443,7 +1479,7 @@ function DreamRunPanel({
       )}
       <details className="dream-diagnostics-details">
         <summary>遇到问题？查看运行诊断</summary>
-        <DreamOpsDiagnostics locks={locks} jobs={jobs} supervisor={supervisor} onChanged={onDone} />
+        <DreamOpsDiagnostics engine={engine} locks={locks} jobs={jobs} supervisor={supervisor} onChanged={onDone} />
       </details>
     </div>
   );
@@ -1545,7 +1581,7 @@ export function DreamOverviewPage() {
         <small>最近更新 {formatDate(data.overview?.recent_write_at ?? null, '暂无')}</small>
       </section>
 
-      <DreamRunPanel defaultSourceId={data.overview?.main_source_id} phaseCatalog={data.phase_catalog} sources={data.overview?.sources} locks={data.locks} jobs={data.jobs} supervisor={data.supervisor} onDone={() => void reload()} />
+      <DreamRunPanel engine={data.overview?.engine} defaultSourceId={data.overview?.main_source_id} phaseCatalog={data.phase_catalog} sources={data.overview?.sources} locks={data.locks} jobs={data.jobs} supervisor={data.supervisor} onDone={() => void reload()} />
 
       <div className="dream-home-grid">
         <section className="dream-summary-card">
@@ -1606,7 +1642,7 @@ export function DreamExecutePage() {
       {loading && <Loading />}
       {data && (
         <>
-          <DreamRunPanel defaultSourceId={data.overview?.main_source_id} phaseCatalog={data.phase_catalog} sources={data.overview?.sources} locks={data.locks} jobs={data.jobs} supervisor={data.supervisor} onDone={() => void reload()} />
+          <DreamRunPanel engine={data.overview?.engine} defaultSourceId={data.overview?.main_source_id} phaseCatalog={data.phase_catalog} sources={data.overview?.sources} locks={data.locks} jobs={data.jobs} supervisor={data.supervisor} onDone={() => void reload()} />
           <PhaseRail catalog={data.phase_catalog} />
           <div className="pm-card">
             <h2>队列与重试</h2>
