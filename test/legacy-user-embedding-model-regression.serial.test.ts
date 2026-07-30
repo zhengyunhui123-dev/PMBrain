@@ -70,10 +70,34 @@ beforeEach(() => {
 });
 
 describe('老用户回归矩阵 · 向量模型 / embed --stale', () => {
+  test('场景0 · 历史 ZE 默认误标自动改为当前模型，向量不重建', async () => {
+    const sqlCalls: string[] = [];
+    const params: unknown[][] = [];
+    const engine = mockEngine({
+      executeRaw: async (sql: string, values?: unknown[]) => {
+        sqlCalls.push(sql);
+        params.push(values ?? []);
+        if (sql.includes('UPDATE content_chunks')) return [{ count: 16547 }];
+        return [{ model: 'ollama:qwen3-embedding:0.6b', count: 16547 }];
+      },
+      countStaleChunks: async () => 0,
+    });
+
+    const result = await runEmbedCore(engine, { stale: true });
+
+    expect(result.embedded).toBe(0);
+    expect(totalEmbedCalls).toBe(0);
+    expect(sqlCalls.some(sql => sql.includes('SET model = $1'))).toBe(true);
+    expect(sqlCalls.some(sql => sql.includes('SET embedding = NULL'))).toBe(false);
+    expect(params.some(values => values[0] === 'ollama:qwen3-embedding:0.6b')).toBe(true);
+  });
+
   test('契约：embed 与 Dream 不得隐式 invalidate 已有向量', () => {
     const embed = readFileSync(resolve('src/commands/embed.ts'), 'utf8');
     const cycle = readFileSync(resolve('src/core/cycle.ts'), 'utf8');
+    const cli = readFileSync(resolve('src/cli.ts'), 'utf8');
     expect(embed).toContain('preflightEmbeddingModelChange');
+    expect(cli).toContain('repairLegacyZeroEntropyLabels(engine, configuredEmbeddingModel)');
     expect(embed).not.toContain('invalidateMismatchedEmbeddingModels(engine, getEmbeddingModel())');
     expect(cycle).toContain('runEmbedCore(engine, { stale: true, dryRun })');
     expect(embed).toContain('Dream、同步或普通向量补全时自动清空已有向量');

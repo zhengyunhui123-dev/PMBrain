@@ -14,6 +14,7 @@ import { filterOutEmbedSkipped } from '../core/embed-skip.ts';
 import { runSlidingPool } from '../core/worker-pool.ts';
 import { getEmbeddingModel } from '../core/ai/gateway.ts';
 import { splitProviderModelId } from '../core/model-id.ts';
+import { repairLegacyZeroEntropyLabels } from '../core/embedding-dimension-alignment.ts';
 
 export interface EmbedOpts {
   /** Embed ALL pages (every chunk). */
@@ -168,6 +169,13 @@ function equivalentEmbeddingModelId(existing: string, configured: string): boole
 async function preflightEmbeddingModelChange(engine: BrainEngine, dryRun: boolean): Promise<void> {
   if (dryRun) return;
   const configuredModel = getEmbeddingModel();
+  const repaired = await repairLegacyZeroEntropyLabels(engine, configuredModel);
+  if (repaired > 0) {
+    slog(
+      `已将 ${repaired} 条历史 zeroentropyai:zembed-1 误标记修正为 ${configuredModel}；` +
+      '已有向量保持不变，无需重建。',
+    );
+  }
   const rows = await engine.executeRaw<{ model: string | null; count: string | number }>(
     `SELECT c.model, COUNT(*)::bigint AS count
        FROM content_chunks c
