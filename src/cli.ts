@@ -1818,6 +1818,7 @@ async function connectEngine(opts?: { probeOnly?: boolean }): Promise<BrainEngin
   // Env is read once here; the gateway never reads process.env at call time (Codex C3).
   const { configureGateway } = await import('./core/ai/gateway.ts');
   configureGateway(buildGatewayConfig(config));
+  let effectiveConfig = config;
 
   const { createEngine } = await import('./core/engine-factory.ts');
   const engine = await createEngine(toEngineConfig(config));
@@ -1874,6 +1875,7 @@ async function connectEngine(opts?: { probeOnly?: boolean }): Promise<BrainEngin
   try {
     const merged = await loadConfigWithEngine(engine, config);
     if (merged) {
+      effectiveConfig = merged;
       // Stash gate flags on process.env for downstream readers (import-file.ts
       // dispatches on GBRAIN_EMBEDDING_MULTIMODAL, OCR consumer reads
       // GBRAIN_EMBEDDING_IMAGE_OCR_*). The gateway itself doesn't read these
@@ -1902,6 +1904,14 @@ async function connectEngine(opts?: { probeOnly?: boolean }): Promise<BrainEngin
     await reconfigureGatewayWithEngine(engine);
   } catch {
     // Non-fatal. Pre-v39 brains may not have a usable config table yet.
+  }
+
+  const configuredEmbeddingModel = effectiveConfig.embedding_model?.trim();
+  if (configuredEmbeddingModel) {
+    const { repairLegacyZeroEntropyLabels } = await import(
+      './core/embedding-dimension-alignment.ts'
+    );
+    await repairLegacyZeroEntropyLabels(engine, configuredEmbeddingModel);
   }
 
   return engine;

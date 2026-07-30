@@ -8,6 +8,7 @@ import {
 import {
   alignEmbeddingDimension,
   invalidateMismatchedEmbeddingModels,
+  repairLegacyZeroEntropyLabels,
   recommendedEmbeddingDimension,
 } from '../src/core/embedding-dimension-alignment.ts';
 import {
@@ -140,6 +141,62 @@ describe('embedding dimension alignment', () => {
       model: 'ollama:qwen3-embedding:0.6b',
     });
     expect(await invalidateMismatchedEmbeddingModels(engine, 'ollama:qwen3-embedding:0.6b')).toBe(0);
+  });
+
+  test('relabels the historical ZeroEntropy default bug without rebuilding vectors', async () => {
+    const pages = await engine.executeRaw<{ id: number }>(
+      "SELECT id FROM pages WHERE slug = 'alignment/source'",
+    );
+    const vector = `[${new Array(1024).fill('0.25').join(',')}]`;
+    await engine.executeRaw(
+      `UPDATE content_chunks
+          SET embedding = '${vector}',
+              embedded_at = NOW(),
+              model = 'zeroentropyai:zembed-1'
+        WHERE page_id = ${pages[0].id}`,
+    );
+    await engine.executeRaw(
+      `INSERT INTO content_chunks (page_id, chunk_index, chunk_text, model)
+       VALUES (${pages[0].id}, 1, 'pending historical chunk', 'zeroentropyai:zembed-1')`,
+    );
+
+    expect(await repairLegacyZeroEntropyLabels(engine, '   ')).toBe(0);
+    const before = await engine.executeRaw<{ mislabeled: number }>(
+      `SELECT COUNT(*)::int AS mislabeled
+         FROM content_chunks
+        WHERE page_id = ${pages[0].id}
+          AND model = 'zeroentropyai:zembed-1'`,
+    );
+    expect(before[0]?.mislabeled).toBe(2);
+
+    const repaired = await repairLegacyZeroEntropyLabels(
+      engine,
+      'custom-openai:Qwen3-Embedding-8B',
+    );
+
+    expect(repaired).toBe(2);
+    const rows = await engine.executeRaw<{
+      embedded: number;
+      embedded_at_present: boolean;
+      target_labels: number;
+    }>(
+      `SELECT
+         COUNT(*) FILTER (WHERE embedding IS NOT NULL)::int AS embedded,
+         BOOL_AND(embedded_at IS NOT NULL) FILTER (WHERE embedding IS NOT NULL) AS embedded_at_present,
+         COUNT(*) FILTER (WHERE model = 'custom-openai:Qwen3-Embedding-8B')::int AS target_labels
+       FROM content_chunks
+       WHERE page_id = ${pages[0].id}`,
+    );
+    expect(rows[0]).toEqual({
+      embedded: 1,
+      embedded_at_present: true,
+      target_labels: 2,
+    });
+    await engine.executeRaw(
+      `DELETE FROM content_chunks
+        WHERE page_id = ${pages[0].id}
+          AND chunk_index = 1`,
+    );
   });
 
   test('normal alignment repairs old-model vectors without forcing a full rebuild', async () => {
