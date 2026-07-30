@@ -157,18 +157,23 @@ describe('E2E full cycle phase order', () => {
           facts_consolidated: 0,
           consolidate_takes_written: 0,
         });
-        // Synthesize and patterns are skipped (not_configured / insufficient_evidence)
+        // Phase 1 policy: PGLite keeps the canonical 22-phase report but
+        // explicitly skips the two phases that require a separate Worker.
         const synth = report.phases.find(p => p.phase === 'synthesize');
         const patterns = report.phases.find(p => p.phase === 'patterns');
         expect(synth?.status).toBe('skipped');
         expect(patterns?.status).toBe('skipped');
+        expect(synth?.details.reason).toBe('pglite_worker_unavailable');
+        expect(patterns?.details.reason).toBe('pglite_worker_unavailable');
+        expect(report.phases.filter(p => p.details.reason === 'pglite_worker_unavailable')).toHaveLength(2);
+        expect(report.phases.length - 2).toBe(20);
       });
     } finally {
       await rig.cleanup();
     }
   }, 20_000);
 
-  test('--phase synthesize alone runs only that phase, returns skipped/not_configured', async () => {
+  test('--phase synthesize alone is explicitly skipped on PGLite', async () => {
     const rig = await setupRig();
     try {
       await withoutAnthropicKey(async () => {
@@ -180,13 +185,14 @@ describe('E2E full cycle phase order', () => {
         expect(report.phases).toHaveLength(1);
         expect(report.phases[0].phase).toBe('synthesize');
         expect(report.phases[0].status).toBe('skipped');
+        expect(report.phases[0].details.reason).toBe('pglite_worker_unavailable');
       });
     } finally {
       await rig.cleanup();
     }
   }, 20_000);
 
-  test('--phase patterns alone runs only that phase, returns skipped/insufficient_evidence', async () => {
+  test('--phase patterns alone is explicitly skipped on PGLite', async () => {
     const rig = await setupRig();
     try {
       await withoutAnthropicKey(async () => {
@@ -198,7 +204,7 @@ describe('E2E full cycle phase order', () => {
         expect(report.phases).toHaveLength(1);
         expect(report.phases[0].phase).toBe('patterns');
         expect(report.phases[0].status).toBe('skipped');
-        expect((report.phases[0].details as { reason?: string }).reason).toBe('insufficient_evidence');
+        expect((report.phases[0].details as { reason?: string }).reason).toBe('pglite_worker_unavailable');
       });
     } finally {
       await rig.cleanup();
@@ -218,10 +224,11 @@ describe('E2E full cycle phase order', () => {
             phases: ['synthesize'],
             synthInputFile: transcript,
           });
-          // Without API key, synthesize falls through to no-key skip-path
-          // and returns ok (NOT cooldown_active — explicit input bypasses).
+          // Phase 1 policy is engine-first: explicit input must not enqueue a
+          // Worker-only child job on PGLite.
           expect(report.phases[0].phase).toBe('synthesize');
-          expect(report.phases[0].status).toBe('ok');
+          expect(report.phases[0].status).toBe('skipped');
+          expect(report.phases[0].details.reason).toBe('pglite_worker_unavailable');
         });
       } finally {
         rmSync(transcript, { force: true });

@@ -8,6 +8,14 @@
 - 描述：旧版本会把实际由用户所选模型生成的向量错误标记为 `zeroentropyai:zembed-1`，导致升级后的 Dream 将 PMBrain 自身的元数据错误识别为真实模型冲突，并要求老用户重建大量有效向量。
 - 是否完成：是
 - 最终结果：用户已显式配置向量模型时，普通 CLI/Sidecar 启动、Dream/embed 预检和非强制维度对齐会静默把全部历史 `zeroentropyai:zembed-1` 标签更新为当前模型，不再把 PMBrain 自身的历史错误显示成用户需要处理的失败；只修改 `content_chunks.model`，不改向量值、`embedded_at`、页面、分块正文、Wiki 或原始资料，不调用向量服务，也不要求重建。未配置向量模型或当前明确使用 ZE 时不猜测、不写入；其他真实模型冲突继续保持停止并要求确认的安全规则。
+## 2026-07-30 修复 PGLite 深度整理错误启动 Supervisor
+
+- 时间：2026-07-30
+- 版本号：PMBrain 1.1.79
+- 标题：PGLite 深度整理跳过 Worker 阶段并保留其余 Dream 流程
+- 描述：PGLite 使用独占文件锁，无法与独立 Supervisor/Worker 并发访问同一数据库；深度整理仍尝试启动 Worker，导致解除 cycle lock 后依旧报 PGLite lock 或 Supervisor requires Postgres。会议与会话预设同样依赖 synthesize，PGLite 下实际不可用。
+- 是否完成：是
+- 最终结果：PGLite 的完整 Dream 保留 22 阶段报告，明确将 synthesize、patterns 标记为 `pglite_worker_unavailable` 并执行其余 20 个阶段；CLI、Admin 手动整理和定时整理统一复用核心策略，不再为 PGLite 启动 Supervisor。Admin 结果页显示 20/22 阶段覆盖并禁用“会议与会话”，CLI 同样给出明确提示；Postgres 仍执行全部阶段。PGLite full-cycle E2E、Postgres 隔离数据库 full-cycle E2E、CLI/Admin 契约测试、根项目与 Admin 类型检查、Admin 生产构建及内嵌资源同步均通过。未修改知识库、原始资料或用户数据，Windows 安装包仍由用户执行 `bun run build:win`。
 
 ## 2026-07-29 修复中文技能路由严格检查
 

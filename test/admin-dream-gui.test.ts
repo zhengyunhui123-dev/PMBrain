@@ -115,6 +115,39 @@ describe('Dream GUI product contract', () => {
       status: 'skipped',
       summary: 'extract_atoms: active pack does not declare this phase',
     })).toContain('当前启用的 Skill 包未开放');
+    expect(phaseSummaryZh({
+      phase: 'synthesize',
+      status: 'skipped',
+      summary: 'PGLite 当前不支持独立 Worker，已跳过 synthesize',
+      details: { reason: 'pglite_worker_unavailable' },
+    })).toContain('PGLite 当前不支持独立 Worker');
+  });
+
+  test('PGLite full reports state that 20 of 22 phases were available', () => {
+    const phases = [
+      ...Array.from({ length: 20 }, (_, index) => ({
+        phase: `phase-${index}`,
+        status: 'ok',
+        summary: 'done',
+        details: {},
+      })),
+      {
+        phase: 'synthesize',
+        status: 'skipped',
+        summary: 'PGLite 当前不支持独立 Worker，已跳过 synthesize',
+        details: { reason: 'pglite_worker_unavailable' },
+      },
+      {
+        phase: 'patterns',
+        status: 'skipped',
+        summary: 'PGLite 当前不支持独立 Worker，已跳过 patterns',
+        details: { reason: 'pglite_worker_unavailable' },
+      },
+    ];
+    const summary = describeDreamRun(completedRun({ status: 'ok', phases, totals: {} }));
+    expect(summary.headline).toBe('PGLite 深度整理已完成 20/22 个阶段');
+    expect(summary.diagnosis).toContain('synthesize、patterns');
+    expect(summary.details).toContain('PGLite 阶段覆盖: 20/22');
   });
 
   test('sync results distinguish detected files from pages actually written', () => {
@@ -297,10 +330,12 @@ describe('Dream GUI product contract', () => {
     expect(dream).toContain('if (!data) setLoading(true)');
   });
 
-  test('full and meeting runs automatically ensure the existing Worker is available', () => {
+  test('Postgres runs ensure Worker availability while PGLite never starts Supervisor', () => {
     expect(dream).toContain('await api.startSupervisor()');
-    expect(dream).toContain("runMode === 'cycle'");
-    expect(dream).toContain("runMode === 'meeting'");
+    expect(dream).toContain('!isPglite');
+    expect(dream).toContain("const isPglite = engine === 'pglite'");
+    expect(dream).toContain('disabled={isPglite');
+    expect(dream).toContain('PGLite 暂不支持会议与会话整理');
     expect(dream).toContain('通常不需要手动操作');
   });
 

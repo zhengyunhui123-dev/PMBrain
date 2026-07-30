@@ -164,6 +164,26 @@ export const ALL_PHASES: CyclePhase[] = [
   'purge',
 ];
 
+const PGLITE_WORKER_ONLY_PHASES = new Set<CyclePhase>(['synthesize', 'patterns']);
+
+export function isPgliteWorkerPhaseUnsupported(engineKind: string, phase: CyclePhase): boolean {
+  return engineKind === 'pglite' && PGLITE_WORKER_ONLY_PHASES.has(phase);
+}
+
+function pgliteWorkerPhaseSkipped(phase: CyclePhase): PhaseResult {
+  return {
+    phase,
+    status: 'skipped',
+    duration_ms: 0,
+    summary: `PGLite 当前不支持独立 Worker，已跳过 ${phase}`,
+    details: {
+      reason: 'pglite_worker_unavailable',
+      engine: 'pglite',
+      requires: 'supervisor_worker',
+    },
+  };
+}
+
 /**
  * v0.38 (CEO + eng review): phase-scope taxonomy. Each entry in
  * `ALL_PHASES` declares whether its work is naturally per-source,
@@ -1616,6 +1636,8 @@ export async function runCycle(
           summary: 'no database connected',
           details: { reason: 'no_database' },
         });
+      } else if (isPgliteWorkerPhaseUnsupported(engine.kind, 'synthesize')) {
+        phaseResults.push(pgliteWorkerPhaseSkipped('synthesize'));
       } else {
         progress.start('cycle.synthesize');
         const { runPhaseSynthesize } = await import('./cycle/synthesize.ts');
@@ -1806,6 +1828,8 @@ export async function runCycle(
           summary: 'no database connected',
           details: { reason: 'no_database' },
         });
+      } else if (isPgliteWorkerPhaseUnsupported(engine.kind, 'patterns')) {
+        phaseResults.push(pgliteWorkerPhaseSkipped('patterns'));
       } else {
         progress.start('cycle.patterns');
         const { runPhasePatterns } = await import('./cycle/patterns.ts');
