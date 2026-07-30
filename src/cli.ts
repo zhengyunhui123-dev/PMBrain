@@ -1911,13 +1911,7 @@ async function connectEngine(opts?: { probeOnly?: boolean }): Promise<BrainEngin
     const { repairLegacyZeroEntropyLabels } = await import(
       './core/embedding-dimension-alignment.ts'
     );
-    const repaired = await repairLegacyZeroEntropyLabels(engine, configuredEmbeddingModel);
-    if (repaired > 0) {
-      console.warn(
-        `已自动修正 ${repaired} 条历史 zeroentropyai:zembed-1 模型误标记为 ` +
-        `${configuredEmbeddingModel}；已有向量保持不变，无需重建。`,
-      );
-    }
+    await repairLegacyZeroEntropyLabels(engine, configuredEmbeddingModel);
   }
 
   return engine;
