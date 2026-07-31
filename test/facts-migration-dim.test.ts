@@ -11,6 +11,7 @@
 
 import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
 import { PGLiteEngine } from '../src/core/pglite-engine.ts';
+import { configureGateway, resetGateway } from '../src/core/ai/gateway.ts';
 
 let engine: PGLiteEngine;
 
@@ -92,5 +93,47 @@ describe('migration v45 facts column shape', () => {
        WHERE table_name = 'facts' AND column_name = 'embedding'`,
     );
     expect(after[0].udt_name).toBe(before[0].udt_name);
+  });
+});
+
+describe('large embedding dimensions skip unsupported HNSW indexes', () => {
+  let largeDimEngine: PGLiteEngine;
+
+  beforeAll(async () => {
+    configureGateway({
+      embedding_model: 'litellm:custom-4096d',
+      embedding_dimensions: 4096,
+      env: { ...process.env },
+    });
+    largeDimEngine = new PGLiteEngine();
+    await largeDimEngine.connect({});
+    await largeDimEngine.initSchema();
+  }, 60000);
+
+  afterAll(async () => {
+    await largeDimEngine.disconnect();
+    resetGateway();
+  });
+
+  test('keeps 4096d facts and query-cache columns without creating invalid HNSW indexes', async () => {
+    for (const [table, index] of [
+      ['facts', 'idx_facts_embedding_hnsw'],
+      ['query_cache', 'idx_query_cache_embedding_hnsw'],
+    ] as const) {
+      const formatRows = await largeDimEngine.executeRaw<{ format_type: string }>(
+        `SELECT format_type(atttypid, atttypmod) AS format_type
+           FROM pg_attribute
+          WHERE attrelid = '${table}'::regclass AND attname = 'embedding'`,
+      );
+      expect(formatRows[0]?.format_type).toMatch(/(halfvec|vector)\(4096\)/);
+
+      const indexRows = await largeDimEngine.executeRaw<{ exists: boolean }>(
+        `SELECT EXISTS (
+           SELECT 1 FROM pg_indexes
+            WHERE tablename = '${table}' AND indexname = '${index}'
+         ) AS exists`,
+      );
+      expect(indexRows[0]?.exists).toBe(false);
+    }
   });
 });
