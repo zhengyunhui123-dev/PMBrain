@@ -13,11 +13,22 @@ import { getDesktopRuntimeContract } from './runtime-contract.js';
 const HEALTH_TIMEOUT_MS = 45_000;
 const HEALTH_INTERVAL_MS = 500;
 const STOP_TIMEOUT_MS = 5_000;
+const FORCE_STOP_TIMEOUT_MS = 2_000;
 const RESTART_WINDOW_MS = 30_000;
 const MAX_RESTARTS = 3;
 const MCP_BEARER_VERIFY_TIMEOUT_MS = 3_000;
 const ADMIN_REQUEST_TIMEOUT_MS = 5_000;
 const STDERR_TAIL_LIMIT = 4_000;
+const NON_RETRYABLE_STARTUP_ERRORS = [
+  /PGLite failed to initialize/i,
+  /\bAborted\(\)/i,
+  /database.*(?:busy|in use|locked)/i,
+  /lock owner.*alive/i,
+  /permission denied/i,
+  /EACCES|EPERM/i,
+  /migration.*failed/i,
+  /database initialization failed/i,
+];
 
 export type SidecarState =
   | { phase: 'starting'; port: number }
@@ -215,16 +226,43 @@ export class SidecarManager {
     this.child = null;
     if (!child || child.exitCode !== null) return;
 
-    child.kill('SIGTERM');
-    await new Promise<void>((resolveDone) => {
-      const timeout = setTimeout(() => {
-        if (child.exitCode === null) child.kill('SIGKILL');
-        resolveDone();
-      }, STOP_TIMEOUT_MS);
-      child.once('exit', () => {
-        clearTimeout(timeout);
-        resolveDone();
+    this.requestProcessTreeStop(child, false);
+    if (await this.waitForChildExit(child, STOP_TIMEOUT_MS)) return;
+
+    this.requestProcessTreeStop(child, true);
+    if (!await this.waitForChildExit(child, FORCE_STOP_TIMEOUT_MS)) {
+      throw new Error(`PMBrain sidecar process tree (PID ${child.pid ?? 'unknown'}) did not stop.`);
+    }
+  }
+
+  private requestProcessTreeStop(child: ChildProcess, force: boolean): void {
+    if (process.platform === 'win32' && child.pid) {
+      const args = ['/PID', String(child.pid), '/T'];
+      if (force) args.push('/F');
+      const killer = spawn('taskkill', args, {
+        windowsHide: true,
+        stdio: 'ignore',
       });
+      killer.once('error', error => {
+        this.options.logger.write('desktop', `Unable to stop sidecar process tree: ${error.message}`);
+      });
+      return;
+    }
+    child.kill(force ? 'SIGKILL' : 'SIGTERM');
+  }
+
+  private async waitForChildExit(child: ChildProcess, timeoutMs: number): Promise<boolean> {
+    if (child.exitCode !== null) return true;
+    return new Promise<boolean>((resolveDone) => {
+      const onExit = () => {
+        clearTimeout(timeout);
+        resolveDone(true);
+      };
+      const timeout = setTimeout(() => {
+        child.off('exit', onExit);
+        resolveDone(child.exitCode !== null);
+      }, timeoutMs);
+      child.once('exit', onExit);
     });
   }
 
@@ -275,6 +313,10 @@ export class SidecarManager {
   private handleCrash(message: string): void {
     this.options.logger.write('desktop', message);
     if (this.stopping || this.recovering) return;
+    if (NON_RETRYABLE_STARTUP_ERRORS.some(pattern => pattern.test(message))) {
+      this.options.onState?.({ phase: 'failed', port: this.port, message });
+      return;
+    }
     this.recovering = true;
     void this.queueLifecycle(async () => {
       try {

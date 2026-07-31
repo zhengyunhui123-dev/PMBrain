@@ -20,6 +20,9 @@
  */
 
 import { describe, test, expect } from 'bun:test';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { PGLiteEngine } from '../src/core/pglite-engine.ts';
 import { LATEST_VERSION } from '../src/core/migrate.ts';
 
@@ -31,6 +34,28 @@ import { LATEST_VERSION } from '../src/core/migrate.ts';
 delete process.env.GBRAIN_PGLITE_SNAPSHOT;
 
 describe('PGLiteEngine#applyForwardReferenceBootstrap', () => {
+  test('Desktop 旧用户的 schema 109 数据库可由同一个 sidecar 生命周期重新打开并升级', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'pmbrain-schema109-reopen-'));
+    const databasePath = join(root, 'brain.pglite');
+    const original = new PGLiteEngine();
+    const reopened = new PGLiteEngine();
+    try {
+      await original.connect({ database_path: databasePath });
+      await original.initSchema();
+      await original.setConfig('version', '109');
+      await original.disconnect();
+
+      await reopened.connect({ database_path: databasePath });
+      await reopened.initSchema();
+
+      expect(await reopened.getConfig('version')).toBe(String(LATEST_VERSION));
+    } finally {
+      await original.disconnect().catch(() => undefined);
+      await reopened.disconnect().catch(() => undefined);
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
   test('no-op on fresh install (no pages or links table)', async () => {
     const engine = new PGLiteEngine();
     await engine.connect({});

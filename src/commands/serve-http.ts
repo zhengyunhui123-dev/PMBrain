@@ -397,7 +397,7 @@ export function renderAdminTokenFooter(opts: {
 }
 
 export type ProbeHealthResult =
-  | { ok: true; status: 200; body: { status: 'ok'; version: string; engine: string; [k: string]: unknown } }
+  | { ok: true; status: 200; body: { status: 'ok' | 'busy'; version: string; engine: string; [k: string]: unknown } }
   | { ok: false; status: 503; body: { error: 'service_unavailable'; error_description: string } };
 
 /**
@@ -573,6 +573,28 @@ export async function probeLiveness(
   } finally {
     if (timer !== null) clearTimeout(timer);
   }
+}
+
+export async function probeSidecarLiveness(
+  sql: SqlQuery,
+  engineName: string,
+  version: string,
+  pgliteBusy: boolean,
+  timeoutMs: number = HEALTH_TIMEOUT_MS,
+): Promise<ProbeHealthResult> {
+  if (engineName === 'pglite' && pgliteBusy) {
+    return {
+      ok: true,
+      status: 200,
+      body: {
+        status: 'busy',
+        version,
+        engine: engineName,
+        reason: 'exclusive_background_run',
+      },
+    };
+  }
+  return probeLiveness(sql, engineName, version, timeoutMs);
 }
 
 /**
@@ -943,11 +965,26 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
   // one coordinator, and the next child cannot start until the previous child
   // has fully exited and the main engine has reconnected.
   const pgliteRunCoordinator = engine.kind === 'pglite' ? new PgliteRunCoordinator() : null;
+  let pgliteBusy = false;
   const runHooks = engine.kind === 'pglite' && config
     ? {
         acquireExclusive: () => pgliteRunCoordinator!.acquire(),
-        beforeSpawn: () => engine.disconnect(),
-        afterComplete: () => engine.connect(toEngineConfig(config as GBrainConfig)),
+        beforeSpawn: async () => {
+          pgliteBusy = true;
+          try {
+            await engine.disconnect();
+          } catch (error) {
+            pgliteBusy = false;
+            throw error;
+          }
+        },
+        afterComplete: async () => {
+          try {
+            await engine.connect(toEngineConfig(config as GBrainConfig));
+          } finally {
+            pgliteBusy = false;
+          }
+        },
       }
     : undefined;
   // Import children need exclusive access to a PGLite brain. This tail also
@@ -1285,7 +1322,12 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
   // /admin/api/full-stats (requireAdmin). See probeLiveness above for the why.
   // ---------------------------------------------------------------------------
   app.get('/health', async (_req, res) => {
-    const result = await probeLiveness(sql, config.engine || 'pglite', VERSION);
+    const result = await probeSidecarLiveness(
+      sql,
+      config.engine || 'pglite',
+      VERSION,
+      pgliteBusy,
+    );
     res.status(result.status).json(result.body);
   });
 
@@ -1440,6 +1482,25 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
     }
     next();
   }
+
+  app.use('/admin/api', (req: Request, res: Response, next: express.NextFunction) => {
+    if (!pgliteBusy) {
+      next();
+      return;
+    }
+    requireAdmin(req, res, () => {
+      const canReadRun = req.method === 'GET' && req.path.startsWith('/runs');
+      const canCancelRun = req.method === 'POST' && /^\/runs\/[^/]+\/cancel$/.test(req.path);
+      if (canReadRun || canCancelRun) {
+        next();
+        return;
+      }
+      res.status(423).json({
+        code: 'pglite_busy',
+        error: 'PGLite 正在执行导入或知识整理，完成后会自动恢复连接。',
+      });
+    });
+  });
 
   // ---------------------------------------------------------------------------
   // Admin API endpoints

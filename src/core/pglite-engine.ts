@@ -183,11 +183,12 @@ export function buildPgliteInitErrorMessage(
       break;
     case 'windows-aborted':
       hint =
-        '  On Windows this usually means the selected PGLite directory is an\n' +
-        '  existing or busy database, or the embedded runtime could not reopen\n' +
-        '  it cleanly. Close other PMBrain/GBrain processes and retry, or choose\n' +
-        '  a fresh .pmbrain\\brain.pglite path. Docker Postgres is the safer\n' +
-        '  option for existing large brains.';
+        '  On Windows this means the configured .pmbrain\\brain.pglite database\n' +
+        '  could not be opened. A competing PMBrain process or a failed handoff\n' +
+        '  during startup is more common than data corruption. PMBrain does not\n' +
+        '  delete, replace, or rebuild the database automatically. Close other\n' +
+        '  PMBrain/GBrain processes and retry once; if it persists, copy the\n' +
+        '  sidecar stderr and configured database path from the recovery page.';
       break;
     case 'macos-26-3':
       hint =

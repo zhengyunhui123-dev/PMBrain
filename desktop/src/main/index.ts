@@ -499,11 +499,16 @@ async function startSidecarOnce(openAdmin: boolean): Promise<void> {
     }
     await reconcileLanGateway();
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const rawMessage = error instanceof Error ? error.message : String(error);
+    const database = getDatabaseRuntimeConfig();
+    const databasePath = getSetupInfo().current.databasePath;
+    const message = database.engine === 'pglite' && databasePath
+      ? `${rawMessage}\nPGLite 数据库路径：${databasePath}`
+      : rawMessage;
     logger.write('desktop', message);
     sendState({ phase: 'failed', port: sidecar?.port ?? 3131, message });
     hideStartupProgress();
-    throw error;
+    throw new Error(message, { cause: error });
   }
 }
 
@@ -597,12 +602,20 @@ async function withSidecarPausedForModelConfig<T>(operation: () => Promise<T>): 
 
 async function migrateConfiguredInstallation(): Promise<boolean> {
   if (!needsDesktopMigration(app.getVersion())) return false;
+  const setup = getSetupInfo();
   sendStartupProgress({
     visible: true,
     stage: 'migration',
     title: '正在升级现有 PMBrain 数据库',
-    message: '检测到桌面版本更新，正在执行兼容迁移。不会删除知识库或原始资料，请不要关闭窗口。',
+    message: setup.current.engine === 'pglite'
+      ? '检测到桌面版本更新，将由唯一的 sidecar 连接完成 PGLite 兼容迁移和健康检查。'
+      : '检测到桌面版本更新，正在执行兼容迁移。不会删除知识库或原始资料，请不要关闭窗口。',
   });
+  if (setup.current.engine === 'pglite') {
+    logger?.write('desktop', `PGLite migrations delegated to sidecar for desktop ${app.getVersion()}`);
+    await syncModelDefaultsToConfigFile();
+    return true;
+  }
   logger?.write('desktop', `Applying migrations for desktop ${app.getVersion()}`);
   await runCliChecked(runtime(), DESKTOP_MIGRATION_ARGS);
   await syncModelDefaultsToConfigFile();
@@ -637,10 +650,14 @@ async function ensureServiceReady(): Promise<SidecarManager> {
   const pending = (async () => {
     await ensureRuntimeReady();
     await prepareConfiguredDatabase();
+    const setup = getSetupInfo();
     const migrationRequired = await migrateConfiguredInstallation();
-    if (migrationRequired) markDesktopMigration(app.getVersion());
+    if (migrationRequired && setup.current.engine !== 'pglite') markDesktopMigration(app.getVersion());
     if (!sidecar || currentState?.phase !== 'ready') await startSidecar(false);
     if (!sidecar || currentState?.phase !== 'ready') throw new Error('PMBrain 本地服务尚未就绪。');
+    if (migrationRequired && setup.current.engine === 'pglite') {
+      markDesktopMigration(app.getVersion());
+    }
     return sidecar;
   })();
   serviceReadyPromise = pending;
@@ -703,6 +720,7 @@ async function applySetupOnce(payload: SetupPayload, setDefaultSource = true) {
   let saved: ReturnType<typeof saveSetup>;
   let embeddingSwitchCommitted = false;
   let reembeddingWarning: string | null = null;
+  let migrationRequired = false;
   try {
     saved = saveSetup(payload);
   } catch (error) {
@@ -750,8 +768,8 @@ async function applySetupOnce(payload: SetupPayload, setDefaultSource = true) {
         saved.config.embedding_dimensions = result.dimensions!;
       }
     }
-    const migrationRequired = needsDesktopMigration(app.getVersion());
-    if (migrationRequired) {
+    migrationRequired = needsDesktopMigration(app.getVersion());
+    if (migrationRequired && saved.config.engine !== 'pglite') {
       sendStartupProgress({
         visible: true,
         stage: 'migration',
@@ -779,7 +797,9 @@ async function applySetupOnce(payload: SetupPayload, setDefaultSource = true) {
       }
       await runCliChecked(runtime(), ['sources', 'default', sourceId]);
     }
-    if (migrationRequired) markDesktopMigration(app.getVersion());
+    if (migrationRequired && saved.config.engine !== 'pglite') {
+      markDesktopMigration(app.getVersion());
+    }
     // Keep this as the final fallible setup step: once the DB column is
     // aligned, no later config rollback may restore an incompatible width.
     if (saved.embeddingModelChanged) {
@@ -832,6 +852,12 @@ async function applySetupOnce(payload: SetupPayload, setDefaultSource = true) {
     throw error;
   }
   await startSidecar(false);
+  if (migrationRequired && saved.config.engine === 'pglite') {
+    if (!sidecar || currentState?.phase !== 'ready') {
+      throw new Error('PGLite sidecar 尚未完成数据库迁移和健康检查。');
+    }
+    markDesktopMigration(app.getVersion());
+  }
   applyDesktopTheme(getSetupInfo().current.theme);
   return {
     setup: getSetupInfo(),
