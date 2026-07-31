@@ -597,6 +597,26 @@ async function withSidecarPausedForModelConfig<T>(operation: () => Promise<T>): 
 
 async function migrateConfiguredInstallation(): Promise<boolean> {
   if (!needsDesktopMigration(app.getVersion())) return false;
+  const setup = getSetupInfo();
+  // PGLite single-owner model: do NOT open the database from a separate
+  // apply-migrations CLI process. Schema migrations run inside the unique
+  // desktop sidecar on connect (tryRunPendingMigrations / initSchema).
+  // A separate migration CLI would acquire .gbrain-lock, then hand off to
+  // sidecar and race on Windows after reboot or fast restart.
+  if (setup.current.engine === 'pglite') {
+    sendStartupProgress({
+      visible: true,
+      stage: 'migration',
+      title: '正在准备数据库升级',
+      message: '检测到桌面版本更新。PGLite 模式下迁移将由唯一本地服务在启动时安全执行，不会删除知识库或原始资料。',
+    });
+    logger?.write(
+      'desktop',
+      `PGLite single-owner migration: defer schema apply to sidecar for desktop ${app.getVersion()}`,
+    );
+    await syncModelDefaultsToConfigFile();
+    return true;
+  }
   sendStartupProgress({
     visible: true,
     stage: 'migration',

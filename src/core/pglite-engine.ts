@@ -24,6 +24,7 @@ import { PGLITE_SCHEMA_SQL, getPGLiteSchema } from './pglite-schema.ts';
 import { DEFAULT_EMBEDDING_DIMENSIONS } from './ai/defaults.ts';
 import { DELETE_BATCH_SIZE } from './engine-constants.ts';
 import { acquireLock, releaseLock, type LockHandle } from './pglite-lock.ts';
+import { DatabaseAlreadyOwnedError, PgliteOpenError } from './pglite-errors.ts';
 import type {
   Page, PageInput, PageFilters, PageType,
   Chunk, ChunkInput, StaleChunkRow,
@@ -166,6 +167,25 @@ export function classifyPgliteInitError(message: string): PgliteInitFailure {
   return 'unknown';
 }
 
+function resolveLockOwnerType(): 'desktop-sidecar' | 'cli' | 'probe' | 'migration' | 'test' | 'unknown' {
+  const explicit = process.env.PMBRAIN_PGLITE_OWNER_TYPE?.trim();
+  if (
+    explicit === 'desktop-sidecar'
+    || explicit === 'cli'
+    || explicit === 'probe'
+    || explicit === 'migration'
+    || explicit === 'test'
+  ) {
+    return explicit;
+  }
+  const argv = process.argv.join(' ').toLowerCase();
+  if (argv.includes('probe-pglite')) return 'probe';
+  if (argv.includes('apply-migrations')) return 'migration';
+  if (argv.includes('serve') || argv.includes('pmbrain-sidecar')) return 'desktop-sidecar';
+  if (process.env.NODE_ENV === 'test' || process.env.BUN_ENV === 'test') return 'test';
+  return 'cli';
+}
+
 export function buildPgliteInitErrorMessage(
   verdict: PgliteInitFailure,
   original: string,
@@ -223,10 +243,22 @@ export class PGLiteEngine implements BrainEngine {
     const dataDir = config.database_path || undefined; // undefined = in-memory
 
     // Acquire file lock to prevent concurrent PGLite access (crashes with Aborted())
-    this._lock = await acquireLock(dataDir);
+    try {
+      this._lock = await acquireLock(dataDir, {
+        ownerType: resolveLockOwnerType(),
+        failFastIfOwned: process.env.PMBRAIN_PGLITE_LOCK_FAIL_FAST === '1',
+      });
+    } catch (err) {
+      if (err instanceof DatabaseAlreadyOwnedError) throw err;
+      throw err;
+    }
 
     if (!this._lock.acquired) {
-      throw new Error('Could not acquire PGLite lock. Another gbrain process is using the database.');
+      throw new DatabaseAlreadyOwnedError({
+        databasePath: dataDir ?? '(in-memory)',
+        lockPath: dataDir ? `${dataDir}/.gbrain-lock` : '',
+        message: 'Could not acquire PGLite lock. Another PMBrain process is using the database.',
+      });
     }
 
     // Tier 3: optional snapshot fast-restore. Only applies to in-memory
@@ -256,9 +288,13 @@ export class PGLiteEngine implements BrainEngine {
       // read-only on older macOS + Bun 1.3.x, so PGLite can't extract its
       // pglite.data WASM payload). Route the hint by failure shape so
       // users get the right next step.
+      // Always preserve the original cause for diagnostics / UI.
       const original = err instanceof Error ? err.message : String(err);
       const verdict = classifyPgliteInitError(original);
-      const wrapped = new Error(buildPgliteInitErrorMessage(verdict, original));
+      const wrapped = new PgliteOpenError(buildPgliteInitErrorMessage(verdict, original), {
+        databasePath: dataDir ?? null,
+        cause: err,
+      });
       // Release the lock so a fresh process can try again; leaking the lock
       // here turns a recoverable init error into a stuck-brain state.
       if (this._lock?.acquired) {

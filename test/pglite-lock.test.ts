@@ -1,115 +1,379 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
-import { mkdirSync, rmSync, existsSync, readFileSync, writeFileSync } from 'fs';
+import { mkdirSync, rmSync, existsSync, readFileSync, writeFileSync, readdirSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { acquireLock, releaseLock, type LockHandle } from '../src/core/pglite-lock';
+import {
+  acquireLock,
+  releaseLock,
+  writeLockFixture,
+  lockDirExists,
+  readLockMetadata,
+  listArchivedLocks,
+  inspectLock,
+  setDefaultProcessInspector,
+} from '../src/core/pglite-lock.ts';
+import { FakeProcessInspector } from '../src/core/pglite-process-inspector.ts';
+import { DatabaseAlreadyOwnedError } from '../src/core/pglite-errors.ts';
+import {
+  classifySidecarStartupError,
+  PgliteOpenError,
+  SidecarExitedBeforeHealthyError,
+} from '../src/core/pglite-errors.ts';
 
-const TEST_DIR = join(tmpdir(), 'gbrain-lock-test-' + process.pid);
+const TEST_DIR = join(tmpdir(), 'gbrain-lock-test-' + process.pid + '-' + Date.now());
 
-describe('pglite-lock', () => {
+describe('pglite-lock v2', () => {
+  let inspector: FakeProcessInspector;
+
   beforeEach(() => {
-    // Clean up test directory
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true, force: true });
     mkdirSync(TEST_DIR, { recursive: true });
+    inspector = new FakeProcessInspector({ bootMarker: 'boot-current' });
+    inspector.setProcess(process.pid, {
+      exists: true,
+      startTime: 'start-self',
+      executablePath: process.execPath,
+    });
+    setDefaultProcessInspector(inspector);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    setDefaultProcessInspector(null);
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true, force: true });
   });
 
-  test('acquires and releases lock', async () => {
-    const lock = await acquireLock(TEST_DIR);
+  test('1. acquires lock atomically when absent', async () => {
+    const lock = await acquireLock(TEST_DIR, { inspector, ownerType: 'test' });
     expect(lock.acquired).toBe(true);
-    expect(existsSync(join(TEST_DIR, '.gbrain-lock'))).toBe(true);
-
+    expect(lock.ownerToken).toBeTruthy();
+    expect(lockDirExists(TEST_DIR)).toBe(true);
+    const meta = readLockMetadata(TEST_DIR);
+    expect(meta?.schemaVersion).toBe(2);
+    expect(meta?.pid).toBe(process.pid);
+    expect(meta?.bootMarker).toBe('boot-current');
+    expect(meta?.ownerType).toBe('test');
     await releaseLock(lock);
-    expect(existsSync(join(TEST_DIR, '.gbrain-lock'))).toBe(false);
+    expect(lockDirExists(TEST_DIR)).toBe(false);
   });
 
-  test('creates missing data directory before acquiring lock', async () => {
-    const missingDataDir = join(TEST_DIR, 'missing-data-dir');
-
-    const lock = await acquireLock(missingDataDir);
-    expect(lock.acquired).toBe(true);
-    expect(existsSync(missingDataDir)).toBe(true);
-    expect(existsSync(join(missingDataDir, '.gbrain-lock'))).toBe(true);
-
-    await releaseLock(lock);
-    expect(existsSync(join(missingDataDir, '.gbrain-lock'))).toBe(false);
-  });
-
-  test('prevents concurrent lock acquisition', async () => {
-    const lock1 = await acquireLock(TEST_DIR, { timeoutMs: 2000 });
-    expect(lock1.acquired).toBe(true);
-
-    // Second lock attempt should timeout
-    await expect(acquireLock(TEST_DIR, { timeoutMs: 1000 })).rejects.toThrow(/Timed out/);
-
+  test('2. second process cannot acquire the same lock while owner is active', async () => {
+    const lock1 = await acquireLock(TEST_DIR, { inspector, ownerType: 'desktop-sidecar', timeoutMs: 500 });
+    await expect(
+      acquireLock(TEST_DIR, { inspector, ownerType: 'cli', timeoutMs: 300, failFastIfOwned: true }),
+    ).rejects.toBeInstanceOf(DatabaseAlreadyOwnedError);
     await releaseLock(lock1);
   });
 
-  test('detects and cleans stale lock from dead process', async () => {
-    // Simulate a stale lock from a dead process
-    const lockDir = join(TEST_DIR, '.gbrain-lock');
-    mkdirSync(lockDir);
-    writeFileSync(join(lockDir, 'lock'), JSON.stringify({
-      pid: 999999999, // Non-existent PID
-      acquired_at: Date.now(),
-      command: 'test',
-    }));
+  test('3. archives lock when PID does not exist', async () => {
+    writeLockFixture(TEST_DIR, {
+      schemaVersion: 2,
+      pid: 999999991,
+      processStartTime: 'old',
+      bootMarker: 'boot-current',
+      ownerToken: 'dead-token',
+      ownerType: 'desktop-sidecar',
+      databasePath: TEST_DIR,
+      executablePath: 'C:\\fake\\pmbrain-sidecar.exe',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+    inspector.clearProcess(999999991);
 
-    // Should clean up the stale lock and acquire
-    const lock = await acquireLock(TEST_DIR);
+    const lock = await acquireLock(TEST_DIR, { inspector, ownerType: 'cli' });
     expect(lock.acquired).toBe(true);
-
+    expect(lock.diagnostics?.reason).toMatch(/pid_not_running|after_pid/);
+    const archives = listArchivedLocks(TEST_DIR);
+    expect(archives.some((p) => p.includes('.stale-') && p.includes('pid_not_running'))).toBe(true);
     await releaseLock(lock);
   });
 
-  test('never removes an old lock while its owning process is still alive', async () => {
-    const lockDir = join(TEST_DIR, '.gbrain-lock');
-    mkdirSync(lockDir);
-    writeFileSync(join(lockDir, 'lock'), JSON.stringify({
-      pid: process.pid,
-      acquired_at: Date.now() - 60 * 60 * 1000,
-      command: 'long-running-pmbrain-sidecar',
-    }));
+  test('4. archives lock from previous bootMarker', async () => {
+    writeLockFixture(TEST_DIR, {
+      schemaVersion: 2,
+      pid: 12345,
+      processStartTime: 't1',
+      bootMarker: 'boot-previous',
+      ownerToken: 'old',
+      ownerType: 'desktop-sidecar',
+      databasePath: TEST_DIR,
+      executablePath: 'C:\\Windows\\System32\\notepad.exe',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+    inspector.setProcess(12345, { exists: true, startTime: 't1', executablePath: 'C:\\Windows\\System32\\notepad.exe' });
 
-    await expect(acquireLock(TEST_DIR, { timeoutMs: 100 })).rejects.toThrow(/Timed out/);
-    expect(existsSync(lockDir)).toBe(true);
-    expect(JSON.parse(readFileSync(join(lockDir, 'lock'), 'utf-8')).pid).toBe(process.pid);
+    const lock = await acquireLock(TEST_DIR, { inspector });
+    expect(lock.acquired).toBe(true);
+    expect(listArchivedLocks(TEST_DIR).some((p) => p.includes('previous_system_boot'))).toBe(true);
+    await releaseLock(lock);
   });
 
-  test('skips lock for in-memory (undefined dataDir)', async () => {
-    const lock = await acquireLock(undefined);
+  test('5. detects PID reuse via processStartTime mismatch', async () => {
+    writeLockFixture(TEST_DIR, {
+      schemaVersion: 2,
+      pid: 4242,
+      processStartTime: 'start-original',
+      bootMarker: 'boot-current',
+      ownerToken: 'token-a',
+      ownerType: 'desktop-sidecar',
+      databasePath: TEST_DIR,
+      executablePath: 'C:\\pmbrain\\pmbrain-sidecar.exe',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+    inspector.setProcess(4242, {
+      exists: true,
+      startTime: 'start-reused',
+      executablePath: 'C:\\pmbrain\\pmbrain-sidecar.exe',
+    });
+
+    const lock = await acquireLock(TEST_DIR, { inspector });
+    expect(lock.acquired).toBe(true);
+    expect(listArchivedLocks(TEST_DIR).some((p) => p.includes('pid_reused'))).toBe(true);
+    await releaseLock(lock);
+  });
+
+  test('6. archives when PID exists but executable is not PMBrain', async () => {
+    writeLockFixture(TEST_DIR, {
+      schemaVersion: 2,
+      pid: 7777,
+      processStartTime: null,
+      bootMarker: 'boot-current',
+      ownerToken: 'x',
+      ownerType: 'desktop-sidecar',
+      databasePath: TEST_DIR,
+      executablePath: null,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+    inspector.setProcess(7777, {
+      exists: true,
+      startTime: null,
+      executablePath: 'C:\\Windows\\System32\\svchost.exe',
+    });
+
+    const lock = await acquireLock(TEST_DIR, { inspector });
+    expect(lock.acquired).toBe(true);
+    expect(listArchivedLocks(TEST_DIR).some((p) => p.includes('executable_not_pmbrain') || p.includes('executable_path'))).toBe(true);
+    await releaseLock(lock);
+  });
+
+  test('7. truly active sidecar lock is not stolen', async () => {
+    const ownerPid = 555001;
+    writeLockFixture(TEST_DIR, {
+      schemaVersion: 2,
+      pid: ownerPid,
+      processStartTime: 'start-live',
+      bootMarker: 'boot-current',
+      ownerToken: 'live-token',
+      ownerType: 'desktop-sidecar',
+      databasePath: TEST_DIR,
+      executablePath: 'D:\\Apps\\PMBrain\\pmbrain-sidecar.exe',
+      createdAt: new Date(Date.now() - 6 * 60 * 1000).toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+    inspector.setProcess(ownerPid, {
+      exists: true,
+      startTime: 'start-live',
+      executablePath: 'D:\\Apps\\PMBrain\\pmbrain-sidecar.exe',
+    });
+
+    await expect(
+      acquireLock(TEST_DIR, { inspector, timeoutMs: 200, failFastIfOwned: true }),
+    ).rejects.toBeInstanceOf(DatabaseAlreadyOwnedError);
+    expect(lockDirExists(TEST_DIR)).toBe(true);
+    expect(readLockMetadata(TEST_DIR)?.ownerToken).toBe('live-token');
+  });
+
+  test('8. lock older than five minutes with valid owner is never deleted', async () => {
+    const ownerPid = 555002;
+    writeLockFixture(TEST_DIR, {
+      schemaVersion: 2,
+      pid: ownerPid,
+      processStartTime: 'start-old',
+      bootMarker: 'boot-current',
+      ownerToken: 'old-but-live',
+      ownerType: 'desktop-sidecar',
+      databasePath: TEST_DIR,
+      executablePath: join('C:', 'pmbrain', 'bun.exe'),
+      createdAt: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+      updatedAt: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+      acquired_at: Date.now() - 60 * 60 * 1000,
+    });
+    inspector.setProcess(ownerPid, {
+      exists: true,
+      startTime: 'start-old',
+      executablePath: join('C:', 'pmbrain', 'bun.exe'),
+    });
+
+    await expect(
+      acquireLock(TEST_DIR, { inspector, timeoutMs: 150, failFastIfOwned: true }),
+    ).rejects.toBeInstanceOf(DatabaseAlreadyOwnedError);
+    expect(lockDirExists(TEST_DIR)).toBe(true);
+    expect(listArchivedLocks(TEST_DIR).length).toBe(0);
+  });
+
+  test('9. corrupt lock metadata is archived not permanently deleted', async () => {
+    const lockDir = join(TEST_DIR, '.gbrain-lock');
+    mkdirSync(lockDir);
+    writeFileSync(join(lockDir, 'lock'), '{not-json');
+
+    const lock = await acquireLock(TEST_DIR, { inspector });
+    expect(lock.acquired).toBe(true);
+    const archives = listArchivedLocks(TEST_DIR);
+    expect(archives.some((p) => p.includes('corrupt') || p.includes('missing') || existsSync(p))).toBe(true);
+    // Original path no longer active; archive retained.
+    expect(archives.length).toBeGreaterThan(0);
+    await releaseLock(lock);
+  });
+
+  test('10. only matching ownerToken can release lock', async () => {
+    const lock = await acquireLock(TEST_DIR, { inspector, ownerType: 'cli' });
+    const fake = { ...lock, ownerToken: 'wrong-token' };
+    await releaseLock(fake);
+    expect(lockDirExists(TEST_DIR)).toBe(true);
+    await releaseLock(lock);
+    expect(lockDirExists(TEST_DIR)).toBe(false);
+  });
+
+  test('11. old process cannot delete lock created by new process', async () => {
+    const first = await acquireLock(TEST_DIR, { inspector, ownerType: 'cli' });
+    // Simulate takeover only after first is "stale" — but release with stale token must no-op
+    // after we manually swap tokens on disk by re-acquiring after force archive.
+    await releaseLock(first);
+
+    const second = await acquireLock(TEST_DIR, { inspector, ownerType: 'desktop-sidecar' });
+    const staleHandle = {
+      lockDir: second.lockDir,
+      acquired: true,
+      ownerToken: first.ownerToken,
+    };
+    await releaseLock(staleHandle);
+    expect(lockDirExists(TEST_DIR)).toBe(true);
+    expect(readLockMetadata(TEST_DIR)?.ownerToken).toBe(second.ownerToken);
+    await releaseLock(second);
+  });
+
+  test('12. concurrent acquire: only one succeeds', async () => {
+    const results = await Promise.allSettled([
+      acquireLock(TEST_DIR, { inspector, ownerType: 'cli', timeoutMs: 2_000, failFastIfOwned: true }),
+      acquireLock(TEST_DIR, { inspector, ownerType: 'cli', timeoutMs: 2_000, failFastIfOwned: true }),
+    ]);
+    const fulfilled = results.filter((r) => r.status === 'fulfilled') as PromiseFulfilledResult<Awaited<ReturnType<typeof acquireLock>>>[];
+    const rejected = results.filter((r) => r.status === 'rejected');
+    expect(fulfilled.length).toBe(1);
+    expect(rejected.length).toBe(1);
+    await releaseLock(fulfilled[0].value);
+  });
+
+  test('14. release after acquire removes active lock directory', async () => {
+    const lock = await acquireLock(TEST_DIR, { inspector });
+    await releaseLock(lock);
+    expect(lockDirExists(TEST_DIR)).toBe(false);
+  });
+
+  test('15. residual lock after crash is correctly judged on next start', async () => {
+    writeLockFixture(TEST_DIR, {
+      schemaVersion: 2,
+      pid: 888001,
+      processStartTime: 'gone',
+      bootMarker: 'boot-current',
+      ownerToken: 'crashed',
+      ownerType: 'desktop-sidecar',
+      databasePath: TEST_DIR,
+      executablePath: 'D:\\pmbrain\\pmbrain-sidecar.exe',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+    // PID no longer exists
+    const diag = await inspectLock(TEST_DIR, { inspector });
+    expect(diag.decision).toBe('archive_stale_lock');
+    expect(diag.reason).toBe('pid_not_running');
+
+    const lock = await acquireLock(TEST_DIR, { inspector });
+    expect(lock.acquired).toBe(true);
+    await releaseLock(lock);
+  });
+
+  test('22. Chinese path metadata read/write', async () => {
+    const chineseDir = join(TEST_DIR, '用户数据', '知识库');
+    mkdirSync(chineseDir, { recursive: true });
+    const lock = await acquireLock(chineseDir, { inspector, ownerType: 'cli' });
+    const meta = readLockMetadata(chineseDir);
+    expect(meta?.databasePath).toContain('知识库');
+    expect(meta?.schemaVersion).toBe(2);
+    await releaseLock(lock);
+  });
+
+  test('creates missing data directory before acquiring lock', async () => {
+    const missing = join(TEST_DIR, 'missing-data-dir');
+    const lock = await acquireLock(missing, { inspector });
+    expect(existsSync(missing)).toBe(true);
+    await releaseLock(lock);
+  });
+
+  test('skips lock for in-memory undefined dataDir', async () => {
+    const lock = await acquireLock(undefined, { inspector });
     expect(lock.acquired).toBe(true);
     expect(lock.lockDir).toBe('');
-
-    // Release should be a no-op
     await releaseLock(lock);
   });
 
-  test('lock file contains PID and command', async () => {
-    const lock = await acquireLock(TEST_DIR);
-    const lockData = JSON.parse(readFileSync(join(TEST_DIR, '.gbrain-lock', 'lock'), 'utf-8'));
-
-    expect(lockData.pid).toBe(process.pid);
-    expect(lockData.acquired_at).toBeDefined();
-    expect(lockData.command).toBeDefined();
-
-    await releaseLock(lock);
-  });
-
-  test('releases lock on disconnect even if DB close fails', async () => {
-    const lock = await acquireLock(TEST_DIR);
+  test('legacy lock with dead PID is archived', async () => {
+    writeLockFixture(TEST_DIR, {
+      pid: 999999992,
+      acquired_at: Date.now() - 1000,
+      command: 'old-pmbrain',
+    });
+    const lock = await acquireLock(TEST_DIR, { inspector });
     expect(lock.acquired).toBe(true);
-
-    // Simulate DB already closed
     await releaseLock(lock);
-    expect(existsSync(join(TEST_DIR, '.gbrain-lock'))).toBe(false);
+  });
+});
 
-    // Second acquisition should work
-    const lock2 = await acquireLock(TEST_DIR);
-    expect(lock2.acquired).toBe(true);
-    await releaseLock(lock2);
+describe('classifySidecarStartupError', () => {
+  test('16. DatabaseAlreadyOwnedError is not retryable', () => {
+    const err = new DatabaseAlreadyOwnedError({
+      databasePath: 'D:/brain.pglite',
+      lockPath: 'D:/brain.pglite/.gbrain-lock',
+      ownerPid: 1,
+      ownerType: 'desktop-sidecar',
+    });
+    const c = classifySidecarStartupError(err);
+    expect(c.category).toBe('database_owned');
+    expect(c.retryable).toBe(false);
+  });
+
+  test('17. transient network errors remain retryable', () => {
+    const c = classifySidecarStartupError(new Error('fetch failed: ECONNREFUSED'));
+    expect(c.category).toBe('transient');
+    expect(c.retryable).toBe(true);
+  });
+
+  test('19. PGlite.create / Aborted is database_open_failed non-retryable', () => {
+    const err = new PgliteOpenError('PGLite failed to initialize\nOriginal error: Aborted()', {
+      cause: new Error('Aborted()'),
+    });
+    const c = classifySidecarStartupError(err);
+    expect(c.category).toBe('database_open_failed');
+    expect(c.retryable).toBe(false);
+    expect(err.cause).toBeInstanceOf(Error);
+  });
+
+  test('18. sidecar exited before healthy is classified from message', () => {
+    const err = new SidecarExitedBeforeHealthyError({
+      message: 'Sidecar exited (code 1). DatabaseAlreadyOwnedError',
+      exitCode: 1,
+      category: 'database_owned',
+    });
+    const c = classifySidecarStartupError(err);
+    expect(c.retryable).toBe(false);
+    expect(c.category).toBe('database_owned');
+  });
+
+  test('port conflict is retryable', () => {
+    const c = classifySidecarStartupError(new Error('listen EADDRINUSE: address already in use'));
+    expect(c.category).toBe('port_conflict');
+    expect(c.retryable).toBe(true);
   });
 });

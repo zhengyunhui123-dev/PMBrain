@@ -259,6 +259,9 @@ async function ensureAdminWorkerStarted(): Promise<{
   pid_file: string;
   mode: 'supervisor';
 }> {
+  if (process.env.PMBRAIN_DIAGNOSTIC_MODE === '1') {
+    throw new Error('diagnostic_mode_disables_supervisor');
+  }
   const current = await getSupervisorStatus();
   if (current.running && current.supervisor_pid) {
     const ready = current.worker_running
@@ -723,6 +726,11 @@ interface ServeHttpOptions {
    * is almost always a misconfiguration.
    */
   bind?: string;
+  /**
+   * When true, skip Dream schedule timer and refuse Supervisor/Worker auto-start.
+   * Used by desktop `--diagnostic-mode` to isolate PGLite single-owner boot.
+   */
+  diagnosticMode?: boolean;
   /**
    * v0.36.x #1024: suppress the printed admin bootstrap token line on
    * startup. Combined with `GBRAIN_ADMIN_BOOTSTRAP_TOKEN`, lets long-lived
@@ -3701,13 +3709,19 @@ ${renderAdminTokenFooter({ suppressBootstrapPrint, bootstrapFromEnv, bootstrapTo
     }
   });
 
-  const dreamScheduleTimer = setInterval(
-    () => void checkScheduledDream(),
-    ADMIN_DREAM_SCHEDULE_CHECK_MS,
-  );
-  dreamScheduleTimer.unref?.();
-  httpServer.once('close', () => clearInterval(dreamScheduleTimer));
-  void checkScheduledDream();
+  const diagnosticMode = options.diagnosticMode === true
+    || process.env.PMBRAIN_DIAGNOSTIC_MODE === '1';
+  if (diagnosticMode) {
+    console.error('[serve-http] diagnostic-mode active: Dream schedule timer not started; Supervisor auto-start disabled');
+  } else {
+    const dreamScheduleTimer = setInterval(
+      () => void checkScheduledDream(),
+      ADMIN_DREAM_SCHEDULE_CHECK_MS,
+    );
+    dreamScheduleTimer.unref?.();
+    httpServer.once('close', () => clearInterval(dreamScheduleTimer));
+    void checkScheduledDream();
+  }
 
   await waitForHttpServerClose(httpServer, engine);
 }

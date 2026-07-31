@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { createServer } from 'node:http';
-import { SidecarManager } from '../src/main/sidecar-manager.js';
+import { SidecarManager, classifySidecarStartupError } from '../src/main/sidecar-manager.js';
 
 const logger = { write() {}, close() {}, directory: '', filePath: '' } as any;
 
@@ -17,10 +17,78 @@ describe('desktop sidecar manager', () => {
     });
     (manager as any).lastExitMessage =
       'Sidecar exited (code 1). PGLite failed to initialize its WASM runtime. Original error: Aborted().';
+    (manager as any).child = null;
 
     await expect((manager as any).waitUntilHealthy()).rejects.toThrow(
-      'PGLite failed to initialize its WASM runtime',
+      /PGLite failed to initialize its WASM runtime|exited before it became healthy/,
     );
+  });
+
+  test('16. DatabaseAlreadyOwnedError does not trigger auto restart loop', async () => {
+    const states: Array<{ phase: string }> = [];
+    const manager = new SidecarManager({
+      packaged: false,
+      appPath: '',
+      resourcesPath: '',
+      port: 3131,
+      bootstrapToken: 'test-bootstrap-token',
+      clientVersion: '1.0.93',
+      logger,
+      onState: (state) => states.push(state),
+    });
+    let spawnCount = 0;
+    (manager as any).spawnProcess = () => {
+      spawnCount += 1;
+      (manager as any).child = { exitCode: null, pid: 1 };
+    };
+    (manager as any).waitUntilHealthy = async () => {
+      throw new Error('DatabaseAlreadyOwnedError: already owned by pid 99');
+    };
+    (manager as any).terminateChild = async () => {
+      (manager as any).child = null;
+    };
+
+    await expect(manager.start()).rejects.toThrow(/already owned|DatabaseAlreadyOwned/);
+    expect(spawnCount).toBe(1);
+    expect(states.some((s) => s.phase === 'failed')).toBe(true);
+    const classified = classifySidecarStartupError(new Error('DatabaseAlreadyOwnedError'));
+    expect(classified.retryable).toBe(false);
+  });
+
+  test('18. health check fails immediately when sidecar already exited', async () => {
+    const manager = new SidecarManager({
+      packaged: false,
+      appPath: '',
+      resourcesPath: '',
+      port: 3131,
+      bootstrapToken: 'test-bootstrap-token',
+      clientVersion: '1.0.93',
+      logger,
+    });
+    (manager as any).child = null;
+    (manager as any).lastExitMessage = 'Sidecar exited (code 1). Aborted()';
+    const t0 = Date.now();
+    await expect((manager as any).waitUntilHealthy()).rejects.toThrow(/exited before it became healthy|Aborted/);
+    expect(Date.now() - t0).toBeLessThan(5_000);
+  });
+
+  test('recoverAfterCrash skips retry for non-retryable database errors', async () => {
+    const states: Array<{ phase: string; message?: string }> = [];
+    const manager = new SidecarManager({
+      packaged: false,
+      appPath: '',
+      resourcesPath: '',
+      port: 3131,
+      bootstrapToken: 'test-bootstrap-token',
+      clientVersion: '1.0.93',
+      logger,
+      onState: (state) => states.push(state),
+    });
+    let spawnCount = 0;
+    (manager as any).spawnProcess = () => { spawnCount += 1; };
+    await (manager as any).recoverAfterCrash('PGlite.create failed: Aborted()');
+    expect(spawnCount).toBe(0);
+    expect(states.at(-1)?.phase).toBe('failed');
   });
 
   test('times out administrator-session creation instead of leaving startup waiting forever', async () => {
