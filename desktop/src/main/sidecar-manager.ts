@@ -288,6 +288,7 @@ export class SidecarManager {
       env: {
         ...cleanDatabaseEnvironment(),
         PMBRAIN_ADMIN_BOOTSTRAP_TOKEN: this.bootstrapToken,
+        PMBRAIN_PGLITE_ROLE: 'desktop-sidecar',
       },
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],

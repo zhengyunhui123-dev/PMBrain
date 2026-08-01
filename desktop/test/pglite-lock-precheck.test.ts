@@ -45,10 +45,13 @@ describe('precheckPgliteLock', () => {
     expect(precheckPgliteLock(dbDir).blocked).toBe(false);
   });
 
-  test('锁文件损坏 → 放行（交给 sidecar stale 清理）', () => {
+  test('锁文件损坏 → 安全拦截且不自动删除', () => {
     const dbDir = makeDbDir();
     writeLock(dbDir, '{not valid json');
-    expect(precheckPgliteLock(dbDir).blocked).toBe(false);
+    const result = precheckPgliteLock(dbDir);
+    expect(result.blocked).toBe(true);
+    expect(result.message).toContain('lock metadata');
+    expect(result.message).toContain('not delete');
   });
 
   test('锁 PID 已死 → 放行（stale 检测会清理）', () => {
@@ -73,18 +76,36 @@ describe('precheckPgliteLock', () => {
     await new Promise((r) => setTimeout(r, 200));
     expect(child.pid).toBeDefined();
 
-    writeLock(dbDir, { pid: child.pid, acquired_at: Date.now(), command: 'pmbrain-sidecar.js serve --http' });
+    writeLock(dbDir, {
+      pid: child.pid,
+      acquired_at: Date.now(),
+      refreshed_at: Date.now(),
+      command: 'pmbrain-sidecar.js serve --http',
+      role: 'desktop-sidecar',
+      owner_token: 'desktop-owner-token',
+    });
     const result = precheckPgliteLock(dbDir);
     expect(result.blocked).toBe(true);
     expect(result.holderPid).toBe(child.pid);
     expect(result.message).toContain(`PID ${child.pid}`);
     expect(result.message).toContain('请先退出该 PMBrain 实例');
+    expect(result.message).toContain('desktop-sidecar');
     expect(result.message).toContain(dbDir);
   });
 
-  test('锁文件缺 pid 字段 → 放行', () => {
+  test('锁文件缺 pid 字段 → 安全拦截', () => {
     const dbDir = makeDbDir();
     writeLock(dbDir, { acquired_at: Date.now(), command: 'x' });
-    expect(precheckPgliteLock(dbDir).blocked).toBe(false);
+    const result = precheckPgliteLock(dbDir);
+    expect(result.blocked).toBe(true);
+    expect(result.message).toContain('cannot verify lock owner');
+  });
+
+  test('lock directory without metadata is blocked safely', () => {
+    const dbDir = makeDbDir();
+    mkdirSync(join(dbDir, '.gbrain-lock'));
+    const result = precheckPgliteLock(dbDir);
+    expect(result.blocked).toBe(true);
+    expect(result.message).toContain('lock metadata is missing');
   });
 });

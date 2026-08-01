@@ -1,5 +1,14 @@
 # Bug 修复台账
 
+## 2026-08-01 修复 PGLite 多进程持有、初始化误报与文件库断线恢复
+
+- 时间：2026-08-01
+- 版本号：PMBrain 1.1.89；PMBrain Desktop 1.1.0
+- 标题：PGLite 单一持有者锁、分阶段故障分类、显式生命周期与兼容迁移保护
+- 描述：老用户升级桌面端或 GUI 时，PGLite 的活进程锁缺少心跳、角色和不可伪造的 owner token；损坏或不完整的锁元数据可能被当作陈旧锁清理；初始化失败又容易统一显示 Aborted()，无法区分持有冲突、权限、WASM 运行时和数据库损坏。文件数据库也缺少与 Postgres 对齐的 reconnect，用户无法明确判断故障发生在哪一阶段。
+- 是否完成：是
+- 最终结果：沿用 GBrain P0 的单目录单持有者原则并按 PMBrain 数据保护边界收紧：锁记录新增 PID、角色、心跳时间和随机 owner token，活 PID 无论心跳是否延迟都绝不抢占，释放锁前必须核验 token；锁元数据缺失、损坏或 PID 不可验证时安全阻断且不自动删除。桌面 sidecar 显式标记为 desktop-sidecar，启动预检显示 PID、角色、心跳、命令和数据库路径。PGLite 初始化现在区分 Bun vfs、Windows Aborted、权限、macOS WASM、catalog/pgvector 损坏和未知错误，并明确不会自动删库或重建；文件库 reconnect 会先完成 close→释放锁，再重开同一目录，内存库保持 no-op。保留既有 forward-reference bootstrap → schema 兼容引导 → 版本迁移顺序和显式向量维度确认，不原地修改 vector(N)，4096 维继续保留完整向量并跳过不兼容 HNSW。所有验证仅使用临时 PGLite 与隔离 pgvector 容器，未读取、修改或复制用户数据库。桌面全套 157/157、锁与分类 33/33、生命周期与 reconnect 7/7、结构/迁移 14/14、向量对齐 7/7、Postgres bootstrap E2E 2/2、根与桌面 typecheck 通过；verify 27/29，剩余两项为本机私有 skill 路由清单漂移和当前环境 wasm 符号检查，完整单元聚合另被 Windows 既有 .sh 子进程测试阻塞。桌面生产资源与 sidecar 已构建并核实包含新锁逻辑；Windows 安装包仍由用户执行 bun run build:win。
+
 ## 2026-07-31 修复查询扩展无超时导致 query 长时间挂起
 
 - 时间：2026-07-31

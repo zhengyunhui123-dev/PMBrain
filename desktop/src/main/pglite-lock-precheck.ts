@@ -1,16 +1,10 @@
 /**
- * PGLite lock precheck — 在启动 sidecar 之前检测数据库是否被其他
- * PMBrain 进程持有（旧桌面端残留、托盘实例、命令行 CLI）。
+ * Read-only PGLite owner precheck before the desktop sidecar starts.
  *
- * 背景（2026-07-31 发布测试实测）：老用户 + PGLite 升级迁移失败的根因
- * 是锁竞争——另一个 PMBrain 进程持有 brain.pglite 时，sidecar 要等满
- * 30 秒锁超时，且错误文本不匹配不可重试列表，还会再重启重试 3 轮，
- * 用户最长等约 2 分钟才看到失败页。预检把这一路径缩短到毫秒级，并
- * 给出可操作的指引（退出哪个 PID）。
- *
- * 只读检测，绝不删除锁目录、绝不结束任何进程：
- *  - 无锁 / 锁损坏 / PID 已死 → 放行（sidecar 的 stale 清理会处理）
- *  - PID 存活且非本进程 → 返回 blocked + 中文指引，由调用方决定展示
+ * PGLite is an embedded PostgreSQL database with one real OS-process owner per
+ * data directory. This check never removes a lock or terminates a process.
+ * Only a lock whose PID is proven dead is left for the engine's stale cleanup.
+ * Missing, malformed, or unverifiable metadata fails closed.
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -21,21 +15,47 @@ export interface PgliteLockPrecheckResult {
   message?: string;
 }
 
+interface LockMetadata {
+  pid?: unknown;
+  acquired_at?: unknown;
+  refreshed_at?: unknown;
+  command?: unknown;
+  role?: unknown;
+  owner_token?: unknown;
+}
+
+function metadataBlocked(databasePath: string, lockDir: string, reason: string): PgliteLockPrecheckResult {
+  return {
+    blocked: true,
+    message:
+      `PGLite ${reason}. PMBrain will not delete ${lockDir} automatically because it cannot verify lock owner liveness.\n` +
+      `请先退出所有 PMBrain/GBrain 进程并检查任务管理器；确认没有进程使用数据库后，再人工处理残留锁。\n` +
+      `PGLite 数据库路径：${databasePath}`,
+  };
+}
+
 export function precheckPgliteLock(databasePath: string | null | undefined): PgliteLockPrecheckResult {
   if (!databasePath) return { blocked: false };
-  const lockFile = join(databasePath, '.gbrain-lock', 'lock');
-  if (!existsSync(lockFile)) return { blocked: false };
 
-  let data: { pid?: unknown; acquired_at?: unknown; command?: unknown };
+  const lockDir = join(databasePath, '.gbrain-lock');
+  if (!existsSync(lockDir)) return { blocked: false };
+
+  const lockFile = join(lockDir, 'lock');
+  if (!existsSync(lockFile)) {
+    return metadataBlocked(databasePath, lockDir, 'lock metadata is missing');
+  }
+
+  let data: LockMetadata;
   try {
     data = JSON.parse(readFileSync(lockFile, 'utf-8'));
   } catch {
-    // 损坏的锁文件交给 sidecar 的 stale 清理逻辑处理，不拦启动。
-    return { blocked: false };
+    return metadataBlocked(databasePath, lockDir, 'lock metadata is unreadable');
   }
 
   const pid = typeof data.pid === 'number' ? data.pid : NaN;
-  if (!Number.isInteger(pid) || pid <= 0) return { blocked: false };
+  if (!Number.isInteger(pid) || pid <= 0) {
+    return metadataBlocked(databasePath, lockDir, 'cannot verify lock owner: metadata has no valid PID');
+  }
   if (pid === process.pid) return { blocked: false };
 
   let alive = true;
@@ -44,22 +64,27 @@ export function precheckPgliteLock(databasePath: string | null | undefined): Pgl
   } catch {
     alive = false;
   }
-  // 持有进程已退出：残留锁会被 sidecar 的 stale 检测自动清理，不拦。
   if (!alive) return { blocked: false };
 
   const since = typeof data.acquired_at === 'number'
     ? new Date(data.acquired_at).toLocaleString('zh-CN')
     : '未知时间';
+  const refreshed = typeof data.refreshed_at === 'number'
+    ? new Date(data.refreshed_at).toLocaleString('zh-CN')
+    : '未知时间';
   const command = typeof data.command === 'string' && data.command.trim()
     ? data.command.trim()
     : '未知命令';
+  const role = typeof data.role === 'string' && data.role.trim()
+    ? data.role.trim()
+    : 'legacy/unknown';
 
   return {
     blocked: true,
     holderPid: pid,
     message:
-      `检测到另一个 PMBrain 进程正在使用本地数据库（PID ${pid}，启动于 ${since}）：\n${command}\n\n` +
+      `检测到另一个 PMBrain 进程正在使用本地数据库（PID ${pid}，角色 ${role}，启动于 ${since}，最近心跳 ${refreshed}）：\n${command}\n\n` +
       `请先退出该 PMBrain 实例（其他窗口、托盘图标或命令行），再点击「重新启动服务」。\n` +
-      `PGLite 数据库路径：${databasePath}`,
+      `活进程锁绝不会被抢占或自动删除。PGLite 数据库路径：${databasePath}`,
   };
 }
