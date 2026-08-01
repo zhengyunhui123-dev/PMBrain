@@ -5,6 +5,7 @@ bin/
 .env
 .env.*
 !.env.*.example
+*.env
 # Bun --compile temp artifacts. Each build emits a new hash-named .bun-build
 # file in cwd; glob catches all of them.
 *.bun-build
@@ -53,6 +54,11 @@ load-env.ps1
 
 # Local gbrain config — contains API keys and local DB path
 .gbrain/
+
+# Local PMBrain runtime state and file-backed PGLite databases
+.pmbrain/
+*.pglite/
+.tmp-pglite-*/
 
 # Local MCP server config — contains real auth tokens
 .mcp.json

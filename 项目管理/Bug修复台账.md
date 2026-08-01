@@ -1,5 +1,14 @@
 # Bug 修复台账
 
+## 2026-08-01 修复主干 CI 漂移并阻止本地数据库与生成物再次入库
+
+- 时间：2026-08-01
+- 版本号：PMBrain 1.1.91
+- 标题：同步 PGLite 安全提示测试、LLM 索引与仓库卫生守卫
+- 描述：PGLite 冷备与生命周期改造合入后，Test 工作流仍保留两条旧结构断言，分别要求维度冲突提示继续推荐整库 `gbrain init`、要求 `PGlite.create` 直接赋值；同时 `llms.txt`/`llms-full.txt` 未随文档更新重新生成。主干还误提交了 968 个约 39 MB 的 `.tmp-pglite-reopen-test/brain.pglite` 数据库文件，并继续跟踪本地 `.mcp.json` 与 `context/` 调试记录。
+- 是否完成：是
+- 最终结果：测试断言改为验证“恢复验证冷备 → 仅重建派生向量 → stale 重嵌入”的现行安全流程，并允许 `preservingProcessExitCode` 包装 PGlite 创建；LLM 索引已由生成器重新同步。PGlite 临时数据库、本地 MCP 配置和调试上下文只从 Git 跟踪移除，本机原件保持不变；`.gitignore` 新增 `.pmbrain/`、`*.pglite/`、临时 PGlite 目录和异常 `.env` 后缀保护。新增仓库卫生检查并接入 `verify`，即使强制添加也会拒绝本地认证配置、数据库、日志、桌面 out/dist 和安装产物。三项原 CI 失败定向回归、仓库卫生 4/4、PGLite engine 101/101、doctor 7/7、桌面跨平台 runtime 合同 10/10、根与桌面 typecheck 通过；Linux/macOS 安装包由 Release 的 build-only 工作流执行真实平台构建与包内 PGLite/Canvas/架构/更新元数据校验。
+
 ## 2026-08-01 修复 PGLite 升级迁移缺少可验证冷备与整库重建边界不清
 
 - 时间：2026-08-01

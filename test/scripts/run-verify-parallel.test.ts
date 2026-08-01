@@ -39,6 +39,7 @@ describe("run-verify-parallel.sh — CLI contract", () => {
     const r = spawnSync("bash", [SCRIPT, "--dry-list"], { encoding: "utf8" });
     expect(r.status).toBe(0);
     const set = new Set(r.stdout.trim().split("\n"));
+    expect(set.has("check:repository-hygiene")).toBe(true);
     expect(set.has("check:privacy")).toBe(true);
     expect(set.has("check:jsonb")).toBe(true);
     expect(set.has("typecheck")).toBe(true);
