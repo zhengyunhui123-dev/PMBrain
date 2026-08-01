@@ -53,7 +53,6 @@ const shape = platform === 'win32'
         metadata: join(distRoot, 'latest-linux.yml'),
         artifacts: [
           `PMBrain-Linux-x64-${desktopPackage.version}.AppImage`,
-          `PMBrain-Linux-x64-${desktopPackage.version}.AppImage.blockmap`,
         ],
       };
 

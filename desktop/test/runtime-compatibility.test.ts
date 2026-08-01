@@ -96,6 +96,7 @@ describe('desktop Windows runtime compatibility', () => {
     expect(desktopPackage.scripts['build:linux']).toContain('--x64');
     expect(builderConfig).toContain('PMBrain-macOS-${arch}-${version}.${ext}');
     expect(builderConfig).toContain('PMBrain-Linux-x64-${version}.${ext}');
+    expect(verifierSource).not.toContain('PMBrain-Linux-x64-${desktopPackage.version}.AppImage.blockmap');
     expect(desktopPackage.desktopName).toBe('PMBrain.desktop');
     expect(builderConfig).toContain('syncDesktopName: true');
     expect(builderConfig).toContain('canvas-darwin-arm64');
