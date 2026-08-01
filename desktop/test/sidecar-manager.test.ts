@@ -1,10 +1,67 @@
 import { describe, expect, test } from 'bun:test';
+import { EventEmitter } from 'node:events';
 import { createServer } from 'node:http';
 import { SidecarManager } from '../src/main/sidecar-manager.js';
 
 const logger = { write() {}, close() {}, directory: '', filePath: '' } as any;
 
 describe('desktop sidecar manager', () => {
+  test('PGLite 数据库打开失败时立即停止，不连续重启多个 sidecar', async () => {
+    const states: any[] = [];
+    const manager = new SidecarManager({
+      packaged: false,
+      appPath: '',
+      resourcesPath: '',
+      port: 3131,
+      bootstrapToken: 'test-bootstrap-token',
+      clientVersion: '1.0.92',
+      logger,
+      onState: state => states.push(state),
+    });
+    let recoveryAttempts = 0;
+    (manager as any).recoverAfterCrash = async () => { recoveryAttempts += 1; };
+
+    (manager as any).handleCrash(
+      'PGLite failed to initialize its WASM runtime. Original error: Aborted().',
+    );
+    await new Promise(resolve => setTimeout(resolve, 20));
+
+    expect(recoveryAttempts).toBe(0);
+    expect(states.at(-1)).toMatchObject({
+      phase: 'failed',
+      message: expect.stringContaining('Aborted()'),
+    });
+  });
+
+  test('退出或安装更新时等待 sidecar 子进程树真正结束后才继续', async () => {
+    const manager = new SidecarManager({
+      packaged: false,
+      appPath: '',
+      resourcesPath: '',
+      port: 3131,
+      bootstrapToken: 'test-bootstrap-token',
+      clientVersion: '1.0.92',
+      logger,
+    });
+    const child = new EventEmitter() as any;
+    child.pid = 12345;
+    child.exitCode = null;
+    (manager as any).child = child;
+    const requested: boolean[] = [];
+    (manager as any).requestProcessTreeStop = (_child: unknown, force: boolean) => {
+      requested.push(force);
+      setTimeout(() => {
+        child.exitCode = 0;
+        child.emit('exit', 0, null);
+      }, 10);
+    };
+
+    await (manager as any).terminateChild();
+
+    expect(requested).toEqual([false]);
+    expect(child.exitCode).toBe(0);
+  });
+
   test('reports the last sidecar stderr instead of a generic health-check failure', async () => {
     const manager = new SidecarManager({
       packaged: false,

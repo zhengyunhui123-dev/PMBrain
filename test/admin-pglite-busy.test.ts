@@ -1,0 +1,13 @@
+import { describe, expect, test } from 'bun:test';
+import { readFileSync } from 'node:fs';
+
+const source = readFileSync('src/commands/serve-http.ts', 'utf8');
+
+describe('PGLite 后台任务忙碌提示', () => {
+  test('导入期间保留任务进度和取消入口，其他管理页显示自动恢复提示', () => {
+    expect(source).toContain("code: 'pglite_busy'");
+    expect(source).toContain('PGLite 正在执行导入或知识整理，完成后会自动恢复连接。');
+    expect(source).toContain("req.path.startsWith('/runs')");
+    expect(source).toContain('requireAdmin(req, res, () => {');
+  });
+});

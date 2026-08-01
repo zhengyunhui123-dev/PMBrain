@@ -84,6 +84,9 @@ describe('buildPgliteInitErrorMessage — hint routing', () => {
     const msg = buildPgliteInitErrorMessage('windows-aborted', original);
     expect(msg).toContain('On Windows');
     expect(msg).toContain('.pmbrain\\brain.pglite');
+    expect(msg).toContain('does not');
+    expect(msg).toContain('delete, replace, or rebuild');
+    expect(msg).not.toContain('choose a fresh');
     expect(msg).toContain(original);
     expect(msg).not.toContain('macOS 26.3');
   });

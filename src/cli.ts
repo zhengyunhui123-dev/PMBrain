@@ -1342,8 +1342,10 @@ async function handleCliOnly(command: string, args: string[]) {
     return;
   }
 
-  // All remaining CLI-only commands need a DB connection
-  const engine = await connectEngine();
+  // All remaining CLI-only commands need a DB connection. The long-lived
+  // sidecar must fail closed when schema migration cannot complete; starting
+  // HTTP with a half-migrated PGLite leaves Desktop waiting on /health.
+  const engine = await connectEngine({ strictMigrations: command === 'serve' });
   try {
     switch (command) {
       case 'import': {
@@ -1807,7 +1809,7 @@ async function dispatchReadOnlyCommand(engine: BrainEngine, command: string, arg
 export { buildGatewayConfig } from './core/ai/gateway-config.ts';
 import { buildGatewayConfig } from './core/ai/gateway-config.ts';
 
-async function connectEngine(opts?: { probeOnly?: boolean }): Promise<BrainEngine> {
+async function connectEngine(opts?: { probeOnly?: boolean; strictMigrations?: boolean }): Promise<BrainEngine> {
   const config = loadConfig();
   if (!config) {
     console.error('No brain configured. Run: pmbrain init');
@@ -1846,6 +1848,9 @@ async function connectEngine(opts?: { probeOnly?: boolean }): Promise<BrainEngin
     const { tryRunPendingMigrations } = await import('./core/migrate.ts');
     const result = await tryRunPendingMigrations(engine);
     if (result.status === 'persistent') {
+      if (opts?.strictMigrations === true) {
+        throw new Error('Schema migrations remained pending after the startup retry window.');
+      }
       console.warn(
         '  Schema migrations are pending. Another process attempted to apply them ' +
         'but the migration didn\'t complete within the retry window. This is usually transient.',
@@ -1855,6 +1860,7 @@ async function connectEngine(opts?: { probeOnly?: boolean }): Promise<BrainEngin
       console.warn('    2. Check `pmbrain jobs supervisor status` for crashed migration workers.');
       console.warn('    3. Re-run: `pmbrain apply-migrations --yes`');
     } else if (result.status === 'error') {
+      if (opts?.strictMigrations === true) throw result.error;
       // Non-deadlock error during initSchema. Surface the message and continue;
       // subsequent operations will resurface the real schema error in context.
       console.warn(`  Schema probe failed: ${result.error.message}`);
@@ -1862,6 +1868,7 @@ async function connectEngine(opts?: { probeOnly?: boolean }): Promise<BrainEngin
     }
     // 'ok', 'not_needed', 'race_resolved' → silent (the common-case outcomes).
   } catch (err) {
+    if (opts?.strictMigrations === true) throw err;
     // Last-resort defense in case the helper itself throws unexpectedly.
     console.warn(`  Schema probe failed (unexpected): ${(err as Error).message}`);
     console.warn('  Re-run: `pmbrain apply-migrations --yes`');
