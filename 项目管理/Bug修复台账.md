@@ -1,41 +1,5 @@
 # Bug 修复台账
 
-## 2026-07-31 修复查询扩展无超时导致 query 长时间挂起
-
-- 时间：2026-07-31
-- 版本号：PMBrain 1.1.88；PMBrain Desktop 1.0.99
-- 标题：查询扩展（expansion）增加 30 秒显式超时与降级提示
-- 描述：发布测试发现：expansion/chat 模型不可用（如 23GB 本地模型尚未加载、内存不足换页）时，`generateObject` 的 HTTP 调用无超时上限，query 主流程长时间挂起，最终 CLI 看门狗以 `engine.disconnect() did not return within 10000ms` 强退，用户看不到任何结果。
-- 是否完成：是
-- 最终结果：`src/core/ai/gateway.ts` 的 `expand()` 增加 `AbortSignal.timeout` 显式超时（默认 30s，`PMBRAIN_EXPANSION_TIMEOUT_MS` 可调），超时后走既有 catch 降级为直接检索，并输出中文提示「查询扩展超时…已降级为直接检索」。实测：1ms 强制超时触发降级且结果正常返回（5 秒完成）；默认超时正常路径无回归；gateway 相关 13 项测试通过，typecheck 通过。不改变检索语义，仅为防御性增强。
-
-## 2026-07-31 修复 PGLite 升级启动时锁冲突导致长时间等待后迁移失败
-
-- 时间：2026-07-31
-- 版本号：PMBrain 1.1.87；PMBrain Desktop 1.0.98
-- 标题：桌面端启动前增加 PGLite 锁预检，锁冲突毫秒级报出可操作指引；锁超时纳入不可重试错误
-- 描述：发布测试实锤「老用户 + PGLite 迁移失败」根因：另一个 PMBrain 进程（旧桌面端残留、托盘实例、命令行 CLI）持有 brain.pglite 锁时，sidecar 需等满 30 秒锁超时，且超时文本不匹配不可重试列表，还会重启重试 3 轮，用户最长等约 2 分钟才看到失败页。
-- 是否完成：是
-- 最终结果：新增 `desktop/src/main/pglite-lock-precheck.ts` 只读预检（无锁/锁损坏/PID 已死均放行，交 sidecar stale 清理；PID 存活且非本进程则拦截并给出持锁 PID、命令行与退出指引），挂入 `startSidecarOnce` 启动链；`sidecar-manager.ts` 不可重试错误列表加入 `Timed out waiting for PGLite lock`，真撞锁时不再无效重启 3 轮。预检不删锁、不结束任何进程（符合数据库保护要求）。新增 `desktop/test/pglite-lock-precheck.test.ts` 7 项全过；desktop 全套 150 通过（仅 QwenPaw 集成测试钩子超时的既有环境敏感失败，与本改动无关）；双 typecheck 通过。
-
-## 2026-07-31 修复 ollama 向量模型维度解析错误导致新用户无法初始化
-
-- 时间：2026-07-31
-- 版本号：PMBrain 1.1.86；PMBrain Desktop 1.0.97
-- 标题：ollama recipe 增加 per-model 维度声明（model_dims），qwen3-embedding 等新模型维度不再被误判为 768
-- 描述：发布测试实测发现 P0 问题：ollama recipe 只有一个 `default_dims=768`（nomic-embed-text 的维度），新用户选 `ollama:qwen3-embedding:0.6b`（真实 1024 维）时两头堵——显式传 1024 被 preflight 以「不支持自定义维度」拒绝（`Refusing to init`），不传则按 768 建库、embed 时模型返回 1024 全部报维度不匹配，无法导入任何内容。
-- 是否完成：是
-- 最终结果：`EmbeddingTouchpoint` 新增 `model_dims` per-model 维度声明；ollama recipe 填入 6 个模型的真实维度（nomic-embed-text=768、mxbai-embed-large=1024、all-minilm=384、qwen3-embedding:0.6b=1024、4b=2560、8b=4096）；`resolveSchemaEmbeddingDim` 与 init 的 `resolveAIOptions` 默认维度推导都优先取 per-model 值。实测：显式 1024 与不传维度两条路径 init 均成功，config 与 schema 一致为 1024，导入 3/3 无错误；PGLite init 路径同步验证。新增 7 个 ollama 维度测试用例，`test/embedding-dim-check.test.ts` 33 项全过，typecheck 通过。其他 provider 行为不变；未知 ollama 模型传显式维度仍按原逻辑拒绝。另记录：`test/init-migrate-only.test.ts` 3 项失败为 Windows 既有测试隔离缺陷（`os.homedir()` 忽略 HOME 环境变量，子进程读到真实生产配置），与本次修改无关，Linux CI 不受影响。
-
-## 2026-07-31 修复 PGLite 锁超时错误文案误导用户手动删锁
-
-- 时间：2026-07-31
-- 版本号：PMBrain 1.1.85；PMBrain Desktop 1.0.96
-- 标题：锁超时提示改为先退出 PMBrain，手动删锁降级为最后手段并附数据损坏警告
-- 描述：发布测试（`项目管理/发布测试-2026-07-31.md`）实测发现：PGLite 锁超时错误直接建议用户 `remove .gbrain-lock`；在持锁进程仍存活时照做，第二个进程能拿到锁，导致两个 PGLite WASM 实例同时写入同一数据目录，存在静默损坏数据库的风险。
-- 是否完成：是
-- 最终结果：`src/core/pglite-lock.ts` 超时错误改为先报告持锁 PID/命令行，引导用户先正常退出 PMBrain（含桌面端托盘实例）再重试；手动删锁仅作为「确认进程已不存在」后的最后手段，并明确警告运行时删锁可致数据损坏。`test/pglite-lock.test.ts` 8 项通过。未改动锁机制本身。
-
 ## 2026-07-31 修复 4096 维向量导致 PGLite 第 55 号迁移失败
 
 - 时间：2026-07-31

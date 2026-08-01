@@ -16,7 +16,6 @@ import { autoUpdater } from 'electron-updater';
 import { join } from 'node:path';
 import { DesktopLogger } from './logs.js';
 import { findAvailablePort } from './port-manager.js';
-import { precheckPgliteLock } from './pglite-lock-precheck.js';
 import { SidecarManager, type SidecarState } from './sidecar-manager.js';
 import { preflightCliRuntime, runCli, runCliChecked, type CliRuntime } from './cli-runner.js';
 import { listDesktopProviderModels, type DesktopModelTouchpoint } from './model-catalog.js';
@@ -456,18 +455,6 @@ async function startSidecarOnce(openAdmin: boolean): Promise<void> {
     await existing.start();
     await reconcileLanGateway();
     return;
-  }
-  // PGLite 锁预检：数据库被其他 PMBrain 进程（旧桌面端残留、托盘实例、
-  // 命令行 CLI）持有时立即给出可操作指引，而不是让 sidecar 等满 30 秒
-  // 锁超时再重启重试 3 轮。只读检测，不删锁、不结束任何进程。
-  if (getDatabaseRuntimeConfig().engine === 'pglite') {
-    const precheck = precheckPgliteLock(getSetupInfo().current.databasePath);
-    if (precheck.blocked && precheck.message) {
-      logger.write('desktop', `PGLite lock precheck blocked startup: holder PID ${precheck.holderPid}`);
-      sendState({ phase: 'failed', port: sidecar?.port ?? 3131, message: precheck.message });
-      hideStartupProgress();
-      throw new Error(precheck.message);
-    }
   }
   sendStartupProgress({
     visible: true,

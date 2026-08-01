@@ -2099,22 +2099,11 @@ export async function expand(query: string): Promise<string[]> {
   if (!query || !query.trim()) return [query];
   if (!isAvailable('expansion')) return [query];
 
-  // 2026-07-31: explicit timeout — local models (e.g. a 23GB ollama chat
-  // model not yet loaded) can park the HTTP call for minutes while the
-  // model loads, hanging the whole query pipeline. Expansion is an
-  // enhancement, never worth blocking search: on timeout, degrade to the
-  // original query via the existing catch path.
-  const EXPANSION_TIMEOUT_MS = (() => {
-    const raw = parseInt(process.env.PMBRAIN_EXPANSION_TIMEOUT_MS || process.env.GBRAIN_EXPANSION_TIMEOUT_MS || '', 10);
-    return Number.isInteger(raw) && raw > 0 ? raw : 30_000;
-  })();
-
   try {
     const { model, recipe, modelId } = await resolveExpansionProvider(getExpansionModel());
     const result = await generateObject({
       model,
       schema: ExpansionSchema,
-      abortSignal: AbortSignal.timeout(EXPANSION_TIMEOUT_MS),
       // Ollama reasoning models can spend the whole output budget on hidden
       // reasoning and return no JSON. Its OpenAI-compatible endpoint accepts
       // reasoning_effort=none; keep this local-only so hosted/custom provider
@@ -2146,11 +2135,6 @@ export async function expand(query: string): Promise<string[]> {
     const normalized = normalizeAIError(err, 'expand');
     if (normalized instanceof AIConfigError) {
       console.warn(`[ai.gateway] expansion disabled: ${normalized.message}`);
-    } else if (err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
-      console.warn(
-        `[ai.gateway] 查询扩展超时（>${EXPANSION_TIMEOUT_MS}ms，模型可能正在加载），已降级为直接检索。` +
-        `可用 PMBRAIN_EXPANSION_TIMEOUT_MS 调整超时。`,
-      );
     }
     return [query];
   }

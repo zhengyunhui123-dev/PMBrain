@@ -303,12 +303,7 @@ export function resolveSchemaEmbeddingDim(opts: ResolveSchemaEmbeddingDimOpts): 
           `Pick a recipe with an embedding touchpoint (gbrain providers list).`,
       };
     }
-    // Per-model native dims win over the touchpoint-wide default (Ollama:
-    // nomic=768 vs qwen3-embedding:8b=4096). With a hit, an explicit dim
-    // equal to the model's native dim is accepted instead of rejected as
-    // "custom", and an omitted dim resolves to the model's own native size.
-    const effectiveDefault = tp.model_dims?.[parsed.modelId] ?? tp.default_dims;
-    return validateDimAgainstTouchpoint(parsed.modelId, recipe, effectiveDefault, tp.dims_options, opts.embedding_dimensions);
+    return validateDimAgainstTouchpoint(parsed.modelId, recipe, tp.default_dims, tp.dims_options, opts.embedding_dimensions);
   } catch (err) {
     return { ok: false, error: err instanceof AIConfigError ? err.message : String(err) };
   }
@@ -359,8 +354,7 @@ export function resolveSchemaMultimodalDim(opts: ResolveSchemaMultimodalDimOpts)
           `Pick a multimodal-capable model from this provider.`,
       };
     }
-    const effectiveDefault = tp.model_dims?.[parsed.modelId] ?? tp.default_dims;
-    return validateDimAgainstTouchpoint(parsed.modelId, recipe, effectiveDefault, tp.dims_options, opts.embedding_multimodal_dimensions);
+    return validateDimAgainstTouchpoint(parsed.modelId, recipe, tp.default_dims, tp.dims_options, opts.embedding_multimodal_dimensions);
   } catch (err) {
     return { ok: false, error: err instanceof AIConfigError ? err.message : String(err) };
   }
