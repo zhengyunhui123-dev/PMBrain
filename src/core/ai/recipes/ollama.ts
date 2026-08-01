@@ -36,31 +36,10 @@ export const ollama: Recipe = {
       price_last_verified: '2026-07-17',
     },
     embedding: {
-      models: [
-        'nomic-embed-text',
-        'mxbai-embed-large',
-        'all-minilm',
-        'qwen3-embedding:0.6b',
-        'qwen3-embedding:4b',
-        'qwen3-embedding:8b',
-      ],
+      models: ['nomic-embed-text', 'mxbai-embed-large', 'all-minilm'],
       default_dims: 768, // nomic-embed-text native dim
-      // Per-model native dims — Ollama's model list is installation-specific
-      // and these models do NOT share default_dims. Without this map, init's
-      // dim preflight both (a) resolved every model to 768 and (b) rejected
-      // an explicit dim matching the model's true native size, so users of
-      // qwen3-embedding:0.6b (1024) could not init at all. All-MiniLM-L6 is
-      // 384; qwen3-embedding 0.6b/4b/8b are 1024/2560/4096 (native max).
-      model_dims: {
-        'nomic-embed-text': 768,
-        'mxbai-embed-large': 1024,
-        'all-minilm': 384,
-        'qwen3-embedding:0.6b': 1024,
-        'qwen3-embedding:4b': 2560,
-        'qwen3-embedding:8b': 4096,
-      },
       cost_per_1m_tokens_usd: 0,
-      price_last_verified: '2026-07-31',
+      price_last_verified: '2026-04-20',
       // Ollama's batch capacity depends on the locally loaded model + the
       // OLLAMA_NUM_PARALLEL config; no static cap to declare. v0.32 (#779).
       no_batch_cap: true,

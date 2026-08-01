@@ -28,18 +28,6 @@ export interface EmbeddingTouchpoint {
   models: string[];
   default_dims: number;
   dims_options?: number[]; // for Matryoshka-aware providers
-  /**
-   * Per-model native dims for recipes whose models do NOT share one
-   * `default_dims` (e.g. Ollama: nomic-embed-text=768, mxbai-embed-large=1024,
-   * qwen3-embedding:8b=4096). A model present here resolves at its own native
-   * dim, and an explicit `--embedding-dimensions` equal to that dim is
-   * accepted (it is not a "custom" dim for that model). Models absent here
-   * keep the legacy `default_dims` behavior. Qwen3-Embedding models also
-   * support Matryoshka truncation at runtime; the native (max) dim is the
-   * declared value here because it is the only width every downstream column
-   * can be sized for safely at init time.
-   */
-  model_dims?: Record<string, number>;
   cost_per_1m_tokens_usd?: number;
   price_last_verified?: string; // ISO date
   /**
