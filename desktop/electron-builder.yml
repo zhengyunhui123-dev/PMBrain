@@ -60,12 +60,15 @@ mac:
     - from: ../node_modules/@napi-rs/canvas-darwin-arm64
       to: pmbrain-runtime/node_modules/@napi-rs/canvas-darwin-arm64
 linux:
-  artifactName: PMBrain-Linux-${arch}-${version}.${ext}
+  # electron-builder renders ${arch} as x86_64 for AppImage, while the
+  # updater, verifier and Release contract intentionally use x64.
+  artifactName: PMBrain-Linux-x64-${version}.${ext}
   target:
     - target: AppImage
       arch:
         - x64
   executableName: PMBrain
+  syncDesktopName: true
   category: Office
   extraResources:
     - from: ../node_modules/@napi-rs/canvas-linux-x64-gnu
