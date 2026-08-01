@@ -84,6 +84,8 @@ let sidecarStartupPromise: Promise<void> | null = null;
 let serviceReadyPromise: Promise<SidecarManager> | null = null;
 let sidecarRetryPromise: Promise<string> | null = null;
 let runtimePreflightPromise: Promise<void> | null = null;
+let pendingPgliteUpgradeBackupPath: string | null = null;
+const pgliteUpgradeBackupByVersion = new Map<string, string | null>();
 let setupInProgress = false;
 let trayHintShown = false;
 let desktopVersionHistory: DesktopVersionHistory = { current: '' };
@@ -515,14 +517,69 @@ async function startSidecarOnce(openAdmin: boolean): Promise<void> {
     const rawMessage = error instanceof Error ? error.message : String(error);
     const database = getDatabaseRuntimeConfig();
     const databasePath = getSetupInfo().current.databasePath;
-    const message = database.engine === 'pglite' && databasePath
+    let message = database.engine === 'pglite' && databasePath
       ? `${rawMessage}\nPGLite 数据库路径：${databasePath}`
       : rawMessage;
+    if (database.engine === 'pglite' && pendingPgliteUpgradeBackupPath) {
+      message +=
+        `\n升级前冷备已验证并保留：${pendingPgliteUpgradeBackupPath}` +
+        '\nPMBrain 不会自动覆盖当前数据库。请保留此备份和桌面日志，不要连续重复迁移。';
+    }
     logger.write('desktop', message);
     sendState({ phase: 'failed', port: sidecar?.port ?? 3131, message });
     hideStartupProgress();
     throw new Error(message, { cause: error });
   }
+}
+
+async function ensurePgliteUpgradeBackup(databasePath: string | null | undefined): Promise<string | null> {
+  if (!databasePath) throw new Error('PGLite 升级前无法确定数据库路径，已停止迁移。');
+  const pathKey = process.platform === 'win32' ? databasePath.toLowerCase() : databasePath;
+  const key = `${pathKey}::${app.getVersion()}`;
+  if (pgliteUpgradeBackupByVersion.has(key)) {
+    const cached = pgliteUpgradeBackupByVersion.get(key) ?? null;
+    pendingPgliteUpgradeBackupPath = cached;
+    return cached;
+  }
+
+  pendingPgliteUpgradeBackupPath = null;
+  sendStartupProgress({
+    visible: true,
+    stage: 'migration',
+    title: '正在创建升级前数据库冷备',
+    message: 'sidecar 已停止。PMBrain 正在取得独占迁移锁、复制完整 PGLite 目录并验证恢复副本，请不要关闭窗口。',
+  });
+  const completed = await runCliChecked(runtime(), [
+    'pglite-backup',
+    'create',
+    '--path', databasePath,
+    '--target-version', app.getVersion(),
+    '--json',
+  ]);
+  const result = JSON.parse(completed.stdout.trim().split(/\r?\n/).at(-1) || '{}') as {
+    status?: string;
+    backup_directory?: string;
+    reason?: string;
+  };
+  if (result.status === 'not_required' && result.reason === 'database_missing') {
+    pgliteUpgradeBackupByVersion.set(key, null);
+    logger?.write('desktop', `PGLite upgrade backup not required; database does not exist yet: ${databasePath}`);
+    return null;
+  }
+  if (!['created', 'reused'].includes(result.status ?? '') || !result.backup_directory) {
+    throw new Error('PGLite 升级冷备没有返回可验证的备份目录，已停止迁移。');
+  }
+
+  pendingPgliteUpgradeBackupPath = result.backup_directory;
+  pgliteUpgradeBackupByVersion.set(key, result.backup_directory);
+  logger?.write('desktop', `Verified PGLite pre-upgrade backup: ${result.backup_directory}`);
+  sendStartupProgress({
+    visible: true,
+    stage: 'migration',
+    title: '升级前冷备验证通过',
+    message: `可恢复备份已保留：${result.backup_directory}。现在开始兼容迁移；失败时不会自动覆盖数据库。`,
+  });
+  return result.backup_directory;
 }
 
 async function startSidecar(openAdmin: boolean): Promise<void> {
@@ -625,6 +682,7 @@ async function migrateConfiguredInstallation(): Promise<boolean> {
       : '检测到桌面版本更新，正在执行兼容迁移。不会删除知识库或原始资料，请不要关闭窗口。',
   });
   if (setup.current.engine === 'pglite') {
+    await ensurePgliteUpgradeBackup(setup.current.databasePath);
     logger?.write('desktop', `PGLite migrations delegated to sidecar for desktop ${app.getVersion()}`);
     await syncModelDefaultsToConfigFile();
     return true;
@@ -743,6 +801,10 @@ async function applySetupOnce(payload: SetupPayload, setDefaultSource = true) {
   }
   try {
     await prepareConfiguredDatabase();
+    migrationRequired = needsDesktopMigration(app.getVersion());
+    if (migrationRequired && saved.config.engine === 'pglite') {
+      await ensurePgliteUpgradeBackup(saved.config.database_path);
+    }
     if (saved.needsEmbeddingDimensionProbe || saved.embeddingModelChanged) {
       sendStartupProgress({
         visible: true,
@@ -781,7 +843,6 @@ async function applySetupOnce(payload: SetupPayload, setDefaultSource = true) {
         saved.config.embedding_dimensions = result.dimensions!;
       }
     }
-    migrationRequired = needsDesktopMigration(app.getVersion());
     if (migrationRequired && saved.config.engine !== 'pglite') {
       sendStartupProgress({
         visible: true,

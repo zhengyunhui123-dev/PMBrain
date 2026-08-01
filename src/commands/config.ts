@@ -232,20 +232,19 @@ export async function runConfig(engine: BrainEngine, args: string[]) {
     //
     // No `--force` escape hatch (CDX2-13): keeping a known-no-op DB-only
     // write preserves the split-brain footgun the wave exists to close.
-    // Switching providers requires wipe-and-reinit; the recipe below is
-    // paste-ready and uses the actual command path that works after Lane B.
+    // PMBrain protects DB-only knowledge and never recommends a whole-database
+    // wipe. PGLite switches require a verified cold backup followed by a
+    // derived-data-only rebuild; raw dimension writes remain forbidden.
     if (key === 'embedding_dimensions') {
-      const { gbrainPath } = await import('../core/config.ts');
       const isPgliteEngine = (await import('../core/config.ts')).loadConfig()?.engine === 'pglite';
-      const dbPath = gbrainPath('brain.pglite');
       console.error(`[config] ${key} is a file-plane field that sizes the schema.`);
       console.error(`[config] Setting it in the DB has no effect on the embed pipeline (silent no-op).`);
       console.error(`[config]`);
       if (isPgliteEngine) {
-        console.error(`[config] To switch embedding models/dimensions on PGLite, wipe and re-init:`);
-        console.error(`[config]   mv ${dbPath} ${dbPath}.bak`);
-        console.error(`[config]   gbrain init --pglite --embedding-dimensions ${value}`);
-        console.error(`[config]   gbrain sync   # re-imports your brain repo`);
+        console.error(`[config] Direct dimension-only changes are disabled for PGLite.`);
+        console.error(`[config] Select the embedding model in Desktop (recommended), or first create a verified backup:`);
+        console.error(`[config]   pmbrain pglite-backup create --target-version manual`);
+        console.error(`[config] PMBrain then rebuilds only derived vectors/caches; it never wipes the whole database.`);
       } else {
         console.error(`[config] To switch embedding models/dimensions on Postgres, see:`);
         console.error(`[config]   docs/embedding-migrations.md`);

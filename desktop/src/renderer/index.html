@@ -389,7 +389,7 @@
           </section>
           <div class="update-safety">
             <span>SAFE UPDATE</span>
-            <p>安装前自动停止 sidecar；更新后自动执行数据库迁移，再启动服务并完成健康检查。现有数据库、API Key 和原始资料目录不会被覆盖。桌面端不会自动降级数据库，也不会自动备份 PGLite；重要升级或手动回退前请保留数据库副本。</p>
+            <p>安装前自动停止 sidecar；PGLite 需要兼容迁移时会先创建升级冷备，并通过一次性恢复副本验证 schema 和关键数据计数，再启动唯一 sidecar 完成迁移与健康检查。失败时保留备份、数据库和日志，不会自动覆盖或整库重建。</p>
           </div>
           <article class="previous-version-card">
             <div><span>PREVIOUS</span><b id="previous-version">暂无记录</b><p id="previous-version-note">升级一次后，桌面端会在这里保留上一版本号。</p></div>

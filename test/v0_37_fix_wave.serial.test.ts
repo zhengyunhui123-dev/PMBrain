@@ -307,7 +307,7 @@ describe('v0.37 deferred TODO shipped — gbrain reinit-pglite', () => {
     expect(typeof mod.runReinitPglite).toBe('function');
   });
 
-  test('embeddingMismatchMessage PGLite branch recommends `gbrain reinit-pglite`', async () => {
+  test('embeddingMismatchMessage PGLite branch refuses whole-database rebuild guidance', async () => {
     const { embeddingMismatchMessage } = await import('../src/core/embedding-dim-check.ts');
     const msg = embeddingMismatchMessage({
       currentDims: 1536,
@@ -317,14 +317,9 @@ describe('v0.37 deferred TODO shipped — gbrain reinit-pglite', () => {
       engineKind: 'pglite',
       databasePath: '/tmp/test.pglite',
     });
-    // The one-command path appears before the by-hand recipe.
-    expect(msg).toContain('gbrain reinit-pglite --embedding-model zeroentropyai:zembed-1 --embedding-dimensions 1280');
-    // The by-hand path is still present as fallback.
-    expect(msg).toContain('mv /tmp/test.pglite /tmp/test.pglite.bak');
-    // The recommended-section header precedes the by-hand section.
-    const recIdx = msg.indexOf('Recommended');
-    const handIdx = msg.indexOf('Or by hand');
-    expect(recIdx).toBeGreaterThan(0);
-    expect(handIdx).toBeGreaterThan(recIdx);
+    expect(msg).toContain('pmbrain pglite-backup create');
+    expect(msg).toContain('pmbrain models align-embedding-dimension --yes');
+    expect(msg).not.toContain('reinit-pglite');
+    expect(msg).not.toContain('mv /tmp/test.pglite');
   });
 });

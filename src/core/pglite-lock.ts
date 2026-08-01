@@ -40,7 +40,7 @@ interface LockRecord {
 }
 
 const VALID_ROLES = new Set<PgliteLockRole>(['desktop-sidecar', 'serve', 'cli', 'migration']);
-const MIGRATION_COMMANDS = new Set(['init', 'migrate', 'apply-migrations', 'reinit-pglite']);
+const MIGRATION_COMMANDS = new Set(['init', 'migrate', 'apply-migrations', 'reinit-pglite', 'pglite-backup']);
 
 // #2058: refresh the lock's `refreshed_at` while held so a long-running but
 // LIVE holder (embed jobs run for many minutes) is never mistaken for stale.

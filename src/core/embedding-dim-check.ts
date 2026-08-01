@@ -143,16 +143,15 @@ export async function readContentChunksEmbeddingDim(engine: BrainEngine): Promis
  * are fundamentally different:
  *
  * - **PGLite** has no native pgvector extension (the WASM build can't
- *   `ALTER COLUMN TYPE vector(N)`), so the only path is wipe-and-reinit
- *   via `gbrain init --pglite --embedding-model X --embedding-dimensions N`.
- *   The recipe derives the active database path so users don't paste a
- *   stale literal that ignores `GBRAIN_HOME` / `--path` / their config.
+ *   `ALTER COLUMN TYPE vector(N)`). PMBrain therefore requires a verified
+ *   cold backup and rebuilds only allowlisted derived vectors/caches. A
+ *   whole-database wipe is forbidden because DB-only knowledge is protected.
  * - **Postgres** keeps the existing four-step SQL recipe.
  *
  * The old recipe pointed at `gbrain config set embedding_model X` which
  * is a no-op for the embed pipeline (the embed gateway reads file plane,
- * not DB plane). After Lane C.2 that command refuses; the recipe now
- * points at the actual fix path.
+ * not DB plane). After Lane C.2 that command refuses; the recipe now points
+ * at the protected backup-and-derived-rebuild path.
  */
 export interface EmbeddingMismatchOpts {
   currentDims: number;
@@ -183,32 +182,30 @@ export function embeddingMismatchMessage(opts: EmbeddingMismatchOpts): string {
 
   if (engineKind === 'pglite') {
     const activePath = databasePath ?? gbrainPath('brain.pglite');
-    const modelArg = requestedModel ? ` --embedding-model ${requestedModel}` : '';
     const lines = [
       header,
       ``,
       `  Existing column: vector(${currentDims})`,
       `  Requested:       vector(${requestedDims})${requestedModel ? `  (${requestedModel})` : ''}`,
       ``,
-      `Switching dims is destructive: it drops every embedding in your brain.`,
+      `Switching dims invalidates derived embeddings in your brain.`,
       `PGLite cannot ALTER vector column types (pgvector ships as embedded WASM,`,
-      `not a native extension). PMBrain can safely recreate only the derived column.`,
+      `not a native extension). PMBrain only rebuilds derived vectors/caches;`,
+      `GUI-created knowledge, sources, tags, permissions and DB-only data stay protected.`,
       ``,
-      `Recommended (one command):`,
+      `Step 1 — create and recovery-verify a cold backup:`,
       ``,
-      `  gbrain models align-embedding-dimension --yes`,
+      `  pmbrain pglite-backup create --path ${activePath} --target-version manual`,
       ``,
-      `Alternative full rebuild:`,
+      `Step 2 — rebuild only allow-listed derived data:`,
       ``,
-      `  gbrain reinit-pglite${modelArg} --embedding-dimensions ${requestedDims}`,
+      `  pmbrain models align-embedding-dimension --yes`,
       ``,
-      `Or by hand:`,
+      `Step 3 — regenerate missing vectors:`,
       ``,
-      `  mv ${activePath} ${activePath}.bak`,
-      `  gbrain init --pglite${modelArg} --embedding-dimensions ${requestedDims}`,
-      `  gbrain sync   # re-imports your brain repo from disk`,
-      `  gbrain embed --stale`,
+      `  pmbrain embed --stale`,
       ``,
+      `Whole-database reinit is disabled because PMBrain does not treat PGLite as a cache.`,
       `Full guide: docs/embedding-migrations.md`,
     ];
     return lines.join('\n');
