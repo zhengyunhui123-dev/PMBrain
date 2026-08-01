@@ -14,7 +14,7 @@
  *  - ZEROENTROPY_API_KEY env merge into GBrainConfig (Lane C.3)
  *  - Embed pre-flight catches dim mismatch end-to-end (Lane D.2)
  *  - Sync hint fires at both catch sites (Lane D.3, CDX2-8)
- *  - reinit-pglite end-to-end behavior (deferred-TODO sugar)
+ *  - reinit-pglite fails closed instead of treating PMBrain DB-only data as cache
  *  - loadRecommendationContext reads gateway + ZE keys (Lane E.4)
  *
  * Hermetic — no DATABASE_URL, no real API keys, no real network. Uses
@@ -351,9 +351,9 @@ describe('Lane E.4 — loadRecommendationContext is provider-aware', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────
-// reinit-pglite end-to-end behavior (deferred-TODO sugar shipped)
+// reinit-pglite safety boundary for PMBrain DB-only data
 // ─────────────────────────────────────────────────────────────────────
-describe('reinit-pglite — backup + reinit', () => {
+describe('reinit-pglite — whole-database rebuild is disabled', () => {
   let tmpHome: string;
   let origHome: string | undefined;
 
@@ -394,14 +394,7 @@ describe('reinit-pglite — backup + reinit', () => {
     else process.env.GBRAIN_HOME = origHome;
   });
 
-  test('refuses on non-PGLite engine', async () => {
-    // Overwrite config to claim postgres.
-    const cfgPath = join(tmpHome, '.gbrain', 'config.json');
-    writeFileSync(cfgPath, JSON.stringify({
-      engine: 'postgres',
-      database_url: 'postgres://example/db',
-    }));
-
+  test('refuses on PGLite without moving the active database', async () => {
     const { runReinitPglite } = await import('../src/commands/reinit-pglite.ts');
     const origExit = process.exit;
     const exits: number[] = [];
@@ -421,6 +414,8 @@ describe('reinit-pglite — backup + reinit', () => {
       (process as any).exit = origExit;
     }
     expect(exits).toContain(1);
+    expect(existsSync(join(tmpHome, '.gbrain', 'brain.pglite'))).toBe(true);
+    expect(existsSync(join(tmpHome, '.gbrain', 'brain.pglite.bak'))).toBe(false);
   });
 
   test('refuses when missing required --embedding-model / --embedding-dimensions', async () => {

@@ -89,7 +89,7 @@ Voyage 4 系列在所有变体之间共享嵌入空间，因此你可以使用 `
 gbrain init --pglite --embedding-model voyage:voyage-code-3 --embedding-dimensions 1024
 ```
 
-要切换现有 brain，请使用 `gbrain reinit-pglite --embedding-model voyage:voyage-code-3 --embedding-dimensions 1024`（PGLite）或遵循 `docs/embedding-migrations.md`（Postgres）。`gbrain config set embedding_model` 被拒绝 — schema 列必须调整大小。
+要切换现有 PMBrain，PGLite 先运行 `pmbrain pglite-backup create --target-version manual`，再通过桌面端（推荐）或 `pmbrain config set embedding_model voyage:voyage-code-3` 执行受保护的模型切换；Postgres 遵循 `docs/embedding-migrations.md`。PGLite 不再通过整库重建切换模型。
 
 `gbrain reindex --code` 将在针对配置的嵌入模型未经代码调整的 brain 运行时打印建议；如果你故意选择了另一个模型（单一供应商采购、合规性等），使用 `GBRAIN_NO_CODE_MODEL_NUDGE=1` 抑制。
 
@@ -179,7 +179,7 @@ CJK 主导的内容标记化比 OpenAI tiktoken 更密集；gbrain 声明 `chars
 
 支持的路径：
 
-- **PGLite（默认安装）**：`gbrain reinit-pglite --embedding-model <provider>:<model> --embedding-dimensions <N>` — 一键擦除并重新初始化，保留所有其他配置字段（聊天模型、扩展模型、API 密钥），将先前的 brain 备份到 `<path>.bak`，使用新标志运行 `gbrain init`，并重新同步你的 brain 仓库。添加 `--no-sync` 以跳过重新同步，`--yes` 以跳过 TTY 确认，`--json` 以用于脚本。
+- **PGLite（默认安装）**：先运行 `pmbrain pglite-backup create --target-version manual` 创建字节级校验冷备并用一次性副本完成恢复打开验证，然后通过桌面端（推荐）或 `pmbrain config set embedding_model <provider>:<model>` 切换。PMBrain 只重建明确允许的向量、缓存和索引；页面、来源、标签、权限、审核状态及未知表默认受保护。旧 `reinit-pglite` 整库擦除路径已禁用。
 - **Postgres（Supabase / 自托管）**：遵循 `docs/embedding-migrations.md` 中的 SQL 配方（删除 HNSW 索引、ALTER COLUMN TYPE、清除陈旧嵌入、有条件地重新创建索引，然后 `gbrain init --supabase --embedding-model X --embedding-dimensions N` 以更新文件平面并重新嵌入）。
 
 `gbrain doctor` 8c "alternative_providers" 显示环境变量已设置但未配置的提供商 — 当你已配置 OpenAI 但还导出了例如 `VOYAGE_API_KEY` 并想知道你可以在不进行额外设置的情况下切换时很有用。

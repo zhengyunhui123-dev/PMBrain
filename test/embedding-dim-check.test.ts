@@ -127,9 +127,7 @@ describe('embeddingMismatchMessage', () => {
     expect(doctorMsg).toContain('Embedding dimension mismatch detected');
   });
 
-  // v0.37 fix wave Lane D.1: PGLite branch uses wipe-and-reinit recipe
-  // because PGLite can't ALTER vector column types.
-  test('PGLite branch uses wipe-and-reinit, not ALTER COLUMN', () => {
+  test('PGLite branch recommends verified backup plus derived-only rebuild', () => {
     const msg = embeddingMismatchMessage({
       currentDims: 1536,
       requestedDims: 1280,
@@ -140,23 +138,26 @@ describe('embeddingMismatchMessage', () => {
     });
     expect(msg).toContain('vector(1536)');
     expect(msg).toContain('vector(1280)');
-    expect(msg).toContain('mv /tmp/test-brain.pglite /tmp/test-brain.pglite.bak');
-    expect(msg).toContain('gbrain init --pglite --embedding-model zeroentropyai:zembed-1 --embedding-dimensions 1280');
+    expect(msg).toContain('pmbrain pglite-backup create');
+    expect(msg).toContain('--path /tmp/test-brain.pglite');
+    expect(msg).toContain('pmbrain models align-embedding-dimension --yes');
+    expect(msg).toContain('only rebuilds derived');
+    expect(msg).not.toContain('reinit-pglite');
+    expect(msg).not.toContain('mv /tmp/test-brain.pglite');
     expect(msg).toContain('PGLite cannot ALTER vector column types');
     // Must NOT contain the Postgres-only SQL recipe.
     expect(msg).not.toContain('ALTER TABLE content_chunks ALTER COLUMN');
     expect(msg).not.toContain('DROP INDEX IF EXISTS idx_chunks_embedding');
   });
 
-  test('PGLite branch falls back to default database path when omitted', () => {
+  test('PGLite branch backs up the default database path when omitted', () => {
     const msg = embeddingMismatchMessage({
       currentDims: 1536,
       requestedDims: 1280,
       source: 'init',
       engineKind: 'pglite',
     });
-    // Default falls back to gbrainPath('brain.pglite').
-    expect(msg).toMatch(/mv .+brain\.pglite .+brain\.pglite\.bak/);
+    expect(msg).toMatch(/pglite-backup create --path .+brain\.pglite/);
   });
 
   test('PGLite branch must NOT recommend `gbrain config set embedding_model` (no-op after Lane C.2)', () => {

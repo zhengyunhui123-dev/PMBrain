@@ -240,8 +240,8 @@ describe('v0.28.5 A4 — existing-brain dim mismatch loud failure', () => {
       // Simulate the user passing --embedding-dimensions 768 against this
       // existing 1536 brain. Build the mismatch message that init would
       // print to stderr before exiting 1.
-      // v0.37 fix wave: engineKind now required. This E2E uses PGLite; pin
-      // the PGLite recipe (wipe-and-reinit, not ALTER COLUMN).
+      // This E2E uses PGLite; pin the protected backup-and-derived-rebuild
+      // recipe (not ALTER COLUMN and never a whole-database reinit).
       const msg = embeddingMismatchMessage({
         currentDims: existing.dims!,
         requestedDims: 768,
@@ -250,15 +250,17 @@ describe('v0.28.5 A4 — existing-brain dim mismatch loud failure', () => {
         engineKind: 'pglite',
       });
 
-      // PGLite branch: wipe-and-reinit recipe (no ALTER COLUMN — that fails
-      // on PGLite's WASM pgvector). Asserts the recipe references the
-      // correct dim and model and points at `gbrain init --pglite`.
+      // PGLite branch: verified cold backup plus derived-data-only rebuild.
+      // ALTER COLUMN fails on PGLite's WASM pgvector, while a whole-database
+      // reset would destroy PMBrain data that has no Markdown source.
       expect(msg).toContain('vector(1536)');
       expect(msg).toContain('vector(768)');
-      expect(msg).toContain('gbrain init --pglite --embedding-model ollama:nomic-embed-text --embedding-dimensions 768');
+      expect(msg).toContain('pmbrain pglite-backup create');
+      expect(msg).toContain('pmbrain models align-embedding-dimension --yes');
+      expect(msg).not.toContain('reinit-pglite');
       expect(msg).toContain('PGLite cannot ALTER vector column types');
       expect(msg).toContain('docs/embedding-migrations.md');
-      expect(msg).toContain('gbrain embed --stale');
+      expect(msg).toContain('pmbrain embed --stale');
     } finally {
       await engine.disconnect();
     }

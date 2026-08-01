@@ -50,6 +50,24 @@ describe('desktop system orchestration contracts', () => {
     expect(main).toContain('PGLite 数据库路径：${databasePath}');
   });
 
+  test('PGLite 迁移前完成冷备和恢复验证，失败时显示备份而不自动覆盖', () => {
+    expect(main).toContain('async function ensurePgliteUpgradeBackup');
+    expect(main).toContain("'pglite-backup',");
+    expect(main).toContain("'create',");
+    expect(main).toContain("'--target-version', app.getVersion()");
+    expect(main).toMatch(
+      /if \(setup\.current\.engine === 'pglite'\) \{\s+await ensurePgliteUpgradeBackup\(setup\.current\.databasePath\);[\s\S]*?return true;/,
+    );
+    expect(main).toMatch(
+      /migrationRequired = needsDesktopMigration[\s\S]*?saved\.config\.engine === 'pglite'[\s\S]*?ensurePgliteUpgradeBackup\(saved\.config\.database_path\)[\s\S]*?needsEmbeddingDimensionProbe/,
+    );
+    expect(main).toContain('升级前冷备已验证并保留');
+    expect(main).toContain('PMBrain 不会自动覆盖当前数据库');
+    expect(main).toContain("process.platform === 'win32' ? databasePath.toLowerCase() : databasePath");
+    expect(main).toMatch(/pgliteUpgradeBackupByVersion\.has\(key\)[\s\S]*?pendingPgliteUpgradeBackupPath = cached/);
+    expect(main).toMatch(/pendingPgliteUpgradeBackupPath = null;[\s\S]*?runCliChecked\(runtime\(\), \[/);
+  });
+
   test('桌面启动阶段不自动启动 Supervisor、Worker、Dream 或 Autopilot', () => {
     expect(main).not.toMatch(/runCliChecked\(runtime\(\), \[['"]jobs['"], ['"]supervisor['"], ['"]start['"]/);
     expect(main).not.toMatch(/runCliChecked\(runtime\(\), \[['"]worker['"]/);
