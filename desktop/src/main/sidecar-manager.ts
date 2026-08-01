@@ -24,6 +24,7 @@ const NON_RETRYABLE_STARTUP_ERRORS = [
   /\bAborted\(\)/i,
   /database.*(?:busy|in use|locked)/i,
   /lock owner.*alive/i,
+  /Timed out waiting for PGLite lock/i,
   /permission denied/i,
   /EACCES|EPERM/i,
   /migration.*failed/i,

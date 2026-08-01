@@ -243,6 +243,70 @@ describe('resolveSchemaEmbeddingDim', () => {
     if (!got.ok) expect(got.error).toMatch(/unknown provider/i);
   });
 
+  // ── Ollama per-model dims (model_dims) ──────────────────────────────
+  // 背景（2026-07-31 发布测试实测）：ollama recipe 只有一个 default_dims=768
+  // （nomic-embed-text 的维度），导致新用户选 qwen3-embedding:0.6b（真实
+  // 1024 维）时两头堵——显式传 1024 被「不支持自定义维度」拒绝，不传则按
+  // 768 建库、embed 时维度不匹配。per-model dims 声明后两条路都必须通。
+  test('Ollama qwen3-embedding:0.6b explicit 1024 accepted (its true native dim)', () => {
+    const got = resolveSchemaEmbeddingDim({
+      embedding_model: 'ollama:qwen3-embedding:0.6b',
+      embedding_dimensions: 1024,
+    });
+    expect(got.ok).toBe(true);
+    if (got.ok) {
+      expect(got.dim).toBe(1024);
+      expect(got.model).toBe('ollama:qwen3-embedding:0.6b');
+    }
+  });
+
+  test('Ollama qwen3-embedding:0.6b without explicit dim resolves to 1024, not recipe default 768', () => {
+    const got = resolveSchemaEmbeddingDim({ embedding_model: 'ollama:qwen3-embedding:0.6b' });
+    expect(got.ok).toBe(true);
+    if (got.ok) {
+      expect(got.dim).toBe(1024);
+      expect(got.recipeDefault).toBe(1024);
+    }
+  });
+
+  test('Ollama qwen3-embedding:8b explicit 4096 accepted', () => {
+    const got = resolveSchemaEmbeddingDim({
+      embedding_model: 'ollama:qwen3-embedding:8b',
+      embedding_dimensions: 4096,
+    });
+    expect(got.ok).toBe(true);
+    if (got.ok) expect(got.dim).toBe(4096);
+  });
+
+  test('Ollama nomic-embed-text stays at 768 (regression guard)', () => {
+    const got = resolveSchemaEmbeddingDim({ embedding_model: 'ollama:nomic-embed-text' });
+    expect(got.ok).toBe(true);
+    if (got.ok) expect(got.dim).toBe(768);
+  });
+
+  test('Ollama mxbai-embed-large resolves to 1024, not 768', () => {
+    const got = resolveSchemaEmbeddingDim({ embedding_model: 'ollama:mxbai-embed-large' });
+    expect(got.ok).toBe(true);
+    if (got.ok) expect(got.dim).toBe(1024);
+  });
+
+  test('Ollama unknown model with explicit dim still rejected (behavior unchanged)', () => {
+    const got = resolveSchemaEmbeddingDim({
+      embedding_model: 'ollama:some-future-model',
+      embedding_dimensions: 1024,
+    });
+    expect(got.ok).toBe(false);
+    if (!got.ok) expect(got.error).toMatch(/does not support custom dimensions/);
+  });
+
+  test('Ollama qwen3-embedding:0.6b wrong explicit dim (4096) rejected', () => {
+    const got = resolveSchemaEmbeddingDim({
+      embedding_model: 'ollama:qwen3-embedding:0.6b',
+      embedding_dimensions: 4096,
+    });
+    expect(got.ok).toBe(false);
+  });
+
   test('missing colon rejected', () => {
     const got = resolveSchemaEmbeddingDim({ embedding_model: 'openai' });
     expect(got.ok).toBe(false);

@@ -266,8 +266,12 @@ async function resolveAIOptions(opts: ResolveAIOptionsArgs): Promise<ResolvedAIO
       );
       process.exit(1);
     }
-    if (recipe?.touchpoints.embedding?.default_dims) {
-      out.embedding_dimensions = recipe.touchpoints.embedding.default_dims;
+    // Per-model native dims win over the touchpoint default (Ollama:
+    // qwen3-embedding:0.6b is 1024, not the nomic-embed-text 768 default).
+    const tp = recipe?.touchpoints.embedding;
+    if (tp) {
+      const modelId = out.embedding_model.split(':').slice(1).join(':');
+      out.embedding_dimensions = tp.model_dims?.[modelId] ?? tp.default_dims;
     }
   }
 
