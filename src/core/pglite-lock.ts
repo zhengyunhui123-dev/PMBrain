@@ -105,18 +105,25 @@ export async function acquireLock(dataDir: string | undefined, opts?: { timeoutM
       // mkdir failed — someone else grabbed it between our check and mkdir
       // This is fine, we'll retry
       if (Date.now() - startTime >= timeoutMs) {
-        // Timeout — report which process holds the lock
+        // Timeout — report which process holds the lock. Never tell the user
+        // to simply delete the lock dir: if the holder is actually alive,
+        // removing it lets a second PGLite process open the same data
+        // directory and the two WASM instances can corrupt the database.
         const lockPath = join(lockDir, LOCK_FILE);
         try {
           const lockData = JSON.parse(readFileSync(lockPath, 'utf-8'));
           throw new Error(
-            `GBrain: Timed out waiting for PGLite lock. Process ${lockData.pid} has held it since ${new Date(lockData.acquired_at).toISOString()} (command: ${lockData.command}). ` +
-            `If that process is dead, remove ${lockDir} and try again.`
+            `GBrain: Timed out waiting for PGLite lock. Process ${lockData.pid} has held it since ${new Date(lockData.acquired_at).toISOString()} (command: ${lockData.command}).\n` +
+            `PMBrain 可能正在运行中（含桌面端托盘中的实例）。请先正常退出 PMBrain，再重试。\n` +
+            `仅当确认进程 ${lockData.pid} 已不存在（可在任务管理器中核实）时，才可删除 ${lockDir} 后重试——` +
+            `在 PMBrain 仍运行时删除锁会让两个进程同时写入数据库，可能造成数据损坏。`
           );
         } catch (readErr) {
           if (readErr instanceof Error && readErr.message.startsWith('GBrain')) throw readErr;
           throw new Error(
-            `GBrain: Timed out waiting for PGLite lock. Remove ${lockDir} and try again.`
+            `GBrain: Timed out waiting for PGLite lock. 请先退出正在运行的 PMBrain（含桌面端托盘中的实例）后重试。\n` +
+            `仅当确认没有任何 PMBrain 进程在运行时，才可删除 ${lockDir} 后重试——` +
+            `在 PMBrain 仍运行时删除锁会让两个进程同时写入数据库，可能造成数据损坏。`
           );
         }
       }
