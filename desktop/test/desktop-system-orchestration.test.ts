@@ -30,13 +30,49 @@ describe('desktop system orchestration contracts', () => {
     expect(main).not.toContain('shell.openPath(logger.directory)');
   });
 
-  test('prepares Postgres before migrations and sidecar startup paths', () => {
+  test('Postgres 用户升级时仍先准备数据库并执行原有迁移流程', () => {
     expect(main).toMatch(/async function applySetupOnce[\s\S]*?await ensureRuntimeReady\(\);[\s\S]*?const hadRunningSidecar[\s\S]*?saved = saveSetup\(payload\);/);
     expect(main).toMatch(
-      /await prepareConfiguredDatabase\(\);\s+const migrationRequired = await migrateConfiguredInstallation\(\);/,
+      /await prepareConfiguredDatabase\(\);\s+const setup = getSetupInfo\(\);\s+const migrationRequired = await migrateConfiguredInstallation\(\);/,
     );
     expect(main).toMatch(/saved = saveSetup\(payload\);\s+\} catch \(error\) \{\s+if \(hadRunningSidecar\) await startSidecar\(false\)[\s\S]*?throw error;\s+\}\s+try \{\s+await prepareConfiguredDatabase\(\);/);
     expect(main).toContain('saveDetectedDockerContainerName');
+  });
+
+  test('PGLite 用户升级时只由 sidecar 打开数据库，健康后才记录升级完成', () => {
+    expect(main).toContain("setup.current.engine === 'pglite'");
+    expect(main).toMatch(
+      /async function migrateConfiguredInstallation[\s\S]*?if \(setup\.current\.engine === 'pglite'\)[\s\S]*?return true;[\s\S]*?runCliChecked\(runtime\(\), DESKTOP_MIGRATION_ARGS\)/,
+    );
+    expect(main).toMatch(
+      /await startSidecar\(false\);[\s\S]*?if \(migrationRequired && setup\.current\.engine === 'pglite'\)[\s\S]*?markDesktopMigration\(app\.getVersion\(\)\)/,
+    );
+    expect(main).toContain('PGLite 数据库路径：${databasePath}');
+  });
+
+  test('PGLite 迁移前完成冷备和恢复验证，失败时显示备份而不自动覆盖', () => {
+    expect(main).toContain('async function ensurePgliteUpgradeBackup');
+    expect(main).toContain("'pglite-backup',");
+    expect(main).toContain("'create',");
+    expect(main).toContain("'--target-version', app.getVersion()");
+    expect(main).toMatch(
+      /if \(setup\.current\.engine === 'pglite'\) \{\s+await ensurePgliteUpgradeBackup\(setup\.current\.databasePath\);[\s\S]*?return true;/,
+    );
+    expect(main).toMatch(
+      /migrationRequired = needsDesktopMigration[\s\S]*?saved\.config\.engine === 'pglite'[\s\S]*?ensurePgliteUpgradeBackup\(saved\.config\.database_path\)[\s\S]*?needsEmbeddingDimensionProbe/,
+    );
+    expect(main).toContain('升级前冷备已验证并保留');
+    expect(main).toContain('PMBrain 不会自动覆盖当前数据库');
+    expect(main).toContain("process.platform === 'win32' ? databasePath.toLowerCase() : databasePath");
+    expect(main).toMatch(/pgliteUpgradeBackupByVersion\.has\(key\)[\s\S]*?pendingPgliteUpgradeBackupPath = cached/);
+    expect(main).toMatch(/pendingPgliteUpgradeBackupPath = null;[\s\S]*?runCliChecked\(runtime\(\), \[/);
+  });
+
+  test('桌面启动阶段不自动启动 Supervisor、Worker、Dream 或 Autopilot', () => {
+    expect(main).not.toMatch(/runCliChecked\(runtime\(\), \[['"]jobs['"], ['"]supervisor['"], ['"]start['"]/);
+    expect(main).not.toMatch(/runCliChecked\(runtime\(\), \[['"]worker['"]/);
+    expect(main).not.toMatch(/runCliChecked\(runtime\(\), \[['"]dream['"]/);
+    expect(main).not.toMatch(/runCliChecked\(runtime\(\), \[['"]autopilot['"]/);
   });
 
   test('wires native system settings, tray behavior, autostart, and shared credentials through IPC', () => {
@@ -105,16 +141,17 @@ describe('desktop system orchestration contracts', () => {
   test('never repairs or clears vectors during ordinary desktop startup', () => {
     expect(main).not.toContain('reconcileConfiguredEmbeddingIndex');
     expect(main).toMatch(
-      /const migrationRequired = await migrateConfiguredInstallation\(\);[\s\S]*?if \(migrationRequired\) markDesktopMigration[\s\S]*?startSidecar\(false\)/,
+      /const migrationRequired = await migrateConfiguredInstallation\(\);[\s\S]*?setup\.current\.engine !== 'pglite'[\s\S]*?startSidecar\(false\)[\s\S]*?setup\.current\.engine === 'pglite'/,
     );
   });
 
-  test('shows truthful model-save stages and only migrates after a desktop version change', () => {
+  test('模型保存时仅 Postgres 独立执行迁移，PGLite 等 sidecar 健康后完成升级记录', () => {
     expect(main).toContain("title: '正在验证向量模型'");
     expect(main).toContain("title: '正在保存模型配置'");
     expect(main).toContain("title: '正在准备搜索索引'");
-    expect(main).toContain('const migrationRequired = needsDesktopMigration(app.getVersion())');
-    expect(main).toMatch(/if \(migrationRequired\) \{[\s\S]*?runCliChecked\(runtime\(\), DESKTOP_MIGRATION_ARGS\)/);
+    expect(main).toContain('migrationRequired = needsDesktopMigration(app.getVersion())');
+    expect(main).toMatch(/if \(migrationRequired && saved\.config\.engine !== 'pglite'\) \{[\s\S]*?runCliChecked\(runtime\(\), DESKTOP_MIGRATION_ARGS\)/);
+    expect(main).toMatch(/await startSidecar\(false\);[\s\S]*?if \(migrationRequired && saved\.config\.engine === 'pglite'\)/);
     expect(main).not.toContain("title: '正在应用数据库迁移'");
   });
 

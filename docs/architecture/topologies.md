@@ -285,16 +285,17 @@ gbrain init --pglite \
 `voyage-code-3` 是 Voyage 的代码专用嵌入模型，具有
 高于其通用 flaghips 的 head-to-head 数字，用于代码检索
 ([voyageai.com/blog](https://voyageai.com/blog))。对于已经初始化的
-大脑，使用单命令擦除和重新初始化进行切换（保留每个
-其他配置字段）：
+PMBrain，先创建并验证 PGLite 冷备，再切换模型并仅重建代码检索的
+派生数据；不要擦除整个数据库：
 
 ```bash
-gbrain reinit-pglite --embedding-model voyage:voyage-code-3 --embedding-dimensions 1024
-gbrain reindex --code --yes
+pmbrain pglite-backup create --target-version manual
+pmbrain config set embedding_model voyage:voyage-code-3
+pmbrain reindex --code --yes
 ```
 
-（`gbrain config set embedding_model` 从 v0.37.11.0 开始被拒绝，因为
-schema 列必须随配置一起调整大小。）
+模型切换流程只重建允许重建的向量、缓存和索引；页面、来源、标签、
+权限以及未知表默认受保护。
 
 `gbrain reindex --code` 会在配置的
 嵌入模型不是代码调优时打印建议。使用

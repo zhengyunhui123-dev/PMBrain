@@ -218,4 +218,39 @@ describe('PGLiteEngine.disconnect() — v0.41.8.0 lifecycle invariants', () => {
       rmSync(dataDir, { recursive: true, force: true });
     }
   });
+
+
+  test('FILE RECONNECT reopens the same database and preserves stored rows', async () => {
+    const dataDir = newTempDataDir();
+    try {
+      const engine = new PGLiteEngine();
+      await engine.connect({ engine: 'pglite', database_path: dataDir });
+      await engine.executeRaw('CREATE TABLE reconnect_probe (value TEXT NOT NULL)');
+      await engine.executeRaw("INSERT INTO reconnect_probe (value) VALUES ('preserved')");
+
+      await engine.reconnect();
+
+      const rows = await engine.executeRaw<{ value: string }>('SELECT value FROM reconnect_probe');
+      expect(rows).toEqual([{ value: 'preserved' }]);
+      await engine.disconnect();
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test('IN-MEMORY RECONNECT is a no-op so volatile rows are not discarded', async () => {
+    const engine = new PGLiteEngine();
+    await engine.connect({ engine: 'pglite' });
+    try {
+      await engine.executeRaw('CREATE TABLE reconnect_memory_probe (value INTEGER NOT NULL)');
+      await engine.executeRaw('INSERT INTO reconnect_memory_probe (value) VALUES (7)');
+
+      await engine.reconnect();
+
+      const rows = await engine.executeRaw<{ value: number }>('SELECT value FROM reconnect_memory_probe');
+      expect(rows).toEqual([{ value: 7 }]);
+    } finally {
+      await engine.disconnect();
+    }
+  });
 });

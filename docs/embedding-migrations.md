@@ -20,42 +20,39 @@ GBrain 在 `content_chunks` 上的固定维度 `vector(N)` 列中存储嵌入。
 
 **PGLite 无法 `ALTER COLUMN TYPE vector(N)`。** pgvector 作为嵌入式 WASM 提供，而不是本机扩展，WASM 构建以 `could not access file "$libdir/vector"` 拒绝列类型更改。下面的 SQL 配方仅适用于 Postgres。
 
-在 PGLite 上工作的路径是**擦除并重新初始化**。v0.37 提供了一个单命令包装器：
+PMBrain 不采用 GBrain 的“整库擦除后从 Markdown 重新同步”路径。PMBrain 数据库还包含 GUI 创建知识、来源、标签、回收站、权限和审核状态，这些内容不一定存在于 Markdown/Git 中。
+
+先创建并验证升级冷备：
 
 ```bash
-gbrain reinit-pglite \
-  --embedding-model zeroentropyai:zembed-1 \
-  --embedding-dimensions 1280
+pmbrain pglite-backup create \
+  --target-version manual
 ```
 
-这将现有 brain 备份到 `<path>.bak`，使用新标志运行 `gbrain init`（保留 `~/.gbrain/config.json` 中的每个其他字段），并重新同步 brain 仓库。添加 `--no-sync` 以跳过重新同步，`--yes` 以跳过 TTY 确认，`--json` 以获取结构化输出。
+该命令只在取得单目录独占迁移锁后复制数据库。源目录与冷备进行文件数、字节数和 SHA-256 校验；随后再复制出一次性恢复副本，实际打开它并读取 schema 版本和关键持久表计数。冷备本体不会被打开或迁移。备份保存在当前生效配置目录（默认新安装为 `~/.pmbrain`，兼容旧安装和 `PMBRAIN_HOME` / `GBRAIN_HOME` 覆盖）：
 
-手动等效：
+```text
+<config-dir>/backups/pglite-upgrades/<timestamp>-<target-version>-<id>/
+  brain.pglite/
+  manifest.json
+```
+
+可随时重新验证：
 
 ```bash
-# 1. 备份现有 brain（以防你想回滚）。
-mv ~/.gbrain/brain.pglite ~/.gbrain/brain.pglite.bak
-
-# 2. 使用新模型 + 维度重新初始化。`gbrain init` 写入
-#    调整为新 dim 的 schema，并且（从 v0.37 开始）保留
-#    ~/.gbrain/config.json 中的每个其他字段（聊天模型、
-#    扩展模型、API 密钥）。
-gbrain init --pglite \
-  --embedding-model zeroentropyai:zembed-1 \
-  --embedding-dimensions 1280
-
-# 3. 重新导入你的 brain 仓库。`gbrain sync` 从磁盘读取 brain 仓库
-#    并重新创建页面行。
-gbrain sync
-
-# 4. 重新嵌入。嵌入管道现在使用新模型和
-#    列接受新 dim。
-gbrain embed --stale
+pmbrain pglite-backup verify --backup <backup-directory>
 ```
 
-如果你的 brain 仓库足够大，从磁盘重新同步很昂贵（>50K 页面），请参阅下面的 Postgres 部分 — 临时迁移到 Postgres 让你运行 SQL 配方，然后迁移回 PGLite。
+验证完成后，只重建明确列入派生数据白名单的向量和缓存：
 
-`GBRAIN_HOME` 用户：替换活动数据库路径（或使用 `gbrain config get database_path` 查找它）。
+```bash
+pmbrain models align-embedding-dimension --yes
+pmbrain embed --stale
+```
+
+`models align-embedding-dimension` 保留页面、chunk 文本、来源、标签、权限、审核状态和其他未知表，只重建向量列、派生 embedding、查询缓存和相关索引。未知数据默认归类为受保护数据。
+
+桌面端在检测到 PGLite 需要升级时会自动执行同一冷备流程；备份验证通过后才启动唯一 sidecar 迁移。迁移失败时保留数据库、备份和日志，不自动覆盖。旧 `reinit-pglite` 命令在 PMBrain 中保留为安全拒绝入口，不再移动或擦除整个数据库。
 
 ## Postgres（Supabase / 自托管）
 
@@ -102,9 +99,9 @@ gbrain embed --stale
 
 v0.37 之前的文档推荐 `gbrain config set embedding_model X` 来切换模型。**这对嵌入管道是无操作。** `config set` 写入 DB 平面；嵌入网关读取文件平面（`~/.gbrain/config.json`）。v0.37 之前的配方提供了谎言，因为契约没有公开。
 
-从 v0.37 开始，`gbrain config set embedding_model` 和 `gbrain config set embedding_dimensions` 拒绝并打印擦除并重新初始化配方。
+PMBrain 中，`config set embedding_model` 和 `config set embedding_dimensions` 会拒绝绕过安全流程的直接修改，并提示使用经过确认的模型切换与派生数据重建路径。
 
-要更改 schema 大小调整字段，请使用 `gbrain init`（PGLite）或 SQL 配方（Postgres）。两者都一起更新文件平面和 schema。
+PGLite 使用 `pmbrain models align-embedding-dimension --yes`；Postgres 使用上面的事务 SQL 配方。两条路径都必须由用户明确确认，不能在普通升级时隐式清空向量。
 
 ## 验证
 

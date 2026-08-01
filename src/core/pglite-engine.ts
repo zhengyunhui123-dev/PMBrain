@@ -153,17 +153,31 @@ export function computeSnapshotSchemaHash(
  * errors). Match the literal `$$bunfs` marker OR ENOENT+pglite.data
  * co-occurrence.
  */
-export type PgliteInitFailure = 'bunfs' | 'windows-aborted' | 'macos-26-3' | 'unknown';
+export type PgliteInitFailure =
+  | 'bunfs'
+  | 'windows-aborted'
+  | 'macos-26-3'
+  | 'permission'
+  | 'corrupt'
+  | 'unknown';
 
-export function classifyPgliteInitError(message: string): PgliteInitFailure {
+// Emscripten may reject with a plain object rather than an Error instance.
+export function stringifyPgliteInitError(err: unknown): string {
+  return String((err as { message?: unknown })?.message ?? err);
+}
+
+export function classifyPgliteInitError(
+  message: string,
+  platform: NodeJS.Platform = process.platform,
+): PgliteInitFailure {
   if (/\$\$bunfs|ENOENT[\s\S]*pglite\.data/i.test(message)) return 'bunfs';
+  if (/58P01|internal_load_library|type "?vector"? does not exist|relation "?content_chunks"? does not exist/i.test(message)) {
+    return 'corrupt';
+  }
+  if (/EACCES|EPERM|permission denied|access is denied/i.test(message)) return 'permission';
   if (/macos.*26\.3/i.test(message)) return 'macos-26-3';
-  if (process.platform === 'win32' && /aborted\(\)|abort/i.test(message)) {
-    return 'windows-aborted';
-  }
-  if (/abort.*runtime|wasm.*runtime/i.test(message)) {
-    return 'macos-26-3';
-  }
+  if (platform === 'win32' && /aborted\(\)|abort/i.test(message)) return 'windows-aborted';
+  if (/abort.*runtime|wasm.*runtime/i.test(message)) return 'macos-26-3';
   return 'unknown';
 }
 
@@ -189,6 +203,7 @@ function resolveLockOwnerType(): 'desktop-sidecar' | 'cli' | 'probe' | 'migratio
 export function buildPgliteInitErrorMessage(
   verdict: PgliteInitFailure,
   original: string,
+  platform: NodeJS.Platform = process.platform,
 ): string {
   const header = 'PGLite failed to initialize its WASM runtime.';
   let hint: string;
@@ -197,17 +212,32 @@ export function buildPgliteInitErrorMessage(
       hint =
         '  This looks like a Bun vfs issue: `/$$bunfs/root` is read-only on\n' +
         '  your system, so PGLite cannot extract its pglite.data WASM payload.\n' +
-        '  Fix: `bun upgrade` (newer Bun mounts the vfs writable). If that\n' +
-        '  does not help, run via Node: `node src/cli.ts` or install pmbrain\n' +
-        '  using the Node-based path. See #1340 for details.';
+        '  Fix: `bun upgrade`. If that does not help, run via Node or use the\n' +
+        '  Node-based PMBrain installation path.';
       break;
     case 'windows-aborted':
       hint =
-        '  On Windows this usually means the selected PGLite directory is an\n' +
-        '  existing or busy database, or the embedded runtime could not reopen\n' +
-        '  it cleanly. Close other PMBrain/GBrain processes and retry, or choose\n' +
-        '  a fresh .pmbrain\\brain.pglite path. Docker Postgres is the safer\n' +
-        '  option for existing large brains.';
+        '  On Windows this means the configured .pmbrain\\brain.pglite database\n' +
+        '  could not be opened. A competing PMBrain process or a failed handoff\n' +
+        '  during startup is more common than data corruption. PMBrain does not\n' +
+        '  delete, replace, or rebuild the database automatically. Close other\n' +
+        '  PMBrain/GBrain processes (including the desktop tray) and retry once.\n' +
+        '  Windows 的 Aborted() 不能一律判定为损坏；若仍失败，请保留数据库路径、\n' +
+        '  初始化阶段和 sidecar stderr，PMBrain 不会自动删除或重建数据库。';
+      break;
+    case 'permission':
+      hint =
+        '  数据库路径没有可用的读写权限，或被安全软件/同步软件阻止。\n' +
+        '  请检查配置的数据库路径、父目录权限和磁盘状态；PMBrain 不会改用其他路径，\n' +
+        '  也不会自动删除或重建该数据库。';
+      break;
+    case 'corrupt':
+      hint =
+        '  PGLite 数据库疑似损坏：目录中的 catalog、pgvector 扩展或核心表无法加载。\n' +
+        '  PMBrain 不会自动删除、替换或原地重建数据库。请停止重复启动，然后：\n' +
+        '    1. 备份完整的 brain.pglite 目录；\n' +
+        '    2. 优先从可用备份恢复；\n' +
+        '    3. 运行 `pmbrain doctor` 保存诊断结果，再决定是否执行显式的数据恢复。';
       break;
     case 'macos-26-3':
       hint =
@@ -216,18 +246,34 @@ export function buildPgliteInitErrorMessage(
       break;
     case 'unknown':
     default:
-      hint =
-        '  Run `pmbrain doctor` for a full diagnosis. If this happened in the\n' +
-        '  desktop setup wizard, choose Docker Postgres or a fresh PGLite path.';
+      hint = platform === 'darwin'
+        ? '  Possible cause: the macOS 26.3 WASM bug. Run `pmbrain doctor` and keep the database path and original error.'
+        : '  无法自动判定原因。请运行 `pmbrain doctor`，并保留数据库路径、启动阶段和原始错误；PMBrain 不会自动删除或重建数据库。';
       break;
   }
   return `${header}\n${hint}\n  Original error: ${original}`;
 }
 
+/**
+ * PGLite's Emscripten runtime uses process.exitCode as an internal status
+ * channel. Contain that global side effect around create() so a successful
+ * embedded database open cannot make the surrounding PMBrain process fail.
+ */
+async function preservingProcessExitCode<T>(fn: () => Promise<T>): Promise<T> {
+  const previous = process.exitCode;
+  try {
+    return await fn();
+  } finally {
+    process.exitCode = typeof previous === 'number' || typeof previous === 'string'
+      ? previous
+      : 0;
+  }
+}
 export class PGLiteEngine implements BrainEngine {
   readonly kind = 'pglite' as const;
   private _db: PGLiteDB | null = null;
   private _lock: LockHandle | null = null;
+  private _savedConfig: EngineConfig | null = null;
   // Tier 3: when GBRAIN_PGLITE_SNAPSHOT loaded a post-initSchema state into
   // PGlite.create(loadDataDir), initSchema is a no-op (schema is already
   // present + migrations already applied). Saves ~1-3s per fresh test PGLite.
@@ -240,6 +286,7 @@ export class PGLiteEngine implements BrainEngine {
 
   // Lifecycle
   async connect(config: EngineConfig): Promise<void> {
+    this._savedConfig = config;
     const dataDir = config.database_path || undefined; // undefined = in-memory
 
     // Acquire file lock to prevent concurrent PGLite access (crashes with Aborted())
@@ -276,11 +323,13 @@ export class PGLiteEngine implements BrainEngine {
     }
 
     try {
-      this._db = await PGlite.create({
-        dataDir,
-        loadDataDir,
-        extensions: { vector, pg_trgm },
-      });
+      this._db = await preservingProcessExitCode(() =>
+        PGlite.create({
+          dataDir,
+          loadDataDir,
+          extensions: { vector, pg_trgm },
+        }),
+      );
     } catch (err) {
       // v0.13.1: any PGLite.create() failure becomes actionable. v0.41.8.0
       // (#1340): the previous error hint hardcoded the macOS 26.3 link, but
@@ -288,8 +337,12 @@ export class PGLiteEngine implements BrainEngine {
       // read-only on older macOS + Bun 1.3.x, so PGLite can't extract its
       // pglite.data WASM payload). Route the hint by failure shape so
       // users get the right next step.
+<<<<<<< HEAD
       // Always preserve the original cause for diagnostics / UI.
       const original = err instanceof Error ? err.message : String(err);
+=======
+      const original = stringifyPgliteInitError(err);
+>>>>>>> 6a2c6ad171d97368c36050d97f69297926787ea9
       const verdict = classifyPgliteInitError(original);
       const wrapped = new PgliteOpenError(buildPgliteInitErrorMessage(verdict, original), {
         databasePath: dataDir ?? null,
@@ -333,6 +386,17 @@ export class PGLiteEngine implements BrainEngine {
     }
   }
 
+  /**
+   * Reopen the same file-backed database after a recoverable connection drop.
+   * In-memory PGLite is intentionally a no-op because reopening would discard it.
+   */
+  async reconnect(_ctx?: { error?: unknown }): Promise<void> {
+    if (!this._savedConfig) return;
+    if (!this._savedConfig.database_path) return;
+    const config = this._savedConfig;
+    await this.disconnect();
+    await this.connect(config);
+  }
   async initSchema(): Promise<void> {
     // Tier 3: snapshot was loaded into PGlite — schema + migrations already
     // applied. Nothing to do. Returns immediately.
@@ -378,7 +442,7 @@ export class PGLiteEngine implements BrainEngine {
       if (actualDim !== null && actualDim !== dims) {
         process.stderr.write(
           `  ⚠️  检测到 embedding 列维度不匹配：DB 为 vector(${actualDim})，配置为 ${dims}。\n` +
-          `  请运行：gbrain models align-embedding-dimension --yes\n`
+          `  不会原地修改 vector(N)。确认备份后，请显式运行：pmbrain models align-embedding-dimension --yes\n`
         );
       }
     }

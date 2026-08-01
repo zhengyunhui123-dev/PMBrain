@@ -16,6 +16,7 @@ describe('cross-platform desktop release gates', () => {
     expect(releaseWorkflow).toContain('PMBrain-macOS-arm64-*.dmg');
     expect(releaseWorkflow).toContain('PMBrain-macOS-arm64-*.zip');
     expect(releaseWorkflow).toContain('PMBrain-Linux-x64-*.AppImage');
+    expect(releaseWorkflow).not.toContain('PMBrain-Linux-x64-*.AppImage.blockmap');
     expect(releaseWorkflow).toContain('latest-mac.yml');
     expect(releaseWorkflow).toContain('latest-linux.yml');
   });

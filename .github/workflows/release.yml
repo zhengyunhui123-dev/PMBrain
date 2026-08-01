@@ -71,7 +71,6 @@ jobs:
             build_script: build:linux
             artifact_paths: |
               desktop/dist/PMBrain-Linux-x64-*.AppImage
-              desktop/dist/PMBrain-Linux-x64-*.AppImage.blockmap
               desktop/dist/latest-linux.yml
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
@@ -132,6 +131,5 @@ jobs:
             artifacts/pmbrain-desktop-macos/PMBrain-macOS-arm64-*.zip.blockmap
             artifacts/pmbrain-desktop-macos/latest-mac.yml
             artifacts/pmbrain-desktop-linux/PMBrain-Linux-x64-*.AppImage
-            artifacts/pmbrain-desktop-linux/PMBrain-Linux-x64-*.AppImage.blockmap
             artifacts/pmbrain-desktop-linux/latest-linux.yml
           generate_release_notes: true

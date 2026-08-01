@@ -11,10 +11,20 @@
 import { describe, test, expect, beforeAll, afterAll, beforeEach } from 'bun:test';
 import { PGLiteEngine } from '../src/core/pglite-engine.ts';
 import { runPhaseConsolidate } from '../src/core/cycle/phases/consolidate.ts';
+import { configureGateway, resetGateway } from '../src/core/ai/gateway.ts';
 
 let engine: PGLiteEngine;
 
 beforeAll(async () => {
+  // The fixtures below intentionally use legacy 1536-d vectors. Pin the
+  // schema width before init so another test file cannot leak ZE/1280 into
+  // this file through the process-global gateway.
+  resetGateway();
+  configureGateway({
+    embedding_model: 'openai:text-embedding-3-large',
+    embedding_dimensions: 1536,
+    env: { OPENAI_API_KEY: 'sk-fake' },
+  });
   engine = new PGLiteEngine();
   await engine.connect({});
   await engine.initSchema();
@@ -22,6 +32,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await engine.disconnect();
+  resetGateway();
 });
 
 beforeEach(async () => {

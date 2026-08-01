@@ -16,7 +16,12 @@
  */
 
 import { describe, test, expect } from 'bun:test';
-import { HEALTH_TIMEOUT_MS, probeHealth, probeLiveness } from '../src/commands/serve-http.ts';
+import {
+  HEALTH_TIMEOUT_MS,
+  probeHealth,
+  probeLiveness,
+  probeSidecarLiveness,
+} from '../src/commands/serve-http.ts';
 import type { BrainEngine } from '../src/core/engine.ts';
 import type { SqlQuery } from '../src/core/oauth-provider.ts';
 
@@ -89,6 +94,21 @@ describe('probeHealth', () => {
 });
 
 describe('probeLiveness (v0.28.10)', () => {
+  test('PGLite 后台导入独占数据库时服务仍存活，并明确返回忙碌状态', async () => {
+    const sql = makeMockSql(() => Promise.reject(new Error('should not query while busy')));
+    const result = await probeSidecarLiveness(sql, 'pglite', '1.1.82', true, 100);
+
+    expect(result.ok).toBe(true);
+    expect(result.status).toBe(200);
+    if (result.ok) {
+      expect(result.body).toMatchObject({
+        status: 'busy',
+        engine: 'pglite',
+        reason: 'exclusive_background_run',
+      });
+    }
+  });
+
   test('happy path: returns 200 + status:ok with NO engine-stats fields', async () => {
     const sql = makeMockSql(async () => [{ '?column?': 1 }]);
     const result = await probeLiveness(sql, 'postgres', '0.28.10', 100);

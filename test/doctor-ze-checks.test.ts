@@ -136,8 +136,13 @@ describe('checkEmbeddingWidthConsistency', () => {
     const check = await checkEmbeddingWidthConsistency(engine);
     expect(check.status).toBe('warn');
     expect(check.message).toContain('mismatch');
-    // v0.37 hint points at gbrain init (the path that works), not config set.
-    expect(check.message).toContain('gbrain init');
+    // PMBrain protects the whole file database: create and verify a cold
+    // backup, rebuild only allow-listed derived vectors, then re-embed stale
+    // chunks. Whole-database init/reinit must never be the suggested fix.
+    expect(check.message).toContain('pglite-backup create');
+    expect(check.message).toContain('align-embedding-dimension --yes');
+    expect(check.message).toContain('embed --stale');
+    expect(check.message).not.toContain('gbrain init');
   });
 
   test('gateway unconfigured: skips with ok', async () => {

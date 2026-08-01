@@ -1,5 +1,95 @@
 # Bug 修复台账
 
+## 2026-08-01 修复主干 CI 漂移并阻止本地数据库与生成物再次入库
+
+- 时间：2026-08-01
+- 版本号：PMBrain 1.1.91；Desktop 1.1.2
+- 标题：同步 PGLite 安全提示测试、LLM 索引与仓库卫生守卫
+- 描述：PGLite 冷备与生命周期改造合入后，Test 工作流仍保留两条旧结构断言，分别要求维度冲突提示继续推荐整库 `gbrain init`、要求 `PGlite.create` 直接赋值；`cycle-consolidate` 的 1536 维固定向量测试也未隔离进程级网关，受同分片 ZE/1280 配置污染。同时 `llms.txt`/`llms-full.txt` 未随文档更新重新生成。主干还误提交了 968 个约 39 MB 的 `.tmp-pglite-reopen-test/brain.pglite` 数据库文件，并继续跟踪本地 `.mcp.json` 与 `context/` 调试记录。Release 实跑另发现 electron-builder 将 Linux `${arch}` 渲染为 `x86_64`，与校验和上传统一使用的 `x64` 文件名不一致，并缺少 Linux `desktopName` 关联；修正命名后又发现 AppImage 的 blockmap 实际嵌入包内，不会生成工作流原先要求的外部 `.AppImage.blockmap`。
+- 是否完成：是
+- 最终结果：测试断言改为验证“恢复验证冷备 → 仅重建派生向量 → stale 重嵌入”的现行安全流程，并允许 `preservingProcessExitCode` 包装 PGlite 创建；1536 维 consolidate 用例在建表前显式固定维度并在结束后恢复网关，消除跨文件污染；LLM 索引已由生成器重新同步。PGlite 临时数据库、本地 MCP 配置和调试上下文只从 Git 跟踪移除，本机原件保持不变；`.gitignore` 新增 `.pmbrain/`、`*.pglite/`、临时 PGlite 目录和异常 `.env` 后缀保护。新增仓库卫生检查并接入 `verify`，即使强制添加也会拒绝本地认证配置、数据库、日志、桌面 out/dist 和安装产物。Linux AppImage 固定使用 `x64` 合同命名并同步 `PMBrain.desktop`，桌面版本递增至 1.1.2；Release 仅上传 AppImage 与 `latest-linux.yml`，接受 electron-builder 的包内嵌入 blockmap，不再等待不存在的外部 sidecar。定向回归、仓库卫生、PGLite engine、doctor、桌面跨平台 runtime 合同及类型检查通过；Linux/macOS 安装包由 Release 的 build-only 工作流执行真实平台构建与包内 PGlite/Canvas/架构/更新元数据校验。
+
+## 2026-08-01 修复 PGLite 升级迁移缺少可验证冷备与整库重建边界不清
+
+- 时间：2026-08-01
+- 版本号：PMBrain 1.1.90；PMBrain Desktop 1.1.1
+- 标题：PGLite 升级前冷备、恢复验证与派生数据可重建白名单
+- 描述：老用户升级桌面端并执行 PGLite 兼容迁移前没有强制恢复点；上游 GBrain 的整库重建路径又以 Markdown/Git 为唯一真源，不适用于还保存 GUI 创建知识、来源、标签、回收站、权限和审核状态的 PMBrain。迁移失败时既缺少字节级备份校验和实际恢复打开验证，也可能继续向用户推荐整库擦除。
+- 是否完成：是
+- 最终结果：桌面端只在确认 sidecar 已停止并取得单目录独占迁移锁后创建升级冷备；源目录与冷备按文件数、字节数和 SHA-256 完整核对，再从冷备复制一次性恢复副本，实际打开并检查 schema 版本与受保护表计数，验证通过后才允许唯一 sidecar 执行迁移和健康检查。同一数据库同一目标版本复用并重新验证第一份升级前备份，活进程锁、符号链接、目录互相嵌套和备份篡改均安全拒绝；失败保留活动库、冷备和日志，不自动覆盖或恢复。数据策略采用默认保护、显式派生白名单，只允许重建 chunk 向量、facts 向量、查询缓存和检索索引；旧 `reinit-pglite` 保留为明确拒绝入口，不再移动或擦除整库。PGLite 冷备恢复 6/6、向量迁移 E2E 6/6、Postgres bootstrap 2/2、桌面全套 158/158、slow 41/41、heavy 6/6 及两端 typecheck 通过；verify 27/29，剩余为本机 WASM 符号检查和私有 skill 清单漂移。标准单元聚合在 Windows Git Bash 下 4 个分片均触发 1500 秒统一上限，串行阶段另保留 4 个既有环境敏感失败文件，因此不报告全量通过。桌面生产资源与分发 sidecar 已构建并核实包含新命令和提示；Windows 安装包仍由用户执行 `bun run build:win`。
+
+## 2026-08-01 修复 PGLite 多进程持有、初始化误报与文件库断线恢复
+
+- 时间：2026-08-01
+- 版本号：PMBrain 1.1.89；PMBrain Desktop 1.1.0
+- 标题：PGLite 单一持有者锁、分阶段故障分类、显式生命周期与兼容迁移保护
+- 描述：老用户升级桌面端或 GUI 时，PGLite 的活进程锁缺少心跳、角色和不可伪造的 owner token；损坏或不完整的锁元数据可能被当作陈旧锁清理；初始化失败又容易统一显示 Aborted()，无法区分持有冲突、权限、WASM 运行时和数据库损坏。文件数据库也缺少与 Postgres 对齐的 reconnect，用户无法明确判断故障发生在哪一阶段。
+- 是否完成：是
+- 最终结果：沿用 GBrain P0 的单目录单持有者原则并按 PMBrain 数据保护边界收紧：锁记录新增 PID、角色、心跳时间和随机 owner token，活 PID 无论心跳是否延迟都绝不抢占，释放锁前必须核验 token；锁元数据缺失、损坏或 PID 不可验证时安全阻断且不自动删除。桌面 sidecar 显式标记为 desktop-sidecar，启动预检显示 PID、角色、心跳、命令和数据库路径。PGLite 初始化现在区分 Bun vfs、Windows Aborted、权限、macOS WASM、catalog/pgvector 损坏和未知错误，并明确不会自动删库或重建；文件库 reconnect 会先完成 close→释放锁，再重开同一目录，内存库保持 no-op。保留既有 forward-reference bootstrap → schema 兼容引导 → 版本迁移顺序和显式向量维度确认，不原地修改 vector(N)，4096 维继续保留完整向量并跳过不兼容 HNSW。所有验证仅使用临时 PGLite 与隔离 pgvector 容器，未读取、修改或复制用户数据库。桌面全套 157/157、锁与分类 33/33、生命周期与 reconnect 7/7、结构/迁移 14/14、向量对齐 7/7、Postgres bootstrap E2E 2/2、根与桌面 typecheck 通过；verify 27/29，剩余两项为本机私有 skill 路由清单漂移和当前环境 wasm 符号检查，完整单元聚合另被 Windows 既有 .sh 子进程测试阻塞。桌面生产资源与 sidecar 已构建并核实包含新锁逻辑；Windows 安装包仍由用户执行 bun run build:win。
+
+## 2026-07-31 修复查询扩展无超时导致 query 长时间挂起
+
+- 时间：2026-07-31
+- 版本号：PMBrain 1.1.88；PMBrain Desktop 1.0.99
+- 标题：查询扩展（expansion）增加 30 秒显式超时与降级提示
+- 描述：发布测试发现：expansion/chat 模型不可用（如 23GB 本地模型尚未加载、内存不足换页）时，`generateObject` 的 HTTP 调用无超时上限，query 主流程长时间挂起，最终 CLI 看门狗以 `engine.disconnect() did not return within 10000ms` 强退，用户看不到任何结果。
+- 是否完成：是
+- 最终结果：`src/core/ai/gateway.ts` 的 `expand()` 增加 `AbortSignal.timeout` 显式超时（默认 30s，`PMBRAIN_EXPANSION_TIMEOUT_MS` 可调），超时后走既有 catch 降级为直接检索，并输出中文提示「查询扩展超时…已降级为直接检索」。实测：1ms 强制超时触发降级且结果正常返回（5 秒完成）；默认超时正常路径无回归；gateway 相关 13 项测试通过，typecheck 通过。不改变检索语义，仅为防御性增强。
+
+## 2026-07-31 修复 PGLite 升级启动时锁冲突导致长时间等待后迁移失败
+
+- 时间：2026-07-31
+- 版本号：PMBrain 1.1.87；PMBrain Desktop 1.0.98
+- 标题：桌面端启动前增加 PGLite 锁预检，锁冲突毫秒级报出可操作指引；锁超时纳入不可重试错误
+- 描述：发布测试实锤「老用户 + PGLite 迁移失败」根因：另一个 PMBrain 进程（旧桌面端残留、托盘实例、命令行 CLI）持有 brain.pglite 锁时，sidecar 需等满 30 秒锁超时，且超时文本不匹配不可重试列表，还会重启重试 3 轮，用户最长等约 2 分钟才看到失败页。
+- 是否完成：是
+- 最终结果：新增 `desktop/src/main/pglite-lock-precheck.ts` 只读预检（无锁/锁损坏/PID 已死均放行，交 sidecar stale 清理；PID 存活且非本进程则拦截并给出持锁 PID、命令行与退出指引），挂入 `startSidecarOnce` 启动链；`sidecar-manager.ts` 不可重试错误列表加入 `Timed out waiting for PGLite lock`，真撞锁时不再无效重启 3 轮。预检不删锁、不结束任何进程（符合数据库保护要求）。新增 `desktop/test/pglite-lock-precheck.test.ts` 7 项全过；desktop 全套 150 通过（仅 QwenPaw 集成测试钩子超时的既有环境敏感失败，与本改动无关）；双 typecheck 通过。
+
+## 2026-07-31 修复 ollama 向量模型维度解析错误导致新用户无法初始化
+
+- 时间：2026-07-31
+- 版本号：PMBrain 1.1.86；PMBrain Desktop 1.0.97
+- 标题：ollama recipe 增加 per-model 维度声明（model_dims），qwen3-embedding 等新模型维度不再被误判为 768
+- 描述：发布测试实测发现 P0 问题：ollama recipe 只有一个 `default_dims=768`（nomic-embed-text 的维度），新用户选 `ollama:qwen3-embedding:0.6b`（真实 1024 维）时两头堵——显式传 1024 被 preflight 以「不支持自定义维度」拒绝（`Refusing to init`），不传则按 768 建库、embed 时模型返回 1024 全部报维度不匹配，无法导入任何内容。
+- 是否完成：是
+- 最终结果：`EmbeddingTouchpoint` 新增 `model_dims` per-model 维度声明；ollama recipe 填入 6 个模型的真实维度（nomic-embed-text=768、mxbai-embed-large=1024、all-minilm=384、qwen3-embedding:0.6b=1024、4b=2560、8b=4096）；`resolveSchemaEmbeddingDim` 与 init 的 `resolveAIOptions` 默认维度推导都优先取 per-model 值。实测：显式 1024 与不传维度两条路径 init 均成功，config 与 schema 一致为 1024，导入 3/3 无错误；PGLite init 路径同步验证。新增 7 个 ollama 维度测试用例，`test/embedding-dim-check.test.ts` 33 项全过，typecheck 通过。其他 provider 行为不变；未知 ollama 模型传显式维度仍按原逻辑拒绝。另记录：`test/init-migrate-only.test.ts` 3 项失败为 Windows 既有测试隔离缺陷（`os.homedir()` 忽略 HOME 环境变量，子进程读到真实生产配置），与本次修改无关，Linux CI 不受影响。
+
+## 2026-07-31 修复 PGLite 锁超时错误文案误导用户手动删锁
+
+- 时间：2026-07-31
+- 版本号：PMBrain 1.1.85；PMBrain Desktop 1.0.96
+- 标题：锁超时提示改为先退出 PMBrain，手动删锁降级为最后手段并附数据损坏警告
+- 描述：发布测试（`项目管理/发布测试-2026-07-31.md`）实测发现：PGLite 锁超时错误直接建议用户 `remove .gbrain-lock`；在持锁进程仍存活时照做，第二个进程能拿到锁，导致两个 PGLite WASM 实例同时写入同一数据目录，存在静默损坏数据库的风险。
+- 是否完成：是
+- 最终结果：`src/core/pglite-lock.ts` 超时错误改为先报告持锁 PID/命令行，引导用户先正常退出 PMBrain（含桌面端托盘实例）再重试；手动删锁仅作为「确认进程已不存在」后的最后手段，并明确警告运行时删锁可致数据损坏。`test/pglite-lock.test.ts` 8 项通过。未改动锁机制本身。
+
+## 2026-07-31 修复 4096 维向量导致 PGLite 第 55 号迁移失败
+
+- 时间：2026-07-31
+- 版本号：PMBrain 1.1.84；PMBrain Desktop 1.0.95
+- 标题：query_cache 大维度向量跳过不兼容 HNSW 索引
+- 描述：第 45 号 facts 迁移修复后，配置 4096 维的用户库继续在第 55 号 `query_cache_search_lite` 迁移创建 HNSW 索引，并因 HALFVEC HNSW 上限为 4000 维退出。
+- 是否完成：是
+- 最终结果：`query_cache.embedding` 保留完整 4096 维列；HALFVEC 超过 4000 维或 VECTOR 超过 2000 维时跳过 HNSW，继续使用精确搜索完成后续迁移。新增 4096 维 PGLite schema 1→113 回归测试；未修改向量模型、现有向量、用户配置、知识库或原始资料。
+
+## 2026-07-31 修复 4096 维向量导致 PGLite 第 45 号迁移失败
+
+- 时间：2026-07-31
+- 版本号：PMBrain 1.1.83；PMBrain Desktop 1.0.94
+- 标题：超出 HNSW 上限时保留完整向量并使用精确搜索
+- 描述：配置 Qwen3-Embedding-8B 等 4096 维向量模型时，第 45 号 `facts_hot_memory_v0_31` 迁移会创建 `HALFVEC(4096)`，随后无条件创建最多支持 4000 维的 HNSW 索引，导致新库和停在 schema 44 的旧库都无法完成迁移，sidecar 因此退出。
+- 是否完成：是
+- 最终结果：保留用户配置的完整向量维度；`HALFVEC` 超过 4000 维或 `VECTOR` 超过 2000 维时不创建不兼容的 HNSW 索引，`facts` 改用精确向量搜索并继续完成后续迁移。未修改向量模型、用户配置、现有向量、知识库或原始资料。本版本先供用户安装确认启动问题，完整测试在确认后执行。
+
+## 2026-07-31 修复 PGLite 升级后无法启动与后台任务断连
+
+- 时间：2026-07-31
+- 版本号：PMBrain 1.1.82；PMBrain Desktop 1.0.93
+- 标题：PGLite 升级改为单一 sidecar 迁移并安全管理后台子进程
+- 描述：桌面版本变化时会先启动独立 `apply-migrations` CLI 打开 PGLite，退出后立即由 sidecar 重开同一目录；导入或 Dream 子进程独占数据库时，管理页又会把正常断连显示为 `PGLite not connected`。数据库类启动错误还可能触发连续 sidecar 恢复，退出和安装更新只结束父进程，无法确认后台子进程树已释放数据库。
+- 是否完成：是
+- 最终结果：PGLite 升级不再在 sidecar 前运行独立迁移 CLI，由唯一 sidecar 在连接生命周期内从 schema 109 迁移到当前 schema 113，健康后才记录桌面迁移完成；Postgres 保留原迁移流程。后台独占任务期间 `/health` 返回存活但忙碌，管理页明确提示完成后自动恢复，并保留任务进度与取消入口。Windows 退出、重启和安装更新会按 sidecar PID 结束整棵子进程树，确认退出后才继续；PGLite 打开、锁、权限及迁移错误首次发生即停止自动重启并显示 stderr 与数据库路径。未删除、替换、重建或修改用户数据库、知识库和原始资料。
+
 ## 2026-07-30 修复桌面本地服务健康检查长期等待
 
 - 时间：2026-07-30

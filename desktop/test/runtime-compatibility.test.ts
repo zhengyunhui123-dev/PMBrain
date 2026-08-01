@@ -20,6 +20,7 @@ const verifierSource = readFileSync(resolve(import.meta.dir, '../scripts/verify-
 const builderConfig = readFileSync(resolve(import.meta.dir, '../electron-builder.yml'), 'utf8');
 const installerSource = readFileSync(resolve(import.meta.dir, '../build/installer.nsh'), 'utf8');
 const desktopPackage = JSON.parse(readFileSync(resolve(import.meta.dir, '../package.json'), 'utf8')) as {
+  desktopName: string;
   scripts: Record<string, string>;
 };
 
@@ -94,7 +95,10 @@ describe('desktop Windows runtime compatibility', () => {
     expect(desktopPackage.scripts['build:mac']).toContain('--arm64');
     expect(desktopPackage.scripts['build:linux']).toContain('--x64');
     expect(builderConfig).toContain('PMBrain-macOS-${arch}-${version}.${ext}');
-    expect(builderConfig).toContain('PMBrain-Linux-${arch}-${version}.${ext}');
+    expect(builderConfig).toContain('PMBrain-Linux-x64-${version}.${ext}');
+    expect(verifierSource).not.toContain('PMBrain-Linux-x64-${desktopPackage.version}.AppImage.blockmap');
+    expect(desktopPackage.desktopName).toBe('PMBrain.desktop');
+    expect(builderConfig).toContain('syncDesktopName: true');
     expect(builderConfig).toContain('canvas-darwin-arm64');
     expect(builderConfig).toContain('canvas-linux-x64-gnu');
   });

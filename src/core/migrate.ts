@@ -2277,6 +2277,23 @@ export const MIGRATIONS: Migration[] = [
       //   VECTOR(n)  → vector_cosine_ops
       //   HALFVEC(n) → halfvec_cosine_ops
       const opclass = useHalfvec ? 'halfvec_cosine_ops' : 'vector_cosine_ops';
+      // pgvector can store wider vectors than its HNSW access method can
+      // index (VECTOR: 2000, HALFVEC: 4000). Qwen3-Embedding-8B uses 4096
+      // dimensions, so keep the full column and fall back to exact search
+      // instead of aborting the entire schema migration.
+      const hnswMaxDimensions = useHalfvec ? 4000 : 2000;
+      const hnswIndexDDL = embeddingDim <= hnswMaxDimensions
+        ? `CREATE INDEX IF NOT EXISTS idx_facts_embedding_hnsw
+             ON facts USING hnsw (embedding ${opclass})
+             WHERE embedding IS NOT NULL AND expired_at IS NULL;`
+        : '';
+      if (!hnswIndexDDL) {
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[v45 facts] ${vecType}(${embeddingDim}) exceeds the ${hnswMaxDimensions}-dimension ` +
+          'HNSW limit; keeping full-width facts embeddings with exact search.',
+        );
+      }
       // FK to sources is added in a separate ALTER TABLE rather than inline
       // on the column. Inline `REFERENCES` worked on PGLite but silently
       // got dropped by postgres.js's `unsafe()` multi-statement path on
@@ -2350,9 +2367,7 @@ export const MIGRATIONS: Migration[] = [
           ON facts(source_id, entity_slug)
           WHERE consolidated_at IS NULL AND expired_at IS NULL;
 
-        CREATE INDEX IF NOT EXISTS idx_facts_embedding_hnsw
-          ON facts USING hnsw (embedding ${opclass})
-          WHERE embedding IS NOT NULL AND expired_at IS NULL;
+        ${hnswIndexDDL}
       `;
 
       await engine.runMigration(40, factsDDL);
@@ -2868,6 +2883,21 @@ export const MIGRATIONS: Migration[] = [
 
       const vecType = useHalfvec ? 'HALFVEC' : 'VECTOR';
       const opclass = useHalfvec ? 'halfvec_cosine_ops' : 'vector_cosine_ops';
+      // Keep the full query embedding column when it exceeds the HNSW limit;
+      // exact scans remain valid and avoid aborting the whole migration.
+      const hnswMaxDimensions = useHalfvec ? 4000 : 2000;
+      const hnswIndexDDL = embeddingDim <= hnswMaxDimensions
+        ? `CREATE INDEX IF NOT EXISTS idx_query_cache_embedding_hnsw
+             ON query_cache USING hnsw (embedding ${opclass})
+             WHERE embedding IS NOT NULL;`
+        : '';
+      if (!hnswIndexDDL) {
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[v55 query_cache] ${vecType}(${embeddingDim}) exceeds the ${hnswMaxDimensions}-dimension ` +
+          'HNSW limit; keeping full-width query embeddings with exact search.',
+        );
+      }
 
       const ddl = `
         CREATE TABLE IF NOT EXISTS query_cache (
@@ -2886,9 +2916,7 @@ export const MIGRATIONS: Migration[] = [
         CREATE INDEX IF NOT EXISTS idx_query_cache_source_created
           ON query_cache(source_id, created_at DESC);
 
-        CREATE INDEX IF NOT EXISTS idx_query_cache_embedding_hnsw
-          ON query_cache USING hnsw (embedding ${opclass})
-          WHERE embedding IS NOT NULL;
+        ${hnswIndexDDL}
       `;
 
       await engine.runMigration(55, ddl);
