@@ -17,6 +17,7 @@ import { describe, test, expect } from 'bun:test';
 import {
   classifyPgliteInitError,
   buildPgliteInitErrorMessage,
+  stringifyPgliteInitError,
 } from '../src/core/pglite-engine.ts';
 
 describe('classifyPgliteInitError', () => {
@@ -37,9 +38,7 @@ describe('classifyPgliteInitError', () => {
 
   test('Windows Aborted() does not route to the macOS hint', () => {
     const msg = 'Aborted(). Build with -sASSERTIONS for more info.';
-    const verdict = classifyPgliteInitError(msg);
-    if (process.platform === 'win32') expect(verdict).toBe('windows-aborted');
-    else expect(verdict).not.toBe('bunfs');
+    expect(classifyPgliteInitError(msg, 'win32')).toBe('windows-aborted');
   });
 
   test('unknown verdict for generic / unrecognized errors', () => {
@@ -57,6 +56,16 @@ describe('classifyPgliteInitError', () => {
 
   test('case-insensitive matching on bunfs marker', () => {
     expect(classifyPgliteInitError('SYSCALL ENOENT on /$$BUNFS/root')).toBe('bunfs');
+  });
+
+
+  test('catalog or pgvector damage is classified before generic Windows Aborted()', () => {
+    const msg = 'Aborted(): code 58P01 in internal_load_library; type "vector" does not exist';
+    expect(classifyPgliteInitError(msg, 'win32')).toBe('corrupt');
+  });
+
+  test('filesystem permission errors have their own verdict', () => {
+    expect(classifyPgliteInitError('EPERM: operation not permitted, open brain.pglite', 'win32')).toBe('permission');
   });
 });
 
@@ -91,6 +100,21 @@ describe('buildPgliteInitErrorMessage — hint routing', () => {
     expect(msg).not.toContain('macOS 26.3');
   });
 
+
+  test('corrupt verdict stops automatic retries and protects the original database', () => {
+    const msg = buildPgliteInitErrorMessage('corrupt', original, 'win32');
+    expect(msg).toContain('疑似损坏');
+    expect(msg).toContain('不会自动删除');
+    expect(msg).toContain('备份');
+    expect(msg).not.toContain('删除 .gbrain-lock');
+  });
+
+  test('permission verdict points at directory access rather than data corruption', () => {
+    const msg = buildPgliteInitErrorMessage('permission', original, 'win32');
+    expect(msg).toContain('权限');
+    expect(msg).toContain('数据库路径');
+    expect(msg).toContain(original);
+  });
   test('unknown verdict surfaces pmbrain doctor AND original error', () => {
     const msg = buildPgliteInitErrorMessage('unknown', original);
     expect(msg).toContain('pmbrain doctor');
@@ -99,10 +123,24 @@ describe('buildPgliteInitErrorMessage — hint routing', () => {
   });
 
   test('all verdicts produce the canonical header line', () => {
-    for (const v of ['bunfs', 'windows-aborted', 'macos-26-3', 'unknown'] as const) {
+    for (const v of ['bunfs', 'windows-aborted', 'macos-26-3', 'permission', 'corrupt', 'unknown'] as const) {
       const msg = buildPgliteInitErrorMessage(v, original);
       expect(msg.startsWith('PGLite failed to initialize its WASM runtime.')).toBe(true);
     }
+  });
+});
+
+
+describe('stringifyPgliteInitError', () => {
+  test('preserves the message from non-Error Emscripten abort objects', () => {
+    expect(stringifyPgliteInitError({ message: 'Aborted(). Build with -sASSERTIONS.' })).toBe(
+      'Aborted(). Build with -sASSERTIONS.',
+    );
+  });
+
+  test('still handles primitive rejection values', () => {
+    expect(stringifyPgliteInitError('raw failure')).toBe('raw failure');
+    expect(stringifyPgliteInitError(null)).toBe('null');
   });
 });
 
