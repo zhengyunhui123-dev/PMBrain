@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { getAdminBrainPageDetail, listAdminBrainPages } from '../src/commands/admin-console.ts';
 import { normalizeThemeMode, readStoredThemeMode, readThemeMode, resolveTheme } from '../admin/src/lib/theme.ts';
@@ -9,6 +9,7 @@ const appSource = readFileSync(join(process.cwd(), 'admin/src/App.tsx'), 'utf8')
 const consoleSource = readFileSync(join(process.cwd(), 'admin/src/pages/Console.tsx'), 'utf8');
 const adminStyles = readFileSync(join(process.cwd(), 'admin/src/index.css'), 'utf8');
 const serveHttpSource = readFileSync(join(process.cwd(), 'src/commands/serve-http.ts'), 'utf8');
+const customerServiceQrPath = join(process.cwd(), 'admin/public/customer-service-qr.png');
 
 describe('Admin GUI update contract', () => {
   test('support modal promotes the developer account and opens a donation QR view', () => {
@@ -17,6 +18,18 @@ describe('Admin GUI update contract', () => {
     expect(appSource).toContain('认为产品还不错的话可进行打赏，你的支持是产品更新的动力。');
     expect(appSource).toContain("setSupportPanel('donate')");
     expect(appSource).toContain('wechat-donation.jpg');
+    expect(appSource).toContain('遇到问题，添加客服好友');
+    expect(appSource).toContain('customer-service-qr.png');
+    expect(appSource).toContain('客服微信二维码');
+    expect(appSource).toContain('产品动态');
+    expect(appSource).toContain('问题处理');
+    expect(appSource).toContain('className="support-contact-grid"');
+    expect(appSource).toContain('className="support-contact-card support-contact-card-official"');
+    expect(appSource).toContain('className="support-contact-card support-contact-card-service"');
+    expect(appSource).not.toContain('className="customer-service-panel"');
+    expect(adminStyles).toContain('.support-contact-grid');
+    expect(adminStyles).toContain('.support-qr-stage');
+    expect(existsSync(customerServiceQrPath)).toBe(true);
   });
   test('theme defaults to system and supports explicit overrides', () => {
     expect(readThemeMode()).toBe('system');

@@ -105,6 +105,7 @@ export function App() {
   const [supportPanel, setSupportPanel] = useState<'wecom' | 'donate' | null>(null);
   const wecomQrSrc = `${import.meta.env.BASE_URL}wecom-helper.jpg`;
   const donationQrSrc = `${import.meta.env.BASE_URL}wechat-donation.jpg`;
+  const customerServiceQrSrc = `${import.meta.env.BASE_URL}customer-service-qr.png`;
   const navSections: Array<{ title: string; items: Array<{ page: Page; label: string; icon: NavIconName }> }> = useMemo(() => [
     { title: '知识', items: [
       { page: 'import', label: '知识工作台', icon: 'workspace' },
@@ -272,24 +273,45 @@ export function App() {
       </main>
       {supportPanel && (
         <div className="modal-overlay" onClick={() => setSupportPanel(null)}>
-          <div className="modal support-modal" onClick={e => e.stopPropagation()}>
-            <button className="drawer-close" onClick={() => setSupportPanel(null)}>&#10005;</button>
+          <div className={`modal support-modal${supportPanel === 'donate' ? ' support-modal-donation' : ''}`} onClick={e => e.stopPropagation()}>
+            <button type="button" className="drawer-close" aria-label="关闭企微助手" onClick={() => setSupportPanel(null)}>&#10005;</button>
             {supportPanel === 'wecom' && (
               <>
-                <div className="modal-title">企微助手</div>
-                <div className="wecom-panel">
-                  <img className="wecom-qr" src={wecomQrSrc} alt="PMBrain 企微助手二维码" />
-                  <div className="wecom-panel-copy">
-                    <h3>扫码关注开发者公众号，获取最新信息</h3>
-                    <span>打开微信扫码关注。</span>
-                    <div className="donation-invite">
-                      <p>认为产品还不错的话可进行打赏，你的支持是产品更新的动力。</p>
-                      <button type="button" className="pm-ghost donation-button" onClick={() => setSupportPanel('donate')}>
-                        <HeartHandshake aria-hidden="true" />
-                        打赏支持
-                      </button>
+                <div className="support-modal-header">
+                  <div className="modal-title">企微助手</div>
+                  <p>关注产品更新，或添加客服协助处理使用问题。</p>
+                </div>
+                <div className="support-contact-grid">
+                  <section className="support-contact-card support-contact-card-official">
+                    <div className="support-contact-copy">
+                      <span className="support-contact-label">产品动态</span>
+                      <h3>扫码关注开发者公众号，获取最新信息</h3>
+                      <p>打开微信扫码关注。</p>
                     </div>
+                    <div className="support-qr-stage">
+                      <img className="support-qr support-qr-official" src={wecomQrSrc} alt="PMBrain 开发者公众号二维码" />
+                    </div>
+                  </section>
+                  <section className="support-contact-card support-contact-card-service">
+                    <div className="support-contact-copy">
+                      <span className="support-contact-label">问题处理</span>
+                      <h3>遇到问题，添加客服好友</h3>
+                      <p>扫码添加客服，协助处理使用问题。</p>
+                    </div>
+                    <div className="support-qr-stage">
+                      <img className="support-qr support-qr-service" src={customerServiceQrSrc} alt="客服微信二维码" />
+                    </div>
+                  </section>
+                </div>
+                <div className="donation-invite">
+                  <div>
+                    <b>愿意支持 PMBrain？</b>
+                      <p>认为产品还不错的话可进行打赏，你的支持是产品更新的动力。</p>
                   </div>
+                  <button type="button" className="pm-ghost donation-button" onClick={() => setSupportPanel('donate')}>
+                    <HeartHandshake aria-hidden="true" />
+                    打赏支持
+                  </button>
                 </div>
               </>
             )}
