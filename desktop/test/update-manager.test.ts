@@ -43,7 +43,7 @@ describe('desktop update manager', () => {
     let stopped = false;
     const states: UpdateState[] = [];
     const manager = new UpdateManager({
-      updater, packaged: true, currentVersion: '1.0.21', previousVersion: '1.0.20', logger,
+      updater, packaged: true, currentVersion: '1.0.21', logger,
       beforeInstall: async () => { stopped = true; },
       onState: (state) => states.push(state),
     });
@@ -62,7 +62,6 @@ describe('desktop update manager', () => {
     expect(initialDownload?.total).toBe(8_000_000);
     expect(states.some((state) => state.phase === 'downloading')).toBe(true);
     expect(manager.currentState.fileName).toBe('PMBrain Desktop-1.0.22.exe');
-    expect(manager.currentState.previousVersion).toBe('1.0.20');
     expect(manager.currentState.transferred).toBe(8_000_000);
     expect(manager.currentState.total).toBe(8_000_000);
     expect(manager.currentState.bytesPerSecond).toBe(1_024_000);

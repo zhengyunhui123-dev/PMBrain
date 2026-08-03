@@ -22,8 +22,8 @@ describe('desktop settings renderer contracts', () => {
     expect(styles).not.toContain('#97e66c');
   });
 
-  test('keeps the five desktop tasks separate and exposes advanced-only controls', () => {
-    for (const panel of ['basic', 'models', 'integrations', 'system', 'updates']) {
+  test('keeps the six desktop tasks separate and exposes advanced-only controls', () => {
+    for (const panel of ['basic', 'models', 'integrations', 'system', 'updates', 'repair']) {
       expect(html).toContain(`data-target="${panel}"`);
       expect(html).toContain(`id="panel-${panel}"`);
     }
@@ -207,13 +207,13 @@ describe('desktop settings renderer contracts', () => {
       'desktop:get-startup-progress',
       'desktop:get-advanced-model-config',
       'desktop:save-advanced-model-config',
-      'desktop:open-previous-release',
+      'desktop:list-pglite-upgrade-backups',
     ]) {
       expect(main).toContain(channel);
       expect(preload).toContain(channel);
     }
     expect(main).toContain('nativeTheme.themeSource');
-    for (const label of ['基础配置', '模型配置', 'MCP 接入', '软件更新', '打开日志目录']) {
+    for (const label of ['基础配置', '模型配置', 'MCP 接入', '软件更新', '软件修复', '打开日志目录']) {
       expect(main).toContain(`label: '${label}'`);
     }
     expect(main).toContain("desktop:show-panel");
@@ -223,7 +223,11 @@ describe('desktop settings renderer contracts', () => {
     expect(builder).toContain('out/renderer/**/*');
     expect(builder).not.toContain('out/**/*');
     expect(renderer).toContain('document.documentElement.dataset.theme');
-    expect(html).toContain('id="previous-version-action"');
+    expect(html).toContain('id="panel-repair"');
+    expect(html).toContain('id="repair-backup-list"');
+    expect(renderer).toContain('listPgliteUpgradeBackups');
+    expect(renderer).not.toContain('previous-version');
+    expect(preload).not.toContain('openPreviousRelease');
   });
 
   test('reports resumable re-embedding instead of claiming a mixed model switch succeeded', () => {

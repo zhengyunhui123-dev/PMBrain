@@ -62,7 +62,23 @@ export type {
   UpdateState,
 };
 
-export type DesktopSettingsPanel = 'basic' | 'models' | 'integrations' | 'updates' | 'system';
+export type DesktopSettingsPanel = 'basic' | 'models' | 'integrations' | 'updates' | 'system' | 'repair';
+
+export interface DesktopPgliteUpgradeBackup {
+  status: 'verified';
+  backupDirectory: string;
+  backupDatabasePath: string;
+  manifestPath: string;
+  createdAt: string;
+  targetVersion: string;
+  sourceSchemaVersion: number | null;
+  recoveryVerifiedAt: string;
+}
+
+export interface DesktopPgliteUpgradeBackups {
+  databasePath: string | null;
+  backups: DesktopPgliteUpgradeBackup[];
+}
 
 export interface DesktopThemeState {
   source: DesktopTheme;
@@ -114,7 +130,7 @@ export interface PMBrainDesktopApi {
   checkUpdates(): Promise<UpdateState | null>;
   downloadUpdate(): Promise<UpdateState | null>;
   installUpdate(): Promise<void>;
-  openPreviousRelease(): Promise<void>;
+  listPgliteUpgradeBackups(): Promise<DesktopPgliteUpgradeBackups>;
   retry(): Promise<void>;
   openLogs(): Promise<string>;
   quit(): Promise<void>;
@@ -178,7 +194,7 @@ const api: PMBrainDesktopApi = {
   checkUpdates: () => ipcRenderer.invoke('desktop:check-updates'),
   downloadUpdate: () => ipcRenderer.invoke('desktop:download-update'),
   installUpdate: () => ipcRenderer.invoke('desktop:install-update'),
-  openPreviousRelease: () => ipcRenderer.invoke('desktop:open-previous-release'),
+  listPgliteUpgradeBackups: () => ipcRenderer.invoke('desktop:list-pglite-upgrade-backups'),
   retry: () => ipcRenderer.invoke('desktop:retry'),
   openLogs: () => ipcRenderer.invoke('desktop:open-logs'),
   quit: () => ipcRenderer.invoke('desktop:quit'),

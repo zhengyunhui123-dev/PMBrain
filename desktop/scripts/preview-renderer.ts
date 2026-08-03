@@ -157,7 +157,7 @@ window.pmbrainDesktop = {
     snippet: '{ "type": "http", "url": "http://192.168.1.20:3131/mcp" }',
   }),
   revokeSharedIntegration: async () => window.pmbrainDesktop.getSharedAccess(),
-  getUpdateState: async () => ({ phase: 'up-to-date', currentVersion: '1.0.55', previousVersion: '1.0.54', message: '当前已经是最新版本' }),
+  getUpdateState: async () => ({ phase: 'up-to-date', currentVersion: '1.0.55', message: '当前已经是最新版本' }),
   onState: () => () => {},
   onUpdateState: () => () => {},
   onShowUpdates: () => () => {},
@@ -191,7 +191,7 @@ window.pmbrainDesktop = {
   openAdmin: async () => {},
   checkUpdates: async () => null,
   installUpdate: async () => {},
-  openPreviousRelease: async () => {},
+  listPgliteUpgradeBackups: async () => ({ databasePath: null, backups: [] }),
   retry: async () => {},
   openLogs: async () => '',
   quit: async () => {}

@@ -81,6 +81,13 @@ export interface PgliteUpgradeBackupResult {
   manifest: PgliteUpgradeBackupManifest;
 }
 
+export interface PgliteUpgradeBackupSummary {
+  backupDirectory: string;
+  backupDatabasePath: string;
+  manifestPath: string;
+  manifest: PgliteUpgradeBackupManifest;
+}
+
 function normalizedPath(value: string): string {
   const full = resolve(value);
   return process.platform === 'win32' ? full.toLowerCase() : full;
@@ -232,10 +239,9 @@ function parseManifest(backupDirectory: string): PgliteUpgradeBackupManifest {
   return parsed;
 }
 
-function listMatchingBackups(
+function listBackupManifests(
   backupRoot: string,
-  databasePath: string,
-  targetVersion: string,
+  databasePath?: string,
 ): Array<{ directory: string; manifest: PgliteUpgradeBackupManifest }> {
   if (!existsSync(backupRoot)) return [];
   const matches: Array<{ directory: string; manifest: PgliteUpgradeBackupManifest }> = [];
@@ -244,15 +250,36 @@ function listMatchingBackups(
     const directory = join(backupRoot, entry.name);
     try {
       const manifest = parseManifest(directory);
-      if (normalizedPath(manifest.source_database_path) === normalizedPath(databasePath)
-          && manifest.target_version === targetVersion) {
-        matches.push({ directory, manifest });
-      }
+      if (databasePath && normalizedPath(manifest.source_database_path) !== normalizedPath(databasePath)) continue;
+      matches.push({ directory, manifest });
     } catch {
       // An unrelated/incomplete backup is never selected as a recovery point.
     }
   }
-  return matches.sort((a, b) => a.manifest.created_at.localeCompare(b.manifest.created_at));
+  return matches.sort((a, b) => b.manifest.created_at.localeCompare(a.manifest.created_at));
+}
+
+export function listPgliteUpgradeBackups(
+  backupRoot: string,
+  databasePath?: string | null,
+): PgliteUpgradeBackupSummary[] {
+  return listBackupManifests(resolve(backupRoot), databasePath ? resolve(databasePath) : undefined)
+    .map(({ directory, manifest }) => ({
+      backupDirectory: directory,
+      backupDatabasePath: manifest.backup_database_path,
+      manifestPath: join(directory, MANIFEST_FILE),
+      manifest,
+    }));
+}
+
+function listMatchingBackups(
+  backupRoot: string,
+  databasePath: string,
+  targetVersion: string,
+): Array<{ directory: string; manifest: PgliteUpgradeBackupManifest }> {
+  return listBackupManifests(backupRoot, databasePath)
+    .filter(({ manifest }) => manifest.target_version === targetVersion)
+    .sort((a, b) => a.manifest.created_at.localeCompare(b.manifest.created_at));
 }
 
 async function verifyUsingDisposableCopy(

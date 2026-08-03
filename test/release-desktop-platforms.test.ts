@@ -7,18 +7,28 @@ const testWorkflow = readFileSync(join(process.cwd(), '.github/workflows/test.ym
 const heavyWorkflow = readFileSync(join(process.cwd(), '.github/workflows/heavy-tests.yml'), 'utf8');
 const rootPackage = JSON.parse(readFileSync(join(process.cwd(), 'package.json'), 'utf8')) as { scripts: Record<string, string> };
 
-describe('cross-platform desktop release gates', () => {
-  test('Release builds and publishes Windows, macOS, and Linux desktop packages', () => {
-    for (const platform of ['windows', 'macos', 'linux']) {
-      expect(releaseWorkflow).toContain(`platform: ${platform}`);
-      expect(releaseWorkflow).toContain(`pmbrain-desktop-${platform}`);
+describe('Windows desktop release gates', () => {
+  test('Release builds and publishes only the Windows package and updater files', () => {
+    expect(releaseWorkflow).toContain('platform: windows');
+    expect(releaseWorkflow).toContain('pmbrain-desktop-windows');
+    expect(releaseWorkflow).toContain('PMBrain-Windows-x64-Setup-*.exe');
+    expect(releaseWorkflow).toContain('PMBrain-Windows-x64-Setup-*.exe.blockmap');
+    expect(releaseWorkflow).toContain('latest.yml');
+    expect(releaseWorkflow).toContain('needs: [desktop]');
+    for (const removed of [
+      'gbrain-darwin-arm64',
+      'gbrain-linux-x64',
+      'platform: macos',
+      'platform: linux',
+      'build:mac',
+      'build:linux',
+      'latest-mac.yml',
+      'latest-linux.yml',
+      'PMBrain-macOS-arm64-',
+      'PMBrain-Linux-x64-',
+    ]) {
+      expect(releaseWorkflow).not.toContain(removed);
     }
-    expect(releaseWorkflow).toContain('PMBrain-macOS-arm64-*.dmg');
-    expect(releaseWorkflow).toContain('PMBrain-macOS-arm64-*.zip');
-    expect(releaseWorkflow).toContain('PMBrain-Linux-x64-*.AppImage');
-    expect(releaseWorkflow).not.toContain('PMBrain-Linux-x64-*.AppImage.blockmap');
-    expect(releaseWorkflow).toContain('latest-mac.yml');
-    expect(releaseWorkflow).toContain('latest-linux.yml');
   });
 
   test('normal Test CI runs the runtime smoke on all desktop platforms', () => {
