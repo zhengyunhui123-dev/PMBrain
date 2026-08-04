@@ -13,6 +13,7 @@ import {
   type IpcMainInvokeEvent,
 } from 'electron';
 import { autoUpdater } from 'electron-updater';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { DesktopLogger } from './logs.js';
 import { findAvailablePort } from './port-manager.js';
@@ -1060,12 +1061,33 @@ async function openUpdates(): Promise<void> {
   await updateManager?.check();
 }
 
+function readCurrentReleaseNotes(): string | undefined {
+  const releaseNotesPath = app.isPackaged
+    ? join(process.resourcesPath, 'release-notes.md')
+    : join(app.getAppPath(), 'build', 'release-notes.md');
+  try {
+    if (!existsSync(releaseNotesPath)) {
+      logger?.write('updater', `Current release notes file not found: ${releaseNotesPath}`);
+      return undefined;
+    }
+    const content = readFileSync(releaseNotesPath, 'utf8').trim();
+    return content || undefined;
+  } catch (error) {
+    logger?.write(
+      'updater',
+      `Unable to read current release notes: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return undefined;
+  }
+}
+
 function initializeUpdater(): void {
   if (!logger) return;
   updateManager = new UpdateManager({
     updater: autoUpdater,
     packaged: app.isPackaged,
     currentVersion: app.getVersion(),
+    currentReleaseNotes: readCurrentReleaseNotes(),
     logger,
     beforeInstall: async () => {
       updateManager?.stop();

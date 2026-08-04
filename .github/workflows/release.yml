@@ -46,6 +46,12 @@ jobs:
       - name: Run release preflight checks
         run: bun run verify
       - run: bun run build:admin
+      - name: Verify release notes source
+        shell: pwsh
+        run: |
+          $releaseNotesPath = 'desktop/build/release-notes.md'
+          if (-not (Test-Path -LiteralPath $releaseNotesPath)) { throw "Missing $releaseNotesPath" }
+          if ([string]::IsNullOrWhiteSpace((Get-Content -LiteralPath $releaseNotesPath -Raw -Encoding UTF8))) { throw "Empty $releaseNotesPath" }
       - name: Install desktop dependencies
         working-directory: desktop
         run: bun install --trust
@@ -69,6 +75,7 @@ jobs:
     needs: [desktop]
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
         with:
           path: artifacts
@@ -79,4 +86,4 @@ jobs:
             artifacts/pmbrain-desktop-windows/PMBrain-Windows-x64-Setup-*.exe
             artifacts/pmbrain-desktop-windows/PMBrain-Windows-x64-Setup-*.exe.blockmap
             artifacts/pmbrain-desktop-windows/latest.yml
-          generate_release_notes: true
+          body_path: desktop/build/release-notes.md

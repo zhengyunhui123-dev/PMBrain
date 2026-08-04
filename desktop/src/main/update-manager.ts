@@ -85,6 +85,8 @@ interface UpdateManagerOptions {
   updater: UpdaterLike;
   packaged: boolean;
   currentVersion: string;
+  currentReleaseNotes?: string;
+  currentReleaseDate?: string;
   logger: DesktopLogger;
   beforeInstall: () => Promise<void>;
   onState?: (state: UpdateState) => void;
@@ -103,8 +105,20 @@ export class UpdateManager {
   constructor(options: UpdateManagerOptions) {
     this.options = options;
     this.state = options.packaged
-      ? { phase: 'idle', currentVersion: options.currentVersion, message: '等待检查更新' }
-      : { phase: 'disabled', currentVersion: options.currentVersion, message: '开发模式不检查更新' };
+      ? {
+          phase: 'idle',
+          currentVersion: options.currentVersion,
+          releaseDate: options.currentReleaseDate,
+          releaseNotes: options.currentReleaseNotes,
+          message: '等待检查更新',
+        }
+      : {
+          phase: 'disabled',
+          currentVersion: options.currentVersion,
+          releaseDate: options.currentReleaseDate,
+          releaseNotes: options.currentReleaseNotes,
+          message: '开发模式不检查更新',
+        };
     options.updater.autoDownload = false;
     options.updater.autoInstallOnAppQuit = false;
     this.bindEvents();
@@ -168,10 +182,22 @@ export class UpdateManager {
   private bindEvents(): void {
     const updater = this.options.updater;
     updater.on('checking-for-update', () => {
-      this.emit({ phase: 'checking', currentVersion: this.options.currentVersion, message: '正在检查 GitHub Releases…' });
+      this.emit({
+        phase: 'checking',
+        currentVersion: this.options.currentVersion,
+        releaseDate: this.options.currentReleaseDate,
+        releaseNotes: this.options.currentReleaseNotes,
+        message: '正在检查 GitHub Releases…',
+      });
     });
     updater.on('update-not-available', () => {
-      this.emit({ phase: 'up-to-date', currentVersion: this.options.currentVersion, message: '当前已经是最新版本' });
+      this.emit({
+        phase: 'up-to-date',
+        currentVersion: this.options.currentVersion,
+        releaseDate: this.options.currentReleaseDate,
+        releaseNotes: this.options.currentReleaseNotes,
+        message: '当前已经是最新版本',
+      });
     });
     updater.on('update-available', (info) => {
       const file = info.files?.[0];
@@ -182,8 +208,9 @@ export class UpdateManager {
         releaseNotes: normalizeReleaseNotes(info.releaseNotes),
         fileName: updateFileName(info),
         total: file?.size,
-        message: `发现新版本 ${info.version}，查看更新记录后可开始下载`,
+        message: `发现新版本 ${info.version}，正在自动下载…`,
       });
+      void this.startDownload(info.version);
     });
     updater.on('download-progress', (progress) => {
       const percent = Math.max(0, Math.min(100, Math.round(progress.percent)));

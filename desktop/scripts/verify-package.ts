@@ -24,6 +24,7 @@ const shape = platform === 'win32'
   ? {
       unpackedRoot: join(distRoot, 'win-unpacked'),
       runtimeRoot: join(distRoot, 'win-unpacked', 'resources', 'pmbrain-runtime'),
+      releaseNotes: join(distRoot, 'win-unpacked', 'resources', 'release-notes.md'),
       appUpdateConfig: join(distRoot, 'win-unpacked', 'resources', 'app-update.yml'),
       appExecutable: join(distRoot, 'win-unpacked', 'PMBrain.exe'),
       metadata: join(distRoot, 'latest.yml'),
@@ -36,6 +37,7 @@ const shape = platform === 'win32'
     ? {
         unpackedRoot: join(distRoot, 'mac-arm64', 'PMBrain.app'),
         runtimeRoot: join(distRoot, 'mac-arm64', 'PMBrain.app', 'Contents', 'Resources', 'pmbrain-runtime'),
+        releaseNotes: join(distRoot, 'mac-arm64', 'PMBrain.app', 'Contents', 'Resources', 'release-notes.md'),
         appUpdateConfig: join(distRoot, 'mac-arm64', 'PMBrain.app', 'Contents', 'Resources', 'app-update.yml'),
         appExecutable: join(distRoot, 'mac-arm64', 'PMBrain.app', 'Contents', 'MacOS', 'PMBrain'),
         metadata: join(distRoot, 'latest-mac.yml'),
@@ -48,6 +50,7 @@ const shape = platform === 'win32'
     : {
         unpackedRoot: join(distRoot, 'linux-unpacked'),
         runtimeRoot: join(distRoot, 'linux-unpacked', 'resources', 'pmbrain-runtime'),
+        releaseNotes: join(distRoot, 'linux-unpacked', 'resources', 'release-notes.md'),
         appUpdateConfig: join(distRoot, 'linux-unpacked', 'resources', 'app-update.yml'),
         appExecutable: join(distRoot, 'linux-unpacked', 'PMBrain'),
         metadata: join(distRoot, 'latest-linux.yml'),
@@ -63,6 +66,7 @@ const runtimeManifestPath = join(shape.runtimeRoot, 'runtime-manifest.json');
 const sidecarPath = join(shape.runtimeRoot, 'pmbrain-sidecar.js');
 const requiredFiles = [
   shape.appExecutable,
+  shape.releaseNotes,
   shape.appUpdateConfig,
   shape.metadata,
   ...shape.artifacts.map(name => join(distRoot, name)),

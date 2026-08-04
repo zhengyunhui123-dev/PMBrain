@@ -26,4 +26,9 @@ describe('desktop package version contract', () => {
     expect(verifierSource).toContain('runtimeContract.bunRevision');
     expect(verifierSource).toContain('Packaged Bun checksum mismatch');
   });
+
+  test('requires the current release notes in the unpacked package', () => {
+    expect(verifierSource).toContain("shape.releaseNotes");
+    expect(verifierSource).toContain("'release-notes.md'");
+  });
 });

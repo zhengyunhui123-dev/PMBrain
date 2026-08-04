@@ -38,7 +38,7 @@ class FakeUpdater extends EventEmitter {
 const logger = { write() {}, close() {}, directory: '', filePath: '' } as any;
 
 describe('desktop update manager', () => {
-  test('shows release notes before download, then stops sidecar before install', async () => {
+  test('auto-downloads after showing release notes, then stops sidecar before install', async () => {
     const updater = new FakeUpdater();
     let stopped = false;
     const states: UpdateState[] = [];
@@ -48,15 +48,13 @@ describe('desktop update manager', () => {
       onState: (state) => states.push(state),
     });
     await manager.check();
-    expect(updater.autoDownload).toBe(false);
-    expect(updater.downloaded).toBe(false);
-    expect(manager.currentState.phase).toBe('available');
-    expect(manager.currentState.releaseDate).toBe('2026-07-25T10:00:00.000Z');
-    expect(manager.currentState.releaseNotes).toContain('提升中文召回');
-    await manager.download();
     await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(updater.autoDownload).toBe(false);
+    expect(updater.autoInstallOnAppQuit).toBe(false);
     expect(updater.downloaded).toBe(true);
     expect(manager.currentState.phase).toBe('downloaded');
+    expect(manager.currentState.releaseDate).toBe('2026-07-25T10:00:00.000Z');
+    expect(manager.currentState.releaseNotes).toContain('提升中文召回');
     const initialDownload = states.find((state) => state.phase === 'downloading' && state.percent === 0);
     expect(initialDownload?.fileName).toBe('PMBrain Desktop-1.0.22.exe');
     expect(initialDownload?.total).toBe(8_000_000);
@@ -76,5 +74,25 @@ describe('desktop update manager', () => {
       { version: '1.0.21', note: 'Fixed updater state' },
     ])).toBe('### 1.0.22\n- Added search diagnostics\n\n### 1.0.21\nFixed updater state');
     expect(normalizeReleaseNotes(undefined)).toBe('');
+  });
+
+  test('keeps the installed version release notes when no update is available', () => {
+    const updater = new FakeUpdater();
+    const manager = new UpdateManager({
+      updater,
+      packaged: true,
+      currentVersion: '1.0.22',
+      currentReleaseDate: '2026-07-25T10:00:00.000Z',
+      currentReleaseNotes: '## 搜索增强\n\n- 提升中文召回',
+      logger,
+      beforeInstall: async () => {},
+    });
+
+    updater.emit('update-not-available', { version: '1.0.22' });
+
+    expect(manager.currentState.phase).toBe('up-to-date');
+    expect(manager.currentState.currentVersion).toBe('1.0.22');
+    expect(manager.currentState.releaseDate).toBe('2026-07-25T10:00:00.000Z');
+    expect(manager.currentState.releaseNotes).toContain('提升中文召回');
   });
 });
