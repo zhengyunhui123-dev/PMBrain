@@ -3,7 +3,9 @@ import { join, resolve } from 'node:path';
 import { configDir, gbrainPath, loadConfig } from '../core/config.ts';
 import {
   createVerifiedPgliteUpgradeBackup,
+  listPgliteUpgradeBackups,
   verifyPgliteUpgradeBackup,
+  type PgliteUpgradeBackupSummary,
   type PgliteUpgradeBackupResult,
 } from '../core/pglite-upgrade-backup.ts';
 
@@ -35,12 +37,28 @@ function printHuman(result: PgliteUpgradeBackupResult): void {
   );
 }
 
+function printListHuman(databasePath: string, backups: PgliteUpgradeBackupSummary[]): void {
+  if (backups.length === 0) {
+    process.stdout.write(`未找到该数据库的已验证升级备份：${databasePath}\n`);
+    return;
+  }
+  process.stdout.write(`已验证的 PGLite 升级备份（${databasePath}）：\n`);
+  for (const backup of backups) {
+    process.stdout.write(
+      `  升级目标：v${backup.manifest.target_version}；Schema：${backup.manifest.source_schema_version ?? 'unknown'}；` +
+      `创建时间：${backup.manifest.created_at}\n` +
+      `  备份目录：${backup.backupDirectory}\n`,
+    );
+  }
+}
+
 export async function runPgliteBackup(args: string[]): Promise<void> {
   const json = args.includes('--json');
   const subcommand = args[0] ?? 'help';
   if (subcommand === 'help' || args.includes('--help') || args.includes('-h')) {
     process.stdout.write(`Usage:
   pmbrain pglite-backup create --target-version <version> [--path <brain.pglite>] [--json]
+  pmbrain pglite-backup list [--path <brain.pglite>] [--json]
   pmbrain pglite-backup verify --backup <backup-directory> [--json]
 
 create acquires the single-owner migration lock, copies the closed database to
@@ -50,11 +68,43 @@ and protected table counts.
 
 verify re-checks SHA-256 and repeats the disposable-copy recovery test. It does
 not overwrite or restore the active database automatically.
+
+list reads verified backup manifests only. It does not open, restore, modify, or
+delete the active database or any backup.
 `);
     return;
   }
 
   try {
+    if (subcommand === 'list') {
+      const cfg = loadConfig();
+      if (cfg?.engine !== 'pglite') {
+        fail(json, 'not_pglite', `PGLite backup listing requires a PGLite configuration (current: ${cfg?.engine ?? 'none'}).`);
+      }
+      const databasePath = resolve(valueAfter(args, '--path') || cfg.database_path || gbrainPath('brain.pglite'));
+      const backups = listPgliteUpgradeBackups(
+        join(configDir(), 'backups', 'pglite-upgrades'),
+        databasePath,
+      );
+      const result = {
+        status: 'ok',
+        database_path: databasePath,
+        backups: backups.map(backup => ({
+          status: backup.manifest.status,
+          backup_directory: backup.backupDirectory,
+          backup_database_path: backup.backupDatabasePath,
+          manifest_path: backup.manifestPath,
+          created_at: backup.manifest.created_at,
+          target_version: backup.manifest.target_version,
+          source_schema_version: backup.manifest.source_schema_version,
+          recovery_verified_at: backup.manifest.recovery_validation.verified_at,
+        })),
+      };
+      if (json) printJson(result);
+      else printListHuman(databasePath, backups);
+      return;
+    }
+
     if (subcommand === 'create') {
       const cfg = loadConfig();
       if (cfg?.engine !== 'pglite') {

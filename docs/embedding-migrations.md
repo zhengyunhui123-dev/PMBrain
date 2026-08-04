@@ -43,6 +43,14 @@ pmbrain pglite-backup create \
 pmbrain pglite-backup verify --backup <backup-directory>
 ```
 
+桌面端的“软件修复”页面会通过下面的只读命令列出当前数据库对应的所有已验证升级备份：
+
+```bash
+pmbrain pglite-backup list [--path <brain.pglite>]
+```
+
+该命令只读取备份目录中的 `manifest.json`，显示升级目标版本、源数据库 Schema 版本和备份时间，不会打开、恢复、修改或删除当前数据库及备份。
+
 验证完成后，只重建明确列入派生数据白名单的向量和缓存：
 
 ```bash

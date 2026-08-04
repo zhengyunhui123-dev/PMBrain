@@ -202,6 +202,21 @@ describe('admin embed E2E — /admin served from embedded manifest (v0.36.1.x #1
     }
   }, 90_000);
 
+  test('GET /admin/customer-service-qr.png serves the embedded客服二维码 asset', async () => {
+    const s = server;
+    try {
+      const res = await fetch(`http://127.0.0.1:${s.port}/admin/customer-service-qr.png`, {
+        signal: AbortSignal.timeout(5000),
+      });
+      expect(res.status).toBe(200);
+      expect(res.headers.get('content-type') ?? '').toMatch(/image\/png/);
+      const body = new Uint8Array(await res.arrayBuffer());
+      expect(Array.from(body.slice(0, 8))).toEqual([137, 80, 78, 71, 13, 10, 26, 10]);
+    } finally {
+      // Shared server is cleaned up in afterAll.
+    }
+  }, 90_000);
+
   test('GET /admin/agents (SPA-routed deep link) falls back to index.html', async () => {
     const s = server;
     try {

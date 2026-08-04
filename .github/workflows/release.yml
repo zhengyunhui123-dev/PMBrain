@@ -3,49 +3,13 @@ name: Release
 on:
   push:
     tags: ['v*']
-  # Manual runs validate every platform without publishing a release.
+  # Manual runs validate the Windows package without publishing a release.
   workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
-  build:
-    strategy:
-      # Let both platform artifacts report their own result instead of
-      # cancelling the other build when one preflight or compile step fails.
-      fail-fast: false
-      matrix:
-        include:
-          - os: macos-latest
-            target: bun-darwin-arm64
-            artifact: gbrain-darwin-arm64
-          - os: ubuntu-latest
-            target: bun-linux-x64
-            artifact: gbrain-linux-x64
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6  # v2
-        with:
-          bun-version: 1.3.13
-      - run: bun install
-      - name: Install Admin dependencies
-        working-directory: admin
-        run: bun install --frozen-lockfile
-      # The full suite is already enforced by the master Test workflow with
-      # the optimized 10-shard layout. Re-running the generic 4-shard suite
-      # here made release jobs run for 20+ minutes and get cancelled before
-      # the CLI artifacts were built. Keep release preflight fast and stable.
-      - name: Run release preflight checks
-        run: bun run verify
-      - run: bun build --compile --target=${{ matrix.target }} --outfile bin/${{ matrix.artifact }} src/cli.ts
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
-        with:
-          name: ${{ matrix.artifact }}
-          path: bin/${{ matrix.artifact }}
-
   desktop:
     strategy:
       fail-fast: false
@@ -58,20 +22,6 @@ jobs:
               desktop/dist/PMBrain-Windows-x64-Setup-*.exe
               desktop/dist/PMBrain-Windows-x64-Setup-*.exe.blockmap
               desktop/dist/latest.yml
-          - platform: macos
-            os: macos-latest
-            build_script: build:mac
-            artifact_paths: |
-              desktop/dist/PMBrain-macOS-arm64-*.dmg
-              desktop/dist/PMBrain-macOS-arm64-*.zip
-              desktop/dist/PMBrain-macOS-arm64-*.zip.blockmap
-              desktop/dist/latest-mac.yml
-          - platform: linux
-            os: ubuntu-latest
-            build_script: build:linux
-            artifact_paths: |
-              desktop/dist/PMBrain-Linux-x64-*.AppImage
-              desktop/dist/latest-linux.yml
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     steps:
@@ -90,7 +40,18 @@ jobs:
       - name: Install Admin dependencies
         working-directory: admin
         run: bun install --frozen-lockfile
+      # The full suite is already enforced by the master Test workflow with
+      # the optimized 10-shard layout. Keep the release preflight on the
+      # remaining Windows build instead of repeating it per platform.
+      - name: Run release preflight checks
+        run: bun run verify
       - run: bun run build:admin
+      - name: Verify release notes source
+        shell: pwsh
+        run: |
+          $releaseNotesPath = 'desktop/build/release-notes.md'
+          if (-not (Test-Path -LiteralPath $releaseNotesPath)) { throw "Missing $releaseNotesPath" }
+          if ([string]::IsNullOrWhiteSpace((Get-Content -LiteralPath $releaseNotesPath -Raw -Encoding UTF8))) { throw "Empty $releaseNotesPath" }
       - name: Install desktop dependencies
         working-directory: desktop
         run: bun install --trust
@@ -111,9 +72,10 @@ jobs:
     # workflow_dispatch is intentionally a build-only dry run. Publishing is
     # reserved for an explicit v* tag push.
     if: github.event_name == 'push'
-    needs: [build, desktop]
+    needs: [desktop]
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
         with:
           path: artifacts
@@ -121,15 +83,7 @@ jobs:
         uses: softprops/action-gh-release@153bb8e04406b158c6c84fc1615b65b24149a1fe  # v2
         with:
           files: |
-            artifacts/gbrain-darwin-arm64/gbrain-darwin-arm64
-            artifacts/gbrain-linux-x64/gbrain-linux-x64
             artifacts/pmbrain-desktop-windows/PMBrain-Windows-x64-Setup-*.exe
             artifacts/pmbrain-desktop-windows/PMBrain-Windows-x64-Setup-*.exe.blockmap
             artifacts/pmbrain-desktop-windows/latest.yml
-            artifacts/pmbrain-desktop-macos/PMBrain-macOS-arm64-*.dmg
-            artifacts/pmbrain-desktop-macos/PMBrain-macOS-arm64-*.zip
-            artifacts/pmbrain-desktop-macos/PMBrain-macOS-arm64-*.zip.blockmap
-            artifacts/pmbrain-desktop-macos/latest-mac.yml
-            artifacts/pmbrain-desktop-linux/PMBrain-Linux-x64-*.AppImage
-            artifacts/pmbrain-desktop-linux/latest-linux.yml
-          generate_release_notes: true
+          body_path: desktop/build/release-notes.md

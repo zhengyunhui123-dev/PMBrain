@@ -21,6 +21,7 @@
           <button class="rail-item" data-target="integrations" title="MCP 接入"><span>03</span>MCP 接入</button>
           <button class="rail-item" data-target="system" title="系统设置"><span>04</span>系统设置</button>
           <button class="rail-item" data-target="updates" title="软件更新"><span>05</span>软件更新</button>
+          <button class="rail-item" data-target="repair" title="软件修复"><span>06</span>软件修复</button>
         </nav>
         <div class="service-status">
           <i id="service-dot"></i>
@@ -391,10 +392,20 @@
             <span>SAFE UPDATE</span>
             <p>安装前自动停止 sidecar；PGLite 需要兼容迁移时会先创建升级冷备，并通过一次性恢复副本验证 schema 和关键数据计数，再启动唯一 sidecar 完成迁移与健康检查。失败时保留备份、数据库和日志，不会自动覆盖或整库重建。</p>
           </div>
-          <article class="previous-version-card">
-            <div><span>PREVIOUS</span><b id="previous-version">暂无记录</b><p id="previous-version-note">升级一次后，桌面端会在这里保留上一版本号。</p></div>
-            <button type="button" class="ghost" id="previous-version-action" disabled>回退版本（打开下载页）</button>
-          </article>
+        </section>
+
+        <section class="panel repair-panel" id="panel-repair">
+          <div class="section-heading">
+            <div><span class="index">06</span><h2>软件修复</h2></div>
+            <p>查看每次桌面升级前保留的数据库备份；这里只读展示，不会自动恢复或删除数据。</p>
+          </div>
+          <div class="repair-summary">
+            <div><span>DATABASE BACKUPS</span><b id="repair-backup-count">等待读取备份清单</b></div>
+            <p id="repair-database-path">当前数据库：等待读取</p>
+          </div>
+          <div class="repair-backup-list" id="repair-backup-list" aria-live="polite">
+            <div class="repair-empty">打开本页后读取已验证的升级前数据库备份。</div>
+          </div>
         </section>
 
         <section class="panel recovery-panel" id="panel-recovery">

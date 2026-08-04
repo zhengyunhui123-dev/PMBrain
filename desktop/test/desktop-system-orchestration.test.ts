@@ -68,6 +68,14 @@ describe('desktop system orchestration contracts', () => {
     expect(main).toMatch(/pendingPgliteUpgradeBackupPath = null;[\s\S]*?runCliChecked\(runtime\(\), \[/);
   });
 
+  test('软件修复只通过 CLI 读取已验证的 PGLite 备份清单', () => {
+    expect(main).toContain("'desktop:list-pglite-upgrade-backups'");
+    expect(preload).toContain("'desktop:list-pglite-upgrade-backups'");
+    expect(main).toMatch(/listPgliteUpgradeBackupsForDesktop[\s\S]*?'pglite-backup',[\s\S]*?'list',[\s\S]*?'--path'/);
+    expect(main).not.toContain('restorePgliteUpgradeBackup');
+    expect(main).not.toContain('deletePgliteUpgradeBackup');
+  });
+
   test('桌面启动阶段不自动启动 Supervisor、Worker、Dream 或 Autopilot', () => {
     expect(main).not.toMatch(/runCliChecked\(runtime\(\), \[['"]jobs['"], ['"]supervisor['"], ['"]start['"]/);
     expect(main).not.toMatch(/runCliChecked\(runtime\(\), \[['"]worker['"]/);

@@ -15,7 +15,6 @@ export type UpdatePhase =
 export interface UpdateState {
   phase: UpdatePhase;
   currentVersion: string;
-  previousVersion?: string;
   availableVersion?: string;
   releaseDate?: string;
   releaseNotes?: string;
@@ -86,7 +85,8 @@ interface UpdateManagerOptions {
   updater: UpdaterLike;
   packaged: boolean;
   currentVersion: string;
-  previousVersion?: string;
+  currentReleaseNotes?: string;
+  currentReleaseDate?: string;
   logger: DesktopLogger;
   beforeInstall: () => Promise<void>;
   onState?: (state: UpdateState) => void;
@@ -105,8 +105,20 @@ export class UpdateManager {
   constructor(options: UpdateManagerOptions) {
     this.options = options;
     this.state = options.packaged
-      ? { phase: 'idle', currentVersion: options.currentVersion, previousVersion: options.previousVersion, message: '等待检查更新' }
-      : { phase: 'disabled', currentVersion: options.currentVersion, previousVersion: options.previousVersion, message: '开发模式不检查更新' };
+      ? {
+          phase: 'idle',
+          currentVersion: options.currentVersion,
+          releaseDate: options.currentReleaseDate,
+          releaseNotes: options.currentReleaseNotes,
+          message: '等待检查更新',
+        }
+      : {
+          phase: 'disabled',
+          currentVersion: options.currentVersion,
+          releaseDate: options.currentReleaseDate,
+          releaseNotes: options.currentReleaseNotes,
+          message: '开发模式不检查更新',
+        };
     options.updater.autoDownload = false;
     options.updater.autoInstallOnAppQuit = false;
     this.bindEvents();
@@ -170,22 +182,35 @@ export class UpdateManager {
   private bindEvents(): void {
     const updater = this.options.updater;
     updater.on('checking-for-update', () => {
-      this.emit({ phase: 'checking', currentVersion: this.options.currentVersion, previousVersion: this.options.previousVersion, message: '正在检查 GitHub Releases…' });
+      this.emit({
+        phase: 'checking',
+        currentVersion: this.options.currentVersion,
+        releaseDate: this.options.currentReleaseDate,
+        releaseNotes: this.options.currentReleaseNotes,
+        message: '正在检查 GitHub Releases…',
+      });
     });
     updater.on('update-not-available', () => {
-      this.emit({ phase: 'up-to-date', currentVersion: this.options.currentVersion, previousVersion: this.options.previousVersion, message: '当前已经是最新版本' });
+      this.emit({
+        phase: 'up-to-date',
+        currentVersion: this.options.currentVersion,
+        releaseDate: this.options.currentReleaseDate,
+        releaseNotes: this.options.currentReleaseNotes,
+        message: '当前已经是最新版本',
+      });
     });
     updater.on('update-available', (info) => {
       const file = info.files?.[0];
       this.emit({
-        phase: 'available', currentVersion: this.options.currentVersion, previousVersion: this.options.previousVersion,
+        phase: 'available', currentVersion: this.options.currentVersion,
         availableVersion: info.version,
         releaseDate: info.releaseDate,
         releaseNotes: normalizeReleaseNotes(info.releaseNotes),
         fileName: updateFileName(info),
         total: file?.size,
-        message: `发现新版本 ${info.version}，查看更新记录后可开始下载`,
+        message: `发现新版本 ${info.version}，正在自动下载…`,
       });
+      void this.startDownload(info.version);
     });
     updater.on('download-progress', (progress) => {
       const percent = Math.max(0, Math.min(100, Math.round(progress.percent)));
@@ -203,7 +228,7 @@ export class UpdateManager {
       this.downloading = false;
       this.emit({
         ...this.state,
-        phase: 'downloaded', currentVersion: this.options.currentVersion, previousVersion: this.options.previousVersion,
+        phase: 'downloaded', currentVersion: this.options.currentVersion,
         availableVersion: info.version,
         releaseDate: info.releaseDate ?? this.state.releaseDate,
         releaseNotes: normalizeReleaseNotes(info.releaseNotes) || this.state.releaseNotes,
@@ -240,7 +265,7 @@ export class UpdateManager {
     this.options.logger.write('updater', message);
     this.emit({
       ...this.state,
-      phase: 'error', currentVersion: this.options.currentVersion, previousVersion: this.options.previousVersion,
+      phase: 'error', currentVersion: this.options.currentVersion,
       message: displayMessage,
     });
   }

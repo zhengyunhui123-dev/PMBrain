@@ -235,6 +235,56 @@ describe('chat touchpoint — chat() smoke + stop-reason mapping (Codex D8)', ()
   });
 });
 
+describe('chat touchpoint — Ollama thinking request isolation', () => {
+  beforeEach(() => resetGateway());
+
+  test('sends think:false only to Ollama chat requests', async () => {
+    const requestBodies: Array<Record<string, unknown>> = [];
+    const server = Bun.serve({
+      port: 0,
+      async fetch(request) {
+        requestBodies.push(await request.json() as Record<string, unknown>);
+        return Response.json({
+          id: 'synthetic-chat',
+          object: 'chat.completion',
+          created: 0,
+          model: 'synthetic-model',
+          choices: [{
+            index: 0,
+            message: { role: 'assistant', content: 'ok' },
+            finish_reason: 'stop',
+          }],
+          usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+        });
+      },
+    });
+
+    try {
+      const baseURL = `${server.url.toString().replace(/\/$/, '')}/v1`;
+      configureGateway({
+        chat_model: 'ollama:synthetic-model',
+        base_urls: { ollama: baseURL },
+        env: {},
+      });
+      expect((await chat({ messages: [{ role: 'user', content: 'test' }] })).text).toBe('ok');
+
+      configureGateway({
+        chat_model: 'deepseek:synthetic-model',
+        base_urls: { deepseek: baseURL },
+        env: { DEEPSEEK_API_KEY: 'synthetic-key' },
+      });
+      expect((await chat({ messages: [{ role: 'user', content: 'test' }] })).text).toBe('ok');
+
+      expect(requestBodies).toHaveLength(2);
+      expect(requestBodies[0]?.think).toBe(false);
+      expect(requestBodies[1]).not.toHaveProperty('think');
+    } finally {
+      server.stop(true);
+      resetGateway();
+    }
+  });
+});
+
 describe('chat touchpoint — provider-neutral ordinary-model fallback', () => {
   beforeEach(() => resetGateway());
 

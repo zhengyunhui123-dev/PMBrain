@@ -13,6 +13,7 @@ import {
   type IpcMainInvokeEvent,
 } from 'electron';
 import { autoUpdater } from 'electron-updater';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { DesktopLogger } from './logs.js';
 import { findAvailablePort } from './port-manager.js';
@@ -56,7 +57,6 @@ import {
   type SharedIntegrationPayload,
 } from './integration-manager.js';
 import { UpdateManager, type UpdateState } from './update-manager.js';
-import { updateDesktopVersionHistory, type DesktopVersionHistory } from './version-history.js';
 import { DatabaseRuntimeManager } from './database-runtime-manager.js';
 import { LanMcpGateway, type LanMcpGatewayStatus } from './lan-mcp-gateway.js';
 import { listNetworkCandidates } from './network-manager.js';
@@ -65,6 +65,7 @@ import type {
   DesktopSystemSettingsSaveResult,
   DesktopSystemSettingsState,
 } from './system-settings.js';
+import type { DesktopPgliteUpgradeBackups } from '../preload/index.js';
 
 let mainWindow: BrowserWindow | null = null;
 let sidecar: SidecarManager | null = null;
@@ -88,7 +89,6 @@ let pendingPgliteUpgradeBackupPath: string | null = null;
 const pgliteUpgradeBackupByVersion = new Map<string, string | null>();
 let setupInProgress = false;
 let trayHintShown = false;
-let desktopVersionHistory: DesktopVersionHistory = { current: '' };
 let quitting = false;
 const databaseRuntimeManager = new DatabaseRuntimeManager();
 const LAN_MONITOR_INTERVAL_MS = 5_000;
@@ -582,6 +582,64 @@ async function ensurePgliteUpgradeBackup(databasePath: string | null | undefined
   return result.backup_directory;
 }
 
+interface PgliteBackupListCliEntry {
+  status?: string;
+  backup_directory?: string;
+  backup_database_path?: string;
+  manifest_path?: string;
+  created_at?: string;
+  target_version?: string;
+  source_schema_version?: number | null;
+  recovery_verified_at?: string;
+}
+
+async function listPgliteUpgradeBackupsForDesktop(): Promise<DesktopPgliteUpgradeBackups> {
+  const setup = getSetupInfo();
+  if (setup.needsSetup || setup.current.engine !== 'pglite') {
+    return { databasePath: null, backups: [] };
+  }
+  const databasePath = setup.current.databasePath ?? setup.defaults.databasePath;
+  const completed = await runCliChecked(runtime(), [
+    'pglite-backup',
+    'list',
+    '--path', databasePath,
+    '--json',
+  ]);
+  const result = JSON.parse(completed.stdout.trim().split(/\r?\n/).at(-1) || '{}') as {
+    status?: string;
+    database_path?: string;
+    backups?: PgliteBackupListCliEntry[];
+  };
+  if (result.status !== 'ok' || !Array.isArray(result.backups)) {
+    throw new Error('PGLite 备份清单返回格式无效，无法显示软件修复内容。');
+  }
+  const backups = result.backups.flatMap((entry) => {
+    if (entry.status !== 'verified'
+      || !entry.backup_directory
+      || !entry.backup_database_path
+      || !entry.manifest_path
+      || !entry.created_at
+      || !entry.target_version
+      || !entry.recovery_verified_at) {
+      return [];
+    }
+    return [{
+      status: 'verified' as const,
+      backupDirectory: entry.backup_directory,
+      backupDatabasePath: entry.backup_database_path,
+      manifestPath: entry.manifest_path,
+      createdAt: entry.created_at,
+      targetVersion: entry.target_version,
+      sourceSchemaVersion: typeof entry.source_schema_version === 'number' ? entry.source_schema_version : null,
+      recoveryVerifiedAt: entry.recovery_verified_at,
+    }];
+  });
+  return {
+    databasePath: result.database_path ?? databasePath,
+    backups,
+  };
+}
+
 async function startSidecar(openAdmin: boolean): Promise<void> {
   if (sidecarStartupPromise) {
     await sidecarStartupPromise;
@@ -965,7 +1023,7 @@ async function applySetupOnce(payload: SetupPayload, setDefaultSource = true) {
   };
 }
 
-type SettingsPanel = 'basic' | 'models' | 'integrations' | 'updates' | 'system';
+type SettingsPanel = 'basic' | 'models' | 'integrations' | 'updates' | 'system' | 'repair';
 
 function installMenu(): void {
   Menu.setApplicationMenu(Menu.buildFromTemplate([
@@ -978,6 +1036,7 @@ function installMenu(): void {
         { label: 'MCP 接入', click: () => void openSettingsPanel('integrations') },
         { label: '系统设置', click: () => void openSettingsPanel('system') },
         { label: '软件更新', click: () => void openUpdates() },
+        { label: '软件修复', click: () => void openSettingsPanel('repair') },
         { type: 'separator' },
         { label: '打开日志目录', click: () => logger && shell.showItemInFolder(logger.filePath) },
         { type: 'separator' },
@@ -1024,13 +1083,33 @@ async function openUpdates(): Promise<void> {
   await updateManager?.check();
 }
 
+function readCurrentReleaseNotes(): string | undefined {
+  const releaseNotesPath = app.isPackaged
+    ? join(process.resourcesPath, 'release-notes.md')
+    : join(app.getAppPath(), 'build', 'release-notes.md');
+  try {
+    if (!existsSync(releaseNotesPath)) {
+      logger?.write('updater', `Current release notes file not found: ${releaseNotesPath}`);
+      return undefined;
+    }
+    const content = readFileSync(releaseNotesPath, 'utf8').trim();
+    return content || undefined;
+  } catch (error) {
+    logger?.write(
+      'updater',
+      `Unable to read current release notes: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return undefined;
+  }
+}
+
 function initializeUpdater(): void {
   if (!logger) return;
   updateManager = new UpdateManager({
     updater: autoUpdater,
     packaged: app.isPackaged,
     currentVersion: app.getVersion(),
-    previousVersion: desktopVersionHistory.previous,
+    currentReleaseNotes: readCurrentReleaseNotes(),
     logger,
     beforeInstall: async () => {
       updateManager?.stop();
@@ -1357,11 +1436,6 @@ if (!app.requestSingleInstanceLock()) {
     logger = new DesktopLogger(app.getPath('userData'));
     const initialSetup = getSetupInfo();
     selectedAddressWasUnavailable = getDesktopPreferences().sharedResumeRequired;
-    desktopVersionHistory = updateDesktopVersionHistory(
-      join(app.getPath('userData'), 'version-history.json'),
-      app.getVersion(),
-      initialSetup.current.lastMigratedVersion,
-    );
     applyDesktopTheme(initialSetup.current.theme);
     nativeTheme.on('updated', () => {
       mainWindow?.webContents.send('desktop:theme-state', themeState());
@@ -1432,11 +1506,7 @@ if (!app.requestSingleInstanceLock()) {
     handleTrustedIpc('desktop:check-updates', () => updateManager?.check());
     handleTrustedIpc('desktop:download-update', () => updateManager?.download());
     handleTrustedIpc('desktop:install-update', () => updateManager?.install());
-    handleTrustedIpc('desktop:open-previous-release', async () => {
-      const previous = desktopVersionHistory.previous;
-      if (!previous) throw new Error('当前没有可用的上一版本记录。');
-      await shell.openExternal(`https://github.com/zhengyunhui123-dev/PMBrain/releases/tag/v${previous}`);
-    });
+    handleTrustedIpc('desktop:list-pglite-upgrade-backups', () => listPgliteUpgradeBackupsForDesktop());
     handleTrustedIpc('desktop:retry', async () => {
       await showShell();
       if (getSetupInfo().needsSetup) return;

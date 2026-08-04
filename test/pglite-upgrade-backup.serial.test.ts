@@ -16,6 +16,7 @@ import {
 } from '../src/core/pglite-data-policy.ts';
 import {
   createVerifiedPgliteUpgradeBackup,
+  listPgliteUpgradeBackups,
   verifyPgliteUpgradeBackup,
 } from '../src/core/pglite-upgrade-backup.ts';
 
@@ -70,6 +71,12 @@ describe('PGLite upgrade cold backup and recovery verification', () => {
     const verified = await verifyPgliteUpgradeBackup(result.backupDirectory);
     expect(verified.status).toBe('verified');
     expect(verified.manifest.backup_inventory.sha256).toBe(result.manifest.backup_inventory.sha256);
+
+    const listed = listPgliteUpgradeBackups(backupRoot, databasePath);
+    expect(listed).toHaveLength(1);
+    expect(listed[0]?.manifest.target_version).toBe('1.1.91');
+    expect(listed[0]?.manifest.source_schema_version).toBe(result.manifest.source_schema_version);
+    expect(listed[0]?.backupDirectory).toBe(result.backupDirectory);
 
     const engine = new PGLiteEngine();
     await engine.connect({ engine: 'pglite', database_path: databasePath });
@@ -143,6 +150,41 @@ describe('PGLite upgrade cold backup and recovery verification', () => {
       backupRoot: outerBackupRoot,
       targetVersion: '1.1.91',
     })).rejects.toThrow(/must not contain one another/i);
+  });
+
+  test('lists verified manifests for the selected database in newest-first order', () => {
+    const otherDatabasePath = join(root, 'other-brain.pglite');
+    const writeManifest = (directory: string, sourcePath: string, createdAt: string, targetVersion: string): void => {
+      mkdirSync(directory, { recursive: true });
+      writeFileSync(join(directory, 'manifest.json'), JSON.stringify({
+        manifest_version: 1,
+        backup_id: targetVersion,
+        status: 'verified',
+        created_at: createdAt,
+        source_database_path: sourcePath,
+        backup_database_path: join(directory, 'brain.pglite'),
+        target_version: targetVersion,
+        source_schema_version: 44,
+        source_inventory: { files: 0, bytes: 0, sha256: 'source' },
+        backup_inventory: { files: 0, bytes: 0, sha256: 'backup' },
+        recovery_validation: {
+          status: 'verified',
+          verified_at: createdAt,
+          schema_version: 44,
+          protected_table_counts: {},
+        },
+        data_policy_version: 1,
+        rebuildable_artifacts: [],
+      }, null, 2));
+    };
+
+    writeManifest(join(backupRoot, 'older'), databasePath, '2026-08-03T01:00:00.000Z', '1.1.92');
+    writeManifest(join(backupRoot, 'newer'), databasePath, '2026-08-03T02:00:00.000Z', '1.1.93');
+    writeManifest(join(backupRoot, 'other'), otherDatabasePath, '2026-08-03T03:00:00.000Z', '1.1.94');
+
+    const listed = listPgliteUpgradeBackups(backupRoot, databasePath);
+    expect(listed.map(item => item.manifest.target_version)).toEqual(['1.1.93', '1.1.92']);
+    expect(listPgliteUpgradeBackups(backupRoot, otherDatabasePath)).toHaveLength(1);
   });
 
   test('data policy is allow-list based: unknown artifacts remain protected', () => {

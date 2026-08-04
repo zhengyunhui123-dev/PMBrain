@@ -1973,7 +1973,7 @@ function printHelp() {
 初始化
   init [--pglite|--supabase|--url]   创建大脑（默认使用 PGLite，无需服务器）
   migrate --to <supabase|pglite>     在存储引擎之间迁移大脑
-  pglite-backup <create|verify>      创建或验证 PGLite 升级冷备
+  pglite-backup <create|list|verify> 创建、列出或验证 PGLite 升级冷备
   upgrade                            自更新
   check-update [--json]              检查新版本
   doctor [--json] [--fast]           执行健康检查

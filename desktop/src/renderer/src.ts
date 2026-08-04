@@ -14,6 +14,7 @@ import type {
   IntegrationClient,
   IntegrationInfo,
   PMBrainDesktopApi,
+  DesktopPgliteUpgradeBackups,
   SetupPayload,
   SidecarState,
   StartupProgress,
@@ -86,7 +87,7 @@ function clearNotices(): void {
   setNotice('success');
 }
 
-type Panel = 'basic' | 'models' | 'integrations' | 'system' | 'updates' | 'recovery';
+type Panel = 'basic' | 'models' | 'integrations' | 'system' | 'updates' | 'repair' | 'recovery';
 
 const PANEL_COPY: Record<Panel, { eyebrow: string; title: string }> = {
   basic: { eyebrow: 'DESKTOP SETTINGS / 01', title: '配置数据库、原始资料与主源' },
@@ -94,6 +95,7 @@ const PANEL_COPY: Record<Panel, { eyebrow: string; title: string }> = {
   integrations: { eyebrow: 'MCP / 03', title: '把 PMBrain 接入 AI 客户端' },
   system: { eyebrow: 'SYSTEM / 04', title: '管理桌面连接与系统行为' },
   updates: { eyebrow: 'UPDATES / 05', title: '保持桌面端安全更新' },
+  repair: { eyebrow: 'REPAIR / 06', title: '软件修复' },
   recovery: { eyebrow: 'RECOVERY', title: '恢复 PMBrain 本地服务' },
 };
 
@@ -993,14 +995,10 @@ function renderReleaseNotes(notes?: string): void {
 
 function renderUpdate(update: UpdateState | null): void {
   if (!update) return;
+  const displayVersion = update.availableVersion ?? update.currentVersion;
   $('#update-current').textContent = `v${update.currentVersion}`;
-  $('#update-title').textContent = update.availableVersion ? `PMBrain v${update.availableVersion}` : 'PMBrain Desktop';
+  $('#update-title').textContent = `PMBrain v${displayVersion}`;
   $('#update-message').textContent = update.message;
-  $('#previous-version').textContent = update.previousVersion ? `v${update.previousVersion}` : '暂无记录';
-  $('#previous-version-note').textContent = update.previousVersion
-    ? '点击后打开上一版本的官方 Release 下载页。安装旧版前请先备份数据库；数据库结构不会自动降级。'
-    : '升级一次后，桌面端会在这里保留上一版本号。';
-  ($<HTMLButtonElement>('#previous-version-action')).disabled = !update.previousVersion;
   const metrics = $('#update-metrics');
   const details = [
     update.fileName ? `文件：${update.fileName}` : '',
@@ -1019,7 +1017,8 @@ function renderUpdate(update: UpdateState | null): void {
   progress.setAttribute('aria-valuenow', String(update.percent ?? 0));
   progress.setAttribute('aria-valuetext', update.message);
   const releaseNotes = $('#update-release-notes');
-  releaseNotes.hidden = !update.availableVersion;
+  const hasReleaseNotes = Boolean(update.releaseNotes?.trim());
+  releaseNotes.hidden = !hasReleaseNotes;
   $('#update-release-date').textContent = releaseDateLabel(update.releaseDate);
   renderReleaseNotes(update.releaseNotes);
   const button = $<HTMLButtonElement>('#update-action');
@@ -1035,6 +1034,100 @@ function renderUpdate(update: UpdateState | null): void {
         : update.phase === 'installing' ? '正在安装…'
           : update.phase === 'available' ? '下载更新'
             : '检查更新';
+}
+
+function formatRepairVersion(version: string): string {
+  return version === 'manual' || version.startsWith('v') ? version : `v${version}`;
+}
+
+function formatRepairTime(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat('zh-CN', {
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+  }).format(date);
+}
+
+function renderPgliteUpgradeBackups(result: DesktopPgliteUpgradeBackups): void {
+  const list = $('#repair-backup-list');
+  list.replaceChildren();
+  $('#repair-database-path').textContent = result.databasePath
+    ? `当前数据库：${result.databasePath}`
+    : '当前尚未配置 PGLite 数据库';
+  $('#repair-backup-count').textContent = result.backups.length > 0
+    ? `已找到 ${result.backups.length} 份升级前备份`
+    : '暂无已验证的升级前备份';
+
+  if (result.backups.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'repair-empty';
+    empty.textContent = result.databasePath
+      ? '当前数据库还没有由桌面端升级流程保留的备份。升级功能启用后，下一次升级前会自动创建并验证备份。'
+      : '完成基础配置后，这里会显示升级前保留的数据库备份。';
+    list.append(empty);
+    return;
+  }
+
+  for (const backup of result.backups) {
+    const card = document.createElement('article');
+    card.className = 'repair-backup-card';
+
+    const heading = document.createElement('div');
+    heading.className = 'repair-backup-heading';
+    const headingCopy = document.createElement('div');
+    const eyebrow = document.createElement('span');
+    eyebrow.textContent = 'UPGRADE BACKUP';
+    const title = document.createElement('h3');
+    title.textContent = `升级至 ${formatRepairVersion(backup.targetVersion)} 前保存`;
+    headingCopy.append(eyebrow, title);
+    const status = document.createElement('b');
+    status.className = 'repair-backup-status';
+    status.textContent = '已验证';
+    heading.append(headingCopy, status);
+
+    const meta = document.createElement('div');
+    meta.className = 'repair-backup-meta';
+    const values = [
+      ['数据库 Schema', backup.sourceSchemaVersion === null ? '未记录' : String(backup.sourceSchemaVersion)],
+      ['备份时间', formatRepairTime(backup.createdAt)],
+      ['恢复副本', formatRepairTime(backup.recoveryVerifiedAt)],
+    ];
+    for (const [label, value] of values) {
+      const item = document.createElement('span');
+      const itemLabel = document.createElement('small');
+      itemLabel.textContent = label;
+      const itemValue = document.createElement('strong');
+      itemValue.textContent = value;
+      item.append(itemLabel, itemValue);
+      meta.append(item);
+    }
+
+    const path = document.createElement('code');
+    path.textContent = backup.backupDirectory;
+    const note = document.createElement('p');
+    note.textContent = '这是升级前保留的只读副本。此页面只展示备份信息，不会自动恢复、删除或覆盖当前数据库。';
+    card.append(heading, meta, path, note);
+    list.append(card);
+  }
+}
+
+async function loadPgliteUpgradeBackups(): Promise<void> {
+  $('#repair-backup-count').textContent = '正在读取备份清单…';
+  try {
+    renderPgliteUpgradeBackups(await window.pmbrainDesktop.listPgliteUpgradeBackups());
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    $('#repair-backup-count').textContent = '读取失败';
+    $('#repair-database-path').textContent = '';
+    const list = $('#repair-backup-list');
+    list.replaceChildren();
+    const empty = document.createElement('div');
+    empty.className = 'repair-empty error';
+    empty.textContent = `无法读取数据库备份清单：${message}`;
+    list.append(empty);
+    setNotice('error', message);
+  }
 }
 
 async function save(): Promise<void> {
@@ -1289,6 +1382,7 @@ document.querySelectorAll<HTMLButtonElement>('.rail-item').forEach((button) => b
   if (target === 'models' && ($<HTMLDetailsElement>('#advanced-model-settings')).open) {
     void loadAdvancedModels(true);
   }
+  if (target === 'repair') void loadPgliteUpgradeBackups();
 }));
 $('#next-models').addEventListener('click', () => switchPanel('models'));
 $('#advanced-model-settings').addEventListener('toggle', () => {
@@ -1359,8 +1453,6 @@ $('#update-action').addEventListener('click', async () => {
     setNotice('error', error instanceof Error ? error.message : String(error));
   }
 });
-$('#previous-version-action').addEventListener('click', () => void window.pmbrainDesktop.openPreviousRelease());
-
 void window.pmbrainDesktop.getTheme().then(renderTheme).catch(() => undefined);
 window.pmbrainDesktop.onThemeState(renderTheme);
 void window.pmbrainDesktop.getSystemSettings().then((next) => applySystemSettingsState(next)).catch((error) => setNotice('error', String(error)));
@@ -1380,4 +1472,5 @@ window.pmbrainDesktop.onShowPanel((panel) => {
   if (panel === 'models' && ($<HTMLDetailsElement>('#advanced-model-settings')).open) {
     void loadAdvancedModels(true);
   }
+  if (panel === 'repair') void loadPgliteUpgradeBackups();
 });
