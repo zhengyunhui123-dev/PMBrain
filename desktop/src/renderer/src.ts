@@ -995,8 +995,9 @@ function renderReleaseNotes(notes?: string): void {
 
 function renderUpdate(update: UpdateState | null): void {
   if (!update) return;
+  const displayVersion = update.availableVersion ?? update.currentVersion;
   $('#update-current').textContent = `v${update.currentVersion}`;
-  $('#update-title').textContent = update.availableVersion ? `PMBrain v${update.availableVersion}` : 'PMBrain Desktop';
+  $('#update-title').textContent = `PMBrain v${displayVersion}`;
   $('#update-message').textContent = update.message;
   const metrics = $('#update-metrics');
   const details = [
@@ -1016,7 +1017,8 @@ function renderUpdate(update: UpdateState | null): void {
   progress.setAttribute('aria-valuenow', String(update.percent ?? 0));
   progress.setAttribute('aria-valuetext', update.message);
   const releaseNotes = $('#update-release-notes');
-  releaseNotes.hidden = !update.availableVersion;
+  const hasReleaseNotes = Boolean(update.releaseNotes?.trim());
+  releaseNotes.hidden = !hasReleaseNotes;
   $('#update-release-date').textContent = releaseDateLabel(update.releaseDate);
   renderReleaseNotes(update.releaseNotes);
   const button = $<HTMLButtonElement>('#update-action');

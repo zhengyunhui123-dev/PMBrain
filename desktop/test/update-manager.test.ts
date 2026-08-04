@@ -75,4 +75,24 @@ describe('desktop update manager', () => {
     ])).toBe('### 1.0.22\n- Added search diagnostics\n\n### 1.0.21\nFixed updater state');
     expect(normalizeReleaseNotes(undefined)).toBe('');
   });
+
+  test('keeps the installed version release notes when no update is available', () => {
+    const updater = new FakeUpdater();
+    const manager = new UpdateManager({
+      updater,
+      packaged: true,
+      currentVersion: '1.0.22',
+      currentReleaseDate: '2026-07-25T10:00:00.000Z',
+      currentReleaseNotes: '## 搜索增强\n\n- 提升中文召回',
+      logger,
+      beforeInstall: async () => {},
+    });
+
+    updater.emit('update-not-available', { version: '1.0.22' });
+
+    expect(manager.currentState.phase).toBe('up-to-date');
+    expect(manager.currentState.currentVersion).toBe('1.0.22');
+    expect(manager.currentState.releaseDate).toBe('2026-07-25T10:00:00.000Z');
+    expect(manager.currentState.releaseNotes).toContain('提升中文召回');
+  });
 });

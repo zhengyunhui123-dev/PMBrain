@@ -14,6 +14,8 @@ describe('Windows desktop release gates', () => {
   test('electron-builder writes the version release notes into updater metadata', () => {
     expect(desktopBuilderConfig).toContain('releaseInfo:');
     expect(desktopBuilderConfig).toContain('releaseNotesFile: build/release-notes.md');
+    expect(desktopBuilderConfig).toContain('from: build/release-notes.md');
+    expect(desktopBuilderConfig).toContain('to: release-notes.md');
     expect(releaseNotes).toContain(`## PMBrain ${desktopPackage.version}`);
     expect(releaseNotes).toMatch(/^- .+/m);
   });
