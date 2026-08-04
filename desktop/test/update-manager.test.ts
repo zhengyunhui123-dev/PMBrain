@@ -38,7 +38,7 @@ class FakeUpdater extends EventEmitter {
 const logger = { write() {}, close() {}, directory: '', filePath: '' } as any;
 
 describe('desktop update manager', () => {
-  test('shows release notes before download, then stops sidecar before install', async () => {
+  test('auto-downloads after showing release notes, then stops sidecar before install', async () => {
     const updater = new FakeUpdater();
     let stopped = false;
     const states: UpdateState[] = [];
@@ -48,15 +48,13 @@ describe('desktop update manager', () => {
       onState: (state) => states.push(state),
     });
     await manager.check();
-    expect(updater.autoDownload).toBe(false);
-    expect(updater.downloaded).toBe(false);
-    expect(manager.currentState.phase).toBe('available');
-    expect(manager.currentState.releaseDate).toBe('2026-07-25T10:00:00.000Z');
-    expect(manager.currentState.releaseNotes).toContain('提升中文召回');
-    await manager.download();
     await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(updater.autoDownload).toBe(false);
+    expect(updater.autoInstallOnAppQuit).toBe(false);
     expect(updater.downloaded).toBe(true);
     expect(manager.currentState.phase).toBe('downloaded');
+    expect(manager.currentState.releaseDate).toBe('2026-07-25T10:00:00.000Z');
+    expect(manager.currentState.releaseNotes).toContain('提升中文召回');
     const initialDownload = states.find((state) => state.phase === 'downloading' && state.percent === 0);
     expect(initialDownload?.fileName).toBe('PMBrain Desktop-1.0.22.exe');
     expect(initialDownload?.total).toBe(8_000_000);

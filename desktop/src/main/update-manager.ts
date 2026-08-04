@@ -182,8 +182,9 @@ export class UpdateManager {
         releaseNotes: normalizeReleaseNotes(info.releaseNotes),
         fileName: updateFileName(info),
         total: file?.size,
-        message: `发现新版本 ${info.version}，查看更新记录后可开始下载`,
+        message: `发现新版本 ${info.version}，正在自动下载…`,
       });
+      void this.startDownload(info.version);
     });
     updater.on('download-progress', (progress) => {
       const percent = Math.max(0, Math.min(100, Math.round(progress.percent)));

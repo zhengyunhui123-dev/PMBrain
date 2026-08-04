@@ -79,6 +79,8 @@ nsis:
   allowToChangeInstallationDirectory: true
   createDesktopShortcut: true
   createStartMenuShortcut: true
+releaseInfo:
+  releaseNotesFile: build/release-notes.md
 publish:
   provider: generic
   url: https://ghproxy.net/https://github.com/zhengyunhui123-dev/PMBrain/releases/latest/download
