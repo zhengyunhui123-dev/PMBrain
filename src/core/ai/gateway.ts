@@ -2587,7 +2587,10 @@ async function chatOnce(opts: ChatOpts): Promise<ChatResult> {
     providerOptions.anthropic = { cacheControl: { type: 'ephemeral' } };
   }
   if (recipe.id === 'ollama') {
-    providerOptions.ollama = { reasoningEffort: 'none' };
+    // Ollama thinking-capable models may place the whole response in their
+    // thinking channel. Keep local ordinary-model calls on the final-answer
+    // path; this provider-specific option must not affect hosted models.
+    providerOptions.ollama = { reasoningEffort: 'none', think: false };
   }
 
   let _budgetRecorded = false;
