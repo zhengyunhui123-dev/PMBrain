@@ -5884,6 +5884,100 @@ tbody tr:hover td { background: color-mix(in srgb, var(--accent) 4%, var(--conso
 .jobs-error-table td:first-child { width: 64px; color: var(--error); text-align: right; }
 .jobs-error-table td:last-child { text-align: left; }
 .jobs-state-card { max-width: 760px; margin: 0 auto; }
+
+/* Task Center — one quiet control surface for long-running work. */
+.task-center-page { display: grid; gap: 14px; }
+.task-center-page .pm-eyebrow { display: inline-flex; align-items: center; gap: 6px; }
+.task-center-page .pm-eyebrow svg { width: 13px; height: 13px; }
+.task-status-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.task-status-card { min-height: 112px; padding: 16px 18px; border: 1px solid var(--border); border-top: 2px solid var(--accent); border-radius: 12px; background: var(--console-surface); box-shadow: var(--console-panel-shadow); }
+.task-status-card span, .task-status-card small { display: block; color: var(--text-secondary); font-size: 12px; }
+.task-status-card strong { display: block; margin: 10px 0 4px; color: var(--text-primary); font-size: 30px; line-height: 1; }
+.task-status-card-running { border-top-color: var(--accent); }
+.task-status-card-waiting { border-top-color: var(--info, #4784ed); }
+.task-status-card-failed { border-top-color: var(--error); }
+.task-status-card-completed { border-top-color: var(--success); }
+.task-mode-strip, .task-busy-banner { display: flex; justify-content: space-between; align-items: center; gap: 18px; padding: 14px 16px; border: 1px solid var(--border); border-radius: 12px; background: var(--console-surface-soft); }
+.task-mode-strip > div { display: grid; gap: 4px; min-width: 180px; }
+.task-mode-label, .task-origin { color: var(--text-muted); font-size: 10px; letter-spacing: .12em; text-transform: uppercase; }
+.task-mode-strip b { color: var(--text-primary); font-size: 14px; }
+.task-mode-strip p, .task-busy-banner span { margin: 0; color: var(--text-secondary); font-size: 12px; line-height: 1.65; }
+.task-queue-summary { white-space: nowrap; color: var(--text-secondary); font-size: 11px; }
+.task-busy-banner { border-color: color-mix(in srgb, var(--accent-warn, #f1833a) 42%, var(--border)); border-left: 3px solid var(--accent-warn, #f1833a); background: color-mix(in srgb, var(--accent-warn, #f1833a) 8%, var(--console-surface)); }
+.task-busy-banner > div { display: grid; gap: 4px; }
+.task-busy-banner b { color: var(--text-primary); font-size: 13px; }
+.task-busy-dot { display: inline-flex; align-items: center; gap: 7px; color: var(--accent-warn, #f1833a) !important; font-weight: 700; white-space: nowrap; }
+.task-busy-dot::before { width: 7px; height: 7px; border-radius: 50%; background: currentColor; content: ''; }
+.task-section { display: grid; gap: 12px; }
+.task-section-head { display: flex; justify-content: space-between; align-items: end; gap: 16px; }
+.task-section-head h2 { margin: 5px 0 0; }
+.task-run-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.task-history-list { display: grid; gap: 8px; }
+.task-run-card { display: grid; gap: 12px; padding: 16px 18px; border: 1px solid var(--border); border-radius: 12px; background: var(--console-surface); box-shadow: var(--console-panel-shadow); }
+.task-run-card-active { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+.task-run-card-head, .task-run-card-meta, .task-run-card-actions { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.task-run-card-head h3 { margin: 4px 0 0; font-size: 15px; }
+.task-run-card-meta { color: var(--text-secondary); font-size: 11px; }
+.task-run-card-actions { justify-content: flex-start; }
+.task-run-card-actions button, .task-mode-strip button, .dream-busy-actions button { display: inline-flex; align-items: center; gap: 6px; }
+.task-run-card-actions svg, .task-mode-strip svg, .dream-busy-actions svg { width: 14px; height: 14px; }
+.task-run-error { margin: 0; padding: 9px 10px; border-radius: 8px; color: var(--error); background: color-mix(in srgb, var(--error) 8%, transparent); font-size: 12px; line-height: 1.55; }
+.task-run-cancelled { margin: 0; padding: 9px 10px; border-radius: 8px; color: var(--text-secondary); background: color-mix(in srgb, var(--text-muted) 10%, transparent); font-size: 12px; line-height: 1.55; }
+.task-status { display: inline-flex; align-items: center; padding: 4px 8px; border-radius: 999px; font-size: 11px; font-weight: 700; white-space: nowrap; }
+.task-status-running { color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.task-status-queued { color: var(--info, #4784ed); background: color-mix(in srgb, var(--info, #4784ed) 12%, transparent); }
+.task-status-completed { color: var(--success); background: color-mix(in srgb, var(--success) 12%, transparent); }
+.task-status-failed { color: var(--error); background: color-mix(in srgb, var(--error) 10%, transparent); }
+.task-status-cancelled { color: var(--text-secondary); background: color-mix(in srgb, var(--text-muted) 12%, transparent); }
+.task-filter-bar { display: flex; gap: 5px; padding: 4px; border: 1px solid var(--border); border-radius: 9px; background: var(--console-surface-soft); }
+.task-filter-bar button { border: 0; border-radius: 6px; padding: 6px 10px; color: var(--text-secondary); background: transparent; cursor: pointer; font-size: 11px; }
+.task-filter-bar button.active { color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, var(--console-surface)); font-weight: 700; }
+.task-empty, .task-retention-note { color: var(--text-secondary); font-size: 12px; }
+.task-empty { padding: 24px; border: 1px dashed var(--border); border-radius: 11px; text-align: center; }
+.task-retention-note { margin: 0; }
+.task-detail-drawer { width: min(720px, 100vw); }
+.task-detail-drawer h2 { margin: 7px 0 0; font-size: 23px; }
+.task-detail-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 20px 0; }
+.task-detail-grid > div { display: grid; gap: 5px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 9px; background: var(--console-surface-soft); }
+.task-detail-grid span { color: var(--text-secondary); font-size: 11px; }
+.task-detail-grid b { color: var(--text-primary); font-size: 12px; overflow-wrap: anywhere; }
+.task-detail-result { margin-top: 12px; padding: 13px 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--console-surface-soft); }
+.task-detail-result h3 { margin: 0 0 7px; font-size: 13px; }
+.task-detail-result p { margin: 0; color: var(--text-secondary); font-size: 12px; line-height: 1.65; }
+.task-detail-result-error { border-color: color-mix(in srgb, var(--error) 35%, var(--border)); }
+.task-detail-result-error p { color: var(--error); }
+.task-detail-result-cancelled { border-color: color-mix(in srgb, var(--text-muted) 35%, var(--border)); }
+.task-technical-details { margin-top: 14px; border-top: 1px solid var(--border); padding-top: 14px; }
+.task-technical-details summary { color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 700; }
+.task-state-card { max-width: 760px; margin: 0 auto; }
+
+/* A busy PGLite connection is an expected, recoverable state. */
+.pglite-busy-notice { display: flex; align-items: center; justify-content: space-between; gap: 18px; }
+.pglite-busy-copy { display: grid; gap: 5px; min-width: 0; }
+.pglite-busy-copy p { margin: 0; line-height: 1.65; }
+.pglite-busy-copy p + p { color: var(--text-secondary); font-size: 12px; }
+.pglite-busy-notice button { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 7px; white-space: nowrap; }
+.pglite-busy-notice button svg { width: 14px; height: 14px; }
+
+/* Dream fallback while the sidecar has released PGLite to an exclusive child. */
+.dream-busy-recovery { display: grid; gap: 14px; padding: 22px; border: 1px solid color-mix(in srgb, var(--accent-warn, #f1833a) 35%, var(--border)); border-radius: 14px; background: var(--console-surface); box-shadow: var(--console-panel-shadow); }
+.dream-busy-recovery-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 18px; }
+.dream-busy-recovery-head h2 { margin: 6px 0 8px; font-size: 20px; }
+.dream-busy-recovery-head p { max-width: 700px; margin: 0; color: var(--text-secondary); font-size: 13px; line-height: 1.7; }
+.dream-busy-pulse { display: inline-flex; align-items: center; gap: 7px; color: var(--accent-warn, #f1833a); font-size: 12px; font-weight: 700; white-space: nowrap; }
+.dream-busy-pulse i { width: 9px; height: 9px; border-radius: 50%; background: currentColor; box-shadow: 0 0 0 5px color-mix(in srgb, currentColor 14%, transparent); }
+.dream-busy-recovery-note { display: grid; gap: 4px; padding: 13px 14px; border-radius: 10px; background: color-mix(in srgb, var(--accent-warn, #f1833a) 8%, var(--console-surface-soft)); }
+.dream-busy-recovery-note b { color: var(--text-primary); font-size: 13px; }
+.dream-busy-recovery-note span { color: var(--text-secondary); font-size: 12px; }
+.dream-busy-run-list { display: grid; gap: 8px; }
+.dream-busy-run-list > div { display: grid; grid-template-columns: 1fr auto; gap: 4px 14px; align-items: center; padding: 12px 14px; border: 1px solid var(--border); border-radius: 10px; }
+.dream-busy-run-list > div > div { display: flex; align-items: center; gap: 10px; }
+.dream-busy-run-list b { color: var(--text-primary); font-size: 13px; }
+.dream-busy-run-list div div span, .dream-busy-run-list small { color: var(--text-secondary); font-size: 11px; }
+.dream-busy-run-list small { grid-column: 1; }
+.dream-busy-run-list button { grid-column: 2; grid-row: 1 / span 2; }
+.dream-busy-actions { display: flex; justify-content: flex-end; gap: 8px; }
+
 .system-diagnostic-page .metrics-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .system-diagnostic-page > .pm-card:last-child { min-height: 120px; }
 .diagnostic-history { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--console-line); }
@@ -6494,13 +6588,112 @@ html[data-theme="dark"] .mcp-guide-steps span,
 html[data-theme="dark"] .nl-history-list button,
 html[data-theme="dark"] .dream-journey { background: var(--console-surface-soft); }
 
+/* The Dream execute view has a few legacy light-theme internals. Keep the
+   entire page on the same dark console palette, including nested result cards. */
+html[data-theme="dark"] .dream-page .dream-phase-rail section,
+html[data-theme="dark"] .dream-page .dream-result-grid section,
+html[data-theme="dark"] .dream-page .dream-outcome-content-grid section,
+html[data-theme="dark"] .dream-page .dream-ops-grid section,
+html[data-theme="dark"] .dream-page .dream-outcome-metrics > div,
+html[data-theme="dark"] .dream-page .dream-technical-details,
+html[data-theme="dark"] .dream-page .dream-diagnostics-details {
+  border-color: var(--console-line);
+  background: var(--console-surface);
+}
+html[data-theme="dark"] .dream-page .dream-phase-rail h2,
+html[data-theme="dark"] .dream-page .dream-result-grid h3,
+html[data-theme="dark"] .dream-page .dream-outcome-content-grid h3,
+html[data-theme="dark"] .dream-page .dream-outcome-metrics b,
+html[data-theme="dark"] .dream-page .dream-ops-head h3,
+html[data-theme="dark"] .dream-page .dream-ops-grid h4 {
+  color: var(--text-primary);
+}
+html[data-theme="dark"] .dream-page .dream-phase-rail span {
+  color: var(--text-secondary);
+  background: var(--console-surface-soft);
+}
+html[data-theme="dark"] .dream-page .dream-phase-rail span.active {
+  color: var(--accent);
+  background: var(--console-violet-soft);
+}
+html[data-theme="dark"] .dream-page .dream-run-mode {
+  border-color: var(--console-line);
+  background: var(--console-surface-soft);
+}
+html[data-theme="dark"] .dream-page .dream-run-mode button {
+  border-color: var(--console-line);
+  background: var(--console-surface);
+  color: var(--text-secondary);
+}
+html[data-theme="dark"] .dream-page .dream-run-mode button.active {
+  border-color: var(--accent);
+  background: var(--console-violet-soft);
+  color: var(--accent);
+}
+html[data-theme="dark"] .dream-page .dream-run-mode button span,
+html[data-theme="dark"] .dream-page .dream-run-grid label span,
+html[data-theme="dark"] .dream-page .dream-result-grid ul,
+html[data-theme="dark"] .dream-page .dream-outcome-content-grid p,
+html[data-theme="dark"] .dream-page .dream-outcome-content-grid ul,
+html[data-theme="dark"] .dream-page .dream-outcome-metrics span,
+html[data-theme="dark"] .dream-page .dream-technical-details > summary,
+html[data-theme="dark"] .dream-page .dream-diagnostics-details > summary,
+html[data-theme="dark"] .dream-page .dream-friendly-empty {
+  color: var(--text-secondary);
+}
+html[data-theme="dark"] .dream-page .dream-run-grid .dream-input-disabled input,
+html[data-theme="dark"] .dream-page .dream-run-grid .dream-input-disabled select {
+  border-color: var(--console-line);
+  background: var(--console-surface-soft);
+  color: var(--text-muted);
+}
+html[data-theme="dark"] .dream-page .dream-run-grid .dream-input-disabled input::placeholder,
+html[data-theme="dark"] .dream-page .dream-run-grid .dream-input-disabled select::placeholder {
+  color: var(--text-muted);
+}
+html[data-theme="dark"] .dream-page .dream-run-narrative,
+html[data-theme="dark"] .dream-page .dream-ops-diagnostics {
+  border-color: var(--console-line);
+  background: var(--console-surface-soft);
+}
+html[data-theme="dark"] .dream-page .dream-run-narrative > p,
+html[data-theme="dark"] .dream-page .dream-ops-head p,
+html[data-theme="dark"] .dream-page .dream-outcome-metrics small {
+  color: var(--text-secondary);
+}
+html[data-theme="dark"] .dream-page .dream-detail-chips span {
+  color: var(--text-secondary);
+  background: var(--console-violet-soft);
+}
+html[data-theme="dark"] .dream-page .dream-outcome-metrics > div.has-warning,
+html[data-theme="dark"] .dream-page .dream-outcome-content-grid section.has-warning {
+  border-color: color-mix(in srgb, var(--warning) 45%, var(--console-line));
+  background: color-mix(in srgb, var(--warning) 10%, var(--console-surface));
+}
+html[data-theme="dark"] .dream-page .dream-outcome-content,
+html[data-theme="dark"] .dream-page .dream-execution-log {
+  border-top-color: var(--console-line);
+}
+html[data-theme="dark"] .dream-page .dream-execution-log > summary { color: var(--text-secondary); }
+html[data-theme="dark"] .dream-page .run-output-copy {
+  border-color: var(--console-line);
+  background: var(--console-surface);
+  color: var(--accent);
+}
+html[data-theme="dark"] .dream-page .dream-journey-head h2,
+html[data-theme="dark"] .dream-page .dream-journey-step b,
+html[data-theme="dark"] .dream-page .dream-friendly-empty b { color: var(--text-primary); }
+html[data-theme="dark"] .dream-page .dream-journey-step span { color: var(--text-secondary); }
+
 @media (max-width: 1180px) {
   .mcp-client-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .connection-center-page .mcp-guide-steps { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .mcp-endpoint-grid { grid-template-columns: 1fr; }
   .filter-bar { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .metrics-grid,
-  .system-diagnostic-page .metrics-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .system-diagnostic-page .metrics-grid,
+  .task-status-grid,
+  .task-run-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 @media (max-width: 980px) {
@@ -6524,7 +6717,24 @@ html[data-theme="dark"] .dream-journey { background: var(--console-surface-soft)
   .connection-center-page .mcp-guide-steps,
   .settings-operations,
   .metrics-grid,
-  .system-diagnostic-page .metrics-grid { grid-template-columns: 1fr; }
+  .system-diagnostic-page .metrics-grid,
+  .task-status-grid,
+  .task-run-grid { grid-template-columns: 1fr; }
+  .task-mode-strip,
+  .task-busy-banner,
+  .pglite-busy-notice,
+  .task-section-head,
+  .dream-busy-recovery-head { align-items: flex-start; flex-direction: column; }
+  .task-queue-summary { white-space: normal; }
+  .task-filter-bar { width: 100%; }
+  .task-filter-bar button { flex: 1; }
+  .task-run-card-head,
+  .task-run-card-meta { align-items: flex-start; flex-direction: column; }
+  .dream-busy-run-list > div { grid-template-columns: 1fr; }
+  .dream-busy-run-list small,
+  .dream-busy-run-list button { grid-column: 1; grid-row: auto; }
+  .dream-busy-actions { justify-content: stretch; }
+  .dream-busy-actions button { flex: 1; justify-content: center; }
   .dream-schedule-time { grid-template-columns: 1fr; }
   .dream-schedule-time button { width: 100%; justify-self: stretch; }
   .request-agent-filter { grid-template-columns: auto minmax(0, 1fr); }
