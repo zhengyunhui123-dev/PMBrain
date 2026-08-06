@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { LoginPage } from './pages/Login';
 import { AgentsPage } from './pages/Agents';
 import { RequestLogPage } from './pages/RequestLog';
+import { TaskCenterPage } from './pages/TaskCenter';
 import { CalibrationPage } from './pages/Calibration';
 import {
   DreamCalibrationPage,
@@ -34,7 +35,7 @@ import {
 } from './lib/theme';
 import {
   BookOpenText, Bot, BrainCircuit, Cable,
-  Database, FileClock, FolderKanban, HeartHandshake, LayoutDashboard,
+  Database, FileClock, FolderKanban, HeartHandshake, LayoutDashboard, ListTodo,
   MonitorCog, Sparkles, Upload, type LucideIcon,
 } from 'lucide-react';
 
@@ -42,7 +43,7 @@ const PAGES = [
   'login', 'dashboard', 'natural',
   'dream', 'dream-execute', 'dream-knowledge', 'dream-takes', 'dream-scoring', 'dream-calibration', 'dream-insights',
   'import', 'data', 'docs',
-  'mcp', 'config', 'agents', 'log', 'calibration',
+  'mcp', 'tasks', 'config', 'agents', 'log', 'calibration',
   'settings', 'settings-general', 'settings-knowledge', 'settings-dream',
   'settings-import',
 ] as const;
@@ -55,7 +56,7 @@ function getPage(): Page {
 }
 
 type NavIconName =
-  | 'overview' | 'workspace' | 'database' | 'organize' | 'mcp' | 'log' | 'assistant'
+  | 'overview' | 'workspace' | 'database' | 'organize' | 'mcp' | 'tasks' | 'log' | 'assistant'
   | 'settings-general' | 'settings-knowledge' | 'settings-dream'
   | 'settings-import';
 
@@ -65,6 +66,7 @@ const NAV_ICONS: Record<NavIconName, LucideIcon> = {
   database: Database,
   organize: BookOpenText,
   mcp: Cable,
+  tasks: ListTodo,
   log: FileClock,
   assistant: Bot,
   'settings-general': MonitorCog,
@@ -114,6 +116,7 @@ export function App() {
     ] },
     { title: '集成', items: [
       { page: 'mcp', label: 'MCP 接入', icon: 'mcp' },
+      { page: 'tasks', label: '任务中心', icon: 'tasks' },
       { page: 'log', label: '请求日志', icon: 'log' },
     ] },
   ], []);
@@ -263,6 +266,7 @@ export function App() {
         {page === 'docs' && <DocumentationPage />}
         {page === 'natural' && <NaturalLanguagePage />}
         {page === 'mcp' && <ConnectionCenterPage />}
+        {page === 'tasks' && <TaskCenterPage />}
         {page === 'config' && <ModelConfigPage />}
         {page === 'agents' && <AgentsPage />}
         {page === 'log' && <RequestLogPage />}

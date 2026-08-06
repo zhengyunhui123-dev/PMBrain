@@ -1,5 +1,11 @@
 const BASE = '';
 
+export function isPgliteBusyError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const candidate = error as { status?: unknown; code?: unknown };
+  return candidate.status === 423 && candidate.code === 'pglite_busy';
+}
+
 // v0.26.3 trust model (D11 + D12): the admin UI does NOT cache the
 // bootstrap token in browser JS state. On 401, redirect to login —
 // no auto-reauth via saved token, no localStorage/sessionStorage read.
@@ -17,7 +23,10 @@ async function apiFetch(path: string, options?: RequestInit) {
   }
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    throw new Error(body.error || `HTTP ${res.status}`);
+    const error = new Error(body.error || `HTTP ${res.status}`) as Error & { status?: number; code?: string };
+    error.status = res.status;
+    error.code = typeof body.code === 'string' ? body.code : undefined;
+    throw error;
   }
   return res.json();
 }
@@ -82,6 +91,7 @@ export const api = {
   run: (id: string) => apiFetch(`/admin/api/runs/${encodeURIComponent(id)}`),
   cancelRun: (id: string) => apiFetch(`/admin/api/runs/${encodeURIComponent(id)}/cancel`, { method: 'POST' }),
   startActionRun: (action: string) => apiFetch('/admin/api/runs/action', { method: 'POST', body: JSON.stringify({ action }) }),
+  taskCenter: () => apiFetch('/admin/api/task-center'),
   startImportRun: (body: { path: string; sourceId?: string; includeOffice: boolean; includeImages: boolean; autoEmbed: boolean; workers: number }) =>
     apiFetch('/admin/api/import-runs', { method: 'POST', body: JSON.stringify(body) }),
   startImportUploadRun: (file: File, options: { sourceId?: string; autoEmbed: boolean; workers: number }) => {
