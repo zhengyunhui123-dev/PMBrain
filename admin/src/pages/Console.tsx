@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { api } from '../api';
+import { api, isPgliteBusyError } from '../api';
 import { useCallback, useRef } from 'react';
 import { AgentsPage } from './Agents';
 import { ChatGptTunnelPanel } from './ChatGptTunnel';
@@ -13,7 +13,7 @@ import * as Tooltip from '@radix-ui/react-tooltip';
 import {
   Activity, AlertTriangle, Bot, Boxes, CheckCircle2, ChevronDown, Clock3, Cpu, Database,
   Download, FileText, FolderKanban, FolderTree, History, Layers3, Link2,
-  MonitorCog, Plus, RefreshCw, Search, Sparkles, Tags, Upload, type LucideIcon,
+  ListTodo, MonitorCog, Plus, RefreshCw, Search, Sparkles, Tags, Upload, type LucideIcon,
 } from 'lucide-react';
 import {
   Area, AreaChart, CartesianGrid, Cell, Pie, PieChart, ResponsiveContainer,
@@ -208,21 +208,46 @@ function LoadingBlock({ text = '正在读取 PMBrain 状态...' }: { text?: stri
   return <div className="pm-card pm-empty">{text}</div>;
 }
 
+function PgliteBusyNotice({
+  message = 'PGLite 正在执行导入或知识整理，完成后会自动恢复连接。',
+  onNavigate,
+}: {
+  message?: string;
+  onNavigate?: (page: string) => void;
+}) {
+  return (
+    <div className="pm-card pm-error pglite-busy-notice" role="alert">
+      <div className="pglite-busy-copy">
+        <p>{message}</p>
+        <p>可去任务中心查看任务进度和取消任务。</p>
+      </div>
+      {onNavigate && (
+        <button type="button" className="pm-ghost" onClick={() => onNavigate('tasks')}>
+          <ListTodo aria-hidden="true" /> 打开任务中心
+        </button>
+      )}
+    </div>
+  );
+}
+
 function useOverview() {
   const [overview, setOverview] = useState<BrainOverview | null>(null);
   const [error, setError] = useState('');
+  const [pgliteBusy, setPgliteBusy] = useState(false);
 
   const load = useCallback(async () => {
     try {
       setOverview(await api.brainOverview() as BrainOverview);
       setError('');
+      setPgliteBusy(false);
     } catch (e) {
+      setPgliteBusy(isPgliteBusyError(e));
       setError(e instanceof Error ? e.message : String(e));
     }
   }, []);
 
   useEffect(() => { void load(); }, [load]);
-  return { overview, error, reload: load };
+  return { overview, error, pgliteBusy, reload: load };
 }
 
 function sourceLabel(source?: SourceSummary): string {
@@ -297,7 +322,7 @@ function MainSourceSettings({ overview, onSaved }: { overview: BrainOverview; on
 }
 
 export function KnowledgeWorkbenchPage({ onNavigate }: { onNavigate?: (page: string) => void }) {
-  const { overview, error, reload } = useOverview();
+  const { overview, error, pgliteBusy, reload } = useOverview();
   const [serviceStats, setServiceStats] = useState({ connected_agents: 0, requests_today: 0, active_tokens: 0 });
   const [health, setHealth] = useState({ expiring_soon: 0, error_rate: '0%' });
   const [showAllTypes, setShowAllTypes] = useState(false);
@@ -343,6 +368,7 @@ export function KnowledgeWorkbenchPage({ onNavigate }: { onNavigate?: (page: str
     };
   }, []);
 
+  if (pgliteBusy) return <PgliteBusyNotice message={error} onNavigate={onNavigate} />;
   if (error) return <div className="pm-card pm-error">{error}</div>;
   if (!overview) return <LoadingBlock />;
 

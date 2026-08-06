@@ -1499,7 +1499,8 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
     requireAdmin(req, res, () => {
       const canReadRun = req.method === 'GET' && req.path.startsWith('/runs');
       const canCancelRun = req.method === 'POST' && /^\/runs\/[^/]+\/cancel$/.test(req.path);
-      if (canReadRun || canCancelRun) {
+      const canReadTaskCenter = req.method === 'GET' && req.path === '/task-center';
+      if (canReadRun || canCancelRun || canReadTaskCenter) {
         next();
         return;
       }
@@ -1627,6 +1628,28 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
       const msg = e instanceof Error ? e.message : String(e);
       res.status(500).json({ error: msg });
     }
+  });
+
+  // Task Center is intentionally safe during an exclusive PGLite run. It
+  // reports the in-memory ConsoleRun state without touching the database, so
+  // the Admin UI can still show progress and cancel the owning child process.
+  app.get('/admin/api/task-center', requireAdmin, async (_req: Request, res: Response) => {
+    let queue: unknown = null;
+    if (!pgliteBusy) {
+      try {
+        const { readSnapshot } = await import('./jobs-watch.ts');
+        queue = await readSnapshot(engine);
+      } catch {
+        queue = null;
+      }
+    }
+    res.json({
+      mode: config.engine === 'pglite' ? 'pglite' : 'postgres',
+      pglite_busy: pgliteBusy,
+      rows: listRuns(),
+      queue,
+      server_time: new Date().toISOString(),
+    });
   });
 
   app.get('/admin/api/brain/overview', requireAdmin, async (_req: Request, res: Response) => {

@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { api } from '../api';
+import { api, isPgliteBusyError } from '../api';
 import { RunOutput, formatDate, pageTypeLabel, pageTypeTitle, type ConsoleRun } from '../lib/shared';
 import { TakeProposalsPage } from './TakeProposals';
 import { CalibrationPage } from './Calibration';
@@ -259,6 +259,8 @@ function useDreamData() {
   const [data, setData] = useState<DreamData | null>(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [busyRuns, setBusyRuns] = useState<ConsoleRun[]>([]);
 
   const load = async () => {
     // Keep the current Dream page mounted during background refreshes. Replacing
@@ -267,15 +269,33 @@ function useDreamData() {
     try {
       setData(await api.dreamOverview() as DreamData);
       setError('');
+      setBusy(false);
+      setBusyRuns([]);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      if (isPgliteBusyError(err)) {
+        setError('');
+        setBusy(true);
+        try {
+          const snapshot = await api.taskCenter() as { rows?: ConsoleRun[] };
+          setBusyRuns(Array.isArray(snapshot.rows) ? snapshot.rows : []);
+        } catch (snapshotError) {
+          setError(snapshotError instanceof Error ? snapshotError.message : String(snapshotError));
+        }
+      } else {
+        setError(err instanceof Error ? err.message : String(err));
+      }
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => { void load(); }, []);
-  return { data, error, loading, reload: load };
+  useEffect(() => {
+    if (!busy) return;
+    const timer = window.setInterval(() => void load(), 1500);
+    return () => window.clearInterval(timer);
+  }, [busy]);
+  return { data, error, loading, busy, busyRuns, reload: load };
 }
 
 function DreamShell({
@@ -1116,6 +1136,74 @@ function DreamOpsDiagnostics({
   );
 }
 
+function busyRunTitle(kind: string): string {
+  if (kind.startsWith('dream_')) {
+    if (kind.includes('quick')) return '快速维护';
+    if (kind.includes('meeting')) return '会议与会话整理';
+    return '知识整理';
+  }
+  if (kind === 'import_path') return '文件导入';
+  if (kind === 'embed_stale') return '重新向量化';
+  if (kind === 'sync_all') return '知识源同步';
+  return kind;
+}
+
+function DreamBusyRecovery({ runs, onRefresh }: { runs: ConsoleRun[]; onRefresh: () => void }) {
+  const [cancelling, setCancelling] = useState('');
+  const liveRuns = runs.filter(run => run.status === 'running' || run.status === 'queued');
+
+  const cancel = async (run: ConsoleRun) => {
+    if (!window.confirm(run.status === 'queued'
+      ? '取消等待后，本次任务不会再启动。确定取消吗？'
+      : '取消任务不会删除已经完成的成果，确定继续吗？')) return;
+    setCancelling(run.id);
+    try {
+      await api.cancelRun(run.id);
+      onRefresh();
+    } catch {
+      onRefresh();
+    } finally {
+      setCancelling('');
+    }
+  };
+
+  return (
+    <div className="dream-busy-recovery">
+      <div className="dream-busy-recovery-head">
+        <div>
+          <span className="dream-eyebrow">DATABASE TASK IN PROGRESS</span>
+          <h2>PGLite 正在执行后台任务</h2>
+          <p>本地数据库正在由后台任务独占。页面切换不会中断任务，任务完成后会自动恢复知识整理页面。</p>
+        </div>
+        <div className="dream-busy-pulse"><i />运行中</div>
+      </div>
+      <div className="dream-busy-recovery-note">
+        <b>你仍然可以管理当前任务</b>
+        <span>如果需要中止 Dream，请在下面取消；已经完成的内容不会因为取消而自动删除。</span>
+      </div>
+      {liveRuns.length > 0 ? (
+        <div className="dream-busy-run-list">
+          {liveRuns.map(run => (
+            <div key={run.id}>
+              <div><b>{busyRunTitle(run.kind)}</b><span>{run.status === 'queued' ? '等待中' : '运行中'}</span></div>
+              <small>{run.status === 'queued' ? '等待 PGLite 空闲后启动' : `任务编号 ${run.id}`}</small>
+              <button type="button" className="pm-ghost danger" disabled={cancelling === run.id} onClick={() => void cancel(run)}>
+                {cancelling === run.id ? '正在取消…' : run.status === 'queued' ? '取消等待' : '中止任务'}
+              </button>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="pm-hint">当前服务没有返回可取消的任务记录；如果任务来自其他 PMBrain 进程，请先在任务中心确认持有者。</div>
+      )}
+      <div className="dream-busy-actions">
+        <button type="button" className="pm-ghost" onClick={onRefresh}>刷新任务状态</button>
+        <button type="button" className="pm-primary" onClick={() => { window.location.hash = 'tasks'; }}>打开任务中心</button>
+      </div>
+    </div>
+  );
+}
+
 function DreamRunPanel({
   defaultPhase = 'all',
   defaultSourceId,
@@ -1514,7 +1602,8 @@ function RecentRuns({ runs }: { runs: ConsoleRun[] }) {
 }
 
 export function DreamOverviewPage() {
-  const { data, error, loading, reload } = useDreamData();
+  const { data, error, loading, busy, busyRuns, reload } = useDreamData();
+  if (busy) return <DreamShell title="AI 知识整理"><DreamBusyRecovery runs={busyRuns} onRefresh={() => void reload()} /></DreamShell>;
   if (error) return <DreamShell title="AI 知识整理"><ErrorBlock message={error} /></DreamShell>;
   if (loading || !data) return <DreamShell title="AI 知识整理"><Loading text="正在了解你的知识库…" /></DreamShell>;
 
@@ -1625,7 +1714,8 @@ export function DreamOverviewPage() {
 }
 
 export function DreamExecutePage() {
-  const { data, error, loading, reload } = useDreamData();
+  const { data, error, loading, busy, busyRuns, reload } = useDreamData();
+  if (busy) return <DreamShell title="阶段执行"><DreamBusyRecovery runs={busyRuns} onRefresh={() => void reload()} /></DreamShell>;
   return (
     <DreamShell title="阶段执行">
       {error && <ErrorBlock message={error} />}
@@ -1658,7 +1748,8 @@ export function DreamExecutePage() {
 }
 
 export function DreamKnowledgePage() {
-  const { data, error, loading, reload } = useDreamData();
+  const { data, error, loading, busy, busyRuns, reload } = useDreamData();
+  if (busy) return <DreamShell title="知识沉淀"><DreamBusyRecovery runs={busyRuns} onRefresh={() => void reload()} /></DreamShell>;
   if (error) return <DreamShell title="知识沉淀"><ErrorBlock message={error} /></DreamShell>;
   if (loading || !data) return <DreamShell title="知识沉淀"><Loading /></DreamShell>;
   const types = data.knowledge.types;
@@ -1699,7 +1790,8 @@ export function DreamTakesPage() {
 }
 
 export function DreamScoringPage() {
-  const { data, error, loading, reload } = useDreamData();
+  const { data, error, loading, busy, busyRuns, reload } = useDreamData();
+  if (busy) return <DreamShell title="权重与评分"><DreamBusyRecovery runs={busyRuns} onRefresh={() => void reload()} /></DreamShell>;
   if (error) return <DreamShell title="权重与评分"><ErrorBlock message={error} /></DreamShell>;
   if (loading || !data) return <DreamShell title="权重与评分"><Loading /></DreamShell>;
   return (
@@ -1754,7 +1846,8 @@ export function DreamCalibrationPage() {
 }
 
 export function DreamInsightsPage() {
-  const { data, error, loading, reload } = useDreamData();
+  const { data, error, loading, busy, busyRuns, reload } = useDreamData();
+  if (busy) return <DreamShell title="知识维护与质量"><DreamBusyRecovery runs={busyRuns} onRefresh={() => void reload()} /></DreamShell>;
   if (error) return <DreamShell title="知识维护与质量"><ErrorBlock message={error} /></DreamShell>;
   if (loading || !data) return <DreamShell title="知识维护与质量"><Loading /></DreamShell>;
   return (
