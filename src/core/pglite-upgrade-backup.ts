@@ -345,7 +345,7 @@ export async function createVerifiedPgliteUpgradeBackup(
   }
 
   const lock = await acquireLock(databasePath, {
-    role: 'migration',
+    ownerType: 'migration',
     timeoutMs: options.lockTimeoutMs ?? 30_000,
   });
   try {

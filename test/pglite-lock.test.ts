@@ -64,7 +64,6 @@ describe('pglite-lock v2', () => {
     await releaseLock(lock1);
   });
 
-<<<<<<< HEAD
   test('3. archives lock when PID does not exist', async () => {
     writeLockFixture(TEST_DIR, {
       schemaVersion: 2,
@@ -79,43 +78,6 @@ describe('pglite-lock v2', () => {
       updatedAt: new Date().toISOString(),
     });
     inspector.clearProcess(999999991);
-=======
-  test('permission-denied liveness checks are treated as a live owner and never reaped', async () => {
-    const lockDir = join(TEST_DIR, '.gbrain-lock');
-    mkdirSync(lockDir);
-    writeFileSync(join(lockDir, 'lock'), JSON.stringify({
-      pid: 424242,
-      acquired_at: Date.now(),
-      command: 'protected owner',
-      role: 'cli',
-      owner_token: 'protected-owner-token',
-    }));
-
-    const originalKill = process.kill;
-    process.kill = (() => {
-      const error = new Error('operation not permitted') as NodeJS.ErrnoException;
-      error.code = 'EPERM';
-      throw error;
-    }) as typeof process.kill;
-    try {
-      await expect(acquireLock(TEST_DIR, { timeoutMs: 100 })).rejects.toThrow(/Timed out/);
-      expect(JSON.parse(readFileSync(join(lockDir, 'lock'), 'utf-8')).owner_token).toBe(
-        'protected-owner-token',
-      );
-    } finally {
-      process.kill = originalKill;
-    }
-  });
-  test('detects and cleans stale lock from dead process', async () => {
-    // Simulate a stale lock from a dead process
-    const lockDir = join(TEST_DIR, '.gbrain-lock');
-    mkdirSync(lockDir);
-    writeFileSync(join(lockDir, 'lock'), JSON.stringify({
-      pid: 999999999, // Non-existent PID
-      acquired_at: Date.now(),
-      command: 'test',
-    }));
->>>>>>> 6a2c6ad171d97368c36050d97f69297926787ea9
 
     const lock = await acquireLock(TEST_DIR, { inspector, ownerType: 'cli' });
     expect(lock.acquired).toBe(true);
@@ -357,7 +319,6 @@ describe('pglite-lock v2', () => {
     await releaseLock(lock);
   });
 
-<<<<<<< HEAD
   test('legacy lock with dead PID is archived', async () => {
     writeLockFixture(TEST_DIR, {
       pid: 999999992,
@@ -365,28 +326,6 @@ describe('pglite-lock v2', () => {
       command: 'old-pmbrain',
     });
     const lock = await acquireLock(TEST_DIR, { inspector });
-=======
-  test('lock file contains PID and command', async () => {
-    const lock = await acquireLock(TEST_DIR, { role: 'migration' });
-    const lockData = JSON.parse(readFileSync(join(TEST_DIR, '.gbrain-lock', 'lock'), 'utf-8'));
-
-    expect(lockData.pid).toBe(process.pid);
-    expect(lockData.acquired_at).toBeDefined();
-    expect(lockData.refreshed_at).toBeDefined();
-    expect(lockData.command).toBeDefined();
-    expect(lockData.role).toBe('migration');
-    expect(typeof lockData.owner_token).toBe('string');
-    expect(lockData.owner_token.length).toBeGreaterThan(10);
-    expect(lock.ownerToken).toBe(lockData.owner_token);
-    expect(lock.heartbeat).toBeDefined();
-
-    await releaseLock(lock);
-    expect(lock.heartbeat).toBeUndefined();
-  });
-
-  test('releases lock on disconnect even if DB close fails', async () => {
-    const lock = await acquireLock(TEST_DIR);
->>>>>>> 6a2c6ad171d97368c36050d97f69297926787ea9
     expect(lock.acquired).toBe(true);
     await releaseLock(lock);
   });
@@ -436,74 +375,5 @@ describe('classifySidecarStartupError', () => {
     const c = classifySidecarStartupError(new Error('listen EADDRINUSE: address already in use'));
     expect(c.category).toBe('port_conflict');
     expect(c.retryable).toBe(true);
-  });
-
-
-  test('never steals a live lock even when its heartbeat is stale', async () => {
-    const lockDir = join(TEST_DIR, '.gbrain-lock');
-    mkdirSync(lockDir);
-    writeFileSync(join(lockDir, 'lock'), JSON.stringify({
-      pid: process.pid,
-      acquired_at: Date.now() - 60 * 60 * 1000,
-      refreshed_at: Date.now() - 30 * 60 * 1000,
-      command: 'pmbrain embed --stale',
-      role: 'cli',
-      owner_token: 'live-owner-token',
-    }));
-
-    await expect(acquireLock(TEST_DIR, { timeoutMs: 100 })).rejects.toThrow(/Timed out/);
-    const lockData = JSON.parse(readFileSync(join(lockDir, 'lock'), 'utf-8'));
-    expect(lockData.owner_token).toBe('live-owner-token');
-  });
-
-  test('a stale handle cannot delete a replacement owner lock', async () => {
-    const lock: LockHandle = await acquireLock(TEST_DIR);
-    expect(lock.ownerToken).toBeDefined();
-    if (lock.heartbeat) clearInterval(lock.heartbeat);
-
-    const lockFile = join(TEST_DIR, '.gbrain-lock', 'lock');
-    writeFileSync(lockFile, JSON.stringify({
-      pid: process.pid,
-      acquired_at: Date.now() + 1,
-      refreshed_at: Date.now() + 1,
-      command: 'replacement owner',
-      role: 'desktop-sidecar',
-      owner_token: 'replacement-owner-token',
-    }));
-
-    await releaseLock(lock);
-
-    expect(existsSync(lockFile)).toBe(true);
-    expect(JSON.parse(readFileSync(lockFile, 'utf-8')).owner_token).toBe('replacement-owner-token');
-  });
-
-  test('corrupt lock metadata is blocked instead of being deleted automatically', async () => {
-    const lockDir = join(TEST_DIR, '.gbrain-lock');
-    mkdirSync(lockDir);
-    writeFileSync(join(lockDir, 'lock'), '{not valid json');
-
-    await expect(acquireLock(TEST_DIR, { timeoutMs: 100 })).rejects.toThrow(/lock metadata is unreadable/i);
-    expect(existsSync(lockDir)).toBe(true);
-  });
-
-  test('a live desktop sidecar owner fails fast with a clear local-service hint', async () => {
-    const lockDir = join(TEST_DIR, '.gbrain-lock');
-    mkdirSync(lockDir);
-    writeFileSync(join(lockDir, 'lock'), JSON.stringify({
-      pid: process.pid,
-      acquired_at: Date.now(),
-      refreshed_at: Date.now(),
-      command: 'pmbrain-sidecar.js serve --http',
-      subcommand: 'serve',
-      role: 'desktop-sidecar',
-      owner_token: 'desktop-owner-token',
-    }));
-
-    const startedAt = Date.now();
-    await expect(acquireLock(TEST_DIR, { timeoutMs: 5_000 })).rejects.toThrow(
-      /desktop sidecar|local service/i,
-    );
-    expect(Date.now() - startedAt).toBeLessThan(1_000);
-    expect(existsSync(lockDir)).toBe(true);
   });
 });

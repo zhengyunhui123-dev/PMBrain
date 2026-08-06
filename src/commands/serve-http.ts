@@ -87,6 +87,7 @@ import {
   startThinkRun,
   sanitizeOutput,
 } from './admin-console.ts';
+import { runAdminKnowledgeSearch } from './admin-knowledge-search.ts';
 import { waitForAdminSupervisorReady } from './admin-supervisor.ts';
 import {
   buildChatGptTunnelProfile,
@@ -1768,19 +1769,18 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
     const today = adminDreamScheduleDateKey(now);
     try {
       const sourceId = await resolveMainSourceId(engine);
-      if (engine.kind !== 'pglite') await ensureAdminWorkerStarted();
+      // Same entry as Admin「快速维护」: dream --preset quick. No parallel organize pipeline.
+      // Unattended runs keep a 120-minute safety timeout; manual quick has no default timeout.
       await engine.setConfig(ADMIN_DREAM_SCHEDULE_LAST_STARTED_DATE_KEY, today);
       const run = await startDreamRun({
-        preset: 'full',
+        preset: 'quick',
         sourceId,
-        drainProposals: true,
-        windowSeconds: 90 * 60,
         timeoutMs: 120 * 60 * 1000,
       }, process.cwd(), runHooks);
       if (run.status !== 'running' && run.status !== 'queued') {
         throw new Error(run.error || `dream_schedule_start_${run.status}`);
       }
-      console.error(`[admin dream schedule] Started one-click organization for ${today} at ${settings.time} (run ${run.id}).`);
+      console.error(`[admin dream schedule] Started quick organization for ${today} at ${settings.time} (run ${run.id}).`);
     } catch (e) {
       scheduledDreamRetryAfter = Date.now() + 5 * 60 * 1000;
       try {
@@ -1868,6 +1868,68 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
       res.json(await dreamSettingsView());
     } catch (e) {
       res.status(500).json({ error: e instanceof Error ? e.message : 'dream_settings_failed' });
+    }
+  });
+
+  const generativeUsageView = async () => {
+    const {
+      isGenerativeModelEnabled,
+      generativeCapabilitySummary,
+      getPhaseCapabilities,
+    } = await import('../core/model-usage.ts');
+    const cfg = loadConfig();
+    const summary = generativeCapabilitySummary(cfg);
+    return {
+      ...summary,
+      phase_capabilities: getPhaseCapabilities(),
+      chat_model: cfg?.chat_model ?? null,
+    };
+  };
+
+  app.get('/admin/api/model-usage/generative', requireAdmin, async (_req: Request, res: Response) => {
+    try {
+      res.json(await generativeUsageView());
+    } catch (e) {
+      res.status(500).json({ error: e instanceof Error ? e.message : 'generative_usage_failed' });
+    }
+  });
+
+  app.post('/admin/api/model-usage/generative', requireAdmin, express.json({ limit: '4kb' }), async (req: Request, res: Response) => {
+    const enabled = req.body?.enabled;
+    if (typeof enabled !== 'boolean') {
+      res.status(400).json({ error: 'generative_enabled_must_be_boolean' });
+      return;
+    }
+    try {
+      const {
+        setGenerativeModelEnabled,
+        isGenerativeModelEnabled,
+        phaseRequiresGenerativeModel,
+      } = await import('../core/model-usage.ts');
+      const wasEnabled = isGenerativeModelEnabled(loadConfig());
+      setGenerativeModelEnabled(enabled);
+      let stopped: Array<{ id: string; kind: string; status: string }> = [];
+      if (wasEnabled && !enabled) {
+        const { cancelRun, listRuns } = await import('./natural-lang/index.ts');
+        const active = listRuns().filter((run) => {
+          if (run.status !== 'running' && run.status !== 'queued') return false;
+          if (!run.kind.startsWith('dream_')) return false;
+          if (run.kind.includes('quick')) return false;
+          const phase = run.kind.replace(/^dream_/, '');
+          if (phase === 'full' || phase === 'meeting' || phase === 'cycle') return true;
+          return phaseRequiresGenerativeModel(phase);
+        });
+        for (const run of active) {
+          const next = await cancelRun(run.id);
+          if (next) stopped.push({ id: next.id, kind: next.kind, status: next.status });
+        }
+        console.error(
+          `[model-usage] generative disabled; stopped ${stopped.length} AI organize run(s).`,
+        );
+      }
+      res.json({ ...(await generativeUsageView()), stopped_runs: stopped });
+    } catch (e) {
+      res.status(500).json({ error: e instanceof Error ? e.message : 'save_generative_usage_failed' });
     }
   });
 
@@ -2108,6 +2170,21 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
     }
   });
 
+  // Knowledge workbench search: keyword (full-text) or semantic (hybrid, no chat expand).
+  // Does not call think / ordinary chat models.
+  app.post('/admin/api/knowledge-search', requireAdmin, express.json({ limit: '16kb' }), async (req: Request, res: Response) => {
+    try {
+      const payload = await runAdminKnowledgeSearch(engine, {
+        query: typeof req.body?.query === 'string' ? req.body.query : '',
+        mode: req.body?.mode,
+        limit: req.body?.limit,
+      });
+      res.json(payload);
+    } catch (e) {
+      res.status(400).json({ error: e instanceof Error ? e.message : 'knowledge_search_failed' });
+    }
+  });
+
   app.post('/admin/api/capture-runs', requireAdmin, express.json({ limit: '64kb' }), async (req: Request, res: Response) => {
     try {
       const content = typeof req.body?.content === 'string' ? req.body.content : '';
@@ -2284,6 +2361,12 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
       }, process.cwd(), runHooks);
       res.json({ runId: run.id, status: run.status });
     } catch (e) {
+      const { errorPayloadFromGenerativeDisabled } = await import('../core/model-usage.ts');
+      const generative = errorPayloadFromGenerativeDisabled(e);
+      if (generative) {
+        res.status(403).json(generative);
+        return;
+      }
       res.status(400).json({ error: e instanceof Error ? e.message : 'dream_run_failed' });
     }
   });

@@ -2,6 +2,7 @@ import type { GBrainConfig } from '../../core/config.ts';
 import { isSensitiveConfigKey, redactConfigValue } from '../config.ts';
 import { chat, configureGateway, isAvailable } from '../../core/ai/gateway.ts';
 import type { AIGatewayConfig } from '../../core/ai/types.ts';
+import { isGenerativeModelEnabled } from '../../core/model-usage.ts';
 import { INTENT_SYSTEM_PROMPT, PMBRAIN_ACTION_TOOL } from './prompt.ts';
 
 const INTENT_CLASSIFICATION_CHARACTERS = 4_000;
@@ -186,12 +187,21 @@ export function getProviderStatus(config: GBrainConfig | null) {
 
 export function getAdminLlmStatus(config: GBrainConfig | null) {
   const status = getProviderStatus(config);
+  const generativeEnabled = isGenerativeModelEnabled(config);
+  const configured = status.chat.enabled;
   return {
-    enabled: status.chat.enabled,
+    enabled: configured && generativeEnabled,
+    configured,
+    generative_enabled: generativeEnabled,
     chatModel: status.chat.chat_model,
     provider: status.chat.provider,
     providersConfigured: status.providers,
     missing: status.chat.missing,
+    status_label: !configured
+      ? '未配置'
+      : generativeEnabled
+        ? '已配置'
+        : '已配置，但全局禁用',
   };
 }
 

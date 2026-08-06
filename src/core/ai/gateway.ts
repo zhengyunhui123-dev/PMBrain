@@ -2708,6 +2708,10 @@ function isChatFallbackEligible(err: unknown, signal?: AbortSignal): boolean {
  * advanced override can never make the ordinary installation unusable.
  */
 export async function chat(opts: ChatOpts): Promise<ChatResult> {
+  // Global generative gate — re-check on every chat call (not only at task start).
+  const { assertGenerativeModelEnabled } = await import('../model-usage.ts');
+  assertGenerativeModelEnabled();
+
   const primary = opts.model ?? getChatModel();
   const candidates = [
     primary,

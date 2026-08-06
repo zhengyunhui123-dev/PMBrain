@@ -19,7 +19,8 @@ interface TaskCenterSnapshot {
 function taskTitle(kind: string): string {
   if (kind.startsWith('dream_')) {
     if (kind.includes('quick')) return '快速维护';
-    if (kind.includes('meeting')) return '会议与会话整理';
+    if (kind.includes('meeting')) return 'AI 会议整理';
+    if (kind.includes('full') || kind.includes('cycle')) return 'AI 深度整理';
     return '知识整理';
   }
   return ({
@@ -42,6 +43,32 @@ function taskOrigin(kind: string): string {
   if (kind === 'import_path') return '知识工作台';
   if (kind === 'sync_all') return '知识库';
   return '后台任务';
+}
+
+function taskTriggerLabel(_kind: string): string {
+  // ConsoleRun currently has no explicit trigger field; Admin ConsoleRun is manual.
+  return '手动';
+}
+
+function taskModelUsageLines(run: ConsoleRun): string[] {
+  const lines: string[] = [`触发方式：${taskTriggerLabel(run.kind)}`];
+  if (run.kind.includes('quick')) {
+    lines.push('普通模型：未使用');
+    lines.push('向量模型：可能使用（embed 阶段）');
+  } else if (run.kind.startsWith('dream_')) {
+    lines.push('普通模型：使用（任务需开启全局开关）');
+    lines.push('向量模型：可能使用（embed 阶段）');
+  } else if (run.kind === 'embed_stale') {
+    lines.push('普通模型：未使用');
+    lines.push('向量模型：使用');
+  } else if (run.kind === 'search_brain') {
+    lines.push('普通模型：综合回答路径可能使用');
+  } else {
+    lines.push('普通模型：通常未使用');
+  }
+  if (run.startedAt) lines.push(`开始：${formatDate(run.startedAt, '-')}`);
+  if (run.completedAt) lines.push(`结束：${formatDate(run.completedAt, '-')}`);
+  return lines;
 }
 
 function statusLabel(status: ConsoleRun['status']): string {
@@ -98,6 +125,9 @@ function TaskCard({
         <span>{run.status === 'queued' ? '等待数据库任务空闲后开始' : elapsedLabel(run)}</span>
         <span>发起于 {formatDate(run.startedAt, '-')}</span>
       </div>
+      <ul className="task-run-usage">
+        {taskModelUsageLines(run).map(line => <li key={line}>{line}</li>)}
+      </ul>
       {run.status === 'cancelled' ? (
         <p className="task-run-cancelled">任务已取消，已完成的部分已保留，不会自动回滚。</p>
       ) : run.error ? (

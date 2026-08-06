@@ -11,7 +11,7 @@ import { CopyButton } from '../lib/clipboard';
 import { parseMarkdownTable } from '../lib/markdown-table';
 import * as Tooltip from '@radix-ui/react-tooltip';
 import {
-  Activity, AlertTriangle, Bot, Boxes, CheckCircle2, ChevronDown, Clock3, Cpu, Database,
+  Activity, AlertTriangle, Bot, Boxes, Check, CheckCircle2, ChevronDown, Clock3, Cpu, Database,
   Download, FileText, FolderKanban, FolderTree, History, Layers3, Link2,
   ListTodo, MonitorCog, Plus, RefreshCw, Search, Sparkles, Tags, Upload, type LucideIcon,
 } from 'lucide-react';
@@ -126,12 +126,35 @@ interface DocsArticle {
   markdown: string;
 }
 
+type KnowledgeSearchMode = 'keyword' | 'semantic';
+
+interface KnowledgeSearchHit {
+  slug: string;
+  title: string;
+  type: string;
+  score: number;
+  snippet: string;
+  source_id: string | null;
+  page_id: number;
+  chunk_id: number;
+}
+
+interface KnowledgeSearchPayload {
+  mode: KnowledgeSearchMode;
+  query: string;
+  limit: number;
+  vector_enabled: boolean;
+  result_count: number;
+  results: KnowledgeSearchHit[];
+}
+
 interface NaturalTaskHistoryItem {
   id: string;
   text: string;
   createdAt: string;
   preview?: IntentPreview;
   run?: ConsoleRun;
+  search?: KnowledgeSearchPayload;
   error?: string;
 }
 
@@ -584,9 +607,42 @@ export function KnowledgeWorkbenchPage({ onNavigate }: { onNavigate?: (page: str
 
 const NATURAL_HISTORY_KEY = 'pmbrain.natural.history';
 const NATURAL_WORKSPACE_KEY = 'pmbrain.natural.workspace';
+const KNOWLEDGE_SEARCH_MODE_KEY = 'pmbrain.knowledge.searchMode';
 export const NATURAL_HISTORY_LIMIT = 5;
 // Backend authority: src/commands/natural-lang/types.ts.
 const MAX_NATURAL_TASK_CHARACTERS = 10_000;
+
+function loadKnowledgeSearchMode(): KnowledgeSearchMode {
+  try {
+    const saved = window.localStorage.getItem(KNOWLEDGE_SEARCH_MODE_KEY);
+    if (saved === 'semantic' || saved === 'keyword') return saved;
+  } catch { /* ignore */ }
+  return 'keyword';
+}
+
+function saveKnowledgeSearchMode(mode: KnowledgeSearchMode) {
+  try {
+    window.localStorage.setItem(KNOWLEDGE_SEARCH_MODE_KEY, mode);
+  } catch { /* ignore */ }
+}
+
+function knowledgeSearchModeLabel(mode: KnowledgeSearchMode): string {
+  return mode === 'semantic' ? '语义搜索' : '关键词搜索';
+}
+
+function summarizeKnowledgeSearch(payload: KnowledgeSearchPayload): string {
+  const modeLabel = knowledgeSearchModeLabel(payload.mode);
+  if (payload.result_count === 0) {
+    const vectorHint = payload.mode === 'semantic' && !payload.vector_enabled
+      ? '（当前未启用向量通道，已按混合检索尽力召回）'
+      : '';
+    return `${modeLabel}「${payload.query}」未找到结果${vectorHint}。`;
+  }
+  const vectorNote = payload.mode === 'semantic'
+    ? (payload.vector_enabled ? '（含向量通道）' : '（向量未启用，已降级）')
+    : '（纯全文，不调用普通模型）';
+  return `${modeLabel}「${payload.query}」找到 ${payload.result_count} 条${vectorNote}。`;
+}
 
 const MAX_KNOWLEDGE_ATTACHMENTS = 10;
 const MAX_KNOWLEDGE_ATTACHMENT_BYTES = 50 * 1024 * 1024;
@@ -725,6 +781,7 @@ function summarizeRunResult(preview: IntentPreview, run: ConsoleRun): string {
       return `当前有 ${count} 个数据源，请在详情中查看各数据源详情。`;
     }
     case 'search_brain': {
+      // Legacy path: workbench「发送」意图识别仍可能落到 think；直接「搜索」走 knowledge-search。
       const result = parseThinkOutput(out);
       if (!result) return summarizeRunLog(run, '知识库回答已生成');
       const sections = [result.answer];
@@ -834,6 +891,9 @@ function NaturalLanguagePanel({
   const [text, setText] = useState(initialWorkspace.text);
   const [preview, setPreview] = useState<IntentPreview | null>(initialWorkspace.preview);
   const [run, setRun] = useState<ConsoleRun | null>(initialWorkspace.run);
+  const [searchPayload, setSearchPayload] = useState<KnowledgeSearchPayload | null>(null);
+  const [searchMode, setSearchMode] = useState<KnowledgeSearchMode>(() => loadKnowledgeSearchMode());
+  const [searchModeMenuOpen, setSearchModeMenuOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [submitClicked, setSubmitClicked] = useState(false);
   const [executeClicked, setExecuteClicked] = useState(false);
@@ -845,8 +905,33 @@ function NaturalLanguagePanel({
   const [attachmentError, setAttachmentError] = useState('');
   const [attachmentProgress, setAttachmentProgress] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const searchModeMenuRef = useRef<HTMLDivElement>(null);
   const inputLength = text.length;
   const inputTooLong = inputLength > MAX_NATURAL_TASK_CHARACTERS;
+
+  useEffect(() => {
+    if (!searchModeMenuOpen) return;
+    const onPointerDown = (event: MouseEvent) => {
+      if (!searchModeMenuRef.current?.contains(event.target as Node)) {
+        setSearchModeMenuOpen(false);
+      }
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setSearchModeMenuOpen(false);
+    };
+    document.addEventListener('mousedown', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [searchModeMenuOpen]);
+
+  const applySearchMode = (mode: KnowledgeSearchMode) => {
+    setSearchMode(mode);
+    saveKnowledgeSearchMode(mode);
+    setSearchModeMenuOpen(false);
+  };
 
   const addAttachments = (files: File[]) => {
     if (files.length === 0) return;
@@ -937,8 +1022,10 @@ function NaturalLanguagePanel({
     setText(item.text);
     setPreview(item.preview ?? null);
     setRun(item.run ?? null);
+    setSearchPayload(item.search ?? null);
     setError(item.error ?? '');
     setActiveHistoryId(item.id);
+    if (item.search?.mode) applySearchMode(item.search.mode);
     if (!item.run?.id) return;
     setLoading(true);
     try {
@@ -969,6 +1056,8 @@ function NaturalLanguagePanel({
     setAttachmentError('');
     setPreview(null);
     setRun(null);
+    setSearchPayload(null);
+    setSearchModeMenuOpen(false);
     const attachedFiles = [...attachments];
     const attachedNames = attachedFiles.map(item => item.file.name);
     const requestText = text.trim() || '请阅读并整理这些文件。';
@@ -1046,17 +1135,26 @@ function NaturalLanguagePanel({
     setError('');
     setAttachmentError('');
     setRun(null);
+    setSearchPayload(null);
     setPendingContext('');
+    setSearchModeMenuOpen(false);
     const attachedNames = attachedFiles.map(item => item.file.name);
     const displayValue = attachedNames.length > 0 ? attachedNames.join('、') : value;
     const captureText = kind === 'import' && attachedFiles.length === 0 && !looksLikeLocalImportPath(value);
+    const modeLabel = knowledgeSearchModeLabel(searchMode);
     const directPreview: IntentPreview = {
       previewId: `direct-${Date.now()}`,
       intent: kind === 'search' ? 'search_brain' : captureText ? 'capture_memory' : 'import_path',
       confidence: 1,
-      slots: kind === 'search' ? { query: value } : captureText ? { content: value } : attachedNames.length > 0 ? { files: attachedNames } : { path: value },
+      slots: kind === 'search'
+        ? { query: value, searchMode }
+        : captureText
+          ? { content: value }
+          : attachedNames.length > 0
+            ? { files: attachedNames }
+            : { path: value },
       proposedAction: kind === 'search'
-        ? `综合回答：${value}`
+        ? `${modeLabel}：${value}`
         : captureText
           ? `保存完整文本到知识库（共 ${value.length.toLocaleString('zh-CN')} 字）`
           : attachedNames.length > 0
@@ -1075,8 +1173,18 @@ function NaturalLanguagePanel({
     setPreview(directPreview);
     upsertHistory(historyItem);
     try {
+      if (kind === 'search') {
+        const payload = await api.knowledgeSearch({
+          query: value,
+          mode: searchMode,
+          limit: 20,
+        }) as KnowledgeSearchPayload;
+        setSearchPayload(payload);
+        upsertHistory({ ...historyItem, search: payload });
+        return;
+      }
       let first: ConsoleRun;
-      if (kind === 'import' && attachedFiles.length > 0) {
+      if (attachedFiles.length > 0) {
         first = await uploadAttachmentRuns(attachedFiles);
         setAttachments([]);
       } else if (captureText) {
@@ -1084,16 +1192,14 @@ function NaturalLanguagePanel({
         first = await waitForConsoleRun(response.runId, setRun);
         if (first.status === 'completed') setText('');
       } else {
-        const response = kind === 'search'
-          ? await api.startThinkRun(value) as { runId: string }
-          : await api.startImportRun({
-            path: value,
-            sourceId: importOptions?.sourceId,
-            includeOffice: importOptions?.includeOffice ?? true,
-            includeImages: importOptions?.includeImages ?? false,
-            autoEmbed: importOptions?.autoEmbed ?? true,
-            workers: importOptions?.workers ?? 1,
-          }) as { runId: string };
+        const response = await api.startImportRun({
+          path: value,
+          sourceId: importOptions?.sourceId,
+          includeOffice: importOptions?.includeOffice ?? true,
+          includeImages: importOptions?.includeImages ?? false,
+          autoEmbed: importOptions?.autoEmbed ?? true,
+          workers: importOptions?.workers ?? 1,
+        }) as { runId: string };
         first = await api.run(response.runId) as ConsoleRun;
       }
       setRun(first);
@@ -1159,8 +1265,11 @@ function NaturalLanguagePanel({
 
   const importRunSummary = preview?.intent === 'import_path' && run ? summarizeImportRun(preview, run) : null;
   const importEmbeddingSkip = preview?.intent === 'import_path' && run && !importRunSummary ? getImportEmbeddingSkip(run) : null;
-  const summary = importRunSummary?.markdown ?? (preview && run ? summarizeRunResult(preview, run) : null);
-  const searchWarning = preview?.intent === 'search_brain' && run
+  const searchSummary = searchPayload ? summarizeKnowledgeSearch(searchPayload) : null;
+  const summary = searchSummary
+    ?? importRunSummary?.markdown
+    ?? (preview && run ? summarizeRunResult(preview, run) : null);
+  const searchWarning = preview?.intent === 'search_brain' && run && !searchPayload
     ? getThinkRetrievalWarning(run.stderr)
     : null;
   const isRunActive = run?.status === 'queued' || run?.status === 'running';
@@ -1270,15 +1379,69 @@ function NaturalLanguagePanel({
             <span className="assistant-action-icon" aria-hidden="true"><Upload /></span>
             <span className="assistant-action-copy"><strong>导入</strong></span>
           </button>
-          <button
-            type="button"
-            className="pm-assistant-action search-action"
-            onClick={() => void startDirect('search')}
-            disabled={loading || !text.trim() || inputTooLong}
-          >
-            <span className="assistant-action-icon" aria-hidden="true"><Search /></span>
-            <span className="assistant-action-copy"><strong>搜索</strong></span>
-          </button>
+          <div className={`assistant-search-split ${searchModeMenuOpen ? 'is-open' : ''}`} ref={searchModeMenuRef}>
+            <button
+              type="button"
+              className="pm-assistant-action search-action search-action-main"
+              onClick={() => void startDirect('search')}
+              disabled={loading || !text.trim() || inputTooLong}
+              title={`当前：${knowledgeSearchModeLabel(searchMode)}`}
+            >
+              <span className="assistant-action-icon" aria-hidden="true"><Search /></span>
+              <span className="assistant-action-copy">
+                <strong>搜索</strong>
+                <small>{knowledgeSearchModeLabel(searchMode)}</small>
+              </span>
+            </button>
+            <button
+              type="button"
+              className="search-mode-badge"
+              aria-label="选择搜索方式"
+              aria-haspopup="menu"
+              aria-expanded={searchModeMenuOpen}
+              disabled={loading}
+              onClick={(event) => {
+                event.stopPropagation();
+                setSearchModeMenuOpen(open => !open);
+              }}
+            >
+              <ChevronDown aria-hidden="true" />
+            </button>
+            {searchModeMenuOpen && (
+              <div className="search-mode-menu" role="menu" aria-label="搜索方式">
+                <button
+                  type="button"
+                  role="menuitemradio"
+                  aria-checked={searchMode === 'keyword'}
+                  className={searchMode === 'keyword' ? 'is-active' : ''}
+                  onClick={() => applySearchMode('keyword')}
+                >
+                  <span className="search-mode-check" aria-hidden="true">
+                    {searchMode === 'keyword' ? <Check /> : null}
+                  </span>
+                  <span>
+                    <strong>关键词搜索</strong>
+                    <small>标题与正文全文匹配，不调用普通模型</small>
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  role="menuitemradio"
+                  aria-checked={searchMode === 'semantic'}
+                  className={searchMode === 'semantic' ? 'is-active' : ''}
+                  onClick={() => applySearchMode('semantic')}
+                >
+                  <span className="search-mode-check" aria-hidden="true">
+                    {searchMode === 'semantic' ? <Check /> : null}
+                  </span>
+                  <span>
+                    <strong>语义搜索</strong>
+                    <small>关键词＋向量混合检索，需要向量模型</small>
+                  </span>
+                </button>
+              </div>
+            )}
+          </div>
           <button
             type="button"
             className={`pm-assistant-action ai-action ${submitClicked ? 'pm-clicked' : ''}`}
@@ -1305,7 +1468,39 @@ function NaturalLanguagePanel({
             )}
           </div>
         )}
-        {run && (
+        {searchPayload && (
+          <div className="nl-result knowledge-search-result">
+            <div className="nl-summary">
+              <div className="nl-summary-text">
+                {summary && <MarkdownArticle markdown={summary} />}
+              </div>
+              <span className={`pm-pill run-pill ${searchPayload.result_count > 0 ? 'run-completed' : 'run-partial'}`}>
+                {searchPayload.result_count > 0 ? '已完成' : '无结果'}
+              </span>
+            </div>
+            {searchPayload.results.length > 0 ? (
+              <ul className="knowledge-search-hits">
+                {searchPayload.results.map((hit) => (
+                  <li key={`${hit.source_id ?? 'default'}:${hit.page_id}:${hit.chunk_id}`}>
+                    <div className="knowledge-search-hit-head">
+                      <strong title={hit.slug}>{hit.title || hit.slug}</strong>
+                      <em>{hit.score.toFixed(3)}</em>
+                    </div>
+                    <code className="knowledge-search-slug">{hit.slug}</code>
+                    {hit.snippet && <p>{hit.snippet}{hit.snippet.length >= 160 ? '…' : ''}</p>}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="pm-hint knowledge-search-empty">
+                {searchPayload.mode === 'semantic'
+                  ? '可以改用关键词搜索，或确认已配置向量模型并完成向量化。'
+                  : '可以换个关键词，或切换到语义搜索再试。'}
+              </p>
+            )}
+          </div>
+        )}
+        {run && !searchPayload && (
           <div className="nl-result">
             <div className={`nl-summary ${importRunSummary?.tone === 'partial' || importEmbeddingSkip ? 'is-partial' : ''}`}>
               <div className="nl-summary-text">
@@ -1385,14 +1580,11 @@ export function ImportDataPage() {
         <div>
           <div className="pm-eyebrow">IMPORT · SEARCH · ASK</div>
           <h1>知识工作台</h1>
-          <p>输入正文、路径或添加文件；导入会直接保存，其他需求可搜索或发送给 AI。</p>
+          <p>输入正文、路径或添加文件；导入直接保存，搜索支持关键词/语义切换，发送才走 AI 意图。</p>
         </div>
         <div className="assistant-pulse" aria-hidden="true"><i /><i /><i /></div>
       </section>
       {error && <div className="pm-card pm-error">{error}</div>}
-      {overview && !overview.llm_enabled && (
-        <div className="pm-card pm-warning">搜索综合和 AI 意图识别需要普通模型；正文、路径和附件导入仍可直接使用。</div>
-      )}
       <details
         className="pm-card import-options"
         open={importOptionsOpen}
@@ -2399,6 +2591,106 @@ interface DreamSettingsValue {
   directoryExists?: boolean;
 }
 
+interface GenerativeUsageValue {
+  generative_enabled: boolean;
+  capabilities: {
+    semantic_search: boolean;
+    hybrid_search: boolean;
+    vectorization: boolean;
+    quick_maintenance: boolean;
+    ai_deep_organize: boolean;
+    ai_meeting_organize: boolean;
+  };
+  chat_model: string | null;
+  stopped_runs?: Array<{ id: string; kind: string; status: string }>;
+}
+
+function GenerativeModelSettings() {
+  const [value, setValue] = useState<GenerativeUsageValue | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    void api.generativeUsage()
+      .then(next => setValue(next as GenerativeUsageValue))
+      .catch(nextError => setError(nextError instanceof Error ? nextError.message : String(nextError)))
+      .finally(() => setLoading(false));
+  }, []);
+
+  const toggle = async (enabled: boolean) => {
+    if (!value) return;
+    if (!enabled && value.generative_enabled) {
+      const ok = window.confirm(
+        '关闭后，将停止正在运行的 AI 深度整理和会议整理任务。向量化、语义搜索、混合搜索和快速维护不受影响。',
+      );
+      if (!ok) return;
+    }
+    setSaving(true);
+    setMessage('');
+    setError('');
+    try {
+      const next = await api.saveGenerativeUsage(enabled) as GenerativeUsageValue;
+      setValue(next);
+      const stopped = next.stopped_runs?.length ?? 0;
+      setMessage(
+        enabled
+          ? '已允许 PMBrain 调用普通模型'
+          : stopped > 0
+            ? `已关闭普通模型调用，并停止 ${stopped} 个 AI 整理任务`
+            : '已关闭普通模型调用',
+      );
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : String(nextError));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const caps = value?.capabilities;
+  return (
+    <section className="pm-card generative-model-settings settings-panel">
+      <div className="settings-panel-title">
+        <span className="settings-panel-icon"><Sparkles /></span>
+        <div>
+          <h2>普通模型调用</h2>
+          <p>关闭后，PMBrain 不会调用 DeepSeek 等聊天或推理模型，仅保留向量化、语义搜索、混合搜索和快速维护。向量模型不受此开关影响。</p>
+        </div>
+      </div>
+      <label className="dream-schedule-toggle" htmlFor="generative-model-enabled">
+        <span>
+          <b>允许 PMBrain 调用普通模型</b>
+          <small>新用户默认关闭。即使已配置普通模型，也需主动打开。</small>
+        </span>
+        <input
+          id="generative-model-enabled"
+          type="checkbox"
+          checked={value?.generative_enabled === true}
+          onChange={event => void toggle(event.target.checked)}
+          disabled={loading || saving || !value}
+        />
+      </label>
+      {caps && (
+        <ul className="generative-capability-list">
+          <li className="is-ok">语义搜索：可用</li>
+          <li className="is-ok">混合搜索：可用</li>
+          <li className="is-ok">向量化：可用</li>
+          <li className="is-ok">快速维护：可用</li>
+          <li className={caps.ai_deep_organize ? 'is-ok' : 'is-off'}>AI 深度整理：{caps.ai_deep_organize ? '可用' : '不可用'}</li>
+          <li className={caps.ai_meeting_organize ? 'is-ok' : 'is-off'}>AI 会议整理：{caps.ai_meeting_organize ? '可用' : '不可用'}</li>
+        </ul>
+      )}
+      {(message || error) && (
+        <div className="settings-feedback" aria-live="polite">
+          {message && <span className="pm-ok">{message}</span>}
+          {error && <span className="pm-error-text">{error}</span>}
+        </div>
+      )}
+    </section>
+  );
+}
+
 function DreamSettings() {
   const [settings, setSettings] = useState<DreamSettingsValue>({
     outputDir: 'output',
@@ -2600,7 +2892,7 @@ function DreamScheduleSettings() {
         <span className="settings-panel-icon"><Clock3 /></span>
         <div>
           <h2>定时一键整理</h2>
-          <p>每天到设定时间后，自动执行一次与“知识整理”页面相同的一键整理。</p>
+          <p>每天到设定时间后，自动执行一次与“知识整理”页面「快速维护」相同的整理（同一套 quick 入口，不另起流程）。</p>
         </div>
       </div>
       <div className="dream-schedule-row">
@@ -2801,6 +3093,7 @@ export function SettingsPage({
         )}
         {section === 'dream' && (
           <div className="settings-section-stack">
+            <GenerativeModelSettings />
             <DreamSettings />
             <DreamScheduleSettings />
           </div>

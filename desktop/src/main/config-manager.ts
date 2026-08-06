@@ -112,6 +112,8 @@ export interface SetupInfo {
     chatModel?: string;
     embeddingModel?: string;
     embeddingDimensions?: number;
+    /** Global generative gate; false when missing. */
+    generativeEnabled?: boolean;
     customProvider?: DesktopCustomProvider;
     theme: DesktopTheme;
     keyStatus: Record<string, boolean>;
@@ -343,6 +345,8 @@ export function getSetupInfo(): SetupInfo {
       knowledgeDirectory: desktop?.knowledge_directory,
       knowledgeSourceId: desktop?.knowledge_source_id,
       chatModel: typeof config?.chat_model === 'string' ? config.chat_model : undefined,
+      generativeEnabled: (config as { model_usage?: { generative_enabled?: boolean } } | null)
+        ?.model_usage?.generative_enabled === true,
       embeddingModel: typeof config?.embedding_model === 'string' ? config.embedding_model : undefined,
       embeddingDimensions: typeof config?.embedding_dimensions === 'number' ? config.embedding_dimensions : undefined,
       customProvider: customChatBaseUrl || customEmbeddingBaseUrl ? {

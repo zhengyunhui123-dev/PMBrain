@@ -121,6 +121,13 @@ export interface GBrainConfig {
    */
   chat_model?: string;
   /**
+   * Global generative (chat/reasoning) model usage. Independent of embedding.
+   * Missing → treated as closed. Never auto-enable because chat_model is set.
+   */
+  model_usage?: {
+    generative_enabled?: boolean;
+  };
+  /**
    * Optional silent-refusal fallback chain for `chatWithFallback()` (v0.27+).
    * Each entry is a "provider:modelId" string. Blocked from critic/judge/
    * synthesize flows in their respective handlers (per D13 review decision).

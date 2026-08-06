@@ -898,7 +898,11 @@ function populate(next: DesktopSetupState): void {
   syncProviderKeyField('embedding');
   void refreshProviderModels('chat', false);
   void refreshProviderModels('embedding', false);
-  $('#chat-model-effective').textContent = setup.current.chatModel ? `当前生效：${setup.current.chatModel}` : '当前未配置';
+  $('#chat-model-effective').textContent = setup.current.chatModel
+    ? (setup.current.generativeEnabled
+      ? `当前生效：${setup.current.chatModel}`
+      : `普通模型：${setup.current.chatModel} · 状态：已配置，但全局禁用`)
+    : '当前未配置';
   $('#embedding-model-effective').textContent = setup.current.embeddingModel ? `当前生效：${setup.current.embeddingModel}` : '当前未配置';
   $('#config-path').textContent = `配置写入：${setup.configPath}`;
   $('#postgres-status').textContent = setup.current.engine === 'postgres' && setup.current.databaseConfigured

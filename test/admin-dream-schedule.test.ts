@@ -32,15 +32,18 @@ describe('Admin scheduled one-click organization', () => {
     expect(isAdminDreamScheduleDue({ enabled: true, time: '02:00', lastStartedDate: dateKey }, nextDay)).toBe(true);
   });
 
-  test('reuses the existing one-click Dream run and persists settings', () => {
+  test('reuses the same quick-maintenance Dream run as the knowledge organize page', () => {
     const serveSource = readFileSync(join(ROOT, 'src/commands/serve-http.ts'), 'utf8');
+    const dreamSource = readFileSync(join(ROOT, 'admin/src/pages/Dream.tsx'), 'utf8');
     expect(serveSource).toContain("app.get('/admin/api/dream/schedule'");
     expect(serveSource).toContain("app.post('/admin/api/dream/schedule'");
     expect(serveSource).toContain("engine.setConfig(ADMIN_DREAM_SCHEDULE_ENABLED_KEY");
-    expect(serveSource).toContain("preset: 'full'");
-    expect(serveSource).toContain('drainProposals: true');
-    expect(serveSource).toContain("engine.kind !== 'pglite'");
-    expect(serveSource).toContain('await ensureAdminWorkerStarted()');
+    // Must match manual「快速维护」: startDreamRun({ preset: 'quick', ... }), not full/depth.
+    expect(serveSource).toContain("preset: 'quick'");
+    expect(dreamSource).toContain("runMode === 'quick'");
+    expect(dreamSource).toContain("? 'quick'");
+    expect(serveSource).not.toMatch(/checkScheduledDream[\s\S]*?preset:\s*'full'/);
+    expect(serveSource).not.toMatch(/checkScheduledDream[\s\S]*?drainProposals:\s*true/);
     expect(serveSource).toContain('const dreamScheduleTimer = setInterval(');
   });
 
@@ -48,6 +51,7 @@ describe('Admin scheduled one-click organization', () => {
     const consoleSource = readFileSync(join(ROOT, 'admin/src/pages/Console.tsx'), 'utf8');
     const apiSource = readFileSync(join(ROOT, 'admin/src/api.ts'), 'utf8');
     expect(consoleSource).toContain('<h2>定时一键整理</h2>');
+    expect(consoleSource).toContain('快速维护');
     expect(consoleSource).toContain('type="time"');
     expect(consoleSource).toContain('!dirty || !validTime');
     expect(consoleSource).toContain('当天服务恢复后补跑');

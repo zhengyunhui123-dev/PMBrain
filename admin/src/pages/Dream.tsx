@@ -4,8 +4,28 @@ import { RunOutput, formatDate, pageTypeLabel, pageTypeTitle, type ConsoleRun } 
 import { TakeProposalsPage } from './TakeProposals';
 import { CalibrationPage } from './Calibration';
 
+interface PhaseCapability {
+  id: string;
+  requiresGenerativeModel: boolean;
+  kind: 'local' | 'generative';
+  labelZh: string;
+}
+
 interface DreamData {
   phase_catalog: string[];
+  phase_capabilities?: PhaseCapability[];
+  generative_enabled?: boolean;
+  generative_usage?: {
+    generative_enabled: boolean;
+    capabilities: {
+      semantic_search: boolean;
+      hybrid_search: boolean;
+      vectorization: boolean;
+      quick_maintenance: boolean;
+      ai_deep_organize: boolean;
+      ai_meeting_organize: boolean;
+    };
+  };
   overview: {
     version: string;
     engine: string;
@@ -1204,12 +1224,16 @@ function DreamBusyRecovery({ runs, onRefresh }: { runs: ConsoleRun[]; onRefresh:
   );
 }
 
+const GENERATIVE_DISABLED_HINT = '当前已关闭普通模型调用，请先前往「设置 → 知识整理设置」开启。';
+
 function DreamRunPanel({
   defaultPhase = 'all',
   defaultSourceId,
   compact = false,
   engine,
   phaseCatalog = [],
+  phaseCapabilities = [],
+  generativeEnabled = false,
   sources,
   locks,
   jobs,
@@ -1221,6 +1245,8 @@ function DreamRunPanel({
   compact?: boolean;
   engine?: string;
   phaseCatalog?: string[];
+  phaseCapabilities?: PhaseCapability[];
+  generativeEnabled?: boolean;
   sources?: Array<{ id: string; name: string; page_count: number; archived?: boolean }>;
   locks?: DreamData['locks'];
   jobs?: DreamData['jobs'];
@@ -1228,6 +1254,12 @@ function DreamRunPanel({
   onDone?: () => void;
 }) {
   const isPglite = engine === 'pglite';
+  const phaseCapMap = useMemo(() => {
+    const map = new Map<string, PhaseCapability>();
+    for (const item of phaseCapabilities) map.set(item.id, item);
+    return map;
+  }, [phaseCapabilities]);
+  const phaseNeedsGenerative = (id: string) => phaseCapMap.get(id)?.requiresGenerativeModel === true;
   const [phase, setPhase] = useState(defaultPhase);
   const [sourceId, setSourceId] = useState('');
   const [maxPages, setMaxPages] = useState('25');
@@ -1239,11 +1271,19 @@ function DreamRunPanel({
   const [timeoutMinutes, setTimeoutMinutes] = useState('');
   const [runMode, setRunMode] = useState<DreamRunMode>(() => {
     const saved = window.localStorage.getItem(DREAM_RUN_MODE_KEY);
-    if (saved === 'meeting' && isPglite) return 'cycle';
+    if (!generativeEnabled && (saved === 'cycle' || saved === 'meeting')) return 'quick';
+    if (saved === 'meeting' && isPglite) return generativeEnabled ? 'cycle' : 'quick';
     return saved === 'quick' || saved === 'meeting' || saved === 'cycle' || saved === 'advanced'
       ? saved
-      : defaultPhase === 'all' ? 'cycle' : 'advanced';
+      : defaultPhase === 'all' ? (generativeEnabled ? 'cycle' : 'quick') : 'advanced';
   });
+
+  useEffect(() => {
+    if (!generativeEnabled && (runMode === 'cycle' || runMode === 'meeting')) {
+      setRunMode('quick');
+      window.localStorage.setItem(DREAM_RUN_MODE_KEY, 'quick');
+    }
+  }, [generativeEnabled, runMode]);
 
   const [run, setRun] = useState<ConsoleRun | null>(null);
   const [error, setError] = useState('');
@@ -1321,8 +1361,12 @@ function DreamRunPanel({
   const start = async (dryRunOverride?: boolean) => {
     if (busy) return;
     setError('');
+    if (generativeBlocked) {
+      setError(GENERATIVE_DISABLED_HINT);
+      return;
+    }
     if (runMode === 'meeting' && isPglite) {
-      setError('PGLite 暂不支持会议与会话整理；请改用深度整理或快速维护。');
+      setError('PGLite 暂不支持 AI 会议整理；请改用 AI 深度整理或快速维护。');
       return;
     }
     if (runMode === 'meeting' && !input.trim()) {
@@ -1401,27 +1445,30 @@ function DreamRunPanel({
   }> = {
     quick: {
       title: '先做一次轻量维护',
-      description: '同步变化、补全事实与关系并更新搜索索引，不运行深度观点与概念沉淀。',
+      description: '同步变化、补全事实与关系并更新搜索索引，不运行深度观点与概念沉淀。不使用普通模型。',
       action: '开始快速维护',
     },
     cycle: {
-      title: '让知识库完整整理一遍',
+      title: 'AI 深度整理知识库',
       description: isPglite
-        ? 'PGLite 将执行 20/22 个阶段；synthesize、patterns 会明确跳过，其余阶段照常整理。'
-        : '检查变化、补全关系、沉淀观点、合并重复信息，并更新搜索能力。',
-      action: '开始深度整理',
+        ? 'PGLite 将执行 20/22 个阶段；synthesize、patterns 会明确跳过，其余阶段照常整理。需要普通模型。'
+        : '检查变化、补全关系、沉淀观点、合并重复信息，并更新搜索能力。需要普通模型。',
+      action: '开始 AI 深度整理',
     },
     meeting: {
-      title: '把会议和会话变成长期知识',
-      description: '选择会议记录或会话文件夹，AI 会完成整理、提炼、连接和索引。',
-      action: '开始整理会议',
+      title: 'AI 会议与会话整理',
+      description: '选择会议记录或会话文件夹，AI 会完成整理、提炼、连接和索引。需要普通模型。',
+      action: '开始 AI 会议整理',
     },
     advanced: {
       title: '自定义本次整理',
-      description: '按来源、日期或内部阶段运行，适合调试和精细维护。',
+      description: '按来源、日期或内部阶段运行，适合调试和精细维护。需要普通模型的阶段在关闭全局开关时不可用。',
       action: '运行所选流程',
     },
   };
+  const generativeBlocked = !generativeEnabled && (runMode === 'cycle' || runMode === 'meeting'
+    || (runMode === 'advanced' && phase !== 'all' && phaseNeedsGenerative(phase))
+    || (runMode === 'advanced' && phase === 'all'));
 
   return (
     <div id="dream-launcher" className={`dream-launcher ${compact ? 'compact' : ''}`}>
@@ -1432,28 +1479,51 @@ function DreamRunPanel({
           <p>{modeCopy[runMode].description}</p>
         </div>
         <div className="dream-run-actions">
-          <button className="pm-primary dream-primary-action" onClick={() => void start(runMode === 'advanced' ? undefined : false)} disabled={busy}>
+          <button
+            className="pm-primary dream-primary-action"
+            onClick={() => void start(runMode === 'advanced' ? undefined : false)}
+            disabled={busy || generativeBlocked}
+            title={generativeBlocked ? GENERATIVE_DISABLED_HINT : undefined}
+          >
             {running ? '正在整理…' : starting ? (isPglite ? '正在准备…' : '正在准备 Worker…') : modeCopy[runMode].action}
           </button>
           {!running && runMode !== 'advanced' && (
-            <button className="pm-ghost" disabled={starting} onClick={() => void start(true)}>先预览会发生什么</button>
+            <button className="pm-ghost" disabled={starting || generativeBlocked} title={generativeBlocked ? GENERATIVE_DISABLED_HINT : undefined} onClick={() => void start(true)}>先预览会发生什么</button>
           )}
           {running && <button className="pm-ghost danger" onClick={() => void cancel()}>中止</button>}
         </div>
       </div>
+      {generativeBlocked && <div className="pm-hint dream-generative-hint">{GENERATIVE_DISABLED_HINT}</div>}
       <div className="dream-run-mode">
         <button type="button" className={runMode === 'quick' ? 'active' : ''} onClick={() => applyRunMode('quick')}>
           <strong>快速维护</strong>
-          <span>日常更新 · 较快</span>
+          <span>不使用普通模型 · 日常更新</span>
         </button>
-        <button type="button" className={runMode === 'cycle' ? 'active' : ''} onClick={() => applyRunMode('cycle')}>
-          <strong>深度整理</strong>
-          <span>完整 Dream · 最全面</span>
+        <button
+          type="button"
+          className={`${runMode === 'cycle' ? 'active' : ''} ${!generativeEnabled ? 'is-disabled' : ''}`}
+          onClick={() => {
+            if (!generativeEnabled) { setError(GENERATIVE_DISABLED_HINT); return; }
+            applyRunMode('cycle');
+          }}
+          disabled={!generativeEnabled}
+          title={!generativeEnabled ? GENERATIVE_DISABLED_HINT : undefined}
+        >
+          <strong>AI 深度整理</strong>
+          <span>{generativeEnabled ? '完整 Dream · 最全面' : '需要普通模型'}</span>
         </button>
-        <button type="button" className={runMode === 'meeting' ? 'active' : ''} onClick={() => applyRunMode('meeting')}
-          disabled={isPglite} title={isPglite ? 'PGLite 暂不支持会议与会话整理' : undefined}>
-          <strong>会议与会话</strong>
-          <span>{isPglite ? '需要 Postgres Worker' : '指定文件 · 专项提炼'}</span>
+        <button
+          type="button"
+          className={`${runMode === 'meeting' ? 'active' : ''} ${!generativeEnabled || isPglite ? 'is-disabled' : ''}`}
+          onClick={() => {
+            if (!generativeEnabled) { setError(GENERATIVE_DISABLED_HINT); return; }
+            applyRunMode('meeting');
+          }}
+          disabled={isPglite || !generativeEnabled}
+          title={!generativeEnabled ? GENERATIVE_DISABLED_HINT : isPglite ? 'PGLite 暂不支持 AI 会议整理' : undefined}
+        >
+          <strong>AI 会议整理</strong>
+          <span>{!generativeEnabled ? '需要普通模型' : isPglite ? '需要 Postgres Worker' : '指定文件 · 专项提炼'}</span>
         </button>
         <button type="button" className={runMode === 'advanced' ? 'active' : ''} onClick={() => applyRunMode('advanced')}>
           <strong>高级设置</strong>
@@ -1466,15 +1536,30 @@ function DreamRunPanel({
             <span>Phase</span>
             <select value={phase} onChange={event => {
               const newPhase = event.target.value;
+              if (newPhase !== 'all' && phaseNeedsGenerative(newPhase) && !generativeEnabled) {
+                setError(GENERATIVE_DISABLED_HINT);
+                return;
+              }
               setPhase(newPhase);
               if (newPhase === 'all') setSourceId('');
             }}>
-              <option value="all">整轮 cycle</option>
-              {phaseCatalog.map(item => <option key={item} value={item} title={PHASE_LABELS[item]}>{item}</option>)}
+              <option value="all" disabled={!generativeEnabled}>整轮 cycle（需要普通模型）</option>
+              {phaseCatalog.map(item => {
+                const needsGen = phaseNeedsGenerative(item);
+                const blocked = needsGen && !generativeEnabled;
+                const tag = needsGen ? '需要普通模型' : '不使用普通模型';
+                return (
+                  <option key={item} value={item} disabled={blocked} title={`${PHASE_LABELS[item] ?? item} · ${tag}`}>
+                    {item} · {tag}
+                  </option>
+                );
+              })}
             </select>
             {phase !== 'all' && (
               <div className="pm-hint" style={{ marginTop: 4 }}>
                 {PHASE_LABELS[phase]}
+                {' · '}
+                {phaseNeedsGenerative(phase) ? '需要普通模型' : '本地处理 / 不使用普通模型'}
               </div>
             )}
           </label>
@@ -1660,7 +1745,7 @@ export function DreamOverviewPage() {
         <small>最近更新 {formatDate(data.overview?.recent_write_at ?? null, '暂无')}</small>
       </section>
 
-      <DreamRunPanel engine={data.overview?.engine} defaultSourceId={data.overview?.main_source_id} phaseCatalog={data.phase_catalog} sources={data.overview?.sources} locks={data.locks} jobs={data.jobs} supervisor={data.supervisor} onDone={() => void reload()} />
+      <DreamRunPanel engine={data.overview?.engine} defaultSourceId={data.overview?.main_source_id} phaseCatalog={data.phase_catalog} phaseCapabilities={data.phase_capabilities} generativeEnabled={data.generative_enabled === true} sources={data.overview?.sources} locks={data.locks} jobs={data.jobs} supervisor={data.supervisor} onDone={() => void reload()} />
 
       <div className="dream-home-grid">
         <section className="dream-summary-card">
@@ -1722,7 +1807,7 @@ export function DreamExecutePage() {
       {loading && <Loading />}
       {data && (
         <>
-          <DreamRunPanel engine={data.overview?.engine} defaultSourceId={data.overview?.main_source_id} phaseCatalog={data.phase_catalog} sources={data.overview?.sources} locks={data.locks} jobs={data.jobs} supervisor={data.supervisor} onDone={() => void reload()} />
+          <DreamRunPanel engine={data.overview?.engine} defaultSourceId={data.overview?.main_source_id} phaseCatalog={data.phase_catalog} phaseCapabilities={data.phase_capabilities} generativeEnabled={data.generative_enabled === true} sources={data.overview?.sources} locks={data.locks} jobs={data.jobs} supervisor={data.supervisor} onDone={() => void reload()} />
           <PhaseRail catalog={data.phase_catalog} />
           <div className="pm-card">
             <h2>队列与重试</h2>
