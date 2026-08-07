@@ -34,7 +34,7 @@ for (const op of operations) {
 }
 
 // CLI-only commands that bypass the operation layer
-const CLI_ONLY = new Set(['init', 'reinit-pglite', 'pglite-backup', 'upgrade', 'post-upgrade', 'check-update', 'integrations', 'publish', 'check-backlinks', 'lint', 'report', 'import', 'export', 'files', 'embed', 'serve', 'call', 'config', 'doctor', 'migrate', 'eval', 'sync', 'extract', 'extract-conversation-facts', 'enrich', 'features', 'autopilot', 'graph-query', 'jobs', 'advisor', 'agent', 'apply-migrations', 'skillpack-check', 'skillpack', 'resolvers', 'integrity', 'repair-jsonb', 'orphans', 'quarantine', 'sources', 'mounts', 'dream', 'check-resolvable', 'routing-eval', 'skillify', 'smoke-test', 'providers', 'storage', 'repos', 'code-def', 'code-refs', 'reindex', 'reindex-code', 'reindex-frontmatter', 'code-callers', 'code-callees', 'frontmatter', 'auth', 'friction', 'claw-test', 'book-mirror', 'takes', 'think', 'salience', 'anomalies', 'transcripts', 'models', 'remote', 'recall', 'forget', 'edges-backfill', 'cache', 'ze-switch', 'founder', 'brainstorm', 'lsd', 'schema', 'capture', 'onboard', 'conversation-parser', 'status']);
+const CLI_ONLY = new Set(['init', 'reinit-pglite', 'pglite-backup', 'upgrade', 'post-upgrade', 'check-update', 'integrations', 'publish', 'check-backlinks', 'lint', 'report', 'import', 'export', 'files', 'embed', 'serve', 'call', 'config', 'doctor', 'migrate', 'eval', 'sync', 'extract', 'extract-conversation-facts', 'enrich', 'features', 'autopilot', 'graph-query', 'jobs', 'advisor', 'agent', 'apply-migrations', 'skillpack-check', 'skillpack', 'resolvers', 'integrity', 'repair-jsonb', 'orphans', 'quarantine', 'sources', 'mounts', 'dream', 'check-resolvable', 'routing-eval', 'skillify', 'smoke-test', 'providers', 'storage', 'repos', 'code-def', 'code-refs', 'reindex', 'reindex-code', 'reindex-frontmatter', 'code-callers', 'code-callees', 'frontmatter', 'auth', 'friction', 'claw-test', 'book-mirror', 'takes', 'think', 'salience', 'anomalies', 'transcripts', 'models', 'remote', 'recall', 'forget', 'edges-backfill', 'cache', 'ze-switch', 'founder', 'brainstorm', 'lsd', 'schema', 'capture', 'onboard', 'conversation-parser', 'status', 'probe-pglite']);
 // CLI-only commands whose handlers print their own --help text. These are
 // excluded from the generic short-circuit so detailed per-command and
 // per-subcommand usage stays reachable.
@@ -1040,6 +1040,12 @@ async function handleCliOnly(command: string, args: string[]) {
     await runApplyMigrations(args);
     return;
   }
+  if (command === 'probe-pglite') {
+    // Opens PGLite once, SELECT 1, disconnects, releases lock. No HTTP/Dream/Worker.
+    const { runProbePglite } = await import('./commands/probe-pglite.ts');
+    const result = await runProbePglite(args);
+    process.exit(result.ok ? 0 : 1);
+  }
   if (command === 'repair-jsonb') {
     const { runRepairJsonbCli } = await import('./commands/repair-jsonb.ts');
     await runRepairJsonbCli(args);
@@ -1348,10 +1354,8 @@ async function handleCliOnly(command: string, args: string[]) {
     return;
   }
 
-  // All remaining CLI-only commands need a DB connection. The long-lived
-  // sidecar must fail closed when schema migration cannot complete; starting
-  // HTTP with a half-migrated PGLite leaves Desktop waiting on /health.
-  const engine = await connectEngine({ strictMigrations: command === 'serve' });
+  // All remaining CLI-only commands need a DB connection
+  const engine = await connectEngine();
   try {
     switch (command) {
       case 'import': {
@@ -1815,7 +1819,7 @@ async function dispatchReadOnlyCommand(engine: BrainEngine, command: string, arg
 export { buildGatewayConfig } from './core/ai/gateway-config.ts';
 import { buildGatewayConfig } from './core/ai/gateway-config.ts';
 
-async function connectEngine(opts?: { probeOnly?: boolean; strictMigrations?: boolean }): Promise<BrainEngine> {
+async function connectEngine(opts?: { probeOnly?: boolean }): Promise<BrainEngine> {
   const config = loadConfig();
   if (!config) {
     console.error('No brain configured. Run: pmbrain init');
@@ -1854,9 +1858,6 @@ async function connectEngine(opts?: { probeOnly?: boolean; strictMigrations?: bo
     const { tryRunPendingMigrations } = await import('./core/migrate.ts');
     const result = await tryRunPendingMigrations(engine);
     if (result.status === 'persistent') {
-      if (opts?.strictMigrations === true) {
-        throw new Error('Schema migrations remained pending after the startup retry window.');
-      }
       console.warn(
         '  Schema migrations are pending. Another process attempted to apply them ' +
         'but the migration didn\'t complete within the retry window. This is usually transient.',
@@ -1866,7 +1867,6 @@ async function connectEngine(opts?: { probeOnly?: boolean; strictMigrations?: bo
       console.warn('    2. Check `pmbrain jobs supervisor status` for crashed migration workers.');
       console.warn('    3. Re-run: `pmbrain apply-migrations --yes`');
     } else if (result.status === 'error') {
-      if (opts?.strictMigrations === true) throw result.error;
       // Non-deadlock error during initSchema. Surface the message and continue;
       // subsequent operations will resurface the real schema error in context.
       console.warn(`  Schema probe failed: ${result.error.message}`);
@@ -1874,7 +1874,6 @@ async function connectEngine(opts?: { probeOnly?: boolean; strictMigrations?: bo
     }
     // 'ok', 'not_needed', 'race_resolved' → silent (the common-case outcomes).
   } catch (err) {
-    if (opts?.strictMigrations === true) throw err;
     // Last-resort defense in case the helper itself throws unexpectedly.
     console.warn(`  Schema probe failed (unexpected): ${(err as Error).message}`);
     console.warn('  Re-run: `pmbrain apply-migrations --yes`');
@@ -1963,7 +1962,7 @@ function printHelp() {
 初始化
   init [--pglite|--supabase|--url]   创建大脑（默认使用 PGLite，无需服务器）
   migrate --to <supabase|pglite>     在存储引擎之间迁移大脑
-  pglite-backup <create|list|verify> 创建、列出或验证 PGLite 升级冷备
+  pglite-backup <create|list|verify> 创建、列出或验证 PGLite 冷备份
   upgrade                            自更新
   check-update [--json]              检查新版本
   doctor [--json] [--fast]           执行健康检查

@@ -9,42 +9,73 @@ import {
   type CliRuntime,
 } from './cli-runner.js';
 import { getDesktopRuntimeContract } from './runtime-contract.js';
+import {
+  classifySidecarStartupError,
+  SidecarExitedBeforeHealthyError,
+  SidecarHealthTimeoutError,
+  type SidecarErrorCategory,
+} from '../../../src/core/pglite-errors.js';
 
 const HEALTH_TIMEOUT_MS = 45_000;
 const HEALTH_INTERVAL_MS = 500;
 const STOP_TIMEOUT_MS = 5_000;
-const FORCE_STOP_TIMEOUT_MS = 2_000;
 const RESTART_WINDOW_MS = 30_000;
 const MAX_RESTARTS = 3;
 const MCP_BEARER_VERIFY_TIMEOUT_MS = 3_000;
 const ADMIN_REQUEST_TIMEOUT_MS = 5_000;
 const STDERR_TAIL_LIMIT = 4_000;
-const NON_RETRYABLE_STARTUP_ERRORS = [
-  /PGLite failed to initialize/i,
-  /\bAborted\(\)/i,
-  /database.*(?:busy|in use|locked)/i,
-  /lock owner.*alive/i,
-  /Timed out waiting for PGLite lock/i,
-  /permission denied/i,
-  /EACCES|EPERM/i,
-  /migration.*failed/i,
-  /database initialization failed/i,
-];
 
 export type SidecarState =
   | { phase: 'starting'; port: number }
   | { phase: 'ready'; port: number; adminUrl: string }
   | { phase: 'stopped'; port: number }
-  | { phase: 'failed'; port: number; message: string };
+  | {
+      phase: 'failed';
+      port: number;
+      message: string;
+      category?: SidecarErrorCategory;
+      categoryLabelZh?: string;
+      details?: SidecarFailureDetails;
+    };
+
+export interface SidecarFailureDetails {
+  healthUrl?: string;
+  lastHealthError?: string;
+  sidecarPid?: number | null;
+  exitCode?: number | null;
+  signal?: string | null;
+  recentStderr?: string;
+  databasePath?: string;
+  retryable?: boolean;
+}
+
+export interface HealthCheckObservation {
+  url: string;
+  startedAt: string;
+  durationMs: number;
+  httpStatus?: number;
+  bodySummary?: string;
+  networkError?: string;
+  sidecarAlive: boolean;
+  sidecarPid: number | null;
+  recentStderr: string;
+}
 
 interface SidecarManagerOptions extends CliRuntime {
   port: number;
   bootstrapToken: string;
   clientVersion: string;
   adminRequestTimeoutMs?: number;
+  /** Extra argv after `serve` (e.g. --diagnostic-mode). */
+  extraServeArgs?: string[];
+  /** When true, never auto-restart after crash. */
+  disableAutoRestart?: boolean;
   logger: DesktopLogger;
   onState?: (state: SidecarState) => void;
+  onHealthObservation?: (observation: HealthCheckObservation) => void;
 }
+
+export { classifySidecarStartupError };
 
 export class SidecarManager {
   readonly port: number;
@@ -59,6 +90,9 @@ export class SidecarManager {
   private adminCookieRequest: Promise<string> | null = null;
   private recentStderr = '';
   private lastExitMessage: string | null = null;
+  private lastExitCode: number | null = null;
+  private lastExitSignal: string | null = null;
+  private lastFailureDetails: SidecarFailureDetails | null = null;
 
   constructor(options: SidecarManagerOptions) {
     this.options = options;
@@ -86,6 +120,17 @@ export class SidecarManager {
     } catch (error) {
       this.stopping = true;
       await this.terminateChild();
+      const classified = classifySidecarStartupError(error);
+      const message = this.formatUserFacingFailure(error, classified.labelZh);
+      this.lastFailureDetails = this.buildFailureDetails(error, classified.retryable);
+      this.options.onState?.({
+        phase: 'failed',
+        port: this.port,
+        message,
+        category: classified.category,
+        categoryLabelZh: classified.labelZh,
+        details: this.lastFailureDetails,
+      });
       throw error;
     }
     const adminUrl = await this.issueMagicLink();
@@ -103,6 +148,10 @@ export class SidecarManager {
 
   get mcpUrl(): string {
     return `http://127.0.0.1:${this.port}/mcp`;
+  }
+
+  get lastFailure(): SidecarFailureDetails | null {
+    return this.lastFailureDetails;
   }
 
   async createAdminLink(): Promise<string> {
@@ -227,43 +276,16 @@ export class SidecarManager {
     this.child = null;
     if (!child || child.exitCode !== null) return;
 
-    this.requestProcessTreeStop(child, false);
-    if (await this.waitForChildExit(child, STOP_TIMEOUT_MS)) return;
-
-    this.requestProcessTreeStop(child, true);
-    if (!await this.waitForChildExit(child, FORCE_STOP_TIMEOUT_MS)) {
-      throw new Error(`PMBrain sidecar process tree (PID ${child.pid ?? 'unknown'}) did not stop.`);
-    }
-  }
-
-  private requestProcessTreeStop(child: ChildProcess, force: boolean): void {
-    if (process.platform === 'win32' && child.pid) {
-      const args = ['/PID', String(child.pid), '/T'];
-      if (force) args.push('/F');
-      const killer = spawn('taskkill', args, {
-        windowsHide: true,
-        stdio: 'ignore',
-      });
-      killer.once('error', error => {
-        this.options.logger.write('desktop', `Unable to stop sidecar process tree: ${error.message}`);
-      });
-      return;
-    }
-    child.kill(force ? 'SIGKILL' : 'SIGTERM');
-  }
-
-  private async waitForChildExit(child: ChildProcess, timeoutMs: number): Promise<boolean> {
-    if (child.exitCode !== null) return true;
-    return new Promise<boolean>((resolveDone) => {
-      const onExit = () => {
-        clearTimeout(timeout);
-        resolveDone(true);
-      };
+    child.kill('SIGTERM');
+    await new Promise<void>((resolveDone) => {
       const timeout = setTimeout(() => {
-        child.off('exit', onExit);
-        resolveDone(child.exitCode !== null);
-      }, timeoutMs);
-      child.once('exit', onExit);
+        if (child.exitCode === null) child.kill('SIGKILL');
+        resolveDone();
+      }, STOP_TIMEOUT_MS);
+      child.once('exit', () => {
+        clearTimeout(timeout);
+        resolveDone();
+      });
     });
   }
 
@@ -272,15 +294,18 @@ export class SidecarManager {
     this.adminCookieRequest = null;
     this.recentStderr = '';
     this.lastExitMessage = null;
+    this.lastExitCode = null;
+    this.lastExitSignal = null;
     const root = projectRoot(this.options);
     const workingDirectory = this.options.packaged ? packagedRuntimeRoot(this.options) : root;
     const runtimeContract = this.options.packaged ? getDesktopRuntimeContract() : null;
     const command = this.options.packaged
       ? join(workingDirectory, runtimeContract!.runtimeExecutableName)
       : process.env.PMBRAIN_DESKTOP_BUN || 'bun';
+    const extra = this.options.extraServeArgs ?? [];
     const args = this.options.packaged
-      ? [join(workingDirectory, 'pmbrain-sidecar.js'), 'serve', '--http', '--port', String(this.port), '--bind', '127.0.0.1', '--suppress-bootstrap-token']
-      : ['run', join(root, 'src', 'cli.ts'), 'serve', '--http', '--port', String(this.port), '--bind', '127.0.0.1', '--suppress-bootstrap-token'];
+      ? [join(workingDirectory, 'pmbrain-sidecar.js'), 'serve', '--http', '--port', String(this.port), '--bind', '127.0.0.1', '--suppress-bootstrap-token', ...extra]
+      : ['run', join(root, 'src', 'cli.ts'), 'serve', '--http', '--port', String(this.port), '--bind', '127.0.0.1', '--suppress-bootstrap-token', ...extra];
 
     this.options.logger.write('desktop', `Starting sidecar on 127.0.0.1:${this.port}`);
     const child = spawn(command, args, {
@@ -288,7 +313,9 @@ export class SidecarManager {
       env: {
         ...cleanDatabaseEnvironment(),
         PMBRAIN_ADMIN_BOOTSTRAP_TOKEN: this.bootstrapToken,
-        PMBRAIN_PGLITE_ROLE: 'desktop-sidecar',
+        PMBRAIN_PGLITE_OWNER_TYPE: 'desktop-sidecar',
+        // Desktop sidecar is the sole PGLite owner; fail fast if another owner is live.
+        PMBRAIN_PGLITE_LOCK_FAIL_FAST: '1',
       },
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -306,6 +333,8 @@ export class SidecarManager {
     });
     child.once('exit', (code, signal) => {
       const stderr = this.recentStderr.trim();
+      this.lastExitCode = code;
+      this.lastExitSignal = signal;
       this.lastExitMessage = `Sidecar exited (${formatProcessExit(code, signal)}).${stderr ? ` ${stderr}` : ''}`;
       if (this.child === child) this.child = null;
       if (!this.stopping) this.handleCrash(this.lastExitMessage);
@@ -315,10 +344,28 @@ export class SidecarManager {
   private handleCrash(message: string): void {
     this.options.logger.write('desktop', message);
     if (this.stopping || this.recovering) return;
-    if (NON_RETRYABLE_STARTUP_ERRORS.some(pattern => pattern.test(message))) {
-      this.options.onState?.({ phase: 'failed', port: this.port, message });
+
+    const classified = classifySidecarStartupError(message);
+    if (!classified.retryable || this.options.disableAutoRestart) {
+      this.lastFailureDetails = {
+        recentStderr: this.recentStderr.trim(),
+        sidecarPid: null,
+        exitCode: this.lastExitCode,
+        signal: this.lastExitSignal,
+        lastHealthError: message,
+        retryable: false,
+      };
+      this.options.onState?.({
+        phase: 'failed',
+        port: this.port,
+        message: this.formatUserFacingFailure(message, classified.labelZh),
+        category: classified.category,
+        categoryLabelZh: classified.labelZh,
+        details: this.lastFailureDetails,
+      });
       return;
     }
+
     this.recovering = true;
     void this.queueLifecycle(async () => {
       try {
@@ -332,10 +379,33 @@ export class SidecarManager {
   private async recoverAfterCrash(lastMessage: string): Promise<void> {
     let failure = lastMessage;
     while (!this.stopping) {
+      const classified = classifySidecarStartupError(failure);
+      if (!classified.retryable) {
+        this.lastFailureDetails = this.buildFailureDetails(failure, false);
+        this.options.onState?.({
+          phase: 'failed',
+          port: this.port,
+          message: this.formatUserFacingFailure(failure, classified.labelZh),
+          category: classified.category,
+          categoryLabelZh: classified.labelZh,
+          details: this.lastFailureDetails,
+        });
+        return;
+      }
+
       const now = Date.now();
       this.restartTimes = this.restartTimes.filter((time) => now - time <= RESTART_WINDOW_MS);
       if (this.restartTimes.length >= MAX_RESTARTS) {
-        this.options.onState?.({ phase: 'failed', port: this.port, message: failure });
+        this.lastFailureDetails = this.buildFailureDetails(failure, true);
+        const finalClassified = classifySidecarStartupError(failure);
+        this.options.onState?.({
+          phase: 'failed',
+          port: this.port,
+          message: this.formatUserFacingFailure(failure, finalClassified.labelZh),
+          category: finalClassified.category,
+          categoryLabelZh: finalClassified.labelZh,
+          details: this.lastFailureDetails,
+        });
         return;
       }
       this.restartTimes.push(now);
@@ -352,28 +422,125 @@ export class SidecarManager {
         failure = error instanceof Error ? error.message : String(error);
         this.options.logger.write('desktop', `Recovery attempt failed: ${failure}`);
         await this.terminateChild();
+        const recoveredClassified = classifySidecarStartupError(error);
+        if (!recoveredClassified.retryable) {
+          this.lastFailureDetails = this.buildFailureDetails(error, false);
+          this.options.onState?.({
+            phase: 'failed',
+            port: this.port,
+            message: this.formatUserFacingFailure(error, recoveredClassified.labelZh),
+            category: recoveredClassified.category,
+            categoryLabelZh: recoveredClassified.labelZh,
+            details: this.lastFailureDetails,
+          });
+          return;
+        }
       }
     }
   }
 
   private async waitUntilHealthy(): Promise<void> {
     const deadline = Date.now() + HEALTH_TIMEOUT_MS;
+    const healthUrl = `http://127.0.0.1:${this.port}/health`;
     let lastError = 'PMBrain did not report healthy.';
+    let lastObservation: HealthCheckObservation | null = null;
+
     while (Date.now() < deadline) {
       if (this.stopping) throw new Error('PMBrain sidecar startup was stopped.');
-      if (!this.child) throw new Error(this.lastExitMessage ?? 'PMBrain sidecar exited before it became healthy.');
+
+      // If sidecar already exited, fail immediately — do not wait out 45s.
+      if (!this.child || this.child.exitCode !== null) {
+        const stderr = this.recentStderr.trim();
+        const message = this.lastExitMessage
+          ?? `PMBrain sidecar exited before it became healthy.${stderr ? ` ${stderr}` : ''}`;
+        const classified = classifySidecarStartupError(message);
+        throw new SidecarExitedBeforeHealthyError({
+          message,
+          exitCode: this.lastExitCode,
+          signal: this.lastExitSignal,
+          stderr,
+          category: classified.category,
+        });
+      }
+
+      const startedAt = new Date().toISOString();
+      const t0 = Date.now();
       try {
-        const response = await fetch(`http://127.0.0.1:${this.port}/health`, {
+        const response = await fetch(healthUrl, {
           signal: AbortSignal.timeout(2_000),
         });
+        const bodyText = await response.text().catch(() => '');
+        const observation: HealthCheckObservation = {
+          url: healthUrl,
+          startedAt,
+          durationMs: Date.now() - t0,
+          httpStatus: response.status,
+          bodySummary: bodyText.slice(0, 200),
+          sidecarAlive: true,
+          sidecarPid: this.child.pid ?? null,
+          recentStderr: this.recentStderr.trim().slice(-500),
+        };
+        lastObservation = observation;
+        this.options.onHealthObservation?.(observation);
+        this.options.logger.write(
+          'desktop',
+          `health check url=${healthUrl} status=${response.status} ms=${observation.durationMs} pid=${observation.sidecarPid}`,
+        );
         if (response.ok) return;
-        lastError = `Health check returned HTTP ${response.status}.`;
+        lastError = `Health check returned HTTP ${response.status}. body=${observation.bodySummary}`;
       } catch (error) {
         lastError = error instanceof Error ? error.message : String(error);
+        const observation: HealthCheckObservation = {
+          url: healthUrl,
+          startedAt,
+          durationMs: Date.now() - t0,
+          networkError: lastError,
+          sidecarAlive: Boolean(this.child && this.child.exitCode === null),
+          sidecarPid: this.child?.pid ?? null,
+          recentStderr: this.recentStderr.trim().slice(-500),
+        };
+        lastObservation = observation;
+        this.options.onHealthObservation?.(observation);
       }
       await new Promise((resolveDelay) => setTimeout(resolveDelay, HEALTH_INTERVAL_MS));
     }
-    throw new Error(`PMBrain startup timed out: ${lastError}`);
+
+    const classified = classifySidecarStartupError(lastError);
+    throw new SidecarHealthTimeoutError({
+      healthUrl,
+      lastError,
+      sidecarAlive: Boolean(this.child && this.child.exitCode === null),
+      sidecarPid: this.child?.pid ?? lastObservation?.sidecarPid ?? null,
+      recentStderr: this.recentStderr.trim(),
+      category: classified.category,
+      message: `本地服务启动失败：健康检查超时。最后错误：${lastError}`,
+    });
+  }
+
+  private buildFailureDetails(error: unknown, retryable: boolean): SidecarFailureDetails {
+    const text = error instanceof Error ? error.message : String(error);
+    return {
+      healthUrl: `http://127.0.0.1:${this.port}/health`,
+      lastHealthError: text,
+      sidecarPid: this.child?.pid ?? null,
+      exitCode: this.lastExitCode,
+      signal: this.lastExitSignal,
+      recentStderr: this.recentStderr.trim(),
+      retryable,
+    };
+  }
+
+  private formatUserFacingFailure(error: unknown, categoryLabelZh: string): string {
+    const text = error instanceof Error ? error.message : String(error);
+    const stderr = this.recentStderr.trim();
+    const parts = [
+      '本地服务启动失败',
+      `失败类别：${categoryLabelZh}`,
+      `详细信息：${text}`,
+    ];
+    if (this.lastExitCode != null) parts.push(`sidecar 退出码：${this.lastExitCode}`);
+    if (stderr) parts.push(`sidecar stderr：${stderr.slice(-1500)}`);
+    return parts.join('\n');
   }
 
   private async issueMagicLink(): Promise<string> {

@@ -100,7 +100,11 @@ export async function previewIntent(text: string, config: GBrainConfig | null): 
     throw new Error(`输入内容不能超过 ${MAX_NATURAL_TASK_CHARACTERS.toLocaleString('zh-CN')} 字，当前为 ${text.length.toLocaleString('zh-CN')} 字。`);
   }
   const llm = getAdminLlmStatus(config);
-  if (!llm.enabled) {
+  if (!llm.generative_enabled) {
+    const { GENERATIVE_MODEL_DISABLED_MESSAGE } = await import('../../core/model-usage.ts');
+    throw new Error(GENERATIVE_MODEL_DISABLED_MESSAGE);
+  }
+  if (!llm.configured) {
     throw new Error(`LLM is not configured: ${llm.missing.join(', ') || 'missing chat model or key'}`);
   }
   let lastError: Error | null = null;
@@ -312,6 +316,20 @@ export async function startDreamRun(input: {
   to?: string;
   timeoutMs?: number;
 }, cwd: string, hooks?: RunHooks): Promise<ConsoleRun> {
+  const {
+    assertDreamPresetAllowGenerative,
+    assertPhasesAllowGenerative,
+  } = await import('../../core/model-usage.ts');
+  if (input.preset === 'quick') {
+    // allowed when generative is off
+  } else if (input.phase && input.phase !== 'all') {
+    assertPhasesAllowGenerative([input.phase]);
+  } else if (input.preset) {
+    assertDreamPresetAllowGenerative(input.preset);
+  } else {
+    assertDreamPresetAllowGenerative('full');
+  }
+
   const mode = input.preset ?? (input.phase && input.phase !== 'all' ? input.phase : 'cycle');
   return await startRun(
     `dream_${mode}`,

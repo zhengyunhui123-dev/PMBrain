@@ -85,6 +85,8 @@ export const api = {
     apiFetch('/admin/api/intent/execute', { method: 'POST', body: JSON.stringify({ previewId, confirmed }) }),
   startThinkRun: (question: string) =>
     apiFetch('/admin/api/think-runs', { method: 'POST', body: JSON.stringify({ question }) }),
+  knowledgeSearch: (body: { query: string; mode: 'keyword' | 'semantic'; limit?: number }) =>
+    apiFetch('/admin/api/knowledge-search', { method: 'POST', body: JSON.stringify(body) }),
   startCaptureRun: (content: string, sourceId?: string) =>
     apiFetch('/admin/api/capture-runs', { method: 'POST', body: JSON.stringify({ content, sourceId }) }),
   runs: () => apiFetch('/admin/api/runs'),
@@ -114,6 +116,9 @@ export const api = {
   dreamSchedule: () => apiFetch('/admin/api/dream/schedule'),
   saveDreamSchedule: (body: { enabled: boolean; time: string }) =>
     apiFetch('/admin/api/dream/schedule', { method: 'POST', body: JSON.stringify(body) }),
+  generativeUsage: () => apiFetch('/admin/api/model-usage/generative'),
+  saveGenerativeUsage: (enabled: boolean) =>
+    apiFetch('/admin/api/model-usage/generative', { method: 'POST', body: JSON.stringify({ enabled }) }),
   startDreamRun: (body: { phase?: string; preset?: 'full' | 'meeting' | 'quick'; sourceId?: string; maxPages?: number; drainProposals?: boolean; windowSeconds?: number; dryRun: boolean; input?: string; date?: string; from?: string; to?: string; timeoutMs?: number }) =>
     apiFetch('/admin/api/dream-runs', { method: 'POST', body: JSON.stringify(body) }),
   breakDreamLock: (id: string, holderPid: number) =>

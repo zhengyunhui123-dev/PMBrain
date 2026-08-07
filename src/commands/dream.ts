@@ -584,6 +584,33 @@ export async function runDream(engine: BrainEngine | null, args: string[]): Prom
     return;
   }
 
+  // Global generative gate (file-plane model_usage.generative_enabled).
+  // Blocks full/meeting / bare full cycle and generative phases before work.
+  try {
+    const {
+      assertDreamPresetAllowGenerative,
+      assertPhasesAllowGenerative,
+    } = await import('../core/model-usage.ts');
+    if (opts.preset === 'quick') {
+      // quick is local-only
+    } else if (opts.phase) {
+      assertPhasesAllowGenerative([opts.phase]);
+    } else {
+      // full, meeting, or bare dream (ALL_PHASES)
+      assertDreamPresetAllowGenerative(opts.preset ?? 'full');
+    }
+  } catch (e) {
+    const { GenerativeModelDisabledError, GENERATIVE_MODEL_DISABLED_CODE } = await import('../core/model-usage.ts');
+    if (e instanceof GenerativeModelDisabledError || (e as { code?: string })?.code === GENERATIVE_MODEL_DISABLED_CODE) {
+      console.error(JSON.stringify({
+        code: GENERATIVE_MODEL_DISABLED_CODE,
+        message: e instanceof Error ? e.message : String(e),
+      }));
+      process.exit(2);
+    }
+    throw e;
+  }
+
   if (engine !== null && engine.kind === 'pglite' && opts.preset === 'meeting') {
     console.error(
       'PGLite 暂不支持“会议与会话”整理：该预设依赖 synthesize。' +

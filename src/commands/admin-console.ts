@@ -89,6 +89,9 @@ export async function getAdminBrainOverview(engine: BrainEngine, config: GBrainC
   const chunks = stats.chunk_count ?? 0;
   const coverage = chunks > 0 ? Math.round((embedded / chunks) * 1000) / 10 : 100;
   const providerStatus = getProviderStatus(config);
+  const { isGenerativeModelEnabled } = await import('../core/model-usage.ts');
+  const generativeEnabled = isGenerativeModelEnabled(config);
+  const chatConfigured = providerStatus.chat.enabled;
 
   return {
     version,
@@ -106,7 +109,14 @@ export async function getAdminBrainOverview(engine: BrainEngine, config: GBrainC
     main_source_id: mainSourceId,
     federated_source_count: sourceRows.filter(s => s.federated).length,
     provider_status: providerStatus,
-    llm_enabled: providerStatus.chat.enabled,
+    llm_enabled: chatConfigured && generativeEnabled,
+    llm_configured: chatConfigured,
+    generative_enabled: generativeEnabled,
+    llm_status_label: !chatConfigured
+      ? '未配置'
+      : generativeEnabled
+        ? '已配置'
+        : '已配置，但全局禁用',
     config: redactedConfig(config),
   };
 }
@@ -508,8 +518,12 @@ export async function getAdminDreamOverview(engine: BrainEngine, config: GBrainC
     .filter(row => row.kind.startsWith('dream_') || row.kind === 'embed_stale' || row.kind === 'sync_all' || row.kind === 'doctor_check')
     .slice(0, 20);
 
+  const { getPhaseCapabilities, isGenerativeModelEnabled, generativeCapabilitySummary } = await import('../core/model-usage.ts');
   return {
     phase_catalog: ALL_PHASES,
+    phase_capabilities: getPhaseCapabilities(),
+    generative_usage: generativeCapabilitySummary(config),
+    generative_enabled: isGenerativeModelEnabled(config),
     overview: overviewValue,
     health,
     locks,

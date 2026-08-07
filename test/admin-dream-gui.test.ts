@@ -54,8 +54,10 @@ describe('Dream GUI product contract', () => {
   });
 
   test('phase ordering comes from the backend catalog', () => {
-    expect(dream).toContain('phaseCatalog.map(item => <option');
+    // Options are built with an expanded map body (capability tags for ordinary-model gate).
+    expect(dream).toContain('phaseCatalog.map(item =>');
     expect(dream).toContain('phaseCatalog={data.phase_catalog}');
+    expect(dream).toContain('phaseCapabilities={data.phase_capabilities}');
   });
 
   test('removed project-management phases are not presented by Dream', () => {

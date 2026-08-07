@@ -1,0 +1,130 @@
+/**
+ * Admin knowledge workbench search — keyword vs semantic (hybrid).
+ * Reuses engine searchKeyword / hybridSearch; no chat / think path.
+ */
+import type { BrainEngine } from '../core/engine.ts';
+import type { SearchResult } from '../core/types.ts';
+import { dedupResults } from '../core/search/dedup.ts';
+import { hybridSearch } from '../core/search/hybrid.ts';
+import { normalizeChineseQuery } from '../core/search/query-normalize-zh.ts';
+
+export type AdminKnowledgeSearchMode = 'keyword' | 'semantic';
+
+export interface AdminKnowledgeSearchHit {
+  slug: string;
+  title: string;
+  type: string;
+  score: number;
+  snippet: string;
+  source_id: string | null;
+  page_id: number;
+  chunk_id: number;
+}
+
+export interface AdminKnowledgeSearchResponse {
+  mode: AdminKnowledgeSearchMode;
+  query: string;
+  limit: number;
+  vector_enabled: boolean;
+  result_count: number;
+  results: AdminKnowledgeSearchHit[];
+}
+
+const DEFAULT_LIMIT = 20;
+const MAX_LIMIT = 50;
+const SNIPPET_LEN = 160;
+
+export function isAdminKnowledgeSearchMode(value: unknown): value is AdminKnowledgeSearchMode {
+  return value === 'keyword' || value === 'semantic';
+}
+
+function clampLimit(raw: unknown): number {
+  const n = Math.floor(Number(raw));
+  if (!Number.isFinite(n) || n <= 0) return DEFAULT_LIMIT;
+  return Math.min(MAX_LIMIT, n);
+}
+
+function toHit(row: SearchResult): AdminKnowledgeSearchHit {
+  const snippet = (row.chunk_text ?? '').replace(/\s+/g, ' ').trim().slice(0, SNIPPET_LEN);
+  return {
+    slug: row.slug,
+    title: row.title || row.slug,
+    type: String(row.type ?? ''),
+    score: Number.isFinite(row.score) ? row.score : 0,
+    snippet,
+    source_id: row.source_id ?? null,
+    page_id: row.page_id,
+    chunk_id: row.chunk_id,
+  };
+}
+
+async function runKeywordSearch(
+  engine: BrainEngine,
+  query: string,
+  limit: number,
+): Promise<SearchResult[]> {
+  const chineseQuery = normalizeChineseQuery(query);
+  const lexicalQueries = chineseQuery.lexicalQueries.length > 0
+    ? chineseQuery.lexicalQueries
+    : [query];
+  const batches = await Promise.all(
+    lexicalQueries.map((lexicalQuery) => engine.searchKeyword(lexicalQuery, {
+      limit,
+      ...(chineseQuery.since ? { afterDate: chineseQuery.since.toISOString() } : {}),
+      ...(chineseQuery.until ? { beforeDate: chineseQuery.until.toISOString() } : {}),
+    })),
+  );
+  return dedupResults(batches.flat()).slice(0, limit);
+}
+
+async function runSemanticSearch(
+  engine: BrainEngine,
+  query: string,
+  limit: number,
+): Promise<{ results: SearchResult[]; vectorEnabled: boolean }> {
+  let vectorEnabled = false;
+  // expansion:false — no chat model for multi-query rewrite
+  const results = await hybridSearch(engine, query, {
+    limit,
+    expansion: false,
+    mode: 'balanced',
+    onMeta: (meta) => {
+      vectorEnabled = Boolean(meta.vector_enabled);
+    },
+  });
+  return { results, vectorEnabled };
+}
+
+export async function runAdminKnowledgeSearch(
+  engine: BrainEngine,
+  input: { query: string; mode?: unknown; limit?: unknown },
+): Promise<AdminKnowledgeSearchResponse> {
+  const query = typeof input.query === 'string' ? input.query.trim() : '';
+  if (!query) throw new Error('搜索词不能为空');
+  const mode: AdminKnowledgeSearchMode = isAdminKnowledgeSearchMode(input.mode)
+    ? input.mode
+    : 'keyword';
+  const limit = clampLimit(input.limit);
+
+  if (mode === 'keyword') {
+    const raw = await runKeywordSearch(engine, query, limit);
+    return {
+      mode,
+      query,
+      limit,
+      vector_enabled: false,
+      result_count: raw.length,
+      results: raw.map(toHit),
+    };
+  }
+
+  const { results, vectorEnabled } = await runSemanticSearch(engine, query, limit);
+  return {
+    mode,
+    query,
+    limit,
+    vector_enabled: vectorEnabled,
+    result_count: results.length,
+    results: results.map(toHit),
+  };
+}

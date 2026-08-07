@@ -13,11 +13,9 @@ import {
   type IpcMainInvokeEvent,
 } from 'electron';
 import { autoUpdater } from 'electron-updater';
-import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { DesktopLogger } from './logs.js';
 import { findAvailablePort } from './port-manager.js';
-import { precheckPgliteLock } from './pglite-lock-precheck.js';
 import { SidecarManager, type SidecarState } from './sidecar-manager.js';
 import { preflightCliRuntime, runCli, runCliChecked, type CliRuntime } from './cli-runner.js';
 import { listDesktopProviderModels, type DesktopModelTouchpoint } from './model-catalog.js';
@@ -57,6 +55,7 @@ import {
   type SharedIntegrationPayload,
 } from './integration-manager.js';
 import { UpdateManager, type UpdateState } from './update-manager.js';
+import { updateDesktopVersionHistory, type DesktopVersionHistory } from './version-history.js';
 import { DatabaseRuntimeManager } from './database-runtime-manager.js';
 import { LanMcpGateway, type LanMcpGatewayStatus } from './lan-mcp-gateway.js';
 import { listNetworkCandidates } from './network-manager.js';
@@ -65,7 +64,6 @@ import type {
   DesktopSystemSettingsSaveResult,
   DesktopSystemSettingsState,
 } from './system-settings.js';
-import type { DesktopPgliteUpgradeBackups } from '../preload/index.js';
 
 let mainWindow: BrowserWindow | null = null;
 let sidecar: SidecarManager | null = null;
@@ -85,10 +83,9 @@ let sidecarStartupPromise: Promise<void> | null = null;
 let serviceReadyPromise: Promise<SidecarManager> | null = null;
 let sidecarRetryPromise: Promise<string> | null = null;
 let runtimePreflightPromise: Promise<void> | null = null;
-let pendingPgliteUpgradeBackupPath: string | null = null;
-const pgliteUpgradeBackupByVersion = new Map<string, string | null>();
 let setupInProgress = false;
 let trayHintShown = false;
+let desktopVersionHistory: DesktopVersionHistory = { current: '' };
 let quitting = false;
 const databaseRuntimeManager = new DatabaseRuntimeManager();
 const LAN_MONITOR_INTERVAL_MS = 5_000;
@@ -459,18 +456,6 @@ async function startSidecarOnce(openAdmin: boolean): Promise<void> {
     await reconcileLanGateway();
     return;
   }
-  // PGLite 锁预检：数据库被其他 PMBrain 进程（旧桌面端残留、托盘实例、
-  // 命令行 CLI）持有时立即给出可操作指引，而不是让 sidecar 等满 30 秒
-  // 锁超时再重启重试 3 轮。只读检测，不删锁、不结束任何进程。
-  if (getDatabaseRuntimeConfig().engine === 'pglite') {
-    const precheck = precheckPgliteLock(getSetupInfo().current.databasePath);
-    if (precheck.blocked && precheck.message) {
-      logger.write('desktop', `PGLite lock precheck blocked startup: holder PID ${precheck.holderPid}`);
-      sendState({ phase: 'failed', port: sidecar?.port ?? 3131, message: precheck.message });
-      hideStartupProgress();
-      throw new Error(precheck.message);
-    }
-  }
   sendStartupProgress({
     visible: true,
     stage: 'sidecar',
@@ -514,130 +499,12 @@ async function startSidecarOnce(openAdmin: boolean): Promise<void> {
     }
     await reconcileLanGateway();
   } catch (error) {
-    const rawMessage = error instanceof Error ? error.message : String(error);
-    const database = getDatabaseRuntimeConfig();
-    const databasePath = getSetupInfo().current.databasePath;
-    let message = database.engine === 'pglite' && databasePath
-      ? `${rawMessage}\nPGLite 数据库路径：${databasePath}`
-      : rawMessage;
-    if (database.engine === 'pglite' && pendingPgliteUpgradeBackupPath) {
-      message +=
-        `\n升级前冷备已验证并保留：${pendingPgliteUpgradeBackupPath}` +
-        '\nPMBrain 不会自动覆盖当前数据库。请保留此备份和桌面日志，不要连续重复迁移。';
-    }
+    const message = error instanceof Error ? error.message : String(error);
     logger.write('desktop', message);
     sendState({ phase: 'failed', port: sidecar?.port ?? 3131, message });
     hideStartupProgress();
-    throw new Error(message, { cause: error });
+    throw error;
   }
-}
-
-async function ensurePgliteUpgradeBackup(databasePath: string | null | undefined): Promise<string | null> {
-  if (!databasePath) throw new Error('PGLite 升级前无法确定数据库路径，已停止迁移。');
-  const pathKey = process.platform === 'win32' ? databasePath.toLowerCase() : databasePath;
-  const key = `${pathKey}::${app.getVersion()}`;
-  if (pgliteUpgradeBackupByVersion.has(key)) {
-    const cached = pgliteUpgradeBackupByVersion.get(key) ?? null;
-    pendingPgliteUpgradeBackupPath = cached;
-    return cached;
-  }
-
-  pendingPgliteUpgradeBackupPath = null;
-  sendStartupProgress({
-    visible: true,
-    stage: 'migration',
-    title: '正在创建升级前数据库冷备',
-    message: 'sidecar 已停止。PMBrain 正在取得独占迁移锁、复制完整 PGLite 目录并验证恢复副本，请不要关闭窗口。',
-  });
-  const completed = await runCliChecked(runtime(), [
-    'pglite-backup',
-    'create',
-    '--path', databasePath,
-    '--target-version', app.getVersion(),
-    '--json',
-  ]);
-  const result = JSON.parse(completed.stdout.trim().split(/\r?\n/).at(-1) || '{}') as {
-    status?: string;
-    backup_directory?: string;
-    reason?: string;
-  };
-  if (result.status === 'not_required' && result.reason === 'database_missing') {
-    pgliteUpgradeBackupByVersion.set(key, null);
-    logger?.write('desktop', `PGLite upgrade backup not required; database does not exist yet: ${databasePath}`);
-    return null;
-  }
-  if (!['created', 'reused'].includes(result.status ?? '') || !result.backup_directory) {
-    throw new Error('PGLite 升级冷备没有返回可验证的备份目录，已停止迁移。');
-  }
-
-  pendingPgliteUpgradeBackupPath = result.backup_directory;
-  pgliteUpgradeBackupByVersion.set(key, result.backup_directory);
-  logger?.write('desktop', `Verified PGLite pre-upgrade backup: ${result.backup_directory}`);
-  sendStartupProgress({
-    visible: true,
-    stage: 'migration',
-    title: '升级前冷备验证通过',
-    message: `可恢复备份已保留：${result.backup_directory}。现在开始兼容迁移；失败时不会自动覆盖数据库。`,
-  });
-  return result.backup_directory;
-}
-
-interface PgliteBackupListCliEntry {
-  status?: string;
-  backup_directory?: string;
-  backup_database_path?: string;
-  manifest_path?: string;
-  created_at?: string;
-  target_version?: string;
-  source_schema_version?: number | null;
-  recovery_verified_at?: string;
-}
-
-async function listPgliteUpgradeBackupsForDesktop(): Promise<DesktopPgliteUpgradeBackups> {
-  const setup = getSetupInfo();
-  if (setup.needsSetup || setup.current.engine !== 'pglite') {
-    return { databasePath: null, backups: [] };
-  }
-  const databasePath = setup.current.databasePath ?? setup.defaults.databasePath;
-  const completed = await runCliChecked(runtime(), [
-    'pglite-backup',
-    'list',
-    '--path', databasePath,
-    '--json',
-  ]);
-  const result = JSON.parse(completed.stdout.trim().split(/\r?\n/).at(-1) || '{}') as {
-    status?: string;
-    database_path?: string;
-    backups?: PgliteBackupListCliEntry[];
-  };
-  if (result.status !== 'ok' || !Array.isArray(result.backups)) {
-    throw new Error('PGLite 备份清单返回格式无效，无法显示软件修复内容。');
-  }
-  const backups = result.backups.flatMap((entry) => {
-    if (entry.status !== 'verified'
-      || !entry.backup_directory
-      || !entry.backup_database_path
-      || !entry.manifest_path
-      || !entry.created_at
-      || !entry.target_version
-      || !entry.recovery_verified_at) {
-      return [];
-    }
-    return [{
-      status: 'verified' as const,
-      backupDirectory: entry.backup_directory,
-      backupDatabasePath: entry.backup_database_path,
-      manifestPath: entry.manifest_path,
-      createdAt: entry.created_at,
-      targetVersion: entry.target_version,
-      sourceSchemaVersion: typeof entry.source_schema_version === 'number' ? entry.source_schema_version : null,
-      recoveryVerifiedAt: entry.recovery_verified_at,
-    }];
-  });
-  return {
-    databasePath: result.database_path ?? databasePath,
-    backups,
-  };
 }
 
 async function startSidecar(openAdmin: boolean): Promise<void> {
@@ -731,20 +598,31 @@ async function withSidecarPausedForModelConfig<T>(operation: () => Promise<T>): 
 async function migrateConfiguredInstallation(): Promise<boolean> {
   if (!needsDesktopMigration(app.getVersion())) return false;
   const setup = getSetupInfo();
+  // PGLite single-owner model: do NOT open the database from a separate
+  // apply-migrations CLI process. Schema migrations run inside the unique
+  // desktop sidecar on connect (tryRunPendingMigrations / initSchema).
+  // A separate migration CLI would acquire .gbrain-lock, then hand off to
+  // sidecar and race on Windows after reboot or fast restart.
+  if (setup.current.engine === 'pglite') {
+    sendStartupProgress({
+      visible: true,
+      stage: 'migration',
+      title: '正在准备数据库升级',
+      message: '检测到桌面版本更新。PGLite 模式下迁移将由唯一本地服务在启动时安全执行，不会删除知识库或原始资料。',
+    });
+    logger?.write(
+      'desktop',
+      `PGLite single-owner migration: defer schema apply to sidecar for desktop ${app.getVersion()}`,
+    );
+    await syncModelDefaultsToConfigFile();
+    return true;
+  }
   sendStartupProgress({
     visible: true,
     stage: 'migration',
     title: '正在升级现有 PMBrain 数据库',
-    message: setup.current.engine === 'pglite'
-      ? '检测到桌面版本更新，将由唯一的 sidecar 连接完成 PGLite 兼容迁移和健康检查。'
-      : '检测到桌面版本更新，正在执行兼容迁移。不会删除知识库或原始资料，请不要关闭窗口。',
+    message: '检测到桌面版本更新，正在执行兼容迁移。不会删除知识库或原始资料，请不要关闭窗口。',
   });
-  if (setup.current.engine === 'pglite') {
-    await ensurePgliteUpgradeBackup(setup.current.databasePath);
-    logger?.write('desktop', `PGLite migrations delegated to sidecar for desktop ${app.getVersion()}`);
-    await syncModelDefaultsToConfigFile();
-    return true;
-  }
   logger?.write('desktop', `Applying migrations for desktop ${app.getVersion()}`);
   await runCliChecked(runtime(), DESKTOP_MIGRATION_ARGS);
   await syncModelDefaultsToConfigFile();
@@ -779,14 +657,10 @@ async function ensureServiceReady(): Promise<SidecarManager> {
   const pending = (async () => {
     await ensureRuntimeReady();
     await prepareConfiguredDatabase();
-    const setup = getSetupInfo();
     const migrationRequired = await migrateConfiguredInstallation();
-    if (migrationRequired && setup.current.engine !== 'pglite') markDesktopMigration(app.getVersion());
+    if (migrationRequired) markDesktopMigration(app.getVersion());
     if (!sidecar || currentState?.phase !== 'ready') await startSidecar(false);
     if (!sidecar || currentState?.phase !== 'ready') throw new Error('PMBrain 本地服务尚未就绪。');
-    if (migrationRequired && setup.current.engine === 'pglite') {
-      markDesktopMigration(app.getVersion());
-    }
     return sidecar;
   })();
   serviceReadyPromise = pending;
@@ -849,7 +723,6 @@ async function applySetupOnce(payload: SetupPayload, setDefaultSource = true) {
   let saved: ReturnType<typeof saveSetup>;
   let embeddingSwitchCommitted = false;
   let reembeddingWarning: string | null = null;
-  let migrationRequired = false;
   try {
     saved = saveSetup(payload);
   } catch (error) {
@@ -859,10 +732,6 @@ async function applySetupOnce(payload: SetupPayload, setDefaultSource = true) {
   }
   try {
     await prepareConfiguredDatabase();
-    migrationRequired = needsDesktopMigration(app.getVersion());
-    if (migrationRequired && saved.config.engine === 'pglite') {
-      await ensurePgliteUpgradeBackup(saved.config.database_path);
-    }
     if (saved.needsEmbeddingDimensionProbe || saved.embeddingModelChanged) {
       sendStartupProgress({
         visible: true,
@@ -901,7 +770,8 @@ async function applySetupOnce(payload: SetupPayload, setDefaultSource = true) {
         saved.config.embedding_dimensions = result.dimensions!;
       }
     }
-    if (migrationRequired && saved.config.engine !== 'pglite') {
+    const migrationRequired = needsDesktopMigration(app.getVersion());
+    if (migrationRequired) {
       sendStartupProgress({
         visible: true,
         stage: 'migration',
@@ -929,9 +799,7 @@ async function applySetupOnce(payload: SetupPayload, setDefaultSource = true) {
       }
       await runCliChecked(runtime(), ['sources', 'default', sourceId]);
     }
-    if (migrationRequired && saved.config.engine !== 'pglite') {
-      markDesktopMigration(app.getVersion());
-    }
+    if (migrationRequired) markDesktopMigration(app.getVersion());
     // Keep this as the final fallible setup step: once the DB column is
     // aligned, no later config rollback may restore an incompatible width.
     if (saved.embeddingModelChanged) {
@@ -984,12 +852,6 @@ async function applySetupOnce(payload: SetupPayload, setDefaultSource = true) {
     throw error;
   }
   await startSidecar(false);
-  if (migrationRequired && saved.config.engine === 'pglite') {
-    if (!sidecar || currentState?.phase !== 'ready') {
-      throw new Error('PGLite sidecar 尚未完成数据库迁移和健康检查。');
-    }
-    markDesktopMigration(app.getVersion());
-  }
   applyDesktopTheme(getSetupInfo().current.theme);
   return {
     setup: getSetupInfo(),
@@ -1001,7 +863,7 @@ async function applySetupOnce(payload: SetupPayload, setDefaultSource = true) {
   };
 }
 
-type SettingsPanel = 'basic' | 'models' | 'integrations' | 'updates' | 'system' | 'repair';
+type SettingsPanel = 'basic' | 'models' | 'integrations' | 'updates' | 'system';
 
 function installMenu(): void {
   Menu.setApplicationMenu(Menu.buildFromTemplate([
@@ -1014,7 +876,6 @@ function installMenu(): void {
         { label: 'MCP 接入', click: () => void openSettingsPanel('integrations') },
         { label: '系统设置', click: () => void openSettingsPanel('system') },
         { label: '软件更新', click: () => void openUpdates() },
-        { label: '软件修复', click: () => void openSettingsPanel('repair') },
         { type: 'separator' },
         { label: '打开日志目录', click: () => logger && shell.showItemInFolder(logger.filePath) },
         { type: 'separator' },
@@ -1061,33 +922,13 @@ async function openUpdates(): Promise<void> {
   await updateManager?.check();
 }
 
-function readCurrentReleaseNotes(): string | undefined {
-  const releaseNotesPath = app.isPackaged
-    ? join(process.resourcesPath, 'release-notes.md')
-    : join(app.getAppPath(), 'build', 'release-notes.md');
-  try {
-    if (!existsSync(releaseNotesPath)) {
-      logger?.write('updater', `Current release notes file not found: ${releaseNotesPath}`);
-      return undefined;
-    }
-    const content = readFileSync(releaseNotesPath, 'utf8').trim();
-    return content || undefined;
-  } catch (error) {
-    logger?.write(
-      'updater',
-      `Unable to read current release notes: ${error instanceof Error ? error.message : String(error)}`,
-    );
-    return undefined;
-  }
-}
-
 function initializeUpdater(): void {
   if (!logger) return;
   updateManager = new UpdateManager({
     updater: autoUpdater,
     packaged: app.isPackaged,
     currentVersion: app.getVersion(),
-    currentReleaseNotes: readCurrentReleaseNotes(),
+    previousVersion: desktopVersionHistory.previous,
     logger,
     beforeInstall: async () => {
       updateManager?.stop();
@@ -1414,6 +1255,11 @@ if (!app.requestSingleInstanceLock()) {
     logger = new DesktopLogger(app.getPath('userData'));
     const initialSetup = getSetupInfo();
     selectedAddressWasUnavailable = getDesktopPreferences().sharedResumeRequired;
+    desktopVersionHistory = updateDesktopVersionHistory(
+      join(app.getPath('userData'), 'version-history.json'),
+      app.getVersion(),
+      initialSetup.current.lastMigratedVersion,
+    );
     applyDesktopTheme(initialSetup.current.theme);
     nativeTheme.on('updated', () => {
       mainWindow?.webContents.send('desktop:theme-state', themeState());
@@ -1484,7 +1330,11 @@ if (!app.requestSingleInstanceLock()) {
     handleTrustedIpc('desktop:check-updates', () => updateManager?.check());
     handleTrustedIpc('desktop:download-update', () => updateManager?.download());
     handleTrustedIpc('desktop:install-update', () => updateManager?.install());
-    handleTrustedIpc('desktop:list-pglite-upgrade-backups', () => listPgliteUpgradeBackupsForDesktop());
+    handleTrustedIpc('desktop:open-previous-release', async () => {
+      const previous = desktopVersionHistory.previous;
+      if (!previous) throw new Error('当前没有可用的上一版本记录。');
+      await shell.openExternal(`https://github.com/zhengyunhui123-dev/PMBrain/releases/tag/v${previous}`);
+    });
     handleTrustedIpc('desktop:retry', async () => {
       await showShell();
       if (getSetupInfo().needsSetup) return;

@@ -121,7 +121,7 @@ describe('PGLite upgrade cold backup and recovery verification', () => {
 
   test('never copies while a live owner holds the database directory', async () => {
     await seedProtectedPage();
-    const lock = await acquireLock(databasePath, { role: 'serve', timeoutMs: 100 });
+    const lock = await acquireLock(databasePath, { ownerType: 'desktop-sidecar', timeoutMs: 100 });
     try {
       await expect(createVerifiedPgliteUpgradeBackup({
         databasePath,

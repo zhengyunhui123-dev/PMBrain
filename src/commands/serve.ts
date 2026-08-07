@@ -119,8 +119,36 @@ export async function runServe(
     // restart.
     const suppressBootstrapToken = args.includes('--suppress-bootstrap-token');
 
+    // Diagnostic mode: single sidecar only — no Dream schedule, no Supervisor/Worker.
+    // Still serves HTTP + /health (SELECT 1) so desktop can verify PGLite ownership.
+    const diagnosticMode = args.includes('--diagnostic-mode');
+    if (diagnosticMode) {
+      process.env.PMBRAIN_DIAGNOSTIC_MODE = '1';
+      console.error('[serve] diagnostic-mode: Dream schedule and Supervisor/Worker auto-start disabled');
+      try {
+        const { inspectLock } = await import('../core/pglite-lock.ts');
+        const { loadConfig } = await import('../core/config.ts');
+        const cfg = loadConfig();
+        if (cfg?.engine === 'pglite' && cfg.database_path) {
+          const diag = await inspectLock(cfg.database_path);
+          console.error(`[serve] pglite lock diagnostics: ${JSON.stringify(diag)}`);
+        }
+      } catch (err) {
+        console.error(`[serve] lock diagnostics failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+
     const { runServeHttp } = await import('./serve-http.ts');
-    await runServeHttp(engine, { port, tokenTtl, enableDcr, publicUrl, logFullParams, bind, suppressBootstrapToken });
+    await runServeHttp(engine, {
+      port,
+      tokenTtl,
+      enableDcr,
+      publicUrl,
+      logFullParams,
+      bind,
+      suppressBootstrapToken,
+      diagnosticMode,
+    });
     return;
   }
 
