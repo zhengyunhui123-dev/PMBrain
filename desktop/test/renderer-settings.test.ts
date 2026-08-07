@@ -98,6 +98,13 @@ describe('desktop settings renderer contracts', () => {
     expect(preview).toContain("touchpoint === 'embedding' ? ['nomic-embed-text'] : ['qwen3:latest', 'qwen2.5:latest']");
   });
 
+  test('model settings label the embedding model without an optional marker', () => {
+    expect(html).toContain('<b>向量化模型</b>');
+    expect(html).not.toContain('向量化模型（可选）');
+    expect(html).toContain('向量模型需要配置，且不受该开关影响。');
+    expect(html).not.toContain('向量模型可选，且不受该开关影响。');
+  });
+
   test('moves appearance and native desktop behavior into an accessible system panel', () => {
     for (const id of [
       'network-mode-local',
