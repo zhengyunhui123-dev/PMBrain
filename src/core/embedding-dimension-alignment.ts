@@ -185,7 +185,7 @@ async function alignDerivedEmbeddingStores(
 export async function alignEmbeddingDimension(
   engine: BrainEngine,
   targetDimensions: number,
-  opts: { forceReembed?: boolean; targetModel?: string } = {},
+  opts: { forceReembed?: boolean; targetModel?: string; requireEmpty?: boolean } = {},
 ): Promise<EmbeddingDimensionAlignmentResult> {
   if (!Number.isInteger(targetDimensions) || targetDimensions <= 0 || targetDimensions > PGVECTOR_COLUMN_MAX_DIMS) {
     throw new Error(`Invalid embedding dimension: ${targetDimensions}`);
@@ -194,6 +194,18 @@ export async function alignEmbeddingDimension(
   const current = await readContentChunksEmbeddingDim(engine);
   if (!current.exists) {
     throw new Error('content_chunks.embedding does not exist; run `pmbrain apply-migrations --yes` first.');
+  }
+  if (opts.requireEmpty) {
+    const countRows = await engine.executeRaw<{ count: string | number }>(
+      'SELECT COUNT(*) AS count FROM content_chunks WHERE embedding IS NOT NULL',
+    );
+    const existingEmbeddings = Number(countRows[0]?.count ?? 0);
+    if (existingEmbeddings > 0) {
+      throw new Error(
+        `Embedding store contains ${existingEmbeddings} existing embedding(s); ` +
+        'refusing first-activation alignment without explicit rebuild confirmation.',
+      );
+    }
   }
   if (current.dims === targetDimensions && !opts.forceReembed) {
     const invalidated = opts.targetModel

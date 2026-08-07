@@ -1,5 +1,6 @@
 import type { GBrainConfig } from '../config.ts';
 import type { AIGatewayConfig } from './types.ts';
+import { isGenerativeModelEnabled } from '../model-usage.ts';
 
 /** Build the process-local AI gateway config from PMBrain's canonical file config. */
 export function buildGatewayConfig(config: GBrainConfig): AIGatewayConfig {
@@ -22,6 +23,7 @@ export function buildGatewayConfig(config: GBrainConfig): AIGatewayConfig {
   if (process.env.OPENROUTER_BASE_URL) envBaseUrls.openrouter = process.env.OPENROUTER_BASE_URL;
 
   return {
+    generative_enabled: isGenerativeModelEnabled(config),
     embedding_model: config.embedding_model,
     embedding_dimensions: config.embedding_dimensions,
     embedding_multimodal_model: config.embedding_multimodal_model,

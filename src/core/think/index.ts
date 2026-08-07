@@ -27,6 +27,7 @@ import { chat as gatewayChat, type ChatResult } from '../ai/gateway.ts';
 import { resolveRecipe } from '../ai/model-resolver.ts';
 import { AIConfigError } from '../ai/errors.ts';
 import { loadConfig } from '../config.ts';
+import { isGenerativeModelEnabled } from '../model-usage.ts';
 import { DEFAULT_USER_HOLDER } from '../cycle/emotional-weight.ts';
 
 /** Anthropic Messages client interface — same shape used by subagent.ts so test stubs can be shared. */
@@ -420,6 +421,12 @@ export async function runThink(
   if (opts.stubResponse) {
     response = opts.stubResponse;
   } else {
+    // Keep the think path aligned with the file-plane capability switch used
+    // by CLI/Admin. Injected clients remain a deliberate test seam; real
+    // synthesis must stop cleanly when the ordinary model is disabled.
+    if (!opts.client && !isGenerativeModelEnabled(loadConfig())) {
+      return unavailableResult();
+    }
     // Build a ThinkLLMClient. Three sources, in priority order:
     //   1. opts.client (test injection — preserved as test seam)
     //   2. Gateway adapter (routes through gateway.chat() — picks up

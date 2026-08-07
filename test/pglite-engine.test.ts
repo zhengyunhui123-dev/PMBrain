@@ -1332,7 +1332,7 @@ describe('PGLiteEngine: v0.13.1 error-wrap on connect() (#223)', () => {
     // Regression guard: the user-visible error MESSAGE must not re-introduce
     // the misleading "missing migrations" hint. (A source comment explaining
     // *why* we removed it is fine — match only inside the wrapped Error body.)
-    const wrapStart = src.indexOf('const wrapped = new Error(');
+    const wrapStart = src.indexOf('const wrapped = new PgliteOpenError(');
     expect(wrapStart).toBeGreaterThan(-1);
     const wrapEnd = src.indexOf(');', wrapStart);
     const errBody = src.slice(wrapStart, wrapEnd);

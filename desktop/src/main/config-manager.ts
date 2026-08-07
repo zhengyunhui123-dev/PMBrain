@@ -491,6 +491,7 @@ export function saveSetup(payload: SetupPayload): {
   snapshot: ConfigSnapshot;
   backup: string | null;
   needsEmbeddingDimensionProbe: boolean;
+  embeddingModelActivated: boolean;
   embeddingModelChanged: boolean;
   previousEmbeddingModel?: string;
 } {
@@ -557,10 +558,12 @@ export function saveSetup(payload: SetupPayload): {
   const embeddingModel = payload.modelConfig?.embeddingModel?.trim();
   let needsEmbeddingDimensionProbe = false;
   let previousEmbeddingModel: string | undefined;
+  let embeddingModelActivated = false;
   let embeddingModelChanged = false;
   if (embeddingModel) {
     const previousModel = typeof existing.embedding_model === 'string' ? existing.embedding_model : undefined;
     previousEmbeddingModel = previousModel;
+    embeddingModelActivated = !previousModel;
     embeddingModelChanged = Boolean(previousModel && embeddingModel !== previousModel);
     config.embedding_model = embeddingModel;
     delete config.embedding_disabled;
@@ -624,6 +627,7 @@ export function saveSetup(payload: SetupPayload): {
     snapshot,
     backup,
     needsEmbeddingDimensionProbe,
+    embeddingModelActivated,
     embeddingModelChanged,
     previousEmbeddingModel,
   };

@@ -6,6 +6,7 @@ import { __setChatTransportForTests, resetGateway } from '../src/core/ai/gateway
 
 describe('admin console intent planning', () => {
   const originalFetch = globalThis.fetch;
+  const generativeConfig = { model_usage: { generative_enabled: true } };
 
   afterEach(() => {
     globalThis.fetch = originalFetch;
@@ -34,6 +35,7 @@ describe('admin console intent planning', () => {
     }), { status: 200, headers: { 'content-type': 'application/json' } })) as unknown as typeof fetch;
 
     const preview = await previewIntent('导入这个md', {
+      ...generativeConfig,
       chat_model: 'mimo:mimo-v2.5-pro',
       mimo_api_key: 'test-key',
     } as any);
@@ -62,6 +64,7 @@ describe('admin console intent planning', () => {
 
     const article = `标题\n${'完整正文。'.repeat(900)}`;
     const preview = await previewIntent(`${article}\n存入知识库`, {
+      ...generativeConfig,
       chat_model: 'mimo:mimo-v2.5-pro',
       mimo_api_key: 'test-key',
     } as any);
@@ -82,6 +85,7 @@ describe('admin console intent planning', () => {
     }) as unknown as typeof fetch;
 
     await expect(previewIntent('字'.repeat(MAX_NATURAL_TASK_CHARACTERS + 1), {
+      ...generativeConfig,
       chat_model: 'mimo:mimo-v2.5-pro',
       mimo_api_key: 'test-key',
     } as any)).rejects.toThrow('不能超过 10,000 字');
@@ -104,6 +108,7 @@ describe('admin console intent planning', () => {
     }));
 
     const preview = await previewIntent('查一下项目文档', {
+      ...generativeConfig,
       chat_model: 'zhipu:glm-4.5',
       zhipu_api_key: 'test-key',
     } as any);
@@ -114,6 +119,7 @@ describe('admin console intent planning', () => {
 
   test('custom OpenAI chat is ready with a chat endpoint and an optional touchpoint key', () => {
     const status = getAdminLlmStatus({
+      ...generativeConfig,
       chat_model: 'custom-openai:qwen-chat',
       provider_touchpoint_base_urls: {
         'custom-openai': { chat: 'http://127.0.0.1:8000/v1' },
@@ -129,6 +135,7 @@ describe('admin console intent planning', () => {
 
   test('Ollama chat is ready without an API key', () => {
     const status = getAdminLlmStatus({
+      ...generativeConfig,
       chat_model: 'ollama:qwen3.6:latest',
       expansion_model: 'ollama:qwen3.6:latest',
     } as any);
@@ -155,6 +162,7 @@ describe('admin console intent planning', () => {
     }));
 
     const preview = await previewIntent('搜索本地模型内容', {
+      ...generativeConfig,
       chat_model: 'ollama:qwen3.6:latest',
       expansion_model: 'ollama:qwen3.6:latest',
     } as any);

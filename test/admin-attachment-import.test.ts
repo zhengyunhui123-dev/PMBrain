@@ -53,7 +53,7 @@ describe('Admin knowledge assistant attachment contract', () => {
     expect(startDirect).toContain("kind === 'search' ? !value : !value && attachedFiles.length === 0");
     expect(startDirect).toContain("if (kind === 'import' && attachedFiles.length > 0)");
     expect(startDirect).toContain('first = await uploadAttachmentRuns(attachedFiles)');
-    expect(startDirect).toMatch(/kind === 'search'[\s\S]{0,120}api\.startThinkRun\(value\)/);
+    expect(startDirect).toMatch(/kind === 'search'[\s\S]{0,240}api\.knowledgeSearch\(/);
   });
 
   test('Import stores ordinary text through capture while keeping explicit paths on path import', () => {

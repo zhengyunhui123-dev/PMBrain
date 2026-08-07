@@ -1184,7 +1184,7 @@ function NaturalLanguagePanel({
         return;
       }
       let first: ConsoleRun;
-      if (attachedFiles.length > 0) {
+      if (kind === 'import' && attachedFiles.length > 0) {
         first = await uploadAttachmentRuns(attachedFiles);
         setAttachments([]);
       } else if (captureText) {

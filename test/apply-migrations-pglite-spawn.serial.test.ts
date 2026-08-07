@@ -28,8 +28,9 @@ import { describe, test, expect } from 'bun:test';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, chmodSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import { fileURLToPath } from 'url';
 
-const REPO = new URL('..', import.meta.url).pathname.replace(/\/$/, '');
+const REPO = fileURLToPath(new URL('..', import.meta.url)).replace(/[\\/]$/, '');
 
 /**
  * Make a shim `gbrain` binary that routes to `bun run <repo>/src/cli.ts`.
@@ -44,13 +45,22 @@ const REPO = new URL('..', import.meta.url).pathname.replace(/\/$/, '');
  */
 function makeGbrainShim(): { binDir: string; cleanup: () => void } {
   const binDir = mkdtempSync(join(tmpdir(), 'gbrain-shim-'));
-  const shimPath = join(binDir, 'gbrain');
-  writeFileSync(
-    shimPath,
-    `#!/bin/sh\nexec bun run ${REPO}/src/cli.ts "$@"\n`,
-    { mode: 0o755 },
-  );
-  chmodSync(shimPath, 0o755);
+  const shimPath = process.platform === 'win32'
+    ? join(binDir, 'gbrain.cmd')
+    : join(binDir, 'gbrain');
+  if (process.platform === 'win32') {
+    writeFileSync(
+      shimPath,
+      `@echo off\r\n"${process.execPath}" run "${REPO}/src/cli.ts" %*\r\n`,
+    );
+  } else {
+    writeFileSync(
+      shimPath,
+      `#!/bin/sh\nexec "${process.execPath}" run ${REPO}/src/cli.ts "$@"\n`,
+      { mode: 0o755 },
+    );
+    chmodSync(shimPath, 0o755);
+  }
   return {
     binDir,
     cleanup: () => {
@@ -64,7 +74,11 @@ async function runCli(
   env: Record<string, string>,
   timeoutMs: number,
 ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
-  const proc = Bun.spawn(['bun', 'run', `${REPO}/src/cli.ts`, ...args], {
+  const cliArgs = [process.execPath, 'run', `${REPO}/src/cli.ts`, ...args];
+  // Spawn Bun directly instead of relying on a shell. GitHub's Ubuntu
+  // runner has `bun` on PATH; Windows developer environments may not expose
+  // cmd.exe to Bun.spawn even though process.execPath is valid.
+  const proc = Bun.spawn(cliArgs, {
     cwd: REPO,
     env: { ...process.env, ...env },
     stdout: 'pipe',

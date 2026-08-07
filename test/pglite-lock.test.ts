@@ -312,6 +312,17 @@ describe('pglite-lock v2', () => {
     await releaseLock(lock);
   });
 
+  test('release archives remain unique when two owners finish in one second', async () => {
+    const first = await acquireLock(TEST_DIR, { inspector, ownerType: 'migration' });
+    await releaseLock(first);
+    const second = await acquireLock(TEST_DIR, { inspector, ownerType: 'migration' });
+    await releaseLock(second);
+
+    expect(lockDirExists(TEST_DIR)).toBe(false);
+    const released = listArchivedLocks(TEST_DIR).filter((path) => path.includes('.released-'));
+    expect(new Set(released).size).toBe(2);
+  });
+
   test('skips lock for in-memory undefined dataDir', async () => {
     const lock = await acquireLock(undefined, { inspector });
     expect(lock.acquired).toBe(true);

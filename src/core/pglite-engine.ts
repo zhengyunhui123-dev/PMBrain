@@ -264,6 +264,22 @@ export function buildPgliteInitErrorMessage(
   return `${header}\n${hint}\n  Original error: ${original}`;
 }
 
+/**
+ * PGLite's Emscripten runtime uses process.exitCode as an internal status
+ * channel. Contain that global side effect around create() so a successful
+ * embedded database open cannot make the surrounding PMBrain process fail.
+ */
+async function preservingProcessExitCode<T>(fn: () => Promise<T>): Promise<T> {
+  const previous = process.exitCode;
+  try {
+    return await fn();
+  } finally {
+    process.exitCode = typeof previous === 'number' || typeof previous === 'string'
+      ? previous
+      : 0;
+  }
+}
+
 export class PGLiteEngine implements BrainEngine {
   readonly kind = 'pglite' as const;
   private _db: PGLiteDB | null = null;
@@ -316,11 +332,13 @@ export class PGLiteEngine implements BrainEngine {
     }
 
     try {
-      this._db = await PGlite.create({
-        dataDir,
-        loadDataDir,
-        extensions: { vector, pg_trgm },
-      });
+      this._db = await preservingProcessExitCode(() =>
+        PGlite.create({
+          dataDir,
+          loadDataDir,
+          extensions: { vector, pg_trgm },
+        }),
+      );
     } catch (err) {
       // v0.13.1: any PGLite.create() failure becomes actionable. v0.41.8.0
       // (#1340): the previous error hint hardcoded the macOS 26.3 link, but

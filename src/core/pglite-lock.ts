@@ -467,9 +467,13 @@ export async function acquireLock(
       // Proceed to atomic create below (lock dir should be gone).
     }
 
+    // Build metadata before mkdirSync. The metadata lookup is asynchronous;
+    // doing it after the exclusive directory creation leaves a short-lived
+    // empty lock directory that a concurrent acquirer could mistake for
+    // corrupt residue and archive, allowing two owners through.
+    const metadata = await buildMetadata(dataDir as string, ownerType, inspector, opts?.command);
     try {
       mkdirSync(lockDir, { recursive: false });
-      const metadata = await buildMetadata(dataDir as string, ownerType, inspector, opts?.command);
       writeFileSync(lockFilePath(lockDir), JSON.stringify(metadata, null, 2), { mode: 0o644 });
       const diagnostics: LockDiagnostics = {
         databasePath: redactPath(dataDir as string),
@@ -565,11 +569,20 @@ export async function releaseLock(lock: LockHandle): Promise<void> {
     // Prefer renaming to a released archive rather than permanent delete so
     // field diagnostics retain the last owner snapshot. Then remove by
     // renaming out of the active lock path; leave archive on disk.
-    const released = join(
+    let released = join(
       lock.lockDir,
       '..',
       `${LOCK_DIR_NAME}.released-${formatArchiveStamp()}-${process.pid}`,
     );
+    let suffix = 0;
+    while (existsSync(released)) {
+      suffix += 1;
+      released = join(
+        lock.lockDir,
+        '..',
+        `${LOCK_DIR_NAME}.released-${formatArchiveStamp()}-${process.pid}-${suffix}`,
+      );
+    }
     try {
       renameSync(lock.lockDir, released);
     } catch {

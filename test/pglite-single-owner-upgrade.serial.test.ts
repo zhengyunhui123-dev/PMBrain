@@ -17,6 +17,7 @@ import {
 import { FakeProcessInspector } from '../src/core/pglite-process-inspector.ts';
 import { DatabaseAlreadyOwnedError, classifySidecarStartupError } from '../src/core/pglite-errors.ts';
 import { PGLiteEngine } from '../src/core/pglite-engine.ts';
+import { withEnv } from './helpers/with-env.ts';
 
 const ROOT = join(tmpdir(), `pglite-upgrade-${process.pid}-${Date.now()}`);
 
@@ -72,15 +73,16 @@ describe('PGLite upgrade scenarios A–E', () => {
     // Hand off: release lock before PGLiteEngine acquires its own (single owner at a time).
     await releaseLock(lock);
 
-    process.env.PMBRAIN_PGLITE_OWNER_TYPE = 'desktop-sidecar';
-    const engine = new PGLiteEngine();
-    try {
-      await engine.connect({ engine: 'pglite', database_path: dbDir });
-      const rows = await engine.db.query<{ ok: number }>('SELECT 1 AS ok');
-      expect(rows.rows[0]?.ok).toBe(1);
-    } finally {
-      await engine.disconnect();
-    }
+    await withEnv({ PMBRAIN_PGLITE_OWNER_TYPE: 'desktop-sidecar' }, async () => {
+      const engine = new PGLiteEngine();
+      try {
+        await engine.connect({ engine: 'pglite', database_path: dbDir });
+        const rows = await engine.db.query<{ ok: number }>('SELECT 1 AS ok');
+        expect(rows.rows[0]?.ok).toBe(1);
+      } finally {
+        await engine.disconnect();
+      }
+    });
   });
 
   test('Scenario B: live owner rejects second instance without deleting live lock', async () => {

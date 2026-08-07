@@ -541,7 +541,7 @@ export async function runModels(engine: BrainEngine, args: string[]): Promise<vo
 `Usage:
   gbrain models                   Show routing table (read-only)
   gbrain models doctor [flags]    Probe each configured model (~1 token each)
-  gbrain models align-embedding-dimension --yes [--force-reembed]
+  gbrain models align-embedding-dimension --yes [--force-reembed] [--empty-only]
                                   Align the DB vector column; force also invalidates same-width vectors
   gbrain models detect-embedding-dimension --json [--requested-dimensions=N]
                                   Probe the actual width, requesting N when supported
@@ -583,6 +583,7 @@ Tiers: utility (fast/low-cost) | reasoning (balanced) | deep (high-capability) |
     const result = await alignEmbeddingDimension(engine, targetDimensions, {
       forceReembed,
       targetModel: model,
+      requireEmpty: args.includes('--empty-only'),
     });
     if (json) {
       process.stdout.write(JSON.stringify({ ...result, embedding_model: model }) + '\n');

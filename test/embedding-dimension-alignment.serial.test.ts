@@ -57,6 +57,10 @@ describe('embedding dimension alignment', () => {
       `VALUES (${pages[0].id}, 0, 'preserved chunk', '${vector}')`,
     );
 
+    await expect(alignEmbeddingDimension(engine, 1024, { requireEmpty: true }))
+      .rejects.toThrow('contains 1 existing embedding');
+    expect((await readContentChunksEmbeddingDim(engine)).dims).toBe(1280);
+
     const result = await alignEmbeddingDimension(engine, 1024);
     expect(result.status).toBe('aligned');
     expect(result.previous_dimensions).toBe(1280);

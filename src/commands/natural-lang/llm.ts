@@ -118,6 +118,7 @@ export function buildAdminGatewayConfig(config: GBrainConfig): AIGatewayConfig {
   if (config.anthropic_api_key) envFromConfig.ANTHROPIC_API_KEY = config.anthropic_api_key;
   if (config.zeroentropy_api_key) envFromConfig.ZEROENTROPY_API_KEY = config.zeroentropy_api_key;
   return {
+    generative_enabled: isGenerativeModelEnabled(config),
     embedding_model: config.embedding_model,
     embedding_dimensions: config.embedding_dimensions,
     expansion_model: config.expansion_model,

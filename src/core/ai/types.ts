@@ -349,6 +349,12 @@ export interface Recipe {
 }
 
 export interface AIGatewayConfig {
+  /**
+   * Effective file-plane switch for generative-model calls. The CLI and
+   * Admin config builders pass this explicitly; it remains optional for
+   * lower-level gateway callers that only exercise transport behavior.
+   */
+  generative_enabled?: boolean;
   /** Current embedding model as "provider:modelId" (e.g. "openai:text-embedding-3-large"). */
   embedding_model?: string;
   /** Target embedding dims. Gateway asserts returned embeddings match this. */

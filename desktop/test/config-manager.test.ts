@@ -273,7 +273,7 @@ describe('desktop config manager', () => {
   test('automatically selects the recipe recommendation for a new embedding model', () => {
     const root = isolatedHome();
 
-    saveSetup({
+    const saved = saveSetup({
       engine: 'pglite',
       databasePath: join(root, 'selected-db-parent'),
       knowledgeDirectory: join(root, 'knowledge'),
@@ -286,6 +286,8 @@ describe('desktop config manager', () => {
 
     const config = JSON.parse(readFileSync(desktopConfigPath(), 'utf8'));
     expect(config.embedding_dimensions).toBe(1024);
+    expect(saved.embeddingModelActivated).toBe(true);
+    expect(saved.embeddingModelChanged).toBe(false);
   });
 
   test('preserves a legacy dimension until the user actively changes models', () => {

@@ -138,6 +138,8 @@ describe('desktop system orchestration contracts', () => {
 
   test('only rebuilds embeddings after explicit desktop confirmation', () => {
     expect(main).toContain('saved.embeddingModelChanged');
+    expect(main).toContain('saved.embeddingModelActivated');
+    expect(main).toContain("'--empty-only'");
     expect(main).toContain('payload.confirmEmbeddingRebuild !== true');
     expect(main).toContain("'--force-reembed'");
     expect(main).toContain("['embed', '--stale', '--catch-up', '--json']");

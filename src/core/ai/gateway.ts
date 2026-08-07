@@ -377,6 +377,7 @@ export function configureGateway(config: AIGatewayConfig): void {
     );
   }
   _config = {
+    generative_enabled: config.generative_enabled,
     embedding_model: embeddingModel,
     embedding_dimensions: config.embedding_dimensions ?? DEFAULT_EMBEDDING_DIMENSIONS,
     embedding_multimodal_model: config.embedding_multimodal_model,
@@ -674,18 +675,21 @@ export type EmbeddingDiagnosis =
   | { ok: false; reason: 'missing_env'; model: string; provider: string; recipeId: string; missingEnvVars: string[] };
 
 export function diagnoseEmbedding(modelOverride?: string): EmbeddingDiagnosis {
-  if (!_config && !modelOverride) return { ok: false, reason: 'no_gateway_config' };
+  // Test-transport fast path: a deliberately injected embed transport is
+  // available without real provider configuration, matching the chat seam.
+  if (_embedTransportInstalled) {
+    const model = modelOverride?.trim() || _config?.embedding_model?.trim() || '<test-transport>';
+    return { ok: true, model, provider: '<test-transport>', recipeId: '<test-transport>' };
+  }
+
+  // A model override selects which configured column to inspect; it does not
+  // create a gateway. Without the process-local config, embed() would fail at
+  // requireConfig(), so reporting an override as available is a false
+  // positive (especially for API-key-free providers such as Ollama).
+  if (!_config) return { ok: false, reason: 'no_gateway_config' };
 
   const modelStr = modelOverride?.trim() || _config?.embedding_model?.trim();
   if (!modelStr) return { ok: false, reason: 'no_model_configured' };
-
-  // Test-transport fast path: matches the `if (touchpoint === 'chat' &&
-  // _chatTransport) return true` shortcut in isAvailable() so tests that
-  // install an embed transport stub also pass the preflight without
-  // having to configure real provider env vars.
-  if (_embedTransportInstalled) {
-    return { ok: true, model: modelStr, provider: '<test-transport>', recipeId: '<test-transport>' };
-  }
 
   let parsed;
   let recipe;
@@ -2708,9 +2712,19 @@ function isChatFallbackEligible(err: unknown, signal?: AbortSignal): boolean {
  * advanced override can never make the ordinary installation unusable.
  */
 export async function chat(opts: ChatOpts): Promise<ChatResult> {
-  // Global generative gate — re-check on every chat call (not only at task start).
+  // The canonical CLI/Admin builders pass the file-plane decision into the
+  // process-local gateway. Do not reload the user's config file here: that
+  // makes injected transports and callers using an already-built config
+  // observe a different gate from the one used to configure the gateway.
+  // Lower-level transport tests may omit the field; those callers are not a
+  // file-plane authorization boundary and retain the historical behavior.
   const { assertGenerativeModelEnabled } = await import('../model-usage.ts');
-  assertGenerativeModelEnabled();
+  if (_config?.generative_enabled === false) {
+    assertGenerativeModelEnabled({
+      engine: 'pglite',
+      model_usage: { generative_enabled: false },
+    } as any);
+  }
 
   const primary = opts.model ?? getChatModel();
   const candidates = [
