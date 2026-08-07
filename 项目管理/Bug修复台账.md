@@ -1,5 +1,14 @@
 # Bug 修复台账
 
+## 2026-08-07 修复 Admin 嵌入资源清单与构建产物不同步
+
+- 时间：2026-08-07
+- 版本号：PMBrain 1.2.6；PMBrain Desktop 1.1.10
+- 标题：修复最新推送 Test CI 的 Admin 嵌入资源加载失败
+- 描述：最新推送将 `admin/dist/assets/index-CvrU-w0Y.js` 重命名为 `index-8miD2SKK.js`，但未重新生成自动生成的 `src/admin-embedded.ts`。全新 CI 环境按旧清单导入已不存在的资源，导致 `admin-embed-spawn.serial.test.ts` 等待服务就绪 120 秒后失败。
+- 是否完成：是
+- 最终结果：重新执行 `bun run build:admin`，同步 `src/admin-embedded.ts` 中的资源路径与构建日期，保留现有 Admin 构建产物和用户数据不变；本次未修改数据库、向量、知识库或原始资料。Windows 安装包仍由用户执行 `bun run build:win`。
+
 ## 2026-08-07 修复最新推送的 Test CI 回归
 
 - 时间：2026-08-07
