@@ -10,7 +10,7 @@
  */
 
 import { describe, test, expect, beforeEach, afterEach, beforeAll, afterAll } from 'bun:test';
-import { mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { PGLiteEngine } from '../src/core/pglite-engine.ts';
@@ -142,5 +142,29 @@ describe('export --restore-only resolution chain (D5)', () => {
     await tryRunExport(['--dir', outDir]);
     expect(exitCode).toBeNull();
     expect(stdout.some((line) => line.includes('Exporting 0'))).toBe(true);
+  });
+
+  test('source-grouped snapshot exports every source without slug collisions and stamps provenance', async () => {
+    await engine.executeRaw(
+      `INSERT INTO sources (id, name) VALUES ('research', 'Research') ON CONFLICT DO NOTHING`,
+    );
+    await engine.executeRaw(
+      `INSERT INTO pages (source_id, slug, type, title, compiled_truth, timeline, frontmatter)
+       VALUES
+         ('default', 'projects/shared', 'project', 'Default copy', 'default body', '', '{}'),
+         ('research', 'projects/shared', 'project', 'Research copy', 'research body', '', '{}')`,
+    );
+
+    await tryRunExport(['--dir', outDir, '--group-by-source']);
+
+    const defaultPath = join(outDir, 'default', 'projects', 'shared.md');
+    const researchPath = join(outDir, 'research', 'projects', 'shared.md');
+    expect(existsSync(defaultPath)).toBe(true);
+    expect(existsSync(researchPath)).toBe(true);
+    expect(readFileSync(defaultPath, 'utf8')).toContain('source_id: default');
+    expect(readFileSync(defaultPath, 'utf8')).toContain('default body');
+    expect(readFileSync(researchPath, 'utf8')).toContain('source_id: research');
+    expect(readFileSync(researchPath, 'utf8')).toContain('research body');
+    expect(stdout.some((line) => line.includes('Exported 2 pages'))).toBe(true);
   });
 });

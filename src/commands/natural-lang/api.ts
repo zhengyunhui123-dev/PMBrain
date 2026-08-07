@@ -233,7 +233,10 @@ export function buildMarkdownExportCommand(
   if (!isAbsolute(trimmed)) throw new Error('Export directory must be an absolute path');
   const stamp = now.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, '');
   const outputDir = join(resolve(trimmed), `PMBrain-Export-${stamp}-${suffix}`);
-  return { command: [...resolveCliEntry(), 'export', '--dir', outputDir], outputDir };
+  return {
+    command: [...resolveCliEntry(), 'export', '--dir', outputDir, '--group-by-source'],
+    outputDir,
+  };
 }
 
 export async function startSourceAddRun(input: {

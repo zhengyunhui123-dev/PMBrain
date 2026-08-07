@@ -22,6 +22,7 @@ export async function runExport(engine: BrainEngine, args: string[]) {
   const slugPrefix = slugPrefixIdx !== -1 ? args[slugPrefixIdx + 1] : undefined;
 
   const restoreOnly = args.includes('--restore-only');
+  const groupBySource = args.includes('--group-by-source');
 
   // Resolution chain (D5): explicit --repo → typed sources.getDefault() →
   // hard-error for restore-only paths (never fall through to cwd).
@@ -108,23 +109,27 @@ export async function runExport(engine: BrainEngine, args: string[]) {
   let exported = 0;
 
   for (const page of pages) {
-    const tags = await engine.getTags(page.slug);
+    const tags = await engine.getTags(page.slug, { sourceId: page.source_id });
+    const exportFrontmatter = groupBySource
+      ? { ...page.frontmatter, source_id: page.source_id }
+      : page.frontmatter;
     const md = serializeMarkdown(
-      page.frontmatter,
+      exportFrontmatter,
       page.compiled_truth,
       page.timeline,
       { type: page.type, title: page.title, tags },
     );
 
-    const filePath = join(outDir, page.slug + '.md');
+    const pageRoot = groupBySource ? join(outDir, page.source_id) : outDir;
+    const filePath = join(pageRoot, page.slug + '.md');
     mkdirSync(dirname(filePath), { recursive: true });
     writeFileSync(filePath, md);
 
     // Export raw data as sidecar JSON
-    const rawData = await engine.getRawData(page.slug);
+    const rawData = await engine.getRawData(page.slug, undefined, { sourceId: page.source_id });
     if (rawData.length > 0) {
       const slugParts = page.slug.split('/');
-      const rawDir = join(outDir, ...slugParts.slice(0, -1), '.raw');
+      const rawDir = join(pageRoot, ...slugParts.slice(0, -1), '.raw');
       mkdirSync(rawDir, { recursive: true });
       const rawPath = join(rawDir, slugParts[slugParts.length - 1] + '.json');
 
