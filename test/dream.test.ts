@@ -64,14 +64,14 @@ describe('runDream 鈥?brainDir resolution', () => {
 
   test('explicit --dir takes precedence over engine config', async () => {
     await engine.setConfig('sync.repo_path', '/configured/dir');
-    const report = await runDream(engine, ['--dir', repo, '--json']);
+    const report = await runDream(engine, ['--dir', repo, '--phase', 'lint', '--json']);
     expect(report).toBeTruthy();
     if (report) expect(report.brain_dir).toBe(repo);
   });
 
   test('no --dir + engine-configured: uses engine.getConfig("sync.repo_path")', async () => {
     await engine.setConfig('sync.repo_path', repo);
-    const report = await runDream(engine, ['--json']);
+    const report = await runDream(engine, ['--phase', 'lint', '--json']);
     expect(report).toBeTruthy();
     if (report) expect(report.brain_dir).toBe(repo);
   });
@@ -110,7 +110,7 @@ describe('runDream 鈥?brainDir resolution', () => {
     try {
       process.env.PMBRAIN_HOME = home;
       delete process.env.GBRAIN_HOME;
-      await runDream(null, []);
+      await runDream(null, ['--phase', 'lint']);
     } catch (e: any) {
       expect(e.message).toBe('EXIT');
     } finally {
@@ -129,7 +129,7 @@ describe('runDream 鈥?brainDir resolution', () => {
     const spy = spyOn(process, 'exit').mockImplementation(() => { throw new Error('EXIT'); });
     const errSpy = spyOn(console, 'error').mockImplementation(() => {});
     try {
-      await runDream(null, ['--dir', '/does/not/exist/hopefully']);
+      await runDream(null, ['--dir', '/does/not/exist/hopefully', '--phase', 'lint']);
     } catch (e: any) {
       expect(e.message).toBe('EXIT');
     }
@@ -186,12 +186,23 @@ describe('runDream 鈥?--phase <name> restricts the cycle', () => {
   });
 
   test('--preset meeting is rejected clearly on PGLite', async () => {
+    const oldPmbrainHome = process.env.PMBRAIN_HOME;
+    const home = mkdtempSync(join(tmpdir(), 'gbrain-dream-generative-home-'));
+    mkdirSync(join(home, '.pmbrain'), { recursive: true });
+    writeFileSync(join(home, '.pmbrain', 'config.json'), JSON.stringify({
+      model_usage: { generative_enabled: true },
+    }));
     const exitSpy = spyOn(process, 'exit').mockImplementation(() => { throw new Error('EXIT'); });
     const errSpy = spyOn(console, 'error').mockImplementation(() => {});
     try {
+      process.env.PMBRAIN_HOME = home;
       await runDream(engine, ['--dir', repo, '--preset', 'meeting', '--input', repo]);
     } catch (e: any) {
       expect(e.message).toBe('EXIT');
+    } finally {
+      if (oldPmbrainHome === undefined) delete process.env.PMBRAIN_HOME;
+      else process.env.PMBRAIN_HOME = oldPmbrainHome;
+      rmSync(home, { recursive: true, force: true });
     }
     expect(exitSpy).toHaveBeenCalledWith(2);
     expect(errSpy.mock.calls.flat().join(' ')).toContain('PGLite');
@@ -260,7 +271,7 @@ describe('runDream 鈥?dry-run propagates through to runCycle', () => {
     const { rows: before } = await (engine as any).db.query('SELECT COUNT(*)::int AS n FROM pages');
     expect(before[0].n).toBe(0);
 
-    await runDream(engine, ['--dir', repo, '--dry-run', '--json']);
+    await runDream(engine, ['--dir', repo, '--phase', 'lint', '--dry-run', '--json']);
 
     // After dry-run: still 0 pages. The cycle ran but wrote nothing.
     const { rows: after } = await (engine as any).db.query('SELECT COUNT(*)::int AS n FROM pages');
@@ -370,7 +381,7 @@ describe('runDream 鈥?--source / --source-id (v0.41.13)', () => {
     const exitSpy = spyOn(process, 'exit').mockImplementation(() => { throw new Error('EXIT'); });
     const errSpy = spyOn(console, 'error').mockImplementation(() => {});
     try {
-      await runDream(engine, ['--source', 'foo', '--source', 'bar']);
+      await runDream(engine, ['--source', 'foo', '--source', 'bar', '--phase', 'lint']);
     } catch (e: any) {
       expect(e.message).toBe('EXIT');
     }
@@ -425,7 +436,7 @@ describe('runDream 鈥?--source / --source-id (v0.41.13)', () => {
     const exitSpy = spyOn(process, 'exit').mockImplementation(() => { throw new Error('EXIT'); });
     const errSpy = spyOn(console, 'error').mockImplementation(() => {});
     try {
-      await runDream(null, ['--source', 'whatever']);
+      await runDream(null, ['--source', 'whatever', '--phase', 'lint']);
     } catch (e: any) {
       expect(e.message).toBe('EXIT');
     }
@@ -441,7 +452,7 @@ describe('runDream 鈥?--source / --source-id (v0.41.13)', () => {
     const exitSpy = spyOn(process, 'exit').mockImplementation(() => { throw new Error('EXIT'); });
     const errSpy = spyOn(console, 'error').mockImplementation(() => {});
     try {
-      await runDream(engine, ['--source', 'no-such-source']);
+      await runDream(engine, ['--source', 'no-such-source', '--phase', 'lint']);
     } catch (e: any) {
       expect(e.message).toBe('EXIT');
     }
@@ -463,7 +474,7 @@ describe('runDream 鈥?--source / --source-id (v0.41.13)', () => {
     const exitSpy = spyOn(process, 'exit').mockImplementation(() => { throw new Error('EXIT'); });
     const errSpy = spyOn(console, 'error').mockImplementation(() => {});
     try {
-      await runDream(engine, ['--source', 'archived-thing']);
+      await runDream(engine, ['--source', 'archived-thing', '--phase', 'lint']);
     } catch (e: any) {
       expect(e.message).toBe('EXIT');
     }

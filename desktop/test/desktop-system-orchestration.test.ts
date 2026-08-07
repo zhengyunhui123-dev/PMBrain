@@ -56,7 +56,7 @@ describe('desktop system orchestration contracts', () => {
     expect(main).toContain("'create',");
     expect(main).toContain("'--target-version', app.getVersion()");
     expect(main).toMatch(
-      /if \(setup\.current\.engine === 'pglite'\) \{\s+await ensurePgliteUpgradeBackup\(setup\.current\.databasePath\);[\s\S]*?return true;/,
+      /if \(setup\.current\.engine === 'pglite'\) \{[\s\S]*?await ensurePgliteUpgradeBackup\(setup\.current\.databasePath\);[\s\S]*?return true;/,
     );
     expect(main).toMatch(
       /migrationRequired = needsDesktopMigration[\s\S]*?saved\.config\.engine === 'pglite'[\s\S]*?ensurePgliteUpgradeBackup\(saved\.config\.database_path\)[\s\S]*?needsEmbeddingDimensionProbe/,

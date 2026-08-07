@@ -111,7 +111,7 @@ describe('Admin GUI update contract', () => {
   test('assistant exposes direct import/search actions, AI, and five local history entries', () => {
     expect(consoleSource).toContain("startDirect('import')");
     expect(consoleSource).toContain("startDirect('search')");
-    expect(consoleSource).toContain('className="pm-assistant-action search-action"');
+    expect(consoleSource).toContain('className="pm-assistant-action search-action search-action-main"');
     expect(consoleSource).toContain('<strong>导入</strong>');
     expect(consoleSource).toContain('<strong>搜索</strong>');
     expect(consoleSource).toContain("<strong>{loading ? '处理中…' : '发送'}</strong>");
