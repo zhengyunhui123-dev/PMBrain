@@ -1,6 +1,6 @@
 # Takes vs Facts — 架构区分
 
-gbrain有两个认识论存储层，服务于不同的目的。**永远不要混淆它们。**
+PMBrain 有两个认识论存储层，服务于不同的目的。**永远不要混淆它们。**
 
 ## Takes（冷存储 — `takes`表）
 
@@ -18,7 +18,7 @@ gbrain有两个认识论存储层，服务于不同的目的。**永远不要混
 - `holder=world kind=fact` "Clipboard raised $100M Series C" (w=1.0)
 - `holder=brain kind=hunch` "Garry has a hero/rescuer pattern" (w=0.70)
 
-**查询表面：** `gbrain takes list`, `gbrain takes search`, `gbrain think`
+**查询表面：** `pmbrain takes list`, `pmbrain takes search`, `pmbrain think`
 
 ## Facts（热内存 — `facts`表，v0.31）
 
@@ -36,7 +36,7 @@ gbrain有两个认识论存储层，服务于不同的目的。**永远不要混
 - `kind=commitment` "We decided on nesting custody"
 - `kind=belief` "I think the market is overheated"
 
-**查询表面：** `gbrain recall`, MCP `_meta.brain_hot_memory`
+**查询表面：** `pmbrain recall`, MCP `_meta.brain_hot_memory`
 
 ## 类别错误
 

@@ -1,6 +1,6 @@
 # 插件作者指南 (v0.15)
 
-`gbrain` 通过 `GBRAIN_PLUGIN_PATH` 从本仓库之外发现子代理定义。如果你维护下游代理（你的 OpenClaw 部署、工作流主机、私有工具）并希望随其分发自定义子代理，请将插件目录放在该环境路径上。
+PMBrain 通过兼容环境变量 `GBRAIN_PLUGIN_PATH` 从本仓库之外发现子代理定义。如果你维护下游代理、工作流主机或私有工具，并希望随其分发自定义子代理，请将插件目录放在该环境路径上。
 
 本指南面向插件作者。CLI 用户不需要阅读它。
 
@@ -42,8 +42,8 @@ a 3-sentence summary.
 
 ```bash
 export GBRAIN_PLUGIN_PATH="/path/to/my-plugin"
-gbrain jobs work           # worker 启动时打印插件加载行
-gbrain agent run "summarize meetings/2026-04-20" --subagent-def my-summarizer
+pmbrain jobs work           # worker 启动时打印插件加载行
+pmbrain agent run "summarize meetings/2026-04-20" --subagent-def my-summarizer
 ```
 
 多个插件：用冒号分隔，就像 `$PATH` 一样：
@@ -54,7 +54,7 @@ export GBRAIN_PLUGIN_PATH="/path/to/plugin-a:/path/to/plugin-b"
 
 ## 规则（设计严格）
 
-**路径策略。** 仅限绝对路径。相对路径、`~` 前缀路径和 URL 风格路径（`https://`、`file://`）会被拒绝并警告。你控制插件在磁盘上的位置；`gbrain` 不会猜测。
+**路径策略。** 仅限绝对路径。相对路径、`~` 前缀路径和 URL 风格路径（`https://`、`file://`）会被拒绝并警告。你控制插件在磁盘上的位置；PMBrain 不会猜测。
 
 **冲突策略。** 如果两个插件附带同名的子代理，则 `GBRAIN_PLUGIN_PATH` 中首先列出的那个获胜。另一个会被丢弃并附带警告，说明两个来源。
 
@@ -75,7 +75,7 @@ v0.16+ 可能会通过单独的合约打开插件声明的工具。不要指望�
 | `version`        | string | 是      | 你的插件的 semver。信息性的。                               |
 | `plugin_version` | string | 是      | 合约锁定。对于 v0.15 必须等于 `"gbrain-plugin-v1"`。          |
 | `subagents`      | string | 否       | 子目录名称（默认 `subagents`）。会拒绝转义尝试。   |
-| `description`    | string | 否       | 显示在将来的 `gbrain plugin list` 中。                              |
+| `description`    | string | 否       | 显示在将来的 `pmbrain plugin list` 中。                              |
 
 ## 子代理定义文件
 
@@ -96,7 +96,7 @@ v0.16+ 可能会通过单独的合约打开插件声明的工具。不要指望�
 
 1. **插件定义在运行期间不能更改。** 加载器在 worker 启动时读取磁盘一次。编辑子代理定义不会生效，直到你重启 worker。这是故意的 — 实时重载会破坏崩溃可恢复的重放。
 
-2. **`~/.gbrain/audit/subagent-jobs-*.jsonl` 仅在本地。** 如果你的 worker 在与 `gbrain agent logs` 调用者不同的主机上运行，CLI 将看不到来自该 worker 的心跳。v0.16 将统一这一点；目前假设 worker + CLI 共享文件系统。
+2. **`~/.pmbrain/audit/subagent-jobs-*.jsonl` 仅在本地。** 如果你的 worker 在与 `pmbrain agent logs` 调用者不同的主机上运行，CLI 将看不到来自该 worker 的心跳。v0.16 将统一这一点；目前假设 worker + CLI 共享文件系统。
 
 3. **工具调用始终以 `ctx.remote = true` 运行。** 即使在本地 CLI 调用时也是如此。对 `remote=true` 进行门控的工具（file_upload 的严格限制、put_page 的命名空间检查）将会应用。好的默认设置；想要本地文件系统访问超出 brain 范围的子代理定义无法拥有它。
 
@@ -131,4 +131,4 @@ v0.16+ 可能会通过单独的合约打开插件声明的工具。不要指望�
 export GBRAIN_PLUGIN_PATH="$HOME/your-openclaw/gbrain-plugin"
 ```
 
-然后你的 OpenClaw 调用 `gbrain agent run --subagent-def meeting-ingestion --fanout-by transcript ...` 并且它的定义会自动加载。
+然后你的 OpenClaw 调用 `pmbrain agent run --subagent-def meeting-ingestion --fanout-by transcript ...` 并且它的定义会自动加载。

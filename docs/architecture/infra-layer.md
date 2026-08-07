@@ -1,106 +1,52 @@
-# GBrain 基础设施层
+# PMBrain 代码分层
 
-所有技能、配方和集成构建于其上的共享基础。
+PMBrain 不要求 AI 在每次任务前理解整个项目。先看项目地图，再沿当前任务的一条调用链读取。
 
-## 数据管道
+## 分层
 
-```
-输入（markdown 文件、git 仓库）
-  ↓
-文件解析（本地 → .redirect → .supabase → 错误）
-  ↓
-MARKDOWN 解析器（gray-matter frontmatter + 正文）
-  → compiled_truth + 时间线分离
-  ↓
-内容哈希（SHA-256 幂等性检查 — 如果未更改则跳过）
-  ↓
-分块（3 种策略，可配置）
-  ├── 递归：300 词块，50 词重叠，5 级分隔符层次结构
-  ├── 语义：嵌入句子，余弦相似度，Savitzky-Golay 平滑
-  └── LLM 引导：Claude Haiku 在 128 词候选者中识别主题偏移
-  ↓
-嵌入（OpenAI text-embedding-3-large，1536 维）
-  → 批量 100，指数退避，如果失败则为非致命性
-  ↓
-数据库事务（原子性：页面 + 块 + 标签 + 版本）
-  ↓
-搜索（混合，立即可用）
+```text
+Admin / Desktop / CLI / MCP
+          ↓
+Command 与 HTTP 路由
+          ↓
+Operation 与核心能力
+          ↓
+BrainEngine 接口
+          ↓
+PGLite / Postgres
 ```
 
-## 搜索架构
+### 交互层
 
-GBrain 使用互惠排名融合（RRF）来合并向量和关键词搜索：
+- `admin/`：React Admin Console；请求封装在 `admin/src/api.ts`。
+- `desktop/`：Electron 主进程、preload 和 renderer；主进程负责 Sidecar 生命周期。
+- `src/cli.ts`、`src/commands/`：CLI 与部分独立命令处理器。
+- `src/mcp/dispatch.ts`：MCP 调度。
 
-```
-用户查询
-  ↓
-扩展（可选：Claude Haiku 生成 2 个替代措辞）
-  ↓
-  ├── 向量搜索（pgvector HNSW，余弦距离）
-  │     → 每个查询变体 2 倍限制结果
-  │
-  └── 关键词搜索（PostgreSQL tsvector，ts_rank）
-        → 2 倍限制结果
-  ↓
-RRF 合并（得分 = Σ(1/(60 + 排名))，公平地平衡两者）
-  ↓
-4 层去重
-  ├── 每页面最佳 3 个块（来源去重）
-  ├── Jaccard 相似度 > 0.85（文本去重）
-  ├── 无类型超过 60%（多样性）
-  └── 每页面最多 2 个块（页面上限）
-  ↓
-前 N 个结果（默认 20）
-```
+### 合同与核心能力层
 
-## 关键组件
+- `src/core/operations.ts`：共享 Operation 合同、权限和参数边界。
+- `src/core/search/`：检索流水线。
+- `src/core/import-file.ts`、`src/core/sync.ts`：导入和同步。
+- `src/core/cycle/`：Dream 阶段。
+- `src/core/source-resolver.ts`：Source 解析。
 
-| 文件 | 用途 |
-|------|---------|
-| `src/core/engine.ts` | 可插拔引擎接口（BrainEngine） |
-| `src/core/postgres-engine.ts` | Postgres + pgvector 实现 |
-| `src/core/import-file.ts` | importFromFile + importFromContent 管道 |
-| `src/core/sync.ts` | 基于 git 的增量更改检测 |
-| `src/core/markdown.ts` | YAML frontmatter + compiled_truth/timeline 解析 |
-| `src/core/embedding.ts` | OpenAI 嵌入，带有批处理、重试、退避 |
-| `src/core/chunkers/recursive.ts` | 基础分块器（300 词，5 级分隔符） |
-| `src/core/chunkers/semantic.ts` | 基于嵌入的主题边界检测 |
-| `src/core/chunkers/llm.ts` | Claude Haiku 引导的分块 |
-| `src/core/search/hybrid.ts` | 向量 + 关键词的 RRF 合并 |
-| `src/core/search/dedup.ts` | 4 层结果去重 |
-| `src/core/search/expansion.ts` | 通过 Claude Haiku 进行多查询扩展 |
-| `src/core/storage.ts` | 可插拔存储（S3、Supabase、本地） |
-| `src/core/operations.ts` | 契约优先的操作定义（31 个操作） |
-| `src/schema.sql` | 完整 DDL（10 个表、RLS、tsvector、HNSW） |
+并非所有 CLI 命令都会自动经过 `operations.ts`。修改前必须用 `rg` 跟踪真实入口，不要根据
+目录名猜测调用关系。
 
-## Schema 概览
+### 数据引擎层
 
-Postgres 中的 10 个表：
+- `src/core/engine.ts`：`BrainEngine` 接口；
+- `src/core/pglite-engine.ts`：本地 PGLite；
+- `src/core/postgres-engine.ts`：Postgres；
+- `src/core/engine-factory.ts`：引擎选择；
+- `src/core/migrate.ts`：迁移编排；
+- `src/schema.sql`、`src/core/schema-embedded.ts`、`src/core/pglite-schema.ts`：schema。
 
-- **pages** — slug（唯一）、type、title、compiled_truth、timeline、frontmatter (JSONB)
-- **content_chunks** — pgvector 1536 维嵌入，chunk_source（compiled_truth|timeline）
-- **links** — 类型化边（knows、works_at、invested_in、founded 等）
-- **tags** — 多对多页面标记
-- **timeline_entries** — 结构化事件（日期、来源、摘要、详细信息）
-- **page_versions** — 用于差异/还原的快照历史记录
-- **raw_data** — 来自外部 API 的 sidecar JSON（保留来源）
-- **files** — 存储后端中的二进制附件
-- **ingest_log** — 导入操作的审计跟踪
-- **config** — 大脑级设置（版本、嵌入模型、分块策略）
+## 修改原则
 
-全文搜索使用加权 tsvector：title (A)、compiled_truth (B)、timeline (C)。
-向量搜索在 content_chunks.embedding 上使用带有余弦距离的 HNSW 索引。
-
-## 薄工具原理
-
-GBrain 是确定性层。技能和配方是潜在空间层。
-
-有关完整的
-架构理念，请参阅 [薄工具，胖技能](../ethos/THIN_HARNESS_FAT_SKILLS.md)。
-
-- **GBrain CLI** = 薄工具（相同输入 → 相同输出）
-- **技能**（摄取、查询、维护、丰富、简报、迁移、设置）= 胖技能
-- **配方**（语音到大脑、电子邮件到大脑）= 安装基础设施的胖技能
-
-代理读取技能/配方并使用 GBrain 的确定性工具来
-完成工作。
+1. GUI 和 Desktop 优先调用已有 CLI、Operation 或 HTTP 能力。
+2. 如果底层没有能力，先说明缺口，不要为了一个按钮偷偷新增另一套数据逻辑。
+3. 核心能力或数据逻辑属于底层架构，修改前要得到用户确认。
+4. 数据库相关改动同时验证 PGLite 和 Postgres。
+5. 打包前检查实际内嵌 Admin、Sidecar 和资源，不以源码 diff 代替运行时验收。

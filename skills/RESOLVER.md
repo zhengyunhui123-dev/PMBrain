@@ -25,7 +25,7 @@
 | 将大脑页面作为链接共享 | `skills/publish/SKILL.md` |
 | "验证前置元数据"、"检查前置元数据"、"修复前置元数据"、"前置元数据审计"、"大脑 lint" | `skills/frontmatter-guard/SKILL.md` |
 | "什么搜索模式"、"我的缓存是否热"、"调优我的检索"、"比较搜索模式"、"清除搜索覆盖" | 直接使用 `gbrain search modes/stats/tune`。请参阅 `skills/conventions/search-modes.md` |
-| "评估结果"、"搜索基准"、"抗批评者方法"、"检索回归检查" | `gbrain eval run-all` / `gbrain eval compare`。请参阅 `docs/eval/SEARCH_MODE_METHODOLOGY.md` |
+| "评估结果"、"搜索基准"、"检索回归检查" | `pmbrain eval run-all` / `pmbrain eval compare`。先读 `docs/eval/PMBrain检索与Dream质量评测规范.md`；需要统计方法细节时再读 `docs/eval/SEARCH_MODE_METHODOLOGY.md` |
 
 ## 内容和媒体摄取
 

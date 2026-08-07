@@ -9,9 +9,7 @@
 # working tree (for CI) and fails loudly if found.
 #
 # The allow-list below whitelists files where the name is legitimate
-# — specifically, this script itself (where we reference the name to
-# describe the rule) and upgrade guides that historically referenced
-# the pre-rename fork name.
+# — specifically, files that must name the pattern in order to enforce it.
 #
 # Usage:
 #   scripts/check-privacy.sh          # scan working tree
@@ -54,7 +52,6 @@ The script greps for '${BANNED_NAME}' (case-insensitive) in:
 
 Allow-list (references to the name are permitted):
   - scripts/check-privacy.sh itself
-  - docs/UPGRADING_DOWNSTREAM_AGENTS.md (historical context for pre-rename upgrades)
   - .git/** (branch names, commit history — not checked in artifacts)
 
 Exit codes: 0 clean, 1 banned name found, 2 setup error.
@@ -103,15 +100,12 @@ ALLOW_LIST=(
   'scripts/check-fixture-privacy.sh'
   'CLAUDE.md'
   'llms-full.txt'
-  'docs/UPGRADING_DOWNSTREAM_AGENTS.md'
   'test/integrations.test.ts'
   # v0.25.1 (codex T7) BANNED_PATHS allow-list:
   # Historical docs, frozen migration files, test fixtures, and env-var
   # fallbacks where /data/brain/ or /data/.openclaw/ appears legitimately.
   # New skills/, src/, and tests must NOT slip onto this list — extend the
   # banned check above instead.
-  'docs/GBRAIN_RECOMMENDED_SCHEMA.md'
-  'docs/GBRAIN_V0.md'
   'docs/guides/minions-shell-jobs.md'
   'scripts/smoke-test.sh'
   'skills/migrations/v0.9.0.md'

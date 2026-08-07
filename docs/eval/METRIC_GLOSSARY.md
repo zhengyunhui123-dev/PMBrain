@@ -2,7 +2,7 @@
 
 **Auto-generated from `src/core/eval/metric-glossary.ts`. Do not edit by hand.** Run `bun run scripts/generate-metric-glossary.ts` to regenerate.
 
-Every metric `gbrain eval *` and `gbrain search stats` reports has a plain-English explanation here. Industry terms are preserved verbatim so users searching the literature find what we report.
+Every metric `pmbrain eval *` and `pmbrain search stats` reports has a plain-English explanation here. Industry terms are preserved verbatim so users searching the literature find what we report.
 
 ## Retrieval Metrics
 
@@ -60,7 +60,7 @@ Every metric `gbrain eval *` and `gbrain search stats` reports has a plain-Engli
 
 **Key:** `avg_rank1_score`
 
-**Plain English:** The mean base (pre-boost) retrieval score of the TOP result across recent searches, from `gbrain search stats`. It is NOT a labeled accuracy number — it is a drift signal: if this trends DOWN over time, retrieval quality is regressing (the early warning that would have caught the duplicate-page incident before a human did).
+**Plain English:** The mean base (pre-boost) retrieval score of the TOP result across recent searches, from `pmbrain search stats`. It is NOT a labeled accuracy number — it is a drift signal: if this trends DOWN over time, retrieval quality is regressing.
 
 **Range:** 0..1. Watch the trend, not the absolute value; pair with the <0.6 / 0.6-0.85 / >=0.85 bucket counts for shape.
 
@@ -172,4 +172,4 @@ Every metric `gbrain eval *` and `gbrain search stats` reports has a plain-Engli
 
 ## Coverage
 
-Every metric printed by any `gbrain eval *` or `gbrain search stats` command resolves through `getMetricGloss()` in `src/core/eval/metric-glossary.ts`. Adding a new metric to the glossary REQUIRES updating this doc; the CI guard catches drift.
+Every metric printed by any `pmbrain eval *` or `pmbrain search stats` command resolves through `getMetricGloss()` in `src/core/eval/metric-glossary.ts`. Adding a new metric to the glossary REQUIRES updating this doc; the CI guard catches drift.

@@ -17,8 +17,8 @@ Agent 不允许：
 
 * 架构：CLAUDE.md
 * 技能：skills/RESOLVER.md
-* Agent 安装：INSTALL_FOR_AGENTS.md
 * LLM 导航：llms.txt
+* 按主题架构：docs/architecture/ 下对应的单篇文档，不默认通读整个目录
 * 知识库：wiki/
 * 原始资料：sources/
 

@@ -46,11 +46,31 @@ PMBrain 是面向项目管理和个人知识工作的知识大脑，核心能力
 - Schema 与迁移：`src/schema.sql`、`src/core/schema-embedded.ts`、
   `src/core/pglite-schema.ts`、`src/core/migrate.ts`
 - 项目技能：`skills/RESOLVER.md`
-- Agent 安装：`INSTALL_FOR_AGENTS.md`
 - LLM 导航：`llms.txt`
 
 不要假设所有 CLI 和 MCP 能力都由 `operations.ts` 自动生成。先用 `rg` 追踪真实
 调用链；共享能力优先复用 Operation，独立 CLI 命令仍可能有自己的 handler。
+
+## 按任务读取调用链
+
+AI 不需要先理解整个项目，也不要默认通读 `docs/architecture/`。先读本文件了解项目
+地图，再根据任务只追踪下面一条调用链；发现分支时用 `rg` 从真实符号继续向下找。
+
+| 用户要改什么 | AI 首先读什么 |
+|---|---|
+| Admin 页面 | `admin/src/pages/Console.tsx` 对应区域 → `admin/src/api.ts` → `src/commands/serve-http.ts` 中对应 `/admin/api/*` 路由；知识搜索另看 `src/commands/admin-knowledge-search.ts` |
+| Desktop | `desktop/src/main/` 对应 manager → `desktop/src/preload/index.ts` → `desktop/src/renderer/` → `desktop/test/` 对应测试 |
+| 搜索 / RAG | `src/core/search/` → `src/core/operations.ts` 或对应 Command → `evals/` 与 `test/` 定向用例 |
+| 导入 | `src/core/import-file.ts` / `src/core/sync.ts` / `src/core/source-resolver.ts` → `src/commands/import.ts` 或 `src/commands/serve-http.ts` |
+| Dream | `src/core/cycle/` 与 `src/core/cycle.ts` → `src/commands/dream.ts` → `src/commands/serve-http.ts` 中 Admin 接口 |
+| MCP | `src/core/operations.ts` → `src/mcp/dispatch.ts` → HTTP MCP 所在的 `src/commands/serve-http.ts` |
+| 数据库 | `src/core/engine.ts` → `src/core/pglite-engine.ts` / `src/core/postgres-engine.ts` → `src/core/migrate.ts` 与 schema 文件 |
+| 软件更新 | `desktop/src/main/update-manager.ts` → `desktop/test/update-manager.test.ts` → `desktop/package.json` / `desktop/electron-builder.yml` 与发布配置 |
+| Source | `src/core/source-resolver.ts` / `src/core/sources-load.ts` / `src/core/sources-ops.ts` → `src/commands/sources.ts` 或对应 Admin endpoint |
+
+只有任务涉及跨层契约或数据安全时，才补读对应的单篇架构文档：部署读
+`docs/architecture/topologies.md`，Source 读 `brains-and-sources.md`，检索读
+`RETRIEVAL.md`，数据保护读 `system-of-record.md`。
 
 ## 模型与 Embedding 契约
 
@@ -121,3 +141,5 @@ Bash 环境缺失而未跑完的项目要明确报告为“部分验证”，不
    标题、描述、是否完成和最终结果；
 4. 列出实现结果与原计划不一致的地方；
 5. 保留用户已有工作区修改，不清理不相关文件。
+
+纯文档整理、归档和文案更新在用户明确说明时，可以不写台账、不增加版本号。
