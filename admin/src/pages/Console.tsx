@@ -781,7 +781,7 @@ function summarizeRunResult(preview: IntentPreview, run: ConsoleRun): string {
       return `当前有 ${count} 个数据源，请在详情中查看各数据源详情。`;
     }
     case 'search_brain': {
-      // Legacy path: workbench「发送」意图识别仍可能落到 think；直接「搜索」走 knowledge-search。
+      // Legacy path: workbench「AI搜索」意图识别仍可能落到 think；直接「搜索」走 knowledge-search。
       const result = parseThinkOutput(out);
       if (!result) return summarizeRunLog(run, '知识库回答已生成');
       const sections = [result.answer];
@@ -1289,7 +1289,7 @@ function NaturalLanguagePanel({
           </div>
           {compact && <button className="pm-ghost" onClick={() => onNavigate?.('import')}>完整视图</button>}
         </div>
-        {pendingContext && <div className="assistant-followup">请补充上一个问题需要的信息，发送后会继续判断。</div>}
+        {pendingContext && <div className="assistant-followup">请补充上一个问题需要的信息，点击“AI搜索”后会继续判断。</div>}
         <div className="assistant-composer">
           {attachments.length > 0 && (
             <div className="assistant-attachments" role="list" aria-label={`已添加 ${attachments.length} 个文件`}>
@@ -1362,7 +1362,7 @@ function NaturalLanguagePanel({
           </div>
         </div>
         <div className={`nl-input-meta ${inputTooLong ? 'is-over-limit' : ''}`}>
-          <span>{attachments.length > 0 ? '导入会处理附件；发送会先导入再按文字要求处理；搜索只使用文字。' : '导入会检查整个路径：未变化文件跳过，修改过的文件重新导入，并按成功、跳过和失败分类。'}</span>
+          <span>{attachments.length > 0 ? '导入会处理附件；AI搜索会先导入再按文字要求处理；搜索只使用文字。' : '导入会检查整个路径：未变化文件跳过，修改过的文件重新导入，并按成功、跳过和失败分类。'}</span>
           <strong>{inputLength.toLocaleString('zh-CN')} / {MAX_NATURAL_TASK_CHARACTERS.toLocaleString('zh-CN')} 字</strong>
         </div>
         {attachmentError && <div className="pm-error-text" role="alert">{attachmentError}</div>}
@@ -1449,7 +1449,7 @@ function NaturalLanguagePanel({
             disabled={loading || (!text.trim() && attachments.length === 0) || inputTooLong}
           >
             <span className="assistant-action-icon" aria-hidden="true"><Sparkles /></span>
-            <span className="assistant-action-copy"><strong>{loading ? '处理中…' : '发送'}</strong></span>
+            <span className="assistant-action-copy"><strong>{loading ? '处理中…' : 'AI搜索'}</strong></span>
           </button>
         </div>
         {error && <div className="pm-error-text">{error}</div>}
@@ -1544,7 +1544,7 @@ function NaturalLanguagePanel({
             )}
           </div>
           {history.length === 0 ? (
-            <div className="pm-empty compact-empty">暂无历史记录。每次发送任务后会自动保留在这里。</div>
+            <div className="pm-empty compact-empty">暂无历史记录。每次执行任务后会自动保留在这里。</div>
           ) : (
             <div className="nl-history-list">
               {history.map(item => (
@@ -1580,7 +1580,7 @@ export function ImportDataPage() {
         <div>
           <div className="pm-eyebrow">IMPORT · SEARCH · ASK</div>
           <h1>知识工作台</h1>
-          <p>输入正文、路径或添加文件；导入直接保存，搜索支持关键词/语义切换，发送才走 AI 意图。</p>
+          <p>输入正文、路径或添加文件；导入直接保存，搜索支持关键词/语义切换，AI搜索才走 AI 意图。</p>
         </div>
         <div className="assistant-pulse" aria-hidden="true"><i /><i /><i /></div>
       </section>

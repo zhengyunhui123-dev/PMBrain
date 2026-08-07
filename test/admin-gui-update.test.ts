@@ -114,7 +114,7 @@ describe('Admin GUI update contract', () => {
     expect(consoleSource).toContain('className="pm-assistant-action search-action search-action-main"');
     expect(consoleSource).toContain('<strong>导入</strong>');
     expect(consoleSource).toContain('<strong>搜索</strong>');
-    expect(consoleSource).toContain("<strong>{loading ? '处理中…' : '发送'}</strong>");
+    expect(consoleSource).toContain("<strong>{loading ? '处理中…' : 'AI搜索'}</strong>");
     expect(consoleSource).not.toContain('本地文件或文件夹</small>');
     expect(consoleSource).not.toContain('模型综合并附引用</small>');
     expect(consoleSource).toContain('submitAuto()');
