@@ -46,7 +46,6 @@ PMBrain 是面向项目管理和个人知识工作的知识大脑，核心能力
 - Schema 与迁移：`src/schema.sql`、`src/core/schema-embedded.ts`、
   `src/core/pglite-schema.ts`、`src/core/migrate.ts`
 - 项目技能：`skills/RESOLVER.md`
-- LLM 导航：`llms.txt`
 
 不要假设所有 CLI 和 MCP 能力都由 `operations.ts` 自动生成。先用 `rg` 追踪真实
 调用链；共享能力优先复用 Operation，独立 CLI 命令仍可能有自己的 handler。
@@ -114,6 +113,10 @@ pmbrain search "查询内容" --mode tokenmax
 ## 修改与测试
 
 先写能复现问题的测试，再做最小实现，最后跑与风险匹配的验证。
+
+依赖安装必须保持零数据库副作用：根包不得定义 `preinstall`、`install` 或 `postinstall`
+生命周期钩子来初始化、打开或迁移数据库。新安装由用户显式运行 `pmbrain init`；已有
+安装由用户显式运行 `pmbrain upgrade` 或 `pmbrain apply-migrations --yes`。
 
 Windows 本机优先：
 

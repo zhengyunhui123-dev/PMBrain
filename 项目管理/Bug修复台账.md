@@ -1,5 +1,14 @@
 # Bug 修复台账
 
+## 2026-08-09 修复依赖安装隐式执行数据库迁移
+
+- 时间：2026-08-09
+- 版本号：PMBrain 1.2.9
+- 标题：移除根包 postinstall 自动迁移
+- 描述：根 `package.json` 的 `postinstall` 会在 `bun install` 时自动执行 `apply-migrations --yes --non-interactive`，导致克隆项目并安装开发依赖也可能连接并迁移已有数据库。
+- 是否完成：是
+- 最终结果：根包不再定义 `preinstall`、`install` 或 `postinstall` 安装期钩子；原脚本移入本地备份目录。新安装继续由用户显式运行 `pmbrain init`，已有安装升级由用户显式运行 `pmbrain upgrade` 或 `pmbrain apply-migrations --yes`。安装安全与迁移参数定向测试 20/20、根目录类型检查通过；完整 `bun test` 运行 184 秒无输出后超时，仓库卫生脚本因本机缺少可用 Bash 未执行。额外运行既有 `init --migrate-only` 测试时，Windows 下 `os.homedir()` 绕过测试设置的 `HOME` 并读取了当前用户的真实 Postgres 配置，3 项因此失败；成功退出表明测试子进程可能连接并执行了幂等 schema 初始化，当前没有证据判断是否产生实际数据库写入，发现后未继续检查或操作该数据库，也未为绕过测试修改迁移逻辑。未操作知识库原始文件、Wiki 或向量重建。Windows 安装包仍由用户执行 `bun run build:win`。
+
 ## 2026-08-07 修复 Admin 嵌入资源清单与构建产物不同步
 
 - 时间：2026-08-07

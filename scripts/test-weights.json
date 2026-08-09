@@ -79,7 +79,6 @@
   "test/brainstorm/lsd-mode-skip.test.ts": 2,
   "test/budget-meter.test.ts": 26,
   "test/budget-tracker.test.ts": 3265,
-  "test/build-llms.test.ts": 11,
   "test/calibration-cli.test.ts": 13,
   "test/calibration-profile.test.ts": 7,
   "test/candidate-audit.test.ts": 9,
