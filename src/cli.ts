@@ -17,6 +17,7 @@ import { operations, OperationError } from './core/operations.ts';
 import type { Operation, OperationContext } from './core/operations.ts';
 import { awaitPendingLastRetrievedWrites, type DrainOutcome } from './core/last-retrieved.ts';
 import { shouldForceExitAfterMain } from './core/cli-force-exit.ts';
+import { disconnectCliEngine } from './core/cli-disconnect.ts';
 import { serializeMarkdown } from './core/markdown.ts';
 import { parseGlobalFlags, setCliOptions, getCliOptions } from './core/cli-options.ts';
 import type { CliOptions } from './core/cli-options.ts';
@@ -1783,7 +1784,16 @@ async function handleCliOnly(command: string, args: string[]) {
       }
     }
   } finally {
-    if (command !== 'serve') await engine.disconnect();
+    if (command === 'import') {
+      // Admin/Desktop imports run in a child process after the Sidecar releases
+      // its PGLite lock. If PGLite finishes the import but wedges while closing,
+      // an unbounded disconnect leaves the Admin run stuck at "running" and the
+      // parent database disconnected forever. Preserve the normal clean close,
+      // but force-exit the already-completed one-shot child after a hard deadline.
+      await disconnectCliEngine(engine, 'import');
+    } else if (command !== 'serve') {
+      await engine.disconnect();
+    }
   }
 }
 

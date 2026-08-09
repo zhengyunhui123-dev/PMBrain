@@ -1,5 +1,14 @@
 # Bug 修复台账
 
+## 2026-08-09 修复 PGLite 导入完成后关闭卡住
+
+- 时间：2026-08-09
+- 版本号：PMBrain 1.2.18；PMBrain Desktop 1.1.15
+- 标题：防止 Admin 导入因 PGLite 子进程关闭卡住而永久显示执行中
+- 描述：Windows 真实用户路径发现导入子进程完成写入后，CLI 的 import 分支可能无限等待 PGLite 关闭，导致 Sidecar 一直保持数据库断开、Admin 永久显示“执行中”；现有 10 秒关闭防挂死只覆盖另一条 Operation 分发路径，没有覆盖 CLI import。
+- 是否完成：是
+- 最终结果：只在一次性 import 已完成后的数据库关闭阶段增加 10 秒硬截止，正常导入和正常关闭行为不变，超过截止后保留原退出码结束子进程并让 Sidecar 重新连接；Windows Runtime CI 新增真实打包 Sidecar、非默认 Source、连续 Markdown/PDF Admin 上传回归，真实 UI 失败时会保存导入 run 的 stdout/stderr。定向测试 5/5、Windows 打包 Sidecar 导入链路 3/3、根目录类型检查通过；未修改数据库 Schema、用户数据、知识库、Wiki、向量或原始资料，未运行 `bun run build:win`。
+
 ## 2026-08-09 修复结构化导入 PR 的 CI 契约漂移
 
 - 时间：2026-08-09

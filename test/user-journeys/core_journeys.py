@@ -298,7 +298,7 @@ def first_launch_journey(page: Page, artifacts: Path, provider: LocalOpenAIServe
     return open_admin_from_desktop(page)
 
 
-def import_search_journey(page: Page, origin: str, markdown: Path, pdf: Path) -> None:
+def import_search_journey(page: Page, origin: str, markdown: Path, pdf: Path, artifacts: Path) -> None:
     print("[journey 2/6] import Markdown/PDF -> visible knowledge -> keyword search", flush=True)
     response = page.goto(origin + "/admin/#import")
     print(f"[admin] import url={page.url} status={response.status if response else 'n/a'} title={page.title()}", flush=True)
@@ -312,7 +312,18 @@ def import_search_journey(page: Page, origin: str, markdown: Path, pdf: Path) ->
     )
     if page.locator(".pm-error-text").count() and page.locator(".pm-error-text").first.is_visible():
         raise AssertionError(f"Import UI reported an error: {page.locator('.pm-error-text').first.inner_text()}")
-    page.wait_for_function("() => ['已完成', '部分完成'].includes(document.querySelector('.run-pill')?.textContent?.trim() || '')", timeout=180_000)
+    try:
+        page.wait_for_function("() => ['已完成', '部分完成'].includes(document.querySelector('.run-pill')?.textContent?.trim() || '')", timeout=180_000)
+    except PlaywrightTimeoutError:
+        details = page.locator(".nl-details")
+        if details.count():
+            details.evaluate("element => { element.open = true; }")
+        diagnostic = page.locator(".nl-result").inner_text() if page.locator(".nl-result").count() else page.locator("body").inner_text()
+        (artifacts / "import-run-timeout.txt").write_text(
+            f"url={page.url}\nprogress={page.locator('.attachment-progress').inner_text() if page.locator('.attachment-progress').count() else 'n/a'}\n\n{diagnostic}\n",
+            encoding="utf-8",
+        )
+        raise
     if badge.inner_text().strip() != "已完成":
         details = page.locator(".nl-result").inner_text()
         raise AssertionError(f"Markdown/PDF import was not fully successful: {details}")
@@ -429,7 +440,7 @@ def run(args: argparse.Namespace) -> None:
         page = session.start()
         try:
             origin = first_launch_journey(page, artifacts, provider)
-            import_search_journey(page, origin, markdown, pdf)
+            import_search_journey(page, origin, markdown, pdf, artifacts)
             delete_restore_journey(page, origin)
             embedding_switch_journey(page, artifacts, provider)
             mcp_key_search_journey(page)
