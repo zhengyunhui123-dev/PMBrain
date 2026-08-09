@@ -1,0 +1,262 @@
+import { app, type BrowserWindow } from 'electron';
+import { ensureBootstrapToken, getDatabaseRuntimeConfig, getSetupInfo, markDesktopMigration } from '../config-manager.js';
+import type { CliRuntime } from '../cli-runner.js';
+import { findAvailablePort } from '../port-manager.js';
+import { precheckPgliteLock } from '../pglite-lock-precheck.js';
+import { SidecarManager, type SidecarState } from '../sidecar-manager.js';
+import type { DesktopLogger } from '../logs.js';
+
+interface StartupProgress {
+  visible: boolean;
+  stage: 'database' | 'migration' | 'sidecar' | 'health';
+  title: string;
+  message: string;
+}
+
+export interface SidecarControllerDependencies {
+  runtime: () => CliRuntime;
+  getLogger: () => DesktopLogger | null;
+  getMainWindow: () => BrowserWindow | null;
+  getSetupInProgress: () => boolean;
+  ensureRuntimeReady: () => Promise<void>;
+  prepareConfiguredDatabase: () => Promise<void>;
+  migrateConfiguredInstallation: () => Promise<boolean>;
+  pendingPgliteBackupPath: () => string | null;
+  reconcileLan: () => Promise<unknown>;
+  stopLan: () => Promise<void>;
+  sendSystemSettingsState: () => void;
+  sendStartupProgress: (progress: StartupProgress) => void;
+  hideStartupProgress: () => void;
+}
+
+export class SidecarController {
+  private manager: SidecarManager | null = null;
+  private stateValue: SidecarState | null = null;
+  private lifecycleQueue: Promise<void> = Promise.resolve();
+  private startupPromise: Promise<void> | null = null;
+  private retryPromise: Promise<string> | null = null;
+  private readyPromise: Promise<SidecarManager> | null = null;
+
+  constructor(private readonly dependencies: SidecarControllerDependencies) {}
+
+  get current(): SidecarManager | null {
+    return this.manager;
+  }
+
+  get state(): SidecarState | null {
+    return this.stateValue;
+  }
+
+  reportFailure(message: string): void {
+    this.sendState({ phase: 'failed', port: this.manager?.port ?? 3131, message });
+  }
+
+  private sendState(state: SidecarState): void {
+    this.stateValue = state;
+    this.dependencies.getMainWindow()?.webContents.send('desktop:state', state);
+  }
+
+  private queueTransition<T>(transition: () => Promise<T>): Promise<T> {
+    const pending = this.lifecycleQueue.then(transition, transition);
+    this.lifecycleQueue = pending.then(() => undefined, () => undefined);
+    return pending;
+  }
+
+  private async startOnce(openAdmin: boolean): Promise<void> {
+    const mainWindow = this.dependencies.getMainWindow();
+    const logger = this.dependencies.getLogger();
+    if (!mainWindow || !logger) return;
+    await this.dependencies.ensureRuntimeReady();
+    const existing = this.manager;
+    if (existing) {
+      await existing.start();
+      await this.dependencies.reconcileLan();
+      return;
+    }
+    if (getDatabaseRuntimeConfig().engine === 'pglite') {
+      const precheck = precheckPgliteLock(getSetupInfo().current.databasePath);
+      if (precheck.blocked && precheck.message) {
+        logger.write('desktop', `PGLite lock precheck blocked startup: holder PID ${precheck.holderPid}`);
+        this.sendState({ phase: 'failed', port: this.manager?.port ?? 3131, message: precheck.message });
+        this.dependencies.hideStartupProgress();
+        throw new Error(precheck.message);
+      }
+    }
+    this.dependencies.sendStartupProgress({
+      visible: true,
+      stage: 'sidecar',
+      title: '正在启动 PMBrain 本地服务',
+      message: '正在分配本机端口并启动 sidecar，请保持窗口开启。',
+    });
+    try {
+      const port = await findAvailablePort();
+      const bootstrapToken = ensureBootstrapToken();
+      let manager!: SidecarManager;
+      manager = new SidecarManager({
+        ...this.dependencies.runtime(),
+        port,
+        bootstrapToken,
+        clientVersion: app.getVersion(),
+        logger,
+        onState: state => {
+          if (this.manager !== manager) return;
+          this.sendState(state);
+          if (state.phase === 'starting') {
+            this.dependencies.sendStartupProgress({
+              visible: true,
+              stage: 'health',
+              title: '正在等待本地服务健康检查',
+              message: 'sidecar 已启动，PMBrain 正在检查数据库与 HTTP 服务；首次启动最长可能需要约 45 秒。',
+            });
+          } else if (state.phase === 'ready' || state.phase === 'failed') {
+            this.dependencies.hideStartupProgress();
+          }
+          if (state.phase === 'failed' || state.phase === 'stopped') {
+            void this.dependencies.stopLan().then(this.dependencies.sendSystemSettingsState);
+          }
+          if (openAdmin && state.phase === 'ready') void this.dependencies.getMainWindow()?.loadURL(state.adminUrl);
+        },
+      });
+      this.manager = manager;
+      await manager.start();
+      if (this.manager !== manager) {
+        await manager.stop();
+        return;
+      }
+      await this.dependencies.reconcileLan();
+    } catch (error) {
+      const rawMessage = error instanceof Error ? error.message : String(error);
+      const database = getDatabaseRuntimeConfig();
+      const databasePath = getSetupInfo().current.databasePath;
+      let message = database.engine === 'pglite' && databasePath
+        ? `${rawMessage}\nPGLite 数据库路径：${databasePath}`
+        : rawMessage;
+      const pendingBackupPath = this.dependencies.pendingPgliteBackupPath();
+      if (database.engine === 'pglite' && pendingBackupPath) {
+        message +=
+          `\n升级前冷备已验证并保留：${pendingBackupPath}`
+          + '\nPMBrain 不会自动覆盖当前数据库。请保留此备份和桌面日志，不要连续重复迁移。';
+      }
+      logger.write('desktop', message);
+      this.sendState({ phase: 'failed', port: this.manager?.port ?? 3131, message });
+      this.dependencies.hideStartupProgress();
+      throw new Error(message, { cause: error });
+    }
+  }
+
+  async start(openAdmin: boolean): Promise<void> {
+    if (this.startupPromise) {
+      await this.startupPromise;
+      if (openAdmin && this.manager && this.stateValue?.phase === 'ready') {
+        await this.dependencies.getMainWindow()?.loadURL(await this.manager.createAdminLink());
+      }
+      return;
+    }
+    const pending = this.queueTransition(() => this.startOnce(openAdmin));
+    this.startupPromise = pending;
+    try {
+      await pending;
+    } finally {
+      if (this.startupPromise === pending) this.startupPromise = null;
+    }
+  }
+
+  private async stopNow(): Promise<void> {
+    await this.dependencies.stopLan();
+    const active = this.manager;
+    this.manager = null;
+    if (active) await active.stop();
+  }
+
+  stop(): Promise<void> {
+    return this.queueTransition(() => this.stopNow());
+  }
+
+  async restartForRetry(): Promise<string> {
+    if (this.retryPromise) return this.retryPromise;
+    const pending = this.queueTransition(async () => {
+      if (this.dependencies.getSetupInProgress()) throw new Error('PMBrain 正在应用基础配置，请等待完成。');
+      await this.dependencies.ensureRuntimeReady();
+      await this.dependencies.prepareConfiguredDatabase();
+      const active = this.manager;
+      if (!active) {
+        await this.startOnce(false);
+        const started = this.manager;
+        if (!started) throw new Error('PMBrain 本地服务未能启动。');
+        return started.createAdminLink();
+      }
+      const url = await active.restart();
+      if (this.manager !== active) {
+        await active.stop();
+        throw new Error('PMBrain 本地服务在重试过程中已被替换。');
+      }
+      await this.dependencies.reconcileLan();
+      return url;
+    });
+    this.retryPromise = pending;
+    try {
+      return await pending;
+    } finally {
+      if (this.retryPromise === pending) this.retryPromise = null;
+    }
+  }
+
+  async withPausedForModelConfig<T>(operation: () => Promise<T>): Promise<T> {
+    const shouldRestart = Boolean(this.manager && getSetupInfo().current.engine === 'pglite');
+    if (shouldRestart) await this.stop();
+    this.dependencies.sendStartupProgress({
+      visible: true,
+      stage: 'sidecar',
+      title: '正在安全读取模型路由',
+      message: shouldRestart
+        ? 'PGLite 配置需要独占访问，桌面端已暂停本地服务；完成后会自动重启并执行健康检查。'
+        : '正在读取 PMBrain 的任务层级模型配置。',
+    });
+    let operationError: unknown;
+    try {
+      return await operation();
+    } catch (error) {
+      operationError = error;
+      throw error;
+    } finally {
+      if (shouldRestart) {
+        try {
+          await this.start(false);
+        } catch (restartError) {
+          if (!operationError) throw restartError;
+          this.dependencies.getLogger()?.write(
+            'desktop',
+            `模型路由操作失败后，本地服务恢复也失败：${restartError instanceof Error ? restartError.message : String(restartError)}`,
+          );
+        }
+      } else {
+        this.dependencies.hideStartupProgress();
+      }
+    }
+  }
+
+  async ensureReady(): Promise<SidecarManager> {
+    if (this.manager && this.stateValue?.phase === 'ready') return this.manager;
+    if (getSetupInfo().needsSetup) throw new Error('请先完成 PMBrain 基础配置。');
+    if (this.dependencies.getSetupInProgress()) throw new Error('PMBrain 正在应用基础配置，请等待完成后再打开管理台。');
+    if (this.readyPromise) return this.readyPromise;
+
+    const pending = (async () => {
+      await this.dependencies.ensureRuntimeReady();
+      await this.dependencies.prepareConfiguredDatabase();
+      const setup = getSetupInfo();
+      const migrationRequired = await this.dependencies.migrateConfiguredInstallation();
+      if (migrationRequired && setup.current.engine !== 'pglite') markDesktopMigration(app.getVersion());
+      if (!this.manager || this.stateValue?.phase !== 'ready') await this.start(false);
+      if (!this.manager || this.stateValue?.phase !== 'ready') throw new Error('PMBrain 本地服务尚未就绪。');
+      if (migrationRequired && setup.current.engine === 'pglite') markDesktopMigration(app.getVersion());
+      return this.manager;
+    })();
+    this.readyPromise = pending;
+    try {
+      return await pending;
+    } finally {
+      if (this.readyPromise === pending) this.readyPromise = null;
+    }
+  }
+}

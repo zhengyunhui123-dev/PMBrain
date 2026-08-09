@@ -46,10 +46,22 @@ PMBrain 是面向项目管理和个人知识工作的知识大脑，核心能力
 - Schema 与迁移：`src/schema.sql`、`src/core/schema-embedded.ts`、
   `src/core/pglite-schema.ts`、`src/core/migrate.ts`
 - 项目技能：`skills/RESOLVER.md`
-- LLM 导航：`llms.txt`
 
 不要假设所有 CLI 和 MCP 能力都由 `operations.ts` 自动生成。先用 `rg` 追踪真实
 调用链；共享能力优先复用 Operation，独立 CLI 命令仍可能有自己的 handler。
+
+### 与 GBrain 同步的三层边界
+
+- **UPSTREAM CORE**：`src/core/`、`src/cli.ts`、`src/commands/serve-http.ts` 中 OAuth、MCP
+  与通用 HTTP 运行时骨架。少做结构重排，优先移植上游安全、正确性、RAG 和 Dream 修复。
+- **PMBrain ADAPTER**：连接上游能力与产品交互的 PMBrain 增量。优先新增独立模块，
+  让核心入口只保留注册或调用点，避免把上游主体搬散。
+- **PRODUCT**：`desktop/`、`admin/`、Windows、中文和国产模型交互。可以按页面、
+  manager、IPC 与安全职责拆分，但必须复用 Core / Operation / Admin API 的现有能力。
+
+判断原则：保持上游骨架，向外抽 PMBrain 增量。PMBrain Admin 产品路由集中在
+`src/commands/pmbrain-admin-routes.ts`，通用服务器仍由 `serve-http.ts` 负责；不要为了代码整洁
+大拆 `src/cli.ts` 或检索、Dream、数据库核心文件。
 
 ## 按任务读取调用链
 
@@ -58,15 +70,15 @@ AI 不需要先理解整个项目，也不要默认通读 `docs/architecture/`�
 
 | 用户要改什么 | AI 首先读什么 |
 |---|---|
-| Admin 页面 | `admin/src/pages/Console.tsx` 对应区域 → `admin/src/api.ts` → `src/commands/serve-http.ts` 中对应 `/admin/api/*` 路由；知识搜索另看 `src/commands/admin-knowledge-search.ts` |
-| Desktop | `desktop/src/main/` 对应 manager → `desktop/src/preload/index.ts` → `desktop/src/renderer/` → `desktop/test/` 对应测试 |
+| Admin 页面 | 先读 `admin/src/App.tsx`；再按任务读 `Knowledge.tsx`、`Import.tsx`、`Sources.tsx`、`BrainData.tsx`、`Dream.tsx`、`Settings.tsx`、`Connection.tsx` 或 `Documentation.tsx` → `admin/src/api.ts` → `src/commands/pmbrain-admin-routes.ts` 中对应 `/admin/api/*` 路由；知识搜索另看 `src/commands/admin-knowledge-search.ts`。`Console.tsx` 只是旧导入兼容出口 |
+| Desktop | 先按职责读 `desktop/src/main/database/`、`sidecar/`、`network/`、`updates/`、`startup/`、`system/`、`integration/` 或 `app/`；IPC 注册读 `ipc-handlers.ts`，窗口信任边界读 `window-security.ts`，只有生命周期编排才读 `index.ts` → `desktop/src/preload/index.ts` → `desktop/src/renderer/` → `desktop/test/` 对应测试 |
 | 搜索 / RAG | `src/core/search/` → `src/core/operations.ts` 或对应 Command → `evals/` 与 `test/` 定向用例 |
-| 导入 | `src/core/import-file.ts` / `src/core/sync.ts` / `src/core/source-resolver.ts` → `src/commands/import.ts` 或 `src/commands/serve-http.ts` |
-| Dream | `src/core/cycle/` 与 `src/core/cycle.ts` → `src/commands/dream.ts` → `src/commands/serve-http.ts` 中 Admin 接口 |
+| 导入 | `src/core/import-file.ts` / `src/core/sync.ts` / `src/core/source-resolver.ts` → `src/commands/import.ts`；Admin 调用再读 `src/commands/pmbrain-admin-routes.ts` |
+| Dream | `src/core/cycle/` 与 `src/core/cycle.ts` → `src/commands/dream.ts` → `src/commands/pmbrain-admin-routes.ts` 中 Admin 接口 |
 | MCP | `src/core/operations.ts` → `src/mcp/dispatch.ts` → HTTP MCP 所在的 `src/commands/serve-http.ts` |
 | 数据库 | `src/core/engine.ts` → `src/core/pglite-engine.ts` / `src/core/postgres-engine.ts` → `src/core/migrate.ts` 与 schema 文件 |
-| 软件更新 | `desktop/src/main/update-manager.ts` → `desktop/test/update-manager.test.ts` → `desktop/package.json` / `desktop/electron-builder.yml` 与发布配置 |
-| Source | `src/core/source-resolver.ts` / `src/core/sources-load.ts` / `src/core/sources-ops.ts` → `src/commands/sources.ts` 或对应 Admin endpoint |
+| 软件更新 | `desktop/src/main/updates/update-controller.ts` → `desktop/src/main/update-manager.ts` → `desktop/test/update-manager.test.ts` → `desktop/package.json` / `desktop/electron-builder.yml` 与发布配置 |
+| Source | `src/core/source-resolver.ts` / `src/core/sources-load.ts` / `src/core/sources-ops.ts` → `src/commands/sources.ts`；Admin 调用再读 `src/commands/pmbrain-admin-routes.ts` |
 
 只有任务涉及跨层契约或数据安全时，才补读对应的单篇架构文档：部署读
 `docs/architecture/topologies.md`，Source 读 `brains-and-sources.md`，检索读
@@ -114,6 +126,10 @@ pmbrain search "查询内容" --mode tokenmax
 ## 修改与测试
 
 先写能复现问题的测试，再做最小实现，最后跑与风险匹配的验证。
+
+依赖安装必须保持零数据库副作用：根包不得定义 `preinstall`、`install` 或 `postinstall`
+生命周期钩子来初始化、打开或迁移数据库。新安装由用户显式运行 `pmbrain init`；已有
+安装由用户显式运行 `pmbrain upgrade` 或 `pmbrain apply-migrations --yes`。
 
 Windows 本机优先：
 

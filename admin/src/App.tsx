@@ -13,17 +13,12 @@ import {
   DreamScoringPage,
   DreamTakesPage,
 } from './pages/Dream';
-import {
-  BrainDataPage,
-  ConnectionCenterPage,
-  ImportDataPage,
-  KnowledgeWorkbenchPage,
-  ModelConfigPage,
-  NaturalLanguagePage,
-  DocumentationPage,
-  SettingsPage,
-  type SettingsSection,
-} from './pages/Console';
+import { BrainDataPage } from './pages/BrainData';
+import { ImportDataPage, NaturalLanguagePage } from './pages/Import';
+import { KnowledgeWorkbenchPage } from './pages/Knowledge';
+import { ConnectionCenterPage } from './pages/Connection';
+import { DocumentationPage } from './pages/Documentation';
+import { ModelConfigPage, SettingsPage, type SettingsSection } from './pages/Settings';
 import { api } from './api';
 import {
   applyThemeMode,

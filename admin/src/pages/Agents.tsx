@@ -344,9 +344,9 @@ export function AgentsPage({
     setShowApiKeyCreate(true);
   };
   const loadOverview = () => {
-    api.brainOverview().then((overview: any) => {
-      const nextMainSourceId = typeof overview?.main_source_id === 'string' ? overview.main_source_id : 'default';
-      const nextSources = Array.isArray(overview?.sources) ? overview.sources as SourceOption[] : [];
+    api.brainOverview().then((overview) => {
+      const nextMainSourceId = overview.main_source_id || 'default';
+      const nextSources: SourceOption[] = overview.sources;
       setMainSourceId(nextMainSourceId);
       setSources(normalizeSourceOptions(nextSources, nextMainSourceId));
     }).catch(() => {});

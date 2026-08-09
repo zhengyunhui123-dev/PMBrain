@@ -80,6 +80,12 @@ export interface DesktopPgliteUpgradeBackups {
   backups: DesktopPgliteUpgradeBackup[];
 }
 
+export interface DesktopDiagnosticBundleResult {
+  path: string;
+  fileName: string;
+  files: string[];
+}
+
 export interface DesktopThemeState {
   source: DesktopTheme;
   resolved: 'light' | 'dark';
@@ -133,6 +139,7 @@ export interface PMBrainDesktopApi {
   listPgliteUpgradeBackups(): Promise<DesktopPgliteUpgradeBackups>;
   retry(): Promise<void>;
   openLogs(): Promise<string>;
+  exportDiagnosticBundle(): Promise<DesktopDiagnosticBundleResult | null>;
   quit(): Promise<void>;
 }
 
@@ -197,6 +204,7 @@ const api: PMBrainDesktopApi = {
   listPgliteUpgradeBackups: () => ipcRenderer.invoke('desktop:list-pglite-upgrade-backups'),
   retry: () => ipcRenderer.invoke('desktop:retry'),
   openLogs: () => ipcRenderer.invoke('desktop:open-logs'),
+  exportDiagnosticBundle: () => ipcRenderer.invoke('desktop:export-diagnostic-bundle'),
   quit: () => ipcRenderer.invoke('desktop:quit'),
 };
 

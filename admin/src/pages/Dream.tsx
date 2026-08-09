@@ -287,7 +287,7 @@ function useDreamData() {
     // it with the initial loading screen resets the user's scroll anchor.
     if (!data) setLoading(true);
     try {
-      setData(await api.dreamOverview() as DreamData);
+      setData(await api.dreamOverview());
       setError('');
       setBusy(false);
       setBusyRuns([]);

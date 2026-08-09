@@ -8,10 +8,13 @@ import {
 } from '../src/commands/serve-http.ts';
 
 const root = process.cwd();
-const consoleSource = readFileSync(join(root, 'admin/src/pages/Console.tsx'), 'utf8');
+const consoleSource = [
+  'admin/src/pages/Import.tsx',
+  'admin/src/pages/import/import-support.tsx',
+].map(path => readFileSync(join(root, path), 'utf8')).join('\n');
 const apiSource = readFileSync(join(root, 'admin/src/api.ts'), 'utf8');
 const stylesSource = readFileSync(join(root, 'admin/src/index.css'), 'utf8');
-const serveHttpSource = readFileSync(join(root, 'src/commands/serve-http.ts'), 'utf8');
+const serveHttpSource = readFileSync(join(root, 'src/commands/pmbrain-admin-routes.ts'), 'utf8');
 
 function sourceBetween(source: string, start: string, end: string): string {
   const from = source.indexOf(start);

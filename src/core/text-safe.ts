@@ -24,6 +24,11 @@
  *   low surrogate:  U+DC00..U+DFFF
  */
 
+/** Replace lone UTF-16 surrogate halves while preserving valid pairs. */
+export function ensureWellFormed(text: string): string {
+  return text.isWellFormed() ? text : text.toWellFormed();
+}
+
 function isHighSurrogate(code: number): boolean {
   return code >= 0xd800 && code <= 0xdbff;
 }

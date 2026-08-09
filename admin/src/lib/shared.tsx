@@ -1,32 +1,13 @@
 import React, { useState } from 'react';
 import { copyText as writeClipboardText } from './clipboard';
+import type { BrainPageChunk as ContractBrainPageChunk } from '../../../shared/contracts/brain.ts';
+import type { ConsoleRun as ContractConsoleRun } from '../../../shared/contracts/common.ts';
 
 /** Console run status shared across Console, TakeProposals, and SystemDiagnostic pages. */
-export interface ConsoleRun {
-  id: string;
-  kind: string;
-  status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
-  command: string[];
-  stdout: string;
-  stderr: string;
-  exitCode: number | null;
-  error: string | null;
-  startedAt: string;
-  completedAt: string | null;
-  durationMs: number | null;
-  /** Bounded structured command result, kept separately from truncated logs. */
-  result?: unknown;
-}
+export type ConsoleRun = ContractConsoleRun;
 
 /** Brain page chunk shared across Console and TakeProposals pages. */
-export interface BrainPageChunk {
-  id: number;
-  chunk_index: number;
-  chunk_text: string;
-  chunk_source: string;
-  token_count: number | null;
-  embedded: boolean;
-}
+export type BrainPageChunk = ContractBrainPageChunk;
 
 const PAGE_TYPE_LABELS: Record<string, { label: string; description: string }> = {
   atom: { label: '原子知识', description: '最小粒度的事实或主张，通常由抽取流程生成。' },

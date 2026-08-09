@@ -1,7 +1,10 @@
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 
-const source = readFileSync('src/commands/serve-http.ts', 'utf8');
+const source = [
+  'src/commands/serve-http.ts',
+  'src/commands/pmbrain-admin-routes.ts',
+].map(path => readFileSync(path, 'utf8')).join('\n');
 
 describe('PGLite 后台任务忙碌提示', () => {
   test('导入期间保留任务进度和取消入口，其他管理页显示自动恢复提示', () => {

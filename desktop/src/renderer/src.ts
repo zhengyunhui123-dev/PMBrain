@@ -1429,6 +1429,18 @@ $('#save-system-settings').addEventListener('click', () => void saveSystemSettin
 $('#restart-shared-gateway').addEventListener('click', () => void restartSharedGateway());
 $('#shared-open-admin').addEventListener('click', () => void window.pmbrainDesktop.openAdmin());
 $('#open-logs').addEventListener('click', () => void window.pmbrainDesktop.openLogs());
+$('#export-diagnostic').addEventListener('click', async () => {
+  const button = $<HTMLButtonElement>('#export-diagnostic');
+  setBusy(button, true, '正在收集…');
+  try {
+    const result = await window.pmbrainDesktop.exportDiagnosticBundle();
+    if (result) setNotice('success', `诊断包已导出：${result.fileName}`);
+  } catch (error) {
+    setNotice('error', error instanceof Error ? error.message : String(error));
+  } finally {
+    setBusy(button, false, '导出诊断包');
+  }
+});
 $('#open-admin').addEventListener('click', () => void window.pmbrainDesktop.openAdmin());
 $('#finish-open-admin').addEventListener('click', () => void window.pmbrainDesktop.openAdmin());
 $('#copy-result').addEventListener('click', () => void window.pmbrainDesktop.copy(lastResult));

@@ -10,7 +10,7 @@
  */
 
 import { describe, test, expect } from 'bun:test';
-import { truncateUtf8, safeSplitIndex } from '../src/core/text-safe.ts';
+import { ensureWellFormed, truncateUtf8, safeSplitIndex } from '../src/core/text-safe.ts';
 
 // 🚀 = U+1F680 (surrogate pair: 0xD83D 0xDE80; JS string length = 2).
 // 𝕏 = U+1D54F (surrogate pair: 0xD835 0xDD4F; JS string length = 2).
@@ -19,6 +19,14 @@ const ROCKET = '🚀';   // 🚀
 const MATH_X = '𝕏';   // 𝕏
 const NBMP_HAN = '𠀀'; // 𠀀
 const STRAY_HIGH = '\uD83D';     // orphaned high surrogate (invalid alone)
+
+describe('ensureWellFormed', () => {
+  test('preserves valid emoji and replaces consecutive lone surrogates', () => {
+    expect(ensureWellFormed(`a${ROCKET}b`)).toBe(`a${ROCKET}b`);
+    expect(ensureWellFormed('\uDE80\uDE80')).toBe('\uFFFD\uFFFD');
+    expect(ensureWellFormed(`head${STRAY_HIGH}`)).toBe('head\uFFFD');
+  });
+});
 
 describe('truncateUtf8', () => {
   test('returns empty for empty input', () => {

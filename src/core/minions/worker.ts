@@ -266,28 +266,35 @@ export class MinionWorker extends EventEmitter {
     // Stall + timeout detection on interval. Order matters: handleStalled FIRST
     // so a stalled job (lock_until expired) gets requeued before handleTimeouts'
     // `lock_until > now()` guard would skip it. Stall → retry, timeout → dead.
-    const stalledTimer = setInterval(async () => {
-      try {
-        const { requeued, dead } = await this.queue.handleStalled();
-        if (requeued.length > 0) console.log(`Stall detector: requeued ${requeued.length} jobs`);
-        if (dead.length > 0) console.log(`Stall detector: dead-lettered ${dead.length} jobs`);
-      } catch (e) {
-        console.error('Stall detection error:', e instanceof Error ? e.message : String(e));
-      }
-      try {
-        const timedOut = await this.queue.handleTimeouts();
-        if (timedOut.length > 0) console.log(`Timeout detector: dead-lettered ${timedOut.length} jobs (timeout exceeded)`);
-      } catch (e) {
-        console.error('Timeout detection error:', e instanceof Error ? e.message : String(e));
-      }
-      try {
-        const wallClockTimedOut = await this.queue.handleWallClockTimeouts(this.opts.lockDuration);
-        if (wallClockTimedOut.length > 0) {
-          console.log(`Wall-clock detector: dead-lettered ${wallClockTimedOut.length} jobs (wall-clock timeout exceeded)`);
+    let stalledSweepInFlight = false;
+    const stalledTimer = setInterval(() => {
+      if (stalledSweepInFlight) return;
+      stalledSweepInFlight = true;
+      void (async () => {
+        try {
+          const { requeued, dead } = await this.queue.handleStalled();
+          if (requeued.length > 0) console.log(`Stall detector: requeued ${requeued.length} jobs`);
+          if (dead.length > 0) console.log(`Stall detector: dead-lettered ${dead.length} jobs`);
+        } catch (e) {
+          console.error('Stall detection error:', e instanceof Error ? e.message : String(e));
         }
-      } catch (e) {
-        console.error('Wall-clock timeout detection error:', e instanceof Error ? e.message : String(e));
-      }
+        try {
+          const timedOut = await this.queue.handleTimeouts();
+          if (timedOut.length > 0) console.log(`Timeout detector: dead-lettered ${timedOut.length} jobs (timeout exceeded)`);
+        } catch (e) {
+          console.error('Timeout detection error:', e instanceof Error ? e.message : String(e));
+        }
+        try {
+          const wallClockTimedOut = await this.queue.handleWallClockTimeouts(this.opts.lockDuration);
+          if (wallClockTimedOut.length > 0) {
+            console.log(`Wall-clock detector: dead-lettered ${wallClockTimedOut.length} jobs (wall-clock timeout exceeded)`);
+          }
+        } catch (e) {
+          console.error('Wall-clock timeout detection error:', e instanceof Error ? e.message : String(e));
+        }
+      })().finally(() => {
+        stalledSweepInFlight = false;
+      });
     }, this.opts.stalledInterval);
 
     // Periodic RSS watchdog — closes the production-freeze regression where

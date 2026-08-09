@@ -99,7 +99,6 @@ ALLOW_LIST=(
   # tokens it forbids.
   'scripts/check-fixture-privacy.sh'
   'CLAUDE.md'
-  'llms-full.txt'
   'test/integrations.test.ts'
   # v0.25.1 (codex T7) BANNED_PATHS allow-list:
   # Historical docs, frozen migration files, test fixtures, and env-var

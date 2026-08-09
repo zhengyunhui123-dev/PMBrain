@@ -1,3 +1,40 @@
+import {
+  BrainOverviewResponseSchema,
+  BrainPageChunksResponseSchema,
+  BrainPageDetailResponseSchema,
+  BrainPagesResponseSchema,
+  DreamOverviewResponseSchema,
+  DreamRunResponseSchema,
+  DreamScheduleResponseSchema,
+  DreamSettingsResponseSchema,
+  GenerativeUsageResponseSchema,
+  ImportRunResponseSchema,
+  ImportSettingsResponseSchema,
+  ImportUploadRunResponseSchema,
+  LlmStatusResponseSchema,
+  SetDefaultSourceResponseSchema,
+  SourceAddResponseSchema,
+} from '../../shared/contracts/index.ts';
+import type {
+  BrainOverviewResponse,
+  BrainPageChunksResponse,
+  BrainPageDetailResponse,
+  BrainPagesResponse,
+  DreamOverviewResponse,
+  DreamRunResponse,
+  DreamScheduleResponse,
+  DreamSettingsResponse,
+  GenerativeUsageResponse,
+  ImportRunResponse,
+  ImportSettingsResponse,
+  ImportUploadRunResponse,
+  LlmStatusResponse,
+  SetDefaultSourceResponse,
+  SourceAddResponse,
+} from '../../shared/contracts/index.ts';
+
+interface ContractParser { parse(value: unknown): unknown }
+
 const BASE = '';
 
 export function isPgliteBusyError(error: unknown): boolean {
@@ -10,7 +47,7 @@ export function isPgliteBusyError(error: unknown): boolean {
 // bootstrap token in browser JS state. On 401, redirect to login —
 // no auto-reauth via saved token, no localStorage/sessionStorage read.
 // The HttpOnly cookie set by /admin/login is the only session credential.
-async function apiFetch(path: string, options?: RequestInit) {
+async function apiFetch<T = any>(path: string, options?: RequestInit, schema?: ContractParser): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     ...options,
     credentials: 'same-origin',
@@ -28,7 +65,8 @@ async function apiFetch(path: string, options?: RequestInit) {
     error.code = typeof body.code === 'string' ? body.code : undefined;
     throw error;
   }
-  return res.json();
+  const payload: unknown = await res.json();
+  return (schema ? schema.parse(payload) : payload) as T;
 }
 
 // v0.36.1.0 (T15 / E6) — SVG fetch (text/plain payload, NOT JSON).
@@ -42,7 +80,7 @@ async function apiFetchText(path: string) {
   return res.text();
 }
 
-async function apiUploadFile(path: string, file: File) {
+async function apiUploadFile<T>(path: string, file: File, schema: ContractParser): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     method: 'POST',
     credentials: 'same-origin',
@@ -60,26 +98,26 @@ async function apiUploadFile(path: string, file: File) {
     const body = await res.json().catch(() => ({}));
     throw new Error(body.error || `HTTP ${res.status}`);
   }
-  return res.json();
+  return schema.parse(await res.json()) as T;
 }
 
 export const api = {
   login: (token: string) => apiFetch('/admin/login', { method: 'POST', body: JSON.stringify({ token }) }),
   signOutEverywhere: () => apiFetch('/admin/api/sign-out-everywhere', { method: 'POST' }),
   stats: () => apiFetch('/admin/api/stats'),
-  brainOverview: () => apiFetch('/admin/api/brain/overview'),
+  brainOverview: () => apiFetch<BrainOverviewResponse>('/admin/api/brain/overview', undefined, BrainOverviewResponseSchema),
   theme: () => apiFetch('/admin/api/theme'),
   docs: () => apiFetch('/admin/api/docs'),
-  brainPages: (qs = '') => apiFetch(`/admin/api/brain/pages${qs}`),
+  brainPages: (qs = '') => apiFetch<BrainPagesResponse>(`/admin/api/brain/pages${qs}`, undefined, BrainPagesResponseSchema),
   brainPage: (sourceId: string, slug: string, includeDeleted = false) =>
-    apiFetch(`/admin/api/brain/pages/${encodeURIComponent(sourceId)}/${encodeURIComponent(slug)}${includeDeleted ? '?includeDeleted=1' : ''}`),
+    apiFetch<BrainPageDetailResponse>(`/admin/api/brain/pages/${encodeURIComponent(sourceId)}/${encodeURIComponent(slug)}${includeDeleted ? '?includeDeleted=1' : ''}`, undefined, BrainPageDetailResponseSchema),
   brainPageChunks: (sourceId: string, slug: string, includeDeleted = false) =>
-    apiFetch(`/admin/api/brain/pages/${encodeURIComponent(sourceId)}/${encodeURIComponent(slug)}/chunks${includeDeleted ? '?includeDeleted=1' : ''}`),
+    apiFetch<BrainPageChunksResponse>(`/admin/api/brain/pages/${encodeURIComponent(sourceId)}/${encodeURIComponent(slug)}/chunks${includeDeleted ? '?includeDeleted=1' : ''}`, undefined, BrainPageChunksResponseSchema),
   deleteBrainPage: (sourceId: string, slug: string) =>
     apiFetch(`/admin/api/brain/pages/${encodeURIComponent(sourceId)}/${encodeURIComponent(slug)}/delete`, { method: 'POST' }),
   restoreBrainPage: (sourceId: string, slug: string) =>
     apiFetch(`/admin/api/brain/pages/${encodeURIComponent(sourceId)}/${encodeURIComponent(slug)}/restore`, { method: 'POST' }),
-  llmStatus: () => apiFetch('/admin/api/llm/status'),
+  llmStatus: () => apiFetch<LlmStatusResponse>('/admin/api/llm/status', undefined, LlmStatusResponseSchema),
   previewIntent: (text: string) => apiFetch('/admin/api/intent/preview', { method: 'POST', body: JSON.stringify({ text }) }),
   executeIntent: (previewId: string, confirmed = false) =>
     apiFetch('/admin/api/intent/execute', { method: 'POST', body: JSON.stringify({ previewId, confirmed }) }),
@@ -95,32 +133,32 @@ export const api = {
   startActionRun: (action: string) => apiFetch('/admin/api/runs/action', { method: 'POST', body: JSON.stringify({ action }) }),
   taskCenter: () => apiFetch('/admin/api/task-center'),
   startImportRun: (body: { path: string; sourceId?: string; includeOffice: boolean; includeImages: boolean; autoEmbed: boolean; workers: number }) =>
-    apiFetch('/admin/api/import-runs', { method: 'POST', body: JSON.stringify(body) }),
+    apiFetch<ImportRunResponse>('/admin/api/import-runs', { method: 'POST', body: JSON.stringify(body) }, ImportRunResponseSchema),
   startImportUploadRun: (file: File, options: { sourceId?: string; autoEmbed: boolean; workers: number }) => {
     const query = new URLSearchParams({
       autoEmbed: options.autoEmbed ? '1' : '0',
       workers: String(options.workers),
     });
     if (options.sourceId) query.set('sourceId', options.sourceId);
-    return apiUploadFile(`/admin/api/import-upload-runs?${query.toString()}`, file);
+    return apiUploadFile<ImportUploadRunResponse>(`/admin/api/import-upload-runs?${query.toString()}`, file, ImportUploadRunResponseSchema);
   },
   startMarkdownExportRun: (rootPath: string) =>
     apiFetch('/admin/api/export-runs', { method: 'POST', body: JSON.stringify({ rootPath }) }),
-  importSettings: () => apiFetch('/admin/api/import/settings'),
+  importSettings: () => apiFetch<ImportSettingsResponse>('/admin/api/import/settings', undefined, ImportSettingsResponseSchema),
   saveImportSettings: (thresholdKb: number) =>
-    apiFetch('/admin/api/import/settings', { method: 'POST', body: JSON.stringify({ thresholdKb }) }),
-  dreamOverview: () => apiFetch('/admin/api/dream/overview'),
-  dreamSettings: () => apiFetch('/admin/api/dream/settings'),
+    apiFetch<ImportSettingsResponse>('/admin/api/import/settings', { method: 'POST', body: JSON.stringify({ thresholdKb }) }, ImportSettingsResponseSchema),
+  dreamOverview: () => apiFetch<DreamOverviewResponse>('/admin/api/dream/overview', undefined, DreamOverviewResponseSchema),
+  dreamSettings: () => apiFetch<DreamSettingsResponse>('/admin/api/dream/settings', undefined, DreamSettingsResponseSchema),
   saveDreamSettings: (body: { outputDir: string; dualWrite: boolean }) =>
-    apiFetch('/admin/api/dream/settings', { method: 'POST', body: JSON.stringify(body) }),
-  dreamSchedule: () => apiFetch('/admin/api/dream/schedule'),
+    apiFetch<DreamSettingsResponse>('/admin/api/dream/settings', { method: 'POST', body: JSON.stringify(body) }, DreamSettingsResponseSchema),
+  dreamSchedule: () => apiFetch<DreamScheduleResponse>('/admin/api/dream/schedule', undefined, DreamScheduleResponseSchema),
   saveDreamSchedule: (body: { enabled: boolean; time: string }) =>
-    apiFetch('/admin/api/dream/schedule', { method: 'POST', body: JSON.stringify(body) }),
-  generativeUsage: () => apiFetch('/admin/api/model-usage/generative'),
+    apiFetch<DreamScheduleResponse>('/admin/api/dream/schedule', { method: 'POST', body: JSON.stringify(body) }, DreamScheduleResponseSchema),
+  generativeUsage: () => apiFetch<GenerativeUsageResponse>('/admin/api/model-usage/generative', undefined, GenerativeUsageResponseSchema),
   saveGenerativeUsage: (enabled: boolean) =>
-    apiFetch('/admin/api/model-usage/generative', { method: 'POST', body: JSON.stringify({ enabled }) }),
+    apiFetch<GenerativeUsageResponse>('/admin/api/model-usage/generative', { method: 'POST', body: JSON.stringify({ enabled }) }, GenerativeUsageResponseSchema),
   startDreamRun: (body: { phase?: string; preset?: 'full' | 'meeting' | 'quick'; sourceId?: string; maxPages?: number; drainProposals?: boolean; windowSeconds?: number; dryRun: boolean; input?: string; date?: string; from?: string; to?: string; timeoutMs?: number }) =>
-    apiFetch('/admin/api/dream-runs', { method: 'POST', body: JSON.stringify(body) }),
+    apiFetch<DreamRunResponse>('/admin/api/dream-runs', { method: 'POST', body: JSON.stringify(body) }, DreamRunResponseSchema),
   breakDreamLock: (id: string, holderPid: number) =>
     apiFetch(`/admin/api/dream/locks/${encodeURIComponent(id)}/break`, { method: 'POST', body: JSON.stringify({ holderPid }) }),
   cancelJob: (id: number) =>
@@ -130,13 +168,13 @@ export const api = {
   stopSupervisor: () =>
     apiFetch('/admin/api/jobs/supervisor/stop', { method: 'POST' }),
   addSource: (body: { id?: string; path: string; name?: string; federated: boolean }) =>
-    apiFetch('/admin/api/sources', { method: 'POST', body: JSON.stringify(body) }),
+    apiFetch<SourceAddResponse>('/admin/api/sources', { method: 'POST', body: JSON.stringify(body) }, SourceAddResponseSchema),
   initializeSourceGit: (id: string) =>
     apiFetch(`/admin/api/sources/${encodeURIComponent(id)}/git/init`, { method: 'POST', body: '{}' }),
   commitSourceGit: (id: string, message: string) =>
     apiFetch(`/admin/api/sources/${encodeURIComponent(id)}/git/commit`, { method: 'POST', body: JSON.stringify({ message }) }),
   setDefaultSource: (sourceId: string) =>
-    apiFetch('/admin/api/sources/default', { method: 'POST', body: JSON.stringify({ sourceId }) }),
+    apiFetch<SetDefaultSourceResponse>('/admin/api/sources/default', { method: 'POST', body: JSON.stringify({ sourceId }) }, SetDefaultSourceResponseSchema),
   archiveSource: (id: string) =>
     apiFetch(`/admin/api/sources/${encodeURIComponent(id)}/archive`, { method: 'POST' }),
   restoreSource: (id: string) =>

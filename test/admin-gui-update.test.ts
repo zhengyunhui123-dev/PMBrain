@@ -6,9 +6,15 @@ import { normalizeThemeMode, readStoredThemeMode, readThemeMode, resolveTheme } 
 import { getThinkRetrievalWarning, parseThinkOutput } from '../admin/src/lib/think-output.ts';
 
 const appSource = readFileSync(join(process.cwd(), 'admin/src/App.tsx'), 'utf8');
-const consoleSource = readFileSync(join(process.cwd(), 'admin/src/pages/Console.tsx'), 'utf8');
+const consoleSource = [
+  'admin/src/pages/Knowledge.tsx',
+  'admin/src/pages/Import.tsx',
+  'admin/src/pages/import/import-support.tsx',
+  'admin/src/pages/BrainData.tsx',
+].map(path => readFileSync(join(process.cwd(), path), 'utf8')).join('\n');
+const settingsSource = readFileSync(join(process.cwd(), 'admin/src/pages/Settings.tsx'), 'utf8');
 const adminStyles = readFileSync(join(process.cwd(), 'admin/src/index.css'), 'utf8');
-const serveHttpSource = readFileSync(join(process.cwd(), 'src/commands/serve-http.ts'), 'utf8');
+const serveHttpSource = readFileSync(join(process.cwd(), 'src/commands/pmbrain-admin-routes.ts'), 'utf8');
 const customerServiceQrPath = join(process.cwd(), 'admin/public/customer-service-qr.png');
 
 describe('Admin GUI update contract', () => {
@@ -48,8 +54,8 @@ describe('Admin GUI update contract', () => {
     expect(appSource).toContain('api.theme()');
     expect(appSource).toContain('readStoredThemeMode() === null');
     expect(appSource).toContain('storeThemeMode(mode)');
-    expect(consoleSource).toContain('onThemeModeChange(value)');
-    expect(consoleSource).not.toContain('请在 PMBrain 桌面端修改界面主题');
+    expect(settingsSource).toContain('onThemeModeChange(value)');
+    expect(settingsSource).not.toContain('请在 PMBrain 桌面端修改界面主题');
     expect(serveHttpSource).toContain("app.get('/admin/api/theme'");
   });
 
@@ -57,8 +63,8 @@ describe('Admin GUI update contract', () => {
     expect(consoleSource).toContain('className="main-source-current"');
     expect(consoleSource).toContain('className="main-source-purpose"');
     expect(consoleSource).not.toContain('className="main-source-grid"');
-    expect(consoleSource).toContain('className="dream-output-action-row"');
-    expect(consoleSource).not.toContain('<div className="settings-panel-actions">');
+    expect(settingsSource).toContain('className="dream-output-action-row"');
+    expect(settingsSource).not.toContain('<div className="settings-panel-actions">');
     expect(adminStyles).toContain('.dream-output-setting,');
     expect(adminStyles).toContain('.settings-feedback');
   });
@@ -74,18 +80,18 @@ describe('Admin GUI update contract', () => {
   });
 
   test('settings exposes the all-file chunking and vectorization threshold', () => {
-    expect(consoleSource).toContain('function ImportVectorizationSettings()');
-    expect(consoleSource).toContain('默认 500 KB，可设置 100–5000 KB');
-    expect(consoleSource).toContain('适用于所有文件');
+    expect(settingsSource).toContain('function ImportVectorizationSettings()');
+    expect(settingsSource).toContain('默认 500 KB，可设置 100–5000 KB');
+    expect(settingsSource).toContain('适用于所有文件');
     expect(serveHttpSource).toContain("app.get('/admin/api/import/settings'");
     expect(serveHttpSource).toContain("app.post('/admin/api/import/settings'");
   });
 
   test('Dream local Markdown toggle persists immediately and rolls back on failure', () => {
-    expect(consoleSource).toContain('const saveDualWrite = async (dualWrite: boolean)');
-    expect(consoleSource).toContain('onChange={event => void saveDualWrite(event.target.checked)}');
-    expect(consoleSource).toContain("setMessage(dualWrite ? '已开启本地 Markdown 写入' : '已关闭本地 Markdown 写入')");
-    expect(consoleSource).toContain('dualWrite: previousValue');
+    expect(settingsSource).toContain('const saveDualWrite = async (dualWrite: boolean)');
+    expect(settingsSource).toContain('onChange={event => void saveDualWrite(event.target.checked)}');
+    expect(settingsSource).toContain("setMessage(dualWrite ? '已开启本地 Markdown 写入' : '已关闭本地 Markdown 写入')");
+    expect(settingsSource).toContain('dualWrite: previousValue');
   });
 
   test('dark mode covers code blocks and Dream contrast-sensitive content', () => {

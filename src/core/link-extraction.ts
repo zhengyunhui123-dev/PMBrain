@@ -13,6 +13,7 @@
 
 import type { BrainEngine } from './engine.ts';
 import type { EffectiveDateSource, PageType } from './types.ts';
+import { ensureWellFormed } from './text-safe.ts';
 
 // ─── Entity references ──────────────────────────────────────────
 
@@ -482,7 +483,7 @@ function excerpt(s: string, idx: number, width: number): string {
   const half = Math.floor(width / 2);
   const start = Math.max(0, idx - half);
   const end = Math.min(s.length, idx + half);
-  return s.slice(start, end).replace(/\s+/g, ' ').trim();
+  return ensureWellFormed(s.slice(start, end)).replace(/\s+/g, ' ').trim();
 }
 
 // ─── Relationship type inference (deterministic, zero LLM) ──────

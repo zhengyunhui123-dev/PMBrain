@@ -5,7 +5,7 @@ const appSource = readFileSync('admin/src/App.tsx', 'utf8');
 const apiSource = readFileSync('admin/src/api.ts', 'utf8');
 const dreamSource = readFileSync('admin/src/pages/Dream.tsx', 'utf8');
 const taskCenterSource = readFileSync('admin/src/pages/TaskCenter.tsx', 'utf8');
-const consoleSource = readFileSync('admin/src/pages/Console.tsx', 'utf8');
+const consoleSource = readFileSync('admin/src/pages/Knowledge.tsx', 'utf8');
 const adminCss = readFileSync('admin/src/index.css', 'utf8');
 
 describe('Admin 任务中心与 Dream 忙碌态', () => {

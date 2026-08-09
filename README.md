@@ -37,6 +37,11 @@ pmbrain serve --http --port 3131
 浏览器打开 `http://127.0.0.1:3131/admin` 进入 Admin Console。PGLite 数据目录同一时间
 只能由一个真实进程持有；桌面端运行时，不要再让另一个 CLI 服务打开同一目录。
 
+PMBrain 根包不定义 `preinstall`、`install` 或 `postinstall` 钩子，因此 `bun install` 和
+`bun install -g` 不会由 PMBrain 自动连接或迁移数据库。已有安装升级后，由用户在确认
+数据库和备份状态后显式运行 `pmbrain upgrade`；也可先用 `pmbrain doctor` 检查，再执行
+`pmbrain apply-migrations --yes`。
+
 ### CLI + Postgres
 
 ```powershell

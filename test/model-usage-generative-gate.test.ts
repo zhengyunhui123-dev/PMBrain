@@ -71,9 +71,9 @@ describe('生成式模型全局开关', () => {
   });
 
   test('服务端与前端接入生成式开关', () => {
-    const serve = readFileSync(join(ROOT, 'src/commands/serve-http.ts'), 'utf8');
+    const serve = readFileSync(join(ROOT, 'src/commands/pmbrain-admin-routes.ts'), 'utf8');
     const dreamUi = readFileSync(join(ROOT, 'admin/src/pages/Dream.tsx'), 'utf8');
-    const consoleUi = readFileSync(join(ROOT, 'admin/src/pages/Console.tsx'), 'utf8');
+    const settingsUi = readFileSync(join(ROOT, 'admin/src/pages/Settings.tsx'), 'utf8');
     const gateway = readFileSync(join(ROOT, 'src/core/ai/gateway.ts'), 'utf8');
     const dreamCli = readFileSync(join(ROOT, 'src/commands/dream.ts'), 'utf8');
     expect(serve).toContain("app.get('/admin/api/model-usage/generative'");
@@ -81,9 +81,9 @@ describe('生成式模型全局开关', () => {
     expect(serve).toContain('cancelRun');
     expect(gateway).toContain('assertGenerativeModelEnabled');
     expect(dreamCli).toContain('assertDreamPresetAllowGenerative');
-    expect(consoleUi).toContain('普通模型调用');
-    expect(consoleUi).toContain('允许 PMBrain 调用普通模型');
-    expect(consoleUi).not.toContain('「发送」的 AI 意图识别与综合回答需要普通模型');
+    expect(settingsUi).toContain('普通模型调用');
+    expect(settingsUi).toContain('允许 PMBrain 调用普通模型');
+    expect(settingsUi).not.toContain('「发送」的 AI 意图识别与综合回答需要普通模型');
     expect(dreamUi).toContain('AI 深度整理');
     expect(dreamUi).toContain('AI 会议整理');
     expect(dreamUi).toContain('快速维护');
@@ -92,7 +92,7 @@ describe('生成式模型全局开关', () => {
   });
 
   test('定时任务仍只使用 quick 预设', () => {
-    const serve = readFileSync(join(ROOT, 'src/commands/serve-http.ts'), 'utf8');
+    const serve = readFileSync(join(ROOT, 'src/commands/pmbrain-admin-routes.ts'), 'utf8');
     expect(serve).toContain("preset: 'quick'");
     expect(serve).not.toMatch(/checkScheduledDream[\s\S]{0,800}preset:\s*'full'/);
   });

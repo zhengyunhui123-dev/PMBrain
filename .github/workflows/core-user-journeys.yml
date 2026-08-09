@@ -1,0 +1,63 @@
+name: Core User Journeys
+
+on:
+  pull_request:
+    branches: [master]
+    paths:
+      - 'admin/**'
+      - 'desktop/**'
+      - 'src/commands/pmbrain-admin-*.ts'
+      - 'src/commands/serve-http.ts'
+      - 'src/core/import-file.ts'
+      - 'src/core/search/**'
+      - 'src/core/operations.ts'
+      - 'src/mcp/**'
+      - 'test/user-journeys/**'
+      - '.github/workflows/core-user-journeys.yml'
+  push:
+    branches: [master]
+    paths:
+      - 'admin/**'
+      - 'desktop/**'
+      - 'src/commands/pmbrain-admin-*.ts'
+      - 'src/commands/serve-http.ts'
+      - 'src/core/import-file.ts'
+      - 'src/core/search/**'
+      - 'src/core/operations.ts'
+      - 'src/mcp/**'
+      - 'test/user-journeys/**'
+      - '.github/workflows/core-user-journeys.yml'
+  schedule:
+    - cron: '30 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-real-ui:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6  # v2
+        with:
+          bun-version: 1.3.14
+      - run: bun install --frozen-lockfile
+      - name: Install Admin dependencies
+        working-directory: admin
+        run: bun install --frozen-lockfile
+      - name: Install Desktop dependencies
+        working-directory: desktop
+        run: bun install --frozen-lockfile
+      - name: Install UI driver
+        run: python -m pip install -r test/user-journeys/requirements.txt
+      - name: Run real Desktop/Admin/PGLite/MCP journeys
+        run: python test/user-journeys/core_journeys.py
+      - name: Upload journey evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: pmbrain-core-user-journeys
+          path: 备份/核心用户路径测试/runs/
+          if-no-files-found: warn

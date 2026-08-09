@@ -357,6 +357,12 @@ select { cursor: pointer; appearance: auto; -webkit-appearance: auto; }
 .repair-summary b { display: block; margin-top: 5px; font-size: 15px; }
 .repair-summary p { margin: 0; color: var(--text-secondary); font: 11px/1.5 Consolas, monospace; overflow-wrap: anywhere; text-align: right; }
 .repair-backup-list { display: grid; gap: 12px; }
+.diagnostic-export-card { display: flex; align-items: center; justify-content: space-between; gap: 24px; margin-bottom: 18px; padding: 18px 20px; border: 1px solid var(--line); border-radius: 13px; background: var(--surface); box-shadow: var(--panel-shadow); }
+.diagnostic-export-card > div { min-width: 0; }
+.diagnostic-export-card span { color: var(--accent); font: 700 9px Consolas, monospace; letter-spacing: .12em; }
+.diagnostic-export-card h3 { margin: 6px 0; font-size: 16px; }
+.diagnostic-export-card p { margin: 0; color: var(--text-muted); font-size: 11px; line-height: 1.6; }
+.diagnostic-export-card button { flex: 0 0 auto; }
 .repair-backup-card { padding: 18px 20px; border: 1px solid var(--line); border-radius: 13px; background: var(--surface); box-shadow: var(--panel-shadow); }
 .repair-backup-heading { display: flex; justify-content: space-between; align-items: start; gap: 18px; }
 .repair-backup-heading span { color: var(--accent); font: 700 9px Consolas, monospace; letter-spacing: .12em; }
@@ -436,7 +442,7 @@ select { cursor: pointer; appearance: auto; -webkit-appearance: auto; }
   .workspace { width: 100%; padding: 28px 24px 60px; }
 }
 @media (max-width: 680px) {
-  .topbar, .section-heading, .subsection-heading, .form-footer, .finish-bar, .advanced-actions, .help-dialog-foot, .repair-summary, .repair-backup-heading, .system-save-bar { align-items: flex-start; flex-direction: column; }
+  .topbar, .section-heading, .subsection-heading, .form-footer, .finish-bar, .advanced-actions, .help-dialog-foot, .repair-summary, .repair-backup-heading, .diagnostic-export-card, .system-save-bar { align-items: flex-start; flex-direction: column; }
   .top-actions { flex-wrap: wrap; }
   .section-heading p { text-align: left; }
   .mode-grid, .network-mode-grid, .model-fields.chat-fields, .model-fields.embedding-fields, .advanced-model-grid, .advanced-task-fields, .key-grid, .integration-grid, .shared-form, .source-check-list { grid-template-columns: 1fr; }

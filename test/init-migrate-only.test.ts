@@ -1,6 +1,6 @@
 /**
  * Tests for `gbrain init --migrate-only` — the schema-only primitive used by
- * apply-migrations, the stopgap script, and the postinstall hook.
+ * apply-migrations and the stopgap script.
  *
  * The key contract: migrate-only MUST NOT call saveConfig. Running it on an
  * existing Postgres install must not flip it to PGLite. Running it against a
