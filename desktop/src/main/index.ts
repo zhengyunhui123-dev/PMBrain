@@ -35,6 +35,19 @@ let quitting = false;
 const LAN_MONITOR_INTERVAL_MS = 5_000;
 const DESKTOP_RENDERER_PATH = join(__dirname, '../renderer/index.html');
 
+// Release E2E launches the previous installer with a CLI debugging flag, but
+// electron-updater restarts the newly installed executable without preserving
+// CLI arguments. This explicit test-only environment variable lets the new
+// process reopen the same CDP port so the runner can verify the post-upgrade UI
+// and database. Normal installs never set it.
+const e2eRemoteDebuggingPort = process.env.PMBRAIN_E2E_REMOTE_DEBUGGING_PORT?.trim();
+const e2eRemoteDebuggingPortNumber = Number(e2eRemoteDebuggingPort);
+if (Number.isInteger(e2eRemoteDebuggingPortNumber)
+  && e2eRemoteDebuggingPortNumber > 0
+  && e2eRemoteDebuggingPortNumber <= 65_535) {
+  app.commandLine.appendSwitch('remote-debugging-port', String(e2eRemoteDebuggingPortNumber));
+}
+
 interface StartupProgress {
   visible: boolean;
   stage: 'database' | 'migration' | 'sidecar' | 'health';

@@ -35,7 +35,7 @@ function InlineMarkdown({ text }: { text: string }) {
   })}</>;
 }
 
-function MarkdownArticle({ markdown }: { markdown: string }) {
+export function MarkdownArticle({ markdown }: { markdown: string }) {
   const blocks: React.ReactNode[] = [];
   const lines = markdown.split('\n');
   let list: string[] = [];

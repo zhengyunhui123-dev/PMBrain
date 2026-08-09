@@ -87,3 +87,60 @@ jobs:
             artifacts/pmbrain-desktop-windows/PMBrain-Windows-x64-Setup-*.exe.blockmap
             artifacts/pmbrain-desktop-windows/latest.yml
           body_path: desktop/build/release-notes.md
+
+  published-upgrade-e2e:
+    name: Published Windows upgrade preserves PGLite data
+    if: github.event_name == 'push'
+    needs: [release]
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - name: Find and download previous Windows installer
+        id: previous
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CURRENT_TAG: ${{ github.ref_name }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $headers = @{ Authorization = "Bearer $env:GH_TOKEN"; 'User-Agent' = 'PMBrain-release-upgrade-e2e' }
+          $releases = Invoke-RestMethod -Headers $headers -Uri "https://api.github.com/repos/$env:GITHUB_REPOSITORY/releases?per_page=30"
+          $previous = $releases | Where-Object { -not $_.draft -and $_.tag_name -ne $env:CURRENT_TAG } | Select-Object -First 1
+          if (-not $previous) {
+            "found=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+            exit 0
+          }
+          $asset = $previous.assets | Where-Object { $_.name -match '^PMBrain-Windows-x64-Setup-.*\.exe$' } | Select-Object -First 1
+          if (-not $asset) { throw "Previous release $($previous.tag_name) has no Windows NSIS installer" }
+          $downloadDir = Join-Path $env:RUNNER_TEMP 'pmbrain-previous-release'
+          New-Item -ItemType Directory -Force -Path $downloadDir | Out-Null
+          $target = Join-Path $downloadDir $asset.name
+          Invoke-WebRequest -Headers $headers -Uri $asset.browser_download_url -OutFile $target
+          "found=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "installer=$target" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+      - name: Install release UI driver
+        if: steps.previous.outputs.found == 'true'
+        run: python -m pip install -r test/user-journeys/requirements.txt
+      - name: Run published updater journey
+        if: steps.previous.outputs.found == 'true'
+        shell: pwsh
+        env:
+          OLD_INSTALLER: ${{ steps.previous.outputs.installer }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = (Get-Content -LiteralPath 'desktop/package.json' -Raw -Encoding UTF8 | ConvertFrom-Json).version
+          python test/user-journeys/release_upgrade_journey.py `
+            --old-installer $env:OLD_INSTALLER `
+            --expected-version $version `
+            --artifacts-dir (Join-Path $env:RUNNER_TEMP 'pmbrain-release-upgrade')
+      - name: Explain first-release skip
+        if: steps.previous.outputs.found != 'true'
+        run: echo "No previous Windows release exists; the cross-version updater journey is not applicable yet."
+      - name: Upload upgrade evidence
+        if: always() && steps.previous.outputs.found == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: pmbrain-published-upgrade-e2e
+          path: ${{ runner.temp }}/pmbrain-release-upgrade/
+          if-no-files-found: warn

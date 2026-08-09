@@ -8,6 +8,7 @@ import { getThinkRetrievalWarning, parseThinkOutput } from '../lib/think-output'
 import { summarizeImportRun } from '../lib/import-summary';
 import { CopyButton } from '../lib/clipboard';
 import { parseMarkdownTable } from '../lib/markdown-table';
+import { MarkdownArticle } from './Documentation';
 import * as Tooltip from '@radix-ui/react-tooltip';
 import {
   Activity, AlertTriangle, Bot, Boxes, Check, CheckCircle2, ChevronDown, Clock3, Cpu, Database,

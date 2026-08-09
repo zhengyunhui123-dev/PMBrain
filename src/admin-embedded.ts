@@ -11,7 +11,7 @@ import A_0_assets_charts_BO6HVfrh_js from '../admin/dist/assets/charts-BO6HVfrh.
 // @ts-ignore — type: 'file' is Bun ESM, not in lib.d.ts
 import A_1_assets_index_BvtFytOE_css from '../admin/dist/assets/index-BvtFytOE.css' with { type: 'file' };
 // @ts-ignore — type: 'file' is Bun ESM, not in lib.d.ts
-import A_2_assets_index_FSz3w6jM_js from '../admin/dist/assets/index-FSz3w6jM.js' with { type: 'file' };
+import A_2_assets_index_X9B4rQsy_js from '../admin/dist/assets/index-X9B4rQsy.js' with { type: 'file' };
 // @ts-ignore — type: 'file' is Bun ESM, not in lib.d.ts
 import A_3_assets_react_LdaKN5mt_js from '../admin/dist/assets/react-LdaKN5mt.js' with { type: 'file' };
 // @ts-ignore — type: 'file' is Bun ESM, not in lib.d.ts
@@ -33,7 +33,7 @@ export interface AdminAsset {
 export const ADMIN_ASSETS: Record<string, AdminAsset> = {
   "/admin/assets/charts-BO6HVfrh.js": { path: A_0_assets_charts_BO6HVfrh_js as unknown as string, mime: "application/javascript; charset=utf-8" },
   "/admin/assets/index-BvtFytOE.css": { path: A_1_assets_index_BvtFytOE_css as unknown as string, mime: "text/css; charset=utf-8" },
-  "/admin/assets/index-FSz3w6jM.js": { path: A_2_assets_index_FSz3w6jM_js as unknown as string, mime: "application/javascript; charset=utf-8" },
+  "/admin/assets/index-X9B4rQsy.js": { path: A_2_assets_index_X9B4rQsy_js as unknown as string, mime: "application/javascript; charset=utf-8" },
   "/admin/assets/react-LdaKN5mt.js": { path: A_3_assets_react_LdaKN5mt_js as unknown as string, mime: "application/javascript; charset=utf-8" },
   "/admin/assets/ui-D67EOKFW.js": { path: A_4_assets_ui_D67EOKFW_js as unknown as string, mime: "application/javascript; charset=utf-8" },
   "/admin/customer-service-qr.png": { path: A_5_customer_service_qr_png as unknown as string, mime: "image/png" },

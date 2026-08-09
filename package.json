@@ -57,6 +57,8 @@
     "check:wasm": "bash scripts/check-wasm-embedded.sh",
     "check:newlines": "bash scripts/check-trailing-newline.sh",
     "test:e2e": "bash scripts/run-e2e.sh",
+    "test:user-journeys": "python test/user-journeys/core_journeys.py",
+    "test:user-journeys:upgrade": "python test/user-journeys/release_upgrade_journey.py",
     "test:slow": "bash scripts/run-slow-tests.sh",
     "test:heavy": "bash scripts/run-heavy.sh",
     "test:profile": "bash scripts/profile-tests.sh",
@@ -148,5 +150,5 @@
     "bun": ">=1.3.10"
   },
   "license": "MIT",
-  "version": "1.2.11"
+  "version": "1.2.12"
 }
