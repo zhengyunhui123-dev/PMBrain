@@ -2,7 +2,7 @@
   "name": "pmbrain-desktop",
   "productName": "PMBrain Desktop",
   "desktopName": "PMBrain.desktop",
-  "version": "1.1.12",
+  "version": "1.1.13",
   "private": true,
   "author": "PMBrain",
   "description": "PMBrain cross-platform desktop shell",
@@ -30,6 +30,7 @@
     "typescript": "^5.8.3"
   },
   "dependencies": {
-    "electron-updater": "^6.8.9"
+    "electron-updater": "^6.8.9",
+    "zod": "^4.3.6"
   }
 }

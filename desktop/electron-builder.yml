@@ -17,6 +17,8 @@ extraResources:
     to: pmbrain-runtime
   - from: build/release-notes.md
     to: release-notes.md
+  - from: ../release-manifest.json
+    to: release-manifest.json
   # Broad file sets omit nested node_modules, so PGLite must be copied explicitly.
   - from: ../node_modules/@electric-sql/pglite
     to: pmbrain-runtime/node_modules/@electric-sql/pglite

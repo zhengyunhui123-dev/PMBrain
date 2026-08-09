@@ -58,6 +58,7 @@ describe('Admin scheduled one-click organization', () => {
     expect(settingsSource).toContain('type="time"');
     expect(settingsSource).toContain('!dirty || !validTime');
     expect(settingsSource).toContain('当天服务恢复后补跑');
-    expect(apiSource).toContain("apiFetch('/admin/api/dream/schedule'");
+    expect(apiSource).toContain("'/admin/api/dream/schedule'");
+    expect(apiSource).toContain('DreamScheduleResponseSchema');
   });
 });

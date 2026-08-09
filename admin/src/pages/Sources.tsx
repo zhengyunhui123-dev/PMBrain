@@ -63,7 +63,7 @@ export function SourceManagementSettings() {
   const addSource = async () => {
     setSubmitError('');
     try {
-      const res = await api.addSource({ id: sourceId || undefined, path, name: sourceName || undefined, federated }) as { runId: string };
+      const res = await api.addSource({ id: sourceId || undefined, path, name: sourceName || undefined, federated });
       const first = await api.run(res.runId) as ConsoleRun;
       setRegistrationRun(first);
       if (first.status !== 'running' && first.status !== 'queued') await reload();

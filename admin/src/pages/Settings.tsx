@@ -6,6 +6,12 @@ import type { ThemeMode } from '../lib/theme';
 import { MainSourceSettings } from './Knowledge';
 import { SourceManagementSettings } from './Sources';
 import { LoadingBlock, useOverview } from './console-shared';
+import type {
+  DreamScheduleResponse,
+  DreamSettingsResponse,
+  GenerativeUsageResponse,
+  ImportSettingsResponse,
+} from '../../../shared/contracts/index.ts';
 export function ModelConfigPage() {
   const { overview, reload } = useOverview();
   if (!overview) return <LoadingBlock />;
@@ -94,27 +100,9 @@ function MarkdownExportSettings() {
   );
 }
 
-interface DreamSettingsValue {
-  outputDir: string;
-  dualWrite: boolean;
-  defaultBrainDir: string | null;
-  resolvedOutputDir: string | null;
-  directoryExists?: boolean;
-}
+type DreamSettingsValue = DreamSettingsResponse;
 
-interface GenerativeUsageValue {
-  generative_enabled: boolean;
-  capabilities: {
-    semantic_search: boolean;
-    hybrid_search: boolean;
-    vectorization: boolean;
-    quick_maintenance: boolean;
-    ai_deep_organize: boolean;
-    ai_meeting_organize: boolean;
-  };
-  chat_model: string | null;
-  stopped_runs?: Array<{ id: string; kind: string; status: string }>;
-}
+type GenerativeUsageValue = GenerativeUsageResponse;
 
 function GenerativeModelSettings() {
   const [value, setValue] = useState<GenerativeUsageValue | null>(null);
@@ -125,7 +113,7 @@ function GenerativeModelSettings() {
 
   useEffect(() => {
     void api.generativeUsage()
-      .then(next => setValue(next as GenerativeUsageValue))
+      .then(next => setValue(next))
       .catch(nextError => setError(nextError instanceof Error ? nextError.message : String(nextError)))
       .finally(() => setLoading(false));
   }, []);
@@ -142,7 +130,7 @@ function GenerativeModelSettings() {
     setMessage('');
     setError('');
     try {
-      const next = await api.saveGenerativeUsage(enabled) as GenerativeUsageValue;
+      const next = await api.saveGenerativeUsage(enabled);
       setValue(next);
       const stopped = next.stopped_runs?.length ?? 0;
       setMessage(
@@ -208,6 +196,7 @@ function DreamSettings() {
     dualWrite: true,
     defaultBrainDir: null,
     resolvedOutputDir: null,
+    directoryExists: false,
   });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -218,7 +207,7 @@ function DreamSettings() {
   useEffect(() => {
     void api.dreamSettings()
       .then(value => {
-        const loaded = value as DreamSettingsValue;
+        const loaded = value;
         setSettings(loaded);
         setSavedOutputDir(loaded.outputDir);
       })
@@ -236,7 +225,7 @@ function DreamSettings() {
     setMessage('');
     setError('');
     try {
-      const saved = await api.saveDreamSettings({ ...settings, outputDir }) as DreamSettingsValue;
+      const saved = await api.saveDreamSettings({ ...settings, outputDir });
       setSettings(current => ({ ...current, ...saved }));
       setSavedOutputDir(saved.outputDir);
       setMessage('知识整理设置已保存');
@@ -259,7 +248,7 @@ function DreamSettings() {
     setMessage('');
     setError('');
     try {
-      const saved = await api.saveDreamSettings({ outputDir, dualWrite }) as DreamSettingsValue;
+      const saved = await api.saveDreamSettings({ outputDir, dualWrite });
       setSettings(current => ({ ...current, ...saved }));
       setSavedOutputDir(saved.outputDir);
       setMessage(dualWrite ? '已开启本地 Markdown 写入' : '已关闭本地 Markdown 写入');
@@ -341,12 +330,7 @@ function DreamSettings() {
   );
 }
 
-interface DreamScheduleSettingsValue {
-  enabled: boolean;
-  time: string;
-  lastStartedDate: string | null;
-  timeZone: string;
-}
+type DreamScheduleSettingsValue = DreamScheduleResponse;
 
 const DEFAULT_DREAM_SCHEDULE: DreamScheduleSettingsValue = {
   enabled: false,
@@ -366,7 +350,7 @@ function DreamScheduleSettings() {
   useEffect(() => {
     void api.dreamSchedule()
       .then(next => {
-        const loaded = next as DreamScheduleSettingsValue;
+        const loaded = next;
         setValue(loaded);
         setSaved(loaded);
       })
@@ -386,7 +370,7 @@ function DreamScheduleSettings() {
     setMessage('');
     setError('');
     try {
-      const next = await api.saveDreamSchedule({ enabled: value.enabled, time: value.time }) as DreamScheduleSettingsValue;
+      const next = await api.saveDreamSchedule({ enabled: value.enabled, time: value.time });
       setValue(next);
       setSaved(next);
       setMessage(next.enabled ? `已设置每天 ${next.time} 自动整理` : '已关闭定时一键整理');
@@ -445,11 +429,7 @@ function DreamScheduleSettings() {
     </section>
   );
 }
-interface ImportSettingsValue {
-  thresholdKb: number;
-  minKb: number;
-  maxKb: number;
-}
+type ImportSettingsValue = Omit<ImportSettingsResponse, 'bytesBlock'>;
 
 function ImportVectorizationSettings() {
   const [value, setValue] = useState<ImportSettingsValue>({ thresholdKb: 500, minKb: 100, maxKb: 5000 });
@@ -461,7 +441,7 @@ function ImportVectorizationSettings() {
   useEffect(() => {
     void api.importSettings()
       .then(next => {
-        const loaded = next as ImportSettingsValue;
+        const loaded = next;
         setValue(loaded);
         setSavedThresholdKb(loaded.thresholdKb);
       })
@@ -473,7 +453,7 @@ function ImportVectorizationSettings() {
     setMessage('');
     setError('');
     try {
-      const saved = await api.saveImportSettings(value.thresholdKb) as ImportSettingsValue;
+      const saved = await api.saveImportSettings(value.thresholdKb);
       setValue(saved);
       setSavedThresholdKb(saved.thresholdKb);
       setMessage('切片与向量化上限已保存');

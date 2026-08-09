@@ -49,6 +49,7 @@ export interface DesktopIpcHandlers {
   previousVersion: () => string | undefined;
   retry: () => Promise<string | undefined>;
   openLogs: () => Promise<void> | void;
+  exportDiagnosticBundle: () => Promise<unknown>;
 }
 
 function registerTrustedHandler(
@@ -104,5 +105,6 @@ export function registerDesktopIpcHandlers(handlers: DesktopIpcHandlers): void {
     if (url) await handlers.mainWindow()?.loadURL(url);
   });
   registerTrustedHandler('desktop:open-logs', handlers, () => handlers.openLogs());
+  registerTrustedHandler('desktop:export-diagnostic-bundle', handlers, () => handlers.exportDiagnosticBundle());
   registerTrustedHandler('desktop:quit', handlers, () => app.quit());
 }

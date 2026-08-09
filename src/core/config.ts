@@ -2,6 +2,7 @@
 import { isAbsolute, join } from 'path';
 import { homedir } from 'os';
 import type { EngineConfig, EmbeddingColumnConfig } from './types.ts';
+import { readCompatEnv } from './env-compat.ts';
 
 /**
  * Where is the active DB URL coming from? Pure introspection, no connection
@@ -27,7 +28,7 @@ function getConfigDir() { return configDir(); }
 function getConfigPath() { return configPath(); }
 
 function envCompat(primary: string, legacy: string): string | undefined {
-  return process.env[primary] ?? process.env[legacy];
+  return readCompatEnv(primary as `PMBRAIN_${string}`, legacy as `GBRAIN_${string}`);
 }
 
 export type EmbeddingEnvOverrideName =

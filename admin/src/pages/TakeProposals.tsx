@@ -87,8 +87,8 @@ export function TakeProposalsPage({
   const [sources, setSources] = useState<Array<{ id: string; name: string; page_count: number; archived?: boolean }>>([]);
 
   useEffect(() => {
-    api.dreamOverview().then((data: any) => {
-      setSources((data.overview?.sources ?? []).filter((s: any) => !s.archived));
+    api.dreamOverview().then((data) => {
+      setSources((data.overview?.sources ?? []).filter(s => !s.archived));
     }).catch(() => { /* 静默失败，Source ID 回退到输入框 */ });
   }, []);
 
@@ -147,11 +147,8 @@ export function TakeProposalsPage({
     setSourceError('');
     setSourceLoading(true);
     try {
-      const result = await api.brainPageChunks(proposal.source_id, proposal.page_slug) as {
-        chunks?: BrainPageChunk[];
-        rows?: BrainPageChunk[];
-      };
-      setSourceChunks(result.chunks ?? result.rows ?? []);
+      const result = await api.brainPageChunks(proposal.source_id, proposal.page_slug);
+      setSourceChunks(result.rows);
     } catch (err) {
       setSourceError(err instanceof Error ? err.message : String(err));
     } finally {

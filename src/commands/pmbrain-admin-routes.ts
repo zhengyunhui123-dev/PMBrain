@@ -77,6 +77,7 @@ import {
   sanitizeOutput,
 } from './admin-console.ts';
 import { runAdminKnowledgeSearch } from './admin-knowledge-search.ts';
+import { buildChecks as buildDoctorChecks } from './doctor.ts';
 import { waitForAdminSupervisorReady } from './admin-supervisor.ts';
 import {
   buildChatGptTunnelProfile,
@@ -106,6 +107,25 @@ import {
   queryFlag,
   removeAdminUploadTempDir,
 } from './pmbrain-admin-support.ts';
+import { sendAdminContract } from './admin-response-contract.ts';
+import {
+  BrainOverviewResponseSchema,
+  BrainPageChunksResponseSchema,
+  BrainPageDetailResponseSchema,
+  BrainPagesResponseSchema,
+  DreamOverviewResponseSchema,
+  DreamRunResponseSchema,
+  DreamScheduleResponseSchema,
+  DreamSettingsResponseSchema,
+  GenerativeUsageResponseSchema,
+  ImportRunResponseSchema,
+  ImportSettingsResponseSchema,
+  ImportUploadRunResponseSchema,
+  LlmStatusResponseSchema,
+  RunAcceptedResponseSchema,
+  SetDefaultSourceResponseSchema,
+  SourceAddResponseSchema,
+} from '../../shared/contracts/index.ts';
 
 export interface PmbrainAdminRouteOptions {
   app: express.Express;
@@ -143,7 +163,7 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
 
   app.get('/admin/api/brain/overview', requireAdmin, async (_req: Request, res: Response) => {
     try {
-      res.json(await getAdminBrainOverview(engine, config, VERSION));
+      sendAdminContract(res, BrainOverviewResponseSchema, await getAdminBrainOverview(engine, config, VERSION));
     } catch (e) {
       res.status(500).json({ error: e instanceof Error ? e.message : 'overview_failed' });
     }
@@ -183,7 +203,7 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
         return;
       }
       await engine.setConfig('sources.default', sourceId);
-      res.json({ sourceId });
+      sendAdminContract(res, SetDefaultSourceResponseSchema, { sourceId });
     } catch (e) {
       res.status(400).json({ error: e instanceof Error ? e.message : 'set_default_source_failed' });
     }
@@ -198,7 +218,7 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
 
   app.get('/admin/api/import/settings', requireAdmin, async (_req: Request, res: Response) => {
     try {
-      res.json(await importSettingsView());
+      sendAdminContract(res, ImportSettingsResponseSchema, await importSettingsView());
     } catch (e) {
       res.status(500).json({ error: e instanceof Error ? e.message : 'import_settings_failed' });
     }
@@ -213,7 +233,7 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
     try {
       const bytesBlock = thresholdKb * 1000;
       await engine.setConfig('content_sanity.bytes_block', String(bytesBlock));
-      res.json(await importSettingsView(bytesBlock));
+      sendAdminContract(res, ImportSettingsResponseSchema, await importSettingsView(bytesBlock));
     } catch (e) {
       res.status(500).json({ error: e instanceof Error ? e.message : 'save_import_settings_failed' });
     }
@@ -287,7 +307,7 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
 
   app.get('/admin/api/dream/schedule', requireAdmin, async (_req: Request, res: Response) => {
     try {
-      res.json(await dreamScheduleView());
+      sendAdminContract(res, DreamScheduleResponseSchema, await dreamScheduleView());
     } catch (e) {
       res.status(500).json({ error: e instanceof Error ? e.message : 'dream_schedule_settings_failed' });
     }
@@ -310,7 +330,7 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
         engine.setConfig(ADMIN_DREAM_SCHEDULE_TIME_KEY, time),
       ]);
       const view = await dreamScheduleView({ enabled, time });
-      res.json(view);
+      sendAdminContract(res, DreamScheduleResponseSchema, view);
       if (enabled) {
         const immediateCheck = setTimeout(() => void checkScheduledDream(), 0);
         immediateCheck.unref?.();
@@ -322,7 +342,7 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
 
   app.get('/admin/api/dream/overview', requireAdmin, async (_req: Request, res: Response) => {
     try {
-      res.json(await getAdminDreamOverview(engine, config, VERSION));
+      sendAdminContract(res, DreamOverviewResponseSchema, await getAdminDreamOverview(engine, config, VERSION));
     } catch (e) {
       res.status(500).json({ error: e instanceof Error ? e.message : 'dream_overview_failed' });
     }
@@ -353,7 +373,7 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
 
   app.get('/admin/api/dream/settings', requireAdmin, async (_req: Request, res: Response) => {
     try {
-      res.json(await dreamSettingsView());
+      sendAdminContract(res, DreamSettingsResponseSchema, await dreamSettingsView());
     } catch (e) {
       res.status(500).json({ error: e instanceof Error ? e.message : 'dream_settings_failed' });
     }
@@ -376,7 +396,7 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
 
   app.get('/admin/api/model-usage/generative', requireAdmin, async (_req: Request, res: Response) => {
     try {
-      res.json(await generativeUsageView());
+      sendAdminContract(res, GenerativeUsageResponseSchema, await generativeUsageView());
     } catch (e) {
       res.status(500).json({ error: e instanceof Error ? e.message : 'generative_usage_failed' });
     }
@@ -415,7 +435,7 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
           `[model-usage] generative disabled; stopped ${stopped.length} AI organize run(s).`,
         );
       }
-      res.json({ ...(await generativeUsageView()), stopped_runs: stopped });
+      sendAdminContract(res, GenerativeUsageResponseSchema, { ...(await generativeUsageView()), stopped_runs: stopped });
     } catch (e) {
       res.status(500).json({ error: e instanceof Error ? e.message : 'save_generative_usage_failed' });
     }
@@ -446,7 +466,7 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
         engine.setConfig('dream.synthesize.output_dir', outputDir),
         engine.setConfig('dream.synthesize.dual_write', dualWrite ? 'true' : 'false'),
       ]);
-      res.json(await dreamSettingsView({ outputDir, dualWrite }));
+      sendAdminContract(res, DreamSettingsResponseSchema, await dreamSettingsView({ outputDir, dualWrite }));
     } catch (e) {
       res.status(500).json({ error: e instanceof Error ? e.message : 'save_dream_settings_failed' });
     }
@@ -552,7 +572,7 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
 
   app.get('/admin/api/brain/pages', requireAdmin, async (req: Request, res: Response) => {
     try {
-      res.json(await listAdminBrainPages(engine, {
+      sendAdminContract(res, BrainPagesResponseSchema, await listAdminBrainPages(engine, {
         source: req.query.source as string | undefined,
         type: req.query.type as string | undefined,
         view: req.query.view as string | undefined,
@@ -575,7 +595,7 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
         res.status(404).json({ error: 'page_not_found' });
         return;
       }
-      res.json(page);
+      sendAdminContract(res, BrainPageDetailResponseSchema, page);
     } catch (e) {
       res.status(500).json({ error: e instanceof Error ? e.message : 'page_detail_failed' });
     }
@@ -617,14 +637,14 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
         res.status(400).json({ error: 'missing_page_identity' });
         return;
       }
-      res.json(await getAdminBrainPageChunks(engine, sourceId, slug, req.query.includeDeleted === '1'));
+      sendAdminContract(res, BrainPageChunksResponseSchema, await getAdminBrainPageChunks(engine, sourceId, slug, req.query.includeDeleted === '1'));
     } catch (e) {
       res.status(500).json({ error: e instanceof Error ? e.message : 'chunks_failed' });
     }
   });
 
   app.get('/admin/api/llm/status', requireAdmin, (_req: Request, res: Response) => {
-    res.json(getAdminLlmStatus(config));
+    sendAdminContract(res, LlmStatusResponseSchema, getAdminLlmStatus(config));
   });
 
   app.post('/admin/api/intent/preview', requireAdmin, express.json({ limit: '64kb' }), async (req: Request, res: Response) => {
@@ -642,7 +662,7 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
       const previewId = typeof req.body?.previewId === 'string' ? req.body.previewId : '';
       const confirmed = req.body?.confirmed === true;
       const run = await executePreview(engine, previewId, confirmed, process.cwd(), runHooks);
-      res.json({ runId: run.id, status: run.status });
+      sendAdminContract(res, RunAcceptedResponseSchema, { runId: run.id, status: run.status });
     } catch (e) {
       res.status(400).json({ error: e instanceof Error ? e.message : 'intent_execute_failed' });
     }
@@ -716,7 +736,7 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
         return;
       }
       const run = await startActionRun(action, process.cwd(), runHooks);
-      res.json({ runId: run.id, status: run.status });
+      sendAdminContract(res, RunAcceptedResponseSchema, { runId: run.id, status: run.status });
     } catch (e) {
       res.status(400).json({ error: e instanceof Error ? e.message : 'action_run_failed' });
     }
@@ -734,7 +754,7 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
         fresh: true,
         reportFiles: true,
       }, process.cwd(), runHooks);
-      res.json({ runId: run.id, status: run.status });
+      sendAdminContract(res, ImportRunResponseSchema, { runId: run.id, status: run.status });
     } catch (e) {
       res.status(400).json({ error: e instanceof Error ? e.message : 'import_run_failed' });
     }
@@ -807,7 +827,7 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
           await cleanup();
           releaseUpload();
         }
-        res.status(202).json({ runId: run.id, status: run.status, fileName });
+        sendAdminContract(res, ImportUploadRunResponseSchema, { runId: run.id, status: run.status, fileName }, 202);
       } catch (e) {
         if (tempDir) await removeAdminUploadTempDir(tempDir);
         releaseUpload();
@@ -847,7 +867,7 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
         to: typeof req.body?.to === 'string' ? req.body.to : undefined,
         timeoutMs: typeof req.body?.timeoutMs === 'number' ? req.body.timeoutMs : undefined,
       }, process.cwd(), runHooks);
-      res.json({ runId: run.id, status: run.status });
+      sendAdminContract(res, DreamRunResponseSchema, { runId: run.id, status: run.status });
     } catch (e) {
       const { errorPayloadFromGenerativeDisabled } = await import('../core/model-usage.ts');
       const generative = errorPayloadFromGenerativeDisabled(e);
@@ -867,7 +887,7 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
         name: typeof req.body?.name === 'string' ? req.body.name : undefined,
         federated: req.body?.federated !== false,
       }, process.cwd(), runHooks);
-      res.json({ runId: run.id, status: run.status });
+      sendAdminContract(res, SourceAddResponseSchema, { runId: run.id, status: run.status });
     } catch (e) {
       res.status(400).json({ error: e instanceof Error ? e.message : 'source_add_failed' });
     }
@@ -955,6 +975,15 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
       return;
     }
     res.json(run);
+  });
+
+  app.get('/admin/api/doctor', requireAdmin, async (_req: Request, res: Response) => {
+    try {
+      const checks = await buildDoctorChecks(engine, ['--fast', '--scope=brain']);
+      res.json({ mode: 'fast', scope: 'brain', checks });
+    } catch (e) {
+      res.status(500).json({ error: e instanceof Error ? e.message : 'doctor_failed' });
+    }
   });
   return { checkScheduledDream };
 }

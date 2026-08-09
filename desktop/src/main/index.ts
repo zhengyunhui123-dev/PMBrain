@@ -1,4 +1,5 @@
-import { app, nativeTheme, shell } from 'electron';
+import { app, dialog, nativeTheme, shell } from 'electron';
+import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { readAdvancedModelConfig, writeAdvancedModelConfig } from './advanced-model-config.js';
 import { installAppMenu, type SettingsPanel } from './app/menu-controller.js';
@@ -13,6 +14,7 @@ import {
 } from './config-manager.js';
 import { DatabaseUpgradeController } from './database/database-upgrade.js';
 import { PgliteBackupController } from './database/pglite-backup.js';
+import { buildDiagnosticBundle } from './diagnostics/diagnostic-bundle.js';
 import { SharedAccessController } from './integration/shared-access-controller.js';
 import { registerDesktopIpcHandlers } from './ipc-handlers.js';
 import { DesktopLogger } from './logs.js';
@@ -203,6 +205,55 @@ function reportUiActionError(title: string, error: unknown): void {
   windowController.reveal();
 }
 
+async function readReleaseManifest(): Promise<unknown> {
+  const candidates = [
+    join(app.getAppPath(), 'release-manifest.json'),
+    join(app.getAppPath(), '..', 'release-manifest.json'),
+    join(process.resourcesPath, 'release-manifest.json'),
+  ];
+  for (const path of candidates) {
+    try { return JSON.parse(await readFile(path, 'utf8')); } catch { /* try next packaged/dev location */ }
+  }
+  return null;
+}
+
+async function exportDiagnosticBundle(): Promise<{ path: string; fileName: string; files: string[] } | null> {
+  const setup = getSetupInfo();
+  const activeSidecar = sidecarController.current;
+  const [doctor, overview, releaseManifest] = await Promise.all([
+    activeSidecar?.adminRequest('/admin/api/doctor').catch(error => ({
+      status: 'unavailable', error: error instanceof Error ? error.message : String(error),
+    })) ?? Promise.resolve({ status: 'sidecar_not_ready' }),
+    activeSidecar?.adminRequest('/admin/api/brain/overview').catch(error => ({
+      status: 'unavailable', error: error instanceof Error ? error.message : String(error),
+    })) ?? Promise.resolve({ status: 'sidecar_not_ready' }),
+    readReleaseManifest(),
+  ]);
+  const bundle = await buildDiagnosticBundle({
+    desktopVersion: app.getVersion(),
+    releaseManifest,
+    setup,
+    sidecarState: sidecarController.state,
+    updateState: updateController.currentState,
+    logPath: logger?.filePath,
+    doctor,
+    overview,
+    personalPaths: [app.getPath('home'), app.getPath('userData')],
+  });
+  const mainWindow = windowController.current;
+  if (!mainWindow) throw new Error('PMBrain desktop window is not ready.');
+  const selected = await dialog.showSaveDialog(mainWindow, {
+    title: '导出 PMBrain 诊断包',
+    defaultPath: join(app.getPath('documents'), bundle.fileName),
+    filters: [{ name: 'ZIP archive', extensions: ['zip'] }],
+  });
+  if (selected.canceled || !selected.filePath) return null;
+  await writeFile(selected.filePath, bundle.data, { flag: 'w' });
+  await shell.showItemInFolder(selected.filePath);
+  logger?.write('desktop', `Diagnostic bundle exported: ${selected.filePath}`);
+  return { path: selected.filePath, fileName: bundle.fileName, files: bundle.files };
+}
+
 async function openSettingsPanel(panel: SettingsPanel): Promise<void> {
   await windowController.showShell();
   windowController.current?.webContents.send('desktop:show-panel', panel);
@@ -296,6 +347,7 @@ if (!app.requestSingleInstanceLock()) {
       openLogs: () => {
         if (logger) return shell.showItemInFolder(logger.filePath);
       },
+      exportDiagnosticBundle,
     });
     lanController.startMonitor(LAN_MONITOR_INTERVAL_MS);
     await windowController.create();

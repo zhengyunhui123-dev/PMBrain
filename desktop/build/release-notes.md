@@ -1,3 +1,10 @@
+## PMBrain 1.1.13
+
+- Admin 的知识库、Dream、导入、模型与 Source 接口采用共享 Zod 合同，前后端字段不一致会在测试或接口边界直接报错。
+- 新增可脱敏的一键诊断包，包含版本、Doctor、数据库/模型/MCP/更新状态和近期日志，不包含知识库或数据库文件。
+- 发布流程新增统一 release manifest 与 Admin 生成物一致性检查；新增 100 问中文项目知识检索基准。
+- 修复后台任务停滞扫描可能重入和 Markdown 摘要截断 Unicode 代理对的问题，保留现有数据库架构与 GBrain 环境变量兼容。
+
 ## PMBrain 1.1.12
 
 - 新增真实 Desktop/Admin/PGLite/MCP 核心用户路径 E2E，并在发布后用上一版 NSIS 验证自动更新和数据保留。

@@ -1,49 +1,11 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { api, isPgliteBusyError } from '../api';
+import type {
+  BrainOverviewResponse as BrainOverview,
+  SourceSummary,
+} from '../../../shared/contracts/brain.ts';
 
-export interface SourceSummary {
-  id: string;
-  name: string;
-  local_path: string | null;
-  git_repo: boolean;
-  federated: boolean;
-  page_count: number;
-  last_sync_at: string | null;
-  archived?: boolean;
-  archived_at?: string | null;
-  archive_expires_at?: string | null;
-}
-
-export interface BrainOverview {
-  version: string;
-  engine: string;
-  schema_pack: string;
-  chat_model: string | null;
-  embedding_model: string | null;
-  embedding_dimensions: number | null;
-  expansion_model: string | null;
-  stats: {
-    page_count: number;
-    chunk_count: number;
-    embedded_count: number;
-    link_count: number;
-    tag_count: number;
-    timeline_entry_count: number;
-    pages_by_type: Record<string, number>;
-  };
-  embedding_coverage: number;
-  pending_embeddings: number;
-  recent_write_at: string | null;
-  sources: SourceSummary[];
-  main_source_id: string;
-  federated_source_count: number;
-  provider_status: {
-    providers: Record<string, boolean>;
-    chat: { enabled: boolean; chat_model: string | null; provider: string | null; missing: string[] };
-  };
-  llm_enabled: boolean;
-  config: Record<string, unknown>;
-}
+export type { BrainOverview, SourceSummary };
 
 export function pct(value: number): string {
   return `${Number.isFinite(value) ? value.toFixed(value % 1 === 0 ? 0 : 1) : '0'}%`;
@@ -70,7 +32,7 @@ export function useOverview() {
 
   const load = useCallback(async () => {
     try {
-      setOverview(await api.brainOverview() as BrainOverview);
+      setOverview(await api.brainOverview());
       setError('');
       setPgliteBusy(false);
     } catch (error) {

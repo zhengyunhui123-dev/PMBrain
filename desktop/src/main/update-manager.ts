@@ -1,30 +1,9 @@
 import type { DesktopLogger } from './logs.js';
 import { basename } from 'node:path';
+import { UpdateStateSchema } from '../../../shared/contracts/updates.ts';
+import type { UpdatePhase, UpdateState } from '../../../shared/contracts/updates.ts';
 
-export type UpdatePhase =
-  | 'disabled'
-  | 'idle'
-  | 'checking'
-  | 'available'
-  | 'downloading'
-  | 'downloaded'
-  | 'installing'
-  | 'up-to-date'
-  | 'error';
-
-export interface UpdateState {
-  phase: UpdatePhase;
-  currentVersion: string;
-  availableVersion?: string;
-  releaseDate?: string;
-  releaseNotes?: string;
-  fileName?: string;
-  percent?: number;
-  transferred?: number;
-  total?: number;
-  bytesPerSecond?: number;
-  message: string;
-}
+export type { UpdatePhase, UpdateState };
 
 interface UpdateInfo {
   version: string;
@@ -271,8 +250,9 @@ export class UpdateManager {
   }
 
   private emit(state: UpdateState): void {
-    this.state = state;
-    this.options.logger.write('updater', state.message);
-    this.options.onState?.(state);
+    const validated = UpdateStateSchema.parse(state);
+    this.state = validated;
+    this.options.logger.write('updater', validated.message);
+    this.options.onState?.(validated);
   }
 }

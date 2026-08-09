@@ -28,41 +28,10 @@ import {
   type BrainOverview,
   type SourceSummary,
 } from './console-shared';
-
-interface BrainPageRow {
-  id: number;
-  slug: string;
-  title: string | null;
-  source_id: string;
-  type: string;
-  updated_at: string;
-  deleted_at: string | null;
-  chunk_count: number;
-  embedded_chunks: number;
-  tag_count: number;
-  frontmatter: unknown;
-  preview: string;
-}
-
-interface BrainPageDetail {
-  id: number;
-  slug: string;
-  title: string;
-  source_id: string;
-  source_name: string | null;
-  source_path: string | null;
-  type: string;
-  page_kind: string;
-  compiled_truth: string;
-  timeline: string;
-  frontmatter: unknown;
-  source_kind: string | null;
-  source_uri: string | null;
-  created_at: string;
-  updated_at: string;
-  takes: Array<{ row_num: number; claim: string; kind: string; holder: string; weight: number; source: string | null }>;
-}
-
+import type {
+  BrainPageDetailResponse as BrainPageDetail,
+  BrainPageRow,
+} from '../../../shared/contracts/brain.ts';
 
 export function BrainDataPage() {
   const { overview } = useOverview();
@@ -88,8 +57,8 @@ export function BrainDataPage() {
     if (filters.view !== 'all') qs.set('view', filters.view);
     if (filters.embedded !== 'all') qs.set('embedded', filters.embedded);
     if (filters.q.trim()) qs.set('q', filters.q.trim());
-    const data = await api.brainPages(`?${qs.toString()}`) as any;
-    setRows(data.rows as BrainPageRow[]);
+    const data = await api.brainPages(`?${qs.toString()}`);
+    setRows(data.rows);
     setMeta({ total: data.total, page: data.page, pages: data.pages, limit: data.limit ?? filters.pageSize });
   }, [filters]);
 
@@ -115,9 +84,9 @@ export function BrainDataPage() {
       api.brainPage(selected.source_id, selected.slug, filters.view === 'trash'),
       api.brainPageChunks(selected.source_id, selected.slug, filters.view === 'trash'),
     ])
-      .then(([page, chunkData]: any[]) => {
-        setDetail(page as BrainPageDetail);
-        setChunks(chunkData.rows as BrainPageChunk[]);
+      .then(([page, chunkData]) => {
+        setDetail(page);
+        setChunks(chunkData.rows);
       })
       .catch(e => setChunksError(e instanceof Error ? e.message : String(e)))
       .finally(() => setChunksLoading(false));

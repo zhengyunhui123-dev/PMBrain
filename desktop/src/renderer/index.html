@@ -403,6 +403,10 @@
             <div><span>DATABASE BACKUPS</span><b id="repair-backup-count">等待读取备份清单</b></div>
             <p id="repair-database-path">当前数据库：等待读取</p>
           </div>
+          <article class="diagnostic-export-card">
+            <div><span>SUPPORT BUNDLE</span><h3>导出脱敏诊断包</h3><p>收集版本、Doctor、桌面与 Sidecar 日志、数据库/模型/MCP/更新状态和近期错误。不会打包数据库或知识内容，API Key、Token、密码和个人路径会自动脱敏。</p></div>
+            <button class="primary" id="export-diagnostic"><span>导出诊断包</span><i></i></button>
+          </article>
           <div class="repair-backup-list" id="repair-backup-list" aria-live="polite">
             <div class="repair-empty">打开本页后读取已验证的升级前数据库备份。</div>
           </div>
