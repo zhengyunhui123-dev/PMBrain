@@ -1784,15 +1784,13 @@ async function handleCliOnly(command: string, args: string[]) {
       }
     }
   } finally {
-    if (command === 'import') {
-      // Admin/Desktop imports run in a child process after the Sidecar releases
-      // its PGLite lock. If PGLite finishes the import but wedges while closing,
-      // an unbounded disconnect leaves the Admin run stuck at "running" and the
-      // parent database disconnected forever. Preserve the normal clean close,
-      // but force-exit the already-completed one-shot child after a hard deadline.
-      await disconnectCliEngine(engine, 'import');
-    } else if (command !== 'serve') {
-      await engine.disconnect();
+    if (command !== 'serve') {
+      // Desktop setup and Admin tasks invoke several one-shot CLI children
+      // (models, sources, import, ...). If PGLite finishes the command but
+      // wedges while closing, an unbounded disconnect leaves the Desktop wait
+      // overlay or Admin run stuck forever. Preserve the normal clean close,
+      // but force-exit only the already-completed child after a hard deadline.
+      await disconnectCliEngine(engine, command);
     }
   }
 }

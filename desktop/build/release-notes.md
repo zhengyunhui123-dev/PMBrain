@@ -1,6 +1,6 @@
 ## PMBrain 1.1.15
 
-- 修复 PGLite 导入已经完成但数据库关闭句柄卡住时，Admin 长时间停留在“执行中”的问题；Windows CI 现在会真实验证打包 Sidecar 连续上传 Markdown 和 PDF。
+- 修复 PGLite 一次性命令已经完成但数据库关闭句柄卡住时，首次配置或 Admin 长时间停留在“处理中”的问题；Windows CI 现在会真实验证打包 Sidecar 连续上传 Markdown 和 PDF。
 - 修复不同 Windows 构建环境生成 Admin HTML 空行不一致的问题，并同步更新只验证 Windows Desktop Runtime 的 CI 契约。
 - 可信的大型 PDF、Word、PPT 和 Excel 文档不再因结构化正文超过 500KB 而整篇跳过向量化；普通 Markdown、MCP、Webhook 和远程输入仍保留原安全限制。
 - 大文档按章节生成带文档名、章节路径和页码等定位信息的 Chunk，分批持久化向量；中断后可从已完成 Chunk 继续，仅修改章节时复用未变化的向量。
