@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import { dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
   isAllowedWindowNavigationUrl,
@@ -6,8 +7,9 @@ import {
   type DesktopWindowTrustContext,
 } from '../src/main/window-security.ts';
 
+const rendererPath = resolve(import.meta.dir, 'fixture-renderer', 'index.html');
 const context: DesktopWindowTrustContext = {
-  rendererPath: 'D:\\PMBrain\\desktop\\renderer\\index.html',
+  rendererPath,
   rendererUrl: 'http://127.0.0.1:5174/admin/',
   sidecarPort: 3131,
 };
@@ -17,7 +19,7 @@ describe('desktop window trust boundary', () => {
     expect(isTrustedDesktopShellUrl(pathToFileURL(context.rendererPath).href, context)).toBe(true);
     expect(isTrustedDesktopShellUrl('http://127.0.0.1:5174/settings', context)).toBe(true);
     expect(isTrustedDesktopShellUrl('http://127.0.0.1:5175/settings', context)).toBe(false);
-    expect(isTrustedDesktopShellUrl('file:///D:/PMBrain/desktop/renderer/other.html', context)).toBe(false);
+    expect(isTrustedDesktopShellUrl(pathToFileURL(resolve(dirname(rendererPath), 'other.html')).href, context)).toBe(false);
   });
 
   test('allows the local Sidecar port but rejects remote or mismatched navigation', () => {

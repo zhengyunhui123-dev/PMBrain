@@ -6,8 +6,8 @@ const rendererSource = readFileSync(
   resolve(import.meta.dir, '../src/renderer/src.ts'),
   'utf8',
 );
-const mainSource = readFileSync(
-  resolve(import.meta.dir, '../src/main/index.ts'),
+const updateControllerSource = readFileSync(
+  resolve(import.meta.dir, '../src/main/updates/update-controller.ts'),
   'utf8',
 );
 
@@ -23,8 +23,8 @@ describe('desktop release notes rendering', () => {
   });
 
   test('reads the packaged release notes when initializing the updater', () => {
-    expect(mainSource).toContain("join(process.resourcesPath, 'release-notes.md')");
-    expect(mainSource).toContain("join(app.getAppPath(), 'build', 'release-notes.md')");
-    expect(mainSource).toContain('currentReleaseNotes: readCurrentReleaseNotes(),');
+    expect(updateControllerSource).toContain("join(process.resourcesPath, 'release-notes.md')");
+    expect(updateControllerSource).toContain("join(app.getAppPath(), 'build', 'release-notes.md')");
+    expect(updateControllerSource).toContain('currentReleaseNotes: this.readCurrentReleaseNotes(),');
   });
 });
