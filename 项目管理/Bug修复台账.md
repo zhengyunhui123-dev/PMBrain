@@ -1,5 +1,14 @@
 # Bug 修复台账
 
+## 2026-08-09 修复结构化导入 PR 的 CI 契约漂移
+
+- 时间：2026-08-09
+- 版本号：PMBrain 1.2.17；PMBrain Desktop 1.1.15
+- 标题：修复 Admin 生成物、Windows Runtime、README、桌面结构和向量维度测试漂移
+- 描述：Admin Vite 在不同 Windows runner 下会保留不同的 root/body 空行并改变发布清单 hash；旧测试仍要求 macOS/Linux Desktop Runtime、旧 README 文案和精确的 Desktop 入口行数；向量列测试还把旧 1536 维默认值写死，无法兼容当前配置或数据库实际维度。
+- 是否完成：是
+- 最终结果：Admin 生成物归一化新增跨平台 HTML 空行规则；Desktop Runtime 契约只验证 Windows；README 锚点改为当前产品语义并补充结构化文档能力；桌面结构测试保留职责断言并取消精确行数耦合；向量测试从测试数据库读取实际维度。五组定向测试 22/22 通过，Admin 重建后生成物无差异；未修改数据库 Schema、用户数据、知识库、Wiki、向量或原始资料，未运行 `bun run build:win`。
+
 ## 2026-08-09 修复打包后 Excel 导入与 UTF-8 CSV 乱码
 
 - 时间：2026-08-09

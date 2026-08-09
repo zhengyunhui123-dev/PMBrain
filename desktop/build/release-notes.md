@@ -1,5 +1,6 @@
 ## PMBrain 1.1.15
 
+- 修复不同 Windows 构建环境生成 Admin HTML 空行不一致的问题，并同步更新只验证 Windows Desktop Runtime 的 CI 契约。
 - 可信的大型 PDF、Word、PPT 和 Excel 文档不再因结构化正文超过 500KB 而整篇跳过向量化；普通 Markdown、MCP、Webhook 和远程输入仍保留原安全限制。
 - 大文档按章节生成带文档名、章节路径和页码等定位信息的 Chunk，分批持久化向量；中断后可从已完成 Chunk 继续，仅修改章节时复用未变化的向量。
 - 文档导入升级为本地结构化解析：PDF、Word、PPT 和 Excel 统一保留章节、列表、表格及页码、幻灯片、工作表定位。

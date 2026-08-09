@@ -32,21 +32,22 @@ describe('README hero anchors (D9 regression guard)', () => {
   });
 
   test('credits the GBrain upstream project', () => {
-    expect(hero).toContain('基于 [GBrain]');
+    expect(hero).toContain('项目以 [GBrain]');
+    expect(hero).toContain('底层逻辑基线');
   });
 
   test('keeps the local-first positioning', () => {
-    expect(hero).toContain('数据本地化');
+    expect(hero).toContain('本地优先');
   });
 
   test('names the hybrid search and knowledge graph capabilities', () => {
-    expect(hero).toContain('混合搜索引擎');
-    expect(hero).toContain('知识图谱');
+    expect(hero).toContain('混合检索');
+    expect(hero).toContain('关系');
   });
 
   test('shows the direct office-document import promise', () => {
-    expect(readme).toContain('导入即用，无需转换格式');
-    expect(readme).toContain('.docx');
-    expect(readme).toContain('.pdf');
+    expect(readme).toContain('结构化文档导入');
+    expect(readme).toContain('DOCX');
+    expect(readme).toContain('PDF');
   });
 });

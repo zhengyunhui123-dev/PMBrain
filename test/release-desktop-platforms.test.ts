@@ -9,6 +9,7 @@ const desktopBuilderConfig = readFileSync(join(process.cwd(), 'desktop/electron-
 const releaseNotes = readFileSync(join(process.cwd(), 'desktop/build/release-notes.md'), 'utf8');
 const desktopPackage = JSON.parse(readFileSync(join(process.cwd(), 'desktop/package.json'), 'utf8')) as { version: string };
 const rootPackage = JSON.parse(readFileSync(join(process.cwd(), 'package.json'), 'utf8')) as { scripts: Record<string, string> };
+const desktopRuntimeJob = testWorkflow.match(/\n  desktop-runtime:[\s\S]*?\n  cache-write:/)?.[0] ?? '';
 
 describe('Windows desktop release gates', () => {
   test('electron-builder writes the version release notes into updater metadata', () => {
@@ -45,12 +46,11 @@ describe('Windows desktop release gates', () => {
     }
   });
 
-  test('normal Test CI runs the runtime smoke on all desktop platforms', () => {
-    expect(testWorkflow).toContain('desktop-runtime');
-    expect(testWorkflow).toContain('windows-latest');
-    expect(testWorkflow).toContain('macos-latest');
-    expect(testWorkflow).toContain('ubuntu-latest');
-    expect(testWorkflow).toContain('bun run verify:runtime');
+  test('normal Test CI runs the runtime smoke on the supported Windows desktop', () => {
+    expect(desktopRuntimeJob).toContain('windows-latest');
+    expect(desktopRuntimeJob).not.toContain('macos-latest');
+    expect(desktopRuntimeJob).not.toContain('ubuntu-latest');
+    expect(desktopRuntimeJob).toContain('bun run verify:runtime');
   });
 
   test('heavy operational tests run automatically for every master change and pull request', () => {
