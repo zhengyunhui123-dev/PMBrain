@@ -33,7 +33,10 @@ describe('Admin scheduled one-click organization', () => {
   });
 
   test('reuses the same quick-maintenance Dream run as the knowledge organize page', () => {
-    const serveSource = readFileSync(join(ROOT, 'src/commands/serve-http.ts'), 'utf8');
+    const serveSource = [
+      'src/commands/serve-http.ts',
+      'src/commands/pmbrain-admin-routes.ts',
+    ].map(path => readFileSync(join(ROOT, path), 'utf8')).join('\n');
     const dreamSource = readFileSync(join(ROOT, 'admin/src/pages/Dream.tsx'), 'utf8');
     expect(serveSource).toContain("app.get('/admin/api/dream/schedule'");
     expect(serveSource).toContain("app.post('/admin/api/dream/schedule'");
@@ -48,13 +51,13 @@ describe('Admin scheduled one-click organization', () => {
   });
 
   test('settings UI has a daily time and a dirty-state save button', () => {
-    const consoleSource = readFileSync(join(ROOT, 'admin/src/pages/Console.tsx'), 'utf8');
+    const settingsSource = readFileSync(join(ROOT, 'admin/src/pages/Settings.tsx'), 'utf8');
     const apiSource = readFileSync(join(ROOT, 'admin/src/api.ts'), 'utf8');
-    expect(consoleSource).toContain('<h2>定时一键整理</h2>');
-    expect(consoleSource).toContain('快速维护');
-    expect(consoleSource).toContain('type="time"');
-    expect(consoleSource).toContain('!dirty || !validTime');
-    expect(consoleSource).toContain('当天服务恢复后补跑');
+    expect(settingsSource).toContain('<h2>定时一键整理</h2>');
+    expect(settingsSource).toContain('快速维护');
+    expect(settingsSource).toContain('type="time"');
+    expect(settingsSource).toContain('!dirty || !validTime');
+    expect(settingsSource).toContain('当天服务恢复后补跑');
     expect(apiSource).toContain("apiFetch('/admin/api/dream/schedule'");
   });
 });

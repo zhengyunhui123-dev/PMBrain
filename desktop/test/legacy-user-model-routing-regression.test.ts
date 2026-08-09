@@ -7,28 +7,29 @@
  * C. 普通模型保存不静默删除 A/B；仅 resetAdvanced=true 时整批清除
  */
 import { describe, expect, test } from 'bun:test';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-const main = readFileSync(resolve('src/main/index.ts'), 'utf8');
+const main = readdirSync(resolve('src/main'), { recursive: true })
+  .filter((path): path is string => typeof path === 'string' && path.endsWith('.ts'))
+  .sort()
+  .map(path => readFileSync(resolve('src/main', path), 'utf8'))
+  .join('\n');
+const modelSync = readFileSync(resolve('src/main/models/model-config-sync.ts'), 'utf8');
 const renderer = readFileSync(resolve('src/renderer/src.ts'), 'utf8');
 const html = readFileSync(resolve('src/renderer/index.html'), 'utf8');
 const advanced = readFileSync(resolve('src/main/advanced-model-config.ts'), 'utf8');
 const configManager = readFileSync(resolve('src/main/config-manager.ts'), 'utf8');
 
 function sliceSyncModelDefaults(): string {
-  const start = main.indexOf('async function syncModelDefaultsToConfigFile');
-  expect(start).toBeGreaterThan(-1);
-  const end = main.indexOf('\nasync function ensureServiceReady', start);
-  expect(end).toBeGreaterThan(start);
-  return main.slice(start, end);
+  return modelSync;
 }
 
 describe('老用户回归矩阵 · 桌面模型路由', () => {
   test('场景A · 普通模型保存默认不重置 models.tier.*（高级面板配置应保留）', () => {
     expect(renderer).toContain('resetAdvancedModelRouting: false');
     const body = sliceSyncModelDefaults();
-    const resetBlock = body.match(/if \(opts\.resetAdvanced\) \{[\s\S]*?\n  \}/)?.[0] ?? '';
+    const resetBlock = body.match(/if \(options\.resetAdvanced\) \{[\s\S]*?\n  \}/)?.[0] ?? '';
     expect(resetBlock).toContain("['config', 'unset', '--pattern', 'models.tier.']");
     expect(resetBlock).toContain("['config', 'unset', '--pattern', 'models.dream.']");
     expect(advanced).toContain('models.tier.${tier}');
@@ -37,11 +38,11 @@ describe('老用户回归矩阵 · 桌面模型路由', () => {
 
   test('场景B · Dream 阶段覆盖属于高级模型：可配置且普通保存不静默删除', () => {
     const body = sliceSyncModelDefaults();
-    const resetBlock = body.match(/if \(opts\.resetAdvanced\) \{[\s\S]*?\n  \}/)?.[0] ?? '';
+    const resetBlock = body.match(/if \(options\.resetAdvanced\) \{[\s\S]*?\n  \}/)?.[0] ?? '';
     expect(resetBlock).toContain('models.propose_takes');
     expect(resetBlock).toContain('models.grade_takes');
     expect(resetBlock).toContain('models.calibration_profile');
-    const outside = body.replace(/if \(opts\.resetAdvanced\) \{[\s\S]*?\n  \}/, '');
+    const outside = body.replace(/if \(options\.resetAdvanced\) \{[\s\S]*?\n  \}/, '');
     expect(outside).not.toContain("for (const key of ['models.propose_takes'");
     expect(html).toContain('Dream 阶段模型');
     expect(html).toContain('data-advanced-phase="propose_takes"');
@@ -52,8 +53,8 @@ describe('老用户回归矩阵 · 桌面模型路由', () => {
   test('场景C · 只有显式 resetAdvanced 才清理 tier / dream / 阶段覆盖', () => {
     expect(main).toContain('resetAdvanced: payload.resetAdvancedModelRouting === true');
     const body = sliceSyncModelDefaults();
-    expect(body).toMatch(/if \(opts\.resetAdvanced\) \{[\s\S]*models\.tier\.[\s\S]*models\.dream\./);
-    expect(body).toMatch(/if \(opts\.resetAdvanced\) \{[\s\S]*models\.propose_takes/);
+    expect(body).toMatch(/if \(options\.resetAdvanced\) \{[\s\S]*models\.tier\.[\s\S]*models\.dream\./);
+    expect(body).toMatch(/if \(options\.resetAdvanced\) \{[\s\S]*models\.propose_takes/);
   });
 
   test('场景D · 向量模型真实变更必须二次确认，取消则主进程拒绝', () => {

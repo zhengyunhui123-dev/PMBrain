@@ -6,9 +6,13 @@ import {
   summarizeImportRun,
 } from '../admin/src/lib/import-summary.ts';
 
-const consoleSource = readFileSync(join(import.meta.dir, '..', 'admin', 'src', 'pages', 'Console.tsx'), 'utf8');
+const consoleSource = [
+  join(import.meta.dir, '..', 'admin', 'src', 'pages', 'Import.tsx'),
+  join(import.meta.dir, '..', 'admin', 'src', 'pages', 'import', 'import-support.tsx'),
+].map(path => readFileSync(path, 'utf8')).join('\n');
+const settingsSource = readFileSync(join(import.meta.dir, '..', 'admin', 'src', 'pages', 'Settings.tsx'), 'utf8');
 const naturalApiSource = readFileSync(join(import.meta.dir, '..', 'src', 'commands', 'natural-lang', 'api.ts'), 'utf8');
-const serveHttpSource = readFileSync(join(import.meta.dir, '..', 'src', 'commands', 'serve-http.ts'), 'utf8');
+const serveHttpSource = readFileSync(join(import.meta.dir, '..', 'src', 'commands', 'pmbrain-admin-routes.ts'), 'utf8');
 const importSource = readFileSync(join(import.meta.dir, '..', 'src', 'commands', 'import.ts'), 'utf8');
 
 describe('Admin folder import summary', () => {
@@ -131,11 +135,11 @@ describe('Admin import behavior contracts', () => {
   });
 
   test('save buttons are concise and disabled until their values change', () => {
-    expect(consoleSource).toContain("const [savedOutputDir, setSavedOutputDir] = useState('output')");
-    expect(consoleSource).toContain('!outputDirDirty');
-    expect(consoleSource).toContain("saving ? '正在保存…' : '保存'");
-    expect(consoleSource).toContain('value.thresholdKb === savedThresholdKb');
-    expect(consoleSource).not.toContain("saving ? '正在保存…' : '保存设置'");
+    expect(settingsSource).toContain("const [savedOutputDir, setSavedOutputDir] = useState('output')");
+    expect(settingsSource).toContain('!outputDirDirty');
+    expect(settingsSource).toContain("saving ? '正在保存…' : '保存'");
+    expect(settingsSource).toContain('value.thresholdKb === savedThresholdKb');
+    expect(settingsSource).not.toContain("saving ? '正在保存…' : '保存设置'");
   });
 
   test('Admin re-walks files, reports each result and allows long folder imports', () => {

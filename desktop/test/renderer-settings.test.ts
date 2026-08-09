@@ -1,11 +1,15 @@
 import { describe, expect, test } from 'bun:test';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 const html = readFileSync(resolve('src/renderer/index.html'), 'utf8');
 const renderer = readFileSync(resolve('src/renderer/src.ts'), 'utf8');
 const styles = readFileSync(resolve('src/renderer/style.css'), 'utf8');
-const main = readFileSync(resolve('src/main/index.ts'), 'utf8');
+const main = readdirSync(resolve('src/main'), { recursive: true })
+  .filter((path): path is string => typeof path === 'string' && path.endsWith('.ts'))
+  .sort()
+  .map(path => readFileSync(resolve('src/main', path), 'utf8'))
+  .join('\n');
 const preload = readFileSync(resolve('src/preload/index.ts'), 'utf8');
 const builder = readFileSync(resolve('electron-builder.yml'), 'utf8');
 const preview = readFileSync(resolve('scripts/preview-renderer.ts'), 'utf8');

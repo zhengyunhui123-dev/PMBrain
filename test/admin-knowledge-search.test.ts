@@ -16,7 +16,7 @@ describe('Admin knowledge workbench search modes', () => {
   });
 
   test('serve exposes knowledge-search API and does not route workbench search through think', () => {
-    const serveSource = readFileSync(join(ROOT, 'src/commands/serve-http.ts'), 'utf8');
+    const serveSource = readFileSync(join(ROOT, 'src/commands/pmbrain-admin-routes.ts'), 'utf8');
     const helperSource = readFileSync(join(ROOT, 'src/commands/admin-knowledge-search.ts'), 'utf8');
     expect(serveSource).toContain("app.post('/admin/api/knowledge-search'");
     expect(serveSource).toContain('runAdminKnowledgeSearch');
@@ -27,7 +27,10 @@ describe('Admin knowledge workbench search modes', () => {
   });
 
   test('workbench search button supports keyword/semantic toggle and calls knowledgeSearch', () => {
-    const consoleSource = readFileSync(join(ROOT, 'admin/src/pages/Console.tsx'), 'utf8');
+    const consoleSource = [
+      'admin/src/pages/Import.tsx',
+      'admin/src/pages/import/import-support.tsx',
+    ].map(path => readFileSync(join(ROOT, path), 'utf8')).join('\n');
     const apiSource = readFileSync(join(ROOT, 'admin/src/api.ts'), 'utf8');
     expect(apiSource).toContain("apiFetch('/admin/api/knowledge-search'");
     expect(consoleSource).toContain("type KnowledgeSearchMode = 'keyword' | 'semantic'");

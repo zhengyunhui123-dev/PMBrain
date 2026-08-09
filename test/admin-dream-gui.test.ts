@@ -5,7 +5,11 @@ import { buildDreamOutcome, describeDreamRun, dreamRunDeltas, isKnowledgeJourney
 import type { ConsoleRun } from '../admin/src/lib/shared.tsx';
 
 const dream = readFileSync(join(process.cwd(), 'admin/src/pages/Dream.tsx'), 'utf8');
-const consolePage = readFileSync(join(process.cwd(), 'admin/src/pages/Console.tsx'), 'utf8');
+const consolePage = [
+  'admin/src/pages/Knowledge.tsx',
+  'admin/src/pages/Sources.tsx',
+].map(path => readFileSync(join(process.cwd(), path), 'utf8')).join('\n');
+const settingsPage = readFileSync(join(process.cwd(), 'admin/src/pages/Settings.tsx'), 'utf8');
 const app = readFileSync(join(process.cwd(), 'admin/src/App.tsx'), 'utf8');
 const api = readFileSync(join(process.cwd(), 'src/commands/natural-lang/api.ts'), 'utf8');
 
@@ -326,11 +330,11 @@ describe('Dream GUI product contract', () => {
   });
 
   test('Dream settings explain relative paths with a resolved directory preview', () => {
-    expect(consolePage).toContain('默认 Dream 目录');
-    expect(consolePage).toContain('当前实际输出目录');
-    expect(consolePage).toContain('填写 <code>output</code> 不需要盘符');
-    expect(consolePage).toContain('高级设置选择其他 Source 时');
-    expect(consolePage).toContain('目录不存在会自动创建；已经存在则直接复用，不会清空目录');
+    expect(settingsPage).toContain('默认 Dream 目录');
+    expect(settingsPage).toContain('当前实际输出目录');
+    expect(settingsPage).toContain('填写 <code>output</code> 不需要盘符');
+    expect(settingsPage).toContain('高级设置选择其他 Source 时');
+    expect(settingsPage).toContain('目录不存在会自动创建；已经存在则直接复用，不会清空目录');
   });
 
   test('selected run mode survives the data reload after a run completes', () => {

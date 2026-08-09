@@ -160,10 +160,10 @@ describe('PGLite upgrade scenarios A–E', () => {
 
 describe('desktop migration single-owner contract', () => {
   test('13. desktop main defers PGLite migration to sidecar (no overlapping CLI owner)', () => {
-    const main = readFileSync(join(import.meta.dir, '../desktop/src/main/index.ts'), 'utf8');
-    expect(main).toContain("setup.current.engine === 'pglite'");
-    expect(main).toContain('PGLite single-owner');
-    expect(main).toContain('defer schema apply to sidecar');
+    const database = readFileSync(join(import.meta.dir, '../desktop/src/main/database/database-upgrade.ts'), 'utf8');
+    expect(database).toContain("setup.current.engine === 'pglite'");
+    expect(database).toContain('PGLite migrations delegated to sidecar');
+    expect(database).toContain('pgliteBackup.ensureUpgradeBackup');
   });
 
   test('20. diagnostic-mode skips Dream schedule and supervisor', () => {

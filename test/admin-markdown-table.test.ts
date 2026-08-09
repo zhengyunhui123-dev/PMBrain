@@ -28,7 +28,10 @@ describe('Admin Markdown table preview', () => {
   });
 
   test('renders parsed tables with preview styling and horizontal overflow', () => {
-    const consolePage = readFileSync(join(process.cwd(), 'admin/src/pages/Console.tsx'), 'utf8');
+    const consolePage = [
+      'admin/src/pages/Documentation.tsx',
+      'admin/src/pages/BrainData.tsx',
+    ].map(path => readFileSync(join(process.cwd(), path), 'utf8')).join('\n');
     const styles = readFileSync(join(process.cwd(), 'admin/src/index.css'), 'utf8');
     expect(consolePage).toContain('className="markdown-table-wrap"');
     expect(styles).toContain('.docs-markdown .markdown-table-wrap');

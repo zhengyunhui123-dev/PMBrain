@@ -1,18 +1,19 @@
 import { describe, expect, test } from 'bun:test';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-const source = readFileSync(resolve('src/main/index.ts'), 'utf8');
+const source = readdirSync(resolve('src/main'), { recursive: true })
+  .filter((path): path is string => typeof path === 'string' && path.endsWith('.ts'))
+  .sort()
+  .map(path => readFileSync(resolve('src/main', path), 'utf8'))
+  .join('\n');
+const modelSync = readFileSync(resolve('src/main/models/model-config-sync.ts'), 'utf8');
 const renderer = readFileSync(resolve('src/renderer/src.ts'), 'utf8');
 const html = readFileSync(resolve('src/renderer/index.html'), 'utf8');
 const advanced = readFileSync(resolve('src/main/advanced-model-config.ts'), 'utf8');
 
 function sliceSyncModelDefaults(): string {
-  const start = source.indexOf('async function syncModelDefaultsToConfigFile');
-  expect(start).toBeGreaterThan(-1);
-  const end = source.indexOf('\nasync function ensureServiceReady', start);
-  expect(end).toBeGreaterThan(start);
-  return source.slice(start, end);
+  return modelSync;
 }
 
 describe('desktop simple-model config.json sync', () => {
@@ -26,18 +27,18 @@ describe('desktop simple-model config.json sync', () => {
     expect(source).toContain("['config', 'unset', '--pattern', 'models.dream.']");
     expect(source).toContain('resetAdvanced: payload.resetAdvancedModelRouting === true');
     expect(renderer).toContain('resetAdvancedModelRouting: false');
-    expect(source).toContain('await syncModelDefaultsToConfigFile();');
+    expect(source).toContain('syncModelDefaults: options => syncModelDefaultsToConfigFile(runtime(), options)');
   });
 
   test('ordinary model save does not silently unset Dream phase overrides', () => {
     const body = sliceSyncModelDefaults();
-    const resetBlock = body.match(/if \(opts\.resetAdvanced\) \{[\s\S]*?\n  \}/)?.[0] ?? '';
+    const resetBlock = body.match(/if \(options\.resetAdvanced\) \{[\s\S]*?\n  \}/)?.[0] ?? '';
     expect(resetBlock).toContain("'models.propose_takes'");
     expect(resetBlock).toContain("'models.grade_takes'");
     expect(resetBlock).toContain("'models.calibration_profile'");
     // 阶段键 unset 不得出现在 resetAdvanced 条件之外
-    const afterReset = body.slice(body.indexOf('if (opts.resetAdvanced)'));
-    const outside = afterReset.replace(/if \(opts\.resetAdvanced\) \{[\s\S]*?\n  \}/, '');
+    const afterReset = body.slice(body.indexOf('if (options.resetAdvanced)'));
+    const outside = afterReset.replace(/if \(options\.resetAdvanced\) \{[\s\S]*?\n  \}/, '');
     expect(outside).not.toContain("for (const key of ['models.propose_takes'");
   });
 

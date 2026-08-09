@@ -3,7 +3,10 @@ import { readFileSync } from 'fs';
 import { resolve } from 'path';
 
 describe('P1/P2 review regression guards', () => {
-  const serveSource = readFileSync(resolve(process.cwd(), 'src/commands/serve-http.ts'), 'utf8');
+  const serveSource = [
+    'src/commands/serve-http.ts',
+    'src/commands/pmbrain-admin-routes.ts',
+  ].map(path => readFileSync(resolve(process.cwd(), path), 'utf8')).join('\n');
   const jobsSource = readFileSync(resolve(process.cwd(), 'src/commands/jobs.ts'), 'utf8');
   const supervisorSource = readFileSync(resolve(process.cwd(), 'src/core/minions/supervisor.ts'), 'utf8');
   const readme = readFileSync(resolve(process.cwd(), 'README.md'), 'utf8');

@@ -1,0 +1,12 @@
+import { nativeImage, Notification } from 'electron';
+
+export const DESKTOP_ICON_PNG = 'iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAAXNSR0IArs4c6QAAAARzQklUCAgICHwIZIgAAAJpSURBVFiF7ZfdS1NhHMc/62XuxR11m9aWTd2FitpYhmiNQKUoCIqkoJvAILrovqsoFvVHRBAIXQT2cl9ZGGG4iyDUYlMrXc2Zuian4WxZp4vobHNbnubZdtP37vk953e+H56X3/M8mkqLWaKE2lJKc4Bt2YJ6QYvnbDMOlwVbUxXlFl1eP49FVgkHogTHIozc8RMXExnfaNZPQdNBO33eToQafV6muSQuxHno9RF4MZcboNFj49zNHlWN12vg4nAahLwG9IKWU9e7CmoO0OftxFBRlgnQfsKJqVrdYc8moUbP3uMNmQAOl6Xg5tm8UgCsRQRIesnbsNJu/GvS8MBbnt6ayIgbBC1Gs44qu5EGdzWuI3UIG0xlqlfWOvAvWhETrIgJFmdEJl+Gef0oyJkb+7HWmRTl5wXQeMCG1WECCda+/2RpVuT9qwUAPr9b5tntN5y+1oVGUyCA1p5a2o8lV7IkwfiTIPe8owCMDwXpPd/6G3IDqXIWaDSw57CDXc1mOfZ1aVVRrnqHkZTfoaoKgCTB2OMgIf8XOab0LMlrDUwMfSQ8uQzA2rcfLM6IzI4tyf3uo/VYassLBzDlm2fKN5+1r95dzaELbYr/tek6YBC0VOw0YnWYcO6roa13NzrT9sICnLzckbYNN6OSX8n+A8gAsYiyyqWGUr1kgDl/tGgAqV7yLggHojR6bDmTuvtb6O5vUQUgHEgCyCPgG5zOem9XW3ExgW9wOhMgGorx4Kqv4AD3r4wSDcXk9ladQe/901j8IPJpIoKzYwdlRuXVTInEhTh3L43gfx5Ki2e8jCj106zYKnkh+gVjEMHNYhHKxwAAAABJRU5ErkJggg==';
+
+export function desktopIcon(size: number) {
+  return nativeImage.createFromBuffer(Buffer.from(DESKTOP_ICON_PNG, 'base64')).resize({ width: size, height: size });
+}
+
+export function showDesktopNotification(title: string, body: string): void {
+  if (!Notification.isSupported()) return;
+  new Notification({ title, body, icon: desktopIcon(32) }).show();
+}

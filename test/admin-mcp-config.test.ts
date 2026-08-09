@@ -55,7 +55,7 @@ describe('Admin MCP handoff content', () => {
 
   test('all Admin copy buttons use the shared feedback component', () => {
     const agents = readFileSync(join(process.cwd(), 'admin/src/pages/Agents.tsx'), 'utf8');
-    const consolePage = readFileSync(join(process.cwd(), 'admin/src/pages/Console.tsx'), 'utf8');
+    const consolePage = readFileSync(join(process.cwd(), 'admin/src/pages/Connection.tsx'), 'utf8');
     const clipboard = readFileSync(join(process.cwd(), 'admin/src/lib/clipboard.tsx'), 'utf8');
     expect(agents).toContain('<CopyButton value={content} />');
     expect(consolePage).toContain('<CopyButton className="pm-ghost" value={value} />');
@@ -65,7 +65,7 @@ describe('Admin MCP handoff content', () => {
 
   test('keeps credential actions visible and simplifies the MCP page hierarchy', () => {
     const agents = readFileSync(join(process.cwd(), 'admin/src/pages/Agents.tsx'), 'utf8');
-    const consolePage = readFileSync(join(process.cwd(), 'admin/src/pages/Console.tsx'), 'utf8');
+    const consolePage = readFileSync(join(process.cwd(), 'admin/src/pages/Connection.tsx'), 'utf8');
     const styles = readFileSync(join(process.cwd(), 'admin/src/index.css'), 'utf8');
     expect(agents.match(/className="modal credential-modal"/g)?.length).toBe(4);
     expect(agents.match(/className="credential-modal-actions"/g)?.length).toBe(4);
@@ -97,7 +97,7 @@ describe('Admin MCP handoff content', () => {
   });
 
   test('only exposes a validated desktop IPv4 address to shared MCP configuration', () => {
-    const server = readFileSync(join(process.cwd(), 'src/commands/serve-http.ts'), 'utf8');
+    const server = readFileSync(join(process.cwd(), 'src/commands/pmbrain-admin-routes.ts'), 'utf8');
     expect(server).toContain("import { isIP } from 'node:net'");
     expect(server).toContain('isIP(configuredSharedIp) === 4');
   });
