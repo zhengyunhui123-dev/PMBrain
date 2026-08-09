@@ -210,15 +210,14 @@ jobs:
         run: scripts/test-shard.sh ${{ matrix.shard }} 10
 
   desktop-runtime:
-    # Each normal code change assembles and executes the bundled Bun, sidecar,
-    # Canvas and PGLite runtime on all supported desktop platforms. Release
-    # performs the heavier installer/AppImage/DMG verification.
+    # PMBrain Desktop is released for Windows. Normal code changes assemble
+    # and execute the bundled Bun, sidecar, Canvas and PGLite runtime there.
     needs: cache-check
     if: needs.cache-check.outputs.hit != 'true'
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest, ubuntu-latest]
+        os: [windows-latest]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:

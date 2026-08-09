@@ -31,6 +31,17 @@ from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
 
 
+def configure_utf8_output() -> None:
+    """Keep Windows CI diagnostics from crashing on Chinese page titles."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            reconfigure(encoding="utf-8", errors="backslashreplace")
+
+
+configure_utf8_output()
+
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DESKTOP_ROOT = REPO_ROOT / "desktop"
 ELECTRON_EXE = DESKTOP_ROOT / "node_modules" / "electron" / "dist" / "electron.exe"
