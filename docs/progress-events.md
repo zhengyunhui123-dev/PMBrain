@@ -1,6 +1,6 @@
 # 进度事件
 
-`gbrain`在批量命令运行时使用`--progress-json`写入`stderr`的JSONL进度流的规范参考。从v0.15.2开始稳定。仅 additive 更改；没有重命名或删除，除非是主要版本升级。
+PMBrain 在批量命令运行时使用 `--progress-json` 向 `stderr` 写入 JSONL 进度流。该合同只允许追加字段；破坏性重命名或删除需要明确的主版本迁移。
 
 大多数人类不会阅读此页面。解析进度的代理会。
 
@@ -8,21 +8,21 @@
 
 当设置`--progress-json`时，以下任何命令都会流式传输事件：
 
-- `gbrain doctor` (DB检查, JSONB完整性, markdown body完整性, 完整性采样)
-- `gbrain orphans`
-- `gbrain embed`
-- `gbrain files sync`
-- `gbrain export`
-- `gbrain extract [links|timeline|all]` (fs或db源)
-- `gbrain import`
-- `gbrain sync`
-- `gbrain migrate --to …`
-- `gbrain repair-jsonb`
-- `gbrain check-backlinks`
-- `gbrain lint`
-- `gbrain integrity auto`
-- `gbrain eval`
-- `gbrain apply-migrations` (编排器 + 每个子命令)
+- `pmbrain doctor` (DB检查, JSONB完整性, markdown body完整性, 完整性采样)
+- `pmbrain orphans`
+- `pmbrain embed`
+- `pmbrain files sync`
+- `pmbrain export`
+- `pmbrain extract [links|timeline|all]` (fs或db源)
+- `pmbrain import`
+- `pmbrain sync`
+- `pmbrain migrate --to …`
+- `pmbrain repair-jsonb`
+- `pmbrain check-backlinks`
+- `pmbrain lint`
+- `pmbrain integrity auto`
+- `pmbrain eval`
+- `pmbrain apply-migrations` (编排器 + 每个子命令)
 
 非批量命令（`stats`, `graph-query`, `get`, `put`等）不发出事件 — 它们在不到一秒内返回。
 
@@ -43,7 +43,7 @@
 | `--quiet` | 完全抑制进度。警告和最终输出仍然打印。 |
 | `--progress-interval=<ms>` | 覆盖tick发射之间的最小间隔（默认1000）。 |
 
-全局标志：在命令调度之前由`src/core/cli-options.ts`解析，因此`gbrain --progress-json doctor`与`gbrain doctor --progress-json`的工作方式相同（后者也工作 — 每命令解析器通过共享的`CliOptions`单例看到标志）。
+全局标志：在命令调度之前由`src/core/cli-options.ts`解析，因此`pmbrain --progress-json doctor`与`pmbrain doctor --progress-json`的工作方式相同（后者也工作 — 每命令解析器通过共享的`CliOptions`单例看到标志）。
 
 ## 事件类型
 
@@ -137,13 +137,13 @@ v0.15.2中发布的稳定阶段名称：
 
 ## 子进程继承
 
-当父CLI生成`gbrain …`子进程时（主要在`src/commands/migrations/*`中），全局标志（`--quiet`, `--progress-json`, `--progress-interval`）通过`src/core/cli-options.ts`中的`childGlobalFlags()`帮助程序传播到子进程的argv。子进程stderr直接通过`stdio: 'inherit'`传递，因此事件流是父进程stderr上的一个合并的JSONL流。
+当父CLI生成`pmbrain …`子进程时（主要在`src/commands/migrations/*`中），全局标志（`--quiet`, `--progress-json`, `--progress-interval`）通过`src/core/cli-options.ts`中的`childGlobalFlags()`帮助程序传播到子进程的argv。子进程stderr直接通过`stdio: 'inherit'`传递，因此事件流是父进程stderr上的一个合并的JSONL流。
 
 一个例外：`migrations/v0_12_2.ts`中捕获子进程stdout（`repair-jsonb --dry-run --json`用于验证）的编排器阶段不会传递`--progress-json`以避免任何stdout污染破坏编排器的`JSON.parse`的风险。它的stdio是显式的：`['ignore', 'pipe', 'inherit']`因此stderr仍然流过。
 
 ## Minion作业
 
-`gbrain jobs work`（Minion工作守护程序）将进度保留在DB中，而不是stderr上。每个运行批量核心（embed, sync, extract, import, backlinks）的Minion处理程序在每次迭代时调用`job.updateProgress({done, total, …})`。代理通过`get_job_progress` MCP操作或`gbrain jobs get <id>`读取每作业进度。
+`pmbrain jobs work`（Minion工作守护程序）将进度保留在DB中，而不是stderr上。每个运行批量核心（embed, sync, extract, import, backlinks）的Minion处理程序在每次迭代时调用`job.updateProgress({done, total, …})`。代理通过`get_job_progress` MCP操作或`pmbrain jobs get <id>`读取每作业进度。
 
 `jobs work`守护程序本身仅为活跃度发出粗略的单行每作业stderr输出。每页细节存在于DB中。
 

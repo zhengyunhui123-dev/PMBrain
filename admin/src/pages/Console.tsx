@@ -2566,7 +2566,7 @@ function MarkdownExportSettings() {
           <span className="settings-panel-icon"><Download /></span>
           <div>
             <h2>导出本地 Markdown</h2>
-            <p className="pm-hint">可选择 Obsidian Vault 的上级目录。每次都会创建新的 PMBrain-Export 快照目录，不覆盖现有笔记。</p>
+            <p className="pm-hint">可选择 Obsidian Vault 的上级目录。每次都会创建新的 PMBrain-Export 快照目录，并按 Source 保留原有目录结构。</p>
           </div>
         </div>
       </div>
@@ -2575,7 +2575,7 @@ function MarkdownExportSettings() {
         <input value={rootPath} onChange={event => setRootPath(event.target.value)} placeholder="D:\\Obsidian\\Vault" />
         <button className="pm-primary" onClick={() => void startExport()} disabled={!rootPath.trim() || run?.status === 'running'}>导出快照</button>
       </div>
-      <p className="pm-hint">当前能力是安全的全库快照，不是双向同步；多 Source 同名冲突、增量覆盖和删除同步不会在这里偷偷处理。</p>
+      <p className="pm-hint">当前能力会导出全部 Source，并按 Source 分目录保存；这是安全的全库快照，不是双向同步，也不会增量覆盖或同步删除。</p>
       {outputDir && <div className="export-output"><span>输出目录</span><code>{outputDir}</code></div>}
       {error && <div className="pm-error-text">{error}</div>}
       {run && <RunOutput run={run} />}

@@ -4,15 +4,15 @@
 
 ```bash
 # 运行你的第一个 shell 作业：
-GBRAIN_ALLOW_SHELL_JOBS=1 gbrain jobs submit shell \
+GBRAIN_ALLOW_SHELL_JOBS=1 pmbrain jobs submit shell \
   --params '{"cmd":"echo hello","cwd":"/tmp"}' --follow
 # → exit_code: 0, stdout_tail: "hello\n", duration_ms: 43
 ```
 
 就是这样。你的 cron 脚本现在有一个家，具有重试、退避、DLQ 和
-`gbrain jobs list` 可见性，而无需每个都引导完整的 LLM 会话。
+`pmbrain jobs list` 可见性，而无需每个都引导完整的 LLM 会话。
 
-**PGLite 用户：** `gbrain jobs work` 不会在 PGLite 上运行（独占文件
+**PGLite 用户：** `pmbrain jobs work` 不会在 PGLite 上运行（独占文件
 锁）。每个 crontab 调用都必须使用 `--follow` 进行内联执行。
 Postgres 用户可以运行持久 worker；请参阅下面的配方。
 
@@ -47,14 +47,14 @@ env 运行：`PATH`、`HOME`、`USER`、`LANG`、`TZ`、`NODE_ENV`。你的密�
 和 `DATABASE_URL`）不会传递到子级。你可以通过 `env: { ... }` 选择加入其他密钥
 （仅限非密钥值 — 请参阅下面的"密钥"），或通过
 `inherit: ["database_url"]`（推荐用于密钥 — 名称仅在行中，
-值在从 `gbrain config set` 生成时从 worker 的配置中解析）。这会阻止
+值在从 `pmbrain config set` 生成时从 worker 的配置中解析）。这会阻止
 偶然的 `$OPENAI_API_KEY` 插值在用户创作的脚本中。它**不会**
 沙盒文件系统读取：shell 脚本可以 `cat ~/.env` 或 worker 进程可以读取的
 任何文件。操作员选择一个安全的 `cwd`。那就是信任
 边界。
 
 **审计跟踪，不是取证保证。** 每次提交都会将 JSONL 行写入
-`~/.gbrain/audit/shell-jobs-YYYY-Www.jsonl`（ISO 周轮换；使用 `GBRAIN_AUDIT_DIR` 覆盖）。失败会记录到 stderr，但不会阻止提交，因此
+`~/.pmbrain/audit/shell-jobs-YYYY-Www.jsonl`（ISO 周轮换；使用 `GBRAIN_AUDIT_DIR` 覆盖）。失败会记录到 stderr，但不会阻止提交，因此
 磁盘已满的对手可以静默地禁用跟踪。善于"上周二这个 cron 提交了什么"，而不是
 用于安全关键的取证。
 
@@ -71,19 +71,19 @@ env 运行：`PATH`、`HOME`、`USER`、`LANG`、`TZ`、`NODE_ENV`。你的密�
 在一个终端上，启动持久 worker：
 
 ```bash
-GBRAIN_ALLOW_SHELL_JOBS=1 gbrain jobs work
+GBRAIN_ALLOW_SHELL_JOBS=1 pmbrain jobs work
 ```
 
 重写 crontab 以提交 shell 作业（没有 `--follow`）：
 
 ```cron
 # 之前（LLM 网关）：
-#   OpenClaw cron：x-garrytan-unified
+#   示例 cron：project-sync
 
 # 之后（Minions worker）：
 3 13,16,19,22,1,4,7,10 * * * \
-  gbrain jobs submit shell \
-    --params '{"cmd":"node scripts/x-garrytan-daily.mjs","cwd":"/data/.openclaw/workspace"}' \
+  pmbrain jobs submit shell \
+    --params '{"cmd":"node scripts/project-sync.mjs","cwd":"/data/pmbrain/workspace"}' \
     --max-attempts 3 --timeout-ms 300000
 ```
 
@@ -99,8 +99,8 @@ PGLite 不支持持久 worker 守护程序。每个 crontab 调用
 ```cron
 # 每个 cron 刻度生成一个短寿命的 worker，该 worker 内联运行作业。
 3 13,16,19,22,1,4,7,10 * * * \
-  GBRAIN_ALLOW_SHELL_JOBS=1 gbrain jobs submit shell \
-    --params '{"cmd":"node scripts/x-garrytan-daily.mjs","cwd":"/data/.openclaw/workspace"}' \
+  GBRAIN_ALLOW_SHELL_JOBS=1 pmbrain jobs submit shell \
+    --params '{"cmd":"node scripts/project-sync.mjs","cwd":"/data/pmbrain/workspace"}' \
     --follow --timeout-ms 300000
 ```
 
@@ -108,13 +108,13 @@ PGLite 不支持持久 worker 守护程序。每个 crontab 调用
 cron 在同一分钟触发，并且每个都需要 30 秒，则它们会序列化通过
 crontab 的生成限制。Postgres + 持久 worker 扩展得更好。
 
-### 从 shell 作业调用 `gbrain` 本身 — 对 DATABASE_URL 使用 `inherit:` {#secrets}
+### 从 shell 作业调用 `PMBrain` 本身 — 对 DATABASE_URL 使用 `inherit:` {#secrets}
 
-一个常见的模式是提交运行 `gbrain` CLI 命令的 shell 作业：
+一个常见的模式是提交运行 `PMBrain` CLI 命令的 shell 作业：
 
 ```bash
-gbrain jobs submit shell --params '{
-  "cmd": "gbrain sync --skip-failed && gbrain embed --stale",
+pmbrain jobs submit shell --params '{
+  "cmd": "pmbrain sync --skip-failed && PMBrain embed --stale",
   "cwd": "/data/brain",
   "inherit": ["database_url"]
 }'
@@ -129,7 +129,7 @@ gbrain jobs submit shell --params '{
 ```jsonc
 // v0.36.5.0 之前：有效，但 URL 以明文形式持久化在 minion_jobs.data 中。
 {
-  "cmd": "gbrain sync --skip-failed",
+  "cmd": "pmbrain sync --skip-failed",
   "cwd": "/data/brain",
   "env": { "GBRAIN_DATABASE_URL": "postgresql://..." }
 }
@@ -141,7 +141,7 @@ JSONL 中。任何具有 brain-DB 读取访问权限的人（或通过挂载的�
 
 **范围：** v0.36.5.0 `inherit:` 是**自由格式**。传递 worker 上的任何 snake_case
 配置键名称 — `database_url`、`anthropic_api_key`、`openai_api_key`、
-`voyage_api_key`、`groq_api_key`、`zeroentropy_api_key`，或你填入 `~/.gbrain/config.json` 的任何自定义字段。Agent 选择它需要的内容。
+`voyage_api_key`、`groq_api_key`、`zeroentropy_api_key`，或你填入 `~/.pmbrain/config.json` 的任何自定义字段。Agent 选择它需要的内容。
 
 **输出侧泄漏（阅读此内容）。** `inherit:` 允许列表可防止
 密钥登陆 JOB ROW INPUT 字段（`data.cmd`、`data.argv`、
@@ -155,16 +155,16 @@ JSONL 中。任何具有 brain-DB 读取访问权限的人（或通过挂载的�
 （或在 CLI 上传递 `--redact-secrets`）：
 
 ```bash
-gbrain jobs submit shell --params '{
-  "cmd": "gbrain sync --skip-failed",
+pmbrain jobs submit shell --params '{
+  "cmd": "pmbrain sync --skip-failed",
   "cwd": "/data/brain",
   "inherit": ["database_url"],
   "redact_secrets": true
 }'
 
 # 或，等效地：
-gbrain jobs submit shell \
-  --params '{"cmd":"gbrain sync --skip-failed","cwd":"/data/brain","inherit":["database_url"]}' \
+pmbrain jobs submit shell \
+  --params '{"cmd":"pmbrain sync --skip-failed","cwd":"/data/brain","inherit":["database_url"]}' \
   --redact-secrets
 ```
 
@@ -189,7 +189,7 @@ gbrain jobs submit shell \
 - **包装嘈杂的 CLI 工具以在错误时抑制 URL。** `psql --quiet`、
   `pg_dump --quiet`，或通过
   `2>&1 | sed 's|postgresql://[^@]*@|postgresql://REDACTED@|g'`。
-- **失败后使用 `gbrain jobs get <id>` 进行检查。** 验证什么
+- **失败后使用 `pmbrain jobs get <id>` 进行检查。** 验证什么
   实际上持久化了。
 
 ### 使用 `argv` 提交（没有 shell 插值）
@@ -198,7 +198,7 @@ gbrain jobs submit shell \
 `cmd`。没有 shell，没有注入表面：
 
 ```bash
-gbrain jobs submit shell \
+pmbrain jobs submit shell \
   --params '{"argv":["node","scripts/fetch.mjs","--date","2026-04-19"],"cwd":"/data"}' \
   --follow
 ```
@@ -209,17 +209,17 @@ gbrain jobs submit shell \
 
 ```bash
 # 列出死信 shell 作业
-gbrain jobs list --status dead
+pmbrain jobs list --status dead
 
 # 检查一个
-gbrain jobs get 42
+pmbrain jobs get 42
 # → error_text、stacktrace、result.stdout_tail、result.stderr_tail
 
 # 提交审计日志（操作员跟踪，不是取证）
-cat ~/.gbrain/audit/shell-jobs-*.jsonl | jq '.'
+cat ~/.pmbrain/audit/shell-jobs-*.jsonl | jq '.'
 
 # 首次失败模式：在没有 worker 上的 env 标志的情况下提交
-gbrain jobs list --status waiting --name shell
+pmbrain jobs list --status waiting --name shell
 # 如果行堆积在此处，则没有运行 GBRAIN_ALLOW_SHELL_JOBS=1 的 worker。
 ```
 
@@ -251,9 +251,9 @@ gbrain jobs list --status waiting --name shell
 | `shell: inherit must be an array of config-key names` | `inherit` 不是数组。 | 传递 `"inherit": ["database_url", ...]`。 |
 | `shell: inherit entries must be non-empty strings` | `inherit` 的元素为空、非字符串或 null。 | 使用 snake_case 配置键名称，如 `database_url`、`anthropic_api_key`。 |
 | `shell: inherit name "<X>" must match [a-z][a-z0-9_]*` | 名称未通过 snake_case 正则表达式（大写、前导数字/下划线、特殊字符）。 | 逐字使用配置键名称 — `database_url`，而不是 `DATABASE_URL`。 |
-| `shell: inherit requested "<X>" but worker has no <X> configured` | Worker 无法从 `loadConfig()` 解析请求的名称。 | 在 worker 主机上运行 `gbrain config set <X> <value>`，或检查 `~/.gbrain/config.json` 中的配置文件。 |
+| `shell: inherit requested "<X>" but worker has no <X> configured` | Worker 无法从 `loadConfig()` 解析请求的名称。 | 在 worker 主机上运行 `pmbrain config set <X> <value>`，或检查 `~/.pmbrain/config.json` 中的配置文件。 |
 | `shell: redact_secrets must be a boolean if set` | 调用程序为 `redact_secrets` 传递了非布尔值。 | 传递 `true` 或 `false`（或省略）。CLI `--redact-secrets` 标志会自动设置它。 |
 | `permission_denied: shell jobs cannot be submitted over MCP` | MCP 客户端尝试提交 shell 作业。按设计，仅 CLI。 | 从 CLI 或通过受信任的操作处理程序（`ctx.remote === false`）提交。 |
 | `protected job name 'shell' requires CLI or operation-local submitter` | 调用程序在没有 `trusted` 选择加入的情况下调用了 `MinionQueue.add('shell', ...)`。 | 将 `{ allowProtectedSubmit: true }` 作为第 4 个参数传递。CLI 和 `submit_job` 会自动执行此操作。 |
-| `aborted: timeout` / `aborted: cancel` / `aborted: shutdown` / `aborted: lock-lost` | Worker 的中止信号在 mid-execution 时触发。子级获得 SIGTERM、5 秒宽限，然后 SIGKILL。 | 预期：超时 / 用户取消 / 部署重新启动 / 失速。使用 `gbrain jobs get` 进行检查以查看哪个。 |
-| `exit N: <stderr_tail_500>` | 脚本以非零退出。 | 在 `gbrain jobs get` 中读取 `stderr_tail`。 |
+| `aborted: timeout` / `aborted: cancel` / `aborted: shutdown` / `aborted: lock-lost` | Worker 的中止信号在 mid-execution 时触发。子级获得 SIGTERM、5 秒宽限，然后 SIGKILL。 | 预期：超时 / 用户取消 / 部署重新启动 / 失速。使用 `pmbrain jobs get` 进行检查以查看哪个。 |
+| `exit N: <stderr_tail_500>` | 脚本以非零退出。 | 在 `pmbrain jobs get` 中读取 `stderr_tail`。 |

@@ -2,9 +2,9 @@
 
 ## 概述
 
-GBrain支持存储分层，以将版本控制的内容与批量机器生成的数据分开。这可以防止git仓库因大量自动生成的内容而膨胀，同时仍将其保留在数据库中。
+PMBrain支持存储分层，以将版本控制的内容与批量机器生成的数据分开。这可以防止git仓库因大量自动生成的内容而膨胀，同时仍将其保留在数据库中。
 
-> 关于命名的说明：在v0.22.11之前，键是`git_tracked` / `supabase_only`。规范名称现在是`db_tracked` / `db_only`（引擎无关 — 在PGLite和Postgres上都工作）。已弃用的键仍然加载，并带有每次进程一次的警告。当该路径落地时，运行`gbrain doctor --fix`进行自动重命名。
+> 关于命名的说明：在v0.22.11之前，键是`git_tracked` / `supabase_only`。规范名称现在是`db_tracked` / `db_only`（引擎无关 — 在PGLite和Postgres上都工作）。已弃用的键仍然加载，并带有每次进程一次的警告。当该路径落地时，运行`pmbrain doctor --fix`进行自动重命名。
 
 ## 配置
 
@@ -24,8 +24,8 @@ storage:
 
   # 仅通过brain数据库持久化的目录（批量机器生成的内容）。
   # 作为本地缓存写入磁盘，但不提交到git；
-  # `gbrain sync`自动管理这些路径的.gitignore。
-  # `gbrain export --restore-only`从数据库重新填充缺失的文件。
+  # `pmbrain sync`自动管理这些路径的.gitignore。
+  # `pmbrain export --restore-only`从数据库重新填充缺失的文件。
   db_only:
     - media/x/
     - media/articles/
@@ -39,9 +39,9 @@ storage:
 
 ## 行为更改
 
-### 1. `gbrain sync` — 自动.gitignore管理
+### 1. `pmbrain sync` — 自动.gitignore管理
 
-当存在存储配置时，`gbrain sync`在每次成功同步时自动管理`.gitignore`条目：
+当存在存储配置时，`pmbrain sync`在每次成功同步时自动管理`.gitignore`条目：
 
 - 将缺失的`db_only`目录模式添加到`.gitignore`。
 - 幂等 — 重新运行不会添加重复的条目。
@@ -49,32 +49,32 @@ storage:
 - 在`--dry-run`上跳过（不要在预览模式下变异磁盘）。
 - 在`blocked_by_failures`状态上跳过（同步状态不一致）。
 - 当仓库是git子模块（`.git`是文件，而不是目录）时跳过 — 子模块.gitignore更改不会在父更新中生存。会显示警告。
-- 当设置了`GBRAIN_NO_GITIGNORE=1`时完全跳过（对于维护者希望gbrain单独放置.gitignore的共享仓库设置的逃生舱）。
+- 当设置了 `GBRAIN_NO_GITIGNORE=1` 时完全跳过（该兼容变量适合由维护者自行管理 `.gitignore` 的共享仓库）。
 - 失败（写入权限被拒绝等）被捕获并记录，永远不会使同步崩溃。
 
 示例`.gitignore`添加：
 
 ```gitignore
-# Auto-managed by gbrain (db_only directories)
+# Auto-managed by PMBrain (db_only directories)
 media/x/
 media/articles/
 meetings/transcripts/
 ```
 
-### 2. `gbrain export --restore-only` — 重新填充缺失的db_only文件
+### 2. `pmbrain export --restore-only` — 重新填充缺失的db_only文件
 
 ```bash
 # 仅从数据库恢复缺失的db_only文件。
-gbrain export --restore-only --repo /path/to/brain
+pmbrain export --restore-only --repo /path/to/brain
 
 # 按页面类型过滤。
-gbrain export --restore-only --type media --repo /path/to/brain
+pmbrain export --restore-only --type media --repo /path/to/brain
 
 # 按slug前缀过滤。
-gbrain export --restore-only --slug-prefix media/x/ --repo /path/to/brain
+pmbrain export --restore-only --slug-prefix media/x/ --repo /path/to/brain
 
 # 组合过滤器。
-gbrain export --restore-only --type media --slug-prefix media/x/ --repo /path/to/brain
+pmbrain export --restore-only --type media --slug-prefix media/x/ --repo /path/to/brain
 ```
 
 `--restore-only`标志：
@@ -83,14 +83,14 @@ gbrain export --restore-only --type media --slug-prefix media/x/ --repo /path/to
 - 仅导出匹配`db_only`模式且磁盘上缺失的页面。
 - 理想用于容器重启恢复和新鲜克隆。
 
-### 3. `gbrain storage status` — 存储层级运行状况仪表板
+### 3. `pmbrain storage status` — 存储层级运行状况仪表板
 
 ```bash
 # 人类可读的状态。
-gbrain storage status --repo /path/to/brain
+pmbrain storage status --repo /path/to/brain
 
 # 用于脚本和编排器的JSON输出。
-gbrain storage status --repo /path/to/brain --json
+pmbrain storage status --repo /path/to/brain --json
 ```
 
 输出包括：
@@ -127,7 +127,7 @@ Missing Files (need restore):
   media/x/tweet-0987654321
   ... and 47 more
 
-Use: gbrain export --restore-only --repo "/data/brain"
+Use: PMBrain export --restore-only --repo "/data/brain"
 
 Configuration:
 --------------
@@ -168,7 +168,7 @@ DB-only directories:
 
 - Git仓库仅包含基本文件。
 - 容器重启不会丢失db_only数据。
-- `gbrain export --restore-only`在需要时快速恢复批量文件。
+- `pmbrain export --restore-only`在需要时快速恢复批量文件。
 - 本地磁盘充当缓存层。
 
 ### 多环境一致性
@@ -181,12 +181,12 @@ DB-only directories:
 
 ## 迁移策略
 
-1. **评估当前仓库**：使用`gbrain storage status`了解当前分布。
+1. **评估当前仓库**：使用`pmbrain storage status`了解当前分布。
 2. **计划目录结构**：确定哪些目录应该是db_tracked vs db_only。
 3. **创建`gbrain.yml`**：将存储配置添加到仓库根目录。
-4. **使用干运行测试**：`gbrain sync --dry-run`验证行为；`.gitignore`在干运行时不触及。
-5. **运行真实同步**：`gbrain sync`成功时自动更新`.gitignore`。
-6. **验证恢复**：针对小型db_only目录测试`gbrain export --restore-only --repo .`。
+4. **使用干运行测试**：`pmbrain sync --dry-run`验证行为；`.gitignore`在干运行时不触及。
+5. **运行真实同步**：`pmbrain sync`成功时自动更新`.gitignore`。
+6. **验证恢复**：针对小型db_only目录测试`pmbrain export --restore-only --repo .`。
 
 ## 最佳实践
 
@@ -198,7 +198,7 @@ DB-only directories:
 
 ## PGLite引擎说明
 
-在PGLite引擎（gbrain的仅本地嵌入式Postgres）上，您的db_only页面所在的"DB"就是gbrain用于其他所有内容的本地文件。`.gitignore`内务处理仍然有帮助（使批量内容远离git历史），但卸载到DB的承诺在技术上是空的。每次进程一次的软警告在检测到引擎时解释。要获得完整的分层，请使用`gbrain migrate --to supabase`迁移到Postgres。
+在PGLite引擎（PMBrain 的仅本地嵌入式Postgres）上，您的db_only页面所在的"DB"就是PMBrain 用于其他所有内容的本地文件。`.gitignore`内务处理仍然有帮助（使批量内容远离git历史），但卸载到DB的承诺在技术上是空的。每次进程一次的软警告在检测到引擎时解释。要获得完整的分层，请使用`pmbrain migrate --to supabase`迁移到Postgres。
 
 ## 兼容性
 

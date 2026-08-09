@@ -198,7 +198,7 @@ describe('admin console intent planning', () => {
       'abc123',
     );
     expect(result.outputDir.replace(/\\/g, '/')).toEndWith('/PMBrain-Export-20260711T030405-abc123');
-    expect(result.command.slice(-3)).toEqual(['export', '--dir', result.outputDir]);
+    expect(result.command.slice(-4)).toEqual(['export', '--dir', result.outputDir, '--group-by-source']);
     expect(() => buildMarkdownExportCommand('relative/path')).toThrow('absolute path');
   });
 

@@ -3,8 +3,8 @@
  *
  * `schema_version: 1` is a one-way-door contract (codex review #3). Rename
  * fields → bump schema_version. Adding optional fields is additive and
- * compatible. Any changes here MUST be reflected in docs/eval-takes-quality.md
- * since gbrain-evals (sibling repo) consumes this shape.
+ * compatible. Changes must remain covered by the PMBrain retrieval and Dream
+ * quality evaluation contract and by the consumer tests.
  */
 import type { RubricDimension } from './rubric.ts';
 import type { DimensionRoll } from './aggregate.ts';

@@ -1,30 +1,45 @@
 # PMBrain — 项目管理知识大脑
 
-PMBrain 是一个支持混合 RAG 搜索的项目管理知识大脑。把你的项目文档、会议纪要、需求文档、合同文件放进来，AI 就能自动构建知识图谱、追踪进度、预警风险、生成报告。
+PMBrain 是一个本地优先的项目与个人知识大脑。它把分散在不同 Source 中的项目文档、
+会议纪要、需求、合同和笔记接入同一套检索与知识整理能力，并通过 CLI、MCP、Admin
+Console 和 Windows 桌面端提供访问入口。
 
-基于 [GBrain](https://github.com/garrytan/gbrain) 深度改造，保留完整知识管理能力，针对国内使用习惯做了大量优化。
-
----
+项目以 [GBrain](https://github.com/garrytan/gbrain) 为底层逻辑基线，在多 Source、中文
+检索、国内模型、桌面端和管理交互上持续扩展。上游文档不是 PMBrain 的默认使用说明。
 
 ## 核心能力
 
-你的 AI 工具（CodeBuddy、Workbuddy、Codex、Cursor、Claude Code 等）原本每次对话独立，聊完就忘。PMBrain 给它们装上**有记忆的大脑**——AI 可以搜索你存过的所有文档、笔记、对话记录，回答问题时带着历史上下文。
-
-- **混合搜索引擎**：向量搜索 + 关键词 + RRF 多重融合，搜索质量远高于单纯关键词匹配
-- **知识图谱**：自动从文档中提取人物、公司、项目之间的关联关系
-- **MCP 接口**：CodeBuddy、Workbuddy、Codex、Cursor、Claude Code、QwenPaw 等 AI 工具在对话中直接调用知识库
-- **GUI 管理控制台**：浏览器导入资料、浏览知识库、审批观点、自然语言任务、MCP 接入配置、任务监控和系统诊断
-- **数据本地化**：知识库数据库和原始资料默认保存在本机；使用云端模型时，向量化、聊天、识别所需内容会发送给你配置的模型提供商，使用本地模型可实现完整本地处理
-- **双引擎架构**：PGLite（零配置本地）和 Postgres + pgvector（大规模生产）两种部署方式
-
----
+- 多 Source 管理：按 `source_id + slug` 隔离内容，同时保留显式的共享回退规则。
+- 混合检索：关键词、标题、关系、向量和可选 Reranker 共同参与召回与排序。
+- Dream 周期：整理资料、抽取事实与关系、生成候选观点，并保留审批边界。
+- 多入口：CLI、HTTP/MCP、Admin Console 与 Windows 桌面端复用核心能力。
+- 双引擎：PGLite 适合本地单机，Postgres + pgvector 适合独立数据库部署。
+- 数据保护：原始资料、Wiki、数据库内知识和已有向量不会因升级或普通测试被隐式重建。
 
 ## 快速开始
 
-### Docker + Postgres（推荐）
+### Windows 桌面版
+
+桌面版内置运行时、PGLite 和所需 WASM 资源，适合希望直接安装使用的 Windows 用户。
+首次启动会引导选择本地 PGLite 或外部 Postgres，并沿用可识别的已有配置。
+
+详见 [桌面版安装与首次使用](docs/desktop/安装与首次使用.md)。需要独立数据库时，再看
+[Docker Postgres 首次安装](docs/desktop/首次安装使用DockerPostgres.md)。
+
+### CLI + PGLite
 
 ```powershell
-# 1. 启动 Postgres（含 pgvector）
+bun install -g github:zhengyunhui123-dev/PMBrain
+pmbrain init --pglite
+pmbrain serve --http --port 3131
+```
+
+浏览器打开 `http://127.0.0.1:3131/admin` 进入 Admin Console。PGLite 数据目录同一时间
+只能由一个真实进程持有；桌面端运行时，不要再让另一个 CLI 服务打开同一目录。
+
+### CLI + Postgres
+
+```powershell
 docker run -d `
   --name pmbrain-postgres `
   -e POSTGRES_USER=postgres `
@@ -34,116 +49,46 @@ docker run -d `
   -v pmbrain-postgres-data:/var/lib/postgresql/data `
   pgvector/pgvector:pg16
 
-# 2. 确认 pgvector 可用
-docker exec -it pmbrain-postgres psql -U postgres -d pmbrain -c "CREATE EXTENSION IF NOT EXISTS vector;"
-
-# 3. 安装
-bun install -g github:zhengyunhui123-dev/PMBrain
-
-# 4. 配置 ~/.pmbrain/config.json
-# { "engine": "postgres", "database_url": "postgresql://postgres:postgres@127.0.0.1:5433/pmbrain", ... }
-
-# 5. 初始化和启动
-pmbrain init
-pmbrain serve --http --port 3131
+docker exec -it pmbrain-postgres psql -U postgres -d pmbrain `
+  -c "CREATE EXTENSION IF NOT EXISTS vector;"
 ```
 
-浏览器打开 `http://localhost:3131/admin` 进入管理控制台。
+然后在 PMBrain 配置中选择 `postgres` 引擎并填写 `database_url`，再运行 `pmbrain init`
+和 `pmbrain serve --http --port 3131`。数据库卷保存用户数据，不要在升级时删除或重建。
 
-### PGLite 本地模式（macOS / Linux 推荐）
+## 导入与 Source
 
-```powershell
-bun install -g github:zhengyunhui123-dev/PMBrain
-pmbrain init --pglite
-pmbrain serve --http --port 3131
-```
-
-> Windows 上 PGLite WASM 可能存在兼容性问题，推荐优先使用 Docker。详见 [安装文档](docs/INSTALL.md)。
-
-### Windows 桌面版
-
-一键安装，内置 Bun 运行时、PGLite 和 WASM 资源，兼容不支持 AVX2 的旧 x64 CPU。自动检测已有配置并沿用。详见 [桌面版安装指南](docs/desktop/安装与首次使用.md)。
-
-更多安装方式（Supabase、源码安装、AI 自动安装）见 [完整安装文档](docs/INSTALL.md) 和 [AI 安装协议](INSTALL_FOR_AGENTS.md)。
-
----
-
-## 特色功能
-
-### 导入即用，无需转换格式
-
-支持常用办公文档格式直接导入，不产生中间文件：
-
-| 格式 | 说明 |
-|------|------|
-| `.md` / `.mdx` | Markdown 笔记 |
-| `.docx` / `.doc` / `.wps` | Word 文档 |
-| `.pdf` | PDF 文档 |
-| `.xlsx` / `.xlsm` / `.xls` | Excel 表格 |
-| `.csv` | 表格数据 |
-| `.png` / `.jpg` / `.jpeg` / `.gif` / `.webp` / `.heic` / `.heif` / `.avif` | 图片和扫描件 |
+PMBrain 可导入 Markdown、Word、PDF、Excel、CSV 和常见图片格式。每份内容都属于一个
+Source；同名 slug 在不同 Source 中彼此隔离。
 
 ```powershell
 pmbrain sources add my-project --path "D:\项目文档"
 pmbrain sync --source my-project
+pmbrain import <文件或文件夹>
 ```
 
-### 多模型支持（国内可用）
+Source 的解析顺序、共享回退和安全边界见
+[Brains and Sources](docs/architecture/brains-and-sources.md)。
 
-内置 20 类 AI 提供商（含自定义 OpenAI 兼容接口），国内可直接使用：
+## 搜索与 Dream
 
-| 提供商 | 用途 |
-|--------|------|
-| 智谱 BigModel | 向量嵌入、对话 |
-| MIMO 小米 | 搜索扩展、对话 |
-| DeepSeek | 对话、搜索扩展 |
-| OpenAI / Anthropic / Ollama | 嵌入 / 对话 / 重排序 |
-| 自定义 OpenAI 兼容接口 | 本地 Qwen、vLLM、LM Studio、Xinference、LocalAI |
-
-详细配置见 [AI 提供商配置速查](#ai-提供商配置速查)。
-
-### 全量中文化
-
-管理后台、CLI 帮助、仪表盘、文档页均已翻译为中文。命令行参数名和 JSON 字段等技术标识保持英文。
-
-### Dream 周期与观点审批
-
-Dream 周期分多个阶段运行（同步、抽取、概念整理、候选观点、观点打分、校准画像、嵌入刷新等）。候选观点先在 Admin Console 审批，确认后才进入正式知识库。
+未配置 Embedding 时，PMBrain 仍可使用关键词、标题和关系检索；显式配置向量模型后，
+才启用向量召回。普通对话模型和 Embedding 模型是两套配置，不能互相代替。
 
 ```powershell
-pmbrain dream --phase propose_takes --dry-run --json --max-pages 25  # 安全预览
-pmbrain dream --help                                                    # 查看所有阶段
+pmbrain search "关键词" --mode conservative
+pmbrain search "关键词" --mode balanced --explain
+pmbrain search "关键词" --mode tokenmax
+pmbrain dream --phase propose_takes --dry-run --json --max-pages 25
 ```
 
-### 自然语言 AI 控制台
+切换向量模型前，PMBrain 会校验模型和实际维度。重算仅针对派生向量，不应删除原始页面
+或分块。检索流程见 [Retrieval](docs/architecture/RETRIEVAL.md)，质量验收见
+[检索与 Dream 质量评测规范](docs/eval/PMBrain检索与Dream质量评测规范.md)。
 
-Admin Console 支持自然语言操作：导入文件、同步知识库、搜索资料、运行诊断——系统自动识别意图并执行。
+## MCP 接入
 
----
-
-## 常用命令
-
-```powershell
-pmbrain init                              # 初始化（默认 PGLite）
-pmbrain search "关键词"                    # 搜索知识库
-pmbrain search "关键词" --explain          # 可溯源搜索（查看评分来源）
-pmbrain search --mode conservative        # 保守模式（精确优先）
-pmbrain search --mode tokenmax           # Token 最大化（召回优先）
-pmbrain capture "要记住的内容"             # 保存当前对话/笔记
-pmbrain sync --all                        # 同步所有知识库
-pmbrain embed --stale                     # 重算过期向量
-pmbrain import <文件或文件夹>              # 导入文件
-pmbrain serve --http --port 3131          # 启动管理控制台
-pmbrain doctor                            # 系统诊断
-pmbrain migrate --to supabase            # 迁移到 Supabase
-pmbrain --help                            # 查看所有命令
-```
-
----
-
-## MCP 接入 AI 工具
-
-### HTTP + Bearer Token（推荐）
+HTTP MCP 适合桌面端或已经运行 Admin 服务的场景：
 
 ```json
 {
@@ -152,14 +97,14 @@ pmbrain --help                            # 查看所有命令
       "type": "http",
       "url": "http://127.0.0.1:3131/mcp",
       "headers": {
-        "Authorization": "Bearer <从Admin Console获取的API Key>"
+        "Authorization": "Bearer <从 Admin Console 获取的 API Key>"
       }
     }
   }
 }
 ```
 
-### 本地 STDIO 模式
+本地 STDIO 模式：
 
 ```json
 {
@@ -172,93 +117,57 @@ pmbrain --help                            # 查看所有命令
 }
 ```
 
-支持 Claude Code、Claude Cowork、ChatGPT（Secure MCP Tunnel）、Perplexity、CodeBuddy、Workbuddy、Cursor、Codex、QwenPaw 等工具。详见 [MCP 部署指南](docs/mcp/) 和各工具接入文档。
+ChatGPT 的连接步骤见 [ChatGPT MCP 接入](docs/mcp/CHATGPT.md)。
 
----
+## 常用命令
 
-## AI 提供商配置速查
-
-| 功能 | 推荐提供商 | 模型标识 | 配置字段 |
-|------|-----------|---------|---------|
-| 向量化（必需） | 智谱 BigModel | `zhipu:embedding-3`（1024d） | `zhipu_api_key` |
-| 对话/搜索扩展 | MIMO 小米 | `mimo:mimo-v2.5-pro` | `mimo_api_key` |
-| Dream 提炼/判定 | MIMO 小米 | `mimo:mimo-v2.5-pro` | `mimo_api_key` |
-| 对话备用 | DeepSeek | `deepseek:deepseek-v4-flash` | `deepseek_api_key` |
-| 对话/嵌入（海外） | OpenAI | `openai:text-embedding-3-small`（1536d） | `openai_api_key` |
-
-> 向量化是搜索的基础，建议优先申请智谱 Key（[open.bigmodel.cn](https://open.bigmodel.cn)）。智谱 `embedding-3` 每百万 token 仅 0.01 美元，国内可直接访问。
-
-```json
-{
-  "zhipu_api_key": "你的智谱Key",
-  "mimo_api_key": "你的MIMO Key",
-  "deepseek_api_key": "你的DeepSeek Key"
-}
+```powershell
+pmbrain init                         # 初始化当前配置的数据库引擎
+pmbrain sources list                 # 查看 Source
+pmbrain sync --all                   # 同步全部 Source
+pmbrain search "关键词" --explain    # 搜索并显示评分依据
+pmbrain capture "要记住的内容"        # 保存笔记
+pmbrain embed --stale                # 按当前配置刷新过期向量
+pmbrain doctor                       # 只读诊断与健康检查入口
+pmbrain serve --http --port 3131     # 启动 HTTP、MCP 和 Admin Console
+pmbrain --help                       # 查看当前版本的完整命令
 ```
 
-切换向量模型请使用桌面端或 `pmbrain config set embedding_model <provider:model>`：PMBrain 先验证新模型连接和实际维度，验证通过后仅标记旧向量为待重算并立即使用新模型；原始页面和分块不会删除。
+## 项目地图
 
----
-
-## 项目结构
-
-```
+```text
 PMBrain/
-├── admin/                  # Admin Console 前端（React + Vite）
+├── admin/                  # Admin Console（React + Vite）
 ├── desktop/                # Electron Windows 桌面端
-├── src/                    # 源代码
+├── src/
 │   ├── cli.ts              # CLI 入口
-│   ├── core/               # 核心引擎、搜索、AI 网关、Dream 周期
-│   │   ├── engine.ts       # BrainEngine 接口
-│   │   ├── operations.ts   # 所有操作定义
-│   │   ├── search/         # 混合搜索（向量 + 关键词 + RRF + 多查询）
-│   │   ├── ai/             # AI 网关 + 20 个提供商配方
-│   │   ├── cycle/          # Dream 周期各阶段
-│   │   └── facts/          # 事实队列系统
-│   ├── commands/           # CLI 命令和 HTTP Admin Console 后端
-│   └── mcp/                # MCP 服务器
-├── skills/                 # AI 智能体技能
-├── templates/              # 模式包模板
-├── docs/                   # 完整文档（100+ 文件）
-├── evals/                  # 评估基准
-├── test/                   # 测试套件
-├── CLAUDE.md               # AI Agent 工作手册
-└── AGENTS.md               # AI 开发规则
+│   ├── commands/           # Command、HTTP 与 Admin API
+│   ├── core/               # 引擎、检索、导入、Source、Dream、AI
+│   └── mcp/                # MCP 分发
+├── skills/                 # 项目技能与解析入口
+├── docs/                   # 精选的 PMBrain 架构、安装和评测文档
+├── evals/                  # 质量评估
+├── test/                   # 核心测试
+├── CLAUDE.md               # AI 项目地图与按任务调用链
+└── AGENTS.md               # 项目工作规则与数据边界
 ```
 
----
+AI 参与开发时先读 [AGENTS.md](AGENTS.md) 和 [CLAUDE.md](CLAUDE.md)，然后只追踪当前任务
+对应的一条调用链，不需要先理解全项目，也不默认通读整个 `docs/architecture/`。
 
-## 文档索引
+## 精选文档
 
-- **[安装文档](docs/INSTALL.md)** — Docker、PGLite、Supabase 三种部署方式
-- **[桌面版安装指南](docs/desktop/安装与首次使用.md)** — Windows 桌面端首次配置
-- **[Docker Postgres 首次安装](docs/desktop/首次安装使用DockerPostgres.md)** — PGLite/WASM 异常时的替代方案
-- **[MCP 部署指南](docs/mcp/)** — OAuth 认证、远程部署、各工具接入
-- **[ChatGPT 接入指南](docs/mcp/CHATGPT.md)** — Secure MCP Tunnel 方式
-- **[架构文档](docs/architecture/)** — 系统设计、Brains & Sources、Schema Packs
-- **[AI Agent 工作手册](CLAUDE.md)** — 面向 Claude Code / Codex 的开发规则
-- **[AI 安装协议](INSTALL_FOR_AGENTS.md)** — 让 AI 帮你自动安装
-- **[变更日志](CHANGELOG.md)** — 完整版本历史
-
----
-
-## 近期更新
-
-| 版本 | 说明 |
-|------|------|
-| **1.1.46** | 优化大文件导入失败的提示；共享模式 source 范围管理；Ollama 普通模型调通及 Dream 修复 |
-| **1.0.83** | README 与当前桌面安装、Docker Postgres 首装、MCP 源范围和主知识库源说明对齐 |
-| **1.0.82** | 新增 Docker Postgres 首次安装教程，面向 PGLite/WASM 启动异常的新用户 |
-| **1.0.81** | Admin Console 的 Agent/API Key 源范围选择器排版优化 |
-| **1.0.80** | MCP Agent/API Key 读取源范围管理；自然语言任务失败/跳过明细单独展示 |
-| **Desktop 1.0.45** | 首次配置支持 PGLite 和 Docker Postgres；可保存主知识库源 ID 并同步设置默认 source |
-| **Desktop M5** | GitHub Releases 自动发布与更新；启动后检查下载、安装前停止 sidecar、更新后自动迁移和健康检查 |
-| **全量中文化** | Admin Console 所有页面、CLI 帮助、仪表盘、文档页已全部中文化 |
-
-[查看完整变更日志 →](CHANGELOG.md)
-
----
+- [部署拓扑](docs/architecture/topologies.md) — Desktop、PGLite、Postgres 和 MCP 的边界
+- [Brains and Sources](docs/architecture/brains-and-sources.md) — Source 身份、slug 与解析规则
+- [基础设施分层](docs/architecture/infra-layer.md) — UI、Command、Core 与数据库引擎的分层
+- [检索架构](docs/architecture/RETRIEVAL.md) — 当前 RAG 召回与排序流程
+- [数据事实来源](docs/architecture/system-of-record.md) — 原始资料、数据库知识与派生数据保护
+- [桌面版安装与首次使用](docs/desktop/安装与首次使用.md)
+- [Docker Postgres 首次安装](docs/desktop/首次安装使用DockerPostgres.md)
+- [ChatGPT MCP 接入](docs/mcp/CHATGPT.md)
+- [检索与 Dream 质量评测规范](docs/eval/PMBrain检索与Dream质量评测规范.md)
+- [PMBrain 与上游 GBrain 对比](docs/eval/PMBrain与原版GBrain的检索和Dream功能对比.md) — 仅在比较或合并上游能力时阅读
 
 ## 许可证
 
-MIT License。基于 [GBrain](https://github.com/garrytan/gbrain) 改造。
+MIT License。PMBrain 基于 [GBrain](https://github.com/garrytan/gbrain) 的底层逻辑持续开发。

@@ -1,8 +1,8 @@
 # 在现有 brain 上切换嵌入模型或维度
 
-GBrain 在 `content_chunks` 上的固定维度 `vector(N)` 列中存储嵌入。如果你切换到具有不同维度的模型（例如 `openai:text-embedding-3-large` 1536 → `zeroentropyai:zembed-1` 1280，或 `voyage:voyage-4-large` 2048），磁盘列类型不会自动更改。
+PMBrain 在 `content_chunks` 上的固定维度 `vector(N)` 列中存储嵌入。如果你切换到具有不同维度的模型（例如 `openai:text-embedding-3-large` 1536 → `zeroentropyai:zembed-1` 1280，或 `voyage:voyage-4-large` 2048），磁盘列类型不会自动更改。
 
-`gbrain init`、`gbrain doctor` 和 `gbrain embed --stale` 都会检测这种不匹配，并拒绝静默继续。本文档是它们指向的配方。
+`pmbrain init`、`pmbrain doctor` 和 `pmbrain embed --stale` 都会检测这种不匹配，并拒绝静默继续。本文档是它们指向的配方。
 
 ## 为什么我们不会自动执行此操作
 
@@ -20,7 +20,7 @@ GBrain 在 `content_chunks` 上的固定维度 `vector(N)` 列中存储嵌入。
 
 **PGLite 无法 `ALTER COLUMN TYPE vector(N)`。** pgvector 作为嵌入式 WASM 提供，而不是本机扩展，WASM 构建以 `could not access file "$libdir/vector"` 拒绝列类型更改。下面的 SQL 配方仅适用于 Postgres。
 
-PMBrain 不采用 GBrain 的“整库擦除后从 Markdown 重新同步”路径。PMBrain 数据库还包含 GUI 创建知识、来源、标签、回收站、权限和审核状态，这些内容不一定存在于 Markdown/Git 中。
+PMBrain 不采用 PMBrain 的“整库擦除后从 Markdown 重新同步”路径。PMBrain 数据库还包含 GUI 创建知识、来源、标签、回收站、权限和审核状态，这些内容不一定存在于 Markdown/Git 中。
 
 先创建并验证升级冷备：
 
@@ -79,7 +79,7 @@ ALTER TABLE content_chunks ALTER COLUMN embedding TYPE vector(<NEW_DIMS>);
 UPDATE content_chunks SET embedding = NULL, embedded_at = NULL;
 
 -- 4. 仅当 dims <= 2000 时重新创建 HNSW 索引。超过这个，
---    让它无索引并依赖精确扫描（gbrain searchVector 自动处理 —
+--    让它无索引并依赖精确扫描（PMBrain searchVector 自动处理 —
 --    搜索只是变慢，不会损坏）。
 -- 对于 dims <= 2000（例如 1024、1280、1536、768）：
 CREATE INDEX IF NOT EXISTS idx_chunks_embedding
@@ -92,7 +92,7 @@ COMMIT;
 然后使用新模型重新初始化配置：
 
 ```bash
-gbrain init --supabase \
+pmbrain init --supabase \
   --embedding-model <provider:model> \
   --embedding-dimensions <NEW_DIMS>
 ```
@@ -100,12 +100,12 @@ gbrain init --supabase \
 并重新嵌入：
 
 ```bash
-gbrain embed --stale
+pmbrain embed --stale
 ```
 
-## 关于 `gbrain config set` 的说明
+## 关于 `pmbrain config set` 的说明
 
-v0.37 之前的文档推荐 `gbrain config set embedding_model X` 来切换模型。**这对嵌入管道是无操作。** `config set` 写入 DB 平面；嵌入网关读取文件平面（`~/.gbrain/config.json`）。v0.37 之前的配方提供了谎言，因为契约没有公开。
+v0.37 之前的文档推荐 `pmbrain config set embedding_model X` 来切换模型。**这对嵌入管道是无操作。** `config set` 写入 DB 平面；嵌入网关读取文件平面（`~/.pmbrain/config.json`）。v0.37 之前的配方提供了谎言，因为契约没有公开。
 
 PMBrain 中，`config set embedding_model` 和 `config set embedding_dimensions` 会拒绝绕过安全流程的直接修改，并提示使用经过确认的模型切换与派生数据重建路径。
 
@@ -113,7 +113,7 @@ PGLite 使用 `pmbrain models align-embedding-dimension --yes`；Postgres 使用
 
 ## 验证
 
-配方生效后，`gbrain doctor --fast` 应报告绿色，`gbrain doctor` 应通过 `embedding_width_consistency` 检查：
+配方生效后，`pmbrain doctor --fast` 应报告绿色，`pmbrain doctor` 应通过 `embedding_width_consistency` 检查：
 
 ```
 ✓ embedding_width_consistency   dim parity: config 1280 / column vector(1280)

@@ -245,4 +245,4 @@ watchdog():
 | **推荐** | **$8/月（Hobby）** |
 
 ---
-*GBrain Skillpack 的一部分。另请参阅：[Voice-to-Brain](twilio-voice-brain.md)、[Remote MCP Deployment](../docs/mcp/DEPLOY.md)*
+*PMBrain Skillpack 的一部分。另请参阅：[Voice-to-Brain](twilio-voice-brain.md)、[ChatGPT MCP 接入](../docs/mcp/CHATGPT.md)*

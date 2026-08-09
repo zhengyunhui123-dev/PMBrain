@@ -188,7 +188,7 @@ export async function captureEvalCandidate(
  * a footgun even with PII scrubbing; tying capture to CONTRIBUTOR_MODE makes
  * the developer-skill nature of the feature explicit. Production users get
  * a quiet brain; contributors get the BrainBench-Real replay loop with one
- * shell rc line. See docs/eval-bench.md and CONTRIBUTING.md.
+ * shell rc line. See docs/eval/PMBrain检索与Dream质量评测规范.md.
  *
  * Takes the already-loaded config so callers control the loadConfig()
  * lifecycle (MCP server loads once at boot, CLI commands load per-invocation).

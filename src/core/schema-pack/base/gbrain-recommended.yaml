@@ -1,10 +1,9 @@
 # gbrain-recommended — the recommended starter pack.
 #
-# v0.39 T8 — converts the prose taxonomy in docs/GBRAIN_RECOMMENDED_SCHEMA.md
-# into a real, activatable schema pack. Users who like the documented
-# "operational brain" pattern can:
+# PMBrain bundled recommended taxonomy. The gbrain-prefixed pack identifier is
+# retained as a compatibility contract for existing installations. Activate it with:
 #
-#   gbrain schema use gbrain-recommended
+#   pmbrain schema use gbrain-recommended
 #
 # and get the documented behavior in one command instead of inferring it
 # from a 1013-line essay.
@@ -28,8 +27,7 @@ gbrain_min_version: 0.39.0
 extends: gbrain-base
 description: |
   The recommended starter pack for an operational personal brain.
-  Based on docs/GBRAIN_RECOMMENDED_SCHEMA.md — Karpathy's LLM wiki
-  pattern extended into a full operational knowledge base. Use this
+  PMBrain's recommended operational knowledge taxonomy. Use this
   when you want the documented behavior immediately instead of
   authoring your own pack from scratch.
 

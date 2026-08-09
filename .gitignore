@@ -66,6 +66,10 @@ load-env.ps1
 # Local context / brain dump — not for git
 context/
 
+# Local archive for upstream GBrain and retired documentation. Files moved
+# here are preserved for reference but must not be published with PMBrain.
+/备份/
+
 # Temp/generated artifacts — not project code
 _import_code.cjs
 imports/

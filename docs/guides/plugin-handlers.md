@@ -1,8 +1,8 @@
 # 插件处理程序 — 注册主机特定的 Minion 处理程序
 
-GBrain 的 Minion worker 附带七个内置处理程序：`sync`、`embed`、`lint`、`import`、`extract`、`backlinks`、`autopilot-cycle`。这些覆盖了 gbrain CLI 本身执行的每个后台操作。
+PMBrain 的 Minion worker 附带七个内置处理程序：`sync`、`embed`、`lint`、`import`、`extract`、`backlinks`、`autopilot-cycle`。这些覆盖了 PMBrain CLI 本身执行的每个后台操作。
 
-主机平台（OpenClaw 部署、将来的主机）通过导入 `gbrain/minions` 的插件引导注册它们自己的处理程序。没有 `handlers.json` 风格的数据文件 — 处理程序是代码，由 worker 加载，具有与主机仓库中任何其他代码相同的信任模型。
+主机平台通过导入 `pmbrain/minions` 的插件引导注册自己的处理程序。没有 `handlers.json` 风格的数据文件 — 处理程序是代码，由 worker 加载，具有与主机仓库中其他代码相同的信任模型。
 
 ## 为什么是代码，而不是数据
 
@@ -13,8 +13,8 @@ GBrain 的 Minion worker 附带七个内置处理程序：`sync`、`embed`、`li
 主机 worker 引导看起来像这样（TypeScript）：
 
 ```ts
-import { MinionQueue, MinionWorker } from 'gbrain/minions';
-import type { BrainEngine } from 'gbrain/engine';
+import { MinionQueue, MinionWorker } from 'pmbrain/minions';
+import type { BrainEngine } from 'pmbrain/engine';
 
 async function main() {
   const engine: BrainEngine = /* 你的引擎设置 */;
@@ -47,7 +47,7 @@ async function main() {
 main().catch(err => { console.error(err); process.exit(1); });
 ```
 
-将其作为单独的可执行文件发布在主机仓库中（例如 `your-openclaw-worker`），或者作为 stock `gbrain jobs work` 命令在启动时自动加载的副作用模块（通过主机提供的入口点可配置）。
+将其作为单独的可执行文件发布在主机仓库中（例如 `your-openclaw-worker`），或者作为 stock `pmbrain jobs work` 命令在启动时自动加载的副作用模块（通过主机提供的入口点可配置）。
 
 ## 处理程序合约
 
@@ -68,9 +68,9 @@ interface MinionJobContext {
 
 **幂等性。** 队列在数据库层强制执行唯一的 `idempotency_key`，所以你不需要担心 cron 在前一次调用仍在运行时触发的双重提交。
 
-## Gbrain 的迁移流程
+## PMBrain 的迁移流程
 
-v0.11.0 迁移编排器（由 `gbrain apply-migrations` 运行）检测处理程序名称不在 GBrain 内置集合中的 cron 条目，并向 `~/.gbrain/migrations/pending-host-work.jsonl` 发出结构化 TODO。每个 TODO 的形状为：
+v0.11.0 迁移编排器（由 `pmbrain apply-migrations` 运行）检测处理程序名称不在 PMBrain 内置集合中的 cron 条目，并向 `~/.pmbrain/migrations/pending-host-work.jsonl` 发出结构化 TODO。每个 TODO 的形状为：
 
 ```json
 {
@@ -78,17 +78,17 @@ v0.11.0 迁移编排器（由 `gbrain apply-migrations` 运行）检测处理程
   "handler": "ea-inbox-sweep",
   "cron_schedule": "0 */30 * * *",
   "manifest_path": "/path/to/cron/jobs.json",
-  "recommendation": "Add a handler registration for `ea-inbox-sweep` in your host worker bootstrap per docs/guides/plugin-handlers.md. Once registered, re-run `gbrain apply-migrations` to auto-rewrite this entry.",
+  "recommendation": "Add a handler registration for `ea-inbox-sweep` in your host worker bootstrap per docs/guides/plugin-handlers.md. Once registered, re-run `pmbrain apply-migrations` to auto-rewrite this entry.",
   "status": "pending"
 }
 ```
 
 主机代理使用 `skills/migrations/v0.11.0.md` 遍历这些条目：
 
-1. 读取 `~/.gbrain/migrations/pending-host-work.jsonl`。
+1. 读取 `~/.pmbrain/migrations/pending-host-work.jsonl`。
 2. 对于每个 `cron-handler-needs-host-registration` 行，请按照上面的模式在主机 worker 引导中发布处理程序注册。
 3. 部署更新的 worker。
-4. 重新运行 `gbrain apply-migrations --yes`。编排器现在会识别新可注册的处理程序（worker 在启动时将注册的名称写入发现文件）并重写 cron 条目以使用 `gbrain jobs submit`。JSONL 行被标记为 `status: "complete"`。
+4. 重新运行 `pmbrain apply-migrations --yes`。编排器现在会识别新可注册的处理程序（worker 在启动时将注册的名称写入发现文件）并重写 cron 条目以使用 `pmbrain jobs submit`。JSONL 行被标记为 `status: "complete"`。
 
 ## 信任边界
 

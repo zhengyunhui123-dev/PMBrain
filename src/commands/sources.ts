@@ -3,7 +3,7 @@
  *
  * A source is a logical brain-within-the-DB: wiki, gstack, yc-media, etc.
  * Every page/file/ingest_log row is scoped to a sources(id) row. Slugs
- * are unique per source. See docs/guides/multi-source-brains.md for the
+ * are unique per source. See docs/architecture/brains-and-sources.md for the
  * full story.
  *
  * Subcommands:
