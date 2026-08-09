@@ -53,6 +53,8 @@ export async function runImport(
   const reportFiles = args.includes('--report-files');
   const includeOffice = args.includes('--include-office');
   const includeImages = args.includes('--include-images');
+  const structuredDocuments = !args.includes('--legacy-document-parser');
+  const documentOcr = args.includes('--document-ocr');
 
   // T7 (D9): refuse cleanly when init persisted the deferred-setup sentinel,
   // unless the user is explicitly skipping embedding via `--no-embed` (in
@@ -162,7 +164,7 @@ export async function runImport(
   const dirArg = args.find((a, i) => !a.startsWith('--') && !flagValues.has(i));
 
   if (!dirArg) {
-    console.error('Usage: gbrain import <dir> [--no-embed] [--workers N] [--fresh] [--source-id <id>] [--include-office] [--include-images] [--json]');
+    console.error('Usage: gbrain import <dir> [--no-embed] [--workers N] [--fresh] [--source-id <id>] [--include-office] [--include-images] [--document-ocr] [--legacy-document-parser] [--json]');
     process.exit(1);
   }
   let dir: string = dirArg;  // narrowed; survives closure capture
@@ -245,7 +247,16 @@ export async function runImport(
     progress.tick(1, `imported=${imported} skipped=${skipped} errors=${errors}`);
   }
 
-  function reportFile(result: { status: 'imported' | 'partial' | 'unchanged' | 'failed'; path: string; chunks?: number; bytes?: number; reason?: string }) {
+  function reportFile(result: {
+    status: 'imported' | 'partial' | 'unchanged' | 'failed';
+    path: string;
+    chunks?: number;
+    bytes?: number;
+    reason?: string;
+    vectorized?: boolean;
+    document?: import('../core/document/types.ts').DocumentImportSummary;
+    largeDocument?: import('../core/document/trusted-large-document.ts').LargeDocumentProgress;
+  }) {
     if (reportFiles) console.error(`[pmbrain import-file] ${JSON.stringify(result)}`);
   }
 
@@ -262,9 +273,15 @@ export async function runImport(
       // unreachable when the gate is off; defense-in-depth check anyway.
       const imageImportEnabled = includeImages || (process.env.PMBRAIN_EMBEDDING_MULTIMODAL ?? process.env.GBRAIN_EMBEDDING_MULTIMODAL) === 'true';
       const result = isImageFilePath(relativePath) && imageImportEnabled
-        ? await importImageFile(eng, filePath, relativePath, { noEmbed, sourceId })
+        ? await importImageFile(eng, filePath, relativePath, { noEmbed, sourceId, forceOcr: documentOcr })
         : includeOffice && isOfficeFilePath(relativePath)
-          ? await importOfficeFile(eng, filePath, relativePath, { noEmbed, sourceId, activePack: importActivePack })
+          ? await importOfficeFile(eng, filePath, relativePath, {
+              noEmbed,
+              sourceId,
+              structured: structuredDocuments,
+              documentOcr,
+              activePack: importActivePack,
+            })
         : await importFile(eng, filePath, relativePath, { noEmbed, sourceId, activePack: importActivePack });
       const _fileMs = Date.now() - _fileT0;
       if (_fileMs > 5000) {
@@ -280,9 +297,35 @@ export async function runImport(
           : undefined;
         reportFile(embedSkip
           ? { status: 'partial', path: relativePath, chunks: result.chunks, bytes: embedSkipBytes, reason: '正文超过切片与向量化上限' }
-          : { status: 'imported', path: relativePath, chunks: result.chunks });
+          : {
+              status: 'imported',
+              path: relativePath,
+              chunks: result.chunks,
+              vectorized: !noEmbed,
+              document: result.documentSummary,
+              largeDocument: result.largeDocument,
+            });
         // v0.33.2: path-based checkpoint — record only on success.
         completed.add(relativePath);
+      } else if (result.status === 'partial') {
+        imported++;
+        errors++;
+        chunksCreated += result.chunks;
+        importedSlugs.push(result.slug);
+        const reason = result.error ?? 'Large document embedding is partially complete';
+        reportFile({
+          status: 'partial',
+          path: relativePath,
+          chunks: result.chunks,
+          reason,
+          vectorized: false,
+          document: result.documentSummary,
+          largeDocument: result.largeDocument,
+        });
+        failures.push({ path: relativePath, error: reason });
+        console.error(
+          `  Partial ${relativePath}: ${result.largeDocument?.embedded ?? 0}/${result.largeDocument?.chunksTotal ?? result.chunks} chunks embedded; retry will resume`,
+        );
       } else {
         skipped++;
         if (result.error && result.error !== 'unchanged') {

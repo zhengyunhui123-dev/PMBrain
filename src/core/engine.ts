@@ -120,6 +120,18 @@ export interface BatchOpts {
   signal?: AbortSignal;
 }
 
+/**
+ * Chunk writes replace the page's complete chunk manifest by default.
+ * Trusted structured-document imports opt into merge-only batches so a
+ * large manifest can be persisted incrementally without each batch deleting
+ * the preceding one. The caller must prune stale indices after all manifest
+ * batches land. Ordinary callers retain the historical replace semantics.
+ */
+export interface ChunkWriteOpts extends BatchOpts {
+  sourceId?: string;
+  replaceExisting?: boolean;
+}
+
 /** Input row for addLinksBatch. Optional fields default to '' (matches NOT NULL DDL). */
 export interface LinkBatchInput {
   from_slug: string;
@@ -962,7 +974,7 @@ export interface BrainEngine {
    * failure replays to the same end state. Callers MUST NOT wrap externally;
    * see {@link BatchOpts} retry-contract block.
    */
-  upsertChunks(slug: string, chunks: ChunkInput[], opts?: { sourceId?: string } & BatchOpts): Promise<void>;
+  upsertChunks(slug: string, chunks: ChunkInput[], opts?: ChunkWriteOpts): Promise<void>;
   /**
    * Read every chunk for a page. `opts.sourceId` source-scopes the page
    * lookup; without it, multi-source brains return chunks from every

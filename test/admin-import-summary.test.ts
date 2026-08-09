@@ -124,6 +124,22 @@ describe('Admin folder import summary', () => {
     expect(summary?.markdown).toContain('文件 `D:\\project\\large.xlsx` 仅部分导入');
     expect(summary?.markdown).toContain('未生成切片，也未进行向量化');
   });
+
+  test('shows local parser, OCR, chunks and vector status for one document', () => {
+    const summary = summarizeImportRun(
+      { slots: { path: 'D:\\project\\plan.pdf' } },
+      {
+        status: 'completed',
+        stderr: '[pmbrain import-file] {"status":"imported","path":"plan.pdf","chunks":37,"vectorized":true,"document":{"parser":"@firecrawl/pdf-inspector@1.12.0","structured":true,"local":true,"sections":12,"tables":4,"images":2,"pagesNeedingOcr":2,"ocrUsed":false}}',
+      },
+    );
+    expect(summary?.badge).toBe('已完成');
+    expect(summary?.markdown).toContain('本地结构化解析');
+    expect(summary?.markdown).toContain('识别 12 个内容区段、4 个表格、2 个图片位置');
+    expect(summary?.markdown).toContain('创建 37 个检索片段');
+    expect(summary?.markdown).toContain('向量化：已完成');
+    expect(summary?.markdown).toContain('有 2 页没有可靠文字');
+  });
 });
 
 describe('Admin import behavior contracts', () => {

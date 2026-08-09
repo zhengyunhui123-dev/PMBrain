@@ -8,7 +8,7 @@ import { chunkText } from './chunkers/recursive.ts';
 import { chunkCodeText, chunkCodeTextFull, detectCodeLanguage, CHUNKER_VERSION } from './chunkers/code.ts';
 import { findChunkForOffset } from './chunkers/edge-extractor.ts';
 import { extractCodeRefs, imageOfCandidates } from './link-extraction.ts';
-import { embedBatch, embedMultimodal } from './embedding.ts';
+import { embedBatch, embedMultimodal, getEmbeddingDimensions } from './embedding.ts';
 import { getEmbeddingModel } from './ai/gateway.ts';
 import { slugifyPath, slugifyCodePath, isCodeFilePath } from './sync.ts';
 import type { ChunkInput, PageInput, PageType } from './types.ts';
@@ -39,6 +39,12 @@ import { loadSearchModeConfig, resolveSearchMode } from './search/mode.ts';
 import { normalizeAliasList } from './search/alias-normalize.ts';
 import { isUndefinedTableError, warnOncePerProcess } from './utils.ts';
 import { computeCorpusGeneration } from './contextual-retrieval-service.ts';
+import {
+  batchLargeDocumentChunks,
+  logLargeDocumentProgress,
+  reuseStructuredChunkEmbeddings,
+  type LargeDocumentProgress,
+} from './document/trusted-large-document.ts';
 
 /**
  * v0.20.0 Cathedral II Layer 8 D2 — markdown fence extraction helper.
@@ -185,11 +191,13 @@ export interface ParentSectionInput {
   title: string;
   locator: string;
   text: string;
+  /** Repeated on every child chunk (for example, structured table headers). */
+  chunkContext?: string;
 }
 
 export interface ImportResult {
   slug: string;
-  status: 'imported' | 'skipped' | 'error';
+  status: 'imported' | 'partial' | 'skipped' | 'error';
   chunks: number;
   error?: string;
   /**
@@ -202,9 +210,14 @@ export interface ImportResult {
   quarantined?: boolean;
   flagged?: boolean;
   flag_reason?: 'markup_heavy' | 'oversized';
+  /** Structured document parsing/privacy summary for Office/PDF imports. */
+  documentSummary?: import('./document/types.ts').DocumentImportSummary;
+  /** Present only when the trusted structured large-document path ran. */
+  largeDocument?: LargeDocumentProgress;
 }
 
 const MAX_FILE_SIZE = 5_000_000; // 5MB
+const TRUSTED_STRUCTURED_IMPORT = Symbol('pmbrain.trusted-structured-import');
 
 /**
  * Import content from a string. Core pipeline:
@@ -273,6 +286,7 @@ export async function importFromContent(
     /** Optional structural child sections whose chunks inherit parent context. */
     parentSections?: ParentSectionInput[];
   } = {},
+  trustedStructuredToken?: symbol,
 ): Promise<ImportResult> {
   // v0.18.0+ multi-source: when caller is syncing under a non-default source,
   // every per-page tx call must carry `sourceId` so writes target the right
@@ -280,6 +294,18 @@ export async function importFromContent(
   // silently fabricated a duplicate at (default, slug) — causing later
   // bare-slug subqueries (getTags, deleteChunks, etc.) to crash with 21000.
   const sourceId = opts.sourceId;
+  const trustedStructuredRequested =
+    trustedStructuredToken === TRUSTED_STRUCTURED_IMPORT
+    && opts.remote !== true
+    && Array.isArray(opts.parentSections)
+    && opts.parentSections.length > 0
+    && opts.parentSections.every(section =>
+      typeof section.title === 'string'
+      && section.title.trim().length > 0
+      && typeof section.locator === 'string'
+      && typeof section.text === 'string'
+      && section.text.trim().length > 0
+    );
   // Reject oversized payloads before any parsing, chunking, or embedding happens.
   // Uses Buffer.byteLength to count UTF-8 bytes the same way disk size would,
   // so the network path behaves identically to the file path.
@@ -330,6 +356,7 @@ export async function importFromContent(
   let pageQuarantined = false;
   let pageFlagged = false;
   let pageFlagReason: 'markup_heavy' | 'oversized' | undefined;
+  let trustedLargeDocument = false;
   {
     const baseCfg = loadConfig();
     let effectiveCfg = baseCfg;
@@ -374,6 +401,14 @@ export async function importFromContent(
     logContentSanityAssessment(slug, sourceId ?? 'default', sanityResult, {
       bypass: sanityDisabled,
     });
+
+    // Only the unforgeable local structured-import entry may replace the
+    // whole-document size soft-block with Section -> Chunk processing.
+    // Junk/quarantine findings remain authoritative.
+    trustedLargeDocument =
+      trustedStructuredRequested
+      && sanityResult.shouldSkipEmbed
+      && !sanityResult.shouldQuarantine;
 
     if (sanityDisabled) {
       // Kill-switch active: loud stderr per offending ingest. Operator
@@ -432,10 +467,19 @@ export async function importFromContent(
         // (D9 transition invariant — old chunks were searchable
         // against stale content; deleting them maintains the
         // invariant that embed_skip means "no live chunks").
-        parsed.frontmatter[EMBED_SKIP_KEY] = buildEmbedSkipMarker(sanityResult.bytes);
-        process.stderr.write(
+        if (trustedLargeDocument) {
+          // Keep every other sanity outcome, including the oversized flag.
+          // Only the embed_skip consequence is bypassed.
+          delete parsed.frontmatter[EMBED_SKIP_KEY];
+          process.stderr.write(
+            `[pmbrain] content-sanity trusted-structured: ${slug} (${sanityResult.bytes} bytes) - whole-page embed_skip replaced by section chunking\n`,
+          );
+        } else {
+          parsed.frontmatter[EMBED_SKIP_KEY] = buildEmbedSkipMarker(sanityResult.bytes);
+          process.stderr.write(
           `[pmbrain] content-sanity soft-block: ${slug} (${sanityResult.bytes} bytes) — page lands, embedding skipped\n`,
-        );
+          );
+        }
       } else if (sanityResult.reasons.includes('oversize_warn')) {
         // Warn tier: page lands normally; lint surface picks up too.
         process.stderr.write(
@@ -493,7 +537,8 @@ export async function importFromContent(
   };
 
   const existing = await engine.getPage(slug, sourceId ? { sourceId } : undefined);
-  if (existing?.content_hash === hash && !opts.forceRechunk) {
+  const contentUnchanged = existing?.content_hash === hash && !opts.forceRechunk;
+  if (contentUnchanged && !trustedLargeDocument) {
     return { slug, status: 'skipped', chunks: 0, parsedPage };
   }
 
@@ -568,6 +613,7 @@ export async function importFromContent(
             `Parent document: ${parsed.title}`,
             `Section: ${section.title}`,
             `Locator: ${section.locator}`,
+            ...(section.chunkContext ? [section.chunkContext] : []),
           ].join('\n');
           chunks.push({
             chunk_index: chunks.length,
@@ -632,23 +678,29 @@ export async function importFromContent(
     effectiveCRMode = resolution.mode === 'per_chunk_synopsis' ? 'title' : resolution.mode;
   }
 
+  let wrappedTexts: string[] = [];
+  let embeddingModel: string | undefined;
+  let embeddingDimensions: number | undefined;
   if (!opts.noEmbed && chunks.length > 0) {
     const safeTitle = sanitizeTitle(parsed.title);
     const prefix =
       modeRequiresWrapper(effectiveCRMode) && !modeRequiresHaiku(effectiveCRMode)
         ? buildContextualPrefix(safeTitle, null)
         : null;
-    const wrappedTexts = prefix
+    wrappedTexts = prefix
       ? chunks.map((c) => wrapChunkForEmbedding(c.chunk_text, prefix, c.chunk_source))
       : chunks.map((c) => c.chunk_text);
-    const embeddings = await embedBatch(wrappedTexts);
-    const embeddingModel = getEmbeddingModel();
-    for (let i = 0; i < chunks.length; i++) {
-      chunks[i].embedding = embeddings[i];
-      chunks[i].model = embeddingModel;
-      // token_count tracks the wrapped string length so cost reporting
-      // reflects what we actually sent to the embedder.
-      chunks[i].token_count = Math.ceil(wrappedTexts[i].length / 4);
+    embeddingModel = getEmbeddingModel();
+    embeddingDimensions = getEmbeddingDimensions();
+    if (!trustedLargeDocument) {
+      const embeddings = await embedBatch(wrappedTexts);
+      for (let i = 0; i < chunks.length; i++) {
+        chunks[i].embedding = embeddings[i];
+        chunks[i].model = embeddingModel;
+        // token_count tracks the wrapped string length so cost reporting
+        // reflects what we actually sent to the embedder.
+        chunks[i].token_count = Math.ceil(wrappedTexts[i].length / 4);
+      }
     }
   }
 
@@ -663,13 +715,89 @@ export async function importFromContent(
           haikuModel: 'anthropic:claude-haiku-4-5-20251001',
         });
 
+  let largeProgress: LargeDocumentProgress | undefined;
+  let largePendingChunks: ChunkInput[] = [];
+  if (trustedLargeDocument) {
+    const sectionCount = opts.parentSections?.length ?? 0;
+    const existingChunks = existing
+      ? await engine.getChunks(slug, sourceId ? { sourceId } : undefined)
+      : [];
+    if (!opts.noEmbed && existingChunks.length > 0) {
+      // getChunks intentionally omits vector payloads from its normal egress.
+      // Hydrate only this page's ids for strict model/dimension reuse checks.
+      const hydrated = await engine.getEmbeddingsByChunkIds(existingChunks.map(chunk => chunk.id));
+      for (const chunk of existingChunks) {
+        chunk.embedding = hydrated.get(chunk.id) ?? null;
+      }
+    }
+    let reused = 0;
+    if (!opts.noEmbed && !opts.forceRechunk && embeddingModel && embeddingDimensions) {
+      const reuse = reuseStructuredChunkEmbeddings(
+        chunks,
+        existingChunks,
+        embeddingModel,
+        embeddingDimensions,
+      );
+      reused = reuse.reused;
+      largePendingChunks = reuse.pending;
+    } else if (!opts.noEmbed) {
+      largePendingChunks = [...chunks];
+    }
+
+    const exactManifest = existingChunks.length === chunks.length
+      && chunks.every((chunk, index) => {
+        const current = existingChunks[index];
+        if (!current || current.chunk_index !== chunk.chunk_index || current.chunk_text !== chunk.chunk_text) {
+          return false;
+        }
+        if (opts.noEmbed) return true;
+        return Boolean(
+          current.embedding
+          && current.model === embeddingModel
+          && current.embedding.length === embeddingDimensions,
+        );
+      });
+
+    largeProgress = {
+      mode: 'trusted_structured',
+      phase: 'parsed',
+      documentHash: hash,
+      bytes: byteLength,
+      sections: sectionCount,
+      chunksTotal: chunks.length,
+      embedded: reused,
+      reused,
+      pending: opts.noEmbed ? 0 : largePendingChunks.length,
+      failed: 0,
+      batchesCompleted: 0,
+    };
+    logLargeDocumentProgress(slug, largeProgress);
+    largeProgress = { ...largeProgress, phase: 'chunked' };
+    logLargeDocumentProgress(slug, largeProgress);
+
+    // Same content + complete canonical manifest is a true no-op. A prior
+    // partial run has NULL/mismatched vectors and therefore falls through.
+    if (contentUnchanged && exactManifest) {
+      largeProgress = {
+        ...largeProgress,
+        phase: 'completed',
+        embedded: opts.noEmbed ? 0 : chunks.length,
+        reused: opts.noEmbed ? 0 : chunks.length,
+        pending: 0,
+      };
+      logLargeDocumentProgress(slug, largeProgress);
+      return { slug, status: 'skipped', chunks: 0, parsedPage, largeDocument: largeProgress };
+    }
+  }
+
   // Transaction wraps all DB writes. Every per-page tx call carries the
   // caller's sourceId so writes target (sourceId, slug) rather than the
   // schema DEFAULT — required for multi-source brains; harmless ('default')
   // for single-source callers.
   const txOpts = sourceId ? { sourceId } : undefined;
-  await engine.transaction(async (tx) => {
-    if (existing) await tx.createVersion(slug, txOpts);
+  try {
+    await engine.transaction(async (tx) => {
+    if (existing && !contentUnchanged) await tx.createVersion(slug, txOpts);
 
     // v0.29.1 — compute effective_date from frontmatter precedence chain.
     // Filename comes from importFromFile path (basename) or the slug tail
@@ -739,7 +867,39 @@ export async function importFromContent(
     }
 
     if (chunks.length > 0) {
-      await tx.upsertChunks(slug, chunks, txOpts);
+      if (trustedLargeDocument) {
+        // Persist the canonical manifest in bounded merge-only batches, then
+        // prune stale indices once. This keeps the full page write atomic
+        // without constructing one enormous vector INSERT statement.
+        for (const batch of batchLargeDocumentChunks(chunks)) {
+          await tx.upsertChunks(slug, batch, {
+            ...(txOpts ?? {}),
+            replaceExisting: false,
+          });
+        }
+        const keepIndices = chunks.map(chunk => chunk.chunk_index);
+        await tx.executeRaw(
+          `DELETE FROM content_chunks
+           WHERE page_id = (SELECT id FROM pages WHERE slug = $1 AND source_id = $2)
+             AND chunk_index != ALL($3::int[])`,
+          [slug, sourceId ?? 'default', keepIndices],
+        );
+
+        // Same-text rows can carry an embedding from an obsolete model.
+        // Clear only genuinely pending indices so partial runs never expose a
+        // vector that fails the model/dimension resume contract.
+        if (!opts.noEmbed && largePendingChunks.length > 0) {
+          await tx.executeRaw(
+            `UPDATE content_chunks
+             SET embedding = NULL, model = NULL, embedded_at = NULL
+             WHERE page_id = (SELECT id FROM pages WHERE slug = $1 AND source_id = $2)
+               AND chunk_index = ANY($3::int[])`,
+            [slug, sourceId ?? 'default', largePendingChunks.map(chunk => chunk.chunk_index)],
+          );
+        }
+      } else {
+        await tx.upsertChunks(slug, chunks, txOpts);
+      }
     } else {
       // Content is empty — delete stale chunks so they don't ghost in search results
       await tx.deleteChunks(slug, txOpts);
@@ -781,7 +941,15 @@ export async function importFromContent(
         );
       } catch { /* same reason — silent skip */ }
     }
-  });
+    });
+  } catch (error) {
+    if (trustedLargeDocument && largeProgress) {
+      const message = error instanceof Error ? error.message : String(error);
+      largeProgress = { ...largeProgress, phase: 'failed', error: message };
+      logLargeDocumentProgress(slug, largeProgress);
+    }
+    throw error;
+  }
 
   // T3 — project frontmatter `aliases:` into page_aliases (free-text alias
   // resolution for search). Runs AFTER the page write commits so the slug
@@ -802,14 +970,116 @@ export async function importFromContent(
     }
   }
 
+  if (trustedLargeDocument && largeProgress) {
+    if (!opts.noEmbed && largePendingChunks.length > 0) {
+      largeProgress = { ...largeProgress, phase: 'embedding' };
+      logLargeDocumentProgress(slug, largeProgress);
+      let newlyEmbedded = 0;
+      let activeBatchSize = 0;
+      try {
+        for (const batch of batchLargeDocumentChunks(largePendingChunks)) {
+          activeBatchSize = batch.length;
+          const inputs = batch.map(chunk => wrappedTexts[chunk.chunk_index]);
+          const embeddings = await embedBatch(inputs);
+          if (embeddings.length !== batch.length) {
+            throw new Error(`Embedding gateway returned ${embeddings.length} vectors for ${batch.length} chunks`);
+          }
+          for (let index = 0; index < batch.length; index++) {
+            const chunk = batch[index];
+            chunk.embedding = embeddings[index];
+            chunk.model = embeddingModel!;
+            chunk.token_count = Math.ceil(inputs[index].length / 4);
+          }
+          await engine.upsertChunks(slug, batch, {
+            ...(txOpts ?? {}),
+            replaceExisting: false,
+          });
+          newlyEmbedded += batch.length;
+          activeBatchSize = 0;
+          largeProgress = {
+            ...largeProgress,
+            phase: 'embedding',
+            embedded: largeProgress.reused + newlyEmbedded,
+            pending: largePendingChunks.length - newlyEmbedded,
+            batchesCompleted: largeProgress.batchesCompleted + 1,
+          };
+          logLargeDocumentProgress(slug, largeProgress);
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        const remaining = largePendingChunks.length - newlyEmbedded;
+        largeProgress = {
+          ...largeProgress,
+          phase: 'partial',
+          pending: remaining,
+          failed: activeBatchSize || remaining,
+          error: message,
+        };
+        logLargeDocumentProgress(slug, largeProgress);
+        return {
+          slug,
+          status: 'partial',
+          chunks: chunks.length,
+          error: message,
+          parsedPage,
+          largeDocument: largeProgress,
+          ...(pageQuarantined ? { quarantined: true } : {}),
+          ...(pageFlagged ? { flagged: true, flag_reason: pageFlagReason } : {}),
+        };
+      }
+    }
+
+    largeProgress = {
+      ...largeProgress,
+      phase: 'completed',
+      embedded: opts.noEmbed ? 0 : chunks.length,
+      pending: 0,
+      failed: 0,
+    };
+    logLargeDocumentProgress(slug, largeProgress);
+  }
+
   return {
     slug,
     status: 'imported',
     chunks: chunks.length,
     parsedPage,
+    ...(largeProgress ? { largeDocument: largeProgress } : {}),
     ...(pageQuarantined ? { quarantined: true } : {}),
     ...(pageFlagged ? { flagged: true, flag_reason: pageFlagReason } : {}),
   };
+}
+
+/**
+ * Internal trust boundary for PMBrain's local structured parsers. The
+ * unexported symbol cannot be supplied by JSON/MCP/webhook callers, and the
+ * public importFromContent path never manufactures it. This function also
+ * refuses an empty/invalid section manifest before entering the core hook.
+ */
+export async function importTrustedStructuredContent(
+  engine: BrainEngine,
+  slug: string,
+  content: string,
+  opts: Omit<NonNullable<Parameters<typeof importFromContent>[3]>, 'remote'> & {
+    parentSections: ParentSectionInput[];
+  },
+): Promise<ImportResult> {
+  if (
+    !Array.isArray(opts.parentSections)
+    || opts.parentSections.length === 0
+    || opts.parentSections.some(section =>
+      !section.title?.trim() || !section.locator || !section.text?.trim()
+    )
+  ) {
+    throw new Error('Trusted structured import requires a valid non-empty ParentSection manifest');
+  }
+  return importFromContent(
+    engine,
+    slug,
+    content,
+    { ...opts, remote: false },
+    TRUSTED_STRUCTURED_IMPORT,
+  );
 }
 
 /**
@@ -1353,13 +1623,14 @@ async function readExifSafe(buf: Buffer): Promise<Record<string, unknown>> {
  * embedded in the image (mitigation for the OCR-as-prompt-injection vector).
  */
 let _ocrWarnedThisSession = false;
-async function maybeOcr(
+export async function extractImageOcrText(
   engine: BrainEngine,
   imgBuf: Buffer,
   mime: string,
+  opts: { enabled?: boolean } = {},
 ): Promise<string> {
   const opt = process.env.GBRAIN_EMBEDDING_IMAGE_OCR;
-  if (opt !== 'true') return '';
+  if (opts.enabled !== true && opt !== 'true') return '';
 
   // Counter helpers — quiet failure if config table is unavailable.
   async function bump(key: string) {
@@ -1404,6 +1675,8 @@ export interface ImportImageOptions {
    * with sourceId would TS-error on the importImageFile branch.
    */
   sourceId?: string;
+  /** Explicit per-import opt-in for OCR; still requires an available vision model. */
+  forceOcr?: boolean;
 }
 
 /** Module-level limiter so concurrent imports across files share the budget. */
@@ -1470,7 +1743,7 @@ export async function importImageFile(
   // images first-import doesn't serialize into 200s of OCR latency.
   const ocrText: string = opts.noEmbed
     ? ''
-    : await _ocrLimiter(() => maybeOcr(engine, decoded.buf, decoded.mime));
+    : await _ocrLimiter(() => extractImageOcrText(engine, decoded.buf, decoded.mime, { enabled: opts.forceOcr }));
 
   // Multimodal embed.
   let embedding: Float32Array | null = null;

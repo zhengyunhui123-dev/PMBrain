@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   isAdminKnowledgeSearchMode,
+  runAdminKnowledgeSearch,
 } from '../src/commands/admin-knowledge-search.ts';
 
 const ROOT = join(import.meta.dir, '..');
@@ -13,6 +14,19 @@ describe('Admin knowledge workbench search modes', () => {
     expect(isAdminKnowledgeSearchMode('semantic')).toBe(true);
     expect(isAdminKnowledgeSearchMode('think')).toBe(false);
     expect(isAdminKnowledgeSearchMode('hybrid')).toBe(false);
+  });
+
+  test('returns document locator separately from the readable snippet', async () => {
+    const engine = {
+      searchKeyword: async () => [{
+        slug: 'docs/plan.pdf', title: 'Plan', type: 'source', score: 1,
+        source_id: 'default', page_id: 1, chunk_id: 2,
+        chunk_text: 'Parent document: Plan\nSection: 启动条件\nLocator: 第三章 > 3.1 · 第 18 页\n\n当库存低于阈值时启动。',
+      }],
+    } as any;
+    const result = await runAdminKnowledgeSearch(engine, { query: '启动条件', mode: 'keyword' });
+    expect(result.results[0].locator).toBe('第三章 > 3.1 · 第 18 页');
+    expect(result.results[0].snippet).toBe('当库存低于阈值时启动。');
   });
 
   test('serve exposes knowledge-search API and does not route workbench search through think', () => {

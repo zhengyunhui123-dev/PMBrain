@@ -37,7 +37,7 @@ import { importFromContent } from '../../import-file.ts';
 
 export interface IngestCaptureResult {
   slug: string;
-  status: 'imported' | 'skipped' | 'error';
+  status: 'imported' | 'partial' | 'skipped' | 'error';
   chunks: number;
   untrusted_payload: boolean;
   source_kind: string;

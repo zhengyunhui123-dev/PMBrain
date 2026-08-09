@@ -79,6 +79,7 @@ const requiredFiles = [
   runtimeManifestPath,
   join(shape.runtimeRoot, 'pdf.worker.mjs'),
   join(shape.runtimeRoot, 'package.json'),
+  join(shape.runtimeRoot, 'THIRD_PARTY_NOTICES.md'),
   join(shape.runtimeRoot, 'recipes', 'agent-voice.md'),
   join(shape.runtimeRoot, 'templates', 'SOUL.md.template'),
   join(shape.runtimeRoot, 'skills', 'manifest.json'),
@@ -98,6 +99,12 @@ const requiredFiles = [
   join(shape.runtimeRoot, 'node_modules', '@dqbd', 'tiktoken', 'package.json'),
   join(shape.runtimeRoot, 'node_modules', 'web-tree-sitter', 'package.json'),
   join(shape.runtimeRoot, 'node_modules', 'libheif-js', 'package.json'),
+  ...(platform === 'win32' ? [
+    join(shape.runtimeRoot, 'node_modules', '@firecrawl', 'pdf-inspector', 'package.json'),
+    join(shape.runtimeRoot, 'node_modules', '@firecrawl', 'pdf-inspector', 'index.js'),
+    join(shape.runtimeRoot, 'node_modules', '@firecrawl', 'pdf-inspector-win32-x64-msvc', 'package.json'),
+    join(shape.runtimeRoot, 'node_modules', '@firecrawl', 'pdf-inspector-win32-x64-msvc', 'pdf-inspector.win32-x64-msvc.node'),
+  ] : []),
 ];
 
 const missing = requiredFiles.filter(path => !existsSync(path) || statSync(path).size === 0);

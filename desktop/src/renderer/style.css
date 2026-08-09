@@ -359,10 +359,10 @@ select { cursor: pointer; appearance: auto; -webkit-appearance: auto; }
 .repair-backup-list { display: grid; gap: 12px; }
 .diagnostic-export-card { display: flex; align-items: center; justify-content: space-between; gap: 24px; margin-bottom: 18px; padding: 18px 20px; border: 1px solid var(--line); border-radius: 13px; background: var(--surface); box-shadow: var(--panel-shadow); }
 .diagnostic-export-card > div { min-width: 0; }
-.diagnostic-export-card span { color: var(--accent); font: 700 9px Consolas, monospace; letter-spacing: .12em; }
+.diagnostic-export-card > div > span { color: var(--accent); font: 700 9px Consolas, monospace; letter-spacing: .12em; }
 .diagnostic-export-card h3 { margin: 6px 0; font-size: 16px; }
 .diagnostic-export-card p { margin: 0; color: var(--text-muted); font-size: 11px; line-height: 1.6; }
-.diagnostic-export-card button { flex: 0 0 auto; }
+.diagnostic-export-card button { flex: 0 0 auto; min-width: 128px; }
 .repair-backup-card { padding: 18px 20px; border: 1px solid var(--line); border-radius: 13px; background: var(--surface); box-shadow: var(--panel-shadow); }
 .repair-backup-heading { display: flex; justify-content: space-between; align-items: start; gap: 18px; }
 .repair-backup-heading span { color: var(--accent); font: 700 9px Consolas, monospace; letter-spacing: .12em; }

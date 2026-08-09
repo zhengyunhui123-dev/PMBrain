@@ -118,6 +118,7 @@ import {
   DreamSettingsResponseSchema,
   GenerativeUsageResponseSchema,
   ImportRunResponseSchema,
+  ImportRunRequestSchema,
   ImportSettingsResponseSchema,
   ImportUploadRunResponseSchema,
   LlmStatusResponseSchema,
@@ -743,13 +744,16 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
 
   app.post('/admin/api/import-runs', requireAdmin, express.json({ limit: '16kb' }), async (req: Request, res: Response) => {
     try {
+      const input = ImportRunRequestSchema.parse(req.body);
       const run = await startImportRun(engine, {
-        path: typeof req.body?.path === 'string' ? req.body.path : '',
-        sourceId: typeof req.body?.sourceId === 'string' ? req.body.sourceId : undefined,
-        includeOffice: req.body?.includeOffice === true,
-        includeImages: req.body?.includeImages === true,
-        noEmbed: req.body?.autoEmbed === false,
-        workers: Number(req.body?.workers ?? 1),
+        path: input.path,
+        sourceId: input.sourceId,
+        includeOffice: input.includeOffice,
+        includeImages: input.includeImages,
+        noEmbed: !input.autoEmbed,
+        structuredDocuments: input.structuredDocuments,
+        documentOcr: input.documentOcr,
+        workers: input.workers,
         fresh: true,
         reportFiles: true,
       }, process.cwd(), runHooks);
@@ -816,6 +820,8 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
           includeOffice: fileKind === 'office',
           includeImages: fileKind === 'image',
           noEmbed: !queryFlag(req.query.autoEmbed, true),
+          structuredDocuments: queryFlag(req.query.structuredDocuments, true),
+          documentOcr: queryFlag(req.query.documentOcr, false),
           workers,
           reportFiles: true,
         }, process.cwd(), uploadRunHooks);

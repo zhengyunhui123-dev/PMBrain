@@ -26,7 +26,9 @@ import type {
   DreamSettingsResponse,
   GenerativeUsageResponse,
   ImportRunResponse,
+  ImportRunRequest,
   ImportSettingsResponse,
+  ImportUploadOptions,
   ImportUploadRunResponse,
   LlmStatusResponse,
   SetDefaultSourceResponse,
@@ -132,11 +134,13 @@ export const api = {
   cancelRun: (id: string) => apiFetch(`/admin/api/runs/${encodeURIComponent(id)}/cancel`, { method: 'POST' }),
   startActionRun: (action: string) => apiFetch('/admin/api/runs/action', { method: 'POST', body: JSON.stringify({ action }) }),
   taskCenter: () => apiFetch('/admin/api/task-center'),
-  startImportRun: (body: { path: string; sourceId?: string; includeOffice: boolean; includeImages: boolean; autoEmbed: boolean; workers: number }) =>
+  startImportRun: (body: ImportRunRequest) =>
     apiFetch<ImportRunResponse>('/admin/api/import-runs', { method: 'POST', body: JSON.stringify(body) }, ImportRunResponseSchema),
-  startImportUploadRun: (file: File, options: { sourceId?: string; autoEmbed: boolean; workers: number }) => {
+  startImportUploadRun: (file: File, options: ImportUploadOptions) => {
     const query = new URLSearchParams({
       autoEmbed: options.autoEmbed ? '1' : '0',
+      structuredDocuments: options.structuredDocuments ? '1' : '0',
+      documentOcr: options.documentOcr ? '1' : '0',
       workers: String(options.workers),
     });
     if (options.sourceId) query.set('sourceId', options.sourceId);

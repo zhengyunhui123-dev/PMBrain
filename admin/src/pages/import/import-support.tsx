@@ -48,6 +48,7 @@ export interface KnowledgeSearchHit {
   type: string;
   score: number;
   snippet: string;
+  locator: string | null;
   source_id: string | null;
   page_id: number;
   chunk_id: number;
@@ -375,5 +376,7 @@ export interface KnowledgeImportOptions {
   includeOffice: boolean;
   includeImages: boolean;
   autoEmbed: boolean;
+  structuredDocuments: boolean;
+  documentOcr: boolean;
   workers: number;
 }
