@@ -471,6 +471,17 @@ export interface CycleOpts {
    * Validated via `assertValidSourceId` in `cycleLockIdFor` (defense-in-depth).
    */
   sourceId?: string;
+  /**
+   * PMBrain Quick Maintenance: after the extract phase, also run the existing
+   * deterministic by-mention linker (entity gazetteer → mentions edges).
+   * Full Dream leaves this unset so upstream phase semantics stay intact.
+   */
+  includeByMention?: boolean;
+  /**
+   * When includeByMention is set, cap historical (non-priority) pages scanned
+   * after this-run sync successes. Default 500. Checkpoint resumes next run.
+   */
+  byMentionMaxHistorical?: number;
 }
 
 // ─── Lock primitives ───────────────────────────────────────────────
@@ -1685,6 +1696,47 @@ export async function runCycle(
         progress.start('cycle.extract');
         const { result, duration_ms } = await timePhase(() => runPhaseExtract(engine, opts.brainDir, dryRun, syncPagesAffected));
         result.duration_ms = duration_ms;
+
+        // PMBrain Quick: deterministic by-mention after explicit link extract.
+        // Independent of empty syncPagesAffected so historical catch-up and
+        // failed-file isolation still build knowledge relations.
+        if (opts.includeByMention && !dryRun) {
+          try {
+            const { runByMentionCore } = await import('../commands/extract.ts');
+            const mentionStart = performance.now();
+            const mention = await runByMentionCore(engine, {
+              prioritySlugs: syncPagesAffected,
+              maxHistoricalPages: opts.byMentionMaxHistorical ?? 500,
+              sourceIdFilter: opts.sourceId,
+              quiet: true,
+            });
+            const mentionMs = Math.round(performance.now() - mentionStart);
+            const prevLinks = Number(result.details.linksCreated ?? 0);
+            result.details = {
+              ...result.details,
+              linksCreated: prevLinks + mention.created,
+              mentionLinksCreated: mention.created,
+              mentionPagesProcessed: mention.pages,
+              mentionHistoricalRemaining: mention.historicalRemaining,
+              by_mention: true,
+            };
+            result.summary =
+              `${result.summary}; by-mention +${mention.created} link(s) ` +
+              `(${mention.pages} page(s), ${mention.historicalRemaining} historical remaining)`;
+            result.duration_ms += mentionMs;
+            if (result.status === 'skipped' && mention.pages > 0) {
+              result.status = 'ok';
+            }
+          } catch (e) {
+            result.status = result.status === 'fail' ? 'fail' : 'warn';
+            result.details = {
+              ...result.details,
+              by_mention_error: e instanceof Error ? e.message : String(e),
+            };
+            result.summary = `${result.summary}; by-mention failed`;
+          }
+        }
+
         phaseResults.push(result);
         progress.finish();
       }

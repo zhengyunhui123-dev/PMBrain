@@ -667,6 +667,28 @@ export async function runDream(engine: BrainEngine | null, args: string[]): Prom
   const brainDir = await resolveBrainDir(engine, opts.dir, resolvedSourcePath);
   ensureDreamSystemSkillAssets(brainDir);
   validateDreamInputPath(opts.inputFile);
+
+  // Quick Maintenance is PMBrain's thin orchestration (by-mention + failed-file
+  // isolation). Full / meeting / bare dream keep upstream runCycle phase tables.
+  if (opts.preset === 'quick' && !opts.phase) {
+    const { runQuickMaintenance } = await import('../core/quick-maintenance.ts');
+    const report = await runQuickMaintenance(engine, {
+      brainDir,
+      dryRun: opts.dryRun,
+      pull: opts.pull,
+      sourceId: resolvedSourceId,
+    });
+    if (opts.json) {
+      console.log(JSON.stringify(report, null, 2));
+    } else {
+      printHuman(report);
+    }
+    if (report.status === 'failed') {
+      process.exit(1);
+    }
+    return report;
+  }
+
   const phases: CyclePhase[] | undefined = opts.phase
     ? [opts.phase]
     : opts.preset
