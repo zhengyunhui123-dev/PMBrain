@@ -1980,14 +1980,19 @@ async function performFullSync(
       );
       await engine.setConfig('sync.last_run', new Date().toISOString());
       await writeSyncAnchor(engine, opts.sourceId, 'repo_path', repoPath);
+      // Keep successfully imported slugs so extract / relation / embed can
+      // continue for good files. Failures still block last_commit advance.
       return {
         status: 'blocked_by_failures',
         fromCommit: null,
         toCommit: headCommit,
-        added: 0, modified: 0, deleted: 0, renamed: 0,
+        added: result.imported,
+        modified: 0,
+        deleted: 0,
+        renamed: 0,
         chunksCreated: result.chunksCreated,
         embedded: 0,
-        pagesAffected: [],
+        pagesAffected: result.importedSlugs ?? [],
         failedFiles: result.failures.length,
       };
     }
@@ -2040,7 +2045,9 @@ async function performFullSync(
     renamed: 0,
     chunksCreated: result.chunksCreated,
     embedded,
-    pagesAffected: [],
+    // Surface imported slugs so cycle extract can run incrementally after
+    // first_sync instead of receiving [] and processing zero pages.
+    pagesAffected: result.importedSlugs ?? [],
   };
 }
 

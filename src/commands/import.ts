@@ -40,6 +40,12 @@ export interface RunImportResult {
   errors: number;
   chunksCreated: number;
   failures: Array<{ path: string; error: string }>;
+  /**
+   * Slugs successfully imported this run (status imported/partial).
+   * Downstream Quick/Full extract must keep processing these even when
+   * other files failed and last_commit is not advanced.
+   */
+  importedSlugs: string[];
 }
 
 export async function runImport(
@@ -539,7 +545,7 @@ export async function runImport(
     await engine.setConfig('sync.repo_path', importRoot);
   }
 
-  return { imported, skipped, errors, chunksCreated, failures };
+  return { imported, skipped, errors, chunksCreated, failures, importedSlugs };
 }
 
 /**
