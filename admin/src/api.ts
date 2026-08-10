@@ -9,7 +9,6 @@ import {
   DreamSettingsResponseSchema,
   GenerativeUsageResponseSchema,
   ImportRunResponseSchema,
-  ImportSettingsResponseSchema,
   ImportUploadRunResponseSchema,
   LlmStatusResponseSchema,
   SetDefaultSourceResponseSchema,
@@ -27,7 +26,6 @@ import type {
   GenerativeUsageResponse,
   ImportRunResponse,
   ImportRunRequest,
-  ImportSettingsResponse,
   ImportUploadOptions,
   ImportUploadRunResponse,
   LlmStatusResponse,
@@ -148,9 +146,6 @@ export const api = {
   },
   startMarkdownExportRun: (rootPath: string) =>
     apiFetch('/admin/api/export-runs', { method: 'POST', body: JSON.stringify({ rootPath }) }),
-  importSettings: () => apiFetch<ImportSettingsResponse>('/admin/api/import/settings', undefined, ImportSettingsResponseSchema),
-  saveImportSettings: (thresholdKb: number) =>
-    apiFetch<ImportSettingsResponse>('/admin/api/import/settings', { method: 'POST', body: JSON.stringify({ thresholdKb }) }, ImportSettingsResponseSchema),
   dreamOverview: () => apiFetch<DreamOverviewResponse>('/admin/api/dream/overview', undefined, DreamOverviewResponseSchema),
   dreamSettings: () => apiFetch<DreamSettingsResponse>('/admin/api/dream/settings', undefined, DreamSettingsResponseSchema),
   saveDreamSettings: (body: { outputDir: string; dualWrite: boolean }) =>

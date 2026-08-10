@@ -1,5 +1,6 @@
 ## PMBrain 1.1.15
 
+- 管理台移除已经失去作用的“导入与向量化”阈值设置；普通 Markdown、MCP 和外部输入仍由核心 500KB 内容安全规则保护，可信结构化 Office/PDF 继续按 Section → Chunk 处理。
 - 修复 PGLite 一次性命令已经完成但数据库关闭句柄卡住时，首次配置或 Admin 长时间停留在“处理中”的问题；Windows CI 现在会真实验证打包 Sidecar 连续上传 Markdown 和 PDF。
 - 修复不同 Windows 构建环境生成 Admin HTML 空行不一致的问题，并同步更新只验证 Windows Desktop Runtime 的 CI 契约。
 - 可信的大型 PDF、Word、PPT 和 Excel 文档不再因结构化正文超过 500KB 而整篇跳过向量化；普通 Markdown、MCP、Webhook 和远程输入仍保留原安全限制。

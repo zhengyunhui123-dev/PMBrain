@@ -154,7 +154,6 @@ describe('Admin import behavior contracts', () => {
     expect(settingsSource).toContain("const [savedOutputDir, setSavedOutputDir] = useState('output')");
     expect(settingsSource).toContain('!outputDirDirty');
     expect(settingsSource).toContain("saving ? '正在保存…' : '保存'");
-    expect(settingsSource).toContain('value.thresholdKb === savedThresholdKb');
     expect(settingsSource).not.toContain("saving ? '正在保存…' : '保存设置'");
   });
 

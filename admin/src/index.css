@@ -6445,7 +6445,6 @@ tbody tr:hover td { background: color-mix(in srgb, var(--accent) 4%, var(--conso
 
 .dream-settings-card,
 .dream-schedule-settings,
-.import-vector-settings,
 .settings-source-section,
 .markdown-export-card,
 .model-snapshot-card {
@@ -6454,7 +6453,6 @@ tbody tr:hover td { background: color-mix(in srgb, var(--accent) 4%, var(--conso
 
 .dream-settings-card,
 .dream-schedule-settings,
-.import-vector-settings,
 .markdown-export-card,
 .model-snapshot-card {
   padding: 18px 20px;
@@ -6505,11 +6503,6 @@ tbody tr:hover td { background: color-mix(in srgb, var(--accent) 4%, var(--conso
 .dream-schedule-time input { width: 100%; }
 .dream-schedule-time button { justify-self: end; }
 .dream-schedule-note { margin: -2px 0 0; line-height: 1.65; }
-.import-vector-settings { display: grid; gap: 14px; }
-.import-vector-setting-row { display: grid; grid-template-columns: auto minmax(120px, 180px) auto auto; gap: 10px; align-items: center; }
-.import-vector-setting-row input { width: 100%; }
-.import-vector-setting-row button { margin-left: 4px; }
-
 .dream-output-preview {
   margin: 0;
   background: var(--console-surface);

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Clock3, Database, Download, MonitorCog, Sparkles } from 'lucide-react';
+import { Clock3, Download, MonitorCog, Sparkles } from 'lucide-react';
 import { api } from '../api';
 import { RunOutput, type ConsoleRun } from '../lib/shared';
 import type { ThemeMode } from '../lib/theme';
@@ -10,7 +10,6 @@ import type {
   DreamScheduleResponse,
   DreamSettingsResponse,
   GenerativeUsageResponse,
-  ImportSettingsResponse,
 } from '../../../shared/contracts/index.ts';
 export function ModelConfigPage() {
   const { overview, reload } = useOverview();
@@ -429,77 +428,7 @@ function DreamScheduleSettings() {
     </section>
   );
 }
-type ImportSettingsValue = Omit<ImportSettingsResponse, 'bytesBlock'>;
-
-function ImportVectorizationSettings() {
-  const [value, setValue] = useState<ImportSettingsValue>({ thresholdKb: 500, minKb: 100, maxKb: 5000 });
-  const [savedThresholdKb, setSavedThresholdKb] = useState(500);
-  const [saving, setSaving] = useState(false);
-  const [message, setMessage] = useState('');
-  const [error, setError] = useState('');
-
-  useEffect(() => {
-    void api.importSettings()
-      .then(next => {
-        const loaded = next;
-        setValue(loaded);
-        setSavedThresholdKb(loaded.thresholdKb);
-      })
-      .catch(nextError => setError(nextError instanceof Error ? nextError.message : String(nextError)));
-  }, []);
-
-  const save = async () => {
-    setSaving(true);
-    setMessage('');
-    setError('');
-    try {
-      const saved = await api.saveImportSettings(value.thresholdKb);
-      setValue(saved);
-      setSavedThresholdKb(saved.thresholdKb);
-      setMessage('切片与向量化上限已保存');
-    } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : String(nextError));
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <section className="pm-card import-vector-settings settings-panel">
-      <div className="settings-panel-title">
-        <span className="settings-panel-icon"><Database /></span>
-        <div>
-          <h2>导入切片与向量化</h2>
-          <p>适用于所有文件。正文超过此上限时仍会保留，但不会切片和向量化，并会明确提示原因。</p>
-        </div>
-      </div>
-      <div className="import-vector-setting-row">
-        <label htmlFor="vectorization-threshold">最大正文大小</label>
-        <input
-          id="vectorization-threshold"
-          type="number"
-          min={value.minKb}
-          max={value.maxKb}
-          step={100}
-          value={value.thresholdKb}
-          onChange={event => setValue(current => ({ ...current, thresholdKb: Number(event.target.value) || current.minKb }))}
-          disabled={saving}
-        />
-        <span>KB</span>
-        <button className="pm-primary" onClick={() => void save()} disabled={saving || value.thresholdKb === savedThresholdKb || value.thresholdKb < value.minKb || value.thresholdKb > value.maxKb}>
-          {saving ? '正在保存…' : '保存'}
-        </button>
-      </div>
-      <p className="pm-hint">默认 500 KB，可设置 100–5000 KB。上限越大，切片和向量化耗时越长，也会增加内存、模型调用量和 API 消耗。该项不限制原文件上传大小。</p>
-      {(message || error) && <div className="settings-feedback" aria-live="polite">
-        {message && <span className="pm-ok">{message}</span>}
-        {error && <span className="pm-error-text">{error}</span>}
-      </div>}
-    </section>
-  );
-}
-
-export type SettingsSection = 'general' | 'knowledge' | 'dream' | 'import';
+export type SettingsSection = 'general' | 'knowledge' | 'dream';
 
 const SETTINGS_SECTIONS: Array<{
   key: SettingsSection;
@@ -509,7 +438,6 @@ const SETTINGS_SECTIONS: Array<{
   { key: 'general', label: '常规设置', description: '管理台界面外观' },
   { key: 'knowledge', label: '知识库设置', description: '主源、数据源与导出' },
   { key: 'dream', label: '知识整理设置', description: '整理规则与定时任务' },
-  { key: 'import', label: '导入与向量化', description: '文件限制与切片上限' },
 ];
 
 function AppearanceSettings({
@@ -589,7 +517,6 @@ export function SettingsPage({
             <DreamScheduleSettings />
           </div>
         )}
-        {section === 'import' && <ImportVectorizationSettings />}
       </div>
     </div>
   );
