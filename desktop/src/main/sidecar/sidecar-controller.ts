@@ -242,15 +242,78 @@ export class SidecarController {
     if (this.readyPromise) return this.readyPromise;
 
     const pending = (async () => {
+      const {
+        POST_UPGRADE_READY_ATTEMPTS,
+        POST_UPGRADE_SETTLE_MS,
+        postUpgradeRetryDelayMs,
+        sanitizeStartupFailureMessage,
+        sleep,
+      } = await import('../startup/post-upgrade-startup.js');
+
       await this.dependencies.ensureRuntimeReady();
       await this.dependencies.prepareConfiguredDatabase();
       const setup = getSetupInfo();
       const migrationRequired = await this.dependencies.migrateConfiguredInstallation();
       if (migrationRequired && setup.current.engine !== 'pglite') markDesktopMigration(app.getVersion());
-      if (!this.manager || this.stateValue?.phase !== 'ready') await this.start(false);
-      if (!this.manager || this.stateValue?.phase !== 'ready') throw new Error('PMBrain 本地服务尚未就绪。');
-      if (migrationRequired && setup.current.engine === 'pglite') markDesktopMigration(app.getVersion());
-      return this.manager;
+
+      // Upgrade cold-backup holds an exclusive PGLite lock. Give it a short
+      // settle window so the first sidecar start does not race the lock.
+      if (migrationRequired) {
+        this.dependencies.sendStartupProgress({
+          visible: true,
+          stage: 'sidecar',
+          title: '升级完成，正在启动本地服务',
+          message: '升级前冷备已完成。PMBrain 正在启动本地服务并自动重试，请稍候，无需手动点击重启。',
+        });
+        await sleep(POST_UPGRADE_SETTLE_MS);
+      }
+
+      const maxAttempts = migrationRequired ? POST_UPGRADE_READY_ATTEMPTS : 1;
+      let lastError: unknown;
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        try {
+          if (this.manager && this.stateValue?.phase !== 'ready') {
+            // Clear a failed/half-started manager before another attempt.
+            await this.stopNow();
+          }
+          if (!this.manager || this.stateValue?.phase !== 'ready') {
+            await this.start(false);
+          }
+          if (this.manager && this.stateValue?.phase === 'ready') {
+            if (migrationRequired && setup.current.engine === 'pglite') {
+              markDesktopMigration(app.getVersion());
+            }
+            return this.manager;
+          }
+          lastError = new Error('PMBrain 本地服务尚未就绪。');
+        } catch (error) {
+          lastError = error;
+          const raw = error instanceof Error ? error.message : String(error);
+          this.dependencies.getLogger()?.write(
+            'desktop',
+            `ensureReady attempt ${attempt}/${maxAttempts} failed: ${raw}`,
+          );
+          try {
+            await this.stopNow();
+          } catch {
+            // best-effort cleanup between retries
+          }
+        }
+        if (attempt < maxAttempts) {
+          this.dependencies.sendStartupProgress({
+            visible: true,
+            stage: 'sidecar',
+            title: `正在自动重试本地服务（${attempt + 1}/${maxAttempts}）`,
+            message: '升级后首次启动偶发未就绪，PMBrain 正在自动重试，成功后会直接进入管理台。',
+          });
+          await sleep(postUpgradeRetryDelayMs(attempt));
+        }
+      }
+
+      const message = sanitizeStartupFailureMessage(
+        lastError instanceof Error ? lastError.message : String(lastError ?? 'unknown'),
+      );
+      throw new Error(message, { cause: lastError });
     })();
     this.readyPromise = pending;
     try {

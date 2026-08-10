@@ -123,12 +123,49 @@ function selectedEngine(): 'pglite' | 'postgres' {
   return (document.querySelector<HTMLInputElement>('input[name="engine"]:checked')?.value ?? 'pglite') as 'pglite' | 'postgres';
 }
 
+/** Configured engine currently in use (saved), not only the radio draft. */
+function configuredEngine(): 'pglite' | 'postgres' {
+  return state?.setup.current.engine === 'postgres' ? 'postgres' : 'pglite';
+}
+
+function renderDatabaseEngineHint(): void {
+  const engine = selectedEngine();
+  const hint = $('#database-engine-hint');
+  const text = $('#database-engine-hint-text');
+  const title = hint.querySelector('b');
+  if (engine === 'pglite') {
+    hint.classList.remove('ready');
+    hint.classList.add('warning');
+    if (title) title.textContent = 'PGLite 限制';
+    text.textContent =
+      'PGLite 是嵌入式单写者数据库：不支持多进程并发写入，也不适合多人同时通过局域网/MCP 使用。' +
+      '单机自己用最省事；若有多用户或共享模式需求，请改选 Docker Postgres。';
+  } else {
+    hint.classList.remove('warning');
+    hint.classList.add('ready');
+    if (title) title.textContent = '多用户更合适';
+    text.textContent =
+      'Docker Postgres 支持多连接并发，适合局域网共享、多人 MCP 接入和更大规模知识库。' +
+      '请确保本机已有带 pgvector 的 Postgres 容器，并填写正确连接地址。';
+  }
+}
+
+function renderPgliteSharedWarning(): void {
+  const warning = $('#pglite-shared-warning');
+  const shared = selectedNetworkMode() === 'shared';
+  // Use saved/running engine so the warning matches the actual database, not an unsaved radio draft.
+  const show = shared && configuredEngine() === 'pglite';
+  warning.hidden = !show;
+}
+
 function renderEngine(): void {
   const engine = selectedEngine();
   $('#pglite-fields').hidden = engine !== 'pglite';
   $('#postgres-fields').hidden = engine !== 'postgres';
   $('#mode-pglite-card').classList.toggle('selected', engine === 'pglite');
   $('#mode-postgres-card').classList.toggle('selected', engine === 'postgres');
+  renderDatabaseEngineHint();
+  renderPgliteSharedWarning();
 }
 
 function normalizePglitePathForDisplay(value: string): string {
@@ -702,6 +739,7 @@ function renderNetworkMode(): void {
   $('#shared-connection-spine').hidden = !shared;
   $('#network-mode-local-card').classList.toggle('selected', !shared);
   $('#network-mode-shared-card').classList.toggle('selected', shared);
+  renderPgliteSharedWarning();
 }
 
 function renderSystemSettings(next: DesktopSystemSettingsState): void {
@@ -838,7 +876,10 @@ async function saveSystemSettings(): Promise<void> {
     if (mode === 'local') {
       setNotice('success', '系统设置已保存，当前仅本机连接。');
     } else if (result.state.gateway?.running) {
-      setNotice('success', `共享入口已保存：${result.state.sharedMcpUrl || address.address}`);
+      const pgliteNote = configuredEngine() === 'pglite'
+        ? ' 注意：当前是 PGLite，多人同时使用可能卡顿或不稳定，多用户请改用 Docker Postgres。'
+        : '';
+      setNotice('success', `共享入口已保存：${result.state.sharedMcpUrl || address.address}.${pgliteNote}`);
     } else {
       setNotice('success', '系统设置已保存；局域网共享仍保持停止，请按页面提示恢复固定网卡或 IPv4 后重新确认。');
     }

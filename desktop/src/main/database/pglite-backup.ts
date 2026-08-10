@@ -52,18 +52,37 @@ export class PgliteBackupController {
       title: '正在创建升级前数据库冷备',
       message: 'sidecar 已停止。PMBrain 正在取得独占迁移锁、复制完整 PGLite 目录并验证恢复副本，请不要关闭窗口。',
     });
-    const completed = await this.dependencies.runCliChecked(this.dependencies.runtime(), [
-      'pglite-backup',
-      'create',
-      '--path', databasePath,
-      '--target-version', this.dependencies.appVersion(),
-      '--json',
-    ]);
-    const result = JSON.parse(completed.stdout.trim().split(/\r?\n/).at(-1) || '{}') as {
+    const { parseSuccessfulBackupJsonFromError } = await import('../startup/post-upgrade-startup.js');
+    let result: {
       status?: string;
       backup_directory?: string;
       reason?: string;
     };
+    try {
+      const completed = await this.dependencies.runCliChecked(this.dependencies.runtime(), [
+        'pglite-backup',
+        'create',
+        '--path', databasePath,
+        '--target-version', this.dependencies.appVersion(),
+        '--json',
+      ]);
+      result = JSON.parse(completed.stdout.trim().split(/\r?\n/).at(-1) || '{}') as {
+        status?: string;
+        backup_directory?: string;
+        reason?: string;
+      };
+    } catch (error) {
+      // Windows occasionally exits non-zero after printing a valid success
+      // envelope. Recover so upgrade first-boot is not false-failed.
+      const recovered = parseSuccessfulBackupJsonFromError(
+        error instanceof Error ? error.message : String(error),
+      );
+      if (!recovered) throw error;
+      this.dependencies.log(
+        `PGLite upgrade backup CLI exited non-zero but returned success JSON (${recovered.status}); continuing.`,
+      );
+      result = recovered;
+    }
     if (result.status === 'not_required' && result.reason === 'database_missing') {
       this.backupByVersion.set(key, null);
       this.dependencies.log(`PGLite upgrade backup not required; database does not exist yet: ${databasePath}`);
