@@ -36,6 +36,8 @@ extraResources:
     to: pmbrain-runtime/node_modules/tslib
   - from: ../node_modules/web-tree-sitter
     to: pmbrain-runtime/node_modules/web-tree-sitter
+  - from: ../node_modules/@firecrawl/pdf-inspector
+    to: pmbrain-runtime/node_modules/@firecrawl/pdf-inspector
 win:
   artifactName: PMBrain-Windows-${arch}-Setup-${version}.${ext}
   target:
@@ -46,6 +48,8 @@ win:
   extraResources:
     - from: ../node_modules/@napi-rs/canvas-win32-x64-msvc
       to: pmbrain-runtime/node_modules/@napi-rs/canvas-win32-x64-msvc
+    - from: ../node_modules/@firecrawl/pdf-inspector-win32-x64-msvc
+      to: pmbrain-runtime/node_modules/@firecrawl/pdf-inspector-win32-x64-msvc
 mac:
   artifactName: PMBrain-macOS-${arch}-${version}.${ext}
   # CI currently has no Apple Developer certificate. Keep unsigned builds
