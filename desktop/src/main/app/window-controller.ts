@@ -105,13 +105,16 @@ export class WindowController {
     if (!window.isVisible()) window.show();
     if (!getSetupInfo().needsSetup) {
       try {
+        // ensureReady already auto-retries after upgrades; success → Admin.
         await this.dependencies.sidecar.ensureReady();
         if (this.dependencies.sidecar.current && this.dependencies.sidecar.state?.phase === 'ready') {
           await window.loadURL(await this.dependencies.sidecar.current.createAdminLink());
         }
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        this.dependencies.getLogger()?.write('desktop', message);
+        const { sanitizeStartupFailureMessage } = await import('../startup/post-upgrade-startup.js');
+        const raw = error instanceof Error ? error.message : String(error);
+        const message = sanitizeStartupFailureMessage(raw);
+        this.dependencies.getLogger()?.write('desktop', `startup failed after auto-retry: ${raw}`);
         this.dependencies.sidecar.reportFailure(message);
         this.dependencies.hideStartupProgress();
       }

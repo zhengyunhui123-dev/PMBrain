@@ -26,6 +26,21 @@ describe('desktop settings renderer contracts', () => {
     expect(styles).not.toContain('#97e66c');
   });
 
+  test('database engine cards explain PGLite single-writer limits and multi-user Postgres', () => {
+    expect(html).toContain('id="database-engine-hint"');
+    expect(html).toContain('id="database-engine-hint-text"');
+    expect(html).toContain('不支持多人并发写入');
+    expect(html).toContain('适合多用户、局域网共享');
+    expect(html).toContain('id="pglite-shared-warning"');
+    expect(html).toContain('PGLite + 共享模式');
+    expect(renderer).toContain('renderDatabaseEngineHint');
+    expect(renderer).toContain('renderPgliteSharedWarning');
+    expect(renderer).toContain('configuredEngine');
+    expect(renderer).toContain('多人同时使用可能卡顿或不稳定');
+    expect(styles).toContain('.engine-usage-hint');
+    expect(styles).toContain('.engine-usage-hint.warning');
+  });
+
   test('keeps the six desktop tasks separate and exposes advanced-only controls', () => {
     for (const panel of ['basic', 'models', 'integrations', 'system', 'updates', 'repair']) {
       expect(html).toContain(`data-target="${panel}"`);

@@ -21,6 +21,12 @@ import {
 } from '../src/core/quick-maintenance.ts';
 import { ALL_PHASES } from '../src/core/cycle.ts';
 import { runByMentionCore } from '../src/commands/extract.ts';
+import { withEnv } from './helpers/with-env.ts';
+
+/** Isolate sync-failure JSONL and config home per suite via withEnv. */
+function withTestHome<T>(home: string, fn: () => T | Promise<T>): Promise<T> {
+  return withEnv({ PMBRAIN_HOME: home, GBRAIN_HOME: home }, fn);
+}
 
 function makeGitRepo(): string {
   const dir = mkdtempSync(join(tmpdir(), 'pmbrain-quick-maint-'));
@@ -120,8 +126,6 @@ describe('sync failure isolation (TEST 1–2)', () => {
 
   beforeAll(async () => {
     home = mkdtempSync(join(tmpdir(), 'pmbrain-quick-home-'));
-    process.env.PMBRAIN_HOME = home;
-    process.env.GBRAIN_HOME = home;
     engine = new PGLiteEngine();
     await engine.connect({});
     await engine.initSchema();
@@ -131,8 +135,6 @@ describe('sync failure isolation (TEST 1–2)', () => {
     await engine.disconnect();
     if (repo && existsSync(repo)) rmSync(repo, { recursive: true, force: true });
     if (home && existsSync(home)) rmSync(home, { recursive: true, force: true });
-    delete process.env.PMBRAIN_HOME;
-    delete process.env.GBRAIN_HOME;
   }, 60_000);
 
   beforeEach(async () => {
@@ -150,69 +152,75 @@ describe('sync failure isolation (TEST 1–2)', () => {
   });
 
   test('TEST 1: historical bad file B + new good file A → pagesAffected includes A', async () => {
-    const { performSync } = await import('../src/commands/sync.ts');
+    await withTestHome(home, async () => {
+      const { performSync } = await import('../src/commands/sync.ts');
 
-    // Baseline first sync
-    writeFileSync(join(repo, 'people/alice.md'), goodPerson('Alice Example'));
-    commitAll(repo, 'add alice');
-    let result = await performSync(engine, { repoPath: repo, noPull: true, noEmbed: true, skipLock: true });
-    expect(['first_sync', 'synced']).toContain(result.status);
-    const anchor = await engine.getConfig('sync.last_commit');
-    expect(anchor).toBeTruthy();
+      // Baseline first sync
+      writeFileSync(join(repo, 'people/alice.md'), goodPerson('Alice Example'));
+      commitAll(repo, 'add alice');
+      let result = await performSync(engine, { repoPath: repo, noPull: true, noEmbed: true, skipLock: true });
+      expect(['first_sync', 'synced']).toContain(result.status);
+      const anchor = await engine.getConfig('sync.last_commit');
+      expect(anchor).toBeTruthy();
 
-    // Bad B blocks; good A still lands in pagesAffected
-    writeFileSync(join(repo, 'people/bad-bob.md'), badSlugPerson('Bad Bob'));
-    writeFileSync(join(repo, 'notes/good-a.md'), goodNote('Good A', 'Today I researched things.'));
-    commitAll(repo, 'add bad B and good A');
+      // Bad B blocks; good A still lands in pagesAffected
+      writeFileSync(join(repo, 'people/bad-bob.md'), badSlugPerson('Bad Bob'));
+      writeFileSync(join(repo, 'notes/good-a.md'), goodNote('Good A', 'Today I researched things.'));
+      commitAll(repo, 'add bad B and good A');
 
-    result = await performSync(engine, { repoPath: repo, noPull: true, noEmbed: true, skipLock: true });
-    expect(result.status).toBe('blocked_by_failures');
-    expect(result.failedFiles).toBeGreaterThan(0);
-    const affected = result.pagesAffected ?? [];
-    expect(affected.some(s => s.includes('good-a') || s.includes('notes/good-a'))).toBe(true);
-    expect(await engine.getConfig('sync.last_commit')).toBe(anchor);
-    const page = await engine.getPage('notes/good-a')
-      ?? await engine.getPage(affected.find(s => s.includes('good')) ?? '');
-    expect(page).not.toBeNull();
+      result = await performSync(engine, { repoPath: repo, noPull: true, noEmbed: true, skipLock: true });
+      expect(result.status).toBe('blocked_by_failures');
+      expect(result.failedFiles).toBeGreaterThan(0);
+      const affected = result.pagesAffected ?? [];
+      expect(affected.some(s => s.includes('good-a') || s.includes('notes/good-a'))).toBe(true);
+      expect(await engine.getConfig('sync.last_commit')).toBe(anchor);
+      const page = await engine.getPage('notes/good-a')
+        ?? await engine.getPage(affected.find(s => s.includes('good')) ?? '');
+      expect(page).not.toBeNull();
+    });
   }, 60_000);
 
   test('TEST 2: 20 good + 1 bad → pagesAffected non-empty (not [])', async () => {
-    const { performSync } = await import('../src/commands/sync.ts');
+    await withTestHome(home, async () => {
+      const { performSync } = await import('../src/commands/sync.ts');
 
-    writeFileSync(join(repo, 'people/seed.md'), goodPerson('Seed Person'));
-    commitAll(repo, 'seed');
-    await performSync(engine, { repoPath: repo, noPull: true, noEmbed: true, skipLock: true });
+      writeFileSync(join(repo, 'people/seed.md'), goodPerson('Seed Person'));
+      commitAll(repo, 'seed');
+      await performSync(engine, { repoPath: repo, noPull: true, noEmbed: true, skipLock: true });
 
-    // 20 is enough to prove non-empty isolation without slow imports
-    for (let i = 0; i < 20; i++) {
-      writeFileSync(
-        join(repo, `notes/n${String(i).padStart(3, '0')}.md`),
-        goodNote(`Note ${i}`, `Body of note ${i}`),
-      );
-    }
-    writeFileSync(join(repo, 'people/broken.md'), badSlugPerson('Broken'));
-    commitAll(repo, '20 good + 1 bad');
+      // 20 is enough to prove non-empty isolation without slow imports
+      for (let i = 0; i < 20; i++) {
+        writeFileSync(
+          join(repo, `notes/n${String(i).padStart(3, '0')}.md`),
+          goodNote(`Note ${i}`, `Body of note ${i}`),
+        );
+      }
+      writeFileSync(join(repo, 'people/broken.md'), badSlugPerson('Broken'));
+      commitAll(repo, '20 good + 1 bad');
 
-    const result = await performSync(engine, { repoPath: repo, noPull: true, noEmbed: true, skipLock: true });
-    expect(result.status).toBe('blocked_by_failures');
-    expect(result.pagesAffected.length).toBeGreaterThan(0);
-    expect(result.pagesAffected.length).toBeGreaterThanOrEqual(15);
-    expect(result.failedFiles).toBeGreaterThanOrEqual(1);
+      const result = await performSync(engine, { repoPath: repo, noPull: true, noEmbed: true, skipLock: true });
+      expect(result.status).toBe('blocked_by_failures');
+      expect(result.pagesAffected.length).toBeGreaterThan(0);
+      expect(result.pagesAffected.length).toBeGreaterThanOrEqual(15);
+      expect(result.failedFiles).toBeGreaterThanOrEqual(1);
+    });
   }, 60_000);
 
   test('full sync blocked still returns importedSlugs as pagesAffected', async () => {
-    writeFileSync(join(repo, 'people/ok.md'), goodPerson('Ok Person'));
-    writeFileSync(join(repo, 'people/bad.md'), badSlugPerson('Bad Person'));
-    commitAll(repo, 'mixed first tree');
+    await withTestHome(home, async () => {
+      writeFileSync(join(repo, 'people/ok.md'), goodPerson('Ok Person'));
+      writeFileSync(join(repo, 'people/bad.md'), badSlugPerson('Bad Person'));
+      commitAll(repo, 'mixed first tree');
 
-    await engine.setConfig('sync.last_commit', '');
-    await engine.setConfig('sync.repo_path', '');
+      await engine.setConfig('sync.last_commit', '');
+      await engine.setConfig('sync.repo_path', '');
 
-    const { performSync } = await import('../src/commands/sync.ts');
-    const result = await performSync(engine, { repoPath: repo, noPull: true, noEmbed: true, skipLock: true });
-    expect(result.status).toBe('blocked_by_failures');
-    expect(result.pagesAffected.length).toBeGreaterThan(0);
-    expect(result.failedFiles).toBeGreaterThanOrEqual(1);
+      const { performSync } = await import('../src/commands/sync.ts');
+      const result = await performSync(engine, { repoPath: repo, noPull: true, noEmbed: true, skipLock: true });
+      expect(result.status).toBe('blocked_by_failures');
+      expect(result.pagesAffected.length).toBeGreaterThan(0);
+      expect(result.failedFiles).toBeGreaterThanOrEqual(1);
+    });
   }, 60_000);
 });
 
@@ -374,8 +382,6 @@ describe('runQuickMaintenance orchestration smoke', () => {
 
   beforeAll(async () => {
     home = mkdtempSync(join(tmpdir(), 'pmbrain-quick-orch-'));
-    process.env.PMBRAIN_HOME = home;
-    process.env.GBRAIN_HOME = home;
     engine = new PGLiteEngine();
     await engine.connect({});
     await engine.initSchema();
@@ -385,43 +391,43 @@ describe('runQuickMaintenance orchestration smoke', () => {
     await engine.disconnect();
     if (repo && existsSync(repo)) rmSync(repo, { recursive: true, force: true });
     if (home && existsSync(home)) rmSync(home, { recursive: true, force: true });
-    delete process.env.PMBRAIN_HOME;
-    delete process.env.GBRAIN_HOME;
   }, 60_000);
 
   test('quick run includes extract with by_mention details and keeps full phase list', async () => {
-    repo = makeGitRepo();
-    writeFileSync(join(repo, 'companies/openai.md'), [
-      '---', 'type: company', 'title: OpenAI', '---', '', 'AI company.', '',
-    ].join('\n'));
-    writeFileSync(join(repo, 'notes/research.md'), goodNote(
-      'Research',
-      'Today I studied OpenAI carefully.',
-    ));
-    commitAll(repo, 'seed for quick');
+    await withTestHome(home, async () => {
+      repo = makeGitRepo();
+      writeFileSync(join(repo, 'companies/openai.md'), [
+        '---', 'type: company', 'title: OpenAI', '---', '', 'AI company.', '',
+      ].join('\n'));
+      writeFileSync(join(repo, 'notes/research.md'), goodNote(
+        'Research',
+        'Today I studied OpenAI carefully.',
+      ));
+      commitAll(repo, 'seed for quick');
 
-    const report = await runQuickMaintenance(engine, {
-      brainDir: repo,
-      dryRun: false,
-      pull: false,
-      byMentionMaxHistorical: 50,
+      const report = await runQuickMaintenance(engine, {
+        brainDir: repo,
+        dryRun: false,
+        pull: false,
+        byMentionMaxHistorical: 50,
+      });
+
+      expect(report.phases.map(p => p.phase)).toEqual([
+        'lint',
+        'backlinks',
+        'sync',
+        'extract',
+        'extract_facts',
+        'resolve_symbol_edges',
+        'embed',
+        'orphans',
+      ]);
+      const extract = report.phases.find(p => p.phase === 'extract');
+      expect(extract).toBeTruthy();
+      expect(extract!.details.by_mention).toBe(true);
+      // Full Dream phases like synthesize/patterns must not appear
+      expect(report.phases.some(p => p.phase === 'synthesize')).toBe(false);
+      expect(report.phases.some(p => p.phase === 'patterns')).toBe(false);
     });
-
-    expect(report.phases.map(p => p.phase)).toEqual([
-      'lint',
-      'backlinks',
-      'sync',
-      'extract',
-      'extract_facts',
-      'resolve_symbol_edges',
-      'embed',
-      'orphans',
-    ]);
-    const extract = report.phases.find(p => p.phase === 'extract');
-    expect(extract).toBeTruthy();
-    expect(extract!.details.by_mention).toBe(true);
-    // Full Dream phases like synthesize/patterns must not appear
-    expect(report.phases.some(p => p.phase === 'synthesize')).toBe(false);
-    expect(report.phases.some(p => p.phase === 'patterns')).toBe(false);
   }, 120_000);
 });

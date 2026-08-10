@@ -1,0 +1,98 @@
+/**
+ * Post-upgrade first-boot helpers.
+ *
+ * After NSIS install + quitAndInstall, the first ensureReady often races the
+ * PGLite exclusive lock released by the cold-backup CLI. Manual "重新启动服务"
+ * almost always succeeds a moment later. These helpers encode automatic retry
+ * and user-facing message sanitization so upgrades enter Admin without a click.
+ */
+
+/** Delay after upgrade cold-backup / migration before the first sidecar start. */
+export const POST_UPGRADE_SETTLE_MS = 1_500;
+
+/** Max ensureReady attempts when this launch performed an upgrade migration. */
+export const POST_UPGRADE_READY_ATTEMPTS = 3;
+
+/** Base backoff between ensureReady attempts (multiplied by attempt index). */
+export const POST_UPGRADE_RETRY_BASE_MS = 2_000;
+
+export function postUpgradeRetryDelayMs(attempt: number): number {
+  const n = Math.max(1, Math.floor(attempt));
+  return POST_UPGRADE_RETRY_BASE_MS * n;
+}
+
+/**
+ * Extract a successful pglite-backup --json payload from a thrown CLI error.
+ * Some Windows runs print a valid {status:created|reused} line but still exit
+ * non-zero; treat that as success so upgrade startup can continue.
+ */
+export function parseSuccessfulBackupJsonFromError(message: string): {
+  status: 'created' | 'reused';
+  backup_directory: string;
+} | null {
+  const lines = message
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(Boolean)
+    .reverse();
+  for (const line of lines) {
+    if (!line.startsWith('{')) continue;
+    try {
+      const parsed = JSON.parse(line) as {
+        status?: string;
+        backup_directory?: string;
+      };
+      if (
+        (parsed.status === 'created' || parsed.status === 'reused')
+        && typeof parsed.backup_directory === 'string'
+        && parsed.backup_directory.length > 0
+      ) {
+        return {
+          status: parsed.status,
+          backup_directory: parsed.backup_directory,
+        };
+      }
+    } catch {
+      // keep scanning other lines
+    }
+  }
+  return null;
+}
+
+/**
+ * Recovery UI must never dump raw CLI JSON (especially successful backup
+ * envelopes) as the failure reason — users read it as "data corruption".
+ */
+export function sanitizeStartupFailureMessage(message: string): string {
+  const trimmed = message.trim();
+  if (!trimmed) {
+    return 'PMBrain 本地服务没有成功启动。配置与知识库已保留，请点击「重新启动服务」。';
+  }
+
+  const successfulBackup = parseSuccessfulBackupJsonFromError(trimmed);
+  if (successfulBackup) {
+    return (
+      '升级后首次启动未完成。升级前冷备已保留，配置与知识库安全。' +
+      'PMBrain 会自动重试本地服务；若仍失败，请点击「重新启动服务」。'
+    );
+  }
+
+  if (trimmed.startsWith('{') && /"backup_directory"\s*:/.test(trimmed)) {
+    return (
+      '升级准备阶段异常。配置与知识库已保留。' +
+      '请点击「重新启动服务」；若反复失败，请打开日志排查。'
+    );
+  }
+
+  // Strip accidental multi-line JSON tails while keeping human text.
+  if (trimmed.includes('\n{') && /"status"\s*:/.test(trimmed)) {
+    const head = trimmed.slice(0, trimmed.indexOf('\n{')).trim();
+    if (head) return head;
+  }
+
+  return trimmed;
+}
+
+export function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}

@@ -51,20 +51,25 @@
           </div>
           <div class="section-heading">
             <div><span class="index">01A</span><h2>数据库</h2></div>
-            <p>PGLite 无需外部服务；Docker 模式连接你已有的 Postgres。</p>
+            <p>PGLite 适合单机自用；多人共享或局域网并发建议使用 Docker Postgres。</p>
           </div>
           <div class="mode-grid" role="radiogroup" aria-label="数据库模式">
             <label class="mode-card selected" id="mode-pglite-card">
               <input type="radio" name="engine" value="pglite" checked />
               <span class="mode-icon">P</span>
-              <span><b>PGLite 零配置</b><small>数据库随安装包提供，数据保存在本机用户目录。</small></span>
-              <em>推荐</em>
+              <span><b>PGLite 零配置</b><small>本机单用户最省事。数据在用户目录，不支持多人并发写入。</small></span>
+              <em>单机推荐</em>
             </label>
             <label class="mode-card" id="mode-postgres-card">
               <input type="radio" name="engine" value="postgres" />
               <span class="mode-icon docker">D</span>
-              <span><b>Docker Postgres</b><small>适合已有 pgvector 容器或更大规模知识库。</small></span>
+              <span><b>Docker Postgres</b><small>适合多用户、局域网共享，以及更大规模知识库。</small></span>
+              <em class="mode-tag-alt">多用户推荐</em>
             </label>
+          </div>
+          <div class="engine-usage-hint" id="database-engine-hint" role="note">
+            <b>使用建议</b>
+            <p id="database-engine-hint-text">PGLite 是嵌入式单写者数据库，同一时间只适合本机一个服务进程访问。若需要多人同时通过 MCP/局域网使用，请选择 Docker Postgres。</p>
           </div>
           <div class="database-safety"><b>数据库切换说明</b><p>切换 PGLite / Postgres 只会改变连接目标，不会自动迁移、删除或备份原数据库。PGLite 数据仍保留在原位置；切换前请确认目标数据库和数据范围。</p></div>
           <div class="field-group" id="pglite-fields">
@@ -342,6 +347,10 @@
             <div class="network-mode-grid" role="radiogroup" aria-label="PMBrain 网络模式">
               <label class="network-mode-card selected" id="network-mode-local-card"><input id="network-mode-local" type="radio" name="network-mode" value="local" checked /><span><b>本地模式</b><small>仅本机 Agent 访问 127.0.0.1，局域网电脑无法连接。</small></span><em>默认</em></label>
               <label class="network-mode-card" id="network-mode-shared-card"><input id="network-mode-shared" type="radio" name="network-mode" value="shared" /><span><b>共享模式</b><small>在选定网卡的固定 IPv4 上开放 MCP，供同一局域网成员使用。</small></span></label>
+            </div>
+            <div class="engine-usage-hint warning" id="pglite-shared-warning" role="status" hidden>
+              <b>PGLite + 共享模式</b>
+              <p>当前数据库是 PGLite：它不支持多进程/多用户并发写入。局域网多人同时调用时，容易出现排队、超时或体验变差。若要稳定给多人使用，建议在「基础配置」改选 Docker Postgres 后再开共享。</p>
             </div>
             <div class="shared-network-fields" id="shared-network-fields" hidden>
               <label for="shared-address"><span>固定局域网入口</span><select id="shared-address" aria-label="选择共享网络适配器和 IPv4 地址"><option value="">请选择网卡与 IPv4</option></select></label>
