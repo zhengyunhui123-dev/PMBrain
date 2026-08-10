@@ -31,7 +31,7 @@ import {
 import {
   BookOpenText, Bot, BrainCircuit, Cable,
   Database, FileClock, FolderKanban, HeartHandshake, LayoutDashboard, ListTodo,
-  MonitorCog, Sparkles, Upload, type LucideIcon,
+  MonitorCog, Sparkles, type LucideIcon,
 } from 'lucide-react';
 
 const PAGES = [
@@ -40,7 +40,6 @@ const PAGES = [
   'import', 'data', 'docs',
   'mcp', 'tasks', 'config', 'agents', 'log', 'calibration',
   'settings', 'settings-general', 'settings-knowledge', 'settings-dream',
-  'settings-import',
 ] as const;
 
 type Page = typeof PAGES[number];
@@ -52,8 +51,7 @@ function getPage(): Page {
 
 type NavIconName =
   | 'overview' | 'workspace' | 'database' | 'organize' | 'mcp' | 'tasks' | 'log' | 'assistant'
-  | 'settings-general' | 'settings-knowledge' | 'settings-dream'
-  | 'settings-import';
+  | 'settings-general' | 'settings-knowledge' | 'settings-dream';
 
 const NAV_ICONS: Record<NavIconName, LucideIcon> = {
   overview: LayoutDashboard,
@@ -67,7 +65,6 @@ const NAV_ICONS: Record<NavIconName, LucideIcon> = {
   'settings-general': MonitorCog,
   'settings-knowledge': Database,
   'settings-dream': Sparkles,
-  'settings-import': Upload,
 };
 
 const SETTINGS_NAV_ITEMS: Array<{
@@ -79,7 +76,6 @@ const SETTINGS_NAV_ITEMS: Array<{
   { page: 'settings-general', section: 'general', label: '常规设置', icon: 'settings-general' },
   { page: 'settings-knowledge', section: 'knowledge', label: '知识库设置', icon: 'settings-knowledge' },
   { page: 'settings-dream', section: 'dream', label: '知识整理设置', icon: 'settings-dream' },
-  { page: 'settings-import', section: 'import', label: '导入与向量化', icon: 'settings-import' },
 ];
 
 const SETTINGS_PAGE_SECTIONS: Partial<Record<Page, SettingsSection>> = {

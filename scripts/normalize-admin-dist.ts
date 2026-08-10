@@ -8,6 +8,18 @@ export function normalizeLineEndings(value: string): string {
   return value.replace(/\r\n?/g, '\n');
 }
 
+export function normalizeAdminText(value: string, extension: string): string {
+  const normalized = normalizeLineEndings(value);
+  if (extension.toLowerCase() !== '.html') return normalized;
+  // Vite may preserve a whitespace-only line left by the removed source
+  // module script differently across Windows runners. Canonicalize the
+  // generated root/body boundary so build hashes remain platform-stable.
+  return normalized.replace(
+    /(<div id="root"><\/div>)\n[ \t]*\n(?=<\/body>)/g,
+    '$1\n',
+  );
+}
+
 function walk(dir: string): string[] {
   const files: string[] = [];
   for (const name of readdirSync(dir)) {
@@ -24,9 +36,10 @@ export function normalizeAdminDist(root = join(import.meta.dir, '..')): number {
 
   let changed = 0;
   for (const file of walk(dist)) {
-    if (!TEXT_EXTENSIONS.has(extname(file).toLowerCase())) continue;
+    const extension = extname(file).toLowerCase();
+    if (!TEXT_EXTENSIONS.has(extension)) continue;
     const current = readFileSync(file, 'utf8');
-    const normalized = normalizeLineEndings(current);
+    const normalized = normalizeAdminText(current, extension);
     if (current === normalized) continue;
     writeFileSync(file, normalized, 'utf8');
     changed += 1;

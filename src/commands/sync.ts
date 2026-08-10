@@ -1485,6 +1485,13 @@ async function performSyncInner(engine: BrainEngine, opts: SyncOpts): Promise<Sy
           ? await importOfficeFile(engine, filePath, to, { noEmbed, sourceId: opts.sourceId, activePack: syncActivePack })
           : await importFile(engine, filePath, to, { noEmbed, sourceId: opts.sourceId, activePack: syncActivePack });
         if (result.status === 'imported') chunksCreated += result.chunks;
+        else if (result.status === 'partial') {
+          chunksCreated += result.chunks;
+          failedFiles.push({
+            path: to,
+            error: result.error ?? 'large document embedding partially completed; retry will resume',
+          });
+        }
       }
       pagesAffected.push(newSlug);
       progress.tick(1, newSlug);
@@ -1581,6 +1588,14 @@ async function performSyncInner(engine: BrainEngine, opts: SyncOpts): Promise<Sy
           // persist. partial() reports this so cron operators see how
           // much actually landed before --timeout fired.
           filesImported++;
+        } else if (result.status === 'partial') {
+          chunksCreated += result.chunks;
+          pagesAffected.push(result.slug);
+          filesImported++;
+          failedFiles.push({
+            path,
+            error: result.error ?? 'large document embedding partially completed; retry will resume',
+          });
         } else if (result.status === 'skipped' && (result as any).error) {
           failedFiles.push({ path, error: String((result as any).error) });
         }

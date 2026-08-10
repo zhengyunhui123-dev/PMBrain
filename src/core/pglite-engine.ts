@@ -5,6 +5,7 @@ import type { Transaction } from '@electric-sql/pglite';
 import type {
   BrainEngine,
   BatchOpts,
+  ChunkWriteOpts,
   LinkBatchInput, TimelineBatchInput,
   ReservedConnection,
   DreamVerdict, DreamVerdictInput,
@@ -2196,11 +2197,11 @@ export class PGLiteEngine implements BrainEngine {
   }
 
   // Chunks
-  async upsertChunks(slug: string, chunks: ChunkInput[], opts?: { sourceId?: string } & BatchOpts): Promise<void> {
+  async upsertChunks(slug: string, chunks: ChunkInput[], opts?: ChunkWriteOpts): Promise<void> {
     return this.batchRetry(opts?.auditSite ?? 'upsertChunks', opts?.signal, () => this._upsertChunksOnce(slug, chunks, opts), chunks.length);
   }
 
-  private async _upsertChunksOnce(slug: string, chunks: ChunkInput[], opts?: { sourceId?: string }): Promise<void> {
+  private async _upsertChunksOnce(slug: string, chunks: ChunkInput[], opts?: ChunkWriteOpts): Promise<void> {
     const sourceId = opts?.sourceId ?? 'default';
 
     // Source-scope the page-id lookup so duplicate slugs in different sources
@@ -2212,16 +2213,21 @@ export class PGLiteEngine implements BrainEngine {
     if (pageResult.rows.length === 0) throw new Error(`Page not found: ${slug} (source=${sourceId})`);
     const pageId = (pageResult.rows[0] as { id: number }).id;
 
-    // Remove chunks that no longer exist
+    // Historical default is a full manifest replacement. Trusted structured
+    // imports use merge-only batches and prune once after every batch lands.
     const newIndices = chunks.map(c => c.chunk_index);
-    if (newIndices.length > 0) {
-      // PGLite doesn't auto-serialize arrays, so use ANY with explicit array cast
-      await this.db.query(
-        `DELETE FROM content_chunks WHERE page_id = $1 AND chunk_index != ALL($2::int[])`,
-        [pageId, newIndices]
-      );
-    } else {
-      await this.db.query('DELETE FROM content_chunks WHERE page_id = $1', [pageId]);
+    if (opts?.replaceExisting !== false) {
+      if (newIndices.length > 0) {
+        // PGLite doesn't auto-serialize arrays, so use ANY with explicit array cast
+        await this.db.query(
+          `DELETE FROM content_chunks WHERE page_id = $1 AND chunk_index != ALL($2::int[])`,
+          [pageId, newIndices]
+        );
+      } else {
+        await this.db.query('DELETE FROM content_chunks WHERE page_id = $1', [pageId]);
+        return;
+      }
+    } else if (newIndices.length === 0) {
       return;
     }
 

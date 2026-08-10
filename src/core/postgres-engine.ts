@@ -2,6 +2,7 @@ import postgres from 'postgres';
 import type {
   BrainEngine,
   BatchOpts,
+  ChunkWriteOpts,
   LinkBatchInput, TimelineBatchInput,
   ReservedConnection,
   DreamVerdict, DreamVerdictInput,
@@ -2150,11 +2151,11 @@ export class PostgresEngine implements BrainEngine {
   }
 
   // Chunks
-  async upsertChunks(slug: string, chunks: ChunkInput[], opts?: { sourceId?: string } & BatchOpts): Promise<void> {
+  async upsertChunks(slug: string, chunks: ChunkInput[], opts?: ChunkWriteOpts): Promise<void> {
     return this.batchRetry(opts?.auditSite ?? 'upsertChunks', opts?.signal, () => this._upsertChunksOnce(slug, chunks, opts), chunks.length);
   }
 
-  private async _upsertChunksOnce(slug: string, chunks: ChunkInput[], opts?: { sourceId?: string }): Promise<void> {
+  private async _upsertChunksOnce(slug: string, chunks: ChunkInput[], opts?: ChunkWriteOpts): Promise<void> {
     const sql = this.sql;
     const sourceId = opts?.sourceId ?? 'default';
 
@@ -2165,12 +2166,17 @@ export class PostgresEngine implements BrainEngine {
     if (pages.length === 0) throw new Error(`Page not found: ${slug} (source=${sourceId})`);
     const pageId = pages[0].id;
 
-    // Remove chunks that no longer exist (chunk_index beyond new count)
+    // Historical default is a full manifest replacement. Trusted structured
+    // imports use merge-only batches and prune once after every batch lands.
     const newIndices = chunks.map(c => c.chunk_index);
-    if (newIndices.length > 0) {
-      await sql`DELETE FROM content_chunks WHERE page_id = ${pageId} AND chunk_index != ALL(${newIndices})`;
-    } else {
-      await sql`DELETE FROM content_chunks WHERE page_id = ${pageId}`;
+    if (opts?.replaceExisting !== false) {
+      if (newIndices.length > 0) {
+        await sql`DELETE FROM content_chunks WHERE page_id = ${pageId} AND chunk_index != ALL(${newIndices})`;
+      } else {
+        await sql`DELETE FROM content_chunks WHERE page_id = ${pageId}`;
+        return;
+      }
+    } else if (newIndices.length === 0) {
       return;
     }
 

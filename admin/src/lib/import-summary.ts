@@ -15,6 +15,19 @@ export interface ImportFileReport {
   chunks?: number;
   bytes?: number;
   reason?: string;
+  vectorized?: boolean;
+  document?: {
+    parser: string;
+    structured: boolean;
+    local: boolean;
+    fallback?: string;
+    sections: number;
+    tables: number;
+    images: number;
+    pagesNeedingOcr: number;
+    ocrUsed: boolean;
+    ocrProvider?: string;
+  };
 }
 
 export interface ImportRunSummary {
@@ -89,7 +102,28 @@ function summarizeSingleFile(preview: ImportSummaryPreview, run: ImportSummaryRu
   const skip = partial
     ? { bytes: typeof partial.bytes === 'number' ? partial.bytes : null }
     : getEmbeddingSkip(text);
-  if (!skip) return null;
+  if (!skip) {
+    const imported = reports.find(report => report.status === 'imported' && report.document);
+    if (!imported?.document || run.status !== 'completed') return null;
+    const document = imported.document;
+    const parser = document.structured ? '本地结构化解析' : '本地兼容解析';
+    const lines = [
+      `文件 \`${imported.path}\` 导入完成。`,
+      `- 文档解析：${parser}（${document.parser}）`,
+      `- 识别 ${document.sections} 个内容区段、${document.tables} 个表格、${document.images} 个图片位置`,
+      `- 创建 ${imported.chunks ?? 0} 个检索片段`,
+      `- 向量化：${imported.vectorized ? '已完成' : '未执行'}`,
+    ];
+    if (document.fallback) lines.push(`- 解析回退：${document.fallback}`);
+    if (document.ocrUsed) {
+      lines.push(`- OCR：${document.ocrProvider ?? '已配置视觉模型'}`);
+    } else if (document.pagesNeedingOcr > 0) {
+      lines.push(`- OCR：未使用；有 ${document.pagesNeedingOcr} 页没有可靠文字，可按需开启“图片内容识别”后重试`);
+    } else {
+      lines.push('- OCR：未使用');
+    }
+    return { markdown: lines.join('\n'), badge: '已完成', tone: 'success' };
+  }
   const sourcePath = typeof preview.slots.path === 'string'
     ? preview.slots.path
     : Array.isArray(preview.slots.files) && typeof preview.slots.files[0] === 'string'

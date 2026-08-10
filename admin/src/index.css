@@ -3895,6 +3895,18 @@ pre {
 .import-option-grid label:first-child { display: grid; align-items: stretch; }
 .import-option-grid label > span { margin-bottom: 5px; font-weight: 700; }
 .import-option-grid input[type="checkbox"] { width: auto; }
+.import-option-grid .import-parser-choice {
+  align-self: stretch;
+  min-width: 240px;
+  padding: 11px 12px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--bg-secondary);
+}
+.import-option-grid .import-parser-choice > span { display: grid; gap: 3px; margin: 0; }
+.import-option-grid .import-parser-choice b { color: var(--text-primary); font-size: 12px; }
+.import-option-grid .import-parser-choice small { color: var(--text-muted); font-size: 11px; font-weight: 500; line-height: 1.45; }
+.knowledge-search-locator { display: block; margin-top: 5px; color: var(--accent); font-size: 11px; font-weight: 700; }
 
 .knowledge-assistant-page .nl-card { padding: 24px; border-radius: 16px; }
 .knowledge-assistant-page .nl-card textarea { min-height: 210px; border-color: #b8c3ff; border-radius: 12px; padding: 18px; resize: vertical; }
@@ -6433,7 +6445,6 @@ tbody tr:hover td { background: color-mix(in srgb, var(--accent) 4%, var(--conso
 
 .dream-settings-card,
 .dream-schedule-settings,
-.import-vector-settings,
 .settings-source-section,
 .markdown-export-card,
 .model-snapshot-card {
@@ -6442,7 +6453,6 @@ tbody tr:hover td { background: color-mix(in srgb, var(--accent) 4%, var(--conso
 
 .dream-settings-card,
 .dream-schedule-settings,
-.import-vector-settings,
 .markdown-export-card,
 .model-snapshot-card {
   padding: 18px 20px;
@@ -6493,11 +6503,6 @@ tbody tr:hover td { background: color-mix(in srgb, var(--accent) 4%, var(--conso
 .dream-schedule-time input { width: 100%; }
 .dream-schedule-time button { justify-self: end; }
 .dream-schedule-note { margin: -2px 0 0; line-height: 1.65; }
-.import-vector-settings { display: grid; gap: 14px; }
-.import-vector-setting-row { display: grid; grid-template-columns: auto minmax(120px, 180px) auto auto; gap: 10px; align-items: center; }
-.import-vector-setting-row input { width: 100%; }
-.import-vector-setting-row button { margin-left: 4px; }
-
 .dream-output-preview {
   margin: 0;
   background: var(--console-surface);

@@ -248,6 +248,7 @@ jobs:
           bun run build
           bun run build:sidecar
           bun run verify:runtime
+          bun test ../test/cli-import-exit.serial.test.ts --timeout=120000
 
   # ──────────────────────────────────────────────────────────────────────
   # cache-write: ONLY runs when every gated job succeeded. Writes the

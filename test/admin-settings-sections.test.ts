@@ -9,12 +9,11 @@ const styles = readFileSync(join(process.cwd(), 'admin/src/index.css'), 'utf8');
 const desktopRenderer = readFileSync(join(process.cwd(), 'desktop/src/renderer/src.ts'), 'utf8');
 
 describe('Admin settings information architecture', () => {
-  test('Admin settings are split into four useful service-focused sections', () => {
+  test('Admin settings keep only the three useful service-focused sections', () => {
     for (const label of [
       '常规设置',
       '知识库设置',
       '知识整理设置',
-      '导入与向量化',
     ]) {
       expect(settingsSource).toContain(`label: '${label}'`);
     }
@@ -23,13 +22,14 @@ describe('Admin settings information architecture', () => {
     expect(appSource).toContain("'settings-general'");
     expect(appSource).toContain("'settings-knowledge'");
     expect(appSource).toContain("'settings-dream'");
-    expect(appSource).toContain("'settings-import'");
+    expect(appSource).not.toContain("'settings-import'");
     expect(appSource).not.toContain("'settings-models'");
     expect(settingsSource).not.toContain("label: '模型配置'");
     expect(settingsSource).not.toContain('className="settings-menu"');
     expect(settingsSource).toContain("section === 'knowledge'");
     expect(settingsSource).toContain("section === 'dream'");
-    expect(settingsSource).toContain("section === 'import'");
+    expect(settingsSource).not.toContain("section === 'import'");
+    expect(settingsSource).not.toContain('ImportVectorizationSettings');
     expect(settingsSource).not.toContain("section === 'models'");
     expect(settingsSource).not.toContain("section === 'system'");
     expect(settingsSource).not.toContain('<h2>系统与更新</h2>');

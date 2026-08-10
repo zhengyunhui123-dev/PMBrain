@@ -1,11 +1,21 @@
 import { describe, expect, test } from 'bun:test';
-import { normalizeLineEndings } from '../scripts/normalize-admin-dist.ts';
+import { normalizeAdminText, normalizeLineEndings } from '../scripts/normalize-admin-dist.ts';
 import { validateVersionContract } from '../scripts/check-version-sync.ts';
 
 describe('release build guards', () => {
   test('normalizes Windows and legacy line endings without changing LF text', () => {
     expect(normalizeLineEndings('a\r\nb\rc\n')).toBe('a\nb\nc\n');
     expect(normalizeLineEndings('already\nnormalized\n')).toBe('already\nnormalized\n');
+  });
+
+  test('normalizes the cross-platform Vite root/body whitespace without touching scripts', () => {
+    const html = '<body>\r\n  <div id="root"></div>\r\n\r\n</body>\r\n';
+    expect(normalizeAdminText(html, '.html')).toBe(
+      '<body>\n  <div id="root"></div>\n</body>\n',
+    );
+    expect(normalizeAdminText('const gap = "\\n\\n";\r\n', '.js')).toBe(
+      'const gap = "\\n\\n";\n',
+    );
   });
 
   test('accepts a synchronized release version contract', () => {

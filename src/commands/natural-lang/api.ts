@@ -165,6 +165,8 @@ export async function startImportRun(engine: BrainEngine, input: {
   sourceId?: string;
   includeOffice?: boolean;
   includeImages?: boolean;
+  structuredDocuments?: boolean;
+  documentOcr?: boolean;
   noEmbed?: boolean;
   workers?: number;
   fresh?: boolean;
@@ -176,6 +178,8 @@ export async function startImportRun(engine: BrainEngine, input: {
   const cmd = [...prefix, 'import', input.path.trim()];
   if (input.includeOffice) cmd.push('--include-office');
   if (input.includeImages) cmd.push('--include-images');
+  if (input.structuredDocuments === false) cmd.push('--legacy-document-parser');
+  if (input.documentOcr) cmd.push('--document-ocr');
   if (input.noEmbed) cmd.push('--no-embed');
   if (input.fresh) cmd.push('--fresh');
   if (input.reportFiles) cmd.push('--report-files');

@@ -17,6 +17,7 @@ import { operations, OperationError } from './core/operations.ts';
 import type { Operation, OperationContext } from './core/operations.ts';
 import { awaitPendingLastRetrievedWrites, type DrainOutcome } from './core/last-retrieved.ts';
 import { shouldForceExitAfterMain } from './core/cli-force-exit.ts';
+import { disconnectCliEngine } from './core/cli-disconnect.ts';
 import { serializeMarkdown } from './core/markdown.ts';
 import { parseGlobalFlags, setCliOptions, getCliOptions } from './core/cli-options.ts';
 import type { CliOptions } from './core/cli-options.ts';
@@ -1783,7 +1784,14 @@ async function handleCliOnly(command: string, args: string[]) {
       }
     }
   } finally {
-    if (command !== 'serve') await engine.disconnect();
+    if (command !== 'serve') {
+      // Desktop setup and Admin tasks invoke several one-shot CLI children
+      // (models, sources, import, ...). If PGLite finishes the command but
+      // wedges while closing, an unbounded disconnect leaves the Desktop wait
+      // overlay or Admin run stuck forever. Preserve the normal clean close,
+      // but force-exit only the already-completed child after a hard deadline.
+      await disconnectCliEngine(engine, command);
+    }
   }
 }
 

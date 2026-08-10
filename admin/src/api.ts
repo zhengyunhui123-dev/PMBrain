@@ -9,7 +9,6 @@ import {
   DreamSettingsResponseSchema,
   GenerativeUsageResponseSchema,
   ImportRunResponseSchema,
-  ImportSettingsResponseSchema,
   ImportUploadRunResponseSchema,
   LlmStatusResponseSchema,
   SetDefaultSourceResponseSchema,
@@ -26,7 +25,8 @@ import type {
   DreamSettingsResponse,
   GenerativeUsageResponse,
   ImportRunResponse,
-  ImportSettingsResponse,
+  ImportRunRequest,
+  ImportUploadOptions,
   ImportUploadRunResponse,
   LlmStatusResponse,
   SetDefaultSourceResponse,
@@ -132,11 +132,13 @@ export const api = {
   cancelRun: (id: string) => apiFetch(`/admin/api/runs/${encodeURIComponent(id)}/cancel`, { method: 'POST' }),
   startActionRun: (action: string) => apiFetch('/admin/api/runs/action', { method: 'POST', body: JSON.stringify({ action }) }),
   taskCenter: () => apiFetch('/admin/api/task-center'),
-  startImportRun: (body: { path: string; sourceId?: string; includeOffice: boolean; includeImages: boolean; autoEmbed: boolean; workers: number }) =>
+  startImportRun: (body: ImportRunRequest) =>
     apiFetch<ImportRunResponse>('/admin/api/import-runs', { method: 'POST', body: JSON.stringify(body) }, ImportRunResponseSchema),
-  startImportUploadRun: (file: File, options: { sourceId?: string; autoEmbed: boolean; workers: number }) => {
+  startImportUploadRun: (file: File, options: ImportUploadOptions) => {
     const query = new URLSearchParams({
       autoEmbed: options.autoEmbed ? '1' : '0',
+      structuredDocuments: options.structuredDocuments ? '1' : '0',
+      documentOcr: options.documentOcr ? '1' : '0',
       workers: String(options.workers),
     });
     if (options.sourceId) query.set('sourceId', options.sourceId);
@@ -144,9 +146,6 @@ export const api = {
   },
   startMarkdownExportRun: (rootPath: string) =>
     apiFetch('/admin/api/export-runs', { method: 'POST', body: JSON.stringify({ rootPath }) }),
-  importSettings: () => apiFetch<ImportSettingsResponse>('/admin/api/import/settings', undefined, ImportSettingsResponseSchema),
-  saveImportSettings: (thresholdKb: number) =>
-    apiFetch<ImportSettingsResponse>('/admin/api/import/settings', { method: 'POST', body: JSON.stringify({ thresholdKb }) }, ImportSettingsResponseSchema),
   dreamOverview: () => apiFetch<DreamOverviewResponse>('/admin/api/dream/overview', undefined, DreamOverviewResponseSchema),
   dreamSettings: () => apiFetch<DreamSettingsResponse>('/admin/api/dream/settings', undefined, DreamSettingsResponseSchema),
   saveDreamSettings: (body: { outputDir: string; dualWrite: boolean }) =>

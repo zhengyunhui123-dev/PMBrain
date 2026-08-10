@@ -58,6 +58,8 @@ describe('v0.36.1.x #1090 — admin embed two-tier resolution', () => {
     const buildSrc = readFileSync('scripts/build-admin-embedded.ts', 'utf8');
     expect(buildSrc).toMatch(/walk\(DIST/);
     expect(buildSrc).toMatch(/with \{ type: 'file' \}/);
+    expect(buildSrc).toContain('// Source: admin/dist/.');
+    expect(buildSrc).not.toContain('new Date().toISOString().slice(0, 10)');
     const guard = readFileSync('scripts/check-admin-embedded.sh', 'utf8');
     expect(guard).toMatch(/git diff --exit-code -- src\/admin-embedded\.ts/);
   });

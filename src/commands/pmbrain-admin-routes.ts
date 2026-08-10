@@ -118,7 +118,7 @@ import {
   DreamSettingsResponseSchema,
   GenerativeUsageResponseSchema,
   ImportRunResponseSchema,
-  ImportSettingsResponseSchema,
+  ImportRunRequestSchema,
   ImportUploadRunResponseSchema,
   LlmStatusResponseSchema,
   RunAcceptedResponseSchema,
@@ -205,36 +205,6 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
       sendAdminContract(res, SetDefaultSourceResponseSchema, { sourceId });
     } catch (e) {
       res.status(400).json({ error: e instanceof Error ? e.message : 'set_default_source_failed' });
-    }
-  });
-
-  const importSettingsView = async (overrideBytes?: number) => {
-    const stored = await engine.getConfig('content_sanity.bytes_block');
-    const parsed = Number.parseInt(stored ?? '', 10);
-    const bytesBlock = overrideBytes ?? (Number.isFinite(parsed) && parsed > 0 ? parsed : 500_000);
-    return { bytesBlock, thresholdKb: Math.round(bytesBlock / 1000), minKb: 100, maxKb: 5000 };
-  };
-
-  app.get('/admin/api/import/settings', requireAdmin, async (_req: Request, res: Response) => {
-    try {
-      sendAdminContract(res, ImportSettingsResponseSchema, await importSettingsView());
-    } catch (e) {
-      res.status(500).json({ error: e instanceof Error ? e.message : 'import_settings_failed' });
-    }
-  });
-
-  app.post('/admin/api/import/settings', requireAdmin, express.json({ limit: '4kb' }), async (req: Request, res: Response) => {
-    const thresholdKb = Number(req.body?.thresholdKb);
-    if (!Number.isInteger(thresholdKb) || thresholdKb < 100 || thresholdKb > 5000) {
-      res.status(400).json({ error: 'vectorization_threshold_kb_must_be_between_100_and_5000' });
-      return;
-    }
-    try {
-      const bytesBlock = thresholdKb * 1000;
-      await engine.setConfig('content_sanity.bytes_block', String(bytesBlock));
-      sendAdminContract(res, ImportSettingsResponseSchema, await importSettingsView(bytesBlock));
-    } catch (e) {
-      res.status(500).json({ error: e instanceof Error ? e.message : 'save_import_settings_failed' });
     }
   });
 
@@ -743,13 +713,16 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
 
   app.post('/admin/api/import-runs', requireAdmin, express.json({ limit: '16kb' }), async (req: Request, res: Response) => {
     try {
+      const input = ImportRunRequestSchema.parse(req.body);
       const run = await startImportRun(engine, {
-        path: typeof req.body?.path === 'string' ? req.body.path : '',
-        sourceId: typeof req.body?.sourceId === 'string' ? req.body.sourceId : undefined,
-        includeOffice: req.body?.includeOffice === true,
-        includeImages: req.body?.includeImages === true,
-        noEmbed: req.body?.autoEmbed === false,
-        workers: Number(req.body?.workers ?? 1),
+        path: input.path,
+        sourceId: input.sourceId,
+        includeOffice: input.includeOffice,
+        includeImages: input.includeImages,
+        noEmbed: !input.autoEmbed,
+        structuredDocuments: input.structuredDocuments,
+        documentOcr: input.documentOcr,
+        workers: input.workers,
         fresh: true,
         reportFiles: true,
       }, process.cwd(), runHooks);
@@ -816,6 +789,8 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
           includeOffice: fileKind === 'office',
           includeImages: fileKind === 'image',
           noEmbed: !queryFlag(req.query.autoEmbed, true),
+          structuredDocuments: queryFlag(req.query.structuredDocuments, true),
+          documentOcr: queryFlag(req.query.documentOcr, false),
           workers,
           reportFiles: true,
         }, process.cwd(), uploadRunHooks);

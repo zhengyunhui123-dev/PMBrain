@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "corpusRoot": "./documents",
+  "documents": [
+    { "path": "方案/应急保供方案.pdf", "format": "pdf" },
+    { "path": "方案/项目建设方案.docx", "format": "docx" },
+    { "path": "汇报/项目汇报.pptx", "format": "pptx" },
+    { "path": "数据/监测统计.xlsx", "format": "xlsx" }
+  ],
+  "questions": [
+    {
+      "id": "pdf-start-condition",
+      "query": "应急调度在什么情况下启动",
+      "expectedPath": "方案/应急保供方案.pdf",
+      "expectedLocator": "第三章 应急调度 > 3.1 启动条件"
+    }
+  ]
+}

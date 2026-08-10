@@ -1,5 +1,41 @@
 # Bug 修复台账
 
+## 2026-08-09 修复 PGLite 导入完成后关闭卡住
+
+- 时间：2026-08-09
+- 版本号：PMBrain 1.2.18；PMBrain Desktop 1.1.15
+- 标题：防止桌面一次性命令因 PGLite 子进程关闭卡住而永久等待
+- 描述：Windows 真实用户路径先后发现导入和首次配置子进程完成工作后，CLI-only 分支可能无限等待 PGLite 关闭，导致 Admin 永久显示“执行中”或桌面首次配置永久显示“处理中”；现有 10 秒关闭防挂死只覆盖另一条 Operation 分发路径，没有覆盖 models、sources、import 等桌面调用的一次性 CLI 命令。
+- 是否完成：是
+- 最终结果：只在非 serve 的一次性 CLI 命令完成后的数据库关闭阶段增加 10 秒硬截止，命令执行时长和正常关闭行为不变，超过截止后保留原退出码结束子进程；长期运行的 serve 明确排除。Windows Runtime CI 新增真实打包 Sidecar、非默认 Source、连续 Markdown/PDF Admin 上传回归，真实 UI 失败时会保存导入 run 的 stdout/stderr。定向测试 5/5、Windows 打包 Sidecar 导入链路 3/3、根目录类型检查通过；未修改数据库 Schema、用户数据、知识库、Wiki、向量或原始资料，未运行 `bun run build:win`。
+
+## 2026-08-09 修复结构化导入 PR 的 CI 契约漂移
+
+- 时间：2026-08-09
+- 版本号：PMBrain 1.2.17；PMBrain Desktop 1.1.15
+- 标题：修复 Admin 生成物、Windows Runtime、README、桌面结构和向量维度测试漂移
+- 描述：Admin Vite 在不同 Windows runner 下会保留不同的 root/body 空行并改变发布清单 hash；旧测试仍要求 macOS/Linux Desktop Runtime、旧 README 文案和精确的 Desktop 入口行数；向量列测试还把旧 1536 维默认值写死，无法兼容当前配置或数据库实际维度。
+- 是否完成：是
+- 最终结果：Admin 生成物归一化新增跨平台 HTML 空行规则；Desktop Runtime 契约只验证 Windows；README 锚点改为当前产品语义并补充结构化文档能力；桌面结构测试保留职责断言并取消精确行数耦合；向量测试从测试数据库读取实际维度。五组定向测试 22/22 通过，Admin 重建后生成物无差异；未修改数据库 Schema、用户数据、知识库、Wiki、向量或原始资料，未运行 `bun run build:win`。
+
+## 2026-08-09 修复打包后 Excel 导入与 UTF-8 CSV 乱码
+
+- 时间：2026-08-09
+- 版本号：PMBrain 1.2.15；PMBrain Desktop 1.1.15
+- 标题：修复 Bun Sidecar 中 Excel 文件读取失败和中文 CSV 编码错误
+- 描述：`xlsx.readFile()` 依赖的 CommonJS 文件系统探测在 Bun 单文件 Sidecar 中不可用，导致源码测试正常但打包后导入失败；无 BOM UTF-8 CSV 直接按二进制交给 xlsx 时会被错误解码。
+- 是否完成：是
+- 最终结果：PMBrain 在自身文件系统边界读取 XLSX Buffer，并将 CSV/TSV 明确按 UTF-8 文本读取；隔离 PGLite 的真实打包 Sidecar 已成功导入中文 CSV，生成 1 个页面和 2 个 Parent Section，页面正文中文无乱码。
+
+## 2026-08-09 修复诊断包按钮可读性与脱敏遗漏
+
+- 时间：2026-08-09
+- 版本号：PMBrain 1.2.14；PMBrain Desktop 1.1.14
+- 标题：恢复诊断包按钮文字并补齐令牌、路径和 Dream 诊断
+- 描述：软件修复页卡片标签的宽泛 CSS 选择器误伤按钮文字，导致深色主题下“导出诊断包”几乎不可见；诊断包还会保留管理员一次性登录链接和非当前主目录的本地绝对路径，独立 Sidecar 日志会丢失多行内容，也没有 Dream 运行状态。
+- 是否完成：是
+- 最终结果：按钮恢复现有主操作按钮的白字、16px 字号和稳定宽度；管理员登录链接、API Key、Token、密码和所有本地绝对路径均脱敏；诊断包新增 `dream-status.json`，并保留 Sidecar 多行日志。定向测试 4/4、Desktop 类型检查和生产资源构建通过，实际深色主题渲染确认按钮文字为白色 16px。未修改用户数据库、知识库、Wiki、向量或原始资料，未运行 `bun run build:win`。
+
 ## 2026-08-09 修复依赖安装隐式执行数据库迁移
 
 - 时间：2026-08-09

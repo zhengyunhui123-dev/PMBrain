@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { chmod, cp, mkdir, readFile, rename, rm } from 'node:fs/promises';
+import { chmod, copyFile, cp, mkdir, readFile, rename, rm } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import JSZip from 'jszip';
 import { getDesktopRuntimeContract } from '../src/main/runtime-contract.ts';
@@ -121,6 +121,8 @@ const runtimePackages = [
   ['@electric-sql', 'pglite'],
   ['@napi-rs', 'canvas'],
   ['@napi-rs', runtimeContract.nativeCanvasPackage],
+  ['@firecrawl', 'pdf-inspector'],
+  ['@firecrawl', 'pdf-inspector-win32-x64-msvc'],
   ['@dqbd', 'tiktoken'],
   ['@aws-sdk'],
   ['@smithy'],
@@ -150,6 +152,7 @@ const runtimeArchive = await ensureRuntimeArchive();
 await rm(outputDirectory, { recursive: true, force: true });
 await mkdir(outputDirectory, { recursive: true });
 await extractRuntimeExecutable(runtimeArchive);
+await copyFile(join(projectRoot, 'THIRD_PARTY_NOTICES.md'), join(outputDirectory, 'THIRD_PARTY_NOTICES.md'));
 
 const build = Bun.spawn([
   runtimeExecutablePath,
@@ -168,6 +171,8 @@ const build = Bun.spawn([
   '--external', 'libheif-js/*',
   '--external', 'web-tree-sitter',
   '--external', 'web-tree-sitter/*',
+  '--external', '@firecrawl/pdf-inspector',
+  '--external', '@firecrawl/pdf-inspector/*',
 ], {
   cwd: projectRoot,
   stdout: 'inherit',

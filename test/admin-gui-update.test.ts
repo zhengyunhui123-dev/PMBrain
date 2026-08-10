@@ -79,12 +79,11 @@ describe('Admin GUI update contract', () => {
     expect(adminStyles).toContain('.import-options-action');
   });
 
-  test('settings exposes the all-file chunking and vectorization threshold', () => {
-    expect(settingsSource).toContain('function ImportVectorizationSettings()');
-    expect(settingsSource).toContain('默认 500 KB，可设置 100–5000 KB');
-    expect(settingsSource).toContain('适用于所有文件');
-    expect(serveHttpSource).toContain("app.get('/admin/api/import/settings'");
-    expect(serveHttpSource).toContain("app.post('/admin/api/import/settings'");
+  test('settings no longer exposes the obsolete all-file vectorization threshold', () => {
+    expect(settingsSource).not.toContain('function ImportVectorizationSettings()');
+    expect(settingsSource).not.toContain('默认 500 KB，可设置 100–5000 KB');
+    expect(serveHttpSource).not.toContain("app.get('/admin/api/import/settings'");
+    expect(serveHttpSource).not.toContain("app.post('/admin/api/import/settings'");
   });
 
   test('Dream local Markdown toggle persists immediately and rolls back on failure', () => {

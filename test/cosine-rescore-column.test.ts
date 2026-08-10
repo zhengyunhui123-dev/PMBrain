@@ -19,16 +19,19 @@ import { PGLiteEngine } from '../src/core/pglite-engine.ts';
 import {
   EmbeddingColumnNotRegisteredError,
 } from '../src/core/search/embedding-column.ts';
+import { DEFAULT_EMBEDDING_DIMENSIONS } from '../src/core/ai/defaults.ts';
 import type { PageInput, ChunkInput } from '../src/core/types.ts';
 
 let engine: PGLiteEngine;
 let chunkId: number;
 let chunkId2: number;
+let primaryDimensions: number;
 
 beforeAll(async () => {
   engine = new PGLiteEngine();
   await engine.connect({});
   await engine.initSchema();
+  primaryDimensions = Number(await engine.getConfig('embedding_dimensions')) || DEFAULT_EMBEDDING_DIMENSIONS;
 
   // Add an ad-hoc voyage column at the same shape Garry's brain has —
   // outside the committed schema, declared per-instance.
@@ -60,20 +63,20 @@ beforeAll(async () => {
   chunkId = rows[0].id;
   chunkId2 = rows[1].id;
 
-  // Plant distinct vectors in 'embedding' (1536d) and 'embedding_voyage'
+  // Plant distinct vectors in the configured primary shape and 'embedding_voyage'
   // (1024d) so we can prove the column parameter actually selects.
-  const v1536a = new Array(1536).fill(0).map(() => 0.001).join(',');
-  const v1536b = new Array(1536).fill(0).map(() => 0.002).join(',');
+  const primaryA = new Array(primaryDimensions).fill(0).map(() => 0.001).join(',');
+  const primaryB = new Array(primaryDimensions).fill(0).map(() => 0.002).join(',');
   const v1024a = new Array(1024).fill(0).map(() => 0.5).join(',');
   const v1024b = new Array(1024).fill(0).map(() => 0.6).join(',');
 
   await (engine as any).db.query(
     `UPDATE content_chunks SET embedding = $1::vector WHERE id = $2`,
-    [`[${v1536a}]`, chunkId],
+    [`[${primaryA}]`, chunkId],
   );
   await (engine as any).db.query(
     `UPDATE content_chunks SET embedding = $1::vector WHERE id = $2`,
-    [`[${v1536b}]`, chunkId2],
+    [`[${primaryB}]`, chunkId2],
   );
   await (engine as any).db.query(
     `UPDATE content_chunks SET embedding_voyage = $1::vector WHERE id = $2`,
@@ -93,8 +96,8 @@ describe('getEmbeddingsByChunkIds — column parameter (D9)', () => {
   test('default param fetches from "embedding" — preserves pre-v0.36 behavior', async () => {
     const map = await engine.getEmbeddingsByChunkIds([chunkId, chunkId2]);
     expect(map.size).toBe(2);
-    expect(map.get(chunkId)!.length).toBe(1536);
-    expect(map.get(chunkId2)!.length).toBe(1536);
+    expect(map.get(chunkId)!.length).toBe(primaryDimensions);
+    expect(map.get(chunkId2)!.length).toBe(primaryDimensions);
     // First-element matches what we seeded for the primary column.
     expect(map.get(chunkId)![0]).toBeCloseTo(0.001, 5);
   });

@@ -10,6 +10,7 @@ Console 和 Windows 桌面端提供访问入口。
 ## 核心能力
 
 - 多 Source 管理：按 `source_id + slug` 隔离内容，同时保留显式的共享回退规则。
+- 结构化文档导入：PDF、DOCX、PPTX 和 XLSX 在本地保留章节、表格与来源定位，大文档可分批向量化并在中断后继续。
 - 混合检索：关键词、标题、关系、向量和可选 Reranker 共同参与召回与排序。
 - Dream 周期：整理资料、抽取事实与关系、生成候选观点，并保留审批边界。
 - 多入口：CLI、HTTP/MCP、Admin Console 与 Windows 桌面端复用核心能力。

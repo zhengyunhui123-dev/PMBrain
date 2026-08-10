@@ -16,6 +16,7 @@ export interface AdminKnowledgeSearchHit {
   type: string;
   score: number;
   snippet: string;
+  locator: string | null;
   source_id: string | null;
   page_id: number;
   chunk_id: number;
@@ -45,13 +46,18 @@ function clampLimit(raw: unknown): number {
 }
 
 function toHit(row: SearchResult): AdminKnowledgeSearchHit {
-  const snippet = (row.chunk_text ?? '').replace(/\s+/g, ' ').trim().slice(0, SNIPPET_LEN);
+  const raw = row.chunk_text ?? '';
+  const locator = raw.match(/^Locator:\s*(.+)$/m)?.[1]?.trim() ?? null;
+  const snippet = raw
+    .replace(/^Parent document:.*\r?\nSection:.*\r?\nLocator:.*\r?\n*/m, '')
+    .replace(/\s+/g, ' ').trim().slice(0, SNIPPET_LEN);
   return {
     slug: row.slug,
     title: row.title || row.slug,
     type: String(row.type ?? ''),
     score: Number.isFinite(row.score) ? row.score : 0,
     snippet,
+    locator,
     source_id: row.source_id ?? null,
     page_id: row.page_id,
     chunk_id: row.chunk_id,

@@ -6,6 +6,7 @@ import type { SidecarState } from '../sidecar-manager.js';
 import type { UpdateState } from '../update-manager.js';
 
 const SECRET_KEY = /(api.?key|token|password|secret|authorization|cookie|credential|database.?url)/i;
+const PATH_KEY = /(path|directory|local_path|pid_file)$/i;
 const MAX_LOG_BYTES = 512 * 1024;
 
 export interface DiagnosticBundleInput {
@@ -18,6 +19,7 @@ export interface DiagnosticBundleInput {
   logPath?: string;
   doctor?: unknown;
   overview?: unknown;
+  dreamStatus?: unknown;
   personalPaths?: string[];
 }
 
@@ -37,8 +39,11 @@ function replacePersonalPaths(value: string, paths: string[]): string {
 export function redactDiagnosticText(value: string, personalPaths: string[] = []): string {
   return replacePersonalPaths(value, personalPaths)
     .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, 'Bearer [REDACTED]')
+    .replace(/(\/admin\/auth\/)[^/?#\s"']+/gi, '$1[REDACTED]')
     .replace(/(postgres(?:ql)?:\/\/[^:\s/]+:)[^@\s/]+@/gi, '$1[REDACTED]@')
-    .replace(/((?:api[_-]?key|token|password|secret|authorization|cookie)\s*[=:]\s*)[^\s,;]+/gi, '$1[REDACTED]');
+    .replace(/((?:api[_-]?key|token|password|secret|authorization|cookie)\s*[=:]\s*)[^\s,;]+/gi, '$1[REDACTED]')
+    .replace(/(?:[A-Za-z]:\\|\\\\)[^\r\n]*/g, '<PATH>')
+    .replace(/(?:\/Users\/|\/home\/)[^\r\n]*/g, '<PATH>');
 }
 
 export function redactDiagnosticValue(value: unknown, personalPaths: string[] = []): unknown {
@@ -47,7 +52,11 @@ export function redactDiagnosticValue(value: unknown, personalPaths: string[] = 
   if (!value || typeof value !== 'object') return value;
   const output: Record<string, unknown> = {};
   for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
-    output[key] = SECRET_KEY.test(key) ? '[REDACTED]' : redactDiagnosticValue(item, personalPaths);
+    output[key] = SECRET_KEY.test(key)
+      ? '[REDACTED]'
+      : PATH_KEY.test(key) && typeof item === 'string' && item
+        ? '<PATH>'
+        : redactDiagnosticValue(item, personalPaths);
   }
   return output;
 }
@@ -60,6 +69,20 @@ async function readLogTail(path?: string): Promise<string> {
   } catch (error) {
     return `[log unavailable] ${error instanceof Error ? error.message : String(error)}`;
   }
+}
+
+export function extractSidecarLog(value: string): string {
+  const output: string[] = [];
+  let includeContinuation = false;
+  for (const line of value.split(/\r?\n/)) {
+    const source = line.match(/^\[[^\]]+\]\s+\[([^\]]+)\]/)?.[1] ?? null;
+    if (source) {
+      includeContinuation = /^(sidecar|health|runtime)/i.test(source)
+        || (source === 'desktop' && /health check/i.test(line));
+    }
+    if (includeContinuation) output.push(line);
+  }
+  return output.join('\n');
 }
 
 function json(value: unknown, personalPaths: string[]): string {
@@ -78,8 +101,8 @@ export async function buildDiagnosticBundle(input: DiagnosticBundleInput): Promi
   ];
   const rawLog = await readLogTail(input.logPath);
   const safeLog = redactDiagnosticText(rawLog, personalPaths);
-  const sidecarLog = safeLog.split(/\r?\n/).filter(line => /\[(sidecar|health|runtime)\]/i.test(line)).join('\n');
-  const recentErrors = safeLog.split(/\r?\n/).filter(line => /(error|failed|fatal|exception|timeout)/i.test(line)).slice(-200);
+  const sidecarLog = extractSidecarLog(safeLog);
+  const recentErrors = safeLog.split(/\r?\n/).filter(line => /(error|failed|fatal|exception|timeout|unable)/i.test(line)).slice(-200);
   const setupStatus = {
     needsSetup: input.setup.needsSetup,
     configPath: input.setup.configPath,
@@ -102,6 +125,7 @@ export async function buildDiagnosticBundle(input: DiagnosticBundleInput): Promi
   const zip = new JSZip();
   zip.file('version.json', json({ desktopVersion: input.desktopVersion, release: input.releaseManifest ?? null }, personalPaths));
   zip.file('doctor.json', json(input.doctor ?? { status: 'unavailable' }, personalPaths));
+  zip.file('dream-status.json', json(input.dreamStatus ?? { status: 'unavailable' }, personalPaths));
   zip.file('desktop.log', safeLog || '[empty]\n');
   zip.file('sidecar.log', sidecarLog || '[no sidecar log lines]\n');
   zip.file('database-status.json', json(setupStatus, personalPaths));
@@ -109,7 +133,13 @@ export async function buildDiagnosticBundle(input: DiagnosticBundleInput): Promi
   zip.file('mcp-status.json', json({ sidecar: input.sidecarState }, personalPaths));
   zip.file('update-status.json', json(input.updateState ?? { status: 'unavailable' }, personalPaths));
   zip.file('recent-errors.json', json({ rows: recentErrors }, personalPaths));
-  zip.file('README.txt', 'PMBrain diagnostic bundle. Secrets and configured personal paths are redacted. No database or knowledge content is included.\n');
+  zip.file('README.txt', [
+    'PMBrain 脱敏诊断包',
+    '',
+    '状态数据来自导出时正在运行的数据库引擎，不会合并其他数据库的统计结果。',
+    '诊断包不包含数据库文件或知识正文；令牌、密码、API Key 和本地绝对路径均已脱敏。',
+    '',
+  ].join('\n'));
   const data = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
   const stamp = createdAt.toISOString().replace(/[-:]/g, '').slice(0, 15);
   return {
