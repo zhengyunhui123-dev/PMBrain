@@ -1,7 +1,14 @@
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { buildDreamOutcome, describeDreamRun, dreamRunDeltas, isKnowledgeJourneyComplete, phaseSummaryZh } from '../admin/src/pages/Dream.tsx';
+import {
+  buildDreamOutcome,
+  buildQuickMaintenanceStages,
+  describeDreamRun,
+  dreamRunDeltas,
+  isKnowledgeJourneyComplete,
+  phaseSummaryZh,
+} from '../admin/src/pages/Dream.tsx';
 import type { ConsoleRun } from '../admin/src/lib/shared.tsx';
 
 const dream = readFileSync(join(process.cwd(), 'admin/src/pages/Dream.tsx'), 'utf8');
@@ -26,6 +33,15 @@ function completedRun(report: Record<string, unknown>, stderr = ''): ConsoleRun 
     startedAt: '2026-07-11T00:00:00.000Z',
     completedAt: '2026-07-11T00:01:00.000Z',
     durationMs: 60_000,
+  };
+}
+
+function quickRun(report: Record<string, unknown>, status: ConsoleRun['status'] = 'completed'): ConsoleRun {
+  return {
+    ...completedRun(report),
+    kind: 'dream_quick',
+    status,
+    command: ['pmbrain', 'dream', '--preset', 'quick', '--json'],
   };
 }
 
@@ -202,6 +218,8 @@ describe('Dream GUI product contract', () => {
   test('uses the separately captured result when the visible stdout log is truncated', () => {
     const run = {
       ...completedRun({ status: 'clean', totals: {} }),
+      kind: 'dream_quick',
+      command: ['pmbrain', 'dream', '--preset', 'quick', '--json'],
       stdout: '...only the final 120k log tail...',
       result: {
         status: 'partial',
@@ -227,11 +245,106 @@ describe('Dream GUI product contract', () => {
     expect(buildDreamOutcome(run).metrics.map(metric => [metric.label, metric.value])).toEqual([
       ['新增知识', 988],
       ['更新知识', 3],
-      ['合并与去重', 0],
       ['新增关联', 183],
-      ['未处理成功', 1869],
+      ['完成向量', 12132],
     ]);
-    expect(describeDreamRun(run).headline).toBe('Dream 已部分完成，成果与待处理项如下');
+    expect(buildDreamOutcome(run).pendingMetrics.map(metric => [metric.label, metric.value])).toEqual([
+      ['异常文件', 0],
+      ['待向量化', 1868],
+      ['历史待补关联', 0],
+    ]);
+    expect(buildDreamOutcome(run).failureItems).toEqual(['更新索引：1 项模型或数据处理未成功']);
+    expect(describeDreamRun(run).headline).toBe('快速维护已部分完成');
+  });
+
+  test('Quick maintenance presents five honest clickable stages with individual states and results', () => {
+    const run = quickRun({
+      status: 'partial',
+      phases: [
+        { phase: 'lint', status: 'ok', details: { pages_scanned: 2177, issues: 12, fixed: 9 } },
+        { phase: 'backlinks', status: 'ok', details: { gaps: 3, added: 0 } },
+        {
+          phase: 'sync',
+          status: 'warn',
+          details: { added: 81, modified: 7, failedFiles: 2 },
+          pagesAffected: ['one', 'two'],
+          pagesAffectedCount: 86,
+        },
+        {
+          phase: 'extract',
+          status: 'ok',
+          details: {
+            linksCreated: 48,
+            mentionLinksCreated: 40,
+            mentionPagesProcessed: 500,
+            mentionHistoricalRemaining: 1706,
+          },
+        },
+        { phase: 'resolve_symbol_edges', status: 'ok', details: { chunks_walked: 300, edges_resolved: 8 } },
+        { phase: 'embed', status: 'ok', details: { embedded: 420, skipped: 1200, total_chunks: 2000, pending: 380 } },
+        { phase: 'orphans', status: 'ok', details: { total_orphans: 31, total_pages: 2177 } },
+      ],
+      totals: { pages_added: 81, pages_synced: 88, links_created: 56, pages_embedded: 420 },
+    });
+
+    const stages = buildQuickMaintenanceStages(run);
+    expect(stages.map(stage => [stage.title, stage.state])).toEqual([
+      ['检查知识', 'done'],
+      ['同步内容', 'partial'],
+      ['建立关联', 'partial'],
+      ['更新索引', 'partial'],
+      ['完成检查', 'partial'],
+    ]);
+    expect(stages[0]?.results).toEqual([
+      { label: '扫描页面', value: 2177 },
+      { label: '发现问题', value: 15 },
+      { label: '自动修复', value: 9 },
+    ]);
+    expect(stages[1]?.results).toEqual([
+      { label: '新增内容', value: 81 },
+      { label: '更新内容', value: 7 },
+      { label: '异常文件', value: 2 },
+    ]);
+    expect(stages[2]?.results).toEqual([
+      { label: '新增关联', value: 56 },
+      { label: '扫描历史页面', value: 414 },
+      { label: '历史待补关联', value: 1706 },
+    ]);
+    expect(stages[3]?.results).toEqual([
+      { label: '本次完成向量', value: 420 },
+      { label: '待向量化', value: 380 },
+    ]);
+    expect(stages[4]?.results).toEqual([
+      { label: '孤立知识', value: 31 },
+      { label: '整体状态', value: '部分完成' },
+    ]);
+    expect(dream).toContain('未开始');
+    expect(dream).toContain('进行中');
+    expect(dream).toContain('已完成');
+    expect(dream).toContain('部分完成');
+    expect(dream).toContain('异常');
+  });
+
+  test('Quick pending work is shown separately from real failures', () => {
+    const run = quickRun({
+      status: 'partial',
+      phases: [
+        { phase: 'sync', status: 'warn', details: { added: 9, modified: 2, failedFiles: 1 } },
+        { phase: 'extract', status: 'ok', details: { linksCreated: 4, mentionHistoricalRemaining: 1706 } },
+        { phase: 'embed', status: 'ok', details: { embedded: 20, pending: 3563 } },
+      ],
+      totals: { pages_added: 9, links_created: 4, pages_embedded: 20 },
+    });
+    const outcome = buildDreamOutcome(run);
+    expect(outcome.metrics.map(metric => metric.label)).toEqual(['新增知识', '更新知识', '新增关联', '完成向量']);
+    expect(outcome.pendingMetrics.map(metric => [metric.label, metric.value])).toEqual([
+      ['异常文件', 1],
+      ['待向量化', 3563],
+      ['历史待补关联', 1706],
+    ]);
+    expect(outcome.failureItems).toEqual(['同步内容：1 个文件未处理成功']);
+    expect(dream).toContain('仍需处理');
+    expect(outcome.metrics.some(metric => metric.label === '未处理成功')).toBe(false);
   });
 
   test('proposal drain statistics are shown from the structured phase report', () => {
