@@ -763,6 +763,35 @@ describe('embedAllStale wall-clock budget end-to-end (D3 + D3a)', () => {
     expect(elapsed).toBeLessThan(1500);
   });
 
+  test('all page timeouts are reported as failed instead of clean/ok', async () => {
+    const { runEmbedCore } = await import('../src/commands/embed.ts');
+    const stale = [
+      { slug: 'timeout-a', chunk_index: 0, chunk_text: 'a', chunk_source: 'compiled_truth' as const, model: null, token_count: 1, source_id: 'default', page_id: 1 },
+      { slug: 'timeout-b', chunk_index: 0, chunk_text: 'b', chunk_source: 'compiled_truth' as const, model: null, token_count: 1, source_id: 'default', page_id: 2 },
+      { slug: 'timeout-b', chunk_index: 1, chunk_text: 'c', chunk_source: 'compiled_truth' as const, model: null, token_count: 1, source_id: 'default', page_id: 2 },
+    ];
+    embedBatchBehavior = async () => {
+      const error = new Error('Ollama request timed out');
+      error.name = 'TimeoutError';
+      throw error;
+    };
+    const engine = mockEngine({
+      countStaleChunks: async () => stale.length,
+      listStaleChunks: async () => stale,
+      getChunks: async (slug: string) => stale
+        .filter((row) => row.slug === slug)
+        .map((row) => ({ ...row, embedded_at: null })),
+      upsertChunks: async () => {},
+    });
+
+    const result = await runEmbedCore(engine, { stale: true });
+
+    expect(result.embedded).toBe(0);
+    expect(result.failedPages).toBe(2);
+    expect(result.failedChunks).toBe(3);
+    expect(result.status).toBe('failed');
+  });
+
   test('--catch-up disables the timer without overflowing the Windows timeout range', async () => {
     const { runEmbedCore } = await import('../src/commands/embed.ts');
     const originalSetTimeout = globalThis.setTimeout;

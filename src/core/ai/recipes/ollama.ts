@@ -64,6 +64,19 @@ export const ollama: Recipe = {
       // Ollama's batch capacity depends on the locally loaded model + the
       // OLLAMA_NUM_PARALLEL config; no static cap to declare. v0.32 (#779).
       no_batch_cap: true,
+      // Local Ollama shares CPU/GPU memory across requests. Keep item-count
+      // batching and page concurrency conservative, then let the centralized
+      // execution profile heal upward after sustained success.
+      execution_profile: {
+        mode: 'local',
+        initial_concurrency: 2,
+        min_concurrency: 1,
+        max_concurrency: 4,
+        initial_batch_items: 12,
+        min_batch_items: 8,
+        max_batch_items: 16,
+        success_window: 8,
+      },
     },
   },
   setup_hint: 'Install Ollama from https://ollama.ai, pull a chat or embedding model, then run `ollama serve`.',

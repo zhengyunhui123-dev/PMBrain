@@ -11,8 +11,8 @@ import {
 } from '../core/config.ts';
 import { slog, serr } from '../core/console-prefix.ts';
 import { filterOutEmbedSkipped } from '../core/embed-skip.ts';
-import { runSlidingPool } from '../core/worker-pool.ts';
 import { getEmbeddingModel } from '../core/ai/gateway.ts';
+import { runEmbeddingExecutionPool } from '../core/ai/embedding-execution-profile.ts';
 import { splitProviderModelId } from '../core/model-id.ts';
 import { repairLegacyZeroEntropyLabels } from '../core/embedding-dimension-alignment.ts';
 
@@ -88,8 +88,32 @@ export interface EmbedResult {
   total_chunks: number;
   /** Number of pages processed (whether or not they had stale chunks). */
   pages_processed: number;
+  /** Pages whose embedding or persistence failed. */
+  failedPages: number;
+  /** Chunks left without a newly requested embedding because their page failed. */
+  failedChunks: number;
+  /** Real execution outcome; failures can no longer look clean. */
+  status: 'clean' | 'ok' | 'partial' | 'failed';
   /** True if this run was a dry-run. */
   dryRun: boolean;
+}
+
+function finalizeEmbedResult(result: EmbedResult): EmbedResult {
+  if (result.failedPages > 0 || result.failedChunks > 0) {
+    result.status = result.embedded > 0 ? 'partial' : 'failed';
+  } else if (result.embedded > 0 || result.would_embed > 0) {
+    result.status = 'ok';
+  } else {
+    result.status = 'clean';
+  }
+  return result;
+}
+
+class PageEmbeddingFailure extends Error {
+  constructor(public readonly failedChunks: number, cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause), { cause });
+    this.name = 'PageEmbeddingFailure';
+  }
 }
 
 /**
@@ -225,6 +249,9 @@ export async function runEmbedCore(engine: BrainEngine, opts: EmbedOpts): Promis
     would_embed: 0,
     total_chunks: 0,
     pages_processed: 0,
+    failedPages: 0,
+    failedChunks: 0,
+    status: 'clean',
     dryRun: !!opts.dryRun,
   };
 
@@ -233,10 +260,12 @@ export async function runEmbedCore(engine: BrainEngine, opts: EmbedOpts): Promis
       try {
         await embedPage(engine, s, !!opts.dryRun, result, opts.sourceId);
       } catch (e: unknown) {
+        result.failedPages++;
+        result.failedChunks += e instanceof PageEmbeddingFailure ? e.failedChunks : 0;
         serr(`  Error embedding ${s}: ${e instanceof Error ? e.message : e}`);
       }
     }
-    return result;
+    return finalizeEmbedResult(result);
   }
   if (opts.all || opts.stale) {
     await embedAll(engine, !!opts.stale, !!opts.dryRun, result, opts.onProgress, opts.sourceId, {
@@ -244,11 +273,11 @@ export async function runEmbedCore(engine: BrainEngine, opts: EmbedOpts): Promis
       priority: opts.priority,
       catchUp: opts.catchUp,
     });
-    return result;
+    return finalizeEmbedResult(result);
   }
   if (opts.slug) {
     await embedPage(engine, opts.slug, !!opts.dryRun, result, opts.sourceId);
-    return result;
+    return finalizeEmbedResult(result);
   }
   throw new Error('No embed target specified. Pass { slug }, { slugs }, { all }, or { stale }.');
 }
@@ -414,25 +443,29 @@ async function embedPage(
     return;
   }
 
-  const embeddings = await embedBatch(toEmbed.map(c => c.chunk_text));
-  const embeddingModel = getEmbeddingModel();
-  const embeddingMap = new Map<number, Float32Array>();
-  for (let j = 0; j < toEmbed.length; j++) {
-    embeddingMap.set(toEmbed[j].chunk_index, embeddings[j]);
-  }
-  const updated: ChunkInput[] = chunks.map(c => ({
-    chunk_index: c.chunk_index,
-    chunk_text: c.chunk_text,
-    chunk_source: c.chunk_source,
-    embedding: embeddingMap.get(c.chunk_index),
-    model: embeddingModel,
-    token_count: c.token_count || Math.ceil(c.chunk_text.length / 4),
-  }));
+  try {
+    const embeddings = await embedBatch(toEmbed.map(c => c.chunk_text));
+    const embeddingModel = getEmbeddingModel();
+    const embeddingMap = new Map<number, Float32Array>();
+    for (let j = 0; j < toEmbed.length; j++) {
+      embeddingMap.set(toEmbed[j].chunk_index, embeddings[j]);
+    }
+    const updated: ChunkInput[] = chunks.map(c => ({
+      chunk_index: c.chunk_index,
+      chunk_text: c.chunk_text,
+      chunk_source: c.chunk_source,
+      embedding: embeddingMap.get(c.chunk_index),
+      model: embeddingModel,
+      token_count: c.token_count || Math.ceil(c.chunk_text.length / 4),
+    }));
 
-  await engine.upsertChunks(slug, updated, opts);
-  result.embedded += toEmbed.length;
-  result.pages_processed++;
-  slog(`${slug}: embedded ${toEmbed.length} chunks`);
+    await engine.upsertChunks(slug, updated, opts);
+    result.embedded += toEmbed.length;
+    result.pages_processed++;
+    slog(`${slug}: embedded ${toEmbed.length} chunks`);
+  } catch (error) {
+    throw new PageEmbeddingFailure(toEmbed.length, error);
+  }
 }
 
 async function embedAll(
@@ -491,8 +524,6 @@ async function embedAll(
   // (3000+/min for tier 1 = 50+/sec, 20 parallel is safely below) and
   // avoids overwhelming postgres connection pools. Users can tune via
   // GBRAIN_EMBED_CONCURRENCY env var based on their tier/infra.
-  const CONCURRENCY = parseInt(process.env.GBRAIN_EMBED_CONCURRENCY || '20', 10);
-
   async function embedOnePage(page: typeof pages[number]) {
     // v0.31.12: thread source_id from the page row so getChunks/upsertChunks
     // target the correct (source_id, slug) row, not the 'default' source.
@@ -538,6 +569,8 @@ async function embedAll(
       await engine.upsertChunks(page.slug, updated, pageOpts);
       result.embedded += toEmbed.length;
     } catch (e: unknown) {
+      result.failedPages++;
+      result.failedChunks += toEmbed.length;
       serr(`\n  Error embedding ${page.slug}: ${e instanceof Error ? e.message : e}`);
     }
 
@@ -553,11 +586,14 @@ async function embedAll(
   // and stderr log (no rethrow), so we don't need failures[] here and
   // omitting onError means the default 'continue' policy applies cleanly
   // even though no errors should reach the pool's catch.
-  await runSlidingPool({
+  await runEmbeddingExecutionPool({
     items: pages,
-    workers: CONCURRENCY,
+    model: embeddingModel,
     onItem: (page) => embedOnePage(page),
-    failureLabel: (page) => page.slug,
+    onError: (error, page) => {
+      result.failedPages++;
+      serr(`\n  Error embedding ${page.slug}: ${error instanceof Error ? error.message : error}`);
+    },
   });
 
   // Stdout summary preserved for scripts/tests that grep for counts.
@@ -628,8 +664,6 @@ async function embedAllStale(
   // (page_id, chunk_index). Each query finishes in <1s.
   // v0.41.18.0 (A13): --batch-size N CLI flag overrides hardcoded 2000 default.
   const PAGE_SIZE = staleOpts?.batchSize ?? 2000;
-  const CONCURRENCY = parseInt(process.env.GBRAIN_EMBED_CONCURRENCY || '20', 10);
-
   // D3 + D3a + D8: wall-clock budget. 30 min default; env override.
   // v0.41.18.0 (A13): --catch-up removes the wall-clock cap entirely so the
   // handler runs until countStaleChunks() returns 0. Do not emulate infinity
@@ -734,6 +768,8 @@ async function embedAllStale(
           // Budget-fired aborts are expected on the way out; don't spam
           // per-page "Error embedding" lines when we're shutting down.
           if (budgetSignal.aborted) return;
+          result.failedPages++;
+          result.failedChunks += stale.length;
           serr(`\n  Error embedding ${slug}: ${e instanceof Error ? e.message : e}`);
         }
         totalProcessedPages++;
@@ -743,17 +779,17 @@ async function embedAllStale(
         onProgress?.(totalProcessedPages, Math.ceil(staleCount / PAGE_SIZE) * keys.length, result.embedded);
       }
 
-      // v0.41.15.0: migrated to shared runSlidingPool. The pool checks
-      // its `signal` argument before each claim (mirrors the pre-migration
-      // `!budgetSignal.aborted` gate) AND threads abort into in-flight
-      // onItem via the local-abort composition for D13. embedOneKey
-      // already handles its own per-key errors via try/catch + stderr.
-      await runSlidingPool({
+      // Provider-aware waves re-read concurrency after each wave so a local
+      // timeout downshift takes effect without changing cursor semantics.
+      await runEmbeddingExecutionPool({
         items: keys,
-        workers: CONCURRENCY,
+        model: embeddingModel,
         signal: budgetSignal,
         onItem: (key) => embedOneKey(key),
-        failureLabel: (key) => key,
+        onError: (error, key) => {
+          result.failedPages++;
+          serr(`\n  Error embedding ${key}: ${error instanceof Error ? error.message : error}`);
+        },
       });
 
       // If we got fewer rows than PAGE_SIZE, we've reached the end.

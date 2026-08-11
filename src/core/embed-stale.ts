@@ -20,6 +20,7 @@
 import type { BrainEngine } from './engine.ts';
 import type { ChunkInput } from './types.ts';
 import { embedBatchWithBackoff } from '../commands/embed.ts';
+import { runEmbeddingExecutionPool } from './ai/embedding-execution-profile.ts';
 import { AbortError, type DbPacer, createNoopPacer, observed } from './db-pacer.ts';
 
 /** Last visited (page_id, chunk_index) for keyset-resume across runs. */
@@ -69,6 +70,10 @@ export interface EmbedStaleResult {
   chunksProcessed: number;
   /** Pages whose embeddings landed. */
   pagesProcessed: number;
+  /** Pages that failed and remain stale for a later retry. */
+  failedPages: number;
+  /** Chunks that failed and remain NULL for a later retry. */
+  failedChunks: number;
   /** Last cursor reached. null iff zero stale chunks existed at start. */
   lastCursor: StaleCursor | null;
   /** True iff the loop exited because every stale chunk was processed. */
@@ -102,7 +107,6 @@ export async function embedStaleForSource(
   opts: EmbedStaleOpts = {},
 ): Promise<EmbedStaleResult> {
   const batchSize = opts.batchSize ?? 2000;
-  const concurrency = opts.concurrency ?? 20;
   const signal = opts.signal;
   const pacer = opts.pacer ?? createNoopPacer();
   const embedFn = opts.embedFn ?? ((texts, fnOpts) =>
@@ -115,6 +119,8 @@ export async function embedStaleForSource(
     embedded: 0,
     chunksProcessed: 0,
     pagesProcessed: 0,
+    failedPages: 0,
+    failedChunks: 0,
     lastCursor: null,
     done: false,
     aborted: false,
@@ -158,7 +164,6 @@ export async function embedStaleForSource(
     }
 
     const keys = Array.from(byKey.keys());
-    let nextIdx = 0;
 
     async function embedOneKey(key: string): Promise<void> {
       const stale = byKey.get(key)!;
@@ -188,6 +193,8 @@ export async function embedStaleForSource(
       } catch (e: unknown) {
         // Aborted mid-fetch is expected; treat as graceful exit.
         if (signal?.aborted) return;
+        result.failedPages += 1;
+        result.failedChunks += stale.length;
         // Otherwise log and skip — the chunk stays NULL and next call retries.
         process.stderr.write(
           `\n  [embed-stale] error on ${keySourceId}/${slug}: ${
@@ -197,21 +204,30 @@ export async function embedStaleForSource(
       }
     }
 
-    async function worker(): Promise<void> {
-      while (nextIdx < keys.length && !signal?.aborted) {
-        const idx = nextIdx++;
-        await embedOneKey(keys[idx]);
+    await runEmbeddingExecutionPool({
+      items: keys,
+      model: opts.model,
+      requestedConcurrency: opts.concurrency,
+      signal,
+      onItem: async (key) => {
+        await embedOneKey(key);
         try {
           await pacer.pace(signal);
         } catch (e) {
-          if (e instanceof AbortError) return;
-          throw e;
+          if (!(e instanceof AbortError)) throw e;
         }
-      }
-    }
-
-    const numWorkers = Math.min(concurrency, keys.length);
-    await Promise.all(Array.from({ length: numWorkers }, () => worker()));
+      },
+      onError: (error, key) => {
+        const stale = byKey.get(key)!;
+        result.failedPages += 1;
+        result.failedChunks += stale.length;
+        process.stderr.write(
+          `\n  [embed-stale] worker error on ${key}: ${
+            error instanceof Error ? error.message : String(error)
+          }\n`,
+        );
+      },
+    });
 
     if (opts.onProgress) {
       opts.onProgress({

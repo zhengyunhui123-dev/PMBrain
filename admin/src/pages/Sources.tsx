@@ -37,6 +37,7 @@ export function SourceManagementSettings() {
   const [sourceId, setSourceId] = useState('');
   const [sourceName, setSourceName] = useState('');
   const [federated, setFederated] = useState(true);
+  const [registrationOpen, setRegistrationOpen] = useState(false);
   const [registrationRun, setRegistrationRun] = useState<ConsoleRun | null>(null);
   const [submitError, setSubmitError] = useState('');
   const [sourceActionId, setSourceActionId] = useState<string | null>(null);
@@ -45,6 +46,27 @@ export function SourceManagementSettings() {
   const [gitError, setGitError] = useState('');
   const [gitResult, setGitResult] = useState('');
   const [gitBusy, setGitBusy] = useState(false);
+  const registrationBusy = registrationRun?.status === 'running' || registrationRun?.status === 'queued';
+
+  const resetRegistration = () => {
+    setPath('');
+    setSourceId('');
+    setSourceName('');
+    setFederated(true);
+    setRegistrationRun(null);
+    setSubmitError('');
+  };
+
+  const openRegistration = () => {
+    resetRegistration();
+    setRegistrationOpen(true);
+  };
+
+  const closeRegistration = () => {
+    if (registrationBusy) return;
+    setRegistrationOpen(false);
+    resetRegistration();
+  };
 
   useEffect(() => {
     if (!registrationRun || (registrationRun.status !== 'running' && registrationRun.status !== 'queued')) return;
@@ -52,8 +74,10 @@ export function SourceManagementSettings() {
       try {
         const next = await api.run(registrationRun.id) as ConsoleRun;
         setRegistrationRun(next);
-        if (next.status !== 'running' && next.status !== 'queued') {
-          void reload();
+        if (next.status === 'completed') {
+          await reload();
+          setRegistrationOpen(false);
+          resetRegistration();
         }
       } catch {}
     }, 1500);
@@ -66,7 +90,11 @@ export function SourceManagementSettings() {
       const res = await api.addSource({ id: sourceId || undefined, path, name: sourceName || undefined, federated });
       const first = await api.run(res.runId) as ConsoleRun;
       setRegistrationRun(first);
-      if (first.status !== 'running' && first.status !== 'queued') await reload();
+      if (first.status === 'completed') {
+        await reload();
+        setRegistrationOpen(false);
+        resetRegistration();
+      }
     } catch (e) {
       setSubmitError(e instanceof Error ? e.message : String(e));
     }
@@ -153,18 +181,22 @@ export function SourceManagementSettings() {
 
   return (
     <section className="settings-source-section settings-panel-group">
-      <div className="pm-section-head settings-group-head">
+      <div className="pm-section-head settings-group-head source-register-head">
         <div className="settings-panel-title">
           <span className="settings-panel-icon"><FolderTree /></span>
           <div><h2>数据源与归档</h2><p className="pm-hint">注册要持续同步的资料目录；不再使用的 Source 可归档，72 小时内恢复。</p></div>
         </div>
+        <button className="pm-primary source-register-trigger" type="button" onClick={openRegistration}>
+          <Plus aria-hidden="true" />
+          注册数据源
+        </button>
       </div>
       {error && <div className="pm-card pm-error">{error}</div>}
+      {submitError && !registrationOpen && <div className="pm-error-text source-management-error">{submitError}</div>}
       {!overview ? <LoadingBlock /> : (
-        <div className="pm-grid two-col import-layout">
-          <div className="pm-card import-sources-card settings-subcard">
+          <div className="pm-card import-sources-card settings-subcard source-list-card">
             <div className="pm-section-head">
-              <h3>已有数据源</h3>
+              <h3>已注册数据源</h3>
               <label className="checkbox-label" style={{ fontSize: 12, fontWeight: 400, cursor: 'pointer' }}>
                 <input type="checkbox" checked={showArchived} onChange={e => setShowArchived(e.target.checked)} />
                 显示已归档
@@ -223,27 +255,39 @@ export function SourceManagementSettings() {
             </div>
             <p className="pm-hint source-git-note">Git 操作只在资料目录内创建仓库或保存本地版本，不会推送远程，也不会改写资料内容。</p>
           </div>
-          <div className="pm-card settings-subcard">
-            <h3>注册资料目录</h3>
-            <p className="pm-hint">注册后，PMBrain 可按 Source 同步这个目录。单次导入请到“知识工作台”。</p>
-            <label>本地资料目录</label>
-            <div className="main-source-note">
+      )}
+      {registrationOpen && overview && (
+        <div className="modal-overlay" role="presentation" onClick={closeRegistration}>
+          <div className="modal source-registration-modal" role="dialog" aria-modal="true" aria-labelledby="source-registration-title" onClick={event => event.stopPropagation()}>
+            <button className="drawer-close" type="button" aria-label="关闭注册数据源" onClick={closeRegistration} disabled={registrationBusy}>&#10005;</button>
+            <div className="source-registration-modal-head">
+              <h2 id="source-registration-title">注册数据源</h2>
+              <p className="pm-hint">添加需要持续同步的本地资料目录。单次文件导入请使用“知识工作台”。</p>
+            </div>
+            <div className="main-source-note source-registration-main-note">
               <b>当前主知识库源：{overview.main_source_id}</b>
-              <span>新 Source 注册后不会自动替换主源，可在上方“主知识库源”单独切换。</span>
+              <span>注册后不会自动替换主源，可在上方“主知识库源”单独切换。</span>
             </div>
-            <input value={path} onChange={e => setPath(e.target.value)} placeholder="C:\\MyData" />
-            <label>Source ID（留空自动生成）</label>
-            <input value={sourceId} onChange={e => setSourceId(e.target.value)} placeholder="例如 project-docs" />
-            <label>显示名称（可选）</label>
-            <input value={sourceName} onChange={e => setSourceName(e.target.value)} placeholder="例如 项目资料库" />
-            <div className="pm-form-row">
-              <label><input type="checkbox" checked={federated} onChange={e => setFederated(e.target.checked)} /> 参与跨源搜索</label>
-            </div>
-            <div className="pm-actions">
-              <button className="pm-primary" onClick={() => void addSource()} disabled={!path.trim()}>注册数据源</button>
+            <div className="source-registration-fields">
+              <label htmlFor="source-registration-path">本地资料目录</label>
+              <input id="source-registration-path" value={path} onChange={e => setPath(e.target.value)} placeholder="C:\\MyData" disabled={registrationBusy} autoFocus />
+              <label htmlFor="source-registration-id">Source ID（留空自动生成）</label>
+              <input id="source-registration-id" value={sourceId} onChange={e => setSourceId(e.target.value)} placeholder="例如 project-docs" disabled={registrationBusy} />
+              <label htmlFor="source-registration-name">显示名称（可选）</label>
+              <input id="source-registration-name" value={sourceName} onChange={e => setSourceName(e.target.value)} placeholder="例如 项目资料库" disabled={registrationBusy} />
+              <label className="checkbox-label source-registration-federated" htmlFor="source-registration-federated">
+                <input id="source-registration-federated" type="checkbox" checked={federated} onChange={e => setFederated(e.target.checked)} disabled={registrationBusy} />
+                参与跨源搜索
+              </label>
             </div>
             {submitError && <div className="pm-error-text">{submitError}</div>}
             {registrationRun && <RunOutput run={registrationRun} />}
+            <div className="source-registration-actions">
+              <button className="pm-ghost" type="button" onClick={closeRegistration} disabled={registrationBusy}>取消</button>
+              <button className="pm-primary" type="button" onClick={() => void addSource()} disabled={!path.trim() || registrationBusy}>
+                {registrationBusy ? '正在注册…' : '注册数据源'}
+              </button>
+            </div>
           </div>
         </div>
       )}

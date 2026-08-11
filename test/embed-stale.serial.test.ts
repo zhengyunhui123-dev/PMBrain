@@ -72,6 +72,8 @@ describe('embedStaleForSource', () => {
       embedded: 0,
       chunksProcessed: 0,
       pagesProcessed: 0,
+      failedPages: 0,
+      failedChunks: 0,
       lastCursor: null,
       done: true,
       aborted: false,
@@ -195,6 +197,8 @@ describe('embedStaleForSource', () => {
     // The helper itself didn't throw
     expect(result.done).toBe(true);
     expect(badCount).toBe(1);
+    expect(result.failedPages).toBe(1);
+    expect(result.failedChunks).toBe(2);
 
     // 'good' chunks got embedded; 'bad' chunks stayed NULL
     expect(result.embedded).toBe(2);
