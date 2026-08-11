@@ -261,7 +261,7 @@ describe('Dream GUI product contract', () => {
     const run = quickRun({
       status: 'partial',
       phases: [
-        { phase: 'lint', status: 'ok', details: { pages_scanned: 2177, issues: 12, fixed: 9 } },
+        { phase: 'lint', status: 'warn', details: { pages_scanned: 2177, issues: 2777, fixed: 9 } },
         { phase: 'backlinks', status: 'ok', details: { gaps: 3, added: 0 } },
         {
           phase: 'sync',
@@ -280,9 +280,10 @@ describe('Dream GUI product contract', () => {
             mentionHistoricalRemaining: 1706,
           },
         },
+        { phase: 'extract_facts', status: 'ok', details: { facts_upserted: 0 } },
         { phase: 'resolve_symbol_edges', status: 'ok', details: { chunks_walked: 300, edges_resolved: 8 } },
         { phase: 'embed', status: 'ok', details: { embedded: 420, skipped: 1200, total_chunks: 2000, pending: 380 } },
-        { phase: 'orphans', status: 'ok', details: { total_orphans: 31, total_pages: 2177 } },
+        { phase: 'orphans', status: 'warn', details: { total_orphans: 31, total_pages: 2177 } },
       ],
       totals: { pages_added: 81, pages_synced: 88, links_created: 56, pages_embedded: 420 },
     });
@@ -291,13 +292,13 @@ describe('Dream GUI product contract', () => {
     expect(stages.map(stage => [stage.title, stage.state])).toEqual([
       ['检查知识', 'done'],
       ['同步内容', 'partial'],
-      ['建立关联', 'partial'],
+      ['建立关联', 'done'],
       ['更新索引', 'partial'],
-      ['完成检查', 'partial'],
+      ['完成检查', 'done'],
     ]);
     expect(stages[0]?.results).toEqual([
       { label: '扫描页面', value: 2177 },
-      { label: '发现问题', value: 15 },
+      { label: '发现问题', value: 2780 },
       { label: '自动修复', value: 9 },
     ]);
     expect(stages[1]?.results).toEqual([

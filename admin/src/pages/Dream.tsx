@@ -1039,9 +1039,9 @@ function quickStageState(
     .filter((phase): phase is DreamPhaseReport => !!phase);
   if (reports.some(phase => phase.status === 'fail' || phase.status === 'error')) return 'error';
   if (progress.active && phases.includes(progress.active)) return 'active';
-  if (reports.some(phase => phase.status === 'warn') || partialWhen) return 'partial';
-  if (phases.every(phase => progress.completed.has(phase))) return 'done';
-  if (reports.length > 0) return 'done';
+  if (phases.every(phase => progress.completed.has(phase))) {
+    return partialWhen ? 'partial' : 'done';
+  }
   return 'idle';
 }
 
@@ -1065,7 +1065,9 @@ export function buildQuickMaintenanceStages(run: ConsoleRun | null): QuickMainte
   const syncAffected = syncReport?.pagesAffectedCount
     ?? syncReport?.pagesAffected?.length
     ?? Math.max(0, number(sync.added) + number(sync.modified) - number(sync.failedFiles));
-  const historicalScanned = Math.max(0, number(extract.mentionPagesProcessed) - syncAffected);
+  const historicalScanned = 'mentionHistoricalPagesProcessed' in extract
+    ? number(extract.mentionHistoricalPagesProcessed)
+    : Math.max(0, number(extract.mentionPagesProcessed) - syncAffected);
   const overallStatus = !run
     ? '未开始'
     : run.status === 'running' || run.status === 'queued'
@@ -1088,7 +1090,7 @@ export function buildQuickMaintenanceStages(run: ConsoleRun | null): QuickMainte
     },
     {
       ...QUICK_MAINTENANCE_STEPS[1],
-      state: quickStageState(run, QUICK_MAINTENANCE_STEPS[1].phases, pending.exceptionalFiles > 0),
+      state: quickStageState(run, QUICK_MAINTENANCE_STEPS[1].phases, number(sync.failedFiles) > 0),
       results: [
         { label: '新增内容', value: number(sync.added) },
         { label: '更新内容', value: number(sync.modified) },
@@ -1097,7 +1099,7 @@ export function buildQuickMaintenanceStages(run: ConsoleRun | null): QuickMainte
     },
     {
       ...QUICK_MAINTENANCE_STEPS[2],
-      state: quickStageState(run, QUICK_MAINTENANCE_STEPS[2].phases, pending.historicalLinks > 0),
+      state: quickStageState(run, QUICK_MAINTENANCE_STEPS[2].phases, false),
       results: [
         { label: '新增关联', value: number(totals.links_created) },
         { label: '扫描历史页面', value: historicalScanned },
@@ -1114,9 +1116,7 @@ export function buildQuickMaintenanceStages(run: ConsoleRun | null): QuickMainte
     },
     {
       ...QUICK_MAINTENANCE_STEPS[4],
-      state: run && (run.status === 'failed' || report?.status === 'failed')
-        ? 'error'
-        : quickStageState(run, QUICK_MAINTENANCE_STEPS[4].phases, quickMaintenanceIsPartial(report)),
+      state: quickStageState(run, QUICK_MAINTENANCE_STEPS[4].phases, false),
       results: [
         { label: '孤立知识', value: number(orphans.total_orphans) },
         { label: '整体状态', value: overallStatus },
