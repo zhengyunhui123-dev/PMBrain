@@ -13,6 +13,7 @@ const consoleSource = [
   'admin/src/pages/BrainData.tsx',
 ].map(path => readFileSync(join(process.cwd(), path), 'utf8')).join('\n');
 const settingsSource = readFileSync(join(process.cwd(), 'admin/src/pages/Settings.tsx'), 'utf8');
+const sourcesSource = readFileSync(join(process.cwd(), 'admin/src/pages/Sources.tsx'), 'utf8');
 const adminStyles = readFileSync(join(process.cwd(), 'admin/src/index.css'), 'utf8');
 const serveHttpSource = readFileSync(join(process.cwd(), 'src/commands/pmbrain-admin-routes.ts'), 'utf8');
 const customerServiceQrPath = join(process.cwd(), 'admin/public/customer-service-qr.png');
@@ -88,6 +89,17 @@ describe('Admin GUI update contract', () => {
     expect(settingsSource).not.toContain('默认 500 KB，可设置 100–5000 KB');
     expect(serveHttpSource).not.toContain("app.get('/admin/api/import/settings'");
     expect(serveHttpSource).not.toContain("app.post('/admin/api/import/settings'");
+  });
+
+  test('knowledge settings uses a full-width source list and opens registration in a modal', () => {
+    expect(sourcesSource).toContain('className="pm-primary source-register-trigger"');
+    expect(sourcesSource).toContain('className="pm-card import-sources-card settings-subcard source-list-card"');
+    expect(sourcesSource).toContain('role="dialog" aria-modal="true" aria-labelledby="source-registration-title"');
+    expect(sourcesSource).toContain('<h2 id="source-registration-title">注册数据源</h2>');
+    expect(sourcesSource).toContain('setRegistrationOpen(false)');
+    expect(sourcesSource).not.toContain('className="pm-grid two-col import-layout"');
+    expect(adminStyles).toContain('.source-register-head');
+    expect(adminStyles).toContain('.source-registration-modal');
   });
 
   test('Dream local Markdown toggle persists immediately and rolls back on failure', () => {

@@ -1235,16 +1235,26 @@ async function runPhaseEmbed(engine: BrainEngine, dryRun: boolean): Promise<Phas
     const { runEmbedCore } = await import('../commands/embed.ts');
     const result = await runEmbedCore(engine, { stale: true, dryRun });
     const embeddedCount = dryRun ? result.would_embed : result.embedded;
+    const phaseStatus: PhaseStatus = result.status === 'failed'
+      ? 'fail'
+      : result.status === 'partial'
+        ? 'warn'
+        : 'ok';
     return {
       phase: 'embed',
-      status: 'ok',
+      status: phaseStatus,
       duration_ms: 0,
       summary: dryRun
         ? `${result.would_embed} chunk(s) would be embedded (dry-run)`
-        : `${result.embedded} chunk(s) newly embedded (${result.skipped} already had embeddings)`,
+        : result.failedChunks > 0
+          ? `${result.embedded} chunk(s) embedded; ${result.failedChunks} chunk(s) failed across ${result.failedPages} page(s)`
+          : `${result.embedded} chunk(s) newly embedded (${result.skipped} already had embeddings)`,
       details: {
+        status: result.status,
         embedded: result.embedded,
         skipped: result.skipped,
+        failedPages: result.failedPages,
+        failedChunks: result.failedChunks,
         would_embed: result.would_embed,
         total_chunks: result.total_chunks,
         pages_processed: result.pages_processed,

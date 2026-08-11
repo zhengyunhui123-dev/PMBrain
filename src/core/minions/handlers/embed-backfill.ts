@@ -52,11 +52,13 @@ export interface EmbedBackfillJobData {
 }
 
 export interface EmbedBackfillResult {
-  status: 'success' | 'already_in_progress' | 'budget_exhausted' | 'aborted';
+  status: 'success' | 'partial' | 'already_in_progress' | 'budget_exhausted' | 'aborted';
   sourceId: string;
   embedded: number;
   chunksProcessed: number;
   pagesProcessed: number;
+  failedPages: number;
+  failedChunks: number;
   /** $USD spent inside this job (from BudgetTracker.totalSpent). */
   spentUsd: number;
   /** Set when status === 'budget_exhausted'. */
@@ -125,6 +127,8 @@ export function makeEmbedBackfillHandler(engine: BrainEngine) {
         embedded: 0,
         chunksProcessed: 0,
         pagesProcessed: 0,
+        failedPages: 0,
+        failedChunks: 0,
         spentUsd: 0,
       };
     }
@@ -167,15 +171,19 @@ export function makeEmbedBackfillHandler(engine: BrainEngine) {
           embedded: result.embedded,
           chunksProcessed: result.chunksProcessed,
           pagesProcessed: result.pagesProcessed,
+          failedPages: result.failedPages,
+          failedChunks: result.failedChunks,
           spentUsd: tracker.totalSpent,
         };
       }
       return {
-        status: 'success',
+        status: result.failedChunks > 0 ? 'partial' : 'success',
         sourceId,
         embedded: result.embedded,
         chunksProcessed: result.chunksProcessed,
         pagesProcessed: result.pagesProcessed,
+        failedPages: result.failedPages,
+        failedChunks: result.failedChunks,
         spentUsd: tracker.totalSpent,
       };
     } catch (err) {
@@ -188,6 +196,8 @@ export function makeEmbedBackfillHandler(engine: BrainEngine) {
           embedded: 0, // Tracker doesn't track per-chunk count
           chunksProcessed: 0,
           pagesProcessed: 0,
+          failedPages: 0,
+          failedChunks: 0,
           spentUsd: tracker.totalSpent,
           budgetCapUsd: capUsd,
         };

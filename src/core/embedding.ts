@@ -12,6 +12,12 @@ import {
   getEmbeddingModel as gatewayGetModel,
   getEmbeddingDimensions as gatewayGetDims,
 } from './ai/gateway.ts';
+import {
+  getEmbeddingExecutionProfile,
+  isEmbeddingTimeoutError,
+  recordEmbeddingExecutionSuccess,
+  recordEmbeddingExecutionTimeout,
+} from './ai/embedding-execution-profile.ts';
 
 // v0.27.1: re-export multimodal embedding so callers can pull both text and
 // image embedding APIs from `src/core/embedding`. import-image-file consumes
@@ -81,12 +87,10 @@ export interface EmbedBatchOptions {
 }
 
 /**
- * Embed a batch of texts via the gateway. Sub-batches of 100 so upstream
- * progress callbacks fire incrementally on large imports. The gateway owns
- * adaptive batch splitting and per-recipe token-budget logic; this paginator
- * is purely about progress-callback granularity.
+ * Embed a batch of texts via the gateway. Hosted providers keep the existing
+ * 100-item batches; local recipes can declare a smaller adaptive item profile.
+ * Gateway token budgets and retry/error normalization remain unchanged.
  */
-const BATCH_SIZE = 100;
 export async function embedBatch(
   texts: string[],
   options: EmbedBatchOptions = {},
@@ -98,16 +102,25 @@ export async function embedBatch(
     ...(options.abortSignal !== undefined && { abortSignal: options.abortSignal }),
     ...(options.maxRetries !== undefined && { maxRetries: options.maxRetries }),
   };
-  // Fast path: small batch, no progress callback — single gateway call.
-  if (texts.length <= BATCH_SIZE && !options.onBatchComplete) {
-    return gatewayEmbed(texts, gwOpts);
-  }
+  const model = gatewayGetModel();
   const results: Float32Array[] = [];
-  for (let i = 0; i < texts.length; i += BATCH_SIZE) {
-    const slice = texts.slice(i, i + BATCH_SIZE);
-    const out = await gatewayEmbed(slice, gwOpts);
-    results.push(...out);
-    options.onBatchComplete?.(results.length, texts.length);
+  let index = 0;
+  while (index < texts.length) {
+    const profile = getEmbeddingExecutionProfile(model);
+    const slice = texts.slice(index, index + profile.batchSize);
+    try {
+      const out = await gatewayEmbed(slice, gwOpts);
+      results.push(...out);
+      index += slice.length;
+      recordEmbeddingExecutionSuccess(model);
+      options.onBatchComplete?.(results.length, texts.length);
+    } catch (error) {
+      // Caller-owned wall-clock aborts are not provider-health evidence.
+      if (!options.abortSignal?.aborted && isEmbeddingTimeoutError(error)) {
+        recordEmbeddingExecutionTimeout(model);
+      }
+      throw error;
+    }
   }
   return results;
 }

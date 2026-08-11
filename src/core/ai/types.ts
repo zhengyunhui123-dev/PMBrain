@@ -112,6 +112,21 @@ export interface EmbeddingTouchpoint {
    * noise for them.
    */
   no_batch_cap?: true;
+  /**
+   * Provider-aware execution policy for page-level parallelism and item-count
+   * batching. Token capacity remains owned by `max_batch_tokens` above.
+   * Hosted providers omit this block and retain the legacy 20/100 defaults.
+   */
+  execution_profile?: {
+    mode: 'local';
+    initial_concurrency: number;
+    min_concurrency: number;
+    max_concurrency: number;
+    initial_batch_items: number;
+    min_batch_items: number;
+    max_batch_items: number;
+    success_window: number;
+  };
 }
 
 /**

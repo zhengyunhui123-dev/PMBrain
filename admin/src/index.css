@@ -1108,6 +1108,103 @@ label { display: block; font-size: 13px; font-weight: 500; margin-bottom: 6px; }
   margin: 10px 0 0;
 }
 
+.source-register-head {
+  align-items: center;
+}
+
+.source-register-trigger {
+  display: inline-flex;
+  min-height: 36px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  white-space: nowrap;
+}
+
+.source-register-trigger svg {
+  width: 16px;
+  height: 16px;
+}
+
+.source-list-card {
+  width: 100%;
+}
+
+.source-management-error {
+  margin: -4px 0 12px;
+}
+
+.source-registration-modal {
+  position: relative;
+  display: grid;
+  width: min(560px, calc(100vw - 32px));
+  min-width: 0;
+  max-width: 560px;
+  max-height: calc(100dvh - 32px);
+  gap: 15px;
+  padding: 22px;
+  overflow-y: auto;
+  border-color: color-mix(in srgb, var(--accent) 26%, var(--border));
+}
+
+.source-registration-modal-head {
+  display: grid;
+  gap: 5px;
+  padding-right: 34px;
+}
+
+.source-registration-modal-head h2 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 22px;
+  letter-spacing: -.02em;
+}
+
+.source-registration-modal-head p {
+  margin: 0;
+  line-height: 1.65;
+}
+
+.source-registration-main-note {
+  margin: 0;
+  background: var(--console-surface-soft);
+}
+
+.source-registration-fields {
+  display: grid;
+  gap: 7px;
+}
+
+.source-registration-fields > label:not(.source-registration-federated) {
+  margin: 5px 0 0;
+}
+
+.source-registration-fields > label:first-child {
+  margin-top: 0;
+}
+
+.source-registration-federated {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 5px 0 0;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.source-registration-federated input {
+  margin: 0;
+}
+
+.source-registration-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 14px;
+  border-top: 1px solid var(--console-line);
+}
+
 .source-git-modal {
   width: min(520px, calc(100vw - 28px));
   min-width: 0;
@@ -6683,10 +6780,6 @@ tbody tr:hover td { background: color-mix(in srgb, var(--accent) 4%, var(--conso
   padding: 18px 20px 20px;
 }
 
-.settings-source-section .import-layout {
-  gap: 12px;
-}
-
 .settings-source-section .settings-subcard {
   min-width: 0;
   margin: 0;
@@ -6694,10 +6787,6 @@ tbody tr:hover td { background: color-mix(in srgb, var(--accent) 4%, var(--conso
   border-radius: 10px;
   background: var(--console-surface-soft);
   box-shadow: none;
-}
-
-.settings-source-section .settings-subcard .main-source-note {
-  background: var(--console-surface);
 }
 
 .model-snapshot-grid {
@@ -6769,6 +6858,19 @@ tbody tr:hover td { background: color-mix(in srgb, var(--accent) 4%, var(--conso
 
   .main-source-select-row .pm-primary {
     width: 100%;
+  }
+
+  .source-register-head {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .source-register-trigger {
+    width: 100%;
+  }
+
+  .source-registration-modal {
+    padding: 18px;
   }
 
   .settings-panel-group,
