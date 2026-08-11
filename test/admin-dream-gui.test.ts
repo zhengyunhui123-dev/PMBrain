@@ -325,6 +325,35 @@ describe('Dream GUI product contract', () => {
     expect(dream).toContain('异常');
   });
 
+  test('Quick maintenance marks earlier stages completed while a later stage is running', () => {
+    const run: ConsoleRun = {
+      ...quickRun({}, 'running'),
+      stdout: [
+        '[cycle.lint] start',
+        '[cycle.lint] done',
+        '[cycle.backlinks] start',
+        '[cycle.backlinks] done',
+        '[cycle.sync] start',
+        '[cycle.sync] done',
+        '[cycle.extract] start',
+        '[cycle.extract] done',
+        '[cycle.extract_facts] start',
+        '[cycle.extract_facts] done',
+        '[cycle.resolve_symbol_edges] start',
+        '[cycle.resolve_symbol_edges] done',
+        '[cycle.embed] start',
+      ].join('\n'),
+    };
+
+    expect(buildQuickMaintenanceStages(run).map(stage => stage.state)).toEqual([
+      'done',
+      'done',
+      'done',
+      'active',
+      'idle',
+    ]);
+  });
+
   test('Quick pending work is shown separately from real failures', () => {
     const run = quickRun({
       status: 'partial',

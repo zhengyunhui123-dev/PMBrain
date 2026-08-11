@@ -1040,6 +1040,7 @@ function quickStageState(
   if (reports.some(phase => phase.status === 'fail' || phase.status === 'error')) return 'error';
   if (progress.active && phases.includes(progress.active)) return 'active';
   if (reports.some(phase => phase.status === 'warn') || partialWhen) return 'partial';
+  if (phases.every(phase => progress.completed.has(phase))) return 'done';
   if (reports.length > 0) return 'done';
   return 'idle';
 }
