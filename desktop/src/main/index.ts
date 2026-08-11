@@ -17,6 +17,10 @@ import { PgliteBackupController } from './database/pglite-backup.js';
 import { buildDiagnosticBundle } from './diagnostics/diagnostic-bundle.js';
 import { SharedAccessController } from './integration/shared-access-controller.js';
 import { registerDesktopIpcHandlers } from './ipc-handlers.js';
+import {
+  initializeKnowledgeSourceGit,
+  inspectKnowledgeSourceDirectory,
+} from './knowledge-source-git.js';
 import { DesktopLogger } from './logs.js';
 import { syncModelDefaultsToConfigFile } from './models/model-config-sync.js';
 import { listDesktopProviderModels } from './model-catalog.js';
@@ -330,6 +334,8 @@ if (!app.requestSingleInstanceLock()) {
       revokeSharedIntegration: credentialName => sharedAccessController.revoke(credentialName),
       updateState: () => updateController.currentState,
       setup: () => setupController.currentState(),
+      inspectKnowledgeSourceDirectory,
+      initializeKnowledgeSourceGit,
       providerModels: listDesktopProviderModels,
       advancedModelConfig: () => sidecarController.withPausedForModelConfig(() => readAdvancedModelConfig(runtime())),
       saveAdvancedModelConfig: values => sidecarController.withPausedForModelConfig(

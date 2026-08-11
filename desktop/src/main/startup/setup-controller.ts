@@ -1,4 +1,5 @@
 import { app } from 'electron';
+import { basename } from 'node:path';
 import {
   getSetupInfo,
   markDesktopMigration,
@@ -190,7 +191,7 @@ export class SetupController {
       if (setDefaultSource && knowledgeDirectory && sourceId) {
         const add = await runCli(this.dependencies.runtime(), [
           'sources', 'add', sourceId, '--path', knowledgeDirectory,
-          '--name', '桌面知识库', '--federated',
+          '--name', basename(knowledgeDirectory), '--federated',
         ]);
         if (add.code !== 0 && !/already exists|duplicate|已存在|already registered/i.test(`${add.stderr}\n${add.stdout}`)) {
           throw new Error((add.stderr || add.stdout).trim());

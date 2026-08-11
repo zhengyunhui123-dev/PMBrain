@@ -33,6 +33,7 @@ const output = outputArg
   ? outputArg.slice('--out='.length)
   : join(root, 'out', `renderer-preview-${panel}.png`);
 const prepareOnly = process.argv.includes('--prepare-only');
+const firstRun = process.argv.includes('--first-run');
 const preparedHtmlArg = process.argv.find((arg) => arg.startsWith('--html='));
 
 function chromePath(): string | null {
@@ -72,7 +73,7 @@ const mockApi = `
 window.pmbrainDesktop = {
   getSetup: async () => ({
     setup: {
-      needsSetup: false,
+      needsSetup: ${firstRun},
       configPath: 'C:\\\\Users\\\\zhengyunhui\\\\.pmbrain\\\\config.json',
       defaults: {
         databasePath: 'C:\\\\Users\\\\zhengyunhui\\\\.pmbrain\\\\brain.pglite',
@@ -83,7 +84,8 @@ window.pmbrainDesktop = {
         theme: 'system',
         databasePath: 'D:\\\\tmp\\\\brain.pglite',
         databaseConfigured: true,
-        knowledgeDirectory: 'C:\\\\Users\\\\zhengyunhui\\\\Documents\\\\PMBrain',
+        knowledgeDirectory: ${firstRun ? "''" : "'C:\\\\\\\\Users\\\\\\\\zhengyunhui\\\\\\\\Documents\\\\\\\\PMBrain'"},
+        knowledgeSourceId: ${firstRun ? "''" : "'PMBrain'"},
         chatModel: 'mimo:mimo-v2.5-pro',
         embeddingModel: 'zhipu:embedding-3',
         embeddingDimensions: 1024,
@@ -163,6 +165,16 @@ window.pmbrainDesktop = {
   onShowUpdates: () => () => {},
   onShowPanel: (callback) => { setTimeout(() => callback('${panel}'), 0); return () => {}; },
   chooseDirectory: async () => null,
+  inspectKnowledgeSourceDirectory: async (path) => ({
+    path,
+    sourceName: path.replace(/[\\\\/]+$/, '').split(/[\\\\/]/).pop() || '',
+    gitEnabled: false,
+  }),
+  initializeKnowledgeSourceGit: async (path) => ({
+    path,
+    sourceName: path.replace(/[\\\\/]+$/, '').split(/[\\\\/]/).pop() || '',
+    gitEnabled: true,
+  }),
   getProviderModels: async (provider, touchpoint) => ({
     source: provider === 'ollama' ? 'ollama' : 'catalog',
     models: provider === 'ollama'
