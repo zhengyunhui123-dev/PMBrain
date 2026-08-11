@@ -18,6 +18,7 @@ import { embedStaleForSource } from '../src/core/embed-stale.ts';
 import type { ChunkInput } from '../src/core/types.ts';
 
 let engine: PGLiteEngine;
+const TEST_EMBEDDING_MODEL = 'openai:text-embedding-3-large';
 
 beforeAll(async () => {
   engine = new PGLiteEngine();
@@ -66,6 +67,7 @@ function fakeEmbedFn(texts: string[]): Promise<Float32Array[]> {
 describe('embedStaleForSource', () => {
   test('empty stale set returns done:true with zero embedded', async () => {
     const result = await embedStaleForSource(engine, 'default', {
+      model: TEST_EMBEDDING_MODEL,
       embedFn: fakeEmbedFn,
     });
     expect(result).toEqual({
@@ -85,6 +87,7 @@ describe('embedStaleForSource', () => {
     await seedPageWithStaleChunks('b', 3);
 
     const result = await embedStaleForSource(engine, 'default', {
+      model: TEST_EMBEDDING_MODEL,
       embedFn: fakeEmbedFn,
     });
     expect(result.done).toBe(true);
@@ -102,6 +105,7 @@ describe('embedStaleForSource', () => {
     await seedPageWithStaleChunks('b', 3);
     let batchCount = 0;
     const result = await embedStaleForSource(engine, 'default', {
+      model: TEST_EMBEDDING_MODEL,
       embedFn: fakeEmbedFn,
       batchSize: 2,
       onProgress: () => {
@@ -122,6 +126,7 @@ describe('embedStaleForSource', () => {
     // Abort fires inside embedFn for page 'b', so 'a' lands, 'b' aborts mid-call,
     // and the third batch ('c') never starts.
     const result = await embedStaleForSource(engine, 'default', {
+      model: TEST_EMBEDDING_MODEL,
       batchSize: 4,
       concurrency: 1,
       signal: controller.signal,
@@ -185,6 +190,7 @@ describe('embedStaleForSource', () => {
 
     let badCount = 0;
     const result = await embedStaleForSource(engine, 'default', {
+      model: TEST_EMBEDDING_MODEL,
       embedFn: async (texts) => {
         if (texts.some((t) => t.includes('bad'))) {
           badCount++;
@@ -229,6 +235,7 @@ describe('embedStaleForSource', () => {
     );
 
     const result = await embedStaleForSource(engine, 'default', {
+      model: TEST_EMBEDDING_MODEL,
       embedFn: fakeEmbedFn,
     });
     expect(result.embedded).toBe(3);
