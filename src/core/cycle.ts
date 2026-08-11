@@ -478,10 +478,17 @@ export interface CycleOpts {
    */
   includeByMention?: boolean;
   /**
-   * When includeByMention is set, cap historical (non-priority) pages scanned
-   * after this-run sync successes. Default 500. Checkpoint resumes next run.
+   * Optional compatibility cap for historical (non-priority) pages. Quick
+   * Maintenance no longer sets a default page cap; explicit callers may still
+   * use this for deterministic bounded runs.
    */
   byMentionMaxHistorical?: number;
+  /**
+   * PMBrain Quick Maintenance wall-clock budget for historical by-mention
+   * scanning. Priority pages from this run are always processed first and do
+   * not consume this budget. Checkpoint resumes any remaining history.
+   */
+  byMentionTimeBudgetMs?: number;
 }
 
 // ─── Lock primitives ───────────────────────────────────────────────
@@ -1706,7 +1713,8 @@ export async function runCycle(
             const mentionStart = performance.now();
             const mention = await runByMentionCore(engine, {
               prioritySlugs: syncPagesAffected,
-              maxHistoricalPages: opts.byMentionMaxHistorical ?? 500,
+              maxHistoricalPages: opts.byMentionMaxHistorical,
+              historicalTimeBudgetMs: opts.byMentionTimeBudgetMs,
               sourceIdFilter: opts.sourceId,
               quiet: true,
             });
@@ -1717,7 +1725,11 @@ export async function runCycle(
               linksCreated: prevLinks + mention.created,
               mentionLinksCreated: mention.created,
               mentionPagesProcessed: mention.pages,
+              mentionPriorityPagesProcessed: mention.priorityPages,
+              mentionHistoricalPagesProcessed: mention.historicalPages,
               mentionHistoricalRemaining: mention.historicalRemaining,
+              mentionTimeBudgetReached: mention.timeBudgetReached,
+              mentionTimeBudgetMs: opts.byMentionTimeBudgetMs ?? null,
               by_mention: true,
             };
             result.summary =

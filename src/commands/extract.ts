@@ -1379,8 +1379,22 @@ export interface RunByMentionOpts {
    * a budget so each run gradually drains the backlog.
    */
   maxHistoricalPages?: number;
+  /**
+   * Wall-clock budget for historical catch-up. Priority slugs are always
+   * scanned first and do not consume this budget. Undefined means unlimited.
+   */
+  historicalTimeBudgetMs?: number;
   /** Suppress human-readable progress lines (library callers). */
   quiet?: boolean;
+}
+
+export interface RunByMentionResult {
+  created: number;
+  pages: number;
+  priorityPages: number;
+  historicalPages: number;
+  historicalRemaining: number;
+  timeBudgetReached: boolean;
 }
 
 /**
@@ -1394,7 +1408,7 @@ export interface RunByMentionOpts {
 export async function runByMentionCore(
   engine: BrainEngine,
   opts: RunByMentionOpts = {},
-): Promise<{ created: number; pages: number; historicalRemaining: number }> {
+): Promise<RunByMentionResult> {
   const dryRun = !!opts.dryRun;
   const jsonMode = !!opts.jsonMode;
   const typeFilter = opts.typeFilter;
@@ -1405,6 +1419,12 @@ export async function runByMentionCore(
     (opts.prioritySlugs ?? []).map(s => s.trim()).filter(Boolean),
   );
   const maxHistorical = opts.maxHistoricalPages;
+  const historicalTimeBudgetMs =
+    typeof opts.historicalTimeBudgetMs === 'number'
+      && Number.isFinite(opts.historicalTimeBudgetMs)
+      && opts.historicalTimeBudgetMs >= 0
+      ? Math.floor(opts.historicalTimeBudgetMs)
+      : null;
 
   // Build gazetteer once per run. Skip everything if there are no
   // linkable entities — vacuous truth, no mentions to find.
@@ -1415,7 +1435,14 @@ export async function runByMentionCore(
     } else if (!quiet) {
       console.log('No linkable entity pages found in this brain (need pages with type IN person/company/organization/entity).');
     }
-    return { created: 0, pages: 0, historicalRemaining: 0 };
+    return {
+      created: 0,
+      pages: 0,
+      priorityPages: 0,
+      historicalPages: 0,
+      historicalRemaining: 0,
+      timeBudgetReached: false,
+    };
   }
 
   // v0.41.19.0 (T5): gazetteer hash is part of the checkpoint
@@ -1460,8 +1487,8 @@ export async function runByMentionCore(
     typeof maxHistorical === 'number' && Number.isFinite(maxHistorical) && maxHistorical >= 0
       ? Math.floor(maxHistorical)
       : historicalRemainingRefs.length;
-  const historicalBatch = historicalRemainingRefs.slice(0, historicalBudget);
-  const remaining = [...priorityRefs, ...historicalBatch];
+  const historicalCandidates = historicalRemainingRefs.slice(0, historicalBudget);
+  const remaining = [...priorityRefs, ...historicalCandidates];
   // Dedupe by source::slug while preserving order (priority first).
   const seenKeys = new Set<string>();
   const walkList = remaining.filter(r => {
@@ -1470,19 +1497,20 @@ export async function runByMentionCore(
     seenKeys.add(key);
     return true;
   });
-  const historicalRemainingAfter =
-    Math.max(0, historicalRemainingRefs.length - historicalBatch.length);
-
   if (completed.size > 0 && !jsonMode && !quiet) {
     console.log(
       `[by-mention] resuming: ${completed.size} pages already scanned, ` +
-      `walking ${walkList.length} (priority ${priorityRefs.length}, historical ${historicalBatch.length}, ` +
-      `historical remaining after this run ${historicalRemainingAfter})`,
+      `walking up to ${walkList.length} (priority ${priorityRefs.length}, ` +
+      `historical ${historicalCandidates.length})`,
     );
   }
 
   let processed = 0;
   let created = 0;
+  let priorityPages = 0;
+  let historicalPages = 0;
+  let historicalStartedAt: number | null = null;
+  let timeBudgetReached = false;
   const batch: LinkBatchInput[] = [];
 
   const progress = createProgress(cliOptsToProgressOptions(getCliOptions()));
@@ -1534,6 +1562,20 @@ export async function runByMentionCore(
   const sinceMs = since ? new Date(since).getTime() : null;
 
   for (const { slug, source_id } of walkList) {
+    const isPriority = prioritySlugSet.has(slug);
+    if (!isPriority) {
+      if (historicalStartedAt === null) historicalStartedAt = Date.now();
+      if (
+        historicalTimeBudgetMs !== null
+        && (Date.now() - historicalStartedAt) >= historicalTimeBudgetMs
+      ) {
+        timeBudgetReached = true;
+        break;
+      }
+      historicalPages++;
+    } else {
+      priorityPages++;
+    }
     const page = await engine.getPage(slug, { sourceId: source_id });
     // v0.41.19.0 (T5 — codex fix #4): even when we skip a page (filter
     // miss, missing row, empty body, no mentions), MARK IT COMPLETED so
@@ -1623,6 +1665,9 @@ export async function runByMentionCore(
   }
   progress.finish();
 
+  const historicalRemainingAfter =
+    Math.max(0, historicalRemainingRefs.length - historicalPages);
+
   // Clean exit only when historical backlog is empty (and no dry-run).
   // Partial Quick budgets leave the checkpoint so the next run resumes.
   if (!dryRun && historicalRemainingAfter === 0) {
@@ -1633,7 +1678,14 @@ export async function runByMentionCore(
     const label = dryRun ? '(dry run) would create' : 'created';
     console.log(`Mentions: ${label} ${created} links from ${processed} pages against gazetteer of ${gazetteer.size} first-token buckets`);
   }
-  return { created, pages: processed, historicalRemaining: historicalRemainingAfter };
+  return {
+    created,
+    pages: processed,
+    priorityPages,
+    historicalPages,
+    historicalRemaining: historicalRemainingAfter,
+    timeBudgetReached,
+  };
 }
 
 /** CLI adapter — unlimited historical walk (legacy behavior). */

@@ -17,7 +17,7 @@ import { resolveDreamPresetPhases } from '../src/commands/dream.ts';
 import {
   resolveQuickMaintenancePhases,
   runQuickMaintenance,
-  QUICK_BY_MENTION_HISTORICAL_DEFAULT,
+  QUICK_BY_MENTION_TIME_BUDGET_MS,
 } from '../src/core/quick-maintenance.ts';
 import { ALL_PHASES } from '../src/core/cycle.ts';
 import { runByMentionCore } from '../src/commands/extract.ts';
@@ -112,9 +112,13 @@ describe('Quick Maintenance phase contracts (TEST 6–7)', () => {
     expect(source).toContain('../core/quick-maintenance.ts');
   });
 
-  test('default historical by-mention budget is finite and positive', () => {
-    expect(QUICK_BY_MENTION_HISTORICAL_DEFAULT).toBeGreaterThan(0);
-    expect(QUICK_BY_MENTION_HISTORICAL_DEFAULT).toBeLessThanOrEqual(5000);
+  test('Quick historical by-mention uses a 10-30 second time budget instead of a 500-page cap', async () => {
+    expect(QUICK_BY_MENTION_TIME_BUDGET_MS).toBeGreaterThanOrEqual(10_000);
+    expect(QUICK_BY_MENTION_TIME_BUDGET_MS).toBeLessThanOrEqual(30_000);
+    const quickSource = await Bun.file(new URL('../src/core/quick-maintenance.ts', import.meta.url)).text();
+    const cycleSource = await Bun.file(new URL('../src/core/cycle.ts', import.meta.url)).text();
+    expect(quickSource).not.toContain('QUICK_BY_MENTION_HISTORICAL_DEFAULT');
+    expect(cycleSource).not.toContain('opts.byMentionMaxHistorical ?? 500');
   });
 });
 
@@ -357,6 +361,67 @@ describe('by-mention relations (TEST 3–4)', () => {
       `SELECT COUNT(*)::int AS c FROM links WHERE link_source = 'mentions'`,
     );
     expect(Number(links[0]?.c ?? 0)).toBeGreaterThan(0);
+  });
+
+  test('Quick time budget always scans priority pages before checkpointing historical backlog', async () => {
+    await engine.putPage('companies/acme-corp', {
+      type: 'company',
+      title: 'Acme Corp',
+      compiled_truth: 'corp',
+      timeline: '',
+      frontmatter: {},
+    });
+    await engine.putPage('notes/priority', {
+      type: 'note',
+      title: 'Priority',
+      compiled_truth: 'This changed page mentions Acme Corp.',
+      timeline: '',
+      frontmatter: {},
+    });
+    await engine.putPage('notes/history', {
+      type: 'note',
+      title: 'History',
+      compiled_truth: 'This historical page also mentions Acme Corp.',
+      timeline: '',
+      frontmatter: {},
+    });
+
+    const result = await runByMentionCore(engine, {
+      quiet: true,
+      prioritySlugs: ['notes/priority'],
+      historicalTimeBudgetMs: 0,
+    });
+
+    expect(result.priorityPages).toBe(1);
+    expect(result.historicalPages).toBe(0);
+    expect(result.historicalRemaining).toBeGreaterThan(0);
+    expect(result.timeBudgetReached).toBe(true);
+    const checkpointRows = await engine.executeRaw<{ c: number }>(
+      `SELECT COUNT(*)::int AS c FROM op_checkpoints WHERE op = 'extract-by-mention'`,
+    );
+    expect(Number(checkpointRows[0]?.c ?? 0)).toBeGreaterThan(0);
+    const links = await engine.executeRaw<{ from_slug: string }>(
+      `SELECT fp.slug AS from_slug
+       FROM links l
+       JOIN pages fp ON fp.id = l.from_page_id
+       WHERE l.link_source = 'mentions'`,
+    );
+    expect(links.some(link => link.from_slug === 'notes/priority')).toBe(true);
+    expect(links.some(link => link.from_slug === 'notes/history')).toBe(false);
+
+    const resumed = await runByMentionCore(engine, {
+      quiet: true,
+      historicalTimeBudgetMs: 30_000,
+    });
+    expect(resumed.historicalRemaining).toBe(0);
+    expect(resumed.historicalPages).toBeGreaterThan(0);
+    const resumedLinks = await engine.executeRaw<{ from_slug: string }>(
+      `SELECT fp.slug AS from_slug
+       FROM links l
+       JOIN pages fp ON fp.id = l.from_page_id
+       WHERE l.link_source = 'mentions'`,
+    );
+    expect(resumedLinks.some(link => link.from_slug === 'notes/history')).toBe(true);
   });
 });
 

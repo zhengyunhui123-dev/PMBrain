@@ -19,7 +19,11 @@ const customerServiceQrPath = join(process.cwd(), 'admin/public/customer-service
 
 describe('Admin GUI update contract', () => {
   test('support modal promotes the developer account and opens a donation QR view', () => {
-    expect(appSource).toContain('扫码关注开发者公众号，获取最新信息');
+    expect(appSource).toContain('<span>使用帮助</span>');
+    expect(appSource).toContain('<div className="modal-title">使用帮助</div>');
+    expect(appSource).toContain('扫码关注开发者公众号，获取使用方法和最新信息');
+    expect(appSource).not.toContain('<span>企微助手</span>');
+    expect(appSource).not.toContain('<div className="modal-title">企微助手</div>');
     expect(appSource).not.toContain('用于获取管理员登录链接、MCP 接入帮助和常见运维问题支持。');
     expect(appSource).toContain('认为产品还不错的话可进行打赏，你的支持是产品更新的动力。');
     expect(appSource).toContain("setSupportPanel('donate')");

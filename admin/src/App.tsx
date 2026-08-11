@@ -219,7 +219,7 @@ export function App() {
         <div className="sidebar-support">
           <button className="support-link" onClick={() => setSupportPanel('wecom')}>
             <NavIcon name="assistant" />
-            <span>企微助手</span>
+            <span>使用帮助</span>
           </button>
           <button
             onClick={handleSignOutEverywhere}
@@ -269,18 +269,18 @@ export function App() {
       {supportPanel && (
         <div className="modal-overlay" onClick={() => setSupportPanel(null)}>
           <div className={`modal support-modal${supportPanel === 'donate' ? ' support-modal-donation' : ''}`} onClick={e => e.stopPropagation()}>
-            <button type="button" className="drawer-close" aria-label="关闭企微助手" onClick={() => setSupportPanel(null)}>&#10005;</button>
+            <button type="button" className="drawer-close" aria-label="关闭使用帮助" onClick={() => setSupportPanel(null)}>&#10005;</button>
             {supportPanel === 'wecom' && (
               <>
                 <div className="support-modal-header">
-                  <div className="modal-title">企微助手</div>
+                  <div className="modal-title">使用帮助</div>
                   <p>关注产品更新，或添加客服协助处理使用问题。</p>
                 </div>
                 <div className="support-contact-grid">
                   <section className="support-contact-card support-contact-card-official">
                     <div className="support-contact-copy">
                       <span className="support-contact-label">产品动态</span>
-                      <h3>扫码关注开发者公众号，获取最新信息</h3>
+                      <h3>扫码关注开发者公众号，获取使用方法和最新信息</h3>
                       <p>打开微信扫码关注。</p>
                     </div>
                     <div className="support-qr-stage">

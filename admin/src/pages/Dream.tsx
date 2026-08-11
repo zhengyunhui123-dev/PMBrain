@@ -221,6 +221,17 @@ const PHASE_USER_ACTIONS: Record<string, string> = {
   purge: '清理已经过期且可安全移除的数据',
 };
 
+const QUICK_PHASE_USER_ACTIONS: Record<string, string> = {
+  lint: '检查知识',
+  backlinks: '检查反向引用',
+  sync: '同步内容',
+  extract: '建立确定性关联',
+  extract_facts: '校验事实索引',
+  resolve_symbol_edges: '解析确定性关联',
+  embed: '更新索引',
+  orphans: '完成检查',
+};
+
 const PHASE_GROUPS = [
   { key: 'prepare', title: '同步与数据准备' },
   { key: 'synthesis', title: '知识沉淀' },
@@ -241,12 +252,20 @@ function phasesForGroup(catalog: string[], groupKey: string): string[] {
   return catalog.filter(phase => PHASE_GROUP_BY_PHASE[phase] === groupKey);
 }
 
-const KNOWLEDGE_STEPS = [
+const DREAM_KNOWLEDGE_STEPS = [
   { key: 'read', title: '阅读新内容', description: '找到最近新增或变化的资料', phases: ['lint', 'backlinks', 'sync'] },
   { key: 'understand', title: '理解与提炼', description: '提取事实、人物、概念和知识点', phases: ['synthesize', 'extract', 'extract_facts', 'extract_atoms'] },
   { key: 'connect', title: '建立知识连接', description: '补全关系并发现反复出现的主题', phases: ['resolve_symbol_edges', 'patterns', 'synthesize_concepts'] },
   { key: 'remember', title: '形成长期记忆', description: '合并重复信息并沉淀重要判断', phases: ['recompute_emotional_weight', 'consolidate', 'propose_takes', 'grade_takes', 'calibration_profile', 'conversation_facts_backfill'] },
   { key: 'search', title: '更新搜索能力', description: '让最新知识可以被 AI 准确找到', phases: ['embed', 'orphans', 'schema-suggest', 'purge'] },
+] as const;
+
+const QUICK_MAINTENANCE_STEPS = [
+  { key: 'check', title: '检查知识', description: '检查页面与内容规范', phases: ['lint', 'backlinks'] },
+  { key: 'sync', title: '同步内容', description: '同步新增和变化内容', phases: ['sync'] },
+  { key: 'connect', title: '建立关联', description: '补全确定性引用关系', phases: ['extract', 'extract_facts', 'resolve_symbol_edges'] },
+  { key: 'index', title: '更新索引', description: '向量化待处理内容', phases: ['embed'] },
+  { key: 'verify', title: '完成检查', description: '汇总孤立知识与异常', phases: ['orphans'] },
 ] as const;
 
 type DreamRunMode = 'quick' | 'meeting' | 'cycle' | 'advanced';
@@ -414,6 +433,48 @@ function effectiveDreamStatus(run: ConsoleRun): string {
   return 'completed';
 }
 
+function isQuickMaintenanceRun(run: ConsoleRun): boolean {
+  return run.kind.includes('quick')
+    || run.command.some((part, index) => part === 'quick' && run.command[index - 1] === '--preset');
+}
+
+function phaseDetailNumber(report: DreamCycleReport | null, phaseName: string, key: string): number {
+  const value = report?.phases?.find(phase => phase.phase === phaseName)?.details?.[key];
+  const parsed = Number(value ?? 0);
+  return Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
+}
+
+function quickMaintenancePending(report: DreamCycleReport | null): {
+  exceptionalFiles: number;
+  pendingEmbeddings: number;
+  historicalLinks: number;
+  processingErrors: number;
+} {
+  const phases = report?.phases ?? [];
+  const embed = phases.find(phase => phase.phase === 'embed')?.details ?? {};
+  const explicitPending = Number(embed.pending);
+  const totalChunks = Math.max(0, Number(embed.total_chunks ?? 0));
+  const completedChunks = Math.max(0, Number(embed.embedded ?? 0)) + Math.max(0, Number(embed.skipped ?? 0));
+  return {
+    exceptionalFiles: phases.reduce((sum, phase) => sum + Math.max(0, Number(phase.details?.failedFiles ?? 0)), 0),
+    pendingEmbeddings: Number.isFinite(explicitPending)
+      ? Math.max(0, explicitPending)
+      : Math.max(0, totalChunks - completedChunks),
+    historicalLinks: phaseDetailNumber(report, 'extract', 'mentionHistoricalRemaining'),
+    processingErrors: phases.reduce((sum, phase) => sum + Math.max(0, Number(phase.details?.errors_count ?? 0)), 0),
+  };
+}
+
+function quickMaintenanceIsPartial(report: DreamCycleReport | null): boolean {
+  const pending = quickMaintenancePending(report);
+  return report?.status === 'partial'
+    || pending.exceptionalFiles > 0
+    || pending.pendingEmbeddings > 0
+    || pending.historicalLinks > 0
+    || pending.processingErrors > 0
+    || (report?.phases ?? []).some(phase => phase.status === 'warn');
+}
+
 export function dreamRunDeltas(run: ConsoleRun | null): { pages: number; links: number } {
   if (!run || !run.kind.startsWith('dream_') || run.command.includes('--dry-run')) {
     return { pages: 0, links: 0 };
@@ -456,6 +517,7 @@ export function describeDreamRun(run: ConsoleRun): {
   slugs: string[];
 } {
   const report = parseDreamReport(run);
+  const isQuick = isQuickMaintenanceRun(run);
   const text = `${run.stdout}\n${run.stderr}`;
   const synth = report?.phases?.find(phase => phase.phase === 'synthesize');
   const synthDetails = synth?.details ?? {};
@@ -490,14 +552,18 @@ export function describeDreamRun(run: ConsoleRun): {
   const proposalCacheHits = Number(proposalDetails.cache_hits ?? 0);
   const proposalPagesFailed = Number(proposalDetails.pages_failed ?? 0);
   const proposalRemaining = Number(proposalDetails.remaining ?? 0);
-  const reportIsPartial = report?.status === 'partial';
+  const reportIsPartial = report?.status === 'partial' || (isQuick && quickMaintenanceIsPartial(report));
 
   if (run.status === 'running' || run.status === 'queued') {
     return {
-      headline: 'Dream 正在后台执行',
-      diagnosis: '离开本页不会主动停止后台进程；返回后会继续读取同一个 run 的状态。需要停下时点“中止”。',
+      headline: isQuick ? '快速维护正在后台执行' : 'Dream 正在后台执行',
+      diagnosis: isQuick
+        ? '正在依次检查、同步、建立确定性关联、更新索引并检查异常；离开页面不会中断。'
+        : '离开本页不会主动停止后台进程；返回后会继续读取同一个 run 的状态。需要停下时点“中止”。',
       actions: ['正在等待命令完成，已保留当前 run id。'],
-      outputs: ['运行结束后这里会显示产出的知识点、跳过原因和失败明细。'],
+      outputs: [isQuick
+        ? '运行结束后这里会显示同步、关联、向量和异常检查结果。'
+        : '运行结束后这里会显示产出的知识点、跳过原因和失败明细。'],
       details: [`run id: ${run.id}`, `命令: ${run.command.join(' ')}`],
       slugs: [],
     };
@@ -505,9 +571,11 @@ export function describeDreamRun(run: ConsoleRun): {
 
   if (run.status === 'cancelled') {
     return {
-      headline: '本次 Dream 已中止',
-      diagnosis: '中止会结束 Admin 启动的 Dream 子进程；已经完成的阶段会保留，未开始或未完成的阶段不会继续写入。',
-      actions: report?.phases?.map(phase => PHASE_USER_ACTIONS[phase.phase] ?? phase.summary ?? phase.phase) ?? ['进程已被用户中止。'],
+      headline: isQuick ? '本次快速维护已中止' : '本次 Dream 已中止',
+      diagnosis: isQuick
+        ? '中止会结束本次快速维护；已经完成的检查和索引结果会保留，未开始的阶段不会继续。'
+        : '中止会结束 Admin 启动的 Dream 子进程；已经完成的阶段会保留，未开始或未完成的阶段不会继续写入。',
+      actions: report?.phases?.map(phase => (isQuick ? QUICK_PHASE_USER_ACTIONS[phase.phase] : undefined) ?? PHASE_USER_ACTIONS[phase.phase] ?? phase.summary ?? phase.phase) ?? ['进程已被用户中止。'],
       outputs: pagesWritten > 0 ? [`中止前已写入 ${pagesWritten} 个知识页。`] : ['中止前没有检测到新的知识页写入。'],
       details: [`耗时约 ${(duration / 1000).toFixed(1)} 秒`, `run id: ${run.id}`],
       slugs: writtenSlugs,
@@ -525,7 +593,12 @@ export function describeDreamRun(run: ConsoleRun): {
     };
   }
 
-  const actions = report?.phases?.map(phase => PHASE_USER_ACTIONS[phase.phase] ?? phase.summary ?? phase.phase) ?? [];
+  const actions = report?.phases?.map(phase =>
+    (isQuick ? QUICK_PHASE_USER_ACTIONS[phase.phase] : undefined)
+      ?? PHASE_USER_ACTIONS[phase.phase]
+      ?? phase.summary
+      ?? phase.phase,
+  ) ?? [];
   const details: string[] = [
     `检查阶段: ${phaseCount}`,
     `耗时约 ${(duration / 1000).toFixed(1)} 秒`,
@@ -546,10 +619,16 @@ export function describeDreamRun(run: ConsoleRun): {
     details.push('DeepSeek 路径：当前配方支持 chat/tools/subagent loop；若失败通常看 API key、模型名或网关返回。');
   }
 
-  let headline = isDryRun ? 'Dry run 已完成：只是预演，没有写入知识点' : 'Dream 已完成';
+  let headline = isDryRun
+    ? isQuick ? '快速维护预览已完成' : 'Dry run 已完成：只是预演，没有写入知识点'
+    : isQuick ? '快速维护已完成' : 'Dream 已完成';
   let diagnosis = isDryRun
-    ? 'dry-run 会检查影响范围和部分判定逻辑，但不会提交综合写入，所以“没有新知识点”是预期结果。'
-    : '命令已结束，需要看下面的产出和子任务结果判断是否真的沉淀成功。';
+    ? isQuick
+      ? '预览只检查可能受影响的内容，不会同步、建立关联或写入向量。'
+      : 'dry-run 会检查影响范围和部分判定逻辑，但不会提交综合写入，所以“没有新知识点”是预期结果。'
+    : isQuick
+      ? '本次检查、同步、确定性关联、向量索引和异常检查已经结束。'
+      : '命令已结束，需要看下面的产出和子任务结果判断是否真的沉淀成功。';
   const outputs: string[] = [];
 
   if (!isDryRun && pagesWritten > 0) {
@@ -587,10 +666,14 @@ export function describeDreamRun(run: ConsoleRun): {
   }
 
   if (reportIsPartial) {
-    headline = totalKnowledgeUpdates > 0 || pagesSynced > 0 || pagesEmbedded > 0
-      ? 'Dream 已部分完成，成果与待处理项如下'
-      : 'Dream 只完成了部分检查';
-    diagnosis = '部分阶段已成功并保留实际成果，仍有未处理内容；下方会据实显示写入数量和失败原因。';
+    headline = isQuick
+      ? '快速维护已部分完成'
+      : totalKnowledgeUpdates > 0 || pagesSynced > 0 || pagesEmbedded > 0
+        ? 'Dream 已部分完成，成果与待处理项如下'
+        : 'Dream 只完成了部分检查';
+    diagnosis = isQuick
+      ? '已完成的维护结果会保留；异常文件、待向量化和历史待补关联会分开列出，待继续处理不等于失败。'
+      : '部分阶段已成功并保留实际成果，仍有未处理内容；下方会据实显示写入数量和失败原因。';
   }
 
   if (run.status === 'completed' && pgliteWorkerSkipped.length > 0 && report?.status !== 'failed') {
@@ -600,14 +683,14 @@ export function describeDreamRun(run: ConsoleRun): {
   }
 
   if (run.status === 'failed') {
-    headline = 'Dream 执行失败';
+    headline = isQuick ? '快速维护执行异常' : 'Dream 执行失败';
     diagnosis = firstErrorText(run, report) || diagnosis;
   }
 
   if (writtenSlugs.length > 0) {
     outputs.push(`页面 slug: ${writtenSlugs.slice(0, 8).join(', ')}${writtenSlugs.length > 8 ? ' ...' : ''}`);
   }
-  if (outputs.length === 0) outputs.push('没有检测到新的知识页写入。');
+  if (outputs.length === 0) outputs.push(isQuick ? '本次没有检测到新增或变化的内容。' : '没有检测到新的知识页写入。');
 
   return {
     headline,
@@ -628,6 +711,7 @@ interface DreamOutcomeMetric {
 export interface DreamOutcomeSummary {
   isDryRun: boolean;
   metrics: DreamOutcomeMetric[];
+  pendingMetrics: DreamOutcomeMetric[];
   knowledgeItems: string[];
   extractionItems: string[];
   failureItems: string[];
@@ -655,6 +739,7 @@ export function buildDreamOutcome(run: ConsoleRun): DreamOutcomeSummary {
   const facts = details('extract_facts');
   const concepts = details('synthesize_concepts');
   const proposals = details('propose_takes');
+  const isQuick = isQuickMaintenanceRun(run);
   const isDryRun = run.command.includes('--dry-run')
     || synth.dryRun === true
     || concepts.dry_run === true;
@@ -668,12 +753,17 @@ export function buildDreamOutcome(run: ConsoleRun): DreamOutcomeSummary {
       + Math.max(0, Number(atoms.duplicates_skipped ?? 0))
       + Math.max(0, Number(totals.phantoms_redirected ?? 0));
   const links = isDryRun ? 0 : Math.max(0, Number(totals.links_created ?? 0));
+  const embedded = isDryRun ? 0 : Math.max(0, Number(details('embed').embedded ?? totals.pages_embedded ?? 0));
+  const quickPending = quickMaintenancePending(report);
 
   const failureItems: string[] = [];
   let failureCount = 0;
   for (const current of phases) {
     const currentDetails = current.details ?? {};
-    const currentLabel = PHASE_USER_ACTIONS[current.phase] ?? PHASE_LABELS[current.phase] ?? current.phase;
+    const currentLabel = (isQuick ? QUICK_PHASE_USER_ACTIONS[current.phase] : undefined)
+      ?? PHASE_USER_ACTIONS[current.phase]
+      ?? PHASE_LABELS[current.phase]
+      ?? current.phase;
     const failedFiles = Math.max(0, Number(currentDetails.failedFiles ?? 0));
     if (failedFiles > 0) {
       failureCount += failedFiles;
@@ -689,7 +779,7 @@ export function buildDreamOutcome(run: ConsoleRun): DreamOutcomeSummary {
       failureItems.push(`${currentLabel}：${additionalErrors} 项模型或数据处理未成功`);
     }
     const pending = Math.max(0, Number(currentDetails.pending ?? 0));
-    if (pending > 0) {
+    if (!isQuick && pending > 0) {
       failureCount += pending;
       failureItems.push(`${currentLabel}：${pending} 个内容块仍待处理`);
     }
@@ -762,13 +852,27 @@ export function buildDreamOutcome(run: ConsoleRun): DreamOutcomeSummary {
 
   return {
     isDryRun,
-    metrics: [
-      { label: '新增知识', value: added, note: isDryRun ? '预览不写入' : '新页面与综合知识' },
-      { label: '更新知识', value: updated, note: isDryRun ? '预览不写入' : '已有页面更新' },
-      { label: '合并与去重', value: merged, note: isDryRun ? '预览不写入' : '重复内容与重定向' },
-      { label: '新增关联', value: links, note: isDryRun ? '预览不写入' : '链接和关系边' },
-      { label: '未处理成功', value: failureCount, note: failureCount > 0 ? '可在下方查看原因' : '本次无失败项' },
-    ],
+    metrics: isQuick
+      ? [
+          { label: '新增知识', value: added, note: isDryRun ? '预览不写入' : '同步新增页面' },
+          { label: '更新知识', value: updated, note: isDryRun ? '预览不写入' : '同步更新页面' },
+          { label: '新增关联', value: links, note: isDryRun ? '预览不写入' : '确定性关系' },
+          { label: '完成向量', value: embedded, note: isDryRun ? '预览不写入' : '新完成内容块' },
+        ]
+      : [
+          { label: '新增知识', value: added, note: isDryRun ? '预览不写入' : '新页面与综合知识' },
+          { label: '更新知识', value: updated, note: isDryRun ? '预览不写入' : '已有页面更新' },
+          { label: '合并与去重', value: merged, note: isDryRun ? '预览不写入' : '重复内容与重定向' },
+          { label: '新增关联', value: links, note: isDryRun ? '预览不写入' : '链接和关系边' },
+          { label: '未处理成功', value: failureCount, note: failureCount > 0 ? '可在下方查看原因' : '本次无失败项' },
+        ],
+    pendingMetrics: isQuick
+      ? [
+          { label: '异常文件', value: quickPending.exceptionalFiles, note: quickPending.exceptionalFiles > 0 ? '需要检查解析原因' : '本次无异常文件' },
+          { label: '待向量化', value: quickPending.pendingEmbeddings, note: '待继续处理，不是失败' },
+          { label: '历史待补关联', value: quickPending.historicalLinks, note: '下次从检查点继续' },
+        ]
+      : [],
     knowledgeItems,
     extractionItems,
     failureItems: uniqueStrings(failureItems),
@@ -778,7 +882,10 @@ export function buildDreamOutcome(run: ConsoleRun): DreamOutcomeSummary {
 function DreamRunResult({ run }: { run: ConsoleRun }) {
   const summary = describeDreamRun(run);
   const outcome = buildDreamOutcome(run);
-  const displayStatus = effectiveDreamStatus(run);
+  const isQuick = isQuickMaintenanceRun(run);
+  const displayStatus = isQuick && quickMaintenanceIsPartial(parseDreamReport(run))
+    ? 'partial'
+    : effectiveDreamStatus(run);
   const statusLabel = ({
     completed: '已完成',
     partial: '部分完成',
@@ -789,7 +896,7 @@ function DreamRunResult({ run }: { run: ConsoleRun }) {
     cancelled: '已中止',
   } as Record<string, string>)[displayStatus] ?? displayStatus;
   return (
-    <section className="dream-run-narrative dream-outcome">
+    <section className={`dream-run-narrative dream-outcome ${isQuick ? 'is-quick' : ''}`}>
       <div className="dream-run-headline">
         <div>
           <span className="dream-eyebrow">本次成果</span>
@@ -807,6 +914,26 @@ function DreamRunResult({ run }: { run: ConsoleRun }) {
           </div>
         ))}
       </div>
+      {isQuick && (
+        <section className="dream-pending-work" aria-label="仍需处理">
+          <div className="dream-pending-head">
+            <div>
+              <span className="dream-eyebrow">仍需处理</span>
+              <b>待继续处理不等于失败</b>
+            </div>
+            <small>快速维护会在后续运行中继续补齐</small>
+          </div>
+          <div className="dream-pending-metrics">
+            {outcome.pendingMetrics.map(metric => (
+              <div key={metric.label} className={metric.label === '异常文件' && metric.value > 0 ? 'has-error' : ''}>
+                <span>{metric.label}</span>
+                <b>{metric.value}</b>
+                <small>{metric.note}</small>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
       <div className="dream-detail-chips">
         {summary.details.map((item, index) => <span key={index}>{item}</span>)}
       </div>
@@ -819,17 +946,19 @@ function DreamRunResult({ run }: { run: ConsoleRun }) {
               ? <ul>{outcome.knowledgeItems.map(item => <li key={item}><code>{item}</code></li>)}</ul>
               : <p>本次没有记录到新增或更新的知识页面。</p>}
           </section>
-          <section>
-            <h3>事实、概念和观点</h3>
-            {outcome.extractionItems.length > 0
-              ? <ul>{outcome.extractionItems.map((item, index) => <li key={`${item}:${index}`}>{item}</li>)}</ul>
-              : <p>本次没有提取出新的事实、概念或观点。</p>}
-          </section>
+          {!isQuick && (
+            <section>
+              <h3>事实、概念和观点</h3>
+              {outcome.extractionItems.length > 0
+                ? <ul>{outcome.extractionItems.map((item, index) => <li key={`${item}:${index}`}>{item}</li>)}</ul>
+                : <p>本次没有提取出新的事实、概念或观点。</p>}
+            </section>
+          )}
           <section className={outcome.failureItems.length > 0 ? 'has-warning' : ''}>
-            <h3>未处理成功的内容</h3>
+            <h3>{isQuick ? '需要检查的异常' : '未处理成功的内容'}</h3>
             {outcome.failureItems.length > 0
               ? <ul>{outcome.failureItems.map((item, index) => <li key={`${item}:${index}`}>{item}</li>)}</ul>
-              : <p>没有未处理成功的内容。</p>}
+              : <p>{isQuick ? '本次没有记录到执行异常。' : '没有未处理成功的内容。'}</p>}
           </section>
           <section>
             <h3>本次执行了什么</h3>
@@ -850,6 +979,23 @@ function DreamRunResult({ run }: { run: ConsoleRun }) {
 }
 
 type JourneyState = 'idle' | 'active' | 'done' | 'warning';
+export type QuickMaintenanceStageState = 'idle' | 'active' | 'done' | 'partial' | 'error';
+
+export interface QuickMaintenanceStage {
+  key: string;
+  title: string;
+  description: string;
+  state: QuickMaintenanceStageState;
+  results: Array<{ label: string; value: number | string }>;
+}
+
+const QUICK_STAGE_STATUS: Record<QuickMaintenanceStageState, string> = {
+  idle: '未开始',
+  active: '进行中',
+  done: '已完成',
+  partial: '部分完成',
+  error: '异常',
+};
 
 function phaseProgressFromRun(run: ConsoleRun | null): { completed: Set<string>; active: string | null; report: DreamCycleReport | null } {
   if (!run) return { completed: new Set(), active: null, report: null };
@@ -881,7 +1027,161 @@ export function isKnowledgeJourneyComplete(run: ConsoleRun | null): boolean {
     && (report.phases?.length ?? 0) > 1;
 }
 
-function KnowledgeJourney({ run }: { run: ConsoleRun | null }) {
+function quickStageState(
+  run: ConsoleRun | null,
+  phases: readonly string[],
+  partialWhen: boolean,
+): QuickMaintenanceStageState {
+  if (!run) return 'idle';
+  const progress = phaseProgressFromRun(run);
+  const reports = phases
+    .map(phase => progress.report?.phases?.find(item => item.phase === phase))
+    .filter((phase): phase is DreamPhaseReport => !!phase);
+  if (reports.some(phase => phase.status === 'fail' || phase.status === 'error')) return 'error';
+  if (progress.active && phases.includes(progress.active)) return 'active';
+  if (phases.every(phase => progress.completed.has(phase))) {
+    return partialWhen ? 'partial' : 'done';
+  }
+  return 'idle';
+}
+
+export function buildQuickMaintenanceStages(run: ConsoleRun | null): QuickMaintenanceStage[] {
+  const report = run ? parseDreamReport(run) : null;
+  const phase = (name: string) => report?.phases?.find(item => item.phase === name);
+  const details = (name: string) => phase(name)?.details ?? {};
+  const number = (value: unknown) => {
+    const parsed = Number(value ?? 0);
+    return Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
+  };
+  const lint = details('lint');
+  const backlinks = details('backlinks');
+  const sync = details('sync');
+  const extract = details('extract');
+  const embed = details('embed');
+  const orphans = details('orphans');
+  const pending = quickMaintenancePending(report);
+  const totals = report?.totals ?? {};
+  const syncReport = phase('sync');
+  const syncAffected = syncReport?.pagesAffectedCount
+    ?? syncReport?.pagesAffected?.length
+    ?? Math.max(0, number(sync.added) + number(sync.modified) - number(sync.failedFiles));
+  const historicalScanned = 'mentionHistoricalPagesProcessed' in extract
+    ? number(extract.mentionHistoricalPagesProcessed)
+    : Math.max(0, number(extract.mentionPagesProcessed) - syncAffected);
+  const overallStatus = !run
+    ? '未开始'
+    : run.status === 'running' || run.status === 'queued'
+      ? '进行中'
+      : run.status === 'failed' || report?.status === 'failed'
+        ? '异常'
+        : quickMaintenanceIsPartial(report)
+          ? '部分完成'
+          : '已完成';
+
+  const stages: QuickMaintenanceStage[] = [
+    {
+      ...QUICK_MAINTENANCE_STEPS[0],
+      state: quickStageState(run, QUICK_MAINTENANCE_STEPS[0].phases, false),
+      results: [
+        { label: '扫描页面', value: number(lint.pages_scanned) },
+        { label: '发现问题', value: number(lint.issues) + number(backlinks.gaps) },
+        { label: '自动修复', value: number(lint.fixed) },
+      ],
+    },
+    {
+      ...QUICK_MAINTENANCE_STEPS[1],
+      state: quickStageState(run, QUICK_MAINTENANCE_STEPS[1].phases, number(sync.failedFiles) > 0),
+      results: [
+        { label: '新增内容', value: number(sync.added) },
+        { label: '更新内容', value: number(sync.modified) },
+        { label: '异常文件', value: pending.exceptionalFiles },
+      ],
+    },
+    {
+      ...QUICK_MAINTENANCE_STEPS[2],
+      state: quickStageState(run, QUICK_MAINTENANCE_STEPS[2].phases, false),
+      results: [
+        { label: '新增关联', value: number(totals.links_created) },
+        { label: '扫描历史页面', value: historicalScanned },
+        { label: '历史待补关联', value: pending.historicalLinks },
+      ],
+    },
+    {
+      ...QUICK_MAINTENANCE_STEPS[3],
+      state: quickStageState(run, QUICK_MAINTENANCE_STEPS[3].phases, pending.pendingEmbeddings > 0),
+      results: [
+        { label: '本次完成向量', value: number(embed.embedded ?? totals.pages_embedded) },
+        { label: '待向量化', value: pending.pendingEmbeddings },
+      ],
+    },
+    {
+      ...QUICK_MAINTENANCE_STEPS[4],
+      state: quickStageState(run, QUICK_MAINTENANCE_STEPS[4].phases, false),
+      results: [
+        { label: '孤立知识', value: number(orphans.total_orphans) },
+        { label: '整体状态', value: overallStatus },
+      ],
+    },
+  ];
+  return stages;
+}
+
+function QuickMaintenanceJourney({ run }: { run: ConsoleRun | null }) {
+  const stages = useMemo(() => buildQuickMaintenanceStages(run), [run]);
+  const suggestedKey = stages.find(stage => stage.state === 'active')?.key
+    ?? (run && run.status !== 'running' && run.status !== 'queued' ? 'verify' : 'check');
+  const [selectedKey, setSelectedKey] = useState(suggestedKey);
+  useEffect(() => setSelectedKey(suggestedKey), [run?.id, run?.status, suggestedKey]);
+  const selected = stages.find(stage => stage.key === selectedKey) ?? stages[0]!;
+  const running = run?.status === 'running' || run?.status === 'queued';
+
+  return (
+    <section className={`dream-journey quick-maintenance-journey ${running ? 'is-running' : ''}`} aria-label="快速维护进度">
+      <div className="dream-journey-head">
+        <div>
+          <span className="dream-eyebrow">快速维护进度</span>
+          <h2>{running ? '正在执行快速维护' : '快速维护会完成这五项检查'}</h2>
+        </div>
+        {running && <span className="dream-live"><i />后台运行中</span>}
+      </div>
+      <div className="dream-journey-track">
+        {stages.map((stage, index) => (
+          <button
+            type="button"
+            className={`dream-journey-step ${stage.state} ${selected.key === stage.key ? 'is-selected' : ''}`}
+            key={stage.key}
+            onClick={() => setSelectedKey(stage.key)}
+            aria-pressed={selected.key === stage.key}
+          >
+            <span className="dream-step-marker" aria-hidden="true">{stage.state === 'done' ? '✓' : index + 1}</span>
+            <span className="dream-step-copy">
+              <b>{stage.title}</b>
+              <span>{stage.description}</span>
+              <small className={`dream-step-status ${stage.state}`}>{QUICK_STAGE_STATUS[stage.state]}</small>
+            </span>
+          </button>
+        ))}
+      </div>
+      <div className={`quick-stage-result state-${selected.state}`} aria-live="polite">
+        <div>
+          <span className="dream-eyebrow">阶段结果</span>
+          <b>{selected.title}</b>
+          <small>{QUICK_STAGE_STATUS[selected.state]}</small>
+        </div>
+        <dl>
+          {selected.results.map(item => (
+            <div key={item.label}>
+              <dt>{item.label}</dt>
+              <dd>{typeof item.value === 'number' ? item.value.toLocaleString() : item.value}</dd>
+            </div>
+          ))}
+        </dl>
+      </div>
+    </section>
+  );
+}
+
+function DreamKnowledgeJourney({ run }: { run: ConsoleRun | null }) {
   const progress = phaseProgressFromRun(run);
   const running = run?.status === 'running' || run?.status === 'queued';
   const successfulRun = isKnowledgeJourneyComplete(run);
@@ -895,7 +1195,7 @@ function KnowledgeJourney({ run }: { run: ConsoleRun | null }) {
         {running && <span className="dream-live"><i />后台运行中</span>}
       </div>
       <div className="dream-journey-track">
-        {KNOWLEDGE_STEPS.map((step, index) => {
+        {DREAM_KNOWLEDGE_STEPS.map((step, index) => {
           const phaseStates = step.phases.map(phase => progress.report?.phases?.find(item => item.phase === phase)?.status);
           const hasWarning = phaseStates.some(status => status === 'warn' || status === 'error');
           const isActive = !!progress.active && step.phases.includes(progress.active as never);
@@ -914,6 +1214,13 @@ function KnowledgeJourney({ run }: { run: ConsoleRun | null }) {
       </div>
     </section>
   );
+}
+
+function KnowledgeJourney({ run, mode }: { run: ConsoleRun | null; mode: DreamRunMode }) {
+  if (mode === 'quick') {
+    return <QuickMaintenanceJourney run={run && isQuickMaintenanceRun(run) ? run : null} />;
+  }
+  return <DreamKnowledgeJourney run={run} />;
 }
 
 function phaseStatusZh(status: string): string {
@@ -1445,7 +1752,7 @@ function DreamRunPanel({
   }> = {
     quick: {
       title: '先做一次轻量维护',
-      description: '同步变化、补全事实与关系并更新搜索索引，不运行深度观点与概念沉淀。不使用普通模型。',
+      description: '检查知识、同步内容、建立确定性关联、更新向量索引并检查异常。不使用普通模型。',
       action: '开始快速维护',
     },
     cycle: {
@@ -1497,7 +1804,7 @@ function DreamRunPanel({
       <div className="dream-run-mode">
         <button type="button" className={runMode === 'quick' ? 'active' : ''} onClick={() => applyRunMode('quick')}>
           <strong>快速维护</strong>
-          <span>不使用普通模型 · 日常更新</span>
+          <span>检查 · 同步 · 关联 · 向量化</span>
         </button>
         <button
           type="button"
@@ -1636,7 +1943,7 @@ function DreamRunPanel({
       <div className="pm-hint dream-run-persist-note">
         手动整理默认不设外层时限，会在后台继续运行；离开页面不会中断，也可随时中止。
       </div>
-      <KnowledgeJourney run={run} />
+      <KnowledgeJourney run={run} mode={runMode} />
       {run && (
         <DreamRunResult run={run} />
       )}

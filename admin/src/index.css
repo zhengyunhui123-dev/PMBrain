@@ -2775,6 +2775,35 @@ pre {
   line-height: 1.45;
 }
 
+.dream-outcome.is-quick .dream-outcome-metrics { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+
+.dream-pending-work {
+  margin-top: 12px;
+  padding: 13px 14px;
+  border: 1px solid #e3d5bb;
+  border-radius: 10px;
+  background: #fffaf1;
+}
+.dream-pending-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.dream-pending-head > div { display: grid; gap: 3px; }
+.dream-pending-head b { color: var(--text-primary); font-size: 13px; }
+.dream-pending-head small { color: var(--text-secondary); font-size: 10px; }
+.dream-pending-metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-top: 10px; }
+.dream-pending-metrics > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 3px 10px;
+  align-items: baseline;
+  padding: 9px 10px;
+  border: 1px solid #eadfc9;
+  border-radius: 8px;
+  background: rgba(255,255,255,.66);
+}
+.dream-pending-metrics span { color: var(--text-secondary); font-size: 11px; }
+.dream-pending-metrics b { color: #9b651e; font-size: 18px; font-variant-numeric: tabular-nums; }
+.dream-pending-metrics small { grid-column: 1 / -1; color: var(--text-secondary); font-size: 9px; }
+.dream-pending-metrics > div.has-error b { color: var(--danger); }
+
 .dream-outcome-content,
 .dream-execution-log {
   margin-top: 14px;
@@ -3707,6 +3736,82 @@ pre {
 .dream-journey-step.active .dream-step-marker { border: 7px solid #e4e4fc; background: #5b5bd6; color: #fff; box-shadow: 0 0 0 1px #5b5bd6; }
 .dream-journey-step.active b { color: #4d4dc6; }
 .dream-journey-step.warning .dream-step-marker { border-color: #d89a46; background: #fff1dc; color: #a56313; }
+
+.quick-maintenance-journey .dream-journey-step {
+  appearance: none;
+  min-width: 0;
+  padding: 5px 6px 9px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+}
+
+.quick-maintenance-journey .dream-journey-step:hover,
+.quick-maintenance-journey .dream-journey-step.is-selected {
+  border-color: color-mix(in srgb, var(--accent) 34%, #d7dce7);
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+}
+
+.quick-maintenance-journey .dream-journey-step:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.dream-step-copy { display: grid; justify-items: center; gap: 3px; }
+.dream-step-status {
+  justify-self: center;
+  margin-top: 2px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: #edf0f6;
+  color: #778196 !important;
+  font-size: 9px !important;
+  font-weight: 760;
+  line-height: 1.35 !important;
+}
+
+.dream-step-status.active { background: #ecebff; color: #5753ca !important; }
+.dream-step-status.done { background: #e7f5f1; color: #237d6a !important; }
+.dream-step-status.partial { background: #fff1dc; color: #a56313 !important; }
+.dream-step-status.error { background: #ffe9e9; color: #bd3f4c !important; }
+.dream-journey-step.partial .dream-step-marker { border-color: #d89a46; background: #fff1dc; color: #a56313; }
+.dream-journey-step.error .dream-step-marker { border-color: #d56a74; background: #ffe9e9; color: #bd3f4c; }
+
+.quick-stage-result {
+  display: grid;
+  grid-template-columns: minmax(160px, .7fr) minmax(0, 2fr);
+  gap: 18px;
+  align-items: center;
+  margin-top: 14px;
+  padding: 13px 15px;
+  border: 1px solid #dfe3ec;
+  border-left: 3px solid #aeb5c6;
+  border-radius: 10px;
+  background: #fff;
+}
+
+.quick-stage-result.state-active { border-left-color: #5b5bd6; }
+.quick-stage-result.state-done { border-left-color: #2d9b83; }
+.quick-stage-result.state-partial { border-left-color: #d89a46; }
+.quick-stage-result.state-error { border-left-color: #d56a74; }
+.quick-stage-result > div { display: grid; gap: 3px; }
+.quick-stage-result > div > b { color: var(--text-primary); font-size: 14px; }
+.quick-stage-result > div > small { color: var(--text-secondary); font-size: 10px; }
+.quick-stage-result dl {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+.quick-stage-result dl > div {
+  min-width: 0;
+  padding: 7px 10px;
+  border-left: 1px solid #e2e5ec;
+}
+.quick-stage-result dt { color: var(--text-secondary); font-size: 10px; }
+.quick-stage-result dd { margin: 3px 0 0; color: var(--text-primary); font-size: 17px; font-weight: 780; font-variant-numeric: tabular-nums; }
 
 .dream-run-narrative {
   padding: 18px;
@@ -6819,6 +6924,30 @@ html[data-theme="dark"] .dream-page .dream-detail-chips span {
   color: var(--text-secondary);
   background: var(--console-violet-soft);
 }
+html[data-theme="dark"] .dream-page .quick-maintenance-journey .dream-journey-step:hover,
+html[data-theme="dark"] .dream-page .quick-maintenance-journey .dream-journey-step.is-selected {
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--console-line));
+  background: var(--console-violet-soft);
+}
+html[data-theme="dark"] .dream-page .dream-step-status.idle { background: var(--console-surface); color: var(--text-secondary) !important; }
+html[data-theme="dark"] .dream-page .dream-step-status.active { background: var(--console-violet-soft); color: #c7c5ff !important; }
+html[data-theme="dark"] .dream-page .dream-step-status.done { background: color-mix(in srgb, var(--success) 15%, var(--console-surface)); color: #8de0c7 !important; }
+html[data-theme="dark"] .dream-page .dream-step-status.partial { background: color-mix(in srgb, var(--warning) 13%, var(--console-surface)); color: #f3cf94 !important; }
+html[data-theme="dark"] .dream-page .dream-step-status.error { background: color-mix(in srgb, var(--danger) 13%, var(--console-surface)); color: #ffb3ba !important; }
+html[data-theme="dark"] .dream-page .quick-stage-result {
+  border-color: var(--console-line);
+  background: var(--console-surface);
+}
+html[data-theme="dark"] .dream-page .quick-stage-result dl > div { border-left-color: var(--console-line); }
+html[data-theme="dark"] .dream-page .dream-pending-work {
+  border-color: color-mix(in srgb, var(--warning) 34%, var(--console-line));
+  background: color-mix(in srgb, var(--warning) 7%, var(--console-surface));
+}
+html[data-theme="dark"] .dream-page .dream-pending-metrics > div {
+  border-color: var(--console-line);
+  background: var(--console-surface);
+}
+html[data-theme="dark"] .dream-page .dream-pending-metrics b { color: #f3cf94; }
 html[data-theme="dark"] .dream-page .dream-outcome-metrics > div.has-warning,
 html[data-theme="dark"] .dream-page .dream-outcome-content-grid section.has-warning {
   border-color: color-mix(in srgb, var(--warning) 45%, var(--console-line));
@@ -6902,6 +7031,15 @@ html[data-theme="dark"] .dream-page .dream-journey-step span { color: var(--text
   .dream-journey-track { grid-template-columns: 1fr; }
   .dream-journey-track::before { top: 14px; bottom: 14px; left: 14px; width: 1px; height: auto; }
   .dream-journey-step { grid-template-columns: 29px minmax(0, 1fr); justify-items: start; text-align: left; }
+}
+
+/* Keep Quick's compact five-step receipt horizontal in normal desktop windows.
+   The legacy Dream journey may still stack earlier because its labels are longer. */
+@media (min-width: 769px) and (max-width: 980px) {
+  .quick-maintenance-journey .dream-journey-track { grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
+  .quick-maintenance-journey .dream-journey-track::before { top: 14px; bottom: auto; left: 8%; right: 8%; width: auto; height: 1px; }
+  .quick-maintenance-journey .dream-journey-step { grid-template-columns: 1fr; justify-items: center; text-align: center; }
+  .quick-maintenance-journey .dream-step-copy { justify-items: center; }
 }
 
 @media (prefers-reduced-motion: reduce) {
