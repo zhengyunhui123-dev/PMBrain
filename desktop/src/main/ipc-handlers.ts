@@ -19,6 +19,7 @@ import type {
 import type { DesktopTheme, SetupPayload } from './config-manager.js';
 import type { UpdateState } from './update-manager.js';
 import type { DesktopPgliteUpgradeBackups } from '../preload/index.js';
+import type { DesktopKnowledgeSourceStatus } from './knowledge-source-git.js';
 
 type IpcHandler = (event: IpcMainInvokeEvent, ...args: any[]) => any;
 
@@ -36,6 +37,8 @@ export interface DesktopIpcHandlers {
   revokeSharedIntegration: (credentialName: string) => Promise<unknown>;
   updateState: () => UpdateState | null;
   setup: () => Promise<unknown>;
+  inspectKnowledgeSourceDirectory: (path: string) => DesktopKnowledgeSourceStatus;
+  initializeKnowledgeSourceGit: (path: string) => DesktopKnowledgeSourceStatus;
   providerModels: (provider: string, touchpoint: DesktopModelTouchpoint) => unknown;
   advancedModelConfig: () => Promise<unknown>;
   saveAdvancedModelConfig: (values: AdvancedModelWriteInput) => Promise<unknown>;
@@ -75,6 +78,8 @@ export function registerDesktopIpcHandlers(handlers: DesktopIpcHandlers): void {
   registerTrustedHandler('desktop:revoke-shared-integration', handlers, (_event, credentialName: string) => handlers.revokeSharedIntegration(credentialName));
   registerTrustedHandler('desktop:get-update-state', handlers, () => handlers.updateState());
   registerTrustedHandler('desktop:get-setup', handlers, () => handlers.setup());
+  registerTrustedHandler('desktop:inspect-knowledge-source', handlers, (_event, path: string) => handlers.inspectKnowledgeSourceDirectory(path));
+  registerTrustedHandler('desktop:initialize-knowledge-source-git', handlers, (_event, path: string) => handlers.initializeKnowledgeSourceGit(path));
   registerTrustedHandler('desktop:choose-directory', handlers, async (_event, initialPath?: string) => {
     const window = handlers.mainWindow();
     if (!window) throw new Error('PMBrain 桌面窗口尚未就绪。');

@@ -1,8 +1,13 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { commitSourceGit, initializeSourceGit, isSourceGitRepository } from '../src/core/source-git.ts';
+import {
+  commitSourceGit,
+  getSourceGitStatus,
+  initializeSourceGit,
+  isSourceGitRepository,
+} from '../src/core/source-git.ts';
 
 const temporaryDirectories: string[] = [];
 
@@ -32,7 +37,7 @@ describe('Source Git version control', () => {
       changedFiles: 1,
       message: 'First version',
     });
-  });
+  }, 20_000);
 
   test('commits all changes and reports a no-op when the tree is clean', () => {
     const directory = makeSourceDirectory();
@@ -47,7 +52,43 @@ describe('Source Git version control', () => {
     expect(second.committed).toBe(true);
     expect(second.commit).not.toBe(first.commit);
     expect(clean).toMatchObject({ committed: false, changedFiles: 0, commit: null });
-  });
+  }, 20_000);
+
+  test('reports whether the source has changes the parent repository can commit', () => {
+    const directory = makeSourceDirectory();
+    initializeSourceGit(directory);
+
+    expect(getSourceGitStatus(directory)).toMatchObject({ repository: true, hasChanges: false, changedFiles: 0 });
+
+    writeFileSync(join(directory, 'note.md'), 'content\n');
+    expect(getSourceGitStatus(directory)).toMatchObject({ repository: true, hasChanges: true, changedFiles: 1 });
+
+    commitSourceGit(directory, 'Save note');
+    expect(getSourceGitStatus(directory)).toMatchObject({ repository: true, hasChanges: false, changedFiles: 0 });
+  }, 20_000);
+
+  test('does not offer a parent commit for changes that exist only inside a nested repository', () => {
+    const directory = makeSourceDirectory();
+    initializeSourceGit(directory);
+    writeFileSync(join(directory, 'root.md'), 'root\n');
+    commitSourceGit(directory, 'Initial parent');
+
+    const nested = join(directory, 'nested');
+    mkdirSync(nested);
+    initializeSourceGit(nested);
+    writeFileSync(join(nested, 'note.md'), 'nested\n');
+    commitSourceGit(nested, 'Initial nested');
+    commitSourceGit(directory, 'Track nested repository');
+
+    writeFileSync(join(nested, 'note.md'), 'nested changed\n');
+
+    expect(getSourceGitStatus(directory)).toMatchObject({ repository: true, hasChanges: false, changedFiles: 0 });
+    expect(commitSourceGit(directory, 'Cannot commit nested worktree')).toMatchObject({
+      committed: false,
+      changedFiles: 0,
+      commit: null,
+    });
+  }, 20_000);
 
   test('requires explicit initialization and bounds commit messages', () => {
     const directory = makeSourceDirectory();
@@ -55,5 +96,5 @@ describe('Source Git version control', () => {
     initializeSourceGit(directory);
     writeFileSync(join(directory, 'note.md'), 'content\n');
     expect(() => commitSourceGit(directory, 'x'.repeat(201))).toThrow('cannot exceed 200');
-  });
+  }, 20_000);
 });

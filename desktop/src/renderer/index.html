@@ -85,14 +85,21 @@
 
           <div class="section-heading separated">
             <div><span class="index">01B</span><h2>原始资料与主源</h2></div>
-            <p>原始资料保留在所选目录；PMBrain 将目录注册为主源，后续导入与 MCP 默认使用它。</p>
+            <p>选择原始资料目录后，PMBrain 会将其注册为主源；启用 Git 后，快速维护可自动同步目录变化。</p>
           </div>
           <div class="field-group">
             <label for="knowledge-directory">原始资料目录</label>
-            <div class="input-action"><input id="knowledge-directory" spellcheck="false" /><button class="ghost choose" data-input="knowledge-directory">选择</button></div>
+            <div class="input-action"><input id="knowledge-directory" spellcheck="false" placeholder="例如：D:\你的知识库" /><button class="ghost choose" data-input="knowledge-directory">选择</button></div>
             <small>这里保存你自己的 Markdown、文档与资料；配置和升级不会删除或覆盖这些文件。</small>
           </div>
-          <div class="source-summary"><b>主源</b><p id="main-source-copy">保存后，原始资料目录会注册为主源；导入默认写入该源，MCP 默认读取该源。</p></div>
+          <div class="source-summary source-status-card" id="knowledge-source-status" hidden>
+            <b id="knowledge-source-title">主源</b>
+            <div class="source-status-content">
+              <code id="knowledge-source-path"></code>
+              <p id="knowledge-source-git-status"></p>
+              <button type="button" class="ghost source-git-button" id="enable-knowledge-source-git" hidden><span>启用 Git 自动同步</span></button>
+            </div>
+          </div>
           <details class="advanced-block source-advanced">
             <summary>高级：自定义主源 ID</summary>
             <div class="field-group">

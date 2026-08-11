@@ -9,9 +9,9 @@
 // @ts-ignore — type: 'file' is Bun ESM, not in lib.d.ts
 import A_0_assets_charts_BO6HVfrh_js from '../admin/dist/assets/charts-BO6HVfrh.js' with { type: 'file' };
 // @ts-ignore — type: 'file' is Bun ESM, not in lib.d.ts
-import A_1_assets_index_C962y_bJ_css from '../admin/dist/assets/index-C962y_bJ.css' with { type: 'file' };
+import A_1_assets_index_DBCBgJMo_js from '../admin/dist/assets/index-DBCBgJMo.js' with { type: 'file' };
 // @ts-ignore — type: 'file' is Bun ESM, not in lib.d.ts
-import A_2_assets_index_ZAabPGi7_js from '../admin/dist/assets/index-ZAabPGi7.js' with { type: 'file' };
+import A_2_assets_index_xmkORKcK_css from '../admin/dist/assets/index-xmkORKcK.css' with { type: 'file' };
 // @ts-ignore — type: 'file' is Bun ESM, not in lib.d.ts
 import A_3_assets_react_LdaKN5mt_js from '../admin/dist/assets/react-LdaKN5mt.js' with { type: 'file' };
 // @ts-ignore — type: 'file' is Bun ESM, not in lib.d.ts
@@ -32,8 +32,8 @@ export interface AdminAsset {
 
 export const ADMIN_ASSETS: Record<string, AdminAsset> = {
   "/admin/assets/charts-BO6HVfrh.js": { path: A_0_assets_charts_BO6HVfrh_js as unknown as string, mime: "application/javascript; charset=utf-8" },
-  "/admin/assets/index-C962y_bJ.css": { path: A_1_assets_index_C962y_bJ_css as unknown as string, mime: "text/css; charset=utf-8" },
-  "/admin/assets/index-ZAabPGi7.js": { path: A_2_assets_index_ZAabPGi7_js as unknown as string, mime: "application/javascript; charset=utf-8" },
+  "/admin/assets/index-DBCBgJMo.js": { path: A_1_assets_index_DBCBgJMo_js as unknown as string, mime: "application/javascript; charset=utf-8" },
+  "/admin/assets/index-xmkORKcK.css": { path: A_2_assets_index_xmkORKcK_css as unknown as string, mime: "text/css; charset=utf-8" },
   "/admin/assets/react-LdaKN5mt.js": { path: A_3_assets_react_LdaKN5mt_js as unknown as string, mime: "application/javascript; charset=utf-8" },
   "/admin/assets/ui-D67EOKFW.js": { path: A_4_assets_ui_D67EOKFW_js as unknown as string, mime: "application/javascript; charset=utf-8" },
   "/admin/customer-service-qr.png": { path: A_5_customer_service_qr_png as unknown as string, mime: "image/png" },

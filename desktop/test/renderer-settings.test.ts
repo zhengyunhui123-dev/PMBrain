@@ -15,6 +15,21 @@ const builder = readFileSync(resolve('electron-builder.yml'), 'utf8');
 const preview = readFileSync(resolve('scripts/preview-renderer.ts'), 'utf8');
 
 describe('desktop settings renderer contracts', () => {
+  test('keeps the first-use knowledge source empty until the user selects a directory', () => {
+    expect(html).toContain('id="knowledge-directory"');
+    expect(html).toContain('placeholder="例如：D:\\你的知识库"');
+    expect(html).toContain('选择原始资料目录后，PMBrain 会将其注册为主源；启用 Git 后，快速维护可自动同步目录变化。');
+    expect(html).toContain('id="knowledge-source-status"');
+    expect(html).toContain('id="enable-knowledge-source-git"');
+    expect(html).toContain('高级：自定义主源 ID');
+    expect(renderer).toContain("setup.current.knowledgeDirectory || (setup.needsSetup ? '' : setup.defaults.knowledgeDirectory)");
+    expect(renderer).toContain('inspectKnowledgeSourceDirectory');
+    expect(renderer).toContain('initializeKnowledgeSourceGit');
+    expect(renderer).toContain('✓ Git 已启用 · 快速维护会自动同步此目录');
+    expect(renderer).toContain('⚠ 未启用 Git，快速维护暂时无法自动同步');
+    expect(main).toContain("'--name', basename(knowledgeDirectory), '--federated'");
+  });
+
   test('shares the PMBrain violet visual identity across dark and light themes', () => {
     expect(styles).toContain('--accent: #938aff;');
     expect(styles).toContain('--accent: #6b5de8;');
@@ -207,6 +222,8 @@ describe('desktop settings renderer contracts', () => {
     expect(preview).toContain('getSharedAccess: async');
     expect(preview).toContain('createSharedIntegration: async');
     expect(preview).toContain('revokeSharedIntegration: async');
+    expect(preview).toContain('inspectKnowledgeSourceDirectory: async');
+    expect(preview).toContain('initializeKnowledgeSourceGit: async');
     expect(preview).toContain("id: 'trae', name: 'Trae'");
     expect(preview).toContain("id: 'qwenpaw', name: 'QwenPaw'");
     expect(preview).toContain("id: 'hermes', name: 'Hermes'");

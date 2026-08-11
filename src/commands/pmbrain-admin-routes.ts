@@ -160,9 +160,11 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
     });
   });
 
-  app.get('/admin/api/brain/overview', requireAdmin, async (_req: Request, res: Response) => {
+  app.get('/admin/api/brain/overview', requireAdmin, async (req: Request, res: Response) => {
     try {
-      sendAdminContract(res, BrainOverviewResponseSchema, await getAdminBrainOverview(engine, config, VERSION));
+      sendAdminContract(res, BrainOverviewResponseSchema, await getAdminBrainOverview(engine, config, VERSION, {
+        inspectSourceGit: req.query.source_git_status === '1',
+      }));
     } catch (e) {
       res.status(500).json({ error: e instanceof Error ? e.message : 'overview_failed' });
     }

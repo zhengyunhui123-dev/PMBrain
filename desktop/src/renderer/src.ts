@@ -6,6 +6,7 @@ import type {
   AdvancedModelWriteInput,
   CredentialKind,
   DesktopCustomProvider,
+  DesktopKnowledgeSourceStatus,
   DesktopSystemSettingsPayload,
   DesktopSystemSettingsState,
   DesktopSetupState,
@@ -34,6 +35,7 @@ let advancedOverrides: Partial<Record<AdvancedModelTier, string>> = {};
 let advancedPhaseOverrides: Partial<Record<AdvancedModelPhase, string>> = {};
 let loadedKnowledgeDirectory = '';
 let loadedKnowledgeSourceId = '';
+let knowledgeSourceStatusRequest = 0;
 let customProviderDraft: DesktopCustomProvider | null = null;
 let customProviderTarget: ModelKind | null = null;
 const providerModels: Record<'chat' | 'embedding', string[]> = { chat: [], embedding: [] };
@@ -173,6 +175,44 @@ function normalizePglitePathForDisplay(value: string): string {
   if (!trimmed || /[\\/]?brain\.pglite$/i.test(trimmed)) return trimmed;
   const separator = trimmed.endsWith('\\') || trimmed.endsWith('/') ? '' : '\\';
   return `${trimmed}${separator}brain.pglite`;
+}
+
+function renderKnowledgeSourceStatus(status: DesktopKnowledgeSourceStatus | null): void {
+  const card = $('#knowledge-source-status');
+  card.hidden = !status;
+  if (!status) return;
+
+  $('#knowledge-source-title').textContent = `主源：${status.sourceName}`;
+  $('#knowledge-source-path').textContent = status.path;
+  const gitStatus = $('#knowledge-source-git-status');
+  gitStatus.textContent = status.gitEnabled
+    ? '✓ Git 已启用 · 快速维护会自动同步此目录'
+    : '⚠ 未启用 Git，快速维护暂时无法自动同步';
+  gitStatus.classList.toggle('ready', status.gitEnabled);
+  gitStatus.classList.toggle('warning', !status.gitEnabled);
+  $('#enable-knowledge-source-git').hidden = status.gitEnabled;
+}
+
+async function refreshKnowledgeSourceStatus(
+  inputPath: string,
+  reportError = true,
+): Promise<void> {
+  const path = inputPath.trim();
+  const request = ++knowledgeSourceStatusRequest;
+  if (!path) {
+    renderKnowledgeSourceStatus(null);
+    return;
+  }
+
+  try {
+    const status = await window.pmbrainDesktop.inspectKnowledgeSourceDirectory(path);
+    if (request !== knowledgeSourceStatusRequest) return;
+    renderKnowledgeSourceStatus(status);
+  } catch (error) {
+    if (request !== knowledgeSourceStatusRequest) return;
+    renderKnowledgeSourceStatus(null);
+    if (reportError) setNotice('error', error instanceof Error ? error.message : String(error));
+  }
 }
 
 function splitModelId(value?: string): { provider: string; model: string } {
@@ -903,16 +943,15 @@ function populate(next: DesktopSetupState): void {
   const radio = document.querySelector<HTMLInputElement>(`input[name="engine"][value="${setup.current.engine}"]`);
   if (radio) radio.checked = true;
   ($<HTMLInputElement>('#database-path')).value = setup.current.databasePath || setup.defaults.databasePath;
-  ($<HTMLInputElement>('#knowledge-directory')).value = setup.current.knowledgeDirectory || setup.defaults.knowledgeDirectory;
+  ($<HTMLInputElement>('#knowledge-directory')).value = setup.current.knowledgeDirectory || (setup.needsSetup ? '' : setup.defaults.knowledgeDirectory);
   ($<HTMLInputElement>('#knowledge-source-id')).value = setup.current.knowledgeSourceId || '';
   loadedKnowledgeDirectory = ($<HTMLInputElement>('#knowledge-directory')).value.trim();
   loadedKnowledgeSourceId = ($<HTMLInputElement>('#knowledge-source-id')).value.trim();
   $('#knowledge-source-hint').textContent = setup.current.knowledgeSourceId
     ? `当前主源 ID：${setup.current.knowledgeSourceId}。只有 CLI/MCP 路由或多源管理需要识别这个值。`
     : '主源 ID 用于 CLI 和 MCP 路由。普通用户保持自动生成即可。';
-  $('#main-source-copy').textContent = setup.current.knowledgeSourceId
-    ? `当前主源为 ${setup.current.knowledgeSourceId}；导入默认写入该源，MCP 默认读取该源。`
-    : '保存后，原始资料目录会注册为主源；导入默认写入该源，MCP 默认读取该源。';
+  renderKnowledgeSourceStatus(null);
+  void refreshKnowledgeSourceStatus(loadedKnowledgeDirectory, false);
   const chat = splitModelId(setup.current.chatModel);
   const embedding = splitModelId(setup.current.embeddingModel);
   ($<HTMLSelectElement>('#chat-provider')).value = chat.provider;
@@ -1454,10 +1493,33 @@ $('#save-advanced-models').addEventListener('click', () => void saveAdvancedMode
 document.querySelectorAll<HTMLButtonElement>('.choose').forEach((button) => button.addEventListener('click', async () => {
   const input = $<HTMLInputElement>(`#${button.dataset.input}`);
   const selected = await window.pmbrainDesktop.chooseDirectory(input.value);
-  if (selected) input.value = button.dataset.input === 'database-path'
+  if (!selected) return;
+  input.value = button.dataset.input === 'database-path'
     ? normalizePglitePathForDisplay(selected)
     : selected;
+  if (button.dataset.input === 'knowledge-directory') {
+    await refreshKnowledgeSourceStatus(selected);
+  }
 }));
+$('#knowledge-directory').addEventListener('change', () => {
+  void refreshKnowledgeSourceStatus(($<HTMLInputElement>('#knowledge-directory')).value);
+});
+$('#enable-knowledge-source-git').addEventListener('click', async () => {
+  const button = $<HTMLButtonElement>('#enable-knowledge-source-git');
+  const path = ($<HTMLInputElement>('#knowledge-directory')).value.trim();
+  if (!path) return;
+  setBusy(button, true, '正在启用…');
+  try {
+    const status = await window.pmbrainDesktop.initializeKnowledgeSourceGit(path);
+    if (($<HTMLInputElement>('#knowledge-directory')).value.trim() !== path) return;
+    renderKnowledgeSourceStatus(status);
+    setNotice('success', `已为主源 ${status.sourceName} 启用 Git 自动同步。`);
+  } catch (error) {
+    setNotice('error', error instanceof Error ? error.message : String(error));
+  } finally {
+    setBusy(button, false, '启用 Git 自动同步');
+  }
+});
 document.querySelectorAll<HTMLButtonElement>('.secret-toggle').forEach((button) => button.addEventListener('click', () => {
   const input = $<HTMLInputElement>(`#${button.dataset.secret}`);
   const shouldShow = input.type === 'password';

@@ -31,7 +31,7 @@ import {
 import { waitForConsoleRun } from './import/import-support';
 
 export function SourceManagementSettings() {
-  const { overview, error, reload } = useOverview();
+  const { overview, error, reload } = useOverview({ includeSourceGitStatus: true });
   const [showArchived, setShowArchived] = useState(false);
   const [path, setPath] = useState('');
   const [sourceId, setSourceId] = useState('');
@@ -234,7 +234,8 @@ export function SourceManagementSettings() {
                             <button
                               className="pm-ghost"
                               onClick={() => openGitDialog(source, source.git_repo ? 'commit' : 'init')}
-                              disabled={sourceActionId === source.id}
+                              disabled={sourceActionId === source.id || (source.git_repo && source.git_has_changes === false)}
+                              title={source.git_repo && source.git_has_changes === false ? '当前没有可提交的更改' : undefined}
                             >
                               {source.git_repo ? '提交更改' : '创建 Git'}
                             </button>

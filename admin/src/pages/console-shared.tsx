@@ -25,21 +25,22 @@ export function LoadingBlock({ text = '正在读取 PMBrain 状态...' }: { text
   return <div className="pm-card pm-empty">{text}</div>;
 }
 
-export function useOverview() {
+export function useOverview(options: { includeSourceGitStatus?: boolean } = {}) {
+  const includeSourceGitStatus = options.includeSourceGitStatus === true;
   const [overview, setOverview] = useState<BrainOverview | null>(null);
   const [error, setError] = useState('');
   const [pgliteBusy, setPgliteBusy] = useState(false);
 
   const load = useCallback(async () => {
     try {
-      setOverview(await api.brainOverview());
+      setOverview(await api.brainOverview(includeSourceGitStatus));
       setError('');
       setPgliteBusy(false);
     } catch (error) {
       setPgliteBusy(isPgliteBusyError(error));
       setError(error instanceof Error ? error.message : String(error));
     }
-  }, []);
+  }, [includeSourceGitStatus]);
 
   useEffect(() => { void load(); }, [load]);
   return { overview, error, pgliteBusy, reload: load };
