@@ -5,6 +5,7 @@ export const SourceSummarySchema = z.object({
   name: z.string(),
   local_path: z.string().nullable(),
   git_repo: z.boolean(),
+  git_has_changes: z.boolean().nullable().optional().default(null),
   federated: z.boolean(),
   page_count: z.number().int().nonnegative(),
   last_sync_at: z.string().nullable(),

@@ -5991,6 +5991,7 @@ html[data-theme="dark"] {
 .btn-primary:hover:not(:disabled) { background: #5d50d3; transform: translateY(-1px); }
 .pm-ghost { border: 1px solid var(--console-line); background: var(--console-surface-soft); color: var(--text-secondary); }
 .pm-ghost:hover:not(:disabled) { border-color: color-mix(in srgb, var(--accent) 32%, var(--console-line)); color: var(--accent); }
+.pm-ghost:disabled { opacity: .38; cursor: not-allowed; color: var(--text-muted); box-shadow: none; }
 
 input,
 select,

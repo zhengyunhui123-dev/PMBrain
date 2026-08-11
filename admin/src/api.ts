@@ -105,7 +105,11 @@ export const api = {
   login: (token: string) => apiFetch('/admin/login', { method: 'POST', body: JSON.stringify({ token }) }),
   signOutEverywhere: () => apiFetch('/admin/api/sign-out-everywhere', { method: 'POST' }),
   stats: () => apiFetch('/admin/api/stats'),
-  brainOverview: () => apiFetch<BrainOverviewResponse>('/admin/api/brain/overview', undefined, BrainOverviewResponseSchema),
+  brainOverview: (includeSourceGitStatus = false) => apiFetch<BrainOverviewResponse>(
+    `/admin/api/brain/overview${includeSourceGitStatus ? '?source_git_status=1' : ''}`,
+    undefined,
+    BrainOverviewResponseSchema,
+  ),
   theme: () => apiFetch('/admin/api/theme'),
   docs: () => apiFetch('/admin/api/docs'),
   brainPages: (qs = '') => apiFetch<BrainPagesResponse>(`/admin/api/brain/pages${qs}`, undefined, BrainPagesResponseSchema),

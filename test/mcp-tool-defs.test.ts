@@ -88,6 +88,13 @@ describe('buildToolDefs', () => {
       expect(Array.isArray(def.inputSchema.required)).toBe(true);
     }
   });
+
+  test('query tells MCP agents when to opt into expansion', () => {
+    const query = buildToolDefs(operations).find(def => def.name === 'query')!;
+    const expand = query.inputSchema.properties.expand as { description?: string };
+    expect(expand.description).toContain('MCP default: false');
+    expect(expand.description).toContain('ambiguous questions or after weak/no recall');
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -8,11 +8,10 @@
 
 import type { BrainEngine } from '../core/engine.ts';
 import type { GBrainConfig } from '../core/config.ts';
-import { existsSync } from 'node:fs';
-import { join } from 'node:path';
 import { isSensitiveConfigKey, redactConfigValue } from './config.ts';
 import { loadAllSources, isSourceFederated } from '../core/sources-load.ts';
 import { resolveMainSourceId } from '../core/source-resolver.ts';
+import { getSourceGitStatus, isSourceGitRepository } from '../core/source-git.ts';
 import { ALL_PHASES } from '../core/cycle.ts';
 import { getProviderStatus, listRuns } from './natural-lang/index.ts';
 import { inspectAdminSupervisorStatus } from './admin-supervisor.ts';
@@ -46,7 +45,12 @@ function redactedConfig(config: GBrainConfig | null): Record<string, unknown> {
   return out;
 }
 
-export async function getAdminBrainOverview(engine: BrainEngine, config: GBrainConfig | null, version: string) {
+export async function getAdminBrainOverview(
+  engine: BrainEngine,
+  config: GBrainConfig | null,
+  version: string,
+  options: { inspectSourceGit?: boolean } = {},
+) {
   const [stats, sources, mainSourceId] = await Promise.all([
     engine.getStats(),
     loadAllSources(engine, { includeArchived: true }),
@@ -62,11 +66,27 @@ export async function getAdminBrainOverview(engine: BrainEngine, config: GBrainC
       `SELECT archived_at::text, archive_expires_at::text FROM sources WHERE id = $1`,
       [source.id],
     );
+    let gitRepo = false;
+    let gitHasChanges: boolean | null = false;
+    if (source.local_path) {
+      gitRepo = isSourceGitRepository(source.local_path);
+      gitHasChanges = gitRepo ? null : false;
+      if (gitRepo && options.inspectSourceGit) {
+        try {
+          gitHasChanges = getSourceGitStatus(source.local_path).hasChanges;
+        } catch {
+          // Keep the action available when Git status cannot be inspected;
+          // the existing commit path will return the actionable native error.
+          gitHasChanges = null;
+        }
+      }
+    }
     return {
       id: source.id,
       name: source.name,
       local_path: source.local_path,
-      git_repo: source.local_path ? existsSync(join(source.local_path, '.git')) : false,
+      git_repo: gitRepo,
+      git_has_changes: gitHasChanges,
       federated: isSourceFederated(source.config),
       page_count: count?.page_count ?? 0,
       last_sync_at: source.last_sync_at ? new Date(source.last_sync_at).toISOString() : null,

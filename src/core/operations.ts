@@ -1499,7 +1499,11 @@ const query: Operation = {
     image_mime: { type: 'string', description: 'MIME type for the image bytes (auto-derived from path on CLI; required when calling op directly).' },
     limit: { type: 'number', description: 'Max results (default 20)' },
     offset: { type: 'number', description: 'Skip first N results (for pagination)' },
-    expand: { type: 'boolean', description: 'Enable multi-query expansion (default: true)' },
+    expand: {
+      type: 'boolean',
+      description:
+        'Enable multi-query expansion. MCP default: false; pass true for ambiguous questions or after weak/no recall. Direct/CLI default: true.',
+    },
     detail: { type: 'string', description: 'Result detail level: low (compiled truth only), medium (default, all with dedup), high (all chunks)' },
     mode: { type: 'string', description: 'Search mode (conservative|balanced|tokenmax). Local callers only.' },
     // v0.20.0 Cathedral II Layer 10 C1/C2: language + symbol-kind filters.

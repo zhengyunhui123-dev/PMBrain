@@ -45,6 +45,10 @@ describe('Admin settings information architecture', () => {
 
   test('source Git actions match repository state and do not expose CLI output', () => {
     expect(consoleSource).toContain("source.git_repo ? '提交更改' : '创建 Git'");
+    expect(consoleSource).toContain("source.git_repo && source.git_has_changes === false");
+    expect(consoleSource).toContain("当前没有可提交的更改");
+    expect(consoleSource).toContain('useOverview({ includeSourceGitStatus: true })');
+    expect(styles).toContain('.pm-ghost:disabled');
     expect(consoleSource).toContain('{source.local_path && (');
     expect(consoleSource).toContain('将包含新增、修改和删除的文件');
     expect(consoleSource).not.toContain('同步复用 PMBrain CLI');

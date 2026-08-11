@@ -18,6 +18,12 @@ export interface SourceGitCommitResult {
   message: string;
 }
 
+export interface SourceGitStatus {
+  repository: boolean;
+  hasChanges: boolean;
+  changedFiles: number;
+}
+
 function assertSourceDirectory(inputPath: string): string {
   const localPath = resolve(inputPath);
   if (!existsSync(localPath) || !statSync(localPath).isDirectory()) {
@@ -60,6 +66,30 @@ export function isSourceGitRepository(inputPath: string): boolean {
   return existsSync(join(localPath, '.git'));
 }
 
+function listCommittableChanges(localPath: string): string[] {
+  const pending = runGit(localPath, [
+    'status',
+    '--porcelain=v1',
+    '-z',
+    '--untracked-files=all',
+    '--ignore-submodules=dirty',
+  ]);
+  return pending ? pending.split('\0').filter(Boolean) : [];
+}
+
+export function getSourceGitStatus(inputPath: string): SourceGitStatus {
+  const localPath = assertSourceDirectory(inputPath);
+  if (!isSourceGitRepository(localPath)) {
+    return { repository: false, hasChanges: false, changedFiles: 0 };
+  }
+  const changes = listCommittableChanges(localPath);
+  return {
+    repository: true,
+    hasChanges: changes.length > 0,
+    changedFiles: changes.length,
+  };
+}
+
 export function initializeSourceGit(inputPath: string): SourceGitInitResult {
   const localPath = assertSourceDirectory(inputPath);
   if (isSourceGitRepository(localPath)) {
@@ -81,8 +111,11 @@ export function commitSourceGit(inputPath: string, requestedMessage?: string): S
     throw new Error(`Commit message cannot exceed ${MAX_COMMIT_MESSAGE_LENGTH} characters`);
   }
   const message = trimmedMessage || `PMBrain 保存 ${new Date().toLocaleString('zh-CN', { hour12: false })}`;
-  const pending = runGit(localPath, ['status', '--porcelain=v1', '-z']);
-  const changedFiles = pending ? pending.split('\0').filter(Boolean).length : 0;
+  // A parent repository cannot commit uncommitted files that only exist
+  // inside a nested repository/submodule. Ignore that dirty-only signal so
+  // the UI and CLI both report a clean no-op instead of running `git commit`
+  // and surfacing Git's "no changes added" error.
+  const changedFiles = listCommittableChanges(localPath).length;
   if (changedFiles === 0) {
     return {
       committed: false,

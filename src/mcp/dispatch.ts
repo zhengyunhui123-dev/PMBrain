@@ -194,6 +194,25 @@ export function validateParams(op: Operation, params: Record<string, unknown>): 
 }
 
 /**
+ * Apply PMBrain's MCP-only defaults before an Operation handler runs.
+ *
+ * The shared `query` Operation intentionally keeps its historical default
+ * (`expand=true`) for direct/CLI callers. Remote MCP callers start with the
+ * cheaper direct query instead; the Agent can explicitly retry with
+ * `expand=true` when the wording is ambiguous or the first retrieval is weak.
+ */
+export function applyMcpQueryDefaults(
+  name: string,
+  params: Record<string, unknown>,
+  remote: boolean,
+): Record<string, unknown> {
+  if (remote && name === 'query' && params.expand === undefined) {
+    return { ...params, expand: false };
+  }
+  return params;
+}
+
+/**
  * U+FFFD is emitted when a client decodes bytes with the wrong charset before
  * serializing the MCP JSON request. Once it reaches the server the original
  * Chinese text is unrecoverable, so fail explicitly instead of running a
@@ -270,7 +289,8 @@ export async function dispatchToolCall(
     };
   }
 
-  const safeParams = params || {};
+  const submittedParams = params || {};
+  const safeParams = applyMcpQueryDefaults(name, submittedParams, opts.remote !== false);
   if (opts.remote !== false) {
     const invalidEncodingPath = findUnicodeReplacementPath(safeParams);
     if (invalidEncodingPath) {
