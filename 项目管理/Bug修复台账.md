@@ -1,5 +1,14 @@
 # Bug 修复台账
 
+## 2026-08-11 修复 Provider-aware Embedding 合并后的 CI 契约漂移
+
+- 时间：2026-08-11
+- 版本号：PMBrain 1.2.32；PMBrain Desktop 1.1.18
+- 标题：同步向量执行 Profile 测试、隔离门禁与桌面发布说明
+- 描述：Provider-aware embedding 已替代旧 `runSlidingPool`，但结构测试仍固定旧实现；Profile 测试直接修改环境变量触发隔离门禁，stale 测试未传模型导致无法解析执行 Profile，桌面 1.1.18 发布说明也未同步。
+- 是否完成：是
+- 最终结果：测试改为验证统一 Provider Profile Pool，环境变量通过 `withEnv` 自动恢复，stale 测试显式声明模型，桌面发布说明补齐 1.1.18。未修改 embedding 生产执行逻辑、数据库 Schema、用户知识数据、Wiki、原始资料或已有向量。
+
 ## 2026-08-11 修复数据源无可提交内容仍可点击
 
 - 时间：2026-08-11
