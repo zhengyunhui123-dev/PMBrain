@@ -109,16 +109,19 @@ export async function recordCompleted(
     // Sorted serialization keeps diff-based debug output stable and tests
     // deterministic across insertion order shuffles.
     const sorted = [...keys].sort();
+    // postgres.js accepts native arrays for jsonb parameters, while PGLite
+    // expects serialized JSON text. Keep this adapter detail at the shared
+    // engine boundary so both databases persist the same JSON array value.
+    const completedKeysParam = engine.kind === 'postgres'
+      ? sorted
+      : JSON.stringify(sorted);
     await engine.executeRaw(
       `INSERT INTO op_checkpoints (op, fingerprint, completed_keys, updated_at)
        VALUES ($1, $2, $3::jsonb, now())
        ON CONFLICT (op, fingerprint) DO UPDATE
          SET completed_keys = EXCLUDED.completed_keys,
              updated_at     = now()`,
-      // Pass the array as a native parameter. postgres.js serializes a
-      // pre-stringified JSON value as a JSON string scalar, which violates
-      // the completed_keys array CHECK and silently loses resume progress.
-      [key.op, key.fingerprint, sorted],
+      [key.op, key.fingerprint, completedKeysParam],
     );
   } catch (e) {
     console.error(`[op-checkpoint] write failed (${key.op}, ${key.fingerprint}):`, (e as Error).message);
