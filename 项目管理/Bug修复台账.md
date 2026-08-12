@@ -1,5 +1,23 @@
 # Bug 修复台账
 
+## 2026-08-13 完善知识标题与别名的确定性提及关系
+
+- 时间：2026-08-13
+- 版本号：PMBrain 1.2.40；PMBrain Desktop 1.1.19
+- 标题：快速维护补全标题、知识点前缀与别名关系并安全处理歧义
+- 描述：历史 by-mention 只把 person、company、organization、entity 类型的完整标题作为候选，导入后常见的 `知识点-OpenAI`、concept 页面和显式 aliases 无法由正文中的 `OpenAI` 命中；旧断点指纹也只包含首词桶，别名变化可能不会触发重扫，已有 Markdown 关系与推断关系还会重复显示。
+- 是否完成：是
+- 最终结果：候选范围增加 concept，以及带知识点前缀或显式 aliases 的导入 note；匹配优先当前 Source，只允许 default 作为共享后备，同一 Source 同名时停止自动猜测并报告歧义。词表完整内容和规则版本进入断点指纹，快速维护一次扫描完当前 Source；显式 Markdown/frontmatter/manual 关系优先，推断扫描会移除重复、过期或歧义化的 mentions 关系，不触碰 typed NER。PGLite 93 项定向回归和独立 PostgreSQL 3 项对等测试通过；真实用户库未执行批量回填，未修改 Markdown、Wiki、原始资料、知识正文、向量或数据库 Schema，未运行 `bun run build:win`。
+
+## 2026-08-12 修复快速维护关系补全断点并改为一次完成
+
+- 时间：2026-08-12
+- 版本号：PMBrain 1.2.39；PMBrain Desktop 1.1.19
+- 标题：快速维护一次补全当前 Source 的确定性关系并正确保存 PostgreSQL 检查点
+- 描述：快速维护的 Markdown 历史补全原先固定每次最多处理 250 页，确定性提及关系另有 20 秒历史扫描预算；同时 PostgreSQL 参数序列化把 `completed_keys` 数组写成 JSON 字符串，触发数组约束后检查点未保存，导致后续运行重复扫描同一批页面。
+- 是否完成：是
+- 最终结果：快速维护默认取消 Markdown 250 页上限和 by-mention 20 秒截止时间，一次处理完所选 Source 当前全部待补确定性关系；高级调用仍可显式传入上限。检查点改为传递原生数组，PGLite 42 项相关回归和独立临时 PostgreSQL 2 项对等回归通过。经用户授权，真实 PostgreSQL 仅对 `duwu/wiki/重庆保供项目/项目-重庆保供项目` 回填 20 条 Markdown 出链，核对为 20 个唯一同 Source 目标，加上既有 5 条入链后图谱共 25 条关系；检查点为有效 JSON 数组并包含目标页。未修改 Markdown、Wiki、原始资料、知识正文、向量或数据库 Schema，未执行整个 Source 的历史回填，未运行 `bun run build:win`。
+
 ## 2026-08-12 修复普通 Markdown 链接未形成 Source 内知识关系
 
 - 时间：2026-08-12

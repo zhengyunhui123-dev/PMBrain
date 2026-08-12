@@ -80,4 +80,23 @@ describe('Quick Maintenance historical Markdown catch-up', () => {
     expect(preview.linksCreated).toBe(0);
     expect((await engine.executeRaw<{ count: number }>('SELECT COUNT(*)::int AS count FROM links'))[0]?.count).toBe(1);
   });
+
+  test('default catch-up drains the complete historical Markdown backlog in one run', async () => {
+    const bulkRepo = mkdtempSync(join(tmpdir(), 'pmbrain-markdown-catchup-all-'));
+    try {
+      for (let index = 0; index < 260; index++) {
+        writeFileSync(join(bulkRepo, `history-${String(index).padStart(3, '0')}.md`), `# History ${index}\n`);
+      }
+
+      const result = await runHistoricalMarkdownCatchUp(engine, {
+        brainDir: bulkRepo,
+        sourceId: 'bulk-history',
+      });
+
+      expect(result.historicalPages).toBe(260);
+      expect(result.historicalRemaining).toBe(0);
+    } finally {
+      rmSync(bulkRepo, { recursive: true, force: true });
+    }
+  });
 });

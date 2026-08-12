@@ -32,6 +32,7 @@ import { describe, test, expect, beforeAll, afterAll, beforeEach } from 'bun:tes
 import { PGLiteEngine } from '../src/core/pglite-engine.ts';
 import {
   buildGazetteer,
+  countAmbiguousGazetteerEntries,
   findMentionedEntities,
   LINKABLE_ENTITY_TYPES,
   type Gazetteer,
@@ -408,6 +409,75 @@ describe('buildGazetteer — engine integration', () => {
   test('LINKABLE_ENTITY_TYPES exposes the hardcoded contract', () => {
     // Regression: if anyone changes the hardcoded type list, this test
     // forces a deliberate change (and a corresponding test update).
-    expect(LINKABLE_ENTITY_TYPES).toEqual(['person', 'company', 'organization', 'entity']);
+    expect(LINKABLE_ENTITY_TYPES).toEqual(['person', 'company', 'organization', 'entity', 'concept']);
+  });
+
+  test('concept titles, explicit aliases, and safe knowledge-point prefixes enter the gazetteer', async () => {
+    await engine.putPage('concepts/openai', {
+      type: 'concept', title: '知识点-OpenAI', compiled_truth: 'b', timeline: '',
+      frontmatter: { aliases: ['Open AI'] },
+    });
+    const g = await buildGazetteer(engine);
+    expect(g.get('openai')?.[0]).toMatchObject({ slug: 'concepts/openai', name: 'OpenAI' });
+    expect(g.get('open')?.[0]).toMatchObject({ slug: 'concepts/openai', name: 'open ai' });
+  });
+
+  test('an imported note with a knowledge-point prefix is linkable without making every note a target', async () => {
+    await engine.putPage('notes/openai', {
+      type: 'note', title: '知识点-OpenAI', compiled_truth: 'b', timeline: '', frontmatter: {},
+    });
+    await engine.putPage('notes/random', {
+      type: 'note', title: 'OpenAI', compiled_truth: 'b', timeline: '', frontmatter: {},
+    });
+    const g = await buildGazetteer(engine);
+    expect(g.get('openai')).toHaveLength(1);
+    expect(g.get('openai')?.[0]).toMatchObject({ slug: 'notes/openai', name: 'OpenAI' });
+  });
+
+  test('same-Source alias collisions fail closed while another Source remains isolated', async () => {
+    await engine.executeRaw(
+      `INSERT INTO sources (id, name, config) VALUES ('team-a', 'Team A', '{}'), ('team-b', 'Team B', '{}')
+       ON CONFLICT (id) DO NOTHING`,
+    );
+    for (const [sourceId, slug] of [
+      ['team-a', 'concepts/openai-a'],
+      ['team-a', 'concepts/openai-b'],
+      ['team-b', 'concepts/openai'],
+    ] as const) {
+      await engine.putPage(slug, {
+        type: 'concept', title: 'OpenAI', compiled_truth: 'b', timeline: '', frontmatter: {},
+      }, { sourceId });
+    }
+    const g = await buildGazetteer(engine);
+    expect(countAmbiguousGazetteerEntries(g)).toBe(1);
+    expect(findMentionedEntities('OpenAI released a model.', g, {
+      fromSlug: 'notes/a', fromSourceId: 'team-a',
+    })).toEqual([]);
+    expect(findMentionedEntities('OpenAI released a model.', g, {
+      fromSlug: 'notes/b', fromSourceId: 'team-b',
+    }).map(item => item.slug)).toEqual(['concepts/openai']);
+  });
+
+  test('default is the only shared fallback and a local page wins over it', async () => {
+    await engine.executeRaw(
+      `INSERT INTO sources (id, name, config) VALUES ('team-a', 'Team A', '{}'), ('team-b', 'Team B', '{}')
+       ON CONFLICT (id) DO NOTHING`,
+    );
+    await engine.putPage('concepts/openai', {
+      type: 'concept', title: 'OpenAI', compiled_truth: 'b', timeline: '', frontmatter: {},
+    });
+    await engine.putPage('concepts/openai-local', {
+      type: 'concept', title: 'OpenAI', compiled_truth: 'b', timeline: '', frontmatter: {},
+    }, { sourceId: 'team-a' });
+    await engine.putPage('concepts/openai-other', {
+      type: 'concept', title: 'OpenAI', compiled_truth: 'b', timeline: '', frontmatter: {},
+    }, { sourceId: 'team-b' });
+    const g = await buildGazetteer(engine);
+    expect(findMentionedEntities('OpenAI released a model.', g, {
+      fromSlug: 'notes/a', fromSourceId: 'team-a',
+    })[0]).toMatchObject({ slug: 'concepts/openai-local', source_id: 'team-a' });
+    expect(findMentionedEntities('OpenAI released a model.', g, {
+      fromSlug: 'notes/c', fromSourceId: 'team-c',
+    })[0]).toMatchObject({ slug: 'concepts/openai', source_id: 'default' });
   });
 });

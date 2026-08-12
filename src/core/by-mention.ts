@@ -7,7 +7,7 @@
  *
  * `findMentionedEntities` is a pure function that scans body text against
  * the gazetteer, applies the maximal-munch matcher (longest gazetteer
- * entry wins at each offset), self-link guard, cross-source guard, and
+ * entry wins at each offset), self-link guard, Source-local/default fallback,
  * per-page first-mention-only cap (1 link per (source_slug, target_slug)).
  *
  * Design decisions locked in /plan-eng-review for v0.42.0.0:
@@ -28,9 +28,13 @@
 
 import type { BrainEngine } from './engine.ts';
 import { stripCodeBlocks } from './link-extraction.ts';
+import { normalizeAliasList } from './search/alias-normalize.ts';
 
 /** D2: hardcoded entity types for v1. Pack-aware extension is TODO-1. */
-export const LINKABLE_ENTITY_TYPES = ['person', 'company', 'organization', 'entity'] as const;
+export const LINKABLE_ENTITY_TYPES = ['person', 'company', 'organization', 'entity', 'concept'] as const;
+
+/** Prefixes used by imported/organized knowledge-point titles. */
+const DERIVED_ALIAS_PREFIX_RE = /^(?:知识点|概念)\s*[-—–:：]\s*/iu;
 
 /**
  * Minimum title length for gazetteer inclusion. Filters out 2-3 char names
@@ -61,8 +65,21 @@ export interface GazetteerEntry {
   source_id: string;
   /** Original title (preserved for the mention payload). */
   title: string;
+  /** Surface form that matched (title, explicit alias, or safe derived alias). */
+  name?: string;
   /** Lowercase title tokens in order. Length 1 = single-word entity. */
   tokens: string[];
+  /** Collision sentinel: this surface form has multiple owners in one Source. */
+  ambiguous?: boolean;
+}
+
+/** Number of Source-local surface forms that auto-linking must skip. */
+export function countAmbiguousGazetteerEntries(gazetteer: Gazetteer): number {
+  let count = 0;
+  for (const bucket of gazetteer.values()) {
+    count += bucket.filter(entry => entry.ambiguous).length;
+  }
+  return count;
 }
 
 /**
@@ -161,12 +178,16 @@ export async function buildGazetteer(
   engine: BrainEngine,
   opts: BuildGazetteerOpts = {},
 ): Promise<Gazetteer> {
-  const typeList = LINKABLE_ENTITY_TYPES.map(t => `'${t}'`).join(', ');
-  const rows = await engine.executeRaw<{ slug: string; source_id: string | null; title: string | null }>(
-    `SELECT slug, source_id, title
+  const rows = await engine.executeRaw<{
+    slug: string;
+    source_id: string | null;
+    type: string;
+    title: string | null;
+    frontmatter: Record<string, unknown> | null;
+  }>(
+    `SELECT slug, source_id, type, title, frontmatter
      FROM pages
-     WHERE type IN (${typeList})
-       AND deleted_at IS NULL`,
+     WHERE deleted_at IS NULL`,
     [],
   );
 
@@ -178,25 +199,71 @@ export async function buildGazetteer(
   }
   const ignoreSet = new Set<string>([...DEFAULT_IGNORE_LIST, ...(opts.extraIgnore ?? [])]);
 
-  const gazetteer: Gazetteer = new Map();
+  const candidates: GazetteerEntry[] = [];
   for (const row of rows) {
     if (!row.title) continue;
-    const cjkCount = cjkCharCount(row.title);
-    if (cjkCount === 0 && row.title.length < MIN_NAME_LENGTH) continue;
-    if (cjkCount > 0 && cjkCount < MIN_CJK_NAME_LENGTH) continue;
-    if (ignoreSet.has(row.title) && !existingTitles.has(row.title)) continue;
+    const derived = row.title.replace(DERIVED_ALIAS_PREFIX_RE, '').trim();
+    const aliases = normalizeAliasList(row.frontmatter?.aliases);
+    const typedEntity = (LINKABLE_ENTITY_TYPES as readonly string[]).includes(row.type);
+    // Imported knowledge points are often stored as `note`. A recognized
+    // knowledge-point prefix or an explicit aliases field is an intentional
+    // opt-in; arbitrary note titles never become auto-link targets.
+    if (!typedEntity && derived === row.title && aliases.length === 0) continue;
+    const names = new Set<string>([row.title]);
+    if (derived !== row.title && derived) names.add(derived);
+    if (typedEntity || derived !== row.title) {
+      for (const alias of aliases) names.add(alias);
+    } else {
+      // An aliases field on an ordinary note exposes only the deliberate
+      // aliases, not the whole note title, as mention targets.
+      names.clear();
+      for (const alias of aliases) names.add(alias);
+    }
+    const seenTokenKeys = new Set<string>();
 
-    const tokens = tokenizeTitle(row.title);
-    if (tokens.length === 0) continue;
-    if (tokens[0]!.length < MIN_NAME_LENGTH && tokens.length === 1) continue;
+    for (const name of names) {
+      const cjkCount = cjkCharCount(name);
+      if (cjkCount === 0 && name.length < MIN_NAME_LENGTH) continue;
+      if (cjkCount > 0 && cjkCount < MIN_CJK_NAME_LENGTH) continue;
+      if (ignoreSet.has(name) && !existingTitles.has(name) && name === row.title) continue;
 
-    const entry: GazetteerEntry = {
-      slug: row.slug,
-      source_id: row.source_id ?? 'default',
-      title: row.title,
-      tokens,
-    };
-    const key = tokens[0]!;
+      const tokens = tokenizeTitle(name);
+      if (tokens.length === 0) continue;
+      if (tokens[0]!.length < MIN_NAME_LENGTH && tokens.length === 1) continue;
+      const tokenKey = tokens.join('\u0000');
+      if (seenTokenKeys.has(tokenKey)) continue;
+      seenTokenKeys.add(tokenKey);
+      candidates.push({
+        slug: row.slug,
+        source_id: row.source_id ?? 'default',
+        title: row.title,
+        name,
+        tokens,
+      });
+    }
+  }
+
+  // Ambiguous surface forms fail closed within a Source. A same-named page in
+  // another Source remains valid because matching is Source-local.
+  const owners = new Map<string, Set<string>>();
+  for (const entry of candidates) {
+    const key = `${entry.source_id}\u0000${entry.tokens.join('\u0000')}`;
+    const slugs = owners.get(key) ?? new Set<string>();
+    slugs.add(entry.slug);
+    owners.set(key, slugs);
+  }
+
+  const gazetteer: Gazetteer = new Map();
+  const ambiguitySentinels = new Set<string>();
+  for (const candidate of candidates) {
+    let entry = candidate;
+    const ownerKey = `${entry.source_id}\u0000${entry.tokens.join('\u0000')}`;
+    if ((owners.get(ownerKey)?.size ?? 0) !== 1) {
+      if (ambiguitySentinels.has(ownerKey)) continue;
+      ambiguitySentinels.add(ownerKey);
+      entry = { ...entry, slug: '', ambiguous: true };
+    }
+    const key = entry.tokens[0]!;
     const bucket = gazetteer.get(key);
     if (bucket) bucket.push(entry);
     else gazetteer.set(key, [entry]);
@@ -224,9 +291,8 @@ export async function buildGazetteer(
  *
  * Guards (deterministic):
  *  - D13 self-link: skip when `fromSlug === entry.slug`.
- *  - Cross-source: skip when `fromSourceId !== entry.source_id` (mention
- *    in source A of an entity in source B is suppressed; design doc
- *    treats this as deliberate isolation in v1, can relax in a follow-up).
+ *  - Source resolution: prefer entries in the page's own Source. When no
+ *    local surface form matches, `default` is the only shared fallback.
  *  - First-mention-only cap: dedup by `entry.slug` (one link per
  *    target page regardless of how many body mentions there are).
  *
@@ -260,26 +326,33 @@ export function findMentionedEntities(
     // entry whose subsequent tokens all match the body sequence.
     let matched: GazetteerEntry | null = null;
     let matchedTokens = 0;
-    for (const entry of bucket) {
-      if (entry.tokens.length === 1) {
-        matched = entry;
-        matchedTokens = 1;
-        break;
-      }
-      // Multi-word: validate subsequent tokens.
-      if (i + entry.tokens.length > tokens.length) continue;
-      let allMatch = true;
-      for (let k = 1; k < entry.tokens.length; k++) {
-        if (tokens[i + k]!.text !== entry.tokens[k]) {
-          allMatch = false;
+    const scopes = opts.fromSourceId === 'default'
+      ? [['default']]
+      : [[opts.fromSourceId], ['default']];
+    for (const scope of scopes) {
+      for (const entry of bucket) {
+        if (!scope.includes(entry.source_id)) continue;
+        if (entry.tokens.length === 1) {
+          matched = entry;
+          matchedTokens = 1;
+          break;
+        }
+        // Multi-word: validate subsequent tokens.
+        if (i + entry.tokens.length > tokens.length) continue;
+        let allMatch = true;
+        for (let k = 1; k < entry.tokens.length; k++) {
+          if (tokens[i + k]!.text !== entry.tokens[k]) {
+            allMatch = false;
+            break;
+          }
+        }
+        if (allMatch) {
+          matched = entry;
+          matchedTokens = entry.tokens.length;
           break;
         }
       }
-      if (allMatch) {
-        matched = entry;
-        matchedTokens = entry.tokens.length;
-        break;
-      }
+      if (matched) break;
     }
 
     if (!matched) {
@@ -287,12 +360,15 @@ export function findMentionedEntities(
       continue;
     }
 
-    // Guards.
-    if (matched.slug === opts.fromSlug) {
+    // A Source-local collision blocks the shared-default fallback. Auto-link
+    // must not guess which same-named page the author intended.
+    if (matched.ambiguous) {
       i += matchedTokens;
       continue;
     }
-    if (matched.source_id !== opts.fromSourceId) {
+
+    // Guards.
+    if (matched.slug === opts.fromSlug) {
       i += matchedTokens;
       continue;
     }
@@ -304,7 +380,7 @@ export function findMentionedEntities(
     out.push({
       slug: matched.slug,
       source_id: matched.source_id,
-      name: matched.title,
+      name: matched.name ?? matched.title,
       offset: head.offset,
     });
     seenSlugs.add(matched.slug);

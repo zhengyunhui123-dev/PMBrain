@@ -8,7 +8,7 @@ import { runDream } from '../../src/commands/dream.ts';
 import { hasDatabase, setupDB, teardownDB } from './helpers.ts';
 import { withEnv } from '../helpers/with-env.ts';
 import type { PostgresEngine } from '../../src/core/postgres-engine.ts';
-import { runHistoricalMarkdownCatchUp } from '../../src/commands/extract.ts';
+import { runByMentionCore, runHistoricalMarkdownCatchUp } from '../../src/commands/extract.ts';
 
 const skip = !hasDatabase();
 const describeIfDB = skip ? describe.skip : describe;
@@ -20,6 +20,12 @@ beforeAll(async () => {
   if (skip) return;
   testHome = mkdtempSync(join(tmpdir(), 'pmbrain-quick-pg-'));
   engine = (await setupDB()) as PostgresEngine;
+  await engine.executeRaw(
+    `DELETE FROM op_checkpoints WHERE op IN ('extract-by-mention', 'extract-markdown-catchup')`,
+  );
+  await engine.executeRaw(
+    `DELETE FROM sources WHERE id IN ('moved-source', 'mention-source', 'duwu-catchup')`,
+  );
 });
 
 afterAll(async () => {
@@ -33,7 +39,8 @@ describeIfDB('Postgres Quick Maintenance — stale Source local_path', () => {
     const missingPath = join(testHome, 'moved-away-source');
     await engine.executeRaw(
       `INSERT INTO sources (id, name, local_path, config, created_at)
-       VALUES ('moved-source', 'Moved Source', $1, '{}'::jsonb, NOW())`,
+       VALUES ('moved-source', 'Moved Source', $1, '{}'::jsonb, NOW())
+       ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, local_path = EXCLUDED.local_path, config = EXCLUDED.config`,
       [missingPath],
     );
     await engine.executeRaw(
@@ -70,6 +77,58 @@ describeIfDB('Postgres Quick Maintenance — stale Source local_path', () => {
   }, 120_000);
 });
 
+describeIfDB('Postgres Quick Maintenance - mention relation parity', () => {
+  test('recognizes concept aliases, preserves explicit links, and removes an inferred link after ambiguity appears', async () => {
+    await engine.executeRaw(
+      `INSERT INTO sources (id, name, config, created_at)
+       VALUES ('mention-source', 'mention-source', '{}'::jsonb, NOW())
+       ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, config = EXCLUDED.config`,
+    );
+    await engine.putPage('concepts/openai', {
+      type: 'note', title: '知识点-OpenAI', compiled_truth: 'OpenAI knowledge point.', timeline: '',
+      frontmatter: { aliases: ['Open AI'] },
+    }, { sourceId: 'mention-source' });
+    await engine.putPage('notes/inferred', {
+      type: 'note', title: 'Inferred', compiled_truth: 'OpenAI released a model.', timeline: '', frontmatter: {},
+    }, { sourceId: 'mention-source' });
+    await engine.putPage('notes/explicit', {
+      type: 'note', title: 'Explicit', compiled_truth: 'OpenAI released a model.', timeline: '', frontmatter: {},
+    }, { sourceId: 'mention-source' });
+    await engine.addLink(
+      'notes/explicit', 'concepts/openai', 'explicit Markdown relation', 'related_to', 'markdown',
+      undefined, undefined, { fromSourceId: 'mention-source', toSourceId: 'mention-source' },
+    );
+
+    const first = await runByMentionCore(engine, { sourceIdFilter: 'mention-source', quiet: true });
+    expect(first.created).toBe(1);
+    expect(first.removed).toBe(0);
+    expect(first.ambiguousNames).toBe(0);
+    const firstRows = await engine.executeRaw<{ slug: string; link_source: string }>(
+      `SELECT f.slug, l.link_source FROM links l
+       JOIN pages f ON f.id = l.from_page_id
+       WHERE f.source_id = 'mention-source' ORDER BY f.slug, l.link_source`,
+    );
+    expect(firstRows).toEqual([
+      { slug: 'notes/explicit', link_source: 'markdown' },
+      { slug: 'notes/inferred', link_source: 'mentions' },
+    ]);
+
+    await engine.putPage('concepts/openai-duplicate', {
+      type: 'concept', title: 'OpenAI', compiled_truth: 'Duplicate name.', timeline: '', frontmatter: {},
+    }, { sourceId: 'mention-source' });
+    const second = await runByMentionCore(engine, { sourceIdFilter: 'mention-source', quiet: true });
+    expect(second.created).toBe(0);
+    expect(second.removed).toBe(1);
+    expect(second.ambiguousNames).toBeGreaterThanOrEqual(1);
+    const finalRows = await engine.executeRaw<{ slug: string; link_source: string }>(
+      `SELECT f.slug, l.link_source FROM links l
+       JOIN pages f ON f.id = l.from_page_id
+       WHERE f.source_id = 'mention-source' ORDER BY f.slug, l.link_source`,
+    );
+    expect(finalRows).toEqual([{ slug: 'notes/explicit', link_source: 'markdown' }]);
+  }, 120_000);
+});
+
 describeIfDB('Postgres Quick Maintenance — historical Markdown catch-up', () => {
   test('writes exact relative links only inside the selected Source and is idempotent', async () => {
     const repo = join(testHome, 'markdown-catchup-source');
@@ -84,7 +143,8 @@ describeIfDB('Postgres Quick Maintenance — historical Markdown catch-up', () =
 
     await engine.executeRaw(
       `INSERT INTO sources (id, name, local_path, config, created_at)
-       VALUES ('duwu-catchup', 'duwu-catchup', $1, '{}'::jsonb, NOW())`,
+       VALUES ('duwu-catchup', 'duwu-catchup', $1, '{}'::jsonb, NOW())
+       ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, local_path = EXCLUDED.local_path, config = EXCLUDED.config`,
       [repo],
     );
     await engine.executeRaw(
@@ -108,6 +168,15 @@ describeIfDB('Postgres Quick Maintenance — historical Markdown catch-up', () =
     });
     expect(first.linksCreated).toBe(1);
     expect(second.linksCreated).toBe(0);
+    expect(second.historicalPages).toBe(0);
+
+    const checkpoints = await engine.executeRaw<{ completed_kind: string; completed_count: number }>(
+      `SELECT jsonb_typeof(completed_keys) AS completed_kind,
+              jsonb_array_length(completed_keys)::int AS completed_count
+         FROM op_checkpoints
+        WHERE op = 'extract-markdown-catchup'`,
+    );
+    expect(checkpoints).toEqual([{ completed_kind: 'array', completed_count: 2 }]);
 
     const rows = await engine.executeRaw<{ from_source: string; to_source: string }>(
       `SELECT f.source_id AS from_source, t.source_id AS to_source

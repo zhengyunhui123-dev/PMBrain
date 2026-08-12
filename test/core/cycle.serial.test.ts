@@ -118,7 +118,7 @@ mock.module('../../src/commands/orphans.ts', () => ({
 }));
 
 // Import after mocks.
-const { runCycle, ALL_PHASES } = await import('../../src/core/cycle.ts');
+const { runCycle, ALL_PHASES, resolveIncrementalExtractSlugs } = await import('../../src/core/cycle.ts');
 const { PGLiteEngine } = await import('../../src/core/pglite-engine.ts');
 
 // Shared PGLite engine per describe block. Each block does its own
@@ -471,6 +471,14 @@ describe('runCycle — incremental extract slug propagation (#417)', () => {
     expect(syncCalls.length).toBe(0);
     expect(extractCalls.length).toBe(1);
     expect(extractCalls[0].slugs).toBeUndefined();
+  });
+
+  test('same-cycle synthesis slugs join sync slugs for extract without duplicates', () => {
+    expect(resolveIncrementalExtractSlugs(['sync-a', 'shared'], ['dream-a', 'shared']))
+      .toEqual(['sync-a', 'shared', 'dream-a']);
+    expect(resolveIncrementalExtractSlugs(undefined, ['dream-only']))
+      .toEqual(['dream-only']);
+    expect(resolveIncrementalExtractSlugs(undefined, undefined)).toBeUndefined();
   });
 });
 

@@ -331,3 +331,67 @@ export async function getAdminKnowledgeGraphGlobal(
     edge_limit: ADMIN_KNOWLEDGE_GRAPH_GLOBAL_EDGE_LIMIT,
   };
 }
+
+/**
+ * Lightweight orphan audit view: pages with no valid incoming or outgoing
+ * relation to another non-deleted page. Kept separate from the global graph
+ * so the normal star map does not pay for an anti-join unless requested.
+ */
+export async function getAdminKnowledgeGraphIsolated(
+  engine: BrainEngine,
+  query: { sourceId?: string },
+): Promise<KnowledgeGraphGlobalResponse> {
+  const sourceId = query.sourceId?.trim() && query.sourceId !== 'all' ? query.sourceId.trim() : null;
+  const rows = await engine.executeRaw<NodeRow>(
+    `SELECT p.id::int AS id,
+            p.slug,
+            COALESCE(NULLIF(p.title, ''), p.slug) AS title,
+            p.source_id,
+            s.name AS source_name,
+            p.type,
+            '' AS preview,
+            p.updated_at::text AS updated_at,
+            0::int AS outgoing_count,
+            0::int AS incoming_count,
+            0::int AS relation_count
+       FROM pages p
+       JOIN sources s ON s.id = p.source_id
+      WHERE p.deleted_at IS NULL
+        AND ($1::text IS NULL OR p.source_id = $1)
+        AND NOT EXISTS (
+          SELECT 1
+            FROM links l
+            JOIN pages source ON source.id = l.from_page_id AND source.deleted_at IS NULL
+            JOIN pages target ON target.id = l.to_page_id AND target.deleted_at IS NULL
+           WHERE l.from_page_id = p.id OR l.to_page_id = p.id
+        )
+      ORDER BY p.updated_at DESC, p.id
+      LIMIT $2`,
+    [sourceId, ADMIN_KNOWLEDGE_GRAPH_GLOBAL_NODE_LIMIT + 1],
+  );
+  const nodes = rows.slice(0, ADMIN_KNOWLEDGE_GRAPH_GLOBAL_NODE_LIMIT).map(node => ({ ...node, tags: [] }));
+  const countRows = await engine.executeRaw<{ total_nodes: number }>(
+    `SELECT COUNT(*)::int AS total_nodes
+       FROM pages p
+      WHERE p.deleted_at IS NULL
+        AND ($1::text IS NULL OR p.source_id = $1)
+        AND NOT EXISTS (
+          SELECT 1
+            FROM links l
+            JOIN pages source ON source.id = l.from_page_id AND source.deleted_at IS NULL
+            JOIN pages target ON target.id = l.to_page_id AND target.deleted_at IS NULL
+           WHERE l.from_page_id = p.id OR l.to_page_id = p.id
+        )`,
+    [sourceId],
+  );
+  const totalNodes = countRows[0]?.total_nodes ?? nodes.length;
+  return {
+    nodes,
+    edges: [],
+    total_nodes: totalNodes,
+    total_edges: 0,
+    truncated: rows.length > ADMIN_KNOWLEDGE_GRAPH_GLOBAL_NODE_LIMIT,
+    node_limit: ADMIN_KNOWLEDGE_GRAPH_GLOBAL_NODE_LIMIT,
+    edge_limit: ADMIN_KNOWLEDGE_GRAPH_GLOBAL_EDGE_LIMIT,
+  };
+}

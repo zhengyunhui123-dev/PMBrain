@@ -5939,7 +5939,7 @@ html[data-theme="dark"] .knowledge-graph-toolbar select option {
 }
 .graph-view-switch {
   display: inline-grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(3, 1fr);
   height: 38px;
   padding: 3px;
   border: 1px solid var(--border);
@@ -5959,6 +5959,7 @@ html[data-theme="dark"] .knowledge-graph-toolbar select option {
 .graph-view-switch button:hover { color: var(--text-primary); }
 .graph-view-switch button.active { color: #655bc2; background: rgba(117, 104, 218, .12); }
 html[data-theme="dark"] .graph-view-switch button.active { color: #c3bdfc; background: rgba(159, 149, 248, .15); }
+.knowledge-graph-toolbar > label.is-disabled { opacity: .52; }
 .graph-reset-button,
 .graph-direction-toggle,
 .graph-fullscreen-button {

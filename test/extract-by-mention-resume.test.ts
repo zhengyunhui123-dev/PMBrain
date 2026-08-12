@@ -82,11 +82,15 @@ async function runByMention(args: string[]): Promise<void> {
 
 /** Compute the canonical gazetteer hash the way the production code does. */
 async function expectedGazetteerHash(): Promise<string> {
-  // The gazetteer is built from entity pages by buildGazetteer; for tests
-  // we just build it the same way the prod code does and hash sorted keys.
   const { buildGazetteer } = await import('../src/core/by-mention.ts');
   const gz = await buildGazetteer(engine);
-  return createHash('sha256').update([...gz.keys()].sort().join('|')).digest('hex').slice(0, 8);
+  return createHash('sha256').update(
+    [...gz.values()]
+      .flat()
+      .map(entry => [entry.source_id, entry.slug, entry.tokens.join('\u0000'), entry.ambiguous ? 'ambiguous' : 'resolved'].join('\u0001'))
+      .sort()
+      .join('\n'),
+  ).digest('hex').slice(0, 8);
 }
 
 describe('by-mention checkpoint/resume (T5)', () => {
@@ -96,7 +100,7 @@ describe('by-mention checkpoint/resume (T5)', () => {
     await runByMention([]);
 
     const gh = await expectedGazetteerHash();
-    const fp = mentionsFingerprint({ source: undefined, type: undefined, since: undefined, gazetteerHash: gh });
+    const fp = mentionsFingerprint({ source: undefined, type: undefined, since: undefined, gazetteerHash: gh, rulesVersion: 2 });
     const rows = await loadOpCheckpoint(engine, { op: 'extract-by-mention', fingerprint: fp });
     expect(rows.length).toBe(0); // cleared on clean exit
   });
@@ -119,7 +123,7 @@ describe('by-mention checkpoint/resume (T5)', () => {
 
     // Seed a checkpoint that marks `writing/already-scanned` as completed.
     const gh = await expectedGazetteerHash();
-    const fp = mentionsFingerprint({ source: undefined, type: undefined, since: undefined, gazetteerHash: gh });
+    const fp = mentionsFingerprint({ source: undefined, type: undefined, since: undefined, gazetteerHash: gh, rulesVersion: 2 });
     await engine.executeRaw(
       `INSERT INTO op_checkpoints (op, fingerprint, completed_keys, updated_at)
        VALUES ('extract-by-mention', $1, $2::jsonb, NOW())`,
@@ -153,16 +157,13 @@ describe('by-mention checkpoint/resume (T5)', () => {
 
     // Now add a new entity. The gazetteer hash changes → different
     // fingerprint → fresh checkpoint state (codex fix #3 regression guard).
+    const oldHash = await expectedGazetteerHash();
     await engine.putPage('people/charlie', { type: 'person', title: 'Charlie Example', compiled_truth: 'body', timeline: '', frontmatter: {} });
-
-    const oldHash = createHash('sha256').update(
-      ['acme corp', 'alice example'].sort().join('|'),
-    ).digest('hex').slice(0, 8);
     const newHash = await expectedGazetteerHash();
     expect(newHash).not.toBe(oldHash);
 
-    const oldFp = mentionsFingerprint({ source: undefined, type: undefined, since: undefined, gazetteerHash: oldHash });
-    const newFp = mentionsFingerprint({ source: undefined, type: undefined, since: undefined, gazetteerHash: newHash });
+    const oldFp = mentionsFingerprint({ source: undefined, type: undefined, since: undefined, gazetteerHash: oldHash, rulesVersion: 2 });
+    const newFp = mentionsFingerprint({ source: undefined, type: undefined, since: undefined, gazetteerHash: newHash, rulesVersion: 2 });
     expect(oldFp).not.toBe(newFp);
   });
 
@@ -175,7 +176,7 @@ describe('by-mention checkpoint/resume (T5)', () => {
     await runByMention(['--type', 'meeting']);
 
     const gh = await expectedGazetteerHash();
-    const fp = mentionsFingerprint({ source: undefined, type: 'meeting', since: undefined, gazetteerHash: gh });
+    const fp = mentionsFingerprint({ source: undefined, type: 'meeting', since: undefined, gazetteerHash: gh, rulesVersion: 2 });
     // Checkpoint should have been cleared on clean exit. But the
     // observable signal that filtered pages got checkpointed too is
     // that the run finishes cleanly without errors AND completes.

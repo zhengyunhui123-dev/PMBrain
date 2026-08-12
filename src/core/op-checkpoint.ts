@@ -115,7 +115,10 @@ export async function recordCompleted(
        ON CONFLICT (op, fingerprint) DO UPDATE
          SET completed_keys = EXCLUDED.completed_keys,
              updated_at     = now()`,
-      [key.op, key.fingerprint, JSON.stringify(sorted)],
+      // Pass the array as a native parameter. postgres.js serializes a
+      // pre-stringified JSON value as a JSON string scalar, which violates
+      // the completed_keys array CHECK and silently loses resume progress.
+      [key.op, key.fingerprint, sorted],
     );
   } catch (e) {
     console.error(`[op-checkpoint] write failed (${key.op}, ${key.fingerprint}):`, (e as Error).message);
@@ -316,6 +319,7 @@ export function mentionsFingerprint(p: {
   type?: string;
   since?: string;
   gazetteerHash: string;
+  rulesVersion?: number;
 }): string {
   return fingerprint({
     mode: 'by_mention',
@@ -323,6 +327,7 @@ export function mentionsFingerprint(p: {
     type: p.type ?? null,
     since: p.since ?? null,
     gazetteer: p.gazetteerHash,
+    rules_version: p.rulesVersion ?? 1,
   });
 }
 

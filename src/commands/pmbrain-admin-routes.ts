@@ -56,6 +56,7 @@ import {
   getAdminBrainPageDetail,
   getAdminBrainPageChunks,
   getAdminKnowledgeGraphGlobal,
+  getAdminKnowledgeGraphIsolated,
   getAdminKnowledgeGraphMeta,
   getAdminKnowledgeGraphNeighborhood,
   getAdminDreamOverview,
@@ -583,6 +584,16 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
       }));
     } catch (e) {
       res.status(500).json({ error: e instanceof Error ? e.message : 'knowledge_graph_global_failed' });
+    }
+  });
+
+  app.get('/admin/api/knowledge-graph/isolated', requireAdmin, async (req: Request, res: Response) => {
+    try {
+      sendAdminContract(res, KnowledgeGraphGlobalResponseSchema, await getAdminKnowledgeGraphIsolated(engine, {
+        sourceId: firstQueryValue(req.query.sourceId),
+      }));
+    } catch (e) {
+      res.status(500).json({ error: e instanceof Error ? e.message : 'knowledge_graph_isolated_failed' });
     }
   });
 

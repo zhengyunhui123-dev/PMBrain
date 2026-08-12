@@ -5,6 +5,7 @@ import { PGLiteEngine } from '../src/core/pglite-engine.ts';
 import type { BrainEngine } from '../src/core/engine.ts';
 import {
   getAdminKnowledgeGraphGlobal,
+  getAdminKnowledgeGraphIsolated,
   getAdminKnowledgeGraphMeta,
   getAdminKnowledgeGraphNeighborhood,
   searchAdminKnowledgeGraphPages,
@@ -189,6 +190,32 @@ describe('Admin knowledge graph read model', () => {
     expect(scoped.total_edges).toBe(0);
     expect(scoped.nodes.map(node => node.id)).toEqual([other.id]);
   });
+
+  test('isolated view returns only pages with no valid incoming or outgoing links and respects Source', async () => {
+    const isolatedDefault = await seedPage(engine, 'isolated/default', '默认孤立页');
+    const connectedA = await seedPage(engine, 'connected/a', '关联页 A');
+    const connectedB = await seedPage(engine, 'connected/b', '关联页 B');
+    const isolatedOther = await seedPage(engine, 'isolated/other', '其他孤立页', 'project-a');
+    await engine.addLinksBatch([{
+      from_slug: connectedA.slug,
+      to_slug: connectedB.slug,
+      link_type: '关联',
+      link_source: 'manual',
+    }]);
+
+    const all = await getAdminKnowledgeGraphIsolated(engine, {});
+    expect(all.total_nodes).toBe(2);
+    expect(all.total_edges).toBe(0);
+    expect(all.edges).toEqual([]);
+    expect(all.nodes.map(node => node.id).sort((a, b) => a - b)).toEqual(
+      [isolatedDefault.id, isolatedOther.id].sort((a, b) => a - b),
+    );
+    expect(all.nodes.every(node => node.relation_count === 0 && node.preview === '' && node.tags.length === 0)).toBe(true);
+
+    const scoped = await getAdminKnowledgeGraphIsolated(engine, { sourceId: 'project-a' });
+    expect(scoped.total_nodes).toBe(1);
+    expect(scoped.nodes.map(node => node.id)).toEqual([isolatedOther.id]);
+  });
 });
 
 describe('Knowledge graph client-side bounds', () => {
@@ -258,13 +285,14 @@ describe('Knowledge graph Admin surface contract', () => {
     expect(pageSource).toContain('显示方向');
     expect(pageSource).toContain('局部图谱');
     expect(pageSource).toContain('全局图谱');
+    expect(pageSource).toContain('孤立页');
     expect(pageSource).toContain('requestFullscreen()');
     expect(pageSource).toContain('exitFullscreen()');
     expect(pageSource).toContain('onNodeHover');
     expect(pageSource).toContain('activeNeighborIds');
     expect(pageSource).toContain('globalScale >= 2.2');
     expect(pageSource).toContain('Math.log2');
-    expect(pageSource).toContain("viewMode === 'global' ? 45 : 80");
+    expect(pageSource).toContain("viewMode !== 'local' ? 45 : 80");
     expect(pageSource).toContain('pauseAnimation()');
     expect(pageSource).not.toContain('KNOWLEDGE CONSTELLATION');
     expect(pageSource).not.toContain('graph-empty-orbit');

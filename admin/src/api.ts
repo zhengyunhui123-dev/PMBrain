@@ -134,6 +134,12 @@ export const api = {
     const suffix = query.size ? `?${query.toString()}` : '';
     return apiFetch<KnowledgeGraphGlobalResponse>(`/admin/api/knowledge-graph/global${suffix}`, undefined, KnowledgeGraphGlobalResponseSchema);
   },
+  knowledgeGraphIsolated: (sourceId?: string) => {
+    const query = new URLSearchParams();
+    if (sourceId && sourceId !== 'all') query.set('sourceId', sourceId);
+    const suffix = query.size ? `?${query.toString()}` : '';
+    return apiFetch<KnowledgeGraphGlobalResponse>(`/admin/api/knowledge-graph/isolated${suffix}`, undefined, KnowledgeGraphGlobalResponseSchema);
+  },
   knowledgeGraphSearch: (queryText: string, sourceId?: string, limit = 12) => {
     const query = new URLSearchParams({ q: queryText, limit: String(limit) });
     if (sourceId && sourceId !== 'all') query.set('sourceId', sourceId);

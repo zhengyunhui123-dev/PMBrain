@@ -495,8 +495,17 @@ export interface CycleOpts {
   byMentionTimeBudgetMs?: number;
   /** Quick Maintenance: resumable historical exact Markdown-link catch-up. */
   includeHistoricalMarkdownCatchUp?: boolean;
-  /** Maximum old pages reconciled per Quick run; changed pages are always processed first. */
+  /** Optional compatibility cap; Quick leaves this unset and drains all old pages. */
   markdownCatchUpMaxHistorical?: number;
+}
+
+/** Union sync + synthesis writes without turning "no producer ran" into []. */
+export function resolveIncrementalExtractSlugs(
+  syncSlugs?: string[],
+  synthesizedSlugs?: string[],
+): string[] | undefined {
+  if (syncSlugs === undefined && synthesizedSlugs === undefined) return undefined;
+  return [...new Set([...(syncSlugs ?? []), ...(synthesizedSlugs ?? [])])];
 }
 
 // ─── Lock primitives ───────────────────────────────────────────────
@@ -1758,7 +1767,8 @@ export async function runCycle(
         } else {
           progress.start('cycle.extract');
           progressStarted = true;
-          const timed = await timePhase(() => runPhaseExtract(engine, brainDir, dryRun, syncPagesAffected, filesystemSourceId));
+          const extractSlugs = resolveIncrementalExtractSlugs(syncPagesAffected, synthesizeWrittenSlugs);
+          const timed = await timePhase(() => runPhaseExtract(engine, brainDir, dryRun, extractSlugs, filesystemSourceId));
           result = timed.result;
           result.duration_ms = timed.duration_ms;
         }
@@ -1812,16 +1822,18 @@ export async function runCycle(
               ...result.details,
               linksCreated: prevLinks + mention.created,
               mentionLinksCreated: mention.created,
+              mentionLinksRemoved: mention.removed,
               mentionPagesProcessed: mention.pages,
               mentionPriorityPagesProcessed: mention.priorityPages,
               mentionHistoricalPagesProcessed: mention.historicalPages,
               mentionHistoricalRemaining: mention.historicalRemaining,
               mentionTimeBudgetReached: mention.timeBudgetReached,
               mentionTimeBudgetMs: opts.byMentionTimeBudgetMs ?? null,
+              mentionAmbiguousNames: mention.ambiguousNames,
               by_mention: true,
             };
             result.summary =
-              `${result.summary}; by-mention +${mention.created} link(s) ` +
+              `${result.summary}; by-mention +${mention.created}/-${mention.removed} link(s) ` +
               `(${mention.pages} page(s), ${mention.historicalRemaining} historical remaining)`;
             result.duration_ms += mentionMs;
             if (result.status === 'skipped' && mention.pages > 0) {

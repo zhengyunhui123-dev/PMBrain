@@ -7,7 +7,7 @@
  * Goals:
  *   - failed sync files must not empty successful pagesAffected (sync layer)
  *   - deterministic by-mention relations for known entities
- *   - historical mention catch-up via existing op-checkpoint (time budget)
+ *   - complete deterministic relation catch-up with resumable checkpoints
  *   - no generative LLM phases
  */
 
@@ -39,11 +39,6 @@ export function resolveQuickMaintenancePhases(): CyclePhase[] {
   return ALL_PHASES.filter((p) => QUICK_PHASE_SET.has(p));
 }
 
-/** Historical by-mention wall-clock budget per Quick run (checkpoint resumes). */
-export const QUICK_BY_MENTION_TIME_BUDGET_MS = 20_000;
-
-export const QUICK_MARKDOWN_CATCH_UP_MAX_HISTORICAL = 250;
-
 export type QuickMaintenanceOpts = Omit<CycleOpts, 'phases' | 'includeByMention' | 'includeHistoricalMarkdownCatchUp' | 'forcePackPhases'>;
 
 /**
@@ -61,7 +56,9 @@ export async function runQuickMaintenance(
     phases: resolveQuickMaintenancePhases(),
     includeByMention: true,
     includeHistoricalMarkdownCatchUp: true,
-    markdownCatchUpMaxHistorical: opts.markdownCatchUpMaxHistorical ?? QUICK_MARKDOWN_CATCH_UP_MAX_HISTORICAL,
-    byMentionTimeBudgetMs: opts.byMentionTimeBudgetMs ?? QUICK_BY_MENTION_TIME_BUDGET_MS,
+    // Undefined means drain every pending deterministic relation in this
+    // Source. Explicit caps remain available to tests/advanced callers.
+    markdownCatchUpMaxHistorical: opts.markdownCatchUpMaxHistorical,
+    byMentionTimeBudgetMs: opts.byMentionTimeBudgetMs,
   });
 }

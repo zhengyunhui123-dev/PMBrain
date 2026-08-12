@@ -56,6 +56,7 @@ export function KnowledgeGraphPage() {
   const requestEpoch = useRef(0);
   const animationFrame = useRef<number | null>(null);
   const globalFitPending = useRef(false);
+  const pendingLocalStart = useRef<KnowledgeGraphNode | null>(null);
   const [viewport, setViewport] = useState({ width: 840, height: 680 });
   const [graph, setGraph] = useState<KnowledgeGraphData>(EMPTY_GRAPH);
   const [rootId, setRootId] = useState<number | null>(null);
@@ -69,7 +70,7 @@ export function KnowledgeGraphPage() {
   const [sourceFilter, setSourceFilter] = useState('all');
   const [relationFilter, setRelationFilter] = useState('all');
   const [relationTypes, setRelationTypes] = useState<string[]>([]);
-  const [viewMode, setViewMode] = useState<'local' | 'global'>('local');
+  const [viewMode, setViewMode] = useState<'local' | 'global' | 'isolated'>('local');
   const [globalTotals, setGlobalTotals] = useState<{ nodes: number; edges: number } | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [hoveredNodeId, setHoveredNodeId] = useState<number | null>(null);
@@ -210,7 +211,7 @@ export function KnowledgeGraphPage() {
       distance?: (value: number) => unknown;
       strength?: (value: number) => unknown;
     } | undefined;
-    charge?.strength?.(viewMode === 'global' ? -16 : -58);
+    charge?.strength?.(viewMode === 'local' ? -58 : -16);
     link?.distance?.(viewMode === 'global' ? 18 : 48);
     link?.strength?.(viewMode === 'global' ? .12 : .24);
   }, [graph.nodes.length, viewMode]);
@@ -227,9 +228,11 @@ export function KnowledgeGraphPage() {
     setLoadingIds(new Set());
     setRelationFilter('all');
     const metaRequest = api.knowledgeGraphMeta(sourceFilter);
-    if (viewMode === 'global') {
-      const globalRequest = api.knowledgeGraphGlobal(sourceFilter, 'all');
-      void Promise.all([metaRequest, globalRequest])
+    if (viewMode !== 'local') {
+      const graphRequest = viewMode === 'global'
+        ? api.knowledgeGraphGlobal(sourceFilter, 'all')
+        : api.knowledgeGraphIsolated(sourceFilter);
+      void Promise.all([metaRequest, graphRequest])
         .then(([meta, global]) => {
           if (!active) return;
           setRelationTypes(meta.relation_types);
@@ -237,7 +240,7 @@ export function KnowledgeGraphPage() {
           setGlobalTotals({ nodes: global.total_nodes, edges: global.total_edges });
           globalFitPending.current = true;
           if (global.truncated) {
-            setNotice(`全局图谱较大，当前展示 ${global.nodes.length} 个知识和 ${global.edges.length} 条关系。`);
+            setNotice(`${viewMode === 'isolated' ? '孤立页' : '全局图谱'}较多，当前展示 ${global.nodes.length} 个知识。`);
           }
           reheat();
         })
@@ -247,7 +250,10 @@ export function KnowledgeGraphPage() {
       void metaRequest.then(meta => {
         if (!active) return;
         setRelationTypes(meta.relation_types);
-        if (meta.seed) startFromNode(meta.seed, 'all', false);
+        const requestedNode = pendingLocalStart.current;
+        pendingLocalStart.current = null;
+        if (requestedNode) startFromNode(requestedNode, 'all', false);
+        else if (meta.seed) startFromNode(meta.seed, 'all', false);
       })
       .catch(caught => active && setError(caught instanceof Error ? caught.message : String(caught)));
     }
@@ -311,6 +317,7 @@ export function KnowledgeGraphPage() {
         .catch(caught => epoch === requestEpoch.current && setError(caught instanceof Error ? caught.message : String(caught)));
       return;
     }
+    if (viewMode === 'isolated') return;
     const center = selectedNode ?? (rootId ? nodeById.get(rootId) ?? null : null);
     if (!center) return;
     requestEpoch.current += 1;
@@ -401,8 +408,8 @@ export function KnowledgeGraphPage() {
     if (!node) return;
     setSelectedNode(node);
     setSelectedEdge(null);
-    if (!expandedIds.has(node.id) && !loadingIds.has(node.id)) void loadNeighborhood(node, false);
-  }, [expandedIds, loadNeighborhood, loadingIds, nodeById]);
+    if (viewMode === 'local' && !expandedIds.has(node.id) && !loadingIds.has(node.id)) void loadNeighborhood(node, false);
+  }, [expandedIds, loadNeighborhood, loadingIds, nodeById, viewMode]);
 
   const selectRelatedNode = (id: number) => {
     const node = nodeById.get(id);
@@ -416,7 +423,7 @@ export function KnowledgeGraphPage() {
   const selectSearchResult = (node: KnowledgeGraphNode) => {
     setSearchText(node.title);
     setSearchResults([]);
-    if (viewMode === 'global') {
+    if (viewMode !== 'local') {
       const visible = nodeById.get(node.id) as CanvasNode | undefined;
       if (visible) {
         setSelectedNode(visible);
@@ -427,6 +434,9 @@ export function KnowledgeGraphPage() {
         }
         return;
       }
+      pendingLocalStart.current = node;
+      setViewMode('local');
+      return;
     }
     startFromNode(node);
   };
@@ -470,6 +480,7 @@ export function KnowledgeGraphPage() {
         <div className="graph-view-switch" role="group" aria-label="图谱范围">
           <button type="button" className={viewMode === 'local' ? 'active' : ''} onClick={() => setViewMode('local')}>局部图谱</button>
           <button type="button" className={viewMode === 'global' ? 'active' : ''} onClick={() => setViewMode('global')}>全局图谱</button>
+          <button type="button" className={viewMode === 'isolated' ? 'active' : ''} onClick={() => setViewMode('isolated')}>孤立页</button>
         </div>
         <label>
           <span>Source</span>
@@ -480,9 +491,9 @@ export function KnowledgeGraphPage() {
             ))}
           </select>
         </label>
-        <label>
+        <label className={viewMode === 'isolated' ? 'is-disabled' : ''}>
           <span>关系</span>
-          <select value={relationFilter} onChange={event => resetAroundCurrent(event.target.value)}>
+          <select disabled={viewMode === 'isolated'} value={relationFilter} onChange={event => resetAroundCurrent(event.target.value)}>
             <option value="all">全部关系</option>
             {relationTypes.map(type => <option key={type} value={type}>{type}</option>)}
           </select>
@@ -509,17 +520,17 @@ export function KnowledgeGraphPage() {
       <div className="knowledge-graph-shell">
         <div className="knowledge-graph-stage" ref={stageRef} role="region" aria-label="可拖拽和缩放的知识星图">
           <div className="graph-stage-chrome">
-            <span><CircleDot />{viewMode === 'global'
+            <span><CircleDot />{viewMode !== 'local'
               ? `${graph.nodes.length}${globalTotals && globalTotals.nodes !== graph.nodes.length ? ` / ${globalTotals.nodes}` : ''} 个知识`
               : `${graph.nodes.length} / ${KNOWLEDGE_GRAPH_MAX_VISIBLE_NODES} 个知识`}</span>
             <span><Network />{graph.edges.length}{globalTotals && globalTotals.edges !== graph.edges.length ? ` / ${globalTotals.edges}` : ''} 条关系</span>
-            <span><MousePointer2 />{viewMode === 'global' ? '悬停聚焦 · 搜索定位' : '悬停聚焦 · 点击展开'}</span>
+            <span><MousePointer2 />{viewMode === 'global' ? '悬停聚焦 · 搜索定位' : viewMode === 'isolated' ? '点击查看 · 搜索定位' : '悬停聚焦 · 点击展开'}</span>
           </div>
           {graph.nodes.length === 0 && !error && (
             <div className="graph-empty">
               <Network aria-hidden="true" />
-              <h2>选择一个知识</h2>
-              <p>搜索知识，或选择有内容的 Source 开始探索。</p>
+              <h2>{viewMode === 'isolated' ? '没有孤立页' : '选择一个知识'}</h2>
+              <p>{viewMode === 'isolated' ? '这个范围内的知识都至少有一条有效关系。' : '搜索知识，或选择有内容的 Source 开始探索。'}</p>
             </div>
           )}
           <ForceGraph2D<CanvasNode, CanvasLink>
@@ -565,10 +576,10 @@ export function KnowledgeGraphPage() {
             enableNodeDrag
             enableZoomInteraction
             enablePanInteraction
-            minZoom={viewMode === 'global' ? 0.02 : 0.45}
+            minZoom={viewMode === 'local' ? 0.45 : 0.02}
             maxZoom={6}
-            warmupTicks={prefersReducedMotion || viewMode === 'global' ? 0 : 12}
-            cooldownTicks={prefersReducedMotion ? 1 : viewMode === 'global' ? 45 : 80}
+            warmupTicks={prefersReducedMotion || viewMode !== 'local' ? 0 : 12}
+            cooldownTicks={prefersReducedMotion ? 1 : viewMode !== 'local' ? 45 : 80}
             d3AlphaDecay={0.045}
             d3VelocityDecay={0.32}
             onEngineStop={() => {
@@ -643,15 +654,17 @@ export function KnowledgeGraphPage() {
                 )) : <p>当前星图里没有反向引用。</p>}
               </section>
               <div className="graph-detail-actions">
-                <button
-                  type="button"
-                  className="graph-expand-button"
-                  disabled={loadingIds.has(selectedNode.id)}
-                  onClick={() => void loadNeighborhood(selectedNode, false)}
-                >
-                  <Expand aria-hidden="true" />
-                  {loadingIds.has(selectedNode.id) ? '正在展开…' : expandedIds.has(selectedNode.id) ? '刷新关系' : '展开关系'}
-                </button>
+                {viewMode === 'local' ? (
+                  <button
+                    type="button"
+                    className="graph-expand-button"
+                    disabled={loadingIds.has(selectedNode.id)}
+                    onClick={() => void loadNeighborhood(selectedNode, false)}
+                  >
+                    <Expand aria-hidden="true" />
+                    {loadingIds.has(selectedNode.id) ? '正在展开…' : expandedIds.has(selectedNode.id) ? '刷新关系' : '展开关系'}
+                  </button>
+                ) : null}
                 <button type="button" className="graph-open-button" onClick={() => openFullKnowledge(selectedNode)}>
                   <ExternalLink aria-hidden="true" />查看完整知识
                 </button>
