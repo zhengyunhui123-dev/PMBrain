@@ -55,6 +55,9 @@ import {
   getAdminBrainOverview,
   getAdminBrainPageDetail,
   getAdminBrainPageChunks,
+  getAdminKnowledgeGraphGlobal,
+  getAdminKnowledgeGraphMeta,
+  getAdminKnowledgeGraphNeighborhood,
   getAdminDreamOverview,
   getSupervisorStatus,
   getAdminLlmStatus,
@@ -74,6 +77,7 @@ import {
   startSourceGitRun,
   startThinkRun,
   sanitizeOutput,
+  searchAdminKnowledgeGraphPages,
 } from './admin-console.ts';
 import { runAdminKnowledgeSearch } from './admin-knowledge-search.ts';
 import { buildChecks as buildDoctorChecks } from './doctor.ts';
@@ -112,6 +116,10 @@ import {
   BrainPageChunksResponseSchema,
   BrainPageDetailResponseSchema,
   BrainPagesResponseSchema,
+  KnowledgeGraphMetaResponseSchema,
+  KnowledgeGraphGlobalResponseSchema,
+  KnowledgeGraphNeighborhoodResponseSchema,
+  KnowledgeGraphSearchResponseSchema,
   DreamOverviewResponseSchema,
   DreamRunResponseSchema,
   DreamScheduleResponseSchema,
@@ -554,6 +562,53 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
       }));
     } catch (e) {
       res.status(500).json({ error: e instanceof Error ? e.message : 'pages_failed' });
+    }
+  });
+
+  app.get('/admin/api/knowledge-graph/meta', requireAdmin, async (req: Request, res: Response) => {
+    try {
+      sendAdminContract(res, KnowledgeGraphMetaResponseSchema, await getAdminKnowledgeGraphMeta(engine, {
+        sourceId: firstQueryValue(req.query.sourceId),
+      }));
+    } catch (e) {
+      res.status(500).json({ error: e instanceof Error ? e.message : 'knowledge_graph_meta_failed' });
+    }
+  });
+
+  app.get('/admin/api/knowledge-graph/global', requireAdmin, async (req: Request, res: Response) => {
+    try {
+      sendAdminContract(res, KnowledgeGraphGlobalResponseSchema, await getAdminKnowledgeGraphGlobal(engine, {
+        sourceId: firstQueryValue(req.query.sourceId),
+        relationType: firstQueryValue(req.query.relationType),
+      }));
+    } catch (e) {
+      res.status(500).json({ error: e instanceof Error ? e.message : 'knowledge_graph_global_failed' });
+    }
+  });
+
+  app.get('/admin/api/knowledge-graph/search', requireAdmin, async (req: Request, res: Response) => {
+    try {
+      sendAdminContract(res, KnowledgeGraphSearchResponseSchema, await searchAdminKnowledgeGraphPages(engine, {
+        query: firstQueryValue(req.query.q),
+        sourceId: firstQueryValue(req.query.sourceId),
+        limit: Number(firstQueryValue(req.query.limit)),
+      }));
+    } catch (e) {
+      res.status(400).json({ error: e instanceof Error ? e.message : 'knowledge_graph_search_failed' });
+    }
+  });
+
+  app.get('/admin/api/knowledge-graph/neighborhood', requireAdmin, async (req: Request, res: Response) => {
+    try {
+      sendAdminContract(res, KnowledgeGraphNeighborhoodResponseSchema, await getAdminKnowledgeGraphNeighborhood(engine, {
+        sourceId: firstQueryValue(req.query.sourceId) ?? '',
+        slug: firstQueryValue(req.query.slug) ?? '',
+        relationType: firstQueryValue(req.query.relationType),
+        limit: Number(firstQueryValue(req.query.limit)),
+      }));
+    } catch (e) {
+      const message = e instanceof Error ? e.message : 'knowledge_graph_neighborhood_failed';
+      res.status(message === 'knowledge_graph_page_not_found' ? 404 : 400).json({ error: message });
     }
   });
 

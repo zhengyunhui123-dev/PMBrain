@@ -490,6 +490,7 @@ describe('runQuickMaintenance orchestration smoke', () => {
       const extract = report.phases.find(p => p.phase === 'extract');
       expect(extract).toBeTruthy();
       expect(extract!.details.by_mention).toBe(true);
+      expect(extract!.details.historical_markdown_catch_up).toBe(true);
       // Full Dream phases like synthesize/patterns must not appear
       expect(report.phases.some(p => p.phase === 'synthesize')).toBe(false);
       expect(report.phases.some(p => p.phase === 'patterns')).toBe(false);

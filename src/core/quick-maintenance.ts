@@ -42,7 +42,9 @@ export function resolveQuickMaintenancePhases(): CyclePhase[] {
 /** Historical by-mention wall-clock budget per Quick run (checkpoint resumes). */
 export const QUICK_BY_MENTION_TIME_BUDGET_MS = 20_000;
 
-export type QuickMaintenanceOpts = Omit<CycleOpts, 'phases' | 'includeByMention' | 'forcePackPhases'>;
+export const QUICK_MARKDOWN_CATCH_UP_MAX_HISTORICAL = 250;
+
+export type QuickMaintenanceOpts = Omit<CycleOpts, 'phases' | 'includeByMention' | 'includeHistoricalMarkdownCatchUp' | 'forcePackPhases'>;
 
 /**
  * Run one Quick Maintenance cycle.
@@ -58,6 +60,8 @@ export async function runQuickMaintenance(
     ...opts,
     phases: resolveQuickMaintenancePhases(),
     includeByMention: true,
+    includeHistoricalMarkdownCatchUp: true,
+    markdownCatchUpMaxHistorical: opts.markdownCatchUpMaxHistorical ?? QUICK_MARKDOWN_CATCH_UP_MAX_HISTORICAL,
     byMentionTimeBudgetMs: opts.byMentionTimeBudgetMs ?? QUICK_BY_MENTION_TIME_BUDGET_MS,
   });
 }

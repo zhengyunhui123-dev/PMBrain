@@ -85,6 +85,12 @@ function OverviewIcon({ name }: { name: OverviewIconName }) {
   return <Icon className="overview-icon" aria-hidden="true" />;
 }
 
+function handleOverviewNavigationKey(event: React.KeyboardEvent, navigate: () => void) {
+  if (event.key !== 'Enter' && event.key !== ' ') return;
+  event.preventDefault();
+  navigate();
+}
+
 function PgliteBusyNotice({
   message = 'PGLite 正在执行导入或知识整理，完成后会自动恢复连接。',
   onNavigate,
@@ -298,7 +304,14 @@ export function KnowledgeWorkbenchPage({ onNavigate }: { onNavigate?: (page: str
 
       <section className="overview-top-grid">
         <div className="overview-stage-main">
-          <div className="overview-hero">
+          <div
+            className="overview-hero overview-navigation-card"
+            role="link"
+            tabIndex={0}
+            aria-label="打开知识图谱"
+            onClick={() => onNavigate?.('graph')}
+            onKeyDown={event => handleOverviewNavigationKey(event, () => onNavigate?.('graph'))}
+          >
           <div className="overview-hero-copy">
             <div className="overview-kicker">PMBRAIN OVERVIEW</div>
             <h2>你的知识库，现在是什么状态</h2>
@@ -319,7 +332,14 @@ export function KnowledgeWorkbenchPage({ onNavigate }: { onNavigate?: (page: str
         </div>
 
           <section className="overview-metrics-grid" aria-label="核心指标">
-            <article className="overview-stat-card overview-accent-violet">
+            <article
+              className="overview-stat-card overview-accent-violet overview-navigation-card"
+              role="link"
+              tabIndex={0}
+              aria-label="打开知识库"
+              onClick={() => onNavigate?.('data')}
+              onKeyDown={event => handleOverviewNavigationKey(event, () => onNavigate?.('data'))}
+            >
               <div className="overview-stat-icon overview-stat-icon-violet"><OverviewIcon name="page" /></div>
               <div className="overview-stat-copy"><span>知识总数</span><strong>{formatCount(overview.stats.page_count)}</strong><small>文档与知识条目</small><em>最近更新 {shortDate(overview.recent_write_at)}</em></div>
             </article>

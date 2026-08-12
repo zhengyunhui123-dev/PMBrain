@@ -35,6 +35,13 @@ import type {
 
 export function BrainDataPage() {
   const { overview } = useOverview();
+  const initialGraphTarget = useRef((() => {
+    const [, query = ''] = window.location.hash.replace(/^#/, '').split('?');
+    const params = new URLSearchParams(query);
+    const source = params.get('source');
+    const slug = params.get('slug');
+    return source && slug ? { source, slug } : null;
+  })());
   const [rows, setRows] = useState<BrainPageRow[]>([]);
   const [meta, setMeta] = useState({ total: 0, page: 1, pages: 1, limit: 10 });
   const [selected, setSelected] = useState<BrainPageRow | null>(null);
@@ -45,7 +52,15 @@ export function BrainDataPage() {
   const [chunksLoading, setChunksLoading] = useState(false);
   const [chunksError, setChunksError] = useState('');
   const [pageError, setPageError] = useState('');
-  const [filters, setFilters] = useState({ view: 'all', source: 'all', type: 'all', embedded: 'all', q: '', page: 1, pageSize: 10 });
+  const [filters, setFilters] = useState({
+    view: 'all',
+    source: initialGraphTarget.current?.source ?? 'all',
+    type: 'all',
+    embedded: 'all',
+    q: initialGraphTarget.current?.slug ?? '',
+    page: 1,
+    pageSize: 10,
+  });
   const [gotoPage, setGotoPage] = useState('1');
 
   const loadRows = useCallback(async () => {
@@ -65,6 +80,17 @@ export function BrainDataPage() {
   useEffect(() => {
     void loadRows().catch(() => undefined);
   }, [loadRows]);
+
+  useEffect(() => {
+    const target = initialGraphTarget.current;
+    if (!target || selected || rows.length === 0) return;
+    const match = rows.find(row => row.source_id === target.source && row.slug === target.slug);
+    if (match) {
+      setSelected(match);
+      initialGraphTarget.current = null;
+      window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}#data`);
+    }
+  }, [rows, selected]);
 
   useEffect(() => {
     if (!selected) {

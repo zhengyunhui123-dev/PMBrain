@@ -29,7 +29,7 @@
  */
 
 import { readFileSync, readdirSync, lstatSync, existsSync } from 'fs';
-import { join, relative, dirname } from 'path';
+import { join, relative, dirname, posix } from 'path';
 import type { BrainEngine, LinkBatchInput, TimelineBatchInput } from '../core/engine.ts';
 import type { PageType } from '../core/types.ts';
 import { parseMarkdown } from '../core/markdown.ts';
@@ -52,7 +52,7 @@ export { withRetry };
 export type { WithRetryOpts } from '../core/retry.ts';
 import { buildGazetteer, findMentionedEntities } from '../core/by-mention.ts';
 import {
-  loadOpCheckpoint, recordCompleted, clearOpCheckpoint, mentionsFingerprint,
+  loadOpCheckpoint, recordCompleted, clearOpCheckpoint, mentionsFingerprint, fingerprint,
 } from '../core/op-checkpoint.ts';
 import { createHash } from 'crypto';
 // v0.41.15.0 (T7, D9): --workers N for the fs-walk inner loops via the
@@ -193,15 +193,18 @@ export function extractMarkdownLinks(content: string): { name: string; relTarget
  * Returns null when no matching slug is found (dangling link).
  */
 export function resolveSlug(fileDir: string, relTarget: string, allSlugs: Set<string>): string | null {
-  const targetNoExt = relTarget.endsWith('.md') ? relTarget.slice(0, -3) : relTarget;
+  const canonicalDir = fileDir.replace(/\\/g, '/');
+  const canonicalTarget = relTarget.replace(/\\/g, '/').split('#', 1)[0]!;
+  const targetNoExt = canonicalTarget.endsWith('.md') ? canonicalTarget.slice(0, -3) : canonicalTarget;
+  const normalizeCandidate = (candidate: string) => pathToSlug(posix.normalize(`${candidate}.md`));
 
-  const s1 = join(fileDir, targetNoExt);
+  const s1 = normalizeCandidate(posix.join(canonicalDir, targetNoExt));
   if (allSlugs.has(s1)) return s1;
 
-  const parts = fileDir.split('/').filter(Boolean);
+  const parts = canonicalDir.split('/').filter(Boolean);
   for (let strip = 1; strip <= parts.length; strip++) {
     const ancestor = parts.slice(0, parts.length - strip).join('/');
-    const candidate = ancestor ? join(ancestor, targetNoExt) : targetNoExt;
+    const candidate = normalizeCandidate(ancestor ? posix.join(ancestor, targetNoExt) : targetNoExt);
     if (allSlugs.has(candidate)) return candidate;
   }
 
@@ -258,7 +261,7 @@ export async function extractLinksFromFile(
 ): Promise<ExtractedLink[]> {
   const links: ExtractedLink[] = [];
   const slug = pathToSlug(relPath);
-  const fileDir = dirname(relPath);
+  const fileDir = posix.dirname(relPath.replace(/\\/g, '/'));
   const fm = parseFrontmatterFromContent(content, relPath);
 
   for (const { name, relTarget } of extractMarkdownLinks(content)) {
@@ -362,6 +365,8 @@ export interface ExtractOpts {
    * Pass undefined or omit for a full walk (CLI / first-run path).
    */
   slugs?: string[];
+  /** Source that owns the filesystem checkout. Required for non-default Sources. */
+  sourceId?: string;
   /**
    * v0.41.15.0 (D9): in-process parallel file workers for the fs-walk
    * loops. Default 1. PGLite engines clamp to 1 (single-writer; though
@@ -413,7 +418,7 @@ export async function runExtractCore(engine: BrainEngine, opts: ExtractOpts): Pr
       // Nothing changed — skip entirely.
       return result;
     }
-    const r = await extractForSlugs(engine, opts.dir, opts.slugs, opts.mode, dryRun, jsonMode, workers);
+    const r = await extractForSlugs(engine, opts.dir, opts.slugs, opts.mode, dryRun, jsonMode, workers, opts.sourceId);
     result.links_created = r.links_created;
     result.timeline_entries_created = r.timeline_created;
     result.pages_processed = r.pages;
@@ -422,12 +427,12 @@ export async function runExtractCore(engine: BrainEngine, opts: ExtractOpts): Pr
 
   // Full walk path: CLI `gbrain extract` or first-run.
   if (opts.mode === 'links' || opts.mode === 'all') {
-    const r = await extractLinksFromDir(engine, opts.dir, dryRun, jsonMode, workers);
+    const r = await extractLinksFromDir(engine, opts.dir, dryRun, jsonMode, workers, opts.sourceId);
     result.links_created = r.created;
     result.pages_processed = r.pages;
   }
   if (opts.mode === 'timeline' || opts.mode === 'all') {
-    const r = await extractTimelineFromDir(engine, opts.dir, dryRun, jsonMode, workers);
+    const r = await extractTimelineFromDir(engine, opts.dir, dryRun, jsonMode, workers, opts.sourceId);
     result.timeline_entries_created = r.created;
     result.pages_processed = Math.max(result.pages_processed, r.pages);
   }
@@ -748,6 +753,7 @@ async function extractForSlugs(
   // shared flush primitive; JS single-threaded event loop makes the
   // shared counter increments atomic.
   workers: number = 1,
+  sourceId?: string,
 ): Promise<{ links_created: number; timeline_created: number; pages: number }> {
   // Build the full slug set for link resolution (fast: just readdir, no file reads)
   const allFiles = walkMarkdownFiles(brainDir);
@@ -821,7 +827,12 @@ async function extractForSlugs(
               if (!jsonMode) console.log(`  ${link.from_slug} → ${link.to_slug} (${link.link_type})`);
               linksCreated++;
             } else {
-              linkBatch.push(link);
+              linkBatch.push({
+                ...link,
+                from_source_id: sourceId ?? 'default',
+                to_source_id: sourceId ?? 'default',
+                resolution_type: 'unqualified',
+              });
               if (linkBatch.length >= BATCH_SIZE) await flushLinks();
             }
           }
@@ -834,7 +845,7 @@ async function extractForSlugs(
               if (!jsonMode) console.log(`  ${entry.slug}: ${entry.date} — ${entry.summary}`);
               timelineCreated++;
             } else {
-              timelineBatch.push({ slug: entry.slug, date: entry.date, source: entry.source, summary: entry.summary, detail: entry.detail });
+              timelineBatch.push({ slug: entry.slug, date: entry.date, source: entry.source, summary: entry.summary, detail: entry.detail, source_id: sourceId ?? 'default' });
               if (timelineBatch.length >= BATCH_SIZE) await flushTimeline();
             }
           }
@@ -862,6 +873,7 @@ async function extractLinksFromDir(
   engine: BrainEngine, brainDir: string, dryRun: boolean, jsonMode: boolean,
   // v0.41.15.0 (T7): in-process worker count. Default 1.
   workers: number = 1,
+  sourceId?: string,
 ): Promise<{ created: number; pages: number }> {
   const files = walkMarkdownFiles(brainDir);
   const allSlugs = new Set(files.map(f => pathToSlug(f.relPath)));
@@ -910,7 +922,12 @@ async function extractLinksFromDir(
             if (!jsonMode) console.log(`  ${link.from_slug} → ${link.to_slug} (${link.link_type})`);
             created++;
           } else {
-            batch.push(link);
+            batch.push({
+              ...link,
+              from_source_id: sourceId ?? 'default',
+              to_source_id: sourceId ?? 'default',
+              resolution_type: 'unqualified',
+            });
             if (batch.length >= BATCH_SIZE) await flush();
           }
         }
@@ -932,6 +949,7 @@ async function extractTimelineFromDir(
   engine: BrainEngine, brainDir: string, dryRun: boolean, jsonMode: boolean,
   // v0.41.15.0 (T7): in-process worker count. Default 1.
   workers: number = 1,
+  sourceId?: string,
 ): Promise<{ created: number; pages: number }> {
   const files = walkMarkdownFiles(brainDir);
 
@@ -975,7 +993,7 @@ async function extractTimelineFromDir(
             if (!jsonMode) console.log(`  ${entry.slug}: ${entry.date} — ${entry.summary}`);
             created++;
           } else {
-            batch.push({ slug: entry.slug, date: entry.date, source: entry.source, summary: entry.summary, detail: entry.detail });
+            batch.push({ slug: entry.slug, date: entry.date, source: entry.source, summary: entry.summary, detail: entry.detail, source_id: sourceId ?? 'default' });
             if (batch.length >= BATCH_SIZE) await flush();
           }
         }
@@ -1022,6 +1040,105 @@ export async function extractLinksForSlugs(
     } catch { /* skip */ }
   }
   return created;
+}
+
+export interface HistoricalMarkdownCatchUpOpts {
+  brainDir: string;
+  sourceId: string;
+  prioritySlugs?: string[];
+  maxHistoricalPages?: number;
+  dryRun?: boolean;
+}
+
+export interface HistoricalMarkdownCatchUpResult {
+  linksCreated: number;
+  pagesProcessed: number;
+  priorityPages: number;
+  historicalPages: number;
+  historicalRemaining: number;
+}
+
+/**
+ * Resumable deterministic repair for historical filesystem Markdown links.
+ * Quick Maintenance processes current sync changes first, then a bounded
+ * historical batch. Only exact links inside the selected Source are emitted.
+ */
+export async function runHistoricalMarkdownCatchUp(
+  engine: BrainEngine,
+  opts: HistoricalMarkdownCatchUpOpts,
+): Promise<HistoricalMarkdownCatchUpResult> {
+  const files = walkMarkdownFiles(opts.brainDir);
+  const fileBySlug = new Map(files.map(file => [pathToSlug(file.relPath), file] as const));
+  const allSlugs = new Set(fileBySlug.keys());
+  const prioritySlugs = [...new Set(opts.prioritySlugs ?? [])].filter(slug => fileBySlug.has(slug));
+  const key = {
+    op: 'extract-markdown-catchup',
+    fingerprint: fingerprint({ source: opts.sourceId, dir: opts.brainDir, version: 1 }),
+  };
+  const completed = new Set(opts.dryRun ? [] : await loadOpCheckpoint(engine, key));
+  const prioritySet = new Set(prioritySlugs);
+  const historicalPending = [...fileBySlug.keys()]
+    .filter(slug => !prioritySet.has(slug) && !completed.has(slug))
+    .sort();
+  const limit = Math.max(0, opts.maxHistoricalPages ?? 250);
+  const historical = historicalPending.slice(0, limit);
+  const work = [...prioritySlugs, ...historical];
+  const existing = new Set<string>();
+  if (opts.dryRun) {
+    const rows = await engine.executeRaw<{
+      from_slug: string;
+      to_slug: string;
+      link_type: string;
+      link_source: string;
+    }>(
+      `SELECT f.slug AS from_slug, t.slug AS to_slug, l.link_type, COALESCE(l.link_source, 'markdown') AS link_source
+       FROM links l
+       JOIN pages f ON f.id = l.from_page_id
+       JOIN pages t ON t.id = l.to_page_id
+       WHERE f.source_id = $1 AND t.source_id = $1`,
+      [opts.sourceId],
+    );
+    for (const row of rows) {
+      existing.add(`${row.from_slug}\u0000${row.to_slug}\u0000${row.link_type}\u0000${row.link_source}`);
+    }
+  }
+  let linksCreated = 0;
+  let pagesProcessed = 0;
+
+  for (const slug of work) {
+    const file = fileBySlug.get(slug);
+    if (!file) continue;
+    const content = readFileSync(file.path, 'utf8');
+    const links = await extractLinksFromFile(content, file.relPath, allSlugs);
+    if (opts.dryRun) {
+      for (const link of links) {
+        const edgeKey = `${link.from_slug}\u0000${link.to_slug}\u0000${link.link_type}\u0000markdown`;
+        if (existing.has(edgeKey)) continue;
+        existing.add(edgeKey);
+        linksCreated++;
+      }
+    } else if (links.length > 0) {
+      linksCreated += await engine.addLinksBatch(links.map(link => ({
+        ...link,
+        link_source: 'markdown',
+        from_source_id: opts.sourceId,
+        to_source_id: opts.sourceId,
+        resolution_type: 'unqualified' as const,
+      })), { auditSite: 'extract.markdown_catchup' });
+    }
+    pagesProcessed++;
+    completed.add(slug);
+  }
+
+  const historicalRemaining = Math.max(0, historicalPending.length - historical.length);
+  if (!opts.dryRun) await recordCompleted(engine, key, [...completed]);
+  return {
+    linksCreated,
+    pagesProcessed,
+    priorityPages: prioritySlugs.length,
+    historicalPages: historical.length,
+    historicalRemaining,
+  };
 }
 
 export async function extractTimelineForSlugs(

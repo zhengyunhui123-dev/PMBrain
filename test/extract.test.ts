@@ -3,6 +3,7 @@ import {
   extractMarkdownLinks,
   extractLinksFromFile,
   extractTimelineFromContent,
+  resolveSlug,
   walkMarkdownFiles,
 } from '../src/commands/extract.ts';
 
@@ -33,6 +34,18 @@ describe('extractMarkdownLinks', () => {
 });
 
 describe('extractLinksFromFile', () => {
+  it('resolves nested Markdown targets with canonical slash slugs on Windows and Unix', () => {
+    const slugs = new Set([
+      'wiki/重庆保供项目/项目-重庆保供项目',
+      'youdao/重庆保供项目/事件管理中心.note',
+    ]);
+    expect(resolveSlug(
+      'wiki/重庆保供项目',
+      '../../youdao/重庆保供项目/事件管理中心.note.md',
+      slugs,
+    )).toBe('youdao/重庆保供项目/事件管理中心.note');
+  });
+
   it('resolves relative paths to slugs', async () => {
     const content = '---\ntitle: Test\n---\nSee [Pedro](../people/pedro.md).';
     const allSlugs = new Set(['people/pedro', 'deals/test-deal']);
