@@ -1,0 +1,69 @@
+/** Postgres parity for Quick Maintenance on a Source with no usable checkout. */
+import { afterAll, beforeAll, describe, expect, spyOn, test } from 'bun:test';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { runDream } from '../../src/commands/dream.ts';
+import { hasDatabase, setupDB, teardownDB } from './helpers.ts';
+import { withEnv } from '../helpers/with-env.ts';
+import type { PostgresEngine } from '../../src/core/postgres-engine.ts';
+
+const skip = !hasDatabase();
+const describeIfDB = skip ? describe.skip : describe;
+
+let engine: PostgresEngine;
+let testHome = '';
+
+beforeAll(async () => {
+  if (skip) return;
+  testHome = mkdtempSync(join(tmpdir(), 'pmbrain-quick-pg-'));
+  engine = (await setupDB()) as PostgresEngine;
+});
+
+afterAll(async () => {
+  if (skip) return;
+  await teardownDB();
+  rmSync(testHome, { recursive: true, force: true });
+});
+
+describeIfDB('Postgres Quick Maintenance — stale Source local_path', () => {
+  test('skips file-side phases and keeps Source-scoped DB phases running', async () => {
+    const missingPath = join(testHome, 'moved-away-source');
+    await engine.executeRaw(
+      `INSERT INTO sources (id, name, local_path, config, created_at)
+       VALUES ('moved-source', 'Moved Source', $1, '{}'::jsonb, NOW())`,
+      [missingPath],
+    );
+    await engine.executeRaw(
+      `INSERT INTO pages (source_id, slug, type, title, compiled_truth, timeline, frontmatter, updated_at, created_at)
+       VALUES
+         ('moved-source', 'notes/kept', 'note', 'Kept', 'Database content remains available.', '', '{}'::jsonb, NOW(), NOW()),
+         ('default', 'notes/other', 'note', 'Other', 'A different source page.', '', '{}'::jsonb, NOW(), NOW())`,
+    );
+
+    const exitSpy = spyOn(process, 'exit').mockImplementation(((code?: number) => {
+      throw new Error(`unexpected exit ${code}`);
+    }) as never);
+    const logSpy = spyOn(console, 'log').mockImplementation(() => {});
+    const errorSpy = spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const report = await withEnv(
+        { PMBRAIN_HOME: testHome, GBRAIN_HOME: testHome },
+        () => runDream(engine, ['--preset', 'quick', '--source', 'moved-source', '--json']),
+      );
+      expect(report).toBeTruthy();
+      if (!report) return;
+
+      expect(report.brain_dir).toBeNull();
+      expect(report.status).not.toBe('failed');
+      expect(report.phases.find(item => item.phase === 'sync')?.details?.reason).toBe('no_brain_dir');
+      expect(report.phases.find(item => item.phase === 'extract')?.details?.by_mention).toBe(true);
+      expect(report.phases.find(item => item.phase === 'resolve_symbol_edges')?.details?.sources_walked).toBe(1);
+      expect(report.phases.find(item => item.phase === 'orphans')?.details?.total_pages).toBe(1);
+    } finally {
+      exitSpy.mockRestore();
+      logSpy.mockRestore();
+      errorSpy.mockRestore();
+    }
+  }, 120_000);
+});

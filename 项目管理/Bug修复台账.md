@@ -1,5 +1,14 @@
 # Bug 修复台账
 
+## 2026-08-12 修复 Source 本地路径失效导致快速维护整体退出
+
+- 时间：2026-08-12
+- 版本号：PMBrain 1.2.33；PMBrain Desktop 1.1.18
+- 标题：快速维护支持无可用本地目录的数据库 Source
+- 描述：显式选择的 Source 在 `local_path` 搬迁、删除或不可用时，快速维护会在进入周期前直接退出，导致 PGLite/Postgres 中仍存在的知识无法执行数据库侧维护；同时需要保持稳定 Source ID、友好显示名与当前路径三者职责分离。
+- 是否完成：是
+- 最终结果：保留 `desktop-<8位摘要>` 稳定内部 ID 和以目录末级名称注册显示名的现有逻辑；选中 Source 无可用本地目录时，lint、backlinks、sync 等文件阶段以 `no_brain_dir` 跳过，facts、by-mention、符号边、embedding、orphans 等数据库阶段继续并按显式 Source 限定范围。PGLite 回归 42/42、Source 时间戳回归 5/5、embedding 配置回归 1/1、Postgres 对等回归 1/1、桌面命名相关回归 37/37 与类型检查通过；`dream.test.ts` 在本机长时间无输出后自行退出，未取得可信结论。未修改数据库 Schema、用户知识数据、Wiki、原始资料或已有向量；未运行 `bun run build:win`，未提交或推送 GitHub。
+
 ## 2026-08-11 修复 Provider-aware Embedding 合并后的 CI 契约漂移
 
 - 时间：2026-08-11
