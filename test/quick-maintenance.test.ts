@@ -7,13 +7,13 @@
  * TEST 6–7: Full / Meeting phase order unchanged; Quick uses thin entry.
  */
 
-import { describe, test, expect, beforeAll, afterAll, beforeEach } from 'bun:test';
+import { describe, test, expect, beforeAll, afterAll, beforeEach, spyOn } from 'bun:test';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync, existsSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { execSync } from 'child_process';
 import { PGLiteEngine } from '../src/core/pglite-engine.ts';
-import { resolveDreamPresetPhases } from '../src/commands/dream.ts';
+import { resolveDreamPresetPhases, runDream } from '../src/commands/dream.ts';
 import {
   resolveQuickMaintenancePhases,
   runQuickMaintenance,
@@ -493,6 +493,63 @@ describe('runQuickMaintenance orchestration smoke', () => {
       // Full Dream phases like synthesize/patterns must not appear
       expect(report.phases.some(p => p.phase === 'synthesize')).toBe(false);
       expect(report.phases.some(p => p.phase === 'patterns')).toBe(false);
+    });
+  }, 120_000);
+
+  test('quick run keeps database maintenance working when the selected source local_path is stale', async () => {
+    await withTestHome(home, async () => {
+      const missingPath = join(home, 'moved-away-source');
+      await engine.executeRaw(
+        `INSERT INTO sources (id, name, local_path, config, created_at)
+         VALUES ('moved-source', 'Moved Source', $1, '{}'::jsonb, NOW())
+         ON CONFLICT (id) DO UPDATE SET local_path = EXCLUDED.local_path, archived = false`,
+        [missingPath],
+      );
+      await engine.executeRaw(
+        `INSERT INTO pages (source_id, slug, type, title, compiled_truth, timeline, frontmatter, updated_at, created_at)
+         VALUES
+           ('moved-source', 'notes/kept', 'note', 'Kept', 'Database content remains available.', '', '{}'::jsonb, NOW(), NOW()),
+           ('default', 'notes/other', 'note', 'Other', 'A different source page.', '', '{}'::jsonb, NOW(), NOW())
+         ON CONFLICT (source_id, slug) DO NOTHING`,
+      );
+
+      const exitSpy = spyOn(process, 'exit').mockImplementation(((code?: number) => {
+        throw new Error(`unexpected exit ${code}`);
+      }) as never);
+      const logSpy = spyOn(console, 'log').mockImplementation(() => {});
+      const errorSpy = spyOn(console, 'error').mockImplementation(() => {});
+      try {
+        const report = await runDream(engine, [
+          '--preset', 'quick', '--source', 'moved-source', '--json',
+        ]);
+        expect(report).toBeTruthy();
+        if (!report) return;
+
+        expect(report.brain_dir).toBeNull();
+        expect(report.status).not.toBe('failed');
+        for (const phaseName of ['lint', 'backlinks', 'sync'] as const) {
+          const phase = report.phases.find(item => item.phase === phaseName);
+          expect(phase?.status).toBe('skipped');
+          expect(phase?.details?.reason).toBe('no_brain_dir');
+        }
+
+        const extract = report.phases.find(item => item.phase === 'extract');
+        expect(extract?.details?.filesystem_skipped).toBe(true);
+        expect(extract?.details?.by_mention).toBe(true);
+
+        const facts = report.phases.find(item => item.phase === 'extract_facts');
+        expect(facts?.status).not.toBe('fail');
+
+        const symbols = report.phases.find(item => item.phase === 'resolve_symbol_edges');
+        expect(symbols?.details?.sources_walked).toBe(1);
+
+        const orphans = report.phases.find(item => item.phase === 'orphans');
+        expect(orphans?.details?.total_pages).toBe(1);
+      } finally {
+        exitSpy.mockRestore();
+        logSpy.mockRestore();
+        errorSpy.mockRestore();
+      }
     });
   }, 120_000);
 });

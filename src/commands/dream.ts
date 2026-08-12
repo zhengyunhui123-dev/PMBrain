@@ -352,19 +352,22 @@ function parseArgs(args: string[]): DreamArgs {
  *
  * Prior dream.ts walked up 10 levels of cwd looking for `.git` and would
  * happily run lint + sync against an unrelated git repo the user happened
- * to be cd'd into. This resolver only trusts two sources:
+ * to be cd'd into. This resolver only trusts explicit/configured signals:
  *   1. An explicit --dir argument.
- *   2. The `sync.repo_path` config key set by `gbrain init` (engine-backed).
+ *   2. The selected Source's existing `local_path`.
+ *   3. The `sync.repo_path` config key set by `gbrain init` (engine-backed).
+ *   4. The desktop wizard's `desktop.knowledge_directory` file-plane config.
+ *   5. `null` when there is a connected database but no usable checkout.
  *
- *   3. The desktop wizard's `desktop.knowledge_directory` file-plane config.
- *
- * If none is available, we error out instead of guessing.
+ * A selected Source whose local_path is missing must stay DB-only. Falling
+ * through to another configured directory would mix one Source's files with
+ * another Source's database maintenance.
  */
 export async function resolveBrainDir(
   engine: BrainEngine | null,
   explicit: string | null,
-  sourcePath: string | null = null,
-): Promise<string> {
+  resolvedSourceId?: string,
+): Promise<string | null> {
   if (explicit) {
     if (!existsSync(explicit)) {
       console.error(`--dir path does not exist: ${explicit}`);
@@ -375,12 +378,12 @@ export async function resolveBrainDir(
     return resolve(explicit);
   }
 
-  if (sourcePath) {
-    if (!existsSync(sourcePath)) {
-      console.error(`source local_path does not exist: ${sourcePath}`);
-      process.exit(1);
+  if (engine && resolvedSourceId) {
+    const source = await fetchSource(engine, resolvedSourceId);
+    if (source?.local_path && existsSync(source.local_path)) {
+      return resolve(source.local_path);
     }
-    return resolve(sourcePath);
+    return null;
   }
 
   if (engine) {
@@ -395,10 +398,7 @@ export async function resolveBrainDir(
     return resolve(desktopConfigured);
   }
 
-  console.error(
-    'No brain directory found. Pass --dir <path>, set sync.repo_path, or configure a desktop knowledge directory.',
-  );
-  process.exit(1);
+  return null;
 }
 
 function printHelp() {
@@ -629,7 +629,6 @@ export async function runDream(engine: BrainEngine | null, args: string[]): Prom
   //      last_full_cycle_at to an archived source would mask data
   //      staleness when the source is later restored)
   let resolvedSourceId: string | undefined;
-  let resolvedSourcePath: string | null = null;
   if (opts.source !== null) {
     if (engine === null) {
       console.error(
@@ -654,7 +653,6 @@ export async function runDream(engine: BrainEngine | null, args: string[]): Prom
     // built-in listAllSources defaults to includeArchived=false AND
     // doesn't project the archived column, so it cannot be used here.
     const src = await fetchSource(engine, resolvedSourceId);
-    resolvedSourcePath = src?.local_path ?? null;
     if (src?.archived === true) {
       console.error(
         `source ${resolvedSourceId} is archived; restore with ` +
@@ -664,8 +662,15 @@ export async function runDream(engine: BrainEngine | null, args: string[]): Prom
     }
   }
 
-  const brainDir = await resolveBrainDir(engine, opts.dir, resolvedSourcePath);
-  ensureDreamSystemSkillAssets(brainDir);
+  const brainDir = await resolveBrainDir(engine, opts.dir, resolvedSourceId);
+  if (brainDir === null && engine === null) {
+    console.error(
+      'No brain directory found and no database connection. ' +
+      'Pass --dir <path> or configure a brain via `pmbrain init`.',
+    );
+    process.exit(1);
+  }
+  if (brainDir !== null) ensureDreamSystemSkillAssets(brainDir);
   validateDreamInputPath(opts.inputFile);
 
   // Quick Maintenance is PMBrain's thin orchestration (by-mention + failed-file

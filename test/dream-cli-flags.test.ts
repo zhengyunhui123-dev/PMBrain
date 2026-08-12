@@ -144,14 +144,32 @@ describe('dream CLI flag wiring', () => {
     test('uses the selected source local_path as the Dream brain directory', async () => {
       const sourcePath = mkdtempSync(join(tmpdir(), 'pmbrain-dream-source-'));
       try {
-        expect(await resolveBrainDir(null, null, sourcePath)).toBe(resolve(sourcePath));
+        const engine = {
+          executeRaw: async () => [{
+            id: 'selected-source', name: 'Selected Source', local_path: sourcePath,
+            last_commit: null, last_sync_at: null, config: {}, created_at: new Date(), archived: false,
+          }],
+        } as any;
+        expect(await resolveBrainDir(engine, null, 'selected-source')).toBe(resolve(sourcePath));
       } finally {
         rmSync(sourcePath, { recursive: true, force: true });
       }
     });
 
+    test('keeps a selected source DB-only when its local_path is missing', async () => {
+      const missingPath = join(tmpdir(), 'pmbrain-missing-source-path');
+      const engine = {
+        executeRaw: async () => [{
+          id: 'selected-source', name: 'Selected Source', local_path: missingPath,
+          last_commit: null, last_sync_at: null, config: {}, created_at: new Date(), archived: false,
+        }],
+        getConfig: async () => resolve(tmpdir()),
+      } as any;
+      expect(await resolveBrainDir(engine, null, 'selected-source')).toBeNull();
+    });
+
     test('calibration phases prefer explicit sourceId over brainDir inference', () => {
-      expect(cycleSrc).toContain('const calibrationSourceId = opts.sourceId ?? await resolveSourceForDir(engine, opts.brainDir)');
+      expect(cycleSrc).toContain('const calibrationSourceId = cycleSourceId');
     });
 
     test('imports resolveSourceId from canonical source-resolver helper', () => {
