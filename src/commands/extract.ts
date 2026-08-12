@@ -1125,7 +1125,7 @@ export async function runHistoricalMarkdownCatchUp(
         linksCreated++;
       }
     } else if (links.length > 0) {
-      linksCreated += await engine.addLinksBatch(links.map(link => ({
+      linksCreated += await engine.addLinksBatch(links.map(link => ({ // gbrain-allow-direct-insert: canonical extract reconciliation for historical Source-scoped Markdown links
         ...link,
         link_source: 'markdown',
         from_source_id: opts.sourceId,
