@@ -5082,6 +5082,35 @@ export const MIGRATIONS: Migration[] = [
       ALTER TABLE content_chunks ALTER COLUMN model DROP NOT NULL;
     `,
   },
+  {
+    version: 114,
+    name: 'take_proposals_review_lifecycle',
+    idempotent: true,
+    sql: `
+      ALTER TABLE take_proposals ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMPTZ;
+      ALTER TABLE take_proposals ADD COLUMN IF NOT EXISTS review_note TEXT;
+      ALTER TABLE take_proposals ADD COLUMN IF NOT EXISTS accepted_take_id BIGINT;
+      ALTER TABLE take_proposals ADD COLUMN IF NOT EXISTS accepted_claim TEXT;
+      ALTER TABLE take_proposals ADD COLUMN IF NOT EXISTS accepted_kind TEXT;
+      ALTER TABLE take_proposals ADD COLUMN IF NOT EXISTS accepted_holder TEXT;
+      ALTER TABLE take_proposals ADD COLUMN IF NOT EXISTS accepted_weight REAL;
+      ALTER TABLE take_proposals ADD COLUMN IF NOT EXISTS accepted_domain TEXT;
+      DO $$ BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint
+          WHERE conname = 'take_proposals_accepted_take_fk'
+            AND conrelid = 'take_proposals'::regclass
+        ) THEN
+          ALTER TABLE take_proposals
+            ADD CONSTRAINT take_proposals_accepted_take_fk
+            FOREIGN KEY (accepted_take_id) REFERENCES takes(id) ON DELETE SET NULL;
+        END IF;
+      END $$;
+      CREATE INDEX IF NOT EXISTS take_proposals_accepted_take_idx
+        ON take_proposals (accepted_take_id)
+        WHERE accepted_take_id IS NOT NULL;
+    `,
+  },
 ];
 
 export const LATEST_VERSION = MIGRATIONS.length > 0

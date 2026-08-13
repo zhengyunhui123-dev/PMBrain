@@ -37,7 +37,7 @@
  * phase can run hermetically in unit tests without touching the gateway.
  */
 
-import { randomUUID, createHash } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { BaseCyclePhase, type ScopedReadOpts, type BasePhaseOpts } from './base-phase.ts';
 import { chat as gatewayChat } from '../ai/gateway.ts';
 import { writeReceipt } from '../extract/receipt-writer.ts';
@@ -48,6 +48,7 @@ import type { Page } from '../types.ts';
 import type { OperationContext } from '../operations.ts';
 import type { BrainEngine } from '../engine.ts';
 import type { PhaseStatus, CyclePhase } from '../cycle.ts';
+import { takeProposalContentHash } from '../take-proposal-hash.ts';
 
 /**
  * Bump when the extractor prompt or the JSON output shape changes. Old
@@ -204,7 +205,7 @@ export interface ProposeTakesResult {
  * the composite unique index.
  */
 export function contentHash(pageBody: string): string {
-  return createHash('sha256').update(pageBody).digest('hex');
+  return takeProposalContentHash(pageBody);
 }
 
 function progressNote(done: number, total: number, status: string, slug: string): string {

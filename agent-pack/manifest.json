@@ -1,0 +1,77 @@
+{
+  "pack_version": "1.0.0",
+  "name": "PMBrain Agent Capability Pack",
+  "description": "Official host-agent workflow templates for safe PMBrain retrieval, review, correction, and durable writeback.",
+  "skills": [
+    {
+      "name": "brain-first",
+      "path": "skills/brain-first",
+      "description": "Consult PMBrain before answering history-sensitive questions.",
+      "triggers": ["人物", "项目", "公司", "历史决策", "用户过去观点", "承诺", "偏好", "历史状态"],
+      "required_operations": ["recall", "query", "get_page"]
+    },
+    {
+      "name": "remember",
+      "path": "skills/remember",
+      "description": "Save knowledge the user explicitly asks PMBrain to remember.",
+      "triggers": ["记住", "保存一下", "以后按这个来", "这是我的偏好", "这个很重要"],
+      "required_operations": ["recall", "query", "get_page", "put_page"]
+    },
+    {
+      "name": "durable-writeback",
+      "path": "skills/durable-writeback",
+      "description": "Persist clearly established long-lived outcomes from the current task.",
+      "triggers": ["明确决策", "明确偏好", "明确承诺", "项目状态变化", "重要事实修正"],
+      "required_operations": ["recall", "query", "get_page", "put_page"]
+    },
+    {
+      "name": "correction",
+      "path": "skills/correction",
+      "description": "Investigate and precisely correct wrong or stale PMBrain knowledge.",
+      "triggers": ["这个错了", "不是这样的", "我没说过", "你记错了", "这个已经过时了", "应该是"],
+      "required_operations": ["recall", "query", "get_page", "patch_page", "get_links", "get_backlinks"]
+    },
+    {
+      "name": "takes-review",
+      "path": "skills/takes-review",
+      "description": "Present pending take proposals and apply only explicit user review decisions.",
+      "triggers": ["有什么待审核观点", "最近发现了什么观点", "看看新观点", "有什么观点需要确认", "审核观点"],
+      "required_operations": ["list_take_proposals", "get_take_proposal", "accept_take_proposal", "reject_take_proposal"]
+    },
+    {
+      "name": "brain-ingest-gate",
+      "path": "skills/brain-ingest-gate",
+      "description": "Check durability, provenance, entity identity, and duplication before writing.",
+      "triggers": ["保存知识", "沉淀知识", "创建知识页", "更新知识"],
+      "required_operations": ["recall", "query", "get_page", "put_page"]
+    },
+    {
+      "name": "resolve-before-asking",
+      "path": "skills/resolve-before-asking",
+      "description": "Use stored context to resolve ambiguous references before asking the user.",
+      "triggers": ["老王那个项目", "指代不明的人", "指代不明的项目", "隐含历史上下文"],
+      "required_operations": ["recall", "query", "get_page", "get_links", "get_backlinks"]
+    },
+    {
+      "name": "data-loss-gate",
+      "path": "skills/data-loss-gate",
+      "description": "Require scoped impact review and confirmation before destructive knowledge actions.",
+      "triggers": ["批量删除", "清空", "purge", "forget", "删除来源", "批量覆盖", "大规模替换"],
+      "required_operations": ["list_pages", "get_page", "sources_list", "delete_page", "forget_fact", "sources_remove"]
+    },
+    {
+      "name": "fact-check",
+      "path": "skills/fact-check",
+      "description": "Classify factual claims using PMBrain evidence and original source context.",
+      "triggers": ["核实一下", "是真的吗", "检查事实", "有没有依据", "发布前检查"],
+      "required_operations": ["recall", "query", "get_page"]
+    },
+    {
+      "name": "conversation-summary",
+      "path": "skills/conversation-summary",
+      "description": "Extract durable outcomes from the current conversation and merge them into PMBrain.",
+      "triggers": ["把刚才讨论沉淀一下", "把刚才的讨论总结并记住"],
+      "required_operations": ["recall", "query", "get_page", "put_page"]
+    }
+  ]
+}

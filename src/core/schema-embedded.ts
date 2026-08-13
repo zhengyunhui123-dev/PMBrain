@@ -1175,6 +1175,14 @@ CREATE TABLE IF NOT EXISTS take_proposals (
   model_id                    TEXT         NOT NULL,
   acted_at                    TIMESTAMPTZ,
   acted_by                    TEXT,
+  reviewed_at                 TIMESTAMPTZ,
+  review_note                 TEXT,
+  accepted_take_id            BIGINT,
+  accepted_claim              TEXT,
+  accepted_kind               TEXT,
+  accepted_holder             TEXT,
+  accepted_weight             REAL,
+  accepted_domain             TEXT,
   promoted_row_num            INTEGER,
   predicted_brier             REAL,
   predicted_brier_bucket_n    INTEGER
@@ -1186,7 +1194,6 @@ CREATE INDEX IF NOT EXISTS take_proposals_pending_idx
   WHERE status = 'pending';
 CREATE INDEX IF NOT EXISTS take_proposals_run_id_idx
   ON take_proposals (proposal_run_id);
-
 -- take_grade_cache: grade_takes verdict cache. Composite PK on
 -- (take_id, prompt_version, judge_model_id, evidence_signature) means
 -- prompt edits OR evidence changes cleanly invalidate prior verdicts.

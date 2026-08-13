@@ -30,13 +30,23 @@ import { CJK_SLUG_CHARS } from './cjk.ts';
 import { getContentFlag } from './quarantine.ts';
 import { normalizeChineseQuery } from './search/query-normalize-zh.ts';
 import {
-  acceptTakeProposal,
-  listTakeProposals,
-  rejectTakeProposal,
+  acceptTakeProposal as acceptWorkBuddyTakeProposal,
+  listTakeProposals as listWorkBuddyTakeProposals,
+  rejectTakeProposal as rejectWorkBuddyTakeProposal,
   TakeProposalError,
 } from './take-proposals.ts';
 import * as db from './db.ts';
 import { VERSION } from '../version.ts';
+import { OperationError } from './operation-error.ts';
+import {
+  acceptTakeProposal as acceptAgentPackTakeProposal,
+  getTakeProposal as getAgentPackTakeProposal,
+  listTakeProposals as listAgentPackTakeProposals,
+  rejectTakeProposal as rejectAgentPackTakeProposal,
+} from './agent-pack-take-proposals.ts';
+import { patchPage } from './patch-page.ts';
+export { OperationError } from './operation-error.ts';
+export type { ErrorCode } from './operation-error.ts';
 import {
   GET_RECENT_SALIENCE_DESCRIPTION,
   FIND_ANOMALIES_DESCRIPTION,
@@ -56,51 +66,6 @@ import {
 } from './operations-descriptions.ts';
 
 // --- Types ---
-
-/**
- * v0.31 (eD6 / eE7): ErrorCode is now an OPEN union via the
- * `(string & {})` autocomplete-friendly hack. Downstream consumers (e.g.
- * gbrain-evals) get autocomplete on the named codes AND remain TS-forward-
- * compatible when gbrain adds new codes in future releases. This shape is
- * the standard Anthropic-API/OpenAI-API pattern.
- *
- * v0.31 added: 'rate_limited', 'extraction_failed', 'fact_not_found'.
- */
-export type ErrorCode =
-  | 'page_not_found'
-  | 'invalid_params'
-  | 'embedding_failed'
-  | 'storage_error'
-  | 'bucket_not_found'
-  | 'database_error'
-  | 'permission_denied'
-  | 'unknown_transport' // v0.28.1: whoami fail-closed for ambiguous transport
-  | 'rate_limited'      // v0.31: gateway rate-limit upstream
-  | 'extraction_failed' // v0.31: facts extractor failed (refusal, parse, abort)
-  | 'fact_not_found'    // v0.31: forget_fact / recall on unknown id
-  // eslint-disable-next-line @typescript-eslint/ban-types
-  | (string & {});      // OPEN union for forward-compat (eE7 / D13)
-
-export class OperationError extends Error {
-  constructor(
-    public code: ErrorCode,
-    message: string,
-    public suggestion?: string,
-    public docs?: string,
-  ) {
-    super(message);
-    this.name = 'OperationError';
-  }
-
-  toJSON() {
-    return {
-      error: this.code,
-      message: this.message,
-      suggestion: this.suggestion,
-      docs: this.docs,
-    };
-  }
-}
 
 // --- Upload validators (Fix 1 / B5 / H5 / M4) ---
 
@@ -349,7 +314,8 @@ export interface OperationContext {
    * by the MCP HTTP/stdio dispatch layer from `access_tokens.permissions.takes_holders`.
    *
    * When set (i.e., this OperationContext came from an MCP-bound token),
-   * `takes_list`, `takes_search`, `takes_scorecard`, `takes_calibration`,
+   * `takes_list`, `takes_search`, proposal-review operations,
+   * `takes_scorecard`, `takes_calibration`,
    * and `query` (when it returns takes) MUST apply `WHERE holder = ANY($takesHoldersAllowList)`.
    * This is the server-side filter that backs the v0.28+ visibility model.
    *
@@ -1230,6 +1196,28 @@ async function runAutoLink(
   return { ...result, unresolved };
 }
 
+const patch_page: Operation = {
+  name: 'patch_page',
+  description: 'Safely replace one exact excerpt in a canonical Markdown page, re-import it, and verify disk plus database state.',
+  params: {
+    page_slug: { type: 'string', required: true, description: 'Exact page slug in the caller source scope' },
+    old_text: { type: 'string', required: true, description: 'Current text; must occur exactly once in the page body' },
+    new_text: { type: 'string', required: true, description: 'Replacement text' },
+    reason: { type: 'string', required: true, description: 'Audit reason for the correction' },
+  },
+  mutating: true,
+  scope: 'write',
+  handler: async (ctx, p) => {
+    validatePageSlug(p.page_slug as string);
+    return patchPage(ctx, {
+      pageSlug: p.page_slug as string,
+      oldText: p.old_text as string,
+      newText: p.new_text as string,
+      reason: p.reason as string,
+    });
+  },
+};
+
 const delete_page: Operation = {
   name: 'delete_page',
   description: 'Soft-delete a page. The row is hidden from search and from get_page/list_pages, but is recoverable via restore_page within 72h. The autopilot purge phase hard-deletes after the recovery window. Pass include_deleted: true to get_page to verify the soft-delete landed.',
@@ -1845,7 +1833,7 @@ const take_proposals_list: Operation = {
     if (!scope.sourceId && (!scope.sourceIds || scope.sourceIds.length === 0)) {
       throw new OperationError('permission_denied', 'take_proposals_list requires a Source-scoped operation context');
     }
-    return listTakeProposals(ctx.engine, {
+    return listWorkBuddyTakeProposals(ctx.engine, {
       status: p.status as string | undefined,
       limit: p.limit as number | undefined,
       ...scope,
@@ -1863,7 +1851,7 @@ const take_proposal_accept: Operation = {
   },
   handler: async (ctx, p) => {
     try {
-      return await acceptTakeProposal(ctx.engine, p.id as number, {
+      return await acceptWorkBuddyTakeProposal(ctx.engine, p.id as number, {
         actedBy: takeProposalActor(ctx),
         sourceId: ctx.sourceId,
       });
@@ -1883,7 +1871,7 @@ const take_proposal_reject: Operation = {
   },
   handler: async (ctx, p) => {
     try {
-      return await rejectTakeProposal(ctx.engine, p.id as number, {
+      return await rejectWorkBuddyTakeProposal(ctx.engine, p.id as number, {
         actedBy: takeProposalActor(ctx),
         sourceId: ctx.sourceId,
       });
@@ -1947,6 +1935,109 @@ const takes_calibration: Operation = {
     );
   },
   cliHints: { name: 'takes-calibration' },
+};
+
+const list_take_proposals: Operation = {
+  name: 'list_take_proposals',
+  description: 'List reviewable take proposals without mutating their lifecycle state.',
+  scope: 'read',
+  params: {
+    status: { type: 'string', enum: ['pending', 'accepted', 'rejected', 'superseded'], default: 'pending' },
+    limit: { type: 'number', description: 'Maximum proposals (default 10, cap 100)' },
+    page_slug: { type: 'string', description: 'Filter by page slug' },
+    kind: { type: 'string', description: 'Filter by proposed take kind' },
+    source_id: { type: 'string', description: 'Optional source within the caller read scope' },
+  },
+  handler: async (ctx, p) => {
+    if (p.page_slug !== undefined) validatePageSlug(p.page_slug as string);
+    const scope = requestedSourceScopeOpts(ctx, p.source_id);
+    return listAgentPackTakeProposals(ctx.engine, {
+      ...scope,
+      status: p.status as string | undefined,
+      limit: p.limit as number | undefined,
+      pageSlug: p.page_slug as string | undefined,
+      kind: p.kind as string | undefined,
+      takesHoldersAllowList: ctx.takesHoldersAllowList,
+    });
+  },
+};
+
+function takeProposalId(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0) {
+    throw new OperationError('invalid_params', 'proposal_id must be a positive integer');
+  }
+  return value;
+}
+
+const get_take_proposal: Operation = {
+  name: 'get_take_proposal',
+  description: 'Inspect a take proposal, its source evidence, staleness, canonical takes, and possible duplicates.',
+  scope: 'read',
+  params: {
+    proposal_id: { type: 'number', required: true },
+  },
+  handler: async (ctx, p) => getAgentPackTakeProposal(
+    ctx.engine,
+    takeProposalId(p.proposal_id),
+    sourceScopeOpts(ctx),
+    ctx.takesHoldersAllowList,
+  ),
+};
+
+const accept_take_proposal: Operation = {
+  name: 'accept_take_proposal',
+  description: 'Accept a pending proposal, optionally edit it, and persist one canonical take to Markdown plus DB.',
+  scope: 'write',
+  mutating: true,
+  params: {
+    proposal_id: { type: 'number', required: true },
+    edited_claim: { type: 'string' },
+    edited_kind: { type: 'string' },
+    edited_holder: { type: 'string' },
+    edited_weight: { type: 'number' },
+    edited_domain: { type: 'string' },
+    review_note: { type: 'string' },
+  },
+  handler: async (ctx, p) => {
+    if (ctx.dryRun) {
+      return { dry_run: true, action: 'accept_take_proposal', proposal_id: p.proposal_id };
+    }
+    return acceptAgentPackTakeProposal(ctx.engine, {
+      proposalId: takeProposalId(p.proposal_id),
+      sourceId: ctx.sourceId,
+      editedClaim: p.edited_claim as string | undefined,
+      editedKind: p.edited_kind as string | undefined,
+      editedHolder: p.edited_holder as string | undefined,
+      editedWeight: p.edited_weight as number | undefined,
+      editedDomain: p.edited_domain as string | undefined,
+      reviewNote: p.review_note as string | undefined,
+      actedBy: ctx.auth?.clientName ?? ctx.auth?.clientId,
+      takesHoldersAllowList: ctx.takesHoldersAllowList,
+    });
+  },
+};
+
+const reject_take_proposal: Operation = {
+  name: 'reject_take_proposal',
+  description: 'Reject a pending take proposal while preserving it as an audit record.',
+  scope: 'write',
+  mutating: true,
+  params: {
+    proposal_id: { type: 'number', required: true },
+    reason: { type: 'string', description: 'Review note or rejection reason' },
+  },
+  handler: async (ctx, p) => {
+    if (ctx.dryRun) {
+      return { dry_run: true, action: 'reject_take_proposal', proposal_id: p.proposal_id };
+    }
+    return rejectAgentPackTakeProposal(ctx.engine, {
+      proposalId: takeProposalId(p.proposal_id),
+      sourceId: ctx.sourceId,
+      reason: p.reason as string | undefined,
+      actedBy: ctx.auth?.clientName ?? ctx.auth?.clientId,
+      takesHoldersAllowList: ctx.takesHoldersAllowList,
+    });
+  },
 };
 
 const think: Operation = {
@@ -4778,7 +4869,7 @@ const run_onboard: Operation = {
 
 export const operations: Operation[] = [
   // Page CRUD
-  get_page, put_page, delete_page, list_pages,
+  get_page, put_page, patch_page, delete_page, list_pages,
   // v0.26.5 destructive-guard ops (page-level soft-delete + recovery + admin purge)
   restore_page, purge_deleted_pages,
   // Search
@@ -4817,8 +4908,10 @@ export const operations: Operation[] = [
   find_orphans,
   // v0.36.1.0 (T7) — Hindsight calibration wave: read profile via MCP
   get_calibration_profile,
-  // v0.28: Takes + think
-  takes_list, takes_search, think,
+  // Takes + user-reviewed proposal lifecycle
+  takes_list, takes_search,
+  list_take_proposals, get_take_proposal, accept_take_proposal, reject_take_proposal,
+  think,
   // WorkBuddy V1: explicit, privacy-safe Skill diagnostic declaration
   agent_integration_debug,
   // PMBrain WorkBuddy V1: Source-scoped review queue (admin-only)

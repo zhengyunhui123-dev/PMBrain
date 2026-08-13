@@ -1,0 +1,4 @@
+interface:
+  display_name: "Brain Ingest Gate"
+  short_description: "Check before adding knowledge to PMBrain."
+  default_prompt: "Decide whether this belongs in PMBrain."

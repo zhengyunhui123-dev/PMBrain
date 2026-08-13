@@ -1,0 +1,4 @@
+interface:
+  display_name: "Data Loss Gate"
+  short_description: "Gate destructive PMBrain actions behind confirmation."
+  default_prompt: "Protect PMBrain data before destructive changes."

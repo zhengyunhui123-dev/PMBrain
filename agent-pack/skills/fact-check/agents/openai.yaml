@@ -1,0 +1,4 @@
+interface:
+  display_name: "Fact Check"
+  short_description: "Verify a claim against PMBrain evidence."
+  default_prompt: "Fact-check this against stored evidence."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Brain First"
+  short_description: "Consult PMBrain before answering from memory."
+  default_prompt: "Use PMBrain evidence before answering."

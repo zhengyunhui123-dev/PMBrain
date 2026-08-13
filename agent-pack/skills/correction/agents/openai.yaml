@@ -1,0 +1,4 @@
+interface:
+  display_name: "Correction"
+  short_description: "Correct one verified PMBrain passage safely."
+  default_prompt: "Correct this stored knowledge safely."

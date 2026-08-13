@@ -71,4 +71,3 @@ export interface WorkBuddyAdapterOptions {
 export interface WorkBuddyAgentPackInstallerOptions extends WorkBuddyAdapterOptions {
   adapter?: never;
 }
-
