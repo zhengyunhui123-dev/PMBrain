@@ -36,6 +36,10 @@ let advancedPhaseOverrides: Partial<Record<AdvancedModelPhase, string>> = {};
 let loadedKnowledgeDirectory = '';
 let loadedKnowledgeSourceId = '';
 let knowledgeSourceStatusRequest = 0;
+type WorkbuddyAgentIntegrationStatus = Awaited<ReturnType<PMBrainDesktopApi['getWorkbuddyAgentIntegration']>>;
+let workbuddyAgentIntegration: WorkbuddyAgentIntegrationStatus | null = null;
+let workbuddyAgentIntegrationError = '';
+let workbuddyAgentIntegrationRequest = 0;
 let customProviderDraft: DesktopCustomProvider | null = null;
 let customProviderTarget: ModelKind | null = null;
 const providerModels: Record<'chat' | 'embedding', string[]> = { chat: [], embedding: [] };
@@ -703,9 +707,188 @@ function renderService(service: SidecarState | null, port?: number): void {
   }
 }
 
+function appendWorkbuddyCheck(
+  container: HTMLElement,
+  label: string,
+  value: string,
+  state: 'ready' | 'warning' | 'checking',
+): void {
+  const item = document.createElement('div');
+  item.className = `workbuddy-check ${state}`;
+  const name = document.createElement('small');
+  name.textContent = label;
+  const result = document.createElement('b');
+  result.textContent = value;
+  item.append(name, result);
+  container.append(item);
+}
+
+function workbuddyStateCopy(status: WorkbuddyAgentIntegrationStatus | null): { badge: string; message: string } {
+  if (!status) {
+    return {
+      badge: workbuddyAgentIntegrationError ? '检查失败' : '正在检查',
+      message: workbuddyAgentIntegrationError
+        ? `检查失败：${workbuddyAgentIntegrationError}`
+        : '正在确认 WorkBuddy 实际读取的 Agent Rules、Skills 与 MCP 状态。',
+    };
+  }
+  if (!status.workbuddyDetected) {
+    return {
+      badge: '未检测到客户端',
+      message: status.message || '未检测到受支持的 WorkBuddy 版本，请安装或启动 WorkBuddy 后重新检查。',
+    };
+  }
+  const copy: Record<WorkbuddyAgentIntegrationStatus['state'], { badge: string; message: string }> = {
+    not_installed: {
+      badge: '未深度接入',
+      message: '选择工作目录后，安装 PMBrain 官方 Agent Rules 与 Skills，并验证 MCP。',
+    },
+    installed: {
+      badge: '已深度接入',
+      message: 'Agent Rules、PMBrain Skills 与 MCP 已完成检查。',
+    },
+    update_available: {
+      badge: '有新版本',
+      message: '官方 Agent Pack 有新版本；更新只处理 PMBrain 管理的内容。',
+    },
+    modified: {
+      badge: '检测到修改',
+      message: 'PMBrain 管理的内容已有本地修改，不会静默覆盖。',
+    },
+    incomplete: {
+      badge: '接入不完整',
+      message: '部分检查未通过，请根据下面的状态重新接入。',
+    },
+  };
+  return status.message ? { ...copy[status.state], message: status.message } : copy[status.state];
+}
+
+function workbuddyVersionLabel(status: WorkbuddyAgentIntegrationStatus | null): string {
+  if (!status) return '正在读取';
+  const label = (version: string) => version.startsWith('v') ? version : `v${version}`;
+  if (!status.installedPackVersion) return `可安装 ${label(status.packVersion)}`;
+  return status.installedPackVersion === status.packVersion
+    ? label(status.installedPackVersion)
+    : `${label(status.installedPackVersion)} → ${label(status.packVersion)}`;
+}
+
+function applyWorkbuddyAgentIntegrationStatus(status: WorkbuddyAgentIntegrationStatus): void {
+  workbuddyAgentIntegration = status;
+  workbuddyAgentIntegrationError = '';
+  if (state) renderIntegrations(state.integrations);
+}
+
+function createWorkbuddyAction(
+  label: string,
+  className: string,
+  action: (button: HTMLButtonElement) => void,
+): HTMLButtonElement {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = className;
+  const text = document.createElement('span');
+  text.textContent = label;
+  const spinner = document.createElement('i');
+  button.append(text, spinner);
+  button.addEventListener('click', () => action(button));
+  return button;
+}
+
+function renderWorkbuddyIntegration(item: IntegrationInfo): HTMLElement {
+  const status = workbuddyAgentIntegration;
+  const copy = workbuddyStateCopy(status);
+  const article = document.createElement('article');
+  article.className = 'integration-card workbuddy-integration-card';
+
+  const badge = document.createElement('span');
+  const healthy = status?.state === 'installed' && status.workbuddyDetected && status.mcpConnected;
+  badge.className = healthy ? 'configured badge' : status ? 'attention badge' : 'badge';
+  badge.textContent = copy.badge;
+
+  const title = document.createElement('h3');
+  title.textContent = 'WorkBuddy 深度接入';
+  const summary = document.createElement('p');
+  const warning = status && (status.state === 'modified' || status.state === 'incomplete' || !status.workbuddyDetected);
+  summary.className = warning
+    ? 'workbuddy-summary warning'
+    : 'workbuddy-summary';
+  summary.textContent = copy.message;
+
+  const checks = document.createElement('div');
+  checks.className = 'workbuddy-checks';
+  if (!status) {
+    appendWorkbuddyCheck(checks, 'MCP 接入', item.configured ? '已配置，正在验证' : '正在检查', 'checking');
+    appendWorkbuddyCheck(checks, 'Agent Rules', '正在检查', 'checking');
+    appendWorkbuddyCheck(checks, 'PMBrain Skills', '正在检查', 'checking');
+  } else {
+    const mcpReady = status.mcpConfigured && status.mcpConnected;
+    appendWorkbuddyCheck(
+      checks,
+      'MCP 接入',
+      mcpReady ? '✓ 已连接' : status.mcpConfigured ? '⚠ 已配置，尚未连通' : '⚠ 未配置',
+      mcpReady ? 'ready' : 'warning',
+    );
+    appendWorkbuddyCheck(
+      checks,
+      'Agent Rules',
+      status.rulesInstalled ? '✓ 已安装' : '⚠ 未安装',
+      status.rulesInstalled ? 'ready' : 'warning',
+    );
+    const skillsReady = status.skillsTotal > 0 && status.skillsInstalled === status.skillsTotal;
+    appendWorkbuddyCheck(
+      checks,
+      'PMBrain Skills',
+      skillsReady
+        ? `✓ ${status.skillsInstalled} 个`
+        : status.skillsInstalled > 0 ? `⚠ ${status.skillsInstalled}/${status.skillsTotal} 个` : '⚠ 未安装',
+      skillsReady ? 'ready' : 'warning',
+    );
+  }
+
+  const metadata = document.createElement('div');
+  metadata.className = 'workbuddy-meta';
+  const workspace = document.createElement('div');
+  const workspaceLabel = document.createElement('small');
+  workspaceLabel.textContent = '安装目录';
+  const workspacePath = document.createElement('code');
+  workspacePath.textContent = status?.workspace || '尚未选择工作目录';
+  workspace.append(workspaceLabel, workspacePath);
+  const version = document.createElement('div');
+  const versionLabel = document.createElement('small');
+  versionLabel.textContent = 'Agent Pack 版本';
+  const versionValue = document.createElement('b');
+  versionValue.textContent = workbuddyVersionLabel(status);
+  version.append(versionLabel, versionValue);
+  metadata.append(workspace, version);
+
+  const scope = document.createElement('small');
+  scope.className = 'workbuddy-scope-note';
+  scope.textContent = 'Agent Rules 与 PMBrain Skills 仅对所选工作目录生效。安装或更新后，请重启 WorkBuddy 并新建会话。';
+
+  const actions = document.createElement('div');
+  actions.className = 'workbuddy-actions';
+  if (status && status.workbuddyDetected && status.state === 'not_installed') {
+    actions.append(createWorkbuddyAction('深度接入', 'solid', button => void installWorkbuddyIntegration(button)));
+  }
+  const managedContentUnmodified = !status || status.state !== 'modified';
+  if (status?.state === 'incomplete' && managedContentUnmodified) {
+    actions.append(createWorkbuddyAction('修复', 'solid', button => void updateWorkbuddyIntegration(button, '修复')));
+  } else if (status?.state === 'update_available' && managedContentUnmodified) {
+    actions.append(createWorkbuddyAction('更新', 'solid', button => void updateWorkbuddyIntegration(button, '更新')));
+  }
+  actions.append(createWorkbuddyAction('重新检查', '', button => void refreshWorkbuddyAgentIntegration(true, button)));
+  if (status?.workspace && status.state !== 'not_installed') {
+    actions.append(createWorkbuddyAction('移除深度接入', 'workbuddy-remove', button => void removeWorkbuddyIntegration(button)));
+  }
+
+  article.append(badge, title, summary, checks, metadata, scope, actions);
+  return article;
+}
+
 function renderIntegrations(integrations: IntegrationInfo[]): void {
   const grid = $('#integration-grid');
   grid.replaceChildren(...integrations.map((item) => {
+    if (item.id === 'workbuddy') return renderWorkbuddyIntegration(item);
     const article = document.createElement('article');
     article.className = 'integration-card';
     const badge = document.createElement('span');
@@ -990,6 +1173,7 @@ function populate(next: DesktopSetupState): void {
     : '不会安装或新建 Docker；会安全启动已安装的 Docker Desktop 和匹配的现有容器。';
   renderEngine();
   renderIntegrations(next.integrations);
+  void refreshWorkbuddyAgentIntegration(false);
   renderService(null, next.port);
   $('#save-setup').querySelector('span')!.textContent = saveButtonText();
   updateSystemSettingsAvailability();
@@ -1337,6 +1521,85 @@ async function save(): Promise<void> {
 
 function selectedCredential(): CredentialKind {
   return (document.querySelector<HTMLInputElement>('input[name="credential"]:checked')?.value ?? 'api_key') as CredentialKind;
+}
+
+async function refreshWorkbuddyAgentIntegration(
+  reportResult = false,
+  button?: HTMLButtonElement,
+): Promise<boolean> {
+  const request = ++workbuddyAgentIntegrationRequest;
+  if (reportResult) clearNotices();
+  if (button) setBusy(button, true, '正在检查…');
+  try {
+    const status = await window.pmbrainDesktop.getWorkbuddyAgentIntegration();
+    if (request !== workbuddyAgentIntegrationRequest) return false;
+    applyWorkbuddyAgentIntegrationStatus(status);
+    if (reportResult) setNotice('success', 'WorkBuddy 深度接入状态已重新检查，请按卡片中的检查结果处理。');
+    return true;
+  } catch (error) {
+    if (request !== workbuddyAgentIntegrationRequest) return false;
+    workbuddyAgentIntegration = null;
+    workbuddyAgentIntegrationError = error instanceof Error ? error.message : String(error);
+    if (state) renderIntegrations(state.integrations);
+    if (reportResult) setNotice('error', `WorkBuddy 检查失败：${workbuddyAgentIntegrationError}`);
+    return false;
+  } finally {
+    if (button) setBusy(button, false, '重新检查');
+  }
+}
+
+async function installWorkbuddyIntegration(button: HTMLButtonElement): Promise<void> {
+  clearNotices();
+  let workspace: string | null;
+  try {
+    workspace = await window.pmbrainDesktop.chooseDirectory(workbuddyAgentIntegration?.workspace ?? undefined);
+  } catch (error) {
+    setNotice('error', error instanceof Error ? error.message : String(error));
+    return;
+  }
+  if (!workspace) return;
+  setBusy(button, true, '正在接入…');
+  try {
+    const status = await window.pmbrainDesktop.installWorkbuddyAgent(workspace);
+    applyWorkbuddyAgentIntegrationStatus(status);
+    setNotice('success', 'WorkBuddy 深度接入已完成。请重启 WorkBuddy 并新建会话后使用。');
+  } catch (error) {
+    setNotice('error', error instanceof Error ? error.message : String(error));
+  } finally {
+    setBusy(button, false, '深度接入');
+  }
+}
+
+async function updateWorkbuddyIntegration(button: HTMLButtonElement, idleLabel: '更新' | '修复'): Promise<void> {
+  clearNotices();
+  setBusy(button, true, '正在更新…');
+  try {
+    const status = await window.pmbrainDesktop.updateWorkbuddyAgent();
+    applyWorkbuddyAgentIntegrationStatus(status);
+    setNotice('success', 'WorkBuddy Agent Pack 已更新。请重启 WorkBuddy 并新建会话后使用。');
+  } catch (error) {
+    setNotice('error', error instanceof Error ? error.message : String(error));
+  } finally {
+    setBusy(button, false, idleLabel);
+  }
+}
+
+async function removeWorkbuddyIntegration(button: HTMLButtonElement): Promise<void> {
+  const confirmed = confirm(
+    '只移除 PMBrain 安装的 WorkBuddy Skills 和 Agent Rules 文件；不会删除你自己的 Rules 或 Skills。\n\n确认移除深度接入？',
+  );
+  if (!confirmed) return;
+  clearNotices();
+  setBusy(button, true, '正在移除…');
+  try {
+    const status = await window.pmbrainDesktop.removeWorkbuddyAgent();
+    applyWorkbuddyAgentIntegrationStatus(status);
+    setNotice('success', status.message || '已移除 PMBrain 管理的 WorkBuddy 深度接入内容；你的 Rules 与 Skills 未被删除。');
+  } catch (error) {
+    setNotice('error', error instanceof Error ? error.message : String(error));
+  } finally {
+    setBusy(button, false, '移除深度接入');
+  }
 }
 
 async function configure(client: IntegrationClient, button: HTMLButtonElement): Promise<void> {

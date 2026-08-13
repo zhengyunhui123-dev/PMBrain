@@ -199,6 +199,50 @@ describe('desktop settings renderer contracts', () => {
     expect(renderer).toContain('重试连接');
   });
 
+  test('gives Workbuddy a workspace-scoped Agent Pack card without changing other clients', () => {
+    expect(renderer).toContain("item.id === 'workbuddy'");
+    expect(renderer).toContain('renderWorkbuddyIntegration');
+    expect(renderer).toContain('getWorkbuddyAgentIntegration()');
+    expect(renderer).toContain('installWorkbuddyAgent(workspace)');
+    expect(renderer).toContain('updateWorkbuddyAgent()');
+    expect(renderer).toContain('removeWorkbuddyAgent()');
+    expect(renderer).toContain("createWorkbuddyAction('修复'");
+    expect(renderer).toContain('Agent Rules 文件');
+    expect(renderer).toContain('深度接入');
+    expect(renderer).toContain('重新检查');
+    expect(renderer).toContain('更新');
+    expect(renderer).toContain('移除深度接入');
+    expect(renderer).toContain('MCP 接入');
+    expect(renderer).toContain('Agent Rules');
+    expect(renderer).toContain('PMBrain Skills');
+    expect(renderer).toContain('安装目录');
+    expect(renderer).toContain('Agent Pack 版本');
+    expect(renderer).toContain('仅对所选工作目录生效');
+    expect(renderer).toContain('重启 WorkBuddy 并新建会话');
+    expect(renderer).toContain("status.state !== 'modified'");
+    expect(renderer).toContain("status?.state === 'installed' && status.workbuddyDetected && status.mcpConnected");
+    expect(renderer).toContain("if (item.id === 'workbuddy') return renderWorkbuddyIntegration(item)");
+    expect(renderer).toContain("button.addEventListener('click', () => void configure(item.id, button))");
+    expect(styles).toContain('.workbuddy-integration-card');
+    expect(styles).toContain('.workbuddy-checks');
+    expect(styles).toContain('.workbuddy-actions');
+    expect(preview).toContain('getWorkbuddyAgentIntegration: async');
+    expect(preview).toContain('installWorkbuddyAgent: async');
+    expect(preview).toContain('updateWorkbuddyAgent: async');
+    expect(preview).toContain('removeWorkbuddyAgent: async');
+    expect(preview).toContain("packVersion: '1'");
+    expect(preview).toContain('skillsInstalled: 5');
+    for (const channel of [
+      'desktop:get-workbuddy-agent-integration',
+      'desktop:install-workbuddy-agent',
+      'desktop:update-workbuddy-agent',
+      'desktop:remove-workbuddy-agent',
+    ]) {
+      expect(main).toContain(channel);
+      expect(preload).toContain(channel);
+    }
+  });
+
   test('removes stale shared credential DOM access while preserving network settings', () => {
     expect(renderer).not.toContain('loadSharedAccess');
     expect(renderer).not.toContain('renderSharedAccess');

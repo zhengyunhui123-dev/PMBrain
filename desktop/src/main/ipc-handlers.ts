@@ -44,6 +44,10 @@ export interface DesktopIpcHandlers {
   saveAdvancedModelConfig: (values: AdvancedModelWriteInput) => Promise<unknown>;
   saveSetup: (payload: SetupPayload) => Promise<unknown>;
   configureIntegration: (client: IntegrationClient, kind: CredentialKind) => Promise<unknown>;
+  getWorkbuddyAgentIntegration: () => Promise<unknown>;
+  installWorkbuddyAgent: (workspace: string) => Promise<unknown>;
+  updateWorkbuddyAgent: () => Promise<unknown>;
+  removeWorkbuddyAgent: () => Promise<unknown>;
   openAdmin: () => Promise<void>;
   checkUpdates: () => Promise<unknown> | undefined;
   downloadUpdate: () => Promise<unknown> | undefined;
@@ -94,6 +98,10 @@ export function registerDesktopIpcHandlers(handlers: DesktopIpcHandlers): void {
   registerTrustedHandler('desktop:save-advanced-model-config', handlers, (_event, values: AdvancedModelWriteInput) => handlers.saveAdvancedModelConfig(values ?? {}));
   registerTrustedHandler('desktop:save-setup', handlers, (_event, payload: SetupPayload) => handlers.saveSetup(payload));
   registerTrustedHandler('desktop:configure-integration', handlers, (_event, client: IntegrationClient, kind: CredentialKind) => handlers.configureIntegration(client, kind));
+  registerTrustedHandler('desktop:get-workbuddy-agent-integration', handlers, () => handlers.getWorkbuddyAgentIntegration());
+  registerTrustedHandler('desktop:install-workbuddy-agent', handlers, (_event, workspace: string) => handlers.installWorkbuddyAgent(workspace));
+  registerTrustedHandler('desktop:update-workbuddy-agent', handlers, () => handlers.updateWorkbuddyAgent());
+  registerTrustedHandler('desktop:remove-workbuddy-agent', handlers, () => handlers.removeWorkbuddyAgent());
   registerTrustedHandler('desktop:copy', handlers, (_event, value: string) => clipboard.writeText(value));
   registerTrustedHandler('desktop:open-admin', handlers, () => handlers.openAdmin());
   registerTrustedHandler('desktop:check-updates', handlers, () => handlers.checkUpdates());

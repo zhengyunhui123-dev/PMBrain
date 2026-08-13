@@ -165,6 +165,22 @@ window.pmbrainDesktop = {
   onShowUpdates: () => () => {},
   onShowPanel: (callback) => { setTimeout(() => callback('${panel}'), 0); return () => {}; },
   chooseDirectory: async () => null,
+  getWorkbuddyAgentIntegration: async () => ({
+    state: 'update_available',
+    workbuddyDetected: true,
+    workspace: 'D:\\\\Projects\\\\PMBrain',
+    packVersion: '1',
+    installedPackVersion: '0',
+    rulesInstalled: true,
+    skillsInstalled: 5,
+    skillsTotal: 5,
+    mcpConfigured: true,
+    mcpConnected: true,
+    message: '官方 Agent Pack 有新版本；更新只处理 PMBrain 管理的内容。',
+  }),
+  installWorkbuddyAgent: async () => window.pmbrainDesktop.getWorkbuddyAgentIntegration(),
+  updateWorkbuddyAgent: async () => window.pmbrainDesktop.getWorkbuddyAgentIntegration(),
+  removeWorkbuddyAgent: async () => window.pmbrainDesktop.getWorkbuddyAgentIntegration(),
   inspectKnowledgeSourceDirectory: async (path) => ({
     path,
     sourceName: path.replace(/[\\\\/]+$/, '').split(/[\\\\/]/).pop() || '',
@@ -208,7 +224,7 @@ window.pmbrainDesktop = {
   openLogs: async () => '',
   quit: async () => {}
 };
-console.log('PMBrain mock injected: panel=${panel}, theme=${theme}, integrations count=6');
+console.log('PMBrain mock injected: panel=${panel}, theme=${theme}, integrations count=9');
 // HTML 初始状态已在 Node.js 侧修改，无需 setTimeout 切换面板
 // 等 DOM 渲染后滚动到目标区域
 setTimeout(() => {
@@ -285,6 +301,24 @@ const mockIntegrations: MockIntegration[] = [
   { id: 'openclaw', name: 'OpenClaw', path: null, configured: false, automatic: false },
 ];
 const cardsHtml = mockIntegrations.map((item) => {
+  if (item.id === 'workbuddy') {
+    return `<article class="integration-card workbuddy-integration-card">
+      <span class="attention badge">有新版本</span>
+      <h3>WorkBuddy 深度接入</h3>
+      <p class="workbuddy-summary">官方 Agent Pack 有新版本；更新只处理 PMBrain 管理的内容。</p>
+      <div class="workbuddy-checks">
+        <div class="workbuddy-check ready"><small>MCP 接入</small><b>✓ 已连接</b></div>
+        <div class="workbuddy-check ready"><small>Agent Rules</small><b>✓ 已安装</b></div>
+        <div class="workbuddy-check ready"><small>PMBrain Skills</small><b>✓ 5 个</b></div>
+      </div>
+      <div class="workbuddy-meta">
+        <div><small>安装目录</small><code>D:\\Projects\\PMBrain</code></div>
+        <div><small>Agent Pack 版本</small><b>v0 → v1</b></div>
+      </div>
+      <small class="workbuddy-scope-note">Agent Rules 与 PMBrain Skills 仅对所选工作目录生效。安装或更新后，请重启 WorkBuddy 并新建会话。</small>
+      <div class="workbuddy-actions"><button class="solid">更新</button><button>重新检查</button><button class="workbuddy-remove">移除深度接入</button></div>
+    </article>`;
+  }
   const badgeClass = item.configured ? 'configured badge' : 'badge';
   const badgeText = item.id === 'qwenpaw' && item.connectionState === 'connected'
     ? '已连接'
@@ -361,4 +395,4 @@ if (result.status !== 0) {
 }
 
 const size = statSync(output).size;
-console.log(`[${new Date().toISOString()}] Preview: panel=${panel}, theme=${theme}, output=${output}, mock integrations count=6`);
+console.log(`[${new Date().toISOString()}] Preview: panel=${panel}, theme=${theme}, output=${output}, mock integrations count=9`);

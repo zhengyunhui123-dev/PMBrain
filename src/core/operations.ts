@@ -29,6 +29,12 @@ import { stampEvidence } from './search/evidence.ts';
 import { CJK_SLUG_CHARS } from './cjk.ts';
 import { getContentFlag } from './quarantine.ts';
 import { normalizeChineseQuery } from './search/query-normalize-zh.ts';
+import {
+  acceptTakeProposal,
+  listTakeProposals,
+  rejectTakeProposal,
+  TakeProposalError,
+} from './take-proposals.ts';
 import * as db from './db.ts';
 import { VERSION } from '../version.ts';
 import {
@@ -1778,6 +1784,113 @@ const takes_search: Operation = {
     });
   },
   cliHints: { name: 'takes-search', positional: ['query'] },
+};
+
+const agent_integration_debug: Operation = {
+  name: 'agent_integration_debug',
+  description: 'Declare the PMBrain Agent Pack route for privacy-safe diagnostics. WorkBuddy does not natively send a Skill name, so the official Skill calls this before its real operation; no conversation id or request content is persisted.',
+  scope: 'read',
+  mutating: false,
+  params: {
+    client: { type: 'string', required: true, enum: ['desktop-workbuddy'] },
+    agent_integration: { type: 'string', required: true, enum: ['deep'] },
+    skill: {
+      type: 'string',
+      required: true,
+      enum: ['brain-first', 'remember', 'correction', 'durable-writeback', 'takes-review'],
+    },
+  },
+  handler: async (_ctx, p) => ({
+    recorded: true,
+    client: p.client,
+    agent_integration: p.agent_integration,
+    skill: p.skill,
+    native_skill_metadata: false,
+  }),
+};
+
+function takeProposalActor(ctx: OperationContext): string {
+  const identity = ctx.auth?.clientName ?? ctx.auth?.clientId;
+  return identity ? `mcp:${identity}` : 'mcp';
+}
+
+function mapTakeProposalError(error: unknown): never {
+  if (!(error instanceof TakeProposalError)) throw error;
+  const code = error.code === 'invalid_id'
+    ? 'invalid_params'
+    : error.code === 'not_found'
+      ? 'take_proposal_not_found'
+      : error.code === 'already_acted'
+        ? 'take_proposal_already_acted'
+        : 'take_proposal_conflict';
+  throw new OperationError(code, error.message);
+}
+
+const take_proposals_list: Operation = {
+  name: 'take_proposals_list',
+  description: 'List AI-proposed takes awaiting review. Admin scope. Results are Source-scoped and expose the stored proposal fields; weight is not a fabricated confidence score.',
+  scope: 'admin',
+  mutating: false,
+  params: {
+    status: {
+      type: 'string',
+      enum: ['pending', 'accepted', 'rejected', 'superseded', 'all'],
+      description: 'Proposal status (default pending)',
+    },
+    limit: { type: 'number', description: 'Max rows (default 50, cap 200)' },
+    source: { type: 'string', description: 'Optional source id. Must remain within the credential read scope.' },
+  },
+  handler: async (ctx, p) => {
+    const scope = requestedSourceScopeOpts(ctx, p.source);
+    if (!scope.sourceId && (!scope.sourceIds || scope.sourceIds.length === 0)) {
+      throw new OperationError('permission_denied', 'take_proposals_list requires a Source-scoped operation context');
+    }
+    return listTakeProposals(ctx.engine, {
+      status: p.status as string | undefined,
+      limit: p.limit as number | undefined,
+      ...scope,
+    });
+  },
+};
+
+const take_proposal_accept: Operation = {
+  name: 'take_proposal_accept',
+  description: 'Accept one pending take proposal and transactionally promote it to one canonical take. Admin scope; writes only to the credential write Source.',
+  scope: 'admin',
+  mutating: true,
+  params: {
+    id: { type: 'number', required: true, description: 'Positive take_proposals.id returned by take_proposals_list' },
+  },
+  handler: async (ctx, p) => {
+    try {
+      return await acceptTakeProposal(ctx.engine, p.id as number, {
+        actedBy: takeProposalActor(ctx),
+        sourceId: ctx.sourceId,
+      });
+    } catch (error) {
+      mapTakeProposalError(error);
+    }
+  },
+};
+
+const take_proposal_reject: Operation = {
+  name: 'take_proposal_reject',
+  description: 'Reject one pending take proposal without creating a canonical take. Admin scope; writes only to the credential write Source.',
+  scope: 'admin',
+  mutating: true,
+  params: {
+    id: { type: 'number', required: true, description: 'Positive take_proposals.id returned by take_proposals_list' },
+  },
+  handler: async (ctx, p) => {
+    try {
+      return await rejectTakeProposal(ctx.engine, p.id as number, {
+        actedBy: takeProposalActor(ctx),
+        sourceId: ctx.sourceId,
+      });
+    } catch (error) {
+      mapTakeProposalError(error);
+    }
+  },
 };
 
 /**
@@ -4706,6 +4819,10 @@ export const operations: Operation[] = [
   get_calibration_profile,
   // v0.28: Takes + think
   takes_list, takes_search, think,
+  // WorkBuddy V1: explicit, privacy-safe Skill diagnostic declaration
+  agent_integration_debug,
+  // PMBrain WorkBuddy V1: Source-scoped review queue (admin-only)
+  take_proposals_list, take_proposal_accept, take_proposal_reject,
   // v0.30: calibration aggregates over takes
   takes_scorecard, takes_calibration,
   // v0.28: whoami + scoped sources management
