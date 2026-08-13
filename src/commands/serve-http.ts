@@ -31,10 +31,20 @@ import { requireBearerAuth } from '@modelcontextprotocol/sdk/server/auth/middlew
 import type { BrainEngine } from '../core/engine.ts';
 import { operations, OperationError } from '../core/operations.ts';
 import type { OperationContext, AuthInfo } from '../core/operations.ts';
+import {
+  acceptAdminTakeProposal,
+  listAdminTakeProposals,
+  rejectAdminTakeProposal,
+  type AdminTakeProposalRow,
+} from '../core/take-proposals.ts';
 import { GBrainOAuthProvider, legacyAccessTokenScopes, legacyAccessTokenSourceScope, validateTokenEndpointAuthMethod } from '../core/oauth-provider.ts';
 import type { SqlQuery } from '../core/oauth-provider.ts';
 import { hasScope, ALLOWED_SCOPES_LIST, normalizeScopesInput } from '../core/scope.ts';
 import { summarizeMcpParams, dispatchToolCall } from '../mcp/dispatch.ts';
+import {
+  AgentIntegrationTraceRegistry,
+  withAgentIntegrationLogContext,
+} from '../mcp/agent-integration-trace.ts';
 import { paramDefToSchema } from '../mcp/tool-defs.ts';
 import { getBrainHotMemoryMeta } from '../core/facts/meta-hook.ts';
 import { loadConfig, toEngineConfig, type GBrainConfig } from '../core/config.ts';
@@ -112,6 +122,12 @@ export {
   normalizeAdminUploadFilename,
   type AdminUploadFileKind,
 } from './pmbrain-admin-support.ts';
+export {
+  acceptAdminTakeProposal,
+  listAdminTakeProposals,
+  rejectAdminTakeProposal,
+  type AdminTakeProposalRow,
+};
 
 export const ADMIN_SESSION_CAP = 1000;
 export const ADMIN_SESSION_PRUNE_INTERVAL_MS = 60 * 60 * 1000;
@@ -758,125 +774,6 @@ export async function queryAgentClientSpend(engine: BrainEngine): Promise<AgentC
   }));
 }
 
-export interface AdminTakeProposalRow {
-  id: number;
-  source_id: string;
-  page_slug: string;
-  status: string;
-  claim_text: string;
-  kind: string;
-  holder: string;
-  weight: number;
-  domain: string | null;
-  model_id: string;
-  proposed_at: string;
-  acted_at: string | null;
-  acted_by: string | null;
-  promoted_row_num: number | null;
-  existing_take_count: number;
-}
-
-const TAKE_PROPOSAL_STATUSES = new Set(['pending', 'accepted', 'rejected', 'superseded', 'all']);
-
-function normalizeTakeProposalStatus(status: unknown): string {
-  const raw = typeof status === 'string' && status.trim() ? status.trim() : 'pending';
-  return TAKE_PROPOSAL_STATUSES.has(raw) ? raw : 'pending';
-}
-
-export async function listAdminTakeProposals(
-  engine: BrainEngine,
-  opts: { status?: string; limit?: number } = {},
-): Promise<AdminTakeProposalRow[]> {
-  const status = normalizeTakeProposalStatus(opts.status);
-  const limit = Math.max(1, Math.min(200, Math.floor(opts.limit ?? 50)));
-  return await engine.executeRaw<AdminTakeProposalRow>(
-    `SELECT tp.id::int AS id, tp.source_id, tp.page_slug, tp.status, tp.claim_text, tp.kind, tp.holder,
-            tp.weight, tp.domain, tp.model_id, tp.proposed_at, tp.acted_at, tp.acted_by,
-            tp.promoted_row_num::int AS promoted_row_num,
-            COALESCE(tc.n, 0)::int AS existing_take_count
-       FROM take_proposals tp
-       LEFT JOIN pages p ON p.source_id = tp.source_id AND p.slug = tp.page_slug
-       LEFT JOIN LATERAL (
-         SELECT COUNT(*)::int AS n FROM takes t WHERE t.page_id = p.id
-       ) tc ON true
-      WHERE ($1 = 'all' OR tp.status = $1)
-      ORDER BY tp.proposed_at DESC, tp.id DESC
-      LIMIT $2`,
-    [status, limit],
-  );
-}
-
-export async function acceptAdminTakeProposal(
-  engine: BrainEngine,
-  id: number,
-  actedBy = 'admin',
-): Promise<AdminTakeProposalRow> {
-  return await engine.transaction(async tx => {
-    const rows = await tx.executeRaw<AdminTakeProposalRow & { page_id: number; next_row_num: number }>(
-      `SELECT tp.id::int AS id, tp.source_id, tp.page_slug, tp.status, tp.claim_text, tp.kind, tp.holder,
-              tp.weight, tp.domain, tp.model_id, tp.proposed_at, tp.acted_at, tp.acted_by,
-              tp.promoted_row_num::int AS promoted_row_num, p.id::int AS page_id,
-              (COALESCE((SELECT MAX(row_num) FROM takes WHERE page_id = p.id), 0) + 1)::int AS next_row_num,
-              COALESCE((SELECT COUNT(*) FROM takes WHERE page_id = p.id), 0)::int AS existing_take_count
-         FROM take_proposals tp
-         JOIN pages p ON p.source_id = tp.source_id AND p.slug = tp.page_slug
-        WHERE tp.id = $1
-        FOR UPDATE OF tp`,
-      [id],
-    );
-    const proposal = rows[0];
-    if (!proposal) throw new Error('take proposal not found');
-    if (proposal.status !== 'pending') throw new Error(`take proposal is already ${proposal.status}`);
-
-    await tx.addTakesBatch([{
-      page_id: proposal.page_id,
-      row_num: proposal.next_row_num,
-      claim: proposal.claim_text,
-      kind: proposal.kind,
-      holder: proposal.holder,
-      weight: proposal.weight,
-      source: `take_proposal:${proposal.id}`,
-      active: true,
-    }]);
-
-    const updated = await tx.executeRaw<AdminTakeProposalRow>(
-      `UPDATE take_proposals
-          SET status = 'accepted',
-              acted_at = now(),
-              acted_by = $2,
-              promoted_row_num = $3
-        WHERE id = $1
-        RETURNING id::int AS id, source_id, page_slug, status, claim_text, kind, holder, weight,
-                  domain, model_id, proposed_at, acted_at, acted_by, promoted_row_num::int AS promoted_row_num,
-                  $4::int AS existing_take_count`,
-      [id, actedBy, proposal.next_row_num, proposal.existing_take_count + 1],
-    );
-    return updated[0]!;
-  });
-}
-
-export async function rejectAdminTakeProposal(
-  engine: BrainEngine,
-  id: number,
-  actedBy = 'admin',
-): Promise<AdminTakeProposalRow> {
-  return await engine.transaction(async tx => {
-    const updated = await tx.executeRaw<AdminTakeProposalRow>(
-      `UPDATE take_proposals
-          SET status = 'rejected',
-              acted_at = now(),
-              acted_by = $2
-        WHERE id = $1 AND status = 'pending'
-        RETURNING id::int AS id, source_id, page_slug, status, claim_text, kind, holder, weight,
-                  domain, model_id, proposed_at, acted_at, acted_by, promoted_row_num::int AS promoted_row_num,
-                  0::int AS existing_take_count`,
-      [id, actedBy],
-    );
-    if (!updated[0]) throw new Error('take proposal not found or already acted');
-    return updated[0];
-  });
-}
-
 export async function runServeHttp(engine: BrainEngine, options: ServeHttpOptions) {
   const { port, tokenTtl, enableDcr, publicUrl, logFullParams } = options;
   // v0.34.1 (#864, D11): default bind flipped from 0.0.0.0 to 127.0.0.1.
@@ -888,6 +785,10 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
   // than silently binding loopback only.
   const bind = options.bind ?? '127.0.0.1';
   const config = loadConfig() || { engine: 'pglite' as const };
+  // WorkBuddy emits native per-conversation metadata but no Skill name.
+  // Keep the explicit Skill correlation in memory only; persisted logs receive
+  // fixed enum labels, never conversation/request ids.
+  const agentIntegrationTraceRegistry = new AgentIntegrationTraceRegistry();
 
   // PGLite lock coordination: release the engine lock before spawning a child
   // process (import/sync/etc.) so the child can acquire it. Every child shares
@@ -2373,11 +2274,22 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
       // cast, so reads return real objects and `params->>'op'` returns
       // 'tools/list'. Pre-existing string-shaped rows are normalized by
       // migration v41 in src/core/migrate.ts.
-      const safeParamsSummary = summarizeMcpParams(name, params);
+      const rawInvocationMeta = (request.params as typeof request.params & { _meta?: unknown })._meta;
+      const agentIntegrationContext = agentIntegrationTraceRegistry.contextFor(
+        name,
+        params as Record<string, unknown> | undefined,
+        rawInvocationMeta,
+      );
+      const safeParamsSummary = withAgentIntegrationLogContext(
+        summarizeMcpParams(name, params),
+        agentIntegrationContext,
+      );
       const logParamsObj: unknown = logFullParams
-        ? (params || null)
+        ? withAgentIntegrationLogContext(params || null, agentIntegrationContext)
         : (safeParamsSummary || null);
-      const broadcastParams = logFullParams ? (params || {}) : safeParamsSummary;
+      const broadcastParams = logFullParams
+        ? withAgentIntegrationLogContext(params || {}, agentIntegrationContext)
+        : safeParamsSummary;
 
       // v0.31 (D12 / eE1): refactor the inlined op.handler call to go through
       // src/mcp/dispatch.ts so HTTP MCP shares the same dispatch path as

@@ -1,3 +1,9 @@
+## PMBrain 1.1.20
+
+- 新增 WorkBuddy 深度接入 V1：选择工作目录后，将 PMBrain Agent Rules 和 5 个官方 Skills 安装到 WorkBuddy 实际读取的 `.codebuddy` workspace 目录，并继续复用现有 MCP 连接。
+- 支持安装状态检查、安全更新和卸载；用户修改过的 Rules/Skills 不会被静默覆盖或删除，其他 WorkBuddy MCP 服务保持不变。
+- WorkBuddy 可主动检索 PMBrain、按明确指令记忆与纠错、选择性持久写回，并查看、接受或拒绝 AI 深度整理产生的待审核观点。
+
 ## PMBrain 1.1.19
 
 - 新增轻量知识图谱：支持局部逐层探索、全局概览、孤立页审计、搜索、Source/关系筛选、悬停聚焦、方向显示、缩放拖动、全屏查看和知识详情。

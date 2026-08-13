@@ -51,7 +51,7 @@ describe('PMBrain Agent Capability Pack contract', () => {
 
   test('CLI add and proposal acceptance share the canonical take writer', () => {
     const cli = readFileSync(join(import.meta.dir, '..', 'src', 'commands', 'takes.ts'), 'utf8');
-    const proposals = readFileSync(join(import.meta.dir, '..', 'src', 'core', 'take-proposals.ts'), 'utf8');
+    const proposals = readFileSync(join(import.meta.dir, '..', 'src', 'core', 'agent-pack-take-proposals.ts'), 'utf8');
     expect(cli).toContain("import { addCanonicalTake } from '../core/canonical-takes.ts'");
     expect(cli).toContain('await addCanonicalTake(engine, {');
     expect(proposals).toContain("import { addCanonicalTake } from './canonical-takes.ts'");
