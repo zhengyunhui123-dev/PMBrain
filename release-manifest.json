@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "product": "PMBrain",
   "core": {
-    "version": "1.2.42"
+    "version": "1.2.43"
   },
   "desktop": {
     "version": "1.1.20"
@@ -15,6 +15,6 @@
     "latestSchemaVersion": 114
   },
   "sidecar": {
-    "version": "1.2.42"
+    "version": "1.2.43"
   }
 }

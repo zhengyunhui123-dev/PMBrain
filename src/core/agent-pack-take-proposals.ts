@@ -1,10 +1,13 @@
 import type { BrainEngine, TakeKind } from './engine.ts';
 import { OperationError } from './operation-error.ts';
 import { readCanonicalPageFile } from './canonical-page-file.ts';
-import { legacyTakeProposalContentHash, takeProposalContentHash } from './take-proposal-hash.ts';
+import {
+  EMPTY_EXTRACTION_TOMBSTONE_TEXT,
+  legacyTakeProposalContentHash,
+  takeProposalContentHash,
+} from './take-proposal-hash.ts';
 import { addCanonicalTake } from './canonical-takes.ts';
 import { withPageLock } from './page-lock.ts';
-import { EMPTY_EXTRACTION_TOMBSTONE_TEXT } from './cycle/propose-takes.ts';
 
 export interface TakeProposalRow {
   id: number;

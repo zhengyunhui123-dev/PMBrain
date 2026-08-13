@@ -2,6 +2,13 @@ import { createHash } from 'node:crypto';
 import { TAKES_FENCE_BEGIN, TAKES_FENCE_END } from './takes-fence.ts';
 
 /**
+ * Rejected sentinel row for a successful extraction that produced no
+ * gradeable claims. Kept in this dependency-leaf module so proposal review
+ * code does not need to import the cycle/operation graph at runtime.
+ */
+export const EMPTY_EXTRACTION_TOMBSTONE_TEXT = '(no gradeable claims)';
+
+/**
  * Hash only the source prose that produced a take proposal.
  *
  * Canonical takes are written back into the same Markdown page. Excluding the

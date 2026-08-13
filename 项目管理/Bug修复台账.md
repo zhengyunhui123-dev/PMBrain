@@ -1,5 +1,14 @@
 # Bug 修复台账
 
+## 2026-08-13 修复 Agent Pack 合并后的 Operation 循环依赖
+
+- 时间：2026-08-13
+- 版本号：PMBrain 1.2.43；PMBrain Desktop 1.1.20
+- 标题：切断待审观点常量对 Cycle 与 Operation 的运行时循环依赖
+- 描述：Agent Capability Pack 的待审观点实现为复用空提取哨兵常量而导入 `cycle/propose-takes.ts`，该模块经 Cycle 基类反向加载 `operations.ts`，导致 GitHub Test 分片在并发加载 Operation 注册表时出现 `Cannot access 'operations' before initialization`，并连带使检索、Source threading 与 MCP guidance 测试失败。
+- 是否完成：是
+- 最终结果：将空提取哨兵常量下沉到无 Operation/Cycle 反向依赖的 `take-proposal-hash.ts` 叶子模块，原 `propose-takes.ts` 继续 re-export 保持兼容；不改变数据库 Schema、Operation 名称、审核语义或用户数据。修复后的定向测试、类型检查和 GitHub CI 结果见本次 PR #46。
+
 ## 2026-08-13 完善知识标题与别名的确定性提及关系
 
 - 时间：2026-08-13

@@ -48,7 +48,12 @@ import type { Page } from '../types.ts';
 import type { OperationContext } from '../operations.ts';
 import type { BrainEngine } from '../engine.ts';
 import type { PhaseStatus, CyclePhase } from '../cycle.ts';
-import { takeProposalContentHash } from '../take-proposal-hash.ts';
+import {
+  EMPTY_EXTRACTION_TOMBSTONE_TEXT,
+  takeProposalContentHash,
+} from '../take-proposal-hash.ts';
+
+export { EMPTY_EXTRACTION_TOMBSTONE_TEXT } from '../take-proposal-hash.ts';
 
 /**
  * Bump when the extractor prompt or the JSON output shape changes. Old
@@ -62,8 +67,6 @@ export const PROPOSE_TAKES_PROMPT_VERSION = 'v0.36.1.1-tuned-cat15-cn';
  * gradeable claims. It records the page/content/prompt tuple so unchanged
  * prose becomes a cache hit on the next Dream cycle.
  */
-export const EMPTY_EXTRACTION_TOMBSTONE_TEXT = '(no gradeable claims)';
-
 /**
  * Tuned extractor prompt, validated against the hand-labeled synthetic
  * corpus at test/fixtures/calibration/. Measured F1 on first live run

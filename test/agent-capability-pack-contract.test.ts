@@ -58,6 +58,14 @@ describe('PMBrain Agent Capability Pack contract', () => {
     expect(proposals).toContain('await addCanonicalTake(engine, {');
   });
 
+  test('proposal review stays outside the Cycle and Operation initialization graph', () => {
+    const proposals = readFileSync(join(import.meta.dir, '..', 'src', 'core', 'agent-pack-take-proposals.ts'), 'utf8');
+    const hashes = readFileSync(join(import.meta.dir, '..', 'src', 'core', 'take-proposal-hash.ts'), 'utf8');
+    expect(proposals).not.toContain("from './cycle/");
+    expect(proposals).toContain("from './take-proposal-hash.ts'");
+    expect(hashes).toContain("export const EMPTY_EXTRACTION_TOMBSTONE_TEXT = '(no gradeable claims)'");
+  });
+
   test('manifest is valid, lists ten unique skills, and references only real Operations', () => {
     const packRoot = join(import.meta.dir, '..', 'agent-pack');
     const manifest = JSON.parse(readFileSync(join(packRoot, 'manifest.json'), 'utf8')) as {
