@@ -17,7 +17,6 @@ import { resolveDreamPresetPhases, runDream } from '../src/commands/dream.ts';
 import {
   resolveQuickMaintenancePhases,
   runQuickMaintenance,
-  QUICK_BY_MENTION_TIME_BUDGET_MS,
 } from '../src/core/quick-maintenance.ts';
 import { ALL_PHASES } from '../src/core/cycle.ts';
 import { runByMentionCore } from '../src/commands/extract.ts';
@@ -112,12 +111,11 @@ describe('Quick Maintenance phase contracts (TEST 6–7)', () => {
     expect(source).toContain('../core/quick-maintenance.ts');
   });
 
-  test('Quick historical by-mention uses a 10-30 second time budget instead of a 500-page cap', async () => {
-    expect(QUICK_BY_MENTION_TIME_BUDGET_MS).toBeGreaterThanOrEqual(10_000);
-    expect(QUICK_BY_MENTION_TIME_BUDGET_MS).toBeLessThanOrEqual(30_000);
+  test('Quick leaves deterministic relation catch-up unbounded instead of applying a page or time cap', async () => {
     const quickSource = await Bun.file(new URL('../src/core/quick-maintenance.ts', import.meta.url)).text();
     const cycleSource = await Bun.file(new URL('../src/core/cycle.ts', import.meta.url)).text();
     expect(quickSource).not.toContain('QUICK_BY_MENTION_HISTORICAL_DEFAULT');
+    expect(quickSource).not.toContain('QUICK_BY_MENTION_TIME_BUDGET_MS');
     expect(cycleSource).not.toContain('opts.byMentionMaxHistorical ?? 500');
   });
 });
@@ -490,11 +488,20 @@ describe('runQuickMaintenance orchestration smoke', () => {
       const extract = report.phases.find(p => p.phase === 'extract');
       expect(extract).toBeTruthy();
       expect(extract!.details.by_mention).toBe(true);
+      expect(extract!.details.historical_markdown_catch_up).toBe(true);
       // Full Dream phases like synthesize/patterns must not appear
       expect(report.phases.some(p => p.phase === 'synthesize')).toBe(false);
       expect(report.phases.some(p => p.phase === 'patterns')).toBe(false);
     });
   }, 120_000);
+
+  test('quick maintenance leaves deterministic relation catch-up unbounded by default', async () => {
+    const quickSource = await Bun.file(new URL('../src/core/quick-maintenance.ts', import.meta.url)).text();
+    expect(quickSource).toContain('markdownCatchUpMaxHistorical: opts.markdownCatchUpMaxHistorical');
+    expect(quickSource).toContain('byMentionTimeBudgetMs: opts.byMentionTimeBudgetMs');
+    expect(quickSource).not.toContain('QUICK_MARKDOWN_CATCH_UP_MAX_HISTORICAL');
+    expect(quickSource).not.toContain('QUICK_BY_MENTION_TIME_BUDGET_MS');
+  });
 
   test('quick run keeps database maintenance working when the selected source local_path is stale', async () => {
     await withTestHome(home, async () => {

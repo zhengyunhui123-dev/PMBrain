@@ -172,6 +172,27 @@ describe('extractPageLinks', () => {
     expect(aliceLink!.linkType).toBe('works_at');
   });
 
+  test('resolves ordinary relative Markdown links outside the historical directory whitelist', async () => {
+    const resolver = {
+      resolve: async () => null,
+      resolveLocalExact: async (slug: string) => slug === 'youdao/重庆保供项目/事件管理中心.note'
+        ? { slug, sourceId: 'duwu', resolutionType: 'unqualified' as const }
+        : null,
+    };
+    const { candidates } = await extractPageLinks(
+      'wiki/重庆保供项目/项目-重庆保供项目',
+      '查看 [事件管理中心](../../youdao/重庆保供项目/事件管理中心.note.md)。',
+      {},
+      'note',
+      resolver,
+    );
+    expect(candidates).toContainEqual(expect.objectContaining({
+      targetSlug: 'youdao/重庆保供项目/事件管理中心.note',
+      targetSourceId: 'duwu',
+      linkSource: 'markdown',
+    }));
+  });
+
   test('dedups multiple mentions of same entity (within-page dedup)', async () => {
     const content = '[Alice](people/alice) said this. Later, [Alice](people/alice) said that.';
     const { candidates } = await extractPageLinks('docs/x', content, {}, 'concept', allowAllResolver);

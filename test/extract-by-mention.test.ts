@@ -13,9 +13,9 @@
  *   6. --since DATE only scans pages modified after date
  *   7. --source fs --by-mention rejected with usage error + fix-hint
  *   8. Default link extract NOT also run when --by-mention is set
- *   9. Cross-source mention suppressed (source isolation)
+ *   9. Only default can act as a shared cross-source fallback
  *  10. Pseudo-pages excluded from gazetteer by type filter (NOT auto-suffix)
- *  11. Existing markdown link coexists with mention link (different link_source)
+ *  11. Existing explicit link suppresses duplicate mention provenance
  *  12. Progress phase events fire under --progress-json
  *  13. Schema migration verified — link_source='mentions' insert succeeds
  *  14. Empty brain (no entity pages) → no-op with informative message
@@ -194,7 +194,7 @@ describe('gbrain extract links --by-mention — integration', () => {
     expect(Number(mentionRows[0]!.c)).toBeGreaterThanOrEqual(1);
   });
 
-  test('11. existing markdown link + new mention link coexist (different link_source)', async () => {
+  test('11. existing Markdown link suppresses duplicate mention provenance', async () => {
     await seedEntities();
     await seedContentPage('writing/post-1', 'Acme Corp body text');
     // Simulate a pre-existing markdown link from the default extract pass.
@@ -216,9 +216,26 @@ describe('gbrain extract links --by-mention — integration', () => {
       [],
     );
     const sources = rows.map(r => r.ls).sort();
-    // Both rows present — ON CONFLICT key includes link_source so no collision.
-    expect(sources).toContain('markdown');
-    expect(sources).toContain('mentions');
+    expect(sources).toEqual(['markdown']);
+  });
+
+  test('11b. a later explicit link removes the older inferred mention row', async () => {
+    await seedEntities();
+    await seedContentPage('writing/post-1', 'Acme Corp body text');
+    await runCli(['links', '--by-mention', '--source', 'db']);
+    await engine.addLink('writing/post-1', 'companies/acme', 'explicit', 'related_to', 'markdown');
+
+    await runCli(['links', '--by-mention', '--source', 'db']);
+
+    const rows = await engine.executeRaw<{ ls: string }>(
+      `SELECT l.link_source AS ls FROM links l
+       JOIN pages fp ON fp.id = l.from_page_id
+       JOIN pages tp ON tp.id = l.to_page_id
+       WHERE fp.slug = 'writing/post-1' AND tp.slug = 'companies/acme'
+       ORDER BY l.link_source`,
+      [],
+    );
+    expect(rows.map(row => row.ls)).toEqual(['markdown']);
   });
 
   test('13. schema migration verified — link_source=mentions insert succeeds end-to-end', async () => {
@@ -259,31 +276,33 @@ describe('gbrain extract links --by-mention — integration', () => {
     });
     // Scope walk to team-b only.
     await runCli(['links', '--by-mention', '--source', 'db', '--source-id', 'team-b']);
-    // team-b post mentions Acme — but cross-source guard suppresses (Acme is in 'default').
+    // team-b post resolves Acme through the deliberate default shared fallback.
     const rows = await engine.executeRaw<{ c: string; fp: string }>(
       `SELECT COUNT(*)::text AS c, fp.slug AS fp FROM links l
        JOIN pages fp ON fp.id = l.from_page_id
        WHERE l.link_source = 'mentions' GROUP BY fp.slug`, [],
     );
-    // Default-source post NOT scanned (walk scoped to team-b); team-b post
-    // scanned but cross-source guard fires → zero mention rows.
-    expect(rows.length).toBe(0);
+    // Default-source post is NOT scanned; exactly the team-b post links to Acme.
+    expect(rows).toEqual([{ c: '1', fp: 'writing/team-b-post' }]);
   });
 
-  test('9. cross-source mention suppressed (source isolation)', async () => {
-    await seedEntities(); // entities in 'default'
-    await engine.executeRaw(`INSERT INTO sources (id, name) VALUES ('team-b', 'Team B') ON CONFLICT (id) DO NOTHING`, []);
+  test('9. non-default entities never leak across Sources', async () => {
+    await engine.executeRaw(
+      `INSERT INTO sources (id, name) VALUES ('team-a', 'Team A'), ('team-b', 'Team B') ON CONFLICT (id) DO NOTHING`, [],
+    );
+    await engine.putPage('companies/acme', {
+      type: 'company', title: 'Acme Corp', compiled_truth: 'entity', timeline: '', frontmatter: {},
+    }, { sourceId: 'team-a' });
     await engine.putPage('writing/team-b-post', {
       type: 'note', title: 'Team B Post', compiled_truth: 'Acme Corp mentioned.', timeline: '', frontmatter: {},
     }, { sourceId: 'team-b' });
-    // Run without --source-id (walks all) — team-b post mentions default-source Acme.
     await runCli(['links', '--by-mention', '--source', 'db']);
     const rows = await engine.executeRaw<{ c: string }>(
       `SELECT COUNT(*)::text AS c FROM links l
        JOIN pages fp ON fp.id = l.from_page_id
        WHERE fp.slug = 'writing/team-b-post' AND l.link_source = 'mentions'`, [],
     );
-    // Cross-source guard fires → 0 mention links from team-b/post to default/acme.
+    // team-a is not the shared default Source, so it cannot satisfy team-b.
     expect(Number(rows[0]!.c)).toBe(0);
   });
 });

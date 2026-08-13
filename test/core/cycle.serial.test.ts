@@ -20,7 +20,7 @@ import { join } from 'node:path';
 let lintCalls: Array<{ target: string; fix: boolean; dryRun: boolean | undefined }> = [];
 let backlinksCalls: Array<{ action: string; dir: string; dryRun: boolean | undefined }> = [];
 let syncCalls: Array<{ dryRun: boolean | undefined; noPull: boolean | undefined; noExtract: boolean | undefined; sourceId: string | undefined }> = [];
-let extractCalls: Array<{ mode: string; dir: string; slugs: string[] | undefined }> = [];
+let extractCalls: Array<{ mode: string; dir: string; slugs: string[] | undefined; sourceId: string | undefined }> = [];
 let embedCalls: Array<{ stale: boolean | undefined; dryRun: boolean | undefined }> = [];
 let orphansCalls: number = 0;
 
@@ -75,7 +75,7 @@ mock.module('../../src/commands/sync.ts', () => ({
 // Mock extract
 mock.module('../../src/commands/extract.ts', () => ({
   runExtractCore: async (_engine: any, opts: any) => {
-    extractCalls.push({ mode: opts.mode, dir: opts.dir, slugs: opts.slugs });
+    extractCalls.push({ mode: opts.mode, dir: opts.dir, slugs: opts.slugs, sourceId: opts.sourceId });
     return { links_created: 7, timeline_entries_created: 3, pages_processed: opts.slugs?.length ?? 5 };
   },
   walkMarkdownFiles: () => [],
@@ -118,7 +118,7 @@ mock.module('../../src/commands/orphans.ts', () => ({
 }));
 
 // Import after mocks.
-const { runCycle, ALL_PHASES } = await import('../../src/core/cycle.ts');
+const { runCycle, ALL_PHASES, resolveIncrementalExtractSlugs } = await import('../../src/core/cycle.ts');
 const { PGLiteEngine } = await import('../../src/core/pglite-engine.ts');
 
 // Shared PGLite engine per describe block. Each block does its own
@@ -460,6 +460,7 @@ describe('runCycle — incremental extract slug propagation (#417)', () => {
     // Extract ran once with the slugs from sync (not undefined)
     expect(extractCalls.length).toBe(1);
     expect(extractCalls[0].slugs).toEqual(['a', 'b']);
+    expect(extractCalls[0].sourceId).toBeDefined();
   });
 
   test('extract phase falls back to full walk when sync was skipped (slugs undefined)', async () => {
@@ -470,6 +471,14 @@ describe('runCycle — incremental extract slug propagation (#417)', () => {
     expect(syncCalls.length).toBe(0);
     expect(extractCalls.length).toBe(1);
     expect(extractCalls[0].slugs).toBeUndefined();
+  });
+
+  test('same-cycle synthesis slugs join sync slugs for extract without duplicates', () => {
+    expect(resolveIncrementalExtractSlugs(['sync-a', 'shared'], ['dream-a', 'shared']))
+      .toEqual(['sync-a', 'shared', 'dream-a']);
+    expect(resolveIncrementalExtractSlugs(undefined, ['dream-only']))
+      .toEqual(['dream-only']);
+    expect(resolveIncrementalExtractSlugs(undefined, undefined)).toBeUndefined();
   });
 });
 

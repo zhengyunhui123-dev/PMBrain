@@ -29,7 +29,7 @@
  */
 
 import { readFileSync, readdirSync, lstatSync, existsSync } from 'fs';
-import { join, relative, dirname } from 'path';
+import { join, relative, dirname, posix } from 'path';
 import type { BrainEngine, LinkBatchInput, TimelineBatchInput } from '../core/engine.ts';
 import type { PageType } from '../core/types.ts';
 import { parseMarkdown } from '../core/markdown.ts';
@@ -50,9 +50,13 @@ import { pathToSlug, pruneDir, isSyncable } from '../core/sync.ts';
 import { withRetry, isRetryableConnError } from '../core/retry.ts';
 export { withRetry };
 export type { WithRetryOpts } from '../core/retry.ts';
-import { buildGazetteer, findMentionedEntities } from '../core/by-mention.ts';
 import {
-  loadOpCheckpoint, recordCompleted, clearOpCheckpoint, mentionsFingerprint,
+  buildGazetteer,
+  countAmbiguousGazetteerEntries,
+  findMentionedEntities,
+} from '../core/by-mention.ts';
+import {
+  loadOpCheckpoint, recordCompleted, clearOpCheckpoint, mentionsFingerprint, fingerprint,
 } from '../core/op-checkpoint.ts';
 import { createHash } from 'crypto';
 // v0.41.15.0 (T7, D9): --workers N for the fs-walk inner loops via the
@@ -193,15 +197,18 @@ export function extractMarkdownLinks(content: string): { name: string; relTarget
  * Returns null when no matching slug is found (dangling link).
  */
 export function resolveSlug(fileDir: string, relTarget: string, allSlugs: Set<string>): string | null {
-  const targetNoExt = relTarget.endsWith('.md') ? relTarget.slice(0, -3) : relTarget;
+  const canonicalDir = fileDir.replace(/\\/g, '/');
+  const canonicalTarget = relTarget.replace(/\\/g, '/').split('#', 1)[0]!;
+  const targetNoExt = canonicalTarget.endsWith('.md') ? canonicalTarget.slice(0, -3) : canonicalTarget;
+  const normalizeCandidate = (candidate: string) => pathToSlug(posix.normalize(`${candidate}.md`));
 
-  const s1 = join(fileDir, targetNoExt);
+  const s1 = normalizeCandidate(posix.join(canonicalDir, targetNoExt));
   if (allSlugs.has(s1)) return s1;
 
-  const parts = fileDir.split('/').filter(Boolean);
+  const parts = canonicalDir.split('/').filter(Boolean);
   for (let strip = 1; strip <= parts.length; strip++) {
     const ancestor = parts.slice(0, parts.length - strip).join('/');
-    const candidate = ancestor ? join(ancestor, targetNoExt) : targetNoExt;
+    const candidate = normalizeCandidate(ancestor ? posix.join(ancestor, targetNoExt) : targetNoExt);
     if (allSlugs.has(candidate)) return candidate;
   }
 
@@ -258,7 +265,7 @@ export async function extractLinksFromFile(
 ): Promise<ExtractedLink[]> {
   const links: ExtractedLink[] = [];
   const slug = pathToSlug(relPath);
-  const fileDir = dirname(relPath);
+  const fileDir = posix.dirname(relPath.replace(/\\/g, '/'));
   const fm = parseFrontmatterFromContent(content, relPath);
 
   for (const { name, relTarget } of extractMarkdownLinks(content)) {
@@ -362,6 +369,8 @@ export interface ExtractOpts {
    * Pass undefined or omit for a full walk (CLI / first-run path).
    */
   slugs?: string[];
+  /** Source that owns the filesystem checkout. Required for non-default Sources. */
+  sourceId?: string;
   /**
    * v0.41.15.0 (D9): in-process parallel file workers for the fs-walk
    * loops. Default 1. PGLite engines clamp to 1 (single-writer; though
@@ -413,7 +422,7 @@ export async function runExtractCore(engine: BrainEngine, opts: ExtractOpts): Pr
       // Nothing changed — skip entirely.
       return result;
     }
-    const r = await extractForSlugs(engine, opts.dir, opts.slugs, opts.mode, dryRun, jsonMode, workers);
+    const r = await extractForSlugs(engine, opts.dir, opts.slugs, opts.mode, dryRun, jsonMode, workers, opts.sourceId);
     result.links_created = r.links_created;
     result.timeline_entries_created = r.timeline_created;
     result.pages_processed = r.pages;
@@ -422,12 +431,12 @@ export async function runExtractCore(engine: BrainEngine, opts: ExtractOpts): Pr
 
   // Full walk path: CLI `gbrain extract` or first-run.
   if (opts.mode === 'links' || opts.mode === 'all') {
-    const r = await extractLinksFromDir(engine, opts.dir, dryRun, jsonMode, workers);
+    const r = await extractLinksFromDir(engine, opts.dir, dryRun, jsonMode, workers, opts.sourceId);
     result.links_created = r.created;
     result.pages_processed = r.pages;
   }
   if (opts.mode === 'timeline' || opts.mode === 'all') {
-    const r = await extractTimelineFromDir(engine, opts.dir, dryRun, jsonMode, workers);
+    const r = await extractTimelineFromDir(engine, opts.dir, dryRun, jsonMode, workers, opts.sourceId);
     result.timeline_entries_created = r.created;
     result.pages_processed = Math.max(result.pages_processed, r.pages);
   }
@@ -748,6 +757,7 @@ async function extractForSlugs(
   // shared flush primitive; JS single-threaded event loop makes the
   // shared counter increments atomic.
   workers: number = 1,
+  sourceId?: string,
 ): Promise<{ links_created: number; timeline_created: number; pages: number }> {
   // Build the full slug set for link resolution (fast: just readdir, no file reads)
   const allFiles = walkMarkdownFiles(brainDir);
@@ -821,7 +831,12 @@ async function extractForSlugs(
               if (!jsonMode) console.log(`  ${link.from_slug} → ${link.to_slug} (${link.link_type})`);
               linksCreated++;
             } else {
-              linkBatch.push(link);
+              linkBatch.push({
+                ...link,
+                from_source_id: sourceId ?? 'default',
+                to_source_id: sourceId ?? 'default',
+                resolution_type: 'unqualified',
+              });
               if (linkBatch.length >= BATCH_SIZE) await flushLinks();
             }
           }
@@ -834,7 +849,7 @@ async function extractForSlugs(
               if (!jsonMode) console.log(`  ${entry.slug}: ${entry.date} — ${entry.summary}`);
               timelineCreated++;
             } else {
-              timelineBatch.push({ slug: entry.slug, date: entry.date, source: entry.source, summary: entry.summary, detail: entry.detail });
+              timelineBatch.push({ slug: entry.slug, date: entry.date, source: entry.source, summary: entry.summary, detail: entry.detail, source_id: sourceId ?? 'default' });
               if (timelineBatch.length >= BATCH_SIZE) await flushTimeline();
             }
           }
@@ -862,6 +877,7 @@ async function extractLinksFromDir(
   engine: BrainEngine, brainDir: string, dryRun: boolean, jsonMode: boolean,
   // v0.41.15.0 (T7): in-process worker count. Default 1.
   workers: number = 1,
+  sourceId?: string,
 ): Promise<{ created: number; pages: number }> {
   const files = walkMarkdownFiles(brainDir);
   const allSlugs = new Set(files.map(f => pathToSlug(f.relPath)));
@@ -910,7 +926,12 @@ async function extractLinksFromDir(
             if (!jsonMode) console.log(`  ${link.from_slug} → ${link.to_slug} (${link.link_type})`);
             created++;
           } else {
-            batch.push(link);
+            batch.push({
+              ...link,
+              from_source_id: sourceId ?? 'default',
+              to_source_id: sourceId ?? 'default',
+              resolution_type: 'unqualified',
+            });
             if (batch.length >= BATCH_SIZE) await flush();
           }
         }
@@ -932,6 +953,7 @@ async function extractTimelineFromDir(
   engine: BrainEngine, brainDir: string, dryRun: boolean, jsonMode: boolean,
   // v0.41.15.0 (T7): in-process worker count. Default 1.
   workers: number = 1,
+  sourceId?: string,
 ): Promise<{ created: number; pages: number }> {
   const files = walkMarkdownFiles(brainDir);
 
@@ -975,7 +997,7 @@ async function extractTimelineFromDir(
             if (!jsonMode) console.log(`  ${entry.slug}: ${entry.date} — ${entry.summary}`);
             created++;
           } else {
-            batch.push({ slug: entry.slug, date: entry.date, source: entry.source, summary: entry.summary, detail: entry.detail });
+            batch.push({ slug: entry.slug, date: entry.date, source: entry.source, summary: entry.summary, detail: entry.detail, source_id: sourceId ?? 'default' });
             if (batch.length >= BATCH_SIZE) await flush();
           }
         }
@@ -1022,6 +1044,108 @@ export async function extractLinksForSlugs(
     } catch { /* skip */ }
   }
   return created;
+}
+
+export interface HistoricalMarkdownCatchUpOpts {
+  brainDir: string;
+  sourceId: string;
+  prioritySlugs?: string[];
+  maxHistoricalPages?: number;
+  dryRun?: boolean;
+}
+
+export interface HistoricalMarkdownCatchUpResult {
+  linksCreated: number;
+  pagesProcessed: number;
+  priorityPages: number;
+  historicalPages: number;
+  historicalRemaining: number;
+}
+
+/**
+ * Resumable deterministic repair for historical filesystem Markdown links.
+ * Quick Maintenance processes current sync changes first, then drains the
+ * historical backlog. Explicit callers may still provide a compatibility
+ * cap. Only exact links inside the selected Source are emitted.
+ */
+export async function runHistoricalMarkdownCatchUp(
+  engine: BrainEngine,
+  opts: HistoricalMarkdownCatchUpOpts,
+): Promise<HistoricalMarkdownCatchUpResult> {
+  const files = walkMarkdownFiles(opts.brainDir);
+  const fileBySlug = new Map(files.map(file => [pathToSlug(file.relPath), file] as const));
+  const allSlugs = new Set(fileBySlug.keys());
+  const prioritySlugs = [...new Set(opts.prioritySlugs ?? [])].filter(slug => fileBySlug.has(slug));
+  const key = {
+    op: 'extract-markdown-catchup',
+    fingerprint: fingerprint({ source: opts.sourceId, dir: opts.brainDir, version: 1 }),
+  };
+  const completed = new Set(opts.dryRun ? [] : await loadOpCheckpoint(engine, key));
+  const prioritySet = new Set(prioritySlugs);
+  const historicalPending = [...fileBySlug.keys()]
+    .filter(slug => !prioritySet.has(slug) && !completed.has(slug))
+    .sort();
+  const limit = typeof opts.maxHistoricalPages === 'number' && Number.isFinite(opts.maxHistoricalPages)
+    ? Math.max(0, Math.floor(opts.maxHistoricalPages))
+    : historicalPending.length;
+  const historical = historicalPending.slice(0, limit);
+  const work = [...prioritySlugs, ...historical];
+  const existing = new Set<string>();
+  if (opts.dryRun) {
+    const rows = await engine.executeRaw<{
+      from_slug: string;
+      to_slug: string;
+      link_type: string;
+      link_source: string;
+    }>(
+      `SELECT f.slug AS from_slug, t.slug AS to_slug, l.link_type, COALESCE(l.link_source, 'markdown') AS link_source
+       FROM links l
+       JOIN pages f ON f.id = l.from_page_id
+       JOIN pages t ON t.id = l.to_page_id
+       WHERE f.source_id = $1 AND t.source_id = $1`,
+      [opts.sourceId],
+    );
+    for (const row of rows) {
+      existing.add(`${row.from_slug}\u0000${row.to_slug}\u0000${row.link_type}\u0000${row.link_source}`);
+    }
+  }
+  let linksCreated = 0;
+  let pagesProcessed = 0;
+
+  for (const slug of work) {
+    const file = fileBySlug.get(slug);
+    if (!file) continue;
+    const content = readFileSync(file.path, 'utf8');
+    const links = await extractLinksFromFile(content, file.relPath, allSlugs);
+    if (opts.dryRun) {
+      for (const link of links) {
+        const edgeKey = `${link.from_slug}\u0000${link.to_slug}\u0000${link.link_type}\u0000markdown`;
+        if (existing.has(edgeKey)) continue;
+        existing.add(edgeKey);
+        linksCreated++;
+      }
+    } else if (links.length > 0) {
+      linksCreated += await engine.addLinksBatch(links.map(link => ({ // gbrain-allow-direct-insert: canonical extract reconciliation for historical Source-scoped Markdown links
+        ...link,
+        link_source: 'markdown',
+        from_source_id: opts.sourceId,
+        to_source_id: opts.sourceId,
+        resolution_type: 'unqualified' as const,
+      })), { auditSite: 'extract.markdown_catchup' });
+    }
+    pagesProcessed++;
+    completed.add(slug);
+  }
+
+  const historicalRemaining = Math.max(0, historicalPending.length - historical.length);
+  if (!opts.dryRun) await recordCompleted(engine, key, [...completed]);
+  return {
+    linksCreated,
+    pagesProcessed,
+    priorityPages: prioritySlugs.length,
+    historicalPages: historical.length,
+    historicalRemaining,
+  };
 }
 
 export async function extractTimelineForSlugs(
@@ -1375,26 +1499,30 @@ export interface RunByMentionOpts {
   prioritySlugs?: string[];
   /**
    * Cap on how many non-priority (historical catch-up) pages to scan after
-   * priority slugs. Default unlimited (CLI path). Quick Maintenance passes
-   * a budget so each run gradually drains the backlog.
+   * priority slugs. Default unlimited. Quick Maintenance leaves this unset
+   * so one run completes deterministic relation repair for the Source.
    */
   maxHistoricalPages?: number;
   /**
-   * Wall-clock budget for historical catch-up. Priority slugs are always
-   * scanned first and do not consume this budget. Undefined means unlimited.
+   * Optional wall-clock budget for historical catch-up. Priority slugs are
+   * always scanned first. Quick Maintenance leaves this undefined.
    */
   historicalTimeBudgetMs?: number;
   /** Suppress human-readable progress lines (library callers). */
   quiet?: boolean;
+  /** Increment when gazetteer matching semantics change to invalidate history. */
+  rulesVersion?: number;
 }
 
 export interface RunByMentionResult {
   created: number;
+  removed: number;
   pages: number;
   priorityPages: number;
   historicalPages: number;
   historicalRemaining: number;
   timeBudgetReached: boolean;
+  ambiguousNames: number;
 }
 
 /**
@@ -1429,34 +1557,85 @@ export async function runByMentionCore(
   // Build gazetteer once per run. Skip everything if there are no
   // linkable entities — vacuous truth, no mentions to find.
   const gazetteer = await buildGazetteer(engine);
-  if (gazetteer.size === 0) {
-    if (jsonMode) {
-      process.stdout.write(JSON.stringify({ event: 'no_gazetteer', message: 'no linkable entity pages found; nothing to scan' }) + '\n');
-    } else if (!quiet) {
-      console.log('No linkable entity pages found in this brain (need pages with type IN person/company/organization/entity).');
-    }
-    return {
-      created: 0,
-      pages: 0,
-      priorityPages: 0,
-      historicalPages: 0,
-      historicalRemaining: 0,
-      timeBudgetReached: false,
-    };
-  }
+  const ambiguousNames = countAmbiguousGazetteerEntries(gazetteer);
 
   // v0.41.19.0 (T5): gazetteer hash is part of the checkpoint
   // fingerprint so adding new entity pages mid-pause invalidates the
   // checkpoint cleanly. Without it, resumed pages would skip new
   // entities silently (codex flag).
   const gazetteerHash = createHash('sha256')
-    .update([...gazetteer.keys()].sort().join('|'))
+    .update(
+      [...gazetteer.values()]
+        .flat()
+        .map(entry => [
+          entry.source_id,
+          entry.slug,
+          entry.tokens.join('\u0000'),
+          entry.ambiguous ? 'ambiguous' : 'resolved',
+        ].join('\u0001'))
+        .sort()
+        .join('\n'),
+    )
     .digest('hex')
     .slice(0, 8);
 
   const allRefs = sourceIdFilter
     ? (await engine.listAllPageRefs()).filter(r => r.source_id === sourceIdFilter)
     : await engine.listAllPageRefs();
+
+  type ExistingRelationRow = {
+    from_source_id: string;
+    from_slug: string;
+    to_source_id: string;
+    to_slug: string;
+    link_type: string;
+    link_source: string | null;
+    link_kind: string | null;
+  };
+  const relationSql = `
+    SELECT f.source_id AS from_source_id, f.slug AS from_slug,
+           t.source_id AS to_source_id, t.slug AS to_slug,
+           l.link_type, l.link_source, l.link_kind
+      FROM links l
+      JOIN pages f ON f.id = l.from_page_id
+      JOIN pages t ON t.id = l.to_page_id
+     ${sourceIdFilter ? 'WHERE f.source_id = $1' : ''}`;
+  const existingRelations = await engine.executeRaw<ExistingRelationRow>(
+    relationSql,
+    sourceIdFilter ? [sourceIdFilter] : [],
+  );
+  const explicitTargetsByPage = new Map<string, Set<string>>();
+  const mentionTargetsByPage = new Map<string, Map<string, ExistingRelationRow>>();
+  for (const relation of existingRelations) {
+    const pageKey = `${relation.from_source_id}::${relation.from_slug}`;
+    const targetKey = `${relation.to_source_id}\u0000${relation.to_slug}`;
+    if (relation.link_source !== 'mentions') {
+      const targets = explicitTargetsByPage.get(pageKey) ?? new Set<string>();
+      targets.add(targetKey);
+      explicitTargetsByPage.set(pageKey, targets);
+    } else if (relation.link_type === 'mentions' && relation.link_kind !== 'typed_ner') {
+      const targets = mentionTargetsByPage.get(pageKey) ?? new Map<string, ExistingRelationRow>();
+      targets.set(targetKey, relation);
+      mentionTargetsByPage.set(pageKey, targets);
+    }
+  }
+  if (gazetteer.size === 0 && mentionTargetsByPage.size === 0) {
+    if (jsonMode) {
+      process.stdout.write(JSON.stringify({ event: 'no_gazetteer', message: 'no linkable entity or concept pages found; nothing to scan' }) + '\n');
+    } else if (!quiet) {
+      console.log('No linkable entity or concept pages found in this brain; nothing to scan.');
+    }
+    return {
+      created: 0,
+      removed: 0,
+      pages: 0,
+      priorityPages: 0,
+      historicalPages: 0,
+      historicalRemaining: 0,
+      timeBudgetReached: false,
+      ambiguousNames: 0,
+    };
+  }
 
   // v0.41.19.0 (T5): load checkpoint and skip already-completed
   // (source_id, slug) pairs. Dry-run does NOT load OR persist the
@@ -1469,6 +1648,7 @@ export async function runByMentionCore(
       type: typeFilter,
       since,
       gazetteerHash,
+      rulesVersion: opts.rulesVersion ?? 2,
     }),
   };
   const completed = dryRun
@@ -1507,6 +1687,7 @@ export async function runByMentionCore(
 
   let processed = 0;
   let created = 0;
+  let removed = 0;
   let priorityPages = 0;
   let historicalPages = 0;
   let historicalStartedAt: number | null = null;
@@ -1613,13 +1794,48 @@ export async function runByMentionCore(
       fromSourceId: source_id,
     });
 
-    if (mentions.length === 0) {
+    // Explicit Markdown/frontmatter/manual edges are stronger evidence than a
+    // plain body mention. Avoid storing a second provenance row for the same
+    // endpoint pair when a deterministic explicit relation already exists.
+    const explicitTargets = explicitTargetsByPage.get(key) ?? new Set<string>();
+    const filteredMentions = mentions.filter(
+      mention => !explicitTargets.has(`${mention.source_id}\u0000${mention.slug}`),
+    );
+
+    // Reconcile only the deterministic plain-mention rows owned by this
+    // operation. Typed NER and every explicit/manual provenance are untouched.
+    const desiredTargets = new Set(
+      filteredMentions.map(mention => `${mention.source_id}\u0000${mention.slug}`),
+    );
+    const existingMentionTargets = mentionTargetsByPage.get(key) ?? new Map<string, ExistingRelationRow>();
+    for (const [targetKey, relation] of existingMentionTargets) {
+      if (desiredTargets.has(targetKey)) continue;
+      if (dryRun) {
+        if (jsonMode) {
+          process.stdout.write(JSON.stringify({
+            action: 'remove_link', from: slug, from_source_id: source_id,
+            to: relation.to_slug, to_source_id: relation.to_source_id,
+            type: 'mentions', link_source: 'mentions',
+          }) + '\n');
+        } else if (!quiet) {
+          console.log(`  ${slug} -> ${relation.to_slug} (remove stale mention)`);
+        }
+      } else {
+        await engine.removeLink(slug, relation.to_slug, 'mentions', 'mentions', {
+          fromSourceId: source_id,
+          toSourceId: relation.to_source_id,
+        });
+      }
+      removed++;
+    }
+
+    if (filteredMentions.length === 0) {
       pendingForFlush.push(key);
       unpersistedCount++;
       continue;
     }
 
-    for (const m of mentions) {
+    for (const m of filteredMentions) {
       if (dryRun) {
         if (jsonMode) {
           process.stdout.write(JSON.stringify({
@@ -1676,15 +1892,20 @@ export async function runByMentionCore(
 
   if (!jsonMode && !quiet) {
     const label = dryRun ? '(dry run) would create' : 'created';
-    console.log(`Mentions: ${label} ${created} links from ${processed} pages against gazetteer of ${gazetteer.size} first-token buckets`);
+    console.log(
+      `Mentions: ${label} ${created} links, removed ${removed} stale links from ${processed} pages ` +
+      `against gazetteer of ${gazetteer.size} first-token buckets (${ambiguousNames} ambiguous names skipped)`,
+    );
   }
   return {
     created,
+    removed,
     pages: processed,
     priorityPages,
     historicalPages,
     historicalRemaining: historicalRemainingAfter,
     timeBudgetReached,
+    ambiguousNames,
   };
 }
 

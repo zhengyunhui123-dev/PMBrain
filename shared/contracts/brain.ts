@@ -111,6 +111,57 @@ export const BrainPageChunkSchema = z.object({
 
 export const BrainPageChunksResponseSchema = z.object({ rows: z.array(BrainPageChunkSchema) });
 
+export const KnowledgeGraphNodeSchema = z.object({
+  id: z.number().int().positive(),
+  slug: z.string(),
+  title: z.string(),
+  source_id: z.string(),
+  source_name: z.string().nullable(),
+  type: z.string(),
+  preview: z.string(),
+  tags: z.array(z.string()),
+  updated_at: z.string(),
+  outgoing_count: z.number().int().nonnegative(),
+  incoming_count: z.number().int().nonnegative(),
+  relation_count: z.number().int().nonnegative(),
+});
+
+export const KnowledgeGraphEdgeSchema = z.object({
+  id: z.number().int().positive(),
+  from_page_id: z.number().int().positive(),
+  to_page_id: z.number().int().positive(),
+  link_type: z.string(),
+  context: z.string(),
+  link_source: z.string().nullable(),
+});
+
+export const KnowledgeGraphSearchResponseSchema = z.object({
+  rows: z.array(KnowledgeGraphNodeSchema),
+});
+
+export const KnowledgeGraphNeighborhoodResponseSchema = z.object({
+  center_id: z.number().int().positive(),
+  nodes: z.array(KnowledgeGraphNodeSchema),
+  edges: z.array(KnowledgeGraphEdgeSchema),
+  truncated: z.boolean(),
+  limit: z.number().int().positive(),
+});
+
+export const KnowledgeGraphMetaResponseSchema = z.object({
+  relation_types: z.array(z.string()),
+  seed: KnowledgeGraphNodeSchema.nullable(),
+});
+
+export const KnowledgeGraphGlobalResponseSchema = z.object({
+  nodes: z.array(KnowledgeGraphNodeSchema),
+  edges: z.array(KnowledgeGraphEdgeSchema),
+  total_nodes: z.number().int().nonnegative(),
+  total_edges: z.number().int().nonnegative(),
+  truncated: z.boolean(),
+  node_limit: z.number().int().positive(),
+  edge_limit: z.number().int().positive(),
+});
+
 export type SourceSummary = z.infer<typeof SourceSummarySchema>;
 export type BrainOverviewResponse = z.infer<typeof BrainOverviewResponseSchema>;
 export type BrainPageRow = z.infer<typeof BrainPageRowSchema>;
@@ -118,3 +169,9 @@ export type BrainPagesResponse = z.infer<typeof BrainPagesResponseSchema>;
 export type BrainPageDetailResponse = z.infer<typeof BrainPageDetailResponseSchema>;
 export type BrainPageChunk = z.infer<typeof BrainPageChunkSchema>;
 export type BrainPageChunksResponse = z.infer<typeof BrainPageChunksResponseSchema>;
+export type KnowledgeGraphNode = z.infer<typeof KnowledgeGraphNodeSchema>;
+export type KnowledgeGraphEdge = z.infer<typeof KnowledgeGraphEdgeSchema>;
+export type KnowledgeGraphSearchResponse = z.infer<typeof KnowledgeGraphSearchResponseSchema>;
+export type KnowledgeGraphNeighborhoodResponse = z.infer<typeof KnowledgeGraphNeighborhoodResponseSchema>;
+export type KnowledgeGraphMetaResponse = z.infer<typeof KnowledgeGraphMetaResponseSchema>;
+export type KnowledgeGraphGlobalResponse = z.infer<typeof KnowledgeGraphGlobalResponseSchema>;

@@ -3,6 +3,10 @@ import {
   BrainPageChunksResponseSchema,
   BrainPageDetailResponseSchema,
   BrainPagesResponseSchema,
+  KnowledgeGraphGlobalResponseSchema,
+  KnowledgeGraphMetaResponseSchema,
+  KnowledgeGraphNeighborhoodResponseSchema,
+  KnowledgeGraphSearchResponseSchema,
   DreamOverviewResponseSchema,
   DreamRunResponseSchema,
   DreamScheduleResponseSchema,
@@ -19,6 +23,10 @@ import type {
   BrainPageChunksResponse,
   BrainPageDetailResponse,
   BrainPagesResponse,
+  KnowledgeGraphGlobalResponse,
+  KnowledgeGraphMetaResponse,
+  KnowledgeGraphNeighborhoodResponse,
+  KnowledgeGraphSearchResponse,
   DreamOverviewResponse,
   DreamRunResponse,
   DreamScheduleResponse,
@@ -113,6 +121,35 @@ export const api = {
   theme: () => apiFetch('/admin/api/theme'),
   docs: () => apiFetch('/admin/api/docs'),
   brainPages: (qs = '') => apiFetch<BrainPagesResponse>(`/admin/api/brain/pages${qs}`, undefined, BrainPagesResponseSchema),
+  knowledgeGraphMeta: (sourceId?: string) => {
+    const query = new URLSearchParams();
+    if (sourceId && sourceId !== 'all') query.set('sourceId', sourceId);
+    const suffix = query.size ? `?${query.toString()}` : '';
+    return apiFetch<KnowledgeGraphMetaResponse>(`/admin/api/knowledge-graph/meta${suffix}`, undefined, KnowledgeGraphMetaResponseSchema);
+  },
+  knowledgeGraphGlobal: (sourceId?: string, relationType = 'all') => {
+    const query = new URLSearchParams();
+    if (sourceId && sourceId !== 'all') query.set('sourceId', sourceId);
+    if (relationType !== 'all') query.set('relationType', relationType);
+    const suffix = query.size ? `?${query.toString()}` : '';
+    return apiFetch<KnowledgeGraphGlobalResponse>(`/admin/api/knowledge-graph/global${suffix}`, undefined, KnowledgeGraphGlobalResponseSchema);
+  },
+  knowledgeGraphIsolated: (sourceId?: string) => {
+    const query = new URLSearchParams();
+    if (sourceId && sourceId !== 'all') query.set('sourceId', sourceId);
+    const suffix = query.size ? `?${query.toString()}` : '';
+    return apiFetch<KnowledgeGraphGlobalResponse>(`/admin/api/knowledge-graph/isolated${suffix}`, undefined, KnowledgeGraphGlobalResponseSchema);
+  },
+  knowledgeGraphSearch: (queryText: string, sourceId?: string, limit = 12) => {
+    const query = new URLSearchParams({ q: queryText, limit: String(limit) });
+    if (sourceId && sourceId !== 'all') query.set('sourceId', sourceId);
+    return apiFetch<KnowledgeGraphSearchResponse>(`/admin/api/knowledge-graph/search?${query.toString()}`, undefined, KnowledgeGraphSearchResponseSchema);
+  },
+  knowledgeGraphNeighborhood: (sourceId: string, slug: string, relationType = 'all', limit = 30) => {
+    const query = new URLSearchParams({ sourceId, slug, limit: String(limit) });
+    if (relationType !== 'all') query.set('relationType', relationType);
+    return apiFetch<KnowledgeGraphNeighborhoodResponse>(`/admin/api/knowledge-graph/neighborhood?${query.toString()}`, undefined, KnowledgeGraphNeighborhoodResponseSchema);
+  },
   brainPage: (sourceId: string, slug: string, includeDeleted = false) =>
     apiFetch<BrainPageDetailResponse>(`/admin/api/brain/pages/${encodeURIComponent(sourceId)}/${encodeURIComponent(slug)}${includeDeleted ? '?includeDeleted=1' : ''}`, undefined, BrainPageDetailResponseSchema),
   brainPageChunks: (sourceId: string, slug: string, includeDeleted = false) =>

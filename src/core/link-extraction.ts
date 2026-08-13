@@ -14,6 +14,8 @@
 import type { BrainEngine } from './engine.ts';
 import type { EffectiveDateSource, PageType } from './types.ts';
 import { ensureWellFormed } from './text-safe.ts';
+import { posix } from 'node:path';
+import { pathToSlug } from './sync.ts';
 
 // ─── Entity references ──────────────────────────────────────────
 
@@ -87,6 +89,35 @@ const WIKILINK_RE = new RegExp(
  * their original directory and page names in slugs.
  */
 const WIKILINK_ANY_PATH_RE = /\[\[([^|\]#\r\n]+\/[^|\]#\r\n]+?)(?:#[^|\]]*?)?(?:\|([^\]]+?))?\]\]/g;
+
+export interface RelativeMarkdownRef {
+  name: string;
+  target: string;
+  slug: string;
+}
+
+/**
+ * Ordinary Markdown paths are Source-local filesystem references, regardless
+ * of their top-level directory name. Convert them with POSIX semantics so a
+ * Windows host produces the same canonical slash slug as Linux/macOS.
+ */
+export function extractRelativeMarkdownRefs(content: string, fromSlug: string): RelativeMarkdownRef[] {
+  const stripped = stripCodeBlocks(content);
+  const refs: RelativeMarkdownRef[] = [];
+  const pattern = /\[([^\]]+)\]\(([^)\r\n]+?\.md)(?:#[^)\r\n]*)?\)/gi;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(stripped)) !== null) {
+    const target = match[2]!.trim().replace(/^<|>$/g, '').replace(/\\/g, '/');
+    if (!target || target.includes('://') || target.startsWith('#')) continue;
+    const joined = target.startsWith('/')
+      ? target.slice(1)
+      : posix.join(posix.dirname(fromSlug), target);
+    const slug = pathToSlug(posix.normalize(joined));
+    if (!slug) continue;
+    refs.push({ name: match[1]!, target, slug });
+  }
+  return refs;
+}
 
 /**
  * v0.17.0: qualified wikilink `[[source-id:dir/slug]]` or
@@ -401,9 +432,34 @@ export async function extractPageLinks(
   const candidates: LinkCandidate[] = [];
   const wikilinkUnresolved: UnresolvedFrontmatterRef[] = [];
   const wikilinkUnresolvedSeen = new Set<string>();
+  const relativeMarkdownTargetSlugs = new Set<string>();
+
+  // Ordinary relative Markdown paths are exact, Source-local references.
+  // They must never use the resolver's default-Source fallback.
+  if (typeof resolver.resolveLocalExact === 'function') {
+    for (const ref of extractRelativeMarkdownRefs(content, slug)) {
+      const resolved = await resolver.resolveLocalExact(ref.slug);
+      if (!resolved) continue;
+      relativeMarkdownTargetSlugs.add(resolved.slug);
+      const idx = content.indexOf(ref.name);
+      const context = idx >= 0 ? excerpt(content, idx, 240) : ref.name;
+      candidates.push({
+        targetSlug: resolved.slug,
+        targetSourceId: resolved.sourceId,
+        resolutionType: 'unqualified',
+        linkType: inferLinkType(pageType, context, content, resolved.slug),
+        context,
+        linkSource: 'markdown',
+      });
+    }
+  }
 
   // 1. Markdown entity refs.
   for (const ref of extractEntityRefs(content)) {
+    // A standard .md link was already resolved above with strict Source-local
+    // semantics. Do not re-emit it through the historical entity path, whose
+    // unqualified resolver is allowed to fall back to default.
+    if (relativeMarkdownTargetSlugs.has(ref.slug)) continue;
     const resolvedExact = typeof resolver.resolveExact === 'function'
       ? await resolver.resolveExact(ref.slug, ref.sourceId ?? undefined)
       : null;
@@ -723,6 +779,10 @@ export interface SlugResolver {
     slug: string,
     requestedSourceId?: string,
   ): Promise<{ slug: string; sourceId: string; resolutionType: LinkResolutionType } | null>;
+  /** Exact path in the current Source only; ordinary relative Markdown links never fall back across Sources. */
+  resolveLocalExact?(
+    slug: string,
+  ): Promise<{ slug: string; sourceId: string; resolutionType: LinkResolutionType } | null>;
   /** Backward-compatible exact existence check. */
   slugExists?(slug: string, requestedSourceId?: string): Promise<boolean>;
 }
@@ -875,6 +935,9 @@ export function makeResolver(
 
   return {
     resolveExact,
+    async resolveLocalExact(slug: string): Promise<ResolvedTarget | null> {
+      return resolveExact(slug, currentSourceId);
+    },
     resolveTarget,
     async slugExists(slug: string, requestedSourceId?: string): Promise<boolean> {
       return (await resolveExact(slug, requestedSourceId)) !== null;

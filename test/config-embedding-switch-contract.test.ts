@@ -22,7 +22,7 @@ describe('embedding model switch contract', () => {
 
   test('default Dream cycles only fill missing vectors and never invalidate a model implicitly', () => {
     expect(cycle).toMatch(/export const ALL_PHASES[\s\S]*?'embed'/);
-    expect(cycle).toContain('runEmbedCore(engine, { stale: true, dryRun })');
+    expect(cycle).toContain('runEmbedCore(engine, { stale: true, dryRun, sourceId })');
     const embed = readFileSync(resolve('src/commands/embed.ts'), 'utf8');
     expect(embed).toContain('preflightEmbeddingModelChange(engine, !!opts.dryRun)');
     expect(embed).toMatch(/FROM content_chunks c\s+JOIN pages p ON p\.id = c\.page_id\s+WHERE c\.embedding IS NOT NULL\s+AND p\.deleted_at IS NULL/);

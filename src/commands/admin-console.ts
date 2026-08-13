@@ -25,6 +25,7 @@ export async function getSupervisorStatus() {
 // ---------------------------------------------------------------------------
 
 export * from './natural-lang/index.ts';
+export * from './admin-knowledge-graph.ts';
 
 // ---------------------------------------------------------------------------
 // Dashboard / knowledge-base browsing

@@ -81,6 +81,7 @@ export const BATCH_AUDIT_SITES = [
   'extract.links_inc',
   'extract.timeline_inc',
   'extract.links_fs',
+  'extract.markdown_catchup',
   'extract.timeline_fs',
   'extract.links_db',
   'extract.timeline_db',

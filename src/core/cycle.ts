@@ -493,6 +493,19 @@ export interface CycleOpts {
    * not consume this budget. Checkpoint resumes any remaining history.
    */
   byMentionTimeBudgetMs?: number;
+  /** Quick Maintenance: resumable historical exact Markdown-link catch-up. */
+  includeHistoricalMarkdownCatchUp?: boolean;
+  /** Optional compatibility cap; Quick leaves this unset and drains all old pages. */
+  markdownCatchUpMaxHistorical?: number;
+}
+
+/** Union sync + synthesis writes without turning "no producer ran" into []. */
+export function resolveIncrementalExtractSlugs(
+  syncSlugs?: string[],
+  synthesizedSlugs?: string[],
+): string[] | undefined {
+  if (syncSlugs === undefined && synthesizedSlugs === undefined) return undefined;
+  return [...new Set([...(syncSlugs ?? []), ...(synthesizedSlugs ?? [])])];
 }
 
 // ─── Lock primitives ───────────────────────────────────────────────
@@ -1018,6 +1031,7 @@ async function runPhaseExtract(
   brainDir: string,
   dryRun: boolean,
   changedSlugs?: string[],
+  sourceId?: string,
 ): Promise<PhaseResult> {
   try {
     const { runExtractCore } = await import('../commands/extract.ts');
@@ -1039,6 +1053,7 @@ async function runPhaseExtract(
       mode: 'all',
       dir: brainDir,
       slugs: changedSlugs,  // undefined = full walk (first run / manual)
+      sourceId,
     });
     const linksCreated = result?.links_created ?? 0;
     const timelineCreated = result?.timeline_entries_created ?? 0;
@@ -1498,6 +1513,7 @@ export async function runCycle(
   const cycleSourceId: string | undefined = engine
     ? (opts.sourceId ?? await resolveSourceForDir(engine, brainDir))
     : opts.sourceId;
+  const filesystemSourceId = cycleSourceId ?? 'default';
 
   const progress = createProgress(cliOptsToProgressOptions(getCliOptions()));
 
@@ -1751,9 +1767,39 @@ export async function runCycle(
         } else {
           progress.start('cycle.extract');
           progressStarted = true;
-          const timed = await timePhase(() => runPhaseExtract(engine, brainDir, dryRun, syncPagesAffected));
+          const extractSlugs = resolveIncrementalExtractSlugs(syncPagesAffected, synthesizeWrittenSlugs);
+          const timed = await timePhase(() => runPhaseExtract(engine, brainDir, dryRun, extractSlugs, filesystemSourceId));
           result = timed.result;
           result.duration_ms = timed.duration_ms;
+        }
+
+        if (opts.includeHistoricalMarkdownCatchUp && !dryRun && brainDir !== null) {
+          try {
+            const { runHistoricalMarkdownCatchUp } = await import('../commands/extract.ts');
+            const catchUpStart = performance.now();
+            const catchUp = await runHistoricalMarkdownCatchUp(engine, {
+              brainDir,
+              sourceId: filesystemSourceId,
+              prioritySlugs: syncPagesAffected,
+              maxHistoricalPages: opts.markdownCatchUpMaxHistorical,
+            });
+            result.details = {
+              ...result.details,
+              linksCreated: Number(result.details.linksCreated ?? 0) + catchUp.linksCreated,
+              markdownLinksCreated: catchUp.linksCreated,
+              markdownPagesProcessed: catchUp.pagesProcessed,
+              markdownPriorityPagesProcessed: catchUp.priorityPages,
+              markdownHistoricalPagesProcessed: catchUp.historicalPages,
+              markdownHistoricalRemaining: catchUp.historicalRemaining,
+              historical_markdown_catch_up: true,
+            };
+            result.summary = `${result.summary}; historical Markdown +${catchUp.linksCreated} link(s) (${catchUp.historicalRemaining} page(s) remaining)`;
+            result.duration_ms += Math.round(performance.now() - catchUpStart);
+          } catch (e) {
+            result.status = result.status === 'fail' ? 'fail' : 'warn';
+            result.details = { ...result.details, markdown_catch_up_error: e instanceof Error ? e.message : String(e) };
+            result.summary = `${result.summary}; historical Markdown catch-up failed`;
+          }
         }
 
         // PMBrain Quick: deterministic by-mention after explicit link extract.
@@ -1767,7 +1813,7 @@ export async function runCycle(
               prioritySlugs: syncPagesAffected,
               maxHistoricalPages: opts.byMentionMaxHistorical,
               historicalTimeBudgetMs: opts.byMentionTimeBudgetMs,
-              sourceIdFilter: opts.sourceId,
+              sourceIdFilter: filesystemSourceId,
               quiet: true,
             });
             const mentionMs = Math.round(performance.now() - mentionStart);
@@ -1776,16 +1822,18 @@ export async function runCycle(
               ...result.details,
               linksCreated: prevLinks + mention.created,
               mentionLinksCreated: mention.created,
+              mentionLinksRemoved: mention.removed,
               mentionPagesProcessed: mention.pages,
               mentionPriorityPagesProcessed: mention.priorityPages,
               mentionHistoricalPagesProcessed: mention.historicalPages,
               mentionHistoricalRemaining: mention.historicalRemaining,
               mentionTimeBudgetReached: mention.timeBudgetReached,
               mentionTimeBudgetMs: opts.byMentionTimeBudgetMs ?? null,
+              mentionAmbiguousNames: mention.ambiguousNames,
               by_mention: true,
             };
             result.summary =
-              `${result.summary}; by-mention +${mention.created} link(s) ` +
+              `${result.summary}; by-mention +${mention.created}/-${mention.removed} link(s) ` +
               `(${mention.pages} page(s), ${mention.historicalRemaining} historical remaining)`;
             result.duration_ms += mentionMs;
             if (result.status === 'skipped' && mention.pages > 0) {

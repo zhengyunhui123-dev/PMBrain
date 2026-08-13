@@ -32,31 +32,37 @@ import {
   BookOpenText, Bot, BrainCircuit, Cable,
   Database, FileClock, FolderKanban, HeartHandshake, LayoutDashboard, ListTodo,
   MonitorCog, Sparkles, type LucideIcon,
+  Orbit,
 } from 'lucide-react';
 
 const PAGES = [
   'login', 'dashboard', 'natural',
   'dream', 'dream-execute', 'dream-knowledge', 'dream-takes', 'dream-scoring', 'dream-calibration', 'dream-insights',
-  'import', 'data', 'docs',
+  'import', 'data', 'graph', 'docs',
   'mcp', 'tasks', 'config', 'agents', 'log', 'calibration',
   'settings', 'settings-general', 'settings-knowledge', 'settings-dream',
 ] as const;
 
+const KnowledgeGraphPage = React.lazy(() => import('./pages/KnowledgeGraph').then(module => ({
+  default: module.KnowledgeGraphPage,
+})));
+
 type Page = typeof PAGES[number];
 
 function getPage(): Page {
-  const hash = window.location.hash.replace('#', '') || 'dashboard';
+  const hash = window.location.hash.replace('#', '').split('?')[0] || 'dashboard';
   return PAGES.includes(hash as Page) ? hash as Page : 'dashboard';
 }
 
 type NavIconName =
   | 'overview' | 'workspace' | 'database' | 'organize' | 'mcp' | 'tasks' | 'log' | 'assistant'
-  | 'settings-general' | 'settings-knowledge' | 'settings-dream';
+  | 'graph' | 'settings-general' | 'settings-knowledge' | 'settings-dream';
 
 const NAV_ICONS: Record<NavIconName, LucideIcon> = {
   overview: LayoutDashboard,
   workspace: FolderKanban,
   database: Database,
+  graph: Orbit,
   organize: BookOpenText,
   mcp: Cable,
   tasks: ListTodo,
@@ -103,6 +109,7 @@ export function App() {
     { title: '知识', items: [
       { page: 'import', label: '知识工作台', icon: 'workspace' },
       { page: 'data', label: '知识库', icon: 'database' },
+      { page: 'graph', label: '知识图谱', icon: 'graph' },
       { page: 'dream', label: '知识整理', icon: 'organize' },
     ] },
     { title: '集成', items: [
@@ -254,6 +261,11 @@ export function App() {
         {page === 'dream-insights' && <DreamInsightsPage />}
         {page === 'import' && <ImportDataPage />}
         {page === 'data' && <BrainDataPage />}
+        {page === 'graph' && (
+          <React.Suspense fallback={<div className="pm-empty">正在打开知识星图…</div>}>
+            <KnowledgeGraphPage />
+          </React.Suspense>
+        )}
         {page === 'docs' && <DocumentationPage />}
         {page === 'natural' && <NaturalLanguagePage />}
         {page === 'mcp' && <ConnectionCenterPage />}
