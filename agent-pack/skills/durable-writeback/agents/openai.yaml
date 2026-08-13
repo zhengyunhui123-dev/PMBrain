@@ -1,0 +1,4 @@
+interface:
+  display_name: "Durable Writeback"
+  short_description: "Write verified outcomes back to PMBrain."
+  default_prompt: "Persist the verified outcome."

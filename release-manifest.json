@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "product": "PMBrain",
   "core": {
-    "version": "1.2.40"
+    "version": "1.2.41"
   },
   "desktop": {
     "version": "1.1.19"
@@ -12,9 +12,9 @@
     "assetCount": 11
   },
   "database": {
-    "latestSchemaVersion": 113
+    "latestSchemaVersion": 114
   },
   "sidecar": {
-    "version": "1.2.40"
+    "version": "1.2.41"
   }
 }
