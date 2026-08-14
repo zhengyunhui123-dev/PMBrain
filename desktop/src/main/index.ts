@@ -16,6 +16,7 @@ import { DatabaseUpgradeController } from './database/database-upgrade.js';
 import { PgliteBackupController } from './database/pglite-backup.js';
 import { buildDiagnosticBundle } from './diagnostics/diagnostic-bundle.js';
 import { SharedAccessController } from './integration/shared-access-controller.js';
+import { WorkBuddyAgentController } from './integration/workbuddy-agent-controller.js';
 import { registerDesktopIpcHandlers } from './ipc-handlers.js';
 import {
   initializeKnowledgeSourceGit,
@@ -153,6 +154,10 @@ const sidecarController: SidecarController = new SidecarController({
 });
 
 const sharedAccessController = new SharedAccessController(sidecarController, lanController);
+const workBuddyAgentController = new WorkBuddyAgentController({
+  sidecar: sidecarController,
+  configureMcp: () => sharedAccessController.configure('workbuddy', 'api_key'),
+});
 
 const systemSettingsController: SystemSettingsController = new SystemSettingsController({
   lan: lanController,
@@ -343,6 +348,10 @@ if (!app.requestSingleInstanceLock()) {
       ),
       saveSetup: payload => setupController.apply(payload),
       configureIntegration: (client, kind) => sharedAccessController.configure(client, kind),
+      getWorkbuddyAgentIntegration: () => workBuddyAgentController.read(),
+      installWorkbuddyAgent: workspace => workBuddyAgentController.install(workspace),
+      updateWorkbuddyAgent: () => workBuddyAgentController.update(),
+      removeWorkbuddyAgent: () => workBuddyAgentController.remove(),
       openAdmin,
       checkUpdates: () => updateController.check(),
       downloadUpdate: () => updateController.download(),

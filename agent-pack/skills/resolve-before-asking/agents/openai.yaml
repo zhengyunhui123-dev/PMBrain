@@ -1,0 +1,4 @@
+interface:
+  display_name: "Resolve Before Asking"
+  short_description: "Search PMBrain before asking the user."
+  default_prompt: "Resolve this from existing knowledge first."

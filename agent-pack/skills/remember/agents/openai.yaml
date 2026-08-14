@@ -1,0 +1,4 @@
+interface:
+  display_name: "Remember"
+  short_description: "Save user-approved durable knowledge to PMBrain."
+  default_prompt: "Preserve this as durable knowledge."

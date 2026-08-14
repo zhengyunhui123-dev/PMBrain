@@ -1,0 +1,4 @@
+interface:
+  display_name: "Conversation Summary"
+  short_description: "Save an approved conversation summary to PMBrain."
+  default_prompt: "Turn this conversation into durable knowledge."

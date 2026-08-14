@@ -9,10 +9,10 @@
  *   takes supersede <slug> --row N ...     — strikethrough old + append new
  *   takes resolve <slug> --row N --outcome true|false [--value N --unit u]
  *
- * Markdown is canonical. Every mutate command:
+ * Markdown is canonical. Mutate commands:
  *   1. acquires the per-page file lock
  *   2. re-reads the .md file
- *   3. applies the edit via takes-fence (upsertTakeRow / supersedeRow)
+ *   3. applies the edit via the shared canonical writer or takes-fence helper
  *   4. writes the .md file back
  *   5. mirrors to the DB via the engine method
  *   6. releases the lock (auto via withPageLock)
@@ -23,12 +23,12 @@ import { join, dirname } from 'node:path';
 import type { BrainEngine, TakeKind } from '../core/engine.ts';
 import {
   parseTakesFence,
-  upsertTakeRow,
   supersedeRow,
   type ParsedTake,
 } from '../core/takes-fence.ts';
 import { withPageLock } from '../core/page-lock.ts';
 import { DEFAULT_USER_HOLDER } from '../core/cycle/emotional-weight.ts';
+import { addCanonicalTake } from '../core/canonical-takes.ts';
 
 // --- Helpers ---
 
@@ -187,22 +187,18 @@ async function cmdAdd(engine: BrainEngine, args: string[]): Promise<void> {
   const dirArg = flagValue(args, '--dir');
   const brainDir = await resolveBrainDir(engine, dirArg ?? null);
 
-  await withPageLock(slug, async () => {
-    const path = pageFilePath(brainDir, slug);
-    const body = readBodyOrEmpty(path);
-    const { body: nextBody, rowNum } = upsertTakeRow(body, {
-      claim, kind, holder, weight, source, sinceDate: since, active: true,
-    });
-    writeBody(path, nextBody);
-
-    // Mirror to DB. Page may not be in DB yet if not synced — caller must run sync first.
-    const pageId = await getPageId(engine, slug);
-    await engine.addTakesBatch([{
-      page_id: pageId, row_num: rowNum, claim, kind, holder, weight,
-      since_date: since, source, active: true, superseded_by: null,
-    }]);
-    console.log(`Added take #${rowNum} to ${slug}.`);
+  const result = await addCanonicalTake(engine, {
+    pageSlug: slug,
+    claim,
+    kind,
+    holder,
+    weight,
+    source,
+    sinceDate: since,
+    canonicalRoot: brainDir,
   });
+
+  console.log(`${result.created ? 'Added' : 'Reused'} take #${result.rowNum} on ${slug}.`);
 }
 
 async function cmdUpdate(engine: BrainEngine, args: string[]): Promise<void> {

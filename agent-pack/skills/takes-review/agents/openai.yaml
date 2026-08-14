@@ -1,0 +1,4 @@
+interface:
+  display_name: "Takes Review"
+  short_description: "Review and decide pending take proposals."
+  default_prompt: "Show pending viewpoints for review."
