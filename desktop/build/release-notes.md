@@ -1,3 +1,9 @@
+## PMBrain 1.1.21
+
+- 对齐原版 GBrain 的 fact 写入能力：Agent 可通过 `remember` 记住一条事实，通过 `forget` 忘掉，并通过 `recall` 读回。
+- 知识库新增「事实」页，直接展示数据库 `facts` 表；知识页详情也会显示挂在该页上的事实。
+- 知识分类调整：笔记、人物、项目归入结构化知识；原始与资料只保留会话、会议、导入材料和参考来源。
+
 ## PMBrain 1.1.20
 
 - 新增 WorkBuddy 深度接入 V1：选择工作目录后，将 PMBrain Agent Rules 和 5 个官方 Skills 安装到 WorkBuddy 实际读取的 `.codebuddy` workspace 目录，并继续复用现有 MCP 连接。

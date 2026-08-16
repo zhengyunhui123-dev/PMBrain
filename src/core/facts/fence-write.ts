@@ -64,6 +64,10 @@ export interface FenceInputFact {
   /** Defaults to 1.0 when undefined (matches engine.insertFact behavior). */
   confidence?: number;
   validFrom?: Date;
+  /**
+   * MEMORY_VERBS v1: remember's ttl → valid_until. Undefined/null = never expires.
+   */
+  validUntil?: Date | null;
   embedding: Float32Array | null;
   sessionId: string | null;
 }
@@ -223,7 +227,7 @@ export async function writeFactsToFence(
           visibility:  f.visibility,
           notability:  f.notability ?? 'medium',
           validFrom:   validFromStr,
-          validUntil:  undefined,
+          validUntil:  f.validUntil ? f.validUntil.toISOString().slice(0, 10) : undefined,
           source:      f.source,
           context:     f.context ?? undefined,
         });

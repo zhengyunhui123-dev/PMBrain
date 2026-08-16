@@ -17,6 +17,13 @@ const PAGE_TYPE_LABELS: Record<string, { label: string; description: string }> =
   daily: { label: '每日记录', description: '按日期组织的日历、日志或当天记录。' },
   extract_receipt: { label: '抽取回执', description: '抽取任务的过程记录和结果凭证。' },
   fact: { label: '事实', description: '可追溯、可验证的结构化事实。' },
+  person: { label: '人物', description: '人物、角色或联系人页面。' },
+  pattern: { label: '模式', description: '跨会话或跨项目重复出现的模式。' },
+  'project-context': { label: '项目上下文', description: '项目背景、约束和上下文说明。' },
+  project_context: { label: '项目上下文', description: '项目背景、约束和上下文说明。' },
+  'project-note': { label: '项目笔记', description: '挂在项目下的工作笔记。' },
+  skill: { label: '技能', description: '可复用的工作方法、Skill 或操作说明。' },
+  doc: { label: '文档', description: '说明文档、规范或帮助页。' },
   idea: { label: '想法', description: '待发展的问题、灵感、产品或写作种子。' },
   material: { label: '材料', description: '原始资料、附件或素材类页面。' },
   meeting: { label: '会议', description: '会议纪要、决策、行动项和跟进问题。' },
@@ -39,6 +46,18 @@ export function pageTypeLabel(type: string): string {
 export function pageTypeTitle(type: string): string {
   const info = PAGE_TYPE_LABELS[type];
   return info ? `${type}: ${info.description}` : `${type}: 未配置中文说明`;
+}
+
+const FACT_KIND_LABELS: Record<string, string> = {
+  event: '事件',
+  preference: '偏好',
+  commitment: '承诺',
+  belief: '判断',
+  fact: '事实',
+};
+
+export function factKindLabel(kind: string): string {
+  return FACT_KIND_LABELS[kind] ?? kind;
 }
 
 /** Format a date string or null into locale string. */

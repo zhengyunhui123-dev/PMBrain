@@ -20,6 +20,9 @@ export type ErrorCode =
   | (string & {});
 
 export class OperationError extends Error {
+  public detail?: string;
+  public protocolVersion?: number;
+
   constructor(
     public code: ErrorCode,
     message: string,
@@ -36,6 +39,8 @@ export class OperationError extends Error {
       message: this.message,
       suggestion: this.suggestion,
       docs: this.docs,
+      detail: this.detail,
+      protocol_version: this.protocolVersion,
     };
   }
 }

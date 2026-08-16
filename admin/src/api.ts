@@ -1,6 +1,8 @@
 import {
   BrainOverviewResponseSchema,
   BrainPageChunksResponseSchema,
+  BrainFactDetailResponseSchema,
+  BrainFactsResponseSchema,
   BrainPageDetailResponseSchema,
   BrainPagesResponseSchema,
   KnowledgeGraphGlobalResponseSchema,
@@ -21,6 +23,8 @@ import {
 import type {
   BrainOverviewResponse,
   BrainPageChunksResponse,
+  BrainFactDetailResponse,
+  BrainFactsResponse,
   BrainPageDetailResponse,
   BrainPagesResponse,
   KnowledgeGraphGlobalResponse,
@@ -121,6 +125,8 @@ export const api = {
   theme: () => apiFetch('/admin/api/theme'),
   docs: () => apiFetch('/admin/api/docs'),
   brainPages: (qs = '') => apiFetch<BrainPagesResponse>(`/admin/api/brain/pages${qs}`, undefined, BrainPagesResponseSchema),
+  brainFacts: (qs = '') => apiFetch<BrainFactsResponse>(`/admin/api/brain/facts${qs}`, undefined, BrainFactsResponseSchema),
+  brainFact: (id: number) => apiFetch<BrainFactDetailResponse>(`/admin/api/brain/facts/${id}`, undefined, BrainFactDetailResponseSchema),
   knowledgeGraphMeta: (sourceId?: string) => {
     const query = new URLSearchParams();
     if (sourceId && sourceId !== 'all') query.set('sourceId', sourceId);

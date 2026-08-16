@@ -55,6 +55,7 @@ interface FactDbRow {
   row_num: number | null;
   source_markdown_slug: string | null;
   expired_at: Date | null;
+  visibility?: string | null;
 }
 
 interface SourceRow {
@@ -83,15 +84,36 @@ function todayUtc(): string {
 export async function forgetFactInFence(
   engine: BrainEngine,
   factId: number,
-  opts: { reason?: string } = {},
+  opts: {
+    reason?: string;
+    /**
+     * MEMORY_VERBS v1 trust boundary: when set, the fact must belong to this
+     * source or the call returns `not_found`.
+     */
+    sourceId?: string;
+    /**
+     * When true (remote callers), the fact must be visibility='world' or the
+     * call returns `not_found`.
+     */
+    worldOnly?: boolean;
+  } = {},
 ): Promise<ForgetFactResult> {
   const reason = opts.reason ?? 'forgotten';
 
   const rows = await engine.executeRaw<FactDbRow>(
-    `SELECT id, source_id, entity_slug, row_num, source_markdown_slug, expired_at
+    `SELECT id, source_id, entity_slug, row_num, source_markdown_slug, expired_at, visibility
        FROM facts WHERE id = $1`,
     [factId],
   );
+  if (rows.length === 1) {
+    const scoped = rows[0];
+    const outOfScope =
+      (opts.sourceId !== undefined && scoped.source_id !== opts.sourceId) ||
+      (opts.worldOnly === true && scoped.visibility !== 'world');
+    if (outOfScope) {
+      return { ok: false, path: 'not_found', reason };
+    }
+  }
   if (rows.length === 0) {
     return { ok: false, path: 'not_found', reason };
   }

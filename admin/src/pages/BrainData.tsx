@@ -3,7 +3,7 @@ import { api } from '../api';
 import { useCallback, useRef } from 'react';
 import { AgentsPage } from './Agents';
 import { ChatGptTunnelPanel } from './ChatGptTunnel';
-import { RunOutput, InfoIcon, formatDate, pageTypeLabel, pageTypeTitle, type ConsoleRun, type BrainPageChunk } from '../lib/shared';
+import { RunOutput, InfoIcon, formatDate, factKindLabel, pageTypeLabel, pageTypeTitle, type ConsoleRun, type BrainPageChunk } from '../lib/shared';
 import { getThinkRetrievalWarning, parseThinkOutput } from '../lib/think-output';
 import { summarizeImportRun } from '../lib/import-summary';
 import { CopyButton } from '../lib/clipboard';
@@ -29,9 +29,12 @@ import {
   type SourceSummary,
 } from './console-shared';
 import type {
+  BrainFactDetailResponse as BrainFactDetail,
+  BrainFactRow,
   BrainPageDetailResponse as BrainPageDetail,
   BrainPageRow,
 } from '../../../shared/contracts/brain.ts';
+import { FACT_KINDS, knowledgePageViewTypes } from '../../../shared/knowledge-views.ts';
 
 export function BrainDataPage() {
   const { overview } = useOverview();
@@ -43,9 +46,12 @@ export function BrainDataPage() {
     return source && slug ? { source, slug } : null;
   })());
   const [rows, setRows] = useState<BrainPageRow[]>([]);
+  const [factRows, setFactRows] = useState<BrainFactRow[]>([]);
   const [meta, setMeta] = useState({ total: 0, page: 1, pages: 1, limit: 10 });
   const [selected, setSelected] = useState<BrainPageRow | null>(null);
+  const [selectedFact, setSelectedFact] = useState<BrainFactRow | null>(null);
   const [detail, setDetail] = useState<BrainPageDetail | null>(null);
+  const [factDetail, setFactDetail] = useState<BrainFactDetail | null>(null);
   const [detailTab, setDetailTab] = useState<'content' | 'knowledge' | 'chunks'>('content');
   const [chunks, setChunks] = useState<BrainPageChunk[]>([]);
   const [selectedChunkIndex, setSelectedChunkIndex] = useState(0);
@@ -63,17 +69,26 @@ export function BrainDataPage() {
   });
   const [gotoPage, setGotoPage] = useState('1');
 
+  const isFactsView = filters.view === 'facts';
   const loadRows = useCallback(async () => {
     const qs = new URLSearchParams();
     qs.set('page', String(filters.page));
     qs.set('limit', String(filters.pageSize));
     if (filters.source !== 'all') qs.set('source', filters.source);
     if (filters.type !== 'all') qs.set('type', filters.type);
-    if (filters.view !== 'all') qs.set('view', filters.view);
     if (filters.embedded !== 'all') qs.set('embedded', filters.embedded);
     if (filters.q.trim()) qs.set('q', filters.q.trim());
+    if (filters.view === 'facts') {
+      const data = await api.brainFacts(`?${qs.toString()}`);
+      setFactRows(data.rows);
+      setRows([]);
+      setMeta({ total: data.total, page: data.page, pages: data.pages, limit: data.limit ?? filters.pageSize });
+      return;
+    }
+    if (filters.view !== 'all') qs.set('view', filters.view);
     const data = await api.brainPages(`?${qs.toString()}`);
     setRows(data.rows);
+    setFactRows([]);
     setMeta({ total: data.total, page: data.page, pages: data.pages, limit: data.limit ?? filters.pageSize });
   }, [filters]);
 
@@ -93,8 +108,19 @@ export function BrainDataPage() {
   }, [rows, selected]);
 
   useEffect(() => {
+    if (selectedFact) {
+      setFactDetail(null);
+      setChunksLoading(true);
+      setChunksError('');
+      api.brainFact(selectedFact.id)
+        .then(setFactDetail)
+        .catch(e => setChunksError(e instanceof Error ? e.message : String(e)))
+        .finally(() => setChunksLoading(false));
+      return;
+    }
     if (!selected) {
       setDetail(null);
+      setFactDetail(null);
       setChunks([]);
       setSelectedChunkIndex(0);
       setChunksError('');
@@ -102,6 +128,7 @@ export function BrainDataPage() {
     }
     setChunks([]);
     setDetail(null);
+    setFactDetail(null);
     setDetailTab('content');
     setSelectedChunkIndex(0);
     setChunksError('');
@@ -116,16 +143,12 @@ export function BrainDataPage() {
       })
       .catch(e => setChunksError(e instanceof Error ? e.message : String(e)))
       .finally(() => setChunksLoading(false));
-  }, [selected, filters.view]);
+  }, [selected, selectedFact, filters.view]);
 
   const types = useMemo(() => {
-    const viewTypes: Record<string, Set<string>> = {
-      materials: new Set(['material', 'reference', 'source', 'conversation', 'meeting', 'note', 'cover']),
-      structured: new Set(['atom', 'fact', 'concept']),
-      insights: new Set(['take', 'original', 'originals', 'reflection', 'pattern']),
-    };
-    const allowed = viewTypes[filters.view];
-    return Object.keys(overview?.stats.pages_by_type ?? {}).filter(type => !allowed || allowed.has(type)).sort();
+    if (filters.view === 'facts') return [...FACT_KINDS];
+    const allowed = knowledgePageViewTypes(filters.view);
+    return Object.keys(overview?.stats.pages_by_type ?? {}).filter(type => !allowed || allowed.includes(type)).sort();
   }, [overview, filters.view]);
   const chunkBlocks = useMemo(() => {
     if (chunks.length > 0) return chunks.map(chunk => ({ index: chunk.chunk_index, embedded: chunk.embedded }));
@@ -230,7 +253,10 @@ export function BrainDataPage() {
         <div>
           <div className="pm-eyebrow">DATABASE · MARKDOWN · KNOWLEDGE</div>
           <h1>知识数据</h1>
-          <p className="pm-page-intro">这里展示数据库中的可检索 Markdown 页面。原始资料、结构化知识和观点总结可以分开查看。</p>
+          <p className="pm-page-intro">
+            这里展示数据库里的知识页、热记忆事实和观点记录。知识页是 Markdown；事实是 Agent 记住的独立陈述，不是页面。
+            {overview && ` 当前 ${overview.stats.page_count} 个知识页 · ${overview.stats.active_fact_count ?? 0} 条有效事实 · ${overview.stats.link_count} 条关系。`}
+          </p>
         </div>
       </div>
       {pageError && <div className="pm-error-text">{pageError}</div>}
@@ -240,6 +266,7 @@ export function BrainDataPage() {
             ['all', '全部'],
             ['materials', '原始与资料'],
             ['structured', '结构化知识'],
+            ['facts', '事实'],
             ['insights', '观点与总结'],
             ['trash', '回收站'],
           ].map(([value, label]) => (
@@ -248,6 +275,7 @@ export function BrainDataPage() {
               className={filters.view === value ? 'active' : ''}
               onClick={() => {
                 setSelected(null);
+                setSelectedFact(null);
                 setPageError('');
                 setFilters(current => ({ ...current, view: value, type: 'all', page: 1 }));
               }}
@@ -255,15 +283,20 @@ export function BrainDataPage() {
           ))}
         </div>
         {filters.view === 'trash' && <p className="trash-retention-note">移出的内容保留 3 天，之后自动清空。打开详情可以撤销删除。</p>}
+        {filters.view === 'facts' && <p className="trash-retention-note">事实来自 facts 热记忆表，不是 Markdown 页面。由 remember / extract_facts / Dream 写入，可被 recall 读回。</p>}
         <div className="filter-bar">
-          <input value={filters.q} onChange={e => setFilters(f => ({ ...f, q: e.target.value, page: 1 }))} placeholder="搜索 slug 或标题" />
+          <input value={filters.q} onChange={e => setFilters(f => ({ ...f, q: e.target.value, page: 1 }))} placeholder={isFactsView ? '搜索事实、实体或来源' : '搜索 slug 或标题'} />
           <select value={filters.source} onChange={e => setFilters(f => ({ ...f, source: e.target.value, page: 1 }))}>
             <option value="all">全部 source</option>
             {overview?.sources.map(s => <option key={s.id} value={s.id}>{s.id}</option>)}
           </select>
           <select value={filters.type} onChange={e => setFilters(f => ({ ...f, type: e.target.value, page: 1 }))}>
-            <option value="all">全部类型</option>
-            {types.map(t => <option key={t} value={t} title={pageTypeTitle(t)}>{pageTypeLabel(t)}</option>)}
+            <option value="all">{isFactsView ? '全部事实类型' : '全部类型'}</option>
+            {types.map(t => (
+              <option key={t} value={t} title={isFactsView ? t : pageTypeTitle(t)}>
+                {isFactsView ? factKindLabel(t) : pageTypeLabel(t)}
+              </option>
+            ))}
           </select>
           <select value={filters.embedded} onChange={e => setFilters(f => ({ ...f, embedded: e.target.value, page: 1 }))}>
             <option value="all">向量化不限</option>
@@ -272,17 +305,50 @@ export function BrainDataPage() {
           </select>
         </div>
         <table className="brain-page-table">
-          <thead><tr><th>标题</th><th>Source</th><th>类型</th><th>Chunks</th><th>Embedding</th><th>{filters.view === 'trash' ? '移除时间' : '更新'}</th></tr></thead>
+          <thead>
+            <tr>
+              <th>{isFactsView ? '事实' : '标题'}</th>
+              <th>Source</th>
+              <th>类型</th>
+              <th>{isFactsView ? '实体' : 'Chunks'}</th>
+              <th>Embedding</th>
+              <th>{filters.view === 'trash' ? '移除时间' : '更新'}</th>
+            </tr>
+          </thead>
           <tbody>
-            {rows.map(row => (
+            {isFactsView
+              ? factRows.map(row => (
+                <tr
+                  key={`fact:${row.id}`}
+                  tabIndex={0}
+                  aria-label={`查看事实 ${row.id}`}
+                  onClick={() => { setSelected(null); setSelectedFact(row); }}
+                  onKeyDown={event => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault();
+                      setSelected(null);
+                      setSelectedFact(row);
+                    }
+                  }}
+                >
+                  <td><b>{row.fact}</b><div className="pm-muted mono">#{row.id} · {row.source}</div></td>
+                  <td>{row.source_id}</td>
+                  <td><span className="pm-pill">{factKindLabel(row.kind)}</span></td>
+                  <td>{row.entity_slug || '—'}</td>
+                  <td>{row.embedded ? '1/1' : '0/1'}</td>
+                  <td>{formatDate(row.created_at)}</td>
+                </tr>
+              ))
+              : rows.map(row => (
               <tr
                 key={`${row.source_id}:${row.slug}`}
                 tabIndex={0}
                 aria-label={`查看 ${row.title || row.slug}`}
-                onClick={() => setSelected(row)}
+                onClick={() => { setSelectedFact(null); setSelected(row); }}
                 onKeyDown={event => {
                   if (event.key === 'Enter' || event.key === ' ') {
                     event.preventDefault();
+                    setSelectedFact(null);
                     setSelected(row);
                   }
                 }}
@@ -299,6 +365,44 @@ export function BrainDataPage() {
         </table>
         {renderPagination()}
       </div>
+      {selectedFact && (
+        <>
+          <div className="drawer-overlay" onClick={() => setSelectedFact(null)} />
+          <div className="drawer light-drawer knowledge-drawer">
+            <button className="drawer-close" onClick={() => setSelectedFact(null)}>×</button>
+            <div className="knowledge-drawer-head">
+              <div>
+                <div className="pm-eyebrow">{selectedFact.source_id} / 事实 #{selectedFact.id}</div>
+                <h2>{factKindLabel(selectedFact.kind)}</h2>
+              </div>
+            </div>
+            <div className="page-detail-summary">
+              <div><span>Source</span><b>{selectedFact.source_id}</b></div>
+              <div><span>类型</span><b>{factKindLabel(selectedFact.kind)}</b></div>
+              <div><span>可见性</span><b>{(factDetail ?? selectedFact).visibility === 'world' ? '共享' : '私有'}</b></div>
+              <div><span>记录</span><b>{formatDate(selectedFact.created_at)}</b></div>
+            </div>
+            {chunksLoading && <div className="pm-empty compact-empty">正在读取事实...</div>}
+            {chunksError && <div className="pm-error-text">{chunksError}</div>}
+            {!chunksLoading && (
+              <div className="knowledge-meta-view">
+                <section>
+                  <h3>事实内容</h3>
+                  <p>{(factDetail ?? selectedFact).fact}</p>
+                </section>
+                <section>
+                  <h3>出处与挂载</h3>
+                  <div className="pm-kv"><span>来源说明</span><b>{(factDetail ?? selectedFact).source}</b></div>
+                  <div className="pm-kv"><span>实体</span><b>{(factDetail ?? selectedFact).entity_slug || '未挂实体'}</b></div>
+                  <div className="pm-kv"><span>知识页</span><b>{(factDetail ?? selectedFact).source_markdown_slug || '仅数据库记录'}</b></div>
+                  <div className="pm-kv"><span>向量</span><b>{(factDetail ?? selectedFact).embedded ? '已向量化' : '未向量化'}</b></div>
+                  {factDetail?.context && <div className="pm-kv"><span>上下文</span><b>{factDetail.context}</b></div>}
+                </section>
+              </div>
+            )}
+          </div>
+        </>
+      )}
       {selected && (
         <>
           <div className="drawer-overlay" onClick={() => setSelected(null)} />
@@ -334,6 +438,16 @@ export function BrainDataPage() {
             )}
             {!chunksLoading && !chunksError && detailTab === 'knowledge' && (
               <div className="knowledge-meta-view">
+                <section>
+                  <h3>关联事实</h3>
+                  {detail?.facts?.length ? detail.facts.map(item => (
+                    <article className="take-summary-row" key={item.id}>
+                      <span>#{item.id} · {factKindLabel(item.kind)} · {item.visibility === 'world' ? '共享' : '私有'}</span>
+                      <p>{item.fact}</p>
+                      <small>{item.source}</small>
+                    </article>
+                  )) : <div className="pm-empty compact-empty">这个页面暂时没有挂载热记忆事实。</div>}
+                </section>
                 <section>
                   <h3>关联观点</h3>
                   {detail?.takes.length ? detail.takes.map(take => (

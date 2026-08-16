@@ -22,6 +22,8 @@ export const BrainStatsSchema = z.object({
   tag_count: z.number().int().nonnegative().optional().default(0),
   timeline_entry_count: z.number().int().nonnegative(),
   pages_by_type: z.record(z.string(), z.number()),
+  fact_count: z.number().int().nonnegative().optional(),
+  active_fact_count: z.number().int().nonnegative().optional(),
 }).passthrough();
 
 export const BrainOverviewResponseSchema = z.object({
@@ -98,6 +100,51 @@ export const BrainPageDetailResponseSchema = z.object({
     row_num: z.number().int(), claim: z.string(), kind: z.string(), holder: z.string(),
     weight: z.number(), source: z.string().nullable(),
   }).passthrough()),
+  facts: z.array(z.object({
+    id: z.number().int(),
+    fact: z.string(),
+    kind: z.string(),
+    visibility: z.string(),
+    notability: z.string().optional(),
+    entity_slug: z.string().nullable().optional(),
+    source: z.string(),
+    source_markdown_slug: z.string().nullable().optional(),
+    confidence: z.number().optional(),
+    expired_at: z.string().nullable().optional(),
+    created_at: z.string().optional(),
+  }).passthrough()).optional().default([]),
+}).passthrough();
+
+export const BrainFactRowSchema = z.object({
+  id: z.number().int(),
+  fact: z.string(),
+  kind: z.string(),
+  source_id: z.string(),
+  entity_slug: z.string().nullable(),
+  visibility: z.string(),
+  notability: z.string().optional(),
+  source: z.string(),
+  source_markdown_slug: z.string().nullable().optional(),
+  confidence: z.number().optional(),
+  embedded: z.boolean(),
+  expired_at: z.string().nullable().optional(),
+  created_at: z.string(),
+  updated_at: z.string().optional(),
+}).passthrough();
+
+export const BrainFactsResponseSchema = z.object({
+  rows: z.array(BrainFactRowSchema),
+  total: z.number().int().nonnegative(),
+  page: z.number().int().positive(),
+  limit: z.number().int().positive(),
+  pages: z.number().int().positive(),
+});
+
+export const BrainFactDetailResponseSchema = BrainFactRowSchema.extend({
+  context: z.string().nullable().optional(),
+  source_session: z.string().nullable().optional(),
+  valid_from: z.string().optional(),
+  valid_until: z.string().nullable().optional(),
 }).passthrough();
 
 export const BrainPageChunkSchema = z.object({
@@ -175,3 +222,6 @@ export type KnowledgeGraphSearchResponse = z.infer<typeof KnowledgeGraphSearchRe
 export type KnowledgeGraphNeighborhoodResponse = z.infer<typeof KnowledgeGraphNeighborhoodResponseSchema>;
 export type KnowledgeGraphMetaResponse = z.infer<typeof KnowledgeGraphMetaResponseSchema>;
 export type KnowledgeGraphGlobalResponse = z.infer<typeof KnowledgeGraphGlobalResponseSchema>;
+export type BrainFactRow = z.infer<typeof BrainFactRowSchema>;
+export type BrainFactsResponse = z.infer<typeof BrainFactsResponseSchema>;
+export type BrainFactDetailResponse = z.infer<typeof BrainFactDetailResponseSchema>;
