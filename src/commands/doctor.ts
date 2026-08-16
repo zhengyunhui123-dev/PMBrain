@@ -2665,6 +2665,61 @@ export async function computeConversationFactsBacklogCheck(
  * Empty rollup short-circuits BEFORE hitting the rollup_write_failures
  * branch so a brand-new brain doesn't surface a "0 failures" warning.
  */
+export const EXTRACTION_LAG_WARN_PCT_DEFAULT = 20;
+export const EXTRACTION_LAG_MIN_PAGES = 100;
+
+export async function checkLinksExtractionLag(
+  engine: BrainEngine,
+  opts?: { sourceId?: string },
+): Promise<Check> {
+  const name = 'links_extraction_lag';
+  const sourceId = opts?.sourceId;
+  const fix = 'Run: pmbrain extract --stale';
+  try {
+    const { LINK_EXTRACTOR_VERSION_TS } = await import('../core/link-extraction.ts');
+    const { isUndefinedColumnError } = await import('../core/utils.ts');
+    const totalRows = await engine.executeRaw<{ count: number }>(
+      sourceId
+        ? `SELECT count(*)::int AS count FROM pages WHERE deleted_at IS NULL AND source_id = $1`
+        : `SELECT count(*)::int AS count FROM pages WHERE deleted_at IS NULL`,
+      sourceId ? [sourceId] : [],
+    );
+    const total = Number(totalRows[0]?.count ?? 0);
+    if (total === 0) {
+      return { name, status: 'ok', message: 'Extraction lag not applicable (no pages)' };
+    }
+    if (total < EXTRACTION_LAG_MIN_PAGES && !sourceId) {
+      return { name, status: 'ok', message: `Extraction lag not applicable (${total} pages — too few to assess)` };
+    }
+
+    const stale = await engine.countStalePagesForExtraction({ sourceId, versionTs: LINK_EXTRACTOR_VERSION_TS });
+    const pct = (stale / total) * 100;
+    const pctStr = pct.toFixed(0);
+    const scope = sourceId ? ` in source '${sourceId}'` : '';
+    const warnPct = Number(process.env.PMBRAIN_EXTRACTION_LAG_WARN_PCT || process.env.GBRAIN_EXTRACTION_LAG_WARN_PCT || EXTRACTION_LAG_WARN_PCT_DEFAULT);
+    let failPct: number | undefined;
+    const failRaw = process.env.PMBRAIN_EXTRACTION_LAG_FAIL_PCT || process.env.GBRAIN_EXTRACTION_LAG_FAIL_PCT;
+    if (failRaw !== undefined && failRaw !== '') {
+      const n = Number(failRaw);
+      if (Number.isFinite(n) && n > 0) failPct = n;
+    }
+    const details = { total, stale, pct: Number(pctStr), warn_pct: warnPct, fail_pct: failPct ?? null, source_id: sourceId ?? null };
+    if (failPct !== undefined && pct > failPct) {
+      return { name, status: 'fail', message: `${stale}/${total} pages (${pctStr}%)${scope} need link/timeline extraction (> ${failPct}% fail threshold). ${fix}`, details };
+    }
+    if (pct > warnPct) {
+      return { name, status: 'warn', message: `${stale}/${total} pages (${pctStr}%)${scope} have un-extracted edges. ${fix}`, details };
+    }
+    return { name, status: 'ok', message: `Extraction current: ${stale}/${total} pages (${pctStr}%) stale${scope}`, details };
+  } catch (e) {
+    const { isUndefinedColumnError } = await import('../core/utils.ts');
+    if (isUndefinedColumnError(e, 'links_extracted_at')) {
+      return { name, status: 'ok', message: 'links_extracted_at not present (run pmbrain apply-migrations)' };
+    }
+    return { name, status: 'warn', message: `Could not check links_extraction_lag: ${(e as Error).message}` };
+  }
+}
+
 export async function computeExtractHealthCheck(
   engine: BrainEngine,
 ): Promise<Check> {
@@ -3646,6 +3701,15 @@ export async function buildChecks(
     } catch {
       // Best-effort; rollup-table missing on pre-v106 brains is normal
       // and is already handled inside computeExtractHealthCheck.
+    }
+    try {
+      checks.push(await checkLinksExtractionLag(engine));
+    } catch {
+      checks.push({
+        name: 'links_extraction_lag',
+        status: 'warn',
+        message: 'Could not check links_extraction_lag',
+      });
     }
   }
 

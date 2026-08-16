@@ -343,6 +343,7 @@ describe('BATCH_AUDIT_SITES typed enum + isBatchAuditSite guard (D10c codex)', (
       'extract.links_inc', 'extract.timeline_inc',
       'extract.links_fs', 'extract.timeline_fs',
       'extract.links_db', 'extract.timeline_db',
+      'extract.stale',
       'extract.by_mention',
       'extract.markdown_catchup',
       'mcp.put_page.autolink',

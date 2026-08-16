@@ -1,3 +1,13 @@
+## PMBrain 1.1.23
+
+- 修复已有知识库升级后 Sidecar 因缺少 `links_extracted_at` 列而无法启动的问题。启动时会自动补列，不再要求先手动跑迁移。
+
+## PMBrain 1.1.22
+
+- 对齐 GBrain 关系抽取水位：新增 `pages.links_extracted_at`，支持 `pmbrain extract --stale` 和医生检查“有多少页关系过期”。
+- 知识库补上公司、事件页分类；事实详情显示事件类型。
+- Agent 可通过 `entity` 零模型查看人物/公司/项目卡片。
+
 ## PMBrain 1.1.21
 
 - 对齐原版 GBrain 的 fact 写入能力：Agent 可通过 `remember` 记住一条事实，通过 `forget` 忘掉，并通过 `recall` 读回。

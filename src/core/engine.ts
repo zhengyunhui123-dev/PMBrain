@@ -1152,6 +1152,23 @@ export interface BrainEngine {
     slug: string,
     opts?: { depth?: number; linkType?: string; direction?: 'in' | 'out' | 'both'; sourceId?: string; sourceIds?: string[] },
   ): Promise<GraphPath[]>;
+
+  /**
+   * Count pages needing link/timeline (re)extraction.
+   * A page is stale when links_extracted_at is NULL, older than versionTs,
+   * or older than updated_at.
+   */
+  countStalePagesForExtraction(opts?: { sourceId?: string; versionTs?: string }): Promise<number>;
+  listStalePagesForExtraction(opts: {
+    batchSize: number;
+    afterPageId?: number;
+    sourceId?: string;
+    versionTs?: string;
+  }): Promise<import('./types.ts').StalePageRow[]>;
+  markPagesExtractedBatch(
+    refs: Array<{ slug: string; source_id: string; extractedAt?: string }>,
+    defaultExtractedAt: string,
+  ): Promise<void>;
   relationalFanout(
     seeds: string[],
     opts?: RelationalFanoutOpts,

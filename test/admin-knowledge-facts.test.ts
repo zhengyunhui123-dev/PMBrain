@@ -26,7 +26,10 @@ describe('Knowledge data classification and facts inventory', () => {
     expect(KNOWLEDGE_PAGE_VIEW_TYPES.materials).not.toContain('note');
     expect(KNOWLEDGE_PAGE_VIEW_TYPES.structured).toContain('note');
     expect(KNOWLEDGE_PAGE_VIEW_TYPES.structured).toContain('person');
+    expect(KNOWLEDGE_PAGE_VIEW_TYPES.structured).toContain('company');
+    expect(KNOWLEDGE_PAGE_VIEW_TYPES.structured).toContain('event');
     expect(KNOWLEDGE_PAGE_VIEW_TYPES.structured).toContain('project');
+    expect(KNOWLEDGE_PAGE_VIEW_TYPES.materials).toContain('calendar-event');
     expect(KNOWLEDGE_PAGE_VIEW_TYPES.insights).toContain('idea');
     expect(knowledgePageViewTypes('facts')).toBeUndefined();
   });
@@ -55,6 +58,8 @@ describe('Knowledge data classification and facts inventory', () => {
     await listAdminBrainPages(engine, { view: 'structured' });
     expect(statements[0]).toContain('"note"');
     expect(statements[0]).toContain('"person"');
+    expect(statements[0]).toContain('"company"');
+    expect(statements[0]).toContain('"event"');
     expect(statements[0]).toContain('"project"');
   });
 

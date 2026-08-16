@@ -55,7 +55,8 @@ describe('Gbrain-aligned memory verbs', () => {
   test('remember and forget are registered as ordinary operations', () => {
     expect(operationsByName.remember?.name).toBe('remember');
     expect(operationsByName.forget?.name).toBe('forget');
-    expect(memoryVerbOperations.map(op => op.name).sort()).toEqual(['forget', 'remember']);
+    expect(memoryVerbOperations.map(op => op.name).sort()).toEqual(['entity', 'forget', 'remember']);
+    expect(operationsByName.entity?.name).toBe('entity');
   });
 
   test('unset visibility follows the brain default and fails closed', async () => {
@@ -139,6 +140,28 @@ describe('Gbrain-aligned memory verbs', () => {
       [Number(remembered.id)],
     );
     expect(kept[0]?.expired_at).toBeTruthy();
+  });
+
+  test('entity card finds a person page and reports attached facts', async () => {
+    await engine.putPage('people/alice', {
+      type: 'person',
+      title: 'Alice',
+      compiled_truth: 'Alice works on PMBrain.',
+      timeline: '',
+    });
+    await operationsByName.remember!.handler(ctx(), {
+      fact: 'Alice prefers short status notes',
+      provenance: 'entity card test',
+      entity: 'people/alice',
+      visibility: 'world',
+    });
+    const card = await operationsByName.entity!.handler(ctx(), { name: 'Alice' }) as {
+      found: boolean;
+      card?: { entity: { slug: string }; active_fact_count: number };
+    };
+    expect(card.found).toBe(true);
+    expect(card.card?.entity.slug).toBe('people/alice');
+    expect((card.card?.active_fact_count ?? 0)).toBeGreaterThanOrEqual(1);
   });
 
   test('knowledge inventory lists remembered facts from the facts table', async () => {

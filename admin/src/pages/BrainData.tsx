@@ -394,6 +394,7 @@ export function BrainDataPage() {
                   <h3>出处与挂载</h3>
                   <div className="pm-kv"><span>来源说明</span><b>{(factDetail ?? selectedFact).source}</b></div>
                   <div className="pm-kv"><span>实体</span><b>{(factDetail ?? selectedFact).entity_slug || '未挂实体'}</b></div>
+                  <div className="pm-kv"><span>事件类型</span><b>{(factDetail ?? selectedFact).event_type || '—'}</b></div>
                   <div className="pm-kv"><span>知识页</span><b>{(factDetail ?? selectedFact).source_markdown_slug || '仅数据库记录'}</b></div>
                   <div className="pm-kv"><span>向量</span><b>{(factDetail ?? selectedFact).embedded ? '已向量化' : '未向量化'}</b></div>
                   {factDetail?.context && <div className="pm-kv"><span>上下文</span><b>{factDetail.context}</b></div>}
@@ -442,7 +443,7 @@ export function BrainDataPage() {
                   <h3>关联事实</h3>
                   {detail?.facts?.length ? detail.facts.map(item => (
                     <article className="take-summary-row" key={item.id}>
-                      <span>#{item.id} · {factKindLabel(item.kind)} · {item.visibility === 'world' ? '共享' : '私有'}</span>
+                      <span>#{item.id} · {factKindLabel(item.kind)}{item.event_type ? ` · ${item.event_type}` : ''} · {item.visibility === 'world' ? '共享' : '私有'}</span>
                       <p>{item.fact}</p>
                       <small>{item.source}</small>
                     </article>

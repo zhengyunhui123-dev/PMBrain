@@ -2,9 +2,8 @@
  * MEMORY_VERBS v1 write/delete façade, ported from GBrain as an independent
  * registration module. Core entry (`operations.ts`) only spreads these ops.
  *
- * This turn ports `remember` and `forget` only. `entity` / `synthesize` /
- * `context_pack` / `delta` stay out until the desktop application layer
- * needs them.
+ * Ports `remember`, `forget`, and the zero-LLM `entity` card.
+ * `synthesize` / `context_pack` / `delta` stay out of this module.
  */
 
 import { OperationError } from './operation-error.ts';
@@ -237,4 +236,40 @@ const forget: Operation = {
   },
 };
 
-export const memoryVerbOperations: Operation[] = [remember, forget];
+const entity: Operation = {
+  name: 'entity',
+  description:
+    'MEMORY VERB (v1): inspect ONE known person/company/project card — zero LLM calls. ' +
+    'Resolution: alias > exact title > slug-suffix. NEVER errors on a miss: returns found:false plus near-miss suggestions. ' +
+    'Routing: for facts/snippets retrieval use recall; for broad questions needing reasoning use think.',
+  params: {
+    name: { type: 'string', required: true, description: 'Free-text name, alias, or slug (e.g. "Alice", "people/alice").' },
+  },
+  scope: 'read',
+  verb: true,
+  handler: async (ctx, p) => {
+    const name = typeof p.name === 'string' ? p.name.trim() : '';
+    if (!name) {
+      throw verbError(
+        'invalid_params',
+        'name must be a non-empty string.',
+        'Pass the entity to look up, e.g. name: "Alice" or name: "people/alice".',
+      );
+    }
+    const t0 = Date.now();
+    const { buildEntityCard } = await import('./verbs/entity-card.ts');
+    const result = await buildEntityCard(ctx.engine, ctx.sourceId ?? 'default', name, {
+      remote: ctx.remote !== false,
+    });
+    return {
+      protocol_version: MEMORY_VERBS_VERSION,
+      found: result.found,
+      latency_ms: Date.now() - t0,
+      ...(result.card ? { card: result.card } : {}),
+      ...(result.suggestions !== undefined ? { suggestions: result.suggestions } : {}),
+    };
+  },
+  cliHints: { name: 'entity', positional: ['name'] },
+};
+
+export const memoryVerbOperations: Operation[] = [remember, forget, entity];

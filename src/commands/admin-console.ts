@@ -284,6 +284,7 @@ export async function listAdminBrainFacts(
     notability: string;
     source: string;
     source_markdown_slug: string | null;
+    event_type: string | null;
     confidence: number;
     embedded: boolean;
     expired_at: string | null;
@@ -299,6 +300,7 @@ export async function listAdminBrainFacts(
             f.notability,
             f.source,
             f.source_markdown_slug,
+            f.event_type,
             f.confidence,
             (f.embedding IS NOT NULL) AS embedded,
             f.expired_at::text AS expired_at,
@@ -336,6 +338,7 @@ export async function getAdminBrainFact(engine: BrainEngine, id: number) {
     source: string;
     source_markdown_slug: string | null;
     source_session: string | null;
+    event_type: string | null;
     confidence: number;
     context: string | null;
     embedded: boolean;
@@ -345,7 +348,7 @@ export async function getAdminBrainFact(engine: BrainEngine, id: number) {
     created_at: string;
   }>(
     `SELECT id, fact, kind, source_id, entity_slug, visibility, notability, source,
-            source_markdown_slug, source_session, confidence, context,
+            source_markdown_slug, source_session, event_type, confidence, context,
             (embedding IS NOT NULL) AS embedded,
             valid_from::text AS valid_from,
             valid_until::text AS valid_until,
@@ -411,13 +414,14 @@ export async function getAdminBrainPageDetail(engine: BrainEngine, sourceId: str
     entity_slug: string | null;
     source: string;
     source_markdown_slug: string | null;
+    event_type: string | null;
     confidence: number;
     expired_at: string | null;
     created_at: string;
   }>(
     engine,
     `SELECT id, fact, kind, visibility, notability, entity_slug, source, source_markdown_slug,
-            confidence, expired_at::text AS expired_at, created_at::text AS created_at
+            event_type, confidence, expired_at::text AS expired_at, created_at::text AS created_at
        FROM facts
       WHERE source_id = $1
         AND expired_at IS NULL

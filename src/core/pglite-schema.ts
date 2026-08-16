@@ -96,6 +96,8 @@ CREATE TABLE IF NOT EXISTS pages (
   -- v0.37.0 (migration v79): real stale-page signal for gbrain lsd
   -- (mirrors src/schema.sql). NULL = never retrieved.
   last_retrieved_at     TIMESTAMPTZ,
+  -- PMBrain schema 115: link-extraction freshness watermark.
+  links_extracted_at    TIMESTAMPTZ,
   -- v0.40.3.0 contextual retrieval (renumbered from v81 to v90 on master
   -- merge; mirrors src/schema.sql).
   -- contextual_retrieval_mode is the tier the page was last embedded under;
@@ -184,6 +186,17 @@ CREATE INDEX IF NOT EXISTS pages_coalesce_date_idx
 -- query (mirrors src/schema.sql). Postgres handles NULL in B-tree indexes.
 CREATE INDEX IF NOT EXISTS pages_last_retrieved_at_idx
   ON pages (last_retrieved_at);
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = current_schema()
+      AND table_name = 'pages'
+      AND column_name = 'links_extracted_at'
+  ) THEN
+    EXECUTE 'CREATE INDEX IF NOT EXISTS pages_links_extracted_at_idx ON pages (source_id, links_extracted_at)';
+  END IF;
+END $$;
 
 -- ============================================================
 -- content_chunks: chunked content with embeddings

@@ -22,6 +22,7 @@
  *   gbrain extract links    [--source fs|db] [--dir <brain>] [--dry-run] [--json] [--type T] [--since DATE]
  *   gbrain extract timeline [--source fs|db] [--dir <brain>] [--dry-run] [--json] [--type T] [--since DATE]
  *   gbrain extract all      [--source fs|db] [--dir <brain>] [--dry-run] [--json] [--type T] [--since DATE]
+ *   gbrain extract --stale  [--source-id ID] [--dry-run] [--json] [--catch-up] [--include-frontmatter]
  *
  * The DB-source path uses the v0.10.3 graph extractor (typed link inference,
  * within-page dedup, snapshot iteration so concurrent writes don't corrupt
@@ -465,6 +466,27 @@ export async function runExtract(engine: BrainEngine, args: string[]) {
   if (args.includes('--explain')) {
     const { runExtractExplain } = await import('./extract-explain.ts');
     return runExtractExplain(engine, args);
+  }
+
+  if (args.includes('--stale')) {
+    const sIdx = args.indexOf('--source');
+    const src = (sIdx >= 0 && sIdx + 1 < args.length) ? args[sIdx + 1] : 'db';
+    if (src === 'fs') {
+      console.error(
+        `extract --stale 只读数据库页面，不能和 --source fs 一起用。去掉 --source fs，或改成 --source db。`,
+      );
+      process.exit(1);
+    }
+    const sidIdx = args.indexOf('--source-id');
+    const staleSourceId = (sidIdx >= 0 && sidIdx + 1 < args.length) ? args[sidIdx + 1] : undefined;
+    const { extractStaleFromDB } = await import('./extract-stale.ts');
+    return extractStaleFromDB(engine, {
+      dryRun: args.includes('--dry-run'),
+      jsonMode: args.includes('--json'),
+      includeFrontmatter: args.includes('--include-frontmatter'),
+      sourceIdFilter: staleSourceId,
+      catchUp: args.includes('--catch-up'),
+    });
   }
 
   const dirIdx = args.indexOf('--dir');
@@ -1138,7 +1160,13 @@ export async function runHistoricalMarkdownCatchUp(
   }
 
   const historicalRemaining = Math.max(0, historicalPending.length - historical.length);
-  if (!opts.dryRun) await recordCompleted(engine, key, [...completed]);
+  if (!opts.dryRun) {
+    await recordCompleted(engine, key, [...completed]);
+    if (work.length > 0) {
+      const { stampExtractedPages } = await import('./extract-stale.ts');
+      await stampExtractedPages(engine, work.map(slug => ({ slug, source_id: opts.sourceId })));
+    }
+  }
   return {
     linksCreated,
     pagesProcessed,
@@ -1202,6 +1230,7 @@ export async function extractLinksFromDB(
     return resolver;
   };
   const unresolved: UnresolvedFrontmatterRef[] = [];
+  const processedRefs: Array<{ slug: string; source_id: string }> = [];
   // v0.32.8: listAllPageRefs enumerates (slug, source_id) so we can thread
   // sourceId to getPage AND build a cross-source resolution map for link
   // disambiguation. Pre-fix used getAllSlugs() which collapsed
@@ -1359,11 +1388,16 @@ export async function extractLinksFromDB(
         if (batch.length >= BATCH_SIZE) await flush();
       }
     }
+    processedRefs.push({ slug, source_id });
     processed++;
     progress.tick(1);
   }
   await flush();
   progress.finish();
+  if (!dryRun && processedRefs.length > 0) {
+    const { stampExtractedPages } = await import('./extract-stale.ts');
+    await stampExtractedPages(engine, processedRefs);
+  }
 
   if (!jsonMode) {
     const label = dryRun ? '(dry run) would create' : 'created';

@@ -119,6 +119,10 @@ CREATE TABLE IF NOT EXISTS pages (
   -- (NOT inside engine methods — internal callers must not pollute the
   -- signal). NULL = never retrieved (LSD prioritizes these first).
   last_retrieved_at     TIMESTAMPTZ,
+  -- PMBrain schema 115 / GBrain v0.42.7: link-extraction freshness watermark.
+  -- A page is stale when this is NULL, older than LINK_EXTRACTOR_VERSION_TS,
+  -- or older than updated_at. Powers `pmbrain extract --stale`.
+  links_extracted_at    TIMESTAMPTZ,
   -- v0.40.3.0 contextual retrieval (renumbered from v81 to v90 on master
   -- merge). contextual_retrieval_mode is what tier the page was last embedded
   -- under (NULL = pre-v90 = treated as 'none' for drift detection).
@@ -244,6 +248,17 @@ CREATE INDEX IF NOT EXISTS pages_deleted_at_purge_idx
 -- would miss the NULL branch that LSD prioritizes (codex round 2 #6).
 CREATE INDEX IF NOT EXISTS pages_last_retrieved_at_idx
   ON pages (last_retrieved_at);
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = current_schema()
+      AND table_name = 'pages'
+      AND column_name = 'links_extracted_at'
+  ) THEN
+    EXECUTE 'CREATE INDEX IF NOT EXISTS pages_links_extracted_at_idx ON pages (source_id, links_extracted_at)';
+  END IF;
+END $$;
 -- v0.29.1: expression index used by since/until date-range filters that read
 -- COALESCE(effective_date, updated_at). A partial index on effective_date
 -- alone would NOT help — the planner can't use it for the negative side of

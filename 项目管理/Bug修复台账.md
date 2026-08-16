@@ -1,5 +1,14 @@
 # Bug 修复台账
 
+## 2026-08-16 旧库启动时缺少 links_extracted_at 导致 Sidecar 退出
+
+- 时间：2026-08-16
+- 版本号：PMBrain 1.2.46；PMBrain Desktop 1.1.23
+- 标题：已有数据库启动时自动补齐关系抽取水位列
+- 描述：Schema 115 把 `pages.links_extracted_at` 写进了启动重放的 schema，旧库还没有这一列时 Sidecar 会在建索引处退出。真正的缺口是：已有库只缺这一列时，bootstrap 把其他列都当成“已齐”而提前返回，`ADD COLUMN` 根本没执行。现已把该列纳入提前返回判断；schema 重放里的索引改为列存在才创建，过期页计数在列缺失时返回 0。
+- 是否完成：是
+- 最终结果：PGLite 定向 15/15（含“只缺这一列时重放 schema 不崩溃”）、医生水位 3/3、版本契约 5/5，根目录类型检查通过。未修改用户知识正文、Wiki、原始资料或已有向量；启动只会给 `pages` 补一个可空列。未设置 `DATABASE_URL`，真实 PostgreSQL 对等测试本轮跳过。未执行 `bun run build:win`。已安装的旧 Sidecar 仍会退出，需要用当前源码重启或自行打包。
+
 ## 2026-08-13 修复 Agent Pack 合并后的 Operation 循环依赖
 
 - 时间：2026-08-13
