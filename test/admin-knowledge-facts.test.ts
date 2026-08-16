@@ -38,6 +38,8 @@ describe('Knowledge data classification and facts inventory', () => {
     expect(brainDataSource).toContain("['facts', '事实']");
     expect(brainDataSource).toContain('api.brainFacts');
     expect(brainDataSource).toContain('知识页、热记忆事实');
+    expect(brainDataSource).toContain('还没有可显示的热记忆事实');
+    expect(brainDataSource).toContain('setPageError(message)');
   });
 
   test('page view presets no longer dump notes into imported materials', async () => {
@@ -94,6 +96,39 @@ describe('Knowledge data classification and facts inventory', () => {
     expect(statements[0]).toContain('FROM facts f');
     expect(statements[0]).toContain('f.expired_at IS NULL');
     expect(statements[0]).toContain('f.fact ILIKE');
+  });
+
+  test('facts inventory accepts Postgres-shaped id and boolean driver values', async () => {
+    const { BrainFactsResponseSchema } = await import('../shared/contracts/brain.ts');
+    const engine = {
+      executeRaw: async (sql: string) => {
+        if (sql.includes('COUNT(*)')) return [{ total: '1' }];
+        return [{
+          id: '42',
+          fact: 'Postgres 驱动会把 BIGSERIAL 变成字符串',
+          kind: 'fact',
+          source_id: 'duwu',
+          entity_slug: null,
+          visibility: 'world',
+          notability: 'medium',
+          source: 'remember',
+          source_markdown_slug: null,
+          event_type: null,
+          confidence: '1',
+          embedded: 'f',
+          expired_at: null,
+          created_at: '2026-08-16',
+          updated_at: '2026-08-16',
+        }];
+      },
+    } as any;
+
+    const listed = await listAdminBrainFacts(engine, {});
+    expect(listed.total).toBe(1);
+    expect(listed.rows[0]?.id).toBe(42);
+    expect(listed.rows[0]?.embedded).toBe(false);
+    expect(listed.rows[0]?.confidence).toBe(1);
+    expect(BrainFactsResponseSchema.safeParse(listed).success).toBe(true);
   });
 
   test('page detail includes facts attached by slug', async () => {

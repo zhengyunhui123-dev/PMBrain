@@ -1,3 +1,15 @@
+## PMBrain 1.1.26
+
+- 对齐 GBrain 的 MCP Skill 用法：Agent 可通过 `list_skills` / `get_skill` 先取写作与工作流说明，再搜索知识。本地服务默认打开 Skill 发布。WorkBuddy 的 Agent 写入也会提示先读 Skill。
+
+## PMBrain 1.1.25
+
+- WorkBuddy 卡片恢复为普通 MCP 接入样式，不再做工作目录深度接入。已配置时「更新」旁边增加「Agent写入」，把用户级 `@pmbrain` 子代理和 `/pmbrain` 命令写到客户端用户目录。
+
+## PMBrain 1.1.24
+
+- 修复知识库「事实」页有计数却列表空白：Postgres 把事实编号当成字符串时契约校验失败，错误还被前端吞掉。现在会正常列出事实，失败时显示错误而不是沿用上一页的条数。
+
 ## PMBrain 1.1.23
 
 - 修复已有知识库升级后 Sidecar 因缺少 `links_extracted_at` 列而无法启动的问题。启动时会自动补列，不再要求先手动跑迁移。

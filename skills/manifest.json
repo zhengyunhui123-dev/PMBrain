@@ -260,6 +260,21 @@
       "description": "Expand short Chinese prompts into essays matching Yunhui's personal writing style."
     },
     {
+      "name": "gongwengeshi",
+      "path": "gongwengeshi/SKILL.md",
+      "description": "中国政府公文与汇报材料格式。用户说方案、汇报稿、请示、公文时使用。"
+    },
+    {
+      "name": "kaifawendangguifan",
+      "path": "kaifawendangguifan/SKILL.md",
+      "description": "开发文档规范。写技术方案、设计说明、接口文档时使用。"
+    },
+    {
+      "name": "training-meeting-notice",
+      "path": "training-meeting-notice/SKILL.md",
+      "description": "培训会、会议通知类文稿。"
+    },
+    {
       "name": "schema-unify",
       "path": "schema-unify/SKILL.md",
       "description": "Migrate a brain off a noisy 24+-type pack onto gbrain-base-v2 (15 canonical types). 7-phase workflow: brain → assess → propose → apply → sync → verify → commit. Wraps the v0.41.22 unify-types PROTECTED Minion handler."

@@ -7,11 +7,11 @@
 // the request path the express handler sees to (resolved-path, mime).
 
 // @ts-ignore — type: 'file' is Bun ESM, not in lib.d.ts
-import A_0_assets_KnowledgeGraph_CKwzH6bu_js from '../admin/dist/assets/KnowledgeGraph-CKwzH6bu.js' with { type: 'file' };
+import A_0_assets_KnowledgeGraph_BzyWbm8K_js from '../admin/dist/assets/KnowledgeGraph-BzyWbm8K.js' with { type: 'file' };
 // @ts-ignore — type: 'file' is Bun ESM, not in lib.d.ts
 import A_1_assets_charts_DVozmnPF_js from '../admin/dist/assets/charts-DVozmnPF.js' with { type: 'file' };
 // @ts-ignore — type: 'file' is Bun ESM, not in lib.d.ts
-import A_2_assets_index_CLPgEnbp_js from '../admin/dist/assets/index-CLPgEnbp.js' with { type: 'file' };
+import A_2_assets_index_BgVdxICz_js from '../admin/dist/assets/index-BgVdxICz.js' with { type: 'file' };
 // @ts-ignore — type: 'file' is Bun ESM, not in lib.d.ts
 import A_3_assets_index_CXhYRMSR_css from '../admin/dist/assets/index-CXhYRMSR.css' with { type: 'file' };
 // @ts-ignore — type: 'file' is Bun ESM, not in lib.d.ts
@@ -35,9 +35,9 @@ export interface AdminAsset {
 }
 
 export const ADMIN_ASSETS: Record<string, AdminAsset> = {
-  "/admin/assets/KnowledgeGraph-CKwzH6bu.js": { path: A_0_assets_KnowledgeGraph_CKwzH6bu_js as unknown as string, mime: "application/javascript; charset=utf-8" },
+  "/admin/assets/KnowledgeGraph-BzyWbm8K.js": { path: A_0_assets_KnowledgeGraph_BzyWbm8K_js as unknown as string, mime: "application/javascript; charset=utf-8" },
   "/admin/assets/charts-DVozmnPF.js": { path: A_1_assets_charts_DVozmnPF_js as unknown as string, mime: "application/javascript; charset=utf-8" },
-  "/admin/assets/index-CLPgEnbp.js": { path: A_2_assets_index_CLPgEnbp_js as unknown as string, mime: "application/javascript; charset=utf-8" },
+  "/admin/assets/index-BgVdxICz.js": { path: A_2_assets_index_BgVdxICz_js as unknown as string, mime: "application/javascript; charset=utf-8" },
   "/admin/assets/index-CXhYRMSR.css": { path: A_3_assets_index_CXhYRMSR_css as unknown as string, mime: "text/css; charset=utf-8" },
   "/admin/assets/knowledge-graph-LvcWT1vl.js": { path: A_4_assets_knowledge_graph_LvcWT1vl_js as unknown as string, mime: "application/javascript; charset=utf-8" },
   "/admin/assets/react-CTwocyy_.js": { path: A_5_assets_react_CTwocyy__js as unknown as string, mime: "application/javascript; charset=utf-8" },

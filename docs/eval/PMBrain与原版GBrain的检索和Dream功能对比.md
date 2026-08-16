@@ -131,6 +131,7 @@ lint → backlinks → sync → synthesize → extract → extract_facts
 | `extract --stale` 关系抽取水位 | **已移植**（Schema 115） | `pages.links_extracted_at` + `pmbrain extract --stale` + `links_extraction_lag` |
 | MEMORY_VERBS `entity` | **已移植** | 零模型实体卡片 |
 | Fact remember/forget | **已移植** | 知识库可列出 facts 表 |
+| MCP `list_skills` / `get_skill` 协议信封 | **已对齐** | 返回 `instructions` / `client_guidance`；本地 Sidecar 默认打开 `mcp.publish_skills`；Agent 先读 Skill 再搜知识。未移植 `list_brain_skillpack`、SkillOpt |
 
 ## 7. 本次 Embedding 差异结论
 

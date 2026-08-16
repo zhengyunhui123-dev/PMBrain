@@ -28,6 +28,35 @@ export async function getSupervisorStatus() {
 export * from './natural-lang/index.ts';
 export * from './admin-knowledge-graph.ts';
 
+function asFiniteNumber(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'bigint') {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : null;
+  }
+  if (typeof value === 'string' && value.trim() !== '') {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
+}
+
+function asBool(value: unknown): boolean {
+  return value === true || value === 't' || value === 'true' || value === 1 || value === '1';
+}
+
+/** Postgres.js returns BIGSERIAL as string; PGLite may return t/f for booleans. */
+export function normalizeAdminFactRow<T extends Record<string, unknown>>(row: T): T {
+  const id = asFiniteNumber(row.id);
+  const confidence = row.confidence == null ? undefined : asFiniteNumber(row.confidence);
+  return {
+    ...row,
+    id: id == null ? row.id : Math.trunc(id),
+    embedded: asBool(row.embedded),
+    ...(confidence !== undefined ? { confidence } : {}),
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Dashboard / knowledge-base browsing
 // ---------------------------------------------------------------------------
@@ -317,12 +346,13 @@ export async function listAdminBrainFacts(
     params,
   );
 
+  const total = asFiniteNumber(count?.total) ?? 0;
   return {
-    rows,
-    total: count?.total ?? 0,
+    rows: rows.map(row => normalizeAdminFactRow(row as Record<string, unknown>)) as typeof rows,
+    total,
     page,
     limit,
-    pages: Math.max(1, Math.ceil((count?.total ?? 0) / limit)),
+    pages: Math.max(1, Math.ceil(total / limit)),
   };
 }
 
@@ -359,7 +389,8 @@ export async function getAdminBrainFact(engine: BrainEngine, id: number) {
       LIMIT 1`,
     [id],
   );
-  return rows[0] ?? null;
+  const row = rows[0];
+  return row ? normalizeAdminFactRow(row as Record<string, unknown>) as typeof row : null;
 }
 
 export async function getAdminBrainPageDetail(engine: BrainEngine, sourceId: string, slug: string, includeDeleted = false) {
@@ -429,7 +460,11 @@ export async function getAdminBrainPageDetail(engine: BrainEngine, sourceId: str
       ORDER BY created_at DESC, id DESC`,
     [sourceId, slug],
   );
-  return { ...page, takes, facts };
+  return {
+    ...page,
+    takes,
+    facts: facts.map(row => normalizeAdminFactRow(row as Record<string, unknown>)) as typeof facts,
+  };
 }
 
 export async function getAdminBrainPageChunks(engine: BrainEngine, sourceId: string, slug: string, includeDeleted = false) {

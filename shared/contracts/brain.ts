@@ -101,7 +101,7 @@ export const BrainPageDetailResponseSchema = z.object({
     weight: z.number(), source: z.string().nullable(),
   }).passthrough()),
   facts: z.array(z.object({
-    id: z.number().int(),
+    id: z.coerce.number().int(),
     fact: z.string(),
     kind: z.string(),
     visibility: z.string(),
@@ -110,14 +110,20 @@ export const BrainPageDetailResponseSchema = z.object({
     source: z.string(),
     source_markdown_slug: z.string().nullable().optional(),
     event_type: z.string().nullable().optional(),
-    confidence: z.number().optional(),
+    confidence: z.preprocess(value => value == null || value === '' ? undefined : Number(value), z.number().optional()),
     expired_at: z.string().nullable().optional(),
     created_at: z.string().optional(),
   }).passthrough()).optional().default([]),
 }).passthrough();
 
+const adminBool = z.preprocess((value) => {
+  if (value === true || value === 't' || value === 'true' || value === 1 || value === '1') return true;
+  if (value === false || value === 'f' || value === 'false' || value === 0 || value === '0') return false;
+  return value;
+}, z.boolean());
+
 export const BrainFactRowSchema = z.object({
-  id: z.number().int(),
+  id: z.coerce.number().int(),
   fact: z.string(),
   kind: z.string(),
   source_id: z.string(),
@@ -127,8 +133,8 @@ export const BrainFactRowSchema = z.object({
   source: z.string(),
   source_markdown_slug: z.string().nullable().optional(),
   event_type: z.string().nullable().optional(),
-  confidence: z.number().optional(),
-  embedded: z.boolean(),
+  confidence: z.preprocess(value => value == null || value === '' ? undefined : Number(value), z.number().optional()),
+  embedded: adminBool,
   expired_at: z.string().nullable().optional(),
   created_at: z.string(),
   updated_at: z.string().optional(),

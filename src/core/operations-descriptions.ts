@@ -159,7 +159,41 @@ export const CODE_REFS_DESCRIPTION =
   "Returns: `{symbol, count, refs: [{slug, file, language, line, context}]}`.";
 
 export const LIST_SKILLS_DESCRIPTION =
-  'List the host workspace skills explicitly published to MCP. Returns names, routing triggers, declared tools, and mutation metadata.';
+  "List the skills this brain publishes. A skill is a named prose instruction set " +
+  "(NOT executable code) that teaches you how to do a task using this server's other tools. " +
+  "Call this BEFORE writing a 方案, 汇报稿, 公文, report, or following a house style — " +
+  "search/query only find knowledge pages, not these skills. Returns names, descriptions, " +
+  "triggers, and declared tools. Then call get_skill with the matching name, read the body, " +
+  "and follow it. The response includes an `instructions` envelope.";
 
 export const GET_SKILL_DESCRIPTION =
-  'Fetch one published SKILL.md by its exact list_skills catalog name. The path is server-confined and the response contains prose plus allowlisted frontmatter.';
+  "Fetch one skill's full instructions by name from list_skills. Returns `{name, frontmatter, body, client_guidance}`. " +
+  "The `body` is your operating procedure. When it says to search or store, call the same-named MCP tool on THIS server. " +
+  "There is nothing to execute — follow the prose, then use search/query/think/remember/put_page as the skill directs.";
+
+export const SKILL_CATALOG_INSTRUCTIONS = {
+  summary:
+    "These are 'skills': named prose instruction sets, not executable tools. " +
+    "There is no skill to 'run' — a skill tells YOU how to accomplish a task " +
+    "using the MCP tools this same server already exposes. " +
+    "Knowledge search will not return these skills.",
+  how_to_use: [
+    "If the user wants a 方案, 汇报, 公文, 报告, 教程, or a specific writing style, call list_skills first.",
+    "Pick a skill whose triggers match the user's intent.",
+    "Call get_skill with its name to fetch the full prose (the `body`).",
+    "Follow that prose as your plan for the task.",
+    "When the prose says to search, store, or look something up, call search, query, think, remember, or put_page on THIS server.",
+    "Then search the knowledge base for project facts. Do not skip the skill and only search content.",
+  ],
+} as const;
+
+export const SKILL_CLIENT_GUIDANCE = {
+  nature:
+    "This is a fat-markdown instruction set, not code to execute. The `body` is " +
+    "your operating procedure; carry it out using this server's MCP tools.",
+  protocol: [
+    "Read `body` as your operating instructions for this task.",
+    "When the prose names a brain operation (search, store, link, look up), call the MCP tool of that name on THIS server.",
+    "If `mutating` is true, this skill writes to the brain; confirm before doing so if the user hasn't clearly asked for a write.",
+  ],
+} as const;

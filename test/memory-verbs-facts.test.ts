@@ -14,7 +14,8 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:tes
 import { configureGateway, resetGateway } from '../src/core/ai/gateway.ts';
 import { writeSingleFact } from '../src/core/facts/write-single.ts';
 import { resolveVisibilityParam } from '../src/core/facts/visibility.ts';
-import { listAdminBrainFacts } from '../src/commands/admin-console.ts';
+import { getAdminBrainFact, listAdminBrainFacts } from '../src/commands/admin-console.ts';
+import { BrainFactDetailResponseSchema, BrainFactsResponseSchema } from '../shared/contracts/brain.ts';
 import { memoryVerbOperations } from '../src/core/memory-verbs.ts';
 import { operationsByName } from '../src/core/operations.ts';
 import { PGLiteEngine } from '../src/core/pglite-engine.ts';
@@ -176,5 +177,24 @@ describe('Gbrain-aligned memory verbs', () => {
     expect(listed.rows[0]?.fact).toContain('知识库列表应能读到这条事实');
     expect(listed.rows[0]?.kind).toBe('fact');
     expect(listed.rows[0]?.embedded).toBe(false);
+  });
+
+  test('knowledge inventory rows pass the Admin facts contract', async () => {
+    // 知识库「事实」页会按契约校验每一行。PGLite 的 BIGSERIAL id、
+    // 布尔表达式、REAL 置信度不能原样丢给前端，否则整页空白。
+    await operationsByName.remember!.handler(ctx(), {
+      fact: '契约校验必须能列出这条事实',
+      provenance: 'admin contract test',
+      kind: 'belief',
+      visibility: 'world',
+    });
+    const listed = await listAdminBrainFacts(engine, { q: '契约校验必须能列出' });
+    const parsed = BrainFactsResponseSchema.safeParse(listed);
+    expect(parsed.success).toBe(true);
+    expect(typeof listed.rows[0]?.id).toBe('number');
+    expect(typeof listed.rows[0]?.embedded).toBe('boolean');
+    expect(typeof listed.rows[0]?.confidence).toBe('number');
+    const detail = await getAdminBrainFact(engine, listed.rows[0]!.id);
+    expect(BrainFactDetailResponseSchema.safeParse(detail).success).toBe(true);
   });
 });

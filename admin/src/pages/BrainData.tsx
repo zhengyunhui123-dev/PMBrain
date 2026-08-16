@@ -78,6 +78,7 @@ export function BrainDataPage() {
     if (filters.type !== 'all') qs.set('type', filters.type);
     if (filters.embedded !== 'all') qs.set('embedded', filters.embedded);
     if (filters.q.trim()) qs.set('q', filters.q.trim());
+    setPageError('');
     if (filters.view === 'facts') {
       const data = await api.brainFacts(`?${qs.toString()}`);
       setFactRows(data.rows);
@@ -93,7 +94,14 @@ export function BrainDataPage() {
   }, [filters]);
 
   useEffect(() => {
-    void loadRows().catch(() => undefined);
+    void loadRows().catch(error => {
+      const message = error instanceof Error ? error.message : String(error);
+      setPageError(message);
+      if (filters.view === 'facts') {
+        setFactRows([]);
+        setMeta({ total: 0, page: 1, pages: 1, limit: filters.pageSize });
+      }
+    });
   }, [loadRows]);
 
   useEffect(() => {
@@ -277,6 +285,9 @@ export function BrainDataPage() {
                 setSelected(null);
                 setSelectedFact(null);
                 setPageError('');
+                setFactRows([]);
+                setRows([]);
+                setMeta({ total: 0, page: 1, pages: 1, limit: filters.pageSize });
                 setFilters(current => ({ ...current, view: value, type: 'all', page: 1 }));
               }}
             >{label}</button>
@@ -317,7 +328,19 @@ export function BrainDataPage() {
           </thead>
           <tbody>
             {isFactsView
-              ? factRows.map(row => (
+              ? (factRows.length === 0
+                ? (
+                  <tr>
+                    <td colSpan={6}>
+                      <div className="pm-empty compact-empty">
+                        {pageError
+                          ? '事实列表读取失败，见上方错误。'
+                          : '还没有可显示的热记忆事实。Agent 调用 remember，或对会话页执行 extract_facts 后会出现在这里。'}
+                      </div>
+                    </td>
+                  </tr>
+                )
+                : factRows.map(row => (
                 <tr
                   key={`fact:${row.id}`}
                   tabIndex={0}
@@ -338,7 +361,7 @@ export function BrainDataPage() {
                   <td>{row.embedded ? '1/1' : '0/1'}</td>
                   <td>{formatDate(row.created_at)}</td>
                 </tr>
-              ))
+              )))
               : rows.map(row => (
               <tr
                 key={`${row.source_id}:${row.slug}`}

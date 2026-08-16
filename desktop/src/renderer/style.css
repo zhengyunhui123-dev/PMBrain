@@ -261,6 +261,8 @@ select { cursor: pointer; appearance: auto; -webkit-appearance: auto; }
 .integration-card h3 { margin: 4px 0 10px; font-size: 17px; }
 .integration-card p { min-height: 34px; margin: 0 0 8px; color: var(--text-secondary); font: 10px Consolas, monospace; overflow-wrap: anywhere; }
 .integration-card small { display: block; margin-bottom: 16px; color: var(--text-muted); }
+.integration-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.integration-actions button { min-height: 34px; }
 .badge { float: right; padding: 3px 7px; border: 1px solid var(--line-strong); border-radius: 999px; color: var(--text-muted); background: var(--surface-soft); font: 9px Consolas, monospace; }
 .badge.configured { color: var(--success-text); border-color: var(--success-border); background: var(--success-soft); }
 .badge.attention { color: var(--warning-text); border-color: var(--warning-border); background: var(--warning-soft); }

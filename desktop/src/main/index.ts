@@ -16,6 +16,7 @@ import { DatabaseUpgradeController } from './database/database-upgrade.js';
 import { PgliteBackupController } from './database/pglite-backup.js';
 import { buildDiagnosticBundle } from './diagnostics/diagnostic-bundle.js';
 import { SharedAccessController } from './integration/shared-access-controller.js';
+import { writeWorkbuddyUserAgent } from './integration/user-agent-writer.js';
 import { WorkBuddyAgentController } from './integration/workbuddy-agent-controller.js';
 import { registerDesktopIpcHandlers } from './ipc-handlers.js';
 import {
@@ -348,6 +349,7 @@ if (!app.requestSingleInstanceLock()) {
       ),
       saveSetup: payload => setupController.apply(payload),
       configureIntegration: (client, kind) => sharedAccessController.configure(client, kind),
+      writeWorkbuddyUserAgent: () => writeWorkbuddyUserAgent(),
       getWorkbuddyAgentIntegration: () => workBuddyAgentController.read(),
       installWorkbuddyAgent: workspace => workBuddyAgentController.install(workspace),
       updateWorkbuddyAgent: () => workBuddyAgentController.update(),
