@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 
 const html = readFileSync(resolve('src/renderer/index.html'), 'utf8');
 const renderer = readFileSync(resolve('src/renderer/src.ts'), 'utf8');
+const mainIndex = readFileSync(resolve('src/main/index.ts'), 'utf8');
 const styles = readFileSync(resolve('src/renderer/style.css'), 'utf8');
 const main = readdirSync(resolve('src/main'), { recursive: true })
   .filter((path): path is string => typeof path === 'string' && path.endsWith('.ts'))
@@ -79,6 +80,14 @@ describe('desktop settings renderer contracts', () => {
     expect(styles).toContain('place-items: center');
     expect(renderer).not.toContain('window.scrollTo');
     expect(renderer).not.toContain("switchPanel('integrations');");
+  });
+
+  test('reuses custom chat models in advanced tier and Dream phase selectors', () => {
+    expect(renderer).toContain('function syncAdvancedProviderOptions');
+    expect(renderer).toContain('customCatalog.chat');
+    expect(renderer).toContain('advancedProviderModels[tier] = endpoint.modelId ? [endpoint.modelId] : []');
+    expect(renderer).toContain('advancedPhaseProviderModels[phase] = endpoint.modelId ? [endpoint.modelId] : []');
+    expect(renderer).toContain('syncAdvancedProviderOptions();');
   });
 
   test('adds custom OpenAI-compatible models from both model cards without fake editable controls', () => {
@@ -292,6 +301,15 @@ describe('desktop settings renderer contracts', () => {
     expect(renderer).toContain('listPgliteUpgradeBackups');
     expect(renderer).not.toContain('previous-version');
     expect(preload).not.toContain('openPreviousRelease');
+  });
+
+  test('opening advanced model settings only reads a draft and saves with the PGLite pause', () => {
+    expect(mainIndex).toContain('advancedModelConfig: () => readAdvancedModelConfig(runtime())');
+    expect(mainIndex).toContain('saveAdvancedModelConfig: values => sidecarController.withPausedForModelConfig(');
+    expect(main).toContain("title: '正在安全保存模型路由'");
+    expect(main).not.toContain("title: '正在安全读取模型路由'");
+    expect(renderer).toContain('正在读取当前高级路由…');
+    expect(renderer).not.toContain('正在读取当前高级路由并安全检查本地服务…');
   });
 
   test('reports resumable re-embedding instead of claiming a mixed model switch succeeded', () => {

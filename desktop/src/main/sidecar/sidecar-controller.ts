@@ -203,10 +203,10 @@ export class SidecarController {
     this.dependencies.sendStartupProgress({
       visible: true,
       stage: 'sidecar',
-      title: '正在安全读取模型路由',
+      title: '正在安全保存模型路由',
       message: shouldRestart
         ? 'PGLite 配置需要独占访问，桌面端已暂停本地服务；完成后会自动重启并执行健康检查。'
-        : '正在读取 PMBrain 的任务层级模型配置。',
+        : '正在保存 PMBrain 的任务层级模型配置。',
     });
     let operationError: unknown;
     try {

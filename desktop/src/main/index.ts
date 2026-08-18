@@ -344,7 +344,7 @@ if (!app.requestSingleInstanceLock()) {
       inspectKnowledgeSourceDirectory,
       initializeKnowledgeSourceGit,
       providerModels: listDesktopProviderModels,
-      advancedModelConfig: () => sidecarController.withPausedForModelConfig(() => readAdvancedModelConfig(runtime())),
+      advancedModelConfig: () => readAdvancedModelConfig(runtime()),
       saveAdvancedModelConfig: values => sidecarController.withPausedForModelConfig(
         () => writeAdvancedModelConfig(runtime(), values),
       ),

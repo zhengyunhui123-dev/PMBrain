@@ -311,6 +311,35 @@ function advancedPhaseId(phase: AdvancedModelPhase): string {
   return `advanced-phase-${phase}`;
 }
 
+function syncAdvancedProviderOptions(): void {
+  const selects = [
+    ...ADVANCED_TIERS.map(tier => $<HTMLSelectElement>(`#advanced-${tier}-provider`)),
+    ...ADVANCED_PHASES.map(phase => $<HTMLSelectElement>(`#${advancedPhaseId(phase)}-provider`)),
+  ];
+  for (const select of selects) {
+    const current = select.value;
+    for (const option of Array.from(select.options)) {
+      if (isCustomEndpointId(option.value)) option.remove();
+    }
+    for (const endpoint of customCatalog.chat) {
+      const option = document.createElement('option');
+      option.value = endpoint.id;
+      option.textContent = endpoint.displayName;
+      select.append(option);
+    }
+    if (current && Array.from(select.options).some(option => option.value === current)) {
+      select.value = current;
+    }
+  }
+}
+
+function advancedCustomEndpoint(provider: string): DesktopCustomEndpoint | undefined {
+  if (!isCustomEndpointId(provider)) return undefined;
+  return provider === 'custom-openai'
+    ? selectedCustomEndpoint('chat')
+    : customCatalog.chat.find(endpoint => endpoint.id === provider);
+}
+
 function syncProviderKeyField(kind: ModelKind): void {
   const provider = ($<HTMLSelectElement>(`#${kind}-provider`)).value;
   const input = $<HTMLInputElement>(`#${kind}-api-key`);
@@ -421,6 +450,7 @@ function deleteCustomEndpoint(kind: ModelKind, id: string): void {
     $<HTMLInputElement>(`#${kind}-api-key`).value = '';
   }
   renderProviderDropdown(kind);
+  syncAdvancedProviderOptions();
 }
 
 function snapshotSelectedCustomEndpoints(): void {
@@ -512,6 +542,7 @@ function confirmCustomProvider(): void {
   providerModels[target] = [modelId];
   renderModelDropdown(target);
   renderProviderDropdown(target);
+  syncAdvancedProviderOptions();
 }
 
 function renderModelDropdown(kind: 'chat' | 'embedding'): void {
@@ -625,6 +656,18 @@ async function refreshAdvancedProviderModels(tier: AdvancedModelTier, chooseDefa
     return;
   }
 
+  const endpoint = advancedCustomEndpoint(provider);
+  if (endpoint) {
+    if (chooseDefault) input.value = endpoint.modelId;
+    advancedProviderModels[tier] = endpoint.modelId ? [endpoint.modelId] : [];
+    if (!($<HTMLUListElement>(`#advanced-${tier}-model-dropdown`)).hidden) renderAdvancedModelDropdown(tier);
+    status.textContent = endpoint.modelId
+      ? `自定义普通模型：${endpoint.modelId} · 接口：${endpoint.baseUrl}`
+      : '自定义普通模型尚未填写模型 ID。';
+    status.hidden = false;
+    return;
+  }
+
   status.hidden = false;
   status.textContent = '正在加载模型列表…';
   try {
@@ -662,6 +705,18 @@ async function refreshAdvancedPhaseProviderModels(phase: AdvancedModelPhase, cho
     return;
   }
 
+  const endpoint = advancedCustomEndpoint(provider);
+  if (endpoint) {
+    if (chooseDefault) input.value = endpoint.modelId;
+    advancedPhaseProviderModels[phase] = endpoint.modelId ? [endpoint.modelId] : [];
+    if (!($<HTMLUListElement>(`#${prefix}-model-dropdown`)).hidden) renderAdvancedPhaseModelDropdown(phase);
+    status.textContent = endpoint.modelId
+      ? `自定义普通模型：${endpoint.modelId} · 接口：${endpoint.baseUrl}`
+      : '自定义普通模型尚未填写模型 ID。';
+    status.hidden = false;
+    return;
+  }
+
   status.hidden = false;
   status.textContent = '正在加载模型列表…';
   try {
@@ -685,13 +740,20 @@ async function refreshAdvancedPhaseProviderModels(phase: AdvancedModelPhase, cho
 }
 
 function renderAdvancedModelConfig(config: AdvancedModelConfig): void {
+  syncAdvancedProviderOptions();
   for (const tier of ADVANCED_TIERS) {
     const entry = config.tiers[tier];
     const override = splitModelId(entry.override);
-    ($<HTMLSelectElement>(`#advanced-${tier}-provider`)).value = override.provider;
+    const provider = override.provider === 'custom-openai'
+      ? (customCatalog.chat.find(item => item.id === customSelection.chat)?.id
+        || customCatalog.chat.find(item => item.modelId === override.model)?.id
+        || customCatalog.chat[0]?.id
+        || '')
+      : override.provider;
+    ($<HTMLSelectElement>(`#advanced-${tier}-provider`)).value = provider;
     const input = $<HTMLInputElement>(`#advanced-${tier}-model-name`);
     input.value = override.model;
-    input.disabled = !override.provider;
+    input.disabled = !provider;
     advancedOverrides[tier] = entry.override;
     $(`#advanced-${tier}-effective`).textContent = entry.resolved
       ? `当前解析：${entry.resolved}${entry.source ? ` · 来源 ${entry.source}` : ''}`
@@ -701,10 +763,16 @@ function renderAdvancedModelConfig(config: AdvancedModelConfig): void {
     const entry = config.phases[phase];
     const prefix = advancedPhaseId(phase);
     const override = splitModelId(entry.override);
-    ($<HTMLSelectElement>(`#${prefix}-provider`)).value = override.provider;
+    const provider = override.provider === 'custom-openai'
+      ? (customCatalog.chat.find(item => item.id === customSelection.chat)?.id
+        || customCatalog.chat.find(item => item.modelId === override.model)?.id
+        || customCatalog.chat[0]?.id
+        || '')
+      : override.provider;
+    ($<HTMLSelectElement>(`#${prefix}-provider`)).value = provider;
     const input = $<HTMLInputElement>(`#${prefix}-model-name`);
     input.value = override.model;
-    input.disabled = !override.provider;
+    input.disabled = !provider;
     advancedPhaseOverrides[phase] = entry.override;
     $(`#${prefix}-effective`).textContent = entry.resolved
       ? `当前解析：${entry.resolved}${entry.source ? ` · 来源 ${entry.source}` : ''}`
@@ -721,7 +789,8 @@ async function loadAdvancedModels(force = false): Promise<void> {
     button.disabled = true;
     return;
   }
-  status.textContent = '正在读取当前高级路由并安全检查本地服务…';
+  syncAdvancedProviderOptions();
+  status.textContent = '正在读取当前高级路由…';
   button.disabled = true;
   try {
     const config = await window.pmbrainDesktop.getAdvancedModelConfig();
@@ -1061,6 +1130,7 @@ function populate(next: DesktopSetupState): void {
   customSelection = { ...(setup.current.customSelection ?? {}) };
   renderProviderDropdown('chat');
   renderProviderDropdown('embedding');
+  syncAdvancedProviderOptions();
   const activePanel = (document.querySelector<HTMLElement>('.panel.active')?.id.replace('panel-', '') || 'basic') as Panel;
   switchPanel(activePanel);
   $('#existing-config').hidden = setup.needsSetup;
