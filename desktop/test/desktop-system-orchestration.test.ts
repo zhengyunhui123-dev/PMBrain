@@ -123,6 +123,7 @@ describe('desktop system orchestration contracts', () => {
     expect(main).toContain('payload.knowledgeSourceChanged === false');
     expect(setupController).toContain('this.applyOnce(effectivePayload');
     expect(setupController).toContain('repairMissingMainSourcePath');
+    expect(setupController).toContain('ensureKnowledgeDirectory(knowledgeDirectory)');
     expect(setupController).toContain('if (knowledgeDirectory && sourceId)');
     expect(setupController).toContain('主源路径校验失败');
   });

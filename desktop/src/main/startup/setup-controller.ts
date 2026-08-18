@@ -14,6 +14,7 @@ import { runCli, runCliChecked, type CliRuntime } from '../cli-runner.js';
 import { listIntegrationsWithConnectionState } from '../integration-manager.js';
 import type { PgliteBackupController } from '../database/pglite-backup.js';
 import type { SidecarController } from '../sidecar/sidecar-controller.js';
+import { ensureKnowledgeDirectory } from './knowledge-directory.js';
 
 const DESKTOP_MIGRATION_ARGS = ['apply-migrations', '--yes', '--non-interactive', '--no-autopilot-install'];
 
@@ -220,6 +221,7 @@ export class SetupController {
       const knowledgeDirectory = saved.config.desktop?.knowledge_directory;
       const sourceId = saved.config.desktop?.knowledge_source_id;
       if (knowledgeDirectory && sourceId) {
+        await ensureKnowledgeDirectory(knowledgeDirectory);
         const add = await runCli(this.dependencies.runtime(), [
           'sources', 'add', sourceId, '--path', knowledgeDirectory,
           '--name', basename(knowledgeDirectory), '--federated',
