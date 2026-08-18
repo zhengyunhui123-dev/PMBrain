@@ -12,10 +12,12 @@ import {
   recommendedEmbeddingDimension,
 } from '../src/core/embedding-dimension-alignment.ts';
 import {
+  readEmbeddingDimensionStatus,
   readContentChunksEmbeddingDim,
   readFactsEmbeddingDim,
 } from '../src/core/embedding-dim-check.ts';
 import { importFromContent } from '../src/core/import-file.ts';
+import { runModels } from '../src/commands/models.ts';
 
 let engine: PGLiteEngine;
 
@@ -39,6 +41,65 @@ describe('embedding dimension alignment', () => {
   test('uses the recommended Zhipu desktop dimension', () => {
     expect(recommendedEmbeddingDimension('zhipu:embedding-3')).toBe(1024);
     expect(recommendedEmbeddingDimension('zhipu:embedding-2')).toBe(1024);
+  });
+
+  test('reports an interrupted first-activation mismatch without changing content', async () => {
+    const before = await engine.executeRaw<{ pages: number; chunks: number; embedded: number }>(
+      `SELECT
+         (SELECT COUNT(*)::int FROM pages) AS pages,
+         (SELECT COUNT(*)::int FROM content_chunks) AS chunks,
+         (SELECT COUNT(*)::int FROM content_chunks WHERE embedding IS NOT NULL) AS embedded`,
+    );
+    const report = await readEmbeddingDimensionStatus(engine, {
+      embeddingModel: 'zhipu:embedding-3',
+      configuredDimensions: 1024,
+    });
+
+    expect(report).toEqual({
+      status: 'mismatch',
+      embedding_model: 'zhipu:embedding-3',
+      configured_dimensions: 1024,
+      column_dimensions: 1280,
+      existing_embeddings: 0,
+    });
+    const after = await engine.executeRaw<{ pages: number; chunks: number; embedded: number }>(
+      `SELECT
+         (SELECT COUNT(*)::int FROM pages) AS pages,
+         (SELECT COUNT(*)::int FROM content_chunks) AS chunks,
+         (SELECT COUNT(*)::int FROM content_chunks WHERE embedding IS NOT NULL) AS embedded`,
+    );
+    expect(after).toEqual(before);
+  });
+
+  test('CLI status command emits the same mismatch state as JSON', async () => {
+    configureGateway({
+      embedding_model: 'zhipu:embedding-3',
+      embedding_dimensions: 1024,
+      env: { ZHIPUAI_API_KEY: 'test-key' },
+    });
+    let output = '';
+    const originalWrite = process.stdout.write;
+    process.stdout.write = ((chunk: string | Uint8Array) => {
+      output += typeof chunk === 'string' ? chunk : new TextDecoder().decode(chunk);
+      return true;
+    }) as typeof process.stdout.write;
+    try {
+      await runModels(engine, ['models', 'embedding-dimension-status', '--json']);
+    } finally {
+      process.stdout.write = originalWrite;
+      configureGateway({
+        embedding_model: 'zeroentropyai:zembed-1',
+        embedding_dimensions: 1280,
+        env: {},
+      });
+    }
+    expect(JSON.parse(output.trim())).toMatchObject({
+      status: 'mismatch',
+      embedding_model: 'zhipu:embedding-3',
+      configured_dimensions: 1024,
+      column_dimensions: 1280,
+      existing_embeddings: 0,
+    });
   });
 
   test('rebuilds only derived text embeddings and preserves pages and chunks', async () => {

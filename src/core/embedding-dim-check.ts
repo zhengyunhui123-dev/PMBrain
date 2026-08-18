@@ -95,6 +95,21 @@ export interface ColumnDimResult {
   dims: number | null;
 }
 
+export type EmbeddingDimensionStatusKind =
+  | 'not_configured'
+  | 'column_missing'
+  | 'unknown'
+  | 'aligned'
+  | 'mismatch';
+
+export interface EmbeddingDimensionStatus {
+  status: EmbeddingDimensionStatusKind;
+  embedding_model: string | null;
+  configured_dimensions: number | null;
+  column_dimensions: number | null;
+  existing_embeddings: number;
+}
+
 /**
  * Read the actual dimension of `content_chunks.embedding` from the engine.
  *
@@ -133,6 +148,51 @@ export async function readContentChunksEmbeddingDim(engine: BrainEngine): Promis
 
   const m = formatted.match(/vector\((\d+)\)/i);
   return { exists: true, dims: m ? parseInt(m[1], 10) : null };
+}
+
+/**
+ * Read the configured-vs-physical embedding state without changing derived
+ * vectors or source content. Desktop startup uses this to repair the
+ * interrupted first-activation state only when the vector store is empty.
+ */
+export async function readEmbeddingDimensionStatus(
+  engine: BrainEngine,
+  opts: { embeddingModel?: string | null; configuredDimensions?: number | null } = {},
+): Promise<EmbeddingDimensionStatus> {
+  const embeddingModel = opts.embeddingModel?.trim() || null;
+  const configuredDimensions = Number.isInteger(opts.configuredDimensions)
+    && (opts.configuredDimensions ?? 0) > 0
+    ? opts.configuredDimensions!
+    : null;
+  const current = await readContentChunksEmbeddingDim(engine);
+  let existingEmbeddings = 0;
+  if (current.exists) {
+    const rows = await engine.executeRaw<{ count: number | string }>(
+      'SELECT COUNT(*)::int AS count FROM content_chunks WHERE embedding IS NOT NULL',
+    );
+    existingEmbeddings = Number(rows[0]?.count ?? 0);
+  }
+
+  let status: EmbeddingDimensionStatusKind;
+  if (!embeddingModel || configuredDimensions === null) {
+    status = 'not_configured';
+  } else if (!current.exists) {
+    status = 'column_missing';
+  } else if (current.dims === null) {
+    status = 'unknown';
+  } else if (current.dims === configuredDimensions) {
+    status = 'aligned';
+  } else {
+    status = 'mismatch';
+  }
+
+  return {
+    status,
+    embedding_model: embeddingModel,
+    configured_dimensions: configuredDimensions,
+    column_dimensions: current.dims,
+    existing_embeddings: existingEmbeddings,
+  };
 }
 
 /**

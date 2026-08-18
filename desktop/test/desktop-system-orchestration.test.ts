@@ -147,11 +147,15 @@ describe('desktop system orchestration contracts', () => {
     expect(main).toContain('Dream 不会自行触发模型迁移');
   });
 
-  test('never repairs or clears vectors during ordinary desktop startup', () => {
-    expect(main).not.toContain('reconcileConfiguredEmbeddingIndex');
-    expect(main).toMatch(
-      /const migrationRequired = await this\.dependencies\.migrateConfiguredInstallation\(\);[\s\S]*?setup\.current\.engine !== 'pglite'[\s\S]*?this\.start\(false\)[\s\S]*?setup\.current\.engine === 'pglite'/,
-    );
+  test('启动前只对空向量库自动修复维度漂移，并在已有向量时保留数据', () => {
+    expect(databaseController).toContain("'models', 'embedding-dimension-status', '--json'");
+    expect(databaseController).toContain('existing_embeddings');
+    expect(databaseController).toContain("'--empty-only'");
+    expect(databaseController).toContain('pgliteBackup.ensureUpgradeBackup');
+    expect(databaseController).toContain('automatic clearing was refused');
+    expect(sidecarController).toMatch(/migrateConfiguredInstallation\(\)[\s\S]*?reconcileConfiguredEmbeddingIndex\(\)[\s\S]*?this\.start\(false\)/);
+    expect(sidecarController).toMatch(/await this\.stopNow\(\);[\s\S]*?reconcileConfiguredEmbeddingIndex\(\)[\s\S]*?await this\.startOnce\(false\)/);
+    expect(main).toContain('reconcileConfiguredEmbeddingIndex: () => databaseUpgradeController.reconcileConfiguredEmbeddingIndex()');
   });
 
   test('模型保存时仅 Postgres 独立执行迁移，PGLite 等 sidecar 健康后完成升级记录', () => {

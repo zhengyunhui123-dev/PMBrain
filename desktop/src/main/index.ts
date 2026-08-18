@@ -146,6 +146,7 @@ const sidecarController: SidecarController = new SidecarController({
   ensureRuntimeReady,
   prepareConfiguredDatabase: () => databaseUpgradeController.prepareConfiguredDatabase(),
   migrateConfiguredInstallation: () => databaseUpgradeController.migrateConfiguredInstallation(),
+  reconcileConfiguredEmbeddingIndex: () => databaseUpgradeController.reconcileConfiguredEmbeddingIndex(),
   pendingPgliteBackupPath: () => pgliteBackupController.pendingBackupPath,
   reconcileLan: () => lanController.reconcile(),
   stopLan: () => lanController.stop(),

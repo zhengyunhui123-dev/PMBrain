@@ -14,6 +14,23 @@ interface StartupProgress {
   message: string;
 }
 
+interface EmbeddingDimensionStatusCliResult {
+  status?: string;
+  embedding_model?: string | null;
+  configured_dimensions?: number | null;
+  column_dimensions?: number | null;
+  existing_embeddings?: number | string;
+}
+
+function parseLastJson<T>(stdout: string, errorMessage: string): T {
+  const line = stdout.trim().split(/\r?\n/).at(-1) || '';
+  try {
+    return JSON.parse(line) as T;
+  } catch (error) {
+    throw new Error(errorMessage, { cause: error });
+  }
+}
+
 export interface DatabaseUpgradeDependencies {
   runtime: () => CliRuntime;
   getLogger: () => DesktopLogger | null;
@@ -71,5 +88,90 @@ export class DatabaseUpgradeController {
     await runCliChecked(this.dependencies.runtime(), DESKTOP_MIGRATION_ARGS);
     await this.dependencies.syncModelDefaults();
     return true;
+  }
+
+  /**
+   * Repair the interrupted first-activation state before sidecar startup.
+   * This is deliberately a status-first flow: only a dimension mismatch with
+   * zero stored vectors may use the existing empty-only alignment command.
+   */
+  async reconcileConfiguredEmbeddingIndex(): Promise<void> {
+    const setup = getSetupInfo();
+    const model = setup.current.embeddingModel?.trim();
+    if (setup.needsSetup || !model) return;
+
+    const statusResult = await runCliChecked(this.dependencies.runtime(), [
+      'models', 'embedding-dimension-status', '--json',
+    ]);
+    const status = parseLastJson<EmbeddingDimensionStatusCliResult>(
+      statusResult.stdout,
+      '向量维度状态检查返回格式无效，已停止自动修复。',
+    );
+    const existingEmbeddings = Number(status.existing_embeddings ?? 0);
+    this.dependencies.getLogger()?.write(
+      'desktop',
+      `Embedding dimension preflight: status=${status.status ?? 'unknown'} `
+        + `model=${status.embedding_model ?? model} `
+        + `configured=${status.configured_dimensions ?? 'unknown'} `
+        + `column=${status.column_dimensions ?? 'unknown'} `
+        + `existing=${existingEmbeddings}`,
+    );
+
+    if (status.status === 'aligned' || status.status === 'not_configured') return;
+    if (status.status !== 'mismatch') {
+      this.dependencies.getLogger()?.write(
+        'desktop',
+        `Embedding dimension preflight did not auto-repair status=${status.status ?? 'unknown'}; `
+          + 'the database and source content were left unchanged.',
+      );
+      return;
+    }
+
+    const hasValidDimensions = Number.isInteger(status.column_dimensions)
+      && (status.column_dimensions ?? 0) > 0
+      && Number.isInteger(status.configured_dimensions)
+      && (status.configured_dimensions ?? 0) > 0;
+    if (!hasValidDimensions || !Number.isInteger(existingEmbeddings) || existingEmbeddings < 0) {
+      this.dependencies.getLogger()?.write(
+        'desktop',
+        'Embedding dimension preflight returned invalid mismatch data; automatic repair was refused.',
+      );
+      return;
+    }
+
+    if (existingEmbeddings > 0) {
+      this.dependencies.getLogger()?.write(
+        'desktop',
+        `Embedding dimension mismatch remains at vector(${status.column_dimensions}) `
+          + `while ${status.existing_embeddings} derived vector(s) exist for ${model}; `
+          + 'automatic clearing was refused. Explicit model-rebuild confirmation is required.',
+      );
+      return;
+    }
+
+    if (setup.current.engine === 'pglite') {
+      await this.dependencies.pgliteBackup.ensureUpgradeBackup(setup.current.databasePath);
+    }
+    this.dependencies.sendStartupProgress({
+      visible: true,
+      stage: 'migration',
+      title: '正在修复搜索索引兼容性',
+      message: `检测到空向量库的维度不一致（数据库 ${status.column_dimensions} 维，配置 ${status.configured_dimensions} 维），正在安全对齐。知识页面、文本分块和原始资料不会被修改。`,
+    });
+    const aligned = await runCliChecked(this.dependencies.runtime(), [
+      'models', 'align-embedding-dimension', '--yes', '--json', '--empty-only',
+    ]);
+    const result = parseLastJson<{ status?: string }>(
+      aligned.stdout,
+      '向量维度自动修复返回格式无效，请保留日志并重试。',
+    );
+    if (result.status !== 'aligned' && result.status !== 'already_aligned') {
+      throw new Error(`向量维度自动修复未完成（状态：${result.status ?? 'unknown'}）。`);
+    }
+    this.dependencies.getLogger()?.write(
+      'desktop',
+      `Embedding dimension preflight repaired an empty vector store from vector(${status.column_dimensions}) `
+        + `to vector(${status.configured_dimensions}) for ${model}.`,
+    );
   }
 }

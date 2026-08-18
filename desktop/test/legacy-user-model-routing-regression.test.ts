@@ -65,8 +65,12 @@ describe('老用户回归矩阵 · 桌面模型路由', () => {
     expect(configManager).toContain('confirmEmbeddingRebuild?: boolean');
   });
 
-  test('场景E · 普通启动/升级不得自动 align 或清空向量', () => {
-    expect(main).not.toContain('reconcileConfiguredEmbeddingIndex');
+  test('场景E · 普通启动/升级只修复空向量库，不自动清空已有向量', () => {
+    expect(main).toContain('reconcileConfiguredEmbeddingIndex');
+    expect(main).toContain('embedding-dimension-status');
+    expect(main).toContain("'--empty-only'");
+    expect(main).toContain('existing_embeddings');
+    expect(main).toContain('automatic clearing was refused');
     expect(main).toContain('Dream 不会自行触发模型迁移');
     expect(main).toMatch(/if \(saved\.embeddingModelChanged\) \{[\s\S]*'--force-reembed'/);
   });
