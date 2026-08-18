@@ -4789,17 +4789,41 @@ export class PGLiteEngine implements BrainEngine {
   async getStats(): Promise<BrainStats> {
     const { rows: [stats] } = await this.db.query(`
       SELECT
-        -- v0.26.5: exclude soft-deleted from page_count (mirrors postgres-engine).
+        -- v0.26.5: dashboard stats describe the visible knowledge base, not
+        -- rows waiting in the recycle bin. Keep derived rows aligned with the
+        -- same page visibility boundary until the 72h purge removes them.
         (SELECT count(*) FROM pages WHERE deleted_at IS NULL) as page_count,
-        (SELECT count(*) FROM content_chunks) as chunk_count,
-        (SELECT count(*) FROM content_chunks WHERE embedded_at IS NOT NULL) as embedded_count,
-        (SELECT count(*) FROM links) as link_count,
-        (SELECT count(DISTINCT tag) FROM tags) as tag_count,
-        (SELECT count(*) FROM timeline_entries) as timeline_entry_count
+        (SELECT count(*)
+           FROM content_chunks c
+           JOIN pages p ON p.id = c.page_id
+          WHERE p.deleted_at IS NULL) as chunk_count,
+        (SELECT count(*)
+           FROM content_chunks c
+           JOIN pages p ON p.id = c.page_id
+          WHERE p.deleted_at IS NULL
+            AND c.embedded_at IS NOT NULL) as embedded_count,
+        (SELECT count(*)
+           FROM links l
+           JOIN pages from_page ON from_page.id = l.from_page_id
+                                AND from_page.deleted_at IS NULL
+           JOIN pages to_page ON to_page.id = l.to_page_id
+                              AND to_page.deleted_at IS NULL) as link_count,
+        (SELECT count(DISTINCT t.tag)
+           FROM tags t
+           JOIN pages p ON p.id = t.page_id
+          WHERE p.deleted_at IS NULL) as tag_count,
+        (SELECT count(*)
+           FROM timeline_entries te
+           JOIN pages p ON p.id = te.page_id
+          WHERE p.deleted_at IS NULL) as timeline_entry_count
     `);
 
     const { rows: types } = await this.db.query(
-      `SELECT type, count(*)::int as count FROM pages GROUP BY type ORDER BY count DESC`
+      `SELECT type, count(*)::int as count
+         FROM pages
+        WHERE deleted_at IS NULL
+        GROUP BY type
+        ORDER BY count DESC`
     );
     const pages_by_type: Record<string, number> = {};
     for (const t of types as { type: string; count: number }[]) {

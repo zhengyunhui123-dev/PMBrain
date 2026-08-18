@@ -977,6 +977,50 @@ describe('PGLiteEngine: Stats & Health', () => {
     expect(health.missing_embeddings).toBe(1); // chunk has no embedding
     expect(health.embed_coverage).toBe(0);
   });
+
+  test('getStats excludes soft-deleted pages and their derived rows', async () => {
+    await engine.putPage('test/stats-deleted', { ...testPage, type: 'note' as any });
+    await engine.putPage('test/stats-target', { ...testPage, type: 'concept' as any });
+    await engine.upsertChunks('test/stats-deleted', [
+      { chunk_index: 0, chunk_text: 'deleted chunk', chunk_source: 'compiled_truth' },
+    ]);
+    await engine.addTag('test/stats-deleted', 'deleted-tag');
+
+    const [deletedPage] = await engine.executeRaw<{ id: number }>(
+      `SELECT id FROM pages WHERE slug = $1`,
+      ['test/stats-deleted'],
+    );
+    const [targetPage] = await engine.executeRaw<{ id: number }>(
+      `SELECT id FROM pages WHERE slug = $1`,
+      ['test/stats-target'],
+    );
+    if (!deletedPage || !targetPage) throw new Error('stats regression fixture pages were not created');
+
+    await engine.executeRaw(
+      `INSERT INTO timeline_entries (page_id, date, source, summary) VALUES ($1, CURRENT_DATE, '', 'deleted timeline')`,
+      [deletedPage.id],
+    );
+    await engine.executeRaw(
+      `INSERT INTO links (from_page_id, to_page_id, link_type, context) VALUES ($1, $2, '', '')`,
+      [deletedPage.id, targetPage.id],
+    );
+    await engine.softDeletePage('test/stats-deleted');
+
+    try {
+      const stats = await engine.getStats();
+      expect(stats.page_count).toBe(2);
+      expect(stats.chunk_count).toBe(1);
+      expect(stats.embedded_count).toBe(0);
+      expect(stats.link_count).toBe(0);
+      expect(stats.tag_count).toBe(1);
+      expect(stats.timeline_entry_count).toBe(0);
+      expect(stats.pages_by_type.concept).toBe(2);
+      expect(stats.pages_by_type.note).toBeUndefined();
+    } finally {
+      await engine.deletePage('test/stats-deleted');
+      await engine.deletePage('test/stats-target');
+    }
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────

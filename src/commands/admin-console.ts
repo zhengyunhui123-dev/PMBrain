@@ -12,6 +12,7 @@ import { isSensitiveConfigKey, redactConfigValue } from './config.ts';
 import { loadAllSources, isSourceFederated } from '../core/sources-load.ts';
 import { resolveMainSourceId } from '../core/source-resolver.ts';
 import { getSourceGitStatus, isSourceGitRepository } from '../core/source-git.ts';
+import { SOFT_DELETE_TTL_HOURS } from '../core/destructive-guard.ts';
 import { ALL_PHASES } from '../core/cycle.ts';
 import { getProviderStatus, listRuns } from './natural-lang/index.ts';
 import { inspectAdminSupervisorStatus } from './admin-supervisor.ts';
@@ -90,7 +91,10 @@ export async function getAdminBrainOverview(
 
   const sourceRows = await Promise.all(sources.map(async (source) => {
     const [count] = await engine.executeRaw<{ page_count: number }>(
-      `SELECT COUNT(*)::int AS page_count FROM pages WHERE source_id = $1`,
+      `SELECT COUNT(*)::int AS page_count
+         FROM pages
+        WHERE source_id = $1
+          AND deleted_at IS NULL`,
       [source.id],
     );
     const [archive] = await engine.executeRaw<{ archived_at: string | null; archive_expires_at: string | null }>(
@@ -132,12 +136,16 @@ export async function getAdminBrainOverview(
   }));
 
   const [recentWrite] = await engine.executeRaw<{ updated_at: string | null }>(
-    `SELECT MAX(updated_at)::text AS updated_at FROM pages`,
+    `SELECT MAX(updated_at)::text AS updated_at
+       FROM pages
+      WHERE deleted_at IS NULL`,
   );
   const [pendingEmbed] = await engine.executeRaw<{ pending: number }>(
     `SELECT COUNT(*)::int AS pending
-       FROM content_chunks
-      WHERE embedding IS NULL`,
+       FROM content_chunks c
+       JOIN pages p ON p.id = c.page_id
+      WHERE c.embedding IS NULL
+        AND p.deleted_at IS NULL`,
   );
   const factCounts = await optionalOne<{ fact_count: number; active_fact_count: number }>(
     engine,
@@ -194,6 +202,12 @@ export async function listAdminBrainPages(
   const limit = [10, 20, 40].includes(requestedLimit) ? requestedLimit : 10;
   const offset = (page - 1) * limit;
   const isTrash = query.view === 'trash';
+  // Desktop deliberately does not start Autopilot for PGLite. Reuse the
+  // existing core purge primitive when the recycle bin is read so the UI does
+  // not depend on an opt-in background worker for the 72-hour retention rule.
+  if (isTrash) {
+    await engine.purgeDeletedPages(SOFT_DELETE_TTL_HOURS);
+  }
   const filters: string[] = [isTrash ? 'p.deleted_at IS NOT NULL' : 'p.deleted_at IS NULL'];
   const params: (string | number)[] = [];
 
