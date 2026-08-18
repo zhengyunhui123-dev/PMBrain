@@ -120,13 +120,18 @@ lint → backlinks → sync → synthesize → extract → extract_facts
 | Dream embed 的 AbortSignal 与 quiet 输出 | 最新 GBrain 已接入，PMBrain 当前仅完成“未配置则跳过”和不回退 | 后续移植中止信号与安静输出，不改变现有阶段数据语义 |
 | Query cache 最新隔离 | GBrain `KNOBS_HASH_VERSION=13`，已纳入 embedding provider 与 hard-exclude；PMBrain 当前为 9 | 高优先级移植，防止模型切换或排除规则变化后误用旧缓存 |
 | Provider-agnostic embedding migration 命令 | GBrain 有独立 `migrate-embeddings.ts`；PMBrain 仍使用自己的受保护重嵌入流程 | 与老用户向量保护规则对照后移植，不能直接清空索引 |
-| Global basename Wikilink 解析 | PMBrain 未采用上游跨目录 basename 开关 | 暂不直接移植；当前 Source-local → default 策略更符合多 Source 安全边界 |
-| Life Chronicle temporal boost / eval | 尚未同步 | 非当前项目管理核心，继续单独评估 |
+| Global basename Wikilink 解析 | 明确不移植跨目录 basename | 当前 Source-local → default 更符合多 Source 安全边界 |
+| Life Chronicle / 事件页投影 / 本体维度 | 尚未同步 | 知识库已能分类事件页；Chronicle、`event_page_id`、`facts.dimension` 仍暂缓 |
 | Retrieval reflex | 尚未同步 | 需要真实题集证明收益后再决定 |
-| SkillOpt | 明确暂缓，PMBrain 的 Dream 阶段中没有 `skillopt` | 保持暂缓；缺少专属 benchmark、held-out 和人工门禁前不允许自动改 Skill |
-| extract-atoms-drain | 尚未同步 | 建议评估移植其失败重试与任务排空，不改变现有阶段语义 |
-| 最新会话解析模式 | GBrain 当前 17 个 built-in，PMBrain 为 12 个 | 建议补齐 Slack/会议等新增格式，并使用现有 conversation parser 测试验证 |
-| `extract --stale` 与 global-basename 相关修复 | PMBrain 尚未完整同步 | 只移植与 Source 安全策略兼容的增量水位、失败回显和中止处理 |
+| SkillOpt | 明确暂缓 | 缺少专属 benchmark 前不允许自动改 Skill |
+| extract-atoms-drain | 尚未同步 | 可评估失败重试与任务排空，不改变阶段语义 |
+| 最新会话解析模式 | GBrain 17 个 built-in，PMBrain 12 个 | 建议补齐 Slack/会议等新增格式 |
+| Query embedding 共享 deadline | 尚未同步 | 高优先级评估，避免向量服务卡住两次 |
+| Query cache 最新隔离 | GBrain KNOBS_HASH_VERSION=13，PMBrain 为 9 | 高优先级移植 |
+| `extract --stale` 关系抽取水位 | **已移植**（Schema 115） | `pages.links_extracted_at` + `pmbrain extract --stale` + `links_extraction_lag` |
+| MEMORY_VERBS `entity` | **已移植** | 零模型实体卡片 |
+| Fact remember/forget | **已移植** | 知识库可列出 facts 表 |
+| MCP `list_skills` / `get_skill` 协议信封 | **已对齐** | 返回 `instructions` / `client_guidance`；本地 Sidecar 默认打开 `mcp.publish_skills`；Agent 先读 Skill 再搜知识。未移植 `list_brain_skillpack`、SkillOpt |
 
 ## 7. 本次 Embedding 差异结论
 

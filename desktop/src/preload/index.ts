@@ -2,7 +2,10 @@ import { contextBridge, ipcRenderer } from 'electron';
 import type { SidecarState } from '../main/sidecar-manager.js';
 import type {
   DesktopCloseBehavior,
+  DesktopCustomEndpoint,
   DesktopCustomProvider,
+  DesktopCustomProviderCatalog,
+  DesktopCustomProviderSelection,
   DesktopNetworkMode,
   DesktopPreferences,
   DesktopTheme,
@@ -43,7 +46,10 @@ export type {
   AdvancedModelWriteInput,
   CredentialKind,
   DesktopCloseBehavior,
+  DesktopCustomEndpoint,
   DesktopCustomProvider,
+  DesktopCustomProviderCatalog,
+  DesktopCustomProviderSelection,
   DesktopNetworkMode,
   DesktopKnowledgeSourceStatus,
   DesktopPreferences,
@@ -137,6 +143,7 @@ export interface PMBrainDesktopApi {
   saveAdvancedModelConfig(values: AdvancedModelWriteInput): Promise<AdvancedModelConfig>;
   saveSetup(payload: SetupPayload): Promise<DesktopSetupState & { backup?: string | null; reembeddingWarning?: string | null }>;
   configureIntegration(client: IntegrationClient, kind: CredentialKind): Promise<IntegrationResult>;
+  writeWorkbuddyUserAgent(): Promise<{ written: string[]; backedUp: string[] }>;
   getWorkbuddyAgentIntegration(): Promise<WorkbuddyAgentIntegrationStatus>;
   installWorkbuddyAgent(workspace: string): Promise<WorkbuddyAgentIntegrationStatus>;
   updateWorkbuddyAgent(): Promise<WorkbuddyAgentIntegrationStatus>;
@@ -208,6 +215,7 @@ const api: PMBrainDesktopApi = {
   saveAdvancedModelConfig: (values) => ipcRenderer.invoke('desktop:save-advanced-model-config', values),
   saveSetup: (payload) => ipcRenderer.invoke('desktop:save-setup', payload),
   configureIntegration: (client, kind) => ipcRenderer.invoke('desktop:configure-integration', client, kind),
+  writeWorkbuddyUserAgent: () => ipcRenderer.invoke('desktop:write-workbuddy-user-agent'),
   getWorkbuddyAgentIntegration: () => ipcRenderer.invoke('desktop:get-workbuddy-agent-integration'),
   installWorkbuddyAgent: (workspace) => ipcRenderer.invoke('desktop:install-workbuddy-agent', workspace),
   updateWorkbuddyAgent: () => ipcRenderer.invoke('desktop:update-workbuddy-agent'),

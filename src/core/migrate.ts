@@ -5111,6 +5111,34 @@ export const MIGRATIONS: Migration[] = [
         WHERE accepted_take_id IS NOT NULL;
     `,
   },
+  {
+    version: 115,
+    name: 'pages_links_extracted_at',
+    // Ported from GBrain v0.42.7. PMBrain schema numbers already diverged,
+    // so this lands as 115 rather than GBrain's 112.
+    sql: '',
+    idempotent: true,
+    transaction: false,
+    handler: async (engine) => {
+      await engine.runMigration(
+        115,
+        `ALTER TABLE pages ADD COLUMN IF NOT EXISTS links_extracted_at TIMESTAMPTZ;`,
+      );
+      if (engine.kind === 'postgres') {
+        await engine.runMigration(
+          115,
+          `CREATE INDEX CONCURRENTLY IF NOT EXISTS pages_links_extracted_at_idx
+             ON pages (source_id, links_extracted_at);`,
+        );
+      } else {
+        await engine.runMigration(
+          115,
+          `CREATE INDEX IF NOT EXISTS pages_links_extracted_at_idx
+             ON pages (source_id, links_extracted_at);`,
+        );
+      }
+    },
+  },
 ];
 
 export const LATEST_VERSION = MIGRATIONS.length > 0

@@ -506,6 +506,86 @@ describe('desktop config manager', () => {
     expect(existsSync(desktopConfigPath())).toBe(false);
   });
 
+  test('keeps multiple chat and embedding custom endpoints independent', () => {
+    isolatedHome();
+    saveSetup({
+      engine: 'pglite',
+      customProviders: {
+        chat: [
+          { id: 'custom-endpoint-chat-a', displayName: 'A', baseUrl: 'http://127.0.0.1:8000/v1', modelId: 'chat-a' },
+          { id: 'custom-endpoint-chat-b', displayName: 'B', baseUrl: 'http://127.0.0.1:8001/v1', modelId: 'chat-b' },
+        ],
+        embedding: [
+          { id: 'custom-endpoint-embedding-x', displayName: 'X', baseUrl: 'http://127.0.0.1:9000/v1', modelId: 'embed-x' },
+        ],
+      },
+      customSelection: {
+        chat: 'custom-endpoint-chat-a',
+        embedding: 'custom-endpoint-embedding-x',
+      },
+      modelConfig: {
+        chatModel: 'custom-openai:chat-a',
+        embeddingModel: 'custom-openai:embed-x',
+        embeddingDimensions: 1024,
+      },
+    });
+
+    const first = getSetupInfo().current;
+    expect(first.customProviders?.chat.map(item => item.displayName)).toEqual(['A', 'B']);
+    expect(first.customProviders?.embedding.map(item => item.displayName)).toEqual(['X']);
+    expect(first.customSelection).toEqual({
+      chat: 'custom-endpoint-chat-a',
+      embedding: 'custom-endpoint-embedding-x',
+    });
+    expect(first.customProvider?.baseUrls).toEqual({
+      chat: 'http://127.0.0.1:8000/v1',
+      embedding: 'http://127.0.0.1:9000/v1',
+    });
+
+    saveSetup({
+      engine: 'pglite',
+      customProviders: {
+        chat: [
+          { id: 'custom-endpoint-chat-a', displayName: 'A', baseUrl: 'http://127.0.0.1:8000/v1', modelId: 'chat-a' },
+          { id: 'custom-endpoint-chat-b', displayName: 'B', baseUrl: 'http://127.0.0.1:8001/v1', modelId: 'chat-b' },
+        ],
+        embedding: [
+          { id: 'custom-endpoint-embedding-x', displayName: 'X', baseUrl: 'http://127.0.0.1:9000/v1', modelId: 'embed-x' },
+          { id: 'custom-endpoint-embedding-y', displayName: 'Y', baseUrl: 'http://127.0.0.1:9001/v1', modelId: 'embed-y' },
+        ],
+      },
+      customSelection: {
+        chat: 'custom-endpoint-chat-b',
+        embedding: 'custom-endpoint-embedding-y',
+      },
+      modelConfig: {
+        chatModel: 'custom-openai:chat-b',
+        embeddingModel: 'custom-openai:embed-y',
+        embeddingDimensions: 1024,
+      },
+    });
+
+    const next = getSetupInfo().current;
+    expect(next.customProviders?.chat.map(item => item.displayName)).toEqual(['A', 'B']);
+    expect(next.customProviders?.embedding.map(item => item.displayName)).toEqual(['X', 'Y']);
+    expect(next.customSelection).toEqual({
+      chat: 'custom-endpoint-chat-b',
+      embedding: 'custom-endpoint-embedding-y',
+    });
+    expect(next.customProvider?.displayName).toBe('B');
+    expect(next.customProvider?.baseUrls).toEqual({
+      chat: 'http://127.0.0.1:8001/v1',
+      embedding: 'http://127.0.0.1:9001/v1',
+    });
+    const config = JSON.parse(readFileSync(desktopConfigPath(), 'utf8'));
+    expect(config.provider_touchpoint_base_urls['custom-openai']).toEqual({
+      chat: 'http://127.0.0.1:8001/v1',
+      embedding: 'http://127.0.0.1:9001/v1',
+    });
+    expect(config.desktop.custom_endpoints.chat).toHaveLength(2);
+    expect(config.desktop.custom_endpoints.embedding).toHaveLength(2);
+  });
+
   test('desktop reads and writes the same discovered legacy CLI config', () => {
     const root = mkdtempSync(join(tmpdir(), 'pmbrain-desktop-legacy-switch-'));
     roots.push(root);

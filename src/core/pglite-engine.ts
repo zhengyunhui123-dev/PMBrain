@@ -28,7 +28,7 @@ import { acquireLock, releaseLock, type LockHandle } from './pglite-lock.ts';
 import { DatabaseAlreadyOwnedError, PgliteOpenError } from './pglite-errors.ts';
 import type {
   Page, PageInput, PageFilters, PageType,
-  Chunk, ChunkInput, StaleChunkRow,
+  Chunk, ChunkInput, StaleChunkRow, StalePageRow,
   SearchResult, SearchOpts,
   Link, GraphNode, GraphPath,
   TimelineEntry, TimelineInput, TimelineOpts,
@@ -44,7 +44,7 @@ import type {
   DomainBankSampleOpts, CorpusSampleOpts, DomainBankRow,
   EnrichCandidatesOpts, EnrichCandidate,
 } from './types.ts';
-import { validateSlug, contentHash, rowToPage, rowToChunk, rowToSearchResult, takeRowToTake, isUndefinedTableError, warnOncePerProcess } from './utils.ts';
+import { validateSlug, contentHash, rowToPage, rowToStalePage, rowToChunk, rowToSearchResult, takeRowToTake, isUndefinedTableError, isUndefinedColumnError, warnOncePerProcess } from './utils.ts';
 import { deriveResolutionTuple, finalizeScorecard } from './takes-resolution.ts';
 import { normalizeWeightForStorage } from './takes-fence.ts';
 import { GBrainError, PAGE_SORT_SQL, ENRICH_ORDER_SQL } from './types.ts';
@@ -530,6 +530,8 @@ export class PGLiteEngine implements BrainEngine {
         EXISTS (SELECT 1 FROM information_schema.columns
                 WHERE table_schema='public' AND table_name='pages' AND column_name='last_retrieved_at') AS pages_last_retrieved_at_exists,
         EXISTS (SELECT 1 FROM information_schema.columns
+                WHERE table_schema='public' AND table_name='pages' AND column_name='links_extracted_at') AS pages_links_extracted_at_exists,
+        EXISTS (SELECT 1 FROM information_schema.columns
                 WHERE table_schema='public' AND table_name='pages' AND column_name='ingested_via') AS pages_ingested_via_exists,
         EXISTS (SELECT 1 FROM information_schema.columns
                 WHERE table_schema='public' AND table_name='pages' AND column_name='ingested_at') AS pages_ingested_at_exists,
@@ -578,6 +580,7 @@ export class PGLiteEngine implements BrainEngine {
       sources_archived_at_exists: boolean;
       sources_archive_expires_at_exists: boolean;
       pages_last_retrieved_at_exists: boolean;
+      pages_links_extracted_at_exists: boolean;
       pages_ingested_via_exists: boolean;
       pages_ingested_at_exists: boolean;
       pages_source_uri_exists: boolean;
@@ -631,7 +634,8 @@ export class PGLiteEngine implements BrainEngine {
           || !probe.sources_archive_expires_at_exists);
     // v0.37.0 (v79): pages_last_retrieved_at_idx in PGLITE_SCHEMA_SQL
     // references last_retrieved_at. Pre-v79 brains crash without the column.
-    const needsPagesLastRetrievedAt = probe.pages_exists && !probe.pages_last_retrieved_at_exists;
+    const needsPagesLastRetrievedAt = probe.pages_exists && probe.pages_last_retrieved_at_exists !== true;
+    const needsPagesLinksExtractedAt = probe.pages_exists && probe.pages_links_extracted_at_exists !== true;
     // v0.38.0 (v80): provenance columns on pages. Not referenced by any
     // SCHEMA_SQL index or FK today, but added defense-in-depth so future
     // schema work that references them doesn't wedge pre-v80 brains.
@@ -662,6 +666,7 @@ export class PGLiteEngine implements BrainEngine {
         && !needsPagesRecency && !needsIngestLogSourceId
         && !needsFilesBootstrap && !needsOauthClientsBootstrap
         && !needsSourcesArchive && !needsPagesLastRetrievedAt
+        && !needsPagesLinksExtractedAt
         && !needsPagesProvenance
         && !needsContextualRetrievalColumns && !needsPagesGeneration) return;
 
@@ -850,6 +855,17 @@ export class PGLiteEngine implements BrainEngine {
       // later via runMigrations and is idempotent.
       await this.db.exec(`
         ALTER TABLE pages ADD COLUMN IF NOT EXISTS last_retrieved_at TIMESTAMPTZ;
+      `);
+    }
+
+    if (needsPagesLinksExtractedAt) {
+      // Schema 115: pages_links_extracted_at_idx in PGLITE_SCHEMA_SQL
+      // references links_extracted_at. Existing brains that already have
+      // last_retrieved_at (and every older bootstrap target) still lack
+      // this column; omitting it from the early-return above made Sidecar
+      // skip ADD COLUMN and crash on schema replay.
+      await this.db.exec(`
+        ALTER TABLE pages ADD COLUMN IF NOT EXISTS links_extracted_at TIMESTAMPTZ;
       `);
     }
 
@@ -2504,6 +2520,78 @@ export class PGLiteEngine implements BrainEngine {
       [opts.sourceId, afterPid, afterIdx, limit],
     );
     return rows as unknown as StaleChunkRow[];
+  }
+
+  private buildStalePagesWhere(opts?: { sourceId?: string; versionTs?: string }): { where: string; params: unknown[] } {
+    const conds: string[] = ['deleted_at IS NULL'];
+    const params: unknown[] = [];
+    if (opts?.versionTs) {
+      params.push(opts.versionTs);
+      conds.push(`(links_extracted_at IS NULL OR links_extracted_at < $${params.length}::timestamptz OR updated_at > links_extracted_at)`);
+    } else {
+      conds.push('(links_extracted_at IS NULL OR updated_at > links_extracted_at)');
+    }
+    if (opts?.sourceId) {
+      params.push(opts.sourceId);
+      conds.push(`source_id = $${params.length}`);
+    }
+    return { where: conds.join(' AND '), params };
+  }
+
+  async countStalePagesForExtraction(opts?: { sourceId?: string; versionTs?: string }): Promise<number> {
+    try {
+      const { where, params } = this.buildStalePagesWhere(opts);
+      const { rows } = await this.db.query<{ count: number }>(
+        `SELECT count(*)::int AS count FROM pages WHERE ${where}`,
+        params,
+      );
+      return rows[0]?.count ?? 0;
+    } catch (error) {
+      if (isUndefinedColumnError(error, 'links_extracted_at')) return 0;
+      throw error;
+    }
+  }
+
+  async listStalePagesForExtraction(opts: {
+    batchSize: number;
+    afterPageId?: number;
+    sourceId?: string;
+    versionTs?: string;
+  }): Promise<StalePageRow[]> {
+    const { where, params } = this.buildStalePagesWhere(opts);
+    let afterClause = '';
+    if (opts.afterPageId != null) {
+      params.push(opts.afterPageId);
+      afterClause = ` AND id > $${params.length}`;
+    }
+    params.push(opts.batchSize);
+    const limitIdx = params.length;
+    const { rows } = await this.db.query(
+      `SELECT id, slug, source_id, type, title, compiled_truth, timeline, frontmatter, updated_at,
+              to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS updated_at_iso
+         FROM pages
+         WHERE ${where}${afterClause}
+         ORDER BY id
+         LIMIT $${limitIdx}`,
+      params,
+    );
+    return (rows as Record<string, unknown>[]).map(rowToStalePage);
+  }
+
+  async markPagesExtractedBatch(
+    refs: Array<{ slug: string; source_id: string; extractedAt?: string }>,
+    defaultExtractedAt: string,
+  ): Promise<void> {
+    if (refs.length === 0) return;
+    const slugs = refs.map(r => r.slug);
+    const srcs = refs.map(r => r.source_id);
+    const tss = refs.map(r => r.extractedAt ?? defaultExtractedAt);
+    await this.db.query(
+      `UPDATE pages p SET links_extracted_at = v.ts::timestamptz
+         FROM unnest($1::text[], $2::text[], $3::text[]) AS v(slug, source_id, ts)
+         WHERE p.slug = v.slug AND p.source_id = v.source_id`,
+      [slugs, srcs, tss],
+    );
   }
 
   async deleteChunks(slug: string, opts?: { sourceId?: string }): Promise<void> {

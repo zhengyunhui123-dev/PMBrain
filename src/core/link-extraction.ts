@@ -17,6 +17,14 @@ import { ensureWellFormed } from './text-safe.ts';
 import { posix } from 'node:path';
 import { pathToSlug } from './sync.ts';
 
+/**
+ * Link-extraction version stamp, ported from GBrain v0.42.7.
+ * Bump this ISO timestamp when extractPageLinks / inferLinkType /
+ * parseTimelineEntries change shape, so extract --stale re-sweeps pages
+ * stamped by the previous extractor.
+ */
+export const LINK_EXTRACTOR_VERSION_TS = '2026-08-16T00:00:00Z';
+
 // ─── Entity references ──────────────────────────────────────────
 
 export interface EntityRef {

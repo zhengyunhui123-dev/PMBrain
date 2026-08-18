@@ -580,6 +580,23 @@ export interface Chunk {
  * an embedding come back, and we don't ship the (always-null on stale
  * rows) embedding bytes over the wire. See `embed --stale` egress fix.
  */
+/**
+ * A page that needs link/timeline extraction. Content is included so
+ * `extract --stale` can work without an N+1 getPage per row.
+ */
+export interface StalePageRow {
+  id: number;
+  slug: string;
+  source_id: string;
+  type: string;
+  title: string;
+  compiled_truth: string;
+  timeline: string;
+  frontmatter: Record<string, unknown>;
+  updated_at: Date;
+  updated_at_iso: string;
+}
+
 export interface StaleChunkRow {
   slug: string;
   chunk_index: number;

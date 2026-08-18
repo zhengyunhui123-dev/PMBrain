@@ -223,6 +223,7 @@ describe('Admin GUI update contract', () => {
 
   test('knowledge data UI exposes a three-day recycle bin without a top undo notice', () => {
     expect(consoleSource).toContain("['trash', '回收站']");
+    expect(consoleSource).toContain("['facts', '事实']");
     expect(consoleSource).toContain('移出的内容保留 3 天，之后自动清空');
     expect(consoleSource).toContain('restoreSelectedPage');
     expect(consoleSource).not.toContain('已移出知识库，可在本页撤销');

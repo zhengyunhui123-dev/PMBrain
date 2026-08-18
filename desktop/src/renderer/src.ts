@@ -5,7 +5,9 @@ import type {
   AdvancedModelTier,
   AdvancedModelWriteInput,
   CredentialKind,
-  DesktopCustomProvider,
+  DesktopCustomEndpoint,
+  DesktopCustomProviderCatalog,
+  DesktopCustomProviderSelection,
   DesktopKnowledgeSourceStatus,
   DesktopSystemSettingsPayload,
   DesktopSystemSettingsState,
@@ -36,11 +38,9 @@ let advancedPhaseOverrides: Partial<Record<AdvancedModelPhase, string>> = {};
 let loadedKnowledgeDirectory = '';
 let loadedKnowledgeSourceId = '';
 let knowledgeSourceStatusRequest = 0;
-type WorkbuddyAgentIntegrationStatus = Awaited<ReturnType<PMBrainDesktopApi['getWorkbuddyAgentIntegration']>>;
-let workbuddyAgentIntegration: WorkbuddyAgentIntegrationStatus | null = null;
-let workbuddyAgentIntegrationError = '';
-let workbuddyAgentIntegrationRequest = 0;
-let customProviderDraft: DesktopCustomProvider | null = null;
+const CUSTOM_ENDPOINT_PREFIX = 'custom-endpoint-';
+let customCatalog: DesktopCustomProviderCatalog = { chat: [], embedding: [] };
+let customSelection: DesktopCustomProviderSelection = {};
 let customProviderTarget: ModelKind | null = null;
 const providerModels: Record<'chat' | 'embedding', string[]> = { chat: [], embedding: [] };
 const previousProviderSelection: Record<'chat' | 'embedding', string> = { chat: '', embedding: '' };
@@ -226,8 +226,22 @@ function splitModelId(value?: string): { provider: string; model: string } {
   return { provider: value.slice(0, index), model: value.slice(index + 1) };
 }
 
+function isCustomEndpointId(value: string): boolean {
+  return value === 'custom-openai' || value.startsWith(CUSTOM_ENDPOINT_PREFIX);
+}
+
+function recipeProvider(provider: string): string {
+  return isCustomEndpointId(provider) ? 'custom-openai' : normalizeProviderForModel(provider);
+}
+
+function selectedCustomEndpoint(kind: ModelKind): DesktopCustomEndpoint | undefined {
+  const id = customSelection[kind];
+  return customCatalog[kind].find(item => item.id === id) ?? customCatalog[kind][0];
+}
+
 function normalizeProviderForModel(provider: string): string {
   const trimmed = provider.trim();
+  if (isCustomEndpointId(trimmed)) return 'custom-openai';
   return trimmed === 'zeroentropy' ? 'zeroentropyai' : trimmed;
 }
 
@@ -320,34 +334,124 @@ function setCustomProviderError(message = '', field?: HTMLInputElement): void {
   }
 }
 
-function renderCustomProvider(): void {
-  document.querySelectorAll<HTMLOptionElement>('option[value="custom-openai"]').forEach(option => {
-    option.textContent = customProviderDraft?.displayName || '自定义 OpenAI 接口';
-  });
+function syncCustomProviderOptions(kind: ModelKind): void {
+  const select = $<HTMLSelectElement>(`#${kind}-provider`);
+  const current = select.value;
+  for (const option of Array.from(select.options)) {
+    if (isCustomEndpointId(option.value)) option.remove();
+  }
+  for (const endpoint of customCatalog[kind]) {
+    const option = document.createElement('option');
+    option.value = endpoint.id;
+    option.textContent = endpoint.displayName;
+    select.append(option);
+  }
+  if (current && Array.from(select.options).some(option => option.value === current)) {
+    select.value = current;
+  }
+}
+
+function renderProviderDropdown(kind: ModelKind): void {
+  syncCustomProviderOptions(kind);
+  const select = $<HTMLSelectElement>(`#${kind}-provider`);
+  const ul = $<HTMLUListElement>(`#${kind}-provider-dropdown`);
+  ul.replaceChildren(...Array.from(select.options).map(option => {
+    const li = document.createElement('li');
+    li.dataset.value = option.value;
+    if (option.value === select.value) li.classList.add('selected');
+    const label = document.createElement('span');
+    label.textContent = option.textContent || option.value || (kind === 'chat' ? '请选择供应商' : '暂不启用向量化');
+    li.append(label);
+    if (option.value.startsWith(CUSTOM_ENDPOINT_PREFIX)) {
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'provider-delete';
+      remove.textContent = '×';
+      remove.setAttribute('aria-label', `删除自定义供应商 ${option.textContent || option.value}`);
+      remove.addEventListener('click', event => {
+        event.preventDefault();
+        event.stopPropagation();
+        deleteCustomEndpoint(kind, option.value);
+      });
+      li.append(remove);
+    }
+    li.addEventListener('click', () => {
+      applyProviderSelection(kind, option.value, option.value.startsWith(CUSTOM_ENDPOINT_PREFIX) ? false : true);
+      ul.hidden = true;
+    });
+    return li;
+  }));
+}
+
+function toggleProviderDropdown(kind: ModelKind): void {
+  const ul = $<HTMLUListElement>(`#${kind}-provider-dropdown`);
+  const opening = ul.hidden;
+  document.querySelectorAll<HTMLUListElement>('.provider-dropdown').forEach(dropdown => { dropdown.hidden = true; });
+  if (!opening) return;
+  renderProviderDropdown(kind);
+  ul.hidden = false;
+}
+
+function applyProviderSelection(kind: ModelKind, value: string, chooseDefault: boolean): void {
+  const select = $<HTMLSelectElement>(`#${kind}-provider`);
+  select.value = value;
+  previousProviderSelection[kind] = value;
+  if (isCustomEndpointId(value)) {
+    const endpoint = customCatalog[kind].find(item => item.id === value);
+    customSelection[kind] = endpoint?.id;
+    if (endpoint) {
+      $<HTMLInputElement>(`#${kind}-model-name`).value = endpoint.modelId;
+      $<HTMLInputElement>(`#${kind}-api-key`).value = endpoint.apiKey || '';
+    }
+  }
+  syncProviderKeyField(kind);
+  void refreshProviderModels(kind, chooseDefault);
+}
+
+function deleteCustomEndpoint(kind: ModelKind, id: string): void {
+  customCatalog = {
+    ...customCatalog,
+    [kind]: customCatalog[kind].filter(item => item.id !== id),
+  };
+  const select = $<HTMLSelectElement>(`#${kind}-provider`);
+  if (select.value === id || customSelection[kind] === id) {
+    customSelection = { ...customSelection, [kind]: undefined };
+    applyProviderSelection(kind, '', false);
+    $<HTMLInputElement>(`#${kind}-model-name`).value = '';
+    $<HTMLInputElement>(`#${kind}-api-key`).value = '';
+  }
+  renderProviderDropdown(kind);
+}
+
+function snapshotSelectedCustomEndpoints(): void {
+  for (const kind of ['chat', 'embedding'] as const) {
+    const provider = $<HTMLSelectElement>(`#${kind}-provider`).value;
+    if (!isCustomEndpointId(provider)) continue;
+    const endpoint = customCatalog[kind].find(item => item.id === provider);
+    if (!endpoint) continue;
+    endpoint.modelId = $<HTMLInputElement>(`#${kind}-model-name`).value.trim();
+    const apiKey = $<HTMLInputElement>(`#${kind}-api-key`).value.trim();
+    if (apiKey) endpoint.apiKey = apiKey;
+    else delete endpoint.apiKey;
+    customSelection[kind] = endpoint.id;
+  }
 }
 
 function openCustomProvider(target: ModelKind): void {
   customProviderTarget = target;
-  const provider = $<HTMLSelectElement>(`#${target}-provider`).value;
-  const currentModel = $<HTMLInputElement>(`#${target}-model-name`).value.trim();
-  const editingModel = provider === 'custom-openai' && Boolean(currentModel);
-  const targetBaseUrl = customProviderDraft?.baseUrls?.[target] || '';
-  ($<HTMLInputElement>('#custom-provider-name')).value = customProviderDraft?.displayName || '';
-  ($<HTMLInputElement>('#custom-provider-base-url')).value = targetBaseUrl;
-  ($<HTMLInputElement>('#custom-provider-model-id')).value = editingModel ? currentModel : '';
+  ($<HTMLInputElement>('#custom-provider-name')).value = '';
+  ($<HTMLInputElement>('#custom-provider-base-url')).value = '';
+  ($<HTMLInputElement>('#custom-provider-model-id')).value = '';
   const targetLabel = target === 'chat' ? '普通模型' : '向量模型';
   $('#custom-provider-base-url-label').textContent = `${targetLabel} Base URL`;
-  $('#custom-provider-title').textContent = `${editingModel ? '编辑' : '添加'}自定义${targetLabel}`;
+  $('#custom-provider-title').textContent = `添加自定义${targetLabel}`;
   $('#custom-provider-target-copy').textContent = target === 'chat'
     ? 'PMBrain 将通过该地址调用 OpenAI 兼容的对话接口。'
     : 'PMBrain 将通过该地址调用 OpenAI 兼容的向量接口。';
   setCustomProviderError();
   const dialog = $<HTMLDialogElement>('#custom-provider-dialog');
   dialog.showModal();
-  const focusTarget = !customProviderDraft?.displayName
-    ? '#custom-provider-name'
-    : !targetBaseUrl ? '#custom-provider-base-url' : '#custom-provider-model-id';
-  setTimeout(() => $<HTMLInputElement>(focusTarget).focus(), 0);
+  setTimeout(() => $<HTMLInputElement>('#custom-provider-name').focus(), 0);
 }
 
 function closeCustomProvider(): void {
@@ -391,22 +495,23 @@ function confirmCustomProvider(): void {
   }
   const target = customProviderTarget;
   const normalizedBaseUrl = rawBaseUrl.replace(/\/+$/, '');
-  customProviderDraft = {
-    id: 'custom-openai',
+  const endpoint: DesktopCustomEndpoint = {
+    id: `${CUSTOM_ENDPOINT_PREFIX}${target}-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`,
     displayName,
-    baseUrls: { ...customProviderDraft?.baseUrls, [target]: normalizedBaseUrl },
+    baseUrl: normalizedBaseUrl,
+    modelId,
   };
+  customCatalog = {
+    ...customCatalog,
+    [target]: [...customCatalog[target], endpoint],
+  };
+  customSelection = { ...customSelection, [target]: endpoint.id };
   customProviderTarget = null;
-  renderCustomProvider();
   $<HTMLDialogElement>('#custom-provider-dialog').close();
-  const select = $<HTMLSelectElement>(`#${target}-provider`);
-  select.value = 'custom-openai';
-  previousProviderSelection[target] = 'custom-openai';
-  $<HTMLInputElement>(`#${target}-model-name`).value = modelId;
+  applyProviderSelection(target, endpoint.id, false);
   providerModels[target] = [modelId];
   renderModelDropdown(target);
-  syncProviderKeyField(target);
-  void refreshProviderModels(target, false);
+  renderProviderDropdown(target);
 }
 
 function renderModelDropdown(kind: 'chat' | 'embedding'): void {
@@ -439,10 +544,11 @@ async function refreshProviderModels(kind: ModelKind, chooseDefault: boolean): P
     return;
   }
 
-  if (provider === 'custom-openai') {
-    if (chooseDefault) input.value = '';
-    providerModels[kind] = input.value.trim() ? [input.value.trim()] : [];
-    const baseUrl = customProviderDraft?.baseUrls?.[kind];
+  if (isCustomEndpointId(provider)) {
+    const endpoint = customCatalog[kind].find(item => item.id === provider) ?? selectedCustomEndpoint(kind);
+    if (chooseDefault) input.value = endpoint?.modelId || '';
+    providerModels[kind] = input.value.trim() ? [input.value.trim()] : (endpoint?.modelId ? [endpoint.modelId] : []);
+    const baseUrl = endpoint?.baseUrl;
     status.textContent = baseUrl
       ? `接口：${baseUrl}。请输入该接口实际提供的模型 ID。`
       : '请先添加自定义接口并填写 Base URL。';
@@ -707,188 +813,9 @@ function renderService(service: SidecarState | null, port?: number): void {
   }
 }
 
-function appendWorkbuddyCheck(
-  container: HTMLElement,
-  label: string,
-  value: string,
-  state: 'ready' | 'warning' | 'checking',
-): void {
-  const item = document.createElement('div');
-  item.className = `workbuddy-check ${state}`;
-  const name = document.createElement('small');
-  name.textContent = label;
-  const result = document.createElement('b');
-  result.textContent = value;
-  item.append(name, result);
-  container.append(item);
-}
-
-function workbuddyStateCopy(status: WorkbuddyAgentIntegrationStatus | null): { badge: string; message: string } {
-  if (!status) {
-    return {
-      badge: workbuddyAgentIntegrationError ? '检查失败' : '正在检查',
-      message: workbuddyAgentIntegrationError
-        ? `检查失败：${workbuddyAgentIntegrationError}`
-        : '正在确认 WorkBuddy 实际读取的 Agent Rules、Skills 与 MCP 状态。',
-    };
-  }
-  if (!status.workbuddyDetected) {
-    return {
-      badge: '未检测到客户端',
-      message: status.message || '未检测到受支持的 WorkBuddy 版本，请安装或启动 WorkBuddy 后重新检查。',
-    };
-  }
-  const copy: Record<WorkbuddyAgentIntegrationStatus['state'], { badge: string; message: string }> = {
-    not_installed: {
-      badge: '未深度接入',
-      message: '选择工作目录后，安装 PMBrain 官方 Agent Rules 与 Skills，并验证 MCP。',
-    },
-    installed: {
-      badge: '已深度接入',
-      message: 'Agent Rules、PMBrain Skills 与 MCP 已完成检查。',
-    },
-    update_available: {
-      badge: '有新版本',
-      message: '官方 Agent Pack 有新版本；更新只处理 PMBrain 管理的内容。',
-    },
-    modified: {
-      badge: '检测到修改',
-      message: 'PMBrain 管理的内容已有本地修改，不会静默覆盖。',
-    },
-    incomplete: {
-      badge: '接入不完整',
-      message: '部分检查未通过，请根据下面的状态重新接入。',
-    },
-  };
-  return status.message ? { ...copy[status.state], message: status.message } : copy[status.state];
-}
-
-function workbuddyVersionLabel(status: WorkbuddyAgentIntegrationStatus | null): string {
-  if (!status) return '正在读取';
-  const label = (version: string) => version.startsWith('v') ? version : `v${version}`;
-  if (!status.installedPackVersion) return `可安装 ${label(status.packVersion)}`;
-  return status.installedPackVersion === status.packVersion
-    ? label(status.installedPackVersion)
-    : `${label(status.installedPackVersion)} → ${label(status.packVersion)}`;
-}
-
-function applyWorkbuddyAgentIntegrationStatus(status: WorkbuddyAgentIntegrationStatus): void {
-  workbuddyAgentIntegration = status;
-  workbuddyAgentIntegrationError = '';
-  if (state) renderIntegrations(state.integrations);
-}
-
-function createWorkbuddyAction(
-  label: string,
-  className: string,
-  action: (button: HTMLButtonElement) => void,
-): HTMLButtonElement {
-  const button = document.createElement('button');
-  button.type = 'button';
-  button.className = className;
-  const text = document.createElement('span');
-  text.textContent = label;
-  const spinner = document.createElement('i');
-  button.append(text, spinner);
-  button.addEventListener('click', () => action(button));
-  return button;
-}
-
-function renderWorkbuddyIntegration(item: IntegrationInfo): HTMLElement {
-  const status = workbuddyAgentIntegration;
-  const copy = workbuddyStateCopy(status);
-  const article = document.createElement('article');
-  article.className = 'integration-card workbuddy-integration-card';
-
-  const badge = document.createElement('span');
-  const healthy = status?.state === 'installed' && status.workbuddyDetected && status.mcpConnected;
-  badge.className = healthy ? 'configured badge' : status ? 'attention badge' : 'badge';
-  badge.textContent = copy.badge;
-
-  const title = document.createElement('h3');
-  title.textContent = 'WorkBuddy 深度接入';
-  const summary = document.createElement('p');
-  const warning = status && (status.state === 'modified' || status.state === 'incomplete' || !status.workbuddyDetected);
-  summary.className = warning
-    ? 'workbuddy-summary warning'
-    : 'workbuddy-summary';
-  summary.textContent = copy.message;
-
-  const checks = document.createElement('div');
-  checks.className = 'workbuddy-checks';
-  if (!status) {
-    appendWorkbuddyCheck(checks, 'MCP 接入', item.configured ? '已配置，正在验证' : '正在检查', 'checking');
-    appendWorkbuddyCheck(checks, 'Agent Rules', '正在检查', 'checking');
-    appendWorkbuddyCheck(checks, 'PMBrain Skills', '正在检查', 'checking');
-  } else {
-    const mcpReady = status.mcpConfigured && status.mcpConnected;
-    appendWorkbuddyCheck(
-      checks,
-      'MCP 接入',
-      mcpReady ? '✓ 已连接' : status.mcpConfigured ? '⚠ 已配置，尚未连通' : '⚠ 未配置',
-      mcpReady ? 'ready' : 'warning',
-    );
-    appendWorkbuddyCheck(
-      checks,
-      'Agent Rules',
-      status.rulesInstalled ? '✓ 已安装' : '⚠ 未安装',
-      status.rulesInstalled ? 'ready' : 'warning',
-    );
-    const skillsReady = status.skillsTotal > 0 && status.skillsInstalled === status.skillsTotal;
-    appendWorkbuddyCheck(
-      checks,
-      'PMBrain Skills',
-      skillsReady
-        ? `✓ ${status.skillsInstalled} 个`
-        : status.skillsInstalled > 0 ? `⚠ ${status.skillsInstalled}/${status.skillsTotal} 个` : '⚠ 未安装',
-      skillsReady ? 'ready' : 'warning',
-    );
-  }
-
-  const metadata = document.createElement('div');
-  metadata.className = 'workbuddy-meta';
-  const workspace = document.createElement('div');
-  const workspaceLabel = document.createElement('small');
-  workspaceLabel.textContent = '安装目录';
-  const workspacePath = document.createElement('code');
-  workspacePath.textContent = status?.workspace || '尚未选择工作目录';
-  workspace.append(workspaceLabel, workspacePath);
-  const version = document.createElement('div');
-  const versionLabel = document.createElement('small');
-  versionLabel.textContent = 'Agent Pack 版本';
-  const versionValue = document.createElement('b');
-  versionValue.textContent = workbuddyVersionLabel(status);
-  version.append(versionLabel, versionValue);
-  metadata.append(workspace, version);
-
-  const scope = document.createElement('small');
-  scope.className = 'workbuddy-scope-note';
-  scope.textContent = 'Agent Rules 与 PMBrain Skills 仅对所选工作目录生效。安装或更新后，请重启 WorkBuddy 并新建会话。';
-
-  const actions = document.createElement('div');
-  actions.className = 'workbuddy-actions';
-  if (status && status.workbuddyDetected && status.state === 'not_installed') {
-    actions.append(createWorkbuddyAction('深度接入', 'solid', button => void installWorkbuddyIntegration(button)));
-  }
-  const managedContentUnmodified = !status || status.state !== 'modified';
-  if (status?.state === 'incomplete' && managedContentUnmodified) {
-    actions.append(createWorkbuddyAction('修复', 'solid', button => void updateWorkbuddyIntegration(button, '修复')));
-  } else if (status?.state === 'update_available' && managedContentUnmodified) {
-    actions.append(createWorkbuddyAction('更新', 'solid', button => void updateWorkbuddyIntegration(button, '更新')));
-  }
-  actions.append(createWorkbuddyAction('重新检查', '', button => void refreshWorkbuddyAgentIntegration(true, button)));
-  if (status?.workspace && status.state !== 'not_installed') {
-    actions.append(createWorkbuddyAction('移除深度接入', 'workbuddy-remove', button => void removeWorkbuddyIntegration(button)));
-  }
-
-  article.append(badge, title, summary, checks, metadata, scope, actions);
-  return article;
-}
-
 function renderIntegrations(integrations: IntegrationInfo[]): void {
   const grid = $('#integration-grid');
   grid.replaceChildren(...integrations.map((item) => {
-    if (item.id === 'workbuddy') return renderWorkbuddyIntegration(item);
     const article = document.createElement('article');
     article.className = 'integration-card';
     const badge = document.createElement('span');
@@ -926,7 +853,17 @@ function renderIntegrations(integrations: IntegrationInfo[]): void {
       button.textContent = item.id === 'claude' ? '生成接入命令' : '生成接入配置';
     }
     button.addEventListener('click', () => void configure(item.id, button));
-    article.append(badge, title, path, note, button);
+    if (item.id === 'workbuddy' && item.configured) {
+      const actions = document.createElement('div');
+      actions.className = 'integration-actions';
+      const agentButton = document.createElement('button');
+      agentButton.textContent = 'Agent写入';
+      agentButton.addEventListener('click', () => void writeWorkbuddyUserAgent(agentButton));
+      actions.append(button, agentButton);
+      article.append(badge, title, path, note, actions);
+    } else {
+      article.append(badge, title, path, note, button);
+    }
     return article;
   }));
 }
@@ -1117,8 +1054,13 @@ async function saveSystemSettings(): Promise<void> {
 function populate(next: DesktopSetupState): void {
   state = next;
   const { setup } = next;
-  customProviderDraft = setup.current.customProvider ? { ...setup.current.customProvider } : null;
-  renderCustomProvider();
+  customCatalog = {
+    chat: [...(setup.current.customProviders?.chat ?? [])],
+    embedding: [...(setup.current.customProviders?.embedding ?? [])],
+  };
+  customSelection = { ...(setup.current.customSelection ?? {}) };
+  renderProviderDropdown('chat');
+  renderProviderDropdown('embedding');
   const activePanel = (document.querySelector<HTMLElement>('.panel.active')?.id.replace('panel-', '') || 'basic') as Panel;
   switchPanel(activePanel);
   $('#existing-config').hidden = setup.needsSetup;
@@ -1137,9 +1079,15 @@ function populate(next: DesktopSetupState): void {
   void refreshKnowledgeSourceStatus(loadedKnowledgeDirectory, false);
   const chat = splitModelId(setup.current.chatModel);
   const embedding = splitModelId(setup.current.embeddingModel);
-  ($<HTMLSelectElement>('#chat-provider')).value = chat.provider;
+  const chatProviderValue = chat.provider === 'custom-openai'
+    ? (customSelection.chat || customCatalog.chat.find(item => item.modelId === chat.model)?.id || customCatalog.chat[0]?.id || '')
+    : chat.provider;
+  const embeddingProviderValue = embedding.provider === 'custom-openai'
+    ? (customSelection.embedding || customCatalog.embedding.find(item => item.modelId === embedding.model)?.id || customCatalog.embedding[0]?.id || '')
+    : embedding.provider === 'zeroentropyai' ? 'zeroentropy' : embedding.provider;
+  ($<HTMLSelectElement>('#chat-provider')).value = chatProviderValue;
   ($<HTMLInputElement>('#chat-model-name')).value = chat.model;
-  ($<HTMLSelectElement>('#embedding-provider')).value = embedding.provider === 'zeroentropyai' ? 'zeroentropy' : embedding.provider;
+  ($<HTMLSelectElement>('#embedding-provider')).value = embeddingProviderValue;
   previousProviderSelection.chat = ($<HTMLSelectElement>('#chat-provider')).value;
   previousProviderSelection.embedding = ($<HTMLSelectElement>('#embedding-provider')).value;
   ($<HTMLInputElement>('#embedding-model-name')).value = embedding.model;
@@ -1173,7 +1121,6 @@ function populate(next: DesktopSetupState): void {
     : '不会安装或新建 Docker；会安全启动已安装的 Docker Desktop 和匹配的现有容器。';
   renderEngine();
   renderIntegrations(next.integrations);
-  void refreshWorkbuddyAgentIntegration(false);
   renderService(null, next.port);
   $('#save-setup').querySelector('span')!.textContent = saveButtonText();
   updateSystemSettingsAvailability();
@@ -1409,10 +1356,11 @@ async function save(): Promise<void> {
     return;
   }
   const embeddingProvider = ($<HTMLSelectElement>('#embedding-provider')).value;
-  const missingCustomTarget = chatProvider === 'custom-openai' && !customProviderDraft?.baseUrls?.chat
-    ? 'chat'
-    : embeddingProvider === 'custom-openai' && !customProviderDraft?.baseUrls?.embedding
-      ? 'embedding'
+  snapshotSelectedCustomEndpoints();
+  const missingCustomTarget = isCustomEndpointId(chatProvider) && !selectedCustomEndpoint('chat')?.baseUrl
+    ? 'chat' as const
+    : isCustomEndpointId(embeddingProvider) && !selectedCustomEndpoint('embedding')?.baseUrl
+      ? 'embedding' as const
       : null;
   if (missingCustomTarget) {
     setNotice('error', '请先添加自定义接口并填写 Base URL。');
@@ -1435,7 +1383,7 @@ async function save(): Promise<void> {
   let confirmEmbeddingRebuild = false;
   // 检测向量化模型是否变更（非首次配置）
   if (!state?.setup?.needsSetup && state?.setup?.current?.embeddingModel) {
-    const newEmbeddingModel = composeModelId(embeddingProvider, embeddingModelName);
+    const newEmbeddingModel = composeModelId(recipeProvider(embeddingProvider), embeddingModelName);
     const oldEmbeddingModel = state.setup.current.embeddingModel;
     if (newEmbeddingModel && oldEmbeddingModel && newEmbeddingModel !== oldEmbeddingModel) {
       if (!confirm(
@@ -1451,14 +1399,14 @@ async function save(): Promise<void> {
   }
 
   const keys: SetupPayload['keys'] = {};
-  const chatModel = composeModelId(chatProvider, chatModelName);
-  const embeddingModel = composeModelId(embeddingProvider, embeddingModelName);
+  const chatModel = composeModelId(recipeProvider(chatProvider), chatModelName);
+  const embeddingModel = composeModelId(recipeProvider(embeddingProvider), embeddingModelName);
   const chatKey = providerKeyId(chatProvider, 'chat');
   const embeddingKey = providerKeyId(embeddingProvider, 'embedding');
   // 需要 Key 的供应商才保存 Key
   if (chatKey && chatKey !== '__none__') {
     const chatKeyValue = ($<HTMLInputElement>('#chat-api-key')).value.trim();
-    if (!chatKeyValue && chatProvider !== 'custom-openai') {
+    if (!chatKeyValue && !isCustomEndpointId(chatProvider)) {
       setNotice('error', `供应商 ${chatProvider} 需要填写 API Key`);
       return;
     }
@@ -1466,7 +1414,7 @@ async function save(): Promise<void> {
   }
   if (embeddingProvider && embeddingKey && embeddingKey !== '__none__') {
     const embeddingKeyValue = ($<HTMLInputElement>('#embedding-api-key')).value.trim();
-    if (!embeddingKeyValue && embeddingProvider !== 'custom-openai') {
+    if (!embeddingKeyValue && !isCustomEndpointId(embeddingProvider)) {
       setNotice('error', `供应商 ${embeddingProvider} 需要填写 API Key`);
       return;
     }
@@ -1488,7 +1436,8 @@ async function save(): Promise<void> {
       chatModel,
       ...(embeddingModel ? { embeddingModel } : {}),
     },
-    customProvider: customProviderDraft ?? undefined,
+    customProviders: customCatalog,
+    customSelection,
     keys,
   };
   const firstSetup = state?.setup.needsSetup ?? true;
@@ -1523,82 +1472,17 @@ function selectedCredential(): CredentialKind {
   return (document.querySelector<HTMLInputElement>('input[name="credential"]:checked')?.value ?? 'api_key') as CredentialKind;
 }
 
-async function refreshWorkbuddyAgentIntegration(
-  reportResult = false,
-  button?: HTMLButtonElement,
-): Promise<boolean> {
-  const request = ++workbuddyAgentIntegrationRequest;
-  if (reportResult) clearNotices();
-  if (button) setBusy(button, true, '正在检查…');
-  try {
-    const status = await window.pmbrainDesktop.getWorkbuddyAgentIntegration();
-    if (request !== workbuddyAgentIntegrationRequest) return false;
-    applyWorkbuddyAgentIntegrationStatus(status);
-    if (reportResult) setNotice('success', 'WorkBuddy 深度接入状态已重新检查，请按卡片中的检查结果处理。');
-    return true;
-  } catch (error) {
-    if (request !== workbuddyAgentIntegrationRequest) return false;
-    workbuddyAgentIntegration = null;
-    workbuddyAgentIntegrationError = error instanceof Error ? error.message : String(error);
-    if (state) renderIntegrations(state.integrations);
-    if (reportResult) setNotice('error', `WorkBuddy 检查失败：${workbuddyAgentIntegrationError}`);
-    return false;
-  } finally {
-    if (button) setBusy(button, false, '重新检查');
-  }
-}
-
-async function installWorkbuddyIntegration(button: HTMLButtonElement): Promise<void> {
+async function writeWorkbuddyUserAgent(button: HTMLButtonElement): Promise<void> {
   clearNotices();
-  let workspace: string | null;
+  setBusy(button, true, '正在写入…');
   try {
-    workspace = await window.pmbrainDesktop.chooseDirectory(workbuddyAgentIntegration?.workspace ?? undefined);
-  } catch (error) {
-    setNotice('error', error instanceof Error ? error.message : String(error));
-    return;
-  }
-  if (!workspace) return;
-  setBusy(button, true, '正在接入…');
-  try {
-    const status = await window.pmbrainDesktop.installWorkbuddyAgent(workspace);
-    applyWorkbuddyAgentIntegrationStatus(status);
-    setNotice('success', 'WorkBuddy 深度接入已完成。请重启 WorkBuddy 并新建会话后使用。');
+    const result = await window.pmbrainDesktop.writeWorkbuddyUserAgent();
+    const extra = result.backedUp.length > 0 ? ` 已备份 ${result.backedUp.length} 个你改过的同名文件。` : '';
+    setNotice('success', `已写入用户级 PMBrain 子代理。重启 WorkBuddy 后可用 @pmbrain 或 /pmbrain 调用，并路由已接入的 PMBrain MCP 工具。${extra}`);
   } catch (error) {
     setNotice('error', error instanceof Error ? error.message : String(error));
   } finally {
-    setBusy(button, false, '深度接入');
-  }
-}
-
-async function updateWorkbuddyIntegration(button: HTMLButtonElement, idleLabel: '更新' | '修复'): Promise<void> {
-  clearNotices();
-  setBusy(button, true, '正在更新…');
-  try {
-    const status = await window.pmbrainDesktop.updateWorkbuddyAgent();
-    applyWorkbuddyAgentIntegrationStatus(status);
-    setNotice('success', 'WorkBuddy Agent Pack 已更新。请重启 WorkBuddy 并新建会话后使用。');
-  } catch (error) {
-    setNotice('error', error instanceof Error ? error.message : String(error));
-  } finally {
-    setBusy(button, false, idleLabel);
-  }
-}
-
-async function removeWorkbuddyIntegration(button: HTMLButtonElement): Promise<void> {
-  const confirmed = confirm(
-    '只移除 PMBrain 安装的 WorkBuddy Skills 和 Agent Rules 文件；不会删除你自己的 Rules 或 Skills。\n\n确认移除深度接入？',
-  );
-  if (!confirmed) return;
-  clearNotices();
-  setBusy(button, true, '正在移除…');
-  try {
-    const status = await window.pmbrainDesktop.removeWorkbuddyAgent();
-    applyWorkbuddyAgentIntegrationStatus(status);
-    setNotice('success', status.message || '已移除 PMBrain 管理的 WorkBuddy 深度接入内容；你的 Rules 与 Skills 未被删除。');
-  } catch (error) {
-    setNotice('error', error instanceof Error ? error.message : String(error));
-  } finally {
-    setBusy(button, false, '移除深度接入');
+    setBusy(button, false, 'Agent写入');
   }
 }
 
@@ -1650,16 +1534,19 @@ document.querySelectorAll<HTMLInputElement>('input[name="engine"]').forEach((inp
 document.querySelectorAll<HTMLInputElement>('input[name="network-mode"]').forEach((input) => input.addEventListener('change', renderNetworkMode));
 $<HTMLSelectElement>('#shared-address').addEventListener('change', renderSelectedAddressNote);
 (['chat', 'embedding'] as const).forEach(kind => {
-  $<HTMLSelectElement>(`#${kind}-provider`).addEventListener('change', () => {
-    const select = $<HTMLSelectElement>(`#${kind}-provider`);
-    if (select.value === 'custom-openai' && !customProviderDraft?.baseUrls?.[kind]) {
-      select.value = previousProviderSelection[kind];
-      openCustomProvider(kind);
-      return;
+  const select = $<HTMLSelectElement>(`#${kind}-provider`);
+  select.addEventListener('mousedown', event => {
+    event.preventDefault();
+    toggleProviderDropdown(kind);
+  });
+  select.addEventListener('keydown', event => {
+    if (event.key === 'Enter' || event.key === ' ' || event.key === 'ArrowDown') {
+      event.preventDefault();
+      toggleProviderDropdown(kind);
     }
-    previousProviderSelection[kind] = select.value;
-    syncProviderKeyField(kind);
-    void refreshProviderModels(kind, true);
+  });
+  select.addEventListener('change', () => {
+    applyProviderSelection(kind, select.value, !isCustomEndpointId(select.value));
   });
 });
 $<HTMLButtonElement>('#add-custom-chat-model').addEventListener('click', () => openCustomProvider('chat'));
@@ -1717,10 +1604,14 @@ document.addEventListener('click', e => {
   if (!target.closest('.model-picker') && !target.closest('.model-dropdown')) {
     document.querySelectorAll<HTMLUListElement>('.model-dropdown').forEach(dropdown => { dropdown.hidden = true; });
   }
+  if (!target.closest('.provider-picker')) {
+    document.querySelectorAll<HTMLUListElement>('.provider-dropdown').forEach(dropdown => { dropdown.hidden = true; });
+  }
 });
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape') {
     document.querySelectorAll<HTMLUListElement>('.model-dropdown').forEach(dropdown => { dropdown.hidden = true; });
+    document.querySelectorAll<HTMLUListElement>('.provider-dropdown').forEach(dropdown => { dropdown.hidden = true; });
   }
 });
 document.querySelectorAll<HTMLButtonElement>('.rail-item').forEach((button) => button.addEventListener('click', () => {

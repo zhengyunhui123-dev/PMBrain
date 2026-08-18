@@ -1,5 +1,5 @@
 import { app, type BrowserWindow } from 'electron';
-import { ensureBootstrapToken, getDatabaseRuntimeConfig, getSetupInfo, markDesktopMigration } from '../config-manager.js';
+import { ensureBootstrapToken, getDatabaseRuntimeConfig, getSetupInfo, markDesktopMigration, needsDesktopMigration } from '../config-manager.js';
 import type { CliRuntime } from '../cli-runner.js';
 import { findAvailablePort } from '../port-manager.js';
 import { precheckPgliteLock } from '../pglite-lock-precheck.js';
@@ -21,6 +21,7 @@ export interface SidecarControllerDependencies {
   ensureRuntimeReady: () => Promise<void>;
   prepareConfiguredDatabase: () => Promise<void>;
   migrateConfiguredInstallation: () => Promise<boolean>;
+  reconcileConfiguredEmbeddingIndex: () => Promise<void>;
   pendingPgliteBackupPath: () => string | null;
   reconcileLan: () => Promise<unknown>;
   stopLan: () => Promise<void>;
@@ -177,21 +178,16 @@ export class SidecarController {
     const pending = this.queueTransition(async () => {
       if (this.dependencies.getSetupInProgress()) throw new Error('PMBrain 正在应用基础配置，请等待完成。');
       await this.dependencies.ensureRuntimeReady();
+      await this.stopNow();
       await this.dependencies.prepareConfiguredDatabase();
-      const active = this.manager;
-      if (!active) {
-        await this.startOnce(false);
-        const started = this.manager;
-        if (!started) throw new Error('PMBrain 本地服务未能启动。');
-        return started.createAdminLink();
+      const retrySetup = getSetupInfo();
+      if (!(retrySetup.current.engine === 'pglite' && needsDesktopMigration(app.getVersion()))) {
+        await this.dependencies.reconcileConfiguredEmbeddingIndex();
       }
-      const url = await active.restart();
-      if (this.manager !== active) {
-        await active.stop();
-        throw new Error('PMBrain 本地服务在重试过程中已被替换。');
-      }
-      await this.dependencies.reconcileLan();
-      return url;
+      await this.startOnce(false);
+      const started = this.manager;
+      if (!started) throw new Error('PMBrain 本地服务未能启动。');
+      return started.createAdminLink();
     });
     this.retryPromise = pending;
     try {
@@ -254,6 +250,12 @@ export class SidecarController {
       await this.dependencies.prepareConfiguredDatabase();
       const setup = getSetupInfo();
       const migrationRequired = await this.dependencies.migrateConfiguredInstallation();
+      // PGLite migrations are intentionally performed by the sidecar's sole
+      // database owner. Inspect only after that migration has completed on a
+      // later startup; never let the preflight CLI open a pending upgrade DB.
+      if (!(migrationRequired && setup.current.engine === 'pglite')) {
+        await this.dependencies.reconcileConfiguredEmbeddingIndex();
+      }
       if (migrationRequired && setup.current.engine !== 'pglite') markDesktopMigration(app.getVersion());
 
       // Upgrade cold-backup holds an exclusive PGLite lock. Give it a short

@@ -15,6 +15,7 @@ import { getSourceGitStatus, isSourceGitRepository } from '../core/source-git.ts
 import { ALL_PHASES } from '../core/cycle.ts';
 import { getProviderStatus, listRuns } from './natural-lang/index.ts';
 import { inspectAdminSupervisorStatus } from './admin-supervisor.ts';
+import { knowledgePageViewTypes } from '../../shared/knowledge-views.ts';
 
 export async function getSupervisorStatus() {
   return inspectAdminSupervisorStatus();
@@ -26,6 +27,35 @@ export async function getSupervisorStatus() {
 
 export * from './natural-lang/index.ts';
 export * from './admin-knowledge-graph.ts';
+
+function asFiniteNumber(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'bigint') {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : null;
+  }
+  if (typeof value === 'string' && value.trim() !== '') {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
+}
+
+function asBool(value: unknown): boolean {
+  return value === true || value === 't' || value === 'true' || value === 1 || value === '1';
+}
+
+/** Postgres.js returns BIGSERIAL as string; PGLite may return t/f for booleans. */
+export function normalizeAdminFactRow<T extends Record<string, unknown>>(row: T): T {
+  const id = asFiniteNumber(row.id);
+  const confidence = row.confidence == null ? undefined : asFiniteNumber(row.confidence);
+  return {
+    ...row,
+    id: id == null ? row.id : Math.trunc(id),
+    embedded: asBool(row.embedded),
+    ...(confidence !== undefined ? { confidence } : {}),
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Dashboard / knowledge-base browsing
@@ -69,12 +99,15 @@ export async function getAdminBrainOverview(
     );
     let gitRepo = false;
     let gitHasChanges: boolean | null = false;
+    let lastGitCommitAt: string | null = null;
     if (source.local_path) {
       gitRepo = isSourceGitRepository(source.local_path);
       gitHasChanges = gitRepo ? null : false;
       if (gitRepo && options.inspectSourceGit) {
         try {
-          gitHasChanges = getSourceGitStatus(source.local_path).hasChanges;
+          const gitStatus = getSourceGitStatus(source.local_path);
+          gitHasChanges = gitStatus.hasChanges;
+          lastGitCommitAt = gitStatus.lastCommitAt;
         } catch {
           // Keep the action available when Git status cannot be inspected;
           // the existing commit path will return the actionable native error.
@@ -91,6 +124,7 @@ export async function getAdminBrainOverview(
       federated: isSourceFederated(source.config),
       page_count: count?.page_count ?? 0,
       last_sync_at: source.last_sync_at ? new Date(source.last_sync_at).toISOString() : null,
+      last_git_commit_at: lastGitCommitAt,
       archived: source.archived === true,
       archived_at: archive?.archived_at ?? null,
       archive_expires_at: archive?.archive_expires_at ?? null,
@@ -104,6 +138,12 @@ export async function getAdminBrainOverview(
     `SELECT COUNT(*)::int AS pending
        FROM content_chunks
       WHERE embedding IS NULL`,
+  );
+  const factCounts = await optionalOne<{ fact_count: number; active_fact_count: number }>(
+    engine,
+    `SELECT COUNT(*)::int AS fact_count,
+            COUNT(*) FILTER (WHERE expired_at IS NULL)::int AS active_fact_count
+       FROM facts`,
   );
 
   const embedded = stats.embedded_count ?? 0;
@@ -122,7 +162,11 @@ export async function getAdminBrainOverview(
     embedding_model: config?.embedding_model ?? null,
     embedding_dimensions: config?.embedding_dimensions ?? null,
     expansion_model: config?.expansion_model ?? null,
-    stats,
+    stats: {
+      ...stats,
+      fact_count: factCounts?.fact_count ?? 0,
+      active_fact_count: factCounts?.active_fact_count ?? 0,
+    },
     embedding_coverage: coverage,
     pending_embeddings: pendingEmbed?.pending ?? Math.max(0, chunks - embedded),
     recent_write_at: recentWrite?.updated_at ?? null,
@@ -161,12 +205,7 @@ export async function listAdminBrainPages(
     params.push(query.type);
     filters.push(`p.type = $${params.length}`);
   }
-  const viewTypes: Record<string, string[]> = {
-    materials: ['material', 'reference', 'source', 'conversation', 'meeting', 'note', 'cover'],
-    structured: ['atom', 'fact', 'concept'],
-    insights: ['take', 'original', 'originals', 'reflection', 'pattern'],
-  };
-  const selectedViewTypes = query.view ? viewTypes[query.view] : undefined;
+  const selectedViewTypes = knowledgePageViewTypes(query.view);
   if (selectedViewTypes) {
     const placeholders = selectedViewTypes.map(value => {
       params.push(value);
@@ -237,6 +276,127 @@ export async function listAdminBrainPages(
   };
 }
 
+export async function listAdminBrainFacts(
+  engine: BrainEngine,
+  query: { source?: string; type?: string; q?: string; embedded?: string; page?: string; limit?: string; includeExpired?: string },
+) {
+  const page = Math.max(1, Number.parseInt(query.page ?? '1', 10) || 1);
+  const requestedLimit = Number.parseInt(query.limit ?? '10', 10) || 10;
+  const limit = [10, 20, 40].includes(requestedLimit) ? requestedLimit : 10;
+  const offset = (page - 1) * limit;
+  const includeExpired = query.includeExpired === '1' || query.includeExpired === 'true';
+  const filters: string[] = includeExpired ? [] : ['f.expired_at IS NULL'];
+  const params: (string | number)[] = [];
+
+  if (query.source && query.source !== 'all') {
+    params.push(query.source);
+    filters.push(`f.source_id = $${params.length}`);
+  }
+  if (query.type && query.type !== 'all') {
+    params.push(query.type);
+    filters.push(`f.kind = $${params.length}`);
+  }
+  if (query.q) {
+    params.push(`%${query.q}%`);
+    filters.push(`(f.fact ILIKE $${params.length} OR COALESCE(f.entity_slug, '') ILIKE $${params.length} OR COALESCE(f.source, '') ILIKE $${params.length})`);
+  }
+  if (query.embedded === 'yes') {
+    filters.push(`f.embedding IS NOT NULL`);
+  } else if (query.embedded === 'no') {
+    filters.push(`f.embedding IS NULL`);
+  }
+
+  const where = filters.length > 0 ? `WHERE ${filters.join(' AND ')}` : '';
+  const rows = await engine.executeRaw<{
+    id: number;
+    fact: string;
+    kind: string;
+    source_id: string;
+    entity_slug: string | null;
+    visibility: string;
+    notability: string;
+    source: string;
+    source_markdown_slug: string | null;
+    event_type: string | null;
+    confidence: number;
+    embedded: boolean;
+    expired_at: string | null;
+    created_at: string;
+    updated_at: string;
+  }>(
+    `SELECT f.id,
+            f.fact,
+            f.kind,
+            f.source_id,
+            f.entity_slug,
+            f.visibility,
+            f.notability,
+            f.source,
+            f.source_markdown_slug,
+            f.event_type,
+            f.confidence,
+            (f.embedding IS NOT NULL) AS embedded,
+            f.expired_at::text AS expired_at,
+            f.created_at::text AS created_at,
+            COALESCE(f.embedded_at, f.created_at)::text AS updated_at
+       FROM facts f
+       ${where}
+      ORDER BY f.created_at DESC, f.id DESC
+      LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+    [...params, limit, offset],
+  );
+  const [count] = await engine.executeRaw<{ total: number }>(
+    `SELECT COUNT(*)::int AS total FROM facts f ${where}`,
+    params,
+  );
+
+  const total = asFiniteNumber(count?.total) ?? 0;
+  return {
+    rows: rows.map(row => normalizeAdminFactRow(row as Record<string, unknown>)) as typeof rows,
+    total,
+    page,
+    limit,
+    pages: Math.max(1, Math.ceil(total / limit)),
+  };
+}
+
+export async function getAdminBrainFact(engine: BrainEngine, id: number) {
+  const rows = await engine.executeRaw<{
+    id: number;
+    fact: string;
+    kind: string;
+    source_id: string;
+    entity_slug: string | null;
+    visibility: string;
+    notability: string;
+    source: string;
+    source_markdown_slug: string | null;
+    source_session: string | null;
+    event_type: string | null;
+    confidence: number;
+    context: string | null;
+    embedded: boolean;
+    valid_from: string;
+    valid_until: string | null;
+    expired_at: string | null;
+    created_at: string;
+  }>(
+    `SELECT id, fact, kind, source_id, entity_slug, visibility, notability, source,
+            source_markdown_slug, source_session, event_type, confidence, context,
+            (embedding IS NOT NULL) AS embedded,
+            valid_from::text AS valid_from,
+            valid_until::text AS valid_until,
+            expired_at::text AS expired_at,
+            created_at::text AS created_at
+       FROM facts
+      WHERE id = $1
+      LIMIT 1`,
+    [id],
+  );
+  const row = rows[0];
+  return row ? normalizeAdminFactRow(row as Record<string, unknown>) as typeof row : null;
+}
+
 export async function getAdminBrainPageDetail(engine: BrainEngine, sourceId: string, slug: string, includeDeleted = false) {
   const rows = await engine.executeRaw<{
     id: number;
@@ -280,7 +440,35 @@ export async function getAdminBrainPageDetail(engine: BrainEngine, sourceId: str
       ORDER BY row_num ASC`,
     [page.id],
   );
-  return { ...page, takes };
+  const facts = await optionalRows<{
+    id: number;
+    fact: string;
+    kind: string;
+    visibility: string;
+    notability: string;
+    entity_slug: string | null;
+    source: string;
+    source_markdown_slug: string | null;
+    event_type: string | null;
+    confidence: number;
+    expired_at: string | null;
+    created_at: string;
+  }>(
+    engine,
+    `SELECT id, fact, kind, visibility, notability, entity_slug, source, source_markdown_slug,
+            event_type, confidence, expired_at::text AS expired_at, created_at::text AS created_at
+       FROM facts
+      WHERE source_id = $1
+        AND expired_at IS NULL
+        AND (source_markdown_slug = $2 OR entity_slug = $2)
+      ORDER BY created_at DESC, id DESC`,
+    [sourceId, slug],
+  );
+  return {
+    ...page,
+    takes,
+    facts: facts.map(row => normalizeAdminFactRow(row as Record<string, unknown>)) as typeof facts,
+  };
 }
 
 export async function getAdminBrainPageChunks(engine: BrainEngine, sourceId: string, slug: string, includeDeleted = false) {

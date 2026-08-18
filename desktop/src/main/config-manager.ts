@@ -43,12 +43,42 @@ export interface DesktopDatabaseRuntimeConfig {
   configuredContainerName?: string;
 }
 
+export type DesktopCustomTouchpoint = 'chat' | 'embedding';
+
 export interface DesktopCustomProvider {
   id: 'custom-openai';
   displayName: string;
   /** Legacy single-endpoint payload accepted for backward compatibility. */
   baseUrl?: string;
-  baseUrls?: Partial<Record<'chat' | 'embedding', string>>;
+  baseUrls?: Partial<Record<DesktopCustomTouchpoint, string>>;
+}
+
+export interface DesktopCustomEndpoint {
+  id: string;
+  displayName: string;
+  baseUrl: string;
+  modelId: string;
+  apiKey?: string;
+}
+
+export interface DesktopCustomProviderCatalog {
+  chat: DesktopCustomEndpoint[];
+  embedding: DesktopCustomEndpoint[];
+}
+
+export interface DesktopCustomProviderSelection {
+  chat?: string;
+  embedding?: string;
+}
+
+export const CUSTOM_ENDPOINT_PREFIX = 'custom-endpoint-';
+
+export function isCustomEndpointId(value: string): boolean {
+  return value === 'custom-openai' || value.startsWith(CUSTOM_ENDPOINT_PREFIX);
+}
+
+export function createCustomEndpointId(kind: DesktopCustomTouchpoint): string {
+  return `${CUSTOM_ENDPOINT_PREFIX}${kind}-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
 }
 
 export function normalizeDesktopTheme(value: unknown): DesktopTheme {
@@ -91,6 +121,8 @@ export interface SetupPayload {
     embeddingDimensions?: number;
   };
   customProvider?: DesktopCustomProvider;
+  customProviders?: DesktopCustomProviderCatalog;
+  customSelection?: DesktopCustomProviderSelection;
   keys?: Partial<Record<
     'mimo' | 'zhipu' | 'deepseek' | 'openai' | 'anthropic' | 'zeroentropy' |
     'google' | 'voyage' | 'groq' | 'together' | 'openrouter' | 'minimax' | 'dashscope' |
@@ -115,6 +147,8 @@ export interface SetupInfo {
     /** Global generative gate; false when missing. */
     generativeEnabled?: boolean;
     customProvider?: DesktopCustomProvider;
+    customProviders?: DesktopCustomProviderCatalog;
+    customSelection?: DesktopCustomProviderSelection;
     theme: DesktopTheme;
     keyStatus: Record<string, boolean>;
     keyValues: Record<string, string | undefined>;
@@ -151,6 +185,8 @@ type RawConfig = Record<string, unknown> & {
     shared_resume_required?: boolean;
     docker_container_name?: string;
     custom_openai_display_name?: string;
+    custom_endpoints?: DesktopCustomProviderCatalog;
+    custom_endpoint_selection?: DesktopCustomProviderSelection;
     tray_hint_shown?: boolean;
   };
 };
@@ -187,6 +223,156 @@ function normalizeCustomProvider(value: DesktopCustomProvider): DesktopCustomPro
     id: 'custom-openai',
     displayName,
     baseUrls,
+  };
+}
+
+function normalizeCustomBaseUrl(rawBaseUrl: string): string {
+  if (rawBaseUrl.length > 2048) throw new Error('请填写有效的自定义接口 Base URL。');
+  let parsed: URL;
+  try {
+    parsed = new URL(rawBaseUrl);
+  } catch {
+    throw new Error('自定义接口 Base URL 格式无效，请填写完整的 http:// 或 https:// 地址。');
+  }
+  if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password || parsed.search || parsed.hash) {
+    throw new Error('自定义接口 Base URL 只能使用 http/https，且不能包含账号、查询参数或锚点。');
+  }
+  return rawBaseUrl.replace(/\/+$/, '');
+}
+
+function normalizeCustomDisplayName(value: string): string {
+  const displayName = value.trim();
+  if (!displayName) throw new Error('请填写自定义接口显示名称。');
+  if (displayName.length > 80 || /[\r\n]/.test(displayName)) {
+    throw new Error('自定义接口显示名称不能超过 80 个字符或包含换行。');
+  }
+  return displayName;
+}
+
+export function normalizeCustomEndpoint(
+  value: DesktopCustomEndpoint,
+  kind: DesktopCustomTouchpoint,
+  index: number,
+): DesktopCustomEndpoint {
+  const displayName = normalizeCustomDisplayName(value.displayName);
+  const baseUrl = normalizeCustomBaseUrl(value.baseUrl?.trim() || '');
+  const modelId = value.modelId?.trim() || '';
+  if (!modelId) throw new Error('请填写自定义模型名称（模型 ID）。');
+  if (modelId.length > 160 || /[\r\n]/.test(modelId)) {
+    throw new Error('自定义模型名称不能超过 160 个字符或包含换行。');
+  }
+  const rawId = value.id?.trim() || '';
+  const id = rawId.startsWith(`${CUSTOM_ENDPOINT_PREFIX}${kind}-`)
+    ? rawId
+    : `${CUSTOM_ENDPOINT_PREFIX}${kind}-${index + 1}`;
+  const apiKey = value.apiKey?.trim();
+  return {
+    id,
+    displayName,
+    baseUrl,
+    modelId,
+    ...(apiKey ? { apiKey } : {}),
+  };
+}
+
+export function normalizeCustomProviderCatalog(value: DesktopCustomProviderCatalog): DesktopCustomProviderCatalog {
+  return {
+    chat: (value.chat ?? []).map((item, index) => normalizeCustomEndpoint(item, 'chat', index)),
+    embedding: (value.embedding ?? []).map((item, index) => normalizeCustomEndpoint(item, 'embedding', index)),
+  };
+}
+
+export function emptyCustomProviderCatalog(): DesktopCustomProviderCatalog {
+  return { chat: [], embedding: [] };
+}
+
+function catalogFromLegacyProvider(
+  provider: DesktopCustomProvider | undefined,
+  chatModelId = '',
+  embeddingModelId = '',
+): DesktopCustomProviderCatalog {
+  const catalog = emptyCustomProviderCatalog();
+  if (!provider) return catalog;
+  if (provider.baseUrls?.chat) {
+    catalog.chat.push({
+      id: `${CUSTOM_ENDPOINT_PREFIX}chat-legacy`,
+      displayName: provider.displayName,
+      baseUrl: provider.baseUrls.chat,
+      modelId: chatModelId,
+    });
+  }
+  if (provider.baseUrls?.embedding) {
+    catalog.embedding.push({
+      id: `${CUSTOM_ENDPOINT_PREFIX}embedding-legacy`,
+      displayName: provider.displayName,
+      baseUrl: provider.baseUrls.embedding,
+      modelId: embeddingModelId,
+    });
+  }
+  return catalog;
+}
+
+function modelNameAfterPrefix(model: string | undefined, prefix: string): string {
+  if (!model?.startsWith(prefix)) return '';
+  return model.slice(prefix.length);
+}
+
+function readStoredCustomCatalog(
+  desktop: RawConfig['desktop'] | undefined,
+  legacy: DesktopCustomProvider | undefined,
+  chatModel?: string,
+  embeddingModel?: string,
+): { catalog: DesktopCustomProviderCatalog; selection: DesktopCustomProviderSelection } {
+  const chatModelId = modelNameAfterPrefix(chatModel, 'custom-openai:');
+  const embeddingModelId = modelNameAfterPrefix(embeddingModel, 'custom-openai:');
+  if (desktop?.custom_endpoints) {
+    const catalog = normalizeCustomProviderCatalog(desktop.custom_endpoints);
+    const stored = desktop.custom_endpoint_selection ?? {};
+    return {
+      catalog,
+      selection: {
+        chat: catalog.chat.some(item => item.id === stored.chat)
+          ? stored.chat
+          : catalog.chat.find(item => item.modelId === chatModelId)?.id ?? catalog.chat[0]?.id,
+        embedding: catalog.embedding.some(item => item.id === stored.embedding)
+          ? stored.embedding
+          : catalog.embedding.find(item => item.modelId === embeddingModelId)?.id ?? catalog.embedding[0]?.id,
+      },
+    };
+  }
+  const catalog = catalogFromLegacyProvider(legacy, chatModelId, embeddingModelId);
+  return {
+    catalog,
+    selection: {
+      chat: catalog.chat[0]?.id,
+      embedding: catalog.embedding[0]?.id,
+    },
+  };
+}
+
+function selectedCustomEndpoint(
+  catalog: DesktopCustomProviderCatalog,
+  selection: DesktopCustomProviderSelection,
+  kind: DesktopCustomTouchpoint,
+): DesktopCustomEndpoint | undefined {
+  const id = selection[kind];
+  return catalog[kind].find(item => item.id === id) ?? catalog[kind][0];
+}
+
+function legacyProviderFromCatalog(
+  catalog: DesktopCustomProviderCatalog,
+  selection: DesktopCustomProviderSelection,
+): DesktopCustomProvider | undefined {
+  const chat = selectedCustomEndpoint(catalog, selection, 'chat');
+  const embedding = selectedCustomEndpoint(catalog, selection, 'embedding');
+  if (!chat && !embedding) return undefined;
+  return {
+    id: 'custom-openai',
+    displayName: chat?.displayName || embedding?.displayName || '自定义 OpenAI 接口',
+    baseUrls: {
+      ...(chat ? { chat: chat.baseUrl } : {}),
+      ...(embedding ? { embedding: embedding.baseUrl } : {}),
+    },
   };
 }
 
@@ -331,6 +517,20 @@ export function getSetupInfo(): SetupInfo {
   const customTouchpointApiKeys = config?.provider_touchpoint_api_keys?.['custom-openai'];
   const customChatKey = customTouchpointApiKeys?.chat?.trim() || sharedCustomKey;
   const customEmbeddingKey = customTouchpointApiKeys?.embedding?.trim() || sharedCustomKey;
+  const legacyCustomProvider = customChatBaseUrl || customEmbeddingBaseUrl ? {
+    id: 'custom-openai' as const,
+    displayName: desktop?.custom_openai_display_name?.trim() || '自定义 OpenAI 接口',
+    baseUrls: {
+      ...(customChatBaseUrl ? { chat: customChatBaseUrl } : {}),
+      ...(customEmbeddingBaseUrl ? { embedding: customEmbeddingBaseUrl } : {}),
+    },
+  } : undefined;
+  const storedCustom = readStoredCustomCatalog(
+    desktop,
+    legacyCustomProvider,
+    typeof config?.chat_model === 'string' ? config.chat_model : undefined,
+    typeof config?.embedding_model === 'string' ? config.embedding_model : undefined,
+  );
   return {
     needsSetup: !config,
     configPath: path,
@@ -349,14 +549,9 @@ export function getSetupInfo(): SetupInfo {
         ?.model_usage?.generative_enabled === true,
       embeddingModel: typeof config?.embedding_model === 'string' ? config.embedding_model : undefined,
       embeddingDimensions: typeof config?.embedding_dimensions === 'number' ? config.embedding_dimensions : undefined,
-      customProvider: customChatBaseUrl || customEmbeddingBaseUrl ? {
-        id: 'custom-openai',
-        displayName: desktop?.custom_openai_display_name?.trim() || '自定义 OpenAI 接口',
-        baseUrls: {
-          ...(customChatBaseUrl ? { chat: customChatBaseUrl } : {}),
-          ...(customEmbeddingBaseUrl ? { embedding: customEmbeddingBaseUrl } : {}),
-        },
-      } : undefined,
+      customProvider: legacyProviderFromCatalog(storedCustom.catalog, storedCustom.selection) ?? legacyCustomProvider,
+      customProviders: storedCustom.catalog,
+      customSelection: storedCustom.selection,
       theme: normalizeDesktopTheme(desktop?.theme),
       keyStatus: {
         mimo: Boolean(config?.mimo_api_key),
@@ -602,10 +797,30 @@ export function saveSetup(payload: SetupPayload): {
     theme: normalizeDesktopTheme(payload.theme ?? existing.desktop?.theme),
     ...(knowledgeDirectory ? { knowledge_directory: knowledgeDirectory, knowledge_source_id: sourceId } : {}),
   };
-  if (payload.customProvider) {
-    const customProvider = normalizeCustomProvider(payload.customProvider);
+  const incomingCatalog = payload.customProviders
+    ? normalizeCustomProviderCatalog(payload.customProviders)
+    : payload.customProvider
+      ? catalogFromLegacyProvider(normalizeCustomProvider(payload.customProvider),
+        modelNameAfterPrefix(payload.modelConfig?.chatModel, 'custom-openai:'),
+        modelNameAfterPrefix(payload.modelConfig?.embeddingModel, 'custom-openai:'))
+      : undefined;
+  if (incomingCatalog) {
+    const selection = payload.customSelection ?? {};
+    const chatEndpoint = selectedCustomEndpoint(incomingCatalog, selection, 'chat');
+    const embeddingEndpoint = selectedCustomEndpoint(incomingCatalog, selection, 'embedding');
     const existingTouchpoints = existing.provider_touchpoint_base_urls?.['custom-openai'] ?? {};
-    const customTouchpoints = { ...existingTouchpoints, ...customProvider.baseUrls };
+    const customTouchpoints = {
+      ...existingTouchpoints,
+      ...(chatEndpoint ? { chat: chatEndpoint.baseUrl } : payload.customProvider?.baseUrls?.chat
+        ? { chat: payload.customProvider.baseUrls.chat } : {}),
+      ...(embeddingEndpoint ? { embedding: embeddingEndpoint.baseUrl } : payload.customProvider?.baseUrls?.embedding
+        ? { embedding: payload.customProvider.baseUrls.embedding } : {}),
+    };
+    if (payload.customProvider && !payload.customProviders) {
+      const legacy = normalizeCustomProvider(payload.customProvider);
+      if (legacy.baseUrls?.chat) customTouchpoints.chat = legacy.baseUrls.chat;
+      if (legacy.baseUrls?.embedding) customTouchpoints.embedding = legacy.baseUrls.embedding;
+    }
     const fallbackBaseUrl = customTouchpoints.chat
       ?? customTouchpoints.embedding
       ?? existing.provider_base_urls?.['custom-openai'];
@@ -617,7 +832,25 @@ export function saveSetup(payload: SetupPayload): {
       ...(existing.provider_touchpoint_base_urls ?? {}),
       'custom-openai': customTouchpoints,
     };
-    config.desktop.custom_openai_display_name = customProvider.displayName;
+    const existingProviderKeys = config.provider_touchpoint_api_keys?.['custom-openai']
+      ?? existing.provider_touchpoint_api_keys?.['custom-openai']
+      ?? {};
+    const nextProviderKeys = { ...existingProviderKeys };
+    if (chatEndpoint?.apiKey) nextProviderKeys.chat = chatEndpoint.apiKey;
+    if (embeddingEndpoint?.apiKey) nextProviderKeys.embedding = embeddingEndpoint.apiKey;
+    config.provider_touchpoint_api_keys = {
+      ...(config.provider_touchpoint_api_keys ?? existing.provider_touchpoint_api_keys ?? {}),
+      'custom-openai': nextProviderKeys,
+    };
+    config.desktop.custom_endpoints = incomingCatalog;
+    config.desktop.custom_endpoint_selection = {
+      ...(chatEndpoint ? { chat: chatEndpoint.id } : {}),
+      ...(embeddingEndpoint ? { embedding: embeddingEndpoint.id } : {}),
+    };
+    config.desktop.custom_openai_display_name = chatEndpoint?.displayName
+      || embeddingEndpoint?.displayName
+      || payload.customProvider?.displayName
+      || existing.desktop?.custom_openai_display_name;
   }
 
   const backup = backupFile(path, 'config');

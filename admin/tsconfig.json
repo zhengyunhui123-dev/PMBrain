@@ -13,5 +13,5 @@
     "jsx": "react-jsx",
     "strict": true
   },
-  "include": ["src", "../shared/contracts"]
+  "include": ["src", "../shared/contracts", "../shared/knowledge-views.ts"]
 }

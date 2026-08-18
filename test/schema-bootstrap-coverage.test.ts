@@ -134,6 +134,7 @@ const REQUIRED_BOOTSTRAP_COVERAGE: ForwardReference[] = [
   // have pages without this column; bootstrap adds it before SCHEMA_SQL
   // replay creates the index.
   { kind: 'column', table: 'pages', column: 'last_retrieved_at' },
+  { kind: 'column', table: 'pages', column: 'links_extracted_at' },
   // v0.38.0 (v81) — pages_provenance_columns adds four nullable columns
   // (ingested_via, ingested_at, source_uri, source_kind) to track WHERE
   // every page came from (capture-cli, webhook, put_page, dream, etc.).
@@ -198,6 +199,10 @@ test('applyForwardReferenceBootstrap covers every forward reference declared in 
 
       DROP INDEX IF EXISTS pages_deleted_at_purge_idx;
       ALTER TABLE pages DROP COLUMN IF EXISTS deleted_at;
+      DROP INDEX IF EXISTS pages_last_retrieved_at_idx;
+      ALTER TABLE pages DROP COLUMN IF EXISTS last_retrieved_at;
+      DROP INDEX IF EXISTS pages_links_extracted_at_idx;
+      ALTER TABLE pages DROP COLUMN IF EXISTS links_extracted_at;
 
       DROP INDEX IF EXISTS idx_chunks_embedding_image;
       ALTER TABLE content_chunks DROP COLUMN IF EXISTS embedding_image;
@@ -304,6 +309,10 @@ test('after bootstrap, PGLITE_SCHEMA_SQL replays without crashing on missing for
       ALTER TABLE links DROP COLUMN IF EXISTS origin_page_id;
       DROP INDEX IF EXISTS pages_deleted_at_purge_idx;
       ALTER TABLE pages DROP COLUMN IF EXISTS deleted_at;
+      DROP INDEX IF EXISTS pages_last_retrieved_at_idx;
+      ALTER TABLE pages DROP COLUMN IF EXISTS last_retrieved_at;
+      DROP INDEX IF EXISTS pages_links_extracted_at_idx;
+      ALTER TABLE pages DROP COLUMN IF EXISTS links_extracted_at;
 
       DROP INDEX IF EXISTS idx_chunks_embedding_image;
       ALTER TABLE content_chunks DROP COLUMN IF EXISTS embedding_image;

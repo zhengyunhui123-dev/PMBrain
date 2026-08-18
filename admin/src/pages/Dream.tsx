@@ -475,12 +475,28 @@ function quickMaintenanceIsPartial(report: DreamCycleReport | null): boolean {
     || (report?.phases ?? []).some(phase => phase.status === 'warn');
 }
 
+function actualSyncPagesAdded(report: DreamCycleReport | null): number {
+  const sync = report?.phases?.find(phase => phase.phase === 'sync');
+  const detectedAdded = Math.max(0, Number(sync?.details?.added ?? 0));
+  const hasWrittenField = Boolean(sync && (sync.pagesAffectedCount != null || Array.isArray(sync.pagesAffected)));
+  const written = Math.max(0, Number(sync?.pagesAffectedCount ?? sync?.pagesAffected?.length ?? 0));
+  if (hasWrittenField) return written > 0 ? Math.min(detectedAdded || written, written) : 0;
+  return detectedAdded;
+}
+
 export function dreamRunDeltas(run: ConsoleRun | null): { pages: number; links: number } {
   if (!run || !run.kind.startsWith('dream_') || run.command.includes('--dry-run')) {
     return { pages: 0, links: 0 };
   }
-  const totals = parseDreamReport(run)?.totals ?? {};
-  const pages = Math.max(0, Number(totals.pages_added ?? totals.synth_pages_written ?? 0));
+  const report = parseDreamReport(run);
+  const totals = report?.totals ?? {};
+  const synthWritten = Number(report?.phases?.find(phase => phase.phase === 'synthesize')?.details?.pages_written ?? 0);
+  const synthPages = Math.max(0, Number(totals.synth_pages_written ?? synthWritten));
+  const syncPages = actualSyncPagesAdded(report);
+  const hasHonestPageSource = Boolean(report?.phases?.some(phase => phase.phase === 'sync') || synthPages > 0);
+  const pages = hasHonestPageSource
+    ? syncPages + synthPages
+    : Math.max(0, Number(totals.pages_added ?? 0));
   const links = Math.max(0, Number(totals.links_created ?? (
     Number(totals.backlinks_added ?? 0)
     + Number(totals.pages_extracted ?? 0)
@@ -744,7 +760,7 @@ export function buildDreamOutcome(run: ConsoleRun): DreamOutcomeSummary {
     || synth.dryRun === true
     || concepts.dry_run === true;
 
-  const added = isDryRun ? 0 : Math.max(0, Number(totals.pages_added ?? 0));
+  const added = isDryRun ? 0 : dreamRunDeltas(run).pages;
   const updated = isDryRun ? 0 : Math.max(0, Number(sync.modified ?? 0));
   const duplicateSkips = asArray(synth.duplicate_skips).length;
   const merged = isDryRun
@@ -1092,7 +1108,7 @@ export function buildQuickMaintenanceStages(run: ConsoleRun | null): QuickMainte
       ...QUICK_MAINTENANCE_STEPS[1],
       state: quickStageState(run, QUICK_MAINTENANCE_STEPS[1].phases, number(sync.failedFiles) > 0),
       results: [
-        { label: '新增内容', value: number(sync.added) },
+        { label: '新增内容', value: actualSyncPagesAdded(report) },
         { label: '更新内容', value: number(sync.modified) },
         { label: '异常文件', value: pending.exceptionalFiles },
       ],

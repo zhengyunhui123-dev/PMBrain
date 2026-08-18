@@ -38,6 +38,7 @@ import {
 import * as db from './db.ts';
 import { VERSION } from '../version.ts';
 import { OperationError } from './operation-error.ts';
+import { MEMORY_VERBS_VERSION, memoryVerbOperations } from './memory-verbs.ts';
 import {
   acceptTakeProposal as acceptAgentPackTakeProposal,
   getTakeProposal as getAgentPackTakeProposal,
@@ -521,6 +522,8 @@ export interface Operation {
    */
   scope?: 'read' | 'write' | 'admin' | 'sources_admin' | 'users_admin';
   localOnly?: boolean;
+  /** MEMORY_VERBS v1: first-class memory protocol surface. */
+  verb?: boolean;
   cliHints?: {
     name?: string;
     positional?: string[];
@@ -3863,7 +3866,8 @@ const extract_facts: Operation = {
     }
 
     const sourceId = ctx.sourceId ?? 'default';
-    const visibility: 'private' | 'world' = p.visibility === 'world' ? 'world' : 'private';
+    const { resolveVisibilityParam } = await import('./facts/visibility.ts');
+    const visibility: 'private' | 'world' = await resolveVisibilityParam(ctx.engine, p.visibility);
 
     const r = await runFactsPipeline(p.turn_text as string, {
       engine: ctx.engine,
@@ -3972,6 +3976,7 @@ const recall: Operation = {
     return {
       facts: rows.map(r => ({
         id: r.id,
+        fact_id: String(r.id),
         fact: r.fact,
         kind: r.kind,
         entity_slug: r.entity_slug,
@@ -3987,11 +3992,13 @@ const recall: Operation = {
         consolidated_at: r.consolidated_at?.toISOString() ?? null,
         consolidated_into: r.consolidated_into,
         source: r.source,
+        provenance: r.source,
         source_session: r.source_session,
         confidence: r.confidence,
         created_at: r.created_at.toISOString(),
       })),
       total: rows.length,
+      protocol_version: MEMORY_VERBS_VERSION,
       ...(pending_consolidation_count !== undefined ? { pending_consolidation_count } : {}),
     };
   },
@@ -4924,6 +4931,8 @@ export const operations: Operation[] = [
   get_recent_salience, find_anomalies, get_recent_transcripts,
   // v0.31: hot memory (facts table)
   extract_facts, recall, forget_fact,
+  // MEMORY_VERBS v1 write/delete — registered from an independent module
+  ...memoryVerbOperations,
   // v0.32.6: contradiction probe MCP surface (M3)
   find_contradictions,
   // v0.33: expertise + relationship-proximity routing

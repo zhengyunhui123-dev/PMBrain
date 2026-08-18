@@ -785,6 +785,15 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
   // than silently binding loopback only.
   const bind = options.bind ?? '127.0.0.1';
   const config = loadConfig() || { engine: 'pglite' as const };
+  try {
+    const { ensureDefaultSkillPublication } = await import('../core/skill-catalog.ts');
+    const published = await ensureDefaultSkillPublication(engine, config);
+    if (published === 'enabled') {
+      console.error('[serve-http] mcp.publish_skills 已打开：接入的 Agent 可通过 list_skills / get_skill 读取写作与工作流 Skill。');
+    }
+  } catch (error) {
+    console.error(`[serve-http] skill publication probe failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
   // WorkBuddy emits native per-conversation metadata but no Skill name.
   // Keep the explicit Skill correlation in memory only; persisted logs receive
   // fixed enum labels, never conversation/request ids.

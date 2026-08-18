@@ -58,13 +58,16 @@ describe('Source Git version control', () => {
     const directory = makeSourceDirectory();
     initializeSourceGit(directory);
 
-    expect(getSourceGitStatus(directory)).toMatchObject({ repository: true, hasChanges: false, changedFiles: 0 });
+    expect(getSourceGitStatus(directory)).toMatchObject({ repository: true, hasChanges: false, changedFiles: 0, lastCommitAt: null });
 
     writeFileSync(join(directory, 'note.md'), 'content\n');
-    expect(getSourceGitStatus(directory)).toMatchObject({ repository: true, hasChanges: true, changedFiles: 1 });
+    expect(getSourceGitStatus(directory)).toMatchObject({ repository: true, hasChanges: true, changedFiles: 1, lastCommitAt: null });
 
     commitSourceGit(directory, 'Save note');
-    expect(getSourceGitStatus(directory)).toMatchObject({ repository: true, hasChanges: false, changedFiles: 0 });
+    const afterCommit = getSourceGitStatus(directory);
+    expect(afterCommit).toMatchObject({ repository: true, hasChanges: false, changedFiles: 0 });
+    expect(afterCommit.lastCommitAt).toBeTruthy();
+    expect(Number.isNaN(new Date(afterCommit.lastCommitAt ?? '').getTime())).toBe(false);
   }, 20_000);
 
   test('does not offer a parent commit for changes that exist only inside a nested repository', () => {

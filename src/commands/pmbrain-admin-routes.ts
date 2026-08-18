@@ -53,6 +53,7 @@ import {
 import {
   executePreview,
   getAdminBrainOverview,
+  getAdminBrainFact,
   getAdminBrainPageDetail,
   getAdminBrainPageChunks,
   getAdminKnowledgeGraphGlobal,
@@ -64,6 +65,7 @@ import {
   getAdminLlmStatus,
   getRun,
   cancelRun,
+  listAdminBrainFacts,
   listAdminBrainPages,
   listRuns,
   PgliteRunCoordinator,
@@ -116,6 +118,8 @@ import {
   BrainOverviewResponseSchema,
   BrainPageChunksResponseSchema,
   BrainPageDetailResponseSchema,
+  BrainFactDetailResponseSchema,
+  BrainFactsResponseSchema,
   BrainPagesResponseSchema,
   KnowledgeGraphMetaResponseSchema,
   KnowledgeGraphGlobalResponseSchema,
@@ -563,6 +567,41 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
       }));
     } catch (e) {
       res.status(500).json({ error: e instanceof Error ? e.message : 'pages_failed' });
+    }
+  });
+
+  app.get('/admin/api/brain/facts', requireAdmin, async (req: Request, res: Response) => {
+    try {
+      sendAdminContract(res, BrainFactsResponseSchema, await listAdminBrainFacts(engine, {
+        source: req.query.source as string | undefined,
+        type: req.query.type as string | undefined,
+        q: req.query.q as string | undefined,
+        embedded: req.query.embedded as string | undefined,
+        page: req.query.page as string | undefined,
+        limit: req.query.limit as string | undefined,
+        includeExpired: req.query.includeExpired as string | undefined,
+      }));
+    } catch (e) {
+      res.status(500).json({ error: e instanceof Error ? e.message : 'facts_failed' });
+    }
+  });
+
+  app.get('/admin/api/brain/facts/:id', requireAdmin, async (req: Request, res: Response) => {
+    const rawId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const id = Number.parseInt(rawId ?? '', 10);
+    if (!Number.isInteger(id) || id <= 0) {
+      res.status(400).json({ error: 'invalid_fact_id' });
+      return;
+    }
+    try {
+      const fact = await getAdminBrainFact(engine, id);
+      if (!fact) {
+        res.status(404).json({ error: 'fact_not_found' });
+        return;
+      }
+      sendAdminContract(res, BrainFactDetailResponseSchema, fact);
+    } catch (e) {
+      res.status(500).json({ error: e instanceof Error ? e.message : 'fact_detail_failed' });
     }
   });
 

@@ -37,16 +37,29 @@ describe('MCP skill catalog', () => {
   test('list_skills and get_skill expose confined workspace prose locally', async () => {
     const listed = await operationsByName.list_skills.handler(context(), {}) as {
       count: number;
-      skills: Array<{ name: string }>;
+      skills: Array<{ name: string; triggers?: string[] }>;
+      instructions?: { how_to_use: string[]; fetch_op: string };
     };
     expect(listed.count).toBeGreaterThan(0);
+    expect(listed.instructions?.fetch_op).toBe('get_skill');
+    expect(listed.instructions?.how_to_use.some(step => step.includes('list_skills'))).toBe(true);
     const name = listed.skills[0]!.name;
     const detail = await operationsByName.get_skill.handler(context(), { name }) as {
       name: string;
       body: string;
+      client_guidance?: { protocol: string[] };
     };
     expect(detail.name).toBe(name);
     expect(detail.body.length).toBeGreaterThan(0);
+    expect(detail.client_guidance?.protocol.length).toBeGreaterThan(0);
+  });
+
+  test('default publication turns on only when the owner has not opted out', async () => {
+    const { ensureDefaultSkillPublication } = await import('../src/core/skill-catalog.ts');
+    expect(await ensureDefaultSkillPublication(engine, {})).toBe('enabled');
+    expect(await ensureDefaultSkillPublication(engine, {})).toBe('already');
+    await engine.setConfig('mcp.publish_skills', 'false');
+    expect(await ensureDefaultSkillPublication(engine, {})).toBe('opted_out');
   });
 
   test('remote calls fail closed until publication is explicitly enabled', async () => {

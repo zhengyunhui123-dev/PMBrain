@@ -5,7 +5,7 @@ import { withEnv } from './helpers/with-env.ts';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { importFromContent } from '../src/core/import-file.ts';
+import { importFromContent, importFromFile } from '../src/core/import-file.ts';
 import { ContentSanityBlockError } from '../src/core/content-sanity.ts';
 import { isEmbedSkipped, EMBED_SKIP_KEY } from '../src/core/embed-skip.ts';
 
@@ -208,6 +208,37 @@ describe('importFromContent — soft-block (D9 transition + embed_skip)', () => 
       await importFromContent(engine, 'test/big2', content, { noEmbed: true });
       const chunks = await engine.getChunks('test/big2');
       expect(chunks.length).toBe(0);
+    });
+  });
+
+  test('local markdown files over the size gate are split into searchable chunks', async () => {
+    await withIsolatedHome(async () => {
+      const filePath = join(gbrainHomeDir, 'HSM_TS_V2.0_Rev2.0.md');
+      writeFileSync(filePath, [
+        FRONTMATTER,
+        '# 概述',
+        '',
+        '这是一份用户主动上传的技术规格。'.repeat(80),
+        '',
+        '## 硬件接口',
+        '',
+        '网口、串口和调试口的接线说明。'.repeat(80),
+        '',
+        '## 软件协议',
+        '',
+        '报文格式和状态机说明。'.repeat(80),
+        '',
+        'x'.repeat(520_000),
+      ].join('\n'));
+
+      const result = await importFromFile(engine, filePath, 'HSM_TS_V2.0_Rev2.0.md', { noEmbed: true });
+      expect(result.status).toBe('imported');
+      expect(result.chunks).toBeGreaterThan(0);
+      const page = await engine.getPage(result.slug);
+      expect(isEmbedSkipped(page?.frontmatter as Record<string, unknown>)).toBe(false);
+      const chunks = await engine.getChunks(result.slug);
+      expect(chunks.length).toBe(result.chunks);
+      expect(chunks.some(chunk => chunk.chunk_text.includes('硬件接口'))).toBe(true);
     });
   });
 });

@@ -165,18 +165,19 @@ window.pmbrainDesktop = {
   onShowUpdates: () => () => {},
   onShowPanel: (callback) => { setTimeout(() => callback('${panel}'), 0); return () => {}; },
   chooseDirectory: async () => null,
+  writeWorkbuddyUserAgent: async () => ({ written: [], backedUp: [] }),
   getWorkbuddyAgentIntegration: async () => ({
-    state: 'update_available',
+    state: 'not_installed',
     workbuddyDetected: true,
-    workspace: 'D:\\\\Projects\\\\PMBrain',
+    workspace: null,
     packVersion: '1',
-    installedPackVersion: '0',
-    rulesInstalled: true,
-    skillsInstalled: 5,
+    installedPackVersion: null,
+    rulesInstalled: false,
+    skillsInstalled: 0,
     skillsTotal: 5,
-    mcpConfigured: true,
-    mcpConnected: true,
-    message: '官方 Agent Pack 有新版本；更新只处理 PMBrain 管理的内容。',
+    mcpConfigured: false,
+    mcpConnected: false,
+    message: '',
   }),
   installWorkbuddyAgent: async () => window.pmbrainDesktop.getWorkbuddyAgentIntegration(),
   updateWorkbuddyAgent: async () => window.pmbrainDesktop.getWorkbuddyAgentIntegration(),
@@ -291,7 +292,7 @@ interface MockIntegration {
 }
 const mockIntegrations: MockIntegration[] = [
   { id: 'codebuddy', name: 'CodeBuddy', path: 'C:\\Users\\zhengyunhui\\.codebuddy\\mcp.json', configured: true, automatic: true },
-  { id: 'workbuddy', name: 'Workbuddy', path: 'C:\\Users\\zhengyunhui\\.workbuddy\\mcp.json', configured: false, automatic: true },
+  { id: 'workbuddy', name: 'Workbuddy', path: 'C:\\Users\\zhengyunhui\\.workbuddy\\mcp.json', configured: true, automatic: true },
   { id: 'cursor', name: 'Cursor', path: 'C:\\Users\\zhengyunhui\\.cursor\\mcp.json', configured: true, automatic: true },
   { id: 'trae', name: 'Trae', path: 'C:\\Users\\zhengyunhui\\AppData\\Roaming\\Trae\\User\\mcp.json', configured: false, automatic: true },
   { id: 'claude', name: 'Claude', path: null, configured: false, automatic: false },
@@ -301,24 +302,6 @@ const mockIntegrations: MockIntegration[] = [
   { id: 'openclaw', name: 'OpenClaw', path: null, configured: false, automatic: false },
 ];
 const cardsHtml = mockIntegrations.map((item) => {
-  if (item.id === 'workbuddy') {
-    return `<article class="integration-card workbuddy-integration-card">
-      <span class="attention badge">有新版本</span>
-      <h3>WorkBuddy 深度接入</h3>
-      <p class="workbuddy-summary">官方 Agent Pack 有新版本；更新只处理 PMBrain 管理的内容。</p>
-      <div class="workbuddy-checks">
-        <div class="workbuddy-check ready"><small>MCP 接入</small><b>✓ 已连接</b></div>
-        <div class="workbuddy-check ready"><small>Agent Rules</small><b>✓ 已安装</b></div>
-        <div class="workbuddy-check ready"><small>PMBrain Skills</small><b>✓ 5 个</b></div>
-      </div>
-      <div class="workbuddy-meta">
-        <div><small>安装目录</small><code>D:\\Projects\\PMBrain</code></div>
-        <div><small>Agent Pack 版本</small><b>v0 → v1</b></div>
-      </div>
-      <small class="workbuddy-scope-note">Agent Rules 与 PMBrain Skills 仅对所选工作目录生效。安装或更新后，请重启 WorkBuddy 并新建会话。</small>
-      <div class="workbuddy-actions"><button class="solid">更新</button><button>重新检查</button><button class="workbuddy-remove">移除深度接入</button></div>
-    </article>`;
-  }
   const badgeClass = item.configured ? 'configured badge' : 'badge';
   const badgeText = item.id === 'qwenpaw' && item.connectionState === 'connected'
     ? '已连接'
@@ -332,7 +315,10 @@ const cardsHtml = mockIntegrations.map((item) => {
   const btnText = item.automatic
     ? item.configured ? '更新' : '创建并写入'
     : item.id === 'claude' ? '生成接入命令' : '生成接入配置';
-  return `<article class="integration-card"><span class="${badgeClass}">${badgeText}</span><h3>${item.name}</h3><p>${pathText}</p><small>${noteText}</small><button class="solid">${btnText}</button></article>`;
+  const buttons = item.id === 'workbuddy' && item.configured
+    ? `<div class="integration-actions"><button class="solid">${btnText}</button><button>Agent写入</button></div>`
+    : `<button class="solid">${btnText}</button>`;
+  return `<article class="integration-card"><span class="${badgeClass}">${badgeText}</span><h3>${item.name}</h3><p>${pathText}</p><small>${noteText}</small>${buttons}</article>`;
 }).join('\n          ');
 html = html.replace(
   '<div class="integration-grid" id="integration-grid"></div>',

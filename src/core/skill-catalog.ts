@@ -20,9 +20,28 @@ import {
   OperationError,
   type OperationContext,
 } from './operations.ts';
+import {
+  SKILL_CATALOG_INSTRUCTIONS,
+  SKILL_CLIENT_GUIDANCE,
+} from './operations-descriptions.ts';
 
 const MAX_SKILL_MD_BYTES = 256 * 1024;
 type CatalogSource = SkillsDirSource | 'config';
+
+/**
+ * New installs and local sidecar should publish the skill catalog, matching
+ * GBrain init. Explicit `false` on either config plane is left alone.
+ */
+export async function ensureDefaultSkillPublication(
+  engine: { getConfig(key: string): Promise<string | null>; setConfig(key: string, value: string): Promise<void> },
+  fileConfig?: { mcp?: { publish_skills?: boolean } } | null,
+): Promise<'enabled' | 'already' | 'opted_out'> {
+  const dbVal = await engine.getConfig('mcp.publish_skills').catch(() => null);
+  if (dbVal === 'true') return 'already';
+  if (dbVal === 'false' || fileConfig?.mcp?.publish_skills === false) return 'opted_out';
+  await engine.setConfig('mcp.publish_skills', 'true');
+  return 'enabled';
+}
 
 export async function readMcpPublishSkills(ctx: OperationContext): Promise<boolean> {
   const fromDb = await ctx.engine.getConfig('mcp.publish_skills').catch(() => null);
@@ -130,6 +149,11 @@ export function buildSkillCatalog(
   skills_dir_source: CatalogSource;
   count: number;
   skills: Array<Record<string, unknown>>;
+  instructions: {
+    summary: string;
+    how_to_use: string[];
+    fetch_op: 'get_skill';
+  };
 } {
   const skills = loadOrDeriveManifest(skillsDir).skills.flatMap((entry) => {
     try {
@@ -156,6 +180,11 @@ export function buildSkillCatalog(
     skills_dir_source: source,
     count: skills.length,
     skills,
+    instructions: {
+      summary: SKILL_CATALOG_INSTRUCTIONS.summary,
+      how_to_use: [...SKILL_CATALOG_INSTRUCTIONS.how_to_use],
+      fetch_op: 'get_skill',
+    },
   };
 }
 
@@ -175,5 +204,10 @@ export function getSkillDetail(skillsDir: string, name: string): Record<string, 
       mutating: frontmatter?.mutating ?? false,
     },
     body: bodyFrom(content),
+    client_guidance: {
+      nature: SKILL_CLIENT_GUIDANCE.nature,
+      protocol: [...SKILL_CLIENT_GUIDANCE.protocol],
+      mutating: frontmatter?.mutating ?? false,
+    },
   };
 }

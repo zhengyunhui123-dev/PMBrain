@@ -195,6 +195,22 @@ describe('Dream GUI product contract', () => {
     expect(dream).toContain('phase.pagesAffectedCount ?? phase.pagesAffected?.length ?? 0');
   });
 
+  test('overview increment ignores detected files that were not actually written', () => {
+    const run = completedRun({
+      status: 'ok',
+      phases: [{
+        phase: 'sync',
+        status: 'warn',
+        details: { added: 1000, modified: 0, failedFiles: 0 },
+        pagesAffected: [],
+        pagesAffectedCount: 0,
+      }],
+      totals: { pages_added: 1000, pages_synced: 1000, links_created: 0 },
+    });
+    expect(dreamRunDeltas(run)).toEqual({ pages: 0, links: 0 });
+    expect(buildDreamOutcome(run).metrics.find(metric => metric.label === '新增知识')?.value).toBe(0);
+  });
+
   test('overview metrics show deltas from the latest Dream report', () => {
     const run = completedRun({
       status: 'ok',
@@ -241,9 +257,9 @@ describe('Dream GUI product contract', () => {
       },
     };
 
-    expect(dreamRunDeltas(run)).toEqual({ pages: 988, links: 183 });
+    expect(dreamRunDeltas(run)).toEqual({ pages: 985, links: 183 });
     expect(buildDreamOutcome(run).metrics.map(metric => [metric.label, metric.value])).toEqual([
-      ['新增知识', 988],
+      ['新增知识', 985],
       ['更新知识', 3],
       ['新增关联', 183],
       ['完成向量', 12132],

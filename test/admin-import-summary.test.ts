@@ -123,6 +123,8 @@ describe('Admin folder import summary', () => {
     expect(summary?.badge).toBe('部分完成');
     expect(summary?.markdown).toContain('文件 `D:\\project\\large.xlsx` 仅部分导入');
     expect(summary?.markdown).toContain('未生成切片，也未进行向量化');
+    expect(summary?.markdown).toContain('按工作表、章节拆成较小文件');
+    expect(summary?.markdown).not.toContain('设置 → 导入切片与向量化');
   });
 
   test('shows local parser, OCR, chunks and vector status for one document', () => {

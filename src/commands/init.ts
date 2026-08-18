@@ -958,6 +958,7 @@ async function initPGLite(opts: {
       // time. Existing config.schema_pack survives (...existingFile spread)
       // unless explicitly overridden by --schema-pack on re-init.
       ...(opts.schemaPack ? { schema_pack: opts.schemaPack } : {}),
+      mcp: { publish_skills: true, ...(existingFile.mcp ?? {}) },
     };
     saveConfig(config);
     ensureConfiguredSystemSkillAssets(config);
@@ -1196,6 +1197,7 @@ async function initPostgres(opts: {
       ...(opts.aiOpts?.chat_model ? { chat_model: opts.aiOpts.chat_model } : {}),
       // v0.42 (T17): same schema_pack default as PGLite path.
       ...(opts.schemaPack ? { schema_pack: opts.schemaPack } : {}),
+      mcp: { publish_skills: true, ...(existingFile.mcp ?? {}) },
     };
     saveConfig(config);
     ensureConfiguredSystemSkillAssets(config);

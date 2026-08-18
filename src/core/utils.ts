@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'crypto';
-import type { Page, PageInput, PageType, Chunk, SearchResult } from './types.ts';
+import type { Page, PageInput, PageType, Chunk, SearchResult, StalePageRow } from './types.ts';
 import type { Take, TakeKind } from './engine.ts';
 
 /**
@@ -184,6 +184,24 @@ export function parseEmbedding(value: unknown): Float32Array | null {
  *
  * Anything else falls through and the caller MUST re-throw.
  */
+export function rowToStalePage(row: Record<string, unknown>): StalePageRow {
+  const fm = row.frontmatter;
+  return {
+    id: row.id as number,
+    slug: row.slug as string,
+    source_id: (row.source_id as string | undefined) ?? 'default',
+    type: row.type as string,
+    title: (row.title as string | null) ?? '',
+    compiled_truth: (row.compiled_truth as string | null) ?? '',
+    timeline: (row.timeline as string | null) ?? '',
+    frontmatter: (fm == null ? {} : (typeof fm === 'string' ? JSON.parse(fm) : fm)) as Record<string, unknown>,
+    updated_at: new Date(row.updated_at as string),
+    updated_at_iso: row.updated_at_iso != null
+      ? String(row.updated_at_iso)
+      : new Date(row.updated_at as string).toISOString(),
+  };
+}
+
 export function isUndefinedColumnError(error: unknown, column: string): boolean {
   const code = typeof error === 'object' && error !== null && 'code' in error
     ? String((error as { code?: unknown }).code)

@@ -528,6 +528,8 @@ export async function runModels(engine: BrainEngine, args: string[]): Promise<vo
   const subArg = args[0] === 'models' ? args[1] : args[0];
   const sub = subArg === 'doctor'
     ? 'doctor'
+    : subArg === 'embedding-dimension-status'
+      ? 'embedding-dimension-status'
     : subArg === 'align-embedding-dimension'
       ? 'align-embedding-dimension'
       : subArg === 'detect-embedding-dimension'
@@ -541,6 +543,8 @@ export async function runModels(engine: BrainEngine, args: string[]): Promise<vo
 `Usage:
   gbrain models                   Show routing table (read-only)
   gbrain models doctor [flags]    Probe each configured model (~1 token each)
+  gbrain models embedding-dimension-status --json
+                                  Read configured and physical vector dimensions
   gbrain models align-embedding-dimension --yes [--force-reembed] [--empty-only]
                                   Align the DB vector column; force also invalidates same-width vectors
   gbrain models detect-embedding-dimension --json [--requested-dimensions=N]
@@ -559,6 +563,27 @@ Configure routing:
 
 Tiers: utility (fast/low-cost) | reasoning (balanced) | deep (high-capability) | subagent (tool-capable)
 `);
+    return;
+  }
+
+  if (sub === 'embedding-dimension-status') {
+    const { getConfiguredEmbeddingModel, getEmbeddingDimensions } = await import('../core/ai/gateway.ts');
+    const { readEmbeddingDimensionStatus } = await import('../core/embedding-dim-check.ts');
+    const model = getConfiguredEmbeddingModel();
+    const report = await readEmbeddingDimensionStatus(engine, {
+      embeddingModel: model,
+      configuredDimensions: model ? getEmbeddingDimensions() : null,
+    });
+    if (json) {
+      process.stdout.write(JSON.stringify(report) + '\n');
+    } else {
+      const configured = report.configured_dimensions === null ? '未配置' : `vector(${report.configured_dimensions})`;
+      const column = report.column_dimensions === null ? '不存在或未知' : `vector(${report.column_dimensions})`;
+      process.stdout.write(
+        `Embedding status: ${report.status}; model=${report.embedding_model ?? '未配置'}; `
+        + `configured=${configured}; column=${column}; existing=${report.existing_embeddings}.\n`,
+      );
+    }
     return;
   }
 
