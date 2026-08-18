@@ -99,12 +99,15 @@ export async function getAdminBrainOverview(
     );
     let gitRepo = false;
     let gitHasChanges: boolean | null = false;
+    let lastGitCommitAt: string | null = null;
     if (source.local_path) {
       gitRepo = isSourceGitRepository(source.local_path);
       gitHasChanges = gitRepo ? null : false;
       if (gitRepo && options.inspectSourceGit) {
         try {
-          gitHasChanges = getSourceGitStatus(source.local_path).hasChanges;
+          const gitStatus = getSourceGitStatus(source.local_path);
+          gitHasChanges = gitStatus.hasChanges;
+          lastGitCommitAt = gitStatus.lastCommitAt;
         } catch {
           // Keep the action available when Git status cannot be inspected;
           // the existing commit path will return the actionable native error.
@@ -121,6 +124,7 @@ export async function getAdminBrainOverview(
       federated: isSourceFederated(source.config),
       page_count: count?.page_count ?? 0,
       last_sync_at: source.last_sync_at ? new Date(source.last_sync_at).toISOString() : null,
+      last_git_commit_at: lastGitCommitAt,
       archived: source.archived === true,
       archived_at: archive?.archived_at ?? null,
       archive_expires_at: archive?.archive_expires_at ?? null,

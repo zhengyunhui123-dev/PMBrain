@@ -22,6 +22,7 @@ export interface SourceGitStatus {
   repository: boolean;
   hasChanges: boolean;
   changedFiles: number;
+  lastCommitAt: string | null;
 }
 
 function assertSourceDirectory(inputPath: string): string {
@@ -77,16 +78,24 @@ function listCommittableChanges(localPath: string): string[] {
   return pending ? pending.split('\0').filter(Boolean) : [];
 }
 
+function readLastCommitAt(localPath: string): string | null {
+  const value = runGit(localPath, ['log', '-1', '--format=%cI'], true);
+  if (!value) return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
 export function getSourceGitStatus(inputPath: string): SourceGitStatus {
   const localPath = assertSourceDirectory(inputPath);
   if (!isSourceGitRepository(localPath)) {
-    return { repository: false, hasChanges: false, changedFiles: 0 };
+    return { repository: false, hasChanges: false, changedFiles: 0, lastCommitAt: null };
   }
   const changes = listCommittableChanges(localPath);
   return {
     repository: true,
     hasChanges: changes.length > 0,
     changedFiles: changes.length,
+    lastCommitAt: readLastCommitAt(localPath),
   };
 }
 

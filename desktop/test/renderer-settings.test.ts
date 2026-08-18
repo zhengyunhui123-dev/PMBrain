@@ -86,20 +86,22 @@ describe('desktop settings renderer contracts', () => {
     expect(html).toContain('id="custom-provider-dialog"');
     expect(html).toContain('id="custom-provider-base-url"');
     expect(html).toContain('id="custom-provider-model-id"');
-    expect(html).toContain('value="custom-openai"');
+    expect(html).toContain('id="chat-provider-dropdown"');
+    expect(html).toContain('id="embedding-provider-dropdown"');
     expect(html).toContain('供应商路由');
     expect(html).toContain('OpenAI 兼容');
     expect(html).not.toContain('id="custom-provider-id"');
     expect(html).not.toContain('id="custom-provider-protocol"');
     expect(html).toContain('API Key 可选');
     expect(html).not.toContain('厂商');
-    expect(renderer).toContain('customProviderDraft');
-    expect(renderer).toContain('customProvider: customProviderDraft ?? undefined');
-    expect(renderer).toContain("provider === 'custom-openai'");
+    expect(renderer).toContain('customCatalog');
+    expect(renderer).toContain('customProviders: customCatalog');
+    expect(renderer).toContain('customSelection');
     expect(renderer).toContain("openCustomProvider('chat')");
     expect(renderer).toContain("openCustomProvider('embedding')");
-    expect(renderer).toContain('customProviderDraft?.baseUrls?.[target]');
-    expect(renderer).toContain('baseUrls: { ...customProviderDraft?.baseUrls, [target]: normalizedBaseUrl }');
+    expect(renderer).toContain('[target]: [...customCatalog[target], endpoint]');
+    expect(renderer).toContain('deleteCustomEndpoint');
+    expect(renderer).toContain('provider-delete');
     expect(renderer).toContain("kind === 'embedding' ? 'customOpenaiEmbedding'");
     expect(renderer).toContain("kind === 'chat' ? 'customOpenaiChat'");
     expect(renderer).toContain("providerKeyId(chatProvider, 'chat')");
@@ -107,6 +109,8 @@ describe('desktop settings renderer contracts', () => {
     expect(main).toContain('自定义向量模型验证失败');
     expect(styles).toContain('.model-add-button');
     expect(styles).toContain('.custom-provider-dialog');
+    expect(styles).toContain('.provider-dropdown');
+    expect(styles).toContain('.provider-delete');
   });
 
   test('marks and validates every required custom model field before accepting it', () => {

@@ -16,7 +16,8 @@ import { computeEffectiveDate } from './effective-date.ts';
 import { MARKDOWN_CHUNKER_VERSION } from './chunkers/recursive.ts';
 import { logSlugFallback } from './audit-slug-fallback.ts';
 import { resolveContextualRetrievalMode } from './contextual-retrieval-resolver.ts';
-import { assessContentSanity, ContentSanityBlockError } from './content-sanity.ts';
+import { assessContentSanity, ContentSanityBlockError, DEFAULT_BYTES_BLOCK } from './content-sanity.ts';
+import { buildMarkdownParentSections } from './document/markdown-sections.ts';
 import { loadOperatorLiterals } from './content-sanity-literals.ts';
 import { logContentSanityAssessment } from './audit/content-sanity-audit.ts';
 import { isEmbedSkipped, buildEmbedSkipMarker, EMBED_SKIP_KEY } from './embed-skip.ts';
@@ -1202,6 +1203,22 @@ export async function importFromFile(
   // precedence in computeEffectiveDate. e.g. `daily/2024-03-15.md` →
   // filename `2024-03-15`.
   const fileBasename = basename(relativePath, '.md');
+  const bodyBytes = Buffer.byteLength(`${parsed.compiled_truth}\n${parsed.timeline ?? ''}`, 'utf-8');
+  const bytesBlock = loadConfig()?.content_sanity?.bytes_block ?? DEFAULT_BYTES_BLOCK;
+  if (bodyBytes > bytesBlock) {
+    const parentSections = buildMarkdownParentSections(
+      [parsed.compiled_truth, parsed.timeline].filter(Boolean).join('\n\n'),
+      parsed.title || fileBasename,
+    );
+    if (parentSections.length > 0) {
+      return importTrustedStructuredContent(engine, resolvedSlug, content, {
+        ...opts,
+        filename: fileBasename,
+        sourcePath: relativePath,
+        parentSections,
+      });
+    }
+  }
   return importFromContent(engine, resolvedSlug, content, {
     ...opts,
     filename: fileBasename,

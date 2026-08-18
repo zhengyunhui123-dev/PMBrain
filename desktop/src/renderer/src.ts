@@ -5,7 +5,9 @@ import type {
   AdvancedModelTier,
   AdvancedModelWriteInput,
   CredentialKind,
-  DesktopCustomProvider,
+  DesktopCustomEndpoint,
+  DesktopCustomProviderCatalog,
+  DesktopCustomProviderSelection,
   DesktopKnowledgeSourceStatus,
   DesktopSystemSettingsPayload,
   DesktopSystemSettingsState,
@@ -36,7 +38,9 @@ let advancedPhaseOverrides: Partial<Record<AdvancedModelPhase, string>> = {};
 let loadedKnowledgeDirectory = '';
 let loadedKnowledgeSourceId = '';
 let knowledgeSourceStatusRequest = 0;
-let customProviderDraft: DesktopCustomProvider | null = null;
+const CUSTOM_ENDPOINT_PREFIX = 'custom-endpoint-';
+let customCatalog: DesktopCustomProviderCatalog = { chat: [], embedding: [] };
+let customSelection: DesktopCustomProviderSelection = {};
 let customProviderTarget: ModelKind | null = null;
 const providerModels: Record<'chat' | 'embedding', string[]> = { chat: [], embedding: [] };
 const previousProviderSelection: Record<'chat' | 'embedding', string> = { chat: '', embedding: '' };
@@ -222,8 +226,22 @@ function splitModelId(value?: string): { provider: string; model: string } {
   return { provider: value.slice(0, index), model: value.slice(index + 1) };
 }
 
+function isCustomEndpointId(value: string): boolean {
+  return value === 'custom-openai' || value.startsWith(CUSTOM_ENDPOINT_PREFIX);
+}
+
+function recipeProvider(provider: string): string {
+  return isCustomEndpointId(provider) ? 'custom-openai' : normalizeProviderForModel(provider);
+}
+
+function selectedCustomEndpoint(kind: ModelKind): DesktopCustomEndpoint | undefined {
+  const id = customSelection[kind];
+  return customCatalog[kind].find(item => item.id === id) ?? customCatalog[kind][0];
+}
+
 function normalizeProviderForModel(provider: string): string {
   const trimmed = provider.trim();
+  if (isCustomEndpointId(trimmed)) return 'custom-openai';
   return trimmed === 'zeroentropy' ? 'zeroentropyai' : trimmed;
 }
 
@@ -316,34 +334,124 @@ function setCustomProviderError(message = '', field?: HTMLInputElement): void {
   }
 }
 
-function renderCustomProvider(): void {
-  document.querySelectorAll<HTMLOptionElement>('option[value="custom-openai"]').forEach(option => {
-    option.textContent = customProviderDraft?.displayName || '自定义 OpenAI 接口';
-  });
+function syncCustomProviderOptions(kind: ModelKind): void {
+  const select = $<HTMLSelectElement>(`#${kind}-provider`);
+  const current = select.value;
+  for (const option of Array.from(select.options)) {
+    if (isCustomEndpointId(option.value)) option.remove();
+  }
+  for (const endpoint of customCatalog[kind]) {
+    const option = document.createElement('option');
+    option.value = endpoint.id;
+    option.textContent = endpoint.displayName;
+    select.append(option);
+  }
+  if (current && Array.from(select.options).some(option => option.value === current)) {
+    select.value = current;
+  }
+}
+
+function renderProviderDropdown(kind: ModelKind): void {
+  syncCustomProviderOptions(kind);
+  const select = $<HTMLSelectElement>(`#${kind}-provider`);
+  const ul = $<HTMLUListElement>(`#${kind}-provider-dropdown`);
+  ul.replaceChildren(...Array.from(select.options).map(option => {
+    const li = document.createElement('li');
+    li.dataset.value = option.value;
+    if (option.value === select.value) li.classList.add('selected');
+    const label = document.createElement('span');
+    label.textContent = option.textContent || option.value || (kind === 'chat' ? '请选择供应商' : '暂不启用向量化');
+    li.append(label);
+    if (option.value.startsWith(CUSTOM_ENDPOINT_PREFIX)) {
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'provider-delete';
+      remove.textContent = '×';
+      remove.setAttribute('aria-label', `删除自定义供应商 ${option.textContent || option.value}`);
+      remove.addEventListener('click', event => {
+        event.preventDefault();
+        event.stopPropagation();
+        deleteCustomEndpoint(kind, option.value);
+      });
+      li.append(remove);
+    }
+    li.addEventListener('click', () => {
+      applyProviderSelection(kind, option.value, option.value.startsWith(CUSTOM_ENDPOINT_PREFIX) ? false : true);
+      ul.hidden = true;
+    });
+    return li;
+  }));
+}
+
+function toggleProviderDropdown(kind: ModelKind): void {
+  const ul = $<HTMLUListElement>(`#${kind}-provider-dropdown`);
+  const opening = ul.hidden;
+  document.querySelectorAll<HTMLUListElement>('.provider-dropdown').forEach(dropdown => { dropdown.hidden = true; });
+  if (!opening) return;
+  renderProviderDropdown(kind);
+  ul.hidden = false;
+}
+
+function applyProviderSelection(kind: ModelKind, value: string, chooseDefault: boolean): void {
+  const select = $<HTMLSelectElement>(`#${kind}-provider`);
+  select.value = value;
+  previousProviderSelection[kind] = value;
+  if (isCustomEndpointId(value)) {
+    const endpoint = customCatalog[kind].find(item => item.id === value);
+    customSelection[kind] = endpoint?.id;
+    if (endpoint) {
+      $<HTMLInputElement>(`#${kind}-model-name`).value = endpoint.modelId;
+      $<HTMLInputElement>(`#${kind}-api-key`).value = endpoint.apiKey || '';
+    }
+  }
+  syncProviderKeyField(kind);
+  void refreshProviderModels(kind, chooseDefault);
+}
+
+function deleteCustomEndpoint(kind: ModelKind, id: string): void {
+  customCatalog = {
+    ...customCatalog,
+    [kind]: customCatalog[kind].filter(item => item.id !== id),
+  };
+  const select = $<HTMLSelectElement>(`#${kind}-provider`);
+  if (select.value === id || customSelection[kind] === id) {
+    customSelection = { ...customSelection, [kind]: undefined };
+    applyProviderSelection(kind, '', false);
+    $<HTMLInputElement>(`#${kind}-model-name`).value = '';
+    $<HTMLInputElement>(`#${kind}-api-key`).value = '';
+  }
+  renderProviderDropdown(kind);
+}
+
+function snapshotSelectedCustomEndpoints(): void {
+  for (const kind of ['chat', 'embedding'] as const) {
+    const provider = $<HTMLSelectElement>(`#${kind}-provider`).value;
+    if (!isCustomEndpointId(provider)) continue;
+    const endpoint = customCatalog[kind].find(item => item.id === provider);
+    if (!endpoint) continue;
+    endpoint.modelId = $<HTMLInputElement>(`#${kind}-model-name`).value.trim();
+    const apiKey = $<HTMLInputElement>(`#${kind}-api-key`).value.trim();
+    if (apiKey) endpoint.apiKey = apiKey;
+    else delete endpoint.apiKey;
+    customSelection[kind] = endpoint.id;
+  }
 }
 
 function openCustomProvider(target: ModelKind): void {
   customProviderTarget = target;
-  const provider = $<HTMLSelectElement>(`#${target}-provider`).value;
-  const currentModel = $<HTMLInputElement>(`#${target}-model-name`).value.trim();
-  const editingModel = provider === 'custom-openai' && Boolean(currentModel);
-  const targetBaseUrl = customProviderDraft?.baseUrls?.[target] || '';
-  ($<HTMLInputElement>('#custom-provider-name')).value = customProviderDraft?.displayName || '';
-  ($<HTMLInputElement>('#custom-provider-base-url')).value = targetBaseUrl;
-  ($<HTMLInputElement>('#custom-provider-model-id')).value = editingModel ? currentModel : '';
+  ($<HTMLInputElement>('#custom-provider-name')).value = '';
+  ($<HTMLInputElement>('#custom-provider-base-url')).value = '';
+  ($<HTMLInputElement>('#custom-provider-model-id')).value = '';
   const targetLabel = target === 'chat' ? '普通模型' : '向量模型';
   $('#custom-provider-base-url-label').textContent = `${targetLabel} Base URL`;
-  $('#custom-provider-title').textContent = `${editingModel ? '编辑' : '添加'}自定义${targetLabel}`;
+  $('#custom-provider-title').textContent = `添加自定义${targetLabel}`;
   $('#custom-provider-target-copy').textContent = target === 'chat'
     ? 'PMBrain 将通过该地址调用 OpenAI 兼容的对话接口。'
     : 'PMBrain 将通过该地址调用 OpenAI 兼容的向量接口。';
   setCustomProviderError();
   const dialog = $<HTMLDialogElement>('#custom-provider-dialog');
   dialog.showModal();
-  const focusTarget = !customProviderDraft?.displayName
-    ? '#custom-provider-name'
-    : !targetBaseUrl ? '#custom-provider-base-url' : '#custom-provider-model-id';
-  setTimeout(() => $<HTMLInputElement>(focusTarget).focus(), 0);
+  setTimeout(() => $<HTMLInputElement>('#custom-provider-name').focus(), 0);
 }
 
 function closeCustomProvider(): void {
@@ -387,22 +495,23 @@ function confirmCustomProvider(): void {
   }
   const target = customProviderTarget;
   const normalizedBaseUrl = rawBaseUrl.replace(/\/+$/, '');
-  customProviderDraft = {
-    id: 'custom-openai',
+  const endpoint: DesktopCustomEndpoint = {
+    id: `${CUSTOM_ENDPOINT_PREFIX}${target}-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`,
     displayName,
-    baseUrls: { ...customProviderDraft?.baseUrls, [target]: normalizedBaseUrl },
+    baseUrl: normalizedBaseUrl,
+    modelId,
   };
+  customCatalog = {
+    ...customCatalog,
+    [target]: [...customCatalog[target], endpoint],
+  };
+  customSelection = { ...customSelection, [target]: endpoint.id };
   customProviderTarget = null;
-  renderCustomProvider();
   $<HTMLDialogElement>('#custom-provider-dialog').close();
-  const select = $<HTMLSelectElement>(`#${target}-provider`);
-  select.value = 'custom-openai';
-  previousProviderSelection[target] = 'custom-openai';
-  $<HTMLInputElement>(`#${target}-model-name`).value = modelId;
+  applyProviderSelection(target, endpoint.id, false);
   providerModels[target] = [modelId];
   renderModelDropdown(target);
-  syncProviderKeyField(target);
-  void refreshProviderModels(target, false);
+  renderProviderDropdown(target);
 }
 
 function renderModelDropdown(kind: 'chat' | 'embedding'): void {
@@ -435,10 +544,11 @@ async function refreshProviderModels(kind: ModelKind, chooseDefault: boolean): P
     return;
   }
 
-  if (provider === 'custom-openai') {
-    if (chooseDefault) input.value = '';
-    providerModels[kind] = input.value.trim() ? [input.value.trim()] : [];
-    const baseUrl = customProviderDraft?.baseUrls?.[kind];
+  if (isCustomEndpointId(provider)) {
+    const endpoint = customCatalog[kind].find(item => item.id === provider) ?? selectedCustomEndpoint(kind);
+    if (chooseDefault) input.value = endpoint?.modelId || '';
+    providerModels[kind] = input.value.trim() ? [input.value.trim()] : (endpoint?.modelId ? [endpoint.modelId] : []);
+    const baseUrl = endpoint?.baseUrl;
     status.textContent = baseUrl
       ? `接口：${baseUrl}。请输入该接口实际提供的模型 ID。`
       : '请先添加自定义接口并填写 Base URL。';
@@ -944,8 +1054,13 @@ async function saveSystemSettings(): Promise<void> {
 function populate(next: DesktopSetupState): void {
   state = next;
   const { setup } = next;
-  customProviderDraft = setup.current.customProvider ? { ...setup.current.customProvider } : null;
-  renderCustomProvider();
+  customCatalog = {
+    chat: [...(setup.current.customProviders?.chat ?? [])],
+    embedding: [...(setup.current.customProviders?.embedding ?? [])],
+  };
+  customSelection = { ...(setup.current.customSelection ?? {}) };
+  renderProviderDropdown('chat');
+  renderProviderDropdown('embedding');
   const activePanel = (document.querySelector<HTMLElement>('.panel.active')?.id.replace('panel-', '') || 'basic') as Panel;
   switchPanel(activePanel);
   $('#existing-config').hidden = setup.needsSetup;
@@ -964,9 +1079,15 @@ function populate(next: DesktopSetupState): void {
   void refreshKnowledgeSourceStatus(loadedKnowledgeDirectory, false);
   const chat = splitModelId(setup.current.chatModel);
   const embedding = splitModelId(setup.current.embeddingModel);
-  ($<HTMLSelectElement>('#chat-provider')).value = chat.provider;
+  const chatProviderValue = chat.provider === 'custom-openai'
+    ? (customSelection.chat || customCatalog.chat.find(item => item.modelId === chat.model)?.id || customCatalog.chat[0]?.id || '')
+    : chat.provider;
+  const embeddingProviderValue = embedding.provider === 'custom-openai'
+    ? (customSelection.embedding || customCatalog.embedding.find(item => item.modelId === embedding.model)?.id || customCatalog.embedding[0]?.id || '')
+    : embedding.provider === 'zeroentropyai' ? 'zeroentropy' : embedding.provider;
+  ($<HTMLSelectElement>('#chat-provider')).value = chatProviderValue;
   ($<HTMLInputElement>('#chat-model-name')).value = chat.model;
-  ($<HTMLSelectElement>('#embedding-provider')).value = embedding.provider === 'zeroentropyai' ? 'zeroentropy' : embedding.provider;
+  ($<HTMLSelectElement>('#embedding-provider')).value = embeddingProviderValue;
   previousProviderSelection.chat = ($<HTMLSelectElement>('#chat-provider')).value;
   previousProviderSelection.embedding = ($<HTMLSelectElement>('#embedding-provider')).value;
   ($<HTMLInputElement>('#embedding-model-name')).value = embedding.model;
@@ -1235,10 +1356,11 @@ async function save(): Promise<void> {
     return;
   }
   const embeddingProvider = ($<HTMLSelectElement>('#embedding-provider')).value;
-  const missingCustomTarget = chatProvider === 'custom-openai' && !customProviderDraft?.baseUrls?.chat
-    ? 'chat'
-    : embeddingProvider === 'custom-openai' && !customProviderDraft?.baseUrls?.embedding
-      ? 'embedding'
+  snapshotSelectedCustomEndpoints();
+  const missingCustomTarget = isCustomEndpointId(chatProvider) && !selectedCustomEndpoint('chat')?.baseUrl
+    ? 'chat' as const
+    : isCustomEndpointId(embeddingProvider) && !selectedCustomEndpoint('embedding')?.baseUrl
+      ? 'embedding' as const
       : null;
   if (missingCustomTarget) {
     setNotice('error', '请先添加自定义接口并填写 Base URL。');
@@ -1261,7 +1383,7 @@ async function save(): Promise<void> {
   let confirmEmbeddingRebuild = false;
   // 检测向量化模型是否变更（非首次配置）
   if (!state?.setup?.needsSetup && state?.setup?.current?.embeddingModel) {
-    const newEmbeddingModel = composeModelId(embeddingProvider, embeddingModelName);
+    const newEmbeddingModel = composeModelId(recipeProvider(embeddingProvider), embeddingModelName);
     const oldEmbeddingModel = state.setup.current.embeddingModel;
     if (newEmbeddingModel && oldEmbeddingModel && newEmbeddingModel !== oldEmbeddingModel) {
       if (!confirm(
@@ -1277,14 +1399,14 @@ async function save(): Promise<void> {
   }
 
   const keys: SetupPayload['keys'] = {};
-  const chatModel = composeModelId(chatProvider, chatModelName);
-  const embeddingModel = composeModelId(embeddingProvider, embeddingModelName);
+  const chatModel = composeModelId(recipeProvider(chatProvider), chatModelName);
+  const embeddingModel = composeModelId(recipeProvider(embeddingProvider), embeddingModelName);
   const chatKey = providerKeyId(chatProvider, 'chat');
   const embeddingKey = providerKeyId(embeddingProvider, 'embedding');
   // 需要 Key 的供应商才保存 Key
   if (chatKey && chatKey !== '__none__') {
     const chatKeyValue = ($<HTMLInputElement>('#chat-api-key')).value.trim();
-    if (!chatKeyValue && chatProvider !== 'custom-openai') {
+    if (!chatKeyValue && !isCustomEndpointId(chatProvider)) {
       setNotice('error', `供应商 ${chatProvider} 需要填写 API Key`);
       return;
     }
@@ -1292,7 +1414,7 @@ async function save(): Promise<void> {
   }
   if (embeddingProvider && embeddingKey && embeddingKey !== '__none__') {
     const embeddingKeyValue = ($<HTMLInputElement>('#embedding-api-key')).value.trim();
-    if (!embeddingKeyValue && embeddingProvider !== 'custom-openai') {
+    if (!embeddingKeyValue && !isCustomEndpointId(embeddingProvider)) {
       setNotice('error', `供应商 ${embeddingProvider} 需要填写 API Key`);
       return;
     }
@@ -1314,7 +1436,8 @@ async function save(): Promise<void> {
       chatModel,
       ...(embeddingModel ? { embeddingModel } : {}),
     },
-    customProvider: customProviderDraft ?? undefined,
+    customProviders: customCatalog,
+    customSelection,
     keys,
   };
   const firstSetup = state?.setup.needsSetup ?? true;
@@ -1411,16 +1534,19 @@ document.querySelectorAll<HTMLInputElement>('input[name="engine"]').forEach((inp
 document.querySelectorAll<HTMLInputElement>('input[name="network-mode"]').forEach((input) => input.addEventListener('change', renderNetworkMode));
 $<HTMLSelectElement>('#shared-address').addEventListener('change', renderSelectedAddressNote);
 (['chat', 'embedding'] as const).forEach(kind => {
-  $<HTMLSelectElement>(`#${kind}-provider`).addEventListener('change', () => {
-    const select = $<HTMLSelectElement>(`#${kind}-provider`);
-    if (select.value === 'custom-openai' && !customProviderDraft?.baseUrls?.[kind]) {
-      select.value = previousProviderSelection[kind];
-      openCustomProvider(kind);
-      return;
+  const select = $<HTMLSelectElement>(`#${kind}-provider`);
+  select.addEventListener('mousedown', event => {
+    event.preventDefault();
+    toggleProviderDropdown(kind);
+  });
+  select.addEventListener('keydown', event => {
+    if (event.key === 'Enter' || event.key === ' ' || event.key === 'ArrowDown') {
+      event.preventDefault();
+      toggleProviderDropdown(kind);
     }
-    previousProviderSelection[kind] = select.value;
-    syncProviderKeyField(kind);
-    void refreshProviderModels(kind, true);
+  });
+  select.addEventListener('change', () => {
+    applyProviderSelection(kind, select.value, !isCustomEndpointId(select.value));
   });
 });
 $<HTMLButtonElement>('#add-custom-chat-model').addEventListener('click', () => openCustomProvider('chat'));
@@ -1478,10 +1604,14 @@ document.addEventListener('click', e => {
   if (!target.closest('.model-picker') && !target.closest('.model-dropdown')) {
     document.querySelectorAll<HTMLUListElement>('.model-dropdown').forEach(dropdown => { dropdown.hidden = true; });
   }
+  if (!target.closest('.provider-picker')) {
+    document.querySelectorAll<HTMLUListElement>('.provider-dropdown').forEach(dropdown => { dropdown.hidden = true; });
+  }
 });
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape') {
     document.querySelectorAll<HTMLUListElement>('.model-dropdown').forEach(dropdown => { dropdown.hidden = true; });
+    document.querySelectorAll<HTMLUListElement>('.provider-dropdown').forEach(dropdown => { dropdown.hidden = true; });
   }
 });
 document.querySelectorAll<HTMLButtonElement>('.rail-item').forEach((button) => button.addEventListener('click', () => {

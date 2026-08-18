@@ -125,18 +125,20 @@
               <div class="model-fields chat-fields">
                 <label>
                   <span>供应商</span>
-                  <select id="chat-provider">
-                    <option value="">请选择供应商</option>
-                    <option value="mimo">mimo</option>
-                    <option value="zhipu">zhipu</option>
-                    <option value="deepseek">deepseek</option>
-                    <option value="openai">openai</option>
-                    <option value="anthropic">anthropic</option>
-                    <option value="google">google</option>
-                    <option value="openrouter">openrouter</option>
-                    <option value="ollama">ollama</option>
-                    <option value="custom-openai">自定义 OpenAI 接口</option>
-                  </select>
+                  <div class="provider-picker">
+                    <select id="chat-provider">
+                      <option value="">请选择供应商</option>
+                      <option value="mimo">mimo</option>
+                      <option value="zhipu">zhipu</option>
+                      <option value="deepseek">deepseek</option>
+                      <option value="openai">openai</option>
+                      <option value="anthropic">anthropic</option>
+                      <option value="google">google</option>
+                      <option value="openrouter">openrouter</option>
+                      <option value="ollama">ollama</option>
+                    </select>
+                    <ul class="provider-dropdown" id="chat-provider-dropdown" hidden></ul>
+                  </div>
                 </label>
                 <label>
                   <span>模型名称</span>
@@ -157,21 +159,23 @@
               <div class="model-fields embedding-fields">
                 <label>
                   <span>供应商</span>
-                  <select id="embedding-provider">
-                    <option value="">暂不启用向量化</option>
-                    <option value="zhipu">zhipu</option>
-                    <option value="zeroentropy">zeroentropy</option>
-                    <option value="openai">openai</option>
-                    <option value="openrouter">openrouter</option>
-                    <option value="voyage">voyage</option>
-                    <option value="google">google</option>
-                    <option value="minimax">minimax</option>
-                    <option value="dashscope">dashscope</option>
-                    <option value="ollama">ollama</option>
-                    <option value="llama-server">llama-server</option>
-                    <option value="litellm">litellm</option>
-                    <option value="custom-openai">自定义 OpenAI 接口</option>
-                  </select>
+                  <div class="provider-picker">
+                    <select id="embedding-provider">
+                      <option value="">暂不启用向量化</option>
+                      <option value="zhipu">zhipu</option>
+                      <option value="zeroentropy">zeroentropy</option>
+                      <option value="openai">openai</option>
+                      <option value="openrouter">openrouter</option>
+                      <option value="voyage">voyage</option>
+                      <option value="google">google</option>
+                      <option value="minimax">minimax</option>
+                      <option value="dashscope">dashscope</option>
+                      <option value="ollama">ollama</option>
+                      <option value="llama-server">llama-server</option>
+                      <option value="litellm">litellm</option>
+                    </select>
+                    <ul class="provider-dropdown" id="embedding-provider-dropdown" hidden></ul>
+                  </div>
                 </label>
                 <label>
                   <span>模型名称</span>

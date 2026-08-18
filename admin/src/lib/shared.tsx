@@ -66,7 +66,9 @@ export function factKindLabel(kind: string): string {
 /** Format a date string or null into locale string. */
 export function formatDate(value: string | null, fallback = '无记录'): string {
   if (!value) return fallback;
-  return new Date(value).toLocaleString();
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return fallback;
+  return date.toLocaleString('zh-CN', { hour12: false });
 }
 
 /** Run output panel shared across Console, TakeProposals, and SystemDiagnostic pages. */

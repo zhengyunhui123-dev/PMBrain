@@ -9,6 +9,7 @@ export const SourceSummarySchema = z.object({
   federated: z.boolean(),
   page_count: z.number().int().nonnegative(),
   last_sync_at: z.string().nullable(),
+  last_git_commit_at: z.string().nullable().optional(),
   archived: z.boolean().optional(),
   archived_at: z.string().nullable().optional(),
   archive_expires_at: z.string().nullable().optional(),

@@ -138,7 +138,7 @@ function summarizeSingleFile(preview: ImportSummaryPreview, run: ImportSummaryRu
       '- 正文已保存到知识库',
       '- 未生成切片，也未进行向量化',
       `- 原因：${sizeReason}`,
-      '- 处理方法：拆分成多个较小文件，或在“设置 → 导入切片与向量化”中谨慎提高正文上限后重新导入。',
+      '- 处理方法：把表格或超大附件按工作表、章节拆成较小文件后重新导入。普通 Markdown 规格说明书会自动按标题切片。',
     ].join('\n'),
     badge: '部分完成',
     tone: 'partial',

@@ -222,7 +222,7 @@ export function SourceManagementSettings() {
                       </span>
                     </td>
                     <td>{source.page_count}</td>
-                    <td>{formatDate(source.last_sync_at)}</td>
+                    <td>{formatDate(source.git_repo ? (source.last_git_commit_at ?? source.last_sync_at) : source.last_sync_at)}</td>
                     <td>
                       {source.archived ? (
                         <button className="pm-ghost" onClick={() => void restoreSource(source)} disabled={sourceActionId === source.id}>

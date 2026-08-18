@@ -249,7 +249,7 @@ export function summarizeImportEmbeddingSkip(skip: ImportEmbeddingSkip): string 
     '- 正文已保存到知识库',
     '- 未生成切片，也未进行向量化',
     `- 原因：${sizeReason}`,
-    '- 处理方法：按工作表、地区或主题拆分成多个较小文件，删除不需要的空行或列后重新导入。',
+    '- 处理方法：把表格或超大附件按工作表、章节拆成较小文件后重新导入。普通 Markdown 规格说明书会自动按标题切片。',
   ].join('\n');
 }
 export function summarizeRunResult(preview: IntentPreview, run: ConsoleRun): string {
