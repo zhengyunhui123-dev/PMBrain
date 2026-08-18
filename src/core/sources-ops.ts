@@ -217,7 +217,8 @@ async function fetchSourceRow(engine: BrainEngine, id: string): Promise<SourceRo
  * existing row instead of throwing source_id_taken. This lets the setup
  * wizard / admin console "save" flow succeed when the user re-saves an
  * already-registered knowledge directory without manually removing it
- * first.
+ * first. A DB-only row with the same id is also repaired when --path is
+ * supplied; remote rows and path conflicts remain errors.
  *
  * Comparison is done on resolved (realpath) paths so that case / trailing
  * separator differences on Windows don't cause false negatives. Falls
@@ -246,6 +247,83 @@ function realpathSafe(p: string): string {
   } catch {
     return resolvePath(p);
   }
+}
+
+function comparablePath(p: string): string {
+  const normalized = realpathSafe(p).replace(/\\/g, '/').replace(/\/+$/, '');
+  return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
+}
+
+function pathsOverlap(a: string, b: string): boolean {
+  const left = comparablePath(a);
+  const right = comparablePath(b);
+  return left === right || left.startsWith(`${right}/`) || right.startsWith(`${left}/`);
+}
+
+/**
+ * Attach a filesystem directory to an existing DB-only source.
+ *
+ * This is deliberately repair-only: an existing non-null path is accepted
+ * only when it resolves to the same directory, and remote/overlapping source
+ * paths are never silently reassigned.
+ */
+export async function ensureSourceLocalPath(
+  engine: BrainEngine,
+  id: string,
+  localPath: string,
+): Promise<SourceRow> {
+  validateSourceId(id);
+  const normalizedPath = localPath.trim();
+  if (!normalizedPath) {
+    throw new SourceOpError('source_id_taken', `Source "${id}" requires a non-empty local path.`);
+  }
+
+  const existing = await fetchSourceRow(engine, id);
+  if (!existing) {
+    throw new SourceOpError('not_found', `Source "${id}" was not found.`);
+  }
+  if (existing.local_path) {
+    if (comparablePath(existing.local_path) === comparablePath(normalizedPath)) return existing;
+    throw new SourceOpError(
+      'source_id_taken',
+      `Source "${id}" is already registered at "${existing.local_path}".`,
+    );
+  }
+  if (getRemoteUrl(existing.config)) {
+    throw new SourceOpError(
+      'source_id_taken',
+      `Source "${id}" is a remote source and cannot be assigned a local path.`,
+    );
+  }
+
+  const others = await engine.executeRaw<{ id: string; local_path: string }>(
+    `SELECT id, local_path FROM sources WHERE local_path IS NOT NULL AND id != $1`,
+    [id],
+  );
+  const conflict = others.find(other => pathsOverlap(normalizedPath, other.local_path));
+  if (conflict) {
+    throw new SourceOpError(
+      'overlapping_path',
+      `path "${normalizedPath}" overlaps with existing source "${conflict.id}" at "${conflict.local_path}". `
+        + 'Overlapping sources are not allowed.',
+    );
+  }
+
+  await engine.executeRaw(
+    `UPDATE sources SET local_path = $1 WHERE id = $2 AND local_path IS NULL`,
+    [normalizedPath, id],
+  );
+  const repaired = await fetchSourceRow(engine, id);
+  if (!repaired) {
+    throw new SourceOpError('insert_failed', `Source "${id}" disappeared while repairing its local path.`);
+  }
+  if (!repaired.local_path || comparablePath(repaired.local_path) !== comparablePath(normalizedPath)) {
+    throw new SourceOpError(
+      'source_id_taken',
+      `Source "${id}" local path changed concurrently; expected "${normalizedPath}".`,
+    );
+  }
+  return repaired;
 }
 
 async function countPages(engine: BrainEngine, id: string): Promise<number> {
@@ -311,6 +389,9 @@ export async function addSource(
     const existingRow = await fetchSourceRow(engine, opts.id);
     if (existingRow && isSameSourceSpec(existingRow, opts)) {
       return existingRow;
+    }
+    if (existingRow && opts.localPath && !existingRow.local_path && !getRemoteUrl(existingRow.config)) {
+      return ensureSourceLocalPath(engine, opts.id, opts.localPath);
     }
     const where = existingRow?.local_path
       ? ` at "${existingRow.local_path}"`

@@ -14,6 +14,7 @@
 import { describe, test, expect, beforeAll, afterAll, beforeEach } from 'bun:test';
 import { setupDB, teardownDB, hasDatabase } from './helpers.ts';
 import { PostgresEngine } from '../../src/core/postgres-engine.ts';
+import { ensureSourceLocalPath } from '../../src/core/sources-ops.ts';
 
 const skip = !hasDatabase();
 const describeIfDB = skip ? describe.skip : describe;
@@ -60,6 +61,13 @@ async function seedSource(
 }
 
 describeIfDB('Postgres parity — listAllSources', () => {
+  test('repairs a DB-only source local_path without changing its id', async () => {
+    await seedSource('db-only', { local_path: null });
+    const repaired = await ensureSourceLocalPath(engine, 'db-only', '/tmp/db-only-repaired');
+    expect(repaired.id).toBe('db-only');
+    expect(repaired.local_path).toBe('/tmp/db-only-repaired');
+  });
+
   test('returns rows including default + seeded', async () => {
     await seedSource('alpha');
     const all = await engine.listAllSources();

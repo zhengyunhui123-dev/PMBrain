@@ -122,6 +122,9 @@ describe('desktop system orchestration contracts', () => {
     expect(main).toContain("'/admin/api/brain/overview'");
     expect(main).toContain('payload.knowledgeSourceChanged === false');
     expect(setupController).toContain('this.applyOnce(effectivePayload');
+    expect(setupController).toContain('repairMissingMainSourcePath');
+    expect(setupController).toContain('if (knowledgeDirectory && sourceId)');
+    expect(setupController).toContain('主源路径校验失败');
   });
 
   test('serializes gateway transitions and keeps service startup single-flight', () => {

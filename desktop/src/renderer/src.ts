@@ -1068,7 +1068,7 @@ function populate(next: DesktopSetupState): void {
   const radio = document.querySelector<HTMLInputElement>(`input[name="engine"][value="${setup.current.engine}"]`);
   if (radio) radio.checked = true;
   ($<HTMLInputElement>('#database-path')).value = setup.current.databasePath || setup.defaults.databasePath;
-  ($<HTMLInputElement>('#knowledge-directory')).value = setup.current.knowledgeDirectory || (setup.needsSetup ? '' : setup.defaults.knowledgeDirectory);
+  ($<HTMLInputElement>('#knowledge-directory')).value = setup.current.knowledgeDirectory || setup.defaults.knowledgeDirectory;
   ($<HTMLInputElement>('#knowledge-source-id')).value = setup.current.knowledgeSourceId || '';
   loadedKnowledgeDirectory = ($<HTMLInputElement>('#knowledge-directory')).value.trim();
   loadedKnowledgeSourceId = ($<HTMLInputElement>('#knowledge-source-id')).value.trim();

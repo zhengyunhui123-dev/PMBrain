@@ -18,6 +18,7 @@ import { tmpdir } from 'os';
 import { PGLiteEngine } from '../src/core/pglite-engine.ts';
 import {
   addSource,
+  ensureSourceLocalPath,
   listSources,
   removeSource,
   getSourceStatus,
@@ -158,6 +159,25 @@ describe('addSource — Q4 pre-flight collision', () => {
         expect(e).toBeInstanceOf(SourceOpError);
         expect((e as SourceOpError).code).toBe('invalid_id');
       }
+    });
+  });
+
+  test('repairs an existing DB-only source when a local path is supplied', async () => {
+    await withEnv2(async () => {
+      await engine.executeRaw(
+        `INSERT INTO sources (id, name, local_path, config) VALUES ('legacy-main', 'legacy-main', NULL, '{"federated":true}'::jsonb)`,
+      );
+
+      const row = await addSource(engine, {
+        id: 'legacy-main',
+        localPath: '/tmp/legacy-main',
+        federated: true,
+      });
+
+      expect(row.id).toBe('legacy-main');
+      expect(row.local_path).toBe('/tmp/legacy-main');
+      const repaired = await ensureSourceLocalPath(engine, 'legacy-main', '/tmp/legacy-main');
+      expect(repaired.local_path).toBe('/tmp/legacy-main');
     });
   });
 });

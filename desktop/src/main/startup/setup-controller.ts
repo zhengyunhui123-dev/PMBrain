@@ -1,5 +1,5 @@
 import { app } from 'electron';
-import { basename } from 'node:path';
+import { basename, resolve } from 'node:path';
 import {
   getSetupInfo,
   markDesktopMigration,
@@ -27,6 +27,14 @@ interface StartupProgress {
 interface CanonicalMainSource {
   id: string;
   localPath?: string;
+}
+
+function sameSourcePath(left: string, right: string): boolean {
+  const normalize = (value: string) => {
+    const normalized = resolve(value).replace(/[\\/]+$/, '');
+    return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
+  };
+  return normalize(left) === normalize(right);
 }
 
 export interface SetupControllerDependencies {
@@ -63,10 +71,33 @@ export class SetupController {
     return { id, ...(source?.local_path ? { localPath: source.local_path } : {}) };
   }
 
+  private async repairMissingMainSourcePath(sourceId: string, localPath: string): Promise<void> {
+    const activeSidecar = this.dependencies.sidecar.current;
+    if (!activeSidecar || this.dependencies.sidecar.state?.phase !== 'ready') return;
+    await activeSidecar.adminRequest('/admin/api/sources/default', {
+      method: 'POST',
+      body: JSON.stringify({ sourceId, localPath }),
+    });
+  }
+
+  private async verifyConfiguredMainSource(sourceId: string, localPath: string): Promise<void> {
+    const canonical = await this.readCanonicalMainSource().catch(() => null);
+    if (canonical?.id === sourceId && canonical.localPath && sameSourcePath(canonical.localPath, localPath)) return;
+    throw new Error(
+      `主源路径校验失败：桌面目录为「${localPath}」，数据库主源「${canonical?.id ?? sourceId}」路径为「${canonical?.localPath ?? '空'}」。`
+        + '未显示主源已配置成功，请检查后重试。',
+    );
+  }
+
   async currentState() {
     const setup = getSetupInfo();
     if (!setup.needsSetup) {
-      const canonical = await this.readCanonicalMainSource().catch(() => null);
+      let canonical = await this.readCanonicalMainSource().catch(() => null);
+      const configuredDirectory = setup.current.knowledgeDirectory?.trim();
+      if (canonical && configuredDirectory && !canonical.localPath) {
+        await this.repairMissingMainSourcePath(canonical.id, configuredDirectory).catch(() => undefined);
+        canonical = await this.readCanonicalMainSource().catch(() => canonical);
+      }
       if (canonical) {
         setup.current.knowledgeSourceId = canonical.id;
         if (canonical.localPath) setup.current.knowledgeDirectory = canonical.localPath;
@@ -94,13 +125,13 @@ export class SetupController {
             knowledgeDirectory: canonical.localPath ?? payload.knowledgeDirectory,
           }
         : payload;
-      return await this.applyOnce(effectivePayload, payload.knowledgeSourceChanged !== false || !canonical);
+      return await this.applyOnce(effectivePayload);
     } finally {
       this.applying = false;
     }
   }
 
-  private async applyOnce(payload: SetupPayload, setDefaultSource = true) {
+  private async applyOnce(payload: SetupPayload) {
     await this.dependencies.ensureRuntimeReady();
     const previousEmbeddingModel = getSetupInfo().current.embeddingModel?.trim();
     const requestedEmbeddingModel = payload.modelConfig?.embeddingModel?.trim();
@@ -188,7 +219,7 @@ export class SetupController {
       await this.dependencies.syncModelDefaults({ resetAdvanced: payload.resetAdvancedModelRouting === true });
       const knowledgeDirectory = saved.config.desktop?.knowledge_directory;
       const sourceId = saved.config.desktop?.knowledge_source_id;
-      if (setDefaultSource && knowledgeDirectory && sourceId) {
+      if (knowledgeDirectory && sourceId) {
         const add = await runCli(this.dependencies.runtime(), [
           'sources', 'add', sourceId, '--path', knowledgeDirectory,
           '--name', basename(knowledgeDirectory), '--federated',
@@ -256,6 +287,11 @@ export class SetupController {
       throw error;
     }
     await this.dependencies.sidecar.start(false);
+    const savedKnowledgeDirectory = saved.config.desktop?.knowledge_directory;
+    const savedSourceId = saved.config.desktop?.knowledge_source_id;
+    if (savedKnowledgeDirectory && savedSourceId) {
+      await this.verifyConfiguredMainSource(savedSourceId, savedKnowledgeDirectory);
+    }
     if (migrationRequired && saved.config.engine === 'pglite') {
       if (!this.dependencies.sidecar.current || this.dependencies.sidecar.state?.phase !== 'ready') {
         throw new Error('PGLite sidecar 尚未完成数据库迁移和健康检查。');

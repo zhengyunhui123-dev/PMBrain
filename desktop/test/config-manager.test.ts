@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { getRecipe } from '../../src/core/ai/recipes/index.js';
 import {
@@ -29,6 +29,13 @@ function isolatedHome(): string {
 }
 
 describe('desktop config manager', () => {
+  test('exposes Documents/PMBrain as the first-use knowledge directory default', () => {
+    isolatedHome();
+    const info = getSetupInfo();
+    expect(info.needsSetup).toBe(true);
+    expect(info.defaults.knowledgeDirectory).toBe(join(homedir(), 'Documents', 'PMBrain'));
+  });
+
   test('keeps legacy users local and defaults window close to tray without rewriting config', () => {
     const root = isolatedHome();
     writeJsonConfig(desktopConfigPath(), {

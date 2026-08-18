@@ -15,19 +15,20 @@ const builder = readFileSync(resolve('electron-builder.yml'), 'utf8');
 const preview = readFileSync(resolve('scripts/preview-renderer.ts'), 'utf8');
 
 describe('desktop settings renderer contracts', () => {
-  test('keeps the first-use knowledge source empty until the user selects a directory', () => {
+  test('shows the Documents/PMBrain default on first use and keeps it on save', () => {
     expect(html).toContain('id="knowledge-directory"');
-    expect(html).toContain('placeholder="例如：D:\\你的知识库"');
+    expect(html).toContain('placeholder="默认：Documents\\PMBrain"');
     expect(html).toContain('选择原始资料目录后，PMBrain 会将其注册为主源；启用 Git 后，快速维护可自动同步目录变化。');
     expect(html).toContain('id="knowledge-source-status"');
     expect(html).toContain('id="enable-knowledge-source-git"');
     expect(html).toContain('高级：自定义主源 ID');
-    expect(renderer).toContain("setup.current.knowledgeDirectory || (setup.needsSetup ? '' : setup.defaults.knowledgeDirectory)");
+    expect(renderer).toContain('setup.current.knowledgeDirectory || setup.defaults.knowledgeDirectory');
     expect(renderer).toContain('inspectKnowledgeSourceDirectory');
     expect(renderer).toContain('initializeKnowledgeSourceGit');
     expect(renderer).toContain('✓ Git 已启用 · 快速维护会自动同步此目录');
     expect(renderer).toContain('⚠ 未启用 Git，快速维护暂时无法自动同步');
     expect(main).toContain("'--name', basename(knowledgeDirectory), '--federated'");
+    expect(main).toContain('主源路径校验失败');
   });
 
   test('shares the PMBrain violet visual identity across dark and light themes', () => {

@@ -35,6 +35,7 @@ import { VERSION } from '../version.ts';
 import * as db from '../core/db.ts';
 import { sqlQueryForEngine, executeRawJsonb } from '../core/sql-query.ts';
 import { resolveMainSourceId } from '../core/source-resolver.ts';
+import { ensureSourceLocalPath } from '../core/sources-ops.ts';
 import { isImageFilePath, isMarkdownFilePath, isOfficeFilePath } from '../core/sync.ts';
 import { MinionQueue } from '../core/minions/queue.ts';
 import {
@@ -198,8 +199,15 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
 
   app.post('/admin/api/sources/default', requireAdmin, express.json({ limit: '4kb' }), async (req: Request, res: Response) => {
     const sourceId = typeof req.body?.sourceId === 'string' ? req.body.sourceId.trim() : '';
+    const localPath = req.body?.localPath === undefined
+      ? undefined
+      : typeof req.body.localPath === 'string' ? req.body.localPath.trim() : '';
     if (!sourceId) {
       res.status(400).json({ error: 'source_id_required' });
+      return;
+    }
+    if (localPath === '') {
+      res.status(400).json({ error: 'local_path_required' });
       return;
     }
     try {
@@ -216,6 +224,7 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
         res.status(400).json({ error: 'archived_source_cannot_be_main' });
         return;
       }
+      if (localPath !== undefined) await ensureSourceLocalPath(engine, sourceId, localPath);
       await engine.setConfig('sources.default', sourceId);
       sendAdminContract(res, SetDefaultSourceResponseSchema, { sourceId });
     } catch (e) {
