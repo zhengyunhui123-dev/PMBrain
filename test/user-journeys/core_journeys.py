@@ -305,34 +305,33 @@ def import_search_journey(page: Page, origin: str, markdown: Path, pdf: Path, ar
     page.get_by_role("heading", name="知识工作台").wait_for()
     page.get_by_label("选择本地文件").set_input_files([str(markdown), str(pdf)])
     page.get_by_role("button", name="导入", exact=True).click()
-    badge = page.locator(".run-pill")
-    page.wait_for_function(
-        "() => document.querySelector('.run-pill') || document.querySelector('.pm-error-text')",
-        timeout=180_000,
-    )
-    if page.locator(".pm-error-text").count() and page.locator(".pm-error-text").first.is_visible():
-        raise AssertionError(f"Import UI reported an error: {page.locator('.pm-error-text').first.inner_text()}")
+    textarea = page.locator(".assistant-composer textarea")
+    textarea.fill(UNIQUE_MARKER)
     try:
-        page.wait_for_function("() => ['已完成', '部分完成'].includes(document.querySelector('.run-pill')?.textContent?.trim() || '')", timeout=180_000)
+        page.wait_for_function(
+            """() => {
+              const button = document.querySelector('.search-action-main');
+              const progress = document.querySelector('.assistant-attachment-help')?.textContent || '';
+              return Boolean(button && !button.disabled && !progress.startsWith('正在导入'));
+            }""",
+            timeout=180_000,
+        )
     except PlaywrightTimeoutError:
         details = page.locator(".nl-details")
         if details.count():
             details.evaluate("element => { element.open = true; }")
         diagnostic = page.locator(".nl-result").inner_text() if page.locator(".nl-result").count() else page.locator("body").inner_text()
         (artifacts / "import-run-timeout.txt").write_text(
-            f"url={page.url}\nprogress={page.locator('.attachment-progress').inner_text() if page.locator('.attachment-progress').count() else 'n/a'}\n\n{diagnostic}\n",
+            f"url={page.url}\nprogress={page.locator('.assistant-attachment-help').inner_text() if page.locator('.assistant-attachment-help').count() else 'n/a'}\n\n{diagnostic}\n",
             encoding="utf-8",
         )
         raise
-    if badge.inner_text().strip() != "已完成":
+    if page.locator(".pm-error-text").count() and page.locator(".pm-error-text").first.is_visible():
+        raise AssertionError(f"Import UI reported an error: {page.locator('.pm-error-text').first.inner_text()}")
+    run_pill = page.locator(".nl-result .run-pill").last
+    if not run_pill.count() or run_pill.inner_text().strip() != "已完成":
         details = page.locator(".nl-result").inner_text()
         raise AssertionError(f"Markdown/PDF import was not fully successful: {details}")
-    textarea = page.locator(".assistant-composer textarea")
-    textarea.fill(UNIQUE_MARKER)
-    page.wait_for_function(
-        "() => { const button = document.querySelector('.search-action-main'); return button && !button.disabled; }",
-        timeout=90_000,
-    )
     page.locator(".search-action-main").click()
     result = page.locator(".knowledge-search-result")
     result.wait_for(state="visible", timeout=90_000)
