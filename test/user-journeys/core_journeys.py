@@ -413,39 +413,88 @@ def embedding_switch_journey(page: Page, artifacts: Path, provider: LocalOpenAIS
     origin = open_admin_from_desktop(page)
     page.goto(origin + "/admin/#tasks")
     page.get_by_role("heading", name="任务中心").wait_for(timeout=90_000)
-    run_id_handle = page.wait_for_function(
-        """async () => {
-          const response = await fetch('/admin/api/runs', { credentials: 'same-origin' });
-          if (!response.ok) return false;
-          const payload = await response.json();
-          const current = (payload.rows || [])
-            .filter(run =>
-              run.kind === 'embed_stale' &&
-              Array.isArray(run.command) &&
-              run.command.includes('--catch-up') &&
-              typeof run.id === 'string'
+    poll_deadline = time.monotonic() + 180
+    rebuild_id = None
+    last_runs_response: object = None
+    while time.monotonic() < poll_deadline:
+        try:
+            last_runs_response = page.evaluate(
+                """async () => {
+                  const controller = new AbortController();
+                  const timeout = setTimeout(() => controller.abort(), 5000);
+                  try {
+                    const response = await fetch('/admin/api/runs', {
+                      credentials: 'same-origin',
+                      signal: controller.signal,
+                    });
+                    let body = null;
+                    try { body = await response.json(); } catch (_) {}
+                    return { ok: response.ok, status: response.status, body };
+                  } catch (error) {
+                    return { ok: false, status: 0, error: String(error) };
+                  } finally {
+                    clearTimeout(timeout);
+                  }
+                }"""
             )
-            .sort((left, right) => String(right.startedAt).localeCompare(String(left.startedAt)));
-          return current[0]?.id || false;
-        }""",
-        timeout=180_000,
-    )
-    rebuild_id = run_id_handle.json_value()
+            rows = (last_runs_response or {}).get("body", {}).get("rows", [])
+            current = [
+                run for run in rows
+                if run.get("kind") == "embed_stale"
+                and "--catch-up" in (run.get("command") or [])
+                and isinstance(run.get("id"), str)
+            ]
+            current.sort(key=lambda run: str(run.get("startedAt", "")), reverse=True)
+            if current:
+                rebuild_id = current[0]["id"]
+                break
+        except Exception as exc:
+            last_runs_response = {"error": repr(exc)}
+        page.wait_for_timeout(1000)
     if not isinstance(rebuild_id, str) or not rebuild_id:
-        raise AssertionError(f"Background embedding rebuild was not submitted: {rebuild_id}")
-    rebuild_handle = page.wait_for_function(
-        f"""async () => {{
-          const response = await fetch(`/admin/api/runs/${{encodeURIComponent({json.dumps(rebuild_id)})}}`, {{ credentials: 'same-origin' }});
-          if (!response.ok) return false;
-          const run = await response.json();
-          if (!['completed', 'failed', 'cancelled'].includes(run.status)) return false;
-          return run;
-        }}""",
-        timeout=180_000,
-    )
-    rebuild = rebuild_handle.json_value()
+        raise AssertionError(
+            f"Background embedding rebuild was not submitted: {rebuild_id}; "
+            f"last runs response={last_runs_response}"
+        )
+    poll_deadline = time.monotonic() + 180
+    rebuild: object = None
+    last_rebuild_response: object = None
+    while time.monotonic() < poll_deadline:
+        try:
+            last_rebuild_response = page.evaluate(
+                """async (runId) => {
+                  const controller = new AbortController();
+                  const timeout = setTimeout(() => controller.abort(), 5000);
+                  try {
+                    const response = await fetch(`/admin/api/runs/${encodeURIComponent(runId)}`, {
+                      credentials: 'same-origin',
+                      signal: controller.signal,
+                    });
+                    let body = null;
+                    try { body = await response.json(); } catch (_) {}
+                    return { ok: response.ok, status: response.status, body };
+                  } catch (error) {
+                    return { ok: false, status: 0, error: String(error) };
+                  } finally {
+                    clearTimeout(timeout);
+                  }
+                }""",
+                rebuild_id,
+            )
+            if (last_rebuild_response and last_rebuild_response.get("ok")):
+                candidate = last_rebuild_response.get("body")
+                if isinstance(candidate, dict):
+                    rebuild = candidate
+                    if candidate.get("status") in {"completed", "failed", "cancelled"}:
+                        break
+        except Exception as exc:
+            last_rebuild_response = {"error": repr(exc)}
+        page.wait_for_timeout(1000)
     if not rebuild or rebuild.get("status") != "completed":
-        raise AssertionError(f"Background embedding rebuild did not complete: {rebuild}")
+        raise AssertionError(
+            f"Background embedding rebuild did not complete: {rebuild}; "
+            f"last response={last_rebuild_response}"
+        )
     if "--catch-up" not in (rebuild.get("command") or []):
         raise AssertionError(f"Embedding rebuild was not handed to the catch-up task: {rebuild}")
 
