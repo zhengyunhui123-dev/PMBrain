@@ -376,6 +376,7 @@ def embedding_switch_journey(page: Page, artifacts: Path, provider: LocalOpenAIS
     # value in the UI.
     page.locator("#embedding-provider").select_option(label="PMBrain E2E Local Provider")
     page.locator("#embedding-model-name").fill("e2e-embedding-12")
+    switch_started_at = page.evaluate("() => new Date().toISOString()")
     page.once("dialog", lambda dialog: dialog.accept())
     page.locator("#save-setup").click()
     page.locator("#setup-wait").wait_for(state="hidden", timeout=180_000)
@@ -391,32 +392,26 @@ def embedding_switch_journey(page: Page, artifacts: Path, provider: LocalOpenAIS
     origin = open_admin_from_desktop(page)
     page.goto(origin + "/admin/#tasks")
     page.get_by_role("heading", name="任务中心").wait_for(timeout=90_000)
-    page.wait_for_function(
-        """async () => {
-          const response = await fetch('/admin/api/runs', { credentials: 'same-origin' });
+    rebuild_handle = page.wait_for_function(
+        f"""async () => {{
+          const switchStartedAt = {json.dumps(switch_started_at)};
+          const response = await fetch('/admin/api/runs', {{ credentials: 'same-origin' }});
           if (!response.ok) return false;
           const payload = await response.json();
-          return (payload.rows || []).some(run =>
-            run.kind === 'embed_stale' &&
-            Array.isArray(run.command) &&
-            run.command.includes('--catch-up') &&
-            ['completed', 'failed', 'cancelled'].includes(run.status)
-          );
-        }""",
-        timeout=180_000,
-    )
-    rebuild = page.evaluate(
-        """() => fetch('/admin/api/runs', { credentials: 'same-origin' })
-          .then(response => response.json())
-          .then(payload => (payload.rows || [])
+          const terminal = (payload.rows || [])
             .filter(run =>
               run.kind === 'embed_stale' &&
               Array.isArray(run.command) &&
               run.command.includes('--catch-up') &&
+              Date.parse(run.startedAt || '') >= Date.parse(switchStartedAt) &&
               ['completed', 'failed', 'cancelled'].includes(run.status)
             )
-            .sort((left, right) => String(right.startedAt).localeCompare(String(left.startedAt)))[0])"""
+            .sort((left, right) => String(right.startedAt).localeCompare(String(left.startedAt)));
+          return terminal[0] || false;
+        }}""",
+        timeout=180_000,
     )
+    rebuild = rebuild_handle.json_value()
     if not rebuild or rebuild.get("status") != "completed":
         raise AssertionError(f"Background embedding rebuild did not complete: {rebuild}")
     if "--catch-up" not in (rebuild.get("command") or []):
