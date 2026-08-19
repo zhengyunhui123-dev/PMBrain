@@ -265,12 +265,16 @@ def select_custom_model(page: Page, kind: str, base_url: str, model: str) -> Non
 
 
 def open_admin_from_desktop(page: Page) -> str:
-    page.wait_for_function("() => !document.querySelector('#open-admin')?.disabled", timeout=120_000)
-    try:
-        page.locator("#open-admin").click(timeout=20_000)
-    except PlaywrightTimeoutError:
-        if "/admin/" not in page.url:
-            raise
+    if "/admin/" in page.url:
+        origin = page.url.split("/admin", 1)[0]
+        page.goto(origin + "/admin/#")
+    else:
+        page.wait_for_function("() => !document.querySelector('#open-admin')?.disabled", timeout=120_000)
+        try:
+            page.locator("#open-admin").click(timeout=20_000)
+        except PlaywrightTimeoutError:
+            if "/admin/" not in page.url:
+                raise
     page.wait_for_load_state("domcontentloaded")
     page.get_by_role("heading", name="总体概览").wait_for(timeout=90_000)
     return page.url.split("/admin", 1)[0]
