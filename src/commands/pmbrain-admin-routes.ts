@@ -148,6 +148,7 @@ export interface PmbrainAdminRouteOptions {
   requireAdmin: express.RequestHandler;
   runHooks?: RunHooks;
   getPgliteBusy: () => boolean;
+  getPgliteConnected?: () => boolean;
   reconnectPglite?: () => Promise<void>;
   ensureAdminWorkerStarted: () => Promise<unknown>;
 }
@@ -162,6 +163,7 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
     requireAdmin,
     runHooks,
     getPgliteBusy,
+    getPgliteConnected,
     reconnectPglite,
     ensureAdminWorkerStarted,
   } = options;
@@ -176,7 +178,8 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
         queue = null;
       }
     }
-    const pgliteOwner = config.engine === 'pglite' && config.database_path && !getPgliteBusy()
+    const pgliteDisconnected = config.engine === 'pglite' && getPgliteConnected?.() === false;
+    const pgliteOwner = config.engine === 'pglite' && config.database_path && (!getPgliteBusy() || pgliteDisconnected)
       ? await inspectPgliteOwner(config.database_path, {
           allowTerminate: true,
         })
@@ -196,7 +199,8 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
       res.status(400).json({ error: 'pglite_owner_control_unavailable' });
       return;
     }
-    if (getPgliteBusy()) {
+    const pgliteDisconnected = getPgliteConnected?.() === false;
+    if (getPgliteBusy() && !pgliteDisconnected) {
       res.status(423).json({ error: 'PGLite 正在执行后台任务，请使用任务卡片中的安全取消。', code: 'pglite_busy' });
       return;
     }
@@ -311,7 +315,11 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
   let scheduledDreamStarting = false;
   let scheduledDreamRetryAfter = 0;
   const checkScheduledDream = async (now = new Date()) => {
-    if (scheduledDreamStarting || Date.now() < scheduledDreamRetryAfter) return;
+    if (
+      scheduledDreamStarting
+      || Date.now() < scheduledDreamRetryAfter
+      || (config.engine === 'pglite' && (getPgliteBusy() || getPgliteConnected?.() === false))
+    ) return;
     let settings: AdminDreamScheduleSettings;
     try {
       settings = await dreamScheduleView();

@@ -55,6 +55,7 @@ import { assessDestructiveImpact, softDeleteSource, restoreSource } from '../cor
 import { deleteLockRow } from '../core/db-lock.ts';
 import { VERSION } from '../version.ts';
 import * as db from '../core/db.ts';
+import { reconnectPgliteWithRetry } from '../core/pglite-reconnect.ts';
 import { sqlQueryForEngine, executeRawJsonb } from '../core/sql-query.ts';
 import { resolveMainSourceId } from '../core/source-resolver.ts';
 import { isImageFilePath, isMarkdownFilePath, isOfficeFilePath } from '../core/sync.ts';
@@ -454,6 +455,10 @@ function listenHttpServer(
       if (settled) return;
       settled = true;
       cleanup();
+      // If bind fails (usually because an older sidecar still owns the port),
+      // close the un-listened server before rejecting. The caller then also
+      // releases the PGLite engine instead of leaving a lock-only process.
+      server.close(() => undefined);
       reject(err);
     };
 
@@ -806,11 +811,30 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
   const pgliteRunCoordinator = engine.kind === 'pglite' ? new PgliteRunCoordinator() : null;
   let pgliteBusy = false;
   let pgliteConnected = true;
+  let pgliteReconnectPromise: Promise<void> | null = null;
   const reconnectPglite = engine.kind === 'pglite' && config
     ? async () => {
         if (pgliteConnected) return;
-        await engine.connect(toEngineConfig(config as GBrainConfig));
-        pgliteConnected = true;
+        if (!pgliteReconnectPromise) {
+          const pending = reconnectPgliteWithRetry(
+            () => engine.connect(toEngineConfig(config as GBrainConfig)),
+            {
+              onRetry: (_error, attempt, delayMs) => {
+                console.error(`[serve-http] PGLite handoff waiting for previous owner (attempt ${attempt}, retry in ${delayMs}ms)`);
+              },
+            },
+          ).then(() => {
+            pgliteConnected = true;
+          });
+          pgliteReconnectPromise = pending;
+          try {
+            await pending;
+          } finally {
+            if (pgliteReconnectPromise === pending) pgliteReconnectPromise = null;
+          }
+          return;
+        }
+        await pgliteReconnectPromise;
       }
     : undefined;
   const runHooks = engine.kind === 'pglite' && config
@@ -827,12 +851,11 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
           }
         },
         afterComplete: async () => {
-          try {
-            await engine.connect(toEngineConfig(config as GBrainConfig));
-            pgliteConnected = true;
-          } finally {
-            pgliteBusy = false;
-          }
+          // Keep the service in the safe busy state until ownership is really
+          // back. A single fail-fast connect leaves a live HTTP process with
+          // no database and makes the next user action look corrupted.
+          await reconnectPglite?.();
+          pgliteBusy = false;
         },
       }
     : undefined;
@@ -1171,7 +1194,7 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
       sql,
       config.engine || 'pglite',
       VERSION,
-      pgliteBusy,
+      pgliteBusy || (engine.kind === 'pglite' && !pgliteConnected),
     );
     res.status(result.status).json(result.body);
   });
@@ -1329,7 +1352,8 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
   }
 
   app.use('/admin/api', (req: Request, res: Response, next: express.NextFunction) => {
-    if (!pgliteBusy) {
+    const pgliteUnavailable = engine.kind === 'pglite' && !pgliteConnected;
+    if (!pgliteBusy && !pgliteUnavailable) {
       next();
       return;
     }
@@ -1477,7 +1501,8 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
     config,
     requireAdmin,
     runHooks,
-    getPgliteBusy: () => pgliteBusy,
+    getPgliteBusy: () => pgliteBusy || (engine.kind === 'pglite' && !pgliteConnected),
+    getPgliteConnected: () => pgliteConnected,
     reconnectPglite,
     ensureAdminWorkerStarted,
   });

@@ -266,7 +266,14 @@ export async function startRun(kind: string, command: string[], cwd: string, hoo
         cwd,
         shell: false,
         windowsHide: true,
-        env: process.env,
+        env: {
+          ...process.env,
+          // The parent is a desktop sidecar, but this child is the temporary
+          // CLI owner of PGLite. Do not let the sidecar's fail-fast startup
+          // policy or owner label leak into maintenance children.
+          PMBRAIN_PGLITE_OWNER_TYPE: 'cli',
+          PMBRAIN_PGLITE_LOCK_FAIL_FAST: '0',
+        },
       });
     } catch (e) {
       await completeWithoutChild('failed', e instanceof Error ? e.message : String(e));

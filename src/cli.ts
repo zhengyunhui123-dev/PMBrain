@@ -1388,7 +1388,16 @@ async function handleCliOnly(command: string, args: string[]) {
       }
       case 'serve': {
         const { runServe } = await import('./commands/serve.ts');
-        await runServe(engine, args);
+        try {
+          await runServe(engine, args);
+        } catch (error) {
+          // HTTP startup can fail after connectEngine() but before the
+          // server-close lifecycle is installed (for example EADDRINUSE).
+          // The normal serve path owns cleanup; this error path must release
+          // the PGLite engine before the process exits.
+          await engine.disconnect().catch(() => undefined);
+          throw error;
+        }
         return; // serve doesn't disconnect
       }
       case 'call': {
