@@ -417,12 +417,11 @@ def embedding_switch_journey(page: Page, artifacts: Path, provider: LocalOpenAIS
           if (!response.ok) return false;
           const run = await response.json();
           if (!['completed', 'failed', 'cancelled'].includes(run.status)) return false;
-          return JSON.stringify(run);
+          return run;
         }}""",
         timeout=180_000,
     )
-    rebuild_json = rebuild_handle.json_value()
-    rebuild = json.loads(rebuild_json) if isinstance(rebuild_json, str) else None
+    rebuild = rebuild_handle.json_value()
     if not rebuild or rebuild.get("status") != "completed":
         raise AssertionError(f"Background embedding rebuild did not complete: {rebuild}")
     if "--catch-up" not in (rebuild.get("command") or []):
