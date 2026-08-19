@@ -6,8 +6,8 @@
 - 版本号：PMBrain 1.2.64；PMBrain Desktop 1.1.35
 - 标题：修复技能路由、技能契约与 CI 发布说明不一致
 - 描述：修复 GitHub Actions 中技能清单引用但文件未纳入版本库、技能路由不可达、路由样例字段不符合解析器契约、技能契约段落缺失、附件导入提示文案和 Desktop 发布说明版本不一致的问题；同步修正 Core Journey 对自定义供应商下拉值的过时断言。不改变核心业务逻辑，不修改知识正文、原始资料、Wiki、数据库或向量。
-- 是否完成：进行中
-- 最终结果：已完成源码修复，待提交后复核精确提交 SHA 的 GitHub Actions 结果；未执行 `bun run build:win`，由用户最后打包。
+- 是否完成：是
+- 最终结果：精确提交 SHA `019ea4ea2eecaccbac058581eba1f27f8885c841` 的 Test（32237312815）、Heavy Tests（32237312891）、E2E Tests（32237312765）和 Core User Journeys（32237312807）均通过；未执行 `bun run build:win`，由用户最后打包。
 
 ## 2026-08-19 任务运行时误显示 PGLite 残留占用恢复卡片
 
