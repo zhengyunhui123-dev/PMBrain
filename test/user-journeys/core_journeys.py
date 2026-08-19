@@ -397,7 +397,10 @@ def embedding_switch_journey(page: Page, artifacts: Path, provider: LocalOpenAIS
           if (!response.ok) return false;
           const payload = await response.json();
           return (payload.rows || []).some(run =>
-            run.kind === 'embed_stale' && ['completed', 'failed', 'cancelled'].includes(run.status)
+            run.kind === 'embed_stale' &&
+            Array.isArray(run.command) &&
+            run.command.includes('--catch-up') &&
+            ['completed', 'failed', 'cancelled'].includes(run.status)
           );
         }""",
         timeout=180_000,
@@ -405,7 +408,14 @@ def embedding_switch_journey(page: Page, artifacts: Path, provider: LocalOpenAIS
     rebuild = page.evaluate(
         """() => fetch('/admin/api/runs', { credentials: 'same-origin' })
           .then(response => response.json())
-          .then(payload => (payload.rows || []).find(run => run.kind === 'embed_stale'))"""
+          .then(payload => (payload.rows || [])
+            .filter(run =>
+              run.kind === 'embed_stale' &&
+              Array.isArray(run.command) &&
+              run.command.includes('--catch-up') &&
+              ['completed', 'failed', 'cancelled'].includes(run.status)
+            )
+            .sort((left, right) => String(right.startedAt).localeCompare(String(left.startedAt)))[0])"""
     )
     if not rebuild or rebuild.get("status") != "completed":
         raise AssertionError(f"Background embedding rebuild did not complete: {rebuild}")
