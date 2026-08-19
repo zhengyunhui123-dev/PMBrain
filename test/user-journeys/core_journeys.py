@@ -388,6 +388,29 @@ def embedding_switch_journey(page: Page, artifacts: Path, provider: LocalOpenAIS
         raise AssertionError(f"Expected a 12-dimensional embedding column, got {config.get('embedding_dimensions')}")
     if page.locator("#global-error").is_visible():
         raise AssertionError(page.locator("#global-error").inner_text())
+    origin = open_admin_from_desktop(page)
+    page.goto(origin + "/admin/#tasks")
+    page.get_by_role("heading", name="任务中心").wait_for(timeout=90_000)
+    page.wait_for_function(
+        """async () => {
+          const response = await fetch('/admin/api/runs', { credentials: 'same-origin' });
+          if (!response.ok) return false;
+          const payload = await response.json();
+          return (payload.rows || []).some(run =>
+            run.kind === 'embed_stale' && ['completed', 'failed', 'cancelled'].includes(run.status)
+          );
+        }""",
+        timeout=180_000,
+    )
+    rebuild = page.evaluate(
+        """() => fetch('/admin/api/runs', { credentials: 'same-origin' })
+          .then(response => response.json())
+          .then(payload => (payload.rows || []).find(run => run.kind === 'embed_stale'))"""
+    )
+    if not rebuild or rebuild.get("status") != "completed":
+        raise AssertionError(f"Background embedding rebuild did not complete: {rebuild}")
+    if "--catch-up" not in (rebuild.get("command") or []):
+        raise AssertionError(f"Embedding rebuild was not handed to the catch-up task: {rebuild}")
 
 
 def mcp_key_search_journey(page: Page) -> None:

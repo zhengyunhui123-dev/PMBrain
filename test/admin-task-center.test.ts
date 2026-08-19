@@ -41,8 +41,15 @@ describe('Admin 任务中心与 Dream 忙碌态', () => {
 
   test('PGLite 忙碌提示直接引导到任务中心', () => {
     expect(consoleSource).toContain('PgliteBusyNotice');
+    expect(consoleSource).toContain('<h1>总体概览</h1>');
     expect(consoleSource).toContain('可去任务中心查看任务进度和取消任务。');
     expect(consoleSource).toContain('打开任务中心');
+  });
+
+  test('PGLite 恢复后概览会自动重试，而不是永久停留在忙碌态', () => {
+    const sharedSource = readFileSync('admin/src/pages/console-shared.tsx', 'utf8');
+    expect(sharedSource).toContain('if (!pgliteBusy) return;');
+    expect(sharedSource).toContain('window.setInterval(() => void load(), 1500)');
   });
 
   test('取消任务显示用户说明而不是把取消当成错误', () => {
