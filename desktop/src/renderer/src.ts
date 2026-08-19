@@ -537,6 +537,7 @@ function confirmCustomProvider(): void {
     ...customCatalog,
     [target]: [...customCatalog[target], endpoint],
   };
+  syncCustomProviderOptions(target);
   customSelection = { ...customSelection, [target]: endpoint.id };
   customProviderTarget = null;
   $<HTMLDialogElement>('#custom-provider-dialog').close();

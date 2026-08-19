@@ -138,6 +138,20 @@ describe('desktop settings renderer contracts', () => {
     expect(renderer).toContain('option.textContent = endpoint.displayName');
   });
 
+  test('selects the custom provider immediately after adding a model', () => {
+    const confirmIndex = renderer.indexOf('function confirmCustomProvider');
+    const catalogIndex = renderer.indexOf('customCatalog = {', confirmIndex);
+    const syncIndex = renderer.indexOf('syncCustomProviderOptions(target);', confirmIndex);
+    const applyIndex = renderer.indexOf('applyProviderSelection(target, endpoint.id, false);', confirmIndex);
+    const renderIndex = renderer.indexOf('renderProviderDropdown(target);', confirmIndex);
+
+    expect(confirmIndex).toBeGreaterThanOrEqual(0);
+    expect(catalogIndex).toBeGreaterThan(confirmIndex);
+    expect(syncIndex).toBeGreaterThan(catalogIndex);
+    expect(syncIndex).toBeLessThan(applyIndex);
+    expect(renderIndex).toBeGreaterThan(applyIndex);
+  });
+
   test('marks and validates every required custom model field before accepting it', () => {
     expect(html).toContain('id="custom-provider-form" novalidate');
     for (const id of ['custom-provider-name', 'custom-provider-base-url', 'custom-provider-model-id']) {
