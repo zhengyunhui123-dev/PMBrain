@@ -28,6 +28,7 @@ import { getBrainHotMemoryMeta } from '../core/facts/meta-hook.ts';
 import { loadConfig, toEngineConfig, type GBrainConfig } from '../core/config.ts';
 import { brainDirFromConfig } from '../core/system-skill-assets.ts';
 import { ensureDreamOutputDirectory, resolveDreamOutputRoot } from '../core/cycle/dream-output.ts';
+import { inspectPgliteOwner, terminatePgliteOwner } from '../core/pglite-owner-control.ts';
 import { buildError, serializeError } from '../core/errors.ts';
 import { assessDestructiveImpact, softDeleteSource, restoreSource } from '../core/destructive-guard.ts';
 import { deleteLockRow } from '../core/db-lock.ts';
@@ -147,13 +148,23 @@ export interface PmbrainAdminRouteOptions {
   requireAdmin: express.RequestHandler;
   runHooks?: RunHooks;
   getPgliteBusy: () => boolean;
+  reconnectPglite?: () => Promise<void>;
   ensureAdminWorkerStarted: () => Promise<unknown>;
 }
 
 export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
   checkScheduledDream: (now?: Date) => Promise<void>;
 } {
-  const { app, engine, config, requireAdmin, runHooks, getPgliteBusy, ensureAdminWorkerStarted } = options;
+  const {
+    app,
+    engine,
+    config,
+    requireAdmin,
+    runHooks,
+    getPgliteBusy,
+    reconnectPglite,
+    ensureAdminWorkerStarted,
+  } = options;
   let adminUploadTail: Promise<void> = Promise.resolve();
   app.get('/admin/api/task-center', requireAdmin, async (_req: Request, res: Response) => {
     let queue: unknown = null;
@@ -165,13 +176,61 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
         queue = null;
       }
     }
+    const pgliteOwner = config.engine === 'pglite' && config.database_path && !getPgliteBusy()
+      ? await inspectPgliteOwner(config.database_path, {
+          allowTerminate: true,
+        })
+      : null;
     res.json({
       mode: config.engine === 'pglite' ? 'pglite' : 'postgres',
       pglite_busy: getPgliteBusy(),
+      pglite_owner: pgliteOwner,
       rows: listRuns(),
       queue,
       server_time: new Date().toISOString(),
     });
+  });
+
+  app.post('/admin/api/pglite-owner/terminate', requireAdmin, express.json({ limit: '4kb' }), async (req: Request, res: Response) => {
+    if (config.engine !== 'pglite' || !config.database_path) {
+      res.status(400).json({ error: 'pglite_owner_control_unavailable' });
+      return;
+    }
+    if (getPgliteBusy()) {
+      res.status(423).json({ error: 'PGLite 正在执行后台任务，请使用任务卡片中的安全取消。', code: 'pglite_busy' });
+      return;
+    }
+    const pid = Number(req.body?.pid);
+    if (!Number.isInteger(pid) || pid <= 0) {
+      res.status(400).json({ error: 'pglite_owner_pid_invalid' });
+      return;
+    }
+    try {
+      const owner = await terminatePgliteOwner(config.database_path, pid);
+      let reconnected = false;
+      let reconnectError: string | null = null;
+      if (reconnectPglite) {
+        try {
+          await reconnectPglite();
+          reconnected = true;
+        } catch (error) {
+          reconnectError = error instanceof Error ? error.message : String(error);
+        }
+      }
+      const latestOwner = await inspectPgliteOwner(config.database_path, {
+        allowTerminate: false,
+      });
+      res.json({
+        pglite_owner: latestOwner.state === 'current' ? latestOwner : owner,
+        reconnected,
+        reconnect_error: reconnectError,
+      });
+    } catch (error) {
+      res.status(409).json({
+        error: error instanceof Error ? error.message : String(error),
+        code: 'pglite_owner_terminate_failed',
+      });
+    }
   });
 
   app.get('/admin/api/brain/overview', requireAdmin, async (req: Request, res: Response) => {

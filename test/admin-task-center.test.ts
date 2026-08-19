@@ -18,6 +18,13 @@ describe('Admin 任务中心与 Dream 忙碌态', () => {
     expect(taskCenterSource).toContain('安全取消');
   });
 
+  test('任务中心展示 PGLite 残留占用进程并提供安全恢复入口', () => {
+    expect(taskCenterSource).toContain('pglite_owner');
+    expect(taskCenterSource).toContain('发现残留 PGLite 占用进程');
+    expect(taskCenterSource).toContain('结束占用进程');
+    expect(apiSource).toContain('terminatePgliteOwner');
+  });
+
   test('PGlite 忙碌时 Dream 页面保留任务状态和取消路径', () => {
     expect(apiSource).toContain('error.status = res.status');
     expect(apiSource).toContain('taskCenter: () => apiFetch');

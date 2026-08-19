@@ -179,6 +179,10 @@ export const api = {
   cancelRun: (id: string) => apiFetch(`/admin/api/runs/${encodeURIComponent(id)}/cancel`, { method: 'POST' }),
   startActionRun: (action: string) => apiFetch('/admin/api/runs/action', { method: 'POST', body: JSON.stringify({ action }) }),
   taskCenter: () => apiFetch('/admin/api/task-center'),
+  terminatePgliteOwner: (pid: number) => apiFetch('/admin/api/pglite-owner/terminate', {
+    method: 'POST',
+    body: JSON.stringify({ pid }),
+  }),
   startImportRun: (body: ImportRunRequest) =>
     apiFetch<ImportRunResponse>('/admin/api/import-runs', { method: 'POST', body: JSON.stringify(body) }, ImportRunResponseSchema),
   startImportUploadRun: (file: File, options: ImportUploadOptions) => {

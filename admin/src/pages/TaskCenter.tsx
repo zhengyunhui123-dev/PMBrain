@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Eye, ListTodo, RefreshCw, XCircle } from 'lucide-react';
+import { Eye, ListTodo, Power, RefreshCw, ShieldAlert, XCircle } from 'lucide-react';
 import { api } from '../api';
 import { formatDate, RunOutput, type ConsoleRun } from '../lib/shared';
 
@@ -8,12 +8,23 @@ type TaskFilter = 'all' | 'completed' | 'failed' | 'cancelled';
 interface TaskCenterSnapshot {
   mode: 'pglite' | 'postgres';
   pglite_busy: boolean;
+  pglite_owner?: PgliteOwnerStatus | null;
   rows: ConsoleRun[];
   queue: {
     queue_health?: { waiting: number; active: number; stalled: number };
     ts_ms?: number;
   } | null;
   server_time: string;
+}
+
+interface PgliteOwnerStatus {
+  state: 'clear' | 'current' | 'active' | 'stale' | 'unavailable';
+  pid: number | null;
+  ownerType: string | null;
+  commandLabel: string | null;
+  acquiredAt: string | null;
+  canTerminate: boolean;
+  message: string;
 }
 
 function taskTitle(kind: string): string {
@@ -99,6 +110,48 @@ function isToday(value: string | null): boolean {
   const date = new Date(value);
   const now = new Date();
   return date.toDateString() === now.toDateString();
+}
+
+function PgliteRecoveryCard({
+  owner,
+  onTerminate,
+  terminating,
+}: {
+  owner: PgliteOwnerStatus;
+  onTerminate: () => void;
+  terminating: boolean;
+}) {
+  const active = owner.state === 'active';
+  const title = active ? '发现残留 PGLite 占用进程' : owner.state === 'stale' ? '发现已退出的 PGLite 残留锁' : 'PGLite 连接需要人工确认';
+  const stateLabel = active ? '需要恢复' : owner.state === 'stale' ? '可自动清理' : '无法确认';
+  return (
+    <section className="task-recovery-section">
+      <div className="task-section-head">
+        <div><span className="pm-eyebrow"><ShieldAlert aria-hidden="true" /> DATABASE RECOVERY</span><h2>PGLite 连接恢复</h2></div>
+        <span className="task-status task-status-failed">{stateLabel}</span>
+      </div>
+      <article className="task-recovery-card">
+        <div className="task-recovery-card-head">
+          <div><h3>{title}</h3><p>{owner.message}</p></div>
+          {owner.pid && <span className="task-recovery-pid">PID {owner.pid}</span>}
+        </div>
+        <div className="task-recovery-meta">
+          <span>进程来源：{owner.commandLabel ?? owner.ownerType ?? '未知'}</span>
+          {owner.acquiredAt && <span>占用开始：{formatDate(owner.acquiredAt, '-')}</span>}
+        </div>
+        {active && owner.canTerminate && owner.pid && (
+          <div className="task-run-card-actions">
+            <button type="button" className="pm-ghost danger" onClick={onTerminate} disabled={terminating}>
+              <Power aria-hidden="true" /> {terminating ? '正在结束…' : '结束占用进程'}
+            </button>
+            <span className="pm-hint">只结束该 PMBrain 进程树，不删除数据库。</span>
+          </div>
+        )}
+        {active && !owner.canTerminate && <p className="task-recovery-hint">当前无法安全结束这个进程，请先确认它不是正在运行的其他 PMBrain 实例。</p>}
+        {owner.state === 'stale' && <p className="task-recovery-hint">进程已经停止，刷新或重新启动服务即可让 PGLite 自动归档残留锁。</p>}
+      </article>
+    </section>
+  );
 }
 
 function TaskCard({
@@ -199,6 +252,7 @@ export function TaskCenterPage() {
   const [filter, setFilter] = useState<TaskFilter>('all');
   const [selectedRun, setSelectedRun] = useState<ConsoleRun | null>(null);
   const [cancelling, setCancelling] = useState('');
+  const [terminatingOwner, setTerminatingOwner] = useState<number | null>(null);
 
   const load = async () => {
     try {
@@ -246,6 +300,24 @@ export function TaskCenterPage() {
     }
   };
 
+  const terminateOwner = async () => {
+    const owner = snapshot?.pglite_owner;
+    if (!owner?.canTerminate || !owner.pid) return;
+    if (!window.confirm(
+      `这会结束 PID ${owner.pid} 的 PMBrain 占用进程树，但不会删除数据库、锁文件或知识数据。仅在确认它是中止任务留下的残留进程时继续。确定结束吗？`,
+    )) return;
+    setTerminatingOwner(owner.pid);
+    setError('');
+    try {
+      await api.terminatePgliteOwner(owner.pid);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setTerminatingOwner(null);
+    }
+  };
+
   if (error && !snapshot) {
     return <div className="pm-page task-center-page"><div className="pm-card pm-error task-state-card"><h2>任务中心暂时不可用</h2><p>{error}</p><button type="button" className="pm-ghost" onClick={() => void load()}><RefreshCw aria-hidden="true" /> 重试</button></div></div>;
   }
@@ -260,7 +332,7 @@ export function TaskCenterPage() {
         <div>
           <span className="pm-eyebrow"><ListTodo aria-hidden="true" /> BACKGROUND TASKS</span>
           <h1>任务中心</h1>
-          <p className="pm-page-intro">各功能页面负责发起任务，任务中心负责查看进度、处理错误和安全取消。</p>
+          <p className="pm-page-intro">各功能页面负责发起任务，任务中心负责查看进度、处理错误、安全取消和恢复残留进程。</p>
         </div>
         <button type="button" className="pm-ghost" onClick={() => void load()}><RefreshCw aria-hidden="true" /> 刷新状态</button>
       </div>
@@ -270,6 +342,16 @@ export function TaskCenterPage() {
           <div><b>个人本地模式正在执行数据库任务</b><span>页面可以继续查看任务；PGLite 会自动排队，避免多个进程同时打开数据库。</span></div>
           <span className="task-busy-dot">运行中</span>
         </div>
+      )}
+
+      {error && <div className="pm-error task-inline-error">{error}</div>}
+
+      {snapshot.pglite_owner && snapshot.pglite_owner.state !== 'clear' && snapshot.pglite_owner.state !== 'current' && (
+        <PgliteRecoveryCard
+          owner={snapshot.pglite_owner}
+          onTerminate={() => void terminateOwner()}
+          terminating={terminatingOwner === snapshot.pglite_owner.pid}
+        />
       )}
 
       <div className="task-status-grid">

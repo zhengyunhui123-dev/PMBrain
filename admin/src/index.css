@@ -6620,6 +6620,14 @@ tbody tr:hover td { background: color-mix(in srgb, var(--accent) 4%, var(--conso
 .task-busy-banner b { color: var(--text-primary); font-size: 13px; }
 .task-busy-dot { display: inline-flex; align-items: center; gap: 7px; color: var(--accent-warn, #f1833a) !important; font-weight: 700; white-space: nowrap; }
 .task-busy-dot::before { width: 7px; height: 7px; border-radius: 50%; background: currentColor; content: ''; }
+.task-recovery-section { display: grid; gap: 12px; }
+.task-recovery-card { display: grid; gap: 12px; padding: 16px 18px; border: 1px solid color-mix(in srgb, var(--error) 42%, var(--border)); border-left: 3px solid var(--error); border-radius: 12px; background: color-mix(in srgb, var(--error) 5%, var(--console-surface)); box-shadow: var(--console-panel-shadow); }
+.task-recovery-card-head, .task-recovery-meta { display: flex; justify-content: space-between; align-items: flex-start; gap: 14px; }
+.task-recovery-card-head h3 { margin: 0 0 6px; font-size: 15px; }
+.task-recovery-card-head p, .task-recovery-hint { margin: 0; color: var(--text-secondary); font-size: 12px; line-height: 1.65; }
+.task-recovery-pid { color: var(--error); font-size: 13px; font-weight: 800; white-space: nowrap; }
+.task-recovery-meta { color: var(--text-secondary); font-size: 11px; }
+.task-recovery-hint { padding-top: 2px; }
 .task-section { display: grid; gap: 12px; }
 .task-section-head { display: flex; justify-content: space-between; align-items: end; gap: 16px; }
 .task-section-head h2 { margin: 5px 0 0; }

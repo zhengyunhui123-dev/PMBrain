@@ -805,11 +805,20 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
   // has fully exited and the main engine has reconnected.
   const pgliteRunCoordinator = engine.kind === 'pglite' ? new PgliteRunCoordinator() : null;
   let pgliteBusy = false;
+  let pgliteConnected = true;
+  const reconnectPglite = engine.kind === 'pglite' && config
+    ? async () => {
+        if (pgliteConnected) return;
+        await engine.connect(toEngineConfig(config as GBrainConfig));
+        pgliteConnected = true;
+      }
+    : undefined;
   const runHooks = engine.kind === 'pglite' && config
     ? {
         acquireExclusive: () => pgliteRunCoordinator!.acquire(),
         beforeSpawn: async () => {
           pgliteBusy = true;
+          pgliteConnected = false;
           try {
             await engine.disconnect();
           } catch (error) {
@@ -820,6 +829,7 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
         afterComplete: async () => {
           try {
             await engine.connect(toEngineConfig(config as GBrainConfig));
+            pgliteConnected = true;
           } finally {
             pgliteBusy = false;
           }
@@ -1327,7 +1337,8 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
       const canReadRun = req.method === 'GET' && req.path.startsWith('/runs');
       const canCancelRun = req.method === 'POST' && /^\/runs\/[^/]+\/cancel$/.test(req.path);
       const canReadTaskCenter = req.method === 'GET' && req.path === '/task-center';
-      if (canReadRun || canCancelRun || canReadTaskCenter) {
+      const canRecoverPgliteOwner = req.method === 'POST' && req.path === '/pglite-owner/terminate';
+      if (canReadRun || canCancelRun || canReadTaskCenter || canRecoverPgliteOwner) {
         next();
         return;
       }
@@ -1467,6 +1478,7 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
     requireAdmin,
     runHooks,
     getPgliteBusy: () => pgliteBusy,
+    reconnectPglite,
     ensureAdminWorkerStarted,
   });
 
