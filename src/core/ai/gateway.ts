@@ -1378,7 +1378,7 @@ export async function detectEmbeddingDimensions(
       : dimsProviderOptions(recipe.implementation, modelId, requestedDimensions, 'document');
     const result = await _embedTransport({
       model,
-      values: ['PMBrain embedding dimension probe'],
+      values: ['PMBrain embedding test'],
       providerOptions,
       maxRetries: 0,
     });
@@ -2718,7 +2718,7 @@ export async function chat(opts: ChatOpts): Promise<ChatResult> {
   // observe a different gate from the one used to configure the gateway.
   // Lower-level transport tests may omit the field; those callers are not a
   // file-plane authorization boundary and retain the historical behavior.
-  const { assertGenerativeModelEnabled } = await import('../model-usage.ts');
+  const { assertGenerativeModelEnabled } = await import('../model-usage-gate.ts');
   if (_config?.generative_enabled === false) {
     assertGenerativeModelEnabled({
       engine: 'pglite',

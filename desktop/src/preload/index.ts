@@ -32,6 +32,10 @@ import type {
 import type { UpdateState } from '../main/update-manager.js';
 import type { DesktopModelTouchpoint, DesktopProviderModels } from '../main/model-catalog.js';
 import type {
+  DesktopModelConnectionTestInput,
+  DesktopModelConnectionTestResult,
+} from '../main/model-connection-test.js';
+import type {
   DesktopSystemSettingsPayload,
   DesktopSystemSettingsSaveResult,
   DesktopSystemSettingsState,
@@ -50,6 +54,8 @@ export type {
   DesktopCustomProvider,
   DesktopCustomProviderCatalog,
   DesktopCustomProviderSelection,
+  DesktopModelConnectionTestInput,
+  DesktopModelConnectionTestResult,
   DesktopNetworkMode,
   DesktopKnowledgeSourceStatus,
   DesktopPreferences,
@@ -139,6 +145,7 @@ export interface PMBrainDesktopApi {
   inspectKnowledgeSourceDirectory(path: string): Promise<DesktopKnowledgeSourceStatus>;
   initializeKnowledgeSourceGit(path: string): Promise<DesktopKnowledgeSourceStatus>;
   getProviderModels(provider: string, touchpoint: DesktopModelTouchpoint): Promise<DesktopProviderModels>;
+  testModelConnection(input: DesktopModelConnectionTestInput): Promise<DesktopModelConnectionTestResult>;
   getAdvancedModelConfig(): Promise<AdvancedModelConfig>;
   saveAdvancedModelConfig(values: AdvancedModelWriteInput): Promise<AdvancedModelConfig>;
   saveSetup(payload: SetupPayload): Promise<DesktopSetupState & { backup?: string | null; reembeddingWarning?: string | null }>;
@@ -211,6 +218,7 @@ const api: PMBrainDesktopApi = {
   inspectKnowledgeSourceDirectory: (path) => ipcRenderer.invoke('desktop:inspect-knowledge-source', path),
   initializeKnowledgeSourceGit: (path) => ipcRenderer.invoke('desktop:initialize-knowledge-source-git', path),
   getProviderModels: (provider, touchpoint) => ipcRenderer.invoke('desktop:get-provider-models', provider, touchpoint),
+  testModelConnection: input => ipcRenderer.invoke('desktop:test-model-connection', input),
   getAdvancedModelConfig: () => ipcRenderer.invoke('desktop:get-advanced-model-config'),
   saveAdvancedModelConfig: (values) => ipcRenderer.invoke('desktop:save-advanced-model-config', values),
   saveSetup: (payload) => ipcRenderer.invoke('desktop:save-setup', payload),

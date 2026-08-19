@@ -25,6 +25,7 @@ import {
 } from './knowledge-source-git.js';
 import { DesktopLogger } from './logs.js';
 import { syncModelDefaultsToConfigFile } from './models/model-config-sync.js';
+import { testModelConnection } from './model-connection-test.js';
 import { listDesktopProviderModels } from './model-catalog.js';
 import { LanController } from './network/lan-controller.js';
 import { listNetworkCandidates } from './network-manager.js';
@@ -344,6 +345,7 @@ if (!app.requestSingleInstanceLock()) {
       inspectKnowledgeSourceDirectory,
       initializeKnowledgeSourceGit,
       providerModels: listDesktopProviderModels,
+      testModelConnection,
       advancedModelConfig: () => readAdvancedModelConfig(runtime()),
       saveAdvancedModelConfig: values => sidecarController.withPausedForModelConfig(
         () => writeAdvancedModelConfig(runtime(), values),

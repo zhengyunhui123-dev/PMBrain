@@ -123,6 +123,21 @@ describe('desktop settings renderer contracts', () => {
     expect(styles).toContain('.provider-delete');
   });
 
+  test('restores custom provider labels before restoring saved model selections', () => {
+    const catalogIndex = renderer.indexOf('customCatalog = {');
+    const chatSyncIndex = renderer.indexOf("syncCustomProviderOptions('chat');", catalogIndex);
+    const embeddingSyncIndex = renderer.indexOf("syncCustomProviderOptions('embedding');", catalogIndex);
+    const chatValueIndex = renderer.indexOf("($<HTMLSelectElement>('#chat-provider')).value = chatProviderValue;");
+    const embeddingValueIndex = renderer.indexOf("($<HTMLSelectElement>('#embedding-provider')).value = embeddingProviderValue;");
+
+    expect(catalogIndex).toBeGreaterThanOrEqual(0);
+    expect(chatSyncIndex).toBeGreaterThan(catalogIndex);
+    expect(embeddingSyncIndex).toBeGreaterThan(catalogIndex);
+    expect(chatSyncIndex).toBeLessThan(chatValueIndex);
+    expect(embeddingSyncIndex).toBeLessThan(embeddingValueIndex);
+    expect(renderer).toContain('option.textContent = endpoint.displayName');
+  });
+
   test('marks and validates every required custom model field before accepting it', () => {
     expect(html).toContain('id="custom-provider-form" novalidate');
     for (const id of ['custom-provider-name', 'custom-provider-base-url', 'custom-provider-model-id']) {
@@ -144,6 +159,21 @@ describe('desktop settings renderer contracts', () => {
     expect(renderer).toContain("if (['ollama', 'llama-server', 'litellm', 'llama-server-reranker'].includes(normalized))");
     expect(renderer).toContain("provider === 'ollama' ? '正在读取本机 Ollama 模型…'");
     expect(preview).toContain("touchpoint === 'embedding' ? ['nomic-embed-text'] : ['qwen3:latest', 'qwen2.5:latest']");
+  });
+
+  test('tests unsaved model drafts and reports provider or dimension errors in place', () => {
+    expect(html).toContain('id="test-chat-model"');
+    expect(html).toContain('id="test-embedding-model"');
+    expect(html).toContain('class="model-test-icon"');
+    expect(renderer).toContain('testConfiguredModel');
+    expect(renderer).toContain('window.pmbrainDesktop.testModelConnection(modelConnectionInput(kind))');
+    expect(renderer).toContain('✓ 连接成功 · ${result.dimensions} 维 · ${result.durationMs}ms');
+    expect(renderer).toContain('⚠ ${result.message} · ${result.durationMs}ms');
+    expect(preload).toContain("desktop:test-model-connection");
+    expect(main).toContain("desktop:test-model-connection");
+    expect(styles).toContain('.model-connection-field');
+    expect(styles).toContain('.model-test-button.busy');
+    expect(preview).toContain('testModelConnection: async (input)');
   });
 
   test('model settings label the embedding model without an optional marker', () => {

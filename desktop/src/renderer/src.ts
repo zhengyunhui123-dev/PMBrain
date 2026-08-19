@@ -8,6 +8,8 @@ import type {
   DesktopCustomEndpoint,
   DesktopCustomProviderCatalog,
   DesktopCustomProviderSelection,
+  DesktopModelConnectionTestInput,
+  DesktopModelConnectionTestResult,
   DesktopKnowledgeSourceStatus,
   DesktopSystemSettingsPayload,
   DesktopSystemSettingsState,
@@ -609,6 +611,76 @@ async function refreshProviderModels(kind: ModelKind, chooseDefault: boolean): P
   }
 }
 
+function expectedEmbeddingDimensions(provider: string, model: string): number | undefined {
+  const configured = splitModelId(state?.setup.current.embeddingModel);
+  if (!configured.provider || !configured.model || configured.model !== model) return undefined;
+  if (recipeProvider(configured.provider) !== provider) return undefined;
+  const dimensions = state?.setup.current.embeddingDimensions;
+  return typeof dimensions === 'number' && Number.isInteger(dimensions) && dimensions > 0 ? dimensions : undefined;
+}
+
+function modelConnectionInput(kind: ModelKind): DesktopModelConnectionTestInput {
+  const providerValue = ($<HTMLSelectElement>(`#${kind}-provider`)).value;
+  const provider = recipeProvider(providerValue);
+  const endpoint = isCustomEndpointId(providerValue)
+    ? customCatalog[kind].find(item => item.id === providerValue) ?? selectedCustomEndpoint(kind)
+    : undefined;
+  const model = ($<HTMLInputElement>(`#${kind}-model-name`)).value.trim();
+  return {
+    provider,
+    baseUrl: endpoint?.baseUrl,
+    model,
+    apiKey: ($<HTMLInputElement>(`#${kind}-api-key`)).value.trim(),
+    ...(kind === 'embedding'
+      ? { expectedDimensions: expectedEmbeddingDimensions(provider, model) }
+      : {}),
+    touchpoint: kind,
+  };
+}
+
+function renderModelConnectionResult(
+  kind: ModelKind,
+  result: DesktopModelConnectionTestResult,
+): void {
+  const status = $<HTMLElement>(`#${kind}-model-load-status`);
+  status.classList.remove('ready', 'warning', 'error');
+  status.hidden = false;
+  if (result.status === 'success') {
+    status.classList.add('ready');
+    status.textContent = kind === 'embedding'
+      ? `✓ 连接成功 · ${result.dimensions} 维 · ${result.durationMs}ms`
+      : `✓ 连接成功 · 耗时 ${result.durationMs}ms`;
+    return;
+  }
+  if (result.status === 'warning') {
+    status.classList.add('warning');
+    status.textContent = `⚠ ${result.message} · ${result.durationMs}ms`;
+    return;
+  }
+  status.classList.add('error');
+  status.textContent = `✕ ${result.message}`;
+}
+
+async function testConfiguredModel(kind: ModelKind): Promise<void> {
+  const button = $<HTMLButtonElement>(`#test-${kind}-model`);
+  const status = $<HTMLElement>(`#${kind}-model-load-status`);
+  status.classList.remove('ready', 'warning', 'error');
+  status.hidden = false;
+  status.textContent = '正在测试连接…';
+  button.setAttribute('aria-busy', 'true');
+  setBusy(button, true);
+  try {
+    const result = await window.pmbrainDesktop.testModelConnection(modelConnectionInput(kind));
+    renderModelConnectionResult(kind, result);
+  } catch (error) {
+    status.classList.add('error');
+    status.textContent = `✕ ${error instanceof Error ? error.message : String(error)}`;
+  } finally {
+    button.removeAttribute('aria-busy');
+    setBusy(button, false);
+  }
+}
+
 function renderAdvancedModelDropdown(tier: AdvancedModelTier): void {
   const ul = $<HTMLUListElement>(`#advanced-${tier}-model-dropdown`);
   const input = $<HTMLInputElement>(`#advanced-${tier}-model-name`);
@@ -1128,6 +1200,8 @@ function populate(next: DesktopSetupState): void {
     embedding: [...(setup.current.customProviders?.embedding ?? [])],
   };
   customSelection = { ...(setup.current.customSelection ?? {}) };
+  syncCustomProviderOptions('chat');
+  syncCustomProviderOptions('embedding');
   renderProviderDropdown('chat');
   renderProviderDropdown('embedding');
   syncAdvancedProviderOptions();
@@ -1621,6 +1695,8 @@ $<HTMLSelectElement>('#shared-address').addEventListener('change', renderSelecte
 });
 $<HTMLButtonElement>('#add-custom-chat-model').addEventListener('click', () => openCustomProvider('chat'));
 $<HTMLButtonElement>('#add-custom-embedding-model').addEventListener('click', () => openCustomProvider('embedding'));
+$<HTMLButtonElement>('#test-chat-model').addEventListener('click', () => void testConfiguredModel('chat'));
+$<HTMLButtonElement>('#test-embedding-model').addEventListener('click', () => void testConfiguredModel('embedding'));
 $<HTMLButtonElement>('#custom-provider-close').addEventListener('click', closeCustomProvider);
 $<HTMLButtonElement>('#custom-provider-cancel').addEventListener('click', closeCustomProvider);
 $<HTMLFormElement>('#custom-provider-form').addEventListener('submit', event => {

@@ -146,7 +146,7 @@
                 </label>
                 <label>
                   <span>API Key</span>
-                  <span class="secret-input"><input id="chat-api-key" type="password" autocomplete="off" /><button type="button" class="secret-toggle" data-secret="chat-api-key" aria-label="显示普通模型 API Key">&#128065;</button></span>
+                  <span class="secret-input model-connection-field"><input id="chat-api-key" type="password" autocomplete="off" /><button type="button" class="secret-toggle" data-secret="chat-api-key" aria-label="显示普通模型 API Key">&#128065;</button><button type="button" class="model-test-button" id="test-chat-model" aria-label="测试普通模型连接" title="测试普通模型连接"><svg class="model-test-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12h4l2-7 4 14 2-7h4" /><path d="M19 8v8M16 11h6" /></svg></button></span>
                 </label>
               </div>
               <small class="model-load-status" id="chat-model-load-status" hidden></small>
@@ -183,7 +183,7 @@
                 </label>
                 <label>
                   <span>API Key</span>
-                  <span class="secret-input"><input id="embedding-api-key" type="password" autocomplete="off" /><button type="button" class="secret-toggle" data-secret="embedding-api-key" aria-label="显示向量化模型 API Key">&#128065;</button></span>
+                  <span class="secret-input model-connection-field"><input id="embedding-api-key" type="password" autocomplete="off" /><button type="button" class="secret-toggle" data-secret="embedding-api-key" aria-label="显示向量化模型 API Key">&#128065;</button><button type="button" class="model-test-button" id="test-embedding-model" aria-label="测试向量模型连接" title="测试向量模型连接"><svg class="model-test-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12h4l2-7 4 14 2-7h4" /><path d="M19 8v8M16 11h6" /></svg></button></span>
                 </label>
               </div>
               <small class="model-load-status" id="embedding-model-load-status" hidden></small>

@@ -11,20 +11,22 @@
  */
 
 import type { GBrainConfig } from './config.ts';
-import { loadConfig, readFileConfigValue, saveConfig, writeFileConfigValue } from './config.ts';
+import { loadConfig, saveConfig, writeFileConfigValue } from './config.ts';
 import type { CyclePhase } from './cycle.ts';
 import { ALL_PHASES } from './cycle.ts';
+import {
+  GENERATIVE_MODEL_DISABLED_CODE,
+  GENERATIVE_MODEL_DISABLED_MESSAGE,
+  GenerativeModelDisabledError,
+  isGenerativeModelEnabled,
+} from './model-usage-gate.ts';
 
-export const GENERATIVE_MODEL_DISABLED_CODE = 'generative_model_disabled' as const;
-export const GENERATIVE_MODEL_DISABLED_MESSAGE = '当前已关闭生成式模型调用';
-
-export class GenerativeModelDisabledError extends Error {
-  readonly code = GENERATIVE_MODEL_DISABLED_CODE;
-  constructor(message = GENERATIVE_MODEL_DISABLED_MESSAGE) {
-    super(message);
-    this.name = 'GenerativeModelDisabledError';
-  }
-}
+export {
+  GENERATIVE_MODEL_DISABLED_CODE,
+  GENERATIVE_MODEL_DISABLED_MESSAGE,
+  GenerativeModelDisabledError,
+  isGenerativeModelEnabled,
+} from './model-usage-gate.ts';
 
 export type GenerativePhaseKind = 'local' | 'generative';
 
@@ -110,15 +112,6 @@ export function getPhaseCapabilities(): PhaseCapability[] {
       labelZh: PHASE_LABEL_ZH[id] ?? id,
     };
   });
-}
-
-export function isGenerativeModelEnabled(config?: GBrainConfig | null): boolean {
-  const cfg = config === undefined ? loadConfig() : config;
-  const raw = readFileConfigValue(cfg, 'model_usage.generative_enabled');
-  if (raw === true || raw === 'true') return true;
-  if (raw === false || raw === 'false') return false;
-  // Missing / unknown → closed (never auto-open because chat_model is set).
-  return false;
 }
 
 export function assertGenerativeModelEnabled(config?: GBrainConfig | null): void {

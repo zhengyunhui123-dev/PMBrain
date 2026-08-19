@@ -200,6 +200,9 @@ window.pmbrainDesktop = {
         ? (provider === 'zhipu' ? ['embedding-3', 'embedding-2'] : ['nomic-embed-text'])
         : ['mimo-v2.5-pro', 'mimo-v2-pro']
   }),
+  testModelConnection: async (input) => input.touchpoint === 'embedding'
+    ? { status: 'success', dimensions: 4096, durationMs: 320 }
+    : { status: 'success', durationMs: 820 },
   getAdvancedModelConfig: async () => ({
     tiers: {
       utility: { override: '', resolved: 'mimo:mimo-v2.5-pro', source: 'models.default' },
