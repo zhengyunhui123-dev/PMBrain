@@ -1,5 +1,14 @@
 # Bug 修复台账
 
+## 2026-08-19 桌面端主源 local_path 自动补齐过度触发
+
+- 时间：2026-08-19
+- 版本号：PMBrain 1.2.65；PMBrain Desktop 1.1.36
+- 标题：将主源路径补齐改为一次性兼容修复并隔离普通模型保存
+- 描述：修复 SetupController 每次保存模型、API Key 或重启时重复执行 `sources add/default`，导致已有主源与其他 Source 存在父子目录关系时误报 `overlapping_path`、模型配置也无法保存的问题。新增持久化的 `desktop.main_source_path_repair_completed` 标记；历史主源缺少 `local_path` 时只对现有 Source 做一次安全补齐，路径冲突时跳过且不改动任一 Source；用户明确修改知识源时才执行 Source 校验，单独切换到无路径主源时不继承旧目录。未修改知识正文、原始资料、Wiki、数据库内容或向量。
+- 是否完成：进行中
+- 最终结果：本地类型检查、桌面端定向测试和 PGLite 重叠场景已通过；Postgres 对等测试等待 CI/配置 `DATABASE_URL` 验证。未执行 `bun run build:win`，由用户最后打包。
+
 ## 2026-08-19 GitHub Actions CI 静态契约失败
 
 - 时间：2026-08-19

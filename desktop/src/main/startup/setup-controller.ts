@@ -3,6 +3,7 @@ import { basename, resolve } from 'node:path';
 import {
   getSetupInfo,
   markDesktopMigration,
+  markMainSourcePathRepairCompleted,
   needsDesktopMigration,
   restoreConfig,
   saveSetup,
@@ -15,6 +16,12 @@ import { listIntegrationsWithConnectionState } from '../integration-manager.js';
 import type { PgliteBackupController } from '../database/pglite-backup.js';
 import type { SidecarController } from '../sidecar/sidecar-controller.js';
 import { ensureKnowledgeDirectory } from './knowledge-directory.js';
+import {
+  decideLegacyMainSourceRepair,
+  decideSourceSetupPolicy,
+  isSourcePathConflict,
+  type SourceSetupPolicy,
+} from './source-setup-policy.js';
 
 const DESKTOP_MIGRATION_ARGS = ['apply-migrations', '--yes', '--non-interactive', '--no-autopilot-install'];
 
@@ -75,10 +82,76 @@ export class SetupController {
   private async repairMissingMainSourcePath(sourceId: string, localPath: string): Promise<void> {
     const activeSidecar = this.dependencies.sidecar.current;
     if (!activeSidecar || this.dependencies.sidecar.state?.phase !== 'ready') return;
-    await activeSidecar.adminRequest('/admin/api/sources/default', {
+    await activeSidecar.adminRequest('/admin/api/sources/local-path', {
       method: 'POST',
       body: JSON.stringify({ sourceId, localPath }),
     });
+  }
+
+  private sourceSetupPolicy(payload: SetupPayload): SourceSetupPolicy {
+    const setup = getSetupInfo();
+    return decideSourceSetupPolicy({
+      firstSetup: setup.needsSetup,
+      knowledgeSourceChanged: payload.knowledgeSourceChanged,
+      storedKnowledgeDirectory: setup.current.knowledgeDirectory,
+      storedKnowledgeSourceId: setup.current.knowledgeSourceId,
+      requestedKnowledgeDirectory: payload.knowledgeDirectory,
+      requestedKnowledgeSourceId: payload.knowledgeSourceId,
+    });
+  }
+
+  private async markMainSourcePathRepairComplete(): Promise<void> {
+    try {
+      markMainSourcePathRepairCompleted();
+    } catch (error) {
+      // The marker prevents repeated compatibility work, but failure to write
+      // it must not make an otherwise usable PMBrain installation fail.
+      console.warn(
+        '[desktop] Unable to persist main source path repair marker:',
+        error instanceof Error ? error.message : error,
+      );
+    }
+  }
+
+  private async repairLegacyMainSourcePath(): Promise<void> {
+    const setup = getSetupInfo();
+    const canonical = await this.readCanonicalMainSource().catch(() => null);
+    const action = decideLegacyMainSourceRepair({
+      firstSetup: setup.needsSetup,
+      repairCompleted: setup.current.mainSourcePathRepairCompleted === true,
+      mainSourceExists: canonical !== null,
+      mainSourceId: canonical?.id,
+      configuredMainSourceId: setup.current.knowledgeSourceId,
+      mainSourceHasPath: Boolean(canonical?.localPath),
+      knowledgeDirectory: setup.current.knowledgeDirectory,
+    });
+    if (action === 'skip') return;
+    if (action === 'mark-complete') {
+      await this.markMainSourcePathRepairComplete();
+      return;
+    }
+
+    const knowledgeDirectory = setup.current.knowledgeDirectory?.trim();
+    if (!canonical || !knowledgeDirectory) return;
+    try {
+      await this.repairMissingMainSourcePath(canonical.id, knowledgeDirectory);
+    } catch (error) {
+      if (!isSourcePathConflict(error)) {
+        console.warn(
+          '[desktop] Main source local_path compatibility repair deferred:',
+          error instanceof Error ? error.message : error,
+        );
+        return;
+      }
+      console.warn(
+        '[desktop] Main source local_path compatibility repair skipped because the configured '
+          + 'knowledge directory overlaps another source:',
+        error instanceof Error ? error.message : error,
+      );
+    }
+    // A successful repair and a conflict skip both complete this historical
+    // compatibility check. Explicit source changes are handled separately.
+    await this.markMainSourcePathRepairComplete();
   }
 
   private async verifyConfiguredMainSource(sourceId: string, localPath: string): Promise<void> {
@@ -93,12 +166,8 @@ export class SetupController {
   async currentState() {
     const setup = getSetupInfo();
     if (!setup.needsSetup) {
-      let canonical = await this.readCanonicalMainSource().catch(() => null);
-      const configuredDirectory = setup.current.knowledgeDirectory?.trim();
-      if (canonical && configuredDirectory && !canonical.localPath) {
-        await this.repairMissingMainSourcePath(canonical.id, configuredDirectory).catch(() => undefined);
-        canonical = await this.readCanonicalMainSource().catch(() => canonical);
-      }
+      await this.repairLegacyMainSourcePath();
+      const canonical = await this.readCanonicalMainSource().catch(() => null);
       if (canonical) {
         setup.current.knowledgeSourceId = canonical.id;
         if (canonical.localPath) setup.current.knowledgeDirectory = canonical.localPath;
@@ -116,7 +185,9 @@ export class SetupController {
     if (this.applying) throw new Error('PMBrain 正在应用上一份基础配置，请等待完成。');
     this.applying = true;
     try {
-      const canonical = payload.knowledgeSourceChanged === false
+      const sourcePolicy = this.sourceSetupPolicy(payload);
+      if (!sourcePolicy.explicitSourceChange) await this.repairLegacyMainSourcePath();
+      const canonical = !sourcePolicy.explicitSourceChange
         ? await this.readCanonicalMainSource().catch(() => null)
         : null;
       const effectivePayload = canonical
@@ -126,13 +197,13 @@ export class SetupController {
             knowledgeDirectory: canonical.localPath ?? payload.knowledgeDirectory,
           }
         : payload;
-      return await this.applyOnce(effectivePayload);
+      return await this.applyOnce(effectivePayload, sourcePolicy);
     } finally {
       this.applying = false;
     }
   }
 
-  private async applyOnce(payload: SetupPayload) {
+  private async applyOnce(payload: SetupPayload, sourcePolicy: SourceSetupPolicy) {
     await this.dependencies.ensureRuntimeReady();
     const previousEmbeddingModel = getSetupInfo().current.embeddingModel?.trim();
     const requestedEmbeddingModel = payload.modelConfig?.embeddingModel?.trim();
@@ -218,16 +289,15 @@ export class SetupController {
         message: '正在应用普通模型与向量模型设置。',
       });
       await this.dependencies.syncModelDefaults({ resetAdvanced: payload.resetAdvancedModelRouting === true });
-      const knowledgeDirectory = saved.config.desktop?.knowledge_directory;
-      const sourceId = saved.config.desktop?.knowledge_source_id;
-      if (knowledgeDirectory && sourceId) {
-        await ensureKnowledgeDirectory(knowledgeDirectory);
-        const add = await runCli(this.dependencies.runtime(), [
-          'sources', 'add', sourceId, '--path', knowledgeDirectory,
-          '--name', basename(knowledgeDirectory), '--federated',
-        ]);
-        if (add.code !== 0 && !/already exists|duplicate|已存在|already registered/i.test(`${add.stderr}\n${add.stdout}`)) {
-          throw new Error((add.stderr || add.stdout).trim());
+      const knowledgeDirectory = saved.config.desktop?.knowledge_directory?.trim();
+      const sourceId = saved.config.desktop?.knowledge_source_id?.trim();
+      if (sourcePolicy.applySourceConfiguration && sourceId) {
+        if (sourcePolicy.bindPath && knowledgeDirectory) {
+          await ensureKnowledgeDirectory(knowledgeDirectory);
+          await runCliChecked(this.dependencies.runtime(), [
+            'sources', 'add', sourceId, '--path', knowledgeDirectory,
+            '--name', basename(knowledgeDirectory), '--federated',
+          ]);
         }
         await runCliChecked(this.dependencies.runtime(), ['sources', 'default', sourceId]);
       }
@@ -291,9 +361,10 @@ export class SetupController {
     await this.dependencies.sidecar.start(false);
     const savedKnowledgeDirectory = saved.config.desktop?.knowledge_directory;
     const savedSourceId = saved.config.desktop?.knowledge_source_id;
-    if (savedKnowledgeDirectory && savedSourceId) {
+    if (sourcePolicy.bindPath && savedKnowledgeDirectory && savedSourceId) {
       await this.verifyConfiguredMainSource(savedSourceId, savedKnowledgeDirectory);
     }
+    if (sourcePolicy.applySourceConfiguration) await this.markMainSourcePathRepairComplete();
     if (migrationRequired && saved.config.engine === 'pglite') {
       if (!this.dependencies.sidecar.current || this.dependencies.sidecar.state?.phase !== 'ready') {
         throw new Error('PGLite sidecar 尚未完成数据库迁移和健康检查。');

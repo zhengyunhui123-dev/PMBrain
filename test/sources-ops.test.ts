@@ -180,6 +180,55 @@ describe('addSource — Q4 pre-flight collision', () => {
       expect(repaired.local_path).toBe('/tmp/legacy-main');
     });
   });
+
+  test('keeps both sources unchanged when a repair path is already owned by another source', async () => {
+    await withEnv2(async () => {
+      const mainPath = join(GBRAIN_HOME, 'duwu');
+      mkdirSync(mainPath, { recursive: true });
+      await engine.executeRaw(
+        `INSERT INTO sources (id, name, local_path, config) VALUES
+          ('legacy-main', 'legacy-main', NULL, '{}'::jsonb),
+          ('other', 'other', $1, '{}'::jsonb)`,
+        [mainPath],
+      );
+
+      await expect(ensureSourceLocalPath(engine, 'legacy-main', mainPath)).rejects.toMatchObject({
+        code: 'overlapping_path',
+      });
+      const rows = await engine.executeRaw<{ id: string; local_path: string | null }>(
+        `SELECT id, local_path FROM sources WHERE id IN ('legacy-main', 'other') ORDER BY id`,
+      );
+      expect(rows).toEqual([
+        { id: 'legacy-main', local_path: null },
+        { id: 'other', local_path: mainPath },
+      ]);
+    });
+  });
+
+  test('keeps a DB-only source unchanged when the repair path overlaps a child source', async () => {
+    await withEnv2(async () => {
+      const mainPath = join(GBRAIN_HOME, 'duwu');
+      const childPath = join(mainPath, 'wiki');
+      mkdirSync(childPath, { recursive: true });
+      await engine.executeRaw(
+        `INSERT INTO sources (id, name, local_path, config) VALUES
+          ('legacy-main', 'legacy-main', NULL, '{}'::jsonb),
+          ('child', 'child', $1, '{}'::jsonb)`,
+        [childPath],
+      );
+
+      await expect(ensureSourceLocalPath(engine, 'legacy-main', mainPath)).rejects.toMatchObject({
+        code: 'overlapping_path',
+      });
+      const rows = await engine.executeRaw<{ id: string; local_path: string | null }>(
+        `SELECT id, local_path FROM sources WHERE id IN ('legacy-main', 'child') ORDER BY id`,
+      );
+      expect(rows).toEqual([
+        { id: 'child', local_path: childPath },
+        { id: 'legacy-main', local_path: null },
+      ]);
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------

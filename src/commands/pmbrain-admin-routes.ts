@@ -300,6 +300,41 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
     }
   });
 
+  // Desktop compatibility repair: attach a path to an existing DB source
+  // without changing the brain-level default. Source selection is an
+  // explicit setup action; historical path repair must not re-run it.
+  app.post('/admin/api/sources/local-path', requireAdmin, express.json({ limit: '4kb' }), async (req: Request, res: Response) => {
+    const sourceId = typeof req.body?.sourceId === 'string' ? req.body.sourceId.trim() : '';
+    const localPath = typeof req.body?.localPath === 'string' ? req.body.localPath.trim() : '';
+    if (!sourceId) {
+      res.status(400).json({ error: 'source_id_required' });
+      return;
+    }
+    if (!localPath) {
+      res.status(400).json({ error: 'local_path_required' });
+      return;
+    }
+    try {
+      const rows = await engine.executeRaw<{ id: string; archived: boolean }>(
+        `SELECT id, archived FROM sources WHERE id = $1 LIMIT 1`,
+        [sourceId],
+      );
+      const source = rows[0];
+      if (!source) {
+        res.status(404).json({ error: 'source_not_found' });
+        return;
+      }
+      if (source.archived) {
+        res.status(400).json({ error: 'archived_source_cannot_be_repaired' });
+        return;
+      }
+      await ensureSourceLocalPath(engine, sourceId, localPath);
+      sendAdminContract(res, SetDefaultSourceResponseSchema, { sourceId });
+    } catch (e) {
+      res.status(400).json({ error: e instanceof Error ? e.message : 'repair_source_local_path_failed' });
+    }
+  });
+
   const dreamScheduleView = async (overrides?: { enabled?: boolean; time?: string; lastStartedDate?: string | null }) => {
     const [storedEnabled, storedTime, storedLastStartedDate] = await Promise.all([
       engine.getConfig(ADMIN_DREAM_SCHEDULE_ENABLED_KEY),

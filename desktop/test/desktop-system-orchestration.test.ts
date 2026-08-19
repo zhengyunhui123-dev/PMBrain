@@ -120,11 +120,14 @@ describe('desktop system orchestration contracts', () => {
     expect(trayController).toContain('click: this.dependencies.openDesktop');
     expect(trayController).toContain("tray.on('double-click', this.dependencies.openDesktop)");
     expect(main).toContain("'/admin/api/brain/overview'");
-    expect(main).toContain('payload.knowledgeSourceChanged === false');
-    expect(setupController).toContain('this.applyOnce(effectivePayload');
+    expect(main).toContain('knowledgeSourceChanged === true');
+    expect(setupController).toContain('this.applyOnce(effectivePayload, sourcePolicy');
     expect(setupController).toContain('repairMissingMainSourcePath');
+    expect(setupController).toContain("'/admin/api/sources/local-path'");
+    expect(setupController).toContain('!sourcePolicy.explicitSourceChange');
     expect(setupController).toContain('ensureKnowledgeDirectory(knowledgeDirectory)');
-    expect(setupController).toContain('if (knowledgeDirectory && sourceId)');
+    expect(setupController).toContain('sourcePolicy.applySourceConfiguration');
+    expect(setupController).toContain('sourcePolicy.bindPath');
     expect(setupController).toContain('主源路径校验失败');
   });
 

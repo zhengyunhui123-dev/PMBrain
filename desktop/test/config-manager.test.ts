@@ -4,7 +4,7 @@ import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { getRecipe } from '../../src/core/ai/recipes/index.js';
 import {
-  activeConfigDirectory, desktopConfigPath, getSetupInfo, markDesktopMigration, needsDesktopMigration,
+  activeConfigDirectory, desktopConfigPath, getSetupInfo, markDesktopMigration, markMainSourcePathRepairCompleted, needsDesktopMigration,
   getDatabaseRuntimeConfig, getDesktopPreferences, normalizeDesktopTheme, normalizePgliteDatabasePath, preferredConfigDirectory, restoreConfig,
   isTrayHintShown, markTrayHintShown, saveDesktopPreferences, saveDesktopTheme, saveSetup, writeJsonConfig,
 } from '../src/main/config-manager.js';
@@ -34,6 +34,23 @@ describe('desktop config manager', () => {
     const info = getSetupInfo();
     expect(info.needsSetup).toBe(true);
     expect(info.defaults.knowledgeDirectory).toBe(join(homedir(), 'Documents', 'PMBrain'));
+  });
+
+  test('persists the one-time main source path compatibility marker', () => {
+    const root = isolatedHome();
+    saveSetup({
+      engine: 'pglite',
+      databasePath: join(root, 'brain.pglite'),
+      keys: {},
+    });
+
+    expect(getSetupInfo().current.mainSourcePathRepairCompleted).toBe(false);
+    expect(markMainSourcePathRepairCompleted()).toBeTruthy();
+    expect(getSetupInfo().current.mainSourcePathRepairCompleted).toBe(true);
+    expect(markMainSourcePathRepairCompleted()).toBeNull();
+
+    const config = JSON.parse(readFileSync(desktopConfigPath(), 'utf8'));
+    expect(config.desktop.main_source_path_repair_completed).toBe(true);
   });
 
   test('keeps legacy users local and defaults window close to tray without rewriting config', () => {
