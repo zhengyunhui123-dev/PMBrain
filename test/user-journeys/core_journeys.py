@@ -376,7 +376,6 @@ def embedding_switch_journey(page: Page, artifacts: Path, provider: LocalOpenAIS
     # value in the UI.
     page.locator("#embedding-provider").select_option(label="PMBrain E2E Local Provider")
     page.locator("#embedding-model-name").fill("e2e-embedding-12")
-    switch_started_at = page.evaluate("() => new Date().toISOString()")
     page.once("dialog", lambda dialog: dialog.accept())
     page.locator("#save-setup").click()
     page.locator("#setup-wait").wait_for(state="hidden", timeout=180_000)
@@ -392,26 +391,38 @@ def embedding_switch_journey(page: Page, artifacts: Path, provider: LocalOpenAIS
     origin = open_admin_from_desktop(page)
     page.goto(origin + "/admin/#tasks")
     page.get_by_role("heading", name="任务中心").wait_for(timeout=90_000)
-    rebuild_handle = page.wait_for_function(
-        f"""async () => {{
-          const switchStartedAt = {json.dumps(switch_started_at)};
-          const response = await fetch('/admin/api/runs', {{ credentials: 'same-origin' }});
+    run_id_handle = page.wait_for_function(
+        """async () => {
+          const response = await fetch('/admin/api/runs', { credentials: 'same-origin' });
           if (!response.ok) return false;
           const payload = await response.json();
-          const terminal = (payload.rows || [])
+          const current = (payload.rows || [])
             .filter(run =>
               run.kind === 'embed_stale' &&
               Array.isArray(run.command) &&
               run.command.includes('--catch-up') &&
-              Date.parse(run.startedAt || '') >= Date.parse(switchStartedAt) &&
-              ['completed', 'failed', 'cancelled'].includes(run.status)
+              typeof run.id === 'string'
             )
             .sort((left, right) => String(right.startedAt).localeCompare(String(left.startedAt)));
-          return terminal[0] || false;
+          return current[0]?.id || false;
+        }""",
+        timeout=180_000,
+    )
+    rebuild_id = run_id_handle.json_value()
+    if not isinstance(rebuild_id, str) or not rebuild_id:
+        raise AssertionError(f"Background embedding rebuild was not submitted: {rebuild_id}")
+    rebuild_handle = page.wait_for_function(
+        f"""async () => {{
+          const response = await fetch(`/admin/api/runs/${{encodeURIComponent({json.dumps(rebuild_id)})}}`, {{ credentials: 'same-origin' }});
+          if (!response.ok) return false;
+          const run = await response.json();
+          if (!['completed', 'failed', 'cancelled'].includes(run.status)) return false;
+          return JSON.stringify(run);
         }}""",
         timeout=180_000,
     )
-    rebuild = rebuild_handle.json_value()
+    rebuild_json = rebuild_handle.json_value()
+    rebuild = json.loads(rebuild_json) if isinstance(rebuild_json, str) else None
     if not rebuild or rebuild.get("status") != "completed":
         raise AssertionError(f"Background embedding rebuild did not complete: {rebuild}")
     if "--catch-up" not in (rebuild.get("command") or []):
