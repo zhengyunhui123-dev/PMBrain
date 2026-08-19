@@ -329,6 +329,10 @@ def import_search_journey(page: Page, origin: str, markdown: Path, pdf: Path, ar
         raise AssertionError(f"Markdown/PDF import was not fully successful: {details}")
     textarea = page.locator(".assistant-composer textarea")
     textarea.fill(UNIQUE_MARKER)
+    page.wait_for_function(
+        "() => { const button = document.querySelector('.search-action-main'); return button && !button.disabled; }",
+        timeout=90_000,
+    )
     page.locator(".search-action-main").click()
     result = page.locator(".knowledge-search-result")
     result.wait_for(state="visible", timeout=90_000)
