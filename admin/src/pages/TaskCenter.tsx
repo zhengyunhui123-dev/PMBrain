@@ -346,7 +346,7 @@ export function TaskCenterPage() {
 
       {error && <div className="pm-error task-inline-error">{error}</div>}
 
-      {snapshot.pglite_owner && snapshot.pglite_owner.state !== 'clear' && snapshot.pglite_owner.state !== 'current' && (
+      {activeRows.length === 0 && snapshot.pglite_owner && snapshot.pglite_owner.state !== 'clear' && snapshot.pglite_owner.state !== 'current' && (
         <PgliteRecoveryCard
           owner={snapshot.pglite_owner}
           onTerminate={() => void terminateOwner()}

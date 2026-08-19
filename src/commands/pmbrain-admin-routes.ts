@@ -169,6 +169,8 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
   } = options;
   let adminUploadTail: Promise<void> = Promise.resolve();
   app.get('/admin/api/task-center', requireAdmin, async (_req: Request, res: Response) => {
+    const runs = listRuns();
+    const hasActiveRun = runs.some(run => run.status === 'queued' || run.status === 'running');
     let queue: unknown = null;
     if (!getPgliteBusy()) {
       try {
@@ -178,8 +180,11 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
         queue = null;
       }
     }
-    const pgliteDisconnected = config.engine === 'pglite' && getPgliteConnected?.() === false;
-    const pgliteOwner = config.engine === 'pglite' && config.database_path && (!getPgliteBusy() || pgliteDisconnected)
+    // A live queued/running Admin task is the expected PGLite owner. Only
+    // inspect the owner for recovery when there is no actual task record;
+    // disconnected state alone must not turn a normal maintenance run into a
+    // misleading "残留占用进程" card.
+    const pgliteOwner = config.engine === 'pglite' && config.database_path && !hasActiveRun
       ? await inspectPgliteOwner(config.database_path, {
           allowTerminate: true,
         })
@@ -188,7 +193,7 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
       mode: config.engine === 'pglite' ? 'pglite' : 'postgres',
       pglite_busy: getPgliteBusy(),
       pglite_owner: pgliteOwner,
-      rows: listRuns(),
+      rows: runs,
       queue,
       server_time: new Date().toISOString(),
     });

@@ -18,7 +18,9 @@ describe('PGLite 后台任务忙碌提示', () => {
     expect(source).toContain("const canRecoverPgliteOwner = req.method === 'POST' && req.path === '/pglite-owner/terminate';");
     expect(source).toContain("app.get('/admin/api/task-center'");
     expect(source).toContain("app.post('/admin/api/pglite-owner/terminate'");
-    expect(source).toContain('rows: listRuns()');
+    expect(source).toContain('rows: runs');
     expect(source).toContain('requireAdmin(req, res, () => {');
+    expect(source).toContain("const hasActiveRun = runs.some(run => run.status === 'queued' || run.status === 'running');");
+    expect(source).toContain('config.database_path && !hasActiveRun');
   });
 });
