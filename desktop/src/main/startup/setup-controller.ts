@@ -220,6 +220,7 @@ export class SetupController {
     await this.dependencies.sidecar.stop();
     let saved: ReturnType<typeof saveSetup>;
     let embeddingSwitchCommitted = false;
+    let embeddingRebuildQueued = false;
     let reembeddingWarning: string | null = null;
     let migrationRequired = false;
     try {
@@ -327,27 +328,10 @@ export class SetupController {
         this.dependencies.sendStartupProgress({
           visible: true,
           stage: 'migration',
-          title: '正在使用新模型重建向量',
-          message: '正在重新生成搜索索引。此操作由你在桌面端明确确认；Dream 不会自行触发模型迁移。',
+          title: '正在准备后台向量重建',
+          message: '新模型已生效，正在恢复本地服务；恢复后会由任务中心安全接管剩余向量化。Dream 不会自行触发模型迁移。',
         });
-        const reembed = await runCli(this.dependencies.runtime(), ['embed', '--stale', '--catch-up', '--json']);
-        if (reembed.code !== 0) {
-          reembeddingWarning = (reembed.stderr || reembed.stdout).trim()
-            || '本次重新向量化未完成，Dream 会继续处理剩余内容。';
-        } else {
-          try {
-            const result = JSON.parse(reembed.stdout.trim().split(/\r?\n/).at(-1) || '{}') as {
-              embedded?: number;
-              total_chunks?: number;
-            };
-            const pending = Math.max(0, (result.total_chunks ?? 0) - (result.embedded ?? 0));
-            if (pending > 0) {
-              reembeddingWarning = `新模型已生效，但仍有 ${pending} 个分块等待向量化；Dream 下次启动会继续处理。`;
-            }
-          } catch {
-            reembeddingWarning = '新模型已生效，但无法确认重新向量化是否全部完成；Dream 下次启动会检查并继续处理。';
-          }
-        }
+        embeddingRebuildQueued = true;
       }
     } catch (error) {
       if (!embeddingSwitchCommitted) restoreConfig(saved.snapshot);
@@ -372,9 +356,29 @@ export class SetupController {
       markDesktopMigration(app.getVersion());
     }
     this.dependencies.applyTheme(getSetupInfo().current.theme);
+    // Read all sidecar-backed setup state before submitting the background
+    // task. The task coordinator will briefly disconnect PGLite before its
+    // CLI child starts; no post-submit database request may race that handoff.
+    const integrations = await listIntegrationsWithConnectionState(this.dependencies.sidecar.current?.port);
+    if (embeddingRebuildQueued) {
+      const activeSidecar = this.dependencies.sidecar.current;
+      if (!activeSidecar || this.dependencies.sidecar.state?.phase !== 'ready') {
+        reembeddingWarning = '新模型已生效，但本地服务尚未就绪，无法提交后台向量重建任务；请稍后在任务中心运行“补齐待向量化内容”。';
+      } else {
+        try {
+          await activeSidecar.adminRequest('/admin/api/runs/action', {
+            method: 'POST',
+            body: JSON.stringify({ action: 'embed_stale', catchUp: true }),
+          });
+        } catch (error) {
+          reembeddingWarning = '新模型已生效，但后台向量重建任务提交失败；请稍后在任务中心运行“补齐待向量化内容”。'
+            + ` 原因：${error instanceof Error ? error.message : String(error)}`;
+        }
+      }
+    }
     return {
       setup: getSetupInfo(),
-      integrations: await listIntegrationsWithConnectionState(this.dependencies.sidecar.current?.port),
+      integrations,
       port: this.dependencies.sidecar.current?.port,
       mcpUrl: this.dependencies.sidecar.current?.mcpUrl,
       backup: saved.backup,

@@ -148,8 +148,9 @@ describe('desktop system orchestration contracts', () => {
     expect(main).toContain("'--empty-only'");
     expect(main).toContain('payload.confirmEmbeddingRebuild !== true');
     expect(main).toContain("'--force-reembed'");
-    expect(main).toContain("['embed', '--stale', '--catch-up', '--json']");
-    expect(main).toContain('(result.total_chunks ?? 0) - (result.embedded ?? 0)');
+    expect(main).toContain('embeddingRebuildQueued');
+    expect(main).toContain("'/admin/api/runs/action'");
+    expect(main).toContain("{ action: 'embed_stale', catchUp: true }");
     expect(main).toContain('if (!embeddingSwitchCommitted) restoreConfig(saved.snapshot)');
     expect(main).toContain('Dream 不会自行触发模型迁移');
   });

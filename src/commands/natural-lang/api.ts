@@ -359,7 +359,12 @@ export async function startSourceGitRun(sourceId: string, action: 'init' | 'comm
   return await startRun(`source_git_${action}`, buildSourceGitCommand(sourceId, action, message), cwd, hooks);
 }
 
-export async function startActionRun(action: 'doctor_check' | 'show_sources' | 'show_stats' | 'embed_stale' | 'sync_all', cwd: string, hooks?: RunHooks): Promise<ConsoleRun> {
+export async function startActionRun(
+  action: 'doctor_check' | 'show_sources' | 'show_stats' | 'embed_stale' | 'sync_all',
+  cwd: string,
+  hooks?: RunHooks,
+  options: { embedCatchUp?: boolean } = {},
+): Promise<ConsoleRun> {
   const preview: IntentPreview = {
     previewId: randomUUID(),
     intent: action,
@@ -369,5 +374,6 @@ export async function startActionRun(action: 'doctor_check' | 'show_sources' | '
     riskLevel: action === 'embed_stale' || action === 'sync_all' ? 'maintenance' : 'read',
     requiresConfirmation: false,
   };
-  return await startRun(action, commandForPreview(preview), cwd, hooks);
+  return await startRun(action, commandForPreview(preview, options), cwd, hooks,
+    options.embedCatchUp ? null : undefined);
 }

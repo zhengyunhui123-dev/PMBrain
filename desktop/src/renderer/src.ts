@@ -1602,7 +1602,7 @@ async function save(): Promise<void> {
     setNotice(
       next.reembeddingWarning ? 'error' : 'success',
       next.reembeddingWarning
-        ? `模型配置已保存，剩余向量将在 Dream 中继续处理：${next.reembeddingWarning}`
+        ? `模型配置已保存：${next.reembeddingWarning}`
         : `配置完成，PMBrain 已在 127.0.0.1:${next.port} 启动。`,
     );
   } catch (error) {

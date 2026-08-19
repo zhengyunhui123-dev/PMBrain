@@ -927,7 +927,9 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
         res.status(400).json({ error: 'unsupported_action' });
         return;
       }
-      const run = await startActionRun(action, process.cwd(), runHooks);
+      const run = await startActionRun(action, process.cwd(), runHooks, {
+        embedCatchUp: action === 'embed_stale' && req.body?.catchUp === true,
+      });
       sendAdminContract(res, RunAcceptedResponseSchema, { runId: run.id, status: run.status });
     } catch (e) {
       res.status(400).json({ error: e instanceof Error ? e.message : 'action_run_failed' });

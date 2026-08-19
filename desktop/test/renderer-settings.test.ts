@@ -358,7 +358,7 @@ describe('desktop settings renderer contracts', () => {
 
   test('reports resumable re-embedding instead of claiming a mixed model switch succeeded', () => {
     expect(renderer).toContain('next.reembeddingWarning');
-    expect(renderer).toContain('剩余向量将在 Dream 中继续处理');
+    expect(renderer).toContain('模型配置已保存：');
     expect(preload).toContain('reembeddingWarning?: string | null');
   });
 });

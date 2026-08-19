@@ -184,6 +184,19 @@ describe('admin console intent planning', () => {
     expect(command.slice(-3)).toEqual(['think', '项目文档', '--json']);
   });
 
+  test('embedding catch-up actions can run without a wall-clock cap', () => {
+    const command = commandForPreview({
+      previewId: 'preview-embed',
+      intent: 'embed_stale',
+      confidence: 1,
+      slots: {},
+      proposedAction: '补齐待向量化内容',
+      riskLevel: 'maintenance',
+      requiresConfirmation: false,
+    }, { embedCatchUp: true });
+    expect(command.slice(-4)).toEqual(['embed', '--stale', '--catch-up', '--json']);
+  });
+
   test('direct text import reuses capture and respects the selected source', () => {
     const command = buildCaptureCommand('需要保存的完整正文', 'duwu');
     expect(command.slice(-4)).toEqual(['capture', '需要保存的完整正文', '--source', 'duwu']);
