@@ -49,6 +49,7 @@ DESKTOP_ENTRY = DESKTOP_ROOT / "out" / "main" / "index.js"
 DESKTOP_RENDERER = DESKTOP_ROOT / "out" / "renderer" / "index.html"
 DEFAULT_ARTIFACTS_ROOT = REPO_ROOT / "备份" / "核心用户路径测试" / "runs"
 UNIQUE_MARKER = "pmbrain-real-e2e-orchid-7429"
+FIRST_SETUP_TIMEOUT_MS = 300_000
 
 
 def free_port() -> int:
@@ -290,8 +291,30 @@ def first_launch_journey(page: Page, artifacts: Path, provider: LocalOpenAIServe
     select_custom_model(page, "chat", provider.base_url, "e2e-chat")
     select_custom_model(page, "embedding", provider.base_url, "e2e-embedding-8")
     page.locator("#save-setup").click()
-    page.locator("#setup-wait").wait_for(state="hidden", timeout=120_000)
-    page.locator("#global-success").wait_for(state="visible", timeout=120_000)
+    try:
+        page.wait_for_function(
+            """() => {
+              const wait = document.querySelector('#setup-wait');
+              const error = document.querySelector('#global-error');
+              return Boolean(wait?.hidden || !error?.hidden);
+            }""",
+            timeout=FIRST_SETUP_TIMEOUT_MS,
+        )
+    except PlaywrightTimeoutError:
+        progress = {
+            "stage": page.locator("#setup-wait-stage").inner_text() if page.locator("#setup-wait-stage").count() else "n/a",
+            "title": page.locator("#setup-wait-title").inner_text() if page.locator("#setup-wait-title").count() else "n/a",
+            "message": page.locator("#setup-wait-message").inner_text() if page.locator("#setup-wait-message").count() else "n/a",
+            "error": page.locator("#global-error").inner_text() if page.locator("#global-error").count() else "n/a",
+        }
+        (artifacts / "first-launch-timeout.txt").write_text(
+            f"url={page.url}\n{json.dumps(progress, ensure_ascii=False, indent=2)}\n",
+            encoding="utf-8",
+        )
+        raise
+    if page.locator("#global-error").is_visible():
+        raise AssertionError(page.locator("#global-error").inner_text())
+    page.locator("#global-success").wait_for(state="visible", timeout=FIRST_SETUP_TIMEOUT_MS)
     success = page.locator("#global-success").inner_text()
     if "配置完成" not in success:
         raise AssertionError(f"First-run setup did not complete: {success}")
