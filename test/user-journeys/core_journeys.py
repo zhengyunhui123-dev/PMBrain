@@ -364,7 +364,13 @@ def embedding_switch_journey(page: Page, artifacts: Path, provider: LocalOpenAIS
     page.goto(DESKTOP_RENDERER.as_uri())
     page.locator("#panel-basic").wait_for(state="visible")
     page.locator('.rail-item[data-target="models"]').click()
-    page.locator("#embedding-provider").select_option("custom-openai")
+    page.wait_for_function(
+        "() => Array.from(document.querySelector('#embedding-provider')?.options ?? []).some(option => option.textContent === 'PMBrain E2E Local Provider')"
+    )
+    # The renderer exposes saved custom endpoints as their generated catalog
+    # ids. `custom-openai` is the normalized config provider, not a selectable
+    # value in the UI.
+    page.locator("#embedding-provider").select_option(label="PMBrain E2E Local Provider")
     page.locator("#embedding-model-name").fill("e2e-embedding-12")
     page.once("dialog", lambda dialog: dialog.accept())
     page.locator("#save-setup").click()
