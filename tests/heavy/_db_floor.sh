@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Shared name floor for heavy scripts that mutate DATABASE_URL.
+# Shared name floor for heavy scripts that mutate any accepted database URL.
 # Source this file before any psql call or CLI that can initialize/mutate DB.
 
 _pmbrain_db_floor_check() {
@@ -25,5 +25,6 @@ _pmbrain_db_floor_check() {
 
 _pmbrain_db_floor_check "${DATABASE_URL:-}" DATABASE_URL
 _pmbrain_db_floor_check "${GBRAIN_DATABASE_URL:-}" GBRAIN_DATABASE_URL
+_pmbrain_db_floor_check "${PMBRAIN_DATABASE_URL:-}" PMBRAIN_DATABASE_URL
 unset -f _pmbrain_db_floor_check 2>/dev/null || true
 unset _pmbrain_db_floor_url _pmbrain_db_floor_var _pmbrain_db_floor_prequery _pmbrain_db_floor_name 2>/dev/null || true

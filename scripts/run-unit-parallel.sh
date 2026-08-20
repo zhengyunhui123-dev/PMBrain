@@ -27,7 +27,7 @@ cd "$(dirname "$0")/.."
 
 # Unit tests are PGLite/hermetic. Never let a developer's Postgres URL leak
 # into any child Bun process.
-unset DATABASE_URL GBRAIN_DATABASE_URL
+unset DATABASE_URL GBRAIN_DATABASE_URL PMBRAIN_DATABASE_URL GBRAIN_TEST_ALLOW_DATABASE_URL
 
 # ──────────────────────────────────────────────────────────────────────────
 # CPU detection: Apple Silicon perf cores → Mac total physical → nproc → 4.

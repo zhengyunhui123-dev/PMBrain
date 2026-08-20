@@ -57,7 +57,7 @@ fi
 cd "$(dirname "$0")/.."
 
 # This shard is the CI unit lane; E2E files are excluded below.
-unset DATABASE_URL GBRAIN_DATABASE_URL
+unset DATABASE_URL GBRAIN_DATABASE_URL PMBRAIN_DATABASE_URL GBRAIN_TEST_ALLOW_DATABASE_URL
 
 # Collect non-E2E, non-serial unit test files. Slow files INCLUDED — see
 # header comment. Local run-unit-shard.sh excludes slow files (different

@@ -146,7 +146,7 @@ export async function runClawTest(args: string[]): Promise<number> {
  * Strip these on entry so the child env carries no Postgres-pointing
  * variable. PGLite-only by design.
  */
-const POSTGRES_POLLUTION_ENV_VARS = ['DATABASE_URL', 'GBRAIN_DATABASE_URL'];
+const POSTGRES_POLLUTION_ENV_VARS = ['DATABASE_URL', 'GBRAIN_DATABASE_URL', 'PMBRAIN_DATABASE_URL'];
 
 async function runScripted(
   opts: HarnessOpts,

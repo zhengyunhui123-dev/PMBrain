@@ -64,7 +64,7 @@ WORKLOAD_OUT="$LOG_DIR/heavy-sync_timeout_rescue-$TS.json"
 echo "[sync_timeout_rescue] pages=$PAGES waves=$WAVES timeout=${TIMEOUT_SECONDS}s strict=$STRICT"
 echo "[sync_timeout_rescue] running cascade-recovery simulation..."
 
-unset DATABASE_URL || true
+unset DATABASE_URL GBRAIN_DATABASE_URL PMBRAIN_DATABASE_URL || true
 set +e
 timeout 600s env \
   PAGES="$PAGES" \

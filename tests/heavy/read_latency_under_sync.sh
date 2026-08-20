@@ -34,7 +34,7 @@ WORKLOAD_OUT="$LOG_DIR/heavy-read_latency-$TS.json"
 echo "[read_latency] pages=${BRAIN_PAGES:-500} queries=${NUM_QUERIES:-200} writers=${NUM_WRITERS:-4} strict=${STRICT_LATENCY:-0}"
 echo "[read_latency] running baseline + under-load workload..."
 
-unset DATABASE_URL || true
+unset DATABASE_URL GBRAIN_DATABASE_URL PMBRAIN_DATABASE_URL || true
 set +e
 timeout 600s env \
   BRAIN_PAGES="${BRAIN_PAGES:-500}" \

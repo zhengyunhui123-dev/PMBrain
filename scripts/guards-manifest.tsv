@@ -1,0 +1,46 @@
+# CI guard registry. This is the classification source for every scripts/check-* guard.
+#
+# class: scanner   = scans source/repository text; selftest is yes or todo.
+#        buildfresh = regenerates/builds and diffs tracked output; exempt.
+#        repostate  = checks repository/index state; exempt.
+# A scanner marked selftest=yes must have bad/ and good/ fixtures under
+# test/fixtures/guards/<guard>/. scripts/guard-self-test.sh enforces both the
+# fixture contract and manifest completeness.
+#
+# guard	class	selftest	notes
+check-admin-build.sh	buildfresh	exempt	Builds admin and refreshes tracked admin/dist, src/admin-embedded.ts, and release-manifest.json; the pre-build snapshot and CI tree diff are the freshness tests.
+check-admin-embedded.sh	buildfresh	exempt	Standalone embedded-admin freshness check; covered by check-admin-build in verify.
+check-admin-scope-drift.sh	buildfresh	exempt	Regenerates and diffs admin scope artifacts.
+check-batch-audit-site.sh	scanner	todo	Scanner guard; add fixtures when its rule is changed.
+check-cli-executable.sh	repostate	exempt	Checks repository file mode.
+check-eval-glossary-fresh.sh	buildfresh	exempt	Regenerates and diffs glossary output.
+check-exports-count.sh	scanner	todo	Previously reachable only through the drifting check:all chain; now in verify.
+check-fixture-privacy.sh	scanner	todo	Scanner guard; add fixtures when its rule is changed.
+check-fuzz-purity.sh	buildfresh	exempt	Executes the fuzz corpus.
+check-gateway-routed-no-direct-anthropic.sh	scanner	todo	Scanner guard; add fixtures when its rule is changed.
+check-image-decoders-embedded.sh	buildfresh	exempt	Binary embed check; not in the normal verify lane.
+check-jsonb-pattern.sh	scanner	yes	Catches JSONB double-encoding and schema max_stalled regression.
+check-no-double-retry.sh	scanner	yes	Catches single-line and multiline outer retry wrappers around engine batch methods.
+check-no-legacy-getconnection.sh	scanner	todo	Previously reachable only through the drifting check:all chain; now in verify.
+check-no-pii-in-agent-voice.sh	scanner	todo	Scanner guard; add fixtures when its rule is changed.
+check-operations-filter-bypass.sh	scanner	todo	Scanner guard; add fixtures when its rule is changed.
+check-pagetype-exhaustive.sh	scanner	todo	Wired into the canonical verify list; add fixtures when its rule is changed.
+check-pg-url-redaction.sh	scanner	todo	Wired into the canonical verify list; only explicit redactor documentation lines are allow-listed.
+check-pmbrain-env-prefix.ts	scanner	todo	PMBrain compatibility-prefix scanner.
+check-privacy.sh	scanner	todo	Scanner guard; add fixtures when its rule is changed.
+check-progress-to-stdout.sh	scanner	todo	Scanner guard; add fixtures when its rule is changed.
+check-proposal-pii.sh	scanner	todo	Scanner guard; add fixtures when its rule is changed.
+check-repository-hygiene.sh	scanner	todo	Scanner guard; add fixtures when its rule is changed.
+check-skill-brain-first.sh	scanner	todo	Scanner guard; add fixtures when its rule is changed.
+check-source-config-leak.sh	scanner	todo	Scanner guard; add fixtures when its rule is changed.
+check-source-id-projection.sh	scanner	todo	Scanner guard; add fixtures when its rule is changed.
+check-source-scope-onboard.sh	scanner	todo	Scanner guard; add fixtures when its rule is changed.
+check-synthetic-corpus-privacy.sh	scanner	todo	Scanner guard; add fixtures when its rule is changed.
+check-system-of-record.sh	scanner	todo	Scanner guard; add fixtures when its rule is changed.
+check-test-isolation.sh	scanner	todo	Uses check-test-isolation.allowlist as input.
+check-test-real-names.sh	scanner	todo	Scanner guard; add fixtures when its rule is changed.
+check-trailing-newline.sh	scanner	todo	Previously reachable only through the drifting check:all chain; now in verify.
+check-version-sync.ts	repostate	exempt	Checks version and generated release metadata consistency.
+check-wasm-embedded.sh	buildfresh	exempt	Binary embed check.
+check-worker-lock-renewal-shape.sh	scanner	todo	Scanner guard; add fixtures when its rule is changed.
+check-worker-pool-atomicity.sh	scanner	todo	Scanner guard; add fixtures when its rule is changed.

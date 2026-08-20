@@ -16,12 +16,13 @@ set -euo pipefail
 
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 cd "$ROOT"
+SCAN_ROOT="${GBRAIN_GUARD_ROOT:-src}"
 
 # Match the interpolated form: ${JSON.stringify(...)}::jsonb
 # Using grep -P for Perl-compatible regex (lookahead-free pattern is enough here).
 PATTERN='\$\{JSON\.stringify\([^)]*\)\}::jsonb'
 
-if grep -rEn "$PATTERN" src/ 2>/dev/null; then
+if grep -rEn "$PATTERN" "$SCAN_ROOT" 2>/dev/null; then
   echo
   echo "ERROR: Found JSON.stringify(...)::jsonb pattern in src/."
   echo "       postgres.js v3 stringifies again, producing JSONB string literals."
@@ -29,7 +30,7 @@ if grep -rEn "$PATTERN" src/ 2>/dev/null; then
   exit 1
 fi
 
-echo "OK: no JSON.stringify(x)::jsonb interpolation pattern in src/"
+echo "OK: no JSON.stringify(x)::jsonb interpolation pattern in $SCAN_ROOT/"
 
 # v0.13.1 #219: guard against max_stalled DEFAULT 1 regressing in any schema
 # source file. DEFAULT 1 dead-lettered any SIGKILL'd job on first stall, making

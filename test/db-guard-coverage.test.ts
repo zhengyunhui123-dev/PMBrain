@@ -46,8 +46,8 @@ function* codeLines(src: string): Generator<string> {
 function readsAmbientDatabaseUrl(src: string): boolean {
   for (const line of codeLines(src)) {
     if (/delete\s+process\.env/.test(line)) continue;
-    if (/process\.env\.(GBRAIN_)?DATABASE_URL\b/.test(line)) return true;
-    if (/process\.env\[\s*['"`](GBRAIN_)?DATABASE_URL['"`]\s*\]/.test(line)) return true;
+    if (/process\.env\.(PMBRAIN_|GBRAIN_)?DATABASE_URL\b/.test(line)) return true;
+    if (/process\.env\[\s*['"`](PMBRAIN_|GBRAIN_)?DATABASE_URL['"`]\s*\]/.test(line)) return true;
   }
   return false;
 }
@@ -103,10 +103,12 @@ describe('heavy shell database isolation', () => {
     for (const entry of readdirSync(heavyDir, { withFileTypes: true })) {
       if (!entry.isFile() || !entry.name.endsWith('.sh') || entry.name === '_db_floor.sh') continue;
       const source = readFileSync(join(heavyDir, entry.name), 'utf-8');
-      const readsDatabaseUrl = /\b(DATABASE_URL|GBRAIN_DATABASE_URL)\b/.test(source);
+      const readsDatabaseUrl = /\b(DATABASE_URL|GBRAIN_DATABASE_URL|PMBRAIN_DATABASE_URL)\b/.test(source);
       if (!readsDatabaseUrl) continue;
       const hasFloor = source.includes('source "$(dirname "$0")/_db_floor.sh"');
-      const clearsUrls = source.includes('unset DATABASE_URL');
+      const clearsUrls = source.includes('unset DATABASE_URL')
+        && source.includes('GBRAIN_DATABASE_URL')
+        && source.includes('PMBRAIN_DATABASE_URL');
       if (!hasFloor && !clearsUrls) unprotected.push(`tests/heavy/${entry.name}`);
     }
     expect(unprotected).toEqual([]);

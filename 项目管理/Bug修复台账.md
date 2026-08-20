@@ -5,9 +5,9 @@
 - 时间：2026-08-20
 - 版本号：PMBrain 1.2.67
 - 标题：为 PostgreSQL 测试增加 fail-closed 数据库隔离保护
-- 描述：修复 E2E 测试直接使用环境中的 DATABASE_URL、先连接后清理数据库的误删风险。新增 Bun 测试启动级 Guard、数据库名 test 语义 Guard、setupDB 连接前 Guard、E2E 外层 psql 清理前校验、重型 shell 测试数据库 floor、破坏性测试静态覆盖门禁；正式库、恢复库、旧库和 pmbrain 等名称默认拒绝，单元测试脚本主动清除数据库环境变量。未连接、清理、修改或迁移任何用户 PostgreSQL/PGLite 数据。
+- 描述：修复 E2E 测试直接使用环境中的 DATABASE_URL、先连接后清理数据库的误删风险。新增 Bun 测试启动级 Guard、数据库名 test 语义 Guard、setupDB 连接前 Guard、E2E 外层 psql 清理前校验、重型 shell 测试数据库 floor、破坏性测试静态覆盖门禁；本轮继续补齐 PMBRAIN_DATABASE_URL 兼容别名、普通测试 allow 清理、统一 E2E workflow 和 Guard self-test。正式库、恢复库、旧库和 pmbrain 等名称默认拒绝，未连接、清理、修改或迁移任何用户 PostgreSQL/PGLite 数据。
 - 是否完成：进行中
-- 最终结果：TypeScript 类型检查、静态环境连接扫描和 diff 检查通过；新增 Guard 回归、预加载回归和覆盖门禁已写入，当前 Codex 终端因未安装 bun.exe 未能执行 Bun 测试，需在安装 Bun 的开发机或 GitHub Actions 中继续验证。
+- 最终结果：Guard self-test 2/2、Bash 语法、E2E 错误数据库名 smoke 和静态环境连接扫描通过；统一 `verify`/E2E workflow、JSONB parity、生成物门禁及普通测试环境清理已写入。当前 Codex 终端因未安装 bun.exe 未能执行 Bun 测试，真实 PGLite/Postgres 与 GitHub Actions 仍待验证，因此本 Bug 记录保持进行中。
 
 ## 2026-08-19 桌面端切换向量模型后重建任务卡住界面
 

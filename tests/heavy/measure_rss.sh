@@ -71,7 +71,7 @@ fi
 # in-memory PGLite, then runs the read loop). No cross-process state.
 WORKLOAD_OUT="$LOG_DIR/heavy-measure_rss-workload-$TS.json"
 echo "[measure_rss] running in-memory workload (brain insert + search loop)..."
-unset DATABASE_URL || true
+unset DATABASE_URL GBRAIN_DATABASE_URL PMBRAIN_DATABASE_URL || true
 set +e
 timeout 600s env \
   BRAIN_PAGES="${BRAIN_PAGES:-200}" \

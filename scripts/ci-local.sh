@@ -21,6 +21,7 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
+SHELL_BIN="${BASH:-bash}"
 
 COMPOSE_FILE="docker-compose.ci.yml"
 
@@ -156,39 +157,56 @@ done
 
 # Step 3: smoke-test run-e2e.sh argv + shard handling.
 echo "[ci-local] Smoke: run-e2e.sh argv + shard..."
-SMOKE_NO_ARGS=$(bash scripts/run-e2e.sh --dry-run-list | wc -l | tr -d ' ')
+SMOKE_NO_ARGS=$("$SHELL_BIN" scripts/run-e2e.sh --dry-run-list | wc -l | tr -d ' ')
 EXPECTED_ALL=$(ls test/e2e/*.test.ts | wc -l | tr -d ' ')
 if [ "$SMOKE_NO_ARGS" != "$EXPECTED_ALL" ]; then
   echo "[ci-local] ERROR: --dry-run-list (no args) printed $SMOKE_NO_ARGS, expected $EXPECTED_ALL" >&2
   exit 1
 fi
-SMOKE_ONE_ARG=$(bash scripts/run-e2e.sh --dry-run-list test/e2e/sync.test.ts)
+SMOKE_ONE_ARG=$("$SHELL_BIN" scripts/run-e2e.sh --dry-run-list test/e2e/sync.test.ts)
 if [ "$SMOKE_ONE_ARG" != "test/e2e/sync.test.ts" ]; then
   echo "[ci-local] ERROR: --dry-run-list with 1 arg printed '$SMOKE_ONE_ARG'" >&2
   exit 1
 fi
-SHARD_TOTAL=$(( $(SHARD=1/4 bash scripts/run-e2e.sh --dry-run-list | wc -l) + \
-                $(SHARD=2/4 bash scripts/run-e2e.sh --dry-run-list | wc -l) + \
-                $(SHARD=3/4 bash scripts/run-e2e.sh --dry-run-list | wc -l) + \
-                $(SHARD=4/4 bash scripts/run-e2e.sh --dry-run-list | wc -l) ))
+SHARD_TOTAL=$(( $(SHARD=1/4 "$SHELL_BIN" scripts/run-e2e.sh --dry-run-list | wc -l) + \
+                $(SHARD=2/4 "$SHELL_BIN" scripts/run-e2e.sh --dry-run-list | wc -l) + \
+                $(SHARD=3/4 "$SHELL_BIN" scripts/run-e2e.sh --dry-run-list | wc -l) + \
+                $(SHARD=4/4 "$SHELL_BIN" scripts/run-e2e.sh --dry-run-list | wc -l) ))
 if [ "$SHARD_TOTAL" != "$EXPECTED_ALL" ]; then
   echo "[ci-local] ERROR: shards 1-4 covered $SHARD_TOTAL files, expected $EXPECTED_ALL" >&2
   exit 1
 fi
 echo "[ci-local] Smoke OK ($SMOKE_NO_ARGS files no-arg, 1 single-arg, ${SHARD_TOTAL}=4-shard total)."
 
+# The wrapper must reject an obvious production-shaped database before it can
+# invoke psql or Bun. Keep this smoke test dependency-free so it also catches
+# accidental guard bypasses on hosts without Postgres installed.
+echo "[ci-local] Smoke: E2E database-name floor..."
+BAD_DB_SMOKE_LOG=$(mktemp)
+if DATABASE_URL=postgresql://postgres:postgres@localhost:5432/gbrain \
+    "$SHELL_BIN" scripts/run-e2e.sh test/e2e/sync.test.ts >"$BAD_DB_SMOKE_LOG" 2>&1; then
+  echo "[ci-local] ERROR: run-e2e.sh accepted a non-test database name" >&2
+  rm -f "$BAD_DB_SMOKE_LOG"
+  exit 1
+fi
+if ! grep -qi "does not look like a test database" "$BAD_DB_SMOKE_LOG"; then
+  echo "[ci-local] ERROR: run-e2e.sh failed without the database-name floor message" >&2
+  cat "$BAD_DB_SMOKE_LOG" >&2
+  rm -f "$BAD_DB_SMOKE_LOG"
+  exit 1
+fi
+rm -f "$BAD_DB_SMOKE_LOG"
+echo "[ci-local] E2E database-name floor OK."
+
 # Step 4: build the runner-side command.
 # Tier 1: 4-shard parallel UNIT + E2E. Each shard runs ~46 unit files + ~9
-# E2E files against postgres-N. Guards + typecheck run ONCE before fan-out.
+# E2E files against postgres-N. The authoritative verify lane runs ONCE before
+# fan-out.
 # --no-shard runs the legacy unsharded flow (debug aid).
 if [ "$NO_SHARD" = "1" ]; then
   if [ "$DIFF" = "1" ]; then
-    RUN_PHASES_CMD='echo "[runner] guards + typecheck"
-bash scripts/check-jsonb-pattern.sh
-bash scripts/check-progress-to-stdout.sh
-bash scripts/check-trailing-newline.sh
-bash scripts/check-wasm-embedded.sh
-bun run typecheck
+    RUN_PHASES_CMD='echo "[runner] authoritative verify"
+bun run verify
 echo "[runner] unit (unsharded, DATABASE_URL unset)"
 env -u DATABASE_URL bash scripts/run-unit-shard.sh
 echo "[runner] e2e (unsharded, --diff selected)"
@@ -196,15 +214,11 @@ SELECTED=$(bun run scripts/select-e2e.ts)
 if [ -z "$SELECTED" ]; then
   echo "[runner] selector emitted nothing (doc-only diff); skipping E2E."
 else
-  DATABASE_URL=postgresql://postgres:postgres@postgres-1:5432/gbrain_test echo "$SELECTED" | xargs bash scripts/run-e2e.sh
+  printf "%s\n" "$SELECTED" | DATABASE_URL=postgresql://postgres:postgres@postgres-1:5432/gbrain_test xargs -r bash scripts/run-e2e.sh
 fi'
   else
-    RUN_PHASES_CMD='echo "[runner] guards + typecheck"
-bash scripts/check-jsonb-pattern.sh
-bash scripts/check-progress-to-stdout.sh
-bash scripts/check-trailing-newline.sh
-bash scripts/check-wasm-embedded.sh
-bun run typecheck
+    RUN_PHASES_CMD='echo "[runner] authoritative verify"
+bun run verify
 echo "[runner] unit (unsharded, DATABASE_URL unset)"
 env -u DATABASE_URL bash scripts/run-unit-shard.sh
 echo "[runner] e2e (unsharded)"
@@ -224,12 +238,8 @@ fi'
     # Empty file -> run-e2e.sh uses default glob (all 36 E2E files).
     DIFF_E2E_PREP='> /tmp/e2e-selected.txt'
   fi
-  RUN_PHASES_CMD="echo \"[runner] guards + typecheck (run once before sharding)\"
-bash scripts/check-jsonb-pattern.sh
-bash scripts/check-progress-to-stdout.sh
-bash scripts/check-trailing-newline.sh
-bash scripts/check-wasm-embedded.sh
-bun run typecheck
+  RUN_PHASES_CMD="echo \"[runner] authoritative verify (run once before sharding)\"
+bun run verify
 echo \"[runner] Tier 3: building PGLite snapshot fixture (cached across reruns)\"
 if [ ! -f test/fixtures/pglite-snapshot.tar ] || [ ! -f test/fixtures/pglite-snapshot.version ]; then
   bun run build:pglite-snapshot
