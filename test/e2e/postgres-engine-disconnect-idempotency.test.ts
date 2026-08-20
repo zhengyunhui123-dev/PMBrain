@@ -26,9 +26,12 @@
 import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
 import { PostgresEngine } from '../../src/core/postgres-engine.ts';
 import * as db from '../../src/core/db.ts';
+import { assertSafeE2eDatabaseUrl } from '../helpers/db-guard.ts';
 
 const DATABASE_URL = process.env.DATABASE_URL;
 const skip = !DATABASE_URL;
+
+if (DATABASE_URL) assertSafeE2eDatabaseUrl(DATABASE_URL);
 
 if (skip) {
   // eslint-disable-next-line no-console

@@ -40,6 +40,8 @@ if [ -z "${DATABASE_URL:-}" ]; then
   exit 2
 fi
 
+source "$(dirname "$0")/_db_floor.sh"
+
 SQL_FILE="tests/heavy/fixtures/down-mutate-${SHAPE}.sql"
 if [ ! -f "$SQL_FILE" ]; then
   echo "[build_legacy_fixtures] no fixture for shape '$SHAPE' at $SQL_FILE" >&2

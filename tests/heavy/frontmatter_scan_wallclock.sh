@@ -32,6 +32,9 @@ set -euo pipefail
 
 cd "$(dirname "$0")/../.."
 
+# This script may exercise Postgres and mutate its fixture state.
+source "$(dirname "$0")/_db_floor.sh"
+
 WALLCLOCK_BUDGET_S="${WALLCLOCK_BUDGET_S:-15}"
 REAL_PAGES="${REAL_PAGES:-10000}"
 NODE_MODULES_PAGES="${NODE_MODULES_PAGES:-50000}"

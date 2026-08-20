@@ -36,6 +36,12 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
+# This wrapper is the explicit E2E boundary. The Bun preload guard is allowed
+# only here, while the shell floor below validates the URL before this script
+# runs its psql connection cleanup.
+export GBRAIN_TEST_ALLOW_DATABASE_URL=1
+unset GBRAIN_DATABASE_URL
+
 # --- HOME isolation: snapshot real user config before switching ---
 # Tolerate unset HOME (minimal containers, exotic CI shells) without tripping set -u.
 REAL_HOME="${HOME:-/tmp}"
@@ -122,6 +128,27 @@ if [ "${#files[@]}" -eq 0 ]; then
   # Empty shard (e.g. SHARD=4/4 with only 3 files): nothing to do.
   echo "No files for shard ${SHARD:-(unsharded)}; exiting clean."
   exit 0
+fi
+
+# The first psql call below happens before Bun imports setupDB(). Keep the
+# same name floor in this shell layer so an ambient production URL cannot be
+# touched even for connection cleanup. An explicit exact-name override is
+# still available for deliberate one-shot maintenance tests.
+if [ -n "${DATABASE_URL:-}" ]; then
+  E2E_DATABASE_NAME="${DATABASE_URL%%\?*}"
+  E2E_DATABASE_NAME="${E2E_DATABASE_NAME##*/}"
+  if [ -z "$E2E_DATABASE_NAME" ]; then
+    echo "E2E guard: DATABASE_URL has no database name; refusing to start." >&2
+    exit 2
+  fi
+  if ! printf '%s' "$E2E_DATABASE_NAME" | grep -qiE '(^|[_-])test([_-]|$)'; then
+    if [ "${GBRAIN_E2E_ALLOW_DB:-}" != "$E2E_DATABASE_NAME" ]; then
+      echo "E2E guard: database \"$E2E_DATABASE_NAME\" does not look like a test database; refusing to start." >&2
+      echo "  Expected \"test\" as a name segment, e.g. gbrain_test." >&2
+      echo "  For an intentional one-shot exception: GBRAIN_E2E_ALLOW_DB=$E2E_DATABASE_NAME bun run test:e2e" >&2
+      exit 2
+    fi
+  fi
 fi
 
 pass_files=0
