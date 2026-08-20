@@ -1,5 +1,14 @@
 # Bug 修复台账
 
+## 2026-08-20 PMBrain 1.2.69 修复 run-verify-parallel CI 契约测试的脆弱文本匹配
+
+- 时间：2026-08-20
+- 版本号：PMBrain 1.2.69
+- 标题：修复 GitHub Actions shard 7 的 CI 契约测试
+- 描述：GitHub Actions 当前 HEAD 的 Test shard 7 仅有该契约测试失败（1080 通过、1 失败）；实际 shell 脚本已先保存检查退出码，失败原因是测试依赖固定缩进和注释位置。
+- 是否完成：是
+- 最终结果：改为验证 `wait "$pid"` → `rc=$?` → watchdog 清理的顺序，不改生产执行逻辑；本地与远程最终状态分别待验证/提交后复验。
+
 ## 2026-08-20 PostgreSQL E2E 测试误删正式库风险
 
 - 时间：2026-08-20

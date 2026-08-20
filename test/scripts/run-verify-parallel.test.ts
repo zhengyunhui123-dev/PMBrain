@@ -54,12 +54,20 @@ describe("run-verify-parallel.sh — CLI contract", () => {
   });
 
   it("preserves the check exit code when the macOS fallback timer is stopped", () => {
-    const source = readFileSync(SCRIPT, "utf8");
-    const unitSource = readFileSync(UNIT_SCRIPT, "utf8");
-    for (const script of [source, unitSource]) {
-      expect(script).toContain('rc=$?\n    else');
-      expect(script).toContain('rc=$?\n      kill "$cap_pid"');
-      expect(script).toContain('wait "$cap_pid" 2>/dev/null || true');
+    for (const scriptPath of [SCRIPT, UNIT_SCRIPT]) {
+      const script = readFileSync(scriptPath, "utf8").replace(/\r\n/g, "\n");
+      const fallbackWait = script.indexOf('wait "$pid" 2>/dev/null');
+      const fallbackRc = script.indexOf("rc=$?", fallbackWait);
+      const watchdogKill = script.indexOf('kill "$cap_pid"', fallbackRc);
+      const watchdogWait = script.indexOf(
+        'wait "$cap_pid" 2>/dev/null || true',
+        watchdogKill,
+      );
+
+      expect(fallbackWait).toBeGreaterThanOrEqual(0);
+      expect(fallbackRc).toBeGreaterThan(fallbackWait);
+      expect(watchdogKill).toBeGreaterThan(fallbackRc);
+      expect(watchdogWait).toBeGreaterThan(watchdogKill);
     }
   });
 });
