@@ -20,9 +20,12 @@ import {
   readRecentDbDisconnects,
   logDbDisconnect,
 } from '../../src/core/audit/db-disconnect-audit.ts';
+import { assertSafeE2eDatabaseUrl } from '../helpers/db-guard.ts';
 
 const DATABASE_URL = process.env.DATABASE_URL;
 const skip = !DATABASE_URL;
+
+if (DATABASE_URL) assertSafeE2eDatabaseUrl(DATABASE_URL);
 
 if (skip) {
   // eslint-disable-next-line no-console

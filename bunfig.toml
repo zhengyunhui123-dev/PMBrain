@@ -12,4 +12,6 @@ timeout = 60_000
 # 因此具有硬编码 1536-d Float32Array fixtures 的 20+ 测试文件
 # 仍然匹配架构。v0.37 的生产默认值是 ZE/1280；
 # 想要新默认值的测试在他们自己的 beforeAll 中显式调用 configureGateway()。
-preload = ["./test/helpers/legacy-embedding-preload.ts"]
+# P0 database safety: this must be first so a bare `bun test` with a real
+# DATABASE_URL never loads a test file that can mutate that database.
+preload = ["./test/helpers/database-url-guard-preload.ts", "./test/helpers/legacy-embedding-preload.ts"]

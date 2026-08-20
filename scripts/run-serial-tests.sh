@@ -13,6 +13,9 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
+# Serial files are still unit tests; keep the database URL boundary hermetic.
+unset DATABASE_URL GBRAIN_DATABASE_URL
+
 # Use while-read for portability to macOS bash 3.2 (no mapfile).
 files=()
 while IFS= read -r f; do

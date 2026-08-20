@@ -4,11 +4,13 @@
  */
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { PostgresEngine } from '../../src/core/postgres-engine.ts';
+import { assertSafeE2eDatabaseUrl } from '../helpers/db-guard.ts';
 import { importTrustedStructuredContent, type ParentSectionInput } from '../../src/core/import-file.ts';
 import { isEmbedSkipped } from '../../src/core/embed-skip.ts';
 
 const databaseUrl = process.env.DATABASE_URL;
 const skip = !databaseUrl;
+if (databaseUrl) assertSafeE2eDatabaseUrl(databaseUrl);
 let engine: PostgresEngine;
 const slug = 'tests/trusted-large-document-postgres';
 

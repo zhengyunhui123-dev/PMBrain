@@ -14,9 +14,11 @@
 
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
 import { PostgresEngine } from '../../src/core/postgres-engine.ts';
+import { assertSafeE2eDatabaseUrl } from '../helpers/db-guard.ts';
 import type { EvalCandidateInput } from '../../src/core/types.ts';
 
 const DATABASE_URL = process.env.DATABASE_URL;
+if (DATABASE_URL) assertSafeE2eDatabaseUrl(DATABASE_URL);
 
 let engine: PostgresEngine | null = null;
 

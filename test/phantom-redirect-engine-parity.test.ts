@@ -13,7 +13,11 @@ import { describe, test, expect, beforeAll, afterAll, beforeEach } from 'bun:tes
 import { PGLiteEngine } from '../src/core/pglite-engine.ts';
 import { PostgresEngine } from '../src/core/postgres-engine.ts';
 import { resetPgliteState } from './helpers/reset-pglite.ts';
+import { assertSafeE2eDatabaseUrl } from './helpers/db-guard.ts';
 import type { BrainEngine } from '../src/core/engine.ts';
+
+const DATABASE_URL = process.env.DATABASE_URL;
+if (DATABASE_URL) assertSafeE2eDatabaseUrl(DATABASE_URL);
 
 let pglite: PGLiteEngine;
 let pg: PostgresEngine | null = null;
@@ -23,9 +27,9 @@ beforeAll(async () => {
   await pglite.connect({});
   await pglite.initSchema();
 
-  if (process.env.DATABASE_URL) {
+  if (DATABASE_URL) {
     pg = new PostgresEngine();
-    await pg.connect({ database_url: process.env.DATABASE_URL });
+    await pg.connect({ database_url: DATABASE_URL });
     await pg.initSchema();
   }
 });

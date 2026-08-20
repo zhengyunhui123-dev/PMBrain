@@ -14,9 +14,13 @@
 
 import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
 import { hasDatabase } from './helpers.ts';
+import { assertSafeE2eDatabaseUrl } from '../helpers/db-guard.ts';
 
 const skip = !hasDatabase();
 const describeE2E = skip ? describe.skip : describe;
+const DATABASE_URL = process.env.GBRAIN_DATABASE_URL || process.env.DATABASE_URL;
+
+if (DATABASE_URL) assertSafeE2eDatabaseUrl(DATABASE_URL);
 
 if (skip) {
   console.log('Skipping E2E serve-http-oauth tests (DATABASE_URL not set)');

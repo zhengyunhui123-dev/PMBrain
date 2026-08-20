@@ -20,12 +20,14 @@
 
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
 import { PostgresEngine } from '../../src/core/postgres-engine.ts';
+import { assertSafeE2eDatabaseUrl } from '../helpers/db-guard.ts';
 import { writeRunRow, loadTrend } from '../../src/core/eval-contradictions/trends.ts';
 import { JudgeCache, buildCacheKey } from '../../src/core/eval-contradictions/cache.ts';
 import type { ProbeReport } from '../../src/core/eval-contradictions/types.ts';
 import { operationsByName, type OperationContext } from '../../src/core/operations.ts';
 
 const DATABASE_URL = process.env.DATABASE_URL;
+if (DATABASE_URL) assertSafeE2eDatabaseUrl(DATABASE_URL);
 
 let engine: PostgresEngine | null = null;
 

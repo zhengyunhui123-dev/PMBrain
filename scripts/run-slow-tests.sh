@@ -6,6 +6,9 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# Slow files are unit tests, not the Postgres E2E lane.
+unset DATABASE_URL GBRAIN_DATABASE_URL
+
 slow_files=()
 while IFS= read -r f; do
   slow_files+=("$f")

@@ -19,9 +19,11 @@
 import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
 import { PostgresEngine } from '../../src/core/postgres-engine.ts';
 import { quoteIdentifier } from '../../src/core/search/embedding-column.ts';
+import { assertSafeE2eDatabaseUrl } from '../helpers/db-guard.ts';
 import type { ResolvedColumn } from '../../src/core/types.ts';
 
 const dbUrl = process.env.DATABASE_URL;
+if (dbUrl) assertSafeE2eDatabaseUrl(dbUrl);
 if (!dbUrl) {
   describe.skip('postgres E2E — embedding column (skipped: DATABASE_URL unset)', () => {
     test('skipped', () => { expect(true).toBe(true); });

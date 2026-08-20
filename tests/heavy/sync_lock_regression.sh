@@ -19,6 +19,8 @@ set -euo pipefail
 
 cd "$(dirname "$0")/../.."
 
+source "$(dirname "$0")/_db_floor.sh"
+
 if [ -z "${DATABASE_URL:-}" ]; then
   echo "[sync_lock_regression] DATABASE_URL not set; skipping (informational)." >&2
   echo "  Local: docker run -d --name gbrain-test-pg -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=gbrain_test -p 5434:5432 pgvector/pgvector:pg16" >&2

@@ -15,9 +15,12 @@
 
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
 import { PostgresEngine } from '../../src/core/postgres-engine.ts';
+import { assertSafeE2eDatabaseUrl } from '../helpers/db-guard.ts';
 
 const DATABASE_URL = process.env.DATABASE_URL;
 const skip = !DATABASE_URL;
+
+if (DATABASE_URL) assertSafeE2eDatabaseUrl(DATABASE_URL);
 
 if (skip) {
   test.skip('multimodal-postgres E2E skipped (DATABASE_URL unset)', () => {});
