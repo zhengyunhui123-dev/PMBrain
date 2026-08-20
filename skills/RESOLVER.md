@@ -37,6 +37,14 @@
 | 收到会议记录 | `skills/meeting-ingestion/SKILL.md` |
 | 通用"摄取这个"（自动路由到上述） | `skills/ingest/SKILL.md` |
 
+## 文档格式与会议通知
+
+| 触发器 | 技能 |
+|---------|------|
+| "公文"、"申报材料"、"请示"、"政府公文"、"正式文档"、"Word排版" | `skills/gongwengeshi/SKILL.md` |
+| "开发方案排版"、"技术方案"、"字体规范"、"Word字体格式" | `skills/kaifawendangguifan/SKILL.md` |
+| "培训会议通知"、"会议通知"、"培训通知"、"外贸培训会议" | `skills/training-meeting-notice/SKILL.md` |
+
 ## 思考技能（来自 GStack）
 
 | 触发器 | 技能 |

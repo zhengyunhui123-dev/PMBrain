@@ -28,6 +28,7 @@ import { getBrainHotMemoryMeta } from '../core/facts/meta-hook.ts';
 import { loadConfig, toEngineConfig, type GBrainConfig } from '../core/config.ts';
 import { brainDirFromConfig } from '../core/system-skill-assets.ts';
 import { ensureDreamOutputDirectory, resolveDreamOutputRoot } from '../core/cycle/dream-output.ts';
+import { inspectPgliteOwner, terminatePgliteOwner } from '../core/pglite-owner-control.ts';
 import { buildError, serializeError } from '../core/errors.ts';
 import { assessDestructiveImpact, softDeleteSource, restoreSource } from '../core/destructive-guard.ts';
 import { deleteLockRow } from '../core/db-lock.ts';
@@ -35,6 +36,7 @@ import { VERSION } from '../version.ts';
 import * as db from '../core/db.ts';
 import { sqlQueryForEngine, executeRawJsonb } from '../core/sql-query.ts';
 import { resolveMainSourceId } from '../core/source-resolver.ts';
+import { ensureSourceLocalPath } from '../core/sources-ops.ts';
 import { isImageFilePath, isMarkdownFilePath, isOfficeFilePath } from '../core/sync.ts';
 import { MinionQueue } from '../core/minions/queue.ts';
 import {
@@ -146,15 +148,29 @@ export interface PmbrainAdminRouteOptions {
   requireAdmin: express.RequestHandler;
   runHooks?: RunHooks;
   getPgliteBusy: () => boolean;
+  getPgliteConnected?: () => boolean;
+  reconnectPglite?: () => Promise<void>;
   ensureAdminWorkerStarted: () => Promise<unknown>;
 }
 
 export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
   checkScheduledDream: (now?: Date) => Promise<void>;
 } {
-  const { app, engine, config, requireAdmin, runHooks, getPgliteBusy, ensureAdminWorkerStarted } = options;
+  const {
+    app,
+    engine,
+    config,
+    requireAdmin,
+    runHooks,
+    getPgliteBusy,
+    getPgliteConnected,
+    reconnectPglite,
+    ensureAdminWorkerStarted,
+  } = options;
   let adminUploadTail: Promise<void> = Promise.resolve();
   app.get('/admin/api/task-center', requireAdmin, async (_req: Request, res: Response) => {
+    const runs = listRuns();
+    const hasActiveRun = runs.some(run => run.status === 'queued' || run.status === 'running');
     let queue: unknown = null;
     if (!getPgliteBusy()) {
       try {
@@ -164,13 +180,66 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
         queue = null;
       }
     }
+    // A live queued/running Admin task is the expected PGLite owner. Only
+    // inspect the owner for recovery when there is no actual task record;
+    // disconnected state alone must not turn a normal maintenance run into a
+    // misleading "残留占用进程" card.
+    const pgliteOwner = config.engine === 'pglite' && config.database_path && !hasActiveRun
+      ? await inspectPgliteOwner(config.database_path, {
+          allowTerminate: true,
+        })
+      : null;
     res.json({
       mode: config.engine === 'pglite' ? 'pglite' : 'postgres',
       pglite_busy: getPgliteBusy(),
-      rows: listRuns(),
+      pglite_owner: pgliteOwner,
+      rows: runs,
       queue,
       server_time: new Date().toISOString(),
     });
+  });
+
+  app.post('/admin/api/pglite-owner/terminate', requireAdmin, express.json({ limit: '4kb' }), async (req: Request, res: Response) => {
+    if (config.engine !== 'pglite' || !config.database_path) {
+      res.status(400).json({ error: 'pglite_owner_control_unavailable' });
+      return;
+    }
+    const pgliteDisconnected = getPgliteConnected?.() === false;
+    if (getPgliteBusy() && !pgliteDisconnected) {
+      res.status(423).json({ error: 'PGLite 正在执行后台任务，请使用任务卡片中的安全取消。', code: 'pglite_busy' });
+      return;
+    }
+    const pid = Number(req.body?.pid);
+    if (!Number.isInteger(pid) || pid <= 0) {
+      res.status(400).json({ error: 'pglite_owner_pid_invalid' });
+      return;
+    }
+    try {
+      const owner = await terminatePgliteOwner(config.database_path, pid);
+      let reconnected = false;
+      let reconnectError: string | null = null;
+      if (reconnectPglite) {
+        try {
+          await reconnectPglite();
+          reconnected = true;
+        } catch (error) {
+          reconnectError = error instanceof Error ? error.message : String(error);
+        }
+      }
+      const latestOwner = await inspectPgliteOwner(config.database_path, {
+        allowTerminate: false,
+      });
+      res.json({
+        pglite_owner: latestOwner.state === 'current' ? latestOwner : owner,
+        reconnected,
+        reconnect_error: reconnectError,
+      });
+    } catch (error) {
+      res.status(409).json({
+        error: error instanceof Error ? error.message : String(error),
+        code: 'pglite_owner_terminate_failed',
+      });
+    }
   });
 
   app.get('/admin/api/brain/overview', requireAdmin, async (req: Request, res: Response) => {
@@ -198,8 +267,15 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
 
   app.post('/admin/api/sources/default', requireAdmin, express.json({ limit: '4kb' }), async (req: Request, res: Response) => {
     const sourceId = typeof req.body?.sourceId === 'string' ? req.body.sourceId.trim() : '';
+    const localPath = req.body?.localPath === undefined
+      ? undefined
+      : typeof req.body.localPath === 'string' ? req.body.localPath.trim() : '';
     if (!sourceId) {
       res.status(400).json({ error: 'source_id_required' });
+      return;
+    }
+    if (localPath === '') {
+      res.status(400).json({ error: 'local_path_required' });
       return;
     }
     try {
@@ -216,10 +292,46 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
         res.status(400).json({ error: 'archived_source_cannot_be_main' });
         return;
       }
+      if (localPath !== undefined) await ensureSourceLocalPath(engine, sourceId, localPath);
       await engine.setConfig('sources.default', sourceId);
       sendAdminContract(res, SetDefaultSourceResponseSchema, { sourceId });
     } catch (e) {
       res.status(400).json({ error: e instanceof Error ? e.message : 'set_default_source_failed' });
+    }
+  });
+
+  // Desktop compatibility repair: attach a path to an existing DB source
+  // without changing the brain-level default. Source selection is an
+  // explicit setup action; historical path repair must not re-run it.
+  app.post('/admin/api/sources/local-path', requireAdmin, express.json({ limit: '4kb' }), async (req: Request, res: Response) => {
+    const sourceId = typeof req.body?.sourceId === 'string' ? req.body.sourceId.trim() : '';
+    const localPath = typeof req.body?.localPath === 'string' ? req.body.localPath.trim() : '';
+    if (!sourceId) {
+      res.status(400).json({ error: 'source_id_required' });
+      return;
+    }
+    if (!localPath) {
+      res.status(400).json({ error: 'local_path_required' });
+      return;
+    }
+    try {
+      const rows = await engine.executeRaw<{ id: string; archived: boolean }>(
+        `SELECT id, archived FROM sources WHERE id = $1 LIMIT 1`,
+        [sourceId],
+      );
+      const source = rows[0];
+      if (!source) {
+        res.status(404).json({ error: 'source_not_found' });
+        return;
+      }
+      if (source.archived) {
+        res.status(400).json({ error: 'archived_source_cannot_be_repaired' });
+        return;
+      }
+      await ensureSourceLocalPath(engine, sourceId, localPath);
+      sendAdminContract(res, SetDefaultSourceResponseSchema, { sourceId });
+    } catch (e) {
+      res.status(400).json({ error: e instanceof Error ? e.message : 'repair_source_local_path_failed' });
     }
   });
 
@@ -243,7 +355,11 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
   let scheduledDreamStarting = false;
   let scheduledDreamRetryAfter = 0;
   const checkScheduledDream = async (now = new Date()) => {
-    if (scheduledDreamStarting || Date.now() < scheduledDreamRetryAfter) return;
+    if (
+      scheduledDreamStarting
+      || Date.now() < scheduledDreamRetryAfter
+      || (config.engine === 'pglite' && (getPgliteBusy() || getPgliteConnected?.() === false))
+    ) return;
     let settings: AdminDreamScheduleSettings;
     try {
       settings = await dreamScheduleView();
@@ -811,7 +927,9 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
         res.status(400).json({ error: 'unsupported_action' });
         return;
       }
-      const run = await startActionRun(action, process.cwd(), runHooks);
+      const run = await startActionRun(action, process.cwd(), runHooks, {
+        embedCatchUp: action === 'embed_stale' && req.body?.catchUp === true,
+      });
       sendAdminContract(res, RunAcceptedResponseSchema, { runId: run.id, status: run.status });
     } catch (e) {
       res.status(400).json({ error: e instanceof Error ? e.message : 'action_run_failed' });

@@ -181,6 +181,7 @@ describe('Knowledge data classification and facts inventory', () => {
   });
 
   test('overview reports active facts without changing page inventory', async () => {
+    const statements: string[] = [];
     const engine = {
       getStats: async () => ({
         page_count: 10,
@@ -192,8 +193,9 @@ describe('Knowledge data classification and facts inventory', () => {
         pages_by_type: { note: 10 },
       }),
       executeRaw: async (sql: string) => {
+        statements.push(sql);
         if (sql.includes('COUNT(*) FILTER (WHERE expired_at IS NULL)')) return [{ fact_count: 3, active_fact_count: 2 }];
-        if (sql.includes('FROM pages WHERE source_id')) return [{ page_count: 10 }];
+        if (sql.includes('source_id = $1') && sql.includes('deleted_at IS NULL')) return [{ page_count: 10 }];
         if (sql.includes('FROM sources') && sql.includes('ORDER BY')) return [];
         if (sql.includes('FROM sources')) return [{ archived_at: null, archive_expires_at: null }];
         if (sql.includes('MAX(updated_at)')) return [{ updated_at: null }];
@@ -206,5 +208,7 @@ describe('Knowledge data classification and facts inventory', () => {
     expect(overview.stats.page_count).toBe(10);
     expect(overview.stats.fact_count).toBe(3);
     expect(overview.stats.active_fact_count).toBe(2);
+    expect(statements.some(sql => sql.includes('MAX(updated_at)') && sql.includes('deleted_at IS NULL'))).toBe(true);
+    expect(statements.some(sql => sql.includes('FROM content_chunks c') && sql.includes('p.deleted_at IS NULL'))).toBe(true);
   });
 });

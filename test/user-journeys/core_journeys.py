@@ -49,6 +49,7 @@ DESKTOP_ENTRY = DESKTOP_ROOT / "out" / "main" / "index.js"
 DESKTOP_RENDERER = DESKTOP_ROOT / "out" / "renderer" / "index.html"
 DEFAULT_ARTIFACTS_ROOT = REPO_ROOT / "备份" / "核心用户路径测试" / "runs"
 UNIQUE_MARKER = "pmbrain-real-e2e-orchid-7429"
+FIRST_SETUP_TIMEOUT_MS = 300_000
 
 
 def free_port() -> int:
@@ -264,12 +265,16 @@ def select_custom_model(page: Page, kind: str, base_url: str, model: str) -> Non
 
 
 def open_admin_from_desktop(page: Page) -> str:
-    page.wait_for_function("() => !document.querySelector('#open-admin')?.disabled", timeout=120_000)
-    try:
-        page.locator("#open-admin").click(timeout=20_000)
-    except PlaywrightTimeoutError:
-        if "/admin/" not in page.url:
-            raise
+    if "/admin/" in page.url:
+        origin = page.url.split("/admin", 1)[0]
+        page.goto(origin + "/admin/#")
+    else:
+        page.wait_for_function("() => !document.querySelector('#open-admin')?.disabled", timeout=120_000)
+        try:
+            page.locator("#open-admin").click(timeout=20_000)
+        except PlaywrightTimeoutError:
+            if "/admin/" not in page.url:
+                raise
     page.wait_for_load_state("domcontentloaded")
     page.get_by_role("heading", name="总体概览").wait_for(timeout=90_000)
     return page.url.split("/admin", 1)[0]
@@ -290,8 +295,30 @@ def first_launch_journey(page: Page, artifacts: Path, provider: LocalOpenAIServe
     select_custom_model(page, "chat", provider.base_url, "e2e-chat")
     select_custom_model(page, "embedding", provider.base_url, "e2e-embedding-8")
     page.locator("#save-setup").click()
-    page.locator("#setup-wait").wait_for(state="hidden", timeout=120_000)
-    page.locator("#global-success").wait_for(state="visible", timeout=120_000)
+    try:
+        page.wait_for_function(
+            """() => {
+              const wait = document.querySelector('#setup-wait');
+              const error = document.querySelector('#global-error');
+              return Boolean(wait?.hidden || !error?.hidden);
+            }""",
+            timeout=FIRST_SETUP_TIMEOUT_MS,
+        )
+    except PlaywrightTimeoutError:
+        progress = {
+            "stage": page.locator("#setup-wait-stage").inner_text() if page.locator("#setup-wait-stage").count() else "n/a",
+            "title": page.locator("#setup-wait-title").inner_text() if page.locator("#setup-wait-title").count() else "n/a",
+            "message": page.locator("#setup-wait-message").inner_text() if page.locator("#setup-wait-message").count() else "n/a",
+            "error": page.locator("#global-error").inner_text() if page.locator("#global-error").count() else "n/a",
+        }
+        (artifacts / "first-launch-timeout.txt").write_text(
+            f"url={page.url}\n{json.dumps(progress, ensure_ascii=False, indent=2)}\n",
+            encoding="utf-8",
+        )
+        raise
+    if page.locator("#global-error").is_visible():
+        raise AssertionError(page.locator("#global-error").inner_text())
+    page.locator("#global-success").wait_for(state="visible", timeout=FIRST_SETUP_TIMEOUT_MS)
     success = page.locator("#global-success").inner_text()
     if "配置完成" not in success:
         raise AssertionError(f"First-run setup did not complete: {success}")
@@ -305,30 +332,33 @@ def import_search_journey(page: Page, origin: str, markdown: Path, pdf: Path, ar
     page.get_by_role("heading", name="知识工作台").wait_for()
     page.get_by_label("选择本地文件").set_input_files([str(markdown), str(pdf)])
     page.get_by_role("button", name="导入", exact=True).click()
-    badge = page.locator(".run-pill")
-    page.wait_for_function(
-        "() => document.querySelector('.run-pill') || document.querySelector('.pm-error-text')",
-        timeout=180_000,
-    )
-    if page.locator(".pm-error-text").count() and page.locator(".pm-error-text").first.is_visible():
-        raise AssertionError(f"Import UI reported an error: {page.locator('.pm-error-text').first.inner_text()}")
+    textarea = page.locator(".assistant-composer textarea")
+    textarea.fill(UNIQUE_MARKER)
     try:
-        page.wait_for_function("() => ['已完成', '部分完成'].includes(document.querySelector('.run-pill')?.textContent?.trim() || '')", timeout=180_000)
+        page.wait_for_function(
+            """() => {
+              const button = document.querySelector('.search-action-main');
+              const progress = document.querySelector('.assistant-attachment-help')?.textContent || '';
+              return Boolean(button && !button.disabled && !progress.startsWith('正在导入'));
+            }""",
+            timeout=180_000,
+        )
     except PlaywrightTimeoutError:
         details = page.locator(".nl-details")
         if details.count():
             details.evaluate("element => { element.open = true; }")
         diagnostic = page.locator(".nl-result").inner_text() if page.locator(".nl-result").count() else page.locator("body").inner_text()
         (artifacts / "import-run-timeout.txt").write_text(
-            f"url={page.url}\nprogress={page.locator('.attachment-progress').inner_text() if page.locator('.attachment-progress').count() else 'n/a'}\n\n{diagnostic}\n",
+            f"url={page.url}\nprogress={page.locator('.assistant-attachment-help').inner_text() if page.locator('.assistant-attachment-help').count() else 'n/a'}\n\n{diagnostic}\n",
             encoding="utf-8",
         )
         raise
-    if badge.inner_text().strip() != "已完成":
+    if page.locator(".pm-error-text").count() and page.locator(".pm-error-text").first.is_visible():
+        raise AssertionError(f"Import UI reported an error: {page.locator('.pm-error-text').first.inner_text()}")
+    run_pill = page.locator(".nl-result .run-pill").last
+    if not run_pill.count() or run_pill.inner_text().strip() != "已完成":
         details = page.locator(".nl-result").inner_text()
         raise AssertionError(f"Markdown/PDF import was not fully successful: {details}")
-    textarea = page.locator(".assistant-composer textarea")
-    textarea.fill(UNIQUE_MARKER)
     page.locator(".search-action-main").click()
     result = page.locator(".knowledge-search-result")
     result.wait_for(state="visible", timeout=90_000)
@@ -364,7 +394,13 @@ def embedding_switch_journey(page: Page, artifacts: Path, provider: LocalOpenAIS
     page.goto(DESKTOP_RENDERER.as_uri())
     page.locator("#panel-basic").wait_for(state="visible")
     page.locator('.rail-item[data-target="models"]').click()
-    page.locator("#embedding-provider").select_option("custom-openai")
+    page.wait_for_function(
+        "() => Array.from(document.querySelector('#embedding-provider')?.options ?? []).some(option => option.textContent === 'PMBrain E2E Local Provider')"
+    )
+    # The renderer exposes saved custom endpoints as their generated catalog
+    # ids. `custom-openai` is the normalized config provider, not a selectable
+    # value in the UI.
+    page.locator("#embedding-provider").select_option(label="PMBrain E2E Local Provider")
     page.locator("#embedding-model-name").fill("e2e-embedding-12")
     page.once("dialog", lambda dialog: dialog.accept())
     page.locator("#save-setup").click()
@@ -378,6 +414,93 @@ def embedding_switch_journey(page: Page, artifacts: Path, provider: LocalOpenAIS
         raise AssertionError(f"Expected a 12-dimensional embedding column, got {config.get('embedding_dimensions')}")
     if page.locator("#global-error").is_visible():
         raise AssertionError(page.locator("#global-error").inner_text())
+    origin = open_admin_from_desktop(page)
+    page.goto(origin + "/admin/#tasks")
+    page.get_by_role("heading", name="任务中心").wait_for(timeout=90_000)
+    poll_deadline = time.monotonic() + 180
+    rebuild_id = None
+    last_runs_response: object = None
+    while time.monotonic() < poll_deadline:
+        try:
+            last_runs_response = page.evaluate(
+                """async () => {
+                  const controller = new AbortController();
+                  const timeout = setTimeout(() => controller.abort(), 5000);
+                  try {
+                    const response = await fetch('/admin/api/runs', {
+                      credentials: 'same-origin',
+                      signal: controller.signal,
+                    });
+                    let body = null;
+                    try { body = await response.json(); } catch (_) {}
+                    return { ok: response.ok, status: response.status, body };
+                  } catch (error) {
+                    return { ok: false, status: 0, error: String(error) };
+                  } finally {
+                    clearTimeout(timeout);
+                  }
+                }"""
+            )
+            rows = (last_runs_response or {}).get("body", {}).get("rows", [])
+            current = [
+                run for run in rows
+                if run.get("kind") == "embed_stale"
+                and "--catch-up" in (run.get("command") or [])
+                and isinstance(run.get("id"), str)
+            ]
+            current.sort(key=lambda run: str(run.get("startedAt", "")), reverse=True)
+            if current:
+                rebuild_id = current[0]["id"]
+                break
+        except Exception as exc:
+            last_runs_response = {"error": repr(exc)}
+        page.wait_for_timeout(1000)
+    if not isinstance(rebuild_id, str) or not rebuild_id:
+        raise AssertionError(
+            f"Background embedding rebuild was not submitted: {rebuild_id}; "
+            f"last runs response={last_runs_response}"
+        )
+    poll_deadline = time.monotonic() + 180
+    rebuild: object = None
+    last_rebuild_response: object = None
+    while time.monotonic() < poll_deadline:
+        try:
+            last_rebuild_response = page.evaluate(
+                """async (runId) => {
+                  const controller = new AbortController();
+                  const timeout = setTimeout(() => controller.abort(), 5000);
+                  try {
+                    const response = await fetch(`/admin/api/runs/${encodeURIComponent(runId)}`, {
+                      credentials: 'same-origin',
+                      signal: controller.signal,
+                    });
+                    let body = null;
+                    try { body = await response.json(); } catch (_) {}
+                    return { ok: response.ok, status: response.status, body };
+                  } catch (error) {
+                    return { ok: false, status: 0, error: String(error) };
+                  } finally {
+                    clearTimeout(timeout);
+                  }
+                }""",
+                rebuild_id,
+            )
+            if (last_rebuild_response and last_rebuild_response.get("ok")):
+                candidate = last_rebuild_response.get("body")
+                if isinstance(candidate, dict):
+                    rebuild = candidate
+                    if candidate.get("status") in {"completed", "failed", "cancelled"}:
+                        break
+        except Exception as exc:
+            last_rebuild_response = {"error": repr(exc)}
+        page.wait_for_timeout(1000)
+    if not rebuild or rebuild.get("status") != "completed":
+        raise AssertionError(
+            f"Background embedding rebuild did not complete: {rebuild}; "
+            f"last response={last_rebuild_response}"
+        )
+    if "--catch-up" not in (rebuild.get("command") or []):
+        raise AssertionError(f"Embedding rebuild was not handed to the catch-up task: {rebuild}")
 
 
 def mcp_key_search_journey(page: Page) -> None:

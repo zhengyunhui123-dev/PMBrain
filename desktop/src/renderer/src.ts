@@ -8,6 +8,8 @@ import type {
   DesktopCustomEndpoint,
   DesktopCustomProviderCatalog,
   DesktopCustomProviderSelection,
+  DesktopModelConnectionTestInput,
+  DesktopModelConnectionTestResult,
   DesktopKnowledgeSourceStatus,
   DesktopSystemSettingsPayload,
   DesktopSystemSettingsState,
@@ -311,6 +313,35 @@ function advancedPhaseId(phase: AdvancedModelPhase): string {
   return `advanced-phase-${phase}`;
 }
 
+function syncAdvancedProviderOptions(): void {
+  const selects = [
+    ...ADVANCED_TIERS.map(tier => $<HTMLSelectElement>(`#advanced-${tier}-provider`)),
+    ...ADVANCED_PHASES.map(phase => $<HTMLSelectElement>(`#${advancedPhaseId(phase)}-provider`)),
+  ];
+  for (const select of selects) {
+    const current = select.value;
+    for (const option of Array.from(select.options)) {
+      if (isCustomEndpointId(option.value)) option.remove();
+    }
+    for (const endpoint of customCatalog.chat) {
+      const option = document.createElement('option');
+      option.value = endpoint.id;
+      option.textContent = endpoint.displayName;
+      select.append(option);
+    }
+    if (current && Array.from(select.options).some(option => option.value === current)) {
+      select.value = current;
+    }
+  }
+}
+
+function advancedCustomEndpoint(provider: string): DesktopCustomEndpoint | undefined {
+  if (!isCustomEndpointId(provider)) return undefined;
+  return provider === 'custom-openai'
+    ? selectedCustomEndpoint('chat')
+    : customCatalog.chat.find(endpoint => endpoint.id === provider);
+}
+
 function syncProviderKeyField(kind: ModelKind): void {
   const provider = ($<HTMLSelectElement>(`#${kind}-provider`)).value;
   const input = $<HTMLInputElement>(`#${kind}-api-key`);
@@ -421,6 +452,7 @@ function deleteCustomEndpoint(kind: ModelKind, id: string): void {
     $<HTMLInputElement>(`#${kind}-api-key`).value = '';
   }
   renderProviderDropdown(kind);
+  syncAdvancedProviderOptions();
 }
 
 function snapshotSelectedCustomEndpoints(): void {
@@ -505,6 +537,7 @@ function confirmCustomProvider(): void {
     ...customCatalog,
     [target]: [...customCatalog[target], endpoint],
   };
+  syncCustomProviderOptions(target);
   customSelection = { ...customSelection, [target]: endpoint.id };
   customProviderTarget = null;
   $<HTMLDialogElement>('#custom-provider-dialog').close();
@@ -512,6 +545,7 @@ function confirmCustomProvider(): void {
   providerModels[target] = [modelId];
   renderModelDropdown(target);
   renderProviderDropdown(target);
+  syncAdvancedProviderOptions();
 }
 
 function renderModelDropdown(kind: 'chat' | 'embedding'): void {
@@ -578,6 +612,76 @@ async function refreshProviderModels(kind: ModelKind, chooseDefault: boolean): P
   }
 }
 
+function expectedEmbeddingDimensions(provider: string, model: string): number | undefined {
+  const configured = splitModelId(state?.setup.current.embeddingModel);
+  if (!configured.provider || !configured.model || configured.model !== model) return undefined;
+  if (recipeProvider(configured.provider) !== provider) return undefined;
+  const dimensions = state?.setup.current.embeddingDimensions;
+  return typeof dimensions === 'number' && Number.isInteger(dimensions) && dimensions > 0 ? dimensions : undefined;
+}
+
+function modelConnectionInput(kind: ModelKind): DesktopModelConnectionTestInput {
+  const providerValue = ($<HTMLSelectElement>(`#${kind}-provider`)).value;
+  const provider = recipeProvider(providerValue);
+  const endpoint = isCustomEndpointId(providerValue)
+    ? customCatalog[kind].find(item => item.id === providerValue) ?? selectedCustomEndpoint(kind)
+    : undefined;
+  const model = ($<HTMLInputElement>(`#${kind}-model-name`)).value.trim();
+  return {
+    provider,
+    baseUrl: endpoint?.baseUrl,
+    model,
+    apiKey: ($<HTMLInputElement>(`#${kind}-api-key`)).value.trim(),
+    ...(kind === 'embedding'
+      ? { expectedDimensions: expectedEmbeddingDimensions(provider, model) }
+      : {}),
+    touchpoint: kind,
+  };
+}
+
+function renderModelConnectionResult(
+  kind: ModelKind,
+  result: DesktopModelConnectionTestResult,
+): void {
+  const status = $<HTMLElement>(`#${kind}-model-load-status`);
+  status.classList.remove('ready', 'warning', 'error');
+  status.hidden = false;
+  if (result.status === 'success') {
+    status.classList.add('ready');
+    status.textContent = kind === 'embedding'
+      ? `✓ 连接成功 · ${result.dimensions} 维 · ${result.durationMs}ms`
+      : `✓ 连接成功 · 耗时 ${result.durationMs}ms`;
+    return;
+  }
+  if (result.status === 'warning') {
+    status.classList.add('warning');
+    status.textContent = `⚠ ${result.message} · ${result.durationMs}ms`;
+    return;
+  }
+  status.classList.add('error');
+  status.textContent = `✕ ${result.message}`;
+}
+
+async function testConfiguredModel(kind: ModelKind): Promise<void> {
+  const button = $<HTMLButtonElement>(`#test-${kind}-model`);
+  const status = $<HTMLElement>(`#${kind}-model-load-status`);
+  status.classList.remove('ready', 'warning', 'error');
+  status.hidden = false;
+  status.textContent = '正在测试连接…';
+  button.setAttribute('aria-busy', 'true');
+  setBusy(button, true);
+  try {
+    const result = await window.pmbrainDesktop.testModelConnection(modelConnectionInput(kind));
+    renderModelConnectionResult(kind, result);
+  } catch (error) {
+    status.classList.add('error');
+    status.textContent = `✕ ${error instanceof Error ? error.message : String(error)}`;
+  } finally {
+    button.removeAttribute('aria-busy');
+    setBusy(button, false);
+  }
+}
+
 function renderAdvancedModelDropdown(tier: AdvancedModelTier): void {
   const ul = $<HTMLUListElement>(`#advanced-${tier}-model-dropdown`);
   const input = $<HTMLInputElement>(`#advanced-${tier}-model-name`);
@@ -625,6 +729,18 @@ async function refreshAdvancedProviderModels(tier: AdvancedModelTier, chooseDefa
     return;
   }
 
+  const endpoint = advancedCustomEndpoint(provider);
+  if (endpoint) {
+    if (chooseDefault) input.value = endpoint.modelId;
+    advancedProviderModels[tier] = endpoint.modelId ? [endpoint.modelId] : [];
+    if (!($<HTMLUListElement>(`#advanced-${tier}-model-dropdown`)).hidden) renderAdvancedModelDropdown(tier);
+    status.textContent = endpoint.modelId
+      ? `自定义普通模型：${endpoint.modelId} · 接口：${endpoint.baseUrl}`
+      : '自定义普通模型尚未填写模型 ID。';
+    status.hidden = false;
+    return;
+  }
+
   status.hidden = false;
   status.textContent = '正在加载模型列表…';
   try {
@@ -662,6 +778,18 @@ async function refreshAdvancedPhaseProviderModels(phase: AdvancedModelPhase, cho
     return;
   }
 
+  const endpoint = advancedCustomEndpoint(provider);
+  if (endpoint) {
+    if (chooseDefault) input.value = endpoint.modelId;
+    advancedPhaseProviderModels[phase] = endpoint.modelId ? [endpoint.modelId] : [];
+    if (!($<HTMLUListElement>(`#${prefix}-model-dropdown`)).hidden) renderAdvancedPhaseModelDropdown(phase);
+    status.textContent = endpoint.modelId
+      ? `自定义普通模型：${endpoint.modelId} · 接口：${endpoint.baseUrl}`
+      : '自定义普通模型尚未填写模型 ID。';
+    status.hidden = false;
+    return;
+  }
+
   status.hidden = false;
   status.textContent = '正在加载模型列表…';
   try {
@@ -685,13 +813,20 @@ async function refreshAdvancedPhaseProviderModels(phase: AdvancedModelPhase, cho
 }
 
 function renderAdvancedModelConfig(config: AdvancedModelConfig): void {
+  syncAdvancedProviderOptions();
   for (const tier of ADVANCED_TIERS) {
     const entry = config.tiers[tier];
     const override = splitModelId(entry.override);
-    ($<HTMLSelectElement>(`#advanced-${tier}-provider`)).value = override.provider;
+    const provider = override.provider === 'custom-openai'
+      ? (customCatalog.chat.find(item => item.id === customSelection.chat)?.id
+        || customCatalog.chat.find(item => item.modelId === override.model)?.id
+        || customCatalog.chat[0]?.id
+        || '')
+      : override.provider;
+    ($<HTMLSelectElement>(`#advanced-${tier}-provider`)).value = provider;
     const input = $<HTMLInputElement>(`#advanced-${tier}-model-name`);
     input.value = override.model;
-    input.disabled = !override.provider;
+    input.disabled = !provider;
     advancedOverrides[tier] = entry.override;
     $(`#advanced-${tier}-effective`).textContent = entry.resolved
       ? `当前解析：${entry.resolved}${entry.source ? ` · 来源 ${entry.source}` : ''}`
@@ -701,10 +836,16 @@ function renderAdvancedModelConfig(config: AdvancedModelConfig): void {
     const entry = config.phases[phase];
     const prefix = advancedPhaseId(phase);
     const override = splitModelId(entry.override);
-    ($<HTMLSelectElement>(`#${prefix}-provider`)).value = override.provider;
+    const provider = override.provider === 'custom-openai'
+      ? (customCatalog.chat.find(item => item.id === customSelection.chat)?.id
+        || customCatalog.chat.find(item => item.modelId === override.model)?.id
+        || customCatalog.chat[0]?.id
+        || '')
+      : override.provider;
+    ($<HTMLSelectElement>(`#${prefix}-provider`)).value = provider;
     const input = $<HTMLInputElement>(`#${prefix}-model-name`);
     input.value = override.model;
-    input.disabled = !override.provider;
+    input.disabled = !provider;
     advancedPhaseOverrides[phase] = entry.override;
     $(`#${prefix}-effective`).textContent = entry.resolved
       ? `当前解析：${entry.resolved}${entry.source ? ` · 来源 ${entry.source}` : ''}`
@@ -721,7 +862,8 @@ async function loadAdvancedModels(force = false): Promise<void> {
     button.disabled = true;
     return;
   }
-  status.textContent = '正在读取当前高级路由并安全检查本地服务…';
+  syncAdvancedProviderOptions();
+  status.textContent = '正在读取当前高级路由…';
   button.disabled = true;
   try {
     const config = await window.pmbrainDesktop.getAdvancedModelConfig();
@@ -1059,8 +1201,11 @@ function populate(next: DesktopSetupState): void {
     embedding: [...(setup.current.customProviders?.embedding ?? [])],
   };
   customSelection = { ...(setup.current.customSelection ?? {}) };
+  syncCustomProviderOptions('chat');
+  syncCustomProviderOptions('embedding');
   renderProviderDropdown('chat');
   renderProviderDropdown('embedding');
+  syncAdvancedProviderOptions();
   const activePanel = (document.querySelector<HTMLElement>('.panel.active')?.id.replace('panel-', '') || 'basic') as Panel;
   switchPanel(activePanel);
   $('#existing-config').hidden = setup.needsSetup;
@@ -1068,7 +1213,7 @@ function populate(next: DesktopSetupState): void {
   const radio = document.querySelector<HTMLInputElement>(`input[name="engine"][value="${setup.current.engine}"]`);
   if (radio) radio.checked = true;
   ($<HTMLInputElement>('#database-path')).value = setup.current.databasePath || setup.defaults.databasePath;
-  ($<HTMLInputElement>('#knowledge-directory')).value = setup.current.knowledgeDirectory || (setup.needsSetup ? '' : setup.defaults.knowledgeDirectory);
+  ($<HTMLInputElement>('#knowledge-directory')).value = setup.current.knowledgeDirectory || setup.defaults.knowledgeDirectory;
   ($<HTMLInputElement>('#knowledge-source-id')).value = setup.current.knowledgeSourceId || '';
   loadedKnowledgeDirectory = ($<HTMLInputElement>('#knowledge-directory')).value.trim();
   loadedKnowledgeSourceId = ($<HTMLInputElement>('#knowledge-source-id')).value.trim();
@@ -1457,7 +1602,7 @@ async function save(): Promise<void> {
     setNotice(
       next.reembeddingWarning ? 'error' : 'success',
       next.reembeddingWarning
-        ? `模型配置已保存，剩余向量将在 Dream 中继续处理：${next.reembeddingWarning}`
+        ? `模型配置已保存：${next.reembeddingWarning}`
         : `配置完成，PMBrain 已在 127.0.0.1:${next.port} 启动。`,
     );
   } catch (error) {
@@ -1551,6 +1696,8 @@ $<HTMLSelectElement>('#shared-address').addEventListener('change', renderSelecte
 });
 $<HTMLButtonElement>('#add-custom-chat-model').addEventListener('click', () => openCustomProvider('chat'));
 $<HTMLButtonElement>('#add-custom-embedding-model').addEventListener('click', () => openCustomProvider('embedding'));
+$<HTMLButtonElement>('#test-chat-model').addEventListener('click', () => void testConfiguredModel('chat'));
+$<HTMLButtonElement>('#test-embedding-model').addEventListener('click', () => void testConfiguredModel('embedding'));
 $<HTMLButtonElement>('#custom-provider-close').addEventListener('click', closeCustomProvider);
 $<HTMLButtonElement>('#custom-provider-cancel').addEventListener('click', closeCustomProvider);
 $<HTMLFormElement>('#custom-provider-form').addEventListener('submit', event => {

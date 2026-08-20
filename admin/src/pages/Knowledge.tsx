@@ -99,16 +99,24 @@ function PgliteBusyNotice({
   onNavigate?: (page: string) => void;
 }) {
   return (
-    <div className="pm-card pm-error pglite-busy-notice" role="alert">
-      <div className="pglite-busy-copy">
-        <p>{message}</p>
-        <p>可去任务中心查看任务进度和取消任务。</p>
+    <div className="pm-page overview-page">
+      <header className="overview-header">
+        <div>
+          <h1>总体概览</h1>
+          <p>本地数据库任务完成后会自动恢复概览数据。</p>
+        </div>
+      </header>
+      <div className="pm-card pm-error pglite-busy-notice" role="alert">
+        <div className="pglite-busy-copy">
+          <p>{message}</p>
+          <p>可去任务中心查看任务进度和取消任务。</p>
+        </div>
+        {onNavigate && (
+          <button type="button" className="pm-ghost" onClick={() => onNavigate('tasks')}>
+            <ListTodo aria-hidden="true" /> 打开任务中心
+          </button>
+        )}
       </div>
-      {onNavigate && (
-        <button type="button" className="pm-ghost" onClick={() => onNavigate('tasks')}>
-          <ListTodo aria-hidden="true" /> 打开任务中心
-        </button>
-      )}
     </div>
   );
 }

@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 
 const html = readFileSync(resolve('src/renderer/index.html'), 'utf8');
 const renderer = readFileSync(resolve('src/renderer/src.ts'), 'utf8');
+const mainIndex = readFileSync(resolve('src/main/index.ts'), 'utf8');
 const styles = readFileSync(resolve('src/renderer/style.css'), 'utf8');
 const main = readdirSync(resolve('src/main'), { recursive: true })
   .filter((path): path is string => typeof path === 'string' && path.endsWith('.ts'))
@@ -15,19 +16,20 @@ const builder = readFileSync(resolve('electron-builder.yml'), 'utf8');
 const preview = readFileSync(resolve('scripts/preview-renderer.ts'), 'utf8');
 
 describe('desktop settings renderer contracts', () => {
-  test('keeps the first-use knowledge source empty until the user selects a directory', () => {
+  test('shows the Documents/PMBrain default on first use and keeps it on save', () => {
     expect(html).toContain('id="knowledge-directory"');
-    expect(html).toContain('placeholder="例如：D:\\你的知识库"');
+    expect(html).toContain('placeholder="默认：Documents\\PMBrain"');
     expect(html).toContain('选择原始资料目录后，PMBrain 会将其注册为主源；启用 Git 后，快速维护可自动同步目录变化。');
     expect(html).toContain('id="knowledge-source-status"');
     expect(html).toContain('id="enable-knowledge-source-git"');
     expect(html).toContain('高级：自定义主源 ID');
-    expect(renderer).toContain("setup.current.knowledgeDirectory || (setup.needsSetup ? '' : setup.defaults.knowledgeDirectory)");
+    expect(renderer).toContain('setup.current.knowledgeDirectory || setup.defaults.knowledgeDirectory');
     expect(renderer).toContain('inspectKnowledgeSourceDirectory');
     expect(renderer).toContain('initializeKnowledgeSourceGit');
     expect(renderer).toContain('✓ Git 已启用 · 快速维护会自动同步此目录');
     expect(renderer).toContain('⚠ 未启用 Git，快速维护暂时无法自动同步');
     expect(main).toContain("'--name', basename(knowledgeDirectory), '--federated'");
+    expect(main).toContain('主源路径校验失败');
   });
 
   test('shares the PMBrain violet visual identity across dark and light themes', () => {
@@ -80,6 +82,14 @@ describe('desktop settings renderer contracts', () => {
     expect(renderer).not.toContain("switchPanel('integrations');");
   });
 
+  test('reuses custom chat models in advanced tier and Dream phase selectors', () => {
+    expect(renderer).toContain('function syncAdvancedProviderOptions');
+    expect(renderer).toContain('customCatalog.chat');
+    expect(renderer).toContain('advancedProviderModels[tier] = endpoint.modelId ? [endpoint.modelId] : []');
+    expect(renderer).toContain('advancedPhaseProviderModels[phase] = endpoint.modelId ? [endpoint.modelId] : []');
+    expect(renderer).toContain('syncAdvancedProviderOptions();');
+  });
+
   test('adds custom OpenAI-compatible models from both model cards without fake editable controls', () => {
     expect(html).toContain('id="add-custom-chat-model"');
     expect(html).toContain('id="add-custom-embedding-model"');
@@ -113,6 +123,35 @@ describe('desktop settings renderer contracts', () => {
     expect(styles).toContain('.provider-delete');
   });
 
+  test('restores custom provider labels before restoring saved model selections', () => {
+    const catalogIndex = renderer.indexOf('customCatalog = {');
+    const chatSyncIndex = renderer.indexOf("syncCustomProviderOptions('chat');", catalogIndex);
+    const embeddingSyncIndex = renderer.indexOf("syncCustomProviderOptions('embedding');", catalogIndex);
+    const chatValueIndex = renderer.indexOf("($<HTMLSelectElement>('#chat-provider')).value = chatProviderValue;");
+    const embeddingValueIndex = renderer.indexOf("($<HTMLSelectElement>('#embedding-provider')).value = embeddingProviderValue;");
+
+    expect(catalogIndex).toBeGreaterThanOrEqual(0);
+    expect(chatSyncIndex).toBeGreaterThan(catalogIndex);
+    expect(embeddingSyncIndex).toBeGreaterThan(catalogIndex);
+    expect(chatSyncIndex).toBeLessThan(chatValueIndex);
+    expect(embeddingSyncIndex).toBeLessThan(embeddingValueIndex);
+    expect(renderer).toContain('option.textContent = endpoint.displayName');
+  });
+
+  test('selects the custom provider immediately after adding a model', () => {
+    const confirmIndex = renderer.indexOf('function confirmCustomProvider');
+    const catalogIndex = renderer.indexOf('customCatalog = {', confirmIndex);
+    const syncIndex = renderer.indexOf('syncCustomProviderOptions(target);', confirmIndex);
+    const applyIndex = renderer.indexOf('applyProviderSelection(target, endpoint.id, false);', confirmIndex);
+    const renderIndex = renderer.indexOf('renderProviderDropdown(target);', confirmIndex);
+
+    expect(confirmIndex).toBeGreaterThanOrEqual(0);
+    expect(catalogIndex).toBeGreaterThan(confirmIndex);
+    expect(syncIndex).toBeGreaterThan(catalogIndex);
+    expect(syncIndex).toBeLessThan(applyIndex);
+    expect(renderIndex).toBeGreaterThan(applyIndex);
+  });
+
   test('marks and validates every required custom model field before accepting it', () => {
     expect(html).toContain('id="custom-provider-form" novalidate');
     for (const id of ['custom-provider-name', 'custom-provider-base-url', 'custom-provider-model-id']) {
@@ -134,6 +173,21 @@ describe('desktop settings renderer contracts', () => {
     expect(renderer).toContain("if (['ollama', 'llama-server', 'litellm', 'llama-server-reranker'].includes(normalized))");
     expect(renderer).toContain("provider === 'ollama' ? '正在读取本机 Ollama 模型…'");
     expect(preview).toContain("touchpoint === 'embedding' ? ['nomic-embed-text'] : ['qwen3:latest', 'qwen2.5:latest']");
+  });
+
+  test('tests unsaved model drafts and reports provider or dimension errors in place', () => {
+    expect(html).toContain('id="test-chat-model"');
+    expect(html).toContain('id="test-embedding-model"');
+    expect(html).toContain('class="model-test-icon"');
+    expect(renderer).toContain('testConfiguredModel');
+    expect(renderer).toContain('window.pmbrainDesktop.testModelConnection(modelConnectionInput(kind))');
+    expect(renderer).toContain('✓ 连接成功 · ${result.dimensions} 维 · ${result.durationMs}ms');
+    expect(renderer).toContain('⚠ ${result.message} · ${result.durationMs}ms');
+    expect(preload).toContain("desktop:test-model-connection");
+    expect(main).toContain("desktop:test-model-connection");
+    expect(styles).toContain('.model-connection-field');
+    expect(styles).toContain('.model-test-button.busy');
+    expect(preview).toContain('testModelConnection: async (input)');
   });
 
   test('model settings label the embedding model without an optional marker', () => {
@@ -293,9 +347,18 @@ describe('desktop settings renderer contracts', () => {
     expect(preload).not.toContain('openPreviousRelease');
   });
 
+  test('opening advanced model settings only reads a draft and saves with the PGLite pause', () => {
+    expect(mainIndex).toContain('advancedModelConfig: () => readAdvancedModelConfig(runtime())');
+    expect(mainIndex).toContain('saveAdvancedModelConfig: values => sidecarController.withPausedForModelConfig(');
+    expect(main).toContain("title: '正在安全保存模型路由'");
+    expect(main).not.toContain("title: '正在安全读取模型路由'");
+    expect(renderer).toContain('正在读取当前高级路由…');
+    expect(renderer).not.toContain('正在读取当前高级路由并安全检查本地服务…');
+  });
+
   test('reports resumable re-embedding instead of claiming a mixed model switch succeeded', () => {
     expect(renderer).toContain('next.reembeddingWarning');
-    expect(renderer).toContain('剩余向量将在 Dream 中继续处理');
+    expect(renderer).toContain('模型配置已保存：');
     expect(preload).toContain('reembeddingWarning?: string | null');
   });
 });

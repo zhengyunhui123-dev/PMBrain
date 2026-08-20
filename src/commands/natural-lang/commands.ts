@@ -21,7 +21,10 @@ export function resolveCliEntry(): string[] {
   return ['bun', 'run', cliPath];
 }
 
-export function commandForPreview(preview: IntentPreview): string[] {
+export function commandForPreview(
+  preview: IntentPreview,
+  options: { embedCatchUp?: boolean } = {},
+): string[] {
   const s = preview.slots;
   const prefix = resolveCliEntry();
   switch (preview.intent) {
@@ -41,7 +44,12 @@ export function commandForPreview(preview: IntentPreview): string[] {
     case 'sync_all':
       return [...prefix, 'sync', '--all'];
     case 'embed_stale':
-      return [...prefix, 'embed', '--stale'];
+      return [
+        ...prefix,
+        'embed',
+        '--stale',
+        ...(options.embedCatchUp ? ['--catch-up', '--json'] : []),
+      ];
     case 'show_sources':
       return [...prefix, 'sources', 'list', '--json'];
     case 'show_stats':

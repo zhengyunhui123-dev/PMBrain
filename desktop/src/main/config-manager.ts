@@ -153,6 +153,7 @@ export interface SetupInfo {
     keyStatus: Record<string, boolean>;
     keyValues: Record<string, string | undefined>;
     lastMigratedVersion?: string;
+    mainSourcePathRepairCompleted?: boolean;
   };
 }
 
@@ -177,6 +178,7 @@ type RawConfig = Record<string, unknown> & {
     knowledge_directory?: string;
     knowledge_source_id?: string;
     last_migrated_version?: string;
+    main_source_path_repair_completed?: boolean;
     theme?: DesktopTheme;
     network_mode?: DesktopNetworkMode;
     close_behavior?: DesktopCloseBehavior;
@@ -590,6 +592,7 @@ export function getSetupInfo(): SetupInfo {
         customOpenaiEmbedding: customEmbeddingKey,
       },
       lastMigratedVersion: desktop?.last_migrated_version,
+      mainSourcePathRepairCompleted: desktop?.main_source_path_repair_completed === true,
     },
   };
 }
@@ -606,6 +609,17 @@ export function markDesktopMigration(version: string): string | null {
   if (config.desktop?.last_migrated_version === version) return null;
   const backup = backupFile(path, 'config');
   config.desktop = { ...config.desktop, last_migrated_version: version };
+  writeJsonConfig(path, config);
+  return backup;
+}
+
+export function markMainSourcePathRepairCompleted(): string | null {
+  const path = desktopConfigPath();
+  const config = readConfig(path);
+  if (!config) return null;
+  if (config.desktop?.main_source_path_repair_completed === true) return null;
+  const backup = backupFile(path, 'config');
+  config.desktop = { ...config.desktop, main_source_path_repair_completed: true };
   writeJsonConfig(path, config);
   return backup;
 }

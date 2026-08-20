@@ -183,6 +183,15 @@ describe('desktop migration single-owner contract', () => {
     expect(sidecar).toContain('SidecarExitedBeforeHealthyError');
   });
 
+  test('maintenance children use a CLI owner and HTTP bind failures release the lock', () => {
+    const executor = readFileSync(join(import.meta.dir, '../src/commands/natural-lang/executor.ts'), 'utf8');
+    const cli = readFileSync(join(import.meta.dir, '../src/cli.ts'), 'utf8');
+    expect(executor).toContain("PMBRAIN_PGLITE_OWNER_TYPE: 'cli'");
+    expect(executor).toContain("PMBRAIN_PGLITE_LOCK_FAIL_FAST: '0'");
+    expect(cli).toContain('HTTP startup can fail after connectEngine()');
+    expect(cli).toContain('await engine.disconnect().catch(() => undefined);');
+  });
+
   test('25. config-manager still resolves ~/.gbrain style preferred directory helpers', () => {
     const cfg = readFileSync(join(import.meta.dir, '../desktop/src/main/config-manager.ts'), 'utf8');
     expect(cfg).toMatch(/preferredConfigDirectory|gbrain|pmbrain/);

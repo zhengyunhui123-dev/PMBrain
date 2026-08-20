@@ -10,6 +10,10 @@ import {
 import type { AdvancedModelWriteInput } from './advanced-model-config.js';
 import type { CredentialKind, IntegrationClient, SharedIntegrationPayload } from './integration-manager.js';
 import type { DesktopModelTouchpoint } from './model-catalog.js';
+import type {
+  DesktopModelConnectionTestInput,
+  DesktopModelConnectionTestResult,
+} from './model-connection-test.js';
 import type { SidecarState } from './sidecar-manager.js';
 import type {
   DesktopSystemSettingsPayload,
@@ -40,6 +44,7 @@ export interface DesktopIpcHandlers {
   inspectKnowledgeSourceDirectory: (path: string) => DesktopKnowledgeSourceStatus;
   initializeKnowledgeSourceGit: (path: string) => DesktopKnowledgeSourceStatus;
   providerModels: (provider: string, touchpoint: DesktopModelTouchpoint) => unknown;
+  testModelConnection: (input: DesktopModelConnectionTestInput) => Promise<DesktopModelConnectionTestResult>;
   advancedModelConfig: () => Promise<unknown>;
   saveAdvancedModelConfig: (values: AdvancedModelWriteInput) => Promise<unknown>;
   saveSetup: (payload: SetupPayload) => Promise<unknown>;
@@ -95,6 +100,7 @@ export function registerDesktopIpcHandlers(handlers: DesktopIpcHandlers): void {
     return result.canceled ? null : result.filePaths[0];
   });
   registerTrustedHandler('desktop:get-provider-models', handlers, (_event, provider: string, touchpoint: DesktopModelTouchpoint) => handlers.providerModels(provider, touchpoint));
+  registerTrustedHandler('desktop:test-model-connection', handlers, (_event, input: DesktopModelConnectionTestInput) => handlers.testModelConnection(input));
   registerTrustedHandler('desktop:get-advanced-model-config', handlers, () => handlers.advancedModelConfig());
   registerTrustedHandler('desktop:save-advanced-model-config', handlers, (_event, values: AdvancedModelWriteInput) => handlers.saveAdvancedModelConfig(values ?? {}));
   registerTrustedHandler('desktop:save-setup', handlers, (_event, payload: SetupPayload) => handlers.saveSetup(payload));

@@ -198,7 +198,12 @@ describe('Admin GUI update contract', () => {
 
   test('recycle bin lists only deleted pages and can read their detail', async () => {
     const statements: string[] = [];
+    let purgeHours = 0;
     const engine = {
+      purgeDeletedPages: async (hours: number) => {
+        purgeHours = hours;
+        return { count: 0, slugs: [] };
+      },
       executeRaw: async (sql: string) => {
         statements.push(sql);
         if (sql.startsWith('SELECT COUNT')) return [{ total: 0 }];
@@ -212,6 +217,7 @@ describe('Admin GUI update contract', () => {
       },
     } as any;
     await listAdminBrainPages(engine, { view: 'trash' });
+    expect(purgeHours).toBe(72);
     expect(statements[0]).toContain('p.deleted_at IS NOT NULL');
     expect(statements[0]).toContain('ORDER BY p.deleted_at DESC');
 

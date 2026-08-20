@@ -43,6 +43,11 @@ export function useOverview(options: { includeSourceGitStatus?: boolean } = {}) 
   }, [includeSourceGitStatus]);
 
   useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    if (!pgliteBusy) return;
+    const timer = window.setInterval(() => void load(), 1500);
+    return () => window.clearInterval(timer);
+  }, [load, pgliteBusy]);
   return { overview, error, pgliteBusy, reload: load };
 }
 

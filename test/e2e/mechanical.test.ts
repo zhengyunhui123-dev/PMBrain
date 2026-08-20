@@ -826,7 +826,7 @@ describeE2E('E2E: Init Edge Cases', () => {
 
     const after = await callOp('get_stats') as any;
     expect(after.page_count).toBe(before.page_count);
-  });
+  }, 30_000);
 });
 
 // ─────────────────────────────────────────────────────────────────

@@ -14,6 +14,7 @@
 import { describe, test, expect, beforeAll, afterAll, beforeEach } from 'bun:test';
 import { setupDB, teardownDB, hasDatabase } from './helpers.ts';
 import { PostgresEngine } from '../../src/core/postgres-engine.ts';
+import { ensureSourceLocalPath } from '../../src/core/sources-ops.ts';
 
 const skip = !hasDatabase();
 const describeIfDB = skip ? describe.skip : describe;
@@ -60,6 +61,29 @@ async function seedSource(
 }
 
 describeIfDB('Postgres parity — listAllSources', () => {
+  test('repairs a DB-only source local_path without changing its id', async () => {
+    await seedSource('db-only', { local_path: null });
+    const repaired = await ensureSourceLocalPath(engine, 'db-only', '/tmp/db-only-repaired');
+    expect(repaired.id).toBe('db-only');
+    expect(repaired.local_path).toBe('/tmp/db-only-repaired');
+  });
+
+  test('preserves the target and existing source when a repair path overlaps', async () => {
+    await seedSource('db-only', { local_path: null });
+    await seedSource('other', { local_path: '/tmp/db-only/wiki' });
+
+    await expect(ensureSourceLocalPath(engine, 'db-only', '/tmp/db-only')).rejects.toMatchObject({
+      code: 'overlapping_path',
+    });
+    const rows = await engine.executeRaw<{ id: string; local_path: string | null }>(
+      `SELECT id, local_path FROM sources WHERE id IN ('db-only', 'other') ORDER BY id`,
+    );
+    expect(rows).toEqual([
+      { id: 'db-only', local_path: null },
+      { id: 'other', local_path: '/tmp/db-only/wiki' },
+    ]);
+  });
+
   test('returns rows including default + seeded', async () => {
     await seedSource('alpha');
     const all = await engine.listAllSources();
