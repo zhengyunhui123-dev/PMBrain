@@ -21,7 +21,7 @@
  *     rotation (via configureGateway()) invalidates stale entries.
  */
 
-import { embed as aiEmbed, embedMany, generateObject, generateText, jsonSchema } from 'ai';
+import { embed as aiEmbed, embedMany, generateObject, generateText, jsonSchema, streamText } from 'ai';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { listRecipes } from './recipes/index.ts';
 import { createOpenAI } from '@ai-sdk/openai';
@@ -29,6 +29,7 @@ import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { z } from 'zod';
+import { streamOllamaNativeChat, type OllamaNativeMessage } from './ollama-native.ts';
 
 import {
   BudgetTracker,
@@ -2518,8 +2519,11 @@ function mapStopReason(
 
 /**
  * Run one chat completion turn. Provider-neutral wrapper over Vercel AI SDK's
- * `generateText`. Tool-use blocks are normalized; cache_control markers are
- * applied only on Anthropic when `cacheSystem: true`.
+ * text generation. Plain Ollama text calls use its native streamed chat API;
+ * Ollama tool calls use AI SDK `streamText`. Hosted providers retain
+ * `generateText`, so the local compatibility fix cannot alter cloud requests.
+ * Tool-use blocks are normalized; cache_control markers are applied only on
+ * Anthropic when `cacheSystem: true`.
  *
  * Crash-resumable replay is the caller's responsibility (subagent.ts persists
  * blocks via the provider-neutral schema landing in commit 2a).
@@ -2633,15 +2637,96 @@ async function chatOnce(opts: ChatOpts): Promise<ChatResult> {
   };
 
   try {
-    const result = await generateText({
+    const repairedMessages = repairToolPairing(opts.messages);
+    const generationOptions = {
       model,
       system: opts.system,
-      messages: toModelMessages(repairToolPairing(opts.messages)) as any,
+      messages: toModelMessages(repairedMessages) as any,
       tools: opts.tools && opts.tools.length > 0 ? tools : undefined,
       maxOutputTokens: opts.maxTokens ?? 4096,
       abortSignal: opts.abortSignal,
       providerOptions: Object.keys(providerOptions).length > 0 ? providerOptions : undefined,
-    });
+    };
+    const nativeMessages: OllamaNativeMessage[] | null = (() => {
+      if (recipe.id !== 'ollama' || (opts.tools?.length ?? 0) > 0) return null;
+      const messages: OllamaNativeMessage[] = [];
+      if (opts.system) messages.push({ role: 'system', content: opts.system });
+      for (const message of repairedMessages) {
+        if (message.role !== 'system' && message.role !== 'user' && message.role !== 'assistant') return null;
+        if (typeof message.content === 'string') {
+          messages.push({ role: message.role, content: message.content });
+          continue;
+        }
+        if (!message.content.every(block => block.type === 'text')) return null;
+        messages.push({
+          role: message.role,
+          content: message.content.map(block => block.type === 'text' ? block.text : '').join(''),
+        });
+      }
+      return messages;
+    })();
+    const result = nativeMessages
+      ? await (async () => {
+          const cfg = requireConfig();
+          const compat = applyOpenAICompatConfig(recipe, cfg, 'chat');
+          const auth = applyResolveAuth(recipe, cfg, 'chat');
+          const qwenAnswerEnvelope = /^qwen3(?:[.:-]|$)/i.test(modelId);
+          const qwenJsonResponse = qwenAnswerEnvelope
+            && nativeMessages.some(message => /\bjson\b/i.test(message.content));
+          const qwenMessages = nativeMessages.map(message => ({ ...message }));
+          if (qwenAnswerEnvelope) {
+            const instruction = qwenJsonResponse
+              ? '关闭思考。严格输出 JSON 对象 {"result":...}；result 必须直接是原任务要求的 JSON 值，不要添加其他字段。'
+              : '关闭思考。严格输出 JSON 对象 {"result":"最终回答"}；result 必须是字符串，不要添加其他字段。';
+            const system = qwenMessages.find(message => message.role === 'system');
+            if (system) system.content = `${system.content}\n${instruction}`;
+            else qwenMessages.unshift({ role: 'system', content: instruction });
+          }
+          const nativeResult = await streamOllamaNativeChat({
+            baseURL: compat.baseURL,
+            model: modelId,
+            messages: qwenMessages,
+            maxTokens: opts.maxTokens ?? 4096,
+            apiKey: auth.apiKey,
+            headers: auth.headers,
+            format: qwenAnswerEnvelope
+              ? {
+                  type: 'object',
+                  additionalProperties: false,
+                  required: ['result'],
+                  properties: { result: qwenJsonResponse ? {} : { type: 'string' } },
+                }
+              : undefined,
+            abortSignal: opts.abortSignal,
+          });
+          if (!qwenAnswerEnvelope) return nativeResult;
+          const parsed = JSON.parse(nativeResult.text) as { result?: unknown };
+          if (parsed.result === undefined || (!qwenJsonResponse && typeof parsed.result !== 'string')) {
+            throw new Error('Ollama Qwen3 chat did not return the required result envelope');
+          }
+          const answer = typeof parsed.result === 'string'
+            ? parsed.result
+            : JSON.stringify(parsed.result);
+          return {
+            ...nativeResult,
+            text: answer,
+            content: answer ? [{ type: 'text' as const, text: answer }] : [],
+          };
+        })()
+      : recipe.id === 'ollama'
+        ? await (async () => {
+          const streamed = streamText(generationOptions);
+          const [content, text, toolCalls, finishReason, usage, providerMetadata] = await Promise.all([
+            streamed.content,
+            streamed.text,
+            streamed.toolCalls,
+            streamed.finishReason,
+            streamed.usage,
+            streamed.providerMetadata,
+          ]);
+          return { content, text, toolCalls, finishReason, usage, providerMetadata };
+        })()
+        : await generateText(generationOptions);
 
     // Normalize blocks. Vercel SDK gives us `result.content` (an array of typed
     // parts) for v6+; fall back to text + toolCalls for older shapes.

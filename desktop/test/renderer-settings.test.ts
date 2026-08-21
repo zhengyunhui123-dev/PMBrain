@@ -181,6 +181,7 @@ describe('desktop settings renderer contracts', () => {
     expect(html).toContain('class="model-test-icon"');
     expect(renderer).toContain('testConfiguredModel');
     expect(renderer).toContain('window.pmbrainDesktop.testModelConnection(modelConnectionInput(kind))');
+    expect(renderer).toContain('本地模型首次加载可能需要 1–2 分钟');
     expect(renderer).toContain('✓ 连接成功 · ${result.dimensions} 维 · ${result.durationMs}ms');
     expect(renderer).toContain('⚠ ${result.message} · ${result.durationMs}ms');
     expect(preload).toContain("desktop:test-model-connection");

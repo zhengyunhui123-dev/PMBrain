@@ -2,10 +2,11 @@
   "schemaVersion": 1,
   "product": "PMBrain",
   "core": {
+    "version": "1.2.73"
     "version": "1.2.75"
   },
   "desktop": {
-    "version": "1.1.38"
+    "version": "1.1.39"
   },
   "admin": {
     "buildSha256": "5679303e9876fe75250e2780030aa9495c255b1bcf184fe3608e200cbe07bbdc",
@@ -15,6 +16,7 @@
     "latestSchemaVersion": 116
   },
   "sidecar": {
+    "version": "1.2.73"
     "version": "1.2.75"
   }
 }

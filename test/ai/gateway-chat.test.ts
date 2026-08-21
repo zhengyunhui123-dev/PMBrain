@@ -238,12 +238,28 @@ describe('chat touchpoint — chat() smoke + stop-reason mapping (Codex D8)', ()
 describe('chat touchpoint — Ollama thinking request isolation', () => {
   beforeEach(() => resetGateway());
 
-  test('sends think:false only to Ollama chat requests', async () => {
+  test('streams ordinary Ollama chat through the native API while hosted providers keep JSON', async () => {
+    const requestUrls: string[] = [];
     const requestBodies: Array<Record<string, unknown>> = [];
     const server = Bun.serve({
       port: 0,
       async fetch(request) {
-        requestBodies.push(await request.json() as Record<string, unknown>);
+        requestUrls.push(request.url);
+        const body = await request.json() as Record<string, unknown>;
+        requestBodies.push(body);
+        if (new URL(request.url).pathname.endsWith('/api/chat')) {
+          return new Response([
+            JSON.stringify({ model: 'synthetic-model', message: { role: 'assistant', content: '{"result":"' }, done: false }),
+            JSON.stringify({
+              model: 'synthetic-model',
+              message: { role: 'assistant', content: 'ok"}' },
+              done: true,
+              done_reason: 'stop',
+              prompt_eval_count: 1,
+              eval_count: 1,
+            }),
+          ].join('\n') + '\n', { headers: { 'content-type': 'application/x-ndjson' } });
+        }
         return Response.json({
           id: 'synthetic-chat',
           object: 'chat.completion',
@@ -262,7 +278,7 @@ describe('chat touchpoint — Ollama thinking request isolation', () => {
     try {
       const baseURL = `${server.url.toString().replace(/\/$/, '')}/v1`;
       configureGateway({
-        chat_model: 'ollama:synthetic-model',
+        chat_model: 'ollama:qwen3:synthetic-model',
         base_urls: { ollama: baseURL },
         env: {},
       });
@@ -277,7 +293,103 @@ describe('chat touchpoint — Ollama thinking request isolation', () => {
 
       expect(requestBodies).toHaveLength(2);
       expect(requestBodies[0]?.think).toBe(false);
+      expect(requestBodies[0]?.stream).toBe(true);
+      expect(requestUrls[0]).toEndWith('/api/chat');
+      expect((requestBodies[0]?.messages as Array<{ content?: string }>).at(-1)?.content).toContain('/no_think');
+      expect((requestBodies[0]?.format as { required?: string[] }).required).toContain('result');
       expect(requestBodies[1]).not.toHaveProperty('think');
+      expect(requestBodies[1]?.stream).not.toBe(true);
+      expect(requestUrls[1]).toEndWith('/v1/chat/completions');
+    } finally {
+      server.stop(true);
+      resetGateway();
+    }
+  });
+
+  test('Qwen3 preserves JSON requested by AI search and deep organization prompts', async () => {
+    let requestBody: Record<string, unknown> = {};
+    const server = Bun.serve({
+      port: 0,
+      async fetch(request) {
+        requestBody = await request.json() as Record<string, unknown>;
+        return new Response([
+          JSON.stringify({
+            model: 'synthetic-model',
+            message: {
+              role: 'assistant',
+              content: '{"result":{"answer":"ok","citations":[],"gaps":[]}}',
+            },
+            done: true,
+            done_reason: 'stop',
+            prompt_eval_count: 1,
+            eval_count: 1,
+          }),
+        ].join('\n') + '\n', { headers: { 'content-type': 'application/x-ndjson' } });
+      },
+    });
+
+    try {
+      const baseURL = `${server.url.toString().replace(/\/$/, '')}/v1`;
+      configureGateway({
+        chat_model: 'ollama:qwen3:synthetic-model',
+        base_urls: { ollama: baseURL },
+        env: {},
+      });
+      const result = await chat({
+        system: 'Return JSON with answer, citations, and gaps.',
+        messages: [{ role: 'user', content: 'test' }],
+      });
+
+      expect(JSON.parse(result.text)).toEqual({ answer: 'ok', citations: [], gaps: [] });
+      const format = requestBody.format as { properties?: Record<string, unknown> };
+      expect(format.properties?.result).toEqual({});
+      expect((requestBody.messages as Array<{ content?: string }>)[0]?.content).toContain('result');
+    } finally {
+      server.stop(true);
+      resetGateway();
+    }
+  });
+
+  test('Ollama tool calls keep the AI SDK streaming compatibility path', async () => {
+    let requestUrl = '';
+    let requestBody: Record<string, unknown> = {};
+    const server = Bun.serve({
+      port: 0,
+      async fetch(request) {
+        requestUrl = request.url;
+        requestBody = await request.json() as Record<string, unknown>;
+        const chunks = [
+          {
+            id: 'synthetic-tool-chat',
+            object: 'chat.completion.chunk',
+            created: 0,
+            model: 'synthetic-model',
+            choices: [{ index: 0, delta: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
+            usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+          },
+        ];
+        return new Response(`${chunks.map(chunk => `data: ${JSON.stringify(chunk)}\n\n`).join('')}data: [DONE]\n\n`, {
+          headers: { 'content-type': 'text/event-stream' },
+        });
+      },
+    });
+
+    try {
+      const baseURL = `${server.url.toString().replace(/\/$/, '')}/v1`;
+      configureGateway({
+        chat_model: 'ollama:qwen3:synthetic-model',
+        base_urls: { ollama: baseURL },
+        env: {},
+      });
+      const result = await chat({
+        messages: [{ role: 'user', content: 'test' }],
+        tools: [{ name: 'lookup', description: 'lookup', inputSchema: { type: 'object' } }],
+      });
+
+      expect(result.text).toBe('ok');
+      expect(requestUrl).toEndWith('/v1/chat/completions');
+      expect(requestBody.stream).toBe(true);
+      expect(requestBody.tools).toBeArray();
     } finally {
       server.stop(true);
       resetGateway();

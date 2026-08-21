@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { join } from 'node:path';
 import { buildCaptureCommand, buildDreamCommand, buildMarkdownExportCommand, buildSourceGitCommand, commandForPreview, deriveSourceIdFromPath, MAX_NATURAL_TASK_CHARACTERS, previewIntent, resolveImportSourceIdForPath } from '../src/commands/admin-console.ts';
-import { getAdminLlmStatus } from '../src/commands/natural-lang/llm.ts';
+import { callIntentModel, getAdminLlmStatus } from '../src/commands/natural-lang/llm.ts';
 import { __setChatTransportForTests, resetGateway } from '../src/core/ai/gateway.ts';
 
 describe('admin console intent planning', () => {
@@ -146,29 +146,65 @@ describe('admin console intent planning', () => {
     expect(status.providersConfigured.ollama).toBe(true);
   });
 
-  test('Ollama can pass the intent gate and use the shared gateway path', async () => {
-    __setChatTransportForTests(async () => ({
-      text: '',
-      blocks: [{
-        type: 'tool-call',
-        toolCallId: 'ollama-call-1',
-        toolName: 'pmbrain_action',
-        input: { intent: 'search_brain', query: '本地模型搜索' },
-      }],
-      stopReason: 'tool_calls',
-      usage: { input_tokens: 1, output_tokens: 1, cache_read_tokens: 0, cache_creation_tokens: 0 },
-      model: 'ollama:qwen3.6:latest',
-      providerId: 'ollama',
-    }));
+  test('Ollama can pass the intent gate through its native structured-output path', async () => {
+    let requestBody: Record<string, any> = {};
+    globalThis.fetch = (async (
+      _input: Parameters<typeof fetch>[0],
+      init?: Parameters<typeof fetch>[1],
+    ) => {
+      requestBody = JSON.parse(String(init?.body ?? '{}'));
+      return new Response(JSON.stringify({
+        message: { role: 'assistant', content: '{"intent":"search_brain","query":"本地模型搜索"}' },
+        done: true,
+        done_reason: 'stop',
+      }) + '\n', { headers: { 'content-type': 'application/x-ndjson' } });
+    }) as unknown as typeof fetch;
 
     const preview = await previewIntent('搜索本地模型内容', {
       ...generativeConfig,
-      chat_model: 'ollama:qwen3.6:latest',
-      expansion_model: 'ollama:qwen3.6:latest',
+      chat_model: 'ollama:gemma4:e4b',
+      expansion_model: 'ollama:gemma4:e4b',
     } as any);
 
     expect(preview.intent).toBe('search_brain');
     expect(preview.slots.query).toBe('本地模型搜索');
+    expect(requestBody.messages.at(-1)?.content).not.toContain('/no_think');
+  });
+
+  test('Qwen3 on Ollama uses native streamed JSON intent output without thinking text', async () => {
+    let requestUrl = '';
+    let requestBody: Record<string, any> = {};
+    globalThis.fetch = (async (
+      input: Parameters<typeof fetch>[0],
+      init?: Parameters<typeof fetch>[1],
+    ) => {
+      requestUrl = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+      requestBody = JSON.parse(String(init?.body ?? '{}'));
+      return new Response([
+        JSON.stringify({ message: { role: 'assistant', content: '{"intent":"search_' }, done: false }),
+        JSON.stringify({
+          message: { role: 'assistant', content: 'brain","query":"我家狗叫什么名字"}' },
+          done: true,
+          done_reason: 'stop',
+          prompt_eval_count: 20,
+          eval_count: 8,
+        }),
+      ].join('\n') + '\n', { headers: { 'content-type': 'application/x-ndjson' } });
+    }) as unknown as typeof fetch;
+
+    const result = await callIntentModel({
+      ...generativeConfig,
+      chat_model: 'ollama:qwen3:4b',
+    } as any, '我家狗叫什么名字', 0);
+
+    expect(requestUrl).toEndWith('/api/chat');
+    expect(requestBody.stream).toBe(true);
+    expect(requestBody.think).toBe(false);
+    expect(requestBody.format.required).toContain('intent');
+    expect(requestBody.format.properties.intent.enum).toContain('search_brain');
+    expect(requestBody.tools).toBeUndefined();
+    expect(requestBody.messages.at(-1)?.content).toContain('/no_think');
+    expect(result).toEqual({ intent: 'search_brain', query: '我家狗叫什么名字' });
   });
 
   test('knowledge questions use the existing think synthesis command', () => {
