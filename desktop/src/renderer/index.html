@@ -436,12 +436,14 @@
           <div class="recovery-code">STARTUP / INTERRUPTED</div>
           <h2>本机配置已保留，PMBrain 服务没有成功启动</h2>
           <p id="recovery-message">请重试启动；如果仍然失败，可以打开日志查看原因。无需重新填写数据库或 API Key。</p>
+          <p class="recovery-owner" id="recovery-owner" role="status" hidden></p>
           <div class="recovery-actions">
             <button class="primary" id="recovery-retry"><span>重新启动服务</span><i></i></button>
+            <button class="recovery-terminate" id="recovery-terminate" hidden><span>结束占用进程并重启</span><i></i></button>
             <button class="ghost" id="recovery-logs">打开日志</button>
             <button class="ghost" id="recovery-settings">修改配置</button>
           </div>
-          <div class="recovery-note"><b>配置安全</b><span>故障恢复不会清空或重建现有 config.json。</span></div>
+          <div class="recovery-note"><b>数据安全</b><span>只会结束经过身份校验的 PMBrain 进程；不会删除数据库、知识内容或锁文件，也不会清空或重建 config.json。</span></div>
         </section>
       </section>
     </main>

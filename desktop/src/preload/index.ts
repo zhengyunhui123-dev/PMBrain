@@ -42,6 +42,7 @@ import type {
 } from '../main/system-settings.js';
 import type { DesktopKnowledgeSourceStatus } from '../main/knowledge-source-git.js';
 import type { WorkbuddyAgentIntegrationStatus } from '../main/integration/workbuddy-agent-controller.js';
+import type { PgliteOwnerStatus } from '../../../src/core/pglite-owner-control.js';
 
 export type {
   AdvancedModelConfig,
@@ -161,6 +162,8 @@ export interface PMBrainDesktopApi {
   downloadUpdate(): Promise<UpdateState | null>;
   installUpdate(): Promise<void>;
   listPgliteUpgradeBackups(): Promise<DesktopPgliteUpgradeBackups>;
+  getPgliteRecoveryStatus(): Promise<PgliteOwnerStatus>;
+  terminatePgliteOwnerAndRetry(pid: number): Promise<void>;
   retry(): Promise<void>;
   openLogs(): Promise<string>;
   exportDiagnosticBundle(): Promise<DesktopDiagnosticBundleResult | null>;
@@ -234,6 +237,8 @@ const api: PMBrainDesktopApi = {
   downloadUpdate: () => ipcRenderer.invoke('desktop:download-update'),
   installUpdate: () => ipcRenderer.invoke('desktop:install-update'),
   listPgliteUpgradeBackups: () => ipcRenderer.invoke('desktop:list-pglite-upgrade-backups'),
+  getPgliteRecoveryStatus: () => ipcRenderer.invoke('desktop:get-pglite-recovery-status'),
+  terminatePgliteOwnerAndRetry: (pid) => ipcRenderer.invoke('desktop:terminate-pglite-owner-and-retry', pid),
   retry: () => ipcRenderer.invoke('desktop:retry'),
   openLogs: () => ipcRenderer.invoke('desktop:open-logs'),
   exportDiagnosticBundle: () => ipcRenderer.invoke('desktop:export-diagnostic-bundle'),

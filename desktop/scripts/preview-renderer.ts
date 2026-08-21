@@ -110,7 +110,9 @@ window.pmbrainDesktop = {
     ],
     port: 3132
   }),
-  getState: async () => ({ phase: 'ready', port: 3132 }),
+  getState: async () => (${panel === 'recovery'
+    ? "({ phase: 'failed', message: 'PGLite database is already owned by another process (pid=37564, type=desktop-sidecar).' })"
+    : "({ phase: 'ready', port: 3132 })"}),
   getStartupProgress: async () => ({ visible: false, stage: 'sidecar', title: '', message: '' }),
   onStartupProgress: () => () => {},
   getTheme: async () => ({ source: '${theme}', resolved: '${theme}' }),
@@ -224,6 +226,12 @@ window.pmbrainDesktop = {
   checkUpdates: async () => null,
   installUpdate: async () => {},
   listPgliteUpgradeBackups: async () => ({ databasePath: null, backups: [] }),
+  getPgliteRecoveryStatus: async () => ({
+    state: 'active', pid: 37564, ownerType: 'desktop-sidecar',
+    commandLabel: 'PMBrain Desktop sidecar', acquiredAt: null,
+    canTerminate: true, message: '发现另一个 PMBrain 进程。',
+  }),
+  terminatePgliteOwnerAndRetry: async () => {},
   retry: async () => {},
   openLogs: async () => '',
   quit: async () => {}
