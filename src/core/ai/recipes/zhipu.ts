@@ -32,6 +32,8 @@ export const zhipu: Recipe = {
       // stay HNSW-compatible.
       dims_options: [256, 512, 1024, 2048],
       max_batch_tokens: 8192,
+      // embedding-3 accepts at most 64 strings in one input array.
+      model_max_batch_items: { 'embedding-3': 64 },
       chars_per_token: 2,
       cost_per_1m_tokens_usd: 0.01,
       price_last_verified: '2026-06-02',

@@ -25,6 +25,8 @@ describe('recipe: dashscope', () => {
     expect(r.touchpoints.embedding).toBeDefined();
     expect(r.touchpoints.embedding!.models[0]).toBe('text-embedding-v3');
     expect(r.touchpoints.embedding!.models).toContain('text-embedding-v2');
+    expect(r.touchpoints.embedding!.models).toContain('qwen3.7-text-embedding');
+    expect(r.touchpoints.embedding!.models).toContain('text-embedding-v4');
     expect(r.touchpoints.embedding!.default_dims).toBe(1024);
     expect(r.touchpoints.embedding!.dims_options).toEqual([64, 128, 256, 512, 768, 1024]);
     // Matryoshka: every dims option ≤ 2000 (HNSW-compatible).
@@ -53,6 +55,13 @@ describe('recipe: dashscope', () => {
     const r = getRecipe('dashscope')!;
     expect(r.touchpoints.embedding!.max_batch_tokens).toBeGreaterThan(0);
     expect(r.touchpoints.embedding!.chars_per_token).toBeGreaterThan(0);
+    expect(r.touchpoints.embedding!.model_max_batch_items).toEqual({
+      'qwen3.7-text-embedding': 20,
+      'text-embedding-v4': 10,
+      'text-embedding-v3': 10,
+      'text-embedding-v2': 25,
+      'text-embedding-v1': 25,
+    });
   });
 
   test('dimsProviderOptions threads dimensions for text-embedding-v3 (Matryoshka)', async () => {
@@ -63,6 +72,10 @@ describe('recipe: dashscope', () => {
     expect(dimsProviderOptions('openai-compatible', 'text-embedding-v3', 512))
       .toEqual({ openaiCompatible: { dimensions: 512 } });
     expect(dimsProviderOptions('openai-compatible', 'text-embedding-v3', 1024))
+      .toEqual({ openaiCompatible: { dimensions: 1024 } });
+    expect(dimsProviderOptions('openai-compatible', 'qwen3.7-text-embedding', 512))
+      .toEqual({ openaiCompatible: { dimensions: 512 } });
+    expect(dimsProviderOptions('openai-compatible', 'text-embedding-v4', 1024))
       .toEqual({ openaiCompatible: { dimensions: 1024 } });
     // text-embedding-v2 is fixed-dim; no passthrough.
     expect(dimsProviderOptions('openai-compatible', 'text-embedding-v2', 1024))
