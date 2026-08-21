@@ -76,17 +76,6 @@ if ! command -v git >/dev/null 2>&1; then
   exit 2
 fi
 
-# Build the file list by scanning-mode.
-if [ "$MODE" = staged ]; then
-  FILES=$(git diff --cached --name-only --diff-filter=ACMR 2>/dev/null || true)
-else
-  FILES=$(git ls-files 2>/dev/null || true)
-fi
-
-if [ -z "$FILES" ]; then
-  exit 0
-fi
-
 # Allow-list: files in which the banned name is legitimate.
 # Meta-rule docs (define the rule itself), auto-generated LLM indexes,
 # historical upgrade guides, and the test that enforces the rule
@@ -173,32 +162,47 @@ is_allowed() {
   return 1
 }
 
+# Batch the repository scan so Windows Git Bash does not spawn several grep
+# processes per tracked file. The pathspecs preserve the previous extension
+# and directory scope; the line-by-line loop below keeps the allow-list and
+# staged-file semantics.
+SCAN_PATHS=(
+  'CHANGELOG.md' 'README*' 'CLAUDE*' 'AGENTS*'
+  'docs/**' 'skills/**' 'src/**' 'test/**' 'scripts/**'
+  '*.md' '*.ts' '*.mjs' '*.js' '*.py' '*.sh' '*.json' '*.yaml' '*.yml' '*.txt'
+)
+GIT_GREP_ARGS=(-I -n -i -E)
+if [ "$MODE" = staged ]; then
+  GIT_GREP_ARGS+=(--cached)
+  STAGED_FILES=$(git diff --cached --name-only --diff-filter=ACMR 2>/dev/null || true)
+else
+  STAGED_FILES=""
+fi
+
+HITS=$(git grep "${GIT_GREP_ARGS[@]}" \
+  -e "$BANNED_NAME" \
+  -e '/data/brain/' \
+  -e '/data/.openclaw/' \
+  -- "${SCAN_PATHS[@]}" 2>/dev/null || true)
+
 FOUND=0
-while IFS= read -r file; do
+while IFS= read -r hit; do
+  [ -z "$hit" ] && continue
+  file="${hit%%:*}"
   [ -z "$file" ] && continue
-  [ ! -f "$file" ] && continue
+  if [ "$MODE" = staged ]; then
+    case $'\n'"$STAGED_FILES"$'\n' in
+      *$'\n'"$file"$'\n'*) ;;
+      *) continue ;;
+    esac
+  fi
   if is_allowed "$file"; then
     continue
   fi
-  # Case-insensitive grep; only specific extensions + known docs.
-  case "$file" in
-    *.md|*.ts|*.mjs|*.js|*.py|*.sh|*.json|*.yaml|*.yml|*.txt|README*|CHANGELOG*|CLAUDE*|AGENTS*)
-      if grep -in "$BANNED_NAME" "$file" >/dev/null 2>&1; then
-        echo "[check-privacy] BANNED NAME in $file:" >&2
-        grep -in "$BANNED_NAME" "$file" | sed 's|^|  |' >&2
-        FOUND=1
-      fi
-      # Banned wintermute-specific filesystem paths (codex T7).
-      for path in "${BANNED_PATHS[@]}"; do
-        if grep -nF "$path" "$file" >/dev/null 2>&1; then
-          echo "[check-privacy] BANNED PATH '$path' in $file:" >&2
-          grep -nF "$path" "$file" | sed 's|^|  |' >&2
-          FOUND=1
-        fi
-      done
-      ;;
-  esac
-done <<< "$FILES"
+  echo "[check-privacy] banned token in $file:" >&2
+  echo "  ${hit#*:}" >&2
+  FOUND=1
+done <<< "$HITS"
 
 if [ "$FOUND" -eq 1 ]; then
   echo "" >&2

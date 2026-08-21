@@ -2,7 +2,7 @@
 # Run E2E tests ONE FILE AT A TIME.
 #
 # Bun's default is to run test files in parallel (each in its own worker).
-# Our E2E suite shares one Postgres database across all 13 files, and
+# Our E2E suite shares one Postgres database across all files, and
 # `setupDB()` does TRUNCATE CASCADE + fixture import. When files run in
 # parallel, file A's TRUNCATE can race with file B's fixture import,
 # producing observed fails like "expected 16 pages, got 8", missing
@@ -40,7 +40,17 @@ cd "$(dirname "$0")/.."
 # only here, while the shell floor below validates the URL before this script
 # runs its psql connection cleanup.
 export GBRAIN_TEST_ALLOW_DATABASE_URL=1
-unset GBRAIN_DATABASE_URL
+unset GBRAIN_DATABASE_URL PMBRAIN_DATABASE_URL
+
+# Do not let credentials, agent-provider settings, or an operator's external
+# integration endpoints bleed into a hermetic E2E child. The PMBrain runtime
+# has many legitimate PMBRAIN_* compatibility settings, so scrub only the
+# integration namespaces that the E2E suite does not own.
+while IFS='=' read -r e2e_env_name _; do
+  case "$e2e_env_name" in
+    CONDUCTOR_*|MCP_*|OPENCLAW_*|HERMES_*|GROK_*|OPENCODE_*|PMBRAIN_HOME|GBRAIN_HOME|GBRAIN_DATABASE_URL|PMBRAIN_DATABASE_URL) unset "$e2e_env_name" ;;
+  esac
+done < <(env)
 
 # --- HOME isolation: snapshot real user config before switching ---
 # Tolerate unset HOME (minimal containers, exotic CI shells) without tripping set -u.
@@ -171,15 +181,25 @@ for f in "${files[@]}"; do
   if [ -n "${DATABASE_URL:-}" ]; then
     psql "$DATABASE_URL" -At -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE pid != pg_backend_pid() AND datname = current_database()" >/dev/null 2>&1 || true
   fi
-  # Hard outer timeout (180s per file). bun's --timeout is per-test; if a
+  # Hard outer timeout per file. bun's --timeout is per-test; if a
   # PGLite WASM call hangs in beforeAll/afterAll, --timeout never fires and
   # the file wedges indefinitely. gtimeout/timeout SIGKILLs the file so the
   # suite advances. gtimeout (macOS via coreutils) preferred; timeout (Linux)
   # fallback; bare bun (no outer cap) if neither is installed.
+  FILE_TIMEOUT="${GBRAIN_E2E_FILE_TIMEOUT:-${E2E_FILE_TIMEOUT_SECS:-180}}"
+  if ! printf '%s' "$FILE_TIMEOUT" | grep -qE '^[0-9]+$' || [ "$FILE_TIMEOUT" -lt 1 ]; then
+    echo "ERROR: GBRAIN_E2E_FILE_TIMEOUT must be a positive integer" >&2
+    exit 2
+  fi
+  case "$name" in
+    skills*.test.ts|zeroentropy*.test.ts|serve-http-multi-agent*.test.ts)
+      FILE_TIMEOUT=$((FILE_TIMEOUT * 4))
+      ;;
+  esac
   if command -v gtimeout >/dev/null 2>&1; then
-    TIMEOUT_CMD="gtimeout 180"
+    TIMEOUT_CMD="gtimeout $FILE_TIMEOUT"
   elif command -v timeout >/dev/null 2>&1; then
-    TIMEOUT_CMD="timeout 180"
+    TIMEOUT_CMD="timeout $FILE_TIMEOUT"
   else
     TIMEOUT_CMD=""
   fi

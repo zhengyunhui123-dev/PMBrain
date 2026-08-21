@@ -9,13 +9,14 @@
  *
  * HARD-FAIL, never silently unset: silently clearing the variable would turn
  * DATABASE_URL-gated E2E tests into green skips and hide the dangerous path.
- * Both names are checked because PMBrain's runtime accepts both spellings.
+ * All accepted spellings are checked because PMBrain's runtime accepts the
+ * legacy GBrain aliases as well as PMBRAIN_DATABASE_URL.
  */
 
 const ALLOW = process.env.GBRAIN_TEST_ALLOW_DATABASE_URL === '1';
 
 if (!ALLOW) {
-  const offending = (['DATABASE_URL', 'GBRAIN_DATABASE_URL'] as const).filter(
+  const offending = (['DATABASE_URL', 'GBRAIN_DATABASE_URL', 'PMBRAIN_DATABASE_URL'] as const).filter(
     (name) => {
       const value = process.env[name];
       return value !== undefined && value !== '';

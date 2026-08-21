@@ -1,13 +1,22 @@
 # Bug 修复台账
 
+## 2026-08-20 PMBrain 1.2.69 修复 run-verify-parallel CI 契约测试的脆弱文本匹配
+
+- 时间：2026-08-20
+- 版本号：PMBrain 1.2.69
+- 标题：修复 GitHub Actions shard 7 的 CI 契约测试
+- 描述：GitHub Actions 当前 HEAD 的 Test shard 7 仅有该契约测试失败（1080 通过、1 失败）；实际 shell 脚本已先保存检查退出码，失败原因是测试依赖固定缩进和注释位置。
+- 是否完成：是
+- 最终结果：已改为验证 `wait "$pid"` → `rc=$?` → watchdog 清理的顺序，并补齐 `VERSION` 1.2.69；不改生产执行逻辑，本地版本契约已通过，GitHub Actions 的 Test、E2E、Heavy 三条 workflow 全部通过。
+
 ## 2026-08-20 PostgreSQL E2E 测试误删正式库风险
 
 - 时间：2026-08-20
-- 版本号：PMBrain 1.2.67
+- 版本号：PMBrain 1.2.68
 - 标题：为 PostgreSQL 测试增加 fail-closed 数据库隔离保护
-- 描述：修复 E2E 测试直接使用环境中的 DATABASE_URL、先连接后清理数据库的误删风险。新增 Bun 测试启动级 Guard、数据库名 test 语义 Guard、setupDB 连接前 Guard、E2E 外层 psql 清理前校验、重型 shell 测试数据库 floor、破坏性测试静态覆盖门禁；正式库、恢复库、旧库和 pmbrain 等名称默认拒绝，单元测试脚本主动清除数据库环境变量。未连接、清理、修改或迁移任何用户 PostgreSQL/PGLite 数据。
+- 描述：修复 E2E 测试直接使用环境中的 DATABASE_URL、先连接后清理数据库的误删风险。新增 Bun 测试启动级 Guard、数据库名 test 语义 Guard、setupDB 连接前 Guard、E2E 外层 psql 清理前校验、重型 shell 测试数据库 floor、破坏性测试静态覆盖门禁；本轮继续补齐 PMBRAIN_DATABASE_URL 兼容别名、普通测试 allow 清理、统一 E2E workflow 和 Guard self-test。正式库、恢复库、旧库和 pmbrain 等名称默认拒绝，未连接、清理、修改或迁移任何用户 PostgreSQL/PGLite 数据。
 - 是否完成：进行中
-- 最终结果：TypeScript 类型检查、静态环境连接扫描和 diff 检查通过；新增 Guard 回归、预加载回归和覆盖门禁已写入，当前 Codex 终端因未安装 bun.exe 未能执行 Bun 测试，需在安装 Bun 的开发机或 GitHub Actions 中继续验证。
+- 最终结果：Guard self-test 2/2、Bash 语法、E2E 错误数据库名 smoke 和静态环境连接扫描通过；已使用 PMBrain 内置 Bun runtime 1.3.14 实际执行 `bun run verify`，38/38 检查通过。Windows Git Bash 下的 privacy/isolation 扫描和 WASM 编译产物启动已修正并通过；`bun run test` 暴露 `brain-writer` 与 POSIX 路径断言等 Windows 兼容性失败，取得证据后停止，未将单元聚合称为通过。真实 PGLite/Postgres/E2E 与 GitHub Actions 仍待验证，因此本 Bug 记录保持进行中。
 
 ## 2026-08-19 桌面端切换向量模型后重建任务卡住界面
 

@@ -45,16 +45,22 @@ GBRAIN_SKILLS_DIR="$ROOT/skills" bun run src/cli.ts doctor --fast --json >"$TMPO
 # repo-wide dependency via image-decoders + admin tooling) so we don't
 # add jq to the verify chain.
 PYTHON_BIN=""
+NODE_BIN=""
 if python3 -c "import sys" >/dev/null 2>&1; then
   PYTHON_BIN="python3"
 elif python -c "import sys" >/dev/null 2>&1; then
   PYTHON_BIN="python"
+elif command -v node >/dev/null 2>&1; then
+  NODE_BIN="node"
+elif command -v node.exe >/dev/null 2>&1; then
+  NODE_BIN="node.exe"
 else
-  echo "ERROR: Python is required to parse doctor --json output." >&2
+  echo "ERROR: Python or Node.js is required to parse doctor --json output." >&2
   exit 2
 fi
 
-STATUS=$("$PYTHON_BIN" -c "
+if [ -n "$PYTHON_BIN" ]; then
+  STATUS=$("$PYTHON_BIN" -c "
 import json, sys
 sys.stdin.reconfigure(encoding='utf-8-sig')
 for line in sys.stdin:
@@ -73,6 +79,26 @@ for line in sys.stdin:
     sys.exit(0)
 print('parse_error')
 " <"$TMPOUT" 2>/dev/null || echo "parse_error")
+else
+  STATUS=$("$NODE_BIN" -e '
+let data = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => { data += chunk; });
+process.stdin.on("end", () => {
+  for (const raw of data.split(/\r?\n/)) {
+    const line = raw.trim().replace(/^\uFEFF/, "");
+    if (!line.startsWith("{") || !line.endsWith("}")) continue;
+    try {
+      const report = JSON.parse(line);
+      const check = (report.checks || []).find((item) => item.name === "skill_brain_first");
+      console.log(check?.status || "missing");
+      return;
+    } catch {}
+  }
+  console.log("parse_error");
+});
+' <"$TMPOUT" 2>/dev/null || echo "parse_error")
+fi
 
 case "$STATUS" in
   ok)

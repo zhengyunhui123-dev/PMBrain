@@ -41,12 +41,9 @@ import { E2E_TEST_MAP } from "./e2e-test-map.ts";
 // doc-only. skills/ is intentionally NOT here — skills are product input.
 const DOC_ROOT_FILES = new Set([
   "README.md",
-  "CLAUDE.md",
-  "AGENTS.md",
   "CHANGELOG.md",
   "TODOS.md",
   "LICENSE",
-  "VERSION",
 ]);
 
 function isDocPath(p: string): boolean {
@@ -71,6 +68,20 @@ const ESCAPE_HATCH_FILES = new Set([
   "docker-compose.ci.yml",
   "scripts/ci-local.sh",
   "scripts/run-e2e.sh",
+  "scripts/run-unit-parallel.sh",
+  "scripts/run-unit-shard.sh",
+  "scripts/run-serial-tests.sh",
+  "scripts/run-slow-tests.sh",
+  "scripts/run-verify-parallel.sh",
+  "scripts/guard-self-test.sh",
+  "scripts/guards-manifest.tsv",
+  "scripts/check-admin-build.sh",
+  "test/helpers/database-url-guard-preload.ts",
+  "test/helpers/db-guard.ts",
+  "test/database-url-guard-preload.test.ts",
+  "test/db-guard-coverage.test.ts",
+  "test/guard-registry.test.ts",
+  "bunfig.toml",
   "scripts/select-e2e.ts",
   "scripts/e2e-test-map.ts",
   "test/e2e/helpers.ts",
@@ -79,6 +90,8 @@ const ESCAPE_HATCH_FILES = new Set([
 const ESCAPE_HATCH_PREFIXES = [
   "src/commands/migrations/",
   "test/e2e/fixtures/",
+  "test/fixtures/guards/",
+  "scripts/check-",
   "skills/",
   ".github/workflows/",
 ];

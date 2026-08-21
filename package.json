@@ -50,7 +50,7 @@
     "check:system-of-record": "bash scripts/check-system-of-record.sh",
     "check:admin-scope-drift": "bash scripts/check-admin-scope-drift.sh",
     "check:cli-exec": "bash scripts/check-cli-executable.sh",
-    "check:all": "bun run scripts/check-version-sync.ts && bash scripts/check-repository-hygiene.sh && bash scripts/check-privacy.sh && bash scripts/check-proposal-pii.sh && bash scripts/check-test-real-names.sh && bash scripts/check-jsonb-pattern.sh && bash scripts/check-source-id-projection.sh && bash scripts/check-source-config-leak.sh && bash scripts/check-progress-to-stdout.sh && bash scripts/check-no-legacy-getconnection.sh && bash scripts/check-test-isolation.sh && bash scripts/check-trailing-newline.sh && bash scripts/check-wasm-embedded.sh && bash scripts/check-exports-count.sh && bash scripts/check-admin-build.sh && bash scripts/check-admin-scope-drift.sh && bash scripts/check-cli-executable.sh && bash scripts/check-skill-brain-first.sh && bash scripts/check-operations-filter-bypass.sh && bash scripts/check-gateway-routed-no-direct-anthropic.sh && bash scripts/check-worker-pool-atomicity.sh && bash scripts/check-no-double-retry.sh && bash scripts/check-batch-audit-site.sh && bun run scripts/check-pmbrain-env-prefix.ts",
+    "check:all": "bun run verify",
     "check:version-sync": "bun run scripts/check-version-sync.ts",
     "check:pmbrain-env": "bun run scripts/check-pmbrain-env-prefix.ts",
     "check:gateway-routed": "bash scripts/check-gateway-routed-no-direct-anthropic.sh",
@@ -86,6 +86,10 @@
     "check:exports-count": "bash scripts/check-exports-count.sh",
     "check:admin-build": "bash scripts/check-admin-build.sh",
     "check:admin-embedded": "bash scripts/check-admin-embedded.sh",
+    "check:no-legacy-getconnection": "bash scripts/check-no-legacy-getconnection.sh",
+    "check:guard-self-test": "bash scripts/guard-self-test.sh",
+    "check:pagetype-exhaustive": "bash scripts/check-pagetype-exhaustive.sh",
+    "check:pg-url-redaction": "bash scripts/check-pg-url-redaction.sh",
     "check:test-isolation": "bash scripts/check-test-isolation.sh",
     "check:fuzz-purity": "bash scripts/check-fuzz-purity.sh",
     "check:operations-filter-bypass": "bash scripts/check-operations-filter-bypass.sh",
@@ -156,5 +160,5 @@
     "bun": ">=1.3.10"
   },
   "license": "MIT",
-  "version": "1.2.67"
+  "version": "1.2.69"
 }

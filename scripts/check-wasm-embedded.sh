@@ -20,15 +20,23 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
 OUT_BIN="$(mktemp /tmp/gbrain-wasm-check.XXXXXX)"
-trap 'rm -f "$OUT_BIN"' EXIT
+trap 'rm -f "$OUT_BIN" "$OUT_BIN.exe"' EXIT
 
 # Build a minimal smoketest binary that imports the chunker. We compile this
 # instead of the full gbrain CLI so the failure mode is laser-focused on
 # chunker + WASM path resolution, not unrelated CLI wiring.
 bun build --compile --outfile "$OUT_BIN" scripts/chunker-smoketest.ts >/dev/null 2>&1
 
-# Run it and capture JSON output.
-OUTPUT="$("$OUT_BIN" 2>&1)"
+# Run it and capture JSON output. On Windows Git Bash, Bun emits an .exe
+# beside the extensionless outfile and direct MSYS execution can return an
+# empty stdout stream. Launch that executable through PowerShell so the
+# compiled-binary result reaches the guard reliably.
+if command -v powershell.exe >/dev/null 2>&1 && command -v cygpath >/dev/null 2>&1; then
+  WIN_OUT="$(cygpath -w "$OUT_BIN.exe")"
+  OUTPUT="$(powershell.exe -NoProfile -NonInteractive -Command "& '$WIN_OUT'" 2>&1)"
+else
+  OUTPUT="$("$OUT_BIN" 2>&1)"
+fi
 
 # Sanity: JSON parses and has expected shape.
 # - has_symbol_names: at least one chunk carries a concrete symbol name

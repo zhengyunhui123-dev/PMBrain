@@ -138,6 +138,15 @@ bun test <定向测试文件>
 bun run typecheck
 ```
 
+CI 稳定性门禁的唯一入口是 `bun run verify`，其检查清单维护在
+`scripts/run-verify-parallel.sh`；`bun run check:all` 仅保留为兼容别名，不得再维护第二条
+检查链。完整链路为 `verify → test → test:slow → test:e2e`（有测试数据库时）→ `test:heavy`；
+`ci:local:diff` 负责 Pull Request 的变更选择，`ci:local` 负责发布前本地链路。普通测试包装器
+必须清掉 `DATABASE_URL`、`GBRAIN_DATABASE_URL`、`PMBRAIN_DATABASE_URL` 和显式 allow；只有
+E2E wrapper 或明确的一次性命令可以设置 `GBRAIN_TEST_ALLOW_DATABASE_URL=1`，且仍须通过
+测试数据库名 floor。生成的 `admin/dist`、`src/admin-embedded.ts`、`release-manifest.json`
+必须在构建后保持零 diff，不能自动提交。
+
 需要完整 Bash 门禁时使用 Git for Windows Bash；最终 GitHub CI 必须正常。本机因
 Bash 环境缺失而未跑完的项目要明确报告为“部分验证”，不能当成业务通过。
 

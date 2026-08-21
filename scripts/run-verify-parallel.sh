@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# scripts/run-verify-parallel.sh — parallel verify dispatcher.
+# scripts/run-verify-parallel.sh — canonical verify dispatcher.
 #
-# Runs the 19+ verify checks (privacy, jsonb, source-id, … + typecheck +
-# admin-build) as background jobs, waits for all, aggregates exit codes,
+# Runs the complete CHECKS registry (privacy, version/generated files, JSONB,
+# source-id, guard self-test, typecheck, …), waits for all, aggregates exit codes,
 # surfaces failed-check name + tail of its log to stderr.
 #
 # Replaces the sequential `&&`-chain in package.json's `verify` script.
@@ -14,6 +14,8 @@
 #
 # Env overrides:
 #   GBRAIN_VERIFY_TIMEOUT       per-check wallclock cap, seconds (default 120)
+#   GBRAIN_VERIFY_MAX_PARALLEL  bounded worker count (default: detected CPUs,
+#                               capped at 8)
 #   GBRAIN_VERIFY_LOG_DIR       where to write per-check logs (default tempdir)
 #
 # Exit codes:
@@ -34,7 +36,12 @@ cd "$(dirname "$0")/.."
 # the line — the parallel runner doesn't care about count.
 # ──────────────────────────────────────────────────────────────────────────
 CHECKS=(
+  # This is intentionally first and runs synchronously. It regenerates tracked
+  # admin/release artifacts; every other check must see the same generated
+  # state instead of racing that build.
+  "check:admin-build"
   "check:repository-hygiene"
+  "check:version-sync"
   "check:privacy"
   "check:proposal-pii"
   "check:test-names"
@@ -44,7 +51,6 @@ CHECKS=(
   "check:progress"
   "check:test-isolation"
   "check:wasm"
-  "check:admin-build"
   "check:admin-scope-drift"
   "check:cli-exec"
   "check:system-of-record"
@@ -60,9 +66,16 @@ CHECKS=(
   "check:conversation-parser"
   "check:resolver"
   "check:source-scope-onboard"
+  "check:no-legacy-getconnection"
+  "check:newlines"
+  "check:exports-count"
+  "check:pagetype-exhaustive"
+  "check:pg-url-redaction"
   "check:no-double-retry"
   "check:batch-audit-site"
   "check:worker-lock-renewal-shape"
+  "check:guard-self-test"
+  "check:pmbrain-env"
   "typecheck"
 )
 
@@ -84,6 +97,26 @@ if [ "$#" -gt 0 ] && [ "${1:-}" != "" ]; then
 fi
 
 TIMEOUT="${GBRAIN_VERIFY_TIMEOUT:-120}"
+if ! printf '%s' "$TIMEOUT" | grep -qE '^[0-9]+$' || [ "$TIMEOUT" -lt 1 ]; then
+  echo "ERROR: GBRAIN_VERIFY_TIMEOUT must be a positive integer" >&2
+  exit 2
+fi
+
+detect_cpus() {
+  if command -v nproc >/dev/null 2>&1; then nproc; return; fi
+  if command -v sysctl >/dev/null 2>&1; then
+    cpus=$(sysctl -n hw.ncpu 2>/dev/null || true)
+    [ -n "$cpus" ] && echo "$cpus" && return
+  fi
+  echo 4
+}
+
+MAX_PARALLEL="${GBRAIN_VERIFY_MAX_PARALLEL:-$(detect_cpus)}"
+if ! printf '%s' "$MAX_PARALLEL" | grep -qE '^[0-9]+$' || [ "$MAX_PARALLEL" -lt 1 ]; then
+  echo "ERROR: GBRAIN_VERIFY_MAX_PARALLEL must be a positive integer" >&2
+  exit 2
+fi
+if [ "$MAX_PARALLEL" -gt 8 ]; then MAX_PARALLEL=8; fi
 
 # Per-check temp dir. Each check gets its own subdir so writes can't race
 # on shared scratch state (the checks themselves are read-only — they grep
@@ -105,7 +138,7 @@ elif command -v timeout >/dev/null 2>&1; then TIMEOUT_BIN="timeout"
 fi
 
 START_TS=$(date +%s)
-echo "[verify-parallel] running ${#CHECKS[@]} checks in parallel (timeout=${TIMEOUT}s, logs=$LOG_DIR)" >&2
+echo "[verify-parallel] running ${#CHECKS[@]} checks (max-parallel=${MAX_PARALLEL}, timeout=${TIMEOUT}s, logs=$LOG_DIR)" >&2
 
 # ──────────────────────────────────────────────────────────────────────────
 # Spawn one background process per check. Each child captures its own exit
@@ -117,28 +150,46 @@ echo "[verify-parallel] running ${#CHECKS[@]} checks in parallel (timeout=${TIME
 # ──────────────────────────────────────────────────────────────────────────
 PIDS=()
 SAFE_NAMES=()
+
+run_check() {
+  local c="$1" log_file="$2" exit_file="$3" rc
+  if [ -n "$TIMEOUT_BIN" ]; then
+    "$TIMEOUT_BIN" "${TIMEOUT}s" bun run "$c" > "$log_file" 2>&1
+    rc=$?
+  else
+    bun run "$c" > "$log_file" 2>&1 &
+    pid=$!
+    ( sleep "$TIMEOUT" && kill -TERM "$pid" 2>/dev/null && \
+      sleep 5 && kill -KILL "$pid" 2>/dev/null ) &
+    cap_pid=$!
+    wait "$pid" 2>/dev/null
+    rc=$?
+    # Kill the watchdog and its child sleep process. Otherwise a completed
+    # check can leave a timer behind that wakes during a later verify run.
+    kill "$cap_pid" 2>/dev/null || true
+    pkill -P "$cap_pid" 2>/dev/null || true
+    wait "$cap_pid" 2>/dev/null || true
+  fi
+  echo "$rc" > "$exit_file"
+  return "$rc"
+}
+
 for c in "${CHECKS[@]}"; do
   safe="${c//:/_}"
   SAFE_NAMES+=("$safe")
   LOG_FILE="$LOG_DIR/$safe.log"
   EXIT_FILE="$LOG_DIR/$safe.exit"
-  (
-    if [ -n "$TIMEOUT_BIN" ]; then
-      "$TIMEOUT_BIN" "${TIMEOUT}s" bun run "$c" > "$LOG_FILE" 2>&1
-      rc=$?
-    else
-      bun run "$c" > "$LOG_FILE" 2>&1 &
-      pid=$!
-      ( sleep "$TIMEOUT" && kill -TERM "$pid" 2>/dev/null && \
-        sleep 5 && kill -KILL "$pid" 2>/dev/null ) &
-      cap_pid=$!
-      wait "$pid" 2>/dev/null
-      rc=$?
-      kill "$cap_pid" 2>/dev/null
-      wait "$cap_pid" 2>/dev/null || true
-    fi
-    echo "$rc" > "$EXIT_FILE"
-  ) &
+
+  if [ "$c" = "check:admin-build" ]; then
+    echo "[verify-parallel] running generated-artifact gate before parallel checks" >&2
+    run_check "$c" "$LOG_FILE" "$EXIT_FILE" || true
+    continue
+  fi
+
+  while [ "$(jobs -rp | wc -l | tr -d ' ')" -ge "$MAX_PARALLEL" ]; do
+    sleep 0.1
+  done
+  (run_check "$c" "$LOG_FILE" "$EXIT_FILE" || true) &
   PIDS+=($!)
 done
 

@@ -16,7 +16,7 @@ function baseEnv(): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) {
     if (value === undefined) continue;
-    if (key === 'DATABASE_URL' || key === 'GBRAIN_DATABASE_URL' || key === 'GBRAIN_TEST_ALLOW_DATABASE_URL') continue;
+    if (key === 'DATABASE_URL' || key === 'GBRAIN_DATABASE_URL' || key === 'PMBRAIN_DATABASE_URL' || key === 'GBRAIN_TEST_ALLOW_DATABASE_URL') continue;
     env[key] = value;
   }
   return env;
@@ -49,14 +49,22 @@ describe('database-url-guard-preload', () => {
     expect(result.stderr).toContain('GBRAIN_DATABASE_URL');
   }, 30_000);
 
-  test('names both ambient variables when both are set', () => {
+  test('refuses an ambient PMBRAIN_DATABASE_URL', () => {
+    const result = runProbe({ PMBRAIN_DATABASE_URL: 'postgresql://localhost:5434/gbrain' });
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toContain(GUARD_MARKER);
+    expect(result.stderr).toContain('PMBRAIN_DATABASE_URL');
+  }, 30_000);
+
+  test('names all ambient variables when all are set', () => {
     const result = runProbe({
       DATABASE_URL: 'postgresql://localhost:5434/gbrain',
       GBRAIN_DATABASE_URL: 'postgresql://localhost:5434/gbrain',
+      PMBRAIN_DATABASE_URL: 'postgresql://localhost:5434/gbrain',
     });
     expect(result.exitCode).not.toBe(0);
     expect(result.stderr).toContain(GUARD_MARKER);
-    expect(result.stderr).toContain('DATABASE_URL and GBRAIN_DATABASE_URL are set');
+    expect(result.stderr).toContain('DATABASE_URL and GBRAIN_DATABASE_URL and PMBRAIN_DATABASE_URL are set');
   }, 30_000);
 
   test('allows the explicit wrapper opt-in', () => {
@@ -84,7 +92,7 @@ describe('database-url-guard-preload', () => {
   }, 30_000);
 
   test('treats empty-string variables as unset', () => {
-    const result = runProbe({ DATABASE_URL: '', GBRAIN_DATABASE_URL: '' });
+    const result = runProbe({ DATABASE_URL: '', GBRAIN_DATABASE_URL: '', PMBRAIN_DATABASE_URL: '' });
     expect(result.stderr).not.toContain(GUARD_MARKER);
     expect(result.exitCode).toBe(0);
   }, 30_000);

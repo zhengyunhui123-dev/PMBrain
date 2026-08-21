@@ -18,6 +18,12 @@ set -euo pipefail
 
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 cd "$ROOT"
+SCAN_ROOT="${GBRAIN_GUARD_ROOT:-src}"
+if [ -x /usr/bin/find ]; then
+  FIND_BIN=/usr/bin/find
+else
+  FIND_BIN=find
+fi
 
 # Match: withRetry(...) wrapping any of the 3 engine batch methods.
 # The greedy `.*` between `withRetry(` and `engine.` covers both the
@@ -25,10 +31,10 @@ cd "$ROOT"
 # Multi-line wraps are caught by `grep -E` per file (line-wise) for the
 # common single-line case; multi-line wraps still get caught by a separate
 # multi-line pass below.
-PATTERN='withRetry\([^)]*engine\.(addLinksBatch|addTimelineEntriesBatch|upsertChunks)'
+PATTERN='withRetry\(.*engine\.(addLinksBatch|addTimelineEntriesBatch|upsertChunks)'
 
 # Single-line scan (covers ~95% of real cases).
-if grep -rEn "$PATTERN" src/ --include='*.ts' 2>/dev/null; then
+if grep -rEn "$PATTERN" "$SCAN_ROOT" --include='*.ts' 2>/dev/null; then
   echo
   echo "ERROR: Found withRetry(...engine.{addLinksBatch|addTimelineEntriesBatch|upsertChunks})"
   echo "       pattern in src/."
@@ -48,16 +54,26 @@ if grep -rEn "$PATTERN" src/ --include='*.ts' 2>/dev/null; then
 fi
 
 # Multi-line scan: a withRetry( on one line and the engine call on the next
-# few. Bounded to 3-line window so we don't flag distant unrelated calls.
-# Uses pcregrep if available, else falls back to a simple awk window.
-if command -v pcregrep >/dev/null 2>&1; then
-  if pcregrep -r -M -n --include='\.ts$' \
-    'withRetry\([^)]*\n\s*\(?[^)]*=>\s*engine\.(addLinksBatch|addTimelineEntriesBatch|upsertChunks)' \
-    src/ 2>/dev/null; then
-    echo
-    echo "ERROR: Multi-line withRetry(...engine.batch...) wrap found in src/. See above."
-    exit 1
-  fi
+# few. Bounded to a four-line window so we don't flag distant unrelated calls.
+# Use a portable awk pass consistently; pcregrep is not present on many
+# Windows Git Bash installations and must not control whether this guard runs.
+if ! command -v awk >/dev/null 2>&1; then
+  echo "ERROR: awk is unavailable for multiline retry guard" >&2
+  exit 1
+fi
+if "$FIND_BIN" "$SCAN_ROOT" -type f -name '*.ts' -print0 | xargs -0 awk '
+  FNR == 1 { pending=0 }
+  /withRetry[[:space:]]*\(/ { pending=4 }
+  pending > 0 && /engine\.(addLinksBatch|addTimelineEntriesBatch|upsertChunks)/ {
+    print FILENAME ":" FNR ": multiline withRetry(...engine.batch...) wrap found"
+    found=1
+  }
+  pending > 0 { pending-- }
+  END { exit found ? 0 : 1 }
+' 2>/dev/null; then
+  echo
+  echo "ERROR: Multi-line withRetry(...engine.batch...) wrap found in $SCAN_ROOT. See above."
+  exit 1
 fi
 
-echo "OK: no withRetry(...engine.batch...) double-retry patterns in src/"
+echo "OK: no withRetry(...engine.batch...) double-retry patterns in $SCAN_ROOT/"

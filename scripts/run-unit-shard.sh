@@ -17,7 +17,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 # Unit tests are PGLite/hermetic. Never let an ambient Postgres URL reach Bun.
-unset DATABASE_URL GBRAIN_DATABASE_URL
+unset DATABASE_URL GBRAIN_DATABASE_URL PMBRAIN_DATABASE_URL GBRAIN_TEST_ALLOW_DATABASE_URL
 
 # --max-concurrency=N is forwarded to `bun test`. v0.26.4: invoked by
 # run-unit-parallel.sh; safe to call without (defaults to bun's default cap).
