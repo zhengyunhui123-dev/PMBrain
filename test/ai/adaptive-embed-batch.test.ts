@@ -84,6 +84,31 @@ function configureGoogle(): void {
   });
 }
 
+function configureCustomOpenAI(modelId: string, dimensions = 1024): void {
+  configureGateway({
+    embedding_model: `custom-openai:${modelId}`,
+    embedding_dimensions: dimensions,
+    env: {},
+    base_urls: { 'custom-openai': 'http://127.0.0.1:8000/v1' },
+  });
+}
+
+function configureZhipu(): void {
+  configureGateway({
+    embedding_model: 'zhipu:embedding-3',
+    embedding_dimensions: 1024,
+    env: { ZHIPUAI_API_KEY: 'fake' },
+  });
+}
+
+function configureDashscope(modelId: string): void {
+  configureGateway({
+    embedding_model: `dashscope:${modelId}`,
+    embedding_dimensions: 1024,
+    env: { DASHSCOPE_API_KEY: 'fake' },
+  });
+}
+
 // --------- 1. Pure helpers ---------
 
 describe('splitByTokenBudget (pure helper)', () => {
@@ -293,6 +318,93 @@ describe('embed() OpenAI fast path (no max_batch_tokens)', () => {
     await embed(['x', 'y']);
     expect(openaiStub).toHaveBeenCalledTimes(1);
     expect(__getShrinkStateForTests('voyage')).toBeUndefined();
+  });
+});
+
+// --------- 5b. Provider/model item-count limits ---------
+
+describe('embed() provider/model item-count limits', () => {
+  beforeEach(() => resetGateway());
+  afterEach(() => __setEmbedTransportForTests(null));
+
+  test('custom-openai qwen3.7 splits a document with more than 20 chunks and preserves order', async () => {
+    configureCustomOpenAI('qwen3.7-text-embedding');
+
+    const calls: string[][] = [];
+    const stub = mock(async ({ values }: { values: string[] }) => {
+      calls.push([...values]);
+      return fakeEmbeddings(values, 1024);
+    });
+    __setEmbedTransportForTests(stub as any);
+
+    const texts = Array.from({ length: 45 }, (_, i) => `chunk-${i}`);
+    const result = await embed(texts);
+
+    expect(calls.map(values => values.length)).toEqual([20, 20, 5]);
+    expect(calls.flat()).toEqual(texts);
+    expect(result).toHaveLength(texts.length);
+  });
+
+  test('dashscope qwen3.7 applies the same 20-item limit through the native recipe', async () => {
+    configureDashscope('qwen3.7-text-embedding');
+    const callLengths: number[] = [];
+    const stub = mock(async ({ values }: { values: string[] }) => {
+      callLengths.push(values.length);
+      return fakeEmbeddings(values, 1024);
+    });
+    __setEmbedTransportForTests(stub as any);
+
+    await embed(Array.from({ length: 21 }, (_, i) => `chunk-${i}`));
+
+    expect(callLengths).toEqual([20, 1]);
+  });
+
+  test.each([
+    ['text-embedding-v4', 10],
+    ['text-embedding-v3', 10],
+    ['text-embedding-v2', 25],
+    ['text-embedding-v1', 25],
+  ])('custom-openai %s honors the Alibaba maximum row count of %d', async (modelId, limit) => {
+    configureCustomOpenAI(modelId as string);
+    const callLengths: number[] = [];
+    const stub = mock(async ({ values }: { values: string[] }) => {
+      callLengths.push(values.length);
+      return fakeEmbeddings(values, 1024);
+    });
+    __setEmbedTransportForTests(stub as any);
+
+    const texts = Array.from({ length: (limit as number) + 1 }, (_, i) => `chunk-${i}`);
+    await embed(texts);
+
+    expect(callLengths).toEqual([limit, 1]);
+  });
+
+  test('zhipu embedding-3 honors its official 64-item array limit', async () => {
+    configureZhipu();
+    const callLengths: number[] = [];
+    const stub = mock(async ({ values }: { values: string[] }) => {
+      callLengths.push(values.length);
+      return fakeEmbeddings(values, 1024);
+    });
+    __setEmbedTransportForTests(stub as any);
+
+    await embed(Array.from({ length: 65 }, (_, i) => `chunk-${i}`));
+
+    expect(callLengths).toEqual([64, 1]);
+  });
+
+  test('custom-openai embedding-3 keeps the Zhipu limit when routed through a custom endpoint', async () => {
+    configureCustomOpenAI('embedding-3');
+    const callLengths: number[] = [];
+    const stub = mock(async ({ values }: { values: string[] }) => {
+      callLengths.push(values.length);
+      return fakeEmbeddings(values, 1024);
+    });
+    __setEmbedTransportForTests(stub as any);
+
+    await embed(Array.from({ length: 65 }, (_, i) => `chunk-${i}`));
+
+    expect(callLengths).toEqual([64, 1]);
   });
 });
 

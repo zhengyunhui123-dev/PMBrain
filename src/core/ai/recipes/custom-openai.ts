@@ -24,6 +24,16 @@ export const customOpenAI: Recipe = {
       user_provided_models: true,
       default_dims: 0,
       no_batch_cap: true,
+      // Preserve known upstream row limits even when users add Alibaba Model
+      // Studio or Zhipu through PMBrain's generic OpenAI-compatible provider.
+      model_max_batch_items: {
+        'qwen3.7-text-embedding': 20,
+        'text-embedding-v4': 10,
+        'text-embedding-v3': 10,
+        'text-embedding-v2': 25,
+        'text-embedding-v1': 25,
+        'embedding-3': 64,
+      },
     },
     expansion: {
       models: [],

@@ -2,8 +2,8 @@ import type { Recipe } from '../types.ts';
 
 /**
  * Alibaba DashScope (灵积). OpenAI-compatible /embeddings endpoint at
- * dashscope-intl.aliyuncs.com. Hosts text-embedding-v2 (older) and
- * text-embedding-v3 (current; Matryoshka-aware up to 1024 dims).
+ * dashscope-intl.aliyuncs.com. Hosts qwen3.7-text-embedding,
+ * text-embedding-v4, and the earlier text-embedding-v2/v3 models.
  *
  * Reference: https://help.aliyun.com/zh/model-studio/getting-started/
  *
@@ -24,7 +24,12 @@ export const dashscope: Recipe = {
   },
   touchpoints: {
     embedding: {
-      models: ['text-embedding-v3', 'text-embedding-v2'],
+      models: [
+        'text-embedding-v3',
+        'text-embedding-v2',
+        'qwen3.7-text-embedding',
+        'text-embedding-v4',
+      ],
       default_dims: 1024,
       dims_options: [64, 128, 256, 512, 768, 1024],
       // Alibaba doesn't publish a hard batch-token cap for the OpenAI-compat
@@ -35,6 +40,16 @@ export const dashscope: Recipe = {
       // closer to Voyage density than OpenAI tiktoken for CJK-dominant
       // content. Conservative chars_per_token=2 leaves headroom.
       chars_per_token: 2,
+      // Alibaba Model Studio synchronous embeddings accept different maximum
+      // row counts by model family. The gateway applies this independently of
+      // the token budget and concatenates all sub-batches in input order.
+      model_max_batch_items: {
+        'qwen3.7-text-embedding': 20,
+        'text-embedding-v4': 10,
+        'text-embedding-v3': 10,
+        'text-embedding-v2': 25,
+        'text-embedding-v1': 25,
+      },
     },
   },
   setup_hint:

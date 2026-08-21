@@ -5,6 +5,7 @@ import {
   configureGateway,
   defaultResolveAuth,
   detectEmbeddingDimensions,
+  embed,
   resetGateway,
 } from '../../src/core/ai/gateway.ts';
 import { getRecipe } from '../../src/core/ai/recipes/index.ts';
@@ -19,6 +20,8 @@ describe('custom-openai recipe', () => {
     expect(recipe!.base_url_default).toBeUndefined();
     expect(recipe!.touchpoints.embedding?.user_provided_models).toBe(true);
     expect(recipe!.touchpoints.embedding?.default_dims).toBe(0);
+    expect(recipe!.touchpoints.embedding?.model_max_batch_items?.['qwen3.7-text-embedding']).toBe(20);
+    expect(recipe!.touchpoints.embedding?.model_max_batch_items?.['embedding-3']).toBe(64);
     expect(recipe!.touchpoints.expansion).toBeDefined();
     expect(recipe!.touchpoints.chat?.supports_tools).toBe(true);
   });
@@ -112,6 +115,50 @@ describe('custom-openai recipe', () => {
       expect(requestPath).toBe('/v1/embeddings');
       expect(authorization).toBe('Bearer embedding-key');
     } finally {
+      server.stop(true);
+    }
+  });
+
+  test('sends qwen3.7 documents over real HTTP in batches of 20 and completes all chunks', async () => {
+    const requestSizes: number[] = [];
+    const receivedTexts: string[] = [];
+    const server = Bun.serve({
+      port: 0,
+      async fetch(request) {
+        const body = await request.json() as { input?: string | string[] };
+        const values = Array.isArray(body.input) ? body.input : [body.input ?? ''];
+        requestSizes.push(values.length);
+        receivedTexts.push(...values);
+        return Response.json({
+          object: 'list',
+          data: values.map((_, index) => ({
+            object: 'embedding',
+            index,
+            embedding: [index, 0.1, 0.2],
+          })),
+          model: 'qwen3.7-text-embedding',
+          usage: { prompt_tokens: values.length, total_tokens: values.length },
+        });
+      },
+    });
+
+    try {
+      const origin = server.url.toString().replace(/\/$/, '');
+      configureGateway({
+        embedding_model: 'custom-openai:qwen3.7-text-embedding',
+        embedding_dimensions: 3,
+        env: {},
+        touchpoint_base_urls: { 'custom-openai': { embedding: `${origin}/v1` } },
+      });
+      const texts = Array.from({ length: 45 }, (_, index) => `chunk-${index}`);
+
+      const vectors = await embed(texts, { maxRetries: 0 });
+
+      expect(requestSizes).toEqual([20, 20, 5]);
+      expect(receivedTexts).toEqual(texts);
+      expect(vectors).toHaveLength(45);
+    } finally {
+      resetGateway();
       server.stop(true);
     }
   });

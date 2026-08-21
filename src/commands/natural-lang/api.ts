@@ -265,6 +265,7 @@ export function buildDreamCommand(input: {
   phase?: CyclePhase | 'all' | string;
   preset?: 'full' | 'meeting' | 'quick';
   sourceId?: string;
+  allSources?: boolean;
   maxPages?: number;
   drainProposals?: boolean;
   windowSeconds?: number;
@@ -278,7 +279,10 @@ export function buildDreamCommand(input: {
   const prefix = resolveCliEntry();
   const cmd = [...prefix, 'dream'];
   if (input.phase && input.preset) throw new Error('Dream phase and preset are mutually exclusive');
+  if (input.allSources && input.sourceId?.trim()) throw new Error('Dream allSources and sourceId are mutually exclusive');
+  if (input.allSources && input.preset !== 'quick') throw new Error('Dream allSources requires the quick preset');
   if (input.preset) cmd.push('--preset', input.preset);
+  if (input.allSources) cmd.push('--all-sources');
   const phase = input.phase === 'all' ? undefined : (input.phase || undefined);
   if (phase) {
     if (!(ALL_PHASES as readonly string[]).includes(phase)) throw new Error(`Unsupported dream phase: ${phase}`);
@@ -313,6 +317,7 @@ export async function startDreamRun(input: {
   phase?: CyclePhase | 'all' | string;
   preset?: 'full' | 'meeting' | 'quick';
   sourceId?: string;
+  allSources?: boolean;
   maxPages?: number;
   drainProposals?: boolean;
   windowSeconds?: number;

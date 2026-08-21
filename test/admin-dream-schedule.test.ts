@@ -43,6 +43,7 @@ describe('Admin scheduled one-click organization', () => {
     expect(serveSource).toContain("engine.setConfig(ADMIN_DREAM_SCHEDULE_ENABLED_KEY");
     // Must match manual「快速维护」: startDreamRun({ preset: 'quick', ... }), not full/depth.
     expect(serveSource).toContain("preset: 'quick'");
+    expect(serveSource).toContain('allSources: true');
     expect(dreamSource).toContain("runMode === 'quick'");
     expect(dreamSource).toContain("? 'quick'");
     expect(serveSource).not.toMatch(/checkScheduledDream[\s\S]*?preset:\s*'full'/);

@@ -403,6 +403,8 @@ export interface CycleOpts {
   brainDir: string | null;
   /** Whether sync should run `git pull`. Default false (cron-safe). */
   pull?: boolean;
+  /** Include committed Office/PDF files in the sync phase. Default false. */
+  includeOffice?: boolean;
   /**
    * Called between phases AND before runCycle returns. Awaited even
    * after phase failure. Hook exceptions are logged, never fatal.
@@ -977,6 +979,7 @@ async function runPhaseSync(
   dryRun: boolean,
   pull: boolean,
   willRunExtractPhase: boolean,
+  includeOffice: boolean,
 ): Promise<SyncPhaseResult> {
   try {
     const { performSync } = await import('../commands/sync.ts');
@@ -993,6 +996,7 @@ async function runPhaseSync(
       noExtract: willRunExtractPhase,      // dedupe ONLY when cycle's extract phase will also run.
                                            // If extract isn't scheduled (e.g. `gbrain dream --phase sync`),
                                            // sync's inline extract still runs to preserve prior behavior.
+      includeOffice,
     });
     const syncedCount = result.added + result.modified;
     return {
@@ -1693,7 +1697,14 @@ export async function runCycle(
       } else {
         progress.start('cycle.sync');
         syncAttempted = true;
-        const { result, duration_ms } = await timePhase(() => runPhaseSync(engine, brainDir, dryRun, pull, phases.includes('extract')));
+        const { result, duration_ms } = await timePhase(() => runPhaseSync(
+          engine,
+          brainDir,
+          dryRun,
+          pull,
+          phases.includes('extract'),
+          opts.includeOffice === true,
+        ));
         result.duration_ms = duration_ms;
         // Capture changed slugs for incremental extract.
         syncPagesAffected = (result as SyncPhaseResult).pagesAffected;

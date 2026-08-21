@@ -1180,23 +1180,24 @@ function instantiateEmbedding(recipe: Recipe, modelId: string, cfg: AIGatewayCon
 const MIN_SUB_BATCH = 1;
 
 /**
- * Embed many texts. Truncates to MAX_CHARS, then dispatches based on whether
- * the recipe declares a per-batch token budget.
+ * Embed many texts. Truncates to MAX_CHARS, then dispatches under both the
+ * recipe's token budget and its provider/model input-count ceiling.
  *
  * Flow:
  * ```
  * embed(texts)
  *   ├─ resolve recipe + model
  *   ├─ truncate each text to MAX_CHARS (8000)
- *   ├─ read recipe.touchpoints.embedding.{max_batch_tokens, chars_per_token, safety_factor}
+ *   ├─ read recipe.touchpoints.embedding token + item-count limits
  *   │
  *   ├─ if max_batch_tokens declared (Voyage path):
  *   │     budget = max_batch_tokens × shrinkState[recipe].factor (default = recipe.safety_factor)
  *   │     splitByTokenBudget(texts, budget, recipe.chars_per_token)
  *   │     for each sub-batch: embedSubBatch(...)
  *   │
- *   └─ else (OpenAI fast path):
- *         embedSubBatch(texts, ...) once  // no pre-split, no token-limit safety net
+ *   ├─ if max_batch_items/model_max_batch_items declared:
+ *   │     split every token batch again by input count
+ *   └─ dispatch all sub-batches in order
  *
  * embedSubBatch(texts, ...)
  *   ├─ try: _embedTransport(texts) → dim check → return Float32Array[]
@@ -1317,11 +1318,16 @@ export async function embed(texts: string[], opts?: EmbedOpts): Promise<Float32A
   const maxBatchTokens = embedding?.max_batch_tokens;
   const charsPerToken = embedding?.chars_per_token ?? DEFAULT_CHARS_PER_TOKEN;
 
-  // Pre-split is gated on max_batch_tokens. Recipes without it (e.g. OpenAI)
-  // ride the fast path: one embedMany call, no recursion safety net.
-  const batches = maxBatchTokens
+  // Token and item-count limits are independent. Start with token-budget
+  // batches, then split each result by the model's maximum input rows. This
+  // preserves source order and lets one document contain any number of chunks
+  // even when the provider accepts only a small list per HTTP request.
+  const tokenBatches = maxBatchTokens
     ? splitByTokenBudget(truncated, Math.floor(maxBatchTokens * effectiveSafetyFactor(recipe)), charsPerToken)
     : [truncated];
+  const maxBatchItems = embedding?.model_max_batch_items?.[modelId]
+    ?? embedding?.max_batch_items;
+  const batches = splitByItemLimit(tokenBatches, maxBatchItems);
 
   const allEmbeddings: Float32Array[] = [];
   let _embedThrew = false;
@@ -1431,6 +1437,19 @@ export function splitByTokenBudget(
   if (current.length > 0) batches.push(current);
 
   return batches;
+}
+
+/** Split existing batches by a positive per-request item ceiling. */
+function splitByItemLimit(batches: string[][], maxBatchItems?: number): string[][] {
+  if (!Number.isInteger(maxBatchItems) || (maxBatchItems ?? 0) <= 0) return batches;
+  const limit = maxBatchItems as number;
+  const limited: string[][] = [];
+  for (const batch of batches) {
+    for (let index = 0; index < batch.length; index += limit) {
+      limited.push(batch.slice(index, index + limit));
+    }
+  }
+  return limited;
 }
 
 /**

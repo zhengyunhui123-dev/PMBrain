@@ -366,6 +366,27 @@ function unique<T>(items: T[]): T[] {
   return [...new Set(items)];
 }
 
+async function findMissingTrackedOfficeFiles(
+  engine: BrainEngine,
+  repoPath: string,
+  sourceId: string | undefined,
+  strategy: SyncOpts['strategy'],
+): Promise<string[]> {
+  const trackedOfficeFiles = git(repoPath, ['ls-files'])
+    .split(/\r?\n/)
+    .filter(path => path.length > 0)
+    .filter(path => isOfficeFilePath(path) && isSyncable(path, { strategy, includeOffice: true }));
+  if (trackedOfficeFiles.length === 0) return [];
+
+  const pageOpts = sourceId ? { sourceId } : undefined;
+  const missing: string[] = [];
+  for (const path of trackedOfficeFiles) {
+    const slug = await resolveSlugByPathOrSourcePath(engine, path, sourceId);
+    if (!(await engine.getPage(slug, pageOpts))) missing.push(path);
+  }
+  return missing;
+}
+
 function buildDetachedWorkingTreeManifest(repoPath: string): SyncManifest {
   const manifest = buildSyncManifest(git(repoPath, ['diff', '--name-status', '-M', 'HEAD']));
   const untracked = git(repoPath, ['ls-files', '--others', '--exclude-standard'])
@@ -1113,6 +1134,20 @@ async function performSyncInner(engine: BrainEngine, opts: SyncOpts): Promise<Sy
   const currentVersion = String(CHUNKER_VERSION);
   const versionMismatch = storedVersion !== null && storedVersion !== currentVersion;
   const versionNeverSet = storedVersion === null && opts.sourceId !== undefined;
+  const syncOpts = (opts.strategy || opts.includeOffice)
+    ? { strategy: opts.strategy, includeOffice: opts.includeOffice }
+    : undefined;
+  // Older Quick Maintenance runs filtered Office/PDF but still advanced the
+  // Git bookmark. Reconcile committed document paths against the Source so a
+  // later fixed run can backfill them even when last_commit already equals
+  // HEAD. Only missing tracked documents join the incremental manifest; this
+  // avoids a full Source reimport on every Quick run.
+  const missingTrackedOfficeFiles = opts.includeOffice
+    ? await findMissingTrackedOfficeFiles(engine, repoPath, opts.sourceId, opts.strategy)
+    : [];
+  if (missingTrackedOfficeFiles.length > 0) {
+    slog(`[sync] backfilling ${missingTrackedOfficeFiles.length} committed Office/PDF file(s) missing from Source.`);
+  }
   const detachedWorkingTreeManifest = detachedHead ? buildDetachedWorkingTreeManifest(repoPath) : null;
   const hasDetachedWorkingTreeChanges = detachedWorkingTreeManifest !== null &&
     (detachedWorkingTreeManifest.added.length > 0 ||
@@ -1120,7 +1155,13 @@ async function performSyncInner(engine: BrainEngine, opts: SyncOpts): Promise<Sy
       detachedWorkingTreeManifest.deleted.length > 0 ||
       detachedWorkingTreeManifest.renamed.length > 0);
 
-  if (lastCommit === headCommit && !versionMismatch && !versionNeverSet && !hasDetachedWorkingTreeChanges) {
+  if (
+    lastCommit === headCommit
+    && !versionMismatch
+    && !versionNeverSet
+    && !hasDetachedWorkingTreeChanges
+    && missingTrackedOfficeFiles.length === 0
+  ) {
     return {
       status: 'up_to_date',
       fromCommit: lastCommit,
@@ -1145,6 +1186,7 @@ async function performSyncInner(engine: BrainEngine, opts: SyncOpts): Promise<Sy
   // Diff using git diff (net result, not per-commit)
   const diffOutput = git(repoPath, ['diff', '--name-status', '-M', `${lastCommit}..${headCommit}`]);
   const manifest = buildSyncManifest(diffOutput);
+  manifest.added = unique([...manifest.added, ...missingTrackedOfficeFiles]);
   if (detachedWorkingTreeManifest) {
     manifest.added = unique([...manifest.added, ...detachedWorkingTreeManifest.added]);
     manifest.modified = unique([...manifest.modified, ...detachedWorkingTreeManifest.modified]);
@@ -1153,9 +1195,6 @@ async function performSyncInner(engine: BrainEngine, opts: SyncOpts): Promise<Sy
   }
 
   // Filter to syncable files (strategy-aware)
-  const syncOpts = (opts.strategy || opts.includeOffice)
-    ? { strategy: opts.strategy, includeOffice: opts.includeOffice }
-    : undefined;
   const filtered: SyncManifest = {
     added: manifest.added.filter(p => isSyncable(p, syncOpts)),
     modified: manifest.modified.filter(p => isSyncable(p, syncOpts)),

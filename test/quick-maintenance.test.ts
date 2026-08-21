@@ -12,7 +12,9 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync, existsSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { execSync } from 'child_process';
+import JSZip from 'jszip';
 import { PGLiteEngine } from '../src/core/pglite-engine.ts';
+import { CHUNKER_VERSION } from '../src/core/chunkers/code.ts';
 import { resolveDreamPresetPhases, runDream } from '../src/commands/dream.ts';
 import {
   resolveQuickMaintenancePhases,
@@ -43,6 +45,42 @@ function makeGitRepo(): string {
 function commitAll(repo: string, message: string): void {
   execSync('git add -A', { cwd: repo, stdio: 'pipe' });
   execSync(`git commit -m "${message}"`, { cwd: repo, stdio: 'pipe' });
+}
+
+async function writeDocx(path: string, text: string): Promise<void> {
+  const zip = new JSZip();
+  zip.file(
+    'word/document.xml',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body><w:p><w:r><w:t>${text}</w:t></w:r></w:p></w:body>
+</w:document>`,
+  );
+  writeFileSync(path, await zip.generateAsync({ type: 'uint8array' }));
+}
+
+function writePdf(path: string, text: string): void {
+  const escaped = text.replace(/\\/g, '\\\\').replace(/\(/g, '\\(').replace(/\)/g, '\\)');
+  const objects = [
+    '1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n',
+    '2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n',
+    '3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>\nendobj\n',
+    '4 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n',
+    `5 0 obj\n<< /Length ${escaped.length + 44} >>\nstream\nBT /F1 24 Tf 72 720 Td (${escaped}) Tj ET\nendstream\nendobj\n`,
+  ];
+  let pdf = '%PDF-1.4\n';
+  const offsets = [0];
+  for (const object of objects) {
+    offsets.push(Buffer.byteLength(pdf));
+    pdf += object;
+  }
+  const xrefOffset = Buffer.byteLength(pdf);
+  pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+  for (const offset of offsets.slice(1)) {
+    pdf += `${String(offset).padStart(10, '0')} 00000 n \n`;
+  }
+  pdf += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF\n`;
+  writeFileSync(path, pdf);
 }
 
 function goodPerson(title: string, body = 'body'): string {
@@ -503,6 +541,61 @@ describe('runQuickMaintenance orchestration smoke', () => {
     expect(quickSource).not.toContain('QUICK_BY_MENTION_TIME_BUDGET_MS');
   });
 
+  test('quick maintenance syncs committed Office and PDF files for the selected Source', async () => {
+    await withTestHome(home, async () => {
+      repo = makeGitRepo();
+      mkdirSync(join(repo, 'docs'), { recursive: true });
+      await writeDocx(join(repo, 'docs', 'proposal.docx'), 'Outputs proposal milestone');
+      writePdf(join(repo, 'docs', 'report.pdf'), 'Outputs PDF risk report');
+      commitAll(repo, 'add committed documents');
+
+      const sourceId = 'outputs-office-sync';
+      await engine.executeRaw(
+        `INSERT INTO sources (id, name, local_path, config, created_at)
+         VALUES ($1, 'Outputs', $2, '{}'::jsonb, NOW())
+         ON CONFLICT (id) DO UPDATE SET local_path = EXCLUDED.local_path, archived = false`,
+        [sourceId, repo],
+      );
+      const headCommit = execSync('git rev-parse HEAD', { cwd: repo, encoding: 'utf8' }).trim();
+      // Reproduce the user's screenshot: an older Quick run filtered the
+      // documents but still bookmarked HEAD and last_sync_at, leaving 0 pages.
+      await engine.executeRaw(
+        `UPDATE sources
+         SET last_commit = $1, last_sync_at = NOW(), chunker_version = $2
+         WHERE id = $3`,
+        [headCommit, String(CHUNKER_VERSION), sourceId],
+      );
+
+      const report = await runQuickMaintenance(engine, {
+        brainDir: repo,
+        sourceId,
+        dryRun: false,
+        pull: false,
+      });
+
+      const sync = report.phases.find(phase => phase.phase === 'sync');
+      expect(sync?.status).toBe('ok');
+      expect(sync?.details.added).toBe(2);
+
+      const docx = await engine.getPage('docs/proposal.docx', { sourceId });
+      const pdf = await engine.getPage('docs/report.pdf', { sourceId });
+      expect(docx?.frontmatter.source_format).toBe('docx');
+      expect(docx?.compiled_truth).toContain('Outputs proposal milestone');
+      expect(pdf?.frontmatter.source_format).toBe('pdf');
+      expect(pdf?.compiled_truth).toContain('Outputs PDF risk report');
+
+      const secondReport = await runQuickMaintenance(engine, {
+        brainDir: repo,
+        sourceId,
+        dryRun: false,
+        pull: false,
+      });
+      const secondSync = secondReport.phases.find(phase => phase.phase === 'sync');
+      expect(secondSync?.details.added).toBe(0);
+      expect(secondSync?.details.modified).toBe(0);
+    });
+  }, 120_000);
+
   test('quick run keeps database maintenance working when the selected source local_path is stale', async () => {
     await withTestHome(home, async () => {
       const missingPath = join(home, 'moved-away-source');
@@ -559,4 +652,72 @@ describe('runQuickMaintenance orchestration smoke', () => {
       }
     });
   }, 120_000);
+});
+
+describe('Admin all-Source Quick Maintenance', () => {
+  let engine: PGLiteEngine;
+  let home: string;
+  const repos: string[] = [];
+
+  beforeAll(async () => {
+    home = mkdtempSync(join(tmpdir(), 'pmbrain-quick-all-home-'));
+    engine = new PGLiteEngine();
+    await engine.connect({});
+    await engine.initSchema();
+  }, 60_000);
+
+  afterAll(async () => {
+    await engine.disconnect();
+    for (const dir of repos) {
+      if (existsSync(dir)) rmSync(dir, { recursive: true, force: true });
+    }
+    if (home && existsSync(home)) rmSync(home, { recursive: true, force: true });
+  }, 60_000);
+
+  test('quick --all-sources syncs committed Office/PDF files from every registered Source', async () => {
+    await withTestHome(home, async () => {
+      const officeRepo = makeGitRepo();
+      const pdfRepo = makeGitRepo();
+      repos.push(officeRepo, pdfRepo);
+
+      mkdirSync(join(officeRepo, 'docs'), { recursive: true });
+      mkdirSync(join(pdfRepo, 'docs'), { recursive: true });
+      await writeDocx(join(officeRepo, 'docs', 'proposal.docx'), 'All Source Office milestone');
+      writePdf(join(pdfRepo, 'docs', 'report.pdf'), 'All Source PDF risk');
+      commitAll(officeRepo, 'add office document');
+      commitAll(pdfRepo, 'add pdf document');
+
+      await engine.executeRaw(
+        `INSERT INTO sources (id, name, local_path, config, created_at)
+         VALUES
+           ('quick-office', 'Quick Office', $1, '{"federated":true}'::jsonb, NOW()),
+           ('quick-pdf', 'Quick PDF', $2, '{"federated":true}'::jsonb, NOW())`,
+        [officeRepo, pdfRepo],
+      );
+
+      const exitSpy = spyOn(process, 'exit').mockImplementation(((code?: number) => {
+        throw new Error(`unexpected exit ${code}`);
+      }) as never);
+      const logSpy = spyOn(console, 'log').mockImplementation(() => {});
+      const errorSpy = spyOn(console, 'error').mockImplementation(() => {});
+      try {
+        const report = await runDream(engine, ['--preset', 'quick', '--all-sources', '--json']);
+        expect(report).toBeTruthy();
+        if (!report) return;
+
+        expect(report.status).not.toBe('failed');
+        expect(report.totals.pages_synced).toBe(2);
+        expect(await engine.getPage('docs/proposal.docx', { sourceId: 'quick-office' })).toBeTruthy();
+        expect(await engine.getPage('docs/report.pdf', { sourceId: 'quick-pdf' })).toBeTruthy();
+        expect(existsSync(join(officeRepo, 'skills'))).toBe(false);
+        expect(existsSync(join(pdfRepo, 'skills'))).toBe(false);
+        const sync = report.phases.find(phase => phase.phase === 'sync');
+        expect(sync?.details.sources_processed).toBe(3);
+      } finally {
+        exitSpy.mockRestore();
+        logSpy.mockRestore();
+        errorSpy.mockRestore();
+      }
+    });
+  }, 180_000);
 });

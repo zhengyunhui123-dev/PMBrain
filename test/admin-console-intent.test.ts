@@ -305,6 +305,19 @@ describe('admin console intent planning', () => {
     ]);
   });
 
+  test('Admin quick maintenance can explicitly target every registered Source', () => {
+    const command = buildDreamCommand({
+      preset: 'quick',
+      allSources: true,
+    });
+    expect(command.slice(3)).toEqual([
+      'dream',
+      '--preset',
+      'quick',
+      '--all-sources',
+    ]);
+  });
+
   test('source Git actions use scoped CLI commands without a sync import', () => {
     expect(buildSourceGitCommand('project-docs', 'init').slice(-4)).toEqual(['sources', 'git-init', 'project-docs', '--json']);
     expect(buildSourceGitCommand('project-docs', 'commit', '保存资料').slice(-6)).toEqual([

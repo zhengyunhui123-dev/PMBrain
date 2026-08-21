@@ -52,6 +52,20 @@ export interface EmbeddingTouchpoint {
    */
   max_batch_tokens?: number;
   /**
+   * Maximum number of input strings accepted by one embedding HTTP request.
+   * Use this when every model exposed by the recipe shares the same limit.
+   * The gateway combines this ceiling with `max_batch_tokens`, so a document
+   * with more chunks is sent as multiple ordered requests instead of failing.
+   */
+  max_batch_items?: number;
+  /**
+   * Per-model input-count ceilings for providers whose embedding models have
+   * different limits. This is also useful for a generic OpenAI-compatible
+   * recipe where a well-known upstream model keeps its native API limit.
+   * Exact model ids win over `max_batch_items`.
+   */
+  model_max_batch_items?: Record<string, number>;
+  /**
    * Expected character density for this provider's tokenizer (chars per
    * token). OpenAI tiktoken averages ~4 on English text; Voyage averages
    * ~1 on mixed content (code/JSON/CJK). Defaults to 4 if omitted.

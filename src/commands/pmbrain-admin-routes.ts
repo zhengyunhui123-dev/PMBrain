@@ -376,13 +376,12 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
     scheduledDreamStarting = true;
     const today = adminDreamScheduleDateKey(now);
     try {
-      const sourceId = await resolveMainSourceId(engine);
       // Same entry as Admin「快速维护」: dream --preset quick. No parallel organize pipeline.
       // Unattended runs keep a 120-minute safety timeout; manual quick has no default timeout.
       await engine.setConfig(ADMIN_DREAM_SCHEDULE_LAST_STARTED_DATE_KEY, today);
       const run = await startDreamRun({
         preset: 'quick',
-        sourceId,
+        allSources: true,
         timeoutMs: 120 * 60 * 1000,
       }, process.cwd(), runHooks);
       if (run.status !== 'running' && run.status !== 'queued') {
@@ -1056,6 +1055,7 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
         phase: typeof req.body?.phase === 'string' ? req.body.phase : undefined,
         preset: ['full', 'meeting', 'quick'].includes(req.body?.preset) ? req.body.preset : undefined,
         sourceId: typeof req.body?.sourceId === 'string' ? req.body.sourceId : undefined,
+        allSources: req.body?.allSources === true,
         maxPages,
         drainProposals: req.body?.drainProposals === true,
         windowSeconds: typeof req.body?.windowSeconds === 'number' ? req.body.windowSeconds : undefined,

@@ -1,5 +1,23 @@
 # Bug 修复台账
 
+## 2026-08-21 PMBrain 1.2.71 修复向量模型单次输入条数超限
+
+- 时间：2026-08-21
+- 版本号：PMBrain 1.2.71
+- 标题：按模型限制拆分向量化请求并支持超长切块列表
+- 描述：修复云端向量模型仅按 Token 预算拆批、未按接口最大输入条数拆批的问题。统一 Embedding Recipe 新增供应商级和模型级条数上限，网关同时应用 Token 与条数约束并按原顺序合并结果；`qwen3.7-text-embedding` 每次最多 20 条，阿里云 `text-embedding-v3/v4` 每次最多 10 条、`v1/v2` 每次最多 25 条，智谱 `embedding-3` 每次最多 64 条，同时覆盖 DashScope 原生 Recipe 与 `custom-openai` 接入；DashScope 新增 qwen3.7/v4 模型选择和向量维度透传。文档切块数量超过单次上限时会自动连续分批完成，不删除、不重建、不修改已有知识、原始资料或向量。
+- 是否完成：是
+- 最终结果：45 个切块使用 `custom-openai:qwen3.7-text-embedding` 已通过真实本地 OpenAI 兼容 HTTP 传输验证按 20、20、5 三次请求完成并保持原顺序；阿里云各代模型、DashScope qwen3.7 原生接入、智谱原生及自定义 OpenAI 接入的条数限制回归通过。向量网关、执行策略与 Recipe 契约定向测试 78/78 通过，根项目 TypeScript 类型检查与桌面 Sidecar 运行时验证通过；未调用真实付费向量接口，未执行 `bun run build:win`。
+
+## 2026-08-21 PMBrain 1.2.70 修复快速维护漏同步非主 Source 的 Office/PDF
+
+- 时间：2026-08-21
+- 版本号：PMBrain 1.2.70
+- 标题：快速维护同步全部启用 Source 中已提交的 Office/PDF
+- 描述：修复 Admin「开始快速维护」只维护主 Source，且 Quick Maintenance 未向现有 Git 同步能力传递 Office 文档开关的问题。现在一键快速维护会顺序处理全部已注册且启用的 Source，并同步其中的 DOCX、PDF、PPT、Excel 等现有支持格式；如果旧版本已将 `last_commit` 推进到当前 HEAD 但文档从未入库，会只回填 Git 已跟踪且数据库缺失的文档。保留普通 Cycle、裸 CLI Dream 和高级单 Source 维护的兼容范围，不修改 Source 原始文件、Wiki、已有知识或向量。
+- 是否完成：是
+- 最终结果：已增加隔离 PGLite 与真实临时 Git Source 回归，分别提交 DOCX/PDF 后执行一次全部 Source 快速维护，2 份文档均进入各自 Source，且未向 Source 目录写入系统 Skill 文件；另复现 `last_commit = HEAD`、已有 `last_sync_at`、页面为 0 的历史漏导状态，首次运行回填 2 份文档，第二次运行新增和更新均为 0。Quick Maintenance 18/18、Admin 契约 51/51、同步回归 61/61、Office 导入 9/9、目录遍历 9/9、TypeScript 类型检查均通过，Admin 最新静态资源、内嵌资源与 Sidecar 运行时已生成并验证。
+
 ## 2026-08-20 PMBrain 1.2.69 修复 run-verify-parallel CI 契约测试的脆弱文本匹配
 
 - 时间：2026-08-20
