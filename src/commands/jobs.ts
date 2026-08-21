@@ -1475,11 +1475,25 @@ export async function registerBuiltinHandlers(worker: MinionWorker, engine: Brai
 
     // Allow callers to select phases via job data (e.g. skip embed for
     // fast cycles). Validates against ALL_PHASES to prevent injection.
-    const { ALL_PHASES } = await import('../core/cycle.ts');
+    const { ALL_PHASES, normalizeQueuedSourcePhases } = await import('../core/cycle.ts');
     const validPhases = new Set(ALL_PHASES);
     const requestedPhases = Array.isArray(job.data.phases)
       ? (job.data.phases as string[]).filter(p => validPhases.has(p as any))
       : undefined;
+    const normalized = normalizeQueuedSourcePhases(requestedPhases as any, sourceId);
+    if (normalized.phases !== undefined && normalized.phases.length === 0) {
+      return {
+        partial: false,
+        status: 'skipped',
+        report: {
+          reason: normalized.rejected.length > 0
+            ? 'all_phases_rejected_by_normalization'
+            : 'empty_phase_list',
+          ...(sourceId ? { source_id: sourceId } : {}),
+          phases_rejected_by_normalization: normalized.rejected,
+        },
+      };
+    }
 
     // Pull default: legacy `true` for back-compat; explicit boolean wins.
     const pull = typeof job.data.pull === 'boolean' ? job.data.pull : true;
@@ -1489,7 +1503,7 @@ export async function registerBuiltinHandlers(worker: MinionWorker, engine: Brai
       pull,
       signal: job.signal, // propagate abort so cycle bails on timeout/cancel
       ...(sourceId ? { sourceId } : {}),
-      ...(requestedPhases && requestedPhases.length > 0 ? { phases: requestedPhases as any } : {}),
+      ...(normalized.phases !== undefined ? { phases: normalized.phases as any } : {}),
       yieldBetweenPhases: async () => {
         // Yield to the event loop so worker lock-renewal can fire.
         await new Promise<void>(r => setImmediate(r));
@@ -1499,8 +1513,84 @@ export async function registerBuiltinHandlers(worker: MinionWorker, engine: Brai
     return {
       partial: report.status === 'partial' || report.status === 'failed',
       status: report.status,
+      report: normalized.rejected.length > 0
+        ? { ...report, phases_rejected_by_normalization: normalized.rejected }
+        : report,
+    };
+  });
+
+  worker.register('autopilot-global-maintenance', async (job) => {
+    const {
+      LAST_GLOBAL_AT_KEY,
+      MAINTENANCE_PHASES,
+      runCycle,
+    } = await import('../core/cycle.ts');
+    const repoPath = typeof job.data.repoPath === 'string'
+      ? job.data.repoPath
+      : (await engine.getConfig('sync.repo_path')) ?? '.';
+    const allowed = new Set<string>(MAINTENANCE_PHASES);
+    const requested = Array.isArray(job.data.phases)
+      ? (job.data.phases as string[]).filter((phase) => allowed.has(phase))
+      : MAINTENANCE_PHASES;
+    const phases = requested.length > 0 ? requested : MAINTENANCE_PHASES;
+    const report = await runCycle(engine, {
+      brainDir: repoPath,
+      phases: phases as any,
+      signal: job.signal,
+      yieldBetweenPhases: async () => {
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      },
+    });
+    if (report.status === 'ok' || report.status === 'clean' || report.status === 'partial') {
+      await engine.setConfig(LAST_GLOBAL_AT_KEY, new Date().toISOString());
+    }
+    return {
+      partial: report.status === 'partial' || report.status === 'failed',
+      status: report.status,
       report,
     };
+  });
+
+  worker.register('extract-atoms-drain', async (job) => {
+    const rawSourceId = job.data.source_id;
+    if (typeof rawSourceId !== 'string') {
+      throw new Error('extract-atoms-drain: source_id must be a string');
+    }
+    const { isValidSourceId } = await import('../core/source-id.ts');
+    if (!isValidSourceId(rawSourceId)) {
+      throw new Error(`extract-atoms-drain: invalid source_id: ${JSON.stringify(rawSourceId)}`);
+    }
+    const rows = await engine.executeRaw<{ archived: boolean | null; local_path: string | null }>(
+      'SELECT archived, local_path FROM sources WHERE id = $1',
+      [rawSourceId],
+    );
+    if (rows.length === 0) {
+      return { status: 'skipped', reason: 'source_not_found', source_id: rawSourceId };
+    }
+    if (rows[0].archived === true) {
+      return { status: 'skipped', reason: 'source_archived', source_id: rawSourceId };
+    }
+    const configuredWindow = Number(job.data.window_seconds);
+    const windowSeconds = Number.isFinite(configuredWindow)
+      ? Math.max(1, Math.min(3600, Math.floor(configuredWindow)))
+      : 300;
+    const { runExtractAtomsDrainForSource } = await import('../core/cycle/extract-atoms-drain.ts');
+    const report = await runExtractAtomsDrainForSource(engine, {
+      sourceId: rawSourceId,
+      windowSeconds,
+      brainDir: typeof job.data.repoPath === 'string'
+        ? job.data.repoPath
+        : rows[0].local_path ?? undefined,
+      onBatch: info => {
+        void job.updateProgress({ phase: 'extract_atoms', ...info });
+      },
+    });
+    if (report.status === 'provider_failure') {
+      throw new Error(
+        `extract-atoms-drain: every provider call failed; ${report.remaining ?? 'unknown'} pages remain`,
+      );
+    }
+    return report;
   });
 
   // Shell handler is always registered. Runtime env guard lives inside the

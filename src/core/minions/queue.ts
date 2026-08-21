@@ -132,7 +132,49 @@ export class MinionQueue {
         if (existing.length > 0) return rowToMinionJob(existing[0]);
       }
 
-      // 1b. Submission-time backpressure for high-frequency named jobs.
+      // 1b. Submission-time single-flight for named jobs. Unlike maxWaiting,
+      // maxPending also counts active jobs while their worker lock is live.
+      // Source scope is exact so one Source never suppresses another.
+      if (opts?.maxPending !== undefined) {
+        const maxPending = Math.max(1, Math.floor(opts.maxPending));
+        const backpressureQueue = opts?.queue ?? 'default';
+        const payload = data as Record<string, unknown> | undefined;
+        const sourceId = typeof payload?.sourceId === 'string'
+          ? payload.sourceId
+          : typeof payload?.source_id === 'string'
+            ? payload.source_id
+            : null;
+        await tx.executeRaw(
+          `SELECT pg_advisory_xact_lock(hashtext('minion_maxpending:' || $1 || ':' || $2 || ':' || coalesce($3, '')))`,
+          [jobName, backpressureQueue, sourceId]
+        );
+        const pendingCondition = `(status = 'waiting' OR (status = 'active' AND lock_until > now()))`;
+        const sourceCondition = `COALESCE(data->>'sourceId', data->>'source_id') IS NOT DISTINCT FROM $3`;
+        const pendingCountRows = await tx.executeRaw<{ count: string }>(
+          `SELECT count(*)::text AS count
+           FROM minion_jobs
+           WHERE name = $1 AND queue = $2 AND ${pendingCondition}
+             AND ${sourceCondition}`,
+          [jobName, backpressureQueue, sourceId]
+        );
+        const pendingCount = parseInt(pendingCountRows[0]?.count ?? '0', 10);
+        if (pendingCount >= maxPending) {
+          const existingPending = await tx.executeRaw<Record<string, unknown>>(
+            `SELECT * FROM minion_jobs
+             WHERE name = $1 AND queue = $2 AND ${pendingCondition}
+               AND ${sourceCondition}
+             ORDER BY CASE WHEN status = 'waiting' THEN 0 ELSE 1 END,
+                      created_at DESC, id DESC
+             LIMIT 1`,
+            [jobName, backpressureQueue, sourceId]
+          );
+          if (existingPending.length > 0) {
+            return rowToMinionJob(existingPending[0]);
+          }
+        }
+      }
+
+      // 1c. Submission-time backpressure for high-frequency named jobs.
       // If waiting jobs for this (name, queue) already hit maxWaiting, return
       // the most-recent waiting row instead of inserting another slot.
       //

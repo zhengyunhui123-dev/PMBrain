@@ -6,8 +6,8 @@
 //      pages already extracted by content hash — see "Idempotency" below).
 //   2. Dedup by content_hash; transcripts win on collision.
 //   3. Per work-item, ask Haiku for 1-3 atoms.
-//   4. Write each atom via engine.putPage(slug, page, {sourceId})
-//      with sourceId threaded so federated brains route correctly.
+//   4. Write each atom through importFromContent with sourceId threaded so
+//      federated brains route correctly and the page reaches content_chunks.
 //
 // Idempotency (D1 from /plan-eng-review):
 //   Each atom carries frontmatter.source_hash (16-char sha256 prefix).
@@ -48,8 +48,10 @@ import type { BrainEngine } from '../engine.ts';
 import type { PhaseResult } from '../cycle.ts';
 import type { GBrainConfig } from '../config.ts';
 import type { ProgressReporter } from '../progress.ts';
-import { chat as gatewayChat, withBudgetTracker } from '../ai/gateway.ts';
+import { chat as gatewayChat, isAvailable, withBudgetTracker } from '../ai/gateway.ts';
 import { BudgetExhausted, BudgetTracker } from '../budget/budget-tracker.ts';
+import { importFromContent } from '../import-file.ts';
+import { serializeMarkdown } from '../markdown.ts';
 import { dreamModelDetails, resolveDreamModel } from './model-routing.ts';
 import { writeReceipt } from '../extract/receipt-writer.ts';
 import { upsertExtractRollup } from '../extract/rollup-writer.ts';
@@ -238,6 +240,44 @@ export async function discoverExtractablePages(
 }
 
 /**
+ * Count the same Source-scoped page backlog discoverExtractablePages drains.
+ * Returns null on query failure so callers never misreport an unknown backlog
+ * as fully drained.
+ */
+export async function countExtractAtomsBacklog(
+  engine: BrainEngine,
+  sourceId: string,
+): Promise<number | null> {
+  try {
+    const rows = await engine.executeRaw<{ cnt: string | number }>(
+      `SELECT COUNT(*) AS cnt
+         FROM pages p
+        WHERE p.source_id = $1
+          AND p.type = ANY($2::text[])
+          AND p.deleted_at IS NULL
+          AND p.content_hash IS NOT NULL
+          AND COALESCE(p.frontmatter->>'imported_from', '') <> 'markdown-greenfield'
+          AND COALESCE(p.frontmatter->>'dream_generated', '') <> 'true'
+          AND length(COALESCE(p.compiled_truth, '')) >= $3
+          AND COALESCE(p.frontmatter->>'atoms_scan_hash', '') <> substring(p.content_hash from 1 for 16)
+          AND NOT EXISTS (
+            SELECT 1
+              FROM pages atom
+             WHERE atom.type = 'atom'
+               AND atom.source_id = $1
+               AND atom.frontmatter->>'source_hash' = substring(p.content_hash from 1 for 16)
+               AND atom.deleted_at IS NULL
+          )`,
+      [sourceId, EXTRACTABLE_PAGE_TYPES as unknown as string[], MIN_PAGE_CHARS_FOR_EXTRACTION],
+    );
+    return Number(rows[0]?.cnt ?? 0);
+  } catch (error) {
+    console.error(`[extract_atoms] backlog count failed: ${error instanceof Error ? error.message : String(error)}`);
+    return null;
+  }
+}
+
+/**
  * Batch source-hash idempotency check. Returns the set of contentHash16
  * values that already have an atom row for this source. One SQL
  * roundtrip; migration v104 adds the partial expression index that
@@ -356,24 +396,32 @@ export async function runPhaseExtractAtoms(
   }
 
   // 3. Dual-source merge: transcripts + pages, dedup by contentHash.
-  //    Transcripts win on collision (origin attribution stays with the
-  //    raw transcript file even if the same content was later imported
-  //    as a brain page).
+  //    Transcripts still win on collision for origin attribution, but the
+  //    final work order is page-first and interleaved 1:1. The page pool is
+  //    what countExtractAtomsBacklog measures, so this guarantees visible
+  //    drain progress even when the per-call budget only covers one item.
   type WorkItem =
     | { kind: 'transcript'; filePath: string; content: string; contentHash: string }
     | { kind: 'page'; slug: string; content: string; contentHash: string };
 
   const seenHashes = new Set<string>();
-  const work: WorkItem[] = [];
+  const transcriptItems: WorkItem[] = [];
   for (const t of transcriptsLive) {
     if (seenHashes.has(t.contentHash)) { duplicatesSkipped++; continue; }
     seenHashes.add(t.contentHash);
-    work.push({ kind: 'transcript', ...t });
+    transcriptItems.push({ kind: 'transcript', ...t });
   }
+  const pageItems: WorkItem[] = [];
   for (const p of pages) {
     if (seenHashes.has(p.contentHash)) { duplicatesSkipped++; continue; }
     seenHashes.add(p.contentHash);
-    work.push({ kind: 'page', ...p });
+    pageItems.push({ kind: 'page', ...p });
+  }
+  const work: WorkItem[] = [];
+  const maxPoolLen = Math.max(transcriptItems.length, pageItems.length);
+  for (let i = 0; i < maxPoolLen; i++) {
+    if (i < pageItems.length) work.push(pageItems[i]);
+    if (i < transcriptItems.length) work.push(transcriptItems[i]);
   }
 
   // Phase-level no-op: nothing to extract today.
@@ -495,32 +543,33 @@ export async function runPhaseExtractAtoms(
             item.kind === 'transcript'
               ? { source_path: item.filePath }
               : { source_slug: item.slug };
-          // v0.41.2.1 D9 #1 — thread sourceId through every putPage so
-          // atoms land in the source we discovered them from. Pre-fix
-          // the third arg was missing and atoms always wrote to 'default'.
-          await engine.putPage(
-            slug,
+          // The bare page-row upsert used here did not create content_chunks,
+          // leaving extracted atoms invisible to keyword and vector search.
+          // Serialize and reuse the canonical import path so Dream output has
+          // the same chunking/provenance behavior as every other page. The
+          // explicit type survives parsing, sourceId preserves isolation, and
+          // an unconfigured embedding provider remains a no-embed import.
+          const markdown = serializeMarkdown(
             {
-              title: atom.title,
-              type: 'atom',
-              compiled_truth: atom.body,
-              frontmatter: {
-                type: 'atom',
-                atom_type: atom.atom_type,
-                ...originFrontmatter,
-                source_hash: item.contentHash.slice(0, 16),
-                ...(atom.source_quote && { source_quote: atom.source_quote }),
-                ...(atom.lesson && { lesson: atom.lesson }),
-                ...(atom.concepts && atom.concepts.length > 0 && { concepts: atom.concepts }),
-                ...(atom.virality_score !== undefined && { virality_score: atom.virality_score }),
-                ...(atom.emotional_register && { emotional_register: atom.emotional_register }),
-                extracted_at: new Date().toISOString(),
-                extracted_by: 'extract_atoms-v0.41.2.1',
-              },
-              timeline: '',
+              atom_type: atom.atom_type,
+              ...originFrontmatter,
+              source_hash: item.contentHash.slice(0, 16),
+              ...(atom.source_quote && { source_quote: atom.source_quote }),
+              ...(atom.lesson && { lesson: atom.lesson }),
+              ...(atom.concepts && atom.concepts.length > 0 && { concepts: atom.concepts }),
+              ...(atom.virality_score !== undefined && { virality_score: atom.virality_score }),
+              ...(atom.emotional_register && { emotional_register: atom.emotional_register }),
+              extracted_at: new Date().toISOString(),
+              extracted_by: 'extract_atoms-v0.41.2.1',
             },
-            { sourceId },
+            atom.body,
+            '',
+            { type: 'atom', title: atom.title, tags: [] },
           );
+          await importFromContent(engine, slug, markdown, {
+            sourceId,
+            noEmbed: !isAvailable('embedding'),
+          });
           totalAtomsExtracted++;
         }
       } else {

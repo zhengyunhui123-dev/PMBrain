@@ -109,4 +109,29 @@ describe('autopilot-cycle handler source_id validation + archive recheck', () =>
     const result = await runHandlerOnce({ repoPath: brainDir, source_id: 'echo', pull: false, phases: ['lint'] });
     expect(['ok', 'clean']).toContain(result.status);
   });
+
+  test('legacy queued per-Source phases are normalized to freshness work', async () => {
+    await seedSource('legacy');
+    const result = await runHandlerOnce({
+      repoPath: brainDir,
+      source_id: 'legacy',
+      pull: false,
+      phases: ['lint', 'synthesize', 'patterns', 'embed'],
+    });
+    expect(result.report.phases.some((phase: any) => phase.phase === 'lint')).toBe(true);
+    expect(result.report.phases.some((phase: any) => phase.phase === 'synthesize')).toBe(false);
+    expect(result.report.phases_rejected_by_normalization).toEqual(['synthesize', 'patterns', 'embed']);
+  });
+
+  test('an all-rejected queued phase list becomes an honest no-op', async () => {
+    await seedSource('rejected');
+    const result = await runHandlerOnce({
+      repoPath: brainDir,
+      source_id: 'rejected',
+      pull: false,
+      phases: ['synthesize', 'patterns', 'embed'],
+    });
+    expect(result.status).toBe('skipped');
+    expect(result.report.reason).toBe('all_phases_rejected_by_normalization');
+  });
 });

@@ -326,13 +326,13 @@ describe('judgeSignificance', () => {
     expect(captured.model).toBe('claude-haiku-4-5-20251001');
   });
 
-  test('defaults to processing when judge returns unparseable text', async () => {
+  test('marks an unparseable judgment unreliable instead of defaulting or caching it', async () => {
     const client: JudgeClient = {
       create: async () => ({ content: [{ type: 'text', text: 'no json here' }] } as any),
     };
     const r = await judgeSignificance(client, makeTranscript());
-    expect(r.worth_processing).toBe(true);
-    expect(r.reasons[0]).toContain('defaulted to process');
+    expect(r.worth_processing).toBe(false);
+    expect(r.unreliable).toBe('unparseable');
   });
 });
 

@@ -548,10 +548,6 @@ export function describeDreamRun(run: ConsoleRun): {
     || (!report && /(?:cycle[_ ]already[_ ]running|could not acquire cycle lock)/i.test(text));
   const duration = report?.duration_ms ?? run.durationMs ?? 0;
   const phaseCount = report?.phases?.length ?? 0;
-  const pgliteWorkerSkipped = report?.phases?.filter(
-    phase => phase.status === 'skipped' && phase.details?.reason === 'pglite_worker_unavailable',
-  ) ?? [];
-  const pgliteAvailablePhaseCount = phaseCount - pgliteWorkerSkipped.length;
   const pagesWritten = Number(totals.synth_pages_written ?? synthDetails.pages_written ?? 0);
   const patternsWritten = Number(totals.patterns_written ?? 0);
   const pagesSynced = Number(totals.pages_synced ?? 0);
@@ -620,9 +616,6 @@ export function describeDreamRun(run: ConsoleRun): {
     `耗时约 ${(duration / 1000).toFixed(1)} 秒`,
     `run id: ${run.id}`,
   ];
-  if (pgliteWorkerSkipped.length > 0) {
-    details.push(`PGLite 阶段覆盖: ${pgliteAvailablePhaseCount}/${phaseCount}`);
-  }
   if (transcriptsDiscovered > 0) details.push(`发现 transcript: ${transcriptsDiscovered}`);
   if (transcriptsProcessed > 0 || synth) details.push(`进入综合处理: ${transcriptsProcessed}`);
   if (childOutcomes.length > 0) {
@@ -690,12 +683,6 @@ export function describeDreamRun(run: ConsoleRun): {
     diagnosis = isQuick
       ? '已完成的维护结果会保留；异常文件、待向量化和历史待补关联会分开列出，待继续处理不等于失败。'
       : '部分阶段已成功并保留实际成果，仍有未处理内容；下方会据实显示写入数量和失败原因。';
-  }
-
-  if (run.status === 'completed' && pgliteWorkerSkipped.length > 0 && report?.status !== 'failed') {
-    headline = `PGLite 深度整理已完成 ${pgliteAvailablePhaseCount}/${phaseCount} 个阶段`;
-    diagnosis = 'PGLite 已按当前能力范围完成整理；synthesize、patterns 依赖独立 Worker，本次已明确跳过，其余阶段继续执行。';
-    outputs.unshift(`已完成 ${pgliteAvailablePhaseCount}/${phaseCount} 个阶段；synthesize、patterns 未执行。`);
   }
 
   if (run.status === 'failed') {
@@ -1249,9 +1236,6 @@ export function phaseSummaryZh(phase: DreamPhaseReport): string {
   const baseAction = PHASE_USER_ACTIONS[phase.phase] ?? PHASE_LABELS[phase.phase] ?? '完成本阶段处理';
 
   if (phase.status === 'skipped') {
-    if (details.reason === 'pglite_worker_unavailable') {
-      return `PGLite 当前不支持独立 Worker，本轮已安全跳过“${phase.phase}”；其他阶段继续执行。`;
-    }
     if (/active pack does not declare/i.test(phase.summary ?? '')) {
       return `当前启用的 Skill 包未开放“${PHASE_LABELS[phase.phase] ?? phase.phase}”，本轮已安全跳过。`;
     }
@@ -1630,10 +1614,6 @@ function DreamRunPanel({
 
   const applyRunMode = (mode: DreamRunMode) => {
     setError('');
-    if (mode === 'meeting' && isPglite) {
-      setError('PGLite 暂不支持会议与会话整理；深度整理可继续执行其余 20/22 个阶段。');
-      return;
-    }
     setRunMode(mode);
     window.localStorage.setItem(DREAM_RUN_MODE_KEY, mode);
     if (mode === 'meeting') {
@@ -1774,9 +1754,7 @@ function DreamRunPanel({
     },
     cycle: {
       title: 'AI 深度整理知识库',
-      description: isPglite
-        ? 'PGLite 将执行 20/22 个阶段；synthesize、patterns 会明确跳过，其余阶段照常整理。需要普通模型。'
-        : '检查变化、补全关系、沉淀观点、合并重复信息，并更新搜索能力。需要普通模型。',
+      description: '检查变化、补全关系、沉淀观点、合并重复信息，并更新搜索能力。需要普通模型。',
       action: '开始 AI 深度整理',
     },
     meeting: {

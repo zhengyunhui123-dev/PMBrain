@@ -23,7 +23,9 @@ import type { PhaseResult } from '../cycle.ts';
 import type { ProgressReporter } from '../progress.ts';
 import { writeReceipt } from '../extract/receipt-writer.ts';
 import { upsertExtractRollup } from '../extract/rollup-writer.ts';
-import { chat as gatewayChat } from '../ai/gateway.ts';
+import { chat as gatewayChat, isAvailable } from '../ai/gateway.ts';
+import { importFromContent } from '../import-file.ts';
+import { serializeMarkdown } from '../markdown.ts';
 import { dreamModelDetails, resolveDreamModel } from './model-routing.ts';
 
 const DEFAULT_BUDGET_USD = 1.5;
@@ -231,12 +233,12 @@ export async function runPhaseSynthesizeConcepts(
     const title = group.conceptSlug.split('/').pop() ?? group.conceptSlug;
     const outputSlug = `concepts/${title}`;
     if (!opts.dryRun) {
-      await engine.putPage(outputSlug, {
-        title: title.replace(/-/g, ' '),
-        type: 'concept',
-        compiled_truth: narrative,
-        frontmatter: {
-          type: 'concept',
+      // Concept pages are user-facing Dream output and must participate in
+      // the same chunk/search pipeline as imported knowledge. A bare putPage
+      // only wrote the pages row, so reuse the canonical import path while
+      // retaining the existing global-source and relationship semantics.
+      const markdown = serializeMarkdown(
+        {
           tier: group.tier,
           mention_count: group.atomTitles.length,
           composite_score: group.atomTitles.length,
@@ -247,7 +249,12 @@ export async function runPhaseSynthesizeConcepts(
             source_id: ref.source_id,
           })),
         },
-        timeline: '',
+        narrative,
+        '',
+        { type: 'concept', title: title.replace(/-/g, ' '), tags: [] },
+      );
+      await importFromContent(engine, outputSlug, markdown, {
+        noEmbed: !isAvailable('embedding'),
       });
       const relationshipRows = group.atomRefs.flatMap(ref => [
         {

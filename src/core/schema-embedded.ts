@@ -123,6 +123,9 @@ CREATE TABLE IF NOT EXISTS pages (
   -- (NOT inside engine methods — internal callers must not pollute the
   -- signal). NULL = never retrieved (LSD prioritizes these first).
   last_retrieved_at     TIMESTAMPTZ,
+  -- PMBrain schema 115 / GBrain v0.42.7: link-extraction freshness watermark.
+  -- A page is stale when this is NULL, older than LINK_EXTRACTOR_VERSION_TS,
+  -- or older than updated_at. Powers \`pmbrain extract --stale\`.
   links_extracted_at    TIMESTAMPTZ,
   -- v0.40.3.0 contextual retrieval (renumbered from v81 to v90 on master
   -- merge). contextual_retrieval_mode is what tier the page was last embedded
@@ -249,7 +252,7 @@ CREATE INDEX IF NOT EXISTS pages_deleted_at_purge_idx
 -- would miss the NULL branch that LSD prioritizes (codex round 2 #6).
 CREATE INDEX IF NOT EXISTS pages_last_retrieved_at_idx
   ON pages (last_retrieved_at);
-DO $$
+DO \$\$
 BEGIN
   IF EXISTS (
     SELECT 1 FROM information_schema.columns
@@ -259,7 +262,7 @@ BEGIN
   ) THEN
     EXECUTE 'CREATE INDEX IF NOT EXISTS pages_links_extracted_at_idx ON pages (source_id, links_extracted_at)';
   END IF;
-END $$;
+END \$\$;
 -- v0.29.1: expression index used by since/until date-range filters that read
 -- COALESCE(effective_date, updated_at). A partial index on effective_date
 -- alone would NOT help — the planner can't use it for the negative side of
@@ -334,12 +337,32 @@ CREATE INDEX IF NOT EXISTS content_chunks_stale_idx
 -- NL queries ("how do we handle errors") rank doc-comment hits above body text.
 -- BEFORE INSERT OR UPDATE OF specific columns — only refires when those change,
 -- not on every chunk update (e.g., embedding refresh doesn't trigger rebuild).
+CREATE OR REPLACE FUNCTION pmbrain_cjk_search_tokens(input_text TEXT) RETURNS TEXT AS \$fn\$
+  WITH chars AS (
+    SELECT ch, ord
+    FROM regexp_split_to_table(COALESCE(input_text, ''), '') WITH ORDINALITY AS t(ch, ord)
+    WHERE ch ~ '[一-鿿぀-ゟ゠-ヿ가-힯]'
+  )
+  SELECT COALESCE(string_agg(
+    CASE WHEN next_char.ch IS NOT NULL
+      THEN current_char.ch || ' ' || current_char.ch || next_char.ch
+      ELSE current_char.ch
+    END,
+    ' ' ORDER BY current_char.ord
+  ), '')
+  FROM chars current_char
+  LEFT JOIN chars next_char ON next_char.ord = current_char.ord + 1
+\$fn\$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
+
 CREATE OR REPLACE FUNCTION update_chunk_search_vector() RETURNS TRIGGER AS \$fn\$
 BEGIN
   NEW.search_vector :=
     setweight(to_tsvector('english', COALESCE(NEW.doc_comment, '')), 'A') ||
     setweight(to_tsvector('english', COALESCE(NEW.symbol_name_qualified, '')), 'A') ||
-    setweight(to_tsvector('english', COALESCE(NEW.chunk_text, '')), 'B');
+    setweight(to_tsvector('english', COALESCE(NEW.chunk_text, '')), 'B') ||
+    setweight(to_tsvector('simple', pmbrain_cjk_search_tokens(COALESCE(NEW.doc_comment, ''))), 'A') ||
+    setweight(to_tsvector('simple', pmbrain_cjk_search_tokens(COALESCE(NEW.symbol_name_qualified, ''))), 'A') ||
+    setweight(to_tsvector('simple', pmbrain_cjk_search_tokens(COALESCE(NEW.chunk_text, ''))), 'B');
   RETURN NEW;
 END;
 \$fn\$ LANGUAGE plpgsql;
@@ -984,6 +1007,12 @@ CREATE TABLE IF NOT EXISTS dream_verdicts (
   worth_processing BOOLEAN     NOT NULL,
   reasons          JSONB,
   judged_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  score            DOUBLE PRECISION,
+  content_type     TEXT,
+  segments         JSONB,
+  entities         JSONB,
+  model            TEXT,
+  triage_version   INT,
   PRIMARY KEY (file_path, content_hash)
 );
 

@@ -1003,6 +1003,12 @@ CREATE TABLE IF NOT EXISTS dream_verdicts (
   worth_processing BOOLEAN     NOT NULL,
   reasons          JSONB,
   judged_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  score            DOUBLE PRECISION,
+  content_type     TEXT,
+  segments         JSONB,
+  entities         JSONB,
+  model            TEXT,
+  triage_version   INT,
   PRIMARY KEY (file_path, content_hash)
 );
 

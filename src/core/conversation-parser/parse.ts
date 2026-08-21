@@ -29,6 +29,7 @@ import {
   BUILTIN_PATTERNS,
   cleanSpeaker,
 } from './builtins.ts';
+import { normalizeBlockConversation } from './normalize-block.ts';
 import type {
   DateContext,
   MatchedMessage,
@@ -389,9 +390,42 @@ function scoreFromLines(
 ): number {
   if (lines.length === 0) return 0;
   let anchored = 0;
-  for (const line of lines) {
+  let anchorCandidates = 0;
+  let firstLineAnchored = false;
+  let firstAnchorIndex = -1;
+  const distinctSpeakers = entry.score_continuations_min_distinct_speakers !== undefined
+    ? new Set<string>()
+    : undefined;
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index];
     if (entry.quick_reject && !entry.quick_reject.test(line)) continue;
-    if (entry.regex.test(line)) anchored++;
+    anchorCandidates++;
+    const match = distinctSpeakers ? entry.regex.exec(line) : null;
+    const isMatch = distinctSpeakers ? match !== null : entry.regex.test(line);
+    if (match) {
+      const speaker = match[entry.captures.speaker_group];
+      if (speaker) distinctSpeakers?.add(speaker);
+    }
+    if (isMatch) {
+      anchored++;
+      if (index === 0) firstLineAnchored = true;
+      if (firstAnchorIndex === -1) firstAnchorIndex = index;
+    }
+  }
+  const distinctSpeakersOk = entry.score_continuations_min_distinct_speakers === undefined ||
+    (distinctSpeakers?.size ?? 0) >= entry.score_continuations_min_distinct_speakers;
+  const preambleOk = entry.score_continuations_max_preamble_lines === undefined ||
+    (firstAnchorIndex !== -1 && firstAnchorIndex <= entry.score_continuations_max_preamble_lines);
+  if (
+    entry.score_continuations_as_body &&
+    entry.multi_line &&
+    entry.quick_reject &&
+    anchorCandidates > 0 &&
+    (anchored >= 2 || firstLineAnchored) &&
+    distinctSpeakersOk &&
+    preambleOk
+  ) {
+    return anchored / anchorCandidates;
   }
   return anchored / lines.length;
 }
@@ -441,6 +475,10 @@ export function parseConversation(
     return { messages: [], phase: 'no_match' };
   }
 
+  // Strict no-op for ordinary/canonical content; collapses Slack-style
+  // header + indented body blocks into lines the built-in registry parses.
+  body = normalizeBlockConversation(body);
+
   const dateCtx = deriveDateContext(opts);
 
   // Assemble candidate pool: built-ins (minus disabled) + user patterns.
@@ -479,6 +517,7 @@ export function parseConversation(
   // 10 head lines matched"; chat-only pages still score 1.0 and skip
   // the fallback. Re-score every candidate against the full body,
   // pre-splitting ONCE to avoid 12 redundant body splits.
+  let fullBodyScored = false;
   if (scored[0].score < SCORING_HEAD_TRIGGER_THRESHOLD) {
     const allLines = getNonBlankLines(body);
     scored = candidates.map((entry) => ({
@@ -487,6 +526,7 @@ export function parseConversation(
       priority: priorityOf(entry.id),
     }));
     sortScored(scored);
+    fullBodyScored = true;
     // NOTE: patterns_scored stays as scored.length (= candidate
     // count, typically 12) even when the fallback runs — the
     // diagnostic reports "candidates considered" not "scoring
@@ -495,6 +535,10 @@ export function parseConversation(
 
   const top = scored[0];
   const patternsScored = scored.length;
+
+  if (top.entry.score_full_body && !fullBodyScored) {
+    top.score = scoreFromLines(getNonBlankLines(body), top.entry);
+  }
 
   // Minimum acceptance floor (closes Codex P1 #2): an essay with
   // one stray `**Name** (date time):` line scores ~1/300 ≈ 0.003 —

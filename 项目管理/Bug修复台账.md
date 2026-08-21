@@ -8,6 +8,14 @@
 - 描述：修复 Ollama 普通问答经 OpenAI 兼容非流式路径调用时，Qwen3 持续输出思考内容、不返回最终 JSON/工具调用，最终触发超时或 `Unsupported intent`的问题。现在无工具的 Ollama 问答统一使用原生流式 `/api/chat`；Qwen3 显式关闭思考，意图识别使用原生结构化输出，并保留 AI 搜索/整理要求的 JSON。Ollama 工具调用仍保留 AI SDK 流式兼容路径，云端供应商仍使用原路径。不修改用户配置、知识、向量、Wiki 或原始资料。
 - 是否完成：是
 - 最终结果：实机 `qwen3:4b` 意图识别约 1.5 秒并正确识别为知识库搜索，普通答案约 1.4 秒返回最终文本，AI 搜索结构化结果约 2.8 秒返回可解析 JSON；实机 `gemma4:e4b` 约 9.6 秒返回最终答案。Core/搜索/整理定向测试 70/70、Desktop 连接与老用户模型路由 33/33、扩展网关/工具循环/Dream 回归 91/91 通过，根项目和 Desktop TypeScript 类型检查通过；Electron 生产资源与 Sidecar 已编译，Windows x64 运行时校验通过。未执行 `bun run build:win`，由用户最后打包。
+## 2026-08-21 PMBrain 1.2.73 修复 Dream 产物无法进入检索
+
+- 时间：2026-08-21
+- 版本号：PMBrain 1.2.73；PMBrain Desktop 1.1.38（桌面端未改动）
+- 标题：让 Atom 与 Concept 复用标准导入、切块和向量流程
+- 描述：修复 Dream 提取的 Atom 和合成的 Concept 仅写入 `pages`、未生成 `content_chunks`，导致关键词和向量检索不可见的问题。两个阶段现统一复用 `importFromContent`：保留 Atom 的 Source 隔离与既有前置信息，Concept 仍写入默认 Source 并保留显式关系；未配置 Embedding 时只切块、不调用模型，显式配置时按现有网关生成向量和模型来源。未自动回填历史产物，未重建或清空知识、向量、Wiki 和原始资料。
+- 是否完成：进行中
+- 最终结果：先新增失败回归并复现 Atom/Concept 均无切块，再完成最小实现；隔离 PGLite 下无 Embedding、显式假向量、Source 隔离、关键词检索及既有 Dream 行为共 53/53 通过，版本契约 5/5、TypeScript 类型检查通过。PostgreSQL 对等 E2E 契约已新增并受测试库名 Guard 保护，但当前无 `DATABASE_URL` 且 Docker 服务不可用，3 项按设计跳过，等待一次性测试库或 GitHub CI 实跑后更新为完成。
 
 ## 2026-08-21 PMBrain 1.2.72 修复桌面升级后 PGLite 占用无法自助恢复
 

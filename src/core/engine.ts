@@ -439,17 +439,36 @@ export interface SynthesisEvidenceInput {
   citation_index: number;
 }
 
-/** Dream-cycle Haiku verdict on whether a transcript is worth processing. */
+/** One candidate segment extracted by the cheap Dream triage pass. */
+export interface TriageSegment {
+  quote: string;
+  note?: string;
+}
+
+/** Dream-cycle structured triage verdict. Legacy rows expose nullable v1 fields. */
 export interface DreamVerdict {
   worth_processing: boolean;
   reasons: string[];
   judged_at: string;
+  score: number | null;
+  content_type: string | null;
+  segments: TriageSegment[];
+  entities: string[];
+  model: string | null;
+  triage_version: number | null;
 }
 
 /** Input shape for putDreamVerdict — judged_at defaults to now() server-side. */
 export interface DreamVerdictInput {
   worth_processing: boolean;
   reasons: string[];
+  /** Optional for compatibility with pre-v116 callers; omitted means legacy. */
+  score?: number;
+  content_type?: string | null;
+  segments?: TriageSegment[];
+  entities?: string[];
+  model?: string;
+  triage_version?: number;
 }
 
 // ============================================================

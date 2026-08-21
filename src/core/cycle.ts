@@ -52,6 +52,17 @@ import { createProgress, type ProgressReporter } from './progress.ts';
 import { getCliOptions, cliOptsToProgressOptions } from './cli-options.ts';
 import { deleteLockRow, inspectLock, tryAcquireDbLock, type DbLockHandle } from './db-lock.ts';
 import { assertValidSourceId } from './source-id.ts';
+import {
+  PHASE_SCOPE,
+  SOURCE_FRESHNESS_PHASES,
+  type PhaseScope,
+} from './cycle/phase-scope.ts';
+
+export {
+  PHASE_SCOPE,
+  SOURCE_FRESHNESS_PHASES,
+  type PhaseScope,
+} from './cycle/phase-scope.ts';
 
 // ─── Types ─────────────────────────────────────────────────────────
 
@@ -164,79 +175,53 @@ export const ALL_PHASES: CyclePhase[] = [
   'purge',
 ];
 
-const PGLITE_WORKER_ONLY_PHASES = new Set<CyclePhase>(['synthesize', 'patterns']);
+/** Ordered stage partitions used by Source freshness and global maintenance. */
+export const SOURCE_PHASES: CyclePhase[] = ALL_PHASES.filter(
+  phase => PHASE_SCOPE[phase] === 'source',
+);
+export const MIXED_PHASES: CyclePhase[] = ALL_PHASES.filter(
+  phase => PHASE_SCOPE[phase] === 'mixed',
+);
+export const GLOBAL_PHASES: CyclePhase[] = ALL_PHASES.filter(
+  phase => PHASE_SCOPE[phase] === 'global',
+);
+export const MAINTENANCE_PHASES: CyclePhase[] = ALL_PHASES.filter(
+  phase => PHASE_SCOPE[phase] !== 'source',
+);
+/** LLM-backed or unbounded Source work cannot hold freshness hostage. */
+export const SOURCE_BACKGROUND_PHASES: CyclePhase[] = SOURCE_PHASES.filter(
+  phase => !SOURCE_FRESHNESS_PHASES.includes(phase),
+);
 
-export function isPgliteWorkerPhaseUnsupported(engineKind: string, phase: CyclePhase): boolean {
-  return engineKind === 'pglite' && PGLITE_WORKER_ONLY_PHASES.has(phase);
+/**
+ * A named non-default Source without an explicit list runs only deterministic
+ * freshness work. The default Source retains the full cycle, while explicit
+ * operator phase choices remain authoritative.
+ */
+export function resolveCyclePhases(
+  requested: CyclePhase[] | undefined,
+  sourceId: string | undefined,
+): CyclePhase[] {
+  if (!sourceId || sourceId === 'default') return requested ?? ALL_PHASES;
+  if (requested === undefined) return SOURCE_FRESHNESS_PHASES;
+  return requested;
 }
 
-function pgliteWorkerPhaseSkipped(phase: CyclePhase): PhaseResult {
+/** Normalize machine-authored per-Source queue payloads to the freshness stage. */
+export function normalizeQueuedSourcePhases(
+  requested: CyclePhase[] | undefined,
+  sourceId: string | undefined,
+): { phases: CyclePhase[] | undefined; rejected: CyclePhase[] } {
+  if (!sourceId || requested === undefined) return { phases: requested, rejected: [] };
+  const freshness = new Set<CyclePhase>(SOURCE_FRESHNESS_PHASES);
   return {
-    phase,
-    status: 'skipped',
-    duration_ms: 0,
-    summary: `PGLite 当前不支持独立 Worker，已跳过 ${phase}`,
-    details: {
-      reason: 'pglite_worker_unavailable',
-      engine: 'pglite',
-      requires: 'supervisor_worker',
-    },
+    phases: requested.filter((phase) => freshness.has(phase)),
+    rejected: requested.filter((phase) => !freshness.has(phase)),
   };
 }
 
-/**
- * v0.38 (CEO + eng review): phase-scope taxonomy. Each entry in
- * `ALL_PHASES` declares whether its work is naturally per-source,
- * brain-global, or mixed. Static documentation only — no runtime
- * enforcement yet (filed as follow-up TODO in the plan).
- *
- * Load-bearing for any future fan-out wave:
- *   - `source`: safe to parallelize per source. Sync reads/writes the
- *     one source's rows; extract walks changed slugs.
- *   - `global`: must serialize across the brain. Embed walks all stale
- *     chunks; orphans/purge sweep brain-wide; grade_takes + calibration
- *     aggregate across sources; resolve_symbol_edges walks every chunk.
- *   - `mixed`: per-phase decomposition needed before parallelizing.
- *     Synthesize reads the brain-global transcripts dir but writes to
- *     per-source slugs (via subagent allowlist). Patterns reads
- *     cross-source reflections but writes pattern pages.
- *
- * Per-source cycle locks (codex r2 fix) let two cycles RUN concurrently,
- * but `global` phases inside each cycle will still touch the same rows.
- * Genuine per-source autopilot fan-out requires the deferred TODOs.
- */
-export type PhaseScope = 'source' | 'global' | 'mixed';
-export const PHASE_SCOPE: Record<CyclePhase, PhaseScope> = {
-  lint: 'source',
-  backlinks: 'source',
-  sync: 'source',
-  synthesize: 'mixed',
-  extract: 'source',
-  extract_facts: 'source',
-  resolve_symbol_edges: 'global',
-  patterns: 'mixed',
-  recompute_emotional_weight: 'source',
-  consolidate: 'source',
-  propose_takes: 'source',
-  grade_takes: 'global',
-  calibration_profile: 'global',
-  drift: 'global',
-  embed: 'global',
-  orphans: 'global',
-  purge: 'global',
-  'schema-suggest': 'source',
-  // v0.41 T9 — extract_atoms is naturally per-source (each source's
-  // transcript dir gets walked independently). synthesize_concepts is
-  // global because concept clusters cross sources by nature.
-  extract_atoms: 'source',
-  synthesize_concepts: 'global',
-  // v0.41.11.0 — declared 'source' for taxonomy alignment with
-  // extract_facts (per-source semantics). PHASE_SCOPE has no runtime
-  // fanout enforcement today (per the comment above); the phase
-  // wrapper does its own multi-source loop via listSources().
-  conversation_facts_backfill: 'source',
-  enrich_thin: 'source',
-};
+/** Config key stamped after one successful brain-wide maintenance stage. */
+export const LAST_GLOBAL_AT_KEY = 'autopilot.last_global_at';
 
 /**
  * Phases that mutate state (filesystem or DB) and therefore should
@@ -1497,11 +1482,23 @@ export async function runCycle(
   opts: CycleOpts,
 ): Promise<CycleReport> {
   const start = performance.now();
-  const phases = opts.phases ?? ALL_PHASES;
+  const requestedPhases = opts.phases ?? ALL_PHASES;
+  const phases = resolveCyclePhases(opts.phases, opts.sourceId);
+  const excludedPhases = requestedPhases.filter(phase => !phases.includes(phase));
   const dryRun = !!opts.dryRun;
   const pull = !!opts.pull;
   const timestamp = new Date().toISOString();
-  const phaseResults: PhaseResult[] = [];
+  const phaseResults: PhaseResult[] = excludedPhases.map(phase => ({
+    phase,
+    status: 'skipped',
+    duration_ms: 0,
+    summary: `excluded from implicit non-default source cycle (${PHASE_SCOPE[phase]} scope)`,
+    details: {
+      reason: 'excluded_from_implicit_source_cycle',
+      source_id: opts.sourceId,
+      phase_scope: PHASE_SCOPE[phase],
+    },
+  }));
   const brainDir = opts.brainDir;
 
   const skipNoBrainDir = (phase: CyclePhase): PhaseResult => ({
@@ -1726,8 +1723,6 @@ export async function runCycle(
         });
       } else if (brainDir === null) {
         phaseResults.push(skipNoBrainDir('synthesize'));
-      } else if (isPgliteWorkerPhaseUnsupported(engine.kind, 'synthesize')) {
-        phaseResults.push(pgliteWorkerPhaseSkipped('synthesize'));
       } else {
         progress.start('cycle.synthesize');
         const { runPhaseSynthesize } = await import('./cycle/synthesize.ts');
@@ -2007,8 +2002,6 @@ export async function runCycle(
         });
       } else if (brainDir === null) {
         phaseResults.push(skipNoBrainDir('patterns'));
-      } else if (isPgliteWorkerPhaseUnsupported(engine.kind, 'patterns')) {
-        phaseResults.push(pgliteWorkerPhaseSkipped('patterns'));
       } else {
         progress.start('cycle.patterns');
         const { runPhasePatterns } = await import('./cycle/patterns.ts');
@@ -2480,8 +2473,10 @@ export async function runCycle(
   // the cost of missing a successful write (next cycle will redo work).
   if (opts.sourceId && engine && !dryRun && (status === 'ok' || status === 'clean' || status === 'partial')) {
     try {
+      const nowIso = new Date().toISOString();
       await engine.updateSourceConfig(opts.sourceId, {
-        last_full_cycle_at: new Date().toISOString(),
+        last_source_cycle_at: nowIso,
+        last_full_cycle_at: nowIso,
       });
     } catch (e) {
       // Best-effort; cycle already succeeded by the time we get here.
@@ -2588,6 +2583,13 @@ function extractTotals(phases: PhaseResult[]): CycleReport['totals'] {
 }
 
 function deriveStatus(phases: PhaseResult[], totals: CycleReport['totals']): CycleStatus {
+  // Scope exclusions are bookkeeping, not attempted work. Ignoring them also
+  // prevents six failed freshness phases plus many exclusions from looking
+  // merely partial and incorrectly stamping a Source fresh.
+  const attempted = phases.filter(
+    phase => phase.details?.reason !== 'excluded_from_implicit_source_cycle',
+  );
+  if (attempted.length > 0) phases = attempted;
   if (phases.length === 0) return 'failed';
   const anyFailed = phases.some(p => p.status === 'fail');
   const allFailed = phases.every(p => p.status === 'fail');

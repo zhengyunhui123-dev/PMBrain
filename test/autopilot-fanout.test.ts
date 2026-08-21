@@ -17,8 +17,11 @@ import {
   selectSourcesForDispatch,
   resolveFanoutMax,
   dispatchPerSource,
+  dispatchGlobalMaintenance,
+  dispatchExtractAtomsDrains,
 } from '../src/commands/autopilot-fanout.ts';
 import type { SourceRow, BrainEngine } from '../src/core/engine.ts';
+import { MAINTENANCE_PHASES, SOURCE_FRESHNESS_PHASES } from '../src/core/cycle.ts';
 
 function src(id: string, last_full_cycle_at?: string | null, extra: Record<string, unknown> = {}): SourceRow {
   return {
@@ -34,6 +37,12 @@ function src(id: string, last_full_cycle_at?: string | null, extra: Record<strin
 }
 
 describe('readLastFullCycleAt', () => {
+  test('prefers the new Source freshness stamp and falls back to the legacy stamp', () => {
+    const row = src('a', '2026-05-22T07:00:00.000Z', {
+      last_source_cycle_at: '2026-05-22T08:00:00.000Z',
+    });
+    expect(readLastFullCycleAt(row)?.toISOString()).toBe('2026-05-22T08:00:00.000Z');
+  });
   test('returns Date when ISO string present', () => {
     const d = readLastFullCycleAt(src('a', '2026-05-22T07:00:00.000Z'));
     expect(d).toBeInstanceOf(Date);
@@ -220,6 +229,9 @@ describe('dispatchPerSource — integration with stubbed engine + queue', () => 
     // source_id threaded through job data
     const sourceIds = added.map(j => (j.data as Record<string, unknown>).source_id).sort();
     expect(sourceIds).toEqual(['alpha', 'beta']);
+    for (const job of added) {
+      expect((job.data as Record<string, unknown>).phases).toEqual(SOURCE_FRESHNESS_PHASES);
+    }
   });
 
   test('pull: true only when source.config.remote_url is set', async () => {
@@ -306,5 +318,74 @@ describe('dispatchPerSource — integration with stubbed engine + queue', () => 
     expect(result.dispatched.length).toBe(0);
     expect(result.skipped_fresh.length).toBe(2);
     expect(added.length).toBe(0);
+  });
+});
+
+describe('dispatchGlobalMaintenance — second stage', () => {
+  test('submits mixed and global phases once when maintenance is stale', async () => {
+    const added: Array<{ name: string; data: any; opts: any }> = [];
+    const engine = {
+      getConfig: async () => null,
+    } as unknown as BrainEngine;
+    const queue = {
+      add: async (name: string, data: unknown, opts: unknown) => {
+        added.push({ name, data, opts });
+        return { id: 1 };
+      },
+    } as any;
+    const result = await dispatchGlobalMaintenance(engine, queue, {
+      repoPath: '/tmp/brain', slot: 'slot-1', timeoutMs: 60_000, jsonMode: true, emit: () => {},
+    });
+    expect(result).toEqual({ dispatched: true, reason: 'stale' });
+    expect(added).toHaveLength(1);
+    expect(added[0].name).toBe('autopilot-global-maintenance');
+    expect(added[0].data.phases).toEqual(MAINTENANCE_PHASES);
+    expect(added[0].opts.idempotency_key).toBe('autopilot-global:slot-1');
+    expect(added[0].opts.maxPending).toBe(1);
+    expect(added[0].opts.maxWaiting).toBeUndefined();
+  });
+
+  test('does not submit while the global stage is fresh', async () => {
+    const engine = {
+      getConfig: async (key: string) => key === 'autopilot.last_global_at' ? new Date().toISOString() : null,
+    } as unknown as BrainEngine;
+    let added = 0;
+    const queue = { add: async () => { added++; return { id: 1 }; } } as any;
+    expect(await dispatchGlobalMaintenance(engine, queue, {
+      repoPath: '/tmp/brain', slot: 'slot-1', timeoutMs: 60_000, jsonMode: true, emit: () => {},
+    })).toEqual({ dispatched: false, reason: 'fresh' });
+    expect(added).toBe(0);
+  });
+});
+
+describe('dispatchExtractAtomsDrains — bounded backlog cleanup', () => {
+  test('submits only Sources with backlog and opts into the protected job name', async () => {
+    const sources = [src('empty'), src('pending')];
+    const added: Array<{ name: string; data: any; opts: any; trusted: any }> = [];
+    const engine = {
+      listAllSources: async () => sources,
+      getConfig: async () => '120',
+      executeRaw: async (_sql: string, params: unknown[]) => [
+        { cnt: params[0] === 'pending' ? 7 : 0 },
+      ],
+    } as unknown as BrainEngine;
+    const queue = {
+      add: async (name: string, data: unknown, opts: unknown, trusted: unknown) => {
+        added.push({ name, data, opts, trusted });
+        return { id: 41 };
+      },
+    } as any;
+
+    const result = await dispatchExtractAtomsDrains(engine, queue, {
+      slot: 'slot-1', timeoutMs: 60_000, maxSubmissions: 4, jsonMode: true, emit: () => {},
+    });
+
+    expect(result.dispatched).toEqual(['pending']);
+    expect(result.no_backlog).toEqual(['empty']);
+    expect(added).toHaveLength(1);
+    expect(added[0].name).toBe('extract-atoms-drain');
+    expect(added[0].data.window_seconds).toBe(120);
+    expect(added[0].opts.max_attempts).toBe(3);
+    expect(added[0].trusted).toEqual({ allowProtectedSubmit: true });
   });
 });

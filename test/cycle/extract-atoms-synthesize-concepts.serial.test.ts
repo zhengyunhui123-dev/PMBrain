@@ -114,6 +114,28 @@ describe('v0.41 T5: parseAtomsResponse', () => {
 });
 
 describe('v0.41 T5: runPhaseExtractAtoms via stubbed chat', () => {
+  test('processes pages first and interleaves transcripts so backlog cannot be starved', async () => {
+    const seenBodies: string[] = [];
+    const chat = async (opts: ChatOpts) => {
+      seenBodies.push(String(opts.messages[0]?.content ?? ''));
+      return stubChat('[]')(opts);
+    };
+    await runPhaseExtractAtoms(engine, {
+      _pages: [
+        { slug: 'page-1', content: 'PAGE_ONE', contentHash: 'page-hash-1' },
+        { slug: 'page-2', content: 'PAGE_TWO', contentHash: 'page-hash-2' },
+      ],
+      _transcripts: [
+        { filePath: '/transcript-1.txt', content: 'TRANSCRIPT_ONE', contentHash: 'transcript-hash-1' },
+        { filePath: '/transcript-2.txt', content: 'TRANSCRIPT_TWO', contentHash: 'transcript-hash-2' },
+      ],
+      _chat: chat as typeof import('../../src/core/ai/gateway.ts').chat,
+      dryRun: true,
+    });
+    expect(seenBodies.map(body => body.match(/PAGE_(?:ONE|TWO)|TRANSCRIPT_(?:ONE|TWO)/)?.[0]))
+      .toEqual(['PAGE_ONE', 'TRANSCRIPT_ONE', 'PAGE_TWO', 'TRANSCRIPT_TWO']);
+  });
+
   test('passes the resolved reasoning-tier model explicitly', async () => {
     await engine.setConfig('models.tier.reasoning', 'openai:gpt-5.2');
     let receivedModel: string | undefined;
