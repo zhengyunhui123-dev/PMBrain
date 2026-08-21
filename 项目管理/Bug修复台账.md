@@ -1,5 +1,14 @@
 # Bug 修复台账
 
+## 2026-08-21 PMBrain 1.2.70 修复快速维护漏同步非主 Source 的 Office/PDF
+
+- 时间：2026-08-21
+- 版本号：PMBrain 1.2.70
+- 标题：快速维护同步全部启用 Source 中已提交的 Office/PDF
+- 描述：修复 Admin「开始快速维护」只维护主 Source，且 Quick Maintenance 未向现有 Git 同步能力传递 Office 文档开关的问题。现在一键快速维护会顺序处理全部已注册且启用的 Source，并同步其中的 DOCX、PDF、PPT、Excel 等现有支持格式；如果旧版本已将 `last_commit` 推进到当前 HEAD 但文档从未入库，会只回填 Git 已跟踪且数据库缺失的文档。保留普通 Cycle、裸 CLI Dream 和高级单 Source 维护的兼容范围，不修改 Source 原始文件、Wiki、已有知识或向量。
+- 是否完成：是
+- 最终结果：已增加隔离 PGLite 与真实临时 Git Source 回归，分别提交 DOCX/PDF 后执行一次全部 Source 快速维护，2 份文档均进入各自 Source，且未向 Source 目录写入系统 Skill 文件；另复现 `last_commit = HEAD`、已有 `last_sync_at`、页面为 0 的历史漏导状态，首次运行回填 2 份文档，第二次运行新增和更新均为 0。Quick Maintenance 18/18、Admin 契约 51/51、同步回归 61/61、Office 导入 9/9、目录遍历 9/9、TypeScript 类型检查均通过，Admin 最新静态资源、内嵌资源与 Sidecar 运行时已生成并验证。
+
 ## 2026-08-20 PMBrain 1.2.69 修复 run-verify-parallel CI 契约测试的脆弱文本匹配
 
 - 时间：2026-08-20

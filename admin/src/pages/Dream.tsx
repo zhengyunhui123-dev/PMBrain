@@ -1726,7 +1726,8 @@ function DreamRunPanel({
               ? 'quick'
               : undefined,
         phase: runMode === 'advanced' ? phase : undefined,
-        sourceId: runMode === 'advanced' ? sourceId.trim() || undefined : defaultSourceId,
+        sourceId: runMode === 'advanced' ? sourceId.trim() || undefined : runMode === 'quick' ? undefined : defaultSourceId,
+        allSources: runMode === 'quick',
         maxPages: runMode === 'advanced' && phase === 'propose_takes' && maxPages.trim() ? Number(maxPages) : undefined,
         drainProposals: runMode === 'cycle',
         windowSeconds: runMode === 'cycle' && timeoutMs
@@ -1768,7 +1769,7 @@ function DreamRunPanel({
   }> = {
     quick: {
       title: '先做一次轻量维护',
-      description: '检查知识、同步内容、建立确定性关联、更新向量索引并检查异常。不使用普通模型。',
+      description: '依次检查全部已注册 Source、同步内容、建立确定性关联、更新向量索引并检查异常。不使用普通模型。',
       action: '开始快速维护',
     },
     cycle: {

@@ -65,8 +65,9 @@ describe('Dream GUI product contract', () => {
     expect(api).toContain("cmd.push('--preset', input.preset)");
   });
 
-  test('one-click Dream uses the main source and only applies the page limit to proposals', () => {
-    expect(dream).toContain("sourceId: runMode === 'advanced' ? sourceId.trim() || undefined : defaultSourceId");
+  test('one-click Quick covers all registered Sources while advanced runs stay source-scoped', () => {
+    expect(dream).toContain("sourceId: runMode === 'advanced' ? sourceId.trim() || undefined : runMode === 'quick' ? undefined : defaultSourceId");
+    expect(dream).toContain("allSources: runMode === 'quick'");
     expect(dream).toContain("maxPages: runMode === 'advanced' && phase === 'propose_takes' && maxPages.trim() ? Number(maxPages) : undefined");
     expect(dream).toContain("showAdvancedControls && phase === 'propose_takes'");
     expect(dream).toContain('embed 会处理全部待向量分块');

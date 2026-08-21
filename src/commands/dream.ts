@@ -31,7 +31,7 @@ import {
   type CycleReport,
 } from '../core/cycle.ts';
 import { resolveSourceId } from '../core/source-resolver.ts';
-import { fetchSource } from '../core/sources-load.ts';
+import { fetchSource, loadAllSources, parseSourceConfig } from '../core/sources-load.ts';
 import { existsSync } from 'fs';
 import { resolve } from 'node:path';
 import { loadConfig } from '../core/config.ts';
@@ -69,6 +69,8 @@ interface DreamArgs {
    * until a follow-up CLI cleanup picks one. Supersedes PR #1559.
    */
   source: string | null;
+  /** Explicit Admin fan-out; bare CLI Dream keeps its historical scope. */
+  allSources: boolean;
   /**
    * Limits how many pages propose_takes scans in this dream run.
    * Forwarded to runCycle as proposeTakesPageLimit.
@@ -251,6 +253,19 @@ function parseArgs(args: string[]): DreamArgs {
     process.exit(2);
   }
   const source = uniqSource[0] ?? uniqSourceId[0] ?? null;
+  const allSources = args.includes('--all-sources');
+  if (allSources && source) {
+    console.error('--all-sources cannot be combined with --source or --source-id');
+    process.exit(2);
+  }
+  if (allSources && preset !== 'quick') {
+    console.error('--all-sources is supported only with --preset quick');
+    process.exit(2);
+  }
+  if (allSources && dir) {
+    console.error('--all-sources cannot be combined with --dir');
+    process.exit(2);
+  }
 
   const maxPagesValues = collectFlagValues(args, '--max-pages');
   if (maxPagesValues === null) {
@@ -339,6 +354,7 @@ function parseArgs(args: string[]): DreamArgs {
     to,
     bypassDreamGuard: args.includes('--unsafe-bypass-dream-guard'),
     source,
+    allSources,
     maxPages,
     proposeRequireChunks,
     proposeMaxChunks,
@@ -426,6 +442,7 @@ function printHelp() {
   --source <id>       将周期限定到指定来源；propose_takes、grade_takes、
                       calibration_profile 也会使用这个 source。
   --source-id <id>    --source 的别名。
+  --all-sources       仅用于 quick：顺序维护全部已注册且启用的 Source。
   --max-pages <n>     限制 propose_takes 最多处理的页面数，适合分批执行。
   --drain-proposals   按批次持续处理真正未整理的页面，直到清空或达到 --window。
                       每批默认 100 页；仅用于 --phase propose_takes 或 --preset full。
@@ -619,6 +636,11 @@ export async function runDream(engine: BrainEngine | null, args: string[]): Prom
     process.exit(2);
   }
 
+  if (opts.allSources && engine === null) {
+    console.error('pmbrain dream --all-sources requires a connected brain');
+    process.exit(1);
+  }
+
   // v0.41.13: --source <id> resolution. Three guards in order:
   //   1. engine null → exit 1 (the writeback in cycle.ts requires a
   //      DB connection; without engine we'd silently fail the same way
@@ -662,7 +684,9 @@ export async function runDream(engine: BrainEngine | null, args: string[]): Prom
     }
   }
 
-  const brainDir = await resolveBrainDir(engine, opts.dir, resolvedSourceId);
+  const brainDir = opts.allSources
+    ? null
+    : await resolveBrainDir(engine, opts.dir, resolvedSourceId);
   if (brainDir === null && engine === null) {
     console.error(
       'No brain directory found and no database connection. ' +
@@ -676,7 +700,34 @@ export async function runDream(engine: BrainEngine | null, args: string[]): Prom
   // Quick Maintenance is PMBrain's thin orchestration (by-mention + failed-file
   // isolation). Full / meeting / bare dream keep upstream runCycle phase tables.
   if (opts.preset === 'quick' && !opts.phase) {
-    const { runQuickMaintenance } = await import('../core/quick-maintenance.ts');
+    const {
+      runQuickMaintenance,
+      combineQuickMaintenanceReports,
+    } = await import('../core/quick-maintenance.ts');
+    if (opts.allSources) {
+      const startedAt = new Date();
+      const sources = (await loadAllSources(engine!)).filter(source => (
+        parseSourceConfig(source.config).syncEnabled !== false
+      ));
+      const sourceReports = [];
+      for (const source of sources) {
+        const sourceBrainDir = await resolveBrainDir(engine, null, source.id);
+        console.error(`[quick-maintenance] Source ${source.id} start`);
+        const sourceReport = await runQuickMaintenance(engine, {
+          brainDir: sourceBrainDir,
+          dryRun: opts.dryRun,
+          pull: opts.pull,
+          sourceId: source.id,
+        });
+        sourceReports.push({ sourceId: source.id, report: sourceReport });
+        console.error(`[quick-maintenance] Source ${source.id} ${sourceReport.status}`);
+      }
+      const report = combineQuickMaintenanceReports(sourceReports, startedAt);
+      if (opts.json) console.log(JSON.stringify(report, null, 2));
+      else printHuman(report);
+      if (report.status === 'failed') process.exit(1);
+      return report;
+    }
     const report = await runQuickMaintenance(engine, {
       brainDir,
       dryRun: opts.dryRun,

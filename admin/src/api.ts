@@ -207,7 +207,7 @@ export const api = {
   generativeUsage: () => apiFetch<GenerativeUsageResponse>('/admin/api/model-usage/generative', undefined, GenerativeUsageResponseSchema),
   saveGenerativeUsage: (enabled: boolean) =>
     apiFetch<GenerativeUsageResponse>('/admin/api/model-usage/generative', { method: 'POST', body: JSON.stringify({ enabled }) }, GenerativeUsageResponseSchema),
-  startDreamRun: (body: { phase?: string; preset?: 'full' | 'meeting' | 'quick'; sourceId?: string; maxPages?: number; drainProposals?: boolean; windowSeconds?: number; dryRun: boolean; input?: string; date?: string; from?: string; to?: string; timeoutMs?: number }) =>
+  startDreamRun: (body: { phase?: string; preset?: 'full' | 'meeting' | 'quick'; sourceId?: string; allSources?: boolean; maxPages?: number; drainProposals?: boolean; windowSeconds?: number; dryRun: boolean; input?: string; date?: string; from?: string; to?: string; timeoutMs?: number }) =>
     apiFetch<DreamRunResponse>('/admin/api/dream-runs', { method: 'POST', body: JSON.stringify(body) }, DreamRunResponseSchema),
   breakDreamLock: (id: string, holderPid: number) =>
     apiFetch(`/admin/api/dream/locks/${encodeURIComponent(id)}/break`, { method: 'POST', body: JSON.stringify({ holderPid }) }),
