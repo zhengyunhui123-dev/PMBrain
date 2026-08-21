@@ -185,30 +185,25 @@ describe('runDream 鈥?--phase <name> restricts the cycle', () => {
     errSpy.mockRestore();
   });
 
-  test('--preset meeting is rejected clearly on PGLite', async () => {
+  test('--preset meeting is available on PGLite through inline Dream execution', async () => {
     const oldPmbrainHome = process.env.PMBRAIN_HOME;
     const home = mkdtempSync(join(tmpdir(), 'gbrain-dream-generative-home-'));
     mkdirSync(join(home, '.pmbrain'), { recursive: true });
     writeFileSync(join(home, '.pmbrain', 'config.json'), JSON.stringify({
       model_usage: { generative_enabled: true },
     }));
-    const exitSpy = spyOn(process, 'exit').mockImplementation(() => { throw new Error('EXIT'); });
-    const errSpy = spyOn(console, 'error').mockImplementation(() => {});
+    let report;
     try {
       process.env.PMBRAIN_HOME = home;
-      await runDream(engine, ['--dir', repo, '--preset', 'meeting', '--input', repo]);
-    } catch (e: any) {
-      expect(e.message).toBe('EXIT');
+      report = await runDream(engine, ['--dir', repo, '--preset', 'meeting', '--input', repo, '--dry-run', '--json']);
     } finally {
       if (oldPmbrainHome === undefined) delete process.env.PMBRAIN_HOME;
       else process.env.PMBRAIN_HOME = oldPmbrainHome;
       rmSync(home, { recursive: true, force: true });
     }
-    expect(exitSpy).toHaveBeenCalledWith(2);
-    expect(errSpy.mock.calls.flat().join(' ')).toContain('PGLite');
-    expect(errSpy.mock.calls.flat().join(' ')).toContain('会议与会话');
-    exitSpy.mockRestore();
-    errSpy.mockRestore();
+    expect(report).toBeTruthy();
+    expect(report?.phases.find((phase) => phase.phase === 'synthesize')?.details.reason)
+      .not.toBe('pglite_worker_unavailable');
   });
 });
 

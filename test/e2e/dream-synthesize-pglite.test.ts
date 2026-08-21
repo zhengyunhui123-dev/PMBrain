@@ -497,10 +497,18 @@ describe('E2E synthesize — verdict cache (Q-2)', () => {
       await withoutAnthropicKey(async () => {
         await runPhaseSynthesize(rig.engine, { brainDir: rig.brainDir, dryRun: false });
         const { createHash } = await import('node:crypto');
+        const { resolveDreamModel } = await import('../../src/core/cycle/model-routing.ts');
         const hash = createHash('sha256').update(body, 'utf8').digest('hex');
+        const verdictModel = (await resolveDreamModel(rig.engine, { phase: 'synthesize_verdict' })).model;
         await rig.engine.putDreamVerdict(filePath, hash, {
           worth_processing: false,
           reasons: ['cached test verdict'],
+          score: 0.1,
+          content_type: 'routine',
+          segments: [],
+          entities: [],
+          model: verdictModel,
+          triage_version: 1,
         });
         const result = await runPhaseSynthesize(rig.engine, {
           brainDir: rig.brainDir,

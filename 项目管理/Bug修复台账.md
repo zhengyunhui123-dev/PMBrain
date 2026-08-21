@@ -1,5 +1,14 @@
 # Bug 修复台账
 
+## 2026-08-21 PMBrain 1.2.73 修复 Dream 产物无法进入检索
+
+- 时间：2026-08-21
+- 版本号：PMBrain 1.2.73；PMBrain Desktop 1.1.38（桌面端未改动）
+- 标题：让 Atom 与 Concept 复用标准导入、切块和向量流程
+- 描述：修复 Dream 提取的 Atom 和合成的 Concept 仅写入 `pages`、未生成 `content_chunks`，导致关键词和向量检索不可见的问题。两个阶段现统一复用 `importFromContent`：保留 Atom 的 Source 隔离与既有前置信息，Concept 仍写入默认 Source 并保留显式关系；未配置 Embedding 时只切块、不调用模型，显式配置时按现有网关生成向量和模型来源。未自动回填历史产物，未重建或清空知识、向量、Wiki 和原始资料。
+- 是否完成：进行中
+- 最终结果：先新增失败回归并复现 Atom/Concept 均无切块，再完成最小实现；隔离 PGLite 下无 Embedding、显式假向量、Source 隔离、关键词检索及既有 Dream 行为共 53/53 通过，版本契约 5/5、TypeScript 类型检查通过。PostgreSQL 对等 E2E 契约已新增并受测试库名 Guard 保护，但当前无 `DATABASE_URL` 且 Docker 服务不可用，3 项按设计跳过，等待一次性测试库或 GitHub CI 实跑后更新为完成。
+
 ## 2026-08-21 PMBrain 1.2.72 修复桌面升级后 PGLite 占用无法自助恢复
 
 - 时间：2026-08-21

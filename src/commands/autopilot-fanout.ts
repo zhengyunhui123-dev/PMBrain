@@ -32,6 +32,11 @@
 
 import type { BrainEngine, SourceRow } from '../core/engine.ts';
 import type { MinionQueue } from '../core/minions/queue.ts';
+import {
+  LAST_GLOBAL_AT_KEY,
+  MAINTENANCE_PHASES,
+  SOURCE_FRESHNESS_PHASES,
+} from '../core/cycle.ts';
 
 const FULL_CYCLE_FLOOR_MIN = 60;
 
@@ -89,7 +94,7 @@ export async function resolveFanoutMax(engine: BrainEngine): Promise<number> {
  * shape `listAllSources` returns (config is already a parsed object).
  */
 export function readLastFullCycleAt(src: SourceRow): Date | null {
-  const raw = src.config?.last_full_cycle_at;
+  const raw = src.config?.last_source_cycle_at ?? src.config?.last_full_cycle_at;
   if (typeof raw !== 'string') return null;
   const d = new Date(raw);
   return Number.isFinite(d.getTime()) ? d : null;
@@ -208,6 +213,7 @@ export async function dispatchPerSource(
           repoPath: opts.repoPath,
           source_id: src.id,
           pull: !!remoteUrl,
+          phases: SOURCE_FRESHNESS_PHASES,
         },
         {
           queue: 'default',
@@ -267,4 +273,148 @@ export async function dispatchPerSource(
     skipped_cap: skippedCap.map(s => s.id),
     legacy_fallback: false,
   };
+}
+
+const GLOBAL_FLOOR_MIN = 60;
+
+export function isGlobalMaintenanceStale(
+  lastGlobalAtIso: string | null,
+  now = Date.now(),
+  floorMin = GLOBAL_FLOOR_MIN,
+): boolean {
+  if (!lastGlobalAtIso) return true;
+  const last = new Date(lastGlobalAtIso);
+  return !Number.isFinite(last.getTime()) || (now - last.getTime()) / 60_000 >= floorMin;
+}
+
+/** Queue the mixed/global Dream stage once per freshness window. */
+export async function dispatchGlobalMaintenance(
+  engine: BrainEngine,
+  queue: MinionQueue,
+  opts: {
+    repoPath: string;
+    slot: string;
+    timeoutMs: number;
+    jsonMode: boolean;
+    emit?: (line: string) => void;
+    log?: (line: string) => void;
+  },
+): Promise<{ dispatched: boolean; reason: 'stale' | 'fresh' }> {
+  const emit = opts.emit ?? ((line: string) => process.stderr.write(line + '\n'));
+  const log = opts.log ?? ((line: string) => console.log(line));
+  const configuredFloor = Number.parseInt(
+    (await engine.getConfig('autopilot.global_floor_min')) ?? '',
+    10,
+  );
+  const floorMin = Number.isFinite(configuredFloor) && configuredFloor >= 1
+    ? configuredFloor
+    : GLOBAL_FLOOR_MIN;
+  if (!isGlobalMaintenanceStale(await engine.getConfig(LAST_GLOBAL_AT_KEY), Date.now(), floorMin)) {
+    return { dispatched: false, reason: 'fresh' };
+  }
+  const job = await queue.add(
+    'autopilot-global-maintenance',
+    { repoPath: opts.repoPath, phases: MAINTENANCE_PHASES },
+    {
+      queue: 'default',
+      idempotency_key: `autopilot-global:${opts.slot}`,
+      max_attempts: 2,
+      timeout_ms: opts.timeoutMs,
+      maxPending: 1,
+    },
+  );
+  if (opts.jsonMode) {
+    emit(JSON.stringify({ event: 'dispatched', job_id: job.id, mode: 'global_maintenance', slot: opts.slot }));
+  } else {
+    log(`[dispatch] job #${job.id} autopilot-global-maintenance`);
+  }
+  return { dispatched: true, reason: 'stale' };
+}
+
+/**
+ * Queue a bounded drain only for Sources with a currently observable atom
+ * backlog. The durable handler re-counts between batches and retries total
+ * provider outages instead of reporting a false success.
+ */
+export async function dispatchExtractAtomsDrains(
+  engine: BrainEngine,
+  queue: MinionQueue,
+  opts: {
+    slot: string;
+    timeoutMs: number;
+    maxSubmissions: number;
+    jsonMode: boolean;
+    emit?: (line: string) => void;
+    log?: (line: string) => void;
+  },
+): Promise<{ dispatched: string[]; no_backlog: string[]; failed: string[] }> {
+  const emit = opts.emit ?? ((line: string) => process.stderr.write(line + '\n'));
+  const log = opts.log ?? ((line: string) => console.log(line));
+  const { countExtractAtomsBacklog } = await import('../core/cycle/extract-atoms.ts');
+  const sources = await engine.listAllSources({ localPathOnly: true });
+  const configuredWindow = Number.parseInt(
+    (await engine.getConfig('autopilot.extract_atoms_drain_window_seconds')) ?? '',
+    10,
+  );
+  const windowSeconds = Number.isFinite(configuredWindow)
+    ? Math.max(1, Math.min(3600, configuredWindow))
+    : 300;
+  const dispatched: string[] = [];
+  const noBacklog: string[] = [];
+  const failed: string[] = [];
+
+  for (const source of sources) {
+    if (dispatched.length >= Math.max(1, opts.maxSubmissions)) break;
+    try {
+      const remaining = await countExtractAtomsBacklog(engine, source.id);
+      if (remaining === 0) {
+        noBacklog.push(source.id);
+        continue;
+      }
+      // Unknown counts are not submitted: fail closed instead of converting a
+      // database read error into model-spending background work.
+      if (remaining === null) {
+        failed.push(source.id);
+        continue;
+      }
+      const job = await queue.add(
+        'extract-atoms-drain',
+        {
+          source_id: source.id,
+          repoPath: source.local_path ?? undefined,
+          window_seconds: windowSeconds,
+        },
+        {
+          queue: 'default',
+          idempotency_key: `autopilot-extract-atoms-drain:${source.id}:${opts.slot}`,
+          max_attempts: 3,
+          timeout_ms: Math.max(opts.timeoutMs, (windowSeconds + 60) * 1000),
+        },
+        { allowProtectedSubmit: true },
+      );
+      dispatched.push(source.id);
+      if (opts.jsonMode) {
+        emit(JSON.stringify({
+          event: 'dispatched',
+          job_id: job.id,
+          mode: 'extract_atoms_drain',
+          source_id: source.id,
+          remaining,
+          window_seconds: windowSeconds,
+        }));
+      } else {
+        log(`[dispatch] job #${job.id} extract-atoms-drain source=${source.id} remaining=${remaining}`);
+      }
+    } catch (error) {
+      failed.push(source.id);
+      if (opts.jsonMode) {
+        emit(JSON.stringify({
+          event: 'extract_atoms_drain_dispatch_failed',
+          source_id: source.id,
+          error: error instanceof Error ? error.message : String(error),
+        }));
+      }
+    }
+  }
+  return { dispatched, no_backlog: noBacklog, failed };
 }

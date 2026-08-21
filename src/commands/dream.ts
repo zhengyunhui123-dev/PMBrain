@@ -485,18 +485,6 @@ function printHelp() {
 // ─── Human-friendly report printing ────────────────────────────────
 
 function printHuman(report: CycleReport) {
-  const pgliteWorkerSkipped = report.phases.filter(
-    phase => phase.details?.reason === 'pglite_worker_unavailable',
-  );
-  const printPgliteCoverage = () => {
-    if (pgliteWorkerSkipped.length === 0) return;
-    const completed = report.phases.length - pgliteWorkerSkipped.length;
-    console.log(
-      `PGLite 阶段覆盖: ${completed}/${report.phases.length}；` +
-      `${pgliteWorkerSkipped.map(phase => phase.phase).join('、')} 已明确跳过。`,
-    );
-  };
-
   if (report.status === 'skipped') {
     if (report.reason === 'cycle_already_running') {
       console.log(`Skipped: another cycle is already running. (locked)`);
@@ -512,7 +500,6 @@ function printHuman(report: CycleReport) {
     console.log(
       `Brain is healthy. ${report.phases.length} phase(s) checked in ${(report.duration_ms / 1000).toFixed(1)}s.`,
     );
-    printPgliteCoverage();
     return;
   }
 
@@ -543,7 +530,6 @@ function printHuman(report: CycleReport) {
       `patterns=${t.patterns_written}`,
     );
   }
-  printPgliteCoverage();
 }
 
 // ─── CLI entry ─────────────────────────────────────────────────────
@@ -626,14 +612,6 @@ export async function runDream(engine: BrainEngine | null, args: string[]): Prom
       process.exit(2);
     }
     throw e;
-  }
-
-  if (engine !== null && engine.kind === 'pglite' && opts.preset === 'meeting') {
-    console.error(
-      'PGLite 暂不支持“会议与会话”整理：该预设依赖 synthesize。' +
-      '请使用 --preset full（执行 20/22 阶段）或 --preset quick。',
-    );
-    process.exit(2);
   }
 
   if (opts.allSources && engine === null) {

@@ -130,6 +130,11 @@ export interface MinionJobInput {
   idempotency_key?: string;
   /** Submission backpressure: cap waiting jobs with this name before inserting a new row. */
   maxWaiting?: number;
+  /**
+   * Submission single-flight: cap waiting jobs plus active jobs whose lock is
+   * still live. Expired active locks do not suppress a fresh submission.
+   */
+  maxPending?: number;
 
   // v12: scheduler polish
   /**

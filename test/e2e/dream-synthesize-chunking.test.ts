@@ -97,10 +97,18 @@ async function withSubagentAutoCancel<T>(engine: PGLiteEngine, body: () => Promi
  */
 async function seedVerdict(engine: PGLiteEngine, filePath: string, content: string): Promise<string> {
   const { createHash } = await import('node:crypto');
+  const { resolveDreamModel } = await import('../../src/core/cycle/model-routing.ts');
   const contentHash = createHash('sha256').update(content, 'utf8').digest('hex');
+  const verdictModel = (await resolveDreamModel(engine, { phase: 'synthesize_verdict' })).model;
   await engine.putDreamVerdict(filePath, contentHash, {
     worth_processing: true,
     reasons: ['seeded for chunking E2E test'],
+    score: 0.9,
+    content_type: 'strategy',
+    segments: [],
+    entities: [],
+    model: verdictModel,
+    triage_version: 1,
   });
   return contentHash;
 }

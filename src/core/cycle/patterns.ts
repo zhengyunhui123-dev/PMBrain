@@ -19,6 +19,7 @@
  */
 
 import { join, dirname } from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import type { BrainEngine } from '../engine.ts';
 import type { PhaseResult, PhaseError } from '../cycle.ts';
@@ -34,6 +35,7 @@ import {
   resolveSubagentExecutionMode,
 } from './model-routing.ts';
 import type { ResolvedModel } from '../model-config.ts';
+import { runSubagentsInline } from './inline-drain.ts';
 
 export interface PatternsPhaseOpts {
   brainDir: string;
@@ -82,6 +84,7 @@ export async function runPhasePatterns(
     }
 
     const queue = new MinionQueue(engine);
+    const childQueueName = `dream-inline-${Date.now()}-${randomUUID().slice(0, 8)}`;
     const data: SubagentHandlerData = {
       prompt: buildPatternsPrompt(reflections, config.minEvidence),
       model: config.resolvedModel.model,
@@ -91,10 +94,13 @@ export async function runPhasePatterns(
     const submitOpts: Partial<MinionJobInput> = {
       max_stalled: 3,
       timeout_ms: 30 * 60 * 1000,
+      queue: childQueueName,
     };
     const job = await queue.add('subagent', data as unknown as Record<string, unknown>, submitOpts, {
       allowProtectedSubmit: true,
     });
+
+    await runSubagentsInline(engine, queue, childQueueName, opts.yieldDuringPhase);
 
     let outcome: string;
     try {

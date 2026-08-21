@@ -31,6 +31,9 @@ export const PROTECTED_JOB_NAMES: ReadonlySet<string> = new Set([
   'synthesize',
   'patterns',
   'consolidate',
+  // Bounded Haiku extraction can spend model budget repeatedly until the
+  // Source backlog is empty. Only trusted local maintenance paths may queue it.
+  'extract-atoms-drain',
   // v0.40.3.0 — per-chunk Haiku contextual retrieval backfill. Each job
   // potentially calls Haiku 1-50 times per page; an MCP/OAuth-scoped
   // caller submitting this in bulk could drain the user's Anthropic

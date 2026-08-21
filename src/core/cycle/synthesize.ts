@@ -27,6 +27,7 @@
  */
 
 import type Anthropic from '@anthropic-ai/sdk';
+import { randomUUID } from 'node:crypto';
 import { writeFileSync, mkdirSync, statSync } from 'node:fs';
 import { chat as gatewayChat, type ChatResult } from '../ai/gateway.ts';
 import { resolveRecipe } from '../ai/model-resolver.ts';
@@ -35,7 +36,7 @@ import { loadConfig } from '../config.ts';
 import { basename, join, dirname, isAbsolute, resolve } from 'node:path';
 import { resolveDreamOutputRoot } from './dream-output.ts';
 export { resolveDreamOutputRoot } from './dream-output.ts';
-import type { BrainEngine } from '../engine.ts';
+import type { BrainEngine, DreamVerdict } from '../engine.ts';
 import type { PhaseResult, PhaseError } from '../cycle.ts';
 import { MinionQueue } from '../minions/queue.ts';
 import { waitForCompletion, TimeoutError } from '../minions/wait-for-completion.ts';
@@ -52,6 +53,24 @@ import {
   resolveDreamModel,
   resolveSubagentExecutionMode,
 } from './model-routing.ts';
+import {
+  buildLinkManifest,
+  buildManifestContext,
+  type ManifestContext,
+} from './link-manifest.ts';
+import { runSubagentsInline } from './inline-drain.ts';
+import {
+  buildTriageMapBlock as buildStructuredTriageMapBlock,
+  DEFAULT_TRIAGE_THRESHOLD,
+  runTriagePass as runStructuredTriagePass,
+} from './structured-triage.ts';
+export {
+  buildTriageMapBlock,
+  judgeSignificance,
+  runTriagePass,
+  TRIAGE_VERSION,
+} from './structured-triage.ts';
+export type { TriagePassCfg } from './structured-triage.ts';
 
 // Slug regex from validatePageSlug — kept in sync.
 // Used for the orchestrator-written summary index slug.
@@ -388,63 +407,60 @@ export async function runPhaseSynthesize(
       });
     }
 
-    // Significance verdicts (cached in dream_verdicts; Haiku on miss).
+    // Structured significance triage (cached only when the cheap-model
+    // response is complete and parseable). Legacy boolean-only rows are
+    // deliberately re-judged so the expensive pass can consume segments,
+    // entities and content type instead of re-scanning from scratch.
     const worthProcessing: DiscoveredTranscript[] = [];
-    const verdicts: Array<{ filePath: string; worth: boolean; reasons: string[]; cached: boolean }> = [];
+    let verdicts: Array<{
+      filePath: string;
+      worth: boolean;
+      score: number | null;
+      content_type: string | null;
+      reasons: string[];
+      cached: boolean;
+      unreliable?: string;
+      deferred?: boolean;
+    }> = [];
+    const structuredVerdicts = new Map<string, DreamVerdict>();
+    let triageStats = { judged: 0, cacheHits: 0, unreliable: 0, deferred: 0 };
     // Provider-aware judge client routes through gateway.chat, so any
     // configured provider works (Anthropic, DeepSeek, OpenRouter, Voyage,
     // Ollama, llama-server, etc.). Returns null when the resolved verdict
     // model has no reachable provider (legacy "no API key" branch preserved
     // as the cheap pre-flight check).
-    const judge = makeJudgeClient(config.verdictModel);
-    for (const t of transcripts) {
-      if (explicitInputIsDirectory) {
+    if (explicitInputIsDirectory) {
+      for (const t of transcripts) {
         verdicts.push({
           filePath: t.filePath,
           worth: true,
+          score: null,
+          content_type: null,
           reasons: ['explicit input folder selected'],
           cached: false,
         });
         worthProcessing.push(t);
-        continue;
       }
-      const cached = await engine.getDreamVerdict(t.filePath, t.contentHash);
-      if (cached) {
-        verdicts.push({ filePath: t.filePath, worth: cached.worth_processing, reasons: cached.reasons, cached: true });
-        if (cached.worth_processing) worthProcessing.push(t);
-        continue;
-      }
-      if (!judge) {
-        // No configured provider for the verdict model — can't judge.
-        // Skip with explicit reason; don't crash phase.
-        verdicts.push({
-          filePath: t.filePath,
-          worth: false,
-          reasons: [`no configured provider for verdict model: ${config.verdictModel}`],
-          cached: false,
-        });
-        continue;
-      }
-      try {
-        const verdict = await judgeSignificance(judge, t, config.verdictModel);
-        await engine.putDreamVerdict(t.filePath, t.contentHash, verdict);
-        verdicts.push({ filePath: t.filePath, worth: verdict.worth_processing, reasons: verdict.reasons, cached: false });
-        if (verdict.worth_processing) worthProcessing.push(t);
-      } catch (e) {
-        // AIConfigError at chat time = provider auth/config went bad mid-run
-        // (revoked key, recipe misconfig surfacing at first real call). Skip
-        // this transcript with the gateway error message so the user sees the
-        // shape of the problem in `gbrain dream --phase synthesize --dry-run`.
-        if (e instanceof AIConfigError) {
-          verdicts.push({
-            filePath: t.filePath,
-            worth: false,
-            reasons: [`gateway error: ${e.message}`],
-            cached: false,
-          });
-          continue;
-        }
-        throw e;
+    } else {
+      const triage = await runStructuredTriagePass(engine, transcripts, {
+        model: config.verdictModel,
+        maxChars: config.triage.maxChars,
+        maxTokens: config.triage.maxTokens,
+        threshold: config.triage.threshold,
+        concurrency: config.triage.concurrency,
+        maxMs: config.triage.maxMs,
+        judge: makeJudgeClient(config.verdictModel),
+      }, opts.yieldDuringPhase);
+      verdicts = triage.reports;
+      triage.byPath.forEach((verdict, path) => structuredVerdicts.set(path, verdict));
+      triageStats = {
+        judged: triage.judged,
+        cacheHits: triage.cacheHits,
+        unreliable: triage.unreliable,
+        deferred: triage.deferred,
+      };
+      for (let i = 0; i < transcripts.length; i++) {
+        if (triage.reports[i]?.worth) worthProcessing.push(transcripts[i]);
       }
     }
 
@@ -461,6 +477,7 @@ export async function runPhaseSynthesize(
         transcripts_processed: 0,
         pages_written: 0,
         verdicts,
+        triage: triageStats,
         duplicate_skips: duplicateInputSkips,
         dryRun: true,
       });
@@ -477,6 +494,7 @@ export async function runPhaseSynthesize(
         transcripts_processed: 0,
         pages_written: 0,
         verdicts,
+        triage: triageStats,
         duplicate_skips: duplicateInputSkips,
       });
     }
@@ -489,7 +507,21 @@ export async function runPhaseSynthesize(
         'skills/_brain-filing-rules.json missing dream_synthesize_paths.globs'));
     }
 
+    // Build one Source-scoped, zero-Embedding candidate index for the phase.
+    const manifestSourceId = opts.sourceId ?? 'default';
+    let manifestCtx: ManifestContext | null = null;
+    if (config.linkManifest) {
+      try {
+        manifestCtx = await buildManifestContext(engine, manifestSourceId);
+      } catch (e) {
+        process.stderr.write(
+          `[dream] manifest context build failed (continuing without manifests): ${e instanceof Error ? e.message : String(e)}\n`,
+        );
+      }
+    }
+
     const queue = new MinionQueue(engine);
+    const childQueueName = `dream-inline-${Date.now()}-${randomUUID().slice(0, 8)}`;
     const childIds: number[] = [];
     /** Map child job_id → chunk metadata for D6 orchestrator-side slug rewrite. */
     const chunkInfo = new Map<number, { idx: number; hash6: string }>();
@@ -555,9 +587,31 @@ export async function runPhaseSynthesize(
         : config.model.toLowerCase().startsWith('claude-')
           ? `anthropic:${config.model}`
           : config.model;
+      const manifestBlock = manifestCtx
+        ? (await buildLinkManifest(
+            engine,
+            manifestCtx,
+            structuredVerdicts.get(t.filePath),
+            t.basename,
+            { outputRoot: 'wiki', sourceId: manifestSourceId },
+          )).block
+        : '';
       for (let i = 0; i < chunks.length; i++) {
+        const triageMapBlock = buildStructuredTriageMapBlock(
+          structuredVerdicts.get(t.filePath),
+          chunks[i],
+          chunks.length,
+        );
         const childData: SubagentHandlerData = {
-          prompt: buildSynthesisPrompt(t, chunks[i], i, chunks.length, priorContradictionsBlock),
+          prompt: buildSynthesisPrompt(
+            t,
+            chunks[i],
+            i,
+            chunks.length,
+            priorContradictionsBlock,
+            triageMapBlock,
+            manifestBlock,
+          ),
           model: subagentModel,
           max_turns: 30,
           allowed_slug_prefixes: allowedSlugPrefixes,
@@ -580,6 +634,7 @@ export async function runPhaseSynthesize(
           on_child_fail: 'continue',
           idempotency_key,
           timeout_ms: 30 * 60 * 1000, // 30 min per chunk
+          queue: childQueueName,
         };
         const child = await queue.add(
           'subagent',
@@ -593,6 +648,8 @@ export async function runPhaseSynthesize(
         }
       }
     }
+
+    await runSubagentsInline(engine, queue, childQueueName, opts.yieldDuringPhase);
 
     // Wait for every child to reach a terminal state. Tick yieldDuringPhase
     // every 5 min so the cycle lock TTL refreshes.
@@ -735,6 +792,15 @@ interface SynthConfig {
    * `dream.synthesize.max_chunks_per_transcript`.
    */
   maxChunksPerTranscript: number;
+  /** Pre-resolved, Source-scoped wikilink candidates; default enabled. */
+  linkManifest: boolean;
+  triage: {
+    threshold: number;
+    maxChars: number;
+    maxTokens: number;
+    maxMs: number;
+    concurrency: number;
+  };
 }
 
 async function loadSynthConfig(engine: BrainEngine): Promise<SynthConfig> {
@@ -753,6 +819,20 @@ async function loadSynthConfig(engine: BrainEngine): Promise<SynthConfig> {
   const cooldownHoursStr = await engine.getConfig('dream.synthesize.cooldown_hours');
   const maxPromptTokensStr = await engine.getConfig('dream.synthesize.max_prompt_tokens');
   const maxChunksStr = await engine.getConfig('dream.synthesize.max_chunks_per_transcript');
+  const linkManifestRaw = (await engine.getConfig('dream.synthesize.link_manifest'))
+    ?.trim()
+    .toLowerCase();
+  const triageThresholdRaw = await engine.getConfig('dream.synthesize.triage_threshold');
+  const triageMaxCharsRaw = await engine.getConfig('dream.synthesize.triage_max_chars');
+  const triageMaxTokensRaw = await engine.getConfig('dream.synthesize.triage_max_tokens');
+  const triageMaxMsRaw = await engine.getConfig('dream.synthesize.triage_max_ms');
+  const triageConcurrencyRaw = await engine.getConfig('dream.synthesize.triage_concurrency');
+
+  const finiteNumber = (raw: string | null, fallback: number): number => {
+    if (raw === null || raw.trim() === '') return fallback;
+    const value = Number(raw);
+    return Number.isFinite(value) ? value : fallback;
+  };
 
   let excludePatterns: string[] = ['medical', 'therapy'];
   if (excludeStr) {
@@ -792,6 +872,18 @@ async function loadSynthConfig(engine: BrainEngine): Promise<SynthConfig> {
     cooldownHours: cooldownHoursStr ? Math.max(0, parseInt(cooldownHoursStr, 10) || 12) : 12,
     maxPromptTokens,
     maxChunksPerTranscript,
+    linkManifest: !(
+      linkManifestRaw === 'false' ||
+      linkManifestRaw === '0' ||
+      linkManifestRaw === 'off'
+    ),
+    triage: {
+      threshold: Math.max(0, Math.min(1, finiteNumber(triageThresholdRaw, DEFAULT_TRIAGE_THRESHOLD))),
+      maxChars: Math.max(1000, Math.floor(finiteNumber(triageMaxCharsRaw, 24_000))),
+      maxTokens: Math.max(128, Math.floor(finiteNumber(triageMaxTokensRaw, 2048))),
+      maxMs: Math.max(0, Math.floor(finiteNumber(triageMaxMsRaw, 5 * 60 * 1000))),
+      concurrency: Math.max(1, Math.min(16, Math.floor(finiteNumber(triageConcurrencyRaw, 4)))),
+    },
   };
 }
 
@@ -906,13 +998,20 @@ export function makeJudgeClient(verdictModel: string): JudgeClient | null {
       // Map gateway.ChatResult → Anthropic.Message shape. judgeSignificance
       // reads `.content[0].type === 'text'` and `.content[0].text`; other
       // fields are best-effort for downstream telemetry parity.
+      const stopReason = result.stopReason === 'length'
+        ? 'max_tokens'
+        : (result.stopReason === 'refusal' || result.stopReason === 'content_filter')
+          ? 'refusal'
+          : result.stopReason === 'tool_calls'
+            ? 'tool_use'
+            : 'end_turn';
       return {
         id: '',
         type: 'message',
         role: 'assistant',
         model: modelStr,
         content: [{ type: 'text', text: result.text }],
-        stop_reason: 'end_turn',
+        stop_reason: stopReason as Anthropic.Message['stop_reason'],
         stop_sequence: null,
         usage: {
           input_tokens: result.usage.input_tokens,
@@ -938,83 +1037,6 @@ function hasAnthropicKey(): boolean {
     // loadConfig may throw on first-run installs; treat as no key.
   }
   return false;
-}
-
-interface VerdictResult {
-  worth_processing: boolean;
-  reasons: string[];
-}
-
-export async function judgeSignificance(
-  client: JudgeClient,
-  t: DiscoveredTranscript,
-  verdictModel = 'claude-haiku-4-5-20251001',
-): Promise<VerdictResult> {
-  // Truncate the transcript at 8K chars for cost control. Haiku's verdict
-  // doesn't need the full body; the opening + closing sections are usually
-  // representative of significance.
-  //
-  // v0.41.13 surrogate-safety (supersedes PRs #1559+#1561's safeSliceEnd
-  // helper; see text-safe.ts:18-21 module docstring for why that helper
-  // re-introduces the case-3 bug the canonical safeSplitIndex was written
-  // to fix). Routes head + tail slicing through safeSplitIndex so an emoji
-  // at offset 4000 (or length-4000) never produces a lone surrogate that
-  // Anthropic's JSON parser rejects ("no low surrogate in string", caught
-  // 2026-05-24 on telegram).
-  //
-  // Contract: this branch only runs when content.length > 8000, so
-  // length - 4000 > 4000 > 0 — safeSplitIndex never sees an out-of-range
-  // maxChars here. (Codex C-10 documented contract.)
-  let trimmed: string;
-  if (t.content.length > 8000) {
-    const headEnd = safeSplitIndex(t.content, 4000);
-    const tailStart = safeSplitIndex(t.content, t.content.length - 4000);
-    trimmed = t.content.slice(0, headEnd) + '\n[...truncated...]\n' + t.content.slice(tailStart);
-  } else {
-    trimmed = t.content;
-  }
-
-  const sys = `You judge whether a conversation transcript is worth synthesizing into a personal knowledge brain.
-
-WORTH PROCESSING (return worth_processing=true):
-- The user articulates a new idea, frame, mental model, or thesis
-- The user reflects on themselves, names patterns, processes emotion
-- The user discusses specific people, companies, or decisions in depth
-- The user makes a strategic call worth remembering
-
-NOT WORTH PROCESSING (return worth_processing=false):
-- Routine ops ("check my email", "schedule X")
-- Pure code debugging without user reflection
-- Short message exchanges with no original thought
-- Repetitive content the brain already has
-
-Respond as JSON: {"worth_processing": <bool>, "reasons": ["<short>", "<short>"]}.
-Two reasons max, one phrase each.`;
-
-  const msg = await client.create({
-    model: verdictModel,
-    max_tokens: 200,
-    system: sys,
-    messages: [{ role: 'user', content: `Transcript ${t.basename}:\n\n${trimmed}` }],
-  });
-
-  for (const block of msg.content) {
-    if (block.type === 'text') {
-      const text = block.text.trim();
-      const m = /\{[\s\S]*\}/.exec(text);
-      if (!m) continue;
-      try {
-        const parsed = JSON.parse(m[0]) as { worth_processing?: unknown; reasons?: unknown };
-        const worth = parsed.worth_processing === true;
-        const reasons = Array.isArray(parsed.reasons)
-          ? parsed.reasons.filter((r): r is string => typeof r === 'string').slice(0, 4)
-          : [];
-        return { worth_processing: worth, reasons };
-      } catch { /* fall through */ }
-    }
-  }
-  // Couldn't parse — default to processing (lenient fallback for non-Anthropic models).
-  return { worth_processing: true, reasons: ['defaulted to process (unparseable verdict)'] };
 }
 
 // ── Subagent prompt ──────────────────────────────────────────────────
@@ -1079,6 +1101,8 @@ function buildSynthesisPrompt(
   chunkIdx: number,
   chunkTotal: number,
   priorContradictionsBlock = '',
+  triageMapBlock = '',
+  linkManifestBlock = '',
 ): string {
   const dateHint = t.inferredDate ?? today();
   const baseSlugSegment = sanitizeForSlug(t.basename) || `session-${dateHint}`;
@@ -1092,16 +1116,19 @@ function buildSynthesisPrompt(
   const transcriptHeader = isChunked
     ? `${t.filePath} (chunk ${chunkIdx + 1}/${chunkTotal})`
     : t.filePath;
+  const crossRefRule = linkManifestBlock
+    ? 'Cross-reference compulsively: every new page MUST contain at least one wikilink (e.g., `[ref](people/jane-doe)` or `[[people/jane-doe]]`) to existing brain content. Pick targets from LINK CANDIDATES first; use search only when no candidate fits.'
+    : 'Cross-reference compulsively: every new page MUST contain at least one wikilink (e.g., `[ref](people/jane-doe)` or `[[people/jane-doe]]`) to existing brain content. Use the search tool to find existing pages first.';
   return `You are synthesizing a conversation transcript into the user's personal knowledge brain.
 
 CONTEXT
 - Today's date: ${dateHint}
 - Transcript hash suffix (USE THIS in slugs): ${hashSuffix}
-- Source file basename: ${baseSlugSegment}${chunkBanner}${priorContradictionsBlock}
+- Source file basename: ${baseSlugSegment}${chunkBanner}${priorContradictionsBlock}${triageMapBlock}${linkManifestBlock}
 
 OUTPUT POLICY (ALL of these are required)
 1. Quote the user verbatim. Do not paraphrase memorable phrasings.
-2. Cross-reference compulsively: every new page MUST contain at least one wikilink (e.g., \`[ref](people/jane-doe)\` or \`[[people/jane-doe]]\`) to existing brain content. Use the search tool to find existing pages first.
+2. ${crossRefRule}
 3. Do NOT write to any path outside the allow-list shown in the put_page schema.
 4. Slug discipline: lowercase alphanumeric and hyphens only, slash-separated segments. NO underscores, NO file extensions.
 
@@ -1480,6 +1507,7 @@ function makeError(cls: string, code: string, message: string, hint?: string): P
 // behavior at function granularity (e.g., #745 collectChildPutPageSlugs
 // double-encoded jsonb regression). Not part of the runtime contract.
 export const __testing = {
+  buildSynthesisPrompt,
   collectChildPutPageSlugs,
   findLegacyCompletion,
   stampDreamProvenance,

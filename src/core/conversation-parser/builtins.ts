@@ -179,6 +179,129 @@ export const BUILTIN_PATTERNS: readonly PatternEntry[] = [
   },
 
   {
+    id: 'bold-paren-time-12h',
+    origin: 'builtin',
+    regex: /^\*\*(.+?)\*\*\s*\((\d{1,2}):(\d{2})\s*(AM|PM|am|pm)\)\s*:\s*(.*)$/,
+    captures: {
+      speaker_group: 1,
+      hour_group: 2,
+      minute_group: 3,
+      ampm_group: 4,
+      text_group: 5,
+    },
+    date_source: 'frontmatter',
+    time_format: '12h_ampm',
+    timezone_policy: 'utc_assumed_with_warn',
+    multi_line: false,
+    quick_reject: /^\*\*/,
+    test_positive: [
+      '**Me** (9:04 AM): sounds good, see you then',
+      '**Alice Example** (12:00 PM): noon message',
+    ],
+    test_negative: [
+      '**Alice** (00:00): 24h shape',
+      '**Alice Example** (2024-03-15 9:00 AM): full-date shape',
+    ],
+    source_doc: 'Time-only 12h iMessage Markdown export',
+  },
+
+  {
+    id: 'bold-time-dash',
+    origin: 'builtin',
+    regex: /^\*\*(.+?)\*\*\s+([01]?\d|2[0-3]):([0-5]\d)\s+[-\u2013\u2014]\s*(.*)$/,
+    captures: {
+      speaker_group: 1,
+      hour_group: 2,
+      minute_group: 3,
+      text_group: 4,
+    },
+    date_source: 'frontmatter',
+    time_format: '24h',
+    timezone_policy: 'utc_assumed_with_warn',
+    multi_line: true,
+    score_continuations_as_body: true,
+    quick_reject: /^\*\*/,
+    test_positive: [
+      '**Alice Example** 09:15 — hello world',
+      '**Bob Example** 7:05 - ASCII dash export',
+    ],
+    test_negative: [
+      '**Alice Example** (09:15): parenthesized shape',
+      '**Alice Example:** no-time shape',
+    ],
+    source_doc: 'Normalized Slack Markdown with time and dash',
+  },
+
+  {
+    id: 'speaker-letter-no-time',
+    origin: 'builtin',
+    regex: /^(Speaker [A-Z0-9]+):\s*(.*)$/,
+    captures: { speaker_group: 1, text_group: 2 },
+    date_source: 'frontmatter',
+    time_format: '24h',
+    timezone_policy: 'utc_assumed_with_warn',
+    multi_line: false,
+    quick_reject: /^Speaker /,
+    score_full_body: true,
+    test_positive: [
+      'Speaker A: That is exactly the issue.',
+      'Speaker Z9: Let me ask him.',
+    ],
+    test_negative: [
+      '**Speaker A:** bold no-time shape',
+      'Owner: prose label',
+    ],
+    source_doc: 'Fathom and phone-call raw transcript sidecars',
+  },
+
+  {
+    id: 'chatgpt-export-you-chatgpt',
+    origin: 'builtin',
+    regex: /^\*\*(You|ChatGPT):\*\*\s*(.*)$/,
+    captures: { speaker_group: 1, text_group: 2 },
+    date_source: 'frontmatter',
+    time_format: '24h',
+    timezone_policy: 'utc_assumed_with_warn',
+    multi_line: true,
+    score_continuations_as_body: true,
+    score_continuations_min_distinct_speakers: 2,
+    score_continuations_max_preamble_lines: 5,
+    score_full_body: true,
+    quick_reject: /^\*\*(?:You|ChatGPT):\*\*/,
+    test_positive: [
+      '**You:** what is the capital of France?',
+      '**ChatGPT:** The capital of France is Paris.',
+    ],
+    test_negative: [
+      '**Alice Example:** hello world',
+      '**Assistant:** not the literal ChatGPT label',
+    ],
+    source_doc: 'ChatGPT web-export converted to Markdown',
+  },
+
+  {
+    id: 'bold-name-no-time',
+    origin: 'builtin',
+    regex: /^\*\*(?!\[)(.+?):\*\*\s*(.*)$/,
+    captures: { speaker_group: 1, text_group: 2 },
+    date_source: 'frontmatter',
+    time_format: '24h',
+    timezone_policy: 'utc_assumed_with_warn',
+    multi_line: false,
+    quick_reject: /^\*\*/,
+    score_full_body: true,
+    test_positive: [
+      '**Alice Example:** Okay, start on.',
+      '**Participant 2:** That is exactly right.',
+    ],
+    test_negative: [
+      '**Alice** (00:00): text',
+      '**[18:37] Alice:** telegram shape',
+    ],
+    source_doc: 'Circleback, Granola, and Zoom no-time Markdown transcript',
+  },
+
+  {
     id: 'telegram-text-export',
     origin: 'builtin',
     // Telegram Desktop's text-export shape: `Alice Doe, [Mar 15, 2024 at 6:37:00 PM]`
@@ -471,6 +594,32 @@ export const BUILTIN_PATTERNS: readonly PatternEntry[] = [
     test_positive: ['18:37 <alice> hello', '06:00 <bob> morning'],
     test_negative: ['<alice> classic irc, no time', '[18:37] @alice: matrix'],
     source_doc: 'weechat default logger.format `%H:%M %p\\t%m`',
+  },
+  {
+    id: 'markdown-heading-turn',
+    origin: 'builtin',
+    // AI transcript ingest shape: a closed-set role heading opens a turn;
+    // continuation lines below it become the message body. Ordinary section
+    // headings such as "## Summary" cannot match this registry entry.
+    regex: /^#{2,3}\s+(User|Assistant|Human|System)\s*:?\s*()$/,
+    captures: {
+      speaker_group: 1,
+      text_group: 2,
+    },
+    date_source: 'frontmatter',
+    time_format: '24h',
+    timezone_policy: 'utc_assumed_with_warn',
+    multi_line: true,
+    score_continuations_as_body: true,
+    quick_reject: /^#{2,3}\s+(?:User|Assistant|Human|System)\b/,
+    test_positive: ['## User', '## Assistant', '### Human', '## System', '## User:'],
+    test_negative: [
+      '## Summary',
+      '#### User',
+      'User: plain no heading',
+      '## User said hello',
+    ],
+    source_doc: 'AI transcript Markdown heading roles',
   },
 ];
 

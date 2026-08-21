@@ -1783,6 +1783,37 @@ describe('MinionQueue: v0.19.1 maxWaiting — cap correctness + race (D2/H2)', (
   });
 });
 
+describe('MinionQueue: maxPending — live-lock single-flight', () => {
+  test('a live active job suppresses a second submission in the same source scope', async () => {
+    const first = await queue.add('global-maintenance', { source_id: 'source-a' }, { maxPending: 1 });
+    await engine.executeRaw(
+      `UPDATE minion_jobs
+       SET status='active', lock_token='live-worker', lock_until=now() + interval '60 seconds'
+       WHERE id=$1`,
+      [first.id],
+    );
+
+    const second = await queue.add('global-maintenance', { source_id: 'source-a' }, { maxPending: 1 });
+    const otherSource = await queue.add('global-maintenance', { source_id: 'source-b' }, { maxPending: 1 });
+
+    expect(second.id).toBe(first.id);
+    expect(otherSource.id).not.toBe(first.id);
+  });
+
+  test('an expired active lock does not suppress a fresh submission', async () => {
+    const first = await queue.add('expired-maintenance', {}, { maxPending: 1 });
+    await engine.executeRaw(
+      `UPDATE minion_jobs
+       SET status='active', lock_token='expired-worker', lock_until=now() - interval '1 second'
+       WHERE id=$1`,
+      [first.id],
+    );
+
+    const second = await queue.add('expired-maintenance', {}, { maxPending: 1 });
+    expect(second.id).not.toBe(first.id);
+  });
+});
+
 describe('resolveWorkerConcurrency (v0.19.1 H3): clamp + validation', () => {
   // jobs.ts handler — tested via direct import. Warning goes to stderr;
   // tests verify return value only, not the warning line.

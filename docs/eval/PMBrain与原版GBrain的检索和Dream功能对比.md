@@ -1,10 +1,10 @@
 # PMBrain 与原版 GBrain 的检索和 Dream 功能对比
 
-维护日期：2026-07-29
+维护日期：2026-08-22
 
-PMBrain 基线：1.1.76，本次 Embedding 安全修复结果
+PMBrain 基线：1.2.75，AI 深度整理第三批实现
 
-GBrain 基线：`D:\cursor-claude\gbrain` 的最新本地 `master`，commit `faf5cdba`，VERSION `0.42.66.1`
+GBrain 基线：`D:\cursor-claude\gbrain` 的最新本地 `master`，commit `055ac6c7`，VERSION `0.46.25.0`
 
 > 两个项目采用不同版本规则，版本号不能直接比较大小。本对比以实际代码、阶段顺序、配置解析和测试入口为准，不以版本号推断能力。
 
@@ -15,7 +15,7 @@ PMBrain 不是重新实现了一套 RAG 和 Dream：
 - RAG 的混合召回、搜索模式、排序增强、图谱召回、缓存、遥测和评测底座主要沿用 GBrain。
 - Dream 的阶段顺序、锁、Source 作用域、知识抽取、概念合成、观点与校准等主流程主要沿用 GBrain。
 - PMBrain 的新增集中在中文与项目管理检索、普通模型统一兜底、无默认 Embedding 安全契约、桌面与 Admin 产品化、Source 安全实体解析、知识关系回填、孤儿治理和面向真实用户的质量评分。
-- PMBrain 也存在尚未同步的上游更新，不能把这些差异误称为产品创新。查询向量超时、最新缓存隔离、部分会话解析、原子任务排空等应继续评估移植；SkillOpt、Chronicle 等仍按产品边界暂缓。
+- PMBrain 仍有尚未同步的上游更新，不能把这些差异误称为产品创新。查询向量共享 deadline、最新缓存隔离、Retrieval Reflex 等仍需评估；SkillOpt、Chronicle 等继续按产品边界暂缓。
 
 后续维护原则仍是：
 
@@ -81,7 +81,7 @@ lint → backlinks → sync → synthesize → extract → extract_facts
 | Cycle lock、刷新、超时与 dry-run | 沿用 GBrain | 保留，写阶段统一进入锁保护 |
 | Phase scope | 沿用 GBrain | 保留 source / global / mixed 分类 |
 | Transcript synthesize | 沿用后适配 | 保留会话转知识页的核心逻辑，增加 PMBrain 路径与模型适配 |
-| Synthesize verdict | 沿用 GBrain | 保留生成结果判定 |
+| Synthesize verdict | 沿用后对齐 | 已升级为评分、内容类型、候选分段、实体、模型和 triage 版本；旧布尔缓存会重判，截断、拒答和格式错误不会永久缓存 |
 | Link、timeline 与 facts 抽取 | 沿用后适配 | 保留上游抽取骨架，并增加 PMBrain Source 解析规则 |
 | CJK 人名和中文关系类型 | 最新上游能力移植 | 已支持中日韩名称及中文 founded / works_at / advises 等关系语义 |
 | 正文日期推断 | 最新上游能力移植 | `--infer-dates` 只使用可信正文、frontmatter 或文件名日期，不用 `updated_at` 代替事件日期 |
@@ -91,6 +91,9 @@ lint → backlinks → sync → synthesize → extract → extract_facts
 | Drift 与 enrich_thin | 沿用 GBrain | 保留且默认受配置门控制 |
 | Conversation facts backfill | 沿用 GBrain | 保留，支持 conversation、meeting、slack、email |
 | Embed、orphans、schema-suggest、purge | 沿用后适配 | 保留后段顺序；PMBrain 改进孤儿分母和产品回显 |
+| PGLite Dream 子任务执行 | 沿用后对齐 | 私有子任务在同进程串行排空，不再跳过 synthesize 和 patterns；PostgreSQL 保留受控并发 |
+| Source 新鲜度与全局阶段 | 沿用后对齐 | 每个 Source 只运行确定性的 Source 阶段，混合/全局阶段由单独维护任务执行一次，避免多 Source 重复消耗模型 |
+| extract-atoms-drain | 沿用后对齐 | 单锁、固定时间窗持续清理积压；无进展停止；供应商全失败让持久任务重试而不是显示成功 |
 
 ## 5. Dream：PMBrain 自己新增或产品化的能力
 
@@ -109,6 +112,11 @@ lint → backlinks → sync → synthesize → extract → extract_facts
 | Admin 与桌面 Dream 产品层 | 一键整理、定时运行、阶段摘要、成果明细、后台无窗口运行和高级模型配置 | `admin/`、`desktop/` |
 | 面向发布的 Dream 评分 | 事实保真、证据有效、实体串联、孤儿改善、去重、Source 规则和行动价值分开评分 | `docs/eval/PMBrain检索与Dream质量评测规范.md` |
 | 未配置向量时跳过 embed | Dream 返回 `embedding_not_configured` 的 skipped 阶段，不会选择 ZE，也不会把普通模型当向量模型 | `src/core/cycle.ts`、`src/core/embedding-dim-check.ts` |
+| 深度整理两阶段筛选 | 便宜模型先输出可验证的结构化 triage map，昂贵综合阶段优先读取候选分段和实体；可配置阈值、并发与时间预算 | `cycle/structured-triage.ts`、`cycle/synthesize.ts` |
+| Source 内链接候选清单 | 综合前用标题、名称、slug 尾名和关键词生成零 Embedding 候选；只在当前 Source 内提供人物、项目、公司和概念链接 | `cycle/link-manifest.ts` |
+| 原子积压自动排空 | Autopilot 只为确有积压的 Source 提交受保护的排空任务；一次任务持有同一 Source cycle lock 并重复处理 bounded batch | `cycle/extract-atoms-drain.ts`、`autopilot-fanout.ts` |
+| Dream 产物可检索 | atom、concept 统一走导入切块管线；无向量配置时仍写 `content_chunks` 并可关键词召回 | `extract-atoms.ts`、`synthesize-concepts.ts` |
+| 会话输入适配 | 当前 PMBrain 与本地 GBrain 均为 19 个 built-in；补齐 ChatGPT 导出、Slack 块、AI 角色标题、Speaker A/B 等格式并保留普通文档保护 | `conversation-parser/builtins.ts` |
 
 ## 6. 当前尚未同步或明确暂缓的上游能力
 
@@ -118,22 +126,27 @@ lint → backlinks → sync → synthesize → extract → extract_facts
 |---|---|---|
 | Query embedding 共享 deadline | 尚未同步；GBrain 有 `makeQueryEmbedDeadline()`，PMBrain 当前没有 | 高优先级评估移植，避免向量服务卡住缓存查询和主搜索两次 |
 | Dream embed 的 AbortSignal 与 quiet 输出 | 最新 GBrain 已接入，PMBrain 当前仅完成“未配置则跳过”和不回退 | 后续移植中止信号与安静输出，不改变现有阶段数据语义 |
-| Query cache 最新隔离 | GBrain `KNOBS_HASH_VERSION=13`，已纳入 embedding provider 与 hard-exclude；PMBrain 当前为 9 | 高优先级移植，防止模型切换或排除规则变化后误用旧缓存 |
+| Query cache 最新隔离 | GBrain `KNOBS_HASH_VERSION=21`，PMBrain 当前为 9 | 高优先级移植，防止模型切换或排除规则变化后误用旧缓存 |
 | Provider-agnostic embedding migration 命令 | GBrain 有独立 `migrate-embeddings.ts`；PMBrain 仍使用自己的受保护重嵌入流程 | 与老用户向量保护规则对照后移植，不能直接清空索引 |
 | Global basename Wikilink 解析 | 明确不移植跨目录 basename | 当前 Source-local → default 更符合多 Source 安全边界 |
 | Life Chronicle / 事件页投影 / 本体维度 | 尚未同步 | 知识库已能分类事件页；Chronicle、`event_page_id`、`facts.dimension` 仍暂缓 |
 | Retrieval reflex | 尚未同步 | 需要真实题集证明收益后再决定 |
 | SkillOpt | 明确暂缓 | 缺少专属 benchmark 前不允许自动改 Skill |
-| extract-atoms-drain | 尚未同步 | 可评估失败重试与任务排空，不改变阶段语义 |
-| 最新会话解析模式 | GBrain 17 个 built-in，PMBrain 12 个 | 建议补齐 Slack/会议等新增格式 |
-| Query embedding 共享 deadline | 尚未同步 | 高优先级评估，避免向量服务卡住两次 |
-| Query cache 最新隔离 | GBrain KNOBS_HASH_VERSION=13，PMBrain 为 9 | 高优先级移植 |
 | `extract --stale` 关系抽取水位 | **已移植**（Schema 115） | `pages.links_extracted_at` + `pmbrain extract --stale` + `links_extraction_lag` |
 | MEMORY_VERBS `entity` | **已移植** | 零模型实体卡片 |
 | Fact remember/forget | **已移植** | 知识库可列出 facts 表 |
 | MCP `list_skills` / `get_skill` 协议信封 | **已对齐** | 返回 `instructions` / `client_guidance`；本地 Sidecar 默认打开 `mcp.publish_skills`；Agent 先读 Skill 再搜知识。未移植 `list_brain_skillpack`、SkillOpt |
 
-## 7. 本次 Embedding 差异结论
+## 7. 本轮三项完成后的实际体验
+
+1. 深度整理不再只得到“值得/不值得”布尔值。便宜模型先标出分数、内容类型、实体和原文片段，昂贵模型拿着这张地图整理，例行操作更少进入昂贵阶段，人物、项目和概念链接更容易接到既有知识页。
+2. 模型输出被截断、拒答或 JSON 损坏时，本轮不会把错误结果写进永久缓存。下一轮仍可重新判断，不会长期出现“这份内容永远不再整理”的假阴性。
+3. 原子提取每批仍受预算和批量上限保护，但后台会在固定窗口内继续处理下一批。积压清空即停止，连续无进展即停止，全部供应商请求失败则任务失败并进入重试，不再把剩余积压包装成成功。
+4. PGLite 桌面用户可完成完整 Dream 阶段；多 Source 下全局综合不再为每个 Source 重复运行。atom 和 concept 即使没有 Embedding，也会切块并可通过关键词搜索。
+
+数据库兼容：Schema 116 只为 `dream_verdicts` 增加可空字段，不回填、不清空旧判定，也不修改现有知识页、原始资料或向量。旧布尔判定按需重判。
+
+## 8. Embedding 差异结论
 
 最新 GBrain 仍保留 `zeroentropyai:zembed-1` 运行时默认值，因此这一点不沿用。
 GBrain 已把部分分块 provenance 从硬编码 ZE 改为 Gateway 当前模型，这个方向沿用，
@@ -148,7 +161,7 @@ PMBrain 本次新增并固定以下行为：
 5. 导入、Dream、后台补全和两种数据库引擎共享 provenance 规则。
 6. 历史上已被错误标记的行不自动批量改写；需另行取得授权并以可验证证据回填。
 
-## 8. 如何判断后续功能属于哪一层
+## 9. 如何判断后续功能属于哪一层
 
 满足以下任一条件，优先视为 GBrain 核心层：
 

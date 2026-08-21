@@ -576,7 +576,12 @@ export async function runAutopilot(engine: BrainEngine, args: string[]) {
           // codex P1-3). Fresh-install brains with no sources rows fall
           // back to the legacy single autopilot-cycle so existing
           // behavior is preserved.
-          const { dispatchPerSource, resolveFanoutMax } = await import('./autopilot-fanout.ts');
+          const {
+            dispatchExtractAtomsDrains,
+            dispatchGlobalMaintenance,
+            dispatchPerSource,
+            resolveFanoutMax,
+          } = await import('./autopilot-fanout.ts');
           const fanoutMax = await resolveFanoutMax(engine);
           const result = await dispatchPerSource(engine, queue, {
             repoPath,
@@ -585,6 +590,38 @@ export async function runAutopilot(engine: BrainEngine, args: string[]) {
             fanoutMax,
             jsonMode,
           });
+          if (!result.legacy_fallback) {
+            try {
+              await dispatchGlobalMaintenance(engine, queue, {
+                repoPath,
+                slot,
+                timeoutMs: resolveAutopilotDispatchTimeoutMs(baseInterval, true),
+                jsonMode,
+              });
+            } catch (e) {
+              if (jsonMode) {
+                process.stderr.write(JSON.stringify({
+                  event: 'global_maintenance_dispatch_failed',
+                  error: e instanceof Error ? e.message : String(e),
+                }) + '\n');
+              }
+            }
+            try {
+              await dispatchExtractAtomsDrains(engine, queue, {
+                slot,
+                timeoutMs: resolveAutopilotDispatchTimeoutMs(baseInterval, true),
+                maxSubmissions: fanoutMax,
+                jsonMode,
+              });
+            } catch (e) {
+              if (jsonMode) {
+                process.stderr.write(JSON.stringify({
+                  event: 'extract_atoms_drain_scan_failed',
+                  error: e instanceof Error ? e.message : String(e),
+                }) + '\n');
+              }
+            }
+          }
           if (result.dispatched.length > 0 || result.legacy_fallback) {
             lastFullCycleAt = Date.now();
           }

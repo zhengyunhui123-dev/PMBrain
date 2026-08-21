@@ -160,6 +160,16 @@ export interface PatternEntry {
    */
   multi_line: boolean;
   /**
+   * Treat non-anchor lines as message continuations for scoring after the
+   * pattern has shown enough anchor evidence. Requires multi_line and a
+   * quick_reject guard.
+   */
+  score_continuations_as_body?: boolean;
+  /** Minimum number of distinct captured speakers before continuation-aware scoring activates. */
+  score_continuations_min_distinct_speakers?: number;
+  /** Maximum number of non-blank preamble lines before the first anchor. */
+  score_continuations_max_preamble_lines?: number;
+  /**
    * D11: optional cheap O(1) prefix check. If set, orchestrator runs
    * this FIRST per line; only tries `regex` if quick_reject matches.
    * Examples: `/^\*\*\[/` for telegram-bracket.
@@ -170,6 +180,8 @@ export interface PatternEntry {
    * uses `DEFAULT_SPEAKER_CLEAN`.
    */
   speaker_clean?: RegExp;
+  /** Recheck this broad pattern against the complete body before accepting it. */
+  score_full_body?: boolean;
   /** D7: module-load validation — known-positive sample lines. */
   test_positive: string[];
   /** D7: module-load validation — known-negative sample lines. */

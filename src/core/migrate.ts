@@ -5139,6 +5139,21 @@ export const MIGRATIONS: Migration[] = [
       }
     },
   },
+  {
+    version: 116,
+    name: 'dream_verdicts_structured_triage',
+    // Compatible widening only: legacy boolean rows remain intact and are
+    // treated as cache misses until naturally re-judged. No data backfill.
+    idempotent: true,
+    sql: `
+      ALTER TABLE dream_verdicts ADD COLUMN IF NOT EXISTS score DOUBLE PRECISION;
+      ALTER TABLE dream_verdicts ADD COLUMN IF NOT EXISTS content_type TEXT;
+      ALTER TABLE dream_verdicts ADD COLUMN IF NOT EXISTS segments JSONB;
+      ALTER TABLE dream_verdicts ADD COLUMN IF NOT EXISTS entities JSONB;
+      ALTER TABLE dream_verdicts ADD COLUMN IF NOT EXISTS model TEXT;
+      ALTER TABLE dream_verdicts ADD COLUMN IF NOT EXISTS triage_version INT;
+    `,
+  },
 ];
 
 export const LATEST_VERSION = MIGRATIONS.length > 0

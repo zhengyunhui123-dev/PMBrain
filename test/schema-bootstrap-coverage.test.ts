@@ -664,6 +664,15 @@ test('every CREATE INDEX column in PGLITE_SCHEMA_SQL is covered by CREATE TABLE 
 // ─────────────────────────────────────────────────────────────────
 
 const COLUMN_EXEMPTIONS = new Set<string>([
+  // v116: dream_verdicts is migration-created on PGLite and none of these
+  // nullable cache columns are referenced by a schema-blob index. Legacy
+  // rows are deliberately treated as structured-triage cache misses.
+  'dream_verdicts.score',
+  'dream_verdicts.content_type',
+  'dream_verdicts.segments',
+  'dream_verdicts.entities',
+  'dream_verdicts.model',
+  'dream_verdicts.triage_version',
   // T7 — search_telemetry rank-1 drift columns (migration v111). search_telemetry
   // is created entirely by migration v57 (not in the schema blob), so the v57+v111
   // chain handles fresh + upgrade; no CREATE INDEX references these columns, so
