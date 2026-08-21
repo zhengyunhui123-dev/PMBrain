@@ -33,7 +33,10 @@ afterEach(() => {
 // Canned "worth processing" LLM text used by the parsed-verdict parity tests.
 // Mirrors what a well-tuned Haiku would emit for a substantive transcript.
 const WORTH_PROCESSING_JSON = JSON.stringify({
-  worth_processing: true,
+  score: 0.82,
+  content_type: 'strategy',
+  segments: [{ quote: 'portfolio framework', note: 'durable decision framework' }],
+  entities: ['portfolio framework'],
   reasons: ['user reflects on portfolio framework', 'concrete strategic call'],
 });
 
@@ -281,9 +284,7 @@ describe('R3 — parsed-verdict semantic parity (IRON RULE regression)', () => {
     });
   });
 
-  test('R3 corollary: unparseable LLM output → both paths return cheap-fallback verdict', async () => {
-    // Pre-rework AND post-rework both fall through to the
-    // "judge response unparseable" branch when content isn't JSON.
+  test('R3 corollary: unparseable LLM output → both paths return an unreliable non-cacheable verdict', async () => {
     const legacyJudge: JudgeClient = {
       create: async () => ({
         id: 'msg_legacy_garbage',
@@ -314,8 +315,10 @@ describe('R3 — parsed-verdict semantic parity (IRON RULE regression)', () => {
         judgeSignificance(gatewayJudge!, FIXTURE_TRANSCRIPT, 'claude-haiku-4-5-20251001'),
       ]);
 
-      expect(legacyVerdict.worth_processing).toBe(true);
-      expect(gatewayVerdict.worth_processing).toBe(true);
+      expect(legacyVerdict.worth_processing).toBe(false);
+      expect(gatewayVerdict.worth_processing).toBe(false);
+      expect(legacyVerdict.unreliable).toBe('unparseable');
+      expect(gatewayVerdict.unreliable).toBe('unparseable');
       expect(gatewayVerdict.reasons).toEqual(legacyVerdict.reasons);
     });
   });

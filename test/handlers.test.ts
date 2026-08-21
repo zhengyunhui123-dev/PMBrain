@@ -188,21 +188,20 @@ describe('autopilot-cycle handler — phase passthrough', () => {
     }
   }, 30_000);
 
-  test('empty phases array falls back to all phases (same as no phases)', async () => {
+  test('an explicit empty phases array is skipped instead of expanding into expensive work', async () => {
     const handler = (worker as any).handlers.get('autopilot-cycle');
-    // Empty array should fall through to ALL_PHASES (same as omitting phases)
     const result = await handler({
-      data: { repoPath: '/definitely-does-not-exist-for-phase-test', phases: [] },
+      data: { repoPath: '/unused-for-empty-phase-list', phases: [] },
       signal: { aborted: false } as any,
       job: { id: 12, name: 'autopilot-cycle' } as any,
     });
 
-    const report = (result as any).report;
-    // With all phases, filesystem phases fail on missing dir
-    const phaseNames = report.phases.map((p: any) => p.phase);
-    expect(phaseNames).toContain('lint');
-    expect(phaseNames).toContain('backlinks');
-    expect(phaseNames).toContain('sync');
+    expect((result as any).partial).toBe(false);
+    expect((result as any).status).toBe('skipped');
+    expect((result as any).report).toEqual({
+      reason: 'empty_phase_list',
+      phases_rejected_by_normalization: [],
+    });
   }, 30_000);
 
   test('non-array phases value is ignored (falls back to all)', async () => {

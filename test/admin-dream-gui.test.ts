@@ -487,7 +487,7 @@ describe('Dream GUI product contract', () => {
     expect(dream).toContain('!isPglite');
     expect(dream).toContain("const isPglite = engine === 'pglite'");
     expect(dream).toContain('disabled={isPglite');
-    expect(dream).toContain('PGLite 暂不支持会议与会话整理');
+    expect(dream).toContain('PGLite 暂不支持 AI 会议整理');
     expect(dream).toContain('通常不需要手动操作');
   });
 

@@ -16,7 +16,11 @@
  */
 
 import { describe, test, expect, beforeAll, afterAll, beforeEach } from 'bun:test';
+import { mkdtempSync, rmSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import { PGLiteEngine } from '../src/core/pglite-engine.ts';
+import { configPath } from '../src/core/config.ts';
 import { resetPgliteState } from './helpers/reset-pglite.ts';
 import { withEnv } from './helpers/with-env.ts';
 import { runZeSwitch } from '../src/commands/ze-switch.ts';
@@ -28,8 +32,10 @@ import {
 } from '../src/core/retrieval-upgrade-planner.ts';
 
 let engine: PGLiteEngine;
+let configHome: string;
 
 beforeAll(async () => {
+  configHome = mkdtempSync(join(tmpdir(), 'pmbrain-ze-cli-'));
   engine = new PGLiteEngine();
   await engine.connect({});
   await engine.initSchema();
@@ -37,11 +43,22 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await engine.disconnect();
+  rmSync(configHome, { recursive: true, force: true });
 });
 
 beforeEach(async () => {
   await resetPgliteState(engine);
+  await withEnv({ PMBRAIN_HOME: configHome, GBRAIN_HOME: undefined }, async () => {
+    rmSync(configPath(), { force: true });
+  });
 });
+
+function runIsolatedZeSwitch(args: string[]) {
+  return withEnv(
+    { PMBRAIN_HOME: configHome, GBRAIN_HOME: undefined },
+    () => runZeSwitch(args, engine),
+  );
+}
 
 // Helpers: capture stdout/stderr/exitCode without actually exiting.
 function captureExit<T>(fn: () => Promise<T>): Promise<{ exitCode: number; stdout: string; stderr: string }> {
@@ -104,7 +121,7 @@ async function setLegacyConfig() {
 
 describe('--help', () => {
   test('exits 0 with usage text', async () => {
-    const r = await captureExit(() => runZeSwitch(['--help'], engine));
+    const r = await captureExit(() => runIsolatedZeSwitch(['--help']));
     expect(r.exitCode).toBe(0);
     expect(r.stdout).toContain('gbrain ze-switch');
     expect(r.stdout).toContain('--dry-run');
@@ -117,7 +134,7 @@ describe('--dry-run', () => {
     await setLegacyConfig();
     await seedPages(150);
 
-    const r = await captureExit(() => runZeSwitch(['--dry-run'], engine));
+    const r = await captureExit(() => runIsolatedZeSwitch(['--dry-run']));
     expect(r.exitCode).toBe(0);
     expect(r.stdout).toContain('Current model');
     expect(r.stdout).toContain('Target model');
@@ -130,7 +147,7 @@ describe('--dry-run', () => {
     await setLegacyConfig();
     await seedPages(150);
 
-    const r = await captureExit(() => runZeSwitch(['--dry-run', '--json'], engine));
+    const r = await captureExit(() => runIsolatedZeSwitch(['--dry-run', '--json']));
     expect(r.exitCode).toBe(0);
     const env = JSON.parse(r.stdout);
     expect(env.status).toBe('planned');
@@ -148,7 +165,7 @@ describe('--non-interactive', () => {
     // Clear the env var so the test runs the no-key path even when the
     // contributor has ZEROENTROPY_API_KEY set in their shell.
     await withEnv({ ZEROENTROPY_API_KEY: undefined }, async () => {
-      const r = await captureExit(() => runZeSwitch(['--non-interactive'], engine));
+      const r = await captureExit(() => runIsolatedZeSwitch(['--non-interactive']));
       expect(r.exitCode).toBe(1);
       expect(r.stderr).toContain('ZEROENTROPY_API_KEY');
     });
@@ -159,7 +176,7 @@ describe('--non-interactive', () => {
     await seedPages(150);
 
     const r = await captureExit(() =>
-      runZeSwitch(['--non-interactive', '--ignore-missing-key'], engine),
+      runIsolatedZeSwitch(['--non-interactive', '--ignore-missing-key']),
     );
     expect(r.exitCode).toBe(0);
     expect(await engine.getConfig(KEY_APPLIED)).toBe('true');
@@ -171,7 +188,7 @@ describe('--non-interactive', () => {
     await setLegacyConfig();
     await seedPages(150);
     await withEnv({ ZEROENTROPY_API_KEY: 'sk-fake' }, async () => {
-      const r = await captureExit(() => runZeSwitch(['--non-interactive'], engine));
+      const r = await captureExit(() => runIsolatedZeSwitch(['--non-interactive']));
       expect(r.exitCode).toBe(0);
       expect(await engine.getConfig(KEY_APPLIED)).toBe('true');
     });
@@ -181,7 +198,7 @@ describe('--non-interactive', () => {
     await setLegacyConfig();
     await seedPages(150);
     const r = await captureExit(() =>
-      runZeSwitch(['--non-interactive', '--ignore-missing-key', '--json'], engine),
+      runIsolatedZeSwitch(['--non-interactive', '--ignore-missing-key', '--json']),
     );
     expect(r.exitCode).toBe(0);
     const env = JSON.parse(r.stdout);
@@ -196,7 +213,7 @@ describe('--resume', () => {
     // Simulate crash partway: requested but not applied.
     await engine.setConfig(KEY_REQUESTED, 'true');
 
-    const r = await captureExit(() => runZeSwitch(['--resume'], engine));
+    const r = await captureExit(() => runIsolatedZeSwitch(['--resume']));
     expect(r.exitCode).toBe(0);
     expect(await engine.getConfig(KEY_APPLIED)).toBe('true');
     expect(await engine.getConfig('embedding_model')).toBe('zeroentropyai:zembed-1');
@@ -206,13 +223,13 @@ describe('--resume', () => {
 describe('--undo', () => {
   test('without snapshot exits 1', async () => {
     const r = await captureExit(() =>
-      runZeSwitch(['--undo', '--non-interactive', '--confirm-reembed'], engine),
+      runIsolatedZeSwitch(['--undo', '--non-interactive', '--confirm-reembed']),
     );
     expect(r.exitCode).toBe(1);
   });
 
   test('--non-interactive without --confirm-reembed exits 1', async () => {
-    const r = await captureExit(() => runZeSwitch(['--undo', '--non-interactive'], engine));
+    const r = await captureExit(() => runIsolatedZeSwitch(['--undo', '--non-interactive']));
     expect(r.exitCode).toBe(1);
     expect(r.stderr).toContain('confirm-reembed');
   });
@@ -222,12 +239,12 @@ describe('--undo', () => {
     await setLegacyConfig();
     await seedPages(150);
     await captureExit(() =>
-      runZeSwitch(['--non-interactive', '--ignore-missing-key'], engine),
+      runIsolatedZeSwitch(['--non-interactive', '--ignore-missing-key']),
     );
     expect(await engine.getConfig(KEY_APPLIED)).toBe('true');
 
     const r = await captureExit(() =>
-      runZeSwitch(['--undo', '--non-interactive', '--confirm-reembed'], engine),
+      runIsolatedZeSwitch(['--undo', '--non-interactive', '--confirm-reembed']),
     );
     expect(r.exitCode).toBe(0);
     // Reverted to prior model.

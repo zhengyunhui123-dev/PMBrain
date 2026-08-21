@@ -1,5 +1,14 @@
 # Bug 修复台账
 
+## 2026-08-22 PMBrain 1.2.76 修复合并后 CI 安装阶段全部失败
+
+- 时间：2026-08-22
+- 版本号：PMBrain 1.2.76；PMBrain Desktop 1.1.39（桌面端未改动）
+- 标题：修复合并造成的版本文件语法损坏
+- 描述：修复合并 Dream 能力与 Ollama 本地模型改动后，根 `package.json`、`VERSION` 和 `release-manifest.json` 同时保留两组版本号，造成 JSON 语法无效、所有 GitHub Actions 均在 `bun install --frozen-lockfile` 阶段退出的问题。统一 Core、Sidecar 与发布清单版本，不修改用户知识、向量、数据库、Wiki 或原始资料。
+- 是否完成：进行中
+- 最终结果：已根据合并后 Actions 的真实失败日志定位共同根因，等待完整本地验证与分支 CI 后更新。
+
 ## 2026-08-22 PMBrain 1.2.73 修复 Ollama 本地模型 AI 搜索超时与空意图
 
 - 时间：2026-08-22
