@@ -3,6 +3,7 @@ import { isSensitiveConfigKey, redactConfigValue } from '../config.ts';
 import { chat, configureGateway, isAvailable } from '../../core/ai/gateway.ts';
 import type { AIGatewayConfig } from '../../core/ai/types.ts';
 import { isGenerativeModelEnabled } from '../../core/model-usage.ts';
+import { streamOllamaNativeChat } from '../../core/ai/ollama-native.ts';
 import { INTENT_SYSTEM_PROMPT, PMBRAIN_ACTION_TOOL } from './prompt.ts';
 
 const INTENT_CLASSIFICATION_CHARACTERS = 4_000;
@@ -102,6 +103,37 @@ function extractIntentObjectFromChatResult(result: unknown): Record<string, unkn
   }
   if (typeof result.text === 'string' && result.text.trim()) return parseJsonObject(result.text);
   throw new Error('LLM did not return a planning object');
+}
+
+async function callOllamaIntentModel(
+  config: GBrainConfig,
+  taskText: string,
+  attempt: number,
+): Promise<Record<string, unknown>> {
+  const model = config.chat_model!.slice('ollama:'.length);
+  const apiKey = config.provider_touchpoint_api_keys?.ollama?.chat;
+  const result = await streamOllamaNativeChat({
+    baseURL: config.provider_touchpoint_base_urls?.ollama?.chat
+      ?? config.provider_base_urls?.ollama
+      ?? 'http://127.0.0.1:11434/v1',
+    apiKey,
+    model,
+    messages: [
+      {
+        role: 'system',
+        content: `${INTENT_SYSTEM_PROMPT}\n本次调用不提供工具；严格只输出同样结构的 JSON 对象，不要解释。`,
+      },
+      {
+        role: 'user',
+        content: `${attempt === 0 ? '' : '上次输出不可解析。请严格只输出 JSON 对象。\n'}用户输入：${taskText}`,
+      },
+    ],
+    maxTokens: 700,
+    temperature: 0,
+    format: PMBRAIN_ACTION_TOOL.function.parameters,
+  });
+  if (!result.text.trim()) throw new Error('Ollama did not return an intent JSON object');
+  return parseJsonObject(result.text);
 }
 
 // ---------------------------------------------------------------------------
@@ -241,6 +273,10 @@ export async function callIntentModel(config: GBrainConfig, text: string, attemp
     }
     const data = await res.json() as any;
     return extractIntentObjectFromOpenAiResponse(data);
+  }
+
+  if (config.chat_model?.startsWith('ollama:')) {
+    return await callOllamaIntentModel(config, taskText, attempt);
   }
 
   configureGateway(buildAdminGatewayConfig(config));

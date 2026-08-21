@@ -1,5 +1,14 @@
 # Bug 修复台账
 
+## 2026-08-22 PMBrain 1.2.73 修复 Ollama 本地模型 AI 搜索超时与空意图
+
+- 时间：2026-08-22
+- 版本号：PMBrain 1.2.73；PMBrain Desktop 1.1.39
+- 标题：让 Qwen3、Gemma 等 Ollama 普通模型可用于 AI 搜索和深度整理
+- 描述：修复 Ollama 普通问答经 OpenAI 兼容非流式路径调用时，Qwen3 持续输出思考内容、不返回最终 JSON/工具调用，最终触发超时或 `Unsupported intent`的问题。现在无工具的 Ollama 问答统一使用原生流式 `/api/chat`；Qwen3 显式关闭思考，意图识别使用原生结构化输出，并保留 AI 搜索/整理要求的 JSON。Ollama 工具调用仍保留 AI SDK 流式兼容路径，云端供应商仍使用原路径。不修改用户配置、知识、向量、Wiki 或原始资料。
+- 是否完成：是
+- 最终结果：实机 `qwen3:4b` 意图识别约 1.5 秒并正确识别为知识库搜索，普通答案约 1.4 秒返回最终文本，AI 搜索结构化结果约 2.8 秒返回可解析 JSON；实机 `gemma4:e4b` 约 9.6 秒返回最终答案。Core/搜索/整理定向测试 70/70、Desktop 连接与老用户模型路由 33/33、扩展网关/工具循环/Dream 回归 91/91 通过，根项目和 Desktop TypeScript 类型检查通过；Electron 生产资源与 Sidecar 已编译，Windows x64 运行时校验通过。未执行 `bun run build:win`，由用户最后打包。
+
 ## 2026-08-21 PMBrain 1.2.72 修复桌面升级后 PGLite 占用无法自助恢复
 
 - 时间：2026-08-21
