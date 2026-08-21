@@ -669,7 +669,10 @@ async function testConfiguredModel(kind: ModelKind): Promise<void> {
   const status = $<HTMLElement>(`#${kind}-model-load-status`);
   status.classList.remove('ready', 'warning', 'error');
   status.hidden = false;
-  status.textContent = '正在测试连接…';
+  const provider = normalizeProviderForModel($<HTMLSelectElement>(`#${kind}-provider`).value);
+  status.textContent = provider === 'ollama' || provider === 'llama-server'
+    ? '正在测试连接；本地模型首次加载可能需要 1–2 分钟…'
+    : '正在测试连接…';
   button.setAttribute('aria-busy', 'true');
   setBusy(button, true);
   try {

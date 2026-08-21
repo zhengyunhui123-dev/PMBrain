@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { testModelConnection } from '../src/main/model-connection-test.js';
+import {
+  modelConnectionTestTimeoutMs,
+  testModelConnection,
+} from '../src/main/model-connection-test.js';
 
 const servers: Array<{ stop(closeActiveConnections?: boolean): void }> = [];
 
@@ -52,6 +55,12 @@ function startOpenAICompatServer(options: {
 }
 
 describe('desktop model connection test', () => {
+  test('allows local Ollama models to finish a cold start without relaxing cloud probes', () => {
+    expect(modelConnectionTestTimeoutMs('ollama')).toBe(120_000);
+    expect(modelConnectionTestTimeoutMs('openai')).toBe(15_000);
+    expect(modelConnectionTestTimeoutMs('custom-openai')).toBe(15_000);
+  });
+
   test('sends the current ordinary-model draft and reports a successful connection', async () => {
     const fixture = startOpenAICompatServer();
     const result = await testModelConnection({

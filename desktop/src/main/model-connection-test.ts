@@ -24,7 +24,15 @@ export type DesktopModelConnectionTestResult =
   | { status: 'error'; durationMs: number; message: string };
 
 const MODEL_CONNECTION_TEST_TIMEOUT_MS = 15_000;
+const LOCAL_MODEL_CONNECTION_TEST_TIMEOUT_MS = 120_000;
 let testQueue: Promise<void> = Promise.resolve();
+
+export function modelConnectionTestTimeoutMs(provider: string): number {
+  const normalized = normalizeProvider(provider);
+  return normalized === 'ollama' || normalized === 'llama-server'
+    ? LOCAL_MODEL_CONNECTION_TEST_TIMEOUT_MS
+    : MODEL_CONNECTION_TEST_TIMEOUT_MS;
+}
 
 function normalizeProvider(provider: string): string {
   const value = provider.trim().toLowerCase();
@@ -132,13 +140,16 @@ function elapsedMs(startedAt: number): number {
   return Math.max(0, Math.round(performance.now() - startedAt));
 }
 
-function withTimeout<T>(operation: (signal: AbortSignal) => Promise<T>): Promise<T> {
+function withTimeout<T>(
+  operation: (signal: AbortSignal) => Promise<T>,
+  timeoutMs: number,
+): Promise<T> {
   const controller = new AbortController();
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => {
       controller.abort();
-      reject(new Error(`连接测试超时（${MODEL_CONNECTION_TEST_TIMEOUT_MS / 1000} 秒）`));
-    }, MODEL_CONNECTION_TEST_TIMEOUT_MS);
+      reject(new Error(`连接测试超时（${timeoutMs / 1000} 秒）`));
+    }, timeoutMs);
     void operation(controller.signal).then(
       value => {
         clearTimeout(timer);
@@ -158,6 +169,7 @@ async function executeModelConnectionTest(
   const startedAt = performance.now();
   try {
     const { config, model } = buildGatewayConfig(input);
+    const timeoutMs = modelConnectionTestTimeoutMs(input.provider);
     configureGateway(config);
     if (input.touchpoint === 'chat') {
       await withTimeout(signal => chat({
@@ -166,11 +178,11 @@ async function executeModelConnectionTest(
         messages: [{ role: 'user', content: '请返回 OK。' }],
         maxTokens: 8,
         abortSignal: signal,
-      }));
+      }), timeoutMs);
       return { status: 'success', durationMs: elapsedMs(startedAt) };
     }
 
-    const dimensions = await withTimeout(() => detectEmbeddingDimensions(model));
+    const dimensions = await withTimeout(() => detectEmbeddingDimensions(model), timeoutMs);
     const expected = input.expectedDimensions;
     if (Number.isInteger(expected) && expected! > 0 && dimensions !== expected) {
       return {
