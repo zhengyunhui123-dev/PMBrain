@@ -6,8 +6,8 @@
 - 版本号：PMBrain 1.2.76；PMBrain Desktop 1.1.39（桌面端未改动）
 - 标题：修复合并造成的版本文件语法损坏
 - 描述：修复合并 Dream 能力与 Ollama 本地模型改动后，根 `package.json`、`VERSION` 和 `release-manifest.json` 同时保留两组版本号，造成 JSON 语法无效、所有 GitHub Actions 均在 `bun install --frozen-lockfile` 阶段退出的问题。统一 Core、Sidecar 与发布清单版本，不修改用户知识、向量、数据库、Wiki 或原始资料。
-- 是否完成：进行中
-- 最终结果：已根据合并后 Actions 的真实失败日志定位共同根因，等待完整本地验证与分支 CI 后更新。
+- 是否完成：是
+- 最终结果：统一 Core、Sidecar 与发布清单版本为 1.2.76，并同步更新合并后已过期的 Dream、来源新鲜度、Admin 提示和 `ze-switch` 配置隔离测试契约。定向回归 55/55、本地 `verify` 38/38 通过；提交 `047bdde4` 对应的 GitHub Actions Test、E2E（含 PostgreSQL JSONB 对等验证）和 Heavy tests 全部通过。Core User Journeys 因本次变更未命中其路径过滤条件而未触发。未执行 `bun run build:win`，由用户最后打包。
 
 ## 2026-08-22 PMBrain 1.2.73 修复 Ollama 本地模型 AI 搜索超时与空意图
 
