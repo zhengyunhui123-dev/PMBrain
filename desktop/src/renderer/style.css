@@ -443,7 +443,11 @@ select { cursor: pointer; appearance: auto; -webkit-appearance: auto; }
 .recovery-code { margin-bottom: 22px; color: var(--danger); font: 10px Consolas, monospace; letter-spacing: .16em; }
 .recovery-panel h2 { max-width: 650px; font-size: 30px; line-height: 1.3; }
 .recovery-panel > p { max-width: 680px; margin: 18px 0 0; color: var(--text-secondary); font-size: 14px; line-height: 1.8; overflow-wrap: anywhere; }
+.recovery-panel > .recovery-owner { margin-top: 14px; padding: 11px 13px; border: 1px solid var(--danger-border); border-radius: 9px; color: var(--danger-text); background: var(--danger-soft); font-size: 12px; line-height: 1.55; }
 .recovery-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 30px; }
+.recovery-terminate { color: var(--danger-text); border-color: var(--danger-border); background: var(--danger-soft); font-weight: 680; }
+.recovery-terminate:hover:not(:disabled) { color: var(--danger-text); border-color: var(--danger); background: var(--danger-soft); }
+.recovery-terminate.busy i { border-color: var(--danger-text); border-top-color: transparent; }
 .recovery-note { display: grid; grid-template-columns: auto 1fr; gap: 14px; margin-top: 46px; padding: 16px 18px; border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 10px; background: var(--surface); }
 .recovery-note b { color: var(--text-secondary); font-size: 12px; }
 .recovery-note span { color: var(--text-secondary); font-size: 12px; }

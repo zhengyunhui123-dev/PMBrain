@@ -20,6 +20,11 @@ import { writeWorkbuddyUserAgent } from './integration/user-agent-writer.js';
 import { WorkBuddyAgentController } from './integration/workbuddy-agent-controller.js';
 import { registerDesktopIpcHandlers } from './ipc-handlers.js';
 import {
+  inspectDesktopPgliteRecovery,
+  terminateDesktopPgliteOwnerAndRetry,
+  type DesktopPgliteRecoveryDependencies,
+} from './pglite-recovery.js';
+import {
   initializeKnowledgeSourceGit,
   inspectKnowledgeSourceDirectory,
 } from './knowledge-source-git.js';
@@ -323,6 +328,22 @@ if (!app.requestSingleInstanceLock()) {
       getLogger: () => logger,
       reportError: reportUiActionError,
     });
+    const pgliteRecoveryDependencies: DesktopPgliteRecoveryDependencies = {
+      setup: () => {
+        const setup = getSetupInfo();
+        return {
+          needsSetup: setup.needsSetup,
+          engine: setup.current.engine,
+          databasePath: setup.current.databasePath,
+        };
+      },
+      recoveryActive: () => sidecarController.state?.phase === 'failed',
+      restart: async () => {
+        await windowController.showShell();
+        if (getSetupInfo().needsSetup) return undefined;
+        return sidecarController.restartForRetry();
+      },
+    };
     registerDesktopIpcHandlers({
       assertTrustedSender: event => {
         const senderUrl = event.senderFrame?.url || event.sender.getURL();
@@ -363,6 +384,11 @@ if (!app.requestSingleInstanceLock()) {
       installUpdate: () => updateController.install(),
       pgliteUpgradeBackups: () => pgliteBackupController.listUpgradeBackups(),
       previousVersion: () => desktopVersionHistory.previous,
+      pgliteRecoveryStatus: () => inspectDesktopPgliteRecovery(pgliteRecoveryDependencies),
+      terminatePgliteOwnerAndRetry: pid => terminateDesktopPgliteOwnerAndRetry(
+        pid,
+        pgliteRecoveryDependencies,
+      ),
       retry: async () => {
         await windowController.showShell();
         if (getSetupInfo().needsSetup) return undefined;

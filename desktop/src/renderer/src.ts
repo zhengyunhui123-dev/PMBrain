@@ -40,6 +40,8 @@ let advancedPhaseOverrides: Partial<Record<AdvancedModelPhase, string>> = {};
 let loadedKnowledgeDirectory = '';
 let loadedKnowledgeSourceId = '';
 let knowledgeSourceStatusRequest = 0;
+let recoveryStatusRequest = 0;
+let recoveryOwnerPid: number | null = null;
 const CUSTOM_ENDPOINT_PREFIX = 'custom-endpoint-';
 let customCatalog: DesktopCustomProviderCatalog = { chat: [], embedding: [] };
 let customSelection: DesktopCustomProviderSelection = {};
@@ -952,6 +954,32 @@ function renderService(service: SidecarState | null, port?: number): void {
   if (service?.phase === 'failed' && state && !state.setup.needsSetup) {
     $('#recovery-message').textContent = service.message || 'PMBrain 服务启动失败，请重试或查看日志。';
     switchPanel('recovery');
+    void refreshPgliteRecoveryStatus();
+  } else if (service?.phase !== 'failed') {
+    recoveryOwnerPid = null;
+    $<HTMLButtonElement>('#recovery-terminate').hidden = true;
+    $('#recovery-owner').hidden = true;
+  }
+}
+
+async function refreshPgliteRecoveryStatus(): Promise<void> {
+  const request = ++recoveryStatusRequest;
+  const button = $<HTMLButtonElement>('#recovery-terminate');
+  const owner = $('#recovery-owner');
+  recoveryOwnerPid = null;
+  button.hidden = true;
+  owner.hidden = true;
+  try {
+    const status = await window.pmbrainDesktop.getPgliteRecoveryStatus();
+    if (request !== recoveryStatusRequest) return;
+    if (status.canTerminate && status.pid) {
+      recoveryOwnerPid = status.pid;
+      button.hidden = false;
+      owner.textContent = `已确认 ${status.commandLabel ?? 'PMBrain 占用进程'}（PID ${status.pid}）仍在占用本机数据库。`;
+      owner.hidden = false;
+    }
+  } catch {
+    // Recovery remains usable through retry and logs when owner inspection is unavailable.
   }
 }
 
@@ -1852,6 +1880,27 @@ $('#recovery-retry').addEventListener('click', async () => {
   const button = $<HTMLButtonElement>('#recovery-retry');
   setBusy(button, true, '正在重启…');
   try { await window.pmbrainDesktop.retry(); } finally { setBusy(button, false, '重新启动服务'); }
+});
+$('#recovery-terminate').addEventListener('click', async () => {
+  if (!recoveryOwnerPid) return;
+  if (!confirm(
+    `确认结束 PID ${recoveryOwnerPid} 并重启 PMBrain？\n\n只会结束经过身份校验的 PMBrain 占用进程，不会删除数据库、知识内容或锁文件。`,
+  )) return;
+  const button = $<HTMLButtonElement>('#recovery-terminate');
+  const retryButton = $<HTMLButtonElement>('#recovery-retry');
+  const pid = recoveryOwnerPid;
+  setBusy(button, true, '正在结束并重启…');
+  retryButton.disabled = true;
+  clearNotices();
+  try {
+    await window.pmbrainDesktop.terminatePgliteOwnerAndRetry(pid);
+  } catch (error) {
+    setNotice('error', error instanceof Error ? error.message : String(error));
+    await refreshPgliteRecoveryStatus();
+  } finally {
+    setBusy(button, false, '结束占用进程并重启');
+    retryButton.disabled = false;
+  }
 });
 $('#recovery-logs').addEventListener('click', () => void window.pmbrainDesktop.openLogs());
 $('#recovery-settings').addEventListener('click', () => {

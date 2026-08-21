@@ -24,6 +24,7 @@ import type { DesktopTheme, SetupPayload } from './config-manager.js';
 import type { UpdateState } from './update-manager.js';
 import type { DesktopPgliteUpgradeBackups } from '../preload/index.js';
 import type { DesktopKnowledgeSourceStatus } from './knowledge-source-git.js';
+import type { PgliteOwnerStatus } from '../../../src/core/pglite-owner-control.js';
 
 type IpcHandler = (event: IpcMainInvokeEvent, ...args: any[]) => any;
 
@@ -60,6 +61,8 @@ export interface DesktopIpcHandlers {
   installUpdate: () => Promise<unknown> | undefined;
   pgliteUpgradeBackups: () => Promise<DesktopPgliteUpgradeBackups>;
   previousVersion: () => string | undefined;
+  pgliteRecoveryStatus: () => Promise<PgliteOwnerStatus>;
+  terminatePgliteOwnerAndRetry: (pid: number) => Promise<string | undefined>;
   retry: () => Promise<string | undefined>;
   openLogs: () => Promise<void> | void;
   exportDiagnosticBundle: () => Promise<unknown>;
@@ -120,6 +123,11 @@ export function registerDesktopIpcHandlers(handlers: DesktopIpcHandlers): void {
     const previous = handlers.previousVersion();
     if (!previous) throw new Error('当前没有可用的上一版本记录。');
     await shell.openExternal(`https://github.com/zhengyunhui123-dev/PMBrain/releases/tag/v${previous}`);
+  });
+  registerTrustedHandler('desktop:get-pglite-recovery-status', handlers, () => handlers.pgliteRecoveryStatus());
+  registerTrustedHandler('desktop:terminate-pglite-owner-and-retry', handlers, async (_event, pid: number) => {
+    const url = await handlers.terminatePgliteOwnerAndRetry(pid);
+    if (url) await handlers.mainWindow()?.loadURL(url);
   });
   registerTrustedHandler('desktop:retry', handlers, async () => {
     const url = await handlers.retry();
