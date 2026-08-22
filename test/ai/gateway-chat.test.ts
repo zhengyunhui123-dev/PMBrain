@@ -336,13 +336,18 @@ describe('chat touchpoint — Ollama thinking request isolation', () => {
         env: {},
       });
       const result = await chat({
-        system: 'Return JSON with answer, citations, and gaps.',
+        system: `You are gbrain's synthesis engine. Return JSON with "answer", "citations", and "gaps".`,
         messages: [{ role: 'user', content: 'test' }],
+        maxTokens: 4000,
       });
 
       expect(JSON.parse(result.text)).toEqual({ answer: 'ok', citations: [], gaps: [] });
-      const format = requestBody.format as { properties?: Record<string, unknown> };
-      expect(format.properties?.result).toEqual({});
+      const format = requestBody.format as {
+        properties?: { result?: { required?: string[]; properties?: Record<string, unknown> } };
+      };
+      expect(format.properties?.result?.required).toEqual(['answer', 'citations', 'gaps']);
+      expect(format.properties?.result?.properties?.answer).toMatchObject({ type: 'string', minLength: 1 });
+      expect(requestBody.options).toMatchObject({ num_ctx: 8192, num_predict: 1024 });
       expect((requestBody.messages as Array<{ content?: string }>)[0]?.content).toContain('result');
     } finally {
       server.stop(true);

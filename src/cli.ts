@@ -1942,14 +1942,6 @@ async function connectEngine(opts?: { probeOnly?: boolean; strictMigrations?: bo
     // Non-fatal. Pre-v39 brains may not have a usable config table yet.
   }
 
-  const configuredEmbeddingModel = effectiveConfig.embedding_model?.trim();
-  if (configuredEmbeddingModel) {
-    const { repairLegacyZeroEntropyLabels } = await import(
-      './core/embedding-dimension-alignment.ts'
-    );
-    await repairLegacyZeroEntropyLabels(engine, configuredEmbeddingModel);
-  }
-
   return engine;
 }
 

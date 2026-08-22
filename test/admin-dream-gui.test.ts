@@ -482,12 +482,16 @@ describe('Dream GUI product contract', () => {
     expect(dream).toContain('if (!data) setLoading(true)');
   });
 
-  test('Postgres runs ensure Worker availability while PGLite never starts Supervisor', () => {
+  test('PGLite can run AI meeting organization inline while Postgres ensures Worker availability', () => {
     expect(dream).toContain('await api.startSupervisor()');
     expect(dream).toContain('!isPglite');
     expect(dream).toContain("const isPglite = engine === 'pglite'");
-    expect(dream).toContain('disabled={isPglite');
-    expect(dream).toContain('PGLite 暂不支持 AI 会议整理');
+    expect(dream).toContain('disabled={!generativeEnabled}');
+    expect(dream).not.toContain("saved === 'meeting' && isPglite");
+    expect(dream).not.toContain("runMode === 'meeting' && isPglite");
+    expect(dream).not.toContain('disabled={isPglite');
+    expect(dream).not.toContain('PGLite 暂不支持 AI 会议整理');
+    expect(dream).not.toContain('需要 Postgres Worker');
     expect(dream).toContain('通常不需要手动操作');
   });
 

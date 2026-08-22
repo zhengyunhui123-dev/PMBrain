@@ -205,12 +205,20 @@ export class SetupController {
 
   private async applyOnce(payload: SetupPayload, sourcePolicy: SourceSetupPolicy) {
     await this.dependencies.ensureRuntimeReady();
-    const previousEmbeddingModel = getSetupInfo().current.embeddingModel?.trim();
+    const setupBeforeSave = getSetupInfo();
+    const previousEmbeddingModel = setupBeforeSave.current.embeddingModel?.trim();
     const requestedEmbeddingModel = payload.modelConfig?.embeddingModel?.trim();
+    const recoveryCandidate = setupBeforeSave.current.legacyEmbeddingRecoveryCandidate;
+    const legacyEmbeddingRecoveryConfirmed = Boolean(
+      payload.confirmLegacyEmbeddingRecovery === true
+      && requestedEmbeddingModel
+      && recoveryCandidate?.model === requestedEmbeddingModel,
+    );
     if (previousEmbeddingModel
         && requestedEmbeddingModel
         && previousEmbeddingModel !== requestedEmbeddingModel
-        && payload.confirmEmbeddingRebuild !== true) {
+        && payload.confirmEmbeddingRebuild !== true
+        && !legacyEmbeddingRecoveryConfirmed) {
       throw new Error(
         `向量模型将从 ${previousEmbeddingModel} 更换为 ${requestedEmbeddingModel}。`
         + '必须在桌面端明确确认重新向量化后才能继续。',
@@ -314,7 +322,18 @@ export class SetupController {
           'models', 'align-embedding-dimension', '--yes', '--json', '--empty-only',
         ]);
         embeddingSwitchCommitted = true;
-      } else if (saved.embeddingModelChanged) {
+      } else if (saved.embeddingModelChanged && legacyEmbeddingRecoveryConfirmed) {
+        this.dependencies.sendStartupProgress({
+          visible: true,
+          stage: 'migration',
+          title: '正在安全恢复原向量配置',
+          message: '正在核对数据库实际维度并校正历史误标；不会清空或重新生成已有向量。',
+        });
+        await runCliChecked(this.dependencies.runtime(), [
+          'models', 'restore-legacy-embedding-config', '--json',
+        ]);
+        embeddingSwitchCommitted = true;
+      } else if (saved.embeddingModelChanged && !legacyEmbeddingRecoveryConfirmed) {
         this.dependencies.sendStartupProgress({
           visible: true,
           stage: 'migration',

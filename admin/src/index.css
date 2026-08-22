@@ -1886,6 +1886,59 @@ label { display: block; font-size: 13px; font-weight: 500; margin-bottom: 6px; }
   margin-top: 2px;
 }
 
+.assistant-run-progress {
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--console-surface-soft);
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.assistant-run-progress.is-active {
+  border-color: color-mix(in srgb, var(--accent) 32%, var(--border));
+  background: color-mix(in srgb, var(--accent) 7%, var(--surface));
+}
+
+.assistant-run-progress-meta,
+.assistant-run-progress p {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin: 0;
+}
+
+.assistant-run-progress-meta {
+  color: var(--text-primary);
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+.assistant-run-progress svg {
+  width: 15px;
+  height: 15px;
+  margin-top: 1px;
+  flex: 0 0 auto;
+  color: var(--accent);
+}
+
+.assistant-run-progress.is-active .assistant-run-progress-meta svg {
+  animation: assistant-progress-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes assistant-progress-pulse {
+  0%, 100% { opacity: .5; transform: scale(.92); }
+  50% { opacity: 1; transform: scale(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .assistant-run-progress.is-active .assistant-run-progress-meta svg { animation: none; }
+}
+
 .nl-details {
   margin-top: 8px;
 }

@@ -10,6 +10,7 @@ import {
   invalidateMismatchedEmbeddingModels,
   repairLegacyZeroEntropyLabels,
   recommendedEmbeddingDimension,
+  restoreLegacyEmbeddingConfiguration,
 } from '../src/core/embedding-dimension-alignment.ts';
 import {
   readEmbeddingDimensionStatus,
@@ -262,6 +263,107 @@ describe('embedding dimension alignment', () => {
         WHERE page_id = ${pages[0].id}
           AND chunk_index = 1`,
     );
+  });
+
+  test('restores a historical model configuration only when dimensions and labels are safe', async () => {
+    const pages = await engine.executeRaw<{ id: number }>(
+      "SELECT id FROM pages WHERE slug = 'alignment/source'",
+    );
+    const vector = `[${new Array(1024).fill('0.5').join(',')}]`;
+    await engine.executeRaw(
+      `UPDATE content_chunks
+          SET embedding = '${vector}',
+              embedded_at = NOW(),
+              model = 'zeroentropyai:zembed-1'
+        WHERE page_id = ${pages[0].id}`,
+    );
+
+    await expect(restoreLegacyEmbeddingConfiguration(
+      engine,
+      'ollama:qwen3-embedding:0.6b',
+      1280,
+    )).rejects.toThrow('vector(1024)');
+
+    const restored = await restoreLegacyEmbeddingConfiguration(
+      engine,
+      'ollama:qwen3-embedding:0.6b',
+      1024,
+    );
+    expect(restored).toMatchObject({
+      status: 'restored',
+      target_model: 'ollama:qwen3-embedding:0.6b',
+      target_dimensions: 1024,
+      repaired_labels: 1,
+      cleared_embeddings: 0,
+    });
+    const rows = await engine.executeRaw<{
+      embedded: number;
+      embedded_at_present: boolean;
+      model: string;
+    }>(
+      `SELECT
+         COUNT(*) FILTER (WHERE embedding IS NOT NULL)::int AS embedded,
+         BOOL_AND(embedded_at IS NOT NULL) FILTER (WHERE embedding IS NOT NULL) AS embedded_at_present,
+         MAX(model) AS model
+       FROM content_chunks
+       WHERE page_id = ${pages[0].id}`,
+    );
+    expect(rows[0]).toEqual({
+      embedded: 1,
+      embedded_at_present: true,
+      model: 'ollama:qwen3-embedding:0.6b',
+    });
+
+    await engine.executeRaw(
+      `UPDATE content_chunks
+          SET model = 'zeroentropyai:zembed-1'
+        WHERE page_id = ${pages[0].id}`,
+    );
+    configureGateway({
+      embedding_model: 'ollama:qwen3-embedding:0.6b',
+      embedding_dimensions: 1024,
+      env: {},
+    });
+    let cliOutput = '';
+    const originalWrite = process.stdout.write;
+    process.stdout.write = ((chunk: string | Uint8Array) => {
+      cliOutput += typeof chunk === 'string' ? chunk : new TextDecoder().decode(chunk);
+      return true;
+    }) as typeof process.stdout.write;
+    try {
+      await runModels(engine, ['models', 'restore-legacy-embedding-config', '--json']);
+    } finally {
+      process.stdout.write = originalWrite;
+      configureGateway({
+        embedding_model: 'zeroentropyai:zembed-1',
+        embedding_dimensions: 1280,
+        env: {},
+      });
+    }
+    expect(JSON.parse(cliOutput.trim())).toMatchObject({
+      status: 'restored',
+      cleared_embeddings: 0,
+      repaired_labels: 1,
+    });
+
+    await engine.executeRaw(
+      `UPDATE content_chunks
+          SET model = 'zhipu:embedding-3'
+        WHERE page_id = ${pages[0].id}`,
+    );
+    await expect(restoreLegacyEmbeddingConfiguration(
+      engine,
+      'ollama:qwen3-embedding:0.6b',
+      1024,
+    )).rejects.toThrow('other model label');
+    const refused = await engine.executeRaw<{ embedded: number; model: string }>(
+      `SELECT
+         COUNT(*) FILTER (WHERE embedding IS NOT NULL)::int AS embedded,
+         MAX(model) AS model
+       FROM content_chunks
+       WHERE page_id = ${pages[0].id}`,
+    );
+    expect(refused[0]).toEqual({ embedded: 1, model: 'zhipu:embedding-3' });
   });
 
   test('normal alignment repairs old-model vectors without forcing a full rebuild', async () => {

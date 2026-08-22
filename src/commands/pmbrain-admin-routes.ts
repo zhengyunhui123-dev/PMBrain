@@ -441,7 +441,14 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
 
   app.get('/admin/api/dream/overview', requireAdmin, async (_req: Request, res: Response) => {
     try {
-      sendAdminContract(res, DreamOverviewResponseSchema, await getAdminDreamOverview(engine, config, VERSION));
+      // The generative switch is file-plane state and can change while the
+      // HTTP service stays alive. Do not keep the startup snapshot here or
+      // Dream will remain grey until the whole Sidecar restarts.
+      sendAdminContract(
+        res,
+        DreamOverviewResponseSchema,
+        await getAdminDreamOverview(engine, loadConfig() ?? config, VERSION),
+      );
     } catch (e) {
       res.status(500).json({ error: e instanceof Error ? e.message : 'dream_overview_failed' });
     }

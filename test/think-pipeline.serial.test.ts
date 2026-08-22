@@ -205,11 +205,37 @@ describe('runThink (with stub client)', () => {
     expect(result.citations.length).toBeGreaterThanOrEqual(2);
   });
 
+  test('rejects a structured response with an empty answer instead of reporting false success', async () => {
+    const emptyAnswerClient: ThinkLLMClient = {
+      create: async () => ({
+        id: 'msg_empty_answer',
+        type: 'message',
+        role: 'assistant',
+        model: 'stub',
+        stop_reason: 'end_turn',
+        stop_sequence: null,
+        usage: { input_tokens: 10, output_tokens: 10, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, server_tool_use: null, service_tier: null },
+        content: [{
+          type: 'text',
+          text: JSON.stringify({ answer: '', citations: [], gaps: [] }),
+        }],
+      }),
+    };
+
+    await expect(runThink(engine, {
+      question: 'empty answer must fail',
+      client: emptyAnswerClient,
+    })).rejects.toThrow('empty answer');
+  });
+
   test('degrades gracefully when the configured LLM is unavailable', async () => {
     const origKey = process.env.ANTHROPIC_API_KEY;
     delete process.env.ANTHROPIC_API_KEY;
     try {
-      const result = await runThink(engine, { question: 'no key test' });
+      const result = await runThink(engine, {
+        question: 'no key test',
+        model: 'anthropic:claude-sonnet-4-6',
+      });
       expect(result.warnings).toContain('NO_LLM_AVAILABLE');
       expect(result.answer).toContain('no LLM available');
       expect(result.rounds).toBe(0);

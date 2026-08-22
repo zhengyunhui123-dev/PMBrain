@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Eye, ListTodo, Power, RefreshCw, ShieldAlert, XCircle } from 'lucide-react';
 import { api } from '../api';
 import { formatDate, RunOutput, type ConsoleRun } from '../lib/shared';
+import { describeRunRecovery } from '../lib/run-recovery';
 
 type TaskFilter = 'all' | 'completed' | 'failed' | 'cancelled';
 
@@ -82,8 +83,9 @@ function taskModelUsageLines(run: ConsoleRun): string[] {
   return lines;
 }
 
-function statusLabel(status: ConsoleRun['status']): string {
-  return ({ queued: '等待中', running: '运行中', completed: '已完成', failed: '失败', cancelled: '已取消' })[status];
+function statusLabel(run: ConsoleRun): string {
+  return describeRunRecovery(run)?.badge
+    ?? ({ queued: '等待中', running: '运行中', completed: '已完成', failed: '失败', cancelled: '已取消' })[run.status];
 }
 
 function statusClass(status: ConsoleRun['status']): string {
@@ -165,6 +167,7 @@ function TaskCard({
   onCancel: (run: ConsoleRun) => void;
   cancelling: boolean;
 }) {
+  const recovery = describeRunRecovery(run);
   return (
     <article className={`task-run-card ${isActive(run) ? 'task-run-card-active' : ''}`}>
       <div className="task-run-card-head">
@@ -172,7 +175,7 @@ function TaskCard({
           <span className="task-origin">{taskOrigin(run.kind)}</span>
           <h3>{taskTitle(run.kind)}</h3>
         </div>
-        <span className={statusClass(run.status)}>{statusLabel(run.status)}</span>
+        <span className={statusClass(run.status)}>{statusLabel(run)}</span>
       </div>
       <div className="task-run-card-meta">
         <span>{run.status === 'queued' ? '等待数据库任务空闲后开始' : elapsedLabel(run)}</span>
@@ -183,6 +186,8 @@ function TaskCard({
       </ul>
       {run.status === 'cancelled' ? (
         <p className="task-run-cancelled">任务已取消，已完成的部分已保留，不会自动回滚。</p>
+      ) : recovery ? (
+        <p className="task-run-error">{recovery.summary}</p>
       ) : run.error ? (
         <p className="task-run-error">{run.error}</p>
       ) : null}
@@ -207,6 +212,7 @@ function TaskDetailDrawer({
   run: ConsoleRun;
   onClose: () => void;
 }) {
+  const recovery = describeRunRecovery(run);
   return (
     <>
       <div className="drawer-overlay" onClick={onClose} />
@@ -216,15 +222,15 @@ function TaskDetailDrawer({
         <h2>{taskTitle(run.kind)}</h2>
         <p className="pm-hint">任务编号：{run.id}</p>
         <div className="task-detail-grid">
-          <div><span>状态</span><b className={statusClass(run.status)}>{statusLabel(run.status)}</b></div>
+          <div><span>状态</span><b className={statusClass(run.status)}>{statusLabel(run)}</b></div>
           <div><span>开始时间</span><b>{formatDate(run.startedAt, '-')}</b></div>
           <div><span>结束时间</span><b>{formatDate(run.completedAt, '仍在运行')}</b></div>
           <div><span>耗时</span><b>{elapsedLabel(run)}</b></div>
         </div>
         {run.error && run.status !== 'cancelled' && (
           <section className="task-detail-result task-detail-result-error">
-            <h3>错误</h3>
-            <p>{run.error}</p>
+            <h3>{recovery ? '数据库连接恢复说明' : '错误'}</h3>
+            <p>{recovery?.summary ?? run.error}</p>
           </section>
         )}
         {run.status === 'cancelled' && (
@@ -235,7 +241,15 @@ function TaskDetailDrawer({
         )}
         <section className="task-detail-result">
           <h3>执行结果</h3>
-          <p>{run.status === 'completed' ? '任务已完成，可以返回发起页面查看业务结果。' : run.status === 'cancelled' ? '任务已取消，已经完成的部分不会自动回滚。' : '任务尚未完成，详细结果会在结束后显示。'}</p>
+          <p>{recovery?.kind === 'command_completed_reconnect_failed'
+            ? '知识整理命令已经执行结束；请在数据库连接恢复后返回整理页面查看实际成果。'
+            : recovery?.kind === 'command_not_started_handoff_failed'
+              ? '知识整理命令没有启动，可以在数据库连接恢复后重新执行。'
+              : run.status === 'completed'
+                ? '任务已完成，可以返回发起页面查看业务结果。'
+                : run.status === 'cancelled'
+                  ? '任务已取消，已经完成的部分不会自动回滚。'
+                  : '任务尚未完成，详细结果会在结束后显示。'}</p>
         </section>
         <details className="task-technical-details">
           <summary>查看技术详情</summary>

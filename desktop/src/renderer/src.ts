@@ -1557,20 +1557,30 @@ async function save(): Promise<void> {
   }
 
   let confirmEmbeddingRebuild = false;
+  let confirmLegacyEmbeddingRecovery = false;
   // 检测向量化模型是否变更（非首次配置）
   if (!state?.setup?.needsSetup && state?.setup?.current?.embeddingModel) {
     const newEmbeddingModel = composeModelId(recipeProvider(embeddingProvider), embeddingModelName);
     const oldEmbeddingModel = state.setup.current.embeddingModel;
     if (newEmbeddingModel && oldEmbeddingModel && newEmbeddingModel !== oldEmbeddingModel) {
-      if (!confirm(
-        `⚠️ 向量化模型已从 "${oldEmbeddingModel}" 改为 "${newEmbeddingModel}"。\n\n` +
-        `切换后会清除旧的文本向量并重新向量化，可能耗时并产生 API 费用。\n` +
-        `原始文档、页面和分块数据会保留，不会删除知识库内容。\n\n` +
-        `确认更改？`
-      )) {
-        return;
+      const recoveryCandidate = state.setup.current.legacyEmbeddingRecoveryCandidate;
+      if (recoveryCandidate?.model === newEmbeddingModel) {
+        if (!confirm(
+          `检测到该模型与历史配置备份一致："${newEmbeddingModel}"（${recoveryCandidate.dimensions} 维）。\n\n` +
+          `PMBrain 会先核对数据库实际维度和已有向量标签；只有完全匹配时才恢复配置并校正历史误标，` +
+          `不会清空或重新生成已有向量。校验不通过时会自动恢复原配置。\n\n` +
+          `确认安全恢复？`
+        )) return;
+        confirmLegacyEmbeddingRecovery = true;
+      } else {
+        if (!confirm(
+          `⚠️ 向量化模型已从 "${oldEmbeddingModel}" 改为 "${newEmbeddingModel}"。\n\n` +
+          `切换后会清除旧的文本向量并重新向量化，可能耗时并产生 API 费用。\n` +
+          `原始文档、页面和分块数据会保留，不会删除知识库内容。\n\n` +
+          `确认更改？`
+        )) return;
+        confirmEmbeddingRebuild = true;
       }
-      confirmEmbeddingRebuild = true;
     }
   }
 
@@ -1602,6 +1612,7 @@ async function save(): Promise<void> {
     engine: selectedEngine(),
     resetAdvancedModelRouting: false,
     confirmEmbeddingRebuild,
+    confirmLegacyEmbeddingRecovery,
     databasePath: ($<HTMLInputElement>('#database-path')).value,
     databaseUrl: ($<HTMLInputElement>('#database-url')).value,
     knowledgeDirectory,

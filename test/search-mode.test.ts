@@ -395,8 +395,15 @@ describe('knobsHash determinism + cross-mode separation (CDX-4)', () => {
     // post-fusion boost stage. T2: bumped 6→7 for title_boost. v0.42.3.0:
     // bumped 7→8 for autocut (ac=/acj=). A query against a brain with
     // slug_aliases populated must not be served from a cache row written
-    // before the boost stage existed.
-    expect(KNOBS_HASH_VERSION).toBe(9);
+    // before the boost stage existed. PMBrain 1.2.81 bumps 9→10 so a
+    // remote result set that hides private pages cannot reuse a local cache.
+    expect(KNOBS_HASH_VERSION).toBe(10);
+  });
+
+  test('private-page posture produces a separate cache namespace', () => {
+    const resolved = resolveSearchMode({ mode: 'balanced' });
+    expect(knobsHash(resolved, { excludePrivate: false }))
+      .not.toBe(knobsHash(resolved, { excludePrivate: true }));
   });
 
   test('T1 (codex): floor_ratio set vs unset produces DIFFERENT hashes (cache contamination prevention)', () => {
@@ -561,8 +568,8 @@ describe('v0.40.4 — graph_signals knob', () => {
 });
 
 describe('v0.42.3.0 — autocut knobs', () => {
-  test('KNOBS_HASH_VERSION includes relational retrieval cache isolation', () => {
-    expect(KNOBS_HASH_VERSION).toBe(9);
+  test('KNOBS_HASH_VERSION includes relational and private-page cache isolation', () => {
+    expect(KNOBS_HASH_VERSION).toBe(10);
   });
 
   test('bundle defaults: conservative/balanced off, tokenmax on @0.20', () => {

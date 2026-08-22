@@ -30,6 +30,12 @@ import { CJK_SLUG_CHARS } from './cjk.ts';
 import { getContentFlag } from './quarantine.ts';
 import { normalizeChineseQuery } from './search/query-normalize-zh.ts';
 import {
+  findPrivateOnlySlugs,
+  isPrivatePage,
+  resolveExcludePrivatePages,
+  slugHiddenFromCaller,
+} from './search/private-visibility.ts';
+import {
   acceptTakeProposal as acceptWorkBuddyTakeProposal,
   listTakeProposals as listWorkBuddyTakeProposals,
   rejectTakeProposal as rejectWorkBuddyTakeProposal,
@@ -552,6 +558,7 @@ const get_page: Operation = {
     // the cross-source view, preserving pre-v0.31.8 behavior. MCP callers
     // (stdio + HTTP) populate ctx.sourceId via the transport layer.
     const sourceOpts = sourceScopeOpts(ctx);
+    const excludePrivate = await resolveExcludePrivatePages(ctx.engine, ctx.remote);
     // v0.41.13 #1436: fuzzy resolveSlugs ALSO needs source scope — pre-fix
     // it was unscoped, so a remote `get_page` with `fuzzy: true` could
     // return candidates from sources outside ctx.auth.allowedSources /
@@ -561,12 +568,18 @@ const get_page: Operation = {
     const fuzzyScope = sourceScopeOpts(ctx);
 
     let page = await ctx.engine.getPage(slug, { includeDeleted, ...sourceOpts });
+    if (page && excludePrivate && isPrivatePage(page.frontmatter)) page = null;
     let resolved_slug: string | undefined;
 
     if (!page && fuzzy) {
-      const candidates = await ctx.engine.resolveSlugs(slug, fuzzyScope);
+      let candidates = await ctx.engine.resolveSlugs(slug, fuzzyScope);
+      if (excludePrivate) {
+        const hidden = await findPrivateOnlySlugs(ctx.engine, candidates, fuzzyScope, { includeDeleted });
+        candidates = candidates.filter((candidate) => !hidden.has(candidate));
+      }
       if (candidates.length === 1) {
         page = await ctx.engine.getPage(candidates[0], { includeDeleted, ...sourceOpts });
+        if (page && excludePrivate && isPrivatePage(page.frontmatter)) page = null;
         resolved_slug = candidates[0];
       } else if (candidates.length > 1) {
         return { error: 'ambiguous_slug', candidates };
@@ -1340,6 +1353,7 @@ const list_pages: Operation = {
     // were ignored at this op handler and the engine returned every source's
     // pages indiscriminately.
     const scope = requestedSourceScopeOpts(ctx, p.source);
+    const excludePrivate = await resolveExcludePrivatePages(ctx.engine, ctx.remote);
     const requestedLimit = p.limit as number | undefined;
     const isLocal = ctx.remote === false;
     const limit = isLocal
@@ -1363,6 +1377,7 @@ const list_pages: Operation = {
       includeDeleted: (p.include_deleted as boolean) === true,
       updated_after: typeof p.updated_after === 'string' ? p.updated_after : undefined,
       sort,
+      excludePrivate,
       ...scope,
     });
     const truncated = rows.length > limit;
@@ -1405,6 +1420,7 @@ const search: Operation = {
     const offset = (p.offset as number) || 0;
     const scope = requestedSourceScopeOpts(ctx, p.source);
     const perCallMode = resolvePerCallMode(ctx, p.mode);
+    const excludePrivate = await resolveExcludePrivatePages(ctx.engine, ctx.remote);
     const keywordOnly = (await ctx.engine.getConfig('search.mcp_keyword_only')) === 'true';
     let capturedMeta: HybridSearchMeta | null = null;
     // v0.34.1 (#861 — P0 leak seal): thread caller's source scope into
@@ -1419,6 +1435,7 @@ const search: Operation = {
           ).map((lexicalQuery) => ctx.engine.searchKeyword(lexicalQuery, {
             limit,
             offset,
+            excludePrivate,
             ...scope,
             ...(chineseQuery.since ? { afterDate: chineseQuery.since.toISOString() } : {}),
             ...(chineseQuery.until ? { beforeDate: chineseQuery.until.toISOString() } : {}),
@@ -1428,6 +1445,7 @@ const search: Operation = {
           limit,
           offset,
           expansion: false,
+          excludePrivate,
           ...scope,
           ...(perCallMode ? { mode: perCallMode } : {}),
           onMeta: (meta) => { capturedMeta = meta; },
@@ -1602,6 +1620,7 @@ const query: Operation = {
           ? {}
           : { sourceId: sourceIdParam }
         : sourceScopeOpts(ctx);
+    const excludePrivate = await resolveExcludePrivatePages(ctx.engine, ctx.remote);
 
     // v0.27.1: image-similarity branch. Bypasses hybridSearch (which is
     // text-only); embeds the image via embedMultimodal and runs a direct
@@ -1619,6 +1638,7 @@ const query: Operation = {
         limit: (p.limit as number) || 20,
         offset: (p.offset as number) || 0,
         embeddingColumn: 'embedding_image',
+        excludePrivate,
         ...querySourceScope,
       });
       return results;
@@ -1645,6 +1665,7 @@ const query: Operation = {
       limit: (p.limit as number) || 20,
       offset: (p.offset as number) || 0,
       expansion: expand,
+      excludePrivate,
       expandFn: expand ? expandQuery : undefined,
       ...((): { mode?: string } => {
         const mode = resolvePerCallMode(ctx, p.mode);
@@ -2218,7 +2239,17 @@ const get_links: Operation = {
   },
   handler: async (ctx, p) => {
     const sourceOpts = linkReadScopeOpts(ctx);
-    return ctx.engine.getLinks(p.slug as string, sourceOpts);
+    const slug = p.slug as string;
+    if (await slugHiddenFromCaller(ctx.engine, ctx.remote, slug, sourceOpts)) return [];
+    const links = await ctx.engine.getLinks(slug, sourceOpts);
+    if (!(await resolveExcludePrivatePages(ctx.engine, ctx.remote))) return links;
+    const hidden = await findPrivateOnlySlugs(
+      ctx.engine,
+      [...new Set(links.flatMap((link) => [link.from_slug, link.to_slug]))],
+      sourceOpts,
+      { includeDeleted: true },
+    );
+    return links.filter((link) => !hidden.has(link.from_slug) && !hidden.has(link.to_slug));
   },
   scope: 'read',
 };
@@ -2231,7 +2262,17 @@ const get_backlinks: Operation = {
   },
   handler: async (ctx, p) => {
     const sourceOpts = linkReadScopeOpts(ctx);
-    return ctx.engine.getBacklinks(p.slug as string, sourceOpts);
+    const slug = p.slug as string;
+    if (await slugHiddenFromCaller(ctx.engine, ctx.remote, slug, sourceOpts)) return [];
+    const links = await ctx.engine.getBacklinks(slug, sourceOpts);
+    if (!(await resolveExcludePrivatePages(ctx.engine, ctx.remote))) return links;
+    const hidden = await findPrivateOnlySlugs(
+      ctx.engine,
+      [...new Set(links.flatMap((link) => [link.from_slug, link.to_slug]))],
+      sourceOpts,
+      { includeDeleted: true },
+    );
+    return links.filter((link) => !hidden.has(link.from_slug) && !hidden.has(link.to_slug));
   },
   scope: 'read',
   cliHints: { name: 'backlinks', positional: ['slug'] },
@@ -2279,12 +2320,31 @@ const traverse_graph: Operation = {
     // traverseGraph / traversePaths happily followed edges into pages from
     // foreign sources, leaking topology + page metadata via the graph op.
     const scope = sourceScopeOpts(ctx);
+    if (await slugHiddenFromCaller(ctx.engine, ctx.remote, slug, scope)) return [];
     // Backward compat: when neither link_type nor direction is provided, return
     // the legacy GraphNode[] shape. Once either is set, switch to GraphPath[].
     if (linkType === undefined && direction === undefined) {
-      return ctx.engine.traverseGraph(slug, depth, scope);
+      const nodes = await ctx.engine.traverseGraph(slug, depth, scope);
+      if (!(await resolveExcludePrivatePages(ctx.engine, ctx.remote))) return nodes;
+      const hidden = await findPrivateOnlySlugs(
+        ctx.engine,
+        [...new Set(nodes.flatMap((node) => [node.slug, ...node.links.map((link) => link.to_slug)]))],
+        scope,
+        { includeDeleted: true },
+      );
+      return nodes
+        .filter((node) => !hidden.has(node.slug))
+        .map((node) => ({ ...node, links: node.links.filter((link) => !hidden.has(link.to_slug)) }));
     }
-    return ctx.engine.traversePaths(slug, { depth, linkType, direction, ...scope });
+    const paths = await ctx.engine.traversePaths(slug, { depth, linkType, direction, ...scope });
+    if (!(await resolveExcludePrivatePages(ctx.engine, ctx.remote))) return paths;
+    const hidden = await findPrivateOnlySlugs(
+      ctx.engine,
+      [...new Set(paths.flatMap((path) => [path.from_slug, path.to_slug]))],
+      scope,
+      { includeDeleted: true },
+    );
+    return paths.filter((path) => !hidden.has(path.from_slug) && !hidden.has(path.to_slug));
   },
   scope: 'read',
   cliHints: { name: 'graph', positional: ['slug'] },
@@ -2342,7 +2402,9 @@ const get_timeline: Operation = {
     slug: { type: 'string', required: true },
   },
   handler: async (ctx, p) => {
-    return ctx.engine.getTimeline(p.slug as string, sourceScopeOpts(ctx));
+    const scope = sourceScopeOpts(ctx);
+    if (await slugHiddenFromCaller(ctx.engine, ctx.remote, p.slug as string, scope)) return [];
+    return ctx.engine.getTimeline(p.slug as string, scope);
   },
   scope: 'read',
   cliHints: { name: 'timeline', positional: ['slug'] },
@@ -2556,6 +2618,7 @@ const get_versions: Operation = {
   handler: async (ctx, p) => {
     // v0.31.8 (D20): thread ctx.sourceId.
     const sourceOpts = ctx.sourceId ? { sourceId: ctx.sourceId } : {};
+    if (await slugHiddenFromCaller(ctx.engine, ctx.remote, p.slug as string, sourceOpts)) return [];
     const versions = await ctx.engine.getVersions(p.slug as string, sourceOpts);
     // Same takes-allow-list privacy boundary as get_page. Snapshots persist
     // historical compiled_truth verbatim, including the takes fence, so
@@ -2649,6 +2712,7 @@ const get_raw_data: Operation = {
   handler: async (ctx, p) => {
     // v0.31.8 (D20 + D21): thread ctx.sourceId.
     const sourceOpts = ctx.sourceId ? { sourceId: ctx.sourceId } : {};
+    if (await slugHiddenFromCaller(ctx.engine, ctx.remote, p.slug as string, sourceOpts)) return [];
     return ctx.engine.getRawData(p.slug as string, p.source as string | undefined, sourceOpts);
   },
   scope: 'read',
@@ -2663,7 +2727,11 @@ const resolve_slugs: Operation = {
     partial: { type: 'string', required: true },
   },
   handler: async (ctx, p) => {
-    return ctx.engine.resolveSlugs(p.partial as string);
+    const scope = sourceScopeOpts(ctx);
+    const slugs = await ctx.engine.resolveSlugs(p.partial as string, scope);
+    if (!(await resolveExcludePrivatePages(ctx.engine, ctx.remote))) return slugs;
+    const hidden = await findPrivateOnlySlugs(ctx.engine, slugs, scope, { includeDeleted: true });
+    return slugs.filter((slug) => !hidden.has(slug));
   },
   scope: 'read',
 };
@@ -2677,6 +2745,7 @@ const get_chunks: Operation = {
   handler: async (ctx, p) => {
     // v0.31.8 (D20): thread ctx.sourceId.
     const sourceOpts = ctx.sourceId ? { sourceId: ctx.sourceId } : {};
+    if (await slugHiddenFromCaller(ctx.engine, ctx.remote, p.slug as string, sourceOpts)) return [];
     return ctx.engine.getChunks(p.slug as string, sourceOpts);
   },
   scope: 'read',

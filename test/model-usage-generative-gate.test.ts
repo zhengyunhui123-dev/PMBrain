@@ -78,6 +78,7 @@ describe('生成式模型全局开关', () => {
     const dreamCli = readFileSync(join(ROOT, 'src/commands/dream.ts'), 'utf8');
     expect(serve).toContain("app.get('/admin/api/model-usage/generative'");
     expect(serve).toContain("app.post('/admin/api/model-usage/generative'");
+    expect(serve).toContain('getAdminDreamOverview(engine, loadConfig() ?? config, VERSION)');
     expect(serve).toContain('cancelRun');
     expect(gateway).toContain('assertGenerativeModelEnabled');
     expect(dreamCli).toContain('assertDreamPresetAllowGenerative');

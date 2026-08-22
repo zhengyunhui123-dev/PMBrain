@@ -11,6 +11,9 @@ describe('PGLite 后台任务忙碌提示', () => {
     expect(source).toContain("code: 'pglite_busy'");
     expect(source).toContain('PGLite 正在执行导入或知识整理，完成后会自动恢复连接。');
     expect(source).toContain('reconnectPgliteWithRetry');
+    expect(source).toContain('maxElapsedMs: 5 * 60_000');
+    expect(source).toContain('maxAttempts: 150');
+    expect(source).toContain('pgliteConnected = true;\n            pgliteBusy = false;');
     expect(source).toContain('pgliteBusy || (engine.kind === \'pglite\' && !pgliteConnected)');
     expect(source).toContain('getPgliteConnected: () => pgliteConnected');
     expect(source).toContain("req.path.startsWith('/runs')");

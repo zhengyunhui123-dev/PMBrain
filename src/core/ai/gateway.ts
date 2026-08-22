@@ -1599,12 +1599,13 @@ export async function embedOne(text: string): Promise<Float32Array> {
  */
 export async function embedQuery(
   text: string,
-  opts?: { embeddingModel?: string; dimensions?: number },
+  opts?: { embeddingModel?: string; dimensions?: number; abortSignal?: AbortSignal },
 ): Promise<Float32Array> {
   const [v] = await embed([text], {
     inputType: 'query',
     embeddingModel: opts?.embeddingModel,
     dimensions: opts?.dimensions,
+    abortSignal: opts?.abortSignal,
   });
   return v;
 }
@@ -2673,6 +2674,13 @@ async function chatOnce(opts: ChatOpts): Promise<ChatResult> {
           const qwenAnswerEnvelope = /^qwen3(?:[.:-]|$)/i.test(modelId);
           const qwenJsonResponse = qwenAnswerEnvelope
             && nativeMessages.some(message => /\bjson\b/i.test(message.content));
+          const knowledgeSynthesis = nativeMessages.some(message => (
+            message.role === 'system'
+            && message.content.includes("gbrain's synthesis engine")
+            && message.content.includes('"answer"')
+            && message.content.includes('"citations"')
+            && message.content.includes('"gaps"')
+          ));
           const qwenMessages = nativeMessages.map(message => ({ ...message }));
           if (qwenAnswerEnvelope) {
             const instruction = qwenJsonResponse
@@ -2686,7 +2694,15 @@ async function chatOnce(opts: ChatOpts): Promise<ChatResult> {
             baseURL: compat.baseURL,
             model: modelId,
             messages: qwenMessages,
-            maxTokens: opts.maxTokens ?? 4096,
+            // The default Ollama runner has a 4096-token context. Reserving
+            // the cloud-model default of 4000 output tokens leaves only
+            // ~2050 input tokens and silently truncates gathered evidence.
+            // Knowledge synthesis needs the opposite balance: preserve the
+            // retrieved pages and leave a bounded but useful answer budget.
+            maxTokens: knowledgeSynthesis
+              ? Math.min(opts.maxTokens ?? 4096, 1024)
+              : (opts.maxTokens ?? 4096),
+            contextWindow: knowledgeSynthesis ? 8192 : undefined,
             apiKey: auth.apiKey,
             headers: auth.headers,
             format: qwenAnswerEnvelope
@@ -2694,7 +2710,20 @@ async function chatOnce(opts: ChatOpts): Promise<ChatResult> {
                   type: 'object',
                   additionalProperties: false,
                   required: ['result'],
-                  properties: { result: qwenJsonResponse ? {} : { type: 'string' } },
+                  properties: {
+                    result: knowledgeSynthesis
+                      ? {
+                          type: 'object',
+                          additionalProperties: false,
+                          required: ['answer', 'citations', 'gaps'],
+                          properties: {
+                            answer: { type: 'string', minLength: 1 },
+                            citations: { type: 'array', items: { type: 'object' } },
+                            gaps: { type: 'array', items: { type: 'string' } },
+                          },
+                        }
+                      : (qwenJsonResponse ? {} : { type: 'string' }),
+                  },
                 }
               : undefined,
             abortSignal: opts.abortSignal,

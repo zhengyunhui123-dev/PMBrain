@@ -819,12 +819,19 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
           const pending = reconnectPgliteWithRetry(
             () => engine.connect(toEngineConfig(config as GBrainConfig)),
             {
+              // Local model / Dream child processes can take longer than one
+              // minute to flush WASM/PGLite ownership on slower Windows PCs.
+              // Keep this product-adapter wait longer than the shared helper
+              // default without changing CLI or PostgreSQL behavior.
+              maxElapsedMs: 5 * 60_000,
+              maxAttempts: 150,
               onRetry: (_error, attempt, delayMs) => {
                 console.error(`[serve-http] PGLite handoff waiting for previous owner (attempt ${attempt}, retry in ${delayMs}ms)`);
               },
             },
           ).then(() => {
             pgliteConnected = true;
+            pgliteBusy = false;
           });
           pgliteReconnectPromise = pending;
           try {
@@ -854,8 +861,13 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
           // Keep the service in the safe busy state until ownership is really
           // back. A single fail-fast connect leaves a live HTTP process with
           // no database and makes the next user action look corrupted.
-          await reconnectPglite?.();
-          pgliteBusy = false;
+          try {
+            await reconnectPglite?.();
+          } finally {
+            // A failed reconnect remains safely unavailable through
+            // !pgliteConnected, but must not masquerade as a running child.
+            pgliteBusy = false;
+          }
         },
       }
     : undefined;

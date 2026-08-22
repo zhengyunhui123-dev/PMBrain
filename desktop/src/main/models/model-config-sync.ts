@@ -1,4 +1,4 @@
-import { getSetupInfo } from '../config-manager.js';
+import { getSetupInfo, syncChatModelDefaultsInConfig } from '../config-manager.js';
 import { runCli, runCliChecked, type CliRuntime } from '../cli-runner.js';
 
 export async function syncModelDefaultsToConfigFile(
@@ -18,6 +18,5 @@ export async function syncModelDefaultsToConfigFile(
       }
     }
   }
-  await runCliChecked(runtime, ['config', 'set', 'chat_model', chatModel]);
-  await runCliChecked(runtime, ['config', 'set', 'models.default', chatModel]);
+  syncChatModelDefaultsInConfig(chatModel);
 }

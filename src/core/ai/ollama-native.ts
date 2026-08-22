@@ -8,6 +8,7 @@ export interface OllamaNativeChatInput {
   model: string;
   messages: OllamaNativeMessage[];
   maxTokens: number;
+  contextWindow?: number;
   apiKey?: string;
   headers?: Record<string, string>;
   format?: unknown;
@@ -70,6 +71,7 @@ export async function streamOllamaNativeChat(
       ...(input.format === undefined ? {} : { format: input.format }),
       options: {
         num_predict: input.maxTokens,
+        ...(input.contextWindow === undefined ? {} : { num_ctx: input.contextWindow }),
         ...(input.temperature === undefined ? {} : { temperature: input.temperature }),
       },
     }),

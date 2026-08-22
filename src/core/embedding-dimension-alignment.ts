@@ -18,6 +18,15 @@ export interface EmbeddingDimensionAlignmentResult {
   hnsw_index_created: boolean;
 }
 
+export interface LegacyEmbeddingConfigurationRestoreResult {
+  status: 'restored';
+  target_model: string;
+  target_dimensions: number;
+  existing_embeddings: number;
+  repaired_labels: number;
+  cleared_embeddings: 0;
+}
+
 /** Resolve the recipe-recommended dimension for a newly selected model. */
 export function recommendedEmbeddingDimension(model: string): number {
   const resolved = resolveSchemaEmbeddingDim({ embedding_model: model });
@@ -54,6 +63,63 @@ export async function repairLegacyZeroEntropyLabels(
     [normalizedTarget, LEGACY_ZEROENTROPY_DEFAULT_MODEL],
   );
   return Number(Array.isArray(rows) ? rows[0]?.count ?? 0 : 0);
+}
+
+/**
+ * Restore a user's pre-bug embedding configuration without rebuilding valid
+ * vectors. This is intentionally fail-closed: the physical vector width must
+ * already match the requested model, and every non-empty provenance label on
+ * an existing vector must be either the historical ZeroEntropy mislabel or
+ * the requested model. No embedding value or embedded_at timestamp is changed.
+ */
+export async function restoreLegacyEmbeddingConfiguration(
+  engine: BrainEngine,
+  targetModel: string,
+  targetDimensions: number,
+): Promise<LegacyEmbeddingConfigurationRestoreResult> {
+  const normalizedTarget = targetModel.trim();
+  if (!normalizedTarget || normalizedTarget.toLowerCase() === LEGACY_ZEROENTROPY_DEFAULT_MODEL) {
+    throw new Error('Legacy embedding recovery requires a non-ZeroEntropy target model.');
+  }
+  if (!Number.isInteger(targetDimensions) || targetDimensions <= 0) {
+    throw new Error(`Invalid embedding dimension: ${targetDimensions}`);
+  }
+  const current = await readContentChunksEmbeddingDim(engine);
+  if (!current.exists || current.dims !== targetDimensions) {
+    throw new Error(
+      `Safe embedding recovery refused: database column is ${current.dims === null ? 'unknown' : `vector(${current.dims})`}, `
+      + `but ${normalizedTarget} requires vector(${targetDimensions}). No vectors were changed.`,
+    );
+  }
+
+  const labels = await engine.executeRaw<{ model: string | null; count: number | string }>(
+    `SELECT model, COUNT(*)::bigint AS count
+       FROM content_chunks
+      WHERE embedding IS NOT NULL
+      GROUP BY model`,
+  );
+  const targetLower = normalizedTarget.toLowerCase();
+  const unsafe = labels.filter(row => {
+    const model = row.model?.trim().toLowerCase();
+    return Boolean(model && model !== targetLower && model !== LEGACY_ZEROENTROPY_DEFAULT_MODEL);
+  });
+  if (unsafe.length > 0) {
+    const models = unsafe.map(row => row.model).filter(Boolean).join(', ');
+    throw new Error(
+      `Safe embedding recovery refused: existing vectors include other model label(s): ${models}. No vectors were changed.`,
+    );
+  }
+
+  const existingEmbeddings = labels.reduce((sum, row) => sum + Number(row.count ?? 0), 0);
+  const repairedLabels = await repairLegacyZeroEntropyLabels(engine, normalizedTarget);
+  return {
+    status: 'restored',
+    target_model: normalizedTarget,
+    target_dimensions: targetDimensions,
+    existing_embeddings: existingEmbeddings,
+    repaired_labels: repairedLabels,
+    cleared_embeddings: 0,
+  };
 }
 
 /**

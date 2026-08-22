@@ -532,6 +532,8 @@ export async function runModels(engine: BrainEngine, args: string[]): Promise<vo
       ? 'embedding-dimension-status'
     : subArg === 'align-embedding-dimension'
       ? 'align-embedding-dimension'
+      : subArg === 'restore-legacy-embedding-config'
+        ? 'restore-legacy-embedding-config'
       : subArg === 'detect-embedding-dimension'
         ? 'detect-embedding-dimension'
       : subArg === 'help' || args.includes('--help') || args.includes('-h')
@@ -547,6 +549,8 @@ export async function runModels(engine: BrainEngine, args: string[]): Promise<vo
                                   Read configured and physical vector dimensions
   gbrain models align-embedding-dimension --yes [--force-reembed] [--empty-only]
                                   Align the DB vector column; force also invalidates same-width vectors
+  gbrain models restore-legacy-embedding-config --json
+                                  Restore a proven historical misconfiguration without clearing vectors
   gbrain models detect-embedding-dimension --json [--requested-dimensions=N]
                                   Probe the actual width, requesting N when supported
   gbrain models --json            Machine-readable output
@@ -623,6 +627,24 @@ Tiers: utility (fast/low-cost) | reasoning (balanced) | deep (high-capability) |
       process.stdout.write(
         `Embedding column aligned from vector(${result.previous_dimensions ?? 'unknown'}) to vector(${targetDimensions}); ` +
         `${result.cleared_embeddings} derived embeddings cleared. Source content preserved.\n`,
+      );
+    }
+    return;
+  }
+
+  if (sub === 'restore-legacy-embedding-config') {
+    const { getEmbeddingDimensions, getEmbeddingModel } = await import('../core/ai/gateway.ts');
+    const { restoreLegacyEmbeddingConfiguration } = await import('../core/embedding-dimension-alignment.ts');
+    const result = await restoreLegacyEmbeddingConfiguration(
+      engine,
+      getEmbeddingModel(),
+      getEmbeddingDimensions(),
+    );
+    if (json) process.stdout.write(JSON.stringify(result) + '\n');
+    else {
+      process.stdout.write(
+        `Restored ${result.target_model} at vector(${result.target_dimensions}); `
+        + `${result.repaired_labels} historical label(s) repaired and no vectors cleared.\n`,
       );
     }
     return;

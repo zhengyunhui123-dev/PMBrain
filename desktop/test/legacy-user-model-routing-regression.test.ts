@@ -72,7 +72,8 @@ describe('老用户回归矩阵 · 桌面模型路由', () => {
     expect(main).toContain('existing_embeddings');
     expect(main).toContain('automatic clearing was refused');
     expect(main).toContain('Dream 不会自行触发模型迁移');
-    expect(main).toMatch(/if \(saved\.embeddingModelChanged\) \{[\s\S]*'--force-reembed'/);
+    expect(main).toMatch(/saved\.embeddingModelChanged && !legacyEmbeddingRecoveryConfirmed\) \{[\s\S]*'--force-reembed'/);
+    expect(main).toMatch(/saved\.embeddingModelChanged && legacyEmbeddingRecoveryConfirmed\) \{[\s\S]*'restore-legacy-embedding-config'/);
   });
 
   test('场景F · 读写同一份 config.json，不把 legacy CLI 配置另写到新路径', () => {
