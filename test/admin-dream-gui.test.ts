@@ -6,6 +6,7 @@ import {
   buildQuickMaintenanceStages,
   describeDreamRun,
   dreamRunDeltas,
+  hasActionableDreamDiagnostics,
   isKnowledgeJourneyComplete,
   phaseSummaryZh,
 } from '../admin/src/pages/Dream.tsx';
@@ -79,6 +80,69 @@ describe('Dream GUI product contract', () => {
     expect(dream).toContain('phaseCatalog.map(item =>');
     expect(dream).toContain('phaseCatalog={data.phase_catalog}');
     expect(dream).toContain('phaseCapabilities={data.phase_capabilities}');
+    expect(api).toContain("cmd.push('--progress-json')");
+  });
+
+  test('deep organization uses the real phase recorder instead of a five-step concept diagram', () => {
+    expect(dream).toContain('buildDreamLiveProgress');
+    expect(dream).toContain('已完成 {progress.completed} / {progress.total} 个阶段');
+    expect(dream).toContain('本阶段已运行');
+    expect(dream).toContain('最近活动');
+    expect(dream).toContain('为什么这一步可能较慢');
+    expect(dream).not.toContain('一次整理，会完成这五件事');
+  });
+
+  test('the page reveals information in order instead of showing every panel before a run starts', () => {
+    // 产品行为：先选功能并开始，随后才出现流程；长阶段和历史默认收起。
+    expect(dream).toContain('run && <KnowledgeJourney');
+    expect(dream).toContain('className="dream-phase-recorder-disclosure"');
+    expect(dream).toContain('查看全部 {progress.total} 个阶段');
+    expect(dream).toContain('className="dream-overview-more"');
+    expect(dream).toContain('查看知识库状态与整理记录');
+  });
+
+  test('the four modes behave as one accessible tab set', () => {
+    expect(dream).toContain('role="tablist"');
+    expect(dream).toContain('role="tab"');
+    expect(dream).toContain('aria-selected={runMode ===');
+  });
+
+  test('guided modes use one centered circular launcher while advanced keeps the existing controls', () => {
+    expect(dream).toContain("runMode === 'advanced' ? 'is-advanced' : 'is-guided'");
+    expect(dream).toContain("runMode !== 'advanced' ? 'dream-primary-orbit' : ''");
+    expect(dream).toContain('dream-preview-action');
+    expect(dream).toContain('dream-status-signal');
+    expect(dream).not.toContain('dream-status-orbit');
+  });
+
+  test('normal PGLite state does not show a useless diagnostics panel', () => {
+    expect(hasActionableDreamDiagnostics({
+      engine: 'pglite',
+      locks: [],
+      jobs: { recent: [], subagent_status: [], subagent_queue: { waiting: 0, active: 0, stalled_active: 0 } },
+      supervisor: { worker_running: false },
+    })).toBe(false);
+    expect(dream).not.toContain('PGLite 不启动独立 Worker；深度整理会明确跳过 synthesize、patterns');
+  });
+
+  test('diagnostics only appear for a recoverable lock, queue, or worker problem', () => {
+    expect(hasActionableDreamDiagnostics({
+      engine: 'pglite',
+      locks: [{ active: false }],
+      jobs: { recent: [], subagent_status: [], subagent_queue: { waiting: 0, active: 0, stalled_active: 0 } },
+      supervisor: { worker_running: false },
+    })).toBe(true);
+    expect(hasActionableDreamDiagnostics({
+      engine: 'postgres',
+      locks: [],
+      jobs: {
+        recent: [],
+        subagent_status: [{ status: 'waiting' }],
+        subagent_queue: { waiting: 1, active: 0, stalled_active: 0 },
+      },
+      supervisor: { worker_running: false },
+    })).toBe(true);
+    expect(dream).toContain('检测到运行异常，展开处理');
   });
 
   test('removed project-management phases are not presented by Dream', () => {
@@ -90,7 +154,7 @@ describe('Dream GUI product contract', () => {
   test('advanced observability remains available behind details', () => {
     expect(dream).toContain('查看阶段、模型与 Token');
     expect(dream).toContain('原始日志与命令');
-    expect(dream).toContain('查看运行诊断');
+    expect(dream).toContain('检测到运行异常，展开处理');
   });
 
   test('a completed report is not misclassified by incidental lock text', () => {
@@ -492,14 +556,14 @@ describe('Dream GUI product contract', () => {
     expect(dream).not.toContain('disabled={isPglite');
     expect(dream).not.toContain('PGLite 暂不支持 AI 会议整理');
     expect(dream).not.toContain('需要 Postgres Worker');
-    expect(dream).toContain('通常不需要手动操作');
+    expect(dream).toContain("engine !== 'pglite' && waiting > 0 && !supervisor?.worker_running");
   });
 
   test('manual Dream runs have no outer timeout unless advanced settings opt in', () => {
     expect(dream).toContain("const [timeoutMinutes, setTimeoutMinutes] = useState('')");
     expect(dream).toContain('placeholder="不限制"');
     expect(dream).toContain('留空表示不限制');
-    expect(dream).toContain('手动整理默认不设外层时限');
+    expect(dream).toContain('整理正在后台继续；离开页面不会中断');
   });
 
   test('the overview does not duplicate a non-actionable start button', () => {

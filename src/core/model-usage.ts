@@ -7,7 +7,7 @@
  *
  * Config (file plane ~/.gbrain/config.json or ~/.pmbrain/config.json):
  *   model_usage.generative_enabled: boolean
- * Missing key → false (closed). Never auto-enable because a chat key exists.
+ * Missing key → true (open). Only an explicit false disables generative calls.
  */
 
 import type { GBrainConfig } from './config.ts';

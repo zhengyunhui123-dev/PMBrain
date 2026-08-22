@@ -25,7 +25,7 @@ export function isGenerativeModelEnabled(config?: GBrainConfig | null): boolean 
   const raw = readFileConfigValue(cfg, 'model_usage.generative_enabled');
   if (raw === true || raw === 'true') return true;
   if (raw === false || raw === 'false') return false;
-  return false;
+  return true;
 }
 
 export function assertGenerativeModelEnabled(config?: GBrainConfig | null): void {

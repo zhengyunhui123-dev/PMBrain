@@ -309,7 +309,10 @@ export function buildDreamCommand(input: {
   if (input.from?.trim()) cmd.push('--from', input.from.trim());
   if (input.to?.trim()) cmd.push('--to', input.to.trim());
   if (input.dryRun) cmd.push('--dry-run');
-  if (input.json) cmd.push('--json');
+  if (input.json) {
+    cmd.push('--json');
+    cmd.push('--progress-json');
+  }
   return cmd;
 }
 

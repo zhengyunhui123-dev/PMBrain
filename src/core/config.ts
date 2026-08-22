@@ -123,7 +123,7 @@ export interface GBrainConfig {
   chat_model?: string;
   /**
    * Global generative (chat/reasoning) model usage. Independent of embedding.
-   * Missing → treated as closed. Never auto-enable because chat_model is set.
+   * Missing → treated as open. Only an explicit false disables generative calls.
    */
   model_usage?: {
     generative_enabled?: boolean;
