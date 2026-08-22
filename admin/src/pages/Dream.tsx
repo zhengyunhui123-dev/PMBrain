@@ -2068,7 +2068,7 @@ function DreamRunPanel({
         {!compact && showAdvancedControls && showInputControls && (
           <>
             <label className={!inputEnabled ? 'dream-input-disabled' : ''}>
-              <span>{runMode === 'meeting' ? '会议记录文件或文件夹' : '输入文件'}</span>
+              <span>输入文件</span>
               <input value={input} onChange={event => setInput(event.target.value)}
                 placeholder={!inputEnabled ? '当前阶段不支持指定输入' : '例如 D:\\会议记录 或 C:\\Users\\你\\.codex\\sessions'}
                 disabled={!inputEnabled} />

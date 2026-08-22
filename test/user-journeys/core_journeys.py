@@ -352,16 +352,10 @@ def import_search_journey(page: Page, origin: str, markdown: Path, pdf: Path, ar
             """() => {
               const progress = document.querySelector('.assistant-attachment-help')?.textContent || '';
               if (progress.startsWith('正在导入')) return false;
-              const importButton = document.querySelector('.import-action');
-              if (importButton?.disabled) return false;
               const pills = Array.from(document.querySelectorAll('.nl-result .run-pill'));
               const last = pills.at(-1);
               if (!last) return false;
-              const label = (last.textContent || '').trim();
-              if (!['已完成', '失败', '部分完成'].includes(label)) return false;
-              const summary = document.querySelector('.nl-result')?.textContent || '';
-              if (summary.includes('任务正在执行中') || summary.includes('正在进行中')) return false;
-              return true;
+              return ['已完成', '失败', '部分完成'].includes((last.textContent || '').trim());
             }""",
             timeout=240_000,
         )
