@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { api, isPgliteBusyError } from '../api';
 import { RunOutput, formatDate, pageTypeLabel, pageTypeTitle, type ConsoleRun } from '../lib/shared';
+import { describeRunRecovery } from '../lib/run-recovery';
 import { TakeProposalsPage } from './TakeProposals';
 import { CalibrationPage } from './Calibration';
 
@@ -1478,6 +1479,16 @@ function busyRunTitle(kind: string): string {
 function DreamBusyRecovery({ runs, onRefresh }: { runs: ConsoleRun[]; onRefresh: () => void }) {
   const [cancelling, setCancelling] = useState('');
   const liveRuns = runs.filter(run => run.status === 'running' || run.status === 'queued');
+  const recovery = liveRuns.length === 0
+    ? runs.map(describeRunRecovery).find((item): item is NonNullable<typeof item> => item !== null) ?? null
+    : null;
+  const heading = liveRuns.length > 0
+    ? 'PGLite 正在执行后台任务'
+    : recovery?.title ?? 'PGLite 连接正在恢复';
+  const description = liveRuns.length > 0
+    ? '本地数据库正在由后台任务独占。页面切换不会中断任务，任务完成后会自动恢复知识整理页面。'
+    : recovery?.summary ?? '当前没有仍在运行的知识整理任务；桌面服务正在恢复本地数据库连接。';
+  const stateLabel = liveRuns.length > 0 ? '运行中' : recovery?.badge ?? '恢复中';
 
   const cancel = async (run: ConsoleRun) => {
     if (!window.confirm(run.status === 'queued'
@@ -1498,15 +1509,17 @@ function DreamBusyRecovery({ runs, onRefresh }: { runs: ConsoleRun[]; onRefresh:
     <div className="dream-busy-recovery">
       <div className="dream-busy-recovery-head">
         <div>
-          <span className="dream-eyebrow">DATABASE TASK IN PROGRESS</span>
-          <h2>PGLite 正在执行后台任务</h2>
-          <p>本地数据库正在由后台任务独占。页面切换不会中断任务，任务完成后会自动恢复知识整理页面。</p>
+          <span className="dream-eyebrow">{liveRuns.length > 0 ? 'DATABASE TASK IN PROGRESS' : 'DATABASE CONNECTION RECOVERY'}</span>
+          <h2>{heading}</h2>
+          <p>{description}</p>
         </div>
-        <div className="dream-busy-pulse"><i />运行中</div>
+        <div className="dream-busy-pulse"><i />{stateLabel}</div>
       </div>
       <div className="dream-busy-recovery-note">
-        <b>你仍然可以管理当前任务</b>
-        <span>如果需要中止 Dream，请在下面取消；已经完成的内容不会因为取消而自动删除。</span>
+        <b>{liveRuns.length > 0 ? '你仍然可以管理当前任务' : '整理状态和数据库状态已分开显示'}</b>
+        <span>{liveRuns.length > 0
+          ? '如果需要中止 Dream，请在下面取消；已经完成的内容不会因为取消而自动删除。'
+          : recovery?.summary ?? '刷新后可检查连接是否恢复；若持续失败，再到任务中心查看安全恢复选项。'}</span>
       </div>
       {liveRuns.length > 0 ? (
         <div className="dream-busy-run-list">
@@ -1521,7 +1534,7 @@ function DreamBusyRecovery({ runs, onRefresh }: { runs: ConsoleRun[]; onRefresh:
           ))}
         </div>
       ) : (
-        <div className="pm-hint">当前服务没有返回可取消的任务记录；如果任务来自其他 PMBrain 进程，请先在任务中心确认持有者。</div>
+        <div className="pm-hint">当前没有可取消的知识整理任务。这里显示的是数据库连接恢复状态，不是模型仍在运行。</div>
       )}
       <div className="dream-busy-actions">
         <button type="button" className="pm-ghost" onClick={onRefresh}>刷新任务状态</button>

@@ -5,6 +5,7 @@ import { AgentsPage } from './Agents';
 import { ChatGptTunnelPanel } from './ChatGptTunnel';
 import { RunOutput, InfoIcon, formatDate, pageTypeLabel, pageTypeTitle, type ConsoleRun, type BrainPageChunk } from '../lib/shared';
 import { getThinkRetrievalWarning, parseThinkOutput } from '../lib/think-output';
+import { describeRunProgress } from '../lib/run-progress';
 import { summarizeImportRun } from '../lib/import-summary';
 import { CopyButton } from '../lib/clipboard';
 import { parseMarkdownTable } from '../lib/markdown-table';
@@ -71,10 +72,12 @@ function NaturalLanguagePanel({
   compact = false,
   onNavigate,
   importOptions,
+  chatModel,
 }: {
   compact?: boolean;
   onNavigate?: (page: string) => void;
   importOptions?: KnowledgeImportOptions;
+  chatModel?: string | null;
 }) {
   const [initialWorkspace] = useState(loadNaturalWorkspace);
   const [text, setText] = useState(initialWorkspace.text);
@@ -93,6 +96,7 @@ function NaturalLanguagePanel({
   const [attachments, setAttachments] = useState<KnowledgeAttachment[]>([]);
   const [attachmentError, setAttachmentError] = useState('');
   const [attachmentProgress, setAttachmentProgress] = useState('');
+  const [progressNow, setProgressNow] = useState(Date.now());
   const fileInputRef = useRef<HTMLInputElement>(null);
   const searchModeMenuRef = useRef<HTMLDivElement>(null);
   const inputLength = text.length;
@@ -456,6 +460,13 @@ function NaturalLanguagePanel({
     return () => clearInterval(timer);
   }, [run?.id, run?.status, activeHistoryId]);
 
+  useEffect(() => {
+    if (!run || (run.status !== 'running' && run.status !== 'queued')) return;
+    setProgressNow(Date.now());
+    const timer = window.setInterval(() => setProgressNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [run?.id, run?.status]);
+
   const importRunSummary = preview?.intent === 'import_path' && run ? summarizeImportRun(preview, run) : null;
   const importEmbeddingSkip = preview?.intent === 'import_path' && run && !importRunSummary ? getImportEmbeddingSkip(run) : null;
   const searchSummary = searchPayload ? summarizeKnowledgeSearch(searchPayload) : null;
@@ -466,6 +477,7 @@ function NaturalLanguagePanel({
     ? getThinkRetrievalWarning(run.stderr)
     : null;
   const isRunActive = run?.status === 'queued' || run?.status === 'running';
+  const runProgress = run ? describeRunProgress(run, chatModel, progressNow) : null;
   const completenessNote = preview?.intent === 'capture_memory'
     ? '页面只显示内容摘要；实际提交和保存的是上方标注字数的完整文本。'
     : preview?.intent === 'import_path'
@@ -708,9 +720,23 @@ function NaturalLanguagePanel({
                     ? 'run-failed'
                     : `run-${run.status}`
               }`}>
-                {searchWarning ? '检索超时' : importRunSummary?.badge ?? (importEmbeddingSkip ? '部分完成' : run.status === 'completed' ? '已完成' : run.status === 'failed' ? '失败' : run.status === 'running' ? '执行中' : '排队中')}
+                {searchWarning ? '检索超时' : importRunSummary?.badge ?? (importEmbeddingSkip ? '部分完成' : runProgress?.label ?? run.status)}
               </span>
             </div>
+            {runProgress?.meta && (
+              <div className={`assistant-run-progress ${runProgress.active ? 'is-active' : 'is-finished'}`} role="status" aria-live="polite">
+                <div className="assistant-run-progress-meta">
+                  <Clock3 aria-hidden="true" />
+                  <span>{runProgress.meta}</span>
+                </div>
+                {runProgress.explanation && (
+                  <p>
+                    {runProgress.localModel ? <Cpu aria-hidden="true" /> : <Activity aria-hidden="true" />}
+                    <span>{runProgress.explanation}</span>
+                  </p>
+                )}
+              </div>
+            )}
             <details className="nl-details">
               <summary>查看执行详情</summary>
               {run.error && <div className="pm-error-text">{run.error}</div>}
@@ -820,7 +846,7 @@ export function ImportDataPage() {
           </label>
         </div>
       </details>
-      <NaturalLanguagePanel importOptions={{
+      <NaturalLanguagePanel chatModel={overview?.chat_model} importOptions={{
         sourceId: sourceId || undefined,
         includeOffice,
         includeImages,
