@@ -18,8 +18,17 @@ function sliceSyncModelDefaults(): string {
 
 describe('desktop simple-model config.json sync', () => {
   test('writes both legacy chat_model and canonical models.default', () => {
-    expect(source).toContain("['config', 'set', 'chat_model', chatModel]");
-    expect(source).toContain("['config', 'set', 'models.default', chatModel]");
+    expect(modelSync).toContain('syncChatModelDefaultsInConfig(chatModel)');
+    expect(modelSync).not.toContain("['config', 'set', 'chat_model', chatModel]");
+    expect(modelSync).not.toContain("['config', 'set', 'models.default', chatModel]");
+  });
+
+  test('automatic upgrade sync never starts the full CLI or touches embedding storage', () => {
+    const body = sliceSyncModelDefaults();
+    const resetBlock = body.match(/if \(options\.resetAdvanced\) \{[\s\S]*?\n  \}/)?.[0] ?? '';
+    const outsideReset = body.replace(resetBlock, '');
+    expect(outsideReset).not.toContain('runCliChecked(runtime');
+    expect(outsideReset).not.toContain('runCli(runtime');
   });
 
   test('basic desktop saves preserve advanced routing unless an explicit reset is requested', () => {
@@ -57,5 +66,14 @@ describe('desktop simple-model config.json sync', () => {
     expect(renderer).toContain('confirmEmbeddingRebuild = true');
     expect(renderer).toContain('confirmEmbeddingRebuild,');
     expect(source).toContain('payload.confirmEmbeddingRebuild !== true');
+  });
+
+  test('historical ZeroEntropy misconfiguration uses a verified zero-rebuild recovery path', () => {
+    expect(renderer).toContain('legacyEmbeddingRecoveryCandidate');
+    expect(renderer).toContain('confirmLegacyEmbeddingRecovery = true');
+    expect(renderer).toContain('不会清空或重新生成已有向量');
+    expect(source).toContain('payload.confirmLegacyEmbeddingRecovery === true');
+    expect(source).toContain("'models', 'restore-legacy-embedding-config', '--json'");
+    expect(source).toContain('saved.embeddingModelChanged && !legacyEmbeddingRecoveryConfirmed');
   });
 });

@@ -6,7 +6,7 @@ import { getRecipe } from '../../src/core/ai/recipes/index.js';
 import {
   activeConfigDirectory, desktopConfigPath, getSetupInfo, markDesktopMigration, markMainSourcePathRepairCompleted, needsDesktopMigration,
   getDatabaseRuntimeConfig, getDesktopPreferences, normalizeDesktopTheme, normalizePgliteDatabasePath, preferredConfigDirectory, restoreConfig,
-  isTrayHintShown, markTrayHintShown, saveDesktopPreferences, saveDesktopTheme, saveSetup, writeJsonConfig,
+  isTrayHintShown, markTrayHintShown, saveDesktopPreferences, saveDesktopTheme, saveSetup, syncChatModelDefaultsInConfig, writeJsonConfig,
 } from '../src/main/config-manager.js';
 
 const originalHome = process.env.PMBRAIN_HOME;
@@ -178,6 +178,96 @@ describe('desktop config manager', () => {
     expect(config.chat_model).toBe('deepseek:deepseek-v4');
     expect(config.embedding_model).toBeUndefined();
     expect(config.embedding_disabled).toBe(true);
+  });
+
+  test('desktop upgrade sync changes only ordinary-model keys and preserves the user embedding contract byte-for-byte', () => {
+    const root = isolatedHome();
+    const original = {
+      engine: 'pglite',
+      database_path: join(root, 'brain.pglite'),
+      chat_model: 'ollama:gemma4:e4b',
+      expansion_model: 'ollama:gemma4:e4b',
+      'models.default': 'ollama:gemma4:e4b',
+      embedding_model: 'ollama:qwen3-embedding:0.6b',
+      embedding_dimensions: 1024,
+      embedding_disabled: false,
+      embedding_columns: {
+        embedding_local: {
+          provider: 'ollama:qwen3-embedding:0.6b',
+          dimensions: 1024,
+          type: 'vector',
+        },
+      },
+      search_embedding_column: 'embedding_local',
+      provider_touchpoint_api_keys: {
+        'custom-openai': { embedding: 'keep-embedding-key' },
+      },
+      desktop: { last_migrated_version: '1.1.38' },
+    };
+    writeJsonConfig(desktopConfigPath(), original);
+
+    const backup = syncChatModelDefaultsInConfig('ollama:qwen3:4b');
+    const saved = JSON.parse(readFileSync(desktopConfigPath(), 'utf8'));
+    const backedUp = JSON.parse(readFileSync(backup!, 'utf8'));
+
+    expect(backedUp).toEqual(original);
+    expect(saved.chat_model).toBe('ollama:qwen3:4b');
+    expect(saved['models.default']).toBe('ollama:qwen3:4b');
+    expect(saved.expansion_model).toBe(original.expansion_model);
+    expect(saved.embedding_model).toBe(original.embedding_model);
+    expect(saved.embedding_dimensions).toBe(original.embedding_dimensions);
+    expect(saved.embedding_disabled).toBe(original.embedding_disabled);
+    expect(saved.embedding_columns).toEqual(original.embedding_columns);
+    expect(saved.search_embedding_column).toBe(original.search_embedding_column);
+    expect(saved.provider_touchpoint_api_keys).toEqual(original.provider_touchpoint_api_keys);
+    expect(saved.desktop).toEqual(original.desktop);
+  });
+
+  test('offers the last non-ZeroEntropy backup as a safe recovery candidate without changing config', () => {
+    const root = isolatedHome();
+    const configPath = desktopConfigPath();
+    writeJsonConfig(configPath, {
+      engine: 'pglite',
+      database_path: join(root, 'brain.pglite'),
+      embedding_model: 'zeroentropyai:zembed-1',
+      embedding_dimensions: 1280,
+    });
+    const backupDirectory = join(activeConfigDirectory(), 'backups', 'config');
+    mkdirSync(backupDirectory, { recursive: true });
+    writeJsonConfig(join(backupDirectory, 'config.json.2026-08-21T16-11-22-397Z.bak'), {
+      engine: 'pglite',
+      database_path: join(root, 'brain.pglite'),
+      embedding_model: 'ollama:qwen3-embedding:0.6b',
+      embedding_dimensions: 1024,
+    });
+    const before = readFileSync(configPath, 'utf8');
+
+    expect(getSetupInfo().current.legacyEmbeddingRecoveryCandidate).toEqual({
+      model: 'ollama:qwen3-embedding:0.6b',
+      dimensions: 1024,
+    });
+    expect(readFileSync(configPath, 'utf8')).toBe(before);
+  });
+
+  test('does not treat an authenticated ZeroEntropy configuration as a historical recovery', () => {
+    const root = isolatedHome();
+    writeJsonConfig(desktopConfigPath(), {
+      engine: 'pglite',
+      database_path: join(root, 'brain.pglite'),
+      embedding_model: 'zeroentropyai:zembed-1',
+      embedding_dimensions: 1280,
+      zeroentropy_api_key: 'intentional-zeroentropy-key',
+    });
+    const backupDirectory = join(activeConfigDirectory(), 'backups', 'config');
+    mkdirSync(backupDirectory, { recursive: true });
+    writeJsonConfig(join(backupDirectory, 'config.json.2026-08-21T16-11-22-397Z.bak'), {
+      engine: 'pglite',
+      database_path: join(root, 'brain.pglite'),
+      embedding_model: 'ollama:qwen3-embedding:0.6b',
+      embedding_dimensions: 1024,
+    });
+
+    expect(getSetupInfo().current.legacyEmbeddingRecoveryCandidate).toBeUndefined();
   });
 
   test('normalizes selected PGLite directories to a brain.pglite data directory', () => {

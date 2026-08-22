@@ -97,10 +97,31 @@ describe('老用户回归矩阵 · 向量模型 / embed --stale', () => {
     const cycle = readFileSync(resolve('src/core/cycle.ts'), 'utf8');
     const cli = readFileSync(resolve('src/cli.ts'), 'utf8');
     expect(embed).toContain('preflightEmbeddingModelChange');
-    expect(cli).toContain('repairLegacyZeroEntropyLabels(engine, configuredEmbeddingModel)');
+    expect(cli).not.toContain('repairLegacyZeroEntropyLabels(engine, configuredEmbeddingModel)');
+    expect(embed).toContain('repairLegacyZeroEntropyLabels(engine, configuredModel)');
     expect(embed).not.toContain('invalidateMismatchedEmbeddingModels(engine, getEmbeddingModel())');
     expect(cycle).toContain('runEmbedCore(engine, { stale: true, dryRun, sourceId })');
     expect(embed).toContain('Dream、同步或普通向量补全时自动清空已有向量');
+  });
+
+  test('契约：桌面升级、启动、普通模型同步均不得静默切换或重建用户向量', () => {
+    const setupController = readFileSync(resolve('desktop/src/main/startup/setup-controller.ts'), 'utf8');
+    const databaseUpgrade = readFileSync(resolve('desktop/src/main/database/database-upgrade.ts'), 'utf8');
+    const modelSync = readFileSync(resolve('desktop/src/main/models/model-config-sync.ts'), 'utf8');
+
+    expect((setupController.match(/'--force-reembed'/g) ?? [])).toHaveLength(1);
+    expect(setupController).toMatch(
+      /payload\.confirmEmbeddingRebuild !== true[\s\S]*必须在桌面端明确确认重新向量化后才能继续/,
+    );
+    expect(setupController).toMatch(
+      /saved\.embeddingModelChanged && !legacyEmbeddingRecoveryConfirmed\)[\s\S]*'--force-reembed'/,
+    );
+    expect(databaseUpgrade).not.toContain('--force-reembed');
+    expect(databaseUpgrade).toContain("'--empty-only'");
+    expect(databaseUpgrade).toContain('automatic clearing was refused');
+    expect(modelSync).not.toContain("['config', 'set', 'embedding_model'");
+    expect(modelSync).not.toContain("['config', 'set', 'embedding_dimensions'");
+    expect(modelSync).toContain('syncChatModelDefaultsInConfig(chatModel)');
   });
 
   test('场景1 · 模型未变：已有向量全部保留，只报告 0 待补', async () => {

@@ -1,4 +1,4 @@
-import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, isAbsolute, join, resolve } from 'node:path';
 import { isIP } from 'node:net';
@@ -110,6 +110,7 @@ export interface SetupPayload {
   theme?: DesktopTheme;
   resetAdvancedModelRouting?: boolean;
   confirmEmbeddingRebuild?: boolean;
+  confirmLegacyEmbeddingRecovery?: boolean;
   databasePath?: string;
   databaseUrl?: string;
   knowledgeDirectory?: string;
@@ -144,6 +145,10 @@ export interface SetupInfo {
     chatModel?: string;
     embeddingModel?: string;
     embeddingDimensions?: number;
+    legacyEmbeddingRecoveryCandidate?: {
+      model: string;
+      dimensions: number;
+    };
     /** Global generative gate; false when missing. */
     generativeEnabled?: boolean;
     customProvider?: DesktopCustomProvider;
@@ -173,6 +178,7 @@ type RawConfig = Record<string, unknown> & {
   provider_touchpoint_base_urls?: Record<string, Partial<Record<'embedding' | 'expansion' | 'chat' | 'reranker', string>>>;
   provider_touchpoint_api_keys?: Record<string, Partial<Record<'embedding' | 'expansion' | 'chat' | 'reranker', string>>>;
   custom_openai_api_key?: string;
+  zeroentropy_api_key?: string;
   admin_bootstrap_token?: string;
   desktop?: {
     knowledge_directory?: string;
@@ -501,6 +507,51 @@ export function writeJsonConfig(path: string, value: unknown): void {
   }
 }
 
+const LEGACY_ZEROENTROPY_DEFAULT_MODEL = 'zeroentropyai:zembed-1';
+
+function sameDatabaseTarget(current: RawConfig, historical: RawConfig): boolean {
+  const currentEngine = current.engine === 'postgres' ? 'postgres' : 'pglite';
+  const historicalEngine = historical.engine === 'postgres' ? 'postgres' : 'pglite';
+  if (currentEngine !== historicalEngine) return false;
+  if (currentEngine === 'postgres') {
+    return Boolean(current.database_url && current.database_url === historical.database_url);
+  }
+  const currentPath = typeof current.database_path === 'string' ? resolve(current.database_path).toLowerCase() : '';
+  const historicalPath = typeof historical.database_path === 'string' ? resolve(historical.database_path).toLowerCase() : '';
+  return Boolean(currentPath && currentPath === historicalPath);
+}
+
+function findLegacyEmbeddingRecoveryCandidate(config: RawConfig | null): {
+  model: string;
+  dimensions: number;
+} | undefined {
+  if (!config
+      || config.embedding_model?.trim().toLowerCase() !== LEGACY_ZEROENTROPY_DEFAULT_MODEL
+      || Boolean(config.zeroentropy_api_key?.trim())) {
+    return undefined;
+  }
+  const directory = join(activeConfigDirectory(), 'backups', 'config');
+  if (!existsSync(directory)) return undefined;
+  const names = readdirSync(directory)
+    .filter(name => name.startsWith('config.json.') && name.endsWith('.bak'))
+    .sort()
+    .reverse();
+  for (const name of names) {
+    const historical = readConfig(join(directory, name));
+    if (!historical || !sameDatabaseTarget(config, historical)) continue;
+    const model = historical.embedding_model?.trim();
+    const dimensions = historical.embedding_dimensions;
+    if (!model
+        || model.toLowerCase() === LEGACY_ZEROENTROPY_DEFAULT_MODEL
+        || !Number.isInteger(dimensions)
+        || (dimensions ?? 0) <= 0) {
+      continue;
+    }
+    return { model, dimensions: dimensions! };
+  }
+  return undefined;
+}
+
 export function getSetupInfo(): SetupInfo {
   const path = desktopConfigPath();
   const config = readConfig(path);
@@ -551,6 +602,7 @@ export function getSetupInfo(): SetupInfo {
         ?.model_usage?.generative_enabled === true,
       embeddingModel: typeof config?.embedding_model === 'string' ? config.embedding_model : undefined,
       embeddingDimensions: typeof config?.embedding_dimensions === 'number' ? config.embedding_dimensions : undefined,
+      legacyEmbeddingRecoveryCandidate: findLegacyEmbeddingRecoveryCandidate(config),
       customProvider: legacyProviderFromCatalog(storedCustom.catalog, storedCustom.selection) ?? legacyCustomProvider,
       customProviders: storedCustom.catalog,
       customSelection: storedCustom.selection,
@@ -609,6 +661,33 @@ export function markDesktopMigration(version: string): string | null {
   if (config.desktop?.last_migrated_version === version) return null;
   const backup = backupFile(path, 'config');
   config.desktop = { ...config.desktop, last_migrated_version: version };
+  writeJsonConfig(path, config);
+  return backup;
+}
+
+/**
+ * Keep the Desktop's simple ordinary-model aliases in sync without starting
+ * the Core CLI. This path is used during Desktop upgrades, where opening the
+ * database for a file-only chat-model update is both unnecessary and unsafe:
+ * CLI startup may run migrations or embedding provenance repair before the
+ * config command itself is dispatched.
+ *
+ * Deliberately mutate only the two ordinary-model keys. In particular,
+ * embedding_model, embedding_dimensions, embedding_disabled, embedding
+ * columns, provider credentials, and Desktop migration state remain exactly
+ * as the user configured them.
+ */
+export function syncChatModelDefaultsInConfig(chatModel: string): string | null {
+  const normalized = chatModel.trim();
+  if (!normalized) return null;
+  const path = desktopConfigPath();
+  const config = readConfig(path);
+  if (!config) throw new Error('PMBrain 配置不存在。');
+  if (config.chat_model === normalized && config['models.default'] === normalized) return null;
+
+  const backup = backupFile(path, 'config');
+  config.chat_model = normalized;
+  config['models.default'] = normalized;
   writeJsonConfig(path, config);
   return backup;
 }

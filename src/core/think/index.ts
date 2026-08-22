@@ -466,6 +466,13 @@ export async function runThink(
     }
   }
 
+  if (!response.answer.trim()) {
+    throw new Error(
+      `LLM returned an empty answer for ${modelUsed}; synthesis was not completed. ` +
+      'The local model may have received a truncated prompt or failed the structured-output contract.',
+    );
+  }
+
   // Resolve citations: prefer structured, fall back to inline-marker regex scan.
   const resolved = resolveCitations(response.citations, response.answer);
   if (resolved.warnings.length > 0) {
