@@ -324,6 +324,8 @@ export interface PageFilters {
    * pre-v0.34 unscoped behavior is preserved for local CLI callers.
    */
   sourceIds?: string[];
+  /** Hide pages whose frontmatter declares `visibility: private`. */
+  excludePrivate?: boolean;
 }
 
 /** v0.26.5 — opts for getPage / softDeletePage / restorePage. */
@@ -780,6 +782,8 @@ export interface SearchResult {
    * decision keys off (T4).
    */
   alias_hit?: boolean;
+  /** Structural identity match promoted by the exact slug/title tier. */
+  exact_lookup?: 'slug' | 'title';
   /**
    * T4 — the strongest signal that surfaced this page (alias_hit >
    * exact_title_match > high_vector_match > keyword_exact > weak_semantic).
@@ -945,6 +949,8 @@ export interface SearchOpts {
    * client) → `sourceIds`; otherwise `ctx.sourceId` (scalar) → `sourceId`.
    */
   sourceIds?: string[];
+  /** Hide pages whose frontmatter declares `visibility: private`. */
+  excludePrivate?: boolean;
   /**
    * fix/title-retrieval-arm (D2, Reviewer F1): opt-in AND→OR keyword-recall
    * fallback. When true, `searchKeyword` retries ONCE with OR-of-terms after

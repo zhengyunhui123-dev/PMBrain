@@ -1592,7 +1592,6 @@ function DreamRunPanel({
   const [runMode, setRunMode] = useState<DreamRunMode>(() => {
     const saved = window.localStorage.getItem(DREAM_RUN_MODE_KEY);
     if (!generativeEnabled && (saved === 'cycle' || saved === 'meeting')) return 'quick';
-    if (saved === 'meeting' && isPglite) return generativeEnabled ? 'cycle' : 'quick';
     return saved === 'quick' || saved === 'meeting' || saved === 'cycle' || saved === 'advanced'
       ? saved
       : defaultPhase === 'all' ? (generativeEnabled ? 'cycle' : 'quick') : 'advanced';
@@ -1679,10 +1678,6 @@ function DreamRunPanel({
     setError('');
     if (generativeBlocked) {
       setError(GENERATIVE_DISABLED_HINT);
-      return;
-    }
-    if (runMode === 'meeting' && isPglite) {
-      setError('PGLite 暂不支持 AI 会议整理；请改用 AI 深度整理或快速维护。');
       return;
     }
     if (runMode === 'meeting' && !input.trim()) {
@@ -1829,16 +1824,16 @@ function DreamRunPanel({
         </button>
         <button
           type="button"
-          className={`${runMode === 'meeting' ? 'active' : ''} ${!generativeEnabled || isPglite ? 'is-disabled' : ''}`}
+          className={`${runMode === 'meeting' ? 'active' : ''} ${!generativeEnabled ? 'is-disabled' : ''}`}
           onClick={() => {
             if (!generativeEnabled) { setError(GENERATIVE_DISABLED_HINT); return; }
             applyRunMode('meeting');
           }}
-          disabled={isPglite || !generativeEnabled}
-          title={!generativeEnabled ? GENERATIVE_DISABLED_HINT : isPglite ? 'PGLite 暂不支持 AI 会议整理' : undefined}
+          disabled={!generativeEnabled}
+          title={!generativeEnabled ? GENERATIVE_DISABLED_HINT : undefined}
         >
           <strong>AI 会议整理</strong>
-          <span>{!generativeEnabled ? '需要普通模型' : isPglite ? '需要 Postgres Worker' : '指定文件 · 专项提炼'}</span>
+          <span>{!generativeEnabled ? '需要普通模型' : '指定文件 · 专项提炼'}</span>
         </button>
         <button type="button" className={runMode === 'advanced' ? 'active' : ''} onClick={() => applyRunMode('advanced')}>
           <strong>高级设置</strong>

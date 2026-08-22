@@ -17,6 +17,8 @@
  * inline as bare literals.
  */
 
+import { privatePagesFilterFragment } from './private-visibility.ts';
+
 /** Escape `%`, `_`, and `\` so a string can be used as a LIKE prefix literal. */
 function escapeLikePattern(s: string): string {
   return s.replace(/[%_\\]/g, '\\$&');
@@ -125,9 +127,14 @@ export function buildHardExcludeClause(slugColumn: string, prefixes: string[]): 
  *
  * @returns raw SQL fragment, e.g. `AND p.deleted_at IS NULL AND NOT s.archived`
  */
-export function buildVisibilityClause(pageAlias: string, sourceAlias: string): string {
+export function buildVisibilityClause(
+  pageAlias: string,
+  sourceAlias: string,
+  opts?: { excludePrivate?: boolean },
+): string {
   const quarantine = `NOT (COALESCE(${pageAlias}.frontmatter, '{}'::jsonb) ? 'quarantine')`;
-  return `AND ${pageAlias}.deleted_at IS NULL AND NOT ${sourceAlias}.archived AND ${quarantine}`;
+  const privateClause = opts?.excludePrivate ? ` AND ${privatePagesFilterFragment(pageAlias)}` : '';
+  return `AND ${pageAlias}.deleted_at IS NULL AND NOT ${sourceAlias}.archived AND ${quarantine}${privateClause}`;
 }
 
 // ============================================================

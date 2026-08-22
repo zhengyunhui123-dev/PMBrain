@@ -58,6 +58,7 @@ import { logConnectionEvent } from './connection-audit.ts';
 import { validateSlug, contentHash, rowToPage, rowToStalePage, rowToChunk, rowToSearchResult, parseEmbedding, tryParseEmbedding, takeRowToTake, isUndefinedTableError, isUndefinedColumnError, warnOncePerProcess } from './utils.ts';
 import { resolveBoostMap, resolveHardExcludes } from './search/source-boost.ts';
 import { buildSourceFactorCase, buildHardExcludeClause, buildVisibilityClause, buildRecencyComponentSql, buildBestPerPagePoolCte, buildOrFallbackWebsearchQuery } from './search/sql-ranking.ts';
+import { privatePagesFilterFragment } from './search/private-visibility.ts';
 import { DEFAULT_EMBEDDING_DIMENSIONS } from './ai/defaults.ts';
 import { DELETE_BATCH_SIZE } from './engine-constants.ts';
 import { hasCJK } from './cjk.ts';
@@ -1161,6 +1162,9 @@ export class PostgresEngine implements BrainEngine {
     const deletedCondition = filters?.includeDeleted === true
       ? sql``
       : sql`AND p.deleted_at IS NULL`;
+    const privateCondition = filters?.excludePrivate === true
+      ? sql.unsafe(`AND ${privatePagesFilterFragment('p')}`)
+      : sql``;
 
     // v0.29: ORDER BY threading via PAGE_SORT_SQL whitelist (no SQL injection).
     // postgres.js sql.unsafe lets us splice the literal fragment safely.
@@ -1170,7 +1174,7 @@ export class PostgresEngine implements BrainEngine {
     const rows = await sql`
       SELECT p.* FROM pages p
       ${tagJoin}
-      WHERE 1=1 ${typeCondition} ${tagCondition} ${updatedCondition} ${slugCondition} ${sourceCondition} ${deletedCondition}
+      WHERE 1=1 ${typeCondition} ${tagCondition} ${updatedCondition} ${slugCondition} ${sourceCondition} ${deletedCondition} ${privateCondition}
       ORDER BY ${orderBy} LIMIT ${limit} OFFSET ${offset}
     `;
 
@@ -1565,7 +1569,7 @@ export class PostgresEngine implements BrainEngine {
     // archived sources. Joined `sources s` lets the predicate compile to a
     // column lookup. NOT bypassed by detail=high — soft-delete is a contract,
     // not a temporal preference.
-    const visibilityClause = buildVisibilityClause('p', 's');
+    const visibilityClause = buildVisibilityClause('p', 's', { excludePrivate: opts?.excludePrivate === true });
 
     // CJK stays on the same GIN-indexed search_vector path as English. Migration
     // v109 appends CJK unigram + bigram lexemes to search_vector; this query
@@ -1718,7 +1722,7 @@ export class PostgresEngine implements BrainEngine {
     const offsetParam = `$${params.length}`;
 
     // v0.26.5: visibility filter for searchKeywordChunks (anchor primitive).
-    const visibilityClause = buildVisibilityClause('p', 's');
+    const visibilityClause = buildVisibilityClause('p', 's', { excludePrivate: opts?.excludePrivate === true });
 
     const rawQuery = `
       SELECT
@@ -1772,7 +1776,7 @@ export class PostgresEngine implements BrainEngine {
     const sourceFactorCase = buildSourceFactorCase('p.slug', boostMap, opts?.detail);
     const hardExcludePrefixes = resolveHardExcludes(opts?.exclude_slug_prefixes, opts?.include_slug_prefixes);
     const hardExcludeClause = buildHardExcludeClause('p.slug', hardExcludePrefixes);
-    const visibilityClause = buildVisibilityClause('p', 's');
+    const visibilityClause = buildVisibilityClause('p', 's', { excludePrivate: opts?.excludePrivate === true });
     // FTS config name (e.g. 'english', 'pt_br'). Validated by getFtsLanguage()
     // — safe to interpolate into raw SQL.
     const ftsLang = 'english';
@@ -1984,7 +1988,7 @@ export class PostgresEngine implements BrainEngine {
     // sees the same row count it always did. Pulling the predicate to the
     // outer SELECT would force the HNSW scan to over-fetch and post-filter,
     // wasting candidate slots on hidden rows.
-    const visibilityClause = buildVisibilityClause('p', 's');
+    const visibilityClause = buildVisibilityClause('p', 's', { excludePrivate: opts?.excludePrivate === true });
 
     // v0.36 (D11): column routing via resolved descriptor. Engine doesn't
     // read config — caller (hybrid/op) resolved it and passed it in.

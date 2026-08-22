@@ -29,6 +29,7 @@ import type { SearchResult, PageType, RelationalFanoutRow } from '../types.ts';
 import { createAuditWriter } from '../audit/audit-writer.ts';
 import { resolveEntitySlugWithSource } from '../entities/resolve.ts';
 import { parseRelationalQuery, type RelationalQuery, type RelationVocab } from './relational-intent.ts';
+import { findPrivateOnlySlugs, privatePagesFilterFragment } from './private-visibility.ts';
 
 export interface RelationalArmOpts {
   sourceId?: string;
@@ -36,6 +37,7 @@ export interface RelationalArmOpts {
   depth?: number;
   limit?: number;
   vocab?: RelationVocab;
+  excludePrivate?: boolean;
   onMeta?: (meta: RelationalArmMeta) => void;
 }
 
@@ -103,6 +105,7 @@ async function hydrate(
   engine: BrainEngine,
   rows: RelationalFanoutRow[],
   seedSlug: string,
+  excludePrivate = false,
 ): Promise<SearchResult[]> {
   if (rows.length === 0) return [];
   const slugs = Array.from(new Set(rows.map(r => r.slug)));
@@ -112,7 +115,8 @@ async function hydrate(
     `SELECT p.id AS page_id, p.slug, p.source_id, p.title, p.type,
             LEFT(p.compiled_truth, 240) AS synopsis
      FROM pages p
-     WHERE p.slug = ANY($1::text[]) AND p.deleted_at IS NULL`,
+     WHERE p.slug = ANY($1::text[]) AND p.deleted_at IS NULL
+       ${excludePrivate ? `AND ${privatePagesFilterFragment('p')}` : ''}`,
     [slugs],
   );
   const byKey = new Map<string, typeof pageRows[number]>();
@@ -181,8 +185,20 @@ export async function buildRelationalArm(
 
     if (parsed.kind === 'connects' && parsed.seeds.length === 2) {
       // Resolve both endpoints; both must resolve or the arm no-ops.
-      const resA = await resolveSeedScoped(engine, sources, parsed.seeds[0]);
-      const resB = await resolveSeedScoped(engine, sources, parsed.seeds[1]);
+      let resA = await resolveSeedScoped(engine, sources, parsed.seeds[0]);
+      let resB = await resolveSeedScoped(engine, sources, parsed.seeds[1]);
+      if (opts.excludePrivate) {
+        const filterPrivate = async (rows: typeof resA) => {
+          const hidden = await findPrivateOnlySlugs(
+            engine,
+            rows.map((row) => row.slug),
+            { sourceIds: sources },
+          );
+          return rows.filter((row) => !hidden.has(row.slug));
+        };
+        resA = await filterPrivate(resA);
+        resB = await filterPrivate(resB);
+      }
       if (resA.length === 0 || resB.length === 0) return finish([]);
       meta.seeds_resolved = resA.length + resB.length;
 
@@ -204,13 +220,21 @@ export async function buildRelationalArm(
         .map(r => ({ row: r, combined: r.hop + bByKey.get(`${r.source_id}:${r.slug}`)!.hop }))
         .sort((x, y) => x.combined - y.combined || x.row.slug.localeCompare(y.row.slug))
         .map(x => x.row);
-      const list = await hydrate(engine, shared, parsed.seeds.join(' ↔ '));
+      const list = await hydrate(engine, shared, parsed.seeds.join(' ↔ '), opts.excludePrivate);
       meta.fired = list.length > 0;
       return finish(list);
     }
 
     // who_rel / who_at / intro: single logical seed (may resolve in N sources).
-    const resolved = await resolveSeedScoped(engine, sources, parsed.seeds[0]);
+    let resolved = await resolveSeedScoped(engine, sources, parsed.seeds[0]);
+    if (opts.excludePrivate) {
+      const hidden = await findPrivateOnlySlugs(
+        engine,
+        resolved.map((row) => row.slug),
+        { sourceIds: sources },
+      );
+      resolved = resolved.filter((row) => !hidden.has(row.slug));
+    }
     if (resolved.length === 0) return finish([]);
     meta.seeds_resolved = resolved.length;
     const slugs = Array.from(new Set(resolved.map(r => r.slug)));
@@ -220,7 +244,7 @@ export async function buildRelationalArm(
       sourceId: srcIds.length === 1 ? srcIds[0] : undefined,
       sourceIds: srcIds.length > 1 ? srcIds : undefined,
     });
-    const list = await hydrate(engine, rows, resolved[0].slug);
+    const list = await hydrate(engine, rows, resolved[0].slug, opts.excludePrivate);
     meta.fired = list.length > 0;
     return finish(list);
   } catch (err) {

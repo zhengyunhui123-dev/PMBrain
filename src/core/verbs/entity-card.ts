@@ -11,6 +11,7 @@ import { stampEvidence } from '../search/evidence.ts';
 import type { SearchResult } from '../types.ts';
 import { stripFactsFence } from '../facts-fence.ts';
 import { stripTakesFence } from '../takes-fence.ts';
+import { privatePagesFilterFragment, resolveExcludePrivatePages } from '../search/private-visibility.ts';
 
 const EDGE_CAP = 10;
 const OPEN_THREADS_CAP = 3;
@@ -82,6 +83,8 @@ export async function buildEntityCard(
 ): Promise<EntityCardResult> {
   const trimmed = (name ?? '').trim();
   if (!trimmed) return { found: false, suggestions: [] };
+  const excludePrivate = await resolveExcludePrivatePages(engine, opts.remote ? undefined : false);
+  const privatePredicate = excludePrivate ? ` AND ${privatePagesFilterFragment('pages')}` : '';
 
   const norm = normalizeAlias(trimmed);
   const titleLc = trimmed.toLowerCase();
@@ -113,7 +116,7 @@ export async function buildEntityCard(
           AND source_id = $1
           AND ( lower(title) = $2
              OR slug = ANY($3::text[])
-             OR slug LIKE $4 )`,
+             OR slug LIKE $4 )${privatePredicate}`,
       [sourceId, titleLc, exactSlugs, `%/${slug || trimmed}`],
     );
   } catch {
@@ -132,7 +135,7 @@ export async function buildEntityCard(
       const extra = await engine.executeRaw<CardPageRow>(
         `SELECT slug, source_id, title, type, frontmatter, compiled_truth, updated_at, last_retrieved_at
            FROM pages
-          WHERE deleted_at IS NULL AND source_id = $1 AND slug = ANY($2::text[])`,
+          WHERE deleted_at IS NULL AND source_id = $1 AND slug = ANY($2::text[])${privatePredicate}`,
         [sourceId, missing],
       );
       for (const r of extra) rowBySlug.set(r.slug, r);
@@ -147,7 +150,7 @@ export async function buildEntityCard(
     .sort((a, b) => a.rank - b.rank || lastTouchedMs(b.row) - lastTouchedMs(a.row));
 
   if (candidates.length === 0) {
-    return { found: false, suggestions: await nearMissSuggestions(engine, sourceId, trimmed) };
+    return { found: false, suggestions: await nearMissSuggestions(engine, sourceId, trimmed, excludePrivate) };
   }
 
   const best = candidates[0];
@@ -265,9 +268,10 @@ async function nearMissSuggestions(
   engine: BrainEngine,
   sourceId: string,
   name: string,
+  excludePrivate = false,
 ): Promise<EntitySuggestion[]> {
   try {
-    const raw = await engine.searchKeyword(name, { limit: SUGGESTION_CAP, sourceId });
+    const raw = await engine.searchKeyword(name, { limit: SUGGESTION_CAP, sourceId, excludePrivate });
     const results = raw as SearchResult[];
     stampEvidence(results);
     return results.map(r => ({

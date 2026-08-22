@@ -31,6 +31,7 @@ import { isTitlePhraseMatch } from './title-match.ts';
 import { normalizeAlias } from './alias-normalize.ts';
 import { normalizeChineseQuery } from './query-normalize-zh.ts';
 import { stampEvidence } from './evidence.ts';
+import { applyExactLookupTier } from './exact-lookup.ts';
 import { expandAnchors, hydrateChunks } from './two-pass.ts';
 import { enforceTokenBudget } from './token-budget.ts';
 import { warnOncePerProcess } from '../utils.ts';
@@ -566,7 +567,7 @@ export async function applyAliasHop(
   engine: import('../engine.ts').BrainEngine,
   results: SearchResult[],
   query: string,
-  opts: { sourceId?: string; sourceIds?: string[] },
+  opts: { sourceId?: string; sourceIds?: string[]; excludePrivate?: boolean },
 ): Promise<SearchResult[]> {
   if (!query) return results;
   const qNorm = normalizeAlias(query);
@@ -606,6 +607,10 @@ export async function applyAliasHop(
       continue;
     }
     if (!page) continue;
+    if (
+      opts.excludePrivate
+      && (page.frontmatter as Record<string, unknown> | null | undefined)?.visibility === 'private'
+    ) continue;
     injectScore += 1e-6;
     out.push({
       slug: page.slug,
@@ -655,6 +660,48 @@ export interface HybridSearchOpts extends SearchOpts {
    * row; everyone else leaves it undefined and pays no cost.
    */
   onMeta?: (meta: HybridSearchMeta) => void;
+  /** Internal shared wall-clock budget for cache lookup + vector query embedding. */
+  _queryEmbedDeadline?: QueryEmbedDeadline;
+}
+
+const QUERY_EMBED_TIMEOUT_MS = (() => {
+  const n = Number(process.env.PMBRAIN_QUERY_EMBED_TIMEOUT_MS ?? process.env.GBRAIN_QUERY_EMBED_TIMEOUT_MS);
+  return Number.isFinite(n) && n > 0 ? n : 6_000;
+})();
+const MIN_QUERY_EMBED_BUDGET_MS = 2_000;
+
+export interface QueryEmbedDeadline {
+  deadlineAt: number;
+}
+
+export function makeQueryEmbedDeadline(ms = QUERY_EMBED_TIMEOUT_MS): QueryEmbedDeadline {
+  return { deadlineAt: Date.now() + ms };
+}
+
+/** Bound query embeddings even when a provider or local bridge ignores abort. */
+export async function embedQueryBounded(
+  text: string,
+  embedOpts: { embeddingModel?: string; dimensions?: number } | undefined,
+  deadline: QueryEmbedDeadline,
+): Promise<Float32Array> {
+  const remaining = Math.max(MIN_QUERY_EMBED_BUDGET_MS, deadline.deadlineAt - Date.now());
+  const abortSignal = AbortSignal.timeout(remaining);
+  const pending = embedQuery(text, { ...(embedOpts ?? {}), abortSignal });
+  pending.catch(() => { /* a late provider rejection must not become unhandled */ });
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      pending,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`query embed deadline ${QUERY_EMBED_TIMEOUT_MS}ms exceeded`)),
+          remaining,
+        );
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 export async function hybridSearch(
@@ -764,6 +811,7 @@ export async function hybridSearch(
     // ordering means we can't lazy-spread the full opts).
     sourceId: opts?.sourceId,
     sourceIds: opts?.sourceIds,
+    excludePrivate: opts?.excludePrivate,
     // v0.36 (D11): pass the pre-validated descriptor into the engine so
     // it never has to read config. Engines normalize string-or-descriptor
     // via normalizeEngineColumn; the descriptor path is the strict one.
@@ -931,6 +979,7 @@ export async function hybridSearch(
       sourceIds: opts?.sourceIds,
       depth: resolvedMode.relational_retrieval_depth,
       limit: opts?.limit ?? resolvedMode.searchLimit,
+      excludePrivate: opts?.excludePrivate,
       onMeta: opts?.onRelationalMeta,
     });
   }
@@ -979,9 +1028,16 @@ export async function hybridSearch(
           },
         } as any)
       : noEmbedDeduped;
-    const noEmbedHopped = await applyAliasHop(engine, noEmbedReranked, query, {
+    const noEmbedAliased = await applyAliasHop(engine, noEmbedReranked, query, {
       sourceId: opts?.sourceId,
       sourceIds: opts?.sourceIds,
+      excludePrivate: opts?.excludePrivate,
+    });
+    const noEmbedHopped = await applyExactLookupTier(engine, noEmbedAliased, query, {
+      sourceId: opts?.sourceId,
+      sourceIds: opts?.sourceIds,
+      excludePrivate: opts?.excludePrivate,
+      titleCandidates: titleResults,
     });
     stampEvidence(noEmbedHopped);
 
@@ -1003,7 +1059,7 @@ export async function hybridSearch(
         noEmbedReturnPool,
         (result) => result.rerank_score,
         { enabled: true, jumpRatio: resolvedMode.autocut_jump, minKeep: 1 },
-        (result) => result.alias_hit === true,
+        (result) => result.alias_hit === true || result.exact_lookup !== undefined,
       );
       noEmbedReturnPool = decision.kept;
       noEmbedAutocutDecision = decision.decision;
@@ -1199,7 +1255,8 @@ export async function hybridSearch(
       const embedOpts = resolvedCol.embeddingModel
         ? { embeddingModel: resolvedCol.embeddingModel, dimensions: resolvedCol.dimensions }
         : undefined;
-      const embeddings = await Promise.all(queries.map(q => embedQuery(q, embedOpts)));
+      const embedDeadline = opts?._queryEmbedDeadline ?? makeQueryEmbedDeadline();
+      const embeddings = await Promise.all(queries.map(q => embedQueryBounded(q, embedOpts, embedDeadline)));
       queryEmbedding = embeddings[0];
       const textLists = await Promise.all(
         embeddings.map(emb => engine.searchVector(emb, searchOpts)),
@@ -1256,9 +1313,16 @@ export async function hybridSearch(
           },
         } as any)
       : kwDeduped;
-    const kwHopped = await applyAliasHop(engine, kwReranked, query, {
+    const kwAliased = await applyAliasHop(engine, kwReranked, query, {
       sourceId: opts?.sourceId,
       sourceIds: opts?.sourceIds,
+      excludePrivate: opts?.excludePrivate,
+    });
+    const kwHopped = await applyExactLookupTier(engine, kwAliased, query, {
+      sourceId: opts?.sourceId,
+      sourceIds: opts?.sourceIds,
+      excludePrivate: opts?.excludePrivate,
+      titleCandidates: titleResults,
     });
     stampEvidence(kwHopped);
 
@@ -1280,7 +1344,7 @@ export async function hybridSearch(
         kwReturnPool,
         (result) => result.rerank_score,
         { enabled: true, jumpRatio: resolvedMode.autocut_jump, minKeep: 1 },
-        (result) => result.alias_hit === true,
+        (result) => result.alias_hit === true || result.exact_lookup !== undefined,
       );
       kwReturnPool = decision.kept;
       kwAutocutDecision = decision.decision;
@@ -1475,9 +1539,16 @@ export async function hybridSearch(
   // T3 — free-text alias hop. Runs AFTER rerank so a query that is a page's
   // declared chosen name reliably surfaces that page regardless of how the
   // reranker scored body chunks. Fail-open on pre-v110 brains.
-  const aliasHopped = await applyAliasHop(engine, reranked, query, {
+  const aliased = await applyAliasHop(engine, reranked, query, {
     sourceId: opts?.sourceId,
     sourceIds: opts?.sourceIds,
+    excludePrivate: opts?.excludePrivate,
+  });
+  const aliasHopped = await applyExactLookupTier(engine, aliased, query, {
+    sourceId: opts?.sourceId,
+    sourceIds: opts?.sourceIds,
+    excludePrivate: opts?.excludePrivate,
+    titleCandidates: titleResults,
   });
 
   // T4 — stamp evidence + create_safety so the agent's don't-duplicate
@@ -1524,7 +1595,7 @@ export async function hybridSearch(
       // Preserve alias-hop exact matches: applyAliasHop injects the canonical
       // page AFTER reranking, so it has no rerank_score. Without this it would
       // be dropped whenever autocut cuts on the scored set (Codex P1).
-      (x) => x.alias_hit === true,
+      (x) => x.alias_hit === true || x.exact_lookup !== undefined,
     );
     returnPool = r.kept;
     autocutDecision = r.decision;
@@ -1586,6 +1657,7 @@ export async function hybridSearchCached(
   query: string,
   opts?: HybridSearchOpts,
 ): Promise<SearchResult[]> {
+  const queryEmbedDeadline = makeQueryEmbedDeadline();
   // v0.32.3 search-lite mode: resolve mode + per-key overrides once. The
   // resolved knob set drives cache enable/threshold/TTL AND the knobs_hash
   // that scopes the cache row so a tokenmax write can't be served to a
@@ -1646,6 +1718,7 @@ export async function hybridSearchCached(
   const cacheKnobsHash = knobsHash(resolvedForCache, {
     embeddingColumn: resolvedColCached.name,
     embeddingModel: resolvedColCached.embeddingModel,
+    excludePrivate: opts?.excludePrivate === true,
   });
 
   // Cache decision: opts.useCache (explicit) wins over global config; global
@@ -1700,7 +1773,7 @@ export async function hybridSearchCached(
       const providerProbeCached = resolvedColCached.embeddingModel || undefined;
       if (isAvailable('embedding', providerProbeCached)) {
         // v0.35.0.0+: query-side embedding (cache lookup path).
-        queryEmbedding = await embedQuery(query);
+        queryEmbedding = await embedQueryBounded(query, undefined, queryEmbedDeadline);
       } else {
         cacheStatus = 'disabled';
       }
@@ -1768,6 +1841,7 @@ export async function hybridSearchCached(
   const userOnMeta = opts?.onMeta;
   const results = await hybridSearch(engine, query, {
     ...opts,
+    _queryEmbedDeadline: queryEmbedDeadline,
     onMeta: (m) => {
       innerMetaBox.current = m;
       // Do NOT call userOnMeta here — we'll emit a merged meta below

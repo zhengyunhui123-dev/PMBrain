@@ -321,6 +321,14 @@ export function isAmbiguousModalityQuery(query: string): boolean {
   return hasReferenceMarker;
 }
 
+/** A short query can plausibly be a page identity rather than prose. */
+export function isLookupShapedQuery(query: string): boolean {
+  const q = query.trim();
+  if (!q) return false;
+  if (!/\s/.test(q) && q.includes('/')) return true;
+  return q.split(/\s+/).length <= 6;
+}
+
 // ─────────────────────────────────────────────────────────
 // v0.29.0 compatibility shims
 // ─────────────────────────────────────────────────────────

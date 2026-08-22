@@ -711,7 +711,7 @@ export function attributeKnob<K extends keyof ModeBundle>(
 // global cache cold-miss on upgrade — EVERY query_cache row invalidates,
 // including conservative/no-reranker calls where autocut is a no-op (the hash
 // is global, not per-mode). Refills within cache.ttl_seconds (3600s default).
-export const KNOBS_HASH_VERSION = 9;
+export const KNOBS_HASH_VERSION = 10;
 
 /**
  * v0.36 (D8 / CDX-2) — second-arg context for the cache key. The
@@ -740,6 +740,8 @@ export interface KnobsHashContext {
    */
   schemaPack?: string;
   schemaPackVersion?: string;
+  /** Keep remote/private-page result sets in separate cache namespaces. */
+  excludePrivate?: boolean;
 }
 
 export function knobsHash(
@@ -819,6 +821,9 @@ export function knobsHash(
     `acj=${(knobs.autocut_jump ?? 0.2).toFixed(2)}`,
     `rel=${knobs.relationalRetrieval ? 1 : 0}`,
     `reld=${knobs.relational_retrieval_depth ?? 2}`,
+    // v=10 addition: a remote result set that excludes private pages must
+    // never be served from a cache row populated by a local request.
+    `xp=${ctx?.excludePrivate === true ? 1 : 0}`,
   ];
   const h = createHash('sha256');
   h.update(parts.join('|'));

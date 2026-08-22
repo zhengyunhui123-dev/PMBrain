@@ -1599,12 +1599,13 @@ export async function embedOne(text: string): Promise<Float32Array> {
  */
 export async function embedQuery(
   text: string,
-  opts?: { embeddingModel?: string; dimensions?: number },
+  opts?: { embeddingModel?: string; dimensions?: number; abortSignal?: AbortSignal },
 ): Promise<Float32Array> {
   const [v] = await embed([text], {
     inputType: 'query',
     embeddingModel: opts?.embeddingModel,
     dimensions: opts?.dimensions,
+    abortSignal: opts?.abortSignal,
   });
   return v;
 }
