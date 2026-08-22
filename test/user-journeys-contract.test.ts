@@ -17,6 +17,9 @@ describe('core user journeys cover packaged Desktop openability', () => {
     expect(script).toContain('win-unpacked');
     expect(script).toContain("run-pill");
     expect(script).toContain('已完成');
+    expect(script).toContain('正在导入');
+    expect(script).toContain('任务正在执行中');
+    expect(script).toContain('pills.at(-1)');
     expect(script).toContain('build:sidecar');
     expect(script).toContain('build:dir');
   });
