@@ -66,11 +66,7 @@ compare_generated() {
     [ ! -e "$path" ]
     return
   fi
-  if [ -d "$snapshot" ]; then
-    [ -d "$path" ] && diff -qr "$snapshot" "$path" >/dev/null
-  else
-    [ -f "$path" ] && cmp -s "$snapshot" "$path"
-  fi
+  bun run scripts/compare-generated-trees.ts "$snapshot" "$path"
 }
 
 for generated in \

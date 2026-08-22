@@ -4,6 +4,10 @@
 
 ## 日常定向路径
 
+GitHub CI 执行 `python test/user-journeys/core_journeys.py --packaged`，打出
+`desktop/dist/win-unpacked/PMBrain.exe` 后再点真实界面。本地源码调试可以不带
+`--packaged`。
+
 `python test/user-journeys/core_journeys.py` 会执行：
 
 1. 新用户首次启动，选择 PGLite，配置本机 OpenAI-compatible 测试模型并进入管理台。

@@ -141,6 +141,7 @@ bun run typecheck
 CI 稳定性门禁的唯一入口是 `bun run verify`，其检查清单维护在
 `scripts/run-verify-parallel.sh`；`bun run check:all` 仅保留为兼容别名，不得再维护第二条
 检查链。完整链路为 `verify → test → test:slow → test:e2e`（有测试数据库时）→ `test:heavy`；
+提交前本地预演是 `bun run ci:pr-preview`（verify + 检索/可见性散落契约，Windows 自动找 Git Bash）；
 `ci:local:diff` 负责 Pull Request 的变更选择，`ci:local` 负责发布前本地链路。普通测试包装器
 必须清掉 `DATABASE_URL`、`GBRAIN_DATABASE_URL`、`PMBRAIN_DATABASE_URL` 和显式 allow；只有
 E2E wrapper 或明确的一次性命令可以设置 `GBRAIN_TEST_ALLOW_DATABASE_URL=1`，且仍须通过

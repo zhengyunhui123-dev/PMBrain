@@ -89,7 +89,7 @@ describe('alias_resolved boost stage', () => {
 });
 
 describe('KNOBS_HASH_VERSION', () => {
-  it('is 9 after title, adaptive return, and relational retrieval cache changes', () => {
-    expect(KNOBS_HASH_VERSION).toBe(9);
+  it('is 10 after title, adaptive return, relational, and private-page cache changes', () => {
+    expect(KNOBS_HASH_VERSION).toBe(10);
   });
 });
