@@ -108,6 +108,73 @@ export interface RunHooks {
   afterComplete?: () => Promise<void>;
   /** Capture a complete JSON stdout result before applying the bounded log tail. */
   captureJsonResult?: boolean;
+  /**
+   * Kill a child that already printed a terminal JSON result but has not
+   * exited. Packaged PGLite CLI children can hang after a successful embed
+   * JSON because disconnect or leftover handles never return; embed catch-up
+   * also disables the outer run timeout. Default 15s.
+   */
+  hangAfterResultMs?: number;
+}
+
+export const CHILD_HANG_AFTER_RESULT_MS = 15_000;
+
+const TERMINAL_RESULT_STATUSES = new Set([
+  'ok',
+  'clean',
+  'partial',
+  'failed',
+  'error',
+  'success',
+  'completed',
+]);
+
+const SUCCESSFUL_TERMINAL_STATUSES = new Set([
+  'ok',
+  'clean',
+  'partial',
+  'success',
+  'completed',
+]);
+
+function extractLastJsonObject(text: string): unknown | null {
+  const trimmed = text.trim();
+  if (!trimmed) return null;
+  const tryParse = (raw: string): unknown | null => {
+    try {
+      return JSON.parse(raw);
+    } catch {
+      return null;
+    }
+  };
+  const lineStart = trimmed.lastIndexOf('\n{');
+  if (lineStart >= 0) {
+    const parsed = tryParse(trimmed.slice(lineStart + 1));
+    if (parsed !== null) return parsed;
+  }
+  const firstBrace = trimmed.indexOf('{');
+  if (firstBrace >= 0) {
+    const parsed = tryParse(trimmed.slice(firstBrace));
+    if (parsed !== null) return parsed;
+  }
+  return null;
+}
+
+/** Detect a finished CLI JSON result on stdout, ignoring progress events. */
+export function parseTerminalChildResult(stdout: string): { status: string } | null {
+  const parsed = extractLastJsonObject(stdout);
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+  const record = parsed as Record<string, unknown>;
+  if (typeof record.event === 'string') return null;
+  if (typeof record.status !== 'string') return null;
+  if (!TERMINAL_RESULT_STATUSES.has(record.status)) return null;
+  return { status: record.status };
+}
+
+function resolveHangAfterResultMs(hooks?: RunHooks): number {
+  return typeof hooks?.hangAfterResultMs === 'number' && hooks.hangAfterResultMs >= 0
+    ? hooks.hangAfterResultMs
+    : CHILD_HANG_AFTER_RESULT_MS;
 }
 
 const DREAM_DETAIL_KEYS = new Set([
@@ -286,9 +353,23 @@ export async function startRun(kind: string, command: string[], cwd: string, hoo
     const resultPath = resultDir ? join(resultDir, 'stdout.json') : null;
     let resultFd = resultPath ? openSync(resultPath, 'w') : null;
     const cap = 120_000;
+    const armHangWatchdog = () => {
+      if (hangWatchdog || finished) return;
+      const terminal = parseTerminalChildResult(run.stdout);
+      if (!terminal) return;
+      hangWatchdog = setTimeout(() => {
+        if (finished || run.status !== 'running') return;
+        hungAfterResult = parseTerminalChildResult(run.stdout) ?? terminal;
+        run.stderr = sanitizeOutput(
+          `${run.stderr}\n[admin] child printed a terminal JSON result but did not exit within ${hangMs}ms; force-killing\n`,
+        );
+        killProcessTree(child);
+      }, hangMs);
+    };
     const append = (key: 'stdout' | 'stderr', chunk: Buffer) => {
       if (key === 'stdout' && resultFd !== null) writeSync(resultFd, chunk);
       run[key] = sanitizeOutput((run[key] + chunk.toString('utf8')).slice(-cap));
+      if (key === 'stdout') armHangWatchdog();
     };
     const captureResult = () => {
       if (resultFd !== null) {
@@ -306,11 +387,15 @@ export async function startRun(kind: string, command: string[], cwd: string, hoo
     };
     let finished = false;
     let timeout: ReturnType<typeof setTimeout> | null = null;
+    let hangWatchdog: ReturnType<typeof setTimeout> | null = null;
     let timeoutError: string | null = null;
+    let hungAfterResult: { status: string } | null = null;
+    const hangMs = resolveHangAfterResultMs(hooks);
     const finish = async (status: ConsoleRun['status'], code: number | null, error?: string) => {
       if (finished) return;
       finished = true;
       if (timeout) clearTimeout(timeout);
+      if (hangWatchdog) clearTimeout(hangWatchdog);
       children.delete(id);
       captureResult();
       run.exitCode = code;
@@ -345,6 +430,13 @@ export async function startRun(kind: string, command: string[], cwd: string, hoo
         void finish('cancelled', code);
       } else if (timeoutError) {
         void finish('failed', code, timeoutError);
+      } else if (hungAfterResult) {
+        const success = SUCCESSFUL_TERMINAL_STATUSES.has(hungAfterResult.status);
+        void finish(
+          success ? 'completed' : 'failed',
+          code,
+          success ? undefined : `Command printed status ${hungAfterResult.status} but did not exit`,
+        );
       } else {
         void finish(code === 0 ? 'completed' : 'failed', code);
       }
