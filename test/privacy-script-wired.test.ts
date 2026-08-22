@@ -41,10 +41,11 @@ describe('check-privacy.sh CI wiring', () => {
   it('package.json "verify" script delegates to run-verify-parallel.sh', () => {
     const pkg = JSON.parse(readFileSync(PACKAGE_JSON, 'utf-8'));
     expect(typeof pkg.scripts?.verify).toBe('string');
-    // verify body is now `bash scripts/run-verify-parallel.sh`. The
-    // direct check:privacy substring assertion broke when the && chain
-    // was replaced with the parallel dispatcher. Follow the indirection.
-    expect(pkg.scripts.verify).toContain('run-verify-parallel.sh');
+    // Windows needs a Bun wrapper to find Git Bash; the wrapper still
+    // executes scripts/run-verify-parallel.sh as the check list.
+    expect(pkg.scripts.verify).toContain('run-verify.ts');
+    expect(readFileSync(VERIFY_DISPATCHER, 'utf-8')).toContain('check:privacy');
+    expect(readFileSync(resolve(REPO_ROOT, 'scripts/run-verify.ts'), 'utf-8')).toContain('run-verify-parallel.sh');
   });
 
   it('run-verify-parallel.sh dispatches check:privacy', () => {

@@ -275,8 +275,13 @@ describe('buildVisibilityClause (v0.26.5)', () => {
   test('does NOT bypass on detail level — visibility is a contract, not a temporal preference', () => {
     // Distinct from buildSourceFactorCase: there's no detail-gated short-circuit.
     // Soft-deleted content stays hidden regardless of caller's detail level.
-    // Function signature has no detail param at all; this test pins that contract.
-    expect(buildVisibilityClause.length).toBe(2);
+    // The optional 3rd argument is a private-page filter, not a detail switch.
+    expect(buildVisibilityClause.length).toBe(3);
+    const local = buildVisibilityClause('p', 's');
+    const remote = buildVisibilityClause('p', 's', { excludePrivate: true });
+    expect(local).not.toContain("frontmatter->>'visibility'");
+    expect(remote).toContain("COALESCE(p.frontmatter->>'visibility', 'world') <> 'private'");
+    expect(remote.startsWith(local)).toBe(true);
   });
 
   test('emits a stable string regardless of call order (idempotent for snapshot tests)', () => {

@@ -1,5 +1,14 @@
 import { describe, expect, test } from 'bun:test';
-import { normalizeAdminText, normalizeLineEndings } from '../scripts/normalize-admin-dist.ts';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import {
+  compareGeneratedTrees,
+  normalizeAdminText,
+  normalizeLineEndings,
+  textsEquivalentIgnoringLineEndings,
+} from '../scripts/normalize-admin-dist.ts';
+import { glossaryIsFresh } from '../scripts/check-eval-glossary-fresh.ts';
 import { validateVersionContract } from '../scripts/check-version-sync.ts';
 
 describe('release build guards', () => {
@@ -27,6 +36,27 @@ describe('release build guards', () => {
       manifestDesktop: '1.1.13',
       manifestSidecar: '1.2.13',
     })).toEqual([]);
+  });
+
+  test('treats CRLF and LF generated text as the same artifact', () => {
+    expect(textsEquivalentIgnoringLineEndings('alpha\r\nbeta\n', 'alpha\nbeta\n')).toBe(true);
+    expect(glossaryIsFresh('line\r\n', 'line\n')).toBe(true);
+    expect(glossaryIsFresh('stale\n', 'fresh\n')).toBe(false);
+  });
+
+  test('generated tree compare ignores text line endings but not content', () => {
+    const left = mkdtempSync(join(tmpdir(), 'pmbrain-gen-left-'));
+    const right = mkdtempSync(join(tmpdir(), 'pmbrain-gen-right-'));
+    writeFileSync(join(left, 'index.js'), 'export default 1;\r\n');
+    writeFileSync(join(right, 'index.js'), 'export default 1;\n');
+    expect(compareGeneratedTrees(left, right)).toEqual([]);
+    writeFileSync(join(right, 'index.js'), 'export default 2;\n');
+    expect(compareGeneratedTrees(left, right)).toEqual(['text differs: index.js']);
+    const leftFile = join(left, 'snapshot');
+    const rightFile = join(right, 'admin-embedded.ts');
+    writeFileSync(leftFile, 'export const x = 1;\r\n');
+    writeFileSync(rightFile, 'export const x = 1;\n');
+    expect(compareGeneratedTrees(leftFile, rightFile)).toEqual([]);
   });
 
   test('reports every stale version before packaging starts', () => {

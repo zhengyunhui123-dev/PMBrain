@@ -4,7 +4,8 @@
 
 | 命令 | 作用 |
 | --- | --- |
-| `bun run verify` | 静态 Guard、版本/生成物、Admin 构建门禁和 typecheck；权威检查清单在 `scripts/run-verify-parallel.sh`。 |
+| `bun run verify` | 静态 Guard、版本/生成物、Admin 构建门禁和 typecheck；权威检查清单在 `scripts/run-verify-parallel.sh`。Windows 会自动查找 Git Bash，找不到就失败，不能用等价步骤代替。 |
+| `bun run ci:pr-preview` | 提交前的 GitHub Test 预演：真正的 `verify` + 检索/可见性散落契约。不是 10 shard 全量。 |
 | `bun run test` | 清理数据库环境后的快速 unit 测试。 |
 | `bun run test:full` | `verify`、unit、slow，以及存在数据库 URL 时的 E2E。 |
 | `bun run test:e2e` | 统一 E2E wrapper：测试库名 floor、HOME/GBRAIN_HOME 隔离、逐文件串行、逐文件超时和失败汇总。 |
@@ -13,7 +14,8 @@
 | `bun run ci:local` | 本地发布前的完整 Docker/Postgres、verify、unit、PGLite snapshot 和 E2E 链路。 |
 
 `bun run check:all` 只作为旧调用方的兼容别名，等同于 `bun run verify`，不再拥有独立
-的手工检查列表。
+的手工检查列表。推 GitHub 前至少跑 `bun run ci:pr-preview`；本机没有 Git Bash 时必须
+报告为未运行，不能把定向单测当成 CI 通过。
 
 ## 数据库安全契约
 

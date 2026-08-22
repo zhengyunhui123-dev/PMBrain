@@ -1,0 +1,97 @@
+#!/usr/bin/env bun
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { join, relative } from 'node:path';
+
+export function extractKnobsHashVersion(source: string): number {
+  const match = source.match(/export\s+const\s+KNOBS_HASH_VERSION\s*=\s*(\d+)\s*;/);
+  if (!match) throw new Error('KNOBS_HASH_VERSION export was not found');
+  return Number(match[1]);
+}
+
+export function extractFunctionArity(source: string, name: string): number {
+  const start = source.search(new RegExp(`export\\s+function\\s+${name}\\s*\\(`));
+  if (start < 0) throw new Error(`${name} export was not found`);
+  const open = source.indexOf('(', start);
+  let depth = 0;
+  let brace = 0;
+  for (let index = open; index < source.length; index++) {
+    const char = source[index];
+    if (char === '{') brace += 1;
+    else if (char === '}') brace -= 1;
+    else if (char === '(') depth += 1;
+    else if (char === ')') {
+      depth -= 1;
+      if (depth === 0) {
+        const params = source.slice(open + 1, index);
+        let arity = 0;
+        let nested = 0;
+        let current = '';
+        for (const item of params) {
+          if (item === '{' || item === '(' || item === '[') nested += 1;
+          else if (item === '}' || item === ')' || item === ']') nested -= 1;
+          if (item === ',' && nested === 0) {
+            if (current.trim()) arity += 1;
+            current = '';
+            continue;
+          }
+          current += item;
+        }
+        if (current.trim()) arity += 1;
+        return arity;
+      }
+    }
+  }
+  throw new Error(`${name} signature was not closed`);
+}
+
+function walk(dir: string): string[] {
+  if (!existsSync(dir)) return [];
+  const files: string[] = [];
+  for (const name of readdirSync(dir)) {
+    const full = join(dir, name);
+    if (statSync(full).isDirectory()) files.push(...walk(full));
+    else if (full.endsWith('.ts') || full.endsWith('.tsx')) files.push(full);
+  }
+  return files;
+}
+
+export function collectScatteredContractFailures(root: string): string[] {
+  const version = extractKnobsHashVersion(
+    readFileSync(join(root, 'src', 'core', 'search', 'mode.ts'), 'utf8'),
+  );
+  const arity = extractFunctionArity(
+    readFileSync(join(root, 'src', 'core', 'search', 'sql-ranking.ts'), 'utf8'),
+    'buildVisibilityClause',
+  );
+  const failures: string[] = [];
+  for (const file of walk(join(root, 'test'))) {
+    const rel = relative(root, file).replace(/\\/g, '/');
+    if (rel.endsWith('test/scripts/check-scattered-contracts.test.ts')) continue;
+    const content = readFileSync(file, 'utf8');
+    for (const match of content.matchAll(/KNOBS_HASH_VERSION\)\.to(?:Be|Equal)\((\d+)\)/g)) {
+      if (Number(match[1]) !== version) {
+        failures.push(`${rel}: KNOBS_HASH_VERSION pinned to ${match[1]}, source is ${version}`);
+      }
+    }
+    for (const match of content.matchAll(/buildVisibilityClause\.length\)\.to(?:Be|Equal)\((\d+)\)/g)) {
+      if (Number(match[1]) !== arity) {
+        failures.push(`${rel}: buildVisibilityClause.length pinned to ${match[1]}, function arity is ${arity}`);
+      }
+    }
+  }
+  return failures;
+}
+
+export function checkScatteredContracts(root = join(import.meta.dir, '..')): void {
+  const failures = collectScatteredContractFailures(root);
+  if (failures.length > 0) {
+    throw new Error(
+      'Scattered retrieval contract pins drifted from source:\n- ' +
+        failures.join('\n- ') +
+        '\nUpdate every leftover toBe() in the same change as the source constant.',
+    );
+  }
+  console.log('[check:scattered-contracts] retrieval contract pins match source');
+}
+
+if (import.meta.main) checkScatteredContracts();

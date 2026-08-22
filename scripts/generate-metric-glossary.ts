@@ -13,12 +13,13 @@ import { writeFileSync, mkdirSync } from 'fs';
 import { dirname, join, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import { renderMetricGlossaryMarkdown } from '../src/core/eval/metric-glossary.ts';
+import { normalizeLineEndings } from './normalize-admin-dist.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(__dirname, '..');
 const OUT_PATH = join(REPO_ROOT, 'docs', 'eval', 'METRIC_GLOSSARY.md');
 
-const md = renderMetricGlossaryMarkdown();
+const md = normalizeLineEndings(renderMetricGlossaryMarkdown());
 
 mkdirSync(dirname(OUT_PATH), { recursive: true });
 writeFileSync(OUT_PATH, md, 'utf-8');

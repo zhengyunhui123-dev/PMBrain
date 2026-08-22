@@ -76,6 +76,7 @@ CHECKS=(
   "check:worker-lock-renewal-shape"
   "check:guard-self-test"
   "check:pmbrain-env"
+  "check:scattered-contracts"
   "typecheck"
 )
 

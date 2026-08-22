@@ -47,6 +47,7 @@ DESKTOP_ROOT = REPO_ROOT / "desktop"
 ELECTRON_EXE = DESKTOP_ROOT / "node_modules" / "electron" / "dist" / "electron.exe"
 DESKTOP_ENTRY = DESKTOP_ROOT / "out" / "main" / "index.js"
 DESKTOP_RENDERER = DESKTOP_ROOT / "out" / "renderer" / "index.html"
+PACKAGED_EXE = DESKTOP_ROOT / "dist" / "win-unpacked" / "PMBrain.exe"
 DEFAULT_ARTIFACTS_ROOT = REPO_ROOT / "备份" / "核心用户路径测试" / "runs"
 UNIQUE_MARKER = "pmbrain-real-e2e-orchid-7429"
 FIRST_SETUP_TIMEOUT_MS = 300_000
@@ -148,9 +149,18 @@ def run_checked(command: list[str], cwd: Path) -> None:
     subprocess.run(command, cwd=cwd, check=True)
 
 
-def build_current_source() -> None:
+def build_current_source(*, packaged: bool = False) -> None:
     run_checked(["bun", "run", "build:admin"], REPO_ROOT)
     run_checked(["bun", "run", "build"], DESKTOP_ROOT)
+    if not packaged:
+        return
+    env = os.environ.copy()
+    env["CSC_IDENTITY_AUTO_DISCOVERY"] = "false"
+    run_checked(["bun", "run", "build:sidecar"], DESKTOP_ROOT)
+    print(f"[build] {DESKTOP_ROOT}> bun run build:dir", flush=True)
+    subprocess.run(["bun", "run", "build:dir"], cwd=DESKTOP_ROOT, check=True, env=env)
+    if not PACKAGED_EXE.exists():
+        raise RuntimeError(f"Packaged Desktop is missing: {PACKAGED_EXE}")
 
 
 def write_fixtures(fixtures: Path) -> tuple[Path, Path]:
@@ -192,7 +202,11 @@ class DesktopSession:
         self.page: Page | None = None
 
     def start(self) -> Page:
-        if not ELECTRON_EXE.exists() or not DESKTOP_ENTRY.exists():
+        packaged = self.application is None
+        if packaged:
+            if not Path(self.executable).exists():
+                raise RuntimeError(f"Packaged Desktop is missing: {self.executable}")
+        elif not ELECTRON_EXE.exists() or not DESKTOP_ENTRY.exists():
             raise RuntimeError("Desktop build is missing; run without --skip-build first")
         user_data = self.home / "electron-user-data"
         user_data.mkdir(parents=True, exist_ok=True)
@@ -280,7 +294,7 @@ def open_admin_from_desktop(page: Page) -> str:
     return page.url.split("/admin", 1)[0]
 
 
-def first_launch_journey(page: Page, artifacts: Path, provider: LocalOpenAIServer) -> str:
+def first_launch_journey(page: Page, artifacts: Path, provider: LocalOpenAIServer) -> tuple[str, str]:
     print("[journey 1/6] fresh Desktop launch -> PGLite -> models -> Admin homepage", flush=True)
     database_path = artifacts / "user-home" / "database" / "brain.pglite"
     knowledge_dir = artifacts / "knowledge-source"
@@ -322,7 +336,8 @@ def first_launch_journey(page: Page, artifacts: Path, provider: LocalOpenAIServe
     success = page.locator("#global-success").inner_text()
     if "配置完成" not in success:
         raise AssertionError(f"First-run setup did not complete: {success}")
-    return open_admin_from_desktop(page)
+    desktop_url = page.url
+    return open_admin_from_desktop(page), desktop_url
 
 
 def import_search_journey(page: Page, origin: str, markdown: Path, pdf: Path, artifacts: Path) -> None:
@@ -332,16 +347,23 @@ def import_search_journey(page: Page, origin: str, markdown: Path, pdf: Path, ar
     page.get_by_role("heading", name="知识工作台").wait_for()
     page.get_by_label("选择本地文件").set_input_files([str(markdown), str(pdf)])
     page.get_by_role("button", name="导入", exact=True).click()
-    textarea = page.locator(".assistant-composer textarea")
-    textarea.fill(UNIQUE_MARKER)
     try:
         page.wait_for_function(
             """() => {
-              const button = document.querySelector('.search-action-main');
               const progress = document.querySelector('.assistant-attachment-help')?.textContent || '';
-              return Boolean(button && !button.disabled && !progress.startsWith('正在导入'));
+              if (progress.startsWith('正在导入')) return false;
+              const importButton = document.querySelector('.import-action');
+              if (importButton?.disabled) return false;
+              const pills = Array.from(document.querySelectorAll('.nl-result .run-pill'));
+              const last = pills.at(-1);
+              if (!last) return false;
+              const label = (last.textContent || '').trim();
+              if (!['已完成', '失败', '部分完成'].includes(label)) return false;
+              const summary = document.querySelector('.nl-result')?.textContent || '';
+              if (summary.includes('任务正在执行中') || summary.includes('正在进行中')) return false;
+              return true;
             }""",
-            timeout=180_000,
+            timeout=240_000,
         )
     except PlaywrightTimeoutError:
         details = page.locator(".nl-details")
@@ -353,6 +375,8 @@ def import_search_journey(page: Page, origin: str, markdown: Path, pdf: Path, ar
             encoding="utf-8",
         )
         raise
+    textarea = page.locator(".assistant-composer textarea")
+    textarea.fill(UNIQUE_MARKER)
     if page.locator(".pm-error-text").count() and page.locator(".pm-error-text").first.is_visible():
         raise AssertionError(f"Import UI reported an error: {page.locator('.pm-error-text').first.inner_text()}")
     run_pill = page.locator(".nl-result .run-pill").last
@@ -389,9 +413,14 @@ def delete_restore_journey(page: Page, origin: str) -> None:
     page.get_by_role("row", name=re.compile("Real User Journey Orchid")).wait_for(timeout=90_000)
 
 
-def embedding_switch_journey(page: Page, artifacts: Path, provider: LocalOpenAIServer) -> None:
+def embedding_switch_journey(
+    page: Page,
+    artifacts: Path,
+    provider: LocalOpenAIServer,
+    desktop_url: str | None = None,
+) -> None:
     print("[journey 4/6] change embedding model -> dimension migration -> re-embed", flush=True)
-    page.goto(DESKTOP_RENDERER.as_uri())
+    page.goto(desktop_url or DESKTOP_RENDERER.as_uri())
     page.locator("#panel-basic").wait_for(state="visible")
     page.locator('.rail-item[data-target="models"]').click()
     page.wait_for_function(
@@ -535,9 +564,16 @@ def mcp_key_search_journey(page: Page) -> None:
         raise AssertionError("The real MCP search did not return the imported document")
 
 
-def restart_persistence_check(playwright: Playwright, artifacts: Path, home: Path) -> None:
+def restart_persistence_check(
+    playwright: Playwright,
+    artifacts: Path,
+    home: Path,
+    *,
+    executable: Path = ELECTRON_EXE,
+    application: Path | None = DESKTOP_ROOT,
+) -> None:
     print("[journey 6 precheck] restart current Desktop -> imported data persists", flush=True)
-    session = DesktopSession(playwright, artifacts, home)
+    session = DesktopSession(playwright, artifacts, home, executable=executable, application=application)
     page = session.start()
     try:
         origin = open_admin_from_desktop(page)
@@ -556,16 +592,19 @@ def run(args: argparse.Namespace) -> None:
     home = artifacts / "user-home"
     home.mkdir(parents=True)
     markdown, pdf = write_fixtures(artifacts / "fixtures")
+    packaged = bool(args.packaged)
+    executable = PACKAGED_EXE if packaged else ELECTRON_EXE
+    application = None if packaged else DESKTOP_ROOT
     if not args.skip_build:
-        build_current_source()
+        build_current_source(packaged=packaged)
     with LocalOpenAIServer() as provider, sync_playwright() as playwright:
-        session = DesktopSession(playwright, artifacts, home)
+        session = DesktopSession(playwright, artifacts, home, executable=executable, application=application)
         page = session.start()
         try:
-            origin = first_launch_journey(page, artifacts, provider)
+            origin, desktop_url = first_launch_journey(page, artifacts, provider)
             import_search_journey(page, origin, markdown, pdf, artifacts)
             delete_restore_journey(page, origin)
-            embedding_switch_journey(page, artifacts, provider)
+            embedding_switch_journey(page, artifacts, provider, desktop_url)
             mcp_key_search_journey(page)
         except Exception:
             try:
@@ -579,7 +618,13 @@ def run(args: argparse.Namespace) -> None:
             raise
         finally:
             session.stop()
-        restart_persistence_check(playwright, artifacts, home)
+        restart_persistence_check(
+            playwright,
+            artifacts,
+            home,
+            executable=executable,
+            application=application,
+        )
     print(f"[passed] real PMBrain core user journeys; artifacts: {artifacts}")
     print("[note] the cross-version NSIS upgrade journey is run separately by test:user-journeys:upgrade")
 
@@ -587,6 +632,11 @@ def run(args: argparse.Namespace) -> None:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run real PMBrain Desktop/Admin core user journeys")
     parser.add_argument("--skip-build", action="store_true", help="Reuse the current Admin/Desktop build output")
+    parser.add_argument(
+        "--packaged",
+        action="store_true",
+        help="Launch desktop/dist/win-unpacked/PMBrain.exe after building the unpacked Windows app",
+    )
     parser.add_argument("--artifacts-dir", help="Directory for isolated PMBRAIN_HOME, fixtures, logs and screenshots")
     return parser.parse_args()
 
