@@ -14,6 +14,7 @@ check-admin-scope-drift.sh	buildfresh	exempt	Regenerates and diffs admin scope a
 check-batch-audit-site.sh	scanner	todo	Scanner guard; add fixtures when its rule is changed.
 check-cli-executable.sh	repostate	exempt	Checks repository file mode.
 check-eval-glossary-fresh.sh	buildfresh	exempt	Regenerates and diffs glossary output.
+check-eval-glossary-fresh.ts	buildfresh	exempt	In-process glossary freshness check; ignores Windows CRLF.
 check-exports-count.sh	scanner	todo	Previously reachable only through the drifting check:all chain; now in verify.
 check-fixture-privacy.sh	scanner	todo	Scanner guard; add fixtures when its rule is changed.
 check-fuzz-purity.sh	buildfresh	exempt	Executes the fuzz corpus.
@@ -33,6 +34,7 @@ check-proposal-pii.sh	scanner	todo	Scanner guard; add fixtures when its rule is 
 check-repository-hygiene.sh	scanner	todo	Scanner guard; add fixtures when its rule is changed.
 check-skill-brain-first.sh	scanner	todo	Scanner guard; add fixtures when its rule is changed.
 check-source-config-leak.sh	scanner	todo	Scanner guard; add fixtures when its rule is changed.
+check-scattered-contracts.ts	scanner	todo	Fails leftover KNOBS_HASH_VERSION and visibility-arity test pins.
 check-source-id-projection.sh	scanner	todo	Scanner guard; add fixtures when its rule is changed.
 check-source-scope-onboard.sh	scanner	todo	Scanner guard; add fixtures when its rule is changed.
 check-synthetic-corpus-privacy.sh	scanner	todo	Scanner guard; add fixtures when its rule is changed.

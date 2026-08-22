@@ -136,8 +136,8 @@ def run(args: argparse.Namespace) -> None:
         )
         page = old_session.start()
         try:
-            origin = journeys.first_launch_journey(page, artifacts, provider)
-            journeys.import_search_journey(page, origin, markdown, pdf)
+            origin, _desktop_url = journeys.first_launch_journey(page, artifacts, provider)
+            journeys.import_search_journey(page, origin, markdown, pdf, artifacts)
         finally:
             old_session.stop()
 

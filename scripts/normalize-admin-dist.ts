@@ -1,8 +1,8 @@
 #!/usr/bin/env bun
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
-import { extname, join, relative } from 'node:path';
+import { basename, extname, join, relative } from 'node:path';
 
-const TEXT_EXTENSIONS = new Set(['.css', '.html', '.js', '.json', '.map', '.svg', '.txt']);
+export const TEXT_EXTENSIONS = new Set(['.css', '.html', '.js', '.json', '.map', '.svg', '.txt', '.md', '.ts']);
 
 export function normalizeLineEndings(value: string): string {
   return value.replace(/\r\n?/g, '\n');
@@ -28,6 +28,58 @@ function walk(dir: string): string[] {
     else files.push(full);
   }
   return files;
+}
+
+export function textsEquivalentIgnoringLineEndings(left: string, right: string): boolean {
+  return normalizeLineEndings(left) === normalizeLineEndings(right);
+}
+
+function listedFiles(root: string): Map<string, string> {
+  if (statSync(root).isFile()) return new Map([[basename(root), root]]);
+  return new Map(walk(root).map(file => [relative(root, file).replace(/\\/g, '/'), file]));
+}
+
+function compareFilePair(left: string, right: string, label: string): string[] {
+  const extension = extname(right).toLowerCase() || extname(left).toLowerCase();
+  if (TEXT_EXTENSIONS.has(extension)) {
+    return textsEquivalentIgnoringLineEndings(readFileSync(left, 'utf8'), readFileSync(right, 'utf8'))
+      ? []
+      : [`text differs: ${label}`];
+  }
+  return readFileSync(left).equals(readFileSync(right)) ? [] : [`binary differs: ${label}`];
+}
+
+export function compareGeneratedTrees(leftRoot: string, rightRoot: string): string[] {
+  if (!existsSync(leftRoot) && !existsSync(rightRoot)) return [];
+  if (!existsSync(leftRoot)) return [`missing ${leftRoot}`];
+  if (!existsSync(rightRoot)) return [`missing ${rightRoot}`];
+  if (statSync(leftRoot).isFile() && statSync(rightRoot).isFile()) {
+    return compareFilePair(leftRoot, rightRoot, basename(rightRoot));
+  }
+  const leftFiles = listedFiles(leftRoot);
+  const rightFiles = listedFiles(rightRoot);
+  const mismatches: string[] = [];
+  for (const rel of new Set([...leftFiles.keys(), ...rightFiles.keys()])) {
+    const left = leftFiles.get(rel);
+    const right = rightFiles.get(rel);
+    if (!left) {
+      mismatches.push(`only in right: ${rel}`);
+      continue;
+    }
+    if (!right) {
+      mismatches.push(`only in left: ${rel}`);
+      continue;
+    }
+    const extension = extname(rel).toLowerCase();
+    if (TEXT_EXTENSIONS.has(extension)) {
+      if (!textsEquivalentIgnoringLineEndings(readFileSync(left, 'utf8'), readFileSync(right, 'utf8'))) {
+        mismatches.push(`text differs: ${rel}`);
+      }
+      continue;
+    }
+    if (!readFileSync(left).equals(readFileSync(right))) mismatches.push(`binary differs: ${rel}`);
+  }
+  return mismatches;
 }
 
 export function normalizeAdminDist(root = join(import.meta.dir, '..')): number {

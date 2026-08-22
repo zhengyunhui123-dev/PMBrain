@@ -37,7 +37,7 @@ permissions:
 jobs:
   windows-real-ui:
     runs-on: windows-latest
-    timeout-minutes: 25
+    timeout-minutes: 40
     env:
       PYTHONUTF8: '1'
     steps:
@@ -54,8 +54,10 @@ jobs:
         run: bun install --frozen-lockfile
       - name: Install UI driver
         run: python -m pip install -r test/user-journeys/requirements.txt
-      - name: Run real Desktop/Admin/PGLite/MCP journeys
-        run: python test/user-journeys/core_journeys.py
+      - name: Run real packaged Desktop/Admin/PGLite/MCP journeys
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: python test/user-journeys/core_journeys.py --packaged
       - name: Upload journey evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
