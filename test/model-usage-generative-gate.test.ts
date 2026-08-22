@@ -1,6 +1,6 @@
 /**
  * 产品经理可读的测试说明：
- * 1. 未配置 model_usage.generative_enabled 时，默认关闭生成式模型。
+ * 1. 未配置 model_usage.generative_enabled 时，默认开启普通模型调用；用户显式关闭后必须保持关闭。
  * 2. 关闭时禁止 full / meeting 预设，允许 quick。
  * 3. 关闭时禁止 synthesize 等生成式阶段，允许 lint / embed 等本地阶段。
  * 4. 阶段能力表覆盖全部 ALL_PHASES，并声明 requiresGenerativeModel。
@@ -23,9 +23,14 @@ import {
 const ROOT = join(import.meta.dir, '..');
 
 describe('生成式模型全局开关', () => {
-  test('缺少配置字段时默认关闭，不因 chat_model 已配置而自动开启', () => {
-    expect(isGenerativeModelEnabled(null)).toBe(false);
-    expect(isGenerativeModelEnabled({ engine: 'pglite', chat_model: 'deepseek:deepseek-chat' } as any)).toBe(false);
+  test('缺少配置字段时默认开启，但显式关闭永远优先', () => {
+    expect(isGenerativeModelEnabled(null)).toBe(true);
+    expect(isGenerativeModelEnabled({ engine: 'pglite', chat_model: 'deepseek:deepseek-chat' } as any)).toBe(true);
+    expect(isGenerativeModelEnabled({
+      engine: 'pglite',
+      chat_model: 'deepseek:deepseek-chat',
+      model_usage: { generative_enabled: false },
+    } as any)).toBe(false);
     expect(isGenerativeModelEnabled({
       engine: 'pglite',
       chat_model: 'deepseek:deepseek-chat',
@@ -88,7 +93,8 @@ describe('生成式模型全局开关', () => {
     expect(dreamUi).toContain('AI 深度整理');
     expect(dreamUi).toContain('AI 会议整理');
     expect(dreamUi).toContain('快速维护');
-    expect(dreamUi).toContain('不使用普通模型');
+    expect(dreamUi).not.toContain('不使用普通模型');
+    expect(dreamUi).toContain('按阶段精确执行');
     expect(dreamUi).toContain('GENERATIVE_DISABLED_HINT');
   });
 

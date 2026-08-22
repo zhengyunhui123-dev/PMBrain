@@ -2,6 +2,12 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { api, isPgliteBusyError } from '../api';
 import { RunOutput, formatDate, pageTypeLabel, pageTypeTitle, type ConsoleRun } from '../lib/shared';
 import { describeRunRecovery } from '../lib/run-recovery';
+import { formatRunDuration } from '../lib/run-progress';
+import {
+  buildDreamLiveProgress,
+  dreamPhaseOptionText,
+  dreamPhasePurpose,
+} from '../lib/dream-live-progress';
 import { TakeProposalsPage } from './TakeProposals';
 import { CalibrationPage } from './Calibration';
 
@@ -252,14 +258,6 @@ const PHASE_GROUP_BY_PHASE: Record<string, typeof PHASE_GROUPS[number]['key']> =
 function phasesForGroup(catalog: string[], groupKey: string): string[] {
   return catalog.filter(phase => PHASE_GROUP_BY_PHASE[phase] === groupKey);
 }
-
-const DREAM_KNOWLEDGE_STEPS = [
-  { key: 'read', title: '阅读新内容', description: '找到最近新增或变化的资料', phases: ['lint', 'backlinks', 'sync'] },
-  { key: 'understand', title: '理解与提炼', description: '提取事实、人物、概念和知识点', phases: ['synthesize', 'extract', 'extract_facts', 'extract_atoms'] },
-  { key: 'connect', title: '建立知识连接', description: '补全关系并发现反复出现的主题', phases: ['resolve_symbol_edges', 'patterns', 'synthesize_concepts'] },
-  { key: 'remember', title: '形成长期记忆', description: '合并重复信息并沉淀重要判断', phases: ['recompute_emotional_weight', 'consolidate', 'propose_takes', 'grade_takes', 'calibration_profile', 'conversation_facts_backfill'] },
-  { key: 'search', title: '更新搜索能力', description: '让最新知识可以被 AI 准确找到', phases: ['embed', 'orphans', 'schema-suggest', 'purge'] },
-] as const;
 
 const QUICK_MAINTENANCE_STEPS = [
   { key: 'check', title: '检查知识', description: '检查页面与内容规范', phases: ['lint', 'backlinks'] },
@@ -1138,6 +1136,7 @@ function QuickMaintenanceJourney({ run }: { run: ConsoleRun | null }) {
   useEffect(() => setSelectedKey(suggestedKey), [run?.id, run?.status, suggestedKey]);
   const selected = stages.find(stage => stage.key === selectedKey) ?? stages[0]!;
   const running = run?.status === 'running' || run?.status === 'queued';
+  const completedStages = stages.filter(stage => stage.state === 'done' || stage.state === 'partial').length;
 
   return (
     <section className={`dream-journey quick-maintenance-journey ${running ? 'is-running' : ''}`} aria-label="快速维护进度">
@@ -1147,24 +1146,6 @@ function QuickMaintenanceJourney({ run }: { run: ConsoleRun | null }) {
           <h2>{running ? '正在执行快速维护' : '快速维护会完成这五项检查'}</h2>
         </div>
         {running && <span className="dream-live"><i />后台运行中</span>}
-      </div>
-      <div className="dream-journey-track">
-        {stages.map((stage, index) => (
-          <button
-            type="button"
-            className={`dream-journey-step ${stage.state} ${selected.key === stage.key ? 'is-selected' : ''}`}
-            key={stage.key}
-            onClick={() => setSelectedKey(stage.key)}
-            aria-pressed={selected.key === stage.key}
-          >
-            <span className="dream-step-marker" aria-hidden="true">{stage.state === 'done' ? '✓' : index + 1}</span>
-            <span className="dream-step-copy">
-              <b>{stage.title}</b>
-              <span>{stage.description}</span>
-              <small className={`dream-step-status ${stage.state}`}>{QUICK_STAGE_STATUS[stage.state]}</small>
-            </span>
-          </button>
-        ))}
       </div>
       <div className={`quick-stage-result state-${selected.state}`} aria-live="polite">
         <div>
@@ -1181,50 +1162,195 @@ function QuickMaintenanceJourney({ run }: { run: ConsoleRun | null }) {
           ))}
         </dl>
       </div>
+      <details className="dream-journey-disclosure">
+        <summary><span>查看全部 5 个维护步骤</span><b>{completedStages} / 5</b></summary>
+        <div className="dream-journey-track">
+          {stages.map((stage, index) => (
+            <button
+              type="button"
+              className={`dream-journey-step ${stage.state} ${selected.key === stage.key ? 'is-selected' : ''}`}
+              key={stage.key}
+              onClick={() => setSelectedKey(stage.key)}
+              aria-pressed={selected.key === stage.key}
+            >
+              <span className="dream-step-marker" aria-hidden="true">{stage.state === 'done' ? '✓' : index + 1}</span>
+              <span className="dream-step-copy">
+                <b>{stage.title}</b>
+                <span>{stage.description}</span>
+                <small className={`dream-step-status ${stage.state}`}>{QUICK_STAGE_STATUS[stage.state]}</small>
+              </span>
+            </button>
+          ))}
+        </div>
+      </details>
     </section>
   );
 }
 
-function DreamKnowledgeJourney({ run }: { run: ConsoleRun | null }) {
-  const progress = phaseProgressFromRun(run);
+function phaseSlowReason(phase: string, requiresGenerativeModel: boolean): string {
+  if (requiresGenerativeModel) {
+    return '这一步需要模型逐批阅读和生成。使用 Ollama 等本地模型时，首次加载、CPU/GPU 性能、上下文长度和处理批次都会影响速度；在线模型变慢时通常与网络或服务限流有关。';
+  }
+  if (phase === 'sync') return '资料数量、Office/PDF 解析和磁盘速度会影响这一步的用时。';
+  if (phase === 'embed') return '待处理分块数量、向量模型速度和服务批次限制会影响这一步的用时。';
+  return '页面数量和本地数据库读写量会影响这一步的用时。';
+}
+
+function phaseProgressStatus(state: string): string {
+  return ({
+    pending: '等待',
+    active: '运行中',
+    completed: '已完成',
+    skipped: '已跳过',
+    warning: '已完成，有提醒',
+    error: '未完成',
+  } as Record<string, string>)[state] ?? state;
+}
+
+function plannedRunForJourney(mode: DreamRunMode, selectedPhase: string): ConsoleRun {
+  const command = mode === 'meeting'
+    ? ['pmbrain', 'dream', '--preset', 'meeting', '--json', '--progress-json']
+    : mode === 'advanced' && selectedPhase !== 'all'
+      ? ['pmbrain', 'dream', '--phase', selectedPhase, '--json', '--progress-json']
+      : ['pmbrain', 'dream', '--preset', 'full', '--json', '--progress-json'];
+  return {
+    id: 'dream-planned-run',
+    kind: mode === 'meeting' ? 'dream_meeting' : 'dream_full',
+    status: 'queued',
+    command,
+    stdout: '',
+    stderr: '',
+    exitCode: null,
+    error: null,
+    startedAt: new Date().toISOString(),
+    completedAt: null,
+    durationMs: 0,
+  };
+}
+
+function DreamKnowledgeJourney({
+  run,
+  mode,
+  selectedPhase,
+  catalog,
+  phaseCapabilities,
+}: {
+  run: ConsoleRun | null;
+  mode: Exclude<DreamRunMode, 'quick'>;
+  selectedPhase: string;
+  catalog: string[];
+  phaseCapabilities: PhaseCapability[];
+}) {
   const running = run?.status === 'running' || run?.status === 'queued';
-  const successfulRun = isKnowledgeJourneyComplete(run);
+  const [progressNow, setProgressNow] = useState(Date.now());
+  useEffect(() => {
+    if (!running) return;
+    setProgressNow(Date.now());
+    const timer = window.setInterval(() => setProgressNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [running, run?.id]);
+  const progressRun = run ?? plannedRunForJourney(mode, selectedPhase);
+  const progress = useMemo(
+    () => buildDreamLiveProgress(progressRun, catalog, progressNow),
+    [progressRun, catalog, progressNow],
+  );
+  const report = run ? parseDreamReport(run) : null;
+  const activeStep = progress.steps.find(step => step.phase === progress.activePhase) ?? null;
+  const capabilityMap = useMemo(
+    () => new Map(phaseCapabilities.map(item => [item.id, item])),
+    [phaseCapabilities],
+  );
+  const finished = !!run && !running;
+  const completionPercent = progress.total > 0 ? Math.round(progress.completed / progress.total * 100) : 0;
+
   return (
-    <section className={`dream-journey ${running ? 'is-running' : ''}`} aria-label="知识整理进度">
+    <section className={`dream-journey dream-phase-recorder ${running ? 'is-running' : ''}`} aria-label="知识整理进度">
       <div className="dream-journey-head">
         <div>
-          <span className="dream-eyebrow">知识生长轨迹</span>
-          <h2>{running ? 'AI 正在整理你的知识' : '一次整理，会完成这五件事'}</h2>
+          <span className="dream-eyebrow">实时运行记录</span>
+          <h2>{running ? 'AI 深度整理正在运行' : finished ? '本次整理阶段记录' : `本次将执行 ${progress.total} 个真实阶段`}</h2>
         </div>
         {running && <span className="dream-live"><i />后台运行中</span>}
       </div>
-      <div className="dream-journey-track">
-        {DREAM_KNOWLEDGE_STEPS.map((step, index) => {
-          const phaseStates = step.phases.map(phase => progress.report?.phases?.find(item => item.phase === phase)?.status);
-          const hasWarning = phaseStates.some(status => status === 'warn' || status === 'error');
-          const isActive = !!progress.active && step.phases.includes(progress.active as never);
-          const isDone = step.phases.some(phase => progress.completed.has(phase));
-          const state: JourneyState = successfulRun ? 'done' : hasWarning ? 'warning' : isActive ? 'active' : isDone ? 'done' : 'idle';
-          return (
-            <div className={`dream-journey-step ${state}`} key={step.key}>
-              <div className="dream-step-marker" aria-hidden="true">{state === 'done' ? '✓' : index + 1}</div>
-              <div>
-                <b>{step.title}</b>
-                <span>{isActive ? (PHASE_USER_ACTIONS[progress.active ?? ''] ?? step.description) : step.description}</span>
-              </div>
-            </div>
-          );
-        })}
+
+      <div className="dream-recorder-stats" aria-live="polite">
+        <div><span>阶段进度</span><b>已完成 {progress.completed} / {progress.total} 个阶段</b></div>
+        <div><span>剩余</span><b>{progress.remaining} 个阶段</b></div>
+        <div><span>总运行时间</span><b>{formatRunDuration(progress.elapsedMs)}</b></div>
       </div>
+      <div className="dream-recorder-progress" aria-label={`已完成 ${completionPercent}%`}>
+        <i style={{ width: `${completionPercent}%` }} />
+      </div>
+      <small className="dream-recorder-honesty">进度按已结束阶段计算；单个阶段的内部工作量不同，因此不显示虚假的剩余时间。</small>
+
+      {running && activeStep ? (
+        <section className="dream-recorder-current">
+          <div className="dream-recorder-current-head">
+            <div><span>当前第 {progress.steps.indexOf(activeStep) + 1} 步</span><b>{capabilityMap.get(activeStep.phase)?.labelZh ?? PHASE_LABELS[activeStep.phase] ?? activeStep.phase}</b></div>
+            <strong>本阶段已运行 {progress.activeElapsedMs === null ? '计时中' : formatRunDuration(progress.activeElapsedMs)}</strong>
+          </div>
+          <p>{dreamPhasePurpose(activeStep.phase)}</p>
+          {activeStep.done !== null && activeStep.total !== null && activeStep.total > 0 && (
+            <div className="dream-recorder-subprogress">
+              <span>本阶段已处理 {activeStep.done} / {activeStep.total}</span>
+              <i><b style={{ width: `${Math.min(100, Math.max(0, activeStep.done / activeStep.total * 100))}%` }} /></i>
+            </div>
+          )}
+          <div className="dream-recorder-activity"><span>最近活动</span><b>{formatDate(progress.lastActivityAt, '等待新的进度信号')}</b>{activeStep.note && <small>{activeStep.note}</small>}</div>
+          <details>
+            <summary>为什么这一步可能较慢</summary>
+            <p>{phaseSlowReason(activeStep.phase, capabilityMap.get(activeStep.phase)?.requiresGenerativeModel === true)}</p>
+          </details>
+        </section>
+      ) : running ? (
+        <div className="dream-recorder-waiting">任务已经进入后台，正在等待第一个阶段进度信号。</div>
+      ) : null}
+
+      <details className="dream-phase-recorder-disclosure">
+        <summary>
+          <span>查看全部 {progress.total} 个阶段</span>
+          <b>{progress.completed} / {progress.total}</b>
+        </summary>
+        <div className="dream-phase-recorder-list">
+          {progress.steps.map((step, index) => {
+            const phaseReport = report?.phases?.find(item => item.phase === step.phase);
+            return (
+              <div className={`dream-phase-recorder-row state-${step.state}`} key={step.phase}>
+                <span className="dream-phase-recorder-index">{step.state === 'completed' ? '✓' : index + 1}</span>
+                <div className="dream-phase-recorder-copy">
+                  <b>{capabilityMap.get(step.phase)?.labelZh ?? PHASE_LABELS[step.phase] ?? step.phase}</b>
+                  <span>{phaseReport && step.state !== 'active' ? phaseSummaryZh(phaseReport) : step.note || dreamPhasePurpose(step.phase)}</span>
+                </div>
+                <div className="dream-phase-recorder-meta">
+                  <b>{phaseProgressStatus(step.state)}</b>
+                  {step.durationMs !== null && <span>{formatRunDuration(step.durationMs)}</span>}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </details>
     </section>
   );
 }
 
-function KnowledgeJourney({ run, mode }: { run: ConsoleRun | null; mode: DreamRunMode }) {
+function KnowledgeJourney({
+  run,
+  mode,
+  selectedPhase,
+  catalog,
+  phaseCapabilities,
+}: {
+  run: ConsoleRun | null;
+  mode: DreamRunMode;
+  selectedPhase: string;
+  catalog: string[];
+  phaseCapabilities: PhaseCapability[];
+}) {
   if (mode === 'quick') {
     return <QuickMaintenanceJourney run={run && isQuickMaintenanceRun(run) ? run : null} />;
   }
-  return <DreamKnowledgeJourney run={run} />;
+  return <DreamKnowledgeJourney run={run} mode={mode} selectedPhase={selectedPhase} catalog={catalog} phaseCapabilities={phaseCapabilities} />;
 }
 
 function phaseStatusZh(status: string): string {
@@ -1334,6 +1460,30 @@ function isActionableJobErrorStatus(status: string): boolean {
   return isNonTerminalJobStatus(status) || status === 'failed';
 }
 
+export function hasActionableDreamDiagnostics({
+  engine,
+  locks = [],
+  jobs,
+  supervisor,
+}: {
+  engine?: string;
+  locks?: Array<{ active: boolean }>;
+  jobs?: {
+    recent?: Array<{ status: string; error_text?: string | null }>;
+    subagent_status?: Array<{ status: string; count?: number }>;
+    subagent_queue?: { waiting: number; active: number; stalled_active: number } | null;
+  };
+  supervisor?: { worker_running?: boolean };
+}): boolean {
+  const latestLock = locks[0] ?? null;
+  const waiting = jobs?.subagent_queue?.waiting
+    ?? (jobs?.subagent_status ?? []).reduce((sum, row) => sum + (row.status === 'waiting' ? row.count ?? 1 : 0), 0);
+  const stalled = jobs?.subagent_queue?.stalled_active ?? 0;
+  const liveError = (jobs?.recent ?? []).some(job => isNonTerminalJobStatus(job.status) && !!job.error_text);
+  const workerCannotDrainQueue = engine !== 'pglite' && waiting > 0 && !supervisor?.worker_running;
+  return (!!latestLock && !latestLock.active) || stalled > 0 || liveError || workerCannotDrainQueue;
+}
+
 function formatDreamJobError(errorText: string): string {
   if (/Invalid prompt|ModelMessage\[\]\s*schema|messages do not match/i.test(errorText)) {
     return '模型消息格式不兼容：历史子任务消息不能被当前模型接口识别。如果队列没有等待或运行中的子任务，这只是历史失败记录，不影响本次运行。';
@@ -1404,9 +1554,7 @@ function DreamOpsDiagnostics({
           <h3>运行诊断</h3>
           {stuckReason
             ? <p className="pm-warning">{stuckReason}</p>
-            : isPglite
-              ? <p className="pm-hint">PGLite 不启动独立 Worker；深度整理会明确跳过 synthesize、patterns，其余阶段照常执行。</p>
-              : <p className="pm-hint">一键整理和会议整理会在需要时自动启动 Worker，通常不需要手动操作。这里用于故障诊断和恢复。</p>}
+            : <p className="pm-hint">这里仅显示当前可处理的锁、队列或 Worker 异常。</p>}
         </div>
         {!isPglite && <div className="dream-run-actions">
           {supervisor?.running ? (
@@ -1757,60 +1905,57 @@ function DreamRunPanel({
   }> = {
     quick: {
       title: '先做一次轻量维护',
-      description: '依次检查全部已注册 Source、同步内容、建立确定性关联、更新向量索引并检查异常。不使用普通模型。',
+      description: '依次检查全部已注册 Source、同步变化内容、补全确定性关联、更新向量索引并检查异常。',
       action: '开始快速维护',
     },
     cycle: {
       title: 'AI 深度整理知识库',
-      description: '检查变化、补全关系、沉淀观点、合并重复信息，并更新搜索能力。需要普通模型。',
+      description: '按真实阶段持续阅读、提炼、连接和校准知识；运行后可逐步查看当前工作、耗时与阶段结果。',
       action: '开始 AI 深度整理',
     },
     meeting: {
       title: 'AI 会议与会话整理',
-      description: '选择会议记录或会话文件夹，AI 会完成整理、提炼、连接和索引。需要普通模型。',
+      description: '选择会议记录或会话文件夹，AI 会提炼长期知识、事实与关系，并更新搜索索引。',
       action: '开始 AI 会议整理',
     },
     advanced: {
       title: '自定义本次整理',
-      description: '按来源、日期或内部阶段运行，适合调试和精细维护。需要普通模型的阶段在关闭全局开关时不可用。',
+      description: '按来源、日期或真实阶段精确运行，适合专项处理、调试和维护。',
       action: '运行所选流程',
     },
   };
   const generativeBlocked = !generativeEnabled && (runMode === 'cycle' || runMode === 'meeting'
     || (runMode === 'advanced' && phase !== 'all' && phaseNeedsGenerative(phase))
     || (runMode === 'advanced' && phase === 'all'));
+  const showDiagnostics = hasActionableDreamDiagnostics({ engine, locks, jobs, supervisor });
+  const runActions = (
+    <div className={`dream-run-actions ${runMode !== 'advanced' ? 'dream-run-actions-guided' : 'dream-run-actions-advanced-bottom'}`}>
+      <button
+        className={`pm-primary dream-primary-action ${runMode !== 'advanced' ? 'dream-primary-orbit' : ''}`}
+        onClick={() => void start(runMode === 'advanced' ? undefined : false)}
+        disabled={busy || generativeBlocked}
+        title={generativeBlocked ? GENERATIVE_DISABLED_HINT : undefined}
+      >
+        {running ? '正在整理…' : starting ? (isPglite ? '正在准备…' : '正在准备 Worker…') : modeCopy[runMode].action}
+      </button>
+      {!running && runMode !== 'advanced' && (
+        <button className="pm-ghost dream-preview-action" disabled={starting || generativeBlocked} title={generativeBlocked ? GENERATIVE_DISABLED_HINT : undefined} onClick={() => void start(true)}>先预览会发生什么</button>
+      )}
+      {running && <button className="pm-ghost danger" onClick={() => void cancel()}>中止</button>}
+    </div>
+  );
 
   return (
     <div id="dream-launcher" className={`dream-launcher ${compact ? 'compact' : ''}`}>
-      <div className="dream-launcher-head">
-        <div>
-          <span className="dream-eyebrow">开始整理</span>
-          <h2>{modeCopy[runMode].title}</h2>
-          <p>{modeCopy[runMode].description}</p>
-        </div>
-        <div className="dream-run-actions">
-          <button
-            className="pm-primary dream-primary-action"
-            onClick={() => void start(runMode === 'advanced' ? undefined : false)}
-            disabled={busy || generativeBlocked}
-            title={generativeBlocked ? GENERATIVE_DISABLED_HINT : undefined}
-          >
-            {running ? '正在整理…' : starting ? (isPglite ? '正在准备…' : '正在准备 Worker…') : modeCopy[runMode].action}
-          </button>
-          {!running && runMode !== 'advanced' && (
-            <button className="pm-ghost" disabled={starting || generativeBlocked} title={generativeBlocked ? GENERATIVE_DISABLED_HINT : undefined} onClick={() => void start(true)}>先预览会发生什么</button>
-          )}
-          {running && <button className="pm-ghost danger" onClick={() => void cancel()}>中止</button>}
-        </div>
-      </div>
-      {generativeBlocked && <div className="pm-hint dream-generative-hint">{GENERATIVE_DISABLED_HINT}</div>}
-      <div className="dream-run-mode">
-        <button type="button" className={runMode === 'quick' ? 'active' : ''} onClick={() => applyRunMode('quick')}>
+      <div className="dream-run-mode" role="tablist" aria-label="选择知识整理方式">
+        <button type="button" role="tab" aria-selected={runMode === 'quick'} className={runMode === 'quick' ? 'active' : ''} onClick={() => applyRunMode('quick')}>
           <strong>快速维护</strong>
           <span>检查 · 同步 · 关联 · 向量化</span>
         </button>
         <button
           type="button"
+          role="tab"
+          aria-selected={runMode === 'cycle'}
           className={`${runMode === 'cycle' ? 'active' : ''} ${!generativeEnabled ? 'is-disabled' : ''}`}
           onClick={() => {
             if (!generativeEnabled) { setError(GENERATIVE_DISABLED_HINT); return; }
@@ -1820,10 +1965,12 @@ function DreamRunPanel({
           title={!generativeEnabled ? GENERATIVE_DISABLED_HINT : undefined}
         >
           <strong>AI 深度整理</strong>
-          <span>{generativeEnabled ? '完整 Dream · 最全面' : '需要普通模型'}</span>
+          <span>{generativeEnabled ? `${phaseCatalog.length} 个阶段 · 全面整理` : '需要普通模型'}</span>
         </button>
         <button
           type="button"
+          role="tab"
+          aria-selected={runMode === 'meeting'}
           className={`${runMode === 'meeting' ? 'active' : ''} ${!generativeEnabled ? 'is-disabled' : ''}`}
           onClick={() => {
             if (!generativeEnabled) { setError(GENERATIVE_DISABLED_HINT); return; }
@@ -1833,13 +1980,29 @@ function DreamRunPanel({
           title={!generativeEnabled ? GENERATIVE_DISABLED_HINT : undefined}
         >
           <strong>AI 会议整理</strong>
-          <span>{!generativeEnabled ? '需要普通模型' : '指定文件 · 专项提炼'}</span>
+          <span>{!generativeEnabled ? '需要普通模型' : '指定记录 · 提炼事实与关系'}</span>
         </button>
-        <button type="button" className={runMode === 'advanced' ? 'active' : ''} onClick={() => applyRunMode('advanced')}>
+        <button type="button" role="tab" aria-selected={runMode === 'advanced'} className={runMode === 'advanced' ? 'active' : ''} onClick={() => applyRunMode('advanced')}>
           <strong>高级设置</strong>
-          <span>按 Phase 精细控制</span>
+          <span>按阶段精确执行</span>
         </button>
       </div>
+      <div className={`dream-launcher-head ${runMode === 'advanced' ? 'is-advanced' : 'is-guided'}`}>
+        <div className="dream-launcher-copy">
+          <span className="dream-eyebrow">开始整理</span>
+          <h2>{modeCopy[runMode].title}</h2>
+          <p>{modeCopy[runMode].description}</p>
+        </div>
+        {!compact && runMode === 'meeting' && (
+          <label className="dream-meeting-input">
+            <span>会议记录文件或文件夹</span>
+            <input value={input} onChange={event => setInput(event.target.value)}
+              placeholder="例如 D:\\会议记录 或 C:\\Users\\你\\.codex\\sessions" />
+          </label>
+        )}
+        {runMode !== 'advanced' && runActions}
+      </div>
+      {generativeBlocked && <div className="pm-hint dream-generative-hint">{GENERATIVE_DISABLED_HINT}</div>}
       <div className="dream-run-grid">
         {showAdvancedControls && (
           <label>
@@ -1853,23 +2016,29 @@ function DreamRunPanel({
               setPhase(newPhase);
               if (newPhase === 'all') setSourceId('');
             }}>
-              <option value="all" disabled={!generativeEnabled}>整轮 cycle（需要普通模型）</option>
+              <option value="all" disabled={!generativeEnabled}>
+                {generativeEnabled ? `整轮 cycle · 依次完成 ${phaseCatalog.length} 个知识整理阶段` : '整轮 cycle · 需要普通模型'}
+              </option>
               {phaseCatalog.map(item => {
                 const needsGen = phaseNeedsGenerative(item);
                 const blocked = needsGen && !generativeEnabled;
-                const tag = needsGen ? '需要普通模型' : '不使用普通模型';
+                const label = phaseCapMap.get(item)?.labelZh ?? PHASE_LABELS[item] ?? item;
+                const optionText = dreamPhaseOptionText(item, label, needsGen, generativeEnabled);
                 return (
-                  <option key={item} value={item} disabled={blocked} title={`${PHASE_LABELS[item] ?? item} · ${tag}`}>
-                    {item} · {tag}
+                  <option key={item} value={item} disabled={blocked} title={optionText}>
+                    {optionText}
                   </option>
                 );
               })}
             </select>
             {phase !== 'all' && (
               <div className="pm-hint" style={{ marginTop: 4 }}>
-                {PHASE_LABELS[phase]}
-                {' · '}
-                {phaseNeedsGenerative(phase) ? '需要普通模型' : '本地处理 / 不使用普通模型'}
+                {dreamPhaseOptionText(
+                  phase,
+                  phaseCapMap.get(phase)?.labelZh ?? PHASE_LABELS[phase] ?? phase,
+                  phaseNeedsGenerative(phase),
+                  generativeEnabled,
+                )}
               </div>
             )}
           </label>
@@ -1896,7 +2065,7 @@ function DreamRunPanel({
             embed 会处理全部待向量分块；本地模型的实际速度取决于模型并发与页面大小。
           </div>
         )}
-        {!compact && showInputControls && (
+        {!compact && showAdvancedControls && showInputControls && (
           <>
             <label className={!inputEnabled ? 'dream-input-disabled' : ''}>
               <span>{runMode === 'meeting' ? '会议记录文件或文件夹' : '输入文件'}</span>
@@ -1942,18 +2111,21 @@ function DreamRunPanel({
           </label>
         )}
       </div>
+      {runMode === 'advanced' && runActions}
       {error && <div className="pm-error-text">{error}</div>}
-      <div className="pm-hint dream-run-persist-note">
-        手动整理默认不设外层时限，会在后台继续运行；离开页面不会中断，也可随时中止。
-      </div>
-      <KnowledgeJourney run={run} mode={runMode} />
+      {running && <div className="pm-hint dream-run-persist-note">
+        整理正在后台继续；离开页面不会中断，也可随时中止。
+      </div>}
+      {run && <KnowledgeJourney run={run} mode={runMode} selectedPhase={phase} catalog={phaseCatalog} phaseCapabilities={phaseCapabilities} />}
       {run && (
         <DreamRunResult run={run} />
       )}
-      <details className="dream-diagnostics-details">
-        <summary>遇到问题？查看运行诊断</summary>
-        <DreamOpsDiagnostics engine={engine} locks={locks} jobs={jobs} supervisor={supervisor} onChanged={onDone} />
-      </details>
+      {showDiagnostics && (
+        <details className="dream-diagnostics-details is-actionable">
+          <summary>检测到运行异常，展开处理</summary>
+          <DreamOpsDiagnostics engine={engine} locks={locks} jobs={jobs} supervisor={supervisor} onChanged={onDone} />
+        </details>
+      )}
     </div>
   );
 }
@@ -2022,6 +2194,7 @@ export function DreamOverviewPage() {
     : needsAttention
       ? '有一些新知识等待整理'
       : '知识库目前状态很好';
+  const statusLabel = activeLock ? '整理中' : needsAttention ? '待整理' : '清晰';
   const statusText = activeLock
     ? '整理会在后台继续，完成后这里会显示结果。'
     : pending > 0
@@ -2043,9 +2216,12 @@ export function DreamOverviewPage() {
             <button className="pm-ghost" onClick={() => void reload()}>刷新状态</button>
           </div>
         </div>
-        <div className={`dream-status-orbit ${activeLock ? 'running' : needsAttention ? 'attention' : 'healthy'}`}>
-          <div className="dream-orbit-core"><span>{activeLock ? '整理中' : needsAttention ? '待整理' : '清晰'}</span></div>
-          <i className="orbit-one" /><i className="orbit-two" />
+        <div
+          className={`dream-status-signal ${activeLock ? 'running' : needsAttention ? 'attention' : 'healthy'}`}
+          aria-label={`知识库状态：${statusLabel}`}
+        >
+          <span>当前状态</span>
+          <strong><i aria-hidden="true" />{statusLabel}</strong>
         </div>
       </section>
 
@@ -2057,53 +2233,61 @@ export function DreamOverviewPage() {
 
       <DreamRunPanel engine={data.overview?.engine} defaultSourceId={data.overview?.main_source_id} phaseCatalog={data.phase_catalog} phaseCapabilities={data.phase_capabilities} generativeEnabled={data.generative_enabled === true} sources={data.overview?.sources} locks={data.locks} jobs={data.jobs} supervisor={data.supervisor} onDone={() => void reload()} />
 
-      <div className="dream-home-grid">
-        <section className="dream-summary-card">
-          <span className="dream-eyebrow">最近一次整理</span>
-          {latestRun && latestSummary ? (
-            <>
-              <h2>{latestSummary.headline}</h2>
-              <p>{latestSummary.diagnosis}</p>
-              <div className="dream-summary-facts">
-                {latestSummary.outputs.slice(0, 3).map((item, index) => <span key={index}>{item}</span>)}
+      <details className="dream-overview-more">
+        <summary>
+          <span><b>查看知识库状态与整理记录</b><small>{data.overview?.stats.page_count ?? 0} 个知识页面 · 最近整理 {formatDate(latestRun?.startedAt ?? null, '暂无')}</small></span>
+          <strong>展开查看</strong>
+        </summary>
+        <div className="dream-overview-more-content">
+          <div className="dream-home-grid">
+            <section className="dream-summary-card">
+              <span className="dream-eyebrow">最近一次整理</span>
+              {latestRun && latestSummary ? (
+                <>
+                  <h2>{latestSummary.headline}</h2>
+                  <p>{latestSummary.diagnosis}</p>
+                  <div className="dream-summary-facts">
+                    {latestSummary.outputs.slice(0, 3).map((item, index) => <span key={index}>{item}</span>)}
+                  </div>
+                  <small>{formatDate(latestRun.startedAt, '-')}</small>
+                  <button type="button" className="pm-ghost dream-view-run" onClick={() => {
+                    window.localStorage.setItem(DREAM_LAST_RUN_KEY, latestRun.id);
+                    window.location.hash = 'dream-execute';
+                  }}>查看本次整理内容</button>
+                </>
+              ) : (
+                <div className="dream-friendly-empty"><b>还没有整理记录</b><span>第一次整理完成后，这里会告诉你 AI 做了什么。</span></div>
+              )}
+            </section>
+            <section className="dream-library-card">
+              <span className="dream-eyebrow">知识库状态</span>
+              <div className="dream-library-metrics">
+                <div><b>{data.overview?.stats.page_count ?? 0}</b><span>知识页面</span><small>本次 +{latestDeltas.pages}</small></div>
+                <div><b>{pct(data.embeddings.coverage)}</b><span>可被 AI 搜索</span></div>
+                <div><b>{data.overview?.stats.link_count ?? 0}</b><span>知识关联</span><small>本次 +{latestDeltas.links}</small></div>
               </div>
-              <small>{formatDate(latestRun.startedAt, '-')}</small>
-              <button type="button" className="pm-ghost dream-view-run" onClick={() => {
-                window.localStorage.setItem(DREAM_LAST_RUN_KEY, latestRun.id);
-                window.location.hash = 'dream-execute';
-              }}>查看本次整理内容</button>
-            </>
-          ) : (
-            <div className="dream-friendly-empty"><b>还没有整理记录</b><span>第一次整理完成后，这里会告诉你 AI 做了什么。</span></div>
-          )}
-        </section>
-        <section className="dream-library-card">
-          <span className="dream-eyebrow">知识库状态</span>
-          <div className="dream-library-metrics">
-            <div><b>{data.overview?.stats.page_count ?? 0}</b><span>知识页面</span><small>本次 +{latestDeltas.pages}</small></div>
-            <div><b>{pct(data.embeddings.coverage)}</b><span>可被 AI 搜索</span></div>
-            <div><b>{data.overview?.stats.link_count ?? 0}</b><span>知识关联</span><small>本次 +{latestDeltas.links}</small></div>
+              <div className="dream-library-latest">
+                <b>最近一次新增内容</b>
+                {latestAddedItems.length > 0 ? (
+                  <ul>
+                    {latestAddedItems.map((item, index) => <li key={`${item}:${index}`}>{item}</li>)}
+                  </ul>
+                ) : (
+                  <span>{latestRun ? '最近一次整理没有记录到新增内容明细。' : '完成第一次整理后，这里会展示新增的知识、事实、概念和观点。'}</span>
+                )}
+              </div>
+            </section>
           </div>
-          <div className="dream-library-latest">
-            <b>最近一次新增内容</b>
-            {latestAddedItems.length > 0 ? (
-              <ul>
-                {latestAddedItems.map((item, index) => <li key={`${item}:${index}`}>{item}</li>)}
-              </ul>
-            ) : (
-              <span>{latestRun ? '最近一次整理没有记录到新增内容明细。' : '完成第一次整理后，这里会展示新增的知识、事实、概念和观点。'}</span>
-            )}
-          </div>
-        </section>
-      </div>
 
-      <section className="dream-history-card">
-        <div className="dream-section-title">
-          <div><span className="dream-eyebrow">整理记录</span><h2>最近发生了什么</h2></div>
-          <button className="pm-ghost" onClick={() => { window.location.hash = 'dream-execute'; }}>打开高级执行页</button>
+          <section className="dream-history-card">
+            <div className="dream-section-title">
+              <div><span className="dream-eyebrow">整理记录</span><h2>最近发生了什么</h2></div>
+              <button className="pm-ghost" onClick={() => { window.location.hash = 'dream-execute'; }}>打开高级执行页</button>
+            </div>
+            <RecentRuns runs={data.runs} />
+          </section>
         </div>
-        <RecentRuns runs={data.runs} />
-      </section>
+      </details>
     </div>
   );
 }
