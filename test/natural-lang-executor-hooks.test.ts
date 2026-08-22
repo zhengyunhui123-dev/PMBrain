@@ -1,5 +1,12 @@
 import { describe, expect, test } from 'bun:test';
-import { PgliteRunCoordinator, resolveRunTimeoutMs, startRun } from '../src/commands/natural-lang/executor.ts';
+import {
+  cancelRun,
+  CHILD_HANG_AFTER_RESULT_MS,
+  parseTerminalChildResult,
+  PgliteRunCoordinator,
+  resolveRunTimeoutMs,
+  startRun,
+} from '../src/commands/natural-lang/executor.ts';
 
 async function waitFor(predicate: () => boolean, timeoutMs = 3_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
@@ -108,5 +115,72 @@ describe('natural language child-process hooks', () => {
         details: { embedded: 12132, total_chunks: 14000, pending: 1868, errors_count: 1 },
       }],
     });
+  });
+
+  test('recognizes an embed-style terminal JSON result after human summary text', () => {
+    expect(CHILD_HANG_AFTER_RESULT_MS).toBe(15_000);
+    expect(parseTerminalChildResult(
+      'Embedded 2 chunks across 2 pages\n{"embedded":2,"skipped":0,"total_chunks":2,"status":"ok","dryRun":false}\n',
+    )).toEqual({ status: 'ok' });
+    expect(parseTerminalChildResult('{"event":"tick","phase":"embed.pages","status":"ok"}\n')).toBeNull();
+    expect(parseTerminalChildResult('still working')).toBeNull();
+  });
+
+  test('force-completes a child that printed success JSON but never exits', async () => {
+    // Product check: the packaged embed catch-up command already printed
+    // {"status":"ok"} while the process stayed alive, so Admin kept showing
+    // the task as running and 423-locked the database. After the result JSON
+    // appears, the parent must kill that stuck child and mark the task done.
+    const run = await startRun(
+      'embed_stale',
+      [
+        process.execPath,
+        '-e',
+        'process.stdout.write("Embedded 2 chunks\\n{\\"status\\":\\"ok\\",\\"embedded\\":2,\\"total_chunks\\":2}\\n"); setInterval(() => {}, 1000);',
+      ],
+      process.cwd(),
+      { hangAfterResultMs: 80 },
+    );
+
+    await waitFor(() => run.status !== 'running', 5_000);
+    expect(run.status).toBe('completed');
+    expect(run.stdout).toContain('"status":"ok"');
+    expect(run.stderr).toContain('force-killing');
+  });
+
+  test('force-fails a child that printed a failed JSON result but never exits', async () => {
+    const run = await startRun(
+      'embed_stale',
+      [
+        process.execPath,
+        '-e',
+        'process.stdout.write("{\\"status\\":\\"failed\\",\\"failedPages\\":1}\\n"); setInterval(() => {}, 1000);',
+      ],
+      process.cwd(),
+      { hangAfterResultMs: 80 },
+    );
+
+    await waitFor(() => run.status !== 'running', 5_000);
+    expect(run.status).toBe('failed');
+    expect(run.stderr).toContain('force-killing');
+  });
+
+  test('does not treat progress-event JSON as a finished command', async () => {
+    const run = await startRun(
+      'embed_stale',
+      [
+        process.execPath,
+        '-e',
+        'process.stdout.write("{\\"event\\":\\"tick\\",\\"phase\\":\\"embed.pages\\",\\"status\\":\\"ok\\"}\\n"); setInterval(() => {}, 1000);',
+      ],
+      process.cwd(),
+      { hangAfterResultMs: 80 },
+    );
+
+    await Bun.sleep(200);
+    expect(run.status).toBe('running');
+    await cancelRun(run.id);
+    await waitFor(() => run.status !== 'running', 5_000);
+    expect(run.status).toBe('cancelled');
   });
 });
