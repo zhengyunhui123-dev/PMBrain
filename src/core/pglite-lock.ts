@@ -31,6 +31,7 @@ import {
 } from 'fs';
 import { join } from 'path';
 import { randomBytes } from 'crypto';
+import { parseGlobalFlags } from './cli-options.ts';
 import {
   createDefaultProcessInspector,
   looksLikePmbrainExecutable,
@@ -63,6 +64,8 @@ export interface LockMetadataV2 {
   databasePath: string;
   executablePath: string | null;
   command?: string;
+  /** Parsed top-level CLI command, retained so `search serve` is not mistaken for a server owner. */
+  subcommand?: string | null;
   createdAt: string;
   updatedAt: string;
   /** Legacy field kept for older readers / diagnostics. */
@@ -181,10 +184,29 @@ function normalizeMetadata(raw: unknown, databasePath: string): Partial<LockMeta
     databasePath: typeof obj.databasePath === 'string' ? obj.databasePath : databasePath,
     executablePath: typeof obj.executablePath === 'string' ? obj.executablePath : null,
     command: typeof obj.command === 'string' ? obj.command : undefined,
+    subcommand: typeof obj.subcommand === 'string' ? obj.subcommand : null,
     createdAt: createdAt ?? nowIso(),
     updatedAt: typeof obj.updatedAt === 'string' ? obj.updatedAt : createdAt ?? nowIso(),
     acquired_at: typeof obj.acquired_at === 'number' ? obj.acquired_at : undefined,
   };
+}
+
+/**
+ * Upstream GBrain rejects contenders immediately while `gbrain serve` owns
+ * PGLite. A queued process could otherwise acquire the database during a
+ * deliberate Sidecar-to-maintenance handoff and block both the maintenance
+ * child and the Sidecar reconnect.
+ */
+function isLongLivedServeOwner(metadata: Partial<LockMetadataV2> | null): boolean {
+  if (!metadata) return false;
+  if (typeof metadata.subcommand === 'string') return metadata.subcommand === 'serve';
+
+  // Backward compatibility for locks created before subcommand was recorded.
+  if (metadata.ownerType === 'desktop-sidecar') return true;
+  const command = metadata.command?.trim();
+  if (!command) return false;
+  return /^(?:serve)(?:\s|$)/i.test(command)
+    || /(?:cli\.ts|pmbrain-sidecar\.js)\s+serve(?:\s|$)/i.test(command);
 }
 
 async function evaluateExistingLock(
@@ -390,6 +412,7 @@ async function buildMetadata(
     databasePath: dataDir,
     executablePath,
     command: command ?? process.argv.slice(1).join(' ').slice(0, 500),
+    subcommand: parseGlobalFlags(process.argv.slice(2)).rest[0] ?? null,
     createdAt,
     updatedAt: createdAt,
     acquired_at: Date.now(),
@@ -441,7 +464,8 @@ export async function acquireLock(
       lastDiagnostics = evaluation.diagnostics;
 
       if (evaluation.decision === 'active') {
-        if (failFast || Date.now() - startTime >= timeoutMs) {
+        const serveOwner = isLongLivedServeOwner(evaluation.metadata);
+        if (serveOwner || failFast || Date.now() - startTime >= timeoutMs) {
           throw new DatabaseAlreadyOwnedError({
             databasePath: dataDir as string,
             lockPath: lockFilePath(lockDir),
@@ -450,6 +474,11 @@ export async function acquireLock(
             executablePath: evaluation.metadata?.executablePath ?? null,
             lockCreatedAt: evaluation.metadata?.createdAt ?? null,
             ownerToken: evaluation.metadata?.ownerToken ?? null,
+            message: serveOwner
+              ? `PMBrain 的本地 PGLite 已由长驻 serve 服务占用（PID ${evaluation.metadata?.pid ?? 'unknown'}）。`
+                + ' 当前进程不会排队等待，避免在快速维护让锁时抢占数据库。'
+                + ' 请复用正在运行的 Desktop/Admin 服务，或先关闭另一个 PMBrain/Codex/Claude Code 会话后重试。'
+              : undefined,
           });
         }
         await sleep(RETRY_WAIT_MS);

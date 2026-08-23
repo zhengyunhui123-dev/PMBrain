@@ -162,9 +162,16 @@ function extractLastJsonObject(text: string): unknown | null {
   return null;
 }
 
+function isTerminalResultForRun(record: Record<string, unknown>, kind?: string): boolean {
+  if (!kind?.startsWith('dream_')) return true;
+  // Dream may run import/embed internally. Their own terminal summaries are
+  // intermediate results; only the root CycleReport completes the Dream run.
+  return typeof record.schema_version === 'string' && Array.isArray(record.phases);
+}
+
 /** Detect a finished CLI JSON result on stdout or stderr, ignoring progress events. */
-export function parseTerminalChildResult(output: string): { status: string } | null {
-  if (/\bImport complete\b/i.test(output)) return { status: 'ok' };
+export function parseTerminalChildResult(output: string, kind?: string): { status: string } | null {
+  if (!kind?.startsWith('dream_') && /\bImport complete\b/i.test(output)) return { status: 'ok' };
   const lines = output.split(/\r?\n/);
   for (let index = lines.length - 1; index >= 0; index--) {
     const line = lines[index]!.trim();
@@ -176,6 +183,7 @@ export function parseTerminalChildResult(output: string): { status: string } | n
       if (typeof parsed.event === 'string') continue;
       if (typeof parsed.status !== 'string') continue;
       if (!TERMINAL_RESULT_STATUSES.has(parsed.status)) continue;
+      if (!isTerminalResultForRun(parsed as Record<string, unknown>, kind)) continue;
       return { status: parsed.status };
     } catch {
       continue;
@@ -187,6 +195,7 @@ export function parseTerminalChildResult(output: string): { status: string } | n
   if (typeof record.event === 'string') return null;
   if (typeof record.status !== 'string') return null;
   if (!TERMINAL_RESULT_STATUSES.has(record.status)) return null;
+  if (!isTerminalResultForRun(record, kind)) return null;
   return { status: record.status };
 }
 
@@ -374,11 +383,17 @@ export async function startRun(kind: string, command: string[], cwd: string, hoo
     const cap = 120_000;
     const armHangWatchdog = () => {
       if (hangWatchdog || finished) return;
-      const terminal = parseTerminalChildResult(`${run.stdout}\n${run.stderr}`);
+      const terminalOutput = kind.startsWith('dream_')
+        ? run.stdout
+        : `${run.stdout}\n${run.stderr}`;
+      const terminal = parseTerminalChildResult(terminalOutput, kind);
       if (!terminal) return;
       hangWatchdog = setTimeout(() => {
         if (finished || run.status !== 'running') return;
-        hungAfterResult = parseTerminalChildResult(`${run.stdout}\n${run.stderr}`) ?? terminal;
+        const latestOutput = kind.startsWith('dream_')
+          ? run.stdout
+          : `${run.stdout}\n${run.stderr}`;
+        hungAfterResult = parseTerminalChildResult(latestOutput, kind) ?? terminal;
         run.stderr = sanitizeOutput(
           `${run.stderr}\n[admin] child printed a terminal JSON result but did not exit within ${hangMs}ms; force-killing\n`,
         );
