@@ -3,7 +3,7 @@
 ## 2026-08-23 PMBrain 1.2.90 修复打包后导入进程完成后不退出导致 GitHub Test 红
 
 - 时间：2026-08-23
-- 版本号：PMBrain 1.2.90；PMBrain Desktop 1.1.43（桌面端未改动）
+- 版本号：PMBrain 1.2.90；PMBrain Desktop 1.1.44
 - 标题：打包 sidecar 导入完成后释放 PGLite 锁并立即退出
 - 描述：master 合入 1.2.88 后 GitHub Test 的 Windows desktop-runtime 失败。打包 bun 跑 `import` 已写出 Import complete，但 PGLite `db.close()` 卡住 JS 线程，原 10 秒超时无法触发，进程一直不退出。一次性 CLI 的 PGLite 路径改为刷新 stdout 后直接退出，不调用 db.close、不丢弃 WASM 句柄，避免 Windows 非 0 崩溃；失败命令保留退出码 1。Postgres 仍走原超时断开。撤回后的快速维护文案“不使用普通模型”与开关契约对齐。未修改用户知识、向量、数据库、Wiki 或原始资料。
 - 是否完成：是

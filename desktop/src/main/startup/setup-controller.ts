@@ -265,9 +265,11 @@ export class SetupController {
               ?? saved.config.provider_base_urls?.['custom-openai']
               ?? '自定义 Base URL';
             const model = saved.config.embedding_model.slice('custom-openai:'.length);
+            const detail = error instanceof Error ? error.message.trim() : String(error);
             throw new Error(
               `自定义向量模型验证失败：无法通过 ${baseUrl} 访问模型 ${model}。`
-              + '请确认本地模型服务已启动、Base URL 包含正确的 /v1 路径、模型 ID 与 API Key 正确。',
+              + '请确认本地模型服务已启动、Base URL 包含正确的 /v1 路径、模型 ID 与 API Key 正确。'
+              + (detail ? ` ${detail}` : ''),
               { cause: error },
             );
           }

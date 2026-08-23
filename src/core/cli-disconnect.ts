@@ -2,6 +2,15 @@ import type { BrainEngine } from './engine.ts';
 
 export const CLI_DISCONNECT_DEADLINE_MS = 10_000;
 
+/** Packaged Windows PGLite can hang or crash inside db.close() after bulk writers. */
+export const PGLITE_SKIP_CLOSE_COMMANDS: ReadonlySet<string> = new Set([
+  'import',
+  'embed',
+  'dream',
+  'sync',
+  'extract',
+]);
+
 export interface CliDisconnectOptions {
   deadlineMs?: number;
   exitCode?: number;
@@ -50,7 +59,7 @@ export async function disconnectCliEngine(
   const warn = options.warn ?? console.warn;
   const exitCode = resolvedExitCode(options);
 
-  if (engine.kind === 'pglite') {
+  if (engine.kind === 'pglite' && PGLITE_SKIP_CLOSE_COMMANDS.has(command)) {
     if (!options.forceExit) await flushStdio();
     forceExit(exitCode);
     return 'forced_exit';

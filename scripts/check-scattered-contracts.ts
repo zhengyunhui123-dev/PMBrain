@@ -94,6 +94,9 @@ export function collectOneShotPgliteExitFailures(root: string): string[] {
   if (!disconnect.includes('flushStdio')) {
     failures.push('src/core/cli-disconnect.ts must flush stdout before PGLite force-exit so Desktop can read JSON results');
   }
+  if (!disconnect.includes('PGLITE_SKIP_CLOSE_COMMANDS')) {
+    failures.push('src/core/cli-disconnect.ts must only skip PGLite close for bulk writer commands');
+  }
   if (!cli.includes('await disconnectCliEngine(engine, command')) {
     failures.push('src/cli.ts must close one-shot commands through disconnectCliEngine');
   }
