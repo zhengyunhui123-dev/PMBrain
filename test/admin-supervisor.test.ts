@@ -132,10 +132,11 @@ describe('Admin Supervisor readiness', () => {
     )).toBe('Supervisor 启动失败（exit 1）：Could not resolve CLI; token=***');
   });
 
-  test('Admin UI has a separate preparing state and checks Worker readiness', () => {
+  test('Admin UI has a separate preparing state, blocks cross-mode runs, and checks Worker readiness', () => {
     const source = readFileSync(join(process.cwd(), 'admin/src/pages/Dream.tsx'), 'utf8');
     expect(source).toContain('const [starting, setStarting] = useState(false)');
-    expect(source).toContain('const busy = running || starting');
+    expect(source).toContain('const otherRunRunning = !!run');
+    expect(source).toContain('const busy = running || otherRunRunning || starting');
     expect(source).toContain('!supervisor?.worker_running');
     expect(source).toContain('正在准备 Worker…');
   });

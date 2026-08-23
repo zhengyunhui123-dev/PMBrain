@@ -439,6 +439,35 @@ function isQuickMaintenanceRun(run: ConsoleRun): boolean {
     || run.command.some((part, index) => part === 'quick' && run.command[index - 1] === '--preset');
 }
 
+export function dreamRunModeFromRun(run: ConsoleRun): DreamRunMode {
+  if (isQuickMaintenanceRun(run)) return 'quick';
+  if (run.kind.includes('meeting')
+    || run.command.some((part, index) => part === 'meeting' && run.command[index - 1] === '--preset')) {
+    return 'meeting';
+  }
+  const phaseIndex = run.command.indexOf('--phase');
+  const phase = phaseIndex >= 0 ? run.command[phaseIndex + 1] : null;
+  if ((phase === 'propose_takes' && run.command.includes('--drain-proposals'))
+    || run.kind.includes('full')
+    || run.command.some((part, index) => part === 'full' && run.command[index - 1] === '--preset')) {
+    return 'cycle';
+  }
+  return 'advanced';
+}
+
+export function runForDreamMode(run: ConsoleRun | null, mode: DreamRunMode): ConsoleRun | null {
+  return run && dreamRunModeFromRun(run) === mode ? run : null;
+}
+
+function dreamRunModeLabel(mode: DreamRunMode): string {
+  return ({
+    quick: '快速维护',
+    cycle: 'AI 深度整理',
+    meeting: 'AI 会议整理',
+    advanced: '高级设置任务',
+  } as const)[mode];
+}
+
 function phaseDetailNumber(report: DreamCycleReport | null, phaseName: string, key: string): number {
   const value = report?.phases?.find(phase => phase.phase === phaseName)?.details?.[key];
   const parsed = Number(value ?? 0);
@@ -1017,8 +1046,28 @@ function rootCyclePhaseName(value: string): string | null {
   return value.slice('cycle.'.length).split('.')[0] || null;
 }
 
-function phaseProgressFromRun(run: ConsoleRun | null): { completed: Set<string>; active: string | null; report: DreamCycleReport | null } {
-  if (!run) return { completed: new Set(), active: null, report: null };
+interface PhaseProgressFromRun {
+  completed: Set<string>;
+  active: string | null;
+  report: DreamCycleReport | null;
+  currentSource: string | null;
+  completedSources: number;
+  sourceIndex: number | null;
+  sourceTotal: number | null;
+}
+
+function phaseProgressFromRun(run: ConsoleRun | null): PhaseProgressFromRun {
+  if (!run) {
+    return {
+      completed: new Set(),
+      active: null,
+      report: null,
+      currentSource: null,
+      completedSources: 0,
+      sourceIndex: null,
+      sourceTotal: null,
+    };
+  }
   const report = parseDreamReport(run);
   const completed = new Set(
     (report?.phases ?? [])
@@ -1026,6 +1075,11 @@ function phaseProgressFromRun(run: ConsoleRun | null): { completed: Set<string>;
       .map(phase => phase.phase),
   );
   let active: string | null = null;
+  let currentSource: string | null = null;
+  let sourceIndex: number | null = null;
+  let sourceTotal: number | null = null;
+  const completedSourceIds = new Set<string>();
+  const running = run.status === 'running' || run.status === 'queued';
   const markStart = (phase: string) => {
     completed.delete(phase);
     active = phase;
@@ -1060,17 +1114,53 @@ function phaseProgressFromRun(run: ConsoleRun | null): { completed: Set<string>;
       else markFinish(human[1]!);
       continue;
     }
-    if (/^\[quick-maintenance]\s+Source\s+\S+\s+start\b/i.test(line) && !active) {
+    const sourceStart = line.match(/^\[quick-maintenance]\s+Source\s+(\S+)\s+start(?:\s+\((\d+)\/(\d+)\))?\s*$/i);
+    if (sourceStart) {
+      currentSource = sourceStart[1]!;
+      sourceIndex = sourceStart[2] ? Number(sourceStart[2]) : null;
+      sourceTotal = sourceStart[3] ? Number(sourceStart[3]) : null;
+      // --all-sources runs a complete ordered cycle per Source. Do not carry
+      // the previous Source's checkmarks into the next Source's five steps.
+      if (running) completed.clear();
+      active = null;
       markStart('lint');
+      continue;
+    }
+    const sourceFinish = line.match(/^\[quick-maintenance]\s+Source\s+(\S+)\s+(?:ok|clean|partial|failed|skipped)\b/i);
+    if (sourceFinish) {
+      completedSourceIds.add(sourceFinish[1]!);
     }
   }
 
-  const running = run.status === 'running' || run.status === 'queued';
   if (running && !active && completed.size === 0 && !(report?.phases?.length)) {
     active = plannedFirstDreamPhase(run);
   }
   if (!running) active = null;
-  return { completed, active, report };
+  return {
+    completed,
+    active,
+    report,
+    currentSource,
+    completedSources: completedSourceIds.size,
+    sourceIndex,
+    sourceTotal,
+  };
+}
+
+export function quickMaintenanceRunSource(run: ConsoleRun | null): {
+  id: string;
+  completed: number;
+  index?: number;
+  total?: number;
+} | null {
+  const progress = phaseProgressFromRun(run);
+  if (!progress.currentSource) return null;
+  return {
+    id: progress.currentSource,
+    completed: progress.completedSources,
+    ...(progress.sourceIndex !== null ? { index: progress.sourceIndex } : {}),
+    ...(progress.sourceTotal !== null ? { total: progress.sourceTotal } : {}),
+  };
 }
 
 export function isKnowledgeJourneyComplete(run: ConsoleRun | null): boolean {
@@ -1086,12 +1176,11 @@ export function isKnowledgeJourneyComplete(run: ConsoleRun | null): boolean {
 }
 
 function quickStageState(
-  run: ConsoleRun | null,
+  progress: PhaseProgressFromRun | null,
   phases: readonly string[],
   partialWhen: boolean,
 ): QuickMaintenanceStageState {
-  if (!run) return 'idle';
-  const progress = phaseProgressFromRun(run);
+  if (!progress) return 'idle';
   const reports = phases
     .map(phase => progress.report?.phases?.find(item => item.phase === phase))
     .filter((phase): phase is DreamPhaseReport => !!phase);
@@ -1105,6 +1194,7 @@ function quickStageState(
 
 export function buildQuickMaintenanceStages(run: ConsoleRun | null): QuickMaintenanceStage[] {
   const report = run ? parseDreamReport(run) : null;
+  const progress = run ? phaseProgressFromRun(run) : null;
   const phase = (name: string) => report?.phases?.find(item => item.phase === name);
   const details = (name: string) => phase(name)?.details ?? {};
   const number = (value: unknown) => {
@@ -1139,7 +1229,7 @@ export function buildQuickMaintenanceStages(run: ConsoleRun | null): QuickMainte
   const stages: QuickMaintenanceStage[] = [
     {
       ...QUICK_MAINTENANCE_STEPS[0],
-      state: quickStageState(run, QUICK_MAINTENANCE_STEPS[0].phases, false),
+      state: quickStageState(progress, QUICK_MAINTENANCE_STEPS[0].phases, false),
       results: [
         { label: '扫描页面', value: number(lint.pages_scanned) },
         { label: '发现问题', value: number(lint.issues) + number(backlinks.gaps) },
@@ -1148,7 +1238,7 @@ export function buildQuickMaintenanceStages(run: ConsoleRun | null): QuickMainte
     },
     {
       ...QUICK_MAINTENANCE_STEPS[1],
-      state: quickStageState(run, QUICK_MAINTENANCE_STEPS[1].phases, number(sync.failedFiles) > 0),
+      state: quickStageState(progress, QUICK_MAINTENANCE_STEPS[1].phases, number(sync.failedFiles) > 0),
       results: [
         { label: '新增内容', value: actualSyncPagesAdded(report) },
         { label: '更新内容', value: number(sync.modified) },
@@ -1157,7 +1247,7 @@ export function buildQuickMaintenanceStages(run: ConsoleRun | null): QuickMainte
     },
     {
       ...QUICK_MAINTENANCE_STEPS[2],
-      state: quickStageState(run, QUICK_MAINTENANCE_STEPS[2].phases, false),
+      state: quickStageState(progress, QUICK_MAINTENANCE_STEPS[2].phases, false),
       results: [
         { label: '新增关联', value: number(totals.links_created) },
         { label: '扫描历史页面', value: historicalScanned },
@@ -1166,7 +1256,7 @@ export function buildQuickMaintenanceStages(run: ConsoleRun | null): QuickMainte
     },
     {
       ...QUICK_MAINTENANCE_STEPS[3],
-      state: quickStageState(run, QUICK_MAINTENANCE_STEPS[3].phases, pending.pendingEmbeddings > 0),
+      state: quickStageState(progress, QUICK_MAINTENANCE_STEPS[3].phases, pending.pendingEmbeddings > 0),
       results: [
         { label: '本次完成向量', value: number(embed.embedded ?? totals.pages_embedded) },
         { label: '待向量化', value: pending.pendingEmbeddings },
@@ -1174,18 +1264,24 @@ export function buildQuickMaintenanceStages(run: ConsoleRun | null): QuickMainte
     },
     {
       ...QUICK_MAINTENANCE_STEPS[4],
-      state: quickStageState(run, QUICK_MAINTENANCE_STEPS[4].phases, false),
+      state: quickStageState(progress, QUICK_MAINTENANCE_STEPS[4].phases, false),
       results: [
         { label: '孤立知识', value: number(orphans.total_orphans) },
         { label: '整体状态', value: overallStatus },
       ],
     },
   ];
-  return stages;
+  const activeIndex = stages.findIndex(stage => stage.state === 'active');
+  return stages.map((stage, index) => (
+    activeIndex > index && stage.state === 'idle'
+      ? { ...stage, state: 'done' }
+      : stage
+  ));
 }
 
 function QuickMaintenanceJourney({ run }: { run: ConsoleRun | null }) {
   const stages = useMemo(() => buildQuickMaintenanceStages(run), [run]);
+  const source = useMemo(() => quickMaintenanceRunSource(run), [run]);
   const suggestedKey = stages.find(stage => stage.state === 'active')?.key
     ?? (run && run.status !== 'running' && run.status !== 'queued' ? 'verify' : 'check');
   const [selectedKey, setSelectedKey] = useState(suggestedKey);
@@ -1199,6 +1295,12 @@ function QuickMaintenanceJourney({ run }: { run: ConsoleRun | null }) {
         <div>
           <span className="dream-eyebrow">快速维护进度</span>
           <h2>{running ? '正在执行快速维护' : '快速维护会完成这五项检查'}</h2>
+          {running && source && (
+            <p className="pm-hint">
+              当前 Source：{source.id}
+              {source.index && source.total ? `（${source.index} / ${source.total}）` : `（已完成 ${source.completed} 个 Source）`}
+            </p>
+          )}
         </div>
         {running && <span className="dream-live"><i />后台运行中</span>}
       </div>
@@ -1239,7 +1341,7 @@ function QuickMaintenanceJourney({ run }: { run: ConsoleRun | null }) {
   );
 }
 
-function DreamKnowledgeJourney({ run }: { run: ConsoleRun | null }) {
+function DreamKnowledgeJourney({ run, staged = false }: { run: ConsoleRun | null; staged?: boolean }) {
   const progress = phaseProgressFromRun(run);
   const running = run?.status === 'running' || run?.status === 'queued';
   const successfulRun = isKnowledgeJourneyComplete(run);
@@ -1248,7 +1350,10 @@ function DreamKnowledgeJourney({ run }: { run: ConsoleRun | null }) {
       <div className="dream-journey-head">
         <div>
           <span className="dream-eyebrow">知识生长轨迹</span>
-          <h2>{running ? 'AI 正在整理你的知识' : '一次整理，会完成这五件事'}</h2>
+          <h2>{running
+            ? staged ? 'AI 正在提炼本阶段观点' : 'AI 正在整理你的知识'
+            : staged ? '深度整理按阶段推进' : '一次整理，会完成这五件事'}</h2>
+          {staged && <p className="pm-hint">本次阶段结束后会停住，后续打分、向量化和孤立页检查需要分别启动。</p>}
         </div>
         {running && <span className="dream-live"><i />后台运行中</span>}
       </div>
@@ -1278,7 +1383,7 @@ function KnowledgeJourney({ run, mode }: { run: ConsoleRun | null; mode: DreamRu
   if (mode === 'quick') {
     return <QuickMaintenanceJourney run={run && isQuickMaintenanceRun(run) ? run : null} />;
   }
-  return <DreamKnowledgeJourney run={run} />;
+  return <DreamKnowledgeJourney run={run} staged={mode === 'cycle'} />;
 }
 
 function phaseStatusZh(status: string): string {
@@ -1321,7 +1426,7 @@ export function phaseSummaryZh(phase: DreamPhaseReport): string {
     case 'extract_facts':
       return `已检查 ${number('pagesScanned')} 个页面，核对并写入 ${number('factsInserted')} 条事实。`;
     case 'propose_takes':
-      return `已分 ${number('batches')} 批处理 ${number('pages_processed')} 页，生成 ${number('proposals_inserted')} 条候选观点，跳过 ${number('cache_hits')} 页已处理内容，失败 ${number('pages_failed')} 页，剩余 ${number('remaining')} 页。`;
+      return `已分 ${number('batches')} 批处理 ${number('pages_processed')} 页，生成 ${number('proposals_inserted')} 条候选观点，跳过 ${number('cache_hits')} 页已处理内容，失败 ${number('pages_failed')} 页，剩余 ${number('remaining')} 页。${details.stopped === 'window' ? ' 已达到本次时间上限并安全停止，没有继续进入后续阶段。' : details.stopped === 'batch_limit' ? ' 已达到本批页数上限并安全停止。' : ''}`;
     case 'resolve_symbol_edges':
       return number('chunks_walked') > 0
         ? `已检查 ${number('chunks_walked')} 个内容块，确认 ${number('edges_resolved')} 条关系，${number('edges_ambiguous')} 条仍需消歧。`
@@ -1658,11 +1763,19 @@ function DreamRunPanel({
     }
   }, [generativeEnabled, runMode]);
 
+  useEffect(() => {
+    if (isPglite && runMode === 'advanced' && phase === 'all') setPhase('lint');
+  }, [isPglite, phase, runMode]);
+
   const [run, setRun] = useState<ConsoleRun | null>(null);
   const [error, setError] = useState('');
   const [starting, setStarting] = useState(false);
-  const running = run?.status === 'running' || run?.status === 'queued';
-  const busy = running || starting;
+  const selectedRun = runForDreamMode(run, runMode);
+  const running = selectedRun?.status === 'running' || selectedRun?.status === 'queued';
+  const otherRunRunning = !!run
+    && !selectedRun
+    && (run.status === 'running' || run.status === 'queued');
+  const busy = running || otherRunRunning || starting;
 
   const activeSources = useMemo(
     () => (sources ?? []).filter(s => !s.archived),
@@ -1751,8 +1864,7 @@ function DreamRunPanel({
     try {
       const effectiveDryRun = dryRunOverride ?? dryRun;
       const needsSubagentWorker = !isPglite && !effectiveDryRun && (
-        runMode === 'cycle'
-        || runMode === 'meeting'
+        runMode === 'meeting'
         || (runMode === 'advanced' && (phase === 'synthesize' || phase === 'patterns'))
       );
       if (needsSubagentWorker && !supervisor?.worker_running) {
@@ -1762,18 +1874,18 @@ function DreamRunPanel({
       const res = await api.startDreamRun({
         preset: runMode === 'meeting'
           ? 'meeting'
-          : runMode === 'cycle'
-            ? 'full'
-            : runMode === 'quick'
+          : runMode === 'quick'
               ? 'quick'
               : undefined,
-        phase: runMode === 'advanced' ? phase : undefined,
+        phase: runMode === 'cycle' ? 'propose_takes' : runMode === 'advanced' ? phase : undefined,
         sourceId: runMode === 'advanced' ? sourceId.trim() || undefined : runMode === 'quick' ? undefined : defaultSourceId,
         allSources: runMode === 'quick',
         maxPages: runMode === 'advanced' && phase === 'propose_takes' && maxPages.trim() ? Number(maxPages) : undefined,
         drainProposals: runMode === 'cycle',
-        windowSeconds: runMode === 'cycle' && timeoutMs
-          ? Math.max(60, Math.floor((timeoutMs * 0.75) / 1000))
+        windowSeconds: runMode === 'cycle'
+          ? timeoutMs
+            ? Math.min(3600, Math.max(60, Math.floor((timeoutMs * 0.75) / 1000)))
+            : 3600
           : undefined,
         dryRun: effectiveDryRun,
         input: inputEnabled ? input.trim() || undefined : undefined,
@@ -1793,10 +1905,10 @@ function DreamRunPanel({
   };
 
   const cancel = async () => {
-    if (!run || !running) return;
+    if (!selectedRun || !running) return;
     setError('');
     try {
-      const next = await api.cancelRun(run.id) as ConsoleRun;
+      const next = await api.cancelRun(selectedRun.id) as ConsoleRun;
       setRun(next);
       onDone?.();
     } catch (err) {
@@ -1816,7 +1928,7 @@ function DreamRunPanel({
     },
     cycle: {
       title: 'AI 深度整理知识库',
-      description: '检查变化、补全关系、沉淀观点、合并重复信息，并更新搜索能力。需要普通模型。',
+      description: '本次只运行观点提炼，完成或最多运行 1 小时后停止，不会自动进入打分、向量化或孤立页处理。Ollama 本地模型每次最多处理 5 页。',
       action: '开始 AI 深度整理',
     },
     meeting: {
@@ -1849,7 +1961,13 @@ function DreamRunPanel({
             disabled={busy || generativeBlocked}
             title={generativeBlocked ? GENERATIVE_DISABLED_HINT : undefined}
           >
-            {running ? '正在整理…' : starting ? (isPglite ? '正在准备…' : '正在准备 Worker…') : modeCopy[runMode].action}
+            {running
+              ? '正在整理…'
+              : otherRunRunning
+                ? '其他整理正在后台运行'
+                : starting
+                  ? (isPglite ? '正在准备…' : '正在准备 Worker…')
+                  : modeCopy[runMode].action}
           </button>
           {!running && runMode !== 'advanced' && (
             <button className="pm-ghost" disabled={starting || generativeBlocked} title={generativeBlocked ? GENERATIVE_DISABLED_HINT : undefined} onClick={() => void start(true)}>先预览会发生什么</button>
@@ -1857,6 +1975,11 @@ function DreamRunPanel({
           {running && <button className="pm-ghost danger" onClick={() => void cancel()}>中止</button>}
         </div>
       </div>
+      {otherRunRunning && run && (
+        <div className="pm-hint dream-run-persist-note">
+          当前后台任务属于“{dreamRunModeLabel(dreamRunModeFromRun(run))}”；本页仅显示“{dreamRunModeLabel(runMode)}”的独立进度。请切回对应模式或前往任务中心查看。
+        </div>
+      )}
       {generativeBlocked && <div className="pm-hint dream-generative-hint">{GENERATIVE_DISABLED_HINT}</div>}
       <div className="dream-run-mode">
         <button type="button" className={runMode === 'quick' ? 'active' : ''} onClick={() => applyRunMode('quick')}>
@@ -1907,7 +2030,7 @@ function DreamRunPanel({
               setPhase(newPhase);
               if (newPhase === 'all') setSourceId('');
             }}>
-              <option value="all" disabled={!generativeEnabled}>整轮 cycle（需要普通模型）</option>
+              <option value="all" disabled={!generativeEnabled || isPglite}>{isPglite ? '整轮 cycle（PGLite 请分阶段运行）' : '整轮 cycle（需要普通模型）'}</option>
               {phaseCatalog.map(item => {
                 const needsGen = phaseNeedsGenerative(item);
                 const blocked = needsGen && !generativeEnabled;
@@ -2000,9 +2123,9 @@ function DreamRunPanel({
       <div className="pm-hint dream-run-persist-note">
         手动整理默认不设外层时限，会在后台继续运行；离开页面不会中断，也可随时中止。
       </div>
-      <KnowledgeJourney run={run} mode={runMode} />
-      {run && (
-        <DreamRunResult run={run} />
+      <KnowledgeJourney run={selectedRun} mode={runMode} />
+      {selectedRun && (
+        <DreamRunResult run={selectedRun} />
       )}
       <details className="dream-diagnostics-details">
         <summary>遇到问题？查看运行诊断</summary>

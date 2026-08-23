@@ -101,6 +101,7 @@ import {
   writePrivateFile,
 } from '../core/chatgpt-tunnel.ts';
 import type { RunHooks } from './natural-lang/executor.ts';
+import { normalizeAdminDreamRequest } from './admin-dream-policy.ts';
 import {
   ADMIN_DOCS_EMPTY_MARKDOWN,
   ADMIN_DREAM_SCHEDULE_CHECK_MS,
@@ -1058,7 +1059,8 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
       const maxPages = rawMaxPages === undefined || rawMaxPages === null || rawMaxPages === ''
         ? undefined
         : Number(rawMaxPages);
-      const run = await startDreamRun({
+      const configured = loadConfig() ?? config;
+      const request = normalizeAdminDreamRequest({
         phase: typeof req.body?.phase === 'string' ? req.body.phase : undefined,
         preset: ['full', 'meeting', 'quick'].includes(req.body?.preset) ? req.body.preset : undefined,
         sourceId: typeof req.body?.sourceId === 'string' ? req.body.sourceId : undefined,
@@ -1072,7 +1074,11 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
         from: typeof req.body?.from === 'string' ? req.body.from : undefined,
         to: typeof req.body?.to === 'string' ? req.body.to : undefined,
         timeoutMs: typeof req.body?.timeoutMs === 'number' ? req.body.timeoutMs : undefined,
-      }, process.cwd(), runHooks);
+      }, {
+        engine: configured.engine,
+        chatModel: configured.chat_model,
+      });
+      const run = await startDreamRun(request, process.cwd(), runHooks);
       sendAdminContract(res, DreamRunResponseSchema, { runId: run.id, status: run.status });
     } catch (e) {
       const { errorPayloadFromGenerativeDisabled } = await import('../core/model-usage.ts');

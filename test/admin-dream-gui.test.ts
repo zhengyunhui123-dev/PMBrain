@@ -8,6 +8,8 @@ import {
   dreamRunDeltas,
   isKnowledgeJourneyComplete,
   phaseSummaryZh,
+  quickMaintenanceRunSource,
+  runForDreamMode,
 } from '../admin/src/pages/Dream.tsx';
 import type { ConsoleRun } from '../admin/src/lib/shared.tsx';
 
@@ -71,7 +73,51 @@ describe('Dream GUI product contract', () => {
     expect(dream).toContain("maxPages: runMode === 'advanced' && phase === 'propose_takes' && maxPages.trim() ? Number(maxPages) : undefined");
     expect(dream).toContain("showAdvancedControls && phase === 'propose_takes'");
     expect(dream).toContain('embed 会处理全部待向量分块');
+    expect(dream).toContain("phase: runMode === 'cycle' ? 'propose_takes'");
     expect(dream).toContain("drainProposals: runMode === 'cycle'");
+    expect(dream).not.toContain("runMode === 'cycle'\n            ? 'full'");
+  });
+
+  test('Quick, deep, meeting and advanced progress never reuse another mode run', () => {
+    const quick = { ...quickRun({}, 'running'), id: 'quick-running' };
+    const deep: ConsoleRun = {
+      ...completedRun({}),
+      id: 'deep-running',
+      kind: 'dream_propose_takes',
+      status: 'running',
+      command: ['pmbrain', 'dream', '--phase', 'propose_takes', '--drain-proposals', '--json'],
+    };
+    const meeting: ConsoleRun = {
+      ...completedRun({}),
+      id: 'meeting-running',
+      kind: 'dream_meeting',
+      status: 'running',
+      command: ['pmbrain', 'dream', '--preset', 'meeting', '--input', 'meeting.md', '--json'],
+    };
+    const advanced: ConsoleRun = {
+      ...completedRun({}),
+      id: 'advanced-running',
+      kind: 'dream_embed',
+      status: 'running',
+      command: ['pmbrain', 'dream', '--phase', 'embed', '--json'],
+    };
+
+    expect(runForDreamMode(quick, 'quick')).toBe(quick);
+    expect(runForDreamMode(quick, 'cycle')).toBeNull();
+    expect(runForDreamMode(deep, 'cycle')).toBe(deep);
+    expect(runForDreamMode(deep, 'advanced')).toBeNull();
+    expect(runForDreamMode(meeting, 'meeting')).toBe(meeting);
+    expect(runForDreamMode(meeting, 'quick')).toBeNull();
+    expect(runForDreamMode(advanced, 'advanced')).toBe(advanced);
+    expect(runForDreamMode(advanced, 'meeting')).toBeNull();
+    expect(runForDreamMode(null, 'quick')).toBeNull();
+  });
+
+  test('only the selected mode run drives progress, results and cancellation controls', () => {
+    expect(dream).toContain('const selectedRun = runForDreamMode(run, runMode)');
+    expect(dream).toContain('<KnowledgeJourney run={selectedRun} mode={runMode} />');
+    expect(dream).toContain('<DreamRunResult run={selectedRun} />');
+    expect(dream).toContain('当前后台任务属于');
   });
 
   test('phase ordering comes from the backend catalog', () => {
@@ -351,6 +397,77 @@ describe('Dream GUI product contract', () => {
     ]);
   });
 
+  test('Quick maintenance resets the five-step track when all-sources advances to a new Source', () => {
+    const run: ConsoleRun = {
+      ...quickRun({}, 'running'),
+      stderr: [
+        '[quick-maintenance] Source source-a start (1/2)',
+        '[cycle.lint] start',
+        '[cycle.lint] done',
+        '[cycle.backlinks] start',
+        '[cycle.backlinks] done',
+        '[cycle.sync] start',
+        '[cycle.sync] done',
+        '[cycle.extract] start',
+        '[cycle.extract] done',
+        '[cycle.extract_facts] start',
+        '[cycle.extract_facts] done',
+        '[cycle.resolve_symbol_edges] start',
+        '[cycle.resolve_symbol_edges] done',
+        '[cycle.embed] start',
+        '[cycle.embed] done',
+        '[cycle.orphans] start',
+        '[cycle.orphans] done',
+        '[quick-maintenance] Source source-a ok',
+        '[quick-maintenance] Source source-b start (2/2)',
+        '[cycle.lint] start',
+      ].join('\n'),
+    };
+
+    expect(buildQuickMaintenanceStages(run).map(stage => stage.state)).toEqual([
+      'active',
+      'idle',
+      'idle',
+      'idle',
+      'idle',
+    ]);
+    expect(quickMaintenanceRunSource(run)).toEqual({ id: 'source-b', completed: 1, index: 2, total: 2 });
+  });
+
+  test('Quick maintenance only checks prior stages inside the current Source cycle', () => {
+    const run: ConsoleRun = {
+      ...quickRun({}, 'running'),
+      stderr: [
+        '[quick-maintenance] Source source-a start',
+        '[cycle.orphans] start',
+        '[cycle.orphans] done',
+        '[quick-maintenance] Source source-a ok',
+        '[quick-maintenance] Source source-b start',
+        '[cycle.lint] start',
+        '[cycle.lint] done',
+        '[cycle.backlinks] start',
+        '[cycle.backlinks] done',
+        '[cycle.sync] start',
+        '[cycle.sync] done',
+        '[cycle.extract] start',
+        '[cycle.extract] done',
+        '[cycle.extract_facts] start',
+        '[cycle.extract_facts] done',
+        '[cycle.resolve_symbol_edges] start',
+        '[cycle.resolve_symbol_edges] done',
+        '[cycle.embed] start',
+      ].join('\n'),
+    };
+
+    expect(buildQuickMaintenanceStages(run).map(stage => stage.state)).toEqual([
+      'done',
+      'done',
+      'done',
+      'active',
+      'idle',
+    ]);
+  });
+
   test('Quick maintenance reads --progress-json events so running stages are not stuck idle', () => {
     const run: ConsoleRun = {
       ...quickRun({}, 'running'),
@@ -558,6 +675,15 @@ describe('Dream GUI product contract', () => {
     expect(dream).toContain('placeholder="不限制"');
     expect(dream).toContain('留空表示不限制');
     expect(dream).toContain('手动整理默认不设外层时限');
+  });
+
+  test('AI 深度整理明确按阶段停止，不会自动进入后续阶段', () => {
+    expect(dream).toContain('本次只运行观点提炼');
+    expect(dream).toContain('最多运行 1 小时');
+    expect(dream).toContain('不会自动进入打分、向量化或孤立页处理');
+    expect(dream).toContain('Ollama 本地模型每次最多处理 5 页');
+    expect(dream).toContain('已达到本次时间上限并安全停止');
+    expect(dream).toContain('PGLite 请分阶段运行');
   });
 
   test('the overview does not duplicate a non-actionable start button', () => {

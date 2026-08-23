@@ -3,6 +3,7 @@ import { Eye, ListTodo, Power, RefreshCw, ShieldAlert, XCircle } from 'lucide-re
 import { api } from '../api';
 import { formatDate, RunOutput, type ConsoleRun } from '../lib/shared';
 import { describeRunRecovery } from '../lib/run-recovery';
+import { describeDreamRunProgress } from '../lib/dream-run-progress';
 
 type TaskFilter = 'all' | 'completed' | 'failed' | 'cancelled';
 
@@ -33,6 +34,7 @@ function taskTitle(kind: string): string {
     if (kind.includes('quick')) return '快速维护';
     if (kind.includes('meeting')) return 'AI 会议整理';
     if (kind.includes('full') || kind.includes('cycle')) return 'AI 深度整理';
+    if (kind.includes('propose_takes')) return 'AI 深度整理 · 观点提炼';
     return '知识整理';
   }
   return ({
@@ -168,6 +170,7 @@ function TaskCard({
   cancelling: boolean;
 }) {
   const recovery = describeRunRecovery(run);
+  const progress = describeDreamRunProgress(run);
   return (
     <article className={`task-run-card ${isActive(run) ? 'task-run-card-active' : ''}`}>
       <div className="task-run-card-head">
@@ -184,6 +187,13 @@ function TaskCard({
       <ul className="task-run-usage">
         {taskModelUsageLines(run).map(line => <li key={line}>{line}</li>)}
       </ul>
+      {progress && (
+        <div className="task-run-progress">
+          <div><span>当前阶段</span><b>{progress.phaseLabel}</b><strong>{progress.detail}</strong></div>
+          {progress.pct !== null && <div className="task-run-progress-track"><i style={{ width: `${progress.pct}%` }} /></div>}
+          {progress.heartbeat && <small>{progress.heartbeat}</small>}
+        </div>
+      )}
       {run.status === 'cancelled' ? (
         <p className="task-run-cancelled">任务已取消，已完成的部分已保留，不会自动回滚。</p>
       ) : recovery ? (
@@ -213,6 +223,7 @@ function TaskDetailDrawer({
   onClose: () => void;
 }) {
   const recovery = describeRunRecovery(run);
+  const progress = describeDreamRunProgress(run);
   return (
     <>
       <div className="drawer-overlay" onClick={onClose} />
@@ -227,6 +238,12 @@ function TaskDetailDrawer({
           <div><span>结束时间</span><b>{formatDate(run.completedAt, '仍在运行')}</b></div>
           <div><span>耗时</span><b>{elapsedLabel(run)}</b></div>
         </div>
+        {progress && (
+          <section className="task-detail-result task-run-progress">
+            <h3>当前阶段：{progress.phaseLabel}</h3>
+            <p>{progress.detail}{progress.heartbeat ? ` · ${progress.heartbeat}` : ''}</p>
+          </section>
+        )}
         {run.error && run.status !== 'cancelled' && (
           <section className="task-detail-result task-detail-result-error">
             <h3>{recovery ? '数据库连接恢复说明' : '错误'}</h3>

@@ -128,7 +128,7 @@ describe('PGLite upgrade cold backup and recovery verification', () => {
         backupRoot,
         targetVersion: '1.1.91',
         lockTimeoutMs: 100,
-      })).rejects.toThrow(/already owns|single-owner|活进程|lock/i);
+      })).rejects.toThrow(/already owns|single-owner|已由.+占用|lock/i);
     } finally {
       await releaseLock(lock);
     }

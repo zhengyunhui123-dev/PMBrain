@@ -126,6 +126,18 @@ describe('natural language child-process hooks', () => {
     expect(parseTerminalChildResult('still working')).toBeNull();
   });
 
+  test('requires a root Dream report before treating Dream output as terminal', () => {
+    expect(parseTerminalChildResult('Import complete (0.4s)\n', 'dream_quick')).toBeNull();
+    expect(parseTerminalChildResult(
+      '{"status":"imported","chunks":1}\n',
+      'dream_quick',
+    )).toBeNull();
+    expect(parseTerminalChildResult(
+      '{"schema_version":"1","status":"partial","phases":[]}\n',
+      'dream_quick',
+    )).toEqual({ status: 'partial' });
+  });
+
   test('force-completes a child that printed success JSON but never exits', async () => {
     // Product check: the packaged embed catch-up command already printed
     // {"status":"ok"} while the process stayed alive, so Admin kept showing
@@ -199,6 +211,27 @@ describe('natural language child-process hooks', () => {
     expect(run.stderr).toContain('force-killing');
   });
 
+  test('does not stop quick maintenance after its intermediate import summary', async () => {
+    // Product check: Quick Maintenance runs sync/import before later Dream
+    // phases. "Import complete" means only that nested phase finished; the
+    // parent must wait for the whole Dream child to exit normally.
+    const run = await startRun(
+      'dream_quick',
+      [
+        process.execPath,
+        '-e',
+        'process.stdout.write("Import complete (0.4s):\\n  1 pages imported\\n"); setTimeout(() => { process.stdout.write("DREAM_FINISHED\\n"); process.exit(0); }, 180);',
+      ],
+      process.cwd(),
+      { hangAfterResultMs: 80 },
+    );
+
+    await waitFor(() => run.status !== 'running', 5_000);
+    expect(run.status).toBe('completed');
+    expect(run.stdout).toContain('DREAM_FINISHED');
+    expect(run.stderr).not.toContain('force-killing');
+  });
+
   test('does not treat progress-event JSON as a finished command', async () => {
     const run = await startRun(
       'embed_stale',
@@ -216,5 +249,26 @@ describe('natural language child-process hooks', () => {
     await cancelRun(run.id);
     await waitFor(() => run.status !== 'running', 5_000);
     expect(run.status).toBe('cancelled');
+  });
+
+  test('cancel waits for child exit and PGLite reconnection before confirming cancellation', async () => {
+    let reconnected = false;
+    const run = await startRun(
+      'dream_propose_takes',
+      [process.execPath, '-e', 'setInterval(() => {}, 1000)'],
+      process.cwd(),
+      {
+        afterComplete: async () => {
+          await Bun.sleep(120);
+          reconnected = true;
+        },
+      },
+    );
+    await waitFor(() => run.status === 'running');
+
+    const cancelled = await cancelRun(run.id);
+
+    expect(cancelled?.status).toBe('cancelled');
+    expect(reconnected).toBe(true);
   });
 });

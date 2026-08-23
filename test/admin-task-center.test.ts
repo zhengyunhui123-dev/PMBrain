@@ -58,6 +58,12 @@ describe('Admin 任务中心与 Dream 忙碌态', () => {
     expect(taskCenterSource).toContain('task-run-cancelled');
   });
 
+  test('Dream 任务显示当前阶段、页数和 JSON 心跳', () => {
+    expect(taskCenterSource).toContain('describeDreamRunProgress(run)');
+    expect(taskCenterSource).toContain('当前阶段');
+    expect(taskCenterSource).toContain('task-run-progress');
+  });
+
   test('Dream 阶段执行页在深色主题使用控制台配色', () => {
     expect(adminCss).toContain('html[data-theme="dark"] .dream-page .dream-phase-rail section');
     expect(adminCss).toContain('html[data-theme="dark"] .dream-page .dream-run-mode');

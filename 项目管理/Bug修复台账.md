@@ -1,5 +1,59 @@
 # Bug 修复台账
 
+## 2026-08-23 PMBrain 1.2.96 修复 GitHub Test 的过期契约断言
+
+- 时间：2026-08-23
+- 版本号：PMBrain 1.2.96；PMBrain Desktop 1.1.44（桌面端未改动）
+- 标题：对齐知识整理互斥状态与 PGLite 占用拒绝文案的 CI 契约
+- 描述：GitHub Actions 的 Test run `32643003595` 中，shard 10 仍要求 Admin 使用旧的 `running || starting` 忙碌条件，未覆盖 1.2.95 新增的跨模式运行互斥；serial-tests 仍匹配旧的“活进程”锁错误文案，未覆盖当前明确的“已由长驻 serve 服务占用”。现仅更新对应行为测试，要求 Admin 保留跨模式互斥，并允许 PGLite 锁拒绝返回当前占用语义。未修改 Admin 运行代码、PGLite 锁/备份实现、数据库、用户知识、向量、Wiki、原始资料或配置。
+- 是否完成：是
+- 最终结果：Admin Supervisor 定向测试 10/10、项目统一校验 39/39 通过；`VERSION`、`package.json` 与 `release-manifest.json` 已同步到 1.2.96。Windows 本机完整 PGLite 冷备份用例因首次迁移超过测试写死的 60 秒超时，未作为 Linux 串行测试结论；目标 Ubuntu serial-tests 由当前 PR 的 GitHub Actions 复验。未执行 `bun run build:win`。
+
+## 2026-08-23 PMBrain 1.2.95 修复知识整理模式之间的进度串线
+
+- 时间：2026-08-23
+- 版本号：PMBrain 1.2.95；PMBrain Desktop 1.1.44（桌面端未改动）
+- 标题：快速维护、AI 深度整理、AI 会议整理和高级任务独立显示运行状态
+- 描述：知识整理页原来只保存一个全局 Dream run，而模式标题由当前选择单独控制。用户从正在运行的快速维护切换到 AI 深度整理或 AI 会议整理时，页面会把快速维护的阶段事件映射到新模式的五步轨迹，造成尚未启动便出现绿色勾选、阶段跳转和错误取消入口。现根据 run kind、preset、phase 和 `--drain-proposals` 判定任务所属模式；只有匹配当前模式的 run 才能驱动进度、结果和取消按钮。其他模式若仍在后台运行，会显示所属模式提示并阻止重复启动，但不会污染当前轨迹。未修改 Dream 阶段顺序、模型调用、数据库锁、用户知识、向量、数据库、Wiki、原始资料或配置。
+- 是否完成：是
+- 最终结果：失败优先测试覆盖快速维护、AI 深度整理、AI 会议整理与高级任务的互斥分类及展示隔离；相关 Dream GUI、任务中心、进度和命令回归 67/67 通过，根项目 TypeScript 通过，项目统一校验 39/39 通过。Admin 前端与内嵌资源构建成功；发布清单首次写入遇到一次 Windows `EUNKNOWN`，使用同一原生生成脚本单独重试后成功，发布指纹 `9f412f7d6306`。隔离 PGLite 源码服务健康检查返回 1.2.95，并确认实际加载最新 `index-D8SVksFn.js`。未执行 `bun run build:win`，未对用户知识库发起真实整理。
+
+## 2026-08-23 PMBrain 1.2.94 修复多 Source 快速维护阶段状态串线
+
+- 时间：2026-08-23
+- 版本号：PMBrain 1.2.94；PMBrain Desktop 1.1.44（桌面端未改动）
+- 标题：快速维护按当前 Source 独立显示五步进度
+- 描述：Docker PostgreSQL 的快速维护使用 `--all-sources`，实际执行方式是顺序遍历全部启用 Source，并对每个 Source 独立执行完整的 1→5 阶段。原 Admin 进度把不同 Source 的阶段事件合并，切换 Source 后仍保留上一 Source 的完成勾选，造成“第 1 步进行中但后四步已完成”和阶段来回乱跳的误导。现保持逐 Source 单线程执行及数据库逻辑不变，在每个 Source 开始时重置五步状态，同一 Source 内按固定顺序补全已通过阶段，并显示当前 Source 及序号。未修改用户知识、向量、数据库、Wiki、原始资料或模型配置。
+- 是否完成：是
+- 最终结果：失败优先测试覆盖切换新 Source 时五步重置，以及新 Source 进入第 4 步时只勾选本 Source 已通过的前三步；Dream GUI、任务中心与 Dream 进度定向测试 42/42 通过，根项目 TypeScript 通过，项目统一校验 39/39 通过。Admin 生产资源已规范构建并更新内嵌资源，发布指纹 `9d40a2c7711f`；隔离 PGLite 源码服务健康检查返回 1.2.94，并确认实际加载最新 `index-PHvl84FK.js`。未执行 `bun run build:win`，未对用户 Docker PostgreSQL 或 PGLite 知识库发起真实快速维护。
+
+## 2026-08-23 PMBrain 1.2.93 修复深度整理长时间占库、进度误导与取消不彻底
+
+- 时间：2026-08-23
+- 版本号：PMBrain 1.2.93；PMBrain Desktop 1.1.44（桌面端未改动）
+- 标题：按原版 GBrain 固定窗口单阶段机制收敛 AI 深度整理
+- 描述：对照本地最新原版 GBrain 0.46.28.0（`01aab110d0090eb38f706b6af84351b433a17597`）的独立 drain、固定窗口、结构化 progress 和 SIGINT 退出机制，修复 Admin 将观点排空接在 full preset 后继续进入打分、向量化和孤立页的问题。AI 深度整理现在只启动 `propose_takes` 单阶段，云端模型最多排空 1 小时后安全停止并记录处理页数与剩余页数；Ollama 本地模型强制每次最多 5 页且不做 full 排空；PGLite 的 Admin 完整 cycle 改为拒绝并提示分阶段或切换 PostgreSQL。任务中心解析现有 `--progress-json`，显示当前阶段、已处理页数、总页数和最近心跳。取消操作等待 Dream 子进程退出和 PGLite 重连结束后才确认；同时移植原版进度处理器不吞 SIGINT 的修复。快速维护仍使用原有 quick preset 和 PGLite 单所有者串行交接，未修改其阶段集合。未修改用户知识、向量、数据库、Wiki、原始资料或模型配置。
+- 是否完成：是
+- 最终结果：失败优先测试覆盖单阶段一小时停止、Ollama 5 页上限、PGLite full 拒绝、JSON 阶段与页数、取消等待子进程和重连、SIGINT 真正退出；相关 Admin、Dream、执行器、进度、PGLite 锁/重连/进程内 Dream 定向测试通过，根项目 TypeScript 通过。临时 PGLite Dream 扩展回归执行到多项场景通过后因重复 111 个迁移耗时主动停止，未对用户知识库执行真实整理。Admin 生产资源已规范构建并更新内嵌资源，发布指纹 `bc491fc3218d`。未执行 `bun run build:win`。
+
+## 2026-08-23 PMBrain 1.2.92 修复快速维护被中途导入摘要提前终止
+
+- 时间：2026-08-23
+- 版本号：PMBrain 1.2.92；PMBrain Desktop 1.1.44（桌面端未改动）
+- 标题：快速维护只在完整 Dream 报告后启用挂起进程收尾
+- 描述：用户实际输出显示，快速维护在 `cycle.embed` 刚开始时被 Admin 子进程看门狗强制结束。原因是 1.2.90 为独立导入和向量补全增加的挂起进程收尾逻辑，会把快速维护内部 sync 阶段的 `Import complete` 误当成整个 Dream 的最终结果，并在 15 秒后杀掉仍在正常执行的 Dream 子进程。现对 `dream_*` 任务只接受同时包含 `schema_version` 和 `phases` 的根级 CycleReport 作为终态，并且只从 Dream 的 stdout 读取最终报告；中间导入摘要、导入子结果和进度事件不再启动误杀计时器。独立导入、Source 导入和向量补全的原有卡死收尾行为保持不变。未修改 Dream、sync、embed 或数据库底层能力，未修改用户知识、向量、数据库、Wiki、原始资料或配置。
+- 是否完成：是
+- 最终结果：失败优先测试已复现快速维护在中间 `Import complete` 后被提前强杀；修复后假 Dream 能继续输出最终完成标记并正常退出，独立导入和向量补全挂起收尾保持通过。快速维护、Dream GUI、任务恢复、定时维护、PGLite 锁与重连及 CLI 退出定向回归共 103/103 通过，根项目 TypeScript 与版本同步通过。未对用户知识库执行真实快速维护，未执行 `bun run build:win`。
+
+## 2026-08-23 PMBrain 1.2.91 修复长驻服务抢占快速维护 PGLite 交接窗口
+
+- 时间：2026-08-23
+- 版本号：PMBrain 1.2.91；PMBrain Desktop 1.1.44（桌面端未改动）
+- 标题：按原版 GBrain 单所有者策略阻止 serve 排队抢锁
+- 描述：实际日志和锁元数据显示，Desktop Sidecar 在快速维护前正常让出 PGLite 后，已排队的源码 `serve` 进程抢先取得数据库，导致维护子进程和 Sidecar 重连持续等待并最终显示“连接恢复失败”。对照本地原版 GBrain 0.46.28.0 的 `LiveServeLockError` 机制，PMBrain 现在把顶层 `subcommand` 写入锁元数据；活的长驻 `serve` 所有者会让后来进程立即报占用，不再进入等待队列，短命令仍按原有方式串行等待并在前一进程退出后接管。保留 PMBrain 的 PID、启动时间、可执行文件和 owner token 校验，不抢占或删除任何活锁。未修改用户知识、向量、数据库、Wiki、原始资料或配置。
+- 是否完成：是
+- 最终结果：失败优先测试已复现原 2 秒排队行为；修复后活 `serve` 拒绝与锁保留、短命令串行交接、PGLite 重连、任务协调、快速维护、Admin Dream 展示和 CLI 收尾定向回归通过。真实当前锁只读验证从约 5 分钟等待改为进程启动后立即返回明确占用错误。根项目 TypeScript 与版本同步通过。未对用户知识库执行真实快速维护，未执行 `bun run build:win`。
+
 ## 2026-08-23 PMBrain 1.2.90 修复打包后导入进程完成后不退出导致 GitHub Test 红
 
 - 时间：2026-08-23

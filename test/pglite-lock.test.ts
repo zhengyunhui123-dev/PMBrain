@@ -64,6 +64,72 @@ describe('pglite-lock v2', () => {
     await releaseLock(lock1);
   });
 
+  test('live serve owner rejects a queued contender immediately and keeps its lock', async () => {
+    const ownerPid = 555000;
+    writeLockFixture(TEST_DIR, {
+      schemaVersion: 2,
+      pid: ownerPid,
+      processStartTime: 'serve-start',
+      bootMarker: 'boot-current',
+      ownerToken: 'serve-owner',
+      ownerType: 'desktop-sidecar',
+      databasePath: TEST_DIR,
+      executablePath: 'D:\\Apps\\PMBrain\\bun.exe',
+      command: 'D:\\Apps\\PMBrain\\pmbrain-sidecar.js serve --http',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+    inspector.setProcess(ownerPid, {
+      exists: true,
+      startTime: 'serve-start',
+      executablePath: 'D:\\Apps\\PMBrain\\bun.exe',
+    });
+
+    const startedAt = Date.now();
+    await expect(
+      acquireLock(TEST_DIR, { inspector, ownerType: 'cli', timeoutMs: 2_000 }),
+    ).rejects.toBeInstanceOf(DatabaseAlreadyOwnedError);
+    expect(Date.now() - startedAt).toBeLessThan(250);
+    expect(readLockMetadata(TEST_DIR)?.ownerToken).toBe('serve-owner');
+    expect(listArchivedLocks(TEST_DIR)).toHaveLength(0);
+  });
+
+  test('short-lived CLI owner still hands off serially after it exits', async () => {
+    const ownerPid = 555009;
+    writeLockFixture(TEST_DIR, {
+      schemaVersion: 2,
+      pid: ownerPid,
+      processStartTime: 'cli-start',
+      bootMarker: 'boot-current',
+      ownerToken: 'cli-owner',
+      // Packaged one-shot commands historically inherited this broad label;
+      // the recorded subcommand must take precedence and keep them waitable.
+      ownerType: 'desktop-sidecar',
+      subcommand: 'dream',
+      databasePath: TEST_DIR,
+      executablePath: 'D:\\Apps\\PMBrain\\bun.exe',
+      command: 'D:\\Apps\\PMBrain\\pmbrain-sidecar.js dream --preset quick',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+    inspector.setProcess(ownerPid, {
+      exists: true,
+      startTime: 'cli-start',
+      executablePath: 'D:\\Apps\\PMBrain\\bun.exe',
+    });
+    setTimeout(() => inspector.clearProcess(ownerPid), 20);
+
+    const lock = await acquireLock(TEST_DIR, {
+      inspector,
+      ownerType: 'desktop-sidecar',
+      timeoutMs: 1_500,
+    });
+    expect(lock.acquired).toBe(true);
+    expect(readLockMetadata(TEST_DIR)?.ownerToken).toBe(lock.ownerToken);
+    expect(listArchivedLocks(TEST_DIR).some(path => path.includes('pid_not_running'))).toBe(true);
+    await releaseLock(lock);
+  });
+
   test('3. archives lock when PID does not exist', async () => {
     writeLockFixture(TEST_DIR, {
       schemaVersion: 2,

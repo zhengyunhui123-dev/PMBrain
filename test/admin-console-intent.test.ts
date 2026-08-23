@@ -362,24 +362,25 @@ describe('admin console intent planning', () => {
     expect(() => buildSourceGitCommand('../outside', 'init')).toThrow('Invalid source_id');
   });
 
-  test('full preset enables bounded proposal draining without overriding the upstream 100-page batch', () => {
+  test('proposal draining is a standalone bounded phase and cannot silently continue into full', () => {
     const command = buildDreamCommand({
-      preset: 'full',
+      phase: 'propose_takes',
       sourceId: 'duwu',
       drainProposals: true,
       windowSeconds: 3600,
     });
     expect(command.slice(3)).toEqual([
       'dream',
-      '--preset',
-      'full',
+      '--phase',
+      'propose_takes',
       '--source',
       'duwu',
       '--drain-proposals',
       '--window',
       '3600',
     ]);
-    expect(command).not.toContain('--max-pages');
+    expect(() => buildDreamCommand({ preset: 'full', drainProposals: true }))
+      .toThrow('requires the standalone propose_takes phase');
   });
 
   test('phase and preset cannot create two competing Dream selections', () => {
