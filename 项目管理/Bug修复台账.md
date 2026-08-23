@@ -1,5 +1,14 @@
 # Bug 修复台账
 
+## 2026-08-23 PMBrain 1.2.96 修复 GitHub Test 的过期契约断言
+
+- 时间：2026-08-23
+- 版本号：PMBrain 1.2.96；PMBrain Desktop 1.1.44（桌面端未改动）
+- 标题：对齐知识整理互斥状态与 PGLite 占用拒绝文案的 CI 契约
+- 描述：GitHub Actions 的 Test run `32643003595` 中，shard 10 仍要求 Admin 使用旧的 `running || starting` 忙碌条件，未覆盖 1.2.95 新增的跨模式运行互斥；serial-tests 仍匹配旧的“活进程”锁错误文案，未覆盖当前明确的“已由长驻 serve 服务占用”。现仅更新对应行为测试，要求 Admin 保留跨模式互斥，并允许 PGLite 锁拒绝返回当前占用语义。未修改 Admin 运行代码、PGLite 锁/备份实现、数据库、用户知识、向量、Wiki、原始资料或配置。
+- 是否完成：是
+- 最终结果：Admin Supervisor 定向测试 10/10、项目统一校验 39/39 通过；`VERSION`、`package.json` 与 `release-manifest.json` 已同步到 1.2.96。Windows 本机完整 PGLite 冷备份用例因首次迁移超过测试写死的 60 秒超时，未作为 Linux 串行测试结论；目标 Ubuntu serial-tests 由当前 PR 的 GitHub Actions 复验。未执行 `bun run build:win`。
+
 ## 2026-08-23 PMBrain 1.2.95 修复知识整理模式之间的进度串线
 
 - 时间：2026-08-23
