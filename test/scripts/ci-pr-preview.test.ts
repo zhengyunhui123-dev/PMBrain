@@ -23,6 +23,10 @@ describe('GitHub Test local preview', () => {
     expect(GITHUB_TEST_PREVIEW_FILES).toContain('test/cross-modal-phase1.test.ts');
     expect(GITHUB_TEST_PREVIEW_FILES).toContain('test/sql-ranking.test.ts');
     expect(GITHUB_TEST_PREVIEW_FILES).toContain('test/private-page-visibility.test.ts');
+    expect(GITHUB_TEST_PREVIEW_FILES).toContain('test/cli-disconnect.test.ts');
+    expect(GITHUB_TEST_PREVIEW_FILES).toContain('test/model-usage-generative-gate.test.ts');
+    expect(GITHUB_TEST_PREVIEW_FILES).toContain('test/release-desktop-platforms.test.ts');
+    expect(GITHUB_TEST_PREVIEW_FILES).toContain('test/natural-lang-executor-hooks.test.ts');
     for (const file of GITHUB_TEST_PREVIEW_FILES) {
       expect(readFileSync(join(ROOT, file), 'utf8').length).toBeGreaterThan(0);
     }

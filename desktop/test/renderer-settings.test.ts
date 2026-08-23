@@ -117,6 +117,7 @@ describe('desktop settings renderer contracts', () => {
     expect(renderer).toContain("providerKeyId(chatProvider, 'chat')");
     expect(renderer).toContain("providerKeyId(embeddingProvider, 'embedding')");
     expect(main).toContain('自定义向量模型验证失败');
+    expect(main).toContain('error.message.trim()');
     expect(styles).toContain('.model-add-button');
     expect(styles).toContain('.custom-provider-dialog');
     expect(styles).toContain('.provider-dropdown');

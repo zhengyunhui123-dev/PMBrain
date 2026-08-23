@@ -393,6 +393,21 @@ export class PGLiteEngine implements BrainEngine {
     }
   }
 
+  /**
+   * One-shot CLI only. Packaged Windows Bun can freeze the JS thread inside
+   * PGLite `db.close()`, so a disconnect timeout never runs. Drop the JS
+   * handle, release the file lock, and let the process exit; the parent
+   * Sidecar reconnects after the PID is gone.
+   */
+  async releaseOwnershipWithoutClose(): Promise<void> {
+    this._db = null;
+    const lock = this._lock;
+    this._lock = null;
+    if (lock?.acquired) {
+      await releaseLock(lock);
+    }
+  }
+
   async initSchema(): Promise<void> {
     // Tier 3: snapshot was loaded into PGlite — schema + migrations already
     // applied. Nothing to do. Returns immediately.

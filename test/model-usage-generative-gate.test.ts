@@ -93,8 +93,8 @@ describe('生成式模型全局开关', () => {
     expect(dreamUi).toContain('AI 深度整理');
     expect(dreamUi).toContain('AI 会议整理');
     expect(dreamUi).toContain('快速维护');
-    expect(dreamUi).not.toContain('不使用普通模型');
-    expect(dreamUi).toContain('按阶段精确执行');
+    expect(dreamUi).toContain('不使用普通模型');
+    expect(dreamUi).toContain('按 Phase 精细控制');
     expect(dreamUi).toContain('GENERATIVE_DISABLED_HINT');
   });
 

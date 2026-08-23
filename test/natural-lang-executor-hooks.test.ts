@@ -165,6 +165,40 @@ describe('natural language child-process hooks', () => {
     expect(run.stderr).toContain('force-killing');
   });
 
+  test('force-completes a hanging import child after stderr reports imported', async () => {
+    const run = await startRun(
+      'import_path',
+      [
+        process.execPath,
+        '-e',
+        'process.stderr.write("[pmbrain import-file] {\\"status\\":\\"imported\\",\\"chunks\\":1}\\n"); setInterval(() => {}, 1000);',
+      ],
+      process.cwd(),
+      { hangAfterResultMs: 80 },
+    );
+
+    await waitFor(() => run.status !== 'running', 5_000);
+    expect(run.status).toBe('completed');
+    expect(run.stderr).toContain('force-killing');
+  });
+
+  test('force-completes a hanging import child after the human Import complete line', async () => {
+    const run = await startRun(
+      'import_path',
+      [
+        process.execPath,
+        '-e',
+        'process.stdout.write("Import complete (0.4s):\\n  1 pages imported\\n"); setInterval(() => {}, 1000);',
+      ],
+      process.cwd(),
+      { hangAfterResultMs: 80 },
+    );
+
+    await waitFor(() => run.status !== 'running', 5_000);
+    expect(run.status).toBe('completed');
+    expect(run.stderr).toContain('force-killing');
+  });
+
   test('does not treat progress-event JSON as a finished command', async () => {
     const run = await startRun(
       'embed_stale',

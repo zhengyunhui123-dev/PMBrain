@@ -36,6 +36,7 @@ import { mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { PGLiteEngine } from '../src/core/pglite-engine.ts';
+import { acquireLock, releaseLock } from '../src/core/pglite-lock.ts';
 
 function newTempDataDir(): string {
   return mkdtempSync(join(tmpdir(), 'gbrain-disconnect-test-'));
@@ -236,6 +237,22 @@ describe('PGLiteEngine.disconnect() — v0.41.8.0 lifecycle invariants', () => {
       await engine.disconnect();
     } finally {
       rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test('releaseOwnershipWithoutClose lets another owner take the file lock without waiting on db.close()', async () => {
+    const dataDir = newTempDataDir();
+    try {
+      const engine = new PGLiteEngine();
+      await engine.connect({ engine: 'pglite', database_path: dataDir });
+      await engine.initSchema();
+      await engine.releaseOwnershipWithoutClose();
+
+      const lock = await acquireLock(dataDir, { ownerType: 'test', failFastIfOwned: true });
+      expect(lock.acquired).toBe(true);
+      await releaseLock(lock);
+    } finally {
+      try { rmSync(dataDir, { recursive: true, force: true }); } catch { /* WASM may still hold files until process exit */ }
     }
   });
 
