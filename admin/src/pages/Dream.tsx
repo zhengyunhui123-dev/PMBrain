@@ -1001,6 +1001,22 @@ const QUICK_STAGE_STATUS: Record<QuickMaintenanceStageState, string> = {
   error: '异常',
 };
 
+function commandFlagValue(command: string[], flag: string): string | null {
+  const index = command.indexOf(flag);
+  return index >= 0 ? command[index + 1] ?? null : null;
+}
+
+function plannedFirstDreamPhase(run: ConsoleRun): string {
+  const singlePhase = commandFlagValue(run.command, '--phase');
+  if (singlePhase) return singlePhase;
+  return commandFlagValue(run.command, '--preset') === 'meeting' ? 'synthesize' : 'lint';
+}
+
+function rootCyclePhaseName(value: string): string | null {
+  if (!value.startsWith('cycle.')) return null;
+  return value.slice('cycle.'.length).split('.')[0] || null;
+}
+
 function phaseProgressFromRun(run: ConsoleRun | null): { completed: Set<string>; active: string | null; report: DreamCycleReport | null } {
   if (!run) return { completed: new Set(), active: null, report: null };
   const report = parseDreamReport(run);
@@ -1009,13 +1025,51 @@ function phaseProgressFromRun(run: ConsoleRun | null): { completed: Set<string>;
       .filter(phase => phase.status === 'ok' || phase.status === 'skipped' || phase.status === 'warn')
       .map(phase => phase.phase),
   );
+  let active: string | null = null;
+  const markStart = (phase: string) => {
+    completed.delete(phase);
+    active = phase;
+  };
+  const markFinish = (phase: string) => {
+    completed.add(phase);
+    if (active === phase) active = null;
+  };
+
   const text = `${run.stdout}\n${run.stderr}`;
-  for (const match of text.matchAll(/\[cycle\.([a-z_-]+)\]\s+done/g)) completed.add(match[1]);
-  const starts = [...text.matchAll(/\[cycle\.([a-z_-]+)\]\s+start/g)];
-  const lastStarted = starts.length > 0 ? starts[starts.length - 1]?.[1] ?? null : null;
-  const active = run.status === 'running' || run.status === 'queued'
-    ? (lastStarted && !completed.has(lastStarted) ? lastStarted : null)
-    : null;
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    if (line.startsWith('{')) {
+      try {
+        const event = JSON.parse(line) as { event?: unknown; phase?: unknown };
+        if (event && typeof event.phase === 'string') {
+          const phase = rootCyclePhaseName(event.phase);
+          if (phase && event.phase === `cycle.${phase}`) {
+            if (event.event === 'start') markStart(phase);
+            else if (event.event === 'finish' || event.event === 'abort') markFinish(phase);
+          }
+        }
+      } catch {
+        // Mixed human diagnostics and JSON progress are expected on stderr.
+      }
+      continue;
+    }
+    const human = line.match(/^\[cycle\.([a-z0-9_-]+)]\s+(start|done)\b/i);
+    if (human) {
+      if (human[2]!.toLowerCase() === 'start') markStart(human[1]!);
+      else markFinish(human[1]!);
+      continue;
+    }
+    if (/^\[quick-maintenance]\s+Source\s+\S+\s+start\b/i.test(line) && !active) {
+      markStart('lint');
+    }
+  }
+
+  const running = run.status === 'running' || run.status === 'queued';
+  if (running && !active && completed.size === 0 && !(report?.phases?.length)) {
+    active = plannedFirstDreamPhase(run);
+  }
+  if (!running) active = null;
   return { completed, active, report };
 }
 

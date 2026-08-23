@@ -1,5 +1,23 @@
 # Bug 修复台账
 
+## 2026-08-23 PMBrain 1.2.90 修复打包后导入进程完成后不退出导致 GitHub Test 红
+
+- 时间：2026-08-23
+- 版本号：PMBrain 1.2.90；PMBrain Desktop 1.1.43（桌面端未改动）
+- 标题：打包 sidecar 导入完成后释放 PGLite 锁并立即退出
+- 描述：master 合入 1.2.88 后 GitHub Test 的 Windows desktop-runtime 失败。打包 bun 跑 `import` 已写出 Import complete，但 PGLite `db.close()` 卡住 JS 线程，原 10 秒超时无法触发，进程一直不退出。现对一次性 CLI 的 PGLite 路径改为先释放文件锁、不等待 WASM close、立即退出；Postgres 仍走原超时断开。补充失败优先测试，并把该契约纳入散落扫描和 `ci:pr-preview`，避免再只修父进程看门狗而漏掉子进程退出。未修改用户知识、向量、数据库、Wiki 或原始资料。
+- 是否完成：是
+- 最终结果：失败优先测试覆盖 PGLite 一次性 CLI 不等待 WASM close、文件锁可被下一持有者接手；CLI 断开 3/3、PGLite 断开 8/8、散落契约 5/5、预演契约 4/4、Dream GUI 28/28、执行器钩子 9/9。根目录 TypeScript 与版本同步通过。Admin 生产资源已重建，发布指纹 `71be9e5a0003`。未修改用户知识、向量、数据库、Wiki 或原始资料。未执行 `bun run build:win`。
+
+## 2026-08-23 PMBrain 1.2.89 修复快速维护进行中五步一直显示未开始
+
+- 时间：2026-08-23
+- 版本号：PMBrain 1.2.89；PMBrain Desktop 1.1.43（桌面端未改动）
+- 标题：快速维护读取结构化进度，运行中不再误显示全部未开始
+- 描述：1.2.88 撤回知识整理界面后，后台任务仍发送 `--progress-json`，五步进度却只识别旧的 `[cycle.xxx] start/done` 文本。本地 PGLite 还会先交接数据库锁，阶段数字更晚出现，界面就像卡住。现改为同时识别 JSON 进度和旧文本；多 Source 时按最近一次开始/结束更新当前步；子进程还没打出阶段日志时，第一步显示进行中。未修改用户知识、向量、数据库、Wiki 或原始资料。
+- 是否完成：是
+- 最终结果：失败优先测试覆盖 JSON 进度显示进行中、finish/start 推进五步、尚无阶段日志时第一步显示进行中；Dream GUI 契约 28/28、根目录 TypeScript 与版本同步通过。Admin 生产资源已重建，发布指纹 `71be9e5a0003`。未修改用户知识、向量、数据库、Wiki 或原始资料。未执行 `bun run build:win`。未对用户知识库发起真实快速维护，避免改动已有数据。
+
 ## 2026-08-22 PMBrain 1.2.87 修复打包后向量补全任务完成后不退出
 
 - 时间：2026-08-22

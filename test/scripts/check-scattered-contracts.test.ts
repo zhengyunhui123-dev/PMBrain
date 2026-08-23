@@ -3,6 +3,7 @@ import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
+  collectOneShotPgliteExitFailures,
   collectScatteredContractFailures,
   extractFunctionArity,
   extractKnobsHashVersion,
@@ -41,5 +42,9 @@ describe('scattered retrieval contract checker', () => {
 
   test('current repository retrieval contract pins match the source', () => {
     expect(collectScatteredContractFailures(join(import.meta.dir, '../..'))).toEqual([]);
+  });
+
+  test('current repository pins PGLite one-shot CLI exit without waiting on WASM close', () => {
+    expect(collectOneShotPgliteExitFailures(join(import.meta.dir, '../..'))).toEqual([]);
   });
 });

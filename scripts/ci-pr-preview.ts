@@ -13,6 +13,7 @@ export const GITHUB_TEST_PREVIEW_FILES = [
   'test/scripts/check-scattered-contracts.test.ts',
   'test/version-build-guards.test.ts',
   'test/user-journeys-contract.test.ts',
+  'test/cli-disconnect.test.ts',
 ] as const;
 
 export function bashCandidates(): string[] {

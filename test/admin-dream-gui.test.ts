@@ -351,6 +351,64 @@ describe('Dream GUI product contract', () => {
     ]);
   });
 
+  test('Quick maintenance reads --progress-json events so running stages are not stuck idle', () => {
+    const run: ConsoleRun = {
+      ...quickRun({}, 'running'),
+      stdout: '',
+      stderr: [
+        '{"event":"start","phase":"cycle.lint","ts":"2026-08-22T13:32:00.000Z"}',
+        '{"event":"tick","phase":"cycle.lint","done":18,"elapsed_ms":1200,"ts":"2026-08-22T13:32:01.000Z"}',
+      ].join('\n'),
+    };
+
+    expect(buildQuickMaintenanceStages(run).map(stage => stage.state)).toEqual([
+      'active',
+      'idle',
+      'idle',
+      'idle',
+      'idle',
+    ]);
+  });
+
+  test('Quick maintenance JSON finish/start advances the five-step track', () => {
+    const run: ConsoleRun = {
+      ...quickRun({}, 'running'),
+      stdout: '',
+      stderr: [
+        '{"event":"start","phase":"cycle.lint","ts":"2026-08-22T13:32:00.000Z"}',
+        '{"event":"finish","phase":"cycle.lint","elapsed_ms":800,"ts":"2026-08-22T13:32:01.000Z"}',
+        '{"event":"start","phase":"cycle.backlinks","ts":"2026-08-22T13:32:01.000Z"}',
+        '{"event":"finish","phase":"cycle.backlinks","elapsed_ms":200,"ts":"2026-08-22T13:32:01.200Z"}',
+        '{"event":"start","phase":"cycle.sync","ts":"2026-08-22T13:32:01.200Z"}',
+        '{"event":"tick","phase":"cycle.sync.files","done":2,"ts":"2026-08-22T13:32:02.000Z"}',
+      ].join('\n'),
+    };
+
+    expect(buildQuickMaintenanceStages(run).map(stage => stage.state)).toEqual([
+      'done',
+      'active',
+      'idle',
+      'idle',
+      'idle',
+    ]);
+  });
+
+  test('Quick maintenance shows the first stage as active while the child has not emitted phase logs yet', () => {
+    const run: ConsoleRun = {
+      ...quickRun({}, 'running'),
+      stdout: '',
+      stderr: '',
+    };
+
+    expect(buildQuickMaintenanceStages(run).map(stage => stage.state)).toEqual([
+      'active',
+      'idle',
+      'idle',
+      'idle',
+      'idle',
+    ]);
+  });
+
   test('Quick pending work is shown separately from real failures', () => {
     const run = quickRun({
       status: 'partial',

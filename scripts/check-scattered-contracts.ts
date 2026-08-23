@@ -82,16 +82,43 @@ export function collectScatteredContractFailures(root: string): string[] {
   return failures;
 }
 
+export function collectOneShotPgliteExitFailures(root: string): string[] {
+  const disconnect = readFileSync(join(root, 'src', 'core', 'cli-disconnect.ts'), 'utf8');
+  const cli = readFileSync(join(root, 'src', 'cli.ts'), 'utf8');
+  const preview = readFileSync(join(root, 'scripts', 'ci-pr-preview.ts'), 'utf8');
+  const workflow = readFileSync(join(root, '.github', 'workflows', 'test.yml'), 'utf8');
+  const failures: string[] = [];
+  if (!disconnect.includes("engine.kind === 'pglite'")) {
+    failures.push('src/core/cli-disconnect.ts must force-exit PGLite one-shot commands without waiting on db.close()');
+  }
+  if (!disconnect.includes('releaseOwnershipWithoutClose')) {
+    failures.push('src/core/cli-disconnect.ts must release the PGLite file lock before force-exit');
+  }
+  if (!cli.includes('await disconnectCliEngine(engine, command)')) {
+    failures.push('src/cli.ts must close one-shot commands through disconnectCliEngine');
+  }
+  if (!preview.includes('test/cli-disconnect.test.ts')) {
+    failures.push('scripts/ci-pr-preview.ts must run test/cli-disconnect.test.ts so packaged PGLite hang regressions are caught locally');
+  }
+  if (!workflow.includes('cli-import-exit.serial.test.ts')) {
+    failures.push('.github/workflows/test.yml must keep the packaged sidecar import-exit test in desktop-runtime');
+  }
+  return failures;
+}
+
 export function checkScatteredContracts(root = join(import.meta.dir, '..')): void {
-  const failures = collectScatteredContractFailures(root);
+  const failures = [
+    ...collectScatteredContractFailures(root),
+    ...collectOneShotPgliteExitFailures(root),
+  ];
   if (failures.length > 0) {
     throw new Error(
-      'Scattered retrieval contract pins drifted from source:\n- ' +
+      'Scattered contract pins drifted from source:\n- ' +
         failures.join('\n- ') +
         '\nUpdate every leftover toBe() in the same change as the source constant.',
     );
   }
-  console.log('[check:scattered-contracts] retrieval contract pins match source');
+  console.log('[check:scattered-contracts] retrieval and one-shot PGLite exit pins match source');
 }
 
 if (import.meta.main) checkScatteredContracts();
