@@ -11,12 +11,22 @@ export interface CliDisconnectOptions {
 
 type OneShotEngine = Pick<BrainEngine, 'disconnect'> & {
   kind?: BrainEngine['kind'];
-  releaseOwnershipWithoutClose?: () => Promise<void>;
 };
 
 function resolvedExitCode(options: CliDisconnectOptions): number {
   const rawExitCode = options.exitCode ?? process.exitCode ?? 0;
   return typeof rawExitCode === 'number' ? rawExitCode : Number.parseInt(String(rawExitCode), 10) || 0;
+}
+
+function flushStdio(): Promise<void> {
+  const flush = (stream: NodeJS.WriteStream | undefined): Promise<void> => new Promise((resolve) => {
+    if (!stream || typeof stream.write !== 'function') {
+      resolve();
+      return;
+    }
+    stream.write('', () => resolve());
+  });
+  return Promise.all([flush(process.stdout), flush(process.stderr)]).then(() => undefined);
 }
 
 /**
@@ -25,8 +35,10 @@ function resolvedExitCode(options: CliDisconnectOptions): number {
  * installed only around disconnect, never around the import itself.
  *
  * Packaged Windows Bun can freeze the JS thread inside PGLite `db.close()`,
- * so a Promise.race timer never fires. PGLite one-shot commands therefore
- * release the file lock and exit without waiting for WASM close.
+ * so a Promise.race timer never fires. Calling `db.close()` or dropping the
+ * WASM handle before `process.exit` can also crash the child with a non-zero
+ * Windows status. PGLite one-shot commands therefore flush stdio and exit
+ * without touching the database handle; the lock file's dead PID is stale.
  */
 export async function disconnectCliEngine(
   engine: OneShotEngine,
@@ -39,9 +51,7 @@ export async function disconnectCliEngine(
   const exitCode = resolvedExitCode(options);
 
   if (engine.kind === 'pglite') {
-    if (engine.releaseOwnershipWithoutClose) {
-      await engine.releaseOwnershipWithoutClose();
-    }
+    if (!options.forceExit) await flushStdio();
     forceExit(exitCode);
     return 'forced_exit';
   }

@@ -1359,6 +1359,7 @@ async function handleCliOnly(command: string, args: string[]) {
   // sidecar must fail closed when schema migration cannot complete; starting
   // HTTP with a half-migrated PGLite leaves Desktop waiting on /health.
   const engine = await connectEngine({ strictMigrations: command === 'serve' });
+  let commandFailed = false;
   try {
     switch (command) {
       case 'import': {
@@ -1792,6 +1793,10 @@ async function handleCliOnly(command: string, args: string[]) {
         break;
       }
     }
+  } catch (error) {
+    commandFailed = true;
+    console.error(error instanceof Error ? error.message : String(error));
+    throw error;
   } finally {
     if (command !== 'serve') {
       // Desktop setup and Admin tasks invoke several one-shot CLI children
@@ -1799,7 +1804,11 @@ async function handleCliOnly(command: string, args: string[]) {
       // wedges while closing, an unbounded disconnect leaves the Desktop wait
       // overlay or Admin run stuck forever. Preserve the normal clean close,
       // but force-exit only the already-completed child after a hard deadline.
-      await disconnectCliEngine(engine, command);
+      // Do not call db.close() on PGLite: packaged Windows Bun can freeze or
+      // crash. Flush stdio and exit with the command's real status.
+      await disconnectCliEngine(engine, command, {
+        exitCode: commandFailed ? 1 : undefined,
+      });
     }
   }
 }

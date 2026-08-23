@@ -35,15 +35,11 @@ describe('one-shot CLI disconnect deadline', () => {
   test('PGLite one-shot CLI exits without waiting for a WASM close that can freeze the thread', async () => {
     const exits: number[] = [];
     let closed = false;
-    let released = false;
     const outcome = await disconnectCliEngine({
       kind: 'pglite',
       disconnect: async () => {
         closed = true;
         await new Promise(() => {});
-      },
-      releaseOwnershipWithoutClose: async () => {
-        released = true;
       },
     }, 'import', {
       exitCode: 0,
@@ -51,8 +47,21 @@ describe('one-shot CLI disconnect deadline', () => {
     });
 
     expect(outcome).toBe('forced_exit');
-    expect(released).toBe(true);
     expect(closed).toBe(false);
     expect(exits).toEqual([0]);
+  });
+
+  test('PGLite one-shot CLI keeps a failed command exit code', async () => {
+    const exits: number[] = [];
+    const outcome = await disconnectCliEngine({
+      kind: 'pglite',
+      disconnect: async () => {},
+    }, 'models', {
+      exitCode: 1,
+      forceExit: code => { exits.push(code); },
+    });
+
+    expect(outcome).toBe('forced_exit');
+    expect(exits).toEqual([1]);
   });
 });

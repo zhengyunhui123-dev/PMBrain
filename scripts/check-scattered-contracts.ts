@@ -91,11 +91,14 @@ export function collectOneShotPgliteExitFailures(root: string): string[] {
   if (!disconnect.includes("engine.kind === 'pglite'")) {
     failures.push('src/core/cli-disconnect.ts must force-exit PGLite one-shot commands without waiting on db.close()');
   }
-  if (!disconnect.includes('releaseOwnershipWithoutClose')) {
-    failures.push('src/core/cli-disconnect.ts must release the PGLite file lock before force-exit');
+  if (!disconnect.includes('flushStdio')) {
+    failures.push('src/core/cli-disconnect.ts must flush stdout before PGLite force-exit so Desktop can read JSON results');
   }
-  if (!cli.includes('await disconnectCliEngine(engine, command)')) {
+  if (!cli.includes('await disconnectCliEngine(engine, command')) {
     failures.push('src/cli.ts must close one-shot commands through disconnectCliEngine');
+  }
+  if (!cli.includes('commandFailed')) {
+    failures.push('src/cli.ts must preserve a failed PGLite command exit code instead of always exiting 0');
   }
   if (!preview.includes('test/cli-disconnect.test.ts')) {
     failures.push('scripts/ci-pr-preview.ts must run test/cli-disconnect.test.ts so packaged PGLite hang regressions are caught locally');

@@ -14,6 +14,7 @@ export const GITHUB_TEST_PREVIEW_FILES = [
   'test/version-build-guards.test.ts',
   'test/user-journeys-contract.test.ts',
   'test/cli-disconnect.test.ts',
+  'test/model-usage-generative-gate.test.ts',
 ] as const;
 
 export function bashCandidates(): string[] {
