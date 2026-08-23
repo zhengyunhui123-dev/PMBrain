@@ -65,6 +65,20 @@ describe('one-shot CLI disconnect deadline', () => {
     expect(exits).toEqual([1]);
   });
 
+  test('PGLite skip-close returns without waiting on disconnect or stdout drain', async () => {
+    const exits: number[] = [];
+    const started = Date.now();
+    const outcome = await disconnectCliEngine({
+      kind: 'pglite',
+      disconnect: () => new Promise(() => {}),
+    }, 'import', {
+      forceExit: code => { exits.push(code); },
+    });
+    expect(outcome).toBe('forced_exit');
+    expect(exits).toEqual([0]);
+    expect(Date.now() - started).toBeLessThan(100);
+  });
+
   test('PGLite model probe still disconnects instead of skipping close', async () => {
     const exits: number[] = [];
     let disconnected = false;

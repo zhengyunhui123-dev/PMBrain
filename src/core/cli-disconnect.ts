@@ -27,15 +27,9 @@ function resolvedExitCode(options: CliDisconnectOptions): number {
   return typeof rawExitCode === 'number' ? rawExitCode : Number.parseInt(String(rawExitCode), 10) || 0;
 }
 
-function flushStdio(): Promise<void> {
-  const flush = (stream: NodeJS.WriteStream | undefined): Promise<void> => new Promise((resolve) => {
-    if (!stream || typeof stream.write !== 'function') {
-      resolve();
-      return;
-    }
-    stream.write('', () => resolve());
-  });
-  return Promise.all([flush(process.stdout), flush(process.stderr)]).then(() => undefined);
+function flushStdioBestEffort(): void {
+  try { process.stdout.write(''); } catch { /* ignore */ }
+  try { process.stderr.write(''); } catch { /* ignore */ }
 }
 
 /**
@@ -60,7 +54,9 @@ export async function disconnectCliEngine(
   const exitCode = resolvedExitCode(options);
 
   if (engine.kind === 'pglite' && PGLITE_SKIP_CLOSE_COMMANDS.has(command)) {
-    if (!options.forceExit) await flushStdio();
+    // Never await stdout drain: a piped Admin parent can deadlock the callback
+    // and the hang watchdog will SIGKILL, leaving PGLite locked for minutes.
+    flushStdioBestEffort();
     forceExit(exitCode);
     return 'forced_exit';
   }
