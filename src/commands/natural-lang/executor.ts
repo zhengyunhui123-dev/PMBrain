@@ -127,6 +127,7 @@ const TERMINAL_RESULT_STATUSES = new Set([
   'error',
   'success',
   'completed',
+  'imported',
 ]);
 
 const SUCCESSFUL_TERMINAL_STATUSES = new Set([
@@ -135,6 +136,7 @@ const SUCCESSFUL_TERMINAL_STATUSES = new Set([
   'partial',
   'success',
   'completed',
+  'imported',
 ]);
 
 function extractLastJsonObject(text: string): unknown | null {
@@ -160,9 +162,26 @@ function extractLastJsonObject(text: string): unknown | null {
   return null;
 }
 
-/** Detect a finished CLI JSON result on stdout, ignoring progress events. */
-export function parseTerminalChildResult(stdout: string): { status: string } | null {
-  const parsed = extractLastJsonObject(stdout);
+/** Detect a finished CLI JSON result on stdout or stderr, ignoring progress events. */
+export function parseTerminalChildResult(output: string): { status: string } | null {
+  if (/\bImport complete\b/i.test(output)) return { status: 'ok' };
+  const lines = output.split(/\r?\n/);
+  for (let index = lines.length - 1; index >= 0; index--) {
+    const line = lines[index]!.trim();
+    const brace = line.indexOf('{');
+    if (brace < 0) continue;
+    try {
+      const parsed = JSON.parse(line.slice(brace)) as { event?: unknown; status?: unknown };
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) continue;
+      if (typeof parsed.event === 'string') continue;
+      if (typeof parsed.status !== 'string') continue;
+      if (!TERMINAL_RESULT_STATUSES.has(parsed.status)) continue;
+      return { status: parsed.status };
+    } catch {
+      continue;
+    }
+  }
+  const parsed = extractLastJsonObject(output);
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
   const record = parsed as Record<string, unknown>;
   if (typeof record.event === 'string') return null;
@@ -355,11 +374,11 @@ export async function startRun(kind: string, command: string[], cwd: string, hoo
     const cap = 120_000;
     const armHangWatchdog = () => {
       if (hangWatchdog || finished) return;
-      const terminal = parseTerminalChildResult(run.stdout);
+      const terminal = parseTerminalChildResult(`${run.stdout}\n${run.stderr}`);
       if (!terminal) return;
       hangWatchdog = setTimeout(() => {
         if (finished || run.status !== 'running') return;
-        hungAfterResult = parseTerminalChildResult(run.stdout) ?? terminal;
+        hungAfterResult = parseTerminalChildResult(`${run.stdout}\n${run.stderr}`) ?? terminal;
         run.stderr = sanitizeOutput(
           `${run.stderr}\n[admin] child printed a terminal JSON result but did not exit within ${hangMs}ms; force-killing\n`,
         );
@@ -369,7 +388,7 @@ export async function startRun(kind: string, command: string[], cwd: string, hoo
     const append = (key: 'stdout' | 'stderr', chunk: Buffer) => {
       if (key === 'stdout' && resultFd !== null) writeSync(resultFd, chunk);
       run[key] = sanitizeOutput((run[key] + chunk.toString('utf8')).slice(-cap));
-      if (key === 'stdout') armHangWatchdog();
+      armHangWatchdog();
     };
     const captureResult = () => {
       if (resultFd !== null) {
