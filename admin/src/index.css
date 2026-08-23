@@ -6691,6 +6691,13 @@ tbody tr:hover td { background: color-mix(in srgb, var(--accent) 4%, var(--conso
 .task-run-card-head, .task-run-card-meta, .task-run-card-actions { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
 .task-run-card-head h3 { margin: 4px 0 0; font-size: 15px; }
 .task-run-card-meta { color: var(--text-secondary); font-size: 11px; }
+.task-run-progress { display: grid; gap: 7px; padding: 10px 12px; border: 1px solid color-mix(in srgb, var(--accent) 38%, var(--border)); border-radius: 9px; background: color-mix(in srgb, var(--accent) 7%, var(--console-surface-soft)); }
+.task-run-progress > div:first-child { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.task-run-progress span, .task-run-progress small { color: var(--text-secondary); font-size: 11px; }
+.task-run-progress b { color: var(--text-primary); font-size: 12px; }
+.task-run-progress strong { margin-left: auto; color: var(--accent); font-size: 12px; }
+.task-run-progress-track { height: 5px; overflow: hidden; border-radius: 999px; background: var(--border); }
+.task-run-progress-track i { display: block; height: 100%; border-radius: inherit; background: var(--accent); transition: width 180ms ease; }
 .task-run-usage {
   list-style: none;
   margin: 0;

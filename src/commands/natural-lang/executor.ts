@@ -11,6 +11,9 @@ export const runs = new Map<string, ConsoleRun>();
 const children = new Map<string, ChildProcess>();
 const cancelRequested = new Set<string>();
 
+const CANCEL_CONFIRM_TIMEOUT_MS = 15_000;
+const CANCEL_CONFIRM_POLL_MS = 25;
+
 export const MAX_STORED_RUNS = 100;
 export const RUN_RETENTION_MS = 24 * 60 * 60 * 1000;
 
@@ -75,6 +78,9 @@ function killProcessTree(child: ChildProcess): void {
       stdio: 'ignore',
     });
     killer.on('error', () => child.kill());
+    killer.on('close', (code) => {
+      if (code !== 0 && child.exitCode === null && child.signalCode === null) child.kill();
+    });
     return;
   }
   child.kill('SIGTERM');
@@ -98,6 +104,13 @@ export async function cancelRun(id: string): Promise<ConsoleRun | null> {
     run.status = 'cancelled';
     run.completedAt = new Date().toISOString();
     run.durationMs = Date.parse(run.completedAt) - Date.parse(run.startedAt);
+  }
+  const deadline = Date.now() + CANCEL_CONFIRM_TIMEOUT_MS;
+  while ((run.status === 'running' || run.status === 'queued') && Date.now() < deadline) {
+    await new Promise(resolve => setTimeout(resolve, CANCEL_CONFIRM_POLL_MS));
+  }
+  if (run.status === 'running' || run.status === 'queued') {
+    run.error = '取消指令已发出，但 Dream 子进程退出或数据库连接恢复尚未完成；任务仍标记为运行中，请勿把数据库视为已释放。';
   }
   return run;
 }

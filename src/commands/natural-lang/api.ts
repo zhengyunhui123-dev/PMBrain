@@ -279,6 +279,9 @@ export function buildDreamCommand(input: {
   const prefix = resolveCliEntry();
   const cmd = [...prefix, 'dream'];
   if (input.phase && input.preset) throw new Error('Dream phase and preset are mutually exclusive');
+  if (input.drainProposals && input.phase !== 'propose_takes') {
+    throw new Error('Dream proposal draining requires the standalone propose_takes phase');
+  }
   if (input.allSources && input.sourceId?.trim()) throw new Error('Dream allSources and sourceId are mutually exclusive');
   if (input.allSources && input.preset !== 'quick') throw new Error('Dream allSources requires the quick preset');
   if (input.preset) cmd.push('--preset', input.preset);

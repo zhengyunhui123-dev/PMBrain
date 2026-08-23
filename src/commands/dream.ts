@@ -316,8 +316,8 @@ function parseArgs(args: string[]): DreamArgs {
   }
 
   const drainProposals = args.includes('--drain-proposals');
-  if (drainProposals && phase !== 'propose_takes' && preset !== 'full') {
-    console.error('--drain-proposals requires --phase propose_takes or --preset full');
+  if (drainProposals && phase !== 'propose_takes') {
+    console.error('--drain-proposals requires the standalone --phase propose_takes; it cannot continue into later full-preset phases');
     process.exit(2);
   }
   const windowValues = collectFlagValues(args, '--window');
@@ -445,7 +445,7 @@ function printHelp() {
   --all-sources       仅用于 quick：顺序维护全部已注册且启用的 Source。
   --max-pages <n>     限制 propose_takes 最多处理的页面数，适合分批执行。
   --drain-proposals   按批次持续处理真正未整理的页面，直到清空或达到 --window。
-                      每批默认 100 页；仅用于 --phase propose_takes 或 --preset full。
+                      每批默认 100 页；仅用于独立的 --phase propose_takes，结束后不会继续其他阶段。
   --window <seconds>  proposal 排空的运行时间上限，默认 3600 秒。
   --propose-require-chunks
                       仅让已有文本 chunks 的页面进入 propose_takes。默认开启。
@@ -688,9 +688,9 @@ export async function runDream(engine: BrainEngine | null, args: string[]): Prom
         parseSourceConfig(source.config).syncEnabled !== false
       ));
       const sourceReports = [];
-      for (const source of sources) {
+      for (const [sourceIndex, source] of sources.entries()) {
         const sourceBrainDir = await resolveBrainDir(engine, null, source.id);
-        console.error(`[quick-maintenance] Source ${source.id} start`);
+        console.error(`[quick-maintenance] Source ${source.id} start (${sourceIndex + 1}/${sources.length})`);
         const sourceReport = await runQuickMaintenance(engine, {
           brainDir: sourceBrainDir,
           dryRun: opts.dryRun,

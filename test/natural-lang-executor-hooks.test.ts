@@ -250,4 +250,25 @@ describe('natural language child-process hooks', () => {
     await waitFor(() => run.status !== 'running', 5_000);
     expect(run.status).toBe('cancelled');
   });
+
+  test('cancel waits for child exit and PGLite reconnection before confirming cancellation', async () => {
+    let reconnected = false;
+    const run = await startRun(
+      'dream_propose_takes',
+      [process.execPath, '-e', 'setInterval(() => {}, 1000)'],
+      process.cwd(),
+      {
+        afterComplete: async () => {
+          await Bun.sleep(120);
+          reconnected = true;
+        },
+      },
+    );
+    await waitFor(() => run.status === 'running');
+
+    const cancelled = await cancelRun(run.id);
+
+    expect(cancelled?.status).toBe('cancelled');
+    expect(reconnected).toBe(true);
+  });
 });
