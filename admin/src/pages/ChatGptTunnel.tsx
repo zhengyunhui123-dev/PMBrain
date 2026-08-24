@@ -73,7 +73,7 @@ export function ChatGptTunnelPanel() {
     });
     setRuntimeApiKey('');
     setDoctor(null);
-  }, 'Tunnel 配置已生成，只读凭证已轮换。');
+  }, 'Tunnel 配置已生成，凭证已轮换。');
 
   const runDoctor = () => act('doctor', async () => {
     const result = await api.doctorChatGptTunnel(binaryPath) as DoctorResult;
@@ -85,9 +85,9 @@ export function ChatGptTunnelPanel() {
     <section className="tunnel-shell" aria-labelledby="chatgpt-tunnel-title">
       <div className="tunnel-hero">
         <div>
-          <span className="tunnel-kicker">OUTBOUND-ONLY / READ-ONLY</span>
+          <span className="tunnel-kicker">OUTBOUND-ONLY / FULL MCP</span>
           <h2 id="chatgpt-tunnel-title">ChatGPT Secure MCP Tunnel</h2>
-          <p>让 ChatGPT 通过 OpenAI 官方出站隧道读取 PMBrain。本机不开放公网端口，ChatGPT 不接触本地 Bearer Token。</p>
+          <p>让 ChatGPT 通过 OpenAI 官方出站隧道接入 PMBrain。本机不开放公网端口，ChatGPT 不接触本地 Bearer Token。</p>
         </div>
         <div className="tunnel-signal" aria-label="Tunnel 状态">
           <span>{status?.ready.ok ? 'READY' : status?.processRunning ? 'CONNECTING' : 'OFFLINE'}</span>
@@ -127,9 +127,9 @@ export function ChatGptTunnelPanel() {
             />
           </label>
           <div className="tunnel-scope-lock">
-            <span>权限锁</span>
-            <b>READ ONLY</b>
-            <p>只开放 search、query、list_pages、get_page、get_chunks、recall、get_brain_identity；写入、删除与管理工具不会出现在 ChatGPT 工具列表中。</p>
+            <span>工具权限</span>
+            <b>全部开放</b>
+            <p>ChatGPT 可以使用完整 MCP 工具列表，包括搜索、写入和整理。Bearer Token 仍只留在本机，ChatGPT 云端读不到。</p>
           </div>
           <button className="pm-primary tunnel-wide-button" disabled={busy !== null || !tunnelId} onClick={configure}>
             {busy === 'setup' ? '正在生成配置…' : status?.profileExists ? '重新生成并轮换凭证' : '生成安全配置'}
@@ -174,7 +174,7 @@ export function ChatGptTunnelPanel() {
         <span>03</span>
         <div>
           <h3>在 ChatGPT 中连接</h3>
-          <p>设置 → Apps & Connectors → 创建自定义 App；连接选择 <b>Tunnel</b>，选择上面的 Tunnel ID，身份验证选择 <b>无身份验证</b>。本地 PMBrain 仍由只读 Token 保护。</p>
+          <p>设置 → Apps & Connectors → 创建自定义 App；连接选择 <b>Tunnel</b>，选择上面的 Tunnel ID，身份验证选择 <b>无身份验证</b>。本地 PMBrain 仍由本机 Token 保护。</p>
         </div>
       </div>
     </section>

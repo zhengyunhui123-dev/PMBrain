@@ -73,6 +73,11 @@ describe('Admin MCP handoff content', () => {
     expect(styles).toContain('.credential-modal-body');
     expect(consolePage.indexOf('<h1 className="title-with-info">')).toBeLessThan(consolePage.indexOf('<AgentsPage'));
     expect(consolePage.indexOf('<AgentsPage')).toBeLessThan(consolePage.indexOf('className="mcp-tunnel-details"'));
+    const tunnelPage = readFileSync(join(process.cwd(), 'admin/src/pages/ChatGptTunnel.tsx'), 'utf8');
+    expect(tunnelPage).toContain('全部开放');
+    expect(tunnelPage).toContain('ChatGPT 可以使用完整 MCP 工具列表');
+    expect(tunnelPage).not.toContain('READ ONLY');
+    expect(tunnelPage).not.toContain('ChatGPT 只会看到这 7 个只读工具');
     expect(consolePage).not.toContain('className="mcp-connection-details"');
     expect(consolePage).not.toContain('<h2>连接状态</h2>');
     expect(agents).toContain("{visibleAgents.filter(a => a.status === 'active').length} 个活跃凭证");
