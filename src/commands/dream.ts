@@ -72,8 +72,8 @@ interface DreamArgs {
   /** Explicit Admin fan-out; bare CLI Dream keeps its historical scope. */
   allSources: boolean;
   /**
-   * Limits how many pages propose_takes scans in this dream run.
-   * Forwarded to runCycle as proposeTakesPageLimit.
+   * Limits expensive page work in this Dream run. Full Dream forwards the
+   * same bounded scope to propose_takes and stale embedding.
    */
   maxPages: number | null;
   /** Default true: propose_takes only scans pages with existing text chunks. */
@@ -742,6 +742,9 @@ export async function runDream(engine: BrainEngine | null, args: string[]): Prom
     synthTo: opts.to ?? undefined,
     synthBypassDreamGuard: opts.bypassDreamGuard,
     proposeTakesPageLimit: opts.maxPages ?? undefined,
+    // PMBrain local-model safety: the Admin policy clamps full Ollama Dream
+    // to five pages; the embed phase must honor the same scope.
+    embedPageLimit: opts.maxPages ?? undefined,
     proposeTakesRequireChunks: opts.proposeRequireChunks,
     proposeTakesMaxChunks: opts.proposeMaxChunks ?? undefined,
     proposeTakesDrain: opts.drainProposals,

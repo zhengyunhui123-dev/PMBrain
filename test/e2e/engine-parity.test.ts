@@ -149,6 +149,39 @@ describeBoth('Engine parity — Postgres vs PGLite', () => {
     expect(pgResults[0]?.slug).toBe(pgliteResults[0]?.slug);
   });
 
+  test('merge-only embedding checkpoints preserve sibling chunks on both engines', async () => {
+    for (const eng of [pgEngine, pgliteEngine]) {
+      await eng.putPage('test/checkpoint-merge', {
+        type: 'note',
+        title: 'checkpoint merge',
+        compiled_truth: 'checkpoint merge',
+        timeline: '',
+      });
+      await eng.upsertChunks('test/checkpoint-merge', [0, 1].map(chunk_index => ({
+        chunk_index,
+        chunk_text: `checkpoint ${chunk_index}`,
+        chunk_source: 'compiled_truth' as const,
+        token_count: 2,
+      })));
+      await eng.upsertChunks('test/checkpoint-merge', [{
+        chunk_index: 0,
+        chunk_text: 'checkpoint 0',
+        chunk_source: 'compiled_truth',
+        embedding: basisEmbedding(42),
+        model: 'openai:text-embedding-3-large',
+        token_count: 2,
+      }], { replaceExisting: false });
+
+      const chunks = await eng.getChunks('test/checkpoint-merge');
+      expect(chunks).toHaveLength(2);
+      expect(chunks.find(chunk => chunk.chunk_index === 0)).toMatchObject({
+        model: 'openai:text-embedding-3-large',
+        embedded_at: expect.any(Date),
+      });
+      expect(chunks.find(chunk => chunk.chunk_index === 1)?.embedded_at).toBeNull();
+    }
+  });
+
   test('hard-exclude is consistent across engines', async () => {
     // Both engines should hide test/ pages by default; both should opt
     // them back in via include_slug_prefixes.

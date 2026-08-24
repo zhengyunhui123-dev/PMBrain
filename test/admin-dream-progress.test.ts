@@ -44,4 +44,18 @@ describe('Dream task progress parsing', () => {
       'cancelled',
     ))).toBeNull();
   });
+
+  test('shows durable vector count while a large local page is still running', () => {
+    const progress = describeDreamRunProgress(runWith([
+      '{"event":"start","phase":"cycle.embed","ts":"2026-08-24T00:00:00.000Z"}',
+      '{"event":"heartbeat","phase":"cycle.embed","note":"page 1/5 processing: 已落库 24 个向量","elapsed_ms":90000,"ts":"2026-08-24T00:01:30.000Z"}',
+    ].join('\n')));
+
+    expect(progress).toMatchObject({
+      phase: 'embed',
+      phaseLabel: '向量化',
+      detail: '正在处理页面',
+      heartbeat: '第 1 / 5 页 · 正在处理 · 已落库 24 个向量',
+    });
+  });
 });

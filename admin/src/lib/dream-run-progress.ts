@@ -108,7 +108,9 @@ export function describeDreamRunProgress(run: ConsoleRun): DreamRunProgressView 
     ? `${done} / ${total} 页${pct !== null ? ` (${pct}%)` : ''}`
     : done !== null
       ? `已处理 ${done} 页`
-      : '正在等待本阶段返回页数';
+      : heartbeat
+        ? '正在处理页面'
+        : '正在等待本阶段返回页数';
 
   return {
     phase,

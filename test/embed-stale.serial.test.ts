@@ -65,6 +65,30 @@ function fakeEmbedFn(texts: string[]): Promise<Float32Array[]> {
 }
 
 describe('embedStaleForSource', () => {
+  test('PGLite merge-only embedding checkpoint updates one chunk without deleting siblings', async () => {
+    await seedPageWithStaleChunks('checkpoint-page', 2);
+    const vector = new Float32Array(1536);
+    vector[0] = 1;
+
+    await engine.upsertChunks('checkpoint-page', [{
+      chunk_index: 0,
+      chunk_text: 'chunk 0 of checkpoint-page',
+      chunk_source: 'compiled_truth',
+      embedding: vector,
+      model: TEST_EMBEDDING_MODEL,
+      token_count: 4,
+    }], { replaceExisting: false, sourceId: 'default' });
+
+    const chunks = await engine.getChunks('checkpoint-page', { sourceId: 'default' });
+    expect(chunks).toHaveLength(2);
+    expect(chunks.find(chunk => chunk.chunk_index === 0)).toMatchObject({
+      model: TEST_EMBEDDING_MODEL,
+      embedded_at: expect.any(Date),
+    });
+    expect(chunks.find(chunk => chunk.chunk_index === 1)?.embedded_at).toBeNull();
+    expect(await engine.countStaleChunks({ sourceId: 'default' })).toBe(1);
+  });
+
   test('empty stale set returns done:true with zero embedded', async () => {
     const result = await embedStaleForSource(engine, 'default', {
       model: TEST_EMBEDDING_MODEL,

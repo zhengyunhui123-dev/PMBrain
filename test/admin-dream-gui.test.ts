@@ -21,6 +21,7 @@ const consolePage = [
 const settingsPage = readFileSync(join(process.cwd(), 'admin/src/pages/Settings.tsx'), 'utf8');
 const app = readFileSync(join(process.cwd(), 'admin/src/App.tsx'), 'utf8');
 const api = readFileSync(join(process.cwd(), 'src/commands/natural-lang/api.ts'), 'utf8');
+const dreamCommand = readFileSync(join(process.cwd(), 'src/commands/dream.ts'), 'utf8');
 
 function completedRun(report: Record<string, unknown>, stderr = ''): ConsoleRun {
   return {
@@ -71,6 +72,7 @@ describe('Dream GUI product contract', () => {
     expect(dream).toContain("sourceId: runMode === 'advanced' ? sourceId.trim() || undefined : runMode === 'quick' ? undefined : defaultSourceId");
     expect(dream).toContain("allSources: runMode === 'quick'");
     expect(dream).toContain("maxPages: runMode === 'advanced' && phase === 'propose_takes' && maxPages.trim() ? Number(maxPages) : undefined");
+    expect(dreamCommand).toContain('embedPageLimit: opts.maxPages ?? undefined');
     expect(dream).toContain("showAdvancedControls && phase === 'propose_takes'");
     expect(dream).toContain('embed 会处理全部待向量分块');
     expect(dream).toContain("runMode === 'cycle'\n            ? 'full'");
