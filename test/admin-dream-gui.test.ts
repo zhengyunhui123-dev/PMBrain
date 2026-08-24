@@ -67,15 +67,17 @@ describe('Dream GUI product contract', () => {
     expect(api).toContain("cmd.push('--preset', input.preset)");
   });
 
-  test('one-click Quick covers all registered Sources while advanced runs stay source-scoped', () => {
+  test('one-click Quick covers all Sources and one-click deep runs the complete Dream preset', () => {
     expect(dream).toContain("sourceId: runMode === 'advanced' ? sourceId.trim() || undefined : runMode === 'quick' ? undefined : defaultSourceId");
     expect(dream).toContain("allSources: runMode === 'quick'");
     expect(dream).toContain("maxPages: runMode === 'advanced' && phase === 'propose_takes' && maxPages.trim() ? Number(maxPages) : undefined");
     expect(dream).toContain("showAdvancedControls && phase === 'propose_takes'");
     expect(dream).toContain('embed 会处理全部待向量分块');
-    expect(dream).toContain("phase: runMode === 'cycle' ? 'propose_takes'");
-    expect(dream).toContain("drainProposals: runMode === 'cycle'");
-    expect(dream).not.toContain("runMode === 'cycle'\n            ? 'full'");
+    expect(dream).toContain("runMode === 'cycle'\n            ? 'full'");
+    expect(dream).toContain("phase: runMode === 'advanced' ? phase : undefined");
+    expect(dream).toContain('drainProposals: false');
+    expect(dream).not.toContain("phase: runMode === 'cycle' ? 'propose_takes'");
+    expect(dream).not.toContain('本次只运行观点提炼');
   });
 
   test('Quick, deep, meeting and advanced progress never reuse another mode run', () => {
@@ -83,6 +85,13 @@ describe('Dream GUI product contract', () => {
     const deep: ConsoleRun = {
       ...completedRun({}),
       id: 'deep-running',
+      kind: 'dream_full',
+      status: 'running',
+      command: ['pmbrain', 'dream', '--preset', 'full', '--json'],
+    };
+    const proposal: ConsoleRun = {
+      ...completedRun({}),
+      id: 'proposal-running',
       kind: 'dream_propose_takes',
       status: 'running',
       command: ['pmbrain', 'dream', '--phase', 'propose_takes', '--drain-proposals', '--json'],
@@ -106,6 +115,8 @@ describe('Dream GUI product contract', () => {
     expect(runForDreamMode(quick, 'cycle')).toBeNull();
     expect(runForDreamMode(deep, 'cycle')).toBe(deep);
     expect(runForDreamMode(deep, 'advanced')).toBeNull();
+    expect(runForDreamMode(proposal, 'advanced')).toBe(proposal);
+    expect(runForDreamMode(proposal, 'cycle')).toBeNull();
     expect(runForDreamMode(meeting, 'meeting')).toBe(meeting);
     expect(runForDreamMode(meeting, 'quick')).toBeNull();
     expect(runForDreamMode(advanced, 'advanced')).toBe(advanced);
@@ -667,6 +678,12 @@ describe('Dream GUI product contract', () => {
     expect(dream).not.toContain('disabled={isPglite');
     expect(dream).not.toContain('PGLite 暂不支持 AI 会议整理');
     expect(dream).not.toContain('需要 Postgres Worker');
+    expect(dream).not.toContain("isPglite && runMode === 'advanced' && phase === 'all'");
+    expect(dream).not.toContain('PGLite 请分阶段运行');
+    expect(dream).not.toContain('深度整理会明确跳过 synthesize、patterns');
+    expect(dream).toContain('PGLite 会在当前进程内串行完成完整 Dream');
+    expect(dream).toContain("staged={mode === 'advanced'}");
+    expect(dream).not.toContain("staged={mode === 'cycle'}");
     expect(dream).toContain('通常不需要手动操作');
   });
 
@@ -677,13 +694,12 @@ describe('Dream GUI product contract', () => {
     expect(dream).toContain('手动整理默认不设外层时限');
   });
 
-  test('AI 深度整理明确按阶段停止，不会自动进入后续阶段', () => {
-    expect(dream).toContain('本次只运行观点提炼');
-    expect(dream).toContain('最多运行 1 小时');
-    expect(dream).toContain('不会自动进入打分、向量化或孤立页处理');
-    expect(dream).toContain('Ollama 本地模型每次最多处理 5 页');
+  test('AI 深度整理说明完整 Dream，而观点提炼保留为独立高级阶段', () => {
+    expect(dream).toContain('依次完成完整 Dream');
+    expect(dream).toContain('小模型会在昂贵阶段自动缩小单批页数');
+    expect(dream).toContain('观点提炼仍可在“高级设置”中独立运行');
+    expect(dream).not.toContain('不会自动进入打分、向量化或孤立页处理');
     expect(dream).toContain('已达到本次时间上限并安全停止');
-    expect(dream).toContain('PGLite 请分阶段运行');
   });
 
   test('the overview does not duplicate a non-actionable start button', () => {

@@ -34,7 +34,7 @@ function taskTitle(kind: string): string {
     if (kind.includes('quick')) return '快速维护';
     if (kind.includes('meeting')) return 'AI 会议整理';
     if (kind.includes('full') || kind.includes('cycle')) return 'AI 深度整理';
-    if (kind.includes('propose_takes')) return 'AI 深度整理 · 观点提炼';
+    if (kind.includes('propose_takes')) return '观点提炼';
     return '知识整理';
   }
   return ({

@@ -445,10 +445,7 @@ export function dreamRunModeFromRun(run: ConsoleRun): DreamRunMode {
     || run.command.some((part, index) => part === 'meeting' && run.command[index - 1] === '--preset')) {
     return 'meeting';
   }
-  const phaseIndex = run.command.indexOf('--phase');
-  const phase = phaseIndex >= 0 ? run.command[phaseIndex + 1] : null;
-  if ((phase === 'propose_takes' && run.command.includes('--drain-proposals'))
-    || run.kind.includes('full')
+  if (run.kind.includes('full')
     || run.command.some((part, index) => part === 'full' && run.command[index - 1] === '--preset')) {
     return 'cycle';
   }
@@ -1383,7 +1380,7 @@ function KnowledgeJourney({ run, mode }: { run: ConsoleRun | null; mode: DreamRu
   if (mode === 'quick') {
     return <QuickMaintenanceJourney run={run && isQuickMaintenanceRun(run) ? run : null} />;
   }
-  return <DreamKnowledgeJourney run={run} staged={mode === 'cycle'} />;
+  return <DreamKnowledgeJourney run={run} staged={mode === 'advanced'} />;
 }
 
 function phaseStatusZh(status: string): string {
@@ -1564,7 +1561,7 @@ function DreamOpsDiagnostics({
           {stuckReason
             ? <p className="pm-warning">{stuckReason}</p>
             : isPglite
-              ? <p className="pm-hint">PGLite 不启动独立 Worker；深度整理会明确跳过 synthesize、patterns，其余阶段照常执行。</p>
+              ? <p className="pm-hint">PGLite 不启动独立 Worker；PGLite 会在当前进程内串行完成完整 Dream，包括知识综合与模式识别。</p>
               : <p className="pm-hint">一键整理和会议整理会在需要时自动启动 Worker，通常不需要手动操作。这里用于故障诊断和恢复。</p>}
         </div>
         {!isPglite && <div className="dream-run-actions">
@@ -1763,10 +1760,6 @@ function DreamRunPanel({
     }
   }, [generativeEnabled, runMode]);
 
-  useEffect(() => {
-    if (isPglite && runMode === 'advanced' && phase === 'all') setPhase('lint');
-  }, [isPglite, phase, runMode]);
-
   const [run, setRun] = useState<ConsoleRun | null>(null);
   const [error, setError] = useState('');
   const [starting, setStarting] = useState(false);
@@ -1864,7 +1857,8 @@ function DreamRunPanel({
     try {
       const effectiveDryRun = dryRunOverride ?? dryRun;
       const needsSubagentWorker = !isPglite && !effectiveDryRun && (
-        runMode === 'meeting'
+        runMode === 'cycle'
+        || runMode === 'meeting'
         || (runMode === 'advanced' && (phase === 'synthesize' || phase === 'patterns'))
       );
       if (needsSubagentWorker && !supervisor?.worker_running) {
@@ -1874,19 +1868,17 @@ function DreamRunPanel({
       const res = await api.startDreamRun({
         preset: runMode === 'meeting'
           ? 'meeting'
+          : runMode === 'cycle'
+            ? 'full'
           : runMode === 'quick'
-              ? 'quick'
-              : undefined,
-        phase: runMode === 'cycle' ? 'propose_takes' : runMode === 'advanced' ? phase : undefined,
+                ? 'quick'
+                : undefined,
+        phase: runMode === 'advanced' ? phase : undefined,
         sourceId: runMode === 'advanced' ? sourceId.trim() || undefined : runMode === 'quick' ? undefined : defaultSourceId,
         allSources: runMode === 'quick',
         maxPages: runMode === 'advanced' && phase === 'propose_takes' && maxPages.trim() ? Number(maxPages) : undefined,
-        drainProposals: runMode === 'cycle',
-        windowSeconds: runMode === 'cycle'
-          ? timeoutMs
-            ? Math.min(3600, Math.max(60, Math.floor((timeoutMs * 0.75) / 1000)))
-            : 3600
-          : undefined,
+        drainProposals: false,
+        windowSeconds: undefined,
         dryRun: effectiveDryRun,
         input: inputEnabled ? input.trim() || undefined : undefined,
         date: dateEnabled ? date.trim() || undefined : undefined,
@@ -1928,7 +1920,7 @@ function DreamRunPanel({
     },
     cycle: {
       title: 'AI 深度整理知识库',
-      description: '本次只运行观点提炼，完成或最多运行 1 小时后停止，不会自动进入打分、向量化或孤立页处理。Ollama 本地模型每次最多处理 5 页。',
+      description: '依次完成完整 Dream：读取变化、提炼与连接知识、沉淀长期记忆，并更新搜索能力。小模型会在昂贵阶段自动缩小单批页数；观点提炼仍可在“高级设置”中独立运行。',
       action: '开始 AI 深度整理',
     },
     meeting: {
@@ -2030,7 +2022,7 @@ function DreamRunPanel({
               setPhase(newPhase);
               if (newPhase === 'all') setSourceId('');
             }}>
-              <option value="all" disabled={!generativeEnabled || isPglite}>{isPglite ? '整轮 cycle（PGLite 请分阶段运行）' : '整轮 cycle（需要普通模型）'}</option>
+              <option value="all" disabled={!generativeEnabled}>整轮 cycle（需要普通模型）</option>
               {phaseCatalog.map(item => {
                 const needsGen = phaseNeedsGenerative(item);
                 const blocked = needsGen && !generativeEnabled;

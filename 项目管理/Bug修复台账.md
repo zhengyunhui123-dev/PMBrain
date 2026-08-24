@@ -1,5 +1,14 @@
 # Bug 修复台账
 
+## 2026-08-24 PMBrain 1.2.97 恢复 AI 深度整理完整 Dream 语义
+
+- 时间：2026-08-24
+- 版本号：PMBrain 1.2.97；PMBrain Desktop 1.1.44（桌面端未改动）
+- 标题：小模型限流不再把完整 Dream 缩减为观点提炼
+- 描述：修复 Admin 的“AI 深度整理”仍标注“完整 Dream”，实际却只启动 `propose_takes` 单阶段的问题。现恢复一键调用标准 `full` preset，继续进入关系、长期记忆、观点评分、向量化和孤立页等后续阶段；Ollama 仍只在昂贵的观点提炼阶段限制为每次最多 5 页，不再禁用完整流程；PGLite 复用既有串行/进程内执行能力，不再被 Admin 策略拒绝。独立 `propose_takes` 保留在高级设置，并在任务中心显示为“观点提炼”，不再冒充完整深度整理。未修改 Dream `ALL_PHASES`、数据库 schema、用户知识、向量、Wiki、原始资料或配置。
+- 是否完成：是
+- 最终结果：失败优先测试覆盖一键单阶段、PGLite full 拒绝、独立观点任务误分类，以及完整 Dream 仍显示“本阶段结束后停住”和 PGLite 跳过知识综合的两处旧文案；最终定向产品契约 47/47、扩展 Dream/PGLite 回归 114/114、项目统一校验 39/39 通过。Admin 生产资源和内嵌资源已重新构建，发布指纹 `c45e3e1fbe94`；隔离 PGLite 源码服务健康检查返回 1.2.97，Playwright 实际点击确认请求为 `preset=full`、不发送单阶段 `phase`。未执行 `bun run build:win`，未对用户知识库发起真实整理；GitHub CI 由当前 PR 复验。
+
 ## 2026-08-23 PMBrain 1.2.96 修复 GitHub Test 的过期契约断言
 
 - 时间：2026-08-23
