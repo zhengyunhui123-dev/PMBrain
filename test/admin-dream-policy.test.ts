@@ -36,10 +36,28 @@ describe('Admin Dream execution policy', () => {
     expect(request.windowSeconds).toBe(3600);
   });
 
-  test('PGLite Admin refuses a full multi-stage Dream run', () => {
-    expect(() => normalizeAdminDreamRequest({ preset: 'full' }, {
+  test('PGLite Admin preserves the full Dream preset for sequential execution', () => {
+    const request = normalizeAdminDreamRequest({ preset: 'full' }, {
       engine: 'pglite',
       chatModel: 'anthropic:claude-sonnet-4-6',
-    })).toThrow('PGLite');
+    });
+
+    expect(request).toEqual({ preset: 'full' });
+  });
+
+  test('local Ollama keeps the full Dream preset but bounds the expensive proposal phase', () => {
+    const request = normalizeAdminDreamRequest({
+      preset: 'full',
+      maxPages: 100,
+      drainProposals: false,
+    }, {
+      engine: 'pglite',
+      chatModel: 'ollama:gemma4',
+    });
+
+    expect(request.preset).toBe('full');
+    expect(request.phase).toBeUndefined();
+    expect(request.maxPages).toBe(LOCAL_OLLAMA_DREAM_MAX_PAGES);
+    expect(request.drainProposals).toBe(false);
   });
 });

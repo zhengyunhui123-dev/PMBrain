@@ -64,6 +64,11 @@ describe('Admin 任务中心与 Dream 忙碌态', () => {
     expect(taskCenterSource).toContain('task-run-progress');
   });
 
+  test('独立观点提炼不会冒充完整 AI 深度整理', () => {
+    expect(taskCenterSource).toContain("if (kind.includes('propose_takes')) return '观点提炼'");
+    expect(taskCenterSource).not.toContain("return 'AI 深度整理 · 观点提炼'");
+  });
+
   test('Dream 阶段执行页在深色主题使用控制台配色', () => {
     expect(adminCss).toContain('html[data-theme="dark"] .dream-page .dream-phase-rail section');
     expect(adminCss).toContain('html[data-theme="dark"] .dream-page .dream-run-mode');
