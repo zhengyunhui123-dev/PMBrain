@@ -195,4 +195,17 @@ describe('collectSyncableFiles symlink + cycle hardening', () => {
       expect(on.map(f => basename(f)).sort()).toEqual(['a.md', 'photo.jpg', 'scan.png']);
     });
   });
+
+  test('10. Office lock and tmp files are not discovered during folder import', async () => {
+    await withEnv({ GBRAIN_EMBEDDING_MULTIMODAL: undefined }, () => {
+      writeFileSync(join(tmp, 'real.pptx'), Buffer.from([0x50, 0x4b, 0x03, 0x04]));
+      writeFileSync(join(tmp, '~$real.pptx'), Buffer.from([0xd0, 0xcf]));
+      writeFileSync(join(tmp, '~WRL0001.tmp'), Buffer.from('tmp'));
+      writeFileSync(join(tmp, 'scratch.tmp'), 'x');
+      writeFileSync(join(tmp, 'notes.md'), 'n\n');
+
+      const files = collectSyncableFiles(tmp, { strategy: 'markdown', includeOffice: true });
+      expect(files.map(f => basename(f)).sort()).toEqual(['notes.md', 'real.pptx']);
+    });
+  });
 });

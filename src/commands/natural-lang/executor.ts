@@ -122,10 +122,11 @@ export interface RunHooks {
   /** Capture a complete JSON stdout result before applying the bounded log tail. */
   captureJsonResult?: boolean;
   /**
-   * Kill a child that already printed a terminal JSON result but has not
-   * exited. Packaged PGLite CLI children can hang after a successful embed
-   * JSON because disconnect or leftover handles never return; embed catch-up
-   * also disables the outer run timeout. Default 15s.
+   * Kill a child that already printed a finished-command result but has not
+   * exited. Packaged PGLite CLI children can hang after embed JSON or
+   * `Import complete` because disconnect never returns. Per-file import
+   * imported/failed/skipped JSON is progress, not a finished command.
+   * Default 15s.
    */
   hangAfterResultMs?: number;
 }
@@ -175,11 +176,36 @@ function extractLastJsonObject(text: string): unknown | null {
   return null;
 }
 
+function isImportRunKind(kind?: string): boolean {
+  return kind === 'import_path' || (typeof kind === 'string' && kind.startsWith('import_'));
+}
+
+function isImportSummaryResult(record: Record<string, unknown>): boolean {
+  // Per-file progress always includes `path`. The folder/file command
+  // summary is `{status, imported, skipped, errors, total_files, …}`.
+  if (typeof record.path === 'string') return false;
+  return 'total_files' in record
+    || 'duration_s' in record
+    || (
+      typeof record.imported === 'number'
+      && typeof record.skipped === 'number'
+      && typeof record.errors === 'number'
+    );
+}
+
 function isTerminalResultForRun(record: Record<string, unknown>, kind?: string): boolean {
-  if (!kind?.startsWith('dream_')) return true;
-  // Dream may run import/embed internally. Their own terminal summaries are
-  // intermediate results; only the root CycleReport completes the Dream run.
-  return typeof record.schema_version === 'string' && Array.isArray(record.phases);
+  if (kind?.startsWith('dream_')) {
+    // Dream may run import/embed internally. Their own terminal summaries are
+    // intermediate results; only the root CycleReport completes the Dream run.
+    return typeof record.schema_version === 'string' && Array.isArray(record.phases);
+  }
+  if (isImportRunKind(kind)) {
+    // Folder import prints one imported/failed/skipped JSON per file. Those
+    // are progress events; only Import complete / the final summary may arm
+    // the hung-process watchdog.
+    return isImportSummaryResult(record);
+  }
+  return true;
 }
 
 /** Detect a finished CLI JSON result on stdout or stderr, ignoring progress events. */

@@ -89,6 +89,9 @@ describe('生成式模型全局开关', () => {
     expect(dreamCli).toContain('assertDreamPresetAllowGenerative');
     expect(settingsUi).toContain('普通模型调用');
     expect(settingsUi).toContain('允许 PMBrain 调用普通模型');
+    expect(settingsUi).toContain('默认开启');
+    expect(settingsUi).not.toContain('新用户默认关闭');
+    expect(settingsUi).not.toContain('即使已配置普通模型，也需主动打开');
     expect(settingsUi).not.toContain('「发送」的 AI 意图识别与综合回答需要普通模型');
     expect(dreamUi).toContain('AI 深度整理');
     expect(dreamUi).toContain('AI 会议整理');

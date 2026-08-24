@@ -185,11 +185,20 @@ export function isOfficeFilePath(path: string): boolean {
   return false;
 }
 
+/** Office lock/owner files (`~$…`) and `.tmp` scratch files are not documents. */
+export function isOfficeTransientFile(path: string): boolean {
+  const normalized = path.replace(/\\/g, '/');
+  const base = normalized.slice(normalized.lastIndexOf('/') + 1);
+  if (!base) return false;
+  return base.startsWith('~$') || base.toLowerCase().endsWith('.tmp');
+}
+
 function isMultimodalEnabled(): boolean {
   return process.env.GBRAIN_EMBEDDING_MULTIMODAL === 'true';
 }
 
 function isAllowedByStrategy(path: string, strategy: SyncStrategy, includeOffice = false): boolean {
+  if (isOfficeTransientFile(path)) return false;
   const officeAllowed = includeOffice && isOfficeFilePath(path);
   if (strategy === 'markdown') return isMarkdownFilePath(path) || officeAllowed;
   if (strategy === 'code') return isCodeFilePath(path);

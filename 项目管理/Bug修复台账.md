@@ -1,5 +1,14 @@
 # Bug 修复台账
 
+## 2026-08-24 PMBrain 1.2.98 文件夹导入不再把单文件失败当成整次任务终态
+
+- 时间：2026-08-24
+- 版本号：PMBrain 1.2.98；PMBrain Desktop 1.1.44（桌面端未改动）
+- 标题：Office 临时文件不参与导入；单文件 JSON 不再触发 15 秒强杀
+- 描述：文件夹导入会把 `~$`、`.tmp` 这类 Office 锁文件/临时文件算进发现数量，解析失败后再计入失败。同时 Admin 父进程把单文件 `[pmbrain import-file] {"status":"failed"}` / `imported` 误当成整个 import 命令的最终结果，15 秒后强杀仍在处理后续文件的子进程。现统一在发现阶段跳过这类临时文件，不计入发现、失败和任务成功状态；只有 `Import complete` 或带 `total_files` 的最终汇总才允许启动“进程不退出”看门狗。未修改用户知识、向量、数据库、Wiki、原始资料或配置。
+- 是否完成：是
+- 最终结果：失败优先测试已复现单文件 `failed` JSON 会提前强杀文件夹导入；修复后该 JSON 只作为进度，子进程能继续打出后续文件结果和 `Import complete`。Office `~$` / `.tmp` 不再被文件夹 walker 发现。执行器钩子、导入摘要、walker、Office 导入、isSyncable 与版本契约定向测试 143/143 通过，根项目 TypeScript 与版本同步通过。未执行 `bun run build:win`，未对用户知识库发起真实导入；GitHub CI 由当前 PR 复验。
+
 ## 2026-08-24 PMBrain 1.2.97 恢复 AI 深度整理完整 Dream 语义
 
 - 时间：2026-08-24

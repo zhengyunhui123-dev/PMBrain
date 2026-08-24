@@ -138,6 +138,29 @@ describe('natural language child-process hooks', () => {
     )).toEqual({ status: 'partial' });
   });
 
+  test('treats per-file import JSON as progress, not the finished import command', () => {
+    expect(parseTerminalChildResult(
+      '[pmbrain import-file] {"status":"imported","path":"a.pptx","chunks":1}\n',
+      'import_path',
+    )).toBeNull();
+    expect(parseTerminalChildResult(
+      '[pmbrain import-file] {"status":"failed","path":"~$a.pptx","reason":"Can\'t find end of central directory"}\n',
+      'import_path',
+    )).toBeNull();
+    expect(parseTerminalChildResult(
+      '[pmbrain import-file] {"status":"unchanged","path":"same.md"}\n',
+      'import_path',
+    )).toBeNull();
+    expect(parseTerminalChildResult(
+      'Import complete (0.4s):\n  1 pages imported\n',
+      'import_path',
+    )).toEqual({ status: 'ok' });
+    expect(parseTerminalChildResult(
+      '{"status":"success","imported":1,"skipped":0,"errors":0,"chunks":2,"total_files":2,"duration_s":1.2}\n',
+      'import_path',
+    )).toEqual({ status: 'success' });
+  });
+
   test('force-completes a child that printed success JSON but never exits', async () => {
     // Product check: the packaged embed catch-up command already printed
     // {"status":"ok"} while the process stayed alive, so Admin kept showing
@@ -177,13 +200,13 @@ describe('natural language child-process hooks', () => {
     expect(run.stderr).toContain('force-killing');
   });
 
-  test('force-completes a hanging import child after stderr reports imported', async () => {
+  test('does not treat per-file import JSON as a finished import command', async () => {
     const run = await startRun(
       'import_path',
       [
         process.execPath,
         '-e',
-        'process.stderr.write("[pmbrain import-file] {\\"status\\":\\"imported\\",\\"chunks\\":1}\\n"); setInterval(() => {}, 1000);',
+        'process.stderr.write("[pmbrain import-file] {\\"status\\":\\"imported\\",\\"path\\":\\"a.md\\",\\"chunks\\":1}\\n"); setTimeout(() => { process.stdout.write("Import complete (0.1s)\\nSTILL_RUNNING_THEN_DONE\\n"); process.exit(0); }, 180);',
       ],
       process.cwd(),
       { hangAfterResultMs: 80 },
@@ -191,7 +214,37 @@ describe('natural language child-process hooks', () => {
 
     await waitFor(() => run.status !== 'running', 5_000);
     expect(run.status).toBe('completed');
-    expect(run.stderr).toContain('force-killing');
+    expect(run.stdout).toContain('STILL_RUNNING_THEN_DONE');
+    expect(run.stderr).not.toContain('force-killing');
+  });
+
+  test('does not kill a folder import after a per-file failed JSON', async () => {
+    const run = await startRun(
+      'import_path',
+      [
+        process.execPath,
+        '-e',
+        [
+          'process.stderr.write("[pmbrain import-file] {\\"status\\":\\"imported\\",\\"path\\":\\"a.pptx\\"}\\n");',
+          'process.stderr.write("[pmbrain import-file] {\\"status\\":\\"failed\\",\\"path\\":\\"~$a.pptx\\",\\"reason\\":\\"zip\\"}\\n");',
+          'setTimeout(() => {',
+          '  process.stderr.write("[pmbrain import-file] {\\"status\\":\\"imported\\",\\"path\\":\\"b.docx\\"}\\n");',
+          '  process.stdout.write("Import complete (1.2s):\\n  2 pages imported\\nMORE_AFTER_COMPLETE\\n");',
+          '  process.exit(0);',
+          '}, 180);',
+        ].join(''),
+      ],
+      process.cwd(),
+      { hangAfterResultMs: 80 },
+    );
+
+    await Bun.sleep(120);
+    expect(run.status).toBe('running');
+    expect(run.stderr).not.toContain('force-killing');
+    await waitFor(() => run.status !== 'running', 5_000);
+    expect(run.status).toBe('completed');
+    expect(run.stdout).toContain('MORE_AFTER_COMPLETE');
+    expect(run.stderr).not.toContain('force-killing');
   });
 
   test('force-completes a hanging import child after the human Import complete line', async () => {
