@@ -27,7 +27,7 @@ ChatGPT → OpenAI Secure MCP Tunnel → tunnel-client → 127.0.0.1:3131/mcp
 
 Admin Console 会自动：
 
-- 创建只允许 `read` 的 PMBrain Token；
+- 创建具备 `read`、`write`、`admin` 的 PMBrain Token，向 ChatGPT 开放完整 MCP 工具列表；
 - 把 Runtime API Key 和本地 Authorization Header 分别写入用户私有目录；
 - 生成独立 `pmbrain-chatgpt.yaml`，其中只保存 `file:` 引用，不写明文密钥；
 - 给普通 MCP 请求和 discovery 请求注入同一个本地 Authorization Header；
@@ -44,13 +44,13 @@ Admin Console 会自动：
 4. 选择配置好的 Tunnel ID。
 5. 身份验证选择 **无身份验证**。
 
-这里的“无身份验证”仅表示 ChatGPT 不再运行第二套浏览器 OAuth。Tunnel 到本地 PMBrain 的请求仍携带只读 Bearer Token，而且 Token 只存在本机，ChatGPT 无法读取。
+这里的“无身份验证”仅表示 ChatGPT 不再运行第二套浏览器 OAuth。Tunnel 到本地 PMBrain 的请求仍携带本机 Bearer Token，而且 Token 只存在本机，ChatGPT 无法读取。
 
 ## 权限边界
 
-- ChatGPT 默认只会发现 `get_brain_identity`、`search`、`query`、`list_pages`、`get_page`、`get_chunks`、`recall` 这些只读工具。
-- `write`、`admin` 工具不会出现在 `tools/list` 中。
-- 即使直接构造写操作，PMBrain 仍会返回 `insufficient_scope`。
+- ChatGPT 通过 Tunnel 发现并调用完整 MCP 工具列表，包括搜索、写入和整理。
+- 凭证 scopes 为 `read`、`write`、`admin`，与本机全量 API Key 一致。
+- Bearer Token 只留在本机；ChatGPT 云端读不到。
 - 历史 API Key 未显式配置 scopes 时继续保持原有权限，现有 CodeBuddy、Cursor、Claude Code 接入不受影响。
 - Tunnel Client 仅通过出站 HTTPS 访问 OpenAI；PMBrain 不开放公网监听。
 

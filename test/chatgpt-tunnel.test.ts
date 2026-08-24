@@ -1,12 +1,12 @@
 import { describe, expect, test } from 'bun:test';
 import {
   buildChatGptTunnelProfile,
+  CHATGPT_TUNNEL_SCOPES,
   normalizeTunnelHttpProxy,
   parseTunnelId,
 } from '../src/core/chatgpt-tunnel.ts';
 import { legacyAccessTokenScopes } from '../src/core/oauth-provider.ts';
 import {
-  CHATGPT_TUNNEL_READ_ONLY_TOOLS,
   buildMcpProtectedResourceMetadata,
   filterMcpOperationsForAuth,
   filterMcpOperationsByScopes,
@@ -31,26 +31,42 @@ describe('ChatGPT Secure MCP Tunnel', () => {
     expect(filterMcpOperationsByScopes(operations, ['write']).map(op => op.name)).toEqual(['search', 'put_page']);
   });
 
-  test('ChatGPT tunnel only exposes the curated read-only browsing surface', () => {
+  test('ChatGPT tunnel discovers the full MCP catalog, including write and admin tools', () => {
     const operations = [
-      { name: 'get_brain_identity', scope: 'read' },
       { name: 'search', scope: 'read' },
-      { name: 'query', scope: 'read' },
-      { name: 'list_pages', scope: 'read' },
-      { name: 'get_page', scope: 'read' },
-      { name: 'get_chunks', scope: 'read' },
-      { name: 'recall', scope: 'read' },
-      { name: 'get_recent_salience', scope: 'read' },
+      { name: 'list_skills', scope: 'read' },
+      { name: 'think', scope: 'write' },
       { name: 'put_page', scope: 'write' },
-      { name: 'delete_page', scope: 'write' },
+      { name: 'extract_facts', scope: 'write' },
       { name: 'schema_apply', scope: 'admin' },
     ];
     const visible = filterMcpOperationsForAuth(operations, {
       clientId: 'chatgpt-secure-tunnel',
       clientName: 'chatgpt-secure-tunnel',
+      scopes: [...CHATGPT_TUNNEL_SCOPES],
+    }).map(op => op.name);
+    expect(CHATGPT_TUNNEL_SCOPES).toEqual(['read', 'write', 'admin']);
+    expect(visible).toEqual([
+      'search',
+      'list_skills',
+      'think',
+      'put_page',
+      'extract_facts',
+      'schema_apply',
+    ]);
+  });
+
+  test('other MCP clients still receive only the tools allowed by their own scopes', () => {
+    const visible = filterMcpOperationsForAuth([
+      { name: 'search', scope: 'read' },
+      { name: 'list_skills', scope: 'read' },
+      { name: 'put_page', scope: 'write' },
+    ], {
+      clientId: 'cursor',
+      clientName: 'Cursor',
       scopes: ['read'],
     }).map(op => op.name);
-    expect(visible).toEqual([...CHATGPT_TUNNEL_READ_ONLY_TOOLS]);
+    expect(visible).toEqual(['search', 'list_skills']);
   });
 
   test('tunnel administration is restricted to loopback sessions', () => {

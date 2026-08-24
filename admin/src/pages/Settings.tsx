@@ -159,7 +159,7 @@ function GenerativeModelSettings() {
       <label className="dream-schedule-toggle" htmlFor="generative-model-enabled">
         <span>
           <b>允许 PMBrain 调用普通模型</b>
-          <small>新用户默认关闭。即使已配置普通模型，也需主动打开。</small>
+          <small>默认开启。配置普通模型后即可用于 AI 搜索和知识整理，不需要时可关闭。</small>
         </span>
         <input
           id="generative-model-enabled"

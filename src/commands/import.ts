@@ -12,6 +12,7 @@ import {
   isCodeFilePath,
   isMarkdownFilePath,
   isImageFilePath as isImageFilePathFromSync,
+  isOfficeTransientFile,
   type SyncStrategy,
 } from '../core/sync.ts';
 import { sortNewestFirst } from '../core/sort-newest-first.ts';
@@ -268,6 +269,11 @@ export async function runImport(
 
   async function processFile(eng: BrainEngine, filePath: string) {
     const relativePath = relative(importRoot, filePath);
+    if (isOfficeTransientFile(filePath) || isOfficeTransientFile(relativePath)) {
+      processed++;
+      tickProgress();
+      return;
+    }
     // v0.31.2 (D5): per-file slow-path log. Fires only when a single
     // file takes >5s. The user's hang surfaces as one file taking
     // forever — without this, the agent can't see which file.
@@ -583,6 +589,7 @@ function isCollectibleForWalker(
   multimodalOn: boolean,
   includeOffice: boolean,
 ): boolean {
+  if (isOfficeTransientFile(path)) return false;
   const officeAllowed = includeOffice && isOfficeFilePath(path);
   switch (strategy) {
     case 'code':

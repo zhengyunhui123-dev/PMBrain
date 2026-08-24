@@ -8,6 +8,9 @@ export const CHATGPT_TUNNEL_PROFILE_NAME = 'pmbrain-chatgpt';
 export const CHATGPT_TUNNEL_HEALTH_URL = 'http://127.0.0.1:8080';
 export const CHATGPT_TUNNEL_TOKEN_NAME = 'chatgpt-secure-tunnel';
 
+/** ChatGPT tunnel uses the same full catalog as a local full-access API key. */
+export const CHATGPT_TUNNEL_SCOPES = Object.freeze(['read', 'write', 'admin'] as const);
+
 export interface ChatGptTunnelPaths {
   integrationDir: string;
   runtimeKeyFile: string;

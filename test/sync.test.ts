@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeAll, afterAll, beforeEach, afterEach } from 'bun:test';
-import { buildSyncManifest, isSyncable, pathToSlug, pruneDir, isCodeFilePath, isOfficeFilePath } from '../src/core/sync.ts';
+import { buildSyncManifest, isSyncable, pathToSlug, pruneDir, isCodeFilePath, isOfficeFilePath, isOfficeTransientFile } from '../src/core/sync.ts';
 import { buildAutoEmbedArgs, buildGitInvocation } from '../src/commands/sync.ts';
 import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from 'fs';
 import { join } from 'path';
@@ -85,6 +85,17 @@ describe('isSyncable', () => {
     expect(isSyncable('docs/sheet.xlsx', { includeOffice: true })).toBe(true);
     expect(isSyncable('docs/sheet.xls', { includeOffice: true })).toBe(true);
     expect(isSyncable('docs/slides.pptx', { includeOffice: true })).toBe(true);
+  });
+
+  test('rejects Office lock and tmp files even when includeOffice is enabled', () => {
+    expect(isOfficeTransientFile('docs/~$proposal.docx')).toBe(true);
+    expect(isOfficeTransientFile('E:\\dir\\~$slides.pptx')).toBe(true);
+    expect(isOfficeTransientFile('docs/~WRL0001.tmp')).toBe(true);
+    expect(isOfficeTransientFile('scratch.TMP')).toBe(true);
+    expect(isOfficeTransientFile('docs/proposal.docx')).toBe(false);
+    expect(isSyncable('docs/~$proposal.docx', { includeOffice: true })).toBe(false);
+    expect(isSyncable('docs/~$slides.pptx', { includeOffice: true })).toBe(false);
+    expect(isSyncable('docs/~WRL0001.tmp', { includeOffice: true })).toBe(false);
   });
 
   test('rejects files in hidden directories', () => {
