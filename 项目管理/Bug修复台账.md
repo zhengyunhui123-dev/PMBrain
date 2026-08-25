@@ -1,5 +1,14 @@
 # Bug 修复台账
 
+## 2026-08-25 PMBrain 1.3.3 修复向量执行改进后的 GitHub Test 过期契约
+
+- 时间：2026-08-25
+- 版本号：PMBrain 1.3.3；PMBrain Desktop 1.1.44（桌面端未改动）
+- 标题：放宽向量执行结构断言，保留实际行为约束
+- 描述：GitHub Actions 的 Test run `32791495750` 中，两个测试仍要求 Cycle 以旧的一行参数形式调用 `runEmbedCore`，另一个测试要求 `embedding-execution-profile` 只能导入单个符号；1.3.2 增加页数限制、进度回调和提供方执行配置后，产品行为正确但这些源码文本断言误报失败。现让测试接受同一调用中的新增选项及同模块的其他命名导入，同时继续约束 `stale`、`dryRun`、`sourceId`、共享执行池和禁止旧滑动池等关键行为。未修改向量化、Dream、PGLite/PostgreSQL、Admin 或桌面端产品逻辑，未修改用户知识、向量、数据库、Wiki、原始资料或配置。
+- 是否完成：是
+- 最终结果：GitHub 失败对应的 3 个测试修复后定向回归 20/20 通过；项目统一校验 39/39、GitHub Test 本地预演 227/227 通过。Windows Git Bash 完整串行套件仅有 `takes-mcp-allowlist.serial.test.ts` 的 2 个“无 LLM”断言因本机存在可用模型配置而失败，该文件在目标 GitHub run 中通过，不属于本次 CI 红项。当前提交的 GitHub Actions 由推送后复验。未执行 `bun run build:win`，未对用户知识库执行向量化或整理。
+
 ## 2026-08-24 PMBrain 1.3.2 修复本地向量计算完成却未落库
 
 - 时间：2026-08-24

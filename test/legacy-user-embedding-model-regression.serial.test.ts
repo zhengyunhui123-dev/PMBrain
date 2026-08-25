@@ -100,7 +100,9 @@ describe('老用户回归矩阵 · 向量模型 / embed --stale', () => {
     expect(cli).not.toContain('repairLegacyZeroEntropyLabels(engine, configuredEmbeddingModel)');
     expect(embed).toContain('repairLegacyZeroEntropyLabels(engine, configuredModel)');
     expect(embed).not.toContain('invalidateMismatchedEmbeddingModels(engine, getEmbeddingModel())');
-    expect(cycle).toContain('runEmbedCore(engine, { stale: true, dryRun, sourceId })');
+    expect(cycle).toMatch(
+      /runEmbedCore\(engine,\s*\{\s*stale:\s*true,\s*dryRun,\s*sourceId,[\s\S]*?\}\);/,
+    );
     expect(embed).toContain('Dream、同步或普通向量补全时自动清空已有向量');
   });
 

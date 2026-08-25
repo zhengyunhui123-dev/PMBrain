@@ -20,7 +20,7 @@ const PROFILE_SOURCE = readFileSync(
 describe('embed.ts provider-aware execution pool', () => {
   test('routes both full and stale embedding through the shared profile pool', () => {
     expect(EMBED_SOURCE).toMatch(
-      /import\s*\{\s*runEmbeddingExecutionPool\s*\}\s*from\s*['"]\.\.\/core\/ai\/embedding-execution-profile\.ts['"]/,
+      /import\s*\{[^}]*\brunEmbeddingExecutionPool\b[^}]*\}\s*from\s*['"]\.\.\/core\/ai\/embedding-execution-profile\.ts['"]/,
     );
     expect(EMBED_SOURCE.match(/runEmbeddingExecutionPool\(/g) ?? []).toHaveLength(2);
     expect(EMBED_SOURCE).not.toContain('runSlidingPool(');
