@@ -7,7 +7,7 @@
 - 标题：PGlite 中文检索接入 pg_trgm 分字段候选召回
 - 描述：PGlite 已安装 pg_trgm 且 title 已有 trigram GIN，但中文 fallback 对 chunk_text、compiled_truth、title、slug 做四列 JOIN + OR + ILIKE 全表候选与实时排名，2 万 chunks 下可超过 WorkBuddy 60 秒调用上限。现为 chunk_text、compiled_truth、slug 补齐 PGlite 专用 trigram GIN 索引，并将四字段分别走索引、合并有上限的候选后再执行既有评分、去重和 hybrid/RRF；不引入单字/双字 token 表，不改 PostgreSQL 的 v109 索引检索路径。WorkBuddy Agent Pack 与远程 MCP 已有“首次 expand=false、结果不足再升级”的保护，经回归确认后保持不变。未修改用户知识、向量、数据库内容、Wiki、原始资料或配置。
 - 是否完成：是
-- 最终结果：失败优先测试覆盖旧库迁移、新库索引、四字段独立召回、原排序/ASCII 回归和 WorkBuddy expand 策略；隔离 2 万 chunks PGlite 基准中，未索引旧查询约 306ms，仅加索引仍用四列 OR 约 507ms，分字段索引候选约 17ms，EXPLAIN 命中 idx_chunks_text_trgm。核心迁移、PGlite/PostgreSQL 路径、WorkBuddy 与版本定向回归 177/177 通过，根项目 TypeScript、统一校验 39/39、GitHub Test 本地预演 227/227 通过。Docker Desktop 未运行，因此 PostgreSQL 真库 schema-drift E2E 跳过；PostgreSQL schema/engine 未改且迁移 117 明确为空操作，后续由 GitHub CI 复验。未执行 bun run build:win，未连接或迁移用户知识库。
+- 最终结果：失败优先测试覆盖旧库迁移、新库索引、四字段独立召回、原排序/ASCII 回归和 WorkBuddy expand 策略；隔离 2 万 chunks PGlite 基准中，未索引旧查询约 306ms，仅加索引仍用四列 OR 约 507ms，分字段索引候选约 17ms，EXPLAIN 命中 idx_chunks_text_trgm。核心迁移、PGlite/PostgreSQL 路径、WorkBuddy 与版本定向回归 177/177 通过，根项目 TypeScript、统一校验 39/39、GitHub Test 本地预演 227/227 通过。本机 Docker Desktop 未运行，故本地 PostgreSQL 真库 schema-drift E2E 跳过；PR #65 的 GitHub PostgreSQL E2E、Heavy、Windows Desktop、serial-tests、10 个 Test 分片及全部汇总门禁均通过。未执行 bun run build:win，未连接或迁移用户知识库。
 
 ## 2026-08-25 PMBrain 1.3.3 修复向量执行改进后的 GitHub Test 过期契约
 
