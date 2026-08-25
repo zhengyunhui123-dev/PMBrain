@@ -109,7 +109,7 @@ async function phaseBBackfill(
     // backfill phase (the upserts already succeeded).
     if (result.failedFiles && result.failedFiles.length > 0) {
       try {
-        const { recordSyncFailures } = await import('../../core/sync.ts');
+        const { recordSyncFailures } = await import('../../core/sync-failure-ledger.ts');
         // Migration runs against the brain DB, not necessarily a checkout.
         // Use 'migration:v0.28.0-backfill' as the commit sentinel so the
         // dedup key separates these from regular sync-failures and a future

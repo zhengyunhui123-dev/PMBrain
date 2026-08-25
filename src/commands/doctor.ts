@@ -3599,7 +3599,7 @@ export async function buildChecks(
   // Without this doctor check, users see "sync blocked" and have no
   // surface showing which files to fix.
   try {
-    const { unacknowledgedSyncFailures, loadSyncFailures, summarizeFailuresByCode } = await import('../core/sync.ts');
+    const { unacknowledgedSyncFailures, loadSyncFailures, summarizeFailuresByCode } = await import('../core/sync-failure-ledger.ts');
     const unacked = unacknowledgedSyncFailures();
     const all = loadSyncFailures();
     if (unacked.length > 0) {

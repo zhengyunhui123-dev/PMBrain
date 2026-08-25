@@ -1,5 +1,14 @@
 # Bug 修复台账
 
+## 2026-08-25 PMBrain 1.3.5 快速维护统一为 Git 已提交基线
+
+- 时间：2026-08-25
+- 版本号：PMBrain 1.3.5；PMBrain Desktop 1.1.44（桌面端未改动）
+- 标题：Full/增量同步隔离未提交内容并恢复失败账本与断点续跑
+- 描述：默认快速维护的增量与 Full Sync 均以当前 Git HEAD 为唯一内容基线；未提交修改、新文件和删除只计数提示，不再写入数据库。知识整理设置新增“包含未提交内容”显式开关，默认关闭。按本地原版 GBrain 的 working-tree、source-scoped failure ledger 和数据库 op checkpoint 机制，固定坏文件前两次失败阻止锚点，第三次同类失败自动跳过且继续由健康检查展示；数据库、Embedding 和 Git 结构性错误始终禁止自动跳过。长同步按 Source、仓库、起止 commit 和参数保存独立断点，成功文件可续跑，`last_commit` 仍只在整轮允许完成后推进。未自动提交 Git，未修改用户知识、向量、数据库、Wiki、原始资料或现有配置。
+- 是否完成：进行中
+- 最终结果：实现与验证进行中；不会执行 `bun run build:win`，不会连接用户知识库。
+
 ## 2026-08-25 PMBrain 1.3.4 修复 PGlite 中文 query/search 超时
 
 - 时间：2026-08-25
