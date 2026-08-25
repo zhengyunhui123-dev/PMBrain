@@ -46,6 +46,7 @@ const { runEmbed } = await import('../src/commands/embed.ts');
 // the gateway embed transport seam so diagnoseEmbedding's fast-path
 // flags the preflight as ok without touching real env vars.
 const { __setEmbedTransportForTests } = await import('../src/core/ai/gateway.ts');
+const { __resetEmbeddingExecutionProfilesForTests } = await import('../src/core/ai/embedding-execution-profile.ts');
 __setEmbedTransportForTests(async () => ({ embeddings: [], usage: { tokens: 0 } } as any));
 
 let embeddingConfigHome: string;
@@ -89,6 +90,7 @@ function mockEngine(overrides: Partial<Record<string, any>> = {}): BrainEngine {
 }
 
 beforeEach(() => {
+  __resetEmbeddingExecutionProfilesForTests();
   activeEmbedCalls = 0;
   maxConcurrentEmbedCalls = 0;
   totalEmbedCalls = 0;
@@ -428,13 +430,13 @@ describe('runEmbedCore --stale egress fix (SQL-side filter)', () => {
         { chunk_index: 2, chunk_text: 'z', chunk_source: 'compiled_truth', embedded_at: null, token_count: 1 },
       ],
     };
-    const upsertCalls: Array<{ slug: string; chunks: any[] }> = [];
+    const upsertCalls: Array<{ slug: string; chunks: any[]; opts: Record<string, unknown> }> = [];
     const engine = mockEngine({
       countStaleChunks: async () => 3,
       listStaleChunks: async () => stale,
       listPages: async () => { listPagesCalled = true; return []; },
       getChunks: async (slug: string) => fullChunks[slug] || [],
-      upsertChunks: async (slug: string, chunks: any[]) => { upsertCalls.push({ slug, chunks }); },
+      upsertChunks: async (slug: string, chunks: any[], opts: Record<string, unknown>) => { upsertCalls.push({ slug, chunks, opts }); },
     });
 
     const result = await runEmbedCore(engine, { stale: true });
@@ -446,14 +448,13 @@ describe('runEmbedCore --stale egress fix (SQL-side filter)', () => {
     expect(result.embedded).toBe(3);
     expect(result.pages_processed).toBe(2);
 
-    // page-b's upsert MUST include the fresh chunk (chunk_index=0) — otherwise
-    // it would be deleted by the upsertChunks != ALL filter. Critical regression check.
+    // Checkpoint writes contain only stale rows and MUST use merge-only mode,
+    // so page-b's already-fresh chunk cannot be deleted by the engine.
     const pageBUpsert = upsertCalls.find(u => u.slug === 'page-b');
     expect(pageBUpsert).toBeDefined();
     const freshChunkInUpsert = pageBUpsert!.chunks.find((c: any) => c.chunk_index === 0);
-    expect(freshChunkInUpsert).toBeDefined();
-    // Fresh chunk has no `embedding` field (preserved via COALESCE in upsertChunks SQL).
-    expect(freshChunkInUpsert.embedding).toBeUndefined();
+    expect(freshChunkInUpsert).toBeUndefined();
+    expect(pageBUpsert!.opts).toMatchObject({ replaceExisting: false, sourceId: 'default' });
     // Previously-stale chunks come through WITH a new embedding.
     const staleChunkInUpsert = pageBUpsert!.chunks.find((c: any) => c.chunk_index === 1);
     expect(staleChunkInUpsert.embedding).toBeDefined();
@@ -707,6 +708,104 @@ describe('runEmbed CLI flag wiring (--stale --source)', () => {
 });
 
 describe('embedAllStale wall-clock budget end-to-end (D3 + D3a)', () => {
+  test('Dream page limit leaves later pages stale for a later invocation', async () => {
+    const { runEmbedCore } = await import('../src/commands/embed.ts');
+    const stale = [
+      { slug: 'page-a', chunk_index: 0, chunk_text: 'a', chunk_source: 'compiled_truth' as const, model: null, token_count: 1, source_id: 'default', page_id: 1 },
+      { slug: 'page-b', chunk_index: 0, chunk_text: 'b', chunk_source: 'compiled_truth' as const, model: null, token_count: 1, source_id: 'default', page_id: 2 },
+    ];
+    const writtenSlugs: string[] = [];
+    const engine = mockEngine({
+      countStaleChunks: async () => stale.length,
+      listStaleChunks: async () => stale,
+      getChunks: async (slug: string) => stale.filter(row => row.slug === slug).map(row => ({ ...row, embedded_at: null })),
+      upsertChunks: async (slug: string) => { writtenSlugs.push(slug); },
+    });
+
+    const result = await runEmbedCore(engine, { stale: true, pageLimit: 1 });
+
+    expect(writtenSlugs).toEqual(['page-a']);
+    expect(result.embedded).toBe(1);
+    expect(result.pages_processed).toBe(1);
+  });
+
+  test('local embedding checkpoints each provider-sized batch instead of waiting for the whole page', async () => {
+    const { runEmbedCore } = await import('../src/commands/embed.ts');
+    const stale = Array.from({ length: 20 }, (_, chunk_index) => ({
+      slug: 'large-local-page',
+      chunk_index,
+      chunk_text: `chunk ${chunk_index}`,
+      chunk_source: 'compiled_truth' as const,
+      model: null,
+      token_count: 2,
+      source_id: 'default',
+      page_id: 1,
+    }));
+    const writes: Array<{ chunks: Array<{ chunk_index: number }>; opts: Record<string, unknown> }> = [];
+    const engine = mockEngine({
+      countStaleChunks: async () => stale.length,
+      listStaleChunks: async () => stale,
+      getChunks: async () => stale.map(row => ({ ...row, embedded_at: null })),
+      upsertChunks: async (_slug: string, chunks: Array<{ chunk_index: number }>, opts: Record<string, unknown>) => {
+        writes.push({ chunks, opts });
+      },
+    });
+
+    const result = await runEmbedCore(engine, { stale: true });
+
+    expect(result.embedded).toBe(20);
+    expect(totalEmbedCalls).toBe(2); // Ollama profile: 12 + 8 items.
+    expect(writes.map(write => write.chunks.length)).toEqual([12, 8]);
+    expect(writes.every(write => write.opts.replaceExisting === false)).toBe(true);
+  });
+
+  test('budget abort keeps completed local batches and reports a partial run', async () => {
+    const { runEmbedCore } = await import('../src/commands/embed.ts');
+    process.env.GBRAIN_EMBED_TIME_BUDGET_MS = '80';
+    process.env.GBRAIN_EMBED_CONCURRENCY = '1';
+    const stale = Array.from({ length: 20 }, (_, chunk_index) => ({
+      slug: 'large-local-page',
+      chunk_index,
+      chunk_text: `chunk ${chunk_index}`,
+      chunk_source: 'compiled_truth' as const,
+      model: null,
+      token_count: 2,
+      source_id: 'default',
+      page_id: 1,
+    }));
+    const committed: number[] = [];
+    embedBatchBehavior = async (texts, rawOpts) => {
+      if (texts.length <= 12 && totalEmbedCalls === 1) {
+        return texts.map(() => new Float32Array(1536));
+      }
+      const signal = (rawOpts as { abortSignal?: AbortSignal } | undefined)?.abortSignal;
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(resolve, 5_000);
+        signal?.addEventListener('abort', () => {
+          clearTimeout(timer);
+          reject(new Error('embed budget aborted'));
+        }, { once: true });
+      });
+      return texts.map(() => new Float32Array(1536));
+    };
+    const engine = mockEngine({
+      countStaleChunks: async () => stale.length,
+      listStaleChunks: async () => stale,
+      getChunks: async () => stale.map(row => ({ ...row, embedded_at: null })),
+      upsertChunks: async (_slug: string, chunks: Array<{ chunk_index: number }>) => {
+        committed.push(...chunks.map(chunk => chunk.chunk_index));
+      },
+    });
+
+    const result = await runEmbedCore(engine, { stale: true });
+
+    expect(committed).toEqual(Array.from({ length: 12 }, (_, i) => i));
+    expect(result.embedded).toBe(12);
+    expect(result.budgetExceeded).toBe(true);
+    expect(result.remainingChunks).toBe(8);
+    expect(result.status).toBe('partial');
+  });
+
   test('GBRAIN_EMBED_TIME_BUDGET_MS=N cuts the outer loop short on stuck workers', async () => {
     const { runEmbedCore } = await import('../src/commands/embed.ts');
     // Tiny budget: 100ms. Each embed call sleeps 50ms; with budget + multiple

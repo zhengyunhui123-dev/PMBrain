@@ -12,7 +12,10 @@ import {
 import { slog, serr } from '../core/console-prefix.ts';
 import { filterOutEmbedSkipped } from '../core/embed-skip.ts';
 import { getEmbeddingModel } from '../core/ai/gateway.ts';
-import { runEmbeddingExecutionPool } from '../core/ai/embedding-execution-profile.ts';
+import {
+  getEmbeddingExecutionProfile,
+  runEmbeddingExecutionPool,
+} from '../core/ai/embedding-execution-profile.ts';
 import { splitProviderModelId } from '../core/model-id.ts';
 import { repairLegacyZeroEntropyLabels } from '../core/embedding-dimension-alignment.ts';
 
@@ -67,6 +70,8 @@ export interface EmbedOpts {
    * remediation submits on big stale backlogs.
    */
   catchUp?: boolean;
+  /** Limit distinct stale pages handled by this invocation. */
+  pageLimit?: number;
 }
 
 /**
@@ -92,6 +97,12 @@ export interface EmbedResult {
   failedPages: number;
   /** Chunks left without a newly requested embedding because their page failed. */
   failedChunks: number;
+  /** Provider-sized batches durably written during this run. */
+  committedBatches: number;
+  /** True when the stale-embedding wall-clock budget stopped the run. */
+  budgetExceeded: boolean;
+  /** Stale chunks still requiring a later run after a budget stop. */
+  remainingChunks: number;
   /** Real execution outcome; failures can no longer look clean. */
   status: 'clean' | 'ok' | 'partial' | 'failed';
   /** True if this run was a dry-run. */
@@ -99,7 +110,9 @@ export interface EmbedResult {
 }
 
 function finalizeEmbedResult(result: EmbedResult): EmbedResult {
-  if (result.failedPages > 0 || result.failedChunks > 0) {
+  if (result.budgetExceeded) {
+    result.status = 'partial';
+  } else if (result.failedPages > 0 || result.failedChunks > 0) {
     result.status = result.embedded > 0 ? 'partial' : 'failed';
   } else if (result.embedded > 0 || result.would_embed > 0) {
     result.status = 'ok';
@@ -251,6 +264,9 @@ export async function runEmbedCore(engine: BrainEngine, opts: EmbedOpts): Promis
     pages_processed: 0,
     failedPages: 0,
     failedChunks: 0,
+    committedBatches: 0,
+    budgetExceeded: false,
+    remainingChunks: 0,
     status: 'clean',
     dryRun: !!opts.dryRun,
   };
@@ -272,6 +288,7 @@ export async function runEmbedCore(engine: BrainEngine, opts: EmbedOpts): Promis
       batchSize: opts.batchSize,
       priority: opts.priority,
       catchUp: opts.catchUp,
+      pageLimit: opts.pageLimit,
     });
     return finalizeEmbedResult(result);
   }
@@ -479,6 +496,7 @@ async function embedAll(
     batchSize?: number;
     priority?: 'recent';
     catchUp?: boolean;
+    pageLimit?: number;
   },
 ) {
   const embeddingModel = getEmbeddingModel();
@@ -632,6 +650,7 @@ async function embedAllStale(
     batchSize?: number;
     priority?: 'recent';
     catchUp?: boolean;
+    pageLimit?: number;
   } | undefined,
   embeddingModel: string,
 ) {
@@ -692,6 +711,7 @@ async function embedAllStale(
   let afterUpdatedAt: string | null = null;
   let totalChunksLoaded = 0;
   let budgetExitNotified = false;
+  const selectedPageKeys = new Set<string>();
 
   try {
     // eslint-disable-next-line no-constant-condition
@@ -739,31 +759,80 @@ async function embedAllStale(
         else byKey.set(key, [row]);
       }
 
-      const keys = Array.from(byKey.keys());
-      result.total_chunks += batch.length;
+      const availableKeys = Array.from(byKey.keys());
+      const keys = staleOpts?.pageLimit
+        ? availableKeys.filter((key) => {
+            if (selectedPageKeys.has(key)) return true;
+            if (selectedPageKeys.size >= staleOpts.pageLimit!) return false;
+            selectedPageKeys.add(key);
+            return true;
+          })
+        : availableKeys;
+      if (keys.length === 0) break;
+      result.total_chunks += keys.reduce((sum, key) => sum + byKey.get(key)!.length, 0);
+      const estimatedTotalPages = staleOpts?.pageLimit
+        ? selectedPageKeys.size
+        : Math.ceil(staleCount / PAGE_SIZE) * keys.length;
 
       async function embedOneKey(key: string) {
         const stale = byKey.get(key)!;
         const keySourceId = stale[0]?.source_id ?? 'default';
         const slug = stale[0].slug;
         try {
-          const embeddings = await embedBatchWithBackoff(stale.map(c => c.chunk_text), { abortSignal: budgetSignal });
-          // Re-fetch existing chunks and merge to avoid deleting non-stale chunks.
+          // Fetch the full page once so provider-sized checkpoint writes retain
+          // code metadata and never replace/delete sibling chunks.
           const existing = await engine.getChunks(slug, { sourceId: keySourceId });
-          const staleIdxToEmbedding = new Map<number, Float32Array>();
-          for (let j = 0; j < stale.length; j++) {
-            staleIdxToEmbedding.set(stale[j].chunk_index, embeddings[j]);
+          const existingByIndex = new Map(existing.map(chunk => [chunk.chunk_index, chunk]));
+          let offset = 0;
+          while (offset < stale.length) {
+            if (budgetSignal.aborted) throw new Error('embed budget aborted');
+            // Re-read the adaptive profile between writes. Ollama starts at 12
+            // items and can downshift after a provider timeout.
+            const providerBatchSize = Math.max(1, getEmbeddingExecutionProfile().batchSize);
+            const staleBatch = stale.slice(offset, offset + providerBatchSize);
+            const embeddings = await embedBatchWithBackoff(
+              staleBatch.map(chunk => chunk.chunk_text),
+              { abortSignal: budgetSignal },
+            );
+            const checkpoint: ChunkInput[] = staleBatch.map((row, index) => {
+              const current = existingByIndex.get(row.chunk_index);
+              if (!current) {
+                throw new Error(`Chunk disappeared before embedding checkpoint: ${slug}#${row.chunk_index}`);
+              }
+              return {
+                chunk_index: current.chunk_index,
+                chunk_text: current.chunk_text,
+                chunk_source: current.chunk_source,
+                embedding: embeddings[index],
+                model: embeddingModel,
+                token_count: current.token_count || Math.ceil(current.chunk_text.length / 4),
+                ...(current.language && { language: current.language }),
+                ...(current.symbol_name && { symbol_name: current.symbol_name }),
+                ...(current.symbol_type && { symbol_type: current.symbol_type }),
+                ...(current.start_line != null && { start_line: current.start_line }),
+                ...(current.end_line != null && { end_line: current.end_line }),
+                ...(current.parent_symbol_path && { parent_symbol_path: current.parent_symbol_path }),
+                ...(current.doc_comment && { doc_comment: current.doc_comment }),
+                ...(current.symbol_name_qualified && { symbol_name_qualified: current.symbol_name_qualified }),
+              };
+            });
+            // Merge-only is the existing engine contract shared by PGLite and
+            // PostgreSQL. It updates these rows without pruning page siblings.
+            await engine.upsertChunks(slug, checkpoint, {
+              sourceId: keySourceId,
+              replaceExisting: false,
+              signal: budgetSignal,
+              auditSite: 'upsertChunks',
+            });
+            offset += staleBatch.length;
+            result.embedded += staleBatch.length;
+            result.committedBatches++;
+            onProgress?.(
+              totalProcessedPages,
+              estimatedTotalPages,
+              result.embedded,
+            );
           }
-          const merged: ChunkInput[] = existing.map(c => ({
-            chunk_index: c.chunk_index,
-            chunk_text: c.chunk_text,
-            chunk_source: c.chunk_source,
-            embedding: staleIdxToEmbedding.get(c.chunk_index) ?? undefined,
-            model: embeddingModel,
-            token_count: c.token_count || Math.ceil(c.chunk_text.length / 4),
-          }));
-          await engine.upsertChunks(slug, merged, { sourceId: keySourceId });
-          result.embedded += stale.length;
         } catch (e: unknown) {
           // Budget-fired aborts are expected on the way out; don't spam
           // per-page "Error embedding" lines when we're shutting down.
@@ -776,7 +845,7 @@ async function embedAllStale(
         result.pages_processed++;
         // Use staleCount as the estimated total for progress (not exact after
         // pagination starts, but directionally correct).
-        onProgress?.(totalProcessedPages, Math.ceil(staleCount / PAGE_SIZE) * keys.length, result.embedded);
+        onProgress?.(totalProcessedPages, estimatedTotalPages, result.embedded);
       }
 
       // Provider-aware waves re-read concurrency after each wave so a local
@@ -792,11 +861,23 @@ async function embedAllStale(
         },
       });
 
+      // Bounded Dream runs leave later pages stale for the next invocation.
+      // Both supported cursor orders keep rows for one page contiguous.
+      if (staleOpts?.pageLimit && selectedPageKeys.size >= staleOpts.pageLimit) {
+        const lastBatchKey = `${last.source_id}::${last.slug}`;
+        if (batch.length < PAGE_SIZE || !selectedPageKeys.has(lastBatchKey)) break;
+      }
+
       // If we got fewer rows than PAGE_SIZE, we've reached the end.
       if (batch.length < PAGE_SIZE) break;
     }
   } finally {
     if (budgetTimer !== null) clearTimeout(budgetTimer);
+  }
+
+  if (budgetSignal.aborted && budgetMs !== null) {
+    result.budgetExceeded = true;
+    result.remainingChunks = Math.max(0, staleCount - result.embedded);
   }
 
   slog(`Embedded ${result.embedded} chunks across ${totalProcessedPages} pages`);

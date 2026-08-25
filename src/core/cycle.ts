@@ -421,6 +421,8 @@ export interface CycleOpts {
    * batch expensive LLM proposal runs without changing the phase default.
    */
   proposeTakesPageLimit?: number;
+  /** Optional stale-embedding page cap for bounded local-model Dream runs. */
+  embedPageLimit?: number;
   /** Require existing text chunks before propose_takes scans a page. Default true. */
   proposeTakesRequireChunks?: boolean;
   /** Optional upper bound on existing text chunk count for propose_takes. */
@@ -1219,7 +1221,13 @@ async function runPhaseResolveSymbolEdges(
   }
 }
 
-async function runPhaseEmbed(engine: BrainEngine, dryRun: boolean, sourceId?: string): Promise<PhaseResult> {
+async function runPhaseEmbed(
+  engine: BrainEngine,
+  dryRun: boolean,
+  sourceId?: string,
+  pageLimit?: number,
+  reporter?: ProgressReporter,
+): Promise<PhaseResult> {
   try {
     const { loadConfig } = await import('./config.ts');
     const cfg = loadConfig();
@@ -1243,7 +1251,17 @@ async function runPhaseEmbed(engine: BrainEngine, dryRun: boolean, sourceId?: st
       };
     }
     const { runEmbedCore } = await import('../commands/embed.ts');
-    const result = await runEmbedCore(engine, { stale: true, dryRun, sourceId });
+    const result = await runEmbedCore(engine, {
+      stale: true,
+      dryRun,
+      sourceId,
+      pageLimit,
+      onProgress: (done, total, embedded) => {
+        const safeTotal = Math.max(1, total);
+        const current = Math.min(Math.max(1, done + 1), safeTotal);
+        reporter?.heartbeat(`page ${current}/${safeTotal} processing: 已落库 ${embedded} 个向量`);
+      },
+    });
     const embeddedCount = dryRun ? result.would_embed : result.embedded;
     const phaseStatus: PhaseStatus = result.status === 'failed'
       ? 'fail'
@@ -1256,6 +1274,8 @@ async function runPhaseEmbed(engine: BrainEngine, dryRun: boolean, sourceId?: st
       duration_ms: 0,
       summary: dryRun
         ? `${result.would_embed} chunk(s) would be embedded (dry-run)`
+        : result.budgetExceeded
+          ? `${result.embedded} chunk(s) embedded and saved; time budget reached with ${result.remainingChunks} chunk(s) remaining`
         : result.failedChunks > 0
           ? `${result.embedded} chunk(s) embedded; ${result.failedChunks} chunk(s) failed across ${result.failedPages} page(s)`
           : `${result.embedded} chunk(s) newly embedded (${result.skipped} already had embeddings)`,
@@ -1265,6 +1285,9 @@ async function runPhaseEmbed(engine: BrainEngine, dryRun: boolean, sourceId?: st
         skipped: result.skipped,
         failedPages: result.failedPages,
         failedChunks: result.failedChunks,
+        committedBatches: result.committedBatches,
+        budgetExceeded: result.budgetExceeded,
+        remainingChunks: result.remainingChunks,
         would_embed: result.would_embed,
         total_chunks: result.total_chunks,
         pages_processed: result.pages_processed,
@@ -2351,7 +2374,13 @@ export async function runCycle(
         });
       } else {
         progress.start('cycle.embed');
-        const { result, duration_ms } = await timePhase(() => runPhaseEmbed(engine, dryRun, opts.sourceId));
+        const { result, duration_ms } = await timePhase(() => runPhaseEmbed(
+          engine,
+          dryRun,
+          opts.sourceId,
+          opts.embedPageLimit,
+          progress,
+        ));
         result.duration_ms = duration_ms;
         phaseResults.push(result);
         progress.finish();

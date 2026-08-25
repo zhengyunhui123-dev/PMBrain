@@ -1,5 +1,23 @@
 # Bug 修复台账
 
+## 2026-08-25 PMBrain 1.3.3 修复向量执行改进后的 GitHub Test 过期契约
+
+- 时间：2026-08-25
+- 版本号：PMBrain 1.3.3；PMBrain Desktop 1.1.44（桌面端未改动）
+- 标题：放宽向量执行结构断言，保留实际行为约束
+- 描述：GitHub Actions 的 Test run `32791495750` 中，两个测试仍要求 Cycle 以旧的一行参数形式调用 `runEmbedCore`，另一个测试要求 `embedding-execution-profile` 只能导入单个符号；1.3.2 增加页数限制、进度回调和提供方执行配置后，产品行为正确但这些源码文本断言误报失败。现让测试接受同一调用中的新增选项及同模块的其他命名导入，同时继续约束 `stale`、`dryRun`、`sourceId`、共享执行池和禁止旧滑动池等关键行为。未修改向量化、Dream、PGLite/PostgreSQL、Admin 或桌面端产品逻辑，未修改用户知识、向量、数据库、Wiki、原始资料或配置。
+- 是否完成：是
+- 最终结果：GitHub 失败对应的 3 个测试修复后定向回归 20/20 通过；项目统一校验 39/39、GitHub Test 本地预演 227/227 通过。Windows Git Bash 完整串行套件仅有 `takes-mcp-allowlist.serial.test.ts` 的 2 个“无 LLM”断言因本机存在可用模型配置而失败，该文件在目标 GitHub run 中通过，不属于本次 CI 红项。当前提交的 GitHub Actions 由推送后复验。未执行 `bun run build:win`，未对用户知识库执行向量化或整理。
+
+## 2026-08-24 PMBrain 1.3.2 修复本地向量计算完成却未落库
+
+- 时间：2026-08-24
+- 版本号：PMBrain 1.3.2；PMBrain Desktop 1.1.44（桌面端未改动）
+- 标题：Ollama 向量按小批次即时落库，预算到期保留已完成成果
+- 描述：实际任务在 30 分钟向量预算内完成了 50 次 Ollama 请求，但旧实现必须等整页全部 chunk 算完才一次性写库；预算到期后两个页面同时中止，已算出的中间结果全部丢失，最终还误报 `clean / 0`。现按向量提供方的小批量策略逐批计算，并复用 PGLite/PostgreSQL 共有的 merge-only chunk 写入契约即时建立检查点；预算到期返回 `partial`，报告已落库批次和剩余 chunk。AI 深度整理的本地模型页数上限同时约束观点提炼与向量阶段，任务中心持续显示当前页和已落库向量数。未重建或批量修改用户向量，未修改用户知识、Wiki、原始资料或配置。
+- 是否完成：是
+- 最终结果：失败优先测试复现整页等待导致 0 落库；修复后 20 个 chunk 按 Ollama `12 + 8` 两批写入，第二批被预算取消时首批 12 个仍保留且结果为 `partial`。相关向量、Cycle、Dream、Admin 策略与进度共 147 项逐文件验证通过；同进程组合曾因 `embed.serial.test.ts` 的模块 mock 污染后续 3 项，单文件复跑 5/5 通过。PGLite 真库与 Docker PostgreSQL 一次性测试库的 merge-only 检查均通过，PostgreSQL 测试库已删除。根项目 TypeScript、版本同步、差异检查和统一校验 39/39 通过；Admin 生产资源与内嵌资源已重新构建，发布指纹 `c56b62502e4b`。未执行 `bun run build:win`，未对用户知识库发起真实向量化。
+
 ## 2026-08-24 PMBrain 1.2.98 文件夹导入不再把单文件失败当成整次任务终态
 
 - 时间：2026-08-24
