@@ -109,6 +109,13 @@ describe('Admin GUI update contract', () => {
     expect(settingsSource).toContain('dualWrite: previousValue');
   });
 
+  test('knowledge organization settings expose explicit uncommitted sync opt-in', () => {
+    expect(settingsSource).toContain('includeUncommitted');
+    expect(settingsSource).toContain('包含未提交内容');
+    expect(settingsSource).toContain('默认关闭');
+    expect(settingsSource).toContain('saveIncludeUncommitted');
+  });
+
   test('dark mode covers code blocks and Dream contrast-sensitive content', () => {
     expect(adminStyles).toContain('html[data-theme="dark"] .code-block pre');
     expect(adminStyles).toContain('html[data-theme="dark"] .dream-recommendation b');

@@ -193,6 +193,7 @@ function DreamSettings() {
   const [settings, setSettings] = useState<DreamSettingsValue>({
     outputDir: 'output',
     dualWrite: true,
+    includeUncommitted: false,
     defaultBrainDir: null,
     resolvedOutputDir: null,
     directoryExists: false,
@@ -247,12 +248,34 @@ function DreamSettings() {
     setMessage('');
     setError('');
     try {
-      const saved = await api.saveDreamSettings({ outputDir, dualWrite });
+      const saved = await api.saveDreamSettings({ outputDir, dualWrite, includeUncommitted: settings.includeUncommitted });
       setSettings(current => ({ ...current, ...saved }));
       setSavedOutputDir(saved.outputDir);
       setMessage(dualWrite ? '已开启本地 Markdown 写入' : '已关闭本地 Markdown 写入');
     } catch (nextError) {
       setSettings(current => ({ ...current, dualWrite: previousValue }));
+      setError(nextError instanceof Error ? nextError.message : String(nextError));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const saveIncludeUncommitted = async (includeUncommitted: boolean) => {
+    const previousValue = settings.includeUncommitted;
+    setSettings(current => ({ ...current, includeUncommitted }));
+    setSaving(true);
+    setMessage('');
+    setError('');
+    try {
+      const saved = await api.saveDreamSettings({
+        outputDir: settings.outputDir.trim() || 'output',
+        dualWrite: settings.dualWrite,
+        includeUncommitted,
+      });
+      setSettings(current => ({ ...current, ...saved }));
+      setMessage(includeUncommitted ? '快速维护将包含未提交内容' : '快速维护只同步 Git 已提交内容');
+    } catch (nextError) {
+      setSettings(current => ({ ...current, includeUncommitted: previousValue }));
       setError(nextError instanceof Error ? nextError.message : String(nextError));
     } finally {
       setSaving(false);
@@ -317,6 +340,19 @@ function DreamSettings() {
             type="checkbox"
             checked={settings.dualWrite}
             onChange={event => void saveDualWrite(event.target.checked)}
+            disabled={loading || saving}
+          />
+        </label>
+        <label className="dream-dual-write-setting" htmlFor="sync-include-uncommitted">
+          <span>
+            <b>包含未提交内容</b>
+            <small>默认关闭。关闭时快速维护只同步 Git 已提交版本，并提示尚未提交的变化；开启后才同步工作区修改和新文件。</small>
+          </span>
+          <input
+            id="sync-include-uncommitted"
+            type="checkbox"
+            checked={settings.includeUncommitted}
+            onChange={event => void saveIncludeUncommitted(event.target.checked)}
             disabled={loading || saving}
           />
         </label>

@@ -183,3 +183,17 @@ PMBrain 本次新增并固定以下行为：
 3. 与 PMBrain Source、普通模型和老用户数据规则的冲突检查。
 4. 公开题集、私人真实题集和隔离 Dream 评测。
 5. 最后才更新桌面与 Admin 产品入口。
+
+## 10. 2026-08-25 同步规则补充对齐
+
+本节仅补充同步能力的专项复核，不表示前述 RAG/Dream 全文已重新审计。专项基线为 PMBrain 1.3.5 与本地 GBrain `master` commit `9dadfb97`。
+
+| 同步能力 | GBrain 专项证据 | PMBrain 1.3.5 处理 |
+|---|---|---|
+| working-tree 显式开关 | `--working-tree` 与 `sync.include_working_tree` | 对齐；Admin 产品化为“包含未提交内容”，默认关闭 |
+| Source 作用域失败账本 | open / acknowledged / auto_skipped 状态与次数阈值 | 对齐；固定文件第三次同类失败自动跳过，健康检查继续展示 |
+| 基础设施失败保护 | Git sentinel 与数据库/Embedding 错误不允许跳过 | 对齐并保持 fail-closed |
+| 数据库 op checkpoint | 长任务使用独立 DB checkpoint，不等同于最终书签 | 对齐；按 Source、仓库、commit 和参数隔离，成功后才清理 |
+| Full Sync 内容来源 | 当前 GBrain `performFullSync()` 仍把现场目录交给 `runImport()` | PMBrain 按本次产品规则补齐为 `git archive HEAD` 快照；这是相对专项基线的兼容性修复，不宣称原版已具备 |
+
+最终不变量：默认增量与 Full Sync 都只读取 Git HEAD；未提交变化只提示。只有显式开启 working-tree 同步才读取现场目录；任何路径都不会自动执行 `git commit`。

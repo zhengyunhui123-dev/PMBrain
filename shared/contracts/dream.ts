@@ -5,6 +5,7 @@ import { ConsoleRunSchema, RunAcceptedResponseSchema } from './common.ts';
 export const DreamSettingsResponseSchema = z.object({
   outputDir: z.string(),
   dualWrite: z.boolean(),
+  includeUncommitted: z.boolean(),
   defaultBrainDir: z.string().nullable(),
   resolvedOutputDir: z.string().nullable(),
   directoryExists: z.boolean(),
