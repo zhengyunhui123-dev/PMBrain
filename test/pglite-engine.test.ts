@@ -295,6 +295,59 @@ describe('PGLiteEngine: CJK keyword fallback (v0.32.7)', () => {
     expect(results[0].slug).toBe('originals/korean-essay');
   });
 
+  test('CJK candidates include title, compiled truth, slug, and chunk text hits', async () => {
+    await engine.putPage('projects/title-only', {
+      type: 'project', title: '川商出海计划', compiled_truth: '正文没有查询专名',
+    });
+    await engine.upsertChunks('projects/title-only', [
+      { chunk_index: 0, chunk_text: '普通正文', chunk_source: 'compiled_truth' },
+    ]);
+    await engine.putPage('projects/川商出海', {
+      type: 'project', title: '普通标题二', compiled_truth: '普通正文二',
+    });
+    await engine.upsertChunks('projects/川商出海', [
+      { chunk_index: 0, chunk_text: '另一段普通正文二', chunk_source: 'compiled_truth' },
+    ]);
+    await engine.putPage('projects/compiled-only', {
+      type: 'project', title: '普通标题', compiled_truth: '川商出海的长期方案',
+    });
+    await engine.upsertChunks('projects/compiled-only', [
+      { chunk_index: 0, chunk_text: '另一段普通正文', chunk_source: 'compiled_truth' },
+    ]);
+    await engine.putPage('projects/plain-page', {
+      type: 'project', title: '普通页面', compiled_truth: '没有专名',
+    });
+    await engine.upsertChunks('projects/plain-page', [
+      { chunk_index: 0, chunk_text: '这里记录川商出海执行项', chunk_source: 'compiled_truth' },
+    ]);
+
+    const results = await engine.searchKeyword('川商出海', { limit: 20 });
+    expect(results.map((result) => result.slug)).toEqual(expect.arrayContaining([
+      'projects/川商出海',
+      'projects/title-only',
+      'projects/compiled-only',
+      'projects/plain-page',
+    ]));
+  });
+
+  test('fresh PGLite database exposes all CJK trigram indexes', async () => {
+    const { rows } = await (engine as any).db.query(`
+      SELECT indexname
+      FROM pg_indexes
+      WHERE indexname = ANY($1::text[])
+      ORDER BY indexname
+    `, [[
+      'idx_chunks_text_trgm',
+      'idx_pages_compiled_truth_trgm',
+      'idx_pages_slug_trgm',
+    ]]);
+    expect(rows.map((row: { indexname: string }) => row.indexname)).toEqual([
+      'idx_chunks_text_trgm',
+      'idx_pages_compiled_truth_trgm',
+      'idx_pages_slug_trgm',
+    ]);
+  });
+
   test('bigram ranking: 3-hit page outranks 1-hit page', async () => {
     // Add another Chinese page with only ONE occurrence of 测试.
     await engine.putPage('originals/chinese-one-hit', {

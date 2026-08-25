@@ -175,6 +175,10 @@ CREATE TRIGGER bump_page_generation_clock_trg
 CREATE INDEX IF NOT EXISTS idx_pages_type ON pages(type);
 CREATE INDEX IF NOT EXISTS idx_pages_frontmatter ON pages USING GIN(frontmatter);
 CREATE INDEX IF NOT EXISTS idx_pages_trgm ON pages USING GIN(title gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_pages_compiled_truth_trgm
+  ON pages USING GIN(compiled_truth gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_pages_slug_trgm
+  ON pages USING GIN(slug gin_trgm_ops);
 CREATE INDEX IF NOT EXISTS idx_pages_source_id ON pages(source_id);
 -- v0.26.5: partial index supports the autopilot purge sweep (mirrors src/schema.sql).
 CREATE INDEX IF NOT EXISTS pages_deleted_at_purge_idx
@@ -232,6 +236,8 @@ CREATE TABLE IF NOT EXISTS content_chunks (
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_chunks_page_index ON content_chunks(page_id, chunk_index);
 CREATE INDEX IF NOT EXISTS idx_chunks_page ON content_chunks(page_id);
+CREATE INDEX IF NOT EXISTS idx_chunks_text_trgm
+  ON content_chunks USING GIN(chunk_text gin_trgm_ops);
 CREATE INDEX IF NOT EXISTS idx_chunks_embedding ON content_chunks USING hnsw (embedding vector_cosine_ops);
 -- v0.27.1: partial HNSW for multimodal images. Footprint stays proportional
 -- to image-chunk count, not table size.
