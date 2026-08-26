@@ -16,11 +16,17 @@ import {
 } from '../src/core/pglite-data-policy.ts';
 import {
   createVerifiedPgliteUpgradeBackup,
+  deletePgliteUpgradeBackup,
   listPgliteUpgradeBackups,
+  preparePgliteUpgradeBackupRoot,
+  prunePgliteUpgradeBackups,
+  PGLITE_UPGRADE_BACKUP_RETENTION,
+  resolvePgliteUpgradeBackupRoot,
+  restorePgliteUpgradeBackup,
   verifyPgliteUpgradeBackup,
 } from '../src/core/pglite-upgrade-backup.ts';
 
-describe('PGLite upgrade cold backup and recovery verification', () => {
+describe.serial('PGLite upgrade cold backup and recovery verification', () => {
   let root: string;
   let databasePath: string;
   let backupRoot: string;
@@ -195,4 +201,195 @@ describe('PGLite upgrade cold backup and recovery verification', () => {
     expect(classifyPgliteDataArtifact('pages.rows')).toBe('protected');
     expect(classifyPgliteDataArtifact('future_unknown_table.rows')).toBe('protected');
   });
+
+  test('resolves a custom absolute backup root and rejects relative or nested paths', () => {
+    const custom = join(root, 'd-drive-backups');
+    expect(resolvePgliteUpgradeBackupRoot(custom)).toBe(custom);
+    expect(() => resolvePgliteUpgradeBackupRoot('backups/pglite-upgrades')).toThrow(/absolute path/i);
+    expect(() => resolvePgliteUpgradeBackupRoot(`${custom}\\..\\outside`)).toThrow(/\.\./);
+    expect(() => resolvePgliteUpgradeBackupRoot(`${custom}/../outside`)).toThrow(/\.\./);
+    const prepared = preparePgliteUpgradeBackupRoot({
+      backupRoot: custom,
+      databasePath,
+    });
+    expect(prepared.backupRoot).toBe(custom);
+    expect(existsSync(custom)).toBe(true);
+    expect(() => preparePgliteUpgradeBackupRoot({
+      backupRoot: join(databasePath, 'nested-backups'),
+      databasePath,
+    })).toThrow(/must not contain one another/i);
+  });
+
+  test('prunes oldest verified backups and keeps the newest two', () => {
+    expect(PGLITE_UPGRADE_BACKUP_RETENTION).toBe(2);
+    const writeManifest = (directory: string, createdAt: string, targetVersion: string): void => {
+      mkdirSync(directory, { recursive: true });
+      writeFileSync(join(directory, 'manifest.json'), JSON.stringify({
+        manifest_version: 1,
+        backup_id: targetVersion,
+        status: 'verified',
+        created_at: createdAt,
+        source_database_path: databasePath,
+        backup_database_path: join(directory, 'brain.pglite'),
+        target_version: targetVersion,
+        source_schema_version: 44,
+        source_inventory: { files: 0, bytes: 0, sha256: 'source' },
+        backup_inventory: { files: 0, bytes: 1, sha256: 'backup' },
+        recovery_validation: {
+          status: 'verified',
+          verified_at: createdAt,
+          schema_version: 44,
+          protected_table_counts: {},
+        },
+        data_policy_version: 1,
+        rebuildable_artifacts: [],
+      }, null, 2));
+    };
+
+    const oldest = join(backupRoot, 'oldest');
+    const middle = join(backupRoot, 'middle');
+    const newest = join(backupRoot, 'newest');
+    writeManifest(oldest, '2026-08-21T01:00:00.000Z', '1.1.42');
+    writeManifest(middle, '2026-08-22T01:00:00.000Z', '1.1.43');
+    writeManifest(newest, '2026-08-23T01:00:00.000Z', '1.1.44');
+    mkdirSync(join(backupRoot, 'other-db'), { recursive: true });
+    writeFileSync(join(backupRoot, 'other-db', 'manifest.json'), JSON.stringify({
+      manifest_version: 1,
+      backup_id: 'other',
+      status: 'verified',
+      created_at: '2026-08-20T01:00:00.000Z',
+      source_database_path: join(root, 'other-brain.pglite'),
+      backup_database_path: join(backupRoot, 'other-db', 'brain.pglite'),
+      target_version: '1.1.40',
+      source_schema_version: 44,
+      source_inventory: { files: 0, bytes: 0, sha256: 'source' },
+      backup_inventory: { files: 0, bytes: 1, sha256: 'backup' },
+      recovery_validation: {
+        status: 'verified',
+        verified_at: '2026-08-20T01:00:00.000Z',
+        schema_version: 44,
+        protected_table_counts: {},
+      },
+      data_policy_version: 1,
+      rebuildable_artifacts: [],
+    }, null, 2));
+
+    expect(() => prunePgliteUpgradeBackups({
+      backupRoot,
+      databasePath,
+      keep: 1,
+    })).toThrow(/at least 2/i);
+
+    const pruned = prunePgliteUpgradeBackups({ backupRoot, databasePath });
+    expect(pruned.deleted).toEqual([oldest]);
+    expect(pruned.kept).toEqual([newest, middle]);
+    expect(existsSync(oldest)).toBe(false);
+    expect(existsSync(middle)).toBe(true);
+    expect(existsSync(newest)).toBe(true);
+    expect(existsSync(join(backupRoot, 'other-db'))).toBe(true);
+    expect(listPgliteUpgradeBackups(backupRoot, databasePath).map(item => item.backupDirectory))
+      .toEqual([newest, middle]);
+  });
+
+  test('deletes a verified backup inside the root and refuses a path outside it', () => {
+    const inside = join(backupRoot, 'keep-me');
+    mkdirSync(inside, { recursive: true });
+    writeFileSync(join(inside, 'manifest.json'), JSON.stringify({
+      manifest_version: 1,
+      backup_id: 'keep-me',
+      status: 'verified',
+      created_at: '2026-08-23T01:00:00.000Z',
+      source_database_path: databasePath,
+      backup_database_path: join(inside, 'brain.pglite'),
+      target_version: '1.1.44',
+      source_schema_version: 44,
+      source_inventory: { files: 0, bytes: 0, sha256: 'source' },
+      backup_inventory: { files: 0, bytes: 1, sha256: 'backup' },
+      recovery_validation: {
+        status: 'verified',
+        verified_at: '2026-08-23T01:00:00.000Z',
+        schema_version: 44,
+        protected_table_counts: {},
+      },
+      data_policy_version: 1,
+      rebuildable_artifacts: [],
+    }, null, 2));
+
+    const outside = join(root, 'outside-backup');
+    mkdirSync(outside, { recursive: true });
+    writeFileSync(join(outside, 'manifest.json'), JSON.stringify({
+      manifest_version: 1,
+      backup_id: 'outside',
+      status: 'verified',
+      created_at: '2026-08-23T01:00:00.000Z',
+      source_database_path: databasePath,
+      backup_database_path: join(outside, 'brain.pglite'),
+      target_version: '1.1.44',
+      source_schema_version: 44,
+      source_inventory: { files: 0, bytes: 0, sha256: 'source' },
+      backup_inventory: { files: 0, bytes: 1, sha256: 'backup' },
+      recovery_validation: {
+        status: 'verified',
+        verified_at: '2026-08-23T01:00:00.000Z',
+        schema_version: 44,
+        protected_table_counts: {},
+      },
+      data_policy_version: 1,
+      rebuildable_artifacts: [],
+    }, null, 2));
+
+    expect(() => deletePgliteUpgradeBackup({
+      backupDirectory: outside,
+      backupRoot,
+      databasePath,
+    })).toThrow(/outside the configured backup root/i);
+
+    const deleted = deletePgliteUpgradeBackup({
+      backupDirectory: inside,
+      backupRoot,
+      databasePath,
+    });
+    expect(deleted.status).toBe('deleted');
+    expect(existsSync(inside)).toBe(false);
+    expect(existsSync(outside)).toBe(true);
+  });
+
+  test('restores a verified backup over the live database without deleting the backup', async () => {
+    await seedProtectedPage();
+    const created = await createVerifiedPgliteUpgradeBackup({
+      databasePath,
+      backupRoot,
+      targetVersion: '1.1.44',
+    });
+
+    const engine = new PGLiteEngine();
+    await engine.connect({ engine: 'pglite', database_path: databasePath });
+    try {
+      await engine.putPage('notes/upgrade-protected', {
+        type: 'note',
+        title: 'Upgrade protected',
+        compiled_truth: 'This later write must be replaced by restore.',
+        frontmatter: {},
+      });
+    } finally {
+      await engine.disconnect();
+    }
+
+    const restored = await restorePgliteUpgradeBackup({
+      backupDirectory: created.backupDirectory,
+      backupRoot,
+      databasePath,
+    });
+    expect(restored.status).toBe('restored');
+    expect(existsSync(created.backupDirectory)).toBe(true);
+
+    const verifyEngine = new PGLiteEngine();
+    await verifyEngine.connect({ engine: 'pglite', database_path: databasePath });
+    try {
+      const page = await verifyEngine.getPage('notes/upgrade-protected');
+      expect(page?.compiled_truth).toBe('This DB-only page must survive an upgrade.');
+    } finally {
+      await verifyEngine.disconnect();
+    }
+  }, 90_000);
 });

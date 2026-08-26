@@ -327,6 +327,11 @@ describe('desktop settings renderer contracts', () => {
       'desktop:get-advanced-model-config',
       'desktop:save-advanced-model-config',
       'desktop:list-pglite-upgrade-backups',
+      'desktop:prune-pglite-upgrade-backups',
+      'desktop:delete-pglite-upgrade-backup',
+      'desktop:restore-pglite-upgrade-backup',
+      'desktop:set-pglite-upgrade-backup-root',
+      'desktop:open-pglite-upgrade-backup',
     ]) {
       expect(main).toContain(channel);
       expect(preload).toContain(channel);
@@ -344,7 +349,17 @@ describe('desktop settings renderer contracts', () => {
     expect(renderer).toContain('document.documentElement.dataset.theme');
     expect(html).toContain('id="panel-repair"');
     expect(html).toContain('id="repair-backup-list"');
+    expect(html).toContain('id="repair-prune-backups"');
+    expect(html).toContain('id="repair-change-backup-root"');
+    expect(html).toContain('清理旧备份');
+    expect(html).toContain('更改位置');
     expect(renderer).toContain('listPgliteUpgradeBackups');
+    expect(renderer).toContain('恢复此备份');
+    expect(renderer).toContain('删除此备份');
+    expect(renderer).toContain('打开备份目录');
+    expect(renderer).toContain('restorePgliteUpgradeBackup');
+    expect(renderer).toContain('prunePgliteUpgradeBackups');
+    expect(renderer).toContain('setPgliteUpgradeBackupRoot');
     expect(renderer).not.toContain('previous-version');
     expect(preload).not.toContain('openPreviousRelease');
   });

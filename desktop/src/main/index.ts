@@ -154,6 +154,7 @@ const sidecarController: SidecarController = new SidecarController({
   migrateConfiguredInstallation: () => databaseUpgradeController.migrateConfiguredInstallation(),
   reconcileConfiguredEmbeddingIndex: () => databaseUpgradeController.reconcileConfiguredEmbeddingIndex(),
   pendingPgliteBackupPath: () => pgliteBackupController.pendingBackupPath,
+  prunePgliteUpgradeBackups: () => pgliteBackupController.pruneUpgradeBackupsAfterUpgrade(),
   reconcileLan: () => lanController.reconcile(),
   stopLan: () => lanController.stop(),
   sendSystemSettingsState: () => { systemSettingsController.sendState(); },
@@ -383,6 +384,17 @@ if (!app.requestSingleInstanceLock()) {
       downloadUpdate: () => updateController.download(),
       installUpdate: () => updateController.install(),
       pgliteUpgradeBackups: () => pgliteBackupController.listUpgradeBackups(),
+      prunePgliteUpgradeBackups: () => pgliteBackupController.pruneUpgradeBackups(),
+      deletePgliteUpgradeBackup: backupDirectory => pgliteBackupController.deleteUpgradeBackup(backupDirectory),
+      restorePgliteUpgradeBackup: backupDirectory => sidecarController.withPausedForPgliteBackupRestore(
+        () => pgliteBackupController.restoreUpgradeBackup(backupDirectory),
+      ),
+      setPgliteUpgradeBackupRoot: directory => pgliteBackupController.setBackupRoot(directory),
+      openPgliteUpgradeBackup: async target => {
+        const path = await pgliteBackupController.resolveOpenableBackupPath(target);
+        const error = await shell.openPath(path);
+        if (error) throw new Error(`无法打开备份目录：${error}`);
+      },
       previousVersion: () => desktopVersionHistory.previous,
       pgliteRecoveryStatus: () => inspectDesktopPgliteRecovery(pgliteRecoveryDependencies),
       terminatePgliteOwnerAndRetry: pid => terminateDesktopPgliteOwnerAndRetry(

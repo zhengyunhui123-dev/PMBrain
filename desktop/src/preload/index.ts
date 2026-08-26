@@ -90,11 +90,24 @@ export interface DesktopPgliteUpgradeBackup {
   targetVersion: string;
   sourceSchemaVersion: number | null;
   recoveryVerifiedAt: string;
+  bytes: number;
 }
 
 export interface DesktopPgliteUpgradeBackups {
   databasePath: string | null;
+  backupRoot: string | null;
+  keep: number;
+  totalBytes: number;
   backups: DesktopPgliteUpgradeBackup[];
+}
+
+export interface DesktopPgliteUpgradeBackupMutation {
+  status: 'pruned' | 'deleted' | 'restored' | 'updated' | 'unchanged';
+  backupDirectory?: string;
+  backupRoot?: string;
+  deleted?: string[];
+  kept?: string[];
+  listing: DesktopPgliteUpgradeBackups;
 }
 
 export interface DesktopDiagnosticBundleResult {
@@ -162,6 +175,11 @@ export interface PMBrainDesktopApi {
   downloadUpdate(): Promise<UpdateState | null>;
   installUpdate(): Promise<void>;
   listPgliteUpgradeBackups(): Promise<DesktopPgliteUpgradeBackups>;
+  prunePgliteUpgradeBackups(): Promise<DesktopPgliteUpgradeBackupMutation>;
+  deletePgliteUpgradeBackup(backupDirectory: string): Promise<DesktopPgliteUpgradeBackupMutation>;
+  restorePgliteUpgradeBackup(backupDirectory: string): Promise<DesktopPgliteUpgradeBackupMutation>;
+  setPgliteUpgradeBackupRoot(directory: string): Promise<DesktopPgliteUpgradeBackupMutation>;
+  openPgliteUpgradeBackup(target: string): Promise<void>;
   getPgliteRecoveryStatus(): Promise<PgliteOwnerStatus>;
   terminatePgliteOwnerAndRetry(pid: number): Promise<void>;
   retry(): Promise<void>;
@@ -237,6 +255,11 @@ const api: PMBrainDesktopApi = {
   downloadUpdate: () => ipcRenderer.invoke('desktop:download-update'),
   installUpdate: () => ipcRenderer.invoke('desktop:install-update'),
   listPgliteUpgradeBackups: () => ipcRenderer.invoke('desktop:list-pglite-upgrade-backups'),
+  prunePgliteUpgradeBackups: () => ipcRenderer.invoke('desktop:prune-pglite-upgrade-backups'),
+  deletePgliteUpgradeBackup: (backupDirectory) => ipcRenderer.invoke('desktop:delete-pglite-upgrade-backup', backupDirectory),
+  restorePgliteUpgradeBackup: (backupDirectory) => ipcRenderer.invoke('desktop:restore-pglite-upgrade-backup', backupDirectory),
+  setPgliteUpgradeBackupRoot: (directory) => ipcRenderer.invoke('desktop:set-pglite-upgrade-backup-root', directory),
+  openPgliteUpgradeBackup: (target) => ipcRenderer.invoke('desktop:open-pglite-upgrade-backup', target),
   getPgliteRecoveryStatus: () => ipcRenderer.invoke('desktop:get-pglite-recovery-status'),
   terminatePgliteOwnerAndRetry: (pid) => ipcRenderer.invoke('desktop:terminate-pglite-owner-and-retry', pid),
   retry: () => ipcRenderer.invoke('desktop:retry'),

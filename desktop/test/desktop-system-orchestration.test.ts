@@ -69,12 +69,25 @@ describe('desktop system orchestration contracts', () => {
     expect(backupController).toMatch(/pendingBackupPath = null;[\s\S]*?runCliChecked\(this\.dependencies\.runtime\(\), \[/);
   });
 
-  test('软件修复只通过 CLI 读取已验证的 PGLite 备份清单', () => {
+  test('软件修复通过 CLI 列出、恢复、删除和清理 PGLite 备份', () => {
     expect(main).toContain("'desktop:list-pglite-upgrade-backups'");
+    expect(main).toContain("'desktop:prune-pglite-upgrade-backups'");
+    expect(main).toContain("'desktop:delete-pglite-upgrade-backup'");
+    expect(main).toContain("'desktop:restore-pglite-upgrade-backup'");
+    expect(main).toContain("'desktop:set-pglite-upgrade-backup-root'");
+    expect(main).toContain("'desktop:open-pglite-upgrade-backup'");
     expect(preload).toContain("'desktop:list-pglite-upgrade-backups'");
+    expect(preload).toContain("'desktop:restore-pglite-upgrade-backup'");
     expect(backupController).toMatch(/listUpgradeBackups[\s\S]*?'pglite-backup',[\s\S]*?'list',[\s\S]*?'--path'/);
-    expect(main).not.toContain('restorePgliteUpgradeBackup');
-    expect(main).not.toContain('deletePgliteUpgradeBackup');
+    expect(backupController).toContain("'prune'");
+    expect(backupController).toContain("'delete'");
+    expect(backupController).toContain("'restore'");
+    expect(backupController).toContain("'set-root'");
+    expect(backupController).toContain("'--yes'");
+    expect(backupController).toContain("'--keep', '2'");
+    expect(backupController).not.toContain("from '../../../src/core/pglite-upgrade-backup");
+    expect(sidecarController).toContain('withPausedForPgliteBackupRestore');
+    expect(sidecarController).toMatch(/markDesktopMigration\(app\.getVersion\(\)\);[\s\S]*?prunePgliteUpgradeBackups\(\)/);
   });
 
   test('桌面启动阶段不自动启动 Supervisor、Worker、Dream 或 Autopilot', () => {

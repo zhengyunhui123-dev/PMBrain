@@ -22,7 +22,10 @@ import type {
 } from './system-settings.js';
 import type { DesktopTheme, SetupPayload } from './config-manager.js';
 import type { UpdateState } from './update-manager.js';
-import type { DesktopPgliteUpgradeBackups } from '../preload/index.js';
+import type {
+  DesktopPgliteUpgradeBackupMutation,
+  DesktopPgliteUpgradeBackups,
+} from '../preload/index.js';
 import type { DesktopKnowledgeSourceStatus } from './knowledge-source-git.js';
 import type { PgliteOwnerStatus } from '../../../src/core/pglite-owner-control.js';
 
@@ -60,6 +63,11 @@ export interface DesktopIpcHandlers {
   downloadUpdate: () => Promise<unknown> | undefined;
   installUpdate: () => Promise<unknown> | undefined;
   pgliteUpgradeBackups: () => Promise<DesktopPgliteUpgradeBackups>;
+  prunePgliteUpgradeBackups: () => Promise<DesktopPgliteUpgradeBackupMutation>;
+  deletePgliteUpgradeBackup: (backupDirectory: string) => Promise<DesktopPgliteUpgradeBackupMutation>;
+  restorePgliteUpgradeBackup: (backupDirectory: string) => Promise<DesktopPgliteUpgradeBackupMutation>;
+  setPgliteUpgradeBackupRoot: (directory: string) => Promise<DesktopPgliteUpgradeBackupMutation>;
+  openPgliteUpgradeBackup: (target: string) => Promise<void>;
   previousVersion: () => string | undefined;
   pgliteRecoveryStatus: () => Promise<PgliteOwnerStatus>;
   terminatePgliteOwnerAndRetry: (pid: number) => Promise<string | undefined>;
@@ -119,6 +127,11 @@ export function registerDesktopIpcHandlers(handlers: DesktopIpcHandlers): void {
   registerTrustedHandler('desktop:download-update', handlers, () => handlers.downloadUpdate());
   registerTrustedHandler('desktop:install-update', handlers, () => handlers.installUpdate());
   registerTrustedHandler('desktop:list-pglite-upgrade-backups', handlers, () => handlers.pgliteUpgradeBackups());
+  registerTrustedHandler('desktop:prune-pglite-upgrade-backups', handlers, () => handlers.prunePgliteUpgradeBackups());
+  registerTrustedHandler('desktop:delete-pglite-upgrade-backup', handlers, (_event, backupDirectory: string) => handlers.deletePgliteUpgradeBackup(backupDirectory));
+  registerTrustedHandler('desktop:restore-pglite-upgrade-backup', handlers, (_event, backupDirectory: string) => handlers.restorePgliteUpgradeBackup(backupDirectory));
+  registerTrustedHandler('desktop:set-pglite-upgrade-backup-root', handlers, (_event, directory: string) => handlers.setPgliteUpgradeBackupRoot(directory));
+  registerTrustedHandler('desktop:open-pglite-upgrade-backup', handlers, (_event, target: string) => handlers.openPgliteUpgradeBackup(target));
   registerTrustedHandler('desktop:open-previous-release', handlers, async () => {
     const previous = handlers.previousVersion();
     if (!previous) throw new Error('当前没有可用的上一版本记录。');

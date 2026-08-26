@@ -76,6 +76,11 @@ export interface GBrainConfig {
   engine: 'postgres' | 'pglite';
   database_url?: string;
   database_path?: string;
+  /**
+   * Absolute directory for PGLite pre-upgrade cold backups.
+   * Default: `<config-dir>/backups/pglite-upgrades`.
+   */
+  pglite_upgrade_backup_dir?: string;
   /** Stable local-admin secret used by the desktop shell and direct HTTP serve. */
   admin_bootstrap_token?: string;
   /** Desktop-only preferences. Core runtime ignores these fields. */
@@ -770,6 +775,7 @@ export const KNOWN_CONFIG_KEYS: readonly string[] = [
   'database_url',
   'admin_bootstrap_token',
   'database_path',
+  'pglite_upgrade_backup_dir',
   'openai_api_key',
   'custom_openai_api_key',
   'mimo_api_key',
