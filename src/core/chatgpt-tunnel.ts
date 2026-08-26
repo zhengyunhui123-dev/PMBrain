@@ -160,6 +160,25 @@ export function parseTunnelId(profile: string): string | undefined {
   return profile.match(/^\s*tunnel_id:\s*["']?(tunnel_[A-Za-z0-9_-]+)["']?\s*$/m)?.[1];
 }
 
+export function parseChatGptTunnelBearerToken(header: string | null | undefined): string | null {
+  const trimmed = header?.trim() ?? '';
+  if (!trimmed) return null;
+  const bearer = trimmed.match(/^Bearer\s+(\S+)$/i);
+  if (bearer?.[1]) return bearer[1];
+  return /^pmbrain_[A-Za-z0-9]+$/.test(trimmed) ? trimmed : null;
+}
+
+export function readChatGptTunnelAuthorizationHeader(): string | null {
+  const { authorizationHeaderFile } = chatGptTunnelPaths();
+  if (!existsSync(authorizationHeaderFile)) return null;
+  try {
+    const value = readFileSync(authorizationHeaderFile, 'utf8').trim();
+    return value || null;
+  } catch {
+    return null;
+  }
+}
+
 function findSuggestedTunnelId(paths: ChatGptTunnelPaths): string | undefined {
   const candidates = [
     paths.profileFile,

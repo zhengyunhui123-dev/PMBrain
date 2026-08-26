@@ -9,6 +9,8 @@ interface TunnelStatus {
   profileExists: boolean;
   runtimeKeyConfigured: boolean;
   authorizationConfigured: boolean;
+  authorizationValid?: boolean;
+  authorizationRepaired?: boolean;
   tunnelId?: string;
   suggestedTunnelId?: string;
   pid?: number;
@@ -44,6 +46,11 @@ export function ChatGptTunnelPanel() {
       setStatus(next);
       setBinaryPath(next.binaryPath);
       setTunnelId(current => current || next.tunnelId || next.suggestedTunnelId || '');
+      if (next.authorizationRepaired) {
+        setMessage({ kind: 'ok', text: '本地 Tunnel Token 已自动恢复到数据库。请在 ChatGPT 里点一次「重新连接」。' });
+      } else if (next.authorizationConfigured && next.authorizationValid === false) {
+        setMessage({ kind: 'error', text: '本地 Tunnel Token 已失效。请点击「重新生成并轮换凭证」，再到 ChatGPT 点「重新连接」。' });
+      }
     } catch (error) {
       setMessage({ kind: 'error', text: error instanceof Error ? error.message : '读取 Tunnel 状态失败' });
     }
@@ -90,7 +97,7 @@ export function ChatGptTunnelPanel() {
           <p>让 ChatGPT 通过 OpenAI 官方出站隧道接入 PMBrain。本机不开放公网端口，ChatGPT 不接触本地 Bearer Token。</p>
         </div>
         <div className="tunnel-signal" aria-label="Tunnel 状态">
-          <span>{status?.ready.ok ? 'READY' : status?.processRunning ? 'CONNECTING' : 'OFFLINE'}</span>
+          <span>{status?.ready.ok && status.authorizationValid !== false ? 'READY' : status?.processRunning ? 'CONNECTING' : 'OFFLINE'}</span>
           <strong>{status?.processRunning ? `PID ${status.pid}` : '手动启动'}</strong>
         </div>
       </div>
@@ -99,7 +106,8 @@ export function ChatGptTunnelPanel() {
         <StatusPill ok={!!status?.binaryFound}>客户端 {status?.binaryFound ? '已发现' : '未发现'}</StatusPill>
         <StatusPill ok={!!status?.profileExists}>Profile {status?.profileExists ? '已配置' : '待配置'}</StatusPill>
         <StatusPill ok={!!status?.runtimeKeyConfigured}>Runtime Key {status?.runtimeKeyConfigured ? '已保存' : '待输入'}</StatusPill>
-        <StatusPill ok={!!status?.ready.ok}>通道 {status?.ready.ok ? 'Ready' : '未就绪'}</StatusPill>
+        <StatusPill ok={status?.authorizationValid !== false && !!status?.authorizationConfigured}>Token {status?.authorizationValid === false ? '已失效' : status?.authorizationConfigured ? '有效' : '待生成'}</StatusPill>
+        <StatusPill ok={!!status?.ready.ok && status?.authorizationValid !== false}>通道 {status?.ready.ok && status?.authorizationValid !== false ? 'Ready' : '未就绪'}</StatusPill>
       </div>
 
       <div className="tunnel-layout">

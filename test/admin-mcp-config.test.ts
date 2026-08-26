@@ -76,6 +76,8 @@ describe('Admin MCP handoff content', () => {
     const tunnelPage = readFileSync(join(process.cwd(), 'admin/src/pages/ChatGptTunnel.tsx'), 'utf8');
     expect(tunnelPage).toContain('全部开放');
     expect(tunnelPage).toContain('ChatGPT 可以使用完整 MCP 工具列表');
+    expect(tunnelPage).toContain('authorizationValid');
+    expect(tunnelPage).toContain('Token {status?.authorizationValid === false ? \'已失效\'');
     expect(tunnelPage).not.toContain('READ ONLY');
     expect(tunnelPage).not.toContain('ChatGPT 只会看到这 7 个只读工具');
     expect(consolePage).not.toContain('className="mcp-connection-details"');
