@@ -264,9 +264,14 @@ describe('desktop integration config merging', () => {
     }
   });
 
-  test('uses the Trae user-level MCP config and preserves other servers', () => {
+  test('uses the Trae Work user-level MCP config and preserves other servers', () => {
     const path = integrationConfigPath('trae');
-    expect(path).toEndWith(join('Trae', 'User', 'mcp.json'));
+    expect(path).toEndWith(join('TRAE SOLO CN', 'User', 'mcp.json'));
+    expect(path).not.toEndWith(join('Trae', 'User', 'mcp.json'));
+    expect(listIntegrations().find(item => item.id === 'trae')).toMatchObject({
+      name: 'Trae Work',
+      automatic: true,
+    });
 
     const configPath = tempFile('mcp.json');
     writeFileSync(configPath, JSON.stringify({ mcpServers: { existing: { command: 'keep-me' } } }));

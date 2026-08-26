@@ -13,12 +13,16 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs';
-import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { PGlite } from '@electric-sql/pglite';
 import { vector } from '@electric-sql/pglite/vector';
 import { pg_trgm } from '@electric-sql/pglite/contrib/pg_trgm';
+import { configDir } from './config.ts';
 import { acquireLock, releaseLock } from './pglite-lock.ts';
 import { PGLITE_DATA_PROTECTION_POLICY } from './pglite-data-policy.ts';
+
+export const PGLITE_UPGRADE_BACKUP_RETENTION = 2;
+export const PGLITE_UPGRADE_BACKUP_DIRNAME = 'pglite-upgrades';
 
 const MANIFEST_FILE = 'manifest.json';
 const BACKUP_DATABASE_DIR = 'brain.pglite';
@@ -88,6 +92,29 @@ export interface PgliteUpgradeBackupSummary {
   manifest: PgliteUpgradeBackupManifest;
 }
 
+export interface DeletePgliteUpgradeBackupResult {
+  status: 'deleted';
+  backupDirectory: string;
+}
+
+export interface PrunePgliteUpgradeBackupsResult {
+  status: 'pruned';
+  keep: number;
+  kept: string[];
+  deleted: string[];
+}
+
+export interface RestorePgliteUpgradeBackupResult {
+  status: 'restored';
+  backupDirectory: string;
+  databasePath: string;
+}
+
+export interface SetPgliteUpgradeBackupRootResult {
+  status: 'updated' | 'unchanged';
+  backupRoot: string;
+}
+
 function normalizedPath(value: string): string {
   const full = resolve(value);
   return process.platform === 'win32' ? full.toLowerCase() : full;
@@ -96,6 +123,46 @@ function normalizedPath(value: string): string {
 function isWithin(parent: string, candidate: string): boolean {
   const rel = relative(resolve(parent), resolve(candidate));
   return rel !== '' && rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
+}
+
+export function defaultPgliteUpgradeBackupRoot(): string {
+  return join(configDir(), 'backups', PGLITE_UPGRADE_BACKUP_DIRNAME);
+}
+
+export function resolvePgliteUpgradeBackupRoot(configured?: string | null): string {
+  const trimmed = configured?.trim() ?? '';
+  if (!trimmed) return defaultPgliteUpgradeBackupRoot();
+  if (!isAbsolute(trimmed)) {
+    throw new Error('PGLite backup root must be an absolute path.');
+  }
+  if (trimmed.split(/[\\/]/).includes('..')) {
+    throw new Error("PGLite backup root must not contain '..' segments.");
+  }
+  return resolve(trimmed);
+}
+
+function assertDatabaseAndBackupRootSeparated(databasePath: string, backupRoot: string): void {
+  const realDatabasePath = existsSync(databasePath) ? realpathSync(databasePath) : resolve(databasePath);
+  const realBackupRoot = existsSync(backupRoot) ? realpathSync(backupRoot) : resolve(backupRoot);
+  if (normalizedPath(realDatabasePath) === normalizedPath(realBackupRoot)
+      || isWithin(realDatabasePath, realBackupRoot)
+      || isWithin(realBackupRoot, realDatabasePath)) {
+    throw new Error('PGLite database directory and backup root must not contain one another.');
+  }
+}
+
+function normalizedKeepCount(keep?: number): number {
+  const value = keep ?? PGLITE_UPGRADE_BACKUP_RETENTION;
+  if (!Number.isInteger(value) || value < PGLITE_UPGRADE_BACKUP_RETENTION) {
+    throw new Error(`PGLite upgrade backups must keep at least ${PGLITE_UPGRADE_BACKUP_RETENTION} copies.`);
+  }
+  return value;
+}
+
+function assertBackupInsideRoot(backupRoot: string, backupDirectory: string, label: string): void {
+  if (!isWithin(backupRoot, backupDirectory)) {
+    throw new Error(`${label} is outside the configured backup root: ${backupDirectory}`);
+  }
 }
 
 function assertDirectoryNotSymlink(path: string, label: string): void {
@@ -336,13 +403,7 @@ export async function createVerifiedPgliteUpgradeBackup(
 
   mkdirSync(backupRoot, { recursive: true, mode: 0o700 });
   assertDirectoryNotSymlink(backupRoot, 'PGLite backup root');
-  const realDatabasePath = realpathSync(databasePath);
-  const realBackupRoot = realpathSync(backupRoot);
-  if (normalizedPath(realDatabasePath) === normalizedPath(realBackupRoot)
-      || isWithin(realDatabasePath, realBackupRoot)
-      || isWithin(realBackupRoot, realDatabasePath)) {
-    throw new Error('PGLite database directory and backup root must not contain one another.');
-  }
+  assertDatabaseAndBackupRootSeparated(databasePath, backupRoot);
 
   const lock = await acquireLock(databasePath, {
     ownerType: 'migration',
@@ -408,4 +469,151 @@ export async function createVerifiedPgliteUpgradeBackup(
   } finally {
     await releaseLock(lock);
   }
+}
+
+function findVerifiedBackup(
+  backupRoot: string,
+  backupDirectory: string,
+  databasePath?: string,
+): PgliteUpgradeBackupSummary {
+  const directory = resolve(backupDirectory);
+  const root = resolve(backupRoot);
+  assertDirectoryNotSymlink(root, 'PGLite backup root');
+  assertDirectoryNotSymlink(directory, 'PGLite backup directory');
+  assertBackupInsideRoot(root, directory, 'PGLite backup directory');
+  const manifest = parseManifest(directory);
+  if (databasePath && normalizedPath(manifest.source_database_path) !== normalizedPath(databasePath)) {
+    throw new Error(`PGLite backup belongs to a different database: ${directory}`);
+  }
+  return {
+    backupDirectory: directory,
+    backupDatabasePath: manifest.backup_database_path,
+    manifestPath: join(directory, MANIFEST_FILE),
+    manifest,
+  };
+}
+
+export function deletePgliteUpgradeBackup(options: {
+  backupDirectory: string;
+  backupRoot: string;
+  databasePath?: string | null;
+}): DeletePgliteUpgradeBackupResult {
+  const backupRoot = resolve(options.backupRoot);
+  const selected = findVerifiedBackup(
+    backupRoot,
+    options.backupDirectory,
+    options.databasePath ? resolve(options.databasePath) : undefined,
+  );
+  rmSync(selected.backupDirectory, { recursive: true, force: false });
+  return { status: 'deleted', backupDirectory: selected.backupDirectory };
+}
+
+export function prunePgliteUpgradeBackups(options: {
+  backupRoot: string;
+  databasePath: string;
+  keep?: number;
+}): PrunePgliteUpgradeBackupsResult {
+  const keep = normalizedKeepCount(options.keep);
+  const backupRoot = resolve(options.backupRoot);
+  const databasePath = resolve(options.databasePath);
+  const backups = listPgliteUpgradeBackups(backupRoot, databasePath);
+  const retained = backups.slice(0, keep);
+  const removed = backups.slice(keep);
+  const deleted: string[] = [];
+  for (const backup of removed) {
+    const result = deletePgliteUpgradeBackup({
+      backupDirectory: backup.backupDirectory,
+      backupRoot,
+      databasePath,
+    });
+    deleted.push(result.backupDirectory);
+  }
+  return {
+    status: 'pruned',
+    keep,
+    kept: retained.map(backup => backup.backupDirectory),
+    deleted,
+  };
+}
+
+export async function restorePgliteUpgradeBackup(options: {
+  backupDirectory: string;
+  backupRoot: string;
+  databasePath: string;
+  lockTimeoutMs?: number;
+}): Promise<RestorePgliteUpgradeBackupResult> {
+  const databasePath = resolve(options.databasePath);
+  const backupRoot = resolve(options.backupRoot);
+  const selected = findVerifiedBackup(backupRoot, options.backupDirectory, databasePath);
+  const verified = await verifyPgliteUpgradeBackup(selected.backupDirectory);
+  if (normalizedPath(verified.manifest.source_database_path) !== normalizedPath(databasePath)) {
+    throw new Error(`PGLite backup belongs to a different database: ${selected.backupDirectory}`);
+  }
+  assertDatabaseAndBackupRootSeparated(databasePath, backupRoot);
+
+  const parent = dirname(databasePath);
+  mkdirSync(parent, { recursive: true, mode: 0o700 });
+  const restoreTemp = join(parent, `.restore-${randomUUID()}.tmp`);
+  const replacedTemp = join(parent, `.replaced-${randomUUID()}.tmp`);
+
+  const lock = existsSync(databasePath)
+    ? await acquireLock(databasePath, {
+      ownerType: 'migration',
+      timeoutMs: options.lockTimeoutMs ?? 30_000,
+    })
+    : null;
+  try {
+    copyColdDatabase(verified.backupDatabasePath, restoreTemp);
+    const copied = await inventoryPgliteDirectory(restoreTemp);
+    if (!sameInventory(copied, verified.manifest.backup_inventory)) {
+      throw new Error('PGLite restore copy failed byte integrity verification.');
+    }
+  } catch (error) {
+    safeRemoveTemporary(parent, restoreTemp);
+    throw error;
+  } finally {
+    if (lock) await releaseLock(lock);
+  }
+
+  try {
+    if (existsSync(databasePath)) renameSync(databasePath, replacedTemp);
+    try {
+      renameSync(restoreTemp, databasePath);
+    } catch (error) {
+      if (existsSync(replacedTemp) && !existsSync(databasePath)) {
+        renameSync(replacedTemp, databasePath);
+      }
+      throw error;
+    }
+  } catch (error) {
+    safeRemoveTemporary(parent, restoreTemp);
+    throw error;
+  }
+  try {
+    safeRemoveTemporary(parent, replacedTemp);
+  } catch {
+    // Live database already restored; leftover previous copy is not a restore failure.
+  }
+
+  return {
+    status: 'restored',
+    backupDirectory: selected.backupDirectory,
+    databasePath,
+  };
+}
+
+export function preparePgliteUpgradeBackupRoot(options: {
+  backupRoot: string;
+  databasePath?: string | null;
+}): SetPgliteUpgradeBackupRootResult {
+  const backupRoot = resolvePgliteUpgradeBackupRoot(options.backupRoot);
+  if (options.databasePath) {
+    assertDatabaseAndBackupRootSeparated(resolve(options.databasePath), backupRoot);
+  }
+  mkdirSync(backupRoot, { recursive: true, mode: 0o700 });
+  assertDirectoryNotSymlink(backupRoot, 'PGLite backup root');
+  if (options.databasePath) {
+    assertDatabaseAndBackupRootSeparated(resolve(options.databasePath), backupRoot);
+  }
+  return { status: 'updated', backupRoot };
 }

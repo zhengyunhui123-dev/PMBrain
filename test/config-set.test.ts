@@ -20,6 +20,7 @@ import { suggestNearest } from '../src/core/levenshtein.ts';
 
 describe('KNOWN_CONFIG_KEYS', () => {
   test('contains the canonical embedding keys', () => {
+    expect(KNOWN_CONFIG_KEYS).toContain('pglite_upgrade_backup_dir');
     expect(KNOWN_CONFIG_KEYS).toContain('embedding_model');
     expect(KNOWN_CONFIG_KEYS).toContain('embedding_dimensions');
     expect(KNOWN_CONFIG_KEYS).toContain('embedding_disabled');  // v0.37 D9

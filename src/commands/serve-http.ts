@@ -16,7 +16,7 @@ import type { Server as HttpServer } from 'node:http';
 import cookieParser from 'cookie-parser';
 import cors from 'cors';
 import rateLimit from 'express-rate-limit';
-import { randomBytes, createHash } from 'crypto';
+import { randomBytes, createHash, randomUUID } from 'crypto';
 import { mkdtemp, readFile, rm, writeFile } from 'fs/promises';
 import { existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -108,6 +108,8 @@ import {
   defaultTunnelClientBinary,
   detectTunnelHttpProxy,
   getChatGptTunnelStatus,
+  parseChatGptTunnelBearerToken,
+  readChatGptTunnelAuthorizationHeader,
   runTunnelDoctor,
   startTunnelClient,
   stopTunnelClient,
@@ -1834,6 +1836,40 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
     }
   });
 
+  const reconcileChatGptTunnelAccessToken = async (): Promise<{
+    authorizationConfigured: boolean;
+    authorizationValid: boolean;
+    repaired: boolean;
+  }> => {
+    const header = readChatGptTunnelAuthorizationHeader();
+    const token = parseChatGptTunnelBearerToken(header);
+    if (!header) {
+      return { authorizationConfigured: false, authorizationValid: false, repaired: false };
+    }
+    if (!token) {
+      return { authorizationConfigured: true, authorizationValid: false, repaired: false };
+    }
+    const { hashToken } = await import('../core/utils.ts');
+    const hash = hashToken(token);
+    const existing = await sql`
+      SELECT id FROM access_tokens
+      WHERE token_hash = ${hash} AND revoked_at IS NULL
+      LIMIT 1
+    `;
+    if (existing.length > 0) {
+      return { authorizationConfigured: true, authorizationValid: true, repaired: false };
+    }
+    await sql`UPDATE access_tokens SET revoked_at = now() WHERE name = ${CHATGPT_TUNNEL_TOKEN_NAME} AND revoked_at IS NULL`;
+    await executeRawJsonb(
+      engine,
+      `INSERT INTO access_tokens (id, name, token_hash, permissions)
+       VALUES ($1, $2, $3, $4::jsonb)`,
+      [randomUUID(), CHATGPT_TUNNEL_TOKEN_NAME, hash],
+      [{ takes_holders: ['world'], scopes: [...CHATGPT_TUNNEL_SCOPES] }],
+    );
+    return { authorizationConfigured: true, authorizationValid: true, repaired: true };
+  };
+
   const readTunnelHealth = async () => {
     const probe = async (path: '/healthz' | '/readyz') => {
       try {
@@ -1863,7 +1899,15 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
         ? req.query.binaryPath
         : defaultTunnelClientBinary();
       const status = getChatGptTunnelStatus(binaryPath);
-      res.json({ ...status, ...(await readTunnelHealth()), localMcpUrl: `http://127.0.0.1:${port}/mcp` });
+      const authorization = await reconcileChatGptTunnelAccessToken();
+      res.json({
+        ...status,
+        authorizationConfigured: authorization.authorizationConfigured,
+        authorizationValid: authorization.authorizationValid,
+        authorizationRepaired: authorization.repaired,
+        ...(await readTunnelHealth()),
+        localMcpUrl: `http://127.0.0.1:${port}/mcp`,
+      });
     } catch (e) {
       res.status(500).json({ error: e instanceof Error ? e.message : 'Failed to read tunnel status' });
     }
@@ -1893,11 +1937,9 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
     const { generateToken, hashToken } = await import('../core/utils.ts');
     const token = generateToken('pmbrain_');
     const hash = hashToken(token);
-    const id = (await import('crypto')).randomUUID();
+    const id = randomUUID();
     let inserted = false;
     try {
-      if (runtimeApiKey) writePrivateFile(paths.runtimeKeyFile, runtimeApiKey);
-      writePrivateFile(paths.authorizationHeaderFile, `Bearer ${token}`);
       await sql`UPDATE access_tokens SET revoked_at = now() WHERE name = ${CHATGPT_TUNNEL_TOKEN_NAME} AND revoked_at IS NULL`;
       await executeRawJsonb(
         engine,
@@ -1907,6 +1949,8 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
         [{ takes_holders: ['world'], scopes: [...CHATGPT_TUNNEL_SCOPES] }],
       );
       inserted = true;
+      if (runtimeApiKey) writePrivateFile(paths.runtimeKeyFile, runtimeApiKey);
+      writePrivateFile(paths.authorizationHeaderFile, `Bearer ${token}`);
       const profile = buildChatGptTunnelProfile({
         tunnelId,
         mcpUrl: `http://127.0.0.1:${port}/mcp`,
@@ -1935,7 +1979,9 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
       const binaryPath = typeof req.body?.binaryPath === 'string' && req.body.binaryPath.trim()
         ? req.body.binaryPath.trim()
         : defaultTunnelClientBinary();
-      res.json(await runTunnelDoctor(binaryPath));
+      const authorization = await reconcileChatGptTunnelAccessToken();
+      const doctor = await runTunnelDoctor(binaryPath);
+      res.json({ ...doctor, authorizationValid: authorization.authorizationValid, authorizationRepaired: authorization.repaired });
     } catch (e) {
       res.status(500).json({ error: e instanceof Error ? e.message : 'Tunnel doctor failed' });
     }
@@ -1946,6 +1992,11 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
       const binaryPath = typeof req.body?.binaryPath === 'string' && req.body.binaryPath.trim()
         ? req.body.binaryPath.trim()
         : defaultTunnelClientBinary();
+      const authorization = await reconcileChatGptTunnelAccessToken();
+      if (!authorization.authorizationValid) {
+        res.status(409).json({ error: 'ChatGPT tunnel token is missing or invalid. Generate the secure profile again.' });
+        return;
+      }
       const doctor = await runTunnelDoctor(binaryPath);
       if (!doctor.ok) {
         res.status(409).json({ error: 'Tunnel doctor must pass before start', doctor });

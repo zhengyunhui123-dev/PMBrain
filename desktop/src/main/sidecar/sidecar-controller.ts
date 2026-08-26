@@ -23,6 +23,7 @@ export interface SidecarControllerDependencies {
   migrateConfiguredInstallation: () => Promise<boolean>;
   reconcileConfiguredEmbeddingIndex: () => Promise<void>;
   pendingPgliteBackupPath: () => string | null;
+  prunePgliteUpgradeBackups: () => Promise<void>;
   reconcileLan: () => Promise<unknown>;
   stopLan: () => Promise<void>;
   sendSystemSettingsState: () => void;
@@ -197,6 +198,40 @@ export class SidecarController {
     }
   }
 
+  async withPausedForPgliteBackupRestore<T>(operation: () => Promise<T>): Promise<T> {
+    const shouldRestart = Boolean(this.manager && getSetupInfo().current.engine === 'pglite');
+    if (shouldRestart) await this.stop();
+    this.dependencies.sendStartupProgress({
+      visible: true,
+      stage: 'database',
+      title: '正在恢复数据库备份',
+      message: shouldRestart
+        ? '恢复需要独占访问当前数据库，桌面端已暂停本地服务；完成后会自动重启并执行健康检查。'
+        : '正在用已验证的升级备份替换当前数据库。',
+    });
+    let operationError: unknown;
+    try {
+      return await operation();
+    } catch (error) {
+      operationError = error;
+      throw error;
+    } finally {
+      if (shouldRestart) {
+        try {
+          await this.start(false);
+        } catch (restartError) {
+          if (!operationError) throw restartError;
+          this.dependencies.getLogger()?.write(
+            'desktop',
+            `备份恢复失败后，本地服务恢复也失败：${restartError instanceof Error ? restartError.message : String(restartError)}`,
+          );
+        }
+      } else {
+        this.dependencies.hideStartupProgress();
+      }
+    }
+  }
+
   async withPausedForModelConfig<T>(operation: () => Promise<T>): Promise<T> {
     const shouldRestart = Boolean(this.manager && getSetupInfo().current.engine === 'pglite');
     if (shouldRestart) await this.stop();
@@ -284,6 +319,7 @@ export class SidecarController {
           if (this.manager && this.stateValue?.phase === 'ready') {
             if (migrationRequired && setup.current.engine === 'pglite') {
               markDesktopMigration(app.getVersion());
+              await this.dependencies.prunePgliteUpgradeBackups();
             }
             return this.manager;
           }
