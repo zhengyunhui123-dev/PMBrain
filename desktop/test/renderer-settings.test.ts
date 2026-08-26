@@ -300,7 +300,7 @@ describe('desktop settings renderer contracts', () => {
     expect(preview).toContain('revokeSharedIntegration: async');
     expect(preview).toContain('inspectKnowledgeSourceDirectory: async');
     expect(preview).toContain('initializeKnowledgeSourceGit: async');
-    expect(preview).toContain("id: 'trae', name: 'Trae'");
+    expect(preview).toContain("id: 'trae', name: 'Trae Work'");
     expect(preview).toContain("id: 'qwenpaw', name: 'QwenPaw'");
     expect(preview).toContain("id: 'hermes', name: 'Hermes'");
     expect(preview).toContain("id: 'openclaw', name: 'OpenClaw'");

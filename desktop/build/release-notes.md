@@ -1,3 +1,7 @@
+## PMBrain 1.1.46
+
+- MCP 接入将 Trae 改为 Trae Work，写入 `%APPDATA%\TRAE SOLO CN\User\mcp.json`，不再写入已停用的 `Trae\User\mcp.json`。
+
 ## PMBrain 1.1.45
 
 - 自动升级备份只保留最近 2 份，升级成功后清理更早备份，避免最新一份本身有问题时无法回退。

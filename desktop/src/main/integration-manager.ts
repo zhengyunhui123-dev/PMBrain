@@ -88,7 +88,7 @@ const CLIENT_META: Record<IntegrationClient, { name: string; path: () => string 
   codebuddy: { name: 'CodeBuddy', path: () => join(homedir(), '.codebuddy', 'mcp.json'), automatic: true },
   workbuddy: { name: 'Workbuddy', path: () => join(homedir(), '.workbuddy', 'mcp.json'), automatic: true },
   cursor: { name: 'Cursor', path: () => join(homedir(), '.cursor', 'mcp.json'), automatic: true },
-  trae: { name: 'Trae', path: () => join(process.env.APPDATA || join(homedir(), 'AppData', 'Roaming'), 'Trae', 'User', 'mcp.json'), automatic: true },
+  trae: { name: 'Trae Work', path: () => traeWorkIntegrationPath(), automatic: true },
   claude: { name: 'Claude', path: () => null, automatic: false },
   codex: { name: 'Codex', path: () => join(homedir(), '.codex', 'config.toml'), automatic: true },
   qwenpaw: { name: 'QwenPaw', path: () => qwenPawIntegrationPath(), automatic: true },
@@ -113,6 +113,27 @@ function qwenPawPaths(homeDirectory = homedir()): QwenPawPaths {
     driverCard: join(root, 'workspaces', 'default', 'drivers', 'mcp', 'pmbrain.yaml'),
     credentials: join(root, 'workspaces', 'default', 'credentials.yaml'),
   };
+}
+
+const TRAE_WORK_APP_NAMES = ['TRAE SOLO CN', 'Trae Work'] as const;
+
+function traeWorkAppRoot(homeDirectory = homedir()): string {
+  if (process.platform === 'darwin') {
+    return join(homeDirectory, 'Library', 'Application Support');
+  }
+  if (process.platform === 'win32') {
+    return process.env.APPDATA || join(homeDirectory, 'AppData', 'Roaming');
+  }
+  return process.env.XDG_CONFIG_HOME || join(homeDirectory, '.config');
+}
+
+export function traeWorkIntegrationPath(homeDirectory = homedir()): string {
+  const root = traeWorkAppRoot(homeDirectory);
+  for (const name of TRAE_WORK_APP_NAMES) {
+    const candidate = join(root, name);
+    if (existsSync(candidate)) return join(candidate, 'User', 'mcp.json');
+  }
+  return join(root, 'TRAE SOLO CN', 'User', 'mcp.json');
 }
 
 export function qwenPawIntegrationPath(homeDirectory = homedir()): string {
