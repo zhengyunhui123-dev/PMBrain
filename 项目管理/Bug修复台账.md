@@ -1,5 +1,14 @@
 # Bug 修复台账
 
+## 2026-08-27 PMBrain 1.3.10 升级后 Sidecar 健康检查超时且日志不全
+
+- 时间：2026-08-27
+- 版本号：PMBrain 1.3.10；PMBrain Desktop 1.1.48
+- 标题：升级后首次打开不再 45 秒杀掉迁移中的 Sidecar，失败时完整记录 exit code 和 stderr
+- 描述：用户从旧版升到 1.1.46 后 Sidecar 一直健康检查超时（fetch failed），恢复页无法打开。日志只有 Starting sidecar 和超时，没有 sidecar stderr 和退出码。根因是升级后 Sidecar 要先打开大 PGLite 库并跑迁移（含 2 万多条向量上的 trigram 索引），45 秒超时会杀掉还在建索引的进程，下次重试又从头开始。现将 PGLite 升级健康检查延长到 10 分钟；启动失败必须把 pid、exit code 和完整 stderr 写入桌面日志，没有输出也记 empty。未修改用户知识、向量、Wiki 或原始资料。
+- 是否完成：是
+- 最终结果：Sidecar 健康检查超时会写入 pid、exitCode 和完整 stderr（无输出记 empty）；PGLite 升级等待 10 分钟，避免 45 秒杀掉建索引的进程。Sidecar 13/13、升级启动 6/6、编排契约 17/17、serve 启动 2/2、发布说明 6/6、版本同步、根项目与 Desktop TypeScript 通过。未执行 `bun run build:win`。未修改用户知识、向量、Wiki 或原始资料。该用户请安装 1.1.48，首次打开可能要等几分钟，不要连点重启。
+
 ## 2026-08-26 PMBrain 1.3.8 ChatGPT Tunnel Token 丢失导致连接过期
 
 - 时间：2026-08-26

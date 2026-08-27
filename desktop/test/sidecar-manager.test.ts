@@ -62,6 +62,89 @@ describe('desktop sidecar manager', () => {
     expect(child.exitCode).toBe(0);
   });
 
+  test('health timeout writes pid, exit code and complete stderr into desktop logs', async () => {
+    const lines: Array<{ source: string; text: string }> = [];
+    const capturingLogger = {
+      write(source: string, value: string | Buffer) {
+        lines.push({ source, text: String(value) });
+      },
+      close() {},
+      directory: '',
+      filePath: '',
+    } as any;
+    const manager = new SidecarManager({
+      packaged: false,
+      appPath: '',
+      resourcesPath: '',
+      port: 3131,
+      bootstrapToken: 'test-bootstrap-token',
+      clientVersion: '1.1.48',
+      healthTimeoutMs: 80,
+      logger: capturingLogger,
+    });
+    (manager as any).spawnProcess = () => {
+      (manager as any).child = { pid: 4242, exitCode: null };
+      (manager as any).recentStderr = '  [117] pglite_cjk_trigram_candidate_indexes...\n';
+    };
+    (manager as any).terminateChild = async () => {
+      (manager as any).lastExitCode = 1;
+      (manager as any).lastExitSignal = null;
+      (manager as any).child = null;
+    };
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (() => Promise.reject(new Error('fetch failed'))) as typeof fetch;
+    try {
+      await expect(manager.start()).rejects.toThrow(/健康检查超时|fetch failed/);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+    const joined = lines.map((line) => `[${line.source}] ${line.text}`).join('\n');
+    expect(joined).toContain('exitCode=1');
+    expect(joined).toContain('pid=4242');
+    expect(joined).toContain('pglite_cjk_trigram_candidate_indexes');
+    expect(joined).toMatch(/sidecar:stderr/);
+  });
+
+  test('health timeout with silent sidecar still records empty stderr and missing exit code', async () => {
+    const lines: Array<{ source: string; text: string }> = [];
+    const capturingLogger = {
+      write(source: string, value: string | Buffer) {
+        lines.push({ source, text: String(value) });
+      },
+      close() {},
+      directory: '',
+      filePath: '',
+    } as any;
+    const manager = new SidecarManager({
+      packaged: false,
+      appPath: '',
+      resourcesPath: '',
+      port: 3131,
+      bootstrapToken: 'test-bootstrap-token',
+      clientVersion: '1.1.48',
+      healthTimeoutMs: 80,
+      logger: capturingLogger,
+    });
+    (manager as any).spawnProcess = () => {
+      (manager as any).child = { pid: 5252, exitCode: null };
+      (manager as any).recentStderr = '';
+    };
+    (manager as any).terminateChild = async () => {
+      (manager as any).lastExitCode = 1;
+      (manager as any).child = null;
+    };
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (() => Promise.reject(new Error('fetch failed'))) as typeof fetch;
+    try {
+      await expect(manager.start()).rejects.toThrow(/健康检查超时|fetch failed/);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+    const joined = lines.map((line) => `[${line.source}] ${line.text}`).join('\n');
+    expect(joined).toContain('exitCode=1');
+    expect(joined).toContain('(empty)');
+  });
+
   test('reports the last sidecar stderr instead of a generic health-check failure', async () => {
     const manager = new SidecarManager({
       packaged: false,

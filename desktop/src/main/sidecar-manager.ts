@@ -18,13 +18,15 @@ import {
 
 const HEALTH_TIMEOUT_MS = 45_000;
 const HEALTH_INTERVAL_MS = 500;
+const HEALTH_PROGRESS_LOG_MS = 10_000;
 const STOP_TIMEOUT_MS = 5_000;
 const FORCE_STOP_TIMEOUT_MS = 2_000;
 const RESTART_WINDOW_MS = 30_000;
 const MAX_RESTARTS = 3;
 const MCP_BEARER_VERIFY_TIMEOUT_MS = 3_000;
 const ADMIN_REQUEST_TIMEOUT_MS = 5_000;
-const STDERR_TAIL_LIMIT = 4_000;
+const STDERR_TAIL_LIMIT = 64_000;
+const EMPTY_STDERR = '(empty)';
 
 export type SidecarState =
   | { phase: 'starting'; port: number }
@@ -67,6 +69,8 @@ interface SidecarManagerOptions extends CliRuntime {
   bootstrapToken: string;
   clientVersion: string;
   adminRequestTimeoutMs?: number;
+  /** Override /health wait. PGLite upgrades need minutes, not 45s. */
+  healthTimeoutMs?: number;
   /** Extra argv after `serve` (e.g. --diagnostic-mode). */
   extraServeArgs?: string[];
   /** When true, never auto-restart after crash. */
@@ -93,6 +97,7 @@ export class SidecarManager {
   private lastExitMessage: string | null = null;
   private lastExitCode: number | null = null;
   private lastExitSignal: string | null = null;
+  private lastSidecarPid: number | null = null;
   private lastFailureDetails: SidecarFailureDetails | null = null;
 
   constructor(options: SidecarManagerOptions) {
@@ -119,11 +124,13 @@ export class SidecarManager {
     try {
       await this.waitUntilHealthy();
     } catch (error) {
+      this.logSidecarFailure('before-stop', error);
       this.stopping = true;
       await this.terminateChild();
+      this.logSidecarFailure('after-stop', error);
       const classified = classifySidecarStartupError(error);
-      const message = this.formatUserFacingFailure(error, classified.labelZh);
       this.lastFailureDetails = this.buildFailureDetails(error, classified.retryable);
+      const message = this.formatUserFacingFailure(error, classified.labelZh);
       this.options.onState?.({
         phase: 'failed',
         port: this.port,
@@ -324,6 +331,7 @@ export class SidecarManager {
     this.lastExitMessage = null;
     this.lastExitCode = null;
     this.lastExitSignal = null;
+    this.lastSidecarPid = null;
     const root = projectRoot(this.options);
     const workingDirectory = this.options.packaged ? packagedRuntimeRoot(this.options) : root;
     const runtimeContract = this.options.packaged ? getDesktopRuntimeContract() : null;
@@ -349,6 +357,11 @@ export class SidecarManager {
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     this.child = child;
+    this.lastSidecarPid = child.pid ?? null;
+    this.options.logger.write(
+      'desktop',
+      `sidecar spawned pid=${child.pid ?? 'none'} command=${command}`,
+    );
     child.stdout?.on('data', (value) => this.options.logger.write('sidecar:stdout', value));
     child.stderr?.on('data', (value) => {
       const text = String(value);
@@ -377,7 +390,7 @@ export class SidecarManager {
     if (!classified.retryable || this.options.disableAutoRestart) {
       this.lastFailureDetails = {
         recentStderr: this.recentStderr.trim(),
-        sidecarPid: null,
+        sidecarPid: this.lastSidecarPid,
         exitCode: this.lastExitCode,
         signal: this.lastExitSignal,
         lastHealthError: message,
@@ -467,18 +480,44 @@ export class SidecarManager {
     }
   }
 
+  private healthTimeoutMs(): number {
+    return this.options.healthTimeoutMs ?? HEALTH_TIMEOUT_MS;
+  }
+
+  private stderrForLog(): string {
+    const stderr = this.recentStderr.trim();
+    return stderr || EMPTY_STDERR;
+  }
+
+  private logSidecarFailure(stage: string, error?: unknown): void {
+    const reason = error instanceof Error ? error.message.split('\n')[0] : String(error ?? 'unknown');
+    const pid = this.child?.pid ?? this.lastSidecarPid;
+    const alive = Boolean(this.child && this.child.exitCode === null);
+    const exitCode = this.lastExitCode ?? this.child?.exitCode ?? null;
+    const signal = this.lastExitSignal ?? null;
+    const stderr = this.stderrForLog();
+    this.options.logger.write(
+      'desktop',
+      `sidecar startup failure stage=${stage} reason=${reason} pid=${pid ?? 'none'} alive=${alive} exitCode=${exitCode ?? 'none'} signal=${signal ?? 'none'} stderrBytes=${this.recentStderr.length}`,
+    );
+    this.options.logger.write('sidecar:stderr', stderr);
+  }
+
   private async waitUntilHealthy(): Promise<void> {
-    const deadline = Date.now() + HEALTH_TIMEOUT_MS;
+    const timeoutMs = this.healthTimeoutMs();
+    const deadline = Date.now() + timeoutMs;
     const healthUrl = `http://127.0.0.1:${this.port}/health`;
     let lastError = 'PMBrain did not report healthy.';
     let lastObservation: HealthCheckObservation | null = null;
+    let lastProgressLog = 0;
 
     while (Date.now() < deadline) {
       if (this.stopping) throw new Error('PMBrain sidecar startup was stopped.');
 
-      // If sidecar already exited, fail immediately — do not wait out 45s.
+      // If sidecar already exited, fail immediately — do not wait out the timeout.
       if (!this.child || this.child.exitCode !== null) {
         const stderr = this.recentStderr.trim();
+        this.logSidecarFailure('exited-before-healthy');
         const message = this.lastExitMessage
           ?? `PMBrain sidecar exited before it became healthy.${stderr ? ` ${stderr}` : ''}`;
         const classified = classifySidecarStartupError(message);
@@ -529,19 +568,36 @@ export class SidecarManager {
         };
         lastObservation = observation;
         this.options.onHealthObservation?.(observation);
+        if (Date.now() - lastProgressLog >= HEALTH_PROGRESS_LOG_MS) {
+          lastProgressLog = Date.now();
+          this.options.logger.write(
+            'desktop',
+            `health check still waiting url=${healthUrl} error=${lastError} pid=${this.child?.pid ?? 'none'} alive=${observation.sidecarAlive} stderrBytes=${this.recentStderr.length}`,
+          );
+        }
       }
       await new Promise((resolveDelay) => setTimeout(resolveDelay, HEALTH_INTERVAL_MS));
     }
 
     const classified = classifySidecarStartupError(lastError);
+    const sidecarAlive = Boolean(this.child && this.child.exitCode === null);
+    const sidecarPid = this.child?.pid ?? lastObservation?.sidecarPid ?? null;
+    const recentStderr = this.recentStderr.trim();
+    this.logSidecarFailure('health-timeout');
     throw new SidecarHealthTimeoutError({
       healthUrl,
       lastError,
-      sidecarAlive: Boolean(this.child && this.child.exitCode === null),
-      sidecarPid: this.child?.pid ?? lastObservation?.sidecarPid ?? null,
-      recentStderr: this.recentStderr.trim(),
+      sidecarAlive,
+      sidecarPid,
+      recentStderr,
       category: classified.category,
-      message: `本地服务启动失败：健康检查超时。最后错误：${lastError}`,
+      message: [
+        `本地服务启动失败：健康检查超时。最后错误：${lastError}`,
+        `sidecar pid：${sidecarPid ?? 'none'}`,
+        `sidecar 仍在运行：${sidecarAlive ? 'yes' : 'no'}`,
+        `sidecar 退出码：${this.lastExitCode ?? 'none'}`,
+        `sidecar stderr：${recentStderr || EMPTY_STDERR}`,
+      ].join('\n'),
     });
   }
 
@@ -550,7 +606,7 @@ export class SidecarManager {
     return {
       healthUrl: `http://127.0.0.1:${this.port}/health`,
       lastHealthError: text,
-      sidecarPid: this.child?.pid ?? null,
+      sidecarPid: this.child?.pid ?? this.lastSidecarPid,
       exitCode: this.lastExitCode,
       signal: this.lastExitSignal,
       recentStderr: this.recentStderr.trim(),
@@ -560,14 +616,17 @@ export class SidecarManager {
 
   private formatUserFacingFailure(error: unknown, categoryLabelZh: string): string {
     const text = error instanceof Error ? error.message : String(error);
-    const stderr = this.recentStderr.trim();
+    const stderr = this.stderrForLog();
+    const pid = this.child?.pid ?? this.lastSidecarPid;
     const parts = [
       '本地服务启动失败',
       `失败类别：${categoryLabelZh}`,
       `详细信息：${text}`,
+      `sidecar pid：${pid ?? 'none'}`,
+      `sidecar 退出码：${this.lastExitCode ?? 'none'}`,
     ];
-    if (this.lastExitCode != null) parts.push(`sidecar 退出码：${this.lastExitCode}`);
-    if (stderr) parts.push(`sidecar stderr：${stderr.slice(-1500)}`);
+    if (this.lastExitSignal) parts.push(`sidecar signal：${this.lastExitSignal}`);
+    parts.push(`sidecar stderr：${stderr.slice(-STDERR_TAIL_LIMIT)}`);
     return parts.join('\n');
   }
 

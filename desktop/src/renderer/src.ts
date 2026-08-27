@@ -949,7 +949,7 @@ function renderService(service: SidecarState | null, port?: number): void {
     setSetupWait(
       true,
       '正在等待本地服务健康检查',
-      'PMBrain 已启动 sidecar，正在确认数据库与 HTTP 服务可用；首次启动最长可能需要约 45 秒。',
+      'PMBrain 已启动 sidecar，正在打开数据库并完成升级迁移；较大知识库可能需要几分钟，请不要关闭窗口。',
       '健康检查',
     );
   } else if (service?.phase === 'ready' || service?.phase === 'failed') {

@@ -1358,6 +1358,9 @@ async function handleCliOnly(command: string, args: string[]) {
   // All remaining CLI-only commands need a DB connection. The long-lived
   // sidecar must fail closed when schema migration cannot complete; starting
   // HTTP with a half-migrated PGLite leaves Desktop waiting on /health.
+  if (command === 'serve') {
+    console.error(`[serve] opening database (pid=${process.pid}); /health starts after migrations finish`);
+  }
   const engine = await connectEngine({ strictMigrations: command === 'serve' });
   let commandFailed = false;
   try {
