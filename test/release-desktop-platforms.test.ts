@@ -10,6 +10,12 @@ const releaseNotes = readFileSync(join(process.cwd(), 'desktop/build/release-not
 const desktopPackage = JSON.parse(readFileSync(join(process.cwd(), 'desktop/package.json'), 'utf8')) as { version: string };
 const rootPackage = JSON.parse(readFileSync(join(process.cwd(), 'package.json'), 'utf8')) as { scripts: Record<string, string> };
 const desktopRuntimeJob = testWorkflow.match(/\n  desktop-runtime:[\s\S]*?\n  cache-write:/)?.[0] ?? '';
+const MAX_RELEASE_NOTE_VERSIONS = 5;
+const RELEASE_NOTE_HEADING = /^## PMBrain (\d+\.\d+\.\d+)\s*$/gm;
+
+function listReleaseNoteVersions(notes: string): string[] {
+  return [...notes.matchAll(RELEASE_NOTE_HEADING)].map((match) => match[1]);
+}
 
 describe('Windows desktop release gates', () => {
   test('electron-builder writes the version release notes into updater metadata', () => {
@@ -19,6 +25,14 @@ describe('Windows desktop release gates', () => {
     expect(desktopBuilderConfig).toContain('to: release-notes.md');
     expect(releaseNotes).toContain(`## PMBrain ${desktopPackage.version}`);
     expect(releaseNotes).toMatch(/^- .+/m);
+  });
+
+  test('GitHub installer download notes keep only the last 5 desktop versions', () => {
+    const versions = listReleaseNoteVersions(releaseNotes);
+    expect(versions.length).toBeGreaterThan(0);
+    expect(versions.length).toBeLessThanOrEqual(MAX_RELEASE_NOTE_VERSIONS);
+    expect(versions[0]).toBe(desktopPackage.version);
+    expect(new Set(versions).size).toBe(versions.length);
   });
 
   test('Release builds and publishes only the Windows package and updater files', () => {
