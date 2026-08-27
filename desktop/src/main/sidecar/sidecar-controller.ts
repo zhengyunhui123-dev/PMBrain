@@ -91,6 +91,12 @@ export class SidecarController {
       message: '正在分配本机端口并启动 sidecar，请保持窗口开启。',
     });
     try {
+      const { resolveSidecarHealthTimeoutMs, POST_UPGRADE_HEALTH_TIMEOUT_MS } = await import('../startup/post-upgrade-startup.js');
+      const upgradePending = needsDesktopMigration(app.getVersion());
+      const healthTimeoutMs = resolveSidecarHealthTimeoutMs({
+        engine: getDatabaseRuntimeConfig().engine,
+        upgradePending,
+      });
       const port = await findAvailablePort();
       const bootstrapToken = ensureBootstrapToken();
       let manager!: SidecarManager;
@@ -99,16 +105,22 @@ export class SidecarController {
         port,
         bootstrapToken,
         clientVersion: app.getVersion(),
+        healthTimeoutMs,
         logger,
         onState: state => {
           if (this.manager !== manager) return;
           this.sendState(state);
           if (state.phase === 'starting') {
+            const waitHint = healthTimeoutMs >= POST_UPGRADE_HEALTH_TIMEOUT_MS
+              ? '升级后首次打开较大知识库可能需要几分钟，请不要关闭窗口。'
+              : healthTimeoutMs >= 60_000
+                ? `正在打开本机数据库，最长可能需要约 ${Math.round(healthTimeoutMs / 60_000)} 分钟。`
+                : 'sidecar 已启动，PMBrain 正在检查数据库与 HTTP 服务。';
             this.dependencies.sendStartupProgress({
               visible: true,
               stage: 'health',
               title: '正在等待本地服务健康检查',
-              message: 'sidecar 已启动，PMBrain 正在检查数据库与 HTTP 服务；首次启动最长可能需要约 45 秒。',
+              message: waitHint,
             });
           } else if (state.phase === 'ready' || state.phase === 'failed') {
             this.dependencies.hideStartupProgress();
@@ -130,6 +142,13 @@ export class SidecarController {
       const rawMessage = error instanceof Error ? error.message : String(error);
       const database = getDatabaseRuntimeConfig();
       const databasePath = getSetupInfo().current.databasePath;
+      const failure = this.manager?.lastFailure;
+      if (failure) {
+        logger.write(
+          'desktop',
+          `sidecar failure details: exitCode=${failure.exitCode ?? 'none'} signal=${failure.signal ?? 'none'} pid=${failure.sidecarPid ?? 'none'} stderr=${failure.recentStderr?.trim() || '(empty)'}`,
+        );
+      }
       let message = database.engine === 'pglite' && databasePath
         ? `${rawMessage}\nPGLite 数据库路径：${databasePath}`
         : rawMessage;

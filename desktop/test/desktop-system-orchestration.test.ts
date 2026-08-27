@@ -48,6 +48,16 @@ describe('desktop system orchestration contracts', () => {
     expect(databaseController).toContain('runCliChecked(this.dependencies.runtime(), DESKTOP_MIGRATION_ARGS)');
   });
 
+  test('Sidecar 启动失败会把 exit code 和完整 stderr 写入桌面日志', () => {
+    expect(sidecar).toContain('healthTimeoutMs');
+    expect(sidecar).toContain('logSidecarFailure');
+    expect(sidecar).toContain('exitCode=');
+    expect(sidecar).toContain('(empty)');
+    expect(sidecarController).toContain('resolveSidecarHealthTimeoutMs');
+    expect(sidecarController).toContain('POST_UPGRADE_HEALTH_TIMEOUT_MS');
+    expect(sidecarController).toContain("failure.recentStderr");
+  });
+
   test('PGLite 用户升级时只由 sidecar 打开数据库，健康后才记录升级完成', () => {
     expect(main).toContain("setup.current.engine === 'pglite'");
     expect(databaseController).toMatch(/async migrateConfiguredInstallation[\s\S]*?engine === 'pglite'[\s\S]*?pgliteBackup\.ensureUpgradeBackup[\s\S]*?return true;[\s\S]*?DESKTOP_MIGRATION_ARGS/);
