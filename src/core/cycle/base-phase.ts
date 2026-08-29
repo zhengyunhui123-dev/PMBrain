@@ -55,6 +55,19 @@ export interface BasePhaseOpts {
   budgetUsd?: number;
   /** Optional injected BudgetMeter (tests). When set, replaces the default constructed one. */
   meter?: BudgetMeter;
+  /** Absolute wall-clock deadline of the owning Minion job. */
+  deadlineAtMs?: number | null;
+}
+
+export const CYCLE_DEADLINE_RESERVE_MS = 45_000;
+
+export function effectivePhaseDeadlineMs(
+  phaseDefaultMs: number,
+  deadlineAtMs: number | null | undefined,
+  nowMs = Date.now(),
+): number {
+  if (deadlineAtMs == null) return phaseDefaultMs;
+  return Math.max(0, Math.min(phaseDefaultMs, deadlineAtMs - CYCLE_DEADLINE_RESERVE_MS - nowMs));
 }
 
 export abstract class BaseCyclePhase {

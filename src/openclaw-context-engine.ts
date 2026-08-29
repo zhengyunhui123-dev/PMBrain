@@ -46,6 +46,7 @@ interface PluginApi {
 
 interface PluginCtx {
   workspaceDir: string;
+  resolveEntities?: import('./core/context/reflex.ts').ResolveEntitiesFn;
   [key: string]: unknown;
 }
 
@@ -58,6 +59,7 @@ const entry: PluginEntry = {
     api.registerContextEngine(ENGINE_ID, (ctx: PluginCtx) =>
       createGBrainContextEngine({
         workspaceDir: ctx.workspaceDir,
+        resolveEntities: ctx.resolveEntities,
       }),
     );
   },

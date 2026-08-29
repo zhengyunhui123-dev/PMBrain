@@ -74,6 +74,9 @@ export interface MinionJob {
   remove_on_complete: boolean;
   remove_on_fail: boolean;
   idempotency_key: string | null;
+  private_queue_owner_job_id: number | null;
+  private_queue_owner_token: string | null;
+  private_queue_lease_until: Date | null;
 
   // v12: scheduler polish — quiet-hours gate + deterministic stagger
   quiet_hours: Record<string, unknown> | null;
@@ -120,6 +123,10 @@ export interface MinionJobInput {
   max_children?: number;
   /** Wall-clock per-job deadline in ms. Set on claim → timeout_at. Terminal on expire (no retry). */
   timeout_ms?: number;
+  /** Internal metadata for a phase-owned dream-inline queue. */
+  private_queue_owner_job_id?: number | null;
+  private_queue_owner_token?: string | null;
+  private_queue_lease_ms?: number | null;
   /** DELETE row on successful completion (after token rollup + child_done insert). */
   remove_on_complete?: boolean;
   /** DELETE row on terminal failure (after parent failure hook). */
@@ -205,6 +212,8 @@ export interface MinionJobContext {
   attempts_made: number;
   /** AbortSignal for cooperative cancellation (fires on timeout, cancel, pause, or lock loss). */
   signal: AbortSignal;
+  /** Absolute claim-time job deadline, or null for an unbounded job. */
+  deadlineAtMs?: number | null;
   /** AbortSignal that fires only on worker process SIGTERM/SIGINT. Handlers sensitive
    *  to deploy restarts (e.g. the shell handler, which must run a SIGTERM → 5s → SIGKILL
    *  sequence on its child) listen to this in addition to `signal`. Most handlers can
@@ -385,6 +394,11 @@ export function rowToMinionJob(row: Record<string, unknown>): MinionJob {
     remove_on_complete: row.remove_on_complete === true,
     remove_on_fail: row.remove_on_fail === true,
     idempotency_key: (row.idempotency_key as string) || null,
+    private_queue_owner_job_id: (row.private_queue_owner_job_id as number | null) ?? null,
+    private_queue_owner_token: (row.private_queue_owner_token as string) || null,
+    private_queue_lease_until: row.private_queue_lease_until
+      ? new Date(row.private_queue_lease_until as string)
+      : null,
     quiet_hours: row.quiet_hours ? (typeof row.quiet_hours === 'string' ? JSON.parse(row.quiet_hours) : row.quiet_hours) as Record<string, unknown> : null,
     stagger_key: (row.stagger_key as string) || null,
     result: row.result ? (typeof row.result === 'string' ? JSON.parse(row.result) : row.result) as Record<string, unknown> : null,

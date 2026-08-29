@@ -54,6 +54,7 @@ import { importFromContent } from '../import-file.ts';
 import { serializeMarkdown } from '../markdown.ts';
 import { dreamModelDetails, resolveDreamModel } from './model-routing.ts';
 import { writeReceipt } from '../extract/receipt-writer.ts';
+import { throwIfAborted } from '../abort-check.ts';
 import { upsertExtractRollup } from '../extract/rollup-writer.ts';
 
 const DEFAULT_BUDGET_USD = 0.3;
@@ -114,6 +115,8 @@ export interface ExtractAtomsOpts {
    * `heartbeat()` on the passed reporter.
    */
   progress?: ProgressReporter;
+  /** Cooperative stop from the owning Dream job. */
+  signal?: AbortSignal;
 }
 
 interface ExtractedAtom {
@@ -329,6 +332,7 @@ export async function runPhaseExtractAtoms(
   engine: BrainEngine,
   opts: ExtractAtomsOpts = {},
 ): Promise<PhaseResult> {
+  throwIfAborted(opts.signal, '[dream] extract_atoms');
   const sourceId = opts.sourceId ?? 'default';
   const chat = opts._chat ?? gatewayChat;
   const resolvedModel = await resolveDreamModel(engine, { phase: 'extract_atoms' });
@@ -490,6 +494,7 @@ export async function runPhaseExtractAtoms(
 
   await withBudgetTracker(budgetTracker, async () => {
   for (const item of work) {
+    throwIfAborted(opts.signal, '[dream] extract_atoms');
     await maybeYield();
     if (budgetExhausted || budgetTracker.totalSpent >= budgetCap) {
       if (item.kind === 'transcript') transcriptsSkipped++;
@@ -509,6 +514,7 @@ export async function runPhaseExtractAtoms(
           },
         ],
         maxTokens: 2000,
+        abortSignal: opts.signal,
       });
       // Post-await yield: closes the "long LLM call past TTL" hazard
       // codex flagged. The 30s throttle inside maybeYield bounds the
@@ -581,6 +587,7 @@ export async function runPhaseExtractAtoms(
       // Reporter rate-limits to ~1 line/sec; safe to tick every iter.
       opts.progress?.tick(1, `${totalAtomsExtracted} atoms / ${duplicatesSkipped} skipped`);
     } catch (err) {
+      throwIfAborted(opts.signal, '[dream] extract_atoms');
       if (err instanceof BudgetExhausted) {
         budgetExhausted = true;
         if (item.kind === 'transcript') transcriptsSkipped++;

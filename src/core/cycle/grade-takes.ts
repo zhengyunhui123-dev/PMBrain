@@ -35,7 +35,7 @@
  */
 
 import { createHash } from 'node:crypto';
-import { BaseCyclePhase, type ScopedReadOpts, type BasePhaseOpts } from './base-phase.ts';
+import { BaseCyclePhase, effectivePhaseDeadlineMs, type ScopedReadOpts, type BasePhaseOpts } from './base-phase.ts';
 import { chat as gatewayChat } from '../ai/gateway.ts';
 import { GBrainError } from '../types.ts';
 import type { OperationContext } from '../operations.ts';
@@ -251,6 +251,7 @@ export interface GradeTakesResult {
   ensemble_invoked: number;
   /** E2 ensemble (T5): count of takes where ensemble produced 3/3 unanimous. */
   ensemble_unanimous: number;
+  deadline_hit: boolean;
 }
 
 /**
@@ -411,7 +412,24 @@ class GradeTakesPhase extends BaseCyclePhase {
       warnings: [],
       ensemble_invoked: 0,
       ensemble_unanimous: 0,
+      deadline_hit: false,
     };
+
+    const phaseStartMs = Date.now();
+    const deadlineMs = effectivePhaseDeadlineMs(
+      Number.POSITIVE_INFINITY,
+      opts.deadlineAtMs,
+      phaseStartMs,
+    );
+    if (deadlineMs <= 0) {
+      result.deadline_hit = true;
+      result.warnings.push('phase skipped: job deadline already inside the reserve window');
+      return {
+        summary: 'grade_takes: skipped — job deadline inside the reserve window',
+        details: { ...result, prompt_version: promptVersion },
+        status: 'warn',
+      };
+    }
 
     // Load unresolved active takes, oldest-first.
     const takes = await engine.listTakes({
@@ -427,6 +445,13 @@ class GradeTakesPhase extends BaseCyclePhase {
 
     const now = new Date();
     for (const take of takes) {
+      if (Date.now() - phaseStartMs >= deadlineMs) {
+        result.deadline_hit = true;
+        result.warnings.push(
+          `phase deadline hit at take ${result.takes_scanned}/${takes.length}; partial completion`,
+        );
+        break;
+      }
       result.takes_scanned += 1;
       this.tick(opts);
 

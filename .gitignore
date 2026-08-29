@@ -65,6 +65,9 @@ load-env.ps1
 
 # Local context / brain dump — not for git
 context/
+# Retrieval Reflex core modules are project source, not a local brain dump.
+!src/core/context/
+!src/core/context/*.ts
 
 # Local archive for upstream GBrain and retired documentation. Files moved
 # here are preserved for reference but must not be published with PMBrain.

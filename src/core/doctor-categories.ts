@@ -135,6 +135,7 @@ export const OPS_CHECK_NAMES: ReadonlySet<string> = new Set([
   'pgvector',
   'progressive_batch_audit_health',
   'queue_health',
+  'retrieval_reflex_health',
   'reranker_health',
   'rls',
   'rls_event_trigger',

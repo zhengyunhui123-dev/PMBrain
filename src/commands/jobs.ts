@@ -1502,6 +1502,8 @@ export async function registerBuiltinHandlers(worker: MinionWorker, engine: Brai
       brainDir: repoPath,
       pull,
       signal: job.signal, // propagate abort so cycle bails on timeout/cancel
+      deadlineAtMs: job.deadlineAtMs ?? null,
+      privateQueueOwnerJobId: job.id,
       ...(sourceId ? { sourceId } : {}),
       ...(normalized.phases !== undefined ? { phases: normalized.phases as any } : {}),
       yieldBetweenPhases: async () => {
@@ -1537,6 +1539,8 @@ export async function registerBuiltinHandlers(worker: MinionWorker, engine: Brai
       brainDir: repoPath,
       phases: phases as any,
       signal: job.signal,
+      deadlineAtMs: job.deadlineAtMs ?? null,
+      privateQueueOwnerJobId: job.id,
       yieldBetweenPhases: async () => {
         await new Promise<void>((resolve) => setImmediate(resolve));
       },
@@ -1710,6 +1714,8 @@ export async function registerBuiltinHandlers(worker: MinionWorker, engine: Brai
       brainDir: repoPath,
       phases: [phase as any],
       signal: job.signal,
+      deadlineAtMs: job.deadlineAtMs ?? null,
+      privateQueueOwnerJobId: job.id,
     });
     return { phase, status: report.status, report };
   };

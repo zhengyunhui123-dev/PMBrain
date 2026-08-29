@@ -30,6 +30,7 @@ import { autoDetectDetail, classifyQuery, isAmbiguousModalityQuery } from './que
 import { isTitlePhraseMatch } from './title-match.ts';
 import { normalizeAlias } from './alias-normalize.ts';
 import { normalizeChineseQuery } from './query-normalize-zh.ts';
+import { resolveHardExcludes } from './source-boost.ts';
 import { stampEvidence } from './evidence.ts';
 import { applyExactLookupTier } from './exact-lookup.ts';
 import { expandAnchors, hydrateChunks } from './two-pass.ts';
@@ -926,26 +927,8 @@ export async function hybridSearch(
   // event intents). The legacy heuristic still wins when intent weighting
   // is off.
   // Back-compat: recencyBoost: 1|2 → 'on'|'strong'; 0 → 'off'.
-  const legacyRecency: 'off' | 'on' | 'strong' | undefined =
-    opts?.recencyBoost === 2 ? 'strong' :
-    opts?.recencyBoost === 1 ? 'on' :
-    opts?.recencyBoost === 0 ? 'off' :
-    undefined;
-  const salienceMode: 'off' | 'on' | 'strong' = opts?.salience ?? suggestions.suggestedSalience;
-  // Intent-weighting recency suggestion is a NUDGE — it only fires when
-  // the caller left recency unspecified AND the legacy heuristic also
-  // didn't fire. The classifier's own suggestedRecency (from v0.29.1)
-  // still wins when it's set; the new intent suggestion is a fallback.
-  const intentRecency =
-    intentWeightingOn && intentWeights.suggestedRecency != null
-      ? intentWeights.suggestedRecency
-      : null;
-  const recencyMode: 'off' | 'on' | 'strong' =
-    opts?.recency
-    ?? legacyRecency
-    ?? (suggestions.suggestedRecency !== 'off'
-        ? suggestions.suggestedRecency
-        : (intentRecency ?? suggestions.suggestedRecency));
+  const salienceMode = resolveEffectiveSalience(opts, suggestions);
+  const recencyMode = resolveEffectiveRecency(opts, suggestions, intentWeightingOn);
   const postFusionOpts: PostFusionOpts = {
     applyBacklinks: true,
     salience: salienceMode,
@@ -1635,6 +1618,63 @@ export async function hybridSearch(
 // v0.32.x (search-lite) — cached + budgeted public wrapper
 // ----------------------------------------------------------------------
 
+type QuerySuggestions = ReturnType<typeof classifyQuery>;
+
+function resolveEffectiveSalience(
+  opts: HybridSearchOpts | undefined,
+  suggestions: QuerySuggestions,
+): 'off' | 'on' | 'strong' {
+  return opts?.salience ?? suggestions.suggestedSalience;
+}
+
+function resolveEffectiveRecency(
+  opts: HybridSearchOpts | undefined,
+  suggestions: QuerySuggestions,
+  intentWeightingOn: boolean,
+): 'off' | 'on' | 'strong' {
+  const legacyRecency: 'off' | 'on' | 'strong' | undefined =
+    opts?.recencyBoost === 2 ? 'strong' :
+    opts?.recencyBoost === 1 ? 'on' :
+    opts?.recencyBoost === 0 ? 'off' :
+    undefined;
+  const intentRecency = intentWeightingOn
+    ? (weightsForIntent(suggestions.intent).suggestedRecency ?? null)
+    : null;
+  return opts?.recency
+    ?? legacyRecency
+    ?? (suggestions.suggestedRecency !== 'off'
+      ? suggestions.suggestedRecency
+      : (intentRecency ?? suggestions.suggestedRecency));
+}
+
+export type QueryCacheBypassReason =
+  | 'date_filter'
+  | 'type_filter'
+  | 'pagination'
+  | 'exact_slug_filter'
+  | 'code_filter';
+
+/**
+ * Cache only request shapes fully represented by the cache key. Dynamic
+ * Chinese date normalization is passed separately because it is inferred
+ * from query text rather than present on SearchOpts.
+ */
+export function queryCacheRequestBypassReason(
+  opts: HybridSearchOpts | undefined,
+  inferredDateRange = false,
+): QueryCacheBypassReason | null {
+  if (
+    inferredDateRange ||
+    Boolean(opts?.since ?? opts?.afterDate) ||
+    Boolean(opts?.until ?? opts?.beforeDate)
+  ) return 'date_filter';
+  if (opts?.type || (opts?.types?.length ?? 0) > 0) return 'type_filter';
+  if ((opts?.offset ?? 0) !== 0) return 'pagination';
+  if ((opts?.exclude_slugs?.length ?? 0) > 0) return 'exact_slug_filter';
+  if (opts?.language || opts?.symbolKind) return 'code_filter';
+  return null;
+}
+
 /**
  * Public wrapper around hybridSearch that adds the v0.32.x search-lite
  * features: semantic query cache + token budget enforcement. Both are
@@ -1682,8 +1722,8 @@ export async function hybridSearchCached(
       // read (ranking-correctness leak, codex T1).
       floor_ratio: opts?.floorRatio,
       // v0.40.4 — graph_signals threaded through cache resolver too so
-      // knobsHash() includes the per-call override (KNOBS_HASH_VERSION=4
-      // folds gs= into the hash). Without this thread, a per-call
+      // knobsHash() includes the per-call override (the cache epoch that
+      // introduced gs= folds it into the hash). Without this thread, a per-call
       // override would write to one cache row but read from a different
       // one on the next call.
       graph_signals: opts?.graph_signals,
@@ -1712,12 +1752,17 @@ export async function hybridSearchCached(
   const cfgCached = mergedCfgCached ?? ((await import('../config.ts')).loadConfig()) ?? { engine: 'pglite' as const };
   const resolvedColCached = resolveEmbeddingColumn(opts, cfgCached);
   const isNonDefaultColumn = !isCacheSafe(resolvedColCached, cfgCached);
+  const cacheSuggestions = classifyQuery(query);
 
   // Cache key carries the column + provider so different embedding spaces
   // never collide on the same `(source_id, query_text)` row.
   const cacheKnobsHash = knobsHash(resolvedForCache, {
     embeddingColumn: resolvedColCached.name,
     embeddingModel: resolvedColCached.embeddingModel,
+    hardExcludes: resolveHardExcludes(opts?.exclude_slug_prefixes, opts?.include_slug_prefixes),
+    detail: opts?.detail ?? cacheSuggestions.suggestedDetail,
+    salience: resolveEffectiveSalience(opts, cacheSuggestions),
+    recency: resolveEffectiveRecency(opts, cacheSuggestions, resolvedForCache.intentWeighting),
     excludePrivate: opts?.excludePrivate === true,
   });
 
@@ -1745,12 +1790,18 @@ export async function hybridSearchCached(
     opts?.adaptiveReturn,
     cfgCached as unknown as Record<string, unknown> | null,
   );
+  const normalizedChineseForCache = normalizeChineseQuery(query);
+  const unkeyedRequest = queryCacheRequestBypassReason(
+    opts,
+    normalizedChineseForCache.since !== undefined || normalizedChineseForCache.until !== undefined,
+  ) !== null;
   const skipCache =
     !cache.isEnabled() ||
     (opts?.walkDepth ?? 0) > 0 ||
     Boolean(opts?.nearSymbol) ||
     isNonDefaultColumn ||
-    adaptiveReturnOn;
+    adaptiveReturnOn ||
+    unkeyedRequest;
 
   let cacheStatus: 'hit' | 'miss' | 'disabled' = skipCache ? 'disabled' : 'miss';
   let cacheSimilarity: number | undefined;
@@ -1784,13 +1835,17 @@ export async function hybridSearchCached(
   }
 
   if (!skipCache && queryEmbedding && cacheStatus !== 'disabled') {
-    const hit = await cache.lookup(queryEmbedding, { sourceId: cacheScopeKey(opts), knobsHash: cacheKnobsHash });
+    const hit = await cache.lookup(queryEmbedding, {
+      sourceId: cacheScopeKey(opts),
+      knobsHash: cacheKnobsHash,
+      queryText: query,
+    });
     if (hit.hit && hit.results) {
       cacheStatus = 'hit';
       cacheSimilarity = hit.similarity;
       cacheAge = hit.ageSeconds;
 
-      const limit = opts?.limit || 20;
+      const limit = opts?.limit || resolvedForCache.searchLimit;
       const offset = opts?.offset || 0;
       const sliced = hit.results.slice(offset, offset + limit);
 

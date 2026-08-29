@@ -38,7 +38,7 @@ import { resolveDreamOutputRoot } from './dream-output.ts';
 export { resolveDreamOutputRoot } from './dream-output.ts';
 import type { BrainEngine, DreamVerdict } from '../engine.ts';
 import type { PhaseResult, PhaseError } from '../cycle.ts';
-import { MinionQueue } from '../minions/queue.ts';
+import { DEFAULT_PRIVATE_QUEUE_LEASE_MS, MinionQueue } from '../minions/queue.ts';
 import { waitForCompletion, TimeoutError } from '../minions/wait-for-completion.ts';
 import type { MinionJobInput, SubagentHandlerData } from '../minions/types.ts';
 import { discoverTranscripts, type DiscoveredTranscript } from './transcript-discovery.ts';
@@ -59,6 +59,8 @@ import {
   type ManifestContext,
 } from './link-manifest.ts';
 import { runSubagentsInline } from './inline-drain.ts';
+import { CYCLE_DEADLINE_RESERVE_MS } from './base-phase.ts';
+import { combineAbortSignals, throwIfAborted } from '../abort-check.ts';
 import {
   buildTriageMapBlock as buildStructuredTriageMapBlock,
   DEFAULT_TRIAGE_THRESHOLD,
@@ -290,6 +292,9 @@ export interface SynthesizePhaseOpts {
   bypassDreamGuard?: boolean;
   /** Source resolved by the cycle; keeps child writes and summary source-local. */
   sourceId?: string;
+  signal?: AbortSignal;
+  deadlineAtMs?: number | null;
+  privateQueueOwnerJobId?: number | null;
 }
 
 export async function loadDreamWriteSettings(
@@ -311,6 +316,7 @@ export async function runPhaseSynthesize(
   opts: SynthesizePhaseOpts,
 ): Promise<PhaseResult> {
   const start = Date.now();
+  let ownedPrivateQueue: { queue: MinionQueue; name: string } | null = null;
   // Normalize brainDir to an absolute path BEFORE any reverse-write. Without
   // this, a relative or empty brainDir flows down to writeReversePages →
   // `join(brainDir, '${slug}.md')` → relative path → resolves against cwd at
@@ -329,6 +335,7 @@ export async function runPhaseSynthesize(
     opts.brainDir = resolve(opts.brainDir);
   }
   try {
+    throwIfAborted(opts.signal, '[dream] synthesize');
     const config = await loadSynthConfig(engine);
     const { outputRoot, dualWrite } = await loadDreamWriteSettings(engine, opts.brainDir);
     const executionMode = await resolveSubagentExecutionMode(engine, config.resolvedModel.model);
@@ -449,7 +456,7 @@ export async function runPhaseSynthesize(
         threshold: config.triage.threshold,
         concurrency: config.triage.concurrency,
         maxMs: config.triage.maxMs,
-        judge: makeJudgeClient(config.verdictModel),
+        judge: makeJudgeClient(config.verdictModel, opts.signal),
       }, opts.yieldDuringPhase);
       verdicts = triage.reports;
       triage.byPath.forEach((verdict, path) => structuredVerdicts.set(path, verdict));
@@ -522,6 +529,19 @@ export async function runPhaseSynthesize(
 
     const queue = new MinionQueue(engine);
     const childQueueName = `dream-inline-${Date.now()}-${randomUUID().slice(0, 8)}`;
+    ownedPrivateQueue = { queue, name: childQueueName };
+    const privateQueueOwnerToken = randomUUID();
+    const renewPrivateQueueLease = queue.makeThrottledLeaseRenewer(
+      childQueueName,
+      privateQueueOwnerToken,
+      opts.yieldDuringPhase,
+    );
+    const remainingMs = opts.deadlineAtMs == null
+      ? 35 * 60 * 1000
+      : Math.max(0, opts.deadlineAtMs - CYCLE_DEADLINE_RESERVE_MS - Date.now());
+    if (remainingMs < 2 * 60 * 1000) {
+      return skipped('insufficient_cycle_budget', 'synthesize deferred: not enough parent job time remains');
+    }
     const childIds: number[] = [];
     /** Map child job_id → chunk metadata for D6 orchestrator-side slug rewrite. */
     const chunkInfo = new Map<number, { idx: number; hash6: string }>();
@@ -535,6 +555,7 @@ export async function runPhaseSynthesize(
     );
 
     for (const t of worthProcessing) {
+      throwIfAborted(opts.signal, '[dream] synthesize submission');
       const hash16 = t.contentHash.slice(0, 16);
       const hash6 = t.contentHash.slice(0, 6);
 
@@ -597,6 +618,7 @@ export async function runPhaseSynthesize(
           )).block
         : '';
       for (let i = 0; i < chunks.length; i++) {
+        throwIfAborted(opts.signal, '[dream] synthesize submission');
         const triageMapBlock = buildStructuredTriageMapBlock(
           structuredVerdicts.get(t.filePath),
           chunks[i],
@@ -633,8 +655,11 @@ export async function runPhaseSynthesize(
           max_stalled: 3,
           on_child_fail: 'continue',
           idempotency_key,
-          timeout_ms: 30 * 60 * 1000, // 30 min per chunk
+          timeout_ms: Math.min(30 * 60 * 1000, remainingMs),
           queue: childQueueName,
+          private_queue_owner_job_id: opts.privateQueueOwnerJobId ?? null,
+          private_queue_owner_token: privateQueueOwnerToken,
+          private_queue_lease_ms: DEFAULT_PRIVATE_QUEUE_LEASE_MS,
         };
         const child = await queue.add(
           'subagent',
@@ -649,7 +674,16 @@ export async function runPhaseSynthesize(
       }
     }
 
-    await runSubagentsInline(engine, queue, childQueueName, opts.yieldDuringPhase);
+    throwIfAborted(opts.signal, '[dream] synthesize children');
+    await runSubagentsInline(
+      engine,
+      queue,
+      childQueueName,
+      renewPrivateQueueLease,
+      undefined,
+      undefined,
+      opts.signal,
+    );
 
     // Wait for every child to reach a terminal state. Tick yieldDuringPhase
     // every 5 min so the cycle lock TTL refreshes.
@@ -657,14 +691,12 @@ export async function runPhaseSynthesize(
     for (const jobId of childIds) {
       try {
         const job = await waitForCompletion(queue, jobId, {
-          timeoutMs: 35 * 60 * 1000,
+          timeoutMs: remainingMs,
           pollMs: 5 * 1000,
-          onPoll: opts.yieldDuringPhase
-            ? async () => {
-                try { await opts.yieldDuringPhase?.(); } catch { /* best-effort */ }
-              }
-            : undefined,
+          signal: opts.signal,
+          onPoll: renewPrivateQueueLease,
         });
+        throwIfAborted(opts.signal, '[dream] synthesize completion');
         childOutcomes.push({ jobId, status: job.status });
       } catch (e) {
         if (e instanceof TimeoutError) {
@@ -687,6 +719,7 @@ export async function runPhaseSynthesize(
     // v0.32.8: refs carry source_id so reverseWriteRefs picks the correct
     // (source, slug) row (currently always 'default' from subagent put_page).
     const cycleSourceId = opts.sourceId ?? 'default';
+    throwIfAborted(opts.signal, '[dream] synthesize output');
     const writtenRefs = await collectChildPutPageSlugs(engine, childIds, chunkInfo, cycleSourceId);
     const summaryDate = opts.date ?? today();
     await stampDreamProvenance(engine, writtenRefs, summaryDate);
@@ -746,6 +779,19 @@ export async function runPhaseSynthesize(
   } catch (e) {
     return failed(makeError('InternalError', 'SYNTH_PHASE_FAIL',
       e instanceof Error ? (e.message || 'synthesize phase threw') : String(e)));
+  } finally {
+    if (ownedPrivateQueue) {
+      try {
+        await ownedPrivateQueue.queue.reconcilePrivateQueue(
+          ownedPrivateQueue.name,
+          'synthesize phase ended',
+        );
+      } catch (cleanupError) {
+        process.stderr.write(
+          `[dream] synthesize private-queue cleanup failed: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}\n`,
+        );
+      }
+    }
   }
 }
 
@@ -936,7 +982,7 @@ export interface JudgeClient {
  * recipe `auth_env.required` machinery — AIConfigError at gateway.chat()
  * time is caught by the verdict loop and surfaced per-transcript.
  */
-export function makeJudgeClient(verdictModel: string): JudgeClient | null {
+export function makeJudgeClient(verdictModel: string, signal?: AbortSignal): JudgeClient | null {
   // Normalize: ensure provider:model shape. resolveModel returns bare
   // anthropic ids (e.g. `claude-haiku-4-5-20251001`); gateway.chat needs
   // `anthropic:...`.
@@ -989,7 +1035,7 @@ export function makeJudgeClient(verdictModel: string): JudgeClient | null {
           system,
           messages,
           maxTokens: params.max_tokens,
-          abortSignal: controller.signal,
+          abortSignal: combineAbortSignals(controller.signal, signal),
         });
       } finally {
         clearTimeout(timeout);

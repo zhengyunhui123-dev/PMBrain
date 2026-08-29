@@ -31,23 +31,44 @@ export async function extractStaleFromDB(
     includeFrontmatter: boolean;
     sourceIdFilter?: string;
     catchUp: boolean;
+    /** Suppress progress and summaries for Quick Maintenance/library callers. */
+    quiet?: boolean;
+    /** Optional deterministic page cap for advanced/library callers. */
+    maxPages?: number;
   },
-): Promise<{ linksCreated: number; timelineCreated: number; pagesProcessed: number; staleRemaining: number; skippedMissingTarget?: number }> {
+): Promise<{
+  linksCreated: number;
+  timelineCreated: number;
+  pagesProcessed: number;
+  staleRemaining: number;
+  skippedMissingTarget: number;
+  skippedCrossSource: number;
+  unresolvedReferences: number;
+}> {
   const { dryRun, jsonMode, includeFrontmatter, sourceIdFilter, catchUp } = opts;
+  const quiet = opts.quiet ?? false;
   const versionTs = LINK_EXTRACTOR_VERSION_TS;
 
   const totalStale = await engine.countStalePagesForExtraction({ sourceId: sourceIdFilter, versionTs });
   if (dryRun) {
-    if (jsonMode) {
+    if (quiet) {
+      // Library callers consume the return value.
+    } else if (jsonMode) {
       process.stdout.write(JSON.stringify({ action: 'extract_stale_dry_run', stale_pages: totalStale }) + '\n');
     } else {
       console.log(`(dry run) ${totalStale} 个知识页需要补抽关系和时间线。去掉 --dry-run 才会真正抽取。`);
     }
-    return { linksCreated: 0, timelineCreated: 0, pagesProcessed: 0, staleRemaining: totalStale };
+    return {
+      linksCreated: 0, timelineCreated: 0, pagesProcessed: 0, staleRemaining: totalStale,
+      skippedMissingTarget: 0, skippedCrossSource: 0, unresolvedReferences: 0,
+    };
   }
   if (totalStale === 0) {
-    if (!jsonMode) console.log('没有过期页面，关系抽取是最新的。');
-    return { linksCreated: 0, timelineCreated: 0, pagesProcessed: 0, staleRemaining: 0 };
+    if (!quiet && !jsonMode) console.log('没有过期页面，关系抽取是最新的。');
+    return {
+      linksCreated: 0, timelineCreated: 0, pagesProcessed: 0, staleRemaining: 0,
+      skippedMissingTarget: 0, skippedCrossSource: 0, unresolvedReferences: 0,
+    };
   }
 
   const resolver = makeResolver(engine, { mode: 'batch', sourceId: sourceIdFilter });
@@ -61,7 +82,9 @@ export async function extractStaleFromDB(
     slugToSources.set(ref.slug, list);
   }
 
-  const progress = createProgress(cliOptsToProgressOptions(getCliOptions()));
+  const progress = quiet
+    ? { start(_label?: string, _total?: number) {}, tick(_count?: number) {}, finish() {} }
+    : createProgress(cliOptsToProgressOptions(getCliOptions()));
   progress.start('extract.stale', totalStale);
 
   const startMs = Date.now();
@@ -71,10 +94,20 @@ export async function extractStaleFromDB(
   let pagesProcessed = 0;
   let budgetHit = false;
   let skippedMissingTarget = 0;
+  let skippedCrossSource = 0;
+  let unresolvedReferences = 0;
+  const maxPages = typeof opts.maxPages === 'number' && Number.isFinite(opts.maxPages)
+    ? Math.max(0, Math.floor(opts.maxPages))
+    : null;
 
   for (;;) {
+    if (maxPages !== null && pagesProcessed >= maxPages) break;
+    const batchSize = maxPages === null
+      ? STALE_BATCH_SIZE
+      : Math.min(STALE_BATCH_SIZE, maxPages - pagesProcessed);
+    if (batchSize <= 0) break;
     const rows = await engine.listStalePagesForExtraction({
-      batchSize: STALE_BATCH_SIZE,
+      batchSize,
       afterPageId,
       sourceId: sourceIdFilter,
       versionTs,
@@ -87,21 +120,15 @@ export async function extractStaleFromDB(
 
     for (const page of rows) {
       const fullContent = page.compiled_truth + '\n' + page.timeline;
-      const activeResolver = includeFrontmatter
-        ? resolver
-        : {
-            resolve: async () => null as string | null,
-            resolveExact: resolver.resolveExact,
-            slugExists: resolver.slugExists,
-            resolveLocalExact: resolver.resolveLocalExact,
-          };
       const extracted = await extractPageLinks(
         page.slug,
         fullContent,
         page.frontmatter,
         page.type,
-        activeResolver,
+        resolver,
+        { skipFrontmatter: !includeFrontmatter },
       );
+      unresolvedReferences += extracted.unresolved.length;
       for (const c of extracted.candidates) {
         const fromSlug = c.fromSlug ?? page.slug;
         if (!allSlugs.has(c.targetSlug) || !allSlugs.has(fromSlug)) {
@@ -129,7 +156,9 @@ export async function extractStaleFromDB(
           toSourceId = 'default';
         }
         if (!toSourceId) {
-          skippedMissingTarget++;
+          // The slug exists, but only beyond the permitted local/default
+          // boundary. Count this separately from a genuinely missing page.
+          skippedCrossSource++;
           continue;
         }
         linkRows.push({
@@ -182,15 +211,21 @@ export async function extractStaleFromDB(
   progress.finish();
   const staleRemaining = await engine.countStalePagesForExtraction({ sourceId: sourceIdFilter, versionTs });
 
-  if (!jsonMode) {
+  if (!quiet && !jsonMode) {
     console.log(`Extract --stale: 从 ${pagesProcessed} 个页面写入 ${linksCreated} 条关系、${timelineCreated} 条时间线。`);
     if (skippedMissingTarget > 0) {
       console.log(`跳过 ${skippedMissingTarget} 个目标页不存在的候选引用。`);
     }
+    if (skippedCrossSource > 0) {
+      console.log(`跳过 ${skippedCrossSource} 个只存在于其他 Source 的候选引用；PMBrain 不自动串联不同 Source。`);
+    }
+    if (unresolvedReferences > 0) {
+      console.log(`还有 ${unresolvedReferences} 个 WikiLink/frontmatter 引用无法解析。`);
+    }
     if (budgetHit && staleRemaining > 0) {
       console.log(`时间预算已到，还有 ${staleRemaining} 个页面过期。再跑一次 pmbrain extract --stale，或加上 --catch-up。`);
     }
-  } else {
+  } else if (!quiet) {
     process.stdout.write(JSON.stringify({
       action: 'extract_stale_done',
       links_created: linksCreated,
@@ -199,9 +234,19 @@ export async function extractStaleFromDB(
       stale_remaining: staleRemaining,
       budget_hit: budgetHit,
       skipped_missing_target: skippedMissingTarget,
+      skipped_cross_source: skippedCrossSource,
+      unresolved_references: unresolvedReferences,
     }) + '\n');
   }
-  return { linksCreated, timelineCreated, pagesProcessed, staleRemaining, skippedMissingTarget };
+  return {
+    linksCreated,
+    timelineCreated,
+    pagesProcessed,
+    staleRemaining,
+    skippedMissingTarget,
+    skippedCrossSource,
+    unresolvedReferences,
+  };
 }
 
 export async function stampExtractedPages(

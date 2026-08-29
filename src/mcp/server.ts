@@ -8,8 +8,11 @@ import { buildToolDefs } from './tool-defs.ts';
 import { dispatchToolCall, validateParams, buildOperationContext } from './dispatch.ts';
 import { getBrainHotMemoryMeta } from '../core/facts/meta-hook.ts';
 import { resolveMcpDefaultSourceId } from '../core/source-resolver.ts';
+import { bindResolveIpcForServe } from './resolve-ipc-binding.ts';
 
 export async function startMcpServer(engine: BrainEngine) {
+  const defaultSourceId = await resolveMcpDefaultSourceId(engine);
+  const ipcBinding = await bindResolveIpcForServe(engine, defaultSourceId);
   const server = new Server(
     { name: 'pmbrain', version: VERSION },
     { capabilities: { tools: {} } },
@@ -60,7 +63,13 @@ export async function startMcpServer(engine: BrainEngine) {
     if (shuttingDown) return;
     shuttingDown = true;
     process.stderr.write(`[pmbrain-serve] shutdown: ${reason}\n`);
-    Promise.resolve(engine.disconnect?.())
+    ipcBinding.close();
+    Promise.resolve()
+      .then(async () => {
+        const { awaitPendingVolunteerEventWrites } = await import('../core/context/volunteer-events.ts');
+        await awaitPendingVolunteerEventWrites();
+      })
+      .then(() => engine.disconnect?.())
       .catch(() => {})
       .finally(() => process.exit(code));
   };

@@ -38,7 +38,7 @@ mock.module('../src/core/embedding.ts', () => ({
 }));
 
 // Import AFTER mocking.
-const { runEmbed } = await import('../src/commands/embed.ts');
+const { runEmbed, runEmbedCore } = await import('../src/commands/embed.ts');
 
 // v0.41.6.0 D1: runEmbedCore now preflights embedding credentials. This
 // test stack uses the LEGACY embedBatch mock path, not the gateway,
@@ -179,6 +179,92 @@ describe('runEmbed --all (parallel)', () => {
 
     // Only the stale page triggers an embedBatch call.
     expect(totalEmbedCalls).toBe(1);
+  });
+});
+
+describe('Dream embed cooperative abort and quiet output', () => {
+  test('a pre-aborted all-page run starts no provider requests', async () => {
+    const engine = mockEngine({
+      listPages: async () => [{ slug: 'page-1', source_id: 'default' }],
+      getChunks: async () => [
+        { chunk_index: 0, chunk_text: 'text', chunk_source: 'compiled_truth', embedded_at: null, token_count: 1 },
+      ],
+      upsertChunks: async () => {},
+    });
+    const controller = new AbortController();
+    controller.abort(new Error('user stopped Dream'));
+
+    const result = await runEmbedCore(engine, {
+      all: true,
+      signal: controller.signal,
+      quiet: true,
+    });
+
+    expect(totalEmbedCalls).toBe(0);
+    expect(result.embedded).toBe(0);
+    expect(result.failedPages).toBe(0);
+  });
+
+  test('an in-flight stale request receives the Dream abort signal without becoming a provider failure', async () => {
+    const stale = [
+      { slug: 'page-1', chunk_index: 0, chunk_text: 'text', chunk_source: 'compiled_truth' as const, model: null, token_count: 1, source_id: 'default', page_id: 1 },
+    ];
+    const engine = mockEngine({
+      countStaleChunks: async () => 1,
+      listStaleChunks: async () => stale,
+      getChunks: async () => stale,
+      upsertChunks: async () => {},
+    });
+    const controller = new AbortController();
+    let entered!: () => void;
+    const requestStarted = new Promise<void>((resolve) => { entered = resolve; });
+    let providerSignal: AbortSignal | undefined;
+    embedBatchBehavior = async (_texts, rawOpts) => {
+      providerSignal = (rawOpts as { abortSignal?: AbortSignal } | undefined)?.abortSignal;
+      entered();
+      return await new Promise<Float32Array[]>((resolve, reject) => {
+        if (providerSignal?.aborted) {
+          reject(providerSignal.reason ?? new Error('aborted'));
+          return;
+        }
+        providerSignal?.addEventListener(
+          'abort',
+          () => reject(providerSignal?.reason ?? new Error('aborted')),
+          { once: true },
+        );
+      });
+    };
+
+    const run = runEmbedCore(engine, {
+      stale: true,
+      signal: controller.signal,
+      quiet: true,
+    });
+    await requestStarted;
+    controller.abort(new Error('user stopped Dream'));
+    const result = await run;
+
+    expect(providerSignal?.aborted).toBe(true);
+    expect(totalEmbedCalls).toBe(1);
+    expect(result.embedded).toBe(0);
+    expect(result.failedPages).toBe(0);
+    expect(result.failedChunks).toBe(0);
+    expect(result.budgetExceeded).toBe(false);
+  });
+
+  test('quiet suppresses human stale summaries while preserving structured counts', async () => {
+    const engine = mockEngine({ countStaleChunks: async () => 0 });
+    const lines: string[] = [];
+    const originalLog = console.log;
+    console.log = (...args: unknown[]) => { lines.push(args.map(String).join(' ')); };
+    try {
+      const result = await runEmbedCore(engine, { stale: true, dryRun: true, quiet: true });
+      expect(result.would_embed).toBe(0);
+      expect(result.total_chunks).toBe(0);
+    } finally {
+      console.log = originalLog;
+    }
+    expect(lines).toEqual([]);
   });
 });
 

@@ -1605,7 +1605,14 @@ export interface BrainEngine {
   insertFacts(
     rows: Array<NewFact & { row_num: number; source_markdown_slug: string }>,
     ctx: { source_id: string },
-  ): Promise<{ inserted: number; ids: number[] }>;
+    opts?: {
+      deleteForPageFirst?: {
+        slug: string;
+        excludeSourcePrefixes?: string[];
+        preserveExpiredLegacy?: boolean;
+      };
+    },
+  ): Promise<{ inserted: number; ids: number[]; deleted: number }>;
 
   /**
    * v0.32.2: hard-delete every fact row scoped to a single fence page.

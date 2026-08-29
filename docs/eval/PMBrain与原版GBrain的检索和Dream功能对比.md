@@ -1,10 +1,10 @@
 # PMBrain 与原版 GBrain 的检索和 Dream 功能对比
 
-维护日期：2026-08-22
+维护日期：2026-08-29
 
-PMBrain 基线：1.2.75，AI 深度整理第三批实现
+PMBrain 基线：1.3.9，本轮完成历史关系可靠回填、Dream embed 中止/安静输出、Dream P0、Query cache P1 与 Retrieval Reflex 行为对齐
 
-GBrain 基线：`D:\cursor-claude\gbrain` 的最新本地 `master`，commit `055ac6c7`，VERSION `0.46.25.0`
+GBrain 基线：`D:\cursor-claude\gbrain` 的最新本地 `master`，commit `d9909cddd`，VERSION `0.47.5.0`。已逐阶段复核 Dream 主序列，只记录会改变运行结果、数据边界或任务生命周期的真实行为差异，不重新实现 PMBrain 已有阶段。
 
 > 两个项目采用不同版本规则，版本号不能直接比较大小。本对比以实际代码、阶段顺序、配置解析和测试入口为准，不以版本号推断能力。
 
@@ -15,7 +15,7 @@ PMBrain 不是重新实现了一套 RAG 和 Dream：
 - RAG 的混合召回、搜索模式、排序增强、图谱召回、缓存、遥测和评测底座主要沿用 GBrain。
 - Dream 的阶段顺序、锁、Source 作用域、知识抽取、概念合成、观点与校准等主流程主要沿用 GBrain。
 - PMBrain 的新增集中在中文与项目管理检索、普通模型统一兜底、无默认 Embedding 安全契约、桌面与 Admin 产品化、Source 安全实体解析、知识关系回填、孤儿治理和面向真实用户的质量评分。
-- PMBrain 仍有尚未同步的上游更新，不能把这些差异误称为产品创新。查询向量共享 deadline、最新缓存隔离、Retrieval Reflex 等仍需评估；SkillOpt、Chronicle 等继续按产品边界暂缓。
+- PMBrain 仍有尚未同步的上游更新，不能把这些差异误称为产品创新。查询向量共享 deadline 已确认原本就存在，最新 Query cache 隔离与 Retrieval Reflex 已按当前产品能力对齐；SkillOpt、Chronicle 等继续按产品边界暂缓。
 
 后续维护原则仍是：
 
@@ -32,7 +32,7 @@ PMBrain 不是重新实现了一套 RAG 和 Dream：
 | RRF 融合、去重和结果预算 | 沿用 GBrain | 保留 | `hybrid.ts`、`dedup.ts`、`token-budget.ts` |
 | conservative / balanced / tokenmax | 沿用 GBrain | 保留三种搜索模式及 per-call → config → bundle → balanced 解析链 | `src/core/search/mode.ts` |
 | 多查询扩展 | 沿用 GBrain | 保留；tokenmax 默认启用，普通模式按配置使用 | `src/core/search/expansion.ts` |
-| Query cache 与旋钮哈希 | 沿用 GBrain | 保留，但当前缓存哈希版本落后于最新上游，见第 6 节 | `query-cache.ts`、`mode.ts` |
+| Query cache 与旋钮哈希 | 沿用 GBrain 后适配 | 已对齐文本守卫、请求姿态哈希、动态过滤绕过与 mode 返回量；PMBrain 额外隔离中文推断日期、精确 slug 排除和代码过滤 | `query-cache.ts`、`mode.ts`、`hybrid.ts` |
 | 意图权重、时间、情绪、Source boost | 沿用 GBrain | 保留，并增加中文意图词 | `query-intent.ts`、`intent-weights.ts`、`source-boost.ts` |
 | 标题短语、精确匹配与别名加权 | 沿用后适配 | 保留上游标题/别名逻辑；PMBrain 额外强化中文精确 slug 尾名 | `title-match.ts`、`alias-normalize.ts`、`intent-weights.ts` |
 | Graph signals | 沿用 GBrain | balanced/tokenmax 保留图谱邻接、跨 Source hub 和会话多样性信号 | `graph-signals.ts` |
@@ -64,6 +64,18 @@ PMBrain 不是重新实现了一套 RAG 和 Dream：
 
 ## 4. Dream：沿用原版 GBrain 的能力
 
+### GBrain 0.47.5.0 全阶段复核结论
+
+本轮逐阶段检查 `synthesize → extract → extract_facts → extract_atoms → patterns → synthesize_concepts → takes → calibration → drift → enrich_thin → embed → orphans...`。原有主流程完整，确认并处理的 P0 只有三组：
+
+| P0 真实行为差异 | 对齐结果 | 用户影响 |
+|---|---|---|
+| `extract_facts` 非原子替换及 fence 异常处理 | 删除旧 fence 事实与插入新事实进入同一事务；解析异常、代码块伪 fence、timeline sentinel 以下 fence 均保留旧事实；`cli:` 与过期审计事实不被重抽覆盖 | 模型输出或数据库写入失败时，不会先删掉历史事实；手工与审计证据保留 |
+| `patterns` / `synthesize_concepts` Source 不完整 | 候选读取、产物页面、receipt、rollup 和证据关系统一使用当前 Source；原始证据仍保留自身 Source | 多知识源同名页和证据不再串库 |
+| Dream 中止、deadline 与私有队列所有权 | 父任务 signal/deadline 贯穿模型请求、循环和子任务；私有队列增加 owner/token/lease，阶段结束只清自己的队列，启动时只回收可证明失主的旧队列 | 用户停止深度整理后正在运行的上游请求会终止；超时任务不再后台续跑，也不会误取消其他 Dream |
+
+除以上 P0 外，没有发现需要重新实现 Dream 主流程的新增阶段。后续只对新的真实差异做小范围移植。
+
 PMBrain 的 `ALL_PHASES` 与 GBrain 主序列基本一致。除 GBrain 的 `skillopt` 未进入 PMBrain 外，核心顺序仍是：
 
 ```text
@@ -82,7 +94,7 @@ lint → backlinks → sync → synthesize → extract → extract_facts
 | Phase scope | 沿用 GBrain | 保留 source / global / mixed 分类 |
 | Transcript synthesize | 沿用后适配 | 保留会话转知识页的核心逻辑，增加 PMBrain 路径与模型适配 |
 | Synthesize verdict | 沿用后对齐 | 已升级为评分、内容类型、候选分段、实体、模型和 triage 版本；旧布尔缓存会重判，截断、拒答和格式错误不会永久缓存 |
-| Link、timeline 与 facts 抽取 | 沿用后适配 | 保留上游抽取骨架，并增加 PMBrain Source 解析规则 |
+| Link、timeline 与 facts 抽取 | 沿用后适配 | 保留上游抽取骨架；历史 stale 回填统一重扫 WikiLink、Markdown、frontmatter 与实体引用，并继续执行 PMBrain Source 解析规则 |
 | CJK 人名和中文关系类型 | 最新上游能力移植 | 已支持中日韩名称及中文 founded / works_at / advises 等关系语义 |
 | 正文日期推断 | 最新上游能力移植 | `--infer-dates` 只使用可信正文、frontmatter 或文件名日期，不用 `updated_at` 代替事件日期 |
 | Atom 与 concept | 沿用后增强 | 保留原子抽取和概念合成；PMBrain 增加结构化证据关系 |
@@ -90,7 +102,9 @@ lint → backlinks → sync → synthesize → extract → extract_facts
 | Consolidate / takes / grade / calibration | 沿用 GBrain | 保留事实合并、候选观点、评价和校准画像 |
 | Drift 与 enrich_thin | 沿用 GBrain | 保留且默认受配置门控制 |
 | Conversation facts backfill | 沿用 GBrain | 保留，支持 conversation、meeting、slack、email |
-| Embed、orphans、schema-suggest、purge | 沿用后适配 | 保留后段顺序；PMBrain 改进孤儿分母和产品回显 |
+| Embed、orphans、schema-suggest、purge | 沿用后适配 | 保留后段顺序；Dream embed 已将任务中止信号传入 provider 请求并关闭后台人类摘要输出，PMBrain 继续保留无向量配置时跳过、真实失败计数、孤儿分母和产品回显 |
+| 全阶段中止与 deadline | 最新上游能力移植 | 父任务中止和绝对 deadline 贯穿模型请求、循环及内联子任务；中止后的部分阶段不会被误报为成功 |
+| Dream 私有子任务队列生命周期 | 最新上游能力移植 | 以 owner/token/lease 标记阶段私有队列；正常或异常退出只清理本阶段队列，启动恢复只回收可证明失主的旧队列 |
 | PGLite Dream 子任务执行 | 沿用后对齐 | 私有子任务在同进程串行排空，不再跳过 synthesize 和 patterns；PostgreSQL 保留受控并发 |
 | Source 新鲜度与全局阶段 | 沿用后对齐 | 每个 Source 只运行确定性的 Source 阶段，混合/全局阶段由单独维护任务执行一次，避免多 Source 重复消耗模型 |
 | extract-atoms-drain | 沿用后对齐 | 单锁、固定时间窗持续清理积压；无进展停止；供应商全失败让持久任务重试而不是显示成功 |
@@ -108,7 +122,7 @@ lint → backlinks → sync → synthesize → extract → extract_facts
 | Source 内实体优先 | 当前 Source 精确解析优先，只回退 `default` 共享实体；跨其他 Source 必须显式限定 | `link-extraction.ts`、两种数据库引擎 |
 | 任意目录精确路径 Wikilink | 精确路径存在时可以解析，不依赖历史目录白名单 | `link-extraction.ts` |
 | PMBrain 孤儿统计规则 | 排除 Youdao 原始镜像、originals、附件、输出页、维护页等不应入链页面 | `orphan-policy.ts` |
-| 历史关系安全回填 | 写入前导出完整 links 备份，回填后统计关系类型、缺失端点与跨 Source 目标 | `scripts/backup-links.ts`、`scripts/report-link-quality.ts` |
+| 历史关系安全回填 | Quick Maintenance 直接从数据库重扫 stale 页面，补齐 WikiLink、Markdown、frontmatter 与实体引用；同 Source 精确解析优先，只回退 `default`，写批次失败时不推进水位，并返回缺失端点、跨 Source、未解析引用与剩余积压计数。手工数据回填仍要求先备份、后质检 | `extract-stale.ts`、`link-extraction.ts`、`cycle.ts`、`scripts/backup-links.ts`、`scripts/report-link-quality.ts` |
 | Admin 与桌面 Dream 产品层 | 一键整理、定时运行、阶段摘要、成果明细、后台无窗口运行和高级模型配置 | `admin/`、`desktop/` |
 | 面向发布的 Dream 评分 | 事实保真、证据有效、实体串联、孤儿改善、去重、Source 规则和行动价值分开评分 | `docs/eval/PMBrain检索与Dream质量评测规范.md` |
 | 未配置向量时跳过 embed | Dream 返回 `embedding_not_configured` 的 skipped 阶段，不会选择 ZE，也不会把普通模型当向量模型 | `src/core/cycle.ts`、`src/core/embedding-dim-check.ts` |
@@ -124,27 +138,30 @@ lint → backlinks → sync → synthesize → extract → extract_facts
 
 | 上游能力 | PMBrain 状态 | 建议 |
 |---|---|---|
-| Query embedding 共享 deadline | 尚未同步；GBrain 有 `makeQueryEmbedDeadline()`，PMBrain 当前没有 | 高优先级评估移植，避免向量服务卡住缓存查询和主搜索两次 |
-| Dream embed 的 AbortSignal 与 quiet 输出 | 最新 GBrain 已接入，PMBrain 当前仅完成“未配置则跳过”和不回退 | 后续移植中止信号与安静输出，不改变现有阶段数据语义 |
-| Query cache 最新隔离 | GBrain `KNOBS_HASH_VERSION=21`，PMBrain 当前为 9 | 高优先级移植，防止模型切换或排除规则变化后误用旧缓存 |
+| Query embedding 共享 deadline | **已确认对齐**；PMBrain 原实现已有单一 `makeQueryEmbedDeadline()`，缓存查询与主搜索共用同一绝对截止时间 | 本轮补充回归契约，不重复实现已有能力；向量服务停滞时仍只消耗一个超时窗口并回退关键词检索 |
+| Dream embed 的 AbortSignal 与 quiet 输出 | **已对齐** | Minions/任务中心的 cycle signal 会传入 stale/all/单页向量请求与写入；Dream 固定 `quiet: true`，仍保留结构化 PhaseResult、heartbeat 和 stderr 错误；普通 CLI 默认输出不变 |
+| Dream 全阶段中止、deadline 与私有队列生命周期 | **已对齐**（Schema 117） | 取消和截止时间已贯穿阶段与子任务；owner/token/lease 只用于安全清理与恢复，不重建知识数据 |
+| Query cache 最新隔离 | **已按当前 PMBrain 检索面完成对齐**；本地 GBrain 0.47.5.0 为 `KNOBS_HASH_VERSION=26`，PMBrain 独立 epoch 为 11，版本号不直接照搬 | hard excludes、detail、salience、recency 进入哈希；日期、类型、非零分页及 PMBrain 独有的中文推断日期、精确 slug 排除、代码过滤绕过缓存；候选增加 NFKC/字符 bigram 文本守卫，命中返回量与 mode 一致 |
 | Provider-agnostic embedding migration 命令 | GBrain 有独立 `migrate-embeddings.ts`；PMBrain 仍使用自己的受保护重嵌入流程 | 与老用户向量保护规则对照后移植，不能直接清空索引 |
 | Global basename Wikilink 解析 | 明确不移植跨目录 basename | 当前 Source-local → default 更符合多 Source 安全边界 |
 | Life Chronicle / 事件页投影 / 本体维度 | 尚未同步 | 知识库已能分类事件页；Chronicle、`event_page_id`、`facts.dimension` 仍暂缓 |
-| Retrieval reflex | 尚未同步 | 需要真实题集证明收益后再决定 |
+| Retrieval reflex | **已对齐**（Schema 118） | 保留 GBrain 0.47.5.0 的当前 turn/滚动窗口候选提取、标题/别名/姓氏/CJK 解析、最多 3 个 Source 内实体指针、1500ms 硬超时、失败静默和词法臂开关；PMBrain Context Engine 优先使用 host resolver，PGLite 经运行中的 stdio/HTTP Sidecar 本地 IPC，Postgres 使用缓存直连。只在指针真正交付后记录无原始对话文本的确定性遥测，90 天自动清理；Doctor 只读报告开关、心跳与当前可见路径。隔离评测入口仍为 `scripts/eval-ambient-recall-reference.ts`，真实引擎契约为 `test/retrieval-reflex-alignment.test.ts` 与 `test/e2e/retrieval-reflex-postgres.test.ts` |
 | SkillOpt | 明确暂缓 | 缺少专属 benchmark 前不允许自动改 Skill |
-| `extract --stale` 关系抽取水位 | **已移植**（Schema 115） | `pages.links_extracted_at` + `pmbrain extract --stale` + `links_extraction_lag` |
+| `extract --stale` 关系抽取水位 | **已移植并补强**（Schema 115） | `pages.links_extracted_at` + 升级后的 extractor 版本会让历史页面重新进入 stale；Quick Maintenance 默认包含 frontmatter，写入失败不推进水位；保留 Source-local → `default`，不采用跨目录 global basename |
 | MEMORY_VERBS `entity` | **已移植** | 零模型实体卡片 |
 | Fact remember/forget | **已移植** | 知识库可列出 facts 表 |
 | MCP `list_skills` / `get_skill` 协议信封 | **已对齐** | 返回 `instructions` / `client_guidance`；本地 Sidecar 默认打开 `mcp.publish_skills`；Agent 先读 Skill 再搜知识。未移植 `list_brain_skillpack`、SkillOpt |
 
-## 7. 本轮三项完成后的实际体验
+## 7. 当前对齐完成后的实际体验
 
 1. 深度整理不再只得到“值得/不值得”布尔值。便宜模型先标出分数、内容类型、实体和原文片段，昂贵模型拿着这张地图整理，例行操作更少进入昂贵阶段，人物、项目和概念链接更容易接到既有知识页。
 2. 模型输出被截断、拒答或 JSON 损坏时，本轮不会把错误结果写进永久缓存。下一轮仍可重新判断，不会长期出现“这份内容永远不再整理”的假阴性。
 3. 原子提取每批仍受预算和批量上限保护，但后台会在固定窗口内继续处理下一批。积压清空即停止，连续无进展即停止，全部供应商请求失败则任务失败并进入重试，不再把剩余积压包装成成功。
 4. PGLite 桌面用户可完成完整 Dream 阶段；多 Source 下全局综合不再为每个 Source 重复运行。atom 和 concept 即使没有 Embedding，也会切块并可通过关键词搜索。
+5. Query cache 不再只凭“向量很近”判断同一个问题；无关中文问题即使落入相近 embedding 区域也不会串用缓存。带动态日期、类型、分页、精确排除或代码过滤的请求直接走真实检索，缓存命中与未命中的返回数量保持同一 mode 规则。
+6. Retrieval Reflex 已接入 Context Engine：当前 turn 或最近窗口提到已知实体时，最多补充 3 个 Source 内指针，引导 Agent 按需调用 `get_page`，不会改写消息或自动展开整页正文。PGLite 通过当前 Sidecar 的单所有者 IPC 查询，Postgres 复用缓存直连；1500ms 超时或任何解析失败都静默放弃，不阻断用户对话。Doctor 可区分“已启用但尚未触发”“PGLite Sidecar 未运行”和最近 7 天已真实交付。
 
-数据库兼容：Schema 116 只为 `dream_verdicts` 增加可空字段，不回填、不清空旧判定，也不修改现有知识页、原始资料或向量。旧布尔判定按需重判。
+数据库兼容：Schema 116 只为 `dream_verdicts` 增加可空字段；Schema 117 只为 `minion_jobs` 增加可空的私有队列 owner/token/lease 字段和索引；Schema 118 新增空的 `context_volunteer_events` 交付遥测表及索引，不回填历史内容，不保存原始对话文本，并由 Dream purge 清理 90 天前记录。三次迁移均不清空知识数据，也不修改现有知识页、原始资料或向量。旧布尔判定按需重判，旧队列记录按无 owner 元数据处理。
 
 ## 8. Embedding 差异结论
 

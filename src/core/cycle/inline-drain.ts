@@ -13,6 +13,7 @@ import { MinionQueue } from '../minions/queue.ts';
 import { makeSubagentHandler, RateLeaseUnavailableError } from '../minions/handlers/subagent.ts';
 import type { MinionHandler, MinionJobContext } from '../minions/types.ts';
 import { UnrecoverableError } from '../minions/types.ts';
+import { combineAbortSignals, throwIfAborted } from '../abort-check.ts';
 
 export const INLINE_LOCK_MS = 30_000;
 
@@ -23,8 +24,10 @@ export async function runSubagentsInline(
   yieldDuringPhase?: () => Promise<void>,
   handler: MinionHandler = makeSubagentHandler({ engine }),
   lockMs = INLINE_LOCK_MS,
+  signal?: AbortSignal,
 ): Promise<void> {
   while (true) {
+    throwIfAborted(signal, '[dream] inline drain');
     await queue.promoteDelayed();
     await queue.handleStalled();
     await queue.handleTimeouts();
@@ -52,7 +55,8 @@ export async function runSubagentsInline(
       name: job.name,
       data: job.data,
       attempts_made: job.attempts_made,
-      signal: abort.signal,
+      signal: combineAbortSignals(abort.signal, signal),
+      deadlineAtMs: job.timeout_at?.getTime() ?? null,
       shutdownSignal: shutdown.signal,
       updateProgress: async progress => {
         await queue.updateProgress(job.id, lockToken, progress);

@@ -3815,15 +3815,42 @@ export class PGLiteEngine implements BrainEngine {
   async insertFacts(
     rows: Array<NewFact & { row_num: number; source_markdown_slug: string }>,
     ctx: { source_id: string },
-  ): Promise<{ inserted: number; ids: number[] }> {
-    if (rows.length === 0) return { inserted: 0, ids: [] };
+    opts?: {
+      deleteForPageFirst?: {
+        slug: string;
+        excludeSourcePrefixes?: string[];
+        preserveExpiredLegacy?: boolean;
+      };
+    },
+  ): Promise<{ inserted: number; ids: number[]; deleted: number }> {
+    if (rows.length === 0 && !opts?.deleteForPageFirst) {
+      return { inserted: 0, ids: [], deleted: 0 };
+    }
 
     // Single transaction so the v51 partial UNIQUE index can roll back the
     // whole batch on constraint violation. Per-row INSERTs (not multi-row
     // VALUES) keep the embedding-vs-no-embedding branching readable; batch
     // sizes are small (5-30 rows per page in practice) so the loop overhead
     // is negligible vs the embedding compute cost.
+    let deleted = 0;
     const ids = await this.db.transaction(async (tx) => {
+      if (opts?.deleteForPageFirst) {
+        const excluded = (opts.deleteForPageFirst.excludeSourcePrefixes ?? []).map(prefix => `${prefix}%`);
+        const result = await tx.query(
+          `DELETE FROM facts
+            WHERE source_id = $1
+              AND source_markdown_slug = $2
+              AND (cardinality($3::text[]) = 0 OR source NOT LIKE ALL($3::text[]))
+              AND ($4::boolean = false OR expired_at IS NULL)`,
+          [
+            ctx.source_id,
+            opts.deleteForPageFirst.slug,
+            excluded,
+            opts.deleteForPageFirst.preserveExpiredLegacy === true,
+          ],
+        );
+        deleted = result.affectedRows ?? 0;
+      }
       const out: number[] = [];
       for (const input of rows) {
         const validFrom = input.valid_from ?? new Date();
@@ -3888,7 +3915,7 @@ export class PGLiteEngine implements BrainEngine {
       }
       return out;
     });
-    return { inserted: ids.length, ids };
+    return { inserted: ids.length, ids, deleted };
   }
 
   async deleteFactsForPage(slug: string, source_id: string): Promise<{ deleted: number }> {

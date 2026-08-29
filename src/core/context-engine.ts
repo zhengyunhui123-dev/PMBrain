@@ -15,6 +15,11 @@
 
 import { readFileSync, existsSync, statSync } from 'fs';
 import { join } from 'path';
+import {
+  buildReflexAddition,
+  warmReflex,
+  type ResolveEntitiesFn,
+} from './context/reflex.ts';
 // Types inlined from openclaw/plugin-sdk to avoid hard dependency during development.
 // At runtime inside OpenClaw, the real SDK is available; these types ensure build compat.
 
@@ -150,6 +155,57 @@ function loadJsonFile<T = unknown>(filePath: string): T | null {
  */
 function sanitizeForPrompt(s: string, maxLen: number = 100): string {
   return s.replace(/[\n\r\t\x00-\x1F\x7F]/g, ' ').slice(0, maxLen).trim();
+}
+
+/** Best-effort text projection for string and structured message blocks. */
+function messageText(content: unknown): string {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  return content
+    .map(block => (
+      block && typeof block === 'object' && typeof (block as { text?: unknown }).text === 'string'
+        ? (block as { text: string }).text
+        : ''
+    ))
+    .filter(Boolean)
+    .join(' ');
+}
+
+function getLastUserText(messages: AgentMessage[]): string {
+  for (let index = messages.length - 1; index >= 0; index--) {
+    if (messages[index]?.role === 'user') return messageText(messages[index].content);
+  }
+  return '';
+}
+
+const WINDOW_TURNS_HARD_CAP = 12;
+function getWindowTurns(messages: AgentMessage[]): Array<{ role: 'user' | 'assistant'; text: string }> {
+  const turns: Array<{ role: 'user' | 'assistant'; text: string }> = [];
+  for (let index = messages.length - 1; index >= 0 && turns.length < WINDOW_TURNS_HARD_CAP; index--) {
+    const message = messages[index];
+    if (message?.role !== 'user' && message?.role !== 'assistant') continue;
+    const text = messageText(message.content);
+    if (text) turns.push({ role: message.role, text });
+  }
+  return turns.reverse();
+}
+
+/** Everything the agent already saw, excluding the triggering user turn. */
+function getPriorContextText(messages: AgentMessage[]): string {
+  let lastUserIndex = -1;
+  for (let index = messages.length - 1; index >= 0; index--) {
+    if (messages[index]?.role === 'user') {
+      lastUserIndex = index;
+      break;
+    }
+  }
+  const parts: string[] = [];
+  for (let index = 0; index < messages.length; index++) {
+    if (index === lastUserIndex) continue;
+    const text = messageText(messages[index]?.content);
+    if (text) parts.push(text);
+  }
+  return parts.join('\n').slice(-20_000);
 }
 
 /** Common airport → timezone mapping */
@@ -553,8 +609,10 @@ function formatContextBlock(ctx: LiveContext): string {
 
 export function createGBrainContextEngine(ctx: {
   workspaceDir?: string;
+  resolveEntities?: ResolveEntitiesFn;
 }): ContextEngine {
   const workspaceDir = ctx.workspaceDir ?? process.cwd();
+  warmReflex();
 
   const engine: ContextEngine = {
     info: {
@@ -569,9 +627,16 @@ export function createGBrainContextEngine(ctx: {
       return { ingested: true };
     },
 
-    async assemble({ messages, tokenBudget, availableTools, citationsMode }) {
+    async assemble({ messages, tokenBudget, availableTools, citationsMode, prompt }) {
       // Lazy SDK load on first method call (was top-level await pre-L0-B).
       await ensureSdkLoaded();
+
+      const safeMessages = Array.isArray(messages) ? messages : [];
+      const effectiveMessages = safeMessages.length > 0
+        ? safeMessages
+        : (typeof prompt === 'string' && prompt.trim()
+            ? [{ role: 'user', content: prompt }]
+            : safeMessages);
 
       // 1. Generate deterministic context (<5ms, zero LLM calls)
       const liveCtx = generateLiveContext(workspaceDir);
@@ -583,14 +648,25 @@ export function createGBrainContextEngine(ctx: {
         citationsMode,
       });
 
-      // 3. Combine: live context + memory prompt
+      // Retrieval Reflex: detect and point only. It is deterministic,
+      // zero-LLM, Source-bound, time-bounded and fully fail-open.
+      const reflexAddition = await buildReflexAddition({
+        workspaceDir,
+        currentUserText: getLastUserText(effectiveMessages),
+        priorContextText: getPriorContextText(effectiveMessages),
+        windowTurns: getWindowTurns(effectiveMessages),
+        resolveEntities: ctx.resolveEntities,
+      });
+
+      // 3. Combine: live context + memory prompt + entity pointers
       const parts = [contextBlock];
       if (memoryAddition) parts.push(memoryAddition);
+      if (reflexAddition) parts.push(reflexAddition);
 
       // 4. Pass through messages unchanged (legacy assembly)
       return {
-        messages,
-        estimatedTokens: messages.reduce((sum, m) => {
+        messages: safeMessages,
+        estimatedTokens: safeMessages.reduce((sum, m) => {
           const text = typeof m.content === 'string'
             ? m.content
             : JSON.stringify(m.content);

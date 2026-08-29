@@ -116,6 +116,7 @@ import {
 } from '../core/chatgpt-tunnel.ts';
 import { registerPmbrainAdminRoutes } from './pmbrain-admin-routes.ts';
 import { ADMIN_DREAM_SCHEDULE_CHECK_MS } from './pmbrain-admin-support.ts';
+import { bindResolveIpcForServe } from '../mcp/resolve-ipc-binding.ts';
 export {
   ADMIN_DREAM_SCHEDULE_CHECK_MS,
   ADMIN_UPLOAD_MAX_BYTES,
@@ -406,6 +407,8 @@ function waitForHttpServerClose(server: HttpServer, engine: BrainEngine): Promis
       settled = true;
       cleanup();
       try {
+        const { awaitPendingVolunteerEventWrites } = await import('../core/context/volunteer-events.ts');
+        await awaitPendingVolunteerEventWrites();
         await engine.disconnect();
       } catch (disconnectErr) {
         if (!err) {
@@ -2851,8 +2854,14 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
   // Start server
   // ---------------------------------------------------------------------------
   const clientCount = await sql`SELECT count(*)::int as count FROM oauth_clients`;
+  const resolveIpcBinding = await bindResolveIpcForServe(
+    engine,
+    await resolveMainSourceId(engine),
+  );
 
-  const httpServer = await listenHttpServer(app, port, bind, () => {
+  let httpServer: HttpServer;
+  try {
+    httpServer = await listenHttpServer(app, port, bind, () => {
     console.error(`
 ╔══════════════════════════════════════════════════════╗
 ║  PMBrain MCP Server v${VERSION.padEnd(36)}║
@@ -2895,7 +2904,12 @@ ${renderAdminTokenFooter({ suppressBootstrapPrint, bootstrapFromEnv, bootstrapTo
     } catch (e) {
       // non-blocking, swallow error
     }
-  });
+    });
+  } catch (error) {
+    resolveIpcBinding.close();
+    throw error;
+  }
+  httpServer.once('close', () => resolveIpcBinding.close());
 
   const diagnosticMode = options.diagnosticMode === true
     || process.env.PMBRAIN_DIAGNOSTIC_MODE === '1';

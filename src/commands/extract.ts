@@ -64,6 +64,7 @@ import { createHash } from 'crypto';
 // shared sliding-pool helper + PGLite-clamp wrapper.
 import { runSlidingPool } from '../core/worker-pool.ts';
 import { parseWorkers, resolveWorkersWithClamp } from '../core/sync-concurrency.ts';
+import { isAborted } from '../core/abort-check.ts';
 
 // Batch size for addLinksBatch / addTimelineEntriesBatch.
 // Postgres bind-parameter limit is 65535. Links use 4 cols/row → 16K hard ceiling;
@@ -385,6 +386,8 @@ export interface ExtractOpts {
    * own pagination and stay serial in v0.41.15.0.
    */
   workers?: number;
+  /** Cooperative stop for Dream/Minions callers; ordinary CLI calls omit it. */
+  signal?: AbortSignal;
 }
 
 /**
@@ -423,7 +426,7 @@ export async function runExtractCore(engine: BrainEngine, opts: ExtractOpts): Pr
       // Nothing changed — skip entirely.
       return result;
     }
-    const r = await extractForSlugs(engine, opts.dir, opts.slugs, opts.mode, dryRun, jsonMode, workers, opts.sourceId);
+    const r = await extractForSlugs(engine, opts.dir, opts.slugs, opts.mode, dryRun, jsonMode, workers, opts.signal, opts.sourceId);
     result.links_created = r.links_created;
     result.timeline_entries_created = r.timeline_created;
     result.pages_processed = r.pages;
@@ -432,12 +435,12 @@ export async function runExtractCore(engine: BrainEngine, opts: ExtractOpts): Pr
 
   // Full walk path: CLI `gbrain extract` or first-run.
   if (opts.mode === 'links' || opts.mode === 'all') {
-    const r = await extractLinksFromDir(engine, opts.dir, dryRun, jsonMode, workers, opts.sourceId);
+    const r = await extractLinksFromDir(engine, opts.dir, dryRun, jsonMode, workers, opts.signal, opts.sourceId);
     result.links_created = r.created;
     result.pages_processed = r.pages;
   }
   if (opts.mode === 'timeline' || opts.mode === 'all') {
-    const r = await extractTimelineFromDir(engine, opts.dir, dryRun, jsonMode, workers, opts.sourceId);
+    const r = await extractTimelineFromDir(engine, opts.dir, dryRun, jsonMode, workers, opts.signal, opts.sourceId);
     result.timeline_entries_created = r.created;
     result.pages_processed = Math.max(result.pages_processed, r.pages);
   }
@@ -779,6 +782,7 @@ async function extractForSlugs(
   // shared flush primitive; JS single-threaded event loop makes the
   // shared counter increments atomic.
   workers: number = 1,
+  signal?: AbortSignal,
   sourceId?: string,
 ): Promise<{ links_created: number; timeline_created: number; pages: number }> {
   // Build the full slug set for link resolution (fast: just readdir, no file reads)
@@ -838,8 +842,10 @@ async function extractForSlugs(
   await runSlidingPool({
     items: slugs,
     workers,
+    signal,
     failureLabel: (slug) => slug,
     onItem: async (slug) => {
+      if (isAborted(signal)) return;
       const relPath = slug + '.md';
       const fullPath = join(brainDir, relPath);
       try {
@@ -899,6 +905,7 @@ async function extractLinksFromDir(
   engine: BrainEngine, brainDir: string, dryRun: boolean, jsonMode: boolean,
   // v0.41.15.0 (T7): in-process worker count. Default 1.
   workers: number = 1,
+  signal?: AbortSignal,
   sourceId?: string,
 ): Promise<{ created: number; pages: number }> {
   const files = walkMarkdownFiles(brainDir);
@@ -935,8 +942,10 @@ async function extractLinksFromDir(
   await runSlidingPool({
     items: files,
     workers,
+    signal,
     failureLabel: (f) => f.relPath,
     onItem: async (file) => {
+      if (isAborted(signal)) return;
       try {
         const content = readFileSync(file.path, 'utf-8');
         const links = await extractLinksFromFile(content, file.relPath, allSlugs);
@@ -975,6 +984,7 @@ async function extractTimelineFromDir(
   engine: BrainEngine, brainDir: string, dryRun: boolean, jsonMode: boolean,
   // v0.41.15.0 (T7): in-process worker count. Default 1.
   workers: number = 1,
+  signal?: AbortSignal,
   sourceId?: string,
 ): Promise<{ created: number; pages: number }> {
   const files = walkMarkdownFiles(brainDir);
@@ -1006,8 +1016,10 @@ async function extractTimelineFromDir(
   await runSlidingPool({
     items: files,
     workers,
+    signal,
     failureLabel: (f) => f.relPath,
     onItem: async (file) => {
+      if (isAborted(signal)) return;
       try {
         const content = readFileSync(file.path, 'utf-8');
         const slug = pathToSlug(file.relPath);
@@ -1304,15 +1316,13 @@ export async function extractLinksFromDB(
     // Migration orchestrator explicitly enables it for the one-time backfill;
     // user-invoked `gbrain extract links` stays outgoing-only.
     const sourceResolver = resolverForSource(source_id);
-    const activeResolver = includeFrontmatter
-      ? sourceResolver
-      : {
-          resolve: async () => null as string | null,
-          resolveExact: sourceResolver.resolveExact,
-          slugExists: sourceResolver.slugExists,
-        };
     const extracted = await extractPageLinks(
-      slug, fullContent, page.frontmatter, page.type, activeResolver,
+      slug,
+      fullContent,
+      page.frontmatter,
+      page.type,
+      sourceResolver,
+      { skipFrontmatter: !includeFrontmatter },
     );
     unresolved.push(...extracted.unresolved);
 

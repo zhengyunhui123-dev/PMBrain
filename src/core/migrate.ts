@@ -5154,6 +5154,60 @@ export const MIGRATIONS: Migration[] = [
       ALTER TABLE dream_verdicts ADD COLUMN IF NOT EXISTS triage_version INT;
     `,
   },
+  {
+    version: 117,
+    name: 'dream_private_queue_lifecycle',
+    idempotent: true,
+    sql: `
+      ALTER TABLE minion_jobs ADD COLUMN IF NOT EXISTS private_queue_owner_job_id INTEGER;
+      ALTER TABLE minion_jobs ADD COLUMN IF NOT EXISTS private_queue_owner_token TEXT;
+      ALTER TABLE minion_jobs ADD COLUMN IF NOT EXISTS private_queue_lease_until TIMESTAMPTZ;
+      DO $$ BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint
+           WHERE conrelid = 'minion_jobs'::regclass
+             AND contype = 'f'
+             AND pg_get_constraintdef(oid) LIKE 'FOREIGN KEY (private_queue_owner_job_id)%'
+        ) THEN
+          ALTER TABLE minion_jobs
+            ADD CONSTRAINT minion_jobs_private_queue_owner_fk
+            FOREIGN KEY (private_queue_owner_job_id) REFERENCES minion_jobs(id) ON DELETE SET NULL;
+        END IF;
+      END $$;
+      CREATE INDEX IF NOT EXISTS idx_minion_jobs_private_queue_recovery
+        ON minion_jobs (queue, private_queue_lease_until)
+        WHERE queue LIKE 'dream-inline-%'
+          AND status IN ('waiting','active','delayed','waiting-children','paused');
+      CREATE INDEX IF NOT EXISTS idx_minion_jobs_private_queue_owner
+        ON minion_jobs (private_queue_owner_job_id)
+        WHERE private_queue_owner_job_id IS NOT NULL;
+    `,
+  },
+  {
+    version: 118,
+    name: 'retrieval_reflex_delivery_events',
+    // Empty additive telemetry table. It records resolved page identifiers
+    // and deterministic match rationale only, never conversation text.
+    idempotent: true,
+    sql: `
+      CREATE TABLE IF NOT EXISTS context_volunteer_events (
+        id             BIGSERIAL PRIMARY KEY,
+        source_id      TEXT NOT NULL,
+        slug           TEXT NOT NULL,
+        confidence     DOUBLE PRECISION NOT NULL,
+        match_arm      TEXT NOT NULL,
+        rationale      TEXT NOT NULL DEFAULT '',
+        channel        TEXT NOT NULL DEFAULT 'op',
+        session_id     TEXT,
+        turn           INTEGER,
+        volunteered_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
+      CREATE INDEX IF NOT EXISTS context_volunteer_events_src_time_idx
+        ON context_volunteer_events (source_id, volunteered_at DESC);
+      CREATE INDEX IF NOT EXISTS context_volunteer_events_src_slug_idx
+        ON context_volunteer_events (source_id, slug);
+    `,
+  },
 ];
 
 export const LATEST_VERSION = MIGRATIONS.length > 0

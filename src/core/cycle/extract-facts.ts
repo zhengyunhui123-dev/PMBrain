@@ -34,7 +34,7 @@
 import type { BrainEngine } from '../engine.ts';
 import { writeReceipt } from '../extract/receipt-writer.ts';
 import { upsertExtractRollup } from '../extract/rollup-writer.ts';
-import { parseFactsFence } from '../facts-fence.ts';
+import { FACTS_FENCE_BEGIN, parseFactsFence } from '../facts-fence.ts';
 import { extractFactsFromFenceText } from '../facts/extract-from-fence.ts';
 import {
   runPhantomRedirectPass,
@@ -42,6 +42,7 @@ import {
   type PhantomPassResult,
 } from './phantom-redirect.ts';
 import { embed, isAvailable } from '../ai/gateway.ts';
+import { isAborted } from '../abort-check.ts';
 
 export interface ExtractFactsOpts {
   /** Subset of slugs to reconcile. undefined = walk every page in the brain. */
@@ -59,6 +60,8 @@ export interface ExtractFactsOpts {
    * standard fence-reconcile loop).
    */
   brainDir?: string;
+  /** Cooperative stop from the owning Dream job. */
+  signal?: AbortSignal;
 }
 
 export interface ExtractFactsResult {
@@ -77,6 +80,38 @@ export interface ExtractFactsResult {
   phantomsSkippedDrift: number;
   phantomsLockBusy: boolean;
   phantomsMorePending: boolean;
+}
+
+function timelineHasGenuineFactsFenceMarker(timeline: string): boolean {
+  if (!timeline.includes(FACTS_FENCE_BEGIN)) return false;
+  const lines = timeline.split(/\r\n|\r|\n/);
+  const openRe = /^ {0,3}(`{3,}|~{3,})(.*)$/;
+  const closeRe = /^ {0,3}(`{3,}|~{3,})[ \t]*$/;
+  let index = 0;
+  while (index < lines.length) {
+    const line = lines[index]!;
+    const open = openRe.exec(line);
+    if (open) {
+      const marker = open[1]!;
+      const fenceChar = marker[0]!;
+      const info = open[2]!.trim();
+      if (!(fenceChar === '`' && info.includes('`'))) {
+        let next = index + 1;
+        for (; next < lines.length; next++) {
+          const close = closeRe.exec(lines[next]!);
+          if (close && close[1]![0] === fenceChar && close[1]!.length >= marker.length) {
+            next++;
+            break;
+          }
+        }
+        index = next;
+        continue;
+      }
+    }
+    if (line.trim() === FACTS_FENCE_BEGIN) return true;
+    index++;
+  }
+  return false;
 }
 
 /**
@@ -152,6 +187,7 @@ export async function runExtractFacts(
         opts.brainDir,
         sourceId,
         opts.dryRun ?? false,
+        opts.signal,
       );
     } catch (e) {
       // The pass owns its own per-phantom try/catch; reaching this catch
@@ -199,6 +235,7 @@ export async function runExtractFacts(
 
   // ── Reconcile each page ───────────────────────────────────────
   for (const slug of slugs) {
+    if (isAborted(opts.signal)) break;
     result.pagesScanned += 1;
 
     const page = await engine.getPage(slug, { sourceId });
@@ -214,19 +251,20 @@ export async function runExtractFacts(
       result.warnings.push(
         ...parsed.warnings.map(w => `${slug}: ${w}`),
       );
+      continue;
+    }
+
+    if (timelineHasGenuineFactsFenceMarker(page.timeline ?? '')) {
+      result.warnings.push(
+        `${slug}: FACTS_FENCE_BELOW_SENTINEL: a Facts fence exists below the timeline sentinel; ` +
+        'move it above the sentinel before retrying. Existing indexed facts were preserved.',
+      );
+      continue;
     }
 
     if (parsed.facts.length > 0) result.pagesWithFacts += 1;
 
     if (opts.dryRun) continue;
-
-    // Wipe-and-reinsert per page. The deleteFactsForPage call targets
-    // source_markdown_slug = slug only, so NULL-source_markdown_slug
-    // legacy rows survive (the partial-UNIQUE-index keyspace).
-    const deleted = await engine.deleteFactsForPage(slug, sourceId);
-    result.factsDeleted += deleted.deleted;
-
-    if (parsed.facts.length === 0) continue;
 
     // v0.35.4 (D-ENG-1) — thread page.effective_date as the fallback
     // valid_from. Without this, fence rows without explicit `validFrom:`
@@ -246,7 +284,7 @@ export async function runExtractFacts(
     if (isAvailable('embedding') && extracted.length > 0) {
       try {
         const texts = extracted.map(e => e.fact);
-        const embeddings = await embed(texts);
+        const embeddings = await embed(texts, { abortSignal: opts.signal });
         // Defensive: embed should return one vector per input; if the
         // gateway returns a partial array (provider partial-batch retry
         // returning fewer than requested), only fill what we have.
@@ -262,7 +300,18 @@ export async function runExtractFacts(
       }
     }
 
-    const inserted = await engine.insertFacts(extracted, { source_id: sourceId }); // gbrain-allow-direct-insert: extract_facts cycle phase reconciles fence → DB
+    const inserted = await engine.insertFacts( // gbrain-allow-direct-insert: canonical Dream extract_facts reconciliation path
+      extracted,
+      { source_id: sourceId },
+      {
+        deleteForPageFirst: {
+          slug,
+          excludeSourcePrefixes: ['cli:'],
+          preserveExpiredLegacy: true,
+        },
+      },
+    ); // gbrain-allow-direct-insert: extract_facts cycle phase reconciles fence → DB
+    result.factsDeleted += inserted.deleted;
     result.factsInserted += inserted.inserted;
     if (inserted.inserted > 0 && result.affectedSlugs.length < 100) {
       result.affectedSlugs.push(slug);

@@ -190,6 +190,16 @@ export interface GBrainConfig {
   embedding_multimodal?: boolean;
   /** Model override for multimodal embeddings (e.g. "voyage:voyage-multimodal-3"). */
   embedding_multimodal_model?: string;
+
+  /**
+   * Retrieval Reflex file-plane controls. Missing means enabled with the
+   * GBrain defaults (three pointers, four-turn window, lexical arms on).
+   * Environment aliases are PMBRAIN_* first with GBRAIN_* compatibility.
+   */
+  retrieval_reflex?: boolean;
+  retrieval_reflex_max_pointers?: number;
+  retrieval_reflex_window_turns?: number;
+  retrieval_reflex_lexical_arms?: boolean;
   embedding_image_ocr?: boolean;
   embedding_image_ocr_model?: string;
 
@@ -502,6 +512,28 @@ export function loadConfig(): GBrainConfig | null {
     ...(envCompat('PMBRAIN_EMBEDDING_IMAGE_OCR_MODEL', 'GBRAIN_EMBEDDING_IMAGE_OCR_MODEL')
       ? { embedding_image_ocr_model: envCompat('PMBRAIN_EMBEDDING_IMAGE_OCR_MODEL', 'GBRAIN_EMBEDDING_IMAGE_OCR_MODEL') }
       : {}),
+    ...(envCompat('PMBRAIN_RETRIEVAL_REFLEX', 'GBRAIN_RETRIEVAL_REFLEX')
+      ? {
+          retrieval_reflex: !['false', '0'].includes(
+            envCompat('PMBRAIN_RETRIEVAL_REFLEX', 'GBRAIN_RETRIEVAL_REFLEX')!,
+          ),
+        }
+      : {}),
+    ...(envCompat('PMBRAIN_RETRIEVAL_REFLEX_WINDOW_TURNS', 'GBRAIN_RETRIEVAL_REFLEX_WINDOW_TURNS')
+      && Number.isFinite(Number(envCompat('PMBRAIN_RETRIEVAL_REFLEX_WINDOW_TURNS', 'GBRAIN_RETRIEVAL_REFLEX_WINDOW_TURNS')))
+      ? {
+          retrieval_reflex_window_turns: Number(
+            envCompat('PMBRAIN_RETRIEVAL_REFLEX_WINDOW_TURNS', 'GBRAIN_RETRIEVAL_REFLEX_WINDOW_TURNS'),
+          ),
+        }
+      : {}),
+    ...(envCompat('PMBRAIN_RETRIEVAL_REFLEX_LEXICAL_ARMS', 'GBRAIN_RETRIEVAL_REFLEX_LEXICAL_ARMS')
+      ? {
+          retrieval_reflex_lexical_arms: !/^(false|0|off|no)$/i.test(
+            envCompat('PMBRAIN_RETRIEVAL_REFLEX_LEXICAL_ARMS', 'GBRAIN_RETRIEVAL_REFLEX_LEXICAL_ARMS')!.trim(),
+          ),
+        }
+      : {}),
     ...(envCompat('PMBRAIN_REMOTE_CLIENT_SECRET', 'GBRAIN_REMOTE_CLIENT_SECRET') && fileConfig?.remote_mcp
       ? { remote_mcp: { ...fileConfig.remote_mcp, oauth_client_secret: envCompat('PMBRAIN_REMOTE_CLIENT_SECRET', 'GBRAIN_REMOTE_CLIENT_SECRET') } }
       : {}),
@@ -792,6 +824,10 @@ export const KNOWN_CONFIG_KEYS: readonly string[] = [
   'eval.scrub_pii',
   'embedding_multimodal',
   'embedding_multimodal_model',
+  'retrieval_reflex',
+  'retrieval_reflex_max_pointers',
+  'retrieval_reflex_window_turns',
+  'retrieval_reflex_lexical_arms',
   'embedding_image_ocr',
   'embedding_image_ocr_model',
   'embedding_columns',

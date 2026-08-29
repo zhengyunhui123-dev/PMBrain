@@ -3879,8 +3879,17 @@ export class PostgresEngine implements BrainEngine {
   async insertFacts(
     rows: Array<NewFact & { row_num: number; source_markdown_slug: string }>,
     ctx: { source_id: string },
-  ): Promise<{ inserted: number; ids: number[] }> {
-    if (rows.length === 0) return { inserted: 0, ids: [] };
+    opts?: {
+      deleteForPageFirst?: {
+        slug: string;
+        excludeSourcePrefixes?: string[];
+        preserveExpiredLegacy?: boolean;
+      };
+    },
+  ): Promise<{ inserted: number; ids: number[]; deleted: number }> {
+    if (rows.length === 0 && !opts?.deleteForPageFirst) {
+      return { inserted: 0, ids: [], deleted: 0 };
+    }
 
     const sql = this.sql;
     // v0.41.15.0 (T6, codex #20): resolve the embedding-cast suffix
@@ -3893,7 +3902,19 @@ export class PostgresEngine implements BrainEngine {
     // readable; batch sizes are small (5-30 rows per page in practice).
     // No supersede flow in this path — fence reconciliation is the
     // canonical source-of-truth direction, not the consolidator path.
+    let deleted = 0;
     const ids = await sql.begin(async (tx) => {
+      if (opts?.deleteForPageFirst) {
+        const excluded = (opts.deleteForPageFirst.excludeSourcePrefixes ?? []).map(prefix => `${prefix}%`);
+        const result = await tx`
+          DELETE FROM facts
+           WHERE source_id = ${ctx.source_id}
+             AND source_markdown_slug = ${opts.deleteForPageFirst.slug}
+             AND (cardinality(${excluded}::text[]) = 0 OR source NOT LIKE ALL(${excluded}::text[]))
+             AND (${opts.deleteForPageFirst.preserveExpiredLegacy === true}::boolean = false OR expired_at IS NULL)
+        `;
+        deleted = result.count ?? 0;
+      }
       const out: number[] = [];
       for (const input of rows) {
         const validFrom = input.valid_from ?? new Date();
@@ -3937,7 +3958,7 @@ export class PostgresEngine implements BrainEngine {
       }
       return out;
     });
-    return { inserted: ids.length, ids };
+    return { inserted: ids.length, ids, deleted };
   }
 
   async deleteFactsForPage(slug: string, source_id: string): Promise<{ deleted: number }> {
