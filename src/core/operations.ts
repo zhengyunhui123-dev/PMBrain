@@ -2434,6 +2434,22 @@ const get_health: Operation = {
   cliHints: { name: 'health' },
 };
 
+const advisor: Operation = {
+  name: 'advisor',
+  description:
+    'Ranked, read-only "what to do next" for this brain: version drift, pending migrations, ' +
+    'schema-pack issues, stalled jobs, usage-shape gaps, and setup smells. Each finding has a ' +
+    'severity, why-it-matters, and the exact fix command. Never mutates. Tell the user; ask ' +
+    'before running any fix. Gated by mcp.publish_advisor.',
+  params: {},
+  handler: async (ctx) => {
+    const { runAdvisorOperation } = await import('./advisor/operation.ts');
+    return runAdvisorOperation(ctx);
+  },
+  scope: 'read',
+  cliHints: { name: 'advisor', hidden: true },
+};
+
 /**
  * v0.31.1 (Issue #734): lightweight identity packet for the thin-client
  * banner. Read-scope so any authenticated client can surface "thin-client →
@@ -4959,7 +4975,7 @@ export const operations: Operation[] = [
   // Timeline
   add_timeline_entry, get_timeline,
   // Admin
-  get_stats, get_health, run_doctor, get_versions, revert_version,
+  get_stats, get_health, advisor, run_doctor, get_versions, revert_version,
   // v0.31.1 (Issue #734): thin-client banner identity packet (read-scope, banner-only)
   get_brain_identity,
   list_skills, get_skill,

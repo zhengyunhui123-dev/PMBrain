@@ -60,6 +60,8 @@ describe('PMBrain product-layer structure', () => {
     expect(http).not.toContain("app.get('/admin/api/brain/overview'");
     expect(productRoutes).toContain('export function registerPmbrainAdminRoutes');
     expect(productRoutes).toContain("app.get('/admin/api/brain/overview'");
+    expect(productRoutes).toContain("app.get('/admin/api/advisor'");
+    expect(productRoutes).toContain("app.post('/admin/api/advisor/apply'");
     expect(productRoutes).toContain("app.post('/admin/api/export-runs'");
   });
 

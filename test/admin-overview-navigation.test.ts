@@ -19,4 +19,11 @@ describe('Admin overview navigation', () => {
     expect(overviewSource).toContain("onKeyDown={event => handleOverviewNavigationKey(event, () => onNavigate?.('data'))}");
     expect(overviewSource).toContain('aria-label="打开知识库"');
   });
+
+  test('shows a knowledge health card with clickable advisor actions', () => {
+    expect(overviewSource).toContain('function AdvisorHealthCard');
+    expect(overviewSource).toContain('知识库健康状态');
+    expect(overviewSource).toContain("api.applyAdvisor(suggestion.dispatch_id)");
+    expect(overviewSource).toContain("onNavigate?.('tasks')");
+  });
 });

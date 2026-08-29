@@ -140,7 +140,11 @@ import {
   RunAcceptedResponseSchema,
   SetDefaultSourceResponseSchema,
   SourceAddResponseSchema,
+  AdvisorAdminResponseSchema,
+  AdvisorApplyRequestSchema,
+  AdvisorApplyResponseSchema,
 } from '../../shared/contracts/index.ts';
+import { applyAdminAdvisorFinding, getAdminAdvisorReport } from './admin-advisor.ts';
 
 export interface PmbrainAdminRouteOptions {
   app: express.Express;
@@ -250,6 +254,27 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
       }));
     } catch (e) {
       res.status(500).json({ error: e instanceof Error ? e.message : 'overview_failed' });
+    }
+  });
+
+  app.get('/admin/api/advisor', requireAdmin, async (_req: Request, res: Response) => {
+    try {
+      sendAdminContract(res, AdvisorAdminResponseSchema, await getAdminAdvisorReport(engine, loadConfig() ?? config));
+    } catch (e) {
+      res.status(500).json({ error: e instanceof Error ? e.message : 'advisor_failed' });
+    }
+  });
+
+  app.post('/admin/api/advisor/apply', requireAdmin, express.json({ limit: '4kb' }), async (req: Request, res: Response) => {
+    try {
+      const input = AdvisorApplyRequestSchema.parse(req.body);
+      sendAdminContract(
+        res,
+        AdvisorApplyResponseSchema,
+        await applyAdminAdvisorFinding(engine, loadConfig() ?? config, input.dispatch_id, process.cwd(), runHooks),
+      );
+    } catch (e) {
+      res.status(400).json({ error: e instanceof Error ? e.message : 'advisor_apply_failed' });
     }
   });
 

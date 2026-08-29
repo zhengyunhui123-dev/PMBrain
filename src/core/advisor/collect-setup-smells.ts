@@ -1,3 +1,4 @@
+import { isEmbeddingConfigured } from '../embedding-dim-check.ts';
 import type { AdvisorCollector, AdvisorFinding } from './types.ts';
 
 async function dbBool(ctx: { engine: { getConfig(k: string): Promise<string | null> } }, key: string): Promise<boolean | null> {
@@ -21,18 +22,18 @@ export const collectSetupSmells: AdvisorCollector = {
         id: 'embeddings_disabled',
         severity: 'warn',
         title: 'Embeddings are disabled.',
-        detail: 'Semantic search and dedup are reduced until an embedding model is configured.',
-        fix: { command_argv: ['pmbrain', 'config', 'set', 'embedding_model', '<model-id>'] },
+        detail: 'Semantic search stays on keywords, titles, and relations until an embedding model and dimensions are configured.',
+        fix: { command_argv: ['pmbrain', 'config', 'set', 'embedding_model', '<provider:model>'] },
         collector: 'setup-smells',
         ask_user: true,
       });
-    } else if (!cfg.embedding_model && !cfg.zeroentropy_api_key && !process.env.ZEROENTROPY_API_KEY) {
+    } else if (!isEmbeddingConfigured(cfg)) {
       findings.push({
-        id: 'embedding_key_missing',
+        id: 'embedding_not_configured',
         severity: 'warn',
-        title: 'No embedding provider key is set.',
-        detail: 'Set zeroentropy_api_key or choose another provider via embedding_model.',
-        fix: { command_argv: ['pmbrain', 'config', 'set', 'zeroentropy_api_key', '<key>'] },
+        title: 'No embedding model is configured.',
+        detail: 'PMBrain has no default vector provider. Set embedding_model and embedding_dimensions before vector search can run.',
+        fix: { command_argv: ['pmbrain', 'config', 'set', 'embedding_model', '<provider:model>'] },
         collector: 'setup-smells',
         ask_user: true,
       });

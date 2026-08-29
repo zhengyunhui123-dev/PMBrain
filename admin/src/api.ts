@@ -19,8 +19,12 @@ import {
   LlmStatusResponseSchema,
   SetDefaultSourceResponseSchema,
   SourceAddResponseSchema,
+  AdvisorAdminResponseSchema,
+  AdvisorApplyResponseSchema,
 } from '../../shared/contracts/index.ts';
 import type {
+  AdvisorAdminResponse,
+  AdvisorApplyResponse,
   BrainOverviewResponse,
   BrainPageChunksResponse,
   BrainFactDetailResponse,
@@ -121,6 +125,12 @@ export const api = {
     `/admin/api/brain/overview${includeSourceGitStatus ? '?source_git_status=1' : ''}`,
     undefined,
     BrainOverviewResponseSchema,
+  ),
+  advisor: () => apiFetch<AdvisorAdminResponse>('/admin/api/advisor', undefined, AdvisorAdminResponseSchema),
+  applyAdvisor: (dispatchId: string) => apiFetch<AdvisorApplyResponse>(
+    '/admin/api/advisor/apply',
+    { method: 'POST', body: JSON.stringify({ dispatch_id: dispatchId }) },
+    AdvisorApplyResponseSchema,
   ),
   theme: () => apiFetch('/admin/api/theme'),
   docs: () => apiFetch('/admin/api/docs'),

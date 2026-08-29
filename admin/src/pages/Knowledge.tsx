@@ -27,6 +27,7 @@ import {
   type BrainOverview,
   type SourceSummary,
 } from './console-shared';
+import type { AdvisorProductSuggestion, AdvisorProductView } from '../../../shared/contracts/index.ts';
 
 interface RecentRequest {
   id: number;
@@ -89,6 +90,60 @@ function handleOverviewNavigationKey(event: React.KeyboardEvent, navigate: () =>
   if (event.key !== 'Enter' && event.key !== ' ') return;
   event.preventDefault();
   navigate();
+}
+
+function AdvisorHealthCard({
+  advisor,
+  error,
+  notice,
+  applyingId,
+  onApply,
+}: {
+  advisor: AdvisorProductView | null;
+  error: string | null;
+  notice: string | null;
+  applyingId: string | null;
+  onApply: (suggestion: AdvisorProductSuggestion) => Promise<void>;
+}) {
+  const scoreLabel = advisor?.score == null ? '--' : `${Math.round(advisor.score)}分`;
+  const statusClass = advisor?.status === 'good' ? 'is-good' : advisor?.status === 'needs_attention' ? 'is-alert' : 'is-ok';
+  return (
+    <section className={`overview-health-card ${statusClass}`} aria-label="知识库健康状态">
+      <div className="overview-panel-head">
+        <div>
+          <div className="overview-section-eyebrow">KNOWLEDGE HEALTH</div>
+          <h2>知识库健康状态：{advisor?.status_label ?? '检查中'} {scoreLabel}</h2>
+        </div>
+        <span className="overview-panel-note">
+          {advisor ? `发现 ${advisor.suggestion_count} 项建议` : '正在检查知识库'}
+        </span>
+      </div>
+      {error && <p className="overview-health-error">{error}</p>}
+      {notice && <p className="overview-health-notice">{notice}</p>}
+      {!error && advisor && advisor.suggestions.length === 0 && (
+        <p className="overview-health-empty">知识库看起来很健康，没有需要马上处理的事项。</p>
+      )}
+      {advisor && advisor.suggestions.length > 0 && (
+        <ul className="overview-health-list">
+          {advisor.suggestions.slice(0, 5).map((suggestion) => (
+            <li key={suggestion.id}>
+              <span>{suggestion.title}</span>
+              {suggestion.action_label && (
+                <button
+                  type="button"
+                  className="overview-health-action"
+                  disabled={applyingId === suggestion.dispatch_id}
+                  onClick={() => void onApply(suggestion)}
+                >
+                  {applyingId === suggestion.dispatch_id ? '处理中…' : suggestion.action_label}
+                </button>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
 }
 
 function PgliteBusyNotice({
@@ -194,6 +249,10 @@ export function KnowledgeWorkbenchPage({ onNavigate }: { onNavigate?: (page: str
   const [showAllTypes, setShowAllTypes] = useState(false);
   const [showAllSources, setShowAllSources] = useState(false);
   const [recentRequests, setRecentRequests] = useState<RecentRequest[]>([]);
+  const [advisor, setAdvisor] = useState<AdvisorProductView | null>(null);
+  const [advisorError, setAdvisorError] = useState<string | null>(null);
+  const [applyingId, setApplyingId] = useState<string | null>(null);
+  const [advisorNotice, setAdvisorNotice] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -233,6 +292,20 @@ export function KnowledgeWorkbenchPage({ onNavigate }: { onNavigate?: (page: str
       window.clearInterval(timer);
     };
   }, []);
+
+  const loadAdvisor = useCallback(async () => {
+    try {
+      const next = await api.advisor();
+      setAdvisor(next.product);
+      setAdvisorError(null);
+    } catch (loadError) {
+      setAdvisorError(loadError instanceof Error ? loadError.message : '健康检查暂时不可用');
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadAdvisor();
+  }, [loadAdvisor]);
 
   if (pgliteBusy) return <PgliteBusyNotice message={error} onNavigate={onNavigate} />;
   if (error) return <div className="pm-card pm-error">{error}</div>;
@@ -306,9 +379,43 @@ export function KnowledgeWorkbenchPage({ onNavigate }: { onNavigate?: (page: str
           <span className="overview-meta-pill"><OverviewIcon name="database" />数据库 {engineLabel}</span>
           <span className="overview-meta-pill overview-model-pill"><OverviewIcon name="model" /><span>模型 {overview.chat_model ?? '未配置'}</span></span>
           <span className="overview-meta-pill overview-version-pill"><OverviewIcon name="agent" />版本 v{overview.version}</span>
-          <button type="button" className="overview-refresh" onClick={() => void reload()} aria-label="刷新概览" title="刷新概览"><OverviewIcon name="refresh" /></button>
+          <button type="button" className="overview-refresh" onClick={() => { void reload(); void loadAdvisor(); }} aria-label="刷新概览" title="刷新概览"><OverviewIcon name="refresh" /></button>
         </div>
       </header>
+
+      <AdvisorHealthCard
+        advisor={advisor}
+        error={advisorError}
+        notice={advisorNotice}
+        applyingId={applyingId}
+        onApply={async (suggestion) => {
+          if (suggestion.action_kind === 'navigate' && suggestion.navigate) {
+            onNavigate?.(suggestion.navigate);
+            return;
+          }
+          if (!suggestion.dispatch_id) return;
+          setApplyingId(suggestion.dispatch_id);
+          setAdvisorNotice(null);
+          try {
+            const result = await api.applyAdvisor(suggestion.dispatch_id);
+            if (result.status === 'restart_required') {
+              setAdvisorNotice(result.message ?? '请重启 PMBrain 以完成数据库升级。');
+              return;
+            }
+            if (result.status === 'navigate' && result.page) {
+              onNavigate?.(result.page);
+              return;
+            }
+            if (result.status === 'started') {
+              onNavigate?.('tasks');
+            }
+          } catch (applyError) {
+            setAdvisorNotice(applyError instanceof Error ? applyError.message : '处理失败');
+          } finally {
+            setApplyingId(null);
+          }
+        }}
+      />
 
       <section className="overview-top-grid">
         <div className="overview-stage-main">

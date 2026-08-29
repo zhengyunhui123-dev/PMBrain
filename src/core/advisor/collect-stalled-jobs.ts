@@ -1,3 +1,4 @@
+import { isValidSourceId } from '../source-id.ts';
 import type { AdvisorCollector, AdvisorFinding } from './types.ts';
 
 export const collectStalledJobs: AdvisorCollector = {
@@ -30,26 +31,54 @@ export const collectStalledJobs: AdvisorCollector = {
     }
 
     try {
-      const rows = await ctx.engine.executeRaw<{ id: string }>(
-        `SELECT id
+      const rows = await ctx.engine.executeRaw<{ id: string; last_sync_at: string }>(
+        `SELECT id, last_sync_at::text AS last_sync_at
            FROM sources
           WHERE last_sync_at IS NOT NULL
             AND last_sync_at < now() - interval '7 days'
+            AND COALESCE(archived, false) = false
           ORDER BY id`,
       );
       for (const r of rows) {
+        if (!isValidSourceId(r.id)) continue;
+        const syncedAt = Date.parse(r.last_sync_at);
+        const days = Number.isFinite(syncedAt)
+          ? Math.max(7, Math.floor((ctx.now.getTime() - syncedAt) / 86_400_000))
+          : 7;
         findings.push({
           id: `stale_sync:${r.id}`,
           severity: 'info',
-          title: `Source "${r.id}" has not synced in over a week.`,
+          title: `Source "${r.id}" has not synced in ${days} days.`,
           detail: 'Re-sync to pull in content PMBrain has not indexed yet.',
-          fix: { command_argv: ['pmbrain', 'sync', '--source', r.id] },
+          fix: { command_argv: ['pmbrain', 'sync', '--source', r.id], dispatch_id: `sync_source:${r.id}` },
           collector: 'stalled-jobs',
           ask_user: true,
         });
       }
     } catch {
-      // Very old schemas may not have sources.last_sync_at.
+      try {
+        const rows = await ctx.engine.executeRaw<{ id: string }>(
+          `SELECT id
+             FROM sources
+            WHERE last_sync_at IS NOT NULL
+              AND last_sync_at < now() - interval '7 days'
+            ORDER BY id`,
+        );
+        for (const r of rows) {
+          if (!isValidSourceId(r.id)) continue;
+          findings.push({
+            id: `stale_sync:${r.id}`,
+            severity: 'info',
+            title: `Source "${r.id}" has not synced in 7 days.`,
+            detail: 'Re-sync to pull in content PMBrain has not indexed yet.',
+            fix: { command_argv: ['pmbrain', 'sync', '--source', r.id], dispatch_id: `sync_source:${r.id}` },
+            collector: 'stalled-jobs',
+            ask_user: true,
+          });
+        }
+      } catch {
+        // Very old schemas may not have sources.last_sync_at.
+      }
     }
 
     return findings;

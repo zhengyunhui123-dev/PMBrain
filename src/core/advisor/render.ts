@@ -28,9 +28,13 @@ export function renderAdvisorReport(report: AdvisorReport): string {
     if (fl) lines.push(`    fix: ${fl}`);
     lines.push('');
   }
+  const appliable = report.findings.filter((f) => f.fix.dispatch_id);
   lines.push('ACTION FOR THE AGENT:');
   lines.push('  1. Show this list to the user, highest-severity first.');
   lines.push('  2. Ask before running any fix. The user owns these decisions.');
+  if (appliable.length > 0) {
+    lines.push(`  3. After a yes, run: pmbrain advisor --apply ${appliable[0]!.fix.dispatch_id}`);
+  }
   lines.push('');
   lines.push(BAR);
   lines.push('');

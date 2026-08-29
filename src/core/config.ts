@@ -327,6 +327,7 @@ export interface GBrainConfig {
   /** Explicitly published, read-only skill catalog for MCP clients. */
   mcp?: {
     publish_skills?: boolean;
+    publish_advisor?: boolean;
     skills_dir?: string;
   };
 }
@@ -878,6 +879,7 @@ export const KNOWN_CONFIG_KEYS: readonly string[] = [
   'content_sanity.prose_check_enabled',
   // MCP skill catalog. Remote publication is opt-in.
   'mcp.publish_skills',
+  'mcp.publish_advisor',
   'mcp.skills_dir',
   // Spend controls. Registered so `pmbrain config set` accepts these without
   // --force; `spend.posture` itself is validated by the config command.

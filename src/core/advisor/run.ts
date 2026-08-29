@@ -1,4 +1,5 @@
 import type { AdvisorCollector, AdvisorContext, AdvisorFinding, AdvisorReport, AdvisorSeverity } from './types.ts';
+import { collectVersion } from './collect-version.ts';
 import { collectMigration } from './collect-migration.ts';
 import { collectSchemaPack } from './collect-schema-pack.ts';
 import { collectStalledJobs } from './collect-stalled-jobs.ts';
@@ -6,6 +7,7 @@ import { collectUsageShape } from './collect-usage-shape.ts';
 import { collectSetupSmells } from './collect-setup-smells.ts';
 
 export const COLLECTORS: AdvisorCollector[] = [
+  collectVersion,
   collectMigration,
   collectSchemaPack,
   collectStalledJobs,
@@ -38,7 +40,11 @@ export async function runAdvisor(ctx: AdvisorContext): Promise<AdvisorReport> {
   const all: AdvisorFinding[] = [];
   for (const c of COLLECTORS) {
     try {
-      all.push(...await c.collect(ctx));
+      const found = await c.collect(ctx);
+      for (const f of found) {
+        if (ctx.remote && f.workspace_dependent) continue;
+        all.push(f);
+      }
     } catch {
       // One collector failing must not kill the report.
     }

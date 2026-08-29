@@ -1,10 +1,15 @@
-import { describe, expect, test } from 'bun:test';
-import { rankFindings, runAdvisor } from '../src/core/advisor/run.ts';
+import { afterEach, describe, expect, test } from 'bun:test';
+import { mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
+import { COLLECTORS, rankFindings, runAdvisor } from '../src/core/advisor/run.ts';
 import { collectUsageShape } from '../src/core/advisor/collect-usage-shape.ts';
 import { collectStalledJobs } from '../src/core/advisor/collect-stalled-jobs.ts';
 import { collectSetupSmells } from '../src/core/advisor/collect-setup-smells.ts';
+import { pendingCachedUpgradeVersion } from '../src/core/advisor/collect-version.ts';
+import { appendAdvisorRun, summarizeDeltas } from '../src/core/advisor/history.ts';
 import { renderAdvisorReport } from '../src/core/advisor/render.ts';
-import type { AdvisorContext, AdvisorFinding } from '../src/core/advisor/types.ts';
+import type { AdvisorContext, AdvisorFinding, AdvisorReport } from '../src/core/advisor/types.ts';
 
 function finding(over: Partial<AdvisorFinding>): AdvisorFinding {
   return { id: 'x', severity: 'info', title: 't', fix: { command_argv: null }, collector: 'usage-shape', ask_user: true, ...over };
@@ -15,7 +20,10 @@ function ctx(engine: Partial<AdvisorContext['engine']>, over: Partial<AdvisorCon
     engine: engine as AdvisorContext['engine'],
     config: {} as AdvisorContext['config'],
     version: '1.0.0',
+    workspace: null,
+    skillsDir: null,
     now: new Date('2026-06-26T00:00:00Z'),
+    remote: false,
     ...over,
   };
 }
@@ -47,22 +55,41 @@ describe('runAdvisor resilience', () => {
       getHealth: async () => { throw new Error('boom'); },
       getConfig: async () => { throw new Error('boom'); },
       executeRaw: async () => { throw new Error('boom'); },
+      findOrphanPages: async () => { throw new Error('boom'); },
     };
     const report = await runAdvisor(ctx(engine));
     expect(Array.isArray(report.findings)).toBe(true);
   });
+
+  test('drops workspace-dependent findings over MCP', async () => {
+    const report = await runAdvisor(ctx({
+      getStats: async () => ({ page_count: 0, chunk_count: 0, embedded_count: 0, link_count: 0, tag_count: 0, timeline_entry_count: 0, pages_by_type: {} }),
+    }, { remote: true }));
+    expect(report.findings.every((item) => !item.workspace_dependent)).toBe(true);
+  });
+
+  test('does not copy Chronicle or skillpack collectors', () => {
+    expect(COLLECTORS.map((item) => item.id)).toEqual([
+      'version',
+      'migration',
+      'schema-pack',
+      'stalled-jobs',
+      'usage-shape',
+      'setup-smells',
+    ]);
+  });
 });
 
 describe('collectors', () => {
-  test('usage shape flags low embedding coverage and orphans', async () => {
+  test('usage shape flags missing chunks and policy-filtered orphans, and offers stale embed', async () => {
     const engine = {
-      getStats: async () => ({ page_count: 100, chunk_count: 0, embedded_count: 0, link_count: 0, tag_count: 0, timeline_entry_count: 0, pages_by_type: {} }),
+      getStats: async () => ({ page_count: 100, chunk_count: 200, embedded_count: 32, link_count: 0, tag_count: 0, timeline_entry_count: 0, pages_by_type: {} }),
       getHealth: async () => ({
         page_count: 100,
         embed_coverage: 0.4,
         stale_pages: 0,
-        orphan_pages: 5,
-        missing_embeddings: 60,
+        orphan_pages: 50,
+        missing_embeddings: 168,
         brain_score: 50,
         dead_links: 0,
         link_coverage: 0,
@@ -74,10 +101,52 @@ describe('collectors', () => {
         no_orphans_score: 0,
         no_dead_links_score: 0,
       }),
+      getConfig: async () => null,
+      executeRaw: async () => [{ pending: 168 }],
+      findOrphanPages: async () => [
+        { slug: 'wiki/people/alice', title: 'Alice', domain: 'wiki' },
+        { slug: 'youdao/mirror', title: 'Youdao', domain: 'youdao' },
+        { slug: 'output/summary', title: 'Output', domain: 'output' },
+      ],
+    };
+    const out = await collectUsageShape.collect(ctx(engine as never, {
+      config: { embedding_model: 'ollama:nomic', embedding_dimensions: 768 } as AdvisorContext['config'],
+    }));
+    const embed = out.find((f) => f.id === 'low_embed_coverage');
+    expect(embed?.title).toContain('168 chunks');
+    expect(embed?.fix.dispatch_id).toBe('embed_stale');
+    expect(embed?.fix.command_argv).toEqual(['pmbrain', 'embed', '--stale']);
+    const orphans = out.find((f) => f.id === 'orphan_pages');
+    expect(orphans?.title).toContain('1 knowledge pages');
+    expect(orphans?.fix.dispatch_id).toBe('organize_orphans');
+  });
+
+  test('usage shape does not offer embed-now when vectors are not configured', async () => {
+    const engine = {
+      getStats: async () => ({ page_count: 10, chunk_count: 10, embedded_count: 0, link_count: 0, tag_count: 0, timeline_entry_count: 0, pages_by_type: {} }),
+      getHealth: async () => ({
+        page_count: 10,
+        embed_coverage: 0,
+        stale_pages: 0,
+        orphan_pages: 0,
+        missing_embeddings: 10,
+        brain_score: 50,
+        dead_links: 0,
+        link_coverage: 0,
+        timeline_coverage: 0,
+        most_connected: [],
+        embed_coverage_score: 0,
+        link_density_score: 0,
+        timeline_coverage_score: 0,
+        no_orphans_score: 0,
+        no_dead_links_score: 0,
+      }),
+      getConfig: async () => null,
+      executeRaw: async () => [{ pending: 10 }],
+      findOrphanPages: async () => [],
     };
     const out = await collectUsageShape.collect(ctx(engine as never));
-    expect(out.map((f) => f.id)).toContain('low_embed_coverage');
-    expect(out.map((f) => f.id)).toContain('orphan_pages');
+    expect(out.map((f) => f.id)).not.toContain('low_embed_coverage');
   });
 
   test('stalled jobs collector tolerates absent table', async () => {
@@ -89,6 +158,63 @@ describe('collectors', () => {
     const engine = { getConfig: async () => null };
     const out = await collectSetupSmells.collect(ctx(engine as never, { config: { embedding_disabled: true } as AdvisorContext['config'] }));
     expect(out.find((f) => f.id === 'embeddings_disabled')).toBeDefined();
+  });
+
+  test('setup smells asks for embedding_model and dimensions, never ZeroEntropy', async () => {
+    const engine = { getConfig: async () => null };
+    const out = await collectSetupSmells.collect(ctx(engine as never, { config: {} as AdvisorContext['config'] }));
+    expect(out.find((f) => f.id === 'embedding_not_configured')).toBeDefined();
+    expect(out.find((f) => f.id === 'embedding_key_missing')).toBeUndefined();
+    expect(JSON.stringify(out)).not.toMatch(/zeroentropy/i);
+    const configured = await collectSetupSmells.collect(ctx(engine as never, {
+      config: { embedding_model: 'ollama:nomic', embedding_dimensions: 768 } as AdvisorContext['config'],
+    }));
+    expect(configured.find((f) => f.id === 'embedding_not_configured')).toBeUndefined();
+  });
+});
+
+describe('version cache and history', () => {
+  const dirs: string[] = [];
+  afterEach(() => {
+    for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  test('version collector stays silent without a fresh local cache', () => {
+    expect(pendingCachedUpgradeVersion('1.3.10', Date.parse('2026-08-29T00:00:00Z'), { path: join(tmpdir(), 'missing-update-check.json') })).toBeNull();
+  });
+
+  test('version collector reads a fresh cache and ignores stale or older versions', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'advisor-update-'));
+    dirs.push(dir);
+    const path = join(dir, 'update-check.json');
+    writeFileSync(path, JSON.stringify({ latest: '1.3.12', checked_at: '2026-08-28T00:00:00.000Z' }));
+    expect(pendingCachedUpgradeVersion('1.3.10', Date.parse('2026-08-29T00:00:00Z'), { path })).toBe('1.3.12');
+    writeFileSync(path, JSON.stringify({ latest: '1.3.9', checked_at: '2026-08-28T00:00:00.000Z' }));
+    expect(pendingCachedUpgradeVersion('1.3.10', Date.parse('2026-08-29T00:00:00Z'), { path })).toBeNull();
+    writeFileSync(path, JSON.stringify({ latest: '1.4.0', checked_at: '2026-01-01T00:00:00.000Z' }));
+    expect(pendingCachedUpgradeVersion('1.3.10', Date.parse('2026-08-29T00:00:00Z'), { path })).toBeNull();
+  });
+
+  test('history reports new and resolved finding ids', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'advisor-history-'));
+    dirs.push(dir);
+    const path = join(dir, 'advisor-history.jsonl');
+    const first: AdvisorReport = {
+      version: '1.3.11',
+      generated_at: '2026-08-28T00:00:00.000Z',
+      worst: 'warn',
+      findings: [finding({ id: 'low_embed_coverage' })],
+    };
+    expect(appendAdvisorRun(first, { path })).toBeNull();
+    const second: AdvisorReport = {
+      version: '1.3.11',
+      generated_at: '2026-08-29T00:00:00.000Z',
+      worst: 'info',
+      findings: [finding({ id: 'orphan_pages' })],
+    };
+    const prior = appendAdvisorRun(second, { path });
+    expect(summarizeDeltas(prior, second)).toContain('1 new since last run');
+    expect(summarizeDeltas(prior, second)).toContain('1 resolved');
   });
 });
 
