@@ -16,7 +16,7 @@ export const collectMigration: AdvisorCollector = {
       severity: 'critical',
       title: 'Schema migrations are pending.',
       detail: 'Newer PMBrain code expects the latest schema. Run migrations before relying on newer features.',
-      fix: { command_argv: ['pmbrain', 'apply-migrations', '--yes'] },
+      fix: { command_argv: ['pmbrain', 'apply-migrations', '--yes'], dispatch_id: 'apply_migrations' },
       collector: 'migration',
       ask_user: true,
     }];

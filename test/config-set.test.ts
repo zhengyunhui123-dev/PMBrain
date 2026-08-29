@@ -20,6 +20,7 @@ import { suggestNearest } from '../src/core/levenshtein.ts';
 
 describe('KNOWN_CONFIG_KEYS', () => {
   test('contains the canonical embedding keys', () => {
+    expect(KNOWN_CONFIG_KEYS).toContain('pglite_upgrade_backup_dir');
     expect(KNOWN_CONFIG_KEYS).toContain('embedding_model');
     expect(KNOWN_CONFIG_KEYS).toContain('embedding_dimensions');
     expect(KNOWN_CONFIG_KEYS).toContain('embedding_disabled');  // v0.37 D9
@@ -47,6 +48,10 @@ describe('KNOWN_CONFIG_KEYS', () => {
     expect(KNOWN_CONFIG_KEYS).toContain('spend.posture');
     expect(KNOWN_CONFIG_KEYS).toContain('sync.cost_gate_min_usd');
     expect(KNOWN_CONFIG_KEYS).toContain('embed.backfill_max_usd');
+  });
+
+  test('contains the working-tree sync opt-in key', () => {
+    expect(KNOWN_CONFIG_KEYS).toContain('sync.include_working_tree');
   });
 
   test('no duplicate entries', () => {

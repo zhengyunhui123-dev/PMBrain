@@ -990,13 +990,17 @@ async function runPhaseSync(
       includeOffice,
     });
     const syncedCount = result.added + result.modified;
+    const uncommittedCount = result.uncommitted
+      ? result.uncommitted.added + result.uncommitted.modified + result.uncommitted.deleted
+      : 0;
     return {
       phase: 'sync',
-      status: result.status === 'blocked_by_failures' ? 'warn' : 'ok',
+      status: result.status === 'blocked_by_failures' || uncommittedCount > 0 ? 'warn' : 'ok',
       duration_ms: 0,
       summary: dryRun
         ? `${syncedCount} page(s) would sync, ${result.deleted} would delete`
-        : `+${result.added} added, ~${result.modified} modified, -${result.deleted} deleted`,
+        : `+${result.added} added, ~${result.modified} modified, -${result.deleted} deleted` +
+          (uncommittedCount > 0 ? `; ${uncommittedCount} uncommitted file(s) not synced` : ''),
       details: {
         added: result.added,
         modified: result.modified,
@@ -1006,6 +1010,7 @@ async function runPhaseSync(
         failedFiles: result.failedFiles ?? 0,
         syncStatus: result.status,
         dryRun,
+        ...(result.uncommitted ? { uncommitted: result.uncommitted } : {}),
       },
       pagesAffected: result.pagesAffected,
     };

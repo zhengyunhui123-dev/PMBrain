@@ -278,6 +278,11 @@
       "name": "schema-unify",
       "path": "schema-unify/SKILL.md",
       "description": "Migrate a brain off a noisy 24+-type pack onto gbrain-base-v2 (15 canonical types). 7-phase workflow: brain → assess → propose → apply → sync → verify → commit. Wraps the v0.41.22 unify-types PROTECTED Minion handler."
+    },
+    {
+      "name": "pmbrain-advisor",
+      "path": "pmbrain-advisor/SKILL.md",
+      "description": "PMBrain 知识库健康管家。运行 pmbrain advisor，按严重度汇报高价值健康建议；默认只读，修复前必须确认。"
     }
   ],
   "dependencies": {

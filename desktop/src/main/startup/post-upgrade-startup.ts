@@ -11,7 +11,28 @@
 export const POST_UPGRADE_SETTLE_MS = 1_500;
 
 /** Max ensureReady attempts when this launch performed an upgrade migration. */
-export const POST_UPGRADE_READY_ATTEMPTS = 3;
+export const POST_UPGRADE_READY_ATTEMPTS = 2;
+
+/** Default sidecar /health wait for Postgres and non-PGLite engines. */
+export const DEFAULT_HEALTH_TIMEOUT_MS = 45_000;
+
+/** PGLite already-migrated start: opening a large data dir can exceed 45s. */
+export const PGLITE_HEALTH_TIMEOUT_MS = 180_000;
+
+/**
+ * First start after a desktop upgrade. Sidecar owns PGLite migrations,
+ * including GIN trigram indexes on existing chunk text. Killing the process
+ * at 45s rolls the in-progress transaction back and the next retry starts over.
+ */
+export const POST_UPGRADE_HEALTH_TIMEOUT_MS = 600_000;
+
+export function resolveSidecarHealthTimeoutMs(opts: {
+  engine: string;
+  upgradePending: boolean;
+}): number {
+  if (opts.engine !== 'pglite') return DEFAULT_HEALTH_TIMEOUT_MS;
+  return opts.upgradePending ? POST_UPGRADE_HEALTH_TIMEOUT_MS : PGLITE_HEALTH_TIMEOUT_MS;
+}
 
 /** Base backoff between ensureReady attempts (multiplied by attempt index). */
 export const POST_UPGRADE_RETRY_BASE_MS = 2_000;

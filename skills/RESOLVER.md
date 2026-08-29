@@ -89,6 +89,7 @@
 | "提取链接"、"构建链接图"、"填充时间线" | `skills/maintain/SKILL.md`（提取部分） |
 | "运行梦想"、"处理今天的会话"、"综合我的对话"、"整合昨天的对话"、"你看到了什么模式"、"梦想周期是否运行" | `skills/maintain/SKILL.md`（梦想周期部分） |
 | "大脑健康"、"我缺少什么功能"、"大脑评分" | 运行 `gbrain features --json` |
+| "知识库健康"、"pmbrain advisor"、"大脑体检"、"现在最该处理什么" | `skills/pmbrain-advisor/SKILL.md` |
 | "设置自动驾驶"、"运行大脑维护"、"保持大脑更新" | 运行 `gbrain autopilot --install --repo ~/brain` |
 | 智能体身份、"我是谁"、自定义智能体 | `skills/soul-audit/SKILL.md` |
 | "填充链接"、"提取链接"、"回填图" | `skills/maintain/SKILL.md`（图填充阶段） |

@@ -1,6 +1,7 @@
-import { existsSync, readFileSync, writeFileSync, statSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, statSync, mkdirSync, mkdtempSync, rmSync } from 'fs';
 import { execFileSync } from 'child_process';
 import { join, relative } from 'path';
+import { tmpdir } from 'os';
 import type { BrainEngine } from '../core/engine.ts';
 import { DELETE_BATCH_SIZE } from '../core/engine-constants.ts';
 import { importFile } from '../core/import-file.ts';
@@ -11,11 +12,17 @@ import {
   isSyncable,
   unsyncableReason,
   resolveSlugForPath,
-  recordSyncFailures,
-  unacknowledgedSyncFailures,
-  acknowledgeSyncFailures,
   formatCodeBreakdown,
 } from '../core/sync.ts';
+import {
+  DEFAULT_SOURCE_ID,
+  applySyncFailureGate,
+  loadSyncFailures,
+  isSkippablePath,
+  resolveAutoSkipThreshold,
+  unacknowledgedSyncFailures,
+  acknowledgeSyncFailures,
+} from '../core/sync-failure-ledger.ts';
 import { importOfficeFile, isOfficeFilePath } from '../core/office-import.ts';
 import { estimateTokens, CHUNKER_VERSION } from '../core/chunkers/code.ts';
 import { EMBEDDING_MODEL, estimateEmbeddingCostUsd } from '../core/embedding.ts';
@@ -46,6 +53,13 @@ import {
 import { loadStorageConfig } from '../core/storage-config.ts';
 import { getDefaultSourcePath } from '../core/source-resolver.ts';
 import { sortNewestFirst } from '../core/sort-newest-first.ts';
+import {
+  fingerprint,
+  loadOpCheckpoint,
+  recordCompleted as recordOpCompleted,
+  clearOpCheckpoint,
+  type OpCheckpointKey,
+} from '../core/op-checkpoint.ts';
 
 export interface SyncResult {
   status: 'up_to_date' | 'synced' | 'first_sync' | 'dry_run' | 'blocked_by_failures' | 'partial';
@@ -60,6 +74,8 @@ export interface SyncResult {
   embedded: number;
   pagesAffected: string[];
   failedFiles?: number; // count of parse failures (Bug 9)
+  /** Uncommitted working-tree changes intentionally excluded by default. */
+  uncommitted?: { added: number; modified: number; deleted: number };
   /**
    * v0.41.13.0 partial-sync fields (only set when status === 'partial').
    *
@@ -177,6 +193,8 @@ export interface SyncOpts {
   strategy?: 'markdown' | 'code' | 'auto';
   /** Include document files (Word/PDF/Excel) alongside markdown in import/sync. */
   includeOffice?: boolean;
+  /** Import uncommitted edits/untracked files. Default false; config fallback is sync.include_working_tree. */
+  workingTree?: boolean;
   /**
    * Number of parallel workers for the import phase. When > 1, each worker
    * gets its own small Postgres connection pool and files are dispatched via
@@ -399,6 +417,55 @@ function buildDetachedWorkingTreeManifest(repoPath: string): SyncManifest {
     deleted: unique(manifest.deleted),
     renamed: manifest.renamed,
   };
+}
+
+async function resolveWorkingTreeMode(engine: BrainEngine, requested: boolean | undefined): Promise<boolean> {
+  if (requested !== undefined) return requested;
+  try {
+    return (await engine.getConfig('sync.include_working_tree')) === 'true';
+  } catch {
+    return false;
+  }
+}
+
+function filteredWorkingTreeCounts(manifest: SyncManifest, opts: SyncOpts): { added: number; modified: number; deleted: number } {
+  const syncOpts = (opts.strategy || opts.includeOffice)
+    ? { strategy: opts.strategy, includeOffice: opts.includeOffice }
+    : undefined;
+  return {
+    added: manifest.added.filter((path) => isSyncable(path, syncOpts)).length
+      + manifest.renamed.filter((item) => isSyncable(item.to, syncOpts)).length,
+    modified: manifest.modified.filter((path) => isSyncable(path, syncOpts)).length,
+    deleted: manifest.deleted.filter((path) => isSyncable(path, syncOpts)).length
+      + manifest.renamed.filter((item) => isSyncable(item.from, syncOpts)).length,
+  };
+}
+
+function nonEmptyDrift(counts: { added: number; modified: number; deleted: number }): boolean {
+  return counts.added + counts.modified + counts.deleted > 0;
+}
+
+function materializeCommittedTree(repoPath: string, headCommit: string): { tree: string; cleanup: () => void } {
+  const root = mkdtempSync(join(tmpdir(), 'pmbrain-sync-head-'));
+  const tree = join(root, 'tree');
+  const archive = join(root, 'head.tar');
+  mkdirSync(tree, { recursive: true });
+  try {
+    execFileSync('git', ['-C', repoPath, 'archive', '--format=tar', '--output', archive, headCommit], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      timeout: 120_000,
+      maxBuffer: 100 * 1024 * 1024,
+    });
+    execFileSync('tar', ['-xf', archive, '-C', tree], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      timeout: 120_000,
+      maxBuffer: 100 * 1024 * 1024,
+    });
+    return { tree, cleanup: () => rmSync(root, { recursive: true, force: true }) };
+  } catch (error) {
+    rmSync(root, { recursive: true, force: true });
+    throw new Error(`Unable to materialize committed Git baseline ${headCommit.slice(0, 8)}: ${error instanceof Error ? error.message : String(error)}`);
+  }
 }
 
 // v0.18.0 Step 5: source-scoped sync state helpers. When opts.sourceId
@@ -1005,7 +1072,7 @@ async function performSyncInner(engine: BrainEngine, opts: SyncOpts): Promise<Sy
   // gated on opts.noPull.
   const detachedHead = isDetachedHead(repoPath);
   if (detachedHead && !opts.noPull) {
-    serr(`Detached HEAD on ${repoPath}; skipping git pull. Syncing from local working tree.`);
+    serr(`Detached HEAD on ${repoPath}; skipping git pull. Using current Git HEAD.`);
   }
 
   // Git pull (unless --no-pull). v0.28.1 codex finding (HIGH): the legacy
@@ -1016,7 +1083,7 @@ async function performSyncInner(engine: BrainEngine, opts: SyncOpts): Promise<Sy
   // ongoing pulls — single source of truth for the defensive flags.
   const originRemotePresent = !opts.noPull && !detachedHead ? hasOriginRemote(repoPath) : false;
   if (!opts.noPull && !detachedHead && !originRemotePresent) {
-    serr(`No origin remote on ${repoPath}; skipping git pull. Syncing from local working tree.`);
+    serr(`No origin remote on ${repoPath}; skipping git pull. Using current Git HEAD.`);
   }
 
   // v0.41.13.0 (T2 + T3): read the bookmark BEFORE pull so the pull-phase
@@ -1148,18 +1215,32 @@ async function performSyncInner(engine: BrainEngine, opts: SyncOpts): Promise<Sy
   if (missingTrackedOfficeFiles.length > 0) {
     slog(`[sync] backfilling ${missingTrackedOfficeFiles.length} committed Office/PDF file(s) missing from Source.`);
   }
-  const detachedWorkingTreeManifest = detachedHead ? buildDetachedWorkingTreeManifest(repoPath) : null;
-  const hasDetachedWorkingTreeChanges = detachedWorkingTreeManifest !== null &&
-    (detachedWorkingTreeManifest.added.length > 0 ||
-      detachedWorkingTreeManifest.modified.length > 0 ||
-      detachedWorkingTreeManifest.deleted.length > 0 ||
-      detachedWorkingTreeManifest.renamed.length > 0);
+  const workingTreeEnabled = await resolveWorkingTreeMode(engine, opts.workingTree);
+  let workingTreeManifest: SyncManifest = { added: [], modified: [], deleted: [], renamed: [] };
+  try {
+    workingTreeManifest = buildDetachedWorkingTreeManifest(repoPath);
+  } catch (error) {
+    if (workingTreeEnabled) {
+      throw new Error(`Unable to inspect working-tree state: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  const workingTreeCounts = filteredWorkingTreeCounts(workingTreeManifest, opts);
+  const uncommittedDrift = !workingTreeEnabled && nonEmptyDrift(workingTreeCounts)
+    ? workingTreeCounts
+    : undefined;
+  const hasImportedWorkingTreeChanges = workingTreeEnabled && nonEmptyDrift(workingTreeCounts);
+  if (uncommittedDrift) {
+    serr(
+      `[sync] ${uncommittedDrift.added + uncommittedDrift.modified + uncommittedDrift.deleted} uncommitted file(s) not synced. ` +
+      `Commit them or enable sync.include_working_tree.`,
+    );
+  }
 
   if (
     lastCommit === headCommit
     && !versionMismatch
     && !versionNeverSet
-    && !hasDetachedWorkingTreeChanges
+    && !hasImportedWorkingTreeChanges
     && missingTrackedOfficeFiles.length === 0
   ) {
     return {
@@ -1170,6 +1251,7 @@ async function performSyncInner(engine: BrainEngine, opts: SyncOpts): Promise<Sy
       chunksCreated: 0,
       embedded: 0,
       pagesAffected: [],
+      ...(uncommittedDrift ? { uncommitted: uncommittedDrift } : {}),
     };
   }
 
@@ -1187,11 +1269,11 @@ async function performSyncInner(engine: BrainEngine, opts: SyncOpts): Promise<Sy
   const diffOutput = git(repoPath, ['diff', '--name-status', '-M', `${lastCommit}..${headCommit}`]);
   const manifest = buildSyncManifest(diffOutput);
   manifest.added = unique([...manifest.added, ...missingTrackedOfficeFiles]);
-  if (detachedWorkingTreeManifest) {
-    manifest.added = unique([...manifest.added, ...detachedWorkingTreeManifest.added]);
-    manifest.modified = unique([...manifest.modified, ...detachedWorkingTreeManifest.modified]);
-    manifest.deleted = unique([...manifest.deleted, ...detachedWorkingTreeManifest.deleted]);
-    manifest.renamed = [...manifest.renamed, ...detachedWorkingTreeManifest.renamed];
+  if (workingTreeEnabled) {
+    manifest.added = unique([...manifest.added, ...workingTreeManifest.added]);
+    manifest.modified = unique([...manifest.modified, ...workingTreeManifest.modified]);
+    manifest.deleted = unique([...manifest.deleted, ...workingTreeManifest.deleted]);
+    manifest.renamed = [...manifest.renamed, ...workingTreeManifest.renamed];
   }
 
   // Filter to syncable files (strategy-aware)
@@ -1265,6 +1347,7 @@ async function performSyncInner(engine: BrainEngine, opts: SyncOpts): Promise<Sy
       chunksCreated: 0,
       embedded: 0,
       pagesAffected: [],
+      ...(uncommittedDrift ? { uncommitted: uncommittedDrift } : {}),
     };
   }
 
@@ -1281,6 +1364,7 @@ async function performSyncInner(engine: BrainEngine, opts: SyncOpts): Promise<Sy
       chunksCreated: 0,
       embedded: 0,
       pagesAffected: [],
+      ...(uncommittedDrift ? { uncommitted: uncommittedDrift } : {}),
     };
   }
 
@@ -1455,6 +1539,16 @@ async function performSyncInner(engine: BrainEngine, opts: SyncOpts): Promise<Sy
     progress.finish();
   }
 
+  // Incremental sync must read the same committed tree used to calculate the
+  // diff. Reading repoPath here would leak later dirty edits of a committed
+  // file into the database even though working-tree sync is disabled.
+  const committedImportSnapshot = workingTreeEnabled ? null : materializeCommittedTree(repoPath, headCommit);
+  const syncContentRoot = committedImportSnapshot?.tree ?? repoPath;
+  const partialAfterSnapshot = (reason: 'timeout' | 'pull_timeout' | 'stall_timeout'): SyncResult => {
+    committedImportSnapshot?.cleanup();
+    return partial(reason);
+  };
+
   // Process renames (updateSlug preserves page_id, chunks, embeddings).
   // SP-5: both old and new slugs use resolveSlugForPath so a .ts → .ts
   // rename (code→code), .md → .md (markdown→markdown), or cross-kind rename
@@ -1484,7 +1578,7 @@ async function performSyncInner(engine: BrainEngine, opts: SyncOpts): Promise<Sy
       for (let i = 0; i < fromPaths.length; i += DELETE_BATCH_SIZE) {
         if (opts.signal?.aborted) {
           progress.finish();
-          return partial('timeout');
+          return partialAfterSnapshot('timeout');
         }
         const batch = fromPaths.slice(i, i + DELETE_BATCH_SIZE);
         let m: Map<string, string>;
@@ -1505,7 +1599,7 @@ async function performSyncInner(engine: BrainEngine, opts: SyncOpts): Promise<Sy
       // refactor commits with 200+ renames must respect --timeout.
       if (opts.signal?.aborted) {
         progress.finish();
-        return partial('timeout');
+        return partialAfterSnapshot('timeout');
       }
       const oldSlug = opts.sourceId
         ? (fromSlugByPath.get(from) ?? resolveSlugForPath(from))
@@ -1518,7 +1612,7 @@ async function performSyncInner(engine: BrainEngine, opts: SyncOpts): Promise<Sy
         // Slug doesn't exist or collision, treat as add
       }
       // Reimport at new path (picks up content changes)
-      const filePath = join(repoPath, to);
+      const filePath = join(syncContentRoot, to);
       if (existsSync(filePath)) {
         const result = opts.includeOffice && isOfficeFilePath(to)
           ? await importOfficeFile(engine, filePath, to, { noEmbed, sourceId: opts.sourceId, activePack: syncActivePack })
@@ -1556,7 +1650,37 @@ async function performSyncInner(engine: BrainEngine, opts: SyncOpts): Promise<Sy
   // delete decompose path appends here too); kept as a comment-pin so
   // future maintainers know to thread additional failure surfaces through
   // the same array.
-  const addsAndMods = [...filtered.added, ...filtered.modified];
+  const allAddsAndMods = [...filtered.added, ...filtered.modified];
+
+  // Independent DB checkpoint: last_commit still advances only after the
+  // complete sync passes the failure gate.
+  const syncCheckpointKey: OpCheckpointKey = {
+    op: 'sync',
+    fingerprint: fingerprint({
+      source: opts.sourceId ?? DEFAULT_SOURCE_ID,
+      repo: repoPath.toLowerCase(),
+      from: lastCommit,
+      to: headCommit,
+      strategy: opts.strategy ?? 'markdown',
+      includeOffice: opts.includeOffice === true,
+      workingTree: workingTreeEnabled,
+    }),
+  };
+  const completedImportPaths = new Set(await loadOpCheckpoint(engine, syncCheckpointKey));
+  const addsAndMods = allAddsAndMods.filter((path) => !completedImportPaths.has(path));
+  let lastCheckpointSize = completedImportPaths.size;
+  let lastCheckpointAt = Date.now();
+  let checkpointWrite: Promise<void> = Promise.resolve();
+  async function checkpointImportedPath(path: string): Promise<void> {
+    completedImportPaths.add(path);
+    const now = Date.now();
+    if (completedImportPaths.size - lastCheckpointSize < 25 && now - lastCheckpointAt < 10_000) return;
+    const snapshot = Array.from(completedImportPaths);
+    lastCheckpointSize = snapshot.length;
+    lastCheckpointAt = now;
+    checkpointWrite = checkpointWrite.then(() => recordOpCompleted(engine, syncCheckpointKey, snapshot));
+    await checkpointWrite;
+  }
 
   // Sort newest-first so date-prefixed brain paths get embedded before older
   // ones. See src/core/sort-newest-first.ts for the policy.
@@ -1594,7 +1718,7 @@ async function performSyncInner(engine: BrainEngine, opts: SyncOpts): Promise<Sy
 
     // Core import logic shared by serial and parallel paths.
     // repoPath is validated non-null at the top of performSyncInner; narrow for TS.
-    const syncRepoPath = repoPath!;
+    const syncRepoPath = syncContentRoot;
     async function importOnePath(eng: BrainEngine, path: string): Promise<void> {
       const filePath = join(syncRepoPath, path);
       if (!existsSync(filePath)) {
@@ -1627,6 +1751,7 @@ async function performSyncInner(engine: BrainEngine, opts: SyncOpts): Promise<Sy
           // persist. partial() reports this so cron operators see how
           // much actually landed before --timeout fired.
           filesImported++;
+          await checkpointImportedPath(path);
         } else if (result.status === 'partial') {
           chunksCreated += result.chunks;
           pagesAffected.push(result.slug);
@@ -1637,6 +1762,8 @@ async function performSyncInner(engine: BrainEngine, opts: SyncOpts): Promise<Sy
           });
         } else if (result.status === 'skipped' && (result as any).error) {
           failedFiles.push({ path, error: String((result as any).error) });
+        } else {
+          await checkpointImportedPath(path);
         }
       } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : String(e);
@@ -1660,7 +1787,7 @@ async function performSyncInner(engine: BrainEngine, opts: SyncOpts): Promise<Sy
           // serial fallback inside the parallel branch (database_url unset).
           if (opts.signal?.aborted) {
             progress.finish();
-            return partial(stallAborted ? 'stall_timeout' : 'timeout');
+            return partialAfterSnapshot(stallAborted ? 'stall_timeout' : 'timeout');
           }
           await importOnePath(engine, path);
         }
@@ -1724,7 +1851,7 @@ async function performSyncInner(engine: BrainEngine, opts: SyncOpts): Promise<Sy
           // primary serial site.
           if (opts.signal?.aborted) {
             progress.finish();
-            return partial(stallAborted ? 'stall_timeout' : 'timeout');
+            return partialAfterSnapshot(stallAborted ? 'stall_timeout' : 'timeout');
           }
           await importOnePath(engine, path);
         }
@@ -1742,9 +1869,11 @@ async function performSyncInner(engine: BrainEngine, opts: SyncOpts): Promise<Sy
     // the bookmark write below. By returning partial here, we preserve
     // the D-V3-1 invariant that abort means "never advance last_commit."
     if (opts.signal?.aborted) {
-      return partial(stallAborted ? 'stall_timeout' : 'timeout');
+      return partialAfterSnapshot(stallAborted ? 'stall_timeout' : 'timeout');
     }
   }
+
+  committedImportSnapshot?.cleanup();
 
   // CODEX-3 (v0.22.13): head-drift gate. If git HEAD moved during the import
   // window (someone ran `git checkout` or `git pull` in another terminal /
@@ -1771,59 +1900,48 @@ async function performSyncInner(engine: BrainEngine, opts: SyncOpts): Promise<Sy
 
   const elapsed = Date.now() - start;
 
-  // Bug 9 — gate the sync bookmark on success. If any per-file parse
-  // failed, record it to ~/.gbrain/sync-failures.jsonl and DO NOT advance
-  // sync.last_commit. The next sync re-walks the same diff and re-attempts
-  // the failed files. Escape hatches: --skip-failed acknowledges the
-  // current set, --retry-failed re-parses before running the normal sync.
-  if (failedFiles.length > 0) {
-    recordSyncFailures(failedFiles, headCommit);
-    // Emit structured summary grouped by error code so the operator
-    // can see *why* files failed, not just how many.
-    const codeBreakdown = formatCodeBreakdown(failedFiles);
-    if (!opts.skipFailed) {
-      serr(
-        `\nSync blocked: ${failedFiles.length} file(s) failed to parse:\n` +
-        `${codeBreakdown}\n\n` +
-        `Fix the YAML frontmatter in the files above and re-run, or use ` +
-        `'gbrain sync --skip-failed' to acknowledge and move on.`,
-      );
-      // Update last_run + repo_path (progress on infra) but NOT last_commit.
-      await engine.setConfig('sync.last_run', new Date().toISOString());
-      await writeSyncAnchor(engine, opts.sourceId, 'repo_path', repoPath);
-      return {
-        status: 'blocked_by_failures',
-        fromCommit: lastCommit,
-        toCommit: headCommit,
-        added: filtered.added.length,
-        modified: filtered.modified.length,
-        deleted: filtered.deleted.length,
-        renamed: filtered.renamed.length,
-        chunksCreated,
-        embedded: 0,
-        pagesAffected,
-        failedFiles: failedFiles.length,
-      };
-    }
-    // --skip-failed: acknowledge the now-recorded set and proceed.
-    const acked = acknowledgeSyncFailures();
-    if (acked.count > 0) {
-      serr(
-        `  Acknowledged ${acked.count} failure(s) and advancing past them:\n` +
-        `${formatCodeBreakdown(acked.summary)}`,
-      );
-    }
+  if (completedImportPaths.size > lastCheckpointSize) {
+    await checkpointWrite;
+    await recordOpCompleted(engine, syncCheckpointKey, Array.from(completedImportPaths));
+    lastCheckpointSize = completedImportPaths.size;
   }
 
-  // Update sync state AFTER all changes succeed (source-scoped when
-  // opts.sourceId is set, global config otherwise).
-  await writeSyncAnchor(engine, opts.sourceId, 'last_commit', headCommit);
-  await engine.setConfig('sync.last_run', new Date().toISOString());
-  await writeSyncAnchor(engine, opts.sourceId, 'repo_path', repoPath);
-  // v0.20.0 Cathedral II Layer 12: persist the chunker version we just
-  // finished with so the next sync's up_to_date gate respects it. Only
-  // source-scoped syncs track this (see readChunkerVersion for rationale).
-  await writeChunkerVersion(engine, opts.sourceId, String(CHUNKER_VERSION));
+  const failedPathSet = new Set(failedFiles.map((failure) => failure.path));
+  const succeededPaths = allAddsAndMods.filter((path) => !failedPathSet.has(path));
+  const gate = await applySyncFailureGate({
+    sourceId: opts.sourceId ?? DEFAULT_SOURCE_ID,
+    failedFiles,
+    succeededPaths,
+    commit: headCommit,
+    skipFailed: opts.skipFailed === true,
+    advance: async () => {
+      await writeSyncAnchor(engine, opts.sourceId, 'last_commit', headCommit);
+      await engine.setConfig('sync.last_run', new Date().toISOString());
+      await writeSyncAnchor(engine, opts.sourceId, 'repo_path', repoPath);
+      await writeChunkerVersion(engine, opts.sourceId, String(CHUNKER_VERSION));
+      await clearOpCheckpoint(engine, syncCheckpointKey);
+    },
+  });
+  if (!gate.advanced) {
+    const codeBreakdown = formatCodeBreakdown(failedFiles);
+    serr(
+      `\nSync blocked: ${failedFiles.length} file(s) failed:\n${codeBreakdown}\n\n` +
+      `Fix them and re-run. A fixed file auto-clears; the same file/error auto-skips after ` +
+      `${resolveAutoSkipThreshold()} consecutive runs. Infrastructure failures never auto-skip.`,
+    );
+    await engine.setConfig('sync.last_run', new Date().toISOString());
+    await writeSyncAnchor(engine, opts.sourceId, 'repo_path', repoPath);
+    return {
+      status: 'blocked_by_failures', fromCommit: lastCommit, toCommit: headCommit,
+      added: filtered.added.length, modified: filtered.modified.length,
+      deleted: filtered.deleted.length, renamed: filtered.renamed.length,
+      chunksCreated, embedded: 0, pagesAffected, failedFiles: failedFiles.length,
+      ...(uncommittedDrift ? { uncommitted: uncommittedDrift } : {}),
+    };
+  }
+  if (gate.autoSkipped.length > 0) {
+    serr(`  Auto-skipped ${gate.autoSkipped.length} chronic file failure(s); health checks keep them visible.`);
+  }
 
   // Log ingest
   await engine.logIngest({
@@ -1933,6 +2051,7 @@ async function performSyncInner(engine: BrainEngine, opts: SyncOpts): Promise<Sy
     chunksCreated,
     embedded,
     pagesAffected,
+    ...(uncommittedDrift ? { uncommitted: uncommittedDrift } : {}),
   };
 }
 
@@ -1942,6 +2061,27 @@ async function performFullSync(
   headCommit: string,
   opts: SyncOpts,
 ): Promise<SyncResult> {
+  const workingTreeEnabled = await resolveWorkingTreeMode(engine, opts.workingTree);
+  let workingTreeManifest: SyncManifest = { added: [], modified: [], deleted: [], renamed: [] };
+  try {
+    workingTreeManifest = buildDetachedWorkingTreeManifest(repoPath);
+  } catch (error) {
+    if (workingTreeEnabled) {
+      throw new Error(`Unable to inspect working-tree state: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  const workingTreeCounts = filteredWorkingTreeCounts(workingTreeManifest, opts);
+  const uncommittedDrift = !workingTreeEnabled && nonEmptyDrift(workingTreeCounts)
+    ? workingTreeCounts
+    : undefined;
+  if (uncommittedDrift) {
+    serr(
+      `[sync] committed baseline ${headCommit.slice(0, 8)} selected; ` +
+      `${uncommittedDrift.added + uncommittedDrift.modified + uncommittedDrift.deleted} uncommitted file(s) will not be imported.`,
+    );
+  }
+  const committedSnapshot = workingTreeEnabled ? null : materializeCommittedTree(repoPath, headCommit);
+  const importPath = committedSnapshot?.tree ?? repoPath;
   // Dry-run: walk the repo, count syncable files, return without writing.
   // Fixes the silent-write-on-dry-run bug where performFullSync called
   // runImport unconditionally regardless of opts.dryRun.
@@ -1952,7 +2092,7 @@ async function performFullSync(
   // code --dry-run` always reported zero files even when ~1500 code
   // files were waiting.
   if (opts.dryRun) {
-    const allFiles = collectSyncableFiles(repoPath, {
+    const allFiles = collectSyncableFiles(importPath, {
       strategy: opts.strategy ?? 'markdown',
       includeOffice: opts.includeOffice,
     });
@@ -1961,6 +2101,7 @@ async function performFullSync(
       `${allFiles.length} file(s) would be imported ` +
       `from ${repoPath} @ ${headCommit.slice(0, 8)}.`,
     );
+    committedSnapshot?.cleanup();
     return {
       status: 'dry_run',
       fromCommit: null,
@@ -1972,6 +2113,7 @@ async function performFullSync(
       chunksCreated: 0,
       embedded: 0,
       pagesAffected: [],
+      ...(uncommittedDrift ? { uncommitted: uncommittedDrift } : {}),
     };
   }
 
@@ -1982,9 +2124,9 @@ async function performFullSync(
   // sync and the jobs handler.
   const FULL_SYNC_LARGE_MARKER = Number.MAX_SAFE_INTEGER;
   const fullConcurrency = autoConcurrency(engine, FULL_SYNC_LARGE_MARKER, opts.concurrency);
-  slog(`Running full import of ${repoPath}${fullConcurrency > 1 ? ` (${fullConcurrency} workers)` : ''}...`);
+  slog(`Running full import of committed Git baseline ${headCommit.slice(0, 8)}${workingTreeEnabled ? ' plus working tree' : ''}${fullConcurrency > 1 ? ` (${fullConcurrency} workers)` : ''}...`);
   const { runImport } = await import('./import.ts');
-  const importArgs = [repoPath];
+  const importArgs = [importPath];
   if (opts.noEmbed) importArgs.push('--no-embed');
   if (opts.includeOffice) importArgs.push('--include-office');
   if (fullConcurrency > 1) importArgs.push('--workers', String(fullConcurrency));
@@ -1994,64 +2136,73 @@ async function performFullSync(
   // source (incremental path already does this).
   const _fullImportT0 = Date.now();
   serr(`[pmbrain phase] sync.fullsync.import start strategy=${opts.strategy ?? 'markdown'}`);
-  const result = await runImport(engine, importArgs, {
-    commit: headCommit,
-    strategy: opts.strategy,
-    sourceId: opts.sourceId,
-  });
+  let result;
+  const fullCheckpointKey: OpCheckpointKey = {
+    op: 'sync-full',
+    fingerprint: fingerprint({
+      source: opts.sourceId ?? DEFAULT_SOURCE_ID,
+      repo: repoPath.toLowerCase(),
+      head: headCommit,
+      strategy: opts.strategy ?? 'markdown',
+      includeOffice: opts.includeOffice === true,
+      workingTree: workingTreeEnabled,
+    }),
+  };
+  try {
+    result = await runImport(engine, importArgs, {
+      commit: headCommit,
+      strategy: opts.strategy,
+      sourceId: opts.sourceId,
+      checkpointKey: fullCheckpointKey,
+      managedBookmark: true,
+    });
+  } finally {
+    committedSnapshot?.cleanup();
+  }
   serr(
     `[pmbrain phase] sync.fullsync.import done ${Date.now() - _fullImportT0}ms ` +
     `imported=${result.imported} skipped=${result.skipped} errors=${result.errors}`,
   );
 
-  // Bug 9 — gate the full-sync bookmark on success. runImport already
-  // writes its own sync.last_commit conditionally (import.ts), but
-  // performFullSync is called on first-sync + force-full paths where
-  // the sync module owns the last_commit write. Respect the same gate.
-  if (result.failures.length > 0) {
-    recordSyncFailures(result.failures, headCommit);
-    const codeBreakdown = formatCodeBreakdown(result.failures);
-    if (!opts.skipFailed) {
-      serr(
-        `\nFull sync blocked: ${result.failures.length} file(s) failed:\n` +
-        `${codeBreakdown}\n\n` +
-        `Fix the YAML in those files and re-run, or use '--skip-failed'.`,
-      );
+  const sourceId = opts.sourceId ?? DEFAULT_SOURCE_ID;
+  const failedPaths = new Set(result.failures.map((failure) => failure.path));
+  const succeededPaths = loadSyncFailures()
+    .filter((row) => row.source_id === sourceId && isSkippablePath(row.path) && !failedPaths.has(row.path))
+    .map((row) => row.path);
+  const gate = await applySyncFailureGate({
+    sourceId,
+    failedFiles: result.failures,
+    succeededPaths,
+    commit: headCommit,
+    skipFailed: opts.skipFailed === true,
+    advance: async () => {
+      await writeSyncAnchor(engine, opts.sourceId, 'last_commit', headCommit);
       await engine.setConfig('sync.last_run', new Date().toISOString());
       await writeSyncAnchor(engine, opts.sourceId, 'repo_path', repoPath);
-      // Keep successfully imported slugs so extract / relation / embed can
-      // continue for good files. Failures still block last_commit advance.
-      return {
-        status: 'blocked_by_failures',
-        fromCommit: null,
-        toCommit: headCommit,
-        added: result.imported,
-        modified: 0,
-        deleted: 0,
-        renamed: 0,
-        chunksCreated: result.chunksCreated,
-        embedded: 0,
-        pagesAffected: result.importedSlugs ?? [],
-        failedFiles: result.failures.length,
-      };
-    }
-    const acked = acknowledgeSyncFailures();
-    if (acked.count > 0) {
-      serr(
-        `  Acknowledged ${acked.count} failure(s) and advancing past them:\n` +
-        `${formatCodeBreakdown(acked.summary)}`,
-      );
-    }
+      await writeChunkerVersion(engine, opts.sourceId, String(CHUNKER_VERSION));
+      await clearOpCheckpoint(engine, fullCheckpointKey);
+    },
+  });
+  if (!gate.advanced) {
+    const codeBreakdown = formatCodeBreakdown(result.failures);
+    serr(
+      `\nFull sync blocked: ${result.failures.length} file(s) failed:\n${codeBreakdown}\n\n` +
+      `Fix them and re-run. A fixed file auto-clears; the same file/error auto-skips after ` +
+      `${resolveAutoSkipThreshold()} consecutive runs. Infrastructure failures never auto-skip.`,
+    );
+    await engine.setConfig('sync.last_run', new Date().toISOString());
+    await writeSyncAnchor(engine, opts.sourceId, 'repo_path', repoPath);
+    return {
+      status: 'blocked_by_failures', fromCommit: null, toCommit: headCommit,
+      added: result.imported, modified: 0, deleted: 0, renamed: 0,
+      chunksCreated: result.chunksCreated, embedded: 0,
+      pagesAffected: result.importedSlugs ?? [], failedFiles: result.failures.length,
+      ...(uncommittedDrift ? { uncommitted: uncommittedDrift } : {}),
+    };
   }
-
-  // Persist sync state so next sync is incremental (C1 fix: was missing).
-  // v0.18.0 Step 5: routed through writeSyncAnchor so --source pins it
-  // to the right sources row rather than the global config.
-  await writeSyncAnchor(engine, opts.sourceId, 'last_commit', headCommit);
-  await engine.setConfig('sync.last_run', new Date().toISOString());
-  await writeSyncAnchor(engine, opts.sourceId, 'repo_path', repoPath);
-  // v0.20.0 Cathedral II Layer 12: persist chunker version for the gate.
-  await writeChunkerVersion(engine, opts.sourceId, String(CHUNKER_VERSION));
+  if (gate.autoSkipped.length > 0) {
+    serr(`  Auto-skipped ${gate.autoSkipped.length} chronic file failure(s); health checks keep them visible.`);
+  }
 
   // Full sync doesn't track pagesAffected, so fall back to embed --stale.
   // v0.37 fix wave (Lane D.3 + CDX2-8): switched to runEmbedCore for the
@@ -2087,6 +2238,7 @@ async function performFullSync(
     // Surface imported slugs so cycle extract can run incrementally after
     // first_sync instead of receiving [] and processing zero pages.
     pagesAffected: result.importedSlugs ?? [],
+    ...(uncommittedDrift ? { uncommitted: uncommittedDrift } : {}),
   };
 }
 
@@ -2115,6 +2267,8 @@ export async function runSync(engine: BrainEngine, args: string[]) {
   --source <id>        仅同步指定来源，默认使用大脑的默认来源。
   --repo <path>        大脑仓库路径，默认使用 'pmbrain init' 保存的路径。
   --full               强制完整重新同步，通常无需使用。
+  --working-tree       同时同步未提交修改和未跟踪文件。默认关闭；也可通过
+                       sync.include_working_tree=true 持久开启。
   --dry-run            仅预览将同步的内容，不写入数据。
   --skip-failed        确认之前记录的同步失败，让书签跳过无法解析的文件。
   --retry-failed       重试之前失败的文件，成功后清除失败记录。
@@ -2147,6 +2301,7 @@ export async function runSync(engine: BrainEngine, args: string[]) {
   const noEmbed = args.includes('--no-embed');
   const skipFailed = args.includes('--skip-failed');
   const retryFailed = args.includes('--retry-failed');
+  const workingTree = args.includes('--working-tree') ? true : undefined;
   const syncAll = args.includes('--all');
   const jsonOut = args.includes('--json');
   const yesFlag = args.includes('--yes');
@@ -2498,6 +2653,7 @@ export async function runSync(engine: BrainEngine, args: string[]) {
         sourceId: src.id,
         strategy: cfg.strategy,
         includeOffice: includeOffice || cfg.includeOffice === true,
+        workingTree,
         concurrency,
         signal: controller?.signal,
       };
@@ -2697,7 +2853,7 @@ export async function runSync(engine: BrainEngine, args: string[]) {
   singleSourceTimer?.unref?.();
   const opts: SyncOpts = {
     repoPath, dryRun, full, noPull, noEmbed, skipFailed, retryFailed, sourceId,
-    strategy: strategyArg, includeOffice, concurrency,
+    strategy: strategyArg, includeOffice, workingTree, concurrency,
     signal: singleSourceController?.signal,
   };
 
@@ -3278,18 +3434,26 @@ export function manageGitignore(
  */
 function printSyncResult(result: SyncResult, sink: NodeJS.WriteStream = process.stdout) {
   const write = (line: string) => sink.write(line + '\n');
+  const writeUncommitted = () => {
+    if (!result.uncommitted) return;
+    const total = result.uncommitted.added + result.uncommitted.modified + result.uncommitted.deleted;
+    write(`  NOTE: ${total} uncommitted file(s) not synced (${result.uncommitted.added} added, ${result.uncommitted.modified} modified, ${result.uncommitted.deleted} deleted).`);
+  };
   switch (result.status) {
     case 'up_to_date':
       write('Already up to date.');
+      writeUncommitted();
       break;
     case 'synced':
       write(`Synced ${result.fromCommit?.slice(0, 8)}..${result.toCommit.slice(0, 8)}:`);
       write(`  +${result.added} added, ~${result.modified} modified, -${result.deleted} deleted, R${result.renamed} renamed`);
       write(`  ${result.chunksCreated} chunks created${result.embedded > 0 ? `, ${result.embedded} pages embedded` : ''}`);
+      writeUncommitted();
       break;
     case 'first_sync':
       write(`First sync complete. Checkpoint: ${result.toCommit.slice(0, 8)}`);
       write(`  ${result.added} file(s) imported, ${result.chunksCreated} chunks${result.embedded > 0 ? `, ${result.embedded} pages embedded` : ''}`);
+      writeUncommitted();
       break;
     case 'dry_run':
       break; // already printed in performSync

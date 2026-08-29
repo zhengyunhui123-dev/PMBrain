@@ -380,7 +380,7 @@ describe('performSync dry-run never writes', () => {
     // Bookmark NOT set — this is the regression the guard enforces.
     expect(await engine.getConfig('sync.last_commit')).toBeNull();
     expect(await engine.getConfig('sync.repo_path')).toBeNull();
-  });
+  }, 30_000);
 
   test('first sync without origin skips git pull noise and uses local working tree', async () => {
     const { performSync } = await import('../src/commands/sync.ts');
@@ -491,7 +491,7 @@ describe('performSync dry-run never writes', () => {
     expect(typeof result.embedded).toBe('number');
   });
 
-  test('detached HEAD skips git pull and ingests local working-tree files', async () => {
+  test('detached HEAD skips git pull and leaves uncommitted files unsynced by default', async () => {
     const { performSync } = await import('../src/commands/sync.ts');
     const seeded = await performSync(engine, {
       repoPath,
@@ -524,22 +524,21 @@ describe('performSync dry-run never writes', () => {
         noExtract: true,
       });
 
-      expect(result.status).toBe('synced');
-      expect(result.added).toBe(1);
-      expect(result.pagesAffected).toContain('people/detached-local');
+      expect(result.status).toBe('up_to_date');
+      expect(result.added).toBe(0);
+      expect(result.uncommitted).toEqual({ added: 1, modified: 0, deleted: 0 });
     } finally {
       console.error = originalError;
     }
 
-    expect(errors.join('\n')).toContain(`Detached HEAD on ${repoPath}; skipping git pull. Syncing from local working tree.`);
+    expect(errors.join('\n')).toContain(`Detached HEAD on ${repoPath}; skipping git pull. Using current Git HEAD.`);
     expect(errors.join('\n')).not.toContain('git pull failed');
 
     const page = await engine.getPage('people/detached-local');
-    expect(page).not.toBeNull();
-    expect(page!.title).toBe('Detached Local');
+    expect(page).toBeNull();
   });
 
-  test('detached HEAD with --no-pull also ingests local working-tree files', async () => {
+  test('detached HEAD with --no-pull also leaves uncommitted files unsynced by default', async () => {
     const { performSync } = await import('../src/commands/sync.ts');
     const seeded = await performSync(engine, {
       repoPath,
@@ -566,13 +565,12 @@ describe('performSync dry-run never writes', () => {
       noExtract: true,
     });
 
-    expect(result.status).toBe('synced');
-    expect(result.added).toBe(1);
-    expect(result.pagesAffected).toContain('people/detached-nopull');
+    expect(result.status).toBe('up_to_date');
+    expect(result.added).toBe(0);
+    expect(result.uncommitted).toEqual({ added: 1, modified: 0, deleted: 0 });
 
     const page = await engine.getPage('people/detached-nopull');
-    expect(page).not.toBeNull();
-    expect(page!.title).toBe('Detached NoPull');
+    expect(page).toBeNull();
   });
 });
 
@@ -584,7 +582,7 @@ describe('sync regression — #132 nested transaction deadlock', () => {
     // the v0.15.2 progress-wrapped variant where the list is hoisted into
     // a local `addsAndMods` variable first.
     const inlineIdx = source.indexOf('for (const path of [...filtered.added, ...filtered.modified]');
-    const hoistedIdx = source.indexOf('const addsAndMods = [...filtered.added, ...filtered.modified]');
+    const hoistedIdx = source.indexOf('const allAddsAndMods = [...filtered.added, ...filtered.modified]');
     const loopStart = inlineIdx !== -1 ? inlineIdx : hoistedIdx;
     expect(loopStart).toBeGreaterThan(-1);
     const prelude = source.slice(0, loopStart);

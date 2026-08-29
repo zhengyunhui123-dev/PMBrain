@@ -19,8 +19,12 @@ import {
   LlmStatusResponseSchema,
   SetDefaultSourceResponseSchema,
   SourceAddResponseSchema,
+  AdvisorAdminResponseSchema,
+  AdvisorApplyResponseSchema,
 } from '../../shared/contracts/index.ts';
 import type {
+  AdvisorAdminResponse,
+  AdvisorApplyResponse,
   BrainOverviewResponse,
   BrainPageChunksResponse,
   BrainFactDetailResponse,
@@ -122,6 +126,12 @@ export const api = {
     undefined,
     BrainOverviewResponseSchema,
   ),
+  advisor: () => apiFetch<AdvisorAdminResponse>('/admin/api/advisor', undefined, AdvisorAdminResponseSchema),
+  applyAdvisor: (dispatchId: string) => apiFetch<AdvisorApplyResponse>(
+    '/admin/api/advisor/apply',
+    { method: 'POST', body: JSON.stringify({ dispatch_id: dispatchId }) },
+    AdvisorApplyResponseSchema,
+  ),
   theme: () => apiFetch('/admin/api/theme'),
   docs: () => apiFetch('/admin/api/docs'),
   brainPages: (qs = '') => apiFetch<BrainPagesResponse>(`/admin/api/brain/pages${qs}`, undefined, BrainPagesResponseSchema),
@@ -199,7 +209,7 @@ export const api = {
     apiFetch('/admin/api/export-runs', { method: 'POST', body: JSON.stringify({ rootPath }) }),
   dreamOverview: () => apiFetch<DreamOverviewResponse>('/admin/api/dream/overview', undefined, DreamOverviewResponseSchema),
   dreamSettings: () => apiFetch<DreamSettingsResponse>('/admin/api/dream/settings', undefined, DreamSettingsResponseSchema),
-  saveDreamSettings: (body: { outputDir: string; dualWrite: boolean }) =>
+  saveDreamSettings: (body: { outputDir: string; dualWrite: boolean; includeUncommitted: boolean }) =>
     apiFetch<DreamSettingsResponse>('/admin/api/dream/settings', { method: 'POST', body: JSON.stringify(body) }, DreamSettingsResponseSchema),
   dreamSchedule: () => apiFetch<DreamScheduleResponse>('/admin/api/dream/schedule', undefined, DreamScheduleResponseSchema),
   saveDreamSchedule: (body: { enabled: boolean; time: string }) =>

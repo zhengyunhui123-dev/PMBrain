@@ -5208,6 +5208,26 @@ export const MIGRATIONS: Migration[] = [
         ON context_volunteer_events (source_id, slug);
     `,
   },
+  {
+    version: 119,
+    name: 'pglite_cjk_trigram_candidate_indexes',
+    // P0 PGLite Chinese retrieval fix. pg_trgm is already installed and the
+    // title index already exists; connect the remaining fields used by the
+    // CJK fallback. PostgreSQL keeps its migration-v109 indexed lexeme path.
+    idempotent: true,
+    sql: '',
+    sqlFor: {
+      postgres: '',
+      pglite: `
+        CREATE INDEX IF NOT EXISTS idx_chunks_text_trgm
+          ON content_chunks USING GIN(chunk_text gin_trgm_ops);
+        CREATE INDEX IF NOT EXISTS idx_pages_compiled_truth_trgm
+          ON pages USING GIN(compiled_truth gin_trgm_ops);
+        CREATE INDEX IF NOT EXISTS idx_pages_slug_trgm
+          ON pages USING GIN(slug gin_trgm_ops);
+      `,
+    },
+  },
 ];
 
 export const LATEST_VERSION = MIGRATIONS.length > 0

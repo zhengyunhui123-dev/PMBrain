@@ -9,4 +9,11 @@ describe('桌面 sidecar 启动迁移', () => {
     expect(cli).toContain('if (opts?.strictMigrations === true) throw result.error');
     expect(cli).toContain('Schema migrations remained pending after the startup retry window.');
   });
+
+  test('serve 在打开数据库和迁移完成前就把 pid 打到 stderr，避免桌面日志空白', () => {
+    expect(cli).toContain("command === 'serve'");
+    expect(cli).toContain('[serve] opening database');
+    expect(cli).toContain('process.pid');
+    expect(cli).toContain('/health starts after migrations finish');
+  });
 });

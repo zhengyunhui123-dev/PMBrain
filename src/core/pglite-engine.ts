@@ -1664,7 +1664,8 @@ export class PGLiteEngine implements BrainEngine {
   /**
    * v0.32.7 CJK keyword fallback. PGLite's `websearch_to_tsquery('english')`
    * can't tokenize CJK so the FTS path returns empty for Chinese / Japanese /
-   * Korean queries. This routes to an ILIKE substring scan with
+   * Korean queries. This routes each searched field through its pg_trgm GIN
+   * index, unions a bounded candidate pool, and then applies the established
    * bigram-frequency-count ranking as a ts_rank substitute.
    *
    * Codex outside-voice C8 corrections in place:
@@ -1700,6 +1701,10 @@ export class PGLiteEngine implements BrainEngine {
     const terms = expandCjkSearchTerms(query).filter(Boolean);
     const qLike = escapeLikePattern(qRaw);
     const qLikePatterns = terms.map(term => `%${term}%`);
+    // Bound each indexed arm independently. The final score/dedup limits stay
+    // unchanged; this only prevents a broad term from materializing the whole
+    // local brain before ranking.
+    const candidateLimit = Math.min(Math.max((dedup ? innerLimit : limit) * 20, 500), 5_000);
 
     // $1 = qLike (escaped for ILIKE)
     // $2 = qRaw  (raw for position()/replace() ranking arithmetic)
@@ -1757,7 +1762,52 @@ export class PGLiteEngine implements BrainEngine {
 
     if (dedup) {
       const { rows } = await this.db.query(
-        `WITH ranked AS (
+        `WITH chunk_text_candidates AS MATERIALIZED (
+           SELECT cc.id AS chunk_id
+           FROM content_chunks cc
+           JOIN pages p ON p.id = cc.page_id
+           JOIN sources s ON s.id = p.source_id
+           WHERE cc.chunk_text ILIKE ANY($1::text[]) ${detailFilter}${extraFilter} ${hardExcludeClause} ${visibilityClause}
+             AND cc.modality = 'text'
+           LIMIT ${candidateLimit}
+         ),
+         compiled_truth_candidates AS MATERIALIZED (
+           SELECT cc.id AS chunk_id
+           FROM pages p
+           JOIN content_chunks cc ON cc.page_id = p.id
+           JOIN sources s ON s.id = p.source_id
+           WHERE p.compiled_truth ILIKE ANY($1::text[]) ${detailFilter}${extraFilter} ${hardExcludeClause} ${visibilityClause}
+             AND cc.modality = 'text'
+           LIMIT ${candidateLimit}
+         ),
+         title_candidates AS MATERIALIZED (
+           SELECT cc.id AS chunk_id
+           FROM pages p
+           JOIN content_chunks cc ON cc.page_id = p.id
+           JOIN sources s ON s.id = p.source_id
+           WHERE p.title ILIKE ANY($1::text[]) ${detailFilter}${extraFilter} ${hardExcludeClause} ${visibilityClause}
+             AND cc.modality = 'text'
+           LIMIT ${candidateLimit}
+         ),
+         slug_candidates AS MATERIALIZED (
+           SELECT cc.id AS chunk_id
+           FROM pages p
+           JOIN content_chunks cc ON cc.page_id = p.id
+           JOIN sources s ON s.id = p.source_id
+           WHERE p.slug ILIKE ANY($1::text[]) ${detailFilter}${extraFilter} ${hardExcludeClause} ${visibilityClause}
+             AND cc.modality = 'text'
+           LIMIT ${candidateLimit}
+         ),
+         candidate_chunks AS (
+           SELECT chunk_id FROM chunk_text_candidates
+           UNION
+           SELECT chunk_id FROM compiled_truth_candidates
+           UNION
+           SELECT chunk_id FROM title_candidates
+           UNION
+           SELECT chunk_id FROM slug_candidates
+         ),
+         ranked AS (
            SELECT
              p.slug, p.id as page_id, p.title, p.type, p.source_id,
              p.effective_date, p.effective_date_source,
@@ -1766,16 +1816,10 @@ export class PGLiteEngine implements BrainEngine {
              CASE WHEN p.updated_at < (
                SELECT MAX(te.created_at) FROM timeline_entries te WHERE te.page_id = p.id
              ) THEN true ELSE false END AS stale
-           FROM content_chunks cc
+           FROM candidate_chunks candidate
+           JOIN content_chunks cc ON cc.id = candidate.chunk_id
            JOIN pages p ON p.id = cc.page_id
            JOIN sources s ON s.id = p.source_id
-           WHERE (
-               cc.chunk_text ILIKE ANY($1::text[])
-               OR p.compiled_truth ILIKE ANY($1::text[])
-               OR p.title ILIKE ANY($1::text[])
-               OR p.slug ILIKE ANY($1::text[])
-             ) ${detailFilter}${extraFilter} ${hardExcludeClause} ${visibilityClause}
-             AND cc.modality = 'text'
            ORDER BY score DESC
            LIMIT $3
          ),
@@ -1788,7 +1832,15 @@ export class PGLiteEngine implements BrainEngine {
       return (rows as Record<string, unknown>[]).map(rowToSearchResult);
     } else {
       const { rows } = await this.db.query(
-        `SELECT
+        `WITH chunk_text_candidates AS MATERIALIZED (
+           SELECT cc.id AS chunk_id
+           FROM content_chunks cc
+           JOIN pages p ON p.id = cc.page_id
+           JOIN sources s ON s.id = p.source_id
+           WHERE cc.chunk_text ILIKE '%' || $1 || '%' ESCAPE '\\' ${detailFilter}${extraFilter} ${hardExcludeClause} ${visibilityClause}
+           LIMIT ${candidateLimit}
+         )
+         SELECT
            p.slug, p.id as page_id, p.title, p.type, p.source_id,
            p.effective_date, p.effective_date_source,
            cc.id as chunk_id, cc.chunk_index, cc.chunk_text, cc.chunk_source,
@@ -1796,10 +1848,10 @@ export class PGLiteEngine implements BrainEngine {
            CASE WHEN p.updated_at < (
              SELECT MAX(te.created_at) FROM timeline_entries te WHERE te.page_id = p.id
            ) THEN true ELSE false END AS stale
-         FROM content_chunks cc
+         FROM chunk_text_candidates candidate
+         JOIN content_chunks cc ON cc.id = candidate.chunk_id
          JOIN pages p ON p.id = cc.page_id
          JOIN sources s ON s.id = p.source_id
-         WHERE cc.chunk_text ILIKE '%' || $1 || '%' ESCAPE '\\' ${detailFilter}${extraFilter} ${hardExcludeClause} ${visibilityClause}
          ORDER BY score DESC
          LIMIT $3 OFFSET $4`,
         params,

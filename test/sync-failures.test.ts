@@ -169,16 +169,17 @@ describe('Bug 9 — sync.ts CLI flag wiring', () => {
     expect(unacknowledgedSyncFailures().length).toBe(0);
   });
 
-  test('performSync gates sync.last_commit on failedFiles.length', async () => {
+  test('performSync routes failures through the bounded failure gate', async () => {
     const source = await Bun.file(new URL('../src/commands/sync.ts', import.meta.url)).text();
-    // The gate exists and references the failure set.
-    expect(source).toContain('failedFiles.length > 0');
+    expect(source).toContain('applySyncFailureGate({');
+    expect(source).toContain('failedFiles,');
     expect(source).toContain('blocked_by_failures');
   });
 
   test('performFullSync gates on result.failures from runImport', async () => {
     const source = await Bun.file(new URL('../src/commands/sync.ts', import.meta.url)).text();
-    expect(source).toContain('result.failures.length > 0');
+    expect(source).toContain('failedFiles: result.failures');
+    expect(source).toContain('Infrastructure failures never auto-skip');
   });
 
   test('runImport returns RunImportResult with failures list', async () => {

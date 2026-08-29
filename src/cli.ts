@@ -1358,6 +1358,9 @@ async function handleCliOnly(command: string, args: string[]) {
   // All remaining CLI-only commands need a DB connection. The long-lived
   // sidecar must fail closed when schema migration cannot complete; starting
   // HTTP with a half-migrated PGLite leaves Desktop waiting on /health.
+  if (command === 'serve') {
+    console.error(`[serve] opening database (pid=${process.pid}); /health starts after migrations finish`);
+  }
   const engine = await connectEngine({ strictMigrations: command === 'serve' });
   let commandFailed = false;
   try {
@@ -1987,7 +1990,7 @@ function printHelp() {
 初始化
   init [--pglite|--supabase|--url]   创建大脑（默认使用 PGLite，无需服务器）
   migrate --to <supabase|pglite>     在存储引擎之间迁移大脑
-  pglite-backup <create|list|verify> 创建、列出或验证 PGLite 冷备份
+  pglite-backup <create|list|verify|prune|delete|restore|set-root> 创建、列出、验证、清理或恢复 PGLite 冷备份
   upgrade                            自更新
   check-update [--json]              检查新版本
   doctor [--json] [--fast]           执行健康检查

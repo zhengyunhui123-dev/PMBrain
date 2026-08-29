@@ -76,6 +76,11 @@ export interface GBrainConfig {
   engine: 'postgres' | 'pglite';
   database_url?: string;
   database_path?: string;
+  /**
+   * Absolute directory for PGLite pre-upgrade cold backups.
+   * Default: `<config-dir>/backups/pglite-upgrades`.
+   */
+  pglite_upgrade_backup_dir?: string;
   /** Stable local-admin secret used by the desktop shell and direct HTTP serve. */
   admin_bootstrap_token?: string;
   /** Desktop-only preferences. Core runtime ignores these fields. */
@@ -332,6 +337,7 @@ export interface GBrainConfig {
   /** Explicitly published, read-only skill catalog for MCP clients. */
   mcp?: {
     publish_skills?: boolean;
+    publish_advisor?: boolean;
     skills_dir?: string;
   };
 }
@@ -802,6 +808,7 @@ export const KNOWN_CONFIG_KEYS: readonly string[] = [
   'database_url',
   'admin_bootstrap_token',
   'database_path',
+  'pglite_upgrade_backup_dir',
   'openai_api_key',
   'custom_openai_api_key',
   'mimo_api_key',
@@ -836,6 +843,7 @@ export const KNOWN_CONFIG_KEYS: readonly string[] = [
   'sync',
   'sync.repo_path',
   'sync.last_commit',
+  'sync.include_working_tree',
   // DB-plane (v0.32.3 search modes + related)
   'search.mode',
   'search.cache.enabled',
@@ -907,6 +915,7 @@ export const KNOWN_CONFIG_KEYS: readonly string[] = [
   'content_sanity.prose_check_enabled',
   // MCP skill catalog. Remote publication is opt-in.
   'mcp.publish_skills',
+  'mcp.publish_advisor',
   'mcp.skills_dir',
   // Spend controls. Registered so `pmbrain config set` accepts these without
   // --force; `spend.posture` itself is validated by the config command.

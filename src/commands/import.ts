@@ -22,6 +22,12 @@ import {
   clearCheckpoint,
   resumeFilter,
 } from '../core/import-checkpoint.ts';
+import {
+  loadOpCheckpoint,
+  recordCompleted as recordOpCompleted,
+  clearOpCheckpoint,
+  type OpCheckpointKey,
+} from '../core/op-checkpoint.ts';
 
 function defaultWorkers(): number {
   const cpuCount = cpus().length;
@@ -52,7 +58,14 @@ export interface RunImportResult {
 export async function runImport(
   engine: BrainEngine,
   args: string[],
-  opts: { commit?: string; strategy?: SyncStrategy; sourceId?: string } = {},
+  opts: {
+    commit?: string;
+    strategy?: SyncStrategy;
+    sourceId?: string;
+    checkpointKey?: OpCheckpointKey;
+    /** Sync owns failure gating and bookmark advancement for this import. */
+    managedBookmark?: boolean;
+  } = {},
 ): Promise<RunImportResult> {
   const noEmbed = args.includes('--no-embed');
   const fresh = args.includes('--fresh');
@@ -222,9 +235,13 @@ export async function runImport(
   const checkpointPath = gbrainPath('import-checkpoint.json');
   const completed = new Set<string>();
   if (!fresh) {
-    const cp = loadCheckpoint(checkpointPath, importRoot);
-    if (cp) {
-      for (const p of cp.completedPaths) completed.add(p);
+    if (opts.checkpointKey) {
+      for (const path of await loadOpCheckpoint(engine, opts.checkpointKey)) completed.add(path);
+    } else {
+      const cp = loadCheckpoint(checkpointPath, importRoot);
+      if (cp) for (const path of cp.completedPaths) completed.add(path);
+    }
+    if (completed.size > 0) {
       console.log(`Resuming from checkpoint: skipping ${completed.size} already-processed files`);
     }
   }
@@ -341,6 +358,7 @@ export async function runImport(
       } else {
         skipped++;
         if (result.error && result.error !== 'unchanged') {
+          errors++;
           console.error(`  Skipped ${relativePath}: ${result.error}`);
           reportFile({ status: 'failed', path: relativePath, reason: result.error });
           // Bug 9 — non-"unchanged" skips carry a real error reason.
@@ -372,16 +390,20 @@ export async function runImport(
     // Failed files never enter `completed`, so a flaky file can't push the
     // checkpoint past it — the next run will retry it.
     if (completed.size > 0 && completed.size % 100 === 0) {
-      const cpDir = gbrainPath();
-      if (!existsSync(cpDir)) {
-        try { const { mkdirSync } = await import('fs'); mkdirSync(cpDir, { recursive: true }); }
-        catch { /* non-fatal */ }
+      if (opts.checkpointKey) {
+        await recordOpCompleted(engine, opts.checkpointKey, Array.from(completed));
+      } else {
+        const cpDir = gbrainPath();
+        if (!existsSync(cpDir)) {
+          try { const { mkdirSync } = await import('fs'); mkdirSync(cpDir, { recursive: true }); }
+          catch { /* non-fatal */ }
+        }
+        saveCheckpoint(checkpointPath, {
+          dir: importRoot,
+          completedPaths: Array.from(completed),
+          timestamp: new Date().toISOString(),
+        });
       }
-      saveCheckpoint(checkpointPath, {
-        dir: importRoot,
-        completedPaths: Array.from(completed),
-        timestamp: new Date().toISOString(),
-      });
     }
   }
 
@@ -458,8 +480,12 @@ export async function runImport(
   // preserves only the successfully-completed paths, so the next run retries
   // failed files automatically (they never entered `completed`).
   if (errors === 0) {
-    clearCheckpoint(checkpointPath);
-  } else if (existsSync(checkpointPath)) {
+    if (opts.checkpointKey) await clearOpCheckpoint(engine, opts.checkpointKey);
+    else clearCheckpoint(checkpointPath);
+  } else if (opts.checkpointKey || existsSync(checkpointPath)) {
+    if (opts.checkpointKey && completed.size > 0) {
+      await recordOpCompleted(engine, opts.checkpointKey, Array.from(completed));
+    }
     console.log(`  Checkpoint preserved (${errors} errors). Run again to retry failed files.`);
   }
 
@@ -530,12 +556,12 @@ export async function runImport(
     // Not a git repo or git not available
   }
 
-  if (gitHead) {
+  if (gitHead && !opts.managedBookmark) {
     // Record failures into the central JSONL so doctor can surface them.
     // Use gitHead as the commit so a later sync can tell "same broken
     // state as last time" from "new broken state."
     if (failures.length > 0) {
-      const { recordSyncFailures } = await import('../core/sync.ts');
+      const { recordSyncFailures } = await import('../core/sync-failure-ledger.ts');
       recordSyncFailures(failures, gitHead);
     }
     if (failures.length === 0) {

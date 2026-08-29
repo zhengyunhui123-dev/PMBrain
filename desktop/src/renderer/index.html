@@ -417,12 +417,22 @@
         <section class="panel repair-panel" id="panel-repair">
           <div class="section-heading">
             <div><span class="index">06</span><h2>软件修复</h2></div>
-            <p>查看每次桌面升级前保留的数据库备份；这里只读展示，不会自动恢复或删除数据。</p>
+            <p>查看每次桌面升级前保留的数据库备份。自动升级只保留最近 2 份；也可在这里恢复、删除或改到其他磁盘。</p>
           </div>
           <div class="repair-summary">
             <div><span>DATABASE BACKUPS</span><b id="repair-backup-count">等待读取备份清单</b></div>
-            <p id="repair-database-path">当前数据库：等待读取</p>
+            <div class="repair-summary-side">
+              <p id="repair-database-path">当前数据库：等待读取</p>
+              <button class="ghost" id="repair-prune-backups" type="button"><span>清理旧备份</span><i></i></button>
+            </div>
           </div>
+          <article class="diagnostic-export-card">
+            <div><span>BACKUP LOCATION</span><h3>备份保存位置</h3><p id="repair-backup-root">等待读取备份目录</p><small>新备份会写入此目录，现有备份不会自动搬迁。可改到 D 盘等其他磁盘，以减少系统盘占用。</small></div>
+            <div class="repair-location-actions">
+              <button class="ghost" id="repair-open-backup-root" type="button"><span>打开备份目录</span><i></i></button>
+              <button class="primary" id="repair-change-backup-root" type="button"><span>更改位置</span><i></i></button>
+            </div>
+          </article>
           <article class="diagnostic-export-card">
             <div><span>SUPPORT BUNDLE</span><h3>导出脱敏诊断包</h3><p>收集版本、Doctor、桌面与 Sidecar 日志、数据库/模型/MCP/更新状态和近期错误。不会打包数据库或知识内容，API Key、Token、密码和个人路径会自动脱敏。</p></div>
             <button class="primary" id="export-diagnostic"><span>导出诊断包</span><i></i></button>

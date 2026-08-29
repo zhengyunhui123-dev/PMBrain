@@ -73,7 +73,7 @@ describe('sync-parallel: PGLite + concurrency=4 (T4)', () => {
     expect(result.status).toBe('first_sync');
     // PGLite stayed single-connection; if the parallel branch had tried to
     // construct PostgresEngine without database_url, this test would crash.
-  });
+  }, 30_000);
 
   test('PGLite + explicit concurrency=4 + 30 files (below floor): still safe', async () => {
     // Q1 path: explicit opt-in beats the >50 floor. PGLite forces serial
@@ -185,7 +185,7 @@ describe('sync-parallel: head-drift gate (CODEX-3)', () => {
     expect(await engine.getConfig('sync.last_commit')).toBe(head);
   });
 
-  test('vanished-mid-sync file produces a failedFiles entry', async () => {
+  test('dirty deletion after commit still imports the committed HEAD version', async () => {
     // First sync: clean state for incremental.
     seedRepoWithMarkdown(repoPath, 3);
     const { performSync } = await import('../src/commands/sync.ts');
@@ -203,10 +203,9 @@ describe('sync-parallel: head-drift gate (CODEX-3)', () => {
     const result = await performSync(engine, {
       repoPath, noPull: true, noEmbed: true,
     });
-    // Per CODEX-3 (v0.22.13): vanished files now go into failedFiles
-    // (prior behavior was a benign skip, which let last_commit advance).
-    expect(result.status).toBe('blocked_by_failures');
-    expect(result.failedFiles ?? 0).toBeGreaterThan(0);
+    expect(result.status).toBe('synced');
+    expect(result.uncommitted).toEqual({ added: 0, modified: 0, deleted: 1 });
+    expect(await engine.getPage('people/will-vanish')).not.toBeNull();
   });
 });
 

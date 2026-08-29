@@ -1,5 +1,41 @@
 # Bug 修复台账
 
+## 2026-08-27 PMBrain 1.3.10 升级后 Sidecar 健康检查超时且日志不全
+
+- 时间：2026-08-27
+- 版本号：PMBrain 1.3.10；PMBrain Desktop 1.1.48
+- 标题：升级后首次打开不再 45 秒杀掉迁移中的 Sidecar，失败时完整记录 exit code 和 stderr
+- 描述：用户从旧版升到 1.1.46 后 Sidecar 一直健康检查超时（fetch failed），恢复页无法打开。日志只有 Starting sidecar 和超时，没有 sidecar stderr 和退出码。根因是升级后 Sidecar 要先打开大 PGLite 库并跑迁移（含 2 万多条向量上的 trigram 索引），45 秒超时会杀掉还在建索引的进程，下次重试又从头开始。现将 PGLite 升级健康检查延长到 10 分钟；启动失败必须把 pid、exit code 和完整 stderr 写入桌面日志，没有输出也记 empty。未修改用户知识、向量、Wiki 或原始资料。
+- 是否完成：是
+- 最终结果：Sidecar 健康检查超时会写入 pid、exitCode 和完整 stderr（无输出记 empty）；PGLite 升级等待 10 分钟，避免 45 秒杀掉建索引的进程。Sidecar 13/13、升级启动 6/6、编排契约 17/17、serve 启动 2/2、发布说明 6/6、版本同步、根项目与 Desktop TypeScript 通过。未执行 `bun run build:win`。未修改用户知识、向量、Wiki 或原始资料。该用户请安装 1.1.48，首次打开可能要等几分钟，不要连点重启。
+
+## 2026-08-26 PMBrain 1.3.8 ChatGPT Tunnel Token 丢失导致连接过期
+
+- 时间：2026-08-26
+- 版本号：PMBrain 1.3.8；PMBrain Desktop 1.1.46（桌面端未改动）
+- 标题：ChatGPT Tunnel 在本机通道 Ready 时仍 401，自动恢复丢失的本地 Token
+- 描述：ChatGPT 提示“与 PMBrain 的连接已过期”，本机 Tunnel Health/Ready 仍为 200。日志显示 `initialize` 和 `tools/call` 全部 Unauthorized。磁盘上的 Bearer 文件还在，但 `access_tokens` 里没有 `chatgpt-secure-tunnel` 记录，隧道把失效 Token 转发给本机 MCP。打开 MCP 接入页、运行 Doctor 或启动 Tunnel 时，会把文件中的 Token 重新登记到数据库；状态页增加 Token 有效/失效指示。未修改用户知识、向量、Wiki 或原始资料。
+- 是否完成：是
+- 最终结果：已确认隧道日志中 ChatGPT 的 initialize/tools/call 全部 401，数据库缺少 `chatgpt-secure-tunnel`。已把本机 Bearer 重新写入 access_tokens 并重启 Tunnel；本地 `initialize` 恢复 200，readyz 为 `200 ready`。代码侧会在打开 MCP 接入页、Doctor 或启动 Tunnel 时自动补登记丢失 Token。ChatGPT 隧道契约 20/20、根项目 TypeScript 通过，Admin 已构建，发布指纹 `ddca53014dac`。未执行 `bun run build:win`。请在 ChatGPT 弹窗点一次「重新连接」。
+
+## 2026-08-25 PMBrain 1.3.5 快速维护统一为 Git 已提交基线
+
+- 时间：2026-08-25
+- 版本号：PMBrain 1.3.5；PMBrain Desktop 1.1.44（桌面端未改动）
+- 标题：Full/增量同步隔离未提交内容并恢复失败账本与断点续跑
+- 描述：默认快速维护的增量与 Full Sync 均以当前 Git HEAD 为唯一内容基线；未提交修改、新文件和删除只计数提示，不再写入数据库。知识整理设置新增“包含未提交内容”显式开关，默认关闭。按本地原版 GBrain 的 working-tree、source-scoped failure ledger 和数据库 op checkpoint 机制，固定坏文件前两次失败阻止锚点，第三次同类失败自动跳过且继续由健康检查展示；数据库、Embedding 和 Git 结构性错误始终禁止自动跳过。长同步按 Source、仓库、起止 commit 和参数保存独立断点，成功文件可续跑，`last_commit` 仍只在整轮允许完成后推进。未自动提交 Git，未修改用户知识、向量、数据库、Wiki、原始资料或现有配置。
+- 是否完成：是
+- 最终结果：新增失败优先测试验证 Full Sync、增量同步、未提交内容显式 opt-in、Source 隔离失败账本和真实数据库断点续跑；相关同步、快速维护、Admin、配置与断点定向回归 219/219 通过，根项目 TypeScript 与统一校验 39/39 通过。PR #66 的 GitHub PostgreSQL parity、E2E、Heavy、Desktop runtime、serial-tests、10 个 Test 分片及 Windows 真机 Desktop/Admin/PGLite/MCP 六段旅程全部通过；Windows 真机首次因既有本地模型验证环境偶发超时失败，附件确认与本次同步代码无关，未放宽断言，原提交重跑后通过。未执行 `bun run build:win`，未连接、迁移或修改用户知识库。
+
+## 2026-08-25 PMBrain 1.3.4 修复 PGlite 中文 query/search 超时
+
+- 时间：2026-08-25
+- 版本号：PMBrain 1.3.4；PMBrain Desktop 1.1.44（桌面端未改动）
+- 标题：PGlite 中文检索接入 pg_trgm 分字段候选召回
+- 描述：PGlite 已安装 pg_trgm 且 title 已有 trigram GIN，但中文 fallback 对 chunk_text、compiled_truth、title、slug 做四列 JOIN + OR + ILIKE 全表候选与实时排名，2 万 chunks 下可超过 WorkBuddy 60 秒调用上限。现为 chunk_text、compiled_truth、slug 补齐 PGlite 专用 trigram GIN 索引，并将四字段分别走索引、合并有上限的候选后再执行既有评分、去重和 hybrid/RRF；不引入单字/双字 token 表，不改 PostgreSQL 的 v109 索引检索路径。WorkBuddy Agent Pack 与远程 MCP 已有“首次 expand=false、结果不足再升级”的保护，经回归确认后保持不变。未修改用户知识、向量、数据库内容、Wiki、原始资料或配置。
+- 是否完成：是
+- 最终结果：失败优先测试覆盖旧库迁移、新库索引、四字段独立召回、原排序/ASCII 回归和 WorkBuddy expand 策略；隔离 2 万 chunks PGlite 基准中，未索引旧查询约 306ms，仅加索引仍用四列 OR 约 507ms，分字段索引候选约 17ms，EXPLAIN 命中 idx_chunks_text_trgm。核心迁移、PGlite/PostgreSQL 路径、WorkBuddy 与版本定向回归 177/177 通过，根项目 TypeScript、统一校验 39/39、GitHub Test 本地预演 227/227 通过。本机 Docker Desktop 未运行，故本地 PostgreSQL 真库 schema-drift E2E 跳过；PR #65 的 GitHub PostgreSQL E2E、Heavy、Windows Desktop、serial-tests、10 个 Test 分片及全部汇总门禁均通过。未执行 bun run build:win，未连接或迁移用户知识库。
+
 ## 2026-08-25 PMBrain 1.3.3 修复向量执行改进后的 GitHub Test 过期契约
 
 - 时间：2026-08-25

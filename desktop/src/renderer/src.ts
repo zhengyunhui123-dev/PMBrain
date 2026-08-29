@@ -19,6 +19,7 @@ import type {
   IntegrationClient,
   IntegrationInfo,
   PMBrainDesktopApi,
+  DesktopPgliteUpgradeBackupMutation,
   DesktopPgliteUpgradeBackups,
   SetupPayload,
   SidecarState,
@@ -948,7 +949,7 @@ function renderService(service: SidecarState | null, port?: number): void {
     setSetupWait(
       true,
       '正在等待本地服务健康检查',
-      'PMBrain 已启动 sidecar，正在确认数据库与 HTTP 服务可用；首次启动最长可能需要约 45 秒。',
+      'PMBrain 已启动 sidecar，正在打开数据库并完成升级迁移；较大知识库可能需要几分钟，请不要关闭窗口。',
       '健康检查',
     );
   } else if (service?.phase === 'ready' || service?.phase === 'failed') {
@@ -1440,21 +1441,42 @@ function formatRepairTime(value: string): string {
   }).format(date);
 }
 
+function repairActionButtons(): HTMLButtonElement[] {
+  return [
+    $('#repair-prune-backups'),
+    $('#repair-open-backup-root'),
+    $('#repair-change-backup-root'),
+    ...Array.from(document.querySelectorAll<HTMLButtonElement>('.repair-backup-actions button')),
+  ];
+}
+
+function setRepairBusy(busy: boolean): void {
+  for (const button of repairActionButtons()) {
+    button.disabled = busy;
+  }
+}
+
 function renderPgliteUpgradeBackups(result: DesktopPgliteUpgradeBackups): void {
   const list = $('#repair-backup-list');
   list.replaceChildren();
   $('#repair-database-path').textContent = result.databasePath
     ? `当前数据库：${result.databasePath}`
     : '当前尚未配置 PGLite 数据库';
+  $('#repair-backup-root').textContent = result.backupRoot
+    ? result.backupRoot
+    : '完成 PGLite 配置后，这里会显示备份保存位置。';
   $('#repair-backup-count').textContent = result.backups.length > 0
-    ? `已找到 ${result.backups.length} 份升级前备份`
+    ? `${result.backups.length} 份，共占用 ${formatBytes(result.totalBytes)}`
     : '暂无已验证的升级前备份';
+  $<HTMLButtonElement>('#repair-prune-backups').disabled = result.backups.length <= result.keep;
+  $<HTMLButtonElement>('#repair-open-backup-root').disabled = !result.backupRoot;
+  $<HTMLButtonElement>('#repair-change-backup-root').disabled = !result.databasePath;
 
   if (result.backups.length === 0) {
     const empty = document.createElement('div');
     empty.className = 'repair-empty';
     empty.textContent = result.databasePath
-      ? '当前数据库还没有由桌面端升级流程保留的备份。升级功能启用后，下一次升级前会自动创建并验证备份。'
+      ? '当前数据库还没有由桌面端升级流程保留的备份。升级成功后会自动创建并只保留最近 2 份。'
       : '完成基础配置后，这里会显示升级前保留的数据库备份。';
     list.append(empty);
     return;
@@ -1482,7 +1504,7 @@ function renderPgliteUpgradeBackups(result: DesktopPgliteUpgradeBackups): void {
     const values = [
       ['数据库 Schema', backup.sourceSchemaVersion === null ? '未记录' : String(backup.sourceSchemaVersion)],
       ['备份时间', formatRepairTime(backup.createdAt)],
-      ['恢复副本', formatRepairTime(backup.recoveryVerifiedAt)],
+      ['占用空间', formatBytes(backup.bytes)],
     ];
     for (const [label, value] of values) {
       const item = document.createElement('span');
@@ -1497,8 +1519,26 @@ function renderPgliteUpgradeBackups(result: DesktopPgliteUpgradeBackups): void {
     const path = document.createElement('code');
     path.textContent = backup.backupDirectory;
     const note = document.createElement('p');
-    note.textContent = '这是升级前保留的只读副本。此页面只展示备份信息，不会自动恢复、删除或覆盖当前数据库。';
-    card.append(heading, meta, path, note);
+    note.textContent = '这是升级前保留的已验证副本。恢复会替换当前数据库；删除只去掉这份备份，不会改当前知识库。自动升级成功后只保留最近 2 份。';
+    const actions = document.createElement('div');
+    actions.className = 'repair-backup-actions';
+    const restore = document.createElement('button');
+    restore.className = 'solid';
+    restore.type = 'button';
+    restore.innerHTML = '<span>恢复此备份</span><i></i>';
+    restore.addEventListener('click', () => void restorePgliteUpgradeBackup(backup.backupDirectory));
+    const remove = document.createElement('button');
+    remove.className = 'danger';
+    remove.type = 'button';
+    remove.innerHTML = '<span>删除此备份</span><i></i>';
+    remove.addEventListener('click', () => void deletePgliteUpgradeBackup(backup.backupDirectory));
+    const open = document.createElement('button');
+    open.className = 'ghost';
+    open.type = 'button';
+    open.innerHTML = '<span>打开备份目录</span><i></i>';
+    open.addEventListener('click', () => void openPgliteUpgradeBackup(backup.backupDirectory));
+    actions.append(restore, remove, open);
+    card.append(heading, meta, path, note, actions);
     list.append(card);
   }
 }
@@ -1511,6 +1551,10 @@ async function loadPgliteUpgradeBackups(): Promise<void> {
     const message = error instanceof Error ? error.message : String(error);
     $('#repair-backup-count').textContent = '读取失败';
     $('#repair-database-path').textContent = '';
+    $('#repair-backup-root').textContent = '无法读取备份目录';
+    $<HTMLButtonElement>('#repair-prune-backups').disabled = true;
+    $<HTMLButtonElement>('#repair-open-backup-root').disabled = true;
+    $<HTMLButtonElement>('#repair-change-backup-root').disabled = true;
     const list = $('#repair-backup-list');
     list.replaceChildren();
     const empty = document.createElement('div');
@@ -1518,6 +1562,104 @@ async function loadPgliteUpgradeBackups(): Promise<void> {
     empty.textContent = `无法读取数据库备份清单：${message}`;
     list.append(empty);
     setNotice('error', message);
+  }
+}
+
+function applyBackupMutation(result: DesktopPgliteUpgradeBackupMutation, success: string): void {
+  renderPgliteUpgradeBackups(result.listing);
+  setNotice('success', success);
+}
+
+async function restorePgliteUpgradeBackup(backupDirectory: string): Promise<void> {
+  if (!confirm(
+    '确认用这份备份替换当前数据库？\n\n' +
+    '本地服务会先暂停再重启。当前知识数据会回到备份时的状态，这份备份本身会保留。\n' +
+    '请确认当前没有正在进行的导入、整理或搜索任务。',
+  )) return;
+  clearNotices();
+  setRepairBusy(true);
+  setSetupWait(true, '正在恢复数据库备份', '已暂停本地服务，正在校验并替换当前数据库，请不要关闭窗口。', '软件修复');
+  try {
+    applyBackupMutation(
+      await window.pmbrainDesktop.restorePgliteUpgradeBackup(backupDirectory),
+      '已用所选备份替换当前数据库，本地服务正在重新检查。',
+    );
+  } catch (error) {
+    setNotice('error', error instanceof Error ? error.message : String(error));
+  } finally {
+    setSetupWait(false);
+    setRepairBusy(false);
+    await loadPgliteUpgradeBackups();
+  }
+}
+
+async function deletePgliteUpgradeBackup(backupDirectory: string): Promise<void> {
+  if (!confirm('确认删除这份升级备份？删除后无法从软件修复页恢复，当前数据库不会被修改。')) return;
+  clearNotices();
+  setRepairBusy(true);
+  try {
+    applyBackupMutation(
+      await window.pmbrainDesktop.deletePgliteUpgradeBackup(backupDirectory),
+      '已删除所选升级备份。当前数据库未被修改。',
+    );
+  } catch (error) {
+    setNotice('error', error instanceof Error ? error.message : String(error));
+    await loadPgliteUpgradeBackups();
+  } finally {
+    setRepairBusy(false);
+  }
+}
+
+async function openPgliteUpgradeBackup(target: string): Promise<void> {
+  try {
+    await window.pmbrainDesktop.openPgliteUpgradeBackup(target);
+  } catch (error) {
+    setNotice('error', error instanceof Error ? error.message : String(error));
+  }
+}
+
+async function prunePgliteUpgradeBackups(): Promise<void> {
+  if (!confirm('确认只保留最近 2 份已验证备份？更早的升级备份会被删除，当前数据库不会被修改。')) return;
+  clearNotices();
+  setRepairBusy(true);
+  try {
+    const result = await window.pmbrainDesktop.prunePgliteUpgradeBackups();
+    applyBackupMutation(
+      result,
+      result.deleted?.length
+        ? `已清理 ${result.deleted.length} 份旧备份，现保留最近 ${result.kept?.length ?? 2} 份。`
+        : '当前已是最近 2 份备份，无需再清理。',
+    );
+  } catch (error) {
+    setNotice('error', error instanceof Error ? error.message : String(error));
+    await loadPgliteUpgradeBackups();
+  } finally {
+    setRepairBusy(false);
+  }
+}
+
+async function changePgliteUpgradeBackupRoot(): Promise<void> {
+  const current = $('#repair-backup-root').textContent?.trim();
+  const selected = await window.pmbrainDesktop.chooseDirectory(
+    current && current !== '完成 PGLite 配置后，这里会显示备份保存位置。' ? current : undefined,
+  );
+  if (!selected) return;
+  if (!confirm(
+    `确认把之后的升级备份保存到：\n${selected}\n\n` +
+    '现有备份不会自动搬迁。新的自动升级备份会写入这个目录。',
+  )) return;
+  clearNotices();
+  setRepairBusy(true);
+  try {
+    applyBackupMutation(
+      await window.pmbrainDesktop.setPgliteUpgradeBackupRoot(selected),
+      `已将备份位置改为 ${selected}。现有备份不会自动搬迁。`,
+    );
+  } catch (error) {
+    setNotice('error', error instanceof Error ? error.message : String(error));
+    await loadPgliteUpgradeBackups();
+  } finally {
+    setRepairBusy(false);
   }
 }
 
@@ -1875,6 +2017,13 @@ $('#save-system-settings').addEventListener('click', () => void saveSystemSettin
 $('#restart-shared-gateway').addEventListener('click', () => void restartSharedGateway());
 $('#shared-open-admin').addEventListener('click', () => void window.pmbrainDesktop.openAdmin());
 $('#open-logs').addEventListener('click', () => void window.pmbrainDesktop.openLogs());
+$('#repair-prune-backups').addEventListener('click', () => void prunePgliteUpgradeBackups());
+$('#repair-open-backup-root').addEventListener('click', () => {
+  const root = $('#repair-backup-root').textContent?.trim();
+  if (!root || root === '完成 PGLite 配置后，这里会显示备份保存位置。' || root === '无法读取备份目录') return;
+  void openPgliteUpgradeBackup(root);
+});
+$('#repair-change-backup-root').addEventListener('click', () => void changePgliteUpgradeBackupRoot());
 $('#export-diagnostic').addEventListener('click', async () => {
   const button = $<HTMLButtonElement>('#export-diagnostic');
   setBusy(button, true, '正在收集…');

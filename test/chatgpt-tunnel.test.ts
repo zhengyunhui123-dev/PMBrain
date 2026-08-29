@@ -3,6 +3,7 @@ import {
   buildChatGptTunnelProfile,
   CHATGPT_TUNNEL_SCOPES,
   normalizeTunnelHttpProxy,
+  parseChatGptTunnelBearerToken,
   parseTunnelId,
 } from '../src/core/chatgpt-tunnel.ts';
 import { legacyAccessTokenScopes } from '../src/core/oauth-provider.ts';
@@ -100,6 +101,13 @@ describe('ChatGPT Secure MCP Tunnel', () => {
     expect(profile).not.toContain('sk-');
     expect(profile).not.toContain('Bearer pmbrain_');
     expect(parseTunnelId(profile)).toBe('tunnel_example123');
+  });
+
+  test('parses the tunnel Authorization header without keeping a trailing newline', () => {
+    expect(parseChatGptTunnelBearerToken('Bearer pmbrain_abc123\n')).toBe('pmbrain_abc123');
+    expect(parseChatGptTunnelBearerToken('pmbrain_abc123')).toBe('pmbrain_abc123');
+    expect(parseChatGptTunnelBearerToken('Bearer')).toBeNull();
+    expect(parseChatGptTunnelBearerToken('')).toBeNull();
   });
 
   test('normalizes Windows proxy settings for tunnel-client', () => {

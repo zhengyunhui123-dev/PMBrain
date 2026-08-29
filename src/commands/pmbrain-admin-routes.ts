@@ -140,7 +140,11 @@ import {
   RunAcceptedResponseSchema,
   SetDefaultSourceResponseSchema,
   SourceAddResponseSchema,
+  AdvisorAdminResponseSchema,
+  AdvisorApplyRequestSchema,
+  AdvisorApplyResponseSchema,
 } from '../../shared/contracts/index.ts';
+import { applyAdminAdvisorFinding, getAdminAdvisorReport } from './admin-advisor.ts';
 
 export interface PmbrainAdminRouteOptions {
   app: express.Express;
@@ -250,6 +254,27 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
       }));
     } catch (e) {
       res.status(500).json({ error: e instanceof Error ? e.message : 'overview_failed' });
+    }
+  });
+
+  app.get('/admin/api/advisor', requireAdmin, async (_req: Request, res: Response) => {
+    try {
+      sendAdminContract(res, AdvisorAdminResponseSchema, await getAdminAdvisorReport(engine, loadConfig() ?? config));
+    } catch (e) {
+      res.status(500).json({ error: e instanceof Error ? e.message : 'advisor_failed' });
+    }
+  });
+
+  app.post('/admin/api/advisor/apply', requireAdmin, express.json({ limit: '4kb' }), async (req: Request, res: Response) => {
+    try {
+      const input = AdvisorApplyRequestSchema.parse(req.body);
+      sendAdminContract(
+        res,
+        AdvisorApplyResponseSchema,
+        await applyAdminAdvisorFinding(engine, loadConfig() ?? config, input.dispatch_id, process.cwd(), runHooks),
+      );
+    } catch (e) {
+      res.status(400).json({ error: e instanceof Error ? e.message : 'advisor_apply_failed' });
     }
   });
 
@@ -455,14 +480,16 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
     }
   });
 
-  const dreamSettingsView = async (overrides?: { outputDir?: string; dualWrite?: boolean }) => {
-    const [storedOutputDir, storedDualWrite, storedBrainDir] = await Promise.all([
+  const dreamSettingsView = async (overrides?: { outputDir?: string; dualWrite?: boolean; includeUncommitted?: boolean }) => {
+    const [storedOutputDir, storedDualWrite, storedBrainDir, storedIncludeUncommitted] = await Promise.all([
       engine.getConfig('dream.synthesize.output_dir'),
       engine.getConfig('dream.synthesize.dual_write'),
       engine.getConfig('sync.repo_path'),
+      engine.getConfig('sync.include_working_tree'),
     ]);
     const outputDir = overrides?.outputDir ?? (storedOutputDir?.trim() || 'output');
     const dualWrite = overrides?.dualWrite ?? (storedDualWrite !== 'false');
+    const includeUncommitted = overrides?.includeUncommitted ?? (storedIncludeUncommitted === 'true');
     const defaultBrainDir = storedBrainDir?.trim() || brainDirFromConfig(config);
     const resolvedOutputDir = defaultBrainDir
       ? resolveDreamOutputRoot(defaultBrainDir, outputDir)
@@ -472,6 +499,7 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
     return {
       outputDir,
       dualWrite,
+      includeUncommitted,
       defaultBrainDir: defaultBrainDir || null,
       resolvedOutputDir,
       directoryExists: resolvedOutputDir ? existsSync(resolvedOutputDir) : false,
@@ -551,6 +579,7 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
   app.post('/admin/api/dream/settings', requireAdmin, express.json({ limit: '4kb' }), async (req: Request, res: Response) => {
     const rawOutputDir = typeof req.body?.outputDir === 'string' ? req.body.outputDir.trim() : '';
     const dualWrite = req.body?.dualWrite;
+    const includeUncommitted = req.body?.includeUncommitted;
     if (!rawOutputDir || rawOutputDir.length > 1024 || rawOutputDir.includes('\0')) {
       res.status(400).json({ error: 'invalid_dream_output_dir' });
       return;
@@ -559,9 +588,13 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
       res.status(400).json({ error: 'dream_dual_write_must_be_boolean' });
       return;
     }
+    if (typeof includeUncommitted !== 'boolean') {
+      res.status(400).json({ error: 'sync_include_uncommitted_must_be_boolean' });
+      return;
+    }
     const outputDir = rawOutputDir === '/output' || rawOutputDir === '\\output' ? 'output' : rawOutputDir;
     try {
-      const view = await dreamSettingsView({ outputDir, dualWrite });
+      const view = await dreamSettingsView({ outputDir, dualWrite, includeUncommitted });
       if (dualWrite && !view.resolvedOutputDir) {
         res.status(400).json({ error: 'dream_default_directory_unavailable' });
         return;
@@ -572,8 +605,9 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
       await Promise.all([
         engine.setConfig('dream.synthesize.output_dir', outputDir),
         engine.setConfig('dream.synthesize.dual_write', dualWrite ? 'true' : 'false'),
+        engine.setConfig('sync.include_working_tree', includeUncommitted ? 'true' : 'false'),
       ]);
-      sendAdminContract(res, DreamSettingsResponseSchema, await dreamSettingsView({ outputDir, dualWrite }));
+      sendAdminContract(res, DreamSettingsResponseSchema, await dreamSettingsView({ outputDir, dualWrite, includeUncommitted }));
     } catch (e) {
       res.status(500).json({ error: e instanceof Error ? e.message : 'save_dream_settings_failed' });
     }

@@ -68,9 +68,13 @@ Admin Console 会自动：
 
 确认 Tunnel 已关联个人 ChatGPT 对应的 Platform 组织，并确认 Runtime Key 具有 Tunnels `Read + Use` 权限。
 
+**ChatGPT 提示连接已过期 / 重新连接 PMBrain**
+
+本机 Tunnel 显示 Ready 也可能只代表出站通道活着。若本地 Bearer 文件还在、数据库里的 `chatgpt-secure-tunnel` 凭证却丢了（例如恢复过升级备份），ChatGPT 的 `initialize` 会 401，并显示连接过期。打开 MCP 接入页会自动把文件中的 Token 重新登记到数据库；然后在 ChatGPT 点一次「重新连接」。若仍失败，再点「重新生成并轮换凭证」并重启 Tunnel。
+
 **main channel 显示 Unauthorized**
 
-重新生成安全配置以轮换本地只读 Token，然后再次运行 Doctor。不要继续使用名称为 `pmbrain-noauth` 的旧 profile；它并没有为本地 PMBrain 注入认证 Header。
+重新生成安全配置以轮换本地 Token，然后再次运行 Doctor。不要继续使用名称为 `pmbrain-noauth` 的旧 profile；它并没有为本地 PMBrain 注入认证 Header。
 
 **Health 正常但 Ready 未就绪**
 

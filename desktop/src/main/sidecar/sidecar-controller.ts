@@ -23,6 +23,7 @@ export interface SidecarControllerDependencies {
   migrateConfiguredInstallation: () => Promise<boolean>;
   reconcileConfiguredEmbeddingIndex: () => Promise<void>;
   pendingPgliteBackupPath: () => string | null;
+  prunePgliteUpgradeBackups: () => Promise<void>;
   reconcileLan: () => Promise<unknown>;
   stopLan: () => Promise<void>;
   sendSystemSettingsState: () => void;
@@ -90,6 +91,12 @@ export class SidecarController {
       message: '正在分配本机端口并启动 sidecar，请保持窗口开启。',
     });
     try {
+      const { resolveSidecarHealthTimeoutMs, POST_UPGRADE_HEALTH_TIMEOUT_MS } = await import('../startup/post-upgrade-startup.js');
+      const upgradePending = needsDesktopMigration(app.getVersion());
+      const healthTimeoutMs = resolveSidecarHealthTimeoutMs({
+        engine: getDatabaseRuntimeConfig().engine,
+        upgradePending,
+      });
       const port = await findAvailablePort();
       const bootstrapToken = ensureBootstrapToken();
       let manager!: SidecarManager;
@@ -98,16 +105,22 @@ export class SidecarController {
         port,
         bootstrapToken,
         clientVersion: app.getVersion(),
+        healthTimeoutMs,
         logger,
         onState: state => {
           if (this.manager !== manager) return;
           this.sendState(state);
           if (state.phase === 'starting') {
+            const waitHint = healthTimeoutMs >= POST_UPGRADE_HEALTH_TIMEOUT_MS
+              ? '升级后首次打开较大知识库可能需要几分钟，请不要关闭窗口。'
+              : healthTimeoutMs >= 60_000
+                ? `正在打开本机数据库，最长可能需要约 ${Math.round(healthTimeoutMs / 60_000)} 分钟。`
+                : 'sidecar 已启动，PMBrain 正在检查数据库与 HTTP 服务。';
             this.dependencies.sendStartupProgress({
               visible: true,
               stage: 'health',
               title: '正在等待本地服务健康检查',
-              message: 'sidecar 已启动，PMBrain 正在检查数据库与 HTTP 服务；首次启动最长可能需要约 45 秒。',
+              message: waitHint,
             });
           } else if (state.phase === 'ready' || state.phase === 'failed') {
             this.dependencies.hideStartupProgress();
@@ -129,6 +142,13 @@ export class SidecarController {
       const rawMessage = error instanceof Error ? error.message : String(error);
       const database = getDatabaseRuntimeConfig();
       const databasePath = getSetupInfo().current.databasePath;
+      const failure = this.manager?.lastFailure;
+      if (failure) {
+        logger.write(
+          'desktop',
+          `sidecar failure details: exitCode=${failure.exitCode ?? 'none'} signal=${failure.signal ?? 'none'} pid=${failure.sidecarPid ?? 'none'} stderr=${failure.recentStderr?.trim() || '(empty)'}`,
+        );
+      }
       let message = database.engine === 'pglite' && databasePath
         ? `${rawMessage}\nPGLite 数据库路径：${databasePath}`
         : rawMessage;
@@ -194,6 +214,40 @@ export class SidecarController {
       return await pending;
     } finally {
       if (this.retryPromise === pending) this.retryPromise = null;
+    }
+  }
+
+  async withPausedForPgliteBackupRestore<T>(operation: () => Promise<T>): Promise<T> {
+    const shouldRestart = Boolean(this.manager && getSetupInfo().current.engine === 'pglite');
+    if (shouldRestart) await this.stop();
+    this.dependencies.sendStartupProgress({
+      visible: true,
+      stage: 'database',
+      title: '正在恢复数据库备份',
+      message: shouldRestart
+        ? '恢复需要独占访问当前数据库，桌面端已暂停本地服务；完成后会自动重启并执行健康检查。'
+        : '正在用已验证的升级备份替换当前数据库。',
+    });
+    let operationError: unknown;
+    try {
+      return await operation();
+    } catch (error) {
+      operationError = error;
+      throw error;
+    } finally {
+      if (shouldRestart) {
+        try {
+          await this.start(false);
+        } catch (restartError) {
+          if (!operationError) throw restartError;
+          this.dependencies.getLogger()?.write(
+            'desktop',
+            `备份恢复失败后，本地服务恢复也失败：${restartError instanceof Error ? restartError.message : String(restartError)}`,
+          );
+        }
+      } else {
+        this.dependencies.hideStartupProgress();
+      }
     }
   }
 
@@ -284,6 +338,7 @@ export class SidecarController {
           if (this.manager && this.stateValue?.phase === 'ready') {
             if (migrationRequired && setup.current.engine === 'pglite') {
               markDesktopMigration(app.getVersion());
+              await this.dependencies.prunePgliteUpgradeBackups();
             }
             return this.manager;
           }
