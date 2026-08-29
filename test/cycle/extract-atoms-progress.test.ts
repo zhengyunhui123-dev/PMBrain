@@ -11,7 +11,7 @@ import { PGLiteEngine } from '../../src/core/pglite-engine.ts';
 import { runPhaseExtractAtoms } from '../../src/core/cycle/extract-atoms.ts';
 import { resetPgliteState } from '../helpers/reset-pglite.ts';
 import type { ProgressReporter } from '../../src/core/progress.ts';
-import type { ChatResult, ChatOpts } from '../../src/core/ai/gateway.ts';
+import { resetGateway, type ChatResult, type ChatOpts } from '../../src/core/ai/gateway.ts';
 
 let engine: PGLiteEngine;
 
@@ -22,10 +22,12 @@ beforeAll(async () => {
 }, 60000);
 
 afterAll(async () => {
+  resetGateway();
   await engine.disconnect();
 });
 
 beforeEach(async () => {
+  resetGateway();
   await resetPgliteState(engine);
 });
 

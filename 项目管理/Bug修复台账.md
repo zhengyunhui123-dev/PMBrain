@@ -1,5 +1,14 @@
 # Bug 修复台账
 
+## 2026-08-30 PMBrain 1.3.13 修复 Work Desktop 合并后的 GitHub Test 契约
+
+- 时间：2026-08-30
+- 版本号：PMBrain 1.3.13；PMBrain Desktop 1.1.49
+- 标题：补齐 Advisor Skill、发布说明与 Dream 中止信号的 CI 契约
+- 描述：Work Desktop 合入 AI Dream 后，GitHub Test 暴露出 Advisor Skill 缺少仓库要求的英文段名、Desktop 1.1.49 发布说明缺失、phantom redirect 契约仍要求中止信号加入前的旧调用形态，以及 `extract_atoms` 进度测试未重置全局向量网关导致分片状态污染。现只修交付契约和测试隔离，不改变 Advisor、Dream、同步或知识库数据流程。
+- 是否完成：是
+- 最终结果：Advisor Skill 补齐 `Contract`、`Output Format`、`Anti-Patterns`；发布说明以 1.1.49 为首并继续只保留 5 个版本；phantom lock 契约同时固定 Source 锁与 AbortSignal；进度测试每例重置 AI 网关。对应失败项定向回归通过，统一校验与 GitHub 精确 SHA 结果见本次提交。未执行 `bun run build:win`，未读取或修改用户知识库、Wiki、原始资料和向量。
+
 ## 2026-08-27 PMBrain 1.3.10 升级后 Sidecar 健康检查超时且日志不全
 
 - 时间：2026-08-27

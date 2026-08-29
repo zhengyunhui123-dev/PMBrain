@@ -18,7 +18,7 @@ mutating: false
 
 > **Convention:** 遵循 `skills/conventions/brain-first.md`。Advisor 负责告诉知识库所有者当前最值得处理的健康问题，不替用户擅自修改知识库。
 
-## 契约
+## Contract
 
 - 默认运行 `pmbrain advisor --json`，按 `critical` → `warn` → `info` 汇报最重要的 1–3 项。
 - Advisor 报告本身只读。展示准确的 `fix.command_argv`，执行任何修复前先征得用户明确同意。
@@ -30,7 +30,7 @@ mutating: false
 
 当前 PMBrain Advisor 检查版本缓存、待执行迁移、Schema Pack、停滞任务、过期同步、向量覆盖率和配置异常。不要声称它已经覆盖 GBrain 的 Chronicle、未安装 Skill/brain-pack、备份覆盖率或 MCP 客户端适配检查。
 
-## 输出方式
+## Output Format
 
 1. 先说明最高严重度及其用户影响。
 2. 列出最重要的 1–3 项和对应修复命令。
@@ -39,7 +39,7 @@ mutating: false
 
 如果用户明确要求定期体检，使用 `skills/cron-scheduler/SKILL.md` 安排每周一次的只读 `pmbrain advisor --json`；仅在出现 critical 或新增问题时提醒，修复仍需再次确认。
 
-## 禁止事项
+## Anti-Patterns
 
 - 不得因为 Advisor 给出建议就自动运行迁移、补向量、同步或孤立页整理。
 - 不得向用户倾倒未经整理的完整 JSON。
