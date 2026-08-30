@@ -284,6 +284,8 @@ export function rowToChunk(row: Record<string, unknown>, includeEmbedding = fals
     model: (row.model as string | null | undefined) ?? null,
     token_count: row.token_count as number | null,
     embedded_at: row.embedded_at ? new Date(row.embedded_at as string) : null,
+    modality: (row.modality as 'text' | 'image' | undefined) ?? undefined,
+    ...(row.embedding_is_null !== undefined && { embedding_is_null: Boolean(row.embedding_is_null) }),
     // v0.19.0 code-chunk metadata (nullable for markdown chunks).
     language: (row.language as string | null | undefined) ?? null,
     symbol_name: (row.symbol_name as string | null | undefined) ?? null,

@@ -101,6 +101,7 @@ beforeEach(() => {
 afterEach(() => {
   delete process.env.GBRAIN_EMBED_CONCURRENCY;
   delete process.env.GBRAIN_EMBED_TIME_BUDGET_MS;
+  delete process.env.GBRAIN_EMBED_STALL_ABORT_SECONDS;
 });
 
 describe('runEmbed --all (parallel)', () => {
@@ -1063,4 +1064,33 @@ describe('embedAllStale --source threading (D7)', () => {
     await runEmbedCore(engine, { stale: true, sourceId: 'media-corpus' });
     expect((firstCallOpts as { sourceId?: string }).sourceId).toBe('media-corpus');
   });
+});
+
+describe('embed stale stall watchdog', () => {
+  test('returns a resumable stall_timeout result when the provider ignores abort', async () => {
+    process.env.GBRAIN_EMBED_STALL_ABORT_SECONDS = '1';
+    embedBatchBehavior = () => new Promise<Float32Array[]>(() => {});
+    const stale = [{
+      slug: 'wedged-page', chunk_index: 0, chunk_text: 'wedged text',
+      chunk_source: 'compiled_truth' as const, model: null, token_count: 2,
+      source_id: 'default', page_id: 1,
+    }];
+    const chunks = [{
+      id: 1, page_id: 1, chunk_index: 0, chunk_text: 'wedged text',
+      chunk_source: 'compiled_truth' as const, embedding: null, model: null,
+      token_count: 2, embedded_at: null, embedding_is_null: true,
+    }];
+    const engine = mockEngine({
+      countStaleChunks: async () => 1,
+      listStaleChunks: async () => stale,
+      getChunks: async () => chunks,
+      upsertChunks: async () => {},
+    });
+
+    const result = await runEmbedCore(engine, { stale: true, quiet: true });
+    expect(result.reason).toBe('stall_timeout');
+    expect(result.status).toBe('failed');
+    const { assertEmbedNotStalled } = await import('../src/core/embed-stall.ts');
+    expect(() => assertEmbedNotStalled(result)).toThrow(/stall_timeout/);
+  }, 20_000);
 });

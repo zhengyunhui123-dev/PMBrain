@@ -15,6 +15,7 @@ import { join, relative, basename } from 'path';
 import { extractEntityRefs as canonicalExtractEntityRefs } from '../core/link-extraction.ts';
 import { createProgress, startHeartbeat } from '../core/progress.ts';
 import { getCliOptions, cliOptsToProgressOptions } from '../core/cli-options.ts';
+import { findTimelineSplitIndex } from '../core/markdown.ts';
 
 interface BacklinkGap {
   /** The page that mentions the entity */
@@ -62,10 +63,55 @@ export function hasBacklink(targetContent: string, sourceFilename: string): bool
   return targetContent.includes(sourceFilename);
 }
 
-/** Build a timeline back-link entry */
-export function buildBacklinkEntry(sourceTitle: string, sourcePath: string, date: string): string {
-  return `- **${date}** | Referenced in [${sourceTitle}](${sourcePath})`;
+/** Build an undated back-link entry without inventing event chronology. */
+export function buildBacklinkEntry(sourceTitle: string, sourcePath: string): string {
+  const bare = sourcePath.replace(/^(?:\.\.\/)+/, '');
+  const linkPath = bare.includes('/') ? sourcePath.replace(/\.md$/, '') : sourcePath;
+  return `- Referenced in [${sourceTitle}](${linkPath})`;
 }
+
+function frontmatterBodyOffset(content: string): number {
+  if (!content.startsWith('---')) return 0;
+  const match = /^---[ \t]*\r?\n[\s\S]*?\r?\n---[ \t]*(?:\r?\n|$)/.exec(content);
+  return match?.[0].length ?? 0;
+}
+
+/** Insert an undated backlink above Timeline/History in a dedicated section. */
+export function insertBacklinkEntry(content: string, bodyStart: number, entry: string): string {
+  const bodySlice = content.slice(bodyStart);
+  const lines = bodySlice.split('\n');
+  const splitIndex = findTimelineSplitIndex(lines);
+  let timelineStart = content.length;
+  if (splitIndex >= 0) {
+    timelineStart = bodyStart;
+    for (let i = 0; i < splitIndex; i++) timelineStart += lines[i].length + 1;
+  } else {
+    const bareTimeline = /^## (?:Timeline|History)[ \t]*\r?$/im.exec(bodySlice);
+    if (bareTimeline) timelineStart = bodyStart + bareTimeline.index;
+  }
+
+  const beforeTimeline = content.slice(bodyStart, timelineStart);
+  const headingMatch = /^## Referenced by[ \t]*\r?$/im.exec(beforeTimeline);
+  const eol = bodySlice.includes('\r\n') ? '\r\n' : '\n';
+  if (headingMatch) {
+    const headingAbs = bodyStart + headingMatch.index;
+    const headingLineEnd = content.indexOf('\n', headingAbs);
+    const sectionStart = headingLineEnd === -1 ? content.length : headingLineEnd + 1;
+    const nextHeading = /^##\s+\S/m.exec(content.slice(sectionStart, timelineStart));
+    const sectionEnd = nextHeading ? sectionStart + nextHeading.index : timelineStart;
+    const suffix = content.slice(sectionEnd);
+    const updated = content.slice(0, sectionEnd).trimEnd() + eol + entry + eol;
+    return suffix ? updated + eol + suffix : updated;
+  }
+
+  const prefix = content.slice(0, timelineStart).trimEnd();
+  const suffix = content.slice(timelineStart);
+  const section = `${prefix}${prefix ? eol + eol : ''}## Referenced by${eol}${eol}${entry}${eol}`;
+  return suffix ? section + eol + suffix : section;
+}
+
+/** Backward-compatible name for callers that imported the old helper. */
+export const insertTimelineEntry = insertBacklinkEntry;
 
 /** Scan a brain directory for back-link gaps */
 export function findBacklinkGaps(brainDir: string): BacklinkGap[] {
@@ -80,7 +126,7 @@ export function findBacklinkGaps(brainDir: string): BacklinkGap[] {
       if (lstatSync(full).isDirectory()) {
         walk(full);
       } else if (entry.endsWith('.md') && !entry.startsWith('_')) {
-        const relPath = relative(brainDir, full);
+        const relPath = relative(brainDir, full).replace(/\\/g, '/');
         try {
           allPages.push({ path: full, relPath, content: readFileSync(full, 'utf-8') });
         } catch { /* skip unreadable */ }
@@ -132,9 +178,8 @@ export function findBacklinkGaps(brainDir: string): BacklinkGap[] {
   return gaps;
 }
 
-/** Fix back-link gaps by appending timeline entries to target pages */
+/** Fix back-link gaps by adding undated entries outside the event timeline. */
 export function fixBacklinkGaps(brainDir: string, gaps: BacklinkGap[], dryRun: boolean = false): number {
-  const today = new Date().toISOString().slice(0, 10);
   let fixed = 0;
 
   // Group gaps by target page to batch writes
@@ -159,23 +204,8 @@ export function fixBacklinkGaps(brainDir: string, gaps: BacklinkGap[], dryRun: b
       const relPrefix = '../'.repeat(depth);
       const relPath = relPrefix + gap.sourcePage;
 
-      const entry = buildBacklinkEntry(gap.sourceTitle, relPath, today);
-
-      // Insert into Timeline section
-      if (content.includes('## Timeline')) {
-        const parts = content.split('## Timeline');
-        const afterTimeline = parts[1];
-        const nextSection = afterTimeline.match(/\n## /);
-        if (nextSection) {
-          const insertIdx = parts[0].length + '## Timeline'.length + nextSection.index!;
-          content = content.slice(0, insertIdx) + '\n' + entry + content.slice(insertIdx);
-        } else {
-          content = content.trimEnd() + '\n' + entry + '\n';
-        }
-      } else {
-        // Add Timeline section
-        content = content.trimEnd() + '\n\n## Timeline\n\n' + entry + '\n';
-      }
+      const entry = buildBacklinkEntry(gap.sourceTitle, relPath);
+      content = insertBacklinkEntry(content, frontmatterBodyOffset(content), entry);
       fixed++;
     }
 

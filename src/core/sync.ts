@@ -241,7 +241,7 @@ function globToRegex(pattern: string): RegExp {
   return new RegExp(regex);
 }
 
-function matchesAnyGlob(path: string, patterns?: string[]): boolean {
+export function matchesAnyGlob(path: string, patterns?: string[]): boolean {
   if (!patterns || patterns.length === 0) return false;
   const normalized = path.replace(/\\/g, '/');
   return patterns.some((pattern) => globToRegex(pattern).test(normalized));
@@ -325,7 +325,21 @@ export type SyncableReason =
   | 'strategy'
   | 'pruned-dir'
   | 'include-glob-miss'
-  | 'exclude-glob-hit';
+  | 'exclude-glob-hit'
+  | 'malformed-path';
+
+/** Reject markdown-link syntax/control bytes when they leak into filenames. */
+export function hasMalformedPathSegment(path: string): boolean {
+  // eslint-disable-next-line no-control-regex
+  if (/[\x00-\x1f]/.test(path)) return true;
+  return /[\[\]]/.test(path) && /\.(md|mdx)$/i.test(path);
+}
+
+/** Only the injection signature is destructive; ordinary bracket names are preserved. */
+export function isPoisonedPath(path: string): boolean {
+  // eslint-disable-next-line no-control-regex
+  return /\]\(|[\x00-\x1f]/.test(path);
+}
 
 /**
  * Canonical metafile basenames the markdown sync strategy intentionally
@@ -351,6 +365,8 @@ function classifySync(path: string, opts: SyncableOptions = {}): SyncableReason 
   const strategy = opts.strategy || 'markdown';
 
   if (!isAllowedByStrategy(path, strategy, opts.includeOffice)) return 'strategy';
+
+  if (hasMalformedPathSegment(path)) return 'malformed-path';
 
   // Skip every path segment that pruneDir would block walkers from descending
   // into. Catches hidden dirs (`.git`, `.obsidian`), `.raw/` sidecars,

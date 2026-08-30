@@ -5228,6 +5228,23 @@ export const MIGRATIONS: Migration[] = [
       `,
     },
   },
+  {
+    version: 120,
+    name: 'dream_verdicts_ttl',
+    idempotent: true,
+    sql: `
+      ALTER TABLE dream_verdicts ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ;
+      ALTER TABLE dream_verdicts
+        ALTER COLUMN expires_at SET DEFAULT (now() + interval '30 days');
+      UPDATE dream_verdicts
+        SET expires_at = judged_at + interval '30 days'
+        WHERE expires_at IS NULL;
+      ALTER TABLE dream_verdicts
+        ALTER COLUMN expires_at SET NOT NULL;
+      CREATE INDEX IF NOT EXISTS dream_verdicts_expires_idx
+        ON dream_verdicts (expires_at);
+    `,
+  },
 ];
 
 export const LATEST_VERSION = MIGRATIONS.length > 0

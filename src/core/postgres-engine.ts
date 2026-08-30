@@ -19,7 +19,7 @@ import { logBatchRetry as auditLogBatchRetry, logBatchExhausted as auditLogBatch
 import type {
   DomainBankSampleOpts, CorpusSampleOpts, DomainBankRow,
 } from './types.ts';
-import { MAX_SEARCH_LIMIT, clampSearchLimit } from './engine.ts';
+import { MAX_SEARCH_LIMIT, clampSearchLimit, DREAM_VERDICT_TTL_SECONDS } from './engine.ts';
 import { deriveResolutionTuple, finalizeScorecard } from './takes-resolution.ts';
 import { normalizeWeightForStorage } from './takes-fence.ts';
 import { runMigrations } from './migrate.ts';
@@ -957,7 +957,8 @@ export class PostgresEngine implements BrainEngine {
         source_kind           = COALESCE(EXCLUDED.source_kind,           pages.source_kind),
         source_uri            = COALESCE(EXCLUDED.source_uri,            pages.source_uri),
         ingested_via          = COALESCE(EXCLUDED.ingested_via,          pages.ingested_via),
-        ingested_at           = COALESCE(EXCLUDED.ingested_at,           pages.ingested_at)
+        ingested_at           = COALESCE(EXCLUDED.ingested_at,           pages.ingested_at),
+        deleted_at            = NULL
       RETURNING id, source_id, slug, type, title, compiled_truth, timeline, frontmatter, content_hash, created_at, updated_at, effective_date, effective_date_source, import_filename, source_kind, source_uri, ingested_via, ingested_at
     `;
     return rowToPage(rows[0]);
@@ -1029,6 +1030,20 @@ export class PostgresEngine implements BrainEngine {
     `;
     if (rows.length === 0) return null;
     return { slug: rows[0].slug as string };
+  }
+
+  async softDeletePages(slugs: string[], opts: { sourceId: string }): Promise<string[]> {
+    if (slugs.length === 0) return [];
+    if (slugs.length > DELETE_BATCH_SIZE) {
+      throw new Error(`softDeletePages: input size ${slugs.length} exceeds DELETE_BATCH_SIZE=${DELETE_BATCH_SIZE}. Caller must chunk.`);
+    }
+    const sql = this.sql;
+    const rows = await sql<{ slug: string }[]>`
+      UPDATE pages SET deleted_at = now()
+       WHERE slug = ANY(${slugs}::text[]) AND source_id = ${opts.sourceId} AND deleted_at IS NULL
+      RETURNING slug
+    `;
+    return rows.map(row => row.slug);
   }
 
   async restorePage(slug: string, opts?: { sourceId?: string }): Promise<boolean> {
@@ -2322,7 +2337,7 @@ export class PostgresEngine implements BrainEngine {
     const sql = this.sql;
     const sourceId = opts?.sourceId ?? 'default';
     const rows = await sql`
-      SELECT cc.* FROM content_chunks cc
+      SELECT cc.*, (cc.embedding IS NULL) AS embedding_is_null FROM content_chunks cc
       JOIN pages p ON p.id = cc.page_id
       WHERE p.slug = ${slug} AND p.source_id = ${sourceId}
       ORDER BY cc.chunk_index
@@ -2733,8 +2748,8 @@ export class PostgresEngine implements BrainEngine {
                l.link_type, l.context, l.link_source, l.resolution_type,
                o.slug as origin_slug, o.source_id as origin_source_id, l.origin_field
         FROM links l
-        JOIN pages f ON f.id = l.from_page_id
-        JOIN pages t ON t.id = l.to_page_id
+        JOIN pages f ON f.id = l.from_page_id AND f.deleted_at IS NULL
+        JOIN pages t ON t.id = l.to_page_id AND t.deleted_at IS NULL
         LEFT JOIN pages o ON o.id = l.origin_page_id AND o.source_id = ANY(${ids}::text[])
         WHERE f.slug = ${slug} AND f.source_id = ANY(${ids}::text[]) AND t.source_id = ANY(${ids}::text[])
       `;
@@ -2750,8 +2765,8 @@ export class PostgresEngine implements BrainEngine {
                l.link_type, l.context, l.link_source, l.resolution_type,
                o.slug as origin_slug, o.source_id as origin_source_id, l.origin_field
         FROM links l
-        JOIN pages f ON f.id = l.from_page_id
-        JOIN pages t ON t.id = l.to_page_id
+        JOIN pages f ON f.id = l.from_page_id AND f.deleted_at IS NULL
+        JOIN pages t ON t.id = l.to_page_id AND t.deleted_at IS NULL
         LEFT JOIN pages o ON o.id = l.origin_page_id
         WHERE f.slug = ${slug} AND f.source_id = ${opts.sourceId}
       `;
@@ -2763,8 +2778,8 @@ export class PostgresEngine implements BrainEngine {
              l.link_type, l.context, l.link_source, l.resolution_type,
              o.slug as origin_slug, o.source_id as origin_source_id, l.origin_field
       FROM links l
-      JOIN pages f ON f.id = l.from_page_id
-      JOIN pages t ON t.id = l.to_page_id
+      JOIN pages f ON f.id = l.from_page_id AND f.deleted_at IS NULL
+      JOIN pages t ON t.id = l.to_page_id AND t.deleted_at IS NULL
       LEFT JOIN pages o ON o.id = l.origin_page_id
       WHERE f.slug = ${slug}
     `;
@@ -2781,8 +2796,8 @@ export class PostgresEngine implements BrainEngine {
                l.link_type, l.context, l.link_source, l.resolution_type,
                o.slug as origin_slug, o.source_id as origin_source_id, l.origin_field
         FROM links l
-        JOIN pages f ON f.id = l.from_page_id
-        JOIN pages t ON t.id = l.to_page_id
+        JOIN pages f ON f.id = l.from_page_id AND f.deleted_at IS NULL
+        JOIN pages t ON t.id = l.to_page_id AND t.deleted_at IS NULL
         LEFT JOIN pages o ON o.id = l.origin_page_id AND o.source_id = ANY(${ids}::text[])
         WHERE t.slug = ${slug} AND t.source_id = ANY(${ids}::text[]) AND f.source_id = ANY(${ids}::text[])
       `;
@@ -2796,8 +2811,8 @@ export class PostgresEngine implements BrainEngine {
                l.link_type, l.context, l.link_source, l.resolution_type,
                o.slug as origin_slug, o.source_id as origin_source_id, l.origin_field
         FROM links l
-        JOIN pages f ON f.id = l.from_page_id
-        JOIN pages t ON t.id = l.to_page_id
+        JOIN pages f ON f.id = l.from_page_id AND f.deleted_at IS NULL
+        JOIN pages t ON t.id = l.to_page_id AND t.deleted_at IS NULL
         LEFT JOIN pages o ON o.id = l.origin_page_id
         WHERE t.slug = ${slug} AND t.source_id = ${opts.sourceId}
       `;
@@ -2809,8 +2824,8 @@ export class PostgresEngine implements BrainEngine {
              l.link_type, l.context, l.link_source, l.resolution_type,
              o.slug as origin_slug, o.source_id as origin_source_id, l.origin_field
       FROM links l
-      JOIN pages f ON f.id = l.from_page_id
-      JOIN pages t ON t.id = l.to_page_id
+      JOIN pages f ON f.id = l.from_page_id AND f.deleted_at IS NULL
+      JOIN pages t ON t.id = l.to_page_id AND t.deleted_at IS NULL
       LEFT JOIN pages o ON o.id = l.origin_page_id
       WHERE t.slug = ${slug}
     `;
@@ -3693,6 +3708,7 @@ export class PostgresEngine implements BrainEngine {
              score, content_type, segments, entities, model, triage_version
       FROM dream_verdicts
       WHERE file_path = ${filePath} AND content_hash = ${contentHash}
+        AND (expires_at IS NULL OR expires_at > now())
     `;
     if (rows.length === 0) return null;
     const r = rows[0];
@@ -3713,10 +3729,12 @@ export class PostgresEngine implements BrainEngine {
     const sql = this.sql;
     await sql`
       INSERT INTO dream_verdicts (file_path, content_hash, worth_processing, reasons,
-                                  score, content_type, segments, entities, model, triage_version)
+                                  score, content_type, segments, entities, model, triage_version,
+                                  expires_at)
       VALUES (${filePath}, ${contentHash}, ${verdict.worth_processing}, ${sql.json(verdict.reasons as Parameters<typeof sql.json>[0])},
               ${verdict.score ?? null}, ${verdict.content_type ?? null}, ${sql.json((verdict.segments ?? []) as unknown as Parameters<typeof sql.json>[0])},
-              ${sql.json((verdict.entities ?? []) as Parameters<typeof sql.json>[0])}, ${verdict.model ?? null}, ${verdict.triage_version ?? null})
+              ${sql.json((verdict.entities ?? []) as Parameters<typeof sql.json>[0])}, ${verdict.model ?? null}, ${verdict.triage_version ?? null},
+              now() + make_interval(secs => ${DREAM_VERDICT_TTL_SECONDS}))
       ON CONFLICT (file_path, content_hash) DO UPDATE SET
         worth_processing = EXCLUDED.worth_processing,
         reasons = EXCLUDED.reasons,
@@ -3726,8 +3744,14 @@ export class PostgresEngine implements BrainEngine {
         entities = EXCLUDED.entities,
         model = EXCLUDED.model,
         triage_version = EXCLUDED.triage_version,
-        judged_at = now()
+        judged_at = now(),
+        expires_at = EXCLUDED.expires_at
     `;
+  }
+
+  async sweepDreamVerdicts(): Promise<number> {
+    const result = await this.sql`DELETE FROM dream_verdicts WHERE expires_at <= now()`;
+    return result.count ?? 0;
   }
 
   // ============================================================
@@ -4824,51 +4848,35 @@ export class PostgresEngine implements BrainEngine {
   }
 
   // Stats + health
-  async getStats(): Promise<BrainStats> {
+  async getStats(opts?: { sourceId?: string; sourceIds?: string[] }): Promise<BrainStats> {
     const sql = this.sql;
+    const scope: string[] | null = opts?.sourceIds ?? (opts?.sourceId ? [opts.sourceId] : null);
     const [stats] = await sql`
       SELECT
-        -- v0.26.5: dashboard stats describe the visible knowledge base, not
-        -- rows waiting in the recycle bin. Keep derived rows aligned with the
-        -- same page visibility boundary until the 72h purge removes them.
-        (SELECT count(*) FROM pages WHERE deleted_at IS NULL) as page_count,
-        (SELECT count(*)
-           FROM content_chunks c
-           JOIN pages p ON p.id = c.page_id
-          WHERE p.deleted_at IS NULL) as chunk_count,
-        (SELECT count(*)
-           FROM content_chunks c
-           JOIN pages p ON p.id = c.page_id
-          WHERE p.deleted_at IS NULL
-            AND c.embedded_at IS NOT NULL) as embedded_count,
-        (SELECT count(*)
-           FROM links l
-           JOIN pages from_page ON from_page.id = l.from_page_id
-                                AND from_page.deleted_at IS NULL
-           JOIN pages to_page ON to_page.id = l.to_page_id
-                              AND to_page.deleted_at IS NULL) as link_count,
-        (SELECT count(DISTINCT t.tag)
-           FROM tags t
-           JOIN pages p ON p.id = t.page_id
-          WHERE p.deleted_at IS NULL) as tag_count,
-        (SELECT count(*)
-           FROM timeline_entries te
-           JOIN pages p ON p.id = te.page_id
-          WHERE p.deleted_at IS NULL) as timeline_entry_count
+        (SELECT count(*) FROM pages p
+          WHERE p.deleted_at IS NULL AND (${scope}::text[] IS NULL OR p.source_id = ANY(${scope}))) AS page_count,
+        (SELECT count(*) FROM content_chunks c JOIN pages p ON p.id = c.page_id
+          WHERE p.deleted_at IS NULL AND (${scope}::text[] IS NULL OR p.source_id = ANY(${scope}))) AS chunk_count,
+        (SELECT count(*) FROM content_chunks c JOIN pages p ON p.id = c.page_id
+          WHERE p.deleted_at IS NULL AND c.embedded_at IS NOT NULL
+            AND (${scope}::text[] IS NULL OR p.source_id = ANY(${scope}))) AS embedded_count,
+        (SELECT count(*) FROM links l
+          JOIN pages pf ON pf.id = l.from_page_id AND pf.deleted_at IS NULL
+          JOIN pages pt ON pt.id = l.to_page_id AND pt.deleted_at IS NULL
+          WHERE ${scope}::text[] IS NULL OR (pf.source_id = ANY(${scope}) AND pt.source_id = ANY(${scope}))) AS link_count,
+        (SELECT count(DISTINCT t.tag) FROM tags t JOIN pages p ON p.id = t.page_id
+          WHERE p.deleted_at IS NULL AND (${scope}::text[] IS NULL OR p.source_id = ANY(${scope}))) AS tag_count,
+        (SELECT count(*) FROM timeline_entries te JOIN pages p ON p.id = te.page_id
+          WHERE p.deleted_at IS NULL AND (${scope}::text[] IS NULL OR p.source_id = ANY(${scope}))) AS timeline_entry_count
     `;
 
     const types = await sql`
-      SELECT type, count(*)::int as count
-        FROM pages
-       WHERE deleted_at IS NULL
-       GROUP BY type
-       ORDER BY count DESC
+      SELECT type, count(*)::int AS count FROM pages p
+      WHERE p.deleted_at IS NULL AND (${scope}::text[] IS NULL OR p.source_id = ANY(${scope}))
+      GROUP BY type ORDER BY count DESC
     `;
     const pages_by_type: Record<string, number> = {};
-    for (const t of types) {
-      pages_by_type[t.type as string] = t.count as number;
-    }
-
+    for (const row of types) pages_by_type[row.type as string] = Number(row.count);
     return {
       page_count: Number(stats.page_count),
       chunk_count: Number(stats.chunk_count),
@@ -4880,50 +4888,54 @@ export class PostgresEngine implements BrainEngine {
     };
   }
 
-  async getHealth(): Promise<BrainHealth> {
+  async getHealth(opts?: { sourceId?: string; sourceIds?: string[] }): Promise<BrainHealth> {
     const sql = this.sql;
-    // Bug 11 doc-drift fix — orphan_pages means "islanded" (no inbound AND
-    // no outbound links), aligning both engines with the user-facing
-    // definition. The type comment previously said "no inbound" but the
-    // SQL required both — docs now match code so users can trust the
-    // number. A hub page that links out to many but has no back-references
-    // is working as intended, not an orphan.
+    const scope: string[] | null = opts?.sourceIds ?? (opts?.sourceId ? [opts.sourceId] : null);
     const [h] = await sql`
-      WITH entity_pages AS (
-        SELECT id, slug FROM pages WHERE type IN ('person', 'company')
+      WITH scoped_pages AS (
+        SELECT * FROM pages p
+        WHERE p.deleted_at IS NULL AND (${scope}::text[] IS NULL OR p.source_id = ANY(${scope}))
+      ),
+      entity_pages AS (
+        SELECT id, slug FROM scoped_pages WHERE type IN ('person', 'company')
       )
       SELECT
-        (SELECT count(*) FROM pages) as page_count,
-        (SELECT count(*) FROM content_chunks WHERE embedded_at IS NOT NULL)::float /
-          GREATEST((SELECT count(*) FROM content_chunks), 1)::float as embed_coverage,
-        (SELECT count(*) FROM pages p
-         WHERE p.updated_at < (SELECT MAX(te.created_at) FROM timeline_entries te WHERE te.page_id = p.id)
-        ) as stale_pages,
-        (SELECT count(*) FROM pages p
-         WHERE NOT EXISTS (SELECT 1 FROM links l WHERE l.to_page_id = p.id)
-           AND NOT EXISTS (SELECT 1 FROM links l WHERE l.from_page_id = p.id)
-        ) as orphan_pages,
+        (SELECT count(*) FROM scoped_pages) AS page_count,
+        (SELECT count(*) FILTER (WHERE c.embedded_at IS NOT NULL)::float /
+          GREATEST(count(*), 1)::float FROM content_chunks c JOIN scoped_pages p ON p.id = c.page_id) AS embed_coverage,
+        (SELECT count(*) FROM scoped_pages p
+          WHERE p.updated_at < (SELECT MAX(te.created_at) FROM timeline_entries te WHERE te.page_id = p.id)) AS stale_pages,
+        (SELECT count(*) FROM scoped_pages p
+          WHERE NOT EXISTS (SELECT 1 FROM links l JOIN scoped_pages src ON src.id = l.from_page_id WHERE l.to_page_id = p.id)
+            AND NOT EXISTS (SELECT 1 FROM links l JOIN scoped_pages tgt ON tgt.id = l.to_page_id WHERE l.from_page_id = p.id)) AS orphan_pages,
+        (SELECT count(*) FROM links l JOIN scoped_pages src ON src.id = l.from_page_id
+          WHERE NOT EXISTS (SELECT 1 FROM pages p WHERE p.id = l.to_page_id)) AS dead_links,
+        (SELECT count(*) FROM content_chunks c JOIN scoped_pages p ON p.id = c.page_id WHERE c.embedded_at IS NULL) AS missing_embeddings,
         (SELECT count(*) FROM links l
-         WHERE NOT EXISTS (SELECT 1 FROM pages p WHERE p.id = l.to_page_id)
-        ) as dead_links,
-        (SELECT count(*) FROM content_chunks WHERE embedded_at IS NULL) as missing_embeddings,
-        (SELECT count(*) FROM links) as link_count,
-        (SELECT count(DISTINCT page_id) FROM timeline_entries) as pages_with_timeline,
+          JOIN scoped_pages src ON src.id = l.from_page_id
+          JOIN scoped_pages tgt ON tgt.id = l.to_page_id) AS link_count,
+        (SELECT count(DISTINCT te.page_id) FROM timeline_entries te JOIN scoped_pages p ON p.id = te.page_id) AS pages_with_timeline,
         (SELECT count(*) FROM entity_pages e
-         WHERE EXISTS (SELECT 1 FROM links l WHERE l.to_page_id = e.id))::float /
-          GREATEST((SELECT count(*) FROM entity_pages), 1)::float as link_coverage,
+          WHERE EXISTS (SELECT 1 FROM links l JOIN scoped_pages src ON src.id = l.from_page_id WHERE l.to_page_id = e.id))::float /
+          GREATEST((SELECT count(*) FROM entity_pages), 1)::float AS link_coverage,
         (SELECT count(*) FROM entity_pages e
-         WHERE EXISTS (SELECT 1 FROM timeline_entries te WHERE te.page_id = e.id))::float /
-          GREATEST((SELECT count(*) FROM entity_pages), 1)::float as timeline_coverage
+          WHERE EXISTS (SELECT 1 FROM timeline_entries te WHERE te.page_id = e.id))::float /
+          GREATEST((SELECT count(*) FROM entity_pages), 1)::float AS timeline_coverage,
+        (SELECT count(*) FROM entity_pages) AS entity_page_count
     `;
 
     const connected = await sql`
       SELECT p.slug,
-             (SELECT count(*) FROM links l WHERE l.from_page_id = p.id OR l.to_page_id = p.id)::int as link_count
+        (SELECT count(*) FROM links l
+          WHERE (l.from_page_id = p.id AND (${scope}::text[] IS NULL OR EXISTS (
+                   SELECT 1 FROM pages far WHERE far.id = l.to_page_id AND far.deleted_at IS NULL AND far.source_id = ANY(${scope}))))
+             OR (l.to_page_id = p.id AND (${scope}::text[] IS NULL OR EXISTS (
+                   SELECT 1 FROM pages far WHERE far.id = l.from_page_id AND far.deleted_at IS NULL AND far.source_id = ANY(${scope}))))
+        )::int AS link_count
       FROM pages p
-      WHERE p.type IN ('person', 'company')
-      ORDER BY link_count DESC
-      LIMIT 5
+      WHERE p.type IN ('person', 'company') AND p.deleted_at IS NULL
+        AND (${scope}::text[] IS NULL OR p.source_id = ANY(${scope}))
+      ORDER BY link_count DESC LIMIT 5
     `;
 
     const pageCount = Number(h.page_count);
@@ -4932,40 +4944,29 @@ export class PostgresEngine implements BrainEngine {
     const deadLinks = Number(h.dead_links);
     const linkCount = Number(h.link_count);
     const pagesWithTimeline = Number(h.pages_with_timeline);
-
-    // brain_score: 0-100 weighted average
     const linkDensity = pageCount > 0 ? Math.min(linkCount / pageCount, 1) : 0;
     const timelineCoverageWhole = pageCount > 0 ? Math.min(pagesWithTimeline / pageCount, 1) : 0;
-    const noOrphans = pageCount > 0 ? 1 - (orphanPages / pageCount) : 1;
+    const noOrphans = pageCount > 0 ? 1 - orphanPages / pageCount : 1;
     const noDeadLinks = pageCount > 0 ? 1 - Math.min(deadLinks / pageCount, 1) : 1;
-    // Per-component points. Sum equals brainScore by construction.
-    //
-    // v0.37.10.0: empty brains (pageCount === 0) get FULL marks (100/100),
-    // not 0. Semantically an empty brain has no coverage problem to penalize
-    // — there's nothing to embed, nothing to link, nothing to orphan. The
-    // pre-fix "empty = 0" caused fresh-init brains to score as critically
-    // unhealthy on `gbrain doctor`, which was a structural surprise to users
-    // who'd just successfully run init. PGLite path has the same fix.
     const embedCoverageScore = pageCount === 0 ? 35 : Math.round(embedCoverage * 35);
     const linkDensityScore = pageCount === 0 ? 25 : Math.round(linkDensity * 25);
     const timelineCoverageScore = pageCount === 0 ? 15 : Math.round(timelineCoverageWhole * 15);
     const noOrphansScore = pageCount === 0 ? 15 : Math.round(noOrphans * 15);
     const noDeadLinksScore = pageCount === 0 ? 10 : Math.round(noDeadLinks * 10);
-    const brainScore = embedCoverageScore + linkDensityScore + timelineCoverageScore + noOrphansScore + noDeadLinksScore;
-
     return {
       page_count: pageCount,
       embed_coverage: embedCoverage,
       stale_pages: Number(h.stale_pages),
       orphan_pages: orphanPages,
       missing_embeddings: Number(h.missing_embeddings),
-      brain_score: brainScore,
+      brain_score: embedCoverageScore + linkDensityScore + timelineCoverageScore + noOrphansScore + noDeadLinksScore,
       dead_links: deadLinks,
       link_coverage: Number(h.link_coverage),
       timeline_coverage: Number(h.timeline_coverage),
-      most_connected: (connected as unknown as { slug: string; link_count: number }[]).map(c => ({
-        slug: c.slug,
-        link_count: Number(c.link_count),
+      entity_page_count: Number(h.entity_page_count),
+      most_connected: (connected as unknown as { slug: string; link_count: number }[]).map(row => ({
+        slug: row.slug,
+        link_count: Number(row.link_count),
       })),
       embed_coverage_score: embedCoverageScore,
       link_density_score: linkDensityScore,
@@ -4974,7 +4975,6 @@ export class PostgresEngine implements BrainEngine {
       no_dead_links_score: noDeadLinksScore,
     };
   }
-
   // Ingest log
   async logIngest(entry: IngestLogInput): Promise<void> {
     const sql = this.sql;

@@ -5,6 +5,7 @@ import { marked } from 'marked';
 import type { BrainEngine, FileSpec } from './engine.ts';
 import { parseMarkdown } from './markdown.ts';
 import { chunkText } from './chunkers/recursive.ts';
+import { resolveMaxChunkTokens } from './embedding-input-limit.ts';
 import { chunkCodeText, chunkCodeTextFull, detectCodeLanguage, CHUNKER_VERSION } from './chunkers/code.ts';
 import { findChunkForOffset } from './chunkers/edge-extractor.ts';
 import { extractCodeRefs, imageOfCandidates } from './link-extraction.ts';
@@ -607,9 +608,10 @@ export async function importFromContent(
   const chunks: ChunkInput[] = [];
   const embedSkipped = isEmbedSkipped(parsed.frontmatter) || isQuarantined(parsed.frontmatter);
   if (!embedSkipped) {
+    const chunkOpts = { maxTokens: resolveMaxChunkTokens() };
     if (opts.parentSections && opts.parentSections.length > 0) {
       for (const section of opts.parentSections) {
-        for (const child of chunkText(section.text)) {
+        for (const child of chunkText(section.text, chunkOpts)) {
           const parentContext = [
             `Parent document: ${parsed.title}`,
             `Section: ${section.title}`,
@@ -624,12 +626,12 @@ export async function importFromContent(
         }
       }
     } else if (parsed.compiled_truth.trim()) {
-      for (const c of chunkText(parsed.compiled_truth)) {
+      for (const c of chunkText(parsed.compiled_truth, chunkOpts)) {
         chunks.push({ chunk_index: chunks.length, chunk_text: c.text, chunk_source: 'compiled_truth' });
       }
     }
     if (!opts.parentSections && parsed.timeline?.trim()) {
-      for (const c of chunkText(parsed.timeline)) {
+      for (const c of chunkText(parsed.timeline, chunkOpts)) {
         chunks.push({ chunk_index: chunks.length, chunk_text: c.text, chunk_source: 'timeline' });
       }
     }

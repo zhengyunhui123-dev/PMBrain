@@ -564,6 +564,10 @@ export interface Chunk {
   model: string | null;
   token_count: number | null;
   embedded_at: Date | null;
+  /** Multimodal discriminator returned by getChunks. */
+  modality?: 'text' | 'image';
+  /** Stored-vector truth returned by getChunks without parsing the vector. */
+  embedding_is_null?: boolean;
   /** v0.19.0 code metadata (NULL for markdown chunks). */
   language?: string | null;
   symbol_name?: string | null;
@@ -603,7 +607,7 @@ export interface StaleChunkRow {
   slug: string;
   chunk_index: number;
   chunk_text: string;
-  chunk_source: 'compiled_truth' | 'timeline' | 'office_child';
+  chunk_source: 'compiled_truth' | 'timeline' | 'fenced_code' | 'office_child';
   model: string | null;
   token_count: number | null;
   /** v0.31.12: source_id so embed --stale can thread it through getChunks/upsertChunks. */
@@ -1333,6 +1337,8 @@ export interface BrainHealth {
   link_coverage: number;
   /** Fraction of entity pages (person/company) with >= 1 structured timeline entry. */
   timeline_coverage: number;
+  /** Number of live person/company pages inside the requested source scope. */
+  entity_page_count?: number;
   /** Top 5 entities by total link count (in + out). */
   most_connected: Array<{ slug: string; link_count: number }>;
   /**

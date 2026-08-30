@@ -11,6 +11,7 @@ import {
   buildSyncManifest,
   isSyncable,
   unsyncableReason,
+  isPoisonedPath,
   resolveSlugForPath,
   formatCodeBreakdown,
 } from '../core/sync.ts';
@@ -193,6 +194,8 @@ export interface SyncOpts {
   strategy?: 'markdown' | 'code' | 'auto';
   /** Include document files (Word/PDF/Excel) alongside markdown in import/sync. */
   includeOffice?: boolean;
+  /** Glob patterns excluded from indexing; unioned with persisted sync.exclude. */
+  exclude?: string[];
   /** Import uncommitted edits/untracked files. Default false; config fallback is sync.include_working_tree. */
   workingTree?: boolean;
   /**
@@ -429,9 +432,7 @@ async function resolveWorkingTreeMode(engine: BrainEngine, requested: boolean | 
 }
 
 function filteredWorkingTreeCounts(manifest: SyncManifest, opts: SyncOpts): { added: number; modified: number; deleted: number } {
-  const syncOpts = (opts.strategy || opts.includeOffice)
-    ? { strategy: opts.strategy, includeOffice: opts.includeOffice }
-    : undefined;
+  const syncOpts = { strategy: opts.strategy, includeOffice: opts.includeOffice, exclude: opts.exclude };
   return {
     added: manifest.added.filter((path) => isSyncable(path, syncOpts)).length
       + manifest.renamed.filter((item) => isSyncable(item.to, syncOpts)).length,
@@ -977,6 +978,19 @@ function buildPartialResult(opts: {
 }
 
 async function performSyncInner(engine: BrainEngine, opts: SyncOpts): Promise<SyncResult> {
+  // Persisted indexing scope must reach internal callers (Dream, autopilot,
+  // minion jobs), not only the CLI. Per-call patterns only narrow further.
+  try {
+    const stored = await engine.getConfig('sync.exclude');
+    const storedPatterns = (stored ?? '')
+      .split(/[\n,]/)
+      .map(pattern => pattern.trim())
+      .filter(Boolean)
+      .map(pattern => pattern.endsWith('/') ? `${pattern}**` : pattern);
+    if (storedPatterns.length > 0) {
+      opts = { ...opts, exclude: [...new Set([...(opts.exclude ?? []), ...storedPatterns])] };
+    }
+  } catch { /* an unreadable scope must not break sync */ }
   // v0.41.8.0 (D9 / #1342): phase breadcrumbs. The #1342 reporter saw
   // ZERO stderr output before their sync hang, which made the bug
   // impossible to triage. Mirror the existing `[pmbrain phase] sync.git_pull`
@@ -1201,9 +1215,11 @@ async function performSyncInner(engine: BrainEngine, opts: SyncOpts): Promise<Sy
   const currentVersion = String(CHUNKER_VERSION);
   const versionMismatch = storedVersion !== null && storedVersion !== currentVersion;
   const versionNeverSet = storedVersion === null && opts.sourceId !== undefined;
-  const syncOpts = (opts.strategy || opts.includeOffice)
-    ? { strategy: opts.strategy, includeOffice: opts.includeOffice }
-    : undefined;
+  const syncOpts = {
+    strategy: opts.strategy,
+    includeOffice: opts.includeOffice,
+    exclude: opts.exclude,
+  };
   // Older Quick Maintenance runs filtered Office/PDF but still advanced the
   // Git bookmark. Reconcile committed document paths against the Source so a
   // later fixed run can backfill them even when last_commit already equals
@@ -1314,12 +1330,17 @@ async function performSyncInner(engine: BrainEngine, opts: SyncOpts): Promise<Sy
   const pageOpts = opts.sourceId ? { sourceId: opts.sourceId } : undefined;
   for (const path of unsyncableModified) {
     // v0.41.13 #1433: never delete on metafile classification.
-    if (unsyncableReason(path, syncOpts) === 'metafile') continue;
+    const reason = unsyncableReason(path, syncOpts);
+    if (reason === 'metafile') continue;
+    // A bracketed but otherwise legitimate markdown filename imported by an
+    // older version is protected. Only the actual markdown-link/control-byte
+    // poison signature is eligible for cleanup.
+    if (reason === 'malformed-path' && !isPoisonedPath(path)) continue;
     const slug = await resolveSlugByPathOrSourcePath(engine, path, opts.sourceId);
     try {
       const existing = await engine.getPage(slug, pageOpts);
       if (existing) {
-        await engine.deletePage(slug, pageOpts);
+        await engine.softDeletePages([slug], { sourceId: opts.sourceId ?? DEFAULT_SOURCE_ID });
         slog(`  Deleted un-syncable page: ${slug}`);
       }
     } catch { /* ignore */ }
@@ -1488,7 +1509,7 @@ async function performSyncInner(engine: BrainEngine, opts: SyncOpts): Promise<Sy
 
         // Phase B: batch delete (1 round-trip per batch).
         try {
-          const deleted = await engine.deletePages(slugs, deleteScopedOpts);
+          const deleted = await engine.softDeletePages(slugs, deleteScopedOpts);
           // D6: only push slugs that were actually deleted. Filters phantom
           // slugs (paths in filtered.deleted but with no DB row) so
           // downstream extract/embed don't waste lookups.
@@ -1500,8 +1521,8 @@ async function performSyncInner(engine: BrainEngine, opts: SyncOpts): Promise<Sy
           // (matching the existing import-loop pattern at sync.ts:~1350).
           for (let j = 0; j < slugs.length; j++) {
             try {
-              await engine.deletePage(slugs[j], deleteScopedOpts);
-              pagesAffected.push(slugs[j]);
+              const flipped = await engine.softDeletePages([slugs[j]], deleteScopedOpts);
+              pagesAffected.push(...flipped);
             } catch (perSlugErr) {
               failedFiles.push({
                 path: batch[j],
@@ -1525,8 +1546,8 @@ async function performSyncInner(engine: BrainEngine, opts: SyncOpts): Promise<Sy
         }
         const slug = await resolveSlugByPathOrSourcePath(engine, path, undefined);
         try {
-          await engine.deletePage(slug, deleteOpts);
-          pagesAffected.push(slug);
+          const flipped = await engine.softDeletePages([slug], { sourceId: DEFAULT_SOURCE_ID });
+          pagesAffected.push(...flipped);
         } catch (err) {
           failedFiles.push({
             path,
@@ -2082,6 +2103,21 @@ async function performFullSync(
   }
   const committedSnapshot = workingTreeEnabled ? null : materializeCommittedTree(repoPath, headCommit);
   const importPath = committedSnapshot?.tree ?? repoPath;
+  // Capture the authoritative path set while a materialized Git snapshot is
+  // still alive. The snapshot is cleaned immediately after runImport, but
+  // reconciliation below must use the exact same baseline that was imported.
+  const authoritativePaths = new Set(
+    collectSyncableFiles(importPath, {
+      strategy: opts.strategy ?? 'markdown',
+      includeOffice: opts.includeOffice,
+    })
+      .map(abs => relative(importPath, abs).replace(/\\/g, '/'))
+      .filter(path => isSyncable(path, {
+        strategy: opts.strategy,
+        includeOffice: opts.includeOffice,
+        exclude: opts.exclude,
+      })),
+  );
   // Dry-run: walk the repo, count syncable files, return without writing.
   // Fixes the silent-write-on-dry-run bug where performFullSync called
   // runImport unconditionally regardless of opts.dryRun.
@@ -2092,10 +2128,17 @@ async function performFullSync(
   // code --dry-run` always reported zero files even when ~1500 code
   // files were waiting.
   if (opts.dryRun) {
-    const allFiles = collectSyncableFiles(importPath, {
+    let allFiles = collectSyncableFiles(importPath, {
       strategy: opts.strategy ?? 'markdown',
       includeOffice: opts.includeOffice,
     });
+    if (opts.exclude?.length) {
+      allFiles = allFiles.filter(path => isSyncable(relative(importPath, path), {
+        strategy: opts.strategy,
+        includeOffice: opts.includeOffice,
+        exclude: opts.exclude,
+      }));
+    }
     slog(
       `Full-sync dry run (strategy=${opts.strategy ?? 'markdown'}): ` +
       `${allFiles.length} file(s) would be imported ` +
@@ -2155,6 +2198,7 @@ async function performFullSync(
       sourceId: opts.sourceId,
       checkpointKey: fullCheckpointKey,
       managedBookmark: true,
+      exclude: opts.exclude,
     });
   } finally {
     committedSnapshot?.cleanup();
@@ -2204,6 +2248,59 @@ async function performFullSync(
     serr(`  Auto-skipped ${gate.autoSkipped.length} chronic file failure(s); health checks keep them visible.`);
   }
 
+  // A full import is authoritative for file-backed rows in this source, but
+  // runImport itself only upserts files that still exist. Reconcile active
+  // rows whose recorded source_path is genuinely absent. Manual/DB-only rows
+  // (NULL source_path), metafiles, other strategies and persisted exclusions
+  // remain protected. Sync removals are recoverable tombstones; cycle purge
+  // owns the eventual hard delete after the 72-hour window.
+  let reconciledDeletes = 0;
+  if (opts.sourceId) {
+    const sid = opts.sourceId;
+    const rows = await engine.executeRaw<{ slug: string; source_path: string }>(
+      `SELECT slug, source_path FROM pages
+       WHERE source_id = $1 AND source_path IS NOT NULL AND deleted_at IS NULL`,
+      [sid],
+    );
+    const stale = rows.filter(row => {
+      const path = row.source_path.replace(/\\/g, '/');
+      if (authoritativePaths.has(path)) return false;
+      const reason = unsyncableReason(path, {
+        strategy: opts.strategy,
+        includeOffice: opts.includeOffice,
+        exclude: opts.exclude,
+      });
+      return reason === null || (reason === 'malformed-path' && isPoisonedPath(path));
+    });
+    // Fail closed on a suspicious broad sweep. Real small deletions still
+    // reconcile, while a path-normalization/repo-root mistake cannot wipe a
+    // mature source in one run.
+    const suspiciousMassDelete = rows.length >= 10 && stale.length > rows.length / 2;
+    if (suspiciousMassDelete) {
+      serr(
+        `  WARNING: refusing to reconcile ${stale.length}/${rows.length} active file-backed pages; ` +
+        `the repo path or path normalization is likely wrong. No pages were deleted.`,
+      );
+    } else {
+      const staleSlugs = stale.map(row => row.slug);
+      for (let i = 0; i < staleSlugs.length; i += DELETE_BATCH_SIZE) {
+        const batch = staleSlugs.slice(i, i + DELETE_BATCH_SIZE);
+        try {
+          reconciledDeletes += (await engine.softDeletePages(batch, { sourceId: sid })).length;
+        } catch {
+          for (const slug of batch) {
+            try {
+              reconciledDeletes += (await engine.softDeletePages([slug], { sourceId: sid })).length;
+            } catch { /* best-effort: the next full sync retries */ }
+          }
+        }
+      }
+      if (reconciledDeletes > 0) {
+        slog(`  Reconciled ${reconciledDeletes} stale page(s) as recoverable soft deletes (72h).`);
+      }
+    }
+  }
+
   // Full sync doesn't track pagesAffected, so fall back to embed --stale.
   // v0.37 fix wave (Lane D.3 + CDX2-8): switched to runEmbedCore for the
   // same reason as the incremental path — surface dim-mismatch via hint
@@ -2231,7 +2328,7 @@ async function performFullSync(
     toCommit: headCommit,
     added: result.imported,
     modified: 0,
-    deleted: 0,
+    deleted: reconciledDeletes,
     renamed: 0,
     chunksCreated: result.chunksCreated,
     embedded,
@@ -2266,6 +2363,7 @@ export async function runSync(engine: BrainEngine, args: string[]) {
                        文件差异超过 100 个时默认为 4，否则串行执行。
   --source <id>        仅同步指定来源，默认使用大脑的默认来源。
   --repo <path>        大脑仓库路径，默认使用 'pmbrain init' 保存的路径。
+  --exclude <glob>     排除匹配 glob 的文件（可重复传入；相对于来源根目录匹配）。
   --full               强制完整重新同步，通常无需使用。
   --working-tree       同时同步未提交修改和未跟踪文件。默认关闭；也可通过
                        sync.include_working_tree=true 持久开启。
@@ -2416,6 +2514,12 @@ export async function runSync(engine: BrainEngine, args: string[]) {
     process.exit(1);
   }
   const strategyArg = args.find((a, i) => args[i - 1] === '--strategy') as SyncOpts['strategy'] | undefined;
+  const excludePatterns: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--exclude' && i + 1 < args.length && !args[i + 1].startsWith('--')) {
+      excludePatterns.push(args[i + 1]);
+    }
+  }
   const includeOffice = args.includes('--include-office');
   const concurrencyStr = args.find((a, i) => args[i - 1] === '--concurrency' || args[i - 1] === '--workers');
   const parallelStr = args.find((a, i) => args[i - 1] === '--parallel');
@@ -2653,6 +2757,7 @@ export async function runSync(engine: BrainEngine, args: string[]) {
         sourceId: src.id,
         strategy: cfg.strategy,
         includeOffice: includeOffice || cfg.includeOffice === true,
+        exclude: excludePatterns.length > 0 ? excludePatterns : undefined,
         workingTree,
         concurrency,
         signal: controller?.signal,
@@ -2853,7 +2958,9 @@ export async function runSync(engine: BrainEngine, args: string[]) {
   singleSourceTimer?.unref?.();
   const opts: SyncOpts = {
     repoPath, dryRun, full, noPull, noEmbed, skipFailed, retryFailed, sourceId,
-    strategy: strategyArg, includeOffice, workingTree, concurrency,
+    strategy: strategyArg, includeOffice,
+    exclude: excludePatterns.length > 0 ? excludePatterns : undefined,
+    workingTree, concurrency,
     signal: singleSourceController?.signal,
   };
 

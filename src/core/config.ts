@@ -844,6 +844,7 @@ export const KNOWN_CONFIG_KEYS: readonly string[] = [
   'sync.repo_path',
   'sync.last_commit',
   'sync.include_working_tree',
+  'sync.exclude',
   // DB-plane (v0.32.3 search modes + related)
   'search.mode',
   'search.cache.enabled',

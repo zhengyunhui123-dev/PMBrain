@@ -414,6 +414,17 @@ export async function runPhaseSynthesize(
       });
     }
 
+    // Expiry is enforced on reads; housekeeping is best-effort so a sweep
+    // outage cannot block otherwise valid Dream synthesis work.
+    try {
+      const swept = await engine.sweepDreamVerdicts();
+      if (swept > 0) process.stderr.write(`[dream] swept ${swept} expired verdict cache row(s)\n`);
+    } catch (e) {
+      process.stderr.write(
+        `[dream] warning: verdict cache sweep failed: ${e instanceof Error ? e.message : String(e)}\n`,
+      );
+    }
+
     // Structured significance triage (cached only when the cheap-model
     // response is complete and parseable). Legacy boolean-only rows are
     // deliberately re-judged so the expensive pass can consume segments,

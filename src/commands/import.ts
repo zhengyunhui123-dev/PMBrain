@@ -14,6 +14,7 @@ import {
   isImageFilePath as isImageFilePathFromSync,
   isOfficeTransientFile,
   type SyncStrategy,
+  matchesAnyGlob,
 } from '../core/sync.ts';
 import { sortNewestFirst } from '../core/sort-newest-first.ts';
 import {
@@ -65,6 +66,8 @@ export async function runImport(
     checkpointKey?: OpCheckpointKey;
     /** Sync owns failure gating and bookmark advancement for this import. */
     managedBookmark?: boolean;
+    /** Sync exclusion globs, matched against the import-root-relative path. */
+    exclude?: string[];
   } = {},
 ): Promise<RunImportResult> {
   const noEmbed = args.includes('--no-embed');
@@ -220,6 +223,13 @@ export async function runImport(
   console.error(
     `[pmbrain phase] import.collect_files done ${Date.now() - _walkT0}ms files=${allFiles.length}`,
   );
+  if (opts.exclude?.length) {
+    const before = allFiles.length;
+    allFiles = allFiles.filter(path => !matchesAnyGlob(relative(dir, path), opts.exclude));
+    if (before > 0 && allFiles.length === 0) {
+      console.warn(`[pmbrain sync] No files matched after applying ${opts.exclude.length} exclude pattern(s).`);
+    }
+  }
   const fileTypeLabel = strategy === 'code' ? 'code'
     : strategy === 'auto' ? 'syncable' : 'markdown';
   console.log(`Found ${allFiles.length} ${fileTypeLabel} files`);

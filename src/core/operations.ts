@@ -2412,12 +2412,16 @@ const get_timeline: Operation = {
 
 // --- Admin ---
 
+function diagnosticScope(ctx: OperationContext): { sourceId?: string; sourceIds?: string[] } {
+  return ctx.remote === false ? {} : sourceScopeOpts(ctx);
+}
+
 const get_stats: Operation = {
   name: 'get_stats',
   description: 'Brain statistics (page count, chunk count, etc.)',
   params: {},
   handler: async (ctx) => {
-    return ctx.engine.getStats();
+    return ctx.engine.getStats(diagnosticScope(ctx));
   },
   scope: 'admin',
   cliHints: { name: 'stats' },
@@ -2428,7 +2432,7 @@ const get_health: Operation = {
   description: 'Brain health dashboard (embed coverage, stale pages, orphans)',
   params: {},
   handler: async (ctx) => {
-    return ctx.engine.getHealth();
+    return ctx.engine.getHealth(diagnosticScope(ctx));
   },
   scope: 'admin',
   cliHints: { name: 'health' },
@@ -2468,7 +2472,7 @@ const get_brain_identity: Operation = {
   description: 'Brain identity + counters for thin-client banner. Returns version, engine kind, and page/chunk counts. Read-scope.',
   params: {},
   handler: async (ctx) => {
-    const stats = await ctx.engine.getStats();
+    const stats = await ctx.engine.getStats(diagnosticScope(ctx));
     return {
       version: VERSION,
       engine: ctx.engine.kind,

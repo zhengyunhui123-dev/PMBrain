@@ -4,6 +4,7 @@ import {
   extractPageTitle,
   hasBacklink,
   buildBacklinkEntry,
+  insertBacklinkEntry,
 } from '../src/commands/backlinks.ts';
 
 describe('extractEntityRefs', () => {
@@ -73,9 +74,26 @@ describe('hasBacklink', () => {
 });
 
 describe('buildBacklinkEntry', () => {
-  test('builds properly formatted entry', () => {
-    const entry = buildBacklinkEntry('Q1 Review', '../../meetings/q1-review.md', '2026-04-11');
-    expect(entry).toBe('- **2026-04-11** | Referenced in [Q1 Review](../../meetings/q1-review.md)');
+  test('builds an undated extension-less entry for a directory-shaped source', () => {
+    const entry = buildBacklinkEntry('Q1 Review', '../../meetings/q1-review.md');
+    expect(entry).toBe('- Referenced in [Q1 Review](../../meetings/q1-review)');
+    expect(entry).not.toMatch(/\*\*\d{4}-\d{2}-\d{2}\*\*/);
+  });
+
+  test('keeps .md for a root-level source so the next backlink scan credits it', () => {
+    expect(buildBacklinkEntry('Inbox', '../inbox.md')).toBe('- Referenced in [Inbox](../inbox.md)');
+  });
+});
+
+describe('insertBacklinkEntry', () => {
+  test('creates Referenced by before Timeline without changing chronology', () => {
+    const content = '---\ntitle: Alice\n---\n# Alice\n\n## Timeline\n\n- **2025-01-01** | Joined\n';
+    const bodyStart = content.indexOf('# Alice');
+    const updated = insertBacklinkEntry(content, bodyStart, '- Referenced in [Standup](../meetings/standup)');
+    expect(updated.indexOf('## Referenced by')).toBeLessThan(updated.indexOf('## Timeline'));
+    expect(updated).toContain('- Referenced in [Standup](../meetings/standup)');
+    expect(updated).not.toContain('**2026-');
+    expect(updated.startsWith('---\ntitle: Alice\n---\n')).toBe(true);
   });
 });
 

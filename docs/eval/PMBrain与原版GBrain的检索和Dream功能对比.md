@@ -2,9 +2,9 @@
 
 维护日期：2026-08-30
 
-PMBrain 基线：1.3.14，本轮完成历史关系可靠回填、Dream embed 中止/安静输出、Dream P0、Query cache P1、Retrieval Reflex 与 Advisor 可适用行为对齐
+PMBrain 基线：1.3.15，本轮完成历史关系可靠回填、Dream embed 中止/安静输出、Dream P0、Query cache P1、Retrieval Reflex、Advisor 与 GBrain 0.47.6.0 P0 底层行为对齐
 
-GBrain 基线：`D:\cursor-claude\gbrain` 的最新本地 `master`，commit `d9909cddd`，VERSION `0.47.5.0`。已逐阶段复核 Dream 主序列，只记录会改变运行结果、数据边界或任务生命周期的真实行为差异，不重新实现 PMBrain 已有阶段。
+GBrain 基线：`D:\cursor-claude\gbrain` 的最新本地 `master`，commit `7b7921d86141c4e4086e50828de9a867a6814247`，VERSION `0.47.6.0`；本地 HEAD 与 `origin/master` 一致且工作区干净。已逐阶段复核 Dream 主序列，并进一步复核同步、数据库诊断、链接回写与 Embedding 底层，只记录会改变运行结果、数据边界或任务生命周期的真实行为差异，不重新实现 PMBrain 已有能力。
 
 > 两个项目采用不同版本规则，版本号不能直接比较大小。本对比以实际代码、阶段顺序、配置解析和测试入口为准，不以版本号推断能力。
 
@@ -64,7 +64,7 @@ PMBrain 不是重新实现了一套 RAG 和 Dream：
 
 ## 4. Dream：沿用原版 GBrain 的能力
 
-### GBrain 0.47.5.0 全阶段复核结论
+### GBrain 0.47.6.0 全阶段复核结论
 
 本轮逐阶段检查 `synthesize → extract → extract_facts → extract_atoms → patterns → synthesize_concepts → takes → calibration → drift → enrich_thin → embed → orphans...`。原有主流程完整，确认并处理的 P0 只有三组：
 
@@ -136,6 +136,16 @@ lint → backlinks → sync → synthesize → extract → extract_facts
 
 这些项目不能算作 PMBrain 新增能力。
 
+### GBrain 0.47.6.0 P0 底层行为复核
+
+| P0 真实行为差异 | PMBrain 1.3.15 处理 | 数据边界 |
+|---|---|---|
+| 同步删除仍会直接消失，exclude 未贯穿完整同步 | **已对齐**：删除、异常路径清理与完整同步对账统一写 72 小时软删除；重新导入清除墓碑；`sync.exclude` 与可重复 `--exclude` 同时生效 | 不主动硬删知识页；只有既有 purge 在 72 小时后清理过期墓碑 |
+| `get_stats` / `get_health` / brain identity 未按 Source 授权隔离 | **已对齐**：两种引擎的计数、边度、孤立页与实体页分母按允许 Source 过滤，远程 Operation 传入授权范围 | 不改变页面内容，只修正可见统计口径 |
+| backlinks 把无日期引用混入 Timeline | **已对齐**：统一写入 `## Referenced by`，并放在 Timeline 前；保留历史时间线顺序 | 仅影响后续显式 backlinks 写回，不批量覆盖 Wiki |
+| Embedding 卡死、超模型输入和旧超大 chunk 无自愈 | **已对齐**：运行级 stall watchdog、API 活性时间、单 heartbeat 30 秒硬超时与请求取消、模型 token 上限、旧 chunk 安全拆分 | 只重写确认为超限且内容快照未变化的 chunk；保留 Source、模态与代码元数据 |
+| Dream verdict 永久缓存 | **已对齐**（Schema 120）：默认 30 天 TTL，读时忽略过期项，Dream 周期做尽力清理 | 只迁移缓存元数据，不改知识正文、关系、事实或向量 |
+
 ### Advisor 0.47.5.0 逐项行为 diff
 
 | GBrain Advisor 差异 | PMBrain 1.3.14 处理 | 判定依据 |
@@ -172,7 +182,7 @@ lint → backlinks → sync → synthesize → extract → extract_facts
 5. Query cache 不再只凭“向量很近”判断同一个问题；无关中文问题即使落入相近 embedding 区域也不会串用缓存。带动态日期、类型、分页、精确排除或代码过滤的请求直接走真实检索，缓存命中与未命中的返回数量保持同一 mode 规则。
 6. Retrieval Reflex 已接入 Context Engine：当前 turn 或最近窗口提到已知实体时，最多补充 3 个 Source 内指针，引导 Agent 按需调用 `get_page`，不会改写消息或自动展开整页正文。PGLite 通过当前 Sidecar 的单所有者 IPC 查询，Postgres 复用缓存直连；1500ms 超时或任何解析失败都静默放弃，不阻断用户对话。Doctor 可区分“已启用但尚未触发”“PGLite Sidecar 未运行”和最近 7 天已真实交付。
 
-数据库兼容：Schema 116 只为 `dream_verdicts` 增加可空字段；Schema 117 只为 `minion_jobs` 增加可空的私有队列 owner/token/lease 字段和索引；Schema 118 新增空的 `context_volunteer_events` 交付遥测表及索引，不回填历史内容，不保存原始对话文本，并由 Dream purge 清理 90 天前记录。三次迁移均不清空知识数据，也不修改现有知识页、原始资料或向量。旧布尔判定按需重判，旧队列记录按无 owner 元数据处理。
+数据库兼容：Schema 116 只为 `dream_verdicts` 增加可空结构化字段；Schema 117 只为 `minion_jobs` 增加可空的私有队列 owner/token/lease 字段和索引；Schema 118 新增空的 `context_volunteer_events` 交付遥测表及索引；Schema 119 增加 PGLite 中文 trigram 候选索引；Schema 120 只为 `dream_verdicts` 增加 `expires_at`、索引及基于 `judged_at + 30 days` 的回填，回填完成后收紧为非空缓存元数据。以上迁移均不清空知识数据，也不修改现有知识页、原始资料或向量；交付遥测不保存原始对话文本并由 Dream purge 清理 90 天前记录，过期 verdict 缓存按需重判。
 
 ## 8. Embedding 差异结论
 

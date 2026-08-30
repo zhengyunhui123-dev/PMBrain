@@ -1245,7 +1245,7 @@ export async function registerBuiltinHandlers(worker: MinionWorker, engine: Brai
     // readable via `gbrain jobs get <id>`). Stderr from the worker daemon
     // only emits coarse job-start / job-done lines; per-page detail lives
     // in the DB. Per Codex review #20.
-    await runEmbedCore(engine, {
+    const result = await runEmbedCore(engine, {
       slug: typeof job.data.slug === 'string' ? job.data.slug : undefined,
       slugs: Array.isArray(job.data.slugs) ? (job.data.slugs as string[]) : undefined,
       all: !!job.data.all,
@@ -1256,6 +1256,8 @@ export async function registerBuiltinHandlers(worker: MinionWorker, engine: Brai
         job.updateProgress({ done, total, embedded, phase: 'embed.pages' }).catch(() => {});
       },
     });
+    const { assertEmbedNotStalled } = await import('../core/embed-stall.ts');
+    assertEmbedNotStalled(result);
     return { embedded: true };
   });
 
@@ -1789,13 +1791,16 @@ export async function registerBuiltinHandlers(worker: MinionWorker, engine: Brai
       batchSize?: number;
       priority?: 'recent';
     };
-    return await runEmbedCore(engine, {
+    const result = await runEmbedCore(engine, {
       stale: true,
       catchUp: true,
       batchSize: data.batchSize,
       priority: data.priority,
       sourceId: data.sourceId,
     });
+    const { assertEmbedNotStalled } = await import('../core/embed-stall.ts');
+    assertEmbedNotStalled(result);
+    return result;
   });
 
   // v0.42 type-unification (T10): unify-types PROTECTED handler. Pack-upgrade

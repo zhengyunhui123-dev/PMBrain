@@ -40,6 +40,12 @@ import { type DbPacer, createDbPacer, createNoopPacer } from '../../db-pacer.ts'
 import type { BrainEngine } from '../../engine.ts';
 import { loadPaceModeConfig, readPaceEnv, resolvePaceMode } from '../../pace-mode.ts';
 import type { MinionJobContext } from '../types.ts';
+import {
+  createEmbedStallWatchdog,
+  resolveEmbedStallAbortSeconds,
+  assertEmbedNotStalled,
+  EMBED_STALL_CLEANUP_DEADLINE_MS,
+} from '../../embed-stall.ts';
 
 const DEFAULT_MAX_USD_PER_JOB = 10;
 const EMBED_BACKFILL_LOCK_TTL_MIN = 60;
@@ -144,14 +150,29 @@ export function makeEmbedBackfillHandler(engine: BrainEngine) {
     const { pacer, concurrency } = await resolveBackfillPacer(engine);
 
     try {
-      const result = await withBudgetTracker(tracker, async () =>
+      const stallAbort = new AbortController();
+      const forwardAbort = () => stallAbort.abort(job.signal?.reason);
+      if (job.signal) {
+        if (job.signal.aborted) forwardAbort();
+        else job.signal.addEventListener('abort', forwardAbort, { once: true });
+      }
+      let embeddedProgress = 0;
+      const stallSeconds = resolveEmbedStallAbortSeconds();
+      const watchdog = stallSeconds > 0
+        ? createEmbedStallWatchdog({
+            thresholdSeconds: stallSeconds,
+            readProgress: () => embeddedProgress,
+          })
+        : undefined;
+      const run = withBudgetTracker(tracker, async () =>
         embedStaleForSource(engine, sourceId, {
           model: getEmbeddingModel(),
           batchSize,
           pacer,
           ...(concurrency !== undefined ? { concurrency } : {}),
-          signal: job.signal,
+          signal: stallAbort.signal,
           onProgress: ({ embedded, chunksProcessed, cursor }) => {
+            embeddedProgress = embedded;
             // Fire-and-forget; updateProgress returns a Promise but the
             // handler is sync inside the loop.
             void job.updateProgress({
@@ -162,7 +183,35 @@ export function makeEmbedBackfillHandler(engine: BrainEngine) {
             });
           },
         }),
-      );
+      ).then(value => ({ value }), error => ({ error }));
+      let captured: Awaited<typeof run>;
+      try {
+        if (!watchdog) {
+          captured = await run;
+        } else {
+          const outcome = await Promise.race([
+            run.then(value => ({ kind: 'done' as const, value })),
+            watchdog.stalled.then(() => ({ kind: 'stalled' as const })),
+          ]);
+          if (outcome.kind === 'stalled') {
+            stallAbort.abort(new Error('stall_timeout'));
+            let deadline: ReturnType<typeof setTimeout> | undefined;
+            await Promise.race([
+              run,
+              new Promise<void>(resolve => { deadline = setTimeout(resolve, EMBED_STALL_CLEANUP_DEADLINE_MS); }),
+            ]);
+            if (deadline) clearTimeout(deadline);
+            assertEmbedNotStalled({ reason: 'stall_timeout', embedded: embeddedProgress });
+            throw new Error('stall_timeout');
+          }
+          captured = outcome.value;
+        }
+      } finally {
+        watchdog?.stop();
+        job.signal?.removeEventListener('abort', forwardAbort);
+      }
+      if ('error' in captured) throw captured.error;
+      const result = captured.value;
 
       if (result.aborted) {
         return {

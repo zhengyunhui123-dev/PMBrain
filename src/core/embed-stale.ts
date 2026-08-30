@@ -22,6 +22,7 @@ import type { ChunkInput } from './types.ts';
 import { embedBatchWithBackoff } from '../commands/embed.ts';
 import { runEmbeddingExecutionPool } from './ai/embedding-execution-profile.ts';
 import { AbortError, type DbPacer, createNoopPacer, observed } from './db-pacer.ts';
+import { healOversizedPageChunks, healedChunksToStaleRows } from './embed-oversize-heal.ts';
 
 /** Last visited (page_id, chunk_index) for keyset-resume across runs. */
 export interface StaleCursor {
@@ -166,10 +167,17 @@ export async function embedStaleForSource(
     const keys = Array.from(byKey.keys());
 
     async function embedOneKey(key: string): Promise<void> {
-      const stale = byKey.get(key)!;
+      let stale = byKey.get(key)!;
       const keySourceId = stale[0]?.source_id ?? sourceId;
       const slug = stale[0].slug;
       try {
+        const healed = await observed(pacer, () =>
+          healOversizedPageChunks(engine, slug, { sourceId: keySourceId }),
+        );
+        if (healed.changed) {
+          stale = healedChunksToStaleRows(healed.chunks, slug, keySourceId);
+          if (stale.length === 0) return;
+        }
         const embeddings = await embedFn(
           stale.map((c) => c.chunk_text),
           { abortSignal: signal },

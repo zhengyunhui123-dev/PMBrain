@@ -583,7 +583,11 @@ async function acquireDbCycleLock(engine: BrainEngine, sourceId?: string): Promi
   }
   if (handle === null) return null;
   return {
-    refresh: handle.refresh,
+    refresh: async () => {
+      if (!(await handle.refresh())) {
+        throw new Error(`cycle lock '${lockId}' is no longer owned by this process`);
+      }
+    },
     release: handle.release,
   };
 }
