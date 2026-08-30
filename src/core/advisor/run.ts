@@ -5,6 +5,9 @@ import { collectSchemaPack } from './collect-schema-pack.ts';
 import { collectStalledJobs } from './collect-stalled-jobs.ts';
 import { collectUsageShape } from './collect-usage-shape.ts';
 import { collectSetupSmells } from './collect-setup-smells.ts';
+import { collectUninstalledBundled } from './collect-uninstalled-bundled.ts';
+import { collectMcpClientFit } from './collect-mcp-client-fit.ts';
+import { collectBackupCoverage } from './collect-backup-coverage.ts';
 
 export const COLLECTORS: AdvisorCollector[] = [
   collectVersion,
@@ -13,6 +16,9 @@ export const COLLECTORS: AdvisorCollector[] = [
   collectStalledJobs,
   collectUsageShape,
   collectSetupSmells,
+  collectUninstalledBundled,
+  collectMcpClientFit,
+  collectBackupCoverage,
 ];
 
 const SEV_RANK: Record<AdvisorSeverity, number> = { critical: 0, warn: 1, info: 2 };

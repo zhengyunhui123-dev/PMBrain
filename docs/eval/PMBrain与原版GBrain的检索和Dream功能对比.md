@@ -1,8 +1,8 @@
 # PMBrain 与原版 GBrain 的检索和 Dream 功能对比
 
-维护日期：2026-08-29
+维护日期：2026-08-30
 
-PMBrain 基线：1.3.9，本轮完成历史关系可靠回填、Dream embed 中止/安静输出、Dream P0、Query cache P1 与 Retrieval Reflex 行为对齐
+PMBrain 基线：1.3.14，本轮完成历史关系可靠回填、Dream embed 中止/安静输出、Dream P0、Query cache P1、Retrieval Reflex 与 Advisor 可适用行为对齐
 
 GBrain 基线：`D:\cursor-claude\gbrain` 的最新本地 `master`，commit `d9909cddd`，VERSION `0.47.5.0`。已逐阶段复核 Dream 主序列，只记录会改变运行结果、数据边界或任务生命周期的真实行为差异，不重新实现 PMBrain 已有阶段。
 
@@ -135,6 +135,17 @@ lint → backlinks → sync → synthesize → extract → extract_facts
 ## 6. 当前尚未同步或明确暂缓的上游能力
 
 这些项目不能算作 PMBrain 新增能力。
+
+### Advisor 0.47.5.0 逐项行为 diff
+
+| GBrain Advisor 差异 | PMBrain 1.3.14 处理 | 判定依据 |
+|---|---|---|
+| Backup coverage | **已按 PMBrain 数据形态对齐**：对有内容的 PGLite 检查 verified cold backup 是否存在及是否超过 30 天；只读 manifest，不打开、恢复、清理或改写数据库，输出不含本机路径 | Work Desktop 已有经过恢复验证的 PGLite 备份体系；直接复用比复制 GBrain 的 bootstrap workspace 缓存更可靠 |
+| MCP client fit | **已做当前 Schema 可执行的适配**：依据两种引擎已有的 `oauth_clients + mcp_request_log`，只在 30 天至少 10 次请求、至少 5 次失败且失败率不低于 25% 时提醒；远程结果只给聚合数，不暴露 client id/name | GBrain 的 `starter/full` right-sizing 依赖 PMBrain 尚不存在的 `oauth_clients.surface`、surface ceiling 和 `rescope-client`，不得生成无法执行的修复建议 |
+| Recommended bundled skills | **已对齐**：post-install 与 recurring Advisor 共用当前推荐集合，补入 `cold-start`；仅本地 workspace 检查，必须征得用户同意后才安装 | PMBrain 已有 bundled skill、安装 receipt 和 `skillpack install`，无需新架构或数据迁移 |
+| Brain-resident pack nag | **暂缓** | PMBrain 尚未移植 GBrain 的 brain-resident locate/nag ledger；直接检查会重复打扰且缺少 dismiss/snooze 上限 |
+| Chronicle conflicts | **暂缓** | 仍依赖 `event_page_id` 与 ontology conflict 数据模型，当前产品边界未批准 |
+| Advisor 公共排序、单 collector 故障隔离、远程 workspace 过滤、历史与 apply 白名单 | **已对齐或 PMBrain 更严格** | 现有实现已覆盖；`--apply` 额外限制 `pmbrain` argv、dispatch allowlist 与 Source id |
 
 | 上游能力 | PMBrain 状态 | 建议 |
 |---|---|---|
