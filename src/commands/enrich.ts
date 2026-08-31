@@ -34,7 +34,7 @@ import type { EnrichCandidate, PageType } from '../core/types.ts';
 import { operations } from '../core/operations.ts';
 import type { OperationContext } from '../core/operations.ts';
 import { isAvailable, chat, getChatModel, withBudgetTracker } from '../core/ai/gateway.ts';
-import { BudgetTracker, BudgetExhausted } from '../core/budget/budget-tracker.ts';
+import { BudgetTracker, BudgetExhausted, loadPricingOverrides } from '../core/budget/budget-tracker.ts';
 import { hybridSearch } from '../core/search/hybrid.ts';
 import { serializeMarkdown } from '../core/markdown.ts';
 import { listSources } from '../core/sources-ops.ts';
@@ -511,6 +511,7 @@ export async function runEnrichCore(
   const tracker = opts.budgetTracker ?? new BudgetTracker({
     maxCostUsd: opts.maxCostUsd ?? DEFAULT_MAX_COST_USD,
     label: `enrich:${sourceId}`,
+    pricingOverrides: await loadPricingOverrides(engine),
   });
   try {
     if (opts.budgetTracker) {

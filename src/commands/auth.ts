@@ -328,6 +328,25 @@ async function revokeClient(clientId: string) {
   }
 }
 
+export async function rescopeClient(clientId: string, args: string[]): Promise<void> {
+  const surfaceIndex = args.indexOf('--surface');
+  const raw = surfaceIndex >= 0 ? args[surfaceIndex + 1] : undefined;
+  if (!clientId || !raw || !['verbs', 'starter', 'full', 'clear'].includes(raw)) {
+    throw new Error('Usage: auth rescope-client <client_id> --surface verbs|starter|full|clear');
+  }
+  const surface = raw === 'clear' ? null : raw as 'verbs' | 'starter' | 'full';
+  await withConfiguredSql(async (sql) => {
+    const { GBrainOAuthProvider } = await import('../core/oauth-provider.ts');
+    const provider = new GBrainOAuthProvider({ sql });
+    await provider.rescopeClient(clientId, surface);
+    console.log(
+      surface === null
+        ? `OAuth client "${clientId}" surface pin cleared.`
+        : `OAuth client "${clientId}" surface pinned to ${surface}.`,
+    );
+  });
+}
+
 /**
  * Parse `gbrain auth register-client` argv. Walks the array once instead of
  * the prior `indexOf`-based pattern which (a) silently took only the FIRST
@@ -481,6 +500,7 @@ export async function runAuth(args: string[]): Promise<void> {
       return;
     }
     case 'register-client': await registerClient(rest[0], rest.slice(1)); return;
+    case 'rescope-client': await rescopeClient(rest[0], rest.slice(1)); return;
     case 'revoke-client': await revokeClient(rest[0]); return;
     case 'test': {
       const tokenIdx = rest.indexOf('--token');
@@ -513,6 +533,7 @@ Usage:
      --token-endpoint-auth-method <method>                 (v0.41.3+; client_secret_post | client_secret_basic | none;
                                                             'none' = public PKCE-only client, no secret minted)
   gbrain auth revoke-client <client_id>                   Hard-delete an OAuth 2.1 client (cascades to tokens + codes)
+  gbrain auth rescope-client <client_id> --surface <tier> Pin OAuth tools to verbs|starter|full; use clear to remove the pin
   gbrain auth test <url> --token <token>                  Smoke-test a remote MCP server
 `);
   }

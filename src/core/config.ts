@@ -74,6 +74,8 @@ function stripJsonBom(content: string): string {
 export interface GBrainConfig {
   [key: string]: unknown;
   engine: 'postgres' | 'pglite';
+  /** MCP catalog ceiling. full preserves compatibility; starter/verbs reduce agent context. */
+  mcp_surface?: 'verbs' | 'starter' | 'full';
   database_url?: string;
   database_path?: string;
   /**
@@ -339,6 +341,7 @@ export interface GBrainConfig {
     publish_skills?: boolean;
     publish_advisor?: boolean;
     skills_dir?: string;
+    default_surface_dcr?: 'verbs' | 'starter' | 'full';
   };
 }
 

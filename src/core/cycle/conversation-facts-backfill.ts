@@ -43,7 +43,7 @@
  */
 
 import type { BrainEngine } from '../engine.ts';
-import { BudgetTracker, BudgetExhausted } from '../budget/budget-tracker.ts';
+import { BudgetTracker, BudgetExhausted, loadPricingOverrides } from '../budget/budget-tracker.ts';
 import { withBudgetTracker } from '../ai/gateway.ts';
 import { listSources } from '../sources-ops.ts';
 import {
@@ -192,6 +192,7 @@ export async function runPhaseConversationFactsBackfill(
   const brainTracker = new BudgetTracker({
     maxCostUsd: cfg.maxTotalCostUsd,
     label: 'conversation_facts_backfill:brain-wide',
+    pricingOverrides: await loadPricingOverrides(engine),
   });
 
   const perSourceResults: Record<string, ExtractConversationFactsResult & { error?: string }> = {};

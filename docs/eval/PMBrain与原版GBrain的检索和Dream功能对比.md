@@ -1,10 +1,10 @@
 # PMBrain 与原版 GBrain 的检索和 Dream 功能对比
 
-维护日期：2026-08-30
+维护日期：2026-08-31
 
-PMBrain 基线：1.3.15，本轮完成历史关系可靠回填、Dream embed 中止/安静输出、Dream P0、Query cache P1、Retrieval Reflex、Advisor 与 GBrain 0.47.6.0 P0 底层行为对齐
+PMBrain 基线：1.3.16，本轮在历史关系回填、Dream/Query cache/Retrieval Reflex/Advisor/P0 基础上，继续完成 GBrain 0.47.7.0 P1 底层能力对齐
 
-GBrain 基线：`D:\cursor-claude\gbrain` 的最新本地 `master`，commit `7b7921d86141c4e4086e50828de9a867a6814247`，VERSION `0.47.6.0`；本地 HEAD 与 `origin/master` 一致且工作区干净。已逐阶段复核 Dream 主序列，并进一步复核同步、数据库诊断、链接回写与 Embedding 底层，只记录会改变运行结果、数据边界或任务生命周期的真实行为差异，不重新实现 PMBrain 已有能力。
+GBrain 基线：`D:\cursor-claude\gbrain` 的最新本地 `master`，commit `aa820c7f9934f3c23fbf67ff9f3ecd03831cf30f`，VERSION `0.47.7.0`；本地 HEAD 与 `origin/master` 一致且工作区干净。`0.47.6.0 → 0.47.7.0` 仅变更测试基础设施、CI、基准与测试文件，没有新增 Core/Dream 运行行为；P1 实现仍按真实代码差异收口，不重新实现 PMBrain 已有能力。
 
 > 两个项目采用不同版本规则，版本号不能直接比较大小。本对比以实际代码、阶段顺序、配置解析和测试入口为准，不以版本号推断能力。
 
@@ -151,11 +151,21 @@ lint → backlinks → sync → synthesize → extract → extract_facts
 | GBrain Advisor 差异 | PMBrain 1.3.14 处理 | 判定依据 |
 |---|---|---|
 | Backup coverage | **已按 PMBrain 数据形态对齐**：对有内容的 PGLite 检查 verified cold backup 是否存在及是否超过 30 天；只读 manifest，不打开、恢复、清理或改写数据库，输出不含本机路径 | Work Desktop 已有经过恢复验证的 PGLite 备份体系；直接复用比复制 GBrain 的 bootstrap workspace 缓存更可靠 |
-| MCP client fit | **已做当前 Schema 可执行的适配**：依据两种引擎已有的 `oauth_clients + mcp_request_log`，只在 30 天至少 10 次请求、至少 5 次失败且失败率不低于 25% 时提醒；远程结果只给聚合数，不暴露 client id/name | GBrain 的 `starter/full` right-sizing 依赖 PMBrain 尚不存在的 `oauth_clients.surface`、surface ceiling 和 `rescope-client`，不得生成无法执行的修复建议 |
+| MCP client fit | **已做 PMBrain 适配并补齐执行底座**：持续失败检查仍依据 `oauth_clients + mcp_request_log`，远程只给聚合数；Schema 121 已增加 client surface、server ceiling、`request_tools` 自助缩面和 `auth rescope-client` operator pin | 右缩工具面已有真实执行入口；usage-driven starter 集合自动再推导仍未移植，不生成伪建议 |
 | Recommended bundled skills | **已对齐**：post-install 与 recurring Advisor 共用当前推荐集合，补入 `cold-start`；仅本地 workspace 检查，必须征得用户同意后才安装 | PMBrain 已有 bundled skill、安装 receipt 和 `skillpack install`，无需新架构或数据迁移 |
 | Brain-resident pack nag | **暂缓** | PMBrain 尚未移植 GBrain 的 brain-resident locate/nag ledger；直接检查会重复打扰且缺少 dismiss/snooze 上限 |
 | Chronicle conflicts | **暂缓** | 仍依赖 `event_page_id` 与 ontology conflict 数据模型，当前产品边界未批准 |
 | Advisor 公共排序、单 collector 故障隔离、远程 workspace 过滤、历史与 apply 白名单 | **已对齐或 PMBrain 更严格** | 现有实现已覆盖；`--apply` 额外限制 `pmbrain` argv、dispatch allowlist 与 Source id |
+
+### GBrain 0.47.7.0 P1 底层行为复核
+
+| P1 真实行为差异 | PMBrain 1.3.16 处理 | 数据边界 |
+|---|---|---|
+| Provider-agnostic Embedding 生命周期 | **已对齐**：新增显式迁移计划、`--yes` 确认、inflight/completed receipt 与 stalled 状态；分块记录正文哈希，完整页面记录 `model:dimension` 签名；模型/维度切换同步失效 chunks、facts、takes 和 query cache | Schema 121 不清向量；只有用户显式运行 `pmbrain migrate embeddings --to ... --yes` 才验证新模型并重嵌入，正文、分块与原始资料不删除 |
+| Context Pack / Delta / compaction checkpoint | **已对齐当前运行时可用面**：按 Source/client/session 保存 standing entity、已确认 checkpoint 指针，以及 page `(updated_at, slug)` / fact `(created_at, id)` 两套独立 keyset 游标；同一时间戳超过单批上限时可连续排空、不漏尾部；MCP 提供 `context_pack`、`delta`、`checkpoint_context` | 只保存实体名、slug、标题和游标，不复制私有页面正文；读取失败 fail-open，不阻断对话 |
+| Reasoning JSON、prompt-too-long 与 Dream oneshot | **已对齐**：facts/atoms/oneshot 共用最终 JSON 恢复；prompt-too-long 沿 provider wrapper `.cause` 链识别；oneshot 最多一次结构化生成、最多 3 页、slug suffix 校验、写入 ledger 恢复，任何写入前异常回退 agentic | 已提交写入后禁止再走非确定性 fallback；所有写入继续受 Source 与 allowed slug prefix 约束 |
+| Chat usage 与自定义定价 | **已对齐**：`gateway.chat` 成功边界写无内容 usage ledger，Minion 归因到 `job:<name>`；`get_usage` 只返回聚合；`pricing.overrides` 为代理/自定义模型提供真实价格，未知价格在有预算上限时仍 fail-closed | 不保存 prompt、回答或知识正文；未知价格为 NULL，不伪造 0 成本 |
+| MCP initialize、slug 与 OAuth tool surface | **已对齐**：initialize 明确 `put_page` 全量替换及“检索内容是数据”；同步 slug 支持点、下划线与 `_index`；7 个 Memory Verb 与 verbs/starter/full 同时过滤 tools/list 和 dispatch；`--surface` 高于 config；OAuth client 可在 server ceiling 内自助调整，`auth rescope-client` operator pin 不可覆盖 | 隐藏工具不能靠猜名字调用；权限 scope、localOnly 和 Source 边界继续生效 |
 
 | 上游能力 | PMBrain 状态 | 建议 |
 |---|---|---|
@@ -163,7 +173,7 @@ lint → backlinks → sync → synthesize → extract → extract_facts
 | Dream embed 的 AbortSignal 与 quiet 输出 | **已对齐** | Minions/任务中心的 cycle signal 会传入 stale/all/单页向量请求与写入；Dream 固定 `quiet: true`，仍保留结构化 PhaseResult、heartbeat 和 stderr 错误；普通 CLI 默认输出不变 |
 | Dream 全阶段中止、deadline 与私有队列生命周期 | **已对齐**（Schema 117） | 取消和截止时间已贯穿阶段与子任务；owner/token/lease 只用于安全清理与恢复，不重建知识数据 |
 | Query cache 最新隔离 | **已按当前 PMBrain 检索面完成对齐**；本地 GBrain 0.47.5.0 为 `KNOBS_HASH_VERSION=26`，PMBrain 独立 epoch 为 11，版本号不直接照搬 | hard excludes、detail、salience、recency 进入哈希；日期、类型、非零分页及 PMBrain 独有的中文推断日期、精确 slug 排除、代码过滤绕过缓存；候选增加 NFKC/字符 bigram 文本守卫，命中返回量与 mode 一致 |
-| Provider-agnostic embedding migration 命令 | GBrain 有独立 `migrate-embeddings.ts`；PMBrain 仍使用自己的受保护重嵌入流程 | 与老用户向量保护规则对照后移植，不能直接清空索引 |
+| Provider-agnostic embedding migration 命令 | **已对齐（Schema 121）** | PMBrain 保留无默认 Embedding 与显式确认规则，迁移可计划、恢复和检查停滞，不直接清空正文或索引内容 |
 | Global basename Wikilink 解析 | 明确不移植跨目录 basename | 当前 Source-local → default 更符合多 Source 安全边界 |
 | Life Chronicle / 事件页投影 / 本体维度 | 尚未同步 | 知识库已能分类事件页；Chronicle、`event_page_id`、`facts.dimension` 仍暂缓 |
 | Retrieval reflex | **已对齐**（Schema 118） | 保留 GBrain 0.47.5.0 的当前 turn/滚动窗口候选提取、标题/别名/姓氏/CJK 解析、最多 3 个 Source 内实体指针、1500ms 硬超时、失败静默和词法臂开关；PMBrain Context Engine 优先使用 host resolver，PGLite 经运行中的 stdio/HTTP Sidecar 本地 IPC，Postgres 使用缓存直连。只在指针真正交付后记录无原始对话文本的确定性遥测，90 天自动清理；Doctor 只读报告开关、心跳与当前可见路径。隔离评测入口仍为 `scripts/eval-ambient-recall-reference.ts`，真实引擎契约为 `test/retrieval-reflex-alignment.test.ts` 与 `test/e2e/retrieval-reflex-postgres.test.ts` |
@@ -182,7 +192,7 @@ lint → backlinks → sync → synthesize → extract → extract_facts
 5. Query cache 不再只凭“向量很近”判断同一个问题；无关中文问题即使落入相近 embedding 区域也不会串用缓存。带动态日期、类型、分页、精确排除或代码过滤的请求直接走真实检索，缓存命中与未命中的返回数量保持同一 mode 规则。
 6. Retrieval Reflex 已接入 Context Engine：当前 turn 或最近窗口提到已知实体时，最多补充 3 个 Source 内指针，引导 Agent 按需调用 `get_page`，不会改写消息或自动展开整页正文。PGLite 通过当前 Sidecar 的单所有者 IPC 查询，Postgres 复用缓存直连；1500ms 超时或任何解析失败都静默放弃，不阻断用户对话。Doctor 可区分“已启用但尚未触发”“PGLite Sidecar 未运行”和最近 7 天已真实交付。
 
-数据库兼容：Schema 116 只为 `dream_verdicts` 增加可空结构化字段；Schema 117 只为 `minion_jobs` 增加可空的私有队列 owner/token/lease 字段和索引；Schema 118 新增空的 `context_volunteer_events` 交付遥测表及索引；Schema 119 增加 PGLite 中文 trigram 候选索引；Schema 120 只为 `dream_verdicts` 增加 `expires_at`、索引及基于 `judged_at + 30 days` 的回填，回填完成后收紧为非空缓存元数据。以上迁移均不清空知识数据，也不修改现有知识页、原始资料或向量；交付遥测不保存原始对话文本并由 Dream purge 清理 90 天前记录，过期 verdict 缓存按需重判。
+数据库兼容：Schema 116 只为 `dream_verdicts` 增加可空结构化字段；Schema 117 只为 `minion_jobs` 增加可空的私有队列 owner/token/lease 字段和索引；Schema 118 新增空的 `context_volunteer_events` 交付遥测表及索引；Schema 119 增加 PGLite 中文 trigram 候选索引；Schema 120 只为 `dream_verdicts` 增加 TTL；Schema 121 只增加 embedding 派生哈希/签名、OAuth surface、session context state 与 chat usage ledger，并从既有非空向量计算派生 receipt。以上迁移均不清空知识数据，也不修改现有知识页、原始资料或向量；真正的模型切换和重嵌入仍必须由用户显式确认。
 
 ## 8. Embedding 差异结论
 

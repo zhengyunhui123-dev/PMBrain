@@ -37,7 +37,7 @@ export interface ServeOptions {
   // (which unconditionally attaches a 'data' listener to real
   // process.stdin and would pollute the test runner's stdin handle).
   // Defaults to the real implementation when omitted.
-  startMcpServer?: (engine: BrainEngine) => Promise<void>;
+  startMcpServer?: (engine: BrainEngine, opts?: { surface?: 'verbs' | 'starter' | 'full' }) => Promise<void>;
   // Test seam for the parent-process watchdog. The default
   // (`readLiveParentPid`) reads the live kernel PPID via `ps` because
   // `process.ppid` is captured at process creation and does not refresh
@@ -83,6 +83,9 @@ export async function runServe(
   // verifyAccessToken with legacy access_tokens fallback (so v0.22.7 callers
   // that used `gbrain auth create` keep working unchanged).
   const isHttp = args.includes('--http');
+  const { parseSurfaceFlag, resolveSurface } = await import('../mcp/surface.ts');
+  const { loadConfig } = await import('../core/config.ts');
+  const surface = resolveSurface(parseSurfaceFlag(args), loadConfig());
 
   if (isHttp) {
     const portIdx = args.indexOf('--port');
@@ -148,6 +151,7 @@ export async function runServe(
       bind,
       suppressBootstrapToken,
       diagnosticMode,
+      surface,
     });
     return;
   }
@@ -188,7 +192,7 @@ export async function runServe(
     bootDeadline.unref?.();
   }
   try {
-    await start(engine);
+    await start(engine, { surface });
   } finally {
     if (bootDeadline) clearTimeout(bootDeadline);
   }

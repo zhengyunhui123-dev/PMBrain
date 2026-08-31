@@ -49,10 +49,12 @@ import {
 } from './subagent-audit.ts';
 import { resolveModel, isAnthropicProvider, TIER_DEFAULTS } from '../../model-config.ts';
 import { buildSystemPrompt, DEFAULT_SUBAGENT_SYSTEM } from '../system-prompt.ts';
-import { toolLoop as gatewayToolLoop } from '../../ai/gateway.ts';
+import { toolLoop as gatewayToolLoop, chat as gatewayChat } from '../../ai/gateway.ts';
 import type { ChatToolDef, ChatMessage, ChatBlock, ChatResult, ToolHandler } from '../../ai/gateway.ts';
 import { classifyCapabilities } from '../../ai/capabilities.ts';
 import { randomUUIDv7 } from 'bun';
+import { createHash } from 'node:crypto';
+import { parseLlmJson } from '../../llm-json.ts';
 
 // ── Defaults ────────────────────────────────────────────────
 
@@ -225,7 +227,11 @@ export function makeSubagentHandler(deps: SubagentDeps) {
     const useGatewayLoopRaw = await engine.getConfig('agent.use_gateway_loop').catch(() => null);
     const gatewayLoopExplicit = typeof useGatewayLoopRaw === 'string' &&
       (useGatewayLoopRaw === 'true' || useGatewayLoopRaw === '1');
-    const useGatewayLoop = gatewayLoopExplicit || !isAnthropicProvider(model);
+    // An injected Messages client is an explicit execution seam (tests and
+    // embedders). Never bypass it because the host's ambient model config
+    // happens to name a non-Anthropic provider.
+    const useGatewayLoop = !deps.client && !deps.makeAnthropic
+      && (gatewayLoopExplicit || !isAnthropicProvider(model));
 
     // Build the tool registry bound to THIS job as the owning subagent.
     // brain_id (per-call brain override; children inherit parent's unless
@@ -252,6 +258,19 @@ export function makeSubagentHandler(deps: SubagentDeps) {
       no_tool_preamble: data.system_no_tool_preamble,
     });
 
+    let oneshotFallbackReason: string | undefined;
+    if (data.mode === 'oneshot') {
+      const outcome = await tryRunOneshot({ engine, ctx, data, model, systemPrompt, toolDefs });
+      if (outcome.kind === 'success') return outcome.result;
+      oneshotFallbackReason = outcome.reason;
+      logSubagentHeartbeat({
+        job_id: ctx.id,
+        event: 'llm_call_completed',
+        turn_idx: 0,
+        error: `oneshot fallback: ${outcome.reason}`,
+      });
+    }
+
     logSubagentSubmission({
       caller: 'worker',
       remote: true,
@@ -263,7 +282,7 @@ export function makeSubagentHandler(deps: SubagentDeps) {
 
     // v0.38 S1.5 — gateway path. Route here when the feature flag is on.
     if (useGatewayLoop) {
-      return await runSubagentViaGateway({
+      const result = await runSubagentViaGateway({
         engine,
         ctx,
         data,
@@ -272,6 +291,9 @@ export function makeSubagentHandler(deps: SubagentDeps) {
         toolDefs,
         maxTurns,
       });
+      return data.mode === 'oneshot'
+        ? { ...result, synth_mode_used: 'agentic_fallback', fallback_reason: oneshotFallbackReason }
+        : { ...result, synth_mode_used: 'agentic' };
     }
 
     // ── Load prior state (replay) ───────────────────────────
@@ -701,6 +723,8 @@ export function makeSubagentHandler(deps: SubagentDeps) {
       turns_count: assistantTurns,
       stop_reason: stopReason,
       tokens: tokenTotals,
+      synth_mode_used: data.mode === 'oneshot' ? 'agentic_fallback' : 'agentic',
+      ...(data.mode === 'oneshot' && oneshotFallbackReason ? { fallback_reason: oneshotFallbackReason } : {}),
     };
   };
 }
@@ -821,7 +845,9 @@ async function runSubagentViaGateway(args: GatewayRunArgs): Promise<SubagentResu
   };
 
   // Run the loop.
-  const result = await gatewayToolLoop({
+  let result: Awaited<ReturnType<typeof gatewayToolLoop>>;
+  try {
+    result = await gatewayToolLoop({
     model,
     system: systemPrompt,
     initialMessages,
@@ -918,7 +944,14 @@ async function runSubagentViaGateway(args: GatewayRunArgs): Promise<SubagentResu
       });
     },
     onHeartbeat: heartbeat,
-  });
+    });
+  } catch (error) {
+    const detail = promptTooLongDetail(error);
+    if (detail !== null) {
+      throw new UnrecoverableError(`prompt_too_long: ${detail}`);
+    }
+    throw error;
+  }
 
   // A provider can terminate a reasoning-only turn with no text and no tool
   // calls. Treating that as "completed" makes Dream report success while
@@ -1342,26 +1375,181 @@ export class RateLeaseUnavailableError extends Error {
  * Exported for unit testing.
  */
 export function isPromptTooLongError(err: unknown): boolean {
-  if (!err) return false;
-  // Walk both `.message` and `.error?.message` shapes.
-  const msg = (err as { message?: unknown })?.message;
-  const inner = (err as { error?: { message?: unknown } })?.error?.message;
-  const candidates = [msg, inner].filter((s): s is string => typeof s === 'string');
-  for (const c of candidates) {
-    if (/prompt is too long/i.test(c)) return true;
-  }
-  // Anthropic SDK wraps with .status; 400 + 'invalid_request_error' /
-  // 'request_too_large' types both indicate the same class. Only treat
-  // as terminal when the message actually says prompt-too-long; broader
-  // 400s could be transient (e.g., malformed JSON from a test stub).
-  const status = (err as { status?: unknown })?.status;
-  const errType = (err as { error?: { type?: unknown } })?.error?.type;
-  if (status === 400 && (errType === 'invalid_request_error' || errType === 'request_too_large')) {
-    for (const c of candidates) {
-      if (/too long|exceed|maximum/i.test(c)) return true;
+  return promptTooLongDetail(err) !== null;
+}
+
+type OneshotOutcome =
+  | { kind: 'success'; result: SubagentResult }
+  | { kind: 'fallback'; reason: string };
+
+export function parseOneshotPayload(text: string, requiredSuffix?: string): {
+  pages: Array<{ slug: string; content: string }>;
+  skipReason: string | null;
+} {
+  const parsed = parseLlmJson<{ pages?: unknown; skip_reason?: unknown }>(text);
+  if (!parsed || !Array.isArray(parsed.pages) || parsed.pages.length > 3) throw new Error('invalid_pages_shape');
+  const pages = parsed.pages.map((value, index) => {
+    if (!value || typeof value !== 'object') throw new Error(`invalid_page_${index}`);
+    const page = value as { slug?: unknown; content?: unknown };
+    if (typeof page.slug !== 'string' || !page.slug.trim()
+        || typeof page.content !== 'string' || !page.content.trim()) {
+      throw new Error(`invalid_page_${index}`);
     }
+    if (requiredSuffix && !page.slug.endsWith(`-${requiredSuffix}`)) {
+      throw new Error(`slug_suffix_mismatch_${index}`);
+    }
+    return { slug: page.slug, content: page.content };
+  });
+  const skipReason = typeof parsed.skip_reason === 'string' && parsed.skip_reason.trim()
+    ? parsed.skip_reason.trim()
+    : null;
+  if (pages.length === 0 && !skipReason) throw new Error('empty_without_skip_reason');
+  return { pages, skipReason };
+}
+
+async function tryRunOneshot(opts: {
+  engine: BrainEngine;
+  ctx: MinionJobContext;
+  data: SubagentHandlerData;
+  model: string;
+  systemPrompt: string;
+  toolDefs: ToolDef[];
+}): Promise<OneshotOutcome> {
+  const { engine, ctx, data, model, systemPrompt, toolDefs } = opts;
+  const prefix = 'oneshot-';
+  const prior = (await loadPriorTools(engine, ctx.id)).filter((row) => row.tool_use_id.startsWith(prefix));
+  const committed = prior.filter((row) => row.status === 'complete');
+  if (committed.length > 0) {
+    const slugs = committed.flatMap((row) => {
+      const input = row.input as { slug?: unknown } | null;
+      return typeof input?.slug === 'string' ? [input.slug] : [];
+    });
+    return {
+      kind: 'success',
+      result: {
+        result: `oneshot recovery: ${committed.length} committed write(s)`,
+        turns_count: 1,
+        stop_reason: 'end_turn',
+        tokens: { in: 0, out: 0, cache_read: 0, cache_create: 0 },
+        synth_mode_used: 'oneshot',
+        written_slugs: slugs,
+      },
+    };
   }
-  return false;
+  const putPage = toolDefs.find((tool) => tool.name === 'brain_put_page');
+  if (!putPage) return { kind: 'fallback', reason: 'no_put_page_tool' };
+
+  let wroteAny = false;
+  try {
+    const signal = mergeSignals(
+      mergeSignals(ctx.signal, ctx.shutdownSignal),
+      AbortSignal.timeout(60_000),
+    );
+    const response = await gatewayChat({
+      model,
+      system: `${systemPrompt}\n\nONESHOT CONTRACT: Return JSON only: {"pages":[{"slug":"...","content":"complete markdown"}],"skip_reason":null}. Maximum 3 pages. Return pages:[] with a non-empty skip_reason when nothing meets the bar. Do not call tools.`,
+      messages: [{ role: 'user', content: data.prompt }],
+      maxTokens: 8192,
+      abortSignal: signal,
+    });
+    const parsed = parseOneshotPayload(response.text, data.oneshot_slug_suffix);
+    const pages = parsed.pages;
+    const tokens = {
+      in: response.usage.input_tokens,
+      out: response.usage.output_tokens,
+      cache_read: response.usage.cache_read_tokens,
+      cache_create: response.usage.cache_creation_tokens,
+    };
+    if (pages.length === 0) {
+      return {
+        kind: 'success',
+        result: {
+          result: `oneshot: nothing met the bar — ${parsed.skipReason}`,
+          turns_count: 1, stop_reason: 'end_turn', tokens,
+          synth_mode_used: 'oneshot', written_slugs: [],
+        },
+      };
+    }
+    // Validate the complete write set before the first mutation. This avoids
+    // a partially committed oneshot when a later slug is malformed or outside
+    // the same namespace fence enforced by brain_put_page.
+    const { validatePageSlug, matchesSlugAllowList } = await import('../../operations.ts');
+    for (const page of pages) {
+      validatePageSlug(page.slug);
+      if (data.allowed_slug_prefixes && data.allowed_slug_prefixes.length > 0) {
+        if (!matchesSlugAllowList(page.slug, data.allowed_slug_prefixes)) {
+          throw new Error(`oneshot slug outside allowed prefixes: ${page.slug}`);
+        }
+      } else if (!page.slug.startsWith(`wiki/agents/${ctx.id}/`)) {
+        throw new Error(`oneshot slug outside agent namespace: ${page.slug}`);
+      }
+    }
+    const invocation = createHash('sha256').update(data.prompt).digest('hex').slice(0, 8);
+    const written: string[] = [];
+    for (let index = 0; index < pages.length; index++) {
+      const page = pages[index]!;
+      const toolUseId = `${prefix}${invocation}-p${index}`;
+      await persistToolExecPending(engine, ctx.id, index, toolUseId, putPage.name, page);
+      try {
+        await putPage.execute(page, { engine, jobId: ctx.id, remote: true, signal });
+        await persistToolExecComplete(engine, ctx.id, toolUseId, { slug: page.slug });
+        wroteAny = true;
+        written.push(page.slug);
+      } catch (error) {
+        await persistToolExecFailed(
+          engine, ctx.id, index, toolUseId, putPage.name, page,
+          error instanceof Error ? error.message : String(error),
+        );
+        throw error;
+      }
+    }
+    await ctx.updateTokens({ input: tokens.in, output: tokens.out, cache_read: tokens.cache_read });
+    return {
+      kind: 'success',
+      result: {
+        result: `oneshot: wrote ${written.length} page(s): ${written.join(', ')}`,
+        turns_count: 1, stop_reason: 'end_turn', tokens,
+        synth_mode_used: 'oneshot', written_slugs: written,
+      },
+    };
+  } catch (error) {
+    // User/shutdown cancellation is terminal. Falling back to the agentic
+    // loop would violate the same AbortSignal contract the oneshot uses.
+    if (ctx.signal.aborted || ctx.shutdownSignal.aborted) throw error;
+    // After a committed write, never fall into a second nondeterministic path.
+    // Let the durable job retry recover from the ledger above.
+    if (wroteAny) throw error;
+    return { kind: 'fallback', reason: error instanceof Error ? error.message : 'oneshot_failed' };
+  }
+}
+
+/** Provider-neutral prompt-too-long classifier with a bounded `.cause` walk. */
+export function promptTooLongDetail(err: unknown): string | null {
+  const seen = new Set<unknown>();
+  let current: unknown = err;
+  for (let depth = 0; current && depth < 8 && !seen.has(current); depth++) {
+    seen.add(current);
+    const shaped = current as {
+      message?: unknown;
+      status?: unknown;
+      error?: { message?: unknown; type?: unknown };
+      cause?: unknown;
+    };
+    const candidates = [shaped.message, shaped.error?.message]
+      .filter((value): value is string => typeof value === 'string');
+    for (const candidate of candidates) {
+      if (/prompt is too long|context length|context window|maximum context|too many tokens/i.test(candidate)) {
+        return candidate;
+      }
+    }
+    const type = shaped.error?.type;
+    if (shaped.status === 400 && (type === 'invalid_request_error' || type === 'request_too_large')) {
+      const detailed = candidates.find((candidate) => /too long|exceed|maximum/i.test(candidate));
+      if (detailed) return detailed;
+    }
+    current = shaped.cause;
+  }
+  return null;
 }
 
 // ── Testing surface ─────────────────────────────────────────

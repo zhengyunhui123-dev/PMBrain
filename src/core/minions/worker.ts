@@ -28,6 +28,7 @@ import {
   type LockRenewalState,
 } from './lock-renewal-tick.ts';
 import { lockRenewalAudit } from '../audit/lock-renewal-audit.ts';
+import { withChatPhase } from '../ai/chat-usage.ts';
 
 /**
  * Abort reasons that signal infrastructure failure (PgBouncer outage,
@@ -878,7 +879,7 @@ export class MinionWorker extends EventEmitter {
     };
 
     try {
-      const result = await handler(context);
+      const result = await withChatPhase(`job:${job.name}`, () => handler(context));
 
       clearInterval(lockTimer);
 

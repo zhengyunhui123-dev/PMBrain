@@ -502,6 +502,10 @@ export interface SubagentHandlerData {
    * Read by audit + diagnostic surfaces (jobs get / dashboard).
    */
   self_fix_cluster?: string;
+  /** Single structured synthesis call followed by validated programmatic writes. */
+  mode?: 'agentic' | 'oneshot';
+  /** Optional deterministic suffix required on every oneshot output slug. */
+  oneshot_slug_suffix?: string;
 }
 
 /**
@@ -601,4 +605,7 @@ export interface SubagentResult {
     cache_read: number;
     cache_create: number;
   };
+  synth_mode_used?: 'oneshot' | 'agentic_fallback' | 'agentic';
+  fallback_reason?: string;
+  written_slugs?: string[];
 }

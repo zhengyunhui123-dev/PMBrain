@@ -5245,6 +5245,79 @@ export const MIGRATIONS: Migration[] = [
         ON dream_verdicts (expires_at);
     `,
   },
+  {
+    version: 121,
+    name: 'p1_embedding_context_mcp_usage_foundations',
+    // Additive P1 foundations. No knowledge page, source text, relation or
+    // vector is rewritten here; existing vectors remain usable until an
+    // operator explicitly starts a provider migration.
+    idempotent: true,
+    sql: `
+      ALTER TABLE pages ADD COLUMN IF NOT EXISTS embedding_signature TEXT;
+      ALTER TABLE content_chunks ADD COLUMN IF NOT EXISTS embedded_text_hash TEXT;
+      ALTER TABLE oauth_clients ADD COLUMN IF NOT EXISTS surface TEXT;
+      ALTER TABLE oauth_clients ADD COLUMN IF NOT EXISTS surface_set_by TEXT;
+
+      UPDATE content_chunks
+         SET embedded_text_hash = md5(chunk_text)
+       WHERE embedding IS NOT NULL AND embedded_text_hash IS NULL;
+      UPDATE pages p
+         SET embedding_signature = completed.signature
+        FROM (
+          SELECT page_id,
+                 CASE
+                   WHEN COUNT(*) > 0
+                    AND COUNT(*) FILTER (WHERE embedding IS NULL) = 0
+                    AND COUNT(DISTINCT model) = 1
+                    AND COUNT(DISTINCT vector_dims(embedding)) = 1
+                   THEN MIN(model) || ':' || MIN(vector_dims(embedding))::text
+                   ELSE NULL
+                 END AS signature
+            FROM content_chunks
+           GROUP BY page_id
+        ) completed
+       WHERE completed.page_id = p.id;
+
+      CREATE TABLE IF NOT EXISTS session_context_state (
+        source_id TEXT NOT NULL,
+        client_id TEXT NOT NULL DEFAULT 'local',
+        session_id TEXT NOT NULL,
+        standing_entities JSONB NOT NULL DEFAULT '[]'::jsonb,
+        surfaced_slugs JSONB NOT NULL DEFAULT '[]'::jsonb,
+        checkpoint_manifest JSONB NOT NULL DEFAULT '[]'::jsonb,
+        last_wake_at TIMESTAMPTZ,
+        page_cursor_at TIMESTAMPTZ,
+        page_cursor_slug TEXT NOT NULL DEFAULT '',
+        fact_cursor_at TIMESTAMPTZ,
+        fact_cursor_id BIGINT NOT NULL DEFAULT 0,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (source_id, client_id, session_id)
+      );
+      ALTER TABLE session_context_state ADD COLUMN IF NOT EXISTS page_cursor_at TIMESTAMPTZ;
+      ALTER TABLE session_context_state ADD COLUMN IF NOT EXISTS page_cursor_slug TEXT NOT NULL DEFAULT '';
+      ALTER TABLE session_context_state ADD COLUMN IF NOT EXISTS fact_cursor_at TIMESTAMPTZ;
+      ALTER TABLE session_context_state ADD COLUMN IF NOT EXISTS fact_cursor_id BIGINT NOT NULL DEFAULT 0;
+      CREATE INDEX IF NOT EXISTS session_context_state_updated_idx
+        ON session_context_state (updated_at);
+
+      CREATE TABLE IF NOT EXISTS chat_usage_log (
+        id BIGSERIAL PRIMARY KEY,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        model TEXT NOT NULL,
+        provider TEXT,
+        phase TEXT,
+        input_tokens INTEGER NOT NULL DEFAULT 0,
+        output_tokens INTEGER NOT NULL DEFAULT 0,
+        cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+        cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+        cost_usd DOUBLE PRECISION
+      );
+      CREATE INDEX IF NOT EXISTS idx_chat_usage_log_created
+        ON chat_usage_log (created_at);
+      CREATE INDEX IF NOT EXISTS idx_chat_usage_log_model
+        ON chat_usage_log (model, created_at);
+    `,
+  },
 ];
 
 export const LATEST_VERSION = MIGRATIONS.length > 0

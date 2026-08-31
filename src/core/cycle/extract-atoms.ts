@@ -56,6 +56,7 @@ import { dreamModelDetails, resolveDreamModel } from './model-routing.ts';
 import { writeReceipt } from '../extract/receipt-writer.ts';
 import { throwIfAborted } from '../abort-check.ts';
 import { upsertExtractRollup } from '../extract/rollup-writer.ts';
+import { parseLlmJson } from '../llm-json.ts';
 
 const DEFAULT_BUDGET_USD = 0.3;
 
@@ -673,31 +674,8 @@ export async function runPhaseExtractAtoms(
  * invalid atom_type values. Rejects (returns empty) on hard parse fail.
  */
 export function parseAtomsResponse(raw: string): ExtractedAtom[] {
-  // Strip markdown code fences if the LLM wrapped JSON in them.
-  let cleaned = raw.trim();
-  const fenceMatch = cleaned.match(/```(?:json)?\s*([\s\S]*?)```/);
-  if (fenceMatch) cleaned = fenceMatch[1].trim();
-
-  // Find the first JSON array bracket.
-  const arrayStart = cleaned.indexOf('[');
-  if (arrayStart === -1) return [];
-  cleaned = cleaned.slice(arrayStart);
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(cleaned);
-  } catch {
-    // Try trimming back from the end to recover from trailing prose.
-    const arrayEnd = cleaned.lastIndexOf(']');
-    if (arrayEnd === -1) return [];
-    try {
-      parsed = JSON.parse(cleaned.slice(0, arrayEnd + 1));
-    } catch {
-      return [];
-    }
-  }
-
-  if (!Array.isArray(parsed)) return [];
+  const parsed = parseLlmJson<unknown[]>(raw, { array: true });
+  if (!parsed) return [];
 
   const atoms: ExtractedAtom[] = [];
   for (const item of parsed) {

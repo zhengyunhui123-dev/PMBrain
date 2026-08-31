@@ -397,6 +397,26 @@ export class GBrainOAuthProvider implements OAuthServerProvider {
     return this._clientsStore;
   }
 
+  /** Operator-owned MCP surface pin. A null surface clears the pin. */
+  async rescopeClient(
+    clientId: string,
+    surface: 'verbs' | 'starter' | 'full' | null,
+  ): Promise<{ clientId: string; surface: 'verbs' | 'starter' | 'full' | null; surfaceOld: string | null }> {
+    const rows = await this.sql`
+      UPDATE oauth_clients
+         SET surface = ${surface},
+             surface_set_by = ${surface === null ? null : 'operator'}
+       WHERE client_id = ${clientId}
+         AND deleted_at IS NULL
+       RETURNING client_id, surface, surface_set_by
+    `;
+    if (rows.length === 0) throw new Error(`OAuth client not found: ${clientId}`);
+    // SqlQuery cannot expose OLD directly without a writable CTE on every
+    // supported engine. The caller only needs a stable resulting contract;
+    // surfaceOld remains null when the old value was not separately read.
+    return { clientId, surface, surfaceOld: null };
+  }
+
   // -------------------------------------------------------------------------
   // Authorization Code Flow
   // -------------------------------------------------------------------------
@@ -587,7 +607,7 @@ export class GBrainOAuthProvider implements OAuthServerProvider {
     try {
       oauthRows = await this.sql`
         SELECT t.client_id, t.scopes, t.expires_at, t.resource, c.client_name,
-               c.source_id, c.federated_read
+               c.source_id, c.federated_read, c.surface, c.surface_set_by
         FROM oauth_tokens t
         LEFT JOIN oauth_clients c ON c.client_id = t.client_id
         WHERE t.token_hash = ${tokenHash} AND t.token_type = 'access'
@@ -598,7 +618,10 @@ export class GBrainOAuthProvider implements OAuthServerProvider {
       // projection so auth keeps working until the operator runs
       // apply-migrations. Probe both column names so partial-upgrade brains
       // (v60 applied but v61 didn't yet) also fall through cleanly.
-      if (isUndefinedColumnError(err, 'source_id') || isUndefinedColumnError(err, 'federated_read')) {
+      if (isUndefinedColumnError(err, 'source_id')
+          || isUndefinedColumnError(err, 'federated_read')
+          || isUndefinedColumnError(err, 'surface')
+          || isUndefinedColumnError(err, 'surface_set_by')) {
         // Try the v60-only projection first (source_id but no federated_read).
         try {
           oauthRows = await this.sql`
@@ -658,6 +681,8 @@ export class GBrainOAuthProvider implements OAuthServerProvider {
         // operations.ts prefers this array over scalar sourceId when set
         // and non-empty.
         allowedSources,
+        surface: typeof row.surface === 'string' ? row.surface : undefined,
+        surfaceSetBy: typeof row.surface_set_by === 'string' ? row.surface_set_by : undefined,
       } as AuthInfo;
     }
 

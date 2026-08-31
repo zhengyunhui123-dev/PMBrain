@@ -46,6 +46,8 @@ import {
   withAgentIntegrationLogContext,
 } from '../mcp/agent-integration-trace.ts';
 import { paramDefToSchema } from '../mcp/tool-defs.ts';
+import { filterOpsForSurface, effectiveSurfaceForClient, isMcpSurface, type McpSurface } from '../mcp/surface.ts';
+import { PMBRAIN_MCP_INSTRUCTIONS } from '../mcp/instructions.ts';
 import { getBrainHotMemoryMeta } from '../core/facts/meta-hook.ts';
 import { loadConfig, toEngineConfig, type GBrainConfig } from '../core/config.ts';
 import { brainDirFromConfig } from '../core/system-skill-assets.ts';
@@ -647,6 +649,8 @@ interface ServeHttpOptions {
   port: number;
   tokenTtl: number;
   enableDcr: boolean;
+  /** Server-wide MCP surface ceiling resolved by serve flag/config. */
+  surface?: McpSurface;
   /**
    * Public URL the server is reachable at (e.g., https://brain.example.com).
    * Used as the OAuth issuer in discovery metadata. Defaults to
@@ -2192,7 +2196,9 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
   // ---------------------------------------------------------------------------
   // MCP tool calls (bearer auth + scope enforcement)
   // ---------------------------------------------------------------------------
-  const mcpOperations = operations.filter(op => !op.localOnly);
+  const mcpOperationsBase = operations.filter(op => !op.localOnly);
+  const serverSurfaceCeiling: McpSurface = options.surface
+    ?? (isMcpSurface(config.mcp_surface) ? config.mcp_surface : 'full');
 
   // v0.36.x #1076: MCP Streamable HTTP spec — GET /mcp opens an optional SSE
   // backchannel for server-initiated messages. gbrain's transport is stateless
@@ -2208,6 +2214,13 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
   app.post('/mcp', requireBearerAuth({ verifier: oauthProvider }), async (req: Request, res: Response) => {
     const startTime = Date.now();
     const authInfo = (req as any).auth as AuthInfo;
+    const surface = effectiveSurfaceForClient({
+      ceiling: serverSurfaceCeiling,
+      clientSurface: authInfo.surface,
+      defaultSurface: config.mcp?.default_surface_dcr,
+    });
+    const mcpOperations = filterOpsForSurface(mcpOperationsBase, surface);
+    const surfaceAllowedOps = new Set(mcpOperations.map((op) => op.name));
 
     // Human-readable agent name is now threaded through AuthInfo by
     // verifyAccessToken (which JOINs oauth_clients in its existing token
@@ -2218,7 +2231,7 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
     // Create a fresh MCP server per request (stateless)
     const server = new Server(
       { name: 'pmbrain', version: VERSION },
-      { capabilities: { tools: {} } },
+      { capabilities: { tools: {} }, instructions: PMBRAIN_MCP_INSTRUCTIONS },
     );
 
     server.setRequestHandler(ListToolsRequestSchema, async () => {
@@ -2393,6 +2406,9 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
           // but forgot to pass authInfo; whoami fell through to the
           // unknown_transport throw because ctx.auth was undefined.
           auth: effectiveAuthInfo,
+          allowedOps: surfaceAllowedOps,
+          surface,
+          surfaceCeiling: serverSurfaceCeiling,
           logger: {
             info: (msg: string) => console.error(`[INFO] ${msg}`),
             warn: (msg: string) => console.error(`[WARN] ${msg}`),

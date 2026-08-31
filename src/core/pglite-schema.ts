@@ -105,6 +105,7 @@ CREATE TABLE IF NOT EXISTS pages (
   -- query_cache.page_generations invalidation.
   contextual_retrieval_mode  TEXT,
   corpus_generation          TEXT,
+  embedding_signature        TEXT,
   -- v0.40.3.0 cache invalidation gate (migration v91; mirrors src/schema.sql).
   -- Bumped by bump_page_generation_trg on INSERT (initial) and on UPDATE
   -- when content columns IS DISTINCT FROM. Read by the per-page snapshot
@@ -216,6 +217,7 @@ CREATE TABLE IF NOT EXISTS content_chunks (
   model           TEXT,
   token_count     INTEGER,
   embedded_at     TIMESTAMPTZ,
+  embedded_text_hash TEXT,
   created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
   -- v0.19.0: code chunk metadata (markdown chunks leave NULL).
   language        TEXT,
@@ -437,6 +439,38 @@ CREATE INDEX IF NOT EXISTS context_volunteer_events_src_time_idx
   ON context_volunteer_events (source_id, volunteered_at DESC);
 CREATE INDEX IF NOT EXISTS context_volunteer_events_src_slug_idx
   ON context_volunteer_events (source_id, slug);
+
+CREATE TABLE IF NOT EXISTS session_context_state (
+  source_id TEXT NOT NULL,
+  client_id TEXT NOT NULL DEFAULT 'local',
+  session_id TEXT NOT NULL,
+  standing_entities JSONB NOT NULL DEFAULT '[]'::jsonb,
+  surfaced_slugs JSONB NOT NULL DEFAULT '[]'::jsonb,
+  checkpoint_manifest JSONB NOT NULL DEFAULT '[]'::jsonb,
+  last_wake_at TIMESTAMPTZ,
+  page_cursor_at TIMESTAMPTZ,
+  page_cursor_slug TEXT NOT NULL DEFAULT '',
+  fact_cursor_at TIMESTAMPTZ,
+  fact_cursor_id BIGINT NOT NULL DEFAULT 0,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (source_id, client_id, session_id)
+);
+CREATE INDEX IF NOT EXISTS session_context_state_updated_idx ON session_context_state (updated_at);
+
+CREATE TABLE IF NOT EXISTS chat_usage_log (
+  id BIGSERIAL PRIMARY KEY,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  model TEXT NOT NULL,
+  provider TEXT,
+  phase TEXT,
+  input_tokens INTEGER NOT NULL DEFAULT 0,
+  output_tokens INTEGER NOT NULL DEFAULT 0,
+  cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+  cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+  cost_usd DOUBLE PRECISION
+);
+CREATE INDEX IF NOT EXISTS idx_chat_usage_log_created ON chat_usage_log (created_at);
+CREATE INDEX IF NOT EXISTS idx_chat_usage_log_model ON chat_usage_log (model, created_at);
 
 CREATE TABLE IF NOT EXISTS minion_jobs (
   id               SERIAL PRIMARY KEY,
@@ -910,6 +944,8 @@ CREATE TABLE IF NOT EXISTS oauth_clients (
   deleted_at              TIMESTAMPTZ,
   source_id               TEXT REFERENCES sources(id) ON DELETE RESTRICT,
   federated_read          TEXT[] NOT NULL DEFAULT '{}',
+  surface                 TEXT,
+  surface_set_by          TEXT,
   -- v0.38 Slice 2 + 3: per-OAuth-client budget cap (v84) + agent binding (v85).
   -- bound_* columns are NULL on legacy clients (no agent scope by default).
   budget_usd_per_day      NUMERIC(10, 2) NULL,

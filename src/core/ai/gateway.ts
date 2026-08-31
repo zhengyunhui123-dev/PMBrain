@@ -55,6 +55,7 @@ import {
 import type { BrainEngine } from '../engine.ts';
 import { dimsProviderOptions } from './dims.ts';
 import { AIConfigError, AITransientError, normalizeAIError } from './errors.ts';
+import { recordChatUsage } from './chat-usage.ts';
 
 const MAX_CHARS = 8000;
 // The dimension constant is a storage-schema placeholder only. It never
@@ -2557,6 +2558,16 @@ async function chatOnce(opts: ChatOpts): Promise<ChatResult> {
     let threw: unknown = null;
     try {
       res = await _chatTransport(opts);
+      recordChatUsage({
+        model: res.model,
+        provider: res.providerId,
+        usage: {
+          input_tokens: res.usage.input_tokens,
+          output_tokens: res.usage.output_tokens,
+          cache_read_tokens: res.usage.cache_read_tokens,
+          cache_write_tokens: res.usage.cache_creation_tokens,
+        },
+      });
       return res;
     } catch (err) {
       threw = err;
@@ -2796,7 +2807,7 @@ async function chatOnce(opts: ChatOpts): Promise<ChatResult> {
     const outTok = Number(usage.outputTokens ?? usage.completionTokens ?? 0);
     _recordBudget(`${recipe.id}:${modelId}`, inTok, outTok);
 
-    return {
+    const chatResult: ChatResult = {
       text: blocks.filter(b => b.type === 'text').map(b => (b as { type: 'text'; text: string }).text).join(''),
       blocks,
       stopReason: mapStopReason((result as any).finishReason, providerMetadata),
@@ -2810,6 +2821,17 @@ async function chatOnce(opts: ChatOpts): Promise<ChatResult> {
       providerId: recipe.id,
       providerMetadata,
     };
+    recordChatUsage({
+      model: chatResult.model,
+      provider: chatResult.providerId,
+      usage: {
+        input_tokens: chatResult.usage.input_tokens,
+        output_tokens: chatResult.usage.output_tokens,
+        cache_read_tokens: chatResult.usage.cache_read_tokens,
+        cache_write_tokens: chatResult.usage.cache_creation_tokens,
+      },
+    });
+    return chatResult;
   } catch (err) {
     // Pessimistic fallback (A3 amended): when err.usage isn't there, charge
     // the worst-case ceiling — better to overcount on failure than under.

@@ -2,8 +2,9 @@
  * MEMORY_VERBS v1 write/delete façade, ported from GBrain as an independent
  * registration module. Core entry (`operations.ts`) only spreads these ops.
  *
- * Ports `remember`, `forget`, and the zero-LLM `entity` card.
- * `synthesize` / `context_pack` / `delta` stay out of this module.
+ * Ports `remember`, `forget`, the zero-LLM `entity` card, and the existing
+ * Think pipeline as the expensive `synthesize` read verb. Ambient
+ * `context_pack` / `delta` remain registered in operations.ts.
  */
 
 import { OperationError } from './operation-error.ts';
@@ -177,6 +178,65 @@ const remember: Operation = {
   cliHints: { name: 'remember', positional: ['fact'] },
 };
 
+const synthesize: Operation = {
+  name: 'synthesize',
+  description:
+    '[EXPENSIVE / SLOW — makes LLM calls] MEMORY VERB v1: answer a broad question by combining evidence across PMBrain pages. Prefer recall or entity for direct lookups.',
+  params: {
+    question: { type: 'string', required: true, description: 'The broad question to answer.' },
+    since: { type: 'string', description: 'Optional ISO temporal window start.' },
+    until: { type: 'string', description: 'Optional ISO temporal window end.' },
+  },
+  scope: 'read',
+  verb: true,
+  handler: async (ctx, p) => {
+    const question = typeof p.question === 'string' ? p.question.trim() : '';
+    if (!question) {
+      throw verbError(
+        'invalid_params',
+        'question must be a non-empty string.',
+        'Pass the question that needs cross-page reasoning.',
+      );
+    }
+    const allowedSources = ctx.auth?.allowedSources;
+    const { runThink } = await import('./think/index.ts');
+    const result = await runThink(ctx.engine, {
+      question,
+      since: typeof p.since === 'string' ? p.since : undefined,
+      until: typeof p.until === 'string' ? p.until : undefined,
+      takesHoldersAllowList: ctx.takesHoldersAllowList,
+      ...(allowedSources && allowedSources.length > 0
+        ? { allowedSources }
+        : { sourceId: ctx.sourceId }),
+      remote: ctx.remote !== false,
+    });
+    if (result.warnings.includes('NO_LLM_AVAILABLE')) {
+      throw verbError(
+        'unavailable',
+        'synthesize needs an enabled LLM and none is available.',
+        'Configure an ordinary chat model and retry; recall and entity remain available without one.',
+      );
+    }
+    return {
+      answer: result.answer,
+      sources: result.citations.map((citation) => citation.page_slug),
+      gaps: result.gaps,
+      cost: {
+        model: result.modelUsed,
+        input_tokens: null,
+        output_tokens: null,
+        usd_estimate: null,
+      },
+      synthesis_status: 'ok',
+      pages_gathered: result.pagesGathered,
+      takes_gathered: result.takesGathered,
+      warnings: result.warnings,
+      protocol_version: MEMORY_VERBS_VERSION,
+    };
+  },
+  cliHints: { name: 'synthesize', positional: ['question'] },
+};
+
 const forget: Operation = {
   name: 'forget',
   description:
@@ -272,4 +332,4 @@ const entity: Operation = {
   cliHints: { name: 'entity', positional: ['name'] },
 };
 
-export const memoryVerbOperations: Operation[] = [remember, forget, entity];
+export const memoryVerbOperations: Operation[] = [remember, synthesize, forget, entity];
