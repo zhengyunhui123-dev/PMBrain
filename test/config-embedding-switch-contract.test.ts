@@ -39,7 +39,7 @@ describe('embedding model switch contract', () => {
     for (const path of ['src/core/postgres-engine.ts', 'src/core/pglite-engine.ts']) {
       const source = readFileSync(resolve(path), 'utf8');
       const staleQueries = source.match(
-        /WHERE \(cc\.embedding IS NULL OR cc\.embedded_text_hash IS DISTINCT FROM md5\(cc\.chunk_text\)\)\s+AND p\.deleted_at IS NULL/g,
+        /WHERE \(cc\.embedding IS NULL OR \(cc\.embedded_text_hash IS NOT NULL AND cc\.embedded_text_hash <> md5\(cc\.chunk_text\)\)\)\s+AND p\.deleted_at IS NULL/g,
       ) ?? [];
       expect(staleQueries.length).toBe(8);
     }

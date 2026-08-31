@@ -2539,7 +2539,7 @@ export class PGLiteEngine implements BrainEngine {
         `SELECT count(*)::int AS count
            FROM content_chunks cc
            JOIN pages p ON p.id = cc.page_id
-          WHERE (cc.embedding IS NULL OR cc.embedded_text_hash IS DISTINCT FROM md5(cc.chunk_text))
+          WHERE (cc.embedding IS NULL OR (cc.embedded_text_hash IS NOT NULL AND cc.embedded_text_hash <> md5(cc.chunk_text)))
             AND p.deleted_at IS NULL
             AND NOT (COALESCE(p.frontmatter, '{}'::jsonb) ? 'embed_skip')`,
       );
@@ -2550,7 +2550,7 @@ export class PGLiteEngine implements BrainEngine {
       `SELECT count(*)::int AS count
          FROM content_chunks cc
          JOIN pages p ON p.id = cc.page_id
-        WHERE (cc.embedding IS NULL OR cc.embedded_text_hash IS DISTINCT FROM md5(cc.chunk_text))
+        WHERE (cc.embedding IS NULL OR (cc.embedded_text_hash IS NOT NULL AND cc.embedded_text_hash <> md5(cc.chunk_text)))
           AND p.deleted_at IS NULL
           AND p.source_id = $1
           AND NOT (COALESCE(p.frontmatter, '{}'::jsonb) ? 'embed_skip')`,
@@ -2585,7 +2585,7 @@ export class PGLiteEngine implements BrainEngine {
                   p.updated_at
              FROM content_chunks cc
              JOIN pages p ON p.id = cc.page_id
-            WHERE (cc.embedding IS NULL OR cc.embedded_text_hash IS DISTINCT FROM md5(cc.chunk_text))
+            WHERE (cc.embedding IS NULL OR (cc.embedded_text_hash IS NOT NULL AND cc.embedded_text_hash <> md5(cc.chunk_text)))
               AND p.deleted_at IS NULL
               AND NOT (COALESCE(p.frontmatter, '{}'::jsonb) ? 'embed_skip')
             ORDER BY p.updated_at DESC NULLS LAST, p.id ASC, cc.chunk_index ASC
@@ -2597,7 +2597,7 @@ export class PGLiteEngine implements BrainEngine {
                   p.updated_at
              FROM content_chunks cc
              JOIN pages p ON p.id = cc.page_id
-            WHERE (cc.embedding IS NULL OR cc.embedded_text_hash IS DISTINCT FROM md5(cc.chunk_text))
+            WHERE (cc.embedding IS NULL OR (cc.embedded_text_hash IS NOT NULL AND cc.embedded_text_hash <> md5(cc.chunk_text)))
               AND p.deleted_at IS NULL
               AND NOT (COALESCE(p.frontmatter, '{}'::jsonb) ? 'embed_skip')
               AND (
@@ -2617,7 +2617,7 @@ export class PGLiteEngine implements BrainEngine {
                 p.updated_at
            FROM content_chunks cc
            JOIN pages p ON p.id = cc.page_id
-          WHERE (cc.embedding IS NULL OR cc.embedded_text_hash IS DISTINCT FROM md5(cc.chunk_text))
+          WHERE (cc.embedding IS NULL OR (cc.embedded_text_hash IS NOT NULL AND cc.embedded_text_hash <> md5(cc.chunk_text)))
             AND p.deleted_at IS NULL
             AND p.source_id = $1
             AND NOT (COALESCE(p.frontmatter, '{}'::jsonb) ? 'embed_skip')
@@ -2630,7 +2630,7 @@ export class PGLiteEngine implements BrainEngine {
                 p.updated_at
            FROM content_chunks cc
            JOIN pages p ON p.id = cc.page_id
-          WHERE (cc.embedding IS NULL OR cc.embedded_text_hash IS DISTINCT FROM md5(cc.chunk_text))
+          WHERE (cc.embedding IS NULL OR (cc.embedded_text_hash IS NOT NULL AND cc.embedded_text_hash <> md5(cc.chunk_text)))
             AND p.deleted_at IS NULL
             AND p.source_id = $1
             AND NOT (COALESCE(p.frontmatter, '{}'::jsonb) ? 'embed_skip')
@@ -2656,7 +2656,7 @@ export class PGLiteEngine implements BrainEngine {
                 cc.model, cc.token_count, p.source_id, cc.page_id
            FROM content_chunks cc
            JOIN pages p ON p.id = cc.page_id
-          WHERE (cc.embedding IS NULL OR cc.embedded_text_hash IS DISTINCT FROM md5(cc.chunk_text))
+          WHERE (cc.embedding IS NULL OR (cc.embedded_text_hash IS NOT NULL AND cc.embedded_text_hash <> md5(cc.chunk_text)))
             AND p.deleted_at IS NULL
             AND NOT (COALESCE(p.frontmatter, '{}'::jsonb) ? 'embed_skip')
             AND (cc.page_id, cc.chunk_index) > ($1, $2)
@@ -2671,7 +2671,7 @@ export class PGLiteEngine implements BrainEngine {
               cc.model, cc.token_count, p.source_id, cc.page_id
          FROM content_chunks cc
          JOIN pages p ON p.id = cc.page_id
-        WHERE (cc.embedding IS NULL OR cc.embedded_text_hash IS DISTINCT FROM md5(cc.chunk_text))
+        WHERE (cc.embedding IS NULL OR (cc.embedded_text_hash IS NOT NULL AND cc.embedded_text_hash <> md5(cc.chunk_text)))
           AND p.deleted_at IS NULL
           AND p.source_id = $1
           AND NOT (COALESCE(p.frontmatter, '{}'::jsonb) ? 'embed_skip')

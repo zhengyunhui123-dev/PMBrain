@@ -161,7 +161,7 @@ lint → backlinks → sync → synthesize → extract → extract_facts
 
 | P1 真实行为差异 | PMBrain 1.3.16 处理 | 数据边界 |
 |---|---|---|
-| Provider-agnostic Embedding 生命周期 | **已对齐**：新增显式迁移计划、`--yes` 确认、inflight/completed receipt 与 stalled 状态；分块记录正文哈希，完整页面记录 `model:dimension` 签名；模型/维度切换同步失效 chunks、facts、takes 和 query cache | Schema 121 不清向量；只有用户显式运行 `pmbrain migrate embeddings --to ... --yes` 才验证新模型并重嵌入，正文、分块与原始资料不删除 |
+| Provider-agnostic Embedding 生命周期 | **已对齐**：新增显式迁移计划、`--yes` 确认、inflight/completed receipt 与 stalled 状态；分块记录正文哈希，完整页面记录 `model:dimension` 签名；模型/维度切换同步失效 chunks、facts、takes 和 query cache | Schema 121 只增加可空派生字段，不扫描或回填历史向量；历史 `NULL` receipt 继续视为兼容，只有用户显式运行 `pmbrain migrate embeddings --to ... --yes` 才验证新模型并重嵌入，正文、分块与原始资料不删除 |
 | Context Pack / Delta / compaction checkpoint | **已对齐当前运行时可用面**：按 Source/client/session 保存 standing entity、已确认 checkpoint 指针，以及 page `(updated_at, slug)` / fact `(created_at, id)` 两套独立 keyset 游标；同一时间戳超过单批上限时可连续排空、不漏尾部；MCP 提供 `context_pack`、`delta`、`checkpoint_context` | 只保存实体名、slug、标题和游标，不复制私有页面正文；读取失败 fail-open，不阻断对话 |
 | Reasoning JSON、prompt-too-long 与 Dream oneshot | **已对齐**：facts/atoms/oneshot 共用最终 JSON 恢复；prompt-too-long 沿 provider wrapper `.cause` 链识别；oneshot 最多一次结构化生成、最多 3 页、slug suffix 校验、写入 ledger 恢复，任何写入前异常回退 agentic | 已提交写入后禁止再走非确定性 fallback；所有写入继续受 Source 与 allowed slug prefix 约束 |
 | Chat usage 与自定义定价 | **已对齐**：`gateway.chat` 成功边界写无内容 usage ledger，Minion 归因到 `job:<name>`；`get_usage` 只返回聚合；`pricing.overrides` 为代理/自定义模型提供真实价格，未知价格在有预算上限时仍 fail-closed | 不保存 prompt、回答或知识正文；未知价格为 NULL，不伪造 0 成本 |
@@ -192,7 +192,7 @@ lint → backlinks → sync → synthesize → extract → extract_facts
 5. Query cache 不再只凭“向量很近”判断同一个问题；无关中文问题即使落入相近 embedding 区域也不会串用缓存。带动态日期、类型、分页、精确排除或代码过滤的请求直接走真实检索，缓存命中与未命中的返回数量保持同一 mode 规则。
 6. Retrieval Reflex 已接入 Context Engine：当前 turn 或最近窗口提到已知实体时，最多补充 3 个 Source 内指针，引导 Agent 按需调用 `get_page`，不会改写消息或自动展开整页正文。PGLite 通过当前 Sidecar 的单所有者 IPC 查询，Postgres 复用缓存直连；1500ms 超时或任何解析失败都静默放弃，不阻断用户对话。Doctor 可区分“已启用但尚未触发”“PGLite Sidecar 未运行”和最近 7 天已真实交付。
 
-数据库兼容：Schema 116 只为 `dream_verdicts` 增加可空结构化字段；Schema 117 只为 `minion_jobs` 增加可空的私有队列 owner/token/lease 字段和索引；Schema 118 新增空的 `context_volunteer_events` 交付遥测表及索引；Schema 119 增加 PGLite 中文 trigram 候选索引；Schema 120 只为 `dream_verdicts` 增加 TTL；Schema 121 只增加 embedding 派生哈希/签名、OAuth surface、session context state 与 chat usage ledger，并从既有非空向量计算派生 receipt。以上迁移均不清空知识数据，也不修改现有知识页、原始资料或向量；真正的模型切换和重嵌入仍必须由用户显式确认。
+数据库兼容：Schema 116 只为 `dream_verdicts` 增加可空结构化字段；Schema 117 只为 `minion_jobs` 增加可空的私有队列 owner/token/lease 字段和索引；Schema 118 新增空的 `context_volunteer_events` 交付遥测表及索引；Schema 119 增加 PGLite 中文 trigram 候选索引；Schema 120 只为 `dream_verdicts` 增加 TTL；Schema 121 只增加 embedding 可空派生哈希/签名、OAuth surface、session context state 与 chat usage ledger，不扫描、不计算、不回填既有向量。历史 `NULL` receipt 按 GBrain 原版语义 grandfather，不算 stale；新 receipt 只在后续真实向量写入时自然产生。以上迁移均不清空知识数据，也不修改现有知识页、原始资料或向量；真正的模型切换和重嵌入仍必须由用户显式确认。
 
 ## 8. Embedding 差异结论
 
@@ -207,7 +207,7 @@ PMBrain 本次新增并固定以下行为：
 3. Ollama 或其他显式模型失败时保留原错误，不切换到 ZE 或其他供应商。
 4. Fresh schema 不写 `embedding_model`；1280 只作为未配置时的向量列存储宽度。
 5. 导入、Dream、后台补全和两种数据库引擎共享 provenance 规则。
-6. 历史上已被错误标记的行不自动批量改写；需另行取得授权并以可验证证据回填。
+6. 历史向量的派生 hash/signature 保持 `NULL` 并继续可用，不在升级时回填，也不因 `NULL` 自动进入 stale；后续真实重嵌入时自然写入。
 
 ## 9. 如何判断后续功能属于哪一层
 

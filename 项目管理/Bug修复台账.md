@@ -1,5 +1,14 @@
 # Bug 修复台账
 
+## 2026-08-31 PMBrain 1.3.19 修复 schema 121 对旧向量做全库回填
+
+- 时间：2026-08-31
+- 版本号：PMBrain 1.3.19；PMBrain Desktop 1.1.51
+- 标题：对齐 GBrain 的可空派生字段与历史向量 grandfather 语义
+- 描述：schema 121 原先会扫描全部 `content_chunks`、计算正文哈希并聚合页面向量签名，1GB 级旧库升级时因此长时间无法启动；把它改为分批回填或延长 Desktop 健康检查仍会让用户承担本不需要的全库工作。现按本地 GBrain 0.47.7.0（commit `aa820c7f9`）撤销所有 schema 121 数据回填、游标和迁移进度续时逻辑，升级只增加可空字段和新表。PGLite/PostgreSQL 的 stale 查询同时改为只识别“已有 hash 且与当前正文不一致”的真实漂移，历史 `NULL` hash/signature 继续使用原向量，不自动进入重嵌入；后续真实向量写入会自然补齐派生字段。未连接或修改用户真实数据库、知识、Wiki、原始资料或向量。
+- 是否完成：是
+- 最终结果：新增结构契约和文件 PGLite schema 120 升级测试，确认 migration 121 无 UPDATE/handler，升级后历史向量及两个 `NULL` receipt 原样保留，stale 计数与列表均为 0；新向量 receipt 写入和真实正文漂移检测回归保持通过。相关定向测试 34/34、统一校验 39/39、GitHub Test 本地预演 228/228、类型与版本同步均通过。本机 Docker Desktop 未运行，PostgreSQL 真库契约由本次提交的 GitHub PostgreSQL job 继续验证。未执行 `bun run build:win`，未修改 Admin 资源。
+
 ## 2026-08-31 PMBrain 1.3.18 修复旧版数据库升级缺少 Dream 私有队列列
 
 - 时间：2026-08-31

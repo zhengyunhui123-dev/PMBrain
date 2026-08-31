@@ -5258,26 +5258,6 @@ export const MIGRATIONS: Migration[] = [
       ALTER TABLE oauth_clients ADD COLUMN IF NOT EXISTS surface TEXT;
       ALTER TABLE oauth_clients ADD COLUMN IF NOT EXISTS surface_set_by TEXT;
 
-      UPDATE content_chunks
-         SET embedded_text_hash = md5(chunk_text)
-       WHERE embedding IS NOT NULL AND embedded_text_hash IS NULL;
-      UPDATE pages p
-         SET embedding_signature = completed.signature
-        FROM (
-          SELECT page_id,
-                 CASE
-                   WHEN COUNT(*) > 0
-                    AND COUNT(*) FILTER (WHERE embedding IS NULL) = 0
-                    AND COUNT(DISTINCT model) = 1
-                    AND COUNT(DISTINCT vector_dims(embedding)) = 1
-                   THEN MIN(model) || ':' || MIN(vector_dims(embedding))::text
-                   ELSE NULL
-                 END AS signature
-            FROM content_chunks
-           GROUP BY page_id
-        ) completed
-       WHERE completed.page_id = p.id;
-
       CREATE TABLE IF NOT EXISTS session_context_state (
         source_id TEXT NOT NULL,
         client_id TEXT NOT NULL DEFAULT 'local',

@@ -1,3 +1,8 @@
+## PMBrain 1.1.51
+
+- 修复旧用户升级到 schema 121 时扫描并改写全库向量派生元数据，导致大数据库长时间无法启动的问题。
+- 对齐 GBrain：升级只增加可空字段，不回填历史 hash/signature；旧向量继续直接使用且不会被误判为待重嵌入，新数据在正常向量写入时自然补齐派生信息。
+
 ## PMBrain 1.1.50
 
 - 修复从 Desktop 1.1.49 升级后数据库显示 schema 119、实际缺少 Dream 私有队列列而导致 Sidecar 启动失败的问题。
@@ -16,7 +21,3 @@
 ## PMBrain 1.1.47
 
 - GitHub 安装包下载页和软件更新说明只保留最近 5 次更新，不再堆积完整历史。
-
-## PMBrain 1.1.46
-
-- MCP 接入将 Trae 改为 Trae Work，写入 `%APPDATA%\TRAE SOLO CN\User\mcp.json`，不再写入已停用的 `Trae\User\mcp.json`。
