@@ -568,7 +568,19 @@ export class PGLiteEngine implements BrainEngine {
         EXISTS (SELECT 1 FROM information_schema.tables
                 WHERE table_schema='public' AND table_name='dream_verdicts') AS dream_verdicts_exists,
         EXISTS (SELECT 1 FROM information_schema.columns
-                WHERE table_schema='public' AND table_name='dream_verdicts' AND column_name='expires_at') AS dream_verdicts_expires_at_exists
+                WHERE table_schema='public' AND table_name='dream_verdicts' AND column_name='expires_at') AS dream_verdicts_expires_at_exists,
+        EXISTS (SELECT 1 FROM information_schema.tables
+                WHERE table_schema='public' AND table_name='minion_jobs') AS minion_jobs_exists,
+        EXISTS (SELECT 1 FROM information_schema.columns
+                WHERE table_schema='public' AND table_name='minion_jobs' AND column_name='timeout_at') AS minion_jobs_timeout_at_exists,
+        EXISTS (SELECT 1 FROM information_schema.columns
+                WHERE table_schema='public' AND table_name='minion_jobs' AND column_name='idempotency_key') AS minion_jobs_idempotency_key_exists,
+        EXISTS (SELECT 1 FROM information_schema.columns
+                WHERE table_schema='public' AND table_name='minion_jobs' AND column_name='private_queue_owner_job_id') AS minion_jobs_private_queue_owner_job_id_exists,
+        EXISTS (SELECT 1 FROM information_schema.columns
+                WHERE table_schema='public' AND table_name='minion_jobs' AND column_name='private_queue_owner_token') AS minion_jobs_private_queue_owner_token_exists,
+        EXISTS (SELECT 1 FROM information_schema.columns
+                WHERE table_schema='public' AND table_name='minion_jobs' AND column_name='private_queue_lease_until') AS minion_jobs_private_queue_lease_until_exists
     `);
     const probe = rows[0] as {
       pages_exists: boolean;
@@ -612,6 +624,12 @@ export class PGLiteEngine implements BrainEngine {
       pages_generation_exists: boolean;
       dream_verdicts_exists: boolean;
       dream_verdicts_expires_at_exists: boolean;
+      minion_jobs_exists: boolean;
+      minion_jobs_timeout_at_exists: boolean;
+      minion_jobs_idempotency_key_exists: boolean;
+      minion_jobs_private_queue_owner_job_id_exists: boolean;
+      minion_jobs_private_queue_owner_token_exists: boolean;
+      minion_jobs_private_queue_lease_until_exists: boolean;
     };
 
     const needsPagesBootstrap = probe.pages_exists && !probe.source_id_exists;
@@ -682,6 +700,12 @@ export class PGLiteEngine implements BrainEngine {
     const needsPagesGeneration = probe.pages_exists && !probe.pages_generation_exists;
     const needsDreamVerdictsExpiresAt = probe.dream_verdicts_exists
       && !probe.dream_verdicts_expires_at_exists;
+    const needsMinionJobsBootstrap = probe.minion_jobs_exists
+      && (!probe.minion_jobs_timeout_at_exists
+        || !probe.minion_jobs_idempotency_key_exists
+        || !probe.minion_jobs_private_queue_owner_job_id_exists
+        || !probe.minion_jobs_private_queue_owner_token_exists
+        || !probe.minion_jobs_private_queue_lease_until_exists);
 
     // Fresh installs (no tables yet) and modern brains both no-op.
     if (!needsPagesBootstrap && !needsLinksBootstrap && !needsChunksBootstrap
@@ -693,9 +717,9 @@ export class PGLiteEngine implements BrainEngine {
         && !needsPagesLinksExtractedAt
         && !needsPagesProvenance
         && !needsContextualRetrievalColumns && !needsPagesGeneration
-        && !needsDreamVerdictsExpiresAt) return;
+        && !needsDreamVerdictsExpiresAt && !needsMinionJobsBootstrap) return;
 
-    process.stderr.write('  Pre-v0.21 brain detected, applying forward-reference bootstrap\n');
+    process.stderr.write('  Forward-reference bootstrap required, adding missing schema prerequisites\n');
 
     if (needsPagesBootstrap) {
       // Mirror schema-embedded.ts shape for `sources` so the subsequent
@@ -936,6 +960,16 @@ export class PGLiteEngine implements BrainEngine {
     if (needsDreamVerdictsExpiresAt) {
       await this.db.exec(`
         ALTER TABLE dream_verdicts ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ;
+      `);
+    }
+
+    if (needsMinionJobsBootstrap) {
+      await this.db.exec(`
+        ALTER TABLE minion_jobs ADD COLUMN IF NOT EXISTS timeout_at TIMESTAMPTZ;
+        ALTER TABLE minion_jobs ADD COLUMN IF NOT EXISTS idempotency_key TEXT;
+        ALTER TABLE minion_jobs ADD COLUMN IF NOT EXISTS private_queue_owner_job_id INTEGER;
+        ALTER TABLE minion_jobs ADD COLUMN IF NOT EXISTS private_queue_owner_token TEXT;
+        ALTER TABLE minion_jobs ADD COLUMN IF NOT EXISTS private_queue_lease_until TIMESTAMPTZ;
       `);
     }
   }

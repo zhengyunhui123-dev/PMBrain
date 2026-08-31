@@ -1,5 +1,14 @@
 # Bug 修复台账
 
+## 2026-08-31 PMBrain 1.3.18 修复旧版数据库升级缺少 Dream 私有队列列
+
+- 时间：2026-08-31
+- 版本号：PMBrain 1.3.18；PMBrain Desktop 1.1.50
+- 标题：修复 schema 119 版本碰撞导致升级后 Sidecar 无法启动
+- 描述：旧版 Desktop 1.1.49 已使用 migration 117/118/119，但合入 Dream 后同一版本段承载了不同迁移，旧用户数据库会显示已到 schema 119，实际没有 `minion_jobs` 的 Dream 私有队列列；新源码重放当前 schema 创建索引时因此报 `private_queue_lease_until does not exist` 并中止。现 PGLite 和 PostgreSQL 在 schema 重放前只读探测并以 `ADD COLUMN IF NOT EXISTS` 补齐五个历史增量列，再由新增 migration 122 补全私有队列外键和索引。修复只增加缺失结构，不清空、不覆盖、不重建数据库，不改用户知识、向量、Wiki、原始资料或配置，也未连接或修改用户真实数据库及升级备份。
+- 是否完成：是
+- 最终结果：失败优先测试已用隔离文件数据库复现 Desktop 1.1.49 的 schema 119 缺列状态；修复后同一数据库可关闭、重新打开并升级至 schema 122，三个私有队列列、外键和索引完整。PGLite 与迁移门禁定向回归 171/171、大文档串行回归 11/11、统一校验 39/39、GitHub Test 本地预演 228/228、类型与版本同步均通过；PostgreSQL 升级用例和完整 GitHub 精确 SHA 结果由本次提交继续复验。3MB 大文档用例保持 600/600 完整向量化断言，仅将测试等待上限调整为 60 秒以覆盖 CI 波动。Desktop 提升到 1.1.50，确保已安装 1.1.49 的用户能收到修复更新。未执行 `bun run build:win`，未修改 Admin 资源。
+
 ## 2026-08-31 PMBrain 1.3.17 修复 P1 合入后的 GitHub Test 红项
 
 - 时间：2026-08-31

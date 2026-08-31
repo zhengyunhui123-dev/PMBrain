@@ -5318,6 +5318,35 @@ export const MIGRATIONS: Migration[] = [
         ON chat_usage_log (model, created_at);
     `,
   },
+  {
+    version: 122,
+    name: 'repair_private_queue_lineage',
+    idempotent: true,
+    sql: `
+      ALTER TABLE minion_jobs ADD COLUMN IF NOT EXISTS private_queue_owner_job_id INTEGER;
+      ALTER TABLE minion_jobs ADD COLUMN IF NOT EXISTS private_queue_owner_token TEXT;
+      ALTER TABLE minion_jobs ADD COLUMN IF NOT EXISTS private_queue_lease_until TIMESTAMPTZ;
+      DO $$ BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint
+           WHERE conrelid = 'minion_jobs'::regclass
+             AND contype = 'f'
+             AND pg_get_constraintdef(oid) LIKE 'FOREIGN KEY (private_queue_owner_job_id)%'
+        ) THEN
+          ALTER TABLE minion_jobs
+            ADD CONSTRAINT minion_jobs_private_queue_owner_fk
+            FOREIGN KEY (private_queue_owner_job_id) REFERENCES minion_jobs(id) ON DELETE SET NULL;
+        END IF;
+      END $$;
+      CREATE INDEX IF NOT EXISTS idx_minion_jobs_private_queue_recovery
+        ON minion_jobs (queue, private_queue_lease_until)
+        WHERE queue LIKE 'dream-inline-%'
+          AND status IN ('waiting','active','delayed','waiting-children','paused');
+      CREATE INDEX IF NOT EXISTS idx_minion_jobs_private_queue_owner
+        ON minion_jobs (private_queue_owner_job_id)
+        WHERE private_queue_owner_job_id IS NOT NULL;
+    `,
+  },
 ];
 
 export const LATEST_VERSION = MIGRATIONS.length > 0

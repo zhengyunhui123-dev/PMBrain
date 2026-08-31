@@ -34,6 +34,58 @@ import { LATEST_VERSION } from '../src/core/migrate.ts';
 delete process.env.GBRAIN_PGLITE_SNAPSHOT;
 
 describe('PGLiteEngine#applyForwardReferenceBootstrap', () => {
+  test('Desktop 1.1.49 的 schema 119 缺少 Dream 私有队列列时可重新打开并完整升级', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'pmbrain-schema119-private-queue-'));
+    const databasePath = join(root, 'brain.pglite');
+    const original = new PGLiteEngine();
+    const reopened = new PGLiteEngine();
+    try {
+      await original.connect({ database_path: databasePath });
+      await original.initSchema();
+      const db = (original as any).db;
+      await db.exec(`
+        DROP INDEX IF EXISTS idx_minion_jobs_private_queue_recovery;
+        DROP INDEX IF EXISTS idx_minion_jobs_private_queue_owner;
+        ALTER TABLE minion_jobs DROP COLUMN IF EXISTS private_queue_owner_job_id CASCADE;
+        ALTER TABLE minion_jobs DROP COLUMN IF EXISTS private_queue_owner_token;
+        ALTER TABLE minion_jobs DROP COLUMN IF EXISTS private_queue_lease_until;
+      `);
+      await original.setConfig('version', '119');
+      await original.disconnect();
+
+      await reopened.connect({ database_path: databasePath });
+      await reopened.initSchema();
+
+      expect(await reopened.getConfig('version')).toBe(String(LATEST_VERSION));
+      const columns = await reopened.executeRaw<{ column_name: string }>(`
+        SELECT column_name FROM information_schema.columns
+         WHERE table_name = 'minion_jobs'
+           AND column_name IN (
+             'private_queue_owner_job_id',
+             'private_queue_owner_token',
+             'private_queue_lease_until'
+           )
+         ORDER BY column_name
+      `);
+      expect(columns.map(row => row.column_name)).toEqual([
+        'private_queue_lease_until',
+        'private_queue_owner_job_id',
+        'private_queue_owner_token',
+      ]);
+      const constraints = await reopened.executeRaw<{ count: number }>(`
+        SELECT COUNT(*)::int AS count FROM pg_constraint
+         WHERE conrelid = 'minion_jobs'::regclass
+           AND contype = 'f'
+           AND pg_get_constraintdef(oid) LIKE 'FOREIGN KEY (private_queue_owner_job_id)%'
+      `);
+      expect(constraints[0]?.count).toBe(1);
+    } finally {
+      await original.disconnect().catch(() => undefined);
+      await reopened.disconnect().catch(() => undefined);
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 60_000);
+
   test('Desktop 旧用户的 schema 109 数据库可由同一个 sidecar 生命周期重新打开并升级', async () => {
     const root = mkdtempSync(join(tmpdir(), 'pmbrain-schema109-reopen-'));
     const databasePath = join(root, 'brain.pglite');
