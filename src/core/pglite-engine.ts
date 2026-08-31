@@ -564,7 +564,11 @@ export class PGLiteEngine implements BrainEngine {
         EXISTS (SELECT 1 FROM information_schema.columns
                 WHERE table_schema='public' AND table_name='sources' AND column_name='trust_frontmatter_overrides') AS sources_trust_fm_exists,
         EXISTS (SELECT 1 FROM information_schema.columns
-                WHERE table_schema='public' AND table_name='pages' AND column_name='generation') AS pages_generation_exists
+                WHERE table_schema='public' AND table_name='pages' AND column_name='generation') AS pages_generation_exists,
+        EXISTS (SELECT 1 FROM information_schema.tables
+                WHERE table_schema='public' AND table_name='dream_verdicts') AS dream_verdicts_exists,
+        EXISTS (SELECT 1 FROM information_schema.columns
+                WHERE table_schema='public' AND table_name='dream_verdicts' AND column_name='expires_at') AS dream_verdicts_expires_at_exists
     `);
     const probe = rows[0] as {
       pages_exists: boolean;
@@ -606,6 +610,8 @@ export class PGLiteEngine implements BrainEngine {
       sources_cr_mode_exists: boolean;
       sources_trust_fm_exists: boolean;
       pages_generation_exists: boolean;
+      dream_verdicts_exists: boolean;
+      dream_verdicts_expires_at_exists: boolean;
     };
 
     const needsPagesBootstrap = probe.pages_exists && !probe.source_id_exists;
@@ -674,6 +680,8 @@ export class PGLiteEngine implements BrainEngine {
     // body; bootstrap only needs to add the column on pre-v91 brains so
     // the CREATE INDEX doesn't crash.
     const needsPagesGeneration = probe.pages_exists && !probe.pages_generation_exists;
+    const needsDreamVerdictsExpiresAt = probe.dream_verdicts_exists
+      && !probe.dream_verdicts_expires_at_exists;
 
     // Fresh installs (no tables yet) and modern brains both no-op.
     if (!needsPagesBootstrap && !needsLinksBootstrap && !needsChunksBootstrap
@@ -684,7 +692,8 @@ export class PGLiteEngine implements BrainEngine {
         && !needsSourcesArchive && !needsPagesLastRetrievedAt
         && !needsPagesLinksExtractedAt
         && !needsPagesProvenance
-        && !needsContextualRetrievalColumns && !needsPagesGeneration) return;
+        && !needsContextualRetrievalColumns && !needsPagesGeneration
+        && !needsDreamVerdictsExpiresAt) return;
 
     process.stderr.write('  Pre-v0.21 brain detected, applying forward-reference bootstrap\n');
 
@@ -921,6 +930,12 @@ export class PGLiteEngine implements BrainEngine {
       // the column. v91 is idempotent.
       await this.db.exec(`
         ALTER TABLE pages ADD COLUMN IF NOT EXISTS generation BIGINT NOT NULL DEFAULT 1;
+      `);
+    }
+
+    if (needsDreamVerdictsExpiresAt) {
+      await this.db.exec(`
+        ALTER TABLE dream_verdicts ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ;
       `);
     }
   }

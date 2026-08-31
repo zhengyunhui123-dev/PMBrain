@@ -1418,13 +1418,13 @@ describe('PGLiteEngine: v0.13.1 error-wrap on connect() (#223)', () => {
     const src = readFileSync('src/core/pglite-engine.ts', 'utf-8');
     // Structural: the try/catch block must wrap PGlite.create() (the actual
     // abort site, NOT engine-factory.ts). The error message must name the
-    // issue and suggest gbrain doctor. Must NOT suggest "missing migrations"
+    // issue and suggest pmbrain doctor. Must NOT suggest "missing migrations"
     // as a cause (that was conflating #218 and #223 — migrations run AFTER
     // create()).
     expect(src).toContain('this._db = await preservingProcessExitCode');
     expect(src).toContain('PGlite.create({');
     expect(src).toContain('https://github.com/garrytan/gbrain/issues/223');
-    expect(src).toContain('gbrain doctor');
+    expect(src).toContain('pmbrain doctor');
     expect(src).toContain('Original error:');
     // Regression guard: the user-visible error MESSAGE must not re-introduce
     // the misleading "missing migrations" hint. (A source comment explaining

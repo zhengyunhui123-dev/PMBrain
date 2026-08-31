@@ -399,6 +399,8 @@ export class PostgresEngine implements BrainEngine {
       sources_archive_expires_at_exists: boolean;
       pages_last_retrieved_at_exists: boolean;
       pages_links_extracted_at_exists: boolean;
+      dream_verdicts_exists: boolean;
+      dream_verdicts_expires_at_exists: boolean;
     }[]>`
       SELECT
         EXISTS (SELECT 1 FROM information_schema.tables
@@ -478,7 +480,11 @@ export class PostgresEngine implements BrainEngine {
         EXISTS (SELECT 1 FROM information_schema.columns
                 WHERE table_schema = current_schema() AND table_name = 'sources' AND column_name = 'trust_frontmatter_overrides') AS sources_trust_fm_exists,
         EXISTS (SELECT 1 FROM information_schema.columns
-                WHERE table_schema = current_schema() AND table_name = 'pages' AND column_name = 'generation') AS pages_generation_exists
+                WHERE table_schema = current_schema() AND table_name = 'pages' AND column_name = 'generation') AS pages_generation_exists,
+        EXISTS (SELECT 1 FROM information_schema.tables
+                WHERE table_schema = current_schema() AND table_name = 'dream_verdicts') AS dream_verdicts_exists,
+        EXISTS (SELECT 1 FROM information_schema.columns
+                WHERE table_schema = current_schema() AND table_name = 'dream_verdicts' AND column_name = 'expires_at') AS dream_verdicts_expires_at_exists
     `;
     const probe = probeRows[0]!;
 
@@ -556,6 +562,8 @@ export class PostgresEngine implements BrainEngine {
       sources_cr_mode_exists?: boolean;
       sources_trust_fm_exists?: boolean;
       pages_generation_exists?: boolean;
+      dream_verdicts_exists?: boolean;
+      dream_verdicts_expires_at_exists?: boolean;
     };
     const needsContextualRetrievalColumns = (probe.pages_exists
         && (!probeCr.pages_cr_mode_exists || !probeCr.pages_corpus_generation_exists))
@@ -566,6 +574,8 @@ export class PostgresEngine implements BrainEngine {
     // it. Pre-v91 brains crash without the column; bootstrap adds it before
     // SCHEMA_SQL replay creates the index.
     const needsPagesGeneration = probe.pages_exists && !probeCr.pages_generation_exists;
+    const needsDreamVerdictsExpiresAt = probeCr.dream_verdicts_exists === true
+      && probeCr.dream_verdicts_expires_at_exists !== true;
 
     if (!needsPagesBootstrap && !needsLinksBootstrap && !needsChunksBootstrap
         && !needsPagesDeletedAt && !needsMcpLogBootstrap && !needsSubagentProviderId
@@ -575,7 +585,8 @@ export class PostgresEngine implements BrainEngine {
         && !needsPagesLastRetrievedAt
         && !needsPagesLinksExtractedAt
         && !needsPagesProvenance
-        && !needsContextualRetrievalColumns && !needsPagesGeneration) return;
+        && !needsContextualRetrievalColumns && !needsPagesGeneration
+        && !needsDreamVerdictsExpiresAt) return;
 
     process.stderr.write('  Pre-v0.21 brain detected, applying forward-reference bootstrap\n');
 
@@ -810,6 +821,12 @@ export class PostgresEngine implements BrainEngine {
       // later; bootstrap only adds the column. v91 is idempotent.
       await conn.unsafe(`
         ALTER TABLE pages ADD COLUMN IF NOT EXISTS generation BIGINT NOT NULL DEFAULT 1;
+      `);
+    }
+
+    if (needsDreamVerdictsExpiresAt) {
+      await conn.unsafe(`
+        ALTER TABLE dream_verdicts ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ;
       `);
     }
   }

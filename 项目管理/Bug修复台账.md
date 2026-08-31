@@ -1,5 +1,14 @@
 # Bug 修复台账
 
+## 2026-08-31 PMBrain 1.3.17 修复 P1 合入后的 GitHub Test 红项
+
+- 时间：2026-08-31
+- 版本号：PMBrain 1.3.17；PMBrain Desktop 1.1.49（桌面端未改动）
+- 标题：补齐 Dream verdict TTL 升级 bootstrap，并同步 P1 行为契约
+- 描述：GitHub Test run `33374867851` 的 10 个 Unit 分片中有 6 个失败。真实代码缺口是 migration 120 为 `dream_verdicts` 增加 `expires_at`，但 PGLite/PostgreSQL 的迁移前 bootstrap 未覆盖旧库已有 verdict 表的缺列场景；现两个引擎均先探测并仅补可空 TTL 列，再由原迁移负责默认值、按 `judged_at + 30 days` 回填、非空约束与索引。其余失败是 P1 已实现后仍锁定旧行为的测试：Embedding stale 查询、模型切换重建顺序、7 个 Memory Verb、MCP surface、未知模型定价提示和 PMBrain doctor 品牌名；现更新为对应的新安全契约，不回退 P1 产品行为、不放宽 fail-closed 与 MCP 调用限制。未连接或迁移用户数据库，未修改用户知识、向量、Wiki、原始资料或配置。
+- 是否完成：是
+- 最终结果：GitHub 红项对应的 bootstrap、Embedding、Memory Verb、MCP surface、预算与 PGLite 错误包装定向验证通过，TypeScript 类型检查通过；统一 PR 预检与 GitHub 精确 SHA 结果由本次提交继续复验。未执行 `bun run build:win`，未修改 Admin 或 Desktop 资源。
+
 ## 2026-08-30 PMBrain 1.3.13 修复 Work Desktop 合并后的 GitHub Test 契约
 
 - 时间：2026-08-30
