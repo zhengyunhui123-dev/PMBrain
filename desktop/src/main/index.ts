@@ -35,6 +35,7 @@ import { listDesktopProviderModels } from './model-catalog.js';
 import { LanController } from './network/lan-controller.js';
 import { listNetworkCandidates } from './network-manager.js';
 import { SidecarController } from './sidecar/sidecar-controller.js';
+import { chooseEmbeddingRebuild, waitEmbeddingRebuildChoice } from './startup/embedding-rebuild-choice.js';
 import { SetupController } from './startup/setup-controller.js';
 import { SystemSettingsController } from './system/system-settings-controller.js';
 import { UpdateController } from './updates/update-controller.js';
@@ -93,21 +94,6 @@ function sendStartupProgress(progress: StartupProgress): void {
 
 function hideStartupProgress(): void {
   sendStartupProgress({ ...startupProgress, visible: false, canDeferEmbeddingRebuild: false });
-}
-
-let embeddingRebuildChoiceResolver: ((choice: 'wait' | 'defer') => void) | null = null;
-
-function waitEmbeddingRebuildChoice(): Promise<'wait' | 'defer'> {
-  return new Promise(resolve => {
-    embeddingRebuildChoiceResolver = resolve;
-  });
-}
-
-function chooseEmbeddingRebuild(choice: 'wait' | 'defer'): void {
-  const resolve = embeddingRebuildChoiceResolver;
-  embeddingRebuildChoiceResolver = null;
-  if (choice !== 'wait' && choice !== 'defer') return;
-  resolve?.(choice);
 }
 
 async function ensureRuntimeReady(): Promise<void> {

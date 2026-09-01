@@ -1,5 +1,14 @@
 # Bug 修复台账
 
+## 2026-09-01 PMBrain 1.3.26 修复向量切换版本的 CI 发布门禁
+
+- 时间：2026-09-01
+- 版本号：PMBrain 1.3.26；PMBrain Desktop 1.1.58
+- 标题：同步新向量重建交互的测试契约、Windows 真实旅程与 Admin 发布产物
+- 描述：1.3.25 / Desktop 1.1.57 已把模型切换改为用户选择“稍后处理”或“继续等待”，但旧回归仍要求 Desktop 直接执行 `--force-reembed`，Windows 真实 UI 旅程也没有处理新增选择按钮；同时 Admin 源码变更后未提交对应生产资源，导致 Test、Core User Journeys、Desktop runtime 和 verify 门禁失败。现将选择协调器从 Desktop 入口抽为独立模块，保持入口编排边界；测试锁定“仅明确选择继续后提交 forceReembed 后台任务”，Windows 旅程显式点击继续等待；PGLite 结构测试改为当前受保护 WAL 自愈契约，不恢复过期的固定 issue 提示。不修改、扫描、迁移或重建用户知识、向量、Wiki、原始资料和数据库。
+- 是否完成：是
+- 最终结果：CI 红项对应的根项目定向回归 120/120、Desktop 定向回归 26/26、根项目与 Desktop TypeScript 均通过；Admin 生产资源已重建，统一 verify 39/39、GitHub Test 本地预演 228/228 通过。GitHub 精确 SHA 结果由本次提交继续复验。未执行 `bun run build:win`，未连接或修改用户真实数据库。
+
 ## 2026-09-01 PMBrain 1.3.24 安装包补齐内置 Schema Pack
 
 - 时间：2026-09-01

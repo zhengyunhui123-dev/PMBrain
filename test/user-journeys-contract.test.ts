@@ -23,4 +23,10 @@ describe('core user journeys cover packaged Desktop openability', () => {
     expect(script).toContain('build:dir');
     expect(script).not.toContain('importButton?.disabled');
   });
+
+  test('the embedding switch journey explicitly chooses the continue-rebuild path', () => {
+    const script = readFileSync(join(ROOT, 'test/user-journeys/core_journeys.py'), 'utf8');
+    expect(script).toContain('page.locator("#setup-wait-actions").wait_for(state="visible"');
+    expect(script).toContain('page.locator("#setup-wait-continue").click()');
+  });
 });
