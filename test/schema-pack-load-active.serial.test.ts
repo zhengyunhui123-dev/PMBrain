@@ -32,6 +32,16 @@ describe('loadActivePack boundary helper', () => {
     expect(pack.manifest.page_types.length).toBeGreaterThan(0);
   });
 
+  test('configured gbrain-base-v2 loads from bundled YAML', async () => {
+    _resetPackCacheForTests();
+    const pack = await loadActivePack({
+      cfg: { engine: 'pglite', schema_pack: 'gbrain-base-v2' } as never,
+      remote: false,
+    });
+    expect(pack.manifest.name).toBe('gbrain-base-v2');
+    expect(pack.manifest.page_types.length).toBeGreaterThan(0);
+  });
+
   test('tier-1 per-call wins when remote=false', async () => {
     _resetPackCacheForTests();
     const result = resolveActivePackNameOnly({

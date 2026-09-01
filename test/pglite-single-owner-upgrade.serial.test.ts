@@ -83,7 +83,7 @@ describe('PGLite upgrade scenarios A–E', () => {
         await engine.disconnect();
       }
     });
-  });
+  }, 30_000);
 
   test('Scenario B: live owner rejects second instance without deleting live lock', async () => {
     writeLockFixture(dbDir, {

@@ -1,5 +1,14 @@
 # Bug 修复台账
 
+## 2026-09-01 PMBrain 1.3.24 安装包补齐内置 Schema Pack
+
+- 时间：2026-09-01
+- 版本号：PMBrain 1.3.24；PMBrain Desktop 1.1.56
+- 标题：桌面安装包打入 `src/core/schema-pack/base/` 全部内置 YAML，缺少 gbrain-base-v2 则打包失败
+- 描述：安装版管理台健康卡片报 `The configured schema pack "gbrain-base-v2" could not be resolved.`。Sidecar 用 `bun build` 打成单文件后，loader 在运行时目录的 `base/` 查找 YAML，但构建只拷了 skills/recipes/templates，没拷 Schema Pack。Dream 的类型、可抽取规则和 Advisor 都依赖这套内置 Pack。现 sidecar 构建复制全部 `*.yaml`，并在 sidecar 旁和 bun.exe 旁查找；`build:sidecar`、`verify:runtime`、`verify:package` 任一缺少 `gbrain-base-v2.yaml` 即失败。不改用户知识、向量、Wiki 或原始资料。
+- 是否完成：是
+- 最终结果：gbrain-base-v2 从内置 YAML 加载、4 个 lens pack、load-active 10/10、桌面打包契约含“缺 gbrain-base-v2 则失败”、发布说明 6/6 均通过。根项目与 Desktop TypeScript、版本同步通过。未执行 `bun run build:win`，未修改 Admin 资源，未改用户知识库。
+
 ## 2026-09-01 PMBrain 1.3.22 修复 Windows 冷备校验 EPERM 导致升级启动失败
 
 - 时间：2026-09-01

@@ -31,4 +31,9 @@ describe('desktop package version contract', () => {
     expect(verifierSource).toContain("shape.releaseNotes");
     expect(verifierSource).toContain("'release-notes.md'");
   });
+
+  test('fails the Windows package if gbrain-base-v2.yaml is missing from the sidecar runtime', () => {
+    expect(verifierSource).toContain('gbrain-base-v2.yaml');
+    expect(verifierSource).toContain("join(shape.runtimeRoot, 'base'");
+  });
 });

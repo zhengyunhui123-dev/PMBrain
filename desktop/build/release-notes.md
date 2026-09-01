@@ -1,3 +1,11 @@
+## PMBrain 1.1.56
+
+- 安装包补齐内置 Schema Pack（`gbrain-base-v2.yaml` 及 `src/core/schema-pack/base/` 下全部 YAML）。缺少 `gbrain-base-v2.yaml` 时 `bun run build:win` 会失败，避免管理台再报 pack 无法解析。
+
+## PMBrain 1.1.55
+
+- 数据库目录里的 `.gbrain-lock.released-*` / `.stale-*` 不再无限堆积。获取或释放锁时自动清理：保留最近 3 天，超过 3 天也至少留最新 5 份；正在使用的 `.gbrain-lock` 和知识库文件不动。
+
 ## PMBrain 1.1.54
 
 - 修复 Windows 上升级冷备校验副本时 PGLite WASM 中止后无法 `rename pg_wal`（`EPERM`），导致每次启动都卡在「服务没有成功启动」的问题。校验副本在发现未干净关闭后先做受保护 WAL 修复再打开，不再先打开再锁死文件。
@@ -12,13 +20,3 @@
 
 - 修复手动重新向量化运行 10 分钟后被桌面后台强制终止、随后 PGLite 连接恢复失败的问题；向量任务现在持续运行到正常完成或用户主动取消。
 - 修复恢复页成功启动 Sidecar 后未记录升级完成，导致下次启动再次冷备的问题；运行时 `.pmbrain-resolve.sock` 不再进入数据库备份，Sidecar 退出时会在 IPC 真正关闭后清理它。
-
-## PMBrain 1.1.51
-
-- 修复旧用户升级到 schema 121 时扫描并改写全库向量派生元数据，导致大数据库长时间无法启动的问题。
-- 对齐 GBrain：升级只增加可空字段，不回填历史 hash/signature；旧向量继续直接使用且不会被误判为待重嵌入，新数据在正常向量写入时自然补齐派生信息。
-
-## PMBrain 1.1.50
-
-- 修复从 Desktop 1.1.49 升级后数据库显示 schema 119、实际缺少 Dream 私有队列列而导致 Sidecar 启动失败的问题。
-- 升级会先幂等补齐当前 schema 所需列，再迁移到 schema 122 并补全外键和索引；不会清空、覆盖或重建用户数据库。

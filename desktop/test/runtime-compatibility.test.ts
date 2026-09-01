@@ -73,6 +73,16 @@ describe('desktop Windows runtime compatibility', () => {
     expect(buildSource).not.toContain('cp(process.execPath');
   });
 
+  test('packages every bundled schema pack YAML next to the sidecar', () => {
+    expect(buildSource).toContain("join(projectRoot, 'src', 'core', 'schema-pack', 'base')");
+    expect(buildSource).toContain("join(outputDirectory, 'base')");
+    expect(buildSource).toContain('gbrain-base-v2.yaml');
+    expect(buildSource).toContain('Sidecar runtime is missing bundled schema pack gbrain-base-v2.yaml');
+    expect(verifierSource).toContain("join(shape.runtimeRoot, 'base'");
+    expect(verifierSource).toContain('gbrain-base-v2.yaml');
+    expect(verifierSource).toContain("src', 'core', 'schema-pack', 'base'");
+  });
+
   test('verifies manifest, native architecture, Bun revision, Canvas and PGLite before release', () => {
     expect(verifierSource).toContain("join(shape.runtimeRoot, 'runtime-manifest.json')");
     expect(verifierSource).toContain('binaryArchitecture');

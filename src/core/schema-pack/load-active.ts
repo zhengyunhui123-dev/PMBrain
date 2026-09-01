@@ -114,15 +114,18 @@ function defaultPackLocator(name: string): string | null {
     'gbrain-base-v2',
   ];
   if (BUNDLED.includes(name)) {
-    // Resolve bundled YAML relative to this source file. Works in both
-    // direct-bun execution and bun --compile binaries.
-    const here = dirname(fileURLToPath(import.meta.url));
-    const bundledPath = join(here, 'base', `${name}.yaml`);
-    if (existsSync(bundledPath)) return bundledPath;
-    // Repo-root fallback for tests running from a worktree where the
-    // module path doesn't resolve to the source tree.
-    const repoRootFallback = join(here, '..', '..', '..', 'src', 'core', 'schema-pack', 'base', `${name}.yaml`);
-    if (existsSync(repoRootFallback)) return repoRootFallback;
+    const file = `${name}.yaml`;
+    const roots: string[] = [];
+    try { roots.push(dirname(fileURLToPath(import.meta.url))); } catch { /* bundled without import.meta.url */ }
+    try { roots.push(dirname(process.execPath)); } catch { /* no execPath */ }
+    for (const root of roots) {
+      const nextToModule = join(root, 'base', file);
+      if (existsSync(nextToModule)) return nextToModule;
+      const packagedTree = join(root, 'src', 'core', 'schema-pack', 'base', file);
+      if (existsSync(packagedTree)) return packagedTree;
+      const repoRootFallback = join(root, '..', '..', '..', 'src', 'core', 'schema-pack', 'base', file);
+      if (existsSync(repoRootFallback)) return repoRootFallback;
+    }
     return null;
   }
   // User-installed pack at ~/.gbrain/schema-packs/<name>/pack.{yaml,json}
