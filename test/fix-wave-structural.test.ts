@@ -188,6 +188,6 @@ describe('v0.41.8.0 #1340 — PGLite WASM init classifier', () => {
   test('pglite-engine.ts connect catch block routes through the classifier', () => {
     const src = readFileSync('src/core/pglite-engine.ts', 'utf8');
     expect(src).toMatch(/classifyPgliteInitError\(original\)/);
-    expect(src).toMatch(/buildPgliteInitErrorMessage\(verdict, original\)/);
+    expect(src).toMatch(/buildPgliteInitErrorMessage\(verdict, original, process\.platform, ctx\)/);
   });
 });
