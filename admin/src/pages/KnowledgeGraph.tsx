@@ -21,8 +21,15 @@ import type {
 
 type CanvasNode = KnowledgeGraphNode & NodeObject<KnowledgeGraphNode>;
 type CanvasLink = KnowledgeGraphEdge & LinkObject<KnowledgeGraphNode, KnowledgeGraphEdge>;
+type GraphViewMode = 'local' | 'global' | 'isolated';
 
 const EMPTY_GRAPH: KnowledgeGraphData = { nodes: [], edges: [] };
+
+function requestedViewMode(): GraphViewMode {
+  const query = window.location.hash.split('?')[1] ?? '';
+  const requested = new URLSearchParams(query).get('view');
+  return requested === 'global' || requested === 'isolated' ? requested : 'local';
+}
 
 function escapeHtml(value: string): string {
   return value.replace(/[&<>'"]/g, character => ({
@@ -70,7 +77,7 @@ export function KnowledgeGraphPage() {
   const [sourceFilter, setSourceFilter] = useState('all');
   const [relationFilter, setRelationFilter] = useState('all');
   const [relationTypes, setRelationTypes] = useState<string[]>([]);
-  const [viewMode, setViewMode] = useState<'local' | 'global' | 'isolated'>('local');
+  const [viewMode, setViewMode] = useState<GraphViewMode>(requestedViewMode);
   const [globalTotals, setGlobalTotals] = useState<{ nodes: number; edges: number } | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [hoveredNodeId, setHoveredNodeId] = useState<number | null>(null);
@@ -82,6 +89,12 @@ export function KnowledgeGraphPage() {
     () => window.matchMedia('(prefers-reduced-motion: reduce)').matches,
     [],
   );
+
+  useEffect(() => {
+    const syncRequestedView = () => setViewMode(requestedViewMode());
+    window.addEventListener('hashchange', syncRequestedView);
+    return () => window.removeEventListener('hashchange', syncRequestedView);
+  }, []);
 
   const canvasData = useMemo(() => ({
     nodes: graph.nodes as CanvasNode[],

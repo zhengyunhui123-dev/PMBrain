@@ -201,6 +201,12 @@ describe('desktop system orchestration contracts', () => {
     expect(main).not.toContain("title: '正在应用数据库迁移'");
   });
 
+  test('向量重建选择只在 Sidecar 就绪后显示，且按钮显示前已经注册等待器', () => {
+    expect(setupController).toMatch(
+      /await this\.dependencies\.sidecar\.start\(false\)[\s\S]*if \(embeddingRebuildQueued\) \{[\s\S]*const rebuildChoice = this\.dependencies\.waitEmbeddingRebuildChoice\(\);[\s\S]*canDeferEmbeddingRebuild: true/,
+    );
+  });
+
   test('allows credential listing and revocation while keeping creation behind the live gateway', () => {
     expect(sharedAccessController).toMatch(/async read\(\)[\s\S]*requireSidecar/);
     expect(sharedAccessController).toMatch(/async revoke[\s\S]*requireSidecar/);

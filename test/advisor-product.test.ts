@@ -1,7 +1,7 @@
 /**
  * 产品经理可读的测试说明：
  * 首页健康卡片要把底层检查翻译成普通人能看懂的中文，并接到已有任务：
- * 未向量化 → 继续处理；知识源过期 → 立即同步；孤立知识 → 整理关系。
+ * 未向量化 → 继续处理；知识源过期 → 立即同步；孤立知识 → 查看孤立知识。
  * 未配置向量时不能再推荐 ZeroEntropy，也不能假装可以一键补向量。
  */
 import { describe, expect, test } from 'bun:test';
@@ -45,7 +45,7 @@ describe('advisor product view', () => {
         id: 'orphan_pages',
         severity: 'info',
         title: '326 knowledge pages have no links in or out.',
-        fix: { command_argv: ['pmbrain', 'dream', '--phase', 'orphans'], dispatch_id: 'organize_orphans' },
+        fix: { command_argv: ['pmbrain', 'orphans'] },
         collector: 'usage-shape',
       }),
     ]), 92);
@@ -62,11 +62,12 @@ describe('advisor product view', () => {
     expect(view.suggestions.map((item) => item.action_label)).toEqual([
       '继续处理',
       '立即同步',
-      '整理关系',
+      '查看孤立知识',
     ]);
     expect(resolveAdminAdvisorAction(view.suggestions[0]!)).toEqual({ kind: 'embed_stale' });
     expect(resolveAdminAdvisorAction(view.suggestions[1]!)).toEqual({ kind: 'sync_source', sourceId: 'work' });
-    expect(resolveAdminAdvisorAction(view.suggestions[2]!)).toEqual({ kind: 'dream_orphans' });
+    expect(resolveAdminAdvisorAction(view.suggestions[2]!)).toEqual({ kind: 'navigate', page: 'graph?view=isolated' });
+    expect(view.suggestions[2]?.dispatch_id).toBeUndefined();
   });
 
   test('does not offer embed-now when vectors are not configured, and never mentions ZeroEntropy', () => {

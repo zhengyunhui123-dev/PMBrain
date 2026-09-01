@@ -26,4 +26,15 @@ describe('Admin overview navigation', () => {
     expect(overviewSource).toContain("api.applyAdvisor(suggestion.dispatch_id)");
     expect(overviewSource).toContain("onNavigate?.('tasks')");
   });
+
+  test('orphan advice opens the isolated graph instead of starting an orphan scan', () => {
+    const productSource = readFileSync(join(root, 'src/core/advisor/product.ts'), 'utf8');
+    const adminAdvisorSource = readFileSync(join(root, 'src/commands/admin-advisor.ts'), 'utf8');
+    const graphSource = readFileSync(join(root, 'admin/src/pages/KnowledgeGraph.tsx'), 'utf8');
+    expect(productSource).toContain("action_label: '查看孤立知识'");
+    expect(productSource).toContain("navigate: 'graph?view=isolated'");
+    expect(productSource).not.toContain("action_label: '整理关系'");
+    expect(adminAdvisorSource).not.toContain("startDreamRun({ phase: 'orphans' }");
+    expect(graphSource).toContain("new URLSearchParams(query).get('view')");
+  });
 });

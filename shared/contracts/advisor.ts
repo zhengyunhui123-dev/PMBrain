@@ -9,7 +9,7 @@ export const AdvisorProductSuggestionSchema = z.object({
   title: z.string(),
   detail: z.string().optional(),
   action_label: z.string().nullable(),
-  action_kind: z.enum(['embed_stale', 'sync_source', 'dream_orphans', 'restart_required', 'navigate', 'none']),
+  action_kind: z.enum(['embed_stale', 'sync_source', 'restart_required', 'navigate', 'none']),
   navigate: z.string().optional(),
   source_id: z.string().optional(),
 }).passthrough();

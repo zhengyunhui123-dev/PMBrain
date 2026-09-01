@@ -112,9 +112,19 @@ describe('CLI import child process lifecycle', () => {
     resetGateway();
   }, 120_000);
 
-  afterAll(() => {
+  afterAll(async () => {
     server?.stop(true);
-    if (workspace) rmSync(workspace, { recursive: true, force: true });
+    if (!workspace) return;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        rmSync(workspace, { recursive: true, force: true });
+        return;
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (process.platform !== 'win32' || !['EFAULT', 'EBUSY', 'EPERM'].includes(code ?? '')) throw error;
+        if (attempt < 2) await Bun.sleep(100);
+      }
+    }
   });
 
   test('the Sidecar releases PGLite, the Markdown child exits, and the Sidecar reconnects', async () => {

@@ -3,7 +3,6 @@ import type { AdvisorFinding, AdvisorReport, AdvisorSeverity } from './types.ts'
 export type AdvisorActionKind =
   | 'embed_stale'
   | 'sync_source'
-  | 'dream_orphans'
   | 'restart_required'
   | 'navigate'
   | 'none';
@@ -33,7 +32,6 @@ export interface AdvisorProductView {
 export type AdminAdvisorAction =
   | { kind: 'embed_stale' }
   | { kind: 'sync_source'; sourceId: string }
-  | { kind: 'dream_orphans' }
   | { kind: 'restart_required' }
   | { kind: 'navigate'; page: string }
   | { kind: 'unsupported' };
@@ -94,8 +92,9 @@ export function toProductSuggestion(finding: AdvisorFinding): AdvisorProductSugg
       severity: finding.severity,
       title: `发现 ${count} 个孤立知识`,
       detail: finding.detail,
-      action_label: dispatchId ? '整理关系' : null,
-      action_kind: dispatchId ? 'dream_orphans' : 'none',
+      action_label: '查看孤立知识',
+      action_kind: 'navigate',
+      navigate: 'graph?view=isolated',
     };
   }
   if (finding.id === 'pending_migration') {
@@ -172,7 +171,6 @@ export function resolveAdminAdvisorAction(suggestion: AdvisorProductSuggestion):
     if (!sourceId) return { kind: 'unsupported' };
     return { kind: 'sync_source', sourceId };
   }
-  if (suggestion.action_kind === 'dream_orphans') return { kind: 'dream_orphans' };
   if (suggestion.action_kind === 'restart_required') return { kind: 'restart_required' };
   if (suggestion.action_kind === 'navigate' && suggestion.navigate) {
     return { kind: 'navigate', page: suggestion.navigate };

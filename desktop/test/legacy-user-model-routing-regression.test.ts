@@ -20,6 +20,7 @@ const renderer = readFileSync(resolve('src/renderer/src.ts'), 'utf8');
 const html = readFileSync(resolve('src/renderer/index.html'), 'utf8');
 const advanced = readFileSync(resolve('src/main/advanced-model-config.ts'), 'utf8');
 const configManager = readFileSync(resolve('src/main/config-manager.ts'), 'utf8');
+const setupController = readFileSync(resolve('src/main/startup/setup-controller.ts'), 'utf8');
 
 function sliceSyncModelDefaults(): string {
   return modelSync;
@@ -71,8 +72,9 @@ describe('老用户回归矩阵 · 桌面模型路由', () => {
     expect(main).toContain("'--empty-only'");
     expect(main).toContain('existing_embeddings');
     expect(main).toContain('automatic clearing was refused');
-    expect(main).toContain('Dream 不会自行触发模型迁移');
-    expect(main).toMatch(/saved\.embeddingModelChanged && !legacyEmbeddingRecoveryConfirmed\) \{[\s\S]*'--force-reembed'/);
+    expect(setupController).toContain('pauseEmbeddingRebuild');
+    expect(setupController).toContain('markEmbeddingRebuildRunning');
+    expect(setupController).toMatch(/saved\.embeddingModelChanged && !legacyEmbeddingRecoveryConfirmed\) \{[\s\S]*forceReembed: true/);
     expect(main).toMatch(/saved\.embeddingModelChanged && legacyEmbeddingRecoveryConfirmed\) \{[\s\S]*'restore-legacy-embedding-config'/);
   });
 

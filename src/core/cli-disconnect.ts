@@ -32,6 +32,14 @@ function flushStdioBestEffort(): void {
   try { process.stderr.write(''); } catch { /* ignore */ }
 }
 
+function forceProcessExit(code: number): void {
+  const reallyExit = (process as NodeJS.Process & { reallyExit?: (exitCode?: number) => never }).reallyExit;
+  setTimeout(() => {
+    if (typeof reallyExit === 'function') reallyExit.call(process, code);
+    process.exit(code);
+  }, 25);
+}
+
 /**
  * Close a one-shot CLI engine without allowing a wedged PGLite close to keep
  * an already-completed command alive forever. The timeout is deliberately
@@ -49,7 +57,7 @@ export async function disconnectCliEngine(
   options: CliDisconnectOptions = {},
 ): Promise<'disconnected' | 'forced_exit'> {
   const deadlineMs = options.deadlineMs ?? CLI_DISCONNECT_DEADLINE_MS;
-  const forceExit = options.forceExit ?? ((code: number) => process.exit(code));
+  const forceExit = options.forceExit ?? forceProcessExit;
   const warn = options.warn ?? console.warn;
   const exitCode = resolvedExitCode(options);
 

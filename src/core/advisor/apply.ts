@@ -10,7 +10,7 @@ export type ApplyResolution =
   | { ok: false; error: string; runnable: string[] };
 
 const SHELL_META = /[;&|`$<>(){}\n]/;
-const ALLOWED_DISPATCH = /^(apply_migrations|embed_stale|organize_orphans|sync_source:[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?)$/;
+const ALLOWED_DISPATCH = /^(apply_migrations|embed_stale|sync_source:[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?)$/;
 
 function argvIsSafe(argv: string[]): boolean {
   return argv[0] === 'pmbrain' && argv.every((token) => typeof token === 'string' && !SHELL_META.test(token));

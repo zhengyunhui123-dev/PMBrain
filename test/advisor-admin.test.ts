@@ -1,7 +1,7 @@
 /**
  * 产品经理可读的测试说明：
  * 首页点按钮不能去执行 pmbrain advisor --apply。
- * 继续处理要走现有补向量任务，立即同步要走指定知识源同步，整理关系要走孤立页整理。
+ * 继续处理要走现有补向量任务，立即同步要走指定知识源同步，孤立知识只能进入只读查看页。
  * 升级数据库不能在正在运行的服务上硬跑迁移。
  */
 import { describe, expect, test } from 'bun:test';
@@ -38,10 +38,10 @@ describe('Admin advisor actions reuse existing jobs', () => {
 
     expect(resolveAdminAdvisorAction(suggestion({
       id: 'orphan_pages',
-      dispatch_id: 'organize_orphans',
-      action_kind: 'dream_orphans',
-      action_label: '整理关系',
-    }))).toEqual({ kind: 'dream_orphans' });
+      action_kind: 'navigate',
+      action_label: '查看孤立知识',
+      navigate: 'graph?view=isolated',
+    }))).toEqual({ kind: 'navigate', page: 'graph?view=isolated' });
   });
 
   test('refuses to apply migrations against a live Admin/sidecar process', () => {

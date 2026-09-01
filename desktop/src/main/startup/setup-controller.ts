@@ -233,7 +233,6 @@ export class SetupController {
     let embeddingSwitchCommitted = false;
     let embeddingRebuildQueued = false;
     let embeddingRebuildTotal = 0;
-    let rebuildChoice: Promise<'wait' | 'defer'> | null = null;
     let reembeddingWarning: string | null = null;
     let migrationRequired = false;
     try {
@@ -361,17 +360,6 @@ export class SetupController {
           dimensions: Number(saved.config.embedding_dimensions ?? 0) || 1,
           total: embeddingRebuildTotal,
         });
-        this.dependencies.sendStartupProgress({
-          visible: true,
-          stage: 'migration',
-          title: '正在准备搜索索引',
-          message: embeddingRebuildTotal > 0
-            ? `新模型已生效。向量索引待重建 ${embeddingRebuildTotal} 条。可稍后处理并进入 PMBrain，未完成的条目暂时不能语义搜索。`
-            : '新模型已生效。可稍后在任务中心继续重建向量索引。',
-          canDeferEmbeddingRebuild: true,
-          embeddingRebuildTotal,
-        });
-        rebuildChoice = this.dependencies.waitEmbeddingRebuildChoice();
       }
     } catch (error) {
       if (!embeddingSwitchCommitted) restoreConfig(saved.snapshot);
@@ -400,8 +388,19 @@ export class SetupController {
     // task. The task coordinator will briefly disconnect PGLite before its
     // CLI child starts; no post-submit database request may race that handoff.
     const integrations = await listIntegrationsWithConnectionState(this.dependencies.sidecar.current?.port);
-    if (rebuildChoice) {
+    if (embeddingRebuildQueued) {
       const { markEmbeddingRebuildRunning } = await import('../../../../src/core/embedding-rebuild-state.js');
+      const rebuildChoice = this.dependencies.waitEmbeddingRebuildChoice();
+      this.dependencies.sendStartupProgress({
+        visible: true,
+        stage: 'migration',
+        title: '正在准备搜索索引',
+        message: embeddingRebuildTotal > 0
+          ? `新模型已生效。向量索引待重建 ${embeddingRebuildTotal} 条。可稍后处理并进入 PMBrain，未完成的条目暂时不能语义搜索。`
+          : '新模型已生效。可稍后在任务中心继续重建向量索引。',
+        canDeferEmbeddingRebuild: true,
+        embeddingRebuildTotal,
+      });
       const choice = await rebuildChoice;
       const activeSidecar = this.dependencies.sidecar.current;
       if (choice === 'wait') {

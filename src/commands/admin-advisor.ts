@@ -11,7 +11,7 @@ import {
 } from '../core/advisor/product.ts';
 import type { AdvisorContext, AdvisorReport } from '../core/advisor/types.ts';
 import { assertValidSourceId } from '../core/source-id.ts';
-import { startActionRun, startDreamRun, startRun, resolveCliEntry, type RunHooks } from './admin-console.ts';
+import { startActionRun, startRun, resolveCliEntry, type RunHooks } from './admin-console.ts';
 
 export interface AdvisorAdminReport {
   report: AdvisorReport;
@@ -99,6 +99,5 @@ export async function applyAdminAdvisorFinding(
     );
     return { status: 'started', runId: run.id, kind: run.kind };
   }
-  const run = await startDreamRun({ phase: 'orphans' }, cwd, hooks);
-  return { status: 'started', runId: run.id, kind: run.kind };
+  return { status: 'unsupported', message: '这条建议只提供查看入口，不会自动修改知识关系。' };
 }

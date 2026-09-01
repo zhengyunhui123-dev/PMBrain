@@ -70,8 +70,8 @@ export const collectUsageShape: AdvisorCollector = {
           id: 'orphan_pages',
           severity: 'info',
           title: `${orphanCount} knowledge pages have no links in or out.`,
-          detail: 'Orphaned pages do not surface through graph traversal.',
-          fix: { command_argv: ['pmbrain', 'dream', '--phase', 'orphans'], dispatch_id: 'organize_orphans' },
+          detail: 'Orphaned pages do not surface through graph traversal — connect or review them.',
+          fix: { command_argv: ['pmbrain', 'orphans'] },
           collector: 'usage-shape',
           ask_user: true,
         });

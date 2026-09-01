@@ -1,7 +1,7 @@
 /**
  * 产品经理可读的测试说明：
  * --apply 只能跑白名单里的修复，而且必须是结构化参数，不能走 shell。
- * 迁移、补向量、同步某个知识源、整理孤立页可以一键修；随便一条命令或带特殊字符的参数必须被拒绝。
+ * 迁移、补向量、同步某个知识源可以一键修；只读检查、随便一条命令或带特殊字符的参数必须被拒绝。
  */
 import { describe, expect, test } from 'bun:test';
 import { resolveApplyTarget } from '../src/core/advisor/apply.ts';
@@ -24,7 +24,7 @@ function finding(over: Partial<AdvisorFinding>): AdvisorFinding {
 }
 
 describe('resolveApplyTarget', () => {
-  test('allows migration, embed, source sync, and orphan organize', () => {
+  test('allows migration, embed, and source sync but not read-only orphan inspection', () => {
     const r = report([
       finding({
         id: 'pending_migration',
@@ -40,13 +40,13 @@ describe('resolveApplyTarget', () => {
       }),
       finding({
         id: 'orphan_pages',
-        fix: { command_argv: ['pmbrain', 'dream', '--phase', 'orphans'], dispatch_id: 'organize_orphans' },
+        fix: { command_argv: ['pmbrain', 'orphans'] },
       }),
     ]);
     expect(resolveApplyTarget(r, 'apply_migrations').ok).toBe(true);
     expect(resolveApplyTarget(r, 'embed_stale').ok).toBe(true);
     expect(resolveApplyTarget(r, 'sync_source:work').ok).toBe(true);
-    expect(resolveApplyTarget(r, 'organize_orphans').ok).toBe(true);
+    expect(resolveApplyTarget(r, 'organize_orphans').ok).toBe(false);
   });
 
   test('rejects unknown ids, missing dispatch_id, non-pmbrain binaries, and shell characters', () => {

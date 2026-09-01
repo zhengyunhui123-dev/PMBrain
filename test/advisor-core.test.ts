@@ -124,7 +124,8 @@ describe('collectors', () => {
     expect(embed?.fix.command_argv).toEqual(['pmbrain', 'embed', '--stale']);
     const orphans = out.find((f) => f.id === 'orphan_pages');
     expect(orphans?.title).toContain('1 knowledge pages');
-    expect(orphans?.fix.dispatch_id).toBe('organize_orphans');
+    expect(orphans?.fix.command_argv).toEqual(['pmbrain', 'orphans']);
+    expect(orphans?.fix.dispatch_id).toBeUndefined();
   });
 
   test('usage shape does not offer embed-now when vectors are not configured', async () => {

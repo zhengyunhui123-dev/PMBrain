@@ -49,9 +49,13 @@ const KnowledgeGraphPage = React.lazy(() => import('./pages/KnowledgeGraph').the
 
 type Page = typeof PAGES[number];
 
-function getPage(): Page {
-  const hash = window.location.hash.replace('#', '').split('?')[0] || 'dashboard';
+function pageFromTarget(target: string): Page {
+  const hash = target.replace('#', '').split('?')[0] || 'dashboard';
   return PAGES.includes(hash as Page) ? hash as Page : 'dashboard';
+}
+
+function getPage(): Page {
+  return pageFromTarget(window.location.hash);
 }
 
 type NavIconName =
@@ -159,9 +163,9 @@ export function App() {
     };
   }, [page]);
 
-  const navigate = (target: Page) => {
+  const navigate = (target: string) => {
     window.location.hash = target;
-    setPage(target);
+    setPage(pageFromTarget(target));
   };
 
   const changeThemeMode = (mode: ThemeMode) => {
@@ -251,7 +255,7 @@ export function App() {
         <button type="button" className="mobile-signout" onClick={handleSignOutEverywhere}>退出</button>
       </header>
       <main className="main">
-        {page === 'dashboard' && <KnowledgeWorkbenchPage onNavigate={(p) => navigate(p as Page)} />}
+        {page === 'dashboard' && <KnowledgeWorkbenchPage onNavigate={navigate} />}
         {page === 'dream' && <DreamOverviewPage />}
         {page === 'dream-execute' && <DreamExecutePage />}
         {page === 'dream-knowledge' && <DreamKnowledgePage />}
