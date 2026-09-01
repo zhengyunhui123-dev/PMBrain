@@ -171,12 +171,12 @@ describe('desktop system orchestration contracts', () => {
     expect(main).toContain('saved.embeddingModelActivated');
     expect(main).toContain("'--empty-only'");
     expect(main).toContain('payload.confirmEmbeddingRebuild !== true');
-    expect(main).toContain("'--force-reembed'");
     expect(main).toContain('embeddingRebuildQueued');
+    expect(main).toContain('waitEmbeddingRebuildChoice');
+    expect(main).toContain("canDeferEmbeddingRebuild: true");
     expect(main).toContain("'/admin/api/runs/action'");
-    expect(main).toContain("{ action: 'embed_stale', catchUp: true }");
+    expect(main).toContain('forceReembed: true');
     expect(main).toContain('if (!embeddingSwitchCommitted) restoreConfig(saved.snapshot)');
-    expect(main).toContain('Dream 不会自行触发模型迁移');
   });
 
   test('启动前只对空向量库自动修复维度漂移，并在已有向量时保留数据', () => {
@@ -193,7 +193,8 @@ describe('desktop system orchestration contracts', () => {
   test('模型保存时仅 Postgres 独立执行迁移，PGLite 等 sidecar 健康后完成升级记录', () => {
     expect(main).toContain("title: '正在验证向量模型'");
     expect(main).toContain("title: '正在保存模型配置'");
-    expect(main).toContain("title: '正在准备搜索索引'");
+    expect(setupController).toContain("title: '正在准备搜索索引'");
+    expect(setupController).toContain('canDeferEmbeddingRebuild');
     expect(setupController).toContain('migrationRequired = needsDesktopMigration(app.getVersion())');
     expect(setupController).toMatch(/if \(migrationRequired && saved\.config\.engine !== 'pglite'\) \{[\s\S]*?runCliChecked\(this\.dependencies\.runtime\(\), DESKTOP_MIGRATION_ARGS\)/);
     expect(setupController).toMatch(/this\.dependencies\.sidecar\.start\(false\)[\s\S]*?if \(migrationRequired && saved\.config\.engine === 'pglite'\)/);

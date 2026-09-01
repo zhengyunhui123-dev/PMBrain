@@ -194,12 +194,20 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
           allowTerminate: true,
         })
       : null;
+    const { readEmbeddingRebuildState, clearEmbeddingRebuildState } = await import('../core/embedding-rebuild-state.ts');
+    const hasActiveEmbed = runs.some(run => run.kind === 'embed_stale' && (run.status === 'queued' || run.status === 'running'));
+    let embeddingRebuild = readEmbeddingRebuildState(loadConfig() ?? config);
+    if (embeddingRebuild?.status === 'running' && !hasActiveEmbed) {
+      clearEmbeddingRebuildState();
+      embeddingRebuild = null;
+    }
     res.json({
       mode: config.engine === 'pglite' ? 'pglite' : 'postgres',
       pglite_busy: getPgliteBusy(),
       pglite_owner: pgliteOwner,
       rows: runs,
       queue,
+      embedding_rebuild: embeddingRebuild,
       server_time: new Date().toISOString(),
     });
   });
@@ -970,7 +978,12 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
       }
       const run = await startActionRun(action, process.cwd(), runHooks, {
         embedCatchUp: action === 'embed_stale' && req.body?.catchUp === true,
+        forceReembed: action === 'embed_stale' && req.body?.forceReembed === true,
       });
+      if (action === 'embed_stale' && req.body?.forceReembed === true) {
+        const { markEmbeddingRebuildRunning } = await import('../core/embedding-rebuild-state.ts');
+        markEmbeddingRebuildRunning();
+      }
       sendAdminContract(res, RunAcceptedResponseSchema, { runId: run.id, status: run.status });
     } catch (e) {
       res.status(400).json({ error: e instanceof Error ? e.message : 'action_run_failed' });

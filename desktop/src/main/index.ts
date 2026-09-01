@@ -67,6 +67,8 @@ interface StartupProgress {
   stage: 'database' | 'migration' | 'sidecar' | 'health';
   title: string;
   message: string;
+  canDeferEmbeddingRebuild?: boolean;
+  embeddingRebuildTotal?: number;
 }
 
 let startupProgress: StartupProgress = {
@@ -90,7 +92,22 @@ function sendStartupProgress(progress: StartupProgress): void {
 }
 
 function hideStartupProgress(): void {
-  sendStartupProgress({ ...startupProgress, visible: false });
+  sendStartupProgress({ ...startupProgress, visible: false, canDeferEmbeddingRebuild: false });
+}
+
+let embeddingRebuildChoiceResolver: ((choice: 'wait' | 'defer') => void) | null = null;
+
+function waitEmbeddingRebuildChoice(): Promise<'wait' | 'defer'> {
+  return new Promise(resolve => {
+    embeddingRebuildChoiceResolver = resolve;
+  });
+}
+
+function chooseEmbeddingRebuild(choice: 'wait' | 'defer'): void {
+  const resolve = embeddingRebuildChoiceResolver;
+  embeddingRebuildChoiceResolver = null;
+  if (choice !== 'wait' && choice !== 'defer') return;
+  resolve?.(choice);
 }
 
 async function ensureRuntimeReady(): Promise<void> {
@@ -184,6 +201,7 @@ const setupController: SetupController = new SetupController({
   syncModelDefaults: options => syncModelDefaultsToConfigFile(runtime(), options),
   sendStartupProgress,
   hideStartupProgress,
+  waitEmbeddingRebuildChoice,
   applyTheme: theme => systemSettingsController.applyTheme(theme),
 });
 
@@ -373,6 +391,7 @@ if (!app.requestSingleInstanceLock()) {
         () => writeAdvancedModelConfig(runtime(), values),
       ),
       saveSetup: payload => setupController.apply(payload),
+      chooseEmbeddingRebuild,
       configureIntegration: (client, kind) => sharedAccessController.configure(client, kind),
       writeWorkbuddyUserAgent: () => writeWorkbuddyUserAgent(),
       getWorkbuddyAgentIntegration: () => workBuddyAgentController.read(),

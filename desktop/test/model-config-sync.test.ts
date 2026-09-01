@@ -66,6 +66,9 @@ describe('desktop simple-model config.json sync', () => {
     expect(renderer).toContain('confirmEmbeddingRebuild = true');
     expect(renderer).toContain('confirmEmbeddingRebuild,');
     expect(source).toContain('payload.confirmEmbeddingRebuild !== true');
+    expect(html).toContain('setup-wait-defer');
+    expect(renderer).toContain("chooseEmbeddingRebuild('defer')");
+    expect(source).toContain('waitEmbeddingRebuildChoice');
   });
 
   test('historical ZeroEntropy misconfiguration uses a verified zero-rebuild recovery path', () => {

@@ -374,7 +374,7 @@ export async function startActionRun(
   action: 'doctor_check' | 'show_sources' | 'show_stats' | 'embed_stale' | 'sync_all',
   cwd: string,
   hooks?: RunHooks,
-  options: { embedCatchUp?: boolean } = {},
+  options: { embedCatchUp?: boolean; forceReembed?: boolean } = {},
 ): Promise<ConsoleRun> {
   const preview: IntentPreview = {
     previewId: randomUUID(),

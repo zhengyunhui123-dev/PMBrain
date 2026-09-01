@@ -127,6 +127,8 @@ export interface StartupProgress {
   stage: 'database' | 'migration' | 'sidecar' | 'health';
   title: string;
   message: string;
+  canDeferEmbeddingRebuild?: boolean;
+  embeddingRebuildTotal?: number;
 }
 
 export interface DesktopSetupState {
@@ -144,6 +146,7 @@ export interface PMBrainDesktopApi {
   setTheme(theme: DesktopTheme): Promise<DesktopThemeState>;
   onThemeState(listener: (state: DesktopThemeState) => void): () => void;
   getSetup(): Promise<DesktopSetupState>;
+  chooseEmbeddingRebuild(choice: 'wait' | 'defer'): Promise<void>;
   onState(listener: (state: SidecarState) => void): () => void;
   getUpdateState(): Promise<UpdateState | null>;
   onUpdateState(listener: (state: UpdateState) => void): () => void;
@@ -204,6 +207,7 @@ const api: PMBrainDesktopApi = {
     return () => ipcRenderer.removeListener('desktop:theme-state', handler);
   },
   getSetup: () => ipcRenderer.invoke('desktop:get-setup'),
+  chooseEmbeddingRebuild: (choice) => ipcRenderer.invoke('desktop:choose-embedding-rebuild', choice),
   onState: (listener) => {
     const handler = (_event: Electron.IpcRendererEvent, state: SidecarState) => listener(state);
     ipcRenderer.on('desktop:state', handler);

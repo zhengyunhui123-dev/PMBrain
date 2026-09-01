@@ -78,6 +78,7 @@ export interface EmbedOpts {
    * remediation submits on big stale backlogs.
    */
   catchUp?: boolean;
+  forceReembed?: boolean;
   /** Limit distinct stale pages handled by this invocation. */
   pageLimit?: number;
   /** Cooperative cancellation from Dream/Minions into provider requests. */
@@ -269,6 +270,15 @@ export async function runEmbedCore(engine: BrainEngine, opts: EmbedOpts): Promis
   // v0.37.11.0 (Lane D.2): pre-flight dim-mismatch check. Catches the headline
   // fresh-install bug class before the worker pool spends 20 parallel calls
   // hitting raw Postgres dimension errors.
+  if (opts.forceReembed && !opts.dryRun) {
+    const { getEmbeddingDimensions, getEmbeddingModel } = await import('../core/ai/gateway.ts');
+    const { alignEmbeddingDimension } = await import('../core/embedding-dimension-alignment.ts');
+    await alignEmbeddingDimension(engine, getEmbeddingDimensions(), {
+      forceReembed: true,
+      targetModel: getEmbeddingModel(),
+    });
+  }
+
   await preflightDimMismatch(engine, !!opts.dryRun);
   await preflightEmbeddingModelChange(engine, !!opts.dryRun);
 
@@ -410,13 +420,14 @@ export async function runEmbed(engine: BrainEngine, args: string[]): Promise<Emb
   const priorityRaw = priorityIdx >= 0 ? args[priorityIdx + 1] : undefined;
   const priority = priorityRaw === 'recent' ? 'recent' as const : undefined;
   const catchUp = args.includes('--catch-up');
+  const forceReembed = args.includes('--force-reembed');
   const json = args.includes('--json');
 
   let opts: EmbedOpts;
   if (slugsIdx >= 0) {
-    opts = { slugs: args.slice(slugsIdx + 1).filter(a => !a.startsWith('--')), dryRun, sourceId, batchSize, priority, catchUp };
+    opts = { slugs: args.slice(slugsIdx + 1).filter(a => !a.startsWith('--')), dryRun, sourceId, batchSize, priority, catchUp, forceReembed };
   } else if (all || stale) {
-    opts = { all, stale, dryRun, sourceId, batchSize, priority, catchUp };
+    opts = { all, stale, dryRun, sourceId, batchSize, priority, catchUp, forceReembed };
   } else {
     const slug = args.find(a => !a.startsWith('--'));
     if (!slug) {

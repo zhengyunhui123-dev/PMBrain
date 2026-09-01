@@ -1,3 +1,7 @@
+## PMBrain 1.1.57
+
+- 更换向量模型后不再堵在“准备搜索索引”直到全部重建完成。可随时点「稍后处理，进入 PMBrain」；旧向量会在继续重建时清掉，任务中心留下暂停的重建任务，点继续即可断点补齐。未完成的条目暂时不能语义搜索，和尚未向量化的新导入内容一样。
+
 ## PMBrain 1.1.56
 
 - 安装包补齐内置 Schema Pack（`gbrain-base-v2.yaml` 及 `src/core/schema-pack/base/` 下全部 YAML）。缺少 `gbrain-base-v2.yaml` 时 `bun run build:win` 会失败，避免管理台再报 pack 无法解析。
@@ -15,8 +19,3 @@
 
 - 修复异常关闭或向量任务被终止后 PGLite WAL/checkpoint 不完整，导致升级冷备校验持续报 `Aborted()`、Sidecar 无法启动的问题；按 GBrain 的受保护 WAL 自愈链路先留存修复前 WAL，再只重试一次，失败会恢复原状态。
 - 冷备不再复制 `postmaster.pid`、`postmaster.opts` 和运行时 socket；损坏的冷备恢复副本通过同一受保护链路校验。首次健康启动后记录升级完成，后续启动不再重复冷备。
-
-## PMBrain 1.1.52
-
-- 修复手动重新向量化运行 10 分钟后被桌面后台强制终止、随后 PGLite 连接恢复失败的问题；向量任务现在持续运行到正常完成或用户主动取消。
-- 修复恢复页成功启动 Sidecar 后未记录升级完成，导致下次启动再次冷备的问题；运行时 `.pmbrain-resolve.sock` 不再进入数据库备份，Sidecar 退出时会在 IPC 真正关闭后清理它。

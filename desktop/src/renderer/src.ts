@@ -85,12 +85,19 @@ function saveButtonText(): string {
   return state?.setup.needsSetup === false ? '保存修改并重启' : '保存配置并启动';
 }
 
-function setSetupWait(visible: boolean, title = '', message = '', stage = '正在处理'): void {
+function setSetupWait(
+  visible: boolean,
+  title = '',
+  message = '',
+  stage = '正在处理',
+  canDeferEmbeddingRebuild = false,
+): void {
   const overlay = $('#setup-wait');
   overlay.hidden = !visible;
   $('#setup-wait-stage').textContent = stage;
   if (title) $('#setup-wait-title').textContent = title;
   if (message) $('#setup-wait-message').textContent = message;
+  $('#setup-wait-actions').hidden = !visible || !canDeferEmbeddingRebuild;
 }
 
 function clearNotices(): void {
@@ -127,7 +134,13 @@ function renderTheme(theme: DesktopThemeState): void {
 
 function renderStartupProgress(progress: StartupProgress): void {
   const stages = { database: '数据库准备', migration: '数据库迁移', sidecar: '本地服务启动', health: '健康检查' } as const;
-  setSetupWait(progress.visible, progress.title, progress.message, stages[progress.stage]);
+  setSetupWait(
+    progress.visible,
+    progress.title,
+    progress.message,
+    stages[progress.stage],
+    progress.canDeferEmbeddingRebuild === true,
+  );
 }
 
 function selectedEngine(): 'pglite' | 'postgres' {
@@ -2089,6 +2102,12 @@ void window.pmbrainDesktop.getTheme().then(renderTheme).catch(() => undefined);
 window.pmbrainDesktop.onThemeState(renderTheme);
 void window.pmbrainDesktop.getSystemSettings().then((next) => applySystemSettingsState(next)).catch((error) => setNotice('error', String(error)));
 window.pmbrainDesktop.onSystemSettingsState((next) => applySystemSettingsState(next));
+$('#setup-wait-defer').addEventListener('click', () => {
+  void window.pmbrainDesktop.chooseEmbeddingRebuild('defer');
+});
+$('#setup-wait-continue').addEventListener('click', () => {
+  void window.pmbrainDesktop.chooseEmbeddingRebuild('wait');
+});
 void window.pmbrainDesktop.getStartupProgress().then(renderStartupProgress).catch(() => undefined);
 window.pmbrainDesktop.onStartupProgress(renderStartupProgress);
 void window.pmbrainDesktop.getSetup().then(async (next) => {

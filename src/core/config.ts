@@ -113,6 +113,13 @@ export interface GBrainConfig {
   /** AI gateway config. Embedding has no provider default; model + dimensions must both be explicit. */
   embedding_model?: string;
   embedding_dimensions?: number;
+  embedding_rebuild?: {
+    status: 'paused' | 'running';
+    model: string;
+    dimensions: number;
+    total: number;
+    updated_at: string;
+  };
   /**
    * v0.37 (D9): user opted into deferred-setup mode at init time via
    * `gbrain init --no-embedding`. When true, embed callsites and `gbrain

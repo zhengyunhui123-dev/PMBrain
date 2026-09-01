@@ -7,10 +7,19 @@ import { describeDreamRunProgress } from '../lib/dream-run-progress';
 
 type TaskFilter = 'all' | 'completed' | 'failed' | 'cancelled';
 
+interface EmbeddingRebuildTask {
+  status: 'paused' | 'running';
+  model: string;
+  dimensions: number;
+  total: number;
+  updated_at: string;
+}
+
 interface TaskCenterSnapshot {
   mode: 'pglite' | 'postgres';
   pglite_busy: boolean;
   pglite_owner?: PgliteOwnerStatus | null;
+  embedding_rebuild?: EmbeddingRebuildTask | null;
   rows: ConsoleRun[];
   queue: {
     queue_health?: { waiting: number; active: number; stalled: number };
@@ -284,6 +293,7 @@ export function TaskCenterPage() {
   const [selectedRun, setSelectedRun] = useState<ConsoleRun | null>(null);
   const [cancelling, setCancelling] = useState('');
   const [terminatingOwner, setTerminatingOwner] = useState<number | null>(null);
+  const [resumingRebuild, setResumingRebuild] = useState(false);
 
   const load = async () => {
     try {
@@ -328,6 +338,19 @@ export function TaskCenterPage() {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setCancelling('');
+    }
+  };
+
+  const resumeEmbeddingRebuild = async () => {
+    setResumingRebuild(true);
+    setError('');
+    try {
+      await api.startActionRun('embed_stale', { catchUp: true, forceReembed: true });
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setResumingRebuild(false);
     }
   };
 
@@ -397,6 +420,32 @@ export function TaskCenterPage() {
         <p>{snapshot.mode === 'pglite' ? '后台数据库任务将自动排队，优先保证本地知识库安全。' : '后台任务由任务中心统一管理，允许多个任务按资源情况运行。'}</p>
         {snapshot.queue?.queue_health && <span className="task-queue-summary">队列：等待 {snapshot.queue.queue_health.waiting} · 活跃 {snapshot.queue.queue_health.active} · 停滞 {snapshot.queue.queue_health.stalled}</span>}
       </div>
+
+      {snapshot.embedding_rebuild?.status === 'paused' && (
+        <section className="task-section">
+          <div className="task-section-head">
+            <div><span className="pm-eyebrow">PAUSED INDEX</span><h2>重建向量索引</h2></div>
+            <span className="task-status task-status-queued">已暂停</span>
+          </div>
+          <article className="task-run-card">
+            <div className="task-run-card-head">
+              <div>
+                <h3>新模型已生效，向量索引待重建</h3>
+                <p>
+                  {snapshot.embedding_rebuild.model}
+                  {snapshot.embedding_rebuild.total > 0 ? ` · 待重建 ${snapshot.embedding_rebuild.total} 条` : ''}
+                  。未完成的条目暂时不能语义搜索，可随时继续。
+                </p>
+              </div>
+            </div>
+            <div className="task-run-card-actions">
+              <button type="button" className="pm-primary" onClick={() => void resumeEmbeddingRebuild()} disabled={resumingRebuild}>
+                {resumingRebuild ? '正在继续…' : '继续重建'}
+              </button>
+            </div>
+          </article>
+        </section>
+      )}
 
       <section className="task-section">
         <div className="task-section-head"><div><span className="pm-eyebrow">LIVE QUEUE</span><h2>正在运行和等待</h2></div><span className="pm-hint">{activeRows.length} 个任务</span></div>

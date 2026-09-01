@@ -187,7 +187,8 @@ export const api = {
   runs: () => apiFetch('/admin/api/runs'),
   run: (id: string) => apiFetch(`/admin/api/runs/${encodeURIComponent(id)}`),
   cancelRun: (id: string) => apiFetch(`/admin/api/runs/${encodeURIComponent(id)}/cancel`, { method: 'POST' }),
-  startActionRun: (action: string) => apiFetch('/admin/api/runs/action', { method: 'POST', body: JSON.stringify({ action }) }),
+  startActionRun: (action: string, extra?: { catchUp?: boolean; forceReembed?: boolean }) =>
+    apiFetch('/admin/api/runs/action', { method: 'POST', body: JSON.stringify({ action, ...extra }) }),
   taskCenter: () => apiFetch('/admin/api/task-center'),
   terminatePgliteOwner: (pid: number) => apiFetch('/admin/api/pglite-owner/terminate', {
     method: 'POST',

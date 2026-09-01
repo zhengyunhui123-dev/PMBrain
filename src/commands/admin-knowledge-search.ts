@@ -7,6 +7,7 @@ import type { SearchResult } from '../core/types.ts';
 import { dedupResults } from '../core/search/dedup.ts';
 import { hybridSearch } from '../core/search/hybrid.ts';
 import { normalizeChineseQuery } from '../core/search/query-normalize-zh.ts';
+import { embeddingRebuildPausesVectorSearch } from '../core/embedding-rebuild-state.ts';
 
 export type AdminKnowledgeSearchMode = 'keyword' | 'semantic';
 
@@ -27,6 +28,7 @@ export interface AdminKnowledgeSearchResponse {
   query: string;
   limit: number;
   vector_enabled: boolean;
+  index_rebuild_pending?: boolean;
   result_count: number;
   results: AdminKnowledgeSearchHit[];
 }
@@ -111,14 +113,16 @@ export async function runAdminKnowledgeSearch(
     ? input.mode
     : 'keyword';
   const limit = clampLimit(input.limit);
+  const indexRebuildPending = embeddingRebuildPausesVectorSearch();
 
-  if (mode === 'keyword') {
+  if (mode === 'keyword' || indexRebuildPending) {
     const raw = await runKeywordSearch(engine, query, limit);
     return {
       mode,
       query,
       limit,
       vector_enabled: false,
+      ...(indexRebuildPending ? { index_rebuild_pending: true } : {}),
       result_count: raw.length,
       results: raw.map(toHit),
     };
