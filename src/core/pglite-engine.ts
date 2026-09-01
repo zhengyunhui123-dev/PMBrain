@@ -26,6 +26,7 @@ import { DEFAULT_EMBEDDING_DIMENSIONS } from './ai/defaults.ts';
 import { DELETE_BATCH_SIZE } from './engine-constants.ts';
 import { acquireLock, releaseLock, type LockHandle } from './pglite-lock.ts';
 import { DatabaseAlreadyOwnedError, PgliteOpenError } from './pglite-errors.ts';
+import { attemptWalRepairAndRetry, closeRepairEpisodeIfOpen, type WalRepairReceipt } from './pglite-repair.ts';
 import type {
   Page, PageInput, PageFilters, PageType,
   Chunk, ChunkInput, StaleChunkRow, StalePageRow,
@@ -157,6 +158,7 @@ export function computeSnapshotSchemaHash(
  */
 export type PgliteInitFailure =
   | 'bunfs'
+  | 'wasm-abort'
   | 'windows-aborted'
   | 'macos-26-3'
   | 'corrupt'
@@ -164,19 +166,19 @@ export type PgliteInitFailure =
   | 'unknown';
 
 export function stringifyPgliteInitError(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  if (err && typeof err === 'object' && 'message' in err) {
-    const message = (err as { message?: unknown }).message;
-    if (typeof message === 'string' && message.trim()) return message;
+  const message = (err as { message?: unknown })?.message;
+  if (message != null) return String(message);
+  if (typeof err === 'object' && err !== null) {
+    const name = (err as { name?: unknown }).name;
+    const errno = (err as { errno?: unknown }).errno;
+    if (typeof name === 'string' && errno != null) return `${name} (errno ${errno})`;
+    try {
+      const json = JSON.stringify(err);
+      if (json && json !== '{}') return typeof name === 'string' ? `${name}: ${json}` : json;
+    } catch { /* fall through */ }
+    if (typeof name === 'string') return name;
   }
-  if (typeof err === 'string') return err;
-  if (err === null) return 'null';
-  if (err === undefined) return 'undefined';
-  try {
-    return JSON.stringify(err) ?? String(err);
-  } catch {
-    return String(err);
-  }
+  return String(err);
 }
 
 export function classifyPgliteInitError(
@@ -184,18 +186,50 @@ export function classifyPgliteInitError(
   platform: NodeJS.Platform = process.platform,
 ): PgliteInitFailure {
   if (/\$\$bunfs|ENOENT[\s\S]*pglite\.data/i.test(message)) return 'bunfs';
-  if (/macos.*26\.3/i.test(message)) return 'macos-26-3';
   if (/EPERM|EACCES|operation not permitted|access is denied/i.test(message)) return 'permission';
   if (/58P01|internal_load_library|type\s+"vector"\s+does\s+not\s+exist|catalog.*corrupt|corrupt/i.test(message)) {
     return 'corrupt';
   }
-  if (platform === 'win32' && /aborted\(\)|abort/i.test(message)) {
-    return 'windows-aborted';
-  }
-  if (/abort.*runtime|wasm.*runtime/i.test(message)) {
-    return 'macos-26-3';
+  if (/aborted\s*\(\)|RuntimeError|unreachable|abort.*runtime|macos.*26\.3|wasm.*runtime/i.test(message)) {
+    return 'wasm-abort';
   }
   return 'unknown';
+}
+
+export interface PgliteInitRepairContext {
+  repair:
+    | 'not-attempted'
+    | 'in-memory'
+    | 'disabled'
+    | 'skipped-validation'
+    | 'skipped-live-writer'
+    | 'skipped-cooldown'
+    | 'failed-restored'
+    | 'failed-not-restored';
+  backupPath?: string;
+  detail?: string;
+}
+
+function repairContextLine(ctx: PgliteInitRepairContext): string {
+  switch (ctx.repair) {
+    case 'in-memory':
+      return '  当前为内存数据库，没有可修复的持久化数据目录。';
+    case 'disabled':
+      return '  自动 WAL 修复已通过 PMBRAIN_PGLITE_WAL_REPAIR=off 禁用。';
+    case 'skipped-validation':
+    case 'skipped-live-writer':
+    case 'skipped-cooldown':
+      return `  自动 WAL 修复已安全跳过：${ctx.detail ?? '安全校验未通过'}。`;
+    case 'failed-restored':
+      return `  自动 WAL 修复未能启动数据库，原 WAL 已恢复；备份保留在 ${ctx.backupPath ?? '<dataDir>.wal-repair-backup-*'}。`
+        + (ctx.detail ? `\n  详情：${ctx.detail}` : '');
+    case 'failed-not-restored':
+      return `  自动 WAL 修复及自动恢复均失败；修复前文件保留在 ${ctx.backupPath ?? '<dataDir>.wal-repair-backup-*'}。`
+        + (ctx.detail ? `\n  详情：${ctx.detail}` : '');
+    case 'not-attempted':
+    default:
+      return '  自动 WAL 修复未执行。';
+  }
 }
 
 function resolveLockOwnerType(): 'desktop-sidecar' | 'cli' | 'probe' | 'migration' | 'test' | 'unknown' {
@@ -221,6 +255,7 @@ export function buildPgliteInitErrorMessage(
   verdict: PgliteInitFailure,
   original: string,
   _platform: NodeJS.Platform = process.platform,
+  ctx?: PgliteInitRepairContext,
 ): string {
   const header = 'PGLite failed to initialize its WASM runtime.';
   let hint: string;
@@ -232,6 +267,12 @@ export function buildPgliteInitErrorMessage(
         '  Fix: `bun upgrade` (newer Bun mounts the vfs writable). If that\n' +
         '  does not help, run via Node: `node src/cli.ts` or install pmbrain\n' +
         '  using the Node-based path. See #1340 for details.';
+      break;
+    case 'wasm-abort':
+      hint =
+        '  最常见原因是异常关闭后 WAL/checkpoint 状态不完整。\n' +
+        repairContextLine(ctx ?? { repair: 'not-attempted' }) + '\n' +
+        '  PMBrain 不会删除、重建或覆盖知识库；请保留 WAL 修复备份并查看日志。';
       break;
     case 'windows-aborted':
       hint =
@@ -266,6 +307,15 @@ export function buildPgliteInitErrorMessage(
   return `${header}\n${hint}\n  Original error: ${original}`;
 }
 
+export function buildWalRepairNotice(receipt: WalRepairReceipt): string {
+  return [
+    'PMBrain 已修复本地 PGLite 的 WAL/checkpoint 状态。',
+    `数据目录：${receipt.dataDir}`,
+    `修复前备份：${receipt.backupPath}`,
+    '数据文件已保留；异常关闭前尚未 checkpoint 的事务可能丢失。',
+  ].join('\n');
+}
+
 /**
  * PGLite's Emscripten runtime uses process.exitCode as an internal status
  * channel. Contain that global side effect around create() so a successful
@@ -286,6 +336,7 @@ export class PGLiteEngine implements BrainEngine {
   readonly kind = 'pglite' as const;
   private _db: PGLiteDB | null = null;
   private _lock: LockHandle | null = null;
+  walRepairReceipt: WalRepairReceipt | null = null;
   // Tier 3: when GBRAIN_PGLITE_SNAPSHOT loaded a post-initSchema state into
   // PGlite.create(loadDataDir), initSchema is a no-op (schema is already
   // present + migrations already applied). Saves ~1-3s per fresh test PGLite.
@@ -298,6 +349,7 @@ export class PGLiteEngine implements BrainEngine {
 
   // Lifecycle
   async connect(config: EngineConfig): Promise<void> {
+    this.walRepairReceipt = null;
     const dataDir = config.database_path || undefined; // undefined = in-memory
 
     // Acquire file lock to prevent concurrent PGLite access (crashes with Aborted())
@@ -341,6 +393,7 @@ export class PGLiteEngine implements BrainEngine {
           extensions: { vector, pg_trgm },
         }),
       );
+      if (dataDir) closeRepairEpisodeIfOpen(dataDir);
     } catch (err) {
       // v0.13.1: any PGLite.create() failure becomes actionable. v0.41.8.0
       // (#1340): the previous error hint hardcoded the macOS 26.3 link, but
@@ -349,9 +402,45 @@ export class PGLiteEngine implements BrainEngine {
       // pglite.data WASM payload). Route the hint by failure shape so
       // users get the right next step.
       // Always preserve the original cause for diagnostics / UI.
-      const original = err instanceof Error ? err.message : String(err);
+      const original = stringifyPgliteInitError(err);
       const verdict = classifyPgliteInitError(original);
-      const wrapped = new PgliteOpenError(buildPgliteInitErrorMessage(verdict, original), {
+      let ctx: PgliteInitRepairContext = { repair: 'not-attempted' };
+      if (verdict === 'wasm-abort') {
+        if (!dataDir) {
+          ctx = { repair: 'in-memory' };
+        } else {
+          const attempt = await attemptWalRepairAndRetry(
+            dataDir,
+            () => preservingProcessExitCode(() => PGlite.create({
+              dataDir,
+              extensions: { vector, pg_trgm },
+            })),
+            { reaped: this._lock?.reaped },
+          );
+          if (attempt.status === 'repaired') {
+            this._db = attempt.db;
+            this.walRepairReceipt = attempt.receipt;
+            console.warn(buildWalRepairNotice(attempt.receipt));
+            return;
+          }
+          if (attempt.status === 'skipped') {
+            const reasonToContext = {
+              disabled: 'disabled',
+              'validation-failed': 'skipped-validation',
+              'possibly-live-writer': 'skipped-live-writer',
+              'recently-failed': 'skipped-cooldown',
+            } as const;
+            ctx = { repair: reasonToContext[attempt.reason], detail: attempt.detail };
+          } else {
+            ctx = {
+              repair: attempt.restored ? 'failed-restored' : 'failed-not-restored',
+              backupPath: attempt.receipt?.backupPath,
+              detail: attempt.repairError,
+            };
+          }
+        }
+      }
+      const wrapped = new PgliteOpenError(buildPgliteInitErrorMessage(verdict, original, process.platform, ctx), {
         databasePath: dataDir ?? null,
         cause: err,
       });

@@ -19,6 +19,7 @@ import { vector } from '@electric-sql/pglite/vector';
 import { pg_trgm } from '@electric-sql/pglite/contrib/pg_trgm';
 import { configDir } from './config.ts';
 import { acquireLock, releaseLock } from './pglite-lock.ts';
+import { attemptWalRepairAndRetry } from './pglite-repair.ts';
 import { PGLITE_DATA_PROTECTION_POLICY } from './pglite-data-policy.ts';
 
 export const PGLITE_UPGRADE_BACKUP_RETENTION = 2;
@@ -173,7 +174,10 @@ function assertDirectoryNotSymlink(path: string, label: string): void {
 
 function isPgliteRuntimePath(relativePath: string): boolean {
   const topLevel = relativePath.split(/[\\/]/)[0];
-  return topLevel === '.gbrain-lock' || topLevel === '.pmbrain-resolve.sock';
+  return topLevel === '.gbrain-lock'
+    || topLevel === '.pmbrain-resolve.sock'
+    || topLevel === 'postmaster.pid'
+    || topLevel === 'postmaster.opts';
 }
 
 function listInventoryFiles(root: string): string[] {
@@ -257,10 +261,25 @@ async function preservingProcessExitCode<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 async function inspectRestoreCopy(databasePath: string): Promise<PgliteRecoveryValidation> {
-  const db = await preservingProcessExitCode(() => PGlite.create({
+  const open = () => preservingProcessExitCode(() => PGlite.create({
     dataDir: databasePath,
     extensions: { vector, pg_trgm },
   }));
+  let db: PGlite;
+  try {
+    db = await open();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!/aborted\s*\(\)|RuntimeError|unreachable|abort.*runtime|wasm.*runtime/i.test(message)) {
+      throw error;
+    }
+    const attempt = await attemptWalRepairAndRetry(databasePath, open);
+    if (attempt.status !== 'repaired') {
+      const detail = attempt.status === 'skipped' ? attempt.detail : attempt.repairError;
+      throw new Error(`PGLite recovery-copy WAL repair failed: ${detail}`, { cause: error });
+    }
+    db = attempt.db;
+  }
   try {
     const tableResult = await db.query<{ tablename: string }>(
       "SELECT tablename FROM pg_tables WHERE schemaname = 'public'",

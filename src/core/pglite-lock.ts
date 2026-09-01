@@ -75,6 +75,7 @@ export interface LockMetadataV2 {
 export interface LockHandle {
   lockDir: string;
   acquired: boolean;
+  reaped?: boolean;
   ownerToken?: string;
   metadata?: LockMetadataV2;
   diagnostics?: LockDiagnostics;
@@ -189,6 +190,35 @@ function normalizeMetadata(raw: unknown, databasePath: string): Partial<LockMeta
     updatedAt: typeof obj.updatedAt === 'string' ? obj.updatedAt : createdAt ?? nowIso(),
     acquired_at: typeof obj.acquired_at === 'number' ? obj.acquired_at : undefined,
   };
+}
+
+function reapMarkerPath(dataDir: string): string {
+  return `${dataDir}.lock-reap.json`;
+}
+
+function recordReap(dataDir: string): void {
+  try {
+    writeFileSync(reapMarkerPath(dataDir), JSON.stringify({ ts: Date.now(), by: process.pid }), { mode: 0o644 });
+  } catch { /* best-effort */ }
+}
+
+export function msSinceLastReap(dataDir: string): number | null {
+  try {
+    const parsed = JSON.parse(readFileSync(reapMarkerPath(dataDir), 'utf-8')) as { ts?: unknown };
+    return typeof parsed.ts === 'number' ? Date.now() - parsed.ts : null;
+  } catch {
+    return null;
+  }
+}
+
+export function isProcessAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'EPERM';
+  }
 }
 
 /**
@@ -455,6 +485,7 @@ export async function acquireLock(
   const startTime = Date.now();
   let attempts = 0;
   let lastDiagnostics: LockDiagnostics | undefined;
+  let reaped = false;
 
   while (Date.now() - startTime < timeoutMs && attempts < MAX_COMPETE_ATTEMPTS + Math.floor(timeoutMs / RETRY_WAIT_MS)) {
     attempts += 1;
@@ -487,6 +518,8 @@ export async function acquireLock(
 
       // Stale or corrupt → archive (never permanent delete).
       const archivePath = archiveLockDir(lockDir, evaluation.reason);
+      reaped = true;
+      if (evaluation.decision === 'corrupt') recordReap(dataDir as string);
       lastDiagnostics = {
         ...evaluation.diagnostics,
         decision: 'archive_stale_lock',
@@ -525,6 +558,7 @@ export async function acquireLock(
       return {
         lockDir,
         acquired: true,
+        reaped,
         ownerToken: metadata.ownerToken,
         metadata,
         diagnostics,

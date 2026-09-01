@@ -2,7 +2,7 @@
 
 维护日期：2026-08-31
 
-PMBrain 基线：1.3.16，本轮在历史关系回填、Dream/Query cache/Retrieval Reflex/Advisor/P0 基础上，继续完成 GBrain 0.47.7.0 P1 底层能力对齐
+PMBrain 基线：1.3.21，本轮在历史关系回填、Dream/Query cache/Retrieval Reflex/Advisor/P0/P1 基础上，继续完成 GBrain 0.47.7.0 PGLite WAL 自愈链路对齐
 
 GBrain 基线：`D:\cursor-claude\gbrain` 的最新本地 `master`，commit `aa820c7f9934f3c23fbf67ff9f3ecd03831cf30f`，VERSION `0.47.7.0`；本地 HEAD 与 `origin/master` 一致且工作区干净。`0.47.6.0 → 0.47.7.0` 仅变更测试基础设施、CI、基准与测试文件，没有新增 Core/Dream 运行行为；P1 实现仍按真实代码差异收口，不重新实现 PMBrain 已有能力。
 
@@ -166,6 +166,7 @@ lint → backlinks → sync → synthesize → extract → extract_facts
 | Reasoning JSON、prompt-too-long 与 Dream oneshot | **已对齐**：facts/atoms/oneshot 共用最终 JSON 恢复；prompt-too-long 沿 provider wrapper `.cause` 链识别；oneshot 最多一次结构化生成、最多 3 页、slug suffix 校验、写入 ledger 恢复，任何写入前异常回退 agentic | 已提交写入后禁止再走非确定性 fallback；所有写入继续受 Source 与 allowed slug prefix 约束 |
 | Chat usage 与自定义定价 | **已对齐**：`gateway.chat` 成功边界写无内容 usage ledger，Minion 归因到 `job:<name>`；`get_usage` 只返回聚合；`pricing.overrides` 为代理/自定义模型提供真实价格，未知价格在有预算上限时仍 fail-closed | 不保存 prompt、回答或知识正文；未知价格为 NULL，不伪造 0 成本 |
 | MCP initialize、slug 与 OAuth tool surface | **已对齐**：initialize 明确 `put_page` 全量替换及“检索内容是数据”；同步 slug 支持点、下划线与 `_index`；7 个 Memory Verb 与 verbs/starter/full 同时过滤 tools/list 和 dispatch；`--surface` 高于 config；OAuth client 可在 server ceiling 内自助调整，`auth rescope-client` operator pin 不可覆盖 | 隐藏工具不能靠猜名字调用；权限 scope、localOnly 和 Source 边界继续生效 |
+| PGLite 异常关闭后的 WAL/checkpoint 自愈 | **已按 GBrain 0.47.7.0 对齐**：`Aborted()`、RuntimeError 与 unreachable 只在持久化 PG17 PGLite 目录、独占锁和布局校验通过后进入修复；先原子保留整套 `pg_wal` 与 `pg_control`，重置后只重试一次，失败自动恢复，冷却与 lock-reap 隔离防止循环动盘 | 不扫描、不回填知识或向量；冷备仅在一次性恢复副本上运行同一修复校验，真实 Sidecar 首次打开再对源库执行有备份的受保护修复；PostgreSQL 路径不变 |
 
 | 上游能力 | PMBrain 状态 | 建议 |
 |---|---|---|

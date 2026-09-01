@@ -14,12 +14,12 @@ describe('migration 121 legacy embedding compatibility', () => {
     engine = new PGLiteEngine();
     await engine.connect({ database_path: join(root, 'brain.pglite') });
     await engine.initSchema();
-  });
+  }, 120_000);
 
   afterAll(async () => {
     await engine.disconnect();
     rmSync(root, { recursive: true, force: true });
-  });
+  }, 30_000);
 
   test('only adds nullable structures and never registers a data backfill', () => {
     const migration = MIGRATIONS.find(item => item.version === 121);

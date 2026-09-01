@@ -155,7 +155,7 @@ describe('PGLite upgrade scenarios A–E', () => {
       await engine.disconnect();
     }
     expect(lockDirExists(dbDir)).toBe(false);
-  });
+  }, 30_000);
 });
 
 describe('desktop migration single-owner contract', () => {

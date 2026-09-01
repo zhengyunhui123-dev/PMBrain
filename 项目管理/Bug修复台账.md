@@ -1,5 +1,14 @@
 # Bug 修复台账
 
+## 2026-09-01 PMBrain 1.3.21 修复异常关闭后 PGLite WAL 导致升级与启动永久失败
+
+- 时间：2026-09-01
+- 版本号：PMBrain 1.3.21；PMBrain Desktop 1.1.53
+- 标题：对齐 GBrain 的受保护 WAL 自愈链路，修复冷备和 Sidecar 持续 `Aborted()`
+- 描述：安装版 1.1.52 已排除运行时 socket，但用户真实日志仍在冷备恢复副本打开阶段报 `Aborted(). Build with -sASSERTIONS`。只读诊断确认真实 PGLite 为 PG17 布局、`pg_control` 有效、WAL 段存在且残留异常关闭标记；根因是向量任务被终止后 WAL/checkpoint 状态撕裂，删除 socket 或 pid 文件不能修复。现按本地 GBrain 0.47.7.0（commit `aa820c7f9`）移植受保护修复：仅对持久化 PG17 PGLite 的 WASM abort 触发，在独占锁、活进程、symlink、control CRC、冷却与 lock-reap 安全门通过后，先原子保留完整 `pg_wal` 和 `pg_control`，重置 WAL 后只重试一次；失败自动恢复，修复前备份保留。升级冷备排除 `postmaster.pid`、`postmaster.opts` 和运行时 socket，损坏备份只在一次性恢复副本中走同一修复校验；不扫描、不回填、不删除、不重建用户知识、向量、Wiki 或原始资料，PostgreSQL 路径不变。未连接或修改用户真实数据库。
+- 是否完成：是
+- 最终结果：synthetic resetwal 13/13、修复安全门 25/25、真实截断/垃圾 WAL 与开关/冷却/symlink 6/6、分类器 21/21、发布版本契约 13/13、PostgreSQL 不受影响与 schema 121 grandfather 9/9 通过；升级冷备 13 项行为均已通过，其中异常关闭备份的“校验→恢复→源库自愈→受保护记录仍存在”用例在 Windows 完整通过。该用例包含多次真实 PGLite 冷启动，耗时 174 秒，因此只把集成测试预算调整为 240 秒，没有延长产品启动或健康检查超时。统一校验 39/39、GitHub Test 本地预演 228/228、根项目 TypeScript 与版本同步通过。GitHub 精确提交的 PGLite serial、Postgres E2E、Heavy、Windows Desktop runtime 和安装旅程由本次提交继续验收。未执行 `bun run build:win`，未修改 Admin 资源。
+
 ## 2026-09-01 PMBrain 1.3.20 修复升级状态、向量超时与 PGLite 运行时 socket
 
 - 时间：2026-09-01
