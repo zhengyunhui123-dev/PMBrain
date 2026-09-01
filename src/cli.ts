@@ -1815,7 +1815,7 @@ async function handleCliOnly(command: string, args: string[]) {
       // Do not call db.close() on PGLite: packaged Windows Bun can freeze or
       // crash. Flush stdio and exit with the command's real status.
       await disconnectCliEngine(engine, command, {
-        exitCode: commandFailed ? 1 : undefined,
+        exitCode: commandFailed ? 1 : 0,
       });
     }
   }
