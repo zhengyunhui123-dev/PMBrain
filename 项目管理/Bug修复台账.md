@@ -7,7 +7,7 @@
 - 标题：对齐 GBrain 孤立知识只读语义，并修复向量切换等待和打包 import 退出
 - 描述：最新 GBrain 0.47.9.0（commit `81d01622c`）的 `orphans` 与 Dream orphans 阶段只扫描和报告；关系创建由 `extract links`、`--by-mention`、`add_link` 及 maintain Skill 在有证据时分别完成，并不存在 Advisor 一键自动修复孤立关系。PMBrain 首页此前把 `dream --phase orphans` 标成“整理关系”，现改为“查看孤立知识”并进入知识图谱孤立视图，不自动写关系；同时修复 Desktop 向量模型切换后 Sidecar 重启覆盖选择状态造成的等待死锁，以及 Windows 打包 Bun 在 import 完成后无法可靠退出的问题。未扫描、修改、回填或重建用户知识、关系、向量、Wiki、原始资料和数据库。
 - 是否完成：是
-- 最终结果：Advisor 行为与 GBrain 只读 orphans 语义一致；已有明确 WikiLink、Markdown、See Also、frontmatter 和实体提及的关系仍由现有 extract/add_link 链路处理。定向 Advisor、Desktop 和 Windows 打包 import 回归已通过；统一校验和 GitHub 精确 SHA CI 结果在提交后复验。未执行 `bun run build:win`，未连接或修改用户真实数据库。
+- 最终结果：Advisor 行为与 GBrain 只读 orphans 语义一致；已有明确 WikiLink、Markdown、See Also、frontmatter 和实体提及的关系仍由现有 extract/add_link 链路处理。远端真实 UI 首次复验进一步发现模型维度探测完成后可能冻结在 Windows PGLite WASM 关闭阶段，现把已完成的 models 一次性子进程纳入同一跳过关闭并可靠退出契约。定向 Advisor、Desktop 和 Windows 打包 import 回归已通过；统一校验和 GitHub 精确 SHA CI 结果在提交后复验。未执行 `bun run build:win`，未连接或修改用户真实数据库。
 
 ## 2026-09-01 PMBrain 1.3.26 修复向量切换版本的 CI 发布门禁
 

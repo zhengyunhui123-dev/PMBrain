@@ -9,6 +9,7 @@ export const PGLITE_SKIP_CLOSE_COMMANDS: ReadonlySet<string> = new Set([
   'dream',
   'sync',
   'extract',
+  'models',
 ]);
 
 export interface CliDisconnectOptions {
