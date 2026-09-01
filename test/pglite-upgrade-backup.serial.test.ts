@@ -17,6 +17,7 @@ import {
 import {
   createVerifiedPgliteUpgradeBackup,
   deletePgliteUpgradeBackup,
+  inventoryPgliteDirectory,
   listPgliteUpgradeBackups,
   preparePgliteUpgradeBackupRoot,
   prunePgliteUpgradeBackups,
@@ -59,6 +60,7 @@ describe.serial('PGLite upgrade cold backup and recovery verification', () => {
 
   test('creates a byte-verified cold copy and proves a disposable restore copy can open', async () => {
     await seedProtectedPage();
+    writeFileSync(join(databasePath, '.pmbrain-resolve.sock'), 'runtime-only');
 
     const result = await createVerifiedPgliteUpgradeBackup({
       databasePath,
@@ -69,6 +71,7 @@ describe.serial('PGLite upgrade cold backup and recovery verification', () => {
     expect(result.status).toBe('created');
     expect(existsSync(result.backupDatabasePath)).toBe(true);
     expect(existsSync(join(result.backupDatabasePath, '.gbrain-lock'))).toBe(false);
+    expect(existsSync(join(result.backupDatabasePath, '.pmbrain-resolve.sock'))).toBe(false);
     expect(existsSync(join(result.backupDirectory, 'restore-verification.pglite'))).toBe(false);
     expect(result.manifest.recovery_validation.status).toBe('verified');
     expect(result.manifest.recovery_validation.protected_table_counts.pages).toBe(1);
@@ -92,6 +95,15 @@ describe.serial('PGLite upgrade cold backup and recovery verification', () => {
       await engine.disconnect();
     }
   }, 60_000);
+
+  test('excludes the Sidecar resolve socket from the protected database inventory', async () => {
+    mkdirSync(databasePath, { recursive: true });
+    writeFileSync(join(databasePath, 'protected-data'), 'knowledge');
+    const withoutSocket = await inventoryPgliteDirectory(databasePath);
+    writeFileSync(join(databasePath, '.pmbrain-resolve.sock'), 'runtime-only');
+    const withSocket = await inventoryPgliteDirectory(databasePath);
+    expect(withSocket).toEqual(withoutSocket);
+  });
 
   test('reuses the first verified pre-upgrade backup for the same target version', async () => {
     await seedProtectedPage();

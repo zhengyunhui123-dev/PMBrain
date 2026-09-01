@@ -61,8 +61,8 @@ export async function bindResolveIpcForServe(
       close() {
         if (closed) return;
         closed = true;
-        try { server.close(); } catch { /* noop */ }
-        cleanupStaleSocket(socketPath);
+        server.once('close', () => cleanupStaleSocket(socketPath));
+        try { server.close(); } catch { cleanupStaleSocket(socketPath); }
       },
     };
   } catch {

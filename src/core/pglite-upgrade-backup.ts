@@ -171,13 +171,18 @@ function assertDirectoryNotSymlink(path: string, label: string): void {
   if (!info.isDirectory()) throw new Error(`${label} is not a directory: ${path}`);
 }
 
+function isPgliteRuntimePath(relativePath: string): boolean {
+  const topLevel = relativePath.split(/[\\/]/)[0];
+  return topLevel === '.gbrain-lock' || topLevel === '.pmbrain-resolve.sock';
+}
+
 function listInventoryFiles(root: string): string[] {
   const files: string[] = [];
   const visit = (directory: string): void => {
     for (const entry of readdirSync(directory, { withFileTypes: true })) {
       const full = join(directory, entry.name);
       const rel = relative(root, full);
-      if (rel.split(/[\\/]/)[0] === '.gbrain-lock') continue;
+      if (isPgliteRuntimePath(rel)) continue;
       if (entry.isSymbolicLink()) {
         throw new Error(`PGLite backup refuses symbolic links inside the database directory: ${full}`);
       }
@@ -237,7 +242,7 @@ function copyColdDatabase(source: string, destination: string): void {
     preserveTimestamps: true,
     filter: sourcePath => {
       const rel = relative(source, sourcePath);
-      return rel === '' || rel.split(/[\\/]/)[0] !== '.gbrain-lock';
+      return rel === '' || !isPgliteRuntimePath(rel);
     },
   });
 }

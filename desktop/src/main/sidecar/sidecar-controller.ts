@@ -201,12 +201,18 @@ export class SidecarController {
       await this.stopNow();
       await this.dependencies.prepareConfiguredDatabase();
       const retrySetup = getSetupInfo();
-      if (!(retrySetup.current.engine === 'pglite' && needsDesktopMigration(app.getVersion()))) {
+      const migrationRequired = retrySetup.current.engine === 'pglite'
+        && needsDesktopMigration(app.getVersion());
+      if (!migrationRequired) {
         await this.dependencies.reconcileConfiguredEmbeddingIndex();
       }
       await this.startOnce(false);
       const started = this.manager;
       if (!started) throw new Error('PMBrain 本地服务未能启动。');
+      if (migrationRequired) {
+        markDesktopMigration(app.getVersion());
+        await this.dependencies.prunePgliteUpgradeBackups();
+      }
       return started.createAdminLink();
     });
     this.retryPromise = pending;

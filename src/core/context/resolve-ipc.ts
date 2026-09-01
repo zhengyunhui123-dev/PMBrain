@@ -11,9 +11,8 @@ import net from 'node:net';
 import { createHash } from 'node:crypto';
 import {
   chmodSync,
-  existsSync,
+  lstatSync,
   mkdirSync,
-  statSync,
   unlinkSync,
 } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -201,8 +200,7 @@ export async function startResolveIpcServer(
 
 export function cleanupStaleSocket(socketPath: string): void {
   try {
-    if (!existsSync(socketPath)) return;
-    const stat = statSync(socketPath);
-    if (stat.isSocket() || stat.isFIFO() || stat.isFile()) unlinkSync(socketPath);
+    const stat = lstatSync(socketPath);
+    if (stat.isSymbolicLink() || stat.isSocket() || stat.isFIFO() || stat.isFile()) unlinkSync(socketPath);
   } catch { /* best effort */ }
 }

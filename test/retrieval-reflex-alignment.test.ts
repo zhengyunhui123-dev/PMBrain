@@ -27,7 +27,7 @@ import {
 } from '../src/core/context/volunteer-events.ts';
 import { createGBrainContextEngine } from '../src/core/context-engine.ts';
 import { withEnv } from './helpers/with-env.ts';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { bindResolveIpcForServe } from '../src/mcp/resolve-ipc-binding.ts';
@@ -276,6 +276,9 @@ describe('GBrain 0.47.5.0 Retrieval Reflex alignment', () => {
           expect(result.systemPromptAddition).toContain('people/alice-example');
         } finally {
           binding.close();
+          const deadline = Date.now() + 2_000;
+          while (existsSync(binding.socketPath ?? '') && Date.now() < deadline) await Bun.sleep(10);
+          expect(existsSync(binding.socketPath ?? '')).toBe(false);
         }
       },
     );
