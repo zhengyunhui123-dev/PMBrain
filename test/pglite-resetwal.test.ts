@@ -16,6 +16,7 @@ import {
   parseWalSegNo,
   xlogFileName,
   WalResetUnsupportedError,
+  pgControlLooksCleanlyShutdown,
 } from '../src/core/pglite-resetwal.ts';
 
 const SEG_SIZE = 1024 * 1024; // 1MB — valid (power of two, divides 2^32), fast to write
@@ -32,10 +33,11 @@ const OFF = {
   crc: 288,
 } as const;
 
-function makeControl(opts?: { version?: number; segSize?: number; blcksz?: number; tli?: number; redoSegNo?: bigint }): Buffer {
+function makeControl(opts?: { version?: number; segSize?: number; blcksz?: number; tli?: number; redoSegNo?: bigint; state?: number }): Buffer {
   const control = Buffer.alloc(8192);
   control.writeBigUInt64LE(0x1122334455667788n, OFF.systemIdentifier);
   control.writeUInt32LE(opts?.version ?? 1700, OFF.pgControlVersion);
+  control.writeInt32LE(opts?.state ?? 0, OFF.state);
   control.writeUInt32LE(opts?.tli ?? 1, OFF.checkPointCopyThisTimeLineID);
   control.writeUInt32LE(opts?.blcksz ?? 8192, OFF.xlogBlcksz);
   control.writeUInt32LE(opts?.segSize ?? SEG_SIZE, OFF.xlogSegSize);
@@ -99,6 +101,24 @@ describe('resetWal — validation refusals (fail-closed)', () => {
     // leave the old CRC in place → mismatch
     writeFileSync(join(dir, 'global', 'pg_control'), control);
     await expect(resetWal(dir)).rejects.toThrow(/CRC mismatch/);
+  });
+});
+
+describe('pgControlLooksCleanlyShutdown', () => {
+  test('true only for CRC-valid shutdowned or shutdowned-in-recovery states', () => {
+    expect(pgControlLooksCleanlyShutdown(makeLayout({ state: 1 }))).toBe(true);
+    expect(pgControlLooksCleanlyShutdown(makeLayout({ state: 2 }))).toBe(true);
+    expect(pgControlLooksCleanlyShutdown(makeLayout({ state: 0 }))).toBe(false);
+    expect(pgControlLooksCleanlyShutdown(makeLayout({ state: 6 }))).toBe(false);
+    expect(pgControlLooksCleanlyShutdown(makeLayout({ version: 1600, state: 1 }))).toBe(false);
+  });
+
+  test('false when the control CRC does not verify', () => {
+    const dir = makeLayout({ state: 1 });
+    const control = readFileSync(join(dir, 'global', 'pg_control'));
+    control.writeInt32LE(6, OFF.state);
+    writeFileSync(join(dir, 'global', 'pg_control'), control);
+    expect(pgControlLooksCleanlyShutdown(dir)).toBe(false);
   });
 });
 

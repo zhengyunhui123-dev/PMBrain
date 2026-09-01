@@ -42,6 +42,9 @@ import { basename, dirname, join } from 'node:path';
 import { resetWal, writeFileAtomicSynced, WalResetUnsupportedError, PG_CONTROL_FILE_SIZE, isWalSegmentName } from './pglite-resetwal.ts';
 import { msSinceLastReap, isProcessAlive } from './pglite-lock.ts';
 
+const BUSY_UNTOUCHED_DETAIL = 'busy-untouched';
+const DEFAULT_BUSY_RENAME_DELAYS_MS = [0, 100, 250, 500, 1000, 2000];
+
 // A recent reap on this data dir — by ANY process — means a holder that may
 // still be alive lost its lock; auto WAL surgery stays off until the window
 // clears (security review: the in-process `reaped` flag alone let the NEXT
@@ -129,7 +132,12 @@ interface RepairSidecar {
   episodeStartedAt: number | null;
   /** The open episode's (first) backup dir — the pre-damage forensic state. */
   episodeBackupPath: string | null;
-  attempts: Array<{ ts: number; outcome: 'repaired' | 'failed'; backupPath: string | null }>;
+  attempts: Array<{
+    ts: number;
+    outcome: 'repaired' | 'failed';
+    backupPath: string | null;
+    detail?: string;
+  }>;
 }
 
 function sidecarPath(dataDir: string): string {
@@ -166,6 +174,48 @@ function writeRepairSidecar(dataDir: string, sidecar: RepairSidecar): void {
   } catch { /* best-effort — a sidecar write failure must never block recovery */ }
 }
 
+export function isBusyFsError(err: unknown): boolean {
+  const code = (err as NodeJS.ErrnoException)?.code;
+  if (code === 'EPERM' || code === 'EACCES' || code === 'EBUSY') return true;
+  const message = err instanceof Error ? err.message : String(err);
+  return /EPERM|EACCES|EBUSY|operation not permitted|access is denied/i.test(message);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+export async function renameWithBusyRetry(
+  src: string,
+  dest: string,
+  opts?: {
+    delaysMs?: number[];
+    renameFn?: (from: string, to: string) => Promise<void>;
+  },
+): Promise<void> {
+  const delays = opts?.delaysMs ?? DEFAULT_BUSY_RENAME_DELAYS_MS;
+  const renameFn = opts?.renameFn ?? rename;
+  let lastErr: unknown;
+  for (let i = 0; i < delays.length; i++) {
+    const delay = delays[i] ?? 0;
+    if (delay > 0) await sleep(delay);
+    try {
+      await renameFn(src, dest);
+      return;
+    } catch (err) {
+      lastErr = err;
+      if (!isBusyFsError(err) || i === delays.length - 1) throw err;
+    }
+  }
+  throw lastErr;
+}
+
+export function shouldRepairWalBeforeFirstOpen(dataDir: string): boolean {
+  const sidecar = readRepairSidecar(dataDir);
+  const last = sidecar.attempts.at(-1);
+  return last?.outcome === 'failed' && last.detail === BUSY_UNTOUCHED_DETAIL;
+}
+
 /**
  * Record a real repair attempt (repaired|failed) and manage episode state:
  * a `failed` attempt opens an episode (if none is open) pinning its backup as
@@ -186,10 +236,15 @@ export function recordRepairAttempt(
   dataDir: string,
   outcome: 'repaired' | 'failed',
   backupPath: string | null,
-  opts?: { closeEpisode?: boolean },
+  opts?: { closeEpisode?: boolean; detail?: string },
 ): void {
   const sidecar = readRepairSidecar(dataDir);
-  sidecar.attempts.push({ ts: Date.now(), outcome, backupPath });
+  sidecar.attempts.push({
+    ts: Date.now(),
+    outcome,
+    backupPath,
+    ...(opts?.detail ? { detail: opts.detail } : {}),
+  });
   if (sidecar.attempts.length > MAX_SIDECAR_ATTEMPTS) {
     sidecar.attempts = sidecar.attempts.slice(-MAX_SIDECAR_ATTEMPTS);
   }
@@ -269,6 +324,9 @@ export function repairCooldownActive(dataDir: string): { active: boolean; detail
   }
   const lastFailed = [...sidecar.attempts].reverse().find((a) => a.outcome === 'failed');
   if (!lastFailed) return { active: false, detail: 'no prior failed attempt' };
+  if (lastFailed.detail === BUSY_UNTOUCHED_DETAIL) {
+    return { active: false, detail: 'last failure was a busy rename with the directory untouched' };
+  }
   const ageMs = Date.now() - lastFailed.ts;
   // Clock skew (unclean-reboot recovery is exactly when clocks step): a
   // negative age means the recorded ts is in the future — treat as expired
@@ -537,13 +595,13 @@ export async function repairPgliteWal(
     try {
       const walDir = join(dataDir, 'pg_wal');
       if (existsSync(walDir)) {
-        await rename(walDir, join(backupPath, 'pg_wal'));
+        await renameWithBusyRetry(walDir, join(backupPath, 'pg_wal'));
         backupStarted = true;
         backedUpFiles.push('pg_wal/');
       }
       const pidFile = join(dataDir, 'postmaster.pid');
       if (existsSync(pidFile)) {
-        await rename(pidFile, join(backupPath, 'postmaster.pid'));
+        await renameWithBusyRetry(pidFile, join(backupPath, 'postmaster.pid'));
         backupStarted = true;
         backedUpFiles.push('postmaster.pid');
       }
@@ -624,10 +682,10 @@ export async function restoreWalBackup(receipt: WalRepairReceipt): Promise<Resto
     if (existsSync(backupWal)) {
       if (existsSync(walDir)) {
         const aside = join(backupPath, `pg_wal.reset-aside-${Date.now()}`);
-        await rename(walDir, aside);
+        await renameWithBusyRetry(walDir, aside);
         steps.push(`reset pg_wal set aside at ${aside}`);
       }
-      await rename(backupWal, walDir);
+      await renameWithBusyRetry(backupWal, walDir);
       steps.push('pg_wal restored');
     }
     if (steps.length === 0) {
@@ -731,7 +789,13 @@ export async function attemptWalRepairAndRetry<T>(
       }
       // Pre-backup refusal (validation) — the dir was never touched, so there
       // is nothing to restore and `restored: true` reads as "dir intact".
-      recordRepairAttempt(dataDir, 'failed', sidecar.episodeBackupPath);
+      const busy = isBusyFsError(err);
+      recordRepairAttempt(
+        dataDir,
+        'failed',
+        sidecar.episodeBackupPath,
+        busy ? { detail: BUSY_UNTOUCHED_DETAIL } : undefined,
+      );
       return {
         status: 'failed',
         receipt: null,

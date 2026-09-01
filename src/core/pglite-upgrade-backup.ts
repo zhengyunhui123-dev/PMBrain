@@ -20,6 +20,7 @@ import { pg_trgm } from '@electric-sql/pglite/contrib/pg_trgm';
 import { configDir } from './config.ts';
 import { acquireLock, releaseLock } from './pglite-lock.ts';
 import { attemptWalRepairAndRetry } from './pglite-repair.ts';
+import { pgControlLooksCleanlyShutdown } from './pglite-resetwal.ts';
 import { PGLITE_DATA_PROTECTION_POLICY } from './pglite-data-policy.ts';
 
 export const PGLITE_UPGRADE_BACKUP_RETENTION = 2;
@@ -260,26 +261,51 @@ async function preservingProcessExitCode<T>(fn: () => Promise<T>): Promise<T> {
   }
 }
 
+function isWasmAbortMessage(message: string): boolean {
+  return /aborted\s*\(\)|RuntimeError|unreachable|abort.*runtime|wasm.*runtime/i.test(message);
+}
+
+async function openVerifiedRestoreCopy(
+  databasePath: string,
+  open: () => Promise<PGlite>,
+): Promise<PGlite> {
+  const fail = (detail: string, cause?: unknown): never => {
+    throw new Error(`PGLite recovery-copy WAL repair failed: ${detail}`, { cause });
+  };
+  const repair = () => attemptWalRepairAndRetry(databasePath, open);
+
+  if (!pgControlLooksCleanlyShutdown(databasePath)) {
+    const attempt = await repair();
+    if (attempt.status === 'repaired') return attempt.db;
+    if (attempt.status !== 'skipped') return fail(attempt.repairError);
+    try {
+      return await open();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!isWasmAbortMessage(message)) throw error;
+      return fail(attempt.detail, error);
+    }
+  }
+
+  try {
+    return await open();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!isWasmAbortMessage(message)) throw error;
+    const attempt = await repair();
+    if (attempt.status !== 'repaired') {
+      return fail(attempt.status === 'skipped' ? attempt.detail : attempt.repairError, error);
+    }
+    return attempt.db;
+  }
+}
+
 async function inspectRestoreCopy(databasePath: string): Promise<PgliteRecoveryValidation> {
   const open = () => preservingProcessExitCode(() => PGlite.create({
     dataDir: databasePath,
     extensions: { vector, pg_trgm },
   }));
-  let db: PGlite;
-  try {
-    db = await open();
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (!/aborted\s*\(\)|RuntimeError|unreachable|abort.*runtime|wasm.*runtime/i.test(message)) {
-      throw error;
-    }
-    const attempt = await attemptWalRepairAndRetry(databasePath, open);
-    if (attempt.status !== 'repaired') {
-      const detail = attempt.status === 'skipped' ? attempt.detail : attempt.repairError;
-      throw new Error(`PGLite recovery-copy WAL repair failed: ${detail}`, { cause: error });
-    }
-    db = attempt.db;
-  }
+  const db = await openVerifiedRestoreCopy(databasePath, open);
   try {
     const tableResult = await db.query<{ tablename: string }>(
       "SELECT tablename FROM pg_tables WHERE schemaname = 'public'",

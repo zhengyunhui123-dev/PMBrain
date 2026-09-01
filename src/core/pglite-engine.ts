@@ -26,7 +26,12 @@ import { DEFAULT_EMBEDDING_DIMENSIONS } from './ai/defaults.ts';
 import { DELETE_BATCH_SIZE } from './engine-constants.ts';
 import { acquireLock, releaseLock, type LockHandle } from './pglite-lock.ts';
 import { DatabaseAlreadyOwnedError, PgliteOpenError } from './pglite-errors.ts';
-import { attemptWalRepairAndRetry, closeRepairEpisodeIfOpen, type WalRepairReceipt } from './pglite-repair.ts';
+import {
+  attemptWalRepairAndRetry,
+  closeRepairEpisodeIfOpen,
+  shouldRepairWalBeforeFirstOpen,
+  type WalRepairReceipt,
+} from './pglite-repair.ts';
 import type {
   Page, PageInput, PageFilters, PageType,
   Chunk, ChunkInput, StaleChunkRow, StalePageRow,
@@ -385,14 +390,33 @@ export class PGLiteEngine implements BrainEngine {
       }
     }
 
+    const openPersistent = () => preservingProcessExitCode(() =>
+      PGlite.create({
+        dataDir,
+        loadDataDir,
+        extensions: { vector, pg_trgm },
+      }),
+    );
+    const openAfterRepair = () => preservingProcessExitCode(() => PGlite.create({
+      dataDir,
+      extensions: { vector, pg_trgm },
+    }));
+
     try {
-      this._db = await preservingProcessExitCode(() =>
-        PGlite.create({
+      if (dataDir && shouldRepairWalBeforeFirstOpen(dataDir)) {
+        const attempt = await attemptWalRepairAndRetry(
           dataDir,
-          loadDataDir,
-          extensions: { vector, pg_trgm },
-        }),
-      );
+          openAfterRepair,
+          { reaped: this._lock?.reaped },
+        );
+        if (attempt.status === 'repaired') {
+          this._db = attempt.db;
+          this.walRepairReceipt = attempt.receipt;
+          console.warn(buildWalRepairNotice(attempt.receipt));
+          return;
+        }
+      }
+      this._db = await openPersistent();
       if (dataDir) closeRepairEpisodeIfOpen(dataDir);
     } catch (err) {
       // v0.13.1: any PGLite.create() failure becomes actionable. v0.41.8.0
@@ -411,10 +435,7 @@ export class PGLiteEngine implements BrainEngine {
         } else {
           const attempt = await attemptWalRepairAndRetry(
             dataDir,
-            () => preservingProcessExitCode(() => PGlite.create({
-              dataDir,
-              extensions: { vector, pg_trgm },
-            })),
+            openAfterRepair,
             { reaped: this._lock?.reaped },
           );
           if (attempt.status === 'repaired') {

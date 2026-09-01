@@ -1,5 +1,14 @@
 # Bug 修复台账
 
+## 2026-09-01 PMBrain 1.3.22 修复 Windows 冷备校验 EPERM 导致升级启动失败
+
+- 时间：2026-09-01
+- 版本号：PMBrain 1.3.22；PMBrain Desktop 1.1.54
+- 标题：Windows 上 WASM 中止后无法搬走 `pg_wal`，升级冷备校验把完好的知识库挡在启动门外
+- 描述：安装版 1.1.53 日志确认真实库仍在 `C:\Users\zhengyunhui\.pmbrain\brain.pglite`，配置 `last_migrated_version` 停在 1.1.48，每次启动都要做 1.1.53 冷备。校验副本 `D:\backups\.verify-*` 打开时 WASM abort，随后 `rename pg_wal` 报 `EPERM`。这是 Windows 普遍问题：校验副本先被 WASM 打开，文件句柄未释放就不能搬家；不是知识库损坏，也不是多次更新把库写坏。现改为：未干净关闭的校验副本先做受保护 WAL 修复再打开；`pg_wal` 搬家遇到 EPERM/EACCES/EBUSY 自动重试；未改动目录的忙碌失败不进入 1 小时冷却，下一进程打开前修复。不扫描、不回填、不删除、不重建用户知识、向量、Wiki 或原始资料，未连接或修改用户真实数据库。
+- 是否完成：是
+- 最终结果：WAL 修复与 resetwal 定向 43/43，升级冷备含 IN_PRODUCTION 校验与异常关闭恢复 14/14，真实 WAL 自愈含结构门禁 6/6，init 分类器 21/21，发布说明 6/6，根项目与 Desktop TypeScript、版本同步通过。未执行 `bun run build:win`，未修改 Admin 资源，未连接或修改用户真实数据库。
+
 ## 2026-09-01 PMBrain 1.3.21 修复异常关闭后 PGLite WAL 导致升级与启动永久失败
 
 - 时间：2026-09-01

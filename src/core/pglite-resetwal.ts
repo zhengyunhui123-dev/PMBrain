@@ -30,7 +30,7 @@
  * startup still fails and the next repair attempt re-runs this (idempotent).
  * A torn pair can never claim success.
  */
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { mkdir, open, readdir, readFile, rename, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 
@@ -44,6 +44,7 @@ export function isWalSegmentName(name: string): boolean {
 }
 const PG_CONTROL_VERSION = 1700;
 const DB_SHUTDOWNED = 1;
+const DB_SHUTDOWNED_IN_RECOVERY = 2;
 const XLOG_BLCKSZ = 8192;
 const MIN_WAL_SEG_SIZE = 1024 * 1024;
 // Postgres-general max is 1GB, but this port targets pglite (ships 16MB
@@ -111,6 +112,20 @@ for (let i = 0; i < 256; i++) {
     crc = crc & 1 ? (crc >>> 1) ^ 0x82f63b78 : crc >>> 1;
   }
   crcTable[i] = crc >>> 0;
+}
+
+export function pgControlLooksCleanlyShutdown(dataDir: string): boolean {
+  try {
+    const control = readFileSync(join(dataDir, 'global', 'pg_control'));
+    if (control.length !== PG_CONTROL_FILE_SIZE) return false;
+    if (control.readUInt32LE(OFF.pgControlVersion) !== PG_CONTROL_VERSION) return false;
+    const storedCrc = control.readUInt32LE(OFF.crc);
+    if (crc32c([control.subarray(0, OFF.crc)]) !== storedCrc) return false;
+    const state = control.readInt32LE(OFF.state);
+    return state === DB_SHUTDOWNED || state === DB_SHUTDOWNED_IN_RECOVERY;
+  } catch {
+    return false;
+  }
 }
 
 export function crc32c(chunks: Uint8Array[]): number {

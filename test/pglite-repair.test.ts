@@ -29,6 +29,9 @@ import {
   pruneRepairBackups,
   WalRepairError,
   closeRepairEpisodeIfOpen,
+  isBusyFsError,
+  renameWithBusyRetry,
+  shouldRepairWalBeforeFirstOpen,
 } from '../src/core/pglite-repair.ts';
 
 const SEG_SIZE = 1024 * 1024;
@@ -516,6 +519,63 @@ describe('attemptWalRepairAndRetry — the never-throws engine seam', () => {
     await withEnv({ GBRAIN_PGLITE_WAL_REPAIR_COOLDOWN_SECONDS: '0' }, async () => {
       const attempt = await attemptWalRepairAndRetry(dir, async () => 'db');
       expect(attempt.status).toBe('repaired');
+    });
+  });
+});
+
+describe('Windows busy rename and untouched failure', () => {
+  test('isBusyFsError matches EPERM/EACCES/EBUSY and Windows permission text', () => {
+    expect(isBusyFsError(Object.assign(new Error('EPERM: operation not permitted'), { code: 'EPERM' }))).toBe(true);
+    expect(isBusyFsError(Object.assign(new Error('busy'), { code: 'EBUSY' }))).toBe(true);
+    expect(isBusyFsError(new Error('EACCES: access is denied'))).toBe(true);
+    expect(isBusyFsError(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }))).toBe(false);
+  });
+
+  test('renameWithBusyRetry retries EPERM then succeeds; non-busy errors fail immediately', async () => {
+    let calls = 0;
+    const busy = Object.assign(new Error('EPERM: operation not permitted, rename'), { code: 'EPERM' });
+    await renameWithBusyRetry('from', 'to', {
+      delaysMs: [0, 0, 0],
+      renameFn: async () => {
+        calls += 1;
+        if (calls < 3) throw busy;
+      },
+    });
+    expect(calls).toBe(3);
+
+    let immediate = 0;
+    const missing = Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+    await expect(renameWithBusyRetry('from', 'to', {
+      delaysMs: [0, 0, 0],
+      renameFn: async () => {
+        immediate += 1;
+        throw missing;
+      },
+    })).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(immediate).toBe(1);
+
+    let exhausted = 0;
+    await expect(renameWithBusyRetry('from', 'to', {
+      delaysMs: [0, 0],
+      renameFn: async () => {
+        exhausted += 1;
+        throw busy;
+      },
+    })).rejects.toMatchObject({ code: 'EPERM' });
+    expect(exhausted).toBe(2);
+  });
+
+  test('untouched busy failure does not start cooldown and the next process repairs before first open', async () => {
+    await withEnv({ GBRAIN_PGLITE_WAL_REPAIR: undefined, GBRAIN_PGLITE_WAL_REPAIR_COOLDOWN_SECONDS: undefined }, async () => {
+      const dir = makeLayout();
+      recordRepairAttempt(dir, 'failed', null, { detail: 'busy-untouched' });
+      expect(repairCooldownActive(dir).active).toBe(false);
+      expect(repairCooldownActive(dir).detail).toContain('untouched');
+      expect(shouldRepairWalBeforeFirstOpen(dir)).toBe(true);
+
+      const repaired = await attemptWalRepairAndRetry(dir, async () => 'db');
+      expect(repaired.status).toBe('repaired');
+      expect(shouldRepairWalBeforeFirstOpen(dir)).toBe(false);
     });
   });
 });

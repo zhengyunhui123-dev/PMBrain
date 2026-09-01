@@ -185,15 +185,18 @@ describe('WAL auto-repair — real-brain regression (#223/#1670/#2575)', () => {
     expect(backupDirs(link).length).toBe(0);
   }, COLD_START_TIMEOUT);
 
-  test('gate shape: the seam only runs for wasm-abort + persistent dataDir (structural pin)', () => {
+  test('gate shape: the seam runs for a prior untouched busy failure, then only inside wasm-abort', () => {
     const src = readFileSync('src/core/pglite-engine.ts', 'utf-8');
     expect(src).toMatch(/if \(verdict === 'wasm-abort'\)/);
     expect(src).toMatch(/if \(!dataDir\) \{\s*\n\s*ctx = \{ repair: 'in-memory' \}/);
-    // The seam call sits INSIDE the wasm-abort branch (no call site outside it).
-    const firstSeamCall = src.indexOf('await attemptWalRepairAndRetry(');
+    expect(src).toMatch(/shouldRepairWalBeforeFirstOpen\(dataDir\)/);
     const gate = src.indexOf("if (verdict === 'wasm-abort')");
+    const firstSeamCall = src.indexOf('await attemptWalRepairAndRetry(');
+    const secondSeamCall = src.indexOf('await attemptWalRepairAndRetry(', firstSeamCall + 1);
     expect(gate).toBeGreaterThan(-1);
-    expect(firstSeamCall).toBeGreaterThan(gate);
-    expect(src.indexOf('await attemptWalRepairAndRetry(', firstSeamCall + 1)).toBe(-1);
+    expect(firstSeamCall).toBeGreaterThan(-1);
+    expect(firstSeamCall).toBeLessThan(gate);
+    expect(secondSeamCall).toBeGreaterThan(gate);
+    expect(src.indexOf('await attemptWalRepairAndRetry(', secondSeamCall + 1)).toBe(-1);
   });
 });

@@ -3,6 +3,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   readdirSync,
   rmSync,
   truncateSync,
@@ -16,6 +17,7 @@ import {
   classifyPgliteDataArtifact,
   PGLITE_DATA_PROTECTION_POLICY,
 } from '../src/core/pglite-data-policy.ts';
+import { crc32c } from '../src/core/pglite-resetwal.ts';
 import {
   createVerifiedPgliteUpgradeBackup,
   deletePgliteUpgradeBackup,
@@ -28,6 +30,14 @@ import {
   restorePgliteUpgradeBackup,
   verifyPgliteUpgradeBackup,
 } from '../src/core/pglite-upgrade-backup.ts';
+
+function markControlInProduction(dir: string): void {
+  const path = join(dir, 'global', 'pg_control');
+  const control = Buffer.from(readFileSync(path));
+  control.writeInt32LE(6, 16);
+  control.writeUInt32LE(crc32c([control.subarray(0, 288)]), 288);
+  writeFileSync(path, control);
+}
 
 describe.serial('PGLite upgrade cold backup and recovery verification', () => {
   let root: string;
@@ -135,6 +145,27 @@ describe.serial('PGLite upgrade cold backup and recovery verification', () => {
     await engine.connect({ engine: 'pglite', database_path: databasePath });
     try {
       expect(engine.walRepairReceipt).not.toBeNull();
+      expect(await engine.getPage('notes/upgrade-protected')).not.toBeNull();
+    } finally {
+      await engine.disconnect();
+    }
+  }, 240_000);
+
+  test('verifies an IN_PRODUCTION control backup by repairing the disposable copy before WASM open', async () => {
+    await seedProtectedPage();
+    markControlInProduction(databasePath);
+
+    const created = await createVerifiedPgliteUpgradeBackup({
+      databasePath,
+      backupRoot,
+      targetVersion: '1.1.93',
+    });
+    expect(created.manifest.recovery_validation.protected_table_counts.pages).toBe(1);
+    expect((await verifyPgliteUpgradeBackup(created.backupDirectory)).status).toBe('verified');
+
+    const engine = new PGLiteEngine();
+    await engine.connect({ engine: 'pglite', database_path: databasePath });
+    try {
       expect(await engine.getPage('notes/upgrade-protected')).not.toBeNull();
     } finally {
       await engine.disconnect();
