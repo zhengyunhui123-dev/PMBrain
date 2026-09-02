@@ -53,9 +53,13 @@ describe('desktop system orchestration contracts', () => {
     expect(sidecar).toContain('logSidecarFailure');
     expect(sidecar).toContain('exitCode=');
     expect(sidecar).toContain('(empty)');
+    expect(sidecar).toContain('onStderr');
     expect(sidecarController).toContain('resolveSidecarHealthTimeoutMs');
     expect(sidecarController).toContain('POST_UPGRADE_HEALTH_TIMEOUT_MS');
     expect(sidecarController).toContain("failure.recentStderr");
+    expect(sidecarController).toContain('GIN_REPAIR_PROGRESS_MESSAGE');
+    expect(sidecarController).toContain('GIN_REPAIR_SUCCESS_MESSAGE');
+    expect(sidecarController).toContain('GIN_REPAIR_DB_UNUSABLE_MESSAGE');
   });
 
   test('PGLite 用户升级时只由 sidecar 打开数据库，健康后才记录升级完成', () => {

@@ -29,7 +29,12 @@ import {
   clearOpCheckpoint,
   type OpCheckpointKey,
 } from '../core/op-checkpoint.ts';
-import { isGinCorruptionError, repairPgliteGinIndexes } from '../core/pglite-gin-repair.ts';
+import {
+  GIN_REPAIR_FAILED_MESSAGE,
+  GinIndexUnusableError,
+  isGinCorruptionError,
+  repairPgliteGinIndexes,
+} from '../core/pglite-gin-repair.ts';
 
 function defaultWorkers(): number {
   const cpuCount = cpus().length;
@@ -383,10 +388,17 @@ export async function runImport(
         }
       }
     } catch (e: unknown) {
-      if (!ginRepaired && eng.kind === 'pglite' && isGinCorruptionError(e)) {
+      if (eng.kind === 'pglite' && isGinCorruptionError(e)) {
+        if (ginRepaired) {
+          throw e instanceof GinIndexUnusableError
+            ? e
+            : new GinIndexUnusableError(GIN_REPAIR_FAILED_MESSAGE, { cause: e });
+        }
+        const result = await repairPgliteGinIndexes(eng);
+        if (result.status !== 'repaired') {
+          throw new GinIndexUnusableError(result.message, { status: result.status, cause: e });
+        }
         ginRepaired = true;
-        console.error('[pmbrain] PGLite GIN index corrupted; rebuilding indexes and retrying this file.');
-        await repairPgliteGinIndexes(eng);
         return processFile(eng, filePath);
       }
       const msg = e instanceof Error ? e.message : String(e);

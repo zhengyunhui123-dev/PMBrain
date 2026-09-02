@@ -1,5 +1,14 @@
 # Bug 修复台账
 
+## 2026-09-02 PMBrain 1.3.32 搜索索引损坏时只安全重建 GIN，不再整库恢复或跳过知识
+
+- 时间：2026-09-02
+- 版本号：PMBrain 1.3.32；PMBrain Desktop 1.1.64
+- 标题：PGLite GIN 损坏改为动态列出索引、按原定义 DROP 后重建，并用真实搜索验证
+- 描述：确认数据库可打开且只是 GIN 搜索索引损坏时，不再恢复整个数据库，也不删除知识数据。启动和导入/extract 撞上 `right sibling of GIN page is of different type` / `GIN page is of different type` 后先停止后续 Quick Maintenance 与 embed 写入；按当前库里实际存在的全部 GIN 索引保存定义、DROP 再 CREATE；重建后必须真实搜索命中才显示「搜索索引修复完成」。数据库打不开或 WAL 修复失败则不重建索引，提示「数据库本身异常，需要先修复数据库或恢复备份。」修复失败不得假装成功，也不得靠禁用全文搜索、跳过页面或吞错误绕过。
+- 是否完成：是
+- 最终结果：GIN 修复定向 11/11（含真实 PGLite：重建前后知识数量和正文 hash 一致、搜索恢复、CREATE 失败不得报成功），HNSW/Quick Maintenance 23/23，桌面 sidecar 契约 31/31，根项目与 Desktop TypeScript、版本同步通过。未执行 `bun run build:win`，未连接或修改用户真实数据库。
+
 ## 2026-09-02 PMBrain 1.3.31 修复超 2000 维向量库升级时 HNSW 启动失败
 
 - 时间：2026-09-02

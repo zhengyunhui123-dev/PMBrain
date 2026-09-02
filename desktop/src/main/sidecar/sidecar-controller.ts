@@ -5,6 +5,11 @@ import { findAvailablePort } from '../port-manager.js';
 import { precheckPgliteLock } from '../pglite-lock-precheck.js';
 import { SidecarManager, type SidecarState } from '../sidecar-manager.js';
 import type { DesktopLogger } from '../logs.js';
+import {
+  GIN_REPAIR_DB_UNUSABLE_MESSAGE,
+  GIN_REPAIR_PROGRESS_MESSAGE,
+  GIN_REPAIR_SUCCESS_MESSAGE,
+} from '../../../../src/core/pglite-gin-repair.js';
 
 interface StartupProgress {
   visible: boolean;
@@ -107,6 +112,35 @@ export class SidecarController {
         clientVersion: app.getVersion(),
         healthTimeoutMs,
         logger,
+        onStderr: (_chunk, recent) => {
+          if (this.manager !== manager) return;
+          if (recent.includes(GIN_REPAIR_DB_UNUSABLE_MESSAGE)) {
+            this.dependencies.sendStartupProgress({
+              visible: true,
+              stage: 'database',
+              title: '数据库无法打开',
+              message: GIN_REPAIR_DB_UNUSABLE_MESSAGE,
+            });
+            return;
+          }
+          if (recent.includes(GIN_REPAIR_SUCCESS_MESSAGE)) {
+            this.dependencies.sendStartupProgress({
+              visible: true,
+              stage: 'sidecar',
+              title: GIN_REPAIR_SUCCESS_MESSAGE,
+              message: GIN_REPAIR_SUCCESS_MESSAGE,
+            });
+            return;
+          }
+          if (recent.includes(GIN_REPAIR_PROGRESS_MESSAGE)) {
+            this.dependencies.sendStartupProgress({
+              visible: true,
+              stage: 'sidecar',
+              title: '正在修复搜索索引',
+              message: GIN_REPAIR_PROGRESS_MESSAGE,
+            });
+          }
+        },
         onState: state => {
           if (this.manager !== manager) return;
           this.sendState(state);

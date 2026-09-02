@@ -78,6 +78,7 @@ interface SidecarManagerOptions extends CliRuntime {
   logger: DesktopLogger;
   onState?: (state: SidecarState) => void;
   onHealthObservation?: (observation: HealthCheckObservation) => void;
+  onStderr?: (chunk: string, recentStderr: string) => void;
 }
 
 export { classifySidecarStartupError };
@@ -367,6 +368,7 @@ export class SidecarManager {
       const text = String(value);
       this.recentStderr = `${this.recentStderr}${text}`.slice(-STDERR_TAIL_LIMIT);
       this.options.logger.write('sidecar:stderr', value);
+      this.options.onStderr?.(text, this.recentStderr);
     });
     child.once('error', (error) => {
       this.lastExitMessage = `Sidecar failed to start: ${error.message}`;

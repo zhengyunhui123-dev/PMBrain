@@ -15,7 +15,11 @@ import {
 } from '../core/link-extraction.ts';
 import { createProgress } from '../core/progress.ts';
 import { getCliOptions, cliOptsToProgressOptions } from '../core/cli-options.ts';
-import { isGinCorruptionError, repairPgliteGinIndexes } from '../core/pglite-gin-repair.ts';
+import {
+  GinIndexUnusableError,
+  isGinCorruptionError,
+  repairPgliteGinIndexes,
+} from '../core/pglite-gin-repair.ts';
 
 const BATCH_SIZE = 100;
 const STALE_BATCH_SIZE = Math.max(1, Number(process.env.PMBRAIN_EXTRACT_STALE_BATCH || process.env.GBRAIN_EXTRACT_STALE_BATCH) || 25);
@@ -208,10 +212,17 @@ export async function extractStaleFromDB(
     try {
       persisted = await persistBatch();
     } catch (error) {
-      if (ginRepaired || engine.kind !== 'pglite' || !isGinCorruptionError(error)) throw error;
+      if (engine.kind !== 'pglite' || !isGinCorruptionError(error)) throw error;
+      if (ginRepaired) {
+        throw error instanceof GinIndexUnusableError
+          ? error
+          : new GinIndexUnusableError(error instanceof Error ? error.message : String(error), { cause: error });
+      }
+      const result = await repairPgliteGinIndexes(engine);
+      if (result.status !== 'repaired') {
+        throw new GinIndexUnusableError(result.message, { status: result.status, cause: error });
+      }
       ginRepaired = true;
-      console.error('[pmbrain] PGLite GIN index corrupted; rebuilding indexes and retrying this extract batch.');
-      await repairPgliteGinIndexes(engine);
       persisted = await persistBatch();
     }
     linksCreated += persisted.links;

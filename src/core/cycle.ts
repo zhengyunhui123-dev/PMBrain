@@ -53,6 +53,10 @@ import { getCliOptions, cliOptsToProgressOptions } from './cli-options.ts';
 import { deleteLockRow, inspectLock, tryAcquireDbLock, type DbLockHandle } from './db-lock.ts';
 import { assertValidSourceId } from './source-id.ts';
 import {
+  GIN_REPAIR_STOP_WRITES_MESSAGE,
+  isGinRepairAbortText,
+} from './pglite-gin-repair.ts';
+import {
   PHASE_SCOPE,
   SOURCE_FRESHNESS_PHASES,
   type PhaseScope,
@@ -1742,6 +1746,24 @@ export async function runCycle(
     let syncPagesAffected: string[] | undefined;
     let syncAttempted = false;
     let synthesizeWrittenSlugs: string[] | undefined;
+    let stopDbWrites = false;
+    const noteSearchIndexAbort = (result: PhaseResult) => {
+      if (result.status !== 'fail' || stopDbWrites) return;
+      const text = `${result.error?.message ?? ''}\n${result.summary}\n${JSON.stringify(result.details ?? {})}`;
+      if (!isGinRepairAbortText(text)) return;
+      stopDbWrites = true;
+      process.stderr.write(`${GIN_REPAIR_STOP_WRITES_MESSAGE}\n`);
+    };
+    const skipIfSearchIndexUnusable = (phase: CyclePhase): PhaseResult | null => {
+      if (!stopDbWrites) return null;
+      return {
+        phase,
+        status: 'skipped',
+        duration_ms: 0,
+        summary: GIN_REPAIR_STOP_WRITES_MESSAGE,
+        details: { reason: 'search_index_unusable' },
+      };
+    };
     if (phases.includes('sync')) {
       checkAborted(opts.signal);
       if (!engine) {
@@ -1769,6 +1791,7 @@ export async function runCycle(
         // Capture changed slugs for incremental extract.
         syncPagesAffected = (result as SyncPhaseResult).pagesAffected;
         phaseResults.push(result);
+        noteSearchIndexAbort(result);
         progress.finish();
       }
       await safeYield(opts.yieldBetweenPhases);
@@ -1819,7 +1842,10 @@ export async function runCycle(
     // ── Phase 5: extract (now picks up synthesize output) ───────
     if (phases.includes('extract')) {
       checkAborted(opts.signal);
-      if (!engine) {
+      const skippedExtract = skipIfSearchIndexUnusable('extract');
+      if (skippedExtract) {
+        phaseResults.push(skippedExtract);
+      } else if (!engine) {
         phaseResults.push({
           phase: 'extract',
           status: 'skipped',
@@ -1882,9 +1908,17 @@ export async function runCycle(
               result.status = 'ok';
             }
           } catch (e) {
-            result.status = result.status === 'fail' ? 'fail' : 'warn';
-            result.details = { ...result.details, relation_backfill_error: e instanceof Error ? e.message : String(e) };
-            result.summary = `${result.summary}; historical relation backfill failed`;
+            const message = e instanceof Error ? e.message : String(e);
+            if (isGinRepairAbortText(e)) {
+              result.status = 'fail';
+              result.error = makeErrorFromException(e);
+              result.details = { ...result.details, relation_backfill_error: message };
+              result.summary = message;
+            } else {
+              result.status = result.status === 'fail' ? 'fail' : 'warn';
+              result.details = { ...result.details, relation_backfill_error: message };
+              result.summary = `${result.summary}; historical relation backfill failed`;
+            }
           }
         }
 
@@ -1926,16 +1960,25 @@ export async function runCycle(
               result.status = 'ok';
             }
           } catch (e) {
-            result.status = result.status === 'fail' ? 'fail' : 'warn';
-            result.details = {
-              ...result.details,
-              by_mention_error: e instanceof Error ? e.message : String(e),
-            };
-            result.summary = `${result.summary}; by-mention failed`;
+            const message = e instanceof Error ? e.message : String(e);
+            if (isGinRepairAbortText(e)) {
+              result.status = 'fail';
+              result.error = makeErrorFromException(e);
+              result.details = { ...result.details, by_mention_error: message };
+              result.summary = message;
+            } else {
+              result.status = result.status === 'fail' ? 'fail' : 'warn';
+              result.details = {
+                ...result.details,
+                by_mention_error: message,
+              };
+              result.summary = `${result.summary}; by-mention failed`;
+            }
           }
         }
 
         phaseResults.push(result);
+        noteSearchIndexAbort(result);
         if (progressStarted) progress.finish();
       }
       await safeYield(opts.yieldBetweenPhases);
@@ -1950,7 +1993,10 @@ export async function runCycle(
     // v0_32_2 backfill (Codex R2-#7).
     if (phases.includes('extract_facts')) {
       checkAborted(opts.signal);
-      if (!engine) {
+      const skippedFacts = skipIfSearchIndexUnusable('extract_facts');
+      if (skippedFacts) {
+        phaseResults.push(skippedFacts);
+      } else if (!engine) {
         phaseResults.push({
           phase: 'extract_facts',
           status: 'skipped',
@@ -1973,6 +2019,7 @@ export async function runCycle(
           runPhaseExtractFacts(engine, brainDir, xfSourceId, dryRun, affectedSlugs, opts.signal));
         result.duration_ms = duration_ms;
         phaseResults.push(result);
+        noteSearchIndexAbort(result);
         progress.finish();
       }
       await safeYield(opts.yieldBetweenPhases);
@@ -2049,7 +2096,10 @@ export async function runCycle(
     // responsive even on a 100K-chunk brain.
     if (phases.includes('resolve_symbol_edges')) {
       checkAborted(opts.signal);
-      if (!engine) {
+      const skippedEdges = skipIfSearchIndexUnusable('resolve_symbol_edges');
+      if (skippedEdges) {
+        phaseResults.push(skippedEdges);
+      } else if (!engine) {
         phaseResults.push({
           phase: 'resolve_symbol_edges',
           status: 'skipped',
@@ -2062,6 +2112,7 @@ export async function runCycle(
         const { result, duration_ms } = await timePhase(() => runPhaseResolveSymbolEdges(engine, dryRun, opts.sourceId));
         result.duration_ms = duration_ms;
         phaseResults.push(result);
+        noteSearchIndexAbort(result);
         progress.finish();
       }
       await safeYield(opts.yieldBetweenPhases);
@@ -2437,7 +2488,10 @@ export async function runCycle(
     // ── Phase 8: embed ──────────────────────────────────────────
     if (phases.includes('embed')) {
       checkAborted(opts.signal);
-      if (!engine) {
+      const skippedEmbed = skipIfSearchIndexUnusable('embed');
+      if (skippedEmbed) {
+        phaseResults.push(skippedEmbed);
+      } else if (!engine) {
         phaseResults.push({
           phase: 'embed',
           status: 'skipped',
@@ -2457,6 +2511,7 @@ export async function runCycle(
         ));
         result.duration_ms = duration_ms;
         phaseResults.push(result);
+        noteSearchIndexAbort(result);
         progress.finish();
       }
       await safeYield(opts.yieldBetweenPhases);

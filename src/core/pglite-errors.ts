@@ -173,6 +173,17 @@ export function classifySidecarStartupError(error: unknown): SidecarErrorClassif
   const text = extractErrorText(error);
 
   if (
+    error instanceof Error && error.name === 'GinIndexUnusableError'
+    || /搜索索引修复失败|搜索索引异常，已停止后续数据库写入/.test(text)
+  ) {
+    return {
+      category: 'unknown',
+      retryable: false,
+      labelZh: '搜索索引修复失败',
+    };
+  }
+
+  if (
     error instanceof DatabaseAlreadyOwnedError
     || /DatabaseAlreadyOwnedError|already owned|lock owner active|Timed out waiting for PGLite lock|has held it/i.test(text)
   ) {

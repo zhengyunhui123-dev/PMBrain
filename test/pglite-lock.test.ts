@@ -556,4 +556,10 @@ describe('classifySidecarStartupError', () => {
     expect(c.category).toBe('port_conflict');
     expect(c.retryable).toBe(true);
   });
+
+  test('GIN index repair failure is not retryable and is not a whole-database restore', () => {
+    const c = classifySidecarStartupError(new Error('搜索索引修复失败，无法确认搜索已恢复。'));
+    expect(c.retryable).toBe(false);
+    expect(c.labelZh).toBe('搜索索引修复失败');
+  });
 });

@@ -105,6 +105,7 @@ describe('buildPgliteInitErrorMessage — hint routing', () => {
     expect(msg).toContain('WAL/checkpoint');
     expect(msg).toContain('原 WAL 已恢复');
     expect(msg).toContain(original);
+    expect(msg).toContain('数据库本身异常，需要先修复数据库或恢复备份。');
   });
 
 

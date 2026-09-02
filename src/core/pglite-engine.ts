@@ -33,6 +33,11 @@ import { DELETE_BATCH_SIZE } from './engine-constants.ts';
 import { acquireLock, releaseLock, type LockHandle } from './pglite-lock.ts';
 import { DatabaseAlreadyOwnedError, PgliteOpenError } from './pglite-errors.ts';
 import {
+  GIN_REPAIR_DB_UNUSABLE_MESSAGE,
+  GinIndexUnusableError,
+  ensurePgliteGinHealthy,
+} from './pglite-gin-repair.ts';
+import {
   attemptWalRepairAndRetry,
   closeRepairEpisodeIfOpen,
   shouldRepairWalBeforeFirstOpen,
@@ -283,7 +288,8 @@ export function buildPgliteInitErrorMessage(
       hint =
         '  最常见原因是异常关闭后 WAL/checkpoint 状态不完整。\n' +
         repairContextLine(ctx ?? { repair: 'not-attempted' }) + '\n' +
-        '  PMBrain 不会删除、重建或覆盖知识库；请保留 WAL 修复备份并查看日志。';
+        '  PMBrain 不会删除、重建或覆盖知识库；请保留 WAL 修复备份并查看日志。\n' +
+        `  ${GIN_REPAIR_DB_UNUSABLE_MESSAGE}`;
       break;
     case 'windows-aborted':
       hint =
@@ -292,7 +298,8 @@ export function buildPgliteInitErrorMessage(
         '  it cleanly. Close other PMBrain/GBrain processes and retry.\n' +
         '  PMBrain does not delete, replace, or rebuild your database for this\n' +
         '  class of failure. Docker Postgres is the safer option for existing\n' +
-        '  large brains. Path tip: .pmbrain\\brain.pglite';
+        '  large brains. Path tip: .pmbrain\\brain.pglite\n' +
+        `  ${GIN_REPAIR_DB_UNUSABLE_MESSAGE}`;
       break;
     case 'macos-26-3':
       hint =
@@ -302,7 +309,8 @@ export function buildPgliteInitErrorMessage(
     case 'corrupt':
       hint =
         '  数据库疑似损坏（catalog / pgvector 扩展异常）。\n' +
-        '  PMBrain 不会自动删除你的知识库。请先备份，再按文档恢复或迁移到 Postgres。';
+        '  PMBrain 不会自动删除你的知识库。请先备份，再按文档恢复或迁移到 Postgres。\n' +
+        `  ${GIN_REPAIR_DB_UNUSABLE_MESSAGE}`;
       break;
     case 'permission':
       hint =
@@ -467,6 +475,7 @@ export class PGLiteEngine implements BrainEngine {
           }
         }
       }
+      process.stderr.write(`${GIN_REPAIR_DB_UNUSABLE_MESSAGE}\n`);
       const wrapped = new PgliteOpenError(buildPgliteInitErrorMessage(verdict, original, process.platform, ctx), {
         databasePath: dataDir ?? null,
         cause: err,
@@ -528,6 +537,7 @@ export class PGLiteEngine implements BrainEngine {
     // Tier 3: snapshot was loaded into PGlite — schema + migrations already
     // applied. Nothing to do. Returns immediately.
     if (this._snapshotLoaded) {
+      await this.ensureGinIndexesHealthy();
       return;
     }
     // Pre-schema bootstrap: add forward-referenced state the embedded schema
@@ -568,6 +578,14 @@ export class PGLiteEngine implements BrainEngine {
         `  请运行：gbrain models align-embedding-dimension --yes\n`
       );
     }
+
+    await this.ensureGinIndexesHealthy();
+  }
+
+  private async ensureGinIndexesHealthy(): Promise<void> {
+    const result = await ensurePgliteGinHealthy(this);
+    if (result.status === 'ok' || result.status === 'repaired') return;
+    throw new GinIndexUnusableError(result.message, { status: result.status });
   }
 
   private async probeEmbeddingColumnDim(): Promise<number | null> {
