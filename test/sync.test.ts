@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeAll, afterAll, beforeEach, afterEach } from 'bun:test';
-import { buildSyncManifest, isSyncable, pathToSlug, pruneDir, isCodeFilePath, isOfficeFilePath, isOfficeTransientFile } from '../src/core/sync.ts';
+import { buildSyncManifest, parseGitStatusPorcelainZ, isSyncable, pathToSlug, pruneDir, isCodeFilePath, isOfficeFilePath, isOfficeTransientFile } from '../src/core/sync.ts';
 import { buildAutoEmbedArgs, buildGitInvocation } from '../src/commands/sync.ts';
 import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from 'fs';
 import { join } from 'path';
@@ -54,6 +54,38 @@ describe('buildSyncManifest', () => {
     const manifest = buildSyncManifest(output);
     expect(manifest.added).toEqual(['people/a.md']);
     expect(manifest.modified).toEqual(['people/b.md']);
+  });
+});
+
+describe('parseGitStatusPorcelainZ', () => {
+  test('parses untracked, unstaged modify, and unstaged delete', () => {
+    const output = ['?? notes/draft.md', ' M notes/base.md', ' D notes/gone.md', ''].join('\0');
+    expect(parseGitStatusPorcelainZ(output)).toEqual({
+      added: ['notes/draft.md'],
+      modified: ['notes/base.md'],
+      deleted: ['notes/gone.md'],
+      renamed: [],
+    });
+  });
+
+  test('parses staged add/modify/delete', () => {
+    const output = ['A  notes/new.md', 'M  notes/base.md', 'D  notes/old.md', ''].join('\0');
+    expect(parseGitStatusPorcelainZ(output)).toEqual({
+      added: ['notes/new.md'],
+      modified: ['notes/base.md'],
+      deleted: ['notes/old.md'],
+      renamed: [],
+    });
+  });
+
+  test('parses porcelain -z rename as destination then source', () => {
+    const output = ['R  notes/renamed.md', 'notes/a.md', '?? notes/draft.md', ''].join('\0');
+    expect(parseGitStatusPorcelainZ(output)).toEqual({
+      added: ['notes/draft.md'],
+      modified: [],
+      deleted: [],
+      renamed: [{ from: 'notes/a.md', to: 'notes/renamed.md' }],
+    });
   });
 });
 

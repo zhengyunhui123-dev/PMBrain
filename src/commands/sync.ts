@@ -9,6 +9,7 @@ import { collectSyncableFiles } from './import.ts';
 import { createInterface } from 'readline';
 import {
   buildSyncManifest,
+  parseGitStatusPorcelainZ,
   isSyncable,
   unsyncableReason,
   isPoisonedPath,
@@ -353,12 +354,22 @@ export function buildAutoEmbedArgs(slugs: string[], sourceId?: string): string[]
  * 100 MiB is generous but still bounded — a 100K-file diff with long
  * paths tops out around 10–20 MiB in practice.
  */
+function gitProcessEnv(opts?: { optionalLocks?: boolean }): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    GIT_TERMINAL_PROMPT: '0',
+    ...(opts?.optionalLocks === false ? { GIT_OPTIONAL_LOCKS: '0' } : {}),
+  };
+}
+
 function git(repoPath: string, args: string[], configs: string[] = []): string {
   return execFileSync('git', buildGitInvocation(repoPath, args, configs), {
     encoding: 'utf-8',
     timeout: 30000,
     maxBuffer: 100 * 1024 * 1024,
-  }).trim();
+    windowsHide: true,
+    env: gitProcessEnv(),
+  }).trimEnd();
 }
 
 function hasOriginRemote(repoPath: string): boolean {
@@ -367,6 +378,8 @@ function hasOriginRemote(repoPath: string): boolean {
       encoding: 'utf-8',
       timeout: 30000,
       stdio: ['ignore', 'ignore', 'ignore'],
+      windowsHide: true,
+      env: gitProcessEnv(),
     });
     return true;
   } catch {
@@ -408,18 +421,17 @@ async function findMissingTrackedOfficeFiles(
   return missing;
 }
 
-function buildDetachedWorkingTreeManifest(repoPath: string): SyncManifest {
-  const manifest = buildSyncManifest(git(repoPath, ['diff', '--name-status', '-M', 'HEAD']));
-  const untracked = git(repoPath, ['ls-files', '--others', '--exclude-standard'])
-    .split('\n')
-    .filter(line => line.length > 0);
-
-  return {
-    added: unique([...manifest.added, ...untracked]),
-    modified: unique(manifest.modified),
-    deleted: unique(manifest.deleted),
-    renamed: manifest.renamed,
-  };
+function buildDetachedWorkingTreeManifest(
+  repoPath: string,
+  untracked: 'normal' | 'all' = 'normal',
+): SyncManifest {
+  return parseGitStatusPorcelainZ(git(repoPath, [
+    'status',
+    '--porcelain=v1',
+    '-z',
+    `--untracked-files=${untracked}`,
+    '--ignore-submodules=dirty',
+  ]));
 }
 
 async function resolveWorkingTreeMode(engine: BrainEngine, requested: boolean | undefined): Promise<boolean> {
@@ -446,22 +458,57 @@ function nonEmptyDrift(counts: { added: number; modified: number; deleted: numbe
   return counts.added + counts.modified + counts.deleted > 0;
 }
 
-function materializeCommittedTree(repoPath: string, headCommit: string): { tree: string; cleanup: () => void } {
+function materializeCommittedTree(
+  repoPath: string,
+  headCommit: string,
+  paths?: string[],
+): { tree: string; cleanup: () => void } {
+  const wanted = paths ? unique(paths.filter(path => path.length > 0)) : undefined;
   const root = mkdtempSync(join(tmpdir(), 'pmbrain-sync-head-'));
   const tree = join(root, 'tree');
-  const archive = join(root, 'head.tar');
   mkdirSync(tree, { recursive: true });
+  if (wanted && wanted.length === 0) {
+    return { tree, cleanup: () => rmSync(root, { recursive: true, force: true }) };
+  }
+
+  const gitDir = execFileSync('git', ['-C', repoPath, 'rev-parse', '--absolute-git-dir'], {
+    encoding: 'utf-8',
+    timeout: 30_000,
+    windowsHide: true,
+    env: gitProcessEnv({ optionalLocks: false }),
+  }).trim();
+  const env = {
+    ...gitProcessEnv({ optionalLocks: false }),
+    GIT_INDEX_FILE: join(root, 'index'),
+  };
+  const startedAt = Date.now();
+  serr(`[pmbrain phase] sync.materialize_head start files=${wanted ? wanted.length : 'all'}`);
   try {
-    execFileSync('git', ['-C', repoPath, 'archive', '--format=tar', '--output', archive, headCommit], {
+    const args = [
+      `--git-dir=${gitDir}`,
+      `--work-tree=${tree}`,
+      '-c', 'core.quotepath=false',
+      '-c', 'core.autocrlf=false',
+      '-c', 'core.safecrlf=false',
+      'checkout',
+      '-f',
+      headCommit,
+    ];
+    if (wanted) {
+      const pathspec = join(root, 'pathspec');
+      writeFileSync(pathspec, wanted.join('\0') + '\0');
+      args.push(`--pathspec-from-file=${pathspec}`, '--pathspec-file-nul');
+    } else {
+      args.push('--', '.');
+    }
+    execFileSync('git', args, {
       stdio: ['ignore', 'pipe', 'pipe'],
       timeout: 120_000,
+      windowsHide: true,
       maxBuffer: 100 * 1024 * 1024,
+      env,
     });
-    execFileSync('tar', ['-xf', archive, '-C', tree], {
-      stdio: ['ignore', 'pipe', 'pipe'],
-      timeout: 120_000,
-      maxBuffer: 100 * 1024 * 1024,
-    });
+    serr(`[pmbrain phase] sync.materialize_head done ${Date.now() - startedAt}ms`);
     return { tree, cleanup: () => rmSync(root, { recursive: true, force: true }) };
   } catch (error) {
     rmSync(root, { recursive: true, force: true });
@@ -1233,8 +1280,12 @@ async function performSyncInner(engine: BrainEngine, opts: SyncOpts): Promise<Sy
   }
   const workingTreeEnabled = await resolveWorkingTreeMode(engine, opts.workingTree);
   let workingTreeManifest: SyncManifest = { added: [], modified: [], deleted: [], renamed: [] };
+  serr(`[pmbrain phase] sync.inspect_worktree`);
   try {
-    workingTreeManifest = buildDetachedWorkingTreeManifest(repoPath);
+    workingTreeManifest = buildDetachedWorkingTreeManifest(
+      repoPath,
+      workingTreeEnabled ? 'all' : 'normal',
+    );
   } catch (error) {
     if (workingTreeEnabled) {
       throw new Error(`Unable to inspect working-tree state: ${error instanceof Error ? error.message : String(error)}`);
@@ -1563,7 +1614,14 @@ async function performSyncInner(engine: BrainEngine, opts: SyncOpts): Promise<Sy
   // Incremental sync must read the same committed tree used to calculate the
   // diff. Reading repoPath here would leak later dirty edits of a committed
   // file into the database even though working-tree sync is disabled.
-  const committedImportSnapshot = workingTreeEnabled ? null : materializeCommittedTree(repoPath, headCommit);
+  const importPaths = unique([
+    ...filtered.added,
+    ...filtered.modified,
+    ...filtered.renamed.map(item => item.to),
+  ]);
+  const committedImportSnapshot = workingTreeEnabled || importPaths.length === 0
+    ? null
+    : materializeCommittedTree(repoPath, headCommit, importPaths);
   const syncContentRoot = committedImportSnapshot?.tree ?? repoPath;
   const partialAfterSnapshot = (reason: 'timeout' | 'pull_timeout' | 'stall_timeout'): SyncResult => {
     committedImportSnapshot?.cleanup();
@@ -2084,8 +2142,12 @@ async function performFullSync(
 ): Promise<SyncResult> {
   const workingTreeEnabled = await resolveWorkingTreeMode(engine, opts.workingTree);
   let workingTreeManifest: SyncManifest = { added: [], modified: [], deleted: [], renamed: [] };
+  serr(`[pmbrain phase] sync.inspect_worktree`);
   try {
-    workingTreeManifest = buildDetachedWorkingTreeManifest(repoPath);
+    workingTreeManifest = buildDetachedWorkingTreeManifest(
+      repoPath,
+      workingTreeEnabled ? 'all' : 'normal',
+    );
   } catch (error) {
     if (workingTreeEnabled) {
       throw new Error(`Unable to inspect working-tree state: ${error instanceof Error ? error.message : String(error)}`);

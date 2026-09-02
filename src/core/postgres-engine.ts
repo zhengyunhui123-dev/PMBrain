@@ -5518,49 +5518,44 @@ export class PostgresEngine implements BrainEngine {
   // v0.29 — Salience + Anomaly Detection
   // ============================================================
 
-  async batchLoadEmotionalInputs(slugs?: string[]): Promise<EmotionalWeightInputRow[]> {
+  async batchLoadEmotionalInputs(slugs?: string[], opts?: { sourceId?: string }): Promise<EmotionalWeightInputRow[]> {
     const sql = this.sql;
-    // Two CTEs avoid the N×M cartesian product (codex C4#4): a page with N tags
-    // and M takes joined directly would emit N×M rows and corrupt aggregates.
-    // Per-table aggregation keeps each table's grouping correct.
-    const rows = slugs
-      ? await sql`
-          WITH page_tags AS (
-            SELECT page_id, array_agg(DISTINCT tag) AS tags
-              FROM tags GROUP BY page_id
-          ),
-          page_takes AS (
-            SELECT page_id, json_agg(json_build_object(
-                     'holder', holder, 'weight', weight, 'kind', kind, 'active', active
-                   )) AS takes
-              FROM takes WHERE active = TRUE GROUP BY page_id
-          )
-          SELECT p.slug, p.source_id,
-                 COALESCE(pt.tags, ARRAY[]::text[]) AS tags,
-                 COALESCE(pk.takes, '[]'::json) AS takes
-            FROM pages p
-            LEFT JOIN page_tags pt  ON pt.page_id = p.id
-            LEFT JOIN page_takes pk ON pk.page_id = p.id
-           WHERE p.slug = ANY(${slugs}::text[])
-        `
-      : await sql`
-          WITH page_tags AS (
-            SELECT page_id, array_agg(DISTINCT tag) AS tags
-              FROM tags GROUP BY page_id
-          ),
-          page_takes AS (
-            SELECT page_id, json_agg(json_build_object(
-                     'holder', holder, 'weight', weight, 'kind', kind, 'active', active
-                   )) AS takes
-              FROM takes WHERE active = TRUE GROUP BY page_id
-          )
-          SELECT p.slug, p.source_id,
-                 COALESCE(pt.tags, ARRAY[]::text[]) AS tags,
-                 COALESCE(pk.takes, '[]'::json) AS takes
-            FROM pages p
-            LEFT JOIN page_tags pt  ON pt.page_id = p.id
-            LEFT JOIN page_takes pk ON pk.page_id = p.id
-        `;
+    const sourceId = opts?.sourceId;
+    const pageFilter = slugs
+      ? (sourceId
+        ? sql`WHERE p.deleted_at IS NULL AND p.slug = ANY(${slugs}::text[]) AND p.source_id = ${sourceId}`
+        : sql`WHERE p.deleted_at IS NULL AND p.slug = ANY(${slugs}::text[])`)
+      : (sourceId
+        ? sql`WHERE p.deleted_at IS NULL AND p.source_id = ${sourceId}`
+        : sql`WHERE p.deleted_at IS NULL`);
+    const rows = await sql`
+      WITH target_pages AS (
+        SELECT p.id, p.slug, p.source_id
+          FROM pages p
+          ${pageFilter}
+      ),
+      page_tags AS (
+        SELECT t.page_id, array_agg(DISTINCT t.tag) AS tags
+          FROM tags t
+          INNER JOIN target_pages tp ON tp.id = t.page_id
+         GROUP BY t.page_id
+      ),
+      page_takes AS (
+        SELECT tk.page_id, json_agg(json_build_object(
+                 'holder', tk.holder, 'weight', tk.weight, 'kind', tk.kind, 'active', tk.active
+               )) AS takes
+          FROM takes tk
+          INNER JOIN target_pages tp ON tp.id = tk.page_id
+         WHERE tk.active = TRUE
+         GROUP BY tk.page_id
+      )
+      SELECT p.slug, p.source_id,
+             COALESCE(pt.tags, ARRAY[]::text[]) AS tags,
+             COALESCE(pk.takes, '[]'::json) AS takes
+        FROM target_pages p
+        LEFT JOIN page_tags pt ON pt.page_id = p.id
+        LEFT JOIN page_takes pk ON pk.page_id = p.id
+    `;
     return rows.map((r: Record<string, unknown>) => ({
       slug: String(r.slug),
       source_id: String(r.source_id),

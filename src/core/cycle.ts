@@ -2176,6 +2176,8 @@ export async function runCycle(
           runPhaseRecomputeEmotionalWeight(engine, {
             dryRun,
             affectedSlugs: incremental,
+            sourceId: cycleSourceId,
+            yieldDuringPhase: opts.yieldDuringPhase,
           }),
         );
         result.duration_ms = duration_ms;

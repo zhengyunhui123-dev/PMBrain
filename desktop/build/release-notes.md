@@ -1,3 +1,11 @@
+## PMBrain 1.1.61
+
+- 修复 AI 深度整理卡在「权重计算」且长时间无进度的问题。读取标签/观点时不再全表聚合，写入按 500 页一批更新，并打出 load/write 起止进度，便于区分卡在读还是写。
+
+## PMBrain 1.1.60
+
+- 修复更新后快速维护卡在 `cycle.sync` / `sync.detect_head` 的问题。Windows 上不再用 `git diff -M HEAD` 扫工作区，也不再把整个仓库打 tar 展开；改为 `git status --porcelain` 检查未提交文件，并用 `git checkout` 只取出需要导入的已提交文件。
+
 ## PMBrain 1.1.59
 
 - 首页 Advisor 的孤立知识按钮改为「查看孤立知识」，直接打开知识图谱的孤立视图；不再把只读扫描 `dream --phase orphans` 冒充为关系整理，也不会无依据自动创建关系。
@@ -11,10 +19,4 @@
 
 - 更换向量模型后不再堵在“准备搜索索引”直到全部重建完成。可随时点「稍后处理，进入 PMBrain」；旧向量会在继续重建时清掉，任务中心留下暂停的重建任务，点继续即可断点补齐。未完成的条目暂时不能语义搜索，和尚未向量化的新导入内容一样。
 
-## PMBrain 1.1.56
 
-- 安装包补齐内置 Schema Pack（`gbrain-base-v2.yaml` 及 `src/core/schema-pack/base/` 下全部 YAML）。缺少 `gbrain-base-v2.yaml` 时 `bun run build:win` 会失败，避免管理台再报 pack 无法解析。
-
-## PMBrain 1.1.55
-
-- 数据库目录里的 `.gbrain-lock.released-*` / `.stale-*` 不再无限堆积。获取或释放锁时自动清理：保留最近 3 天，超过 3 天也至少留最新 5 份；正在使用的 `.gbrain-lock` 和知识库文件不动。

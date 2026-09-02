@@ -2017,7 +2017,7 @@ export interface BrainEngine {
    * Multi-source-aware: each row carries its `source_id` so the matching
    * `setEmotionalWeightBatch` UPDATE can composite-key correctly.
    */
-  batchLoadEmotionalInputs(slugs?: string[]): Promise<EmotionalWeightInputRow[]>;
+  batchLoadEmotionalInputs(slugs?: string[], opts?: { sourceId?: string }): Promise<EmotionalWeightInputRow[]>;
 
   /**
    * Apply pre-computed emotional weights in a single UPDATE. Composite-keyed

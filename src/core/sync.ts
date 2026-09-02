@@ -142,6 +142,57 @@ export function buildSyncManifest(gitDiffOutput: string): SyncManifest {
   return manifest;
 }
 
+export function parseGitStatusPorcelainZ(output: string): SyncManifest {
+  const added: string[] = [];
+  const modified: string[] = [];
+  const deleted: string[] = [];
+  const renamed: Array<{ from: string; to: string }> = [];
+
+  const parts = output.split('\0');
+  for (let i = 0; i < parts.length; i++) {
+    const entry = parts[i];
+    if (!entry || entry.length < 4 || entry[2] !== ' ') continue;
+    const x = entry[0];
+    const y = entry[1];
+    const filePath = entry.slice(3);
+    if (!filePath) continue;
+
+    if (x === '!' && y === '!') continue;
+
+    if (x === 'R' || x === 'C' || y === 'R' || y === 'C') {
+      const from = parts[++i] ?? '';
+      if (from) renamed.push({ from, to: filePath });
+      continue;
+    }
+
+    if (x === '?' && y === '?') {
+      added.push(filePath);
+      continue;
+    }
+
+    if (x === 'D' || y === 'D') {
+      if (x === 'A' || y === 'A') modified.push(filePath);
+      else deleted.push(filePath);
+      continue;
+    }
+
+    if (x === 'A' || y === 'A') {
+      added.push(filePath);
+      continue;
+    }
+
+    if (x === ' ' && y === ' ') continue;
+    modified.push(filePath);
+  }
+
+  return {
+    added: [...new Set(added)],
+    modified: [...new Set(modified)],
+    deleted: [...new Set(deleted)],
+    renamed,
+  };
+}
+
 export function isCodeFilePath(path: string): boolean {
   const lower = path.toLowerCase();
   for (const ext of CODE_EXTENSIONS) {

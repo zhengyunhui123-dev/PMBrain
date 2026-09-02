@@ -1,5 +1,23 @@
 # Bug 修复台账
 
+## 2026-09-02 PMBrain 1.3.29 修复深度整理卡在权重计算
+
+- 时间：2026-09-02
+- 版本号：PMBrain 1.3.29；PMBrain Desktop 1.1.61
+- 标题：Full Dream 的 `recompute_emotional_weight` 不再因 PGLite 全表聚合和整批 UPDATE 而无进度卡住
+- 描述：与快速维护卡在 Git 扫描不是同一处。extract 已正常跑完 2110 页后，深度整理停在 `cycle.recompute_emotional_weight`。该阶段是纯数据库、无 LLM；原先 `batchLoadEmotionalInputs` 先把整个 tags/takes 表聚完再过滤，`setEmotionalWeightBatch` 又对全部页做一次 `UPDATE FROM unnest`。PGLite 文件库上这两步会长时间无输出。现改为只聚合目标页、按 500 页分批写入，并增加 `recompute_emotional_weight.load` / `write` 的 start/finish 进度。未扫描、修改、回填或重建用户知识、关系、向量、Wiki、原始资料和数据库。
+- 是否完成：是
+- 最终结果：定向权重/进度/PGLite 回归 30/30 通过，1000 页回填约 300ms，根项目 TypeScript 通过。未执行 `bun run build:win`，未连接或修改用户真实数据库。
+
+## 2026-09-02 PMBrain 1.3.28 修复快速维护卡在 sync.detect_head
+
+- 时间：2026-09-02
+- 版本号：PMBrain 1.3.28；PMBrain Desktop 1.1.60
+- 标题：快速维护同步阶段不再因 Windows Git 工作区扫描和 tar 展开而卡住
+- 描述：安装版更新后 `dream --preset quick` 在 lint/backlinks 完成后停在 `sync.detect_head`，并打出 `.obsidian/workspace.json` 的 CRLF 警告。根因是同步为了只读 Git HEAD，每次都会跑 `git diff --name-status -M HEAD` 加全量未跟踪扫描，随后用 `git archive` + `tar` 展开整个仓库。Windows 上 autocrlf、重命名检测和大库 tar 会长时间无进度。现改为 `git status --porcelain=v1` 检查未提交文件；导入已提交内容时用独立 work-tree 的 `git checkout`，增量只取出要导入的文件。未扫描、修改、回填或重建用户知识、关系、向量、Wiki、原始资料和数据库。
+- 是否完成：是
+- 最终结果：同步仍只读取 Git HEAD，未提交内容只提示不入库。定向测试 `test/sync.test.ts`、`test/sync-committed-contract.test.ts`、`test/quick-maintenance.test.ts` 共 89/89 通过，根项目 TypeScript 通过。未执行 `bun run build:win`，未连接或修改用户真实数据库。
+
 ## 2026-09-01 PMBrain 1.3.27 修复 Advisor 孤立知识动作与 Windows 任务退出
 
 - 时间：2026-09-01
