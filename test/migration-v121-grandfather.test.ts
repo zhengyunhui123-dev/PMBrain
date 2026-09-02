@@ -31,6 +31,7 @@ describe('migration 121 legacy embedding compatibility', () => {
   });
 
   test('PGLite keeps legacy vectors and NULL receipts untouched when upgrading from schema 120', async () => {
+    const embeddingDimensions = Number(await engine.getConfig('embedding_dimensions'));
     await engine.putPage('legacy-vector', {
       type: 'note',
       title: 'Legacy vector',
@@ -40,7 +41,7 @@ describe('migration 121 legacy embedding compatibility', () => {
       chunk_index: 0,
       chunk_text: 'legacy content',
       chunk_source: 'compiled_truth',
-      embedding: new Float32Array(1536).fill(0.01),
+      embedding: new Float32Array(embeddingDimensions).fill(0.01),
       model: 'test:model',
       token_count: 2,
     }]);

@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, test } from 'bun:test';
+import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
 import {
   classifyErrorCode,
   isInfrastructureFailureCode,
@@ -18,6 +18,7 @@ import {
   type GinIndexInfo,
   type GinRepairEngine,
 } from '../src/core/pglite-gin-repair.ts';
+import { resetPgliteState } from './helpers/reset-pglite.ts';
 
 const EXTRA_GIN_DEF = 'CREATE INDEX idx_test_extra_gin ON public.pages USING gin (timeline gin_trgm_ops)';
 
@@ -219,18 +220,23 @@ describe('PGLite GIN corruption handling', () => {
 });
 
 describe('PGLite GIN rebuild preserves knowledge and restores search', () => {
-  const engines: PGLiteEngine[] = [];
+  let engine: PGLiteEngine;
+
+  beforeAll(async () => {
+    engine = new PGLiteEngine();
+    await engine.connect({} as never);
+    await engine.initSchema();
+  }, 120_000);
+
+  beforeEach(async () => {
+    await resetPgliteState(engine);
+  });
 
   afterAll(async () => {
-    for (const engine of engines) await engine.disconnect();
+    await engine.disconnect();
   }, 60_000);
 
   test('rebuild leaves page/chunk/embedding/fact/take/link counts and body hashes unchanged', async () => {
-    const engine = new PGLiteEngine();
-    engines.push(engine);
-    await engine.connect({} as never);
-    await engine.initSchema();
-
     await engine.putPage('concepts/项目管理知识库', {
       type: 'concept',
       title: '项目管理知识库',
@@ -282,10 +288,6 @@ describe('PGLite GIN rebuild preserves knowledge and restores search', () => {
   }, 180_000);
 
   test('failed CREATE after DROP does not claim search-index repair succeeded', async () => {
-    const engine = new PGLiteEngine();
-    engines.push(engine);
-    await engine.connect({} as never);
-    await engine.initSchema();
     await engine.putPage('concepts/项目管理知识库', {
       type: 'concept',
       title: '项目管理知识库',
@@ -301,6 +303,7 @@ describe('PGLite GIN rebuild preserves knowledge and restores search', () => {
     }) as typeof engine.executeRaw;
 
     const result = await repairPgliteGinIndexes(engine);
+    engine.executeRaw = original;
     expect(result.status).toBe('failed');
     expect(result.message).toContain(GIN_REPAIR_FAILED_MESSAGE);
     expect(result.message).not.toBe(GIN_REPAIR_SUCCESS_MESSAGE);

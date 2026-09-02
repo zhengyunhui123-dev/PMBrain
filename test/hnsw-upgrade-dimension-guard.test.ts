@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, test } from 'bun:test';
+import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { PGLiteEngine } from '../src/core/pglite-engine.ts';
 import { getPGLiteSchema } from '../src/core/pglite-schema.ts';
 import {
@@ -28,21 +28,27 @@ describe('HNSW upgrade guard for existing wide vector columns', () => {
 });
 
 describe('PGLite schema replay against an existing vector(2048) brain', () => {
-  const engines: PGLiteEngine[] = [];
+  let replayEngine: PGLiteEngine;
+  let initEngine: PGLiteEngine;
+
+  beforeAll(async () => {
+    replayEngine = new PGLiteEngine();
+    initEngine = new PGLiteEngine();
+    await replayEngine.connect({} as never);
+    await initEngine.connect({} as never);
+    await replayEngine.db.exec(getPGLiteSchema(2048));
+    await initEngine.db.exec(getPGLiteSchema(2048));
+  }, 120_000);
 
   afterAll(async () => {
-    for (const engine of engines) await engine.disconnect();
+    await replayEngine.disconnect();
+    await initEngine.disconnect();
   }, 60_000);
 
   test('creating HNSW on vector(2048) throws; policy-stripped replay does not', async () => {
-    const engine = new PGLiteEngine();
-    engines.push(engine);
-    await engine.connect({} as never);
-    await engine.db.exec(getPGLiteSchema(2048));
-
     let thrown: unknown;
     try {
-      await engine.db.exec(
+      await replayEngine.db.exec(
         'CREATE INDEX IF NOT EXISTS idx_chunks_embedding ON content_chunks USING hnsw (embedding vector_cosine_ops);',
       );
     } catch (error) {
@@ -50,20 +56,16 @@ describe('PGLite schema replay against an existing vector(2048) brain', () => {
     }
     expect(isHnswDimensionLimitError(thrown)).toBe(true);
 
-    await engine.db.exec(applyExistingColumnHnswPolicy(getPGLiteSchema(1280), 2048));
-    const indexes = await engine.executeRaw<{ indexname: string }>(
+    await replayEngine.db.exec(applyExistingColumnHnswPolicy(getPGLiteSchema(1280), 2048));
+    const indexes = await replayEngine.executeRaw<{ indexname: string }>(
       `SELECT indexname FROM pg_indexes WHERE indexname = 'idx_chunks_embedding'`,
     );
     expect(indexes).toEqual([]);
   }, 60_000);
 
   test('initSchema upgrades a vector(2048) brain without aborting on HNSW', async () => {
-    const engine = new PGLiteEngine();
-    engines.push(engine);
-    await engine.connect({} as never);
-    await engine.db.exec(getPGLiteSchema(2048));
-    await engine.initSchema();
-    const indexes = await engine.executeRaw<{ indexname: string }>(
+    await initEngine.initSchema();
+    const indexes = await initEngine.executeRaw<{ indexname: string }>(
       `SELECT indexname FROM pg_indexes WHERE indexname = 'idx_chunks_embedding'`,
     );
     expect(indexes).toEqual([]);
