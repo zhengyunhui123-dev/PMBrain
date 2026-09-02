@@ -34,6 +34,11 @@ import { createProgress } from '../core/progress.ts';
 import { getCliOptions, cliOptsToProgressOptions } from '../core/cli-options.ts';
 import { loadConfig } from '../core/config.ts';
 import {
+  GinIndexUnusableError,
+  isGinCorruptionError,
+  repairPgliteGinIndexes,
+} from '../core/pglite-gin-repair.ts';
+import {
   autoConcurrency,
   shouldRunParallel,
   parseWorkers,
@@ -2319,6 +2324,10 @@ async function performFullSync(
   let reconciledDeletes = 0;
   if (opts.sourceId) {
     const sid = opts.sourceId;
+    const reconcileProgress = createProgress(cliOptsToProgressOptions(getCliOptions()));
+    serr('[pmbrain phase] sync.fullsync.reconcile start');
+    reconcileProgress.start('sync.reconcile');
+    reconcileProgress.heartbeat('正在扫描已有页面');
     const rows = await engine.executeRaw<{ slug: string; source_path: string }>(
       `SELECT slug, source_path FROM pages
        WHERE source_id = $1 AND source_path IS NOT NULL AND deleted_at IS NULL`,
@@ -2334,6 +2343,8 @@ async function performFullSync(
       });
       return reason === null || (reason === 'malformed-path' && isPoisonedPath(path));
     });
+    serr(`[pmbrain phase] sync.fullsync.reconcile scanned=${rows.length} stale=${stale.length}`);
+    reconcileProgress.heartbeat(`已扫描 ${rows.length} 页，待核对 ${stale.length} 页`);
     // Fail closed on a suspicious broad sweep. Real small deletions still
     // reconcile, while a path-normalization/repo-root mistake cannot wipe a
     // mature source in one run.
@@ -2345,22 +2356,41 @@ async function performFullSync(
       );
     } else {
       const staleSlugs = stale.map(row => row.slug);
+      reconcileProgress.start('sync.reconcile', staleSlugs.length || 1);
+      let ginRepaired = false;
       for (let i = 0; i < staleSlugs.length; i += DELETE_BATCH_SIZE) {
         const batch = staleSlugs.slice(i, i + DELETE_BATCH_SIZE);
         try {
           reconciledDeletes += (await engine.softDeletePages(batch, { sourceId: sid })).length;
-        } catch {
-          for (const slug of batch) {
-            try {
-              reconciledDeletes += (await engine.softDeletePages([slug], { sourceId: sid })).length;
-            } catch { /* best-effort: the next full sync retries */ }
+        } catch (error) {
+          if (engine.kind === 'pglite' && isGinCorruptionError(error)) {
+            if (ginRepaired) {
+              throw error instanceof GinIndexUnusableError
+                ? error
+                : new GinIndexUnusableError(error instanceof Error ? error.message : String(error), { cause: error });
+            }
+            const repaired = await repairPgliteGinIndexes(engine);
+            if (repaired.status !== 'repaired') {
+              throw new GinIndexUnusableError(repaired.message, { status: repaired.status, cause: error });
+            }
+            ginRepaired = true;
+            reconciledDeletes += (await engine.softDeletePages(batch, { sourceId: sid })).length;
+          } else {
+            for (const slug of batch) {
+              try {
+                reconciledDeletes += (await engine.softDeletePages([slug], { sourceId: sid })).length;
+              } catch { /* best-effort: the next full sync retries */ }
+            }
           }
         }
+        reconcileProgress.tick(batch.length, `核对 ${Math.min(i + batch.length, staleSlugs.length)}/${staleSlugs.length}`);
       }
       if (reconciledDeletes > 0) {
         slog(`  Reconciled ${reconciledDeletes} stale page(s) as recoverable soft deletes (72h).`);
       }
     }
+    reconcileProgress.finish();
+    serr(`[pmbrain phase] sync.fullsync.reconcile done deleted=${reconciledDeletes}`);
   }
 
   // Full sync doesn't track pagesAffected, so fall back to embed --stale.
