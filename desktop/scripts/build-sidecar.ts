@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { existsSync, readdirSync } from 'node:fs';
 import { chmod, copyFile, cp, mkdir, readFile, rename, rm } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import JSZip from 'jszip';
@@ -211,6 +212,19 @@ await cp(
   join(projectRoot, 'skills', 'RESOLVER.md'),
   join(outputDirectory, 'skills', 'RESOLVER.md'),
 );
+const schemaPackSource = join(projectRoot, 'src', 'core', 'schema-pack', 'base');
+const schemaPackOutput = join(outputDirectory, 'base');
+await mkdir(schemaPackOutput, { recursive: true });
+const schemaPackFiles = readdirSync(schemaPackSource).filter(name => name.endsWith('.yaml'));
+if (!schemaPackFiles.includes('gbrain-base-v2.yaml')) {
+  throw new Error(`Source schema pack directory is missing gbrain-base-v2.yaml: ${schemaPackSource}`);
+}
+for (const name of schemaPackFiles) {
+  await copyFile(join(schemaPackSource, name), join(schemaPackOutput, name));
+}
+if (!existsSync(join(schemaPackOutput, 'gbrain-base-v2.yaml'))) {
+  throw new Error(`Sidecar runtime is missing bundled schema pack gbrain-base-v2.yaml: ${schemaPackOutput}`);
+}
 for (const runtimePackage of runtimePackages) {
   await copyRuntimePackage(runtimePackage);
 }

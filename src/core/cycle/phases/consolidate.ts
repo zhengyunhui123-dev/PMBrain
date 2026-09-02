@@ -25,11 +25,14 @@
 import type { BrainEngine, FactRow } from '../../engine.ts';
 import type { PhaseResult } from '../../cycle.ts';
 import { cosineSimilarity } from '../../facts/classify.ts';
+import { isAborted } from '../../abort-check.ts';
 
 export interface ConsolidatePhaseOpts {
   dryRun?: boolean;
   /** In-phase keepalive callback. Awaited between buckets. */
   yieldDuringPhase?: () => Promise<void>;
+  /** Cooperative stop from the owning Dream job. */
+  signal?: AbortSignal;
   /** Cosine cluster threshold. Default 0.85. */
   clusterThreshold?: number;
   /** Minimum facts per (source, entity) bucket before consolidation. Default 3. */
@@ -83,6 +86,7 @@ export async function runPhaseConsolidate(
   }
 
   for (const b of buckets) {
+    if (isAborted(opts.signal)) break;
     if (opts.yieldDuringPhase) {
       try { await opts.yieldDuringPhase(); } catch { /* keepalive errors non-fatal */ }
     }

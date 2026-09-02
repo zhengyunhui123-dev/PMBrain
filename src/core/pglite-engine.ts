@@ -17,15 +17,32 @@ import type {
   NewFact, FactListOpts, FactsHealth,
   SourceRow,
 } from './engine.ts';
-import { MAX_SEARCH_LIMIT, clampSearchLimit } from './engine.ts';
+import { MAX_SEARCH_LIMIT, clampSearchLimit, DREAM_VERDICT_TTL_SECONDS } from './engine.ts';
 import { withRetry, BULK_RETRY_OPTS, resolveBulkRetryOpts, computeNextDelay, type BatchAuditSite } from './retry.ts';
 import { logBatchRetry as auditLogBatchRetry, logBatchExhausted as auditLogBatchExhausted } from './audit/batch-retry-audit.ts';
 import { runMigrations } from './migrate.ts';
 import { PGLITE_SCHEMA_SQL, getPGLiteSchema } from './pglite-schema.ts';
 import { DEFAULT_EMBEDDING_DIMENSIONS } from './ai/defaults.ts';
+import {
+  applyChunkEmbeddingIndexPolicy,
+  applyExistingColumnHnswPolicy,
+  isHnswDimensionLimitError,
+  PGVECTOR_HNSW_VECTOR_MAX_DIMS,
+} from './vector-index.ts';
 import { DELETE_BATCH_SIZE } from './engine-constants.ts';
 import { acquireLock, releaseLock, type LockHandle } from './pglite-lock.ts';
 import { DatabaseAlreadyOwnedError, PgliteOpenError } from './pglite-errors.ts';
+import {
+  GIN_REPAIR_DB_UNUSABLE_MESSAGE,
+  GinIndexUnusableError,
+  ensurePgliteGinHealthy,
+} from './pglite-gin-repair.ts';
+import {
+  attemptWalRepairAndRetry,
+  closeRepairEpisodeIfOpen,
+  shouldRepairWalBeforeFirstOpen,
+  type WalRepairReceipt,
+} from './pglite-repair.ts';
 import type {
   Page, PageInput, PageFilters, PageType,
   Chunk, ChunkInput, StaleChunkRow, StalePageRow,
@@ -157,6 +174,7 @@ export function computeSnapshotSchemaHash(
  */
 export type PgliteInitFailure =
   | 'bunfs'
+  | 'wasm-abort'
   | 'windows-aborted'
   | 'macos-26-3'
   | 'corrupt'
@@ -164,19 +182,19 @@ export type PgliteInitFailure =
   | 'unknown';
 
 export function stringifyPgliteInitError(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  if (err && typeof err === 'object' && 'message' in err) {
-    const message = (err as { message?: unknown }).message;
-    if (typeof message === 'string' && message.trim()) return message;
+  const message = (err as { message?: unknown })?.message;
+  if (message != null) return String(message);
+  if (typeof err === 'object' && err !== null) {
+    const name = (err as { name?: unknown }).name;
+    const errno = (err as { errno?: unknown }).errno;
+    if (typeof name === 'string' && errno != null) return `${name} (errno ${errno})`;
+    try {
+      const json = JSON.stringify(err);
+      if (json && json !== '{}') return typeof name === 'string' ? `${name}: ${json}` : json;
+    } catch { /* fall through */ }
+    if (typeof name === 'string') return name;
   }
-  if (typeof err === 'string') return err;
-  if (err === null) return 'null';
-  if (err === undefined) return 'undefined';
-  try {
-    return JSON.stringify(err) ?? String(err);
-  } catch {
-    return String(err);
-  }
+  return String(err);
 }
 
 export function classifyPgliteInitError(
@@ -184,18 +202,50 @@ export function classifyPgliteInitError(
   platform: NodeJS.Platform = process.platform,
 ): PgliteInitFailure {
   if (/\$\$bunfs|ENOENT[\s\S]*pglite\.data/i.test(message)) return 'bunfs';
-  if (/macos.*26\.3/i.test(message)) return 'macos-26-3';
   if (/EPERM|EACCES|operation not permitted|access is denied/i.test(message)) return 'permission';
   if (/58P01|internal_load_library|type\s+"vector"\s+does\s+not\s+exist|catalog.*corrupt|corrupt/i.test(message)) {
     return 'corrupt';
   }
-  if (platform === 'win32' && /aborted\(\)|abort/i.test(message)) {
-    return 'windows-aborted';
-  }
-  if (/abort.*runtime|wasm.*runtime/i.test(message)) {
-    return 'macos-26-3';
+  if (/aborted\s*\(\)|RuntimeError|unreachable|abort.*runtime|macos.*26\.3|wasm.*runtime/i.test(message)) {
+    return 'wasm-abort';
   }
   return 'unknown';
+}
+
+export interface PgliteInitRepairContext {
+  repair:
+    | 'not-attempted'
+    | 'in-memory'
+    | 'disabled'
+    | 'skipped-validation'
+    | 'skipped-live-writer'
+    | 'skipped-cooldown'
+    | 'failed-restored'
+    | 'failed-not-restored';
+  backupPath?: string;
+  detail?: string;
+}
+
+function repairContextLine(ctx: PgliteInitRepairContext): string {
+  switch (ctx.repair) {
+    case 'in-memory':
+      return '  当前为内存数据库，没有可修复的持久化数据目录。';
+    case 'disabled':
+      return '  自动 WAL 修复已通过 PMBRAIN_PGLITE_WAL_REPAIR=off 禁用。';
+    case 'skipped-validation':
+    case 'skipped-live-writer':
+    case 'skipped-cooldown':
+      return `  自动 WAL 修复已安全跳过：${ctx.detail ?? '安全校验未通过'}。`;
+    case 'failed-restored':
+      return `  自动 WAL 修复未能启动数据库，原 WAL 已恢复；备份保留在 ${ctx.backupPath ?? '<dataDir>.wal-repair-backup-*'}。`
+        + (ctx.detail ? `\n  详情：${ctx.detail}` : '');
+    case 'failed-not-restored':
+      return `  自动 WAL 修复及自动恢复均失败；修复前文件保留在 ${ctx.backupPath ?? '<dataDir>.wal-repair-backup-*'}。`
+        + (ctx.detail ? `\n  详情：${ctx.detail}` : '');
+    case 'not-attempted':
+    default:
+      return '  自动 WAL 修复未执行。';
+  }
 }
 
 function resolveLockOwnerType(): 'desktop-sidecar' | 'cli' | 'probe' | 'migration' | 'test' | 'unknown' {
@@ -221,6 +271,7 @@ export function buildPgliteInitErrorMessage(
   verdict: PgliteInitFailure,
   original: string,
   _platform: NodeJS.Platform = process.platform,
+  ctx?: PgliteInitRepairContext,
 ): string {
   const header = 'PGLite failed to initialize its WASM runtime.';
   let hint: string;
@@ -233,6 +284,13 @@ export function buildPgliteInitErrorMessage(
         '  does not help, run via Node: `node src/cli.ts` or install pmbrain\n' +
         '  using the Node-based path. See #1340 for details.';
       break;
+    case 'wasm-abort':
+      hint =
+        '  最常见原因是异常关闭后 WAL/checkpoint 状态不完整。\n' +
+        repairContextLine(ctx ?? { repair: 'not-attempted' }) + '\n' +
+        '  PMBrain 不会删除、重建或覆盖知识库；请保留 WAL 修复备份并查看日志。\n' +
+        `  ${GIN_REPAIR_DB_UNUSABLE_MESSAGE}`;
+      break;
     case 'windows-aborted':
       hint =
         '  On Windows this usually means the selected PGLite directory is an\n' +
@@ -240,7 +298,8 @@ export function buildPgliteInitErrorMessage(
         '  it cleanly. Close other PMBrain/GBrain processes and retry.\n' +
         '  PMBrain does not delete, replace, or rebuild your database for this\n' +
         '  class of failure. Docker Postgres is the safer option for existing\n' +
-        '  large brains. Path tip: .pmbrain\\brain.pglite';
+        '  large brains. Path tip: .pmbrain\\brain.pglite\n' +
+        `  ${GIN_REPAIR_DB_UNUSABLE_MESSAGE}`;
       break;
     case 'macos-26-3':
       hint =
@@ -250,7 +309,8 @@ export function buildPgliteInitErrorMessage(
     case 'corrupt':
       hint =
         '  数据库疑似损坏（catalog / pgvector 扩展异常）。\n' +
-        '  PMBrain 不会自动删除你的知识库。请先备份，再按文档恢复或迁移到 Postgres。';
+        '  PMBrain 不会自动删除你的知识库。请先备份，再按文档恢复或迁移到 Postgres。\n' +
+        `  ${GIN_REPAIR_DB_UNUSABLE_MESSAGE}`;
       break;
     case 'permission':
       hint =
@@ -264,6 +324,15 @@ export function buildPgliteInitErrorMessage(
       break;
   }
   return `${header}\n${hint}\n  Original error: ${original}`;
+}
+
+export function buildWalRepairNotice(receipt: WalRepairReceipt): string {
+  return [
+    'PMBrain 已修复本地 PGLite 的 WAL/checkpoint 状态。',
+    `数据目录：${receipt.dataDir}`,
+    `修复前备份：${receipt.backupPath}`,
+    '数据文件已保留；异常关闭前尚未 checkpoint 的事务可能丢失。',
+  ].join('\n');
 }
 
 /**
@@ -286,6 +355,7 @@ export class PGLiteEngine implements BrainEngine {
   readonly kind = 'pglite' as const;
   private _db: PGLiteDB | null = null;
   private _lock: LockHandle | null = null;
+  walRepairReceipt: WalRepairReceipt | null = null;
   // Tier 3: when GBRAIN_PGLITE_SNAPSHOT loaded a post-initSchema state into
   // PGlite.create(loadDataDir), initSchema is a no-op (schema is already
   // present + migrations already applied). Saves ~1-3s per fresh test PGLite.
@@ -298,6 +368,7 @@ export class PGLiteEngine implements BrainEngine {
 
   // Lifecycle
   async connect(config: EngineConfig): Promise<void> {
+    this.walRepairReceipt = null;
     const dataDir = config.database_path || undefined; // undefined = in-memory
 
     // Acquire file lock to prevent concurrent PGLite access (crashes with Aborted())
@@ -333,14 +404,34 @@ export class PGLiteEngine implements BrainEngine {
       }
     }
 
+    const openPersistent = () => preservingProcessExitCode(() =>
+      PGlite.create({
+        dataDir,
+        loadDataDir,
+        extensions: { vector, pg_trgm },
+      }),
+    );
+    const openAfterRepair = () => preservingProcessExitCode(() => PGlite.create({
+      dataDir,
+      extensions: { vector, pg_trgm },
+    }));
+
     try {
-      this._db = await preservingProcessExitCode(() =>
-        PGlite.create({
+      if (dataDir && shouldRepairWalBeforeFirstOpen(dataDir)) {
+        const attempt = await attemptWalRepairAndRetry(
           dataDir,
-          loadDataDir,
-          extensions: { vector, pg_trgm },
-        }),
-      );
+          openAfterRepair,
+          { reaped: this._lock?.reaped },
+        );
+        if (attempt.status === 'repaired') {
+          this._db = attempt.db;
+          this.walRepairReceipt = attempt.receipt;
+          console.warn(buildWalRepairNotice(attempt.receipt));
+          return;
+        }
+      }
+      this._db = await openPersistent();
+      if (dataDir) closeRepairEpisodeIfOpen(dataDir);
     } catch (err) {
       // v0.13.1: any PGLite.create() failure becomes actionable. v0.41.8.0
       // (#1340): the previous error hint hardcoded the macOS 26.3 link, but
@@ -349,9 +440,43 @@ export class PGLiteEngine implements BrainEngine {
       // pglite.data WASM payload). Route the hint by failure shape so
       // users get the right next step.
       // Always preserve the original cause for diagnostics / UI.
-      const original = err instanceof Error ? err.message : String(err);
+      const original = stringifyPgliteInitError(err);
       const verdict = classifyPgliteInitError(original);
-      const wrapped = new PgliteOpenError(buildPgliteInitErrorMessage(verdict, original), {
+      let ctx: PgliteInitRepairContext = { repair: 'not-attempted' };
+      if (verdict === 'wasm-abort') {
+        if (!dataDir) {
+          ctx = { repair: 'in-memory' };
+        } else {
+          const attempt = await attemptWalRepairAndRetry(
+            dataDir,
+            openAfterRepair,
+            { reaped: this._lock?.reaped },
+          );
+          if (attempt.status === 'repaired') {
+            this._db = attempt.db;
+            this.walRepairReceipt = attempt.receipt;
+            console.warn(buildWalRepairNotice(attempt.receipt));
+            return;
+          }
+          if (attempt.status === 'skipped') {
+            const reasonToContext = {
+              disabled: 'disabled',
+              'validation-failed': 'skipped-validation',
+              'possibly-live-writer': 'skipped-live-writer',
+              'recently-failed': 'skipped-cooldown',
+            } as const;
+            ctx = { repair: reasonToContext[attempt.reason], detail: attempt.detail };
+          } else {
+            ctx = {
+              repair: attempt.restored ? 'failed-restored' : 'failed-not-restored',
+              backupPath: attempt.receipt?.backupPath,
+              detail: attempt.repairError,
+            };
+          }
+        }
+      }
+      process.stderr.write(`${GIN_REPAIR_DB_UNUSABLE_MESSAGE}\n`);
+      const wrapped = new PgliteOpenError(buildPgliteInitErrorMessage(verdict, original, process.platform, ctx), {
         databasePath: dataDir ?? null,
         cause: err,
       });
@@ -412,6 +537,7 @@ export class PGLiteEngine implements BrainEngine {
     // Tier 3: snapshot was loaded into PGlite — schema + migrations already
     // applied. Nothing to do. Returns immediately.
     if (this._snapshotLoaded) {
+      await this.ensureGinIndexesHealthy();
       return;
     }
     // Pre-schema bootstrap: add forward-referenced state the embedded schema
@@ -428,34 +554,57 @@ export class PGLiteEngine implements BrainEngine {
       dims = gw.getEmbeddingDimensions();
     } catch { /* gateway not configured — use storage placeholder */ }
 
-    await this.db.exec(getPGLiteSchema(dims));
+    const existingDim = await this.probeEmbeddingColumnDim();
+    const schemaSql = applyExistingColumnHnswPolicy(getPGLiteSchema(dims), existingDim);
+    try {
+      await this.db.exec(schemaSql);
+    } catch (error) {
+      if (!isHnswDimensionLimitError(error)) throw error;
+      process.stderr.write(
+        `  ⚠️  skipped HNSW vector index: embedding column exceeds pgvector's ${PGVECTOR_HNSW_VECTOR_MAX_DIMS}-dimension limit; exact search remains available.\n`,
+      );
+      await this.db.exec(applyChunkEmbeddingIndexPolicy(schemaSql, PGVECTOR_HNSW_VECTOR_MAX_DIMS + 1));
+    }
 
     const { applied } = await runMigrations(this);
     if (applied > 0) {
       process.stderr.write(`  ${applied} migration(s) applied\n`);
     }
 
-    // PGLite 不支持 ALTER COLUMN TYPE vector(N)，检测到维度不匹配时只能警告。
-    const dimRows = await this.db.query<{ formatted: string | null }>(`
-      SELECT format_type(a.atttypid, a.atttypmod) AS formatted
-        FROM pg_attribute a
-        JOIN pg_class c ON c.oid = a.attrelid
-        JOIN pg_namespace n ON n.oid = c.relnamespace
-       WHERE n.nspname = 'public'
-         AND c.relname = 'content_chunks'
-         AND a.attname = 'embedding'
-         AND NOT a.attisdropped
-    `);
-    const dimFormatted = dimRows.rows[0]?.formatted;
-    if (dimFormatted) {
-      const dimMatch = dimFormatted.match(/vector\((\d+)\)/i);
-      const actualDim = dimMatch ? parseInt(dimMatch[1], 10) : null;
-      if (actualDim !== null && actualDim !== dims) {
-        process.stderr.write(
-          `  ⚠️  检测到 embedding 列维度不匹配：DB 为 vector(${actualDim})，配置为 ${dims}。\n` +
-          `  请运行：gbrain models align-embedding-dimension --yes\n`
-        );
-      }
+    const actualDim = existingDim ?? await this.probeEmbeddingColumnDim();
+    if (actualDim !== null && actualDim !== dims) {
+      process.stderr.write(
+        `  ⚠️  检测到 embedding 列维度不匹配：DB 为 vector(${actualDim})，配置为 ${dims}。\n` +
+        `  请运行：gbrain models align-embedding-dimension --yes\n`
+      );
+    }
+
+    await this.ensureGinIndexesHealthy();
+  }
+
+  private async ensureGinIndexesHealthy(): Promise<void> {
+    const result = await ensurePgliteGinHealthy(this);
+    if (result.status === 'ok' || result.status === 'repaired') return;
+    throw new GinIndexUnusableError(result.message, { status: result.status });
+  }
+
+  private async probeEmbeddingColumnDim(): Promise<number | null> {
+    try {
+      const dimRows = await this.db.query<{ formatted: string | null }>(`
+        SELECT format_type(a.atttypid, a.atttypmod) AS formatted
+          FROM pg_attribute a
+          JOIN pg_class c ON c.oid = a.attrelid
+          JOIN pg_namespace n ON n.oid = c.relnamespace
+         WHERE n.nspname = 'public'
+           AND c.relname = 'content_chunks'
+           AND a.attname = 'embedding'
+           AND NOT a.attisdropped
+      `);
+      const formatted = dimRows.rows[0]?.formatted;
+      const match = formatted?.match(/vector\((\d+)\)/i);
+      return match ? parseInt(match[1], 10) : null;
+    } catch {
+      return null;
     }
   }
 
@@ -564,7 +713,23 @@ export class PGLiteEngine implements BrainEngine {
         EXISTS (SELECT 1 FROM information_schema.columns
                 WHERE table_schema='public' AND table_name='sources' AND column_name='trust_frontmatter_overrides') AS sources_trust_fm_exists,
         EXISTS (SELECT 1 FROM information_schema.columns
-                WHERE table_schema='public' AND table_name='pages' AND column_name='generation') AS pages_generation_exists
+                WHERE table_schema='public' AND table_name='pages' AND column_name='generation') AS pages_generation_exists,
+        EXISTS (SELECT 1 FROM information_schema.tables
+                WHERE table_schema='public' AND table_name='dream_verdicts') AS dream_verdicts_exists,
+        EXISTS (SELECT 1 FROM information_schema.columns
+                WHERE table_schema='public' AND table_name='dream_verdicts' AND column_name='expires_at') AS dream_verdicts_expires_at_exists,
+        EXISTS (SELECT 1 FROM information_schema.tables
+                WHERE table_schema='public' AND table_name='minion_jobs') AS minion_jobs_exists,
+        EXISTS (SELECT 1 FROM information_schema.columns
+                WHERE table_schema='public' AND table_name='minion_jobs' AND column_name='timeout_at') AS minion_jobs_timeout_at_exists,
+        EXISTS (SELECT 1 FROM information_schema.columns
+                WHERE table_schema='public' AND table_name='minion_jobs' AND column_name='idempotency_key') AS minion_jobs_idempotency_key_exists,
+        EXISTS (SELECT 1 FROM information_schema.columns
+                WHERE table_schema='public' AND table_name='minion_jobs' AND column_name='private_queue_owner_job_id') AS minion_jobs_private_queue_owner_job_id_exists,
+        EXISTS (SELECT 1 FROM information_schema.columns
+                WHERE table_schema='public' AND table_name='minion_jobs' AND column_name='private_queue_owner_token') AS minion_jobs_private_queue_owner_token_exists,
+        EXISTS (SELECT 1 FROM information_schema.columns
+                WHERE table_schema='public' AND table_name='minion_jobs' AND column_name='private_queue_lease_until') AS minion_jobs_private_queue_lease_until_exists
     `);
     const probe = rows[0] as {
       pages_exists: boolean;
@@ -606,6 +771,14 @@ export class PGLiteEngine implements BrainEngine {
       sources_cr_mode_exists: boolean;
       sources_trust_fm_exists: boolean;
       pages_generation_exists: boolean;
+      dream_verdicts_exists: boolean;
+      dream_verdicts_expires_at_exists: boolean;
+      minion_jobs_exists: boolean;
+      minion_jobs_timeout_at_exists: boolean;
+      minion_jobs_idempotency_key_exists: boolean;
+      minion_jobs_private_queue_owner_job_id_exists: boolean;
+      minion_jobs_private_queue_owner_token_exists: boolean;
+      minion_jobs_private_queue_lease_until_exists: boolean;
     };
 
     const needsPagesBootstrap = probe.pages_exists && !probe.source_id_exists;
@@ -674,6 +847,14 @@ export class PGLiteEngine implements BrainEngine {
     // body; bootstrap only needs to add the column on pre-v91 brains so
     // the CREATE INDEX doesn't crash.
     const needsPagesGeneration = probe.pages_exists && !probe.pages_generation_exists;
+    const needsDreamVerdictsExpiresAt = probe.dream_verdicts_exists
+      && !probe.dream_verdicts_expires_at_exists;
+    const needsMinionJobsBootstrap = probe.minion_jobs_exists
+      && (!probe.minion_jobs_timeout_at_exists
+        || !probe.minion_jobs_idempotency_key_exists
+        || !probe.minion_jobs_private_queue_owner_job_id_exists
+        || !probe.minion_jobs_private_queue_owner_token_exists
+        || !probe.minion_jobs_private_queue_lease_until_exists);
 
     // Fresh installs (no tables yet) and modern brains both no-op.
     if (!needsPagesBootstrap && !needsLinksBootstrap && !needsChunksBootstrap
@@ -684,9 +865,10 @@ export class PGLiteEngine implements BrainEngine {
         && !needsSourcesArchive && !needsPagesLastRetrievedAt
         && !needsPagesLinksExtractedAt
         && !needsPagesProvenance
-        && !needsContextualRetrievalColumns && !needsPagesGeneration) return;
+        && !needsContextualRetrievalColumns && !needsPagesGeneration
+        && !needsDreamVerdictsExpiresAt && !needsMinionJobsBootstrap) return;
 
-    process.stderr.write('  Pre-v0.21 brain detected, applying forward-reference bootstrap\n');
+    process.stderr.write('  Forward-reference bootstrap required, adding missing schema prerequisites\n');
 
     if (needsPagesBootstrap) {
       // Mirror schema-embedded.ts shape for `sources` so the subsequent
@@ -923,6 +1105,22 @@ export class PGLiteEngine implements BrainEngine {
         ALTER TABLE pages ADD COLUMN IF NOT EXISTS generation BIGINT NOT NULL DEFAULT 1;
       `);
     }
+
+    if (needsDreamVerdictsExpiresAt) {
+      await this.db.exec(`
+        ALTER TABLE dream_verdicts ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ;
+      `);
+    }
+
+    if (needsMinionJobsBootstrap) {
+      await this.db.exec(`
+        ALTER TABLE minion_jobs ADD COLUMN IF NOT EXISTS timeout_at TIMESTAMPTZ;
+        ALTER TABLE minion_jobs ADD COLUMN IF NOT EXISTS idempotency_key TEXT;
+        ALTER TABLE minion_jobs ADD COLUMN IF NOT EXISTS private_queue_owner_job_id INTEGER;
+        ALTER TABLE minion_jobs ADD COLUMN IF NOT EXISTS private_queue_owner_token TEXT;
+        ALTER TABLE minion_jobs ADD COLUMN IF NOT EXISTS private_queue_lease_until TIMESTAMPTZ;
+      `);
+    }
   }
 
   async withReservedConnection<T>(fn: (conn: ReservedConnection) => Promise<T>): Promise<T> {
@@ -1047,7 +1245,8 @@ export class PGLiteEngine implements BrainEngine {
          source_kind           = COALESCE(EXCLUDED.source_kind,           pages.source_kind),
          source_uri            = COALESCE(EXCLUDED.source_uri,            pages.source_uri),
          ingested_via          = COALESCE(EXCLUDED.ingested_via,          pages.ingested_via),
-         ingested_at           = COALESCE(EXCLUDED.ingested_at,           pages.ingested_at)
+         ingested_at           = COALESCE(EXCLUDED.ingested_at,           pages.ingested_at),
+         deleted_at            = NULL
        RETURNING id, source_id, slug, type, title, compiled_truth, timeline, frontmatter, content_hash, created_at, updated_at, effective_date, effective_date_source, import_filename, source_kind, source_uri, ingested_via, ingested_at`,
       [sourceId, slug, page.type, pageKind, page.title, page.compiled_truth, page.timeline || '', JSON.stringify(frontmatter), hash, effectiveDate, effectiveDateSource, importFilename, chunkerVersion, sourcePath, sourceKind, sourceUri, ingestedVia, ingestedAt]
     );
@@ -1121,6 +1320,18 @@ export class PGLiteEngine implements BrainEngine {
     );
     if (rows.length === 0) return null;
     return { slug: (rows[0] as { slug: string }).slug };
+  }
+
+  async softDeletePages(slugs: string[], opts: { sourceId: string }): Promise<string[]> {
+    if (slugs.length === 0) return [];
+    if (slugs.length > DELETE_BATCH_SIZE) {
+      throw new Error(`softDeletePages: input size ${slugs.length} exceeds DELETE_BATCH_SIZE=${DELETE_BATCH_SIZE}. Caller must chunk.`);
+    }
+    const { rows } = await this.db.query<{ slug: string }>(
+      'UPDATE pages SET deleted_at = now() WHERE slug = ANY($1::text[]) AND source_id = $2 AND deleted_at IS NULL RETURNING slug',
+      [slugs, opts.sourceId],
+    );
+    return rows.map(row => row.slug);
   }
 
   async restorePage(slug: string, opts?: { sourceId?: string }): Promise<boolean> {
@@ -2425,12 +2636,40 @@ export class PGLiteEngine implements BrainEngine {
          embedding_image = COALESCE(EXCLUDED.embedding_image, content_chunks.embedding_image)`,
       params
     );
+    // P1 embedding lifecycle receipt. The hash is derived metadata: it lets
+    // stale scans detect content/vector drift without ever rewriting source
+    // text. A page signature is published only when every chunk is embedded
+    // by one model at one dimension; partial checkpoints intentionally clear
+    // it until the page is complete.
+    await this.db.query(
+      `UPDATE content_chunks
+          SET embedded_text_hash = CASE WHEN embedding IS NULL THEN NULL ELSE md5(chunk_text) END
+        WHERE page_id = $1 AND chunk_index = ANY($2::int[])`,
+      [pageId, newIndices],
+    );
+    await this.db.query(
+      `UPDATE pages
+          SET embedding_signature = (
+            SELECT CASE
+              WHEN COUNT(*) > 0
+               AND COUNT(*) FILTER (WHERE embedding IS NULL) = 0
+               AND COUNT(DISTINCT model) = 1
+               AND COUNT(DISTINCT vector_dims(embedding)) = 1
+              THEN MIN(model) || ':' || MIN(vector_dims(embedding))::text
+              ELSE NULL
+            END
+            FROM content_chunks
+            WHERE page_id = $1
+          )
+        WHERE id = $1`,
+      [pageId],
+    );
   }
 
   async getChunks(slug: string, opts?: { sourceId?: string }): Promise<Chunk[]> {
     const sourceId = opts?.sourceId ?? 'default';
     const { rows } = await this.db.query(
-      `SELECT cc.* FROM content_chunks cc
+      `SELECT cc.*, (cc.embedding IS NULL) AS embedding_is_null FROM content_chunks cc
        JOIN pages p ON p.id = cc.page_id
        WHERE p.slug = $1 AND p.source_id = $2
        ORDER BY cc.chunk_index`,
@@ -2449,7 +2688,7 @@ export class PGLiteEngine implements BrainEngine {
         `SELECT count(*)::int AS count
            FROM content_chunks cc
            JOIN pages p ON p.id = cc.page_id
-          WHERE cc.embedding IS NULL
+          WHERE (cc.embedding IS NULL OR (cc.embedded_text_hash IS NOT NULL AND cc.embedded_text_hash <> md5(cc.chunk_text)))
             AND p.deleted_at IS NULL
             AND NOT (COALESCE(p.frontmatter, '{}'::jsonb) ? 'embed_skip')`,
       );
@@ -2460,7 +2699,7 @@ export class PGLiteEngine implements BrainEngine {
       `SELECT count(*)::int AS count
          FROM content_chunks cc
          JOIN pages p ON p.id = cc.page_id
-        WHERE cc.embedding IS NULL
+        WHERE (cc.embedding IS NULL OR (cc.embedded_text_hash IS NOT NULL AND cc.embedded_text_hash <> md5(cc.chunk_text)))
           AND p.deleted_at IS NULL
           AND p.source_id = $1
           AND NOT (COALESCE(p.frontmatter, '{}'::jsonb) ? 'embed_skip')`,
@@ -2495,7 +2734,7 @@ export class PGLiteEngine implements BrainEngine {
                   p.updated_at
              FROM content_chunks cc
              JOIN pages p ON p.id = cc.page_id
-            WHERE cc.embedding IS NULL
+            WHERE (cc.embedding IS NULL OR (cc.embedded_text_hash IS NOT NULL AND cc.embedded_text_hash <> md5(cc.chunk_text)))
               AND p.deleted_at IS NULL
               AND NOT (COALESCE(p.frontmatter, '{}'::jsonb) ? 'embed_skip')
             ORDER BY p.updated_at DESC NULLS LAST, p.id ASC, cc.chunk_index ASC
@@ -2507,7 +2746,7 @@ export class PGLiteEngine implements BrainEngine {
                   p.updated_at
              FROM content_chunks cc
              JOIN pages p ON p.id = cc.page_id
-            WHERE cc.embedding IS NULL
+            WHERE (cc.embedding IS NULL OR (cc.embedded_text_hash IS NOT NULL AND cc.embedded_text_hash <> md5(cc.chunk_text)))
               AND p.deleted_at IS NULL
               AND NOT (COALESCE(p.frontmatter, '{}'::jsonb) ? 'embed_skip')
               AND (
@@ -2527,7 +2766,7 @@ export class PGLiteEngine implements BrainEngine {
                 p.updated_at
            FROM content_chunks cc
            JOIN pages p ON p.id = cc.page_id
-          WHERE cc.embedding IS NULL
+          WHERE (cc.embedding IS NULL OR (cc.embedded_text_hash IS NOT NULL AND cc.embedded_text_hash <> md5(cc.chunk_text)))
             AND p.deleted_at IS NULL
             AND p.source_id = $1
             AND NOT (COALESCE(p.frontmatter, '{}'::jsonb) ? 'embed_skip')
@@ -2540,7 +2779,7 @@ export class PGLiteEngine implements BrainEngine {
                 p.updated_at
            FROM content_chunks cc
            JOIN pages p ON p.id = cc.page_id
-          WHERE cc.embedding IS NULL
+          WHERE (cc.embedding IS NULL OR (cc.embedded_text_hash IS NOT NULL AND cc.embedded_text_hash <> md5(cc.chunk_text)))
             AND p.deleted_at IS NULL
             AND p.source_id = $1
             AND NOT (COALESCE(p.frontmatter, '{}'::jsonb) ? 'embed_skip')
@@ -2566,7 +2805,7 @@ export class PGLiteEngine implements BrainEngine {
                 cc.model, cc.token_count, p.source_id, cc.page_id
            FROM content_chunks cc
            JOIN pages p ON p.id = cc.page_id
-          WHERE cc.embedding IS NULL
+          WHERE (cc.embedding IS NULL OR (cc.embedded_text_hash IS NOT NULL AND cc.embedded_text_hash <> md5(cc.chunk_text)))
             AND p.deleted_at IS NULL
             AND NOT (COALESCE(p.frontmatter, '{}'::jsonb) ? 'embed_skip')
             AND (cc.page_id, cc.chunk_index) > ($1, $2)
@@ -2581,7 +2820,7 @@ export class PGLiteEngine implements BrainEngine {
               cc.model, cc.token_count, p.source_id, cc.page_id
          FROM content_chunks cc
          JOIN pages p ON p.id = cc.page_id
-        WHERE cc.embedding IS NULL
+        WHERE (cc.embedding IS NULL OR (cc.embedded_text_hash IS NOT NULL AND cc.embedded_text_hash <> md5(cc.chunk_text)))
           AND p.deleted_at IS NULL
           AND p.source_id = $1
           AND NOT (COALESCE(p.frontmatter, '{}'::jsonb) ? 'embed_skip')
@@ -2822,8 +3061,8 @@ export class PGLiteEngine implements BrainEngine {
                 l.link_type, l.context, l.link_source, l.resolution_type,
                 o.slug as origin_slug, o.source_id as origin_source_id, l.origin_field
          FROM links l
-         JOIN pages f ON f.id = l.from_page_id
-         JOIN pages t ON t.id = l.to_page_id
+         JOIN pages f ON f.id = l.from_page_id AND f.deleted_at IS NULL
+         JOIN pages t ON t.id = l.to_page_id AND t.deleted_at IS NULL
          LEFT JOIN pages o ON o.id = l.origin_page_id AND o.source_id = ANY($2::text[])
          WHERE f.slug = $1 AND f.source_id = ANY($2::text[]) AND t.source_id = ANY($2::text[])`,
         [slug, opts.sourceIds]
@@ -2837,8 +3076,8 @@ export class PGLiteEngine implements BrainEngine {
                 l.link_type, l.context, l.link_source, l.resolution_type,
                 o.slug as origin_slug, o.source_id as origin_source_id, l.origin_field
          FROM links l
-         JOIN pages f ON f.id = l.from_page_id
-         JOIN pages t ON t.id = l.to_page_id
+         JOIN pages f ON f.id = l.from_page_id AND f.deleted_at IS NULL
+         JOIN pages t ON t.id = l.to_page_id AND t.deleted_at IS NULL
          LEFT JOIN pages o ON o.id = l.origin_page_id
          WHERE f.slug = $1 AND f.source_id = $2`,
         [slug, opts.sourceId]
@@ -2851,8 +3090,8 @@ export class PGLiteEngine implements BrainEngine {
               l.link_type, l.context, l.link_source, l.resolution_type,
               o.slug as origin_slug, o.source_id as origin_source_id, l.origin_field
        FROM links l
-       JOIN pages f ON f.id = l.from_page_id
-       JOIN pages t ON t.id = l.to_page_id
+       JOIN pages f ON f.id = l.from_page_id AND f.deleted_at IS NULL
+       JOIN pages t ON t.id = l.to_page_id AND t.deleted_at IS NULL
        LEFT JOIN pages o ON o.id = l.origin_page_id
        WHERE f.slug = $1`,
       [slug]
@@ -2868,8 +3107,8 @@ export class PGLiteEngine implements BrainEngine {
                 l.link_type, l.context, l.link_source, l.resolution_type,
                 o.slug as origin_slug, o.source_id as origin_source_id, l.origin_field
          FROM links l
-         JOIN pages f ON f.id = l.from_page_id
-         JOIN pages t ON t.id = l.to_page_id
+         JOIN pages f ON f.id = l.from_page_id AND f.deleted_at IS NULL
+         JOIN pages t ON t.id = l.to_page_id AND t.deleted_at IS NULL
          LEFT JOIN pages o ON o.id = l.origin_page_id AND o.source_id = ANY($2::text[])
          WHERE t.slug = $1 AND t.source_id = ANY($2::text[]) AND f.source_id = ANY($2::text[])`,
         [slug, opts.sourceIds]
@@ -2883,8 +3122,8 @@ export class PGLiteEngine implements BrainEngine {
                 l.link_type, l.context, l.link_source, l.resolution_type,
                 o.slug as origin_slug, o.source_id as origin_source_id, l.origin_field
          FROM links l
-         JOIN pages f ON f.id = l.from_page_id
-         JOIN pages t ON t.id = l.to_page_id
+         JOIN pages f ON f.id = l.from_page_id AND f.deleted_at IS NULL
+         JOIN pages t ON t.id = l.to_page_id AND t.deleted_at IS NULL
          LEFT JOIN pages o ON o.id = l.origin_page_id
          WHERE t.slug = $1 AND t.source_id = $2`,
         [slug, opts.sourceId]
@@ -2897,8 +3136,8 @@ export class PGLiteEngine implements BrainEngine {
               l.link_type, l.context, l.link_source, l.resolution_type,
               o.slug as origin_slug, o.source_id as origin_source_id, l.origin_field
        FROM links l
-       JOIN pages f ON f.id = l.from_page_id
-       JOIN pages t ON t.id = l.to_page_id
+       JOIN pages f ON f.id = l.from_page_id AND f.deleted_at IS NULL
+       JOIN pages t ON t.id = l.to_page_id AND t.deleted_at IS NULL
        LEFT JOIN pages o ON o.id = l.origin_page_id
        WHERE t.slug = $1`,
       [slug]
@@ -3719,7 +3958,8 @@ export class PGLiteEngine implements BrainEngine {
       `SELECT worth_processing, reasons, judged_at,
               score, content_type, segments, entities, model, triage_version
        FROM dream_verdicts
-       WHERE file_path = $1 AND content_hash = $2`,
+       WHERE file_path = $1 AND content_hash = $2
+         AND (expires_at IS NULL OR expires_at > now())`,
       [filePath, contentHash]
     );
     if (result.rows.length === 0) return null;
@@ -3740,8 +3980,10 @@ export class PGLiteEngine implements BrainEngine {
   async putDreamVerdict(filePath: string, contentHash: string, verdict: DreamVerdictInput): Promise<void> {
     await this.db.query(
       `INSERT INTO dream_verdicts (file_path, content_hash, worth_processing, reasons,
-                                   score, content_type, segments, entities, model, triage_version)
-       VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7::jsonb, $8::jsonb, $9, $10)
+                                   score, content_type, segments, entities, model, triage_version,
+                                   expires_at)
+       VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7::jsonb, $8::jsonb, $9, $10,
+               now() + make_interval(secs => $11))
        ON CONFLICT (file_path, content_hash) DO UPDATE SET
          worth_processing = EXCLUDED.worth_processing,
          reasons = EXCLUDED.reasons,
@@ -3751,11 +3993,20 @@ export class PGLiteEngine implements BrainEngine {
          entities = EXCLUDED.entities,
          model = EXCLUDED.model,
          triage_version = EXCLUDED.triage_version,
-         judged_at = now()`,
+         judged_at = now(),
+         expires_at = EXCLUDED.expires_at`,
       [filePath, contentHash, verdict.worth_processing, JSON.stringify(verdict.reasons),
        verdict.score ?? null, verdict.content_type ?? null, JSON.stringify(verdict.segments ?? []),
-       JSON.stringify(verdict.entities ?? []), verdict.model ?? null, verdict.triage_version ?? null]
+       JSON.stringify(verdict.entities ?? []), verdict.model ?? null, verdict.triage_version ?? null,
+       DREAM_VERDICT_TTL_SECONDS]
     );
+  }
+
+  async sweepDreamVerdicts(): Promise<number> {
+    const { rows } = await this.db.query(
+      'DELETE FROM dream_verdicts WHERE expires_at <= now() RETURNING content_hash',
+    );
+    return rows.length;
   }
 
   // ============================================================
@@ -3867,15 +4118,42 @@ export class PGLiteEngine implements BrainEngine {
   async insertFacts(
     rows: Array<NewFact & { row_num: number; source_markdown_slug: string }>,
     ctx: { source_id: string },
-  ): Promise<{ inserted: number; ids: number[] }> {
-    if (rows.length === 0) return { inserted: 0, ids: [] };
+    opts?: {
+      deleteForPageFirst?: {
+        slug: string;
+        excludeSourcePrefixes?: string[];
+        preserveExpiredLegacy?: boolean;
+      };
+    },
+  ): Promise<{ inserted: number; ids: number[]; deleted: number }> {
+    if (rows.length === 0 && !opts?.deleteForPageFirst) {
+      return { inserted: 0, ids: [], deleted: 0 };
+    }
 
     // Single transaction so the v51 partial UNIQUE index can roll back the
     // whole batch on constraint violation. Per-row INSERTs (not multi-row
     // VALUES) keep the embedding-vs-no-embedding branching readable; batch
     // sizes are small (5-30 rows per page in practice) so the loop overhead
     // is negligible vs the embedding compute cost.
+    let deleted = 0;
     const ids = await this.db.transaction(async (tx) => {
+      if (opts?.deleteForPageFirst) {
+        const excluded = (opts.deleteForPageFirst.excludeSourcePrefixes ?? []).map(prefix => `${prefix}%`);
+        const result = await tx.query(
+          `DELETE FROM facts
+            WHERE source_id = $1
+              AND source_markdown_slug = $2
+              AND (cardinality($3::text[]) = 0 OR source NOT LIKE ALL($3::text[]))
+              AND ($4::boolean = false OR expired_at IS NULL)`,
+          [
+            ctx.source_id,
+            opts.deleteForPageFirst.slug,
+            excluded,
+            opts.deleteForPageFirst.preserveExpiredLegacy === true,
+          ],
+        );
+        deleted = result.affectedRows ?? 0;
+      }
       const out: number[] = [];
       for (const input of rows) {
         const validFrom = input.valid_from ?? new Date();
@@ -3940,7 +4218,7 @@ export class PGLiteEngine implements BrainEngine {
       }
       return out;
     });
-    return { inserted: ids.length, ids };
+    return { inserted: ids.length, ids, deleted };
   }
 
   async deleteFactsForPage(slug: string, source_id: string): Promise<{ deleted: number }> {
@@ -4879,50 +5157,35 @@ export class PGLiteEngine implements BrainEngine {
   }
 
   // Stats + health
-  async getStats(): Promise<BrainStats> {
+  async getStats(opts?: { sourceId?: string; sourceIds?: string[] }): Promise<BrainStats> {
+    const scope: string[] | null = opts?.sourceIds ?? (opts?.sourceId ? [opts.sourceId] : null);
     const { rows: [stats] } = await this.db.query(`
       SELECT
-        -- v0.26.5: dashboard stats describe the visible knowledge base, not
-        -- rows waiting in the recycle bin. Keep derived rows aligned with the
-        -- same page visibility boundary until the 72h purge removes them.
-        (SELECT count(*) FROM pages WHERE deleted_at IS NULL) as page_count,
-        (SELECT count(*)
-           FROM content_chunks c
-           JOIN pages p ON p.id = c.page_id
-          WHERE p.deleted_at IS NULL) as chunk_count,
-        (SELECT count(*)
-           FROM content_chunks c
-           JOIN pages p ON p.id = c.page_id
-          WHERE p.deleted_at IS NULL
-            AND c.embedded_at IS NOT NULL) as embedded_count,
-        (SELECT count(*)
-           FROM links l
-           JOIN pages from_page ON from_page.id = l.from_page_id
-                                AND from_page.deleted_at IS NULL
-           JOIN pages to_page ON to_page.id = l.to_page_id
-                              AND to_page.deleted_at IS NULL) as link_count,
-        (SELECT count(DISTINCT t.tag)
-           FROM tags t
-           JOIN pages p ON p.id = t.page_id
-          WHERE p.deleted_at IS NULL) as tag_count,
-        (SELECT count(*)
-           FROM timeline_entries te
-           JOIN pages p ON p.id = te.page_id
-          WHERE p.deleted_at IS NULL) as timeline_entry_count
-    `);
+        (SELECT count(*) FROM pages p
+          WHERE p.deleted_at IS NULL AND ($1::text[] IS NULL OR p.source_id = ANY($1))) AS page_count,
+        (SELECT count(*) FROM content_chunks c JOIN pages p ON p.id = c.page_id
+          WHERE p.deleted_at IS NULL AND ($1::text[] IS NULL OR p.source_id = ANY($1))) AS chunk_count,
+        (SELECT count(*) FROM content_chunks c JOIN pages p ON p.id = c.page_id
+          WHERE p.deleted_at IS NULL AND c.embedded_at IS NOT NULL
+            AND ($1::text[] IS NULL OR p.source_id = ANY($1))) AS embedded_count,
+        (SELECT count(*) FROM links l
+          JOIN pages pf ON pf.id = l.from_page_id AND pf.deleted_at IS NULL
+          JOIN pages pt ON pt.id = l.to_page_id AND pt.deleted_at IS NULL
+          WHERE $1::text[] IS NULL OR (pf.source_id = ANY($1) AND pt.source_id = ANY($1))) AS link_count,
+        (SELECT count(DISTINCT t.tag) FROM tags t JOIN pages p ON p.id = t.page_id
+          WHERE p.deleted_at IS NULL AND ($1::text[] IS NULL OR p.source_id = ANY($1))) AS tag_count,
+        (SELECT count(*) FROM timeline_entries te JOIN pages p ON p.id = te.page_id
+          WHERE p.deleted_at IS NULL AND ($1::text[] IS NULL OR p.source_id = ANY($1))) AS timeline_entry_count
+    `, [scope]);
 
     const { rows: types } = await this.db.query(
-      `SELECT type, count(*)::int as count
-         FROM pages
-        WHERE deleted_at IS NULL
-        GROUP BY type
-        ORDER BY count DESC`
+      `SELECT type, count(*)::int AS count FROM pages p
+        WHERE p.deleted_at IS NULL AND ($1::text[] IS NULL OR p.source_id = ANY($1))
+        GROUP BY type ORDER BY count DESC`,
+      [scope],
     );
     const pages_by_type: Record<string, number> = {};
-    for (const t of types as { type: string; count: number }[]) {
-      pages_by_type[t.type] = t.count;
-    }
-
+    for (const row of types as { type: string; count: number }[]) pages_by_type[row.type] = Number(row.count);
     const s = stats as Record<string, unknown>;
     return {
       page_count: Number(s.page_count),
@@ -4935,51 +5198,54 @@ export class PGLiteEngine implements BrainEngine {
     };
   }
 
-  async getHealth(): Promise<BrainHealth> {
-    // Combined metrics from master (brain_score components: dead_links, link_count,
-    // pages_with_timeline) and v0.10.3 graph layer (link_coverage, timeline_coverage,
-    // most_connected). Both coexist: master's brain_score is the composite
-    // dashboard, v0.10.3 metrics give entity-page-level granularity.
+  async getHealth(opts?: { sourceId?: string; sourceIds?: string[] }): Promise<BrainHealth> {
+    const scope: string[] | null = opts?.sourceIds ?? (opts?.sourceId ? [opts.sourceId] : null);
     const { rows: [h] } = await this.db.query(`
-      WITH entity_pages AS (
-        SELECT id, slug FROM pages WHERE type IN ('person', 'company')
+      WITH scoped_pages AS (
+        SELECT * FROM pages p
+        WHERE p.deleted_at IS NULL AND ($1::text[] IS NULL OR p.source_id = ANY($1))
+      ),
+      entity_pages AS (
+        SELECT id, slug FROM scoped_pages WHERE type IN ('person', 'company')
       )
       SELECT
-        (SELECT count(*) FROM pages) as page_count,
-        (SELECT count(*) FROM content_chunks WHERE embedded_at IS NOT NULL)::float /
-          GREATEST((SELECT count(*) FROM content_chunks), 1)::float as embed_coverage,
-        (SELECT count(*) FROM pages p
-         WHERE p.updated_at < (SELECT MAX(te.created_at) FROM timeline_entries te WHERE te.page_id = p.id)
-        ) as stale_pages,
-        -- Bug 11 — orphan = islanded (no inbound AND no outbound).
-        -- See BrainHealth.orphan_pages docstring; docs updated to match this.
-        (SELECT count(*) FROM pages p
-         WHERE NOT EXISTS (SELECT 1 FROM links l WHERE l.to_page_id = p.id)
-           AND NOT EXISTS (SELECT 1 FROM links l WHERE l.from_page_id = p.id)
-        ) as orphan_pages,
+        (SELECT count(*) FROM scoped_pages) AS page_count,
+        (SELECT count(*) FILTER (WHERE c.embedded_at IS NOT NULL)::float /
+          GREATEST(count(*), 1)::float FROM content_chunks c JOIN scoped_pages p ON p.id = c.page_id) AS embed_coverage,
+        (SELECT count(*) FROM scoped_pages p
+          WHERE p.updated_at < (SELECT MAX(te.created_at) FROM timeline_entries te WHERE te.page_id = p.id)) AS stale_pages,
+        (SELECT count(*) FROM scoped_pages p
+          WHERE NOT EXISTS (SELECT 1 FROM links l JOIN scoped_pages src ON src.id = l.from_page_id WHERE l.to_page_id = p.id)
+            AND NOT EXISTS (SELECT 1 FROM links l JOIN scoped_pages tgt ON tgt.id = l.to_page_id WHERE l.from_page_id = p.id)) AS orphan_pages,
+        (SELECT count(*) FROM links l JOIN scoped_pages src ON src.id = l.from_page_id
+          WHERE NOT EXISTS (SELECT 1 FROM pages p WHERE p.id = l.to_page_id)) AS dead_links,
+        (SELECT count(*) FROM content_chunks c JOIN scoped_pages p ON p.id = c.page_id WHERE c.embedded_at IS NULL) AS missing_embeddings,
         (SELECT count(*) FROM links l
-         WHERE NOT EXISTS (SELECT 1 FROM pages p WHERE p.id = l.to_page_id)
-        ) as dead_links,
-        (SELECT count(*) FROM content_chunks WHERE embedded_at IS NULL) as missing_embeddings,
-        (SELECT count(*) FROM links) as link_count,
-        (SELECT count(DISTINCT page_id) FROM timeline_entries) as pages_with_timeline,
+          JOIN scoped_pages src ON src.id = l.from_page_id
+          JOIN scoped_pages tgt ON tgt.id = l.to_page_id) AS link_count,
+        (SELECT count(DISTINCT te.page_id) FROM timeline_entries te JOIN scoped_pages p ON p.id = te.page_id) AS pages_with_timeline,
         (SELECT count(*) FROM entity_pages e
-         WHERE EXISTS (SELECT 1 FROM links l WHERE l.to_page_id = e.id))::float /
-          GREATEST((SELECT count(*) FROM entity_pages), 1)::float as link_coverage,
+          WHERE EXISTS (SELECT 1 FROM links l JOIN scoped_pages src ON src.id = l.from_page_id WHERE l.to_page_id = e.id))::float /
+          GREATEST((SELECT count(*) FROM entity_pages), 1)::float AS link_coverage,
         (SELECT count(*) FROM entity_pages e
-         WHERE EXISTS (SELECT 1 FROM timeline_entries te WHERE te.page_id = e.id))::float /
-          GREATEST((SELECT count(*) FROM entity_pages), 1)::float as timeline_coverage
-    `);
+          WHERE EXISTS (SELECT 1 FROM timeline_entries te WHERE te.page_id = e.id))::float /
+          GREATEST((SELECT count(*) FROM entity_pages), 1)::float AS timeline_coverage,
+        (SELECT count(*) FROM entity_pages) AS entity_page_count
+    `, [scope]);
 
-    // Top 5 most connected entities by total link count (in + out).
     const { rows: connected } = await this.db.query(`
       SELECT p.slug,
-             (SELECT count(*) FROM links l WHERE l.from_page_id = p.id OR l.to_page_id = p.id)::int as link_count
+        (SELECT count(*) FROM links l
+          WHERE (l.from_page_id = p.id AND ($1::text[] IS NULL OR EXISTS (
+                   SELECT 1 FROM pages far WHERE far.id = l.to_page_id AND far.deleted_at IS NULL AND far.source_id = ANY($1))))
+             OR (l.to_page_id = p.id AND ($1::text[] IS NULL OR EXISTS (
+                   SELECT 1 FROM pages far WHERE far.id = l.from_page_id AND far.deleted_at IS NULL AND far.source_id = ANY($1))))
+        )::int AS link_count
       FROM pages p
-      WHERE p.type IN ('person', 'company')
-      ORDER BY link_count DESC
-      LIMIT 5
-    `);
+      WHERE p.type IN ('person', 'company') AND p.deleted_at IS NULL
+        AND ($1::text[] IS NULL OR p.source_id = ANY($1))
+      ORDER BY link_count DESC LIMIT 5
+    `, [scope]);
 
     const r = h as Record<string, unknown>;
     const pageCount = Number(r.page_count);
@@ -4988,40 +5254,29 @@ export class PGLiteEngine implements BrainEngine {
     const deadLinks = Number(r.dead_links);
     const linkCount = Number(r.link_count);
     const pagesWithTimeline = Number(r.pages_with_timeline);
-
     const linkDensity = pageCount > 0 ? Math.min(linkCount / pageCount, 1) : 0;
     const timelineCoverageDensity = pageCount > 0 ? Math.min(pagesWithTimeline / pageCount, 1) : 0;
-    const noOrphans = pageCount > 0 ? 1 - (orphanPages / pageCount) : 1;
+    const noOrphans = pageCount > 0 ? 1 - orphanPages / pageCount : 1;
     const noDeadLinks = pageCount > 0 ? 1 - Math.min(deadLinks / pageCount, 1) : 1;
-    // Bug 11 — per-component points. Sum equals brainScore by construction
-    // so `doctor` can render a breakdown that adds up to the total.
-    //
-    // v0.37.10.0: empty brains (pageCount === 0) get FULL marks (100/100),
-    // not 0. Semantically an empty brain has no coverage problem to penalize
-    // — there's nothing to embed, nothing to link, nothing to orphan. The
-    // pre-fix "empty = 0" caused fresh-init brains to score as critically
-    // unhealthy on `gbrain doctor`, which was a structural surprise to users
-    // who'd just successfully run init.
     const embedCoverageScore = pageCount === 0 ? 35 : Math.round(embedCoverage * 35);
     const linkDensityScore = pageCount === 0 ? 25 : Math.round(linkDensity * 25);
     const timelineCoverageScore = pageCount === 0 ? 15 : Math.round(timelineCoverageDensity * 15);
     const noOrphansScore = pageCount === 0 ? 15 : Math.round(noOrphans * 15);
     const noDeadLinksScore = pageCount === 0 ? 10 : Math.round(noDeadLinks * 10);
-    const brainScore = embedCoverageScore + linkDensityScore + timelineCoverageScore + noOrphansScore + noDeadLinksScore;
-
     return {
       page_count: pageCount,
       embed_coverage: embedCoverage,
       stale_pages: Number(r.stale_pages),
       orphan_pages: orphanPages,
       missing_embeddings: Number(r.missing_embeddings),
-      brain_score: brainScore,
+      brain_score: embedCoverageScore + linkDensityScore + timelineCoverageScore + noOrphansScore + noDeadLinksScore,
       dead_links: deadLinks,
       link_coverage: Number(r.link_coverage),
       timeline_coverage: Number(r.timeline_coverage),
-      most_connected: (connected as { slug: string; link_count: number }[]).map(c => ({
-        slug: c.slug,
-        link_count: Number(c.link_count),
+      entity_page_count: Number(r.entity_page_count),
+      most_connected: (connected as { slug: string; link_count: number }[]).map(row => ({
+        slug: row.slug,
+        link_count: Number(row.link_count),
       })),
       embed_coverage_score: embedCoverageScore,
       link_density_score: linkDensityScore,
@@ -5030,7 +5285,6 @@ export class PGLiteEngine implements BrainEngine {
       no_dead_links_score: noDeadLinksScore,
     };
   }
-
   // Ingest log
   async logIngest(entry: IngestLogInput): Promise<void> {
     // v0.31.2 (codex P1 #3): source_id threaded so multi-source brains can
@@ -5484,29 +5738,48 @@ export class PGLiteEngine implements BrainEngine {
   // v0.29 — Salience + Anomaly Detection
   // ============================================================
 
-  async batchLoadEmotionalInputs(slugs?: string[]): Promise<EmotionalWeightInputRow[]> {
-    // Two CTEs avoid the N×M cartesian product (codex C4#4).
-    const baseSql = `
-      WITH page_tags AS (
-        SELECT page_id, array_agg(DISTINCT tag) AS tags
-          FROM tags GROUP BY page_id
+  async batchLoadEmotionalInputs(slugs?: string[], opts?: { sourceId?: string }): Promise<EmotionalWeightInputRow[]> {
+    const params: unknown[] = [];
+    const where = ['p.deleted_at IS NULL'];
+    if (slugs) {
+      params.push(slugs);
+      where.push(`p.slug = ANY($${params.length}::text[])`);
+    }
+    if (opts?.sourceId) {
+      params.push(opts.sourceId);
+      where.push(`p.source_id = $${params.length}`);
+    }
+    const sql = `
+      WITH target_pages AS (
+        SELECT p.id, p.slug, p.source_id
+          FROM pages p
+         WHERE ${where.join(' AND ')}
+      ),
+      page_tags AS (
+        SELECT t.page_id, array_agg(DISTINCT t.tag) AS tags
+          FROM tags t
+          INNER JOIN target_pages tp ON tp.id = t.page_id
+         GROUP BY t.page_id
       ),
       page_takes AS (
-        SELECT page_id, json_agg(json_build_object(
-                 'holder', holder, 'weight', weight, 'kind', kind, 'active', active
+        SELECT tk.page_id, json_agg(json_build_object(
+                 'holder', tk.holder, 'weight', tk.weight, 'kind', tk.kind, 'active', tk.active
                )) AS takes
-          FROM takes WHERE active = TRUE GROUP BY page_id
+          FROM takes tk
+          INNER JOIN target_pages tp ON tp.id = tk.page_id
+         WHERE tk.active = TRUE
+         GROUP BY tk.page_id
       )
       SELECT p.slug, p.source_id,
              COALESCE(pt.tags, ARRAY[]::text[]) AS tags,
              COALESCE(pk.takes, '[]'::json) AS takes
-        FROM pages p
-        LEFT JOIN page_tags pt  ON pt.page_id = p.id
+        FROM target_pages p
+        LEFT JOIN page_tags pt ON pt.page_id = p.id
         LEFT JOIN page_takes pk ON pk.page_id = p.id
     `;
-    const { rows } = slugs
-      ? await this.db.query(`${baseSql} WHERE p.slug = ANY($1::text[])`, [slugs])
-      : await this.db.query(baseSql);
+    const { rows } = params.length > 0
+      ? await this.db.query(sql, params)
+      : await this.db.query(sql);
     return (rows as Record<string, unknown>[]).map(r => ({
       slug: String(r.slug),
       source_id: String(r.source_id),

@@ -38,6 +38,8 @@ import { buildPageGenerationsSnapshot, CACHE_GATE_WHERE_CLAUSE } from './query-c
 export const DEFAULT_SIMILARITY_THRESHOLD = 0.92;
 /** Default TTL for cache entries, in seconds. */
 export const DEFAULT_TTL_SECONDS = 3600;
+/** Minimum character-bigram overlap for the query-text safety guard. */
+export const CACHE_TEXT_GUARD_DICE_THRESHOLD = 0.5;
 
 export interface CacheLookupResult {
   hit: boolean;
@@ -94,6 +96,49 @@ function embeddingToPgVector(embedding: Float32Array): string {
   return `[${parts.join(',')}]`;
 }
 
+function normalizeGuardText(text: string): string {
+  return text.normalize('NFKC').toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
+function charBigrams(text: string): Map<string, number> {
+  const grams = new Map<string, number>();
+  const chars = Array.from(text);
+  for (let i = 0; i < chars.length - 1; i++) {
+    if (chars[i] === ' ' || chars[i + 1] === ' ') continue;
+    const gram = chars[i] + chars[i + 1];
+    grams.set(gram, (grams.get(gram) ?? 0) + 1);
+  }
+  return grams;
+}
+
+function bigramDice(a: string, b: string): number {
+  const gramsA = charBigrams(a);
+  const gramsB = charBigrams(b);
+  let sizeA = 0;
+  let sizeB = 0;
+  for (const count of gramsA.values()) sizeA += count;
+  for (const count of gramsB.values()) sizeB += count;
+  if (sizeA === 0 || sizeB === 0) return 0;
+  let intersection = 0;
+  for (const [gram, countA] of gramsA) {
+    const countB = gramsB.get(gram);
+    if (countB) intersection += Math.min(countA, countB);
+  }
+  return (2 * intersection) / (sizeA + sizeB);
+}
+
+/**
+ * Guard semantic-cache candidates against unrelated questions whose query
+ * embeddings happen to be close. NFKC equality covers width/case variants;
+ * character bigrams keep the fallback useful for Chinese without tokenization.
+ */
+export function cacheTextGuard(a: string, b: string): boolean {
+  const normalizedA = normalizeGuardText(a);
+  const normalizedB = normalizeGuardText(b);
+  if (normalizedA === normalizedB) return true;
+  return bigramDice(normalizedA, normalizedB) >= CACHE_TEXT_GUARD_DICE_THRESHOLD;
+}
+
 export class SemanticQueryCache {
   private similarityThreshold: number;
   private ttlSeconds: number;
@@ -126,7 +171,7 @@ export class SemanticQueryCache {
    */
   async lookup(
     queryEmbedding: Float32Array | null,
-    opts: { sourceId?: string; knobsHash?: string } = {},
+    opts: { sourceId?: string; knobsHash?: string; queryText?: string } = {},
   ): Promise<CacheLookupResult> {
     if (!this.enabled || !queryEmbedding || queryEmbedding.length === 0) {
       return { hit: false };
@@ -150,12 +195,11 @@ export class SemanticQueryCache {
       // + qc.page_generations against the live pages table.
       const rows = await this.engine.executeRaw<{
         id: string;
-        results: unknown;
-        meta: unknown;
+        query_text: string;
         distance: number;
         age_seconds: number;
       }>(
-        `SELECT qc.id, qc.results, qc.meta,
+        `SELECT qc.id, qc.query_text,
                 qc.embedding <=> $1::vector AS distance,
                 EXTRACT(EPOCH FROM (now() - qc.created_at))::int AS age_seconds
          FROM query_cache qc
@@ -166,17 +210,29 @@ export class SemanticQueryCache {
            AND qc.created_at + (qc.ttl_seconds || ' seconds')::interval > now()
            AND ${CACHE_GATE_WHERE_CLAUSE}
          ORDER BY qc.embedding <=> $1::vector
-         LIMIT 1`,
+         LIMIT 5`,
         [vec, sourceId, distanceThreshold, knobsHash],
       );
 
       if (rows.length === 0) return { hit: false };
 
-      const row = rows[0];
-      const results = Array.isArray(row.results)
-        ? (row.results as SearchResult[])
-        : safeJsonParse<SearchResult[]>(row.results, []);
-      const meta = safeJsonParse<HybridSearchMeta | undefined>(row.meta, undefined);
+      const row = opts.queryText == null
+        ? rows[0]
+        : rows.find(candidate => cacheTextGuard(opts.queryText!, candidate.query_text ?? ''));
+      if (!row) return { hit: false };
+
+      // Fetch only the selected candidate's heavy JSON payload. A concurrent
+      // prune between the two reads is treated as a normal cache miss.
+      const payloadRows = await this.engine.executeRaw<{ results: unknown; meta: unknown }>(
+        `SELECT results, meta FROM query_cache WHERE id = $1`,
+        [row.id],
+      );
+      if (payloadRows.length === 0) return { hit: false };
+      const payload = payloadRows[0];
+      const results = Array.isArray(payload.results)
+        ? (payload.results as SearchResult[])
+        : safeJsonParse<SearchResult[]>(payload.results, []);
+      const meta = safeJsonParse<HybridSearchMeta | undefined>(payload.meta, undefined);
       const similarity = 1 - row.distance;
 
       // Bump hit_count / last_hit_at \u2014 best-effort.

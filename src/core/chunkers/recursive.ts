@@ -18,6 +18,8 @@
  */
 
 import { countCJKAwareWords, CJK_SENTENCE_DELIMITERS, CJK_CLAUSE_DELIMITERS } from '../cjk.ts';
+import { estimateEmbedTokens, DEFAULT_MAX_CHUNK_TOKENS } from './token-estimate.ts';
+import { safeSplitIndex } from '../text-safe.ts';
 
 /**
  * Markdown chunker version. Folded into the per-page chunker_version column
@@ -48,6 +50,8 @@ export interface ChunkOptions {
   chunkSize?: number;    // target words per chunk (default 300)
   chunkOverlap?: number; // overlap words (default 50)
   maxChars?: number;     // hard cap on any chunk's char length (default 6000)
+  /** Hard cap on estimated embedding tokens; defaults to 2000. */
+  maxTokens?: number;
 }
 
 export interface TextChunk {
@@ -73,6 +77,9 @@ export function chunkText(text: string, opts?: ChunkOptions): TextChunk[] {
   const chunkSize = opts?.chunkSize || 300;
   const chunkOverlap = opts?.chunkOverlap || 50;
   const maxChars = opts?.maxChars || 6000;
+  const maxTokens = opts?.maxTokens && opts.maxTokens > 0
+    ? Math.min(opts.maxTokens, DEFAULT_MAX_CHUNK_TOKENS)
+    : DEFAULT_MAX_CHUNK_TOKENS;
 
   if (!text || text.trim().length === 0) return [];
 
@@ -90,7 +97,7 @@ export function chunkText(text: string, opts?: ChunkOptions): TextChunk[] {
   const wordCount = countWords(stripped);
   if (wordCount <= chunkSize) {
     // Single-chunk path: still apply the maxChars cap.
-    const capped = capByChars(stripped.trim(), maxChars);
+    const capped = capByChars(stripped.trim(), maxChars, maxTokens);
     return capped.map((t, i) => ({ text: t, index: i }));
   }
 
@@ -103,7 +110,7 @@ export function chunkText(text: string, opts?: ChunkOptions): TextChunk[] {
   // exceed 8192 OpenAI embedding tokens at any word count).
   const capped: string[] = [];
   for (const chunk of withOverlap) {
-    capped.push(...capByChars(chunk.trim(), maxChars));
+    capped.push(...capByChars(chunk.trim(), maxChars, maxTokens));
   }
   return capped.map((t, i) => ({ text: t, index: i }));
 }
@@ -119,17 +126,47 @@ export function chunkText(text: string, opts?: ChunkOptions): TextChunk[] {
  * because declared CJK ranges are all BMP; widening to astral Han support
  * is a v0.33+ follow-up that requires Array.from-style codepoint iteration).
  */
-function capByChars(text: string, maxChars: number): string[] {
-  if (text.length <= maxChars) return text.length > 0 ? [text] : [];
-  const overlap = Math.min(500, Math.floor(maxChars / 10));
-  const stride = Math.max(1, maxChars - overlap);
+function capByChars(
+  text: string,
+  maxChars: number,
+  maxTokens: number = DEFAULT_MAX_CHUNK_TOKENS,
+  knownEst?: number,
+): string[] {
+  if (text.length === 0) return [];
+  const est = knownEst ?? probeEmbedTokens(text);
+  const window = est <= maxTokens
+    ? maxChars
+    : Math.max(1, Math.min(maxChars, Math.floor((text.length * maxTokens) / est)));
+  if (text.length <= window) {
+    if (knownEst !== undefined || text.length <= DENSITY_PROBE_CHARS) return [text];
+    const exact = estimateEmbedTokens(text);
+    return exact <= maxTokens ? [text] : capByChars(text, maxChars, maxTokens, exact);
+  }
+  const overlap = Math.min(500, Math.floor(window / 10));
+  const stride = Math.max(1, window - overlap);
   const out: string[] = [];
-  for (let i = 0; i < text.length; i += stride) {
-    const slice = text.slice(i, i + maxChars).trim();
-    if (slice.length > 0) out.push(slice);
-    if (i + maxChars >= text.length) break;
+  let i = 0;
+  while (i < text.length) {
+    const end = safeSplitIndex(text, Math.min(text.length, i + window));
+    const slice = text.slice(i, end).trim();
+    if (slice.length > 0) {
+      const sliceEst = estimateEmbedTokens(slice);
+      if (sliceEst > maxTokens) out.push(...capByChars(slice, maxChars, maxTokens, sliceEst));
+      else out.push(slice);
+    }
+    if (end >= text.length) break;
+    const next = safeSplitIndex(text, Math.min(text.length, i + stride));
+    i = next > i ? next : i + 1;
   }
   return out;
+}
+
+const DENSITY_PROBE_CHARS = 2000;
+
+function probeEmbedTokens(text: string): number {
+  if (text.length <= DENSITY_PROBE_CHARS) return estimateEmbedTokens(text);
+  const head = text.slice(0, safeSplitIndex(text, DENSITY_PROBE_CHARS));
+  return Math.ceil((estimateEmbedTokens(head) * text.length) / head.length);
 }
 
 function recursiveSplit(text: string, level: number, target: number): string[] {

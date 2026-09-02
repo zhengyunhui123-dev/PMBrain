@@ -324,7 +324,8 @@ export function parseCapturedDreamResult(text: string): unknown {
   }
 }
 
-export function resolveRunTimeoutMs(timeoutMs: number | null | undefined): number | null {
+export function resolveRunTimeoutMs(timeoutMs: number | null | undefined, kind?: string): number | null {
+  if (kind === 'embed_stale' && timeoutMs === undefined) return null;
   return timeoutMs === null ? null : timeoutMs ?? 10 * 60 * 1000;
 }
 
@@ -514,7 +515,7 @@ export async function startRun(kind: string, command: string[], cwd: string, hoo
         void finish(code === 0 ? 'completed' : 'failed', code);
       }
     });
-    const effectiveTimeoutMs = resolveRunTimeoutMs(timeoutMs);
+    const effectiveTimeoutMs = resolveRunTimeoutMs(timeoutMs, kind);
     if (effectiveTimeoutMs !== null) {
       timeout = setTimeout(() => {
         if (run.status === 'running') {

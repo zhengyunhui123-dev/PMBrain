@@ -317,7 +317,7 @@ export function splitBody(body: string): { compiled_truth: string; timeline: str
   return { compiled_truth, timeline };
 }
 
-function findTimelineSplitIndex(lines: string[]): number {
+export function findTimelineSplitIndex(lines: string[]): number {
   for (let i = 0; i < lines.length; i++) {
     const trimmed = lines[i].trim();
 

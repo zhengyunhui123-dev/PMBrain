@@ -24,6 +24,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import type { BrainEngine } from '../engine.ts';
 import type { PhaseResult, PhaseError } from '../cycle.ts';
 import { MinionQueue } from '../minions/queue.ts';
+import { DEFAULT_PRIVATE_QUEUE_LEASE_MS } from '../minions/queue.ts';
 import { waitForCompletion, TimeoutError } from '../minions/wait-for-completion.ts';
 import type { MinionJobInput, SubagentHandlerData } from '../minions/types.ts';
 import { loadAllowedSlugPrefixes } from './allowed-slug-prefixes.ts';
@@ -36,19 +37,29 @@ import {
 } from './model-routing.ts';
 import type { ResolvedModel } from '../model-config.ts';
 import { runSubagentsInline } from './inline-drain.ts';
+import { CYCLE_DEADLINE_RESERVE_MS } from './base-phase.ts';
+import { throwIfAborted } from '../abort-check.ts';
 
 export interface PatternsPhaseOpts {
   brainDir: string;
   dryRun: boolean;
+  signal?: AbortSignal;
   yieldDuringPhase?: () => Promise<void>;
+  deadlineAtMs?: number | null;
+  sourceId?: string;
+  privateQueueOwnerJobId?: number | null;
 }
+
+const MIN_CHILD_BUDGET_MS = 2 * 60 * 1000;
 
 export async function runPhasePatterns(
   engine: BrainEngine,
   opts: PatternsPhaseOpts,
 ): Promise<PhaseResult> {
   const start = Date.now();
+  let ownedPrivateQueue: { queue: MinionQueue; name: string } | null = null;
   try {
+    throwIfAborted(opts.signal, '[dream] patterns');
     const config = await loadPatternsConfig(engine);
 
     if (!config.enabled) {
@@ -59,7 +70,7 @@ export async function runPhasePatterns(
     const modelDetails = dreamModelDetails(config.resolvedModel, executionMode);
 
     // Gather reflections within lookback window.
-    const reflections = await gatherReflections(engine, config.lookbackDays);
+    const reflections = await gatherReflections(engine, config.lookbackDays, opts.sourceId);
     if (reflections.length < config.minEvidence) {
       return skipped(
         'insufficient_evidence',
@@ -85,29 +96,58 @@ export async function runPhasePatterns(
 
     const queue = new MinionQueue(engine);
     const childQueueName = `dream-inline-${Date.now()}-${randomUUID().slice(0, 8)}`;
+    ownedPrivateQueue = { queue, name: childQueueName };
+    const privateQueueOwnerToken = randomUUID();
+    const renewPrivateQueueLease = queue.makeThrottledLeaseRenewer(
+      childQueueName,
+      privateQueueOwnerToken,
+      opts.yieldDuringPhase,
+    );
+    const remainingMs = opts.deadlineAtMs == null
+      ? 35 * 60 * 1000
+      : Math.max(0, opts.deadlineAtMs - CYCLE_DEADLINE_RESERVE_MS - Date.now());
+    if (remainingMs < MIN_CHILD_BUDGET_MS) {
+      return skipped('insufficient_cycle_budget', 'patterns deferred: not enough parent job time remains');
+    }
     const data: SubagentHandlerData = {
       prompt: buildPatternsPrompt(reflections, config.minEvidence),
       model: config.resolvedModel.model,
       max_turns: 30,
       allowed_slug_prefixes: allowedSlugPrefixes,
+      ...(opts.sourceId ? { source_id: opts.sourceId } : {}),
     };
     const submitOpts: Partial<MinionJobInput> = {
       max_stalled: 3,
-      timeout_ms: 30 * 60 * 1000,
+      timeout_ms: Math.min(30 * 60 * 1000, remainingMs),
       queue: childQueueName,
+      private_queue_owner_job_id: opts.privateQueueOwnerJobId ?? null,
+      private_queue_owner_token: privateQueueOwnerToken,
+      private_queue_lease_ms: DEFAULT_PRIVATE_QUEUE_LEASE_MS,
     };
     const job = await queue.add('subagent', data as unknown as Record<string, unknown>, submitOpts, {
       allowProtectedSubmit: true,
     });
 
-    await runSubagentsInline(engine, queue, childQueueName, opts.yieldDuringPhase);
+    throwIfAborted(opts.signal, '[dream] patterns');
+    await runSubagentsInline(
+      engine,
+      queue,
+      childQueueName,
+      renewPrivateQueueLease,
+      undefined,
+      undefined,
+      opts.signal,
+    );
 
     let outcome: string;
     try {
       const final = await waitForCompletion(queue, job.id, {
-        timeoutMs: 35 * 60 * 1000,
+        timeoutMs: remainingMs,
         pollMs: 5 * 1000,
+        signal: opts.signal,
+        onPoll: renewPrivateQueueLease,
       });
+      throwIfAborted(opts.signal, '[dream] patterns completion');
       outcome = final.status;
     } catch (e) {
       if (e instanceof TimeoutError) outcome = 'timeout';
@@ -121,10 +161,10 @@ export async function runPhasePatterns(
     // Collect refs the subagent wrote (codex finding #2 — query tool exec rows).
     // v0.32.8: refs carry source_id so reverseWriteRefs targets the right
     // (source, slug) row instead of the first DB match.
-    const writtenRefs = await collectChildPutPageSlugs(engine, [job.id]);
+    const writtenRefs = await collectChildPutPageSlugs(engine, [job.id], opts.sourceId ?? 'default');
 
     // Reverse-write to fs.
-    const reverseWriteCount = await reverseWriteRefs(engine, opts.brainDir, writtenRefs);
+    const reverseWriteCount = await reverseWriteRefs(engine, opts.brainDir, writtenRefs, opts.signal);
 
     return ok(`${writtenRefs.length} pattern page(s) written/updated (${outcome})`, {
       ...modelDetails,
@@ -138,6 +178,18 @@ export async function runPhasePatterns(
     return failed(makeError('InternalError', 'PATTERNS_PHASE_FAIL',
       e instanceof Error ? (e.message || 'patterns phase threw') : String(e)));
   } finally {
+    if (ownedPrivateQueue) {
+      try {
+        await ownedPrivateQueue.queue.reconcilePrivateQueue(
+          ownedPrivateQueue.name,
+          'patterns phase ended',
+        );
+      } catch (cleanupError) {
+        process.stderr.write(
+          `[dream] patterns private-queue cleanup failed: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}\n`,
+        );
+      }
+    }
     void start;
   }
 }
@@ -176,6 +228,7 @@ interface ReflectionRef {
 async function gatherReflections(
   engine: BrainEngine,
   lookbackDays: number,
+  sourceId?: string,
 ): Promise<ReflectionRef[]> {
   const since = new Date(Date.now() - lookbackDays * 24 * 60 * 60 * 1000).toISOString();
   const rows = await engine.executeRaw<{ slug: string; title: string | null; compiled_truth: string | null }>(
@@ -183,9 +236,10 @@ async function gatherReflections(
        FROM pages
       WHERE slug LIKE 'wiki/personal/reflections/%'
         AND updated_at >= $1::timestamptz
+        AND ($2::text IS NULL OR source_id = $2)
       ORDER BY updated_at DESC
       LIMIT 100`,
-    [since],
+    [since, sourceId ?? null],
   );
   return rows.map(r => ({
     slug: r.slug,
@@ -235,6 +289,7 @@ When done, briefly list the pattern slugs you wrote/updated in your final messag
 async function collectChildPutPageSlugs(
   engine: BrainEngine,
   childIds: number[],
+  sourceId: string,
 ): Promise<Array<{ slug: string; source_id: string }>> {
   if (childIds.length === 0) return [];
   // v0.32.8: subagent put_page tool schema doesn't expose source_id (subagents
@@ -255,7 +310,7 @@ async function collectChildPutPageSlugs(
   return rows
     .map(r => r.slug)
     .filter((s): s is string => typeof s === 'string' && s.length > 0)
-    .map(slug => ({ slug, source_id: 'default' }));
+    .map(slug => ({ slug, source_id: sourceId }));
 }
 
 // ── Reverse-write ────────────────────────────────────────────────────
@@ -266,9 +321,11 @@ async function reverseWriteRefs(
   engine: BrainEngine,
   brainDir: string,
   refs: Array<{ slug: string; source_id: string }>,
+  signal?: AbortSignal,
 ): Promise<number> {
   let count = 0;
   for (const { slug, source_id } of refs) {
+    throwIfAborted(signal, '[dream] patterns reverse-write');
     // v0.32.8 F6: guard against malformed source_id (would let join() break
     // out of brainDir). validateSourceId throws on `..`, `/`, etc.
     validateSourceId(source_id);

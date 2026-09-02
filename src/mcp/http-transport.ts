@@ -30,10 +30,12 @@ import type { BrainEngine } from '../core/engine.ts';
 import { buildToolDefs } from './tool-defs.ts';
 import { operations } from '../core/operations.ts';
 import { VERSION } from '../version.ts';
+import { PMBRAIN_MCP_INSTRUCTIONS } from './instructions.ts';
 import { dispatchToolCall } from './dispatch.ts';
 import { buildDefaultLimiters, type RateLimiter } from './rate-limit.ts';
 import { sqlQueryForEngine } from '../core/sql-query.ts';
 import { resolveMainSourceId } from '../core/source-resolver.ts';
+import { clampSurface, filterOpsForSurface } from './surface.ts';
 
 const DEFAULT_BODY_CAP = 1024 * 1024; // 1 MiB
 
@@ -136,7 +138,10 @@ export async function startHttpTransport(opts: HttpTransportOptions) {
   const limiters = opts.limiters || buildDefaultLimiters();
   const bodyCap = envInt('PMBRAIN_HTTP_MAX_BODY_BYTES', DEFAULT_BODY_CAP);
   const corsAllowlist = parseCorsAllowlist();
-  const tools = buildToolDefs(operations);
+  const surface = clampSurface('full');
+  const surfaceOps = filterOpsForSurface(operations, surface);
+  const surfaceAllowedOps = new Set(surfaceOps.map((op) => op.name));
+  const tools = buildToolDefs(surfaceOps);
 
   /**
    * v0.41.3 (T6): single consolidated CORS header builder. Pre-fix there were
@@ -330,6 +335,7 @@ export async function startHttpTransport(opts: HttpTransportOptions) {
               protocolVersion: '2025-03-26',
               serverInfo: { name: 'pmbrain', version: VERSION },
               capabilities: { tools: {} },
+              instructions: PMBRAIN_MCP_INSTRUCTIONS,
             },
             jsonrpc: '2.0',
             id,
@@ -364,6 +370,9 @@ export async function startHttpTransport(opts: HttpTransportOptions) {
           remote: true,
           takesHoldersAllowList: auth.takesHoldersAllowList,
           sourceId: auth.sourceId,
+          allowedOps: surfaceAllowedOps,
+          surface,
+          surfaceCeiling: surface,
         });
         const status = result.isError ? 'error' : 'success';
         logRequest(auth.tokenName!, `tools/call:${toolName}`, status, Date.now() - startedMs);

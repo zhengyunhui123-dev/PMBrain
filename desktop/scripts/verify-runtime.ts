@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { readFileSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { getDesktopRuntimeContract, type DesktopRuntimeContract } from '../src/main/runtime-contract.ts';
 
@@ -9,6 +9,17 @@ const projectRoot = resolve(desktopRoot, '..');
 const runtimeRoot = join(desktopRoot, 'build', 'extraResources', 'pmbrain-runtime');
 const contract = getDesktopRuntimeContract();
 const bunPath = join(runtimeRoot, contract.runtimeExecutableName);
+const schemaPackSource = join(projectRoot, 'src', 'core', 'schema-pack', 'base');
+const bundledSchemaPacks = readdirSync(schemaPackSource).filter(name => name.endsWith('.yaml'));
+if (!bundledSchemaPacks.includes('gbrain-base-v2.yaml')) {
+  throw new Error(`Source schema pack directory is missing gbrain-base-v2.yaml: ${schemaPackSource}`);
+}
+const missingSchemaPacks = bundledSchemaPacks
+  .map(name => join(runtimeRoot, 'base', name))
+  .filter(path => !existsSync(path) || statSync(path).size === 0);
+if (missingSchemaPacks.length > 0) {
+  throw new Error(`Sidecar runtime is missing bundled schema packs:\n- ${missingSchemaPacks.join('\n- ')}`);
+}
 const manifest = JSON.parse(readFileSync(join(runtimeRoot, 'runtime-manifest.json'), 'utf8')) as Partial<DesktopRuntimeContract>;
 
 for (const [key, expected] of Object.entries(contract)) {

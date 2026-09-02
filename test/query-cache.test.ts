@@ -17,7 +17,7 @@
 
 import { describe, test, expect, beforeAll, afterAll, beforeEach } from 'bun:test';
 import { PGLiteEngine } from '../src/core/pglite-engine.ts';
-import { SemanticQueryCache, cacheRowId } from '../src/core/search/query-cache.ts';
+import { SemanticQueryCache, cacheRowId, cacheTextGuard } from '../src/core/search/query-cache.ts';
 import { configureGateway, resetGateway } from '../src/core/ai/gateway.ts';
 import type { SearchResult, HybridSearchMeta } from '../src/core/types.ts';
 
@@ -135,6 +135,22 @@ describe('cacheRowId', () => {
   });
 });
 
+describe('cacheTextGuard', () => {
+  test('normalizes case, width and whitespace for equivalent queries', () => {
+    expect(cacheTextGuard('What  is\tFoo ', 'what is foo')).toBe(true);
+    expect(cacheTextGuard('ｗｈａｔ ｉｓ ｆｏｏ', 'what is foo')).toBe(true);
+  });
+
+  test('rejects unrelated English and CJK questions', () => {
+    expect(cacheTextGuard('quarterly revenue projections', 'kimchi fried rice recipe')).toBe(false);
+    expect(cacheTextGuard('项目预算是多少', '今天成都天气如何')).toBe(false);
+  });
+
+  test('allows close wording with meaningful bigram overlap', () => {
+    expect(cacheTextGuard('项目预算是多少', '项目预算多少')).toBe(true);
+  });
+});
+
 describe('SemanticQueryCache \u2014 store + lookup', () => {
   test('roundtrip: exact embedding match returns a hit', async () => {
     const cache = new SemanticQueryCache(engine);
@@ -176,6 +192,28 @@ describe('SemanticQueryCache \u2014 store + lookup', () => {
     const b = makeOrthogonalEmbedding(2);
     await cache.store('q1', a, [makeResult('a')], META);
     const hit = await cache.lookup(b);
+    expect(hit.hit).toBe(false);
+  });
+
+  test('text guard skips a closer unrelated query and serves a matching candidate', async () => {
+    const cache = new SemanticQueryCache(engine);
+    const queryEmbedding = makeEmbedding(300);
+    const matchingEmbedding = new Float32Array(queryEmbedding);
+    matchingEmbedding[0] += 0.002;
+
+    await cache.store('今天成都天气如何', queryEmbedding, [makeResult('wrong')], META);
+    await cache.store('项目预算多少', matchingEmbedding, [makeResult('right')], META);
+
+    const hit = await cache.lookup(queryEmbedding, { queryText: '项目预算是多少' });
+    expect(hit.hit).toBe(true);
+    expect(hit.results?.[0]?.slug).toBe('right');
+  });
+
+  test('text guard returns a miss when all high-cosine candidates ask different questions', async () => {
+    const cache = new SemanticQueryCache(engine);
+    const emb = makeEmbedding(301);
+    await cache.store('今天成都天气如何', emb, [makeResult('wrong')], META);
+    const hit = await cache.lookup(emb, { queryText: '项目预算是多少' });
     expect(hit.hit).toBe(false);
   });
 });

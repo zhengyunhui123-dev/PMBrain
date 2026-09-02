@@ -1,3 +1,4 @@
+export * from './advisor.ts';
 export * from './brain.ts';
 export * from './common.ts';
 export * from './dream.ts';

@@ -36,7 +36,8 @@ export interface DreamRunProgressView {
 function rootPhase(raw: string): string | null {
   const withoutCycle = raw.startsWith('cycle.') ? raw.slice('cycle.'.length) : raw;
   const candidate = withoutCycle.split('.')[0] ?? '';
-  return candidate in PHASE_LABELS ? candidate : null;
+  const mapped = candidate === 'import' ? 'sync' : candidate;
+  return mapped in PHASE_LABELS ? mapped : null;
 }
 
 function pageHeartbeat(note: string): string {
@@ -103,7 +104,7 @@ export function describeDreamRunProgress(run: ConsoleRun): DreamRunProgressView 
     const phaseIndex = run.command.indexOf('--phase');
     phase = rootPhase(phaseIndex >= 0 ? run.command[phaseIndex + 1] ?? '' : 'lint') ?? 'lint';
   }
-  if (pct === null && done !== null && total && total > 0) pct = Math.min(100, Math.round((done / total) * 100));
+  if (done !== null && total && total > 0) pct = Math.min(100, Math.round((done / total) * 100));
   const detail = done !== null && total !== null
     ? `${done} / ${total} 页${pct !== null ? ` (${pct}%)` : ''}`
     : done !== null

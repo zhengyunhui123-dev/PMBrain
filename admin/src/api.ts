@@ -19,8 +19,12 @@ import {
   LlmStatusResponseSchema,
   SetDefaultSourceResponseSchema,
   SourceAddResponseSchema,
+  AdvisorAdminResponseSchema,
+  AdvisorApplyResponseSchema,
 } from '../../shared/contracts/index.ts';
 import type {
+  AdvisorAdminResponse,
+  AdvisorApplyResponse,
   BrainOverviewResponse,
   BrainPageChunksResponse,
   BrainFactDetailResponse,
@@ -122,6 +126,12 @@ export const api = {
     undefined,
     BrainOverviewResponseSchema,
   ),
+  advisor: () => apiFetch<AdvisorAdminResponse>('/admin/api/advisor', undefined, AdvisorAdminResponseSchema),
+  applyAdvisor: (dispatchId: string) => apiFetch<AdvisorApplyResponse>(
+    '/admin/api/advisor/apply',
+    { method: 'POST', body: JSON.stringify({ dispatch_id: dispatchId }) },
+    AdvisorApplyResponseSchema,
+  ),
   theme: () => apiFetch('/admin/api/theme'),
   docs: () => apiFetch('/admin/api/docs'),
   brainPages: (qs = '') => apiFetch<BrainPagesResponse>(`/admin/api/brain/pages${qs}`, undefined, BrainPagesResponseSchema),
@@ -177,7 +187,20 @@ export const api = {
   runs: () => apiFetch('/admin/api/runs'),
   run: (id: string) => apiFetch(`/admin/api/runs/${encodeURIComponent(id)}`),
   cancelRun: (id: string) => apiFetch(`/admin/api/runs/${encodeURIComponent(id)}/cancel`, { method: 'POST' }),
-  startActionRun: (action: string) => apiFetch('/admin/api/runs/action', { method: 'POST', body: JSON.stringify({ action }) }),
+  startActionRun: (action: string, extra?: { catchUp?: boolean; forceReembed?: boolean }) =>
+    apiFetch('/admin/api/runs/action', { method: 'POST', body: JSON.stringify({ action, ...extra }) }),
+  searchIndexHealth: () => apiFetch<{
+    ok: boolean;
+    engine: string;
+    repairable?: boolean;
+    busy?: boolean;
+    message?: string;
+  }>('/admin/api/search-index-health'),
+  repairSearchIndex: () => apiFetch<{
+    status: 'ok' | 'repaired' | 'failed' | 'database_unusable';
+    rebuilt: string[];
+    message: string;
+  }>('/admin/api/search-index-repair', { method: 'POST' }),
   taskCenter: () => apiFetch('/admin/api/task-center'),
   terminatePgliteOwner: (pid: number) => apiFetch('/admin/api/pglite-owner/terminate', {
     method: 'POST',

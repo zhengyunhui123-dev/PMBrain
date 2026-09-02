@@ -31,14 +31,14 @@ describe('classifyPgliteInitError', () => {
     expect(classifyPgliteInitError(msg)).toBe('bunfs');
   });
 
-  test('macos-26-3 verdict for the existing #223 signature', () => {
+  test('the existing #223 signature routes to guarded WAL repair', () => {
     const msg = 'abort() called from wasm runtime on macOS 26.3 build';
-    expect(classifyPgliteInitError(msg)).toBe('macos-26-3');
+    expect(classifyPgliteInitError(msg)).toBe('wasm-abort');
   });
 
   test('Windows Aborted() does not route to the macOS hint', () => {
     const msg = 'Aborted(). Build with -sASSERTIONS for more info.';
-    expect(classifyPgliteInitError(msg, 'win32')).toBe('windows-aborted');
+    expect(classifyPgliteInitError(msg, 'win32')).toBe('wasm-abort');
   });
 
   test('unknown verdict for generic / unrecognized errors', () => {
@@ -100,6 +100,14 @@ describe('buildPgliteInitErrorMessage — hint routing', () => {
     expect(msg).not.toContain('macOS 26.3');
   });
 
+  test('wasm-abort verdict explains guarded WAL recovery', () => {
+    const msg = buildPgliteInitErrorMessage('wasm-abort', original, 'win32', { repair: 'failed-restored' });
+    expect(msg).toContain('WAL/checkpoint');
+    expect(msg).toContain('原 WAL 已恢复');
+    expect(msg).toContain(original);
+    expect(msg).toContain('数据库本身异常，需要先修复数据库或恢复备份。');
+  });
+
 
   test('corrupt verdict stops automatic retries and protects the original database', () => {
     const msg = buildPgliteInitErrorMessage('corrupt', original, 'win32');
@@ -123,7 +131,7 @@ describe('buildPgliteInitErrorMessage — hint routing', () => {
   });
 
   test('all verdicts produce the canonical header line', () => {
-    for (const v of ['bunfs', 'windows-aborted', 'macos-26-3', 'permission', 'corrupt', 'unknown'] as const) {
+    for (const v of ['bunfs', 'wasm-abort', 'windows-aborted', 'macos-26-3', 'permission', 'corrupt', 'unknown'] as const) {
       const msg = buildPgliteInitErrorMessage(v, original);
       expect(msg.startsWith('PGLite failed to initialize its WASM runtime.')).toBe(true);
     }

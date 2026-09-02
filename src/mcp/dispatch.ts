@@ -28,6 +28,10 @@ export interface ToolResult {
 }
 
 export interface DispatchOpts {
+  /** Fail-closed call allow-set paired with the advertised MCP surface. */
+  allowedOps?: ReadonlySet<string>;
+  surface?: 'verbs' | 'starter' | 'full';
+  surfaceCeiling?: 'verbs' | 'starter' | 'full';
   /** Defaults to true (remote/untrusted). Local CLI callers (`gbrain call`) pass false. */
   remote?: boolean;
   /** Override the default stderr logger (e.g. CLI uses console.* directly). */
@@ -261,6 +265,8 @@ export function buildOperationContext(
     // this fallback covers code paths that historically passed undefined.
     sourceId: opts.sourceId ?? 'default',
     auth: opts.auth,
+    surface: opts.surface,
+    surfaceCeiling: opts.surfaceCeiling,
   };
 }
 
@@ -283,6 +289,12 @@ export async function dispatchToolCall(
     // plain `Error: ...` string here breaks the contract on every
     // unknown-op path and the resulting test failure looked like a
     // transport bug.
+    return {
+      content: [{ type: 'text', text: JSON.stringify({ error: 'unknown_tool', message: `Unknown tool: ${name}` }, null, 2) }],
+      isError: true,
+    };
+  }
+  if (opts.allowedOps && !opts.allowedOps.has(name)) {
     return {
       content: [{ type: 'text', text: JSON.stringify({ error: 'unknown_tool', message: `Unknown tool: ${name}` }, null, 2) }],
       isError: true,

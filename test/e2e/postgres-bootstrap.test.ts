@@ -87,6 +87,46 @@ describe.skipIf(skip)('PostgresEngine forward-reference bootstrap (E2E)', () => 
     expect(srcCheck).toHaveLength(1);
   });
 
+  test('Desktop 1.1.49 schema 119 lineage upgrades the complete private queue contract', async () => {
+    await engine.initSchema();
+    const conn = (engine as any).sql;
+    await conn.unsafe(`
+      DROP INDEX IF EXISTS idx_minion_jobs_private_queue_recovery;
+      DROP INDEX IF EXISTS idx_minion_jobs_private_queue_owner;
+      ALTER TABLE minion_jobs DROP COLUMN IF EXISTS private_queue_owner_job_id CASCADE;
+      ALTER TABLE minion_jobs DROP COLUMN IF EXISTS private_queue_owner_token;
+      ALTER TABLE minion_jobs DROP COLUMN IF EXISTS private_queue_lease_until;
+    `);
+    await engine.setConfig('version', '119');
+
+    await engine.initSchema();
+
+    expect(await engine.getConfig('version')).toBe(String(LATEST_VERSION));
+    const columns = await conn`
+      SELECT column_name FROM information_schema.columns
+       WHERE table_schema = current_schema()
+         AND table_name = 'minion_jobs'
+         AND column_name IN (
+           'private_queue_owner_job_id',
+           'private_queue_owner_token',
+           'private_queue_lease_until'
+         )
+       ORDER BY column_name
+    `;
+    expect(columns.map((row: { column_name: string }) => row.column_name)).toEqual([
+      'private_queue_lease_until',
+      'private_queue_owner_job_id',
+      'private_queue_owner_token',
+    ]);
+    const constraints = await conn`
+      SELECT 1 FROM pg_constraint
+       WHERE conrelid = 'minion_jobs'::regclass
+         AND contype = 'f'
+         AND pg_get_constraintdef(oid) LIKE 'FOREIGN KEY (private_queue_owner_job_id)%'
+    `;
+    expect(constraints).toHaveLength(1);
+  });
+
   test('PostgresEngine.initSchema is idempotent on a brain already at LATEST', async () => {
     // Fresh-LATEST brain. Calling initSchema again must not error and must
     // not regress the version.

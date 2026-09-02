@@ -55,6 +55,7 @@ import {
 import { parseMarkdown, splitBody, serializeMarkdown } from '../markdown.ts';
 import { tryAcquireDbLock, syncLockId, type DbLockHandle } from '../db-lock.ts';
 import { logPhantomEvent, type PhantomOutcome } from '../facts/phantom-audit.ts';
+import { isAborted } from '../abort-check.ts';
 
 /** Tagged-union outcome of a single phantom-redirect attempt. */
 export type RedirectOutcome =
@@ -206,10 +207,12 @@ function computePageContentHash(parsed: {
 async function acquireLockWithRetry(
   engine: BrainEngine,
   lockId: string,
+  signal?: AbortSignal,
 ): Promise<DbLockHandle | null> {
   const deadline = Date.now() + LOCK_TOTAL_TIMEOUT_MS;
   let handle = await tryAcquireDbLock(engine, lockId, LOCK_TTL_MINUTES);
   while (!handle) {
+    if (isAborted(signal)) return null;
     if (Date.now() >= deadline) return null;
     await new Promise((resolve) => setTimeout(resolve, LOCK_RETRY_INTERVAL_MS));
     handle = await tryAcquireDbLock(engine, lockId, LOCK_TTL_MINUTES);
@@ -518,6 +521,7 @@ export async function runPhantomRedirectPass(
   brainDir: string,
   sourceId: string,
   dryRun: boolean,
+  signal?: AbortSignal,
 ): Promise<PhantomPassResult> {
   const result = emptyPhantomPassResult();
   const limitRaw = process.env.GBRAIN_PHANTOM_REDIRECT_LIMIT;
@@ -531,7 +535,7 @@ export async function runPhantomRedirectPass(
   // contention; we loop with 1s backoff up to 30s total.
   // v0.40 D16: per-source lock matching performSync's posture. Phantom + same-
   // source sync still serialize; cross-source parallel sync proceeds unblocked.
-  const lock = await acquireLockWithRetry(engine, syncLockId(sourceId));
+  const lock = await acquireLockWithRetry(engine, syncLockId(sourceId), signal);
   if (!lock) {
     logPhantomEvent({ outcome: 'pass_skipped_lock_busy', source_id: sourceId });
     result.lock_busy = true;
@@ -554,6 +558,7 @@ export async function runPhantomRedirectPass(
 
     const touchedSet = new Set<string>();
     for (let i = 0; i < Math.min(rows.length, limit); i++) {
+      if (isAborted(signal)) break;
       const slug = rows[i].slug;
       const page = await engine.getPage(slug, { sourceId });
       if (!page) continue;

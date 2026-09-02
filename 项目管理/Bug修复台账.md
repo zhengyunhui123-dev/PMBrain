@@ -1,5 +1,166 @@
 # Bug 修复台账
 
+## 2026-09-02 PMBrain 1.3.35 修复连续版本更新后的 CI 发布门禁
+
+- 时间：2026-09-02
+- 版本号：PMBrain 1.3.35；PMBrain Desktop 1.1.67
+- 标题：旧向量兼容测试适配实际库维度，并同步 Admin 生产资源
+- 描述：连续更新到 1.3.34 后，schema 121 兼容测试仍写死 1536 维向量，在 CI 的 1280 维测试库中于迁移前插入失败；同时 Admin 源码已更新但生产资源和发布指纹未重新生成。现让测试按当前测试库实际配置维度构造旧向量，继续严格验证历史向量保留且 NULL receipt 不回填；同步重建并提交 Admin 生产资源。未修改迁移、数据库业务逻辑或用户数据。
+- 是否完成：是
+- 最终结果：schema 121 在 CI 同款 1280 维环境 2/2、HNSW/GIN 真实 PGLite 回归 17/17、版本与发布说明契约 7/7、统一校验 39/39、GitHub Test 本地预演 229/229 通过；Admin 生产资源与发布指纹已同步。GitHub 精确 SHA 工作流在提交后复验。未执行 `bun run build:win`，未连接或修改用户真实数据库。
+
+## 2026-09-02 PMBrain 1.3.34 快速维护同步不再空等「返回页数」
+
+- 时间：2026-09-02
+- 版本号：PMBrain 1.3.34；PMBrain Desktop 1.1.66
+- 标题：任务中心同步阶段显示真实导入进度，导入后核对不再静默卡住
+- 描述：全量导入 531 页已经完成，但任务中心仍显示「内容同步 / 正在等待本阶段返回页数」。原因是进度解析只认 `cycle.sync`，把 `import.files` 的 613 页进度丢掉了；导入结束后核对已有页面也没有心跳。现将导入进度映射到内容同步，核对阶段输出扫描/删除进度；核对时若撞上 GIN 损坏则修复或立刻停止，不再一条条吞错拖很久。80 个 frontmatter slug 不一致仍按原账本自动跳过，不改用户原文。
+- 是否完成：是
+- 最终结果：任务进度解析 4/4，发布说明契约通过。未执行 `bun run build:win`，未连接或修改用户真实数据库。当前安装版任务中心仍会显示旧文案，需重新打包后才会显示导入页数。
+
+
+- 时间：2026-09-02
+- 版本号：PMBrain 1.3.33；PMBrain Desktop 1.1.65
+- 标题：GIN 修复失败后提供「重建搜索索引」按钮，并修正过严的搜索验证
+- 描述：快速维护撞上搜索索引损坏时，上一版只报失败并停写，用户没有可点的修复入口。现于知识整理结果和总体概览提供「重建搜索索引」：只按原定义重建 GIN，不删知识页和原始文件；验证改为用真实标题搜索，失败会带上原因。多 Source 快速维护在索引修复失败后不再继续写后续 Source。
+- 是否完成：是
+- 最终结果：GIN 修复与 Dream GUI 定向 56/56 通过，含真实 PGLite 重建、失败不得报成功、缺失索引可按 schema 回建，以及「重建搜索索引」按钮契约。未执行 `bun run build:win`，未连接或修改用户真实数据库。未在浏览器里点过最新源码管理台，因为当前没有可用的浏览器自动化，且不应打开用户正在使用的安装版。
+
+## 2026-09-02 PMBrain 1.3.32 搜索索引损坏时只安全重建 GIN，不再整库恢复或跳过知识
+
+- 时间：2026-09-02
+- 版本号：PMBrain 1.3.32；PMBrain Desktop 1.1.64
+- 标题：PGLite GIN 损坏改为动态列出索引、按原定义 DROP 后重建，并用真实搜索验证
+- 描述：确认数据库可打开且只是 GIN 搜索索引损坏时，不再恢复整个数据库，也不删除知识数据。启动和导入/extract 撞上 `right sibling of GIN page is of different type` / `GIN page is of different type` 后先停止后续 Quick Maintenance 与 embed 写入；按当前库里实际存在的全部 GIN 索引保存定义、DROP 再 CREATE；重建后必须真实搜索命中才显示「搜索索引修复完成」。数据库打不开或 WAL 修复失败则不重建索引，提示「数据库本身异常，需要先修复数据库或恢复备份。」修复失败不得假装成功，也不得靠禁用全文搜索、跳过页面或吞错误绕过。
+- 是否完成：是
+- 最终结果：GIN 修复定向 11/11（含真实 PGLite：重建前后知识数量和正文 hash 一致、搜索恢复、CREATE 失败不得报成功），HNSW/Quick Maintenance 23/23，桌面 sidecar 契约 31/31，根项目与 Desktop TypeScript、版本同步通过。未执行 `bun run build:win`，未连接或修改用户真实数据库。
+
+## 2026-09-02 PMBrain 1.3.31 修复超 2000 维向量库升级时 HNSW 启动失败
+
+- 时间：2026-09-02
+- 版本号：PMBrain 1.3.31；PMBrain Desktop 1.1.63
+- 标题：旧库向量列超过 pgvector HNSW 2000 维上限时，升级不再因建索引失败而无法启动
+- 描述：1.1.46 升到 1.1.62 时 Sidecar 回放 schema，用配置默认宽度（常为 1280/1536）决定是否创建 `idx_chunks_embedding` HNSW。已有库的 `content_chunks.embedding` 可能是 2048/4096 维，pgvector 对 HNSW 硬限制 2000 维，于是报 `column cannot have more than 2000 dimensions for hnsw index` 并中止启动。现升级前读取真实列宽，超限则跳过 HNSW、保留精确扫描；若仍撞上该错误也改为警告后继续迁移。不修改、清空或重建用户向量、知识页、Wiki 和原始资料。
+- 是否完成：是
+- 最终结果：HNSW 升级守卫与 schema 模板定向 32/32，其中 PGLite 在已有 `vector(2048)` 库上完整跑完 schema 122 迁移且不创建超限索引；根项目 TypeScript 通过。未执行 `bun run build:win`，未连接或修改用户真实数据库。
+
+## 2026-09-02 PMBrain 1.3.30 修复快速维护 extract 后无进度并重建损坏 GIN
+
+- 时间：2026-09-02
+- 版本号：PMBrain 1.3.30；PMBrain Desktop 1.1.62
+- 标题：快速维护不再在 extract 后静默卡住，PGLite GIN 损坏会重建后重试
+- 描述：更新后 Git 扫描已通过，但 Source default 在 HEAD `ce24e03e` 上仍走全量导入 2255 个文件。613 个失败里 535 个是 PGLite `right sibling of GIN page is of different type`（知识页更新会维护 `search_vector` GIN），78 个是 frontmatter slug 与路径不一致。失败门闩因此不推进 `last_commit`，下次又整库重导。extract 4 页后历史关系补抽被 `quiet: true` 关掉进度，看起来像卡住。现将 GIN 损坏归为 `DB_INDEX_CORRUPT` 基础设施错误，导入和 stale extract 首次遇到时 REINDEX 后重试该文件/批次；`--progress-json` 下补抽打出 `extract.stale` 进度。78 个 slug 不一致仍按原账本三次后自动跳过，不改用户知识页和原始资料。
+- 是否完成：是
+- 最终结果：GIN 分类/重建与 catch-up 进度定向 25/25，sync 失败账本 59/59，根项目 TypeScript 通过。未执行 `bun run build:win`，未连接或修改用户真实数据库。
+
+## 2026-09-02 PMBrain 1.3.29 修复深度整理卡在权重计算
+
+- 时间：2026-09-02
+- 版本号：PMBrain 1.3.29；PMBrain Desktop 1.1.61
+- 标题：Full Dream 的 `recompute_emotional_weight` 不再因 PGLite 全表聚合和整批 UPDATE 而无进度卡住
+- 描述：与快速维护卡在 Git 扫描不是同一处。extract 已正常跑完 2110 页后，深度整理停在 `cycle.recompute_emotional_weight`。该阶段是纯数据库、无 LLM；原先 `batchLoadEmotionalInputs` 先把整个 tags/takes 表聚完再过滤，`setEmotionalWeightBatch` 又对全部页做一次 `UPDATE FROM unnest`。PGLite 文件库上这两步会长时间无输出。现改为只聚合目标页、按 500 页分批写入，并增加 `recompute_emotional_weight.load` / `write` 的 start/finish 进度。未扫描、修改、回填或重建用户知识、关系、向量、Wiki、原始资料和数据库。
+- 是否完成：是
+- 最终结果：定向权重/进度/PGLite 回归 30/30 通过，1000 页回填约 300ms，根项目 TypeScript 通过。未执行 `bun run build:win`，未连接或修改用户真实数据库。
+
+## 2026-09-02 PMBrain 1.3.28 修复快速维护卡在 sync.detect_head
+
+- 时间：2026-09-02
+- 版本号：PMBrain 1.3.28；PMBrain Desktop 1.1.60
+- 标题：快速维护同步阶段不再因 Windows Git 工作区扫描和 tar 展开而卡住
+- 描述：安装版更新后 `dream --preset quick` 在 lint/backlinks 完成后停在 `sync.detect_head`，并打出 `.obsidian/workspace.json` 的 CRLF 警告。根因是同步为了只读 Git HEAD，每次都会跑 `git diff --name-status -M HEAD` 加全量未跟踪扫描，随后用 `git archive` + `tar` 展开整个仓库。Windows 上 autocrlf、重命名检测和大库 tar 会长时间无进度。现改为 `git status --porcelain=v1` 检查未提交文件；导入已提交内容时用独立 work-tree 的 `git checkout`，增量只取出要导入的文件。未扫描、修改、回填或重建用户知识、关系、向量、Wiki、原始资料和数据库。
+- 是否完成：是
+- 最终结果：同步仍只读取 Git HEAD，未提交内容只提示不入库。定向测试 `test/sync.test.ts`、`test/sync-committed-contract.test.ts`、`test/quick-maintenance.test.ts` 共 89/89 通过，根项目 TypeScript 通过。未执行 `bun run build:win`，未连接或修改用户真实数据库。
+
+## 2026-09-01 PMBrain 1.3.27 修复 Advisor 孤立知识动作与 Windows 任务退出
+
+- 时间：2026-09-01
+- 版本号：PMBrain 1.3.27；PMBrain Desktop 1.1.59
+- 标题：对齐 GBrain 孤立知识只读语义，并修复向量切换等待和打包 import 退出
+- 描述：最新 GBrain 0.47.9.0（commit `81d01622c`）的 `orphans` 与 Dream orphans 阶段只扫描和报告；关系创建由 `extract links`、`--by-mention`、`add_link` 及 maintain Skill 在有证据时分别完成，并不存在 Advisor 一键自动修复孤立关系。PMBrain 首页此前把 `dream --phase orphans` 标成“整理关系”，现改为“查看孤立知识”并进入知识图谱孤立视图，不自动写关系；同时修复 Desktop 向量模型切换后 Sidecar 重启覆盖选择状态造成的等待死锁，以及 Windows 打包 Bun 在 import 完成后无法可靠退出的问题。未扫描、修改、回填或重建用户知识、关系、向量、Wiki、原始资料和数据库。
+- 是否完成：是
+- 最终结果：Advisor 行为与 GBrain 只读 orphans 语义一致；已有明确 WikiLink、Markdown、See Also、frontmatter 和实体提及的关系仍由现有 extract/add_link 链路处理。远端真实 UI 复验进一步发现模型维度探测完成后可能冻结在 Windows PGLite WASM 关闭阶段，且新库迁移过程遗留的 ambient exitCode 会把已成功的探测误报为失败；现把已完成的 models 一次性子进程纳入同一跳过关闭契约，并由 CLI 明确传递成功 0 / 失败 1，不再继承运行时残留状态。定向 Advisor、Desktop 和 Windows 打包 import 回归已通过；统一校验和 GitHub 精确 SHA CI 结果在提交后复验。未执行 `bun run build:win`，未连接或修改用户真实数据库。
+
+## 2026-09-01 PMBrain 1.3.26 修复向量切换版本的 CI 发布门禁
+
+- 时间：2026-09-01
+- 版本号：PMBrain 1.3.26；PMBrain Desktop 1.1.58
+- 标题：同步新向量重建交互的测试契约、Windows 真实旅程与 Admin 发布产物
+- 描述：1.3.25 / Desktop 1.1.57 已把模型切换改为用户选择“稍后处理”或“继续等待”，但旧回归仍要求 Desktop 直接执行 `--force-reembed`，Windows 真实 UI 旅程也没有处理新增选择按钮；同时 Admin 源码变更后未提交对应生产资源，导致 Test、Core User Journeys、Desktop runtime 和 verify 门禁失败。现将选择协调器从 Desktop 入口抽为独立模块，保持入口编排边界；测试锁定“仅明确选择继续后提交 forceReembed 后台任务”，Windows 旅程显式点击继续等待；PGLite 结构测试改为当前受保护 WAL 自愈契约，不恢复过期的固定 issue 提示。不修改、扫描、迁移或重建用户知识、向量、Wiki、原始资料和数据库。
+- 是否完成：是
+- 最终结果：CI 红项对应的根项目定向回归 120/120、Desktop 定向回归 26/26、根项目与 Desktop TypeScript 均通过；Admin 生产资源已重建，统一 verify 39/39、GitHub Test 本地预演 228/228 通过。GitHub 精确 SHA 结果由本次提交继续复验。未执行 `bun run build:win`，未连接或修改用户真实数据库。
+
+## 2026-09-01 PMBrain 1.3.24 安装包补齐内置 Schema Pack
+
+- 时间：2026-09-01
+- 版本号：PMBrain 1.3.24；PMBrain Desktop 1.1.56
+- 标题：桌面安装包打入 `src/core/schema-pack/base/` 全部内置 YAML，缺少 gbrain-base-v2 则打包失败
+- 描述：安装版管理台健康卡片报 `The configured schema pack "gbrain-base-v2" could not be resolved.`。Sidecar 用 `bun build` 打成单文件后，loader 在运行时目录的 `base/` 查找 YAML，但构建只拷了 skills/recipes/templates，没拷 Schema Pack。Dream 的类型、可抽取规则和 Advisor 都依赖这套内置 Pack。现 sidecar 构建复制全部 `*.yaml`，并在 sidecar 旁和 bun.exe 旁查找；`build:sidecar`、`verify:runtime`、`verify:package` 任一缺少 `gbrain-base-v2.yaml` 即失败。不改用户知识、向量、Wiki 或原始资料。
+- 是否完成：是
+- 最终结果：gbrain-base-v2 从内置 YAML 加载、4 个 lens pack、load-active 10/10、桌面打包契约含“缺 gbrain-base-v2 则失败”、发布说明 6/6 均通过。根项目与 Desktop TypeScript、版本同步通过。未执行 `bun run build:win`，未修改 Admin 资源，未改用户知识库。
+
+## 2026-09-01 PMBrain 1.3.22 修复 Windows 冷备校验 EPERM 导致升级启动失败
+
+- 时间：2026-09-01
+- 版本号：PMBrain 1.3.22；PMBrain Desktop 1.1.54
+- 标题：Windows 上 WASM 中止后无法搬走 `pg_wal`，升级冷备校验把完好的知识库挡在启动门外
+- 描述：安装版 1.1.53 日志确认真实库仍在 `C:\Users\zhengyunhui\.pmbrain\brain.pglite`，配置 `last_migrated_version` 停在 1.1.48，每次启动都要做 1.1.53 冷备。校验副本 `D:\backups\.verify-*` 打开时 WASM abort，随后 `rename pg_wal` 报 `EPERM`。这是 Windows 普遍问题：校验副本先被 WASM 打开，文件句柄未释放就不能搬家；不是知识库损坏，也不是多次更新把库写坏。现改为：未干净关闭的校验副本先做受保护 WAL 修复再打开；`pg_wal` 搬家遇到 EPERM/EACCES/EBUSY 自动重试；未改动目录的忙碌失败不进入 1 小时冷却，下一进程打开前修复。不扫描、不回填、不删除、不重建用户知识、向量、Wiki 或原始资料，未连接或修改用户真实数据库。
+- 是否完成：是
+- 最终结果：WAL 修复与 resetwal 定向 43/43，升级冷备含 IN_PRODUCTION 校验与异常关闭恢复 14/14，真实 WAL 自愈含结构门禁 6/6，init 分类器 21/21，发布说明 6/6，根项目与 Desktop TypeScript、版本同步通过。未执行 `bun run build:win`，未修改 Admin 资源，未连接或修改用户真实数据库。
+
+## 2026-09-01 PMBrain 1.3.21 修复异常关闭后 PGLite WAL 导致升级与启动永久失败
+
+- 时间：2026-09-01
+- 版本号：PMBrain 1.3.21；PMBrain Desktop 1.1.53
+- 标题：对齐 GBrain 的受保护 WAL 自愈链路，修复冷备和 Sidecar 持续 `Aborted()`
+- 描述：安装版 1.1.52 已排除运行时 socket，但用户真实日志仍在冷备恢复副本打开阶段报 `Aborted(). Build with -sASSERTIONS`。只读诊断确认真实 PGLite 为 PG17 布局、`pg_control` 有效、WAL 段存在且残留异常关闭标记；根因是向量任务被终止后 WAL/checkpoint 状态撕裂，删除 socket 或 pid 文件不能修复。现按本地 GBrain 0.47.7.0（commit `aa820c7f9`）移植受保护修复：仅对持久化 PG17 PGLite 的 WASM abort 触发，在独占锁、活进程、symlink、control CRC、冷却与 lock-reap 安全门通过后，先原子保留完整 `pg_wal` 和 `pg_control`，重置 WAL 后只重试一次；失败自动恢复，修复前备份保留。升级冷备排除 `postmaster.pid`、`postmaster.opts` 和运行时 socket，损坏备份只在一次性恢复副本中走同一修复校验；不扫描、不回填、不删除、不重建用户知识、向量、Wiki 或原始资料，PostgreSQL 路径不变。未连接或修改用户真实数据库。
+- 是否完成：是
+- 最终结果：synthetic resetwal 13/13、修复安全门 25/25、真实截断/垃圾 WAL 与开关/冷却/symlink 6/6、分类器 21/21、发布版本契约 13/13、PostgreSQL 不受影响与 schema 121 grandfather 9/9 通过；升级冷备 13 项行为均已通过，其中异常关闭备份的“校验→恢复→源库自愈→受保护记录仍存在”用例在 Windows 完整通过。该用例包含多次真实 PGLite 冷启动，耗时 174 秒，因此只把集成测试预算调整为 240 秒，没有延长产品启动或健康检查超时。统一校验 39/39、GitHub Test 本地预演 228/228、根项目 TypeScript 与版本同步通过。GitHub 精确代码提交 `c60ae882` 的 Test（含 10 个普通分片与 81 个 serial 文件）、PostgreSQL E2E、Heavy、Windows Desktop runtime 和核心用户旅程 4/4 工作流全部成功。未执行 `bun run build:win`，未修改 Admin 资源。
+
+## 2026-09-01 PMBrain 1.3.20 修复升级状态、向量超时与 PGLite 运行时 socket
+
+- 时间：2026-09-01
+- 版本号：PMBrain 1.3.20；PMBrain Desktop 1.1.52
+- 标题：升级恢复成功后不再重复冷备，重新向量化不再被 10 分钟硬中止
+- 描述：安装版日志确认 Desktop 1.1.51 首次冷备因已有 PGLite owner 失败后，恢复页成功启动并完成健康检查，但 `restartForRetry` 没有记录 `last_migrated_version`，导致后续启动仍被误判为首次升级并重复冷备；运行时 `.pmbrain-resolve.sock` 又被冷备当成数据库符号链接而拒绝。手动“重新向量化”同时继承通用 10 分钟硬超时，超时强杀子进程后又暴露 PGLite 重连失败。本次只修桌面编排和运行时文件边界：恢复启动健康后记录并消费当前升级；向量任务运行到正常完成或用户主动取消；Sidecar 在 IPC 关闭后清理 socket，冷备明确排除该运行时入口但继续拒绝其他未知符号链接。不修改 schema，不回填、清空、覆盖或重建用户知识、向量、Wiki、原始资料和数据库。
+- 是否完成：是
+- 最终结果：向量子进程、PGLite 重连、恢复启动编排、IPC 生命周期、冷备运行时文件边界、桌面发布与版本契约定向测试共 75/75 通过；统一校验 39/39、GitHub Test 本地预演 228/228、根项目与 Desktop TypeScript、版本同步和 diff 检查通过。Windows 本机真实冷备用例的 14 项行为断言均执行通过，但 PGLite 测试进程结束阶段触发既有的 60 秒退出超时；没有延长产品超时或据此冒充本机完整通过。GitHub 精确代码提交的 10/10 普通分片、PGLite serial、Postgres E2E、Heavy、Windows Desktop runtime 和真实 UI 全部通过。已结束两套 08:11 启动、无监听端口的源码 `serve` 残留进程，未结束安装版 Desktop，未连接或修改真实数据库。未执行 `bun run build:win`，未修改 Admin 资源。
+
+## 2026-08-31 PMBrain 1.3.19 修复 schema 121 对旧向量做全库回填
+
+- 时间：2026-08-31
+- 版本号：PMBrain 1.3.19；PMBrain Desktop 1.1.51
+- 标题：对齐 GBrain 的可空派生字段与历史向量 grandfather 语义
+- 描述：schema 121 原先会扫描全部 `content_chunks`、计算正文哈希并聚合页面向量签名，1GB 级旧库升级时因此长时间无法启动；把它改为分批回填或延长 Desktop 健康检查仍会让用户承担本不需要的全库工作。现按本地 GBrain 0.47.7.0（commit `aa820c7f9`）撤销所有 schema 121 数据回填、游标和迁移进度续时逻辑，升级只增加可空字段和新表。PGLite/PostgreSQL 的 stale 查询同时改为只识别“已有 hash 且与当前正文不一致”的真实漂移，历史 `NULL` hash/signature 继续使用原向量，不自动进入重嵌入；后续真实向量写入会自然补齐派生字段。未连接或修改用户真实数据库、知识、Wiki、原始资料或向量。
+- 是否完成：是
+- 最终结果：新增结构契约和文件 PGLite schema 120 升级测试，确认 migration 121 无 UPDATE/handler，升级后历史向量及两个 `NULL` receipt 原样保留，stale 计数与列表均为 0；新向量 receipt 写入和真实正文漂移检测回归保持通过。相关定向测试 34/34、统一校验 39/39、GitHub Test 本地预演 228/228、类型与版本同步均通过。本机 Docker Desktop 未运行，PostgreSQL 真库契约由本次提交的 GitHub PostgreSQL job 继续验证。未执行 `bun run build:win`，未修改 Admin 资源。
+
+## 2026-08-31 PMBrain 1.3.18 修复旧版数据库升级缺少 Dream 私有队列列
+
+- 时间：2026-08-31
+- 版本号：PMBrain 1.3.18；PMBrain Desktop 1.1.50
+- 标题：修复 schema 119 版本碰撞导致升级后 Sidecar 无法启动
+- 描述：旧版 Desktop 1.1.49 已使用 migration 117/118/119，但合入 Dream 后同一版本段承载了不同迁移，旧用户数据库会显示已到 schema 119，实际没有 `minion_jobs` 的 Dream 私有队列列；新源码重放当前 schema 创建索引时因此报 `private_queue_lease_until does not exist` 并中止。现 PGLite 和 PostgreSQL 在 schema 重放前只读探测并以 `ADD COLUMN IF NOT EXISTS` 补齐五个历史增量列，再由新增 migration 122 补全私有队列外键和索引。修复只增加缺失结构，不清空、不覆盖、不重建数据库，不改用户知识、向量、Wiki、原始资料或配置，也未连接或修改用户真实数据库及升级备份。
+- 是否完成：是
+- 最终结果：失败优先测试已用隔离文件数据库复现 Desktop 1.1.49 的 schema 119 缺列状态；修复后同一数据库可关闭、重新打开并升级至 schema 122，三个私有队列列、外键和索引完整。PGLite 与迁移门禁定向回归 171/171、大文档串行回归 11/11、统一校验 39/39、GitHub Test 本地预演 228/228、类型与版本同步均通过；PostgreSQL 升级用例和完整 GitHub 精确 SHA 结果由本次提交继续复验。3MB 大文档用例保持 600/600 完整向量化断言，仅将测试等待上限调整为 60 秒以覆盖 CI 波动。Desktop 提升到 1.1.50，确保已安装 1.1.49 的用户能收到修复更新。未执行 `bun run build:win`，未修改 Admin 资源。
+
+## 2026-08-31 PMBrain 1.3.17 修复 P1 合入后的 GitHub Test 红项
+
+- 时间：2026-08-31
+- 版本号：PMBrain 1.3.17；PMBrain Desktop 1.1.49（桌面端未改动）
+- 标题：补齐 Dream verdict TTL 升级 bootstrap，并同步 P1 行为契约
+- 描述：GitHub Test run `33374867851` 的 10 个 Unit 分片中有 6 个失败。真实代码缺口是 migration 120 为 `dream_verdicts` 增加 `expires_at`，但 PGLite/PostgreSQL 的迁移前 bootstrap 未覆盖旧库已有 verdict 表的缺列场景；现两个引擎均先探测并仅补可空 TTL 列，再由原迁移负责默认值、按 `judged_at + 30 days` 回填、非空约束与索引。其余失败是 P1 已实现后仍锁定旧行为的测试：Embedding stale 查询、模型切换重建顺序、7 个 Memory Verb、MCP surface、未知模型定价提示和 PMBrain doctor 品牌名；现更新为对应的新安全契约，不回退 P1 产品行为、不放宽 fail-closed 与 MCP 调用限制。未连接或迁移用户数据库，未修改用户知识、向量、Wiki、原始资料或配置。
+- 是否完成：是
+- 最终结果：GitHub 红项对应的 bootstrap、Embedding、Memory Verb、MCP surface、预算与 PGLite 错误包装定向验证通过，TypeScript 类型检查通过；统一 PR 预检与 GitHub 精确 SHA 结果由本次提交继续复验。未执行 `bun run build:win`，未修改 Admin 或 Desktop 资源。
+
+## 2026-08-30 PMBrain 1.3.13 修复 Work Desktop 合并后的 GitHub Test 契约
+
+- 时间：2026-08-30
+- 版本号：PMBrain 1.3.13；PMBrain Desktop 1.1.49
+- 标题：补齐 Advisor Skill、发布说明与 Dream 中止信号的 CI 契约
+- 描述：Work Desktop 合入 AI Dream 后，GitHub Test 暴露出 Advisor Skill 缺少仓库要求的英文段名、Desktop 1.1.49 发布说明缺失、phantom redirect 契约仍要求中止信号加入前的旧调用形态，以及 `extract_atoms` 进度测试未重置全局向量网关导致分片状态污染。现只修交付契约和测试隔离，不改变 Advisor、Dream、同步或知识库数据流程。
+- 是否完成：是
+- 最终结果：Advisor Skill 补齐 `Contract`、`Output Format`、`Anti-Patterns`；发布说明以 1.1.49 为首并继续只保留 5 个版本；phantom lock 契约同时固定 Source 锁与 AbortSignal；进度测试每例重置 AI 网关。对应失败项定向回归通过，统一校验与 GitHub 精确 SHA 结果见本次提交。未执行 `bun run build:win`，未读取或修改用户知识库、Wiki、原始资料和向量。
+
 ## 2026-08-27 PMBrain 1.3.10 升级后 Sidecar 健康检查超时且日志不全
 
 - 时间：2026-08-27

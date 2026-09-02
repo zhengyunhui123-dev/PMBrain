@@ -25,7 +25,7 @@
  * profiles per source for the same holder.
  */
 
-import { BaseCyclePhase, type ScopedReadOpts, type BasePhaseOpts } from './base-phase.ts';
+import { BaseCyclePhase, effectivePhaseDeadlineMs, type ScopedReadOpts, type BasePhaseOpts } from './base-phase.ts';
 import { chat as gatewayChat } from '../ai/gateway.ts';
 import { gateVoice, type VoiceGateGenerator, type VoiceGateJudge } from '../calibration/voice-gate.ts';
 import { patternStatementTemplate, type PatternStatementSlots } from '../calibration/templates.ts';
@@ -246,6 +246,19 @@ class CalibrationProfilePhase extends BaseCyclePhase {
       brier: null,
       warnings: [],
     };
+
+    const remainingMs = effectivePhaseDeadlineMs(
+      Number.POSITIVE_INFINITY,
+      opts.deadlineAtMs,
+      Date.now(),
+    );
+    if (remainingMs <= 0) {
+      return {
+        summary: 'calibration_profile: skipped — job deadline inside the reserve window',
+        details: { ...result, deadline_hit: true },
+        status: 'warn',
+      };
+    }
 
     // Load the holder's scorecard.
     const scorecard = await engine.getScorecard({ holder }, undefined);

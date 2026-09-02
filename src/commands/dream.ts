@@ -36,6 +36,10 @@ import { existsSync } from 'fs';
 import { resolve } from 'node:path';
 import { loadConfig } from '../core/config.ts';
 import { brainDirFromConfig, ensureSystemSkillAssets } from '../core/system-skill-assets.ts';
+import {
+  GIN_REPAIR_STOP_WRITES_MESSAGE,
+  isGinRepairAbortText,
+} from '../core/pglite-gin-repair.ts';
 
 interface DreamArgs {
   json: boolean;
@@ -699,6 +703,14 @@ export async function runDream(engine: BrainEngine | null, args: string[]): Prom
         });
         sourceReports.push({ sourceId: source.id, report: sourceReport });
         console.error(`[quick-maintenance] Source ${source.id} ${sourceReport.status}`);
+        const ginAbort = sourceReport.phases.some((phase) => {
+          const text = `${phase.error?.message ?? ''}\n${phase.summary}\n${JSON.stringify(phase.details ?? {})}`;
+          return phase.status === 'fail' && isGinRepairAbortText(text);
+        });
+        if (ginAbort) {
+          console.error(GIN_REPAIR_STOP_WRITES_MESSAGE);
+          break;
+        }
       }
       const report = combineQuickMaintenanceReports(sourceReports, startedAt);
       if (opts.json) console.log(JSON.stringify(report, null, 2));

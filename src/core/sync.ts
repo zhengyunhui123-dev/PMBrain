@@ -142,6 +142,57 @@ export function buildSyncManifest(gitDiffOutput: string): SyncManifest {
   return manifest;
 }
 
+export function parseGitStatusPorcelainZ(output: string): SyncManifest {
+  const added: string[] = [];
+  const modified: string[] = [];
+  const deleted: string[] = [];
+  const renamed: Array<{ from: string; to: string }> = [];
+
+  const parts = output.split('\0');
+  for (let i = 0; i < parts.length; i++) {
+    const entry = parts[i];
+    if (!entry || entry.length < 4 || entry[2] !== ' ') continue;
+    const x = entry[0];
+    const y = entry[1];
+    const filePath = entry.slice(3);
+    if (!filePath) continue;
+
+    if (x === '!' && y === '!') continue;
+
+    if (x === 'R' || x === 'C' || y === 'R' || y === 'C') {
+      const from = parts[++i] ?? '';
+      if (from) renamed.push({ from, to: filePath });
+      continue;
+    }
+
+    if (x === '?' && y === '?') {
+      added.push(filePath);
+      continue;
+    }
+
+    if (x === 'D' || y === 'D') {
+      if (x === 'A' || y === 'A') modified.push(filePath);
+      else deleted.push(filePath);
+      continue;
+    }
+
+    if (x === 'A' || y === 'A') {
+      added.push(filePath);
+      continue;
+    }
+
+    if (x === ' ' && y === ' ') continue;
+    modified.push(filePath);
+  }
+
+  return {
+    added: [...new Set(added)],
+    modified: [...new Set(modified)],
+    deleted: [...new Set(deleted)],
+    renamed,
+  };
+}
+
 export function isCodeFilePath(path: string): boolean {
   const lower = path.toLowerCase();
   for (const ext of CODE_EXTENSIONS) {
@@ -241,7 +292,7 @@ function globToRegex(pattern: string): RegExp {
   return new RegExp(regex);
 }
 
-function matchesAnyGlob(path: string, patterns?: string[]): boolean {
+export function matchesAnyGlob(path: string, patterns?: string[]): boolean {
   if (!patterns || patterns.length === 0) return false;
   const normalized = path.replace(/\\/g, '/');
   return patterns.some((pattern) => globToRegex(pattern).test(normalized));
@@ -325,7 +376,21 @@ export type SyncableReason =
   | 'strategy'
   | 'pruned-dir'
   | 'include-glob-miss'
-  | 'exclude-glob-hit';
+  | 'exclude-glob-hit'
+  | 'malformed-path';
+
+/** Reject markdown-link syntax/control bytes when they leak into filenames. */
+export function hasMalformedPathSegment(path: string): boolean {
+  // eslint-disable-next-line no-control-regex
+  if (/[\x00-\x1f]/.test(path)) return true;
+  return /[\[\]]/.test(path) && /\.(md|mdx)$/i.test(path);
+}
+
+/** Only the injection signature is destructive; ordinary bracket names are preserved. */
+export function isPoisonedPath(path: string): boolean {
+  // eslint-disable-next-line no-control-regex
+  return /\]\(|[\x00-\x1f]/.test(path);
+}
 
 /**
  * Canonical metafile basenames the markdown sync strategy intentionally
@@ -351,6 +416,8 @@ function classifySync(path: string, opts: SyncableOptions = {}): SyncableReason 
   const strategy = opts.strategy || 'markdown';
 
   if (!isAllowedByStrategy(path, strategy, opts.includeOffice)) return 'strategy';
+
+  if (hasMalformedPathSegment(path)) return 'malformed-path';
 
   // Skip every path segment that pruneDir would block walkers from descending
   // into. Catches hidden dirs (`.git`, `.obsidian`), `.raw/` sidecars,
@@ -620,6 +687,9 @@ export function classifyErrorCode(errorMsg: string): string {
   // (oversize alone) don't fail — the page lands with frontmatter.embed_skip
   // set and never enters this classifier.
   if (/PAGE_JUNK_PATTERN/i.test(errorMsg)) return 'PAGE_JUNK_PATTERN';
+  if (/right sibling of GIN page is of different type|GIN page is of different type|DB_INDEX_CORRUPT/i.test(errorMsg)) {
+    return 'DB_INDEX_CORRUPT';
+  }
 
   return 'UNKNOWN';
 }

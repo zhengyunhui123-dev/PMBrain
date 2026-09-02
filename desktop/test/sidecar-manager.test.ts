@@ -84,7 +84,7 @@ describe('desktop sidecar manager', () => {
     });
     (manager as any).spawnProcess = () => {
       (manager as any).child = { pid: 4242, exitCode: null };
-      (manager as any).recentStderr = '  [117] pglite_cjk_trigram_candidate_indexes...\n';
+      (manager as any).recentStderr = '  [119] pglite_cjk_trigram_candidate_indexes...\n';
     };
     (manager as any).terminateChild = async () => {
       (manager as any).lastExitCode = 1;

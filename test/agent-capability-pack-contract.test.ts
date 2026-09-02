@@ -42,11 +42,15 @@ describe('PMBrain Agent Capability Pack contract', () => {
       .toEqual(expect.arrayContaining(['page_slug', 'old_text', 'new_text', 'reason']));
   });
 
-  test('stdio and HTTP MCP both consume the shared registry/tool-definition path', () => {
+  test('stdio and HTTP MCP advertise and dispatch only the filtered surface', () => {
     const stdio = readFileSync(join(import.meta.dir, '..', 'src', 'mcp', 'server.ts'), 'utf8');
     const http = readFileSync(join(import.meta.dir, '..', 'src', 'mcp', 'http-transport.ts'), 'utf8');
-    expect(stdio).toContain('buildToolDefs(operations)');
-    expect(http).toContain('buildToolDefs(operations)');
+    for (const transport of [stdio, http]) {
+      expect(transport).toContain('filterOpsForSurface(operations, surface)');
+      expect(transport).toContain('buildToolDefs(surfaceOps)');
+    }
+    expect(stdio).toContain('allowedOps,');
+    expect(http).toContain('allowedOps: surfaceAllowedOps');
   });
 
   test('CLI add and proposal acceptance share the canonical take writer', () => {

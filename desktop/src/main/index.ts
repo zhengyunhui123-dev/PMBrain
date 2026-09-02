@@ -35,6 +35,7 @@ import { listDesktopProviderModels } from './model-catalog.js';
 import { LanController } from './network/lan-controller.js';
 import { listNetworkCandidates } from './network-manager.js';
 import { SidecarController } from './sidecar/sidecar-controller.js';
+import { chooseEmbeddingRebuild, waitEmbeddingRebuildChoice } from './startup/embedding-rebuild-choice.js';
 import { SetupController } from './startup/setup-controller.js';
 import { SystemSettingsController } from './system/system-settings-controller.js';
 import { UpdateController } from './updates/update-controller.js';
@@ -67,6 +68,8 @@ interface StartupProgress {
   stage: 'database' | 'migration' | 'sidecar' | 'health';
   title: string;
   message: string;
+  canDeferEmbeddingRebuild?: boolean;
+  embeddingRebuildTotal?: number;
 }
 
 let startupProgress: StartupProgress = {
@@ -90,7 +93,7 @@ function sendStartupProgress(progress: StartupProgress): void {
 }
 
 function hideStartupProgress(): void {
-  sendStartupProgress({ ...startupProgress, visible: false });
+  sendStartupProgress({ ...startupProgress, visible: false, canDeferEmbeddingRebuild: false });
 }
 
 async function ensureRuntimeReady(): Promise<void> {
@@ -184,6 +187,7 @@ const setupController: SetupController = new SetupController({
   syncModelDefaults: options => syncModelDefaultsToConfigFile(runtime(), options),
   sendStartupProgress,
   hideStartupProgress,
+  waitEmbeddingRebuildChoice,
   applyTheme: theme => systemSettingsController.applyTheme(theme),
 });
 
@@ -373,6 +377,7 @@ if (!app.requestSingleInstanceLock()) {
         () => writeAdvancedModelConfig(runtime(), values),
       ),
       saveSetup: payload => setupController.apply(payload),
+      chooseEmbeddingRebuild,
       configureIntegration: (client, kind) => sharedAccessController.configure(client, kind),
       writeWorkbuddyUserAgent: () => writeWorkbuddyUserAgent(),
       getWorkbuddyAgentIntegration: () => workBuddyAgentController.read(),

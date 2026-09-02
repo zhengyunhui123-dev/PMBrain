@@ -62,6 +62,12 @@ const shape = platform === 'win32'
         ],
       };
 
+const schemaPackSource = join(desktopRoot, '..', 'src', 'core', 'schema-pack', 'base');
+const bundledSchemaPacks = readdirSync(schemaPackSource).filter(name => name.endsWith('.yaml'));
+if (!bundledSchemaPacks.includes('gbrain-base-v2.yaml')) {
+  throw new Error(`Source schema pack directory is missing gbrain-base-v2.yaml: ${schemaPackSource}`);
+}
+
 const bunPath = join(shape.runtimeRoot, runtimeContract.runtimeExecutableName);
 const nativeCanvasRoot = join(shape.runtimeRoot, 'node_modules', '@napi-rs', runtimeContract.nativeCanvasPackage);
 const nativeCanvasBinary = join(nativeCanvasRoot, runtimeContract.nativeCanvasBinary);
@@ -86,6 +92,7 @@ const requiredFiles = [
   join(shape.runtimeRoot, 'skills', 'RESOLVER.md'),
   join(shape.runtimeRoot, 'skills', '_brain-filing-rules.json'),
   join(shape.runtimeRoot, 'skills', '_brain-filing-rules.md'),
+  ...bundledSchemaPacks.map(name => join(shape.runtimeRoot, 'base', name)),
   join(shape.runtimeRoot, 'node_modules', '@electric-sql', 'pglite', 'package.json'),
   join(shape.runtimeRoot, 'node_modules', '@electric-sql', 'pglite', 'dist', 'index.js'),
   join(shape.runtimeRoot, 'node_modules', '@electric-sql', 'pglite', 'dist', 'vector', 'index.js'),

@@ -138,6 +138,19 @@ describe('client registration', () => {
       sql`INSERT INTO oauth_clients (client_id, client_name, scope) VALUES (${clientId}, ${'dup'}, ${'read'})`,
     ).rejects.toThrow();
   });
+
+  test('operator can pin and clear an OAuth MCP surface', async () => {
+    const { clientId } = await provider.registerClientManual(
+      'surface-test', ['client_credentials'], 'read',
+    );
+    await provider.rescopeClient(clientId, 'starter');
+    let rows = await sql`SELECT surface, surface_set_by FROM oauth_clients WHERE client_id = ${clientId}`;
+    expect(rows[0]).toMatchObject({ surface: 'starter', surface_set_by: 'operator' });
+
+    await provider.rescopeClient(clientId, null);
+    rows = await sql`SELECT surface, surface_set_by FROM oauth_clients WHERE client_id = ${clientId}`;
+    expect(rows[0]).toMatchObject({ surface: null, surface_set_by: null });
+  });
 });
 
 // ---------------------------------------------------------------------------

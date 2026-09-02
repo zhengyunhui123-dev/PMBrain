@@ -471,6 +471,9 @@ export interface DreamVerdictInput {
   triage_version?: number;
 }
 
+/** Temporal bound for cached Dream triage decisions (30 days). */
+export const DREAM_VERDICT_TTL_SECONDS = 30 * 24 * 60 * 60;
+
 // ============================================================
 // v0.31 Hot Memory: facts table + recall surface
 // ============================================================
@@ -814,6 +817,8 @@ export interface BrainEngine {
    * links) stay intact; the autopilot purge phase hard-deletes after 72h.
    */
   softDeletePage(slug: string, opts?: { sourceId?: string }): Promise<{ slug: string } | null>;
+  /** Batch soft-delete used by sync; preserves rows and never refreshes an existing tombstone. */
+  softDeletePages(slugs: string[], opts: { sourceId: string }): Promise<string[]>;
   /**
    * v0.26.5 — clear `deleted_at` on a soft-deleted page. Returns true iff a
    * row was restored. False if the slug is unknown OR the page is not
@@ -1448,6 +1453,7 @@ export interface BrainEngine {
   // page-scoped — transcripts being judged aren't pages yet.
   getDreamVerdict(filePath: string, contentHash: string): Promise<DreamVerdict | null>;
   putDreamVerdict(filePath: string, contentHash: string, verdict: DreamVerdictInput): Promise<void>;
+  sweepDreamVerdicts(): Promise<number>;
 
   // ============================================================
   // v0.32.6 Contradiction probe — batched takes fetch + cache + trends
@@ -1605,7 +1611,14 @@ export interface BrainEngine {
   insertFacts(
     rows: Array<NewFact & { row_num: number; source_markdown_slug: string }>,
     ctx: { source_id: string },
-  ): Promise<{ inserted: number; ids: number[] }>;
+    opts?: {
+      deleteForPageFirst?: {
+        slug: string;
+        excludeSourcePrefixes?: string[];
+        preserveExpiredLegacy?: boolean;
+      };
+    },
+  ): Promise<{ inserted: number; ids: number[]; deleted: number }>;
 
   /**
    * v0.32.2: hard-delete every fact row scoped to a single fence page.
@@ -1731,8 +1744,8 @@ export interface BrainEngine {
   revertToVersion(slug: string, versionId: number, opts?: { sourceId?: string }): Promise<void>;
 
   // Stats + health
-  getStats(): Promise<BrainStats>;
-  getHealth(): Promise<BrainHealth>;
+  getStats(opts?: { sourceId?: string; sourceIds?: string[] }): Promise<BrainStats>;
+  getHealth(opts?: { sourceId?: string; sourceIds?: string[] }): Promise<BrainHealth>;
 
   // Ingest log
   logIngest(entry: IngestLogInput): Promise<void>;
@@ -2004,7 +2017,7 @@ export interface BrainEngine {
    * Multi-source-aware: each row carries its `source_id` so the matching
    * `setEmotionalWeightBatch` UPDATE can composite-key correctly.
    */
-  batchLoadEmotionalInputs(slugs?: string[]): Promise<EmotionalWeightInputRow[]>;
+  batchLoadEmotionalInputs(slugs?: string[], opts?: { sourceId?: string }): Promise<EmotionalWeightInputRow[]>;
 
   /**
    * Apply pre-computed emotional weights in a single UPDATE. Composite-keyed

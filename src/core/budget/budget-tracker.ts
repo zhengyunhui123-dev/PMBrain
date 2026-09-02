@@ -78,6 +78,38 @@ export interface BudgetTrackerOpts {
   label: string;
   /** Override the audit file path (tests + custom installers). */
   auditPath?: string;
+  /** Operator config-plane pricing for proxy/custom model ids. */
+  pricingOverrides?: PricingOverrides;
+}
+
+export type PricingOverrides = Record<string, ModelPricing>;
+
+export function parsePricingOverrides(raw: unknown): PricingOverrides | undefined {
+  let value = raw;
+  if (typeof value === 'string') {
+    try { value = JSON.parse(value); } catch { return undefined; }
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const valid = (candidate: unknown): candidate is number =>
+    typeof candidate === 'number' && Number.isFinite(candidate) && candidate >= 0;
+  const out: PricingOverrides = {};
+  for (const [model, entry] of Object.entries(value as Record<string, unknown>)) {
+    const key = model.trim().toLowerCase();
+    if (!key) continue;
+    if (valid(entry)) out[key] = { input: entry, output: entry };
+    else if (entry && typeof entry === 'object' && !Array.isArray(entry)) {
+      const row = entry as { input?: unknown; output?: unknown; pricePerMTok?: unknown };
+      const input = row.input ?? row.pricePerMTok;
+      if (valid(input) && (row.output === undefined || valid(row.output))) {
+        out[key] = { input, output: row.output === undefined ? input : row.output };
+      }
+    }
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+export async function loadPricingOverrides(engine: { getConfig(key: string): Promise<string | null> }): Promise<PricingOverrides | undefined> {
+  try { return parsePricingOverrides(await engine.getConfig('pricing.overrides')); } catch { return undefined; }
 }
 
 export class BudgetExhausted extends Error {
@@ -171,7 +203,9 @@ const FREE_LOCAL_EMBED_PROVIDERS: ReadonlySet<string> = new Set([
  *     return zero pricing so `--max-cost` callers don't TX2 hard-fail on
  *     local inference recipes (electricity, not tokens); else unknown.
  */
-function lookupPricing(modelId: string, kind: BudgetKind): ModelPricing | null {
+function lookupPricing(modelId: string, kind: BudgetKind, overrides?: PricingOverrides): ModelPricing | null {
+  const override = overrides?.[modelId.trim().toLowerCase()];
+  if (override) return override;
   if (kind === 'embed') {
     const hit = lookupEmbeddingPrice(modelId);
     if (hit.kind === 'known') {
@@ -217,8 +251,8 @@ function lookupPricing(modelId: string, kind: BudgetKind): ModelPricing | null {
   return null;
 }
 
-function costForUsage(modelId: string, inputTokens: number, outputTokens: number, kind: BudgetKind): number | null {
-  const p = lookupPricing(modelId, kind);
+function costForUsage(modelId: string, inputTokens: number, outputTokens: number, kind: BudgetKind, overrides?: PricingOverrides): number | null {
+  const p = lookupPricing(modelId, kind, overrides);
   if (!p) return null;
   return (inputTokens / 1_000_000) * p.input + (outputTokens / 1_000_000) * p.output;
 }
@@ -280,6 +314,7 @@ export class BudgetTracker {
       estimate.estimatedInputTokens,
       estimate.maxOutputTokens,
       estimate.kind,
+      this.opts.pricingOverrides,
     );
 
     if (projected === null) {
@@ -288,7 +323,7 @@ export class BudgetTracker {
         // pricing we can't enforce the cap, and silently ignoring it would
         // void the contract.
         const msg = `${this.opts.label}: no pricing entry for model "${estimate.modelId}" (kind=${estimate.kind}). ` +
-          `Add it to src/core/${estimate.kind === 'embed' ? 'embedding-pricing.ts' : 'anthropic-pricing.ts'} or drop --max-cost.`;
+          `Set pricing.overrides for this model or drop --max-cost. The cap stays fail-closed while pricing is unknown.`;
         this.fireExhausted();
         throw new BudgetExhausted(msg, {
           reason: 'no_pricing',
@@ -370,7 +405,7 @@ export class BudgetTracker {
   record(actual: BudgetActualUsage & { kind?: BudgetKind }): void {
     this.callsRecorded++;
     const kind: BudgetKind = actual.kind ?? 'chat';
-    const cost = costForUsage(actual.modelId, actual.inputTokens, actual.outputTokens ?? 0, kind);
+    const cost = costForUsage(actual.modelId, actual.inputTokens, actual.outputTokens ?? 0, kind, this.opts.pricingOverrides);
 
     if (cost === null) {
       // Unpriced model: record audit but skip cumulative math. Cap (if set)

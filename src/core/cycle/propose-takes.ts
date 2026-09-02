@@ -38,7 +38,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { BaseCyclePhase, type ScopedReadOpts, type BasePhaseOpts } from './base-phase.ts';
+import { BaseCyclePhase, effectivePhaseDeadlineMs, type ScopedReadOpts, type BasePhaseOpts } from './base-phase.ts';
 import { chat as gatewayChat } from '../ai/gateway.ts';
 import { writeReceipt } from '../extract/receipt-writer.ts';
 import { upsertExtractRollup } from '../extract/rollup-writer.ts';
@@ -552,7 +552,15 @@ class ProposeTakesPhase extends BaseCyclePhase {
 
     const pages = opts.drain ? pendingPages : pendingPages.slice(0, pageLimit);
     const now = opts.now ?? Date.now;
-    const deadline = opts.drain ? now() + (opts.windowMs ?? DEFAULT_DRAIN_WINDOW_MS) : Number.POSITIVE_INFINITY;
+    const requestedWindowMs = opts.drain
+      ? (opts.windowMs ?? DEFAULT_DRAIN_WINDOW_MS)
+      : Number.POSITIVE_INFINITY;
+    const phaseBudgetMs = effectivePhaseDeadlineMs(requestedWindowMs, opts.deadlineAtMs, now());
+    const deadline = now() + phaseBudgetMs;
+    if (phaseBudgetMs <= 0) {
+      result.stopped = 'window';
+      result.warnings.push('phase skipped: job deadline already inside the reserve window');
+    }
     const completedThisRun = new Set<string>();
 
     if (opts.reporter) {

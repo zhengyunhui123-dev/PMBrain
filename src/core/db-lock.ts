@@ -27,7 +27,12 @@ import type { BrainEngine } from './engine.ts';
 export interface DbLockHandle {
   id: string;
   release: () => Promise<void>;
-  refresh: () => Promise<void>;
+  /**
+   * Refresh this acquisition's TTL. Returns false when the row no longer
+   * matches this holder. The optional signal lets a heartbeat timeout cancel
+   * the in-flight Postgres UPDATE instead of leaving a pool slot wedged.
+   */
+  refresh: (opts?: { signal?: AbortSignal }) => Promise<boolean>;
 }
 
 /** Default TTL: 30 minutes, same as cycle lock. */
@@ -101,16 +106,20 @@ export async function tryAcquireDbLock(
     });
     return {
       id: lockId,
-      refresh: async () => {
+      refresh: async (refreshOpts?: { signal?: AbortSignal }) => {
         // v0.41.13.0: bump BOTH ttl_expires_at AND last_refreshed_at.
         // Without last_refreshed_at, --max-age would steal healthy locks
         // whose acquired_at is old but whose holder is alive and refreshing.
-        await sql`
-          UPDATE gbrain_cycle_locks
-            SET ttl_expires_at = NOW() + ${ttl}::interval,
-                last_refreshed_at = NOW()
-          WHERE id = ${lockId} AND holder_pid = ${pid}
-        `;
+        const updated = await engine.executeRaw<{ id: string }>(
+          `UPDATE gbrain_cycle_locks
+              SET ttl_expires_at = NOW() + ($1)::interval,
+                  last_refreshed_at = NOW()
+            WHERE id = $2 AND holder_pid = $3
+            RETURNING id`,
+          [ttl, lockId, pid],
+          refreshOpts,
+        );
+        return updated.length > 0;
       },
       release: async () => {
         deregister();
@@ -147,14 +156,17 @@ export async function tryAcquireDbLock(
     });
     return {
       id: lockId,
-      refresh: async () => {
-        await db.query(
+      refresh: async (refreshOpts?: { signal?: AbortSignal }) => {
+        const updated = await engine.executeRaw<{ id: string }>(
           `UPDATE gbrain_cycle_locks
               SET ttl_expires_at = NOW() + $1::interval,
                   last_refreshed_at = NOW()
-            WHERE id = $2 AND holder_pid = $3`,
+            WHERE id = $2 AND holder_pid = $3
+            RETURNING id`,
           [ttl, lockId, pid],
+          refreshOpts,
         );
+        return updated.length > 0;
       },
       release: async () => {
         deregister();
@@ -561,34 +573,53 @@ export async function withRefreshingLock<T>(
   if (!handle) throw new LockUnavailableError(lockId);
 
   let healthOk = true;
+  // A slow refresh can outlive the next interval tick. Never stack heartbeat
+  // UPDATEs: one checked-out connection per lock is the hard upper bound.
+  let refreshTickInFlight = false;
 
   const interval = setInterval(() => {
+    if (refreshTickInFlight) return;
+    refreshTickInFlight = true;
     void (async () => {
       try {
-        // A4 heartbeat: SELECT 1 against the engine's connection pool.
-        // Honest limit: this checks a connection is responsive in general,
-        // not the SPECIFIC backend running `work()`. The full X1 fix
-        // (lock-refresh on the work-pinned connection via withReservedConnection)
-        // is layered in by callers that pass the work backend's sql in.
-        // For migrate.ts (transactional DDL), the engine.transaction() path
-        // pins the backend; the heartbeat against engine.sql is a useful
-        // proxy for "Postgres is reachable" even if it can race the actual
-        // backend's wedge state. Lane B's primary win is the auto-refresh
-        // itself; the precise-backend-bind heartbeat is a Lane B follow-up.
-        const probe = engineSelectOne(engine);
-        const timeout = new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('heartbeat_timeout')), heartbeatTimeoutMs)
-        );
-        await Promise.race([probe, timeout]);
-        await handle.refresh();
+        // The refresh UPDATE itself is the liveness probe. Give every tick an
+        // independent hard deadline and abort its query when the deadline
+        // wins, so an unhealthy Postgres pool does not retain an orphaned
+        // heartbeat request indefinitely.
+        const tickAbort = new AbortController();
+        let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
+        const timeout = new Promise<never>((_, reject) => {
+          timeoutTimer = setTimeout(() => {
+            tickAbort.abort(new Error('refresh_timeout'));
+            reject(new Error('refresh_timeout'));
+          }, heartbeatTimeoutMs);
+        });
+        let stillOwned: boolean;
+        try {
+          stillOwned = await Promise.race([
+            handle.refresh({ signal: tickAbort.signal }),
+            timeout,
+          ]);
+        } finally {
+          if (timeoutTimer !== undefined) clearTimeout(timeoutTimer);
+        }
+        if (!stillOwned) {
+          healthOk = false;
+          clearInterval(interval);
+          process.stderr.write(`[lock-refresh] ${lockId}: lock row no longer owned; heartbeat stopped\n`);
+          return;
+        }
+        healthOk = true;
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        process.stderr.write(`[lock-refresh] ${lockId}: ${msg}; lock will auto-expire\n`);
+        process.stderr.write(`[lock-refresh] ${lockId}: ${msg}; will retry next tick\n`);
         healthOk = false;
-        clearInterval(interval);
+      } finally {
+        refreshTickInFlight = false;
       }
     })();
   }, refreshIntervalMs);
+  interval.unref?.();
 
   try {
     return await work();
@@ -601,24 +632,6 @@ export async function withRefreshingLock<T>(
       process.stderr.write(`[lock-refresh] ${lockId}: completed with degraded heartbeat\n`);
     }
   }
-}
-
-/** Internal: SELECT 1 on the engine's connection. */
-async function engineSelectOne(engine: BrainEngine): Promise<void> {
-  const maybePG = engine as unknown as { sql?: (...args: unknown[]) => Promise<unknown> };
-  const maybePGLite = engine as unknown as {
-    db?: { query: (sql: string) => Promise<{ rows: unknown[] }> };
-  };
-  if (engine.kind === 'postgres' && maybePG.sql) {
-    const sql = maybePG.sql as any;
-    await sql`SELECT 1`;
-    return;
-  }
-  if (engine.kind === 'pglite' && maybePGLite.db) {
-    await maybePGLite.db.query('SELECT 1');
-    return;
-  }
-  throw new Error(`Unknown engine kind for heartbeat: ${engine.kind}`);
 }
 
 /**

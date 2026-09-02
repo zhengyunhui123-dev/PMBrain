@@ -147,10 +147,19 @@ export async function invalidateMismatchedEmbeddingModels(
       `UPDATE content_chunks
           SET embedding = NULL,
               embedded_at = NULL,
+              embedded_text_hash = NULL,
               model = $1
         WHERE embedding IS NOT NULL
           AND model IS DISTINCT FROM $1`,
       [targetModel],
+    );
+    await tx.executeRaw(
+      `UPDATE pages p
+          SET embedding_signature = NULL
+        WHERE EXISTS (
+          SELECT 1 FROM content_chunks cc
+           WHERE cc.page_id = p.id AND cc.embedding IS NULL
+        )`,
     );
   });
   return count;
@@ -178,6 +187,22 @@ async function readQueryCacheEmbeddingDim(
   return { exists: true, dims: null, columnType: null };
 }
 
+async function readTakesEmbeddingDim(
+  engine: BrainEngine,
+): Promise<{ exists: boolean; dims: number | null }> {
+  const rows = await engine.executeRaw<{ formatted: string | null }>(
+    `SELECT format_type(a.atttypid, a.atttypmod) AS formatted
+       FROM pg_attribute a
+       JOIN pg_class c ON c.oid = a.attrelid
+       JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE n.nspname = 'public' AND c.relname = 'takes'
+        AND a.attname = 'embedding' AND NOT a.attisdropped`,
+  );
+  const formatted = rows[0]?.formatted ?? null;
+  const match = formatted?.match(/vector\((\d+)\)/i);
+  return { exists: formatted !== null, dims: match ? Number.parseInt(match[1], 10) : null };
+}
+
 async function alignDerivedEmbeddingStores(
   engine: BrainEngine,
   targetDimensions: number,
@@ -185,6 +210,7 @@ async function alignDerivedEmbeddingStores(
 ): Promise<void> {
   const facts = await readFactsEmbeddingDim(engine);
   const queryCache = await readQueryCacheEmbeddingDim(engine);
+  const takes = await readTakesEmbeddingDim(engine);
   const factsNeedsRebuild = facts.exists
     && facts.dims !== null
     && facts.columnType !== null
@@ -193,7 +219,8 @@ async function alignDerivedEmbeddingStores(
     && queryCache.dims !== null
     && queryCache.columnType !== null
     && queryCache.dims !== targetDimensions;
-  if (!invalidateAll && !factsNeedsRebuild && !cacheNeedsRebuild) return;
+  const takesNeedsRebuild = takes.exists && takes.dims !== null && takes.dims !== targetDimensions;
+  if (!invalidateAll && !factsNeedsRebuild && !cacheNeedsRebuild && !takesNeedsRebuild) return;
 
   await engine.transaction(async (tx) => {
     if (facts.exists && facts.columnType) {
@@ -239,6 +266,24 @@ async function alignDerivedEmbeddingStores(
                WHERE embedding IS NOT NULL`,
           );
         }
+      }
+    }
+
+    if (takes.exists) {
+      if (takesNeedsRebuild) {
+        await tx.executeRaw('DROP INDEX IF EXISTS idx_takes_embedding_hnsw');
+        await tx.executeRaw('ALTER TABLE takes DROP COLUMN IF EXISTS embedding');
+        await tx.executeRaw(`ALTER TABLE takes ADD COLUMN embedding vector(${targetDimensions})`);
+        await tx.executeRaw('UPDATE takes SET embedded_at = NULL');
+        if (targetDimensions <= PGVECTOR_HNSW_VECTOR_MAX_DIMS) {
+          await tx.executeRaw(
+            `CREATE INDEX IF NOT EXISTS idx_takes_embedding_hnsw ON takes
+               USING hnsw (embedding vector_cosine_ops)
+               WHERE active AND embedding IS NOT NULL`,
+          );
+        }
+      } else if (invalidateAll) {
+        await tx.executeRaw('UPDATE takes SET embedding = NULL, embedded_at = NULL WHERE embedding IS NOT NULL');
       }
     }
   });
@@ -306,14 +351,15 @@ export async function alignEmbeddingDimension(
     await engine.transaction(async (tx) => {
       if (opts.targetModel) {
         await tx.executeRaw(
-          'UPDATE content_chunks SET embedding = NULL, embedded_at = NULL, model = $1',
+          'UPDATE content_chunks SET embedding = NULL, embedded_at = NULL, embedded_text_hash = NULL, model = $1',
           [opts.targetModel],
         );
       } else {
         await tx.executeRaw(
-          'UPDATE content_chunks SET embedding = NULL, embedded_at = NULL WHERE embedding IS NOT NULL',
+          'UPDATE content_chunks SET embedding = NULL, embedded_at = NULL, embedded_text_hash = NULL WHERE embedding IS NOT NULL',
         );
       }
+      await tx.executeRaw('UPDATE pages SET embedding_signature = NULL WHERE embedding_signature IS NOT NULL');
     });
     await alignDerivedEmbeddingStores(engine, targetDimensions, true);
     return {
@@ -330,10 +376,11 @@ export async function alignEmbeddingDimension(
     await tx.executeRaw('ALTER TABLE content_chunks DROP COLUMN IF EXISTS embedding');
     await tx.executeRaw(`ALTER TABLE content_chunks ADD COLUMN embedding vector(${targetDimensions})`);
     if (opts.targetModel) {
-      await tx.executeRaw('UPDATE content_chunks SET embedded_at = NULL, model = $1', [opts.targetModel]);
+      await tx.executeRaw('UPDATE content_chunks SET embedded_at = NULL, embedded_text_hash = NULL, model = $1', [opts.targetModel]);
     } else {
-      await tx.executeRaw('UPDATE content_chunks SET embedded_at = NULL');
+      await tx.executeRaw('UPDATE content_chunks SET embedded_at = NULL, embedded_text_hash = NULL');
     }
+    await tx.executeRaw('UPDATE pages SET embedding_signature = NULL WHERE embedding_signature IS NOT NULL');
     if (createHnsw) {
       await tx.executeRaw(
         'CREATE INDEX IF NOT EXISTS idx_chunks_embedding ON content_chunks USING hnsw (embedding vector_cosine_ops)',

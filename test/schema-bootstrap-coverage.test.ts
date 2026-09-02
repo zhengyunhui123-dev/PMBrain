@@ -159,6 +159,11 @@ const REQUIRED_BOOTSTRAP_COVERAGE: ForwardReference[] = [
   // pages_generation_idx (CREATE INDEX ON pages (generation)) so bootstrap
   // probes guard pre-v91 brains.
   { kind: 'column', table: 'pages', column: 'generation' },
+  { kind: 'column', table: 'minion_jobs', column: 'timeout_at' },
+  { kind: 'column', table: 'minion_jobs', column: 'idempotency_key' },
+  { kind: 'column', table: 'minion_jobs', column: 'private_queue_owner_job_id' },
+  { kind: 'column', table: 'minion_jobs', column: 'private_queue_owner_token' },
+  { kind: 'column', table: 'minion_jobs', column: 'private_queue_lease_until' },
 ];
 
 test('applyForwardReferenceBootstrap covers every forward reference declared in REQUIRED_BOOTSTRAP_COVERAGE', async () => {
@@ -594,6 +599,7 @@ test('every CREATE INDEX column in PGLITE_SCHEMA_SQL is covered by CREATE TABLE 
   const { readFileSync } = await import('fs');
   const { resolve: resolvePath } = await import('path');
   const { PGLITE_SCHEMA_SQL } = await import('../src/core/pglite-schema.ts');
+  const { extractAddedColumnsFromMigrations } = await import('./helpers/extract-added-columns.ts');
 
   const enginePath = resolvePath(process.cwd(), 'src/core/pglite-engine.ts');
   const engineSrc = readFileSync(enginePath, 'utf-8');
@@ -601,14 +607,19 @@ test('every CREATE INDEX column in PGLITE_SCHEMA_SQL is covered by CREATE TABLE 
   const tableColumns = parseBaseTableColumns(PGLITE_SCHEMA_SQL);
   const indexRefs = parseIndexColumnReferences(PGLITE_SCHEMA_SQL);
   const bootstrapAdds = parseAlterAddColumns(engineSrc);
+  const migrationAdds = new Set(
+    extractAddedColumnsFromMigrations().map(ref => `${ref.table}.${ref.column}`),
+  );
 
   // Build the "covered" set: for each (table, column) pair, true iff it's in
   // the table's CREATE TABLE columns OR added by an ALTER TABLE in the
   // bootstrap function.
   const covered = (table: string, column: string): boolean => {
+    if (bootstrapAdds.some(a => a.table === table && a.column === column)) return true;
+    if (migrationAdds.has(`${table}.${column}`)) return false;
     const cols = tableColumns.get(table);
     if (cols && cols.has(column)) return true;
-    return bootstrapAdds.some(a => a.table === table && a.column === column);
+    return false;
   };
 
   // Sanity checks: parser caught the codex case AND bootstrap provides it.

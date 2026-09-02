@@ -10,6 +10,9 @@ import {
   readLockMetadata,
   listArchivedLocks,
   inspectLock,
+  pruneArchivedLocks,
+  LOCK_ARCHIVE_RETENTION_MS,
+  LOCK_ARCHIVE_KEEP_NEWEST,
   setDefaultProcessInspector,
 } from '../src/core/pglite-lock.ts';
 import { FakeProcessInspector } from '../src/core/pglite-process-inspector.ts';
@@ -406,6 +409,106 @@ describe('pglite-lock v2', () => {
     expect(lock.acquired).toBe(true);
     await releaseLock(lock);
   });
+
+  test('prunes lock archives older than 3 days except the newest 5', () => {
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const stampAt = (ms: number) => {
+      const date = new Date(ms);
+      return (
+        `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}`
+        + `-${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`
+      );
+    };
+    const now = Date.now();
+    const plant = (kind: 'released' | 'stale', ms: number, extra: string) => {
+      const dir = join(TEST_DIR, `.gbrain-lock.${kind}-${stampAt(ms)}-${extra}`);
+      mkdirSync(dir);
+      writeFileSync(join(dir, 'lock'), '{}');
+      return dir;
+    };
+
+    const expired = [
+      plant('released', now - LOCK_ARCHIVE_RETENTION_MS - 86_400_000, 'old1'),
+      plant('stale', now - LOCK_ARCHIVE_RETENTION_MS - 80_000_000, 'old2'),
+    ];
+    const floor = [
+      plant('released', now - LOCK_ARCHIVE_RETENTION_MS - 70_000_000, 'old3'),
+      plant('stale', now - LOCK_ARCHIVE_RETENTION_MS - 60_000_000, 'old4'),
+      plant('released', now - LOCK_ARCHIVE_RETENTION_MS - 50_000_000, 'old5'),
+      plant('stale', now - LOCK_ARCHIVE_RETENTION_MS - 40_000_000, 'old6'),
+      plant('released', now - LOCK_ARCHIVE_RETENTION_MS - 30_000_000, 'old7'),
+    ];
+    mkdirSync(join(TEST_DIR, '.gbrain-lock'));
+    writeFileSync(join(TEST_DIR, '.gbrain-lock', 'lock'), '{"pid":1}');
+    writeFileSync(join(TEST_DIR, 'PG_VERSION'), '17\n');
+
+    const result = pruneArchivedLocks(TEST_DIR, now);
+    for (const path of expired) expect(existsSync(path)).toBe(false);
+    for (const path of floor) expect(existsSync(path)).toBe(true);
+    expect(existsSync(join(TEST_DIR, '.gbrain-lock'))).toBe(true);
+    expect(existsSync(join(TEST_DIR, 'PG_VERSION'))).toBe(true);
+    expect(result.kept).toHaveLength(LOCK_ARCHIVE_KEEP_NEWEST);
+    expect(result.deleted).toHaveLength(2);
+  });
+
+  test('keeps every lock archive from the last 3 days even when there are more than 5', () => {
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const stampAt = (ms: number) => {
+      const date = new Date(ms);
+      return (
+        `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}`
+        + `-${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`
+      );
+    };
+    const now = Date.now();
+    const recent = Array.from({ length: 8 }, (_, i) => {
+      const dir = join(
+        TEST_DIR,
+        `.gbrain-lock.released-${stampAt(now - (i + 1) * 3_600_000)}-r${i}`,
+      );
+      mkdirSync(dir);
+      writeFileSync(join(dir, 'lock'), '{}');
+      return dir;
+    });
+
+    const result = pruneArchivedLocks(TEST_DIR, now);
+    expect(result.deleted).toEqual([]);
+    for (const path of recent) expect(existsSync(path)).toBe(true);
+    expect(result.kept).toHaveLength(8);
+  });
+
+  test('acquire and release drop lock archives older than 3 days beyond the newest 5', async () => {
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const stampAt = (ms: number) => {
+      const date = new Date(ms);
+      return (
+        `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}`
+        + `-${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`
+      );
+    };
+    const now = Date.now();
+    const oldest = join(
+      TEST_DIR,
+      `.gbrain-lock.stale-${stampAt(now - LOCK_ARCHIVE_RETENTION_MS - 86_400_000)}-oldest`,
+    );
+    mkdirSync(oldest);
+    writeFileSync(join(oldest, 'lock'), '{}');
+    for (let i = 0; i < 5; i++) {
+      const dir = join(
+        TEST_DIR,
+        `.gbrain-lock.released-${stampAt(now - LOCK_ARCHIVE_RETENTION_MS - (5 - i) * 3_600_000)}-keep${i}`,
+      );
+      mkdirSync(dir);
+      writeFileSync(join(dir, 'lock'), '{}');
+    }
+
+    const lock = await acquireLock(TEST_DIR, { inspector, ownerType: 'test' });
+    expect(existsSync(oldest)).toBe(false);
+    await releaseLock(lock);
+    const leftover = listArchivedLocks(TEST_DIR);
+    expect(leftover.some((path) => path.includes('.released-'))).toBe(true);
+    expect(leftover.every((path) => !path.includes('-oldest'))).toBe(true);
+  });
 });
 
 describe('classifySidecarStartupError', () => {
@@ -452,5 +555,11 @@ describe('classifySidecarStartupError', () => {
     const c = classifySidecarStartupError(new Error('listen EADDRINUSE: address already in use'));
     expect(c.category).toBe('port_conflict');
     expect(c.retryable).toBe(true);
+  });
+
+  test('GIN index repair failure is not retryable and is not a whole-database restore', () => {
+    const c = classifySidecarStartupError(new Error('搜索索引修复失败，无法确认搜索已恢复。'));
+    expect(c.retryable).toBe(false);
+    expect(c.labelZh).toBe('搜索索引修复失败');
   });
 });

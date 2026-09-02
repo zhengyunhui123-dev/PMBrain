@@ -23,8 +23,8 @@ const expectedIndexes = [
 ] as const;
 
 describe('PGLite CJK trigram candidate retrieval', () => {
-  test('migration 117 upgrades only PGLite with all missing trigram indexes', () => {
-    const migration = MIGRATIONS.find((entry) => entry.version === 117);
+  test('migration 119 upgrades only PGLite with all missing trigram indexes', () => {
+    const migration = MIGRATIONS.find((entry) => entry.version === 119);
     expect(migration?.name).toBe('pglite_cjk_trigram_candidate_indexes');
     expect(migration?.sqlFor?.postgres).toBe('');
 

@@ -74,6 +74,8 @@ function stripJsonBom(content: string): string {
 export interface GBrainConfig {
   [key: string]: unknown;
   engine: 'postgres' | 'pglite';
+  /** MCP catalog ceiling. full preserves compatibility; starter/verbs reduce agent context. */
+  mcp_surface?: 'verbs' | 'starter' | 'full';
   database_url?: string;
   database_path?: string;
   /**
@@ -111,6 +113,13 @@ export interface GBrainConfig {
   /** AI gateway config. Embedding has no provider default; model + dimensions must both be explicit. */
   embedding_model?: string;
   embedding_dimensions?: number;
+  embedding_rebuild?: {
+    status: 'paused' | 'running';
+    model: string;
+    dimensions: number;
+    total: number;
+    updated_at: string;
+  };
   /**
    * v0.37 (D9): user opted into deferred-setup mode at init time via
    * `gbrain init --no-embedding`. When true, embed callsites and `gbrain
@@ -195,6 +204,16 @@ export interface GBrainConfig {
   embedding_multimodal?: boolean;
   /** Model override for multimodal embeddings (e.g. "voyage:voyage-multimodal-3"). */
   embedding_multimodal_model?: string;
+
+  /**
+   * Retrieval Reflex file-plane controls. Missing means enabled with the
+   * GBrain defaults (three pointers, four-turn window, lexical arms on).
+   * Environment aliases are PMBRAIN_* first with GBRAIN_* compatibility.
+   */
+  retrieval_reflex?: boolean;
+  retrieval_reflex_max_pointers?: number;
+  retrieval_reflex_window_turns?: number;
+  retrieval_reflex_lexical_arms?: boolean;
   embedding_image_ocr?: boolean;
   embedding_image_ocr_model?: string;
 
@@ -327,7 +346,9 @@ export interface GBrainConfig {
   /** Explicitly published, read-only skill catalog for MCP clients. */
   mcp?: {
     publish_skills?: boolean;
+    publish_advisor?: boolean;
     skills_dir?: string;
+    default_surface_dcr?: 'verbs' | 'starter' | 'full';
   };
 }
 
@@ -506,6 +527,28 @@ export function loadConfig(): GBrainConfig | null {
       : {}),
     ...(envCompat('PMBRAIN_EMBEDDING_IMAGE_OCR_MODEL', 'GBRAIN_EMBEDDING_IMAGE_OCR_MODEL')
       ? { embedding_image_ocr_model: envCompat('PMBRAIN_EMBEDDING_IMAGE_OCR_MODEL', 'GBRAIN_EMBEDDING_IMAGE_OCR_MODEL') }
+      : {}),
+    ...(envCompat('PMBRAIN_RETRIEVAL_REFLEX', 'GBRAIN_RETRIEVAL_REFLEX')
+      ? {
+          retrieval_reflex: !['false', '0'].includes(
+            envCompat('PMBRAIN_RETRIEVAL_REFLEX', 'GBRAIN_RETRIEVAL_REFLEX')!,
+          ),
+        }
+      : {}),
+    ...(envCompat('PMBRAIN_RETRIEVAL_REFLEX_WINDOW_TURNS', 'GBRAIN_RETRIEVAL_REFLEX_WINDOW_TURNS')
+      && Number.isFinite(Number(envCompat('PMBRAIN_RETRIEVAL_REFLEX_WINDOW_TURNS', 'GBRAIN_RETRIEVAL_REFLEX_WINDOW_TURNS')))
+      ? {
+          retrieval_reflex_window_turns: Number(
+            envCompat('PMBRAIN_RETRIEVAL_REFLEX_WINDOW_TURNS', 'GBRAIN_RETRIEVAL_REFLEX_WINDOW_TURNS'),
+          ),
+        }
+      : {}),
+    ...(envCompat('PMBRAIN_RETRIEVAL_REFLEX_LEXICAL_ARMS', 'GBRAIN_RETRIEVAL_REFLEX_LEXICAL_ARMS')
+      ? {
+          retrieval_reflex_lexical_arms: !/^(false|0|off|no)$/i.test(
+            envCompat('PMBRAIN_RETRIEVAL_REFLEX_LEXICAL_ARMS', 'GBRAIN_RETRIEVAL_REFLEX_LEXICAL_ARMS')!.trim(),
+          ),
+        }
       : {}),
     ...(envCompat('PMBRAIN_REMOTE_CLIENT_SECRET', 'GBRAIN_REMOTE_CLIENT_SECRET') && fileConfig?.remote_mcp
       ? { remote_mcp: { ...fileConfig.remote_mcp, oauth_client_secret: envCompat('PMBRAIN_REMOTE_CLIENT_SECRET', 'GBRAIN_REMOTE_CLIENT_SECRET') } }
@@ -798,6 +841,10 @@ export const KNOWN_CONFIG_KEYS: readonly string[] = [
   'eval.scrub_pii',
   'embedding_multimodal',
   'embedding_multimodal_model',
+  'retrieval_reflex',
+  'retrieval_reflex_max_pointers',
+  'retrieval_reflex_window_turns',
+  'retrieval_reflex_lexical_arms',
   'embedding_image_ocr',
   'embedding_image_ocr_model',
   'embedding_columns',
@@ -807,6 +854,7 @@ export const KNOWN_CONFIG_KEYS: readonly string[] = [
   'sync.repo_path',
   'sync.last_commit',
   'sync.include_working_tree',
+  'sync.exclude',
   // DB-plane (v0.32.3 search modes + related)
   'search.mode',
   'search.cache.enabled',
@@ -878,6 +926,7 @@ export const KNOWN_CONFIG_KEYS: readonly string[] = [
   'content_sanity.prose_check_enabled',
   // MCP skill catalog. Remote publication is opt-in.
   'mcp.publish_skills',
+  'mcp.publish_advisor',
   'mcp.skills_dir',
   // Spend controls. Registered so `pmbrain config set` accepts these without
   // --force; `spend.posture` itself is validated by the config command.

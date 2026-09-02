@@ -2,10 +2,10 @@ import { describe, expect, test } from 'bun:test';
 import { describeDreamRunProgress } from '../admin/src/lib/dream-run-progress.ts';
 import type { ConsoleRun } from '../admin/src/lib/shared.tsx';
 
-function runWith(stderr: string, status: ConsoleRun['status'] = 'running'): ConsoleRun {
+function runWith(stderr: string, status: ConsoleRun['status'] = 'running', kind: ConsoleRun['kind'] = 'dream_propose_takes'): ConsoleRun {
   return {
     id: 'dream-progress-1',
-    kind: 'dream_propose_takes',
+    kind,
     status,
     command: ['pmbrain', 'dream', '--phase', 'propose_takes', '--json', '--progress-json'],
     stdout: '',
@@ -36,6 +36,26 @@ describe('Dream task progress parsing', () => {
     });
     expect(progress?.detail).toContain('4 / 25 页');
     expect(progress?.heartbeat).toContain('第 5 / 25 页');
+  });
+
+  test('maps import.files ticks onto 内容同步 so Task Center is not stuck waiting for page counts', () => {
+    const progress = describeDreamRunProgress(runWith([
+      '{"event":"start","phase":"cycle.sync","ts":"2026-09-02T09:19:50.160Z"}',
+      '{"event":"start","phase":"import.files","ts":"2026-09-02T09:20:08.040Z","total":613}',
+      '{"event":"tick","phase":"import.files","done":531,"elapsed_ms":191000,"ts":"2026-09-02T09:23:19.000Z","total":613,"pct":86.6,"note":"imported=531 skipped=82 errors=80"}',
+      '{"event":"finish","phase":"import.files","elapsed_ms":191634,"ts":"2026-09-02T09:23:19.674Z","done":613,"total":613}',
+    ].join('\n'), 'running', 'dream_quick'));
+
+    expect(progress).toMatchObject({
+      phase: 'sync',
+      phaseLabel: '内容同步',
+      done: 613,
+      total: 613,
+      pct: 100,
+    });
+    expect(progress?.detail).toContain('613 / 613 页');
+    expect(progress?.detail).not.toBe('正在等待本阶段返回页数');
+    expect(progress?.heartbeat).toContain('imported=531');
   });
 
   test('does not report an active phase after the run is terminal', () => {

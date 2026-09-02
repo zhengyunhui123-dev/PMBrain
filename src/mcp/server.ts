@@ -8,18 +8,26 @@ import { buildToolDefs } from './tool-defs.ts';
 import { dispatchToolCall, validateParams, buildOperationContext } from './dispatch.ts';
 import { getBrainHotMemoryMeta } from '../core/facts/meta-hook.ts';
 import { resolveMcpDefaultSourceId } from '../core/source-resolver.ts';
+import { bindResolveIpcForServe } from './resolve-ipc-binding.ts';
+import { PMBRAIN_MCP_INSTRUCTIONS } from './instructions.ts';
+import { filterOpsForSurface, type McpSurface } from './surface.ts';
 
-export async function startMcpServer(engine: BrainEngine) {
+export async function startMcpServer(engine: BrainEngine, opts: { surface?: McpSurface } = {}) {
+  const defaultSourceId = await resolveMcpDefaultSourceId(engine);
+  const surface = opts.surface ?? 'full';
+  const surfaceOps = filterOpsForSurface(operations, surface);
+  const allowedOps = new Set(surfaceOps.map((op) => op.name));
+  const ipcBinding = await bindResolveIpcForServe(engine, defaultSourceId);
   const server = new Server(
     { name: 'pmbrain', version: VERSION },
-    { capabilities: { tools: {} } },
+    { capabilities: { tools: {} }, instructions: PMBRAIN_MCP_INSTRUCTIONS },
   );
 
   // Generate tool definitions from operations. Extracted to buildToolDefs so
   // the subagent tool registry (v0.15+) can call the same mapper against a
   // filtered OPERATIONS subset instead of duplicating this shape.
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: buildToolDefs(operations),
+    tools: buildToolDefs(surfaceOps),
   }));
 
   // Dispatch tool calls via shared dispatch.ts (parity with HTTP transport).
@@ -46,6 +54,9 @@ export async function startMcpServer(engine: BrainEngine) {
       // Code see the brain's relevant hot memory automatically alongside
       // every tool-call response. Best-effort; absorbs errors.
       metaHook: getBrainHotMemoryMeta,
+      allowedOps,
+      surface,
+      surfaceCeiling: surface,
     });
   });
 
@@ -60,7 +71,13 @@ export async function startMcpServer(engine: BrainEngine) {
     if (shuttingDown) return;
     shuttingDown = true;
     process.stderr.write(`[pmbrain-serve] shutdown: ${reason}\n`);
-    Promise.resolve(engine.disconnect?.())
+    ipcBinding.close();
+    Promise.resolve()
+      .then(async () => {
+        const { awaitPendingVolunteerEventWrites } = await import('../core/context/volunteer-events.ts');
+        await awaitPendingVolunteerEventWrites();
+      })
+      .then(() => engine.disconnect?.())
       .catch(() => {})
       .finally(() => process.exit(code));
   };

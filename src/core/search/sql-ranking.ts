@@ -20,7 +20,7 @@
 import { privatePagesFilterFragment } from './private-visibility.ts';
 
 /** Escape `%`, `_`, and `\` so a string can be used as a LIKE prefix literal. */
-function escapeLikePattern(s: string): string {
+export function escapeLikePattern(s: string): string {
   return s.replace(/[%_\\]/g, '\\$&');
 }
 

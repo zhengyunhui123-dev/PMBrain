@@ -711,7 +711,9 @@ export function attributeKnob<K extends keyof ModeBundle>(
 // global cache cold-miss on upgrade — EVERY query_cache row invalidates,
 // including conservative/no-reranker calls where autocut is a no-op (the hash
 // is global, not per-mode). Refills within cache.ttl_seconds (3600s default).
-export const KNOBS_HASH_VERSION = 10;
+// PMBrain 1.3.7 bump 10→11: fold current result-affecting request posture
+// (hard excludes, detail, salience and recency) into query-cache identity.
+export const KNOBS_HASH_VERSION = 11;
 
 /**
  * v0.36 (D8 / CDX-2) — second-arg context for the cache key. The
@@ -740,6 +742,14 @@ export interface KnobsHashContext {
    */
   schemaPack?: string;
   schemaPackVersion?: string;
+  /** Effective hard-exclude prefix policy, sorted before hashing. */
+  hardExcludes?: string[];
+  /** Effective detail level; undefined is the normal medium behavior. */
+  detail?: 'low' | 'medium' | 'high';
+  /** Effective post-fusion salience boost mode. */
+  salience?: 'off' | 'on' | 'strong';
+  /** Effective post-fusion recency boost mode. */
+  recency?: 'off' | 'on' | 'strong';
   /** Keep remote/private-page result sets in separate cache namespaces. */
   excludePrivate?: boolean;
 }
@@ -824,6 +834,12 @@ export function knobsHash(
     // v=10 addition: a remote result set that excludes private pages must
     // never be served from a cache row populated by a local request.
     `xp=${ctx?.excludePrivate === true ? 1 : 0}`,
+    // v=11 additions: PMBrain already exposes these result-affecting inputs,
+    // so cache lookup and write must use the same resolved posture.
+    `hx=${ctx?.hardExcludes ? [...ctx.hardExcludes].sort().join(',') : 'none'}`,
+    `det=${ctx?.detail ?? 'medium'}`,
+    `sal=${ctx?.salience ?? 'off'}`,
+    `rec=${ctx?.recency ?? 'off'}`,
   ];
   const h = createHash('sha256');
   h.update(parts.join('|'));

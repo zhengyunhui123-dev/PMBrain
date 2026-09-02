@@ -23,7 +23,7 @@ export function resolveCliEntry(): string[] {
 
 export function commandForPreview(
   preview: IntentPreview,
-  options: { embedCatchUp?: boolean } = {},
+  options: { embedCatchUp?: boolean; forceReembed?: boolean } = {},
 ): string[] {
   const s = preview.slots;
   const prefix = resolveCliEntry();
@@ -49,6 +49,7 @@ export function commandForPreview(
         'embed',
         '--stale',
         ...(options.embedCatchUp ? ['--catch-up', '--json'] : []),
+        ...(options.forceReembed ? ['--force-reembed'] : []),
       ];
     case 'show_sources':
       return [...prefix, 'sources', 'list', '--json'];

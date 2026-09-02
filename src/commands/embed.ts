@@ -2,6 +2,14 @@ import type { BrainEngine } from '../core/engine.ts';
 import { embedBatch } from '../core/embedding.ts';
 import type { ChunkInput } from '../core/types.ts';
 import { chunkText } from '../core/chunkers/recursive.ts';
+import { resolveMaxChunkTokens } from '../core/embedding-input-limit.ts';
+import { healOversizedPageChunks, healedChunksToStaleRows } from '../core/embed-oversize-heal.ts';
+import {
+  createEmbedStallWatchdog,
+  resolveEmbedStallAbortSeconds,
+  EMBED_STALL_CLEANUP_DEADLINE_MS,
+  noteEmbedApiResponse,
+} from '../core/embed-stall.ts';
 import { createProgress, type ProgressReporter } from '../core/progress.ts';
 import { getCliOptions, cliOptsToProgressOptions } from '../core/cli-options.ts';
 import { assertEmbeddingEnabled } from '../core/embedding-dim-check.ts';
@@ -70,8 +78,13 @@ export interface EmbedOpts {
    * remediation submits on big stale backlogs.
    */
   catchUp?: boolean;
+  forceReembed?: boolean;
   /** Limit distinct stale pages handled by this invocation. */
   pageLimit?: number;
+  /** Cooperative cancellation from Dream/Minions into provider requests. */
+  signal?: AbortSignal;
+  /** Suppress human stdout summaries for structured/background callers. */
+  quiet?: boolean;
 }
 
 /**
@@ -107,6 +120,10 @@ export interface EmbedResult {
   status: 'clean' | 'ok' | 'partial' | 'failed';
   /** True if this run was a dry-run. */
   dryRun: boolean;
+  /** Legacy oversized stored chunks split in place during this run. */
+  healed_splits?: number;
+  /** Resumable error classification emitted by the progress watchdog. */
+  reason?: 'stall_timeout';
 }
 
 function finalizeEmbedResult(result: EmbedResult): EmbedResult {
@@ -253,6 +270,15 @@ export async function runEmbedCore(engine: BrainEngine, opts: EmbedOpts): Promis
   // v0.37.11.0 (Lane D.2): pre-flight dim-mismatch check. Catches the headline
   // fresh-install bug class before the worker pool spends 20 parallel calls
   // hitting raw Postgres dimension errors.
+  if (opts.forceReembed && !opts.dryRun) {
+    const { getEmbeddingDimensions, getEmbeddingModel } = await import('../core/ai/gateway.ts');
+    const { alignEmbeddingDimension } = await import('../core/embedding-dimension-alignment.ts');
+    await alignEmbeddingDimension(engine, getEmbeddingDimensions(), {
+      forceReembed: true,
+      targetModel: getEmbeddingModel(),
+    });
+  }
+
   await preflightDimMismatch(engine, !!opts.dryRun);
   await preflightEmbeddingModelChange(engine, !!opts.dryRun);
 
@@ -273,9 +299,11 @@ export async function runEmbedCore(engine: BrainEngine, opts: EmbedOpts): Promis
 
   if (opts.slugs && opts.slugs.length > 0) {
     for (const s of opts.slugs) {
+      if (opts.signal?.aborted) break;
       try {
-        await embedPage(engine, s, !!opts.dryRun, result, opts.sourceId);
+        await embedPage(engine, s, !!opts.dryRun, result, opts.sourceId, opts.signal, opts.quiet);
       } catch (e: unknown) {
+        if (opts.signal?.aborted) break;
         result.failedPages++;
         result.failedChunks += e instanceof PageEmbeddingFailure ? e.failedChunks : 0;
         serr(`  Error embedding ${s}: ${e instanceof Error ? e.message : e}`);
@@ -284,16 +312,63 @@ export async function runEmbedCore(engine: BrainEngine, opts: EmbedOpts): Promis
     return finalizeEmbedResult(result);
   }
   if (opts.all || opts.stale) {
-    await embedAll(engine, !!opts.stale, !!opts.dryRun, result, opts.onProgress, opts.sourceId, {
+    const stallSeconds = opts.dryRun ? 0 : resolveEmbedStallAbortSeconds();
+    const stallAbort = new AbortController();
+    const forwardAbort = () => stallAbort.abort(opts.signal?.reason);
+    if (opts.signal) {
+      if (opts.signal.aborted) forwardAbort();
+      else opts.signal.addEventListener('abort', forwardAbort, { once: true });
+    }
+    const watchdog = stallSeconds > 0
+      ? createEmbedStallWatchdog({
+          thresholdSeconds: stallSeconds,
+          readProgress: () => result.embedded + (result.healed_splits ?? 0),
+        })
+      : undefined;
+    let drainError: unknown;
+    const drain = embedAll(engine, !!opts.stale, !!opts.dryRun, result, opts.onProgress, opts.sourceId, {
       batchSize: opts.batchSize,
       priority: opts.priority,
       catchUp: opts.catchUp,
       pageLimit: opts.pageLimit,
-    });
+      quiet: opts.quiet,
+    }, stallAbort.signal).catch((error) => { drainError = error; });
+    try {
+      if (!watchdog) {
+        await drain;
+      } else {
+        const outcome = await Promise.race([
+          drain.then(() => 'drained' as const),
+          watchdog.stalled.then(() => 'stalled' as const),
+        ]);
+        if (outcome === 'stalled') {
+          stallAbort.abort(new Error('stall_timeout'));
+          serr(
+            `  [embed] no successful progress for ${stallSeconds}s; aborting with partial progress banked ` +
+            `(embedded=${result.embedded}). Re-run to resume.`,
+          );
+          let deadline: ReturnType<typeof setTimeout> | undefined;
+          await Promise.race([
+            drain,
+            new Promise<void>(resolve => { deadline = setTimeout(resolve, EMBED_STALL_CLEANUP_DEADLINE_MS); }),
+          ]);
+          if (deadline) clearTimeout(deadline);
+          result.reason = 'stall_timeout';
+          result.failedPages += 1;
+          result.remainingChunks = Math.max(result.remainingChunks, 1);
+        }
+      }
+    } finally {
+      watchdog?.stop();
+      opts.signal?.removeEventListener('abort', forwardAbort);
+    }
+    if (drainError && result.reason !== 'stall_timeout') throw drainError;
     return finalizeEmbedResult(result);
   }
   if (opts.slug) {
-    await embedPage(engine, opts.slug, !!opts.dryRun, result, opts.sourceId);
+    if (!opts.signal?.aborted) {
+      await embedPage(engine, opts.slug, !!opts.dryRun, result, opts.sourceId, opts.signal, opts.quiet);
+    }
     return finalizeEmbedResult(result);
   }
   throw new Error('No embed target specified. Pass { slug }, { slugs }, { all }, or { stale }.');
@@ -345,13 +420,14 @@ export async function runEmbed(engine: BrainEngine, args: string[]): Promise<Emb
   const priorityRaw = priorityIdx >= 0 ? args[priorityIdx + 1] : undefined;
   const priority = priorityRaw === 'recent' ? 'recent' as const : undefined;
   const catchUp = args.includes('--catch-up');
+  const forceReembed = args.includes('--force-reembed');
   const json = args.includes('--json');
 
   let opts: EmbedOpts;
   if (slugsIdx >= 0) {
-    opts = { slugs: args.slice(slugsIdx + 1).filter(a => !a.startsWith('--')), dryRun, sourceId, batchSize, priority, catchUp };
+    opts = { slugs: args.slice(slugsIdx + 1).filter(a => !a.startsWith('--')), dryRun, sourceId, batchSize, priority, catchUp, forceReembed };
   } else if (all || stale) {
-    opts = { all, stale, dryRun, sourceId, batchSize, priority, catchUp };
+    opts = { all, stale, dryRun, sourceId, batchSize, priority, catchUp, forceReembed };
   } else {
     const slug = args.find(a => !a.startsWith('--'));
     if (!slug) {
@@ -378,6 +454,10 @@ export async function runEmbed(engine: BrainEngine, args: string[]): Promise<Emb
     const result = await runEmbedCore(engine, opts);
     if (progressStarted) progress.finish();
     if (json) process.stdout.write(JSON.stringify(result) + '\n');
+    if (result.reason === 'stall_timeout') {
+      serr('[embed] exiting non-zero: stall watchdog aborted the drain; partial progress is resumable.');
+      process.exit(1);
+    }
     return result;
   } catch (e) {
     if (progressStarted) progress.finish();
@@ -405,6 +485,8 @@ async function embedPage(
   dryRun: boolean,
   result: EmbedResult,
   sourceId?: string,
+  signal?: AbortSignal,
+  quiet?: boolean,
 ) {
   const opts = sourceId ? { sourceId } : undefined;
   const page = await engine.getPage(slug, opts);
@@ -418,13 +500,14 @@ async function embedPage(
   let chunks = await engine.getChunks(slug, opts);
   if (chunks.length === 0) {
     const inputs: ChunkInput[] = [];
+    const chunkOpts = { maxTokens: resolveMaxChunkTokens() };
     if (page.compiled_truth.trim()) {
-      for (const c of chunkText(page.compiled_truth)) {
+      for (const c of chunkText(page.compiled_truth, chunkOpts)) {
         inputs.push({ chunk_index: inputs.length, chunk_text: c.text, chunk_source: 'compiled_truth' });
       }
     }
     if (page.timeline.trim()) {
-      for (const c of chunkText(page.timeline)) {
+      for (const c of chunkText(page.timeline, chunkOpts)) {
         inputs.push({ chunk_index: inputs.length, chunk_text: c.text, chunk_source: 'timeline' });
       }
     }
@@ -441,15 +524,24 @@ async function embedPage(
       await engine.upsertChunks(slug, inputs, opts);
       chunks = await engine.getChunks(slug, opts);
     }
+  } else if (!dryRun) {
+    const healed = await healOversizedPageChunks(engine, slug, {
+      sourceId,
+      onSplit: (count) => {
+        result.healed_splits = (result.healed_splits ?? 0) + count;
+        serr(`  ${slug}: split ${count} oversized chunk(s) to fit the embedding input limit`);
+      },
+    });
+    if (healed.changed) chunks = healed.chunks;
   }
 
   // Embed chunks without embeddings
-  const toEmbed = chunks.filter(c => !c.embedded_at);
+  const toEmbed = chunks.filter(c => !c.embedded_at || c.embedding_is_null === true);
   result.total_chunks += chunks.length;
   result.skipped += chunks.length - toEmbed.length;
 
   if (toEmbed.length === 0) {
-    slog(`${slug}: all ${chunks.length} chunks already embedded`);
+    if (!quiet) slog(`${slug}: all ${chunks.length} chunks already embedded`);
     result.pages_processed++;
     return;
   }
@@ -461,7 +553,10 @@ async function embedPage(
   }
 
   try {
-    const embeddings = await embedBatch(toEmbed.map(c => c.chunk_text));
+    const embeddings = await embedBatch(
+      toEmbed.map(c => c.chunk_text),
+      signal ? { abortSignal: signal } : {},
+    );
     const embeddingModel = getEmbeddingModel();
     const embeddingMap = new Map<number, Float32Array>();
     for (let j = 0; j < toEmbed.length; j++) {
@@ -476,10 +571,13 @@ async function embedPage(
       token_count: c.token_count || Math.ceil(c.chunk_text.length / 4),
     }));
 
-    await engine.upsertChunks(slug, updated, opts);
+    await engine.upsertChunks(slug, updated, {
+      ...(opts ?? {}),
+      ...(signal && { signal }),
+    });
     result.embedded += toEmbed.length;
     result.pages_processed++;
-    slog(`${slug}: embedded ${toEmbed.length} chunks`);
+    if (!quiet) slog(`${slug}: embedded ${toEmbed.length} chunks`);
   } catch (error) {
     throw new PageEmbeddingFailure(toEmbed.length, error);
   }
@@ -497,8 +595,11 @@ async function embedAll(
     priority?: 'recent';
     catchUp?: boolean;
     pageLimit?: number;
+    quiet?: boolean;
   },
+  signal?: AbortSignal,
 ) {
+  if (signal?.aborted) return;
   const embeddingModel = getEmbeddingModel();
   // ─────────────────────────────────────────────────────────────
   // Stale-only fast path: avoid the listPages + per-page getChunks
@@ -516,7 +617,16 @@ async function embedAll(
   if (staleOnly) {
     // D7: thread sourceId so `gbrain embed --stale --source X` actually scopes.
     // v0.41.18.0 (A13): thread batchSize/priority/catchUp into the stale path.
-    return await embedAllStale(engine, sourceId, dryRun, result, onProgress, staleOpts, embeddingModel);
+    return await embedAllStale(
+      engine,
+      sourceId,
+      dryRun,
+      result,
+      onProgress,
+      staleOpts,
+      embeddingModel,
+      signal,
+    );
   }
 
   // v0.31.12: when sourceId is set, scope listPages to that source.
@@ -543,6 +653,7 @@ async function embedAll(
   // avoids overwhelming postgres connection pools. Users can tune via
   // GBRAIN_EMBED_CONCURRENCY env var based on their tier/infra.
   async function embedOnePage(page: typeof pages[number]) {
+    if (signal?.aborted) return;
     // v0.31.12: thread source_id from the page row so getChunks/upsertChunks
     // target the correct (source_id, slug) row, not the 'default' source.
     const pageSourceId = page.source_id;
@@ -569,7 +680,10 @@ async function embedAll(
     }
 
     try {
-      const embeddings = await embedBatch(toEmbed.map(c => c.chunk_text));
+      const embeddings = await embedBatch(
+        toEmbed.map(c => c.chunk_text),
+        signal ? { abortSignal: signal } : {},
+      );
       // Build a map of new embeddings by chunk_index
       const embeddingMap = new Map<number, Float32Array>();
       for (let j = 0; j < toEmbed.length; j++) {
@@ -584,9 +698,13 @@ async function embedAll(
         model: embeddingModel,
         token_count: c.token_count || Math.ceil(c.chunk_text.length / 4),
       }));
-      await engine.upsertChunks(page.slug, updated, pageOpts);
+      await engine.upsertChunks(page.slug, updated, {
+        ...(pageOpts ?? {}),
+        ...(signal && { signal }),
+      });
       result.embedded += toEmbed.length;
     } catch (e: unknown) {
+      if (signal?.aborted) return;
       result.failedPages++;
       result.failedChunks += toEmbed.length;
       serr(`\n  Error embedding ${page.slug}: ${e instanceof Error ? e.message : e}`);
@@ -607,6 +725,7 @@ async function embedAll(
   await runEmbeddingExecutionPool({
     items: pages,
     model: embeddingModel,
+    signal,
     onItem: (page) => embedOnePage(page),
     onError: (error, page) => {
       result.failedPages++;
@@ -615,10 +734,12 @@ async function embedAll(
   });
 
   // Stdout summary preserved for scripts/tests that grep for counts.
-  if (dryRun) {
-    slog(`[dry-run] Would embed ${result.would_embed} chunks across ${pages.length} pages`);
-  } else {
-    slog(`Embedded ${result.embedded} chunks across ${pages.length} pages`);
+  if (!staleOpts?.quiet) {
+    if (dryRun) {
+      slog(`[dry-run] Would embed ${result.would_embed} chunks across ${pages.length} pages`);
+    } else {
+      slog(`Embedded ${result.embedded} chunks across ${pages.length} pages`);
+    }
   }
 }
 
@@ -651,9 +772,12 @@ async function embedAllStale(
     priority?: 'recent';
     catchUp?: boolean;
     pageLimit?: number;
+    quiet?: boolean;
   } | undefined,
   embeddingModel: string,
+  externalSignal?: AbortSignal,
 ) {
+  if (externalSignal?.aborted) return;
   // D7: thread sourceId so source-scoped runs only count + visit
   // that source's NULL embeddings.
   const sourceOpt = sourceId ? { sourceId } : undefined;
@@ -661,10 +785,12 @@ async function embedAllStale(
   // Pre-flight: 0 stale chunks → nothing to do, no further DB reads.
   const staleCount = await engine.countStaleChunks(sourceOpt);
   if (staleCount === 0) {
-    if (dryRun) {
-      slog('[dry-run] Would embed 0 chunks (0 stale found)');
-    } else {
-      slog('Embedded 0 chunks (0 stale found)');
+    if (!staleOpts?.quiet) {
+      if (dryRun) {
+        slog('[dry-run] Would embed 0 chunks (0 stale found)');
+      } else {
+        slog('Embedded 0 chunks (0 stale found)');
+      }
     }
     return;
   }
@@ -673,7 +799,7 @@ async function embedAllStale(
     result.would_embed += staleCount;
     result.total_chunks += staleCount;
     if (onProgress) onProgress(1, 1, 0);
-    slog(`[dry-run] Would embed ${staleCount} stale chunks`);
+    if (!staleOpts?.quiet) slog(`[dry-run] Would embed ${staleCount} stale chunks`);
     return;
   }
 
@@ -692,9 +818,18 @@ async function embedAllStale(
     ? null
     : parseInt(process.env.GBRAIN_EMBED_TIME_BUDGET_MS || `${30 * 60 * 1000}`, 10);
   const budgetController = new AbortController();
+  let budgetExpired = false;
   const budgetTimer = budgetMs === null
     ? null
-    : setTimeout(() => budgetController.abort(), budgetMs);
+    : setTimeout(() => {
+        budgetExpired = true;
+        budgetController.abort(new Error('embed wall-clock budget exceeded'));
+      }, budgetMs);
+  const onExternalAbort = () => budgetController.abort(externalSignal?.reason);
+  if (externalSignal) {
+    if (externalSignal.aborted) onExternalAbort();
+    else externalSignal.addEventListener('abort', onExternalAbort, { once: true });
+  }
   const budgetSignal = budgetController.signal;
 
   // v0.41.18.0 (A13): --priority recent threads orderBy='updated_desc' to
@@ -717,7 +852,7 @@ async function embedAllStale(
     // eslint-disable-next-line no-constant-condition
     while (true) {
       if (budgetSignal.aborted) {
-        if (!budgetExitNotified) {
+        if (budgetExpired && !budgetExitNotified) {
           serr(`\n  [embed] wall-clock budget (${budgetMs}ms) exceeded; exiting cleanly. Re-run picks up via partial index.`);
           budgetExitNotified = true;
         }
@@ -775,10 +910,21 @@ async function embedAllStale(
         : Math.ceil(staleCount / PAGE_SIZE) * keys.length;
 
       async function embedOneKey(key: string) {
-        const stale = byKey.get(key)!;
+        let stale = byKey.get(key)!;
         const keySourceId = stale[0]?.source_id ?? 'default';
         const slug = stale[0].slug;
         try {
+          const healed = await healOversizedPageChunks(engine, slug, {
+            sourceId: keySourceId,
+            onSplit: (count) => {
+              result.healed_splits = (result.healed_splits ?? 0) + count;
+              serr(`\n  ${slug}: split ${count} oversized chunk(s) to fit the embedding input limit`);
+            },
+          });
+          if (healed.changed) {
+            stale = healedChunksToStaleRows(healed.chunks, slug, keySourceId);
+            if (stale.length === 0) return;
+          }
           // Fetch the full page once so provider-sized checkpoint writes retain
           // code metadata and never replace/delete sibling chunks.
           const existing = await engine.getChunks(slug, { sourceId: keySourceId });
@@ -873,14 +1019,17 @@ async function embedAllStale(
     }
   } finally {
     if (budgetTimer !== null) clearTimeout(budgetTimer);
+    externalSignal?.removeEventListener('abort', onExternalAbort);
   }
 
-  if (budgetSignal.aborted && budgetMs !== null) {
+  if (budgetExpired && budgetMs !== null) {
     result.budgetExceeded = true;
     result.remainingChunks = Math.max(0, staleCount - result.embedded);
   }
 
-  slog(`Embedded ${result.embedded} chunks across ${totalProcessedPages} pages`);
+  if (!staleOpts?.quiet) {
+    slog(`Embedded ${result.embedded} chunks across ${totalProcessedPages} pages`);
+  }
 }
 
 /**
@@ -993,7 +1142,11 @@ export async function embedBatchWithBackoff(
       // D4a + D8: maxRetries:0 disables the SDK's stacked retries (so this
       // wrapper is the single source of truth) and abortSignal threads
       // through to the gateway so an in-flight HTTP request cancels mid-fetch.
-      return await embedBatch(texts, { maxRetries: 0, ...(signal && { abortSignal: signal }) });
+      try {
+        return await embedBatch(texts, { maxRetries: 0, ...(signal && { abortSignal: signal }) });
+      } finally {
+        noteEmbedApiResponse();
+      }
     } catch (e: unknown) {
       // If the budget fired we may have been aborted mid-fetch; bubble out.
       if (signal?.aborted) throw e;

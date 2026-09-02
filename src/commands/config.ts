@@ -46,14 +46,31 @@ export function redactConfigValue(key: string, value: string): string {
   return value;
 }
 
-async function switchEmbeddingModel(engine: BrainEngine, nextModel: string): Promise<void> {
+export async function switchEmbeddingModel(
+  engine: BrainEngine,
+  nextModel: string,
+  opts: { expectedDimensions?: number } = {},
+): Promise<void> {
   const current = loadConfigFileOnly();
   if (!current) throw new Error('No config found. Run: pmbrain init');
   const previousModel = current.embedding_model?.trim();
   if (previousModel === nextModel) {
     await engine.unsetConfig('embedding_model');
     await engine.unsetConfig('embedding_dimensions');
-    console.log(`Embedding model is already ${nextModel}; no re-embedding needed.`);
+    const stale = await engine.countStaleChunks();
+    if (stale === 0) {
+      console.log(`Embedding model is already ${nextModel}; no re-embedding needed.`);
+      return;
+    }
+    // A prior migration may have committed the new model/dimension and then
+    // stopped while re-embedding. Re-running the exact command must resume the
+    // stale rows instead of treating the matching config as completion.
+    const { runEmbedCore } = await import('./embed.ts');
+    const result = await runEmbedCore(engine, { stale: true, catchUp: true });
+    console.log(
+      `Embedding migration resumed for ${nextModel}: ${result.embedded} chunks updated, ` +
+      `${result.total_chunks - result.embedded} still pending.`,
+    );
     return;
   }
 
@@ -87,6 +104,13 @@ async function switchEmbeddingModel(engine: BrainEngine, nextModel: string): Pro
     );
   }
   candidate.embedding_dimensions = detectedDimensions;
+  if (opts.expectedDimensions !== undefined && detectedDimensions !== opts.expectedDimensions) {
+    configureGateway(buildGatewayConfig(current));
+    throw new Error(
+      `Embedding model ${nextModel} returned ${detectedDimensions} dimensions, `
+      + `but --dim requested ${opts.expectedDimensions}. No configuration or vectors were changed.`,
+    );
+  }
 
   saveConfig(candidate);
   let committed = false;

@@ -103,6 +103,9 @@ export function collectOneShotPgliteExitFailures(root: string): string[] {
   if (!cli.includes('commandFailed')) {
     failures.push('src/cli.ts must preserve a failed PGLite command exit code instead of always exiting 0');
   }
+  if (!cli.includes('exitCode: commandFailed ? 1 : 0')) {
+    failures.push('src/cli.ts must pass an explicit zero for successful one-shot commands');
+  }
   if (!preview.includes('test/cli-disconnect.test.ts')) {
     failures.push('scripts/ci-pr-preview.ts must run test/cli-disconnect.test.ts so packaged PGLite hang regressions are caught locally');
   }

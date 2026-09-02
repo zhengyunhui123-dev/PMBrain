@@ -40,6 +40,8 @@ export interface EmbeddingTouchpoint {
    * can be sized for safely at init time.
    */
   model_dims?: Record<string, number>;
+  /** Per-model maximum tokens accepted by one embedding input. */
+  max_input_tokens?: Readonly<Record<string, number>>;
   cost_per_1m_tokens_usd?: number;
   price_last_verified?: string; // ISO date
   /**

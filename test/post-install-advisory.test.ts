@@ -94,6 +94,7 @@ describe('buildAdvisory — partial-install path', () => {
   it('lists ONLY missing skills when most are already installed', () => {
     const { workspace, skillsDir } = scratchWorkspace([
       'brain-ops',
+      'cold-start',
       'article-enrichment',
       'strategic-reading',
       'concept-synthesis',
@@ -135,6 +136,7 @@ describe('buildAdvisory — partial-install path', () => {
 describe('buildAdvisory — all-installed → null (no nag)', () => {
   it('returns null when every recommended skill is already installed', () => {
     const allRecommended = [
+      'cold-start',
       'book-mirror',
       'article-enrichment',
       'strategic-reading',

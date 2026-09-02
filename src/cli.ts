@@ -1416,8 +1416,13 @@ async function handleCliOnly(command: string, args: string[]) {
       }
       // doctor is handled before connectEngine() above
       case 'migrate': {
-        const { runMigrateEngine } = await import('./commands/migrate-engine.ts');
-        await runMigrateEngine(engine, args);
+        if (args[0] === 'embeddings') {
+          const { runMigrateEmbeddings } = await import('./commands/migrate-embeddings.ts');
+          await runMigrateEmbeddings(engine, args.slice(1));
+        } else {
+          const { runMigrateEngine } = await import('./commands/migrate-engine.ts');
+          await runMigrateEngine(engine, args);
+        }
         break;
       }
       case 'eval': {
@@ -1810,7 +1815,7 @@ async function handleCliOnly(command: string, args: string[]) {
       // Do not call db.close() on PGLite: packaged Windows Bun can freeze or
       // crash. Flush stdio and exit with the command's real status.
       await disconnectCliEngine(engine, command, {
-        exitCode: commandFailed ? 1 : undefined,
+        exitCode: commandFailed ? 1 : 0,
       });
     }
   }

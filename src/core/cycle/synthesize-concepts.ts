@@ -22,6 +22,7 @@ import type { BrainEngine } from '../engine.ts';
 import type { PhaseResult } from '../cycle.ts';
 import type { ProgressReporter } from '../progress.ts';
 import { writeReceipt } from '../extract/receipt-writer.ts';
+import { throwIfAborted } from '../abort-check.ts';
 import { upsertExtractRollup } from '../extract/rollup-writer.ts';
 import { chat as gatewayChat, isAvailable } from '../ai/gateway.ts';
 import { importFromContent } from '../import-file.ts';
@@ -35,6 +36,8 @@ const TIER_T3_MIN = 2;
 
 export interface SynthesizeConceptsOpts {
   brainDir?: string;
+  /** Explicit cycle Source. When omitted, preserve the legacy global/default behavior. */
+  sourceId?: string;
   dryRun?: boolean;
   yieldDuringPhase?: (() => Promise<void>) | undefined;
   /**
@@ -44,6 +47,8 @@ export interface SynthesizeConceptsOpts {
    * `heartbeat()`; cycle.ts owns start/finish.
    */
   progress?: ProgressReporter;
+  /** Cooperative stop from the owning Dream job. */
+  signal?: AbortSignal;
   /** Test seam: alternative chat function. */
   _chat?: typeof gatewayChat;
   /** Test seam: skip DB query; cluster these atoms directly. */
@@ -69,6 +74,7 @@ export async function runPhaseSynthesizeConcepts(
   engine: BrainEngine,
   opts: SynthesizeConceptsOpts = {},
 ): Promise<PhaseResult> {
+  throwIfAborted(opts.signal, '[dream] synthesize_concepts');
   const chat = opts._chat ?? gatewayChat;
   const resolvedModel = await resolveDreamModel(engine, { phase: 'synthesize_concepts' });
   const modelDetails = dreamModelDetails(resolvedModel, 'single_chat');
@@ -88,7 +94,9 @@ export async function runPhaseSynthesizeConcepts(
            FROM pages
           WHERE type = 'atom'
             AND deleted_at IS NULL
-            AND (frontmatter->>'imported_from') IS NULL`,
+            AND (frontmatter->>'imported_from') IS NULL
+            AND ($1::text IS NULL OR source_id = $1)`,
+        [opts.sourceId ?? null],
       );
       atoms = rows
         .filter((r) => Array.isArray(r.frontmatter?.concepts) && r.frontmatter.concepts.length > 0)
@@ -185,6 +193,7 @@ export async function runPhaseSynthesizeConcepts(
   }
 
   for (const group of atomGroups) {
+    throwIfAborted(opts.signal, '[dream] synthesize_concepts');
     tierCounts[group.tier]++;
     let narrative: string;
     if (group.tier === 'T1' || group.tier === 'T2') {
@@ -209,6 +218,7 @@ export async function runPhaseSynthesizeConcepts(
               },
             ],
             maxTokens: 500,
+            abortSignal: opts.signal,
           });
           // Post-await yield (T3): the LLM call is the main TTL hazard
           // codex flagged. Throttle inside maybeYield bounds the actual
@@ -219,6 +229,7 @@ export async function runPhaseSynthesizeConcepts(
             (result.usage.input_tokens * 3.0 + result.usage.output_tokens * 15.0) / 1_000_000;
           narrative = result.text.trim() || deterministicNarrative(group);
         } catch (err) {
+          throwIfAborted(opts.signal, '[dream] synthesize_concepts');
           failures.push({
             concept: group.conceptSlug,
             error: err instanceof Error ? err.message : String(err),
@@ -232,6 +243,7 @@ export async function runPhaseSynthesizeConcepts(
 
     const title = group.conceptSlug.split('/').pop() ?? group.conceptSlug;
     const outputSlug = `concepts/${title}`;
+    const outputSourceId = opts.sourceId ?? 'default';
     if (!opts.dryRun) {
       // Concept pages are user-facing Dream output and must participate in
       // the same chunk/search pipeline as imported knowledge. A bare putPage
@@ -255,6 +267,7 @@ export async function runPhaseSynthesizeConcepts(
       );
       await importFromContent(engine, outputSlug, markdown, {
         noEmbed: !isAvailable('embedding'),
+        sourceId: outputSourceId,
       });
       const relationshipRows = group.atomRefs.flatMap(ref => [
         {
@@ -265,9 +278,9 @@ export async function runPhaseSynthesizeConcepts(
           link_source: 'frontmatter',
           origin_slug: outputSlug,
           origin_field: 'derives_from',
-          from_source_id: 'default',
+          from_source_id: outputSourceId,
           to_source_id: ref.source_id,
-          origin_source_id: 'default',
+          origin_source_id: outputSourceId,
           resolution_type: 'qualified' as const,
         },
         {
@@ -279,8 +292,8 @@ export async function runPhaseSynthesizeConcepts(
           origin_slug: outputSlug,
           origin_field: 'derives_from',
           from_source_id: ref.source_id,
-          to_source_id: 'default',
-          origin_source_id: 'default',
+          to_source_id: outputSourceId,
+          origin_source_id: outputSourceId,
           resolution_type: 'qualified' as const,
         },
       ]);
@@ -306,7 +319,7 @@ export async function runPhaseSynthesizeConcepts(
     try {
       await writeReceipt(engine, {
         kind: 'concepts',
-        source_id: 'default',
+        source_id: opts.sourceId ?? 'default',
         run_id: runId,
         round: 'single',
         extracted_at: new Date().toISOString(),
@@ -324,7 +337,7 @@ export async function runPhaseSynthesizeConcepts(
   if (!opts.dryRun) {
     await upsertExtractRollup(engine, {
       kind: 'concepts',
-      source_id: 'default',
+      source_id: opts.sourceId ?? 'default',
       cost_delta: estimatedSpendUsd,
       round_completed_delta: failures.length === 0 ? 1 : 0,
       halt_delta: failures.length > 0 ? 1 : 0,

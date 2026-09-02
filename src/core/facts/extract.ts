@@ -27,6 +27,7 @@ import { INJECTION_PATTERNS } from '../think/sanitize.ts';
 import { resolveModel } from '../model-config.ts';
 import type { BrainEngine, NewFact, FactKind } from '../engine.ts';
 import { normalizeMetricLabel } from './extract-from-fence.ts';
+import { stripReasoningBlocks } from '../llm-json.ts';
 
 /**
  * v0.31 (D15): kill-switch for fact extraction.
@@ -271,6 +272,14 @@ interface RawExtracted {
  * the model included it. Production callers should use extractFactsFromTurn.
  */
 export function parseExtractorJson(raw: string): RawExtracted[] | null {
+  const direct = parseExtractorJsonInner(raw);
+  if (direct) return direct;
+  const stripped = stripReasoningBlocks(raw);
+  if (stripped && stripped !== raw.trim()) return parseExtractorJsonInner(stripped);
+  return null;
+}
+
+function parseExtractorJsonInner(raw: string): RawExtracted[] | null {
   const cleaned = raw.trim().replace(/^```(?:json)?\s*/, '').replace(/\s*```$/, '');
   // Strict.
   const direct = tryArrayShape(cleaned);

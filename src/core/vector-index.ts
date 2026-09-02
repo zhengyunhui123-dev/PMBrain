@@ -33,6 +33,16 @@ export function applyChunkEmbeddingIndexPolicy(sql: string, dims: number): strin
   return sql.replaceAll(CHUNK_EMBEDDING_HNSW_INDEX, chunkEmbeddingIndexSql(dims));
 }
 
+export function applyExistingColumnHnswPolicy(sql: string, existingColumnDim: number | null | undefined): string {
+  if (existingColumnDim == null) return sql;
+  return applyChunkEmbeddingIndexPolicy(sql, existingColumnDim);
+}
+
+export function isHnswDimensionLimitError(error: unknown): boolean {
+  const msg = error instanceof Error ? error.message : String(error);
+  return /column cannot have more than \d+ dimensions for hnsw index/i.test(msg);
+}
+
 // ---------------------------------------------------------------------------
 // v0.30.1 Lifecycle Manager (Fix 5)
 // ---------------------------------------------------------------------------

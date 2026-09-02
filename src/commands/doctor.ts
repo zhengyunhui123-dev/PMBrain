@@ -35,6 +35,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from 'fs';
 import { isSourceUnchangedSinceSync } from '../core/git-head.ts';
 import { CHUNKER_VERSION } from '../core/chunkers/code.ts';
 import { DEFAULT_USER_HOLDER } from '../core/cycle/emotional-weight.ts';
+import { buildRetrievalReflexCheck } from './doctor-retrieval-reflex.ts';
 
 export interface Check {
   name: string;
@@ -3289,6 +3290,7 @@ export async function buildChecks(
   // bundled skills/ dir without warning.
   const detected = scope === 'all' ? autoDetectSkillsDirReadOnly() : { dir: null, source: 'none' as const };
   const skillsDir = detected.dir;
+  checks.push(buildRetrievalReflexCheck());
   if (scope === 'all' && skillsDir) {
 
     // --fix: run auto-repair BEFORE checkResolvable so the post-fix scan

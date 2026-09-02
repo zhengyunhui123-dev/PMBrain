@@ -140,7 +140,11 @@ import {
   RunAcceptedResponseSchema,
   SetDefaultSourceResponseSchema,
   SourceAddResponseSchema,
+  AdvisorAdminResponseSchema,
+  AdvisorApplyRequestSchema,
+  AdvisorApplyResponseSchema,
 } from '../../shared/contracts/index.ts';
+import { applyAdminAdvisorFinding, getAdminAdvisorReport } from './admin-advisor.ts';
 
 export interface PmbrainAdminRouteOptions {
   app: express.Express;
@@ -190,12 +194,20 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
           allowTerminate: true,
         })
       : null;
+    const { readEmbeddingRebuildState, clearEmbeddingRebuildState } = await import('../core/embedding-rebuild-state.ts');
+    const hasActiveEmbed = runs.some(run => run.kind === 'embed_stale' && (run.status === 'queued' || run.status === 'running'));
+    let embeddingRebuild = readEmbeddingRebuildState(loadConfig() ?? config);
+    if (embeddingRebuild?.status === 'running' && !hasActiveEmbed) {
+      clearEmbeddingRebuildState();
+      embeddingRebuild = null;
+    }
     res.json({
       mode: config.engine === 'pglite' ? 'pglite' : 'postgres',
       pglite_busy: getPgliteBusy(),
       pglite_owner: pgliteOwner,
       rows: runs,
       queue,
+      embedding_rebuild: embeddingRebuild,
       server_time: new Date().toISOString(),
     });
   });
@@ -250,6 +262,81 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
       }));
     } catch (e) {
       res.status(500).json({ error: e instanceof Error ? e.message : 'overview_failed' });
+    }
+  });
+
+  app.get('/admin/api/search-index-health', requireAdmin, async (_req: Request, res: Response) => {
+    if (engine.kind !== 'pglite') {
+      res.json({ ok: true, engine: engine.kind, repairable: false });
+      return;
+    }
+    if (getPgliteBusy()) {
+      res.json({ ok: true, engine: 'pglite', repairable: true, busy: true });
+      return;
+    }
+    try {
+      const { probeGinSearch } = await import('../core/pglite-gin-repair.ts');
+      await probeGinSearch(engine);
+      res.json({ ok: true, engine: 'pglite', repairable: true });
+    } catch (e) {
+      const {
+        GIN_REPAIR_DB_UNUSABLE_MESSAGE,
+        isDatabaseUnusableError,
+      } = await import('../core/pglite-gin-repair.ts');
+      if (isDatabaseUnusableError(e)) {
+        res.json({
+          ok: false,
+          engine: 'pglite',
+          repairable: false,
+          message: GIN_REPAIR_DB_UNUSABLE_MESSAGE,
+        });
+        return;
+      }
+      res.json({
+        ok: false,
+        engine: 'pglite',
+        repairable: true,
+        message: e instanceof Error ? e.message : String(e),
+      });
+    }
+  });
+
+  app.post('/admin/api/search-index-repair', requireAdmin, async (_req: Request, res: Response) => {
+    if (engine.kind !== 'pglite') {
+      res.status(400).json({ error: '当前数据库不需要重建搜索索引。' });
+      return;
+    }
+    if (getPgliteBusy()) {
+      res.status(423).json({ error: '正在执行其他任务，请稍后再重建搜索索引。', code: 'pglite_busy' });
+      return;
+    }
+    try {
+      const { repairPgliteGinIndexes } = await import('../core/pglite-gin-repair.ts');
+      const result = await repairPgliteGinIndexes(engine);
+      res.json(result);
+    } catch (e) {
+      res.status(500).json({ error: e instanceof Error ? e.message : 'search_index_repair_failed' });
+    }
+  });
+
+  app.get('/admin/api/advisor', requireAdmin, async (_req: Request, res: Response) => {
+    try {
+      sendAdminContract(res, AdvisorAdminResponseSchema, await getAdminAdvisorReport(engine, loadConfig() ?? config));
+    } catch (e) {
+      res.status(500).json({ error: e instanceof Error ? e.message : 'advisor_failed' });
+    }
+  });
+
+  app.post('/admin/api/advisor/apply', requireAdmin, express.json({ limit: '4kb' }), async (req: Request, res: Response) => {
+    try {
+      const input = AdvisorApplyRequestSchema.parse(req.body);
+      sendAdminContract(
+        res,
+        AdvisorApplyResponseSchema,
+        await applyAdminAdvisorFinding(engine, loadConfig() ?? config, input.dispatch_id, process.cwd(), runHooks),
+      );
+    } catch (e) {
+      res.status(400).json({ error: e instanceof Error ? e.message : 'advisor_apply_failed' });
     }
   });
 
@@ -945,7 +1032,12 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
       }
       const run = await startActionRun(action, process.cwd(), runHooks, {
         embedCatchUp: action === 'embed_stale' && req.body?.catchUp === true,
+        forceReembed: action === 'embed_stale' && req.body?.forceReembed === true,
       });
+      if (action === 'embed_stale' && req.body?.forceReembed === true) {
+        const { markEmbeddingRebuildRunning } = await import('../core/embedding-rebuild-state.ts');
+        markEmbeddingRebuildRunning();
+      }
       sendAdminContract(res, RunAcceptedResponseSchema, { runId: run.id, status: run.status });
     } catch (e) {
       res.status(400).json({ error: e instanceof Error ? e.message : 'action_run_failed' });

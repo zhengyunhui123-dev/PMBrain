@@ -14,6 +14,7 @@ import {
   isImageFilePath as isImageFilePathFromSync,
   isOfficeTransientFile,
   type SyncStrategy,
+  matchesAnyGlob,
 } from '../core/sync.ts';
 import { sortNewestFirst } from '../core/sort-newest-first.ts';
 import {
@@ -28,6 +29,12 @@ import {
   clearOpCheckpoint,
   type OpCheckpointKey,
 } from '../core/op-checkpoint.ts';
+import {
+  GIN_REPAIR_FAILED_MESSAGE,
+  GinIndexUnusableError,
+  isGinCorruptionError,
+  repairPgliteGinIndexes,
+} from '../core/pglite-gin-repair.ts';
 
 function defaultWorkers(): number {
   const cpuCount = cpus().length;
@@ -65,6 +72,8 @@ export async function runImport(
     checkpointKey?: OpCheckpointKey;
     /** Sync owns failure gating and bookmark advancement for this import. */
     managedBookmark?: boolean;
+    /** Sync exclusion globs, matched against the import-root-relative path. */
+    exclude?: string[];
   } = {},
 ): Promise<RunImportResult> {
   const noEmbed = args.includes('--no-embed');
@@ -220,6 +229,13 @@ export async function runImport(
   console.error(
     `[pmbrain phase] import.collect_files done ${Date.now() - _walkT0}ms files=${allFiles.length}`,
   );
+  if (opts.exclude?.length) {
+    const before = allFiles.length;
+    allFiles = allFiles.filter(path => !matchesAnyGlob(relative(dir, path), opts.exclude));
+    if (before > 0 && allFiles.length === 0) {
+      console.warn(`[pmbrain sync] No files matched after applying ${opts.exclude.length} exclude pattern(s).`);
+    }
+  }
   const fileTypeLabel = strategy === 'code' ? 'code'
     : strategy === 'auto' ? 'syncable' : 'markdown';
   console.log(`Found ${allFiles.length} ${fileTypeLabel} files`);
@@ -262,6 +278,7 @@ export async function runImport(
   const errorCounts: Record<string, number> = {};
   const failures: Array<{ path: string; error: string }> = []; // Bug 9
   const startTime = Date.now();
+  let ginRepaired = false;
 
   // Progress on stderr so stdout stays clean for the final summary / --json payload.
   const progress = createProgress(cliOptsToProgressOptions(getCliOptions()));
@@ -371,6 +388,19 @@ export async function runImport(
         }
       }
     } catch (e: unknown) {
+      if (eng.kind === 'pglite' && isGinCorruptionError(e)) {
+        if (ginRepaired) {
+          throw e instanceof GinIndexUnusableError
+            ? e
+            : new GinIndexUnusableError(GIN_REPAIR_FAILED_MESSAGE, { cause: e });
+        }
+        const result = await repairPgliteGinIndexes(eng);
+        if (result.status !== 'repaired') {
+          throw new GinIndexUnusableError(result.message, { status: result.status, cause: e });
+        }
+        ginRepaired = true;
+        return processFile(eng, filePath);
+      }
       const msg = e instanceof Error ? e.message : String(e);
       const errorKey = msg.replace(/"[^"]*"/g, '""');
       errorCounts[errorKey] = (errorCounts[errorKey] || 0) + 1;

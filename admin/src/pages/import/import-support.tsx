@@ -59,6 +59,7 @@ export interface KnowledgeSearchPayload {
   query: string;
   limit: number;
   vector_enabled: boolean;
+  index_rebuild_pending?: boolean;
   result_count: number;
   results: KnowledgeSearchHit[];
 }
@@ -134,7 +135,9 @@ export function knowledgeSearchModeLabel(mode: KnowledgeSearchMode): string {
 export function summarizeKnowledgeSearch(payload: KnowledgeSearchPayload): string {
   const modeLabel = knowledgeSearchModeLabel(payload.mode);
   if (payload.result_count === 0) {
-    const vectorHint = payload.mode === 'semantic' && !payload.vector_enabled
+    const vectorHint = payload.mode === 'semantic' && payload.index_rebuild_pending
+      ? '（新向量索引尚未完成，可在任务中心继续重建）'
+      : payload.mode === 'semantic' && !payload.vector_enabled
       ? '（当前未启用向量通道，已按混合检索尽力召回）'
       : '';
     return `${modeLabel}「${payload.query}」未找到结果${vectorHint}。`;

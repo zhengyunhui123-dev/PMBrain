@@ -28,8 +28,10 @@ import {
   renameSync,
   readdirSync,
   statSync,
+  lstatSync,
+  rmSync,
 } from 'fs';
-import { join } from 'path';
+import { dirname, join } from 'path';
 import { randomBytes } from 'crypto';
 import { parseGlobalFlags } from './cli-options.ts';
 import {
@@ -45,6 +47,10 @@ const LOCK_SCHEMA_VERSION = 2;
 const DEFAULT_TIMEOUT_MS = 30_000;
 const MAX_COMPETE_ATTEMPTS = 8;
 const RETRY_WAIT_MS = 500;
+export const LOCK_ARCHIVE_RETENTION_MS = 3 * 24 * 60 * 60 * 1000;
+export const LOCK_ARCHIVE_KEEP_NEWEST = 5;
+const ARCHIVE_STAMP_RE =
+  /^\.gbrain-lock\.(?:released|stale)-(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})(?:-|$)/;
 
 export type LockOwnerType =
   | 'desktop-sidecar'
@@ -75,6 +81,7 @@ export interface LockMetadataV2 {
 export interface LockHandle {
   lockDir: string;
   acquired: boolean;
+  reaped?: boolean;
   ownerToken?: string;
   metadata?: LockMetadataV2;
   diagnostics?: LockDiagnostics;
@@ -143,6 +150,76 @@ function formatArchiveStamp(date = new Date()): string {
   );
 }
 
+function archiveStampMs(dataDir: string, name: string): number | null {
+  const match = name.match(ARCHIVE_STAMP_RE);
+  if (match) {
+    const stamp = new Date(
+      Number(match[1]),
+      Number(match[2]) - 1,
+      Number(match[3]),
+      Number(match[4]),
+      Number(match[5]),
+      Number(match[6]),
+    ).getTime();
+    if (Number.isFinite(stamp)) return stamp;
+  }
+  try {
+    return statSync(join(dataDir, name)).mtimeMs;
+  } catch {
+    return null;
+  }
+}
+
+function isLockArchiveName(name: string): boolean {
+  return name.startsWith(`${LOCK_DIR_NAME}.stale-`) || name.startsWith(`${LOCK_DIR_NAME}.released-`);
+}
+
+export function pruneArchivedLocks(
+  dataDir: string,
+  nowMs = Date.now(),
+): { kept: string[]; deleted: string[] } {
+  const kept: string[] = [];
+  const deleted: string[] = [];
+  if (!dataDir) return { kept, deleted };
+  let names: string[];
+  try {
+    names = readdirSync(dataDir).filter(isLockArchiveName);
+  } catch {
+    return { kept, deleted };
+  }
+
+  const ranked = names
+    .map((name) => ({ name, stamp: archiveStampMs(dataDir, name) }))
+    .sort((a, b) => (b.stamp ?? 0) - (a.stamp ?? 0));
+  const newest = new Set(ranked.slice(0, LOCK_ARCHIVE_KEEP_NEWEST).map((item) => item.name));
+
+  for (const { name, stamp } of ranked) {
+    const full = join(dataDir, name);
+    try {
+      const info = lstatSync(full);
+      if (info.isSymbolicLink() || !info.isDirectory()) {
+        kept.push(full);
+        continue;
+      }
+    } catch {
+      continue;
+    }
+    const age = stamp == null ? null : nowMs - stamp;
+    const keep = newest.has(name) || age == null || age < LOCK_ARCHIVE_RETENTION_MS;
+    if (keep) {
+      kept.push(full);
+      continue;
+    }
+    try {
+      rmSync(full, { recursive: true, force: true });
+      deleted.push(full);
+    } catch {
+      kept.push(full);
+    }
+  }
+  return { kept, deleted };
+}
+
 function redactPath(pathValue: string): string {
   // Keep basename context; collapse long user-home prefixes for logs.
   return pathValue
@@ -189,6 +266,35 @@ function normalizeMetadata(raw: unknown, databasePath: string): Partial<LockMeta
     updatedAt: typeof obj.updatedAt === 'string' ? obj.updatedAt : createdAt ?? nowIso(),
     acquired_at: typeof obj.acquired_at === 'number' ? obj.acquired_at : undefined,
   };
+}
+
+function reapMarkerPath(dataDir: string): string {
+  return `${dataDir}.lock-reap.json`;
+}
+
+function recordReap(dataDir: string): void {
+  try {
+    writeFileSync(reapMarkerPath(dataDir), JSON.stringify({ ts: Date.now(), by: process.pid }), { mode: 0o644 });
+  } catch { /* best-effort */ }
+}
+
+export function msSinceLastReap(dataDir: string): number | null {
+  try {
+    const parsed = JSON.parse(readFileSync(reapMarkerPath(dataDir), 'utf-8')) as { ts?: unknown };
+    return typeof parsed.ts === 'number' ? Date.now() - parsed.ts : null;
+  } catch {
+    return null;
+  }
+}
+
+export function isProcessAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'EPERM';
+  }
 }
 
 /**
@@ -455,6 +561,7 @@ export async function acquireLock(
   const startTime = Date.now();
   let attempts = 0;
   let lastDiagnostics: LockDiagnostics | undefined;
+  let reaped = false;
 
   while (Date.now() - startTime < timeoutMs && attempts < MAX_COMPETE_ATTEMPTS + Math.floor(timeoutMs / RETRY_WAIT_MS)) {
     attempts += 1;
@@ -487,6 +594,8 @@ export async function acquireLock(
 
       // Stale or corrupt → archive (never permanent delete).
       const archivePath = archiveLockDir(lockDir, evaluation.reason);
+      reaped = true;
+      if (evaluation.decision === 'corrupt') recordReap(dataDir as string);
       lastDiagnostics = {
         ...evaluation.diagnostics,
         decision: 'archive_stale_lock',
@@ -522,9 +631,11 @@ export async function acquireLock(
         reason: lastDiagnostics?.reason ? `after_${lastDiagnostics.reason}` : 'lock_absent',
         archivedTo: lastDiagnostics?.archivedTo,
       };
+      pruneArchivedLocks(dataDir as string);
       return {
         lockDir,
         acquired: true,
+        reaped,
         ownerToken: metadata.ownerToken,
         metadata,
         diagnostics,
@@ -617,6 +728,7 @@ export async function releaseLock(lock: LockHandle): Promise<void> {
     } catch {
       // If rename fails because someone else already moved it, that is fine.
     }
+    pruneArchivedLocks(dirname(lock.lockDir));
   } catch {
     // Best-effort release.
   }

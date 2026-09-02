@@ -52,6 +52,8 @@ import {
   rejectTakeProposal as rejectAgentPackTakeProposal,
 } from './agent-pack-take-proposals.ts';
 import { patchPage } from './patch-page.ts';
+import { buildContextPack, buildContextDelta } from './context/context-pack.ts';
+import { appendCheckpointManifest } from './context/session-state.ts';
 export { OperationError } from './operation-error.ts';
 export type { ErrorCode } from './operation-error.ts';
 import {
@@ -143,9 +145,12 @@ export function validatePageSlug(slug: string): void {
   }
   // v0.32.7: CJK ranges (Han / Hiragana / Katakana / Hangul Syllables) allowed
   // in segments. ASCII shape rules (lead char, hyphen continuation) preserved.
-  const PAGE_SLUG_SEG = `[a-z0-9${CJK_SLUG_CHARS}][a-z0-9${CJK_SLUG_CHARS}\\-]*`;
+  // Sync preserves `_index.md`, dotted releases and underscored filenames.
+  // Underscore may lead a segment; dot remains continuation-only so `..`
+  // traversal and dotfiles stay rejected.
+  const PAGE_SLUG_SEG = `[a-z0-9${CJK_SLUG_CHARS}_][a-z0-9${CJK_SLUG_CHARS}._\\-]*`;
   if (!new RegExp(`^${PAGE_SLUG_SEG}(\\/${PAGE_SLUG_SEG})*$`, 'i').test(slug)) {
-    throw new OperationError('invalid_params', `Invalid page_slug: ${slug} (allowed: alphanumeric, CJK, hyphens, forward-slash separated segments)`);
+    throw new OperationError('invalid_params', `Invalid page_slug: ${slug} (allowed: alphanumeric, CJK, dots, underscores, hyphens and forward-slash separated segments)`);
   }
 }
 
@@ -253,6 +258,9 @@ export interface AuthInfo {
    * case (back-compat).
    */
   allowedSources?: string[];
+  /** OAuth-bound MCP tool surface and provenance (Schema 121). */
+  surface?: 'verbs' | 'starter' | 'full' | string;
+  surfaceSetBy?: string;
 }
 
 export interface OperationContext {
@@ -280,6 +288,9 @@ export interface OperationContext {
    * remote/untrusted (defense in depth in case the type is bypassed via cast).
    */
   remote: boolean;
+  /** Effective caller surface and hard transport ceiling. */
+  surface?: 'verbs' | 'starter' | 'full';
+  surfaceCeiling?: 'verbs' | 'starter' | 'full';
   /**
    * Subagent runtime context (v0.16+). Set by the subagent tool dispatcher when
    * dispatching an op as a tool call from an LLM loop. Used to enforce per-op
@@ -2412,12 +2423,16 @@ const get_timeline: Operation = {
 
 // --- Admin ---
 
+function diagnosticScope(ctx: OperationContext): { sourceId?: string; sourceIds?: string[] } {
+  return ctx.remote === false ? {} : sourceScopeOpts(ctx);
+}
+
 const get_stats: Operation = {
   name: 'get_stats',
   description: 'Brain statistics (page count, chunk count, etc.)',
   params: {},
   handler: async (ctx) => {
-    return ctx.engine.getStats();
+    return ctx.engine.getStats(diagnosticScope(ctx));
   },
   scope: 'admin',
   cliHints: { name: 'stats' },
@@ -2428,10 +2443,26 @@ const get_health: Operation = {
   description: 'Brain health dashboard (embed coverage, stale pages, orphans)',
   params: {},
   handler: async (ctx) => {
-    return ctx.engine.getHealth();
+    return ctx.engine.getHealth(diagnosticScope(ctx));
   },
   scope: 'admin',
   cliHints: { name: 'health' },
+};
+
+const advisor: Operation = {
+  name: 'advisor',
+  description:
+    'Ranked, read-only "what to do next" for this brain: version drift, pending migrations, ' +
+    'schema-pack issues, stalled jobs, usage-shape gaps, and setup smells. Each finding has a ' +
+    'severity, why-it-matters, and the exact fix command. Never mutates. Tell the user; ask ' +
+    'before running any fix. Gated by mcp.publish_advisor.',
+  params: {},
+  handler: async (ctx) => {
+    const { runAdvisorOperation } = await import('./advisor/operation.ts');
+    return runAdvisorOperation(ctx);
+  },
+  scope: 'read',
+  cliHints: { name: 'advisor', hidden: true },
 };
 
 /**
@@ -2452,7 +2483,7 @@ const get_brain_identity: Operation = {
   description: 'Brain identity + counters for thin-client banner. Returns version, engine kind, and page/chunk counts. Read-scope.',
   params: {},
   handler: async (ctx) => {
-    const stats = await ctx.engine.getStats();
+    const stats = await ctx.engine.getStats(diagnosticScope(ctx));
     return {
       version: VERSION,
       engine: ctx.engine.kind,
@@ -3972,6 +4003,7 @@ const recall: Operation = {
     include_pending: { type: 'boolean', description: 'v0.32: when true, response includes pending_consolidation_count (facts not yet promoted to takes by the dream-cycle consolidate phase). One round trip; backward-compatible (field omitted when false).' },
   },
   scope: 'read',
+  verb: true,
   handler: async (ctx, p) => {
     const sourceId = ctx.sourceId ?? 'default';
     const limit = typeof p.limit === 'number' ? p.limit : 50;
@@ -4943,6 +4975,201 @@ const run_onboard: Operation = {
   },
 };
 
+const context_pack: Operation = {
+  name: 'context_pack',
+  description: 'Restore a Source-scoped session context pack after cold start or compaction. Returns entity pointers and confirmed checkpoint links, never raw private page bodies.',
+  params: {
+    session_id: { type: 'string', required: true, description: 'Opaque caller session id' },
+    entities: { type: 'array', items: { type: 'string' }, description: 'Optional standing entity names to resolve in this Source' },
+  },
+  scope: 'read',
+  verb: true,
+  handler: async (ctx, p) => ({
+    ...(await buildContextPack(ctx.engine, {
+      sourceId: ctx.sourceId,
+      clientId: ctx.auth?.clientId,
+      sessionId: p.session_id as string,
+      entities: Array.isArray(p.entities) ? p.entities.filter((v): v is string => typeof v === 'string') : undefined,
+    })),
+    protocol_version: MEMORY_VERBS_VERSION,
+  }),
+};
+
+const delta: Operation = {
+  name: 'delta',
+  description: 'Return world-visible pages and facts changed since this session cursor, scoped to the caller Source. Advances only to the newest delivered item so overflow remains retryable.',
+  params: {
+    session_id: { type: 'string', required: true, description: 'Opaque caller session id' },
+    since: { type: 'string', description: 'Optional ISO cursor; defaults to the saved session cursor' },
+  },
+  scope: 'read',
+  verb: true,
+  handler: async (ctx, p) => ({
+    ...(await buildContextDelta(ctx.engine, {
+      sourceId: ctx.sourceId,
+      clientId: ctx.auth?.clientId,
+      sessionId: p.session_id as string,
+      since: typeof p.since === 'string' ? p.since : undefined,
+    })),
+    protocol_version: MEMORY_VERBS_VERSION,
+  }),
+};
+
+const checkpoint_context: Operation = {
+  name: 'checkpoint_context',
+  description: 'Record confirmed page links emitted during context compaction so the next session can restore them. This stores pointers only and never copies page bodies.',
+  params: {
+    session_id: { type: 'string', required: true, description: 'Opaque caller session id' },
+    segment: { type: 'string', required: true, description: 'Opaque compaction segment id' },
+    links: { type: 'array', required: true, items: { type: 'object' }, description: 'Confirmed {slug,title} page pointers' },
+  },
+  scope: 'write',
+  handler: async (ctx, p) => {
+    const links = (Array.isArray(p.links) ? p.links : []).flatMap((value) => {
+      if (!value || typeof value !== 'object') return [];
+      const row = value as { slug?: unknown; title?: unknown };
+      if (typeof row.slug !== 'string' || typeof row.title !== 'string') return [];
+      validatePageSlug(row.slug);
+      return [{ slug: row.slug, title: row.title }];
+    });
+    const saved = await appendCheckpointManifest(
+      ctx.engine,
+      ctx.sourceId,
+      ctx.auth?.clientId,
+      p.session_id as string,
+      links,
+      p.segment as string,
+    );
+    return { saved, pointers: links.length };
+  },
+};
+
+function callerCanSeeOperation(ctx: OperationContext, op: Operation): boolean {
+  if (ctx.remote !== false && op.localOnly) return false;
+  if (ctx.remote === false || !ctx.auth?.scopes?.length) return true;
+  const scopes = new Set(ctx.auth.scopes);
+  if (scopes.has('admin')) return true;
+  const required = op.scope ?? 'read';
+  if (required === 'read') return scopes.has('read') || scopes.has('write');
+  if (required === 'write') return scopes.has('write');
+  return scopes.has(required);
+}
+
+const request_tools: Operation = {
+  name: 'request_tools',
+  description: 'Discover the tool catalog visible to this caller. With tools:[...] returns full schemas only for visible names; hidden and unauthorized names are silently omitted.',
+  params: {
+    tools: { type: 'array', items: { type: 'string' }, description: 'Optional visible tool names whose full schemas should be returned' },
+    surface: { type: 'string', enum: ['verbs', 'starter', 'full'], description: 'Persist a wider or narrower surface for this OAuth client, bounded by the server ceiling' },
+  },
+  scope: 'read',
+  handler: async (ctx, p) => {
+    if (p.surface !== undefined) {
+      const { isMcpSurface, surfaceWiderThan } = await import('../mcp/surface.ts');
+      const requested = p.surface;
+      if (!isMcpSurface(requested)) {
+        throw new OperationError('invalid_params', 'surface must be verbs, starter, or full');
+      }
+      if (!ctx.auth?.clientId) {
+        throw new OperationError('permission_denied', 'Persisting a tool surface requires an OAuth client.');
+      }
+      const ceiling = ctx.surfaceCeiling ?? 'full';
+      if (surfaceWiderThan(requested, ceiling)) {
+        throw new OperationError('permission_denied', `Requested surface ${requested} exceeds the server ceiling ${ceiling}.`);
+      }
+      const rows = await ctx.engine.executeRaw<{ surface: string | null; surface_set_by: string | null }>(
+        'SELECT surface, surface_set_by FROM oauth_clients WHERE client_id = $1',
+        [ctx.auth.clientId],
+      );
+      if (!rows[0]) throw new OperationError('permission_denied', 'OAuth client is not registered.');
+      if (rows[0].surface_set_by === 'operator') {
+        throw new OperationError('permission_denied', 'This client surface is pinned by the operator.');
+      }
+      await ctx.engine.executeRaw(
+        `UPDATE oauth_clients SET surface = $1, surface_set_by = 'self'
+          WHERE client_id = $2 AND surface_set_by IS DISTINCT FROM 'operator'`,
+        [requested, ctx.auth.clientId],
+      );
+      return { surface: requested, ceiling, persisted: true, takes_effect: 'next tools/list' };
+    }
+    const { filterOpsForSurface } = await import('../mcp/surface.ts');
+    const visible = filterOpsForSurface(operations, ctx.surfaceCeiling ?? 'full')
+      .filter((op) => op.name !== 'request_tools' && callerCanSeeOperation(ctx, op));
+    if (Array.isArray(p.tools)) {
+      const requested = new Set(p.tools.filter((v): v is string => typeof v === 'string'));
+      const { buildToolDefs } = await import('../mcp/tool-defs.ts');
+      return { tools: buildToolDefs(visible.filter((op) => requested.has(op.name))) };
+    }
+    return {
+      total_tools: visible.length,
+      tools: visible.map((op) => ({ name: op.name, description: op.description.split(/(?<=[.!?])\s/, 1)[0] })),
+    };
+  },
+};
+
+const get_usage: Operation = {
+  name: 'get_usage',
+  description: 'Aggregate the durable gateway.chat usage ledger by model and phase. Returns no prompts or page content and states its coverage limits explicitly.',
+  params: {
+    days: { type: 'number', description: 'Window in days (default 30, maximum 365)' },
+  },
+  scope: 'admin',
+  handler: async (ctx, p) => {
+    const requested = Number(p.days ?? 30);
+    const days = Number.isFinite(requested) ? Math.min(365, Math.max(1, Math.round(requested))) : 30;
+    type UsageRow = {
+      model: string;
+      phase: string | null;
+      calls: number | string;
+      input_tokens: number | string | null;
+      output_tokens: number | string | null;
+      cache_read_tokens: number | string | null;
+      cache_write_tokens: number | string | null;
+      cost_usd: number | string | null;
+      unpriced_calls: number | string | null;
+    };
+    try {
+      const rows = await ctx.engine.executeRaw<UsageRow>(
+        `SELECT model, phase, count(*)::int AS calls,
+                sum(input_tokens)::float8 AS input_tokens,
+                sum(output_tokens)::float8 AS output_tokens,
+                sum(cache_read_tokens)::float8 AS cache_read_tokens,
+                sum(cache_write_tokens)::float8 AS cache_write_tokens,
+                sum(cost_usd)::float8 AS cost_usd,
+                count(*) FILTER (WHERE cost_usd IS NULL)::int AS unpriced_calls
+           FROM chat_usage_log
+          WHERE created_at >= now() - ($1 || ' days')::interval
+          GROUP BY model, phase
+          ORDER BY sum(cost_usd) DESC NULLS LAST`,
+        [String(days)],
+      );
+      const number = (value: number | string | null | undefined) => Number(value ?? 0);
+      const totals = rows.reduce((sum, row) => ({
+        calls: sum.calls + number(row.calls),
+        input_tokens: sum.input_tokens + number(row.input_tokens),
+        output_tokens: sum.output_tokens + number(row.output_tokens),
+        cache_read_tokens: sum.cache_read_tokens + number(row.cache_read_tokens),
+        cache_write_tokens: sum.cache_write_tokens + number(row.cache_write_tokens),
+        cost_usd: sum.cost_usd + number(row.cost_usd),
+        unpriced_calls: sum.unpriced_calls + number(row.unpriced_calls),
+      }), { calls: 0, input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0, cost_usd: 0, unpriced_calls: 0 });
+      return {
+        window_days: days,
+        totals,
+        by_model_phase: rows.map((row) => ({ ...row, phase: row.phase ?? 'direct' })),
+        coverage: {
+          source: 'gateway.chat success boundary',
+          includes_failed_calls: false,
+          includes_embeddings: false,
+          unknown_model_cost_is_null: true,
+        },
+      };
+    } catch {
+      return { window_days: days, totals: null, by_model_phase: [], coverage: { available: false, reason: 'ledger table unavailable' } };
+    }
+  },
+};
+
 export const operations: Operation[] = [
   // Page CRUD
   get_page, put_page, patch_page, delete_page, list_pages,
@@ -4959,7 +5186,7 @@ export const operations: Operation[] = [
   // Timeline
   add_timeline_entry, get_timeline,
   // Admin
-  get_stats, get_health, run_doctor, get_versions, revert_version,
+  get_stats, get_health, advisor, run_doctor, get_versions, revert_version,
   // v0.31.1 (Issue #734): thin-client banner identity packet (read-scope, banner-only)
   get_brain_identity,
   list_skills, get_skill,
@@ -5002,6 +5229,8 @@ export const operations: Operation[] = [
   extract_facts, recall, forget_fact,
   // MEMORY_VERBS v1 write/delete — registered from an independent module
   ...memoryVerbOperations,
+  // Context Engine session restoration + capability discovery
+  context_pack, delta, checkpoint_context, request_tools, get_usage,
   // v0.32.6: contradiction probe MCP surface (M3)
   find_contradictions,
   // v0.33: expertise + relationship-proximity routing

@@ -54,7 +54,9 @@ import { importFromContent } from '../import-file.ts';
 import { serializeMarkdown } from '../markdown.ts';
 import { dreamModelDetails, resolveDreamModel } from './model-routing.ts';
 import { writeReceipt } from '../extract/receipt-writer.ts';
+import { throwIfAborted } from '../abort-check.ts';
 import { upsertExtractRollup } from '../extract/rollup-writer.ts';
+import { parseLlmJson } from '../llm-json.ts';
 
 const DEFAULT_BUDGET_USD = 0.3;
 
@@ -114,6 +116,8 @@ export interface ExtractAtomsOpts {
    * `heartbeat()` on the passed reporter.
    */
   progress?: ProgressReporter;
+  /** Cooperative stop from the owning Dream job. */
+  signal?: AbortSignal;
 }
 
 interface ExtractedAtom {
@@ -329,6 +333,7 @@ export async function runPhaseExtractAtoms(
   engine: BrainEngine,
   opts: ExtractAtomsOpts = {},
 ): Promise<PhaseResult> {
+  throwIfAborted(opts.signal, '[dream] extract_atoms');
   const sourceId = opts.sourceId ?? 'default';
   const chat = opts._chat ?? gatewayChat;
   const resolvedModel = await resolveDreamModel(engine, { phase: 'extract_atoms' });
@@ -490,6 +495,7 @@ export async function runPhaseExtractAtoms(
 
   await withBudgetTracker(budgetTracker, async () => {
   for (const item of work) {
+    throwIfAborted(opts.signal, '[dream] extract_atoms');
     await maybeYield();
     if (budgetExhausted || budgetTracker.totalSpent >= budgetCap) {
       if (item.kind === 'transcript') transcriptsSkipped++;
@@ -509,6 +515,7 @@ export async function runPhaseExtractAtoms(
           },
         ],
         maxTokens: 2000,
+        abortSignal: opts.signal,
       });
       // Post-await yield: closes the "long LLM call past TTL" hazard
       // codex flagged. The 30s throttle inside maybeYield bounds the
@@ -581,6 +588,7 @@ export async function runPhaseExtractAtoms(
       // Reporter rate-limits to ~1 line/sec; safe to tick every iter.
       opts.progress?.tick(1, `${totalAtomsExtracted} atoms / ${duplicatesSkipped} skipped`);
     } catch (err) {
+      throwIfAborted(opts.signal, '[dream] extract_atoms');
       if (err instanceof BudgetExhausted) {
         budgetExhausted = true;
         if (item.kind === 'transcript') transcriptsSkipped++;
@@ -666,31 +674,8 @@ export async function runPhaseExtractAtoms(
  * invalid atom_type values. Rejects (returns empty) on hard parse fail.
  */
 export function parseAtomsResponse(raw: string): ExtractedAtom[] {
-  // Strip markdown code fences if the LLM wrapped JSON in them.
-  let cleaned = raw.trim();
-  const fenceMatch = cleaned.match(/```(?:json)?\s*([\s\S]*?)```/);
-  if (fenceMatch) cleaned = fenceMatch[1].trim();
-
-  // Find the first JSON array bracket.
-  const arrayStart = cleaned.indexOf('[');
-  if (arrayStart === -1) return [];
-  cleaned = cleaned.slice(arrayStart);
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(cleaned);
-  } catch {
-    // Try trimming back from the end to recover from trailing prose.
-    const arrayEnd = cleaned.lastIndexOf(']');
-    if (arrayEnd === -1) return [];
-    try {
-      parsed = JSON.parse(cleaned.slice(0, arrayEnd + 1));
-    } catch {
-      return [];
-    }
-  }
-
-  if (!Array.isArray(parsed)) return [];
+  const parsed = parseLlmJson<unknown[]>(raw, { array: true });
+  if (!parsed) return [];
 
   const atoms: ExtractedAtom[] = [];
   for (const item of parsed) {

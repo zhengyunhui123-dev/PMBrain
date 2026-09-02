@@ -28,10 +28,10 @@ describe('phantom-redirect lock contract', () => {
     expect(importLine).not.toMatch(/\bSYNC_LOCK_ID\b/);
   });
 
-  test('IRON-RULE: acquireLockWithRetry call passes syncLockId(sourceId)', () => {
+  test('IRON-RULE: acquireLockWithRetry call passes syncLockId(sourceId) and signal', () => {
     // Banned: the bare `SYNC_LOCK_ID` constant slipped back in.
     // Required: the per-source helper threaded with the active sourceId.
-    expect(SRC).toMatch(/acquireLockWithRetry\s*\(\s*engine\s*,\s*syncLockId\s*\(\s*sourceId\s*\)\s*\)/);
+    expect(SRC).toMatch(/acquireLockWithRetry\s*\(\s*engine\s*,\s*syncLockId\s*\(\s*sourceId\s*\)\s*,\s*signal\s*\)/);
     expect(SRC).not.toMatch(/acquireLockWithRetry\s*\(\s*engine\s*,\s*SYNC_LOCK_ID\s*\)/);
   });
 

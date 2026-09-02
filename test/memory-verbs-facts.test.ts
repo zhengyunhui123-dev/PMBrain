@@ -53,10 +53,14 @@ beforeEach(async () => {
 });
 
 describe('Gbrain-aligned memory verbs', () => {
-  test('remember and forget are registered as ordinary operations', () => {
+  test('the seven memory verbs are registered and explicitly surface-safe', () => {
     expect(operationsByName.remember?.name).toBe('remember');
     expect(operationsByName.forget?.name).toBe('forget');
-    expect(memoryVerbOperations.map(op => op.name).sort()).toEqual(['entity', 'forget', 'remember']);
+    const verbs = Object.values(operationsByName).filter(op => op.verb === true);
+    expect(verbs.map(op => op.name).sort()).toEqual([
+      'context_pack', 'delta', 'entity', 'forget', 'recall', 'remember', 'synthesize',
+    ]);
+    expect(memoryVerbOperations.every(op => op.verb === true)).toBe(true);
     expect(operationsByName.entity?.name).toBe('entity');
   });
 

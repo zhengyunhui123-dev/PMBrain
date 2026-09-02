@@ -7,6 +7,8 @@ import { PGLiteEngine } from '../src/core/pglite-engine.ts';
 import { performSync } from '../src/commands/sync.ts';
 import { withEnv } from './helpers/with-env.ts';
 
+const SYNC_SOURCE = await Bun.file(new URL('../src/commands/sync.ts', import.meta.url)).text();
+
 function git(repo: string, ...args: string[]): string {
   return execFileSync('git', args, { cwd: repo, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 }
@@ -32,6 +34,19 @@ async function pageBody(engine: PGLiteEngine, slug: string): Promise<string | nu
 }
 
 describe('sync committed Git baseline contract', () => {
+  test('inspects the working tree with porcelain status and materializes HEAD without tar', () => {
+    expect(SYNC_SOURCE).toContain("'status'");
+    expect(SYNC_SOURCE).toContain("'--porcelain=v1'");
+    expect(SYNC_SOURCE).toContain('GIT_OPTIONAL_LOCKS');
+    expect(SYNC_SOURCE).toContain('parseGitStatusPorcelainZ');
+    expect(SYNC_SOURCE).not.toContain("['diff', '--name-status', '-M', 'HEAD']");
+    expect(SYNC_SOURCE).not.toContain("'ls-files', '--others', '--exclude-standard'");
+    expect(SYNC_SOURCE).not.toContain("execFileSync('tar'");
+    expect(SYNC_SOURCE).not.toContain('git archive');
+    expect(SYNC_SOURCE).toContain("'checkout'");
+    expect(SYNC_SOURCE).toContain('--pathspec-from-file=');
+  });
+
   let engine: PGLiteEngine;
   let home: string;
   const repos: string[] = [];
@@ -123,6 +138,26 @@ describe('sync committed Git baseline contract', () => {
       expect(await pageBody(engine, 'notes/committed')).toContain('landed');
       expect(await pageBody(engine, 'notes/committed')).not.toContain('uncommitted replacement');
       expect(await pageBody(engine, 'notes/draft')).toBeNull();
+    });
+  }, 120_000);
+
+  test('up-to-date sync with a dirty autocrlf Obsidian working tree stays up_to_date', async () => {
+    await withEnv({ PMBRAIN_HOME: home, GBRAIN_HOME: home }, async () => {
+      const repo = await reset();
+      await performSync(engine, { repoPath: repo, noPull: true, noEmbed: true, noExtract: true, skipLock: true });
+
+      mkdirSync(join(repo, '.obsidian'), { recursive: true });
+      writeFileSync(join(repo, '.obsidian', 'workspace.json'), '{"tabs":[]}\n');
+      writeFileSync(join(repo, 'notes', 'base.md'), '# Base\n\nuncommitted edit\n');
+      git(repo, 'config', 'core.autocrlf', 'true');
+
+      const startedAt = Date.now();
+      const result = await performSync(engine, { repoPath: repo, noPull: true, noEmbed: true, noExtract: true, skipLock: true });
+      expect(Date.now() - startedAt).toBeLessThan(15_000);
+      expect(result.status).toBe('up_to_date');
+      expect(result.uncommitted).toEqual({ added: 0, modified: 1, deleted: 0 });
+      expect(await pageBody(engine, 'notes/base')).toContain('committed baseline');
+      expect(await pageBody(engine, 'notes/base')).not.toContain('uncommitted edit');
     });
   }, 120_000);
 

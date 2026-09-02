@@ -2,6 +2,8 @@ import { describe, expect, test } from 'bun:test';
 import {
   chunkEmbeddingIndexSql,
   applyChunkEmbeddingIndexPolicy,
+  applyExistingColumnHnswPolicy,
+  isHnswDimensionLimitError,
   PGVECTOR_HNSW_VECTOR_MAX_DIMS,
   checkActiveBuild,
   dropZombieIndexes,
@@ -39,6 +41,21 @@ describe('applyChunkEmbeddingIndexPolicy', () => {
     expect(out).toContain('idx_chunks_embedding');
     const out2 = applyChunkEmbeddingIndexPolicy(input, 3072);
     expect(out2).toContain('skipped');
+  });
+
+  test('existing wide columns strip HNSW from a default-dim schema replay', () => {
+    const input = `BEFORE\nCREATE INDEX IF NOT EXISTS idx_chunks_embedding ON content_chunks USING hnsw (embedding vector_cosine_ops);\nAFTER`;
+    const replayed = applyExistingColumnHnswPolicy(input, 2048);
+    expect(replayed).toContain('skipped');
+    expect(replayed).not.toContain('USING hnsw (embedding vector_cosine_ops)');
+    expect(applyExistingColumnHnswPolicy(input, null)).toContain('USING hnsw (embedding vector_cosine_ops)');
+  });
+});
+
+describe('isHnswDimensionLimitError', () => {
+  test('matches pgvector HNSW dimension errors', () => {
+    expect(isHnswDimensionLimitError(new Error('column cannot have more than 2000 dimensions for hnsw index'))).toBe(true);
+    expect(isHnswDimensionLimitError('syntax error')).toBe(false);
   });
 });
 

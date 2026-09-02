@@ -427,6 +427,8 @@ def embedding_switch_journey(
     page.locator("#embedding-model-name").fill("e2e-embedding-12")
     page.once("dialog", lambda dialog: dialog.accept())
     page.locator("#save-setup").click()
+    page.locator("#setup-wait-actions").wait_for(state="visible", timeout=180_000)
+    page.locator("#setup-wait-continue").click()
     page.locator("#setup-wait").wait_for(state="hidden", timeout=180_000)
     page.locator("#global-success").wait_for(state="visible", timeout=180_000)
     config_path = artifacts / "user-home" / ".pmbrain" / "config.json"

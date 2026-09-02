@@ -99,10 +99,11 @@ describe('extractEntityRefs', () => {
     expect(extractEntityRefs('[Alice(people/alice)')).toEqual([]);
   });
 
-  test('skips non-entity dirs (notes/, ideas/ stay if added later but are accepted now)', () => {
-    // Current regex targets entity dirs explicitly. Notes/ shouldn't match.
+  test('surfaces custom-directory markdown refs for downstream exact page validation', () => {
+    // GBrain-compatible extraction no longer hardcodes a directory allowlist;
+    // persist callers still require the target page to exist.
     const refs = extractEntityRefs('See [random](notes/random).');
-    expect(refs).toEqual([]);
+    expect(refs).toEqual([{ name: 'random', slug: 'notes/random', dir: 'notes' }]);
   });
 
   test('extracts meeting refs', () => {

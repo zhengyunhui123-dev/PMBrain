@@ -233,6 +233,19 @@ describe('admin console intent planning', () => {
     expect(command.slice(-4)).toEqual(['embed', '--stale', '--catch-up', '--json']);
   });
 
+  test('model-switch rebuild adds --force-reembed so old vectors are cleared first', () => {
+    const command = commandForPreview({
+      previewId: 'preview-embed-rebuild',
+      intent: 'embed_stale',
+      confidence: 1,
+      slots: {},
+      proposedAction: '补齐待向量化内容',
+      riskLevel: 'maintenance',
+      requiresConfirmation: false,
+    }, { embedCatchUp: true, forceReembed: true });
+    expect(command.slice(-5)).toEqual(['embed', '--stale', '--catch-up', '--json', '--force-reembed']);
+  });
+
   test('direct text import reuses capture and respects the selected source', () => {
     const command = buildCaptureCommand('需要保存的完整正文', 'duwu');
     expect(command.slice(-4)).toEqual(['capture', '需要保存的完整正文', '--source', 'duwu']);

@@ -36,59 +36,7 @@ import { findResolverFile } from '../resolver-filenames.ts';
 import { extractManagedSlugs, parseReceipt } from './installer.ts';
 import { autoDetectSkillsDir } from '../repo-root.ts';
 import { resolve as resolvePath } from 'path';
-
-interface RecommendedSkill {
-  slug: string;
-  description: string;
-}
-
-const V0_25_1_RECOMMENDED: RecommendedSkill[] = [
-  {
-    slug: 'book-mirror',
-    description:
-      'FLAGSHIP. Take any book (EPUB/PDF), produce a personalized two-column chapter-by-chapter analysis. Left column preserves the chapter; right column maps every idea to your life using brain context. ~$6 for a 20-chapter book at Opus.',
-  },
-  {
-    slug: 'article-enrichment',
-    description:
-      'Turn raw article dumps into structured pages with executive summary, verbatim quotes, key insights, why-it-matters.',
-  },
-  {
-    slug: 'strategic-reading',
-    description:
-      'Read a book / article / case study through ONE specific problem-lens. Output: applied playbook with do / avoid / watch-for.',
-  },
-  {
-    slug: 'concept-synthesis',
-    description:
-      'Deduplicate raw concept stubs into a tiered intellectual map (T1 Canon to T4 Riff). Trace idea evolution across years.',
-  },
-  {
-    slug: 'perplexity-research',
-    description:
-      'Brain-augmented web research. Sends brain context to Perplexity so the search focuses on what is NEW vs already-known.',
-  },
-  {
-    slug: 'archive-crawler',
-    description:
-      'Universal archivist for personal file archives (Dropbox / B2 / Gmail-takeout). REFUSES to run without a gbrain.yml allow-list — safe-by-default.',
-  },
-  {
-    slug: 'academic-verify',
-    description:
-      'Trace a research claim through publication → methodology → raw data → independent replication. Verdict-shaped brain page.',
-  },
-  {
-    slug: 'brain-pdf',
-    description:
-      'Render any brain page to publication-quality PDF via the gstack make-pdf binary. Optional gstack co-install.',
-  },
-  {
-    slug: 'voice-note-ingest',
-    description:
-      'Capture voice notes with EXACT-PHRASING preservation (never paraphrased). Routes content to originals/concepts/people/companies/ideas.',
-  },
-];
+import { currentRecommendedSet, type RecommendedSkill } from '../advisor/recommended-set.ts';
 
 /**
  * Read the managed block's cumulative-slugs receipt to find what's
@@ -131,7 +79,8 @@ export function buildAdvisory(opts: {
   }
 
   const installed = detectInstalledSlugs(skillsDir, workspace);
-  const missing = V0_25_1_RECOMMENDED.filter((s) => !installed.has(s.slug));
+  const recommended = currentRecommendedSet();
+  const missing = recommended.filter((s) => !installed.has(s.slug));
 
   if (missing.length === 0) return null;
 
@@ -140,7 +89,7 @@ export function buildAdvisory(opts: {
     context: opts.context,
     missing,
     installCommand:
-      missing.length === V0_25_1_RECOMMENDED.length
+      missing.length === recommended.length
         ? 'gbrain skillpack install --all'
         : `gbrain skillpack install ${missing.map((s) => s.slug).join(' ')}`,
   });
@@ -153,7 +102,7 @@ function buildAdvisoryWithoutWorkspace(
   return renderAdvisory({
     version,
     context,
-    missing: V0_25_1_RECOMMENDED,
+    missing: currentRecommendedSet(),
     installCommand: 'gbrain skillpack install --all',
     workspaceNotDetected: true,
   });

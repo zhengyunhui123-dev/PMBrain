@@ -1410,25 +1410,20 @@ describe('PGLiteEngine: getHealth graph metrics', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────
-// v0.13.1 — PGLite.create() error-wrap (structural guard for #223)
+// PGLite.create() error-wrap and guarded WAL recovery
 // ─────────────────────────────────────────────────────────────────
-describe('PGLiteEngine: v0.13.1 error-wrap on connect() (#223)', () => {
-  test('pglite-engine.ts source contains the wrap with #223 hint and nested original error', async () => {
+describe('PGLiteEngine: error-wrap and guarded WAL recovery on connect()', () => {
+  test('pglite-engine.ts classifies create failures, guards WAL repair, and preserves the original error', async () => {
     const { readFileSync } = await import('fs');
     const src = readFileSync('src/core/pglite-engine.ts', 'utf-8');
-    // Structural: the try/catch block must wrap PGlite.create() (the actual
-    // abort site, NOT engine-factory.ts). The error message must name the
-    // issue and suggest gbrain doctor. Must NOT suggest "missing migrations"
-    // as a cause (that was conflating #218 and #223 — migrations run AFTER
-    // create()).
-    expect(src).toContain('this._db = await preservingProcessExitCode');
+    expect(src).toContain('const openPersistent = () => preservingProcessExitCode');
+    expect(src).toContain('this._db = await openPersistent()');
     expect(src).toContain('PGlite.create({');
-    expect(src).toContain('https://github.com/garrytan/gbrain/issues/223');
-    expect(src).toContain('gbrain doctor');
+    expect(src).toContain('classifyPgliteInitError(original)');
+    expect(src).toContain("verdict === 'wasm-abort'");
+    expect(src).toContain('attemptWalRepairAndRetry(');
+    expect(src).toContain("attempt.status === 'repaired'");
     expect(src).toContain('Original error:');
-    // Regression guard: the user-visible error MESSAGE must not re-introduce
-    // the misleading "missing migrations" hint. (A source comment explaining
-    // *why* we removed it is fine — match only inside the wrapped Error body.)
     const wrapStart = src.indexOf('const wrapped = new PgliteOpenError(');
     expect(wrapStart).toBeGreaterThan(-1);
     const wrapEnd = src.indexOf(');', wrapStart);

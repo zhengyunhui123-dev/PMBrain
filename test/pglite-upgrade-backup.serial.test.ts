@@ -3,7 +3,10 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
+  readdirSync,
   rmSync,
+  truncateSync,
   writeFileSync,
 } from 'node:fs';
 import { join } from 'node:path';
@@ -14,9 +17,11 @@ import {
   classifyPgliteDataArtifact,
   PGLITE_DATA_PROTECTION_POLICY,
 } from '../src/core/pglite-data-policy.ts';
+import { crc32c } from '../src/core/pglite-resetwal.ts';
 import {
   createVerifiedPgliteUpgradeBackup,
   deletePgliteUpgradeBackup,
+  inventoryPgliteDirectory,
   listPgliteUpgradeBackups,
   preparePgliteUpgradeBackupRoot,
   prunePgliteUpgradeBackups,
@@ -25,6 +30,14 @@ import {
   restorePgliteUpgradeBackup,
   verifyPgliteUpgradeBackup,
 } from '../src/core/pglite-upgrade-backup.ts';
+
+function markControlInProduction(dir: string): void {
+  const path = join(dir, 'global', 'pg_control');
+  const control = Buffer.from(readFileSync(path));
+  control.writeInt32LE(6, 16);
+  control.writeUInt32LE(crc32c([control.subarray(0, 288)]), 288);
+  writeFileSync(path, control);
+}
 
 describe.serial('PGLite upgrade cold backup and recovery verification', () => {
   let root: string;
@@ -59,6 +72,7 @@ describe.serial('PGLite upgrade cold backup and recovery verification', () => {
 
   test('creates a byte-verified cold copy and proves a disposable restore copy can open', async () => {
     await seedProtectedPage();
+    writeFileSync(join(databasePath, '.pmbrain-resolve.sock'), 'runtime-only');
 
     const result = await createVerifiedPgliteUpgradeBackup({
       databasePath,
@@ -69,6 +83,9 @@ describe.serial('PGLite upgrade cold backup and recovery verification', () => {
     expect(result.status).toBe('created');
     expect(existsSync(result.backupDatabasePath)).toBe(true);
     expect(existsSync(join(result.backupDatabasePath, '.gbrain-lock'))).toBe(false);
+    expect(existsSync(join(result.backupDatabasePath, '.pmbrain-resolve.sock'))).toBe(false);
+    expect(existsSync(join(result.backupDatabasePath, 'postmaster.pid'))).toBe(false);
+    expect(existsSync(join(result.backupDatabasePath, 'postmaster.opts'))).toBe(false);
     expect(existsSync(join(result.backupDirectory, 'restore-verification.pglite'))).toBe(false);
     expect(result.manifest.recovery_validation.status).toBe('verified');
     expect(result.manifest.recovery_validation.protected_table_counts.pages).toBe(1);
@@ -91,7 +108,69 @@ describe.serial('PGLite upgrade cold backup and recovery verification', () => {
     } finally {
       await engine.disconnect();
     }
-  }, 60_000);
+  }, 240_000);
+
+  test('excludes PGLite runtime files from the protected database inventory', async () => {
+    mkdirSync(databasePath, { recursive: true });
+    writeFileSync(join(databasePath, 'protected-data'), 'knowledge');
+    const withoutRuntimeFiles = await inventoryPgliteDirectory(databasePath);
+    writeFileSync(join(databasePath, '.pmbrain-resolve.sock'), 'runtime-only');
+    writeFileSync(join(databasePath, 'postmaster.pid'), '-42\n/pglite/data\n');
+    writeFileSync(join(databasePath, 'postmaster.opts'), 'runtime-only');
+    const withRuntimeFiles = await inventoryPgliteDirectory(databasePath);
+    expect(withRuntimeFiles).toEqual(withoutRuntimeFiles);
+  });
+
+  test('verifies and restores an unclean-shutdown backup through the guarded WAL repair path', async () => {
+    await seedProtectedPage();
+    const walDirectory = join(databasePath, 'pg_wal');
+    const segments = readdirSync(walDirectory).filter(name => /^[0-9A-F]{24}$/.test(name));
+    expect(segments.length).toBeGreaterThan(0);
+    for (const segment of segments) truncateSync(join(walDirectory, segment), 1024);
+
+    const created = await createVerifiedPgliteUpgradeBackup({
+      databasePath,
+      backupRoot,
+      targetVersion: '1.1.92',
+    });
+    expect(created.manifest.recovery_validation.protected_table_counts.pages).toBe(1);
+    expect((await verifyPgliteUpgradeBackup(created.backupDirectory)).status).toBe('verified');
+
+    await restorePgliteUpgradeBackup({
+      backupDirectory: created.backupDirectory,
+      backupRoot,
+      databasePath,
+    });
+    const engine = new PGLiteEngine();
+    await engine.connect({ engine: 'pglite', database_path: databasePath });
+    try {
+      expect(engine.walRepairReceipt).not.toBeNull();
+      expect(await engine.getPage('notes/upgrade-protected')).not.toBeNull();
+    } finally {
+      await engine.disconnect();
+    }
+  }, 240_000);
+
+  test('verifies an IN_PRODUCTION control backup by repairing the disposable copy before WASM open', async () => {
+    await seedProtectedPage();
+    markControlInProduction(databasePath);
+
+    const created = await createVerifiedPgliteUpgradeBackup({
+      databasePath,
+      backupRoot,
+      targetVersion: '1.1.93',
+    });
+    expect(created.manifest.recovery_validation.protected_table_counts.pages).toBe(1);
+    expect((await verifyPgliteUpgradeBackup(created.backupDirectory)).status).toBe('verified');
+
+    const engine = new PGLiteEngine();
+    await engine.connect({ engine: 'pglite', database_path: databasePath });
+    try {
+      expect(await engine.getPage('notes/upgrade-protected')).not.toBeNull();
+    } finally {
+      await engine.disconnect();
+    }
+  }, 240_000);
 
   test('reuses the first verified pre-upgrade backup for the same target version', async () => {
     await seedProtectedPage();
@@ -109,7 +188,7 @@ describe.serial('PGLite upgrade cold backup and recovery verification', () => {
     expect(first.status).toBe('created');
     expect(second.status).toBe('reused');
     expect(second.backupDirectory).toBe(first.backupDirectory);
-  }, 60_000);
+  }, 240_000);
 
   test('refuses a backup whose cold-copy inventory was changed', async () => {
     await seedProtectedPage();
@@ -123,7 +202,7 @@ describe.serial('PGLite upgrade cold backup and recovery verification', () => {
     await expect(verifyPgliteUpgradeBackup(created.backupDirectory)).rejects.toThrow(
       /integrity|完整性|sha256/i,
     );
-  }, 60_000);
+  }, 240_000);
 
   test('never copies while a live owner holds the database directory', async () => {
     await seedProtectedPage();
@@ -138,7 +217,7 @@ describe.serial('PGLite upgrade cold backup and recovery verification', () => {
     } finally {
       await releaseLock(lock);
     }
-  }, 60_000);
+  }, 240_000);
 
   test('rejects database and backup directories that contain one another', async () => {
     mkdirSync(databasePath, { recursive: true });
@@ -391,5 +470,5 @@ describe.serial('PGLite upgrade cold backup and recovery verification', () => {
     } finally {
       await verifyEngine.disconnect();
     }
-  }, 90_000);
+  }, 240_000);
 });

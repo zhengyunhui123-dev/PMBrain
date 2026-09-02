@@ -1,5 +1,6 @@
 import type { BrainEngine } from './engine.ts';
 import type { EngineConfig } from './types.ts';
+import { registerChatUsageSink, makeEngineChatUsageSink } from './ai/chat-usage.ts';
 
 /**
  * Create an engine instance based on config.
@@ -8,7 +9,7 @@ import type { EngineConfig } from './types.ts';
 export async function createEngine(config: EngineConfig): Promise<BrainEngine> {
   const engineType = config.engine || 'postgres';
 
-  switch (engineType) {
+  const engine = await (async (): Promise<BrainEngine> => { switch (engineType) {
     case 'pglite': {
       const { PGLiteEngine } = await import('./pglite-engine.ts');
       return new PGLiteEngine();
@@ -22,5 +23,13 @@ export async function createEngine(config: EngineConfig): Promise<BrainEngine> {
         `Unknown engine type: "${engineType}". Supported engines: postgres, pglite.` +
         (engineType === 'sqlite' ? ' SQLite is not supported. Use pglite instead.' : '')
       );
-  }
+  } })();
+
+  const deregister = registerChatUsageSink(makeEngineChatUsageSink(engine));
+  const disconnect = engine.disconnect.bind(engine);
+  engine.disconnect = async () => {
+    deregister();
+    await disconnect();
+  };
+  return engine;
 }

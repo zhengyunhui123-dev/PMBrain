@@ -63,6 +63,21 @@ export class EmbeddingDisabledError extends Error {
   }
 }
 
+export function isEmbeddingConfigured(
+  cfg: {
+    embedding_disabled?: boolean;
+    embedding_model?: string;
+    embedding_dimensions?: number;
+  } | null | undefined,
+): boolean {
+  const model = cfg?.embedding_model?.trim();
+  const dimensions = Number(cfg?.embedding_dimensions);
+  return !cfg?.embedding_disabled
+    && !!model
+    && Number.isInteger(dimensions)
+    && dimensions > 0;
+}
+
 export function assertEmbeddingEnabled(
   cfg: {
     embedding_disabled?: boolean;
@@ -70,14 +85,7 @@ export function assertEmbeddingEnabled(
     embedding_dimensions?: number;
   } | null,
 ): void {
-  const model = cfg?.embedding_model?.trim();
-  const dimensions = Number(cfg?.embedding_dimensions);
-  if (
-    cfg?.embedding_disabled
-    || !model
-    || !Number.isInteger(dimensions)
-    || dimensions <= 0
-  ) {
+  if (!isEmbeddingConfigured(cfg)) {
     throw new EmbeddingDisabledError(
       'PMBrain 未配置完整的向量模型，因此不会执行向量化。\n' +
       '请先显式配置模型和维度：\n' +

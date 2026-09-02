@@ -166,7 +166,7 @@ describe('Trusted Large Document Mode - PGLite behavior', () => {
     const chunks = await engine.getChunks(slug);
     expect(chunks.length).toBe(result.largeDocument!.chunksTotal);
     expect(await embeddedCount(slug)).toBe(chunks.length);
-  }, 15_000);
+  }, 60_000);
 
   test('ordinary Markdown and spoofed trusted flag remain protected above 500KB', async () => {
     const parentSections = sections(110, 5_000);

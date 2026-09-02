@@ -5156,6 +5156,60 @@ export const MIGRATIONS: Migration[] = [
   },
   {
     version: 117,
+    name: 'dream_private_queue_lifecycle',
+    idempotent: true,
+    sql: `
+      ALTER TABLE minion_jobs ADD COLUMN IF NOT EXISTS private_queue_owner_job_id INTEGER;
+      ALTER TABLE minion_jobs ADD COLUMN IF NOT EXISTS private_queue_owner_token TEXT;
+      ALTER TABLE minion_jobs ADD COLUMN IF NOT EXISTS private_queue_lease_until TIMESTAMPTZ;
+      DO $$ BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint
+           WHERE conrelid = 'minion_jobs'::regclass
+             AND contype = 'f'
+             AND pg_get_constraintdef(oid) LIKE 'FOREIGN KEY (private_queue_owner_job_id)%'
+        ) THEN
+          ALTER TABLE minion_jobs
+            ADD CONSTRAINT minion_jobs_private_queue_owner_fk
+            FOREIGN KEY (private_queue_owner_job_id) REFERENCES minion_jobs(id) ON DELETE SET NULL;
+        END IF;
+      END $$;
+      CREATE INDEX IF NOT EXISTS idx_minion_jobs_private_queue_recovery
+        ON minion_jobs (queue, private_queue_lease_until)
+        WHERE queue LIKE 'dream-inline-%'
+          AND status IN ('waiting','active','delayed','waiting-children','paused');
+      CREATE INDEX IF NOT EXISTS idx_minion_jobs_private_queue_owner
+        ON minion_jobs (private_queue_owner_job_id)
+        WHERE private_queue_owner_job_id IS NOT NULL;
+    `,
+  },
+  {
+    version: 118,
+    name: 'retrieval_reflex_delivery_events',
+    // Empty additive telemetry table. It records resolved page identifiers
+    // and deterministic match rationale only, never conversation text.
+    idempotent: true,
+    sql: `
+      CREATE TABLE IF NOT EXISTS context_volunteer_events (
+        id             BIGSERIAL PRIMARY KEY,
+        source_id      TEXT NOT NULL,
+        slug           TEXT NOT NULL,
+        confidence     DOUBLE PRECISION NOT NULL,
+        match_arm      TEXT NOT NULL,
+        rationale      TEXT NOT NULL DEFAULT '',
+        channel        TEXT NOT NULL DEFAULT 'op',
+        session_id     TEXT,
+        turn           INTEGER,
+        volunteered_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
+      CREATE INDEX IF NOT EXISTS context_volunteer_events_src_time_idx
+        ON context_volunteer_events (source_id, volunteered_at DESC);
+      CREATE INDEX IF NOT EXISTS context_volunteer_events_src_slug_idx
+        ON context_volunteer_events (source_id, slug);
+    `,
+  },
+  {
+    version: 119,
     name: 'pglite_cjk_trigram_candidate_indexes',
     // P0 PGLite Chinese retrieval fix. pg_trgm is already installed and the
     // title index already exists; connect the remaining fields used by the
@@ -5173,6 +5227,105 @@ export const MIGRATIONS: Migration[] = [
           ON pages USING GIN(slug gin_trgm_ops);
       `,
     },
+  },
+  {
+    version: 120,
+    name: 'dream_verdicts_ttl',
+    idempotent: true,
+    sql: `
+      ALTER TABLE dream_verdicts ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ;
+      ALTER TABLE dream_verdicts
+        ALTER COLUMN expires_at SET DEFAULT (now() + interval '30 days');
+      UPDATE dream_verdicts
+        SET expires_at = judged_at + interval '30 days'
+        WHERE expires_at IS NULL;
+      ALTER TABLE dream_verdicts
+        ALTER COLUMN expires_at SET NOT NULL;
+      CREATE INDEX IF NOT EXISTS dream_verdicts_expires_idx
+        ON dream_verdicts (expires_at);
+    `,
+  },
+  {
+    version: 121,
+    name: 'p1_embedding_context_mcp_usage_foundations',
+    // Additive P1 foundations. No knowledge page, source text, relation or
+    // vector is rewritten here; existing vectors remain usable until an
+    // operator explicitly starts a provider migration.
+    idempotent: true,
+    sql: `
+      ALTER TABLE pages ADD COLUMN IF NOT EXISTS embedding_signature TEXT;
+      ALTER TABLE content_chunks ADD COLUMN IF NOT EXISTS embedded_text_hash TEXT;
+      ALTER TABLE oauth_clients ADD COLUMN IF NOT EXISTS surface TEXT;
+      ALTER TABLE oauth_clients ADD COLUMN IF NOT EXISTS surface_set_by TEXT;
+
+      CREATE TABLE IF NOT EXISTS session_context_state (
+        source_id TEXT NOT NULL,
+        client_id TEXT NOT NULL DEFAULT 'local',
+        session_id TEXT NOT NULL,
+        standing_entities JSONB NOT NULL DEFAULT '[]'::jsonb,
+        surfaced_slugs JSONB NOT NULL DEFAULT '[]'::jsonb,
+        checkpoint_manifest JSONB NOT NULL DEFAULT '[]'::jsonb,
+        last_wake_at TIMESTAMPTZ,
+        page_cursor_at TIMESTAMPTZ,
+        page_cursor_slug TEXT NOT NULL DEFAULT '',
+        fact_cursor_at TIMESTAMPTZ,
+        fact_cursor_id BIGINT NOT NULL DEFAULT 0,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (source_id, client_id, session_id)
+      );
+      ALTER TABLE session_context_state ADD COLUMN IF NOT EXISTS page_cursor_at TIMESTAMPTZ;
+      ALTER TABLE session_context_state ADD COLUMN IF NOT EXISTS page_cursor_slug TEXT NOT NULL DEFAULT '';
+      ALTER TABLE session_context_state ADD COLUMN IF NOT EXISTS fact_cursor_at TIMESTAMPTZ;
+      ALTER TABLE session_context_state ADD COLUMN IF NOT EXISTS fact_cursor_id BIGINT NOT NULL DEFAULT 0;
+      CREATE INDEX IF NOT EXISTS session_context_state_updated_idx
+        ON session_context_state (updated_at);
+
+      CREATE TABLE IF NOT EXISTS chat_usage_log (
+        id BIGSERIAL PRIMARY KEY,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        model TEXT NOT NULL,
+        provider TEXT,
+        phase TEXT,
+        input_tokens INTEGER NOT NULL DEFAULT 0,
+        output_tokens INTEGER NOT NULL DEFAULT 0,
+        cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+        cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+        cost_usd DOUBLE PRECISION
+      );
+      CREATE INDEX IF NOT EXISTS idx_chat_usage_log_created
+        ON chat_usage_log (created_at);
+      CREATE INDEX IF NOT EXISTS idx_chat_usage_log_model
+        ON chat_usage_log (model, created_at);
+    `,
+  },
+  {
+    version: 122,
+    name: 'repair_private_queue_lineage',
+    idempotent: true,
+    sql: `
+      ALTER TABLE minion_jobs ADD COLUMN IF NOT EXISTS private_queue_owner_job_id INTEGER;
+      ALTER TABLE minion_jobs ADD COLUMN IF NOT EXISTS private_queue_owner_token TEXT;
+      ALTER TABLE minion_jobs ADD COLUMN IF NOT EXISTS private_queue_lease_until TIMESTAMPTZ;
+      DO $$ BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint
+           WHERE conrelid = 'minion_jobs'::regclass
+             AND contype = 'f'
+             AND pg_get_constraintdef(oid) LIKE 'FOREIGN KEY (private_queue_owner_job_id)%'
+        ) THEN
+          ALTER TABLE minion_jobs
+            ADD CONSTRAINT minion_jobs_private_queue_owner_fk
+            FOREIGN KEY (private_queue_owner_job_id) REFERENCES minion_jobs(id) ON DELETE SET NULL;
+        END IF;
+      END $$;
+      CREATE INDEX IF NOT EXISTS idx_minion_jobs_private_queue_recovery
+        ON minion_jobs (queue, private_queue_lease_until)
+        WHERE queue LIKE 'dream-inline-%'
+          AND status IN ('waiting','active','delayed','waiting-children','paused');
+      CREATE INDEX IF NOT EXISTS idx_minion_jobs_private_queue_owner
+        ON minion_jobs (private_queue_owner_job_id)
+        WHERE private_queue_owner_job_id IS NOT NULL;
+    `,
   },
 ];
 

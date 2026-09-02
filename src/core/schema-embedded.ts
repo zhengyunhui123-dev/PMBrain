@@ -137,6 +137,7 @@ CREATE TABLE IF NOT EXISTS pages (
   -- rows against any current generation.
   contextual_retrieval_mode  TEXT,
   corpus_generation          TEXT,
+  embedding_signature        TEXT,
   -- v0.40.3.0 cache invalidation gate (migration v91). Monotonic per-page
   -- counter bumped by bump_page_generation_trg on INSERT (initial value =
   -- MAX(generation) + 1 so the bookmark fires for any cache row stored
@@ -284,6 +285,7 @@ CREATE TABLE IF NOT EXISTS content_chunks (
   model                 TEXT,
   token_count           INTEGER,
   embedded_at           TIMESTAMPTZ,
+  embedded_text_hash    TEXT,
   created_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
   -- v0.19.0: code chunk metadata. Nullable — markdown chunks leave these NULL.
   -- Powers \`query --lang\`, \`code-def <symbol>\`, and \`code-refs <symbol>\`.
@@ -614,6 +616,8 @@ CREATE TABLE IF NOT EXISTS oauth_clients (
   deleted_at              TIMESTAMPTZ,
   source_id               TEXT REFERENCES sources(id) ON DELETE RESTRICT,
   federated_read          TEXT[] NOT NULL DEFAULT '{}',
+  surface                 TEXT,
+  surface_set_by          TEXT,
   -- v0.38 Slice 2 + 3: per-client daily budget cap (v84) + agent binding (v85).
   budget_usd_per_day      NUMERIC(10, 2) NULL,
   bound_tools             TEXT[] NULL,
@@ -788,6 +792,57 @@ DROP FUNCTION IF EXISTS update_page_search_vector_from_timeline();
 -- ============================================================
 -- Minion Jobs: BullMQ-inspired Postgres-native job queue
 -- ============================================================
+-- Retrieval Reflex delivery telemetry. Stores resolved page identifiers and
+-- deterministic rationale only; never stores raw conversation text.
+CREATE TABLE IF NOT EXISTS context_volunteer_events (
+  id             BIGSERIAL PRIMARY KEY,
+  source_id      TEXT NOT NULL,
+  slug           TEXT NOT NULL,
+  confidence     DOUBLE PRECISION NOT NULL,
+  match_arm      TEXT NOT NULL,
+  rationale      TEXT NOT NULL DEFAULT '',
+  channel        TEXT NOT NULL DEFAULT 'op',
+  session_id     TEXT,
+  turn           INTEGER,
+  volunteered_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS context_volunteer_events_src_time_idx
+  ON context_volunteer_events (source_id, volunteered_at DESC);
+CREATE INDEX IF NOT EXISTS context_volunteer_events_src_slug_idx
+  ON context_volunteer_events (source_id, slug);
+
+CREATE TABLE IF NOT EXISTS session_context_state (
+  source_id TEXT NOT NULL,
+  client_id TEXT NOT NULL DEFAULT 'local',
+  session_id TEXT NOT NULL,
+  standing_entities JSONB NOT NULL DEFAULT '[]'::jsonb,
+  surfaced_slugs JSONB NOT NULL DEFAULT '[]'::jsonb,
+  checkpoint_manifest JSONB NOT NULL DEFAULT '[]'::jsonb,
+  last_wake_at TIMESTAMPTZ,
+  page_cursor_at TIMESTAMPTZ,
+  page_cursor_slug TEXT NOT NULL DEFAULT '',
+  fact_cursor_at TIMESTAMPTZ,
+  fact_cursor_id BIGINT NOT NULL DEFAULT 0,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (source_id, client_id, session_id)
+);
+CREATE INDEX IF NOT EXISTS session_context_state_updated_idx ON session_context_state (updated_at);
+
+CREATE TABLE IF NOT EXISTS chat_usage_log (
+  id BIGSERIAL PRIMARY KEY,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  model TEXT NOT NULL,
+  provider TEXT,
+  phase TEXT,
+  input_tokens INTEGER NOT NULL DEFAULT 0,
+  output_tokens INTEGER NOT NULL DEFAULT 0,
+  cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+  cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+  cost_usd DOUBLE PRECISION
+);
+CREATE INDEX IF NOT EXISTS idx_chat_usage_log_created ON chat_usage_log (created_at);
+CREATE INDEX IF NOT EXISTS idx_chat_usage_log_model ON chat_usage_log (model, created_at);
+
 CREATE TABLE IF NOT EXISTS minion_jobs (
   id               SERIAL PRIMARY KEY,
   name             TEXT        NOT NULL,
@@ -822,6 +877,9 @@ CREATE TABLE IF NOT EXISTS minion_jobs (
   remove_on_complete BOOLEAN   NOT NULL DEFAULT FALSE,
   remove_on_fail   BOOLEAN     NOT NULL DEFAULT FALSE,
   idempotency_key  TEXT,
+  private_queue_owner_job_id INTEGER REFERENCES minion_jobs(id) ON DELETE SET NULL,
+  private_queue_owner_token TEXT,
+  private_queue_lease_until TIMESTAMPTZ,
   created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
   started_at       TIMESTAMPTZ,
   finished_at      TIMESTAMPTZ,
@@ -845,6 +903,13 @@ CREATE INDEX IF NOT EXISTS idx_minion_jobs_parent ON minion_jobs(parent_job_id);
 CREATE INDEX IF NOT EXISTS idx_minion_jobs_timeout ON minion_jobs (timeout_at) WHERE status = 'active' AND timeout_at IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_minion_jobs_parent_status ON minion_jobs (parent_job_id, status) WHERE parent_job_id IS NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS uniq_minion_jobs_idempotency ON minion_jobs (idempotency_key) WHERE idempotency_key IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_minion_jobs_private_queue_recovery
+  ON minion_jobs (queue, private_queue_lease_until)
+  WHERE queue LIKE 'dream-inline-%'
+    AND status IN ('waiting','active','delayed','waiting-children','paused');
+CREATE INDEX IF NOT EXISTS idx_minion_jobs_private_queue_owner
+  ON minion_jobs (private_queue_owner_job_id)
+  WHERE private_queue_owner_job_id IS NOT NULL;
 
 -- Inbox table for sidechannel messaging
 CREATE TABLE IF NOT EXISTS minion_inbox (
@@ -1007,6 +1072,7 @@ CREATE TABLE IF NOT EXISTS dream_verdicts (
   worth_processing BOOLEAN     NOT NULL,
   reasons          JSONB,
   judged_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  expires_at       TIMESTAMPTZ NOT NULL DEFAULT (now() + interval '30 days'),
   score            DOUBLE PRECISION,
   content_type     TEXT,
   segments         JSONB,
@@ -1015,6 +1081,7 @@ CREATE TABLE IF NOT EXISTS dream_verdicts (
   triage_version   INT,
   PRIMARY KEY (file_path, content_hash)
 );
+CREATE INDEX IF NOT EXISTS dream_verdicts_expires_idx ON dream_verdicts(expires_at);
 
 -- ============================================================
 -- Cycle coordination lock — v0.17 runCycle primitive

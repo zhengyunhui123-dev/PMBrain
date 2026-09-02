@@ -53,15 +53,20 @@ describe('desktop system orchestration contracts', () => {
     expect(sidecar).toContain('logSidecarFailure');
     expect(sidecar).toContain('exitCode=');
     expect(sidecar).toContain('(empty)');
+    expect(sidecar).toContain('onStderr');
     expect(sidecarController).toContain('resolveSidecarHealthTimeoutMs');
     expect(sidecarController).toContain('POST_UPGRADE_HEALTH_TIMEOUT_MS');
     expect(sidecarController).toContain("failure.recentStderr");
+    expect(sidecarController).toContain('GIN_REPAIR_PROGRESS_MESSAGE');
+    expect(sidecarController).toContain('GIN_REPAIR_SUCCESS_MESSAGE');
+    expect(sidecarController).toContain('GIN_REPAIR_DB_UNUSABLE_MESSAGE');
   });
 
   test('PGLite 用户升级时只由 sidecar 打开数据库，健康后才记录升级完成', () => {
     expect(main).toContain("setup.current.engine === 'pglite'");
     expect(databaseController).toMatch(/async migrateConfiguredInstallation[\s\S]*?engine === 'pglite'[\s\S]*?pgliteBackup\.ensureUpgradeBackup[\s\S]*?return true;[\s\S]*?DESKTOP_MIGRATION_ARGS/);
     expect(sidecarController).toMatch(/migrateConfiguredInstallation\(\)[\s\S]*?this\.start\(false\)[\s\S]*?engine === 'pglite'\)[\s\S]*?markDesktopMigration/);
+    expect(sidecarController).toMatch(/async restartForRetry[\s\S]*?needsDesktopMigration\(app\.getVersion\(\)\)[\s\S]*?startOnce\(false\)[\s\S]*?markDesktopMigration\(app\.getVersion\(\)\)/);
     expect(main).toContain('PGLite 数据库路径：${databasePath}');
   });
 
@@ -170,12 +175,12 @@ describe('desktop system orchestration contracts', () => {
     expect(main).toContain('saved.embeddingModelActivated');
     expect(main).toContain("'--empty-only'");
     expect(main).toContain('payload.confirmEmbeddingRebuild !== true');
-    expect(main).toContain("'--force-reembed'");
     expect(main).toContain('embeddingRebuildQueued');
+    expect(main).toContain('waitEmbeddingRebuildChoice');
+    expect(main).toContain("canDeferEmbeddingRebuild: true");
     expect(main).toContain("'/admin/api/runs/action'");
-    expect(main).toContain("{ action: 'embed_stale', catchUp: true }");
+    expect(main).toContain('forceReembed: true');
     expect(main).toContain('if (!embeddingSwitchCommitted) restoreConfig(saved.snapshot)');
-    expect(main).toContain('Dream 不会自行触发模型迁移');
   });
 
   test('启动前只对空向量库自动修复维度漂移，并在已有向量时保留数据', () => {
@@ -192,11 +197,18 @@ describe('desktop system orchestration contracts', () => {
   test('模型保存时仅 Postgres 独立执行迁移，PGLite 等 sidecar 健康后完成升级记录', () => {
     expect(main).toContain("title: '正在验证向量模型'");
     expect(main).toContain("title: '正在保存模型配置'");
-    expect(main).toContain("title: '正在准备搜索索引'");
+    expect(setupController).toContain("title: '正在准备搜索索引'");
+    expect(setupController).toContain('canDeferEmbeddingRebuild');
     expect(setupController).toContain('migrationRequired = needsDesktopMigration(app.getVersion())');
     expect(setupController).toMatch(/if \(migrationRequired && saved\.config\.engine !== 'pglite'\) \{[\s\S]*?runCliChecked\(this\.dependencies\.runtime\(\), DESKTOP_MIGRATION_ARGS\)/);
     expect(setupController).toMatch(/this\.dependencies\.sidecar\.start\(false\)[\s\S]*?if \(migrationRequired && saved\.config\.engine === 'pglite'\)/);
     expect(main).not.toContain("title: '正在应用数据库迁移'");
+  });
+
+  test('向量重建选择只在 Sidecar 就绪后显示，且按钮显示前已经注册等待器', () => {
+    expect(setupController).toMatch(
+      /await this\.dependencies\.sidecar\.start\(false\)[\s\S]*if \(embeddingRebuildQueued\) \{[\s\S]*const rebuildChoice = this\.dependencies\.waitEmbeddingRebuildChoice\(\);[\s\S]*canDeferEmbeddingRebuild: true/,
+    );
   });
 
   test('allows credential listing and revocation while keeping creation behind the live gateway', () => {

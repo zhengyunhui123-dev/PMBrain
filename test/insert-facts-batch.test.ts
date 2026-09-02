@@ -61,7 +61,7 @@ const fixtureFact = (rowNum: number, overrides: Partial<BatchFact> = {}): BatchF
 describe('engine.insertFacts — batch insert', () => {
   test('empty batch returns inserted:0, ids:[]', async () => {
     const r = await engine.insertFacts([], { source_id: 'default' });
-    expect(r).toEqual({ inserted: 0, ids: [] });
+    expect(r).toEqual({ inserted: 0, ids: [], deleted: 0 });
   });
 
   test('single-row batch inserts and persists v51 columns', async () => {
@@ -316,5 +316,84 @@ describe('insertFacts + deleteFactsForPage round-trip (the reconciliation patter
     expect(rows.rows).toHaveLength(2);
     expect(rows.rows[0]).toMatchObject({ fact: 'A', row_num: 1, source_markdown_slug: 'people/alice' });
     expect(rows.rows[1]).toMatchObject({ fact: 'B', row_num: 2, source_markdown_slug: 'people/alice' });
+  });
+});
+
+describe('engine.insertFacts — atomic page reconcile', () => {
+  test('replaces a page inside one transaction and reports the deleted count', async () => {
+    await engine.insertFacts(
+      [fixtureFact(1, { fact: 'old one' }), fixtureFact(2, { fact: 'old two' })],
+      { source_id: 'default' },
+    );
+
+    const result = await engine.insertFacts(
+      [fixtureFact(1, { fact: 'new one' })],
+      { source_id: 'default' },
+      { deleteForPageFirst: { slug: 'people/alice' } },
+    );
+
+    expect(result.inserted).toBe(1);
+    expect(result.deleted).toBe(2);
+    const rows = await (engine as any).db.query(
+      `SELECT fact FROM facts WHERE source_markdown_slug = 'people/alice' ORDER BY row_num`,
+    );
+    expect(rows.rows.map((row: { fact: string }) => row.fact)).toEqual(['new one']);
+  });
+
+  test('rolls the delete back when a replacement row fails to insert', async () => {
+    await engine.insertFacts(
+      [fixtureFact(1, { fact: 'keeper one' }), fixtureFact(2, { fact: 'keeper two' })],
+      { source_id: 'default' },
+    );
+
+    await expect(engine.insertFacts(
+      [
+        fixtureFact(1, { fact: 'replacement' }),
+        fixtureFact(2, { fact: null as unknown as string }),
+      ],
+      { source_id: 'default' },
+      { deleteForPageFirst: { slug: 'people/alice' } },
+    )).rejects.toThrow();
+
+    const rows = await (engine as any).db.query(
+      `SELECT fact FROM facts WHERE source_markdown_slug = 'people/alice' ORDER BY row_num`,
+    );
+    expect(rows.rows.map((row: { fact: string }) => row.fact)).toEqual(['keeper one', 'keeper two']);
+  });
+
+  test('preserves cli-origin and expired audit rows during a fence-owned replacement', async () => {
+    await engine.insertFacts(
+      [
+        fixtureFact(1, { fact: 'old fence row', source: 'fence' }),
+        fixtureFact(2, { fact: 'conversation row', source: 'cli:conversation' }),
+        fixtureFact(3, { fact: 'forgotten audit row', source: 'fence' }),
+      ],
+      { source_id: 'default' },
+    );
+    await (engine as any).db.query(
+      `UPDATE facts SET expired_at = '2026-01-01'::timestamptz WHERE fact = 'forgotten audit row'`,
+    );
+
+    const result = await engine.insertFacts(
+      [fixtureFact(1, { fact: 'new fence row', source: 'fence' })],
+      { source_id: 'default' },
+      {
+        deleteForPageFirst: {
+          slug: 'people/alice',
+          excludeSourcePrefixes: ['cli:'],
+          preserveExpiredLegacy: true,
+        },
+      },
+    );
+
+    expect(result.deleted).toBe(1);
+    const rows = await (engine as any).db.query(
+      `SELECT fact FROM facts WHERE source_markdown_slug = 'people/alice' ORDER BY row_num`,
+    );
+    expect(rows.rows.map((row: { fact: string }) => row.fact)).toEqual([
+      'new fence row',
+      'conversation row',
+      'forgotten audit row',
+    ]);
   });
 });

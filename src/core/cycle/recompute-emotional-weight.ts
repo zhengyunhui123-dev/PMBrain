@@ -23,6 +23,9 @@ import type { BrainEngine } from '../engine.ts';
 import type { PhaseResult, PhaseError } from '../cycle.ts';
 import { computeEmotionalWeight } from './emotional-weight.ts';
 import type { GBrainConfig } from '../config.ts';
+import { DELETE_BATCH_SIZE } from '../engine-constants.ts';
+import { createProgress, type ProgressReporter } from '../progress.ts';
+import { getCliOptions, cliOptsToProgressOptions } from '../cli-options.ts';
 
 export interface RecomputeEmotionalWeightOpts {
   /** When false, the phase reads + computes but skips the UPDATE. */
@@ -33,6 +36,9 @@ export interface RecomputeEmotionalWeightOpts {
    * the incremental path.
    */
   affectedSlugs?: string[];
+  sourceId?: string;
+  yieldDuringPhase?: () => Promise<void>;
+  progress?: ProgressReporter;
   /** GBrain config for high_emotion_tags + user_holder overrides. */
   config?: GBrainConfig;
 }
@@ -73,7 +79,14 @@ export async function runPhaseRecomputeEmotionalWeight(
       }, start);
     }
 
-    const inputs = await engine.batchLoadEmotionalInputs(opts.affectedSlugs);
+    const progress = opts.progress ?? createProgress(cliOptsToProgressOptions(getCliOptions()));
+    progress.start('recompute_emotional_weight.load');
+    let inputs;
+    try {
+      inputs = await engine.batchLoadEmotionalInputs(opts.affectedSlugs, { sourceId: opts.sourceId });
+    } finally {
+      progress.finish();
+    }
     const writes = inputs.map(row => ({
       slug: row.slug,
       source_id: row.source_id,
@@ -91,7 +104,18 @@ export async function runPhaseRecomputeEmotionalWeight(
       }, start);
     }
 
-    const updated = await engine.setEmotionalWeightBatch(writes);
+    progress.start('recompute_emotional_weight.write', writes.length);
+    let updated = 0;
+    try {
+      for (let i = 0; i < writes.length; i += DELETE_BATCH_SIZE) {
+        const batch = writes.slice(i, i + DELETE_BATCH_SIZE);
+        updated += await engine.setEmotionalWeightBatch(batch);
+        progress.tick(batch.length);
+        await opts.yieldDuringPhase?.();
+      }
+    } finally {
+      progress.finish();
+    }
 
     return result('ok', `recompute_emotional_weight (${updated} pages)`, updated, {
       mode: opts.affectedSlugs ? 'incremental' : 'full',

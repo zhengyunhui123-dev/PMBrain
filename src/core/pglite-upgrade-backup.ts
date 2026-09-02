@@ -19,6 +19,8 @@ import { vector } from '@electric-sql/pglite/vector';
 import { pg_trgm } from '@electric-sql/pglite/contrib/pg_trgm';
 import { configDir } from './config.ts';
 import { acquireLock, releaseLock } from './pglite-lock.ts';
+import { attemptWalRepairAndRetry } from './pglite-repair.ts';
+import { pgControlLooksCleanlyShutdown } from './pglite-resetwal.ts';
 import { PGLITE_DATA_PROTECTION_POLICY } from './pglite-data-policy.ts';
 
 export const PGLITE_UPGRADE_BACKUP_RETENTION = 2;
@@ -171,13 +173,21 @@ function assertDirectoryNotSymlink(path: string, label: string): void {
   if (!info.isDirectory()) throw new Error(`${label} is not a directory: ${path}`);
 }
 
+function isPgliteRuntimePath(relativePath: string): boolean {
+  const topLevel = relativePath.split(/[\\/]/)[0];
+  return topLevel === '.gbrain-lock'
+    || topLevel === '.pmbrain-resolve.sock'
+    || topLevel === 'postmaster.pid'
+    || topLevel === 'postmaster.opts';
+}
+
 function listInventoryFiles(root: string): string[] {
   const files: string[] = [];
   const visit = (directory: string): void => {
     for (const entry of readdirSync(directory, { withFileTypes: true })) {
       const full = join(directory, entry.name);
       const rel = relative(root, full);
-      if (rel.split(/[\\/]/)[0] === '.gbrain-lock') continue;
+      if (isPgliteRuntimePath(rel)) continue;
       if (entry.isSymbolicLink()) {
         throw new Error(`PGLite backup refuses symbolic links inside the database directory: ${full}`);
       }
@@ -237,7 +247,7 @@ function copyColdDatabase(source: string, destination: string): void {
     preserveTimestamps: true,
     filter: sourcePath => {
       const rel = relative(source, sourcePath);
-      return rel === '' || rel.split(/[\\/]/)[0] !== '.gbrain-lock';
+      return rel === '' || !isPgliteRuntimePath(rel);
     },
   });
 }
@@ -251,11 +261,51 @@ async function preservingProcessExitCode<T>(fn: () => Promise<T>): Promise<T> {
   }
 }
 
+function isWasmAbortMessage(message: string): boolean {
+  return /aborted\s*\(\)|RuntimeError|unreachable|abort.*runtime|wasm.*runtime/i.test(message);
+}
+
+async function openVerifiedRestoreCopy(
+  databasePath: string,
+  open: () => Promise<PGlite>,
+): Promise<PGlite> {
+  const fail = (detail: string, cause?: unknown): never => {
+    throw new Error(`PGLite recovery-copy WAL repair failed: ${detail}`, { cause });
+  };
+  const repair = () => attemptWalRepairAndRetry(databasePath, open);
+
+  if (!pgControlLooksCleanlyShutdown(databasePath)) {
+    const attempt = await repair();
+    if (attempt.status === 'repaired') return attempt.db;
+    if (attempt.status !== 'skipped') return fail(attempt.repairError);
+    try {
+      return await open();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!isWasmAbortMessage(message)) throw error;
+      return fail(attempt.detail, error);
+    }
+  }
+
+  try {
+    return await open();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!isWasmAbortMessage(message)) throw error;
+    const attempt = await repair();
+    if (attempt.status !== 'repaired') {
+      return fail(attempt.status === 'skipped' ? attempt.detail : attempt.repairError, error);
+    }
+    return attempt.db;
+  }
+}
+
 async function inspectRestoreCopy(databasePath: string): Promise<PgliteRecoveryValidation> {
-  const db = await preservingProcessExitCode(() => PGlite.create({
+  const open = () => preservingProcessExitCode(() => PGlite.create({
     dataDir: databasePath,
     extensions: { vector, pg_trgm },
   }));
+  const db = await openVerifiedRestoreCopy(databasePath, open);
   try {
     const tableResult = await db.query<{ tablename: string }>(
       "SELECT tablename FROM pg_tables WHERE schemaname = 'public'",

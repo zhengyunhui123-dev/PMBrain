@@ -79,7 +79,7 @@ describe('one-shot CLI disconnect deadline', () => {
     expect(Date.now() - started).toBeLessThan(100);
   });
 
-  test('PGLite model probe still disconnects instead of skipping close', async () => {
+  test('PGLite model commands also skip a Windows WASM close after their result is written', async () => {
     const exits: number[] = [];
     let disconnected = false;
     const outcome = await disconnectCliEngine({
@@ -91,10 +91,10 @@ describe('one-shot CLI disconnect deadline', () => {
       forceExit: code => { exits.push(code); },
     });
 
-    expect(PGLITE_SKIP_CLOSE_COMMANDS.has('models')).toBe(false);
+    expect(PGLITE_SKIP_CLOSE_COMMANDS.has('models')).toBe(true);
     expect(PGLITE_SKIP_CLOSE_COMMANDS.has('import')).toBe(true);
-    expect(outcome).toBe('disconnected');
-    expect(disconnected).toBe(true);
-    expect(exits).toEqual([]);
+    expect(outcome).toBe('forced_exit');
+    expect(disconnected).toBe(false);
+    expect(exits).toEqual([0]);
   });
 });

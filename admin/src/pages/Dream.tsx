@@ -4,6 +4,7 @@ import { RunOutput, formatDate, pageTypeLabel, pageTypeTitle, type ConsoleRun } 
 import { describeRunRecovery } from '../lib/run-recovery';
 import { TakeProposalsPage } from './TakeProposals';
 import { CalibrationPage } from './Calibration';
+import { SearchIndexRepairCard, textLooksLikeGinRepairFailure } from './search-index-repair';
 
 interface PhaseCapability {
   id: string;
@@ -717,6 +718,11 @@ export function describeDreamRun(run: ConsoleRun): {
     diagnosis = firstErrorText(run, report) || diagnosis;
   }
 
+  if (textLooksLikeGinRepairFailure(text)) {
+    headline = '搜索索引异常，需要重建';
+    diagnosis = '搜索索引坏了，知识内容还在。请点下面的「重建搜索索引」；修好后再继续快速维护。';
+  }
+
   if (writtenSlugs.length > 0) {
     outputs.push(`页面 slug: ${writtenSlugs.slice(0, 8).join(', ')}${writtenSlugs.length > 8 ? ' ...' : ''}`);
   }
@@ -935,6 +941,9 @@ function DreamRunResult({ run }: { run: ConsoleRun }) {
         <span className={`run-${displayStatus}`}>{statusLabel}</span>
       </div>
       <p>{summary.diagnosis}</p>
+      {textLooksLikeGinRepairFailure(`${run.stdout}\n${run.stderr}\n${run.error ?? ''}`) && (
+        <SearchIndexRepairCard forceShow />
+      )}
       <div className="dream-outcome-metrics">
         {outcome.metrics.map(metric => (
           <div key={metric.label} className={metric.label === '未处理成功' && metric.value > 0 ? 'has-warning' : ''}>
@@ -2223,6 +2232,9 @@ export function DreamOverviewPage() {
         <div><b>{statusTitle}</b><span>{statusText}</span></div>
         <small>最近更新 {formatDate(data.overview?.recent_write_at ?? null, '暂无')}</small>
       </section>
+      {latestRun && textLooksLikeGinRepairFailure(`${latestRun.stdout}\n${latestRun.stderr}\n${latestRun.error ?? ''}`) && (
+        <SearchIndexRepairCard forceShow />
+      )}
 
       <DreamRunPanel engine={data.overview?.engine} defaultSourceId={data.overview?.main_source_id} phaseCatalog={data.phase_catalog} phaseCapabilities={data.phase_capabilities} generativeEnabled={data.generative_enabled === true} sources={data.overview?.sources} locks={data.locks} jobs={data.jobs} supervisor={data.supervisor} onDone={() => void reload()} />
 

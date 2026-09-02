@@ -23,7 +23,7 @@ import { pathToSlug } from './sync.ts';
  * parseTimelineEntries change shape, so extract --stale re-sweeps pages
  * stamped by the previous extractor.
  */
-export const LINK_EXTRACTOR_VERSION_TS = '2026-08-16T00:00:00Z';
+export const LINK_EXTRACTOR_VERSION_TS = '2026-08-29T00:00:00Z';
 
 // ─── Entity references ──────────────────────────────────────────
 
@@ -47,6 +47,8 @@ export interface EntityRef {
    * The literal path must exist exactly before an edge is emitted.
    */
   exactPath?: boolean;
+  /** A bare/custom wikilink that must be resolved against the current page and Source. */
+  needsResolution?: boolean;
 }
 
 /** v0.17.0: how a link's target source was pinned at extraction time. */
@@ -59,7 +61,10 @@ export type LinkResolutionType = 'qualified' | 'unqualified';
  *   - Our domain extensions: tech, finance, personal, openclaw (domain-organized wikis)
  *   - Our entity prefix: entities (we kept some legacy entities/projects/ pages)
  */
-const DIR_PATTERN = '(?:people|companies|meetings|concepts|deal|civic|project|projects|source|media|yc|tech|finance|personal|openclaw|entities)';
+const DIR_PATTERN = '(?:people|companies|meetings|concepts|deal|civic|project|projects|source|media|yc|tech|finance|personal|openclaw|entities|reference)';
+
+/** Any plausible page directory. Persist callers still verify both endpoints exist. */
+const ANY_DIR_SEGMENT = '[a-z0-9][a-z0-9_-]*';
 
 /**
  * Match `[Name](path)` markdown links pointing to entity directories.
@@ -72,7 +77,7 @@ const DIR_PATTERN = '(?:people|companies|meetings|concepts|deal|civic|project|pr
  * `.md` suffix so the same function works for both filesystem and DB content.
  */
 const ENTITY_REF_RE = new RegExp(
-  `\\[([^\\]]+)\\]\\((?:\\.\\.\\/)*(${DIR_PATTERN}\\/[^)\\s]+?)(?:\\.md)?\\)`,
+  `\\[([^\\]]+)\\]\\((?:\\.\\.\\/)*(${ANY_DIR_SEGMENT}\\/[^)\\s]+?)(?:\\.md)?\\)`,
   'g',
 );
 
@@ -97,6 +102,9 @@ const WIKILINK_RE = new RegExp(
  * their original directory and page names in slugs.
  */
 const WIKILINK_ANY_PATH_RE = /\[\[([^|\]#\r\n]+\/[^|\]#\r\n]+?)(?:#[^|\]]*?)?(?:\|([^\]]+?))?\]\]/g;
+
+/** Bare/custom Obsidian wikilinks, handled after the path-aware passes. */
+const WIKILINK_GENERIC_RE = /\[\[([^|\]#\n[]+?)(?:#[^|\]]*?)?(?:\|([^\]]+?))?\]\]/g;
 
 export interface RelativeMarkdownRef {
   name: string;
@@ -287,6 +295,7 @@ export function extractEntityRefs(content: string): EntityRef[] {
   //    Markdown links have no source-qualification syntax — they're
   //    always unqualified. Omit sourceId so the shape stays compatible
   //    with pre-v0.17 consumers doing strict equality.
+  const markdownRanges: Array<[number, number]> = [];
   const mdPattern = new RegExp(ENTITY_REF_RE.source, ENTITY_REF_RE.flags);
   while ((match = mdPattern.exec(stripped)) !== null) {
     const name = match[1];
@@ -294,6 +303,7 @@ export function extractEntityRefs(content: string): EntityRef[] {
     const slug = fullPath;
     const dir = fullPath.split('/')[0];
     refs.push({ name, slug, dir });
+    markdownRanges.push([match.index, match.index + match[0].length]);
   }
 
   // 2a. v0.17.0 qualified wikilinks: [[source-id:path]] or [[source-id:path|Display]]
@@ -303,7 +313,7 @@ export function extractEntityRefs(content: string): EntityRef[] {
   const qualPattern = new RegExp(QUALIFIED_WIKILINK_RE.source, QUALIFIED_WIKILINK_RE.flags);
   while ((match = qualPattern.exec(stripped)) !== null) {
     const sourceId = match[1];
-    let slug = match[2].trim();
+    let slug = stripEscapedPipeTail(match[2].trim());
     if (!slug) continue;
     if (slug.includes('://')) continue;
     if (slug.endsWith('.md')) slug = slug.slice(0, -3);
@@ -319,7 +329,7 @@ export function extractEntityRefs(content: string): EntityRef[] {
   const unqualifiedRanges: Array<[number, number]> = [];
   const wikiPattern = new RegExp(WIKILINK_RE.source, WIKILINK_RE.flags);
   while ((match = wikiPattern.exec(unmasked)) !== null) {
-    let slug = match[1].trim();
+    let slug = stripEscapedPipeTail(match[1].trim());
     if (!slug) continue;
     if (slug.includes('://')) continue;
     if (slug.endsWith('.md')) slug = slug.slice(0, -3);
@@ -333,16 +343,43 @@ export function extractEntityRefs(content: string): EntityRef[] {
   // matches are masked above so they retain their established behavior.
   const anyPathMasked = maskRanges(stripped, [...qualifiedRanges, ...unqualifiedRanges]);
   const anyPathPattern = new RegExp(WIKILINK_ANY_PATH_RE.source, WIKILINK_ANY_PATH_RE.flags);
+  const anyPathRanges: Array<[number, number]> = [];
   while ((match = anyPathPattern.exec(anyPathMasked)) !== null) {
-    let slug = match[1].trim();
+    let slug = stripEscapedPipeTail(match[1].trim());
     if (!slug || slug.includes('://') || slug.includes(':')) continue;
     if (slug.endsWith('.md')) slug = slug.slice(0, -3);
     const displayName = (match[2] || slug).trim();
     const dir = slug.split('/')[0];
     refs.push({ name: displayName, slug, dir, exactPath: true });
+    anyPathRanges.push([match.index, match.index + match[0].length]);
+  }
+
+  // 2d. Bare wikilinks are never resolved by global basename in PMBrain.
+  // They are candidates for current-directory and Source-root exact lookup.
+  const genericMasked = maskRanges(
+    stripped,
+    [...markdownRanges, ...qualifiedRanges, ...unqualifiedRanges, ...anyPathRanges],
+  );
+  const genericPattern = new RegExp(WIKILINK_GENERIC_RE.source, WIKILINK_GENERIC_RE.flags);
+  while ((match = genericPattern.exec(genericMasked)) !== null) {
+    let slug = stripEscapedPipeTail(match[1].trim());
+    if (!slug || slug.includes('://') || slug.includes(':')) continue;
+    if (slug.endsWith('.md')) slug = slug.slice(0, -3);
+    const displayName = (match[2] || slug).trim();
+    refs.push({
+      name: displayName,
+      slug,
+      dir: slug.includes('/') ? slug.split('/')[0] : '',
+      needsResolution: true,
+    });
   }
 
   return refs;
+}
+
+/** Markdown-table wikilinks escape the alias pipe as `\\|`; it is not part of the slug. */
+function stripEscapedPipeTail(slug: string): string {
+  return slug.replace(/\\+$/, '');
 }
 
 /**
@@ -436,6 +473,7 @@ export async function extractPageLinks(
   frontmatter: Record<string, unknown>,
   pageType: PageType,
   resolver: SlugResolver,
+  opts: { skipFrontmatter?: boolean } = {},
 ): Promise<PageLinksResult> {
   const candidates: LinkCandidate[] = [];
   const wikilinkUnresolved: UnresolvedFrontmatterRef[] = [];
@@ -468,13 +506,66 @@ export async function extractPageLinks(
     // semantics. Do not re-emit it through the historical entity path, whose
     // unqualified resolver is allowed to fall back to default.
     if (relativeMarkdownTargetSlugs.has(ref.slug)) continue;
+    if (ref.needsResolution) {
+      const raw = ref.slug.replace(/\\/g, '/');
+      const normalized = raw.startsWith('./') || raw.startsWith('../')
+        ? pathToSlug(posix.join(posix.dirname(slug), raw))
+        : pathToSlug(raw);
+      const resolvedTargets: Array<{ slug: string; sourceId: string; resolutionType: LinkResolutionType }> = [];
+
+      if (normalized.includes('/')) {
+        const exact = typeof resolver.resolveExact === 'function'
+          ? await resolver.resolveExact(normalized)
+          : null;
+        if (exact) resolvedTargets.push(exact);
+      } else {
+        const sameDirSlug = pathToSlug(posix.join(posix.dirname(slug), normalized));
+        const sameDir = typeof resolver.resolveLocalExact === 'function'
+          ? await resolver.resolveLocalExact(sameDirSlug)
+          : null;
+        if (sameDir) resolvedTargets.push(sameDir);
+        const root = typeof resolver.resolveExact === 'function'
+          ? await resolver.resolveExact(normalized)
+          : null;
+        if (root && !resolvedTargets.some(target => target.slug === root.slug && target.sourceId === root.sourceId)) {
+          resolvedTargets.push(root);
+        }
+      }
+
+      if (resolvedTargets.length === 0) {
+        if (!wikilinkUnresolvedSeen.has(ref.slug)) {
+          wikilinkUnresolvedSeen.add(ref.slug);
+          wikilinkUnresolved.push({ field: 'wikilink', name: ref.slug });
+        }
+        continue;
+      }
+
+      const idx = content.indexOf(ref.name);
+      const context = idx >= 0 ? excerpt(content, idx, 240) : ref.name;
+      for (const target of resolvedTargets) {
+        if (target.slug === slug) continue;
+        candidates.push({
+          targetSlug: target.slug,
+          targetSourceId: target.sourceId,
+          resolutionType: target.resolutionType,
+          linkType: inferLinkType(pageType, context, content, target.slug),
+          context,
+          linkSource: 'markdown',
+        });
+      }
+      continue;
+    }
+
+    const normalizedRefSlug = ref.slug.includes('/')
+      ? pathToSlug(ref.slug.replace(/\\/g, '/'))
+      : ref.slug;
     const resolvedExact = typeof resolver.resolveExact === 'function'
-      ? await resolver.resolveExact(ref.slug, ref.sourceId ?? undefined)
+      ? await resolver.resolveExact(normalizedRefSlug, ref.sourceId ?? undefined)
       : null;
     const exactVerified = typeof resolver.resolveExact === 'function'
       ? resolvedExact !== null
       : typeof resolver.slugExists === 'function'
-        ? await resolver.slugExists(ref.slug, ref.sourceId ?? undefined)
+        ? await resolver.slugExists(normalizedRefSlug, ref.sourceId ?? undefined)
         : true;
     if (
       (ref.exactPath || ref.sourceId)
@@ -493,10 +584,10 @@ export async function extractPageLinks(
     // then portfolio companies are listed in subsequent sentences.
     const context = idx >= 0 ? excerpt(content, idx, 240) : ref.name;
     candidates.push({
-      targetSlug: resolvedExact?.slug ?? ref.slug,
+      targetSlug: resolvedExact?.slug ?? normalizedRefSlug,
       ...(resolvedExact?.sourceId ? { targetSourceId: resolvedExact.sourceId } : {}),
       resolutionType: ref.sourceId ? 'qualified' : 'unqualified',
-      linkType: inferLinkType(pageType, context, content, ref.slug),
+      linkType: inferLinkType(pageType, context, content, normalizedRefSlug),
       context,
       linkSource: 'markdown',
     });
@@ -507,7 +598,7 @@ export async function extractPageLinks(
   // Code blocks are stripped first — slugs in code samples are not real refs.
   const strippedContent = stripCodeBlocks(content);
   const bareRe = new RegExp(
-    `\\b(${DIR_PATTERN}\\/[a-z0-9][a-z0-9/-]*[a-z0-9])\\b`,
+    `\\b(${ANY_DIR_SEGMENT}\\/[a-z0-9][a-z0-9/-]*[a-z0-9])\\b`,
     'g',
   );
   let m: RegExpExecArray | null;
@@ -526,7 +617,9 @@ export async function extractPageLinks(
 
   // 3. Frontmatter-derived edges (v0.13). Includes the legacy `source:`
   // field along with the full field map.
-  const fm = await extractFrontmatterLinks(slug, pageType, frontmatter, resolver);
+  const fm = opts.skipFrontmatter
+    ? { candidates: [], unresolved: [] }
+    : await extractFrontmatterLinks(slug, pageType, frontmatter, resolver);
   candidates.push(...fm.candidates);
 
   // Within-page dedup: same (fromSlug, targetSlug, linkType, linkSource)
@@ -970,6 +1063,13 @@ export interface FrontmatterExtractResult {
   unresolved: UnresolvedFrontmatterRef[];
 }
 
+/** Return the target portion of an Obsidian wikilink stored as a YAML value. */
+export function unwrapWikilink(value: string): string {
+  const trimmed = value.trim();
+  const match = /^\[\[([^|\]#]+?)(?:#[^|\]]*?)?(?:\|[^\]]*?)?\]\]$/.exec(trimmed);
+  return match ? stripEscapedPipeTail(match[1]!.trim()) : trimmed;
+}
+
 /**
  * Extract typed graph edges from YAML frontmatter. Async because the
  * resolver may need to query the DB for fuzzy matches.
@@ -1001,7 +1101,7 @@ export async function extractFrontmatterLinks(
         let requestedSourceId: string | undefined;
         let contextExtra = '';
         if (typeof entry === 'string') {
-          name = entry;
+          name = unwrapWikilink(entry);
         } else if (entry && typeof entry === 'object') {
           const obj = entry as Record<string, unknown>;
           const n = obj.name ?? obj.slug ?? obj.title;
@@ -1018,6 +1118,13 @@ export async function extractFrontmatterLinks(
           }
         }
         if (!name) continue;   // skip numbers, nulls, malformed objects
+
+        const qualified = /^([a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?):(.+\/.+)$/.exec(name);
+        if (qualified) {
+          requestedSourceId ??= qualified[1];
+          name = qualified[2];
+        }
+        if (name.includes('/')) name = pathToSlug(name.replace(/\\/g, '/'));
 
         const resolvedTarget = requestedSourceId && typeof resolver.resolveExact === 'function'
           ? await resolver.resolveExact(name, requestedSourceId)
