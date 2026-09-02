@@ -23,6 +23,12 @@ import { logBatchRetry as auditLogBatchRetry, logBatchExhausted as auditLogBatch
 import { runMigrations } from './migrate.ts';
 import { PGLITE_SCHEMA_SQL, getPGLiteSchema } from './pglite-schema.ts';
 import { DEFAULT_EMBEDDING_DIMENSIONS } from './ai/defaults.ts';
+import {
+  applyChunkEmbeddingIndexPolicy,
+  applyExistingColumnHnswPolicy,
+  isHnswDimensionLimitError,
+  PGVECTOR_HNSW_VECTOR_MAX_DIMS,
+} from './vector-index.ts';
 import { DELETE_BATCH_SIZE } from './engine-constants.ts';
 import { acquireLock, releaseLock, type LockHandle } from './pglite-lock.ts';
 import { DatabaseAlreadyOwnedError, PgliteOpenError } from './pglite-errors.ts';
@@ -538,34 +544,49 @@ export class PGLiteEngine implements BrainEngine {
       dims = gw.getEmbeddingDimensions();
     } catch { /* gateway not configured — use storage placeholder */ }
 
-    await this.db.exec(getPGLiteSchema(dims));
+    const existingDim = await this.probeEmbeddingColumnDim();
+    const schemaSql = applyExistingColumnHnswPolicy(getPGLiteSchema(dims), existingDim);
+    try {
+      await this.db.exec(schemaSql);
+    } catch (error) {
+      if (!isHnswDimensionLimitError(error)) throw error;
+      process.stderr.write(
+        `  ⚠️  skipped HNSW vector index: embedding column exceeds pgvector's ${PGVECTOR_HNSW_VECTOR_MAX_DIMS}-dimension limit; exact search remains available.\n`,
+      );
+      await this.db.exec(applyChunkEmbeddingIndexPolicy(schemaSql, PGVECTOR_HNSW_VECTOR_MAX_DIMS + 1));
+    }
 
     const { applied } = await runMigrations(this);
     if (applied > 0) {
       process.stderr.write(`  ${applied} migration(s) applied\n`);
     }
 
-    // PGLite 不支持 ALTER COLUMN TYPE vector(N)，检测到维度不匹配时只能警告。
-    const dimRows = await this.db.query<{ formatted: string | null }>(`
-      SELECT format_type(a.atttypid, a.atttypmod) AS formatted
-        FROM pg_attribute a
-        JOIN pg_class c ON c.oid = a.attrelid
-        JOIN pg_namespace n ON n.oid = c.relnamespace
-       WHERE n.nspname = 'public'
-         AND c.relname = 'content_chunks'
-         AND a.attname = 'embedding'
-         AND NOT a.attisdropped
-    `);
-    const dimFormatted = dimRows.rows[0]?.formatted;
-    if (dimFormatted) {
-      const dimMatch = dimFormatted.match(/vector\((\d+)\)/i);
-      const actualDim = dimMatch ? parseInt(dimMatch[1], 10) : null;
-      if (actualDim !== null && actualDim !== dims) {
-        process.stderr.write(
-          `  ⚠️  检测到 embedding 列维度不匹配：DB 为 vector(${actualDim})，配置为 ${dims}。\n` +
-          `  请运行：gbrain models align-embedding-dimension --yes\n`
-        );
-      }
+    const actualDim = existingDim ?? await this.probeEmbeddingColumnDim();
+    if (actualDim !== null && actualDim !== dims) {
+      process.stderr.write(
+        `  ⚠️  检测到 embedding 列维度不匹配：DB 为 vector(${actualDim})，配置为 ${dims}。\n` +
+        `  请运行：gbrain models align-embedding-dimension --yes\n`
+      );
+    }
+  }
+
+  private async probeEmbeddingColumnDim(): Promise<number | null> {
+    try {
+      const dimRows = await this.db.query<{ formatted: string | null }>(`
+        SELECT format_type(a.atttypid, a.atttypmod) AS formatted
+          FROM pg_attribute a
+          JOIN pg_class c ON c.oid = a.attrelid
+          JOIN pg_namespace n ON n.oid = c.relnamespace
+         WHERE n.nspname = 'public'
+           AND c.relname = 'content_chunks'
+           AND a.attname = 'embedding'
+           AND NOT a.attisdropped
+      `);
+      const formatted = dimRows.rows[0]?.formatted;
+      const match = formatted?.match(/vector\((\d+)\)/i);
+      return match ? parseInt(match[1], 10) : null;
+    } catch {
+      return null;
     }
   }
 

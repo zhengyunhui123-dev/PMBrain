@@ -1,5 +1,14 @@
 # Bug 修复台账
 
+## 2026-09-02 PMBrain 1.3.31 修复超 2000 维向量库升级时 HNSW 启动失败
+
+- 时间：2026-09-02
+- 版本号：PMBrain 1.3.31；PMBrain Desktop 1.1.63
+- 标题：旧库向量列超过 pgvector HNSW 2000 维上限时，升级不再因建索引失败而无法启动
+- 描述：1.1.46 升到 1.1.62 时 Sidecar 回放 schema，用配置默认宽度（常为 1280/1536）决定是否创建 `idx_chunks_embedding` HNSW。已有库的 `content_chunks.embedding` 可能是 2048/4096 维，pgvector 对 HNSW 硬限制 2000 维，于是报 `column cannot have more than 2000 dimensions for hnsw index` 并中止启动。现升级前读取真实列宽，超限则跳过 HNSW、保留精确扫描；若仍撞上该错误也改为警告后继续迁移。不修改、清空或重建用户向量、知识页、Wiki 和原始资料。
+- 是否完成：是
+- 最终结果：HNSW 升级守卫与 schema 模板定向 32/32，其中 PGLite 在已有 `vector(2048)` 库上完整跑完 schema 122 迁移且不创建超限索引；根项目 TypeScript 通过。未执行 `bun run build:win`，未连接或修改用户真实数据库。
+
 ## 2026-09-02 PMBrain 1.3.30 修复快速维护 extract 后无进度并重建损坏 GIN
 
 - 时间：2026-09-02

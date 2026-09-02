@@ -25,7 +25,13 @@ import { normalizeWeightForStorage } from './takes-fence.ts';
 import { runMigrations } from './migrate.ts';
 import { SCHEMA_SQL } from './schema-embedded.ts';
 import { verifySchema } from './schema-verify.ts';
-import { applyChunkEmbeddingIndexPolicy, dropZombieIndexes } from './vector-index.ts';
+import {
+  applyChunkEmbeddingIndexPolicy,
+  applyExistingColumnHnswPolicy,
+  dropZombieIndexes,
+  isHnswDimensionLimitError,
+  PGVECTOR_HNSW_VECTOR_MAX_DIMS,
+} from './vector-index.ts';
 import {
   normalizeEngineColumn,
   buildVectorCastFragment,
@@ -271,17 +277,6 @@ export class PostgresEngine implements BrainEngine {
       // transaction pooler. Codex P1 finding from v0.36 dreamy-thompson wave.
       await this.applyForwardReferenceBootstrap(conn);
 
-      await conn.unsafe(sqlText);
-
-      // Run any pending migrations automatically
-      const { applied } = await runMigrations(this);
-      if (applied > 0) {
-        process.stderr.write(`  ${applied} migration(s) applied\n`);
-      }
-
-      // Detect existing schema drift, but do not auto-migrate vector width.
-      // The desktop UI may suggest a default; the saved config remains the
-      // user's explicit choice, so schema conflicts should be visible.
       const dimRows = await conn`
         SELECT format_type(a.atttypid, a.atttypmod) AS formatted
           FROM pg_attribute a
@@ -293,16 +288,34 @@ export class PostgresEngine implements BrainEngine {
            AND NOT a.attisdropped
       `;
       const formatted = (dimRows as unknown as Array<{ formatted: string | null }>)[0]?.formatted;
-      if (formatted) {
-        const m = formatted.match(/vector\((\d+)\)/i);
-        const actualDim = m ? parseInt(m[1], 10) : null;
-        if (actualDim !== null && actualDim !== dims) {
-          throw new GBrainError(
-            'Embedding dimension mismatch',
-            `content_chunks.embedding is vector(${actualDim}), but config embedding_dimensions is ${dims}.`,
-            `Update the desktop vector dimension to ${actualDim}, or manually migrate/reinitialize the Docker/Postgres database to vector(${dims}) before starting PMBrain.`,
-          );
-        }
+      const existingDim = formatted?.match(/vector\((\d+)\)/i);
+      const actualDim = existingDim ? parseInt(existingDim[1], 10) : null;
+      const schemaSql = applyExistingColumnHnswPolicy(sqlText, actualDim);
+      try {
+        await conn.unsafe(schemaSql);
+      } catch (error) {
+        if (!isHnswDimensionLimitError(error)) throw error;
+        process.stderr.write(
+          `  ⚠️  skipped HNSW vector index: embedding column exceeds pgvector's ${PGVECTOR_HNSW_VECTOR_MAX_DIMS}-dimension limit; exact search remains available.\n`,
+        );
+        await conn.unsafe(applyChunkEmbeddingIndexPolicy(schemaSql, PGVECTOR_HNSW_VECTOR_MAX_DIMS + 1));
+      }
+
+      // Run any pending migrations automatically
+      const { applied } = await runMigrations(this);
+      if (applied > 0) {
+        process.stderr.write(`  ${applied} migration(s) applied\n`);
+      }
+
+      // Detect existing schema drift, but do not auto-migrate vector width.
+      // The desktop UI may suggest a default; the saved config remains the
+      // user's explicit choice, so schema conflicts should be visible.
+      if (actualDim !== null && actualDim !== dims) {
+        throw new GBrainError(
+          'Embedding dimension mismatch',
+          `content_chunks.embedding is vector(${actualDim}), but config embedding_dimensions is ${dims}.`,
+          `Update the desktop vector dimension to ${actualDim}, or manually migrate/reinitialize the Docker/Postgres database to vector(${dims}) before starting PMBrain.`,
+        );
       }
 
       // Post-migration schema verification: catches columns that migrations
