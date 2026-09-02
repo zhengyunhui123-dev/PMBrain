@@ -29,6 +29,7 @@ import {
   clearOpCheckpoint,
   type OpCheckpointKey,
 } from '../core/op-checkpoint.ts';
+import { isGinCorruptionError, repairPgliteGinIndexes } from '../core/pglite-gin-repair.ts';
 
 function defaultWorkers(): number {
   const cpuCount = cpus().length;
@@ -272,6 +273,7 @@ export async function runImport(
   const errorCounts: Record<string, number> = {};
   const failures: Array<{ path: string; error: string }> = []; // Bug 9
   const startTime = Date.now();
+  let ginRepaired = false;
 
   // Progress on stderr so stdout stays clean for the final summary / --json payload.
   const progress = createProgress(cliOptsToProgressOptions(getCliOptions()));
@@ -381,6 +383,12 @@ export async function runImport(
         }
       }
     } catch (e: unknown) {
+      if (!ginRepaired && eng.kind === 'pglite' && isGinCorruptionError(e)) {
+        ginRepaired = true;
+        console.error('[pmbrain] PGLite GIN index corrupted; rebuilding indexes and retrying this file.');
+        await repairPgliteGinIndexes(eng);
+        return processFile(eng, filePath);
+      }
       const msg = e instanceof Error ? e.message : String(e);
       const errorKey = msg.replace(/"[^"]*"/g, '""');
       errorCounts[errorKey] = (errorCounts[errorKey] || 0) + 1;

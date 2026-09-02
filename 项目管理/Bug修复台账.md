@@ -1,5 +1,14 @@
 # Bug 修复台账
 
+## 2026-09-02 PMBrain 1.3.30 修复快速维护 extract 后无进度并重建损坏 GIN
+
+- 时间：2026-09-02
+- 版本号：PMBrain 1.3.30；PMBrain Desktop 1.1.62
+- 标题：快速维护不再在 extract 后静默卡住，PGLite GIN 损坏会重建后重试
+- 描述：更新后 Git 扫描已通过，但 Source default 在 HEAD `ce24e03e` 上仍走全量导入 2255 个文件。613 个失败里 535 个是 PGLite `right sibling of GIN page is of different type`（知识页更新会维护 `search_vector` GIN），78 个是 frontmatter slug 与路径不一致。失败门闩因此不推进 `last_commit`，下次又整库重导。extract 4 页后历史关系补抽被 `quiet: true` 关掉进度，看起来像卡住。现将 GIN 损坏归为 `DB_INDEX_CORRUPT` 基础设施错误，导入和 stale extract 首次遇到时 REINDEX 后重试该文件/批次；`--progress-json` 下补抽打出 `extract.stale` 进度。78 个 slug 不一致仍按原账本三次后自动跳过，不改用户知识页和原始资料。
+- 是否完成：是
+- 最终结果：GIN 分类/重建与 catch-up 进度定向 25/25，sync 失败账本 59/59，根项目 TypeScript 通过。未执行 `bun run build:win`，未连接或修改用户真实数据库。
+
 ## 2026-09-02 PMBrain 1.3.29 修复深度整理卡在权重计算
 
 - 时间：2026-09-02

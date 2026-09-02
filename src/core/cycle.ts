@@ -1855,7 +1855,7 @@ export async function runCycle(
               includeFrontmatter: true,
               sourceIdFilter: filesystemSourceId,
               catchUp: opts.markdownCatchUpMaxHistorical == null,
-              quiet: true,
+              quiet: !getCliOptions().progressJson,
               maxPages: opts.markdownCatchUpMaxHistorical,
             });
             result.details = {
@@ -1900,7 +1900,7 @@ export async function runCycle(
               maxHistoricalPages: opts.byMentionMaxHistorical,
               historicalTimeBudgetMs: opts.byMentionTimeBudgetMs,
               sourceIdFilter: filesystemSourceId,
-              quiet: true,
+              quiet: !getCliOptions().progressJson,
             });
             const mentionMs = Math.round(performance.now() - mentionStart);
             const prevLinks = Number(result.details.linksCreated ?? 0);

@@ -15,6 +15,7 @@ import {
 } from '../core/link-extraction.ts';
 import { createProgress } from '../core/progress.ts';
 import { getCliOptions, cliOptsToProgressOptions } from '../core/cli-options.ts';
+import { isGinCorruptionError, repairPgliteGinIndexes } from '../core/pglite-gin-repair.ts';
 
 const BATCH_SIZE = 100;
 const STALE_BATCH_SIZE = Math.max(1, Number(process.env.PMBRAIN_EXTRACT_STALE_BATCH || process.env.GBRAIN_EXTRACT_STALE_BATCH) || 25);
@@ -88,6 +89,7 @@ export async function extractStaleFromDB(
   progress.start('extract.stale', totalStale);
 
   const startMs = Date.now();
+  let ginRepaired = false;
   let afterPageId = 0;
   let linksCreated = 0;
   let timelineCreated = 0;
@@ -190,13 +192,30 @@ export async function extractStaleFromDB(
       processedRefs.push({ slug: page.slug, source_id: page.source_id, extractedAt: stampIso });
     }
 
-    for (let i = 0; i < linkRows.length; i += BATCH_SIZE) {
-      linksCreated += await engine.addLinksBatch(linkRows.slice(i, i + BATCH_SIZE), { auditSite: 'extract.stale' }); // gbrain-allow-direct-insert: extract --stale — canonical link reconciliation from markdown body
+    const persistBatch = async (): Promise<{ links: number; timeline: number }> => {
+      let links = 0;
+      let timeline = 0;
+      for (let i = 0; i < linkRows.length; i += BATCH_SIZE) {
+        links += await engine.addLinksBatch(linkRows.slice(i, i + BATCH_SIZE), { auditSite: 'extract.stale' }); // gbrain-allow-direct-insert: extract --stale — canonical link reconciliation from markdown body
+      }
+      for (let i = 0; i < timelineRows.length; i += BATCH_SIZE) {
+        timeline += await engine.addTimelineEntriesBatch(timelineRows.slice(i, i + BATCH_SIZE), { auditSite: 'extract.stale' });
+      }
+      await engine.markPagesExtractedBatch(processedRefs, new Date().toISOString());
+      return { links, timeline };
+    };
+    let persisted: { links: number; timeline: number };
+    try {
+      persisted = await persistBatch();
+    } catch (error) {
+      if (ginRepaired || engine.kind !== 'pglite' || !isGinCorruptionError(error)) throw error;
+      ginRepaired = true;
+      console.error('[pmbrain] PGLite GIN index corrupted; rebuilding indexes and retrying this extract batch.');
+      await repairPgliteGinIndexes(engine);
+      persisted = await persistBatch();
     }
-    for (let i = 0; i < timelineRows.length; i += BATCH_SIZE) {
-      timelineCreated += await engine.addTimelineEntriesBatch(timelineRows.slice(i, i + BATCH_SIZE), { auditSite: 'extract.stale' });
-    }
-    await engine.markPagesExtractedBatch(processedRefs, new Date().toISOString());
+    linksCreated += persisted.links;
+    timelineCreated += persisted.timeline;
 
     pagesProcessed += rows.length;
     progress.tick(rows.length);

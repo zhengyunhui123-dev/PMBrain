@@ -687,6 +687,9 @@ export function classifyErrorCode(errorMsg: string): string {
   // (oversize alone) don't fail — the page lands with frontmatter.embed_skip
   // set and never enters this classifier.
   if (/PAGE_JUNK_PATTERN/i.test(errorMsg)) return 'PAGE_JUNK_PATTERN';
+  if (/right sibling of GIN page is of different type|GIN page is of different type|DB_INDEX_CORRUPT/i.test(errorMsg)) {
+    return 'DB_INDEX_CORRUPT';
+  }
 
   return 'UNKNOWN';
 }
