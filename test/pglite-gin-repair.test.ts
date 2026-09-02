@@ -60,7 +60,7 @@ function mockEngine(opts: {
           if (opts.failCreate) throw new Error('simulated create failure');
           return [] as T[];
         }
-        if (/FROM pages WHERE deleted_at IS NULL/i.test(statement)) {
+        if (/FROM pages[\s\S]*deleted_at IS NULL/i.test(statement)) {
           return (opts.pages ?? []) as T[];
         }
         return [] as T[];
@@ -142,7 +142,7 @@ describe('PGLite GIN corruption handling', () => {
     const result = await repairPgliteGinIndexes(engine);
     expect(result.status).toBe('repaired');
     expect(result.message).toBe(GIN_REPAIR_SUCCESS_MESSAGE);
-    expect(result.rebuilt).toEqual(['idx_pages_search', 'idx_pages_trgm', 'idx_test_extra_gin']);
+    expect(result.rebuilt).toEqual(expect.arrayContaining(['idx_pages_search', 'idx_pages_trgm', 'idx_test_extra_gin']));
     expect(sql.some((statement) => /REINDEX/i.test(statement))).toBe(false);
     expect(sql.filter((statement) => /^DROP INDEX IF EXISTS/i.test(statement.trim()))).toHaveLength(3);
     expect(sql).toContain('CREATE INDEX idx_pages_search ON public.pages USING gin (title gin_trgm_ops)');
@@ -165,7 +165,8 @@ describe('PGLite GIN corruption handling', () => {
     });
     const result = await repairPgliteGinIndexes(engine);
     expect(result.status).toBe('failed');
-    expect(result.message).toBe(GIN_REPAIR_FAILED_MESSAGE);
+    expect(result.message).toContain(GIN_REPAIR_FAILED_MESSAGE);
+    expect(result.message).toContain('simulated create failure');
     expect(result.message).not.toBe(GIN_REPAIR_SUCCESS_MESSAGE);
   });
 
@@ -177,7 +178,18 @@ describe('PGLite GIN corruption handling', () => {
     });
     const result = await repairPgliteGinIndexes(engine);
     expect(result.status).toBe('failed');
+    expect(result.message).toContain(GIN_REPAIR_FAILED_MESSAGE);
     expect(result.message).not.toBe(GIN_REPAIR_SUCCESS_MESSAGE);
+  });
+
+  test('missing catalog GIN still recreates the search indexes from schema fallback', async () => {
+    const { sql, engine } = mockEngine({ indexes: [] });
+    const result = await repairPgliteGinIndexes(engine);
+    expect(result.status).toBe('repaired');
+    expect(result.rebuilt).toContain('idx_pages_search');
+    expect(result.rebuilt).toContain('idx_chunks_text_trgm');
+    expect(sql.some((statement) => /CREATE INDEX IF NOT EXISTS idx_pages_search/i.test(statement))).toBe(true);
+    expect(sql.some((statement) => /DROP INDEX/i.test(statement))).toBe(false);
   });
 
   test('probe success does not rebuild indexes', async () => {
@@ -191,6 +203,9 @@ describe('PGLite GIN corruption handling', () => {
     const cycle = await Bun.file(new URL('../src/core/cycle.ts', import.meta.url)).text();
     expect(cycle).toContain('skipIfSearchIndexUnusable');
     expect(cycle).toContain('search_index_unusable');
+    const dreamSource = await Bun.file(new URL('../src/commands/dream.ts', import.meta.url)).text();
+    expect(dreamSource).toContain('isGinRepairAbortText');
+    expect(dreamSource).toContain('GIN_REPAIR_STOP_WRITES_MESSAGE');
     const importSource = await Bun.file(new URL('../src/commands/import.ts', import.meta.url)).text();
     expect(importSource).toContain('repairPgliteGinIndexes');
     expect(importSource).toContain('GinIndexUnusableError');
@@ -252,13 +267,15 @@ describe('PGLite GIN rebuild preserves knowledge and restores search', () => {
     expect(result.status).toBe('repaired');
     expect(result.message).toBe(GIN_REPAIR_SUCCESS_MESSAGE);
     expect(result.rebuilt).toContain('idx_test_extra_gin');
-    expect(result.rebuilt.length).toBe(beforeIndexes.length);
+    expect(result.rebuilt.length).toBeGreaterThanOrEqual(beforeIndexes.length);
 
     const after = await knowledgeSnapshot(engine);
     expect(after).toEqual(before);
 
     const afterIndexes = await listGinIndexes(engine);
-    expect(afterIndexes.map((index) => index.name).sort()).toEqual(beforeIndexes.map((index) => index.name).sort());
+    expect(afterIndexes.map((index) => index.name)).toEqual(
+      expect.arrayContaining(beforeIndexes.map((index) => index.name)),
+    );
 
     const afterSearch = await engine.searchKeyword('项目管理', { limit: 10 });
     expect(afterSearch.some((hit) => hit.slug === 'concepts/项目管理知识库')).toBe(true);
@@ -285,7 +302,7 @@ describe('PGLite GIN rebuild preserves knowledge and restores search', () => {
 
     const result = await repairPgliteGinIndexes(engine);
     expect(result.status).toBe('failed');
-    expect(result.message).toBe(GIN_REPAIR_FAILED_MESSAGE);
+    expect(result.message).toContain(GIN_REPAIR_FAILED_MESSAGE);
     expect(result.message).not.toBe(GIN_REPAIR_SUCCESS_MESSAGE);
 
     const after = await knowledgeSnapshot(engine);

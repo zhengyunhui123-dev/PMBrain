@@ -5287,6 +5287,22 @@ html[data-theme="dark"] .pm-ghost.danger { color: #ff8f99; background: #2d171b; 
   cursor: wait;
 }
 
+.search-index-repair-action {
+  flex: none;
+  padding: 8px 14px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.search-index-repair-action:disabled {
+  opacity: .65;
+  cursor: wait;
+}
+
 .overview-health-empty,
 .overview-health-notice,
 .overview-health-error {

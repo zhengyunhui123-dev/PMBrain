@@ -3,6 +3,8 @@ export const GIN_REPAIR_SUCCESS_MESSAGE = '搜索索引修复完成';
 export const GIN_REPAIR_FAILED_MESSAGE = '搜索索引修复失败，无法确认搜索已恢复。';
 export const GIN_REPAIR_DB_UNUSABLE_MESSAGE = '数据库本身异常，需要先修复数据库或恢复备份。';
 export const GIN_REPAIR_STOP_WRITES_MESSAGE = '搜索索引异常，已停止后续数据库写入。';
+export const GIN_REPAIR_ACTION_LABEL = '重建搜索索引';
+export const GIN_REPAIR_ACTION_HINT = '只修复搜索索引，知识内容不会被删除。修好后再继续快速维护。';
 
 export const LIST_GIN_INDEXES_SQL = `
 SELECT
@@ -25,6 +27,26 @@ export interface GinIndexInfo {
   schema: string;
   name: string;
   indexDef: string;
+}
+
+export const SEARCH_GIN_FALLBACK_INDEXES: GinIndexInfo[] = [
+  { schema: 'public', name: 'idx_pages_search', indexDef: 'CREATE INDEX IF NOT EXISTS idx_pages_search ON pages USING GIN (search_vector)' },
+  { schema: 'public', name: 'idx_pages_trgm', indexDef: 'CREATE INDEX IF NOT EXISTS idx_pages_trgm ON pages USING GIN (title gin_trgm_ops)' },
+  { schema: 'public', name: 'idx_pages_compiled_truth_trgm', indexDef: 'CREATE INDEX IF NOT EXISTS idx_pages_compiled_truth_trgm ON pages USING GIN (compiled_truth gin_trgm_ops)' },
+  { schema: 'public', name: 'idx_pages_slug_trgm', indexDef: 'CREATE INDEX IF NOT EXISTS idx_pages_slug_trgm ON pages USING GIN (slug gin_trgm_ops)' },
+  { schema: 'public', name: 'idx_pages_frontmatter', indexDef: 'CREATE INDEX IF NOT EXISTS idx_pages_frontmatter ON pages USING GIN (frontmatter)' },
+  { schema: 'public', name: 'idx_chunks_text_trgm', indexDef: 'CREATE INDEX IF NOT EXISTS idx_chunks_text_trgm ON content_chunks USING GIN (chunk_text gin_trgm_ops)' },
+  { schema: 'public', name: 'idx_chunks_search_vector', indexDef: 'CREATE INDEX IF NOT EXISTS idx_chunks_search_vector ON content_chunks USING GIN (search_vector)' },
+];
+
+export function textHasGinRepairFailure(text: unknown): boolean {
+  const msg = text instanceof Error ? text.message : String(text ?? '');
+  return (
+    msg.includes(GIN_REPAIR_FAILED_MESSAGE)
+    || msg.includes(GIN_REPAIR_STOP_WRITES_MESSAGE)
+    || msg.includes(GIN_REPAIR_DB_UNUSABLE_MESSAGE)
+    || isGinCorruptionError(msg)
+  );
 }
 
 export interface GinRepairResult {
@@ -121,22 +143,30 @@ function pickSearchToken(row: { title: string; slug: string; compiled_truth: str
 }
 
 export async function verifyGinSearch(engine: GinRepairEngine): Promise<void> {
+  await probeGinSearch(engine);
   const pages = await engine.executeRaw<{ title: string; slug: string; compiled_truth: string | null }>(
-    `SELECT title, slug, compiled_truth FROM pages WHERE deleted_at IS NULL ORDER BY id LIMIT 20`,
+    `SELECT title, slug, compiled_truth
+       FROM pages
+      WHERE deleted_at IS NULL
+        AND title IS NOT NULL
+        AND length(btrim(title)) >= 2
+      ORDER BY length(title) DESC, id
+      LIMIT 8`,
   );
-  if (pages.length === 0) {
-    await engine.searchKeyword('index-health-check', { limit: 5 });
-    return;
+  if (pages.length === 0) return;
+  const ranked = [...pages].sort((a, b) => {
+    const ac = /[\u3400-\u9fff]/.test(a.title) ? 1 : 0;
+    const bc = /[\u3400-\u9fff]/.test(b.title) ? 1 : 0;
+    return bc - ac;
+  });
+  const misses: string[] = [];
+  for (const page of ranked) {
+    const query = pickSearchToken(page) ?? page.title.trim();
+    const hits = await engine.searchKeyword(query, { limit: 50 });
+    if (hits.some((hit) => hit.slug === page.slug)) return;
+    misses.push(`${JSON.stringify(query)} 未命中 ${page.slug}`);
   }
-  const page = pages.find((row) => /[\u3400-\u9fff]/.test(`${row.title}${row.compiled_truth ?? ''}${row.slug}`)) ?? pages[0]!;
-  const token = pickSearchToken(page);
-  if (!token) {
-    throw new Error('GIN search verification failed: no searchable token on existing pages');
-  }
-  const hits = await engine.searchKeyword(token, { limit: 10 });
-  if (!hits.some((hit) => hit.slug === page.slug)) {
-    throw new Error(`GIN search verification failed: query ${JSON.stringify(token)} did not return ${page.slug}`);
-  }
+  throw new Error(`真实搜索未找回已有知识页：${misses[0]}`);
 }
 
 async function rebuildGinIndex(engine: GinRepairEngine, index: GinIndexInfo): Promise<void> {
@@ -146,11 +176,17 @@ async function rebuildGinIndex(engine: GinRepairEngine, index: GinIndexInfo): Pr
   await engine.executeRaw(createSql);
 }
 
-function failedResult(rebuilt: string[], message = GIN_REPAIR_FAILED_MESSAGE): GinRepairResult {
+function failedResult(rebuilt: string[], cause?: unknown): GinRepairResult {
+  const detail = cause instanceof Error ? cause.message : cause ? String(cause) : '';
+  const message = detail && !detail.includes(GIN_REPAIR_FAILED_MESSAGE)
+    ? `${GIN_REPAIR_FAILED_MESSAGE} ${detail}`
+    : (detail || GIN_REPAIR_FAILED_MESSAGE);
+  writeRepairLine(message);
   return { status: 'failed', rebuilt, message };
 }
 
 function unusableResult(): GinRepairResult {
+  writeRepairLine(GIN_REPAIR_DB_UNUSABLE_MESSAGE);
   return { status: 'database_unusable', rebuilt: [], message: GIN_REPAIR_DB_UNUSABLE_MESSAGE };
 }
 
@@ -159,16 +195,13 @@ export async function repairPgliteGinIndexes(engine: GinRepairEngine): Promise<G
   try {
     indexes = await listGinIndexes(engine);
   } catch (error) {
-    if (isDatabaseUnusableError(error)) {
-      writeRepairLine(GIN_REPAIR_DB_UNUSABLE_MESSAGE);
-      return unusableResult();
-    }
-    writeRepairLine(GIN_REPAIR_FAILED_MESSAGE);
-    return failedResult([]);
+    if (isDatabaseUnusableError(error)) return unusableResult();
+    return failedResult([], error);
   }
-  if (indexes.length === 0) {
-    writeRepairLine(GIN_REPAIR_FAILED_MESSAGE);
-    return failedResult([]);
+  const liveNames = new Set(indexes.map((index) => index.name));
+  const missing = SEARCH_GIN_FALLBACK_INDEXES.filter((index) => !liveNames.has(index.name));
+  if (indexes.length === 0 && missing.length === 0) {
+    return failedResult([], '当前库里没有可重建的搜索索引');
   }
   writeRepairLine(GIN_REPAIR_PROGRESS_MESSAGE);
 
@@ -178,24 +211,31 @@ export async function repairPgliteGinIndexes(engine: GinRepairEngine): Promise<G
       await rebuildGinIndex(engine, index);
       rebuilt.push(index.name);
     } catch (error) {
-      if (isDatabaseUnusableError(error)) {
-        writeRepairLine(GIN_REPAIR_DB_UNUSABLE_MESSAGE);
-        return unusableResult();
+      if (isDatabaseUnusableError(error)) return unusableResult();
+      try {
+        const createSql = index.indexDef.replace(/\s+CONCURRENTLY\s+/i, ' ');
+        await engine.executeRaw(createSql);
+      } catch {
+        /* keep the original rebuild error */
       }
-      writeRepairLine(GIN_REPAIR_FAILED_MESSAGE);
-      return failedResult(rebuilt);
+      return failedResult(rebuilt, error);
+    }
+  }
+  for (const index of missing) {
+    try {
+      await engine.executeRaw(index.indexDef);
+      rebuilt.push(index.name);
+    } catch (error) {
+      if (isDatabaseUnusableError(error)) return unusableResult();
+      return failedResult(rebuilt, error);
     }
   }
 
   try {
     await verifyGinSearch(engine);
   } catch (error) {
-    if (isDatabaseUnusableError(error)) {
-      writeRepairLine(GIN_REPAIR_DB_UNUSABLE_MESSAGE);
-      return unusableResult();
-    }
-    writeRepairLine(GIN_REPAIR_FAILED_MESSAGE);
-    return failedResult(rebuilt);
+    if (isDatabaseUnusableError(error)) return unusableResult();
+    return failedResult(rebuilt, error);
   }
 
   writeRepairLine(GIN_REPAIR_SUCCESS_MESSAGE);
@@ -211,10 +251,7 @@ export async function ensurePgliteGinHealthy(engine: GinRepairEngine): Promise<G
     await probeGinSearch(engine);
     return { status: 'ok', rebuilt: [], message: '' };
   } catch (error) {
-    if (isDatabaseUnusableError(error)) {
-      writeRepairLine(GIN_REPAIR_DB_UNUSABLE_MESSAGE);
-      return unusableResult();
-    }
+    if (isDatabaseUnusableError(error)) return unusableResult();
     if (!isGinCorruptionError(error)) throw error;
     return repairPgliteGinIndexes(engine);
   }

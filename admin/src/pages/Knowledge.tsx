@@ -28,6 +28,7 @@ import {
   type SourceSummary,
 } from './console-shared';
 import type { AdvisorProductSuggestion, AdvisorProductView } from '../../../shared/contracts/index.ts';
+import { SearchIndexRepairCard } from './search-index-repair';
 
 interface RecentRequest {
   id: number;
@@ -383,6 +384,7 @@ export function KnowledgeWorkbenchPage({ onNavigate }: { onNavigate?: (page: str
         </div>
       </header>
 
+      <SearchIndexRepairCard />
       <AdvisorHealthCard
         advisor={advisor}
         error={advisorError}

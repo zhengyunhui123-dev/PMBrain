@@ -49,6 +49,25 @@ function quickRun(report: Record<string, unknown>, status: ConsoleRun['status'] 
 }
 
 describe('Dream GUI product contract', () => {
+  test('search index failure shows a rebuild button instead of a dead end', () => {
+    expect(dream).toContain('SearchIndexRepairCard');
+    expect(dream).toContain('重建搜索索引');
+    expect(consolePage).toContain('SearchIndexRepairCard');
+    const summary = describeDreamRun({
+      ...quickRun({
+        status: 'partial',
+        phases: [{
+          phase: 'sync',
+          status: 'fail',
+          summary: '搜索索引修复失败，无法确认搜索已恢复。',
+        }],
+      }),
+      stderr: '搜索索引修复失败，无法确认搜索已恢复。\n搜索索引异常，已停止后续数据库写入。',
+    });
+    expect(summary.headline).toBe('搜索索引异常，需要重建');
+    expect(summary.diagnosis).toContain('重建搜索索引');
+  });
+
   test('ordinary navigation exposes one beginner-friendly Dream entry', () => {
     expect(app).toContain("{ page: 'dream', label: '知识整理', icon: 'organize' }");
     expect(app).not.toContain("{ page: 'dream-execute', label: '阶段执行' }");
@@ -75,7 +94,7 @@ describe('Dream GUI product contract', () => {
     expect(dreamCommand).toContain('embedPageLimit: opts.maxPages ?? undefined');
     expect(dream).toContain("showAdvancedControls && phase === 'propose_takes'");
     expect(dream).toContain('embed 会处理全部待向量分块');
-    expect(dream).toContain("runMode === 'cycle'\n            ? 'full'");
+    expect(dream.replace(/\r\n/g, '\n')).toContain("runMode === 'cycle'\n            ? 'full'");
     expect(dream).toContain("phase: runMode === 'advanced' ? phase : undefined");
     expect(dream).toContain('drainProposals: false');
     expect(dream).not.toContain("phase: runMode === 'cycle' ? 'propose_takes'");

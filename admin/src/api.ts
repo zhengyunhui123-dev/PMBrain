@@ -189,6 +189,18 @@ export const api = {
   cancelRun: (id: string) => apiFetch(`/admin/api/runs/${encodeURIComponent(id)}/cancel`, { method: 'POST' }),
   startActionRun: (action: string, extra?: { catchUp?: boolean; forceReembed?: boolean }) =>
     apiFetch('/admin/api/runs/action', { method: 'POST', body: JSON.stringify({ action, ...extra }) }),
+  searchIndexHealth: () => apiFetch<{
+    ok: boolean;
+    engine: string;
+    repairable?: boolean;
+    busy?: boolean;
+    message?: string;
+  }>('/admin/api/search-index-health'),
+  repairSearchIndex: () => apiFetch<{
+    status: 'ok' | 'repaired' | 'failed' | 'database_unusable';
+    rebuilt: string[];
+    message: string;
+  }>('/admin/api/search-index-repair', { method: 'POST' }),
   taskCenter: () => apiFetch('/admin/api/task-center'),
   terminatePgliteOwner: (pid: number) => apiFetch('/admin/api/pglite-owner/terminate', {
     method: 'POST',
