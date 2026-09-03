@@ -25,6 +25,58 @@ export interface OllamaNativeChatResult {
   providerMetadata: Record<string, unknown>;
 }
 
+function salvageQuotedField(src: string, key: string): string | null {
+  const keyIdx = src.indexOf(`"${key}"`);
+  if (keyIdx === -1) return null;
+  let i = keyIdx + key.length + 2;
+  while (i < src.length && /\s/.test(src[i]!)) i++;
+  if (src[i] !== ':') return null;
+  i++;
+  while (i < src.length && /\s/.test(src[i]!)) i++;
+  if (src[i] !== '"') return null;
+  i++;
+  let raw = '';
+  for (; i < src.length; i++) {
+    const c = src[i]!;
+    if (c === '\\') {
+      raw += c + (src[i + 1] ?? '');
+      i++;
+      continue;
+    }
+    if (c === '"') break;
+    raw += c;
+  }
+  if (/(?:^|[^\\])(?:\\\\)*\\$/.test(raw)) raw = raw.slice(0, -1);
+  raw = raw.replace(/\\u[0-9a-fA-F]{0,3}$/, '');
+  try {
+    return JSON.parse(`"${raw}"`) as string;
+  } catch {
+    return raw;
+  }
+}
+
+export function unwrapOllamaQwenResult(text: string, jsonResponse: boolean): string {
+  const trimmed = text.trim();
+  try {
+    const parsed = JSON.parse(trimmed) as { result?: unknown };
+    if (parsed.result === undefined || (!jsonResponse && typeof parsed.result !== 'string')) {
+      throw new Error('Ollama Qwen3 chat did not return the required result envelope');
+    }
+    return typeof parsed.result === 'string' ? parsed.result : JSON.stringify(parsed.result);
+  } catch (err) {
+    if (!(err instanceof SyntaxError)) throw err;
+    if (!jsonResponse) {
+      const salvaged = salvageQuotedField(trimmed, 'result');
+      return salvaged && salvaged.trim() ? salvaged : trimmed;
+    }
+    const answer = salvageQuotedField(trimmed, 'answer');
+    if (answer && answer.trim()) {
+      return JSON.stringify({ answer, citations: [], gaps: [] });
+    }
+    return trimmed;
+  }
+}
+
 export function ollamaNativeChatUrl(baseURL: string): string {
   const url = new URL(baseURL);
   let path = url.pathname.replace(/\/+$/, '');
@@ -87,6 +139,7 @@ export async function streamOllamaNativeChat(
   const decoder = new TextDecoder();
   let pending = '';
   let text = '';
+  let thinking = '';
   let finishReason = 'stop';
   let inputTokens = 0;
   let outputTokens = 0;
@@ -95,7 +148,7 @@ export async function streamOllamaNativeChat(
     if (!line.trim()) return;
     const chunk = JSON.parse(line) as {
       error?: string;
-      message?: { content?: string };
+      message?: { content?: string; thinking?: string };
       done_reason?: string;
       prompt_eval_count?: number;
       eval_count?: number;
@@ -106,6 +159,7 @@ export async function streamOllamaNativeChat(
     };
     if (chunk.error) throw new Error(`Ollama chat failed: ${chunk.error}`);
     if (typeof chunk.message?.content === 'string') text += chunk.message.content;
+    if (typeof chunk.message?.thinking === 'string') thinking += chunk.message.thinking;
     if (typeof chunk.done_reason === 'string' && chunk.done_reason) finishReason = chunk.done_reason;
     if (typeof chunk.prompt_eval_count === 'number') inputTokens = chunk.prompt_eval_count;
     if (typeof chunk.eval_count === 'number') outputTokens = chunk.eval_count;
@@ -131,9 +185,10 @@ export async function streamOllamaNativeChat(
   }
   consumeLine(pending);
 
+  const finalText = text.trim() ? text : thinking;
   return {
-    content: text ? [{ type: 'text', text }] : [],
-    text,
+    content: finalText ? [{ type: 'text', text: finalText }] : [],
+    text: finalText,
     toolCalls: [],
     finishReason,
     usage: { inputTokens, outputTokens },

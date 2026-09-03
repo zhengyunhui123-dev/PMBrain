@@ -162,6 +162,38 @@ describe('natural language child-process hooks', () => {
     )).toEqual({ status: 'success' });
   });
 
+  test('recognizes pretty-printed think JSON as a finished knowledge search', () => {
+    const output = `{
+  "question": "我家狗叫什么名字",
+  "answer": "靓靓",
+  "citations": [],
+  "gaps": [],
+  "pagesGathered": 11,
+  "modelUsed": "deepseek:deepseek-v4-flash"
+}`;
+    expect(parseTerminalChildResult(output, 'search_brain')).toEqual({ status: 'ok' });
+    expect(parseTerminalChildResult(output)).toBeNull();
+    expect(parseTerminalChildResult('{"question":"q","answer":"a"}\n', 'search_brain')).toBeNull();
+  });
+
+  test('force-completes a think child that printed answer JSON but never exits', async () => {
+    const run = await startRun(
+      'search_brain',
+      [
+        process.execPath,
+        '-e',
+        'process.stdout.write("{\\n  \\"question\\": \\"我家狗叫什么名字\\",\\n  \\"answer\\": \\"靓靓\\",\\n  \\"pagesGathered\\": 11,\\n  \\"modelUsed\\": \\"deepseek:deepseek-v4-flash\\"\\n}\\n"); setInterval(() => {}, 1000);',
+      ],
+      process.cwd(),
+      { hangAfterResultMs: 80 },
+    );
+
+    await waitFor(() => run.status !== 'running', 5_000);
+    expect(run.status).toBe('completed');
+    expect(run.stdout).toContain('靓靓');
+    expect(run.stderr).toContain('force-killing');
+  });
+
   test('force-completes a child that printed success JSON but never exits', async () => {
     // Product check: the packaged embed catch-up command already printed
     // {"status":"ok"} while the process stayed alive, so Admin kept showing

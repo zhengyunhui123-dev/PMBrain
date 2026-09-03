@@ -18,6 +18,7 @@
 
 import type Anthropic from '@anthropic-ai/sdk';
 import type { BrainEngine, SynthesisEvidenceInput } from '../engine.ts';
+import type { SearchResult } from '../types.ts';
 import { runGather, renderPagesBlock, takesHitToTakeForPrompt } from './gather.ts';
 import { renderTakesBlock } from './sanitize.ts';
 import { buildThinkSystemPrompt, buildThinkUserMessage } from './prompt.ts';
@@ -29,6 +30,7 @@ import { AIConfigError } from '../ai/errors.ts';
 import { loadConfig } from '../config.ts';
 import { isGenerativeModelEnabled } from '../model-usage.ts';
 import { DEFAULT_USER_HOLDER } from '../cycle/emotional-weight.ts';
+import { parseLlmJson, stripReasoningBlocks } from '../llm-json.ts';
 
 /** Anthropic Messages client interface — same shape used by subagent.ts so test stubs can be shared. */
 export interface ThinkLLMClient {
@@ -145,19 +147,119 @@ function inferIntent(question: string, anchor?: string): string {
   return 'general';
 }
 
-function tryParseJSON(text: string): unknown {
-  // The model may wrap JSON in code fences. Strip if present.
-  const stripped = text.trim().replace(/^```(?:json)?\s*\n?/, '').replace(/```\s*$/, '');
-  try {
-    return JSON.parse(stripped);
-  } catch {
-    // Fallback: extract the first {...} block. Useful when the model emits prose alongside JSON.
-    const m = stripped.match(/\{[\s\S]*\}/);
-    if (m) {
-      try { return JSON.parse(m[0]); } catch { /* ignore */ }
+function looksLikeJsonEnvelope(text: string): boolean {
+  return text.trim().replace(/^```(?:json)?\s*\n?/, '').startsWith('{');
+}
+
+function salvageStringField(src: string, key: string): string | null {
+  const keyIdx = src.indexOf(`"${key}"`);
+  if (keyIdx === -1) return null;
+  let i = keyIdx + key.length + 2;
+  while (i < src.length && /\s/.test(src[i]!)) i++;
+  if (src[i] !== ':') return null;
+  i++;
+  while (i < src.length && /\s/.test(src[i]!)) i++;
+  if (src[i] !== '"') return null;
+  i++;
+  let raw = '';
+  for (; i < src.length; i++) {
+    const c = src[i]!;
+    if (c === '\\') {
+      raw += c + (src[i + 1] ?? '');
+      i++;
+      continue;
     }
-    return null;
+    if (c === '"') break;
+    raw += c;
   }
+  if (/(?:^|[^\\])(?:\\\\)*\\$/.test(raw)) raw = raw.slice(0, -1);
+  raw = raw.replace(/\\u[0-9a-fA-F]{0,3}$/, '');
+  try {
+    return JSON.parse(`"${raw}"`) as string;
+  } catch {
+    return raw;
+  }
+}
+
+function salvageArrayField(src: string, key: string): unknown[] | null {
+  const keyIdx = src.indexOf(`"${key}"`);
+  if (keyIdx === -1) return null;
+  const open = src.indexOf('[', keyIdx);
+  if (open === -1) return null;
+  let depth = 0;
+  let inStr = false;
+  for (let i = open; i < src.length; i++) {
+    const c = src[i]!;
+    if (inStr) {
+      if (c === '\\') { i++; continue; }
+      if (c === '"') inStr = false;
+      continue;
+    }
+    if (c === '"') { inStr = true; continue; }
+    if (c === '[') depth++;
+    else if (c === ']') {
+      depth--;
+      if (depth === 0) {
+        try {
+          const v = JSON.parse(src.slice(open, i + 1));
+          return Array.isArray(v) ? v : null;
+        } catch {
+          return null;
+        }
+      }
+    }
+  }
+  return null;
+}
+
+function salvageThinkEnvelope(text: string): ThinkResponse | null {
+  const stripped = text.trim().replace(/^```(?:json)?\s*\n?/, '').replace(/```\s*$/, '');
+  if (!stripped.startsWith('{')) return null;
+  const answer = salvageStringField(stripped, 'answer');
+  if (answer === null || answer.trim().length === 0) return null;
+  const citations = (salvageArrayField(stripped, 'citations') ?? []).filter(
+    (c): c is ThinkResponse['citations'][number] =>
+      typeof c === 'object' && c !== null && typeof (c as { page_slug?: unknown }).page_slug === 'string',
+  );
+  const gaps = (salvageArrayField(stripped, 'gaps') ?? []).filter(
+    (g): g is string => typeof g === 'string',
+  );
+  return { answer, citations, gaps };
+}
+
+const EXTRACTIVE_TOP_PAGES = 5;
+const EXTRACTIVE_EXCERPT_LEN = 400;
+
+export function composeExtractiveFallback(
+  pages: SearchResult[],
+  _question: string,
+): { answer: string; citations: ParsedCitation[] } | null {
+  if (pages.length === 0) return null;
+  const top = pages.slice(0, EXTRACTIVE_TOP_PAGES);
+  const citations: ParsedCitation[] = [];
+  const lines = top.map((page, idx) => {
+    const slug = String(page.slug ?? '');
+    const title = String(page.title ?? '') || slug;
+    const content = String(page.chunk_text ?? '');
+    const excerpt = content.trim().slice(0, EXTRACTIVE_EXCERPT_LEN);
+    citations.push({ page_slug: slug, row_num: null, citation_index: idx + 1 });
+    return excerpt ? `- ${title} [${slug}]: ${excerpt}` : `- ${title} [${slug}]`;
+  });
+  return {
+    answer:
+      `模型没有完成综合回答。以下是知识库里检索到的相关内容：\n` +
+      lines.join('\n'),
+    citations,
+  };
+}
+
+function toThinkResponse(parsed: Partial<ThinkResponse> | null): ThinkResponse | null {
+  if (!parsed || typeof parsed !== 'object') return null;
+  return {
+    answer: typeof parsed.answer === 'string' ? parsed.answer : '',
+    citations: Array.isArray(parsed.citations) ? parsed.citations as ThinkResponse['citations'] : [],
+    gaps: Array.isArray(parsed.gaps) ? parsed.gaps.filter((g): g is string => typeof g === 'string') : [],
+  };
 }
 
 /**
@@ -450,27 +552,39 @@ export async function runThink(
       messages: [{ role: 'user', content: userMessage }],
     });
     if (result.id === 'pmbrain:no-llm') return unavailableResult();
-    const block = result.content.find(b => b.type === 'text');
-    const text = block && 'text' in block ? block.text : '';
-    const parsed = tryParseJSON(text);
-    if (!parsed || typeof parsed !== 'object') {
+    const block = result.content.find(b => b.type === 'text' && typeof (b as { text?: unknown }).text === 'string');
+    const text = block && 'text' in block && typeof block.text === 'string' ? block.text : '';
+    const parsed = toThinkResponse(parseLlmJson<Partial<ThinkResponse>>(text));
+    if (!parsed) {
       warnings.push('LLM_OUTPUT_NOT_JSON');
-      response = { answer: text, citations: [], gaps: [] };
+      const salvaged = salvageThinkEnvelope(stripReasoningBlocks(text) || text);
+      if (salvaged) {
+        warnings.push('SALVAGED_ANSWER_FROM_MALFORMED_JSON');
+        response = salvaged;
+      } else if (looksLikeJsonEnvelope(text)) {
+        warnings.push('MALFORMED_JSON_ANSWER_SUPPRESSED');
+        response = { answer: '', citations: [], gaps: [] };
+      } else {
+        response = { answer: stripReasoningBlocks(text) || text, citations: [], gaps: [] };
+      }
     } else {
-      const r = parsed as Partial<ThinkResponse>;
-      response = {
-        answer: typeof r.answer === 'string' ? r.answer : '',
-        citations: Array.isArray(r.citations) ? (r.citations as ThinkResponse['citations']) : [],
-        gaps: Array.isArray(r.gaps) ? (r.gaps as string[]).filter(g => typeof g === 'string') : [],
-      };
+      response = parsed;
     }
   }
 
   if (!response.answer.trim()) {
-    throw new Error(
-      `LLM returned an empty answer for ${modelUsed}; synthesis was not completed. ` +
-      'The local model may have received a truncated prompt or failed the structured-output contract.',
-    );
+    warnings.push('SYNTHESIS_EMPTY_ANSWER');
+    const extractive = composeExtractiveFallback(gather.pages, opts.question);
+    if (extractive) {
+      warnings.push('EXTRACTIVE_FALLBACK');
+      response = {
+        answer: extractive.answer,
+        citations: extractive.citations,
+        gaps: response.gaps,
+      };
+    } else {
+      response.answer = '未能根据知识库生成回答。模型没有返回可用内容，检索也没有命中相关页面。';
+    }
   }
 
   // Resolve citations: prefer structured, fall back to inline-marker regex scan.

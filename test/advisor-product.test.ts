@@ -89,6 +89,22 @@ describe('advisor product view', () => {
     });
   });
 
+  test('stalled minion jobs are leftover queue records, not a live Task Center run', () => {
+    const view = buildAdvisorProductView(report([
+      finding({
+        id: 'stalled_job:subagent',
+        severity: 'warn',
+        title: '1 "subagent" job look stalled.',
+        detail: 'A wedged worker can stop backfill or sync progress.',
+        collector: 'stalled-jobs',
+      }),
+    ]), 72);
+    expect(view.suggestions[0]?.title).toContain('条后台整理记录未正常结束');
+    expect(view.suggestions[0]?.detail).toContain('不是正在运行的任务');
+    expect(view.suggestions[0]?.action_kind).toBe('none');
+    expect(resolveAdminAdvisorAction(view.suggestions[0]!)).toEqual({ kind: 'unsupported' });
+  });
+
   test('pending migrations ask the desktop user to restart instead of writing the live database', () => {
     const view = buildAdvisorProductView(report([
       finding({

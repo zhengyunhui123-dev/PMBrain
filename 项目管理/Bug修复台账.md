@@ -1,5 +1,41 @@
 # Bug 修复台账
 
+## 2026-09-03 PMBrain 1.3.39 强杀整理后不再虚报后台任务卡住
+
+- 时间：2026-09-03
+- 版本号：PMBrain 1.3.39；PMBrain Desktop 1.1.71
+- 标题：个人本地模式把过期 subagent 记录当残留清理，不当成正在运行的任务
+- 描述：上次整理未正常关闭、直接杀进程后，`minion_jobs` 里会留下 status=active 且锁已过期的 subagent 行。总体概览据此报「后台任务卡住」并跳到任务中心，但任务中心只显示本次会话的前台任务，看起来像虚报。现个人本地模式刷新健康检查时把这类过期记录标为已结束；文案改为说明这是中断残留。未修改用户知识、向量、Wiki 和原始资料。
+- 是否完成：是
+- 最终结果：Advisor 残留清理与文案定向 32/32 通过。未执行 `bun run build:win`。当前安装版刷新概览仍会显示旧提示，需重新打包后刷新健康检查才会清掉残留。
+
+## 2026-09-03 PMBrain 1.3.38 本地 Qwen 截断 JSON 不再整次失败
+
+- 时间：2026-09-03
+- 版本号：PMBrain 1.3.38；PMBrain Desktop 1.1.70
+- 标题：Ollama Qwen 知识合成截断时抢救已写出的答案，不改在线模型路径
+- 描述：本地 qwen3:4b 跑「我家猫叫什么」约 6 分钟后失败，报 `JSON Parse error: Unterminated string`。小模型输出被 1024 token 上限截在 JSON 字符串中间，网关一解析就抛错，任务失败；该错误还被当成可重试，可能再去打在线模型。现仅在 Ollama/Qwen 原生路径抢救截断信封，保留本地 1024 输出上限以免挤掉检索上下文；DeepSeek 等在线请求格式和预算不变。未修改用户知识、向量、Wiki 和原始资料。
+- 是否完成：是
+- 最终结果：Ollama Qwen 截断抢救、不回退到 DeepSeek、在线 DeepSeek 请求格式/预算不变，定向 44/44 通过。未执行 `bun run build:win`。当前安装版仍会报 Unterminated string，需重新打包。
+
+## 2026-09-03 PMBrain 1.3.37 知识工作台答案已出仍卡在处理中
+
+- 时间：2026-09-03
+- 版本号：PMBrain 1.3.37；PMBrain Desktop 1.1.69
+- 标题：think 写完 JSON 后任务中心不再空等进程退出
+- 描述：在线模型已经返回「靓靓」等完整答案，工作台仍显示处理中五分钟以上。原因是 `think --json` 没有 `status` 字段，挂起看门狗不认结束；Windows PGLite 关闭数据库时再把子进程卡住。现把 think 结果识别为已完成，并与 import/models 一样跳过 PGLite close 后立即退出。未修改用户知识、向量、Wiki 和原始资料。
+- 是否完成：是
+- 最终结果：think 结果识别、子进程 15 秒内强制完成、PGLite think 跳过 close 定向 31/31 通过。未执行 `bun run build:win`，未连接或修改用户真实数据库。当前安装版仍会卡在处理中，需重新打包后才会生效。
+
+## 2026-09-03 PMBrain 1.3.36 知识工作台推理模型空回答
+
+- 时间：2026-09-03
+- 版本号：PMBrain 1.3.36；PMBrain Desktop 1.1.68
+- 标题：对齐 GBrain 0.47.6 推理模型 JSON 容错，知识工作台不再因空回答整次失败
+- 描述：知识工作台无论本地模型还是 DeepSeek v4 都问不出答案。DeepSeek 把最终内容放在 `reasoning_content`，MiniMax/Qwen 等把草稿 JSON 放在 `<think>` 里，原先 think 合成拿到空 `answer` 就抛错。现接入 DeepSeek 思考内容回填、统一 `<think>` JSON 阶梯解析，合成失败时回退展示检索摘录。未修改用户知识、向量、Wiki 和原始资料。
+- 是否完成：是
+- 最终结果：推理 JSON 阶梯、DeepSeek `reasoning_content`、Ollama thinking 回退、think 空回答摘录回退、propose-takes/facts/atoms 定向共 169 项相关断言通过；think 流水线、gateway chat、Azure/自定义 OpenAI、版本与发布说明契约 84/84；根项目 TypeScript 通过。未执行 `bun run build:win`，未连接或修改用户真实数据库。当前安装版仍会报空回答，需重新打包后才会生效。
+
 ## 2026-09-02 PMBrain 1.3.35 修复连续版本更新后的 CI 发布门禁
 
 - 时间：2026-09-02

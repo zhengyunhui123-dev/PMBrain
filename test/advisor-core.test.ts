@@ -161,6 +161,50 @@ describe('collectors', () => {
     expect(await collectStalledJobs.collect(ctx(engine as never))).toEqual([]);
   });
 
+  test('PGLite leftover active jobs after a killed process are reaped instead of shown as stuck', async () => {
+    const sql: string[] = [];
+    const engine = {
+      kind: 'pglite',
+      executeRaw: async (query: string) => {
+        sql.push(query);
+        return [];
+      },
+    };
+    const out = await collectStalledJobs.collect(ctx(engine as never));
+    expect(sql.some((query) => query.includes('UPDATE minion_jobs') && query.includes("'dead'"))).toBe(true);
+    expect(out.filter((finding) => finding.id.startsWith('stalled_job:'))).toEqual([]);
+  });
+
+  test('Postgres still reports expired active minion jobs and does not auto-reap them', async () => {
+    const sql: string[] = [];
+    const engine = {
+      kind: 'postgres',
+      executeRaw: async (query: string) => {
+        sql.push(query);
+        if (query.includes('FROM minion_jobs')) return [{ name: 'subagent', n: 1 }];
+        return [];
+      },
+    };
+    const out = await collectStalledJobs.collect(ctx(engine as never));
+    expect(sql.some((query) => query.includes('UPDATE minion_jobs'))).toBe(false);
+    expect(out[0]?.id).toBe('stalled_job:subagent');
+  });
+
+  test('remote advisor never writes leftover PGLite jobs', async () => {
+    const sql: string[] = [];
+    const engine = {
+      kind: 'pglite',
+      executeRaw: async (query: string) => {
+        sql.push(query);
+        if (query.includes('FROM minion_jobs')) return [{ name: 'subagent', n: 1 }];
+        return [];
+      },
+    };
+    const out = await collectStalledJobs.collect(ctx(engine as never, { remote: true }));
+    expect(sql.some((query) => query.includes('UPDATE minion_jobs'))).toBe(false);
+    expect(out[0]?.id).toBe('stalled_job:subagent');
+  });
+
   test('setup smells flags disabled embeddings', async () => {
     const engine = { getConfig: async () => null };
     const out = await collectSetupSmells.collect(ctx(engine as never, { config: { embedding_disabled: true } as AdvisorContext['config'] }));

@@ -186,6 +186,13 @@ describe('parseExtractorOutput', () => {
     const out = parseExtractorOutput(raw);
     expect(out[0]!.domain).toBe('macro');
   });
+
+  test('recovers JSON after a MiniMax/DeepSeek think block', () => {
+    const raw = '<think>draft {"claim_text":"wrong"}</think>[{"claim_text":"Cities send messages","kind":"take","holder":"brain","weight":0.65}]';
+    const out = parseExtractorOutput(raw);
+    expect(out).toHaveLength(1);
+    expect(out[0]!.claim_text).toBe('Cities send messages');
+  });
 });
 
 // ─── contentHash ────────────────────────────────────────────────────

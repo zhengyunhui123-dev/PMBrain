@@ -133,11 +133,10 @@ export function toProductSuggestion(finding: AdvisorFinding): AdvisorProductSugg
     return {
       id: finding.id,
       severity: finding.severity,
-      title: finding.title.replace('look stalled.', '个后台任务卡住'),
-      detail: finding.detail,
-      action_label: '打开任务中心',
-      action_kind: 'navigate',
-      navigate: 'tasks',
+      title: finding.title.replace('look stalled.', '条后台整理记录未正常结束'),
+      detail: '通常是上次知识整理被关闭或进程结束后留下的队列记录，不是正在运行的任务。任务中心不会显示这类记录。',
+      action_label: null,
+      action_kind: 'none',
     };
   }
   return {

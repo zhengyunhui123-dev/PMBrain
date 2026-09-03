@@ -93,6 +93,23 @@ describe('one-shot CLI disconnect deadline', () => {
 
     expect(PGLITE_SKIP_CLOSE_COMMANDS.has('models')).toBe(true);
     expect(PGLITE_SKIP_CLOSE_COMMANDS.has('import')).toBe(true);
+    expect(PGLITE_SKIP_CLOSE_COMMANDS.has('think')).toBe(true);
+    expect(outcome).toBe('forced_exit');
+    expect(disconnected).toBe(false);
+    expect(exits).toEqual([0]);
+  });
+
+  test('PGLite think also skips WASM close after the answer JSON is written', async () => {
+    const exits: number[] = [];
+    let disconnected = false;
+    const outcome = await disconnectCliEngine({
+      kind: 'pglite',
+      async disconnect() {
+        disconnected = true;
+      },
+    }, 'think', {
+      forceExit: code => { exits.push(code); },
+    });
     expect(outcome).toBe('forced_exit');
     expect(disconnected).toBe(false);
     expect(exits).toEqual([0]);

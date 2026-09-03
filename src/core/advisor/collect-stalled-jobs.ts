@@ -7,6 +7,19 @@ export const collectStalledJobs: AdvisorCollector = {
     const findings: AdvisorFinding[] = [];
 
     try {
+      if (ctx.engine.kind === 'pglite' && !ctx.remote) {
+        await ctx.engine.executeRaw(
+          `UPDATE minion_jobs
+              SET status = 'dead',
+                  error_text = COALESCE(NULLIF(error_text, ''), 'owner process exited'),
+                  lock_token = NULL,
+                  lock_until = NULL,
+                  finished_at = COALESCE(finished_at, now()),
+                  updated_at = now()
+            WHERE status = 'active'
+              AND (lock_until IS NULL OR lock_until < now())`,
+        );
+      }
       const rows = await ctx.engine.executeRaw<{ name: string; n: number }>(
         `SELECT name, count(*)::int AS n
            FROM minion_jobs
