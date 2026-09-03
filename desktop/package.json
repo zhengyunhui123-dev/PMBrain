@@ -2,7 +2,7 @@
   "name": "pmbrain-desktop",
   "productName": "PMBrain Desktop",
   "desktopName": "PMBrain.desktop",
-  "version": "1.1.70",
+  "version": "1.1.71",
   "private": true,
   "author": "PMBrain",
   "description": "PMBrain cross-platform desktop shell",
