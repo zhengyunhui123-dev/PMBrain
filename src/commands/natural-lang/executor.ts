@@ -193,6 +193,12 @@ function isImportSummaryResult(record: Record<string, unknown>): boolean {
     );
 }
 
+function isThinkTerminalResult(record: Record<string, unknown>): boolean {
+  return typeof record.question === 'string'
+    && typeof record.answer === 'string'
+    && (typeof record.modelUsed === 'string' || typeof record.pagesGathered === 'number');
+}
+
 function isTerminalResultForRun(record: Record<string, unknown>, kind?: string): boolean {
   if (kind?.startsWith('dream_')) {
     // Dream may run import/embed internally. Their own terminal summaries are
@@ -232,6 +238,7 @@ export function parseTerminalChildResult(output: string, kind?: string): { statu
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
   const record = parsed as Record<string, unknown>;
   if (typeof record.event === 'string') return null;
+  if (kind === 'search_brain' && isThinkTerminalResult(record)) return { status: 'ok' };
   if (typeof record.status !== 'string') return null;
   if (!TERMINAL_RESULT_STATUSES.has(record.status)) return null;
   if (!isTerminalResultForRun(record, kind)) return null;
