@@ -25,6 +25,58 @@ export interface OllamaNativeChatResult {
   providerMetadata: Record<string, unknown>;
 }
 
+function salvageQuotedField(src: string, key: string): string | null {
+  const keyIdx = src.indexOf(`"${key}"`);
+  if (keyIdx === -1) return null;
+  let i = keyIdx + key.length + 2;
+  while (i < src.length && /\s/.test(src[i]!)) i++;
+  if (src[i] !== ':') return null;
+  i++;
+  while (i < src.length && /\s/.test(src[i]!)) i++;
+  if (src[i] !== '"') return null;
+  i++;
+  let raw = '';
+  for (; i < src.length; i++) {
+    const c = src[i]!;
+    if (c === '\\') {
+      raw += c + (src[i + 1] ?? '');
+      i++;
+      continue;
+    }
+    if (c === '"') break;
+    raw += c;
+  }
+  if (/(?:^|[^\\])(?:\\\\)*\\$/.test(raw)) raw = raw.slice(0, -1);
+  raw = raw.replace(/\\u[0-9a-fA-F]{0,3}$/, '');
+  try {
+    return JSON.parse(`"${raw}"`) as string;
+  } catch {
+    return raw;
+  }
+}
+
+export function unwrapOllamaQwenResult(text: string, jsonResponse: boolean): string {
+  const trimmed = text.trim();
+  try {
+    const parsed = JSON.parse(trimmed) as { result?: unknown };
+    if (parsed.result === undefined || (!jsonResponse && typeof parsed.result !== 'string')) {
+      throw new Error('Ollama Qwen3 chat did not return the required result envelope');
+    }
+    return typeof parsed.result === 'string' ? parsed.result : JSON.stringify(parsed.result);
+  } catch (err) {
+    if (!(err instanceof SyntaxError)) throw err;
+    if (!jsonResponse) {
+      const salvaged = salvageQuotedField(trimmed, 'result');
+      return salvaged && salvaged.trim() ? salvaged : trimmed;
+    }
+    const answer = salvageQuotedField(trimmed, 'answer');
+    if (answer && answer.trim()) {
+      return JSON.stringify({ answer, citations: [], gaps: [] });
+    }
+    return trimmed;
+  }
+}
+
 export function ollamaNativeChatUrl(baseURL: string): string {
   const url = new URL(baseURL);
   let path = url.pathname.replace(/\/+$/, '');

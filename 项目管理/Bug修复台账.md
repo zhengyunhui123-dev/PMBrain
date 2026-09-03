@@ -1,5 +1,14 @@
 # Bug 修复台账
 
+## 2026-09-03 PMBrain 1.3.38 本地 Qwen 截断 JSON 不再整次失败
+
+- 时间：2026-09-03
+- 版本号：PMBrain 1.3.38；PMBrain Desktop 1.1.70
+- 标题：Ollama Qwen 知识合成截断时抢救已写出的答案，不改在线模型路径
+- 描述：本地 qwen3:4b 跑「我家猫叫什么」约 6 分钟后失败，报 `JSON Parse error: Unterminated string`。小模型输出被 1024 token 上限截在 JSON 字符串中间，网关一解析就抛错，任务失败；该错误还被当成可重试，可能再去打在线模型。现仅在 Ollama/Qwen 原生路径抢救截断信封，保留本地 1024 输出上限以免挤掉检索上下文；DeepSeek 等在线请求格式和预算不变。未修改用户知识、向量、Wiki 和原始资料。
+- 是否完成：是
+- 最终结果：Ollama Qwen 截断抢救、不回退到 DeepSeek、在线 DeepSeek 请求格式/预算不变，定向 44/44 通过。未执行 `bun run build:win`。当前安装版仍会报 Unterminated string，需重新打包。
+
 ## 2026-09-03 PMBrain 1.3.37 知识工作台答案已出仍卡在处理中
 
 - 时间：2026-09-03

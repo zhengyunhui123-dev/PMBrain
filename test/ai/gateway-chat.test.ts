@@ -355,6 +355,151 @@ describe('chat touchpoint — Ollama thinking request isolation', () => {
     }
   });
 
+  test('Qwen3 knowledge synthesis salvages a truncated result envelope instead of failing the chat', async () => {
+    const server = Bun.serve({
+      port: 0,
+      async fetch() {
+        return new Response(JSON.stringify({
+          model: 'synthetic-model',
+          message: {
+            role: 'assistant',
+            content: '{"result":{"answer":"我家猫叫喵喵","citations":[{"page_slug":"wiki/pets',
+          },
+          done: true,
+          done_reason: 'length',
+          prompt_eval_count: 1,
+          eval_count: 1,
+        }) + '\n', { headers: { 'content-type': 'application/x-ndjson' } });
+      },
+    });
+
+    try {
+      const baseURL = `${server.url.toString().replace(/\/$/, '')}/v1`;
+      configureGateway({
+        chat_model: 'ollama:qwen3:synthetic-model',
+        base_urls: { ollama: baseURL },
+        env: {},
+      });
+      const result = await chat({
+        system: `You are gbrain's synthesis engine. Return JSON with "answer", "citations", and "gaps".`,
+        messages: [{ role: 'user', content: '我家猫叫什么' }],
+        maxTokens: 4000,
+      });
+      expect(JSON.parse(result.text)).toEqual({
+        answer: '我家猫叫喵喵',
+        citations: [],
+        gaps: [],
+      });
+    } finally {
+      server.stop(true);
+      resetGateway();
+    }
+  });
+
+  test('truncated local Qwen synthesis does not fall through to a hosted fallback model', async () => {
+    let ollamaHits = 0;
+    let hostedHits = 0;
+    const server = Bun.serve({
+      port: 0,
+      async fetch(request) {
+        if (new URL(request.url).pathname.endsWith('/api/chat')) {
+          ollamaHits += 1;
+          return new Response(JSON.stringify({
+            model: 'qwen3:4b',
+            message: {
+              role: 'assistant',
+              content: '{"result":{"answer":"我家猫叫喵喵","citations":[{"page_slug":"wiki/pets',
+            },
+            done: true,
+            done_reason: 'length',
+          }) + '\n', { headers: { 'content-type': 'application/x-ndjson' } });
+        }
+        hostedHits += 1;
+        return Response.json({
+          id: 'hosted',
+          object: 'chat.completion',
+          created: 0,
+          model: 'deepseek-v4-flash',
+          choices: [{
+            index: 0,
+            message: { role: 'assistant', content: '{"answer":"from-hosted","citations":[],"gaps":[]}' },
+            finish_reason: 'stop',
+          }],
+          usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+        });
+      },
+    });
+
+    try {
+      const baseURL = `${server.url.toString().replace(/\/$/, '')}/v1`;
+      configureGateway({
+        chat_model: 'ollama:qwen3:4b',
+        chat_fallback_chain: ['deepseek:deepseek-v4-flash'],
+        base_urls: { ollama: baseURL, deepseek: baseURL },
+        env: { DEEPSEEK_API_KEY: 'synthetic-key' },
+      });
+      const result = await chat({
+        system: `You are gbrain's synthesis engine. Return JSON with "answer", "citations", and "gaps".`,
+        messages: [{ role: 'user', content: '我家猫叫什么' }],
+      });
+      expect(JSON.parse(result.text).answer).toBe('我家猫叫喵喵');
+      expect(ollamaHits).toBe(1);
+      expect(hostedHits).toBe(0);
+    } finally {
+      server.stop(true);
+      resetGateway();
+    }
+  });
+
+  test('hosted DeepSeek synthesis keeps the OpenAI-compatible path and output budget', async () => {
+    let requestUrl = '';
+    let requestBody: Record<string, unknown> = {};
+    const server = Bun.serve({
+      port: 0,
+      async fetch(request) {
+        requestUrl = request.url;
+        requestBody = await request.json() as Record<string, unknown>;
+        return Response.json({
+          id: 'hosted-synthesis',
+          object: 'chat.completion',
+          created: 0,
+          model: 'deepseek-v4-flash',
+          choices: [{
+            index: 0,
+            message: { role: 'assistant', content: '{"answer":"靓靓","citations":[],"gaps":[]}' },
+            finish_reason: 'stop',
+          }],
+          usage: { prompt_tokens: 8, completion_tokens: 12, total_tokens: 20 },
+        });
+      },
+    });
+
+    try {
+      const baseURL = `${server.url.toString().replace(/\/$/, '')}/v1`;
+      configureGateway({
+        chat_model: 'deepseek:deepseek-v4-flash',
+        base_urls: { deepseek: baseURL },
+        env: { DEEPSEEK_API_KEY: 'synthetic-key' },
+      });
+      const result = await chat({
+        system: `You are gbrain's synthesis engine. Return JSON with "answer", "citations", and "gaps".`,
+        messages: [{ role: 'user', content: '我家狗叫什么' }],
+        maxTokens: 4000,
+      });
+      expect(JSON.parse(result.text)).toEqual({ answer: '靓靓', citations: [], gaps: [] });
+      expect(requestUrl).toEndWith('/v1/chat/completions');
+      expect(requestBody).not.toHaveProperty('think');
+      expect(requestBody).not.toHaveProperty('format');
+      expect(requestBody).not.toHaveProperty('options');
+      const hostedMaxTokens = requestBody.max_tokens ?? requestBody.max_completion_tokens;
+      expect(hostedMaxTokens).not.toBe(1024);
+      if (typeof hostedMaxTokens === 'number') expect(hostedMaxTokens).toBe(4000);
+    } finally {
+      server.stop(true);
+      resetGateway();
+    }
+  });
+
   test('Ollama tool calls keep the AI SDK streaming compatibility path', async () => {
     let requestUrl = '';
     let requestBody: Record<string, unknown> = {};

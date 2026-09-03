@@ -29,7 +29,7 @@ import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { z } from 'zod';
-import { streamOllamaNativeChat, type OllamaNativeMessage } from './ollama-native.ts';
+import { streamOllamaNativeChat, unwrapOllamaQwenResult, type OllamaNativeMessage } from './ollama-native.ts';
 
 import {
   BudgetTracker,
@@ -2742,13 +2742,7 @@ async function chatOnce(opts: ChatOpts): Promise<ChatResult> {
             abortSignal: opts.abortSignal,
           });
           if (!qwenAnswerEnvelope) return nativeResult;
-          const parsed = JSON.parse(nativeResult.text) as { result?: unknown };
-          if (parsed.result === undefined || (!qwenJsonResponse && typeof parsed.result !== 'string')) {
-            throw new Error('Ollama Qwen3 chat did not return the required result envelope');
-          }
-          const answer = typeof parsed.result === 'string'
-            ? parsed.result
-            : JSON.stringify(parsed.result);
+          const answer = unwrapOllamaQwenResult(nativeResult.text, qwenJsonResponse);
           return {
             ...nativeResult,
             text: answer,

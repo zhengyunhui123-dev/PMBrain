@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { streamOllamaNativeChat } from '../../src/core/ai/ollama-native.ts';
+import { streamOllamaNativeChat, unwrapOllamaQwenResult } from '../../src/core/ai/ollama-native.ts';
 
 describe('streamOllamaNativeChat thinking fallback', () => {
   test('promotes thinking text when content is empty', async () => {
@@ -55,5 +55,35 @@ describe('streamOllamaNativeChat thinking fallback', () => {
     } finally {
       server.stop(true);
     }
+  });
+});
+
+describe('unwrapOllamaQwenResult', () => {
+  test('unwraps a complete knowledge-synthesis envelope', () => {
+    expect(unwrapOllamaQwenResult(
+      '{"result":{"answer":"喵喵","citations":[],"gaps":[]}}',
+      true,
+    )).toBe('{"answer":"喵喵","citations":[],"gaps":[]}');
+  });
+
+  test('salvages a truncated envelope instead of throwing Unterminated string', () => {
+    const truncated = '{"result":{"answer":"我家猫叫喵喵，是奶牛猫","citations":[{"page_slug":"wiki/pets';
+    expect(() => JSON.parse(truncated)).toThrow(/Unterminated string/);
+    const unwrapped = unwrapOllamaQwenResult(truncated, true);
+    expect(JSON.parse(unwrapped)).toEqual({
+      answer: '我家猫叫喵喵，是奶牛猫',
+      citations: [],
+      gaps: [],
+    });
+  });
+
+  test('returns raw truncated text when no answer field can be salvaged', () => {
+    const truncated = '{"result":{"citations":[{"page_slug":"wiki/pets';
+    expect(unwrapOllamaQwenResult(truncated, true)).toBe(truncated);
+  });
+
+  test('complete envelopes stay byte-identical so hosted-style JSON is not rewritten twice', () => {
+    const inner = '{"answer":"靓靓","citations":[{"page_slug":"wiki/a","row_num":null}],"gaps":["x"]}';
+    expect(unwrapOllamaQwenResult(`{"result":${inner}}`, true)).toBe(inner);
   });
 });
