@@ -355,7 +355,9 @@ export function applyOpenAICompatConfig(
   touchpoint?: BaseUrlTouchpoint,
 ): { baseURL: string; fetch?: typeof fetch } {
   if (recipe.resolveOpenAICompatConfig) {
-    return recipe.resolveOpenAICompatConfig(cfg.env);
+    const resolved = recipe.resolveOpenAICompatConfig(cfg.env);
+    const fetch = resolved.fetch ?? recipe.compat?.fetch;
+    return fetch ? { ...resolved, fetch } : resolved;
   }
   const baseURL = configuredBaseURL(cfg, recipe.id, touchpoint) ?? recipe.base_url_default;
   if (!baseURL) {
@@ -364,7 +366,7 @@ export function applyOpenAICompatConfig(
       recipe.setup_hint,
     );
   }
-  return { baseURL };
+  return recipe.compat?.fetch ? { baseURL, fetch: recipe.compat.fetch } : { baseURL };
 }
 
 /** Configure the gateway. Called by cli.ts#connectEngine. Clears cached models. */
@@ -2774,7 +2776,7 @@ async function chatOnce(opts: ChatOpts): Promise<ChatResult> {
     const rawContent: any[] = (result as any).content ?? [];
     if (Array.isArray(rawContent) && rawContent.length > 0) {
       for (const part of rawContent) {
-        if (part.type === 'text') blocks.push({ type: 'text', text: part.text });
+        if (part.type === 'text' && typeof part.text === 'string') blocks.push({ type: 'text', text: part.text });
         else if (part.type === 'tool-call') {
           blocks.push({
             type: 'tool-call',

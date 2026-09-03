@@ -52,6 +52,7 @@ import {
   EMPTY_EXTRACTION_TOMBSTONE_TEXT,
   takeProposalContentHash,
 } from '../take-proposal-hash.ts';
+import { stripReasoningBlocks } from '../llm-json.ts';
 
 export { EMPTY_EXTRACTION_TOMBSTONE_TEXT } from '../take-proposal-hash.ts';
 
@@ -389,9 +390,7 @@ export async function defaultExtractor(
  */
 export function parseExtractorOutput(raw: string): ProposedTake[] {
   if (!raw || raw.trim().length === 0) return [];
-  let text = raw.trim();
-  // Strip <think>...</think> reasoning tags (MiniMax-M3, DeepSeek-R1, etc.).
-  text = text.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+  let text = stripReasoningBlocks(raw) || raw.trim();
   // Strip markdown code fence wrapper.
   const fenced = text.match(/^```(?:json)?\s*\n?([\s\S]*?)\n?```$/);
   if (fenced) text = (fenced[1] ?? '').trim();

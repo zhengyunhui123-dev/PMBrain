@@ -1,5 +1,14 @@
 # Bug 修复台账
 
+## 2026-09-03 PMBrain 1.3.36 知识工作台推理模型空回答
+
+- 时间：2026-09-03
+- 版本号：PMBrain 1.3.36；PMBrain Desktop 1.1.68
+- 标题：对齐 GBrain 0.47.6 推理模型 JSON 容错，知识工作台不再因空回答整次失败
+- 描述：知识工作台无论本地模型还是 DeepSeek v4 都问不出答案。DeepSeek 把最终内容放在 `reasoning_content`，MiniMax/Qwen 等把草稿 JSON 放在 `<think>` 里，原先 think 合成拿到空 `answer` 就抛错。现接入 DeepSeek 思考内容回填、统一 `<think>` JSON 阶梯解析，合成失败时回退展示检索摘录。未修改用户知识、向量、Wiki 和原始资料。
+- 是否完成：是
+- 最终结果：推理 JSON 阶梯、DeepSeek `reasoning_content`、Ollama thinking 回退、think 空回答摘录回退、propose-takes/facts/atoms 定向共 169 项相关断言通过；think 流水线、gateway chat、Azure/自定义 OpenAI、版本与发布说明契约 84/84；根项目 TypeScript 通过。未执行 `bun run build:win`，未连接或修改用户真实数据库。当前安装版仍会报空回答，需重新打包后才会生效。
+
 ## 2026-09-02 PMBrain 1.3.35 修复连续版本更新后的 CI 发布门禁
 
 - 时间：2026-09-02

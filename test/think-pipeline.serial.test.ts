@@ -1,6 +1,7 @@
 import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
 import { PGLiteEngine } from '../src/core/pglite-engine.ts';
-import { runThink, persistSynthesis, type ThinkLLMClient } from '../src/core/think/index.ts';
+import { composeExtractiveFallback, runThink, persistSynthesis, type ThinkLLMClient } from '../src/core/think/index.ts';
+import type { SearchResult } from '../src/core/types.ts';
 import { sanitizeTakeForPrompt, renderTakesBlock } from '../src/core/think/sanitize.ts';
 import { resolveCitations, parseInlineCitations, normalizeStructuredCitations } from '../src/core/think/cite-render.ts';
 import { runGather } from '../src/core/think/gather.ts';
@@ -205,7 +206,7 @@ describe('runThink (with stub client)', () => {
     expect(result.citations.length).toBeGreaterThanOrEqual(2);
   });
 
-  test('rejects a structured response with an empty answer instead of reporting false success', async () => {
+  test('empty structured answer falls back to retrieved excerpts instead of failing the think run', async () => {
     const emptyAnswerClient: ThinkLLMClient = {
       create: async () => ({
         id: 'msg_empty_answer',
@@ -222,10 +223,64 @@ describe('runThink (with stub client)', () => {
       }),
     };
 
-    await expect(runThink(engine, {
-      question: 'empty answer must fail',
+    const result = await runThink(engine, {
+      question: 'Alice founded Acme',
       client: emptyAnswerClient,
-    })).rejects.toThrow('empty answer');
+    });
+    expect(result.answer.trim().length).toBeGreaterThan(0);
+    expect(result.answer).toContain('Alice');
+    expect(result.warnings).toContain('SYNTHESIS_EMPTY_ANSWER');
+    expect(result.warnings).toContain('EXTRACTIVE_FALLBACK');
+  });
+
+  test('recovers the final JSON after a reasoning think block', async () => {
+    const thinkBlockClient: ThinkLLMClient = {
+      create: async () => ({
+        id: 'msg_think_block',
+        type: 'message',
+        role: 'assistant',
+        model: 'stub',
+        stop_reason: 'end_turn',
+        stop_sequence: null,
+        usage: { input_tokens: 10, output_tokens: 10, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, server_tool_use: null, service_tier: null },
+        content: [{
+          type: 'text',
+          text: '<think>draft {"answer":""}</think>{"answer":"Alice is CEO [people/alice-example]","citations":[{"page_slug":"people/alice-example","row_num":null,"citation_index":1}],"gaps":[]}',
+        }],
+      }),
+    };
+
+    const result = await runThink(engine, {
+      question: 'Who is Alice?',
+      client: thinkBlockClient,
+    });
+    expect(result.answer).toContain('Alice is CEO');
+    expect(result.warnings).not.toContain('SYNTHESIS_EMPTY_ANSWER');
+  });
+
+  test('empty structured answer with no retrieved pages still returns a usable message', async () => {
+    const emptyAnswerClient: ThinkLLMClient = {
+      create: async () => ({
+        id: 'msg_empty_no_gather',
+        type: 'message',
+        role: 'assistant',
+        model: 'stub',
+        stop_reason: 'end_turn',
+        stop_sequence: null,
+        usage: { input_tokens: 10, output_tokens: 10, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, server_tool_use: null, service_tier: null },
+        content: [{
+          type: 'text',
+          text: JSON.stringify({ answer: '', citations: [], gaps: [] }),
+        }],
+      }),
+    };
+
+    const result = await runThink(engine, {
+      question: 'zzz-no-such-entity-xyzzy-12345',
+      client: emptyAnswerClient,
+    });
+    expect(result.answer.trim().length).toBeGreaterThan(0);
+    expect(result.warnings).toContain('SYNTHESIS_EMPTY_ANSWER');
   });
 
   test('degrades gracefully when the configured LLM is unavailable', async () => {
@@ -281,5 +336,23 @@ describe('runThink (with stub client)', () => {
       [page!.id],
     );
     expect(Number(ev[0]?.count)).toBe(1);
+  });
+});
+
+describe('composeExtractiveFallback', () => {
+  test('quotes gathered pages and never invents slugs', () => {
+    const pages = [
+      { slug: 'notes/alpha', title: 'Alpha Note', chunk_text: 'Alpha content about zebras migrating north in spring.' },
+      { slug: 'notes/beta', title: 'Beta Note', chunk_text: 'Beta content: quokkas photographed on the island.' },
+    ] as unknown as SearchResult[];
+    const r = composeExtractiveFallback(pages, 'zebras migrating');
+    expect(r).not.toBeNull();
+    expect(r!.citations.map(c => c.page_slug)).toEqual(['notes/alpha', 'notes/beta']);
+    expect(r!.answer).toContain('Alpha content about zebras');
+    expect(r!.answer).toContain('quokkas');
+  });
+
+  test('empty gather returns null', () => {
+    expect(composeExtractiveFallback([], 'anything at all')).toBeNull();
   });
 });
