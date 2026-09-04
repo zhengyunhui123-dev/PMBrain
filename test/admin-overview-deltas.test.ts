@@ -8,7 +8,7 @@
  * 4. 知识整理页同一处「可被 AI 搜索」也改成「已向量化」，同样用 + / - 百分点。
  */
 import { describe, expect, test } from 'bun:test';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   coverageDeltaPoints,
@@ -45,6 +45,17 @@ describe('Admin overview change indicators', () => {
     expect(parsed.getSeconds()).toBe(0);
     expect(laterIso('2026-09-01T00:00:00.000Z', '2026-09-04T08:21:43.000Z')).toBe('2026-09-04T08:21:43.000Z');
     expect(laterIso(null, undefined, '2026-09-04T00:00:00.000Z')).toBe('2026-09-04T00:00:00.000Z');
+  });
+
+  test('packaged Admin assets include 已向量化 so a version bump cannot ship the old card copy', () => {
+    const assetDir = join(root, 'admin/dist/assets');
+    const bundled = readdirSync(assetDir)
+      .filter(name => name.endsWith('.js'))
+      .map(name => readFileSync(join(assetDir, name), 'utf8'))
+      .join('\n');
+    expect(bundled).toContain('已向量化');
+    expect(bundled).toContain('pages_added_last_update');
+    expect(bundled).toContain('embedding_coverage_delta');
   });
 
   test('overview cards use plus/minus marks and 已向量化, not 新增/减少 or AI 搜索 copy', () => {
