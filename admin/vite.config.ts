@@ -7,7 +7,7 @@ export default defineConfig({
   server: {
     proxy: {
       '^/admin/(api|auth|events|login)': {
-        target: 'http://127.0.0.1:3131',
+        target: process.env.PMBRAIN_ADMIN_API || 'http://127.0.0.1:3131',
         changeOrigin: false,
       },
     },

@@ -34,6 +34,9 @@ interface DreamData {
     schema_pack: string;
     embedding_coverage: number;
     pending_embeddings: number;
+    pages_added_last_update?: number;
+    pages_removed_last_update?: number;
+    embedding_coverage_delta?: number | null;
     recent_write_at: string | null;
     main_source_id: string;
     stats: {
@@ -2262,7 +2265,15 @@ export function DreamOverviewPage() {
           <span className="dream-eyebrow">知识库状态</span>
           <div className="dream-library-metrics">
             <div><b>{data.overview?.stats.page_count ?? 0}</b><span>知识页面</span><small>本次 +{latestDeltas.pages}</small></div>
-            <div><b>{pct(data.embeddings.coverage)}</b><span>可被 AI 搜索</span></div>
+            <div>
+              <b>{pct(data.embeddings.coverage)}</b>
+              <span>已向量化</span>
+              {data.overview?.embedding_coverage_delta != null && data.overview.embedding_coverage_delta !== 0 && (
+                <small className={data.overview.embedding_coverage_delta > 0 ? 'is-positive' : 'is-negative'}>
+                  {data.overview.embedding_coverage_delta > 0 ? '+' : ''}{data.overview.embedding_coverage_delta.toFixed(1)}
+                </small>
+              )}
+            </div>
             <div><b>{data.overview?.stats.link_count ?? 0}</b><span>知识关联</span><small>本次 +{latestDeltas.links}</small></div>
           </div>
           <div className="dream-library-latest">

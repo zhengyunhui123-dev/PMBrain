@@ -45,6 +45,16 @@ function formatCount(value: number): string {
   return new Intl.NumberFormat('zh-CN').format(Number.isFinite(value) ? value : 0);
 }
 
+function formatSignedCount(value: number): string {
+  if (!Number.isFinite(value) || value === 0) return '';
+  return `${value > 0 ? '+' : '-'}${formatCount(Math.abs(value))}`;
+}
+
+function formatSignedPoints(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value) || value === 0) return '';
+  return `${value > 0 ? '+' : ''}${value.toFixed(1)}`;
+}
+
 const OVERVIEW_CHART_COLORS = ['#7568f0', '#5f93f5', '#4fc29c', '#f1a454', '#db6d7a', '#8b84d8'];
 
 function shortTime(value: string): string {
@@ -317,6 +327,10 @@ export function KnowledgeWorkbenchPage({ onNavigate }: { onNavigate?: (page: str
   const typeEntries = Object.entries(overview.stats.pages_by_type).sort((a, b) => b[1] - a[1]);
   const sourceEntries = [...activeSources].sort((a, b) => b.page_count - a.page_count);
   const coverage = Math.min(100, Math.max(0, overview.embedding_coverage || 0));
+  const pagesAdded = overview.pages_added_last_update ?? 0;
+  const pagesRemoved = overview.pages_removed_last_update ?? 0;
+  const coverageDelta = overview.embedding_coverage_delta;
+  const coverageDeltaLabel = formatSignedPoints(coverageDelta);
   const engineLabel = overview.engine === 'pglite' ? '本地 PGLite' : overview.engine === 'postgres' ? 'Docker / Postgres' : overview.engine;
   const typeChartEntries: Array<[string, number]> = typeEntries.length > 6
     ? [...typeEntries.slice(0, 5), ['其他', typeEntries.slice(5).reduce((sum, [, count]) => sum + count, 0)]]
@@ -458,11 +472,34 @@ export function KnowledgeWorkbenchPage({ onNavigate }: { onNavigate?: (page: str
               onKeyDown={event => handleOverviewNavigationKey(event, () => onNavigate?.('data'))}
             >
               <div className="overview-stat-icon overview-stat-icon-violet"><OverviewIcon name="page" /></div>
-              <div className="overview-stat-copy"><span>知识总数</span><strong>{formatCount(overview.stats.page_count)}</strong><small>文档与知识条目</small><em>最近更新 {shortDate(overview.recent_write_at)}</em></div>
+              <div className="overview-stat-copy">
+                <span>知识总数</span>
+                <strong>{formatCount(overview.stats.page_count)}</strong>
+                <small>文档与知识条目</small>
+                <em>
+                  最近更新 {shortDate(overview.recent_write_at)}
+                  {pagesAdded > 0 && <span className="is-positive">{formatSignedCount(pagesAdded)} <span>↑</span></span>}
+                  {pagesRemoved > 0 && <span className="is-negative">{formatSignedCount(-pagesRemoved)} <span>↓</span></span>}
+                </em>
+              </div>
             </article>
             <article className="overview-stat-card overview-accent-blue">
               <div className="overview-stat-icon overview-stat-icon-blue"><OverviewIcon name="embedding" /></div>
-              <div className="overview-stat-copy"><span>可被检索</span><strong>{pct(coverage)}</strong><small>可用于 AI 搜索</small><em className={overview.pending_embeddings > 0 ? 'is-warning' : 'is-positive'}>{overview.pending_embeddings > 0 ? `${formatCount(overview.pending_embeddings)} 待处理` : '全部完成'} <span>↑</span></em></div>
+              <div className="overview-stat-copy">
+                <span>可被检索</span>
+                <strong>{pct(coverage)}</strong>
+                <small>已向量化</small>
+                <em>
+                  {coverageDeltaLabel && (
+                    <span className={(coverageDelta ?? 0) >= 0 ? 'is-positive' : 'is-negative'}>
+                      {coverageDeltaLabel} <span>{(coverageDelta ?? 0) >= 0 ? '↑' : '↓'}</span>
+                    </span>
+                  )}
+                  {overview.pending_embeddings > 0
+                    ? <span className="is-warning">{formatCount(overview.pending_embeddings)} 待处理</span>
+                    : !coverageDeltaLabel && <span className="is-positive">全部完成</span>}
+                </em>
+              </div>
             </article>
             <article className="overview-stat-card overview-accent-green">
               <div className="overview-stat-icon overview-stat-icon-green"><OverviewIcon name="source" /></div>

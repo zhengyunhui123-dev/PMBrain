@@ -282,6 +282,9 @@ describe('Dream GUI product contract', () => {
     expect(dreamRunDeltas(run)).toEqual({ pages: 21, links: 24 });
     expect(dreamRunDeltas({ ...run, command: [...run.command, '--dry-run'] })).toEqual({ pages: 0, links: 0 });
     expect(dream).toContain('<b>{data.overview?.stats.page_count ?? 0}</b><span>知识页面</span><small>本次 +{latestDeltas.pages}</small>');
+    expect(dream).toContain('<span>已向量化</span>');
+    expect(dream).toContain('embedding_coverage_delta');
+    expect(dream).not.toContain('可被 AI 搜索');
     expect(dream).toContain('<b>{data.overview?.stats.link_count ?? 0}</b><span>知识关联</span><small>本次 +{latestDeltas.links}</small>');
     expect(dream).toContain('最近一次新增内容');
     expect(dream).toContain('...latestOutcome.knowledgeItems.map(item => `知识：${item}`)');
