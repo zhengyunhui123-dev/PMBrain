@@ -18,6 +18,9 @@ describe('Admin overview navigation', () => {
     expect(overviewSource).toContain("onClick={() => onNavigate?.('data')}");
     expect(overviewSource).toContain("onKeyDown={event => handleOverviewNavigationKey(event, () => onNavigate?.('data'))}");
     expect(overviewSource).toContain('aria-label="打开知识库"');
+    expect(overviewSource).toContain('已向量化');
+    expect(overviewSource).toContain('pages_added_last_update');
+    expect(overviewSource).not.toContain('可用于 AI 搜索');
   });
 
   test('shows a knowledge health card with clickable advisor actions', () => {

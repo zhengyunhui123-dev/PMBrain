@@ -46,6 +46,41 @@ function asBool(value: unknown): boolean {
   return value === true || value === 't' || value === 'true' || value === 1 || value === '1';
 }
 
+export function coveragePercent(embedded: number, chunks: number): number {
+  return chunks > 0 ? Math.round((embedded / chunks) * 1000) / 10 : 100;
+}
+
+export function coverageDeltaPoints(
+  current: number,
+  previousEmbedded: number,
+  previousChunks: number,
+): number | null {
+  if (!Number.isFinite(previousChunks) || previousChunks <= 0) return null;
+  const previous = coveragePercent(previousEmbedded, previousChunks);
+  return Math.round((current - previous) * 10) / 10;
+}
+
+export function laterIso(...values: Array<string | null | undefined>): string | null {
+  let best: string | null = null;
+  let bestMs = Number.NEGATIVE_INFINITY;
+  for (const value of values) {
+    if (!value) continue;
+    const ms = new Date(value).getTime();
+    if (!Number.isFinite(ms) || ms < bestMs) continue;
+    best = value;
+    bestMs = ms;
+  }
+  return best;
+}
+
+export function startOfLocalDayIso(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return null;
+  date.setHours(0, 0, 0, 0);
+  return date.toISOString();
+}
+
 /** Postgres.js returns BIGSERIAL as string; PGLite may return t/f for booleans. */
 export function normalizeAdminFactRow<T extends Record<string, unknown>>(row: T): T {
   const id = asFiniteNumber(row.id);
@@ -153,10 +188,57 @@ export async function getAdminBrainOverview(
             COUNT(*) FILTER (WHERE expired_at IS NULL)::int AS active_fact_count
        FROM facts`,
   );
+  const changeBounds = await optionalOne<{ last_deleted_at: string | null; last_embedded_at: string | null }>(
+    engine,
+    `SELECT
+        (SELECT MAX(deleted_at)::text FROM pages) AS last_deleted_at,
+        (SELECT MAX(c.embedded_at)::text
+           FROM content_chunks c
+           JOIN pages p ON p.id = c.page_id) AS last_embedded_at`,
+  );
+  const pageDayStart = startOfLocalDayIso(laterIso(recentWrite?.updated_at, changeBounds?.last_deleted_at));
+  const coverageDayStart = startOfLocalDayIso(laterIso(
+    recentWrite?.updated_at,
+    changeBounds?.last_deleted_at,
+    changeBounds?.last_embedded_at,
+  ));
+  const change = pageDayStart && coverageDayStart
+    ? await optionalOne<{
+        pages_added: number;
+        pages_removed: number;
+        previous_chunks: number;
+        previous_embedded: number;
+      }>(
+        engine,
+        `SELECT
+            (SELECT COUNT(*)::int FROM pages WHERE deleted_at IS NULL AND created_at >= $1::timestamptz) AS pages_added,
+            (SELECT COUNT(*)::int FROM pages WHERE deleted_at IS NOT NULL AND deleted_at >= $1::timestamptz) AS pages_removed,
+            (SELECT COUNT(*)::int
+               FROM content_chunks c
+               JOIN pages p ON p.id = c.page_id
+              WHERE c.created_at < $2::timestamptz
+                AND p.created_at < $2::timestamptz
+                AND (p.deleted_at IS NULL OR p.deleted_at >= $2::timestamptz)) AS previous_chunks,
+            (SELECT COUNT(*)::int
+               FROM content_chunks c
+               JOIN pages p ON p.id = c.page_id
+              WHERE c.created_at < $2::timestamptz
+                AND p.created_at < $2::timestamptz
+                AND (p.deleted_at IS NULL OR p.deleted_at >= $2::timestamptz)
+                AND c.embedding IS NOT NULL
+                AND (c.embedded_at IS NULL OR c.embedded_at < $2::timestamptz)) AS previous_embedded`,
+        [pageDayStart, coverageDayStart],
+      )
+    : null;
 
   const embedded = stats.embedded_count ?? 0;
   const chunks = stats.chunk_count ?? 0;
-  const coverage = chunks > 0 ? Math.round((embedded / chunks) * 1000) / 10 : 100;
+  const coverage = coveragePercent(embedded, chunks);
+  const coverageDelta = coverageDeltaPoints(
+    coverage,
+    Number(change?.previous_embedded ?? 0),
+    Number(change?.previous_chunks ?? 0),
+  );
   const providerStatus = getProviderStatus(config);
   const { isGenerativeModelEnabled } = await import('../core/model-usage.ts');
   const generativeEnabled = isGenerativeModelEnabled(config);
@@ -177,6 +259,9 @@ export async function getAdminBrainOverview(
     },
     embedding_coverage: coverage,
     pending_embeddings: pendingEmbed?.pending ?? Math.max(0, chunks - embedded),
+    pages_added_last_update: Number(change?.pages_added ?? 0),
+    pages_removed_last_update: Number(change?.pages_removed ?? 0),
+    embedding_coverage_delta: coverageDelta,
     recent_write_at: recentWrite?.updated_at ?? null,
     sources: sourceRows,
     main_source_id: mainSourceId,

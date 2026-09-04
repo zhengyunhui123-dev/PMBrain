@@ -86,7 +86,7 @@ export async function applyAdminAdvisorFinding(
   }
 
   if (action.kind === 'embed_stale') {
-    const run = await startActionRun('embed_stale', cwd, hooks);
+    const run = await startActionRun('embed_stale', cwd, hooks, { embedCatchUp: true });
     return { status: 'started', runId: run.id, kind: run.kind };
   }
   if (action.kind === 'sync_source') {
