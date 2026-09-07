@@ -154,9 +154,9 @@ describe('federated by-slug read scope', () => {
     });
 
     const links = await op('get_links').handler(federated, { slug: 'secret/beta-doc' }) as Array<{ to_slug: string; link_source?: string; origin_slug?: string | null }>;
-    expect(links.map(l => l.to_slug).sort()).toEqual(['secret/beta-target', 'secret/beta-target']);
+    expect(links.map(l => l.to_slug)).toEqual(['secret/beta-target']);
     expect(links.find(l => l.to_slug === 'default/only-doc')).toBeUndefined();
-    expect(links.find(l => l.link_source === 'frontmatter')?.origin_slug ?? null).toBeNull();
+    expect(links.find(l => l.link_source === 'frontmatter')).toBeUndefined();
 
     const backlinks = await op('get_backlinks').handler(federated, { slug: 'secret/beta-doc' }) as Array<{ from_slug: string }>;
     expect(backlinks.map(l => l.from_slug)).toEqual(['secret/beta-target']);
@@ -165,7 +165,7 @@ describe('federated by-slug read scope', () => {
 
   test('remote scalar sourceId is promoted to sourceIds for link reads only', async () => {
     const remoteScalarLinks = await op('get_links').handler(ctx({ sourceId: 'beta', remote: true }), { slug: 'secret/beta-doc' }) as Array<{ to_slug: string }>;
-    expect(remoteScalarLinks.map(l => l.to_slug).sort()).toEqual(['secret/beta-target', 'secret/beta-target']);
+    expect(remoteScalarLinks.map(l => l.to_slug)).toEqual(['secret/beta-target']);
 
     const trustedLocalLinks = await op('get_links').handler(ctx({ sourceId: 'beta', remote: false }), { slug: 'secret/beta-doc' }) as Array<{ to_slug: string }>;
     expect(trustedLocalLinks.map(l => l.to_slug).sort()).toEqual(['default/only-doc', 'secret/beta-target', 'secret/beta-target']);
