@@ -93,6 +93,7 @@ export async function runPhaseConsolidate(
 
     const facts = await engine.listFactsByEntity(b.source_id, b.entity_slug, {
       activeOnly: true,
+      unconsolidatedOnly: true,
       limit: 100,
     });
     // Re-filter to unconsolidated since listFactsByEntity returns all active.
@@ -157,13 +158,12 @@ export async function runPhaseConsolidate(
       // which clears `consolidated_at` on every fact. Without this lookup,
       // a second cycle run would re-INSERT a duplicate take via
       // `MAX(row_num)+1`, silently poisoning trajectory + scorecard data.
-      // Match on (page_id, claim, since_date) — the natural identity of a
-      // promoted take.
-      const existing = await engine.executeRaw<{ id: number }>(
-        `SELECT id FROM takes
-         WHERE page_id = $1 AND claim = $2 AND since_date = $3
+      const existing = await engine.executeRaw<{ id: number; resolved_at: Date | null }>(
+        `SELECT id, resolved_at FROM takes
+         WHERE page_id = $1 AND claim = $2 AND kind = 'fact' AND holder = 'self'
+         ORDER BY id
          LIMIT 1`,
-        [pageId, best.fact, sinceISO],
+        [pageId, best.fact],
       );
 
       let takeId: number;
@@ -173,7 +173,7 @@ export async function runPhaseConsolidate(
         // source_session values that the prior run didn't see); leave
         // row_num + weight untouched to keep the take's identity stable.
         takeId = existing[0].id;
-        await engine.executeRaw(
+        if (existing[0].resolved_at === null) await engine.executeRaw(
           `UPDATE takes SET source = $1, updated_at = now() WHERE id = $2`,
           [sources.slice(0, 200), takeId],
         );

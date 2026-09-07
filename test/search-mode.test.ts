@@ -398,7 +398,7 @@ describe('knobsHash determinism + cross-mode separation (CDX-4)', () => {
     // before the boost stage existed. PMBrain 1.2.81 bumps 9→10 so a
     // remote result set that hides private pages cannot reuse a local cache.
     // PMBrain 1.3.7 bumps 10→11 for hard excludes, detail, salience, and recency.
-    expect(KNOBS_HASH_VERSION).toBe(11);
+    expect(KNOBS_HASH_VERSION).toBe(12);
   });
 
   test('private-page posture produces a separate cache namespace', () => {
@@ -570,7 +570,7 @@ describe('v0.40.4 — graph_signals knob', () => {
 
 describe('v0.42.3.0 — autocut knobs', () => {
   test('KNOBS_HASH_VERSION includes relational, private-page, and query-policy cache isolation', () => {
-    expect(KNOBS_HASH_VERSION).toBe(11);
+    expect(KNOBS_HASH_VERSION).toBe(12);
   });
 
   test('bundle defaults: conservative/balanced off, tokenmax on @0.20', () => {

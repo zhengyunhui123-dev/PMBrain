@@ -657,6 +657,8 @@ export interface ChunkInput {
 
 // Search
 export interface SearchResult {
+  keyword_relaxed?: boolean;
+  unverified?: boolean;
   slug: string;
   page_id: number;
   title: string;
@@ -869,7 +871,18 @@ export interface ResolvedColumn {
   embeddingModel: string;
 }
 
+export interface PageReadScope {
+  sourceId?: string;
+  sourceIds?: string[];
+  excludePrivate?: boolean;
+}
+
+export interface PageReadPolicy extends PageReadScope {
+  takesHoldersAllowList?: string[];
+}
+
 export interface SearchOpts {
+  takesHoldersAllowList?: string[];
   limit?: number;
   offset?: number;
   /**
@@ -1233,6 +1246,8 @@ export interface RelationalFanoutRow {
 
 /** Options for BrainEngine.relationalFanout. */
 export interface RelationalFanoutOpts {
+  excludePrivate?: boolean;
+  seedRefs?: Array<{ source_id: string; slug: string }>;
   /** Edge types to traverse; null/empty = type-agnostic. */
   linkTypes?: string[] | null;
   /** Direction from each seed. Default 'both'. */
@@ -1473,6 +1488,7 @@ export interface EvalCaptureFailure {
  * "keyword-only fallback" from "full hybrid with expansion."
  */
 export interface HybridSearchMeta {
+  relaxed_dropped?: number;
   /** True iff vector search actually ran. False when OPENAI_API_KEY missing or embed failed. */
   vector_enabled: boolean;
   /** Post-auto-detect detail level. */

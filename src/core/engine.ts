@@ -59,6 +59,7 @@ export interface SourceRow {
 }
 
 export interface TraverseGraphOpts {
+  excludePrivate?: boolean;
   sourceId?: string;
   sourceIds?: string[];
   frontierCap?: number;
@@ -301,6 +302,9 @@ export interface Take {
 }
 
 export interface TakesListOpts {
+  sourceId?: string;
+  sourceIds?: string[];
+  excludePrivate?: boolean;
   page_id?: number;
   page_slug?: string;       // resolved via JOIN
   holder?: string;
@@ -316,6 +320,7 @@ export interface TakesListOpts {
 
 /** Search result row from searchTakes / searchTakesVector. */
 export interface TakeHit {
+  source_id?: string;
   take_id: number;
   page_id: number;
   page_slug: string;
@@ -558,6 +563,7 @@ export interface NewFact {
 
 /** Options shared by list-facts methods. */
 export interface FactListOpts {
+  unconsolidatedOnly?: boolean;
   /** Hide expired_at IS NOT NULL rows. Default true. */
   activeOnly?: boolean;
   limit?: number;
@@ -1174,7 +1180,7 @@ export interface BrainEngine {
    */
   traversePaths(
     slug: string,
-    opts?: { depth?: number; linkType?: string; direction?: 'in' | 'out' | 'both'; sourceId?: string; sourceIds?: string[] },
+    opts?: { depth?: number; linkType?: string; direction?: 'in' | 'out' | 'both'; sourceId?: string; sourceIds?: string[]; excludePrivate?: boolean },
   ): Promise<GraphPath[]>;
 
   /**

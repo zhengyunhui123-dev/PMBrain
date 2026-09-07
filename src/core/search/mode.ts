@@ -713,7 +713,7 @@ export function attributeKnob<K extends keyof ModeBundle>(
 // is global, not per-mode). Refills within cache.ttl_seconds (3600s default).
 // PMBrain 1.3.7 bump 10→11: fold current result-affecting request posture
 // (hard excludes, detail, salience and recency) into query-cache identity.
-export const KNOBS_HASH_VERSION = 11;
+export const KNOBS_HASH_VERSION = 12;
 
 /**
  * v0.36 (D8 / CDX-2) — second-arg context for the cache key. The

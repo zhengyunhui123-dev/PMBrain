@@ -611,6 +611,25 @@ describe('runEmbedCore --stale egress fix (SQL-side filter)', () => {
 // ────────────────────────────────────────────────────────────────
 
 describe('embedBatchWithBackoff (D2/D4/D4a/D8)', () => {
+  test('a wrapped DNS timeout retries once and cancellation stops network backoff', async () => {
+    const { embedBatchWithBackoff } = await import('../src/commands/embed.ts');
+    let calls = 0;
+    embedBatchBehavior = async () => {
+      if (++calls === 1) throw new Error('temporary transport', { cause: { code: 'DNS_ETIMEOUT' } });
+      return [new Float32Array(1536)];
+    };
+    expect(await embedBatchWithBackoff(['x'])).toHaveLength(1);
+    expect(calls).toBe(2);
+    const controller = new AbortController();
+    calls = 0;
+    embedBatchBehavior = async () => {
+      calls++;
+      setTimeout(() => controller.abort(), 20);
+      throw new Error('temporary transport', { cause: { code: 'ECONNRESET' } });
+    };
+    await expect(embedBatchWithBackoff(['x'], { abortSignal: controller.signal })).rejects.toThrow();
+    expect(calls).toBe(1);
+  });
   test('case 1: parses "try again in 248ms" form and retries', async () => {
     const { embedBatchWithBackoff } = await import('../src/commands/embed.ts');
     let calls = 0;

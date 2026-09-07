@@ -193,6 +193,7 @@ export async function extractFactsFromTurn(input: ExtractInput): Promise<Extract
   const parsedRaw = parseExtractorJson(result.text);
   if (!parsedRaw) return [];
 
+  const junkFilterOn = await isJunkFilterEnabled(input.engine);
   const facts: ExtractedFact[] = [];
   for (const candidate of parsedRaw.slice(0, cap)) {
     if (input.abortSignal?.aborted) {
@@ -209,6 +210,7 @@ export async function extractFactsFromTurn(input: ExtractInput): Promise<Extract
     const kind = ALL_EXTRACT_KINDS.includes(candidate.kind as FactKind)
       ? (candidate.kind as FactKind)
       : 'fact';
+    if (junkFilterOn && isJunkFact(factText, kind)) continue;
     const confidence = clampConfidence(candidate.confidence);
     const notability = ['high', 'medium', 'low'].includes(candidate.notability || '')
       ? (candidate.notability as 'high' | 'medium' | 'low')
@@ -336,4 +338,31 @@ function clampConfidence(x: number | undefined): number {
 function isAbort(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
   return err.name === 'AbortError' || /aborted|cancell?ed/i.test(err.message);
+}
+
+const PLAN_NARRATION_PATTERN =
+  /^["'«]?(now,?\s+)?(let me\b|let's\b|i('| wi)ll\b|i am going to\b|i'm going to\b|next,? i\b|about to\b|proceeding to\b|offered to\b)/i;
+const PROVIDER_ERROR_PATTERN =
+  /^\W*(?:(?:error|warning|\d{3})\W*\s*)?(?:you'?ve hit your\b|(?:\w+\s+){0,2}(?:stopped|failed|halted|aborted)\s+because\s+(?:of\s+)?(?:the\s+|your\s+|our\s+)?(?:monthly\s+|daily\s+|api\s+)*(?:spend|rate)\s+(?:limit|cap)\b|(?:the\s+|your\s+|our\s+|provider\s+|api\s+|monthly\s+|daily\s+|org'?s\s+)*(?:spend|rate)\s+(?:limit|cap)\s+(?:was\s+|has\s+been\s+|is\s+)?(?:hit|exceeded|reached)\b)/i;
+
+export const JUNK_FACT_PATTERNS: readonly RegExp[] = [
+  PLAN_NARRATION_PATTERN,
+  /^["'«]?(the user is asking|the user wants me to|another agent is\b)/i,
+  PROVIDER_ERROR_PATTERN,
+];
+
+
+export function isJunkFact(text: string, kind?: string): boolean {
+  const t = text.trim();
+  if (!t) return true;
+  return JUNK_FACT_PATTERNS.some(
+    (rx) => !(kind === 'commitment' && rx === PLAN_NARRATION_PATTERN) && rx.test(t),
+  );
+}
+
+export async function isJunkFilterEnabled(engine?: BrainEngine): Promise<boolean> {
+  if (!engine) return true;
+  const raw = await engine.getConfig('facts.extraction_junk_filter').catch(() => null);
+  if (raw == null) return true;
+  return !['false', '0', 'no', 'off'].includes(raw.trim().toLowerCase());
 }

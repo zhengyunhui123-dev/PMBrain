@@ -73,6 +73,15 @@ d('cycle consolidate phase (Postgres)', () => {
       expect(f.consolidated_at).not.toBeNull();
       expect(f.consolidated_into).not.toBeNull();
     }
+    await engine.executeRaw(`UPDATE facts SET consolidated_at = NULL, valid_from = valid_from - INTERVAL '1 day' WHERE entity_slug = 'people/post-cons-alice'`);
+    expect((await runPhaseConsolidate(engine, {})).details.takes_written).toBe(0);
+    await engine.executeRaw(`UPDATE takes SET active = FALSE, resolved_at = NOW() WHERE page_id = $1`, [pageId]);
+    await engine.executeRaw(`UPDATE facts SET consolidated_at = NULL WHERE entity_slug = 'people/post-cons-alice'`);
+    expect((await runPhaseConsolidate(engine, {})).details.takes_written).toBe(0);
+    const preserved = await engine.executeRaw<{ active: boolean; resolved_at: unknown }>(`SELECT active, resolved_at FROM takes WHERE page_id = $1`, [pageId]);
+    expect(preserved).toHaveLength(1);
+    expect(preserved[0].active).toBe(false);
+    expect(preserved[0].resolved_at).not.toBeNull();
   });
 
   test('skips bucket below the 24h age threshold', async () => {

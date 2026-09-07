@@ -16,6 +16,7 @@
  * for those flags per Codex P1 #7.
  */
 
+import { resolveExcludePrivatePages } from '../search/private-visibility.ts';
 import type Anthropic from '@anthropic-ai/sdk';
 import type { BrainEngine, SynthesisEvidenceInput } from '../engine.ts';
 import type { SearchResult } from '../types.ts';
@@ -348,6 +349,9 @@ export async function runThink(
 
   // GATHER
   const gather = await runGather(engine, {
+    sourceId: opts.sourceId,
+    sourceIds: opts.allowedSources,
+    excludePrivate: await resolveExcludePrivatePages(engine, opts.remote ?? false),
     question: opts.question,
     anchor: opts.anchor,
     questionEmbedding,

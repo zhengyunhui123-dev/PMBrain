@@ -56,7 +56,7 @@ describe('KNOBS_HASH_VERSION + version invariants', () => {
     // cannot leak past the new stage. PMBrain 1.2.81: 9→10 isolates local
     // cache rows from remote reads that exclude private pages. PMBrain 1.3.7:
     // 10→11 folds hard excludes, detail, salience, and recency into the key.
-    expect(KNOBS_HASH_VERSION).toBe(11);
+    expect(KNOBS_HASH_VERSION).toBe(12);
   });
 
   test('hash is 16 hex chars regardless of reranker config', () => {

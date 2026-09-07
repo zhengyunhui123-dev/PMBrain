@@ -1,3 +1,4 @@
+import { readVersions, readLinks, readPageRefs } from './search/read-enrichment.ts';
 /**
  * Contract-first operation definitions. Single source of truth for CLI, MCP, and tools-json.
  * Each operation defines its schema, handler, and optional CLI hints.
@@ -1673,6 +1674,7 @@ const query: Operation = {
     // semantic cache + token budget + intent weighting fire automatically.
     // Plain hybridSearch remains the bare API for callers that opt out.
     const results = await hybridSearchCached(ctx.engine, queryText, {
+      takesHoldersAllowList: ctx.takesHoldersAllowList,
       limit: (p.limit as number) || 20,
       offset: (p.offset as number) || 0,
       expansion: expand,
@@ -1776,6 +1778,8 @@ const takes_list: Operation = {
   },
   handler: async (ctx, p) => {
     return ctx.engine.listTakes({
+      ...sourceScopeOpts(ctx),
+      excludePrivate: await resolveExcludePrivatePages(ctx.engine, ctx.remote),
       page_slug: p.page_slug as string | undefined,
       holder: p.holder as string | undefined,
       kind: p.kind as never,
@@ -1802,6 +1806,8 @@ const takes_search: Operation = {
   },
   handler: async (ctx, p) => {
     return ctx.engine.searchTakes(p.query as string, {
+      ...sourceScopeOpts(ctx),
+      excludePrivate: await resolveExcludePrivatePages(ctx.engine, ctx.remote),
       limit: p.limit as number | undefined,
       takesHoldersAllowList: ctx.takesHoldersAllowList,
     });
@@ -2251,6 +2257,7 @@ const get_links: Operation = {
   handler: async (ctx, p) => {
     const sourceOpts = linkReadScopeOpts(ctx);
     const slug = p.slug as string;
+    if (ctx.remote !== false) return readLinks(ctx.engine.executeRaw.bind(ctx.engine), slug, false, { ...sourceOpts, excludePrivate: await resolveExcludePrivatePages(ctx.engine, ctx.remote) });
     if (await slugHiddenFromCaller(ctx.engine, ctx.remote, slug, sourceOpts)) return [];
     const links = await ctx.engine.getLinks(slug, sourceOpts);
     if (!(await resolveExcludePrivatePages(ctx.engine, ctx.remote))) return links;
@@ -2274,6 +2281,7 @@ const get_backlinks: Operation = {
   handler: async (ctx, p) => {
     const sourceOpts = linkReadScopeOpts(ctx);
     const slug = p.slug as string;
+    if (ctx.remote !== false) return readLinks(ctx.engine.executeRaw.bind(ctx.engine), slug, true, { ...sourceOpts, excludePrivate: await resolveExcludePrivatePages(ctx.engine, ctx.remote) });
     if (await slugHiddenFromCaller(ctx.engine, ctx.remote, slug, sourceOpts)) return [];
     const links = await ctx.engine.getBacklinks(slug, sourceOpts);
     if (!(await resolveExcludePrivatePages(ctx.engine, ctx.remote))) return links;
@@ -2330,7 +2338,7 @@ const traverse_graph: Operation = {
     // walks stay within the auth'd client's accessible sources. Pre-fix,
     // traverseGraph / traversePaths happily followed edges into pages from
     // foreign sources, leaking topology + page metadata via the graph op.
-    const scope = sourceScopeOpts(ctx);
+    const scope = { ...sourceScopeOpts(ctx), excludePrivate: await resolveExcludePrivatePages(ctx.engine, ctx.remote) };
     if (await slugHiddenFromCaller(ctx.engine, ctx.remote, slug, scope)) return [];
     // Backward compat: when neither link_type nor direction is provided, return
     // the legacy GraphNode[] shape. Once either is set, switch to GraphPath[].
@@ -2648,9 +2656,9 @@ const get_versions: Operation = {
   },
   handler: async (ctx, p) => {
     // v0.31.8 (D20): thread ctx.sourceId.
-    const sourceOpts = ctx.sourceId ? { sourceId: ctx.sourceId } : {};
+    const sourceOpts = sourceScopeOpts(ctx);
     if (await slugHiddenFromCaller(ctx.engine, ctx.remote, p.slug as string, sourceOpts)) return [];
-    const versions = await ctx.engine.getVersions(p.slug as string, sourceOpts);
+    const versions = ctx.remote === false ? await ctx.engine.getVersions(p.slug as string, sourceOpts) : await readVersions(ctx.engine.executeRaw.bind(ctx.engine), p.slug as string, { ...sourceOpts, excludePrivate: await resolveExcludePrivatePages(ctx.engine, ctx.remote) });
     // Same takes-allow-list privacy boundary as get_page. Snapshots persist
     // historical compiled_truth verbatim, including the takes fence, so
     // a remote token bypassing get_page via /history would re-introduce
@@ -2741,6 +2749,10 @@ const get_raw_data: Operation = {
     source: { type: 'string', description: 'Filter by source' },
   },
   handler: async (ctx, p) => {
+    if (ctx.remote !== false) {
+      const refs = await readPageRefs(ctx.engine.executeRaw.bind(ctx.engine), p.slug as string, { ...sourceScopeOpts(ctx), excludePrivate: await resolveExcludePrivatePages(ctx.engine, ctx.remote) });
+      return (await Promise.all(refs.map(ref => ctx.engine.getRawData(ref.slug, p.source as string | undefined, { sourceId: ref.source_id })))).flat();
+    }
     // v0.31.8 (D20 + D21): thread ctx.sourceId.
     const sourceOpts = ctx.sourceId ? { sourceId: ctx.sourceId } : {};
     if (await slugHiddenFromCaller(ctx.engine, ctx.remote, p.slug as string, sourceOpts)) return [];
@@ -2774,6 +2786,10 @@ const get_chunks: Operation = {
     slug: { type: 'string', required: true },
   },
   handler: async (ctx, p) => {
+    if (ctx.remote !== false) {
+      const refs = await readPageRefs(ctx.engine.executeRaw.bind(ctx.engine), p.slug as string, { ...sourceScopeOpts(ctx), excludePrivate: await resolveExcludePrivatePages(ctx.engine, ctx.remote) });
+      return (await Promise.all(refs.map(ref => ctx.engine.getChunks(ref.slug, { sourceId: ref.source_id })))).flat();
+    }
     // v0.31.8 (D20): thread ctx.sourceId.
     const sourceOpts = ctx.sourceId ? { sourceId: ctx.sourceId } : {};
     if (await slugHiddenFromCaller(ctx.engine, ctx.remote, p.slug as string, sourceOpts)) return [];
@@ -4186,6 +4202,7 @@ const code_callers: Operation = {
   },
   scope: 'read',
   handler: async (ctx, p) => {
+    if (ctx.remote !== false) throw new OperationError('permission_denied', 'Code intelligence requires a trusted local caller.');
     const symbol = p.symbol as string;
     const limit = (p.limit as number) ?? 100;
     const allSourcesParam = p.all_sources === true;
@@ -4217,6 +4234,7 @@ const code_callees: Operation = {
   },
   scope: 'read',
   handler: async (ctx, p) => {
+    if (ctx.remote !== false) throw new OperationError('permission_denied', 'Code intelligence requires a trusted local caller.');
     const symbol = p.symbol as string;
     const limit = (p.limit as number) ?? 100;
     const allSourcesParam = p.all_sources === true;
@@ -4247,6 +4265,7 @@ const code_def: Operation = {
   },
   scope: 'read',
   handler: async (ctx, p) => {
+    if (ctx.remote !== false) throw new OperationError('permission_denied', 'Code intelligence requires a trusted local caller.');
     const { findCodeDef } = await import('../commands/code-def.ts');
     const defs = await findCodeDef(ctx.engine, p.symbol as string, {
       limit: (p.limit as number) ?? 20,
@@ -4267,6 +4286,7 @@ const code_refs: Operation = {
   },
   scope: 'read',
   handler: async (ctx, p) => {
+    if (ctx.remote !== false) throw new OperationError('permission_denied', 'Code intelligence requires a trusted local caller.');
     const { findCodeRefs } = await import('../commands/code-refs.ts');
     const refs = await findCodeRefs(ctx.engine, p.symbol as string, {
       limit: (p.limit as number) ?? 50,
@@ -4290,6 +4310,7 @@ const code_blast: Operation = {
   },
   scope: 'read',
   handler: async (ctx, p) => {
+    if (ctx.remote !== false) throw new OperationError('permission_denied', 'Code intelligence requires a trusted local caller.');
     const { runRecursiveWalk } = await import('./code-intel/recursive-walk.ts');
     const { getCachedOrCompute } = await import('./code-intel/traversal-cache.ts');
     const symbol = p.symbol as string;
@@ -4322,6 +4343,7 @@ const code_flow: Operation = {
   },
   scope: 'read',
   handler: async (ctx, p) => {
+    if (ctx.remote !== false) throw new OperationError('permission_denied', 'Code intelligence requires a trusted local caller.');
     const { runRecursiveWalk } = await import('./code-intel/recursive-walk.ts');
     const { getCachedOrCompute } = await import('./code-intel/traversal-cache.ts');
     const symbol = p.entry_point as string;

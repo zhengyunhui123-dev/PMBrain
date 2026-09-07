@@ -13,7 +13,7 @@ describe('P1 query-cache isolation contract', () => {
   const knobs = resolveSearchMode({ mode: 'balanced' });
 
   test('cache epoch advances after folding the new isolation inputs', () => {
-    expect(KNOBS_HASH_VERSION).toBe(11);
+    expect(KNOBS_HASH_VERSION).toBe(12);
   });
 
   test('hard excludes are order-insensitive but policy-sensitive', () => {

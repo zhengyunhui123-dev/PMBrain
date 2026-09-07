@@ -1156,13 +1156,35 @@ export async function embedBatchWithBackoff(
       // strip `cause.status`.
       const isRateLimit = detect429FromCause(e)
         || /rate.?limit|429/i.test(msg);
-      if (!isRateLimit || attempt === MAX_RATE_LIMIT_RETRIES) throw e;
+      const transientNetwork = isTransientNetworkEmbedError(e);
+      if ((!isRateLimit && !transientNetwork) || attempt === MAX_RATE_LIMIT_RETRIES) throw e;
 
-      const delayMs = parseRetryDelayMs(msg);
-      serr(`  [rate-limit] attempt ${attempt + 1}/${MAX_RATE_LIMIT_RETRIES}, waiting ${delayMs}ms...`);
+      const delayMs = isRateLimit ? parseRetryDelayMs(msg) : transientBackoffMs(attempt);
+      serr(`  [${isRateLimit ? 'rate-limit' : 'network-retry'}] attempt ${attempt + 1}/${MAX_RATE_LIMIT_RETRIES}, waiting ${delayMs}ms...`);
       await abortableSleep(delayMs, signal);
     }
   }
   // Unreachable, but TypeScript needs it.
   return embedBatch(texts);
+}
+
+const TRANSIENT_NET_BASE_MS = 1_000;
+const TRANSIENT_NET_MAX_MS = 15_000;
+export function transientBackoffMs(attempt: number, rng: () => number = Math.random): number {
+  const raw = Math.min(TRANSIENT_NET_BASE_MS * 2 ** attempt, TRANSIENT_NET_MAX_MS);
+  const jitterFactor = 1 + (rng() * 2 - 1) * RATE_LIMIT_JITTER;
+  return Math.max(1, Math.floor(raw * jitterFactor));
+}
+
+export function isTransientNetworkEmbedError(e: unknown): boolean {
+  const TRANSIENT_CODES = /^(DNS_ETIMEOUT|ETIMEOUT|ETIMEDOUT|ESOCKETTIMEDOUT|ECONNRESET|EPIPE|ECONNABORTED|EAI_AGAIN|UND_ERR_CONNECT_TIMEOUT|UND_ERR_HEADERS_TIMEOUT|UND_ERR_BODY_TIMEOUT|UND_ERR_SOCKET)$/;
+  let cur: unknown = e;
+  for (let depth = 0; depth < 5 && cur !== undefined && cur !== null; depth++) {
+    const obj = cur as { code?: unknown; name?: unknown; cause?: unknown };
+    if (typeof obj.code === 'string' && TRANSIENT_CODES.test(obj.code)) return true;
+    if (obj.name === 'TimeoutError') return true;
+    cur = obj.cause;
+  }
+  const msg = e instanceof Error ? e.message : String(e);
+  return /\b(DNS_ETIMEOUT|ETIMEOUT|ETIMEDOUT|ESOCKETTIMEDOUT|ECONNRESET|EPIPE|EAI_AGAIN)\b|socket hang up|fetch failed|connect(ion)? timeout|connection (reset|closed)|network (error|timeout)|request timed out|timed out/i.test(msg);
 }

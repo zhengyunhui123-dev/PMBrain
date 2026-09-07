@@ -21,6 +21,9 @@ import type { SearchResult } from '../types.ts';
 import { sanitizeQueryForPrompt } from '../search/expansion.ts';
 
 export interface ThinkGatherOpts {
+  sourceId?: string;
+  sourceIds?: string[];
+  excludePrivate?: boolean;
   question: string;
   /** Anchor entity slug. When set, the graph stream activates. */
   anchor?: string;
@@ -109,6 +112,11 @@ export async function runGather(
   // Stream 1: hybrid page search (existing primitive).
   const pagesPromise = hybridSearch(engine, opts.question, {
     limit: gatherLimit,
+    autocut: false,
+    sourceId: opts.sourceId,
+    sourceIds: opts.sourceIds,
+    excludePrivate: opts.excludePrivate,
+    takesHoldersAllowList: opts.takesHoldersAllowList,
     expansion: false,  // think provides its own anchor + graph context; no need for re-expansion
   }).catch((e) => {
     process.stderr.write(`[think.gather] hybrid stream failed: ${(e as Error).message}\n`);
@@ -117,6 +125,9 @@ export async function runGather(
 
   // Stream 2: keyword search across takes.
   const takesKwPromise = engine.searchTakes(opts.question, {
+    sourceId: opts.sourceId,
+    sourceIds: opts.sourceIds,
+    excludePrivate: opts.excludePrivate,
     limit: takesLimit,
     takesHoldersAllowList: opts.takesHoldersAllowList,
   }).catch((e) => {
@@ -127,6 +138,9 @@ export async function runGather(
   // Stream 3: vector search across takes (only when an embedding is supplied).
   const takesVecPromise: Promise<TakeHit[]> = opts.questionEmbedding
     ? engine.searchTakesVector(opts.questionEmbedding, {
+        sourceId: opts.sourceId,
+        sourceIds: opts.sourceIds,
+        excludePrivate: opts.excludePrivate,
         limit: takesLimit,
         takesHoldersAllowList: opts.takesHoldersAllowList,
       }).catch((e) => {
@@ -137,15 +151,10 @@ export async function runGather(
 
   // Stream 4: graph walk (anchor only).
   const graphPromise: Promise<string[]> = opts.anchor
-    ? engine.traversePaths(opts.anchor, { depth: graphDepth, direction: 'both' })
-        .then(paths => {
-          const slugs = new Set<string>([opts.anchor!]);
-          for (const p of paths) {
-            slugs.add(p.from_slug);
-            slugs.add(p.to_slug);
-          }
-          return Array.from(slugs);
-        })
+    ? engine.relationalFanout([opts.anchor], {
+        depth: graphDepth, direction: 'both', includeMentions: true,
+        sourceId: opts.sourceId, sourceIds: opts.sourceIds, excludePrivate: opts.excludePrivate,
+      }).then(paths => [...new Set(paths.flatMap(p => p.path))])
         .catch((e) => {
           process.stderr.write(`[think.gather] graph stream failed: ${(e as Error).message}\n`);
           return [] as string[];
@@ -159,7 +168,7 @@ export async function runGather(
   // Fuse takes streams (keyword + vector). Key by (page_slug, row_num).
   const fusedTakes = fuseRanked(
     takesKw, takesVec,
-    (h: TakeHit) => `${h.page_slug}#${h.row_num}`,
+    (h: TakeHit) => `${h.source_id ?? h.page_id}::${h.page_slug}#${h.row_num}`,
   ).slice(0, takesLimit);
 
   return {

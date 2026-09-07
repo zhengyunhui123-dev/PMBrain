@@ -28,6 +28,8 @@
 
 import type Anthropic from '@anthropic-ai/sdk';
 import { randomUUID } from 'node:crypto';
+import { resolveCycleDate } from './cycle-date.ts';
+import { verifyAndRepairDreamPages } from './synthesize-verify.ts';
 import { writeFileSync, mkdirSync, statSync } from 'node:fs';
 import { chat as gatewayChat, type ChatResult } from '../ai/gateway.ts';
 import { resolveRecipe } from '../ai/model-resolver.ts';
@@ -337,6 +339,7 @@ export async function runPhaseSynthesize(
   try {
     throwIfAborted(opts.signal, '[dream] synthesize');
     const config = await loadSynthConfig(engine);
+    const summaryDate = await resolveCycleDate(engine, { explicitDate: opts.date });
     const { outputRoot, dualWrite } = await loadDreamWriteSettings(engine, opts.brainDir);
     const executionMode = await resolveSubagentExecutionMode(engine, config.resolvedModel.model);
     const synthesisModelDetails = dreamModelDetails(config.resolvedModel, executionMode);
@@ -465,6 +468,7 @@ export async function runPhaseSynthesize(
         maxChars: config.triage.maxChars,
         maxTokens: config.triage.maxTokens,
         threshold: config.triage.threshold,
+        rescue: await engine.getConfig('dream.synthesize.triage_rescue') === 'true' ? undefined : { floor: 0.30, minSegments: 0, contentTypes: [] },
         concurrency: config.triage.concurrency,
         maxMs: config.triage.maxMs,
         judge: makeJudgeClient(config.verdictModel, opts.signal),
@@ -732,7 +736,21 @@ export async function runPhaseSynthesize(
     const cycleSourceId = opts.sourceId ?? 'default';
     throwIfAborted(opts.signal, '[dream] synthesize output');
     const writtenRefs = await collectChildPutPageSlugs(engine, childIds, chunkInfo, cycleSourceId);
-    const summaryDate = opts.date ?? today();
+    if (await engine.getConfig('dream.synthesize.quote_verify') === 'true') {
+      const transcriptsByPath = new Map(worthProcessing.map(t => [t.filePath, { content: t.content, hash6: t.contentHash.slice(0, 6) }]));
+      const verifiedRefs = writtenRefs.map(ref => {
+        const candidates = worthProcessing.filter(t => ref.slug.includes(`-${t.contentHash.slice(0, 6)}`));
+        return { ...ref, raw_source: candidates.length === 1 ? candidates[0].filePath : undefined };
+      });
+      const createdRefs = await engine.executeRaw<{ slug: string; source_id: string }>(
+        `SELECT p.slug, p.source_id FROM pages p
+         JOIN unnest($1::text[], $2::text[]) AS r(slug, source_id) ON p.slug = r.slug AND p.source_id = r.source_id
+         WHERE p.created_at >= $3::timestamptz AND p.deleted_at IS NULL`,
+        [verifiedRefs.map(r => r.slug), verifiedRefs.map(r => r.source_id), new Date(start).toISOString()],
+      );
+      const createdKeys = new Set(createdRefs.map(r => JSON.stringify([r.source_id, r.slug])));
+      await verifyAndRepairDreamPages(engine, verifiedRefs.filter(r => createdKeys.has(JSON.stringify([r.source_id, r.slug]))), transcriptsByPath, { signal: opts.signal });
+    }
     await stampDreamProvenance(engine, writtenRefs, summaryDate);
 
     // Dual-write: reverse-render each DB row → markdown file.
@@ -1348,7 +1366,9 @@ async function stampDreamProvenance(
       await executeRawJsonb(
         engine,
         `UPDATE pages
-            SET frontmatter = COALESCE(frontmatter, '{}'::jsonb) || $3::jsonb
+            SET frontmatter = COALESCE(frontmatter, '{}'::jsonb) || $3::jsonb || jsonb_build_object(
+              'dream_cycle_date', COALESCE(NULLIF(frontmatter->>'dream_created_cycle_date', ''), NULLIF(frontmatter->>'dream_cycle_date', ''), $3::jsonb->>'dream_cycle_date'),
+              'dream_created_cycle_date', COALESCE(NULLIF(frontmatter->>'dream_created_cycle_date', ''), NULLIF(frontmatter->>'dream_cycle_date', ''), $3::jsonb->>'dream_cycle_date'))
           WHERE slug = $1 AND source_id = $2`,
         [slug, source_id],
         [{ dream_generated: true, dream_cycle_date: cycleDate }],
@@ -1412,7 +1432,8 @@ export function renderPageToMarkdown(page: Page, tags: string[]): string {
   return serializePageToMarkdown(page, tags, {
     frontmatterOverrides: {
       dream_generated: true,
-      dream_cycle_date: today(),
+      dream_cycle_date: page.frontmatter?.dream_created_cycle_date || page.frontmatter?.dream_cycle_date || today(),
+      dream_created_cycle_date: page.frontmatter?.dream_created_cycle_date || page.frontmatter?.dream_cycle_date || today(),
     },
   });
 }

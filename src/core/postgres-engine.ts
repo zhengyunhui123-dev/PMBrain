@@ -1,3 +1,4 @@
+import { readRelationalFanout, readTakes } from './search/read-enrichment.ts';
 import postgres from 'postgres';
 import type {
   BrainEngine,
@@ -1714,7 +1715,7 @@ export class PostgresEngine implements BrainEngine {
     let rows = await runKeyword(query);
     if (rows.length === 0 && opts?.orFallback && !hasCJK(query)) {
       const orQuery = buildOrFallbackWebsearchQuery(query);
-      if (orQuery) rows = await runKeyword(orQuery);
+      if (orQuery) return (await runKeyword(orQuery)).map(row => ({ ...rowToSearchResult(row), keyword_relaxed: true }));
     }
     return rows.map(rowToSearchResult);
   }
@@ -1966,7 +1967,7 @@ export class PostgresEngine implements BrainEngine {
     let rows = await runTitles(query);
     if (rows.length === 0) {
       const orQuery = buildOrFallbackWebsearchQuery(query);
-      if (orQuery) rows = await runTitles(orQuery);
+      if (orQuery) return (await runTitles(orQuery)).map(row => ({ ...rowToSearchResult(row), keyword_relaxed: true }));
     }
     return rows.map(rowToSearchResult);
   }
@@ -2995,17 +2996,17 @@ export class PostgresEngine implements BrainEngine {
     // subquery also filters so the per-node `links` array only includes
     // edges to in-scope pages.
     const useSourceIds = opts?.sourceIds && opts.sourceIds.length > 0;
-    const seedScope = useSourceIds
+    let seedScope = useSourceIds
       ? sql`AND p.source_id = ANY(${opts!.sourceIds!}::text[])`
       : opts?.sourceId
         ? sql`AND p.source_id = ${opts.sourceId}`
         : sql``;
-    const stepScope = useSourceIds
+    let stepScope = useSourceIds
       ? sql`AND p2.source_id = ANY(${opts!.sourceIds!}::text[])`
       : opts?.sourceId
         ? sql`AND p2.source_id = ${opts.sourceId}`
         : sql``;
-    const aggScope = useSourceIds
+    let aggScope = useSourceIds
       ? sql`AND p3.source_id = ANY(${opts!.sourceIds!}::text[])`
       : opts?.sourceId
         ? sql`AND p3.source_id = ${opts.sourceId}`
@@ -3017,6 +3018,21 @@ export class PostgresEngine implements BrainEngine {
     // exact when fanout is bounded; for hub-fanout graphs the cap fires
     // early). Post-query, count rows per depth — if any depth == cap, fire
     // the truncation callback.
+    if (opts?.excludePrivate) {
+      stepScope = sql`${stepScope} AND (l.origin_page_id IS NULL OR EXISTS (
+        SELECT 1 FROM pages origin WHERE origin.id = l.origin_page_id AND origin.deleted_at IS NULL
+          AND ${sql.unsafe(privatePagesFilterFragment('origin'))}
+          AND (${opts.sourceIds ?? (opts.sourceId ? [opts.sourceId] : null)}::text[] IS NULL OR origin.source_id = ANY(${opts.sourceIds ?? (opts.sourceId ? [opts.sourceId] : null)}::text[]))
+      ))`;
+      aggScope = sql`${aggScope} AND (l2.origin_page_id IS NULL OR EXISTS (
+        SELECT 1 FROM pages origin WHERE origin.id = l2.origin_page_id AND origin.deleted_at IS NULL
+          AND ${sql.unsafe(privatePagesFilterFragment('origin'))}
+          AND (${opts.sourceIds ?? (opts.sourceId ? [opts.sourceId] : null)}::text[] IS NULL OR origin.source_id = ANY(${opts.sourceIds ?? (opts.sourceId ? [opts.sourceId] : null)}::text[]))
+      ))`;
+      seedScope = sql`${seedScope} AND ${sql.unsafe(privatePagesFilterFragment('p'))}`;
+      stepScope = sql`${stepScope} AND ${sql.unsafe(privatePagesFilterFragment('p2'))}`;
+      aggScope = sql`${aggScope} AND ${sql.unsafe(privatePagesFilterFragment('p3'))}`;
+    }
     const cap = opts?.frontierCap;
     const recursiveStep = cap !== undefined && cap > 0
       ? sql`(SELECT p2.id, p2.slug, p2.title, p2.type, g.depth + 1, g.visited || p2.id
@@ -3081,7 +3097,7 @@ export class PostgresEngine implements BrainEngine {
 
   async traversePaths(
     slug: string,
-    opts?: { depth?: number; linkType?: string; direction?: 'in' | 'out' | 'both'; sourceId?: string; sourceIds?: string[] },
+    opts?: { depth?: number; linkType?: string; direction?: 'in' | 'out' | 'both'; sourceId?: string; sourceIds?: string[]; excludePrivate?: boolean },
   ): Promise<GraphPath[]> {
     const sql = this.sql;
     const depth = opts?.depth ?? 5;
@@ -3093,29 +3109,45 @@ export class PostgresEngine implements BrainEngine {
     // must be in scope) AND in the SELECT join (final edges respect scope).
     // The 'both' branch needs filters on BOTH endpoint joins.
     const useSourceIds = opts?.sourceIds && opts.sourceIds.length > 0;
-    const seedScope = useSourceIds
+    let seedScope = useSourceIds
       ? sql`AND p.source_id = ANY(${opts!.sourceIds!}::text[])`
       : opts?.sourceId
         ? sql`AND p.source_id = ${opts.sourceId}`
         : sql``;
-    const stepScope = useSourceIds
+    let stepScope = useSourceIds
       ? sql`AND p2.source_id = ANY(${opts!.sourceIds!}::text[])`
       : opts?.sourceId
         ? sql`AND p2.source_id = ${opts.sourceId}`
         : sql``;
     // For the 'both' direction's final SELECT, both endpoint joins (pf, pt)
     // get scope filters so edges crossing into a foreign source are dropped.
-    const pfScope = useSourceIds
+    let pfScope = useSourceIds
       ? sql`AND pf.source_id = ANY(${opts!.sourceIds!}::text[])`
       : opts?.sourceId
         ? sql`AND pf.source_id = ${opts.sourceId}`
         : sql``;
-    const ptScope = useSourceIds
+    let ptScope = useSourceIds
       ? sql`AND pt.source_id = ANY(${opts!.sourceIds!}::text[])`
       : opts?.sourceId
         ? sql`AND pt.source_id = ${opts.sourceId}`
         : sql``;
 
+    if (opts?.excludePrivate) {
+      stepScope = sql`${stepScope} AND (l.origin_page_id IS NULL OR EXISTS (
+        SELECT 1 FROM pages origin WHERE origin.id = l.origin_page_id AND origin.deleted_at IS NULL
+          AND ${sql.unsafe(privatePagesFilterFragment('origin'))}
+          AND (${opts.sourceIds ?? (opts.sourceId ? [opts.sourceId] : null)}::text[] IS NULL OR origin.source_id = ANY(${opts.sourceIds ?? (opts.sourceId ? [opts.sourceId] : null)}::text[]))
+      ))`;
+      pfScope = sql`${pfScope} AND (l.origin_page_id IS NULL OR EXISTS (
+        SELECT 1 FROM pages origin WHERE origin.id = l.origin_page_id AND origin.deleted_at IS NULL
+          AND ${sql.unsafe(privatePagesFilterFragment('origin'))}
+          AND (${opts.sourceIds ?? (opts.sourceId ? [opts.sourceId] : null)}::text[] IS NULL OR origin.source_id = ANY(${opts.sourceIds ?? (opts.sourceId ? [opts.sourceId] : null)}::text[]))
+      ))`;
+      seedScope = sql`${seedScope} AND ${sql.unsafe(privatePagesFilterFragment('p'))}`;
+      stepScope = sql`${stepScope} AND ${sql.unsafe(privatePagesFilterFragment('p2'))}`;
+      pfScope = sql`${pfScope} AND ${sql.unsafe(privatePagesFilterFragment('pf'))}`;
+      ptScope = sql`${ptScope} AND ${sql.unsafe(privatePagesFilterFragment('pt'))}`;
+    }
     let rows;
     if (direction === 'out') {
       rows = await sql`
@@ -3218,82 +3250,7 @@ export class PostgresEngine implements BrainEngine {
     seeds: string[],
     opts?: import('./types.ts').RelationalFanoutOpts,
   ): Promise<import('./types.ts').RelationalFanoutRow[]> {
-    if (!seeds || seeds.length === 0) return [];
-    const sql = this.sql;
-    const depth = Math.min(Math.max(1, opts?.depth ?? 2), 3);
-    const direction = opts?.direction ?? 'both';
-    const limit = Math.min(Math.max(1, opts?.limit ?? 50), 200);
-    const types = opts?.linkTypes && opts.linkTypes.length > 0 ? opts.linkTypes : null;
-
-    // Scope is applied to SEED selection only. Within-source traversal is
-    // enforced separately by `p2.source_id = w.seed_source` in the recursive
-    // step, so a walk can never cross a source boundary even when several
-    // sources are in scope.
-    const useSourceIds = opts?.sourceIds && opts.sourceIds.length > 0;
-    const seedScope = useSourceIds
-      ? sql`AND p.source_id = ANY(${opts!.sourceIds!}::text[])`
-      : opts?.sourceId
-        ? sql`AND p.source_id = ${opts.sourceId}`
-        : sql``;
-    const typeFilter = types ? sql`AND l.link_type = ANY(${types}::text[])` : sql``;
-    const mentionsFilter = opts?.includeMentions
-      ? sql``
-      : sql`AND l.link_source IS DISTINCT FROM 'mentions'`;
-
-    // Recursive step join differs by direction; everything else is shared.
-    const recurStep =
-      direction === 'out'
-        ? sql`JOIN links l ON l.from_page_id = w.id JOIN pages p2 ON p2.id = l.to_page_id`
-        : direction === 'in'
-          ? sql`JOIN links l ON l.to_page_id = w.id JOIN pages p2 ON p2.id = l.from_page_id`
-          : sql`JOIN links l ON (l.from_page_id = w.id OR l.to_page_id = w.id)
-                JOIN pages p2 ON p2.id = CASE WHEN l.from_page_id = w.id THEN l.to_page_id ELSE l.from_page_id END`;
-
-    const rows = await sql`
-      WITH RECURSIVE walk AS (
-        SELECT p.id, p.slug, p.source_id, 0::int AS depth,
-               ARRAY[p.id] AS visited, ARRAY[p.slug] AS path,
-               p.source_id AS seed_source, NULL::text AS last_link_type
-        FROM pages p
-        WHERE p.slug = ANY(${seeds}::text[]) ${seedScope} AND p.deleted_at IS NULL
-        UNION ALL
-        SELECT p2.id, p2.slug, p2.source_id, w.depth + 1,
-               w.visited || p2.id, w.path || p2.slug,
-               w.seed_source, l.link_type
-        FROM walk w
-        ${recurStep}
-        WHERE w.depth < ${depth}
-          AND NOT (p2.id = ANY(w.visited))
-          AND p2.source_id = w.seed_source
-          AND p2.deleted_at IS NULL
-          ${mentionsFilter}
-          ${typeFilter}
-      )
-      SELECT n.source_id, n.slug,
-             MIN(n.depth) AS hop,
-             COUNT(DISTINCT n.last_link_type) AS edge_count,
-             array_agg(DISTINCT n.last_link_type)
-               FILTER (WHERE n.last_link_type IS NOT NULL) AS via_link_types,
-             (array_agg(array_to_string(n.path, chr(9))
-               ORDER BY n.depth ASC, array_length(n.path, 1) ASC))[1] AS path_str,
-             (SELECT cc.id FROM content_chunks cc
-               WHERE cc.page_id = n.id ORDER BY cc.chunk_index ASC LIMIT 1) AS canonical_chunk_id
-      FROM walk n
-      WHERE n.depth > 0
-      GROUP BY n.source_id, n.slug, n.id
-      ORDER BY hop ASC, edge_count DESC, n.source_id ASC, n.slug ASC
-      LIMIT ${limit}
-    `;
-
-    return (rows as Record<string, unknown>[]).map(r => ({
-      source_id: r.source_id as string,
-      slug: r.slug as string,
-      hop: Number(r.hop),
-      edge_count: Number(r.edge_count),
-      via_link_types: Array.isArray(r.via_link_types) ? (r.via_link_types as string[]) : [],
-      path: r.path_str ? String(r.path_str).split('\t') : [],
-      canonical_chunk_id: r.canonical_chunk_id == null ? null : Number(r.canonical_chunk_id),
-    }));
+    return readRelationalFanout(this.executeRaw.bind(this), seeds, opts);
   }
 
   async getBacklinkCounts(slugs: string[]): Promise<Map<string, number>> {
@@ -4100,6 +4057,7 @@ export class PostgresEngine implements BrainEngine {
       WHERE source_id = ${source_id}
         AND entity_slug = ${entitySlug}
         ${activeOnly ? sql`AND expired_at IS NULL` : sql``}
+        ${opts?.unconsolidatedOnly ? sql`AND consolidated_at IS NULL` : sql``}
         ${kinds ? sql`AND kind = ANY(${kinds}::text[])` : sql``}
         ${visibility ? sql`AND visibility = ANY(${visibility}::text[])` : sql``}
       ORDER BY valid_from DESC, id DESC
@@ -4126,6 +4084,7 @@ export class PostgresEngine implements BrainEngine {
         AND created_at >= ${since}
         ${entitySlug ? sql`AND entity_slug = ${entitySlug}` : sql``}
         ${activeOnly ? sql`AND expired_at IS NULL` : sql``}
+        ${opts?.unconsolidatedOnly ? sql`AND consolidated_at IS NULL` : sql``}
         ${kinds ? sql`AND kind = ANY(${kinds}::text[])` : sql``}
         ${visibility ? sql`AND visibility = ANY(${visibility}::text[])` : sql``}
       ORDER BY created_at DESC, id DESC
@@ -4577,7 +4536,9 @@ export class PostgresEngine implements BrainEngine {
       SELECT t.*, p.slug AS page_slug
       FROM takes t
       JOIN pages p ON p.id = t.page_id
-      WHERE 1=1
+      WHERE (${opts.sourceIds ?? (opts.sourceId ? [opts.sourceId] : null)}::text[] IS NULL
+        OR p.source_id = ANY(${opts.sourceIds ?? (opts.sourceId ? [opts.sourceId] : null)}::text[]))
+        AND (NOT ${opts.excludePrivate === true}::boolean OR (p.deleted_at IS NULL AND ${sql.unsafe(privatePagesFilterFragment('p'))}))
         AND (${opts.page_id ?? null}::int   IS NULL OR t.page_id = ${opts.page_id ?? null}::int)
         AND (${opts.page_slug ?? null}::text IS NULL OR p.slug   = ${opts.page_slug ?? null}::text)
         AND (${opts.holder ?? null}::text   IS NULL OR t.holder  = ${opts.holder ?? null}::text)
@@ -4601,50 +4562,12 @@ export class PostgresEngine implements BrainEngine {
     return rows.map((r) => takeRowToTake(r as Record<string, unknown>));
   }
 
-  async searchTakes(query: string, opts: SearchOpts & { takesHoldersAllowList?: string[] } = {}): Promise<TakeHit[]> {
-    const sql = this.sql;
-    const limit = clampSearchLimit(opts.limit, 30, 100);
-    const rows = await sql`
-      SELECT t.id AS take_id, t.page_id, p.slug AS page_slug, t.row_num,
-             t.claim, t.kind, t.holder, t.weight,
-             similarity(t.claim, ${query})::real AS score
-      FROM takes t
-      JOIN pages p ON p.id = t.page_id
-      WHERE t.active
-        AND t.claim % ${query}
-        AND (
-          ${opts.takesHoldersAllowList ?? null}::text[] IS NULL
-          OR t.holder = ANY(${opts.takesHoldersAllowList ?? null}::text[])
-        )
-      ORDER BY score DESC, t.weight DESC
-      LIMIT ${limit}
-    `;
-    return rows as unknown as TakeHit[];
+  async searchTakes(query: string, opts: SearchOpts = {}): Promise<TakeHit[]> {
+    return readTakes(this.executeRaw.bind(this), query, opts);
   }
 
-  async searchTakesVector(
-    embedding: Float32Array,
-    opts: SearchOpts & { takesHoldersAllowList?: string[] } = {},
-  ): Promise<TakeHit[]> {
-    const sql = this.sql;
-    const limit = clampSearchLimit(opts.limit, 30, 100);
-    const vec = `[${Array.from(embedding).join(',')}]`;
-    const rows = await sql`
-      SELECT t.id AS take_id, t.page_id, p.slug AS page_slug, t.row_num,
-             t.claim, t.kind, t.holder, t.weight,
-             (1 - (t.embedding <=> ${vec}::vector))::real AS score
-      FROM takes t
-      JOIN pages p ON p.id = t.page_id
-      WHERE t.active
-        AND t.embedding IS NOT NULL
-        AND (
-          ${opts.takesHoldersAllowList ?? null}::text[] IS NULL
-          OR t.holder = ANY(${opts.takesHoldersAllowList ?? null}::text[])
-        )
-      ORDER BY t.embedding <=> ${vec}::vector
-      LIMIT ${limit}
-    `;
-    return rows as unknown as TakeHit[];
+  async searchTakesVector(embedding: Float32Array, opts: SearchOpts = {}): Promise<TakeHit[]> {
+    return readTakes(this.executeRaw.bind(this), embedding, opts);
   }
 
   async getTakeEmbeddings(ids: number[]): Promise<Map<number, Float32Array>> {
