@@ -235,13 +235,13 @@ export const BUILTIN_PATTERNS: readonly PatternEntry[] = [
   {
     id: 'speaker-letter-no-time',
     origin: 'builtin',
-    regex: /^(Speaker [A-Z0-9]+):\s*(.*)$/,
+    regex: /^((?:Speaker [A-Z0-9]+|(?:发言人|说话人)\s*[A-Z0-9一二三四五六七八九十]+))[:：]\s*(.*)$/,
     captures: { speaker_group: 1, text_group: 2 },
     date_source: 'frontmatter',
     time_format: '24h',
     timezone_policy: 'utc_assumed_with_warn',
     multi_line: false,
-    quick_reject: /^Speaker /,
+    quick_reject: /^(?:Speaker |发言人|说话人)/,
     score_full_body: true,
     test_positive: [
       'Speaker A: That is exactly the issue.',
@@ -282,7 +282,7 @@ export const BUILTIN_PATTERNS: readonly PatternEntry[] = [
   {
     id: 'bold-name-no-time',
     origin: 'builtin',
-    regex: /^\*\*(?!\[)(.+?):\*\*\s*(.*)$/,
+    regex: /^\*\*(?!\[)(.+?)[:：]\*\*\s*(.*)$/,
     captures: { speaker_group: 1, text_group: 2 },
     date_source: 'frontmatter',
     time_format: '24h',
@@ -601,7 +601,7 @@ export const BUILTIN_PATTERNS: readonly PatternEntry[] = [
     // AI transcript ingest shape: a closed-set role heading opens a turn;
     // continuation lines below it become the message body. Ordinary section
     // headings such as "## Summary" cannot match this registry entry.
-    regex: /^#{2,3}\s+(User|Assistant|Human|System)\s*:?\s*()$/,
+    regex: /^#{2,3}\s+(User|Assistant|Human|System|用户|助手|人类|系统)\s*[:：]?\s*()$/,
     captures: {
       speaker_group: 1,
       text_group: 2,
@@ -611,7 +611,7 @@ export const BUILTIN_PATTERNS: readonly PatternEntry[] = [
     timezone_policy: 'utc_assumed_with_warn',
     multi_line: true,
     score_continuations_as_body: true,
-    quick_reject: /^#{2,3}\s+(?:User|Assistant|Human|System)\b/,
+    quick_reject: /^#{2,3}\s+(?:User|Assistant|Human|System|用户|助手|人类|系统)(?=\s|[:：]|$)/,
     test_positive: ['## User', '## Assistant', '### Human', '## System', '## User:'],
     test_negative: [
       '## Summary',

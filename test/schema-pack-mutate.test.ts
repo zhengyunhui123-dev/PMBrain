@@ -83,6 +83,12 @@ afterEach(() => {
 // ─── BUNDLED-pack guard (D6) ─────────────────────────────────────────────
 
 describe('locateMutablePackFile — bundled guard', () => {
+  it.each(['../outside', '..\\outside', 'D:\\outside', '/outside', '.', '..', 'bad\u0000name'])('rejects path-shaped pack names: %s', name => {
+    expect(() => locateMutablePackFile(name)).toThrow('invalid pack name');
+  });
+  it.each(['notes.v2', 'my_pack'])('keeps existing legal pack names usable: %s', name => {
+    expect(() => locateMutablePackFile(name)).toThrow('no pack file');
+  });
   it('rejects gbrain-base with PACK_READONLY + fork hint', () => {
     expect(() => locateMutablePackFile('gbrain-base')).toThrow(SchemaPackMutationError);
     try { locateMutablePackFile('gbrain-base'); } catch (e) {
@@ -116,6 +122,18 @@ describe('locateMutablePackFile — bundled guard', () => {
 // ─── add_type ───────────────────────────────────────────────────────────
 
 describe('addTypeToPack', () => {
+  it('preserves Chinese types and aliases through mutation and reload', async () => {
+    await withEnv({ GBRAIN_HOME: tmpDir, GBRAIN_AUDIT_DIR: auditDir }, async () => {
+      const path = seedPack('mine', 'json');
+      await addTypeToPack('mine', { name: '会议', primitive: 'temporal', prefix: '会议/' }, { lockDir });
+      await addAliasToType('mine', '会议', '项目会议', { lockDir });
+      await addLinkTypeToPack('mine', { name: '参加会议' }, { lockDir });
+      const after = loadPackFromFile(path);
+      expect(after.page_types.find(t => t.name === '会议')?.aliases).toEqual(['项目会议']);
+      expect(after.page_types.find(t => t.name === 'person')).toBeDefined();
+      expect(after.link_types.find(t => t.name === '参加会议')).toBeDefined();
+    });
+  });
   it('appends a new type to JSON pack and writes atomically', async () => {
     await withEnv({ GBRAIN_HOME: tmpDir, GBRAIN_AUDIT_DIR: auditDir }, async () => {
       const path = seedPack('mine', 'json');

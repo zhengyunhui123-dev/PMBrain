@@ -38,6 +38,12 @@ const minimalFact = (rowNum: number, overrides: Partial<ParsedFact> = {}): Parse
   ...overrides,
 });
 
+test('idea round-trips without changing Chinese uncertainty', () => {
+  const { body } = upsertFactRow('', minimalFact(1, { kind: 'idea', claim: '建议先试点，尚未决定实施。' }));
+  expect(parseFactsFence(body).facts[0]?.kind).toBe('idea');
+  expect(parseFactsFence(body).facts[0]?.claim).toBe('建议先试点，尚未决定实施。');
+});
+
 const wrapFenceBody = (rows: string): string => `# Page
 
 Some preamble.

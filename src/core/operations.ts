@@ -4640,6 +4640,8 @@ const schema_lint: Operation = {
       // Locate by name without trust-gating per-call schema_pack opt
       // (that's a separate axis — this is just file lookup).
       const packName = p.pack as string;
+      const { isValidPackName } = await import('./schema-pack/mutate.ts');
+      if (!isValidPackName(packName)) return { error: 'invalid_pack_name' };
       const candidates = ['pack.yaml', 'pack.yml', 'pack.json'];
       let path: string | null = null;
       for (const c of candidates) {

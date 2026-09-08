@@ -5327,6 +5327,18 @@ export const MIGRATIONS: Migration[] = [
         WHERE private_queue_owner_job_id IS NOT NULL;
     `,
   },
+  {
+    version: 123,
+    name: 'facts_kind_idea_alter',
+    idempotent: true,
+    sql: `
+      DO $$ BEGIN
+      ALTER TABLE facts DROP CONSTRAINT IF EXISTS facts_kind_check;
+      ALTER TABLE facts ADD CONSTRAINT facts_kind_check
+        CHECK (kind IN ('event','preference','commitment','belief','fact','idea'));
+      END $$;
+    `,
+  },
 ];
 
 export const LATEST_VERSION = MIGRATIONS.length > 0

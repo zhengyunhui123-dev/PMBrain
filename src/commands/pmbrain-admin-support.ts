@@ -16,7 +16,7 @@ export const ADMIN_DREAM_SCHEDULE_ENABLED_KEY = 'dream.schedule.enabled';
 export const ADMIN_DREAM_SCHEDULE_TIME_KEY = 'dream.schedule.time';
 export const ADMIN_DREAM_SCHEDULE_LAST_STARTED_DATE_KEY = 'dream.schedule.last_started_date';
 
-export type AdminUploadFileKind = 'markdown' | 'office' | 'image';
+export type AdminUploadFileKind = 'markdown' | 'office' | 'image' | 'session';
 
 /**
  * Validate an untrusted browser-supplied basename without rewriting it.
@@ -47,6 +47,7 @@ export function normalizeAdminUploadFilename(value: unknown): string {
 
 export function classifyAdminUploadFilename(fileName: string): AdminUploadFileKind {
   const lower = fileName.toLowerCase();
+  if (extname(lower) === '.jsonl') return 'session';
   if (isMarkdownFilePath(fileName)) return 'markdown';
   if (isOfficeFilePath(lower)) return 'office';
   if (isImageFilePath(lower)) return 'image';

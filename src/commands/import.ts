@@ -5,6 +5,7 @@ import { cpus, totalmem } from 'os';
 import type { BrainEngine } from '../core/engine.ts';
 import { importFile, importImageFile, isImageFilePath } from '../core/import-file.ts';
 import { importOfficeFile, isOfficeFilePath } from '../core/office-import.ts';
+import { importSessionExport, isSessionExportPath } from '../core/conversation-parser/session-import.ts';
 import { loadConfig, gbrainPath } from '../core/config.ts';
 import { createProgress } from '../core/progress.ts';
 import { getCliOptions, cliOptsToProgressOptions } from '../core/cli-options.ts';
@@ -212,7 +213,7 @@ export async function runImport(
     if (stat.isFile()) {
       sourceType = 'file';
       dir = dirname(dirArg);
-      allFiles = isCollectibleForWalker(
+      allFiles = (strategy !== 'code' && isSessionExportPath(dirArg)) || isCollectibleForWalker(
         dirArg,
         strategy,
         includeImages || (process.env.PMBRAIN_EMBEDDING_MULTIMODAL ?? process.env.GBRAIN_EMBEDDING_MULTIMODAL) === 'true',
@@ -318,7 +319,9 @@ export async function runImport(
       // up images when GBRAIN_EMBEDDING_MULTIMODAL=true so this branch is
       // unreachable when the gate is off; defense-in-depth check anyway.
       const imageImportEnabled = includeImages || (process.env.PMBRAIN_EMBEDDING_MULTIMODAL ?? process.env.GBRAIN_EMBEDDING_MULTIMODAL) === 'true';
-      const result = isImageFilePath(relativePath) && imageImportEnabled
+      const result = sourceType === 'file' && strategy !== 'code' && isSessionExportPath(relativePath)
+        ? await importSessionExport(eng, filePath, relativePath, { noEmbed, sourceId })
+        : isImageFilePath(relativePath) && imageImportEnabled
         ? await importImageFile(eng, filePath, relativePath, { noEmbed, sourceId, forceOcr: documentOcr })
         : includeOffice && isOfficeFilePath(relativePath)
           ? await importOfficeFile(eng, filePath, relativePath, {
