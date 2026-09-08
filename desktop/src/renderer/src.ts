@@ -21,6 +21,7 @@ import type {
   PMBrainDesktopApi,
   DesktopPgliteUpgradeBackupMutation,
   DesktopPgliteUpgradeBackups,
+  DesktopToastDiagnoseResult,
   SetupPayload,
   SidecarState,
   StartupProgress,
@@ -43,6 +44,7 @@ let loadedKnowledgeSourceId = '';
 let knowledgeSourceStatusRequest = 0;
 let recoveryStatusRequest = 0;
 let recoveryOwnerPid: number | null = null;
+let toastStagingPath: string | null = null;
 const CUSTOM_ENDPOINT_PREFIX = 'custom-endpoint-';
 let customCatalog: DesktopCustomProviderCatalog = { chat: [], embedding: [] };
 let customSelection: DesktopCustomProviderSelection = {};
@@ -970,12 +972,72 @@ function renderService(service: SidecarState | null, port?: number): void {
   }
   if (service?.phase === 'failed' && state && !state.setup.needsSetup) {
     $('#recovery-message').textContent = service.message || 'PMBrain 服务启动失败，请重试或查看日志。';
+    $('#recovery-toast').hidden = !isToastCorruptFailure(service);
     switchPanel('recovery');
     void refreshPgliteRecoveryStatus();
   } else if (service?.phase !== 'failed') {
     recoveryOwnerPid = null;
     $<HTMLButtonElement>('#recovery-terminate').hidden = true;
     $('#recovery-owner').hidden = true;
+    $('#recovery-toast').hidden = true;
+  }
+}
+
+function isToastCorruptFailure(service: SidecarState | null): boolean {
+  if (!service || service.phase !== 'failed') return false;
+  if (service.category === 'toast_corrupt') return true;
+  const text = `${service.message ?? ''} ${service.categoryLabelZh ?? ''}`;
+  return /大字段|toast value|pg_toast_/i.test(text);
+}
+
+function formatToastDiagnose(result: DesktopToastDiagnoseResult): string {
+  const parts = [`诊断结果：${result.status}`];
+  if (result.table) parts.push(`损坏位置：${result.table}${result.column ? '.' + result.column : ''}`);
+  if (result.recommendedAction) parts.push(result.recommendedAction);
+  if (result.error) parts.push(result.error);
+  if (result.canAutoRepair) parts.push('可以在副本上修复后替换。知识页、Wiki、Facts 不会删除。');
+  else parts.push('不能自动替换当前库。请使用升级备份恢复，或查看日志。');
+  return parts.join('\n');
+}
+
+async function diagnoseToast(source: 'recovery' | 'repair'): Promise<void> {
+  const diagnoseBtn = $<HTMLButtonElement>(source === 'recovery' ? '#recovery-toast-diagnose' : '#repair-toast-diagnose');
+  const replaceBtn = $<HTMLButtonElement>(source === 'recovery' ? '#recovery-toast-replace' : '#repair-toast-replace');
+  const resultEl = $(source === 'recovery' ? '#recovery-toast-result' : '#repair-toast-result');
+  setBusy(diagnoseBtn, true, '正在诊断…');
+  replaceBtn.hidden = true;
+  try {
+    const result = await window.pmbrainDesktop.diagnosePgliteToast();
+    toastStagingPath = result.stagingPath || null;
+    resultEl.hidden = false;
+    resultEl.textContent = formatToastDiagnose(result);
+    replaceBtn.hidden = !(result.canAutoRepair && toastStagingPath);
+  } catch (error) {
+    setNotice('error', error instanceof Error ? error.message : String(error));
+  } finally {
+    setBusy(diagnoseBtn, false, source === 'recovery' ? '在副本上诊断修复' : '在副本上诊断');
+  }
+}
+
+async function replaceToast(source: 'recovery' | 'repair'): Promise<void> {
+  if (!toastStagingPath) return;
+  if (!confirm(
+    '确认用修复副本替换当前知识库？\n\n只会去掉没有对应知识页的搜索分块。知识页、Wiki、Facts 和原始资料不会删除。\n\n当前库会先改名留底，失败会自动退回原库。',
+  )) return;
+  const replaceBtn = $<HTMLButtonElement>(source === 'recovery' ? '#recovery-toast-replace' : '#repair-toast-replace');
+  setBusy(replaceBtn, true, '正在替换…');
+  try {
+    const result = await window.pmbrainDesktop.replacePgliteToastRepair(toastStagingPath);
+    if (result.status !== 'replaced') {
+      setNotice('error', result.error || '副本修复未完成，当前库未被替换。');
+      return;
+    }
+    setNotice('success', `已替换当前库。Pages ${result.pages ?? '—'} / Chunks ${result.chunks ?? '—'}。原库已留底。`);
+    await window.pmbrainDesktop.retry();
+  } catch (error) {
+    setNotice('error', error instanceof Error ? error.message : String(error));
+  } finally {
+    setBusy(replaceBtn, false, '确认替换当前库');
   }
 }
 
@@ -2093,6 +2155,10 @@ $('#export-diagnostic').addEventListener('click', async () => {
 $('#open-admin').addEventListener('click', () => void window.pmbrainDesktop.openAdmin());
 $('#finish-open-admin').addEventListener('click', () => void window.pmbrainDesktop.openAdmin());
 $('#copy-result').addEventListener('click', () => void window.pmbrainDesktop.copy(lastResult));
+$('#recovery-toast-diagnose').addEventListener('click', () => void diagnoseToast('recovery'));
+$('#recovery-toast-replace').addEventListener('click', () => void replaceToast('recovery'));
+$('#repair-toast-diagnose').addEventListener('click', () => void diagnoseToast('repair'));
+$('#repair-toast-replace').addEventListener('click', () => void replaceToast('repair'));
 $('#recovery-retry').addEventListener('click', async () => {
   const button = $<HTMLButtonElement>('#recovery-retry');
   setBusy(button, true, '正在重启…');

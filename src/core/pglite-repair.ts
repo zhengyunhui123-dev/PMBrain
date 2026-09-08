@@ -8,10 +8,9 @@
  *   resetWal → retry create() once → restore on failure.
  *
  * Safety posture (eng-review 1A/2A/3A/4A + codex round):
- *  - WAL surgery only runs under a CLEANLY-acquired data-dir lock. A reaped
- *    acquisition (dead-PID or corrupt-lock-file reap — the only reaps that
- *    exist post-#2348) refuses with `'possibly-live-writer'`; this module
- *    never force-removes `.gbrain-lock`.
+ *  - WAL surgery refuses a reaped lock unless the previous owner PID is
+ *    confirmed dead, or the lock is leftover from a previous system boot.
+ *    This module never force-removes `.gbrain-lock`.
  *  - Backup is a whole-`pg_wal/`-directory rename into a sibling dir (O(1),
  *    zero extra disk — a real brain's pg_wal is ~144MB and a copy would
  *    transiently double it, ENOSPC-ing exactly on disk-pressure machines);
@@ -277,6 +276,13 @@ export function recordRepairAttempt(
  * sidecar exists. Called by PGLiteEngine.connect() on every non-repaired
  * success and by the seam's 'repaired' arm via recordRepairAttempt.
  */
+export function clearRepairAttemptSidecar(dataDir: string): void {
+  try {
+    const path = sidecarPath(dataDir);
+    if (existsSync(path)) rmSync(path);
+  } catch { /* best-effort */ }
+}
+
 export function closeRepairEpisodeIfOpen(dataDir: string): void {
   try {
     if (!existsSync(sidecarPath(dataDir))) return;
@@ -713,13 +719,13 @@ export async function restoreWalBackup(receipt: WalRepairReceipt): Promise<Resto
 export async function attemptWalRepairAndRetry<T>(
   dataDir: string,
   retryCreate: () => Promise<T>,
-  opts?: { reaped?: boolean },
+  opts?: { reaped?: boolean; previousOwnerConfirmedDead?: boolean },
 ): Promise<WalRepairAttempt<T>> {
   try {
     if (!walRepairEnabled()) {
       return { status: 'skipped', reason: 'disabled', detail: 'PMBRAIN_PGLITE_WAL_REPAIR=off' };
     }
-    if (opts?.reaped) {
+    if (opts?.reaped && !opts.previousOwnerConfirmedDead) {
       return {
         status: 'skipped',
         reason: 'possibly-live-writer',

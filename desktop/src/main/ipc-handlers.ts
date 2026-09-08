@@ -26,6 +26,8 @@ import type { UpdateState } from './update-manager.js';
 import type {
   DesktopPgliteUpgradeBackupMutation,
   DesktopPgliteUpgradeBackups,
+  DesktopToastDiagnoseResult,
+  DesktopToastRepairResult,
 } from '../preload/index.js';
 import type { DesktopKnowledgeSourceStatus } from './knowledge-source-git.js';
 import type { PgliteOwnerStatus } from '../../../src/core/pglite-owner-control.js';
@@ -72,6 +74,8 @@ export interface DesktopIpcHandlers {
   restorePgliteUpgradeBackup: (backupDirectory: string) => Promise<DesktopPgliteUpgradeBackupMutation>;
   setPgliteUpgradeBackupRoot: (directory: string) => Promise<DesktopPgliteUpgradeBackupMutation>;
   openPgliteUpgradeBackup: (target: string) => Promise<void>;
+  diagnosePgliteToast: () => Promise<DesktopToastDiagnoseResult>;
+  replacePgliteToastRepair: (stagingPath: string) => Promise<DesktopToastRepairResult>;
   previousVersion: () => string | undefined;
   pgliteRecoveryStatus: () => Promise<PgliteOwnerStatus>;
   terminatePgliteOwnerAndRetry: (pid: number) => Promise<string | undefined>;
@@ -139,6 +143,8 @@ export function registerDesktopIpcHandlers(handlers: DesktopIpcHandlers): void {
   registerTrustedHandler('desktop:restore-pglite-upgrade-backup', handlers, (_event, backupDirectory: string) => handlers.restorePgliteUpgradeBackup(backupDirectory));
   registerTrustedHandler('desktop:set-pglite-upgrade-backup-root', handlers, (_event, directory: string) => handlers.setPgliteUpgradeBackupRoot(directory));
   registerTrustedHandler('desktop:open-pglite-upgrade-backup', handlers, (_event, target: string) => handlers.openPgliteUpgradeBackup(target));
+  registerTrustedHandler('desktop:diagnose-pglite-toast', handlers, () => handlers.diagnosePgliteToast());
+  registerTrustedHandler('desktop:replace-pglite-toast-repair', handlers, (_event, stagingPath: string) => handlers.replacePgliteToastRepair(stagingPath));
   registerTrustedHandler('desktop:open-previous-release', handlers, async () => {
     const previous = handlers.previousVersion();
     if (!previous) throw new Error('当前没有可用的上一版本记录。');

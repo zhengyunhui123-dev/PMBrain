@@ -87,6 +87,14 @@ export interface LockHandle {
   diagnostics?: LockDiagnostics;
 }
 
+export function previousOwnerConfirmedDeadFromLock(
+  lock: Pick<LockHandle, 'reaped' | 'diagnostics'> | null | undefined,
+): boolean {
+  if (!lock?.reaped) return false;
+  const reason = lock.diagnostics?.reason ?? '';
+  return reason === 'after_pid_not_running' || reason === 'after_previous_system_boot';
+}
+
 export type LockDecision =
   | 'acquire_new'
   | 'archive_stale_lock'
@@ -275,6 +283,13 @@ function reapMarkerPath(dataDir: string): string {
 function recordReap(dataDir: string): void {
   try {
     writeFileSync(reapMarkerPath(dataDir), JSON.stringify({ ts: Date.now(), by: process.pid }), { mode: 0o644 });
+  } catch { /* best-effort */ }
+}
+
+export function clearReapMarker(dataDir: string): void {
+  try {
+    const marker = reapMarkerPath(dataDir);
+    if (existsSync(marker)) rmSync(marker);
   } catch { /* best-effort */ }
 }
 

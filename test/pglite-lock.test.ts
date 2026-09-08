@@ -10,6 +10,8 @@ import {
   readLockMetadata,
   listArchivedLocks,
   inspectLock,
+  previousOwnerConfirmedDeadFromLock,
+  clearReapMarker,
   pruneArchivedLocks,
   LOCK_ARCHIVE_RETENTION_MS,
   LOCK_ARCHIVE_KEEP_NEWEST,
@@ -151,6 +153,7 @@ describe('pglite-lock v2', () => {
     const lock = await acquireLock(TEST_DIR, { inspector, ownerType: 'cli' });
     expect(lock.acquired).toBe(true);
     expect(lock.diagnostics?.reason).toMatch(/pid_not_running|after_pid/);
+    expect(previousOwnerConfirmedDeadFromLock(lock)).toBe(true);
     const archives = listArchivedLocks(TEST_DIR);
     expect(archives.some((p) => p.includes('.stale-') && p.includes('pid_not_running'))).toBe(true);
     await releaseLock(lock);
@@ -174,7 +177,31 @@ describe('pglite-lock v2', () => {
     const lock = await acquireLock(TEST_DIR, { inspector });
     expect(lock.acquired).toBe(true);
     expect(listArchivedLocks(TEST_DIR).some((p) => p.includes('previous_system_boot'))).toBe(true);
+    expect(previousOwnerConfirmedDeadFromLock(lock)).toBe(true);
     await releaseLock(lock);
+  });
+
+  test('clearReapMarker removes the sibling quarantine file', () => {
+    const marker = `${TEST_DIR}.lock-reap.json`;
+    writeFileSync(marker, JSON.stringify({ ts: Date.now(), by: 1 }));
+    clearReapMarker(TEST_DIR);
+    expect(existsSync(marker)).toBe(false);
+  });
+
+  test('previousOwnerConfirmedDeadFromLock is true only after a dead PID or previous boot reap', () => {
+    expect(previousOwnerConfirmedDeadFromLock(undefined)).toBe(false);
+    expect(previousOwnerConfirmedDeadFromLock({
+      reaped: true,
+      diagnostics: { reason: 'after_pid_not_running' } as never,
+    })).toBe(true);
+    expect(previousOwnerConfirmedDeadFromLock({
+      reaped: true,
+      diagnostics: { reason: 'after_corrupt_lock' } as never,
+    })).toBe(false);
+    expect(previousOwnerConfirmedDeadFromLock({
+      reaped: false,
+      diagnostics: { reason: 'after_pid_not_running' } as never,
+    })).toBe(false);
   });
 
   test('5. detects PID reuse via processStartTime mismatch', async () => {
@@ -561,5 +588,14 @@ describe('classifySidecarStartupError', () => {
     const c = classifySidecarStartupError(new Error('搜索索引修复失败，无法确认搜索已恢复。'));
     expect(c.retryable).toBe(false);
     expect(c.labelZh).toBe('搜索索引修复失败');
+  });
+
+  test('toast corruption is not WAL recovery and is not retryable', () => {
+    const c = classifySidecarStartupError(
+      new Error('unexpected chunk number 3 (expected 0) for toast value 191139 in pg_toast_16852'),
+    );
+    expect(c.retryable).toBe(false);
+    expect(c.category).toBe('toast_corrupt');
+    expect(c.labelZh).toContain('不会继续自动重置 WAL');
   });
 });

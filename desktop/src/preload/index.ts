@@ -111,6 +111,30 @@ export interface DesktopPgliteUpgradeBackupMutation {
   listing: DesktopPgliteUpgradeBackups;
 }
 
+export interface DesktopToastDiagnoseResult {
+  status: string;
+  stagingPath: string;
+  productionPath: string | null;
+  canAutoRepair: boolean;
+  table?: string;
+  column?: string;
+  repairability?: string;
+  recommendedAction?: string;
+  row?: Record<string, unknown>;
+  error?: string;
+}
+
+export interface DesktopToastRepairResult {
+  status: 'replaced' | 'refused' | 'needs-confirm';
+  stagingPath?: string;
+  preservedPath?: string;
+  pages?: number;
+  chunks?: number;
+  facts?: number;
+  diagnose?: DesktopToastDiagnoseResult;
+  error?: string;
+}
+
 export interface DesktopDiagnosticBundleResult {
   path: string;
   fileName: string;
@@ -186,6 +210,8 @@ export interface PMBrainDesktopApi {
   restorePgliteUpgradeBackup(backupDirectory: string): Promise<DesktopPgliteUpgradeBackupMutation>;
   setPgliteUpgradeBackupRoot(directory: string): Promise<DesktopPgliteUpgradeBackupMutation>;
   openPgliteUpgradeBackup(target: string): Promise<void>;
+  diagnosePgliteToast(): Promise<DesktopToastDiagnoseResult>;
+  replacePgliteToastRepair(stagingPath: string): Promise<DesktopToastRepairResult>;
   getPgliteRecoveryStatus(): Promise<PgliteOwnerStatus>;
   terminatePgliteOwnerAndRetry(pid: number): Promise<void>;
   retry(): Promise<void>;
@@ -269,6 +295,8 @@ const api: PMBrainDesktopApi = {
   restorePgliteUpgradeBackup: (backupDirectory) => ipcRenderer.invoke('desktop:restore-pglite-upgrade-backup', backupDirectory),
   setPgliteUpgradeBackupRoot: (directory) => ipcRenderer.invoke('desktop:set-pglite-upgrade-backup-root', directory),
   openPgliteUpgradeBackup: (target) => ipcRenderer.invoke('desktop:open-pglite-upgrade-backup', target),
+  diagnosePgliteToast: () => ipcRenderer.invoke('desktop:diagnose-pglite-toast'),
+  replacePgliteToastRepair: (stagingPath) => ipcRenderer.invoke('desktop:replace-pglite-toast-repair', stagingPath),
   getPgliteRecoveryStatus: () => ipcRenderer.invoke('desktop:get-pglite-recovery-status'),
   terminatePgliteOwnerAndRetry: (pid) => ipcRenderer.invoke('desktop:terminate-pglite-owner-and-retry', pid),
   retry: () => ipcRenderer.invoke('desktop:retry'),

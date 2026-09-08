@@ -32,8 +32,8 @@ import {
   PGVECTOR_HNSW_VECTOR_MAX_DIMS,
 } from './vector-index.ts';
 import { DELETE_BATCH_SIZE } from './engine-constants.ts';
-import { acquireLock, releaseLock, type LockHandle } from './pglite-lock.ts';
-import { DatabaseAlreadyOwnedError, PgliteOpenError } from './pglite-errors.ts';
+import { acquireLock, previousOwnerConfirmedDeadFromLock, releaseLock, type LockHandle } from './pglite-lock.ts';
+import { DatabaseAlreadyOwnedError, PgliteOpenError, isPgliteToastInconsistencyError } from './pglite-errors.ts';
 import {
   GIN_REPAIR_DB_UNUSABLE_MESSAGE,
   GinIndexUnusableError,
@@ -177,6 +177,7 @@ export function computeSnapshotSchemaHash(
 export type PgliteInitFailure =
   | 'bunfs'
   | 'wasm-abort'
+  | 'toast-corrupt'
   | 'windows-aborted'
   | 'macos-26-3'
   | 'corrupt'
@@ -207,6 +208,9 @@ export function classifyPgliteInitError(
   if (/EPERM|EACCES|operation not permitted|access is denied/i.test(message)) return 'permission';
   if (/58P01|internal_load_library|type\s+"vector"\s+does\s+not\s+exist|catalog.*corrupt|corrupt/i.test(message)) {
     return 'corrupt';
+  }
+  if (isPgliteToastInconsistencyError(message)) {
+    return 'toast-corrupt';
   }
   if (/aborted\s*\(\)|RuntimeError|unreachable|abort.*runtime|macos.*26\.3|wasm.*runtime/i.test(message)) {
     return 'wasm-abort';
@@ -269,6 +273,16 @@ function resolveLockOwnerType(): 'desktop-sidecar' | 'cli' | 'probe' | 'migratio
   return 'cli';
 }
 
+function walRepairOptsFromLock(lock: LockHandle | null | undefined): {
+  reaped?: boolean;
+  previousOwnerConfirmedDead?: boolean;
+} {
+  return {
+    reaped: lock?.reaped,
+    previousOwnerConfirmedDead: previousOwnerConfirmedDeadFromLock(lock),
+  };
+}
+
 export function buildPgliteInitErrorMessage(
   verdict: PgliteInitFailure,
   original: string,
@@ -285,6 +299,13 @@ export function buildPgliteInitErrorMessage(
         '  Fix: `bun upgrade` (newer Bun mounts the vfs writable). If that\n' +
         '  does not help, run via Node: `node src/cli.ts` or install pmbrain\n' +
         '  using the Node-based path. See #1340 for details.';
+      break;
+    case 'toast-corrupt':
+      hint =
+        '  检测到数据库大字段数据损坏，不会继续自动重置 WAL。\n' +
+        '  请使用 `pmbrain repair toast-diagnose --staging <副本>` 定位损坏行，\n' +
+        '  或从软件修复恢复更早的健康备份。PMBrain 不会自动覆盖当前知识库。\n' +
+        `  ${GIN_REPAIR_DB_UNUSABLE_MESSAGE}`;
       break;
     case 'wasm-abort':
       hint =
@@ -357,6 +378,7 @@ export class PGLiteEngine implements BrainEngine {
   readonly kind = 'pglite' as const;
   private _db: PGLiteDB | null = null;
   private _lock: LockHandle | null = null;
+  private _dataDir: string | undefined;
   walRepairReceipt: WalRepairReceipt | null = null;
   // Tier 3: when GBRAIN_PGLITE_SNAPSHOT loaded a post-initSchema state into
   // PGlite.create(loadDataDir), initSchema is a no-op (schema is already
@@ -372,6 +394,7 @@ export class PGLiteEngine implements BrainEngine {
   async connect(config: EngineConfig): Promise<void> {
     this.walRepairReceipt = null;
     const dataDir = config.database_path || undefined; // undefined = in-memory
+    this._dataDir = dataDir;
 
     // Acquire file lock to prevent concurrent PGLite access (crashes with Aborted())
     try {
@@ -423,7 +446,7 @@ export class PGLiteEngine implements BrainEngine {
         const attempt = await attemptWalRepairAndRetry(
           dataDir,
           openAfterRepair,
-          { reaped: this._lock?.reaped },
+          walRepairOptsFromLock(this._lock),
         );
         if (attempt.status === 'repaired') {
           this._db = attempt.db;
@@ -452,7 +475,7 @@ export class PGLiteEngine implements BrainEngine {
           const attempt = await attemptWalRepairAndRetry(
             dataDir,
             openAfterRepair,
-            { reaped: this._lock?.reaped },
+            walRepairOptsFromLock(this._lock),
           );
           if (attempt.status === 'repaired') {
             this._db = attempt.db;
@@ -535,9 +558,41 @@ export class PGLiteEngine implements BrainEngine {
     }
   }
 
+  private async closeHandleKeepLock(): Promise<void> {
+    const db = this._db;
+    this._db = null;
+    if (!db) return;
+    try {
+      await db.close();
+    } catch {
+      /* reopen after WAL repair */
+    }
+  }
+
   async initSchema(): Promise<void> {
-    // Tier 3: snapshot was loaded into PGlite — schema + migrations already
-    // applied. Nothing to do. Returns immediately.
+    try {
+      await this.applySchemaAndMigrations();
+    } catch (err) {
+      const original = stringifyPgliteInitError(err);
+      if (!this._dataDir || classifyPgliteInitError(original) !== 'wasm-abort') throw err;
+      await this.closeHandleKeepLock();
+      const attempt = await attemptWalRepairAndRetry(
+        this._dataDir,
+        () => preservingProcessExitCode(() => PGlite.create({
+          dataDir: this._dataDir,
+          extensions: { vector, pg_trgm },
+        })),
+        walRepairOptsFromLock(this._lock),
+      );
+      if (attempt.status !== 'repaired') throw err;
+      this._db = attempt.db;
+      this.walRepairReceipt = attempt.receipt;
+      console.warn(buildWalRepairNotice(attempt.receipt));
+      await this.applySchemaAndMigrations();
+    }
+  }
+
+  private async applySchemaAndMigrations(): Promise<void> {
     if (this._snapshotLoaded) {
       await this.ensureGinIndexesHealthy();
       return;

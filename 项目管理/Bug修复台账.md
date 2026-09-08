@@ -1,5 +1,32 @@
 # Bug 修复台账
 
+## 2026-09-08 PMBrain 1.3.51 定位并在副本上清除 content_chunks toast 损坏
+
+- 时间：2026-09-08
+- 版本号：Core 1.3.51；Desktop 1.1.82
+- 标题：toast 改为独立损坏类；在 staging 上定位 pg_toast_16852 并去掉无主分块
+- 描述：稳定错误 `toast value 191139 in pg_toast_16852` 属于 `content_chunks` 大字段，不是单纯 WAL。自动 WAL 重置已停用。只读副本确认：现存 2374 个 Page 正文可读；损坏在已不存在的 page_id 926、2114 的 57 条孤儿 chunks（含 191139/312829）。1.1.79 冷备含同一损坏。repair 副本用可读 chunks 重写 `content_chunks` 后连续打开 3 次、initSchema、chunk_text/compiled_truth 扫描通过。正式库未替换。
+- 是否完成：是。用户确认后已替换正式库。
+- 最终结果：2026-09-08 用户确认替换。已停桌面，正式库改名为 `C:\Users\zhengyunhui\.pmbrain\brain.pglite.pre-toast-repair-20260908T144936Z`，修复副本拷入正式路径。打开验证：initSchema 通过，Pages 2374、Chunks 23025、Facts 1，toast 191139 未再出现。旧库未删。未跑 GitHub 或 `build:win`。
+
+## 2026-09-08 PMBrain 1.3.50 启动自愈被锁回收跳过，恢复成功被当成失败
+
+- 时间：2026-09-08
+- 版本号：Core 1.3.50；Desktop 1.1.81
+- 标题：上一进程已死时仍做 WAL 自愈；恢复命令打印成功 JSON 后不再当失败
+- 描述：1.1.80 把 toast 当 WAL 类错误，但 sidecar 崩溃后锁被回收，自愈被当成“可能还有人在写”直接跳过，所以打包后仍打不开。软件修复恢复 1.1.79 冷备时，校验副本上的 WAL 修复会把进程退出码留成 1，界面把已经成功的 `status:restored` 当成失败。现确认上一 PID 已死或属于上次开机残留后允许自愈；恢复成功后清掉库目录旁的锁回收标记和修复冷却文件；桌面端按创建冷备同样的方式识别恢复成功 JSON。不会自动覆盖当前知识库。
+- 是否完成：是，代码修复完成。
+- 最终结果：定向测试覆盖锁回收后自愈、恢复 JSON 识别、旁路标记清理。用户现有 `brain.pglite` 未改。重新打包后再点一次「重新启动服务」。若日志仍是 toast value 191139 且自愈失败，说明 1.1.79 冷备本身大字段页已坏，需要用户明确同意后再处理更早备份或手术修复。不要连续反复点启动。未跑 GitHub 或 `build:win`。
+
+## 2026-09-08 PMBrain 1.3.49 PGLite toast 页不一致导致安装后无法启动
+
+- 时间：2026-09-08
+- 版本号：Core 1.3.49；Desktop 1.1.80
+- 标题：toast 大字段页不一致时尝试 WAL 自愈，不再让 GIN 检查拆坏页把 sidecar 直接打死
+- 描述：打包安装 1.1.79 后 sidecar 退出，报 `unexpected chunk number 3 (expected 0) for toast value … in pg_toast_…`。这是 PGLite 大字段页/WAL 不一致，常见于升级时服务被中断。原先自动 WAL 修复只认 `Aborted()`，这类错误被当成未知失败。现把它纳入与异常关闭同一类修复；GIN 健康检查不再 SELECT `compiled_truth` 去拆大字段。不会自动覆盖当前库。
+- 是否完成：是，代码修复完成。
+- 最终结果：分类与 GIN 契约测试已加。用户现有 `brain.pglite` 未改。升级前冷备仍在 `D:\backups\20260908T102331309Z-1.1.79-943b81a5`。重新打包后先点一次「重新启动服务」让 WAL 自愈；若仍失败，到「软件修复」恢复该冷备。不要连续反复点启动。未跑 GitHub 或 `build:win`。
+
 ## 2026-09-07 PMBrain 1.3.43 远程关系隐私策略测试与实现对齐
 
 - 时间：2026-09-07

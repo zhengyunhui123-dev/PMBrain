@@ -14,6 +14,7 @@ import {
 } from './config-manager.js';
 import { DatabaseUpgradeController } from './database/database-upgrade.js';
 import { PgliteBackupController } from './database/pglite-backup.js';
+import { ToastRepairController } from './database/toast-repair-controller.js';
 import { buildDiagnosticBundle } from './diagnostics/diagnostic-bundle.js';
 import { SharedAccessController } from './integration/shared-access-controller.js';
 import { writeWorkbuddyUserAgent } from './integration/user-agent-writer.js';
@@ -125,6 +126,16 @@ const pgliteBackupController = new PgliteBackupController({
   runtime,
   runCliChecked,
   sendStartupProgress,
+  log: message => logger?.write('desktop', message),
+});
+
+const toastRepairController = new ToastRepairController({
+  setupInfo: getSetupInfo,
+  runtime,
+  runCliChecked,
+  sendStartupProgress,
+  hideStartupProgress,
+  stopSidecar: () => sidecarController.stop(),
   log: message => logger?.write('desktop', message),
 });
 
@@ -403,6 +414,8 @@ if (!app.requestSingleInstanceLock()) {
         const error = await shell.openPath(path);
         if (error) throw new Error(`无法打开备份目录：${error}`);
       },
+      diagnosePgliteToast: () => toastRepairController.diagnose(),
+      replacePgliteToastRepair: stagingPath => toastRepairController.applyAndReplace(stagingPath),
       previousVersion: () => desktopVersionHistory.previous,
       pgliteRecoveryStatus: () => inspectDesktopPgliteRecovery(pgliteRecoveryDependencies),
       terminatePgliteOwnerAndRetry: pid => terminateDesktopPgliteOwnerAndRetry(

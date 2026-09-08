@@ -6,6 +6,13 @@ describe('software repair UI contract', () => {
   const html = readFileSync(resolve(import.meta.dir, '../src/renderer/index.html'), 'utf8');
   const css = readFileSync(resolve(import.meta.dir, '../src/renderer/style.css'), 'utf8');
 
+  test('software repair exposes toast diagnose and confirm replace', () => {
+    expect(html).toContain('id="repair-toast-diagnose"');
+    expect(html).toContain('id="repair-toast-replace"');
+    expect(html).toContain('大字段损坏修复');
+    expect(html).toContain('pre-toast-repair');
+  });
+
   test('diagnostic export keeps the visible primary-button label', () => {
     expect(html).toContain('<button class="primary" id="export-diagnostic"><span>导出诊断包</span>');
     expect(css).toContain('.diagnostic-export-card > div > span');

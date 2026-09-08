@@ -18,8 +18,9 @@ import { PGlite } from '@electric-sql/pglite';
 import { vector } from '@electric-sql/pglite/vector';
 import { pg_trgm } from '@electric-sql/pglite/contrib/pg_trgm';
 import { configDir } from './config.ts';
-import { acquireLock, releaseLock } from './pglite-lock.ts';
-import { attemptWalRepairAndRetry } from './pglite-repair.ts';
+import { acquireLock, clearReapMarker, releaseLock } from './pglite-lock.ts';
+import { isPgliteToastInconsistencyError } from './pglite-errors.ts';
+import { attemptWalRepairAndRetry, clearRepairAttemptSidecar } from './pglite-repair.ts';
 import { pgControlLooksCleanlyShutdown } from './pglite-resetwal.ts';
 import { PGLITE_DATA_PROTECTION_POLICY } from './pglite-data-policy.ts';
 
@@ -262,6 +263,7 @@ async function preservingProcessExitCode<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 function isWasmAbortMessage(message: string): boolean {
+  if (isPgliteToastInconsistencyError(message)) return false;
   return /aborted\s*\(\)|RuntimeError|unreachable|abort.*runtime|wasm.*runtime/i.test(message);
 }
 
@@ -301,46 +303,48 @@ async function openVerifiedRestoreCopy(
 }
 
 async function inspectRestoreCopy(databasePath: string): Promise<PgliteRecoveryValidation> {
-  const open = () => preservingProcessExitCode(() => PGlite.create({
-    dataDir: databasePath,
-    extensions: { vector, pg_trgm },
-  }));
-  const db = await openVerifiedRestoreCopy(databasePath, open);
-  try {
-    const tableResult = await db.query<{ tablename: string }>(
-      "SELECT tablename FROM pg_tables WHERE schemaname = 'public'",
-    );
-    const tables = new Set(tableResult.rows.map(row => row.tablename));
-    if (!tables.has('config') && !tables.has('pages')) {
-      throw new Error('Recovery verification opened the directory, but it is not a recognizable PMBrain PGLite database.');
-    }
-
-    let schemaVersion: number | null = null;
-    if (tables.has('config')) {
-      const versionResult = await db.query<{ value: unknown }>(
-        "SELECT value FROM config WHERE key = 'schema_version' LIMIT 1",
+  return preservingProcessExitCode(async () => {
+    const open = () => PGlite.create({
+      dataDir: databasePath,
+      extensions: { vector, pg_trgm },
+    });
+    const db = await openVerifiedRestoreCopy(databasePath, open);
+    try {
+      const tableResult = await db.query<{ tablename: string }>(
+        "SELECT tablename FROM pg_tables WHERE schemaname = 'public'",
       );
-      const raw = versionResult.rows[0]?.value;
-      const parsed = Number(typeof raw === 'string' ? raw.replace(/^\"|\"$/g, '') : raw);
-      if (Number.isFinite(parsed)) schemaVersion = parsed;
-    }
+      const tables = new Set(tableResult.rows.map(row => row.tablename));
+      if (!tables.has('config') && !tables.has('pages')) {
+        throw new Error('Recovery verification opened the directory, but it is not a recognizable PMBrain PGLite database.');
+      }
 
-    const protectedTableCounts: Record<string, number> = {};
-    for (const table of PROTECTED_COUNT_TABLES) {
-      if (!tables.has(table)) continue;
-      const count = await db.query<{ count: string | number }>(`SELECT COUNT(*)::bigint AS count FROM ${table}`);
-      protectedTableCounts[table] = Number(count.rows[0]?.count ?? 0);
-    }
+      let schemaVersion: number | null = null;
+      if (tables.has('config')) {
+        const versionResult = await db.query<{ value: unknown }>(
+          "SELECT value FROM config WHERE key = 'schema_version' LIMIT 1",
+        );
+        const raw = versionResult.rows[0]?.value;
+        const parsed = Number(typeof raw === 'string' ? raw.replace(/^\"|\"$/g, '') : raw);
+        if (Number.isFinite(parsed)) schemaVersion = parsed;
+      }
 
-    return {
-      status: 'verified',
-      verified_at: new Date().toISOString(),
-      schema_version: schemaVersion,
-      protected_table_counts: protectedTableCounts,
-    };
-  } finally {
-    await preservingProcessExitCode(() => db.close());
-  }
+      const protectedTableCounts: Record<string, number> = {};
+      for (const table of PROTECTED_COUNT_TABLES) {
+        if (!tables.has(table)) continue;
+        const count = await db.query<{ count: string | number }>(`SELECT COUNT(*)::bigint AS count FROM ${table}`);
+        protectedTableCounts[table] = Number(count.rows[0]?.count ?? 0);
+      }
+
+      return {
+        status: 'verified',
+        verified_at: new Date().toISOString(),
+        schema_version: schemaVersion,
+        protected_table_counts: protectedTableCounts,
+      };
+    } finally {
+      await db.close();
+    }
+  });
 }
 
 function parseManifest(backupDirectory: string): PgliteUpgradeBackupManifest {
@@ -644,6 +648,9 @@ export async function restorePgliteUpgradeBackup(options: {
   } catch {
     // Live database already restored; leftover previous copy is not a restore failure.
   }
+
+  clearReapMarker(databasePath);
+  clearRepairAttemptSidecar(databasePath);
 
   return {
     status: 'restored',

@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
+import { readFileSync } from 'node:fs';
 import {
   classifyErrorCode,
   isInfrastructureFailureCode,
@@ -113,6 +114,14 @@ describe('PGLite GIN corruption handling', () => {
     expect(isDatabaseUnusableError(new Error('PGLite failed to initialize its WASM runtime.'))).toBe(true);
     expect(isDatabaseUnusableError({ name: 'PgliteOpenError', message: 'open failed' })).toBe(true);
     expect(isGinCorruptionError(new Error('Aborted()'))).toBe(false);
+    expect(isDatabaseUnusableError(new Error('unexpected chunk number 3 (expected 0) for toast value 191139 in pg_toast_16852'))).toBe(true);
+    expect(isGinCorruptionError(new Error('unexpected chunk number 3 (expected 0) for toast value 191139 in pg_toast_16852'))).toBe(false);
+  });
+
+  test('GIN search verification does not detoast compiled_truth', () => {
+    const src = readFileSync(new URL('../src/core/pglite-gin-repair.ts', import.meta.url), 'utf8');
+    expect(src).toMatch(/SELECT title, slug\s+FROM pages/);
+    expect(src).not.toMatch(/SELECT title, slug, compiled_truth/);
   });
 
   test('lists GIN indexes from pg_am instead of a hardcoded name list', async () => {
