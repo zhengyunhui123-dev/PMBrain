@@ -71,6 +71,7 @@ export const ALL_EXTRACT_KINDS: readonly FactKind[] = [
 ] as const;
 
 export interface ExtractInput {
+  throwOnError?: boolean;
   turnText: string;
   /** Opaque session id (MCP _meta.session_id, CLI --session, or null). */
   sessionId?: string | null;
@@ -201,13 +202,17 @@ export async function extractFactsFromTurn(input: ExtractInput): Promise<Extract
     // Re-throw aborts; absorb other errors as "no extraction" — caller's
     // `put_page` backstop will still record the page itself.
     if (isAbort(err)) throw err;
+    if (input.throwOnError) throw err;
     return [];
   }
 
   if (result.stopReason === 'refusal' || result.stopReason === 'content_filter') return [];
 
   const parsedRaw = parseExtractorJson(result.text);
-  if (!parsedRaw) return [];
+  if (!parsedRaw) {
+    if(input.throwOnError)throw new Error('Facts extraction returned invalid JSON');
+    return [];
+  }
 
   const junkFilterOn = await isJunkFilterEnabled(input.engine);
   const facts: ExtractedFact[] = [];

@@ -123,6 +123,8 @@ import {
   BrainPageDetailResponseSchema,
   BrainFactDetailResponseSchema,
   BrainFactsResponseSchema,
+  MemoryWritebackStatusSchema,
+  MemoryWritebackUpdateRequestSchema,
   BrainPagesResponseSchema,
   KnowledgeGraphMetaResponseSchema,
   KnowledgeGraphGlobalResponseSchema,
@@ -786,6 +788,58 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
       }));
     } catch (e) {
       res.status(500).json({ error: e instanceof Error ? e.message : 'pages_failed' });
+    }
+  });
+
+  app.post('/admin/api/memory/writeback/agent', requireAdmin, express.json({ limit: '4kb' }), async (req: Request, res: Response) => {
+    try {
+      const {agent,mcpConfirmed,serveUrl,remove}=req.body??{};
+      if(remove===true&&['codex','claude'].includes(agent)){
+        const {removeWritebackAgent}=await import('../core/bootstrap/writeback-agents.ts');
+        const {getWritebackStatus}=await import('../core/facts/writeback-set.ts');
+        removeWritebackAgent({agent});
+        sendAdminContract(res,MemoryWritebackStatusSchema,await getWritebackStatus(engine));
+        return;
+      }
+      if(!['codex','claude'].includes(agent)||mcpConfirmed!==true)throw new Error('请先成功接入 Codex 或 Claude Code MCP');
+      const url=new URL(serveUrl);
+      if(url.protocol!=='http:'||url.hostname!=='127.0.0.1'||url.pathname!=='/mcp')throw new Error('深度接入只允许本机 PMBrain');
+      const {resolveMainSourceId}=await import('../core/source-resolver.ts');
+      const {getWritebackStatus}=await import('../core/facts/writeback-set.ts');
+      const {installWritebackAgent,buildWritebackHookCommand}=await import('../core/bootstrap/writeback-agents.ts');
+      const state=await getWritebackStatus(engine);
+      const sourceId=await resolveMainSourceId(engine);
+      installWritebackAgent({agent,mcpConfirmed,sourceId,serveUrl,mode:state.mode,ttl:state.ttl,visibility:state.visibility,command:buildWritebackHookCommand(sourceId)});
+      sendAdminContract(res,MemoryWritebackStatusSchema,await getWritebackStatus(engine));
+    }catch(e){res.status(400).json({error:e instanceof Error?e.message:'agent_writeback_failed'});}
+  });
+
+  app.get('/admin/api/memory/writeback', requireAdmin, async (_req: Request, res: Response) => {
+    try {
+      const { getWritebackStatus } = await import('../core/facts/writeback-set.ts');
+      sendAdminContract(res, MemoryWritebackStatusSchema, await getWritebackStatus(engine));
+    } catch (e) {
+      res.status(500).json({ error: e instanceof Error ? e.message : 'memory_writeback_failed' });
+    }
+  });
+
+  app.post('/admin/api/memory/writeback', requireAdmin, express.json({ limit: '4kb' }), async (req: Request, res: Response) => {
+    try {
+      const parsed = MemoryWritebackUpdateRequestSchema.safeParse(req.body ?? {});
+      if (!parsed.success) {
+        res.status(400).json({ error: 'invalid_params' });
+        return;
+      }
+      const { setWritebackMode, stampWritebackNoticeShown, getWritebackStatus } = await import('../core/facts/writeback-set.ts');
+      if (parsed.data.mode) {
+        await setWritebackMode(engine, parsed.data.mode, { ttl: parsed.data.ttl });
+      }
+      if (parsed.data.notice_shown || parsed.data.mode) {
+        await stampWritebackNoticeShown(engine);
+      }
+      sendAdminContract(res, MemoryWritebackStatusSchema, await getWritebackStatus(engine));
+    } catch (e) {
+      res.status(400).json({ error: e instanceof Error ? e.message : 'memory_writeback_update_failed' });
     }
   });
 

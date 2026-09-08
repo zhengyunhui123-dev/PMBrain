@@ -1,4 +1,6 @@
 import { app, dialog, nativeTheme, type BrowserWindow } from 'electron';
+import type { MemoryWritebackStatus, MemoryWritebackUpdate } from '../../../../shared/contracts/brain.js';
+import { askWritebackOnce } from './memory-writeback-prompt.js';
 import {
   getDesktopPreferences,
   getSetupInfo,
@@ -26,6 +28,7 @@ export interface SystemSettingsControllerDependencies {
   sidecar: SidecarController;
   getMainWindow: () => BrowserWindow | null;
   refreshTray: () => void;
+  convergeMemoryRules: () => Promise<void>;
 }
 
 export class SystemSettingsController {
@@ -70,6 +73,42 @@ export class SystemSettingsController {
       gateway: this.dependencies.lan.status,
       ...(this.dependencies.lan.warning ? { warning: this.dependencies.lan.warning } : {}),
     };
+  }
+
+  async memoryWriteback(): Promise<MemoryWritebackStatus> {
+    const sidecar = this.dependencies.sidecar.current;
+    if (!sidecar) throw new Error('本地服务尚未启动，无法读取长期记忆设置。');
+    return sidecar.adminRequest('/admin/api/memory/writeback');
+  }
+
+  async saveMemoryWriteback(payload: MemoryWritebackUpdate): Promise<MemoryWritebackStatus> {
+    const sidecar = this.dependencies.sidecar.current;
+    if (!sidecar) throw new Error('本地服务尚未启动，无法保存长期记忆设置。');
+    const state=await sidecar.adminRequest<MemoryWritebackStatus>('/admin/api/memory/writeback', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    if(payload.mode){
+      try { await this.dependencies.convergeMemoryRules(); }
+      finally { await sidecar.restart(); }
+    }
+    return state;
+  }
+
+  private memoryPrompt: Promise<void> | null = null;
+
+  async askMemoryWriteback(): Promise<void> {
+    if(this.memoryPrompt)return this.memoryPrompt;
+    this.memoryPrompt=askWritebackOnce({
+      shared:getDesktopPreferences().networkMode==='shared',
+      read:()=>this.memoryWriteback(),
+      save:value=>this.saveMemoryWriteback(value),
+      choose:async()=>{
+        const result=await dialog.showMessageBox({type:'question',title:'AI 长期记忆',message:'是否让接入的 AI 跨会话记住你？',detail:'偏好、决定和承诺保存在 PMBrain Facts；临时记忆会过期。默认关闭，可随时在系统设置修改。',buttons:['关闭','重要内容（推荐）','全部事实','以后再说'],defaultId:3,cancelId:3,noLink:true});
+        return result.response;
+      },
+    }).finally(()=>{this.memoryPrompt=null;});
+    return this.memoryPrompt;
   }
 
   sendState(): DesktopSystemSettingsState {

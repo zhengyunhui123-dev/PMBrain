@@ -165,13 +165,14 @@ const sidecarController: SidecarController = new SidecarController({
   hideStartupProgress,
 });
 
-const sharedAccessController = new SharedAccessController(sidecarController, lanController);
+const sharedAccessController = new SharedAccessController(sidecarController, lanController, () => systemSettingsController.askMemoryWriteback());
 const workBuddyAgentController = new WorkBuddyAgentController({
   sidecar: sidecarController,
   configureMcp: () => sharedAccessController.configure('workbuddy', 'api_key'),
 });
 
 const systemSettingsController: SystemSettingsController = new SystemSettingsController({
+  convergeMemoryRules: () => workBuddyAgentController.convergeMemoryRules(),
   lan: lanController,
   sidecar: sidecarController,
   getMainWindow: () => windowController.current,
@@ -363,6 +364,8 @@ if (!app.requestSingleInstanceLock()) {
       setTheme: value => systemSettingsController.setTheme(value),
       systemSettings: () => systemSettingsController.currentState(),
       saveSystemSettings: payload => systemSettingsController.save(payload),
+      memoryWriteback: () => systemSettingsController.memoryWriteback(),
+      saveMemoryWriteback: payload => systemSettingsController.saveMemoryWriteback(payload),
       sharedAccess: () => sharedAccessController.read(),
       createSharedIntegration: payload => sharedAccessController.create(payload),
       revokeSharedIntegration: credentialName => sharedAccessController.revoke(credentialName),
@@ -378,7 +381,7 @@ if (!app.requestSingleInstanceLock()) {
       ),
       saveSetup: payload => setupController.apply(payload),
       chooseEmbeddingRebuild,
-      configureIntegration: (client, kind) => sharedAccessController.configure(client, kind),
+      configureIntegration: (client, kind, deep) => sharedAccessController.configure(client, kind, deep),
       writeWorkbuddyUserAgent: () => writeWorkbuddyUserAgent(),
       getWorkbuddyAgentIntegration: () => workBuddyAgentController.read(),
       installWorkbuddyAgent: workspace => workBuddyAgentController.install(workspace),

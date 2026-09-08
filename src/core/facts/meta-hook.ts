@@ -50,7 +50,7 @@ export async function getBrainHotMemoryMeta(
   const sessionId = (ctx as { source_session?: string }).source_session
     ?? null;
   const allowListHash = hashAllowList(ctx.takesHoldersAllowList);
-  const cacheKey = `${sourceId}::${sessionId ?? '_'}::${allowListHash}`;
+  const cacheKey = `${sourceId}::${sessionId ?? '_'}::${ctx.remote === false ? 'local' : 'remote'}::${allowListHash}`;
 
   const ttl = Math.max(1000, opts.ttlMs ?? DEFAULT_TTL_MS);
   const topK = Math.max(1, Math.min(opts.topK ?? DEFAULT_TOP_K, 25));
@@ -104,7 +104,8 @@ export async function getBrainHotMemoryMeta(
       })),
     },
   };
-  _cache.set(cacheKey, { expiresAt: Date.now() + ttl, payload });
+  const expiry=Math.min(Date.now()+ttl,...rows.map(r=>r.valid_until?new Date(r.valid_until).getTime():Infinity));
+  _cache.set(cacheKey, { expiresAt: expiry, payload });
   return payload;
 }
 

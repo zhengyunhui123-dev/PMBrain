@@ -7,7 +7,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { IntegrationInfo, IntegrationResult } from '../src/main/integration-manager.js';
-import { WorkBuddyAgentPackInstaller } from '../src/main/integration/agent-integration/index.js';
+import { WorkBuddyAgentPackInstaller, WorkBuddyAdapter, WORKBUDDY_AGENT_PACK_VERSION } from '../src/main/integration/agent-integration/index.js';
 import { WorkBuddyAgentController } from '../src/main/integration/workbuddy-agent-controller.js';
 import type { SidecarManager } from '../src/main/sidecar-manager.js';
 
@@ -161,4 +161,23 @@ describe('WorkBuddy 深度接入 controller', () => {
     expect(existsSync(testbed.config)).toBe(false);
     expect(existsSync(join(testbed.workspace, '.codebuddy'))).toBe(false);
   });
+});
+
+
+test('关闭记忆收敛只处理已安装规则，不配置 MCP 或覆盖用户修改',async()=>{
+  const t=harness();
+  await t.controller.convergeMemoryRules();
+  expect(t.configureCalls()).toBe(0);
+  await t.controller.install(t.workspace);
+  const manifestPath=new WorkBuddyAdapter({workspace:t.workspace}).paths().manifest;
+  const manifest=JSON.parse(readFileSync(manifestPath,'utf8'));
+  manifest.packVersion='1';
+  writeFileSync(manifestPath,JSON.stringify(manifest));
+  await t.controller.convergeMemoryRules();
+  expect(JSON.parse(readFileSync(manifestPath,'utf8')).packVersion).toBe(WORKBUDDY_AGENT_PACK_VERSION);
+  expect(t.configureCalls()).toBe(1);
+  const rules=join(t.workspace,'.codebuddy','rules','pmbrain.md');
+  writeFileSync(rules,'用户自己的规则');
+  await expect(t.controller.convergeMemoryRules()).rejects.toThrow('未覆盖');
+  expect(readFileSync(rules,'utf8')).toBe('用户自己的规则');
 });

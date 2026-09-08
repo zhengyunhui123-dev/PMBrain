@@ -1,3 +1,4 @@
+import type { MemoryWritebackStatus, MemoryWritebackUpdate } from '../../../shared/contracts/brain.js';
 import {
   app,
   clipboard,
@@ -40,6 +41,8 @@ export interface DesktopIpcHandlers {
   setTheme: (value: DesktopTheme) => unknown;
   systemSettings: () => DesktopSystemSettingsState;
   saveSystemSettings: (payload: DesktopSystemSettingsPayload) => Promise<DesktopSystemSettingsSaveResult>;
+  memoryWriteback: () => Promise<unknown>;
+  saveMemoryWriteback: (payload: MemoryWritebackUpdate) => Promise<unknown>;
   sharedAccess: () => Promise<unknown>;
   createSharedIntegration: (payload: SharedIntegrationPayload) => Promise<unknown>;
   revokeSharedIntegration: (credentialName: string) => Promise<unknown>;
@@ -53,7 +56,7 @@ export interface DesktopIpcHandlers {
   saveAdvancedModelConfig: (values: AdvancedModelWriteInput) => Promise<unknown>;
   saveSetup: (payload: SetupPayload) => Promise<unknown>;
   chooseEmbeddingRebuild: (choice: 'wait' | 'defer') => void;
-  configureIntegration: (client: IntegrationClient, kind: CredentialKind) => Promise<unknown>;
+  configureIntegration: (client: IntegrationClient, kind: CredentialKind, deep?: boolean) => Promise<unknown>;
   writeWorkbuddyUserAgent: () => Promise<unknown>;
   getWorkbuddyAgentIntegration: () => Promise<unknown>;
   installWorkbuddyAgent: (workspace: string) => Promise<unknown>;
@@ -95,6 +98,8 @@ export function registerDesktopIpcHandlers(handlers: DesktopIpcHandlers): void {
   registerTrustedHandler('desktop:set-theme', handlers, (_event, value: DesktopTheme) => handlers.setTheme(value));
   registerTrustedHandler('desktop:get-system-settings', handlers, () => handlers.systemSettings());
   registerTrustedHandler('desktop:save-system-settings', handlers, (_event, payload: DesktopSystemSettingsPayload) => handlers.saveSystemSettings(payload));
+  registerTrustedHandler('desktop:get-memory-writeback', handlers, () => handlers.memoryWriteback());
+  registerTrustedHandler('desktop:save-memory-writeback', handlers, (_event, payload: MemoryWritebackUpdate) => handlers.saveMemoryWriteback(payload));
   registerTrustedHandler('desktop:get-shared-access', handlers, () => handlers.sharedAccess());
   registerTrustedHandler('desktop:create-shared-integration', handlers, (_event, payload: SharedIntegrationPayload) => handlers.createSharedIntegration(payload));
   registerTrustedHandler('desktop:revoke-shared-integration', handlers, (_event, credentialName: string) => handlers.revokeSharedIntegration(credentialName));
@@ -117,7 +122,7 @@ export function registerDesktopIpcHandlers(handlers: DesktopIpcHandlers): void {
   registerTrustedHandler('desktop:save-advanced-model-config', handlers, (_event, values: AdvancedModelWriteInput) => handlers.saveAdvancedModelConfig(values ?? {}));
   registerTrustedHandler('desktop:save-setup', handlers, (_event, payload: SetupPayload) => handlers.saveSetup(payload));
   registerTrustedHandler('desktop:choose-embedding-rebuild', handlers, (_event, choice: 'wait' | 'defer') => handlers.chooseEmbeddingRebuild(choice));
-  registerTrustedHandler('desktop:configure-integration', handlers, (_event, client: IntegrationClient, kind: CredentialKind) => handlers.configureIntegration(client, kind));
+  registerTrustedHandler('desktop:configure-integration', handlers, (_event, client: IntegrationClient, kind: CredentialKind, deep?: boolean) => handlers.configureIntegration(client, kind, deep));
   registerTrustedHandler('desktop:write-workbuddy-user-agent', handlers, () => handlers.writeWorkbuddyUserAgent());
   registerTrustedHandler('desktop:get-workbuddy-agent-integration', handlers, () => handlers.getWorkbuddyAgentIntegration());
   registerTrustedHandler('desktop:install-workbuddy-agent', handlers, (_event, workspace: string) => handlers.installWorkbuddyAgent(workspace));

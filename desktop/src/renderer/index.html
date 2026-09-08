@@ -379,8 +379,21 @@
             <div class="gateway-status" id="gateway-status" role="status"><i></i><div><b>仅本机连接</b><small>共享网关未启动。</small></div><button type="button" class="gateway-restart" id="restart-shared-gateway" hidden><span>重启共享</span><i></i></button></div>
           </section>
 
+          <section class="system-block" aria-labelledby="memory-writeback-title">
+            <div class="subsection-heading"><div><span>04B / AGENT</span><h3 id="memory-writeback-title">AI 长期记忆</h3></div></div>
+            <p>让连接 PMBrain 的 AI 跨会话记住你的重要信息。内容保存在本地 Facts。默认关闭。</p>
+            <div class="network-mode-grid" role="radiogroup" aria-label="AI 长期记忆">
+              <label class="network-mode-card selected" id="memory-mode-off-card"><input id="memory-mode-off" type="radio" name="memory-writeback" value="off" checked /><span><b>关闭</b><small>不主动写 Facts。你说“记住”时仍可手动保存。</small></span></label>
+              <label class="network-mode-card" id="memory-mode-salient-card"><input id="memory-mode-salient" type="radio" name="memory-writeback" value="salient" /><span><b>重要内容</b><small>只记偏好、决定、承诺和项目状态。推荐。</small></span><em>推荐</em></label>
+              <label class="network-mode-card" id="memory-mode-all-card"><input id="memory-mode-all" type="radio" name="memory-writeback" value="all" /><span><b>全部事实</b><small>更积极保存你直接说的事实，仍排除寒暄和推测。</small></span></label>
+            </div>
+            <p class="engine-usage-hint" id="memory-shared-warning" hidden>共享模式开启自动记忆后，保存的事实可能被同一知识范围内获授权的成员读取。</p>
+            <p>临时记忆：按保存时设置的有效期过期　保存位置：本地 PMBrain Facts</p>
+            <div id="memory-agent-status"><small>已接入 Agent 状态将在本地服务启动后显示。</small></div>
+          </section>
+
           <section class="system-block" aria-labelledby="desktop-behavior-title">
-            <div class="subsection-heading"><div><span>04B / DESKTOP</span><h3 id="desktop-behavior-title">桌面行为</h3></div></div>
+            <div class="subsection-heading"><div><span>04C / DESKTOP</span><h3 id="desktop-behavior-title">桌面行为</h3></div></div>
             <div class="system-setting-grid">
               <label class="setting-toggle" for="launch-at-login"><input id="launch-at-login" type="checkbox" /><span><b>开机自动启动 PMBrain</b><small>登录 Windows 后启动桌面端，并按数据库类型准备本地服务。</small></span></label>
               <label for="close-behavior"><span>点击窗口 × 时</span><select id="close-behavior"><option value="tray">最小化到托盘（默认）</option><option value="quit">退出 PMBrain</option></select></label>

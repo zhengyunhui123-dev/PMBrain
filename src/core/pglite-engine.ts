@@ -4244,7 +4244,8 @@ export class PGLiteEngine implements BrainEngine {
   async countUnconsolidatedFacts(source_id: string): Promise<number> {
     const r = await this.db.query<{ count: number }>(
       `SELECT COUNT(*)::int AS count FROM facts
-       WHERE source_id = $1 AND consolidated_at IS NULL AND expired_at IS NULL`,
+       WHERE source_id = $1 AND consolidated_at IS NULL AND expired_at IS NULL
+         AND (valid_until IS NULL OR valid_until > now())`,
       [source_id],
     );
     return Number(r.rows[0]?.count ?? 0);
@@ -4265,6 +4266,7 @@ export class PGLiteEngine implements BrainEngine {
          WHERE source_id = $1
            AND entity_slug = $2
            AND expired_at IS NULL
+           AND (valid_until IS NULL OR valid_until > now())
            AND embedding IS NOT NULL
          ORDER BY embedding <=> $3::vector
          LIMIT $4`,
@@ -4278,6 +4280,7 @@ export class PGLiteEngine implements BrainEngine {
        WHERE source_id = $1
          AND entity_slug = $2
          AND expired_at IS NULL
+         AND (valid_until IS NULL OR valid_until > now())
        ORDER BY created_at DESC, id DESC
        LIMIT $3`,
       [source_id, entitySlug, k],
@@ -4450,6 +4453,7 @@ export class PGLiteEngine implements BrainEngine {
     const params: Record<string, unknown> = { source_id };
     if (opts.activeOnly !== false) {
       whereParts.push(`expired_at IS NULL`);
+      whereParts.push(`(valid_until IS NULL OR valid_until > now())`);
     }
     if (opts.unconsolidatedOnly) whereParts.push(`consolidated_at IS NULL`);
     if (opts.kinds && opts.kinds.length > 0) {

@@ -55,11 +55,13 @@ export interface FactsBackstopCtx {
    *   - 'file_upload'        — file_upload import path
    *   - 'code_import'        — code import path
    */
-  source: 'sync:import' | 'mcp:put_page' | 'mcp:extract_facts' | 'file_upload' | 'code_import';
+  source: 'sync:import' | 'mcp:put_page' | 'mcp:extract_facts' | 'file_upload' | 'code_import' | 'Claude Stop Hook / ambient writeback';
   /** Execution mode — D8. Default 'queue' (fire-and-forget). */
   mode?: 'queue' | 'inline';
   /** Notability filter — D4. Default 'all'; sync uses 'high-only'. */
-  notabilityFilter?: 'all' | 'high-only';
+  notabilityFilter?: 'all' | 'high-only' | 'medium-plus';
+  canWrite?: () => Promise<boolean>;
+  throwOnExtractionError?: boolean;
   /** Abort signal for shutdown propagation. */
   abortSignal?: AbortSignal;
   /** Mirrors OperationContext.remote for trust-aware logging paths. */
@@ -300,6 +302,7 @@ async function runPipelineWithBody(
     engine: ctx.engine,
     abortSignal,
     model: ctx.model,
+    throwOnError: ctx.throwOnExtractionError,
   });
 
   const filter = ctx.notabilityFilter ?? 'all';
@@ -323,6 +326,7 @@ async function runPipelineWithBody(
 
     // D4: notability filter applied post-extraction, pre-insert.
     if (filter === 'high-only' && f.notability !== 'high') continue;
+    if (filter === 'medium-plus' && f.notability !== 'high' && f.notability !== 'medium') continue;
 
     const resolvedSlug = f.entity_slug
       ? await resolveEntitySlug(ctx.engine, ctx.sourceId, f.entity_slug)
@@ -399,6 +403,7 @@ async function runPipelineWithBody(
   }
 
   for (const { f, resolvedSlug } of legacyBucket) {
+    if(abortSignal?.aborted || ctx.canWrite && !await ctx.canWrite())break;
     const newFact: NewFact = {
       fact: f.fact,
       kind: f.kind,
@@ -427,6 +432,7 @@ async function runPipelineWithBody(
   // engine.insertFacts batch.
   for (const [slug, group] of byEntity) {
     if (abortSignal?.aborted) break;
+    if(ctx.canWrite && !await ctx.canWrite())break;
 
     const inputFacts = group.map(({ f }) => ({
       fact: f.fact,

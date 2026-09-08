@@ -105,9 +105,9 @@ describe('WorkBuddy Agent Pack 安装核心', () => {
     expect(contents['brain-first']).toContain('query');
     expect(contents['brain-first']).toContain('expand: false');
     expect(contents['brain-first']).toContain('get_page');
-    expect(contents.remember).toContain('优先更新已有页面');
-    expect(contents.remember).toContain('put_page');
-    expect(contents.remember).toContain('同一事实本轮最多执行一次有效 `put_page`');
+    expect(contents.remember).toContain('remember');
+    expect(contents.remember).toContain('一条调用一个事实');
+    expect(contents.remember).toContain('不要用 `put_page` 当记忆');
     expect(contents.remember).toContain('不要再写 WorkBuddy 内置 memory 或其他存储');
     expect(contents.correction).toContain('原始资料错误');
     expect(contents.correction).toContain('实体串线');
@@ -115,6 +115,9 @@ describe('WorkBuddy Agent Pack 安装核心', () => {
     expect(contents.correction).toContain('没有给出正确替换文本');
     expect(contents['durable-writeback']).toContain('AI 推测');
     expect(contents['durable-writeback']).toContain('不要再次触发本 Skill 或重复写入');
+    expect(contents['durable-writeback']).toContain('Ambient memory writeback');
+    expect(contents['durable-writeback']).toContain('remember');
+    expect(contents['durable-writeback']).toContain('禁止用 `put_page` 当记忆');
     expect(contents['takes-review']).toContain('take_proposals_list');
     expect(contents['takes-review']).toContain('take_proposal_accept');
     expect(contents['takes-review']).toContain('take_proposal_reject');
@@ -195,15 +198,15 @@ describe('WorkBuddy Agent Pack 安装核心', () => {
     expect(await installer.getStatus()).toMatchObject({
       state: 'update_available',
       installedPackVersion: '0',
-      packVersion: '1',
+      packVersion: WORKBUDDY_AGENT_PACK_VERSION,
     });
 
     const updated = await installer.update();
-    expect(updated.status).toMatchObject({ state: 'installed', installedPackVersion: '1' });
+    expect(updated.status).toMatchObject({ state: 'installed', installedPackVersion: WORKBUDDY_AGENT_PACK_VERSION });
     expect(updated.writtenFiles).toContain('.codebuddy/rules/pmbrain.md');
     expect(readFileSync(rulesPath, 'utf8')).toContain('Brain First');
     expect(readFileSync(rulesPath, 'utf8')).not.toContain('旧版官方内容');
-    expect(JSON.parse(readFileSync(manifestPath, 'utf8')).packVersion).toBe('1');
+    expect(JSON.parse(readFileSync(manifestPath, 'utf8')).packVersion).toBe(WORKBUDDY_AGENT_PACK_VERSION);
   });
 
   test('卸载删除校验通过的 PMBrain 文件，但保留用户改过的 Skill', async () => {

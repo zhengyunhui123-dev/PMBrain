@@ -1,5 +1,5 @@
 {
-  "pack_version": "1.0.0",
+  "pack_version": "1.0.1",
   "name": "PMBrain Agent Capability Pack",
   "description": "Official host-agent workflow templates for safe PMBrain retrieval, review, correction, and durable writeback.",
   "skills": [
@@ -15,14 +15,14 @@
       "path": "skills/remember",
       "description": "Save knowledge the user explicitly asks PMBrain to remember.",
       "triggers": ["记住", "保存一下", "以后按这个来", "这是我的偏好", "这个很重要"],
-      "required_operations": ["recall", "query", "get_page", "put_page"]
+      "required_operations": ["recall", "remember"]
     },
     {
       "name": "durable-writeback",
       "path": "skills/durable-writeback",
       "description": "Persist clearly established long-lived outcomes from the current task.",
       "triggers": ["明确决策", "明确偏好", "明确承诺", "项目状态变化", "重要事实修正"],
-      "required_operations": ["recall", "query", "get_page", "put_page"]
+      "required_operations": ["recall", "remember"]
     },
     {
       "name": "correction",

@@ -137,6 +137,18 @@ export class WorkBuddyAgentController {
     return this.composeStatus(result.status, true);
   }
 
+  async convergeMemoryRules(): Promise<void> {
+    const workspace=await this.readWorkspaceReceipt();
+    if(!workspace)return;
+    const installer=this.installerFactory(workspace);
+    const state=await installer.getStatus();
+    if(state.state==='not_installed')return;
+    if(state.state==='modified')throw new Error('长期记忆开关已保存，但 WorkBuddy 托管文件有用户修改，未覆盖；请在 MCP 接入中处理旧规则。');
+    if(state.state==='installed')return;
+    const result=await installer.update();
+    await this.assertPackVerified(installer,result);
+  }
+
   async remove(): Promise<WorkbuddyAgentIntegrationStatus> {
     const workspace = await this.requireWorkspaceReceipt();
     const result = await this.installerFactory(workspace).uninstall();

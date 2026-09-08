@@ -90,7 +90,7 @@ const CLIENT_META: Record<IntegrationClient, { name: string; path: () => string 
   cursor: { name: 'Cursor', path: () => join(homedir(), '.cursor', 'mcp.json'), automatic: true },
   trae: { name: 'Trae Work', path: () => traeWorkIntegrationPath(), automatic: true },
   claude: { name: 'Claude', path: () => null, automatic: false },
-  codex: { name: 'Codex', path: () => join(homedir(), '.codex', 'config.toml'), automatic: true },
+  codex: { name: 'Codex', path: () => join(process.env.CODEX_HOME || join(homedir(), '.codex'), 'config.toml'), automatic: true },
   qwenpaw: { name: 'QwenPaw', path: () => qwenPawIntegrationPath(), automatic: true },
   hermes: { name: 'Hermes', path: () => null, automatic: false },
   openclaw: { name: 'OpenClaw', path: () => null, automatic: false },
@@ -766,13 +766,15 @@ export async function configureIntegration(
   sidecar: SidecarManager,
   client: IntegrationClient,
   credentialKind: CredentialKind,
+  opts: {deep?: boolean} = {},
 ): Promise<IntegrationResult> {
   const meta = CLIENT_META[client];
   if (!meta) throw new Error(`不支持的客户端：${client}`);
   if (client === 'qwenpaw' && credentialKind !== 'api_key') {
     throw new Error('QwenPaw 一键接入固定使用 API Key + Bearer，不支持 OAuth 授权。');
   }
-  const path = meta.path();
+  if(opts.deep && (!['codex','claude'].includes(client)||credentialKind!=='api_key'))throw new Error('深度接入仅支持 Codex / Claude Code 的 API Key 接入');
+  const path = opts.deep && client==='claude' ? join(homedir(),'.claude.json') : meta.path();
   const credentialName = `desktop-${client}`;
 
   if (credentialKind === 'oauth') {
@@ -802,13 +804,14 @@ export async function configureIntegration(
 
   const token = await createApiKey(sidecar, credentialName);
   const smoke = await sidecar.smokeTest(token);
+  if(!smoke.statsOk||smoke.toolCount===0)throw new Error('MCP 验证失败，未写客户端配置');
   const entry = { mcpServers: { pmbrain: jsonEntry(sidecar.mcpUrl, token) } };
   let snippet = JSON.stringify(entry, null, 2);
   let backup: string | null = null;
   let configured = false;
   let connectionState: IntegrationResult['connectionState'];
 
-  if (client === 'codebuddy' || client === 'workbuddy' || client === 'cursor' || client === 'trae') {
+  if (client === 'codebuddy' || client === 'workbuddy' || client === 'cursor' || client === 'trae' || opts.deep && client==='claude') {
     backup = writeJsonIntegration(path!, sidecar.mcpUrl, token);
     configured = true;
   } else if (client === 'qwenpaw') {

@@ -140,6 +140,7 @@ export const BrainFactRowSchema = z.object({
   confidence: z.preprocess(value => value == null || value === '' ? undefined : Number(value), z.number().optional()),
   embedded: adminBool,
   expired_at: z.string().nullable().optional(),
+  valid_until: z.string().nullable().optional(),
   created_at: z.string(),
   updated_at: z.string().optional(),
 }).passthrough();
@@ -151,6 +152,24 @@ export const BrainFactsResponseSchema = z.object({
   limit: z.number().int().positive(),
   pages: z.number().int().positive(),
 });
+
+export const MemoryWritebackModeSchema = z.enum(['off', 'salient', 'all']);
+
+export const MemoryWritebackStatusSchema = z.object({
+  mode: MemoryWritebackModeSchema,
+  enabled: z.boolean(),
+  ttl: z.string(),
+  notice_shown: z.boolean(),
+  visibility: z.enum(['world', 'private']),
+  agents: z.array(z.object({agent:z.enum(['codex','claude']),registered:z.boolean(),block:z.string(),hook:z.string(),issue:z.string().nullable()})),
+  issues: z.array(z.string()),
+});
+
+export const MemoryWritebackUpdateRequestSchema = z.object({
+  mode: MemoryWritebackModeSchema.optional(),
+  ttl: z.string().optional(),
+  notice_shown: z.boolean().optional(),
+}).refine(value=>value.mode!==undefined||value.notice_shown===true,'请选择记忆方式或以后再说');
 
 export const BrainFactDetailResponseSchema = BrainFactRowSchema.extend({
   context: z.string().nullable().optional(),
@@ -235,5 +254,7 @@ export type KnowledgeGraphNeighborhoodResponse = z.infer<typeof KnowledgeGraphNe
 export type KnowledgeGraphMetaResponse = z.infer<typeof KnowledgeGraphMetaResponseSchema>;
 export type KnowledgeGraphGlobalResponse = z.infer<typeof KnowledgeGraphGlobalResponseSchema>;
 export type BrainFactRow = z.infer<typeof BrainFactRowSchema>;
+export type MemoryWritebackStatus = z.infer<typeof MemoryWritebackStatusSchema>;
+export type MemoryWritebackUpdate = z.infer<typeof MemoryWritebackUpdateRequestSchema>;
 export type BrainFactsResponse = z.infer<typeof BrainFactsResponseSchema>;
 export type BrainFactDetailResponse = z.infer<typeof BrainFactDetailResponseSchema>;

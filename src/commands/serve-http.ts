@@ -47,7 +47,7 @@ import {
 } from '../mcp/agent-integration-trace.ts';
 import { paramDefToSchema } from '../mcp/tool-defs.ts';
 import { filterOpsForSurface, effectiveSurfaceForClient, isMcpSurface, type McpSurface } from '../mcp/surface.ts';
-import { PMBRAIN_MCP_INSTRUCTIONS } from '../mcp/instructions.ts';
+import { resolveMcpInstructionsForEngine } from '../mcp/instructions.ts';
 import { getBrainHotMemoryMeta } from '../core/facts/meta-hook.ts';
 import { loadConfig, toEngineConfig, type GBrainConfig } from '../core/config.ts';
 import { brainDirFromConfig } from '../core/system-skill-assets.ts';
@@ -2231,7 +2231,13 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
     // Create a fresh MCP server per request (stateless)
     const server = new Server(
       { name: 'pmbrain', version: VERSION },
-      { capabilities: { tools: {} }, instructions: PMBRAIN_MCP_INSTRUCTIONS },
+      {
+        capabilities: { tools: {} },
+        instructions: await resolveMcpInstructionsForEngine(engine, {
+          remember: surfaceAllowedOps.has('remember') && hasScope(authInfo.scopes, 'write'),
+          extractFacts: surfaceAllowedOps.has('extract_facts') && hasScope(authInfo.scopes, 'write'),
+        }),
+      },
     );
 
     server.setRequestHandler(ListToolsRequestSchema, async () => {
@@ -2983,6 +2989,9 @@ ${renderAdminTokenFooter({ suppressBootstrapPrint, bootstrapFromEnv, bootstrapTo
   if (diagnosticMode) {
     console.error('[serve-http] diagnostic-mode active: Dream schedule timer not started; Supervisor auto-start disabled');
   } else {
+    const {startWritebackHarvester}=await import('../core/facts/writeback-harvest.ts');
+    const stopWriteback=startWritebackHarvester(engine);
+    httpServer.once('close',stopWriteback);
     const dreamScheduleTimer = setInterval(
       () => void checkScheduledDream(),
       ADMIN_DREAM_SCHEDULE_CHECK_MS,

@@ -420,6 +420,7 @@ export async function listAdminBrainFacts(
     confidence: number;
     embedded: boolean;
     expired_at: string | null;
+    valid_until: string | null;
     created_at: string;
     updated_at: string;
   }>(
@@ -436,6 +437,7 @@ export async function listAdminBrainFacts(
             f.confidence,
             (f.embedding IS NOT NULL) AS embedded,
             f.expired_at::text AS expired_at,
+            f.valid_until::text AS valid_until,
             f.created_at::text AS created_at,
             COALESCE(f.embedded_at, f.created_at)::text AS updated_at
        FROM facts f

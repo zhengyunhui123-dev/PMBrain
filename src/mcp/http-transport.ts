@@ -30,7 +30,7 @@ import type { BrainEngine } from '../core/engine.ts';
 import { buildToolDefs } from './tool-defs.ts';
 import { operations } from '../core/operations.ts';
 import { VERSION } from '../version.ts';
-import { PMBRAIN_MCP_INSTRUCTIONS } from './instructions.ts';
+import { resolveMcpInstructionsForEngine } from './instructions.ts';
 import { dispatchToolCall } from './dispatch.ts';
 import { buildDefaultLimiters, type RateLimiter } from './rate-limit.ts';
 import { sqlQueryForEngine } from '../core/sql-query.ts';
@@ -329,13 +329,17 @@ export async function startHttpTransport(opts: HttpTransportOptions) {
       // initialize
       if (method === 'initialize') {
         logRequest(auth.tokenName!, 'initialize', 'success', Date.now() - startedMs);
+        const instructions = await resolveMcpInstructionsForEngine(engine, {
+          remember: surfaceAllowedOps.has('remember'),
+          extractFacts: surfaceAllowedOps.has('extract_facts'),
+        });
         return Response.json(
           {
             result: {
               protocolVersion: '2025-03-26',
               serverInfo: { name: 'pmbrain', version: VERSION },
               capabilities: { tools: {} },
-              instructions: PMBRAIN_MCP_INSTRUCTIONS,
+              instructions,
             },
             jsonrpc: '2.0',
             id,

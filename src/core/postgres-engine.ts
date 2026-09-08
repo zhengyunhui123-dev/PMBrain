@@ -4056,7 +4056,7 @@ export class PostgresEngine implements BrainEngine {
       SELECT * FROM facts
       WHERE source_id = ${source_id}
         AND entity_slug = ${entitySlug}
-        ${activeOnly ? sql`AND expired_at IS NULL` : sql``}
+        ${activeOnly ? sql`AND expired_at IS NULL AND (valid_until IS NULL OR valid_until > now())` : sql``}
         ${opts?.unconsolidatedOnly ? sql`AND consolidated_at IS NULL` : sql``}
         ${kinds ? sql`AND kind = ANY(${kinds}::text[])` : sql``}
         ${visibility ? sql`AND visibility = ANY(${visibility}::text[])` : sql``}
@@ -4085,7 +4085,7 @@ export class PostgresEngine implements BrainEngine {
         AND COALESCE(valid_from, created_at) >= ${since}
         ${entitySlug ? sql`AND entity_slug = ${entitySlug}` : sql``}
         ${sessionId ? sql`AND source_session = ${sessionId}` : sql``}
-        ${activeOnly ? sql`AND expired_at IS NULL` : sql``}
+        ${activeOnly ? sql`AND expired_at IS NULL AND (valid_until IS NULL OR valid_until > now())` : sql``}
         ${opts?.unconsolidatedOnly ? sql`AND consolidated_at IS NULL` : sql``}
         ${kinds ? sql`AND kind = ANY(${kinds}::text[])` : sql``}
         ${visibility ? sql`AND visibility = ANY(${visibility}::text[])` : sql``}
@@ -4110,7 +4110,7 @@ export class PostgresEngine implements BrainEngine {
       SELECT * FROM facts
       WHERE source_id = ${source_id}
         AND source_session = ${sessionId}
-        ${activeOnly ? sql`AND expired_at IS NULL` : sql``}
+        ${activeOnly ? sql`AND expired_at IS NULL AND (valid_until IS NULL OR valid_until > now())` : sql``}
         ${kinds ? sql`AND kind = ANY(${kinds}::text[])` : sql``}
         ${visibility ? sql`AND visibility = ANY(${visibility}::text[])` : sql``}
       ORDER BY created_at DESC, id DESC
@@ -4145,6 +4145,7 @@ export class PostgresEngine implements BrainEngine {
       WHERE source_id = ${source_id}
         AND consolidated_at IS NULL
         AND expired_at IS NULL
+        AND (valid_until IS NULL OR valid_until > now())
     `;
     return Number(rows[0]?.count ?? 0);
   }
@@ -4164,6 +4165,7 @@ export class PostgresEngine implements BrainEngine {
         WHERE source_id = ${source_id}
           AND entity_slug = ${entitySlug}
           AND expired_at IS NULL
+          AND (valid_until IS NULL OR valid_until > now())
           AND embedding IS NOT NULL
         ORDER BY embedding <=> ${sql.unsafe(`'${lit}'::vector`)}
         LIMIT ${k}
@@ -4175,6 +4177,7 @@ export class PostgresEngine implements BrainEngine {
       WHERE source_id = ${source_id}
         AND entity_slug = ${entitySlug}
         AND expired_at IS NULL
+        AND (valid_until IS NULL OR valid_until > now())
       ORDER BY created_at DESC, id DESC
       LIMIT ${k}
     `;

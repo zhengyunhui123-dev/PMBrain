@@ -108,6 +108,31 @@ describe('Gbrain-aligned memory verbs', () => {
     expect(recalled.facts[0]?.kind).toBe('belief');
   });
 
+  test('ttl 过期后普通 recall 不再返回，历史仍能看见', async () => {
+    const remember = operationsByName.remember!;
+    const recall = operationsByName.recall!;
+    const remembered = await remember.handler(ctx(), {
+      fact: '下周去上海出差',
+      provenance: 'user said in this conversation, 2026-09-08',
+      kind: 'event',
+      ttl: '3d',
+      visibility: 'world',
+    }) as { id: string; valid_until: string | null };
+    expect(remembered.valid_until).toBeTruthy();
+
+    const active = await recall.handler(ctx(), { limit: 20 }) as { facts: Array<{ fact: string }> };
+    expect(active.facts.map(row => row.fact)).toContain('下周去上海出差');
+
+    await engine.executeRaw(
+      `UPDATE facts SET valid_until = now() - interval '1 hour' WHERE id = $1`,
+      [Number(remembered.id)],
+    );
+    const after = await recall.handler(ctx(), { limit: 20 }) as { facts: Array<{ fact: string }> };
+    expect(after.facts.map(row => row.fact)).not.toContain('下周去上海出差');
+    const expired = await recall.handler(ctx(), { include_expired: true, limit: 20 }) as { facts: Array<{ fact: string }> };
+    expect(expired.facts.map(row => row.fact)).toContain('下周去上海出差');
+  });
+
   test('without embedding, remember still writes and reports degraded dedup', async () => {
     const first = await writeSingleFact(engine, 'default', {
       fact: '未配置向量时也必须能记住',

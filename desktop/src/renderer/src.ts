@@ -1051,6 +1051,11 @@ function renderIntegrations(integrations: IntegrationInfo[]): void {
     } else {
       article.append(badge, title, path, note, button);
     }
+    if(item.id==='codex'||item.id==='claude'){
+      const deep=document.createElement('button');deep.type='button';deep.textContent=`深度接入 ${item.id==='claude'?'Claude Code':'Codex'}`;
+      deep.addEventListener('click',()=>void configure(item.id,deep,true));
+      article.appendChild(deep);
+    }
     return article;
   }));
 }
@@ -1168,6 +1173,32 @@ function updateSystemSettingsAvailability(): void {
 function applySystemSettingsState(next: DesktopSystemSettingsState): void {
   latestSystemSettings = next;
   renderSystemSettings(next);
+  void refreshMemoryWriteback();
+}
+
+let loadedMemoryMode: 'off' | 'salient' | 'all' | null = null;
+
+async function refreshMemoryWriteback(): Promise<void> {
+  const statusEl = $('#memory-agent-status');
+  const sharedWarn = $('#memory-shared-warning');
+  try {
+    const state = await window.pmbrainDesktop.getMemoryWriteback();
+    loadedMemoryMode=state.mode;
+    const selected = document.querySelector<HTMLInputElement>(`input[name="memory-writeback"][value="${state.mode}"]`);
+    if (selected) selected.checked = true;
+    document.querySelectorAll<HTMLLabelElement>('#memory-mode-off-card, #memory-mode-salient-card, #memory-mode-all-card').forEach((card) => {
+      card.classList.toggle('selected', card.querySelector('input')?.checked === true);
+    });
+    sharedWarn.hidden = latestSystemSettings?.preferences.networkMode !== 'shared';
+    statusEl.textContent = [
+      state.enabled ? 'WorkBuddy：长期记忆合同将在重新连接时下发。' : 'WorkBuddy：自动记忆合同未启用。',
+      ...state.agents.map(agent => `${agent.agent === 'claude' ? 'Claude Code' : 'Codex'}：${agent.block === 'present' ? '托管指令已安装' : '未安装托管指令'}${agent.agent === 'claude' ? `；Stop Hook ${agent.hook === 'installed' ? '已安装' : '未安装'}` : ''}`),
+      ...state.issues,
+    ].join('；');
+
+  } catch (error) {
+    statusEl.textContent = error instanceof Error ? error.message : String(error);
+  }
 }
 
 function currentSystemSettingsPayload(): DesktopSystemSettingsPayload {
@@ -1193,6 +1224,8 @@ async function restartSharedGateway(): Promise<void> {
   }
   setBusy(button, true, '正在重启…');
   try {
+    const memoryMode = document.querySelector<HTMLInputElement>('input[name="memory-writeback"]:checked')?.value as 'off' | 'salient' | 'all' | undefined;
+    const saveMemory = memoryMode !== undefined && loadedMemoryMode !== null && memoryMode !== loadedMemoryMode;
     const result = await window.pmbrainDesktop.saveSystemSettings(payload);
     applySystemSettingsState(result.state);
     if (result.canceled) return;
@@ -1217,8 +1250,15 @@ async function saveSystemSettings(): Promise<void> {
   }
   setBusy(button, true, '正在保存…');
   try {
+    const memoryMode = document.querySelector<HTMLInputElement>('input[name="memory-writeback"]:checked')?.value as 'off' | 'salient' | 'all' | undefined;
+    const saveMemory = memoryMode !== undefined && loadedMemoryMode !== null && memoryMode !== loadedMemoryMode;
     const result = await window.pmbrainDesktop.saveSystemSettings(payload);
     applySystemSettingsState(result.state);
+    if (result.canceled) return;
+    if (saveMemory && memoryMode) {
+      await window.pmbrainDesktop.saveMemoryWriteback({ mode: memoryMode, notice_shown: true });
+      await refreshMemoryWriteback();
+    }
     if (result.canceled) return;
     if (mode === 'local') {
       setNotice('success', '系统设置已保存，当前仅本机连接。');
@@ -1828,14 +1868,15 @@ async function writeWorkbuddyUserAgent(button: HTMLButtonElement): Promise<void>
   }
 }
 
-async function configure(client: IntegrationClient, button: HTMLButtonElement): Promise<void> {
+async function configure(client: IntegrationClient, button: HTMLButtonElement, deep = false): Promise<void> {
   setNotice('error'); setNotice('success');
   const originalText = button.textContent || '';
   button.disabled = true; button.textContent = '正在验证…';
   try {
     const result = await window.pmbrainDesktop.configureIntegration(
       client,
-      client === 'qwenpaw' ? 'api_key' : selectedCredential(),
+      deep || client === 'qwenpaw' ? 'api_key' : selectedCredential(),
+      deep,
     );
     lastResult = result.snippet;
     $('#result-title').textContent = `${client} 配置结果`;

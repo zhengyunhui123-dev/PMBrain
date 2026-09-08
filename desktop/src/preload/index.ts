@@ -1,3 +1,4 @@
+import type { MemoryWritebackStatus, MemoryWritebackUpdate } from '../../../shared/contracts/brain.js';
 import { contextBridge, ipcRenderer } from 'electron';
 import type { SidecarState } from '../main/sidecar-manager.js';
 import type {
@@ -154,6 +155,8 @@ export interface PMBrainDesktopApi {
   onShowPanel(listener: (panel: DesktopSettingsPanel) => void): () => void;
   getSystemSettings(): Promise<DesktopSystemSettingsState>;
   saveSystemSettings(payload: DesktopSystemSettingsPayload): Promise<DesktopSystemSettingsSaveResult>;
+  getMemoryWriteback(): Promise<MemoryWritebackStatus>;
+  saveMemoryWriteback(payload: MemoryWritebackUpdate): Promise<MemoryWritebackStatus>;
   onSystemSettingsState(listener: (state: DesktopSystemSettingsState) => void): () => void;
   getSharedAccess(): Promise<SharedAccessContext>;
   createSharedIntegration(payload: SharedIntegrationPayload): Promise<SharedIntegrationResult>;
@@ -166,7 +169,7 @@ export interface PMBrainDesktopApi {
   getAdvancedModelConfig(): Promise<AdvancedModelConfig>;
   saveAdvancedModelConfig(values: AdvancedModelWriteInput): Promise<AdvancedModelConfig>;
   saveSetup(payload: SetupPayload): Promise<DesktopSetupState & { backup?: string | null; reembeddingWarning?: string | null }>;
-  configureIntegration(client: IntegrationClient, kind: CredentialKind): Promise<IntegrationResult>;
+  configureIntegration(client: IntegrationClient, kind: CredentialKind, deep?: boolean): Promise<IntegrationResult>;
   writeWorkbuddyUserAgent(): Promise<{ written: string[]; backedUp: string[] }>;
   getWorkbuddyAgentIntegration(): Promise<WorkbuddyAgentIntegrationStatus>;
   installWorkbuddyAgent(workspace: string): Promise<WorkbuddyAgentIntegrationStatus>;
@@ -231,6 +234,8 @@ const api: PMBrainDesktopApi = {
   },
   getSystemSettings: () => ipcRenderer.invoke('desktop:get-system-settings'),
   saveSystemSettings: (payload) => ipcRenderer.invoke('desktop:save-system-settings', payload),
+  getMemoryWriteback: () => ipcRenderer.invoke('desktop:get-memory-writeback'),
+  saveMemoryWriteback: (payload) => ipcRenderer.invoke('desktop:save-memory-writeback', payload),
   onSystemSettingsState: (listener) => {
     const handler = (_event: Electron.IpcRendererEvent, state: DesktopSystemSettingsState) => listener(state);
     ipcRenderer.on('desktop:system-settings-state', handler);
@@ -247,7 +252,7 @@ const api: PMBrainDesktopApi = {
   getAdvancedModelConfig: () => ipcRenderer.invoke('desktop:get-advanced-model-config'),
   saveAdvancedModelConfig: (values) => ipcRenderer.invoke('desktop:save-advanced-model-config', values),
   saveSetup: (payload) => ipcRenderer.invoke('desktop:save-setup', payload),
-  configureIntegration: (client, kind) => ipcRenderer.invoke('desktop:configure-integration', client, kind),
+  configureIntegration: (client, kind, deep) => ipcRenderer.invoke('desktop:configure-integration', client, kind, deep),
   writeWorkbuddyUserAgent: () => ipcRenderer.invoke('desktop:write-workbuddy-user-agent'),
   getWorkbuddyAgentIntegration: () => ipcRenderer.invoke('desktop:get-workbuddy-agent-integration'),
   installWorkbuddyAgent: (workspace) => ipcRenderer.invoke('desktop:install-workbuddy-agent', workspace),
