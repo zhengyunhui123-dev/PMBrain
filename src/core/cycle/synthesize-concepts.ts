@@ -319,7 +319,7 @@ export async function runPhaseSynthesizeConcepts(
       ]);
       await engine.addLinksBatch(relationshipRows, { auditSite: 'extract.links_db' }); // gbrain-allow-direct-insert: Dream concept evidence is written inside the cycle reconcile path.
       try {
-        await engine.addLinksBatch(provenanceLinks, { auditSite: 'cycle.synthesize_concepts.provenance' });
+        await engine.addLinksBatch(provenanceLinks, { auditSite: 'cycle.synthesize_concepts.provenance' }); // gbrain-allow-direct-insert: Dream concept provenance is written inside the cycle reconcile path.
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         console.error(`[synthesize_concepts] provenance links failed for ${outputSlug} (non-fatal): ${msg}`);
