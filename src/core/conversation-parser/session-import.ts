@@ -12,14 +12,21 @@ function record(value: unknown): Row {
   return value as Row;
 }
 
-function blocks(value: unknown, kind: string): string {
+function blocks(value: unknown, kinds: readonly string[]): string {
   if (!Array.isArray(value)) throw new Error('会话正文格式无法识别');
   return value.map(value => {
     const block = record(value);
-    if (block.type !== kind) return '';
+    if (!kinds.includes(String(block.type))) return '';
     if (typeof block.text !== 'string') throw new Error('会话正文不是文本');
     return block.text;
   }).filter(Boolean).join('\n');
+}
+
+function isTypedUserText(payload: Row): boolean {
+  const meta = payload.internal_chat_message_metadata_passthrough;
+  if (!meta || typeof meta !== 'object' || Array.isArray(meta)) return false;
+  const kinds = (meta as Row).content_item_kinds;
+  return Array.isArray(kinds) && kinds.length > 0 && kinds.every(kind => kind === 'user.text');
 }
 
 export function isSessionExportPath(path: string): boolean {
@@ -48,20 +55,25 @@ export function parseSessionExport(raw: string, filename: string): {
     throw new Error('不支持的会话文件：请选择 Codex rollout JSONL 或 Grok chat_history.jsonl');
   }
   const messages: Message[] = [];
+  const eventUsers = new Set<string>();
+  const desktopUsers = new Set<string>();
   for (const row of rows) {
     let role: Message['role'] | undefined;
     let text = '';
+    let userLane: 'event' | 'desktop' | undefined;
     if (format === 'codex') {
       if (row.type === 'session_meta' && row !== first) throw new Error('一个文件不能混合多个 Codex 会话');
       const payload = row.payload && typeof row.payload === 'object' ? record(row.payload) : {};
       if (row.type === 'event_msg' && payload.type === 'user_message') {
         if (typeof payload.message !== 'string') throw new Error('Codex 用户正文格式无法识别');
-        role = 'user'; text = payload.message;
+        role = 'user'; text = payload.message; userLane = 'event';
+      } else if (row.type === 'response_item' && payload.type === 'message' && payload.role === 'user' && isTypedUserText(payload)) {
+        role = 'user'; text = blocks(payload.content, ['input_text', 'text']); userLane = 'desktop';
       } else if (row.type === 'response_item' && payload.type === 'message' && payload.role === 'assistant') {
-        role = 'assistant'; text = blocks(payload.content, 'output_text');
+        role = 'assistant'; text = blocks(payload.content, ['output_text']);
       }
     } else if (row.type === 'user' && !row.synthetic_reason) {
-      role = 'user'; text = typeof row.content === 'string' ? row.content : blocks(row.content, 'text');
+      role = 'user'; text = typeof row.content === 'string' ? row.content : blocks(row.content, ['text']);
     } else if (row.type === 'assistant') {
       if (typeof row.content !== 'string') {
         if (Array.isArray(row.tool_calls) && row.tool_calls.length) continue;
@@ -71,6 +83,12 @@ export function parseSessionExport(raw: string, filename: string): {
     }
     if (!role || !text.trim()) continue;
     if (text.includes('\u0000')) throw new Error('会话正文包含不支持的空字符');
+    if (role === 'user' && userLane) {
+      const key = text.trim();
+      if (userLane === 'event' && desktopUsers.has(key)) continue;
+      if (userLane === 'desktop' && eventUsers.has(key)) continue;
+      (userLane === 'event' ? eventUsers : desktopUsers).add(key);
+    }
     const timestamp = format === 'codex' && typeof row.timestamp === 'string' && Number.isFinite(Date.parse(row.timestamp))
       ? new Date(row.timestamp).toISOString() : null;
     messages.push({ role, text, timestamp });

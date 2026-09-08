@@ -26,4 +26,22 @@ test('Chinese idea survives extraction and the configured appendix reaches the m
   expect(facts[0]?.fact).toBe('建议尝试订阅服务，尚未决定实施。');
   expect(system).toContain('保留会议中的待确认事项。');
   expect(system).toContain('尚未决定');
+  expect(system).toContain('进度追问');
+  expect(system).toContain('桌面');
+  expect(system).toContain('可以先放着');
+  expect(system).toContain('不要输出 question');
+});
+
+test('unknown extractor kinds are dropped instead of stored as fact', async () => {
+  __setChatTransportForTests(async () => ({
+    text: JSON.stringify({ facts: [
+      { fact: '对齐Gbrain都完成了吗？', kind: 'question', confidence: 0, notability: 'low' },
+      { fact: '以后 GitHub 由我自己提交。', kind: 'commitment', confidence: 0.8, notability: 'medium' },
+    ] }),
+    blocks: [], stopReason: 'end', usage: { input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_creation_tokens: 0 }, model: 'test:stub', providerId: 'test',
+  }));
+  const facts = await extractFactsFromTurn({ turnText: '对齐Gbrain都完成了吗？以后 GitHub 由我自己提交。', source: 'test' });
+  expect(facts.map(fact => ({ fact: fact.fact, kind: fact.kind }))).toEqual([
+    { fact: '以后 GitHub 由我自己提交。', kind: 'commitment' },
+  ]);
 });

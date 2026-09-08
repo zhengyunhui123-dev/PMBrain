@@ -118,6 +118,11 @@ const EXTRACTOR_SYSTEM = [
   '- 中文：保留否定、条件、转述者和不确定性，不将建议变成事实或承诺。',
   '- “建议尝试订阅服务，尚未决定实施”是 idea；“已经决定周五上线”是 commitment；“上周已上线”是 event。',
   '- “我认为订阅更适合长期服务”是 belief；没有具体构想的“尚未决定”不自动归为 idea。',
+  '- 只输出给定六类，不要输出 question。已经发生的事情必须抽成 event。',
+  '- 整句都是进度追问或继续指令时才返回空数组；有主张时不要因为夹了问句就整段丢弃。',
+  '- 长期操作约定、产品兼容和桌面体验约束是 preference 或 commitment，要整句保留，不是 idea 或 belief。',
+  '- 现状陈述是 fact。同一段里的疑问不要单独抽成 belief。',
+  '- “可以先放着”是暂缓决定（preference 或 commitment）。仅“不确定是干什么、不能做就算了”且没有决定时才返回空数组。',
   '- "fact": objective claim that doesn\'t fit the above.',
   '- Skip greetings, operational chatter, and questions ("how does X work?" is not a fact).',
   '- One fact per atomic claim. Cap at 10 facts per turn.',
@@ -218,9 +223,8 @@ export async function extractFactsFromTurn(input: ExtractInput): Promise<Extract
     for (const p of INJECTION_PATTERNS) factText = factText.replace(p.rx, p.replacement);
     if (factText.length > 500) factText = factText.slice(0, 497) + '...';
 
-    const kind = ALL_EXTRACT_KINDS.includes(candidate.kind as FactKind)
-      ? (candidate.kind as FactKind)
-      : 'fact';
+    if (!ALL_EXTRACT_KINDS.includes(candidate.kind as FactKind)) continue;
+    const kind = candidate.kind as FactKind;
     if (junkFilterOn && isJunkFact(factText, kind)) continue;
     const confidence = clampConfidence(candidate.confidence);
     const notability = ['high', 'medium', 'low'].includes(candidate.notability || '')
