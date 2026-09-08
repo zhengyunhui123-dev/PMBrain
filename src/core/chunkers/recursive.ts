@@ -17,7 +17,7 @@
  * Lossless invariant: non-overlapping portions reassemble to original.
  */
 
-import { countCJKAwareWords, CJK_SENTENCE_DELIMITERS, CJK_CLAUSE_DELIMITERS } from '../cjk.ts';
+import { countCJKAwareWords, isCJKDominant, CJK_SENTENCE_DELIMITERS, CJK_CLAUSE_DELIMITERS } from '../cjk.ts';
 import { estimateEmbedTokens, DEFAULT_MAX_CHUNK_TOKENS } from './token-estimate.ts';
 import { safeSplitIndex } from '../text-safe.ts';
 
@@ -324,7 +324,27 @@ function applyOverlap(chunks: string[], overlapWords: number): string[] {
  * Extract the last N words from text, trying to align to sentence boundaries.
  * If a sentence boundary exists within the last N words, start there.
  */
+const CJK_SENTENCE_END = new RegExp(`[${CJK_SENTENCE_DELIMITERS.join('')}]\\s*|[.!?]\\s+`);
+
+function extractTrailingContextCJK(text: string, targetWords: number): string {
+  if (countCJKAwareWords(text) <= targetWords) return '';
+  let count = 0;
+  let i = text.length;
+  while (i > 0 && count < targetWords) {
+    i--;
+    if (!/\s/.test(text[i])) count++;
+  }
+  const trailing = text.slice(safeSplitIndex(text, i));
+  const sentenceEnd = CJK_SENTENCE_END.exec(trailing);
+  if (sentenceEnd && sentenceEnd.index < trailing.length / 2) {
+    const afterSentence = trailing.slice(sentenceEnd.index + sentenceEnd[0].length);
+    if (afterSentence.trim().length > 0) return afterSentence;
+  }
+  return trailing;
+}
+
 function extractTrailingContext(text: string, targetWords: number): string {
+  if (isCJKDominant(text)) return extractTrailingContextCJK(text, targetWords);
   const words = text.match(/\S+\s*/g) || [];
   if (words.length <= targetWords) return '';
 

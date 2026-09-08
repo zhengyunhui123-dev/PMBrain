@@ -79,6 +79,8 @@ describe('SEARCH_MODES + MODE_BUNDLES canonical shape', () => {
       relationalRetrieval: false,
       relational_retrieval_depth: 2,
       autocut_jump: 0.2,
+      metadata_boost_gate: 'lexical',
+      relational_rerank_pin: 3,
     });
   });
 
@@ -109,6 +111,8 @@ describe('SEARCH_MODES + MODE_BUNDLES canonical shape', () => {
       relationalRetrieval: true,
       relational_retrieval_depth: 2,
       autocut_jump: 0.2,
+      metadata_boost_gate: 'lexical',
+      relational_rerank_pin: 3,
     });
   });
 
@@ -133,11 +137,12 @@ describe('SEARCH_MODES + MODE_BUNDLES canonical shape', () => {
       graph_signals: true,
       ...CR_DISABLED_DEFAULT,
       contextual_retrieval: 'per_chunk_synopsis',
-      // v0.42.3.0 — autocut ON.
-      autocut: true,
+      autocut: false,
       relationalRetrieval: true,
       relational_retrieval_depth: 2,
       autocut_jump: 0.2,
+      metadata_boost_gate: 'lexical',
+      relational_rerank_pin: 3,
     });
   });
 
@@ -398,7 +403,7 @@ describe('knobsHash determinism + cross-mode separation (CDX-4)', () => {
     // before the boost stage existed. PMBrain 1.2.81 bumps 9→10 so a
     // remote result set that hides private pages cannot reuse a local cache.
     // PMBrain 1.3.7 bumps 10→11 for hard excludes, detail, salience, and recency.
-    expect(KNOBS_HASH_VERSION).toBe(12);
+    expect(KNOBS_HASH_VERSION).toBe(13);
   });
 
   test('private-page posture produces a separate cache namespace', () => {
@@ -570,13 +575,13 @@ describe('v0.40.4 — graph_signals knob', () => {
 
 describe('v0.42.3.0 — autocut knobs', () => {
   test('KNOBS_HASH_VERSION includes relational, private-page, and query-policy cache isolation', () => {
-    expect(KNOBS_HASH_VERSION).toBe(12);
+    expect(KNOBS_HASH_VERSION).toBe(13);
   });
 
-  test('bundle defaults: conservative/balanced off, tokenmax on @0.20', () => {
+  test('bundle defaults: conservative/balanced/tokenmax autocut off @0.20', () => {
     expect(MODE_BUNDLES.conservative.autocut).toBe(false);
     expect(MODE_BUNDLES.balanced.autocut).toBe(false);
-    expect(MODE_BUNDLES.tokenmax.autocut).toBe(true);
+    expect(MODE_BUNDLES.tokenmax.autocut).toBe(false);
     for (const m of ['conservative', 'balanced', 'tokenmax'] as const) {
       expect(MODE_BUNDLES[m].autocut_jump).toBe(0.2);
     }

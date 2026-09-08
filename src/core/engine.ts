@@ -1666,7 +1666,7 @@ export interface BrainEngine {
   listFactsSince(
     source_id: string,
     since: Date,
-    opts?: FactListOpts & { entitySlug?: string },
+    opts?: FactListOpts & { entitySlug?: string; sessionId?: string },
   ): Promise<FactRow[]>;
 
   /** List facts captured under a session id within a source. */

@@ -26,6 +26,15 @@
 import { createHash } from 'crypto';
 import { CR_MODES, type CRMode } from '../types.ts';
 import { getRecipe } from '../ai/recipes/index.ts';
+import {
+  DEFAULT_METADATA_BOOST_GATE,
+  normalizeMetadataBoostGate,
+  type MetadataBoostGate,
+} from './metadata-boost-gate.ts';
+import {
+  DEFAULT_RELATIONAL_RERANK_PIN,
+  normalizeRelationalRerankPin,
+} from './relational-rerank-pin.ts';
 
 /**
  * Look up the `reranker.default_timeout_ms` declared by the resolved
@@ -246,7 +255,7 @@ export interface ModeBundle {
   /**
    * v0.42.3.0 — autocut (score-discontinuity result-sizing). Default OFF for
    * conservative + balanced (no reranker → no trustworthy cliff signal;
-   * would no-op anyway), ON for tokenmax. When on AND a reranker scored ≥2
+   * would no-op anyway), OFF for tokenmax. When on AND a reranker scored ≥2
    * items, hybridSearch cuts the ranked set at the largest cross-encoder
    * rerank-score gap (instead of returning the full top-K). No-op without a
    * reranker. Override path: per-call SearchOpts.autocut → `search.autocut`
@@ -265,6 +274,8 @@ export interface ModeBundle {
   relationalRetrieval: boolean;
   /** Maximum traversal depth; hard-capped at 3 by config parsing. */
   relational_retrieval_depth: number;
+  metadata_boost_gate: MetadataBoostGate;
+  relational_rerank_pin: number;
 }
 
 /**
@@ -316,6 +327,8 @@ export const MODE_BUNDLES: Readonly<Record<SearchMode, Readonly<ModeBundle>>> = 
     relationalRetrieval: false,
     relational_retrieval_depth: 2,
     autocut_jump: 0.2,
+    metadata_boost_gate: 'lexical',
+    relational_rerank_pin: DEFAULT_RELATIONAL_RERANK_PIN,
   }),
   balanced: Object.freeze({
     cache_enabled: true,
@@ -369,6 +382,8 @@ export const MODE_BUNDLES: Readonly<Record<SearchMode, Readonly<ModeBundle>>> = 
     relationalRetrieval: true,
     relational_retrieval_depth: 2,
     autocut_jump: 0.2,
+    metadata_boost_gate: 'lexical',
+    relational_rerank_pin: DEFAULT_RELATIONAL_RERANK_PIN,
   }),
   tokenmax: Object.freeze({
     cache_enabled: true,
@@ -414,11 +429,12 @@ export const MODE_BUNDLES: Readonly<Record<SearchMode, Readonly<ModeBundle>>> = 
     // 10K-page brain; documented in the post-upgrade cost prompt.
     contextual_retrieval: 'per_chunk_synopsis' as CRMode,
     contextual_retrieval_disabled: false,
-    // v0.42.3.0 — autocut ON.
-    autocut: true,
+    autocut: false,
     relationalRetrieval: true,
     relational_retrieval_depth: 2,
     autocut_jump: 0.2,
+    metadata_boost_gate: 'lexical',
+    relational_rerank_pin: DEFAULT_RELATIONAL_RERANK_PIN,
   }),
 });
 
@@ -472,6 +488,8 @@ export interface SearchKeyOverrides {
   relationalRetrieval?: boolean;
   relational_retrieval_depth?: number;
   autocut_jump?: number;
+  metadata_boost_gate?: MetadataBoostGate;
+  relational_rerank_pin?: number;
 }
 
 /**
@@ -520,6 +538,8 @@ export interface SearchPerCallOpts {
   autocut_jump?: number;
   relationalRetrieval?: boolean;
   relational_retrieval_depth?: number;
+  metadata_boost_gate?: MetadataBoostGate;
+  relational_rerank_pin?: number;
 }
 
 /**
@@ -614,6 +634,8 @@ export function resolveSearchMode(input: ResolveSearchModeInput): ResolvedSearch
     autocut_jump: pick('autocut_jump'),
     relationalRetrieval: pick('relationalRetrieval'),
     relational_retrieval_depth: pick('relational_retrieval_depth'),
+    metadata_boost_gate: pick('metadata_boost_gate'),
+    relational_rerank_pin: pick('relational_rerank_pin'),
     resolved_mode,
     mode_valid: valid,
   };
@@ -713,7 +735,7 @@ export function attributeKnob<K extends keyof ModeBundle>(
 // is global, not per-mode). Refills within cache.ttl_seconds (3600s default).
 // PMBrain 1.3.7 bump 10→11: fold current result-affecting request posture
 // (hard excludes, detail, salience and recency) into query-cache identity.
-export const KNOBS_HASH_VERSION = 12;
+export const KNOBS_HASH_VERSION = 13;
 
 /**
  * v0.36 (D8 / CDX-2) — second-arg context for the cache key. The
@@ -840,6 +862,8 @@ export function knobsHash(
     `det=${ctx?.detail ?? 'medium'}`,
     `sal=${ctx?.salience ?? 'off'}`,
     `rec=${ctx?.recency ?? 'off'}`,
+    `mbg=${knobs.metadata_boost_gate ?? DEFAULT_METADATA_BOOST_GATE}`,
+    `rrp=${knobs.relational_rerank_pin ?? DEFAULT_RELATIONAL_RERANK_PIN}`,
   ];
   const h = createHash('sha256');
   h.update(parts.join('|'));
@@ -1017,6 +1041,11 @@ export function loadOverridesFromConfig(
     if (Number.isFinite(n) && n >= 1 && n <= 3) out.relational_retrieval_depth = n;
   }
 
+  const mbg = normalizeMetadataBoostGate(get('search.metadata_boost_gate'));
+  if (mbg !== undefined) out.metadata_boost_gate = mbg;
+  const rrp = normalizeRelationalRerankPin(get('search.relational_rerank_pin'));
+  if (rrp !== undefined) out.relational_rerank_pin = rrp;
+
   return out;
 }
 
@@ -1058,6 +1087,8 @@ export const SEARCH_MODE_CONFIG_KEYS: ReadonlyArray<string> = Object.freeze([
   'search.relational_retrieval',
   'search.relational_retrieval_depth',
   'search.autocut_jump',
+  'search.metadata_boost_gate',
+  'search.relational_rerank_pin',
 ]);
 
 /**

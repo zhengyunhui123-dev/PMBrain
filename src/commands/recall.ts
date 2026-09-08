@@ -58,6 +58,7 @@ const KIND_ICON: Record<FactKind, string> = {
 interface ParsedFlags {
   entity: string | null;
   since: Date | null;
+  sinceProvided: boolean;
   sessionId: string | null;
   grep: string | null;
   today: boolean;
@@ -86,6 +87,7 @@ function parseFlags(args: string[]): ParsedFlags {
   const out: ParsedFlags = {
     entity: null,
     since: null,
+    sinceProvided: false,
     sessionId: null,
     grep: null,
     today: false,
@@ -103,7 +105,11 @@ function parseFlags(args: string[]): ParsedFlags {
   let positional = '';
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
-    if (a === '--since') { out.since = parseSinceParam(args[++i] ?? ''); continue; }
+    if (a === '--since') {
+      out.sinceProvided = true;
+      out.since = parseSinceParam(args[++i] ?? '');
+      continue;
+    }
     if (a === '--session' || a === '--session-id') { out.sessionId = args[++i] ?? null; continue; }
     if (a === '--grep') { out.grep = (args[++i] ?? '').toLowerCase(); continue; }
     if (a === '--today') { out.today = true; continue; }
@@ -159,6 +165,10 @@ function parseSinceParam(raw: string): Date | null {
 function validateAndNormalizeFlags(flags: ParsedFlags): void {
   if (flags.sinceLastRun && flags.since) {
     process.stderr.write('Error: --since-last-run and --since are mutually exclusive.\n');
+    process.exit(2);
+  }
+  if (flags.sinceProvided && !flags.since) {
+    process.stderr.write('Error: --since could not be parsed. Use ISO time or forms like "8 hours ago".\n');
     process.exit(2);
   }
   if (flags.watchSeconds !== null) {
@@ -337,12 +347,27 @@ async function fetchRowsLocal(
   }
   if (flags.entity) {
     const slug = (await resolveEntitySlug(engine, sourceId, flags.entity)) ?? flags.entity;
+    if (resolvedSince) {
+      return engine.listFactsSince(sourceId, resolvedSince, {
+        entitySlug: slug,
+        sessionId: flags.sessionId ?? undefined,
+        activeOnly: !flags.includeExpired,
+        limit: flags.limit,
+      });
+    }
     return engine.listFactsByEntity(sourceId, slug, {
       activeOnly: !flags.includeExpired,
       limit: flags.limit,
     });
   }
   if (flags.sessionId) {
+    if (resolvedSince) {
+      return engine.listFactsSince(sourceId, resolvedSince, {
+        sessionId: flags.sessionId,
+        activeOnly: !flags.includeExpired,
+        limit: flags.limit,
+      });
+    }
     return engine.listFactsBySession(sourceId, flags.sessionId, {
       activeOnly: !flags.includeExpired,
       limit: flags.limit,

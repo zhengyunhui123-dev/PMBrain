@@ -45,17 +45,19 @@ export function hasCJK(s: string): boolean {
  * and whitespace tokens are the right unit; at or above it's CJK-dominant
  * and char count is the right unit.
  */
-export function countCJKAwareWords(s: string): number {
-  if (s.length === 0) return 0;
+export function isCJKDominant(s: string): boolean {
   const cjkMatches = s.match(new RegExp(`[${CJK_SLUG_CHARS}]`, 'g'));
   const cjkCount = cjkMatches ? cjkMatches.length : 0;
   const nonWhitespace = s.replace(/\s/g, '').length;
-  if (nonWhitespace === 0) return 0;
-  const density = cjkCount / nonWhitespace;
-  if (density >= CJK_DENSITY_THRESHOLD) {
-    return nonWhitespace;
-  }
-  return (s.match(/\S+/g) || []).length;
+  if (nonWhitespace === 0) return false;
+  return cjkCount / nonWhitespace >= CJK_DENSITY_THRESHOLD;
+}
+
+export function countCJKAwareWords(s: string): number {
+  if (s.length === 0) return 0;
+  return isCJKDominant(s)
+    ? s.replace(/\s/g, '').length
+    : (s.match(/\S+/g) || []).length;
 }
 
 /**

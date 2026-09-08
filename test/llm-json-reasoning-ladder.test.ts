@@ -20,6 +20,11 @@ describe('parseLlmJson — reasoning ladder', () => {
     expect(parseLlmJson<{ answer: string }>(raw)).toEqual({ answer: 'final' });
   });
 
+  test('also recovers a closed <thinking> block', () => {
+    const raw = '<thinking>draft {"answer":"draft"}</thinking>{"answer":"final"}';
+    expect(parseLlmJson<{ answer: string }>(raw)).toEqual({ answer: 'final' });
+  });
+
   test('recovers an array payload', () => {
     const raw = '<think>maybe [1,2] ?</think>[3,4]';
     expect(parseLlmJson<number[]>(raw, { array: true })).toEqual([3, 4]);

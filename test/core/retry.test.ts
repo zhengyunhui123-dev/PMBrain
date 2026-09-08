@@ -346,6 +346,7 @@ describe('BATCH_AUDIT_SITES typed enum + isBatchAuditSite guard (D10c codex)', (
       'extract.stale',
       'extract.by_mention',
       'extract.markdown_catchup',
+      'cycle.synthesize_concepts.provenance',
       'mcp.put_page.autolink',
       'sync.import_file',
       'reindex.markdown', 'reindex.multimodal',

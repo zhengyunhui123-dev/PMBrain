@@ -74,6 +74,8 @@ const KNOB_DESCRIPTIONS: Record<keyof ModeBundle, string> = {
   // v0.43 relational recall
   relationalRetrieval: 'Typed-edge relational recall arm (relational queries walk the graph; no-op otherwise)',
   relational_retrieval_depth: 'Max hops for relational traversal (1..3, 2 default)',
+  metadata_boost_gate: 'Post-fusion metadata boosts (backlink/salience/recency/graph/alias): always, or lexical = only when a keyword/title/relational row fused',
+  relational_rerank_pin: 'Relational-arm rows re-pinned above reranked text rows in fused order (0 = off; 0..10, 3 default)',
 };
 
 interface SearchModesReport {

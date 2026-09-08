@@ -13,6 +13,8 @@ import { PMBRAIN_MCP_INSTRUCTIONS } from './instructions.ts';
 import { filterOpsForSurface, type McpSurface } from './surface.ts';
 
 export async function startMcpServer(engine: BrainEngine, opts: { surface?: McpSurface } = {}) {
+  const { assertStdioSourceBindable } = await import('./source-preflight.ts');
+  await assertStdioSourceBindable(engine);
   const defaultSourceId = await resolveMcpDefaultSourceId(engine);
   const surface = opts.surface ?? 'full';
   const surfaceOps = filterOpsForSurface(operations, surface);

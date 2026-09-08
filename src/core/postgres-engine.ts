@@ -4069,7 +4069,7 @@ export class PostgresEngine implements BrainEngine {
   async listFactsSince(
     source_id: string,
     since: Date,
-    opts?: FactListOpts & { entitySlug?: string },
+    opts?: FactListOpts & { entitySlug?: string; sessionId?: string },
   ): Promise<FactRow[]> {
     const sql = this.sql;
     const limit = clampSearchLimit(opts?.limit, 50, MAX_SEARCH_LIMIT);
@@ -4078,11 +4078,13 @@ export class PostgresEngine implements BrainEngine {
     const kinds = (opts?.kinds && opts.kinds.length > 0) ? opts.kinds : null;
     const visibility = (opts?.visibility && opts.visibility.length > 0) ? opts.visibility : null;
     const entitySlug = opts?.entitySlug ?? null;
+    const sessionId = opts?.sessionId ?? null;
     const rows = await sql<FactRowSqlShape[]>`
       SELECT * FROM facts
       WHERE source_id = ${source_id}
-        AND created_at >= ${since}
+        AND COALESCE(valid_from, created_at) >= ${since}
         ${entitySlug ? sql`AND entity_slug = ${entitySlug}` : sql``}
+        ${sessionId ? sql`AND source_session = ${sessionId}` : sql``}
         ${activeOnly ? sql`AND expired_at IS NULL` : sql``}
         ${opts?.unconsolidatedOnly ? sql`AND consolidated_at IS NULL` : sql``}
         ${kinds ? sql`AND kind = ANY(${kinds}::text[])` : sql``}

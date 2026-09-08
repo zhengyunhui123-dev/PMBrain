@@ -4042,28 +4042,55 @@ const recall: Operation = {
     } else if (typeof p.entity === 'string' && p.entity.length > 0) {
       const { resolveEntitySlug } = await import('./entities/resolve.ts');
       const slug = (await resolveEntitySlug(ctx.engine, sourceId, p.entity)) ?? p.entity;
-      rows = await ctx.engine.listFactsByEntity(sourceId, slug, {
-        activeOnly: !includeExpired,
-        limit,
-        visibility,
-      });
-    } else if (typeof p.session_id === 'string' && p.session_id.length > 0) {
-      rows = await ctx.engine.listFactsBySession(sourceId, p.session_id, {
-        activeOnly: !includeExpired,
-        limit,
-        visibility,
-      });
-    } else if (p.since !== undefined) {
-      const since = parseSinceParam(p.since);
+      const since = p.since !== undefined ? parseSinceParam(p.since) : null;
+      if (p.since !== undefined && p.since !== null && p.since !== '' && !since) {
+        throw new OperationError('invalid_params', 'since could not be parsed');
+      }
       if (since) {
         rows = await ctx.engine.listFactsSince(sourceId, since, {
+          entitySlug: slug,
+          sessionId: typeof p.session_id === 'string' && p.session_id.length > 0 ? p.session_id : undefined,
+          activeOnly: !includeExpired,
+          limit,
+          visibility,
+        });
+      } else {
+        rows = await ctx.engine.listFactsByEntity(sourceId, slug, {
           activeOnly: !includeExpired,
           limit,
           visibility,
         });
       }
+    } else if (typeof p.session_id === 'string' && p.session_id.length > 0) {
+      const since = p.since !== undefined ? parseSinceParam(p.since) : null;
+      if (p.since !== undefined && p.since !== null && p.since !== '' && !since) {
+        throw new OperationError('invalid_params', 'since could not be parsed');
+      }
+      if (since) {
+        rows = await ctx.engine.listFactsSince(sourceId, since, {
+          sessionId: p.session_id,
+          activeOnly: !includeExpired,
+          limit,
+          visibility,
+        });
+      } else {
+        rows = await ctx.engine.listFactsBySession(sourceId, p.session_id, {
+          activeOnly: !includeExpired,
+          limit,
+          visibility,
+        });
+      }
+    } else if (p.since !== undefined) {
+      const since = parseSinceParam(p.since);
+      if (!since) {
+        throw new OperationError('invalid_params', 'since could not be parsed');
+      }
+      rows = await ctx.engine.listFactsSince(sourceId, since, {
+        activeOnly: !includeExpired,
+        limit,
+        visibility,
+      });
     } else {
-      // No filter: return recent across the source.
       rows = await ctx.engine.listFactsSince(sourceId, new Date(0), {
         activeOnly: !includeExpired,
         limit,

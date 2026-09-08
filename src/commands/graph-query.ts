@@ -26,6 +26,7 @@ interface Args {
   direction: 'in' | 'out' | 'both';
   showHelp: boolean;
   includeForeign: boolean;
+  source?: string;
 }
 
 function parseArgs(args: string[]): Args {
@@ -39,6 +40,8 @@ function parseArgs(args: string[]): Args {
       if (d === 'in' || d === 'out' || d === 'both') out.direction = d;
     }
     else if (a === '--include-foreign') out.includeForeign = true;
+    else if (a === '--source') out.source = i + 1 < args.length ? args[++i] : '';
+    else if (a.startsWith('--source=')) out.source = a.slice('--source='.length);
     else if (a === '--help' || a === '-h') out.showHelp = true;
     else if (!a.startsWith('-') && !out.slug) out.slug = a;
   }
@@ -56,6 +59,7 @@ Options:
                          founded, advises, mentions, source).
   --depth <N>            Max traversal depth (default 5).
   --direction <dir>      'out' (default), 'in', or 'both'.
+  --source <id>          Scope the walk to this source
   --include-foreign      Include edges to pages in other sources (v0.37.7.0).
                          Off by default; scoped traversal continues as today,
                          and a footer reports the count of foreign-source
@@ -140,7 +144,19 @@ export async function runGraphQuery(engine: BrainEngine, argv: string[]) {
   // set (which the CLI always does); unpackToolResult parses the JSON.
   let paths: GraphPath[];
   const cfg = loadConfig();
+  if (args.source === '') {
+    console.error('`--source` requires a value');
+    process.exit(1);
+  }
+  if (args.source !== undefined && args.includeForeign) {
+    console.error('pass --source <id> OR --include-foreign, not both');
+    process.exit(1);
+  }
   if (isThinClient(cfg)) {
+    if (args.source !== undefined) {
+      console.error('gbrain graph-query does not accept --source on a thin-client install');
+      process.exit(1);
+    }
     const raw = await callRemoteTool(cfg!, 'traverse_graph', {
       slug: args.slug,
       depth: args.depth,
@@ -149,10 +165,14 @@ export async function runGraphQuery(engine: BrainEngine, argv: string[]) {
     }, { timeoutMs: 30_000 });
     paths = unpackToolResult<GraphPath[]>(raw);
   } else {
+    const { resolveSourceId } = await import('../core/source-resolver.ts');
+    const sourceId = await resolveSourceId(engine, args.source ?? null);
+    const scoped = !args.includeForeign && sourceId !== '__all__';
     paths = await engine.traversePaths(args.slug, {
       depth: args.depth,
       linkType: args.linkType,
       direction: args.direction,
+      ...(scoped ? { sourceId } : {}),
     });
   }
 

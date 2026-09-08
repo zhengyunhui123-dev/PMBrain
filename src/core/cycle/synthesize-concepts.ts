@@ -297,7 +297,33 @@ export async function runPhaseSynthesizeConcepts(
           resolution_type: 'qualified' as const,
         },
       ]);
+      const provenanceLinks = group.atomRefs.flatMap(ref => [
+        {
+          from_slug: outputSlug,
+          to_slug: ref.slug,
+          link_type: 'synthesized_from',
+          context: 'member atom',
+          link_source: 'concept-provenance',
+          from_source_id: outputSourceId,
+          to_source_id: ref.source_id,
+        },
+        {
+          from_slug: ref.slug,
+          to_slug: outputSlug,
+          link_type: 'synthesizes',
+          context: 'concept synthesized from this atom',
+          link_source: 'concept-provenance',
+          from_source_id: ref.source_id,
+          to_source_id: outputSourceId,
+        },
+      ]);
       await engine.addLinksBatch(relationshipRows, { auditSite: 'extract.links_db' }); // gbrain-allow-direct-insert: Dream concept evidence is written inside the cycle reconcile path.
+      try {
+        await engine.addLinksBatch(provenanceLinks, { auditSite: 'cycle.synthesize_concepts.provenance' });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(`[synthesize_concepts] provenance links failed for ${outputSlug} (non-fatal): ${msg}`);
+      }
       conceptSlugs.push(outputSlug);
     }
     conceptsWritten++;

@@ -60,6 +60,12 @@ import { upsertExtractRollup } from '../extract/rollup-writer.ts';
 import { parseLlmJson } from '../llm-json.ts';
 import { resolveAtomSlug } from './atom-identity.ts';
 import { resolveCycleDate } from './cycle-date.ts';
+import {
+  recordTranscriptFailureCount,
+  stampTranscriptTombstone,
+  tombstonedTranscriptsForHashes,
+  transcriptStateKey,
+} from './extract-atoms-transcript-state.ts';
 
 const DEFAULT_BUDGET_USD = 0.3;
 
@@ -79,6 +85,7 @@ const EXTRACTABLE_PAGE_TYPES = [
 ] as const;
 const PAGE_DISCOVERY_BUDGET = 50;
 const MIN_PAGE_CHARS_FOR_EXTRACTION = 500;
+export const MAX_DETERMINISTIC_FAILURES = 3;
 
 export interface ExtractAtomsOpts {
   brainDir?: string;
@@ -395,8 +402,10 @@ export async function runPhaseExtractAtoms(
   // short-circuit shows a sign of life (closes Issue 2 silent-phase pain).
   opts.progress?.heartbeat(`checking existing atoms for ${allHashes16.length} transcripts`);
   const existingHashes = await atomsExistingForHashes(engine, sourceId, allHashes16);
+  const tombstoned = await tombstonedTranscriptsForHashes(engine, sourceId, allHashes16);
   for (const t of transcripts) {
-    if (existingHashes.has(t.contentHash.slice(0, 16))) {
+    const hash16 = t.contentHash.slice(0, 16);
+    if (existingHashes.has(hash16) || tombstoned.has(transcriptStateKey(t.filePath, hash16))) {
       duplicatesSkipped++;
       continue;
     }
@@ -542,6 +551,9 @@ export async function runPhaseExtractAtoms(
             // Fail-soft: if the marker cannot be saved, the page remains retryable.
           }
         }
+        if (!opts.dryRun && item.kind === 'transcript') {
+          await stampTranscriptTombstone(engine, sourceId, item.filePath, item.contentHash);
+        }
         if (item.kind === 'transcript') transcriptsProcessed++;
         else pagesProcessed++;
         continue;
@@ -609,6 +621,12 @@ export async function runPhaseExtractAtoms(
         source: originLabel,
         error: err instanceof Error ? err.message : String(err),
       });
+      if (!opts.dryRun && item.kind === 'transcript') {
+        const failCount = await recordTranscriptFailureCount(engine, sourceId, item.filePath, item.contentHash);
+        if (failCount != null && failCount >= MAX_DETERMINISTIC_FAILURES) {
+          await stampTranscriptTombstone(engine, sourceId, item.filePath, item.contentHash);
+        }
+      }
     }
   }
   });

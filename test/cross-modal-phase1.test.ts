@@ -144,7 +144,7 @@ describe('D2 — knobsHash differs across cross-modal knob values', () => {
     // v0.41.22.0 (type-unification): 5→6 for alias_resolved post-fusion boost.
     // PMBrain 1.2.81: 9→10 isolates remote private-page reads from local cache.
     // PMBrain 1.3.7: 10→11 folds query-policy inputs into cache isolation.
-    expect(KNOBS_HASH_VERSION).toBe(12);
+    expect(KNOBS_HASH_VERSION).toBe(13);
   });
 
   test('flipping unified_multimodal changes the hash', () => {

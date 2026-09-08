@@ -28,6 +28,8 @@ import { buildRelationalArm } from './relational-recall.ts';
 import { loadConfigWithEngine } from '../config.ts';
 import { dedupResults } from './dedup.ts';
 import { applyReranker } from './rerank.ts';
+import { decideMetadataBoosts, lexicalArmsVoted, normalizeMetadataBoostGate } from './metadata-boost-gate.ts';
+import { normalizeRelationalRerankPin, pinRelationalRows, type RelationalRerankPinDecision } from './relational-rerank-pin.ts';
 import { autoDetectDetail, classifyQuery, isAmbiguousModalityQuery } from './query-intent.ts';
 import { isTitlePhraseMatch } from './title-match.ts';
 import { normalizeAlias } from './alias-normalize.ts';
@@ -372,6 +374,7 @@ export interface PostFusionOpts {
    * metadata stages so a title hit can't bury a strong semantic match.
    */
   titleBoost?: number;
+  skipMetadataBoosts?: boolean;
 }
 
 export async function runPostFusionStages(
@@ -397,9 +400,10 @@ export async function runPostFusionStages(
   // per-stage recompute (which would couple stage order to gating decisions);
   // see plan `swift-sniffing-nygaard.md` D6 / codex outside-voice T2.
   const floorThreshold = computeFloorThreshold(results, opts.floorRatio);
+  const metadata = opts.skipMetadataBoosts !== true;
 
   // Backlink stage (existing behavior, preserved).
-  if (opts.applyBacklinks) {
+  if (metadata && opts.applyBacklinks) {
     try {
       const slugs = Array.from(new Set(results.map(r => r.slug)));
       const counts = opts.readPolicy
@@ -419,7 +423,7 @@ export async function runPostFusionStages(
   );
 
   // Salience stage (mattering, no time).
-  if (opts.salience !== 'off') {
+  if (metadata && opts.salience !== 'off') {
     try {
       const scores = opts.readPolicy ? await readSalienceScores(engine.executeRaw.bind(engine), refs, opts.readPolicy) : await engine.getSalienceScores(refs);
       applySalienceBoost(results, scores, opts.salience, floorThreshold);
@@ -429,7 +433,7 @@ export async function runPostFusionStages(
   }
 
   // Recency stage (per-prefix decay, no mattering).
-  if (opts.recency !== 'off') {
+  if (metadata && opts.recency !== 'off') {
     try {
       const dates = opts.readPolicy ? await readEffectiveDates(engine.executeRaw.bind(engine), refs, opts.readPolicy) : await engine.getEffectiveDates(refs);
       const { resolveRecencyDecayMap, DEFAULT_FALLBACK } = await import('./recency-decay.ts');
@@ -464,7 +468,7 @@ export async function runPostFusionStages(
   // shares the same floor-threshold so a weak hub gets the same
   // protection v0.35.6.0 added for other metadata boosts. Fail-open at
   // this level matches the per-stage non-fatal contract.
-  if (opts.graphSignalsEnabled) {
+  if (metadata && opts.graphSignalsEnabled) {
     try {
       const { applyGraphSignals } = await import('./graph-signals.ts');
       await applyGraphSignals(results, engine, {
@@ -486,10 +490,12 @@ export async function runPostFusionStages(
   // intent: "user explicitly disambiguated this as canonical." Defense-
   // in-depth: pre-v105 brains don't have slug_aliases table; the lookup
   // throws isUndefinedTableError and the stage no-ops.
-  try {
-    await applyAliasResolvedBoost(results, engine);
-  } catch {
-    // Non-fatal; preserves the per-stage contract.
+  if (metadata) {
+    try {
+      await applyAliasResolvedBoost(results, engine);
+    } catch {
+      // Non-fatal; preserves the per-stage contract.
+    }
   }
 }
 
@@ -763,6 +769,8 @@ export async function hybridSearch(
       // would be a no-op (both branches resolve to the same mode default).
       relationalRetrieval: opts?.relationalRetrieval,
       relational_retrieval_depth: opts?.relationalRetrievalDepth,
+      metadata_boost_gate: normalizeMetadataBoostGate(opts?.metadataBoostGate),
+      relational_rerank_pin: normalizeRelationalRerankPin(opts?.relationalRerankPin),
     },
   });
 
@@ -1437,12 +1445,26 @@ export async function hybridSearch(
     fused = await cosineReScore(engine, fused, queryEmbedding, resolvedCol.name);
   }
 
+  const metadataBoostGate = decideMetadataBoosts({
+    gate: resolvedMode.metadata_boost_gate,
+    modality: effectiveModality,
+    lexicalVoted: lexicalArmsVoted({
+      keywordFusionList,
+      titleFusionList,
+      relationalList,
+      includeRelational: effectiveModality !== 'image',
+    }),
+  });
+
   // v0.29.1: post-fusion stages (backlink + salience + recency) run via
   // runPostFusionStages so all three early-return paths share the same
   // boost surface. Salience and recency are independent axes — either,
   // both, or neither fires depending on resolved modes.
   if (fused.length > 0) {
-    await runPostFusionStages(engine, fused, postFusionOpts);
+    await runPostFusionStages(engine, fused, {
+      ...postFusionOpts,
+      skipMetadataBoosts: !metadataBoostGate.boosts_applied,
+    });
     // Exact literal slug/title matches are always checked. Intent weighting
     // may increase the multiplier, but a chosen exact name must not lose just
     // because the zero-LLM classifier labeled a Chinese lookup as `general`.
@@ -1525,7 +1547,7 @@ export async function hybridSearch(
     timeoutMs: resolvedMode.reranker_timeout_ms,
   };
   let rerankerStatus: { state: 'applied' | 'failed'; reason?: string } | undefined;
-  const reranked = rerankerOpts.enabled
+  let reranked = rerankerOpts.enabled
     ? await applyReranker(query, deduped, {
         ...rerankerOpts,
         onStatus: (status: { state: 'applied' | 'failed'; reason?: string }) => {
@@ -1533,6 +1555,19 @@ export async function hybridSearch(
         },
       } as any)
     : deduped;
+  let relationalPinDecision: RelationalRerankPinDecision | undefined;
+  if (
+    rerankerStatus?.state === 'applied'
+    && resolvedMode.relational_rerank_pin > 0
+    && relationalList.length > 0
+    && effectiveModality !== 'image'
+  ) {
+    reranked = pinRelationalRows(reranked, relationalList, {
+      max: resolvedMode.relational_rerank_pin,
+      fusedOrder: deduped,
+      onPin: decision => { relationalPinDecision = decision; },
+    });
+  }
 
   // T3 — free-text alias hop. Runs AFTER rerank so a query that is a page's
   // declared chosen name reliably surfaces that page regardless of how the
@@ -1588,12 +1623,9 @@ export async function hybridSearch(
   if (resolvedMode.autocut && offset === 0) {
     const r = applyAutocut(
       returnPool,
-      (x) => x.rerank_score,
+      (x) => x.relational_pinned ? undefined : x.rerank_score,
       { enabled: true, jumpRatio: resolvedMode.autocut_jump, minKeep: 1 },
-      // Preserve alias-hop exact matches: applyAliasHop injects the canonical
-      // page AFTER reranking, so it has no rerank_score. Without this it would
-      // be dropped whenever autocut cuts on the scored set (Codex P1).
-      (x) => x.alias_hit === true || x.exact_lookup !== undefined,
+      (x) => x.alias_hit === true || x.exact_lookup !== undefined || x.relational_pinned === true,
     );
     returnPool = r.kept;
     autocutDecision = r.decision;
@@ -1626,6 +1658,8 @@ export async function hybridSearch(
       : {}),
     ...(adaptiveDecision ? { adaptive_return: adaptiveDecision } : {}),
     ...(autocutDecision ? { autocut: autocutDecision } : {}),
+    metadata_boost_gate: metadataBoostGate,
+    ...(relationalPinDecision ? { relational_rerank_pin: relationalPinDecision } : {}),
   });
   return budgeted;
 }
@@ -1753,6 +1787,8 @@ export async function hybridSearchCached(
       // would be a no-op (both branches resolve to the same mode default).
       relationalRetrieval: opts?.relationalRetrieval,
       relational_retrieval_depth: opts?.relationalRetrievalDepth,
+      metadata_boost_gate: normalizeMetadataBoostGate(opts?.metadataBoostGate),
+      relational_rerank_pin: normalizeRelationalRerankPin(opts?.relationalRerankPin),
     },
   });
   // v0.36 (D8 / CDX-2 + codex /ship #4): resolve column for the cache

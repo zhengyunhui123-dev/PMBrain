@@ -724,6 +724,7 @@ export interface SearchResult {
   relational_hop?: number;
   /** Shortest connecting slug path seed→…→result (for "how I know this"). */
   relational_path?: string[];
+  relational_pinned?: boolean;
   /**
    * v0.40.4 full attribution (D12=A) — per-stage score deltas for the
    * `gbrain search --explain` formatter. Every boost stage stamps its
@@ -901,6 +902,8 @@ export interface SearchOpts {
    * offset===0. See src/core/search/autocut.ts.
    */
   autocut?: import('./search/autocut.ts').AutocutInput;
+  metadataBoostGate?: 'always' | 'lexical';
+  relationalRerankPin?: number | 'off' | 'false';
   type?: PageType;
   /**
    * v0.33: multi-type filter. When set, search results are filtered to
@@ -1519,6 +1522,8 @@ export interface HybridSearchMeta {
    * `gbrain search --explain`.
    */
   autocut?: import('./search/autocut.ts').AutocutDecision;
+  metadata_boost_gate?: import('./search/metadata-boost-gate.ts').MetadataBoostGateDecision;
+  relational_rerank_pin?: import('./search/relational-rerank-pin.ts').RelationalRerankPinDecision;
   /**
    * v0.32.x (search-lite): token budget enforcement metadata. Omitted when
    * no budget was applied (backward-compatible with pre-search-lite

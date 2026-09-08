@@ -87,6 +87,7 @@ export const BATCH_AUDIT_SITES = [
   'extract.timeline_db',
   'extract.stale',
   'extract.by_mention',
+  'cycle.synthesize_concepts.provenance',
   // operations.ts MCP put_page auto-link path.
   'mcp.put_page.autolink',
   // sync.ts/reindex.ts orchestrator labels.

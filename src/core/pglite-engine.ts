@@ -4189,13 +4189,17 @@ export class PGLiteEngine implements BrainEngine {
   async listFactsSince(
     source_id: string,
     since: Date,
-    opts?: FactListOpts & { entitySlug?: string },
+    opts?: FactListOpts & { entitySlug?: string; sessionId?: string },
   ): Promise<FactRow[]> {
-    const where: string[] = [`created_at >= $since`];
+    const where: string[] = [`COALESCE(valid_from, created_at) >= $since`];
     const params: Record<string, unknown> = { since };
     if (opts?.entitySlug) {
       where.push(`entity_slug = $entitySlug`);
       params.entitySlug = opts.entitySlug;
+    }
+    if (opts?.sessionId) {
+      where.push(`source_session = $sessionId`);
+      params.sessionId = opts.sessionId;
     }
     return this._listFacts(source_id, {
       ...opts,
