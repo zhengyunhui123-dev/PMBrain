@@ -261,7 +261,6 @@ describe('desktop settings renderer contracts', () => {
 
   test('restores Workbuddy to the ordinary MCP card and adds Agent写入 beside 更新', () => {
     expect(renderer).not.toContain('renderWorkbuddyIntegration');
-    expect(renderer).not.toContain('深度接入');
     expect(renderer).not.toContain('移除深度接入');
     expect(renderer).not.toContain("if (item.id === 'workbuddy') return renderWorkbuddyIntegration(item)");
     expect(renderer).toContain("item.id === 'workbuddy' && item.configured");
@@ -269,6 +268,8 @@ describe('desktop settings renderer contracts', () => {
     expect(renderer).toContain('writeWorkbuddyUserAgent');
     expect(renderer).toContain("button.addEventListener('click', () => void configure(item.id, button))");
     expect(renderer).toContain("item.configured ? '更新' : '创建并写入'");
+    expect(renderer).toContain("item.id==='codex'||item.id==='claude'");
+    expect(renderer).toContain('深度接入');
     expect(styles).toContain('.integration-actions');
     expect(preview).toContain('writeWorkbuddyUserAgent: async');
     expect(main).toContain('desktop:write-workbuddy-user-agent');
@@ -362,6 +363,14 @@ describe('desktop settings renderer contracts', () => {
     expect(renderer).toContain('setPgliteUpgradeBackupRoot');
     expect(renderer).not.toContain('previous-version');
     expect(preload).not.toContain('openPreviousRelease');
+  });
+
+  test('memory writeback selection is not reset by settings polling before save', () => {
+    expect(renderer).toContain("input[name=\"memory-writeback\"]");
+    expect(renderer).toContain('addEventListener(\'change\', renderMemoryMode)');
+    expect(renderer).toContain('pending !== loadedMemoryMode && pending !== state.mode');
+    expect(html).toContain('id="memory-mode-salient-card"');
+    expect(html).toContain('id="memory-agent-status"');
   });
 
   test('opening advanced model settings only reads a draft and saves with the PGLite pause', () => {

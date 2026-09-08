@@ -1240,24 +1240,40 @@ function applySystemSettingsState(next: DesktopSystemSettingsState): void {
 
 let loadedMemoryMode: 'off' | 'salient' | 'all' | null = null;
 
+function selectedMemoryMode(): 'off' | 'salient' | 'all' | undefined {
+  return document.querySelector<HTMLInputElement>('input[name="memory-writeback"]:checked')?.value as 'off' | 'salient' | 'all' | undefined;
+}
+
+function renderMemoryMode(): void {
+  document.querySelectorAll<HTMLLabelElement>('#memory-mode-off-card, #memory-mode-salient-card, #memory-mode-all-card').forEach((card) => {
+    card.classList.toggle('selected', card.querySelector('input')?.checked === true);
+  });
+}
+
+function memoryModeDirty(): boolean {
+  const pending = selectedMemoryMode();
+  return pending !== undefined && loadedMemoryMode !== null && pending !== loadedMemoryMode;
+}
+
 async function refreshMemoryWriteback(): Promise<void> {
   const statusEl = $('#memory-agent-status');
   const sharedWarn = $('#memory-shared-warning');
   try {
     const state = await window.pmbrainDesktop.getMemoryWriteback();
-    loadedMemoryMode=state.mode;
-    const selected = document.querySelector<HTMLInputElement>(`input[name="memory-writeback"][value="${state.mode}"]`);
-    if (selected) selected.checked = true;
-    document.querySelectorAll<HTMLLabelElement>('#memory-mode-off-card, #memory-mode-salient-card, #memory-mode-all-card').forEach((card) => {
-      card.classList.toggle('selected', card.querySelector('input')?.checked === true);
-    });
+    const pending = selectedMemoryMode();
+    const unsaved = pending !== undefined && loadedMemoryMode !== null && pending !== loadedMemoryMode && pending !== state.mode;
+    if (!unsaved) {
+      loadedMemoryMode = state.mode;
+      const selected = document.querySelector<HTMLInputElement>(`input[name="memory-writeback"][value="${state.mode}"]`);
+      if (selected) selected.checked = true;
+      renderMemoryMode();
+    }
     sharedWarn.hidden = latestSystemSettings?.preferences.networkMode !== 'shared';
     statusEl.textContent = [
       state.enabled ? 'WorkBuddy：长期记忆合同将在重新连接时下发。' : 'WorkBuddy：自动记忆合同未启用。',
       ...state.agents.map(agent => `${agent.agent === 'claude' ? 'Claude Code' : 'Codex'}：${agent.block === 'present' ? '托管指令已安装' : '未安装托管指令'}${agent.agent === 'claude' ? `；Stop Hook ${agent.hook === 'installed' ? '已安装' : '未安装'}` : ''}`),
       ...state.issues,
     ].join('；');
-
   } catch (error) {
     statusEl.textContent = error instanceof Error ? error.message : String(error);
   }
@@ -1286,11 +1302,15 @@ async function restartSharedGateway(): Promise<void> {
   }
   setBusy(button, true, '正在重启…');
   try {
-    const memoryMode = document.querySelector<HTMLInputElement>('input[name="memory-writeback"]:checked')?.value as 'off' | 'salient' | 'all' | undefined;
+    const memoryMode = selectedMemoryMode();
     const saveMemory = memoryMode !== undefined && loadedMemoryMode !== null && memoryMode !== loadedMemoryMode;
     const result = await window.pmbrainDesktop.saveSystemSettings(payload);
     applySystemSettingsState(result.state);
     if (result.canceled) return;
+    if (saveMemory && memoryMode) {
+      await window.pmbrainDesktop.saveMemoryWriteback({ mode: memoryMode, notice_shown: true });
+      await refreshMemoryWriteback();
+    }
     if (!result.state.gateway?.running) throw new Error('共享入口仍未启动，请检查固定 IP 与 3131 端口。');
     setNotice('success', `局域网共享已恢复：${result.state.sharedMcpUrl || payload.sharedIp}`);
   } catch (error) {
@@ -1312,8 +1332,8 @@ async function saveSystemSettings(): Promise<void> {
   }
   setBusy(button, true, '正在保存…');
   try {
-    const memoryMode = document.querySelector<HTMLInputElement>('input[name="memory-writeback"]:checked')?.value as 'off' | 'salient' | 'all' | undefined;
-    const saveMemory = memoryMode !== undefined && loadedMemoryMode !== null && memoryMode !== loadedMemoryMode;
+    const memoryMode = selectedMemoryMode();
+    const saveMemory = memoryModeDirty();
     const result = await window.pmbrainDesktop.saveSystemSettings(payload);
     applySystemSettingsState(result.state);
     if (result.canceled) return;
@@ -1977,6 +1997,7 @@ async function configure(client: IntegrationClient, button: HTMLButtonElement, d
 
 document.querySelectorAll<HTMLInputElement>('input[name="engine"]').forEach((input) => input.addEventListener('change', renderEngine));
 document.querySelectorAll<HTMLInputElement>('input[name="network-mode"]').forEach((input) => input.addEventListener('change', renderNetworkMode));
+document.querySelectorAll<HTMLInputElement>('input[name="memory-writeback"]').forEach((input) => input.addEventListener('change', renderMemoryMode));
 $<HTMLSelectElement>('#shared-address').addEventListener('change', renderSelectedAddressNote);
 (['chat', 'embedding'] as const).forEach(kind => {
   const select = $<HTMLSelectElement>(`#${kind}-provider`);
