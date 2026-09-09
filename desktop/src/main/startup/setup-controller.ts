@@ -178,7 +178,10 @@ export class SetupController {
     }
     return {
       setup,
-      integrations: await listIntegrationsWithConnectionState(this.dependencies.sidecar.current?.port),
+      integrations: await listIntegrationsWithConnectionState(
+        this.dependencies.sidecar.current?.port,
+        this.dependencies.sidecar.current ?? undefined,
+      ),
       port: this.dependencies.sidecar.current?.port,
       mcpUrl: this.dependencies.sidecar.current?.mcpUrl,
     };
@@ -387,7 +390,10 @@ export class SetupController {
     // Read all sidecar-backed setup state before submitting the background
     // task. The task coordinator will briefly disconnect PGLite before its
     // CLI child starts; no post-submit database request may race that handoff.
-    const integrations = await listIntegrationsWithConnectionState(this.dependencies.sidecar.current?.port);
+    const integrations = await listIntegrationsWithConnectionState(
+      this.dependencies.sidecar.current?.port,
+      this.dependencies.sidecar.current ?? undefined,
+    );
     if (embeddingRebuildQueued) {
       const { markEmbeddingRebuildRunning } = await import('../../../../src/core/embedding-rebuild-state.js');
       const rebuildChoice = this.dependencies.waitEmbeddingRebuildChoice();

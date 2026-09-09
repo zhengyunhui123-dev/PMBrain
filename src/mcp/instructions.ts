@@ -13,7 +13,7 @@ export const PMBRAIN_MCP_INSTRUCTIONS = `PMBrain agent operating contract (apply
 
 export function buildMcpInstructions(opts?: { writeback?: AmbientWritebackOpts | null }): string {
   if (!opts?.writeback) return PMBRAIN_MCP_INSTRUCTIONS;
-  return `${PMBRAIN_MCP_INSTRUCTIONS}\n\n${buildAmbientWritebackSection(opts.writeback)}`;
+  return `Save with remember; the only Facts write tool is remember, not facts_add.\n${buildAmbientWritebackSection(opts.writeback)}\n\n${PMBRAIN_MCP_INSTRUCTIONS}`;
 }
 
 type Env = Record<string, string | undefined>;

@@ -1071,6 +1071,8 @@ function renderIntegrations(integrations: IntegrationInfo[]): void {
     badge.className = item.configured ? 'configured badge' : 'badge';
     if (!item.configured) {
       badge.textContent = '未配置';
+    } else if (item.connectionState === 'invalid') {
+      badge.textContent = '凭证失效';
     } else if (item.id === 'qwenpaw' && item.connectionState === 'connected') {
       badge.textContent = '已连接';
     } else if (item.id === 'qwenpaw' && item.connectionState === 'saved') {
@@ -1085,7 +1087,9 @@ function renderIntegrations(integrations: IntegrationInfo[]): void {
     path.textContent = item.path
       ?? (item.id === 'claude' ? '通过 Claude CLI / GUI 接入' : '通过客户端 MCP 配置接入');
     const note = document.createElement('small');
-    note.textContent = item.id === 'qwenpaw'
+    note.textContent = item.connectionState === 'invalid'
+      ? '当前凭证无法连接 PMBrain，请点击修复'
+      : item.id === 'qwenpaw'
       ? item.connectionState === 'saved'
         ? '配置已写入；尚未连通，请让代理绕过 localhost/127.0.0.1 后重试'
         : '通过本机 API 写入 Bearer 并验证，不使用 OAuth'
@@ -1095,7 +1099,9 @@ function renderIntegrations(integrations: IntegrationInfo[]): void {
     const button = document.createElement('button');
     button.className = 'solid';
     if (item.automatic) {
-      button.textContent = item.id === 'qwenpaw' && item.connectionState === 'saved'
+      button.textContent = item.connectionState === 'invalid'
+        ? '修复连接'
+        : item.id === 'qwenpaw' && item.connectionState === 'saved'
         ? '重试连接'
         : item.configured ? '更新' : '创建并写入';
     } else {
@@ -1106,7 +1112,7 @@ function renderIntegrations(integrations: IntegrationInfo[]): void {
       const actions = document.createElement('div');
       actions.className = 'integration-actions';
       const agentButton = document.createElement('button');
-      agentButton.textContent = 'Agent写入';
+      agentButton.textContent = '写入规则与 Agent';
       agentButton.addEventListener('click', () => void writeWorkbuddyUserAgent(agentButton));
       actions.append(button, agentButton);
       article.append(badge, title, path, note, actions);
@@ -1942,11 +1948,11 @@ async function writeWorkbuddyUserAgent(button: HTMLButtonElement): Promise<void>
   try {
     const result = await window.pmbrainDesktop.writeWorkbuddyUserAgent();
     const extra = result.backedUp.length > 0 ? ` 已备份 ${result.backedUp.length} 个你改过的同名文件。` : '';
-    setNotice('success', `已写入用户级 PMBrain 子代理。重启 WorkBuddy 后可用 @pmbrain 或 /pmbrain 调用，并路由已接入的 PMBrain MCP 工具。${extra}`);
+    setNotice('success', `已写入用户级 PMBrain 长期记忆规则、Skills、子代理和命令。请重启 WorkBuddy；普通会话会使用 remember 写入 PMBrain，@pmbrain 和 /pmbrain 也可继续使用。${extra}`);
   } catch (error) {
     setNotice('error', error instanceof Error ? error.message : String(error));
   } finally {
-    setBusy(button, false, 'Agent写入');
+    setBusy(button, false, '写入规则与 Agent');
   }
 }
 

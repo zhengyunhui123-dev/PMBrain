@@ -16,7 +16,7 @@ export interface IntegrationInfo {
   automatic: boolean;
   configuredPort?: number;
   portMismatch?: boolean;
-  connectionState?: 'connected' | 'saved';
+  connectionState?: 'connected' | 'saved' | 'invalid';
 }
 
 export interface IntegrationResult {
@@ -30,7 +30,7 @@ export interface IntegrationResult {
   clientId?: string;
   clientSecret?: string;
   smoke?: { toolCount: number; statsOk: boolean };
-  connectionState?: 'connected' | 'saved';
+  connectionState?: 'connected' | 'saved' | 'invalid';
 }
 
 export interface SharedIntegrationPayload {
@@ -740,10 +740,55 @@ export function listIntegrations(currentPort?: number): IntegrationInfo[] {
   });
 }
 
-export async function listIntegrationsWithConnectionState(currentPort?: number): Promise<IntegrationInfo[]> {
+function readLocalBearer(client: IntegrationClient, path: string): string | undefined {
+  try {
+    if (client === 'codex') {
+      const content = readFileSync(path, 'utf8');
+      const expression = new RegExp(`${escapeRegExp(CODEX_START)}[\\s\\S]*?${escapeRegExp(CODEX_END)}`);
+      const block = content.match(expression)?.[0] ?? content;
+      return block.match(/Authorization\s*=\s*(['"])Bearer\s+(.+?)\1/)?.[2];
+    }
+    if (client === 'workbuddy') {
+      const root = JSON.parse(readFileSync(path, 'utf8')) as {
+        mcpServers?: { pmbrain?: { headers?: { Authorization?: string } } };
+      };
+      return root.mcpServers?.pmbrain?.headers?.Authorization?.match(/^Bearer\s+(.+)$/)?.[1];
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
+}
+
+export async function probeLocalIntegrationConnectionState(
+  client: IntegrationClient,
+  path: string,
+  sidecar: Pick<SidecarManager, 'smokeTest'>,
+): Promise<'connected' | 'invalid' | undefined> {
+  if (client !== 'workbuddy' && client !== 'codex') return undefined;
+  const token = readLocalBearer(client, path);
+  if (!token) return 'invalid';
+  try {
+    const smoke = await sidecar.smokeTest(token);
+    return smoke.statsOk && smoke.toolCount > 0 ? 'connected' : 'invalid';
+  } catch {
+    return 'invalid';
+  }
+}
+
+export async function listIntegrationsWithConnectionState(
+  currentPort?: number,
+  sidecar?: Pick<SidecarManager, 'smokeTest'>,
+): Promise<IntegrationInfo[]> {
   const integrations = listIntegrations(currentPort);
   const qwenPaw = integrations.find(item => item.id === 'qwenpaw');
   if (qwenPaw?.configured) qwenPaw.connectionState = await probeQwenPawConnectionState();
+  if (sidecar) {
+    await Promise.all(integrations.map(async (item) => {
+      if (!item.configured || !item.path || (item.id !== 'workbuddy' && item.id !== 'codex')) return;
+      item.connectionState = await probeLocalIntegrationConnectionState(item.id, item.path, sidecar);
+    }));
+  }
   return integrations;
 }
 

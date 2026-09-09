@@ -2,11 +2,11 @@
  * 产品经理可读的测试说明：
  *
  * WorkBuddy 卡片不再做工作目录深度接入。配置好 MCP 后，
- * 「更新」旁边有一个「Agent写入」。点它只往用户级目录写
- * PMBrain 子代理和斜杠命令，不改知识库。
+ * 「更新」旁边有一个「写入规则与 Agent」。点它往用户级目录写
+ * PMBrain 普通会话规则、长期记忆技能、子代理和斜杠命令，不改知识库。
  *
  * 这组测试确认：
- * 1. 会写入用户目录里的 agents/pmbrain.md 和 commands/pmbrain.md。
+ * 1. 会写入用户目录里的 rules、skills、agents 和 commands。
  * 2. 同时写到 WorkBuddy 自己的用户目录，以及它实际读取的
  *    ~/.codebuddy 用户目录，这样 @pmbrain 和 /pmbrain 能用。
  * 3. 子代理声明使用已经接入的 pmbrain MCP，不另起一套工具。
@@ -37,16 +37,19 @@ afterEach(() => {
 });
 
 describe('WorkBuddy user-level agent write', () => {
-  test('writes pmbrain agent and slash command into user folders', async () => {
+  test('writes global memory rules, skills, agent and slash command into user folders', async () => {
     const homeDir = tempHome();
     const result = await writeWorkbuddyUserAgent({ homeDir });
-    expect(result.written).toHaveLength(4);
+    expect(result.written).toHaveLength(10);
     expect(result.backedUp).toEqual([]);
 
     const agent = readFileSync(join(homeDir, '.workbuddy', 'agents', 'pmbrain.md'), 'utf8');
     const command = readFileSync(join(homeDir, '.workbuddy', 'commands', 'pmbrain.md'), 'utf8');
     const codebuddyAgent = readFileSync(join(homeDir, '.codebuddy', 'agents', 'pmbrain.md'), 'utf8');
     const codebuddyCommand = readFileSync(join(homeDir, '.codebuddy', 'commands', 'pmbrain.md'), 'utf8');
+    const rule = readFileSync(join(homeDir, '.codebuddy', 'rules', 'pmbrain.md'), 'utf8');
+    const rememberSkill = readFileSync(join(homeDir, '.codebuddy', 'skills', 'remember', 'SKILL.md'), 'utf8');
+    const durableSkill = readFileSync(join(homeDir, '.codebuddy', 'skills', 'durable-writeback', 'SKILL.md'), 'utf8');
 
     expect(agent).toContain(USER_AGENT_MARKER);
     expect(agent).toContain('name: pmbrain');
@@ -60,6 +63,34 @@ describe('WorkBuddy user-level agent write', () => {
     expect(command).toContain('$ARGUMENTS');
     expect(codebuddyAgent).toContain('name: pmbrain');
     expect(codebuddyCommand).toContain('/pmbrain');
+    expect(rule).toContain('alwaysApply: true');
+    expect(rule).toContain('Official PMBrain Agent Pack v2 for WorkBuddy user scope.');
+    expect(rule).toContain('本文件用于 WorkBuddy 普通会话的用户级规则');
+    expect(rule).not.toContain('不要把本文件当成用户全局规则');
+    expect(rule).toContain('remember');
+    expect(rule).toContain('facts_add');
+    expect(rule).toContain('不要写入 WorkBuddy 内置 memory');
+    expect(rememberSkill).toContain('name: remember');
+    expect(durableSkill).toContain('name: durable-writeback');
+    expect(result.written.filter(path => path.endsWith('SKILL.md'))).toHaveLength(5);
+  });
+
+  test('rewrites its own managed pack without creating backups', async () => {
+    const homeDir = tempHome();
+    await writeWorkbuddyUserAgent({ homeDir });
+    const result = await writeWorkbuddyUserAgent({ homeDir });
+    expect(result.written).toHaveLength(10);
+    expect(result.backedUp).toEqual([]);
+  });
+
+  test('automatic convergence refuses to overwrite a user-modified managed file', async () => {
+    const homeDir = tempHome();
+    await writeWorkbuddyUserAgent({ homeDir });
+    const path = join(homeDir, '.codebuddy', 'rules', 'pmbrain.md');
+    writeFileSync(path, `${readFileSync(path, 'utf8')}\n# my change\n`, 'utf8');
+    await expect(writeWorkbuddyUserAgent({ homeDir, overwriteExisting: false }))
+      .rejects.toThrow('未静默覆盖');
+    expect(readFileSync(path, 'utf8')).toContain('# my change');
   });
 
   test('backs up a user-modified file before replacing it', async () => {

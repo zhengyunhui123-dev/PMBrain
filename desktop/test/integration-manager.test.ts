@@ -10,6 +10,7 @@ import {
   getSharedAccessContext,
   integrationConfigPath,
   listIntegrations,
+  probeLocalIntegrationConnectionState,
   probeQwenPawConnectionState,
   qwenPawDriverIsConfigured,
   qwenPawIntegrationPath,
@@ -553,5 +554,33 @@ describe('desktop integration config merging', () => {
     expect(result).toContain('http://127.0.0.1:3132/mcp');
     expect(result).not.toContain('Bearer first');
     expect(result.match(/\[mcp_servers\.pmbrain\]/g)?.length).toBe(1);
+  });
+
+  test('marks a configured local client invalid when its saved bearer no longer works', async () => {
+    const path = tempFile('config.toml');
+    writeCodexIntegration(path, 'http://127.0.0.1:3131/mcp', 'stale-token', dirname(path));
+    const seen: string[] = [];
+    const state = await probeLocalIntegrationConnectionState('codex', path, {
+      smokeTest: async (token: string) => {
+        seen.push(token);
+        throw new Error('invalid_token');
+      },
+    });
+    expect(state).toBe('invalid');
+    expect(seen).toEqual(['stale-token']);
+  });
+
+  test('verifies the saved WorkBuddy bearer instead of trusting config presence', async () => {
+    const path = tempFile('mcp.json');
+    writeJsonIntegration(path, 'http://127.0.0.1:3131/mcp', 'workbuddy-token', dirname(path));
+    const seen: string[] = [];
+    const state = await probeLocalIntegrationConnectionState('workbuddy', path, {
+      smokeTest: async (token: string) => {
+        seen.push(token);
+        return { toolCount: 99, statsOk: true };
+      },
+    });
+    expect(state).toBe('connected');
+    expect(seen).toEqual(['workbuddy-token']);
   });
 });

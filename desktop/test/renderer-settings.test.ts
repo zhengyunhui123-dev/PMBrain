@@ -259,12 +259,12 @@ describe('desktop settings renderer contracts', () => {
     expect(renderer).toContain('重试连接');
   });
 
-  test('restores Workbuddy to the ordinary MCP card and adds Agent写入 beside 更新', () => {
+  test('restores Workbuddy to the ordinary MCP card and adds rules and Agent write beside 更新', () => {
     expect(renderer).not.toContain('renderWorkbuddyIntegration');
     expect(renderer).not.toContain('移除深度接入');
     expect(renderer).not.toContain("if (item.id === 'workbuddy') return renderWorkbuddyIntegration(item)");
     expect(renderer).toContain("item.id === 'workbuddy' && item.configured");
-    expect(renderer).toContain('Agent写入');
+    expect(renderer).toContain('写入规则与 Agent');
     expect(renderer).toContain('writeWorkbuddyUserAgent');
     expect(renderer).toContain("button.addEventListener('click', () => void configure(item.id, button))");
     expect(renderer).toContain("item.configured ? '更新' : '创建并写入'");
@@ -274,6 +274,12 @@ describe('desktop settings renderer contracts', () => {
     expect(preview).toContain('writeWorkbuddyUserAgent: async');
     expect(main).toContain('desktop:write-workbuddy-user-agent');
     expect(preload).toContain('desktop:write-workbuddy-user-agent');
+  });
+
+  test('shows invalid local credentials and a one-click repair action', () => {
+    expect(renderer).toContain('凭证失效');
+    expect(renderer).toContain('当前凭证无法连接 PMBrain');
+    expect(renderer).toContain('修复连接');
   });
 
   test('removes stale shared credential DOM access while preserving network settings', () => {

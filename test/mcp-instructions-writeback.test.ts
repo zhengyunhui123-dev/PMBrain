@@ -39,9 +39,11 @@ describe('MCP 长期记忆合同', () => {
     expect(buildAmbientWritebackSection(BASE_OPTS).split('\n').length).toBeLessThanOrEqual(15);
   });
 
-  test('开启后基础合同不被改写', () => {
+  test('开启后先告诉宿主准确写入工具，再保留基础合同', () => {
     const out = buildMcpInstructions({ writeback: BASE_OPTS });
-    expect(out.startsWith(PMBRAIN_MCP_INSTRUCTIONS)).toBe(true);
+    expect(out.slice(0, 512)).toContain('Save with remember');
+    expect(out.slice(0, 512)).toContain('not facts_add');
+    expect(out).toContain(PMBRAIN_MCP_INSTRUCTIONS);
     expect(out).toContain('Ambient memory writeback');
   });
 });

@@ -40,7 +40,7 @@ PMBrain 工具失败、超时或连接失败，只能说明工具当前不可用
 
 ## 3. 明确记忆
 
-当用户说“记住这个”“保存一下”“以后按这个来”“这个很重要”“这是我的偏好”等明确记忆指令时，必须执行 \`remember\` Skill，通过 PMBrain \`remember\` 工具保存。一条调用只写一个事实；必要时读回验证。明确记忆只写入 PMBrain，不要复制到 WorkBuddy 内置 memory 或其他存储；\`remember\` 成功后立即停止，不得对同一内容重复写入。
+当用户说“记住这个”“保存一下”“以后按这个来”“这个很重要”“这是我的偏好”等明确记忆指令时，必须执行 \`remember\` Skill，通过 PMBrain \`remember\` 工具保存。写入工具准确名是 \`remember\`；PMBrain 不存在 \`facts_add\`，不得猜测别名。一条调用只写一个事实；必要时读回验证。明确记忆只写入 PMBrain，不要写入 WorkBuddy 内置 memory、MEMORY.md 或其他存储；\`remember\` 成功后立即停止，不得对同一内容重复写入。
 
 ## 4. Durable Write Back
 
@@ -130,7 +130,7 @@ export const WORKBUDDY_SKILL_TEMPLATES: Readonly<Record<WorkBuddySkillSlug, Agen
    调试调用失败不影响实际业务工具；继续完成查重、写入和验证。
 1. 提取用户明确要求保存的原话、对象、适用范围和时间，不把 AI 推测混入用户事实。
 2. 先用 \`recall\` 查找是否已有相同事实，避免重复。
-3. 调用 PMBrain MCP \`remember\`：一条调用一个事实；填写 \`fact\`、\`provenance\`（宿主、会话、日期）、合适的 \`kind\`；临时信息加 \`ttl\`。不要用 \`put_page\` 当记忆。
+3. 调用 PMBrain MCP \`remember\`：一条调用一个事实；填写 \`fact\`、\`provenance\`（宿主、会话、日期）、合适的 \`kind\`；临时信息加 \`ttl\`。准确工具名是 \`remember\`，PMBrain 不存在 \`facts_add\`；不要用 \`put_page\` 当记忆。
 4. \`remember\` 成功后立即停止工具调用；不要再写 WorkBuddy 内置 memory 或其他存储。
 5. 如果对象、来源冲突或改动范围不明确，先询问用户，不擅自删除或批量改写。`,
   ),

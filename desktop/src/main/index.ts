@@ -183,7 +183,10 @@ const workBuddyAgentController = new WorkBuddyAgentController({
 });
 
 const systemSettingsController: SystemSettingsController = new SystemSettingsController({
-  convergeMemoryRules: () => workBuddyAgentController.convergeMemoryRules(),
+  convergeMemoryRules: async () => {
+    await writeWorkbuddyUserAgent({ overwriteExisting: false });
+    return workBuddyAgentController.convergeMemoryRules();
+  },
   lan: lanController,
   sidecar: sidecarController,
   getMainWindow: () => windowController.current,

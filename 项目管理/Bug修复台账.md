@@ -1,5 +1,14 @@
 # Bug 修复台账
 
+## 2026-09-09 PMBrain 1.3.54 WorkBuddy 长期记忆合同未进入普通会话
+
+- 时间：2026-09-09
+- 版本号：Core 1.3.54；Desktop 1.1.85
+- 标题：WorkBuddy 普通会话安装长期记忆规则并识别本地 MCP 失效凭证
+- 描述：WorkBuddy 虽能列出 PMBrain 工具，但原来的用户级写入只安装子 Agent 和命令，普通会话没有规则与 Skills，明确记忆会退回客户端 MEMORY.md；同时界面只按配置文件存在判断“已配置”，无法发现 Codex Bearer 已失效。现把全局规则与 5 个 Skills 纳入用户级写入，明确唯一 Facts 写入工具是 remember、PMBrain 不存在 facts_add；长期记忆开启时把该指令放到 MCP 初始化合同前部；WorkBuddy/Codex 读取现有 Bearer 做 smoke，失效时显示一键修复。不会静默覆盖用户修改文件。
+- 是否完成：是，代码与本机接入配置修复完成；客户端需重启加载新规则和凭证。
+- 最终结果：长期记忆与接入定向回归 88 项、发布门禁 6 项、Core/Desktop TypeScript、桌面构建与 Sidecar 资源构建通过；`verify` 39/39、`ci:pr-preview` 232/232 通过。本机 WorkBuddy 已写入 10 个用户级规则/Skills/Agent 文件，真实 MCP 初始化 200、99 个工具、remember 存在且 facts_add 不存在，desktop-workbuddy 为 admin/read/write。Codex 新 desktop-codex Bearer 经 99 工具与 get_stats 验证，并由 Codex 0.153.4 实际调用 whoami 返回 admin/read/write；当前正在运行的 Codex 桌面会话仍缓存旧凭证，重启后才读取新配置。未执行 `build:win`，未修改用户知识库、Wiki、原始资料、向量或已有 Facts；GitHub Ubuntu/Postgres E2E/Heavy/NSIS 待用户提交后验证。
+
 ## 2026-09-08 PMBrain 1.3.53 长期记忆选项点了会被刷新打回关闭
 
 - 时间：2026-09-08
