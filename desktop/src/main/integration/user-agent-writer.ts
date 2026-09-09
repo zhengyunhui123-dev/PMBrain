@@ -70,14 +70,15 @@ function globalRuleContent(): string {
 }
 
 function workbuddyUserPackFiles(homeDir = homedir()): Array<{ path: string; content: string; marker: string }> {
+  const toWorkbuddyUserPath = (relativePath: string) => relativePath.replace(/^\.codebuddy[\\/]/, '.workbuddy/');
   return [
     {
-      path: join(homeDir, WORKBUDDY_AGENT_INTEGRATION.instruction.relativePath),
+      path: join(homeDir, toWorkbuddyUserPath(WORKBUDDY_AGENT_INTEGRATION.instruction.relativePath)),
       content: markPackContent(globalRuleContent()),
       marker: USER_PACK_MARKER,
     },
     ...WORKBUDDY_AGENT_INTEGRATION.skills.map(skill => ({
-      path: join(homeDir, skill.relativePath),
+      path: join(homeDir, toWorkbuddyUserPath(skill.relativePath)),
       content: markPackContent(skill.content),
       marker: USER_PACK_MARKER,
     })),

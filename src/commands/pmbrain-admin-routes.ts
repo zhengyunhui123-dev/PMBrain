@@ -809,7 +809,7 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
       const {installWritebackAgent,buildWritebackHookCommand}=await import('../core/bootstrap/writeback-agents.ts');
       const state=await getWritebackStatus(engine);
       const sourceId=await resolveMainSourceId(engine);
-      installWritebackAgent({agent,mcpConfirmed,sourceId,serveUrl,mode:state.mode,ttl:state.ttl,visibility:state.visibility,command:buildWritebackHookCommand(sourceId)});
+      installWritebackAgent({agent,mcpConfirmed,sourceId,serveUrl,mode:state.mode,ttl:state.ttl,visibility:state.visibility,command:buildWritebackHookCommand(sourceId,agent==='codex'?'session-end':'stop')});
       sendAdminContract(res,MemoryWritebackStatusSchema,await getWritebackStatus(engine));
     }catch(e){res.status(400).json({error:e instanceof Error?e.message:'agent_writeback_failed'});}
   });

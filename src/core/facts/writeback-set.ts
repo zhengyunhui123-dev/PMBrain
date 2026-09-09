@@ -85,7 +85,7 @@ export async function getWritebackStatus(engine: BrainEngine) {
   if(!wb.ttl_valid)issues.push('临时记忆有效期无效，请重新保存设置');
   if(wb.read_error)issues.push('无法读取长期记忆配置');
   if(!wb.enabled&&agents.some(a=>a.block==='present'||a.hook==='installed'))issues.push('关闭后仍有托管指令或 Hook，尚未收敛');
-  if(wb.enabled&&agents.some(a=>a.registered&&(a.block!=='present'||a.agent==='claude'&&a.hook!=='installed')))issues.push('深度接入组件缺失，请重新接入');
+  if(wb.enabled&&agents.some(a=>a.registered&&(a.block!=='present'||a.hook!=='installed')))issues.push('深度接入组件缺失，请重新接入');
   return {
     mode: wb.mode,
     enabled: wb.enabled,

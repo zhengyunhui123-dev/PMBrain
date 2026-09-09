@@ -17,6 +17,7 @@ import {
   revokeSharedIntegration,
   smokeTestSharedIntegration,
   writeCodexIntegration,
+  writeGrokIntegration,
   writeJsonIntegration,
   writeQwenPawIntegration,
 } from '../src/main/integration-manager.js';
@@ -33,7 +34,7 @@ function tempFile(name: string): string {
 }
 
 describe('desktop integration config merging', () => {
-  test('formats remote JSON and Codex snippets with the LAN URL and bearer token', () => {
+  test('formats remote JSON, Codex, and Grok snippets with the LAN URL and bearer token', () => {
     const url = 'http://192.168.1.20:3131/mcp';
     const json = JSON.parse(formatSharedIntegrationSnippet('cursor', url, 'secret'));
     expect(json.mcpServers.pmbrain.url).toBe(url);
@@ -43,6 +44,14 @@ describe('desktop integration config merging', () => {
     expect(codex).toContain('[mcp_servers.pmbrain]');
     expect(codex).toContain(url);
     expect(codex).toContain('Bearer secret');
+    expect(codex).toContain('http_headers =');
+
+    const grok = formatSharedIntegrationSnippet('grok', url, 'secret');
+    expect(grok).toContain('[mcp_servers.pmbrain]');
+    expect(grok).toContain(url);
+    expect(grok).toContain('Bearer secret');
+    expect(grok).toContain('headers =');
+    expect(grok).not.toContain('http_headers =');
   });
 
   test('creates shared member credentials as read-only unless write is explicitly enabled', async () => {
@@ -552,6 +561,19 @@ describe('desktop integration config merging', () => {
     const result = readFileSync(path, 'utf8');
     expect(result).toContain('model = "gpt-test"');
     expect(result).toContain('http://127.0.0.1:3132/mcp');
+    expect(result).not.toContain('Bearer first');
+    expect(result.match(/\[mcp_servers\.pmbrain\]/g)?.length).toBe(1);
+  });
+
+  test('writes Grok MCP config without replacing foreign settings', () => {
+    const path = tempFile('config.toml');
+    writeFileSync(path, 'model = "grok-code-fast-1"\n');
+    writeGrokIntegration(path, 'http://127.0.0.1:3131/mcp', 'first', dirname(path));
+    writeGrokIntegration(path, 'http://127.0.0.1:3132/mcp', 'second', dirname(path));
+    const result = readFileSync(path, 'utf8');
+    expect(result).toContain('model = "grok-code-fast-1"');
+    expect(result).toContain('http://127.0.0.1:3132/mcp');
+    expect(result).toContain('headers =');
     expect(result).not.toContain('Bearer first');
     expect(result.match(/\[mcp_servers\.pmbrain\]/g)?.length).toBe(1);
   });

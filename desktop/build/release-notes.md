@@ -1,3 +1,10 @@
+## PMBrain 1.1.86
+
+- WorkBuddy 用户级长期记忆规则与 Skills 改写到 `~/.workbuddy/`，不再依赖 CodeBuddy 目录。
+- Codex 深度接入增加 SessionEnd 漏记兜底、Hook 信任记录与配置自检，保留实时 remember 主路径。
+- Claude Code 深度接入继续使用 MCP 实时写回与 Stop Hook 兜底，并纳入统一完整性检查。
+- 新增 Grok Build 原生 MCP 一键接入与连接自检，按 Grok 的 `headers` 配置格式写入。
+
 ## PMBrain 1.1.85
 
 - WorkBuddy 普通会话现在会收到长期记忆规则与 Skills，明确使用 remember，不再误写客户端 MEMORY.md。
@@ -19,8 +26,4 @@
 ## PMBrain 1.1.78
 
 - 兼容吸纳 GBrain 检索与 Dream 修复，保留中文、多 Source 和本地模型行为。
-
-## PMBrain 1.1.77
-
-- 修复 Codex 桌面会话用户消息导入，改善中文 Facts 抽取提示。
 

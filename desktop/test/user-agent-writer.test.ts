@@ -7,8 +7,8 @@
  *
  * 这组测试确认：
  * 1. 会写入用户目录里的 rules、skills、agents 和 commands。
- * 2. 同时写到 WorkBuddy 自己的用户目录，以及它实际读取的
- *    ~/.codebuddy 用户目录，这样 @pmbrain 和 /pmbrain 能用。
+ * 2. 普通 WorkBuddy 会话使用的规则和 Skill 必须写进 ~/.workbuddy，
+ *    不能误写到 CodeBuddy 的 ~/.codebuddy 目录。
  * 3. 子代理声明使用已经接入的 pmbrain MCP，不另起一套工具。
  * 4. 用户自己改过的同名文件会先备份，再覆盖。
  */
@@ -47,9 +47,9 @@ describe('WorkBuddy user-level agent write', () => {
     const command = readFileSync(join(homeDir, '.workbuddy', 'commands', 'pmbrain.md'), 'utf8');
     const codebuddyAgent = readFileSync(join(homeDir, '.codebuddy', 'agents', 'pmbrain.md'), 'utf8');
     const codebuddyCommand = readFileSync(join(homeDir, '.codebuddy', 'commands', 'pmbrain.md'), 'utf8');
-    const rule = readFileSync(join(homeDir, '.codebuddy', 'rules', 'pmbrain.md'), 'utf8');
-    const rememberSkill = readFileSync(join(homeDir, '.codebuddy', 'skills', 'remember', 'SKILL.md'), 'utf8');
-    const durableSkill = readFileSync(join(homeDir, '.codebuddy', 'skills', 'durable-writeback', 'SKILL.md'), 'utf8');
+    const rule = readFileSync(join(homeDir, '.workbuddy', 'rules', 'pmbrain.md'), 'utf8');
+    const rememberSkill = readFileSync(join(homeDir, '.workbuddy', 'skills', 'remember', 'SKILL.md'), 'utf8');
+    const durableSkill = readFileSync(join(homeDir, '.workbuddy', 'skills', 'durable-writeback', 'SKILL.md'), 'utf8');
 
     expect(agent).toContain(USER_AGENT_MARKER);
     expect(agent).toContain('name: pmbrain');
@@ -73,6 +73,8 @@ describe('WorkBuddy user-level agent write', () => {
     expect(rememberSkill).toContain('name: remember');
     expect(durableSkill).toContain('name: durable-writeback');
     expect(result.written.filter(path => path.endsWith('SKILL.md'))).toHaveLength(5);
+    expect(result.written.some(path => path.includes(join('.codebuddy', 'rules')))).toBe(false);
+    expect(result.written.some(path => path.includes(join('.codebuddy', 'skills')))).toBe(false);
   });
 
   test('rewrites its own managed pack without creating backups', async () => {
@@ -86,7 +88,7 @@ describe('WorkBuddy user-level agent write', () => {
   test('automatic convergence refuses to overwrite a user-modified managed file', async () => {
     const homeDir = tempHome();
     await writeWorkbuddyUserAgent({ homeDir });
-    const path = join(homeDir, '.codebuddy', 'rules', 'pmbrain.md');
+    const path = join(homeDir, '.workbuddy', 'rules', 'pmbrain.md');
     writeFileSync(path, `${readFileSync(path, 'utf8')}\n# my change\n`, 'utf8');
     await expect(writeWorkbuddyUserAgent({ homeDir, overwriteExisting: false }))
       .rejects.toThrow('未静默覆盖');

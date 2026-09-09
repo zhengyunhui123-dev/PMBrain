@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { backupFile } from './config-manager.js';
 import type { SidecarManager } from './sidecar-manager.js';
 
-export type IntegrationClient = 'codebuddy' | 'workbuddy' | 'cursor' | 'trae' | 'claude' | 'codex' | 'qwenpaw' | 'hermes' | 'openclaw';
+export type IntegrationClient = 'codebuddy' | 'workbuddy' | 'cursor' | 'trae' | 'claude' | 'codex' | 'grok' | 'qwenpaw' | 'hermes' | 'openclaw';
 export type CredentialKind = 'api_key' | 'oauth';
 
 export interface IntegrationInfo {
@@ -91,6 +91,7 @@ const CLIENT_META: Record<IntegrationClient, { name: string; path: () => string 
   trae: { name: 'Trae Work', path: () => traeWorkIntegrationPath(), automatic: true },
   claude: { name: 'Claude', path: () => null, automatic: false },
   codex: { name: 'Codex', path: () => join(process.env.CODEX_HOME || join(homedir(), '.codex'), 'config.toml'), automatic: true },
+  grok: { name: 'Grok Build', path: () => join(process.env.GROK_HOME || join(homedir(), '.grok'), 'config.toml'), automatic: true },
   qwenpaw: { name: 'QwenPaw', path: () => qwenPawIntegrationPath(), automatic: true },
   hermes: { name: 'Hermes', path: () => null, automatic: false },
   openclaw: { name: 'OpenClaw', path: () => null, automatic: false },
@@ -209,11 +210,11 @@ export function formatSharedIntegrationSnippet(
   mcpUrl: string,
   token: string,
 ): string {
-  if (client === 'codex') {
+  if (client === 'codex' || client === 'grok') {
     return [
       '[mcp_servers.pmbrain]',
       `url = ${tomlString(mcpUrl)}`,
-      `http_headers = { Authorization = ${tomlString(`Bearer ${token}`)} }`,
+      `${client === 'grok' ? 'headers' : 'http_headers'} = { Authorization = ${tomlString(`Bearer ${token}`)} }`,
     ].join('\n');
   }
   if (client === 'claude') {
@@ -632,18 +633,18 @@ function tomlString(value: string): string {
   return JSON.stringify(value);
 }
 
-export function writeCodexIntegration(path: string, mcpUrl: string, token: string, backupRoot?: string): string | null {
+function writeTomlIntegration(path: string, mcpUrl: string, token: string, clientName: string, headerField: 'http_headers' | 'headers', backupRoot?: string): string | null {
   const existing = existsSync(path) ? readFileSync(path, 'utf8') : '';
   const unmanaged = /^\s*\[mcp_servers\.pmbrain\]\s*$/m.test(existing)
     && !existing.includes(CODEX_START);
   if (unmanaged) {
-    throw new Error('Codex 配置里已经存在手工维护的 [mcp_servers.pmbrain]，为避免覆盖已停止写入。');
+    throw new Error(`${clientName} 配置里已经存在手工维护的 [mcp_servers.pmbrain]，为避免覆盖已停止写入。`);
   }
   const block = [
     CODEX_START,
     '[mcp_servers.pmbrain]',
     `url = ${tomlString(mcpUrl)}`,
-    `http_headers = { Authorization = ${tomlString(`Bearer ${token}`)} }`,
+    `${headerField} = { Authorization = ${tomlString(`Bearer ${token}`)} }`,
     CODEX_END,
   ].join('\n');
   const expression = new RegExp(`${escapeRegExp(CODEX_START)}[\\s\\S]*?${escapeRegExp(CODEX_END)}\\s*`, 'm');
@@ -653,6 +654,14 @@ export function writeCodexIntegration(path: string, mcpUrl: string, token: strin
   const backup = backupFile(path, 'mcp', backupRoot);
   writeTextFile(path, next);
   return backup;
+}
+
+export function writeCodexIntegration(path: string, mcpUrl: string, token: string, backupRoot?: string): string | null {
+  return writeTomlIntegration(path,mcpUrl,token,'Codex','http_headers',backupRoot);
+}
+
+export function writeGrokIntegration(path: string, mcpUrl: string, token: string, backupRoot?: string): string | null {
+  return writeTomlIntegration(path,mcpUrl,token,'Grok Build','headers',backupRoot);
 }
 
 function escapeRegExp(value: string): string {
@@ -676,7 +685,7 @@ function isConfigured(client: IntegrationClient, path: string | null): boolean {
   if (!path || !existsSync(path)) return false;
   try {
     const content = readFileSync(path, 'utf8');
-    if (client === 'codex') return /\[mcp_servers\.pmbrain\]/.test(content);
+    if (client === 'codex' || client === 'grok') return /\[mcp_servers\.pmbrain\]/.test(content);
     if (client === 'qwenpaw' && path.toLowerCase().endsWith('.yaml')) {
       return qwenPawDriverIsConfigured(path);
     }
@@ -704,7 +713,7 @@ function extractPortFromUrl(urlStr: string): number | undefined {
 function readConfiguredPort(client: IntegrationClient, path: string): number | undefined {
   if (!path || !existsSync(path)) return undefined;
   try {
-    if (client === 'codex') {
+    if (client === 'codex' || client === 'grok') {
       const content = readFileSync(path, 'utf8');
       const blockPattern = new RegExp(`${escapeRegExp(CODEX_START)}[\\s\\S]*?${escapeRegExp(CODEX_END)}`);
       const block = content.match(blockPattern)?.[0] ?? content;
@@ -742,7 +751,7 @@ export function listIntegrations(currentPort?: number): IntegrationInfo[] {
 
 function readLocalBearer(client: IntegrationClient, path: string): string | undefined {
   try {
-    if (client === 'codex') {
+    if (client === 'codex' || client === 'grok') {
       const content = readFileSync(path, 'utf8');
       const expression = new RegExp(`${escapeRegExp(CODEX_START)}[\\s\\S]*?${escapeRegExp(CODEX_END)}`);
       const block = content.match(expression)?.[0] ?? content;
@@ -765,7 +774,7 @@ export async function probeLocalIntegrationConnectionState(
   path: string,
   sidecar: Pick<SidecarManager, 'smokeTest'>,
 ): Promise<'connected' | 'invalid' | undefined> {
-  if (client !== 'workbuddy' && client !== 'codex') return undefined;
+  if (client !== 'workbuddy' && client !== 'codex' && client !== 'grok') return undefined;
   const token = readLocalBearer(client, path);
   if (!token) return 'invalid';
   try {
@@ -785,7 +794,7 @@ export async function listIntegrationsWithConnectionState(
   if (qwenPaw?.configured) qwenPaw.connectionState = await probeQwenPawConnectionState();
   if (sidecar) {
     await Promise.all(integrations.map(async (item) => {
-      if (!item.configured || !item.path || (item.id !== 'workbuddy' && item.id !== 'codex')) return;
+      if (!item.configured || !item.path || (item.id !== 'workbuddy' && item.id !== 'codex' && item.id !== 'grok')) return;
       item.connectionState = await probeLocalIntegrationConnectionState(item.id, item.path, sidecar);
     }));
   }
@@ -871,12 +880,14 @@ export async function configureIntegration(
     }
     snippet = JSON.stringify({ mcp: { clients: { pmbrain: qwenPawEntry(sidecar.mcpUrl, token) } } }, null, 2);
     configured = true;
-  } else if (client === 'codex') {
-    backup = writeCodexIntegration(path!, sidecar.mcpUrl, token);
+  } else if (client === 'codex' || client === 'grok') {
+    backup = client === 'codex'
+      ? writeCodexIntegration(path!, sidecar.mcpUrl, token)
+      : writeGrokIntegration(path!, sidecar.mcpUrl, token);
     snippet = [
       '[mcp_servers.pmbrain]',
       `url = ${tomlString(sidecar.mcpUrl)}`,
-      `http_headers = { Authorization = ${tomlString(`Bearer ${token}`)} }`,
+      `${client === 'grok' ? 'headers' : 'http_headers'} = { Authorization = ${tomlString(`Bearer ${token}`)} }`,
     ].join('\n');
     configured = true;
   } else {

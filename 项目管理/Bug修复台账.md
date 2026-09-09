@@ -1,5 +1,14 @@
 # Bug 修复台账
 
+## 2026-09-09 PMBrain 1.3.55 WorkBuddy 路径与多客户端长期记忆兜底未完整对齐 GBrain
+
+- 时间：2026-09-09
+- 版本号：Core 1.3.55；Desktop 1.1.86
+- 标题：修正 WorkBuddy 用户目录，补齐 Codex 漏记兜底与配置自检，并验证 Claude Code、Grok
+- 描述：WorkBuddy 的用户级规则与 Skills 原先仍落在 `~/.codebuddy/`，普通会话不能可靠读取；Codex 只有 MCP 实时 remember 主路径，没有对齐 GBrain 的 SessionEnd 会话漏记兜底和 Hook 信任检查；Grok 也未进入桌面一键接入。现把 WorkBuddy 用户级规则与 Skills 写到 `~/.workbuddy/`，保留工作区 `.codebuddy` 深度接入；按 GBrain 方案为 Codex 安装受信任的 SessionEnd Hook，受限读取本机会话并把候选事实写入既有 corpus/harvester 链路，自检同时验证规则块、Hook 与信任哈希；Claude Code 保持 MCP 实时写回和 Stop Hook；Grok 使用原生 `headers` TOML 配置并加入连接探测。Facts 写入合同继续使用 GBrain 的 `remember`/`extract_facts`，不增加不存在的 `facts_add`。
+- 是否完成：是，代码与本机配置已修复；WorkBuddy 需重启新会话加载新用户级规则。
+- 最终结果：定向回归 60 项、`verify` 39/39、`ci:pr-preview` 232/232、Core/Desktop TypeScript 全部通过；真实 PMBrain MCP 初始化返回 200、99 个工具，合同包含 remember、拒绝 facts_add 并处于 mode all。WorkBuddy 写入 10 个托管文件且无用户文件备份；Codex 0.153.4 配置可加载，规则块、SessionEnd Hook 与信任记录自检全部通过，空载 Hook 实跑退出 0 且未写测试 Fact；Claude Code 修复为官方 2.1.266，MCP 显示 Connected，Stop Hook 实跑退出 0；Grok 1.0.13 doctor 握手成功并发现 99 个工具。未执行 `build:win`，未修改知识库、Wiki、原始资料、向量或已有 Facts；GitHub Ubuntu/Postgres E2E/Heavy/NSIS 待用户提交后验证。
+
 ## 2026-09-09 PMBrain 1.3.54 WorkBuddy 长期记忆合同未进入普通会话
 
 - 时间：2026-09-09
