@@ -19,6 +19,7 @@ import { buildDiagnosticBundle } from './diagnostics/diagnostic-bundle.js';
 import { SharedAccessController } from './integration/shared-access-controller.js';
 import { writeWorkbuddyUserAgent } from './integration/user-agent-writer.js';
 import { WorkBuddyAgentController } from './integration/workbuddy-agent-controller.js';
+import { listIntegrations } from './integration-manager.js';
 import { registerDesktopIpcHandlers } from './ipc-handlers.js';
 import {
   inspectDesktopPgliteRecovery,
@@ -385,6 +386,9 @@ if (!app.requestSingleInstanceLock()) {
       revokeSharedIntegration: credentialName => sharedAccessController.revoke(credentialName),
       updateState: () => updateController.currentState,
       setup: () => setupController.currentState(),
+      integrations: probe => probe
+        ? setupController.integrationStates()
+        : Promise.resolve(listIntegrations(sidecarController.current?.port)),
       inspectKnowledgeSourceDirectory,
       initializeKnowledgeSourceGit,
       providerModels: listDesktopProviderModels,

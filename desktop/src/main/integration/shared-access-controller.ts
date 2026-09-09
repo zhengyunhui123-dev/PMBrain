@@ -59,7 +59,8 @@ export class SharedAccessController {
     const result=await configureIntegration(sidecar, client, kind, {deep});
     if(deep){
       if(!result.configured||!result.smoke?.statsOk||!result.smoke.toolCount)throw new Error('MCP 接入验证失败，未安装长期记忆托管块');
-      await sidecar.adminRequest('/admin/api/memory/writeback/agent',{method:'POST',body:JSON.stringify({agent:client,mcpConfirmed:true,serveUrl:sidecar.mcpUrl})});
+      const agent = client === 'grok' ? 'claude' : client;
+      await sidecar.adminRequest('/admin/api/memory/writeback/agent',{method:'POST',body:JSON.stringify({agent,mcpConfirmed:true,serveUrl:sidecar.mcpUrl})});
     }
     return result;
   }

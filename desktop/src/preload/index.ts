@@ -171,6 +171,7 @@ export interface PMBrainDesktopApi {
   setTheme(theme: DesktopTheme): Promise<DesktopThemeState>;
   onThemeState(listener: (state: DesktopThemeState) => void): () => void;
   getSetup(): Promise<DesktopSetupState>;
+  getIntegrations(probe?: boolean): Promise<IntegrationInfo[]>;
   chooseEmbeddingRebuild(choice: 'wait' | 'defer'): Promise<void>;
   onState(listener: (state: SidecarState) => void): () => void;
   getUpdateState(): Promise<UpdateState | null>;
@@ -236,6 +237,7 @@ const api: PMBrainDesktopApi = {
     return () => ipcRenderer.removeListener('desktop:theme-state', handler);
   },
   getSetup: () => ipcRenderer.invoke('desktop:get-setup'),
+  getIntegrations: (probe) => ipcRenderer.invoke('desktop:get-integrations', probe),
   chooseEmbeddingRebuild: (choice) => ipcRenderer.invoke('desktop:choose-embedding-rebuild', choice),
   onState: (listener) => {
     const handler = (_event: Electron.IpcRendererEvent, state: SidecarState) => listener(state);

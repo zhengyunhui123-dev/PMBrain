@@ -1,3 +1,9 @@
+## PMBrain 1.1.87
+
+- MCP 接入页先显示本地配置卡片，再在后台并行刷新连接状态，不再因探测等待出现空白页。
+- Codex、Claude Code、Grok Build 统一显示“深度接入”；Grok 深度接入复用其实际可读取的 Claude 兼容记忆合同。
+- 长期记忆首次选择不再被异步状态刷新覆盖；尚无已验证 MCP 连接时明确引导用户先完成 MCP 接入。
+
 ## PMBrain 1.1.86
 
 - WorkBuddy 用户级长期记忆规则与 Skills 改写到 `~/.workbuddy/`，不再依赖 CodeBuddy 目录。
@@ -22,8 +28,3 @@
 - 新增长期记忆开关，默认关闭，可选择重要内容或全部事实；首次接入询问一次，临时记忆支持到期隐藏。
 - 增加 Codex / Claude Code 深度接入与可撤销托管指令；Claude Stop Hook 先暂存、由本地服务抽取，按真实 Source 归属。
 - 修复关闭收敛、只读接入合同和 Windows 托管标记兼容；保留已有资料与向量。
-
-## PMBrain 1.1.78
-
-- 兼容吸纳 GBrain 检索与 Dream 修复，保留中文、多 Source 和本地模型行为。
-

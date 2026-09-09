@@ -136,6 +136,13 @@ describe('desktop system orchestration contracts', () => {
     expect(main).toContain('dialog.showMessageBox');
   });
 
+  test('MCP 卡片快照不等待连接探测，Grok 深度接入复用 Claude 兼容合同', () => {
+    expect(setupController).toMatch(/async currentState\(\)[\s\S]*?integrations: listIntegrations\(/);
+    expect(setupController).toMatch(/async integrationStates\(\)[\s\S]*?listIntegrationsWithConnectionState/);
+    expect(sharedAccessController).toContain("client === 'grok' ? 'claude' : client");
+    expect(integrationManager).toContain("['codex', 'claude', 'grok'].includes(client)");
+  });
+
   test('fails closed across network changes and untrusted renderer navigation', () => {
     expect(main).toContain('共享不会自动恢复');
     expect(main).toContain('selectedAddressWasUnavailable');

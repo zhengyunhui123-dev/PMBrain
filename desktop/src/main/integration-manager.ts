@@ -89,7 +89,7 @@ const CLIENT_META: Record<IntegrationClient, { name: string; path: () => string 
   workbuddy: { name: 'Workbuddy', path: () => join(homedir(), '.workbuddy', 'mcp.json'), automatic: true },
   cursor: { name: 'Cursor', path: () => join(homedir(), '.cursor', 'mcp.json'), automatic: true },
   trae: { name: 'Trae Work', path: () => traeWorkIntegrationPath(), automatic: true },
-  claude: { name: 'Claude', path: () => null, automatic: false },
+  claude: { name: 'Claude', path: () => join(homedir(), '.claude.json'), automatic: false },
   codex: { name: 'Codex', path: () => join(process.env.CODEX_HOME || join(homedir(), '.codex'), 'config.toml'), automatic: true },
   grok: { name: 'Grok Build', path: () => join(process.env.GROK_HOME || join(homedir(), '.grok'), 'config.toml'), automatic: true },
   qwenpaw: { name: 'QwenPaw', path: () => qwenPawIntegrationPath(), automatic: true },
@@ -757,7 +757,7 @@ function readLocalBearer(client: IntegrationClient, path: string): string | unde
       const block = content.match(expression)?.[0] ?? content;
       return block.match(/Authorization\s*=\s*(['"])Bearer\s+(.+?)\1/)?.[2];
     }
-    if (client === 'workbuddy') {
+    if (client === 'workbuddy' || client === 'claude') {
       const root = JSON.parse(readFileSync(path, 'utf8')) as {
         mcpServers?: { pmbrain?: { headers?: { Authorization?: string } } };
       };
@@ -774,7 +774,7 @@ export async function probeLocalIntegrationConnectionState(
   path: string,
   sidecar: Pick<SidecarManager, 'smokeTest'>,
 ): Promise<'connected' | 'invalid' | undefined> {
-  if (client !== 'workbuddy' && client !== 'codex' && client !== 'grok') return undefined;
+  if (client !== 'workbuddy' && client !== 'codex' && client !== 'claude' && client !== 'grok') return undefined;
   const token = readLocalBearer(client, path);
   if (!token) return 'invalid';
   try {
@@ -790,14 +790,16 @@ export async function listIntegrationsWithConnectionState(
   sidecar?: Pick<SidecarManager, 'smokeTest'>,
 ): Promise<IntegrationInfo[]> {
   const integrations = listIntegrations(currentPort);
-  const qwenPaw = integrations.find(item => item.id === 'qwenpaw');
-  if (qwenPaw?.configured) qwenPaw.connectionState = await probeQwenPawConnectionState();
-  if (sidecar) {
-    await Promise.all(integrations.map(async (item) => {
-      if (!item.configured || !item.path || (item.id !== 'workbuddy' && item.id !== 'codex' && item.id !== 'grok')) return;
+  await Promise.all(integrations.map(async (item) => {
+    if (!item.configured || !item.path) return;
+    if (item.id === 'qwenpaw') {
+      item.connectionState = await probeQwenPawConnectionState();
+      return;
+    }
+    if (sidecar && ['workbuddy', 'codex', 'claude', 'grok'].includes(item.id)) {
       item.connectionState = await probeLocalIntegrationConnectionState(item.id, item.path, sidecar);
-    }));
-  }
+    }
+  }));
   return integrations;
 }
 
@@ -827,7 +829,7 @@ export async function configureIntegration(
   if (client === 'qwenpaw' && credentialKind !== 'api_key') {
     throw new Error('QwenPaw 一键接入固定使用 API Key + Bearer，不支持 OAuth 授权。');
   }
-  if(opts.deep && (!['codex','claude'].includes(client)||credentialKind!=='api_key'))throw new Error('深度接入仅支持 Codex / Claude Code 的 API Key 接入');
+  if(opts.deep && (!['codex', 'claude', 'grok'].includes(client)||credentialKind!=='api_key'))throw new Error('深度接入仅支持 Codex / Claude Code / Grok Build 的 API Key 接入');
   const path = opts.deep && client==='claude' ? join(homedir(),'.claude.json') : meta.path();
   const credentialName = `desktop-${client}`;
 

@@ -605,4 +605,18 @@ describe('desktop integration config merging', () => {
     expect(state).toBe('connected');
     expect(seen).toEqual(['workbuddy-token']);
   });
+
+  test('verifies the Claude JSON bearer so its configured state can enable memory setup', async () => {
+    const path = tempFile('.claude.json');
+    writeJsonIntegration(path, 'http://127.0.0.1:3131/mcp', 'claude-token', dirname(path));
+    const seen: string[] = [];
+    const state = await probeLocalIntegrationConnectionState('claude', path, {
+      smokeTest: async (token: string) => {
+        seen.push(token);
+        return { toolCount: 99, statsOk: true };
+      },
+    });
+    expect(state).toBe('connected');
+    expect(seen).toEqual(['claude-token']);
+  });
 });

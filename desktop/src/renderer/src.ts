@@ -43,6 +43,9 @@ let loadedKnowledgeDirectory = '';
 let loadedKnowledgeSourceId = '';
 let knowledgeSourceStatusRequest = 0;
 let recoveryStatusRequest = 0;
+let integrationRefreshRequest = 0;
+let integrationChecksComplete = false;
+let latestIntegrations: IntegrationInfo[] = [];
 let recoveryOwnerPid: number | null = null;
 let toastStagingPath: string | null = null;
 const CUSTOM_ENDPOINT_PREFIX = 'custom-endpoint-';
@@ -1063,6 +1066,7 @@ async function refreshPgliteRecoveryStatus(): Promise<void> {
 }
 
 function renderIntegrations(integrations: IntegrationInfo[]): void {
+  latestIntegrations = integrations;
   const grid = $('#integration-grid');
   grid.replaceChildren(...integrations.map((item) => {
     const article = document.createElement('article');
@@ -1119,13 +1123,29 @@ function renderIntegrations(integrations: IntegrationInfo[]): void {
     } else {
       article.append(badge, title, path, note, button);
     }
-    if(item.id==='codex'||item.id==='claude'){
-      const deep=document.createElement('button');deep.type='button';deep.textContent=`深度接入 ${item.id==='claude'?'Claude Code':'Codex'}`;
-      deep.addEventListener('click',()=>void configure(item.id,deep,true));
+    if (['codex','claude','grok'].includes(item.id)) {
+      const deep = document.createElement('button'); deep.type = 'button'; deep.textContent = '深度接入';
+      deep.addEventListener('click', () => void configure(item.id, deep, true));
       article.appendChild(deep);
     }
     return article;
   }));
+}
+
+async function refreshIntegrations(probe: boolean): Promise<IntegrationInfo[]> {
+  const request = ++integrationRefreshRequest;
+  const integrations = await window.pmbrainDesktop.getIntegrations(probe);
+  if (request !== integrationRefreshRequest) return integrations;
+  if (probe) integrationChecksComplete = true;
+  if (state) state.integrations = integrations;
+  renderIntegrations(integrations);
+  return integrations;
+}
+
+function refreshIntegrationPanel(): void {
+  void refreshIntegrations(false)
+    .then(() => refreshIntegrations(true))
+    .catch(() => undefined);
 }
 
 function selectedNetworkMode(): 'local' | 'shared' {
@@ -1245,6 +1265,8 @@ function applySystemSettingsState(next: DesktopSystemSettingsState): void {
 }
 
 let loadedMemoryMode: 'off' | 'salient' | 'all' | null = null;
+let memoryModeUserChanged = false;
+let memoryModeChangeRequest = 0;
 
 function selectedMemoryMode(): 'off' | 'salient' | 'all' | undefined {
   return document.querySelector<HTMLInputElement>('input[name="memory-writeback"]:checked')?.value as 'off' | 'salient' | 'all' | undefined;
@@ -1254,6 +1276,61 @@ function renderMemoryMode(): void {
   document.querySelectorAll<HTMLLabelElement>('#memory-mode-off-card, #memory-mode-salient-card, #memory-mode-all-card').forEach((card) => {
     card.classList.toggle('selected', card.querySelector('input')?.checked === true);
   });
+}
+
+function selectMemoryMode(mode: 'off' | 'salient' | 'all'): void {
+  const selected = document.querySelector<HTMLInputElement>(`input[name="memory-writeback"][value="${mode}"]`);
+  if (selected) selected.checked = true;
+  renderMemoryMode();
+}
+
+function showMemorySetupHint(title: string, detail: string): void {
+  $('#memory-setup-title').textContent = title;
+  $('#memory-setup-detail').textContent = detail;
+  $('#memory-setup-hint').hidden = false;
+}
+
+function hideMemorySetupHint(): void {
+  $('#memory-setup-hint').hidden = true;
+}
+
+function memoryIntegrationReady(): boolean {
+  return latestIntegrations.some(item => (
+    ['workbuddy', 'codex', 'claude', 'grok'].includes(item.id)
+    && item.configured
+    && !item.portMismatch
+    && item.connectionState === 'connected'
+  ));
+}
+
+async function handleMemoryModeChange(input: HTMLInputElement): Promise<void> {
+  const request = ++memoryModeChangeRequest;
+  const mode = input.value as 'off' | 'salient' | 'all';
+  memoryModeUserChanged = true;
+  renderMemoryMode();
+  if (mode === 'off') {
+    hideMemorySetupHint();
+    return;
+  }
+  if (!integrationChecksComplete) {
+    showMemorySetupHint('正在检查 MCP 接入', '正在验证 WorkBuddy、Codex、Claude Code 和 Grok Build 的本机连接。');
+    try {
+      await refreshIntegrations(true);
+    } catch {
+      integrationChecksComplete = false;
+    }
+    if (request !== memoryModeChangeRequest) return;
+  }
+  if (!memoryIntegrationReady()) {
+    memoryModeUserChanged = false;
+    selectMemoryMode(loadedMemoryMode ?? 'off');
+    showMemorySetupHint(
+      '请先完成 MCP 接入',
+      '请先到“MCP 接入”更新至少一个 AI 客户端，验证连接后再开启长期记忆。',
+    );
+    return;
+  }
+  hideMemorySetupHint();
 }
 
 function memoryModeDirty(): boolean {
@@ -1267,17 +1344,18 @@ async function refreshMemoryWriteback(): Promise<void> {
   try {
     const state = await window.pmbrainDesktop.getMemoryWriteback();
     const pending = selectedMemoryMode();
-    const unsaved = pending !== undefined && loadedMemoryMode !== null && pending !== loadedMemoryMode && pending !== state.mode;
+    const unsaved = memoryModeUserChanged && pending !== undefined && pending !== state.mode;
     if (!unsaved) {
       loadedMemoryMode = state.mode;
-      const selected = document.querySelector<HTMLInputElement>(`input[name="memory-writeback"][value="${state.mode}"]`);
-      if (selected) selected.checked = true;
-      renderMemoryMode();
+      memoryModeUserChanged = false;
+      selectMemoryMode(state.mode);
+    } else if (loadedMemoryMode === null) {
+      loadedMemoryMode = state.mode;
     }
     sharedWarn.hidden = latestSystemSettings?.preferences.networkMode !== 'shared';
     statusEl.textContent = [
       state.enabled ? 'WorkBuddy：长期记忆合同将在重新连接时下发。' : 'WorkBuddy：自动记忆合同未启用。',
-      ...state.agents.map(agent => `${agent.agent === 'claude' ? 'Claude Code' : 'Codex'}：${agent.block === 'present' ? '托管指令已安装' : '未安装托管指令'}${agent.agent === 'claude' ? `；Stop Hook ${agent.hook === 'installed' ? '已安装' : '未安装'}` : ''}`),
+      ...state.agents.map(agent => `${agent.agent === 'claude' ? 'Claude Code / Grok Build' : 'Codex'}：${agent.block === 'present' ? '托管指令已安装' : '未安装托管指令'}${agent.agent === 'claude' ? `；Stop Hook ${agent.hook === 'installed' ? '已安装' : '未安装'}` : ''}`),
       ...state.issues,
     ].join('；');
   } catch (error) {
@@ -1924,6 +2002,7 @@ async function save(): Promise<void> {
     const next = await window.pmbrainDesktop.saveSetup(payload);
     advancedModelsLoaded = false;
     populate(next);
+    refreshIntegrationPanel();
     setNotice(
       next.reembeddingWarning ? 'error' : 'success',
       next.reembeddingWarning
@@ -1970,9 +2049,8 @@ async function configure(client: IntegrationClient, button: HTMLButtonElement, d
     $('#result-title').textContent = `${client} 配置结果`;
     $('#result-content').textContent = result.snippet;
     $<HTMLButtonElement>('#copy-result').hidden = false;
-    state = await window.pmbrainDesktop.getSetup();
-    renderIntegrations(state.integrations);
-    const refreshedConnection = state.integrations.find(item => item.id === client)?.connectionState
+    const integrations = await refreshIntegrations(true);
+    const refreshedConnection = integrations.find(item => item.id === client)?.connectionState
       ?? result.connectionState;
     const smoke = result.smoke ? `MCP smoke：${result.smoke.toolCount} 个工具，get_stats ${result.smoke.statsOk ? '正常' : '失败'}` : 'OAuth 凭证已创建';
     $('#result-meta').textContent = [
@@ -2003,7 +2081,7 @@ async function configure(client: IntegrationClient, button: HTMLButtonElement, d
 
 document.querySelectorAll<HTMLInputElement>('input[name="engine"]').forEach((input) => input.addEventListener('change', renderEngine));
 document.querySelectorAll<HTMLInputElement>('input[name="network-mode"]').forEach((input) => input.addEventListener('change', renderNetworkMode));
-document.querySelectorAll<HTMLInputElement>('input[name="memory-writeback"]').forEach((input) => input.addEventListener('change', renderMemoryMode));
+document.querySelectorAll<HTMLInputElement>('input[name="memory-writeback"]').forEach((input) => input.addEventListener('change', () => void handleMemoryModeChange(input)));
 $<HTMLSelectElement>('#shared-address').addEventListener('change', renderSelectedAddressNote);
 (['chat', 'embedding'] as const).forEach(kind => {
   const select = $<HTMLSelectElement>(`#${kind}-provider`);
@@ -2094,6 +2172,7 @@ document.querySelectorAll<HTMLButtonElement>('.rail-item').forEach((button) => b
   if (target === 'models' && ($<HTMLDetailsElement>('#advanced-model-settings')).open) {
     void loadAdvancedModels(true);
   }
+  if (target === 'integrations') refreshIntegrationPanel();
   if (target === 'repair') void loadPgliteUpgradeBackups();
 }));
 $('#next-models').addEventListener('click', () => switchPanel('models'));
@@ -2158,6 +2237,10 @@ document.querySelectorAll<HTMLButtonElement>('.secret-toggle').forEach((button) 
 $('#save-setup').addEventListener('click', () => void save());
 $('#save-system-settings').addEventListener('click', () => void saveSystemSettings());
 $('#restart-shared-gateway').addEventListener('click', () => void restartSharedGateway());
+$('#memory-open-integrations').addEventListener('click', () => {
+  switchPanel('integrations');
+  refreshIntegrationPanel();
+});
 $('#shared-open-admin').addEventListener('click', () => void window.pmbrainDesktop.openAdmin());
 $('#open-logs').addEventListener('click', () => void window.pmbrainDesktop.openLogs());
 $('#repair-prune-backups').addEventListener('click', () => void prunePgliteUpgradeBackups());
@@ -2244,6 +2327,7 @@ $('#setup-wait-continue').addEventListener('click', () => {
 });
 void window.pmbrainDesktop.getStartupProgress().then(renderStartupProgress).catch(() => undefined);
 window.pmbrainDesktop.onStartupProgress(renderStartupProgress);
+refreshIntegrationPanel();
 void window.pmbrainDesktop.getSetup().then(async (next) => {
   populate(next);
   renderService(await window.pmbrainDesktop.getState(), next.port);
@@ -2257,5 +2341,6 @@ window.pmbrainDesktop.onShowPanel((panel) => {
   if (panel === 'models' && ($<HTMLDetailsElement>('#advanced-model-settings')).open) {
     void loadAdvancedModels(true);
   }
+  if (panel === 'integrations') refreshIntegrationPanel();
   if (panel === 'repair') void loadPgliteUpgradeBackups();
 });

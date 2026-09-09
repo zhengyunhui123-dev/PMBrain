@@ -34,6 +34,7 @@ const output = outputArg
   : join(root, 'out', `renderer-preview-${panel}.png`);
 const prepareOnly = process.argv.includes('--prepare-only');
 const firstRun = process.argv.includes('--first-run');
+const memorySetupHint = process.argv.includes('--memory-setup-hint');
 const preparedHtmlArg = process.argv.find((arg) => arg.startsWith('--html='));
 
 function chromePath(): string | null {
@@ -102,7 +103,7 @@ window.pmbrainDesktop = {
       { id: 'workbuddy', name: 'Workbuddy', path: 'C:\\\\Users\\\\zhengyunhui\\\\.workbuddy\\\\mcp.json', configured: false, automatic: true },
       { id: 'cursor', name: 'Cursor', path: 'C:\\\\Users\\\\zhengyunhui\\\\.cursor\\\\mcp.json', configured: true, automatic: true },
       { id: 'trae', name: 'Trae Work', path: 'C:\\\\Users\\\\zhengyunhui\\\\AppData\\\\Roaming\\\\TRAE SOLO CN\\\\User\\\\mcp.json', configured: false, automatic: true },
-      { id: 'claude', name: 'Claude', path: null, configured: false, automatic: false },
+      { id: 'claude', name: 'Claude', path: 'C:\\Users\\zhengyunhui\\.claude.json', configured: false, automatic: false },
       { id: 'codex', name: 'Codex', path: 'C:\\\\Users\\\\zhengyunhui\\\\.codex\\\\config.toml', configured: false, automatic: true },
       { id: 'grok', name: 'Grok Build', path: 'C:\\\\Users\\\\zhengyunhui\\\\.grok\\\\config.toml', configured: true, automatic: true, connectionState: 'connected' },
       { id: 'qwenpaw', name: 'QwenPaw', path: 'C:\\\\Users\\\\zhengyunhui\\\\.qwenpaw\\\\workspaces\\\\default\\\\drivers\\\\mcp\\\\pmbrain.yaml', configured: true, automatic: true, connectionState: 'connected' },
@@ -111,6 +112,7 @@ window.pmbrainDesktop = {
     ],
     port: 3132
   }),
+  getIntegrations: async () => (await window.pmbrainDesktop.getSetup()).integrations,
   getState: async () => (${panel === 'recovery'
     ? "({ phase: 'failed', message: 'PGLite database is already owned by another process (pid=37564, type=desktop-sidecar).' })"
     : "({ phase: 'ready', port: 3132 })"}),
@@ -144,6 +146,12 @@ window.pmbrainDesktop = {
     state: { ...(await window.pmbrainDesktop.getSystemSettings()), launchAtLogin: payload.launchAtLogin },
   }),
   onSystemSettingsState: () => () => {},
+  getMemoryWriteback: async () => ({
+    mode: 'off', enabled: false, ttl: '30d', notice_shown: false, visibility: 'private', agents: [], issues: [],
+  }),
+  saveMemoryWriteback: async (payload) => ({
+    mode: payload.mode ?? 'off', enabled: payload.mode !== undefined && payload.mode !== 'off', ttl: '30d', notice_shown: true, visibility: 'private', agents: [], issues: [],
+  }),
   getSharedAccess: async () => ({
     mcpUrl: 'http://192.168.1.20:3131/mcp',
     mainSourceId: 'default',
@@ -312,7 +320,7 @@ const mockIntegrations: MockIntegration[] = [
   { id: 'workbuddy', name: 'Workbuddy', path: 'C:\\Users\\zhengyunhui\\.workbuddy\\mcp.json', configured: true, automatic: true },
   { id: 'cursor', name: 'Cursor', path: 'C:\\Users\\zhengyunhui\\.cursor\\mcp.json', configured: true, automatic: true },
   { id: 'trae', name: 'Trae Work', path: 'C:\\Users\\zhengyunhui\\AppData\\Roaming\\TRAE SOLO CN\\User\\mcp.json', configured: false, automatic: true },
-  { id: 'claude', name: 'Claude', path: null, configured: false, automatic: false },
+  { id: 'claude', name: 'Claude', path: 'C:\Users\zhengyunhui\.claude.json', configured: false, automatic: false },
   { id: 'codex', name: 'Codex', path: 'C:\\Users\\zhengyunhui\\.codex\\config.toml', configured: false, automatic: true },
   { id: 'grok', name: 'Grok Build', path: 'C:\\Users\\zhengyunhui\\.grok\\config.toml', configured: true, automatic: true, connectionState: 'connected' },
   { id: 'qwenpaw', name: 'QwenPaw', path: 'C:\\Users\\zhengyunhui\\.qwenpaw\\workspaces\\default\\drivers\\mcp\\pmbrain.yaml', configured: true, automatic: true, connectionState: 'connected' },
@@ -336,7 +344,8 @@ const cardsHtml = mockIntegrations.map((item) => {
   const buttons = item.id === 'workbuddy' && item.configured
     ? `<div class="integration-actions"><button class="solid">${btnText}</button><button>Agent写入</button></div>`
     : `<button class="solid">${btnText}</button>`;
-  return `<article class="integration-card"><span class="${badgeClass}">${badgeText}</span><h3>${item.name}</h3><p>${pathText}</p><small>${noteText}</small>${buttons}</article>`;
+  const deep = ['claude', 'codex', 'grok'].includes(item.id) ? '<button type="button">深度接入</button>' : '';
+  return `<article class="integration-card"><span class="${badgeClass}">${badgeText}</span><h3>${item.name}</h3><p>${pathText}</p><small>${noteText}</small>${buttons}${deep}</article>`;
 }).join('\n          ');
 html = html.replace(
   '<div class="integration-grid" id="integration-grid"></div>',
@@ -376,6 +385,10 @@ html = html.replace(
 html = html.replace('id="open-admin" disabled', 'id="open-admin"');
 html = html.replace('id="finish-open-admin"', 'id="finish-open-admin" disabled');
 
+if (memorySetupHint) {
+  html = html.replace('id="memory-setup-hint" role="alert" hidden', 'id="memory-setup-hint" role="alert"');
+}
+
 writeFileSync(previewHtml, html, 'utf8');
 
 if (prepareOnly) {
@@ -399,4 +412,4 @@ if (result.status !== 0) {
 }
 
 const size = statSync(output).size;
-console.log(`[${new Date().toISOString()}] Preview: panel=${panel}, theme=${theme}, output=${output}, mock integrations count=9`);
+console.log(`[${new Date().toISOString()}] Preview: panel=${panel}, theme=${theme}, output=${output}, mock integrations count=${mockIntegrations.length}`);

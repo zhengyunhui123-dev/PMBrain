@@ -12,7 +12,7 @@ import {
   type SetupPayload,
 } from '../config-manager.js';
 import { runCli, runCliChecked, type CliRuntime } from '../cli-runner.js';
-import { listIntegrationsWithConnectionState } from '../integration-manager.js';
+import { listIntegrations, listIntegrationsWithConnectionState } from '../integration-manager.js';
 import type { PgliteBackupController } from '../database/pglite-backup.js';
 import type { SidecarController } from '../sidecar/sidecar-controller.js';
 import { ensureKnowledgeDirectory } from './knowledge-directory.js';
@@ -178,13 +178,17 @@ export class SetupController {
     }
     return {
       setup,
-      integrations: await listIntegrationsWithConnectionState(
-        this.dependencies.sidecar.current?.port,
-        this.dependencies.sidecar.current ?? undefined,
-      ),
+      integrations: listIntegrations(this.dependencies.sidecar.current?.port),
       port: this.dependencies.sidecar.current?.port,
       mcpUrl: this.dependencies.sidecar.current?.mcpUrl,
     };
+  }
+
+  async integrationStates() {
+    return listIntegrationsWithConnectionState(
+      this.dependencies.sidecar.current?.port,
+      this.dependencies.sidecar.current ?? undefined,
+    );
   }
 
   async apply(payload: SetupPayload) {
