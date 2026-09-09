@@ -379,8 +379,22 @@
             <div class="gateway-status" id="gateway-status" role="status"><i></i><div><b>仅本机连接</b><small>共享网关未启动。</small></div><button type="button" class="gateway-restart" id="restart-shared-gateway" hidden><span>重启共享</span><i></i></button></div>
           </section>
 
+          <section class="system-block" aria-labelledby="memory-writeback-title">
+            <div class="subsection-heading"><div><span>04B / AGENT</span><h3 id="memory-writeback-title">AI 长期记忆</h3></div></div>
+            <p>让连接 PMBrain 的 AI 跨会话记住你的重要信息。内容保存在本地 Facts。默认关闭。</p>
+            <div class="network-mode-grid" role="radiogroup" aria-label="AI 长期记忆">
+              <label class="network-mode-card selected" id="memory-mode-off-card"><input id="memory-mode-off" type="radio" name="memory-writeback" value="off" checked /><span><b>关闭</b><small>不主动写 Facts。你说“记住”时仍可手动保存。</small></span></label>
+              <label class="network-mode-card" id="memory-mode-salient-card"><input id="memory-mode-salient" type="radio" name="memory-writeback" value="salient" /><span><b>重要内容</b><small>只记偏好、决定、承诺和项目状态。推荐。</small></span><em>推荐</em></label>
+              <label class="network-mode-card" id="memory-mode-all-card"><input id="memory-mode-all" type="radio" name="memory-writeback" value="all" /><span><b>全部事实</b><small>更积极保存你直接说的事实，仍排除寒暄和推测。</small></span></label>
+            </div>
+            <div class="memory-setup-hint" id="memory-setup-hint" role="alert" hidden><div><b id="memory-setup-title">请先完成 MCP 接入</b><small id="memory-setup-detail">请先到“MCP 接入”更新至少一个 AI 客户端，验证连接后再开启长期记忆。</small></div><button type="button" id="memory-open-integrations">去 MCP 接入</button></div>
+            <p class="engine-usage-hint" id="memory-shared-warning" hidden>共享模式开启自动记忆后，保存的事实可能被同一知识范围内获授权的成员读取。</p>
+            <p>临时记忆：按保存时设置的有效期过期　保存位置：本地 PMBrain Facts</p>
+            <div id="memory-agent-status"><small>已接入 Agent 状态将在本地服务启动后显示。</small></div>
+          </section>
+
           <section class="system-block" aria-labelledby="desktop-behavior-title">
-            <div class="subsection-heading"><div><span>04B / DESKTOP</span><h3 id="desktop-behavior-title">桌面行为</h3></div></div>
+            <div class="subsection-heading"><div><span>04C / DESKTOP</span><h3 id="desktop-behavior-title">桌面行为</h3></div></div>
             <div class="system-setting-grid">
               <label class="setting-toggle" for="launch-at-login"><input id="launch-at-login" type="checkbox" /><span><b>开机自动启动 PMBrain</b><small>登录 Windows 后启动桌面端，并按数据库类型准备本地服务。</small></span></label>
               <label for="close-behavior"><span>点击窗口 × 时</span><select id="close-behavior"><option value="tray">最小化到托盘（默认）</option><option value="quit">退出 PMBrain</option></select></label>
@@ -417,7 +431,7 @@
         <section class="panel repair-panel" id="panel-repair">
           <div class="section-heading">
             <div><span class="index">06</span><h2>软件修复</h2></div>
-            <p>查看每次桌面升级前保留的数据库备份。自动升级只保留最近 2 份；也可在这里恢复、删除或改到其他磁盘。</p>
+            <p>查看升级前备份，或在副本上修复大字段损坏。自动升级只保留最近 2 份备份；修复当前库前会先留底。</p>
           </div>
           <div class="repair-summary">
             <div><span>DATABASE BACKUPS</span><b id="repair-backup-count">等待读取备份清单</b></div>
@@ -434,6 +448,13 @@
             </div>
           </article>
           <article class="diagnostic-export-card">
+            <div><span>TOAST REPAIR</span><h3>大字段损坏修复</h3><p>启动失败若提示大字段/toast 损坏，先在副本上诊断。确认后才替换当前库，并留下 pre-toast-repair 原库。不会删除 Wiki、知识页、Facts 或原始资料。</p><p class="repair-toast-result" id="repair-toast-result" hidden></p></div>
+            <div class="repair-location-actions">
+              <button class="ghost" id="repair-toast-diagnose" type="button"><span>在副本上诊断</span><i></i></button>
+              <button class="primary" id="repair-toast-replace" type="button" hidden><span>确认替换当前库</span><i></i></button>
+            </div>
+          </article>
+          <article class="diagnostic-export-card">
             <div><span>SUPPORT BUNDLE</span><h3>导出脱敏诊断包</h3><p>收集版本、Doctor、桌面与 Sidecar 日志、数据库/模型/MCP/更新状态和近期错误。不会打包数据库或知识内容，API Key、Token、密码和个人路径会自动脱敏。</p></div>
             <button class="primary" id="export-diagnostic"><span>导出诊断包</span><i></i></button>
           </article>
@@ -447,6 +468,13 @@
           <h2>本机配置已保留，PMBrain 服务没有成功启动</h2>
           <p id="recovery-message">请重试启动；如果仍然失败，可以打开日志查看原因。无需重新填写数据库或 API Key。</p>
           <p class="recovery-owner" id="recovery-owner" role="status" hidden></p>
+          <article class="recovery-toast" id="recovery-toast" hidden>
+            <div><span>TOAST REPAIR</span><h3>数据库大字段损坏</h3><p>知识页还在。这是搜索用的派生分块坏了，不会自动重置 WAL。先在副本上诊断，你确认后才替换当前库。</p><p class="repair-toast-result" id="recovery-toast-result" hidden></p></div>
+            <div class="recovery-actions">
+              <button class="primary" id="recovery-toast-diagnose" type="button"><span>在副本上诊断修复</span><i></i></button>
+              <button class="ghost" id="recovery-toast-replace" type="button" hidden><span>确认替换当前库</span><i></i></button>
+            </div>
+          </article>
           <div class="recovery-actions">
             <button class="primary" id="recovery-retry"><span>重新启动服务</span><i></i></button>
             <button class="recovery-terminate" id="recovery-terminate" hidden><span>结束占用进程并重启</span><i></i></button>

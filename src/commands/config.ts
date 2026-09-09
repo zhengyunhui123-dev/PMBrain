@@ -19,6 +19,11 @@ import {
   EmbeddingColumnConfigError,
 } from '../core/search/embedding-column.ts';
 
+const MEMORY_DUAL_PLANE_LEAVES = ['auto_writeback', 'auto_writeback_transient_ttl'] as const;
+const MEMORY_DUAL_PLANE_KEYS: ReadonlySet<string> = new Set(
+  MEMORY_DUAL_PLANE_LEAVES.map((leaf) => `memory.${leaf}`),
+);
+
 function redactUrl(url: string): string {
   // Redact password in postgresql:// URLs
   return url.replace(
@@ -179,9 +184,13 @@ export async function runConfig(engine: BrainEngine, args: string[]) {
         process.exit(1);
       }
       const keys = await engine.listConfigKeys(prefix);
+      if('memory.auto_writeback'.startsWith(prefix)){
+        const {setWritebackMode}=await import('../core/facts/writeback-set.ts');
+        await setWritebackMode(engine,'off');
+      }
       const fileConfig = loadConfigFileOnly();
       const fileKeys = listFileConfigKeys(fileConfig).filter(
-        candidate => candidate.startsWith(prefix) && isFileBackedModelConfigKey(candidate),
+        candidate => candidate.startsWith(prefix) && (isFileBackedModelConfigKey(candidate)||MEMORY_DUAL_PLANE_KEYS.has(candidate)),
       );
       const allKeys = [...new Set([...fileKeys, ...keys])];
       if (allKeys.length === 0) {
@@ -210,7 +219,11 @@ export async function runConfig(engine: BrainEngine, args: string[]) {
       process.exit(1);
     }
     let removed = false;
-    if (isFileBackedModelConfigKey(key)) {
+    if(key==='memory.auto_writeback'){
+      const {setWritebackMode}=await import('../core/facts/writeback-set.ts');
+      await setWritebackMode(engine,'off');
+    }
+    if (isFileBackedModelConfigKey(key) || MEMORY_DUAL_PLANE_KEYS.has(key)) {
       const fileConfig = loadConfigFileOnly();
       if (fileConfig && unsetFileConfigValue(fileConfig, key)) {
         saveConfig(fileConfig);
@@ -454,6 +467,14 @@ export async function runConfig(engine: BrainEngine, args: string[]) {
       } catch {
         // ignore — null is the correct "never seen" semantic.
       }
+    }
+
+    if (MEMORY_DUAL_PLANE_KEYS.has(key)) {
+      const { setWritebackMode, getWritebackStatus } = await import('../core/facts/writeback-set.ts');
+      const current = await getWritebackStatus(engine);
+      await setWritebackMode(engine, key === 'memory.auto_writeback' ? value.trim().toLowerCase() as 'off' | 'salient' | 'all' : current.mode, key === 'memory.auto_writeback_transient_ttl' ? { ttl: value } : {});
+      console.log(`Set ${key} = ${value}`);
+      return;
     }
 
     await engine.setConfig(key, value);

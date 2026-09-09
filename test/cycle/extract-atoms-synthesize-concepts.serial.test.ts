@@ -432,6 +432,7 @@ describe('v0.41 T6: runPhaseSynthesizeConcepts via stubbed chat', () => {
          JOIN pages f ON f.id = l.from_page_id
          JOIN pages t ON t.id = l.to_page_id
         WHERE (f.slug = 'concepts/shared-theme' OR t.slug = 'concepts/shared-theme')
+          AND l.link_source = 'frontmatter'
         ORDER BY l.link_type, f.source_id, t.source_id`,
     );
 
@@ -473,5 +474,17 @@ describe('v0.41 T6: runPhaseSynthesizeConcepts via stubbed chat', () => {
         resolution_type: 'qualified',
       },
     ]);
+
+    const provenance = await engine.executeRaw<{ link_type: string; link_source: string }>(
+      `SELECT l.link_type, l.link_source
+         FROM links l
+         JOIN pages f ON f.id = l.from_page_id
+         JOIN pages t ON t.id = l.to_page_id
+        WHERE (f.slug = 'concepts/shared-theme' OR t.slug = 'concepts/shared-theme')
+          AND l.link_source = 'concept-provenance'
+        ORDER BY l.link_type, f.source_id, t.source_id`,
+    );
+    expect(provenance).toHaveLength(4);
+    expect(provenance.every(row => row.link_source === 'concept-provenance')).toBe(true);
   });
 });

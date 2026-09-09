@@ -1,3 +1,4 @@
+import { normalizeForGrounding } from './synthesize-verify.ts';
 // v0.41.2.1 — extract_atoms cycle phase, post-fix-wave rebuild.
 //
 // Sequencing per cycle:
@@ -57,6 +58,14 @@ import { writeReceipt } from '../extract/receipt-writer.ts';
 import { throwIfAborted } from '../abort-check.ts';
 import { upsertExtractRollup } from '../extract/rollup-writer.ts';
 import { parseLlmJson } from '../llm-json.ts';
+import { resolveAtomSlug } from './atom-identity.ts';
+import { resolveCycleDate } from './cycle-date.ts';
+import {
+  recordTranscriptFailureCount,
+  stampTranscriptTombstone,
+  tombstonedTranscriptsForHashes,
+  transcriptStateKey,
+} from './extract-atoms-transcript-state.ts';
 
 const DEFAULT_BUDGET_USD = 0.3;
 
@@ -76,6 +85,7 @@ const EXTRACTABLE_PAGE_TYPES = [
 ] as const;
 const PAGE_DISCOVERY_BUDGET = 50;
 const MIN_PAGE_CHARS_FOR_EXTRACTION = 500;
+export const MAX_DETERMINISTIC_FAILURES = 3;
 
 export interface ExtractAtomsOpts {
   brainDir?: string;
@@ -392,8 +402,10 @@ export async function runPhaseExtractAtoms(
   // short-circuit shows a sign of life (closes Issue 2 silent-phase pain).
   opts.progress?.heartbeat(`checking existing atoms for ${allHashes16.length} transcripts`);
   const existingHashes = await atomsExistingForHashes(engine, sourceId, allHashes16);
+  const tombstoned = await tombstonedTranscriptsForHashes(engine, sourceId, allHashes16);
   for (const t of transcripts) {
-    if (existingHashes.has(t.contentHash.slice(0, 16))) {
+    const hash16 = t.contentHash.slice(0, 16);
+    if (existingHashes.has(hash16) || tombstoned.has(transcriptStateKey(t.filePath, hash16))) {
       duplicatesSkipped++;
       continue;
     }
@@ -505,13 +517,14 @@ export async function runPhaseExtractAtoms(
 
     const originLabel = item.kind === 'transcript' ? item.filePath : item.slug;
     try {
+      const promptContent = item.content.slice(0, 50_000);
       const result = await chat({
         model: resolvedModel.model,
         system: EXTRACT_PROMPT,
         messages: [
           {
             role: 'user',
-            content: `Source: ${originLabel}\n\n---\n\n${item.content.slice(0, 50_000)}`,
+            content: `Source: ${originLabel}\n\n---\n\n${promptContent}`,
           },
         ],
         maxTokens: 2000,
@@ -538,6 +551,9 @@ export async function runPhaseExtractAtoms(
             // Fail-soft: if the marker cannot be saved, the page remains retryable.
           }
         }
+        if (!opts.dryRun && item.kind === 'transcript') {
+          await stampTranscriptTombstone(engine, sourceId, item.filePath, item.contentHash);
+        }
         if (item.kind === 'transcript') transcriptsProcessed++;
         else pagesProcessed++;
         continue;
@@ -545,7 +561,13 @@ export async function runPhaseExtractAtoms(
 
       if (!opts.dryRun) {
         for (const atom of atoms) {
-          const slug = `atoms/${todayDate()}/${slugify(atom.title)}`;
+          const slug = await resolveAtomSlug(engine, sourceId, atom.title, item.kind, originLabel, await resolveCycleDate(engine));
+          const loc = locateQuote(promptContent, atom.source_quote ?? '');
+          const quoteFields = atom.source_quote
+            ? loc
+              ? { source_quote: promptContent.slice(loc.start, loc.end), source_quote_offset: [loc.start, loc.end], source_quote_verified: true }
+              : { quote_unverified: 'model paraphrased; not present in source' }
+            : {};
           const originFrontmatter =
             item.kind === 'transcript'
               ? { source_path: item.filePath }
@@ -561,7 +583,7 @@ export async function runPhaseExtractAtoms(
               atom_type: atom.atom_type,
               ...originFrontmatter,
               source_hash: item.contentHash.slice(0, 16),
-              ...(atom.source_quote && { source_quote: atom.source_quote }),
+              ...quoteFields,
               ...(atom.lesson && { lesson: atom.lesson }),
               ...(atom.concepts && atom.concepts.length > 0 && { concepts: atom.concepts }),
               ...(atom.virality_score !== undefined && { virality_score: atom.virality_score }),
@@ -599,6 +621,12 @@ export async function runPhaseExtractAtoms(
         source: originLabel,
         error: err instanceof Error ? err.message : String(err),
       });
+      if (!opts.dryRun && item.kind === 'transcript') {
+        const failCount = await recordTranscriptFailureCount(engine, sourceId, item.filePath, item.contentHash);
+        if (failCount != null && failCount >= MAX_DETERMINISTIC_FAILURES) {
+          await stampTranscriptTombstone(engine, sourceId, item.filePath, item.contentHash);
+        }
+      }
     }
   }
   });
@@ -724,4 +752,35 @@ function slugify(s: string): string {
     .replace(/\s+/g, '-')
     .replace(/-+/g, '-')
     .slice(0, 60);
+}
+
+export function locateQuote(
+  content: string,
+  quote: string,
+): { start: number; end: number } | null {
+  if (!quote || !content) return null;
+  const c = normalizeForGrounding(content);
+  const q = normalizeForGrounding(quote);
+  if (!q.norm) return null;
+  const valid: Array<{ start: number; end: number }> = [];
+  const MAX_CANDIDATES = 8;
+  let at = c.norm.indexOf(q.norm);
+  let seen = 0;
+  while (at !== -1 && seen < MAX_CANDIDATES) {
+    seen++;
+    const start = c.map[at]!;
+    const lastOrig = c.map[at + q.norm.length - 1]!;
+    const lastCp = content.codePointAt(lastOrig);
+    const end = lastOrig + (lastCp !== undefined && lastCp > 0xffff ? 2 : 1);
+    if (
+      normalizeForGrounding(content.slice(start, end)).norm === q.norm &&
+      !valid.some(v => v.start === start && v.end === end)
+    ) {
+      valid.push({ start, end });
+    }
+    at = c.norm.indexOf(q.norm, at + 1);
+  }
+  if (at !== -1) return null;
+  if (valid.length !== 1) return null;
+  return valid[0]!;
 }

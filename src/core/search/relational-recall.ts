@@ -209,8 +209,8 @@ export async function buildRelationalArm(
       });
       const a = perSource(resA);
       const b = perSource(resB);
-      const fanA = await engine.relationalFanout(a.slugs, { ...fanoutOpts, sourceId: a.sourceId, sourceIds: a.sourceIds });
-      const fanB = await engine.relationalFanout(b.slugs, { ...fanoutOpts, sourceId: b.sourceId, sourceIds: b.sourceIds });
+      const fanA = await engine.relationalFanout(a.slugs, { ...fanoutOpts, excludePrivate: opts.excludePrivate, seedRefs: resA, sourceId: a.sourceId, sourceIds: a.sourceIds });
+      const fanB = await engine.relationalFanout(b.slugs, { ...fanoutOpts, excludePrivate: opts.excludePrivate, seedRefs: resB, sourceId: b.sourceId, sourceIds: b.sourceIds });
       // Shared midpoints: nodes reachable from BOTH endpoints (exclude the
       // endpoints themselves). Ordered by combined hop.
       const bByKey = new Map(fanB.map(r => [`${r.source_id}:${r.slug}`, r] as const));
@@ -241,6 +241,8 @@ export async function buildRelationalArm(
     const srcIds = Array.from(new Set(resolved.map(r => r.source_id)));
     const rows = await engine.relationalFanout(slugs, {
       ...fanoutOpts,
+      excludePrivate: opts.excludePrivate,
+      seedRefs: resolved,
       sourceId: srcIds.length === 1 ? srcIds[0] : undefined,
       sourceIds: srcIds.length > 1 ? srcIds : undefined,
     });

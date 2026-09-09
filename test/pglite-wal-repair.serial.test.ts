@@ -193,10 +193,13 @@ describe('WAL auto-repair — real-brain regression (#223/#1670/#2575)', () => {
     const gate = src.indexOf("if (verdict === 'wasm-abort')");
     const firstSeamCall = src.indexOf('await attemptWalRepairAndRetry(');
     const secondSeamCall = src.indexOf('await attemptWalRepairAndRetry(', firstSeamCall + 1);
+    const thirdSeamCall = src.indexOf('await attemptWalRepairAndRetry(', secondSeamCall + 1);
+    const initSchema = src.indexOf('async initSchema()');
     expect(gate).toBeGreaterThan(-1);
     expect(firstSeamCall).toBeGreaterThan(-1);
     expect(firstSeamCall).toBeLessThan(gate);
     expect(secondSeamCall).toBeGreaterThan(gate);
-    expect(src.indexOf('await attemptWalRepairAndRetry(', secondSeamCall + 1)).toBe(-1);
+    expect(thirdSeamCall).toBeGreaterThan(initSchema);
+    expect(src.indexOf('await attemptWalRepairAndRetry(', thirdSeamCall + 1)).toBe(-1);
   });
 });

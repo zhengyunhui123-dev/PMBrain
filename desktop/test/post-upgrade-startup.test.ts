@@ -54,6 +54,33 @@ describe('post-upgrade startup helpers', () => {
     expect(recovered?.backup_directory).toBe('D:\\\\backups\\\\a');
   });
 
+  test('recovers restored envelope that uses camelCase backupDirectory', () => {
+    const json = JSON.stringify({
+      status: 'restored',
+      backupDirectory: 'D:\\\\backups\\\\20260908T102331309Z-1.1.79-943b81a5',
+      databasePath: 'C:\\\\Users\\\\zhengyunhui\\\\.pmbrain\\\\brain.pglite',
+    });
+    const recovered = parseSuccessfulBackupJsonFromError(
+      `PMBrain: PGLite failed to open copy — attempting automatic WAL repair\n${json}`,
+    );
+    expect(recovered).toEqual({
+      status: 'restored',
+      backup_directory: 'D:\\\\backups\\\\20260908T102331309Z-1.1.79-943b81a5',
+    });
+  });
+
+  test('sanitizeStartupFailureMessage treats restored JSON as restore success', () => {
+    const raw = JSON.stringify({
+      status: 'restored',
+      backupDirectory: 'D:\\\\backups\\\\x',
+      databasePath: 'C:\\\\Users\\\\zhengyunhui\\\\.pmbrain\\\\brain.pglite',
+    });
+    const message = sanitizeStartupFailureMessage(raw);
+    expect(message).not.toContain('backupDirectory');
+    expect(message).toContain('已恢复');
+    expect(message).toContain('重新启动服务');
+  });
+
   test('sanitizeStartupFailureMessage never dumps raw successful backup JSON', () => {
     const raw = JSON.stringify({
       status: 'reused',

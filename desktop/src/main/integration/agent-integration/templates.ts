@@ -1,6 +1,6 @@
 import type { AgentIntegration, AgentSkill } from './types.js';
 
-export const WORKBUDDY_AGENT_PACK_VERSION = '1';
+export const WORKBUDDY_AGENT_PACK_VERSION = '2';
 
 export const WORKBUDDY_SKILL_SLUGS = [
   'brain-first',
@@ -40,11 +40,11 @@ PMBrain 工具失败、超时或连接失败，只能说明工具当前不可用
 
 ## 3. 明确记忆
 
-当用户说“记住这个”“保存一下”“以后按这个来”“这个很重要”“这是我的偏好”等明确记忆指令时，必须执行 \`remember\` Skill，通过 PMBrain 写入工具保存。优先更新已有知识对象，不制造重复页面；必要时读回验证。明确记忆只写入 PMBrain，不要复制到 WorkBuddy 内置 memory 或其他存储；\`put_page\` 成功或返回已存在后，最多读回一次并立即报告，不得对同一内容重复写入。
+当用户说“记住这个”“保存一下”“以后按这个来”“这个很重要”“这是我的偏好”等明确记忆指令时，必须执行 \`remember\` Skill，通过 PMBrain \`remember\` 工具保存。写入工具准确名是 \`remember\`；PMBrain 不存在 \`facts_add\`，不得猜测别名。一条调用只写一个事实；必要时读回验证。明确记忆只写入 PMBrain，不要写入 WorkBuddy 内置 memory、MEMORY.md 或其他存储；\`remember\` 成功后立即停止，不得对同一内容重复写入。
 
 ## 4. Durable Write Back
 
-本轮形成明确且长期有效的决策、结论、用户偏好、承诺、项目状态变化或重要事实修正时，在合适时执行 \`durable-writeback\` Skill。用户已经明确要求“记住/保存”时只执行 \`remember\`，不要再对同一事实重复执行 \`durable-writeback\`。不要把普通闲聊、大量临时信息或 AI 自己的推测写成用户事实。
+只有 MCP 初始化合同里出现 Ambient memory writeback 时，才允许不经用户说“记住”就保存。保存必须调用 \`remember\`，禁止用 \`put_page\` 当记忆。用户已经明确要求“记住/保存”时只执行 \`remember\`，不要再对同一事实重复执行 \`durable-writeback\`。合同未启用时，不要主动写 Facts。不要把普通闲聊、大量临时信息或 AI 自己的推测写成用户事实。
 
 ## 5. Correction
 
@@ -58,12 +58,12 @@ PMBrain 工具失败、超时或连接失败，只能说明工具当前不可用
 
 WorkBuddy workspace 的 PMBrain Skills 位于 \`.codebuddy/skills/<skill>/SKILL.md\`。匹配 Skill 时，读取对应 \`SKILL.md\` 的完整说明并按步骤执行，不要只凭 Skill 名称猜流程：
 
-同一条消息按以下优先级只选择一个写入路由：纠错意图优先 \`correction\`，明确“记住/保存”优先 \`remember\`；两者已经处理的同一事实不得再执行 \`durable-writeback\`。\`durable-writeback\` 只处理本轮形成、但没有进入明确记忆或纠错路由的长期信息。
+同一条消息按以下优先级只选择一个写入路由：纠错意图优先 \`correction\`，明确“记住/保存”优先 \`remember\`；两者已经处理的同一事实不得再执行 \`durable-writeback\`。\`durable-writeback\` 只在 MCP 记忆合同已启用时，处理本轮形成、但没有进入明确记忆或纠错路由的长期信息，并且必须调用 \`remember\`。
 
 - \`brain-first\`：过去信息、项目、人物、决策、偏好与承诺的主动检索。
 - \`remember\`：用户明确要求记住或保存。
 - \`correction\`：用户指出记忆或事实错误。
-- \`durable-writeback\`：本轮产生长期有效信息。
+- \`durable-writeback\`：MCP 长期记忆已开启时，把本轮重要信息交给 \`remember\`。
 - \`takes-review\`：待审核观点的查看、接受与拒绝。
 
 每个 Skill 的首步调试调用只是可观测性标记；调试工具失败不影响后续真实业务 MCP 工具，不能因此跳过检索、写入、纠错或审核流程。
@@ -129,11 +129,10 @@ export const WORKBUDDY_SKILL_TEMPLATES: Readonly<Record<WorkBuddySkillSlug, Agen
 
    调试调用失败不影响实际业务工具；继续完成查重、写入和验证。
 1. 提取用户明确要求保存的原话、对象、适用范围和时间，不把 AI 推测混入用户事实。
-2. 先用 \`recall\`、\`query\` 或 \`search\` 查找最合适的已有页面/知识对象。
-3. 命中已有对象时先用 \`get_page\` 读取完整内容，优先更新已有页面，不制造重复页面。
-4. 通过 PMBrain MCP \`put_page\` 写入；保留原有有效内容、来源和上下文，不直接访问数据库。同一事实本轮最多执行一次有效 \`put_page\`；返回已创建、已更新或已跳过均进入验证，不要用相同内容重试。
-5. 最多调用一次 \`get_page\` 或检索工具读回，确认信息可查询且没有意外覆盖。验证成功后立即停止工具调用并报告完成；不要再写 WorkBuddy 内置 memory 或其他存储。
-6. 如果写入目标、来源冲突或改动范围不明确，先询问用户，不擅自删除或批量改写。`,
+2. 先用 \`recall\` 查找是否已有相同事实，避免重复。
+3. 调用 PMBrain MCP \`remember\`：一条调用一个事实；填写 \`fact\`、\`provenance\`（宿主、会话、日期）、合适的 \`kind\`；临时信息加 \`ttl\`。准确工具名是 \`remember\`，PMBrain 不存在 \`facts_add\`；不要用 \`put_page\` 当记忆。
+4. \`remember\` 成功后立即停止工具调用；不要再写 WorkBuddy 内置 memory 或其他存储。
+5. 如果对象、来源冲突或改动范围不明确，先询问用户，不擅自删除或批量改写。`,
   ),
   correction: skillTemplate(
     'correction',
@@ -172,7 +171,7 @@ export const WORKBUDDY_SKILL_TEMPLATES: Readonly<Record<WorkBuddySkillSlug, Agen
 
 本轮明确形成长期有效的决策、结论、用户偏好、承诺、项目状态变化或重要新事实。不是“每句话都记”。
 
-用户已经明确要求“记住/保存”时由 \`remember\` 处理；如果本轮同一事实已经通过 \`remember\` 保存，不要再次触发本 Skill 或重复写入。
+仅当 MCP 初始化合同包含 Ambient memory writeback 时使用。用户已经明确要求“记住/保存”时由 \`remember\` 处理；如果本轮同一事实已经通过 \`remember\` 保存，不要再次触发本 Skill 或重复写入。合同未启用时不要主动写 Facts。
 
 ## 流程
 
@@ -185,12 +184,11 @@ export const WORKBUDDY_SKILL_TEMPLATES: Readonly<Record<WorkBuddySkillSlug, Agen
    \`\`\`
 
    调试调用失败不影响实际业务工具；继续判断、查重和写回。
-1. 区分用户明确确认的信息与 AI 推测。AI 推测、临时闲聊、过程草稿和很快失效的信息不得作为用户事实写入。
-2. 用 \`recall\`、\`query(expand=false)\` 或 \`search\` 查找已有项目、人物、偏好或决策页面，避免重复知识。
-3. 命中时用 \`get_page\` 读取完整页面，优先写入已有页面；只有不存在合适对象且新页面确有长期价值时才新建。
-4. 使用 \`put_page\` 做最小写入，保留来源、时间、适用范围和既有有效内容。
-5. 对可能覆盖冲突事实、删除内容或扩大影响范围的写入，先向用户确认。
-6. 必要时读回验证；不要把“写入工具失败”说成已经记住。`,
+1. 区分用户明确确认的信息与 AI 推测。AI 推测、临时闲聊、过程草稿不得作为用户事实写入。
+2. 用 \`recall\` 查重。
+3. 调用 \`remember\` 写入当前 Source；一条调用一个事实；临时行程等加 \`ttl\`。禁止用 \`put_page\` 当记忆，也不要发明 \`hook:writeback\` Source。
+4. 正常情况静默保存，不要说“已经保存到 Facts”。
+5. 不要把“写入工具失败”说成已经记住。`,
   ),
   'takes-review': skillTemplate(
     'takes-review',

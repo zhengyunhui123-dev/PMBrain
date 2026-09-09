@@ -5327,6 +5327,59 @@ export const MIGRATIONS: Migration[] = [
         WHERE private_queue_owner_job_id IS NOT NULL;
     `,
   },
+  {
+    version: 123,
+    name: 'facts_kind_idea_alter',
+    idempotent: true,
+    sql: `
+      DO $$ BEGIN
+      ALTER TABLE facts DROP CONSTRAINT IF EXISTS facts_kind_check;
+      ALTER TABLE facts ADD CONSTRAINT facts_kind_check
+        CHECK (kind IN ('event','preference','commitment','belief','fact','idea'));
+      END $$;
+    `,
+  },
+  {
+    version: 124,
+    name: 'extract_atoms_transcript_state_table',
+    idempotent: true,
+    sql: `
+      CREATE TABLE IF NOT EXISTS extract_atoms_transcript_state (
+        source_id    TEXT        NOT NULL DEFAULT 'default',
+        file_path    TEXT        NOT NULL,
+        content_hash TEXT        NOT NULL,
+        fail_count   INTEGER     NOT NULL DEFAULT 0,
+        tombstoned   BOOLEAN     NOT NULL DEFAULT FALSE,
+        updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (source_id, file_path, content_hash)
+      );
+      CREATE INDEX IF NOT EXISTS extract_atoms_transcript_state_tombstoned_idx
+        ON extract_atoms_transcript_state (source_id, content_hash)
+        WHERE tombstoned;
+      ALTER TABLE links DROP CONSTRAINT IF EXISTS links_link_source_check;
+      ALTER TABLE links ADD CONSTRAINT links_link_source_check
+        CHECK (link_source IS NULL OR link_source IN ('markdown', 'frontmatter', 'manual', 'mentions', 'concept-provenance'));
+    `,
+    sqlFor: {
+      pglite: `
+        CREATE TABLE IF NOT EXISTS extract_atoms_transcript_state (
+          source_id    TEXT        NOT NULL DEFAULT 'default',
+          file_path    TEXT        NOT NULL,
+          content_hash TEXT        NOT NULL,
+          fail_count   INTEGER     NOT NULL DEFAULT 0,
+          tombstoned   BOOLEAN     NOT NULL DEFAULT FALSE,
+          updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+          PRIMARY KEY (source_id, file_path, content_hash)
+        );
+        CREATE INDEX IF NOT EXISTS extract_atoms_transcript_state_tombstoned_idx
+          ON extract_atoms_transcript_state (source_id, content_hash)
+          WHERE tombstoned;
+        ALTER TABLE links DROP CONSTRAINT IF EXISTS links_link_source_check;
+        ALTER TABLE links ADD CONSTRAINT links_link_source_check
+          CHECK (link_source IS NULL OR link_source IN ('markdown', 'frontmatter', 'manual', 'mentions', 'concept-provenance'));
+      `,
+    },
+  },
 ];
 
 export const LATEST_VERSION = MIGRATIONS.length > 0

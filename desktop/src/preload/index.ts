@@ -1,3 +1,4 @@
+import type { MemoryWritebackStatus, MemoryWritebackUpdate } from '../../../shared/contracts/brain.js';
 import { contextBridge, ipcRenderer } from 'electron';
 import type { SidecarState } from '../main/sidecar-manager.js';
 import type {
@@ -110,6 +111,30 @@ export interface DesktopPgliteUpgradeBackupMutation {
   listing: DesktopPgliteUpgradeBackups;
 }
 
+export interface DesktopToastDiagnoseResult {
+  status: string;
+  stagingPath: string;
+  productionPath: string | null;
+  canAutoRepair: boolean;
+  table?: string;
+  column?: string;
+  repairability?: string;
+  recommendedAction?: string;
+  row?: Record<string, unknown>;
+  error?: string;
+}
+
+export interface DesktopToastRepairResult {
+  status: 'replaced' | 'refused' | 'needs-confirm';
+  stagingPath?: string;
+  preservedPath?: string;
+  pages?: number;
+  chunks?: number;
+  facts?: number;
+  diagnose?: DesktopToastDiagnoseResult;
+  error?: string;
+}
+
 export interface DesktopDiagnosticBundleResult {
   path: string;
   fileName: string;
@@ -146,6 +171,7 @@ export interface PMBrainDesktopApi {
   setTheme(theme: DesktopTheme): Promise<DesktopThemeState>;
   onThemeState(listener: (state: DesktopThemeState) => void): () => void;
   getSetup(): Promise<DesktopSetupState>;
+  getIntegrations(probe?: boolean): Promise<IntegrationInfo[]>;
   chooseEmbeddingRebuild(choice: 'wait' | 'defer'): Promise<void>;
   onState(listener: (state: SidecarState) => void): () => void;
   getUpdateState(): Promise<UpdateState | null>;
@@ -154,6 +180,8 @@ export interface PMBrainDesktopApi {
   onShowPanel(listener: (panel: DesktopSettingsPanel) => void): () => void;
   getSystemSettings(): Promise<DesktopSystemSettingsState>;
   saveSystemSettings(payload: DesktopSystemSettingsPayload): Promise<DesktopSystemSettingsSaveResult>;
+  getMemoryWriteback(): Promise<MemoryWritebackStatus>;
+  saveMemoryWriteback(payload: MemoryWritebackUpdate): Promise<MemoryWritebackStatus>;
   onSystemSettingsState(listener: (state: DesktopSystemSettingsState) => void): () => void;
   getSharedAccess(): Promise<SharedAccessContext>;
   createSharedIntegration(payload: SharedIntegrationPayload): Promise<SharedIntegrationResult>;
@@ -166,7 +194,7 @@ export interface PMBrainDesktopApi {
   getAdvancedModelConfig(): Promise<AdvancedModelConfig>;
   saveAdvancedModelConfig(values: AdvancedModelWriteInput): Promise<AdvancedModelConfig>;
   saveSetup(payload: SetupPayload): Promise<DesktopSetupState & { backup?: string | null; reembeddingWarning?: string | null }>;
-  configureIntegration(client: IntegrationClient, kind: CredentialKind): Promise<IntegrationResult>;
+  configureIntegration(client: IntegrationClient, kind: CredentialKind, deep?: boolean): Promise<IntegrationResult>;
   writeWorkbuddyUserAgent(): Promise<{ written: string[]; backedUp: string[] }>;
   getWorkbuddyAgentIntegration(): Promise<WorkbuddyAgentIntegrationStatus>;
   installWorkbuddyAgent(workspace: string): Promise<WorkbuddyAgentIntegrationStatus>;
@@ -183,6 +211,8 @@ export interface PMBrainDesktopApi {
   restorePgliteUpgradeBackup(backupDirectory: string): Promise<DesktopPgliteUpgradeBackupMutation>;
   setPgliteUpgradeBackupRoot(directory: string): Promise<DesktopPgliteUpgradeBackupMutation>;
   openPgliteUpgradeBackup(target: string): Promise<void>;
+  diagnosePgliteToast(): Promise<DesktopToastDiagnoseResult>;
+  replacePgliteToastRepair(stagingPath: string): Promise<DesktopToastRepairResult>;
   getPgliteRecoveryStatus(): Promise<PgliteOwnerStatus>;
   terminatePgliteOwnerAndRetry(pid: number): Promise<void>;
   retry(): Promise<void>;
@@ -207,6 +237,7 @@ const api: PMBrainDesktopApi = {
     return () => ipcRenderer.removeListener('desktop:theme-state', handler);
   },
   getSetup: () => ipcRenderer.invoke('desktop:get-setup'),
+  getIntegrations: (probe) => ipcRenderer.invoke('desktop:get-integrations', probe),
   chooseEmbeddingRebuild: (choice) => ipcRenderer.invoke('desktop:choose-embedding-rebuild', choice),
   onState: (listener) => {
     const handler = (_event: Electron.IpcRendererEvent, state: SidecarState) => listener(state);
@@ -231,6 +262,8 @@ const api: PMBrainDesktopApi = {
   },
   getSystemSettings: () => ipcRenderer.invoke('desktop:get-system-settings'),
   saveSystemSettings: (payload) => ipcRenderer.invoke('desktop:save-system-settings', payload),
+  getMemoryWriteback: () => ipcRenderer.invoke('desktop:get-memory-writeback'),
+  saveMemoryWriteback: (payload) => ipcRenderer.invoke('desktop:save-memory-writeback', payload),
   onSystemSettingsState: (listener) => {
     const handler = (_event: Electron.IpcRendererEvent, state: DesktopSystemSettingsState) => listener(state);
     ipcRenderer.on('desktop:system-settings-state', handler);
@@ -247,7 +280,7 @@ const api: PMBrainDesktopApi = {
   getAdvancedModelConfig: () => ipcRenderer.invoke('desktop:get-advanced-model-config'),
   saveAdvancedModelConfig: (values) => ipcRenderer.invoke('desktop:save-advanced-model-config', values),
   saveSetup: (payload) => ipcRenderer.invoke('desktop:save-setup', payload),
-  configureIntegration: (client, kind) => ipcRenderer.invoke('desktop:configure-integration', client, kind),
+  configureIntegration: (client, kind, deep) => ipcRenderer.invoke('desktop:configure-integration', client, kind, deep),
   writeWorkbuddyUserAgent: () => ipcRenderer.invoke('desktop:write-workbuddy-user-agent'),
   getWorkbuddyAgentIntegration: () => ipcRenderer.invoke('desktop:get-workbuddy-agent-integration'),
   installWorkbuddyAgent: (workspace) => ipcRenderer.invoke('desktop:install-workbuddy-agent', workspace),
@@ -264,6 +297,8 @@ const api: PMBrainDesktopApi = {
   restorePgliteUpgradeBackup: (backupDirectory) => ipcRenderer.invoke('desktop:restore-pglite-upgrade-backup', backupDirectory),
   setPgliteUpgradeBackupRoot: (directory) => ipcRenderer.invoke('desktop:set-pglite-upgrade-backup-root', directory),
   openPgliteUpgradeBackup: (target) => ipcRenderer.invoke('desktop:open-pglite-upgrade-backup', target),
+  diagnosePgliteToast: () => ipcRenderer.invoke('desktop:diagnose-pglite-toast'),
+  replacePgliteToastRepair: (stagingPath) => ipcRenderer.invoke('desktop:replace-pglite-toast-repair', stagingPath),
   getPgliteRecoveryStatus: () => ipcRenderer.invoke('desktop:get-pglite-recovery-status'),
   terminatePgliteOwnerAndRetry: (pid) => ipcRenderer.invoke('desktop:terminate-pglite-owner-and-retry', pid),
   retry: () => ipcRenderer.invoke('desktop:retry'),

@@ -1,5 +1,77 @@
 # Bug 修复台账
 
+## 2026-09-09 PMBrain 1.3.56 MCP 接入首屏延迟与长期记忆首次点击无反馈
+
+- 时间：2026-09-09
+- 版本号：Core 1.3.56；Desktop 1.1.87
+- 标题：立即展示 MCP 客户端，统一深度接入入口并补充长期记忆配置引导
+- 描述：桌面设置首次进入 MCP 接入时，把 QwenPaw 重试和多个客户端 smoke 探测放在首屏状态请求中，最慢需要等待数秒才显示卡片；长期记忆首次点选还会被较晚返回的状态请求覆盖，未接入用户看起来像点不动。现将配置快照与真实连接探测拆分，先展示卡片、后台并行刷新状态；Codex、Claude Code、Grok Build 统一显示“深度接入”，Grok 复用其实际读取的 Claude 兼容记忆合同；没有已验证 MCP 连接时恢复原设置并就地提示前往 MCP 接入更新配置。
+- 是否完成：是
+- 最终结果：定向回归 74/74、Core/Desktop TypeScript、桌面构建、版本同步和源码界面预览通过；`verify` 39/39、`ci:pr-preview` 232/232 通过。MCP 页源码预览一次展示 10 个客户端，Codex、Claude、Grok 均显示统一“深度接入”；长期记忆未接入提示与跳转按钮显示正常。未执行 `build:win`，未修改知识库、Wiki、原始资料、向量或已有 Facts；GitHub Ubuntu 10 shard、Postgres E2E、Heavy、NSIS 待用户提交后验证。
+
+## 2026-09-09 PMBrain 1.3.55 WorkBuddy 路径与多客户端长期记忆兜底未完整对齐 GBrain
+
+- 时间：2026-09-09
+- 版本号：Core 1.3.55；Desktop 1.1.86
+- 标题：修正 WorkBuddy 用户目录，补齐 Codex 漏记兜底与配置自检，并验证 Claude Code、Grok
+- 描述：WorkBuddy 的用户级规则与 Skills 原先仍落在 `~/.codebuddy/`，普通会话不能可靠读取；Codex 只有 MCP 实时 remember 主路径，没有对齐 GBrain 的 SessionEnd 会话漏记兜底和 Hook 信任检查；Grok 也未进入桌面一键接入。现把 WorkBuddy 用户级规则与 Skills 写到 `~/.workbuddy/`，保留工作区 `.codebuddy` 深度接入；按 GBrain 方案为 Codex 安装受信任的 SessionEnd Hook，受限读取本机会话并把候选事实写入既有 corpus/harvester 链路，自检同时验证规则块、Hook 与信任哈希；Claude Code 保持 MCP 实时写回和 Stop Hook；Grok 使用原生 `headers` TOML 配置并加入连接探测。Facts 写入合同继续使用 GBrain 的 `remember`/`extract_facts`，不增加不存在的 `facts_add`。
+- 是否完成：是，代码与本机配置已修复；WorkBuddy 需重启新会话加载新用户级规则。
+- 最终结果：定向回归 60 项、`verify` 39/39、`ci:pr-preview` 232/232、Core/Desktop TypeScript 全部通过；真实 PMBrain MCP 初始化返回 200、99 个工具，合同包含 remember、拒绝 facts_add 并处于 mode all。WorkBuddy 写入 10 个托管文件且无用户文件备份；Codex 0.153.4 配置可加载，规则块、SessionEnd Hook 与信任记录自检全部通过，空载 Hook 实跑退出 0 且未写测试 Fact；Claude Code 修复为官方 2.1.266，MCP 显示 Connected，Stop Hook 实跑退出 0；Grok 1.0.13 doctor 握手成功并发现 99 个工具。未执行 `build:win`，未修改知识库、Wiki、原始资料、向量或已有 Facts；GitHub Ubuntu/Postgres E2E/Heavy/NSIS 待用户提交后验证。
+
+## 2026-09-09 PMBrain 1.3.54 WorkBuddy 长期记忆合同未进入普通会话
+
+- 时间：2026-09-09
+- 版本号：Core 1.3.54；Desktop 1.1.85
+- 标题：WorkBuddy 普通会话安装长期记忆规则并识别本地 MCP 失效凭证
+- 描述：WorkBuddy 虽能列出 PMBrain 工具，但原来的用户级写入只安装子 Agent 和命令，普通会话没有规则与 Skills，明确记忆会退回客户端 MEMORY.md；同时界面只按配置文件存在判断“已配置”，无法发现 Codex Bearer 已失效。现把全局规则与 5 个 Skills 纳入用户级写入，明确唯一 Facts 写入工具是 remember、PMBrain 不存在 facts_add；长期记忆开启时把该指令放到 MCP 初始化合同前部；WorkBuddy/Codex 读取现有 Bearer 做 smoke，失效时显示一键修复。不会静默覆盖用户修改文件。
+- 是否完成：是，代码与本机接入配置修复完成；客户端需重启加载新规则和凭证。
+- 最终结果：长期记忆与接入定向回归 88 项、发布门禁 6 项、Core/Desktop TypeScript、桌面构建与 Sidecar 资源构建通过；`verify` 39/39、`ci:pr-preview` 232/232 通过。本机 WorkBuddy 已写入 10 个用户级规则/Skills/Agent 文件，真实 MCP 初始化 200、99 个工具、remember 存在且 facts_add 不存在，desktop-workbuddy 为 admin/read/write。Codex 新 desktop-codex Bearer 经 99 工具与 get_stats 验证，并由 Codex 0.153.4 实际调用 whoami 返回 admin/read/write；当前正在运行的 Codex 桌面会话仍缓存旧凭证，重启后才读取新配置。未执行 `build:win`，未修改用户知识库、Wiki、原始资料、向量或已有 Facts；GitHub Ubuntu/Postgres E2E/Heavy/NSIS 待用户提交后验证。
+
+## 2026-09-08 PMBrain 1.3.53 长期记忆选项点了会被刷新打回关闭
+
+- 时间：2026-09-08
+- 版本号：Core 1.3.53；Desktop 1.1.84
+- 标题：系统设置轮询不再把未保存的长期记忆选择打回「关闭」
+- 描述：点「重要内容/全部事实」后，局域网状态刷新会重读服务器上的 off，卡片高亮立刻回到关闭，看起来像点不动。现点击立即更新选中态；未保存选择不再被轮询覆盖。保存系统设置后才写入。底部接入状态不是按钮。
+- 是否完成：是
+- 最终结果：定向契约测试通过。CI 同步修了 verify 隔离/system-of-record、serial 概念图边断言、发布说明 5 条上限、迁移 124 与桌面入口行数门禁。当前安装版仍会打回关闭，需打包 1.1.84。未改用户知识库。
+
+## 2026-09-08 PMBrain 1.3.51 定位并在副本上清除 content_chunks toast 损坏
+
+- 时间：2026-09-08
+- 版本号：Core 1.3.51；Desktop 1.1.82
+- 标题：toast 改为独立损坏类；在 staging 上定位 pg_toast_16852 并去掉无主分块
+- 描述：稳定错误 `toast value 191139 in pg_toast_16852` 属于 `content_chunks` 大字段，不是单纯 WAL。自动 WAL 重置已停用。只读副本确认：现存 2374 个 Page 正文可读；损坏在已不存在的 page_id 926、2114 的 57 条孤儿 chunks（含 191139/312829）。1.1.79 冷备含同一损坏。repair 副本用可读 chunks 重写 `content_chunks` 后连续打开 3 次、initSchema、chunk_text/compiled_truth 扫描通过。正式库未替换。
+- 是否完成：是。用户确认后已替换正式库。
+- 最终结果：2026-09-08 用户确认替换。已停桌面，正式库改名为 `C:\Users\zhengyunhui\.pmbrain\brain.pglite.pre-toast-repair-20260908T144936Z`，修复副本拷入正式路径。打开验证：initSchema 通过，Pages 2374、Chunks 23025、Facts 1，toast 191139 未再出现。旧库未删。未跑 GitHub 或 `build:win`。
+
+## 2026-09-08 PMBrain 1.3.50 启动自愈被锁回收跳过，恢复成功被当成失败
+
+- 时间：2026-09-08
+- 版本号：Core 1.3.50；Desktop 1.1.81
+- 标题：上一进程已死时仍做 WAL 自愈；恢复命令打印成功 JSON 后不再当失败
+- 描述：1.1.80 把 toast 当 WAL 类错误，但 sidecar 崩溃后锁被回收，自愈被当成“可能还有人在写”直接跳过，所以打包后仍打不开。软件修复恢复 1.1.79 冷备时，校验副本上的 WAL 修复会把进程退出码留成 1，界面把已经成功的 `status:restored` 当成失败。现确认上一 PID 已死或属于上次开机残留后允许自愈；恢复成功后清掉库目录旁的锁回收标记和修复冷却文件；桌面端按创建冷备同样的方式识别恢复成功 JSON。不会自动覆盖当前知识库。
+- 是否完成：是，代码修复完成。
+- 最终结果：定向测试覆盖锁回收后自愈、恢复 JSON 识别、旁路标记清理。用户现有 `brain.pglite` 未改。重新打包后再点一次「重新启动服务」。若日志仍是 toast value 191139 且自愈失败，说明 1.1.79 冷备本身大字段页已坏，需要用户明确同意后再处理更早备份或手术修复。不要连续反复点启动。未跑 GitHub 或 `build:win`。
+
+## 2026-09-08 PMBrain 1.3.49 PGLite toast 页不一致导致安装后无法启动
+
+- 时间：2026-09-08
+- 版本号：Core 1.3.49；Desktop 1.1.80
+- 标题：toast 大字段页不一致时尝试 WAL 自愈，不再让 GIN 检查拆坏页把 sidecar 直接打死
+- 描述：打包安装 1.1.79 后 sidecar 退出，报 `unexpected chunk number 3 (expected 0) for toast value … in pg_toast_…`。这是 PGLite 大字段页/WAL 不一致，常见于升级时服务被中断。原先自动 WAL 修复只认 `Aborted()`，这类错误被当成未知失败。现把它纳入与异常关闭同一类修复；GIN 健康检查不再 SELECT `compiled_truth` 去拆大字段。不会自动覆盖当前库。
+- 是否完成：是，代码修复完成。
+- 最终结果：分类与 GIN 契约测试已加。用户现有 `brain.pglite` 未改。升级前冷备仍在 `D:\backups\20260908T102331309Z-1.1.79-943b81a5`。重新打包后先点一次「重新启动服务」让 WAL 自愈；若仍失败，到「软件修复」恢复该冷备。不要连续反复点启动。未跑 GitHub 或 `build:win`。
+
+## 2026-09-07 PMBrain 1.3.43 远程关系隐私策略测试与实现对齐
+
+- 时间：2026-09-07
+- 版本号：PMBrain 1.3.43；PMBrain Desktop 1.1.74
+- 标题：远程读取排除未授权来源关系后，旧回归测试仍期望保留该关系
+- 描述：合入 GBrain 远程读取策略后，来源页不在授权 Source 内的关系会整条排除，避免通过关系元数据泄漏未授权页面；旧测试仍按此前行为期望保留关系并隐藏来源字段，导致 Test 工作流 shard 1 失败。现仅更新回归契约，明确远程调用排除该关系、可信本地调用仍保留完整关系；未修改生产读取逻辑，未修改用户知识、向量、Wiki 和原始资料。
+- 是否完成：是
+- 最终结果：远程关系 Source 隔离回归 5/5 通过，版本同步通过，`bun run verify` 39/39 通过，`bun run ci:pr-preview` 232/232 通过。GitHub 端 Ubuntu 10 shard、Postgres E2E、Heavy 仍需用户提交后按精确 SHA 验收；未执行 `bun run build:win`。
+
 ## 2026-09-04 PMBrain 1.3.41 更新后概览仍显示旧文案
 
 - 时间：2026-09-04

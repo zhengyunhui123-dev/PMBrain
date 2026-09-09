@@ -21,6 +21,7 @@ import type {
   PMBrainDesktopApi,
   DesktopPgliteUpgradeBackupMutation,
   DesktopPgliteUpgradeBackups,
+  DesktopToastDiagnoseResult,
   SetupPayload,
   SidecarState,
   StartupProgress,
@@ -42,7 +43,11 @@ let loadedKnowledgeDirectory = '';
 let loadedKnowledgeSourceId = '';
 let knowledgeSourceStatusRequest = 0;
 let recoveryStatusRequest = 0;
+let integrationRefreshRequest = 0;
+let integrationChecksComplete = false;
+let latestIntegrations: IntegrationInfo[] = [];
 let recoveryOwnerPid: number | null = null;
+let toastStagingPath: string | null = null;
 const CUSTOM_ENDPOINT_PREFIX = 'custom-endpoint-';
 let customCatalog: DesktopCustomProviderCatalog = { chat: [], embedding: [] };
 let customSelection: DesktopCustomProviderSelection = {};
@@ -970,12 +975,72 @@ function renderService(service: SidecarState | null, port?: number): void {
   }
   if (service?.phase === 'failed' && state && !state.setup.needsSetup) {
     $('#recovery-message').textContent = service.message || 'PMBrain 服务启动失败，请重试或查看日志。';
+    $('#recovery-toast').hidden = !isToastCorruptFailure(service);
     switchPanel('recovery');
     void refreshPgliteRecoveryStatus();
   } else if (service?.phase !== 'failed') {
     recoveryOwnerPid = null;
     $<HTMLButtonElement>('#recovery-terminate').hidden = true;
     $('#recovery-owner').hidden = true;
+    $('#recovery-toast').hidden = true;
+  }
+}
+
+function isToastCorruptFailure(service: SidecarState | null): boolean {
+  if (!service || service.phase !== 'failed') return false;
+  if (service.category === 'toast_corrupt') return true;
+  const text = `${service.message ?? ''} ${service.categoryLabelZh ?? ''}`;
+  return /大字段|toast value|pg_toast_/i.test(text);
+}
+
+function formatToastDiagnose(result: DesktopToastDiagnoseResult): string {
+  const parts = [`诊断结果：${result.status}`];
+  if (result.table) parts.push(`损坏位置：${result.table}${result.column ? '.' + result.column : ''}`);
+  if (result.recommendedAction) parts.push(result.recommendedAction);
+  if (result.error) parts.push(result.error);
+  if (result.canAutoRepair) parts.push('可以在副本上修复后替换。知识页、Wiki、Facts 不会删除。');
+  else parts.push('不能自动替换当前库。请使用升级备份恢复，或查看日志。');
+  return parts.join('\n');
+}
+
+async function diagnoseToast(source: 'recovery' | 'repair'): Promise<void> {
+  const diagnoseBtn = $<HTMLButtonElement>(source === 'recovery' ? '#recovery-toast-diagnose' : '#repair-toast-diagnose');
+  const replaceBtn = $<HTMLButtonElement>(source === 'recovery' ? '#recovery-toast-replace' : '#repair-toast-replace');
+  const resultEl = $(source === 'recovery' ? '#recovery-toast-result' : '#repair-toast-result');
+  setBusy(diagnoseBtn, true, '正在诊断…');
+  replaceBtn.hidden = true;
+  try {
+    const result = await window.pmbrainDesktop.diagnosePgliteToast();
+    toastStagingPath = result.stagingPath || null;
+    resultEl.hidden = false;
+    resultEl.textContent = formatToastDiagnose(result);
+    replaceBtn.hidden = !(result.canAutoRepair && toastStagingPath);
+  } catch (error) {
+    setNotice('error', error instanceof Error ? error.message : String(error));
+  } finally {
+    setBusy(diagnoseBtn, false, source === 'recovery' ? '在副本上诊断修复' : '在副本上诊断');
+  }
+}
+
+async function replaceToast(source: 'recovery' | 'repair'): Promise<void> {
+  if (!toastStagingPath) return;
+  if (!confirm(
+    '确认用修复副本替换当前知识库？\n\n只会去掉没有对应知识页的搜索分块。知识页、Wiki、Facts 和原始资料不会删除。\n\n当前库会先改名留底，失败会自动退回原库。',
+  )) return;
+  const replaceBtn = $<HTMLButtonElement>(source === 'recovery' ? '#recovery-toast-replace' : '#repair-toast-replace');
+  setBusy(replaceBtn, true, '正在替换…');
+  try {
+    const result = await window.pmbrainDesktop.replacePgliteToastRepair(toastStagingPath);
+    if (result.status !== 'replaced') {
+      setNotice('error', result.error || '副本修复未完成，当前库未被替换。');
+      return;
+    }
+    setNotice('success', `已替换当前库。Pages ${result.pages ?? '—'} / Chunks ${result.chunks ?? '—'}。原库已留底。`);
+    await window.pmbrainDesktop.retry();
+  } catch (error) {
+    setNotice('error', error instanceof Error ? error.message : String(error));
+  } finally {
+    setBusy(replaceBtn, false, '确认替换当前库');
   }
 }
 
@@ -1001,6 +1066,7 @@ async function refreshPgliteRecoveryStatus(): Promise<void> {
 }
 
 function renderIntegrations(integrations: IntegrationInfo[]): void {
+  latestIntegrations = integrations;
   const grid = $('#integration-grid');
   grid.replaceChildren(...integrations.map((item) => {
     const article = document.createElement('article');
@@ -1009,6 +1075,8 @@ function renderIntegrations(integrations: IntegrationInfo[]): void {
     badge.className = item.configured ? 'configured badge' : 'badge';
     if (!item.configured) {
       badge.textContent = '未配置';
+    } else if (item.connectionState === 'invalid') {
+      badge.textContent = '凭证失效';
     } else if (item.id === 'qwenpaw' && item.connectionState === 'connected') {
       badge.textContent = '已连接';
     } else if (item.id === 'qwenpaw' && item.connectionState === 'saved') {
@@ -1023,7 +1091,9 @@ function renderIntegrations(integrations: IntegrationInfo[]): void {
     path.textContent = item.path
       ?? (item.id === 'claude' ? '通过 Claude CLI / GUI 接入' : '通过客户端 MCP 配置接入');
     const note = document.createElement('small');
-    note.textContent = item.id === 'qwenpaw'
+    note.textContent = item.connectionState === 'invalid'
+      ? '当前凭证无法连接 PMBrain，请点击修复'
+      : item.id === 'qwenpaw'
       ? item.connectionState === 'saved'
         ? '配置已写入；尚未连通，请让代理绕过 localhost/127.0.0.1 后重试'
         : '通过本机 API 写入 Bearer 并验证，不使用 OAuth'
@@ -1033,7 +1103,9 @@ function renderIntegrations(integrations: IntegrationInfo[]): void {
     const button = document.createElement('button');
     button.className = 'solid';
     if (item.automatic) {
-      button.textContent = item.id === 'qwenpaw' && item.connectionState === 'saved'
+      button.textContent = item.connectionState === 'invalid'
+        ? '修复连接'
+        : item.id === 'qwenpaw' && item.connectionState === 'saved'
         ? '重试连接'
         : item.configured ? '更新' : '创建并写入';
     } else {
@@ -1044,15 +1116,36 @@ function renderIntegrations(integrations: IntegrationInfo[]): void {
       const actions = document.createElement('div');
       actions.className = 'integration-actions';
       const agentButton = document.createElement('button');
-      agentButton.textContent = 'Agent写入';
+      agentButton.textContent = '写入规则与 Agent';
       agentButton.addEventListener('click', () => void writeWorkbuddyUserAgent(agentButton));
       actions.append(button, agentButton);
       article.append(badge, title, path, note, actions);
     } else {
       article.append(badge, title, path, note, button);
     }
+    if (['codex','claude','grok'].includes(item.id)) {
+      const deep = document.createElement('button'); deep.type = 'button'; deep.textContent = '深度接入';
+      deep.addEventListener('click', () => void configure(item.id, deep, true));
+      article.appendChild(deep);
+    }
     return article;
   }));
+}
+
+async function refreshIntegrations(probe: boolean): Promise<IntegrationInfo[]> {
+  const request = ++integrationRefreshRequest;
+  const integrations = await window.pmbrainDesktop.getIntegrations(probe);
+  if (request !== integrationRefreshRequest) return integrations;
+  if (probe) integrationChecksComplete = true;
+  if (state) state.integrations = integrations;
+  renderIntegrations(integrations);
+  return integrations;
+}
+
+function refreshIntegrationPanel(): void {
+  void refreshIntegrations(false)
+    .then(() => refreshIntegrations(true))
+    .catch(() => undefined);
 }
 
 function selectedNetworkMode(): 'local' | 'shared' {
@@ -1168,6 +1261,106 @@ function updateSystemSettingsAvailability(): void {
 function applySystemSettingsState(next: DesktopSystemSettingsState): void {
   latestSystemSettings = next;
   renderSystemSettings(next);
+  void refreshMemoryWriteback();
+}
+
+let loadedMemoryMode: 'off' | 'salient' | 'all' | null = null;
+let memoryModeUserChanged = false;
+let memoryModeChangeRequest = 0;
+
+function selectedMemoryMode(): 'off' | 'salient' | 'all' | undefined {
+  return document.querySelector<HTMLInputElement>('input[name="memory-writeback"]:checked')?.value as 'off' | 'salient' | 'all' | undefined;
+}
+
+function renderMemoryMode(): void {
+  document.querySelectorAll<HTMLLabelElement>('#memory-mode-off-card, #memory-mode-salient-card, #memory-mode-all-card').forEach((card) => {
+    card.classList.toggle('selected', card.querySelector('input')?.checked === true);
+  });
+}
+
+function selectMemoryMode(mode: 'off' | 'salient' | 'all'): void {
+  const selected = document.querySelector<HTMLInputElement>(`input[name="memory-writeback"][value="${mode}"]`);
+  if (selected) selected.checked = true;
+  renderMemoryMode();
+}
+
+function showMemorySetupHint(title: string, detail: string): void {
+  $('#memory-setup-title').textContent = title;
+  $('#memory-setup-detail').textContent = detail;
+  $('#memory-setup-hint').hidden = false;
+}
+
+function hideMemorySetupHint(): void {
+  $('#memory-setup-hint').hidden = true;
+}
+
+function memoryIntegrationReady(): boolean {
+  return latestIntegrations.some(item => (
+    ['workbuddy', 'codex', 'claude', 'grok'].includes(item.id)
+    && item.configured
+    && !item.portMismatch
+    && item.connectionState === 'connected'
+  ));
+}
+
+async function handleMemoryModeChange(input: HTMLInputElement): Promise<void> {
+  const request = ++memoryModeChangeRequest;
+  const mode = input.value as 'off' | 'salient' | 'all';
+  memoryModeUserChanged = true;
+  renderMemoryMode();
+  if (mode === 'off') {
+    hideMemorySetupHint();
+    return;
+  }
+  if (!integrationChecksComplete) {
+    showMemorySetupHint('正在检查 MCP 接入', '正在验证 WorkBuddy、Codex、Claude Code 和 Grok Build 的本机连接。');
+    try {
+      await refreshIntegrations(true);
+    } catch {
+      integrationChecksComplete = false;
+    }
+    if (request !== memoryModeChangeRequest) return;
+  }
+  if (!memoryIntegrationReady()) {
+    memoryModeUserChanged = false;
+    selectMemoryMode(loadedMemoryMode ?? 'off');
+    showMemorySetupHint(
+      '请先完成 MCP 接入',
+      '请先到“MCP 接入”更新至少一个 AI 客户端，验证连接后再开启长期记忆。',
+    );
+    return;
+  }
+  hideMemorySetupHint();
+}
+
+function memoryModeDirty(): boolean {
+  const pending = selectedMemoryMode();
+  return pending !== undefined && loadedMemoryMode !== null && pending !== loadedMemoryMode;
+}
+
+async function refreshMemoryWriteback(): Promise<void> {
+  const statusEl = $('#memory-agent-status');
+  const sharedWarn = $('#memory-shared-warning');
+  try {
+    const state = await window.pmbrainDesktop.getMemoryWriteback();
+    const pending = selectedMemoryMode();
+    const unsaved = memoryModeUserChanged && pending !== undefined && pending !== state.mode;
+    if (!unsaved) {
+      loadedMemoryMode = state.mode;
+      memoryModeUserChanged = false;
+      selectMemoryMode(state.mode);
+    } else if (loadedMemoryMode === null) {
+      loadedMemoryMode = state.mode;
+    }
+    sharedWarn.hidden = latestSystemSettings?.preferences.networkMode !== 'shared';
+    statusEl.textContent = [
+      state.enabled ? 'WorkBuddy：长期记忆合同将在重新连接时下发。' : 'WorkBuddy：自动记忆合同未启用。',
+      ...state.agents.map(agent => `${agent.agent === 'claude' ? 'Claude Code / Grok Build' : 'Codex'}：${agent.block === 'present' ? '托管指令已安装' : '未安装托管指令'}${agent.agent === 'claude' ? `；Stop Hook ${agent.hook === 'installed' ? '已安装' : '未安装'}` : ''}`),
+      ...state.issues,
+    ].join('；');
+  } catch (error) {
+    statusEl.textContent = error instanceof Error ? error.message : String(error);
+  }
 }
 
 function currentSystemSettingsPayload(): DesktopSystemSettingsPayload {
@@ -1193,9 +1386,15 @@ async function restartSharedGateway(): Promise<void> {
   }
   setBusy(button, true, '正在重启…');
   try {
+    const memoryMode = selectedMemoryMode();
+    const saveMemory = memoryMode !== undefined && loadedMemoryMode !== null && memoryMode !== loadedMemoryMode;
     const result = await window.pmbrainDesktop.saveSystemSettings(payload);
     applySystemSettingsState(result.state);
     if (result.canceled) return;
+    if (saveMemory && memoryMode) {
+      await window.pmbrainDesktop.saveMemoryWriteback({ mode: memoryMode, notice_shown: true });
+      await refreshMemoryWriteback();
+    }
     if (!result.state.gateway?.running) throw new Error('共享入口仍未启动，请检查固定 IP 与 3131 端口。');
     setNotice('success', `局域网共享已恢复：${result.state.sharedMcpUrl || payload.sharedIp}`);
   } catch (error) {
@@ -1217,8 +1416,15 @@ async function saveSystemSettings(): Promise<void> {
   }
   setBusy(button, true, '正在保存…');
   try {
+    const memoryMode = selectedMemoryMode();
+    const saveMemory = memoryModeDirty();
     const result = await window.pmbrainDesktop.saveSystemSettings(payload);
     applySystemSettingsState(result.state);
+    if (result.canceled) return;
+    if (saveMemory && memoryMode) {
+      await window.pmbrainDesktop.saveMemoryWriteback({ mode: memoryMode, notice_shown: true });
+      await refreshMemoryWriteback();
+    }
     if (result.canceled) return;
     if (mode === 'local') {
       setNotice('success', '系统设置已保存，当前仅本机连接。');
@@ -1796,6 +2002,7 @@ async function save(): Promise<void> {
     const next = await window.pmbrainDesktop.saveSetup(payload);
     advancedModelsLoaded = false;
     populate(next);
+    refreshIntegrationPanel();
     setNotice(
       next.reembeddingWarning ? 'error' : 'success',
       next.reembeddingWarning
@@ -1820,30 +2027,30 @@ async function writeWorkbuddyUserAgent(button: HTMLButtonElement): Promise<void>
   try {
     const result = await window.pmbrainDesktop.writeWorkbuddyUserAgent();
     const extra = result.backedUp.length > 0 ? ` 已备份 ${result.backedUp.length} 个你改过的同名文件。` : '';
-    setNotice('success', `已写入用户级 PMBrain 子代理。重启 WorkBuddy 后可用 @pmbrain 或 /pmbrain 调用，并路由已接入的 PMBrain MCP 工具。${extra}`);
+    setNotice('success', `已写入用户级 PMBrain 长期记忆规则、Skills、子代理和命令。请重启 WorkBuddy；普通会话会使用 remember 写入 PMBrain，@pmbrain 和 /pmbrain 也可继续使用。${extra}`);
   } catch (error) {
     setNotice('error', error instanceof Error ? error.message : String(error));
   } finally {
-    setBusy(button, false, 'Agent写入');
+    setBusy(button, false, '写入规则与 Agent');
   }
 }
 
-async function configure(client: IntegrationClient, button: HTMLButtonElement): Promise<void> {
+async function configure(client: IntegrationClient, button: HTMLButtonElement, deep = false): Promise<void> {
   setNotice('error'); setNotice('success');
   const originalText = button.textContent || '';
   button.disabled = true; button.textContent = '正在验证…';
   try {
     const result = await window.pmbrainDesktop.configureIntegration(
       client,
-      client === 'qwenpaw' ? 'api_key' : selectedCredential(),
+      deep || client === 'qwenpaw' ? 'api_key' : selectedCredential(),
+      deep,
     );
     lastResult = result.snippet;
     $('#result-title').textContent = `${client} 配置结果`;
     $('#result-content').textContent = result.snippet;
     $<HTMLButtonElement>('#copy-result').hidden = false;
-    state = await window.pmbrainDesktop.getSetup();
-    renderIntegrations(state.integrations);
-    const refreshedConnection = state.integrations.find(item => item.id === client)?.connectionState
+    const integrations = await refreshIntegrations(true);
+    const refreshedConnection = integrations.find(item => item.id === client)?.connectionState
       ?? result.connectionState;
     const smoke = result.smoke ? `MCP smoke：${result.smoke.toolCount} 个工具，get_stats ${result.smoke.statsOk ? '正常' : '失败'}` : 'OAuth 凭证已创建';
     $('#result-meta').textContent = [
@@ -1874,6 +2081,7 @@ async function configure(client: IntegrationClient, button: HTMLButtonElement): 
 
 document.querySelectorAll<HTMLInputElement>('input[name="engine"]').forEach((input) => input.addEventListener('change', renderEngine));
 document.querySelectorAll<HTMLInputElement>('input[name="network-mode"]').forEach((input) => input.addEventListener('change', renderNetworkMode));
+document.querySelectorAll<HTMLInputElement>('input[name="memory-writeback"]').forEach((input) => input.addEventListener('change', () => void handleMemoryModeChange(input)));
 $<HTMLSelectElement>('#shared-address').addEventListener('change', renderSelectedAddressNote);
 (['chat', 'embedding'] as const).forEach(kind => {
   const select = $<HTMLSelectElement>(`#${kind}-provider`);
@@ -1964,6 +2172,7 @@ document.querySelectorAll<HTMLButtonElement>('.rail-item').forEach((button) => b
   if (target === 'models' && ($<HTMLDetailsElement>('#advanced-model-settings')).open) {
     void loadAdvancedModels(true);
   }
+  if (target === 'integrations') refreshIntegrationPanel();
   if (target === 'repair') void loadPgliteUpgradeBackups();
 }));
 $('#next-models').addEventListener('click', () => switchPanel('models'));
@@ -2028,6 +2237,10 @@ document.querySelectorAll<HTMLButtonElement>('.secret-toggle').forEach((button) 
 $('#save-setup').addEventListener('click', () => void save());
 $('#save-system-settings').addEventListener('click', () => void saveSystemSettings());
 $('#restart-shared-gateway').addEventListener('click', () => void restartSharedGateway());
+$('#memory-open-integrations').addEventListener('click', () => {
+  switchPanel('integrations');
+  refreshIntegrationPanel();
+});
 $('#shared-open-admin').addEventListener('click', () => void window.pmbrainDesktop.openAdmin());
 $('#open-logs').addEventListener('click', () => void window.pmbrainDesktop.openLogs());
 $('#repair-prune-backups').addEventListener('click', () => void prunePgliteUpgradeBackups());
@@ -2052,6 +2265,10 @@ $('#export-diagnostic').addEventListener('click', async () => {
 $('#open-admin').addEventListener('click', () => void window.pmbrainDesktop.openAdmin());
 $('#finish-open-admin').addEventListener('click', () => void window.pmbrainDesktop.openAdmin());
 $('#copy-result').addEventListener('click', () => void window.pmbrainDesktop.copy(lastResult));
+$('#recovery-toast-diagnose').addEventListener('click', () => void diagnoseToast('recovery'));
+$('#recovery-toast-replace').addEventListener('click', () => void replaceToast('recovery'));
+$('#repair-toast-diagnose').addEventListener('click', () => void diagnoseToast('repair'));
+$('#repair-toast-replace').addEventListener('click', () => void replaceToast('repair'));
 $('#recovery-retry').addEventListener('click', async () => {
   const button = $<HTMLButtonElement>('#recovery-retry');
   setBusy(button, true, '正在重启…');
@@ -2110,6 +2327,7 @@ $('#setup-wait-continue').addEventListener('click', () => {
 });
 void window.pmbrainDesktop.getStartupProgress().then(renderStartupProgress).catch(() => undefined);
 window.pmbrainDesktop.onStartupProgress(renderStartupProgress);
+refreshIntegrationPanel();
 void window.pmbrainDesktop.getSetup().then(async (next) => {
   populate(next);
   renderService(await window.pmbrainDesktop.getState(), next.port);
@@ -2123,5 +2341,6 @@ window.pmbrainDesktop.onShowPanel((panel) => {
   if (panel === 'models' && ($<HTMLDetailsElement>('#advanced-model-settings')).open) {
     void loadAdvancedModels(true);
   }
+  if (panel === 'integrations') refreshIntegrationPanel();
   if (panel === 'repair') void loadPgliteUpgradeBackups();
 });

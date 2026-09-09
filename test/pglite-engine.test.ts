@@ -1421,7 +1421,9 @@ describe('PGLiteEngine: error-wrap and guarded WAL recovery on connect()', () =>
     expect(src).toContain('PGlite.create({');
     expect(src).toContain('classifyPgliteInitError(original)');
     expect(src).toContain("verdict === 'wasm-abort'");
+    expect(src).toContain("return 'toast-corrupt'");
     expect(src).toContain('attemptWalRepairAndRetry(');
+    expect(src).toContain('walRepairOptsFromLock(this._lock)');
     expect(src).toContain("attempt.status === 'repaired'");
     expect(src).toContain('Original error:');
     const wrapStart = src.indexOf('const wrapped = new PgliteOpenError(');

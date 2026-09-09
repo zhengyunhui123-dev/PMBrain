@@ -173,6 +173,10 @@ describe('schema_stats', () => {
 // ── schema_lint ─────────────────────────────────────────────────────────
 
 describe('schema_lint', () => {
+  it('rejects traversal before resolving pack files', async () => {
+    const result = await operationsByName.schema_lint!.handler(ctxOf(), { pack: '../outside' });
+    expect(result).toEqual({ error: 'invalid_pack_name' });
+  });
   it('lints the active pack and returns ok=true for clean pack', async () => {
     await withEnv({ GBRAIN_HOME: tmpDir, GBRAIN_SCHEMA_PACK: undefined }, async () => {
       const result = await operationsByName.schema_lint!.handler(ctxOf(), {}) as Record<string, unknown>;

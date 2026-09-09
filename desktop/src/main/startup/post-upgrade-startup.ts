@@ -48,7 +48,7 @@ export function postUpgradeRetryDelayMs(attempt: number): number {
  * non-zero; treat that as success so upgrade startup can continue.
  */
 export function parseSuccessfulBackupJsonFromError(message: string): {
-  status: 'created' | 'reused';
+  status: 'created' | 'reused' | 'restored';
   backup_directory: string;
 } | null {
   const lines = message
@@ -62,15 +62,20 @@ export function parseSuccessfulBackupJsonFromError(message: string): {
       const parsed = JSON.parse(line) as {
         status?: string;
         backup_directory?: string;
+        backupDirectory?: string;
       };
+      const backupDirectory = typeof parsed.backup_directory === 'string' && parsed.backup_directory.length > 0
+        ? parsed.backup_directory
+        : typeof parsed.backupDirectory === 'string' && parsed.backupDirectory.length > 0
+          ? parsed.backupDirectory
+          : null;
       if (
-        (parsed.status === 'created' || parsed.status === 'reused')
-        && typeof parsed.backup_directory === 'string'
-        && parsed.backup_directory.length > 0
+        (parsed.status === 'created' || parsed.status === 'reused' || parsed.status === 'restored')
+        && backupDirectory
       ) {
         return {
           status: parsed.status,
-          backup_directory: parsed.backup_directory,
+          backup_directory: backupDirectory,
         };
       }
     } catch {
@@ -91,6 +96,9 @@ export function sanitizeStartupFailureMessage(message: string): string {
   }
 
   const successfulBackup = parseSuccessfulBackupJsonFromError(trimmed);
+  if (successfulBackup?.status === 'restored') {
+    return '数据库备份已恢复，配置与知识库已替换为该备份。请点击「重新启动服务」。';
+  }
   if (successfulBackup) {
     return (
       '升级后首次启动未完成。升级前冷备已保留，配置与知识库安全。' +

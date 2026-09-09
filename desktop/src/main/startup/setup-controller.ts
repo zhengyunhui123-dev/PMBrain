@@ -12,7 +12,7 @@ import {
   type SetupPayload,
 } from '../config-manager.js';
 import { runCli, runCliChecked, type CliRuntime } from '../cli-runner.js';
-import { listIntegrationsWithConnectionState } from '../integration-manager.js';
+import { listIntegrations, listIntegrationsWithConnectionState } from '../integration-manager.js';
 import type { PgliteBackupController } from '../database/pglite-backup.js';
 import type { SidecarController } from '../sidecar/sidecar-controller.js';
 import { ensureKnowledgeDirectory } from './knowledge-directory.js';
@@ -178,10 +178,17 @@ export class SetupController {
     }
     return {
       setup,
-      integrations: await listIntegrationsWithConnectionState(this.dependencies.sidecar.current?.port),
+      integrations: listIntegrations(this.dependencies.sidecar.current?.port),
       port: this.dependencies.sidecar.current?.port,
       mcpUrl: this.dependencies.sidecar.current?.mcpUrl,
     };
+  }
+
+  async integrationStates() {
+    return listIntegrationsWithConnectionState(
+      this.dependencies.sidecar.current?.port,
+      this.dependencies.sidecar.current ?? undefined,
+    );
   }
 
   async apply(payload: SetupPayload) {
@@ -387,7 +394,10 @@ export class SetupController {
     // Read all sidecar-backed setup state before submitting the background
     // task. The task coordinator will briefly disconnect PGLite before its
     // CLI child starts; no post-submit database request may race that handoff.
-    const integrations = await listIntegrationsWithConnectionState(this.dependencies.sidecar.current?.port);
+    const integrations = await listIntegrationsWithConnectionState(
+      this.dependencies.sidecar.current?.port,
+      this.dependencies.sidecar.current ?? undefined,
+    );
     if (embeddingRebuildQueued) {
       const { markEmbeddingRebuildRunning } = await import('../../../../src/core/embedding-rebuild-state.js');
       const rebuildChoice = this.dependencies.waitEmbeddingRebuildChoice();

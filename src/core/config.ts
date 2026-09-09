@@ -350,6 +350,11 @@ export interface GBrainConfig {
     skills_dir?: string;
     default_surface_dcr?: 'verbs' | 'starter' | 'full';
   };
+  memory?: {
+    auto_writeback?: string;
+    auto_writeback_transient_ttl?: string;
+    visibility_posture?: string;
+  };
 }
 
 /**
@@ -892,6 +897,10 @@ export const KNOWN_CONFIG_KEYS: readonly string[] = [
   'models.chat',
   'models.eval.longmemeval',
   'facts.extraction_model',
+  'facts.extraction_prompt_appendix',
+  'memory.auto_writeback',
+  'memory.auto_writeback_transient_ttl',
+  'memory.auto_writeback_notice_shown',
   // Dream cycle config
   'dream.synthesize.session_corpus_dir',
   'dream.synthesize.meeting_transcripts_dir',

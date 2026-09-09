@@ -9,10 +9,12 @@ import { dispatchToolCall, validateParams, buildOperationContext } from './dispa
 import { getBrainHotMemoryMeta } from '../core/facts/meta-hook.ts';
 import { resolveMcpDefaultSourceId } from '../core/source-resolver.ts';
 import { bindResolveIpcForServe } from './resolve-ipc-binding.ts';
-import { PMBRAIN_MCP_INSTRUCTIONS } from './instructions.ts';
+import { resolveMcpInstructionsForEngine } from './instructions.ts';
 import { filterOpsForSurface, type McpSurface } from './surface.ts';
 
 export async function startMcpServer(engine: BrainEngine, opts: { surface?: McpSurface } = {}) {
+  const { assertStdioSourceBindable } = await import('./source-preflight.ts');
+  await assertStdioSourceBindable(engine);
   const defaultSourceId = await resolveMcpDefaultSourceId(engine);
   const surface = opts.surface ?? 'full';
   const surfaceOps = filterOpsForSurface(operations, surface);
@@ -20,7 +22,13 @@ export async function startMcpServer(engine: BrainEngine, opts: { surface?: McpS
   const ipcBinding = await bindResolveIpcForServe(engine, defaultSourceId);
   const server = new Server(
     { name: 'pmbrain', version: VERSION },
-    { capabilities: { tools: {} }, instructions: PMBRAIN_MCP_INSTRUCTIONS },
+    {
+      capabilities: { tools: {} },
+      instructions: await resolveMcpInstructionsForEngine(engine, {
+        remember: allowedOps.has('remember'),
+        extractFacts: allowedOps.has('extract_facts'),
+      }),
+    },
   );
 
   // Generate tool definitions from operations. Extracted to buildToolDefs so

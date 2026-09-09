@@ -128,7 +128,14 @@ export interface MutateOpts extends PackLockOpts {
  * gbrain-recommended) are explicitly refused per D6 — they live inside
  * the installed module and edits would be lost on upgrade.
  */
+export function isValidPackName(name: string): boolean {
+  return name.length > 0 && name.length <= 128 && /^[a-z0-9][a-z0-9._-]*$/.test(name);
+}
+
 export function locateMutablePackFile(name: string): { path: string; format: PackFileFormat } {
+  if (!isValidPackName(name)) {
+    throw new SchemaPackMutationError('INVALID_RESULT', 'invalid pack name: 请使用以小写字母或数字开头的包标识，不能包含路径');
+  }
   if (BUNDLED_PACK_NAMES.has(name)) {
     throw new SchemaPackMutationError(
       'PACK_READONLY',
@@ -411,13 +418,13 @@ export async function withMutation(
 // Validation helpers used by primitives
 // ────────────────────────────────────────────────────────────────────────
 
-const SLUG_RE = /^[a-z0-9._-]+$/i;
+const SLUG_RE = /^[\p{Script=Han}a-z0-9._-]+$/iu;
 
 function validateTypeName(name: unknown): void {
   if (typeof name !== 'string' || name.length === 0 || !SLUG_RE.test(name)) {
     throw new SchemaPackMutationError(
       'INVALID_RESULT',
-      `type name must be a slug-shape string [a-z0-9._-]+ (got: ${JSON.stringify(name)})`,
+      `type name must contain only Chinese characters, letters, digits, dots, underscores or hyphens (got: ${JSON.stringify(name)})`,
     );
   }
 }

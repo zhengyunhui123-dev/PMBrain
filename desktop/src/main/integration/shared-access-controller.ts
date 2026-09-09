@@ -18,6 +18,7 @@ export class SharedAccessController {
   constructor(
     private readonly sidecarController: SidecarController,
     private readonly lanController: LanController,
+    private readonly beforeIntegration: () => Promise<void> = async () => {},
   ) {}
 
   async read() {
@@ -51,10 +52,17 @@ export class SharedAccessController {
     return getSharedAccessContext(shared.sidecar, shared.mcpUrl);
   }
 
-  async configure(client: IntegrationClient, kind: CredentialKind) {
+  async configure(client: IntegrationClient, kind: CredentialKind, deep = false) {
+    await this.beforeIntegration();
     const sidecar = this.sidecarController.current;
     if (!sidecar) throw new Error('请先完成数据库配置并启动 PMBrain。');
-    return configureIntegration(sidecar, client, kind);
+    const result=await configureIntegration(sidecar, client, kind, {deep});
+    if(deep){
+      if(!result.configured||!result.smoke?.statsOk||!result.smoke.toolCount)throw new Error('MCP 接入验证失败，未安装长期记忆托管块');
+      const agent = client === 'grok' ? 'claude' : client;
+      await sidecar.adminRequest('/admin/api/memory/writeback/agent',{method:'POST',body:JSON.stringify({agent,mcpConfirmed:true,serveUrl:sidecar.mcpUrl})});
+    }
+    return result;
   }
 
   private requireSidecar(): { sidecar: SidecarManager; mcpUrl: string } {

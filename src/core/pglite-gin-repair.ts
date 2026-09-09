@@ -82,7 +82,7 @@ export function isDatabaseUnusableError(error: unknown): boolean {
     return true;
   }
   const msg = error instanceof Error ? error.message : String(error);
-  return /Aborted\(\)|database recovery failed|\bWAL\b|PGlite\.create failed|PGLite failed to initialize|could not initialize its WASM/i.test(msg);
+  return /Aborted\(\)|database recovery failed|\bWAL\b|PGlite\.create failed|PGLite failed to initialize|could not initialize its WASM|unexpected chunk number|missing chunk number|for toast value \d+ in pg_toast_/i.test(msg);
 }
 
 export function isGinRepairAbortText(error: unknown): boolean {
@@ -127,8 +127,8 @@ export async function probeGinSearch(engine: GinRepairEngine): Promise<void> {
   await engine.searchKeyword('healthcheck', { limit: 1 });
 }
 
-function pickSearchToken(row: { title: string; slug: string; compiled_truth: string | null }): string | null {
-  const blobs = [row.title, row.compiled_truth ?? '', row.slug];
+function pickSearchToken(row: { title: string; slug: string }): string | null {
+  const blobs = [row.title, row.slug];
   for (const text of blobs) {
     const cjk = text.match(/[\u3400-\u9fff]{2,8}/);
     if (cjk) return cjk[0];
@@ -144,8 +144,8 @@ function pickSearchToken(row: { title: string; slug: string; compiled_truth: str
 
 export async function verifyGinSearch(engine: GinRepairEngine): Promise<void> {
   await probeGinSearch(engine);
-  const pages = await engine.executeRaw<{ title: string; slug: string; compiled_truth: string | null }>(
-    `SELECT title, slug, compiled_truth
+  const pages = await engine.executeRaw<{ title: string; slug: string }>(
+    `SELECT title, slug
        FROM pages
       WHERE deleted_at IS NULL
         AND title IS NOT NULL

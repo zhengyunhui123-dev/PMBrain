@@ -61,6 +61,8 @@ describe('applyAliasHop', () => {
   test('P0 source-isolation: alias hop boosts only the aliased source, not the same slug in another source', async () => {
     // The alias belongs to the src-b page only. Two same-slug results, different
     // sources, both in the organic set. The hop must boost ONLY src-b's row.
+    await engine.executeRaw("INSERT INTO sources (id, name) VALUES ('src-a', 'A'), ('src-b', 'B') ON CONFLICT DO NOTHING");
+    await engine.putPage('shared/page', { type: 'note', title: 'B', compiled_truth: 'x' }, { sourceId: 'src-b' });
     await engine.setPageAliases('shared/page', 'src-b', ['only in b']);
     const organic = [
       { slug: 'shared/page', source_id: 'src-a', score: 0.5 } as unknown as SearchResult,

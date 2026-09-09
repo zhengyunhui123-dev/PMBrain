@@ -7,6 +7,7 @@ export type SidecarErrorCategory =
   | 'database_owned'
   | 'database_open_failed'
   | 'database_corrupt'
+  | 'toast_corrupt'
   | 'migration_failed'
   | 'port_conflict'
   | 'runtime_missing'
@@ -205,6 +206,14 @@ export function classifySidecarStartupError(error: unknown): SidecarErrorClassif
     };
   }
 
+  if (isPgliteToastInconsistencyError(error)) {
+    return {
+      category: 'toast_corrupt',
+      retryable: false,
+      labelZh: '检测到数据库大字段数据损坏，不会继续自动重置 WAL，请使用数据修复/备份恢复。',
+    };
+  }
+
   if (/corrupt|database recovery failed|WAL|checksum|invalid page/i.test(text)) {
     return {
       category: 'database_corrupt',
@@ -265,6 +274,52 @@ export function classifySidecarStartupError(error: unknown): SidecarErrorClassif
     retryable: false,
     labelZh: '未知错误',
   };
+}
+
+export interface PgliteToastErrorLocation {
+  actualChunk: number | null;
+  expectedChunk: number | null;
+  toastValue: number;
+  toastRelation: string;
+  heapOid: number;
+}
+
+export function parsePgliteToastError(error: unknown): PgliteToastErrorLocation | null {
+  const text = extractErrorText(error);
+  const unexpected = text.match(
+    /unexpected chunk number\s+(\d+)\s+\(expected\s+(\d+)\)\s+for toast value\s+(\d+)\s+in\s+(pg_toast_\d+)/i,
+  );
+  if (unexpected) {
+    const toastRelation = unexpected[4]!.toLowerCase();
+    return {
+      actualChunk: Number(unexpected[1]),
+      expectedChunk: Number(unexpected[2]),
+      toastValue: Number(unexpected[3]),
+      toastRelation,
+      heapOid: Number(toastRelation.slice('pg_toast_'.length)),
+    };
+  }
+  const missing = text.match(
+    /missing chunk number\s+(\d+)\s+for toast value\s+(\d+)\s+in\s+(pg_toast_\d+)/i,
+  );
+  if (missing) {
+    const toastRelation = missing[3]!.toLowerCase();
+    return {
+      actualChunk: null,
+      expectedChunk: Number(missing[1]),
+      toastValue: Number(missing[2]),
+      toastRelation,
+      heapOid: Number(toastRelation.slice('pg_toast_'.length)),
+    };
+  }
+  return null;
+}
+
+export function isPgliteToastInconsistencyError(error: unknown): boolean {
+  return parsePgliteToastError(error) != null
+    || /unexpected chunk number|missing chunk number|for toast value \d+ in pg_toast_/i.test(
+      extractErrorText(error),
+    );
 }
 
 function extractErrorText(error: unknown): string {

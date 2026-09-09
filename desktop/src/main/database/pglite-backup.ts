@@ -228,15 +228,34 @@ export class PgliteBackupController {
       title: '正在恢复数据库备份',
       message: '本地服务已暂停。PMBrain 正在校验备份并用它替换当前数据库，请不要关闭窗口。',
     });
-    const completed = await this.dependencies.runCliChecked(this.dependencies.runtime(), [
-      'pglite-backup',
-      'restore',
-      '--backup', selected.backupDirectory,
-      '--path', selected.databasePath,
-      '--yes',
-      '--json',
-    ]);
-    const result = parseLastJson<{ status?: string; backup_directory?: string }>(
+    const { parseSuccessfulBackupJsonFromError } = await import('../startup/post-upgrade-startup.js');
+    let completed: { stdout: string };
+    try {
+      completed = await this.dependencies.runCliChecked(this.dependencies.runtime(), [
+        'pglite-backup',
+        'restore',
+        '--backup', selected.backupDirectory,
+        '--path', selected.databasePath,
+        '--yes',
+        '--json',
+      ]);
+    } catch (error) {
+      const recovered = parseSuccessfulBackupJsonFromError(
+        error instanceof Error ? error.message : String(error),
+      );
+      if (recovered?.status !== 'restored') throw error;
+      this.dependencies.log(
+        `PGLite restore CLI exited non-zero but returned success JSON; continuing.`,
+      );
+      completed = {
+        stdout: JSON.stringify({
+          status: 'restored',
+          backup_directory: recovered.backup_directory,
+          backupDirectory: recovered.backup_directory,
+        }),
+      };
+    }
+    const result = parseLastJson<{ status?: string; backup_directory?: string; backupDirectory?: string }>(
       completed.stdout,
       'PGLite 备份恢复返回格式无效。',
     );
@@ -246,7 +265,7 @@ export class PgliteBackupController {
     this.dependencies.log(`Restored PGLite database from ${selected.backupDirectory}`);
     return {
       status: 'restored',
-      backupDirectory: result.backup_directory ?? selected.backupDirectory,
+      backupDirectory: result.backupDirectory ?? result.backup_directory ?? selected.backupDirectory,
       listing: await this.listUpgradeBackups(),
     };
   }

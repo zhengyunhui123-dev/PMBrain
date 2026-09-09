@@ -141,6 +141,8 @@ describe('Admin local attachment staging safety contract', () => {
   test('classifies only the existing Markdown, Office and image import formats', () => {
     expect(classifyAdminUploadFilename('note.md')).toBe('markdown');
     expect(classifyAdminUploadFilename('note.mdx')).toBe('markdown');
+    expect(classifyAdminUploadFilename('chat_history.jsonl')).toBe('session');
+    expect(classifyAdminUploadFilename('rollout-2026.jsonl')).toBe('session');
     expect(classifyAdminUploadFilename('proposal.docx')).toBe('office');
     expect(classifyAdminUploadFilename('reference.pdf')).toBe('office');
     expect(classifyAdminUploadFilename('budget.xlsx')).toBe('office');

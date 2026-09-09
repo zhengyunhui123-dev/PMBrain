@@ -1,3 +1,5 @@
+import { pageReadFilter } from './search/read-policy-sql.ts';
+import { readRelationalFanout, readTakes } from './search/read-enrichment.ts';
 import { PGlite } from '@electric-sql/pglite';
 import { vector } from '@electric-sql/pglite/vector';
 import { pg_trgm } from '@electric-sql/pglite/contrib/pg_trgm';
@@ -30,8 +32,8 @@ import {
   PGVECTOR_HNSW_VECTOR_MAX_DIMS,
 } from './vector-index.ts';
 import { DELETE_BATCH_SIZE } from './engine-constants.ts';
-import { acquireLock, releaseLock, type LockHandle } from './pglite-lock.ts';
-import { DatabaseAlreadyOwnedError, PgliteOpenError } from './pglite-errors.ts';
+import { acquireLock, previousOwnerConfirmedDeadFromLock, releaseLock, type LockHandle } from './pglite-lock.ts';
+import { DatabaseAlreadyOwnedError, PgliteOpenError, isPgliteToastInconsistencyError } from './pglite-errors.ts';
 import {
   GIN_REPAIR_DB_UNUSABLE_MESSAGE,
   GinIndexUnusableError,
@@ -175,6 +177,7 @@ export function computeSnapshotSchemaHash(
 export type PgliteInitFailure =
   | 'bunfs'
   | 'wasm-abort'
+  | 'toast-corrupt'
   | 'windows-aborted'
   | 'macos-26-3'
   | 'corrupt'
@@ -205,6 +208,9 @@ export function classifyPgliteInitError(
   if (/EPERM|EACCES|operation not permitted|access is denied/i.test(message)) return 'permission';
   if (/58P01|internal_load_library|type\s+"vector"\s+does\s+not\s+exist|catalog.*corrupt|corrupt/i.test(message)) {
     return 'corrupt';
+  }
+  if (isPgliteToastInconsistencyError(message)) {
+    return 'toast-corrupt';
   }
   if (/aborted\s*\(\)|RuntimeError|unreachable|abort.*runtime|macos.*26\.3|wasm.*runtime/i.test(message)) {
     return 'wasm-abort';
@@ -267,6 +273,16 @@ function resolveLockOwnerType(): 'desktop-sidecar' | 'cli' | 'probe' | 'migratio
   return 'cli';
 }
 
+function walRepairOptsFromLock(lock: LockHandle | null | undefined): {
+  reaped?: boolean;
+  previousOwnerConfirmedDead?: boolean;
+} {
+  return {
+    reaped: lock?.reaped,
+    previousOwnerConfirmedDead: previousOwnerConfirmedDeadFromLock(lock),
+  };
+}
+
 export function buildPgliteInitErrorMessage(
   verdict: PgliteInitFailure,
   original: string,
@@ -283,6 +299,13 @@ export function buildPgliteInitErrorMessage(
         '  Fix: `bun upgrade` (newer Bun mounts the vfs writable). If that\n' +
         '  does not help, run via Node: `node src/cli.ts` or install pmbrain\n' +
         '  using the Node-based path. See #1340 for details.';
+      break;
+    case 'toast-corrupt':
+      hint =
+        '  检测到数据库大字段数据损坏，不会继续自动重置 WAL。\n' +
+        '  请使用 `pmbrain repair toast-diagnose --staging <副本>` 定位损坏行，\n' +
+        '  或从软件修复恢复更早的健康备份。PMBrain 不会自动覆盖当前知识库。\n' +
+        `  ${GIN_REPAIR_DB_UNUSABLE_MESSAGE}`;
       break;
     case 'wasm-abort':
       hint =
@@ -355,6 +378,7 @@ export class PGLiteEngine implements BrainEngine {
   readonly kind = 'pglite' as const;
   private _db: PGLiteDB | null = null;
   private _lock: LockHandle | null = null;
+  private _dataDir: string | undefined;
   walRepairReceipt: WalRepairReceipt | null = null;
   // Tier 3: when GBRAIN_PGLITE_SNAPSHOT loaded a post-initSchema state into
   // PGlite.create(loadDataDir), initSchema is a no-op (schema is already
@@ -370,6 +394,7 @@ export class PGLiteEngine implements BrainEngine {
   async connect(config: EngineConfig): Promise<void> {
     this.walRepairReceipt = null;
     const dataDir = config.database_path || undefined; // undefined = in-memory
+    this._dataDir = dataDir;
 
     // Acquire file lock to prevent concurrent PGLite access (crashes with Aborted())
     try {
@@ -421,7 +446,7 @@ export class PGLiteEngine implements BrainEngine {
         const attempt = await attemptWalRepairAndRetry(
           dataDir,
           openAfterRepair,
-          { reaped: this._lock?.reaped },
+          walRepairOptsFromLock(this._lock),
         );
         if (attempt.status === 'repaired') {
           this._db = attempt.db;
@@ -450,7 +475,7 @@ export class PGLiteEngine implements BrainEngine {
           const attempt = await attemptWalRepairAndRetry(
             dataDir,
             openAfterRepair,
-            { reaped: this._lock?.reaped },
+            walRepairOptsFromLock(this._lock),
           );
           if (attempt.status === 'repaired') {
             this._db = attempt.db;
@@ -533,9 +558,41 @@ export class PGLiteEngine implements BrainEngine {
     }
   }
 
+  private async closeHandleKeepLock(): Promise<void> {
+    const db = this._db;
+    this._db = null;
+    if (!db) return;
+    try {
+      await db.close();
+    } catch {
+      /* reopen after WAL repair */
+    }
+  }
+
   async initSchema(): Promise<void> {
-    // Tier 3: snapshot was loaded into PGlite — schema + migrations already
-    // applied. Nothing to do. Returns immediately.
+    try {
+      await this.applySchemaAndMigrations();
+    } catch (err) {
+      const original = stringifyPgliteInitError(err);
+      if (!this._dataDir || classifyPgliteInitError(original) !== 'wasm-abort') throw err;
+      await this.closeHandleKeepLock();
+      const attempt = await attemptWalRepairAndRetry(
+        this._dataDir,
+        () => preservingProcessExitCode(() => PGlite.create({
+          dataDir: this._dataDir,
+          extensions: { vector, pg_trgm },
+        })),
+        walRepairOptsFromLock(this._lock),
+      );
+      if (attempt.status !== 'repaired') throw err;
+      this._db = attempt.db;
+      this.walRepairReceipt = attempt.receipt;
+      console.warn(buildWalRepairNotice(attempt.receipt));
+      await this.applySchemaAndMigrations();
+    }
+  }
+
+  private async applySchemaAndMigrations(): Promise<void> {
     if (this._snapshotLoaded) {
       await this.ensureGinIndexesHealthy();
       return;
@@ -1866,6 +1923,7 @@ export class PGLiteEngine implements BrainEngine {
         const fallbackParams = [...params];
         fallbackParams[0] = orQuery;
         ({ rows } = await this.db.query(keywordSql, fallbackParams));
+        return (rows as Record<string, unknown>[]).map(row => ({ ...rowToSearchResult(row), keyword_relaxed: true }));
       }
     }
 
@@ -2260,6 +2318,7 @@ export class PGLiteEngine implements BrainEngine {
         const fallbackParams = [...params];
         fallbackParams[0] = orQuery;
         ({ rows } = await this.db.query(titlesSql, fallbackParams));
+        return (rows as Record<string, unknown>[]).map(row => ({ ...rowToSearchResult(row), keyword_relaxed: true }));
       }
     }
     return (rows as Record<string, unknown>[]).map(rowToSearchResult);
@@ -3229,6 +3288,14 @@ export class PGLiteEngine implements BrainEngine {
     // ITERATION cap, which maps approximately to per-BFS-LAYER (exact when
     // fanout is bounded; for hub-fanout the cap fires early). Truncation
     // signal computed post-query by counting rows per depth.
+    if (opts?.excludePrivate) {
+      const originPolicy = pageReadFilter('origin', opts, params, true);
+      stepScope += ` AND (l.origin_page_id IS NULL OR EXISTS (SELECT 1 FROM pages origin WHERE origin.id = l.origin_page_id AND ${originPolicy}))`;
+      aggScope += ` AND (l2.origin_page_id IS NULL OR EXISTS (SELECT 1 FROM pages origin WHERE origin.id = l2.origin_page_id AND ${originPolicy}))`;
+      seedScope += ` AND ${privatePagesFilterFragment('p')}`;
+      stepScope += ` AND ${privatePagesFilterFragment('p2')}`;
+      aggScope += ` AND ${privatePagesFilterFragment('p3')}`;
+    }
     const cap = opts?.frontierCap;
     let recursiveTerm: string;
     if (cap !== undefined && cap > 0) {
@@ -3296,7 +3363,7 @@ export class PGLiteEngine implements BrainEngine {
 
   async traversePaths(
     slug: string,
-    opts?: { depth?: number; linkType?: string; direction?: 'in' | 'out' | 'both'; sourceId?: string; sourceIds?: string[] },
+    opts?: { depth?: number; linkType?: string; direction?: 'in' | 'out' | 'both'; sourceId?: string; sourceIds?: string[]; excludePrivate?: boolean },
   ): Promise<GraphPath[]> {
     const depth = opts?.depth ?? 5;
     const direction = opts?.direction ?? 'out';
@@ -3329,6 +3396,15 @@ export class PGLiteEngine implements BrainEngine {
       ptScope = `AND pt.source_id = $${idx}`;
     }
 
+    if (opts?.excludePrivate) {
+      const originPolicy = pageReadFilter('origin', opts, params, true);
+      stepScope += ` AND (l.origin_page_id IS NULL OR EXISTS (SELECT 1 FROM pages origin WHERE origin.id = l.origin_page_id AND ${originPolicy}))`;
+      pfScope += ` AND (l.origin_page_id IS NULL OR EXISTS (SELECT 1 FROM pages origin WHERE origin.id = l.origin_page_id AND ${originPolicy}))`;
+      seedScope += ` AND ${privatePagesFilterFragment('p')}`;
+      stepScope += ` AND ${privatePagesFilterFragment('p2')}`;
+      pfScope += ` AND ${privatePagesFilterFragment('pf')}`;
+      ptScope += ` AND ${privatePagesFilterFragment('pt')}`;
+    }
     let sql: string;
     if (direction === 'out') {
       sql = `
@@ -3434,84 +3510,7 @@ export class PGLiteEngine implements BrainEngine {
     seeds: string[],
     opts?: import('./types.ts').RelationalFanoutOpts,
   ): Promise<import('./types.ts').RelationalFanoutRow[]> {
-    if (!seeds || seeds.length === 0) return [];
-    const depth = Math.min(Math.max(1, opts?.depth ?? 2), 3);
-    const direction = opts?.direction ?? 'both';
-    const limit = Math.min(Math.max(1, opts?.limit ?? 50), 200);
-    const types = opts?.linkTypes && opts.linkTypes.length > 0 ? opts.linkTypes : null;
-
-    // $1=seeds, $2=depth, $3=limit; optional scope/type params appended.
-    const params: unknown[] = [seeds, depth, limit];
-    const useSourceIds = opts?.sourceIds && opts.sourceIds.length > 0;
-    let seedScope = '';
-    if (useSourceIds) {
-      params.push(opts!.sourceIds);
-      seedScope = `AND p.source_id = ANY($${params.length}::text[])`;
-    } else if (opts?.sourceId) {
-      params.push(opts.sourceId);
-      seedScope = `AND p.source_id = $${params.length}`;
-    }
-    let typeFilter = '';
-    if (types) {
-      params.push(types);
-      typeFilter = `AND l.link_type = ANY($${params.length}::text[])`;
-    }
-    const mentionsFilter = opts?.includeMentions ? '' : `AND l.link_source IS DISTINCT FROM 'mentions'`;
-
-    const recurStep =
-      direction === 'out'
-        ? `JOIN links l ON l.from_page_id = w.id JOIN pages p2 ON p2.id = l.to_page_id`
-        : direction === 'in'
-          ? `JOIN links l ON l.to_page_id = w.id JOIN pages p2 ON p2.id = l.from_page_id`
-          : `JOIN links l ON (l.from_page_id = w.id OR l.to_page_id = w.id)
-             JOIN pages p2 ON p2.id = CASE WHEN l.from_page_id = w.id THEN l.to_page_id ELSE l.from_page_id END`;
-
-    const sql = `
-      WITH RECURSIVE walk AS (
-        SELECT p.id, p.slug, p.source_id, 0::int AS depth,
-               ARRAY[p.id] AS visited, ARRAY[p.slug] AS path,
-               p.source_id AS seed_source, NULL::text AS last_link_type
-        FROM pages p
-        WHERE p.slug = ANY($1::text[]) ${seedScope} AND p.deleted_at IS NULL
-        UNION ALL
-        SELECT p2.id, p2.slug, p2.source_id, w.depth + 1,
-               w.visited || p2.id, w.path || p2.slug,
-               w.seed_source, l.link_type
-        FROM walk w
-        ${recurStep}
-        WHERE w.depth < $2
-          AND NOT (p2.id = ANY(w.visited))
-          AND p2.source_id = w.seed_source
-          AND p2.deleted_at IS NULL
-          ${mentionsFilter}
-          ${typeFilter}
-      )
-      SELECT n.source_id, n.slug,
-             MIN(n.depth) AS hop,
-             COUNT(DISTINCT n.last_link_type) AS edge_count,
-             array_agg(DISTINCT n.last_link_type)
-               FILTER (WHERE n.last_link_type IS NOT NULL) AS via_link_types,
-             (array_agg(array_to_string(n.path, chr(9))
-               ORDER BY n.depth ASC, array_length(n.path, 1) ASC))[1] AS path_str,
-             (SELECT cc.id FROM content_chunks cc
-               WHERE cc.page_id = n.id ORDER BY cc.chunk_index ASC LIMIT 1) AS canonical_chunk_id
-      FROM walk n
-      WHERE n.depth > 0
-      GROUP BY n.source_id, n.slug, n.id
-      ORDER BY hop ASC, edge_count DESC, n.source_id ASC, n.slug ASC
-      LIMIT $3
-    `;
-
-    const { rows } = await this.db.query(sql, params);
-    return (rows as Record<string, unknown>[]).map(r => ({
-      source_id: r.source_id as string,
-      slug: r.slug as string,
-      hop: Number(r.hop),
-      edge_count: Number(r.edge_count),
-      via_link_types: Array.isArray(r.via_link_types) ? (r.via_link_types as string[]) : [],
-      path: r.path_str ? String(r.path_str).split('\t') : [],
-      canonical_chunk_id: r.canonical_chunk_id == null ? null : Number(r.canonical_chunk_id),
-    }));
+    return readRelationalFanout(this.executeRaw.bind(this), seeds, opts);
   }
 
   async getBacklinkCounts(slugs: string[]): Promise<Map<string, number>> {
@@ -4245,13 +4244,17 @@ export class PGLiteEngine implements BrainEngine {
   async listFactsSince(
     source_id: string,
     since: Date,
-    opts?: FactListOpts & { entitySlug?: string },
+    opts?: FactListOpts & { entitySlug?: string; sessionId?: string },
   ): Promise<FactRow[]> {
-    const where: string[] = [`created_at >= $since`];
+    const where: string[] = [`COALESCE(valid_from, created_at) >= $since`];
     const params: Record<string, unknown> = { since };
     if (opts?.entitySlug) {
       where.push(`entity_slug = $entitySlug`);
       params.entitySlug = opts.entitySlug;
+    }
+    if (opts?.sessionId) {
+      where.push(`source_session = $sessionId`);
+      params.sessionId = opts.sessionId;
     }
     return this._listFacts(source_id, {
       ...opts,
@@ -4296,7 +4299,8 @@ export class PGLiteEngine implements BrainEngine {
   async countUnconsolidatedFacts(source_id: string): Promise<number> {
     const r = await this.db.query<{ count: number }>(
       `SELECT COUNT(*)::int AS count FROM facts
-       WHERE source_id = $1 AND consolidated_at IS NULL AND expired_at IS NULL`,
+       WHERE source_id = $1 AND consolidated_at IS NULL AND expired_at IS NULL
+         AND (valid_until IS NULL OR valid_until > now())`,
       [source_id],
     );
     return Number(r.rows[0]?.count ?? 0);
@@ -4317,6 +4321,7 @@ export class PGLiteEngine implements BrainEngine {
          WHERE source_id = $1
            AND entity_slug = $2
            AND expired_at IS NULL
+           AND (valid_until IS NULL OR valid_until > now())
            AND embedding IS NOT NULL
          ORDER BY embedding <=> $3::vector
          LIMIT $4`,
@@ -4330,6 +4335,7 @@ export class PGLiteEngine implements BrainEngine {
        WHERE source_id = $1
          AND entity_slug = $2
          AND expired_at IS NULL
+         AND (valid_until IS NULL OR valid_until > now())
        ORDER BY created_at DESC, id DESC
        LIMIT $3`,
       [source_id, entitySlug, k],
@@ -4502,7 +4508,9 @@ export class PGLiteEngine implements BrainEngine {
     const params: Record<string, unknown> = { source_id };
     if (opts.activeOnly !== false) {
       whereParts.push(`expired_at IS NULL`);
+      whereParts.push(`(valid_until IS NULL OR valid_until > now())`);
     }
+    if (opts.unconsolidatedOnly) whereParts.push(`consolidated_at IS NULL`);
     if (opts.kinds && opts.kinds.length > 0) {
       whereParts.push(`kind = ANY($kinds)`);
       params.kinds = opts.kinds;
@@ -4757,7 +4765,8 @@ export class PGLiteEngine implements BrainEngine {
       `SELECT t.*, p.slug AS page_slug
        FROM takes t
        JOIN pages p ON p.id = t.page_id
-       WHERE 1=1
+       WHERE ($11::text[] IS NULL OR p.source_id = ANY($11::text[]))
+         AND (NOT $12::boolean OR (p.deleted_at IS NULL AND ${privatePagesFilterFragment('p')}))
          AND ($1::int   IS NULL OR t.page_id = $1::int)
          AND ($2::text  IS NULL OR p.slug    = $2::text)
          AND ($3::text  IS NULL OR t.holder  = $3::text)
@@ -4785,52 +4794,19 @@ export class PGLiteEngine implements BrainEngine {
         sortBy,
         limit,
         offset,
+        opts.sourceIds ?? (opts.sourceId ? [opts.sourceId] : null),
+        opts.excludePrivate === true,
       ]
     );
     return rows.map((r) => takeRowToTake(r as Record<string, unknown>));
   }
 
-  async searchTakes(
-    query: string,
-    opts: { limit?: number; takesHoldersAllowList?: string[] } = {},
-  ): Promise<TakeHit[]> {
-    const limit = clampSearchLimit(opts.limit, 30, 100);
-    const { rows } = await this.db.query(
-      `SELECT t.id AS take_id, t.page_id, p.slug AS page_slug, t.row_num,
-              t.claim, t.kind, t.holder, t.weight,
-              similarity(t.claim, $1)::real AS score
-       FROM takes t
-       JOIN pages p ON p.id = t.page_id
-       WHERE t.active
-         AND t.claim % $1
-         AND ($2::text[] IS NULL OR t.holder = ANY($2::text[]))
-       ORDER BY score DESC, t.weight DESC
-       LIMIT $3`,
-      [query, opts.takesHoldersAllowList ?? null, limit]
-    );
-    return rows as unknown as TakeHit[];
+  async searchTakes(query: string, opts: SearchOpts = {}): Promise<TakeHit[]> {
+    return readTakes(this.executeRaw.bind(this), query, opts);
   }
 
-  async searchTakesVector(
-    embedding: Float32Array,
-    opts: { limit?: number; takesHoldersAllowList?: string[] } = {},
-  ): Promise<TakeHit[]> {
-    const limit = clampSearchLimit(opts.limit, 30, 100);
-    const vec = `[${Array.from(embedding).join(',')}]`;
-    const { rows } = await this.db.query(
-      `SELECT t.id AS take_id, t.page_id, p.slug AS page_slug, t.row_num,
-              t.claim, t.kind, t.holder, t.weight,
-              (1 - (t.embedding <=> $1::vector))::real AS score
-       FROM takes t
-       JOIN pages p ON p.id = t.page_id
-       WHERE t.active
-         AND t.embedding IS NOT NULL
-         AND ($2::text[] IS NULL OR t.holder = ANY($2::text[]))
-       ORDER BY t.embedding <=> $1::vector
-       LIMIT $3`,
-      [vec, opts.takesHoldersAllowList ?? null, limit]
-    );
-    return rows as unknown as TakeHit[];
+  async searchTakesVector(embedding: Float32Array, opts: SearchOpts = {}): Promise<TakeHit[]> {
+    return readTakes(this.executeRaw.bind(this), embedding, opts);
   }
 
   async getTakeEmbeddings(ids: number[]): Promise<Map<number, Float32Array>> {

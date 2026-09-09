@@ -14,10 +14,12 @@ import {
 } from './config-manager.js';
 import { DatabaseUpgradeController } from './database/database-upgrade.js';
 import { PgliteBackupController } from './database/pglite-backup.js';
+import { ToastRepairController } from './database/toast-repair-controller.js';
 import { buildDiagnosticBundle } from './diagnostics/diagnostic-bundle.js';
 import { SharedAccessController } from './integration/shared-access-controller.js';
 import { writeWorkbuddyUserAgent } from './integration/user-agent-writer.js';
 import { WorkBuddyAgentController } from './integration/workbuddy-agent-controller.js';
+import { listIntegrations } from './integration-manager.js';
 import { registerDesktopIpcHandlers } from './ipc-handlers.js';
 import {
   inspectDesktopPgliteRecovery,
@@ -128,6 +130,16 @@ const pgliteBackupController = new PgliteBackupController({
   log: message => logger?.write('desktop', message),
 });
 
+const toastRepairController = new ToastRepairController({
+  setupInfo: getSetupInfo,
+  runtime,
+  runCliChecked,
+  sendStartupProgress,
+  hideStartupProgress,
+  stopSidecar: () => sidecarController.stop(),
+  log: message => logger?.write('desktop', message),
+});
+
 const databaseUpgradeController = new DatabaseUpgradeController({
   runtime,
   getLogger: () => logger,
@@ -165,13 +177,17 @@ const sidecarController: SidecarController = new SidecarController({
   hideStartupProgress,
 });
 
-const sharedAccessController = new SharedAccessController(sidecarController, lanController);
+const sharedAccessController = new SharedAccessController(sidecarController, lanController, () => systemSettingsController.askMemoryWriteback());
 const workBuddyAgentController = new WorkBuddyAgentController({
   sidecar: sidecarController,
   configureMcp: () => sharedAccessController.configure('workbuddy', 'api_key'),
 });
 
 const systemSettingsController: SystemSettingsController = new SystemSettingsController({
+  convergeMemoryRules: async () => {
+    await writeWorkbuddyUserAgent({ overwriteExisting: false });
+    return workBuddyAgentController.convergeMemoryRules();
+  },
   lan: lanController,
   sidecar: sidecarController,
   getMainWindow: () => windowController.current,
@@ -363,11 +379,16 @@ if (!app.requestSingleInstanceLock()) {
       setTheme: value => systemSettingsController.setTheme(value),
       systemSettings: () => systemSettingsController.currentState(),
       saveSystemSettings: payload => systemSettingsController.save(payload),
+      memoryWriteback: () => systemSettingsController.memoryWriteback(),
+      saveMemoryWriteback: payload => systemSettingsController.saveMemoryWriteback(payload),
       sharedAccess: () => sharedAccessController.read(),
       createSharedIntegration: payload => sharedAccessController.create(payload),
       revokeSharedIntegration: credentialName => sharedAccessController.revoke(credentialName),
       updateState: () => updateController.currentState,
       setup: () => setupController.currentState(),
+      integrations: probe => probe
+        ? setupController.integrationStates()
+        : Promise.resolve(listIntegrations(sidecarController.current?.port)),
       inspectKnowledgeSourceDirectory,
       initializeKnowledgeSourceGit,
       providerModels: listDesktopProviderModels,
@@ -378,7 +399,7 @@ if (!app.requestSingleInstanceLock()) {
       ),
       saveSetup: payload => setupController.apply(payload),
       chooseEmbeddingRebuild,
-      configureIntegration: (client, kind) => sharedAccessController.configure(client, kind),
+      configureIntegration: (client, kind, deep) => sharedAccessController.configure(client, kind, deep),
       writeWorkbuddyUserAgent: () => writeWorkbuddyUserAgent(),
       getWorkbuddyAgentIntegration: () => workBuddyAgentController.read(),
       installWorkbuddyAgent: workspace => workBuddyAgentController.install(workspace),
@@ -400,6 +421,8 @@ if (!app.requestSingleInstanceLock()) {
         const error = await shell.openPath(path);
         if (error) throw new Error(`无法打开备份目录：${error}`);
       },
+      diagnosePgliteToast: () => toastRepairController.diagnose(),
+      replacePgliteToastRepair: stagingPath => toastRepairController.applyAndReplace(stagingPath),
       previousVersion: () => desktopVersionHistory.previous,
       pgliteRecoveryStatus: () => inspectDesktopPgliteRecovery(pgliteRecoveryDependencies),
       terminatePgliteOwnerAndRetry: pid => terminateDesktopPgliteOwnerAndRetry(

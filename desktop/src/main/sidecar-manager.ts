@@ -266,7 +266,7 @@ export class SidecarManager {
     }, 1);
     const tools = await call('tools/list', {}, 2);
     const stats = await call('tools/call', { name: 'get_stats', arguments: {} }, 3);
-    return { toolCount: Array.isArray(tools.result?.tools) ? tools.result.tools.length : 0, statsOk: !stats.error };
+    return { toolCount: Array.isArray(tools.result?.tools) ? tools.result.tools.length : 0, statsOk: !stats.error && !stats.result?.isError };
   }
 
   async stop(): Promise<void> {

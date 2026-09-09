@@ -79,7 +79,7 @@ describe('desktop settings renderer contracts', () => {
     expect(styles).toContain('.model-picker-trigger, .advanced-model-picker-trigger');
     expect(styles).toContain('place-items: center');
     expect(renderer).not.toContain('window.scrollTo');
-    expect(renderer).not.toContain("switchPanel('integrations');");
+    expect(renderer).not.toContain("populate(next);\n    switchPanel('integrations');");
   });
 
   test('reuses custom chat models in advanced tier and Dream phase selectors', () => {
@@ -259,20 +259,46 @@ describe('desktop settings renderer contracts', () => {
     expect(renderer).toContain('重试连接');
   });
 
-  test('restores Workbuddy to the ordinary MCP card and adds Agent写入 beside 更新', () => {
+  test('restores Workbuddy to the ordinary MCP card and adds rules and Agent write beside 更新', () => {
     expect(renderer).not.toContain('renderWorkbuddyIntegration');
-    expect(renderer).not.toContain('深度接入');
     expect(renderer).not.toContain('移除深度接入');
     expect(renderer).not.toContain("if (item.id === 'workbuddy') return renderWorkbuddyIntegration(item)");
     expect(renderer).toContain("item.id === 'workbuddy' && item.configured");
-    expect(renderer).toContain('Agent写入');
+    expect(renderer).toContain('写入规则与 Agent');
     expect(renderer).toContain('writeWorkbuddyUserAgent');
     expect(renderer).toContain("button.addEventListener('click', () => void configure(item.id, button))");
     expect(renderer).toContain("item.configured ? '更新' : '创建并写入'");
+    expect(renderer).toContain("['codex','claude','grok'].includes(item.id)");
+    expect(renderer).toContain("deep.textContent = '深度接入'");
     expect(styles).toContain('.integration-actions');
     expect(preview).toContain('writeWorkbuddyUserAgent: async');
     expect(main).toContain('desktop:write-workbuddy-user-agent');
     expect(preload).toContain('desktop:write-workbuddy-user-agent');
+  });
+
+  test('立即显示 MCP 卡片，并在后台刷新真实连接状态', () => {
+    expect(preload).toContain('getIntegrations(probe?: boolean)');
+    expect(main).toContain("'desktop:get-integrations'");
+    expect(renderer).toContain('refreshIntegrations(false)');
+    expect(renderer).toContain('refreshIntegrations');
+    expect(renderer).toContain('refreshIntegrations(true)');
+    expect(renderer).toMatch(/refreshIntegrations\(false\)[\s\S]*?refreshIntegrations\(true\)/);
+  });
+
+  test('长期记忆首次点击保留用户选择，未接入时给出就地引导', () => {
+    expect(html).toContain('id="memory-setup-hint"');
+    expect(html).toContain('id="memory-open-integrations"');
+    expect(html).toContain('请先到“MCP 接入”更新至少一个 AI 客户端');
+    expect(renderer).toContain('memoryModeUserChanged');
+    expect(renderer).toContain('handleMemoryModeChange');
+    expect(renderer).toContain('showMemorySetupHint');
+    expect(renderer).toContain("switchPanel('integrations')");
+  });
+
+  test('shows invalid local credentials and a one-click repair action', () => {
+    expect(renderer).toContain('凭证失效');
+    expect(renderer).toContain('当前凭证无法连接 PMBrain');
+    expect(renderer).toContain('修复连接');
   });
 
   test('removes stale shared credential DOM access while preserving network settings', () => {
@@ -301,6 +327,7 @@ describe('desktop settings renderer contracts', () => {
     expect(preview).toContain('inspectKnowledgeSourceDirectory: async');
     expect(preview).toContain('initializeKnowledgeSourceGit: async');
     expect(preview).toContain("id: 'trae', name: 'Trae Work'");
+    expect(preview).toContain("id: 'grok', name: 'Grok Build'");
     expect(preview).toContain("id: 'qwenpaw', name: 'QwenPaw'");
     expect(preview).toContain("id: 'hermes', name: 'Hermes'");
     expect(preview).toContain("id: 'openclaw', name: 'OpenClaw'");
@@ -362,6 +389,15 @@ describe('desktop settings renderer contracts', () => {
     expect(renderer).toContain('setPgliteUpgradeBackupRoot');
     expect(renderer).not.toContain('previous-version');
     expect(preload).not.toContain('openPreviousRelease');
+  });
+
+  test('memory writeback selection is not reset by settings polling before save', () => {
+    expect(renderer).toContain("input[name=\"memory-writeback\"]");
+    expect(renderer).toContain("addEventListener('change', () => void handleMemoryModeChange(input))");
+    expect(renderer).toContain('memoryModeUserChanged && pending !== undefined && pending !== state.mode');
+    expect(renderer).toContain('loadedMemoryMode = state.mode');
+    expect(html).toContain('id="memory-mode-salient-card"');
+    expect(html).toContain('id="memory-agent-status"');
   });
 
   test('opening advanced model settings only reads a draft and saves with the PGLite pause', () => {

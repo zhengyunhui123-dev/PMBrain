@@ -35,7 +35,7 @@ for (const op of operations) {
 }
 
 // CLI-only commands that bypass the operation layer
-const CLI_ONLY = new Set(['init', 'reinit-pglite', 'pglite-backup', 'upgrade', 'post-upgrade', 'check-update', 'integrations', 'publish', 'check-backlinks', 'lint', 'report', 'import', 'export', 'files', 'embed', 'serve', 'call', 'config', 'doctor', 'migrate', 'eval', 'sync', 'extract', 'extract-conversation-facts', 'enrich', 'features', 'autopilot', 'graph-query', 'jobs', 'advisor', 'agent', 'apply-migrations', 'skillpack-check', 'skillpack', 'resolvers', 'integrity', 'repair-jsonb', 'orphans', 'quarantine', 'sources', 'mounts', 'dream', 'check-resolvable', 'routing-eval', 'skillify', 'smoke-test', 'providers', 'storage', 'repos', 'code-def', 'code-refs', 'reindex', 'reindex-code', 'reindex-frontmatter', 'code-callers', 'code-callees', 'frontmatter', 'auth', 'friction', 'claw-test', 'book-mirror', 'takes', 'think', 'salience', 'anomalies', 'transcripts', 'models', 'remote', 'recall', 'forget', 'edges-backfill', 'cache', 'ze-switch', 'founder', 'brainstorm', 'lsd', 'schema', 'capture', 'onboard', 'conversation-parser', 'status', 'probe-pglite']);
+const CLI_ONLY = new Set(['init', 'reinit-pglite', 'pglite-backup', 'upgrade', 'post-upgrade', 'check-update', 'integrations', 'publish', 'check-backlinks', 'lint', 'report', 'import', 'export', 'files', 'embed', 'serve', 'call', 'config', 'doctor', 'hook', 'migrate', 'eval', 'sync', 'extract', 'extract-conversation-facts', 'enrich', 'features', 'autopilot', 'graph-query', 'jobs', 'advisor', 'agent', 'apply-migrations', 'skillpack-check', 'skillpack', 'resolvers', 'integrity', 'repair-jsonb', 'repair', 'orphans', 'quarantine', 'sources', 'mounts', 'dream', 'check-resolvable', 'routing-eval', 'skillify', 'smoke-test', 'providers', 'storage', 'repos', 'code-def', 'code-refs', 'reindex', 'reindex-code', 'reindex-frontmatter', 'code-callers', 'code-callees', 'frontmatter', 'auth', 'friction', 'claw-test', 'book-mirror', 'takes', 'think', 'salience', 'anomalies', 'transcripts', 'models', 'remote', 'recall', 'forget', 'edges-backfill', 'cache', 'ze-switch', 'founder', 'brainstorm', 'lsd', 'schema', 'capture', 'onboard', 'conversation-parser', 'status', 'probe-pglite']);
 // CLI-only commands whose handlers print their own --help text. These are
 // excluded from the generic short-circuit so detailed per-command and
 // per-subcommand usage stays reachable.
@@ -59,7 +59,7 @@ const CLI_ONLY_SELF_HELP = new Set([
   // short-circuit fired before runSync could print its own usage block.
   // Adding `sync` here routes `gbrain sync --help` into runSync.
   'sync',
-  'reinit-pglite', 'pglite-backup',
+  'reinit-pglite', 'pglite-backup', 'repair',
   // v0.40.6.0 Schema Cathedral v3 — `gbrain schema --help` should hit
   // schema.ts printHelp() with the full 22+ verb taxonomy, not the
   // generic short-circuit's one-line stub.
@@ -798,7 +798,7 @@ function formatResult(opName: string, result: unknown): string {
  */
 const THIN_CLIENT_REFUSED_COMMANDS = new Set([
   'sync', 'embed', 'extract', 'extract-conversation-facts', 'enrich', 'migrate', 'apply-migrations',
-  'repair-jsonb', 'orphans', 'integrity', 'serve', 'pglite-backup',
+  'repair-jsonb', 'repair', 'orphans', 'integrity', 'serve', 'pglite-backup',
   // v0.31.1 (CDX-2 op coverage matrix): more local-only commands
   'dream', 'transcripts', 'storage',
   // v0.31.1 CDX-2 audit: takes/sources have multiple subcommands; some
@@ -906,6 +906,11 @@ async function handleCliOnly(command: string, args: string[]) {
   if (command === 'pglite-backup') {
     const { runPgliteBackup } = await import('./commands/pglite-backup.ts');
     await runPgliteBackup(args);
+    return;
+  }
+  if (command === 'repair') {
+    const { runRepairCli } = await import('./commands/repair.ts');
+    await runRepairCli(args);
     return;
   }
   if (command === 'auth') {
@@ -1059,6 +1064,11 @@ async function handleCliOnly(command: string, args: string[]) {
     await runSkillpackCheck(args);
     return;
   }
+  if (command === 'hook') {
+    const { runHook } = await import('./commands/hook.ts');
+    process.exit(await runHook(args));
+  }
+
   if (command === 'doctor') {
     // Multi-topology v1: thin-client doctor. When `~/.gbrain/config.json`
     // has remote_mcp set, every DB-bound check is irrelevant. Route to the
@@ -1996,6 +2006,7 @@ function printHelp() {
   init [--pglite|--supabase|--url]   创建大脑（默认使用 PGLite，无需服务器）
   migrate --to <supabase|pglite>     在存储引擎之间迁移大脑
   pglite-backup <create|list|verify|prune|delete|restore|set-root> 创建、列出、验证、清理或恢复 PGLite 冷备份
+  repair toast-diagnose|toast|toast-replace  副本上定位/修复 PGLite toast，确认后才替换正式库
   upgrade                            自更新
   check-update [--json]              检查新版本
   doctor [--json] [--fast]           执行健康检查

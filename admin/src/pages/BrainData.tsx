@@ -36,6 +36,15 @@ import type {
 } from '../../../shared/contracts/brain.ts';
 import { FACT_KINDS, knowledgePageViewTypes } from '../../../shared/knowledge-views.ts';
 
+function factTtlHint(validUntil: string | null | undefined): string | null {
+  if (!validUntil) return null;
+  const until = Date.parse(validUntil);
+  if (!Number.isFinite(until)) return null;
+  const days = Math.ceil((until - Date.now()) / 86_400_000);
+  if (days <= 0) return '临时记忆 · 已过期';
+  return `临时记忆 · 还有 ${days} 天过期`;
+}
+
 export function BrainDataPage() {
   const { overview } = useOverview();
   const initialGraphTarget = useRef((() => {
@@ -354,7 +363,11 @@ export function BrainDataPage() {
                     }
                   }}
                 >
-                  <td><b>{row.fact}</b><div className="pm-muted mono">#{row.id} · {row.source}</div></td>
+                  <td>
+                    <b>{row.fact}</b>
+                    <div className="pm-muted mono">#{row.id} · {row.source}</div>
+                    {factTtlHint(row.valid_until) ? <div className="pm-muted">{factTtlHint(row.valid_until)}</div> : null}
+                  </td>
                   <td>{row.source_id}</td>
                   <td><span className="pm-pill">{factKindLabel(row.kind)}</span></td>
                   <td>{row.entity_slug || '—'}</td>

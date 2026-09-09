@@ -136,11 +136,19 @@ describe.serial('PGLite upgrade cold backup and recovery verification', () => {
     expect(created.manifest.recovery_validation.protected_table_counts.pages).toBe(1);
     expect((await verifyPgliteUpgradeBackup(created.backupDirectory)).status).toBe('verified');
 
+    writeFileSync(`${databasePath}.lock-reap.json`, JSON.stringify({ ts: Date.now(), by: 1 }));
+    writeFileSync(`${databasePath}.wal-repair-attempt.json`, JSON.stringify({
+      episodeStartedAt: Date.now(),
+      episodeBackupPath: null,
+      attempts: [{ ts: Date.now(), outcome: 'failed', backupPath: null }],
+    }));
     await restorePgliteUpgradeBackup({
       backupDirectory: created.backupDirectory,
       backupRoot,
       databasePath,
     });
+    expect(existsSync(`${databasePath}.lock-reap.json`)).toBe(false);
+    expect(existsSync(`${databasePath}.wal-repair-attempt.json`)).toBe(false);
     const engine = new PGLiteEngine();
     await engine.connect({ engine: 'pglite', database_path: databasePath });
     try {

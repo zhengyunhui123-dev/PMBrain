@@ -1,25 +1,6 @@
-/**
- * Outbound HTTP MCP client for thin-client mode (multi-topology v1, Tier B).
- *
- * Wraps the official @modelcontextprotocol/sdk Client + StreamableHTTPClientTransport
- * with OAuth `client_credentials` minting + token caching + 401 retry. Used by:
- *   - `gbrain remote ping`   — submits autopilot-cycle, polls get_job
- *   - `gbrain remote doctor` — calls run_doctor MCP op
- *
- * Token caching strategy: in-process Map keyed by mcp_url, value carries the
- * access_token + expires_at. CLI invocations are short-lived; the cache
- * amortizes when a single `gbrain remote ping` makes multiple calls (submit_job
- * + N × get_job). Persisting to disk would create a credential-on-disk
- * surface for marginal benefit — re-mint is a single sub-100ms /token call.
- *
- * 401 handling: on a tool-call rejection, drop the cached token, mint fresh
- * once, retry the call. If the second attempt also 401s, surface a structured
- * error with the mcp_url + suggested remedy. Auth-failure-after-refresh is the
- * canonical "client credentials revoked or scope insufficient" signal.
- */
-
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { StreamableHTTPClientTransport, StreamableHTTPError } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { combineAbortSignals } from './abort-check.ts';
 import type { GBrainConfig } from './config.ts';
 import { discoverOAuth, mintClientCredentialsToken } from './remote-mcp-probe.ts';
 
@@ -91,25 +72,35 @@ export class RemoteMcpError extends Error {
  * Not part of the public API — production code should consume this only via
  * the callRemoteTool funnel.
  */
-export function toRemoteMcpError(e: unknown, mcpUrl: string): RemoteMcpError {
+export function toRemoteMcpError(e: unknown, mcpUrl: string, signal?: AbortSignal): RemoteMcpError {
+  if (signal?.aborted) {
+    const kind = signal.reason instanceof Error && signal.reason.name === 'TimeoutError'
+      ? 'timeout' : 'aborted';
+    return new RemoteMcpError(
+      'network',
+      `Request to ${mcpUrl} ${kind === 'timeout' ? 'timed out' : 'was aborted'}`,
+      { mcp_url: mcpUrl, kind },
+    );
+  }
   if (e instanceof RemoteMcpError) return e;
   if (e instanceof Error) {
-    // AbortError fires for both --timeout and SIGINT; the caller distinguishes
-    // via the AbortSignal.reason it set, but the SDK swallows that. Fall back
-    // to message inspection for the timeout sub-kind.
-    const isAbort = e.name === 'AbortError' || /abort/i.test(e.message);
-    if (isAbort) {
+    if (e.name === 'AbortError' || e.name === 'TimeoutError') {
       return new RemoteMcpError(
         'network',
-        `Request to ${mcpUrl} aborted: ${e.message}`,
-        { mcp_url: mcpUrl, kind: 'aborted' },
+        `Request to ${mcpUrl} ${e.name === 'TimeoutError' ? 'timed out' : 'was aborted'}`,
+        { mcp_url: mcpUrl, kind: e.name === 'TimeoutError' ? 'timeout' : 'aborted' },
       );
     }
     // undici/fetch network errors (DNS, connection refused, TLS) end up here.
     return new RemoteMcpError(
       'network',
       `Network error talking to ${mcpUrl}: ${e.message}`,
-      { mcp_url: mcpUrl, kind: 'unreachable' },
+      {
+        mcp_url: mcpUrl,
+        kind: 'unreachable',
+        ...(e instanceof StreamableHTTPError && e.code !== undefined && e.code > 0
+          ? { status: e.code } : {}),
+      },
     );
   }
   return new RemoteMcpError(
@@ -132,7 +123,8 @@ export function extractToolErrorCode(message: string): string | undefined {
   try {
     const parsed = JSON.parse(message);
     if (parsed && typeof parsed === 'object') {
-      const code = (parsed as any).error?.code ?? (parsed as any).code;
+      const code = typeof parsed.error === 'string'
+        ? parsed.error : parsed.error?.code ?? parsed.code;
       if (typeof code === 'string') return code;
     }
   } catch { /* not json; fall through */ }
@@ -167,7 +159,8 @@ function resolveSecret(remote: NonNullable<GBrainConfig['remote_mcp']>): string 
  * Mint or reuse a cached access_token for the given config. Throws
  * RemoteMcpError on discovery failure or auth rejection.
  */
-async function getAccessToken(config: GBrainConfig, force = false): Promise<string> {
+async function getAccessToken(config: GBrainConfig, force = false, signal?: AbortSignal): Promise<string> {
+  signal?.throwIfAborted();
   const remote = requireRemoteMcp(config);
   const cached = tokenCache.get(remote.mcp_url);
   if (!force && cached && cached.expires_at_ms > Date.now()) {
@@ -176,21 +169,23 @@ async function getAccessToken(config: GBrainConfig, force = false): Promise<stri
 
   const secret = resolveSecret(remote);
 
-  const disco = await discoverOAuth(remote.issuer_url);
+  const disco = await discoverOAuth(remote.issuer_url, { signal });
+  signal?.throwIfAborted();
   if (!disco.ok) {
     throw new RemoteMcpError(
       disco.reason === 'http' || disco.reason === 'parse' ? 'discovery' : 'network',
       `OAuth discovery failed: ${disco.message}`,
-      { ...(disco.status ? { status: disco.status } : {}), mcp_url: remote.mcp_url },
+      { ...(disco.status ? { status: disco.status } : {}), ...(disco.kind ? { kind: disco.kind } : {}), mcp_url: remote.mcp_url },
     );
   }
 
-  const tokenRes = await mintClientCredentialsToken(disco.metadata.token_endpoint, remote.oauth_client_id, secret);
+  const tokenRes = await mintClientCredentialsToken(disco.metadata.token_endpoint, remote.oauth_client_id, secret, { signal });
+  signal?.throwIfAborted();
   if (!tokenRes.ok) {
     throw new RemoteMcpError(
       tokenRes.reason === 'auth' ? 'auth' : tokenRes.reason === 'network' ? 'network' : 'discovery',
       `OAuth /token failed: ${tokenRes.message}`,
-      { ...(tokenRes.status ? { status: tokenRes.status } : {}), mcp_url: remote.mcp_url },
+      { ...(tokenRes.status ? { status: tokenRes.status } : {}), ...(tokenRes.kind ? { kind: tokenRes.kind } : {}), mcp_url: remote.mcp_url },
     );
   }
 
@@ -201,37 +196,34 @@ async function getAccessToken(config: GBrainConfig, force = false): Promise<stri
   return token.access_token;
 }
 
-/**
- * Build a connected Client with the given bearer. Caller is responsible for
- * `await client.close()` after use. Each tool call gets its own short-lived
- * Client because StreamableHTTPClientTransport doesn't expose a clean way to
- * swap headers on an existing connection — re-mint + reconnect on 401 is
- * cheaper than reusing.
- *
- * v0.31.1: optional AbortSignal threaded into `requestInit` so callers can
- * cancel in-flight HTTP requests on timeout or SIGINT.
- */
 async function buildClient(mcpUrl: string, accessToken: string, signal?: AbortSignal): Promise<Client> {
   const transport = new StreamableHTTPClientTransport(new URL(mcpUrl), {
     requestInit: {
       headers: {
         'Authorization': `Bearer ${accessToken}`,
       },
-      ...(signal ? { signal } : {}),
     },
+    fetch: (input, init) => fetch(input, {
+      ...init,
+      signal: signal ? combineAbortSignals(signal, init?.signal) : init?.signal,
+    }),
   });
   const client = new Client(
     { name: 'gbrain-remote-cli', version: '1' },
     { capabilities: {} },
   );
-  await client.connect(transport);
-  return client;
+  try {
+    signal?.throwIfAborted();
+    await client.connect(transport, { signal });
+    return client;
+  } catch (error) {
+    try { await client.close(); } catch { /* best-effort */ }
+
+    try { await transport.close(); } catch { /* best-effort */ }
+    throw error;
+  }
 }
 
-/**
- * v0.31.1: options for `callRemoteTool`. Both fields optional; when absent the
- * call inherits SDK defaults (no client-side timeout, no abort).
- */
 export interface CallRemoteToolOptions {
   /** Hard wall-clock cap for the whole call (token mint + tool call). Aborts on expiry. */
   timeoutMs?: number;
@@ -251,7 +243,7 @@ export function buildAbortController(opts: CallRemoteToolOptions): { signal: Abo
 
   if (opts.timeoutMs !== undefined && opts.timeoutMs > 0) {
     const timer = setTimeout(() => {
-      controller.abort(new Error(`timeout after ${opts.timeoutMs}ms`));
+      controller.abort(new DOMException(`timeout after ${opts.timeoutMs}ms`, 'TimeoutError'));
     }, opts.timeoutMs);
     cleanups.push(() => clearTimeout(timer));
   }
@@ -296,15 +288,15 @@ export async function callRemoteTool(
     // Step 1: mint (or reuse cached) token. If THIS fails — bad credentials,
     // unreachable issuer, etc. — surface immediately. Retry-on-401 is for
     // the mid-session token-rotation case, NOT for initial-credentials-wrong.
-    const initialToken = await getAccessToken(config, false);
+    const initialToken = await getAccessToken(config, false, signal);
 
-    // Step 2: try the tool call. On a 401-shaped failure here, drop the cache
     // and retry ONCE with a freshly-minted token (handles host-side rotation
     // mid-session). If the retry also fails auth, surface auth_after_refresh.
     const tryCall = async (token: string): Promise<unknown> => {
       const client = await buildClient(remote.mcp_url, token, signal);
       try {
-        const res = await client.callTool({ name: toolName, arguments: args });
+        signal.throwIfAborted();
+        const res = await client.callTool({ name: toolName, arguments: args }, undefined, { signal });
         if (res.isError) {
           const message = Array.isArray(res.content)
             ? res.content.map((c: unknown) => (c as { text?: string }).text ?? '').join('\n')
@@ -328,23 +320,20 @@ export async function callRemoteTool(
     try {
       return await tryCall(initialToken);
     } catch (e) {
-      // RemoteMcpError already-typed: bubble unless it's a tool_error that
-      // happens to look 401-shaped (e.g. SDK wrapping HTTP 401 in a tool
-      // error). For plain Error, do the 401 sniff.
-      const message = e instanceof Error ? e.message : String(e);
-      const looksLike401 = /401|unauthor|invalid.token/i.test(message);
-      if (!looksLike401) throw e;
+
+      signal.throwIfAborted();
+      if (!(e instanceof StreamableHTTPError) || e.code !== 401) throw e;
       // Drop cached token and retry once with a fresh mint.
       tokenCache.delete(remote.mcp_url);
       let freshToken: string;
       try {
-        freshToken = await getAccessToken(config, true);
+        freshToken = await getAccessToken(config, true, signal);
       } catch (mintErr) {
         if (mintErr instanceof RemoteMcpError && mintErr.reason === 'auth') {
           throw new RemoteMcpError(
             'auth_after_refresh',
             `Auth failed after token refresh. Verify oauth_client_id and secret are still valid; the host operator may need to re-run \`gbrain auth register-client\`.`,
-            { mcp_url: remote.mcp_url },
+            { mcp_url: remote.mcp_url, ...(mintErr.detail?.status ? { status: mintErr.detail.status } : {}) },
           );
         }
         throw mintErr;
@@ -352,12 +341,13 @@ export async function callRemoteTool(
       try {
         return await tryCall(freshToken);
       } catch (e2) {
-        const m2 = e2 instanceof Error ? e2.message : String(e2);
-        if (/401|unauthor|invalid.token/i.test(m2)) {
+        signal.throwIfAborted();
+        if (e2 instanceof StreamableHTTPError && e2.code === 401) {
+          tokenCache.delete(remote.mcp_url);
           throw new RemoteMcpError(
             'auth_after_refresh',
             `Auth failed after token refresh. Verify oauth_client_id and secret are still valid; the host operator may need to re-run \`gbrain auth register-client\`.`,
-            { mcp_url: remote.mcp_url },
+            { mcp_url: remote.mcp_url, status: 401 },
           );
         }
         throw e2;
@@ -367,7 +357,7 @@ export async function callRemoteTool(
     // CDX-4: this is the funnel. ANYTHING that escapes the inner block becomes
     // a typed RemoteMcpError. The dispatcher's exhaustive switch can rely on
     // this contract.
-    throw toRemoteMcpError(e, remote.mcp_url);
+    throw toRemoteMcpError(e, remote.mcp_url, signal);
   } finally {
     cleanup();
   }
@@ -384,6 +374,7 @@ export function unpackToolResult<T = unknown>(res: unknown): T {
   if (!Array.isArray(content) || content.length === 0) {
     throw new RemoteMcpError('parse', 'Remote tool returned no content');
   }
+
   const first = content[0] as { type?: string; text?: string };
   if (first.type !== 'text' || typeof first.text !== 'string') {
     throw new RemoteMcpError('parse', 'Remote tool returned unexpected content shape');
@@ -393,4 +384,12 @@ export function unpackToolResult<T = unknown>(res: unknown): T {
   } catch (e) {
     throw new RemoteMcpError('parse', `Remote tool result was not valid JSON: ${(e as Error).message}`);
   }
+}
+
+export function extractResponseMeta(res: unknown): Record<string, unknown> | undefined {
+  const meta = (res as { _meta?: unknown } | undefined)?._meta;
+  if (meta && typeof meta === 'object' && !Array.isArray(meta)) {
+    return meta as Record<string, unknown>;
+  }
+  return undefined;
 }

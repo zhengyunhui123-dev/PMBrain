@@ -30,6 +30,7 @@ Options:
   --save                   Persist a synthesis page under synthesis/<slug>-<date>.md
   --take                   Append a take row to the anchor page (requires --anchor)
   --model <name>           Override the model (alias or full id)
+  --source <id>            Scope evidence gathering to this source
   --since YYYY-MM-DD       Start of temporal window
   --until YYYY-MM-DD       End of temporal window
   --json                   Output as JSON
@@ -45,7 +46,7 @@ has no usable credential, the gather phase still runs and prints its evidence.
   }
 
   // Strip flags from positional args
-  const flagNames = ['--anchor', '--rounds', '--model', '--since', '--until'];
+  const flagNames = ['--anchor', '--rounds', '--model', '--since', '--until', '--source', '--calibration-holder'];
   const positional: string[] = [];
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
@@ -68,6 +69,7 @@ has no usable credential, the gather phase still runs and prints its evidence.
   const model = flagValue(args, '--model');
   const since = flagValue(args, '--since');
   const until = flagValue(args, '--until');
+  const source = flagValue(args, '--source');
   // v0.36.1.0 (E1, D22) — anti-bias rewrite mode. Off by default (no
   // regression for existing think users). When on, the active calibration
   // profile gets injected per D22 placement (after retrieval, before question).
@@ -95,6 +97,9 @@ has no usable credential, the gather phase still runs and prints its evidence.
         'with the `viaSubagent` context if you need persistence.',
       );
     }
+    if (source !== undefined) {
+      console.error('[thin-client] --source is scoped by the remote server and is not forwarded.');
+    }
     const raw = await callRemoteTool(cfg!, 'think', {
       question, anchor, rounds, model, since, until,
       // save/take intentionally NOT forwarded — server would ignore them;
@@ -102,13 +107,24 @@ has no usable credential, the gather phase still runs and prints its evidence.
     }, { timeoutMs: 180_000 });
     result = unpackToolResult<any>(raw);
   } else {
+    let sourceId: string | undefined;
+    try {
+      const { resolveSourceWithTier } = await import('../core/source-resolver.ts');
+      const { isUndefinedTableError } = await import('../core/utils.ts');
+      try {
+        const resolved = await resolveSourceWithTier(engine, source ?? null);
+        sourceId = resolved.source_id === '__all__' ? undefined : resolved.source_id;
+      } catch (err) {
+        if (source !== undefined || !isUndefinedTableError(err)) throw err;
+      }
+    } catch (err) {
+      if (source !== undefined) throw err;
+    }
     result = await runThink(engine, {
       question, anchor, rounds, save, take, model, since, until,
-      // v0.36.1.0 (E1) — opt-in anti-bias rewrite. Falls back to baseline
-      // think when no profile exists, with NO_CALIBRATION_PROFILE warning.
+      ...(sourceId ? { sourceId } : {}),
       withCalibration,
       ...(calibrationHolder ? { calibrationHolder } : {}),
-      // Local CLI: no MCP allow-list filter — operator owns the brain.
     });
 
     // Persist if --save (the runThink path doesn't auto-persist; CLI does it explicitly)

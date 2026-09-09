@@ -97,6 +97,13 @@ describe('desktop system orchestration contracts', () => {
     expect(backupController).toContain("'prune'");
     expect(backupController).toContain("'delete'");
     expect(backupController).toContain("'restore'");
+    expect(main).toContain("'desktop:diagnose-pglite-toast'");
+    expect(main).toContain("'desktop:replace-pglite-toast-repair'");
+    expect(main).toContain("'repair', 'toast-diagnose'");
+    expect(main).toContain("'repair', 'toast-replace'");
+    expect(main).not.toContain("from '../../../src/core/pglite-toast-repair");
+    expect(backupController).toContain('parseSuccessfulBackupJsonFromError');
+    expect(backupController).toContain("recovered?.status !== 'restored'");
     expect(backupController).toContain("'set-root'");
     expect(backupController).toContain("'--yes'");
     expect(backupController).toContain("'--keep', '2'");
@@ -127,6 +134,13 @@ describe('desktop system orchestration contracts', () => {
     expect(main).toContain("closeBehavior === 'quit'");
     expect(main).toContain('app.setLoginItemSettings');
     expect(main).toContain('dialog.showMessageBox');
+  });
+
+  test('MCP 卡片快照不等待连接探测，Grok 深度接入复用 Claude 兼容合同', () => {
+    expect(setupController).toMatch(/async currentState\(\)[\s\S]*?integrations: listIntegrations\(/);
+    expect(setupController).toMatch(/async integrationStates\(\)[\s\S]*?listIntegrationsWithConnectionState/);
+    expect(sharedAccessController).toContain("client === 'grok' ? 'claude' : client");
+    expect(integrationManager).toContain("['codex', 'claude', 'grok'].includes(client)");
   });
 
   test('fails closed across network changes and untrusted renderer navigation', () => {

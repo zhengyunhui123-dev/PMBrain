@@ -657,6 +657,8 @@ export interface ChunkInput {
 
 // Search
 export interface SearchResult {
+  keyword_relaxed?: boolean;
+  unverified?: boolean;
   slug: string;
   page_id: number;
   title: string;
@@ -722,6 +724,7 @@ export interface SearchResult {
   relational_hop?: number;
   /** Shortest connecting slug path seed→…→result (for "how I know this"). */
   relational_path?: string[];
+  relational_pinned?: boolean;
   /**
    * v0.40.4 full attribution (D12=A) — per-stage score deltas for the
    * `gbrain search --explain` formatter. Every boost stage stamps its
@@ -869,7 +872,18 @@ export interface ResolvedColumn {
   embeddingModel: string;
 }
 
+export interface PageReadScope {
+  sourceId?: string;
+  sourceIds?: string[];
+  excludePrivate?: boolean;
+}
+
+export interface PageReadPolicy extends PageReadScope {
+  takesHoldersAllowList?: string[];
+}
+
 export interface SearchOpts {
+  takesHoldersAllowList?: string[];
   limit?: number;
   offset?: number;
   /**
@@ -888,6 +902,8 @@ export interface SearchOpts {
    * offset===0. See src/core/search/autocut.ts.
    */
   autocut?: import('./search/autocut.ts').AutocutInput;
+  metadataBoostGate?: 'always' | 'lexical';
+  relationalRerankPin?: number | 'off' | 'false';
   type?: PageType;
   /**
    * v0.33: multi-type filter. When set, search results are filtered to
@@ -1233,6 +1249,8 @@ export interface RelationalFanoutRow {
 
 /** Options for BrainEngine.relationalFanout. */
 export interface RelationalFanoutOpts {
+  excludePrivate?: boolean;
+  seedRefs?: Array<{ source_id: string; slug: string }>;
   /** Edge types to traverse; null/empty = type-agnostic. */
   linkTypes?: string[] | null;
   /** Direction from each seed. Default 'both'. */
@@ -1473,6 +1491,7 @@ export interface EvalCaptureFailure {
  * "keyword-only fallback" from "full hybrid with expansion."
  */
 export interface HybridSearchMeta {
+  relaxed_dropped?: number;
   /** True iff vector search actually ran. False when OPENAI_API_KEY missing or embed failed. */
   vector_enabled: boolean;
   /** Post-auto-detect detail level. */
@@ -1503,6 +1522,8 @@ export interface HybridSearchMeta {
    * `gbrain search --explain`.
    */
   autocut?: import('./search/autocut.ts').AutocutDecision;
+  metadata_boost_gate?: import('./search/metadata-boost-gate.ts').MetadataBoostGateDecision;
+  relational_rerank_pin?: import('./search/relational-rerank-pin.ts').RelationalRerankPinDecision;
   /**
    * v0.32.x (search-lite): token budget enforcement metadata. Omitted when
    * no budget was applied (backward-compatible with pre-search-lite

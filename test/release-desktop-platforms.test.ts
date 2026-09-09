@@ -9,7 +9,7 @@ const desktopBuilderConfig = readFileSync(join(process.cwd(), 'desktop/electron-
 const releaseNotes = readFileSync(join(process.cwd(), 'desktop/build/release-notes.md'), 'utf8');
 const desktopPackage = JSON.parse(readFileSync(join(process.cwd(), 'desktop/package.json'), 'utf8')) as { version: string };
 const rootPackage = JSON.parse(readFileSync(join(process.cwd(), 'package.json'), 'utf8')) as { scripts: Record<string, string> };
-const desktopRuntimeJob = testWorkflow.match(/\n  desktop-runtime:[\s\S]*?\n  cache-write:/)?.[0] ?? '';
+const desktopRuntimeJob = testWorkflow.match(/\n  desktop-runtime:[\s\S]*?\n  test-status:/)?.[0] ?? '';
 const MAX_RELEASE_NOTE_VERSIONS = 5;
 const RELEASE_NOTE_HEADING = /^## PMBrain (\d+\.\d+\.\d+)\s*$/gm;
 

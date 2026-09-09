@@ -57,6 +57,7 @@ const FACT_KIND_LABELS: Record<string, string> = {
   commitment: '承诺',
   belief: '判断',
   fact: '事实',
+  idea: '想法',
 };
 
 export function factKindLabel(kind: string): string {

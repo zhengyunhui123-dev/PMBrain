@@ -14,6 +14,7 @@ export function combineAbortSignals(...signals: Array<AbortSignal | null | undef
   const present = signals.filter((signal): signal is AbortSignal => signal != null);
   if (present.length === 0) return new AbortController().signal;
   if (present.length === 1) return present[0]!;
+  if (typeof AbortSignal.any === 'function') return AbortSignal.any(present);
   const controller = new AbortController();
   const forward = (signal: AbortSignal) => {
     if (!controller.signal.aborted) controller.abort(signal.reason);

@@ -151,7 +151,7 @@ export function summarizeKnowledgeSearch(payload: KnowledgeSearchPayload): strin
 export const MAX_KNOWLEDGE_ATTACHMENTS = 10;
 export const MAX_KNOWLEDGE_ATTACHMENT_BYTES = 50 * 1024 * 1024;
 export const KNOWLEDGE_ATTACHMENT_EXTENSIONS = new Set([
-  '.md', '.mdx', '.docx', '.doc', '.wps', '.pptx', '.ppt', '.pdf', '.xlsx', '.xlsm', '.xls', '.csv',
+  '.md', '.mdx', '.jsonl', '.docx', '.doc', '.wps', '.pptx', '.ppt', '.pdf', '.xlsx', '.xlsm', '.xls', '.csv',
   '.png', '.jpg', '.jpeg', '.gif', '.webp', '.heic', '.heif', '.avif',
 ]);
 export const KNOWLEDGE_ATTACHMENT_ACCEPT = Array.from(KNOWLEDGE_ATTACHMENT_EXTENSIONS).join(',');

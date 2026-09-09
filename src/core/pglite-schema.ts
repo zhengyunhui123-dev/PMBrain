@@ -267,7 +267,7 @@ CREATE TABLE IF NOT EXISTS links (
   -- v0.41.18.0: 'mentions' added for auto-linked body-text mentions
   -- (gbrain extract links --by-mention). Filtered OUT of backlink-count
   -- for search ranking; only counts toward orphan-ratio + graph traversal.
-  link_source    TEXT    CHECK (link_source IS NULL OR link_source IN ('markdown', 'frontmatter', 'manual', 'mentions')),
+  link_source    TEXT    CHECK (link_source IS NULL OR link_source IN ('markdown', 'frontmatter', 'manual', 'mentions', 'concept-provenance')),
   -- v0.41.18.0 (codex finding #12): nullable link_kind distinguishes
   -- "plain body mention" from "verb-pattern-derived typed link" within
   -- link_source='mentions'. See src/schema.sql for full rationale.
@@ -456,6 +456,19 @@ CREATE TABLE IF NOT EXISTS session_context_state (
   PRIMARY KEY (source_id, client_id, session_id)
 );
 CREATE INDEX IF NOT EXISTS session_context_state_updated_idx ON session_context_state (updated_at);
+
+CREATE TABLE IF NOT EXISTS extract_atoms_transcript_state (
+  source_id TEXT NOT NULL DEFAULT 'default',
+  file_path TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  fail_count INTEGER NOT NULL DEFAULT 0,
+  tombstoned BOOLEAN NOT NULL DEFAULT FALSE,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (source_id, file_path, content_hash)
+);
+CREATE INDEX IF NOT EXISTS extract_atoms_transcript_state_tombstoned_idx
+  ON extract_atoms_transcript_state (source_id, content_hash)
+  WHERE tombstoned;
 
 CREATE TABLE IF NOT EXISTS chat_usage_log (
   id BIGSERIAL PRIMARY KEY,

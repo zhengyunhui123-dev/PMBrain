@@ -67,6 +67,14 @@ describe('classifyPgliteInitError', () => {
   test('filesystem permission errors have their own verdict', () => {
     expect(classifyPgliteInitError('EPERM: operation not permitted, open brain.pglite', 'win32')).toBe('permission');
   });
+
+  test('toast chunk inconsistency is toast-corrupt and must not auto-reset WAL', () => {
+    const msg = 'unexpected chunk number 3 (expected 0) for toast value 191139 in pg_toast_16852';
+    expect(classifyPgliteInitError(msg, 'win32')).toBe('toast-corrupt');
+    expect(classifyPgliteInitError('missing chunk number 0 for toast value 12 in pg_toast_1', 'win32')).toBe('toast-corrupt');
+    expect(buildPgliteInitErrorMessage('toast-corrupt', msg)).toContain('不会继续自动重置 WAL');
+    expect(buildPgliteInitErrorMessage('toast-corrupt', msg)).toContain('toast-diagnose');
+  });
 });
 
 describe('buildPgliteInitErrorMessage — hint routing', () => {

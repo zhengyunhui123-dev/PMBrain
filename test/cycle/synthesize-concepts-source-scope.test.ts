@@ -83,3 +83,63 @@ describe('synthesize_concepts Source scope', () => {
       row.origin_source_id === 'personal')).toBe(true);
   }, 120_000);
 });
+
+describe('synthesize_concepts concept-provenance edges', () => {
+  const memberSlugs = ['atoms/a1', 'atoms/a2'];
+
+  async function seedThemeAtoms(): Promise<void> {
+    for (const atom of atoms) {
+      await engine.putPage(atom.slug, {
+        type: 'atom',
+        title: atom.title,
+        compiled_truth: atom.body,
+        timeline: '',
+        frontmatter: { concepts: ['theme'] },
+      }, { sourceId: 'personal' });
+    }
+  }
+
+  async function provenanceRows(): Promise<Array<{ link_type: string; from_slug: string; to_slug: string }>> {
+    return engine.executeRaw(
+      `SELECT l.link_type, f.slug AS from_slug, t.slug AS to_slug
+         FROM links l
+         JOIN pages f ON f.id = l.from_page_id
+         JOIN pages t ON t.id = l.to_page_id
+        WHERE l.link_source = 'concept-provenance'`,
+    );
+  }
+
+  test('writes synthesized_from and synthesizes edges under the cycle Source', async () => {
+    await seedThemeAtoms();
+    const result = await runPhaseSynthesizeConcepts(engine, { _atoms: atoms, sourceId: 'personal' });
+    expect(result.status).toBe('ok');
+
+    const rows = await provenanceRows();
+    const fromConcept = rows.filter(row => row.link_type === 'synthesized_from');
+    const fromAtom = rows.filter(row => row.link_type === 'synthesizes');
+    expect(fromConcept.map(row => row.to_slug).sort()).toEqual([...memberSlugs]);
+    expect(fromConcept.every(row => row.from_slug === 'concepts/theme')).toBe(true);
+    expect(fromAtom.map(row => row.from_slug).sort()).toEqual([...memberSlugs]);
+    expect(fromAtom.every(row => row.to_slug === 'concepts/theme')).toBe(true);
+  }, 120_000);
+
+  test('re-running the phase does not duplicate provenance edges', async () => {
+    await seedThemeAtoms();
+    await runPhaseSynthesizeConcepts(engine, { _atoms: atoms, sourceId: 'personal' });
+    expect((await provenanceRows()).length).toBe(4);
+    const second = await runPhaseSynthesizeConcepts(engine, { _atoms: atoms, sourceId: 'personal' });
+    expect(second.status).toBe('ok');
+    expect((await provenanceRows()).length).toBe(4);
+  }, 120_000);
+
+  test('dry-run writes zero provenance edges', async () => {
+    await seedThemeAtoms();
+    const result = await runPhaseSynthesizeConcepts(engine, {
+      _atoms: atoms,
+      sourceId: 'personal',
+      dryRun: true,
+    });
+    expect(result.details?.concepts_written).toBe(1);
+    expect(await provenanceRows()).toEqual([]);
+  }, 120_000);
+});

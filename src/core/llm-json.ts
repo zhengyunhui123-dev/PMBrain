@@ -4,8 +4,8 @@
  */
 export function stripReasoningBlocks(raw: string): string {
   return raw
-    .replace(/<think>[\s\S]*?<\/think>/gi, '')
-    .replace(/<think>[\s\S]*$/i, '')
+    .replace(/<(think|thinking)>[\s\S]*?<\/\1>/gi, '')
+    .replace(/<(?:think|thinking)>[\s\S]*$/i, '')
     .trim();
 }
 

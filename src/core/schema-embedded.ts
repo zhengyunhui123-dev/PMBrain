@@ -1,8 +1,7 @@
 // AUTO-GENERATED — do not edit. Run: bun run build:schema
 // Source: src/schema.sql
 
-export const SCHEMA_SQL = `
--- GBrain Postgres + pgvector schema
+export const SCHEMA_SQL = `-- GBrain Postgres + pgvector schema
 
 CREATE EXTENSION IF NOT EXISTS vector;
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
@@ -447,7 +446,7 @@ CREATE TABLE IF NOT EXISTS links (
   -- v0.41.18.0: 'mentions' added for auto-linked body-text mentions
   -- (gbrain extract links --by-mention). Filtered OUT of backlink-count
   -- for search ranking; only counts toward orphan-ratio + graph traversal.
-  link_source    TEXT    CHECK (link_source IS NULL OR link_source IN ('markdown', 'frontmatter', 'manual', 'mentions')),
+  link_source    TEXT    CHECK (link_source IS NULL OR link_source IN ('markdown', 'frontmatter', 'manual', 'mentions', 'concept-provenance')),
   -- v0.41.18.0: nullable link_kind distinguishes "plain body mention" from
   -- "verb-pattern-derived typed link" within link_source='mentions'.
   -- Codex finding #12 design: keep link_source stable; add link_kind
@@ -812,33 +811,46 @@ CREATE INDEX IF NOT EXISTS context_volunteer_events_src_slug_idx
   ON context_volunteer_events (source_id, slug);
 
 CREATE TABLE IF NOT EXISTS session_context_state (
-  source_id TEXT NOT NULL,
-  client_id TEXT NOT NULL DEFAULT 'local',
-  session_id TEXT NOT NULL,
-  standing_entities JSONB NOT NULL DEFAULT '[]'::jsonb,
-  surfaced_slugs JSONB NOT NULL DEFAULT '[]'::jsonb,
+  source_id           TEXT NOT NULL,
+  client_id           TEXT NOT NULL DEFAULT 'local',
+  session_id          TEXT NOT NULL,
+  standing_entities   JSONB NOT NULL DEFAULT '[]'::jsonb,
+  surfaced_slugs      JSONB NOT NULL DEFAULT '[]'::jsonb,
   checkpoint_manifest JSONB NOT NULL DEFAULT '[]'::jsonb,
-  last_wake_at TIMESTAMPTZ,
-  page_cursor_at TIMESTAMPTZ,
-  page_cursor_slug TEXT NOT NULL DEFAULT '',
-  fact_cursor_at TIMESTAMPTZ,
-  fact_cursor_id BIGINT NOT NULL DEFAULT 0,
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_wake_at        TIMESTAMPTZ,
+  page_cursor_at      TIMESTAMPTZ,
+  page_cursor_slug    TEXT NOT NULL DEFAULT '',
+  fact_cursor_at      TIMESTAMPTZ,
+  fact_cursor_id      BIGINT NOT NULL DEFAULT 0,
+  updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (source_id, client_id, session_id)
 );
 CREATE INDEX IF NOT EXISTS session_context_state_updated_idx ON session_context_state (updated_at);
 
+CREATE TABLE IF NOT EXISTS extract_atoms_transcript_state (
+  source_id    TEXT        NOT NULL DEFAULT 'default',
+  file_path    TEXT        NOT NULL,
+  content_hash TEXT        NOT NULL,
+  fail_count   INTEGER     NOT NULL DEFAULT 0,
+  tombstoned   BOOLEAN     NOT NULL DEFAULT FALSE,
+  updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (source_id, file_path, content_hash)
+);
+CREATE INDEX IF NOT EXISTS extract_atoms_transcript_state_tombstoned_idx
+  ON extract_atoms_transcript_state (source_id, content_hash)
+  WHERE tombstoned;
+
 CREATE TABLE IF NOT EXISTS chat_usage_log (
-  id BIGSERIAL PRIMARY KEY,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  model TEXT NOT NULL,
-  provider TEXT,
-  phase TEXT,
-  input_tokens INTEGER NOT NULL DEFAULT 0,
-  output_tokens INTEGER NOT NULL DEFAULT 0,
-  cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+  id                 BIGSERIAL PRIMARY KEY,
+  created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  model              TEXT NOT NULL,
+  provider           TEXT,
+  phase              TEXT,
+  input_tokens       INTEGER NOT NULL DEFAULT 0,
+  output_tokens      INTEGER NOT NULL DEFAULT 0,
+  cache_read_tokens  INTEGER NOT NULL DEFAULT 0,
   cache_write_tokens INTEGER NOT NULL DEFAULT 0,
-  cost_usd DOUBLE PRECISION
+  cost_usd           DOUBLE PRECISION
 );
 CREATE INDEX IF NOT EXISTS idx_chat_usage_log_created ON chat_usage_log (created_at);
 CREATE INDEX IF NOT EXISTS idx_chat_usage_log_model ON chat_usage_log (model, created_at);

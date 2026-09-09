@@ -9,7 +9,7 @@ import type {
 import type { DiscoveredTranscript } from './transcript-discovery.ts';
 import { safeSplitIndex } from '../text-safe.ts';
 
-export const TRIAGE_VERSION = 1;
+export const TRIAGE_VERSION = 2;
 export const DEFAULT_TRIAGE_THRESHOLD = 0.5;
 const DEFAULT_TRIAGE_MAX_CHARS = 24_000;
 const DEFAULT_TRIAGE_MAX_TOKENS = 2048;
@@ -159,6 +159,7 @@ export function isTriageCacheValid(
 }
 
 export interface TriagePassCfg {
+  rescue?: import('./triage-rescue.ts').RescueConfig;
   model: string;
   maxChars: number;
   maxTokens: number;
@@ -196,6 +197,7 @@ export async function runTriagePass(
   yieldDuringPhase?: () => Promise<void>,
 ): Promise<TriagePassResult> {
   const now = cfg.now ?? Date.now;
+  const { passesTriageGate } = await import('./triage-rescue.ts');
   const startedAt = now();
   const reports: TriageFileReport[] = new Array(transcripts.length);
   const byPath = new Map<string, DreamVerdict>();
@@ -214,7 +216,7 @@ export async function runTriagePass(
       byPath.set(item.filePath, cached);
       reports[index] = {
         filePath: item.filePath,
-        worth: cached.score !== null && cached.score >= cfg.threshold,
+        worth: passesTriageGate(cached, item.content, cfg.threshold, cfg.rescue).pass,
         score: cached.score,
         content_type: cached.content_type,
         reasons: cached.reasons,
@@ -266,7 +268,7 @@ export async function runTriagePass(
         return;
       }
       const input: DreamVerdictInput = {
-        worth_processing: result.score >= cfg.threshold,
+        worth_processing: passesTriageGate(result, item.content, cfg.threshold, cfg.rescue).pass,
         reasons: result.reasons,
         score: result.score,
         content_type: result.content_type,
@@ -290,7 +292,7 @@ export async function runTriagePass(
       byPath.set(item.filePath, stored);
       reports[index] = {
         filePath: item.filePath,
-        worth: result.score >= cfg.threshold,
+        worth: input.worth_processing,
         score: result.score,
         content_type: result.content_type,
         reasons: result.reasons,

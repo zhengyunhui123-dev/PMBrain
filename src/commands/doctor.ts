@@ -6040,6 +6040,8 @@ export async function buildChecks(
   // [CDX-20]; hint lives in `message`.
   if (engine !== null) {
     progress.heartbeat('search_mode');
+    const {checkMemoryWriteback}=await import('../core/facts/writeback-set.ts');
+    checks.push(await checkMemoryWriteback(engine));
     checks.push(await checkSearchMode(engine));
     progress.heartbeat('eval_drift');
     checks.push(await checkEvalDrift(engine));

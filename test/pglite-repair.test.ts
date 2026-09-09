@@ -29,6 +29,7 @@ import {
   pruneRepairBackups,
   WalRepairError,
   closeRepairEpisodeIfOpen,
+  clearRepairAttemptSidecar,
   isBusyFsError,
   renameWithBusyRetry,
   shouldRepairWalBeforeFirstOpen,
@@ -399,6 +400,31 @@ describe('attemptWalRepairAndRetry — the never-throws engine seam', () => {
     });
     // withEnv restored whatever the ambient value was (including "unset").
     expect(process.env.GBRAIN_PGLITE_WAL_REPAIR).toBe(before);
+  });
+
+  test('clearRepairAttemptSidecar removes the sibling cooldown file', () => {
+    const dir = makeLayout();
+    const sidecar = `${dir}.wal-repair-attempt.json`;
+    writeFileSync(sidecar, JSON.stringify({
+      episodeStartedAt: Date.now(),
+      episodeBackupPath: null,
+      attempts: [{ ts: Date.now(), outcome: 'failed', backupPath: null }],
+    }));
+    clearRepairAttemptSidecar(dir);
+    expect(existsSync(sidecar)).toBe(false);
+  });
+
+  test('reaped lock still auto-repairs when the previous owner is confirmed dead', async () => {
+    await withEnv({ GBRAIN_PGLITE_WAL_REPAIR: undefined, GBRAIN_PGLITE_WAL_REPAIR_COOLDOWN_SECONDS: undefined }, async () => {
+      const dir = makeLayout();
+      const attempt = await attemptWalRepairAndRetry(
+        dir,
+        async () => 'db',
+        { reaped: true, previousOwnerConfirmedDead: true },
+      );
+      expect(attempt.status).toBe('repaired');
+      expect(listRepairBackups(dir).length).toBe(1);
+    });
   });
 
   test('cooldown skip + episode backup reuse across attempts', async () => {

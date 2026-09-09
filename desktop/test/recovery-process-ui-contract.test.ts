@@ -23,4 +23,20 @@ describe('desktop recovery process controls', () => {
     expect(ipc).toContain("registerTrustedHandler('desktop:terminate-pglite-owner-and-retry'");
     expect(styles).toContain('.recovery-terminate');
   });
+
+  test('toast corrupt startup offers diagnose-on-copy then confirm replace', () => {
+    expect(html).toContain('id="recovery-toast"');
+    expect(html).toContain('id="recovery-toast-diagnose"');
+    expect(html).toContain('id="recovery-toast-replace"');
+    expect(html).toContain('在副本上诊断修复');
+    expect(html).toContain('确认替换当前库');
+    expect(renderer).toContain("service.category === 'toast_corrupt'");
+    expect(renderer).toContain('diagnosePgliteToast()');
+    expect(renderer).toContain('replacePgliteToastRepair(toastStagingPath)');
+    expect(renderer).toContain('当前库会先改名留底');
+    expect(preload).toContain("'desktop:diagnose-pglite-toast'");
+    expect(preload).toContain("'desktop:replace-pglite-toast-repair'");
+    expect(ipc).toContain("registerTrustedHandler('desktop:diagnose-pglite-toast'");
+    expect(ipc).toContain("registerTrustedHandler('desktop:replace-pglite-toast-repair'");
+  });
 });

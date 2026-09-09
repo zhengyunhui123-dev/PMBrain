@@ -28,6 +28,7 @@ export const HALFLIFE_DAYS: Record<FactKind, number> = {
   preference: 90,
   belief: 365,
   fact: 365,
+  idea: 365,
 };
 
 const MS_PER_DAY = 1000 * 60 * 60 * 24;

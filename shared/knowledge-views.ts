@@ -48,7 +48,7 @@ export const KNOWLEDGE_DATA_VIEWS = [
 
 export type KnowledgeDataView = (typeof KNOWLEDGE_DATA_VIEWS)[number];
 
-export const FACT_KINDS = ['event', 'preference', 'commitment', 'belief', 'fact'] as const;
+export const FACT_KINDS = ['event', 'preference', 'commitment', 'belief', 'fact', 'idea'] as const;
 export type FactKindView = (typeof FACT_KINDS)[number];
 
 export function knowledgePageViewTypes(view: string | undefined): readonly string[] | undefined {

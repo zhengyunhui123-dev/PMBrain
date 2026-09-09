@@ -90,6 +90,6 @@ describe('alias_resolved boost stage', () => {
 
 describe('KNOBS_HASH_VERSION', () => {
   it('is 11 after query-policy cache isolation', () => {
-    expect(KNOBS_HASH_VERSION).toBe(11);
+    expect(KNOBS_HASH_VERSION).toBe(13);
   });
 });

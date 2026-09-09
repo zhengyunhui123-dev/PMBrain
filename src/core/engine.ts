@@ -59,6 +59,7 @@ export interface SourceRow {
 }
 
 export interface TraverseGraphOpts {
+  excludePrivate?: boolean;
   sourceId?: string;
   sourceIds?: string[];
   frontierCap?: number;
@@ -301,6 +302,9 @@ export interface Take {
 }
 
 export interface TakesListOpts {
+  sourceId?: string;
+  sourceIds?: string[];
+  excludePrivate?: boolean;
   page_id?: number;
   page_slug?: string;       // resolved via JOIN
   holder?: string;
@@ -316,6 +320,7 @@ export interface TakesListOpts {
 
 /** Search result row from searchTakes / searchTakesVector. */
 export interface TakeHit {
+  source_id?: string;
   take_id: number;
   page_id: number;
   page_slug: string;
@@ -479,10 +484,10 @@ export const DREAM_VERDICT_TTL_SECONDS = 30 * 24 * 60 * 60;
 // ============================================================
 
 /** Allowed `facts.kind` values. Different decay halflives apply per kind. */
-export type FactKind = 'event' | 'preference' | 'commitment' | 'belief' | 'fact';
+export type FactKind = 'event' | 'preference' | 'commitment' | 'belief' | 'fact' | 'idea';
 
 export const ALL_FACT_KINDS: readonly FactKind[] = [
-  'event', 'preference', 'commitment', 'belief', 'fact',
+  'event', 'preference', 'commitment', 'belief', 'fact', 'idea',
 ] as const;
 
 /** Visibility tier on a fact row. Mirrors takes' world-default ACL contract (D21). */
@@ -558,6 +563,7 @@ export interface NewFact {
 
 /** Options shared by list-facts methods. */
 export interface FactListOpts {
+  unconsolidatedOnly?: boolean;
   /** Hide expired_at IS NOT NULL rows. Default true. */
   activeOnly?: boolean;
   limit?: number;
@@ -1174,7 +1180,7 @@ export interface BrainEngine {
    */
   traversePaths(
     slug: string,
-    opts?: { depth?: number; linkType?: string; direction?: 'in' | 'out' | 'both'; sourceId?: string; sourceIds?: string[] },
+    opts?: { depth?: number; linkType?: string; direction?: 'in' | 'out' | 'both'; sourceId?: string; sourceIds?: string[]; excludePrivate?: boolean },
   ): Promise<GraphPath[]>;
 
   /**
@@ -1660,7 +1666,7 @@ export interface BrainEngine {
   listFactsSince(
     source_id: string,
     since: Date,
-    opts?: FactListOpts & { entitySlug?: string },
+    opts?: FactListOpts & { entitySlug?: string; sessionId?: string },
   ): Promise<FactRow[]>;
 
   /** List facts captured under a session id within a source. */
