@@ -35,6 +35,10 @@ const output = outputArg
 const prepareOnly = process.argv.includes('--prepare-only');
 const firstRun = process.argv.includes('--first-run');
 const memorySetupHint = process.argv.includes('--memory-setup-hint');
+const integrationDialogArg = process.argv.find((arg) => arg.startsWith('--integration-dialog='));
+const integrationDialog = integrationDialogArg?.slice('--integration-dialog='.length) ?? '';
+const integrationDialogDeep = integrationDialog.endsWith(':deep');
+const integrationDialogClient = integrationDialog.replace(/:deep$/, '');
 const preparedHtmlArg = process.argv.find((arg) => arg.startsWith('--html='));
 
 function chromePath(): string | null {
@@ -229,7 +233,19 @@ window.pmbrainDesktop = {
   }),
   saveAdvancedModelConfig: async () => window.pmbrainDesktop.getAdvancedModelConfig(),
   saveSetup: async () => window.pmbrainDesktop.getSetup(),
-  configureIntegration: async () => ({}),
+  configureIntegration: async (client, credentialKind, deep) => {
+    const item = (await window.pmbrainDesktop.getSetup()).integrations.find((entry) => entry.id === client);
+    return {
+      client,
+      credentialKind,
+      configured: Boolean(item?.automatic || deep),
+      path: item?.path ?? null,
+      backup: item?.path ? item.path + '.backup' : null,
+      snippet: '[mcp_servers.pmbrain]\\nurl = "http://127.0.0.1:3132/mcp"',
+      smoke: { toolCount: 12, statsOk: true },
+      connectionState: 'connected',
+    };
+  },
   copy: async () => {},
   openAdmin: async () => {},
   checkUpdates: async () => null,
@@ -257,6 +273,12 @@ setTimeout(() => {
   const el = document.querySelector('${scrollTarget}');
   if (el) el.scrollIntoView({ block: 'center' });
 }, 200);
+${integrationDialogClient ? `setTimeout(() => {
+  const card = Array.from(document.querySelectorAll('.integration-card')).find((item) => item.querySelector('h3')?.textContent?.toLowerCase().includes('${integrationDialogClient}'.toLowerCase()));
+  const buttons = card ? Array.from(card.querySelectorAll('button')) : [];
+  const button = buttons.find((item) => ${integrationDialogDeep ? "item.textContent?.includes('深度接入')" : "!item.textContent?.includes('深度接入')"});
+  if (button) button.click();
+}, 450);` : ''}
 </script>
 `;
 
@@ -313,7 +335,7 @@ html = html.replace(/(id="page-title">)[^<]+(<\/h1>)/, `$1${t.title}$2`);
 // 4. 集成面板：预生成卡片 HTML 注入到 integration-grid
 interface MockIntegration {
   id: string; name: string; path: string | null; configured: boolean; automatic: boolean;
-  connectionState?: 'connected' | 'saved';
+  connectionState?: 'connected' | 'saved' | 'invalid';
 }
 const mockIntegrations: MockIntegration[] = [
   { id: 'codebuddy', name: 'CodeBuddy', path: 'C:\\Users\\zhengyunhui\\.codebuddy\\mcp.json', configured: true, automatic: true },
@@ -329,22 +351,24 @@ const mockIntegrations: MockIntegration[] = [
 ];
 const cardsHtml = mockIntegrations.map((item) => {
   const badgeClass = item.configured ? 'configured badge' : 'badge';
-  const badgeText = item.id === 'qwenpaw' && item.connectionState === 'connected'
-    ? '已连接'
-    : item.configured ? '已配置' : '未配置';
+  const badgeText = item.connectionState === 'connected'
+    ? '接入可用'
+    : item.connectionState === 'invalid'
+      ? '接入失效'
+      : item.configured ? '待验证' : '未配置';
   const pathText = item.path ?? (item.id === 'claude' ? '通过 Claude CLI / GUI 接入' : '通过客户端 MCP 配置接入');
   const noteText = item.id === 'qwenpaw'
     ? '通过本机 API 写入 Bearer 并验证，不使用 OAuth'
     : item.automatic
-      ? '自动备份并合并现有配置'
+      ? '自动备份并合并现有配置；连接状态在后台验证。'
       : item.id === 'claude' ? '生成可复制的接入命令' : '生成可复制的接入配置';
   const btnText = item.automatic
-    ? item.configured ? '更新' : '创建并写入'
+    ? item.configured ? '更新连接' : '接入'
     : item.id === 'claude' ? '生成接入命令' : '生成接入配置';
   const buttons = item.id === 'workbuddy' && item.configured
     ? `<div class="integration-actions"><button class="solid">${btnText}</button><button>Agent写入</button></div>`
     : `<button class="solid">${btnText}</button>`;
-  const deep = ['claude', 'codex', 'grok'].includes(item.id) ? '<button type="button">深度接入</button>' : '';
+  const deep = ['claude', 'codex', 'grok'].includes(item.id) ? '<button type="button">深度接入</button><small class="integration-action-help">更新连接只更新 MCP；深度接入还会安装自动记忆规则。</small>' : '';
   return `<article class="integration-card"><span class="${badgeClass}">${badgeText}</span><h3>${item.name}</h3><p>${pathText}</p><small>${noteText}</small>${buttons}${deep}</article>`;
 }).join('\n          ');
 html = html.replace(

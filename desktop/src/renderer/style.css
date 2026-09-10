@@ -284,9 +284,11 @@ select { cursor: pointer; appearance: auto; -webkit-appearance: auto; }
 .integration-card small { display: block; margin-bottom: 16px; color: var(--text-muted); }
 .integration-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .integration-actions button { min-height: 34px; }
+.integration-card .integration-action-help { margin: 10px 0 0; font-size: 10px; line-height: 1.5; }
 .badge { float: right; padding: 3px 7px; border: 1px solid var(--line-strong); border-radius: 999px; color: var(--text-muted); background: var(--surface-soft); font: 9px Consolas, monospace; }
 .badge.configured { color: var(--success-text); border-color: var(--success-border); background: var(--success-soft); }
 .badge.attention { color: var(--warning-text); border-color: var(--warning-border); background: var(--warning-soft); }
+.badge.invalid { color: var(--danger-text); border-color: var(--danger-border); background: var(--danger-soft); }
 .workbuddy-integration-card { grid-column: span 2; display: flex; min-height: 238px; flex-direction: column; border-color: color-mix(in srgb, var(--accent) 30%, var(--line)); background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 6%, var(--surface)), var(--surface) 46%); }
 .workbuddy-integration-card > .badge { position: absolute; top: 16px; right: 16px; }
 .workbuddy-integration-card h3 { margin-bottom: 6px; padding-right: 104px; }
@@ -351,6 +353,21 @@ select { cursor: pointer; appearance: auto; -webkit-appearance: auto; }
 .result-console > div { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--line); }
 .result-console pre { max-height: 260px; margin: 0; padding: 18px; overflow: auto; color: var(--text-secondary); font: 11px/1.6 Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
 .result-console p { margin: 0; padding: 10px 14px; color: var(--text-muted); border-top: 1px solid var(--line); font-size: 11px; }
+.integration-progress-dialog { width: min(660px, calc(100vw - 36px)); overflow: hidden; }
+.integration-progress-body { display: grid; gap: 14px; padding: 20px; overflow-y: auto; }
+.integration-progress-state { display: grid; grid-template-columns: 12px minmax(0, 1fr); align-items: start; gap: 13px; padding: 15px; border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 10px; background: var(--surface); }
+.integration-progress-state > i { width: 9px; height: 9px; margin-top: 3px; border-radius: 50%; background: var(--accent); }
+.integration-progress-state.busy > i { width: 12px; height: 12px; margin-top: 0; border: 2px solid color-mix(in srgb, var(--accent) 28%, transparent); border-top-color: var(--accent); background: transparent; animation: spin .8s linear infinite; }
+.integration-progress-state.success { border-color: var(--success-border); border-left-color: var(--success); background: var(--success-soft); }
+.integration-progress-state.success > i { background: var(--success); box-shadow: 0 0 0 4px color-mix(in srgb, var(--success) 10%, transparent); }
+.integration-progress-state.error { border-color: var(--danger-border); border-left-color: var(--danger); background: var(--danger-soft); }
+.integration-progress-state.error > i { background: var(--danger); box-shadow: 0 0 0 4px color-mix(in srgb, var(--danger) 10%, transparent); }
+.integration-progress-state b { display: block; color: var(--text); font-size: 13px; }
+.integration-progress-state p { margin: 7px 0 0; color: var(--text-secondary); font-size: 11px; line-height: 1.65; }
+.integration-progress-state.success p { color: var(--success-text); }
+.integration-progress-state.error p { color: var(--danger-text); }
+.integration-progress-dialog .result-console { margin-top: 0; }
+.integration-progress-dialog .help-dialog-foot small { max-width: 460px; }
 .system-block { margin-top: 18px; padding: 20px; border: 1px solid var(--line); border-radius: 13px; background: var(--surface); box-shadow: var(--panel-shadow); }
 .system-block + .system-block { margin-top: 14px; }
 .network-mode-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }

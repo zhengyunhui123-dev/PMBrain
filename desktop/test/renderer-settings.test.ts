@@ -267,9 +267,10 @@ describe('desktop settings renderer contracts', () => {
     expect(renderer).toContain('写入规则与 Agent');
     expect(renderer).toContain('writeWorkbuddyUserAgent');
     expect(renderer).toContain("button.addEventListener('click', () => void configure(item.id, button))");
-    expect(renderer).toContain("item.configured ? '更新' : '创建并写入'");
+    expect(renderer).toContain("item.configured ? '更新连接' : '接入'");
     expect(renderer).toContain("['codex','claude','grok'].includes(item.id)");
     expect(renderer).toContain("deep.textContent = '深度接入'");
+    expect(renderer).toContain('更新连接只更新 MCP；深度接入还会安装自动记忆规则');
     expect(styles).toContain('.integration-actions');
     expect(preview).toContain('writeWorkbuddyUserAgent: async');
     expect(main).toContain('desktop:write-workbuddy-user-agent');
@@ -296,9 +297,32 @@ describe('desktop settings renderer contracts', () => {
   });
 
   test('shows invalid local credentials and a one-click repair action', () => {
-    expect(renderer).toContain('凭证失效');
-    expect(renderer).toContain('当前凭证无法连接 PMBrain');
-    expect(renderer).toContain('修复连接');
+    expect(renderer).toContain('接入失效');
+    expect(renderer).toContain('现有凭证已失效');
+    expect(renderer).toContain('重新生成凭证');
+    expect(renderer).toContain("'invalid badge'");
+    expect(styles).toContain('.badge.invalid');
+  });
+
+  test('接入操作立刻展示分阶段弹窗，并用直接验证结果更新当前卡片', () => {
+    for (const id of [
+      'integration-progress-dialog',
+      'integration-progress-title',
+      'integration-progress-stage',
+      'integration-progress-message',
+      'integration-progress-close',
+    ]) {
+      expect(html).toContain(`id="${id}"`);
+    }
+    expect(renderer).toContain('openIntegrationProgress(client, deep)');
+    expect(renderer).toContain("button.textContent = '处理中…'");
+    expect(renderer).toContain('applyIntegrationResult(result)');
+    expect(renderer).toContain('void refreshIntegrations(true)');
+    expect(renderer).not.toMatch(/const integrations = await refreshIntegrations\(true\);[\s\S]*?refreshedConnection/);
+    expect(renderer).toContain('首次设置时会先询问“重要内容 / 全部事实”');
+    expect(renderer).toContain('长期记忆范围请到“系统设置”修改');
+    expect(styles).toContain('.integration-progress-dialog');
+    expect(styles).toContain('.integration-progress-state.busy');
   });
 
   test('removes stale shared credential DOM access while preserving network settings', () => {
@@ -398,6 +422,19 @@ describe('desktop settings renderer contracts', () => {
     expect(renderer).toContain('loadedMemoryMode = state.mode');
     expect(html).toContain('id="memory-mode-salient-card"');
     expect(html).toContain('id="memory-agent-status"');
+  });
+
+  test('integration verification survives setup snapshots and reruns when the sidecar becomes ready', () => {
+    expect(renderer).toContain('const integrations = latestIntegrations.length > 0');
+    expect(renderer).toContain(': restoreLastVerifiedIntegrations(next.integrations)');
+    expect(renderer).toContain('if (sidecarReady && !integrationProbeSidecarReady)');
+    expect(renderer).toContain('integrationChecksComplete = checkable.every');
+    expect(renderer).toContain('restoreLastVerifiedIntegrations');
+    expect(renderer).toContain('recordIntegrationVerification');
+    expect(renderer).toContain('pmbrain.desktop.integration-verification.v1');
+    expect(renderer).toContain("badge.textContent = '接入可用'");
+    expect(renderer).toContain("badge.textContent = '接入失效'");
+    expect(renderer).not.toContain("badge.textContent = '已写入，待验证'");
   });
 
   test('opening advanced model settings only reads a draft and saves with the PGLite pause', () => {

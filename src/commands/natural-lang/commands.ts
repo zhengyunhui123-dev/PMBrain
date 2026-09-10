@@ -4,7 +4,7 @@ import type { IntentPreview } from './types.ts';
 /**
  * 解析当前运行环境下的 CLI 入口命令前缀。
  * - 如果当前进程是用 pmbrain-sidecar.js 启动的（生产环境打包），
- *   返回 ['bun', '<pmbrain-sidecar.js 的绝对路径>']。
+ *   复用启动 sidecar 的 Bun 可执行文件。
  * - 如果当前进程是用 src/cli.ts 启动的（开发环境），
  *   使用本文件的绝对路径推导项目根目录，拼接 src/cli.ts 的绝对路径，
  *   避免全局命令启动时 process.cwd() 不在项目目录导致子进程找不到入口文件。
@@ -13,8 +13,7 @@ export function resolveCliEntry(): string[] {
   const arg1 = process.argv[1] ?? '';
   const entryName = basename(arg1);
   if (entryName === 'pmbrain-sidecar.js') {
-    // 生产环境：sidecar 已编译为单个 JS 文件
-    return ['bun', arg1];
+    return [process.execPath, arg1];
   }
   // 开发环境：使用绝对路径，不依赖 process.cwd()
   const cliPath = resolve(import.meta.dir, '..', '..', '..', 'src', 'cli.ts');

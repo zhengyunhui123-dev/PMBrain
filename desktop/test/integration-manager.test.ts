@@ -23,7 +23,10 @@ import {
 } from '../src/main/integration-manager.js';
 
 const roots: string[] = [];
+const previousCodexHome = process.env.CODEX_HOME;
 afterEach(() => {
+  if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+  else process.env.CODEX_HOME = previousCodexHome;
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
@@ -565,6 +568,24 @@ describe('desktop integration config merging', () => {
     expect(result.match(/\[mcp_servers\.pmbrain\]/g)?.length).toBe(1);
   });
 
+  test('marks a freshly written and smoke-tested automatic integration as connected', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'pmbrain-desktop-codex-'));
+    roots.push(root);
+    process.env.CODEX_HOME = root;
+    const sidecar = {
+      port: 3131,
+      mcpUrl: 'http://127.0.0.1:3131/mcp',
+      adminRequest: async (path: string) => path.endsWith('/revoke') ? { revoked: true } : { token: 'fresh-token' },
+      smokeTest: async () => ({ toolCount: 7, statsOk: true }),
+    };
+
+    const result = await configureIntegration(sidecar as never, 'codex', 'api_key');
+
+    expect(result.configured).toBe(true);
+    expect(result.connectionState).toBe('connected');
+    expect(readFileSync(join(root, 'config.toml'), 'utf8')).toContain('[mcp_servers.pmbrain]');
+  });
+
   test('writes Grok MCP config without replacing foreign settings', () => {
     const path = tempFile('config.toml');
     writeFileSync(path, 'model = "grok-code-fast-1"\n');
@@ -583,13 +604,22 @@ describe('desktop integration config merging', () => {
     writeCodexIntegration(path, 'http://127.0.0.1:3131/mcp', 'stale-token', dirname(path));
     const seen: string[] = [];
     const state = await probeLocalIntegrationConnectionState('codex', path, {
-      smokeTest: async (token: string) => {
-        seen.push(token);
-        throw new Error('invalid_token');
+      verifyMcpBearer: async (authorization: string) => {
+        seen.push(authorization);
+        return false;
       },
     });
     expect(state).toBe('invalid');
-    expect(seen).toEqual(['stale-token']);
+    expect(seen).toEqual(['Bearer stale-token']);
+  });
+
+  test('keeps a temporary probe failure pending instead of declaring the credential invalid', async () => {
+    const path = tempFile('config.toml');
+    writeCodexIntegration(path, 'http://127.0.0.1:3131/mcp', 'unreachable-token', dirname(path));
+    const state = await probeLocalIntegrationConnectionState('codex', path, {
+      verifyMcpBearer: async () => { throw new Error('timeout'); },
+    });
+    expect(state).toBeUndefined();
   });
 
   test('verifies the saved WorkBuddy bearer instead of trusting config presence', async () => {
@@ -597,13 +627,13 @@ describe('desktop integration config merging', () => {
     writeJsonIntegration(path, 'http://127.0.0.1:3131/mcp', 'workbuddy-token', dirname(path));
     const seen: string[] = [];
     const state = await probeLocalIntegrationConnectionState('workbuddy', path, {
-      smokeTest: async (token: string) => {
-        seen.push(token);
-        return { toolCount: 99, statsOk: true };
+      verifyMcpBearer: async (authorization: string) => {
+        seen.push(authorization);
+        return true;
       },
     });
     expect(state).toBe('connected');
-    expect(seen).toEqual(['workbuddy-token']);
+    expect(seen).toEqual(['Bearer workbuddy-token']);
   });
 
   test('verifies the Claude JSON bearer so its configured state can enable memory setup', async () => {
@@ -611,12 +641,28 @@ describe('desktop integration config merging', () => {
     writeJsonIntegration(path, 'http://127.0.0.1:3131/mcp', 'claude-token', dirname(path));
     const seen: string[] = [];
     const state = await probeLocalIntegrationConnectionState('claude', path, {
-      smokeTest: async (token: string) => {
-        seen.push(token);
-        return { toolCount: 99, statsOk: true };
+      verifyMcpBearer: async (authorization: string) => {
+        seen.push(authorization);
+        return true;
       },
     });
     expect(state).toBe('connected');
-    expect(seen).toEqual(['claude-token']);
+    expect(seen).toEqual(['Bearer claude-token']);
+  });
+
+  test('verifies every automatic JSON client instead of leaving it permanently unverified', async () => {
+    for (const client of ['codebuddy', 'cursor', 'trae'] as const) {
+      const path = tempFile(`${client}.json`);
+      writeJsonIntegration(path, 'http://127.0.0.1:3131/mcp', `${client}-token`, dirname(path));
+      const seen: string[] = [];
+      const state = await probeLocalIntegrationConnectionState(client, path, {
+        verifyMcpBearer: async (authorization: string) => {
+          seen.push(authorization);
+          return true;
+        },
+      });
+      expect(state).toBe('connected');
+      expect(seen).toEqual([`Bearer ${client}-token`]);
+    }
   });
 });
