@@ -1,5 +1,14 @@
 # Bug 修复台账
 
+## 2026-09-10 PMBrain 1.3.58 Windows 安装包后台任务错误依赖系统 Bun
+
+- 时间：2026-09-10
+- 版本号：Core 1.3.58；Desktop 1.1.89
+- 标题：安装包后台任务复用内置 Bun，并区分发布标签错位
+- 描述：GitHub `v1.1.87` 发布后的真实升级旅程在导入阶段报 `Executable not found in $PATH: "bun"`。打包 Sidecar 本身由安装包内置 Bun 启动，但自然语言命令前缀又写死调用 PATH 中的 `bun`，导致未安装 Bun 的普通用户无法启动导入、搜索、Dream 等子任务。现改为在打包环境复用当前 `process.execPath`；另确认 `v1.1.88` Release 红项是标签仍指向 Desktop 1.1.87 的旧 master 提交，而非代码测试失败。
+- 是否完成：是
+- 最终结果：打包 Sidecar 命令回归、Admin 命令与任务生命周期、发布旅程契约共 52 项定向断言通过；Core/Desktop TypeScript、版本同步、Admin 生产资源、`verify` 39/39、`ci:pr-preview` 232/232 通过。未执行 `build:win`，未修改知识库、Wiki、原始资料、向量或数据库。已发布 1.1.88 仍含旧逻辑，需发布 1.1.89 才能覆盖；GitHub Windows NSIS 真实升级旅程待 1.1.89 正确合并并打标签后验证。
+
 ## 2026-09-10 PMBrain 1.3.57 MCP 更新与深度接入反馈不清、状态互相冲突
 
 - 时间：2026-09-10
