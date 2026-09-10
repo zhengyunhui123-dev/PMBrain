@@ -12,8 +12,8 @@
  *   gbrain sources remove <id> [--yes] [--dry-run] [--keep-storage]
  *   gbrain sources rename <id> <new-name>
  *   gbrain sources default <id>
- *   gbrain sources attach <id>   — write .gbrain-source in CWD
- *   gbrain sources detach        — remove .gbrain-source from CWD
+ *   pmbrain sources attach <id>  — write .pmbrain-source in CWD
+ *   pmbrain sources detach       — remove .pmbrain-source from CWD
  *   gbrain sources federate <id>   — sources.config.federated = true
  *   gbrain sources unfederate <id> — sources.config.federated = false
  *
@@ -688,10 +688,10 @@ function runAttach(args: string[]): void {
 }
 
 function runDetach(): void {
-  const dotfiles = [join(process.cwd(), '.pmbrain-source'), join(process.cwd(), '.gbrain-source')];
+  const dotfiles = [join(process.cwd(), '.pmbrain-source')];
   const existing = dotfiles.filter(existsSync);
   if (existing.length === 0) {
-    console.log(`No .pmbrain-source or .gbrain-source file in ${process.cwd()}.`);
+    console.log(`No .pmbrain-source file in ${process.cwd()}.`);
     return;
   }
   for (const dotfile of existing) unlinkSync(dotfile);
@@ -1346,7 +1346,7 @@ Subcommands:
   rename <id> <new-name>            Rename display name (id is immutable).
   default <id>                      Set the brain-level default source.
   attach <id>                       Write .pmbrain-source in CWD (like kubectl context).
-  detach                            Remove .pmbrain-source/.gbrain-source from CWD.
+  detach                            Remove .pmbrain-source from CWD.
   current [--source <id>] [--json]  Echo the resolved source id + which tier
                                     won (flag/env/dotfile/local_path/
                                     brain_default/seed_default). Run this

@@ -154,13 +154,13 @@ describe('v0.18.0 — source resolution priority (integration)', () => {
     expect(id).toBe('testsrc');
   });
 
-  test('GBRAIN_SOURCE env wins when no flag', async () => {
-    process.env.GBRAIN_SOURCE = 'testsrc';
+  test('PMBRAIN_SOURCE env wins when no flag', async () => {
+    process.env.PMBRAIN_SOURCE = 'testsrc';
     try {
       const id = await resolveSourceId(engine, null);
       expect(id).toBe('testsrc');
     } finally {
-      delete process.env.GBRAIN_SOURCE;
+      delete process.env.PMBRAIN_SOURCE;
     }
   });
 

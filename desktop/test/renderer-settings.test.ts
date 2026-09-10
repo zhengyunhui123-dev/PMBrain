@@ -351,10 +351,13 @@ describe('desktop settings renderer contracts', () => {
     expect(preview).toContain('inspectKnowledgeSourceDirectory: async');
     expect(preview).toContain('initializeKnowledgeSourceGit: async');
     expect(preview).toContain("id: 'trae', name: 'Trae Work'");
+    expect(preview).toContain("id: 'cherry', name: 'CherryStudio'");
     expect(preview).toContain("id: 'grok', name: 'Grok Build'");
     expect(preview).toContain("id: 'qwenpaw', name: 'QwenPaw'");
     expect(preview).toContain("id: 'hermes', name: 'Hermes'");
     expect(preview).toContain("id: 'openclaw', name: 'OpenClaw'");
+    expect(preview.indexOf("id: 'cherry'")).toBeLessThan(preview.indexOf("id: 'workbuddy'"));
+    expect(preview.indexOf("id: 'codebuddy'")).toBeGreaterThan(preview.indexOf("id: 'openclaw'"));
     expect(preview).toContain('drivers\\\\mcp\\\\pmbrain.yaml');
   });
 

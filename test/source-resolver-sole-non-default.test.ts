@@ -120,12 +120,12 @@ describe('#1434 — sole_non_default tier', () => {
     expect(result.tier).toBe('flag');
   });
 
-  test('does NOT fire when GBRAIN_SOURCE env is set (tier 2 wins)', async () => {
+  test('does NOT fire when PMBRAIN_SOURCE env is set (tier 2 wins)', async () => {
     const engine = makeStub([
       { id: 'default', local_path: null },
       { id: 'studiovault', local_path: '/Users/india/vault' },
     ]);
-    await withEnv({ GBRAIN_SOURCE: 'default' }, async () => {
+    await withEnv({ PMBRAIN_SOURCE: 'default' }, async () => {
       const result = await resolveSourceWithTier(engine, null, '/tmp');
       expect(result.source_id).toBe('default');
       expect(result.tier).toBe('env');

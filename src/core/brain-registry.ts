@@ -23,12 +23,11 @@
  */
 
 import { readFileSync, existsSync } from 'fs';
-import { join, resolve } from 'path';
-import { homedir } from 'os';
+import { resolve } from 'path';
 import type { BrainEngine } from './engine.ts';
 import type { EngineConfig } from './types.ts';
 import { GBrainError } from './types.ts';
-import { loadConfig, type GBrainConfig } from './config.ts';
+import { gbrainPath, loadConfig, type GBrainConfig } from './config.ts';
 
 /** Host brain id. Reserved — users cannot create a mount with this id. */
 export const HOST_BRAIN_ID = 'host';
@@ -39,14 +38,14 @@ const BRAIN_ID_RE = /^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$/;
 /**
  * Path to mounts.json. Lazy to avoid homedir() at module scope.
  *
- * v0.40.3.0: GBRAIN_MOUNTS_PATH override exists for tests (homedir() is
+ * PMBRAIN_MOUNTS_PATH override exists for tests (homedir() is
  * cached at startup by libuv on some platforms, so withFakeHome's HOME
  * mutation isn't always picked up). Production callers don't set this.
  */
 function getMountsPath(): string {
-  const override = process.env.GBRAIN_MOUNTS_PATH;
+  const override = process.env.PMBRAIN_MOUNTS_PATH;
   if (override) return override;
-  return join(homedir(), '.gbrain', 'mounts.json');
+  return gbrainPath('mounts.json');
 }
 
 /**

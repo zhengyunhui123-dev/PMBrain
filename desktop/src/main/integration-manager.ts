@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { backupFile } from './config-manager.js';
 import type { SidecarManager } from './sidecar-manager.js';
 
-export type IntegrationClient = 'codebuddy' | 'workbuddy' | 'cursor' | 'trae' | 'claude' | 'codex' | 'grok' | 'qwenpaw' | 'hermes' | 'openclaw';
+export type IntegrationClient = 'cherry' | 'workbuddy' | 'cursor' | 'trae' | 'claude' | 'codex' | 'grok' | 'qwenpaw' | 'hermes' | 'openclaw' | 'codebuddy';
 export type CredentialKind = 'api_key' | 'oauth';
 
 export interface IntegrationInfo {
@@ -85,7 +85,7 @@ export interface SharedIntegrationSmokeResult {
 }
 
 const CLIENT_META: Record<IntegrationClient, { name: string; path: () => string | null; automatic: boolean }> = {
-  codebuddy: { name: 'CodeBuddy', path: () => join(homedir(), '.codebuddy', 'mcp.json'), automatic: true },
+  cherry: { name: 'CherryStudio', path: () => null, automatic: false },
   workbuddy: { name: 'Workbuddy', path: () => join(homedir(), '.workbuddy', 'mcp.json'), automatic: true },
   cursor: { name: 'Cursor', path: () => join(homedir(), '.cursor', 'mcp.json'), automatic: true },
   trae: { name: 'Trae Work', path: () => traeWorkIntegrationPath(), automatic: true },
@@ -95,6 +95,7 @@ const CLIENT_META: Record<IntegrationClient, { name: string; path: () => string 
   qwenpaw: { name: 'QwenPaw', path: () => qwenPawIntegrationPath(), automatic: true },
   hermes: { name: 'Hermes', path: () => null, automatic: false },
   openclaw: { name: 'OpenClaw', path: () => null, automatic: false },
+  codebuddy: { name: 'CodeBuddy', path: () => join(homedir(), '.codebuddy', 'mcp.json'), automatic: true },
 };
 
 interface QwenPawPaths {
@@ -222,6 +223,20 @@ export function formatSharedIntegrationSnippet(
   }
   if (client === 'qwenpaw') {
     return JSON.stringify({ mcp: { clients: { pmbrain: qwenPawEntry(mcpUrl, token) } } }, null, 2);
+  }
+  if (client === 'cherry') {
+    return JSON.stringify({
+      mcpServers: {
+        pmbrain: {
+          name: 'PMBrain',
+          type: 'streamableHttp',
+          description: 'PMBrain 本地知识库',
+          isActive: true,
+          baseUrl: mcpUrl,
+          headers: { Authorization: `Bearer ${token}` },
+        },
+      },
+    }, null, 2);
   }
   return JSON.stringify({ mcpServers: { pmbrain: jsonEntry(mcpUrl, token) } }, null, 2);
 }
@@ -861,7 +876,9 @@ export async function configureIntegration(
   const smoke = await sidecar.smokeTest(token);
   if(!smoke.statsOk||smoke.toolCount===0)throw new Error('MCP 验证失败，未写客户端配置');
   const entry = { mcpServers: { pmbrain: jsonEntry(sidecar.mcpUrl, token) } };
-  let snippet = JSON.stringify(entry, null, 2);
+  let snippet = client === 'cherry'
+    ? formatSharedIntegrationSnippet(client, sidecar.mcpUrl, token)
+    : JSON.stringify(entry, null, 2);
   let backup: string | null = null;
   let configured = false;
   let connectionState: IntegrationResult['connectionState'];

@@ -7,7 +7,7 @@ import { resolveSourceId } from '../core/source-resolver.ts';
  *
  * v0.31.8 (D22): grammar accepts an optional `--source <id>` flag before the
  * tool name. The flag is the highest-priority tier in resolveSourceId()'s
- * 6-tier chain (--source > GBRAIN_SOURCE > .gbrain-source dotfile > path-match
+ * 6-tier chain (--source > PMBRAIN_SOURCE > .pmbrain-source dotfile > path-match
  * > brain default > 'default'). Without --source, the chain still resolves —
  * env / dotfile / path-match all work.
  */

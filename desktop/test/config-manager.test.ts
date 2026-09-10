@@ -4,7 +4,7 @@ import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { getRecipe } from '../../src/core/ai/recipes/index.js';
 import {
-  activeConfigDirectory, desktopConfigPath, getSetupInfo, markDesktopMigration, markMainSourcePathRepairCompleted, needsDesktopMigration,
+  activeConfigDirectory, desktopConfigPath, ensureFreshDesktopSetup, getSetupInfo, markDesktopMigration, markMainSourcePathRepairCompleted, needsDesktopMigration,
   getDatabaseRuntimeConfig, getDesktopPreferences, normalizeDesktopTheme, normalizePgliteDatabasePath, preferredConfigDirectory, restoreConfig,
   isTrayHintShown, markTrayHintShown, saveDesktopPreferences, saveDesktopTheme, saveSetup, syncChatModelDefaultsInConfig, writeJsonConfig,
 } from '../src/main/config-manager.js';
@@ -29,6 +29,27 @@ function isolatedHome(): string {
 }
 
 describe('desktop config manager', () => {
+  test('first launch creates a PMBrain-only PGLite config without reading an existing GBrain config', () => {
+    const root = isolatedHome();
+    const legacyPath = join(root, '.gbrain', 'config.json');
+    mkdirSync(join(root, '.gbrain'), { recursive: true });
+    writeJsonConfig(legacyPath, {
+      engine: 'postgres',
+      database_url: 'postgresql://legacy:secret@127.0.0.1:5432/gbrain',
+    });
+
+    expect(ensureFreshDesktopSetup()).toBe(true);
+    expect(activeConfigDirectory()).toBe(join(root, '.pmbrain'));
+    const config = JSON.parse(readFileSync(join(root, '.pmbrain', 'config.json'), 'utf8'));
+    expect(config).toMatchObject({
+      engine: 'pglite',
+      database_path: join(root, '.pmbrain', 'brain.pglite'),
+      embedding_disabled: true,
+    });
+    expect(readFileSync(legacyPath, 'utf8')).toContain('/gbrain');
+    expect(ensureFreshDesktopSetup()).toBe(false);
+  });
+
   test('exposes Documents/PMBrain as the first-use knowledge directory default', () => {
     isolatedHome();
     const info = getSetupInfo();
@@ -276,11 +297,15 @@ describe('desktop config manager', () => {
     expect(normalizePgliteDatabasePath(join(root, 'brain.pglite'))).toBe(join(root, 'brain.pglite'));
   });
 
-  test('reads a legacy local config without rewriting database or API keys', () => {
+  test('ignores an explicitly pointed GBrain config and keeps it byte-for-byte unchanged', () => {
     const root = mkdtempSync(join(tmpdir(), 'pmbrain-desktop-legacy-'));
     roots.push(root);
+    const oldUserProfile = process.env.USERPROFILE;
+    const oldHome = process.env.HOME;
     delete process.env.PMBRAIN_HOME;
     process.env.GBRAIN_HOME = root;
+    process.env.USERPROFILE = root;
+    process.env.HOME = root;
     const path = join(root, '.gbrain', 'config.json');
     const original = {
       engine: 'postgres',
@@ -289,13 +314,19 @@ describe('desktop config manager', () => {
     };
     writeJsonConfig(path, original);
     const before = readFileSync(path, 'utf8');
-    const info = getSetupInfo();
-    expect(activeConfigDirectory()).toBe(join(root, '.gbrain'));
-    expect(info.needsSetup).toBe(false);
-    expect(info.current.engine).toBe('postgres');
-    expect(info.current.databaseConfigured).toBe(true);
-    expect(info.current.keyStatus.deepseek).toBe(true);
-    expect(readFileSync(path, 'utf8')).toBe(before);
+    try {
+      const info = getSetupInfo();
+      expect(activeConfigDirectory()).toBe(join(root, '.pmbrain'));
+      expect(info.needsSetup).toBe(true);
+      expect(info.current.databaseConfigured).toBe(false);
+      expect(info.current.keyStatus.deepseek).toBe(false);
+      expect(readFileSync(path, 'utf8')).toBe(before);
+    } finally {
+      if (oldUserProfile === undefined) delete process.env.USERPROFILE;
+      else process.env.USERPROFILE = oldUserProfile;
+      if (oldHome === undefined) delete process.env.HOME;
+      else process.env.HOME = oldHome;
+    }
   });
 
   test('reads a config file with a UTF-8 BOM', () => {
@@ -700,7 +731,7 @@ describe('desktop config manager', () => {
     expect(config.desktop.custom_endpoints.embedding).toHaveLength(2);
   });
 
-  test('desktop reads and writes the same discovered legacy CLI config', () => {
+  test('desktop creates a separate PMBrain config and never rewrites a discovered GBrain config', () => {
     const root = mkdtempSync(join(tmpdir(), 'pmbrain-desktop-legacy-switch-'));
     roots.push(root);
     const oldUserProfile = process.env.USERPROFILE;
@@ -717,25 +748,25 @@ describe('desktop config manager', () => {
         database_url: 'postgresql://local:secret@127.0.0.1:5432/pmbrain',
         zhipu_api_key: 'existing-key',
       });
+      const legacyBefore = readFileSync(legacyPath, 'utf8');
       const info = getSetupInfo();
-      const legacyDefault = join(root, '.gbrain', 'brain.pglite');
-      expect(activeConfigDirectory()).toBe(join(root, '.gbrain'));
+      expect(activeConfigDirectory()).toBe(join(root, '.pmbrain'));
       expect(preferredConfigDirectory()).toBe(join(root, '.pmbrain'));
       expect(info.defaults.databasePath).toBe(join(root, '.pmbrain', 'brain.pglite'));
 
       saveSetup({
         engine: 'pglite',
-        databasePath: legacyDefault,
+        databasePath: info.defaults.databasePath,
         knowledgeDirectory: join(root, 'knowledge'),
         keys: {},
       });
 
-      const saved = JSON.parse(readFileSync(legacyPath, 'utf8'));
+      const saved = JSON.parse(readFileSync(join(root, '.pmbrain', 'config.json'), 'utf8'));
       expect(saved.engine).toBe('pglite');
-      expect(saved.database_path).toBe(legacyDefault);
-      expect(saved.zhipu_api_key).toBe('existing-key');
+      expect(saved.database_path).toBe(join(root, '.pmbrain', 'brain.pglite'));
+      expect(saved.zhipu_api_key).toBeUndefined();
       expect(existsSync(legacyPath)).toBe(true);
-      expect(existsSync(join(root, '.pmbrain', 'config.json'))).toBe(false);
+      expect(readFileSync(legacyPath, 'utf8')).toBe(legacyBefore);
     } finally {
       if (oldUserProfile === undefined) delete process.env.USERPROFILE;
       else process.env.USERPROFILE = oldUserProfile;

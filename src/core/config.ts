@@ -1162,9 +1162,6 @@ export function configDir(): string {
   if (legacyOverride && legacyOverride.trim()) return validateHomeOverride('GBRAIN_HOME', legacyOverride, '.gbrain');
 
   const pmbrainDir = join(homedir(), '.pmbrain');
-  const legacyDir = join(homedir(), '.gbrain');
-  if (existsSync(pmbrainDir)) return pmbrainDir;
-  if (existsSync(legacyDir)) return legacyDir;
   return pmbrainDir;
 }
 
