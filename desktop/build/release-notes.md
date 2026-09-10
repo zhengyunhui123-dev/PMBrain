@@ -1,3 +1,14 @@
+## PMBrain 1.1.91
+
+- MCP 接入页会在 Sidecar 真正就绪后重新验证，不再把启动前的空探测当作完成。
+- 最近一次验证可用的状态会保存在不含凭证的本地回执中，打开页面立即沿用，后台再静默复核；旧配置快照不再把它清空。
+- CodeBuddy、Cursor、Trae 也会校验现存 Bearer；401/403 显示“接入失效”，临时超时显示“待验证”。
+
+## PMBrain 1.1.90
+
+- 修复 Ubuntu CI 中安装包 Sidecar 回归测试写死 Windows 路径导致的跨平台误报。
+- 修正 Home 迁移测试：未设置覆盖变量时，若已有 `~/.gbrain`，应按兼容合同继续复用，而不是无条件断言 `~/.pmbrain`。
+
 ## PMBrain 1.1.89
 
 - 修复 Windows 安装包在系统未安装 Bun 时，知识导入、搜索和维护子任务无法启动的问题；后台任务改为复用安装包内置 Bun 运行时。
@@ -14,16 +25,3 @@
 - MCP 接入页先显示本地配置卡片，再在后台并行刷新连接状态，不再因探测等待出现空白页。
 - Codex、Claude Code、Grok Build 统一显示“深度接入”；Grok 深度接入复用其实际可读取的 Claude 兼容记忆合同。
 - 长期记忆首次选择不再被异步状态刷新覆盖；尚无已验证 MCP 连接时明确引导用户先完成 MCP 接入。
-
-## PMBrain 1.1.86
-
-- WorkBuddy 用户级长期记忆规则与 Skills 改写到 `~/.workbuddy/`，不再依赖 CodeBuddy 目录。
-- Codex 深度接入增加 SessionEnd 漏记兜底、Hook 信任记录与配置自检，保留实时 remember 主路径。
-- Claude Code 深度接入继续使用 MCP 实时写回与 Stop Hook 兜底，并纳入统一完整性检查。
-- 新增 Grok Build 原生 MCP 一键接入与连接自检，按 Grok 的 `headers` 配置格式写入。
-
-## PMBrain 1.1.85
-
-- WorkBuddy 普通会话现在会收到长期记忆规则与 Skills，明确使用 remember，不再误写客户端 MEMORY.md。
-- Codex 与 WorkBuddy 的本地接入会验证现有 Bearer，凭证失效时明确提示并提供一键修复。
-- 长期记忆开启时，MCP 初始化合同开头即声明准确写入工具；不会增加不存在的 facts_add 别名。

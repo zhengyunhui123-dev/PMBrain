@@ -46,7 +46,11 @@ let knowledgeSourceStatusRequest = 0;
 let recoveryStatusRequest = 0;
 let integrationRefreshRequest = 0;
 let integrationChecksComplete = false;
+let integrationProbeSidecarReady = false;
 let latestIntegrations: IntegrationInfo[] = [];
+const INTEGRATION_VERIFICATION_KEY = 'pmbrain.desktop.integration-verification.v1';
+type IntegrationVerificationReceipt = { path: string | null; configuredPort?: number };
+let integrationVerificationCache = readIntegrationVerificationCache();
 let recoveryOwnerPid: number | null = null;
 let toastStagingPath: string | null = null;
 const CUSTOM_ENDPOINT_PREFIX = 'custom-endpoint-';
@@ -959,6 +963,13 @@ function renderService(service: SidecarState | null, port?: number): void {
   const dot = $('#service-dot');
   dot.className = service?.phase ?? (port ? 'ready' : '');
   const ready = service?.phase === 'ready' || (!service && Boolean(port));
+  const sidecarReady = service?.phase === 'ready';
+  if (sidecarReady && !integrationProbeSidecarReady) {
+    integrationChecksComplete = false;
+    refreshIntegrationPanel();
+  }
+  if (service && !sidecarReady) integrationProbeSidecarReady = false;
+  else if (sidecarReady) integrationProbeSidecarReady = true;
   $('#service-label').textContent = ready ? '服务已就绪'
     : service?.phase === 'starting' ? '正在启动'
       : service?.phase === 'failed' ? '启动失败' : '等待配置';
@@ -1081,15 +1092,15 @@ function renderIntegrations(integrations: IntegrationInfo[]): void {
     if (!item.configured) {
       badge.textContent = '未配置';
     } else if (item.connectionState === 'invalid') {
-      badge.textContent = '凭证失效';
+      badge.textContent = '接入失效';
     } else if (item.portMismatch) {
       badge.textContent = '端口需更新';
     } else if (item.connectionState === 'connected') {
-      badge.textContent = '凭证可用';
+      badge.textContent = '接入可用';
     } else if (item.connectionState === 'saved') {
       badge.textContent = '已写入，等待连接';
     } else {
-      badge.textContent = '已写入，待验证';
+      badge.textContent = '待验证';
     }
     const title = document.createElement('h3'); title.textContent = item.name;
     const path = document.createElement('p');
@@ -1106,6 +1117,8 @@ function renderIntegrations(integrations: IntegrationInfo[]): void {
         : '通过本机 API 写入 Bearer 并验证，不使用 OAuth'
       : item.connectionState === 'connected'
         ? '配置文件存在，凭证已通过 PMBrain 验证。'
+      : item.configured
+        ? '配置文件存在，但本次连接验证尚未完成；后台确认后会显示“接入可用”或“接入失效”。'
       : item.automatic
         ? '自动备份并合并现有配置；连接状态在后台验证。'
         : item.id === 'claude' ? '生成可复制的接入命令' : '生成可复制的接入配置';
@@ -1145,11 +1158,54 @@ function renderIntegrations(integrations: IntegrationInfo[]): void {
   }));
 }
 
+function readIntegrationVerificationCache(): Partial<Record<IntegrationClient, IntegrationVerificationReceipt>> {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(INTEGRATION_VERIFICATION_KEY) ?? '{}');
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeIntegrationVerificationCache(): void {
+  try {
+    localStorage.setItem(INTEGRATION_VERIFICATION_KEY, JSON.stringify(integrationVerificationCache));
+  } catch {
+    integrationVerificationCache = {};
+  }
+}
+
+function restoreLastVerifiedIntegrations(integrations: IntegrationInfo[]): IntegrationInfo[] {
+  return integrations.map(item => {
+    if (!item.configured || item.connectionState || item.portMismatch) return item;
+    const receipt = integrationVerificationCache[item.id];
+    return receipt && receipt.path === item.path && receipt.configuredPort === item.configuredPort
+      ? { ...item, connectionState: 'connected' }
+      : item;
+  });
+}
+
+function recordIntegrationVerification(integrations: IntegrationInfo[]): void {
+  for (const item of integrations) {
+    if (item.configured && item.connectionState === 'connected') {
+      integrationVerificationCache[item.id] = { path: item.path, configuredPort: item.configuredPort };
+    } else {
+      delete integrationVerificationCache[item.id];
+    }
+  }
+  writeIntegrationVerificationCache();
+}
+
 async function refreshIntegrations(probe: boolean): Promise<IntegrationInfo[]> {
   const request = ++integrationRefreshRequest;
-  const integrations = await window.pmbrainDesktop.getIntegrations(probe);
+  const received = await window.pmbrainDesktop.getIntegrations(probe);
+  const integrations = probe ? received : restoreLastVerifiedIntegrations(received);
   if (request !== integrationRefreshRequest) return integrations;
-  if (probe) integrationChecksComplete = true;
+  if (probe) {
+    const checkable = integrations.filter(item => item.configured && item.id !== 'hermes' && item.id !== 'openclaw');
+    integrationChecksComplete = checkable.every(item => item.connectionState !== undefined);
+    recordIntegrationVerification(integrations);
+  }
   if (state) state.integrations = integrations;
   renderIntegrations(integrations);
   return integrations;
@@ -1458,7 +1514,10 @@ async function saveSystemSettings(): Promise<void> {
 }
 
 function populate(next: DesktopSetupState): void {
-  state = next;
+  const integrations = latestIntegrations.length > 0
+    ? latestIntegrations
+    : restoreLastVerifiedIntegrations(next.integrations);
+  state = { ...next, integrations };
   const { setup } = next;
   customCatalog = {
     chat: [...(setup.current.customProviders?.chat ?? [])],
@@ -1529,7 +1588,7 @@ function populate(next: DesktopSetupState): void {
     ? '已读取本机 Postgres 连接；留空会继续使用现有地址。'
     : '不会安装或新建 Docker；会安全启动已安装的 Docker Desktop 和匹配的现有容器。';
   renderEngine();
-  renderIntegrations(next.integrations);
+  renderIntegrations(integrations);
   renderService(null, next.port);
   $('#save-setup').querySelector('span')!.textContent = saveButtonText();
   updateSystemSettingsAvailability();
@@ -2099,6 +2158,9 @@ function applyIntegrationResult(result: IntegrationResult): void {
       ?? (result.smoke?.statsOk && result.smoke.toolCount > 0 ? 'connected' : item.connectionState),
   } : item);
   if (state) state.integrations = next;
+  if (result.connectionState === 'connected') {
+    recordIntegrationVerification(next.filter(item => item.id === result.client));
+  }
   renderIntegrations(next);
 }
 

@@ -757,7 +757,7 @@ function readLocalBearer(client: IntegrationClient, path: string): string | unde
       const block = content.match(expression)?.[0] ?? content;
       return block.match(/Authorization\s*=\s*(['"])Bearer\s+(.+?)\1/)?.[2];
     }
-    if (client === 'workbuddy' || client === 'claude') {
+    if (['codebuddy', 'workbuddy', 'cursor', 'trae', 'claude'].includes(client)) {
       const root = JSON.parse(readFileSync(path, 'utf8')) as {
         mcpServers?: { pmbrain?: { headers?: { Authorization?: string } } };
       };
@@ -772,22 +772,21 @@ function readLocalBearer(client: IntegrationClient, path: string): string | unde
 export async function probeLocalIntegrationConnectionState(
   client: IntegrationClient,
   path: string,
-  sidecar: Pick<SidecarManager, 'smokeTest'>,
+  sidecar: Pick<SidecarManager, 'verifyMcpBearer'>,
 ): Promise<'connected' | 'invalid' | undefined> {
-  if (client !== 'workbuddy' && client !== 'codex' && client !== 'claude' && client !== 'grok') return undefined;
+  if (!['codebuddy', 'workbuddy', 'cursor', 'trae', 'claude', 'codex', 'grok'].includes(client)) return undefined;
   const token = readLocalBearer(client, path);
   if (!token) return 'invalid';
   try {
-    const smoke = await sidecar.smokeTest(token);
-    return smoke.statsOk && smoke.toolCount > 0 ? 'connected' : 'invalid';
+    return await sidecar.verifyMcpBearer(`Bearer ${token}`) ? 'connected' : 'invalid';
   } catch {
-    return 'invalid';
+    return undefined;
   }
 }
 
 export async function listIntegrationsWithConnectionState(
   currentPort?: number,
-  sidecar?: Pick<SidecarManager, 'smokeTest'>,
+  sidecar?: Pick<SidecarManager, 'verifyMcpBearer'>,
 ): Promise<IntegrationInfo[]> {
   const integrations = listIntegrations(currentPort);
   await Promise.all(integrations.map(async (item) => {
@@ -796,7 +795,7 @@ export async function listIntegrationsWithConnectionState(
       item.connectionState = await probeQwenPawConnectionState();
       return;
     }
-    if (sidecar && ['workbuddy', 'codex', 'claude', 'grok'].includes(item.id)) {
+    if (sidecar && ['codebuddy', 'workbuddy', 'cursor', 'trae', 'claude', 'codex', 'grok'].includes(item.id)) {
       item.connectionState = await probeLocalIntegrationConnectionState(item.id, item.path, sidecar);
     }
   }));

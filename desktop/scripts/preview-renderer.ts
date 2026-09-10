@@ -335,7 +335,7 @@ html = html.replace(/(id="page-title">)[^<]+(<\/h1>)/, `$1${t.title}$2`);
 // 4. 集成面板：预生成卡片 HTML 注入到 integration-grid
 interface MockIntegration {
   id: string; name: string; path: string | null; configured: boolean; automatic: boolean;
-  connectionState?: 'connected' | 'saved';
+  connectionState?: 'connected' | 'saved' | 'invalid';
 }
 const mockIntegrations: MockIntegration[] = [
   { id: 'codebuddy', name: 'CodeBuddy', path: 'C:\\Users\\zhengyunhui\\.codebuddy\\mcp.json', configured: true, automatic: true },
@@ -352,8 +352,10 @@ const mockIntegrations: MockIntegration[] = [
 const cardsHtml = mockIntegrations.map((item) => {
   const badgeClass = item.configured ? 'configured badge' : 'badge';
   const badgeText = item.connectionState === 'connected'
-    ? '凭证可用'
-    : item.configured ? '已写入，待验证' : '未配置';
+    ? '接入可用'
+    : item.connectionState === 'invalid'
+      ? '接入失效'
+      : item.configured ? '待验证' : '未配置';
   const pathText = item.path ?? (item.id === 'claude' ? '通过 Claude CLI / GUI 接入' : '通过客户端 MCP 配置接入');
   const noteText = item.id === 'qwenpaw'
     ? '通过本机 API 写入 Bearer 并验证，不使用 OAuth'

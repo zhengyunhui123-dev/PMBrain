@@ -297,7 +297,7 @@ describe('desktop settings renderer contracts', () => {
   });
 
   test('shows invalid local credentials and a one-click repair action', () => {
-    expect(renderer).toContain('凭证失效');
+    expect(renderer).toContain('接入失效');
     expect(renderer).toContain('现有凭证已失效');
     expect(renderer).toContain('重新生成凭证');
     expect(renderer).toContain("'invalid badge'");
@@ -422,6 +422,19 @@ describe('desktop settings renderer contracts', () => {
     expect(renderer).toContain('loadedMemoryMode = state.mode');
     expect(html).toContain('id="memory-mode-salient-card"');
     expect(html).toContain('id="memory-agent-status"');
+  });
+
+  test('integration verification survives setup snapshots and reruns when the sidecar becomes ready', () => {
+    expect(renderer).toContain('const integrations = latestIntegrations.length > 0');
+    expect(renderer).toContain(': restoreLastVerifiedIntegrations(next.integrations)');
+    expect(renderer).toContain('if (sidecarReady && !integrationProbeSidecarReady)');
+    expect(renderer).toContain('integrationChecksComplete = checkable.every');
+    expect(renderer).toContain('restoreLastVerifiedIntegrations');
+    expect(renderer).toContain('recordIntegrationVerification');
+    expect(renderer).toContain('pmbrain.desktop.integration-verification.v1');
+    expect(renderer).toContain("badge.textContent = '接入可用'");
+    expect(renderer).toContain("badge.textContent = '接入失效'");
+    expect(renderer).not.toContain("badge.textContent = '已写入，待验证'");
   });
 
   test('opening advanced model settings only reads a draft and saves with the PGLite pause', () => {
