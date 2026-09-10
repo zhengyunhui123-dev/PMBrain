@@ -18,6 +18,7 @@ import type {
   DesktopThemeState,
   IntegrationClient,
   IntegrationInfo,
+  IntegrationResult,
   PMBrainDesktopApi,
   DesktopPgliteUpgradeBackupMutation,
   DesktopPgliteUpgradeBackups,
@@ -1072,19 +1073,23 @@ function renderIntegrations(integrations: IntegrationInfo[]): void {
     const article = document.createElement('article');
     article.className = 'integration-card';
     const badge = document.createElement('span');
-    badge.className = item.configured ? 'configured badge' : 'badge';
+    badge.className = !item.configured
+      ? 'badge'
+      : item.connectionState === 'invalid'
+        ? 'invalid badge'
+        : item.portMismatch ? 'attention badge' : 'configured badge';
     if (!item.configured) {
       badge.textContent = '未配置';
     } else if (item.connectionState === 'invalid') {
       badge.textContent = '凭证失效';
-    } else if (item.id === 'qwenpaw' && item.connectionState === 'connected') {
-      badge.textContent = '已连接';
-    } else if (item.id === 'qwenpaw' && item.connectionState === 'saved') {
-      badge.textContent = '已写入，等待连接';
     } else if (item.portMismatch) {
-      badge.textContent = '已配置，端口号不一致';
+      badge.textContent = '端口需更新';
+    } else if (item.connectionState === 'connected') {
+      badge.textContent = '凭证可用';
+    } else if (item.connectionState === 'saved') {
+      badge.textContent = '已写入，等待连接';
     } else {
-      badge.textContent = '已配置';
+      badge.textContent = '已写入，待验证';
     }
     const title = document.createElement('h3'); title.textContent = item.name;
     const path = document.createElement('p');
@@ -1092,22 +1097,26 @@ function renderIntegrations(integrations: IntegrationInfo[]): void {
       ?? (item.id === 'claude' ? '通过 Claude CLI / GUI 接入' : '通过客户端 MCP 配置接入');
     const note = document.createElement('small');
     note.textContent = item.connectionState === 'invalid'
-      ? '当前凭证无法连接 PMBrain，请点击修复'
+      ? '现有凭证已失效。重新生成凭证后再重启客户端。'
+      : item.portMismatch
+        ? '配置仍指向旧端口，请更新连接后重启客户端。'
       : item.id === 'qwenpaw'
       ? item.connectionState === 'saved'
         ? '配置已写入；尚未连通，请让代理绕过 localhost/127.0.0.1 后重试'
         : '通过本机 API 写入 Bearer 并验证，不使用 OAuth'
+      : item.connectionState === 'connected'
+        ? '配置文件存在，凭证已通过 PMBrain 验证。'
       : item.automatic
-        ? '自动备份并合并现有配置'
+        ? '自动备份并合并现有配置；连接状态在后台验证。'
         : item.id === 'claude' ? '生成可复制的接入命令' : '生成可复制的接入配置';
     const button = document.createElement('button');
     button.className = 'solid';
     if (item.automatic) {
       button.textContent = item.connectionState === 'invalid'
-        ? '修复连接'
+        ? '重新生成凭证'
         : item.id === 'qwenpaw' && item.connectionState === 'saved'
         ? '重试连接'
-        : item.configured ? '更新' : '创建并写入';
+        : item.configured ? '更新连接' : '接入';
     } else {
       button.textContent = item.id === 'claude' ? '生成接入命令' : '生成接入配置';
     }
@@ -1127,6 +1136,10 @@ function renderIntegrations(integrations: IntegrationInfo[]): void {
       const deep = document.createElement('button'); deep.type = 'button'; deep.textContent = '深度接入';
       deep.addEventListener('click', () => void configure(item.id, deep, true));
       article.appendChild(deep);
+      const actionHelp = document.createElement('small');
+      actionHelp.className = 'integration-action-help';
+      actionHelp.textContent = '更新连接只更新 MCP；深度接入还会安装自动记忆规则。';
+      article.appendChild(actionHelp);
     }
     return article;
   }));
@@ -2021,6 +2034,74 @@ function selectedCredential(): CredentialKind {
   return (document.querySelector<HTMLInputElement>('input[name="credential"]:checked')?.value ?? 'api_key') as CredentialKind;
 }
 
+function integrationClientName(client: IntegrationClient): string {
+  return latestIntegrations.find(item => item.id === client)?.name ?? ({
+    codebuddy: 'CodeBuddy',
+    workbuddy: 'Workbuddy',
+    cursor: 'Cursor',
+    trae: 'Trae Work',
+    claude: 'Claude Code',
+    codex: 'Codex',
+    grok: 'Grok Build',
+    qwenpaw: 'QwenPaw',
+    hermes: 'Hermes',
+    openclaw: 'OpenClaw',
+  } satisfies Record<IntegrationClient, string>)[client];
+}
+
+function openIntegrationProgress(client: IntegrationClient, deep: boolean): void {
+  const clientName = integrationClientName(client);
+  const dialog = $<HTMLDialogElement>('#integration-progress-dialog');
+  const progress = $('#integration-progress-state');
+  dialog.dataset.client = client;
+  progress.className = 'integration-progress-state busy';
+  $('#integration-progress-stage').textContent = deep ? '深度接入' : 'MCP 接入';
+  $('#integration-progress-title').textContent = deep ? `正在深度接入 ${clientName}` : `正在更新 ${clientName} 连接`;
+  $('#integration-progress-state-title').textContent = '正在创建并验证新凭证';
+  $('#integration-progress-message').textContent = deep
+    ? '接下来会写入 MCP 配置并安装自动记忆规则。首次设置时会先询问“重要内容 / 全部事实”，请在弹窗中选择。'
+    : '接下来会备份并更新客户端 MCP 配置。本次只更新连接；长期记忆范围请到“系统设置”修改。首次设置时会先询问“重要内容 / 全部事实”。';
+  $('#integration-progress-footnote').textContent = '请保持窗口打开。完成后会明确告诉你写入、验证和重启状态。';
+  $('#result-console').hidden = true;
+  $<HTMLButtonElement>('#copy-result').hidden = true;
+  $<HTMLButtonElement>('#integration-progress-close').disabled = true;
+  if (!dialog.open) dialog.showModal();
+}
+
+function finishIntegrationProgress(
+  status: 'success' | 'error',
+  title: string,
+  message: string,
+  footnote: string,
+): void {
+  $('#integration-progress-state').className = `integration-progress-state ${status}`;
+  $('#integration-progress-title').textContent = title;
+  $('#integration-progress-state-title').textContent = status === 'success' ? '处理完成' : '需要处理';
+  $('#integration-progress-message').textContent = message;
+  $('#integration-progress-footnote').textContent = footnote;
+  $<HTMLButtonElement>('#integration-progress-close').disabled = false;
+}
+
+function integrationMemoryFootnote(deep: boolean): string {
+  return deep
+    ? '深度接入会安装自动记忆规则；“重要内容 / 全部事实”由“系统设置”控制，之后可以随时修改。'
+    : '本次只更新 MCP 连接；长期记忆范围请到“系统设置”修改。首次设置时的选择只询问一次。';
+}
+
+function applyIntegrationResult(result: IntegrationResult): void {
+  if (!result.configured) return;
+  const next = latestIntegrations.map(item => item.id === result.client ? {
+    ...item,
+    configured: true,
+    path: result.path ?? item.path,
+    portMismatch: false,
+    connectionState: result.connectionState
+      ?? (result.smoke?.statsOk && result.smoke.toolCount > 0 ? 'connected' : item.connectionState),
+  } : item);
+  if (state) state.integrations = next;
+  renderIntegrations(next);
+}
+
 async function writeWorkbuddyUserAgent(button: HTMLButtonElement): Promise<void> {
   clearNotices();
   setBusy(button, true, '正在写入…');
@@ -2036,9 +2117,10 @@ async function writeWorkbuddyUserAgent(button: HTMLButtonElement): Promise<void>
 }
 
 async function configure(client: IntegrationClient, button: HTMLButtonElement, deep = false): Promise<void> {
-  setNotice('error'); setNotice('success');
+  clearNotices();
   const originalText = button.textContent || '';
-  button.disabled = true; button.textContent = '正在验证…';
+  button.disabled = true; button.textContent = '处理中…';
+  openIntegrationProgress(client, deep);
   try {
     const result = await window.pmbrainDesktop.configureIntegration(
       client,
@@ -2046,33 +2128,46 @@ async function configure(client: IntegrationClient, button: HTMLButtonElement, d
       deep,
     );
     lastResult = result.snippet;
-    $('#result-title').textContent = `${client} 配置结果`;
+    const clientName = integrationClientName(client);
+    $('#result-title').textContent = `${clientName} 配置结果`;
     $('#result-content').textContent = result.snippet;
     $<HTMLButtonElement>('#copy-result').hidden = false;
-    const integrations = await refreshIntegrations(true);
-    const refreshedConnection = integrations.find(item => item.id === client)?.connectionState
-      ?? result.connectionState;
+    applyIntegrationResult(result);
     const smoke = result.smoke ? `MCP smoke：${result.smoke.toolCount} 个工具，get_stats ${result.smoke.statsOk ? '正常' : '失败'}` : 'OAuth 凭证已创建';
     $('#result-meta').textContent = [
       result.configured && result.path ? `已写入 ${result.path}` : '未自动写入，请复制上方内容',
       result.backup ? `备份：${result.backup}` : '',
-      client === 'qwenpaw' ? `QwenPaw 连接：${refreshedConnection === 'connected' ? '已验证' : '等待重试'}` : smoke,
+      client === 'qwenpaw' ? `QwenPaw 连接：${result.connectionState === 'connected' ? '已验证' : '等待重试'}` : smoke,
     ].filter(Boolean).join(' · ');
     $('#result-console').hidden = false;
-    if (client === 'qwenpaw' && refreshedConnection === 'saved') {
-      setNotice('error', 'QwenPaw 配置已经写入，但当前尚未连通 PMBrain。请让代理绕过 localhost/127.0.0.1 后点击“重试连接”；不会启动 OAuth。');
+    if (client === 'qwenpaw' && result.connectionState === 'saved') {
+      finishIntegrationProgress(
+        'error',
+        '配置已写入，但 QwenPaw 尚未连通',
+        '请让代理绕过 localhost/127.0.0.1 后点击“重试连接”；不会启动 OAuth。',
+        integrationMemoryFootnote(false),
+      );
     } else {
-      setNotice(
+      finishIntegrationProgress(
         'success',
         result.configured
-          ? client === 'qwenpaw'
-            ? 'QwenPaw 已接入 PMBrain，并已验证工具列表。'
-            : `${client} 已接入 PMBrain。重启客户端后生效。`
-          : `${client} 凭证已生成。`,
+          ? deep ? `${clientName} 深度接入完成` : `${clientName} 连接配置已更新`
+          : `${clientName} 接入内容已生成`,
+        result.configured
+          ? `新凭证已通过 PMBrain 验证并写入配置。请重启 ${clientName}，让正在运行的客户端重新加载。`
+          : '凭证已通过 PMBrain 验证。请复制下方内容到客户端，并按客户端提示重新加载。',
+        integrationMemoryFootnote(deep),
       );
     }
+    void refreshIntegrations(true).catch(() => undefined);
   } catch (error) {
-    setNotice('error', error instanceof Error ? error.message : String(error));
+    finishIntegrationProgress(
+      'error',
+      `${integrationClientName(client)} 接入未完成`,
+      error instanceof Error ? error.message : String(error),
+      '本次流程没有全部完成；如果 MCP 配置已写入，后台复核会更新卡片，自动记忆规则仍以错误信息为准。',
+    );
+    void refreshIntegrations(true).catch(() => undefined);
   } finally {
     button.disabled = false;
     button.textContent = originalText;
@@ -2265,6 +2360,10 @@ $('#export-diagnostic').addEventListener('click', async () => {
 $('#open-admin').addEventListener('click', () => void window.pmbrainDesktop.openAdmin());
 $('#finish-open-admin').addEventListener('click', () => void window.pmbrainDesktop.openAdmin());
 $('#copy-result').addEventListener('click', () => void window.pmbrainDesktop.copy(lastResult));
+$<HTMLButtonElement>('#integration-progress-close').addEventListener('click', () => $<HTMLDialogElement>('#integration-progress-dialog').close());
+$<HTMLDialogElement>('#integration-progress-dialog').addEventListener('cancel', (event) => {
+  if ($<HTMLButtonElement>('#integration-progress-close').disabled) event.preventDefault();
+});
 $('#recovery-toast-diagnose').addEventListener('click', () => void diagnoseToast('recovery'));
 $('#recovery-toast-replace').addEventListener('click', () => void replaceToast('recovery'));
 $('#repair-toast-diagnose').addEventListener('click', () => void diagnoseToast('repair'));

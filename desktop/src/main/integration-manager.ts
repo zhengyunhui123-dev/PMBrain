@@ -896,5 +896,6 @@ export async function configureIntegration(
     snippet = `claude mcp add pmbrain -t http ${sidecar.mcpUrl} -H ${tomlString(`Authorization: Bearer ${token}`)}`;
   }
 
+  if (configured && !connectionState) connectionState = 'connected';
   return { client, credentialKind, configured, path, backup, snippet, token, smoke, connectionState };
 }

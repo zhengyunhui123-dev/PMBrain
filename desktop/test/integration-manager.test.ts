@@ -23,7 +23,10 @@ import {
 } from '../src/main/integration-manager.js';
 
 const roots: string[] = [];
+const previousCodexHome = process.env.CODEX_HOME;
 afterEach(() => {
+  if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+  else process.env.CODEX_HOME = previousCodexHome;
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
@@ -563,6 +566,24 @@ describe('desktop integration config merging', () => {
     expect(result).toContain('http://127.0.0.1:3132/mcp');
     expect(result).not.toContain('Bearer first');
     expect(result.match(/\[mcp_servers\.pmbrain\]/g)?.length).toBe(1);
+  });
+
+  test('marks a freshly written and smoke-tested automatic integration as connected', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'pmbrain-desktop-codex-'));
+    roots.push(root);
+    process.env.CODEX_HOME = root;
+    const sidecar = {
+      port: 3131,
+      mcpUrl: 'http://127.0.0.1:3131/mcp',
+      adminRequest: async (path: string) => path.endsWith('/revoke') ? { revoked: true } : { token: 'fresh-token' },
+      smokeTest: async () => ({ toolCount: 7, statsOk: true }),
+    };
+
+    const result = await configureIntegration(sidecar as never, 'codex', 'api_key');
+
+    expect(result.configured).toBe(true);
+    expect(result.connectionState).toBe('connected');
+    expect(readFileSync(join(root, 'config.toml'), 'utf8')).toContain('[mcp_servers.pmbrain]');
   });
 
   test('writes Grok MCP config without replacing foreign settings', () => {

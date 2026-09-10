@@ -337,11 +337,6 @@
             <div class="subsection-heading"><div><span>03B / LAN</span><h3 id="shared-integration-title">共享成员接入</h3></div><p>凭证创建与成员管理请到 PMBrain 管理控制台「集成 → MCP 接入 → Agent 凭证管理」。</p></div>
             <button class="primary" id="shared-open-admin"><span>打开管理控制台</span></button>
           </section>
-          <div class="result-console" id="result-console" hidden>
-            <div><b id="result-title">配置结果</b><button class="ghost" id="copy-result">复制</button></div>
-            <pre id="result-content"></pre>
-            <p id="result-meta"></p>
-          </div>
           <div class="finish-bar">
             <div><b>配置完成后</b><small>重启对应 AI 客户端，让它重新加载 MCP 配置。</small></div>
             <button class="primary" id="finish-open-admin">进入 PMBrain 管理台</button>
@@ -508,6 +503,18 @@
           </div>
           <div class="help-dialog-foot"><small>普通模型和向量模型的 Base URL、模型 ID、API Key 分别保存，可连接不同端口并使用不同凭证；API Key 可选，本地无鉴权接口可留空。最后点击页面“保存配置并启动”才会写入配置。</small><div class="custom-provider-actions"><button type="button" class="ghost" id="custom-provider-cancel">取消</button><button type="submit" class="solid" id="custom-provider-confirm">添加模型</button></div></div>
       </form>
+    </dialog>
+    <dialog class="help-dialog integration-progress-dialog" id="integration-progress-dialog" aria-labelledby="integration-progress-title" aria-describedby="integration-progress-message">
+      <div class="help-dialog-head"><div><span id="integration-progress-stage">MCP 接入</span><h2 id="integration-progress-title">正在准备连接</h2></div></div>
+      <div class="integration-progress-body" aria-live="polite">
+        <div class="integration-progress-state busy" id="integration-progress-state"><i aria-hidden="true"></i><div><b id="integration-progress-state-title">正在处理</b><p id="integration-progress-message">正在创建并验证凭证。</p></div></div>
+        <div class="result-console" id="result-console" hidden>
+          <div><b id="result-title">配置结果</b><button class="ghost" id="copy-result">复制</button></div>
+          <pre id="result-content"></pre>
+          <p id="result-meta"></p>
+        </div>
+      </div>
+      <div class="help-dialog-foot"><small id="integration-progress-footnote">完成后会告诉你是否需要重启客户端。</small><button type="button" class="solid" id="integration-progress-close" disabled>完成</button></div>
     </dialog>
     <div class="wait-overlay" id="setup-wait" hidden role="dialog" aria-modal="true" aria-labelledby="setup-wait-title" aria-describedby="setup-wait-message">
       <div class="wait-dialog" aria-live="polite">
