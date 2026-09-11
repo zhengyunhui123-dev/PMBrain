@@ -167,7 +167,7 @@ export async function runImport(
   // brain_default → sole_non_default → seed_default. The nudge fires only
   // when the resolver returns tier='sole_non_default', so explicit users
   // see no behavior change.
-  if (!sourceId && (process.env.PMBRAIN_SOURCE || process.env.GBRAIN_SOURCE)) {
+  if (!sourceId && process.env.PMBRAIN_SOURCE) {
     const { resolveSourceId } = await import('../core/source-resolver.ts');
     sourceId = await resolveSourceId(engine, null);
   } else if (!sourceId) {

@@ -2095,7 +2095,7 @@ function selectedCredential(): CredentialKind {
 
 function integrationClientName(client: IntegrationClient): string {
   return latestIntegrations.find(item => item.id === client)?.name ?? ({
-    codebuddy: 'CodeBuddy',
+    cherry: 'CherryStudio',
     workbuddy: 'Workbuddy',
     cursor: 'Cursor',
     trae: 'Trae Work',
@@ -2105,6 +2105,7 @@ function integrationClientName(client: IntegrationClient): string {
     qwenpaw: 'QwenPaw',
     hermes: 'Hermes',
     openclaw: 'OpenClaw',
+    codebuddy: 'CodeBuddy',
   } satisfies Record<IntegrationClient, string>)[client];
 }
 

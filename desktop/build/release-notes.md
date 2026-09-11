@@ -1,3 +1,9 @@
+## PMBrain 1.1.92
+
+- MCP 接入新增 CherryStudio 并置于首位，CodeBuddy 调整到最后；CherryStudio 提供可复制导入的 Streamable HTTP 配置，不直接修改它的 SQLite 数据库。
+- 桌面端首次运行会立即创建独立的 `~/.pmbrain/config.json` 与 PGLite `brain.pglite`，不再自动发现、读取或复用已有 `~/.gbrain`。
+- 安装版 Sidecar 会隔离继承到的 GBrain Home、数据库、Source、Brain 与 Mount 路由变量，旧 `.gbrain-source`、`.gbrain-mount` 也不会影响 PMBrain。
+
 ## PMBrain 1.1.91
 
 - MCP 接入页会在 Sidecar 真正就绪后重新验证，不再把启动前的空探测当作完成。
@@ -19,9 +25,3 @@
 - “更新连接”和“深度接入”现在会立即打开当前客户端的进度弹窗，分别说明凭证验证、配置写入、自动记忆规则与重启要求。
 - 已通过直接验证并写入的配置立即显示“凭证可用”，全客户端后台复核不再让按钮长时间停在“正在验证”。
 - 失效状态改为“重新生成凭证”，移除容易与卡片状态冲突的全局成功横幅；长期记忆范围仍在“系统设置”统一修改。
-
-## PMBrain 1.1.87
-
-- MCP 接入页先显示本地配置卡片，再在后台并行刷新连接状态，不再因探测等待出现空白页。
-- Codex、Claude Code、Grok Build 统一显示“深度接入”；Grok 深度接入复用其实际可读取的 Claude 兼容记忆合同。
-- 长期记忆首次选择不再被异步状态刷新覆盖；尚无已验证 MCP 连接时明确引导用户先完成 MCP 接入。

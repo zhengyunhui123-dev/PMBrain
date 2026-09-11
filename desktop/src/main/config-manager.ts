@@ -406,19 +406,27 @@ export function preferredConfigDirectory(): string {
 }
 
 export function activeConfigDirectory(): string {
-  const preferred = preferredHome();
-  if (process.env.PMBRAIN_HOME?.trim()) return preferred;
-  const legacy = process.env.GBRAIN_HOME?.trim()
-    ? join(resolve(process.env.GBRAIN_HOME), '.gbrain')
-    : join(resolveUserHome(), '.gbrain');
-  if (process.env.GBRAIN_HOME?.trim()) return legacy;
-  if (existsSync(join(preferred, 'config.json'))) return preferred;
-  if (existsSync(join(legacy, 'config.json'))) return legacy;
-  return preferred;
+  return preferredHome();
 }
 
 export function desktopConfigPath(): string {
   return join(activeConfigDirectory(), 'config.json');
+}
+
+export function ensureFreshDesktopSetup(): boolean {
+  const path = desktopConfigPath();
+  if (existsSync(path)) return false;
+  const directory = preferredConfigDirectory();
+  writeJsonConfig(path, {
+    engine: 'pglite',
+    database_path: join(directory, 'brain.pglite'),
+    embedding_disabled: true,
+    desktop: {
+      knowledge_directory: join(homedir(), 'Documents', 'PMBrain'),
+      theme: 'system',
+    },
+  });
+  return true;
 }
 
 export function normalizePgliteDatabasePath(input: string): string {

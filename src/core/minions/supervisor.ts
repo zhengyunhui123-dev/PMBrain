@@ -43,9 +43,9 @@ import {
 } from 'fs';
 import { execFileSync } from 'child_process';
 import { randomUUID } from 'crypto';
-import { homedir } from 'os';
 import { basename, dirname, join } from 'path';
 import type { BrainEngine } from '../engine.ts';
+import { gbrainPath } from '../config.ts';
 
 export type SupervisorEvent =
   | 'started'
@@ -99,9 +99,9 @@ export interface SupervisorOpts {
 }
 
 export const DEFAULT_PID_FILE: string = (() => {
-  const envOverride = process.env.GBRAIN_SUPERVISOR_PID_FILE;
+  const envOverride = process.env.PMBRAIN_SUPERVISOR_PID_FILE;
   if (envOverride && envOverride.length > 0) return envOverride;
-  return join(homedir(), '.gbrain', 'supervisor.pid');
+  return gbrainPath('supervisor.pid');
 })();
 
 export interface SupervisorPidRecord {

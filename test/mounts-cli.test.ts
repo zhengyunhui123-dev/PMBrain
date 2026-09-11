@@ -340,24 +340,28 @@ describe('v0.40.3.0 — mount flag verbs', () => {
 /**
  * Async variant of withFakeHome for tests that await runMounts().
  *
- * v0.40.3.0: ALSO sets GBRAIN_MOUNTS_PATH because libuv caches homedir()
+ * ALSO sets PMBRAIN_MOUNTS_PATH because libuv caches homedir()
  * on some platforms, so HOME mutation alone isn't picked up by
  * runMounts's internal getMountsPath() call.
  */
 async function withFakeHomeAsync<T>(fn: (mountsPath: string) => Promise<T>): Promise<T> {
   const home = mktmp('fake-home-');
   const prev = process.env.HOME;
-  const prevMounts = process.env.GBRAIN_MOUNTS_PATH;
+  const prevMounts = process.env.PMBRAIN_MOUNTS_PATH;
+  const prevPmbrainHome = process.env.PMBRAIN_HOME;
   process.env.HOME = home;
-  mkdirSync(join(home, '.gbrain'), { recursive: true });
-  const mountsPath = join(home, '.gbrain', 'mounts.json');
-  process.env.GBRAIN_MOUNTS_PATH = mountsPath;
+  process.env.PMBRAIN_HOME = home;
+  mkdirSync(join(home, '.pmbrain'), { recursive: true });
+  const mountsPath = join(home, '.pmbrain', 'mounts.json');
+  process.env.PMBRAIN_MOUNTS_PATH = mountsPath;
   try {
     return await fn(mountsPath);
   } finally {
     if (prev !== undefined) process.env.HOME = prev;
     else delete process.env.HOME;
-    if (prevMounts !== undefined) process.env.GBRAIN_MOUNTS_PATH = prevMounts;
-    else delete process.env.GBRAIN_MOUNTS_PATH;
+    if (prevMounts !== undefined) process.env.PMBRAIN_MOUNTS_PATH = prevMounts;
+    else delete process.env.PMBRAIN_MOUNTS_PATH;
+    if (prevPmbrainHome !== undefined) process.env.PMBRAIN_HOME = prevPmbrainHome;
+    else delete process.env.PMBRAIN_HOME;
   }
 }

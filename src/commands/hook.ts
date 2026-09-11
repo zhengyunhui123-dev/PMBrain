@@ -17,7 +17,7 @@ function writebackCorpusDir(home: string): string {
 
 function sessionSourceId(args: string[]): string | null {
   const index=args.indexOf('--source');
-  const env = (index>=0 ? args[index+1] ?? '' : process.env.PMBRAIN_SOURCE || process.env.GBRAIN_SOURCE || '').trim();
+  const env = (index>=0 ? args[index+1] ?? '' : process.env.PMBRAIN_SOURCE || '').trim();
   return env && isValidSourceId(env) ? env : null;
 }
 

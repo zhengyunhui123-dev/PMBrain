@@ -24,7 +24,6 @@
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync, chmodSync, renameSync } from 'fs';
 import { join, resolve } from 'path';
-import { homedir } from 'os';
 import {
   loadMounts,
   validateMountId,
@@ -36,13 +35,14 @@ import {
 import { findRepoRoot } from '../core/repo-root.ts';
 import { writeMountsCache, clearMountsCache } from '../core/mounts-cache.ts';
 import { GBrainError } from '../core/types.ts';
+import { gbrainPath } from '../core/config.ts';
 
-function getMountsDir(): string { return join(homedir(), '.gbrain'); }
-// v0.40.3.0: GBRAIN_MOUNTS_PATH override exists for tests (libuv caches
+function getMountsDir(): string { return gbrainPath(); }
+// PMBRAIN_MOUNTS_PATH override exists for tests (libuv caches
 // homedir() at startup on some platforms; HOME mutation alone isn't
 // reliably picked up). Production callers don't set this.
 function getMountsPath(): string {
-  const override = process.env.GBRAIN_MOUNTS_PATH;
+  const override = process.env.PMBRAIN_MOUNTS_PATH;
   if (override) return override;
   return join(getMountsDir(), 'mounts.json');
 }

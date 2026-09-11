@@ -103,7 +103,7 @@ window.pmbrainDesktop = {
       }
     },
     integrations: [
-      { id: 'codebuddy', name: 'CodeBuddy', path: 'C:\\\\Users\\\\zhengyunhui\\\\.codebuddy\\\\mcp.json', configured: true, automatic: true },
+      { id: 'cherry', name: 'CherryStudio', path: null, configured: false, automatic: false },
       { id: 'workbuddy', name: 'Workbuddy', path: 'C:\\\\Users\\\\zhengyunhui\\\\.workbuddy\\\\mcp.json', configured: false, automatic: true },
       { id: 'cursor', name: 'Cursor', path: 'C:\\\\Users\\\\zhengyunhui\\\\.cursor\\\\mcp.json', configured: true, automatic: true },
       { id: 'trae', name: 'Trae Work', path: 'C:\\\\Users\\\\zhengyunhui\\\\AppData\\\\Roaming\\\\TRAE SOLO CN\\\\User\\\\mcp.json', configured: false, automatic: true },
@@ -113,6 +113,7 @@ window.pmbrainDesktop = {
       { id: 'qwenpaw', name: 'QwenPaw', path: 'C:\\\\Users\\\\zhengyunhui\\\\.qwenpaw\\\\workspaces\\\\default\\\\drivers\\\\mcp\\\\pmbrain.yaml', configured: true, automatic: true, connectionState: 'connected' },
       { id: 'hermes', name: 'Hermes', path: null, configured: false, automatic: false },
       { id: 'openclaw', name: 'OpenClaw', path: null, configured: false, automatic: false },
+      { id: 'codebuddy', name: 'CodeBuddy', path: 'C:\\\\Users\\\\zhengyunhui\\\\.codebuddy\\\\mcp.json', configured: true, automatic: true },
     ],
     port: 3132
   }),
@@ -338,7 +339,7 @@ interface MockIntegration {
   connectionState?: 'connected' | 'saved' | 'invalid';
 }
 const mockIntegrations: MockIntegration[] = [
-  { id: 'codebuddy', name: 'CodeBuddy', path: 'C:\\Users\\zhengyunhui\\.codebuddy\\mcp.json', configured: true, automatic: true },
+  { id: 'cherry', name: 'CherryStudio', path: null, configured: false, automatic: false },
   { id: 'workbuddy', name: 'Workbuddy', path: 'C:\\Users\\zhengyunhui\\.workbuddy\\mcp.json', configured: true, automatic: true },
   { id: 'cursor', name: 'Cursor', path: 'C:\\Users\\zhengyunhui\\.cursor\\mcp.json', configured: true, automatic: true },
   { id: 'trae', name: 'Trae Work', path: 'C:\\Users\\zhengyunhui\\AppData\\Roaming\\TRAE SOLO CN\\User\\mcp.json', configured: false, automatic: true },
@@ -348,6 +349,7 @@ const mockIntegrations: MockIntegration[] = [
   { id: 'qwenpaw', name: 'QwenPaw', path: 'C:\\Users\\zhengyunhui\\.qwenpaw\\workspaces\\default\\drivers\\mcp\\pmbrain.yaml', configured: true, automatic: true, connectionState: 'connected' },
   { id: 'hermes', name: 'Hermes', path: null, configured: false, automatic: false },
   { id: 'openclaw', name: 'OpenClaw', path: null, configured: false, automatic: false },
+  { id: 'codebuddy', name: 'CodeBuddy', path: 'C:\\Users\\zhengyunhui\\.codebuddy\\mcp.json', configured: true, automatic: true },
 ];
 const cardsHtml = mockIntegrations.map((item) => {
   const badgeClass = item.configured ? 'configured badge' : 'badge';

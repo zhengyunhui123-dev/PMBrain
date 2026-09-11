@@ -37,11 +37,21 @@ function tempFile(name: string): string {
 }
 
 describe('desktop integration config merging', () => {
-  test('formats remote JSON, Codex, and Grok snippets with the LAN URL and bearer token', () => {
+  test('formats remote JSON, Cherry Studio, Codex, and Grok snippets with the LAN URL and bearer token', () => {
     const url = 'http://192.168.1.20:3131/mcp';
     const json = JSON.parse(formatSharedIntegrationSnippet('cursor', url, 'secret'));
     expect(json.mcpServers.pmbrain.url).toBe(url);
     expect(json.mcpServers.pmbrain.headers.Authorization).toBe('Bearer secret');
+
+    const cherry = JSON.parse(formatSharedIntegrationSnippet('cherry', url, 'secret'));
+    expect(cherry.mcpServers.pmbrain).toEqual({
+      name: 'PMBrain',
+      type: 'streamableHttp',
+      description: 'PMBrain 本地知识库',
+      isActive: true,
+      baseUrl: url,
+      headers: { Authorization: 'Bearer secret' },
+    });
 
     const codex = formatSharedIntegrationSnippet('codex', url, 'secret');
     expect(codex).toContain('[mcp_servers.pmbrain]');
@@ -566,6 +576,14 @@ describe('desktop integration config merging', () => {
     expect(result).toContain('http://127.0.0.1:3132/mcp');
     expect(result).not.toContain('Bearer first');
     expect(result.match(/\[mcp_servers\.pmbrain\]/g)?.length).toBe(1);
+  });
+
+  test('places Cherry Studio first and CodeBuddy last without writing Cherry Studio SQLite', () => {
+    const integrations = listIntegrations();
+    expect(integrations[0]).toMatchObject({
+      id: 'cherry', name: 'CherryStudio', path: null, automatic: false, configured: false,
+    });
+    expect(integrations.at(-1)).toMatchObject({ id: 'codebuddy', name: 'CodeBuddy' });
   });
 
   test('marks a freshly written and smoke-tested automatic integration as connected', async () => {
