@@ -139,12 +139,13 @@ async function main() {
 
   // Per-command --help
   if (hasHelpFlag(subArgs)) {
+    const selfHelpSub = command === 'eval' && subArgs[0] === 'brainbench';
     const op = cliOps.get(command);
-    if (op) {
+    if (op && !selfHelpSub) {
       printOpHelp(op);
       return;
     }
-    if (CLI_ONLY.has(command) && !CLI_ONLY_SELF_HELP.has(command)) {
+    if (!selfHelpSub && CLI_ONLY.has(command) && !CLI_ONLY_SELF_HELP.has(command)) {
       printCliOnlyHelp(command);
       return;
     }
@@ -1183,6 +1184,23 @@ async function handleCliOnly(command: string, args: string[]) {
   if (command === 'eval' && args[0] === 'cross-modal') {
     const { runEvalCrossModal } = await import('./commands/eval-cross-modal.ts');
     process.exit(await runEvalCrossModal(args.slice(1)));
+  }
+
+  if (command === 'eval' && args[0] === 'run-all') {
+    const { runEvalRunAll } = await import('./commands/eval-run-all.ts');
+    await runEvalRunAll(null, args.slice(1));
+    return;
+  }
+
+  if (command === 'eval' && args[0] === 'brainbench') {
+    const { runEvalBrainBench } = await import('./commands/eval-brainbench.ts');
+    if (args.includes('--llm') && !args.includes('--help') && !args.includes('-h')) {
+      const config = loadConfig() ?? ({} as GBrainConfig);
+      const { configureGateway } = await import('./core/ai/gateway.ts');
+      configureGateway(buildGatewayConfig(config));
+    }
+    await runEvalBrainBench(args.slice(1));
+    return;
   }
 
   // v0.32 EXP-5 (codex review #10): `eval takes-quality replay <receipt>`

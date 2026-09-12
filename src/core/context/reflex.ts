@@ -31,6 +31,7 @@ import {
   type PointerBlock,
 } from './retrieval-reflex.ts';
 import { resolveViaIpc, resolveSocketPath, IPC_UNAVAILABLE } from './resolve-ipc.ts';
+import type { VolunteeredPage } from './volunteer.ts';
 
 /** Per-turn resolver options shared by every rung of the ladder. */
 export interface ResolveEntitiesOpts {
@@ -270,6 +271,20 @@ export function warmReflex(): void {
   } catch {
     /* best effort */
   }
+}
+
+export function renderReflexAddition(
+  pointerText: string | null,
+  volunteered: VolunteeredPage[],
+): string | null {
+  if (!volunteered.length) return pointerText;
+  const lines: string[] = pointerText ? [pointerText, ''] : [];
+  lines.push('## Brain pages the brain volunteers');
+  for (const v of volunteered) {
+    const syn = v.synopsis ? ` — ${v.synopsis}` : '';
+    lines.push(`- **${v.display}** → \`${v.slug}\` (${v.confidence.toFixed(2)}, ${v.rationale})${syn}`);
+  }
+  return lines.join('\n');
 }
 
 /** Dispose the cached Postgres connection (tests + clean shutdown). */

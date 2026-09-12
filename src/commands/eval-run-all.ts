@@ -25,6 +25,7 @@ import { writeFileSync, mkdirSync, appendFileSync, existsSync } from 'fs';
 import { dirname, join } from 'path';
 import type { BrainEngine } from '../core/engine.ts';
 import { SEARCH_MODES, type SearchMode } from '../core/search/mode.ts';
+import { redactSecrets } from '../eval/longmemeval/run-config.ts';
 
 export interface RunAllOpts {
   help: boolean;
@@ -109,7 +110,7 @@ export function parseRunAllArgs(args: string[]): RunAllOpts {
 
 function printHelp(): void {
   process.stderr.write(
-    `gbrain eval run-all [flags]\n\n` +
+    `pmbrain eval run-all [flags]\n\n` +
     `Sweeps every requested search-lite mode × eval suite. Writes per-run results to\n` +
     `<repo>/.gbrain-evals/eval-results.jsonl. Personal brain is never touched.\n\n` +
     `Flags:\n` +
@@ -131,11 +132,11 @@ function printHelp(): void {
 }
 
 export interface EvalRunRecord {
-  schema_version: 2;
+  schema_version: 3;
   run_id: string;
   ran_at: string;
   suite: ValidSuite;
-  mode: SearchMode;
+  mode: SearchMode | 'n/a';
   commit: string;
   seed: number;
   limit?: number;
@@ -170,10 +171,29 @@ function evalResultsPath(repoRoot: string, outputDirOverride?: string): string {
   return join(repoRoot, '.gbrain-evals', 'eval-results.jsonl');
 }
 
+function redactDeep<T>(value: T): T {
+  if (typeof value === 'string') return redactSecrets(value) as unknown as T;
+  if (Array.isArray(value)) return value.map(redactDeep) as unknown as T;
+  if (value && typeof value === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) out[k] = redactDeep(v);
+    return out as T;
+  }
+  return value;
+}
+
+export function redactRunRecord(record: EvalRunRecord): EvalRunRecord {
+  return {
+    ...record,
+    params: redactDeep(record.params ?? {}),
+    ...(typeof record.error === 'string' ? { error: redactSecrets(record.error) } : {}),
+  };
+}
+
 export function persistRunRecord(repoRoot: string, record: EvalRunRecord, outputDirOverride?: string): void {
   const path = evalResultsPath(repoRoot, outputDirOverride);
   mkdirSync(dirname(path), { recursive: true });
-  appendFileSync(path, JSON.stringify(record) + '\n', 'utf-8');
+  appendFileSync(path, JSON.stringify(redactRunRecord(record)) + '\n', 'utf-8');
 }
 
 /**
@@ -314,11 +334,42 @@ export async function runEvalRunAll(_engine: BrainEngine | null, args: string[])
   // manually with the documented --mode flags and uses persistRunRecord
   // to log each completion. The methodology doc names this explicitly.
   for (const suite of opts.suites) {
+    if (suite === 'brainbench') {
+      const startedAt = Date.now();
+      const runId = `${commit}-brainbench-na-${opts.seed}`;
+      const { runBrainBenchCore } = await import('./eval-brainbench.ts');
+      const core = await runBrainBenchCore();
+      const record: EvalRunRecord = {
+        schema_version: 3,
+        run_id: runId,
+        ran_at: new Date().toISOString(),
+        suite: 'brainbench',
+        mode: 'n/a',
+        commit,
+        seed: opts.seed,
+        limit: opts.limit,
+        params: {
+          budget_usd_retrieval: opts.budgetUsdRetrieval,
+          budget_usd_answer: opts.budgetUsdAnswer,
+          parallel: opts.parallel,
+          fixtures_hash: core.fixtures_hash,
+          cells: core.cells,
+        },
+        status: core.status,
+        duration_ms: Date.now() - startedAt,
+      };
+      if (core.error) record.error = core.error;
+      persistRunRecord(repoRoot, record, opts.outputDir);
+      if (!opts.jsonOutput) {
+        process.stderr.write(`[eval run-all] ${runId}: ${record.status}\n`);
+      }
+      continue;
+    }
     for (const mode of opts.modes) {
       const startedAt = Date.now();
       const runId = `${commit}-${suite}-${mode}-${opts.seed}`;
       const record: EvalRunRecord = {
-        schema_version: 2,
+        schema_version: 3,
         run_id: runId,
         ran_at: new Date().toISOString(),
         suite: suite as ValidSuite,
