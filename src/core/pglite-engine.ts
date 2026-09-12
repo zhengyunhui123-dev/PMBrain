@@ -772,6 +772,10 @@ export class PGLiteEngine implements BrainEngine {
         EXISTS (SELECT 1 FROM information_schema.columns
                 WHERE table_schema='public' AND table_name='pages' AND column_name='generation') AS pages_generation_exists,
         EXISTS (SELECT 1 FROM information_schema.tables
+                WHERE table_schema='public' AND table_name='timeline_entries') AS timeline_entries_exists,
+        EXISTS (SELECT 1 FROM information_schema.columns
+                WHERE table_schema='public' AND table_name='timeline_entries' AND column_name='event_page_id') AS timeline_event_page_id_exists,
+        EXISTS (SELECT 1 FROM information_schema.tables
                 WHERE table_schema='public' AND table_name='dream_verdicts') AS dream_verdicts_exists,
         EXISTS (SELECT 1 FROM information_schema.columns
                 WHERE table_schema='public' AND table_name='dream_verdicts' AND column_name='expires_at') AS dream_verdicts_expires_at_exists,
@@ -828,6 +832,8 @@ export class PGLiteEngine implements BrainEngine {
       sources_cr_mode_exists: boolean;
       sources_trust_fm_exists: boolean;
       pages_generation_exists: boolean;
+      timeline_entries_exists: boolean;
+      timeline_event_page_id_exists: boolean;
       dream_verdicts_exists: boolean;
       dream_verdicts_expires_at_exists: boolean;
       minion_jobs_exists: boolean;
@@ -904,6 +910,7 @@ export class PGLiteEngine implements BrainEngine {
     // body; bootstrap only needs to add the column on pre-v91 brains so
     // the CREATE INDEX doesn't crash.
     const needsPagesGeneration = probe.pages_exists && !probe.pages_generation_exists;
+    const needsTimelineEventPageId = probe.timeline_entries_exists && !probe.timeline_event_page_id_exists;
     const needsDreamVerdictsExpiresAt = probe.dream_verdicts_exists
       && !probe.dream_verdicts_expires_at_exists;
     const needsMinionJobsBootstrap = probe.minion_jobs_exists
@@ -923,6 +930,7 @@ export class PGLiteEngine implements BrainEngine {
         && !needsPagesLinksExtractedAt
         && !needsPagesProvenance
         && !needsContextualRetrievalColumns && !needsPagesGeneration
+        && !needsTimelineEventPageId
         && !needsDreamVerdictsExpiresAt && !needsMinionJobsBootstrap) return;
 
     process.stderr.write('  Forward-reference bootstrap required, adding missing schema prerequisites\n');
@@ -1160,6 +1168,12 @@ export class PGLiteEngine implements BrainEngine {
       // the column. v91 is idempotent.
       await this.db.exec(`
         ALTER TABLE pages ADD COLUMN IF NOT EXISTS generation BIGINT NOT NULL DEFAULT 1;
+      `);
+    }
+
+    if (needsTimelineEventPageId) {
+      await this.db.exec(`
+        ALTER TABLE timeline_entries ADD COLUMN IF NOT EXISTS event_page_id INTEGER;
       `);
     }
 

@@ -413,6 +413,8 @@ export class PostgresEngine implements BrainEngine {
       sources_archive_expires_at_exists: boolean;
       pages_last_retrieved_at_exists: boolean;
       pages_links_extracted_at_exists: boolean;
+      timeline_entries_exists: boolean;
+      timeline_event_page_id_exists: boolean;
       dream_verdicts_exists: boolean;
       dream_verdicts_expires_at_exists: boolean;
       minion_jobs_exists: boolean;
@@ -501,6 +503,10 @@ export class PostgresEngine implements BrainEngine {
                 WHERE table_schema = current_schema() AND table_name = 'sources' AND column_name = 'trust_frontmatter_overrides') AS sources_trust_fm_exists,
         EXISTS (SELECT 1 FROM information_schema.columns
                 WHERE table_schema = current_schema() AND table_name = 'pages' AND column_name = 'generation') AS pages_generation_exists,
+        EXISTS (SELECT 1 FROM information_schema.tables
+                WHERE table_schema = current_schema() AND table_name = 'timeline_entries') AS timeline_entries_exists,
+        EXISTS (SELECT 1 FROM information_schema.columns
+                WHERE table_schema = current_schema() AND table_name = 'timeline_entries' AND column_name = 'event_page_id') AS timeline_event_page_id_exists,
         EXISTS (SELECT 1 FROM information_schema.tables
                 WHERE table_schema = current_schema() AND table_name = 'dream_verdicts') AS dream_verdicts_exists,
         EXISTS (SELECT 1 FROM information_schema.columns
@@ -612,6 +618,7 @@ export class PostgresEngine implements BrainEngine {
     // it. Pre-v91 brains crash without the column; bootstrap adds it before
     // SCHEMA_SQL replay creates the index.
     const needsPagesGeneration = probe.pages_exists && !probeCr.pages_generation_exists;
+    const needsTimelineEventPageId = probe.timeline_entries_exists && !probe.timeline_event_page_id_exists;
     const needsDreamVerdictsExpiresAt = probeCr.dream_verdicts_exists === true
       && probeCr.dream_verdicts_expires_at_exists !== true;
     const needsMinionJobsBootstrap = probeCr.minion_jobs_exists === true
@@ -630,6 +637,7 @@ export class PostgresEngine implements BrainEngine {
         && !needsPagesLinksExtractedAt
         && !needsPagesProvenance
         && !needsContextualRetrievalColumns && !needsPagesGeneration
+        && !needsTimelineEventPageId
         && !needsDreamVerdictsExpiresAt && !needsMinionJobsBootstrap) return;
 
     process.stderr.write('  Forward-reference bootstrap required, adding missing schema prerequisites\n');
@@ -865,6 +873,12 @@ export class PostgresEngine implements BrainEngine {
       // later; bootstrap only adds the column. v91 is idempotent.
       await conn.unsafe(`
         ALTER TABLE pages ADD COLUMN IF NOT EXISTS generation BIGINT NOT NULL DEFAULT 1;
+      `);
+    }
+
+    if (needsTimelineEventPageId) {
+      await conn.unsafe(`
+        ALTER TABLE timeline_entries ADD COLUMN IF NOT EXISTS event_page_id INTEGER;
       `);
     }
 
