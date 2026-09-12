@@ -355,6 +355,7 @@ export interface GBrainConfig {
     auto_writeback_transient_ttl?: string;
     visibility_posture?: string;
   };
+  integrations?: { memorable?: { enabled?: boolean } };
 }
 
 /**
@@ -840,6 +841,7 @@ export const KNOWN_CONFIG_KEYS: readonly string[] = [
   'provider_base_urls',
   'provider_touchpoint_base_urls',
   'provider_touchpoint_api_keys',
+  'integrations.memorable.enabled',
   'storage',
   'eval',
   'eval.capture',
@@ -965,6 +967,11 @@ export const KNOWN_CONFIG_KEY_PREFIXES: readonly string[] = [
   'provider_touchpoint_base_urls.', // per-provider, per-touchpoint base URL overrides
   'content_sanity.',    // v0.41 content-sanity tunables
 ];
+
+export function isConfigTruthy(raw: unknown): boolean {
+  return typeof raw === 'string'
+    && ['true', '1', 'yes', 'on'].includes(raw.trim().toLowerCase());
+}
 
 export function saveConfig(config: GBrainConfig): void {
   mkdirSync(getConfigDir(), { recursive: true });
