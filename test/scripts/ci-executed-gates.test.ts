@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { resolveBash } from '../../scripts/ci-pr-preview.ts';
 
 for (const [file, name, gates] of [
-  ['test.yml', 'test-status', ['gitleaks', 'verify', 'serial-tests', 'slow-eval-longmemeval', 'slow-entity-resolve-perf', 'test', 'desktop-runtime']],
+  ['test.yml', 'test-status', ['gitleaks', 'verify', 'serial-tests', 'slow-eval-longmemeval', 'slow-entity-resolve-perf', 'brainbench', 'test', 'desktop-runtime']],
   ['e2e.yml', 'e2e-status', ['jsonb-parity', 'tier1', 'tier2']],
 ] as const) {
   test(`${file} requires every execution lane even with an old success cache`, () => {

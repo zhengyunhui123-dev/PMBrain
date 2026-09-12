@@ -1,13 +1,13 @@
 /**
- * gbrain eval — Retrieval Evaluation Command
+ * pmbrain eval — Retrieval Evaluation Command
  *
  * Runs search quality benchmarks against user-defined ground truth (qrels).
  * Supports single-config runs and A/B comparison mode for tuning parameters.
  *
  * Usage:
- *   gbrain eval --qrels <path|json>
- *   gbrain eval --qrels <path> --config-a <path|json> --config-b <path|json>
- *   gbrain eval --qrels <path> --strategy hybrid --rrf-k 30 --k 5
+ *   pmbrain eval --qrels <path|json>
+ *   pmbrain eval --qrels <path> --config-a <path|json> --config-b <path|json>
+ *   pmbrain eval --qrels <path> --strategy hybrid --rrf-k 30 --k 5
  */
 
 import { readFileSync, existsSync } from 'fs';
@@ -21,7 +21,7 @@ import {
 } from '../core/search/eval.ts';
 
 export async function runEvalCommand(engine: BrainEngine, args: string[]): Promise<void> {
-  // v0.25.0 — sub-subcommand dispatch. Bare `gbrain eval --qrels ...`
+  // v0.25.0 — sub-subcommand dispatch. Bare `pmbrain eval --qrels ...`
   // falls through to the legacy IR-metrics flow so existing callers
   // don't break.
   const sub = args[0];
@@ -269,7 +269,7 @@ function printSingleTable(report: EvalReport): void {
   const { config, k, queries } = report;
   const label = config.name ?? config.strategy ?? 'hybrid';
 
-  console.log(`\ngbrain eval — ${queries.length} quer${queries.length === 1 ? 'y' : 'ies'} · strategy: ${label} · k=${k}\n`);
+  console.log(`\npmbrain eval — ${queries.length} quer${queries.length === 1 ? 'y' : 'ies'} · strategy: ${label} · k=${k}\n`);
 
   const COL_QUERY = 36;
   const COL_NUM = 7;
@@ -305,7 +305,7 @@ function printABTable(reportA: EvalReport, reportB: EvalReport, k: number): void
   const labelB = reportB.config.name ?? 'Config B';
   const n = reportA.queries.length;
 
-  console.log(`\ngbrain eval — ${n} quer${n === 1 ? 'y' : 'ies'} · A/B comparison · k=${k}\n`);
+  console.log(`\npmbrain eval — ${n} quer${n === 1 ? 'y' : 'ies'} · A/B comparison · k=${k}\n`);
 
   const COL_QUERY = 34;
   const COL_METRIC = 8;

@@ -11,6 +11,8 @@ import {
   estimateRunCost,
   evaluateCostGuard,
   persistRunRecord,
+  runEvalRunAll,
+  _setBrainBenchCoreForTests,
   type EvalRunRecord,
 } from '../src/commands/eval-run-all.ts';
 
@@ -213,5 +215,25 @@ describe('persistRunRecord audit trail', () => {
     expect(parsed.mode).toBe('n/a');
     expect(parsed.suite).toBe('brainbench');
     expect(parsed.params.mode_independent).toBeUndefined();
+  });
+
+  test('eval run-all --suites brainbench invokes the in-process core (cannot silently skip)', async () => {
+    let calls = 0;
+    _setBrainBenchCoreForTests(async () => {
+      calls += 1;
+      return { status: 'completed', fixtures_hash: 'spy-hash', cells: { 'openclaw/push': { push_recall: 1 } } };
+    });
+    try {
+      await runEvalRunAll(null, ['--suites', 'brainbench', '--output', tmp, '--json']);
+      expect(calls).toBe(1);
+      const parsed = JSON.parse(readFileSync(join(tmp, 'eval-results.jsonl'), 'utf-8').trim());
+      expect(parsed.suite).toBe('brainbench');
+      expect(parsed.mode).toBe('n/a');
+      expect(parsed.status).toBe('completed');
+      expect(parsed.params.fixtures_hash).toBe('spy-hash');
+      expect(parsed.params.cells['openclaw/push'].push_recall).toBe(1);
+    } finally {
+      _setBrainBenchCoreForTests(null);
+    }
   });
 });

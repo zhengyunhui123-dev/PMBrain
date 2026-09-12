@@ -4,7 +4,7 @@
  * Type layer for the fixture corpus, harness adapters, and result documents.
  * The fixture + result shapes are PUBLISHED interchange formats (mirrored as
  * JSON Schemas in evals/brainbench/schema/) so foreign runners — notably the
- * sibling gbrain-evals repo — can drive `gbrain eval brainbench --fixtures DIR
+ * sibling gbrain-evals repo — can drive `pmbrain eval brainbench --fixtures DIR
  * --gold DIR --json --out FILE` against their own corpora. Breaking changes
  * bump FIXTURE_SCHEMA_VERSION / RESULT_SCHEMA_VERSION; additive-only within a
  * version.

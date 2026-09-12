@@ -1,9 +1,9 @@
 /**
- * v0.32.3 — `gbrain eval run-all` orchestrator.
+ * v0.32.3 — `pmbrain eval run-all` orchestrator.
  *
  * Sweeps every requested mode × suite combination and writes per-run
  * results to `<repo>/.gbrain-evals/eval-results.jsonl` [CDX-23]. Personal
- * brain (~/.gbrain) is never touched; the repo's git history is the
+ * brain (~/.pmbrain) is never touched; the repo's git history is the
  * audit trail.
  *
  * Sequential default per D9: --parallel N is opt-in. Modes run one after
@@ -196,6 +196,26 @@ export function persistRunRecord(repoRoot: string, record: EvalRunRecord, output
   appendFileSync(path, JSON.stringify(redactRunRecord(record)) + '\n', 'utf-8');
 }
 
+export type BrainBenchCoreResult = {
+  status: 'completed' | 'failed';
+  fixtures_hash?: string;
+  cells?: Record<string, Record<string, number>>;
+  error?: string;
+};
+
+let brainBenchCoreForTests: (() => Promise<BrainBenchCoreResult>) | null = null;
+
+/** Test seam: stub the in-process BrainBench runner so run-all cannot silently skip it. */
+export function _setBrainBenchCoreForTests(fn: (() => Promise<BrainBenchCoreResult>) | null): void {
+  brainBenchCoreForTests = fn;
+}
+
+async function invokeBrainBenchCore(): Promise<BrainBenchCoreResult> {
+  if (brainBenchCoreForTests) return brainBenchCoreForTests();
+  const { runBrainBenchCore } = await import('./eval-brainbench.ts');
+  return runBrainBenchCore();
+}
+
 /**
  * Estimate per-run cost. Rough heuristic: per-mode estimates × #questions.
  * The methodology doc documents the assumption. Used by the cost guard;
@@ -312,33 +332,14 @@ export async function runEvalRunAll(_engine: BrainEngine | null, args: string[])
     process.stderr.write(`[eval run-all] ${guard.reason}, proceeding.\n`);
   }
 
-  // v0.32.3 Implementation note: per-suite execution is the operator's
-  // responsibility today — `gbrain eval run-all` is the orchestrator's
-  // shape + cost guard + audit trail. The per-suite per-mode calls land
-  // as a follow-up: each suite's CLI is already exposed (gbrain eval
-  // longmemeval --mode X, gbrain eval replay --mode X), so wiring them
-  // into a sequential or parallel sweep is mechanical glue once the
-  // benchmarking environment + dataset paths are configured.
-  //
-  // What ships in v0.32.3:
-  //   - Argv parser + budget guard + persist hook (audit trail)
-  //   - --json estimate-only mode (CI integration without spending)
-  //   - Per-suite hook surface (persistRunRecord)
-  //
-  // What's a v0.32.4 follow-up:
-  //   - In-process invocation of the longmemeval / replay / brainbench
-  //     runners with a streaming-progress aggregator
-  //   - --parallel N semaphore for the multi-mode sweep
-  //
-  // For v0.32.3 release-time, the operator runs the per-suite commands
-  // manually with the documented --mode flags and uses persistRunRecord
-  // to log each completion. The methodology doc names this explicitly.
+  // BrainBench is search-mode-independent (decision 16): run ONCE per
+  // sweep, in-process, recorded under mode 'n/a' — never multiplied by
+  // modes. longmemeval / replay remain operator-run CLI stubs until wired.
   for (const suite of opts.suites) {
     if (suite === 'brainbench') {
       const startedAt = Date.now();
       const runId = `${commit}-brainbench-na-${opts.seed}`;
-      const { runBrainBenchCore } = await import('./eval-brainbench.ts');
-      const core = await runBrainBenchCore();
+      const core = await invokeBrainBenchCore();
       const record: EvalRunRecord = {
         schema_version: 3,
         run_id: runId,

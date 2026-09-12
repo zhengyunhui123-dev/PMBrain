@@ -18,6 +18,7 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { execSync } from 'node:child_process';
+import { flushThenExit } from '../core/cli-force-exit.ts';
 import { cliOptsToProgressOptions, getCliOptions } from '../core/cli-options.ts';
 import { createProgress } from '../core/progress.ts';
 import { buildMetricGlossaryMeta } from '../core/eval/metric-glossary.ts';
@@ -234,16 +235,12 @@ function gitHeadSha(): string {
 /**
  * Bun discards queued stdout on process.exit and PGLite stomps
  * process.exitCode on its own ticks — hold the verdict locally and exit
- * through the #2084 central seam (write-fence + ref'd aliveness grace),
- * which exists for exactly this trap.
+ * through flushThenExit (write-fence + ref'd aliveness grace).
  */
-function flushThenExit(code: number): never {
-  process.exitCode = code;
-  process.exit(code);
-}
-
 async function exitWith(code: 0 | 1 | 2): Promise<never> {
   flushThenExit(code);
+  // flushThenExit exits after its bounded fence + grace; never resolve.
+  return new Promise<never>(() => {});
 }
 
 function readBaselineFile(path: string): BrainBenchBaseline {

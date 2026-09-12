@@ -24,10 +24,10 @@ Every scoreboard row carries a `seam` column:
 |---|---|---|
 | `openclaw` | **production** | The shipped OpenClaw context-engine pipeline, byte-for-byte (`extractCandidates` → `resolveEntitiesToPointers`, 3-pointer budget, prior-context suppression, markdown pointer block), **plus the volunteer arm**: a 4-turn window (`DEFAULT_WINDOW_TURNS` parity) drives the SAME `volunteerStage` primitive production runs (0.7 confidence gate, ≤3 pages, deduped against the turn's pointers) and the SAME `renderReflexAddition` wire shape — the VOLUNTEER-STAGE logic cannot drift between bench and production because both consume one primitive. **Bench-pinned deviations (disclosed):** (a) the harness replays USER turns only — assistant turns fold into `priorContext` — so the adapter's 4-turn window is the last 4 *user* turns while production's `getWindowTurns` windows the last 4 *mixed-role* turns; assistant-introduced entities (a designed volunteer input) are therefore exercised as suppression input, not window input, and per-window user-content depth runs ~2x production; (b) the parity claim is scoped to Arm 2 — bench Arm 1 uses per-turn `extractCandidates` + `'prior-context'` suppression where production's windowed lane uses window extraction + `'slug-only'`. Both deviations apply equally to every banked baseline, so deltas between baselines are internally valid; assistant-role window fidelity is a filed harness change (TODOS) that requires its own rebank. Orchestration differences (config gate, heartbeat, 1500ms timeout wrapper) are deliberately ungraded. |
 | `claude-code` | **contract** | PMBrain's hook surface is writeback-only (`stop` / `session-end`), so this row does **not** drive GBrain's UserPromptSubmit + resolve-IPC path. It grades the same reflex + volunteer primitives under a 2-pointer budget with adapter-owned prior-injection suppression. |
-| `codex` | **contract** | The fragments model: a static entity-index preamble (computed once, slugs not counted as injections) + at most ONE per-turn fragment. Fixture conversations round-trip through the REAL rollout format + the shipped parser (`src/core/transcripts/codex.ts`) for turn selection, so parser drift tanks the row visibly. Fragment DELIVERY is a harness-shaped assumption (there is no shipped codex injection path); the full production flip is a filed follow-up. |
+| `codex` | **contract** | The fragments model: a static entity-index preamble (computed once, slugs not counted as injections) + at most ONE per-turn fragment. Fixture conversations round-trip through the REAL Codex rollout format (`session_meta` / `event_msg`) + the shipped parser (`parseSessionExport` in `src/core/conversation-parser/session-import.ts`) for turn selection, so parser drift tanks the row visibly. Fragment DELIVERY is a harness-shaped assumption (there is no shipped Codex injection path); the full production flip is a filed follow-up. |
 
 **Contract rows do NOT measure third-party harness behavior.** They measure
-gbrain's primitives under each harness's injection-shape constraints. The rows
+pmbrain's primitives under each harness's injection-shape constraints. The rows
 are comparable because fixtures, brain, and gold are identical — only the seam
 varies. Also not graded, by design: the production orchestrator's
 config gate, integration heartbeat, and 1500 ms timeout wrapper.
@@ -74,8 +74,8 @@ not a bug in the bench. The committed baseline reads `know_to_ask_failure_rate`
 
 ## Pre-registered expectations
 
-1. The production seam (openclaw) leads `push_recall` strictly: 3-pointer > 2-pointer > 1-fragment budgets. *(Observed in the committed baseline: 1.00 / 1.00 / 0.55. The ordering hypothesis holds for CONTRACT rows only: both production rows (openclaw, claude-code) carry a volunteer arm and real dedupe in their turn_context assembly, so they exceed their raw pointer budgets by design; the budget gradient survives only on the codex contract row, whose 1-fragment structural ceiling is 57/96 = 0.5938.)*
-2. A no-suppression contract seam is the only seam with `false_fire_rate` > 0. *(Observed: 0 on every harness. The claude-code row is a production seam whose real transcript dedupe suppresses re-injection, so no contract row without suppression remains in the matrix.)*
+1. The production seam (openclaw) leads `push_recall` strictly: 3-pointer > 2-pointer > 1-fragment budgets. *(Observed in the committed baseline: 1.00 / 1.00 / 0.55. The ordering hypothesis holds for CONTRACT rows only: openclaw is the production row; claude-code is a **contract** row (writeback-only hook surface, no UserPromptSubmit + resolve-IPC). Both still carry a volunteer arm, so they exceed their raw pointer budgets by design; the budget gradient survives only on the Codex contract row, whose 1-fragment structural ceiling is 57/96 = 0.5938.)*
+2. A no-suppression contract seam is the only seam with `false_fire_rate` > 0. *(Observed: 0 on every harness. The claude-code row is a **contract** seam whose adapter-owned prior-injection suppression still suppresses re-injection, so no contract row without suppression remains in the matrix.)*
 3. `write_back_fidelity` = 1.0 and `provenance_accuracy` = 1.0 in deterministic mode — the production pipeline must not lose or mis-attribute gold facts it was handed. Anything below 1.0 is a pipeline bug, not benchmark noise.
 4. `source_isolation_violations` = 0 everywhere.
 5. `push_precision` = 1.0 at v1 (exact-match resolution arms cannot inject an irrelevant page on this corpus); expected to dip below 1.0 when fuzzy/semantic resolution lands — that dip is the precision/recall trade made visible.
@@ -83,7 +83,7 @@ not a bug in the bench. The committed baseline reads `know_to_ask_failure_rate`
 The quality floors derived from these expectations are an **executable test**
 (`test/brainbench-floors.test.ts`), asserted against the committed baseline on
 every suite run: `know_to_ask_failure_rate` ≤ 0.05, `false_fire_rate` ≤ 0.03,
-`push_precision` ≥ 0.95, `push_recall` ≥ 0.88 / 0.72 / 0.52
+`push_precision` ≥ 0.95, `push_recall` ≥ 0.95 / 0.72 / 0.52
 (openclaw / claude-code / codex), `source_isolation_violations` = 0 in every
 cell. A baseline update that violates a floor fails the suite — a threshold
 violation cannot be banked by blessing a new baseline.

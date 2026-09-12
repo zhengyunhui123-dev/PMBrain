@@ -2328,6 +2328,8 @@ export interface ChatOpts {
   messages: ChatMessage[];
   tools?: ChatToolDef[];
   maxTokens?: number;
+  /** Sampling temperature. The LongMemEval judge pins 0 (official scorer). */
+  temperature?: number;
   abortSignal?: AbortSignal;
   /**
    * Anthropic-specific: cache the system prompt + last tool def. Silently
@@ -2658,6 +2660,7 @@ async function chatOnce(opts: ChatOpts): Promise<ChatResult> {
       messages: toModelMessages(repairedMessages) as any,
       tools: opts.tools && opts.tools.length > 0 ? tools : undefined,
       maxOutputTokens: opts.maxTokens ?? 4096,
+      ...(opts.temperature !== undefined ? { temperature: opts.temperature } : {}),
       abortSignal: opts.abortSignal,
       providerOptions: Object.keys(providerOptions).length > 0 ? providerOptions : undefined,
     };

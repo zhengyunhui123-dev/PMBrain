@@ -1215,8 +1215,8 @@ async function handleCliOnly(command: string, args: string[]) {
   }
 
   // v0.28.8: longmemeval brings its own in-memory PGLite. Bypassing
-  // connectEngine here keeps `gbrain eval longmemeval --help` and benchmark
-  // runs working on machines that have no `~/.gbrain/config.json` configured.
+  // connectEngine here keeps `pmbrain eval longmemeval --help` and benchmark
+  // runs working on machines that have no `~/.pmbrain/config.json` configured.
   //
   // v0.35.1.1: still need to configureGateway() so the in-memory brain's
   // import + hybridSearch can embed via the configured provider. Reads

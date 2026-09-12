@@ -149,6 +149,7 @@ export async function runJudge(opts: RunJudgeOpts): Promise<JudgeOutcome> {
         ...(opts.system !== undefined ? { system: opts.system } : {}),
         messages: [{ role: 'user', content: opts.prompt }],
         maxTokens: opts.maxTokens,
+        temperature: opts.temperature,
         ...(opts.signal ? { abortSignal: opts.signal } : {}),
       });
     } catch (err) {
@@ -162,7 +163,8 @@ export async function runJudge(opts: RunJudgeOpts): Promise<JudgeOutcome> {
     }
     usage.input_tokens += res.usage?.input_tokens ?? 0;
     usage.output_tokens += res.usage?.output_tokens ?? 0;
-    responseModel = res.model ?? null;
+    const snapshot = (res as ChatResult & { responseModel?: string }).responseModel;
+    responseModel = snapshot ?? (typeof res.model === 'string' && res.model !== opts.model ? res.model : null);
     const raw = typeof res.text === 'string' ? res.text : '';
     if (res.stopReason === 'refusal' || res.stopReason === 'content_filter') {
       return { kind: 'error', judge_error: 'refusal', detail: `stop_reason=${res.stopReason}`, ...base(raw) };
