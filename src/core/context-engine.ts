@@ -677,9 +677,15 @@ export function createGBrainContextEngine(ctx: {
     },
 
     async compact(params) {
-      // Lazy SDK load on first method call (was top-level await pre-L0-B).
+      try {
+        const { captureAndRelayOpenclawCompact } = await import('./context/memorable-capture.ts');
+        await captureAndRelayOpenclawCompact({
+          sessionId: params.sessionId,
+          sessionFile: params.sessionFile,
+          workspaceDir,
+        });
+      } catch { /* receipt is additive — never fails the checkpoint */ }
       await ensureSdkLoaded();
-      // Delegate entirely to legacy runtime compaction
       return _delegateCompactionToRuntime?.(params) ?? { ok: true, compacted: false, reason: 'no-runtime' };
     },
   };

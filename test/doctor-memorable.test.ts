@@ -44,6 +44,7 @@ function isolate(parent: string, extra: Record<string, string | undefined> = {})
   return {
     ...ISOLATE,
     PMBRAIN_HOME: parent,
+    GBRAIN_HOME: join(parent, 'no-gbrain-home'),
     CODEX_HOME: join(parent, 'codex-absent'),
     ...extra,
   };
@@ -103,6 +104,27 @@ describe('memorable_relay_health rung ladder', () => {
         const c = await buildMemorableRelayCheck();
         expect(c.status).toBe('ok');
         expect(c.message).toContain('kill switch');
+        expect(c.message).toContain('GBRAIN_MEMORABLE');
+        expect(c.message).not.toContain('PMBRAIN_MEMORABLE kill switch');
+      });
+    } finally { rmSync(home, { recursive: true, force: true }); }
+  });
+
+  test('~/.gbrain Memorable-on while PMBrain is off: ok message names the pmbrain fix', async () => {
+    const home = tempHome();
+    try {
+      seedPmbrainConfig(home, null);
+      const gbrainParent = join(home, 'legacy');
+      mkdirSync(join(gbrainParent, '.gbrain'), { recursive: true });
+      writeFileSync(join(gbrainParent, '.gbrain', 'config.json'), JSON.stringify({
+        engine: 'pglite',
+        integrations: { memorable: { enabled: true } },
+      }));
+      await withEnv(isolate(home, { GBRAIN_HOME: gbrainParent }), async () => {
+        const c = await buildMemorableRelayCheck();
+        expect(c.status).toBe('ok');
+        expect(c.message).toContain('pmbrain config set integrations.memorable.enabled true --yes');
+        expect(c.details?.gbrain_memorable_enabled).toBe(true);
       });
     } finally { rmSync(home, { recursive: true, force: true }); }
   });

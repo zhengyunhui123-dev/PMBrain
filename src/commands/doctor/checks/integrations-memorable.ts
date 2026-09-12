@@ -32,8 +32,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { loadConfig } from '../../../core/config.ts';
-import { CODEX_HOOK_OWNERSHIP_TOKEN } from '../../../core/bootstrap/codex-hooks.ts';
-import { codexHooksPath } from '../../../core/bootstrap/host-specs.ts';
+import { CODEX_HOOK_MARKER, writebackAgentPaths } from '../../../core/bootstrap/writeback-agents.ts';
 import {
   clampRelayCause,
   lastRelayResult,
@@ -70,11 +69,18 @@ export async function buildMemorableRelayCheck(): Promise<Check> {
       if (gate.reason === 'disabled' && gbrainMemorableEnabledOutOfBand()) {
         details.gbrain_memorable_enabled = true;
         details.pmbrain_fix = `${ENABLE_FIX} --yes`;
+        return {
+          name: NAME,
+          status: 'ok',
+          message:
+            `memorable relay off (default). ~/.gbrain has Memorable enabled; run \`${ENABLE_FIX} --yes\` to opt in on PMBrain.`,
+          details: { ...details, reason: gate.reason },
+        };
       }
       return {
         name: NAME,
         status: 'ok',
-        message: `memorable relay off (${gate.reason === 'kill_switch' ? 'PMBRAIN_MEMORABLE kill switch' : 'default'})`,
+        message: `memorable relay off (${gate.reason === 'kill_switch' ? killSwitchLabel() : 'default'})`,
         details: { ...details, reason: gate.reason },
       };
     }
@@ -155,7 +161,7 @@ export async function buildMemorableRelayCheck(): Promise<Check> {
         status: 'warn',
         message:
           'codex SessionEnd hook is wired but no codex-harness receipt appears in the recent receipt window — codex hooks fail ' +
-          'SILENTLY when their config.toml trust entry is stale/missing. Re-run `pmbrain bootstrap hooks --harness codex` to re-trust.',
+          'SILENTLY when their config.toml trust entry is stale/missing. Re-trust via the 长期记忆 writeback installer (SessionEnd command contains `pmbrain hook session-end --harness codex`).',
         details: { ...details, reason: 'codex_hooks_never_fired' },
       };
     }
@@ -164,6 +170,16 @@ export async function buildMemorableRelayCheck(): Promise<Check> {
   } catch {
     return { name: NAME, status: 'warn', message: 'memorable relay state unreadable', details: { out_of_band_settable: true } };
   }
+}
+
+function killSwitchLabel(): string {
+  const re = /^(0|false|off|no|n|disable|disabled|none)$/i;
+  const pm = re.test((process.env.PMBRAIN_MEMORABLE ?? '').trim());
+  const gb = re.test((process.env.GBRAIN_MEMORABLE ?? '').trim());
+  if (pm && gb) return 'PMBRAIN_MEMORABLE/GBRAIN_MEMORABLE kill switch';
+  if (pm) return 'PMBRAIN_MEMORABLE kill switch';
+  if (gb) return 'GBRAIN_MEMORABLE kill switch';
+  return 'Memorable kill switch';
 }
 
 function gbrainMemorableEnabledOutOfBand(): boolean {
@@ -181,9 +197,9 @@ function gbrainMemorableEnabledOutOfBand(): boolean {
 
 function codexHooksWired(): boolean {
   try {
-    const p = codexHooksPath();
+    const p = join(writebackAgentPaths().codexHome, 'hooks.json');
     if (!existsSync(p)) return false;
-    return readFileSync(p, 'utf8').includes(CODEX_HOOK_OWNERSHIP_TOKEN);
+    return readFileSync(p, 'utf8').includes(CODEX_HOOK_MARKER);
   } catch {
     return false;
   }
