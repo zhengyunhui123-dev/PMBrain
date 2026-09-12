@@ -3,10 +3,9 @@
  *
  * connect (skipped when tokens exist) → register the google source (if
  * needed) → wall-clock-budgeted first sync (newest mail first; the
- * remainder resumes automatically on later syncs) → the first
- * `pmbrain waiting` digest. The magical moment arrives in the same session
- * as consent; every step is idempotent, so re-running resumes wherever the
- * last run stopped.
+ * remainder resumes automatically on later syncs). Every step is
+ * idempotent, so re-running resumes wherever the last run stopped.
+ * Open Loops / `waiting` is PR5 and is not claimed here.
  */
 
 import { credentialId, openVault } from '../core/creds/vault.ts';
@@ -44,7 +43,7 @@ export async function runGoogleSetup(args: string[]): Promise<void> {
   }
   if (!account) return;
 
-  // Step 2 — register the source + first sync + waiting digest.
+  // Step 2 — register the source + first sync.
   const { runGoogleSetupTail } = await import('./google-setup-tail.ts');
   await runGoogleSetupTail({ account, json, args });
 }

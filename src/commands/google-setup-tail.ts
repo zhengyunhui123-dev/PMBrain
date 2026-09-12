@@ -1,14 +1,12 @@
 /**
- * google-setup tail — source registration + first sync + first `waiting`
- * digest (the magical moment). Split from google-setup.ts so the connect
- * half stays engine-free.
+ * google-setup tail — source registration + first sync.
+ * Split from google-setup.ts so the connect half stays engine-free.
  *
  * First-sync shape: runGoogleSync's backfill walks newest→oldest with a
  * batch-committed floor cursor, so the setup sync runs under a wall-clock
- * budget (default 90s) and whatever landed is the NEWEST mail — exactly
- * what `pmbrain waiting` needs. The remainder resumes on every later sync
- * (autopilot, cron, or a queued background job when a worker is running);
- * nothing is lost by the budget, and setup says so honestly.
+ * budget (default 90s) and whatever landed is the NEWEST mail. The
+ * remainder resumes on every later sync (autopilot, cron, or a queued
+ * background job when a worker is running). Open Loops / `waiting` is PR5.
  */
 
 import type { BrainEngine } from '../core/engine.ts';
@@ -117,18 +115,20 @@ export async function runGoogleSetupTail(input: SetupTailInput): Promise<void> {
     }
 
     // ── Step 4: first digest (Open Loops / PR5 — fail-open until waiting lands)
+    let waitingOk = false;
     try {
       const loopsPath = './loops.ts';
       const { runWaiting } = await import(loopsPath) as {
         runWaiting: (engine: BrainEngine, args: string[]) => Promise<void>;
       };
       await runWaiting(engine, input.json ? ['--json', '--stale-ok'] : ['--stale-ok']);
+      waitingOk = true;
     } catch {
       process.stderr.write('Open Loops digest skipped (waiting command not installed yet).\n');
     }
     const { appendGoogleHeartbeat } = await import('./google.ts');
     appendGoogleHeartbeat('first_sync_ok', 'ok', { source_id: sourceId });
-    appendGoogleHeartbeat('first_waiting_ok', 'ok');
+    if (waitingOk) appendGoogleHeartbeat('first_waiting_ok', 'ok');
   } finally {
     await engine.disconnect().catch(() => {});
   }

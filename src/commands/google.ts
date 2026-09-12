@@ -378,10 +378,11 @@ export async function runGoogleConnect(args: string[]): Promise<void> {
     // Relay fast path (hosted verified client; tokens still stored locally).
     if (f.via) {
       // Token custody rides this URL: whatever host it names brokers the
-      // consent AND receives the claim. https only, and the 'gbrain.io'
-      // shorthand resolves exclusively through the GBRAIN_OAUTH_RELAY_URL
-      // feature gate — no hardcoded default that could go live by surprise.
-      const base = f.via === 'gbrain.io' ? relayUrl() : f.via.replace(/\/+$/, '');
+      // consent AND receives the claim. https only. `--via relay` (and the
+      // legacy `gbrain.io` alias) resolve exclusively through
+      // PMBRAIN_OAUTH_RELAY_URL — no hardcoded default that could go live
+      // by surprise.
+      const base = f.via === 'relay' || f.via === 'gbrain.io' ? relayUrl() : f.via.replace(/\/+$/, '');
       if (!base) throw new CredentialError('relay_disabled');
       if (!/^https:\/\//i.test(base)) {
         throw new CredentialError('relay_unreachable', undefined, `refusing non-https relay base: ${base}`);
@@ -800,11 +801,11 @@ Subcommands:
                --code "<redirect-url>"  complete a pending --paste flow
                --no-browser             never try to open a browser
                --port <n>               fixed loopback port
-               --via gbrain.io          hosted fast path (no GCP setup; feature-gated)
+               --via <https-url>        optional OAuth relay (PMBRAIN_OAUTH_RELAY_URL; default is BYO client)
                --consent-state production|testing   record your consent screen's state
                --timeout-ms <ms>        consent wait timeout (default 600000)
                --json
-  setup        connect + register source + first sync + first 'waiting' (one command)
+  setup        connect + register source + first sync (one command)
                --account <email>        which account (repeat setup per account)
                --history-days <n>       backfill window for the source (default 90)
                --sync-budget-ms <ms>    first-sync wall-clock budget

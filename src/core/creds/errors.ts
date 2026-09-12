@@ -49,7 +49,7 @@ export type CredentialErrorCode =
   | 'not_connected'
   | 'upstream';
 
-const DOC_BASE = 'https://github.com/garrytan/gbrain/blob/master/docs/guides/google-connect.md';
+const DOC_BASE = 'docs/guides/google-connect.md';
 
 interface CatalogEntry {
   problem: string;
@@ -163,19 +163,19 @@ const CATALOG: Record<CredentialErrorCode, CatalogEntry> = {
     fix: 'Run `pmbrain google connect --reauth <email>` to grant the full scope set (incremental auth keeps existing grants).',
   },
   relay_unreachable: {
-    problem: 'The gbrain.io connect fast path is unreachable.',
+    problem: 'The hosted connect relay is unreachable.',
     cause: 'Network failure or a relay outage.',
     fix: 'Retry later, or connect without the relay: `pmbrain google connect` (BYO client) always works.',
   },
   relay_session_expired: {
     problem: 'The relay connect session expired before the consent completed.',
     cause: 'Relay sessions are valid for 10 minutes.',
-    fix: 'Re-run `pmbrain google connect --via gbrain.io` and complete the consent within 10 minutes.',
+    fix: 'Re-run `pmbrain google connect --via <https-url>` and complete the consent within 10 minutes.',
   },
   claim_already_used: {
     problem: 'This relay session was already claimed.',
     cause: 'Tokens are handed over exactly once; a second claim is refused by design.',
-    fix: 'If you did not receive the tokens, re-run `pmbrain google connect --via gbrain.io` for a fresh session.',
+    fix: 'If you did not receive the tokens, re-run `pmbrain google connect --via <https-url>` for a fresh session.',
   },
   relay_disabled: {
     problem: 'The hosted connect fast path is not enabled in this build.',
