@@ -102,7 +102,7 @@ export function lastUserText(payload: Record<string, unknown>): string {
   } finally {closeSync(fd);}
 }
 
-export async function runHook(args: string[]): Promise<number> {
+export async function runHook(args: string[], opts?: { spawnFn?: typeof spawn }): Promise<number> {
   const sub = args[0] ?? '';
   let payloadFile: string | null = null;
   try {
@@ -115,15 +115,18 @@ export async function runHook(args: string[]): Promise<number> {
     const payload=payloadFile
       ? JSON.parse(readFileSync(payloadFile,'utf8')) as Record<string,unknown>
       : await readStdinJson(300);
-    const harnessIndex = args.indexOf('--harness');
-    const harness = harnessIndex >= 0 ? args[harnessIndex + 1] : undefined;
-    try {
-      await captureAndRelaySessionEnd({
-        payload,
-        harness,
-        cwd: typeof payload.cwd === 'string' ? payload.cwd : process.cwd(),
-      });
-    } catch { /* memorable is fail-open for the hook */ }
+    if (sub === 'session-end') {
+      const harnessIndex = args.indexOf('--harness');
+      const harness = harnessIndex >= 0 ? args[harnessIndex + 1] : undefined;
+      try {
+        await captureAndRelaySessionEnd({
+          payload,
+          harness,
+          cwd: typeof payload.cwd === 'string' ? payload.cwd : process.cwd(),
+          spawnFn: opts?.spawnFn,
+        });
+      } catch { /* memorable is fail-open for the hook */ }
+    }
     let wb;
     try {
       wb = resolveWritebackConfigFromFile(JSON.parse(readFileSync(join(home,'config.json'),'utf8')));

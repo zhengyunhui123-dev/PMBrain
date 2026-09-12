@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test';
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { withEnv } from './helpers/with-env.ts';
@@ -8,6 +8,8 @@ import {
   captureAndRelaySessionEnd,
 } from '../src/core/context/memorable-capture.ts';
 import { writeMemorableConsent } from '../src/core/context/hook-heartbeat.ts';
+import { runHook } from '../src/commands/hook.ts';
+import { configDir } from '../src/core/config.ts';
 
 function tempHome(): string {
   return mkdtempSync(join(tmpdir(), 'pm-mem-cap-'));
@@ -119,6 +121,7 @@ describe('captureAndRelaySessionEnd — spawn only when all three consents are o
         });
         expect(res.recorded).toBe(false);
         expect(calls.length).toBe(0);
+        expect(existsSync(join(configDir(), 'transcripts', 'corpus', 's1.txt'))).toBe(false);
       });
     } finally { rmSync(home, { recursive: true, force: true }); }
   });
@@ -248,6 +251,68 @@ describe('captureAndRelayOpenclawCompact', () => {
         });
         expect(res.recorded).toBe(false);
         expect(calls.length).toBe(0);
+      });
+    } finally { rmSync(home, { recursive: true, force: true }); }
+  });
+});
+
+describe('runHook event set — Memorable only on session-end, never Stop', () => {
+  async function consentedCapture(home: string) {
+    seedCfg(home, true);
+    const claude = join(home, 'claude');
+    const transcript = writeClaudeTranscript(join(claude, 'projects'));
+    const cfgDir = join(home, '.pmbrain');
+    const payloadDir = join(cfgDir, 'writeback-hook-payloads');
+    mkdirSync(payloadDir, { recursive: true });
+    const payloadPath = join(payloadDir, 'p.json');
+    writeFileSync(payloadPath, JSON.stringify({
+      session_id: 's1',
+      transcript_path: transcript,
+      cwd: home,
+    }));
+    await writeMemorableConsent();
+    return { cfgDir, payloadPath };
+  }
+
+  test('Stop with all consents on does not spawn and writes no corpus', async () => {
+    const home = tempHome();
+    try {
+      const { calls, fn } = fakeSpawn();
+      await withEnv(isolate(home, {
+        PATH: stubBin(home),
+        MEMORABLE_BIN: '',
+        PMBRAIN_MEMORABLE_CONFIG: evidenceDir(home),
+        CLAUDE_CONFIG_DIR: join(home, 'claude'),
+      }), async () => {
+        const { cfgDir, payloadPath } = await consentedCapture(home);
+        await runHook(['stop', '--config-dir', cfgDir, '--payload-file', payloadPath], { spawnFn: fn });
+        expect(calls.length).toBe(0);
+        expect(existsSync(join(cfgDir, 'transcripts', 'corpus', 's1.txt'))).toBe(false);
+      });
+    } finally { rmSync(home, { recursive: true, force: true }); }
+  });
+
+  test('session-end with all consents on still spawns memorable record', async () => {
+    const home = tempHome();
+    try {
+      const { calls, fn } = fakeSpawn();
+      await withEnv(isolate(home, {
+        PATH: stubBin(home),
+        MEMORABLE_BIN: '',
+        PMBRAIN_MEMORABLE_CONFIG: evidenceDir(home),
+        CLAUDE_CONFIG_DIR: join(home, 'claude'),
+      }), async () => {
+        const { cfgDir, payloadPath } = await consentedCapture(home);
+        await runHook([
+          'session-end',
+          '--config-dir', cfgDir,
+          '--detached',
+          '--payload-file', payloadPath,
+          '--harness', 'claude-code',
+        ], { spawnFn: fn });
+        expect(calls.length).toBe(1);
+        expect(calls[0]!.args).toEqual(['record', '--session', 's1']);
+        expect(existsSync(join(cfgDir, 'transcripts', 'corpus', 's1.txt'))).toBe(true);
       });
     } finally { rmSync(home, { recursive: true, force: true }); }
   });

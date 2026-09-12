@@ -51,6 +51,7 @@ export async function captureAndRelaySessionEnd(opts: {
 }): Promise<RelayReceiptResult> {
   const cfg = loadConfig();
   const memorableAllowed = (await memorableGateAllowed(cfg)).allowed;
+  if (!memorableAllowed) return { recorded: false, degradeReasons: [] };
   const spec = captureSpecFor(opts.harness);
   const rootOpt = opts.transcriptRoot ? { root: opts.transcriptRoot } : {};
   let conf = spec.confine(opts.payload.transcript_path, { ...rootOpt });
@@ -92,7 +93,6 @@ export async function captureAndRelaySessionEnd(opts: {
   const tmpCorpus = `${corpusFile}.tmp-${process.pid}`;
   writeFileSync(tmpCorpus, text, { mode: 0o600 });
   renameSync(tmpCorpus, corpusFile);
-  if (!memorableAllowed) return { recorded: false, degradeReasons: [] };
   if (discoveryWasGuess) return { recorded: false, degradeReasons: ['memorable_relay_skipped_newest_guess'] };
   if (redactionsN === undefined) return { recorded: false, degradeReasons: ['memorable_relay_skipped_unscanned'] };
   return recordAndRelayReceipt({
