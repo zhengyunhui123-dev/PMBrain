@@ -51,6 +51,8 @@ import type {
   SearchResult, SearchOpts,
   Link, GraphNode, GraphPath,
   TimelineEntry, TimelineInput, TimelineOpts,
+  OntologyObservationInput, OntologyMergeResult, OntologyValue, OntologyDimensionStat,
+  OntologyConflict, OntologyReadOpts, PageReadScope,
   RawData,
   PageVersion,
   BrainStats, BrainHealth,
@@ -70,7 +72,12 @@ import { GBrainError, PAGE_SORT_SQL, ENRICH_ORDER_SQL } from './types.ts';
 import { computeAnomaliesFromBuckets } from './cycle/anomaly.ts';
 import { resolveBoostMap, resolveHardExcludes } from './search/source-boost.ts';
 import { buildSourceFactorCase, buildHardExcludeClause, buildVisibilityClause, buildRecencyComponentSql, buildBestPerPagePoolCte, buildOrFallbackWebsearchQuery } from './search/sql-ranking.ts';
-import { privatePagesFilterFragment } from './search/private-visibility.ts';
+import { privatePagesFilterFragment, privateProvenanceFilterFragment } from './search/private-visibility.ts';
+import {
+  valueHash,
+  normalizeDimension,
+  isNovelDimension,
+} from './chronicle/ontology.ts';
 import {
   normalizeEngineColumn,
   buildVectorCastFragment,
@@ -3839,6 +3846,139 @@ export class PGLiteEngine implements BrainEngine {
     return result.rows as unknown as TimelineEntry[];
   }
 
+  async mergeOntologyFact(obs: OntologyObservationInput): Promise<OntologyMergeResult> {
+    const sourceId = obs.sourceId ?? 'default';
+    const dimension = normalizeDimension(obs.dimension);
+    const vh = valueHash(obs.value);
+    const conf = obs.confidence ?? 0.7;
+    const status = obs.status ?? (isNovelDimension(dimension) ? 'quarantined' : 'active');
+    const visibility = obs.visibility ?? 'private';
+    const validFrom = obs.validFrom ?? null;
+    const validUntil = obs.validTo ?? null;
+    const factText = `${dimension}: ${obs.value}`;
+
+    // "current open" = open-ended (valid_until IS NULL) + not retracted.
+    const cur = await this.db.query(
+      `SELECT id, value_hash, valid_from FROM facts
+        WHERE source_id = $1 AND entity_slug = $2 AND dimension = $3 AND expired_at IS NULL AND valid_until IS NULL
+          AND (dim_status IS NULL OR dim_status = 'active')
+        ORDER BY valid_from DESC NULLS LAST, confidence DESC, id DESC LIMIT 1`,
+      [sourceId, obs.entitySlug, dimension],
+    );
+    const current = cur.rows[0] as { id: number; value_hash: string; valid_from: string | null } | undefined;
+
+    if (current && current.value_hash === vh) {
+      const ins = await this.db.query(
+        `INSERT INTO facts (source_id, entity_slug, fact, kind, visibility, dimension, value, value_hash, dim_status,
+                            confidence, source, source_markdown_slug, valid_from, valid_until, expired_at, consolidated_into)
+         VALUES ($1,$2,$3,'fact',$4,$5,$6,$7,$8,$9,$10,$10,COALESCE($11::timestamptz, now()),$12, now(), $13)
+         ON CONFLICT (source_id, entity_slug, dimension, value_hash, source_markdown_slug) WHERE dimension IS NOT NULL
+         DO NOTHING RETURNING id`,
+        [sourceId, obs.entitySlug, factText, visibility, dimension, obs.value, vh, status, conf, obs.source, validFrom, validUntil, current.id],
+      );
+      return ins.rows.length
+        ? { action: 'corroborated', factId: Number((ins.rows[0] as { id: number }).id), supersededId: null }
+        : { action: 'noop', factId: null, supersededId: null };
+    }
+
+    const ins = await this.db.query(
+      `INSERT INTO facts (source_id, entity_slug, fact, kind, visibility, dimension, value, value_hash, dim_status,
+                          confidence, source, source_markdown_slug, valid_from, valid_until)
+       VALUES ($1,$2,$3,'fact',$4,$5,$6,$7,$8,$9,$10,$10,COALESCE($11::timestamptz, now()),$12)
+       ON CONFLICT (source_id, entity_slug, dimension, value_hash, source_markdown_slug) WHERE dimension IS NOT NULL
+       DO NOTHING RETURNING id`,
+      [sourceId, obs.entitySlug, factText, visibility, dimension, obs.value, vh, status, conf, obs.source, validFrom, validUntil],
+    );
+    if (!ins.rows.length) return { action: 'noop', factId: null, supersededId: null };
+    const newId = Number((ins.rows[0] as { id: number }).id);
+
+    let supersededId: number | null = null;
+    if (current && status === 'active') {
+      const forward = validFrom == null || current.valid_from == null
+        || new Date(validFrom).getTime() >= new Date(current.valid_from).getTime();
+      if (forward) {
+        await this.db.query(
+          `UPDATE facts SET valid_until = COALESCE($1::timestamptz, now()), superseded_by = $2 WHERE id = $3 AND valid_until IS NULL`,
+          [validFrom, newId, current.id],
+        );
+        supersededId = current.id;
+      }
+    }
+    return { action: supersededId ? 'superseded_prior' : 'inserted', factId: newId, supersededId };
+  }
+
+  async getOntology(entitySlug: string, opts?: OntologyReadOpts): Promise<OntologyValue[]> {
+    const minConf = opts?.minConfidence ?? 0;
+    const includeQ = opts?.includeQuarantined ?? false;
+    const asof = opts?.asof ?? null;
+    const params: unknown[] = [entitySlug, asof, minConf, includeQ];
+    let scope: string;
+    if (opts?.sourceIds && opts.sourceIds.length) { params.push(opts.sourceIds); scope = `AND source_id = ANY($${params.length})`; }
+    else { params.push(opts?.sourceId ?? null); scope = `AND ($${params.length}::text IS NULL OR source_id = $${params.length})`; }
+    // Page-visibility gate on the provenance page, applied BEFORE DISTINCT ON
+    // so the untrusted caller resolves the newest value they may see.
+    const privacy = opts?.excludePrivate ? `AND ${privateProvenanceFilterFragment('facts')}` : '';
+    const r = await this.db.query(
+      `SELECT DISTINCT ON (dimension) dimension, value, confidence,
+         source_markdown_slug AS source, valid_from, valid_until AS valid_to,
+         COALESCE(dim_status,'active') AS status, id AS fact_id
+       FROM facts
+       WHERE entity_slug = $1 AND dimension IS NOT NULL AND expired_at IS NULL ${scope} ${privacy}
+         AND COALESCE(valid_from,'-infinity'::timestamptz) <= COALESCE($2::timestamptz, now())
+         AND COALESCE(valid_until,'infinity'::timestamptz) > COALESCE($2::timestamptz, now())
+         AND confidence >= $3
+         AND ($4::boolean OR dim_status IS NULL OR dim_status = 'active')
+       ORDER BY dimension, valid_from DESC NULLS LAST, confidence DESC, id DESC`,
+      params,
+    );
+    return r.rows.map((row) => ({ ...(row as OntologyValue), confidence: Number((row as { confidence: number }).confidence), fact_id: Number((row as { fact_id: number }).fact_id) }));
+  }
+
+  async discoverOntologyDimensions(opts?: { sourceId?: string; sourceIds?: string[] }): Promise<OntologyDimensionStat[]> {
+    const params: unknown[] = [];
+    let scope: string;
+    if (opts?.sourceIds && opts.sourceIds.length) { params.push(opts.sourceIds); scope = `AND source_id = ANY($${params.length})`; }
+    else { params.push(opts?.sourceId ?? null); scope = `AND ($${params.length}::text IS NULL OR source_id = $${params.length})`; }
+    const r = await this.db.query(
+      `SELECT dimension, count(DISTINCT entity_slug)::int AS entities, count(*)::int AS observations
+       FROM facts WHERE dimension IS NOT NULL AND expired_at IS NULL ${scope}
+       GROUP BY dimension ORDER BY entities DESC, dimension`,
+      params,
+    );
+    return r.rows.map((row) => {
+      const x = row as { dimension: string; entities: number; observations: number };
+      return { dimension: x.dimension, entities: Number(x.entities), observations: Number(x.observations) };
+    });
+  }
+
+  async findOntologyConflicts(opts?: PageReadScope & { minConfidence?: number }): Promise<OntologyConflict[]> {
+    const minConf = opts?.minConfidence ?? 0;
+    const params: unknown[] = [minConf];
+    let scope: string;
+    if (opts?.sourceIds && opts.sourceIds.length) { params.push(opts.sourceIds); scope = `AND source_id = ANY($${params.length})`; }
+    else { params.push(opts?.sourceId ?? null); scope = `AND ($${params.length}::text IS NULL OR source_id = $${params.length})`; }
+    // Same provenance-page gate as getOntology, inside the CTE so a conflict
+    // that only exists because of a hidden provenance is never reported.
+    const privacy = opts?.excludePrivate ? `AND ${privateProvenanceFilterFragment('facts')}` : '';
+    const r = await this.db.query(
+      `WITH cur AS (
+         SELECT entity_slug, dimension, value, source_markdown_slug AS source, confidence, id AS fact_id
+         FROM facts WHERE dimension IS NOT NULL AND expired_at IS NULL AND valid_until IS NULL
+           AND (dim_status IS NULL OR dim_status = 'active') AND confidence >= $1 ${scope} ${privacy}
+       )
+       SELECT entity_slug, dimension,
+              json_agg(json_build_object('value', value, 'source', source, 'confidence', confidence, 'fact_id', fact_id)) AS values
+       FROM cur GROUP BY entity_slug, dimension
+       HAVING count(DISTINCT value) >= 2 AND count(DISTINCT source) >= 2
+       ORDER BY entity_slug, dimension`,
+      params,
+    );
+    return r.rows.map((row) => {
+      const x = row as { entity_slug: string; dimension: string; values: OntologyConflict['values'] };
+      return { entity_slug: x.entity_slug, dimension: x.dimension, values: typeof x.values === 'string' ? JSON.parse(x.values) : x.values };
+    });
+  }
+
   // Raw data
   async putRawData(
     slug: string,
@@ -4295,10 +4435,12 @@ export class PGLiteEngine implements BrainEngine {
     source_id: string,
     opts?: { since?: Date; limit?: number },
   ): Promise<FactRow[]> {
-    const where: string[] = [`expired_at IS NOT NULL`, `superseded_by IS NOT NULL`];
+    // v0.46 (#3014) — filter on `superseded_by` alone; the ontology
+    // writer closes a superseded row via `valid_until` (not `expired_at`).
+    const where: string[] = [`superseded_by IS NOT NULL`];
     const params: Record<string, unknown> = {};
     if (opts?.since) {
-      where.push(`expired_at >= $since`);
+      where.push(`COALESCE(expired_at, valid_until) >= $since`);
       params.since = opts.since;
     }
     return this._listFacts(source_id, {
@@ -4306,7 +4448,7 @@ export class PGLiteEngine implements BrainEngine {
       limit: opts?.limit,
       whereClauses: where,
       whereParams: params,
-      order: 'expired_at DESC, id DESC',
+      order: 'COALESCE(expired_at, valid_until) DESC, id DESC',
     });
   }
 

@@ -882,6 +882,59 @@ export interface PageReadPolicy extends PageReadScope {
   takesHoldersAllowList?: string[];
 }
 
+// v0.42.x — Life Chronicle (#2390) per-entity ontology (rides the `facts` table).
+// An observation is a sourced, confidence-weighted, bi-temporal claim that an
+// entity has dimension=value (e.g. role=advisor). Supersession/validity/visibility
+// are inherited from facts columns.
+export interface OntologyObservationInput {
+  entitySlug: string;
+  dimension: string;
+  value: string;
+  /** 0..1; default 0.7. */
+  confidence?: number;
+  /** Provenance — written to facts.source_markdown_slug (the dedup key + retraction key). */
+  source: string;
+  validFrom?: string | null; // ISO; null = -infinity
+  validTo?: string | null;   // ISO; null = open/current
+  visibility?: 'private' | 'world';
+  /** Novel/LLM-proposed dimensions land 'quarantined' (excluded from current resolution). */
+  status?: 'active' | 'quarantined';
+  sourceId?: string;
+}
+export interface OntologyMergeResult {
+  action: 'inserted' | 'corroborated' | 'superseded_prior' | 'noop';
+  factId: number | null;
+  supersededId: number | null;
+}
+export interface OntologyValue {
+  dimension: string;
+  value: string;
+  confidence: number;
+  source: string | null;
+  valid_from: string | null;
+  valid_to: string | null;
+  status: string;          // 'active' | 'quarantined'
+  fact_id: number;
+}
+export interface OntologyDimensionStat { dimension: string; entities: number; observations: number }
+export interface OntologyConflict {
+  entity_slug: string;
+  dimension: string;
+  values: { value: string; source: string | null; confidence: number; fact_id: number }[];
+}
+// excludePrivate (from PageReadScope) drops observations whose provenance page
+// is `visibility: private` BEFORE per-dimension resolution, so an untrusted
+// caller resolves the newest value they may see — never a private one, never
+// a hole where one was. Set by the op layer (readPolicyOpts); engines never
+// decide trust.
+export interface OntologyReadOpts extends PageReadScope {
+  asof?: string;
+  minConfidence?: number;
+  includeQuarantined?: boolean;
+  sourceId?: string;
+  sourceIds?: string[];
+}
+
 export interface SearchOpts {
   takesHoldersAllowList?: string[];
   limit?: number;

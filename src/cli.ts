@@ -2064,6 +2064,12 @@ function printHelp() {
   timeline [<slug>]                  查看时间线
   timeline-add <slug> <date> <text>  添加时间线条目
 
+本体
+  ontology <entity> [--asof DATE]    查看实体当前维度值（职位→role）
+  ontology-add <entity> <dim> <val>  记录一条本体观察
+  ontology-dimensions                列出大脑跟踪的维度
+  ontology-contradictions            列出当前值冲突
+
 工具
   extract <links|timeline|all>       提取链接或时间线
   publish <page.md> [--password]     生成可分享的 HTML
