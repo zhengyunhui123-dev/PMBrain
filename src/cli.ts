@@ -35,7 +35,7 @@ for (const op of operations) {
 }
 
 // CLI-only commands that bypass the operation layer
-const CLI_ONLY = new Set(['init', 'reinit-pglite', 'pglite-backup', 'upgrade', 'post-upgrade', 'check-update', 'integrations', 'publish', 'check-backlinks', 'lint', 'report', 'import', 'export', 'files', 'embed', 'serve', 'call', 'config', 'doctor', 'hook', 'migrate', 'eval', 'sync', 'extract', 'extract-conversation-facts', 'enrich', 'features', 'autopilot', 'graph-query', 'jobs', 'advisor', 'agent', 'apply-migrations', 'skillpack-check', 'skillpack', 'resolvers', 'integrity', 'repair-jsonb', 'repair', 'orphans', 'quarantine', 'sources', 'mounts', 'dream', 'check-resolvable', 'routing-eval', 'skillify', 'smoke-test', 'providers', 'storage', 'repos', 'code-def', 'code-refs', 'reindex', 'reindex-code', 'reindex-frontmatter', 'code-callers', 'code-callees', 'frontmatter', 'auth', 'friction', 'claw-test', 'book-mirror', 'takes', 'think', 'salience', 'anomalies', 'transcripts', 'models', 'remote', 'recall', 'forget', 'edges-backfill', 'cache', 'ze-switch', 'founder', 'brainstorm', 'lsd', 'schema', 'capture', 'onboard', 'conversation-parser', 'status', 'probe-pglite']);
+const CLI_ONLY = new Set(['init', 'reinit-pglite', 'pglite-backup', 'upgrade', 'post-upgrade', 'check-update', 'integrations', 'publish', 'check-backlinks', 'lint', 'report', 'import', 'export', 'files', 'embed', 'serve', 'call', 'config', 'doctor', 'hook', 'migrate', 'eval', 'sync', 'extract', 'extract-conversation-facts', 'enrich', 'features', 'autopilot', 'graph-query', 'jobs', 'advisor', 'agent', 'apply-migrations', 'skillpack-check', 'skillpack', 'resolvers', 'integrity', 'repair-jsonb', 'repair', 'orphans', 'quarantine', 'sources', 'mounts', 'dream', 'check-resolvable', 'routing-eval', 'skillify', 'smoke-test', 'providers', 'storage', 'repos', 'code-def', 'code-refs', 'reindex', 'reindex-code', 'reindex-frontmatter', 'code-callers', 'code-callees', 'frontmatter', 'auth', 'friction', 'claw-test', 'book-mirror', 'takes', 'think', 'salience', 'anomalies', 'transcripts', 'models', 'remote', 'recall', 'forget', 'edges-backfill', 'cache', 'ze-switch', 'founder', 'brainstorm', 'lsd', 'schema', 'capture', 'onboard', 'conversation-parser', 'status', 'probe-pglite', 'google', 'creds']);
 // CLI-only commands whose handlers print their own --help text. These are
 // excluded from the generic short-circuit so detailed per-command and
 // per-subcommand usage stays reachable.
@@ -70,6 +70,8 @@ const CLI_ONLY_SELF_HELP = new Set([
   'extract-conversation-facts',
   'enrich',
   'sources',
+  'google',
+  'creds',
 ]);
 
 async function main() {
@@ -916,6 +918,16 @@ async function handleCliOnly(command: string, args: string[]) {
   if (command === 'auth') {
     const { runAuth } = await import('./commands/auth.ts');
     await runAuth(args);
+    return;
+  }
+  if (command === 'google') {
+    const { runGoogle } = await import('./commands/google.ts');
+    await runGoogle(args);
+    return;
+  }
+  if (command === 'creds') {
+    const { runCreds } = await import('./commands/creds.ts');
+    await runCreds(args);
     return;
   }
   if (command === 'remote') {
@@ -2086,7 +2098,11 @@ function printHelp() {
 来源
   sources list                       显示已注册来源
   sources add <id> --path <p>        注册来源
+  sources add <id> --kind google --account <email>  注册 Google 来源（凭证在保险库）
   sources remove <id>                删除来源及其页面
+  google connect|status|disconnect   连接或检查 Google 账号（保险库，--json）
+  google setup [--account <email>]   一键：OAuth → 来源 → 首次同步
+  creds list|remove|export|import    通用凭证保险库（脱敏输出；加密包）
   sync --all                         同步全部来源
   sync --source <id>                 同步指定来源
   repos ...                          sources 的弃用别名

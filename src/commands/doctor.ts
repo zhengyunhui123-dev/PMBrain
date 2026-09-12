@@ -728,6 +728,17 @@ export async function doctorReportRemote(engine: BrainEngine): Promise<DoctorRep
   //   - Three-state: ok / warn / fail.
   checks.push(await checkFederationHealth(engine));
 
+  try {
+    const { computeGoogleOauthCheck } = await import('./doctor/checks/google-oauth.ts');
+    checks.push(await computeGoogleOauthCheck());
+  } catch (e) {
+    checks.push({
+      name: 'google_oauth',
+      status: 'warn',
+      message: `credential vault unreadable: ${e instanceof Error ? e.message : String(e)}`,
+    });
+  }
+
   return computeDoctorReport(checks);
 }
 

@@ -41,6 +41,7 @@ import { realpathSync } from 'fs';
 import { join, dirname, resolve as resolvePath } from 'path';
 import { randomBytes } from 'crypto';
 import type { BrainEngine } from './engine.ts';
+import { DEFAULT_CALENDAR_ID } from './google/types.ts';
 import {
   parseRemoteUrl,
   cloneRepo,
@@ -143,6 +144,21 @@ export interface AddSourceOpts {
    * Only honored when remoteUrl is set.
    */
   cloneDir?: string;
+  /**
+   * Register a google-kind source (Gmail/Calendar/Contacts sync).
+   * Credentials come from the vault (`pmbrain google connect`); `account`
+   * is only a pointer — no secret ever lands in sources.config.
+   */
+  google?: {
+    account: string;
+    services: string[];
+    historyDays: number;
+    calendarId?: string;
+    dir: string;
+    access?: 'vault' | 'command' | 'env';
+    tokenCommand?: string;
+    tokenEnv?: string;
+  };
 }
 
 export interface RemoveSourceOpts {
@@ -416,10 +432,16 @@ export async function addSource(
     }
   }
 
+  if (opts.google) {
+    opts = { ...opts, google: { ...opts.google, dir: resolvePath(opts.google.dir) } };
+  }
+
   // Overlap check for any local path (existing behavior).
   let finalPath = opts.localPath ?? null;
   if (parsedUrl) {
     finalPath = opts.cloneDir ?? defaultCloneDir(opts.id);
+  } else if (opts.google) {
+    finalPath = opts.google.dir;
   }
   if (finalPath) {
     const others = await engine.executeRaw<{ id: string; local_path: string }>(
@@ -509,6 +531,34 @@ export async function addSource(
         e,
       );
     }
+  } else if (opts.google) {
+    // ── Path D: --kind google ────────────────────────────────────────────
+    // API-backed source: no git repo, no clone. Credentials live in the
+    // vault; config carries only the account POINTER.
+    const googlePath = opts.google.dir;
+    mkdirSync(googlePath, { recursive: true });
+    const config: Record<string, unknown> = {
+      kind: 'google',
+      g_account: opts.google.account,
+      g_services: opts.google.services.join(','),
+      g_history_days: opts.google.historyDays,
+      ...(opts.google.calendarId && opts.google.calendarId !== DEFAULT_CALENDAR_ID
+        ? { g_calendar_id: opts.google.calendarId }
+        : {}),
+      ...(opts.google.access && opts.google.access !== 'vault'
+        ? { g_access: opts.google.access }
+        : {}),
+      ...(opts.google.tokenCommand ? { g_token_command: opts.google.tokenCommand } : {}),
+      ...(opts.google.tokenEnv ? { g_token_env: opts.google.tokenEnv } : {}),
+      g_managed: googlePath === defaultCloneDir(`${opts.id}-google`),
+      federated: opts.federated ?? true,
+    };
+    const displayName = opts.name ?? opts.id;
+    await engine.executeRaw(
+      `INSERT INTO sources (id, name, local_path, config)
+           VALUES ($1, $2, $3, $4::jsonb)`,
+      [opts.id, displayName, googlePath, JSON.stringify(config)],
+    );
   } else {
     // ── Path B: --path or no path (existing behavior, pre-v0.28) ─────────
     const config: Record<string, unknown> = {};
@@ -685,12 +735,14 @@ export async function removeSource(
 
   // Decide whether we own the clone dir before removing the row.
   const remoteUrl = getRemoteUrl(src.config);
+  const sourceCfg = parseConfig(src.config);
+  const gManaged = sourceCfg.kind === 'google' && sourceCfg.g_managed === true;
   const cloneRoot = gbrainPath('clones');
   let cloneRemoved = false;
   if (
     !opts.keepStorage &&
     src.local_path &&
-    remoteUrl && // only auto-clean when this was a --url-managed clone
+    (remoteUrl || gManaged) && // only auto-clean when pmbrain managed the dir
     isPathContained(src.local_path, cloneRoot)
   ) {
     try {
@@ -750,8 +802,9 @@ export async function getSourceStatus(
   const archived = archivedRows[0]?.archived === true;
 
   const remoteUrl = getRemoteUrl(src.config);
+  const sourceConfig = parseConfig(src.config);
   let cloneState: SourceStatus['clone_state'] = 'not-applicable';
-  if (src.local_path) {
+  if (src.local_path && sourceConfig.kind !== 'google') {
     cloneState = validateRepoState(src.local_path, remoteUrl ?? undefined);
   }
 
