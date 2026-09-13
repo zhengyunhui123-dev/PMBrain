@@ -694,7 +694,7 @@ async function testConfiguredModel(kind: ModelKind): Promise<void> {
   status.classList.remove('ready', 'warning', 'error');
   status.hidden = false;
   const provider = normalizeProviderForModel($<HTMLSelectElement>(`#${kind}-provider`).value);
-  status.textContent = provider === 'ollama' || provider === 'llama-server'
+  status.textContent = provider === 'ollama' || provider === 'llama-server' || provider === 'custom-openai'
     ? '正在测试连接；本地模型首次加载可能需要 1–2 分钟…'
     : '正在测试连接…';
   button.setAttribute('aria-busy', 'true');

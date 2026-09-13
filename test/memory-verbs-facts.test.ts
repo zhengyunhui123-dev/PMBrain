@@ -53,6 +53,22 @@ beforeEach(async () => {
 });
 
 describe('Gbrain-aligned memory verbs', () => {
+  test('admin facts put recently updated old facts first with stable timestamp ties', async () => {
+    for (const [fact, created, embedded] of [
+      ['old-updated', '2026-01-01', '2026-09-13'],
+      ['new-unembedded', '2026-09-12', null],
+      ['same-update', '2026-02-01', '2026-09-13'],
+    ]) {
+      await engine.executeRaw(
+        `INSERT INTO facts (fact, source, created_at, embedded_at) VALUES ($1, 'sort-test', $2::timestamptz, $3::timestamptz)`,
+        [fact, created, embedded],
+      );
+    }
+    const listed = await listAdminBrainFacts(engine, {});
+    expect(listed.rows.map(row => row.fact)).toEqual(['same-update', 'old-updated', 'new-unembedded']);
+    expect((await listAdminBrainFacts(engine, {})).rows.map(row => row.id)).toEqual(listed.rows.map(row => row.id));
+  });
+
   test('the seven memory verbs are registered and explicitly surface-safe', () => {
     expect(operationsByName.remember?.name).toBe('remember');
     expect(operationsByName.forget?.name).toBe('forget');

@@ -45,6 +45,7 @@ describe('Knowledge data classification and facts inventory', () => {
   test('page view presets no longer dump notes into imported materials', async () => {
     const statements: string[] = [];
     const engine = {
+      purgeDeletedPages: async () => 0,
       executeRaw: async (sql: string, params: unknown[] = []) => {
         statements.push(`${sql} :: ${JSON.stringify(params)}`);
         return sql.includes('COUNT(*)') ? [{ total: 0 }] : [];
@@ -54,6 +55,7 @@ describe('Knowledge data classification and facts inventory', () => {
     await listAdminBrainPages(engine, { view: 'materials' });
     expect(statements[0]).toContain('p.type IN');
     expect(statements[0]).toContain('conversation');
+    expect(statements[0]).toContain('ORDER BY p.updated_at DESC, p.id DESC');
     expect(statements[0]).not.toContain('"note"');
 
     statements.length = 0;
@@ -63,6 +65,11 @@ describe('Knowledge data classification and facts inventory', () => {
     expect(statements[0]).toContain('"company"');
     expect(statements[0]).toContain('"event"');
     expect(statements[0]).toContain('"project"');
+    for (const view of ['all', 'insights', 'trash']) {
+      statements.length = 0;
+      await listAdminBrainPages(engine, { view });
+      expect(statements[0]).toContain(`ORDER BY p.${view === 'trash' ? 'deleted_at' : 'updated_at'} DESC, p.id DESC`);
+    }
   });
 
   test('facts inventory reads the facts table and hides expired rows by default', async () => {

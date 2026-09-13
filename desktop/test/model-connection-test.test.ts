@@ -14,6 +14,7 @@ function startOpenAICompatServer(options: {
   chatStatus?: number;
   chatBody?: unknown;
   embedding?: number[];
+  delayMs?: number;
 } = {}): { baseUrl: string; requests: Array<{ path: string; body: any; authorization: string }> } {
   const requests: Array<{ path: string; body: any; authorization: string }> = [];
   const server = Bun.serve({
@@ -28,6 +29,7 @@ function startOpenAICompatServer(options: {
         authorization: request.headers.get('authorization') ?? '',
       });
       if (url.pathname.endsWith('/chat/completions')) {
+        if (options.delayMs) await Bun.sleep(options.delayMs);
         const status = options.chatStatus ?? 200;
         return Response.json(
           options.chatBody ?? {
@@ -58,8 +60,21 @@ describe('desktop model connection test', () => {
   test('allows local Ollama models to finish a cold start without relaxing cloud probes', () => {
     expect(modelConnectionTestTimeoutMs('ollama')).toBe(120_000);
     expect(modelConnectionTestTimeoutMs('openai')).toBe(15_000);
-    expect(modelConnectionTestTimeoutMs('custom-openai')).toBe(15_000);
+    expect(modelConnectionTestTimeoutMs('custom-openai')).toBe(120_000);
+    expect(modelConnectionTestTimeoutMs('custom-endpoint-remote')).toBe(120_000);
+    expect(modelConnectionTestTimeoutMs('llama-server')).toBe(120_000);
   });
+
+  test('waits for an unloaded custom model beyond the cloud probe deadline', async () => {
+    const fixture = startOpenAICompatServer({ delayMs: 15_200 });
+    const result = await testModelConnection({
+      provider: 'custom-endpoint-remote', baseUrl: fixture.baseUrl,
+      model: 'cold-model', touchpoint: 'chat',
+    });
+    expect(result.status).toBe('success');
+    expect(fixture.requests).toHaveLength(1);
+    expect(fixture.requests[0].body.model).toBe('cold-model');
+  }, 25_000);
 
   test('sends the current ordinary-model draft and reports a successful connection', async () => {
     const fixture = startOpenAICompatServer();

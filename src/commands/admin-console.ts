@@ -357,7 +357,7 @@ export async function listAdminBrainPages(
             p.frontmatter,
             LEFT(p.compiled_truth, 8000) AS preview
        ${baseSql}
-      ORDER BY ${isTrash ? 'p.deleted_at' : 'p.updated_at'} DESC, p.slug
+      ORDER BY ${isTrash ? 'p.deleted_at' : 'p.updated_at'} DESC, p.id DESC
       LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
     [...params, limit, offset],
   );
@@ -442,7 +442,7 @@ export async function listAdminBrainFacts(
             COALESCE(f.embedded_at, f.created_at)::text AS updated_at
        FROM facts f
        ${where}
-      ORDER BY f.created_at DESC, f.id DESC
+      ORDER BY COALESCE(f.embedded_at, f.created_at) DESC, f.id DESC
       LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
     [...params, limit, offset],
   );
@@ -777,7 +777,7 @@ export async function getAdminDreamOverview(engine: BrainEngine, config: GBrainC
           OR name LIKE '%dream%'
           OR name LIKE '%project%'
           OR name LIKE '%risk%'
-       ORDER BY updated_at DESC
+       ORDER BY updated_at DESC, id DESC
        LIMIT 20
     `),
     optionalRows(engine, `
@@ -808,7 +808,7 @@ export async function getAdminDreamOverview(engine: BrainEngine, config: GBrainC
              cost_usd,
              created_at::text AS created_at
         FROM eval_takes_quality_runs
-       ORDER BY created_at DESC
+       ORDER BY created_at DESC, id DESC
        LIMIT 6
     `),
     optionalRows(engine, `
@@ -819,7 +819,7 @@ export async function getAdminDreamOverview(engine: BrainEngine, config: GBrainC
              total_contradictions_flagged::int AS total_contradictions_flagged,
              judge_errors_total::int AS judge_errors_total
         FROM eval_contradictions_runs
-       ORDER BY ran_at DESC
+       ORDER BY ran_at DESC, run_id DESC
        LIMIT 6
     `),
   ]);
