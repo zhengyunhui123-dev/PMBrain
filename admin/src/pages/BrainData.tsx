@@ -34,7 +34,7 @@ import type {
   BrainPageDetailResponse as BrainPageDetail,
   BrainPageRow,
 } from '../../../shared/contracts/brain.ts';
-import { FACT_KINDS, knowledgePageViewTypes } from '../../../shared/knowledge-views.ts';
+import { FACT_KINDS, knowledgePageViewAllowsType } from '../../../shared/knowledge-views.ts';
 
 function factTtlHint(validUntil: string | null | undefined): string | null {
   if (!validUntil) return null;
@@ -164,8 +164,7 @@ export function BrainDataPage() {
 
   const types = useMemo(() => {
     if (filters.view === 'facts') return [...FACT_KINDS];
-    const allowed = knowledgePageViewTypes(filters.view);
-    return Object.keys(overview?.stats.pages_by_type ?? {}).filter(type => !allowed || allowed.includes(type)).sort();
+    return Object.keys(overview?.stats.pages_by_type ?? {}).filter(type => knowledgePageViewAllowsType(filters.view, type)).sort();
   }, [overview, filters.view]);
   const chunkBlocks = useMemo(() => {
     if (chunks.length > 0) return chunks.map(chunk => ({ index: chunk.chunk_index, embedded: chunk.embedded }));
@@ -281,7 +280,7 @@ export function BrainDataPage() {
         <div className="knowledge-view-tabs" role="tablist" aria-label="知识数据范围">
           {[
             ['all', '全部'],
-            ['materials', '原始与资料'],
+            ['materials', '原始资料'],
             ['structured', '结构化知识'],
             ['facts', '事实'],
             ['insights', '观点与总结'],
@@ -303,6 +302,8 @@ export function BrainDataPage() {
           ))}
         </div>
         {filters.view === 'trash' && <p className="trash-retention-note">移出的内容保留 3 天，之后自动清空。打开详情可以撤销删除。</p>}
+        {filters.view === 'materials' && <p className="trash-retention-note">导入、同步和直接记录的内容。尚无法确认加工来源的旧内容也保留在这里。</p>}
+        {filters.view === 'structured' && <p className="trash-retention-note">经过二次加工生成的人物、项目、概念和整理笔记等知识。</p>}
         {filters.view === 'facts' && <p className="trash-retention-note">事实来自 facts 热记忆表，不是 Markdown 页面。由 remember / extract_facts / Dream 写入，可被 recall 读回。</p>}
         <div className="filter-bar">
           <input value={filters.q} onChange={e => setFilters(f => ({ ...f, q: e.target.value, page: 1 }))} placeholder={isFactsView ? '搜索事实、实体或来源' : '搜索 slug 或标题'} />

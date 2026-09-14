@@ -1276,3 +1276,51 @@ Fresh install：`schema.sql` / `pglite-schema.ts` / `schema-embedded.ts` 同步�
 - [x] Q2 **已决定（D22）：分键。** `loops.extraction_enabled` 仅 Gmail、默认 ON；`loops.meeting_extraction_enabled` / `transcript` / `connector` 默认 OFF。确定性 scan job 默认不调度。理由：GBrain extract-ON 的消费者只有 google-source 线程（30 天窗 + ceiling 500）；共用一键会把 PMBrain 会议语料变成默认花费面。
 
 **未勾选「批准本设计」之前，不得提交实现 PR。**
+
+---
+
+## 2026-09-14 补充规划：知识库栏目按来源与加工状态分类
+
+状态：用户于 2026-09-14 明确要求按本方案执行；代码与本地定向验证已完成，Core 1.3.63 / Desktop 1.1.94，远程 CI 待提交后验收。未增加底层字段或修改用户数据；结果记录在原 Bug 修复台账。
+
+### 已确认的问题
+
+- `shared/knowledge-views.ts` 把 note、person、project 等固定分到 structured；`src/commands/admin-console.ts` 用 `p.type IN (...)` 过滤。导入内容即使没有二次加工，也会被分到结构化知识。
+- `admin/src/pages/BrainData.tsx` 的类型下拉也使用同一组类型，不能只改后端过滤而漏改下拉范围。
+- 当前 Dream 有 `dream_generated` 标记，extract_atoms 产物有 `extracted_by`；导入有 source_kind、imported_from 等来源信息。标记各有语义，不能简单把“有 source_kind”当原始、“没有 dream_generated”当未加工。
+- 本地 GBrain 历史快照 d99550873（提交时间 2026-08-16 -0700）没有这两个 PMBrain 栏目文件，synthesize 已有 dream_generated。此证据支持栏目是 PMBrain 产品层分组，不代表已审计当天所有上游页面。
+
+### 栏目与判定顺序
+
+| 栏目 | 规划规则 |
+| --- | --- |
+| 全部 | 保留所有未删除页面，不能因分类证据不足而消失。 |
+| 原始资料 | 将“原始与资料”改为“原始资料”；用户导入、同步、直接记录的内容，不论 type 是 note、person、project 或自定义类型，都不据此认定为加工成果。 |
+| 结构化知识 | 放明确由 Dream、extract 或整理脚本二次加工生成的知识页，例如人物、项目、概念、原子知识、整理笔记；原文仅被分块、向量化、打标签或参与抽取，不算生成的新知识。 |
+| 事实 | 保持 facts 热记忆表与现有行为。 |
+| 观点与总结 | 按用户要求保持现有 take/reflection/pattern/idea 分类，不在本轮扩为“仅 Dream 生成”。 |
+| 回收站 | 保持删除状态与删除时间排序。 |
+
+执行判定时先处理删除状态，再保留观点与总结类型的既有归属，剩余页面才按来源/加工证据划分原始资料和结构化知识。栏目互斥；二级 type 继续表达内容类型，不修改现有类型体系。
+
+### 标记、旧数据和例外
+
+1. 对明确的产物标记做有限白名单判断：dream_generated=true、已核实的 extract_atoms extracted_by 等；不能把任意 generated_by 或“脚本碰过”都算结构化知识。
+2. 生成内容可能经 importFromContent 入库，不能因为走过导入函数就划回原始资料；识别的是产物来源，不是最后一次入库通道。
+3. 来源不明的旧页面暂按原始资料展示，不凭标题、目录名或 person/project 类型推断生成历史；这是保守展示规则，不是已确认它的历史来源。全部页仍可查询到。
+4. 抽取回执、运行日志不是加工后的知识正文，保留原有材料归属，不能因为由脚本生成而混入结构化知识。
+5. 实施前继续核对人物、项目、概念和外部脚本的实际写入标记；缺少可靠标记的旧产物列为待确认，不承诺全部自动识别。若需新增核心写入字段、统一生成标记或历史回填，单独说明范围并先获用户确认。
+6. 本轮不批量修改 type/frontmatter，不搬文件、不覆盖 Wiki、不回填历史、不重建向量。
+
+### 实施范围与验收
+
+- 先只读核对生成链路与来源样本；当前 PMBrain 查询返回 429，尚未据真实库统计各类数量。
+- 优先修改 Admin 展示与查询适配：栏目命名、共享判定、分页前过滤、对应总数和类型下拉。不能只在当前页前端过滤，否则翻页和数量会错。
+- 继续保持更新时间倒序、同时间唯一 ID 排序，以及 Source 过滤隔离。
+- 测试同为 note 的导入页和生成页分别进入两个栏目；导入的 person/project/custom type 仍在原始资料；生成的 atom/person/project/note 在结构化知识；原文做完向量化仍不换栏目。
+- 测试生成页重新同步后归属保持、回执不误入、缺标记不冒充产物；事实和观点归属不变；多页数据数量/分页/Source 过滤一致。SQL 在 PGLite 和 Postgres 分别验证，再打开最新源码页面核对。
+- 实施完成后只更新原有 `项目管理/Bug修复台账.md` 并按实际改动同步版本；不新建台账。
+
+与所附 ChatGPT 建议的差异：采用“栏目看来源/加工，type 看内容”的方向，但不只依赖 dream_generated，不改观点栏目范围，也不把所有脚本输出当结构化知识。历史缺标记问题需明确保留验证边界。
+
+实施核对：按上述范围完成，未扩大为历史数据回填。标记白名单采用当前已核实的 dream_generated=true、extract_atoms-v0.41.2.1、synthesize_concepts-v0.41；未知外部脚本和缺标记旧页仍需另行核实，不能承诺自动识别。PGLite/Postgres 分类、分页测试及最新源码隔离 UI 验证通过。PMBrain 查询通道已恢复，但未对真实库全量分类统计。此前 429 的当次原因缺少日志证据，当前隧道未运行导致的查询失败已排除。

@@ -16,7 +16,7 @@ import { SOFT_DELETE_TTL_HOURS } from '../core/destructive-guard.ts';
 import { ALL_PHASES } from '../core/cycle.ts';
 import { getProviderStatus, listRuns } from './natural-lang/index.ts';
 import { inspectAdminSupervisorStatus } from './admin-supervisor.ts';
-import { knowledgePageViewTypes } from '../../shared/knowledge-views.ts';
+import { adminKnowledgeViewFilter } from './admin-knowledge-view.ts';
 
 export async function getSupervisorStatus() {
   return inspectAdminSupervisorStatus();
@@ -304,14 +304,8 @@ export async function listAdminBrainPages(
     params.push(query.type);
     filters.push(`p.type = $${params.length}`);
   }
-  const selectedViewTypes = knowledgePageViewTypes(query.view);
-  if (selectedViewTypes) {
-    const placeholders = selectedViewTypes.map(value => {
-      params.push(value);
-      return `$${params.length}`;
-    });
-    filters.push(`p.type IN (${placeholders.join(', ')})`);
-  }
+  const viewFilter = adminKnowledgeViewFilter(query.view, params);
+  if (viewFilter) filters.push(viewFilter);
   if (query.q) {
     params.push(`%${query.q}%`);
     filters.push(`(p.slug ILIKE $${params.length} OR p.title ILIKE $${params.length})`);

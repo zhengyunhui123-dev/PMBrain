@@ -300,8 +300,17 @@ def first_launch_journey(page: Page, artifacts: Path, provider: LocalOpenAIServe
     knowledge_dir = artifacts / "knowledge-source"
     knowledge_dir.mkdir(parents=True, exist_ok=True)
     page.locator("#panel-basic").wait_for(state="visible")
-    if "FIRST RUN" not in page.locator("#page-eyebrow").inner_text():
-        raise AssertionError("Desktop did not present the first-run setup screen")
+    config_path = artifacts / "user-home" / ".pmbrain" / "config.json"
+    if not config_path.exists():
+        raise AssertionError("Desktop did not create its isolated PMBrain configuration")
+    initial_config = json.loads(config_path.read_text(encoding="utf-8-sig"))
+    expected_database = config_path.parent / "brain.pglite"
+    if initial_config.get("engine") != "pglite" or Path(initial_config.get("database_path", "")).resolve() != expected_database.resolve():
+        raise AssertionError("Desktop did not initialize its own PGLite database")
+    page.wait_for_function(
+        "expected => document.querySelector('#database-path')?.value === expected",
+        arg=str(expected_database), timeout=45_000,
+    )
     page.locator("#database-path").fill(str(database_path))
     page.locator("#knowledge-directory").fill(str(knowledge_dir))
     page.locator("#next-models").click()
