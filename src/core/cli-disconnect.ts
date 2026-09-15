@@ -36,10 +36,8 @@ function flushStdioBestEffort(): void {
 
 function forceProcessExit(code: number): void {
   const reallyExit = (process as NodeJS.Process & { reallyExit?: (exitCode?: number) => never }).reallyExit;
-  setTimeout(() => {
-    if (typeof reallyExit === 'function') reallyExit.call(process, code);
-    process.exit(code);
-  }, 25);
+  if (typeof reallyExit === 'function') reallyExit.call(process, code);
+  process.exit(code);
 }
 
 /**

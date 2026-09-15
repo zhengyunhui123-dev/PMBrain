@@ -6,6 +6,7 @@ import {
   createSharedIntegration,
   configureQwenPawDesktopIntegration,
   configureIntegration,
+  DEFAULT_INTEGRATION_ORDER,
   formatSharedIntegrationSnippet,
   getSharedAccessContext,
   integrationConfigPath,
@@ -16,10 +17,16 @@ import {
   qwenPawIntegrationPath,
   revokeSharedIntegration,
   smokeTestSharedIntegration,
+  sortIntegrationsByConfigured,
   writeCodexIntegration,
   writeGrokIntegration,
   writeJsonIntegration,
+  writeKimiIntegration,
+  writeMimoIntegration,
+  writeQoderIntegration,
+  writeQwenIntegration,
   writeQwenPawIntegration,
+  writeZCodeIntegration,
 } from '../src/main/integration-manager.js';
 
 const roots: string[] = [];
@@ -578,12 +585,96 @@ describe('desktop integration config merging', () => {
     expect(result.match(/\[mcp_servers\.pmbrain\]/g)?.length).toBe(1);
   });
 
-  test('places Cherry Studio first and CodeBuddy last without writing Cherry Studio SQLite', () => {
-    const integrations = listIntegrations();
-    expect(integrations[0]).toMatchObject({
+  test('keeps the confirmed default order for the five new domestic clients', () => {
+    expect(DEFAULT_INTEGRATION_ORDER).toEqual([
+      'cherry', 'workbuddy', 'cursor', 'trae',
+      'qwen', 'qoder', 'zcode', 'mimo', 'kimi',
+      'qwenpaw', 'codex', 'claude', 'grok', 'hermes', 'openclaw', 'codebuddy',
+    ]);
+    expect(integrationConfigPath('qwen')).toEndWith(join('.qwen', 'settings.json'));
+    expect(integrationConfigPath('qoder')).toEndWith(join('.qoder-cn', 'settings.json'));
+    expect(integrationConfigPath('zcode')).toEndWith(join('.zcode', 'cli', 'config.json'));
+    expect(integrationConfigPath('kimi')).toEndWith(join('.kimi-code', 'mcp.json'));
+    expect(integrationConfigPath('mimo')).toMatch(/mimocode[\\/]mimocode\.jsonc$/);
+    const listed = listIntegrations();
+    for (const [defaultOrder, id] of DEFAULT_INTEGRATION_ORDER.entries()) {
+      expect(listed.find(item => item.id === id)?.defaultOrder).toBe(defaultOrder);
+    }
+  });
+
+  test('moves configured clients ahead while preserving the default order inside each group', () => {
+    const items = [
+      { id: 'cherry', configured: false },
+      { id: 'workbuddy', configured: true },
+      { id: 'cursor', configured: false },
+      { id: 'qwen', configured: true },
+      { id: 'mimo', configured: false },
+    ] as Parameters<typeof sortIntegrationsByConfigured>[0];
+
+    expect(sortIntegrationsByConfigured(items).map(item => item.id)).toEqual([
+      'workbuddy', 'qwen', 'cherry', 'cursor', 'mimo',
+    ]);
+  });
+
+  test('writes ZCode nested MCP settings without replacing other Agent configuration', () => {
+    const path = tempFile('config.json');
+    writeFileSync(path, JSON.stringify({ mcp: { servers: { existing: { command: 'keep-me' } } }, theme: 'dark' }));
+    writeZCodeIntegration(path, 'http://127.0.0.1:3131/mcp', 'zcode-token', dirname(path));
+    const parsed = JSON.parse(readFileSync(path, 'utf8'));
+    expect(parsed.theme).toBe('dark');
+    expect(parsed.mcp.servers.existing.command).toBe('keep-me');
+    expect(parsed.mcp.servers.pmbrain).toEqual({
+      type: 'http',
+      url: 'http://127.0.0.1:3131/mcp',
+      headers: { Authorization: 'Bearer zcode-token' },
+    });
+  });
+
+  test('writes each domestic client with its vendor-supported HTTP fields', () => {
+    const qwen = tempFile('qwen.json');
+    const qoder = tempFile('qoder.json');
+    const kimi = tempFile('kimi.json');
+    for (const path of [qwen, qoder, kimi]) {
+      writeFileSync(path, JSON.stringify({ mcpServers: { existing: { command: 'keep-me' } } }));
+    }
+    writeQwenIntegration(qwen, 'http://127.0.0.1:3131/mcp', 'qwen-token', dirname(qwen));
+    writeQoderIntegration(qoder, 'http://127.0.0.1:3131/mcp', 'qoder-token', dirname(qoder));
+    writeKimiIntegration(kimi, 'http://127.0.0.1:3131/mcp', 'kimi-token', dirname(kimi));
+
+    const qwenConfig = JSON.parse(readFileSync(qwen, 'utf8'));
+    const qoderConfig = JSON.parse(readFileSync(qoder, 'utf8'));
+    const kimiConfig = JSON.parse(readFileSync(kimi, 'utf8'));
+    expect(qwenConfig.mcpServers.pmbrain.httpUrl).toBe('http://127.0.0.1:3131/mcp');
+    expect(qwenConfig.mcpServers.pmbrain.url).toBeUndefined();
+    expect(qoderConfig.mcpServers.pmbrain).toMatchObject({ type: 'http', url: 'http://127.0.0.1:3131/mcp' });
+    expect(kimiConfig.mcpServers.pmbrain).toEqual({
+      url: 'http://127.0.0.1:3131/mcp',
+      headers: { Authorization: 'Bearer kimi-token' },
+    });
+    expect(qwenConfig.mcpServers.existing.command).toBe('keep-me');
+    expect(qoderConfig.mcpServers.existing.command).toBe('keep-me');
+    expect(kimiConfig.mcpServers.existing.command).toBe('keep-me');
+  });
+
+  test('writes MiMo Code remote MCP settings while preserving JSONC comments', () => {
+    const path = tempFile('mimocode.jsonc');
+    writeFileSync(path, '{\n  // keep this user setting\n  "model": "mimo/test",\n  "mcp": {\n    "existing": { "type": "remote", "url": "https://example.test/mcp" }\n  }\n}\n');
+    writeMimoIntegration(path, 'http://127.0.0.1:3131/mcp', 'mimo-token', dirname(path));
+    const content = readFileSync(path, 'utf8');
+    expect(content).toContain('// keep this user setting');
+    expect(content).toContain('"model": "mimo/test"');
+    expect(content).toContain('"existing"');
+    expect(content).toContain('"pmbrain"');
+    expect(content).toContain('"type": "remote"');
+    expect(content).toContain('Bearer mimo-token');
+  });
+
+  test('keeps Cherry Studio first and CodeBuddy last in the default order without writing Cherry Studio SQLite', () => {
+    expect(DEFAULT_INTEGRATION_ORDER[0]).toBe('cherry');
+    expect(DEFAULT_INTEGRATION_ORDER.at(-1)).toBe('codebuddy');
+    expect(listIntegrations().find(item => item.id === 'cherry')).toMatchObject({
       id: 'cherry', name: 'CherryStudio', path: null, automatic: false, configured: false,
     });
-    expect(integrations.at(-1)).toMatchObject({ id: 'codebuddy', name: 'CodeBuddy' });
   });
 
   test('marks a freshly written and smoke-tested automatic integration as connected', async () => {
@@ -669,9 +760,19 @@ describe('desktop integration config merging', () => {
   });
 
   test('verifies every automatic JSON client instead of leaving it permanently unverified', async () => {
-    for (const client of ['codebuddy', 'cursor', 'trae'] as const) {
-      const path = tempFile(`${client}.json`);
-      writeJsonIntegration(path, 'http://127.0.0.1:3131/mcp', `${client}-token`, dirname(path));
+    const clients = [
+      ['codebuddy', writeJsonIntegration],
+      ['cursor', writeJsonIntegration],
+      ['trae', writeJsonIntegration],
+      ['qwen', writeQwenIntegration],
+      ['qoder', writeQoderIntegration],
+      ['zcode', writeZCodeIntegration],
+      ['mimo', writeMimoIntegration],
+      ['kimi', writeKimiIntegration],
+    ] as const;
+    for (const [client, write] of clients) {
+      const path = tempFile(`${client}.${client === 'mimo' ? 'jsonc' : 'json'}`);
+      write(path, 'http://127.0.0.1:3131/mcp', `${client}-token`, dirname(path));
       const seen: string[] = [];
       const state = await probeLocalIntegrationConnectionState(client, path, {
         verifyMcpBearer: async (authorization: string) => {

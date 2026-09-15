@@ -1,5 +1,14 @@
 # Bug 修复台账
 
+## 2026-09-15 Windows PGLite 一次性命令退出与 CI 超时修复
+
+- 时间：2026-09-15
+- 版本号：Core 1.3.65；Desktop 1.1.96
+- 标题：修复打包态首次初始化和导入成功后进程未退出造成的 Windows CI 超时
+- 描述：`windows-real-ui` 停在首次配置的空向量库对齐，`desktop-runtime` 在输出导入成功后仍超过 30 秒未退出；两处均由 Windows 打包 Bun 运行 PGLite 后，一次性命令把强制退出放进定时器、但事件循环未再调度该定时器引起。现保留原有一次性命令边界，在输出完成后同步调用运行时退出能力，不放宽 5 分钟和 30 秒测试时限。
+- 是否完成：是，本地按失败步骤完成修复和回归验证。
+- 最终结果：打包 Windows Sidecar 的导入退出测试 3/3 通过；打包态核心用户路径 6/6 通过，首次启动、PGLite 初始化、导入搜索、回收站、向量迁移、HTTP MCP 和重启持久化均完成。相关定向测试、Core/Desktop 类型检查、桌面构建、`verify` 39/39 和 `ci:pr-preview` 232/232 通过；未执行 `build:win`，GitHub `windows-real-ui`、`desktop-runtime` 和汇总 `test-status` 待用户提交后在新 SHA 复跑。
+
 ## 2026-09-15 会话目录与大会话导入、Source 同步和缺失链接查看
 
 - 时间：2026-09-15

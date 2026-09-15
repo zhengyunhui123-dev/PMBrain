@@ -1078,9 +1078,14 @@ async function refreshPgliteRecoveryStatus(): Promise<void> {
 }
 
 function renderIntegrations(integrations: IntegrationInfo[]): void {
-  latestIntegrations = integrations;
+  const ordered = integrations
+    .map((item, index) => ({ item, index }))
+    .sort((left, right) => Number(right.item.configured) - Number(left.item.configured)
+      || (left.item.defaultOrder ?? left.index) - (right.item.defaultOrder ?? right.index))
+    .map(({ item }) => item);
+  latestIntegrations = ordered;
   const grid = $('#integration-grid');
-  grid.replaceChildren(...integrations.map((item) => {
+  grid.replaceChildren(...ordered.map((item) => {
     const article = document.createElement('article');
     article.className = 'integration-card';
     const badge = document.createElement('span');
@@ -2099,10 +2104,15 @@ function integrationClientName(client: IntegrationClient): string {
     workbuddy: 'Workbuddy',
     cursor: 'Cursor',
     trae: 'Trae Work',
-    claude: 'Claude Code',
-    codex: 'Codex',
-    grok: 'Grok Build',
+    qwen: 'Qwen Code',
+    qoder: 'Qoder CN（通义灵码）',
+    zcode: 'ZCode（智谱）',
+    mimo: 'MiMo Code（小米）',
+    kimi: 'Kimi Code（月之暗面）',
     qwenpaw: 'QwenPaw',
+    codex: 'Codex',
+    claude: 'Claude Code',
+    grok: 'Grok Build',
     hermes: 'Hermes',
     openclaw: 'OpenClaw',
     codebuddy: 'CodeBuddy',

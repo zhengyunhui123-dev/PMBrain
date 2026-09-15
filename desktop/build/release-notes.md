@@ -1,3 +1,9 @@
+## PMBrain 1.1.96
+
+- MCP 接入新增 Qwen Code、Qoder CN（通义灵码）、ZCode（智谱）、MiMo Code（小米）和 Kimi Code（月之暗面），按各客户端配置格式安全合并，不覆盖已有设置。
+- 接入列表默认保持既定顺序；已接入客户端自动排到前面，已接入和未接入两组内部仍按默认顺序排列。
+- 修复 Windows PGLite 一次性命令成功完成后进程不退出，导致桌面首次初始化和打包运行时导入超时的问题。
+
 ## PMBrain 1.1.95
 
 - Codex、Grok 会话文件夹可直接识别 JSONL；大会话改为流式上传和逐行解析，不再受 20 MB 或 50 MB 会话限制。
@@ -20,9 +26,3 @@
 - MCP 接入新增 CherryStudio 并置于首位，CodeBuddy 调整到最后；CherryStudio 提供可复制导入的 Streamable HTTP 配置，不直接修改它的 SQLite 数据库。
 - 桌面端首次运行会立即创建独立的 `~/.pmbrain/config.json` 与 PGLite `brain.pglite`，不再自动发现、读取或复用已有 `~/.gbrain`。
 - 安装版 Sidecar 会隔离继承到的 GBrain Home、数据库、Source、Brain 与 Mount 路由变量，旧 `.gbrain-source`、`.gbrain-mount` 也不会影响 PMBrain。
-
-## PMBrain 1.1.91
-
-- MCP 接入页会在 Sidecar 真正就绪后重新验证，不再把启动前的空探测当作完成。
-- 最近一次验证可用的状态会保存在不含凭证的本地回执中，打开页面立即沿用，后台再静默复核；旧配置快照不再把它清空。
-- CodeBuddy、Cursor、Trae 也会校验现存 Bearer；401/403 显示“接入失效”，临时超时显示“待验证”。
