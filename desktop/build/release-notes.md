@@ -1,3 +1,10 @@
+## PMBrain 1.1.97
+
+- 同步会把 PGLite TOAST 索引分裂错误识别为数据库索引损坏，不再误报为 16 份源文件解析失败，也不会在连续三次后自动跳过。
+- 阻断提示改为实际 `.pmbrain` 失败台账和 `pmbrain` 命令；数据库索引损坏时明确要求先修复副本，禁止用 `--skip-failed` 掩盖。
+- PGLite 同步遇到已确认的 B-tree 索引结构损坏时，会核对系统目录、重建点名索引并重试当前文件；无法确认或修复失败时仍会停止同步。
+- 请求日志默认显示 `recall`、`remember`、`forget_fact` 等实际工具调用；`tools/list` 等协议发现请求可在“全部请求”中查看。
+
 ## PMBrain 1.1.96
 
 - MCP 接入新增 Qwen Code、Qoder CN（通义灵码）、ZCode（智谱）、MiMo Code（小米）和 Kimi Code（月之暗面），按各客户端配置格式安全合并，不覆盖已有设置。
@@ -20,9 +27,3 @@
 
 - 自定义模型连接测试支持等待本地或远程模型冷启动，等待上限调整为 120 秒。
 - 事实按显示的更新时间排序，知识列表同时间记录顺序稳定，任务完成后按最近时间上移。
-
-## PMBrain 1.1.92
-
-- MCP 接入新增 CherryStudio 并置于首位，CodeBuddy 调整到最后；CherryStudio 提供可复制导入的 Streamable HTTP 配置，不直接修改它的 SQLite 数据库。
-- 桌面端首次运行会立即创建独立的 `~/.pmbrain/config.json` 与 PGLite `brain.pglite`，不再自动发现、读取或复用已有 `~/.gbrain`。
-- 安装版 Sidecar 会隔离继承到的 GBrain Home、数据库、Source、Brain 与 Mount 路由变量，旧 `.gbrain-source`、`.gbrain-mount` 也不会影响 PMBrain。

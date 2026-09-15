@@ -343,6 +343,27 @@ describe('classifyErrorCode — DB vs YAML duplicate-key disambiguation', () => 
 // keyed off "missing open" / "missing close" / "empty frontmatter" — none
 // of which are produced upstream. Today these all classify correctly.
 describe('classifyErrorCode — canonical message coverage', () => {
+  test('DB_INDEX_CORRUPT matches a TOAST parent-key split failure', async () => {
+    const { classifyErrorCode } = await import('../src/core/sync.ts');
+    expect(classifyErrorCode(
+      'failed to re-find parent key in index "pg_toast_16808_index" for split pages 294/295'
+    )).toBe('DB_INDEX_CORRUPT');
+  });
+
+  test('DB_INDEX_CORRUPT matches a heap pointer outside the index page', async () => {
+    const { classifyErrorCode } = await import('../src/core/sync.ts');
+    expect(classifyErrorCode(
+      'heap tid from index tuple (426,19) points past end of heap page line pointer array at offset 20 of block 10 in index "pages_dedup_idx"',
+    )).toBe('DB_INDEX_CORRUPT');
+  });
+
+  test('GIT_TIMEOUT keeps a transient HEAD verification failure out of file parsing', async () => {
+    const { classifyErrorCode } = await import('../src/core/sync.ts');
+    const { isInfrastructureFailureCode } = await import('../src/core/sync-failure-ledger.ts');
+    expect(classifyErrorCode('git HEAD verification failed: spawnSync git ETIMEDOUT')).toBe('GIT_TIMEOUT');
+    expect(isInfrastructureFailureCode('GIT_TIMEOUT')).toBe(true);
+  });
+
   test('MISSING_OPEN matches "File is empty or whitespace-only"', async () => {
     const { classifyErrorCode } = await import('../src/core/sync.ts');
     expect(classifyErrorCode(
@@ -384,6 +405,16 @@ describe('classifyErrorCode — canonical message coverage', () => {
     const { classifyErrorCode } = await import('../src/core/sync.ts');
     expect(classifyErrorCode('Nested double quotes in YAML value at line 3'))
       .toBe('NESTED_QUOTES');
+  });
+});
+
+describe('blocked sync guidance', () => {
+  test('uses the active PMBrain ledger path and PMBrain commands', () => {
+    const source = readFileSync(new URL('../src/commands/sync.ts', import.meta.url), 'utf8');
+    expect(source).toContain('See ${syncFailuresPath()}');
+    expect(source).toContain("run 'pmbrain doctor'");
+    expect(source).not.toContain('See ~/.gbrain/sync-failures.jsonl');
+    expect(source).toContain('The source files are not the cause.');
   });
 });
 

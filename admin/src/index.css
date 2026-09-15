@@ -6740,6 +6740,7 @@ tbody tr:hover td { background: color-mix(in srgb, var(--accent) 4%, var(--conso
 
 /* Request log */
 .request-agent-filter { display: grid; grid-template-columns: auto minmax(170px, 220px); gap: 9px; align-items: center; color: var(--text-muted); font-size: 10px; }
+.request-log-filters { display: flex; align-items: center; gap: 12px; }
 .request-log-card { padding: 0; overflow: hidden; }
 .request-log-table { min-width: 850px; }
 .request-log-row { cursor: pointer; }

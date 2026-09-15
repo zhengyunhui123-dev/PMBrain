@@ -24,12 +24,13 @@ export function RequestLogPage() {
   });
   const [page, setPage] = useState(1);
   const [agentFilter, setAgentFilter] = useState('all');
+  const [requestKind, setRequestKind] = useState<'business' | 'all'>('business');
   const [expandedRow, setExpandedRow] = useState<number | null>(null);
 
-  useEffect(() => { loadPage(page); }, [page, agentFilter]);
+  useEffect(() => { loadPage(page); }, [page, agentFilter, requestKind]);
 
   const loadPage = (p: number) => {
-    const qs = agentFilter !== 'all' ? `&agent=${encodeURIComponent(agentFilter)}` : '';
+    const qs = `${agentFilter !== 'all' ? `&agent=${encodeURIComponent(agentFilter)}` : ''}&kind=${requestKind}`;
     api.requests(p, qs).then(setData).catch(() => {});
   };
 
@@ -63,16 +64,25 @@ export function RequestLogPage() {
         <h1 className="page-title title-with-info">
           请求日志
           <InfoIcon title="请求日志">
-            记录外部 Agent 通过 MCP 调用 PMBrain 的时间、操作、参数、延迟和状态。用它排查 CodeBuddy 等工具是否接入成功。
+            默认显示外部 Agent 实际调用的 MCP 工具名称。切换到“全部请求”可查看 tools/list 等连接与工具发现流量。
           </InfoIcon>
         </h1>
-        <label className="request-agent-filter">
-          <span>Agent</span>
-          <select value={agentFilter} onChange={e => { setAgentFilter(e.target.value); setPage(1); }}>
-            <option value="all">全部 Agent</option>
-            {[...agentMap.entries()].map(([id, name]) => <option key={id} value={id}>{name}</option>)}
-          </select>
-        </label>
+        <div className="request-log-filters">
+          <label className="request-agent-filter">
+            <span>请求</span>
+            <select value={requestKind} onChange={e => { setRequestKind(e.target.value as 'business' | 'all'); setPage(1); }}>
+              <option value="business">业务调用</option>
+              <option value="all">全部请求</option>
+            </select>
+          </label>
+          <label className="request-agent-filter">
+            <span>Agent</span>
+            <select value={agentFilter} onChange={e => { setAgentFilter(e.target.value); setPage(1); }}>
+              <option value="all">全部 Agent</option>
+              {[...agentMap.entries()].map(([id, name]) => <option key={id} value={id}>{name}</option>)}
+            </select>
+          </label>
+        </div>
       </div>
 
       {data.rows.length === 0 ? (

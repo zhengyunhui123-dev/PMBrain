@@ -24,7 +24,10 @@ import {
   resolveAutoSkipThreshold,
   unacknowledgedSyncFailures,
   acknowledgeSyncFailures,
+  classifyErrorCode,
+  syncFailuresPath,
 } from '../core/sync-failure-ledger.ts';
+import { repairPgliteBtreeIndexes } from '../core/pglite-btree-repair.ts';
 import { importOfficeFile, isOfficeFilePath } from '../core/office-import.ts';
 import { estimateTokens, CHUNKER_VERSION } from '../core/chunkers/code.ts';
 import { EMBEDDING_MODEL, estimateEmbeddingCostUsd } from '../core/embedding.ts';
@@ -1825,9 +1828,20 @@ async function performSyncInner(engine: BrainEngine, opts: SyncOpts): Promise<Sy
         // / addLink) target (sourceId, slug). Pre-fix the schema DEFAULT
         // 'default' was applied even for non-default sources, fabricating
         // duplicate rows that crashed bare-slug subqueries with Postgres 21000.
-        const result = opts.includeOffice && isOfficeFilePath(path)
-          ? await importOfficeFile(eng, filePath, path, { noEmbed, sourceId: opts.sourceId, activePack: syncActivePack })
-          : await importFile(eng, filePath, path, { noEmbed, sourceId: opts.sourceId, activePack: syncActivePack });
+        const runImport = () => opts.includeOffice && isOfficeFilePath(path)
+          ? importOfficeFile(eng, filePath, path, { noEmbed, sourceId: opts.sourceId, activePack: syncActivePack })
+          : importFile(eng, filePath, path, { noEmbed, sourceId: opts.sourceId, activePack: syncActivePack });
+        const importWithIndexRepair = async () => {
+          try {
+            return await runImport();
+          } catch (error) {
+            const repair = await repairPgliteBtreeIndexes(eng, error);
+            if (repair.status !== 'repaired') throw error;
+            serr(`  ${repair.message}。正在重试 ${path}`);
+            return runImport();
+          }
+        };
+        const result = await importWithIndexRepair();
         if (result.status === 'imported') {
           chunksCreated += result.chunks;
           pagesAffected.push(result.slug);
@@ -2013,6 +2027,12 @@ async function performSyncInner(engine: BrainEngine, opts: SyncOpts): Promise<Sy
       `Fix them and re-run. A fixed file auto-clears; the same file/error auto-skips after ` +
       `${resolveAutoSkipThreshold()} consecutive runs. Infrastructure failures never auto-skip.`,
     );
+    if (failedFiles.some((failure) => classifyErrorCode(failure.error) === 'DB_INDEX_CORRUPT')) {
+      serr(
+        'Database index corruption detected. The source files are not the cause. ' +
+        'Do not use --skip-failed; repair and validate a stopped PGLite database copy before replacing the active database.',
+      );
+    }
     await engine.setConfig('sync.last_run', new Date().toISOString());
     await writeSyncAnchor(engine, opts.sourceId, 'repo_path', repoPath);
     return {
@@ -3657,9 +3677,9 @@ function printSyncResult(result: SyncResult, sink: NodeJS.WriteStream = process.
     case 'dry_run':
       break; // already printed in performSync
     case 'blocked_by_failures':
-      write(`Sync BLOCKED at ${result.toCommit.slice(0, 8)}: ${result.failedFiles ?? 0} file(s) failed to parse.`);
-      write(`  See ~/.gbrain/sync-failures.jsonl for details, or run 'gbrain doctor'.`);
-      write(`  Fix the files then re-run 'gbrain sync', or 'gbrain sync --skip-failed' to move on.`);
+      write(`Sync BLOCKED at ${result.toCommit.slice(0, 8)}: ${result.failedFiles ?? 0} file(s) failed during sync.`);
+      write(`  See ${syncFailuresPath()} for details, or run 'pmbrain doctor'.`);
+      write(`  Re-run 'pmbrain sync' after fixing the reported cause. Use 'pmbrain sync --skip-failed' only for source-file failures.`);
       break;
     case 'partial':
       // v0.41.13.0 (T7 / D-V3-5): --timeout fired before the bookmark write
@@ -3672,7 +3692,7 @@ function printSyncResult(result: SyncResult, sink: NodeJS.WriteStream = process.
         `imported ${result.filesImported ?? 0} of ${result.added + result.modified} file(s), ` +
         `reason=${result.reason ?? 'timeout'}.`,
       );
-      write(`  Re-run 'gbrain sync' to continue (last_commit unchanged; safe to retry).`);
+      write(`  Re-run 'pmbrain sync' to continue (last_commit unchanged; safe to retry).`);
       break;
   }
 }

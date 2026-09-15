@@ -65,14 +65,15 @@ export function classifyErrorCode(error: string): string {
   if (/Anthropic has no embedding model|EMBEDDING_NO_TOUCHPOINT/i.test(error)) return 'EMBEDDING_NO_TOUCHPOINT';
   if (/maximum context length|max_tokens|context length|input too long|input length exceeds|tokens? exceed|too many tokens|EMBEDDING_OVERSIZE/i.test(error)) return 'EMBEDDING_OVERSIZE';
   if (/PAGE_JUNK_PATTERN/i.test(error)) return 'PAGE_JUNK_PATTERN';
-  if (/right sibling of GIN page is of different type|GIN page is of different type|DB_INDEX_CORRUPT/i.test(error)) {
+  if (/right sibling of GIN page is of different type|GIN page is of different type|failed to re-find parent key in index .* for split pages|heap tid from index tuple .* in index|DB_INDEX_CORRUPT/i.test(error)) {
     return 'DB_INDEX_CORRUPT';
   }
+  if (/spawnSync git ETIMEDOUT|git .*timed out|git HEAD verification failed.*ETIMEDOUT/i.test(error)) return 'GIT_TIMEOUT';
   return 'UNKNOWN';
 }
 
 const INFRA_CODES = new Set([
-  'DB_CONNECTION', 'DB_DUPLICATE_KEY', 'STATEMENT_TIMEOUT', 'DB_INDEX_CORRUPT',
+  'DB_CONNECTION', 'DB_DUPLICATE_KEY', 'STATEMENT_TIMEOUT', 'DB_INDEX_CORRUPT', 'GIT_TIMEOUT',
   'EMBEDDING_TIMEOUT', 'EMBEDDING_RATE_LIMIT', 'EMBEDDING_QUOTA', 'EMBEDDING_NO_CREDS',
 ]);
 

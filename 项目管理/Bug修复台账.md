@@ -1,5 +1,14 @@
 # Bug 修复台账
 
+## 2026-09-15 PGLite 索引损坏误报源文件失败
+
+- 时间：2026-09-15
+- 版本号：Core 1.3.66；Desktop 1.1.97
+- 标题：同步自修复 PGLite 索引损坏并突出显示真实 MCP 工具调用
+- 描述：`pg_toast_16808_index` 分裂异常原先落为 UNKNOWN，界面和 CLI 因而把同一数据库故障显示成 16 个文件解析失败，并可能在连续三次后误跳过；阻断说明还指向旧 `~/.gbrain` 台账和 `gbrain` 命令。现将索引分裂与堆指针越界归为 `DB_INDEX_CORRUPT` 基础设施故障；PGLite 同步只对系统目录确认的点名索引执行 REINDEX，并重试当前文件，无法确认时保持阻断。Git HEAD 子进程超时单列为基础设施故障。请求日志继续保存完整审计记录，页面默认过滤 `tools/list` 等协议流量，显示 `recall`、`remember`、`forget_fact` 等真实工具名，可切换查看全部请求。
+- 是否完成：是，代码、正式数据库修复与本地验证完成；GitHub CI 待用户提交后在新 SHA 验收。
+- 最终结果：正式库停服后完整冷备到 `D:\backups\pmbrain-pre-index-repair-20260915T202858`，定向重建 `pg_toast_16808_index`、`pages_source_slug_key` 与日志点名损坏的 `pages_dedup_idx`；完整 `default` Source 同步的 15 个待处理文件全部导入，末尾一次 Git HEAD 验证超时经续跑恢复，书签从 `4de620bd` 推进到 `d264f5b4`，失败台账清空，服务恢复为 PGLite 健康。副本曾暴露一个无法由现有默认诊断定位的历史缺失 TOAST 分块，未清理或覆盖正文。索引修复与请求日志定向测试 72/72、Core 类型检查、Admin 构建、源码管理台真实交互、`verify` 39/39、`ci:pr-preview` 232/232、Sidecar 构建和桌面打包运行时检查通过；未执行 `build:win`，GitHub CI 待用户提交后在新 SHA 验收。
+
 ## 2026-09-15 Windows PGLite 一次性命令退出与 CI 超时修复
 
 - 时间：2026-09-15
