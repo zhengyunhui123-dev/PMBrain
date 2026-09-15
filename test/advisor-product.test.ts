@@ -89,6 +89,24 @@ describe('advisor product view', () => {
     });
   });
 
+  test('translates missing-link health findings and opens their read-only detail view', () => {
+    const view = buildAdvisorProductView(report([
+      finding({
+        id: 'dead_links',
+        title: '6 links point to missing pages.',
+        fix: { command_argv: ['pmbrain', 'doctor'] },
+        collector: 'usage-shape',
+      }),
+    ]), 81);
+    expect(view.suggestions[0]).toMatchObject({
+      title: '发现 6 条关系指向不存在的知识',
+      action_label: '查看缺失链接',
+      action_kind: 'navigate',
+      navigate: 'graph?view=missing',
+    });
+    expect(resolveAdminAdvisorAction(view.suggestions[0]!)).toEqual({ kind: 'navigate', page: 'graph?view=missing' });
+  });
+
   test('stalled minion jobs are leftover queue records, not a live Task Center run', () => {
     const view = buildAdvisorProductView(report([
       finding({

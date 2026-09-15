@@ -240,6 +240,26 @@ export const KnowledgeGraphGlobalResponseSchema = z.object({
   edge_limit: z.number().int().positive(),
 });
 
+export const KnowledgeGraphMissingLinkSchema = z.object({
+  id: z.number().int().positive(),
+  from_page_id: z.number().int().positive(),
+  from_slug: z.string().nullable(),
+  from_title: z.string().nullable(),
+  from_source_id: z.string().nullable(),
+  from_source_name: z.string().nullable(),
+  missing_page_id: z.number().int().positive(),
+  link_type: z.string(),
+  context: z.string(),
+  link_source: z.string().nullable(),
+});
+
+export const KnowledgeGraphMissingLinksResponseSchema = z.object({
+  rows: z.array(KnowledgeGraphMissingLinkSchema),
+  total: z.number().int().nonnegative(),
+  truncated: z.boolean(),
+  limit: z.number().int().positive(),
+});
+
 export type SourceSummary = z.infer<typeof SourceSummarySchema>;
 export type BrainOverviewResponse = z.infer<typeof BrainOverviewResponseSchema>;
 export type BrainPageRow = z.infer<typeof BrainPageRowSchema>;
@@ -253,6 +273,8 @@ export type KnowledgeGraphSearchResponse = z.infer<typeof KnowledgeGraphSearchRe
 export type KnowledgeGraphNeighborhoodResponse = z.infer<typeof KnowledgeGraphNeighborhoodResponseSchema>;
 export type KnowledgeGraphMetaResponse = z.infer<typeof KnowledgeGraphMetaResponseSchema>;
 export type KnowledgeGraphGlobalResponse = z.infer<typeof KnowledgeGraphGlobalResponseSchema>;
+export type KnowledgeGraphMissingLink = z.infer<typeof KnowledgeGraphMissingLinkSchema>;
+export type KnowledgeGraphMissingLinksResponse = z.infer<typeof KnowledgeGraphMissingLinksResponseSchema>;
 export type BrainFactRow = z.infer<typeof BrainFactRowSchema>;
 export type MemoryWritebackStatus = z.infer<typeof MemoryWritebackStatusSchema>;
 export type MemoryWritebackUpdate = z.infer<typeof MemoryWritebackUpdateRequestSchema>;

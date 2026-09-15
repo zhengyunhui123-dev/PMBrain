@@ -16,19 +16,20 @@ import {
 import { useOverview } from './console-shared';
 import type {
   KnowledgeGraphEdge,
+  KnowledgeGraphMissingLink,
   KnowledgeGraphNode,
 } from '../../../shared/contracts/brain.ts';
 
 type CanvasNode = KnowledgeGraphNode & NodeObject<KnowledgeGraphNode>;
 type CanvasLink = KnowledgeGraphEdge & LinkObject<KnowledgeGraphNode, KnowledgeGraphEdge>;
-type GraphViewMode = 'local' | 'global' | 'isolated';
+type GraphViewMode = 'local' | 'global' | 'isolated' | 'missing';
 
 const EMPTY_GRAPH: KnowledgeGraphData = { nodes: [], edges: [] };
 
 function requestedViewMode(): GraphViewMode {
   const query = window.location.hash.split('?')[1] ?? '';
   const requested = new URLSearchParams(query).get('view');
-  return requested === 'global' || requested === 'isolated' ? requested : 'local';
+  return requested === 'global' || requested === 'isolated' || requested === 'missing' ? requested : 'local';
 }
 
 function escapeHtml(value: string): string {
@@ -79,6 +80,8 @@ export function KnowledgeGraphPage() {
   const [relationTypes, setRelationTypes] = useState<string[]>([]);
   const [viewMode, setViewMode] = useState<GraphViewMode>(requestedViewMode);
   const [globalTotals, setGlobalTotals] = useState<{ nodes: number; edges: number } | null>(null);
+  const [missingLinks, setMissingLinks] = useState<KnowledgeGraphMissingLink[]>([]);
+  const [missingTotal, setMissingTotal] = useState(0);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [hoveredNodeId, setHoveredNodeId] = useState<number | null>(null);
   const [hoveredEdgeId, setHoveredEdgeId] = useState<number | null>(null);
@@ -239,8 +242,22 @@ export function KnowledgeGraphPage() {
     setSelectedEdge(null);
     setExpandedIds(new Set());
     setLoadingIds(new Set());
+    setMissingLinks([]);
+    setMissingTotal(0);
     setRelationFilter('all');
     const metaRequest = api.knowledgeGraphMeta(sourceFilter);
+    if (viewMode === 'missing') {
+      void Promise.all([metaRequest, api.knowledgeGraphMissing(sourceFilter)])
+        .then(([meta, missing]) => {
+          if (!active) return;
+          setRelationTypes(meta.relation_types);
+          setMissingLinks(missing.rows);
+          setMissingTotal(missing.total);
+          if (missing.truncated) setNotice(`缺失链接较多，当前展示前 ${missing.limit} 条。`);
+        })
+        .catch(caught => active && setError(caught instanceof Error ? caught.message : String(caught)));
+      return () => { active = false; };
+    }
     if (viewMode !== 'local') {
       const graphRequest = viewMode === 'global'
         ? api.knowledgeGraphGlobal(sourceFilter, 'all')
@@ -494,6 +511,7 @@ export function KnowledgeGraphPage() {
           <button type="button" className={viewMode === 'local' ? 'active' : ''} onClick={() => setViewMode('local')}>局部图谱</button>
           <button type="button" className={viewMode === 'global' ? 'active' : ''} onClick={() => setViewMode('global')}>全局图谱</button>
           <button type="button" className={viewMode === 'isolated' ? 'active' : ''} onClick={() => setViewMode('isolated')}>孤立页</button>
+          <button type="button" className={viewMode === 'missing' ? 'active' : ''} onClick={() => setViewMode('missing')}>缺失链接</button>
         </div>
         <label>
           <span>Source</span>
@@ -504,24 +522,24 @@ export function KnowledgeGraphPage() {
             ))}
           </select>
         </label>
-        <label className={viewMode === 'isolated' ? 'is-disabled' : ''}>
+        <label className={viewMode === 'isolated' || viewMode === 'missing' ? 'is-disabled' : ''}>
           <span>关系</span>
-          <select disabled={viewMode === 'isolated'} value={relationFilter} onChange={event => resetAroundCurrent(event.target.value)}>
+          <select disabled={viewMode === 'isolated' || viewMode === 'missing'} value={relationFilter} onChange={event => resetAroundCurrent(event.target.value)}>
             <option value="all">全部关系</option>
             {relationTypes.map(type => <option key={type} value={type}>{type}</option>)}
           </select>
         </label>
-        <button type="button" className="graph-reset-button" onClick={() => graphRef.current?.zoomToFit(520, 64)}>
+        {viewMode !== 'missing' && <button type="button" className="graph-reset-button" onClick={() => graphRef.current?.zoomToFit(520, 64)}>
           <LocateFixed aria-hidden="true" />重置视图
-        </button>
-        <button
+        </button>}
+        {viewMode !== 'missing' && <button
           type="button"
           className="graph-direction-toggle"
           aria-pressed={showArrows}
           onClick={() => setShowArrows(value => !value)}
         >
           <ArrowRight aria-hidden="true" />{showArrows ? '隐藏方向' : '显示方向'}
-        </button>
+        </button>}
         <button type="button" className="graph-fullscreen-button" onClick={() => void toggleFullscreen()}>
           {isFullscreen ? <Minimize2 aria-hidden="true" /> : <Maximize2 aria-hidden="true" />}
           {isFullscreen ? '退出全屏' : '全屏查看'}
@@ -532,6 +550,39 @@ export function KnowledgeGraphPage() {
 
       <div className="knowledge-graph-shell">
         <div className="knowledge-graph-stage" ref={stageRef} role="region" aria-label="可拖拽和缩放的知识星图">
+          {viewMode === 'missing' ? (
+            <div className="graph-missing-view">
+              <div className="graph-missing-summary">
+                <strong>{missingTotal} 条缺失链接</strong>
+                <span>这里只读展示。请核对来源知识，再恢复目标知识或修改原始关系。</span>
+              </div>
+              {missingLinks.length === 0 && !error ? (
+                <div className="graph-empty">
+                  <Network aria-hidden="true" />
+                  <h2>没有缺失链接</h2>
+                  <p>当前范围内的关系都能找到目标知识。</p>
+                </div>
+              ) : (
+                <div className="graph-missing-list">
+                  {missingLinks.map(link => (
+                    <article key={link.id}>
+                      <div>
+                        <b>{link.from_title || link.from_slug || `来源页面 #${link.from_page_id}`}</b>
+                        <small>{link.from_source_name || link.from_source_id || '来源 Source 不存在'} · {link.from_slug || `页面 #${link.from_page_id}`}</small>
+                      </div>
+                      <span>{link.link_type || '关联'} → 缺失页面 #{link.missing_page_id}</span>
+                      <p>{link.context || '这条关系没有记录上下文。'}</p>
+                      {link.from_source_id && link.from_slug ? (
+                        <button type="button" onClick={() => { window.location.hash = `data?source=${encodeURIComponent(link.from_source_id!)}&slug=${encodeURIComponent(link.from_slug!)}`; }}>
+                          查看来源知识
+                        </button>
+                      ) : null}
+                    </article>
+                  ))}
+                </div>
+              )}
+            </div>
+          ) : <>
           <div className="graph-stage-chrome">
             <span><CircleDot />{viewMode !== 'local'
               ? `${graph.nodes.length}${globalTotals && globalTotals.nodes !== graph.nodes.length ? ` / ${globalTotals.nodes}` : ''} 个知识`
@@ -602,6 +653,7 @@ export function KnowledgeGraphPage() {
             }}
             autoPauseRedraw
           />
+          </>}
         </div>
 
         <aside className={`knowledge-graph-detail${selectedEdge || selectedNode ? ' is-open' : ''}`} aria-hidden={!selectedEdge && !selectedNode}>

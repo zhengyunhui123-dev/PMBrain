@@ -49,6 +49,13 @@ describe('Admin advisor actions reuse existing jobs', () => {
       action_label: '查看孤立知识',
       navigate: 'graph?view=isolated',
     }))).toEqual({ kind: 'navigate', page: 'graph?view=isolated' });
+
+    expect(resolveAdminAdvisorAction(suggestion({
+      id: 'dead_links',
+      action_kind: 'navigate',
+      action_label: '查看缺失链接',
+      navigate: 'graph?view=missing',
+    }))).toEqual({ kind: 'navigate', page: 'graph?view=missing' });
   });
 
   test('refuses to apply migrations against a live Admin/sidecar process', () => {

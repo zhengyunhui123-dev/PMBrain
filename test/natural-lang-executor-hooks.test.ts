@@ -22,6 +22,8 @@ describe('natural language child-process hooks', () => {
     expect(resolveRunTimeoutMs(120_000)).toBe(120_000);
     expect(resolveRunTimeoutMs(null)).toBeNull();
     expect(resolveRunTimeoutMs(undefined, 'embed_stale')).toBeNull();
+    expect(resolveRunTimeoutMs(undefined, 'sync_source')).toBeNull();
+    expect(resolveRunTimeoutMs(undefined, 'sync_all')).toBeNull();
   });
 
   test('does not expose a completed run until PGLite reconnection finishes', async () => {

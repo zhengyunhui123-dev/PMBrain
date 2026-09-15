@@ -144,7 +144,7 @@ function NaturalLanguagePanel({
         warnings.add(`${file.name} 是空文件`);
         continue;
       }
-      if (file.size > MAX_KNOWLEDGE_ATTACHMENT_BYTES) {
+      if (extension !== '.jsonl' && file.size > MAX_KNOWLEDGE_ATTACHMENT_BYTES) {
         warnings.add(`${file.name} 超过 ${attachmentSizeLabel(MAX_KNOWLEDGE_ATTACHMENT_BYTES)} 限制`);
         continue;
       }
@@ -560,7 +560,7 @@ function NaturalLanguagePanel({
             <span
               className="assistant-attachment-help"
               aria-live="polite"
-              title="支持 Markdown、Office/PDF/表格和图片，单个文件不超过 50 MB"
+              title="支持会话 JSONL、Markdown、Office/PDF/表格和图片；会话 JSONL 不限制原始文件大小"
             >
               {attachmentProgress || (attachments.length > 0 ? `已添加 ${attachments.length} 个文件` : '选择文件，也可以从资源管理器复制后粘贴')}
             </span>

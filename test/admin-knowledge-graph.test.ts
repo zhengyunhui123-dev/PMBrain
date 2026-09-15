@@ -6,6 +6,7 @@ import type { BrainEngine } from '../src/core/engine.ts';
 import {
   getAdminKnowledgeGraphGlobal,
   getAdminKnowledgeGraphIsolated,
+  getAdminKnowledgeGraphMissingLinks,
   getAdminKnowledgeGraphMeta,
   getAdminKnowledgeGraphNeighborhood,
   searchAdminKnowledgeGraphPages,
@@ -216,6 +217,34 @@ describe('Admin knowledge graph read model', () => {
     expect(scoped.total_nodes).toBe(1);
     expect(scoped.nodes.map(node => node.id)).toEqual([isolatedOther.id]);
   });
+
+  test('missing-link view returns read-only source context and honest totals', async () => {
+    const calls: unknown[][] = [];
+    const fakeEngine = {
+      executeRaw: async (sql: string, params: unknown[] = []) => {
+        calls.push([sql, params]);
+        if (sql.includes('COUNT(*)::int AS total')) return [{ total: 1 }];
+        return [{
+          id: 9,
+          from_page_id: 3,
+          from_slug: 'notes/source',
+          from_title: '来源知识',
+          from_source_id: 'default',
+          from_source_name: 'default',
+          missing_page_id: 88,
+          link_type: '引用',
+          context: '来源知识引用目标',
+          link_source: 'markdown',
+        }];
+      },
+    } as unknown as BrainEngine;
+
+    const result = await getAdminKnowledgeGraphMissingLinks(fakeEngine, { sourceId: 'default' });
+    expect(result.total).toBe(1);
+    expect(result.truncated).toBe(false);
+    expect(result.rows[0]).toMatchObject({ from_title: '来源知识', missing_page_id: 88, link_type: '引用' });
+    expect(calls.every(([, params]) => (params as unknown[])[0] === 'default')).toBe(true);
+  });
 });
 
 describe('Knowledge graph client-side bounds', () => {
@@ -286,6 +315,9 @@ describe('Knowledge graph Admin surface contract', () => {
     expect(pageSource).toContain('局部图谱');
     expect(pageSource).toContain('全局图谱');
     expect(pageSource).toContain('孤立页');
+    expect(pageSource).toContain('缺失链接');
+    expect(pageSource).toContain('查看来源知识');
+    expect(pageSource).toContain('这里只读展示');
     expect(pageSource).toContain('requestFullscreen()');
     expect(pageSource).toContain('exitFullscreen()');
     expect(pageSource).toContain('onNodeHover');

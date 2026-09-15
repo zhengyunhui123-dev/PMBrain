@@ -113,9 +113,13 @@ describe('Admin knowledge assistant attachment contract', () => {
     expect(stylesSource).toContain('.nl-summary.is-partial');
   });
 describe('Admin local attachment staging safety contract', () => {
-  test('caps an individual upload at 50 MiB', () => {
+  test('keeps the 50 MiB cap for ordinary files while streaming session JSONL without that cap', () => {
     expect(ADMIN_UPLOAD_MAX_BYTES).toBe(50 * 1024 * 1024);
     expect(serveHttpSource).toContain("express.raw({ type: 'application/octet-stream', limit: ADMIN_UPLOAD_MAX_BYTES })");
+    expect(serveHttpSource).toContain("classifyAdminUploadFilename(fileName) === 'session'");
+    expect(serveHttpSource).toContain("pipeline(req, createWriteStream(filePath");
+    expect(consoleSource).toContain("extension !== '.jsonl' && file.size > MAX_KNOWLEDGE_ATTACHMENT_BYTES");
+    expect(consoleSource).toContain('会话 JSONL 不限制原始文件大小');
   });
 
   test('accepts a plain encoded basename and rejects path or Windows filename hazards', () => {
@@ -158,6 +162,7 @@ describe('Admin local attachment staging safety contract', () => {
     expect(serveHttpSource).toContain("mkdtemp(joinPath(tmpdir(), 'pmbrain-admin-upload-'))");
     expect(serveHttpSource).toContain('joinPath(tempDir, fileName)');
     expect(serveHttpSource).toContain("writeFile(filePath, req.body, { flag: 'wx', mode: 0o600 })");
+    expect(serveHttpSource).toContain("createWriteStream(filePath, { flags: 'wx', mode: 0o600 })");
   });
 
   test('reuses startImportRun and removes the temporary directory after completion', () => {

@@ -14,7 +14,7 @@ test('manual session import preserves Source, deduplication and original files',
   await verifySessionImport(engine);
 }, 60000);
 
-test('CLI imports a manually selected file without adding JSONL to directory discovery', async () => {
+test('CLI imports session JSONL from a selected file or folder without changing normal sync discovery', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'pmbrain-session-cli-'));
   const file = join(dir, 'chat_history.jsonl');
   writeFileSync(file, [
@@ -24,7 +24,8 @@ test('CLI imports a manually selected file without adding JSONL to directory dis
   ].map(row => JSON.stringify(row)).join('\n'));
   try {
     expect(collectSyncableFiles(dir, { strategy: 'markdown' })).toEqual([]);
-    const result = await runImport(engine, [file, '--no-embed', '--source-id', 'default']);
+    expect(collectSyncableFiles(dir, { strategy: 'markdown', includeSessions: true })).toEqual([file]);
+    const result = await runImport(engine, [dir, '--no-embed', '--source-id', 'default']);
     expect(result.imported).toBe(1);
     expect(result.errors).toBe(0);
   } finally {

@@ -1,5 +1,8 @@
 import { expect, test } from 'bun:test';
-import { parseSessionExport } from '../../src/core/conversation-parser/session-import.ts';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { parseSessionExport, parseSessionExportFile } from '../../src/core/conversation-parser/session-import.ts';
 
 const jsonl = (rows: unknown[]) => rows.map(row => JSON.stringify(row)).join('\n');
 const userText = { content_item_kinds: ['user.text'] };
@@ -126,3 +129,22 @@ test('a malformed human message is an error rather than a successful partial imp
     { type: 'event_msg', payload: { type: 'user_message', message: 42 } },
   ]), 'rollout.jsonl')).toThrow();
 });
+
+test('streams a large Codex log and ignores bulky tool output instead of rejecting the session by file size', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'pmbrain-large-session-'));
+  const file = join(dir, 'rollout-large.jsonl');
+  const largeToolOutput = 'x'.repeat(21 * 1024 * 1024);
+  writeFileSync(file, jsonl([
+    { type: 'session_meta', payload: { id: 'large-session' } },
+    { type: 'response_item', payload: { type: 'function_call_output', output: largeToolOutput } },
+    { type: 'event_msg', payload: { type: 'user_message', message: '保留真正的用户消息。' } },
+    { type: 'response_item', payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: '只导入会话正文。' }] } },
+  ]));
+  try {
+    const result = await parseSessionExportFile(file, file);
+    expect(result.messages.map(message => message.text)).toEqual(['保留真正的用户消息。', '只导入会话正文。']);
+    expect(result.digest).toHaveLength(64);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}, 30_000);

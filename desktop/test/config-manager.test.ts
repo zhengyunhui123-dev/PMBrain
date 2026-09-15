@@ -45,7 +45,9 @@ describe('desktop config manager', () => {
       engine: 'pglite',
       database_path: join(root, '.pmbrain', 'brain.pglite'),
       embedding_disabled: true,
+      desktop: { setup_completed: false },
     });
+    expect(getSetupInfo().needsSetup).toBe(true);
     expect(readFileSync(legacyPath, 'utf8')).toContain('/gbrain');
     expect(ensureFreshDesktopSetup()).toBe(false);
   });
@@ -371,6 +373,7 @@ describe('desktop config manager', () => {
     expect(config.provider_touchpoint_api_keys).toBeUndefined();
     expect(config.admin_bootstrap_token).toMatch(/^[A-Za-z0-9_-]{32,}$/);
     expect(config.desktop.knowledge_source_id).toMatch(/^desktop-[0-9a-f]{8}$/);
+    expect(config.desktop.setup_completed).toBe(true);
     const setupInfo = getSetupInfo();
     expect(setupInfo.needsSetup).toBe(false);
     expect(setupInfo.current.chatModel).toBe('zhipu:glm-4-plus');

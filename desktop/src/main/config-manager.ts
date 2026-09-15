@@ -181,6 +181,7 @@ type RawConfig = Record<string, unknown> & {
   zeroentropy_api_key?: string;
   admin_bootstrap_token?: string;
   desktop?: {
+    setup_completed?: boolean;
     knowledge_directory?: string;
     knowledge_source_id?: string;
     last_migrated_version?: string;
@@ -422,6 +423,7 @@ export function ensureFreshDesktopSetup(): boolean {
     database_path: join(directory, 'brain.pglite'),
     embedding_disabled: true,
     desktop: {
+      setup_completed: false,
       knowledge_directory: join(homedir(), 'Documents', 'PMBrain'),
       theme: 'system',
     },
@@ -593,7 +595,7 @@ export function getSetupInfo(): SetupInfo {
     typeof config?.embedding_model === 'string' ? config.embedding_model : undefined,
   );
   return {
-    needsSetup: !config,
+    needsSetup: !config || desktop?.setup_completed === false,
     configPath: path,
     defaults: {
       databasePath: join(pgliteDefaultDir, 'brain.pglite'),
@@ -895,6 +897,7 @@ export function saveSetup(payload: SetupPayload): {
     : existing.desktop?.knowledge_source_id);
   config.desktop = {
     ...existing.desktop,
+    setup_completed: true,
     theme: normalizeDesktopTheme(payload.theme ?? existing.desktop?.theme),
     ...(knowledgeDirectory ? { knowledge_directory: knowledgeDirectory, knowledge_source_id: sourceId } : {}),
   };

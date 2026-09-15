@@ -6,8 +6,9 @@ import cookieParser from 'cookie-parser';
 import cors from 'cors';
 import rateLimit from 'express-rate-limit';
 import { randomBytes, createHash } from 'crypto';
-import { mkdtemp, readFile, rm, writeFile } from 'fs/promises';
-import { existsSync, readFileSync } from 'node:fs';
+import { mkdtemp, readFile, rm, stat, writeFile } from 'fs/promises';
+import { createWriteStream, existsSync, readFileSync } from 'node:fs';
+import { pipeline } from 'node:stream/promises';
 import { tmpdir } from 'node:os';
 import { isIP } from 'node:net';
 import { extname, join as joinPath } from 'node:path';
@@ -60,6 +61,7 @@ import {
   getAdminBrainPageChunks,
   getAdminKnowledgeGraphGlobal,
   getAdminKnowledgeGraphIsolated,
+  getAdminKnowledgeGraphMissingLinks,
   getAdminKnowledgeGraphMeta,
   getAdminKnowledgeGraphNeighborhood,
   getAdminDreamOverview,
@@ -129,6 +131,7 @@ import {
   KnowledgeGraphMetaResponseSchema,
   KnowledgeGraphGlobalResponseSchema,
   KnowledgeGraphNeighborhoodResponseSchema,
+  KnowledgeGraphMissingLinksResponseSchema,
   KnowledgeGraphSearchResponseSchema,
   DreamOverviewResponseSchema,
   DreamRunResponseSchema,
@@ -909,6 +912,16 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
     }
   });
 
+  app.get('/admin/api/knowledge-graph/missing', requireAdmin, async (req: Request, res: Response) => {
+    try {
+      sendAdminContract(res, KnowledgeGraphMissingLinksResponseSchema, await getAdminKnowledgeGraphMissingLinks(engine, {
+        sourceId: firstQueryValue(req.query.sourceId),
+      }));
+    } catch (e) {
+      res.status(500).json({ error: e instanceof Error ? e.message : 'knowledge_graph_missing_failed' });
+    }
+  });
+
   app.get('/admin/api/knowledge-graph/search', requireAdmin, async (req: Request, res: Response) => {
     try {
       sendAdminContract(res, KnowledgeGraphSearchResponseSchema, await searchAdminKnowledgeGraphPages(engine, {
@@ -1122,7 +1135,19 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
   app.post(
     '/admin/api/import-upload-runs',
     requireAdmin,
-    express.raw({ type: 'application/octet-stream', limit: ADMIN_UPLOAD_MAX_BYTES }),
+    (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const fileName = normalizeAdminUploadFilename(req.get('x-pmbrain-filename'));
+        if (classifyAdminUploadFilename(fileName) === 'session') {
+          next();
+          return;
+        }
+        express.raw({ type: 'application/octet-stream', limit: ADMIN_UPLOAD_MAX_BYTES })(req, res, next);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'import_upload_run_failed';
+        res.status(message.startsWith('Unsupported file type:') ? 415 : 400).json({ error: message });
+      }
+    },
     async (req: Request, res: Response) => {
       let tempDir: string | null = null;
       let releaseUploadSlot: (() => void) | null = null;
@@ -1133,16 +1158,25 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
         releaseUploadSlot?.();
       };
       try {
-        if (!Buffer.isBuffer(req.body) || req.body.length === 0) {
+        const fileName = normalizeAdminUploadFilename(req.get('x-pmbrain-filename'));
+        const fileKind = classifyAdminUploadFilename(fileName);
+        if (fileKind !== 'session' && (!Buffer.isBuffer(req.body) || req.body.length === 0)) {
           res.status(400).json({ error: 'Upload body is required' });
           return;
         }
-        const fileName = normalizeAdminUploadFilename(req.get('x-pmbrain-filename'));
-        const fileKind = classifyAdminUploadFilename(fileName);
         const workersRaw = firstQueryValue(req.query.workers);
         const workers = workersRaw ? Number(workersRaw) : 1;
         if (!Number.isInteger(workers) || workers < 1 || workers > 8) {
           throw new Error('Upload workers must be an integer from 1 to 8');
+        }
+
+        tempDir = await mkdtemp(joinPath(tmpdir(), 'pmbrain-admin-upload-'));
+        const filePath = joinPath(tempDir, fileName);
+        if (fileKind === 'session') {
+          await pipeline(req, createWriteStream(filePath, { flags: 'wx', mode: 0o600 }));
+          if ((await stat(filePath)).size === 0) throw new Error('Upload body is required');
+        } else {
+          await writeFile(filePath, req.body, { flag: 'wx', mode: 0o600 });
         }
 
         const previousUpload = adminUploadTail;
@@ -1150,10 +1184,6 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
           releaseUploadSlot = resolve;
         });
         await previousUpload;
-
-        tempDir = await mkdtemp(joinPath(tmpdir(), 'pmbrain-admin-upload-'));
-        const filePath = joinPath(tempDir, fileName);
-        await writeFile(filePath, req.body, { flag: 'wx', mode: 0o600 });
 
         const cleanup = async () => {
           if (tempDir) await removeAdminUploadTempDir(tempDir);
