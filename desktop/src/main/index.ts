@@ -10,6 +10,7 @@ import { runCliChecked, preflightCliRuntime, type CliRuntime } from './cli-runne
 import {
   getDesktopPreferences,
   getSetupInfo,
+  ensureFreshDesktopSetup,
   saveDesktopPreferences,
 } from './config-manager.js';
 import { DatabaseUpgradeController } from './database/database-upgrade.js';
@@ -329,6 +330,7 @@ if (!app.requestSingleInstanceLock()) {
   app.whenReady().then(async () => {
     if (process.platform === 'win32') app.setAppUserModelId('com.pmbrain.desktop');
     logger = new DesktopLogger(app.getPath('userData'));
+    ensureFreshDesktopSetup();
     const initialSetup = getSetupInfo();
     lanController.initialize();
     desktopVersionHistory = updateDesktopVersionHistory(

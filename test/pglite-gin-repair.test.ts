@@ -109,6 +109,12 @@ describe('PGLite GIN corruption handling', () => {
     expect(isInfrastructureFailureCode('UNKNOWN')).toBe(false);
   });
 
+  test('classifies a PGLite TOAST parent-key split failure as infrastructure', () => {
+    const msg = 'failed to re-find parent key in index "pg_toast_16808_index" for split pages 294/295';
+    expect(classifyErrorCode(msg)).toBe('DB_INDEX_CORRUPT');
+    expect(isInfrastructureFailureCode(classifyErrorCode(msg))).toBe(true);
+  });
+
   test('treats WAL/open failures as unusable, not GIN-only damage', () => {
     expect(isDatabaseUnusableError(new Error('Aborted()'))).toBe(true);
     expect(isDatabaseUnusableError(new Error('PGLite failed to initialize its WASM runtime.'))).toBe(true);

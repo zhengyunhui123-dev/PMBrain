@@ -68,7 +68,10 @@ export function getRun(id: string): ConsoleRun | null {
 
 export function listRuns(): ConsoleRun[] {
   pruneRuns();
-  return [...runs.values()].sort((a, b) => b.startedAt.localeCompare(a.startedAt)).slice(0, 30);
+  return [...runs.values()].sort((a, b) =>
+    Date.parse(b.completedAt ?? b.startedAt) - Date.parse(a.completedAt ?? a.startedAt)
+    || b.id.localeCompare(a.id),
+  ).slice(0, 30);
 }
 
 function killProcessTree(child: ChildProcess): void {
@@ -332,7 +335,7 @@ export function parseCapturedDreamResult(text: string): unknown {
 }
 
 export function resolveRunTimeoutMs(timeoutMs: number | null | undefined, kind?: string): number | null {
-  if (kind === 'embed_stale' && timeoutMs === undefined) return null;
+  if (timeoutMs === undefined && (kind === 'embed_stale' || kind === 'sync_source' || kind === 'sync_all')) return null;
   return timeoutMs === null ? null : timeoutMs ?? 10 * 60 * 1000;
 }
 

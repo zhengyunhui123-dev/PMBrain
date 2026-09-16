@@ -26,9 +26,11 @@ function run(args: string[]): { exitCode: number; stdout: string; stderr: string
   // "no config" error-path tests need loadConfig() to return null, which it
   // won't if any env var fallback is set (src/core/config.ts:30). Tests
   // that seed their own config use freshHomeWithConfig() below.
-  const env = { ...process.env, HOME: tmp } as Record<string, string | undefined>;
+  const env = { ...process.env, HOME: tmp, PMBRAIN_HOME: tmp } as Record<string, string | undefined>;
   delete env.DATABASE_URL;
   delete env.GBRAIN_DATABASE_URL;
+  delete env.PMBRAIN_DATABASE_URL;
+  delete env.GBRAIN_HOME;
   try {
     const stdout = execFileSync('bun', ['run', CLI, ...args], {
       env: env as Record<string, string>,
@@ -62,7 +64,7 @@ describe('gbrain init --migrate-only — error paths', () => {
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('No brain configured');
     // Config file must not have been created (no saveConfig silently)
-    expect(existsSync(join(tmp, '.gbrain', 'config.json'))).toBe(false);
+    expect(existsSync(join(tmp, '.pmbrain', 'config.json'))).toBe(false);
   });
 
   test('JSON output flag emits a structured error', () => {
@@ -80,7 +82,7 @@ describe('gbrain init --migrate-only — error paths', () => {
 describe('gbrain init --migrate-only — happy path with PGLite config', () => {
   test('applies schema against existing PGLite config; does NOT modify config.json', () => {
     // Seed an existing PGLite config + brain file.
-    const gbrainDir = join(tmp, '.gbrain');
+    const gbrainDir = join(tmp, '.pmbrain');
     mkdirSync(gbrainDir, { recursive: true });
     const dbPath = join(gbrainDir, 'brain.pglite');
     const configPath = join(gbrainDir, 'config.json');
@@ -112,7 +114,7 @@ describe('gbrain init --migrate-only — happy path with PGLite config', () => {
   }, 30_000);
 
   test('idempotent on rerun — second call succeeds without error', () => {
-    const gbrainDir = join(tmp, '.gbrain');
+    const gbrainDir = join(tmp, '.pmbrain');
     mkdirSync(gbrainDir, { recursive: true });
     const dbPath = join(gbrainDir, 'brain.pglite');
     const configPath = join(gbrainDir, 'config.json');

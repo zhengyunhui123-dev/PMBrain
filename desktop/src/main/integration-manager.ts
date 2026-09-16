@@ -2,10 +2,11 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSyn
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { applyEdits, modify, parse as parseJsonc, type ParseError } from 'jsonc-parser';
 import { backupFile } from './config-manager.js';
 import type { SidecarManager } from './sidecar-manager.js';
 
-export type IntegrationClient = 'codebuddy' | 'workbuddy' | 'cursor' | 'trae' | 'claude' | 'codex' | 'grok' | 'qwenpaw' | 'hermes' | 'openclaw';
+export type IntegrationClient = 'cherry' | 'workbuddy' | 'cursor' | 'trae' | 'qwen' | 'qoder' | 'zcode' | 'mimo' | 'kimi' | 'qwenpaw' | 'codex' | 'claude' | 'grok' | 'hermes' | 'openclaw' | 'codebuddy';
 export type CredentialKind = 'api_key' | 'oauth';
 
 export interface IntegrationInfo {
@@ -14,6 +15,7 @@ export interface IntegrationInfo {
   path: string | null;
   configured: boolean;
   automatic: boolean;
+  defaultOrder?: number;
   configuredPort?: number;
   portMismatch?: boolean;
   connectionState?: 'connected' | 'saved' | 'invalid';
@@ -84,18 +86,40 @@ export interface SharedIntegrationSmokeResult {
   scopes: string[];
 }
 
+export const DEFAULT_INTEGRATION_ORDER: readonly IntegrationClient[] = [
+  'cherry', 'workbuddy', 'cursor', 'trae',
+  'qwen', 'qoder', 'zcode', 'mimo', 'kimi',
+  'qwenpaw', 'codex', 'claude', 'grok', 'hermes', 'openclaw', 'codebuddy',
+];
+
 const CLIENT_META: Record<IntegrationClient, { name: string; path: () => string | null; automatic: boolean }> = {
-  codebuddy: { name: 'CodeBuddy', path: () => join(homedir(), '.codebuddy', 'mcp.json'), automatic: true },
+  cherry: { name: 'CherryStudio', path: () => null, automatic: false },
   workbuddy: { name: 'Workbuddy', path: () => join(homedir(), '.workbuddy', 'mcp.json'), automatic: true },
   cursor: { name: 'Cursor', path: () => join(homedir(), '.cursor', 'mcp.json'), automatic: true },
   trae: { name: 'Trae Work', path: () => traeWorkIntegrationPath(), automatic: true },
-  claude: { name: 'Claude', path: () => join(homedir(), '.claude.json'), automatic: false },
-  codex: { name: 'Codex', path: () => join(process.env.CODEX_HOME || join(homedir(), '.codex'), 'config.toml'), automatic: true },
-  grok: { name: 'Grok Build', path: () => join(process.env.GROK_HOME || join(homedir(), '.grok'), 'config.toml'), automatic: true },
+  qwen: { name: 'Qwen Code', path: () => join(homedir(), '.qwen', 'settings.json'), automatic: true },
+  qoder: { name: 'Qoder CN（通义灵码）', path: () => join(homedir(), '.qoder-cn', 'settings.json'), automatic: true },
+  zcode: { name: 'ZCode（智谱）', path: () => join(homedir(), '.zcode', 'cli', 'config.json'), automatic: true },
+  mimo: { name: 'MiMo Code（小米）', path: () => mimoCodeIntegrationPath(), automatic: true },
+  kimi: { name: 'Kimi Code（月之暗面）', path: () => join(process.env.KIMI_CODE_HOME || join(homedir(), '.kimi-code'), 'mcp.json'), automatic: true },
   qwenpaw: { name: 'QwenPaw', path: () => qwenPawIntegrationPath(), automatic: true },
+  codex: { name: 'Codex', path: () => join(process.env.CODEX_HOME || join(homedir(), '.codex'), 'config.toml'), automatic: true },
+  claude: { name: 'Claude', path: () => join(homedir(), '.claude.json'), automatic: false },
+  grok: { name: 'Grok Build', path: () => join(process.env.GROK_HOME || join(homedir(), '.grok'), 'config.toml'), automatic: true },
   hermes: { name: 'Hermes', path: () => null, automatic: false },
   openclaw: { name: 'OpenClaw', path: () => null, automatic: false },
+  codebuddy: { name: 'CodeBuddy', path: () => join(homedir(), '.codebuddy', 'mcp.json'), automatic: true },
 };
+
+function mimoCodeIntegrationPath(homeDirectory = homedir()): string {
+  const root = process.env.MIMOCODE_HOME
+    || (process.platform === 'win32'
+      ? join(process.env.LOCALAPPDATA || join(homeDirectory, 'AppData', 'Local'), 'mimocode')
+      : join(process.env.XDG_CONFIG_HOME || join(homeDirectory, '.config'), 'mimocode'));
+  const jsonc = join(root, 'mimocode.jsonc');
+  const json = join(root, 'mimocode.json');
+  return existsSync(jsonc) || !existsSync(json) ? jsonc : json;
+}
 
 interface QwenPawPaths {
   root: string;
@@ -194,6 +218,29 @@ function jsonEntry(mcpUrl: string, token: string) {
   };
 }
 
+function qwenCodeEntry(mcpUrl: string, token: string) {
+  return {
+    httpUrl: mcpUrl,
+    headers: { Authorization: `Bearer ${token}` },
+  };
+}
+
+function kimiCodeEntry(mcpUrl: string, token: string) {
+  return {
+    url: mcpUrl,
+    headers: { Authorization: `Bearer ${token}` },
+  };
+}
+
+function mimoCodeEntry(mcpUrl: string, token: string) {
+  return {
+    type: 'remote',
+    url: mcpUrl,
+    enabled: true,
+    headers: { Authorization: `Bearer ${token}` },
+  };
+}
+
 function qwenPawEntry(mcpUrl: string, token: string) {
   return {
     name: 'PMBrain',
@@ -222,6 +269,32 @@ export function formatSharedIntegrationSnippet(
   }
   if (client === 'qwenpaw') {
     return JSON.stringify({ mcp: { clients: { pmbrain: qwenPawEntry(mcpUrl, token) } } }, null, 2);
+  }
+  if (client === 'qwen') {
+    return JSON.stringify({ mcpServers: { pmbrain: qwenCodeEntry(mcpUrl, token) } }, null, 2);
+  }
+  if (client === 'zcode') {
+    return JSON.stringify({ mcp: { servers: { pmbrain: jsonEntry(mcpUrl, token) } } }, null, 2);
+  }
+  if (client === 'mimo') {
+    return JSON.stringify({ mcp: { pmbrain: mimoCodeEntry(mcpUrl, token) } }, null, 2);
+  }
+  if (client === 'kimi') {
+    return JSON.stringify({ mcpServers: { pmbrain: kimiCodeEntry(mcpUrl, token) } }, null, 2);
+  }
+  if (client === 'cherry') {
+    return JSON.stringify({
+      mcpServers: {
+        pmbrain: {
+          name: 'PMBrain',
+          type: 'streamableHttp',
+          description: 'PMBrain 本地知识库',
+          isActive: true,
+          baseUrl: mcpUrl,
+          headers: { Authorization: `Bearer ${token}` },
+        },
+      },
+    }, null, 2);
   }
   return JSON.stringify({ mcpServers: { pmbrain: jsonEntry(mcpUrl, token) } }, null, 2);
 }
@@ -467,6 +540,14 @@ export async function revokeSharedIntegration(sidecar: SidecarManager, credentia
 }
 
 export function writeJsonIntegration(path: string, mcpUrl: string, token: string, backupRoot?: string): string | null {
+  return writeMcpServersIntegration(path, jsonEntry(mcpUrl, token), backupRoot);
+}
+
+function writeMcpServersIntegration(
+  path: string,
+  entry: Record<string, unknown>,
+  backupRoot?: string,
+): string | null {
   let root: Record<string, unknown> = {};
   if (existsSync(path)) {
     try {
@@ -479,9 +560,59 @@ export function writeJsonIntegration(path: string, mcpUrl: string, token: string
   const servers = root.mcpServers && typeof root.mcpServers === 'object'
     ? { ...(root.mcpServers as Record<string, unknown>) }
     : {};
-  servers.pmbrain = jsonEntry(mcpUrl, token);
+  servers.pmbrain = entry;
   root.mcpServers = servers;
   writeTextFile(path, `${JSON.stringify(root, null, 2)}\n`);
+  return backup;
+}
+
+export function writeQwenIntegration(path: string, mcpUrl: string, token: string, backupRoot?: string): string | null {
+  return writeMcpServersIntegration(path, qwenCodeEntry(mcpUrl, token), backupRoot);
+}
+
+export function writeQoderIntegration(path: string, mcpUrl: string, token: string, backupRoot?: string): string | null {
+  return writeMcpServersIntegration(path, jsonEntry(mcpUrl, token), backupRoot);
+}
+
+export function writeKimiIntegration(path: string, mcpUrl: string, token: string, backupRoot?: string): string | null {
+  return writeMcpServersIntegration(path, kimiCodeEntry(mcpUrl, token), backupRoot);
+}
+
+export function writeZCodeIntegration(path: string, mcpUrl: string, token: string, backupRoot?: string): string | null {
+  let root: Record<string, unknown> = {};
+  if (existsSync(path)) {
+    try {
+      root = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
+    } catch (error) {
+      throw new Error(`${path} 不是有效 JSON，已停止写入：${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  const mcp = root.mcp && typeof root.mcp === 'object' && !Array.isArray(root.mcp)
+    ? { ...(root.mcp as Record<string, unknown>) }
+    : {};
+  const servers = mcp.servers && typeof mcp.servers === 'object' && !Array.isArray(mcp.servers)
+    ? { ...(mcp.servers as Record<string, unknown>) }
+    : {};
+  servers.pmbrain = jsonEntry(mcpUrl, token);
+  mcp.servers = servers;
+  root.mcp = mcp;
+  const backup = backupFile(path, 'mcp', backupRoot);
+  writeTextFile(path, `${JSON.stringify(root, null, 2)}\n`);
+  return backup;
+}
+
+export function writeMimoIntegration(path: string, mcpUrl: string, token: string, backupRoot?: string): string | null {
+  const existing = existsSync(path) ? readFileSync(path, 'utf8') : '{}\n';
+  const errors: ParseError[] = [];
+  const root = parseJsonc(existing, errors, { allowTrailingComma: true });
+  if (errors.length > 0 || !root || typeof root !== 'object' || Array.isArray(root)) {
+    throw new Error(`${path} 不是有效 JSONC，已停止写入。`);
+  }
+  const backup = backupFile(path, 'mcp', backupRoot);
+  const edits = modify(existing, ['mcp', 'pmbrain'], mimoCodeEntry(mcpUrl, token), {
+    formattingOptions: { insertSpaces: true, tabSize: 2, eol: '\n' },
+  });
+  writeTextFile(path, applyEdits(existing, edits));
   return backup;
 }
 
@@ -681,6 +812,26 @@ function writeTextFile(path: string, content: string): void {
   }
 }
 
+type ConfiguredHttpEntry = {
+  url?: string;
+  httpUrl?: string;
+  headers?: { Authorization?: string };
+};
+
+function readConfiguredJsonEntry(client: IntegrationClient, path: string): ConfiguredHttpEntry | undefined {
+  const content = readFileSync(path, 'utf8');
+  const root = client === 'mimo'
+    ? parseJsonc(content, [], { allowTrailingComma: true }) as Record<string, unknown>
+    : JSON.parse(content) as Record<string, unknown>;
+  if (client === 'zcode') {
+    return (root.mcp as { servers?: { pmbrain?: ConfiguredHttpEntry } } | undefined)?.servers?.pmbrain;
+  }
+  if (client === 'mimo') {
+    return (root.mcp as { pmbrain?: ConfiguredHttpEntry } | undefined)?.pmbrain;
+  }
+  return (root.mcpServers as { pmbrain?: ConfiguredHttpEntry } | undefined)?.pmbrain;
+}
+
 function isConfigured(client: IntegrationClient, path: string | null): boolean {
   if (!path || !existsSync(path)) return false;
   try {
@@ -689,12 +840,11 @@ function isConfigured(client: IntegrationClient, path: string | null): boolean {
     if (client === 'qwenpaw' && path.toLowerCase().endsWith('.yaml')) {
       return qwenPawDriverIsConfigured(path);
     }
-    const parsed = JSON.parse(content) as {
-      mcpServers?: Record<string, unknown>;
-      mcp?: { clients?: Record<string, unknown> };
-    };
-    if (client === 'qwenpaw') return Boolean(parsed.mcp?.clients?.pmbrain);
-    return Boolean(parsed.mcpServers?.pmbrain);
+    if (client === 'qwenpaw') {
+      const parsed = JSON.parse(content) as { mcp?: { clients?: Record<string, unknown> } };
+      return Boolean(parsed.mcp?.clients?.pmbrain);
+    }
+    return Boolean(readConfiguredJsonEntry(client, path));
   } catch {
     return false;
   }
@@ -725,28 +875,36 @@ function readConfiguredPort(client: IntegrationClient, path: string): number | u
       const urlMatch = content.match(/^\s*url:\s*(https?:\/\/\S+\/mcp)\s*$/m);
       return urlMatch ? extractPortFromUrl(urlMatch[1]) : undefined;
     }
-    const parsed = JSON.parse(content) as {
-      mcpServers?: { pmbrain?: { url?: string } };
-      mcp?: { clients?: { pmbrain?: { url?: string } } };
-    };
-    const url = client === 'qwenpaw'
-      ? parsed.mcp?.clients?.pmbrain?.url
-      : parsed.mcpServers?.pmbrain?.url;
+    if (client === 'qwenpaw') {
+      const parsed = JSON.parse(content) as { mcp?: { clients?: { pmbrain?: { url?: string } } } };
+      const url = parsed.mcp?.clients?.pmbrain?.url;
+      return url ? extractPortFromUrl(url) : undefined;
+    }
+    const entry = readConfiguredJsonEntry(client, path);
+    const url = entry?.url ?? entry?.httpUrl;
     return url ? extractPortFromUrl(url) : undefined;
   } catch {
     return undefined;
   }
 }
 
+export function sortIntegrationsByConfigured<T extends Pick<IntegrationInfo, 'configured'>>(items: readonly T[]): T[] {
+  return items
+    .map((item, index) => ({ item, index }))
+    .sort((left, right) => Number(right.item.configured) - Number(left.item.configured) || left.index - right.index)
+    .map(({ item }) => item);
+}
+
 export function listIntegrations(currentPort?: number): IntegrationInfo[] {
-  return (Object.keys(CLIENT_META) as IntegrationClient[]).map((id) => {
+  const integrations = DEFAULT_INTEGRATION_ORDER.map((id, defaultOrder) => {
     const meta = CLIENT_META[id];
     const path = meta.path();
     const configured = isConfigured(id, path);
     const configuredPort = configured && path ? readConfiguredPort(id, path) : undefined;
     const portMismatch = configured && currentPort !== undefined && configuredPort !== undefined && configuredPort !== currentPort;
-    return { id, name: meta.name, path, automatic: meta.automatic, configured, configuredPort, portMismatch };
+    return { id, name: meta.name, path, automatic: meta.automatic, configured, defaultOrder, configuredPort, portMismatch };
   });
+  return sortIntegrationsByConfigured(integrations);
 }
 
 function readLocalBearer(client: IntegrationClient, path: string): string | undefined {
@@ -757,11 +915,8 @@ function readLocalBearer(client: IntegrationClient, path: string): string | unde
       const block = content.match(expression)?.[0] ?? content;
       return block.match(/Authorization\s*=\s*(['"])Bearer\s+(.+?)\1/)?.[2];
     }
-    if (['codebuddy', 'workbuddy', 'cursor', 'trae', 'claude'].includes(client)) {
-      const root = JSON.parse(readFileSync(path, 'utf8')) as {
-        mcpServers?: { pmbrain?: { headers?: { Authorization?: string } } };
-      };
-      return root.mcpServers?.pmbrain?.headers?.Authorization?.match(/^Bearer\s+(.+)$/)?.[1];
+    if (['codebuddy', 'workbuddy', 'cursor', 'trae', 'claude', 'qwen', 'qoder', 'zcode', 'mimo', 'kimi'].includes(client)) {
+      return readConfiguredJsonEntry(client, path)?.headers?.Authorization?.match(/^Bearer\s+(.+)$/)?.[1];
     }
   } catch {
     return undefined;
@@ -774,7 +929,7 @@ export async function probeLocalIntegrationConnectionState(
   path: string,
   sidecar: Pick<SidecarManager, 'verifyMcpBearer'>,
 ): Promise<'connected' | 'invalid' | undefined> {
-  if (!['codebuddy', 'workbuddy', 'cursor', 'trae', 'claude', 'codex', 'grok'].includes(client)) return undefined;
+  if (!['codebuddy', 'workbuddy', 'cursor', 'trae', 'claude', 'qwen', 'qoder', 'zcode', 'mimo', 'kimi', 'codex', 'grok'].includes(client)) return undefined;
   const token = readLocalBearer(client, path);
   if (!token) return 'invalid';
   try {
@@ -795,7 +950,7 @@ export async function listIntegrationsWithConnectionState(
       item.connectionState = await probeQwenPawConnectionState();
       return;
     }
-    if (sidecar && ['codebuddy', 'workbuddy', 'cursor', 'trae', 'claude', 'codex', 'grok'].includes(item.id)) {
+    if (sidecar && ['codebuddy', 'workbuddy', 'cursor', 'trae', 'claude', 'qwen', 'qoder', 'zcode', 'mimo', 'kimi', 'codex', 'grok'].includes(item.id)) {
       item.connectionState = await probeLocalIntegrationConnectionState(item.id, item.path, sidecar);
     }
   }));
@@ -860,14 +1015,28 @@ export async function configureIntegration(
   const token = await createApiKey(sidecar, credentialName);
   const smoke = await sidecar.smokeTest(token);
   if(!smoke.statsOk||smoke.toolCount===0)throw new Error('MCP 验证失败，未写客户端配置');
-  const entry = { mcpServers: { pmbrain: jsonEntry(sidecar.mcpUrl, token) } };
-  let snippet = JSON.stringify(entry, null, 2);
+  let snippet = formatSharedIntegrationSnippet(client, sidecar.mcpUrl, token);
   let backup: string | null = null;
   let configured = false;
   let connectionState: IntegrationResult['connectionState'];
 
   if (client === 'codebuddy' || client === 'workbuddy' || client === 'cursor' || client === 'trae' || opts.deep && client==='claude') {
     backup = writeJsonIntegration(path!, sidecar.mcpUrl, token);
+    configured = true;
+  } else if (client === 'qwen') {
+    backup = writeQwenIntegration(path!, sidecar.mcpUrl, token);
+    configured = true;
+  } else if (client === 'qoder') {
+    backup = writeQoderIntegration(path!, sidecar.mcpUrl, token);
+    configured = true;
+  } else if (client === 'zcode') {
+    backup = writeZCodeIntegration(path!, sidecar.mcpUrl, token);
+    configured = true;
+  } else if (client === 'mimo') {
+    backup = writeMimoIntegration(path!, sidecar.mcpUrl, token);
+    configured = true;
+  } else if (client === 'kimi') {
+    backup = writeKimiIntegration(path!, sidecar.mcpUrl, token);
     configured = true;
   } else if (client === 'qwenpaw') {
     const qwenPaw = qwenPawPaths();

@@ -102,8 +102,8 @@ const HELP = `用法：gbrain capture [内容] [选项]
   --slug SLUG          覆盖默认的 inbox/YYYY-MM-DD-<hash6> slug
   --type TYPE          覆盖页面类型，默认为 note
   --source ID          多来源大脑：写入非默认来源。
-                       解析顺序：--source > GBRAIN_SOURCE 环境变量 >
-                       .gbrain-source 文件 > local_path >
+                       解析顺序：--source > PMBRAIN_SOURCE 环境变量 >
+                       .pmbrain-source 文件 > local_path >
                        brain_default > 'default'。
                        瘦客户端不支持该参数，来源由服务端 OAuth 注册范围决定。
   --quiet, -q          仅向 stdout 输出 slug，适用于 shell 管道

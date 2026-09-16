@@ -351,11 +351,21 @@ describe('desktop settings renderer contracts', () => {
     expect(preview).toContain('inspectKnowledgeSourceDirectory: async');
     expect(preview).toContain('initializeKnowledgeSourceGit: async');
     expect(preview).toContain("id: 'trae', name: 'Trae Work'");
+    expect(preview).toContain("id: 'cherry', name: 'CherryStudio'");
     expect(preview).toContain("id: 'grok', name: 'Grok Build'");
     expect(preview).toContain("id: 'qwenpaw', name: 'QwenPaw'");
+    expect(preview).toContain("id: 'qwen', name: 'Qwen Code'");
+    expect(preview).toContain("id: 'qoder', name: 'Qoder CN（通义灵码）'");
+    expect(preview).toContain("id: 'zcode', name: 'ZCode（智谱）'");
+    expect(preview).toContain("id: 'mimo', name: 'MiMo Code（小米）'");
+    expect(preview).toContain("id: 'kimi', name: 'Kimi Code（月之暗面）'");
     expect(preview).toContain("id: 'hermes', name: 'Hermes'");
     expect(preview).toContain("id: 'openclaw', name: 'OpenClaw'");
+    expect(preview.indexOf("id: 'cherry'")).toBeLessThan(preview.indexOf("id: 'workbuddy'"));
+    expect(preview.indexOf("id: 'codebuddy'")).toBeGreaterThan(preview.indexOf("id: 'openclaw'"));
     expect(preview).toContain('drivers\\\\mcp\\\\pmbrain.yaml');
+    expect(renderer).toContain('Number(right.item.configured) - Number(left.item.configured)');
+    expect(renderer).toContain('(left.item.defaultOrder ?? left.index) - (right.item.defaultOrder ?? right.index)');
   });
 
   test('disables premature system saves and exposes accessible global notices', () => {

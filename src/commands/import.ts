@@ -167,7 +167,7 @@ export async function runImport(
   // brain_default → sole_non_default → seed_default. The nudge fires only
   // when the resolver returns tier='sole_non_default', so explicit users
   // see no behavior change.
-  if (!sourceId && (process.env.PMBRAIN_SOURCE || process.env.GBRAIN_SOURCE)) {
+  if (!sourceId && process.env.PMBRAIN_SOURCE) {
     const { resolveSourceId } = await import('../core/source-resolver.ts');
     sourceId = await resolveSourceId(engine, null);
   } else if (!sourceId) {
@@ -222,10 +222,14 @@ export async function runImport(
         ? [dirArg]
         : [];
     } else {
-      allFiles = collectSyncableFiles(dir, { strategy, includeOffice, includeImages });
+      allFiles = collectSyncableFiles(dir, {
+        strategy, includeOffice, includeImages, includeSessions: strategy !== 'code',
+      });
     }
   } catch {
-    allFiles = collectSyncableFiles(dir, { strategy, includeOffice, includeImages });
+    allFiles = collectSyncableFiles(dir, {
+      strategy, includeOffice, includeImages, includeSessions: strategy !== 'code',
+    });
   }
   console.error(
     `[pmbrain phase] import.collect_files done ${Date.now() - _walkT0}ms files=${allFiles.length}`,
@@ -633,6 +637,7 @@ interface CollectOpts {
   strategy?: SyncStrategy;
   includeOffice?: boolean;
   includeImages?: boolean;
+  includeSessions?: boolean;
 }
 
 /**
@@ -647,8 +652,10 @@ function isCollectibleForWalker(
   strategy: SyncStrategy,
   multimodalOn: boolean,
   includeOffice: boolean,
+  includeSessions = false,
 ): boolean {
   if (isOfficeTransientFile(path)) return false;
+  if (includeSessions && strategy !== 'code' && isSessionExportPath(path)) return true;
   const officeAllowed = includeOffice && isOfficeFilePath(path);
   switch (strategy) {
     case 'code':
@@ -685,6 +692,7 @@ function isCollectibleForWalker(
 export function collectSyncableFiles(dir: string, opts: CollectOpts = {}): string[] {
   const strategy: SyncStrategy = opts.strategy ?? 'markdown';
   const includeOffice = opts.includeOffice === true;
+  const includeSessions = opts.includeSessions === true;
   const multimodalOn = opts.includeImages === true
     || (process.env.PMBRAIN_EMBEDDING_MULTIMODAL ?? process.env.GBRAIN_EMBEDDING_MULTIMODAL) === 'true';
   const maxDepth = resolveMaxWalkDepth();
@@ -732,7 +740,7 @@ export function collectSyncableFiles(dir: string, opts: CollectOpts = {}): strin
         visitedInodes.set(inodeKey, true);
         walk(full, depth + 1);
       } else if (stat.isFile()) {
-        if (!isCollectibleForWalker(entry, strategy, multimodalOn, includeOffice)) continue;
+        if (!isCollectibleForWalker(entry, strategy, multimodalOn, includeOffice, includeSessions)) continue;
         files.push(full);
       }
     }

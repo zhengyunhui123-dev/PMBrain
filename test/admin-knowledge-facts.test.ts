@@ -4,7 +4,7 @@
  * 知识库这一页是数据库内容的可视化，不是另一套知识分类。
  * 这组测试确认三件事：
  * 1. 「事实」页读的是 facts 表，不是把页面类型叫 fact 的 Markdown。
- * 2. 笔记不再被误分进「原始与资料」；原始资料只放会话、会议、导入材料和参考来源。
+ * 2. 导入内容归原始资料，有明确生成来源的产物归结构化知识，类型不能替代来源。
  * 3. 打开一个知识页时，能看到挂在这个页面上的事实。
  */
 
@@ -17,23 +17,22 @@ import {
   listAdminBrainFacts,
   listAdminBrainPages,
 } from '../src/commands/admin-console.ts';
-import { KNOWLEDGE_PAGE_VIEW_TYPES, knowledgePageViewTypes } from '../shared/knowledge-views.ts';
+import { KNOWLEDGE_PAGE_VIEW_TYPES, knowledgePageViewTypes, knowledgePageViewAllowsType } from '../shared/knowledge-views.ts';
 
 const brainDataSource = readFileSync(join(process.cwd(), 'admin/src/pages/BrainData.tsx'), 'utf8');
 
 describe('Knowledge data classification and facts inventory', () => {
-  test('notes belong with knowledge pages, not imported source material', () => {
-    expect(KNOWLEDGE_PAGE_VIEW_TYPES.materials).not.toContain('note');
-    expect(KNOWLEDGE_PAGE_VIEW_TYPES.structured).toContain('note');
-    expect(KNOWLEDGE_PAGE_VIEW_TYPES.structured).toContain('person');
-    expect(KNOWLEDGE_PAGE_VIEW_TYPES.structured).toContain('company');
-    expect(KNOWLEDGE_PAGE_VIEW_TYPES.structured).toContain('event');
-    expect(KNOWLEDGE_PAGE_VIEW_TYPES.structured).toContain('project');
-    expect(KNOWLEDGE_PAGE_VIEW_TYPES.materials).toContain('calendar-event');
+  test('content types do not imply processing provenance', () => {
+    for (const type of ['note', 'person', 'project', 'proposal', 'calendar-event']) {
+      expect(knowledgePageViewAllowsType('materials', type)).toBe(true);
+      expect(knowledgePageViewAllowsType('structured', type)).toBe(true);
+    }
+    expect(knowledgePageViewAllowsType('structured', 'extract_receipt')).toBe(false);
+    expect(knowledgePageViewAllowsType('materials', 'take')).toBe(false);
     expect(KNOWLEDGE_PAGE_VIEW_TYPES.insights).toContain('idea');
-    expect(knowledgePageViewTypes('facts')).toBeUndefined();
+    expect(knowledgePageViewTypes('materials')).toBeUndefined();
+    expect(knowledgePageViewTypes('structured')).toBeUndefined();
   });
-
   test('the knowledge page exposes a first-class facts tab', () => {
     expect(brainDataSource).toContain("['facts', '事实']");
     expect(brainDataSource).toContain('api.brainFacts');
@@ -42,9 +41,10 @@ describe('Knowledge data classification and facts inventory', () => {
     expect(brainDataSource).toContain('setPageError(message)');
   });
 
-  test('page view presets no longer dump notes into imported materials', async () => {
+  test('page view predicates use provenance before pagination', async () => {
     const statements: string[] = [];
     const engine = {
+      purgeDeletedPages: async () => 0,
       executeRaw: async (sql: string, params: unknown[] = []) => {
         statements.push(`${sql} :: ${JSON.stringify(params)}`);
         return sql.includes('COUNT(*)') ? [{ total: 0 }] : [];
@@ -53,16 +53,21 @@ describe('Knowledge data classification and facts inventory', () => {
 
     await listAdminBrainPages(engine, { view: 'materials' });
     expect(statements[0]).toContain('p.type IN');
-    expect(statements[0]).toContain('conversation');
+    expect(statements[0]).toContain('dream_generated');
+    expect(statements[0]).toContain('ORDER BY p.updated_at DESC, p.id DESC');
     expect(statements[0]).not.toContain('"note"');
 
     statements.length = 0;
     await listAdminBrainPages(engine, { view: 'structured' });
-    expect(statements[0]).toContain('"note"');
-    expect(statements[0]).toContain('"person"');
-    expect(statements[0]).toContain('"company"');
-    expect(statements[0]).toContain('"event"');
-    expect(statements[0]).toContain('"project"');
+    expect(statements[0]).toContain('synthesized_by');
+    expect(statements[0]).toContain('extracted_by');
+    expect(statements[0]).toContain('synthesized_by');
+    expect(statements[0]).toContain('synthesized_by');
+    for (const view of ['all', 'insights', 'trash']) {
+      statements.length = 0;
+      await listAdminBrainPages(engine, { view });
+      expect(statements[0]).toContain(`ORDER BY p.${view === 'trash' ? 'deleted_at' : 'updated_at'} DESC, p.id DESC`);
+    }
   });
 
   test('facts inventory reads the facts table and hides expired rows by default', async () => {

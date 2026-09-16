@@ -29,7 +29,7 @@ let testQueue: Promise<void> = Promise.resolve();
 
 export function modelConnectionTestTimeoutMs(provider: string): number {
   const normalized = normalizeProvider(provider);
-  return normalized === 'ollama' || normalized === 'llama-server'
+  return normalized === 'ollama' || normalized === 'llama-server' || normalized === 'custom-openai'
     ? LOCAL_MODEL_CONNECTION_TEST_TIMEOUT_MS
     : MODEL_CONNECTION_TEST_TIMEOUT_MS;
 }

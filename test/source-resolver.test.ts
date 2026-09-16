@@ -3,8 +3,8 @@
  *
  * Priority order (highest first):
  *   1. Explicit --source flag
- *   2. GBRAIN_SOURCE env var
- *   3. .gbrain-source dotfile walk-up
+ *   2. PMBRAIN_SOURCE env var
+ *   3. .pmbrain-source dotfile walk-up
  *   4. Registered source whose local_path contains CWD (longest prefix wins)
  *   5. Brain-level `sources.default` config key
  *   6. Fallback: literal 'default'
@@ -43,12 +43,12 @@ function makeStub(registeredSources: string[], paths: Array<{ id: string; local_
 describe('resolveSourceId priority 1 — explicit flag', () => {
   test('wins over every other signal', async () => {
     const engine = makeStub(['default', 'gstack', 'wiki'], [{ id: 'wiki', local_path: '/tmp' }], 'gstack');
-    process.env.GBRAIN_SOURCE = 'wiki';
+    process.env.PMBRAIN_SOURCE = 'wiki';
     try {
       const id = await resolveSourceId(engine, 'gstack', '/tmp/whatever');
       expect(id).toBe('gstack');
     } finally {
-      delete process.env.GBRAIN_SOURCE;
+      delete process.env.PMBRAIN_SOURCE;
     }
   });
 
@@ -65,22 +65,22 @@ describe('resolveSourceId priority 1 — explicit flag', () => {
 
 // ── Priority 2: env var ────────────────────────────────────
 
-describe('resolveSourceId priority 2 — GBRAIN_SOURCE env', () => {
+describe('resolveSourceId priority 2 — PMBRAIN_SOURCE env', () => {
   test('wins over dotfile / registered-path / default', async () => {
     const engine = makeStub(['default', 'env-wins'], [{ id: 'other', local_path: '/tmp' }], 'default');
-    process.env.GBRAIN_SOURCE = 'env-wins';
+    process.env.PMBRAIN_SOURCE = 'env-wins';
     try {
       const id = await resolveSourceId(engine, null, '/tmp/x');
       expect(id).toBe('env-wins');
     } finally {
-      delete process.env.GBRAIN_SOURCE;
+      delete process.env.PMBRAIN_SOURCE;
     }
   });
 });
 
 // ── Priority 3: dotfile walk-up ────────────────────────────
 
-describe('resolveSourceId priority 3 — .gbrain-source dotfile walk-up', () => {
+describe('resolveSourceId priority 3 — .pmbrain-source dotfile walk-up', () => {
   let tmpdirPath: string;
 
   beforeEach(() => {
@@ -91,14 +91,14 @@ describe('resolveSourceId priority 3 — .gbrain-source dotfile walk-up', () => 
   });
 
   test('finds dotfile in CWD', async () => {
-    writeFileSync(join(tmpdirPath, '.gbrain-source'), 'gstack\n');
+    writeFileSync(join(tmpdirPath, '.pmbrain-source'), 'gstack\n');
     const engine = makeStub(['default', 'gstack'], [], null);
     const id = await resolveSourceId(engine, null, tmpdirPath);
     expect(id).toBe('gstack');
   });
 
   test('walks up ancestors to find dotfile', async () => {
-    writeFileSync(join(tmpdirPath, '.gbrain-source'), 'wiki\n');
+    writeFileSync(join(tmpdirPath, '.pmbrain-source'), 'wiki\n');
     const deep = join(tmpdirPath, 'a', 'b', 'c');
     mkdirSync(deep, { recursive: true });
     const engine = makeStub(['default', 'wiki'], [], null);
@@ -107,10 +107,21 @@ describe('resolveSourceId priority 3 — .gbrain-source dotfile walk-up', () => 
   });
 
   test('ignores dotfile with invalid content', async () => {
-    writeFileSync(join(tmpdirPath, '.gbrain-source'), 'INVALID!\n');
+    writeFileSync(join(tmpdirPath, '.pmbrain-source'), 'INVALID!\n');
     const engine = makeStub(['default'], [], null);
     const id = await resolveSourceId(engine, null, tmpdirPath);
     expect(id).toBe('default');
+  });
+
+  test('ignores legacy GBrain env and dotfile signals', async () => {
+    process.env.GBRAIN_SOURCE = 'legacy-env';
+    writeFileSync(join(tmpdirPath, '.gbrain-source'), 'legacy-dotfile\n');
+    const engine = makeStub(['default', 'legacy-env', 'legacy-dotfile'], [], null);
+    try {
+      expect(await resolveSourceId(engine, null, tmpdirPath)).toBe('default');
+    } finally {
+      delete process.env.GBRAIN_SOURCE;
+    }
   });
 });
 

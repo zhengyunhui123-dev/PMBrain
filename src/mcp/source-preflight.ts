@@ -3,7 +3,7 @@ import { isValidSourceId } from '../core/source-id.ts';
 
 export async function assertStdioSourceBindable(
   engine: BrainEngine,
-  env: string | undefined = process.env.PMBRAIN_SOURCE || process.env.GBRAIN_SOURCE,
+  env: string | undefined = process.env.PMBRAIN_SOURCE,
 ): Promise<void> {
   if (!env) return;
   if (env === '__all__' || !isValidSourceId(env)) return;
@@ -21,10 +21,10 @@ export async function assertStdioSourceBindable(
   }
   if (rows.length === 0) {
     throw new Error(
-      `GBRAIN_SOURCE="${env}" is not a registered active source (missing or archived); ` +
+      `PMBRAIN_SOURCE="${env}" is not a registered active source (missing or archived); ` +
       `refusing to serve a phantom scope (reads would return nothing, writes would fail ` +
-      `on the sources foreign key). Run \`pmbrain sources list\`, then set GBRAIN_SOURCE ` +
-      `or PMBRAIN_SOURCE to a listed id or unset it.`,
+      `on the sources foreign key). Run \`pmbrain sources list\`, then set PMBRAIN_SOURCE ` +
+      `to a listed id or unset it.`,
     );
   }
 }

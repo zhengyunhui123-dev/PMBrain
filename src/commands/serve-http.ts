@@ -1705,6 +1705,7 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
       const agent = req.query.agent as string;
       const operation = req.query.operation as string;
       const status = req.query.status as string;
+      const businessOnly = req.query.kind === 'business';
 
       // Dynamic filtering: SqlQuery is deliberately scalar-only and does not
       // support fragment composition (the prior `sql\`AND ... = ${v}\`` shape).
@@ -1725,6 +1726,12 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
       if (status && status !== 'all') {
         filters.push(`AND status = $${params.length + 1}`);
         params.push(status);
+      }
+      if (businessOnly) {
+        filters.push("AND operation <> 'tools/list'");
+        filters.push("AND operation <> 'initialize'");
+        filters.push("AND operation <> 'notifications/initialized'");
+        filters.push("AND operation <> 'ping'");
       }
       const filterSql = filters.join(' ');
       const limitParam = `$${params.length + 1}`;

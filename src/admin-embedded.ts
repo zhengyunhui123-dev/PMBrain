@@ -7,19 +7,19 @@
 // the request path the express handler sees to (resolved-path, mime).
 
 // @ts-ignore — type: 'file' is Bun ESM, not in lib.d.ts
-import A_0_assets_KnowledgeGraph_DP5u7LcC_js from '../admin/dist/assets/KnowledgeGraph-DP5u7LcC.js' with { type: 'file' };
+import A_0_assets_KnowledgeGraph_BwGAeLrU_js from '../admin/dist/assets/KnowledgeGraph-BwGAeLrU.js' with { type: 'file' };
 // @ts-ignore — type: 'file' is Bun ESM, not in lib.d.ts
 import A_1_assets_charts_DVozmnPF_js from '../admin/dist/assets/charts-DVozmnPF.js' with { type: 'file' };
 // @ts-ignore — type: 'file' is Bun ESM, not in lib.d.ts
-import A_2_assets_index_CbkTZXDr_js from '../admin/dist/assets/index-CbkTZXDr.js' with { type: 'file' };
+import A_2_assets_index_Buw4h_aZ_css from '../admin/dist/assets/index-Buw4h-aZ.css' with { type: 'file' };
 // @ts-ignore — type: 'file' is Bun ESM, not in lib.d.ts
-import A_3_assets_index_DNqU_tdo_css from '../admin/dist/assets/index-DNqU_tdo.css' with { type: 'file' };
+import A_3_assets_index_OT1rZqeg_js from '../admin/dist/assets/index-OT1rZqeg.js' with { type: 'file' };
 // @ts-ignore — type: 'file' is Bun ESM, not in lib.d.ts
 import A_4_assets_knowledge_graph_LvcWT1vl_js from '../admin/dist/assets/knowledge-graph-LvcWT1vl.js' with { type: 'file' };
 // @ts-ignore — type: 'file' is Bun ESM, not in lib.d.ts
 import A_5_assets_react_CTwocyy__js from '../admin/dist/assets/react-CTwocyy_.js' with { type: 'file' };
 // @ts-ignore — type: 'file' is Bun ESM, not in lib.d.ts
-import A_6_assets_ui_BBbr1Aw9_js from '../admin/dist/assets/ui-BBbr1Aw9.js' with { type: 'file' };
+import A_6_assets_ui_DAns9rjb_js from '../admin/dist/assets/ui-DAns9rjb.js' with { type: 'file' };
 // @ts-ignore — type: 'file' is Bun ESM, not in lib.d.ts
 import A_7_customer_service_qr_png from '../admin/dist/customer-service-qr.png' with { type: 'file' };
 // @ts-ignore — type: 'file' is Bun ESM, not in lib.d.ts
@@ -35,13 +35,13 @@ export interface AdminAsset {
 }
 
 export const ADMIN_ASSETS: Record<string, AdminAsset> = {
-  "/admin/assets/KnowledgeGraph-DP5u7LcC.js": { path: A_0_assets_KnowledgeGraph_DP5u7LcC_js as unknown as string, mime: "application/javascript; charset=utf-8" },
+  "/admin/assets/KnowledgeGraph-BwGAeLrU.js": { path: A_0_assets_KnowledgeGraph_BwGAeLrU_js as unknown as string, mime: "application/javascript; charset=utf-8" },
   "/admin/assets/charts-DVozmnPF.js": { path: A_1_assets_charts_DVozmnPF_js as unknown as string, mime: "application/javascript; charset=utf-8" },
-  "/admin/assets/index-CbkTZXDr.js": { path: A_2_assets_index_CbkTZXDr_js as unknown as string, mime: "application/javascript; charset=utf-8" },
-  "/admin/assets/index-DNqU_tdo.css": { path: A_3_assets_index_DNqU_tdo_css as unknown as string, mime: "text/css; charset=utf-8" },
+  "/admin/assets/index-Buw4h-aZ.css": { path: A_2_assets_index_Buw4h_aZ_css as unknown as string, mime: "text/css; charset=utf-8" },
+  "/admin/assets/index-OT1rZqeg.js": { path: A_3_assets_index_OT1rZqeg_js as unknown as string, mime: "application/javascript; charset=utf-8" },
   "/admin/assets/knowledge-graph-LvcWT1vl.js": { path: A_4_assets_knowledge_graph_LvcWT1vl_js as unknown as string, mime: "application/javascript; charset=utf-8" },
   "/admin/assets/react-CTwocyy_.js": { path: A_5_assets_react_CTwocyy__js as unknown as string, mime: "application/javascript; charset=utf-8" },
-  "/admin/assets/ui-BBbr1Aw9.js": { path: A_6_assets_ui_BBbr1Aw9_js as unknown as string, mime: "application/javascript; charset=utf-8" },
+  "/admin/assets/ui-DAns9rjb.js": { path: A_6_assets_ui_DAns9rjb_js as unknown as string, mime: "application/javascript; charset=utf-8" },
   "/admin/customer-service-qr.png": { path: A_7_customer_service_qr_png as unknown as string, mime: "image/png" },
   "/admin/index.html": { path: A_8_index_html as unknown as string, mime: "text/html; charset=utf-8" },
   "/admin/wechat-donation.jpg": { path: A_9_wechat_donation_jpg as unknown as string, mime: "image/jpeg" },

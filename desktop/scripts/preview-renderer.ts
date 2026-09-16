@@ -103,16 +103,22 @@ window.pmbrainDesktop = {
       }
     },
     integrations: [
-      { id: 'codebuddy', name: 'CodeBuddy', path: 'C:\\\\Users\\\\zhengyunhui\\\\.codebuddy\\\\mcp.json', configured: true, automatic: true },
+      { id: 'cherry', name: 'CherryStudio', path: null, configured: false, automatic: false },
       { id: 'workbuddy', name: 'Workbuddy', path: 'C:\\\\Users\\\\zhengyunhui\\\\.workbuddy\\\\mcp.json', configured: false, automatic: true },
       { id: 'cursor', name: 'Cursor', path: 'C:\\\\Users\\\\zhengyunhui\\\\.cursor\\\\mcp.json', configured: true, automatic: true },
       { id: 'trae', name: 'Trae Work', path: 'C:\\\\Users\\\\zhengyunhui\\\\AppData\\\\Roaming\\\\TRAE SOLO CN\\\\User\\\\mcp.json', configured: false, automatic: true },
-      { id: 'claude', name: 'Claude', path: 'C:\\Users\\zhengyunhui\\.claude.json', configured: false, automatic: false },
-      { id: 'codex', name: 'Codex', path: 'C:\\\\Users\\\\zhengyunhui\\\\.codex\\\\config.toml', configured: false, automatic: true },
-      { id: 'grok', name: 'Grok Build', path: 'C:\\\\Users\\\\zhengyunhui\\\\.grok\\\\config.toml', configured: true, automatic: true, connectionState: 'connected' },
+      { id: 'qwen', name: 'Qwen Code', path: 'C:\\\\Users\\\\zhengyunhui\\\\.qwen\\\\settings.json', configured: false, automatic: true },
+      { id: 'qoder', name: 'Qoder CN（通义灵码）', path: 'C:\\\\Users\\\\zhengyunhui\\\\.qoder-cn\\\\settings.json', configured: false, automatic: true },
+      { id: 'zcode', name: 'ZCode（智谱）', path: 'C:\\\\Users\\\\zhengyunhui\\\\.zcode\\\\cli\\\\config.json', configured: false, automatic: true },
+      { id: 'mimo', name: 'MiMo Code（小米）', path: 'C:\\\\Users\\\\zhengyunhui\\\\AppData\\\\Local\\\\mimocode\\\\mimocode.jsonc', configured: false, automatic: true },
+      { id: 'kimi', name: 'Kimi Code（月之暗面）', path: 'C:\\\\Users\\\\zhengyunhui\\\\.kimi-code\\\\mcp.json', configured: false, automatic: true },
       { id: 'qwenpaw', name: 'QwenPaw', path: 'C:\\\\Users\\\\zhengyunhui\\\\.qwenpaw\\\\workspaces\\\\default\\\\drivers\\\\mcp\\\\pmbrain.yaml', configured: true, automatic: true, connectionState: 'connected' },
+      { id: 'codex', name: 'Codex', path: 'C:\\\\Users\\\\zhengyunhui\\\\.codex\\\\config.toml', configured: false, automatic: true },
+      { id: 'claude', name: 'Claude', path: 'C:\\Users\\zhengyunhui\\.claude.json', configured: false, automatic: false },
+      { id: 'grok', name: 'Grok Build', path: 'C:\\\\Users\\\\zhengyunhui\\\\.grok\\\\config.toml', configured: true, automatic: true, connectionState: 'connected' },
       { id: 'hermes', name: 'Hermes', path: null, configured: false, automatic: false },
       { id: 'openclaw', name: 'OpenClaw', path: null, configured: false, automatic: false },
+      { id: 'codebuddy', name: 'CodeBuddy', path: 'C:\\\\Users\\\\zhengyunhui\\\\.codebuddy\\\\mcp.json', configured: true, automatic: true },
     ],
     port: 3132
   }),
@@ -338,16 +344,22 @@ interface MockIntegration {
   connectionState?: 'connected' | 'saved' | 'invalid';
 }
 const mockIntegrations: MockIntegration[] = [
-  { id: 'codebuddy', name: 'CodeBuddy', path: 'C:\\Users\\zhengyunhui\\.codebuddy\\mcp.json', configured: true, automatic: true },
+  { id: 'cherry', name: 'CherryStudio', path: null, configured: false, automatic: false },
   { id: 'workbuddy', name: 'Workbuddy', path: 'C:\\Users\\zhengyunhui\\.workbuddy\\mcp.json', configured: true, automatic: true },
   { id: 'cursor', name: 'Cursor', path: 'C:\\Users\\zhengyunhui\\.cursor\\mcp.json', configured: true, automatic: true },
   { id: 'trae', name: 'Trae Work', path: 'C:\\Users\\zhengyunhui\\AppData\\Roaming\\TRAE SOLO CN\\User\\mcp.json', configured: false, automatic: true },
-  { id: 'claude', name: 'Claude', path: 'C:\Users\zhengyunhui\.claude.json', configured: false, automatic: false },
-  { id: 'codex', name: 'Codex', path: 'C:\\Users\\zhengyunhui\\.codex\\config.toml', configured: false, automatic: true },
-  { id: 'grok', name: 'Grok Build', path: 'C:\\Users\\zhengyunhui\\.grok\\config.toml', configured: true, automatic: true, connectionState: 'connected' },
+  { id: 'qwen', name: 'Qwen Code', path: 'C:\\Users\\zhengyunhui\\.qwen\\settings.json', configured: false, automatic: true },
+  { id: 'qoder', name: 'Qoder CN（通义灵码）', path: 'C:\\Users\\zhengyunhui\\.qoder-cn\\settings.json', configured: false, automatic: true },
+  { id: 'zcode', name: 'ZCode（智谱）', path: 'C:\\Users\\zhengyunhui\\.zcode\\cli\\config.json', configured: false, automatic: true },
+  { id: 'mimo', name: 'MiMo Code（小米）', path: 'C:\\Users\\zhengyunhui\\AppData\\Local\\mimocode\\mimocode.jsonc', configured: false, automatic: true },
+  { id: 'kimi', name: 'Kimi Code（月之暗面）', path: 'C:\\Users\\zhengyunhui\\.kimi-code\\mcp.json', configured: false, automatic: true },
   { id: 'qwenpaw', name: 'QwenPaw', path: 'C:\\Users\\zhengyunhui\\.qwenpaw\\workspaces\\default\\drivers\\mcp\\pmbrain.yaml', configured: true, automatic: true, connectionState: 'connected' },
+  { id: 'codex', name: 'Codex', path: 'C:\\Users\\zhengyunhui\\.codex\\config.toml', configured: false, automatic: true },
+  { id: 'claude', name: 'Claude', path: 'C:\Users\zhengyunhui\.claude.json', configured: false, automatic: false },
+  { id: 'grok', name: 'Grok Build', path: 'C:\\Users\\zhengyunhui\\.grok\\config.toml', configured: true, automatic: true, connectionState: 'connected' },
   { id: 'hermes', name: 'Hermes', path: null, configured: false, automatic: false },
   { id: 'openclaw', name: 'OpenClaw', path: null, configured: false, automatic: false },
+  { id: 'codebuddy', name: 'CodeBuddy', path: 'C:\\Users\\zhengyunhui\\.codebuddy\\mcp.json', configured: true, automatic: true },
 ];
 const cardsHtml = mockIntegrations.map((item) => {
   const badgeClass = item.configured ? 'configured badge' : 'badge';

@@ -636,7 +636,7 @@ export function parseOpArgs(op: Operation, args: string[]): Record<string, unkno
 
 async function makeContext(engine: BrainEngine, params: Record<string, unknown>): Promise<OperationContext> {
   // v0.31.8 (D11): resolve sourceId via the canonical 6-tier chain. Honors
-  // --source / GBRAIN_SOURCE / .gbrain-source / path-match / brain default /
+  // --source / PMBRAIN_SOURCE / .pmbrain-source / path-match / brain default /
   // 'default'. Wrapped in try/catch so a doctor / single-source brain that
   // never set up sources still returns 'default' silently.
   let sourceId: string | undefined;

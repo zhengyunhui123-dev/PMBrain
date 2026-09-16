@@ -3,6 +3,7 @@ import type {
   KnowledgeGraphEdge,
   KnowledgeGraphGlobalResponse,
   KnowledgeGraphMetaResponse,
+  KnowledgeGraphMissingLinksResponse,
   KnowledgeGraphNeighborhoodResponse,
   KnowledgeGraphNode,
   KnowledgeGraphSearchResponse,
@@ -12,6 +13,7 @@ export const ADMIN_KNOWLEDGE_GRAPH_NEIGHBOR_LIMIT = 30;
 export const ADMIN_KNOWLEDGE_GRAPH_SEARCH_LIMIT = 12;
 export const ADMIN_KNOWLEDGE_GRAPH_GLOBAL_NODE_LIMIT = 10_000;
 export const ADMIN_KNOWLEDGE_GRAPH_GLOBAL_EDGE_LIMIT = 25_000;
+export const ADMIN_KNOWLEDGE_GRAPH_MISSING_LINK_LIMIT = 1_000;
 
 type NodeRow = Omit<KnowledgeGraphNode, 'tags'>;
 
@@ -393,5 +395,48 @@ export async function getAdminKnowledgeGraphIsolated(
     truncated: rows.length > ADMIN_KNOWLEDGE_GRAPH_GLOBAL_NODE_LIMIT,
     node_limit: ADMIN_KNOWLEDGE_GRAPH_GLOBAL_NODE_LIMIT,
     edge_limit: ADMIN_KNOWLEDGE_GRAPH_GLOBAL_EDGE_LIMIT,
+  };
+}
+
+export async function getAdminKnowledgeGraphMissingLinks(
+  engine: BrainEngine,
+  query: { sourceId?: string },
+): Promise<KnowledgeGraphMissingLinksResponse> {
+  const sourceId = query.sourceId?.trim() && query.sourceId !== 'all' ? query.sourceId.trim() : null;
+  const rows = await engine.executeRaw<KnowledgeGraphMissingLinksResponse['rows'][number]>(
+    `SELECT l.id::int AS id,
+            l.from_page_id::int AS from_page_id,
+            source.slug AS from_slug,
+            COALESCE(NULLIF(source.title, ''), source.slug) AS from_title,
+            source.source_id AS from_source_id,
+            source_scope.name AS from_source_name,
+            l.to_page_id::int AS missing_page_id,
+            COALESCE(l.link_type, '') AS link_type,
+            COALESCE(l.context, '') AS context,
+            l.link_source
+       FROM links l
+       LEFT JOIN pages target ON target.id = l.to_page_id
+       LEFT JOIN pages source ON source.id = l.from_page_id
+       LEFT JOIN sources source_scope ON source_scope.id = source.source_id
+      WHERE target.id IS NULL
+        AND ($1::text IS NULL OR source.source_id = $1)
+      ORDER BY source.updated_at DESC NULLS LAST, l.id DESC
+      LIMIT $2`,
+    [sourceId, ADMIN_KNOWLEDGE_GRAPH_MISSING_LINK_LIMIT + 1],
+  );
+  const countRows = await engine.executeRaw<{ total: number }>(
+    `SELECT COUNT(*)::int AS total
+       FROM links l
+       LEFT JOIN pages target ON target.id = l.to_page_id
+       LEFT JOIN pages source ON source.id = l.from_page_id
+      WHERE target.id IS NULL
+        AND ($1::text IS NULL OR source.source_id = $1)`,
+    [sourceId],
+  );
+  return {
+    rows: rows.slice(0, ADMIN_KNOWLEDGE_GRAPH_MISSING_LINK_LIMIT),
+    total: countRows[0]?.total ?? rows.length,
+    truncated: rows.length > ADMIN_KNOWLEDGE_GRAPH_MISSING_LINK_LIMIT,
+    limit: ADMIN_KNOWLEDGE_GRAPH_MISSING_LINK_LIMIT,
   };
 }

@@ -7,6 +7,7 @@ import {
   BrainPagesResponseSchema,
   KnowledgeGraphGlobalResponseSchema,
   KnowledgeGraphMetaResponseSchema,
+  KnowledgeGraphMissingLinksResponseSchema,
   KnowledgeGraphNeighborhoodResponseSchema,
   KnowledgeGraphSearchResponseSchema,
   DreamOverviewResponseSchema,
@@ -33,6 +34,7 @@ import type {
   BrainPagesResponse,
   KnowledgeGraphGlobalResponse,
   KnowledgeGraphMetaResponse,
+  KnowledgeGraphMissingLinksResponse,
   KnowledgeGraphNeighborhoodResponse,
   KnowledgeGraphSearchResponse,
   DreamOverviewResponse,
@@ -155,6 +157,12 @@ export const api = {
     if (sourceId && sourceId !== 'all') query.set('sourceId', sourceId);
     const suffix = query.size ? `?${query.toString()}` : '';
     return apiFetch<KnowledgeGraphGlobalResponse>(`/admin/api/knowledge-graph/isolated${suffix}`, undefined, KnowledgeGraphGlobalResponseSchema);
+  },
+  knowledgeGraphMissing: (sourceId?: string) => {
+    const query = new URLSearchParams();
+    if (sourceId && sourceId !== 'all') query.set('sourceId', sourceId);
+    const suffix = query.size ? `?${query.toString()}` : '';
+    return apiFetch<KnowledgeGraphMissingLinksResponse>(`/admin/api/knowledge-graph/missing${suffix}`, undefined, KnowledgeGraphMissingLinksResponseSchema);
   },
   knowledgeGraphSearch: (queryText: string, sourceId?: string, limit = 12) => {
     const query = new URLSearchParams({ q: queryText, limit: String(limit) });

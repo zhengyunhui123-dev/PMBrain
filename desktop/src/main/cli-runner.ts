@@ -59,6 +59,10 @@ export function cleanDatabaseEnvironment(env = process.env): NodeJS.ProcessEnv {
     DATABASE_URL: _databaseUrl,
     PMBRAIN_DATABASE_URL: _pmbrainDatabaseUrl,
     GBRAIN_DATABASE_URL: _gbrainDatabaseUrl,
+    GBRAIN_HOME: _gbrainHome,
+    GBRAIN_SOURCE: _gbrainSource,
+    GBRAIN_BRAIN_ID: _gbrainBrainId,
+    GBRAIN_MOUNTS_PATH: _gbrainMountsPath,
     ...clean
   } = env;
   return clean;

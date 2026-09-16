@@ -93,7 +93,7 @@ const HELPER_REL = 'scripts/brain-commit-push.sh';
 const CRED_MANAGED_KEY = 'pmbrain.durability.managedcredential';
 
 function pmbrainHome(): string {
-  return process.env.PMBRAIN_HOME || process.env.GBRAIN_HOME || join(process.env.HOME || '', '.pmbrain');
+  return process.env.PMBRAIN_HOME || join(process.env.HOME || '', '.pmbrain');
 }
 
 /** Resolve the PMBRAIN CLI path for the cron wrapper (inlined to avoid a

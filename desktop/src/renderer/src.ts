@@ -694,7 +694,7 @@ async function testConfiguredModel(kind: ModelKind): Promise<void> {
   status.classList.remove('ready', 'warning', 'error');
   status.hidden = false;
   const provider = normalizeProviderForModel($<HTMLSelectElement>(`#${kind}-provider`).value);
-  status.textContent = provider === 'ollama' || provider === 'llama-server'
+  status.textContent = provider === 'ollama' || provider === 'llama-server' || provider === 'custom-openai'
     ? '正在测试连接；本地模型首次加载可能需要 1–2 分钟…'
     : '正在测试连接…';
   button.setAttribute('aria-busy', 'true');
@@ -1078,9 +1078,14 @@ async function refreshPgliteRecoveryStatus(): Promise<void> {
 }
 
 function renderIntegrations(integrations: IntegrationInfo[]): void {
-  latestIntegrations = integrations;
+  const ordered = integrations
+    .map((item, index) => ({ item, index }))
+    .sort((left, right) => Number(right.item.configured) - Number(left.item.configured)
+      || (left.item.defaultOrder ?? left.index) - (right.item.defaultOrder ?? right.index))
+    .map(({ item }) => item);
+  latestIntegrations = ordered;
   const grid = $('#integration-grid');
-  grid.replaceChildren(...integrations.map((item) => {
+  grid.replaceChildren(...ordered.map((item) => {
     const article = document.createElement('article');
     article.className = 'integration-card';
     const badge = document.createElement('span');
@@ -2095,16 +2100,22 @@ function selectedCredential(): CredentialKind {
 
 function integrationClientName(client: IntegrationClient): string {
   return latestIntegrations.find(item => item.id === client)?.name ?? ({
-    codebuddy: 'CodeBuddy',
+    cherry: 'CherryStudio',
     workbuddy: 'Workbuddy',
     cursor: 'Cursor',
     trae: 'Trae Work',
-    claude: 'Claude Code',
-    codex: 'Codex',
-    grok: 'Grok Build',
+    qwen: 'Qwen Code',
+    qoder: 'Qoder CN（通义灵码）',
+    zcode: 'ZCode（智谱）',
+    mimo: 'MiMo Code（小米）',
+    kimi: 'Kimi Code（月之暗面）',
     qwenpaw: 'QwenPaw',
+    codex: 'Codex',
+    claude: 'Claude Code',
+    grok: 'Grok Build',
     hermes: 'Hermes',
     openclaw: 'OpenClaw',
+    codebuddy: 'CodeBuddy',
   } satisfies Record<IntegrationClient, string>)[client];
 }
 

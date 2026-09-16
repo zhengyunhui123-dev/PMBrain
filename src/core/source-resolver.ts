@@ -3,9 +3,8 @@
  *
  * Resolution priority (highest first):
  *   1. Explicit --source <id> flag (caller passes this as `explicit`)
- *   2. PMBRAIN_SOURCE env var (legacy GBRAIN_SOURCE accepted)
+ *   2. PMBRAIN_SOURCE env var
  *   3. .pmbrain-source dotfile in CWD or any ancestor directory
- *      (legacy .gbrain-source accepted)
  *   4. Registered source whose local_path contains CWD
  *   5. Brain-level default via `gbrain sources default <id>`
  *   6. Literal 'default' (backward compat for pre-v0.17 brains)
@@ -20,7 +19,7 @@ import type { BrainEngine } from './engine.ts';
 import { loadConfig } from './config.ts';
 import { SOURCE_ID_RE, isValidSourceId } from './source-id.ts';
 
-const DOTFILES = ['.pmbrain-source', '.gbrain-source'];
+const DOTFILES = ['.pmbrain-source'];
 // Canonical SOURCE_ID_RE imported from `source-id.ts` (single source of truth).
 // Re-exported below as `__testing.SOURCE_ID_RE` for legacy test imports.
 // Two validator shapes per codex r2 P1-F:
@@ -93,8 +92,8 @@ export async function resolveSourceId(
   }
 
   // 2. Env var.
-  const envName = process.env.PMBRAIN_SOURCE ? 'PMBRAIN_SOURCE' : 'GBRAIN_SOURCE';
-  const env = process.env.PMBRAIN_SOURCE || process.env.GBRAIN_SOURCE;
+  const envName = 'PMBRAIN_SOURCE';
+  const env = process.env.PMBRAIN_SOURCE;
   if (env && env.length > 0) {
     if (!SOURCE_ID_RE.test(env)) {
       throw new Error(`Invalid ${envName} value "${env}". Must match [a-z0-9-]{1,32}.`);
@@ -103,7 +102,7 @@ export async function resolveSourceId(
     return env;
   }
 
-  // 3. .pmbrain-source / .gbrain-source dotfile walk-up.
+  // 3. .pmbrain-source dotfile walk-up.
   const dotfile = readDotfileWalk(cwd);
   if (dotfile) {
     await assertSourceExists(engine, dotfile);
@@ -250,7 +249,7 @@ export async function resolveMainSourceId(engine: BrainEngine): Promise<string> 
 }
 
 export async function resolveMcpDefaultSourceId(engine: BrainEngine): Promise<string> {
-  const env = process.env.PMBRAIN_SOURCE || process.env.GBRAIN_SOURCE;
+  const env = process.env.PMBRAIN_SOURCE;
   if (env && env.length > 0) {
     return resolveSourceId(engine, null);
   }
@@ -337,8 +336,8 @@ export async function resolveSourceWithTier(
   }
 
   // 2. Env var.
-  const envName = process.env.PMBRAIN_SOURCE ? 'PMBRAIN_SOURCE' : 'GBRAIN_SOURCE';
-  const env = process.env.PMBRAIN_SOURCE || process.env.GBRAIN_SOURCE;
+  const envName = 'PMBRAIN_SOURCE';
+  const env = process.env.PMBRAIN_SOURCE;
   if (env && env.length > 0) {
     if (!SOURCE_ID_RE.test(env)) {
       throw new Error(`Invalid ${envName} value "${env}". Must match [a-z0-9-]{1,32}.`);
@@ -347,7 +346,7 @@ export async function resolveSourceWithTier(
     return { source_id: env, tier: 'env', detail: `${envName}=${env}` };
   }
 
-  // 3. .pmbrain-source / .gbrain-source dotfile walk-up.
+  // 3. .pmbrain-source dotfile walk-up.
   const dotfile = readDotfileWalk(cwd);
   if (dotfile) {
     await assertSourceExists(engine, dotfile);

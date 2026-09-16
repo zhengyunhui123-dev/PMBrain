@@ -181,6 +181,7 @@ type RawConfig = Record<string, unknown> & {
   zeroentropy_api_key?: string;
   admin_bootstrap_token?: string;
   desktop?: {
+    setup_completed?: boolean;
     knowledge_directory?: string;
     knowledge_source_id?: string;
     last_migrated_version?: string;
@@ -406,19 +407,28 @@ export function preferredConfigDirectory(): string {
 }
 
 export function activeConfigDirectory(): string {
-  const preferred = preferredHome();
-  if (process.env.PMBRAIN_HOME?.trim()) return preferred;
-  const legacy = process.env.GBRAIN_HOME?.trim()
-    ? join(resolve(process.env.GBRAIN_HOME), '.gbrain')
-    : join(resolveUserHome(), '.gbrain');
-  if (process.env.GBRAIN_HOME?.trim()) return legacy;
-  if (existsSync(join(preferred, 'config.json'))) return preferred;
-  if (existsSync(join(legacy, 'config.json'))) return legacy;
-  return preferred;
+  return preferredHome();
 }
 
 export function desktopConfigPath(): string {
   return join(activeConfigDirectory(), 'config.json');
+}
+
+export function ensureFreshDesktopSetup(): boolean {
+  const path = desktopConfigPath();
+  if (existsSync(path)) return false;
+  const directory = preferredConfigDirectory();
+  writeJsonConfig(path, {
+    engine: 'pglite',
+    database_path: join(directory, 'brain.pglite'),
+    embedding_disabled: true,
+    desktop: {
+      setup_completed: false,
+      knowledge_directory: join(homedir(), 'Documents', 'PMBrain'),
+      theme: 'system',
+    },
+  });
+  return true;
 }
 
 export function normalizePgliteDatabasePath(input: string): string {
@@ -585,7 +595,7 @@ export function getSetupInfo(): SetupInfo {
     typeof config?.embedding_model === 'string' ? config.embedding_model : undefined,
   );
   return {
-    needsSetup: !config,
+    needsSetup: !config || desktop?.setup_completed === false,
     configPath: path,
     defaults: {
       databasePath: join(pgliteDefaultDir, 'brain.pglite'),
@@ -887,6 +897,7 @@ export function saveSetup(payload: SetupPayload): {
     : existing.desktop?.knowledge_source_id);
   config.desktop = {
     ...existing.desktop,
+    setup_completed: true,
     theme: normalizeDesktopTheme(payload.theme ?? existing.desktop?.theme),
     ...(knowledgeDirectory ? { knowledge_directory: knowledgeDirectory, knowledge_source_id: sourceId } : {}),
   };

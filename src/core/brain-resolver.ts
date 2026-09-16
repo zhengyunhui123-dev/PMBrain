@@ -8,11 +8,10 @@
  *
  * Resolution priority (highest first):
  *   1. Explicit --brain <id> flag (caller passes this as `explicit`).
- *   2. PMBRAIN_BRAIN_ID env var (legacy GBRAIN_BRAIN_ID accepted).
+ *   2. PMBRAIN_BRAIN_ID env var.
  *   3. .pmbrain-mount dotfile in CWD or any ancestor directory
- *      (legacy .gbrain-mount accepted).
  *   4. Registered mount whose `path` contains CWD (longest-prefix match).
- *   5. Brain-level default (future: ~/.gbrain/config.json `brains.default`).
+ *   5. Brain-level default (future: ~/.pmbrain/config.json `brains.default`).
  *   6. Literal 'host' fallback (backward compat for every pre-v0.19 brain).
  *
  * Consumed by src/cli.ts, src/mcp/server.ts, and any future command that
@@ -24,12 +23,12 @@ import { readFileSync, existsSync } from 'fs';
 import { join, dirname, resolve } from 'path';
 import { HOST_BRAIN_ID, loadMounts, validateMountId, type MountEntry } from './brain-registry.ts';
 
-const DOTFILES = ['.pmbrain-mount', '.gbrain-mount'];
+const DOTFILES = ['.pmbrain-mount'];
 /** Same regex as brain-registry. Kept in sync. */
 const BRAIN_ID_RE = /^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$/;
 
 /**
- * Walk up from startDir looking for a .pmbrain-mount/.gbrain-mount dotfile. Returns the
+ * Walk up from startDir looking for a .pmbrain-mount dotfile. Returns the
  * first valid id found, or null if none. Guards against filesystem-root
  * infinite loops and malformed dotfiles (silent skip + continue walking).
  */
@@ -75,9 +74,9 @@ function longestPathPrefixMount(mounts: MountEntry[], cwd: string): MountEntry |
  * targets exactly one brain, with 'host' as the guaranteed terminal fallback.
  *
  * @param explicit  The --brain <id> flag value, if the caller parsed one.
- * @param cwd  Working directory for .gbrain-mount walk. Defaults to process.cwd().
+ * @param cwd  Working directory for .pmbrain-mount walk. Defaults to process.cwd().
  * @param mountsLoader  Override for testability. Returns the list of enabled
- *                      mounts. Defaults to reading ~/.gbrain/mounts.json.
+ *                      mounts. Defaults to reading ~/.pmbrain/mounts.json.
  * @returns  The resolved brain id. Always truthy. Either 'host' or a valid mount id.
  *
  * Does NOT validate that the id points at a registered mount — that is
@@ -97,8 +96,8 @@ export function resolveBrainId(
   }
 
   // 2. Env var.
-  const envName = process.env.PMBRAIN_BRAIN_ID ? 'PMBRAIN_BRAIN_ID' : 'GBRAIN_BRAIN_ID';
-  const env = process.env.PMBRAIN_BRAIN_ID || process.env.GBRAIN_BRAIN_ID;
+  const envName = 'PMBRAIN_BRAIN_ID';
+  const env = process.env.PMBRAIN_BRAIN_ID;
   if (env && env.length > 0) {
     if (env === HOST_BRAIN_ID) return HOST_BRAIN_ID;
     validateMountId(env, envName);

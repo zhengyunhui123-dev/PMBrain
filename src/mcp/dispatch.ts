@@ -48,7 +48,7 @@ export interface DispatchOpts {
    * v0.31 (eD4): tenancy axis for facts hot memory ops (extract_facts,
    * recall, forget_fact). When set, the OperationContext receives a
    * matching `sourceId`. CLI dispatch resolves this from --source flag /
-   * GBRAIN_SOURCE / .gbrain-source / 'default'; HTTP MCP transport
+   * PMBRAIN_SOURCE / .pmbrain-source / 'default'; HTTP MCP transport
    * resolves it from the per-token allow-list (eE3).
    */
   sourceId?: string;

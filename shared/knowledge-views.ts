@@ -1,59 +1,28 @@
-/** Knowledge-data view presets. Shared by Admin API and the knowledge page. */
-
 export const KNOWLEDGE_PAGE_VIEW_TYPES = {
-  materials: [
-    'conversation',
-    'meeting',
-    'material',
-    'source',
-    'reference',
-    'original',
-    'originals',
-    'cover',
-    'extract_receipt',
-    'calendar-event',
-  ],
-  structured: [
-    'note',
-    'atom',
-    'concept',
-    'person',
-    'company',
-    'project',
-    'project-context',
-    'project_context',
-    'project-note',
-    'doc',
-    'skill',
-    'event',
-  ],
-  insights: [
-    'take',
-    'reflection',
-    'pattern',
-    'idea',
-  ],
+  insights: ['take', 'reflection', 'pattern', 'idea'],
 } as const;
 
-export type KnowledgePageView = keyof typeof KNOWLEDGE_PAGE_VIEW_TYPES;
+export const KNOWLEDGE_GENERATED_MARKERS = {
+  dream_generated: ['true'],
+  extracted_by: ['extract_atoms-v0.41.2.1'],
+  synthesized_by: ['synthesize_concepts-v0.41'],
+} as const;
 
-export const KNOWLEDGE_DATA_VIEWS = [
-  'all',
-  'materials',
-  'structured',
-  'facts',
-  'insights',
-  'trash',
-] as const;
-
+export const KNOWLEDGE_MATERIAL_OUTPUT_TYPES = ['extract_receipt'] as const;
+export type KnowledgePageView = 'materials' | 'structured' | 'insights';
+export const KNOWLEDGE_DATA_VIEWS = ['all', 'materials', 'structured', 'facts', 'insights', 'trash'] as const;
 export type KnowledgeDataView = (typeof KNOWLEDGE_DATA_VIEWS)[number];
-
 export const FACT_KINDS = ['event', 'preference', 'commitment', 'belief', 'fact', 'idea'] as const;
 export type FactKindView = (typeof FACT_KINDS)[number];
 
 export function knowledgePageViewTypes(view: string | undefined): readonly string[] | undefined {
-  if (!view) return undefined;
-  return view in KNOWLEDGE_PAGE_VIEW_TYPES
-    ? KNOWLEDGE_PAGE_VIEW_TYPES[view as KnowledgePageView]
-    : undefined;
+  return view === 'insights' ? KNOWLEDGE_PAGE_VIEW_TYPES.insights : undefined;
+}
+
+export function knowledgePageViewAllowsType(view: string, type: string): boolean {
+  const insight = (KNOWLEDGE_PAGE_VIEW_TYPES.insights as readonly string[]).includes(type);
+  if (view === 'insights') return insight;
+  if (view === 'materials') return !insight;
+  if (view === 'structured') return !insight && !(KNOWLEDGE_MATERIAL_OUTPUT_TYPES as readonly string[]).includes(type);
+  return true;
 }

@@ -97,6 +97,19 @@ export function toProductSuggestion(finding: AdvisorFinding): AdvisorProductSugg
       navigate: 'graph?view=isolated',
     };
   }
+  if (finding.id === 'dead_links') {
+    const count = countFromTitle(finding.title) ?? 0;
+    return {
+      id: finding.id,
+      dispatch_id: dispatchId,
+      severity: finding.severity,
+      title: `发现 ${count} 条关系指向不存在的知识`,
+      detail: '关系的来源记录仍在，但目标知识已经不存在。请先查看明细，再决定恢复目标知识或修正原始关系。',
+      action_label: '查看缺失链接',
+      action_kind: 'navigate',
+      navigate: 'graph?view=missing',
+    };
+  }
   if (finding.id === 'pending_migration') {
     return {
       id: finding.id,

@@ -41,15 +41,13 @@ describe('GBRAIN_HOME write-side isolation', () => {
     }
   });
 
-  test('configDir() uses the PMBrain home or an existing legacy home when overrides are unset', async () => {
+  test('configDir() always uses the PMBrain home when overrides are unset, even if GBrain exists', async () => {
     delete process.env.GBRAIN_HOME;
     delete process.env.PMBRAIN_HOME;
     try {
       const { configDir } = await import('../src/core/config.ts');
       const pmbrainDir = join(homedir(), '.pmbrain');
-      const legacyDir = join(homedir(), '.gbrain');
-      const expected = existsSync(pmbrainDir) ? pmbrainDir : existsSync(legacyDir) ? legacyDir : pmbrainDir;
-      expect(configDir()).toBe(expected);
+      expect(configDir()).toBe(pmbrainDir);
     } finally {
       if (ORIG_GBRAIN_HOME !== undefined) process.env.GBRAIN_HOME = ORIG_GBRAIN_HOME;
       else delete process.env.GBRAIN_HOME;

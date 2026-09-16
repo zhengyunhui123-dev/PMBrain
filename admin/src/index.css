@@ -6095,7 +6095,7 @@ html[data-theme="dark"] .knowledge-graph-toolbar select option {
 }
 .graph-view-switch {
   display: inline-grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   height: 38px;
   padding: 3px;
   border: 1px solid var(--border);
@@ -6222,6 +6222,22 @@ html[data-theme="dark"] .graph-view-switch button.active { color: #c3bdfc; backg
 .graph-empty h2 { margin-top: 13px; font-size: 17px; }
 .graph-empty p { margin-top: 4px; color: #85858b; }
 
+.graph-missing-view { position: relative; z-index: 3; height: 100%; padding: 56px 22px 24px; overflow: auto; background: var(--graph-ink); }
+.graph-missing-summary { display: flex; align-items: baseline; justify-content: space-between; gap: 18px; margin-bottom: 16px; }
+.graph-missing-summary strong { color: #f0efff; font-size: 16px; }
+.graph-missing-summary span { color: #929299; font-size: 12px; }
+.graph-missing-list { display: grid; gap: 10px; }
+.graph-missing-list article { display: grid; grid-template-columns: minmax(220px, 1fr) minmax(180px, auto) 1.2fr auto; align-items: center; gap: 16px; padding: 15px 16px; border: 1px solid rgba(255, 255, 255, .08); border-radius: 9px; background: rgba(255, 255, 255, .03); }
+.graph-missing-list b,
+.graph-missing-list small { display: block; }
+.graph-missing-list b { overflow: hidden; color: #efeff2; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.graph-missing-list small { margin-top: 4px; overflow: hidden; color: #7f7f87; font: 10px/1.45 var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
+.graph-missing-list > article > span { color: #c5c1f6; font: 11px/1.5 var(--font-mono); }
+.graph-missing-list p { margin: 0; color: #9a9aa1; font-size: 11px; line-height: 1.55; }
+.graph-missing-list button { min-height: 34px; padding: 0 12px; border: 1px solid rgba(159, 149, 248, .36); border-radius: 7px; color: #d9d5ff; background: rgba(159, 149, 248, .1); font-size: 11px; }
+.graph-missing-list button:hover { border-color: rgba(159, 149, 248, .62); background: rgba(159, 149, 248, .17); }
+.graph-missing-view .graph-empty h2 { color: #cfd0d4; }
+
 .knowledge-graph-detail {
   position: absolute;
   z-index: 8;
@@ -6338,6 +6354,7 @@ html[data-theme="dark"] .knowledge-graph-shell { border-color: rgba(145, 145, 15
   .knowledge-graph-shell { height: auto; max-height: none; }
   .knowledge-graph-stage { height: 620px; }
   .knowledge-graph-detail { top: 10px; right: 10px; bottom: 10px; }
+  .graph-missing-list article { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 1180px) {
@@ -6723,6 +6740,7 @@ tbody tr:hover td { background: color-mix(in srgb, var(--accent) 4%, var(--conso
 
 /* Request log */
 .request-agent-filter { display: grid; grid-template-columns: auto minmax(170px, 220px); gap: 9px; align-items: center; color: var(--text-muted); font-size: 10px; }
+.request-log-filters { display: flex; align-items: center; gap: 12px; }
 .request-log-card { padding: 0; overflow: hidden; }
 .request-log-table { min-width: 850px; }
 .request-log-row { cursor: pointer; }

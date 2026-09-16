@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import {
+  cleanDatabaseEnvironment,
   describeWindowsExitCode,
   formatCliFailure,
   isWindowsReleaseAtLeast,
@@ -19,12 +20,32 @@ const cliRunnerSource = readFileSync(resolve(import.meta.dir, '../src/main/cli-r
 const verifierSource = readFileSync(resolve(import.meta.dir, '../scripts/verify-package.ts'), 'utf8');
 const builderConfig = readFileSync(resolve(import.meta.dir, '../electron-builder.yml'), 'utf8');
 const installerSource = readFileSync(resolve(import.meta.dir, '../build/installer.nsh'), 'utf8');
+const mainSource = readFileSync(resolve(import.meta.dir, '../src/main/index.ts'), 'utf8');
 const desktopPackage = JSON.parse(readFileSync(resolve(import.meta.dir, '../package.json'), 'utf8')) as {
   desktopName: string;
   scripts: Record<string, string>;
 };
 
 describe('desktop Windows runtime compatibility', () => {
+  test('does not pass legacy GBrain routing into the bundled PMBrain runtime', () => {
+    expect(cleanDatabaseEnvironment({
+      PATH: 'safe-path',
+      DATABASE_URL: 'postgres://legacy',
+      PMBRAIN_DATABASE_URL: 'postgres://override',
+      GBRAIN_DATABASE_URL: 'postgres://gbrain',
+      GBRAIN_HOME: 'C:/legacy/.gbrain',
+      GBRAIN_SOURCE: 'legacy-source',
+      GBRAIN_BRAIN_ID: 'legacy-brain',
+      GBRAIN_MOUNTS_PATH: 'C:/legacy/mounts.json',
+    })).toEqual({ PATH: 'safe-path' });
+  });
+
+  test('creates the dedicated PMBrain setup before startup inspects or opens the database', () => {
+    const createIndex = mainSource.indexOf('ensureFreshDesktopSetup();');
+    const inspectIndex = mainSource.indexOf('const initialSetup = getSetupInfo();');
+    expect(createIndex).toBeGreaterThan(-1);
+    expect(inspectIndex).toBeGreaterThan(createIndex);
+  });
   test('decodes the reported decimal crash as STATUS_ILLEGAL_INSTRUCTION', () => {
     expect(describeWindowsExitCode(3_221_225_501)).toEqual(expect.objectContaining({
       code: 0xC000001D,
