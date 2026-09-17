@@ -8,6 +8,7 @@ interface ColumnInfo {
   column_name: string;
   is_generated: string;
   is_identity: string;
+  data_type: string;
 }
 
 interface TablePlan {
@@ -17,6 +18,7 @@ interface TablePlan {
   excludedTarget: string[];
   overrideIdentity: boolean;
   count: number;
+  timestampColumns: string[];
 }
 
 export interface FullTransferReceipt {
@@ -43,6 +45,19 @@ function stable(value: unknown): unknown {
   return value;
 }
 
+function canonicalRow(value: string, timestampColumns: string[]): unknown {
+  const row = JSON.parse(value) as Record<string, unknown>;
+  for (const column of timestampColumns) {
+    const raw = row[column];
+    if (typeof raw !== 'string') continue;
+    const parsed = Date.parse(raw);
+    if (!Number.isFinite(parsed)) continue;
+    const fraction = raw.match(/\.([0-9]{1,6})(?:Z|[+-][0-9]{2}(?::?[0-9]{2})?)$/i)?.[1] ?? '';
+    row[column] = `${new Date(parsed).toISOString().slice(0, 19)}.${fraction.padEnd(6, '0')}Z`;
+  }
+  return stable(row);
+}
+
 async function tableNames(engine: BrainEngine): Promise<string[]> {
   const rows = await engine.executeRaw<{ table_name: string }>(
     "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE' ORDER BY table_name",
@@ -52,7 +67,7 @@ async function tableNames(engine: BrainEngine): Promise<string[]> {
 
 async function columns(engine: BrainEngine, table: string): Promise<ColumnInfo[]> {
   return engine.executeRaw<ColumnInfo>(
-    "SELECT column_name, is_generated, is_identity FROM information_schema.columns WHERE table_schema = 'public' AND table_name = $1 ORDER BY ordinal_position",
+    "SELECT column_name, is_generated, is_identity, data_type FROM information_schema.columns WHERE table_schema = 'public' AND table_name = $1 ORDER BY ordinal_position",
     [table],
   );
 }
@@ -94,6 +109,7 @@ async function planTables(source: BrainEngine, target: BrainEngine): Promise<{ p
       excludedTarget: targetColumns.filter(column => !copied.has(column.column_name)).map(column => column.column_name),
       overrideIdentity: copyColumns.some(column => targetColumns.some(targetColumn => targetColumn.column_name === column.column_name && targetColumn.is_identity === 'YES')),
       count,
+      timestampColumns: copyColumns.filter(column => column.data_type === 'timestamp with time zone').map(column => column.column_name),
     });
   }
   return { plans, excluded };
@@ -132,7 +148,7 @@ async function digestRows(engine: BrainEngine, plan: TablePlan, excluded: string
       `SELECT ${projection} AS row FROM ${identifier(plan.name)} t ORDER BY t.ctid LIMIT $1 OFFSET $2`,
       [PAGE_SIZE, offset],
     );
-    for (const row of rows) digest.update(JSON.stringify(stable(JSON.parse(row.row)))).update('\n');
+    for (const row of rows) digest.update(JSON.stringify(canonicalRow(row.row, plan.timestampColumns))).update('\n');
     offset += rows.length;
     if (rows.length < PAGE_SIZE) break;
   }
@@ -151,12 +167,17 @@ async function copyTable(source: BrainEngine, target: BrainEngine, plan: TablePl
       `SELECT ${projection} AS row FROM ${identifier(plan.name)} t ORDER BY t.ctid LIMIT $1 OFFSET $2`,
       [PAGE_SIZE, offset],
     );
-    for (const row of rows) sourceDigest.update(JSON.stringify(stable(JSON.parse(row.row)))).update('\n');
+    for (const row of rows) sourceDigest.update(JSON.stringify(canonicalRow(row.row, plan.timestampColumns))).update('\n');
     if (rows.length > 0) {
-      await target.executeRaw(
-        `INSERT INTO ${identifier(plan.name)} (${columnSql}) ${plan.overrideIdentity ? 'OVERRIDING SYSTEM VALUE ' : ''}SELECT ${columnSql} FROM jsonb_populate_recordset(NULL::${identifier(plan.name)}, $1::jsonb)`,
-        [JSON.stringify(rows.map(row => JSON.parse(row.row)))],
-      );
+      const payload = JSON.stringify(rows.map(row => JSON.parse(row.row)));
+      try {
+        await target.executeRaw(
+          `INSERT INTO ${identifier(plan.name)} (${columnSql}) ${plan.overrideIdentity ? 'OVERRIDING SYSTEM VALUE ' : ''}SELECT ${columnSql} FROM jsonb_populate_recordset(NULL::${identifier(plan.name)}, $1::text::jsonb)`,
+          [payload],
+        );
+      } catch (error) {
+        throw new Error(`复制 ${plan.name} 的 ${rows.length} 行失败（批次形态 ${payload[0]}）：${error instanceof Error ? error.message : String(error)}`, { cause: error });
+      }
     }
     offset += rows.length;
     if (rows.length < PAGE_SIZE) break;
@@ -164,7 +185,21 @@ async function copyTable(source: BrainEngine, target: BrainEngine, plan: TablePl
   const expected = sourceDigest.digest('hex');
   const actual = await digestRows(target, plan, plan.excludedTarget);
   if (offset !== plan.count || actual.count !== plan.count || actual.sha256 !== expected) {
-    throw new Error(`${plan.name} 校验失败：源库 ${offset}/${plan.count} 行，目标库 ${actual.count} 行`);
+    let differingColumns = '';
+    if (offset === actual.count) {
+      const sourceRows = await source.executeRaw<{ row: string }>(`SELECT ${jsonProjection(plan.excludedSource)} AS row FROM ${identifier(plan.name)} t ORDER BY t.ctid LIMIT 10`);
+      const targetRows = await target.executeRaw<{ row: string }>(`SELECT ${jsonProjection(plan.excludedTarget)} AS row FROM ${identifier(plan.name)} t ORDER BY t.ctid LIMIT 10`);
+      for (let index = 0; index < Math.min(sourceRows.length, targetRows.length); index += 1) {
+        const left = canonicalRow(sourceRows[index]!.row, plan.timestampColumns) as Record<string, unknown>;
+        const right = canonicalRow(targetRows[index]!.row, plan.timestampColumns) as Record<string, unknown>;
+        differingColumns = Object.keys(left).filter(key => JSON.stringify(left[key]) !== JSON.stringify(right[key])).join('、');
+        if (differingColumns) {
+          differingColumns = `第 ${index + 1} 行：${differingColumns}`;
+          break;
+        }
+      }
+    }
+    throw new Error(`${plan.name} 校验失败：源库 ${offset}/${plan.count} 行，目标库 ${actual.count} 行${differingColumns ? `；差异列 ${differingColumns}` : ''}`);
   }
   return { name: plan.name, rows: actual.count, sha256: expected };
 }
@@ -202,6 +237,7 @@ export async function transferCompleteBrain(source: BrainEngine, target: BrainEn
   }
   const ordered = await orderTables(target, plans);
   const tables = await target.transaction(async transaction => {
+    for (const plan of ordered) await transaction.executeRaw(`ALTER TABLE ${identifier(plan.name)} DISABLE TRIGGER USER`);
     await transaction.executeRaw("DELETE FROM sources WHERE id = 'default'");
     await transaction.executeRaw('DELETE FROM page_generation_clock WHERE id = 1');
     const copied: FullTransferReceipt['tables'] = [];
@@ -216,6 +252,7 @@ export async function transferCompleteBrain(source: BrainEngine, target: BrainEn
     }
     const targetConfig = await transaction.executeRaw<{ key: string; value: string }>("SELECT key, value FROM config WHERE key <> 'version' ORDER BY key");
     if (JSON.stringify(sourceConfig) !== JSON.stringify(targetConfig)) throw new Error('数据库配置校验失败');
+    for (const plan of ordered) await transaction.executeRaw(`ALTER TABLE ${identifier(plan.name)} ENABLE TRIGGER USER`);
     return copied;
   });
   return { status: 'verified', tables, excludedOperationalTables: excluded };
