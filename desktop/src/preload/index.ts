@@ -194,6 +194,8 @@ export interface PMBrainDesktopApi {
   getAdvancedModelConfig(): Promise<AdvancedModelConfig>;
   saveAdvancedModelConfig(values: AdvancedModelWriteInput): Promise<AdvancedModelConfig>;
   saveSetup(payload: SetupPayload): Promise<DesktopSetupState & { backup?: string | null; reembeddingWarning?: string | null }>;
+  migrateToDocker(): Promise<{ backupDirectory: string; configBackup: string | null; containerName: string; volumeName: string; tables: number; rows: number }>;
+  openDockerInstallGuide(): Promise<void>;
   configureIntegration(client: IntegrationClient, kind: CredentialKind, deep?: boolean): Promise<IntegrationResult>;
   writeWorkbuddyUserAgent(): Promise<{ written: string[]; backedUp: string[] }>;
   getWorkbuddyAgentIntegration(): Promise<WorkbuddyAgentIntegrationStatus>;
@@ -280,6 +282,8 @@ const api: PMBrainDesktopApi = {
   getAdvancedModelConfig: () => ipcRenderer.invoke('desktop:get-advanced-model-config'),
   saveAdvancedModelConfig: (values) => ipcRenderer.invoke('desktop:save-advanced-model-config', values),
   saveSetup: (payload) => ipcRenderer.invoke('desktop:save-setup', payload),
+  migrateToDocker: () => ipcRenderer.invoke('desktop:migrate-to-docker'),
+  openDockerInstallGuide: () => ipcRenderer.invoke('desktop:open-docker-install-guide'),
   configureIntegration: (client, kind, deep) => ipcRenderer.invoke('desktop:configure-integration', client, kind, deep),
   writeWorkbuddyUserAgent: () => ipcRenderer.invoke('desktop:write-workbuddy-user-agent'),
   getWorkbuddyAgentIntegration: () => ipcRenderer.invoke('desktop:get-workbuddy-agent-integration'),

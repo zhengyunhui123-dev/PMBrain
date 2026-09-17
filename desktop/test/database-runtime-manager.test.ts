@@ -40,6 +40,7 @@ function fakeRuntime(options: {
     },
     findDockerDesktopExecutable: async () => options.dockerDesktop ?? null,
     sleep: async () => undefined,
+    findFreePort: async () => 55432,
   };
   return {
     manager: new DatabaseRuntimeManager({
@@ -75,6 +76,25 @@ function inspectResult(
 }
 
 describe('desktop database runtime manager', () => {
+  test('creates a separate local pgvector database with a volume when Docker is ready', async () => {
+    const runtime = fakeRuntime({
+      tcpReady: [false, true],
+      command: args => ({ ok: true, stdout: args[0] === 'run' ? 'container-id' : 'ready', stderr: '' }),
+    });
+
+    const result = await runtime.manager.provisionLocalPostgres();
+
+    expect(result.containerName.startsWith('pmbrain-postgres-')).toBe(true);
+    expect(result.volumeName.startsWith('pmbrain-postgres-data-')).toBe(true);
+    expect(result.databaseUrl).toContain('@127.0.0.1:55432/pmbrain');
+    const run = runtime.commands.find(args => args[0] === 'run')!;
+    expect(run).toContain('127.0.0.1:55432:5432');
+    expect(run).toContain('pgvector/pgvector:pg16');
+    expect(run.some(value => value.includes('POSTGRES_PASSWORD='))).toBe(false);
+    expect(runtime.commands.some(args => args[0] === 'exec' && args.includes('CREATE EXTENSION IF NOT EXISTS vector'))).toBe(true);
+    expect(runtime.commands.some(args => ['rm', 'stop', 'volume'].includes(args[0]!))).toBe(false);
+  });
+
   test('PGLite never probes TCP or Docker', async () => {
     const runtime = fakeRuntime();
 

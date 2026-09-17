@@ -1,7 +1,9 @@
 import { execFile, spawn } from 'node:child_process';
-import { existsSync } from 'node:fs';
-import { createConnection } from 'node:net';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { randomBytes, randomUUID } from 'node:crypto';
+import { createConnection, createServer } from 'node:net';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 
 const DEFAULT_DOCKER_STARTUP_ATTEMPTS = 90;
 const DEFAULT_DATABASE_READINESS_ATTEMPTS = 60;
@@ -38,6 +40,7 @@ export interface DatabaseRuntimeDependencies {
   isTcpReady: (host: string, port: number) => Promise<boolean>;
   findDockerDesktopExecutable: () => Promise<string | null> | string | null;
   sleep: (milliseconds: number) => Promise<void>;
+  findFreePort: () => Promise<number>;
 }
 
 export interface DatabaseRuntimeManagerOptions extends Partial<DatabaseRuntimeDependencies> {
@@ -73,6 +76,7 @@ export class DatabaseRuntimeManager {
       isTcpReady: options.isTcpReady ?? isTcpReady,
       findDockerDesktopExecutable: options.findDockerDesktopExecutable ?? findDockerDesktopExecutable,
       sleep: options.sleep ?? sleep,
+      findFreePort: options.findFreePort ?? findFreePort,
     };
     this.dockerStartupAttempts = positiveInteger(
       options.dockerStartupAttempts,
@@ -146,6 +150,45 @@ export class DatabaseRuntimeManager {
       managedByDocker: true,
       containerName: container.name,
       containerStarted,
+    };
+  }
+
+  async provisionLocalPostgres(): Promise<{ containerName: string; volumeName: string; databaseUrl: string }> {
+    await this.ensureDockerEngine();
+    const id = randomUUID().replaceAll('-', '').slice(0, 12);
+    const containerName = `pmbrain-postgres-${id}`;
+    const volumeName = `pmbrain-postgres-data-${id}`;
+    const password = randomBytes(32).toString('base64url');
+    const port = await this.dependencies.findFreePort();
+    const envDirectory = mkdtempSync(join(tmpdir(), 'pmbrain-docker-'));
+    const envPath = join(envDirectory, 'postgres.env');
+    try {
+      writeFileSync(envPath, `POSTGRES_USER=pmbrain\nPOSTGRES_PASSWORD=${password}\nPOSTGRES_DB=pmbrain\n`, { mode: 0o600 });
+      const result = await this.dependencies.runCommand('docker', [
+        'run', '--detach', '--name', containerName,
+        '--publish', `127.0.0.1:${port}:5432`,
+        '--mount', `type=volume,source=${volumeName},target=/var/lib/postgresql/data`,
+        '--env-file', envPath,
+        '--restart', 'unless-stopped',
+        'pgvector/pgvector:pg16',
+      ]);
+      if (!result.ok) throw new Error(`创建 PMBrain 专属 Postgres 容器失败：${commandFailure(result)}`);
+    } finally {
+      rmSync(envDirectory, { recursive: true, force: true });
+    }
+    if (!await this.waitForPostgres(containerName, 'pmbrain', 'pmbrain')
+      || !await this.waitForTcpReady('127.0.0.1', port)) {
+      throw new Error(`Postgres 容器 ${containerName} 未能就绪。容器和数据卷已保留，请查看 Docker 日志后重试。`);
+    }
+    const extension = await this.dependencies.runCommand('docker', [
+      'exec', containerName, 'psql', '-U', 'pmbrain', '-d', 'pmbrain', '-v', 'ON_ERROR_STOP=1',
+      '-c', 'CREATE EXTENSION IF NOT EXISTS vector',
+    ]);
+    if (!extension.ok) throw new Error(`Postgres 容器 ${containerName} 的 pgvector 扩展初始化失败：${commandFailure(extension)}`);
+    return {
+      containerName,
+      volumeName,
+      databaseUrl: `postgresql://pmbrain:${encodeURIComponent(password)}@127.0.0.1:${port}/pmbrain`,
     };
   }
 
@@ -344,13 +387,28 @@ function runCommand(command: string, args: string[]): Promise<CommandResult> {
   return new Promise((resolve) => {
     execFile(command, args, {
       encoding: 'utf8',
-      timeout: 15_000,
+      timeout: args[0] === 'run' ? 10 * 60_000 : 15_000,
       windowsHide: true,
     }, (error, stdout, stderr) => {
       resolve({
         ok: !error,
         stdout: String(stdout ?? ''),
         stderr: String(stderr ?? error?.message ?? ''),
+      });
+    });
+  });
+}
+
+function findFreePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const server = createServer();
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address();
+      server.close(error => {
+        if (error) reject(error);
+        else if (address && typeof address !== 'string') resolve(address.port);
+        else reject(new Error('无法选择本机 Postgres 端口'));
       });
     });
   });

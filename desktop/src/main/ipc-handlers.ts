@@ -58,6 +58,8 @@ export interface DesktopIpcHandlers {
   advancedModelConfig: () => Promise<unknown>;
   saveAdvancedModelConfig: (values: AdvancedModelWriteInput) => Promise<unknown>;
   saveSetup: (payload: SetupPayload) => Promise<unknown>;
+  migrateToDocker: () => Promise<unknown>;
+  openDockerInstallGuide: () => Promise<unknown>;
   chooseEmbeddingRebuild: (choice: 'wait' | 'defer') => void;
   configureIntegration: (client: IntegrationClient, kind: CredentialKind, deep?: boolean) => Promise<unknown>;
   writeWorkbuddyUserAgent: () => Promise<unknown>;
@@ -127,6 +129,8 @@ export function registerDesktopIpcHandlers(handlers: DesktopIpcHandlers): void {
   registerTrustedHandler('desktop:get-advanced-model-config', handlers, () => handlers.advancedModelConfig());
   registerTrustedHandler('desktop:save-advanced-model-config', handlers, (_event, values: AdvancedModelWriteInput) => handlers.saveAdvancedModelConfig(values ?? {}));
   registerTrustedHandler('desktop:save-setup', handlers, (_event, payload: SetupPayload) => handlers.saveSetup(payload));
+  registerTrustedHandler('desktop:migrate-to-docker', handlers, () => handlers.migrateToDocker());
+  registerTrustedHandler('desktop:open-docker-install-guide', handlers, () => handlers.openDockerInstallGuide());
   registerTrustedHandler('desktop:choose-embedding-rebuild', handlers, (_event, choice: 'wait' | 'defer') => handlers.chooseEmbeddingRebuild(choice));
   registerTrustedHandler('desktop:configure-integration', handlers, (_event, client: IntegrationClient, kind: CredentialKind, deep?: boolean) => handlers.configureIntegration(client, kind, deep));
   registerTrustedHandler('desktop:write-workbuddy-user-agent', handlers, () => handlers.writeWorkbuddyUserAgent());

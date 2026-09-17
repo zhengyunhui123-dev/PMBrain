@@ -745,6 +745,21 @@ export function restoreConfig(snapshot: ConfigSnapshot): void {
   }
 }
 
+export function switchToProvisionedPostgres(databaseUrl: string, containerName: string): { snapshot: ConfigSnapshot; backup: string | null } {
+  const snapshot = snapshotConfig();
+  const config = readConfig(snapshot.path);
+  if (!config || config.engine === 'postgres' || !config.database_path) {
+    throw new Error('只有已配置 PGLite 数据库的 PMBrain 才能执行一键迁移。');
+  }
+  const backup = backupFile(snapshot.path, 'config');
+  config.engine = 'postgres';
+  config.database_url = databaseUrl;
+  delete config.database_path;
+  config.desktop = { ...config.desktop, docker_container_name: containerName };
+  writeJsonConfig(snapshot.path, config);
+  return { snapshot, backup };
+}
+
 function recipeDefault(provider: string, touchpoint: 'chat' | 'expansion'): string {
   const model = getRecipe(provider)?.touchpoints[touchpoint]?.models[0];
   if (!model) throw new Error(`PMBrain recipe ${provider} 没有可用的 ${touchpoint} 默认模型。`);

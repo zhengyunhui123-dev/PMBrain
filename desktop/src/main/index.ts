@@ -14,6 +14,8 @@ import {
   saveDesktopPreferences,
 } from './config-manager.js';
 import { DatabaseUpgradeController } from './database/database-upgrade.js';
+import { DatabaseTransferController } from './database/database-transfer.js';
+import { DatabaseRuntimeManager } from './database-runtime-manager.js';
 import { PgliteBackupController } from './database/pglite-backup.js';
 import { ToastRepairController } from './database/toast-repair-controller.js';
 import { buildDiagnosticBundle } from './diagnostics/diagnostic-bundle.js';
@@ -193,6 +195,15 @@ const systemSettingsController: SystemSettingsController = new SystemSettingsCon
   sidecar: sidecarController,
   getMainWindow: () => windowController.current,
   refreshTray: () => trayController.refresh(),
+});
+
+const databaseTransferController = new DatabaseTransferController({
+  runtime,
+  sidecar: sidecarController,
+  databaseRuntime: new DatabaseRuntimeManager(),
+  runCliChecked,
+  sendProgress: sendStartupProgress,
+  hideProgress: hideStartupProgress,
 });
 
 const setupController: SetupController = new SetupController({
@@ -399,7 +410,15 @@ if (!app.requestSingleInstanceLock()) {
       saveAdvancedModelConfig: values => sidecarController.withPausedForModelConfig(
         () => writeAdvancedModelConfig(runtime(), values),
       ),
-      saveSetup: payload => setupController.apply(payload),
+      saveSetup: payload => {
+        if (databaseTransferController.inProgress) throw new Error('完整知识库迁移进行中，请等待完成后再保存设置。');
+        return setupController.apply(payload);
+      },
+      migrateToDocker: () => {
+        if (setupController.inProgress) throw new Error('基础配置正在保存，请完成后再迁移数据库。');
+        return databaseTransferController.migrate();
+      },
+      openDockerInstallGuide: () => shell.openExternal('https://docs.docker.com/desktop/setup/install/windows-install/'),
       chooseEmbeddingRebuild,
       configureIntegration: (client, kind, deep) => sharedAccessController.configure(client, kind, deep),
       writeWorkbuddyUserAgent: () => writeWorkbuddyUserAgent(),

@@ -1591,7 +1591,8 @@ function populate(next: DesktopSetupState): void {
   $('#config-path').textContent = `配置写入：${setup.configPath}`;
   $('#postgres-status').textContent = setup.current.engine === 'postgres' && setup.current.databaseConfigured
     ? '已读取本机 Postgres 连接；留空会继续使用现有地址。'
-    : '不会安装或新建 Docker；会安全启动已安装的 Docker Desktop 和匹配的现有容器。';
+    : '已有数据库可填写地址；当前使用 PGLite 时可一键创建 Docker 数据库并迁移完整知识库。';
+  $<HTMLButtonElement>('#migrate-to-docker').hidden = setup.needsSetup || setup.current.engine !== 'pglite';
   renderEngine();
   renderIntegrations(integrations);
   renderService(null, next.port);
@@ -2477,6 +2478,21 @@ $('#docker-help-open').addEventListener('click', () => dockerHelp.showModal());
 $('#docker-help-close').addEventListener('click', () => dockerHelp.close());
 $('#docker-help-done').addEventListener('click', () => dockerHelp.close());
 $('#docker-copy-command').addEventListener('click', () => void window.pmbrainDesktop.copy($('#docker-command').textContent || ''));
+$('#docker-install-guide').addEventListener('click', () => void window.pmbrainDesktop.openDockerInstallGuide());
+$('#migrate-to-docker').addEventListener('click', async () => {
+  const button = $<HTMLButtonElement>('#migrate-to-docker');
+  setBusy(button, true, '正在迁移完整知识库…');
+  clearNotices();
+  try {
+    const result = await window.pmbrainDesktop.migrateToDocker();
+    populate(await window.pmbrainDesktop.getSetup());
+    setNotice('success', `迁移完成：${result.tables} 张表、${result.rows} 条记录已核对；原 PGLite 冷备：${result.backupDirectory}。`);
+  } catch (error) {
+    setNotice('error', error instanceof Error ? error.message : String(error));
+  } finally {
+    setBusy(button, false, '自动创建 Docker Postgres 并迁移当前知识库');
+  }
+});
 $('#update-action').addEventListener('click', async () => {
   const button = $<HTMLButtonElement>('#update-action');
   try {

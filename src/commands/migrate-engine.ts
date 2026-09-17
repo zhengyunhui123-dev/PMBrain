@@ -83,6 +83,25 @@ export async function runMigrateEngine(sourceEngine: BrainEngine, args: string[]
     process.exit(1);
   }
 
+  if (args.includes('--full-copy')) {
+    if (config.engine !== 'pglite' || opts.targetEngine !== 'postgres' || !args.includes('--no-switch') || opts.force) {
+      throw new Error('完整迁移仅支持 PGLite → 空 Postgres，并且必须使用 --no-switch；不能使用 --force');
+    }
+    const databaseUrl = opts.targetUrl || process.env.PMBRAIN_MIGRATION_TARGET_URL;
+    if (!databaseUrl) throw new Error('未提供目标 Postgres 数据库地址');
+    const target = await createEngine({ engine: 'postgres', database_url: databaseUrl });
+    try {
+      await target.connect({ engine: 'postgres', database_url: databaseUrl });
+      await target.initSchema();
+      const { transferCompleteBrain } = await import('./full-engine-transfer.ts');
+      const receipt = await transferCompleteBrain(sourceEngine, target);
+      console.log(JSON.stringify(receipt));
+    } finally {
+      await target.disconnect();
+    }
+    return;
+  }
+
   // Check source != target — relaxed in v0.41.28+ to allow re-migration
   // when sources have been added to the target.
   if (config.engine === opts.targetEngine) {
