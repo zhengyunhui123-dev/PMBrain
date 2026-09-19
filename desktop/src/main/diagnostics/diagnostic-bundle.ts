@@ -20,6 +20,7 @@ export interface DiagnosticBundleInput {
   doctor?: unknown;
   overview?: unknown;
   dreamStatus?: unknown;
+  advisor?: unknown;
   personalPaths?: string[];
 }
 
@@ -126,6 +127,7 @@ export async function buildDiagnosticBundle(input: DiagnosticBundleInput): Promi
   zip.file('version.json', json({ desktopVersion: input.desktopVersion, release: input.releaseManifest ?? null }, personalPaths));
   zip.file('doctor.json', json(input.doctor ?? { status: 'unavailable' }, personalPaths));
   zip.file('dream-status.json', json(input.dreamStatus ?? { status: 'unavailable' }, personalPaths));
+  zip.file('advisor.json', json(input.advisor ?? { status: 'unavailable' }, personalPaths));
   zip.file('desktop.log', safeLog || '[empty]\n');
   zip.file('sidecar.log', sidecarLog || '[no sidecar log lines]\n');
   zip.file('database-status.json', json(setupStatus, personalPaths));

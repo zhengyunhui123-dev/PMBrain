@@ -162,6 +162,11 @@ describe('desktop system orchestration contracts', () => {
     expect(trayController).toContain('click: this.dependencies.openDesktop');
     expect(trayController).toContain("tray.on('double-click', this.dependencies.openDesktop)");
     expect(main).toContain("'/admin/api/brain/overview'");
+    expect(main).toContain("'/admin/api/advisor'");
+    expect(trayController).toContain("label: '知识库体检'");
+    expect(main).toContain("label: '知识库体检'");
+    expect(main).not.toContain('collectChronicle');
+    expect(main).not.toContain('runAdvisor');
     expect(main).toContain('knowledgeSourceChanged === true');
     expect(setupController).toContain('this.applyOnce(effectivePayload, sourcePolicy');
     expect(setupController).toContain('repairMissingMainSourcePath');

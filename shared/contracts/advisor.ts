@@ -15,10 +15,11 @@ export const AdvisorProductSuggestionSchema = z.object({
 }).passthrough();
 
 export const AdvisorProductViewSchema = z.object({
+  product_name: z.string().optional(),
   score: z.number().nullable(),
   status: z.enum(['good', 'ok', 'needs_attention']),
-  status_label: z.string(),
   suggestion_count: z.number().int().nonnegative(),
+  status_label: z.string(),
   suggestions: z.array(AdvisorProductSuggestionSchema),
   generated_at: z.string(),
   worst: AdvisorSeveritySchema.nullable(),

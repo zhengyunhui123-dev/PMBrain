@@ -258,7 +258,7 @@ async function readReleaseManifest(): Promise<unknown> {
 async function exportDiagnosticBundle(): Promise<{ path: string; fileName: string; files: string[] } | null> {
   const setup = getSetupInfo();
   const activeSidecar = sidecarController.current;
-  const [doctor, overview, dreamStatus, releaseManifest] = await Promise.all([
+  const [doctor, overview, dreamStatus, advisor, releaseManifest] = await Promise.all([
     activeSidecar?.adminRequest('/admin/api/doctor').catch(error => ({
       status: 'unavailable', error: error instanceof Error ? error.message : String(error),
     })) ?? Promise.resolve({ status: 'sidecar_not_ready' }),
@@ -266,6 +266,9 @@ async function exportDiagnosticBundle(): Promise<{ path: string; fileName: strin
       status: 'unavailable', error: error instanceof Error ? error.message : String(error),
     })) ?? Promise.resolve({ status: 'sidecar_not_ready' }),
     activeSidecar?.adminRequest('/admin/api/dream/overview').catch(error => ({
+      status: 'unavailable', error: error instanceof Error ? error.message : String(error),
+    })) ?? Promise.resolve({ status: 'sidecar_not_ready' }),
+    activeSidecar?.adminRequest('/admin/api/advisor').catch(error => ({
       status: 'unavailable', error: error instanceof Error ? error.message : String(error),
     })) ?? Promise.resolve({ status: 'sidecar_not_ready' }),
     readReleaseManifest(),
@@ -280,6 +283,7 @@ async function exportDiagnosticBundle(): Promise<{ path: string; fileName: strin
     doctor,
     overview,
     dreamStatus,
+    advisor,
     personalPaths: [app.getPath('home'), app.getPath('userData')],
   });
   const mainWindow = windowController.current;

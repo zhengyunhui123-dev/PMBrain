@@ -5257,9 +5257,16 @@ html[data-theme="dark"] .pm-ghost.danger { color: #ff8f99; background: #2d171b; 
   list-style: none;
 }
 
+.overview-health-lead {
+  margin: 6px 0 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
 .overview-health-list li {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
   padding: 8px 10px;
@@ -5267,10 +5274,22 @@ html[data-theme="dark"] .pm-ghost.danger { color: #ff8f99; background: #2d171b; 
   background: rgba(18, 24, 38, .03);
 }
 
+.overview-health-copy {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
 .overview-health-list span {
   min-width: 0;
   color: var(--text-primary);
   font-size: 13px;
+}
+
+.overview-health-detail {
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .overview-health-action {

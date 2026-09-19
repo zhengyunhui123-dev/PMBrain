@@ -40,10 +40,10 @@ export async function runAdvisorCli(engine: BrainEngine, args: string[]): Promis
   if (args.includes('--help') || args.includes('-h')) {
     console.log(
       'pmbrain advisor [--json] [--apply <finding-id>]\n\n' +
-        '  (no flags)        Ranked, agent-readable action list for this brain.\n' +
+        '知识库体检. Ranked, agent-readable action list for this brain.\n' +
         '  --json            Structured findings. Exit code: 0 clean / 1 warn / 2 critical.\n' +
         '  --apply <id>      Run ONE finding\'s fix (local-only, confirms first). Only findings\n' +
-        '                    that report an apply id are runnable.\n\n' +
+        '                    that report an apply id are runnable. chronicle-backfill is not applyable.\n\n' +
         'Read-only by default; never mutates without --apply + your confirmation.',
     );
     return { exitCode: 0 };

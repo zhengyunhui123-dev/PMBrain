@@ -78,6 +78,9 @@ export interface SkillpackManifest {
 
   /** Path to CHANGELOG.md. */
   changelog?: string;
+
+  brain_resident?: boolean;
+  schema_pack?: string;
 }
 
 /** Structured error code surface. */
@@ -255,6 +258,21 @@ export function validateSkillpackManifest(
       `changelog must be a string path`,
       'manifest_invalid_field',
       { field: 'changelog', actual: obj.changelog },
+    );
+  }
+
+  if (obj.brain_resident !== undefined && typeof obj.brain_resident !== 'boolean') {
+    throw new SkillpackManifestError(
+      `brain_resident, if present, must be a boolean`,
+      'manifest_invalid_field',
+      { field: 'brain_resident', actual: obj.brain_resident },
+    );
+  }
+  if (obj.schema_pack !== undefined && (typeof obj.schema_pack !== 'string' || !NAME_RE.test(obj.schema_pack))) {
+    throw new SkillpackManifestError(
+      `schema_pack, if present, must be a lowercase kebab-case pack name; got ${JSON.stringify(obj.schema_pack)}`,
+      'manifest_invalid_field',
+      { field: 'schema_pack', expected: NAME_RE.source, actual: obj.schema_pack },
     );
   }
 

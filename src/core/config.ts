@@ -355,6 +355,7 @@ export interface GBrainConfig {
     auto_writeback_transient_ttl?: string;
     visibility_posture?: string;
   };
+  brain?: { audience?: string };
 }
 
 /**
