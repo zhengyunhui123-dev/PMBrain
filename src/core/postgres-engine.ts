@@ -3770,7 +3770,16 @@ export class PostgresEngine implements BrainEngine {
       GROUP BY entity_slug, dimension
       HAVING count(DISTINCT value) >= 2 AND count(DISTINCT source) >= 2
       ORDER BY entity_slug, dimension`;
-    return rows.map((r) => ({ entity_slug: r.entity_slug, dimension: r.dimension, values: r.values }));
+    return rows.map((r) => {
+      const raw = typeof r.values === 'string' ? JSON.parse(r.values) : r.values;
+      const values = (Array.isArray(raw) ? raw : []).map((v: { value: string; source: string; confidence: number; fact_id: number | string }) => ({
+        value: v.value,
+        source: v.source,
+        confidence: Number(v.confidence),
+        fact_id: Number(v.fact_id),
+      }));
+      return { entity_slug: r.entity_slug, dimension: r.dimension, values };
+    });
   }
 
   // Raw data
