@@ -44,6 +44,7 @@ import type {
 import type { DesktopKnowledgeSourceStatus } from '../main/knowledge-source-git.js';
 import type { WorkbuddyAgentIntegrationStatus } from '../main/integration/workbuddy-agent-controller.js';
 import type { PgliteOwnerStatus } from '../../../src/core/pglite-owner-control.js';
+import type { ManagedPostgresDatabase } from '../main/database-runtime-manager.js';
 
 export type {
   AdvancedModelConfig,
@@ -78,6 +79,7 @@ export type {
   SidecarState,
   UpdateState,
   WorkbuddyAgentIntegrationStatus,
+  ManagedPostgresDatabase,
 };
 
 export type DesktopSettingsPanel = 'basic' | 'models' | 'integrations' | 'updates' | 'system' | 'repair';
@@ -171,6 +173,7 @@ export interface PMBrainDesktopApi {
   setTheme(theme: DesktopTheme): Promise<DesktopThemeState>;
   onThemeState(listener: (state: DesktopThemeState) => void): () => void;
   getSetup(): Promise<DesktopSetupState>;
+  listDockerDatabases(): Promise<ManagedPostgresDatabase[]>;
   getIntegrations(probe?: boolean): Promise<IntegrationInfo[]>;
   chooseEmbeddingRebuild(choice: 'wait' | 'defer'): Promise<void>;
   onState(listener: (state: SidecarState) => void): () => void;
@@ -240,6 +243,7 @@ const api: PMBrainDesktopApi = {
     return () => ipcRenderer.removeListener('desktop:theme-state', handler);
   },
   getSetup: () => ipcRenderer.invoke('desktop:get-setup'),
+  listDockerDatabases: () => ipcRenderer.invoke('desktop:list-docker-databases'),
   getIntegrations: (probe) => ipcRenderer.invoke('desktop:get-integrations', probe),
   chooseEmbeddingRebuild: (choice) => ipcRenderer.invoke('desktop:choose-embedding-rebuild', choice),
   onState: (listener) => {

@@ -78,7 +78,9 @@
             <small>选择保存 PMBrain 数据库的本机位置；现有用户会继续使用原位置。</small>
           </div>
           <div class="field-group" id="postgres-fields" hidden>
-            <label for="database-url">Postgres 连接地址</label>
+            <label for="database-instance">Docker 中可用的 PMBrain 数据库</label>
+            <select id="database-instance"><option value="">正在检查 Docker 中可用的 PMBrain 数据库…</option></select>
+            <label class="database-url-label" for="database-url">Postgres 连接地址</label>
             <input id="database-url" type="password" spellcheck="false" placeholder="postgresql://postgres:postgres@127.0.0.1:5433/pmbrain" />
             <div class="field-help"><small id="postgres-status">已有数据库可填写地址；当前使用 PGLite 时可一键创建 Docker 数据库并迁移完整知识库。</small><button type="button" class="text-button" id="docker-help-open">第一次使用 Docker？查看四步教程</button></div>
             <button type="button" class="solid" id="migrate-to-docker">扫描一键迁移方案</button>

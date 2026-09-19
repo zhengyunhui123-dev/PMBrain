@@ -75,6 +75,36 @@ function inspectResult(
   };
 }
 
+function managedInspectResult(options: {
+  name: string;
+  hostPort: string;
+  running?: boolean;
+  managed?: boolean;
+  created?: string;
+}): CommandResult {
+  return {
+    ok: true,
+    stdout: JSON.stringify([{
+      Name: `/${options.name}`,
+      Created: options.created ?? '2026-09-19T06:00:00Z',
+      State: { Running: options.running ?? true },
+      Config: {
+        Env: ['POSTGRES_USER=pmbrain', 'POSTGRES_PASSWORD=secret', 'POSTGRES_DB=pmbrain'],
+        Labels: options.managed === false ? {} : {
+          'com.pmbrain.managed': 'true',
+          'com.pmbrain.role': 'database',
+        },
+      },
+      HostConfig: {
+        PortBindings: {
+          '5432/tcp': [{ HostIp: '127.0.0.1', HostPort: options.hostPort }],
+        },
+      },
+    }]),
+    stderr: '',
+  };
+}
+
 describe('desktop database runtime manager', () => {
   test('creates a separate local pgvector database with a volume when Docker is ready', async () => {
     const runtime = fakeRuntime({
@@ -94,6 +124,8 @@ describe('desktop database runtime manager', () => {
     const run = runtime.commands.find(args => args[0] === 'run')!;
     expect(run).toContain('127.0.0.1:55432:5432');
     expect(run).toContain('pgvector/pgvector:pg16');
+    expect(run).toContain('com.pmbrain.managed=true');
+    expect(run).toContain('com.pmbrain.role=database');
     expect(run.some(value => value.includes('POSTGRES_PASSWORD='))).toBe(false);
     expect(runtime.commands).toContainEqual(expect.arrayContaining([
       'exec', expect.stringMatching(/^pmbrain-postgres-/), 'pg_isready',
@@ -102,6 +134,78 @@ describe('desktop database runtime manager', () => {
     expect(runtime.commands.some(args => args[0] === 'exec' && args.some(value => value.includes('SELECT 1')))).toBe(true);
     expect(runtime.commands.some(args => args[0] === 'exec' && args.includes('CREATE EXTENSION IF NOT EXISTS vector'))).toBe(false);
     expect(runtime.commands.some(args => ['rm', 'stop', 'volume'].includes(args[0]!))).toBe(false);
+  });
+
+  test('lists only healthy PMBrain Docker databases and puts the current database first', async () => {
+    const runtime = fakeRuntime({
+      command: args => {
+        if (args[0] === 'info') return { ok: true, stdout: 'ready', stderr: '' };
+        if (args[0] === 'container' && args[1] === 'ls') {
+          return { ok: true, stdout: 'pmbrain-postgres-old\ncompany-postgres\npmbrain-postgres-current\n', stderr: '' };
+        }
+        if (args[0] === 'inspect' && args[1] === 'pmbrain-postgres-old') {
+          return managedInspectResult({ name: 'pmbrain-postgres-old', hostPort: '55431', created: '2026-09-18T06:00:00Z' });
+        }
+        if (args[0] === 'inspect' && args[1] === 'pmbrain-postgres-current') {
+          return managedInspectResult({ name: 'pmbrain-postgres-current', hostPort: '55432', created: '2026-09-17T06:00:00Z' });
+        }
+        if (args[0] === 'inspect' && args[1] === 'company-postgres') {
+          return managedInspectResult({ name: 'company-postgres', hostPort: '55433', managed: false });
+        }
+        if (args[0] === 'exec' && args[1] === 'pmbrain-postgres-old') {
+          return { ok: true, stdout: 'pmbrain\n', stderr: '' };
+        }
+        if (args[0] === 'exec' && args[1] === 'pmbrain-postgres-current') {
+          return { ok: true, stdout: 'pmbrain\n', stderr: '' };
+        }
+        if (args[0] === 'exec' && args[1] === 'company-postgres') {
+          return { ok: true, stdout: 'pmbrain\n', stderr: '' };
+        }
+        return { ok: false, stdout: '', stderr: 'unexpected' };
+      },
+    });
+
+    const databases = await runtime.manager.listManagedPostgresDatabases(
+      'postgresql://pmbrain:secret@127.0.0.1:55432/pmbrain',
+    );
+
+    expect(databases.map(item => item.containerName)).toEqual([
+      'pmbrain-postgres-current',
+      'company-postgres',
+      'pmbrain-postgres-old',
+    ]);
+    expect(databases[0]).toMatchObject({
+      current: true,
+      displayAddress: 'postgresql://pmbrain:••••@127.0.0.1:55432/pmbrain',
+    });
+    expect(databases[2]?.databaseUrl).toBe('postgresql://pmbrain:secret@127.0.0.1:55431/pmbrain');
+    expect(runtime.commands.some(args => args[0] === 'exec' && args.some(value => value.includes("to_regclass('public.facts')")))).toBe(true);
+  });
+
+  test('keeps legacy named migration databases discoverable but excludes unhealthy databases', async () => {
+    const runtime = fakeRuntime({
+      command: args => {
+        if (args[0] === 'info') return { ok: true, stdout: 'ready', stderr: '' };
+        if (args[0] === 'container') {
+          return { ok: true, stdout: 'pmbrain-postgres-legacy\npmbrain-postgres-broken\n', stderr: '' };
+        }
+        if (args[0] === 'inspect' && args[1] === 'pmbrain-postgres-legacy') {
+          return managedInspectResult({ name: 'pmbrain-postgres-legacy', hostPort: '55434', managed: false });
+        }
+        if (args[0] === 'inspect' && args[1] === 'pmbrain-postgres-broken') {
+          return managedInspectResult({ name: 'pmbrain-postgres-broken', hostPort: '55435' });
+        }
+        if (args[0] === 'exec' && args[1] === 'pmbrain-postgres-legacy') {
+          return { ok: true, stdout: 'pmbrain\n', stderr: '' };
+        }
+        if (args[0] === 'exec') return { ok: false, stdout: '', stderr: 'database unavailable' };
+        return { ok: false, stdout: '', stderr: 'unexpected' };
+      },
+    });
+
+    await expect(runtime.manager.listManagedPostgresDatabases()).resolves.toEqual([
+      expect.objectContaining({ containerName: 'pmbrain-postgres-legacy', current: false }),
+    ]);
   });
 
   test('does not accept the temporary socket-only server during first initialization', async () => {

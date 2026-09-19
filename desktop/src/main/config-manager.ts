@@ -139,6 +139,7 @@ export interface SetupInfo {
   current: {
     engine: 'pglite' | 'postgres';
     databasePath?: string;
+    databaseUrl?: string;
     databaseConfigured: boolean;
     knowledgeDirectory?: string;
     knowledgeSourceId?: string;
@@ -604,6 +605,7 @@ export function getSetupInfo(): SetupInfo {
     current: {
       engine: config?.engine === 'postgres' ? 'postgres' : 'pglite',
       databasePath: config?.database_path,
+      databaseUrl: typeof config?.database_url === 'string' ? config.database_url : undefined,
       databaseConfigured: Boolean(config?.database_url || config?.database_path),
       knowledgeDirectory: desktop?.knowledge_directory,
       knowledgeSourceId: desktop?.knowledge_source_id,

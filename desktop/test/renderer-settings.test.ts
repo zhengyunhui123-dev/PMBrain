@@ -277,6 +277,18 @@ describe('desktop settings renderer contracts', () => {
     expect(preload).toContain('desktop:write-workbuddy-user-agent');
   });
 
+  test('shows the migrated database address and discovers switchable PMBrain Docker databases', () => {
+    expect(html).toContain('id="database-instance"');
+    expect(html).toContain('正在检查 Docker 中可用的 PMBrain 数据库');
+    expect(renderer).toContain('setup.current.databaseUrl ||');
+    expect(renderer).toContain('listDockerDatabases');
+    expect(renderer).toContain('renderDockerDatabases');
+    expect(renderer).toContain("option.dataset.databaseUrl");
+    expect(renderer).toContain("$<HTMLSelectElement>('#database-instance').addEventListener('change'");
+    expect(main).toContain("'desktop:list-docker-databases'");
+    expect(preload).toContain("'desktop:list-docker-databases'");
+  });
+
   test('立即显示 MCP 卡片，并在后台刷新真实连接状态', () => {
     expect(preload).toContain('getIntegrations(probe?: boolean)');
     expect(main).toContain("'desktop:get-integrations'");

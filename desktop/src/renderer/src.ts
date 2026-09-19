@@ -19,6 +19,7 @@ import type {
   IntegrationClient,
   IntegrationInfo,
   IntegrationResult,
+  ManagedPostgresDatabase,
   PMBrainDesktopApi,
   DesktopPgliteUpgradeBackupMutation,
   DesktopPgliteUpgradeBackups,
@@ -1163,6 +1164,47 @@ function renderIntegrations(integrations: IntegrationInfo[]): void {
   }));
 }
 
+function renderDockerDatabases(databases: ManagedPostgresDatabase[]): void {
+  const select = $<HTMLSelectElement>('#database-instance');
+  const databaseUrl = $<HTMLInputElement>('#database-url');
+  select.replaceChildren();
+  let selected = false;
+  for (const database of databases) {
+    const option = document.createElement('option');
+    option.value = database.containerName;
+    option.textContent = `${database.current ? '当前使用 · ' : ''}${database.containerName} · ${database.displayAddress}`;
+    option.dataset.databaseUrl = database.databaseUrl;
+    option.selected = database.current;
+    selected ||= database.current;
+    select.append(option);
+  }
+  const manual = document.createElement('option');
+  manual.value = '__manual__';
+  manual.textContent = databases.length > 0 ? '手动填写其他 Postgres 地址' : '未发现可用 PMBrain 数据库，可手动填写地址';
+  manual.selected = !selected;
+  select.append(manual);
+  const active = select.selectedOptions[0];
+  if (active?.dataset.databaseUrl) databaseUrl.value = active.dataset.databaseUrl;
+  select.disabled = false;
+  $('#postgres-status').textContent = databases.length > 0
+    ? `已验证 ${databases.length} 个可用 PMBrain 数据库；选择后点击“保存修改并重启”完成切换。`
+    : 'Docker 中没有发现通过 PMBrain 核心表和连接校验的数据库；也可以手动填写地址。';
+}
+
+async function refreshDockerDatabases(): Promise<void> {
+  if (selectedEngine() !== 'postgres') return;
+  const select = $<HTMLSelectElement>('#database-instance');
+  select.disabled = true;
+  select.replaceChildren(new Option('正在检查 Docker 中可用的 PMBrain 数据库…', ''));
+  $('#postgres-status').textContent = '正在检查 Docker 容器、数据库连接和 PMBrain 核心表…';
+  try {
+    renderDockerDatabases(await window.pmbrainDesktop.listDockerDatabases());
+  } catch (error) {
+    renderDockerDatabases([]);
+    $('#postgres-status').textContent = error instanceof Error ? error.message : String(error);
+  }
+}
+
 function readIntegrationVerificationCache(): Partial<Record<IntegrationClient, IntegrationVerificationReceipt>> {
   try {
     const parsed = JSON.parse(localStorage.getItem(INTEGRATION_VERIFICATION_KEY) ?? '{}');
@@ -1541,6 +1583,7 @@ function populate(next: DesktopSetupState): void {
   const radio = document.querySelector<HTMLInputElement>(`input[name="engine"][value="${setup.current.engine}"]`);
   if (radio) radio.checked = true;
   ($<HTMLInputElement>('#database-path')).value = setup.current.databasePath || setup.defaults.databasePath;
+  ($<HTMLInputElement>('#database-url')).value = setup.current.databaseUrl || '';
   ($<HTMLInputElement>('#knowledge-directory')).value = setup.current.knowledgeDirectory || setup.defaults.knowledgeDirectory;
   ($<HTMLInputElement>('#knowledge-source-id')).value = setup.current.knowledgeSourceId || '';
   loadedKnowledgeDirectory = ($<HTMLInputElement>('#knowledge-directory')).value.trim();
@@ -1590,10 +1633,11 @@ function populate(next: DesktopSetupState): void {
   $('#embedding-model-effective').textContent = setup.current.embeddingModel ? `当前生效：${setup.current.embeddingModel}` : '当前未配置';
   $('#config-path').textContent = `配置写入：${setup.configPath}`;
   $('#postgres-status').textContent = setup.current.engine === 'postgres' && setup.current.databaseConfigured
-    ? '已读取本机 Postgres 连接；留空会继续使用现有地址。'
+    ? '已读取当前 Postgres 连接，正在检查 Docker 中可切换的 PMBrain 数据库。'
     : '已有数据库可填写地址；当前使用 PGLite 时可一键创建 Docker 数据库并迁移完整知识库。';
   $<HTMLButtonElement>('#migrate-to-docker').hidden = setup.needsSetup || setup.current.engine !== 'pglite';
   renderEngine();
+  if (setup.current.engine === 'postgres') void refreshDockerDatabases();
   renderIntegrations(integrations);
   renderService(null, next.port);
   $('#save-setup').querySelector('span')!.textContent = saveButtonText();
@@ -2248,7 +2292,17 @@ async function configure(client: IntegrationClient, button: HTMLButtonElement, d
   }
 }
 
-document.querySelectorAll<HTMLInputElement>('input[name="engine"]').forEach((input) => input.addEventListener('change', renderEngine));
+document.querySelectorAll<HTMLInputElement>('input[name="engine"]').forEach((input) => input.addEventListener('change', () => {
+  renderEngine();
+  if (selectedEngine() === 'postgres') void refreshDockerDatabases();
+}));
+$<HTMLSelectElement>('#database-instance').addEventListener('change', (event) => {
+  const option = (event.currentTarget as HTMLSelectElement).selectedOptions[0];
+  if (option?.dataset.databaseUrl) $<HTMLInputElement>('#database-url').value = option.dataset.databaseUrl;
+});
+$<HTMLInputElement>('#database-url').addEventListener('input', () => {
+  $<HTMLSelectElement>('#database-instance').value = '__manual__';
+});
 document.querySelectorAll<HTMLInputElement>('input[name="network-mode"]').forEach((input) => input.addEventListener('change', renderNetworkMode));
 document.querySelectorAll<HTMLInputElement>('input[name="memory-writeback"]').forEach((input) => input.addEventListener('change', () => void handleMemoryModeChange(input)));
 $<HTMLSelectElement>('#shared-address').addEventListener('change', renderSelectedAddressNote);

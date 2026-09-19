@@ -197,10 +197,12 @@ const systemSettingsController: SystemSettingsController = new SystemSettingsCon
   refreshTray: () => trayController.refresh(),
 });
 
+const databaseRuntime = new DatabaseRuntimeManager();
+
 const databaseTransferController = new DatabaseTransferController({
   runtime,
   sidecar: sidecarController,
-  databaseRuntime: new DatabaseRuntimeManager(),
+  databaseRuntime,
   runCliChecked,
   sendProgress: sendStartupProgress,
   hideProgress: hideStartupProgress,
@@ -399,6 +401,7 @@ if (!app.requestSingleInstanceLock()) {
       revokeSharedIntegration: credentialName => sharedAccessController.revoke(credentialName),
       updateState: () => updateController.currentState,
       setup: () => setupController.currentState(),
+      listDockerDatabases: () => databaseRuntime.listManagedPostgresDatabases(getSetupInfo().current.databaseUrl),
       integrations: probe => probe
         ? setupController.integrationStates()
         : Promise.resolve(listIntegrations(sidecarController.current?.port)),

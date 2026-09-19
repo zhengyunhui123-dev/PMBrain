@@ -174,6 +174,7 @@ input:focus, select:focus { border-color: var(--accent); background: var(--surfa
 select { cursor: pointer; appearance: auto; -webkit-appearance: auto; }
 .input-action input { flex: 1; }
 .field-group > small { display: block; margin-top: 7px; color: var(--text-muted); font-size: 11px; }
+.database-url-label { margin-top: 12px; }
 .field-help { display: flex; justify-content: space-between; align-items: baseline; gap: 16px; margin-top: 7px; }
 .field-help small { color: var(--text-muted); font-size: 11px; }
 .text-button { min-height: 0; padding: 0; border: 0; border-radius: 0; color: var(--accent); background: transparent; font-size: 11px; text-decoration: none; }

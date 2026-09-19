@@ -55,9 +55,22 @@ interface DockerContainer {
   matchesHostPort: boolean;
 }
 
+export interface ManagedPostgresDatabase {
+  containerName: string;
+  databaseUrl: string;
+  displayAddress: string;
+  current: boolean;
+  createdAt: string;
+}
+
 interface DockerInspectPayload {
   Name?: string;
+  Created?: string;
   State?: { Running?: boolean };
+  Config?: {
+    Env?: string[];
+    Labels?: Record<string, string>;
+  };
   HostConfig?: {
     PortBindings?: Record<string, Array<{ HostIp?: string; HostPort?: string }> | null>;
   };
@@ -169,6 +182,8 @@ export class DatabaseRuntimeManager {
         '--publish', `127.0.0.1:${port}:5432`,
         '--mount', `type=volume,source=${volumeName},target=/var/lib/postgresql/data`,
         '--env-file', envPath,
+        '--label', 'com.pmbrain.managed=true',
+        '--label', 'com.pmbrain.role=database',
         '--restart', 'unless-stopped',
         'pgvector/pgvector:pg16',
       ]);
@@ -184,6 +199,65 @@ export class DatabaseRuntimeManager {
       containerName,
       volumeName,
       databaseUrl: `postgresql://pmbrain:${encodeURIComponent(password)}@127.0.0.1:${port}/pmbrain`,
+    };
+  }
+
+  async listManagedPostgresDatabases(currentDatabaseUrl?: string): Promise<ManagedPostgresDatabase[]> {
+    await this.ensureDockerEngine();
+    const listResult = await this.dependencies.runCommand('docker', [
+      'container', 'ls', '-a', '--format', '{{.Names}}',
+    ]);
+    if (!listResult.ok) throw new Error(`无法读取 Docker 数据库列表：${commandFailure(listResult)}`);
+
+    const names = listResult.stdout.split(/\r?\n/).map(value => value.trim()).filter(Boolean);
+    const databases: ManagedPostgresDatabase[] = [];
+    for (const name of names) {
+      const result = await this.dependencies.runCommand('docker', ['inspect', name]);
+      if (!result.ok) continue;
+      const database = await this.inspectManagedPostgres(name, result.stdout, currentDatabaseUrl);
+      if (database) databases.push(database);
+    }
+    return databases.sort((left, right) => (
+      Number(right.current) - Number(left.current)
+      || right.createdAt.localeCompare(left.createdAt)
+      || left.containerName.localeCompare(right.containerName)
+    ));
+  }
+
+  private async inspectManagedPostgres(
+    fallbackName: string,
+    rawInspect: string,
+    currentDatabaseUrl?: string,
+  ): Promise<ManagedPostgresDatabase | null> {
+    let inspected: DockerInspectPayload | undefined;
+    try {
+      inspected = (JSON.parse(rawInspect) as DockerInspectPayload[])[0];
+    } catch {
+      return null;
+    }
+    if (!inspected || inspected.State?.Running !== true) return null;
+    const containerName = inspected.Name?.replace(/^\//, '') || fallbackName;
+    const env = environmentMap(inspected.Config?.Env);
+    const username = env.POSTGRES_USER?.trim();
+    const password = env.POSTGRES_PASSWORD;
+    const databaseName = env.POSTGRES_DB?.trim();
+    const binding = (inspected.HostConfig?.PortBindings?.[POSTGRES_CONTAINER_PORT] ?? [])
+      .find(item => item.HostPort && localDockerBinding(item.HostIp));
+    if (!username || password === undefined || !databaseName || !binding?.HostPort) return null;
+
+    const probe = await this.dependencies.runCommand('docker', [
+      'exec', containerName, 'sh', '-c',
+      'PGPASSWORD="$POSTGRES_PASSWORD" exec psql -h 127.0.0.1 -p 5432 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 -Atc "SELECT CASE WHEN to_regclass(\'public.pages\') IS NOT NULL AND to_regclass(\'public.sources\') IS NOT NULL AND to_regclass(\'public.content_chunks\') IS NOT NULL AND to_regclass(\'public.facts\') IS NOT NULL THEN \'pmbrain\' ELSE \'other\' END"',
+    ]);
+    if (!probe.ok || probe.stdout.trim() !== 'pmbrain') return null;
+
+    const databaseUrl = `postgresql://${encodeURIComponent(username)}:${encodeURIComponent(password)}@127.0.0.1:${binding.HostPort}/${encodeURIComponent(databaseName)}`;
+    return {
+      containerName,
+      databaseUrl,
+      displayAddress: `postgresql://${username}:••••@127.0.0.1:${binding.HostPort}/${databaseName}`,
+      current: sameDatabaseUrl(databaseUrl, currentDatabaseUrl),
+      createdAt: inspected.Created ?? '',
     };
   }
 
@@ -375,6 +449,34 @@ function safeDecode(value: string): string {
     return decodeURIComponent(value);
   } catch {
     return value;
+  }
+}
+
+function environmentMap(values: string[] | undefined): Record<string, string> {
+  const result: Record<string, string> = {};
+  for (const value of values ?? []) {
+    const separator = value.indexOf('=');
+    if (separator <= 0) continue;
+    result[value.slice(0, separator)] = value.slice(separator + 1);
+  }
+  return result;
+}
+
+function localDockerBinding(hostIp: string | undefined): boolean {
+  return ['', '0.0.0.0', '127.0.0.1', '::', '::1'].includes((hostIp ?? '').trim());
+}
+
+function sameDatabaseUrl(left: string, right: string | undefined): boolean {
+  if (!right?.trim()) return false;
+  try {
+    const first = new URL(left);
+    const second = new URL(right);
+    return first.hostname.replace(/^\[|\]$/g, '').toLowerCase() === second.hostname.replace(/^\[|\]$/g, '').toLowerCase()
+      && (first.port || '5432') === (second.port || '5432')
+      && safeDecode(first.username) === safeDecode(second.username)
+      && safeDecode(first.pathname) === safeDecode(second.pathname);
+  } catch {
+    return left === right;
   }
 }
 
