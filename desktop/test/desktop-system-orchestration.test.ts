@@ -102,6 +102,7 @@ describe('desktop system orchestration contracts', () => {
     expect(main).toContain("'repair', 'toast-diagnose'");
     expect(main).toContain("'repair', 'toast-replace'");
     expect(main).not.toContain("from '../../../src/core/pglite-toast-repair");
+    expect(readFileSync(resolve('../src/core/model-usage.ts'), 'utf8')).not.toMatch(/import\s*\{[^}]*ALL_PHASES[^}]*\}\s*from\s*['\"]\.\/cycle\.ts['\"]/);
     expect(backupController).toContain('parseSuccessfulBackupJsonFromError');
     expect(backupController).toContain("recovered?.status !== 'restored'");
     expect(backupController).toContain("'set-root'");
