@@ -36,6 +36,8 @@ import { isSourceUnchangedSinceSync } from '../core/git-head.ts';
 import { CHUNKER_VERSION } from '../core/chunkers/code.ts';
 import { DEFAULT_USER_HOLDER } from '../core/cycle/emotional-weight.ts';
 import { buildRetrievalReflexCheck } from './doctor-retrieval-reflex.ts';
+import { buildMemorableRelayCheck } from './doctor/checks/integrations-memorable.ts';
+export { buildMemorableRelayCheck } from './doctor/checks/integrations-memorable.ts';
 
 export interface Check {
   name: string;
@@ -3295,6 +3297,8 @@ export async function buildChecks(
   const detected = scope === 'all' ? autoDetectSkillsDirReadOnly() : { dir: null, source: 'none' as const };
   const skillsDir = detected.dir;
   checks.push(buildRetrievalReflexCheck());
+  progress.heartbeat('memorable_relay_health');
+  checks.push(await buildMemorableRelayCheck()); // name: 'memorable_relay_health'
   if (scope === 'all' && skillsDir) {
 
     // --fix: run auto-repair BEFORE checkResolvable so the post-fix scan

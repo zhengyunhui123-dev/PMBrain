@@ -218,6 +218,21 @@ export async function runConfig(engine: BrainEngine, args: string[]) {
       console.error('Usage: pmbrain config unset <key> | --pattern <prefix>');
       process.exit(1);
     }
+    if (key === 'integrations.memorable.enabled') {
+      const hb = await import('../core/context/hook-heartbeat.ts');
+      const cfg = loadConfigFileOnly();
+      const memorable = cfg?.integrations?.memorable as Record<string, unknown> | undefined;
+      await hb.clearMemorableConsent();
+      if (cfg && memorable && 'enabled' in memorable) {
+        delete memorable.enabled;
+        saveConfig(cfg);
+        console.log(`Unset ${key} (file plane) — disclosure consent revoked`);
+      } else {
+        console.error(`Config key not found: ${key} (disclosure consent revoked regardless)`);
+        process.exit(1);
+      }
+      return;
+    }
     let removed = false;
     if(key==='memory.auto_writeback'){
       const {setWritebackMode}=await import('../core/facts/writeback-set.ts');
@@ -244,7 +259,7 @@ export async function runConfig(engine: BrainEngine, args: string[]) {
   const value = args[2];
 
   if (action === 'get' && key) {
-    const fileValue = isFileBackedModelConfigKey(key)
+    const fileValue = isFileBackedModelConfigKey(key) || key === 'integrations.memorable.enabled'
       ? readFileConfigValue(loadConfigFileOnly(), key)
       : undefined;
     const val = fileValue !== undefined
@@ -330,6 +345,49 @@ export async function runConfig(engine: BrainEngine, args: string[]) {
     // they're mid-backfill.
     const coverageOverride =
       args.includes('--coverage-override') || args.includes('--yes');
+
+    if (key === 'integrations.memorable.enabled') {
+      const { isConfigTruthy } = await import('../core/config.ts');
+      const hb = await import('../core/context/hook-heartbeat.ts');
+      const cfg = (loadConfigFileOnly() ?? { engine: 'pglite' }) as Parameters<typeof saveConfig>[0];
+      const on = isConfigTruthy(value);
+      if (!on) {
+        cfg.integrations = { ...(cfg.integrations ?? {}), memorable: { ...(cfg.integrations?.memorable ?? {}), enabled: false } };
+        saveConfig(cfg);
+        await hb.clearMemorableConsent();
+        console.log(`Set ${key} = false (file plane: ~/.pmbrain/config.json)`);
+        console.log('Relay disabled and the disclosure consent was revoked — re-enabling shows the disclosure again.');
+        return;
+      }
+      if (!(await hb.memorableConsentValid())) {
+        console.log(hb.MEMORABLE_DISCLOSURE_TEXT);
+        const preConsented = args.includes('--yes');
+        if (!preConsented) {
+          if (!process.stdin.isTTY) {
+            console.error('[config] non-interactive session and no --yes: refusing to enable a third-party relay without explicit consent. Nothing was written.');
+            console.error('[AGENT] Relay this to your operator: run `pmbrain config set integrations.memorable.enabled true` in a terminal and answer the prompt.');
+            process.exit(1);
+          }
+          const { promptYesNo } = await import('../core/confirm-prompt.ts');
+          const accepted = await promptYesNo('[pmbrain] 开启 Memorable 会话结束转发？ [y/N] ');
+          if (!accepted) {
+            console.log('Declined. Nothing was written.');
+            return;
+          }
+        }
+        const stampPath = await hb.writeMemorableConsent();
+        console.log(`Consent recorded: ${stampPath}`);
+      }
+      cfg.integrations = { ...(cfg.integrations ?? {}), memorable: { ...(cfg.integrations?.memorable ?? {}), enabled: true } };
+      saveConfig(cfg);
+      console.log(`Set ${key} = true (file plane: ~/.pmbrain/config.json)`);
+      console.log(
+        'Session-end traces will now be offered to the locally-installed `memorable` CLI, ' +
+          'which sends redacted tool calls off-machine to its extraction API. ' +
+          'Turn off: pmbrain config set integrations.memorable.enabled false (or PMBRAIN_MEMORABLE=0 / GBRAIN_MEMORABLE=0)',
+      );
+      return;
+    }
 
     if (key === 'spend.posture') {
       const { isValidSpendPosture } = await import('../core/spend-posture.ts');
