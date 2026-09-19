@@ -25,9 +25,11 @@ describe('Admin overview navigation', () => {
 
   test('shows a knowledge health card with clickable advisor actions', () => {
     expect(overviewSource).toContain('function AdvisorHealthCard');
-    expect(overviewSource).toContain('知识库健康状态');
+    expect(overviewSource).toContain('知识库体检');
     expect(overviewSource).toContain("api.applyAdvisor(suggestion.dispatch_id)");
     expect(overviewSource).toContain("onNavigate?.('tasks')");
+    expect(overviewSource).toContain('advisor.suggestions.map((suggestion)');
+    expect(overviewSource).not.toContain('advisor.suggestions.slice(0, 5)');
   });
 
   test('orphan advice opens the isolated graph instead of starting an orphan scan', () => {

@@ -355,6 +355,7 @@ export interface GBrainConfig {
     auto_writeback_transient_ttl?: string;
     visibility_posture?: string;
   };
+  brain?: { audience?: string };
 }
 
 /**
@@ -956,6 +957,8 @@ export const KNOWN_CONFIG_KEYS: readonly string[] = [
   // Misc
   'artifacts_sync_mode',
   'cross_project_learnings',
+  'auto_chronicle',
+  'chronicle.judge_max_tokens',
 ];
 
 /**
@@ -973,6 +976,7 @@ export const KNOWN_CONFIG_KEY_PREFIXES: readonly string[] = [
   'provider_touchpoint_base_urls.', // per-provider, per-touchpoint base URL overrides
   'content_sanity.',    // v0.41 content-sanity tunables
   'connectors.',        // chat-connectors: source_id, sync_floor_min, embed_kickoff_min_pages, doctor_stale_hours, <provider>.{auto_sync,last_sync_at,auth_error_at,watermark_iso} (no secrets — creds are file-plane)
+  'chronicle.',
 ];
 
 export function saveConfig(config: GBrainConfig): void {

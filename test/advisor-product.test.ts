@@ -50,6 +50,7 @@ describe('advisor product view', () => {
       }),
     ]), 92);
 
+    expect(view.product_name).toBe('知识库体检');
     expect(view.status).toBe('good');
     expect(view.status_label).toBe('良好');
     expect(view.score).toBe(92);
@@ -117,5 +118,41 @@ describe('advisor product view', () => {
     ], 'critical'), 40);
     expect(view.status_label).toBe('需要处理');
     expect(resolveAdminAdvisorAction(view.suggestions[0]!)).toEqual({ kind: 'restart_required' });
+  });
+
+  test('maps chronicle and writeback findings into Chinese copy without fake apply actions', () => {
+    const view = buildAdvisorProductView(report([
+      finding({
+        id: 'chronicle_coverage_gap',
+        severity: 'info',
+        title: '3 recent meeting(s) aren\'t in the timeline yet',
+        detail: 'Sweep them into events with `pmbrain chronicle-backfill`.',
+        fix: { command_argv: ['pmbrain', 'chronicle-backfill'] },
+        collector: 'chronicle',
+      }),
+      finding({
+        id: 'ontology_conflicts',
+        severity: 'warn',
+        title: '2 entity dimension(s) have conflicting current values',
+        detail: 'people/x.role',
+        fix: { command_argv: ['pmbrain', 'ontology-contradictions'] },
+        collector: 'chronicle',
+      }),
+      finding({
+        id: 'writeback_consent_pending',
+        severity: 'info',
+        title: 'Ambient memory writeback is available for this personal brain and still off',
+        collector: 'writeback-consent',
+      }),
+    ]), 80);
+    expect(view.product_name).toBe('知识库体检');
+    expect(view.suggestions.map((item) => item.title)).toEqual([
+      '3 场近期会议还没进入年表',
+      '2 个实体维度当前值有冲突',
+      '个人知识库尚未开启环境记忆回写',
+    ]);
+    expect(view.suggestions.every((item) => item.action_kind === 'none')).toBe(true);
+    expect(view.suggestions.every((item) => item.dispatch_id == null)).toBe(true);
+    expect(resolveAdminAdvisorAction(view.suggestions[0]!)).toEqual({ kind: 'unsupported' });
   });
 });

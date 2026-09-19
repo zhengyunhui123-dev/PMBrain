@@ -13,7 +13,9 @@ const SHELL_META = /[;&|`$<>(){}\n]/;
 const ALLOWED_DISPATCH = /^(apply_migrations|embed_stale|sync_source:[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?)$/;
 
 function argvIsSafe(argv: string[]): boolean {
-  return argv[0] === 'pmbrain' && argv.every((token) => typeof token === 'string' && !SHELL_META.test(token));
+  if (argv[0] !== 'pmbrain') return false;
+  if (argv.includes('chronicle-backfill')) return false;
+  return argv.every((token) => typeof token === 'string' && !SHELL_META.test(token));
 }
 
 function isRunnableFinding(finding: AdvisorFinding): boolean {
@@ -38,6 +40,9 @@ export function resolveApplyTarget(report: AdvisorReport, id: string): ApplyReso
   }
   if (argv[0] !== 'pmbrain') {
     return { ok: false, error: 'Refusing to run: fix does not invoke pmbrain.', runnable };
+  }
+  if (argv.includes('chronicle-backfill')) {
+    return { ok: false, error: 'Refusing to run: chronicle-backfill is not applyable.', runnable };
   }
   if (!argv.every((token) => typeof token === 'string' && !SHELL_META.test(token))) {
     return { ok: false, error: 'Refusing to run: fix command contains unexpected characters.', runnable };

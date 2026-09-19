@@ -1825,6 +1825,23 @@ export async function registerBuiltinHandlers(worker: MinionWorker, engine: Brai
     });
   });
 
+  worker.register('chronicle_extract', async (job) => {
+    const { reconfigureGatewayWithEngine } = await import('../core/ai/gateway.ts');
+    await reconfigureGatewayWithEngine(engine);
+    const slug = typeof job.data.slug === 'string' ? job.data.slug : undefined;
+    if (!slug) throw new Error('chronicle_extract job requires data.slug');
+    const sourceId = typeof job.data.sourceId === 'string' ? job.data.sourceId : undefined;
+    const { runChronicleExtract } = await import('../core/chronicle/extract-events.ts');
+    const { chronicleTz } = await import('../core/chronicle/config.ts');
+    const tz = await chronicleTz(engine);
+    return await runChronicleExtract(engine, {
+      slug,
+      sourceId,
+      tz,
+      signal: (job as { signal?: AbortSignal }).signal,
+    });
+  });
+
   // v0.41.18.0 (A13): embed-catch-up handler for the gbrain onboard
   // remediation pipeline. Wraps runEmbedCore with stale + catchUp + the
   // priority/batchSize the recommendation supplies. NOT in

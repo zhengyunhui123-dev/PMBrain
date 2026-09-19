@@ -46,6 +46,9 @@ import type {
   SearchResult, SearchOpts,
   Link, GraphNode, GraphPath,
   TimelineEntry, TimelineInput, TimelineOpts,
+  OntologyObservationInput, OntologyMergeResult, OntologyValue, OntologyDimensionStat,
+  OntologyConflict, OntologyReadOpts, PageReadScope,
+  ChronicleTimelineRow, ChronicleTimelineOpts, LastSeenResult,
   RawData,
   PageVersion,
   BrainStats, BrainHealth,
@@ -65,7 +68,13 @@ import { logConnectionEvent } from './connection-audit.ts';
 import { validateSlug, contentHash, rowToPage, rowToStalePage, rowToChunk, rowToSearchResult, parseEmbedding, tryParseEmbedding, takeRowToTake, isUndefinedTableError, isUndefinedColumnError, warnOncePerProcess } from './utils.ts';
 import { resolveBoostMap, resolveHardExcludes } from './search/source-boost.ts';
 import { buildSourceFactorCase, buildHardExcludeClause, buildVisibilityClause, buildRecencyComponentSql, buildBestPerPagePoolCte, buildOrFallbackWebsearchQuery } from './search/sql-ranking.ts';
-import { privatePagesFilterFragment } from './search/private-visibility.ts';
+import { privatePagesFilterFragment, privateProvenanceFilterFragment, privateTimelineEventFilterFragment } from './search/private-visibility.ts';
+import { finalizeLastSeen } from './chronicle/last-seen.ts';
+import {
+  valueHash,
+  normalizeDimension,
+  isNovelDimension,
+} from './chronicle/ontology.ts';
 import { DEFAULT_EMBEDDING_DIMENSIONS } from './ai/defaults.ts';
 import { DELETE_BATCH_SIZE } from './engine-constants.ts';
 import { hasCJK } from './cjk.ts';
@@ -3534,7 +3543,7 @@ export class PostgresEngine implements BrainEngine {
       INSERT INTO timeline_entries (page_id, date, source, summary, detail)
       SELECT id, ${entry.date}::date, ${entry.source || ''}, ${entry.summary}, ${entry.detail || ''}
       FROM pages WHERE slug = ${slug} AND source_id = ${sourceId}
-      ON CONFLICT (page_id, date, summary, source) DO NOTHING
+      ON CONFLICT (page_id, date, md5(summary), source) DO NOTHING
     `;
   }
 
@@ -3557,7 +3566,7 @@ export class PostgresEngine implements BrainEngine {
       FROM unnest(${slugs}::text[], ${dates}::text[], ${sources}::text[], ${summaries}::text[], ${details}::text[], ${sourceIds}::text[])
         AS v(slug, date, source, summary, detail, source_id)
       JOIN pages p ON p.slug = v.slug AND p.source_id = v.source_id
-      ON CONFLICT (page_id, date, summary, source) DO NOTHING
+      ON CONFLICT (page_id, date, md5(summary), source) DO NOTHING
       RETURNING 1
     `;
     return result.length;
@@ -3634,6 +3643,266 @@ export class PostgresEngine implements BrainEngine {
         ORDER BY te.date DESC LIMIT ${limit}`;
     }
     return rows as unknown as TimelineEntry[];
+  }
+
+  private chronicleSourceCond(opts?: PageReadScope, ep = false) {
+    const sql = this.sql;
+    const privacy = opts?.excludePrivate && !ep
+      ? sql.unsafe(`AND ${privatePagesFilterFragment('p')} AND ${privateTimelineEventFilterFragment('te')}`)
+      : sql``;
+    if (opts?.sourceIds && opts.sourceIds.length > 0)
+      return ep ? sql`AND ep.source_id = ANY(${opts.sourceIds}::text[])` : sql`AND p.source_id = ANY(${opts.sourceIds}::text[]) ${privacy}`;
+    if (opts?.sourceId) return ep ? sql`AND ep.source_id = ${opts.sourceId}` : sql`AND p.source_id = ${opts.sourceId} ${privacy}`;
+    return privacy;
+  }
+
+  async getTimelineForDate(date: string, opts?: ChronicleTimelineOpts): Promise<ChronicleTimelineRow[]> {
+    const sql = this.sql;
+    const limit = opts?.limit ?? 200;
+    const lower = opts?.week ? sql`date_trunc('week', ${date}::date)::date` : sql`${date}::date`;
+    const upper = opts?.week ? sql`(date_trunc('week', ${date}::date) + interval '6 days')::date` : sql`${date}::date`;
+    const rows = await sql`
+      SELECT te.date::text AS date, te.summary, te.detail, te.source,
+             te.page_id, p.slug AS page_slug,
+             te.event_page_id, ep.slug AS event_slug,
+             ep.effective_date::text AS effective_date,
+             ep.frontmatter->'event'->>'kind' AS kind
+      FROM timeline_entries te
+      JOIN pages p ON p.id = te.page_id AND p.deleted_at IS NULL
+      LEFT JOIN pages ep ON ep.id = te.event_page_id ${this.chronicleSourceCond(opts, true)}
+      WHERE te.date >= ${lower} AND te.date <= ${upper}
+        AND (te.event_page_id IS NULL OR ep.deleted_at IS NULL)
+        ${this.chronicleSourceCond(opts)}
+      ORDER BY COALESCE(ep.effective_date, te.date::timestamptz) ASC, te.id ASC
+      LIMIT ${limit}`;
+    return rows as unknown as ChronicleTimelineRow[];
+  }
+
+  async getSince(date: string, opts?: ChronicleTimelineOpts): Promise<ChronicleTimelineRow[]> {
+    const sql = this.sql;
+    const limit = opts?.limit ?? 200;
+    const kindCond = opts?.kind ? sql`AND ep.frontmatter->'event'->>'kind' = ${opts.kind}` : sql``;
+    const rows = await sql`
+      SELECT te.date::text AS date, te.summary, te.detail, te.source,
+             te.page_id, p.slug AS page_slug,
+             te.event_page_id, ep.slug AS event_slug,
+             ep.effective_date::text AS effective_date,
+             ep.frontmatter->'event'->>'kind' AS kind
+      FROM timeline_entries te
+      JOIN pages p ON p.id = te.page_id AND p.deleted_at IS NULL
+      LEFT JOIN pages ep ON ep.id = te.event_page_id ${this.chronicleSourceCond(opts, true)}
+      WHERE te.date >= ${date}::date
+        AND (te.event_page_id IS NULL OR ep.deleted_at IS NULL)
+        ${kindCond}
+        ${this.chronicleSourceCond(opts)}
+      ORDER BY COALESCE(ep.effective_date, te.date::timestamptz) ASC, te.id ASC
+      LIMIT ${limit}`;
+    return rows as unknown as ChronicleTimelineRow[];
+  }
+
+  async getOnThisDay(opts?: PageReadScope & { date?: string; limit?: number }): Promise<ChronicleTimelineRow[]> {
+    const sql = this.sql;
+    const limit = opts?.limit ?? 50;
+    const target = opts?.date ? sql`${opts.date}::date` : sql`current_date`;
+    const rows = await sql`
+      SELECT te.date::text AS date, te.summary, te.detail, te.source,
+             te.page_id, p.slug AS page_slug,
+             te.event_page_id, ep.slug AS event_slug,
+             ep.effective_date::text AS effective_date,
+             ep.frontmatter->'event'->>'kind' AS kind
+      FROM timeline_entries te
+      JOIN pages p ON p.id = te.page_id AND p.deleted_at IS NULL
+      LEFT JOIN pages ep ON ep.id = te.event_page_id ${this.chronicleSourceCond(opts, true)}
+      WHERE EXTRACT(MONTH FROM te.date) = EXTRACT(MONTH FROM ${target})
+        AND EXTRACT(DAY FROM te.date) = EXTRACT(DAY FROM ${target})
+        AND te.date < ${target}
+        AND (te.event_page_id IS NULL OR ep.deleted_at IS NULL)
+        ${this.chronicleSourceCond(opts)}
+      ORDER BY te.date DESC, te.id ASC
+      LIMIT ${limit}`;
+    return rows as unknown as ChronicleTimelineRow[];
+  }
+
+  async getLastSeen(entitySlug: string, opts?: PageReadScope & { asof?: string }): Promise<LastSeenResult> {
+    const sql = this.sql;
+    const seenThrough = opts?.asof ? sql`${opts.asof}::date` : sql`current_date`;
+    const rows = await sql`
+      SELECT te.date::text AS last_date, ep.slug AS last_event_slug
+      FROM timeline_entries te
+      JOIN pages p ON p.id = te.page_id AND p.deleted_at IS NULL
+      LEFT JOIN pages ep ON ep.id = te.event_page_id ${this.chronicleSourceCond(opts, true)}
+      WHERE (te.event_page_id IS NULL OR ep.deleted_at IS NULL)
+        AND te.date <= ${seenThrough}
+        AND (
+          p.slug = ${entitySlug}
+          OR (ep.id IS NOT NULL AND EXISTS (
+            SELECT 1 FROM jsonb_array_elements_text(
+              CASE WHEN jsonb_typeof(ep.frontmatter->'event'->'who') = 'array'
+                   THEN ep.frontmatter->'event'->'who' ELSE '[]'::jsonb END
+            ) AS w(name)
+            WHERE w.name = ${entitySlug} OR w.name LIKE ${'%' + entitySlug + '%'}
+          ))
+        )
+        ${this.chronicleSourceCond(opts)}
+      ORDER BY COALESCE(ep.effective_date, te.date::timestamptz) DESC, te.id DESC
+      LIMIT 1`;
+    const row = rows[0] as { last_date?: string; last_event_slug?: string } | undefined;
+    return finalizeLastSeen(entitySlug, row?.last_date ?? null, row?.last_event_slug ?? null, opts?.asof);
+  }
+
+  async upsertEventProjection(opts: { depthSlug: string; eventSlug: string; date: string; summary: string; detail?: string; sourceId?: string }): Promise<{ projected: boolean }> {
+    const sql = this.sql;
+    const sourceId = opts.sourceId ?? 'default';
+    const rows = await sql`
+      INSERT INTO timeline_entries (page_id, date, source, summary, detail, event_page_id)
+      SELECT dp.id, ${opts.date}::date, ${'life-chronicle:event:' + opts.eventSlug}, ${opts.summary}, ${opts.detail ?? ''}, ep.id
+      FROM pages dp, pages ep
+      WHERE dp.slug = ${opts.depthSlug} AND dp.source_id = ${sourceId}
+        AND ep.slug = ${opts.eventSlug} AND ep.source_id = ${sourceId}
+      ON CONFLICT (event_page_id, date) WHERE event_page_id IS NOT NULL
+      DO UPDATE SET summary = EXCLUDED.summary, detail = EXCLUDED.detail,
+                    page_id = EXCLUDED.page_id, source = EXCLUDED.source
+      RETURNING id`;
+    return { projected: rows.length > 0 };
+  }
+
+  async mergeOntologyFact(obs: OntologyObservationInput): Promise<OntologyMergeResult> {
+    const sql = this.sql;
+    const sourceId = obs.sourceId ?? 'default';
+    const dimension = normalizeDimension(obs.dimension);
+    const vh = valueHash(obs.value);
+    const conf = obs.confidence ?? 0.7;
+    const status = obs.status ?? (isNovelDimension(dimension) ? 'quarantined' : 'active');
+    const visibility = obs.visibility ?? 'private';
+    const validFrom = obs.validFrom ?? null;
+    const validUntil = obs.validTo ?? null;
+    const factText = `${dimension}: ${obs.value}`;
+
+    // The "current open" row is the open-ended one (valid_until IS NULL) that
+    // hasn't been retracted (expired_at IS NULL). Supersession closes its
+    // valid_until rather than expiring it, so --asof time-travel still sees it.
+    const cur = await sql<{ id: number; value_hash: string; valid_from: string | null }[]>`
+      SELECT id, value_hash, valid_from FROM facts
+       WHERE source_id = ${sourceId} AND entity_slug = ${obs.entitySlug}
+         AND dimension = ${dimension} AND expired_at IS NULL AND valid_until IS NULL
+         AND (dim_status IS NULL OR dim_status = 'active')
+       ORDER BY valid_from DESC NULLS LAST, confidence DESC, id DESC
+       LIMIT 1`;
+    const current = cur[0];
+
+    if (current && current.value_hash === vh) {
+      // Same value → corroboration (or exact dup → noop via the dedup unique).
+      const ins = await sql<{ id: number }[]>`
+        INSERT INTO facts (source_id, entity_slug, fact, kind, visibility, dimension, value, value_hash, dim_status,
+                           confidence, source, source_markdown_slug, valid_from, valid_until, expired_at, consolidated_into)
+        VALUES (${sourceId}, ${obs.entitySlug}, ${factText}, 'fact', ${visibility}, ${dimension}, ${obs.value}, ${vh}, ${status},
+                ${conf}, ${obs.source}, ${obs.source}, COALESCE(${validFrom}::timestamptz, now()), ${validUntil}, now(), ${current.id})
+        ON CONFLICT (source_id, entity_slug, dimension, value_hash, source_markdown_slug) WHERE dimension IS NOT NULL
+        DO NOTHING
+        RETURNING id`;
+      return ins.length
+        ? { action: 'corroborated', factId: Number(ins[0].id), supersededId: null }
+        : { action: 'noop', factId: null, supersededId: null };
+    }
+
+    const ins = await sql<{ id: number }[]>`
+      INSERT INTO facts (source_id, entity_slug, fact, kind, visibility, dimension, value, value_hash, dim_status,
+                         confidence, source, source_markdown_slug, valid_from, valid_until)
+      VALUES (${sourceId}, ${obs.entitySlug}, ${factText}, 'fact', ${visibility}, ${dimension}, ${obs.value}, ${vh}, ${status},
+              ${conf}, ${obs.source}, ${obs.source}, COALESCE(${validFrom}::timestamptz, now()), ${validUntil})
+      ON CONFLICT (source_id, entity_slug, dimension, value_hash, source_markdown_slug) WHERE dimension IS NOT NULL
+      DO NOTHING
+      RETURNING id`;
+    if (!ins.length) return { action: 'noop', factId: null, supersededId: null };
+    const newId = Number(ins[0].id);
+
+    let supersededId: number | null = null;
+    if (current && status === 'active') {
+      const forward = validFrom == null || current.valid_from == null
+        || new Date(validFrom).getTime() >= new Date(current.valid_from).getTime();
+      if (forward) {
+        // Close the prior row's valid window at the new fact's valid_from (or now()).
+        await sql`UPDATE facts SET valid_until = COALESCE(${validFrom}::timestamptz, now()), superseded_by = ${newId}
+                   WHERE id = ${current.id} AND valid_until IS NULL`;
+        supersededId = Number(current.id);
+      }
+    }
+    return { action: supersededId ? 'superseded_prior' : 'inserted', factId: newId, supersededId };
+  }
+
+  async getOntology(entitySlug: string, opts?: OntologyReadOpts): Promise<OntologyValue[]> {
+    const sql = this.sql;
+    const minConf = opts?.minConfidence ?? 0;
+    const includeQ = opts?.includeQuarantined ?? false;
+    const asof = opts?.asof ?? null;
+    const scope = opts?.sourceIds && opts.sourceIds.length
+      ? sql`AND source_id = ANY(${opts.sourceIds})`
+      : sql`AND (${opts?.sourceId ?? null}::text IS NULL OR source_id = ${opts?.sourceId ?? null})`;
+    // Page-visibility gate on the provenance page, applied BEFORE DISTINCT ON
+    // so the untrusted caller resolves the newest value they may see.
+    const privacy = opts?.excludePrivate ? sql.unsafe(`AND ${privateProvenanceFilterFragment('facts')}`) : sql``;
+    const rows = await sql<OntologyValue[]>`
+      SELECT DISTINCT ON (dimension)
+        dimension, value, confidence,
+        source_markdown_slug AS source, valid_from, valid_until AS valid_to,
+        COALESCE(dim_status, 'active') AS status, id AS fact_id
+      FROM facts
+      WHERE entity_slug = ${entitySlug} AND dimension IS NOT NULL AND expired_at IS NULL
+        ${scope} ${privacy}
+        AND COALESCE(valid_from, '-infinity'::timestamptz) <= COALESCE(${asof}::timestamptz, now())
+        AND COALESCE(valid_until, 'infinity'::timestamptz) > COALESCE(${asof}::timestamptz, now())
+        AND confidence >= ${minConf}
+        AND (${includeQ}::boolean OR dim_status IS NULL OR dim_status = 'active')
+      ORDER BY dimension, valid_from DESC NULLS LAST, confidence DESC, id DESC`;
+    return rows.map((r) => ({ ...r, confidence: Number(r.confidence), fact_id: Number(r.fact_id) }));
+  }
+
+  async discoverOntologyDimensions(opts?: { sourceId?: string; sourceIds?: string[] }): Promise<OntologyDimensionStat[]> {
+    const sql = this.sql;
+    const scope = opts?.sourceIds && opts.sourceIds.length
+      ? sql`AND source_id = ANY(${opts.sourceIds})`
+      : sql`AND (${opts?.sourceId ?? null}::text IS NULL OR source_id = ${opts?.sourceId ?? null})`;
+    const rows = await sql<{ dimension: string; entities: number; observations: number }[]>`
+      SELECT dimension, count(DISTINCT entity_slug)::int AS entities, count(*)::int AS observations
+      FROM facts
+      WHERE dimension IS NOT NULL AND expired_at IS NULL ${scope}
+      GROUP BY dimension ORDER BY entities DESC, dimension`;
+    return rows.map((r) => ({ dimension: r.dimension, entities: Number(r.entities), observations: Number(r.observations) }));
+  }
+
+  async findOntologyConflicts(opts?: PageReadScope & { minConfidence?: number }): Promise<OntologyConflict[]> {
+    const sql = this.sql;
+    const minConf = opts?.minConfidence ?? 0;
+    const scope = opts?.sourceIds && opts.sourceIds.length
+      ? sql`AND source_id = ANY(${opts.sourceIds})`
+      : sql`AND (${opts?.sourceId ?? null}::text IS NULL OR source_id = ${opts?.sourceId ?? null})`;
+    // Same provenance-page gate as getOntology, inside the CTE so a conflict
+    // that only exists because of a hidden provenance is never reported.
+    const privacy = opts?.excludePrivate ? sql.unsafe(`AND ${privateProvenanceFilterFragment('facts')}`) : sql``;
+    const rows = await sql<{ entity_slug: string; dimension: string; values: OntologyConflict['values'] }[]>`
+      WITH cur AS (
+        SELECT entity_slug, dimension, value, source_markdown_slug AS source, confidence, id AS fact_id
+        FROM facts
+        WHERE dimension IS NOT NULL AND expired_at IS NULL AND valid_until IS NULL
+          AND (dim_status IS NULL OR dim_status = 'active')
+          AND confidence >= ${minConf} ${scope} ${privacy}
+      )
+      SELECT entity_slug, dimension,
+             json_agg(json_build_object('value', value, 'source', source, 'confidence', confidence, 'fact_id', fact_id)) AS values
+      FROM cur
+      GROUP BY entity_slug, dimension
+      HAVING count(DISTINCT value) >= 2 AND count(DISTINCT source) >= 2
+      ORDER BY entity_slug, dimension`;
+    return rows.map((r) => {
+      const raw = typeof r.values === 'string' ? JSON.parse(r.values) : r.values;
+      const values = (Array.isArray(raw) ? raw : []).map((v: { value: string; source: string; confidence: number; fact_id: number | string }) => ({
+        value: v.value,
+        source: v.source,
+        confidence: Number(v.confidence),
+        fact_id: Number(v.fact_id),
+      }));
+      return { entity_slug: r.entity_slug, dimension: r.dimension, values };
+    });
   }
 
   // Raw data
@@ -4140,13 +4409,14 @@ export class PostgresEngine implements BrainEngine {
     const sql = this.sql;
     const limit = clampSearchLimit(opts?.limit, 50, MAX_SEARCH_LIMIT);
     const since = opts?.since ?? null;
+    // v0.46 (#3014) — filter on `superseded_by` alone; the ontology
+    // writer closes a superseded row via `valid_until` (not `expired_at`).
     const rows = await sql<FactRowSqlShape[]>`
       SELECT * FROM facts
       WHERE source_id = ${source_id}
-        AND expired_at IS NOT NULL
         AND superseded_by IS NOT NULL
-        ${since ? sql`AND expired_at >= ${since}` : sql``}
-      ORDER BY expired_at DESC, id DESC
+        ${since ? sql`AND COALESCE(expired_at, valid_until) >= ${since}` : sql``}
+      ORDER BY COALESCE(expired_at, valid_until) DESC, id DESC
       LIMIT ${limit}
     `;
     return rows.map(rowToFactPg);

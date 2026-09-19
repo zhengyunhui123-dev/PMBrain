@@ -1,5 +1,6 @@
 import type { BrainEngine } from './engine.ts';
 import { slugifyPath } from './sync.ts';
+import { repairTimelineDedupIndex, repairLegacyTimelineSourceRows } from './timeline-dedup-repair.ts';
 
 /**
  * Schema migrations — run automatically on initSchema().
@@ -5493,6 +5494,33 @@ export const MIGRATIONS: Migration[] = [
       );
     `,
   },
+  {
+    version: 129,
+    name: 'timeline_dedup_md5_summary',
+    idempotent: true,
+    sql: `
+      DROP INDEX IF EXISTS idx_timeline_dedup;
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_timeline_dedup
+        ON timeline_entries(page_id, date, md5(summary), source);
+    `,
+  },
+  {
+    version: 130,
+    name: 'timeline_legacy_source_split_repair',
+    idempotent: true,
+    sql: '',
+    handler: async (engine) => {
+      const r = await repairLegacyTimelineSourceRows(engine);
+      if (r.rowsRewritten > 0 || r.rowsDeleted > 0) {
+        process.stderr.write(
+          `  NOTICE: v130 rewrote ${r.rowsRewritten} legacy timeline row(s) to the split ` +
+          `(source, summary) shape` +
+          (r.rowsDeleted > 0 ? ` and removed ${r.rowsDeleted} already-duplicated row(s)` : '') +
+          ` across ${r.pagesScanned} page(s), so re-extraction dedups instead of duplicating.\n`,
+        );
+      }
+    },
+  },
 ];
 
 export const LATEST_VERSION = MIGRATIONS.length > 0
@@ -5831,6 +5859,19 @@ export async function runMigrations(engine: BrainEngine): Promise<{ applied: num
   const sorted = [...MIGRATIONS].sort((a, b) => a.version - b.version);
 
   const pending = sorted.filter(m => m.version > current);
+
+  try {
+    const r = await repairTimelineDedupIndex(engine);
+    if (r.repaired) {
+      process.stderr.write(
+        `[migrate] healed idx_timeline_dedup drift: ${r.before.join(',') || '(absent)'} ` +
+        `→ page_id,date,md5(summary),source` +
+        (r.collapsedDuplicates > 0 ? ` (collapsed ${r.collapsedDuplicates} duplicate row(s))` : '') +
+        '\n',
+      );
+    }
+  } catch { /* best-effort; doctor reports the drift if this couldn't run */ }
+
   if (pending.length === 0) {
     return { applied: 0, current };
   }

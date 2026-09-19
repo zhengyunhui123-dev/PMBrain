@@ -46,10 +46,14 @@ import { VERSION } from '../version.ts';
 import { OperationError } from './operation-error.ts';
 import { MEMORY_VERBS_VERSION, memoryVerbOperations } from './memory-verbs.ts';
 import type { Operation, OperationContext } from './ops/contract.ts';
+import { sourceScopeOpts } from './ops/context.ts';
 import { entityIdentityOperations } from './ops/entity-identity.ts';
 import { connectorsOperations } from './ops/connectors.ts';
 import { loopsOperations } from './ops/loops.ts';
+import { chronicleOperations } from './ops/chronicle.ts';
 import { unionLinksAcrossIdentity } from './entity-identity.ts';
+export type { ParamDef, Logger, AuthInfo, OperationContext, Operation } from './ops/contract.ts';
+export { sourceScopeOpts } from './ops/context.ts';
 import {
   acceptTakeProposal as acceptAgentPackTakeProposal,
   getTakeProposal as getAgentPackTakeProposal,
@@ -212,39 +216,6 @@ export function validateFilename(name: string): void {
 }
 
 
-
-/**
- * v0.34.1 (#861, D9 — P0 leak seal): resolve the source-scope filter for a
- * read-side op handler. Returns an opts fragment ready to spread into the
- * engine call.
- *
- * Precedence:
- *  1. `ctx.auth?.allowedSources` (federated read, #876) → emits
- *     `{sourceIds: [...]}`. Federated semantics subsume the scalar case.
- *  2. `ctx.sourceId` (scalar) → emits `{sourceId: '...'}`.
- *  3. Neither set → emits `{}`. Local CLI callers (and tests that don't
- *     populate ctx) keep the pre-v0.34 unscoped behavior.
- *
- * Both fields default to the engine's "no filter" behavior individually,
- * so unset values are safe — the engine sees the same shape it did
- * pre-v0.34. The leak this guards against is an authenticated MCP client
- * whose ctx.sourceId IS set but whose engine call was constructed without
- * threading it (operations.ts:968/1076/1092/935/1469/1471/2241 pre-fix).
- *
- * Helper rather than inline so every read-side handler routes through the
- * same precedence ladder — drift between sites is the bug class.
- */
-export function sourceScopeOpts(ctx: OperationContext): { sourceId?: string; sourceIds?: string[] } {
-  const allowed = ctx.auth?.allowedSources;
-  // Treat an empty `allowedSources: []` as "no federated read scope" — the
-  // op-handler defers to scalar `ctx.sourceId` below. An attacker-controlled
-  // value of `[]` MUST NOT widen scope to "all sources" by being interpreted
-  // as "no filter."
-  if (allowed && allowed.length > 0) return { sourceIds: allowed };
-  if (ctx.sourceId) return { sourceId: ctx.sourceId };
-  return {};
-}
-
 /**
  * Resolve an optional caller-selected source without allowing remote callers
  * to escape the source scope bound to their credential.
@@ -378,8 +349,6 @@ function maybeCaptureSearch(
     { scrub_pii: isEvalScrubEnabled(ctx.config) },
   );
 }
-
-
 
 // --- Page CRUD ---
 
@@ -765,6 +734,7 @@ const put_page: Operation = {
               date: e.date,
               summary: e.summary,
               detail: e.detail || '',
+              source: e.source || '',
             }));
             // v0.41.18.0: engine self-retries on Supavisor circuit-breaker
             // recovery. auditSite label routes the audit JSONL emission so
@@ -825,6 +795,29 @@ const put_page: Operation = {
       factsQueued = { skipped: 'backstop_error' };
     }
 
+    let chronicleQueued: { queued: boolean } | { skipped: string } | undefined;
+    if (result.status !== 'imported') {
+      chronicleQueued = { skipped: 'not_imported' };
+    } else if (ctx.remote !== false && !trustedWorkspace) {
+      chronicleQueued = { skipped: 'remote' };
+    } else if (result.parsedPage) {
+      try {
+        const { runChronicleBackstop } = await import('./chronicle/backstop.ts');
+        const r = await runChronicleBackstop(
+          {
+            slug,
+            type: result.parsedPage.type,
+            compiled_truth: result.parsedPage.compiled_truth,
+            frontmatter: result.parsedPage.frontmatter,
+          },
+          { engine: ctx.engine, sourceId: ctx.sourceId ?? 'default' },
+        );
+        chronicleQueued = r.enqueued ? { queued: true } : { skipped: r.skipped ?? 'skipped' };
+      } catch {
+        chronicleQueued = { skipped: 'backstop_error' };
+      }
+    }
+
     // Post-write validator lint (PR 2.5): feature-flag-gated, non-blocking.
     // When `writer.lint_on_put_page` is enabled, runs the BrainWriter's
     // validators on the freshly-written page and logs findings to
@@ -854,6 +847,7 @@ const put_page: Operation = {
       ...(autoTimeline ? { auto_timeline: autoTimeline } : {}),
       ...(writerLint ? { writer_lint: writerLint } : {}),
       ...(factsQueued ? { facts_backstop: factsQueued } : {}),
+      ...(chronicleQueued ? { chronicle_backstop: chronicleQueued } : {}),
       ...(writeThrough ? { write_through: writeThrough } : {}),
     };
   },
@@ -5141,6 +5135,8 @@ export const operations: Operation[] = [
   ...entityIdentityOperations,
   // v0.31: hot memory (facts table)
   extract_facts, recall, forget_fact,
+  // Life Chronicle timeline + ontology ops
+  ...chronicleOperations,
   // MEMORY_VERBS v1 write/delete — registered from an independent module
   ...memoryVerbOperations,
   // Context Engine session restoration + capability discovery

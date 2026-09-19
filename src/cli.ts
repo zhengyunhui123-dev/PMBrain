@@ -1244,6 +1244,11 @@ async function handleCliOnly(command: string, args: string[]) {
     process.exit(await runEvalConversationParser(args.slice(1)));
   }
 
+  if (command === 'eval' && args[0] === 'chronicle') {
+    const { runEvalChronicle } = await import('./commands/eval-chronicle.ts');
+    process.exit(await runEvalChronicle(args.slice(1)));
+  }
+
   // v0.41.13.0: `gbrain conversation-parser list-builtins | validate
   // | --help` are pure (no DB access). Bypass connectEngine so the
   // operator can run them on machines with no brain configured.
@@ -2116,6 +2121,12 @@ function printHelp() {
 时间线
   timeline [<slug>]                  查看时间线
   timeline-add <slug> <date> <text>  添加时间线条目
+
+本体
+  ontology <entity> [--asof DATE]    查看实体当前维度值（职位→role）
+  ontology-add <entity> <dim> <val>  记录一条本体观察
+  ontology-dimensions                列出大脑跟踪的维度
+  ontology-contradictions            列出当前值冲突
 
 工具
   extract <links|timeline|all>       提取链接或时间线
