@@ -31,6 +31,8 @@ import type {
 } from '../preload/index.js';
 import type { DesktopKnowledgeSourceStatus } from './knowledge-source-git.js';
 import type { PgliteOwnerStatus } from '../../../src/core/pglite-owner-control.js';
+import type { ProductSurfaceHandlers } from './product-surfaces.js';
+import { isSafeGoogleConsentUrl } from '../../../src/core/creds/oauth-envelope.js';
 
 type IpcHandler = (event: IpcMainInvokeEvent, ...args: any[]) => any;
 
@@ -83,6 +85,9 @@ export interface DesktopIpcHandlers {
   retry: () => Promise<string | undefined>;
   openLogs: () => Promise<void> | void;
   exportDiagnosticBundle: () => Promise<unknown>;
+  productSurfaces: ProductSurfaceHandlers;
+  chooseFile: (filters?: Array<{ name: string; extensions: string[] }>) => Promise<string | null>;
+  openExternal: (url: string) => Promise<void>;
 }
 
 function registerTrustedHandler(
@@ -164,4 +169,21 @@ export function registerDesktopIpcHandlers(handlers: DesktopIpcHandlers): void {
   registerTrustedHandler('desktop:open-logs', handlers, () => handlers.openLogs());
   registerTrustedHandler('desktop:export-diagnostic-bundle', handlers, () => handlers.exportDiagnosticBundle());
   registerTrustedHandler('desktop:quit', handlers, () => app.quit());
+  registerTrustedHandler('desktop:product-connectors', handlers, (_event, provider?: string) => handlers.productSurfaces.connectors(provider));
+  registerTrustedHandler('desktop:product-connector-sync', handlers, (_event, body: { provider: string; full?: boolean; dry_run?: boolean }) => handlers.productSurfaces.connectorSync(body));
+  registerTrustedHandler('desktop:product-waiting', handlers, () => handlers.productSurfaces.waiting());
+  registerTrustedHandler('desktop:product-waiting-close', handlers, (_event, body: { id: number; status: 'done' | 'dropped'; note?: string }) => handlers.productSurfaces.closeWaiting(body));
+  registerTrustedHandler('desktop:product-chronicle-day', handlers, (_event, date?: string) => handlers.productSurfaces.chronicleDay(date));
+  registerTrustedHandler('desktop:product-chronicle-on-this-day', handlers, (_event, date?: string) => handlers.productSurfaces.chronicleOnThisDay(date));
+  registerTrustedHandler('desktop:product-ontology', handlers, (_event, entity: string) => handlers.productSurfaces.ontology(entity));
+  registerTrustedHandler('desktop:product-entity-identity', handlers, (_event, query?: { entity_id?: string; slug?: string }) => handlers.productSurfaces.entityIdentity(query));
+  registerTrustedHandler('desktop:product-entity-identity-link', handlers, (_event, body: { entity_id: string; slug: string; source_id: string; canonical?: boolean }) => handlers.productSurfaces.linkEntityIdentity(body));
+  registerTrustedHandler('desktop:google-status', handlers, () => handlers.productSurfaces.googleStatus());
+  registerTrustedHandler('desktop:google-connect', handlers, (_event, input?: { account?: string; paste?: boolean; code?: string; clientJsonPath?: string }) => handlers.productSurfaces.googleConnect(input));
+  registerTrustedHandler('desktop:google-source', handlers, (_event, body: { account: string; id?: string }) => handlers.productSurfaces.addGoogleSource(body));
+  registerTrustedHandler('desktop:choose-file', handlers, (_event, filters?: Array<{ name: string; extensions: string[] }>) => handlers.chooseFile(filters));
+  registerTrustedHandler('desktop:open-external', handlers, (_event, url: string) => {
+    if (!isSafeGoogleConsentUrl(url)) throw new Error('拒绝打开未授权的外部地址。');
+    return handlers.openExternal(url);
+  });
 }

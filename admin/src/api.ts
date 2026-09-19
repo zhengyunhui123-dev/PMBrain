@@ -252,6 +252,34 @@ export const api = {
     apiFetch(`/admin/api/sources/${encodeURIComponent(id)}/archive`, { method: 'POST' }),
   restoreSource: (id: string) =>
     apiFetch(`/admin/api/sources/${encodeURIComponent(id)}/restore`, { method: 'POST' }),
+  connectors: (provider?: string) =>
+    apiFetch(`/admin/api/connectors${provider ? `?provider=${encodeURIComponent(provider)}` : ''}`),
+  connectorSync: (body: { provider: string; full?: boolean; dry_run?: boolean }) =>
+    apiFetch('/admin/api/connectors/sync', { method: 'POST', body: JSON.stringify(body) }),
+  waiting: (limit = 20) =>
+    apiFetch(`/admin/api/waiting?limit=${encodeURIComponent(String(limit))}`),
+  closeWaiting: (body: { id: number; status: 'done' | 'dropped'; note?: string }) =>
+    apiFetch('/admin/api/waiting/close', { method: 'POST', body: JSON.stringify(body) }),
+  chronicleDay: (date?: string) =>
+    apiFetch(`/admin/api/chronicle/day${date ? `?date=${encodeURIComponent(date)}` : ''}`),
+  chronicleOnThisDay: (date?: string) =>
+    apiFetch(`/admin/api/chronicle/on-this-day${date ? `?date=${encodeURIComponent(date)}` : ''}`),
+  ontology: (entity: string) =>
+    apiFetch(`/admin/api/ontology?entity=${encodeURIComponent(entity)}`),
+  entityIdentity: (query?: { entity_id?: string; slug?: string }) => {
+    const params = new URLSearchParams();
+    if (query?.entity_id) params.set('entity_id', query.entity_id);
+    if (query?.slug) params.set('slug', query.slug);
+    const suffix = params.size ? `?${params.toString()}` : '';
+    return apiFetch(`/admin/api/entity-identity${suffix}`);
+  },
+  linkEntityIdentity: (body: { entity_id: string; slug: string; source_id: string; canonical?: boolean }) =>
+    apiFetch('/admin/api/entity-identity/link', { method: 'POST', body: JSON.stringify(body) }),
+  googleStatus: () => apiFetch('/admin/api/google/status'),
+  googleConnect: (body: { account?: string; paste?: boolean; code?: string; client_json?: string }) =>
+    apiFetch('/admin/api/google/connect', { method: 'POST', body: JSON.stringify(body) }),
+  addGoogleSource: (body: { account: string; id?: string }) =>
+    apiFetch('/admin/api/google/source', { method: 'POST', body: JSON.stringify(body) }),
   health: () => apiFetch('/admin/api/health-indicators'),
   agents: () => apiFetch('/admin/api/agents'),
   requests: (page = 1, qs = '') => apiFetch(`/admin/api/requests?page=${page}${qs}`),

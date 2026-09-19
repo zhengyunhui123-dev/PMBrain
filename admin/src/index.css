@@ -7699,3 +7699,68 @@ html[data-theme="dark"] .dream-page .dream-journey-step span { color: var(--text
   .btn,
   .settings-operations button { transition: none; }
 }
+
+.daily-page .daily-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+.daily-page .daily-stack,
+.daily-page .daily-loop-list { display: grid; gap: 12px; }
+.daily-page .daily-card header {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  margin-bottom: 12px;
+}
+.daily-page .daily-card header h2 { margin: 0; }
+.daily-page .daily-card header p,
+.daily-page .daily-loop-list small { color: var(--text-secondary); }
+.daily-page .daily-loop-list { list-style: none; padding: 0; margin: 0; }
+.daily-page .daily-loop-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 12px 0;
+  border-top: 1px solid var(--border);
+}
+.daily-page .daily-loop-list li:first-child { border-top: 0; padding-top: 0; }
+.daily-page .daily-pill {
+  display: inline-block;
+  margin-right: 8px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #f3f0ff;
+  color: var(--accent, #6b5de8);
+  font-size: 12px;
+}
+.daily-page .daily-form {
+  display: grid;
+  gap: 10px;
+  margin: 12px 0;
+}
+.daily-page .daily-form label { display: grid; gap: 6px; font-size: 13px; color: var(--text-secondary); }
+.daily-page .daily-form input[type="text"],
+.daily-page .daily-form input:not([type="checkbox"]):not([type="file"]),
+.daily-page .daily-date-field input {
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+}
+.daily-page .daily-check { display: flex; align-items: center; gap: 8px; }
+.daily-page .daily-loop-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.daily-page .daily-empty { display: flex; gap: 12px; align-items: flex-start; }
+.daily-page .daily-pre {
+  white-space: pre-wrap;
+  font-size: 12px;
+  line-height: 1.6;
+  padding: 12px;
+  border-radius: 8px;
+  background: #f7f9fc;
+}
+.daily-page .daily-date-field { display: grid; gap: 6px; font-size: 13px; }
+@media (max-width: 980px) {
+  .daily-page .daily-grid { grid-template-columns: 1fr; }
+}

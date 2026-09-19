@@ -7,7 +7,7 @@ export interface TrayControllerDependencies {
   getPreferences: () => DesktopPreferences;
   getLanStatus: () => LanMcpGatewayStatus | null;
   openDesktop: () => void;
-  openAdmin: () => Promise<void>;
+  openAdmin: (hash?: string) => Promise<void>;
   openSystemSettings: () => Promise<void>;
   reportError: (title: string, error: unknown) => void;
   quit: () => void;
@@ -44,6 +44,11 @@ export class TrayController {
         label: '知识库体检',
         click: () => void this.dependencies.openAdmin()
           .catch(error => this.dependencies.reportError('无法打开知识库体检', error)),
+      },
+      {
+        label: '待我处理',
+        click: () => void this.dependencies.openAdmin('#waiting')
+          .catch(error => this.dependencies.reportError('无法打开待我处理', error)),
       },
       {
         label: '系统设置',

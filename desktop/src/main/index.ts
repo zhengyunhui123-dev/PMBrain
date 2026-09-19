@@ -21,6 +21,7 @@ import { writeWorkbuddyUserAgent } from './integration/user-agent-writer.js';
 import { WorkBuddyAgentController } from './integration/workbuddy-agent-controller.js';
 import { listIntegrations } from './integration-manager.js';
 import { registerDesktopIpcHandlers } from './ipc-handlers.js';
+import { createProductSurfaceHandlers } from './product-surfaces.js';
 import {
   inspectDesktopPgliteRecovery,
   terminateDesktopPgliteOwnerAndRetry,
@@ -306,7 +307,7 @@ async function openSettingsPanel(panel: SettingsPanel): Promise<void> {
   windowController.reveal();
 }
 
-async function openAdmin(): Promise<void> {
+async function openAdmin(hash = ''): Promise<void> {
   const mainWindow = windowController.current;
   if (!mainWindow) return;
   if (getSetupInfo().needsSetup) {
@@ -320,7 +321,9 @@ async function openAdmin(): Promise<void> {
     return;
   }
   const activeSidecar = await sidecarController.ensureReady();
-  await mainWindow.loadURL(await activeSidecar.createAdminLink());
+  const url = await activeSidecar.createAdminLink();
+  const suffix = hash ? (hash.startsWith('#') ? hash : `#${hash}`) : '';
+  await mainWindow.loadURL(`${url}${suffix}`);
   windowController.reveal();
 }
 
@@ -442,6 +445,20 @@ if (!app.requestSingleInstanceLock()) {
         if (logger) return shell.showItemInFolder(logger.filePath);
       },
       exportDiagnosticBundle,
+      productSurfaces: createProductSurfaceHandlers({
+        runtime,
+        sidecar: () => sidecarController.current,
+      }),
+      chooseFile: async (filters) => {
+        const window = windowController.current;
+        if (!window) throw new Error('PMBrain 桌面窗口尚未就绪。');
+        const result = await dialog.showOpenDialog(window, {
+          properties: ['openFile'],
+          filters: filters ?? [{ name: 'JSON', extensions: ['json'] }],
+        });
+        return result.canceled ? null : result.filePaths[0] ?? null;
+      },
+      openExternal: (url) => shell.openExternal(url),
     });
     lanController.startMonitor(LAN_MONITOR_INTERVAL_MS);
     await windowController.create();
