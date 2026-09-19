@@ -257,7 +257,7 @@ PMBrain 本次新增并固定以下行为：
 
 产品决定（设计件 `项目管理/GBrain能力吸收底层架构设计.md`，状态 Approved/implemented）：下列能力不再「暂缓」。SkillOpt 与全局 basename Wikilink **从未被吸收**。
 
-本分支 `execute-plan/dce9287a-pr-12-docs-and-ledgers-lift-deferrals` 以 PR11 为底（Core 1.3.66 → 本文档 1.3.67）。**只记录本树实际存在的目录**，不把 sibling PR 的工作算进来。
+当前分支已合入 PR1–PR12，含 Memorable（PR8）与 BrainBench（PR10）。SkillOpt 与全局 basename Wikilink 仍不移植。
 
 | 能力 | 产品状态 | 本分支代码 |
 |---|---|---|
@@ -270,8 +270,8 @@ PMBrain 本次新增并固定以下行为：
 | Life Chronicle / 日记脱敏 / `eval-chronicle` | 已吸收 | 有 `src/core/chronicle/`、`src/eval/chronicle/harness.ts` |
 | Advisor chronicle / writeback / brain-pack nag | 已吸收 | 有 `src/core/advisor/collect-chronicle.ts` 等 |
 | Admin / Desktop 日常产品面 | 已吸收 | 有连接器、待我处理、生命年表、人物关联 |
-| Memorable | 已吸收（产品决定） | **无。** sibling PR8：`src/core/context/memorable-capture.ts`、`src/commands/doctor/checks/integrations-memorable.ts` |
-| BrainBench + LongMemEval 对齐 | 已吸收（产品决定） | **无 BrainBench。** sibling PR10 有 `src/eval/brainbench/`、`evals/brainbench/`、`eval-brainbench.ts` 以及扩容后的 LongMemEval。本树 `src/eval/longmemeval/` 仍为吸收前 5 个文件 |
+| Memorable | 已吸收 | 有 `src/core/context/memorable-capture.ts`、`src/commands/doctor/checks/integrations-memorable.ts` |
+| BrainBench + LongMemEval 对齐 | 已吸收 | 有 `src/commands/eval-brainbench.ts`、`evals/brainbench/`、扩容后的 `src/eval/longmemeval/` |
 | SkillOpt | **不移植** | 无 `src/core/skillopt` |
 | 全局 basename Wikilink | **不移植** | 解析仍是当前 Source → `default` |
 
@@ -281,4 +281,4 @@ PMBrain 本次新增并固定以下行为：
 - [连接 Google](../guides/google-connect.md)
 - [待我处理](../guides/open-loops.md)
 - [生命年表](../guides/chronicle.md)
-- [Memorable（本分支未合入）](../guides/memorable.md)
+- [Memorable](../guides/memorable.md)
