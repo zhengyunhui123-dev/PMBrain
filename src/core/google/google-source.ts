@@ -1123,12 +1123,9 @@ export async function runGoogleSync(
     // Commitment-loop staleness pass (v1 close semantics): overdue >14d or
     // >90d inactive → 'stale'. Cheap indexed UPDATE, once per sweep.
     try {
-      const loopsStorePath = '../loops/loops-store.ts';
-      const { markStaleLoops } = await import(loopsStorePath) as {
-        markStaleLoops: (engine: BrainEngine, sourceId: string) => Promise<void>;
-      };
+      const { markStaleLoops } = await import('../loops/loops-store.ts');
       await markStaleLoops(engine, sourceId);
-    } catch { /* best-effort — Open Loops store is PR5 */ }
+    } catch { /* best-effort */ }
 
     // last_sync_at feeds the trust-critical staleness gate (`pmbrain waiting`
     // refuses on stale sources). A sync whose GMAIL sweep failed did not

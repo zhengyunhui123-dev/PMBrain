@@ -1764,6 +1764,28 @@ export async function registerBuiltinHandlers(worker: MinionWorker, engine: Brai
     return await makeConnectorSyncHandler(engine)(job);
   });
 
+  worker.register('loops_extract', async (job) => {
+    await refreshGatewayForJob(engine);
+    const slug = typeof job.data.slug === 'string' ? job.data.slug : undefined;
+    const sourceId = typeof job.data.sourceId === 'string' ? job.data.sourceId : undefined;
+    if (!slug || !sourceId) throw new Error('loops_extract job requires data.slug and data.sourceId');
+    const threadId = typeof job.data.threadId === 'string' ? job.data.threadId : undefined;
+    const { runLoopsExtract } = await import('../core/google/loops-extract.ts');
+    return await runLoopsExtract(engine, { slug, sourceId, ...(threadId ? { threadId } : {}) });
+  });
+
+  worker.register('loops_scan_meetings', async (job) => {
+    await refreshGatewayForJob(engine);
+    const laneRaw = typeof job.data.lane === 'string' ? job.data.lane : 'all';
+    const lane =
+      laneRaw === 'meeting' || laneRaw === 'transcript' || laneRaw === 'connector' || laneRaw === 'all'
+        ? laneRaw
+        : 'all';
+    const sourceId = typeof job.data.sourceId === 'string' ? job.data.sourceId : undefined;
+    const { runLoopsScan } = await import('../core/loops/scan.ts');
+    return await runLoopsScan(engine, { lane, sourceId });
+  });
+
   // v0.41.18.0 (A10, T7): extract-ner handler for the gbrain onboard
   // remediation pipeline. Wraps extractNerLinks; emits typed_ner kind
   // alongside the by-mention 'plain' kind. NOT in PROTECTED_JOB_NAMES

@@ -33,6 +33,14 @@
 
 export const SOURCE_ID_RE = /^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$/;
 
+/**
+ * Sentinel meaning "span every source". Deliberately NOT a valid source id
+ * (underscores are rejected by SOURCE_ID_RE), so it can never collide with a
+ * real source. Trusted-local CLI reads (`pmbrain waiting`) pass this as
+ * ctx.sourceId so loops living in google sources are visible without --source.
+ */
+export const ALL_SOURCES = '__all__';
+
 /** Returns true if the string matches the canonical source_id regex. */
 export function isValidSourceId(s: unknown): s is string {
   return typeof s === 'string' && SOURCE_ID_RE.test(s);

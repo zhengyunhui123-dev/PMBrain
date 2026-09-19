@@ -309,6 +309,8 @@ link_types:
     inverse: relates_to
   - name: mentions
   - name: discusses
+  - name: owes_to
+  - name: awaiting_reply_from
   - name: founded
     inverse: founded_by
   - name: works_at

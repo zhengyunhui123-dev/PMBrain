@@ -80,7 +80,7 @@ export type FactsBackstopResult =
       mode: 'queue';
       enqueued: boolean;
       queueDepth: number;
-      skipped?: 'extraction_disabled' | 'queue_overflow' | 'queue_shutdown' | `eligibility_failed:${string}`;
+      skipped?: 'extraction_disabled' | 'queue_overflow' | 'queue_shutdown' | 'google_source_email' | `eligibility_failed:${string}`;
     }
   | {
       mode: 'inline';
@@ -88,7 +88,7 @@ export type FactsBackstopResult =
       duplicate: number;
       superseded: number;
       fact_ids: number[];
-      skipped?: 'extraction_disabled' | `eligibility_failed:${string}`;
+      skipped?: 'extraction_disabled' | 'google_source_email' | `eligibility_failed:${string}`;
     };
 
 interface ParsedPageInput {
@@ -96,6 +96,22 @@ interface ParsedPageInput {
   type: PageType;
   compiled_truth: string;
   frontmatter: Record<string, unknown>;
+}
+
+async function isGoogleKindEmailThread(
+  ctx: FactsBackstopCtx,
+  parsedPage: ParsedPageInput,
+): Promise<boolean> {
+  if (parsedPage.type !== 'email' && parsedPage.type !== 'conversation') return false;
+  try {
+    const rows = await ctx.engine.executeRaw<{ kind: string | null }>(
+      `SELECT config->>'kind' AS kind FROM sources WHERE id = $1`,
+      [ctx.sourceId],
+    );
+    return rows[0]?.kind === 'google';
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -152,6 +168,13 @@ export async function runFactsBackstop(
   const eligible = isFactsBackstopEligible(parsedPage.slug, parsedPage);
   if (!eligible.ok) {
     const skipped = `eligibility_failed:${eligible.reason}` as const;
+    return mode === 'queue'
+      ? { mode: 'queue', enqueued: false, queueDepth: 0, skipped }
+      : { mode: 'inline', inserted: 0, duplicate: 0, superseded: 0, fact_ids: [], skipped };
+  }
+
+  if (await isGoogleKindEmailThread(ctx, parsedPage)) {
+    const skipped = 'google_source_email' as const;
     return mode === 'queue'
       ? { mode: 'queue', enqueued: false, queueDepth: 0, skipped }
       : { mode: 'inline', inserted: 0, duplicate: 0, superseded: 0, fact_ids: [], skipped };

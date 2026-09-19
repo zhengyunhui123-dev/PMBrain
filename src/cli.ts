@@ -35,7 +35,7 @@ for (const op of operations) {
 }
 
 // CLI-only commands that bypass the operation layer
-const CLI_ONLY = new Set(['init', 'reinit-pglite', 'pglite-backup', 'upgrade', 'post-upgrade', 'check-update', 'integrations', 'publish', 'check-backlinks', 'lint', 'report', 'import', 'export', 'files', 'embed', 'serve', 'call', 'config', 'doctor', 'hook', 'migrate', 'eval', 'sync', 'extract', 'extract-conversation-facts', 'enrich', 'features', 'autopilot', 'graph-query', 'jobs', 'advisor', 'agent', 'apply-migrations', 'skillpack-check', 'skillpack', 'resolvers', 'integrity', 'repair-jsonb', 'repair', 'orphans', 'quarantine', 'sources', 'mounts', 'dream', 'check-resolvable', 'routing-eval', 'skillify', 'smoke-test', 'providers', 'storage', 'repos', 'code-def', 'code-refs', 'reindex', 'reindex-code', 'reindex-frontmatter', 'code-callers', 'code-callees', 'frontmatter', 'auth', 'friction', 'claw-test', 'book-mirror', 'takes', 'think', 'salience', 'anomalies', 'transcripts', 'models', 'remote', 'recall', 'forget', 'edges-backfill', 'cache', 'ze-switch', 'founder', 'brainstorm', 'lsd', 'schema', 'capture', 'onboard', 'conversation-parser', 'status', 'probe-pglite', 'connectors', 'google', 'creds']);
+const CLI_ONLY = new Set(['init', 'reinit-pglite', 'pglite-backup', 'upgrade', 'post-upgrade', 'check-update', 'integrations', 'publish', 'check-backlinks', 'lint', 'report', 'import', 'export', 'files', 'embed', 'serve', 'call', 'config', 'doctor', 'hook', 'migrate', 'eval', 'sync', 'extract', 'extract-conversation-facts', 'enrich', 'features', 'autopilot', 'graph-query', 'jobs', 'advisor', 'agent', 'apply-migrations', 'skillpack-check', 'skillpack', 'resolvers', 'integrity', 'repair-jsonb', 'repair', 'orphans', 'quarantine', 'sources', 'mounts', 'dream', 'check-resolvable', 'routing-eval', 'skillify', 'smoke-test', 'providers', 'storage', 'repos', 'code-def', 'code-refs', 'reindex', 'reindex-code', 'reindex-frontmatter', 'code-callers', 'code-callees', 'frontmatter', 'auth', 'friction', 'claw-test', 'book-mirror', 'takes', 'think', 'salience', 'anomalies', 'transcripts', 'models', 'remote', 'recall', 'forget', 'edges-backfill', 'cache', 'ze-switch', 'founder', 'brainstorm', 'lsd', 'schema', 'capture', 'onboard', 'conversation-parser', 'status', 'probe-pglite', 'connectors', 'google', 'creds', 'waiting', 'loops']);
 // CLI-only commands whose handlers print their own --help text. These are
 // excluded from the generic short-circuit so detailed per-command and
 // per-subcommand usage stays reachable.
@@ -73,6 +73,8 @@ const CLI_ONLY_SELF_HELP = new Set([
   'connectors',
   'google',
   'creds',
+  'waiting',
+  'loops',
 ]);
 
 async function main() {
@@ -1317,6 +1319,19 @@ async function handleCliOnly(command: string, args: string[]) {
     return;
   }
 
+  if (command === 'waiting' && (args.includes('--help') || args.includes('-h'))) {
+    const { runWaiting } = await import('./commands/loops.ts');
+    await runWaiting(null as never, args);
+    return;
+  }
+  if (command === 'loops' && (
+    !args[0] || args[0] === 'help' || args.includes('--help') || args.includes('-h')
+  )) {
+    const { runLoops } = await import('./commands/loops.ts');
+    await runLoops(null as never, args);
+    return;
+  }
+
   if (command === 'dream' && (args.includes('--help') || args.includes('-h'))) {
     const { runDream } = await import('./commands/dream.ts');
     await runDream(null, args);
@@ -1679,6 +1694,16 @@ async function handleCliOnly(command: string, args: string[]) {
       case 'connectors': {
         const { runConnectors } = await import('./commands/connectors/index.ts');
         await runConnectors(engine, args);
+        break;
+      }
+      case 'waiting': {
+        const { runWaiting } = await import('./commands/loops.ts');
+        await runWaiting(engine, args);
+        break;
+      }
+      case 'loops': {
+        const { runLoops } = await import('./commands/loops.ts');
+        await runLoops(engine, args);
         break;
       }
       case 'models': {
@@ -2119,6 +2144,8 @@ function printHelp() {
   sources remove <id>                删除来源及其页面
   google connect|status|disconnect   连接或检查 Google 账号（保险库，--json）
   google setup [--account <email>]   一键：OAuth → 来源 → 首次同步
+  waiting [--top N] [--json]         谁在等你：Gmail 开环 + 会议/连接器 lane
+  loops list|show|done|drop|mute|scan  查看或关闭开环（mute sender|thread）
   creds list|remove|export|import    通用凭证保险库（脱敏输出；加密包）
   sync --all                         同步全部来源
   sync --source <id>                 同步指定来源

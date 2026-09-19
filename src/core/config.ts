@@ -940,6 +940,14 @@ export const KNOWN_CONFIG_KEYS: readonly string[] = [
   // Spend controls. Registered so `pmbrain config set` accepts these without
   // --force; `spend.posture` itself is validated by the config command.
   'spend.posture',
+  'loops.extraction_enabled',
+  'loops.meeting_extraction_enabled',
+  'loops.transcript_extraction_enabled',
+  'loops.connector_extraction_enabled',
+  'loops.meeting_scan_auto',
+  'loops.meeting_last_scan_at',
+  'loops.transcript_last_scan_at',
+  'loops.connector_last_scan_at',
   'sync.cost_gate_min_usd',
   'sync.federated_v2',
   'embed.backfill_cooldown_min',
