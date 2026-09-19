@@ -70,4 +70,24 @@ describe('dispatch localOnly backstop (WP1/D7)', () => {
     expect(denied.isError).toBe(true);
     expect(parsed(denied).error).toBe('unknown_tool');
   });
+
+  test('connector_sync is localOnly and HTTP-denied as unknown_tool', async () => {
+    const op = operations.find(o => o.name === 'connector_sync');
+    expect(op?.localOnly).toBe(true);
+    const denied = await dispatchToolCall(engineStub, 'connector_sync', {
+      provider: 'chatgpt',
+    }, { remote: true, transport: 'http', sourceId: 'default' });
+    expect(denied.isError).toBe(true);
+    expect(parsed(denied).error).toBe('unknown_tool');
+  });
+
+  test('connectors_status is localOnly and HTTP-denied as unknown_tool', async () => {
+    const op = operations.find(o => o.name === 'connectors_status');
+    expect(op?.localOnly).toBe(true);
+    const denied = await dispatchToolCall(engineStub, 'connectors_status', {}, {
+      remote: true, transport: 'http', sourceId: 'default',
+    });
+    expect(denied.isError).toBe(true);
+    expect(parsed(denied).error).toBe('unknown_tool');
+  });
 });

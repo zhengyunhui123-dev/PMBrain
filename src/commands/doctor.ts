@@ -728,6 +728,10 @@ export async function doctorReportRemote(engine: BrainEngine): Promise<DoctorRep
   //   - Three-state: ok / warn / fail.
   checks.push(await checkFederationHealth(engine));
 
+  // Chat connectors (live ChatGPT/Claude history). name: 'connectors'
+  const { connectorsHealthCheck } = await import('./doctor/checks/connectors.ts');
+  checks.push(await connectorsHealthCheck(engine));
+
   return computeDoctorReport(checks);
 }
 

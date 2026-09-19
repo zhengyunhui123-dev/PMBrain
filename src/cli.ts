@@ -35,7 +35,7 @@ for (const op of operations) {
 }
 
 // CLI-only commands that bypass the operation layer
-const CLI_ONLY = new Set(['init', 'reinit-pglite', 'pglite-backup', 'upgrade', 'post-upgrade', 'check-update', 'integrations', 'publish', 'check-backlinks', 'lint', 'report', 'import', 'export', 'files', 'embed', 'serve', 'call', 'config', 'doctor', 'hook', 'migrate', 'eval', 'sync', 'extract', 'extract-conversation-facts', 'enrich', 'features', 'autopilot', 'graph-query', 'jobs', 'advisor', 'agent', 'apply-migrations', 'skillpack-check', 'skillpack', 'resolvers', 'integrity', 'repair-jsonb', 'repair', 'orphans', 'quarantine', 'sources', 'mounts', 'dream', 'check-resolvable', 'routing-eval', 'skillify', 'smoke-test', 'providers', 'storage', 'repos', 'code-def', 'code-refs', 'reindex', 'reindex-code', 'reindex-frontmatter', 'code-callers', 'code-callees', 'frontmatter', 'auth', 'friction', 'claw-test', 'book-mirror', 'takes', 'think', 'salience', 'anomalies', 'transcripts', 'models', 'remote', 'recall', 'forget', 'edges-backfill', 'cache', 'ze-switch', 'founder', 'brainstorm', 'lsd', 'schema', 'capture', 'onboard', 'conversation-parser', 'status', 'probe-pglite']);
+const CLI_ONLY = new Set(['init', 'reinit-pglite', 'pglite-backup', 'upgrade', 'post-upgrade', 'check-update', 'integrations', 'publish', 'check-backlinks', 'lint', 'report', 'import', 'export', 'files', 'embed', 'serve', 'call', 'config', 'doctor', 'hook', 'migrate', 'eval', 'sync', 'extract', 'extract-conversation-facts', 'enrich', 'features', 'autopilot', 'graph-query', 'jobs', 'advisor', 'agent', 'apply-migrations', 'skillpack-check', 'skillpack', 'resolvers', 'integrity', 'repair-jsonb', 'repair', 'orphans', 'quarantine', 'sources', 'mounts', 'dream', 'check-resolvable', 'routing-eval', 'skillify', 'smoke-test', 'providers', 'storage', 'repos', 'code-def', 'code-refs', 'reindex', 'reindex-code', 'reindex-frontmatter', 'code-callers', 'code-callees', 'frontmatter', 'auth', 'friction', 'claw-test', 'book-mirror', 'takes', 'think', 'salience', 'anomalies', 'transcripts', 'models', 'remote', 'recall', 'forget', 'edges-backfill', 'cache', 'ze-switch', 'founder', 'brainstorm', 'lsd', 'schema', 'capture', 'onboard', 'conversation-parser', 'status', 'probe-pglite', 'connectors']);
 // CLI-only commands whose handlers print their own --help text. These are
 // excluded from the generic short-circuit so detailed per-command and
 // per-subcommand usage stays reachable.
@@ -70,6 +70,7 @@ const CLI_ONLY_SELF_HELP = new Set([
   'extract-conversation-facts',
   'enrich',
   'sources',
+  'connectors',
 ]);
 
 async function main() {
@@ -800,7 +801,7 @@ const THIN_CLIENT_REFUSED_COMMANDS = new Set([
   'sync', 'embed', 'extract', 'extract-conversation-facts', 'enrich', 'migrate', 'apply-migrations',
   'repair-jsonb', 'repair', 'orphans', 'integrity', 'serve', 'pglite-backup',
   // v0.31.1 (CDX-2 op coverage matrix): more local-only commands
-  'dream', 'transcripts', 'storage',
+  'dream', 'transcripts', 'storage', 'connectors',
   // v0.31.1 CDX-2 audit: takes/sources have multiple subcommands; some
   // (takes_list/takes_search, sources_list/sources_status) have MCP
   // equivalents and others are file-system bound (takes mutate commands
@@ -842,6 +843,7 @@ const THIN_CLIENT_REFUSE_HINTS: Record<string, string> = {
   dream: 'dream runs the autopilot cycle on the host. `pmbrain remote ping` queues one. (Native `pmbrain dream` thin-client routing planned for v0.31.2.)',
   orphans: "orphans needs the host's brain. Run on the host or use the `find_orphans` MCP tool from your agent.",
   transcripts: 'transcripts is server-private (raw chat exports stay on the host). Read transcripts on the host machine.',
+  connectors: 'connectors manage provider session credentials in ~/.pmbrain/connectors and sync your chat history on the host. Credentials never cross the wire — run on the host machine.',
   storage: 'storage operates on the local repo on disk. Run on the host.',
   takes: 'takes mutate subcommands edit local .md files; routing the read subcommands lands in v0.31.x. For now: use `takes_list` and `takes_search` MCP tools from your agent, or run on the host.',
   sources: 'sources commands manage local DB + config rows. Per-subcommand thin-client routing lands in v0.31.x. For now: use `sources_list` / `sources_status` MCP tools, or run on the host.',
@@ -1294,6 +1296,15 @@ async function handleCliOnly(command: string, args: string[]) {
     return;
   }
 
+  if (command === 'connectors' && (
+    !args[0] || args[0] === 'help' || args.includes('--help') || args.includes('-h')
+    || args[0] === 'providers' || args[0] === 'logout'
+  )) {
+    const { runConnectors } = await import('./commands/connectors/index.ts');
+    await runConnectors(null as never, args);
+    return;
+  }
+
   if (command === 'dream' && (args.includes('--help') || args.includes('-h'))) {
     const { runDream } = await import('./commands/dream.ts');
     await runDream(null, args);
@@ -1651,6 +1662,11 @@ async function handleCliOnly(command: string, args: string[]) {
       case 'transcripts': {
         const { runTranscripts } = await import('./commands/transcripts.ts');
         await runTranscripts(engine, args);
+        break;
+      }
+      case 'connectors': {
+        const { runConnectors } = await import('./commands/connectors/index.ts');
+        await runConnectors(engine, args);
         break;
       }
       case 'models': {
@@ -2074,6 +2090,7 @@ function printHelp() {
   salience [--days N] [--kind P]     按情绪和活跃度排序页面
   anomalies [--since D] [--sigma N]  查找统计异常
   transcripts recent [--days N]      查看最近的本地转录文本
+  connectors auth|status|sync|logout 同步 ChatGPT / Claude 聊天记录（仅本机）
   dream [--dry-run] [--json]         运行一次夜间维护周期
   check-resolvable [--json] [--fix]  验证 skill 树
   report --type <name> --content ... 保存带时间戳的报告

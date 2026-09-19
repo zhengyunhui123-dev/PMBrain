@@ -125,6 +125,7 @@ export const OPS_CHECK_NAMES: ReadonlySet<string> = new Set([
   'batch_retry_health',
   'brainstorm_health',
   'connection',
+  'connectors',
   'federation_health',
   'home_dir_in_worktree',
   'index_audit',

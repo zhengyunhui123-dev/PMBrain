@@ -155,6 +155,8 @@ describe('mcpOperations filter — localOnly ops are excluded from the HTTP-expo
       'code_traversal_cache_clear',
       'entity_identity_link',
       'entity_identity_unlink',
+      'connectors_status',
+      'connector_sync',
     ];
     const lookup = new Map(operations.map(op => [op.name, op] as const));
     for (const name of KNOWN_LOCAL_ONLY) {

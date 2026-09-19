@@ -11,6 +11,19 @@ import { loadConfig, isThinClient } from '../core/config.ts';
 import { callRemoteTool, unpackToolResult } from '../core/mcp-client.ts';
 import { resolveGbrainCliPath } from './autopilot.ts';
 
+/**
+ * Long-lived workers outlive operator config changes. Re-stamp the AI gateway
+ * from DB-backed model config immediately before queued jobs enter gateway-backed
+ * paths, so a stale process-level default cannot route new work to the wrong
+ * provider. Must NOT call configureGateway(buildGatewayConfig(loadConfig())) —
+ * that would clobber DB-plane-merged fields with file-plane-only values.
+ */
+export async function refreshGatewayForJob(engine: BrainEngine): Promise<void> {
+  const { refreshGatewayEnvFromFilePlane, reconfigureGatewayWithEngine } = await import('../core/ai/gateway.ts');
+  refreshGatewayEnvFromFilePlane();
+  await reconfigureGatewayWithEngine(engine);
+}
+
 function parseFlag(args: string[], flag: string): string | undefined {
   const idx = args.indexOf(flag);
   return idx >= 0 && idx + 1 < args.length ? args[idx + 1] : undefined;
@@ -1739,6 +1752,16 @@ export async function registerBuiltinHandlers(worker: MinionWorker, engine: Brai
   worker.register('embed-backfill', async (job) => {
     const { makeEmbedBackfillHandler } = await import('../core/minions/handlers/embed-backfill.ts');
     return await makeEmbedBackfillHandler(engine)(job);
+  });
+
+  // connector-sync: fetch a chat provider's history and ingest it. Fetch+ingest
+  // needs no LLM, but the PGLite embed kickoff calls runEmbedCore inline, so
+  // refresh the gateway before the handler (a worker booted before `config set`
+  // must see the current embedding model).
+  worker.register('connector-sync', async (job) => {
+    await refreshGatewayForJob(engine);
+    const { makeConnectorSyncHandler } = await import('../core/minions/handlers/connector-sync.ts');
+    return await makeConnectorSyncHandler(engine)(job);
   });
 
   // v0.41.18.0 (A10, T7): extract-ner handler for the gbrain onboard

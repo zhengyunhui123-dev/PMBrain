@@ -47,6 +47,7 @@ import { OperationError } from './operation-error.ts';
 import { MEMORY_VERBS_VERSION, memoryVerbOperations } from './memory-verbs.ts';
 import type { Operation, OperationContext } from './ops/contract.ts';
 import { entityIdentityOperations } from './ops/entity-identity.ts';
+import { connectorsOperations } from './ops/connectors.ts';
 import { unionLinksAcrossIdentity } from './entity-identity.ts';
 import {
   acceptTakeProposal as acceptAgentPackTakeProposal,
@@ -5133,6 +5134,7 @@ export const operations: Operation[] = [
   whoami, sources_add, sources_list, sources_remove, sources_status,
   // v0.29: Salience + anomalies + recent transcripts
   get_recent_salience, find_anomalies, get_recent_transcripts,
+  ...connectorsOperations,
   // Cross-source entity identity groups (v1 manual-only) — immediately before facts
   ...entityIdentityOperations,
   // v0.31: hot memory (facts table)

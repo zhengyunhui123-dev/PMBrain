@@ -53,6 +53,8 @@ import {
   TIER_DEFAULTS,
 } from '../model-config.ts';
 import type { BrainEngine } from '../engine.ts';
+import { loadConfig } from '../config.ts';
+import { buildGatewayConfig } from './gateway-config.ts';
 import { dimsProviderOptions } from './dims.ts';
 import { AIConfigError, AITransientError, normalizeAIError } from './errors.ts';
 import { recordChatUsage } from './chat-usage.ts';
@@ -414,6 +416,27 @@ export function configureGateway(config: AIGatewayConfig): void {
     if (m) registerExtendedModel(m);
   }
   warnRecipesMissingBatchTokens();
+}
+
+/**
+ * Re-fold ONLY the provider-key env from the file plane + process env into the
+ * LIVE gateway config, leaving models/base_urls/chat-options untouched. For
+ * long-lived workers: a key added to ~/.pmbrain/config.json reaches the gateway
+ * at the next job without clobbering the DB-plane-merged fields the worker's
+ * boot fold installed (a full configureGateway(buildGatewayConfig(loadConfig()))
+ * here would reset those to file-plane-only values). No-op before configure.
+ */
+export function refreshGatewayEnvFromFilePlane(): void {
+  if (!_config) return;
+  try {
+    const cfg = loadConfig();
+    if (!cfg) return;
+    const next = buildGatewayConfig(cfg);
+    _config = { ..._config, env: next.env };
+    _modelCache.clear();
+  } catch {
+    // file-plane unreadable — keep the live env
+  }
 }
 
 /**
