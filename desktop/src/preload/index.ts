@@ -44,6 +44,7 @@ import type {
 import type { DesktopKnowledgeSourceStatus } from '../main/knowledge-source-git.js';
 import type { WorkbuddyAgentIntegrationStatus } from '../main/integration/workbuddy-agent-controller.js';
 import type { PgliteOwnerStatus } from '../../../src/core/pglite-owner-control.js';
+import type { ManagedPostgresDatabase } from '../main/database-runtime-manager.js';
 
 export type {
   AdvancedModelConfig,
@@ -78,6 +79,7 @@ export type {
   SidecarState,
   UpdateState,
   WorkbuddyAgentIntegrationStatus,
+  ManagedPostgresDatabase,
 };
 
 export type DesktopSettingsPanel = 'basic' | 'models' | 'integrations' | 'updates' | 'system' | 'repair';
@@ -171,6 +173,8 @@ export interface PMBrainDesktopApi {
   setTheme(theme: DesktopTheme): Promise<DesktopThemeState>;
   onThemeState(listener: (state: DesktopThemeState) => void): () => void;
   getSetup(): Promise<DesktopSetupState>;
+  listDockerDatabases(): Promise<ManagedPostgresDatabase[]>;
+  activateDockerDatabase(containerName: string): Promise<ManagedPostgresDatabase>;
   getIntegrations(probe?: boolean): Promise<IntegrationInfo[]>;
   chooseEmbeddingRebuild(choice: 'wait' | 'defer'): Promise<void>;
   onState(listener: (state: SidecarState) => void): () => void;
@@ -194,6 +198,9 @@ export interface PMBrainDesktopApi {
   getAdvancedModelConfig(): Promise<AdvancedModelConfig>;
   saveAdvancedModelConfig(values: AdvancedModelWriteInput): Promise<AdvancedModelConfig>;
   saveSetup(payload: SetupPayload): Promise<DesktopSetupState & { backup?: string | null; reembeddingWarning?: string | null }>;
+  inspectDockerMigration(): Promise<{ schemaVersion: string | null; fingerprint: string; tables: Array<{ name: string; rows: number; action: 'direct' | 'convert' | 'skip' | 'unknown'; reason: string; skippable?: boolean }>; vectors: Array<{ table: string; column: string; source: string; target: string | null }> }>;
+  migrateToDocker(planFingerprint: string, skipUnknown: boolean): Promise<{ backupDirectory: string; configBackup: string | null; containerName: string; volumeName: string; tables: number; rows: number; skippedTables: Array<{ name: string; rows: number; reason: string }>; reportPath: string }>;
+  openDockerInstallGuide(): Promise<void>;
   configureIntegration(client: IntegrationClient, kind: CredentialKind, deep?: boolean): Promise<IntegrationResult>;
   writeWorkbuddyUserAgent(): Promise<{ written: string[]; backedUp: string[] }>;
   getWorkbuddyAgentIntegration(): Promise<WorkbuddyAgentIntegrationStatus>;
@@ -237,6 +244,8 @@ const api: PMBrainDesktopApi = {
     return () => ipcRenderer.removeListener('desktop:theme-state', handler);
   },
   getSetup: () => ipcRenderer.invoke('desktop:get-setup'),
+  listDockerDatabases: () => ipcRenderer.invoke('desktop:list-docker-databases'),
+  activateDockerDatabase: (containerName) => ipcRenderer.invoke('desktop:activate-docker-database', containerName),
   getIntegrations: (probe) => ipcRenderer.invoke('desktop:get-integrations', probe),
   chooseEmbeddingRebuild: (choice) => ipcRenderer.invoke('desktop:choose-embedding-rebuild', choice),
   onState: (listener) => {
@@ -280,6 +289,9 @@ const api: PMBrainDesktopApi = {
   getAdvancedModelConfig: () => ipcRenderer.invoke('desktop:get-advanced-model-config'),
   saveAdvancedModelConfig: (values) => ipcRenderer.invoke('desktop:save-advanced-model-config', values),
   saveSetup: (payload) => ipcRenderer.invoke('desktop:save-setup', payload),
+  inspectDockerMigration: () => ipcRenderer.invoke('desktop:inspect-docker-migration'),
+  migrateToDocker: (planFingerprint, skipUnknown) => ipcRenderer.invoke('desktop:migrate-to-docker', planFingerprint, skipUnknown),
+  openDockerInstallGuide: () => ipcRenderer.invoke('desktop:open-docker-install-guide'),
   configureIntegration: (client, kind, deep) => ipcRenderer.invoke('desktop:configure-integration', client, kind, deep),
   writeWorkbuddyUserAgent: () => ipcRenderer.invoke('desktop:write-workbuddy-user-agent'),
   getWorkbuddyAgentIntegration: () => ipcRenderer.invoke('desktop:get-workbuddy-agent-integration'),

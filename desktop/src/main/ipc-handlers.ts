@@ -50,6 +50,8 @@ export interface DesktopIpcHandlers {
   revokeSharedIntegration: (credentialName: string) => Promise<unknown>;
   updateState: () => UpdateState | null;
   setup: () => Promise<unknown>;
+  listDockerDatabases: () => Promise<unknown>;
+  activateDockerDatabase: (containerName: string) => Promise<unknown>;
   integrations: (probe: boolean) => Promise<unknown>;
   inspectKnowledgeSourceDirectory: (path: string) => DesktopKnowledgeSourceStatus;
   initializeKnowledgeSourceGit: (path: string) => DesktopKnowledgeSourceStatus;
@@ -58,6 +60,9 @@ export interface DesktopIpcHandlers {
   advancedModelConfig: () => Promise<unknown>;
   saveAdvancedModelConfig: (values: AdvancedModelWriteInput) => Promise<unknown>;
   saveSetup: (payload: SetupPayload) => Promise<unknown>;
+  inspectDockerMigration: () => Promise<unknown>;
+  migrateToDocker: (planFingerprint: string, skipUnknown: boolean) => Promise<unknown>;
+  openDockerInstallGuide: () => Promise<unknown>;
   chooseEmbeddingRebuild: (choice: 'wait' | 'defer') => void;
   configureIntegration: (client: IntegrationClient, kind: CredentialKind, deep?: boolean) => Promise<unknown>;
   writeWorkbuddyUserAgent: () => Promise<unknown>;
@@ -110,6 +115,8 @@ export function registerDesktopIpcHandlers(handlers: DesktopIpcHandlers): void {
   registerTrustedHandler('desktop:revoke-shared-integration', handlers, (_event, credentialName: string) => handlers.revokeSharedIntegration(credentialName));
   registerTrustedHandler('desktop:get-update-state', handlers, () => handlers.updateState());
   registerTrustedHandler('desktop:get-setup', handlers, () => handlers.setup());
+  registerTrustedHandler('desktop:list-docker-databases', handlers, () => handlers.listDockerDatabases());
+  registerTrustedHandler('desktop:activate-docker-database', handlers, (_event, containerName: string) => handlers.activateDockerDatabase(containerName));
   registerTrustedHandler('desktop:get-integrations', handlers, (_event, probe?: boolean) => handlers.integrations(probe === true));
   registerTrustedHandler('desktop:inspect-knowledge-source', handlers, (_event, path: string) => handlers.inspectKnowledgeSourceDirectory(path));
   registerTrustedHandler('desktop:initialize-knowledge-source-git', handlers, (_event, path: string) => handlers.initializeKnowledgeSourceGit(path));
@@ -127,6 +134,9 @@ export function registerDesktopIpcHandlers(handlers: DesktopIpcHandlers): void {
   registerTrustedHandler('desktop:get-advanced-model-config', handlers, () => handlers.advancedModelConfig());
   registerTrustedHandler('desktop:save-advanced-model-config', handlers, (_event, values: AdvancedModelWriteInput) => handlers.saveAdvancedModelConfig(values ?? {}));
   registerTrustedHandler('desktop:save-setup', handlers, (_event, payload: SetupPayload) => handlers.saveSetup(payload));
+  registerTrustedHandler('desktop:inspect-docker-migration', handlers, () => handlers.inspectDockerMigration());
+  registerTrustedHandler('desktop:migrate-to-docker', handlers, (_event, planFingerprint: string, skipUnknown: boolean) => handlers.migrateToDocker(planFingerprint, skipUnknown));
+  registerTrustedHandler('desktop:open-docker-install-guide', handlers, () => handlers.openDockerInstallGuide());
   registerTrustedHandler('desktop:choose-embedding-rebuild', handlers, (_event, choice: 'wait' | 'defer') => handlers.chooseEmbeddingRebuild(choice));
   registerTrustedHandler('desktop:configure-integration', handlers, (_event, client: IntegrationClient, kind: CredentialKind, deep?: boolean) => handlers.configureIntegration(client, kind, deep));
   registerTrustedHandler('desktop:write-workbuddy-user-agent', handlers, () => handlers.writeWorkbuddyUserAgent());

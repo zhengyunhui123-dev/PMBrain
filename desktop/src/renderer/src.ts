@@ -19,6 +19,7 @@ import type {
   IntegrationClient,
   IntegrationInfo,
   IntegrationResult,
+  ManagedPostgresDatabase,
   PMBrainDesktopApi,
   DesktopPgliteUpgradeBackupMutation,
   DesktopPgliteUpgradeBackups,
@@ -1163,6 +1164,77 @@ function renderIntegrations(integrations: IntegrationInfo[]): void {
   }));
 }
 
+function renderDockerDatabases(databases: ManagedPostgresDatabase[]): void {
+  const select = $<HTMLSelectElement>('#database-instance');
+  const databaseUrl = $<HTMLInputElement>('#database-url');
+  select.replaceChildren();
+  let selected = false;
+  for (const database of databases) {
+    const option = document.createElement('option');
+    option.value = database.containerName;
+    const status = database.status === 'stopped' ? '已停止' : '运行中';
+    option.textContent = `${database.current ? '当前使用 · ' : ''}${database.containerName} · ${status} · ${database.displayAddress}`;
+    option.dataset.databaseUrl = database.databaseUrl;
+    option.dataset.status = database.status;
+    option.dataset.displayAddress = database.displayAddress;
+    option.selected = database.current;
+    selected ||= database.current;
+    select.append(option);
+  }
+  const manual = document.createElement('option');
+  manual.value = '__manual__';
+  manual.textContent = databases.length > 0 ? '手动填写其他 Postgres 地址' : '未发现可用 PMBrain 数据库，可手动填写地址';
+  manual.selected = !selected;
+  select.append(manual);
+  const active = select.selectedOptions[0];
+  if (active?.dataset.databaseUrl) databaseUrl.value = active.dataset.databaseUrl;
+  select.disabled = false;
+  const stopped = databases.filter(database => database.status === 'stopped').length;
+  $('#postgres-status').textContent = databases.length > 0
+    ? `发现 ${databases.length} 个 PMBrain 数据库${stopped > 0 ? `，其中 ${stopped} 个已停止，选择时会先启动并校验` : ''}；确认后点击“保存修改并重启”完成切换。`
+    : 'Docker 中没有发现通过 PMBrain 核心表和连接校验的数据库；也可以手动填写地址。';
+}
+
+async function refreshDockerDatabases(): Promise<void> {
+  if (selectedEngine() !== 'postgres') return;
+  const select = $<HTMLSelectElement>('#database-instance');
+  select.disabled = true;
+  select.replaceChildren(new Option('正在检查 Docker 中可用的 PMBrain 数据库…', ''));
+  $('#postgres-status').textContent = '正在检查 Docker 容器、数据库连接和 PMBrain 核心表…';
+  try {
+    renderDockerDatabases(await window.pmbrainDesktop.listDockerDatabases());
+  } catch (error) {
+    renderDockerDatabases([]);
+    $('#postgres-status').textContent = error instanceof Error ? error.message : String(error);
+  }
+}
+
+async function selectDockerDatabase(select: HTMLSelectElement): Promise<void> {
+  const option = select.selectedOptions[0];
+  if (!option?.dataset.databaseUrl) return;
+  if (option.dataset.status !== 'stopped') {
+    $<HTMLInputElement>('#database-url').value = option.dataset.databaseUrl;
+    return;
+  }
+
+  select.disabled = true;
+  $('#postgres-status').textContent = `正在启动 ${option.value}，等待 Postgres 就绪并校验 PMBrain 核心表…`;
+  try {
+    const database = await window.pmbrainDesktop.activateDockerDatabase(option.value);
+    option.dataset.databaseUrl = database.databaseUrl;
+    option.dataset.status = database.status;
+    option.textContent = `${database.containerName} · 运行中 · ${database.displayAddress}`;
+    $<HTMLInputElement>('#database-url').value = database.databaseUrl;
+    $('#postgres-status').textContent = `${database.containerName} 已启动并通过 PMBrain 数据库校验；点击“保存修改并重启”完成切换。`;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await refreshDockerDatabases();
+    $('#postgres-status').textContent = message;
+  } finally {
+    select.disabled = false;
+  }
+}
+
 function readIntegrationVerificationCache(): Partial<Record<IntegrationClient, IntegrationVerificationReceipt>> {
   try {
     const parsed = JSON.parse(localStorage.getItem(INTEGRATION_VERIFICATION_KEY) ?? '{}');
@@ -1541,6 +1613,7 @@ function populate(next: DesktopSetupState): void {
   const radio = document.querySelector<HTMLInputElement>(`input[name="engine"][value="${setup.current.engine}"]`);
   if (radio) radio.checked = true;
   ($<HTMLInputElement>('#database-path')).value = setup.current.databasePath || setup.defaults.databasePath;
+  ($<HTMLInputElement>('#database-url')).value = setup.current.databaseUrl || '';
   ($<HTMLInputElement>('#knowledge-directory')).value = setup.current.knowledgeDirectory || setup.defaults.knowledgeDirectory;
   ($<HTMLInputElement>('#knowledge-source-id')).value = setup.current.knowledgeSourceId || '';
   loadedKnowledgeDirectory = ($<HTMLInputElement>('#knowledge-directory')).value.trim();
@@ -1590,9 +1663,11 @@ function populate(next: DesktopSetupState): void {
   $('#embedding-model-effective').textContent = setup.current.embeddingModel ? `当前生效：${setup.current.embeddingModel}` : '当前未配置';
   $('#config-path').textContent = `配置写入：${setup.configPath}`;
   $('#postgres-status').textContent = setup.current.engine === 'postgres' && setup.current.databaseConfigured
-    ? '已读取本机 Postgres 连接；留空会继续使用现有地址。'
-    : '不会安装或新建 Docker；会安全启动已安装的 Docker Desktop 和匹配的现有容器。';
+    ? '已读取当前 Postgres 连接，正在检查 Docker 中可切换的 PMBrain 数据库。'
+    : '已有数据库可填写地址；当前使用 PGLite 时可一键创建 Docker 数据库并迁移完整知识库。';
+  $<HTMLButtonElement>('#migrate-to-docker').hidden = setup.needsSetup || setup.current.engine !== 'pglite';
   renderEngine();
+  if (setup.current.engine === 'postgres') void refreshDockerDatabases();
   renderIntegrations(integrations);
   renderService(null, next.port);
   $('#save-setup').querySelector('span')!.textContent = saveButtonText();
@@ -2247,7 +2322,16 @@ async function configure(client: IntegrationClient, button: HTMLButtonElement, d
   }
 }
 
-document.querySelectorAll<HTMLInputElement>('input[name="engine"]').forEach((input) => input.addEventListener('change', renderEngine));
+document.querySelectorAll<HTMLInputElement>('input[name="engine"]').forEach((input) => input.addEventListener('change', () => {
+  renderEngine();
+  if (selectedEngine() === 'postgres') void refreshDockerDatabases();
+}));
+$<HTMLSelectElement>('#database-instance').addEventListener('change', (event) => {
+  void selectDockerDatabase(event.currentTarget as HTMLSelectElement);
+});
+$<HTMLInputElement>('#database-url').addEventListener('input', () => {
+  $<HTMLSelectElement>('#database-instance').value = '__manual__';
+});
 document.querySelectorAll<HTMLInputElement>('input[name="network-mode"]').forEach((input) => input.addEventListener('change', renderNetworkMode));
 document.querySelectorAll<HTMLInputElement>('input[name="memory-writeback"]').forEach((input) => input.addEventListener('change', () => void handleMemoryModeChange(input)));
 $<HTMLSelectElement>('#shared-address').addEventListener('change', renderSelectedAddressNote);
@@ -2477,6 +2561,69 @@ $('#docker-help-open').addEventListener('click', () => dockerHelp.showModal());
 $('#docker-help-close').addEventListener('click', () => dockerHelp.close());
 $('#docker-help-done').addEventListener('click', () => dockerHelp.close());
 $('#docker-copy-command').addEventListener('click', () => void window.pmbrainDesktop.copy($('#docker-command').textContent || ''));
+$('#docker-install-guide').addEventListener('click', () => void window.pmbrainDesktop.openDockerInstallGuide());
+let dockerMigrationPlan: Awaited<ReturnType<typeof window.pmbrainDesktop.inspectDockerMigration>> | null = null;
+$('#migrate-to-docker').addEventListener('click', async () => {
+  const button = $<HTMLButtonElement>('#migrate-to-docker');
+  setBusy(button, true, '正在扫描旧库…');
+  clearNotices();
+  try {
+    const plan = await window.pmbrainDesktop.inspectDockerMigration();
+    dockerMigrationPlan = plan;
+    const counts = { direct: 0, convert: 0, skip: 0, unknown: 0 };
+    for (const table of plan.tables) counts[table.action] += 1;
+    $('#docker-migration-summary').textContent = `旧库 Schema ${plan.schemaVersion ?? '未记录'}：${counts.direct} 张直接迁移、${counts.convert} 张自动转换、${counts.skip} 张跳过、${counts.unknown} 张需要决定。`;
+    const details = $('#docker-migration-details');
+    details.replaceChildren();
+    for (const table of plan.tables.filter(item => item.action !== 'direct')) {
+      const line = document.createElement('li');
+      const label = table.action === 'convert' ? '自动转换' : table.action === 'skip' ? '跳过' : '未知旧表';
+      line.textContent = `${label}：${table.name}（${table.rows} 条）— ${table.reason}`;
+      details.append(line);
+    }
+    $<HTMLInputElement>('#docker-migration-skip-unknown').checked = false;
+    const blocked = plan.tables.some(table => table.action === 'unknown' && table.skippable === false);
+    $<HTMLElement>('#docker-migration-unknown-choice').hidden = counts.unknown === 0 || blocked;
+    $<HTMLButtonElement>('#docker-migration-confirm').disabled = counts.unknown > 0;
+    if (blocked) {
+      const line = document.createElement('li');
+      line.textContent = '正式数据存在无法安全转换的结构，本次迁移已阻止；请保留旧库并查看诊断报告。';
+      details.append(line);
+    }
+    $<HTMLElement>('#docker-migration-plan').hidden = false;
+  } catch (error) {
+    setNotice('error', error instanceof Error ? error.message : String(error));
+  } finally {
+    setBusy(button, false, '重新扫描迁移方案');
+  }
+});
+$<HTMLInputElement>('#docker-migration-skip-unknown').addEventListener('change', () => {
+  const blocked = dockerMigrationPlan?.tables.some(table => table.action === 'unknown' && table.skippable === false);
+  $<HTMLButtonElement>('#docker-migration-confirm').disabled = !!blocked || !$<HTMLInputElement>('#docker-migration-skip-unknown').checked;
+});
+$('#docker-migration-cancel').addEventListener('click', () => {
+  dockerMigrationPlan = null;
+  $<HTMLElement>('#docker-migration-plan').hidden = true;
+});
+$('#docker-migration-confirm').addEventListener('click', async () => {
+  const plan = dockerMigrationPlan;
+  if (!plan) return;
+  const button = $<HTMLButtonElement>('#docker-migration-confirm');
+  setBusy(button, true, '正在迁移并校验…');
+  clearNotices();
+  try {
+    const result = await window.pmbrainDesktop.migrateToDocker(plan.fingerprint, $<HTMLInputElement>('#docker-migration-skip-unknown').checked);
+    dockerMigrationPlan = null;
+    $<HTMLElement>('#docker-migration-plan').hidden = true;
+    populate(await window.pmbrainDesktop.getSetup());
+    const skipped = result.skippedTables.length > 0 ? `；跳过 ${result.skippedTables.length} 张历史或用户确认的旧表` : '';
+    setNotice('success', `迁移完成：${result.tables} 张表、${result.rows} 条记录已核对${skipped}；原 PGLite 冷备：${result.backupDirectory}；报告：${result.reportPath}。`);
+  } catch (error) {
+    setNotice('error', error instanceof Error ? error.message : String(error));
+  } finally {
+    setBusy(button, false, '备份并开始迁移');
+  }
+});
 $('#update-action').addEventListener('click', async () => {
   const button = $<HTMLButtonElement>('#update-action');
   try {

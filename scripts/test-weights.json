@@ -96,7 +96,7 @@
   "test/chunkers/code.test.ts": 129,
   "test/chunkers/recursive.test.ts": 57,
   "test/cjk.test.ts": 4,
-  "test/claw-test-cli.test.ts": 9,
+  "test/claw-test-cli.serial.test.ts": 9,
   "test/cli-args.test.ts": 15,
   "test/cli-dispatch-thin-client.test.ts": 6027,
   "test/cli-help-discoverability.test.ts": 1670,

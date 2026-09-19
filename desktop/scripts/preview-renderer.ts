@@ -35,6 +35,7 @@ const output = outputArg
 const prepareOnly = process.argv.includes('--prepare-only');
 const firstRun = process.argv.includes('--first-run');
 const memorySetupHint = process.argv.includes('--memory-setup-hint');
+const postgres = process.argv.includes('--postgres');
 const integrationDialogArg = process.argv.find((arg) => arg.startsWith('--integration-dialog='));
 const integrationDialog = integrationDialogArg?.slice('--integration-dialog='.length) ?? '';
 const integrationDialogDeep = integrationDialog.endsWith(':deep');
@@ -76,7 +77,7 @@ const scrollTarget = panelScrollTarget[panel];
 const mockApi = `
 <script>
 window.pmbrainDesktop = {
-  getSetup: async () => ({
+   getSetup: async () => ({
     setup: {
       needsSetup: ${firstRun},
       configPath: 'C:\\\\Users\\\\zhengyunhui\\\\.pmbrain\\\\config.json',
@@ -85,9 +86,10 @@ window.pmbrainDesktop = {
         knowledgeDirectory: 'C:\\\\Users\\\\zhengyunhui\\\\Documents\\\\PMBrain'
       },
       current: {
-        engine: 'pglite',
+          engine: ${postgres ? "'postgres'" : "'pglite'"},
         theme: 'system',
-        databasePath: 'D:\\\\tmp\\\\brain.pglite',
+         databasePath: 'D:\\\\tmp\\\\brain.pglite',
+         databaseUrl: ${postgres ? "'postgresql://pmbrain:secret@127.0.0.1:55142/pmbrain'" : 'undefined'},
         databaseConfigured: true,
         knowledgeDirectory: ${firstRun ? "''" : "'C:\\\\\\\\Users\\\\\\\\zhengyunhui\\\\\\\\Documents\\\\\\\\PMBrain'"},
         knowledgeSourceId: ${firstRun ? "''" : "'PMBrain'"},
@@ -121,7 +123,12 @@ window.pmbrainDesktop = {
       { id: 'codebuddy', name: 'CodeBuddy', path: 'C:\\\\Users\\\\zhengyunhui\\\\.codebuddy\\\\mcp.json', configured: true, automatic: true },
     ],
     port: 3132
-  }),
+   }),
+   listDockerDatabases: async () => (${postgres ? `[
+    { containerName: 'pmbrain-postgres-694e698fdd7e', databaseUrl: 'postgresql://pmbrain:secret@127.0.0.1:55142/pmbrain', displayAddress: 'postgresql://pmbrain:••••@127.0.0.1:55142/pmbrain', current: true, createdAt: '2026-09-19T07:02:40Z', status: 'running', verified: true },
+    { containerName: 'gbrain-pg', databaseUrl: 'postgresql://postgres:secret@127.0.0.1:5433/gbrain', displayAddress: 'postgresql://postgres:••••@127.0.0.1:5433/gbrain', current: false, createdAt: '2026-08-16T00:27:48Z', status: 'stopped', verified: false }
+  ]` : '[]'}),
+   activateDockerDatabase: async (containerName) => ({ containerName, databaseUrl: 'postgresql://postgres:secret@127.0.0.1:5433/gbrain', displayAddress: 'postgresql://postgres:••••@127.0.0.1:5433/gbrain', current: false, createdAt: '2026-08-16T00:27:48Z', status: 'running', verified: true }),
   getIntegrations: async () => (await window.pmbrainDesktop.getSetup()).integrations,
   getState: async () => (${panel === 'recovery'
     ? "({ phase: 'failed', message: 'PGLite database is already owned by another process (pid=37564, type=desktop-sidecar).' })"

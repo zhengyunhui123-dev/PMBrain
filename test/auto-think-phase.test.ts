@@ -118,6 +118,7 @@ describe('runPhaseAutoThink', () => {
     _resetBudgetMeterWarningsForTest();
     const r = await runPhaseAutoThink(engine, {
       dryRun: false,
+      model: 'anthropic:claude-opus-4-7',
       client: makeStubClient('test'),
       auditPath: join(tmpDir, 'b4.jsonl'),
     });

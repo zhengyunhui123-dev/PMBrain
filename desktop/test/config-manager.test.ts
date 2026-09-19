@@ -344,6 +344,7 @@ describe('desktop config manager', () => {
     expect(info.needsSetup).toBe(false);
     expect(info.current.engine).toBe('postgres');
     expect(info.current.databaseConfigured).toBe(true);
+    expect(info.current.databaseUrl).toBe('postgresql://local:secret@127.0.0.1:5432/pmbrain');
   });
 
   test('creates secure PGLite config and preserves keys on a later switch', () => {

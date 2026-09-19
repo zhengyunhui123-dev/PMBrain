@@ -115,7 +115,7 @@ export function formatCliFailure(result: CliResult): string {
 function spawnCaptured(
   command: string,
   args: string[],
-  options: { cwd: string; env: NodeJS.ProcessEnv; timeoutMs?: number },
+  options: { cwd: string; env: NodeJS.ProcessEnv; timeoutMs?: number; onStderr?: (chunk: string) => void },
 ): Promise<CliResult> {
   return new Promise((resolveResult, reject) => {
     const child = spawn(command, args, {
@@ -141,7 +141,7 @@ function spawnCaptured(
       reject(error);
     };
     child.stdout?.on('data', (value) => { stdout += value.toString(); });
-    child.stderr?.on('data', (value) => { stderr += value.toString(); });
+    child.stderr?.on('data', (value) => { const chunk = value.toString(); stderr += chunk; options.onStderr?.(chunk); });
     child.once('error', rejectOnce);
     child.once('close', (code, signal) => {
       if (timedOut) {
@@ -172,6 +172,7 @@ export function runCli(
   runtime: CliRuntime,
   args: string[],
   extraEnv: NodeJS.ProcessEnv = {},
+  onStderr?: (chunk: string) => void,
 ): Promise<CliResult> {
   const root = projectRoot(runtime);
   const workingDirectory = runtime.packaged ? packagedRuntimeRoot(runtime) : root;
@@ -186,6 +187,7 @@ export function runCli(
   return spawnCaptured(command, commandArgs, {
     cwd: workingDirectory,
     env: { ...cleanDatabaseEnvironment(), ...extraEnv },
+    onStderr,
   });
 }
 
@@ -193,8 +195,9 @@ export async function runCliChecked(
   runtime: CliRuntime,
   args: string[],
   extraEnv: NodeJS.ProcessEnv = {},
+  onStderr?: (chunk: string) => void,
 ): Promise<CliResult> {
-  const result = await runCli(runtime, args, extraEnv);
+  const result = await runCli(runtime, args, extraEnv, onStderr);
   if (result.code !== 0) throw new Error(formatCliFailure(result));
   return result;
 }

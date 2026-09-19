@@ -78,9 +78,21 @@
             <small>选择保存 PMBrain 数据库的本机位置；现有用户会继续使用原位置。</small>
           </div>
           <div class="field-group" id="postgres-fields" hidden>
-            <label for="database-url">Postgres 连接地址</label>
+            <label for="database-instance">Docker 中可用的 PMBrain 数据库</label>
+            <select id="database-instance"><option value="">正在检查 Docker 中可用的 PMBrain 数据库…</option></select>
+            <label class="database-url-label" for="database-url">Postgres 连接地址</label>
             <input id="database-url" type="password" spellcheck="false" placeholder="postgresql://postgres:postgres@127.0.0.1:5433/pmbrain" />
-            <div class="field-help"><small id="postgres-status">不会安装或新建 Docker；会安全启动已安装的 Docker Desktop 和匹配的现有容器。</small><button type="button" class="text-button" id="docker-help-open">第一次使用 Docker？查看四步教程</button></div>
+            <div class="field-help"><small id="postgres-status">已有数据库可填写地址；当前使用 PGLite 时可一键创建 Docker 数据库并迁移完整知识库。</small><button type="button" class="text-button" id="docker-help-open">第一次使用 Docker？查看四步教程</button></div>
+            <button type="button" class="solid" id="migrate-to-docker">扫描一键迁移方案</button>
+            <div class="database-safety" id="docker-migration-plan" hidden>
+              <b>迁移预检结果</b>
+              <p id="docker-migration-summary"></p>
+              <ul id="docker-migration-details"></ul>
+              <label id="docker-migration-unknown-choice" hidden><input type="checkbox" id="docker-migration-skip-unknown" /> 跳过未知旧表并继续；这些表不会进入新库，原 PGLite 和冷备会保留。</label>
+              <div class="repair-backup-actions"><button type="button" class="solid" id="docker-migration-confirm">备份并开始迁移</button><button type="button" class="ghost" id="docker-migration-cancel">取消迁移</button></div>
+            </div>
+            <small>先扫描旧库并展示处理方案；确认后才冷备、创建专属 Docker 库。全部校验和新服务检查通过后才切换，原库始终保留。</small>
+            <button type="button" class="text-button" id="docker-install-guide">未安装 Docker Desktop？查看官方安装说明</button>
           </div>
 
           <div class="section-heading separated">
@@ -486,9 +498,9 @@
         <li><b>安装并启动 Docker Desktop</b><p>Windows 10/11 需要先确认 Docker Desktop 正常运行；如提示 WSL2，请按引导安装并重启电脑。</p></li>
         <li><b>在 PowerShell 启动 pgvector Postgres</b><pre id="docker-command">docker run -d --name pmbrain-postgres -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=pmbrain -p 5433:5432 -v pmbrain-postgres-data:/var/lib/postgresql/data pgvector/pgvector:pg16</pre><button type="button" class="text-button" id="docker-copy-command">复制命令</button></li>
         <li><b>启用向量扩展</b><pre>docker exec -it pmbrain-postgres psql -U postgres -d pmbrain -c "CREATE EXTENSION IF NOT EXISTS vector;"</pre></li>
-        <li><b>回到 PMBrain 填写连接地址</b><pre>postgresql://postgres:postgres@127.0.0.1:5433/pmbrain</pre><p>选择 Docker Postgres，填写上面的地址，再保存配置。首次迁移可能需要等待几十秒。</p></li>
+        <li><b>回到 PMBrain 填写连接地址</b><pre>postgresql://postgres:postgres@127.0.0.1:5433/pmbrain</pre><p>已有数据库可填写地址并保存配置；已有 PGLite 知识库请使用页面上的一键迁移按钮。</p></li>
       </ol>
-      <div class="help-dialog-foot"><small>本教程摘自 docs/desktop/首次安装使用DockerPostgres.md。PMBrain 不会安装、创建、删除或重建 Docker 容器；启动时会尝试启动匹配的现有容器。</small><button type="button" class="solid" id="docker-help-done">我知道了</button></div>
+      <div class="help-dialog-foot"><small>本教程适合手动配置现有数据库。一键迁移会自动创建专属容器和数据库；Docker Desktop 本体需先安装。</small><button type="button" class="solid" id="docker-help-done">我知道了</button></div>
     </dialog>
     <dialog class="help-dialog custom-provider-dialog" id="custom-provider-dialog" aria-labelledby="custom-provider-title">
       <form id="custom-provider-form" novalidate>
