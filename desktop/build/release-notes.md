@@ -1,3 +1,9 @@
+## PMBrain 1.2.2
+
+- Docker 数据库列表会识别已停止的 PMBrain 管理容器和历史 `gbrain-pg`、`pmbrain-postgres-*` 容器，并明确显示“运行中/已停止”。
+- 选择已停止数据库时先启动容器，等待 TCP 与 SQL 就绪并校验 PMBrain 核心表；验证失败会恢复原停止状态，不会写入切换地址。
+- 修复 Sidecar 启动迁移测试依赖单行代码格式，导致 Linux Test 分片误报失败的问题。
+
 ## PMBrain 1.2.1
 
 - 一键迁移完成后回显当前 Postgres 地址，并自动扫描 Docker 中连接正常且包含 PMBrain 核心表的数据库。
@@ -22,9 +28,3 @@
 - 阻断提示改为实际 `.pmbrain` 失败台账和 `pmbrain` 命令；数据库索引损坏时明确要求先修复副本，禁止用 `--skip-failed` 掩盖。
 - PGLite 同步遇到已确认的 B-tree 索引结构损坏时，会核对系统目录、重建点名索引并重试当前文件；无法确认或修复失败时仍会停止同步。
 - 请求日志默认显示 `recall`、`remember`、`forget_fact` 等实际工具调用；`tools/list` 等协议发现请求可在“全部请求”中查看。
-
-## PMBrain 1.1.96
-
-- MCP 接入新增 Qwen Code、Qoder CN（通义灵码）、ZCode（智谱）、MiMo Code（小米）和 Kimi Code（月之暗面），按各客户端配置格式安全合并，不覆盖已有设置。
-- 接入列表默认保持既定顺序；已接入客户端自动排到前面，已接入和未接入两组内部仍按默认顺序排列。
-- 修复 Windows PGLite 一次性命令成功完成后进程不退出，导致桌面首次初始化和打包运行时导入超时的问题。

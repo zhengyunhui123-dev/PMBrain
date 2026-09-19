@@ -61,6 +61,19 @@ export interface ManagedPostgresDatabase {
   displayAddress: string;
   current: boolean;
   createdAt: string;
+  status: 'running' | 'stopped';
+  verified: boolean;
+}
+
+interface DockerDatabaseCandidate {
+  containerName: string;
+  username: string;
+  password: string;
+  databaseName: string;
+  hostPort: string;
+  createdAt: string;
+  running: boolean;
+  recognized: boolean;
 }
 
 interface DockerInspectPayload {
@@ -219,9 +232,43 @@ export class DatabaseRuntimeManager {
     }
     return databases.sort((left, right) => (
       Number(right.current) - Number(left.current)
+      || Number(right.status === 'running') - Number(left.status === 'running')
       || right.createdAt.localeCompare(left.createdAt)
       || left.containerName.localeCompare(right.containerName)
     ));
+  }
+
+  async activateManagedPostgresDatabase(containerName: string): Promise<ManagedPostgresDatabase> {
+    await this.ensureDockerEngine();
+    const inspect = await this.dependencies.runCommand('docker', ['inspect', containerName]);
+    if (!inspect.ok) throw new Error(`无法读取 Docker 容器 ${containerName}：${commandFailure(inspect)}`);
+    const candidate = parseDockerDatabaseCandidate(containerName, inspect.stdout);
+    if (!candidate || (!candidate.running && !candidate.recognized)) {
+      throw new Error(`容器 ${containerName} 不是已识别的 PMBrain Postgres 数据库。`);
+    }
+
+    let started = false;
+    try {
+      if (!candidate.running) {
+        const start = await this.dependencies.runCommand('docker', ['start', candidate.containerName]);
+        if (!start.ok) throw new Error(`无法启动数据库容器：${commandFailure(start)}`);
+        started = true;
+      }
+      if (!await this.waitForPostgres(candidate.containerName, candidate.username, candidate.databaseName, true)) {
+        throw new Error('Postgres 未能在等待时间内就绪。');
+      }
+      if (!await this.waitForTcpReady('127.0.0.1', Number.parseInt(candidate.hostPort, 10))) {
+        throw new Error(`本机端口 ${candidate.hostPort} 未能在等待时间内连接。`);
+      }
+      if (!await this.probePmbrainDatabase(candidate.containerName)) {
+        throw new Error('核心数据表校验未通过，不是可用的 PMBrain 数据库。');
+      }
+      return managedDatabaseFromCandidate({ ...candidate, running: true }, undefined, true);
+    } catch (error) {
+      if (started) await this.dependencies.runCommand('docker', ['stop', candidate.containerName]);
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`数据库容器 ${candidate.containerName} 无法切换：${message}`);
+    }
   }
 
   private async inspectManagedPostgres(
@@ -229,36 +276,23 @@ export class DatabaseRuntimeManager {
     rawInspect: string,
     currentDatabaseUrl?: string,
   ): Promise<ManagedPostgresDatabase | null> {
-    let inspected: DockerInspectPayload | undefined;
-    try {
-      inspected = (JSON.parse(rawInspect) as DockerInspectPayload[])[0];
-    } catch {
-      return null;
+    const candidate = parseDockerDatabaseCandidate(fallbackName, rawInspect);
+    if (!candidate) return null;
+    if (!candidate.running) {
+      return candidate.recognized
+        ? managedDatabaseFromCandidate(candidate, currentDatabaseUrl, false)
+        : null;
     }
-    if (!inspected || inspected.State?.Running !== true) return null;
-    const containerName = inspected.Name?.replace(/^\//, '') || fallbackName;
-    const env = environmentMap(inspected.Config?.Env);
-    const username = env.POSTGRES_USER?.trim();
-    const password = env.POSTGRES_PASSWORD;
-    const databaseName = env.POSTGRES_DB?.trim();
-    const binding = (inspected.HostConfig?.PortBindings?.[POSTGRES_CONTAINER_PORT] ?? [])
-      .find(item => item.HostPort && localDockerBinding(item.HostIp));
-    if (!username || password === undefined || !databaseName || !binding?.HostPort) return null;
+    if (!await this.probePmbrainDatabase(candidate.containerName)) return null;
+    return managedDatabaseFromCandidate(candidate, currentDatabaseUrl, true);
+  }
 
+  private async probePmbrainDatabase(containerName: string): Promise<boolean> {
     const probe = await this.dependencies.runCommand('docker', [
       'exec', containerName, 'sh', '-c',
       'PGPASSWORD="$POSTGRES_PASSWORD" exec psql -h 127.0.0.1 -p 5432 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 -Atc "SELECT CASE WHEN to_regclass(\'public.pages\') IS NOT NULL AND to_regclass(\'public.sources\') IS NOT NULL AND to_regclass(\'public.content_chunks\') IS NOT NULL AND to_regclass(\'public.facts\') IS NOT NULL THEN \'pmbrain\' ELSE \'other\' END"',
     ]);
-    if (!probe.ok || probe.stdout.trim() !== 'pmbrain') return null;
-
-    const databaseUrl = `postgresql://${encodeURIComponent(username)}:${encodeURIComponent(password)}@127.0.0.1:${binding.HostPort}/${encodeURIComponent(databaseName)}`;
-    return {
-      containerName,
-      databaseUrl,
-      displayAddress: `postgresql://${username}:••••@127.0.0.1:${binding.HostPort}/${databaseName}`,
-      current: sameDatabaseUrl(databaseUrl, currentDatabaseUrl),
-      createdAt: inspected.Created ?? '',
-    };
+    return probe.ok && probe.stdout.trim() === 'pmbrain';
   }
 
   private async tcpReady(host: string, port: number): Promise<boolean> {
@@ -460,6 +494,64 @@ function environmentMap(values: string[] | undefined): Record<string, string> {
     result[value.slice(0, separator)] = value.slice(separator + 1);
   }
   return result;
+}
+
+function parseDockerDatabaseCandidate(
+  fallbackName: string,
+  rawInspect: string,
+): DockerDatabaseCandidate | null {
+  let inspected: DockerInspectPayload | undefined;
+  try {
+    inspected = (JSON.parse(rawInspect) as DockerInspectPayload[])[0];
+  } catch {
+    return null;
+  }
+  if (!inspected) return null;
+  const containerName = inspected.Name?.replace(/^\//, '') || fallbackName;
+  const env = environmentMap(inspected.Config?.Env);
+  const username = env.POSTGRES_USER?.trim();
+  const password = env.POSTGRES_PASSWORD;
+  const databaseName = env.POSTGRES_DB?.trim();
+  const binding = (inspected.HostConfig?.PortBindings?.[POSTGRES_CONTAINER_PORT] ?? [])
+    .find(item => item.HostPort && localDockerBinding(item.HostIp));
+  if (!username || password === undefined || !databaseName || !binding?.HostPort) return null;
+  const labels = inspected.Config?.Labels ?? {};
+  return {
+    containerName,
+    username,
+    password,
+    databaseName,
+    hostPort: binding.HostPort,
+    createdAt: inspected.Created ?? '',
+    running: inspected.State?.Running === true,
+    recognized: (
+      labels['com.pmbrain.managed'] === 'true'
+      && labels['com.pmbrain.role'] === 'database'
+    ) || isLegacyPmbrainContainerName(containerName),
+  };
+}
+
+function managedDatabaseFromCandidate(
+  candidate: DockerDatabaseCandidate,
+  currentDatabaseUrl: string | undefined,
+  verified: boolean,
+): ManagedPostgresDatabase {
+  const databaseUrl = `postgresql://${encodeURIComponent(candidate.username)}:${encodeURIComponent(candidate.password)}@127.0.0.1:${candidate.hostPort}/${encodeURIComponent(candidate.databaseName)}`;
+  return {
+    containerName: candidate.containerName,
+    databaseUrl,
+    displayAddress: `postgresql://${candidate.username}:••••@127.0.0.1:${candidate.hostPort}/${candidate.databaseName}`,
+    current: sameDatabaseUrl(databaseUrl, currentDatabaseUrl),
+    createdAt: candidate.createdAt,
+    status: candidate.running ? 'running' : 'stopped',
+    verified,
+  };
+}
+
+function isLegacyPmbrainContainerName(containerName: string): boolean {
+  return containerName === 'gbrain-pg'
+    || containerName === 'pmbrain-postgres'
+    || containerName.startsWith('pmbrain-postgres-');
 }
 
 function localDockerBinding(hostIp: string | undefined): boolean {

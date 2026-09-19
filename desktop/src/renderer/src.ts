@@ -1172,8 +1172,11 @@ function renderDockerDatabases(databases: ManagedPostgresDatabase[]): void {
   for (const database of databases) {
     const option = document.createElement('option');
     option.value = database.containerName;
-    option.textContent = `${database.current ? '当前使用 · ' : ''}${database.containerName} · ${database.displayAddress}`;
+    const status = database.status === 'stopped' ? '已停止' : '运行中';
+    option.textContent = `${database.current ? '当前使用 · ' : ''}${database.containerName} · ${status} · ${database.displayAddress}`;
     option.dataset.databaseUrl = database.databaseUrl;
+    option.dataset.status = database.status;
+    option.dataset.displayAddress = database.displayAddress;
     option.selected = database.current;
     selected ||= database.current;
     select.append(option);
@@ -1186,8 +1189,9 @@ function renderDockerDatabases(databases: ManagedPostgresDatabase[]): void {
   const active = select.selectedOptions[0];
   if (active?.dataset.databaseUrl) databaseUrl.value = active.dataset.databaseUrl;
   select.disabled = false;
+  const stopped = databases.filter(database => database.status === 'stopped').length;
   $('#postgres-status').textContent = databases.length > 0
-    ? `已验证 ${databases.length} 个可用 PMBrain 数据库；选择后点击“保存修改并重启”完成切换。`
+    ? `发现 ${databases.length} 个 PMBrain 数据库${stopped > 0 ? `，其中 ${stopped} 个已停止，选择时会先启动并校验` : ''}；确认后点击“保存修改并重启”完成切换。`
     : 'Docker 中没有发现通过 PMBrain 核心表和连接校验的数据库；也可以手动填写地址。';
 }
 
@@ -1202,6 +1206,32 @@ async function refreshDockerDatabases(): Promise<void> {
   } catch (error) {
     renderDockerDatabases([]);
     $('#postgres-status').textContent = error instanceof Error ? error.message : String(error);
+  }
+}
+
+async function selectDockerDatabase(select: HTMLSelectElement): Promise<void> {
+  const option = select.selectedOptions[0];
+  if (!option?.dataset.databaseUrl) return;
+  if (option.dataset.status !== 'stopped') {
+    $<HTMLInputElement>('#database-url').value = option.dataset.databaseUrl;
+    return;
+  }
+
+  select.disabled = true;
+  $('#postgres-status').textContent = `正在启动 ${option.value}，等待 Postgres 就绪并校验 PMBrain 核心表…`;
+  try {
+    const database = await window.pmbrainDesktop.activateDockerDatabase(option.value);
+    option.dataset.databaseUrl = database.databaseUrl;
+    option.dataset.status = database.status;
+    option.textContent = `${database.containerName} · 运行中 · ${database.displayAddress}`;
+    $<HTMLInputElement>('#database-url').value = database.databaseUrl;
+    $('#postgres-status').textContent = `${database.containerName} 已启动并通过 PMBrain 数据库校验；点击“保存修改并重启”完成切换。`;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await refreshDockerDatabases();
+    $('#postgres-status').textContent = message;
+  } finally {
+    select.disabled = false;
   }
 }
 
@@ -2297,8 +2327,7 @@ document.querySelectorAll<HTMLInputElement>('input[name="engine"]').forEach((inp
   if (selectedEngine() === 'postgres') void refreshDockerDatabases();
 }));
 $<HTMLSelectElement>('#database-instance').addEventListener('change', (event) => {
-  const option = (event.currentTarget as HTMLSelectElement).selectedOptions[0];
-  if (option?.dataset.databaseUrl) $<HTMLInputElement>('#database-url').value = option.dataset.databaseUrl;
+  void selectDockerDatabase(event.currentTarget as HTMLSelectElement);
 });
 $<HTMLInputElement>('#database-url').addEventListener('input', () => {
   $<HTMLSelectElement>('#database-instance').value = '__manual__';

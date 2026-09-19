@@ -37,6 +37,7 @@ export interface DreamPhaseResult {
 export interface AutoThinkPhaseOpts {
   brainDir?: string;
   dryRun: boolean;
+  model?: string;
   /** Inject LLM client (tests). Defaults to the real Anthropic SDK. */
   client?: ThinkLLMClient;
   /** Override the audit-ledger path (tests). */
@@ -115,6 +116,7 @@ export async function runPhaseAutoThink(
   });
 
   const modelId = await resolveModel(engine, {
+    cliFlag: opts.model,
     configKey: 'models.auto_think',
     deprecatedConfigKey: 'dream.auto_think.model',
     tier: 'deep',

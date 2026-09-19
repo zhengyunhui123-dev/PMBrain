@@ -174,6 +174,7 @@ export interface PMBrainDesktopApi {
   onThemeState(listener: (state: DesktopThemeState) => void): () => void;
   getSetup(): Promise<DesktopSetupState>;
   listDockerDatabases(): Promise<ManagedPostgresDatabase[]>;
+  activateDockerDatabase(containerName: string): Promise<ManagedPostgresDatabase>;
   getIntegrations(probe?: boolean): Promise<IntegrationInfo[]>;
   chooseEmbeddingRebuild(choice: 'wait' | 'defer'): Promise<void>;
   onState(listener: (state: SidecarState) => void): () => void;
@@ -244,6 +245,7 @@ const api: PMBrainDesktopApi = {
   },
   getSetup: () => ipcRenderer.invoke('desktop:get-setup'),
   listDockerDatabases: () => ipcRenderer.invoke('desktop:list-docker-databases'),
+  activateDockerDatabase: (containerName) => ipcRenderer.invoke('desktop:activate-docker-database', containerName),
   getIntegrations: (probe) => ipcRenderer.invoke('desktop:get-integrations', probe),
   chooseEmbeddingRebuild: (choice) => ipcRenderer.invoke('desktop:choose-embedding-rebuild', choice),
   onState: (listener) => {

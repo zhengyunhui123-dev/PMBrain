@@ -125,9 +125,10 @@ window.pmbrainDesktop = {
     port: 3132
    }),
    listDockerDatabases: async () => (${postgres ? `[
-    { containerName: 'pmbrain-postgres-694e698fdd7e', databaseUrl: 'postgresql://pmbrain:secret@127.0.0.1:55142/pmbrain', displayAddress: 'postgresql://pmbrain:••••@127.0.0.1:55142/pmbrain', current: true, createdAt: '2026-09-19T07:02:40Z' },
-    { containerName: 'pmbrain-postgres-99bea4574277', databaseUrl: 'postgresql://pmbrain:secret@127.0.0.1:61305/pmbrain', displayAddress: 'postgresql://pmbrain:••••@127.0.0.1:61305/pmbrain', current: false, createdAt: '2026-09-18T00:27:48Z' }
-   ]` : '[]'}),
+    { containerName: 'pmbrain-postgres-694e698fdd7e', databaseUrl: 'postgresql://pmbrain:secret@127.0.0.1:55142/pmbrain', displayAddress: 'postgresql://pmbrain:••••@127.0.0.1:55142/pmbrain', current: true, createdAt: '2026-09-19T07:02:40Z', status: 'running', verified: true },
+    { containerName: 'gbrain-pg', databaseUrl: 'postgresql://postgres:secret@127.0.0.1:5433/gbrain', displayAddress: 'postgresql://postgres:••••@127.0.0.1:5433/gbrain', current: false, createdAt: '2026-08-16T00:27:48Z', status: 'stopped', verified: false }
+  ]` : '[]'}),
+   activateDockerDatabase: async (containerName) => ({ containerName, databaseUrl: 'postgresql://postgres:secret@127.0.0.1:5433/gbrain', displayAddress: 'postgresql://postgres:••••@127.0.0.1:5433/gbrain', current: false, createdAt: '2026-08-16T00:27:48Z', status: 'running', verified: true }),
   getIntegrations: async () => (await window.pmbrainDesktop.getSetup()).integrations,
   getState: async () => (${panel === 'recovery'
     ? "({ phase: 'failed', message: 'PGLite database is already owned by another process (pid=37564, type=desktop-sidecar).' })"

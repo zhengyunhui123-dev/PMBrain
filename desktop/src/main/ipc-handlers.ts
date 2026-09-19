@@ -51,6 +51,7 @@ export interface DesktopIpcHandlers {
   updateState: () => UpdateState | null;
   setup: () => Promise<unknown>;
   listDockerDatabases: () => Promise<unknown>;
+  activateDockerDatabase: (containerName: string) => Promise<unknown>;
   integrations: (probe: boolean) => Promise<unknown>;
   inspectKnowledgeSourceDirectory: (path: string) => DesktopKnowledgeSourceStatus;
   initializeKnowledgeSourceGit: (path: string) => DesktopKnowledgeSourceStatus;
@@ -115,6 +116,7 @@ export function registerDesktopIpcHandlers(handlers: DesktopIpcHandlers): void {
   registerTrustedHandler('desktop:get-update-state', handlers, () => handlers.updateState());
   registerTrustedHandler('desktop:get-setup', handlers, () => handlers.setup());
   registerTrustedHandler('desktop:list-docker-databases', handlers, () => handlers.listDockerDatabases());
+  registerTrustedHandler('desktop:activate-docker-database', handlers, (_event, containerName: string) => handlers.activateDockerDatabase(containerName));
   registerTrustedHandler('desktop:get-integrations', handlers, (_event, probe?: boolean) => handlers.integrations(probe === true));
   registerTrustedHandler('desktop:inspect-knowledge-source', handlers, (_event, path: string) => handlers.inspectKnowledgeSourceDirectory(path));
   registerTrustedHandler('desktop:initialize-knowledge-source-git', handlers, (_event, path: string) => handlers.initializeKnowledgeSourceGit(path));

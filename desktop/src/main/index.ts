@@ -402,6 +402,7 @@ if (!app.requestSingleInstanceLock()) {
       updateState: () => updateController.currentState,
       setup: () => setupController.currentState(),
       listDockerDatabases: () => databaseRuntime.listManagedPostgresDatabases(getSetupInfo().current.databaseUrl),
+      activateDockerDatabase: containerName => databaseRuntime.activateManagedPostgresDatabase(containerName),
       integrations: probe => probe
         ? setupController.integrationStates()
         : Promise.resolve(listIntegrations(sidecarController.current?.port)),

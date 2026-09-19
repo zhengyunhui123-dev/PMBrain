@@ -282,11 +282,15 @@ describe('desktop settings renderer contracts', () => {
     expect(html).toContain('正在检查 Docker 中可用的 PMBrain 数据库');
     expect(renderer).toContain('setup.current.databaseUrl ||');
     expect(renderer).toContain('listDockerDatabases');
+    expect(renderer).toContain('activateDockerDatabase');
     expect(renderer).toContain('renderDockerDatabases');
+    expect(renderer).toContain("database.status === 'stopped' ? '已停止' : '运行中'");
     expect(renderer).toContain("option.dataset.databaseUrl");
     expect(renderer).toContain("$<HTMLSelectElement>('#database-instance').addEventListener('change'");
     expect(main).toContain("'desktop:list-docker-databases'");
+    expect(main).toContain("'desktop:activate-docker-database'");
     expect(preload).toContain("'desktop:list-docker-databases'");
+    expect(preload).toContain("'desktop:activate-docker-database'");
   });
 
   test('立即显示 MCP 卡片，并在后台刷新真实连接状态', () => {

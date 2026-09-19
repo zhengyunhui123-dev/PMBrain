@@ -182,21 +182,21 @@ describe('desktop database runtime manager', () => {
     expect(runtime.commands.some(args => args[0] === 'exec' && args.some(value => value.includes("to_regclass('public.facts')")))).toBe(true);
   });
 
-  test('keeps legacy named migration databases discoverable but excludes unhealthy databases', async () => {
+  test('discovers stopped legacy PMBrain databases without listing unrelated stopped Postgres containers', async () => {
     const runtime = fakeRuntime({
       command: args => {
         if (args[0] === 'info') return { ok: true, stdout: 'ready', stderr: '' };
         if (args[0] === 'container') {
-          return { ok: true, stdout: 'pmbrain-postgres-legacy\npmbrain-postgres-broken\n', stderr: '' };
+          return { ok: true, stdout: 'gbrain-pg\npmbrain-classifi\npmbrain-postgres-broken\n', stderr: '' };
         }
-        if (args[0] === 'inspect' && args[1] === 'pmbrain-postgres-legacy') {
-          return managedInspectResult({ name: 'pmbrain-postgres-legacy', hostPort: '55434', managed: false });
+        if (args[0] === 'inspect' && args[1] === 'gbrain-pg') {
+          return managedInspectResult({ name: 'gbrain-pg', hostPort: '5433', running: false, managed: false });
+        }
+        if (args[0] === 'inspect' && args[1] === 'pmbrain-classifi') {
+          return managedInspectResult({ name: 'pmbrain-classifi', hostPort: '55434', running: false, managed: false });
         }
         if (args[0] === 'inspect' && args[1] === 'pmbrain-postgres-broken') {
           return managedInspectResult({ name: 'pmbrain-postgres-broken', hostPort: '55435' });
-        }
-        if (args[0] === 'exec' && args[1] === 'pmbrain-postgres-legacy') {
-          return { ok: true, stdout: 'pmbrain\n', stderr: '' };
         }
         if (args[0] === 'exec') return { ok: false, stdout: '', stderr: 'database unavailable' };
         return { ok: false, stdout: '', stderr: 'unexpected' };
@@ -204,8 +204,66 @@ describe('desktop database runtime manager', () => {
     });
 
     await expect(runtime.manager.listManagedPostgresDatabases()).resolves.toEqual([
-      expect.objectContaining({ containerName: 'pmbrain-postgres-legacy', current: false }),
+      expect.objectContaining({
+        containerName: 'gbrain-pg',
+        current: false,
+        status: 'stopped',
+        verified: false,
+      }),
     ]);
+    expect(runtime.commands.some(args => args[0] === 'exec' && args[1] === 'gbrain-pg')).toBe(false);
+  });
+
+  test('starts and validates a stopped legacy PMBrain database before returning its address', async () => {
+    const runtime = fakeRuntime({
+      tcpReady: true,
+      command: args => {
+        if (args[0] === 'info') return { ok: true, stdout: 'ready', stderr: '' };
+        if (args[0] === 'inspect' && args[1] === 'gbrain-pg') {
+          return managedInspectResult({ name: 'gbrain-pg', hostPort: '5433', running: false, managed: false });
+        }
+        if (args[0] === 'start') return { ok: true, stdout: 'gbrain-pg', stderr: '' };
+        if (args[0] === 'exec' && args.includes('pg_isready')) return { ok: true, stdout: 'ready', stderr: '' };
+        if (args[0] === 'exec' && args.some(value => value.includes('SELECT 1'))) {
+          return { ok: true, stdout: '1\n', stderr: '' };
+        }
+        if (args[0] === 'exec' && args.some(value => value.includes("to_regclass('public.facts')"))) {
+          return { ok: true, stdout: 'pmbrain\n', stderr: '' };
+        }
+        return { ok: false, stdout: '', stderr: 'unexpected' };
+      },
+    });
+
+    await expect(runtime.manager.activateManagedPostgresDatabase('gbrain-pg')).resolves.toMatchObject({
+      containerName: 'gbrain-pg',
+      status: 'running',
+      verified: true,
+      databaseUrl: 'postgresql://pmbrain:secret@127.0.0.1:5433/pmbrain',
+    });
+    expect(runtime.commands).toContainEqual(['start', 'gbrain-pg']);
+  });
+
+  test('restores a stopped candidate when PMBrain table validation fails', async () => {
+    const runtime = fakeRuntime({
+      tcpReady: true,
+      command: args => {
+        if (args[0] === 'info') return { ok: true, stdout: 'ready', stderr: '' };
+        if (args[0] === 'inspect' && args[1] === 'gbrain-pg') {
+          return managedInspectResult({ name: 'gbrain-pg', hostPort: '5433', running: false, managed: false });
+        }
+        if (args[0] === 'start' || args[0] === 'stop') return { ok: true, stdout: 'gbrain-pg', stderr: '' };
+        if (args[0] === 'exec' && args.includes('pg_isready')) return { ok: true, stdout: 'ready', stderr: '' };
+        if (args[0] === 'exec' && args.some(value => value.includes('SELECT 1'))) {
+          return { ok: true, stdout: '1\n', stderr: '' };
+        }
+        if (args[0] === 'exec') return { ok: true, stdout: 'other\n', stderr: '' };
+        return { ok: false, stdout: '', stderr: 'unexpected' };
+      },
+    });
+
+    await expect(runtime.manager.activateManagedPostgresDatabase('gbrain-pg'))
+      .rejects.toThrow('不是可用的 PMBrain 数据库');
+    expect(runtime.commands).toContainEqual(['stop', 'gbrain-pg']);
   });
 
   test('does not accept the temporary socket-only server during first initialization', async () => {
