@@ -81,8 +81,15 @@
             <label for="database-url">Postgres 连接地址</label>
             <input id="database-url" type="password" spellcheck="false" placeholder="postgresql://postgres:postgres@127.0.0.1:5433/pmbrain" />
             <div class="field-help"><small id="postgres-status">已有数据库可填写地址；当前使用 PGLite 时可一键创建 Docker 数据库并迁移完整知识库。</small><button type="button" class="text-button" id="docker-help-open">第一次使用 Docker？查看四步教程</button></div>
-            <button type="button" class="solid" id="migrate-to-docker">自动创建 Docker Postgres 并迁移当前知识库</button>
-            <small>需先安装 Docker Desktop；PMBrain 会创建专属容器和数据卷。迁移前备份原库，逐表验证后才切换，原库始终保留。</small>
+            <button type="button" class="solid" id="migrate-to-docker">扫描一键迁移方案</button>
+            <div class="database-safety" id="docker-migration-plan" hidden>
+              <b>迁移预检结果</b>
+              <p id="docker-migration-summary"></p>
+              <ul id="docker-migration-details"></ul>
+              <label id="docker-migration-unknown-choice" hidden><input type="checkbox" id="docker-migration-skip-unknown" /> 跳过未知旧表并继续；这些表不会进入新库，原 PGLite 和冷备会保留。</label>
+              <div class="repair-backup-actions"><button type="button" class="solid" id="docker-migration-confirm">备份并开始迁移</button><button type="button" class="ghost" id="docker-migration-cancel">取消迁移</button></div>
+            </div>
+            <small>先扫描旧库并展示处理方案；确认后才冷备、创建专属 Docker 库。全部校验和新服务检查通过后才切换，原库始终保留。</small>
             <button type="button" class="text-button" id="docker-install-guide">未安装 Docker Desktop？查看官方安装说明</button>
           </div>
 

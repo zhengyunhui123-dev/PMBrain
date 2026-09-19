@@ -2479,18 +2479,66 @@ $('#docker-help-close').addEventListener('click', () => dockerHelp.close());
 $('#docker-help-done').addEventListener('click', () => dockerHelp.close());
 $('#docker-copy-command').addEventListener('click', () => void window.pmbrainDesktop.copy($('#docker-command').textContent || ''));
 $('#docker-install-guide').addEventListener('click', () => void window.pmbrainDesktop.openDockerInstallGuide());
+let dockerMigrationPlan: Awaited<ReturnType<typeof window.pmbrainDesktop.inspectDockerMigration>> | null = null;
 $('#migrate-to-docker').addEventListener('click', async () => {
   const button = $<HTMLButtonElement>('#migrate-to-docker');
-  setBusy(button, true, '正在迁移完整知识库…');
+  setBusy(button, true, '正在扫描旧库…');
   clearNotices();
   try {
-    const result = await window.pmbrainDesktop.migrateToDocker();
-    populate(await window.pmbrainDesktop.getSetup());
-    setNotice('success', `迁移完成：${result.tables} 张表、${result.rows} 条记录已核对；原 PGLite 冷备：${result.backupDirectory}。`);
+    const plan = await window.pmbrainDesktop.inspectDockerMigration();
+    dockerMigrationPlan = plan;
+    const counts = { direct: 0, convert: 0, skip: 0, unknown: 0 };
+    for (const table of plan.tables) counts[table.action] += 1;
+    $('#docker-migration-summary').textContent = `旧库 Schema ${plan.schemaVersion ?? '未记录'}：${counts.direct} 张直接迁移、${counts.convert} 张自动转换、${counts.skip} 张跳过、${counts.unknown} 张需要决定。`;
+    const details = $('#docker-migration-details');
+    details.replaceChildren();
+    for (const table of plan.tables.filter(item => item.action !== 'direct')) {
+      const line = document.createElement('li');
+      const label = table.action === 'convert' ? '自动转换' : table.action === 'skip' ? '跳过' : '未知旧表';
+      line.textContent = `${label}：${table.name}（${table.rows} 条）— ${table.reason}`;
+      details.append(line);
+    }
+    $<HTMLInputElement>('#docker-migration-skip-unknown').checked = false;
+    const blocked = plan.tables.some(table => table.action === 'unknown' && table.skippable === false);
+    $<HTMLElement>('#docker-migration-unknown-choice').hidden = counts.unknown === 0 || blocked;
+    $<HTMLButtonElement>('#docker-migration-confirm').disabled = counts.unknown > 0;
+    if (blocked) {
+      const line = document.createElement('li');
+      line.textContent = '正式数据存在无法安全转换的结构，本次迁移已阻止；请保留旧库并查看诊断报告。';
+      details.append(line);
+    }
+    $<HTMLElement>('#docker-migration-plan').hidden = false;
   } catch (error) {
     setNotice('error', error instanceof Error ? error.message : String(error));
   } finally {
-    setBusy(button, false, '自动创建 Docker Postgres 并迁移当前知识库');
+    setBusy(button, false, '重新扫描迁移方案');
+  }
+});
+$<HTMLInputElement>('#docker-migration-skip-unknown').addEventListener('change', () => {
+  const blocked = dockerMigrationPlan?.tables.some(table => table.action === 'unknown' && table.skippable === false);
+  $<HTMLButtonElement>('#docker-migration-confirm').disabled = !!blocked || !$<HTMLInputElement>('#docker-migration-skip-unknown').checked;
+});
+$('#docker-migration-cancel').addEventListener('click', () => {
+  dockerMigrationPlan = null;
+  $<HTMLElement>('#docker-migration-plan').hidden = true;
+});
+$('#docker-migration-confirm').addEventListener('click', async () => {
+  const plan = dockerMigrationPlan;
+  if (!plan) return;
+  const button = $<HTMLButtonElement>('#docker-migration-confirm');
+  setBusy(button, true, '正在迁移并校验…');
+  clearNotices();
+  try {
+    const result = await window.pmbrainDesktop.migrateToDocker(plan.fingerprint, $<HTMLInputElement>('#docker-migration-skip-unknown').checked);
+    dockerMigrationPlan = null;
+    $<HTMLElement>('#docker-migration-plan').hidden = true;
+    populate(await window.pmbrainDesktop.getSetup());
+    const skipped = result.skippedTables.length > 0 ? `；跳过 ${result.skippedTables.length} 张历史或用户确认的旧表` : '';
+    setNotice('success', `迁移完成：${result.tables} 张表、${result.rows} 条记录已核对${skipped}；原 PGLite 冷备：${result.backupDirectory}；报告：${result.reportPath}。`);
+  } catch (error) {
+    setNotice('error', error instanceof Error ? error.message : String(error));
+  } finally {
+    setBusy(button, false, '备份并开始迁移');
   }
 });
 $('#update-action').addEventListener('click', async () => {

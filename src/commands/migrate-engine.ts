@@ -11,7 +11,9 @@ import { createEngine } from '../core/engine-factory.ts';
 import { loadConfig, saveConfig, toEngineConfig, gbrainPath, type GBrainConfig } from '../core/config.ts';
 import type { BrainEngine } from '../core/engine.ts';
 import type { EngineConfig } from '../core/types.ts';
-import { writeFileSync, readFileSync, existsSync, unlinkSync } from 'fs';
+import { writeFileSync, readFileSync, existsSync, unlinkSync, mkdtempSync, rmSync } from 'fs';
+import { tmpdir } from 'node:os';
+import { basename, dirname, join, resolve } from 'node:path';
 import { createProgress } from '../core/progress.ts';
 import { getCliOptions, cliOptsToProgressOptions } from '../core/cli-options.ts';
 import { redactSourceConfig } from '../core/source-config-redact.ts';
@@ -21,6 +23,15 @@ interface MigrateOpts {
   targetUrl?: string;
   targetPath?: string;
   force: boolean;
+}
+
+function transferCategory(table: string): string {
+  if (table === 'pages' || table === 'files' || table === 'raw_data' || table.startsWith('ingest_')) return '原始资料与知识页';
+  if (table === 'content_chunks' || table.includes('embedding')) return '知识分块与向量';
+  if (table === 'facts' || table.startsWith('facts_')) return 'Facts 记忆';
+  if (table === 'takes' || table.startsWith('takes_')) return '观点与总结';
+  if (table === 'links' || table.includes('link') || table.includes('edge')) return '知识关系';
+  return '设置与其他数据';
 }
 
 function parseArgs(args: string[]): MigrateOpts {
@@ -87,6 +98,23 @@ export async function runMigrateEngine(sourceEngine: BrainEngine, args: string[]
     if (config.engine !== 'pglite' || opts.targetEngine !== 'postgres' || !args.includes('--no-switch') || opts.force) {
       throw new Error('完整迁移仅支持 PGLite → 空 Postgres，并且必须使用 --no-switch；不能使用 --force');
     }
+    if (args.includes('--preflight')) {
+      const { PGLiteEngine } = await import('../core/pglite-engine.ts');
+      const { inspectCompleteBrain } = await import('./full-engine-transfer.ts');
+      const directory = mkdtempSync(join(tmpdir(), 'pmbrain-transfer-preflight-'));
+      const reference = new PGLiteEngine();
+      try {
+        await reference.connect({ engine: 'pglite', database_path: join(directory, 'schema.pglite') });
+        await reference.initSchema();
+        console.log(JSON.stringify(await inspectCompleteBrain(sourceEngine, reference)));
+      } finally {
+        await reference.disconnect();
+        if (dirname(resolve(directory)) === resolve(tmpdir()) && basename(directory).startsWith('pmbrain-transfer-preflight-')) {
+          rmSync(directory, { recursive: true, force: true });
+        }
+      }
+      return;
+    }
     const databaseUrl = opts.targetUrl || process.env.PMBRAIN_MIGRATION_TARGET_URL;
     if (!databaseUrl) throw new Error('未提供目标 Postgres 数据库地址');
     const target = await createEngine({ engine: 'postgres', database_url: databaseUrl });
@@ -94,7 +122,20 @@ export async function runMigrateEngine(sourceEngine: BrainEngine, args: string[]
       await target.connect({ engine: 'postgres', database_url: databaseUrl });
       await target.initSchema();
       const { transferCompleteBrain } = await import('./full-engine-transfer.ts');
-      const receipt = await transferCompleteBrain(sourceEngine, target);
+      const rawSkipTables = JSON.parse(process.env.PMBRAIN_MIGRATION_SKIP_TABLES || '[]') as unknown;
+      if (!Array.isArray(rawSkipTables) || !rawSkipTables.every(value => typeof value === 'string' && /^[a-z][a-z0-9_]*$/.test(value))) {
+        throw new Error('迁移跳过表清单无效');
+      }
+      const receipt = await transferCompleteBrain(sourceEngine, target, {
+        planFingerprint: process.env.PMBRAIN_MIGRATION_PLAN_FINGERPRINT,
+        skipUnknownTables: rawSkipTables,
+        onTableVerified: (name, completed, total, rows) => {
+          console.error(`[pmbrain-transfer]${JSON.stringify({ category: transferCategory(name), completed, total, rows })}`);
+        },
+        onTableProgress: (name, copied, total) => {
+          console.error(`[pmbrain-transfer]${JSON.stringify({ category: transferCategory(name), copied, tableTotal: total })}`);
+        },
+      });
       console.log(JSON.stringify(receipt));
     } finally {
       await target.disconnect();

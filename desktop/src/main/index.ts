@@ -414,9 +414,13 @@ if (!app.requestSingleInstanceLock()) {
         if (databaseTransferController.inProgress) throw new Error('完整知识库迁移进行中，请等待完成后再保存设置。');
         return setupController.apply(payload);
       },
-      migrateToDocker: () => {
+      inspectDockerMigration: () => {
+        if (setupController.inProgress) throw new Error('基础配置正在保存，请完成后再扫描数据库。');
+        return databaseTransferController.preflight();
+      },
+      migrateToDocker: (planFingerprint, skipUnknown) => {
         if (setupController.inProgress) throw new Error('基础配置正在保存，请完成后再迁移数据库。');
-        return databaseTransferController.migrate();
+        return databaseTransferController.migrate(planFingerprint, skipUnknown);
       },
       openDockerInstallGuide: () => shell.openExternal('https://docs.docker.com/desktop/setup/install/windows-install/'),
       chooseEmbeddingRebuild,

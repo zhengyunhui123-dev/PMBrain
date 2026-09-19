@@ -1371,7 +1371,10 @@ async function handleCliOnly(command: string, args: string[]) {
   if (command === 'serve') {
     console.error(`[serve] opening database (pid=${process.pid}); /health starts after migrations finish`);
   }
-  const engine = await connectEngine({ strictMigrations: command === 'serve' });
+  const engine = await connectEngine({
+    strictMigrations: command === 'serve',
+    probeOnly: command === 'migrate' && args.includes('--full-copy') && args.includes('--no-switch'),
+  });
   let commandFailed = false;
   try {
     switch (command) {
@@ -1879,11 +1882,16 @@ async function connectEngine(opts?: { probeOnly?: boolean; strictMigrations?: bo
   let effectiveConfig = config;
 
   const { createEngine } = await import('./core/engine-factory.ts');
-  const engine = await createEngine(toEngineConfig(config));
+  const sourceBackupPath = process.argv.includes('--full-copy') && process.argv.includes('--no-switch')
+    ? process.env.PMBRAIN_MIGRATION_SOURCE_BACKUP_PATH : undefined;
+  const connectionConfig = sourceBackupPath && config.engine === 'pglite'
+    ? { ...toEngineConfig(config), database_path: sourceBackupPath }
+    : toEngineConfig(config);
+  const engine = await createEngine(connectionConfig);
   const noRetry = process.argv.includes('--no-retry-connect') ||
                   process.env.GBRAIN_NO_RETRY_CONNECT === '1';
   const { connectWithRetry } = await import('./core/db.ts');
-  await connectWithRetry(engine, toEngineConfig(config), { noRetry });
+  await connectWithRetry(engine, connectionConfig, { noRetry });
 
   // v0.30.1 (Codex X1 / C2): probeOnly skips both hasPendingMigrations() probe
   // AND initSchema(). Used by `get_health` MCP op + `gbrain upgrade --status`

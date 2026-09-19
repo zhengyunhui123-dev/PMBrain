@@ -5,7 +5,7 @@ import { createConnection, createServer } from 'node:net';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
-const DEFAULT_DOCKER_STARTUP_ATTEMPTS = 90;
+const DEFAULT_DOCKER_STARTUP_ATTEMPTS = 180;
 const DEFAULT_DATABASE_READINESS_ATTEMPTS = 60;
 const DEFAULT_RETRY_INTERVAL_MS = 1_000;
 const POSTGRES_CONTAINER_PORT = '5432/tcp';
