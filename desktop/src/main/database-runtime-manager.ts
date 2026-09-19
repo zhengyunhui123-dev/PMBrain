@@ -176,15 +176,10 @@ export class DatabaseRuntimeManager {
     } finally {
       rmSync(envDirectory, { recursive: true, force: true });
     }
-    if (!await this.waitForPostgres(containerName, 'pmbrain', 'pmbrain')
+    if (!await this.waitForPostgres(containerName, 'pmbrain', 'pmbrain', true)
       || !await this.waitForTcpReady('127.0.0.1', port)) {
       throw new Error(`Postgres 容器 ${containerName} 未能就绪。容器和数据卷已保留，请查看 Docker 日志后重试。`);
     }
-    const extension = await this.dependencies.runCommand('docker', [
-      'exec', containerName, 'psql', '-U', 'pmbrain', '-d', 'pmbrain', '-v', 'ON_ERROR_STOP=1',
-      '-c', 'CREATE EXTENSION IF NOT EXISTS vector',
-    ]);
-    if (!extension.ok) throw new Error(`Postgres 容器 ${containerName} 的 pgvector 扩展初始化失败：${commandFailure(extension)}`);
     return {
       containerName,
       volumeName,
@@ -294,14 +289,22 @@ export class DatabaseRuntimeManager {
     containerName: string,
     username: string,
     databaseName: string,
+    verifySql = false,
   ): Promise<boolean> {
-    const args = ['exec', containerName, 'pg_isready'];
+    const args = ['exec', containerName, 'pg_isready', '-h', '127.0.0.1', '-p', '5432'];
     if (username) args.push('-U', username);
     if (databaseName) args.push('-d', databaseName);
 
     for (let attempt = 0; attempt < this.databaseReadinessAttempts; attempt += 1) {
       const result = await this.dependencies.runCommand('docker', args);
-      if (result.ok) return true;
+      if (result.ok) {
+        if (!verifySql) return true;
+        const probe = await this.dependencies.runCommand('docker', [
+          'exec', containerName, 'sh', '-c',
+          'PGPASSWORD="$POSTGRES_PASSWORD" exec psql -h 127.0.0.1 -p 5432 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 -Atc "SELECT 1"',
+        ]);
+        if (probe.ok && probe.stdout.trim() === '1') return true;
+      }
       if (attempt + 1 < this.databaseReadinessAttempts) {
         await this.dependencies.sleep(this.retryIntervalMs);
       }

@@ -79,7 +79,11 @@ describe('desktop database runtime manager', () => {
   test('creates a separate local pgvector database with a volume when Docker is ready', async () => {
     const runtime = fakeRuntime({
       tcpReady: [false, true],
-      command: args => ({ ok: true, stdout: args[0] === 'run' ? 'container-id' : 'ready', stderr: '' }),
+      command: args => ({
+        ok: true,
+        stdout: args[0] === 'run' ? 'container-id' : args.some(value => value.includes('SELECT 1')) ? '1' : 'ready',
+        stderr: '',
+      }),
     });
 
     const result = await runtime.manager.provisionLocalPostgres();
@@ -91,8 +95,42 @@ describe('desktop database runtime manager', () => {
     expect(run).toContain('127.0.0.1:55432:5432');
     expect(run).toContain('pgvector/pgvector:pg16');
     expect(run.some(value => value.includes('POSTGRES_PASSWORD='))).toBe(false);
-    expect(runtime.commands.some(args => args[0] === 'exec' && args.includes('CREATE EXTENSION IF NOT EXISTS vector'))).toBe(true);
+    expect(runtime.commands).toContainEqual(expect.arrayContaining([
+      'exec', expect.stringMatching(/^pmbrain-postgres-/), 'pg_isready',
+      '-h', '127.0.0.1', '-p', '5432', '-U', 'pmbrain', '-d', 'pmbrain',
+    ]));
+    expect(runtime.commands.some(args => args[0] === 'exec' && args.some(value => value.includes('SELECT 1')))).toBe(true);
+    expect(runtime.commands.some(args => args[0] === 'exec' && args.includes('CREATE EXTENSION IF NOT EXISTS vector'))).toBe(false);
     expect(runtime.commands.some(args => ['rm', 'stop', 'volume'].includes(args[0]!))).toBe(false);
+  });
+
+  test('does not accept the temporary socket-only server during first initialization', async () => {
+    let tcpReadinessChecks = 0;
+    let sqlChecks = 0;
+    const runtime = fakeRuntime({
+      tcpReady: true,
+      databaseReadinessAttempts: 4,
+      command: args => {
+        if (args[0] === 'info' || args[0] === 'run') return { ok: true, stdout: 'ready', stderr: '' };
+        if (args[0] === 'exec' && args.includes('pg_isready')) {
+          expect(args).toEqual(expect.arrayContaining(['-h', '127.0.0.1', '-p', '5432']));
+          tcpReadinessChecks += 1;
+          return { ok: tcpReadinessChecks >= 2, stdout: '', stderr: '' };
+        }
+        if (args[0] === 'exec' && args.some(value => value.includes('SELECT 1'))) {
+          sqlChecks += 1;
+          return { ok: sqlChecks >= 2, stdout: sqlChecks >= 2 ? '1' : '', stderr: 'server is restarting' };
+        }
+        return { ok: false, stdout: '', stderr: 'unexpected' };
+      },
+    });
+
+    await expect(runtime.manager.provisionLocalPostgres()).resolves.toMatchObject({
+      databaseUrl: expect.stringContaining('@127.0.0.1:55432/pmbrain'),
+    });
+
+    expect(tcpReadinessChecks).toBe(3);
+    expect(sqlChecks).toBe(2);
   });
 
   test('PGLite never probes TCP or Docker', async () => {
@@ -167,7 +205,7 @@ describe('desktop database runtime manager', () => {
     });
     expect(runtime.launches).toEqual(['C:\\Program Files\\Docker\\Docker\\Docker Desktop.exe']);
     expect(runtime.commands).toContainEqual(['start', 'company-brain-db']);
-    expect(runtime.commands.some((args) => args[0] === 'exec' && args.includes('pg_isready'))).toBe(true);
+    expect(runtime.commands.some((args) => args[0] === 'exec' && args.includes('pg_isready') && args.includes('127.0.0.1'))).toBe(true);
   });
 
   test('falls back from configured and legacy names to a container matching the URL port', async () => {

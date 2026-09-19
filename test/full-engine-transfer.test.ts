@@ -165,7 +165,9 @@ describe('complete engine transfer', () => {
     const postgres = new PostgresEngine();
     try {
       await postgres.connect({ engine: 'postgres', database_url: provisioned.databaseUrl });
+      expect(await postgres.executeRaw<{ extname: string }>("SELECT extname FROM pg_extension WHERE extname IN ('vector', 'pg_trgm', 'pgcrypto') ORDER BY extname")).toEqual([]);
       await postgres.initSchema();
+      expect((await postgres.executeRaw<{ extname: string }>("SELECT extname FROM pg_extension WHERE extname IN ('vector', 'pg_trgm', 'pgcrypto') ORDER BY extname")).map(row => row.extname)).toEqual(['pg_trgm', 'pgcrypto', 'vector']);
       expect((await postgres.executeRaw<{ type: string }>('SELECT jsonb_typeof($1::text::jsonb) AS type', [JSON.stringify([{ probe: true }])])).at(0)?.type).toBe('array');
       const receipt = await transferCompleteBrain(source, postgres);
       expect(receipt.status).toBe('verified');

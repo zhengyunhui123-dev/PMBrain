@@ -1,8 +1,9 @@
-## PMBrain 1.1.99
+## PMBrain 1.2.0
 
 - Docker 迁移先扫描完整旧库并展示处理方案；历史备份表按集中规则跳过，旧库重复 Facts 在新库保留并修复主键。
 - 迁移前保留 PGLite 冷备，向全新 Docker Postgres 复制数据并逐表校验；仅在新服务健康后切换，失败则恢复原连接并保存报告。
 - Docker Desktop 自动启动后等待引擎就绪的时间延长，迁移进度显示当前类别和已复制记录数。
+- 新建 PostgreSQL 容器只在 TCP `pg_isready` 和真实 `SELECT 1` 都成功后继续，避免把首次初始化的临时 Unix socket 服务误判为正式数据库；扩展统一由 PMBrain Schema 初始化。
 
 ## PMBrain 1.1.98
 
