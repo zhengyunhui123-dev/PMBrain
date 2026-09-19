@@ -79,9 +79,12 @@ describe('runAdvisor resilience', () => {
       'stalled-jobs',
       'usage-shape',
       'setup-smells',
+      'uninstalled-brain-pack',
       'uninstalled-bundled',
+      'chronicle',
       'mcp-client-fit',
       'backup-coverage',
+      'writeback-consent',
     ]);
   });
 });

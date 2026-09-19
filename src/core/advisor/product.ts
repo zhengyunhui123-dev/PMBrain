@@ -19,7 +19,10 @@ export interface AdvisorProductSuggestion {
   source_id?: string;
 }
 
+export const ADVISOR_PRODUCT_NAME = '知识库体检';
+
 export interface AdvisorProductView {
+  product_name: string;
   score: number | null;
   status: 'good' | 'ok' | 'needs_attention';
   status_label: string;
@@ -152,6 +155,48 @@ export function toProductSuggestion(finding: AdvisorFinding): AdvisorProductSugg
       action_kind: 'none',
     };
   }
+  if (finding.id === 'chronicle_coverage_gap') {
+    const count = countFromTitle(finding.title) ?? 0;
+    return {
+      id: finding.id,
+      severity: finding.severity,
+      title: `${count} 场近期会议还没进入年表`,
+      detail: '可用 pmbrain chronicle-backfill 补进事件，或打开 auto_chronicle。一键修复不会执行年表回填。',
+      action_label: null,
+      action_kind: 'none',
+    };
+  }
+  if (finding.id === 'ontology_conflicts') {
+    const count = countFromTitle(finding.title) ?? 0;
+    return {
+      id: finding.id,
+      severity: finding.severity,
+      title: `${count} 个实体维度当前值有冲突`,
+      detail: finding.detail ? `冲突项：${finding.detail}。用 pmbrain ontology-contradictions 查看。` : '用 pmbrain ontology-contradictions 查看。',
+      action_label: null,
+      action_kind: 'none',
+    };
+  }
+  if (finding.id === 'writeback_consent_pending') {
+    return {
+      id: finding.id,
+      severity: finding.severity,
+      title: '个人知识库尚未开启环境记忆回写',
+      detail: '开启前请先问过使用者。命令：pmbrain config set memory.auto_writeback salient。关闭：pmbrain config set memory.auto_writeback off。',
+      action_label: null,
+      action_kind: 'none',
+    };
+  }
+  if (finding.id.startsWith('uninstalled_brain_pack:')) {
+    return {
+      id: finding.id,
+      severity: finding.severity,
+      title: finding.title.replace(/^Brain source /, '知识源 ').replace(" you haven't installed", ' 尚未安装'),
+      detail: '这是该知识源自带的技能包，安装前请先确认。不会一键执行 scaffold。',
+      action_label: null,
+      action_kind: 'none',
+    };
+  }
   return {
     id: finding.id,
     dispatch_id: dispatchId,
@@ -167,6 +212,7 @@ export function buildAdvisorProductView(report: AdvisorReport, score: number | n
   const band = score == null ? { status: 'ok' as const, status_label: '待评估' } : healthStatusFromScore(score);
   const suggestions = report.findings.map(toProductSuggestion);
   return {
+    product_name: ADVISOR_PRODUCT_NAME,
     score,
     ...band,
     suggestion_count: suggestions.length,

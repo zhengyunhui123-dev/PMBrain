@@ -1,9 +1,9 @@
 /**
- * v0.32.3 — `gbrain eval run-all` orchestrator.
+ * v0.32.3 — `pmbrain eval run-all` orchestrator.
  *
  * Sweeps every requested mode × suite combination and writes per-run
  * results to `<repo>/.gbrain-evals/eval-results.jsonl` [CDX-23]. Personal
- * brain (~/.gbrain) is never touched; the repo's git history is the
+ * brain (~/.pmbrain) is never touched; the repo's git history is the
  * audit trail.
  *
  * Sequential default per D9: --parallel N is opt-in. Modes run one after
@@ -25,6 +25,7 @@ import { writeFileSync, mkdirSync, appendFileSync, existsSync } from 'fs';
 import { dirname, join } from 'path';
 import type { BrainEngine } from '../core/engine.ts';
 import { SEARCH_MODES, type SearchMode } from '../core/search/mode.ts';
+import { redactSecrets } from '../eval/longmemeval/run-config.ts';
 
 export interface RunAllOpts {
   help: boolean;
@@ -109,7 +110,7 @@ export function parseRunAllArgs(args: string[]): RunAllOpts {
 
 function printHelp(): void {
   process.stderr.write(
-    `gbrain eval run-all [flags]\n\n` +
+    `pmbrain eval run-all [flags]\n\n` +
     `Sweeps every requested search-lite mode × eval suite. Writes per-run results to\n` +
     `<repo>/.gbrain-evals/eval-results.jsonl. Personal brain is never touched.\n\n` +
     `Flags:\n` +
@@ -131,11 +132,11 @@ function printHelp(): void {
 }
 
 export interface EvalRunRecord {
-  schema_version: 2;
+  schema_version: 3;
   run_id: string;
   ran_at: string;
   suite: ValidSuite;
-  mode: SearchMode;
+  mode: SearchMode | 'n/a';
   commit: string;
   seed: number;
   limit?: number;
@@ -170,10 +171,49 @@ function evalResultsPath(repoRoot: string, outputDirOverride?: string): string {
   return join(repoRoot, '.gbrain-evals', 'eval-results.jsonl');
 }
 
+function redactDeep<T>(value: T): T {
+  if (typeof value === 'string') return redactSecrets(value) as unknown as T;
+  if (Array.isArray(value)) return value.map(redactDeep) as unknown as T;
+  if (value && typeof value === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) out[k] = redactDeep(v);
+    return out as T;
+  }
+  return value;
+}
+
+export function redactRunRecord(record: EvalRunRecord): EvalRunRecord {
+  return {
+    ...record,
+    params: redactDeep(record.params ?? {}),
+    ...(typeof record.error === 'string' ? { error: redactSecrets(record.error) } : {}),
+  };
+}
+
 export function persistRunRecord(repoRoot: string, record: EvalRunRecord, outputDirOverride?: string): void {
   const path = evalResultsPath(repoRoot, outputDirOverride);
   mkdirSync(dirname(path), { recursive: true });
-  appendFileSync(path, JSON.stringify(record) + '\n', 'utf-8');
+  appendFileSync(path, JSON.stringify(redactRunRecord(record)) + '\n', 'utf-8');
+}
+
+export type BrainBenchCoreResult = {
+  status: 'completed' | 'failed';
+  fixtures_hash?: string;
+  cells?: Record<string, Record<string, number>>;
+  error?: string;
+};
+
+let brainBenchCoreForTests: (() => Promise<BrainBenchCoreResult>) | null = null;
+
+/** Test seam: stub the in-process BrainBench runner so run-all cannot silently skip it. */
+export function _setBrainBenchCoreForTests(fn: (() => Promise<BrainBenchCoreResult>) | null): void {
+  brainBenchCoreForTests = fn;
+}
+
+async function invokeBrainBenchCore(): Promise<BrainBenchCoreResult> {
+  if (brainBenchCoreForTests) return brainBenchCoreForTests();
+  const { runBrainBenchCore } = await import('./eval-brainbench.ts');
+  return runBrainBenchCore();
 }
 
 /**
@@ -292,33 +332,45 @@ export async function runEvalRunAll(_engine: BrainEngine | null, args: string[])
     process.stderr.write(`[eval run-all] ${guard.reason}, proceeding.\n`);
   }
 
-  // v0.32.3 Implementation note: per-suite execution is the operator's
-  // responsibility today — `gbrain eval run-all` is the orchestrator's
-  // shape + cost guard + audit trail. The per-suite per-mode calls land
-  // as a follow-up: each suite's CLI is already exposed (gbrain eval
-  // longmemeval --mode X, gbrain eval replay --mode X), so wiring them
-  // into a sequential or parallel sweep is mechanical glue once the
-  // benchmarking environment + dataset paths are configured.
-  //
-  // What ships in v0.32.3:
-  //   - Argv parser + budget guard + persist hook (audit trail)
-  //   - --json estimate-only mode (CI integration without spending)
-  //   - Per-suite hook surface (persistRunRecord)
-  //
-  // What's a v0.32.4 follow-up:
-  //   - In-process invocation of the longmemeval / replay / brainbench
-  //     runners with a streaming-progress aggregator
-  //   - --parallel N semaphore for the multi-mode sweep
-  //
-  // For v0.32.3 release-time, the operator runs the per-suite commands
-  // manually with the documented --mode flags and uses persistRunRecord
-  // to log each completion. The methodology doc names this explicitly.
+  // BrainBench is search-mode-independent (decision 16): run ONCE per
+  // sweep, in-process, recorded under mode 'n/a' — never multiplied by
+  // modes. longmemeval / replay remain operator-run CLI stubs until wired.
   for (const suite of opts.suites) {
+    if (suite === 'brainbench') {
+      const startedAt = Date.now();
+      const runId = `${commit}-brainbench-na-${opts.seed}`;
+      const core = await invokeBrainBenchCore();
+      const record: EvalRunRecord = {
+        schema_version: 3,
+        run_id: runId,
+        ran_at: new Date().toISOString(),
+        suite: 'brainbench',
+        mode: 'n/a',
+        commit,
+        seed: opts.seed,
+        limit: opts.limit,
+        params: {
+          budget_usd_retrieval: opts.budgetUsdRetrieval,
+          budget_usd_answer: opts.budgetUsdAnswer,
+          parallel: opts.parallel,
+          fixtures_hash: core.fixtures_hash,
+          cells: core.cells,
+        },
+        status: core.status,
+        duration_ms: Date.now() - startedAt,
+      };
+      if (core.error) record.error = core.error;
+      persistRunRecord(repoRoot, record, opts.outputDir);
+      if (!opts.jsonOutput) {
+        process.stderr.write(`[eval run-all] ${runId}: ${record.status}\n`);
+      }
+      continue;
+    }
     for (const mode of opts.modes) {
       const startedAt = Date.now();
       const runId = `${commit}-${suite}-${mode}-${opts.seed}`;
       const record: EvalRunRecord = {
-        schema_version: 2,
+        schema_version: 3,
         run_id: runId,
         ran_at: new Date().toISOString(),
         suite: suite as ValidSuite,

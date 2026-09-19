@@ -35,7 +35,7 @@ for (const op of operations) {
 }
 
 // CLI-only commands that bypass the operation layer
-const CLI_ONLY = new Set(['init', 'reinit-pglite', 'pglite-backup', 'upgrade', 'post-upgrade', 'check-update', 'integrations', 'publish', 'check-backlinks', 'lint', 'report', 'import', 'export', 'files', 'embed', 'serve', 'call', 'config', 'doctor', 'hook', 'migrate', 'eval', 'sync', 'extract', 'extract-conversation-facts', 'enrich', 'features', 'autopilot', 'graph-query', 'jobs', 'advisor', 'agent', 'apply-migrations', 'skillpack-check', 'skillpack', 'resolvers', 'integrity', 'repair-jsonb', 'repair', 'orphans', 'quarantine', 'sources', 'mounts', 'dream', 'check-resolvable', 'routing-eval', 'skillify', 'smoke-test', 'providers', 'storage', 'repos', 'code-def', 'code-refs', 'reindex', 'reindex-code', 'reindex-frontmatter', 'code-callers', 'code-callees', 'frontmatter', 'auth', 'friction', 'claw-test', 'book-mirror', 'takes', 'think', 'salience', 'anomalies', 'transcripts', 'models', 'remote', 'recall', 'forget', 'edges-backfill', 'cache', 'ze-switch', 'founder', 'brainstorm', 'lsd', 'schema', 'capture', 'onboard', 'conversation-parser', 'status', 'probe-pglite']);
+const CLI_ONLY = new Set(['init', 'reinit-pglite', 'pglite-backup', 'upgrade', 'post-upgrade', 'check-update', 'integrations', 'publish', 'check-backlinks', 'lint', 'report', 'import', 'export', 'files', 'embed', 'serve', 'call', 'config', 'doctor', 'hook', 'migrate', 'eval', 'sync', 'extract', 'extract-conversation-facts', 'enrich', 'features', 'autopilot', 'graph-query', 'jobs', 'advisor', 'agent', 'apply-migrations', 'skillpack-check', 'skillpack', 'resolvers', 'integrity', 'repair-jsonb', 'repair', 'orphans', 'quarantine', 'sources', 'mounts', 'dream', 'check-resolvable', 'routing-eval', 'skillify', 'smoke-test', 'providers', 'storage', 'repos', 'code-def', 'code-refs', 'reindex', 'reindex-code', 'reindex-frontmatter', 'code-callers', 'code-callees', 'frontmatter', 'auth', 'friction', 'claw-test', 'book-mirror', 'takes', 'think', 'salience', 'anomalies', 'transcripts', 'models', 'remote', 'recall', 'forget', 'edges-backfill', 'cache', 'ze-switch', 'founder', 'brainstorm', 'lsd', 'schema', 'capture', 'onboard', 'conversation-parser', 'status', 'probe-pglite', 'connectors', 'google', 'creds', 'waiting', 'loops']);
 // CLI-only commands whose handlers print their own --help text. These are
 // excluded from the generic short-circuit so detailed per-command and
 // per-subcommand usage stays reachable.
@@ -70,6 +70,11 @@ const CLI_ONLY_SELF_HELP = new Set([
   'extract-conversation-facts',
   'enrich',
   'sources',
+  'connectors',
+  'google',
+  'creds',
+  'waiting',
+  'loops',
 ]);
 
 async function main() {
@@ -139,12 +144,13 @@ async function main() {
 
   // Per-command --help
   if (hasHelpFlag(subArgs)) {
+    const selfHelpSub = command === 'eval' && subArgs[0] === 'brainbench';
     const op = cliOps.get(command);
-    if (op) {
+    if (op && !selfHelpSub) {
       printOpHelp(op);
       return;
     }
-    if (CLI_ONLY.has(command) && !CLI_ONLY_SELF_HELP.has(command)) {
+    if (!selfHelpSub && CLI_ONLY.has(command) && !CLI_ONLY_SELF_HELP.has(command)) {
       printCliOnlyHelp(command);
       return;
     }
@@ -800,7 +806,7 @@ const THIN_CLIENT_REFUSED_COMMANDS = new Set([
   'sync', 'embed', 'extract', 'extract-conversation-facts', 'enrich', 'migrate', 'apply-migrations',
   'repair-jsonb', 'repair', 'orphans', 'integrity', 'serve', 'pglite-backup',
   // v0.31.1 (CDX-2 op coverage matrix): more local-only commands
-  'dream', 'transcripts', 'storage',
+  'dream', 'transcripts', 'storage', 'connectors',
   // v0.31.1 CDX-2 audit: takes/sources have multiple subcommands; some
   // (takes_list/takes_search, sources_list/sources_status) have MCP
   // equivalents and others are file-system bound (takes mutate commands
@@ -842,6 +848,7 @@ const THIN_CLIENT_REFUSE_HINTS: Record<string, string> = {
   dream: 'dream runs the autopilot cycle on the host. `pmbrain remote ping` queues one. (Native `pmbrain dream` thin-client routing planned for v0.31.2.)',
   orphans: "orphans needs the host's brain. Run on the host or use the `find_orphans` MCP tool from your agent.",
   transcripts: 'transcripts is server-private (raw chat exports stay on the host). Read transcripts on the host machine.',
+  connectors: 'connectors manage provider session credentials in ~/.pmbrain/connectors and sync your chat history on the host. Credentials never cross the wire — run on the host machine.',
   storage: 'storage operates on the local repo on disk. Run on the host.',
   takes: 'takes mutate subcommands edit local .md files; routing the read subcommands lands in v0.31.x. For now: use `takes_list` and `takes_search` MCP tools from your agent, or run on the host.',
   sources: 'sources commands manage local DB + config rows. Per-subcommand thin-client routing lands in v0.31.x. For now: use `sources_list` / `sources_status` MCP tools, or run on the host.',
@@ -916,6 +923,16 @@ async function handleCliOnly(command: string, args: string[]) {
   if (command === 'auth') {
     const { runAuth } = await import('./commands/auth.ts');
     await runAuth(args);
+    return;
+  }
+  if (command === 'google') {
+    const { runGoogle } = await import('./commands/google.ts');
+    await runGoogle(args);
+    return;
+  }
+  if (command === 'creds') {
+    const { runCreds } = await import('./commands/creds.ts');
+    await runCreds(args);
     return;
   }
   if (command === 'remote') {
@@ -1185,6 +1202,23 @@ async function handleCliOnly(command: string, args: string[]) {
     process.exit(await runEvalCrossModal(args.slice(1)));
   }
 
+  if (command === 'eval' && args[0] === 'run-all') {
+    const { runEvalRunAll } = await import('./commands/eval-run-all.ts');
+    await runEvalRunAll(null, args.slice(1));
+    return;
+  }
+
+  if (command === 'eval' && args[0] === 'brainbench') {
+    const { runEvalBrainBench } = await import('./commands/eval-brainbench.ts');
+    if (args.includes('--llm') && !args.includes('--help') && !args.includes('-h')) {
+      const config = loadConfig() ?? ({} as GBrainConfig);
+      const { configureGateway } = await import('./core/ai/gateway.ts');
+      configureGateway(buildGatewayConfig(config));
+    }
+    await runEvalBrainBench(args.slice(1));
+    return;
+  }
+
   // v0.32 EXP-5 (codex review #10): `eval takes-quality replay <receipt>`
   // is the ONLY sub-subcommand that doesn't need a brain — it reads a
   // receipt JSON file from disk and re-renders it. Bypass connectEngine
@@ -1197,8 +1231,8 @@ async function handleCliOnly(command: string, args: string[]) {
   }
 
   // v0.28.8: longmemeval brings its own in-memory PGLite. Bypassing
-  // connectEngine here keeps `gbrain eval longmemeval --help` and benchmark
-  // runs working on machines that have no `~/.gbrain/config.json` configured.
+  // connectEngine here keeps `pmbrain eval longmemeval --help` and benchmark
+  // runs working on machines that have no `~/.pmbrain/config.json` configured.
   //
   // v0.35.1.1: still need to configureGateway() so the in-memory brain's
   // import + hybridSearch can embed via the configured provider. Reads
@@ -1226,6 +1260,11 @@ async function handleCliOnly(command: string, args: string[]) {
   if (command === 'eval' && args[0] === 'conversation-parser') {
     const { runEvalConversationParser } = await import('./commands/eval-conversation-parser.ts');
     process.exit(await runEvalConversationParser(args.slice(1)));
+  }
+
+  if (command === 'eval' && args[0] === 'chronicle') {
+    const { runEvalChronicle } = await import('./commands/eval-chronicle.ts');
+    process.exit(await runEvalChronicle(args.slice(1)));
   }
 
   // v0.41.13.0: `gbrain conversation-parser list-builtins | validate
@@ -1291,6 +1330,28 @@ async function handleCliOnly(command: string, args: string[]) {
   if (command === 'capture' && (args.includes('--help') || args.includes('-h'))) {
     const { runCapture } = await import('./commands/capture.ts');
     await runCapture(null, args);
+    return;
+  }
+
+  if (command === 'connectors' && (
+    !args[0] || args[0] === 'help' || args.includes('--help') || args.includes('-h')
+    || args[0] === 'providers' || args[0] === 'logout'
+  )) {
+    const { runConnectors } = await import('./commands/connectors/index.ts');
+    await runConnectors(null as never, args);
+    return;
+  }
+
+  if (command === 'waiting' && (args.includes('--help') || args.includes('-h'))) {
+    const { runWaiting } = await import('./commands/loops.ts');
+    await runWaiting(null as never, args);
+    return;
+  }
+  if (command === 'loops' && (
+    !args[0] || args[0] === 'help' || args.includes('--help') || args.includes('-h')
+  )) {
+    const { runLoops } = await import('./commands/loops.ts');
+    await runLoops(null as never, args);
     return;
   }
 
@@ -1654,6 +1715,21 @@ async function handleCliOnly(command: string, args: string[]) {
       case 'transcripts': {
         const { runTranscripts } = await import('./commands/transcripts.ts');
         await runTranscripts(engine, args);
+        break;
+      }
+      case 'connectors': {
+        const { runConnectors } = await import('./commands/connectors/index.ts');
+        await runConnectors(engine, args);
+        break;
+      }
+      case 'waiting': {
+        const { runWaiting } = await import('./commands/loops.ts');
+        await runWaiting(engine, args);
+        break;
+      }
+      case 'loops': {
+        const { runLoops } = await import('./commands/loops.ts');
+        await runLoops(engine, args);
         break;
       }
       case 'models': {
@@ -2072,6 +2148,12 @@ function printHelp() {
   timeline [<slug>]                  查看时间线
   timeline-add <slug> <date> <text>  添加时间线条目
 
+本体
+  ontology <entity> [--asof DATE]    查看实体当前维度值（职位→role）
+  ontology-add <entity> <dim> <val>  记录一条本体观察
+  ontology-dimensions                列出大脑跟踪的维度
+  ontology-contradictions            列出当前值冲突
+
 工具
   extract <links|timeline|all>       提取链接或时间线
   publish <page.md> [--password]     生成可分享的 HTML
@@ -2082,6 +2164,7 @@ function printHelp() {
   salience [--days N] [--kind P]     按情绪和活跃度排序页面
   anomalies [--since D] [--sigma N]  查找统计异常
   transcripts recent [--days N]      查看最近的本地转录文本
+  connectors auth|status|sync|logout 同步 ChatGPT / Claude 聊天记录（仅本机）
   dream [--dry-run] [--json]         运行一次夜间维护周期
   check-resolvable [--json] [--fix]  验证 skill 树
   report --type <name> --content ... 保存带时间戳的报告
@@ -2094,7 +2177,13 @@ function printHelp() {
 来源
   sources list                       显示已注册来源
   sources add <id> --path <p>        注册来源
+  sources add <id> --kind google --account <email>  注册 Google 来源（凭证在保险库）
   sources remove <id>                删除来源及其页面
+  google connect|status|disconnect   连接或检查 Google 账号（保险库，--json）
+  google setup [--account <email>]   一键：OAuth → 来源 → 首次同步
+  waiting [--top N] [--json]         谁在等你：Gmail 开环 + 会议/连接器 lane
+  loops list|show|done|drop|mute|scan  查看或关闭开环（mute sender|thread）
+  creds list|remove|export|import    通用凭证保险库（脱敏输出；加密包）
   sync --all                         同步全部来源
   sync --source <id>                 同步指定来源
   repos ...                          sources 的弃用别名

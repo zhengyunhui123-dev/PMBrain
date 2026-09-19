@@ -14,6 +14,7 @@ Console 和 Windows 桌面端提供访问入口。
 - 混合检索：关键词、标题、关系、向量和可选 Reranker 共同参与召回与排序。
 - Dream 周期：整理资料、抽取事实与关系、生成候选观点，并保留审批边界。
 - 多入口：CLI、HTTP/MCP、Admin Console 与 Windows 桌面端复用核心能力。
+- 日常能力：连接 ChatGPT/Claude 与 Google、看谁在等你、看生命年表、手工关联跨 Source 人物。Admin「日常」与桌面设置复用同一套 Core ops。
 - 双引擎：PGLite 适合本地单机，Postgres + pgvector 适合独立数据库部署。
 - 数据保护：原始资料、Wiki、数据库内知识和已有向量不会因升级或普通测试被隐式重建。
 
@@ -137,6 +138,8 @@ pmbrain search "关键词" --explain    # 搜索并显示评分依据
 pmbrain capture "要记住的内容"        # 保存笔记
 pmbrain embed --stale                # 按当前配置刷新过期向量
 pmbrain doctor                       # 只读诊断与健康检查入口
+pmbrain waiting                      # 谁在等你（需先连接 Google）
+pmbrain day                          # 生命年表：这一天
 pmbrain serve --http --port 3131     # 启动 HTTP、MCP 和 Admin Console
 pmbrain --help                       # 查看当前版本的完整命令
 ```
@@ -172,6 +175,10 @@ AI 参与开发时先读 [AGENTS.md](AGENTS.md) 和 [CLAUDE.md](CLAUDE.md)，然
 - [数据事实来源](docs/architecture/system-of-record.md) — 原始资料、数据库知识与派生数据保护
 - [桌面版安装与首次使用](docs/desktop/安装与首次使用.md)
 - [Docker Postgres 首次安装](docs/desktop/首次安装使用DockerPostgres.md)
+- [连接 ChatGPT / Claude](docs/guides/chat-connectors.md)
+- [连接 Google](docs/guides/google-connect.md)
+- [待我处理](docs/guides/open-loops.md)
+- [生命年表](docs/guides/chronicle.md)
 - [ChatGPT MCP 接入](docs/mcp/CHATGPT.md)
 - [检索与 Dream 质量评测规范](docs/eval/PMBrain检索与Dream质量评测规范.md)
 - [PMBrain 与上游 GBrain 对比](docs/eval/PMBrain与原版GBrain的检索和Dream功能对比.md) — 仅在比较或合并上游能力时阅读

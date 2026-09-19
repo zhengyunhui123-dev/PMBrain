@@ -17,6 +17,8 @@
           <span class="rail-group">设置</span>
           <button class="rail-item active" data-target="basic" title="基础配置"><span>01</span>基础配置</button>
           <button class="rail-item" data-target="models" title="模型配置"><span>02</span>模型配置</button>
+          <span class="rail-group separated">日常</span>
+          <button class="rail-item" data-target="daily" title="日常"><span>日</span>日常</button>
           <span class="rail-group separated">连接与维护</span>
           <button class="rail-item" data-target="integrations" title="MCP 接入"><span>03</span>MCP 接入</button>
           <button class="rail-item" data-target="system" title="系统设置"><span>04</span>系统设置</button>
@@ -329,6 +331,67 @@
             <p id="config-path"></p>
             <button class="primary" id="save-setup"><span>保存配置并启动</span><i></i></button>
           </div>
+        </section>
+
+        <section class="panel" id="panel-daily">
+          <div class="section-heading">
+            <div><span class="index">日常</span><h2>连接器、待办、年表和人物</h2></div>
+            <p>给不会用命令行的人准备。写入都走本机服务，授权码不会出现在这个窗口的日志里。</p>
+          </div>
+
+          <section class="system-block" aria-labelledby="daily-google-title">
+            <div class="subsection-heading"><div><span>GOOGLE</span><h3 id="daily-google-title">连接 Google</h3></div><p>授权在本机 Sidecar 完成。如果防火墙挡住回跳页，把地址栏完整网址粘贴回来。</p></div>
+            <p id="daily-google-status">尚未读取</p>
+            <div class="field-group"><label for="daily-google-account">账号提示</label><input id="daily-google-account" placeholder="you@gmail.com" autocomplete="off" /></div>
+            <div class="input-action"><button type="button" class="ghost" id="daily-google-client">选择客户端 JSON</button><small id="daily-google-client-name">未选择</small></div>
+            <div class="input-action">
+              <button type="button" class="primary" id="daily-google-connect"><span>连接 Google</span><i></i></button>
+              <button type="button" class="ghost" id="daily-google-paste-mode">改用粘贴网址</button>
+            </div>
+            <pre id="daily-google-message" hidden></pre>
+            <button type="button" class="ghost" id="daily-google-open-consent" hidden>打开授权页</button>
+            <div class="field-group" id="daily-google-paste-wrap" hidden>
+              <label for="daily-google-redirect">粘贴打不开的页面地址</label>
+              <input id="daily-google-redirect" placeholder="浏览器地址栏里的完整网址" autocomplete="off" />
+              <button type="button" class="solid" id="daily-google-finish"><span>完成授权</span><i></i></button>
+            </div>
+            <div class="field-group">
+              <label for="daily-google-source">知识源 ID</label>
+              <input id="daily-google-source" placeholder="gmail-you" />
+              <button type="button" class="ghost" id="daily-google-source-save">登记为知识源</button>
+            </div>
+          </section>
+
+          <section class="system-block" aria-labelledby="daily-connectors-title">
+            <div class="subsection-heading"><div><span>CHAT</span><h3 id="daily-connectors-title">ChatGPT / Claude 同步</h3></div><p>只显示是否已有凭证，不会把 Cookie 送到这个窗口。</p></div>
+            <div id="daily-connectors">尚未读取</div>
+          </section>
+
+          <section class="system-block" aria-labelledby="daily-waiting-title">
+            <div class="subsection-heading"><div><span>WAITING</span><h3 id="daily-waiting-title">待我处理</h3></div><p>谁在等你。没有 Google 时不会写成「已清零」。</p></div>
+            <div id="daily-waiting">尚未读取</div>
+          </section>
+
+          <section class="system-block" aria-labelledby="daily-chronicle-title">
+            <div class="subsection-heading"><div><span>DAY</span><h3 id="daily-chronicle-title">生命年表</h3></div></div>
+            <div class="field-group"><label for="daily-chronicle-date">日期</label><input id="daily-chronicle-date" type="date" /></div>
+            <div class="daily-two">
+              <article><b>这一天</b><div id="daily-chronicle-today">尚未读取</div></article>
+              <article><b>往年今日</b><div id="daily-chronicle-memory">尚未读取</div></article>
+            </div>
+          </section>
+
+          <section class="system-block" aria-labelledby="daily-identity-title">
+            <div class="subsection-heading"><div><span>IDENTITY</span><h3 id="daily-identity-title">人物关联与当前本体</h3></div><p>把有道里的张三和会议里的张总标成同一个人。</p></div>
+            <div class="field-group"><label for="daily-identity-id">身份组 ID</label><input id="daily-identity-id" value="zhang-san" /></div>
+            <div class="field-group"><label for="daily-identity-source">来源 ID</label><input id="daily-identity-source" value="youdao" /></div>
+            <div class="field-group"><label for="daily-identity-slug">页面 slug</label><input id="daily-identity-slug" value="people/zhang-san" /></div>
+            <button type="button" class="solid" id="daily-identity-link"><span>关联这个页面</span></button>
+            <div id="daily-identity-groups">尚未读取</div>
+            <div class="field-group"><label for="daily-ontology-entity">查看当前本体</label><input id="daily-ontology-entity" value="people/zhang-san" /></div>
+            <button type="button" class="ghost" id="daily-ontology-load">查看当前值</button>
+            <div id="daily-ontology">尚未读取</div>
+          </section>
         </section>
 
         <section class="panel" id="panel-integrations">

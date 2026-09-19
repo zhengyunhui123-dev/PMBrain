@@ -285,6 +285,22 @@ export function applyRecencyBoost(
  * a stable column; the first chunk is a chunking accident that import changes
  * could shift. The signal is "the query is the name of this thing."
  */
+export function applyChronicleTypeBoost(
+  results: SearchResult[],
+  strength: 'on' | 'strong',
+  floorThreshold?: number,
+): void {
+  const factor = strength === 'strong' ? 1.25 : 1.15;
+  for (const r of results) {
+    if (!Number.isFinite(r.score)) continue;
+    if (floorThreshold !== undefined && r.score < floorThreshold) continue;
+    if (r.type === 'event' || r.type === 'diary') {
+      r.score *= factor;
+      r.chronicle_boost = factor;
+    }
+  }
+}
+
 export function applyTitleBoost(
   results: SearchResult[],
   query: string,
@@ -449,6 +465,7 @@ export async function runPostFusionStages(
     } catch {
       // Non-fatal.
     }
+    applyChronicleTypeBoost(results, opts.recency, floorThreshold);
   }
 
   // T2 — title-phrase boost. Runs after the metadata stages, before graph
@@ -647,8 +664,12 @@ export async function applyAliasHop(
   return out;
 }
 
+export const PRE_FUSION_POOL_FLOOR = 50;
+
 export interface HybridSearchOpts extends SearchOpts {
   expansion?: boolean;
+  expansionVariantBudget?: number | null;
+  onRerankPool?: (pool: readonly SearchResult[], preRerank: readonly SearchResult[]) => void;
   /** v0.43 — observability sink for the relational recall arm (fired/no-op,
    *  kind, seeds resolved, candidates, errored). Best-effort. */
   onRelationalMeta?: (meta: import('./relational-recall.ts').RelationalArmMeta) => void;

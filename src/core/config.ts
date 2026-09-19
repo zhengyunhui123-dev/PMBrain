@@ -355,6 +355,8 @@ export interface GBrainConfig {
     auto_writeback_transient_ttl?: string;
     visibility_posture?: string;
   };
+  brain?: { audience?: string };
+  integrations?: { memorable?: { enabled?: boolean } };
 }
 
 /**
@@ -840,6 +842,7 @@ export const KNOWN_CONFIG_KEYS: readonly string[] = [
   'provider_base_urls',
   'provider_touchpoint_base_urls',
   'provider_touchpoint_api_keys',
+  'integrations.memorable.enabled',
   'storage',
   'eval',
   'eval.capture',
@@ -940,6 +943,14 @@ export const KNOWN_CONFIG_KEYS: readonly string[] = [
   // Spend controls. Registered so `pmbrain config set` accepts these without
   // --force; `spend.posture` itself is validated by the config command.
   'spend.posture',
+  'loops.extraction_enabled',
+  'loops.meeting_extraction_enabled',
+  'loops.transcript_extraction_enabled',
+  'loops.connector_extraction_enabled',
+  'loops.meeting_scan_auto',
+  'loops.meeting_last_scan_at',
+  'loops.transcript_last_scan_at',
+  'loops.connector_last_scan_at',
   'sync.cost_gate_min_usd',
   'sync.federated_v2',
   'embed.backfill_cooldown_min',
@@ -948,6 +959,8 @@ export const KNOWN_CONFIG_KEYS: readonly string[] = [
   // Misc
   'artifacts_sync_mode',
   'cross_project_learnings',
+  'auto_chronicle',
+  'chronicle.judge_max_tokens',
 ];
 
 /**
@@ -964,7 +977,14 @@ export const KNOWN_CONFIG_KEY_PREFIXES: readonly string[] = [
   'provider_base_urls.', // per-provider base URL overrides
   'provider_touchpoint_base_urls.', // per-provider, per-touchpoint base URL overrides
   'content_sanity.',    // v0.41 content-sanity tunables
+  'connectors.',        // chat-connectors: source_id, sync_floor_min, embed_kickoff_min_pages, doctor_stale_hours, <provider>.{auto_sync,last_sync_at,auth_error_at,watermark_iso} (no secrets — creds are file-plane)
+  'chronicle.',
 ];
+
+export function isConfigTruthy(raw: unknown): boolean {
+  return typeof raw === 'string'
+    && ['true', '1', 'yes', 'on'].includes(raw.trim().toLowerCase());
+}
 
 export function saveConfig(config: GBrainConfig): void {
   mkdirSync(getConfigDir(), { recursive: true });

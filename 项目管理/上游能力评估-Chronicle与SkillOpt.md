@@ -5,7 +5,9 @@
 
 ## 结论
 
-本轮完成评估，但不直接嫁接 Chronicle 和 SkillOpt。两者都属于 D 类：需要独立立项和底层架构确认。
+本轮（2026-07-25）完成评估，当时不直接嫁接 Chronicle 和 SkillOpt。两者都属于 D 类：需要独立立项和底层架构确认。
+
+**2026-09-19 更正：** Chronicle 已吸收，不再暂缓。SkillOpt 仍暂缓 / 不移植。见文末「2026-09-19 产品决定」。
 
 ## Chronicle
 
@@ -56,3 +58,13 @@
 - Chronicle：暂缓，原因是数据模型、隐私和双引擎改动过大。
 - SkillOpt：继续暂缓完整嫁接。上游安全门已明显成熟，但 PMBrain 仍缺专属 benchmark、held-out 样本和人工盲测门槛。可独立立项的最小第一步是“单技能、本地、`--no-mutate`、固定成本上限”的提案生成器。
 - 已先采用低风险基础：搜索增强、Dream 稳定性、默认关闭的 drift/enrich_thin、只读 MCP 技能目录。
+
+## 2026-09-19 产品决定：Chronicle 吸收，SkillOpt 仍暂缓
+
+本文件 2026-07-25 的 D 类结论被产品决定撤销一半：
+
+- **Chronicle：已吸收，不再暂缓。** PR1 加法 schema（`event_page_id`）、PR6 本体维度与中文别名、PR7 抽取/时间线/远程日记脱敏、PR9 Advisor chronicle collector、PR11 生命年表产品面。进入条件（隐私分级、事件页目录、双引擎迁移、默认关闭自动抽取）已在设计件与实现 PR 中落地。`auto_chronicle` 默认关；`life/diary` 远程脱敏；`chronicle-backfill` 不进 HTTP、不进 `--apply`。
+- **SkillOpt：仍暂缓 / 明确不移植。** 进入条件未变：缺 PMBrain 自有 benchmark、held-out 样本和人工盲测。本树无 `src/core/skillopt`。不要把 Chronicle 吸收误写成 SkillOpt 已嫁接。
+- 全局 basename Wikilink 仍不移植，与本评估无关，写在对比文档第 11 节。
+
+设计件：`项目管理/GBrain能力吸收底层架构设计.md`（Approved/implemented）。对比文档：`docs/eval/PMBrain与原版GBrain的检索和Dream功能对比.md` 第 11 节。

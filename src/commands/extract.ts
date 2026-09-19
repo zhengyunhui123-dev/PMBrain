@@ -1513,7 +1513,7 @@ export async function extractTimelineFromDB(
       } else {
         // v0.32.8 F4: thread source_id so the JOIN matches the right page
         // when two sources share the same slug.
-        batch.push({ slug, date: entry.date, summary: entry.summary, detail: entry.detail || '', source_id });
+        batch.push({ slug, date: entry.date, summary: entry.summary, detail: entry.detail || '', source: entry.source || '', source_id });
         if (batch.length >= BATCH_SIZE) await flush();
       }
     }

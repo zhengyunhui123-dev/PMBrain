@@ -116,12 +116,13 @@ function clearNotices(): void {
   setNotice('success');
 }
 
-type Panel = 'basic' | 'models' | 'integrations' | 'system' | 'updates' | 'repair' | 'recovery';
+type Panel = 'basic' | 'models' | 'integrations' | 'daily' | 'system' | 'updates' | 'repair' | 'recovery';
 
 const PANEL_COPY: Record<Panel, { eyebrow: string; title: string }> = {
   basic: { eyebrow: 'DESKTOP SETTINGS / 01', title: '配置数据库、原始资料与主源' },
   models: { eyebrow: 'DESKTOP SETTINGS / 02', title: '配置普通模型与向量模型' },
   integrations: { eyebrow: 'MCP / 03', title: '把 PMBrain 接入 AI 客户端' },
+  daily: { eyebrow: 'DAILY', title: '连接器、待我处理、年表和人物关联' },
   system: { eyebrow: 'SYSTEM / 04', title: '管理桌面连接与系统行为' },
   updates: { eyebrow: 'UPDATES / 05', title: '保持桌面端安全更新' },
   repair: { eyebrow: 'REPAIR / 06', title: '软件修复' },
@@ -2418,6 +2419,151 @@ document.addEventListener('keydown', e => {
     document.querySelectorAll<HTMLUListElement>('.provider-dropdown').forEach(dropdown => { dropdown.hidden = true; });
   }
 });
+let googleClientJsonPath = '';
+let googleConsentUrl = '';
+
+function extractConsentUrl(message?: string): string | null {
+  const match = message?.match(/https:\/\/accounts\.google\.com[^\s"'<>]+/i);
+  if (!match) return null;
+  try {
+    const parsed = new URL(match[0].replace(/[).,]+$/, ''));
+    if (parsed.protocol !== 'https:' || parsed.searchParams.has('code')) return null;
+    return parsed.hostname.toLowerCase() === 'accounts.google.com' ? parsed.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
+function renderList(target: HTMLElement, lines: string[]): void {
+  target.textContent = lines.length > 0 ? lines.join('\n') : '暂无';
+}
+
+function chronicleLines(payload: unknown): string[] {
+  const rows = Array.isArray(payload)
+    ? payload as Array<{ date?: string; summary?: string }>
+    : (payload && typeof payload === 'object' && Array.isArray((payload as { events?: unknown }).events)
+      ? (payload as { events: Array<{ date?: string; summary?: string }> }).events
+      : []);
+  return rows.map((row) => `${(row.date ?? '').toString().slice(0, 10)} ${row.summary ?? ''}`.trim()).filter(Boolean);
+}
+
+async function refreshDailyPanel(): Promise<void> {
+  const waitingEl = $('#daily-waiting');
+  const connectorsEl = $('#daily-connectors');
+  const googleEl = $('#daily-google-status');
+  const groupsEl = $('#daily-identity-groups');
+  try {
+    const google = await window.pmbrainDesktop.googleStatus() as {
+      status?: string;
+      accounts?: Array<{ account: string }>;
+      linked_sources?: Array<{ id: string; account: string | null }>;
+    };
+    const accounts = google.accounts ?? [];
+    googleEl.textContent = accounts.length > 0
+      ? `已连接：${accounts.map((item) => item.account).join('、')}`
+      : '还没有连接 Google 账号。';
+    if (accounts[0] && !$<HTMLInputElement>('#daily-google-account').value) {
+      $<HTMLInputElement>('#daily-google-account').value = accounts[0].account;
+    }
+  } catch (error) {
+    googleEl.textContent = error instanceof Error ? error.message : String(error);
+  }
+  try {
+    const payload = await window.pmbrainDesktop.productConnectors() as {
+      providers?: Array<{ provider: string; credential?: { present: boolean }; last_sync_at?: string | null }>;
+    };
+    const providers = payload.providers ?? [];
+    connectorsEl.replaceChildren();
+    if (providers.length === 0) {
+      connectorsEl.textContent = '没有连接器';
+    } else {
+    for (const item of providers) {
+      const row = document.createElement('div');
+      const name = item.provider === 'chatgpt' ? 'ChatGPT' : item.provider === 'claude' ? 'Claude' : item.provider;
+      const label = document.createElement('span');
+      label.textContent = `${name}：${item.credential?.present ? '已有凭证' : '未配置'} · ${item.last_sync_at ? `最近同步 ${item.last_sync_at}` : '尚未同步'}`;
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'ghost';
+      button.textContent = '同步对话';
+      button.disabled = !item.credential?.present;
+      button.addEventListener('click', () => {
+        void window.pmbrainDesktop.productConnectorSync({ provider: item.provider })
+          .then(() => refreshDailyPanel())
+          .catch((syncError) => setNotice('error', syncError instanceof Error ? syncError.message : String(syncError)));
+      });
+      row.append(label, button);
+      connectorsEl.append(row);
+    }
+    }
+  } catch (error) {
+    connectorsEl.textContent = error instanceof Error ? error.message : String(error);
+  }
+  try {
+    const payload = await window.pmbrainDesktop.productWaiting() as {
+      groups?: Array<{ counterparty: string; loop_count: number; loops?: Array<{ summary: string }> }>;
+      no_google_sources?: boolean;
+    };
+    const groups = payload.groups ?? [];
+    if (groups.length === 0) {
+      waitingEl.textContent = payload.no_google_sources
+        ? 'Google 未配置，这不是收件箱已清零。'
+        : '暂时没有待处理事项。';
+    } else {
+      waitingEl.textContent = groups.map((group) => `${group.counterparty}（${group.loop_count}）`).join('\n');
+    }
+  } catch (error) {
+    waitingEl.textContent = error instanceof Error ? error.message : String(error);
+  }
+  const date = $<HTMLInputElement>('#daily-chronicle-date').value;
+  try {
+    renderList($('#daily-chronicle-today'), chronicleLines(await window.pmbrainDesktop.productChronicleDay(date || undefined)));
+    renderList($('#daily-chronicle-memory'), chronicleLines(await window.pmbrainDesktop.productChronicleOnThisDay(date || undefined)));
+  } catch (error) {
+    $('#daily-chronicle-today').textContent = error instanceof Error ? error.message : String(error);
+  }
+  try {
+    const entityId = $<HTMLInputElement>('#daily-identity-id').value.trim();
+    const payload = await window.pmbrainDesktop.productEntityIdentity(entityId ? { entity_id: entityId } : undefined) as {
+      identities?: Array<{ entity_id: string; members?: Array<{ source_id: string; slug: string }> }>;
+    };
+    groupsEl.textContent = (payload.identities ?? []).map((group) => {
+      const members = (group.members ?? []).map((member) => `${member.source_id}/${member.slug}`).join('、');
+      return `${group.entity_id}：${members || '还没有成员'}`;
+    }).join('\n') || '还没有人物关联。';
+  } catch (error) {
+    groupsEl.textContent = error instanceof Error ? error.message : String(error);
+  }
+}
+
+function applyGoogleEnvelope(result: { ok: boolean; status: string; next_action?: { user_message?: string; command?: string }; error?: { code: string; problem?: string; fix?: string }; account?: string }): void {
+  const message = $('#daily-google-message');
+  const pasteWrap = $('#daily-google-paste-wrap');
+  const openConsent = $<HTMLButtonElement>('#daily-google-open-consent');
+  const userMessage = result.next_action?.user_message?.replace('[SHOW USER]', '').replace('[/SHOW USER]', '').trim() ?? '';
+  message.hidden = !userMessage;
+  message.textContent = userMessage;
+  googleConsentUrl = extractConsentUrl(userMessage) ?? '';
+  openConsent.hidden = !googleConsentUrl;
+  const needsPaste = result.status === 'awaiting_consent' || (result.next_action?.command ?? '').includes('--code');
+  pasteWrap.hidden = !needsPaste;
+  $<HTMLInputElement>('#daily-google-redirect').value = '';
+  if (result.ok && result.status === 'connected') {
+    setNotice('success', `Google 已连接${result.account ? `：${result.account}` : ''}`);
+    void refreshDailyPanel();
+    return;
+  }
+  if (result.status === 'needs_client_credentials') {
+    setNotice('error', '还需要 Google 客户端 JSON。请选择 Desktop 应用下载的文件。');
+    return;
+  }
+  if (needsPaste) {
+    setNotice('success', '如果浏览器打不开 127.0.0.1，把地址栏完整网址粘贴回来。');
+    return;
+  }
+  if (result.error) setNotice('error', result.error.fix || result.error.problem || result.error.code);
+}
+
 document.querySelectorAll<HTMLButtonElement>('.rail-item').forEach((button) => button.addEventListener('click', () => {
   const target = button.dataset.target as Panel;
   switchPanel(target);
@@ -2425,6 +2571,7 @@ document.querySelectorAll<HTMLButtonElement>('.rail-item').forEach((button) => b
     void loadAdvancedModels(true);
   }
   if (target === 'integrations') refreshIntegrationPanel();
+  if (target === 'daily') void refreshDailyPanel();
   if (target === 'repair') void loadPgliteUpgradeBackups();
 }));
 $('#next-models').addEventListener('click', () => switchPanel('models'));
@@ -2661,5 +2808,78 @@ window.pmbrainDesktop.onShowPanel((panel) => {
     void loadAdvancedModels(true);
   }
   if (panel === 'integrations') refreshIntegrationPanel();
+  if (panel === 'daily') void refreshDailyPanel();
   if (panel === 'repair') void loadPgliteUpgradeBackups();
+});
+if (!$<HTMLInputElement>('#daily-chronicle-date').value) {
+  const now = new Date();
+  $<HTMLInputElement>('#daily-chronicle-date').value = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+}
+$('#daily-google-client').addEventListener('click', async () => {
+  const path = await window.pmbrainDesktop.chooseFile([{ name: 'JSON', extensions: ['json'] }]);
+  if (!path) return;
+  googleClientJsonPath = path;
+  $('#daily-google-client-name').textContent = path.replace(/^.*[\\/]/, '');
+});
+$('#daily-google-connect').addEventListener('click', async () => {
+  const button = $<HTMLButtonElement>('#daily-google-connect');
+  setBusy(button, true, '请在浏览器完成授权…');
+  try {
+    applyGoogleEnvelope(await window.pmbrainDesktop.googleConnect({
+      account: $<HTMLInputElement>('#daily-google-account').value.trim() || undefined,
+      clientJsonPath: googleClientJsonPath || undefined,
+    }));
+  } catch (error) {
+    setNotice('error', error instanceof Error ? error.message : String(error));
+  } finally {
+    setBusy(button, false, '连接 Google');
+  }
+});
+$('#daily-google-paste-mode').addEventListener('click', async () => {
+  applyGoogleEnvelope(await window.pmbrainDesktop.googleConnect({
+    account: $<HTMLInputElement>('#daily-google-account').value.trim() || undefined,
+    clientJsonPath: googleClientJsonPath || undefined,
+    paste: true,
+  }));
+});
+$('#daily-google-finish').addEventListener('click', async () => {
+  const pasted = $<HTMLInputElement>('#daily-google-redirect').value.trim();
+  if (!pasted) return;
+  applyGoogleEnvelope(await window.pmbrainDesktop.googleConnect({
+    account: $<HTMLInputElement>('#daily-google-account').value.trim() || undefined,
+    clientJsonPath: googleClientJsonPath || undefined,
+    code: pasted,
+  }));
+});
+$('#daily-google-open-consent').addEventListener('click', () => {
+  if (googleConsentUrl) void window.pmbrainDesktop.openExternal(googleConsentUrl);
+});
+$('#daily-google-source-save').addEventListener('click', async () => {
+  const account = $<HTMLInputElement>('#daily-google-account').value.trim();
+  if (!account) {
+    setNotice('error', '请先连接 Google 账号');
+    return;
+  }
+  await window.pmbrainDesktop.googleSource({
+    account,
+    id: $<HTMLInputElement>('#daily-google-source').value.trim() || undefined,
+  });
+  setNotice('success', 'Google 知识源已登记');
+  void refreshDailyPanel();
+});
+$('#daily-chronicle-date').addEventListener('change', () => void refreshDailyPanel());
+$('#daily-identity-link').addEventListener('click', async () => {
+  await window.pmbrainDesktop.productEntityIdentityLink({
+    entity_id: $<HTMLInputElement>('#daily-identity-id').value.trim(),
+    source_id: $<HTMLInputElement>('#daily-identity-source').value.trim(),
+    slug: $<HTMLInputElement>('#daily-identity-slug').value.trim(),
+  });
+  setNotice('success', '已关联页面');
+  void refreshDailyPanel();
+});
+$('#daily-ontology-load').addEventListener('click', async () => {
+  const rows = await window.pmbrainDesktop.productOntology($<HTMLInputElement>('#daily-ontology-entity').value.trim()) as Array<{ dimension: string; value: string }>;
+  $('#daily-ontology').textContent = Array.isArray(rows) && rows.length > 0
+    ? rows.map((row) => `${row.dimension} = ${row.value}`).join('\n')
+    : '这个人还没有本体当前值。';
 });

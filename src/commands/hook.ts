@@ -8,6 +8,7 @@ import { bankWritebackTurn } from '../core/facts/writeback-bank.ts';
 import { resolveWritebackConfigFromFile } from '../core/facts/writeback-config.ts';
 import { isValidSourceId } from '../core/source-id.ts';
 import { codexSessionUserTurns } from '../core/facts/writeback-codex.ts';
+import { captureAndRelaySessionEnd } from '../core/context/memorable-capture.ts';
 
 function writebackCorpusDir(home: string): string {
   const dir = join(home, 'writeback-corpus');
@@ -101,7 +102,7 @@ export function lastUserText(payload: Record<string, unknown>): string {
   } finally {closeSync(fd);}
 }
 
-export async function runHook(args: string[]): Promise<number> {
+export async function runHook(args: string[], opts?: { spawnFn?: typeof spawn }): Promise<number> {
   const sub = args[0] ?? '';
   let payloadFile: string | null = null;
   try {
@@ -114,7 +115,24 @@ export async function runHook(args: string[]): Promise<number> {
     const payload=payloadFile
       ? JSON.parse(readFileSync(payloadFile,'utf8')) as Record<string,unknown>
       : await readStdinJson(300);
-    const wb = resolveWritebackConfigFromFile(JSON.parse(readFileSync(join(home,'config.json'),'utf8')));
+    if (sub === 'session-end') {
+      const harnessIndex = args.indexOf('--harness');
+      const harness = harnessIndex >= 0 ? args[harnessIndex + 1] : undefined;
+      try {
+        await captureAndRelaySessionEnd({
+          payload,
+          harness,
+          cwd: typeof payload.cwd === 'string' ? payload.cwd : process.cwd(),
+          spawnFn: opts?.spawnFn,
+        });
+      } catch { /* memorable is fail-open for the hook */ }
+    }
+    let wb;
+    try {
+      wb = resolveWritebackConfigFromFile(JSON.parse(readFileSync(join(home,'config.json'),'utf8')));
+    } catch {
+      return 0;
+    }
     if (!wb.enabled) return 0;
     const codex = sub === 'session-end' && args.includes('--harness') && args[args.indexOf('--harness') + 1] === 'codex'
       ? codexSessionUserTurns(payload)

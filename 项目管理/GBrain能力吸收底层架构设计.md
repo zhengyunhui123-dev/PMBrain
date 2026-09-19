@@ -2,10 +2,10 @@
 
 | 字段 | 值 |
 |---|---|
-| 作者 | Grok (planning) · 待产品负责人批准 |
-| 日期 | 2026-09-12 |
-| 状态 | Draft（**批准前禁止写代码**） |
-| PMBrain 基线 | Core `1.3.61` · Desktop `1.1.92` · Schema `124` |
+| 作者 | Grok (planning) · 产品负责人已批准 |
+| 日期 | 2026-09-12（批准）；2026-09-19 标记 implemented |
+| 状态 | **Approved / implemented** |
+| PMBrain 基线 | 设计时 Core `1.3.61` · Desktop `1.1.92` · Schema `124`；合入当前分支后 Core 继续递增 · Schema `130` |
 | GBrain 基线 | `0.48.5.0`（本地树 `D:\cursor-claude\gbrain`） |
 | 文档性质 | 底层架构变更批准件（CLI / MCP / Admin / Desktop 共用 Core） |
 
@@ -21,13 +21,13 @@ PMBrain 已沿用 GBrain 的 RAG / Dream 骨架，但刻意暂缓了一批“个
 2. **PMBrain ADAPTER**：只在 GBrain 无法直接工作时加适配层——`~/.pmbrain` 路径隔离、无默认 Embedding、中文本体别名、会议/转录/Connector 的 Open Loops 附加检测器（独立 job、分键、lane 隔离）、pack/markdown/capture 路由 `life/events` 与 `life/diary`（**不**加入 Dream `dream_synthesize_paths`）、产品中文文案。
 3. **PRODUCT**：Admin / Desktop 复用 Core Operation / Admin API，不在 UI 复制业务逻辑。
 
-**在用户书面批准本设计之前，不开始实现。**
+**历史约束：** 在用户书面批准本设计之前，不开始实现。2026-09-19：已批准并落地。SkillOpt 与全局 basename Wikilink 仍不在范围内。
 
 ---
 
 ## Background & Motivation
 
-### 当前状态（已用代码核实）
+### 当前状态（设计时 1.3.61 代码核实）
 
 | 能力 | GBrain 0.48.5.0 | PMBrain 1.3.61 |
 |---|---|---|
@@ -1275,7 +1275,7 @@ Fresh install：`schema.sql` / `pglite-schema.ts` / `schema-embedded.ts` 同步�
 - [x] Q1 **已决定（D19）= A（2026-09-12）。** Desktop/Admin v1「连接 Google」：renderer → main → Sidecar `pmbrain google connect --json` → stdout `JsonEnvelope`。loopback 只在 Sidecar；renderer 看不到 OAuth code。防火墙挡住时走 GBrain 粘贴-redirect `next_action`。禁止第二套 Electron OAuth。
 - [x] Q2 **已决定（D22）：分键。** `loops.extraction_enabled` 仅 Gmail、默认 ON；`loops.meeting_extraction_enabled` / `transcript` / `connector` 默认 OFF。确定性 scan job 默认不调度。理由：GBrain extract-ON 的消费者只有 google-source 线程（30 天窗 + ceiling 500）；共用一键会把 PMBrain 会议语料变成默认花费面。
 
-**未勾选「批准本设计」之前，不得提交实现 PR。**
+**未勾选「批准本设计」之前，不得提交实现 PR。** 2026-09-19：已勾选并实现；已合入当前分支。
 
 ---
 

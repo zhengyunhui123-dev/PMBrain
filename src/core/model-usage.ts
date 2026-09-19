@@ -13,7 +13,6 @@
 import type { GBrainConfig } from './config.ts';
 import { loadConfig, saveConfig, writeFileConfigValue } from './config.ts';
 import type { CyclePhase } from './cycle.ts';
-import { ALL_PHASES } from './cycle.ts';
 import {
   GENERATIVE_MODEL_DISABLED_CODE,
   GENERATIVE_MODEL_DISABLED_MESSAGE,
@@ -96,14 +95,12 @@ const PHASE_LABEL_ZH: Record<CyclePhase, string> = {
 };
 
 export function phaseRequiresGenerativeModel(phase: CyclePhase | string): boolean {
-  if ((ALL_PHASES as readonly string[]).includes(phase)) {
-    return PHASE_REQUIRES_GENERATIVE[phase as CyclePhase] === true;
-  }
-  return false;
+  return Object.prototype.hasOwnProperty.call(PHASE_REQUIRES_GENERATIVE, phase)
+    && PHASE_REQUIRES_GENERATIVE[phase as CyclePhase] === true;
 }
 
 export function getPhaseCapabilities(): PhaseCapability[] {
-  return ALL_PHASES.map((id) => {
+  return (Object.keys(PHASE_REQUIRES_GENERATIVE) as CyclePhase[]).map((id) => {
     const requiresGenerativeModel = PHASE_REQUIRES_GENERATIVE[id] === true;
     return {
       id,

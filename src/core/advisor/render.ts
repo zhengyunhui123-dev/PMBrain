@@ -12,7 +12,7 @@ export function renderAdvisorReport(report: AdvisorReport): string {
   const lines: string[] = [];
   lines.push('');
   lines.push(BAR);
-  lines.push(`pmbrain advisor - ${report.findings.length} thing${report.findings.length === 1 ? '' : 's'} worth attention (pmbrain ${report.version})`);
+  lines.push(`pmbrain advisor - 知识库体检：${report.findings.length} thing${report.findings.length === 1 ? '' : 's'} worth attention (pmbrain ${report.version})`);
   lines.push(BAR);
   lines.push('');
   if (report.findings.length === 0) {

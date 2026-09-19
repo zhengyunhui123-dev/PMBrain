@@ -1,0 +1,39 @@
+{
+  "name": "brainbench-corpus",
+  "version": 1,
+  "seed": 42,
+  "generated_fixtures": 135,
+  "holdout_fixtures": 23,
+  "gold_turns": 241,
+  "categories": {
+    "kta-pos": 25,
+    "kta-neg": 15,
+    "push": 20,
+    "write-back": 20,
+    "continuity_pairs": 15,
+    "multi-source": 10,
+    "adversarial": 15
+  },
+  "prose": "template-synthesized, PRNG-varied; deliberately no LLM pass (controlled difficulty; see README)",
+  "rebuild": "bun evals/brainbench/generator/gen.ts",
+  "generation_cost_usd": 0,
+  "gold_validation": {
+    "method": "blind double-label, stratified 10% sample (14 fixtures, 28 labeled items)",
+    "date": "2026-06-12",
+    "agreement": 0.964,
+    "findings": "continuity-writer rationale-clause drift (5 gold files) fixed in this corpus version; wb-001 MRR fact added; conventions documented in README"
+  },
+  "hand_authored": {
+    "fixtures": 7,
+    "ids": [
+      "cont-001-widget-pass-reader",
+      "cont-001-widget-pass-writer",
+      "kta-001-deal-recall",
+      "kta-002-quiet-smalltalk",
+      "ms-001-two-source-alias",
+      "ms-002-nondefault-active",
+      "wb-001-pricing-concern"
+    ],
+    "note": "Outside the generator contract (drift guard counts gen-* files only). ms-002-nondefault-active is the sole non-default active_source fixture, added to exercise the harness cross-source leak detector's non-default arm. gen.ts rewrites this file on regen; re-add this block if it drops."
+  }
+}
