@@ -40,9 +40,11 @@ import {
 import {
   addSource as opsAddSource,
   recloneIfMissing,
+  defaultCloneDir,
   SourceOpError,
   type SourceRow as OpsSourceRow,
 } from '../core/sources-ops.ts';
+import { ALL_GOOGLE_SERVICES, DEFAULT_CALENDAR_ID } from '../core/google/types.ts';
 import {
   resolveSourceWithTier,
   SOURCE_TIER_NAMES,
@@ -178,8 +180,11 @@ async function runAdd(engine: BrainEngine, args: string[]): Promise<void> {
   const id = args[0];
   if (!id) {
     console.error(
-      'Usage: gbrain sources add <id> [--path <path> | --url <https-url>] ' +
-        '[--name <display>] [--federated|--no-federated] [--clone-dir <path>]',
+      'Usage: pmbrain sources add <id> [--path <path> | --url <https-url> | --kind google] ' +
+        '[--name <display>] [--federated|--no-federated] [--clone-dir <path>]\n' +
+        '       google kind: --account <email> [--services gmail,calendar,contacts] ' +
+        '[--history-days <n>] [--calendar-id <id>] [--dir <path>]   (connect first: pmbrain google connect)\n' +
+        '                    [--access vault|command|env] [--token-command "<cmd>"] [--token-env <VAR>]',
     );
     process.exit(2);
   }
@@ -189,6 +194,15 @@ async function runAdd(engine: BrainEngine, args: string[]): Promise<void> {
   let displayName: string | undefined;
   let federated: boolean | null = null;
   let cloneDir: string | undefined;
+  let gKind = false;
+  let gAccount: string | undefined;
+  let gAccess: string | undefined;
+  let gTokenCommand: string | undefined;
+  let gTokenEnv: string | undefined;
+  let gServices: string[] = ['gmail', 'calendar', 'contacts'];
+  let gHistoryDays = 90;
+  let gCalendarId: string = DEFAULT_CALENDAR_ID;
+  let gDir: string | undefined;
 
   for (let i = 1; i < args.length; i++) {
     const a = args[i];
@@ -198,6 +212,46 @@ async function runAdd(engine: BrainEngine, args: string[]): Promise<void> {
     if (a === '--federated') { federated = true; continue; }
     if (a === '--no-federated') { federated = false; continue; }
     if (a === '--clone-dir') { cloneDir = args[++i]; continue; }
+    if (a === '--kind') {
+      const kind = args[++i];
+      if (kind === 'google') {
+        gKind = true;
+      } else {
+        console.error(`Unknown source kind: ${kind}. Supported: "google".`);
+        process.exit(2);
+      }
+      continue;
+    }
+    if (a === '--account') { gAccount = args[++i]?.trim().toLowerCase(); continue; }
+    if (a === '--access') { gAccess = args[++i]?.trim().toLowerCase(); continue; }
+    if (a === '--token-command') { gTokenCommand = args[++i]; continue; }
+    if (a === '--token-env') { gTokenEnv = args[++i]?.trim(); continue; }
+    if (a === '--services') {
+      gServices = (args[++i] ?? '')
+        .split(',')
+        .map((s) => s.trim().toLowerCase())
+        .filter(Boolean);
+      continue;
+    }
+    if (a === '--history-days') {
+      const v = Number(args[++i]);
+      if (!Number.isInteger(v) || v <= 0) {
+        console.error('--history-days must be a positive integer.');
+        process.exit(2);
+      }
+      gHistoryDays = v;
+      continue;
+    }
+    if (a === '--calendar-id') {
+      const v = (args[++i] ?? '').trim();
+      if (!v) {
+        console.error('--calendar-id needs a value (see: pmbrain google calendars).');
+        process.exit(2);
+      }
+      gCalendarId = v;
+      continue;
+    }
+    if (a === '--dir') { gDir = args[++i]; continue; }
     console.error(`Unknown flag: ${a}`);
     process.exit(2);
   }
@@ -205,6 +259,88 @@ async function runAdd(engine: BrainEngine, args: string[]): Promise<void> {
   if (remoteUrl && localPath) {
     console.error('Error: --url and --path are mutually exclusive (--url manages its own clone path).');
     process.exit(2);
+  }
+  if (gKind && (remoteUrl || localPath)) {
+    console.error('Error: --kind google is mutually exclusive with --url and --path.');
+    process.exit(2);
+  }
+  if (gKind && !gAccount) {
+    console.error(
+      'Error: --kind google requires --account <email> (a connected Google account).\n' +
+        'Connect one first: pmbrain google connect',
+    );
+    process.exit(2);
+  }
+  if (gKind) {
+    const bad = gServices.filter((s) => !(ALL_GOOGLE_SERVICES as readonly string[]).includes(s));
+    if (bad.length > 0) {
+      console.error(`Error: unknown --services entries: ${bad.join(', ')}. Valid: gmail, calendar, contacts`);
+      process.exit(2);
+    }
+    try {
+      const dupRows = await engine.executeRaw<{ id: string; config: unknown }>(
+        `SELECT id, config FROM sources WHERE archived IS NOT TRUE`,
+        [],
+      );
+      let overlapNote = '';
+      const dup = dupRows.find((r) => {
+        const c = typeof r.config === 'string' ? (JSON.parse(r.config) as Record<string, unknown>) : ((r.config ?? {}) as Record<string, unknown>);
+        if (c.kind !== 'google' || c.g_account !== gAccount) return false;
+        const existingServices =
+          typeof c.g_services === 'string'
+            ? c.g_services.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean)
+            : ['gmail', 'calendar', 'contacts'];
+        let overlap = gServices.filter((s) => existingServices.includes(s));
+        const existingCal =
+          typeof c.g_calendar_id === 'string' && c.g_calendar_id.trim() ? c.g_calendar_id.trim() : DEFAULT_CALENDAR_ID;
+        if (existingCal !== gCalendarId) overlap = overlap.filter((s) => s !== 'calendar');
+        if (overlap.length === 0) return false;
+        overlapNote = overlap.join(', ');
+        return true;
+      });
+      if (dup) {
+        console.error(
+          `Warning: source "${dup.id}" already syncs ${gAccount} (${overlapNote}) — a second source for the same account and services duplicates its pages and loops in federated reads.`,
+        );
+      }
+    } catch { /* preflight is best-effort */ }
+    if (gAccess !== undefined && !['vault', 'command', 'env'].includes(gAccess)) {
+      console.error(`Error: unknown --access "${gAccess}". Valid: vault, command, env.`);
+      process.exit(2);
+    }
+    if (gAccess === 'command' && !gTokenCommand?.trim()) {
+      console.error('Error: --access command requires --token-command "<cmd that prints an access token>".');
+      process.exit(2);
+    }
+    if (gAccess === 'env' && !gTokenEnv?.trim()) {
+      console.error('Error: --access env requires --token-env <ENV_VAR_NAME>.');
+      process.exit(2);
+    }
+    if ((gTokenCommand || gTokenEnv) && (gAccess === undefined || gAccess === 'vault')) {
+      console.error('Error: --token-command/--token-env require --access command or --access env.');
+      process.exit(2);
+    }
+    if (gAccess === undefined || gAccess === 'vault') {
+      const { openVault, credentialId } = await import('../core/creds/vault.ts');
+      const entry = await openVault().get(credentialId('google', gAccount!));
+      if (!entry) {
+        console.error(
+          `Error: no connected Google account "${gAccount}" in the credential vault.\n` +
+            `Connect it first: pmbrain google connect --account ${gAccount}\n` +
+            `(or use another access mode: --access command --token-command "<cmd>" | --access env --token-env <VAR>)`,
+        );
+        process.exit(2);
+      }
+    } else if (gAccess === 'command') {
+      try {
+        const { CommandAccessProvider } = await import('../core/google/access.ts');
+        await new CommandAccessProvider(gTokenCommand!).getAccessToken();
+      } catch (e) {
+        console.error(`Warning: token command probe failed (${e instanceof Error ? e.message.split('\n')[0] : String(e)}) — the source is registered, but sync will fail until the command works.`);
+      }
+    } else if (gAccess === 'env' && !(process.env[gTokenEnv!] ?? '').trim()) {
+      console.error(`Warning: $${gTokenEnv} is not set in this shell — sync will fail until it carries a live access token.`);
+    }
   }
 
   // Throw on SourceOpError; cli.ts wraps every command in a try/catch that
@@ -217,6 +353,20 @@ async function runAdd(engine: BrainEngine, args: string[]): Promise<void> {
     remoteUrl,
     federated,
     cloneDir,
+    ...(gKind
+      ? {
+          google: {
+            account: gAccount!,
+            services: gServices,
+            historyDays: gHistoryDays,
+            calendarId: gCalendarId,
+            dir: gDir ?? defaultCloneDir(`${id}-google`),
+            access: (gAccess ?? 'vault') as 'vault' | 'command' | 'env',
+            tokenCommand: gTokenCommand,
+            tokenEnv: gTokenEnv,
+          },
+        }
+      : {}),
   });
 
   const fed = isFederated(created.config);
