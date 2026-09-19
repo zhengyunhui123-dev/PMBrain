@@ -948,6 +948,8 @@ export const KNOWN_CONFIG_KEYS: readonly string[] = [
   // Misc
   'artifacts_sync_mode',
   'cross_project_learnings',
+  'auto_chronicle',
+  'chronicle.judge_max_tokens',
 ];
 
 /**
@@ -964,6 +966,7 @@ export const KNOWN_CONFIG_KEY_PREFIXES: readonly string[] = [
   'provider_base_urls.', // per-provider base URL overrides
   'provider_touchpoint_base_urls.', // per-provider, per-touchpoint base URL overrides
   'content_sanity.',    // v0.41 content-sanity tunables
+  'chronicle.',
 ];
 
 export function saveConfig(config: GBrainConfig): void {

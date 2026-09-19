@@ -25,8 +25,8 @@ describe('schema 125-128 additive foundation', () => {
     rmSync(root, { recursive: true, force: true });
   }, 30_000);
 
-  test('LATEST_VERSION is 128', () => {
-    expect(LATEST_VERSION).toBe(128);
+  test('LATEST_VERSION is 130', () => {
+    expect(LATEST_VERSION).toBe(130);
   });
 
   test('migrations 125-128 are SQL-only and do not rewrite pages/facts/timeline content', () => {
@@ -43,7 +43,7 @@ describe('schema 125-128 additive foundation', () => {
     expect(openLoops?.sql).not.toMatch(/takes/i);
   });
 
-  test('initSchema adds event_page_id without rewriting idx_timeline_dedup', async () => {
+  test('initSchema adds event_page_id and keys idx_timeline_dedup on md5(summary)', async () => {
     const columns = await engine.executeRaw<{ column_name: string }>(`
       SELECT column_name FROM information_schema.columns
        WHERE table_name = 'timeline_entries' AND column_name = 'event_page_id'
@@ -57,8 +57,7 @@ describe('schema 125-128 additive foundation', () => {
     `);
     const dedup = indexes.find(row => row.indexname === 'idx_timeline_dedup');
     expect(dedup).toBeDefined();
-    expect(dedup!.indexdef).toMatch(/page_id,\s*date,\s*summary,\s*source/);
-    expect(dedup!.indexdef).not.toMatch(/md5\s*\(/i);
+    expect(dedup!.indexdef).toMatch(/page_id,\s*date,\s*md5\(summary\),\s*source/);
     expect(indexes.some(row => row.indexname === 'idx_timeline_event_page')).toBe(true);
     expect(indexes.some(row => row.indexname === 'idx_timeline_event_dedup')).toBe(true);
   });
@@ -144,7 +143,7 @@ describe('schema 125-128 additive foundation', () => {
     });
     await engine.setConfig('version', '124');
     await runMigrations(engine);
-    expect(await engine.getConfig('version')).toBe('128');
+    expect(await engine.getConfig('version')).toBe('130');
     const rows = await engine.executeRaw<{ event_page_id: number | null; summary: string }>(`
       SELECT te.event_page_id, te.summary
         FROM timeline_entries te

@@ -1228,6 +1228,11 @@ async function handleCliOnly(command: string, args: string[]) {
     process.exit(await runEvalConversationParser(args.slice(1)));
   }
 
+  if (command === 'eval' && args[0] === 'chronicle') {
+    const { runEvalChronicle } = await import('./commands/eval-chronicle.ts');
+    process.exit(await runEvalChronicle(args.slice(1)));
+  }
+
   // v0.41.13.0: `gbrain conversation-parser list-builtins | validate
   // | --help` are pure (no DB access). Bypass connectEngine so the
   // operator can run them on machines with no brain configured.

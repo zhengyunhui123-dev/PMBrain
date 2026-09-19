@@ -6,6 +6,14 @@ export function privatePagesFilterFragment(pageAlias: string): string {
   return `COALESCE(${pageAlias}.frontmatter->>'visibility', 'world') <> 'private'`;
 }
 
+export function privateTimelineEventFilterFragment(timelineAlias: string): string {
+  return `(${timelineAlias}.event_page_id IS NULL OR EXISTS (
+    SELECT 1 FROM pages event_private
+    WHERE event_private.id = ${timelineAlias}.event_page_id
+      AND ${privatePagesFilterFragment('event_private')}
+  ))`;
+}
+
 /**
  * Fact-row twin for ontology provenance: hide an observation whose provenance
  * page (`source_markdown_slug`, looked up in the fact's own source) is

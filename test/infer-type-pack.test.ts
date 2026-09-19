@@ -39,6 +39,8 @@ const PARITY_FIXTURES: ReadonlyArray<{ path: string; expected: string; reason: s
   { path: 'emails/em-0001.md', expected: 'email', reason: 'emails/ prefix' },
   { path: 'slack/sl-0037.md', expected: 'slack', reason: 'slack/ prefix' },
   { path: 'cal/2026-05-20.md', expected: 'calendar-event', reason: 'cal/ prefix' },
+  { path: 'life/events/2026-06-18-x.md', expected: 'event', reason: 'life/events/ prefix' },
+  { path: 'life/diary/2026-06-18.md', expected: 'diary', reason: 'life/diary/ prefix' },
   // Stronger-signal wins: writing/ inside projects/
   { path: 'projects/blog/writing/essay.md', expected: 'writing', reason: 'writing/ wins over projects/' },
   // Fallback: paths not matching any prefix

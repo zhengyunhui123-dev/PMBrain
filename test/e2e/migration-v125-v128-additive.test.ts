@@ -21,8 +21,8 @@ describe.skipIf(skip)('schema 125-128 additive foundation (Postgres)', () => {
     await engine.disconnect();
   });
 
-  test('LATEST_VERSION is 128 and migrations 125-128 are SQL-only', () => {
-    expect(LATEST_VERSION).toBe(128);
+  test('LATEST_VERSION is 130 and migrations 125-128 are SQL-only', () => {
+    expect(LATEST_VERSION).toBe(130);
     for (const version of [125, 126, 127, 128]) {
       const migration = MIGRATIONS.find(item => item.version === version);
       expect(migration?.handler).toBeUndefined();
@@ -30,7 +30,7 @@ describe.skipIf(skip)('schema 125-128 additive foundation (Postgres)', () => {
     }
   });
 
-  test('event_page_id exists and idx_timeline_dedup stays on raw summary', async () => {
+  test('event_page_id exists and idx_timeline_dedup is keyed on md5(summary)', async () => {
     const columns = await engine.executeRaw<{ column_name: string }>(`
       SELECT column_name FROM information_schema.columns
        WHERE table_schema = current_schema()
@@ -42,8 +42,7 @@ describe.skipIf(skip)('schema 125-128 additive foundation (Postgres)', () => {
       SELECT indexname, indexdef FROM pg_indexes
        WHERE tablename = 'timeline_entries' AND indexname = 'idx_timeline_dedup'
     `);
-    expect(indexes[0]?.indexdef).toMatch(/page_id,\s*date,\s*summary,\s*source/);
-    expect(indexes[0]?.indexdef).not.toMatch(/md5\s*\(/i);
+    expect(indexes[0]?.indexdef).toMatch(/page_id,\s*date,\s*md5\(summary\),\s*source/);
   });
 
   test('addTimelineEntry still uses the old conflict target', async () => {
@@ -96,7 +95,7 @@ describe.skipIf(skip)('schema 125-128 additive foundation (Postgres)', () => {
     });
     await engine.setConfig('version', '124');
     await runMigrations(engine);
-    expect(await engine.getConfig('version')).toBe('128');
+    expect(await engine.getConfig('version')).toBe('130');
     const rows = await engine.executeRaw<{ event_page_id: number | null }>(`
       SELECT te.event_page_id
         FROM timeline_entries te

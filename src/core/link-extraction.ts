@@ -1197,12 +1197,31 @@ export interface TimelineCandidate {
   summary: string;
   /** Optional detail (subsequent lines until next entry/heading). */
   detail: string;
+  source?: string;
+}
+
+export function findTimelineSourceDelimiter(text: string): number {
+  let depth = 0;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (c === '[' || c === '(') depth++;
+    else if (c === ']' || c === ')') { if (depth > 0) depth--; }
+    else if (
+      depth === 0 &&
+      (c === '—' || c === '–' || c === '-') &&
+      i > 0 && /\s/.test(text[i - 1]) &&
+      i + 1 < text.length && /\s/.test(text[i + 1])
+    ) {
+      return i;
+    }
+  }
+  return -1;
 }
 
 // Match: `- **YYYY-MM-DD** | summary` or `- **YYYY-MM-DD** -- summary`
 // or `- **YYYY-MM-DD** - summary` or just `**YYYY-MM-DD** | summary`.
-const TIMELINE_LINE_RE = /^\s*-?\s*\*\*(\d{4}-\d{2}-\d{2})\*\*\s*[|\-–—]+\s*(.+?)\s*$/;
-const TIMELINE_LINE_RE_CN = /^\s*-?\s*(?:\*\*)?(\d{4})年(\d{1,2})月(\d{1,2})日?(?:\*\*)?\s*[|\-–—]+\s*(.+?)\s*$/;
+const TIMELINE_LINE_RE = /^\s*-?\s*\*\*(\d{4}-\d{2}-\d{2})\*\*\s*([|\-–—]+)\s*(.+?)\s*$/;
+const TIMELINE_LINE_RE_CN = /^\s*-?\s*(?:\*\*)?(\d{4})年(\d{1,2})月(\d{1,2})日?(?:\*\*)?\s*([|\-–—]+)\s*(.+?)\s*$/;
 
 /**
  * Parse timeline entries from content. Looks at:
@@ -1222,9 +1241,11 @@ export function parseTimelineEntries(content: string): TimelineCandidate[] {
     const m = TIMELINE_LINE_RE.exec(lines[i]);
     let date: string;
     let summary: string;
+    let separator: string;
     if (m) {
       date = m[1];
-      summary = m[2].trim();
+      separator = m[2];
+      summary = m[3].trim();
     } else {
       const cnMatch = TIMELINE_LINE_RE_CN.exec(lines[i]);
       if (!cnMatch) {
@@ -1232,11 +1253,20 @@ export function parseTimelineEntries(content: string): TimelineCandidate[] {
         continue;
       }
       date = `${cnMatch[1]}-${cnMatch[2].padStart(2, '0')}-${cnMatch[3].padStart(2, '0')}`;
-      summary = cnMatch[4].trim();
+      separator = cnMatch[4];
+      summary = cnMatch[5].trim();
     }
     if (!isValidDate(date) || summary.length === 0) {
       i++;
       continue;
+    }
+    let source = 'markdown';
+    if (separator.includes('|')) {
+      const at = findTimelineSourceDelimiter(summary);
+      if (at >= 0) {
+        source = summary.slice(0, at).trim();
+        summary = summary.slice(at + 1).trim();
+      }
     }
 
     // Collect optional detail lines (indented, until next date or heading).
@@ -1261,7 +1291,7 @@ export function parseTimelineEntries(content: string): TimelineCandidate[] {
       }
       break;
     }
-    result.push({ date, summary, detail: detailLines.join(' ').trim() });
+    result.push({ date, summary, detail: detailLines.join(' ').trim(), source });
     i = j;
   }
   return result;

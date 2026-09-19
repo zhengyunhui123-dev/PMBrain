@@ -58,6 +58,11 @@ export const ALL_PAGE_TYPES: readonly string[] = [
   // loops via the dream_generated:true + type:extract_receipt belt-and-
   // suspenders pattern per plan D-EXTRACT-19.
   'extract_receipt',
+  // v0.42.x — Life Chronicle (#2390). `event` = timeline atom
+  // (when·where·who·what), lives under life/events/; `diary` = first-person
+  // interiority, lives under life/diary/. Both temporal-primitive,
+  // extractable:false (events are one-line atoms; diary is private interiority).
+  'event', 'diary',
 ] as const;
 
 /**
@@ -741,6 +746,8 @@ export interface SearchResult {
   salience_boost?: number;
   /** Multiplier applied by applyRecencyBoost. */
   recency_boost?: number;
+  /** v0.42.x (#2390) — multiplier applied by applyChronicleTypeBoost (event/diary on temporal queries). */
+  chronicle_boost?: number;
   /** Multiplier applied by applyExactMatchBoost. */
   exact_match_boost?: number;
   /** Multiplier applied by applyGraphSignals (adjacency hit). */
@@ -933,6 +940,34 @@ export interface OntologyReadOpts extends PageReadScope {
   includeQuarantined?: boolean;
   sourceId?: string;
   sourceIds?: string[];
+}
+
+export interface ChronicleTimelineRow {
+  date: string;
+  summary: string;
+  detail: string;
+  source: string;
+  page_id: number;
+  page_slug: string;
+  event_page_id: number | null;
+  event_slug: string | null;
+  effective_date: string | null;
+  kind: string | null;
+}
+
+export interface ChronicleTimelineOpts extends PageReadScope {
+  week?: boolean;
+  kind?: string;
+  limit?: number;
+  sourceId?: string;
+  sourceIds?: string[];
+}
+
+export interface LastSeenResult {
+  entity_slug: string;
+  last_date: string | null;
+  last_event_slug: string | null;
+  days_ago: number | null;
 }
 
 export interface SearchOpts {
