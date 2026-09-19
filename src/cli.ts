@@ -144,12 +144,13 @@ async function main() {
 
   // Per-command --help
   if (hasHelpFlag(subArgs)) {
+    const selfHelpSub = command === 'eval' && subArgs[0] === 'brainbench';
     const op = cliOps.get(command);
-    if (op) {
+    if (op && !selfHelpSub) {
       printOpHelp(op);
       return;
     }
-    if (CLI_ONLY.has(command) && !CLI_ONLY_SELF_HELP.has(command)) {
+    if (!selfHelpSub && CLI_ONLY.has(command) && !CLI_ONLY_SELF_HELP.has(command)) {
       printCliOnlyHelp(command);
       return;
     }
@@ -1201,6 +1202,23 @@ async function handleCliOnly(command: string, args: string[]) {
     process.exit(await runEvalCrossModal(args.slice(1)));
   }
 
+  if (command === 'eval' && args[0] === 'run-all') {
+    const { runEvalRunAll } = await import('./commands/eval-run-all.ts');
+    await runEvalRunAll(null, args.slice(1));
+    return;
+  }
+
+  if (command === 'eval' && args[0] === 'brainbench') {
+    const { runEvalBrainBench } = await import('./commands/eval-brainbench.ts');
+    if (args.includes('--llm') && !args.includes('--help') && !args.includes('-h')) {
+      const config = loadConfig() ?? ({} as GBrainConfig);
+      const { configureGateway } = await import('./core/ai/gateway.ts');
+      configureGateway(buildGatewayConfig(config));
+    }
+    await runEvalBrainBench(args.slice(1));
+    return;
+  }
+
   // v0.32 EXP-5 (codex review #10): `eval takes-quality replay <receipt>`
   // is the ONLY sub-subcommand that doesn't need a brain — it reads a
   // receipt JSON file from disk and re-renders it. Bypass connectEngine
@@ -1213,8 +1231,8 @@ async function handleCliOnly(command: string, args: string[]) {
   }
 
   // v0.28.8: longmemeval brings its own in-memory PGLite. Bypassing
-  // connectEngine here keeps `gbrain eval longmemeval --help` and benchmark
-  // runs working on machines that have no `~/.gbrain/config.json` configured.
+  // connectEngine here keeps `pmbrain eval longmemeval --help` and benchmark
+  // runs working on machines that have no `~/.pmbrain/config.json` configured.
   //
   // v0.35.1.1: still need to configureGateway() so the in-memory brain's
   // import + hybridSearch can embed via the configured provider. Reads

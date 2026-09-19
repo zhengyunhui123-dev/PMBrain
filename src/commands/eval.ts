@@ -1,13 +1,13 @@
 /**
- * gbrain eval — Retrieval Evaluation Command
+ * pmbrain eval — Retrieval Evaluation Command
  *
  * Runs search quality benchmarks against user-defined ground truth (qrels).
  * Supports single-config runs and A/B comparison mode for tuning parameters.
  *
  * Usage:
- *   gbrain eval --qrels <path|json>
- *   gbrain eval --qrels <path> --config-a <path|json> --config-b <path|json>
- *   gbrain eval --qrels <path> --strategy hybrid --rrf-k 30 --k 5
+ *   pmbrain eval --qrels <path|json>
+ *   pmbrain eval --qrels <path> --config-a <path|json> --config-b <path|json>
+ *   pmbrain eval --qrels <path> --strategy hybrid --rrf-k 30 --k 5
  */
 
 import { readFileSync, existsSync } from 'fs';
@@ -21,7 +21,7 @@ import {
 } from '../core/search/eval.ts';
 
 export async function runEvalCommand(engine: BrainEngine, args: string[]): Promise<void> {
-  // v0.25.0 — sub-subcommand dispatch. Bare `gbrain eval --qrels ...`
+  // v0.25.0 — sub-subcommand dispatch. Bare `pmbrain eval --qrels ...`
   // falls through to the legacy IR-metrics flow so existing callers
   // don't break.
   const sub = args[0];
@@ -51,6 +51,11 @@ export async function runEvalCommand(engine: BrainEngine, args: string[]): Promi
     // intentionally unused.
     const { runEvalCrossModal } = await import('./eval-cross-modal.ts');
     process.exit(await runEvalCrossModal(args.slice(1)));
+  }
+  if (sub === 'brainbench') {
+    const { runEvalBrainBench } = await import('./eval-brainbench.ts');
+    await runEvalBrainBench(args.slice(1));
+    return;
   }
   if (sub === 'code-retrieval') {
     // v0.33.3 pre-w0 — code-retrieval baseline / gate harness. Needs a brain
@@ -264,7 +269,7 @@ function printSingleTable(report: EvalReport): void {
   const { config, k, queries } = report;
   const label = config.name ?? config.strategy ?? 'hybrid';
 
-  console.log(`\ngbrain eval — ${queries.length} quer${queries.length === 1 ? 'y' : 'ies'} · strategy: ${label} · k=${k}\n`);
+  console.log(`\npmbrain eval — ${queries.length} quer${queries.length === 1 ? 'y' : 'ies'} · strategy: ${label} · k=${k}\n`);
 
   const COL_QUERY = 36;
   const COL_NUM = 7;
@@ -300,7 +305,7 @@ function printABTable(reportA: EvalReport, reportB: EvalReport, k: number): void
   const labelB = reportB.config.name ?? 'Config B';
   const n = reportA.queries.length;
 
-  console.log(`\ngbrain eval — ${n} quer${n === 1 ? 'y' : 'ies'} · A/B comparison · k=${k}\n`);
+  console.log(`\npmbrain eval — ${n} quer${n === 1 ? 'y' : 'ies'} · A/B comparison · k=${k}\n`);
 
   const COL_QUERY = 34;
   const COL_METRIC = 8;
@@ -390,11 +395,30 @@ function truncate(s: string, max: number): string {
 
 function printHelp(): void {
   console.log(`
-gbrain eval — measure and compare retrieval quality
+pmbrain eval — measure and compare retrieval quality
 
 USAGE
-  gbrain eval --qrels <path>
-  gbrain eval --qrels <path> --config-a <path> --config-b <path>
+  pmbrain eval --qrels <path>
+  pmbrain eval --qrels <path> --config-a <path> --config-b <path>
+  pmbrain eval <subcommand> [flags]     (run \`pmbrain eval <subcommand> --help\` where available)
+
+SUBCOMMANDS
+  replay                     Re-run captured production queries against the current config
+  retrieval-quality          Retrieval-quality suite over the calibration corpus
+  gate                       CI pass/fail gate over a saved baseline
+  compare                    Compare two saved eval runs
+  run-all                    Orchestrate every suite (works with no brain configured)
+  brainbench                 Cross-harness memory conformance suite (hermetic)
+  longmemeval                LongMemEval benchmark (brings its own in-memory brain)
+  cross-modal                Cross-modal quality gate (pure API calls, no DB)
+  code-retrieval             Code-retrieval benchmark
+  brainstorm                 Brainstorm-quality eval
+  whoknows                   whoknows ranking eval
+  suspected-contradictions   Contradiction-probe eval
+  trajectory                 Chronological claim trajectory for an entity
+  conversation-parser        Fixture-corpus CI gate for the parser registry
+  takes-quality              {run,trend,regress,replay} takes-quality harness
+  export / prune             Export or prune recorded eval results
 
 OPTIONS
   --qrels <path|json>         Path to qrels JSON file (required)
@@ -427,9 +451,10 @@ CONFIG FORMAT
   { "name": "rrf-k-30", "strategy": "hybrid", "rrf_k": 30, "expand": false }
 
 EXAMPLES
-  gbrain eval --qrels ./my-queries.json
-  gbrain eval --qrels ./qrels.json --strategy keyword
-  gbrain eval --qrels ./qrels.json --rrf-k 30
-  gbrain eval --qrels ./qrels.json --config-a baseline.json --config-b experiment.json
+  pmbrain eval --qrels ./my-queries.json
+  pmbrain eval --qrels ./qrels.json --strategy keyword
+  pmbrain eval --qrels ./qrels.json --rrf-k 30
+  pmbrain eval --qrels ./qrels.json --config-a baseline.json --config-b experiment.json
+  pmbrain eval brainbench --compare evals/brainbench/baselines/main.json
 `.trim());
 }

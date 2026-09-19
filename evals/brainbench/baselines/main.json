@@ -1,0 +1,135 @@
+{
+  "schema_version": 1,
+  "fixtures_hash": "509fd20d7cda693350030393b6d54154e2685516d30f017ca219bd25e92c0e57",
+  "config": {
+    "include_holdout": false,
+    "llm": false,
+    "harnesses": [
+      "claude-code",
+      "codex",
+      "openclaw"
+    ],
+    "suites": [
+      "continuity",
+      "know-to-ask",
+      "push",
+      "write-back"
+    ]
+  },
+  "justification": "PMBrain 1.3.62 port: claude-code is a contract seam (writeback-only hook; reflex+volunteer with 2-pointer budget) rather than GBrain UserPromptSubmit IPC.",
+  "cells": {
+    "claude-code/continuity": {
+      "avg_injected_tokens": 75.3333,
+      "continuity_rate": 1,
+      "source_isolation_violations": 0
+    },
+    "claude-code/know-to-ask": {
+      "avg_injected_tokens": 45.2483,
+      "false_fire_rate": 0,
+      "know_to_ask_failure_rate": 0,
+      "source_isolation_violations": 0
+    },
+    "claude-code/push": {
+      "avg_injected_tokens": 59.7944,
+      "push_precision": 1,
+      "push_recall": 1,
+      "source_isolation_violations": 0
+    },
+    "claude-code/write-back": {
+      "provenance_accuracy": 1,
+      "write_back_fidelity": 1
+    },
+    "codex/continuity": {
+      "avg_injected_tokens": 150.9167,
+      "continuity_rate": 1,
+      "source_isolation_violations": 0
+    },
+    "codex/know-to-ask": {
+      "avg_injected_tokens": 45.2215,
+      "false_fire_rate": 0,
+      "know_to_ask_failure_rate": 0,
+      "source_isolation_violations": 0
+    },
+    "codex/push": {
+      "avg_injected_tokens": 54.6449,
+      "push_precision": 1,
+      "push_recall": 0.5521,
+      "source_isolation_violations": 0
+    },
+    "codex/write-back": {
+      "provenance_accuracy": 1,
+      "write_back_fidelity": 1
+    },
+    "openclaw/continuity": {
+      "avg_injected_tokens": 75.3333,
+      "continuity_rate": 1,
+      "source_isolation_violations": 0
+    },
+    "openclaw/know-to-ask": {
+      "avg_injected_tokens": 44.2617,
+      "false_fire_rate": 0,
+      "know_to_ask_failure_rate": 0,
+      "source_isolation_violations": 0
+    },
+    "openclaw/push": {
+      "avg_injected_tokens": 58.4206,
+      "push_precision": 1,
+      "push_recall": 1,
+      "source_isolation_violations": 0
+    },
+    "openclaw/write-back": {
+      "provenance_accuracy": 1,
+      "write_back_fidelity": 1
+    }
+  },
+  "counts": {
+    "claude-code/continuity": {
+      "gold_total": 12,
+      "gold_failed": 0
+    },
+    "claude-code/know-to-ask": {
+      "gold_total": 149,
+      "gold_failed": 0
+    },
+    "claude-code/push": {
+      "gold_total": 96,
+      "gold_failed": 0
+    },
+    "claude-code/write-back": {
+      "gold_total": 58,
+      "gold_failed": 0
+    },
+    "codex/continuity": {
+      "gold_total": 12,
+      "gold_failed": 0
+    },
+    "codex/know-to-ask": {
+      "gold_total": 149,
+      "gold_failed": 0
+    },
+    "codex/push": {
+      "gold_total": 96,
+      "gold_failed": 43
+    },
+    "codex/write-back": {
+      "gold_total": 58,
+      "gold_failed": 0
+    },
+    "openclaw/continuity": {
+      "gold_total": 12,
+      "gold_failed": 0
+    },
+    "openclaw/know-to-ask": {
+      "gold_total": 149,
+      "gold_failed": 0
+    },
+    "openclaw/push": {
+      "gold_total": 96,
+      "gold_failed": 0
+    },
+    "openclaw/write-back": {
+      "gold_total": 58,
+      "gold_failed": 0
+    }
+  }
+}

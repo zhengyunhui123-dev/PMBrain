@@ -215,10 +215,14 @@ describe('per-question failure handling', () => {
         answer: 'a',
         // missing haystack_sessions on purpose
       };
+      // Distinct id for the trailing question: the harness dedupes repeated
+      // question_ids (WARN + keep-first, plan D12), so a literal repeat of
+      // `valid` would be dropped instead of proving the run continued.
+      const valid2: LongMemEvalQuestion = { ...valid, question_id: 'lme-ok-2' };
       const { writeFileSync } = await import('fs');
       writeFileSync(
         fixturePath,
-        JSON.stringify(valid) + '\n' + JSON.stringify(broken) + '\n' + JSON.stringify(valid) + '\n',
+        JSON.stringify(valid) + '\n' + JSON.stringify(broken) + '\n' + JSON.stringify(valid2) + '\n',
         'utf8',
       );
       await runEvalLongMemEval(
@@ -234,7 +238,7 @@ describe('per-question failure handling', () => {
       expect(lines[1].hypothesis).toBe('');
       expect(typeof lines[1].error).toBe('string');
       expect(lines[1].error.length).toBeGreaterThan(0);
-      expect(lines[2].question_id).toBe('lme-ok-1');
+      expect(lines[2].question_id).toBe('lme-ok-2');
       expect(typeof lines[2].hypothesis).toBe('string');
     } finally {
       rmSync(tmp, { recursive: true, force: true });
@@ -364,10 +368,16 @@ describe('runEvalLongMemEval --by-type (v0.40.1.0 Track D / T1+T2)', () => {
       const withLines = readFileSync(withFlag, 'utf8').split('\n').filter(l => l.length > 0);
       const lastWith = JSON.parse(withLines[withLines.length - 1]);
       expect(lastWith.kind).toBe('by_type_summary');
-      expect(lastWith.schema_version).toBe(1);
+      // Schema v2 (ranker wave): strict + lenient recall per type, run_config receipt.
+      expect(lastWith.schema_version).toBe(2);
+      expect(lastWith.metric).toBe('recall_all@k');
       expect(typeof lastWith.recall_by_type).toBe('object');
-      expect(typeof lastWith.aggregate.hit).toBe('number');
+      expect(typeof lastWith.aggregate.all_hit).toBe('number');
+      expect(typeof lastWith.aggregate.any_hit).toBe('number');
       expect(typeof lastWith.aggregate.total).toBe('number');
+      expect(typeof lastWith.run_config).toBe('object');
+      expect(typeof lastWith.run_config.retrieval_config_hash).toBe('string');
+      expect(typeof lastWith._meta.metric_glossary[`recall_all@${lastWith.k}`]).toBe('string');
       // Per-question rows must NOT have kind:by_type_summary.
       for (let i = 0; i < withLines.length - 1; i++) {
         const row = JSON.parse(withLines[i]);
@@ -440,10 +450,13 @@ describe('codex CDX-3 — resume + --by-type-floor enforcement on no-op resume',
     const tmp = mkdtempSync(join(tmpdir(), 'lme-resume-'));
     const outPath = join(tmp, 'all-done.jsonl');
     try {
-      // Pre-seed the output file with all-failed rows (recall_hit: false).
-      // This represents a prior run that completed every question but with
-      // very poor recall — the floor gate should fire even though no
-      // questions are processed THIS run.
+      // Pre-seed the output file with all-failed rows: retrieved_session_ids
+      // is EMPTY, so the resume re-scoring (recall is recomputed from the
+      // row's retrieved ids + the dataset gold, never trusted from the row)
+      // yields recall_all_hit=false / recall_any_hit=false for every row.
+      // The stale `recall_hit: false` is ignored. This represents a prior run
+      // that completed every question with zero recall — the floor gate
+      // should fire even though no questions are processed THIS run.
       const fixture = readFileSync(FIXTURE_PATH, 'utf8')
         .split('\n').filter(l => l.length > 0).map(l => JSON.parse(l)).slice(0, 5);
       const { writeFileSync } = await import('fs');
@@ -454,7 +467,8 @@ describe('codex CDX-3 — resume + --by-type-floor enforcement on no-op resume',
           question: q.question,
           question_type: q.question_type,
           hypothesis: 'done',
-          recall_hit: false, // every prior question missed
+          retrieved_session_ids: [], // every prior question missed (recomputed on resume)
+          recall_hit: false, // deprecated alias; ignored by the v2 seed
         })).join('\n') + '\n',
         'utf8',
       );
@@ -494,8 +508,11 @@ describe('codex CDX-3 — resume + --by-type-floor enforcement on no-op resume',
       });
       expect(summaries.length).toBe(1);
       const summary = JSON.parse(summaries[0]);
-      // All rows had recall_hit: false → aggregate.rate is 0 → below 0.5 floor.
-      expect(summary.aggregate.rate).toBeLessThan(0.5);
+      // Every row re-scored false → aggregate.all_rate is 0 → below 0.5 floor.
+      expect(summary.schema_version).toBe(2);
+      expect(summary.aggregate.total).toBe(5);
+      expect(summary.aggregate.all_rate).toBeLessThan(0.5);
+      expect(summary.aggregate.any_rate).toBe(0);
     } finally {
       rmSync(tmp, { recursive: true, force: true });
     }

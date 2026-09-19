@@ -664,8 +664,12 @@ export async function applyAliasHop(
   return out;
 }
 
+export const PRE_FUSION_POOL_FLOOR = 50;
+
 export interface HybridSearchOpts extends SearchOpts {
   expansion?: boolean;
+  expansionVariantBudget?: number | null;
+  onRerankPool?: (pool: readonly SearchResult[], preRerank: readonly SearchResult[]) => void;
   /** v0.43 — observability sink for the relational recall arm (fired/no-op,
    *  kind, seeds resolved, candidates, errored). Best-effort. */
   onRelationalMeta?: (meta: import('./relational-recall.ts').RelationalArmMeta) => void;

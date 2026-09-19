@@ -168,6 +168,138 @@ Every metric `pmbrain eval *` and `pmbrain search stats` reports has a plain-Eng
 
 **Range:** 0..1, higher = a sharper cliff (more confident cut). Below the autocut_jump threshold → no cut.
 
+## BrainBench — Cross-Harness Memory Conformance
+
+### Know-to-ask failure rate (BrainBench)
+
+**Key:** `know_to_ask_failure_rate`
+
+**Plain English:** Of the conversation turns where memory SHOULD have surfaced something unprompted, the fraction where nothing relevant was injected. This is the thesis failure mode every agent harness shares: the agent can't ask for what it doesn't know it forgot — the memory layer has to volunteer it.
+
+**Range:** 0..1, LOWER is better. 0.15 means memory stayed silent on 15% of the turns where it had the answer.
+
+### False-fire rate (BrainBench)
+
+**Key:** `false_fire_rate`
+
+**Plain English:** Of the turns where memory should have stayed SILENT, the fraction where it injected anyway. The anti-gaming companion to the know-to-ask rate — "always inject" would ace one and bomb the other. Silence beats noise.
+
+**Range:** 0..1, LOWER is better.
+
+### Push precision (BrainBench)
+
+**Key:** `push_precision`
+
+**Plain English:** Of everything the memory layer volunteered into context, what fraction was actually relevant to the turn? Micro-averaged over injected pointers, so a 3-pointer turn weighs three times a 1-pointer turn — the way a token budget experiences it.
+
+**Range:** 0..1, higher is better.
+
+### Push recall (BrainBench)
+
+**Key:** `push_recall`
+
+**Plain English:** Of everything that SHOULD have been volunteered (the gold pointers), what fraction actually was? Pointer budgets cap this by design: a seam that may inject only 1 fragment cannot reach full recall on a 3-entity turn — that constraint is what the per-harness rows measure.
+
+**Range:** 0..1, higher is better.
+
+### Write-back fidelity (BrainBench)
+
+**Key:** `write_back_fidelity`
+
+**Plain English:** Of the facts stated in a conversation, what fraction survived the PRODUCTION conversation→memory pipeline (segmentation, insertion, dedup) and are findable afterward with the right entity attached? Measures the write path users actually run, not a test-only insert.
+
+**Range:** 0..1, higher is better.
+
+### Provenance accuracy (BrainBench)
+
+**Key:** `provenance_accuracy`
+
+**Plain English:** Of the facts that survived write-back, what fraction carry correct provenance — the right source tag, session id, and origin page? A fact you can't trace is a fact you can't trust, audit, or expire.
+
+**Range:** 0..1, higher is better.
+
+### Cross-session continuity rate (BrainBench)
+
+**Key:** `continuity_rate`
+
+**Plain English:** A decision is recorded in one session and persisted through the production write path; a different harness asks about it later on the same brain. What fraction of those decision probes were recalled — by pointer injection or stored-fact lookup? This is the continuity-that-survives-the-harness-hop moat, measured.
+
+**Range:** 0..1, higher is better. Scored per reader harness (the v1 write path is harness-independent, disclosed in docs/eval/BRAINBENCH.md).
+
+### Source-isolation violations (BrainBench)
+
+**Key:** `source_isolation_violations`
+
+**Plain English:** Count of injected pointers that belong to a source other than the active one. Cross-source leakage is PMBrain's must-never-violate invariant (a missed source filter is a data leak), so this gates at ZERO — any baseline, any run.
+
+**Range:** 0..n, count. MUST be 0; any value above 0 fails the gate.
+
+### Average injected tokens per turn (BrainBench)
+
+**Key:** `avg_injected_tokens`
+
+**Plain English:** Estimated tokens of volunteered context per replayed turn (chars/4 heuristic). The intrusion-budget diagnostic: two seams with equal precision can differ 3x in how much context they spend to get it. Reported, not gated, until calibration data exists.
+
+**Range:** 0..n tokens, judgment call — lower is cheaper, but starving the agent has its own cost. Non-gating.
+
+### Extraction recall (BrainBench --llm)
+
+**Key:** `extraction_recall`
+
+**Plain English:** With the real LLM extractor running (instead of the deterministic gold extractor), what fraction of the gold facts did it actually extract and persist? Only scored in --llm runs — the hermetic CI gate never calls a model.
+
+**Range:** 0..1, higher is better. Absent in deterministic runs.
+
+### Extraction precision (BrainBench --llm)
+
+**Key:** `extraction_precision`
+
+**Plain English:** Of everything the real LLM extractor persisted, what fraction matches a gold fact? Low precision means the extractor invents or over-extracts — junk memory that pollutes future recall.
+
+**Range:** 0..1, higher is better. Absent in deterministic runs.
+
+## LongMemEval — Long-Term Conversational Memory
+
+### Strict session recall at k (recall_all@k, LongMemEval)
+
+**Key:** `recall_all@k`
+
+**Plain English:** Did EVERY gold session for the question land among the distinct sessions in the top k retrieved chunks? A multi-session question with two gold sessions only counts when both are there — this is the evidence-complete rate the answer model actually needs. Abstention (_abs) questions stay out of the denominator unless --include-abstention.
+
+**Range:** 0..1 per question type and aggregate, higher is better. Strict by construction: recall_all@k <= recall_any@k always.
+
+### Lenient session recall at k (recall_any@k, LongMemEval)
+
+**Key:** `recall_any@k`
+
+**Plain English:** Did AT LEAST ONE gold session land among the distinct sessions in the top k retrieved chunks? The lenient companion to recall_all@k — a partial-evidence hit still counts. Per-row `recall_hit` is a deprecated alias of this metric.
+
+**Range:** 0..1, higher is better. Reported alongside recall_all@k; the gap between them is the partial-evidence rate.
+
+### Judged QA accuracy (LongMemEval, LLM-as-judge)
+
+**Key:** `qa_accuracy`
+
+**Plain English:** Of all questions in the run, what fraction did the judge model mark correct against the gold answer (official LongMemEval prompts)? The headline scores every question the judge could not grade (timeouts, refusals, malformed verdicts, budget skips) as INCORRECT, so it is never more lenient than the official scorer; the companion accuracy_excluding_errors drops those rows from the denominator and the judge_errors count says how many there were.
+
+**Range:** 0..1, higher is better. Only comparable across runs with the same reader model, judge model, prompt version and dataset revision.
+
+### Mean returned results per question (autocut benefit, LongMemEval replay)
+
+**Key:** `mean_returned_results`
+
+**Plain English:** Across the questions in an autocut floor replay, the mean number of chunk rows in the returned window (the first k rows autocut kept). This is the benefit side of the autocut trade: fewer rows per question means less context the answer model has to read. Compare it against recall_all@k, the guardrail, at each floor.
+
+**Range:** 0..k, lower is better ONLY while recall_all@k holds. Equals k whenever autocut never trims inside the window (e.g. floor `off`).
+
+### Mean estimated tokens returned per question (autocut benefit, LongMemEval replay)
+
+**Key:** `mean_returned_est_tokens`
+
+**Plain English:** Across the questions in an autocut floor replay, the mean of the summed estimated tokens (chars / 4) of the returned window. The token-denominated twin of mean_returned_results: the direct measure of how much conversational memory each question pushes into the answer model at a given floor.
+
+**Range:** 0..unbounded, lower is better ONLY while recall_all@k holds. Approximates OpenAI tiktoken counts for English; off by ~5-10% for other tokenizers.
+
 ---
 
 ## Coverage
