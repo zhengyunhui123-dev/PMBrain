@@ -4,5 +4,6 @@ export * from './common.ts';
 export * from './dream.ts';
 export * from './import.ts';
 export * from './models.ts';
+export * from './product-surfaces.ts';
 export * from './sources.ts';
 export * from './updates.ts';

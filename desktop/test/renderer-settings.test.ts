@@ -59,7 +59,7 @@ describe('desktop settings renderer contracts', () => {
   });
 
   test('keeps the six desktop tasks separate and exposes advanced-only controls', () => {
-    for (const panel of ['basic', 'models', 'integrations', 'system', 'updates', 'repair']) {
+    for (const panel of ['basic', 'models', 'integrations', 'daily', 'system', 'updates', 'repair']) {
       expect(html).toContain(`data-target="${panel}"`);
       expect(html).toContain(`id="panel-${panel}"`);
     }

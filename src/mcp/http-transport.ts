@@ -139,7 +139,7 @@ export async function startHttpTransport(opts: HttpTransportOptions) {
   const bodyCap = envInt('PMBRAIN_HTTP_MAX_BODY_BYTES', DEFAULT_BODY_CAP);
   const corsAllowlist = parseCorsAllowlist();
   const surface = clampSurface('full');
-  const surfaceOps = filterOpsForSurface(operations, surface);
+  const surfaceOps = filterOpsForSurface(operations.filter(op => !op.localOnly), surface);
   const surfaceAllowedOps = new Set(surfaceOps.map((op) => op.name));
   const tools = buildToolDefs(surfaceOps);
 
@@ -372,6 +372,7 @@ export async function startHttpTransport(opts: HttpTransportOptions) {
         // path defaults to 'default' per AuthResult.sourceId above.
         const result = await dispatchToolCall(engine, toolName, args, {
           remote: true,
+          transport: 'http',
           takesHoldersAllowList: auth.takesHoldersAllowList,
           sourceId: auth.sourceId,
           allowedOps: surfaceAllowedOps,

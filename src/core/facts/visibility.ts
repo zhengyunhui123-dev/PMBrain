@@ -35,7 +35,7 @@ export async function resolveDefaultVisibility(engine: BrainEngine): Promise<Fac
 }
 
 /**
- * Op-layer param resolution shared by extract_facts.
+ * Op-layer param resolution shared by extract_facts and ontology_propose.
  *   - explicit 'world'  → 'world'
  *   - explicit 'private'→ 'private'
  *   - unset (null/undefined) → resolveDefaultVisibility(engine)

@@ -24,6 +24,7 @@ import { writeWorkbuddyUserAgent } from './integration/user-agent-writer.js';
 import { WorkBuddyAgentController } from './integration/workbuddy-agent-controller.js';
 import { listIntegrations } from './integration-manager.js';
 import { registerDesktopIpcHandlers } from './ipc-handlers.js';
+import { createProductSurfaceHandlers } from './product-surfaces.js';
 import {
   inspectDesktopPgliteRecovery,
   terminateDesktopPgliteOwnerAndRetry,
@@ -272,7 +273,7 @@ async function readReleaseManifest(): Promise<unknown> {
 async function exportDiagnosticBundle(): Promise<{ path: string; fileName: string; files: string[] } | null> {
   const setup = getSetupInfo();
   const activeSidecar = sidecarController.current;
-  const [doctor, overview, dreamStatus, releaseManifest] = await Promise.all([
+  const [doctor, overview, dreamStatus, advisor, releaseManifest] = await Promise.all([
     activeSidecar?.adminRequest('/admin/api/doctor').catch(error => ({
       status: 'unavailable', error: error instanceof Error ? error.message : String(error),
     })) ?? Promise.resolve({ status: 'sidecar_not_ready' }),
@@ -280,6 +281,9 @@ async function exportDiagnosticBundle(): Promise<{ path: string; fileName: strin
       status: 'unavailable', error: error instanceof Error ? error.message : String(error),
     })) ?? Promise.resolve({ status: 'sidecar_not_ready' }),
     activeSidecar?.adminRequest('/admin/api/dream/overview').catch(error => ({
+      status: 'unavailable', error: error instanceof Error ? error.message : String(error),
+    })) ?? Promise.resolve({ status: 'sidecar_not_ready' }),
+    activeSidecar?.adminRequest('/admin/api/advisor').catch(error => ({
       status: 'unavailable', error: error instanceof Error ? error.message : String(error),
     })) ?? Promise.resolve({ status: 'sidecar_not_ready' }),
     readReleaseManifest(),
@@ -294,6 +298,7 @@ async function exportDiagnosticBundle(): Promise<{ path: string; fileName: strin
     doctor,
     overview,
     dreamStatus,
+    advisor,
     personalPaths: [app.getPath('home'), app.getPath('userData')],
   });
   const mainWindow = windowController.current;
@@ -316,7 +321,7 @@ async function openSettingsPanel(panel: SettingsPanel): Promise<void> {
   windowController.reveal();
 }
 
-async function openAdmin(): Promise<void> {
+async function openAdmin(hash = ''): Promise<void> {
   const mainWindow = windowController.current;
   if (!mainWindow) return;
   if (getSetupInfo().needsSetup) {
@@ -330,7 +335,9 @@ async function openAdmin(): Promise<void> {
     return;
   }
   const activeSidecar = await sidecarController.ensureReady();
-  await mainWindow.loadURL(await activeSidecar.createAdminLink());
+  const url = await activeSidecar.createAdminLink();
+  const suffix = hash ? (hash.startsWith('#') ? hash : `#${hash}`) : '';
+  await mainWindow.loadURL(`${url}${suffix}`);
   windowController.reveal();
 }
 
@@ -467,6 +474,20 @@ if (!app.requestSingleInstanceLock()) {
         if (logger) return shell.showItemInFolder(logger.filePath);
       },
       exportDiagnosticBundle,
+      productSurfaces: createProductSurfaceHandlers({
+        runtime,
+        sidecar: () => sidecarController.current,
+      }),
+      chooseFile: async (filters) => {
+        const window = windowController.current;
+        if (!window) throw new Error('PMBrain 桌面窗口尚未就绪。');
+        const result = await dialog.showOpenDialog(window, {
+          properties: ['openFile'],
+          filters: filters ?? [{ name: 'JSON', extensions: ['json'] }],
+        });
+        return result.canceled ? null : result.filePaths[0] ?? null;
+      },
+      openExternal: (url) => shell.openExternal(url),
     });
     lanController.startMonitor(LAN_MONITOR_INTERVAL_MS);
     await windowController.create();

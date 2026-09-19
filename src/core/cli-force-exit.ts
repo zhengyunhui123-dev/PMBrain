@@ -19,6 +19,21 @@
 
 const DAEMON_COMMANDS: ReadonlySet<string> = new Set(['serve']);
 
+let cliVerdict: number | null = null;
+
+export function setCliExitVerdict(code: number): void {
+  cliVerdict = code;
+  process.exitCode = code;
+}
+
+export function currentExitCode(): number {
+  return cliVerdict ?? 0;
+}
+
+export function _resetCliExitVerdictForTests(): void {
+  cliVerdict = null;
+}
+
 export function shouldForceExitAfterMain(
   argv: string[] = process.argv.slice(2),
 ): boolean {

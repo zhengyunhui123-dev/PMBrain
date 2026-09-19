@@ -8,7 +8,6 @@ import { lstatSync, realpathSync } from 'fs';
 import { resolve, relative, sep } from 'path';
 import type { BrainEngine } from './engine.ts';
 import { clampSearchLimit } from './engine.ts';
-import type { GBrainConfig } from './config.ts';
 import type { PageType, SearchResult } from './types.ts';
 import { importFromContent } from './import-file.ts';
 import { serializePageToMarkdown } from './markdown.ts';
@@ -46,6 +45,15 @@ import * as db from './db.ts';
 import { VERSION } from '../version.ts';
 import { OperationError } from './operation-error.ts';
 import { MEMORY_VERBS_VERSION, memoryVerbOperations } from './memory-verbs.ts';
+import type { Operation, OperationContext } from './ops/contract.ts';
+import { sourceScopeOpts } from './ops/context.ts';
+import { entityIdentityOperations } from './ops/entity-identity.ts';
+import { connectorsOperations } from './ops/connectors.ts';
+import { loopsOperations } from './ops/loops.ts';
+import { chronicleOperations } from './ops/chronicle.ts';
+import { unionLinksAcrossIdentity } from './entity-identity.ts';
+export type { ParamDef, Logger, AuthInfo, OperationContext, Operation } from './ops/contract.ts';
+export { sourceScopeOpts } from './ops/context.ts';
 import {
   acceptTakeProposal as acceptAgentPackTakeProposal,
   getTakeProposal as getAgentPackTakeProposal,
@@ -57,6 +65,13 @@ import { buildContextPack, buildContextDelta } from './context/context-pack.ts';
 import { appendCheckpointManifest } from './context/session-state.ts';
 export { OperationError } from './operation-error.ts';
 export type { ErrorCode } from './operation-error.ts';
+export type {
+  ParamDef,
+  Logger,
+  AuthInfo,
+  OperationContext,
+  Operation,
+} from './ops/contract.ts';
 import {
   GET_RECENT_SALIENCE_DESCRIPTION,
   FIND_ANOMALIES_DESCRIPTION,
@@ -200,224 +215,6 @@ export function validateFilename(name: string): void {
   }
 }
 
-export interface ParamDef {
-  type: 'string' | 'number' | 'boolean' | 'object' | 'array';
-  required?: boolean;
-  description?: string;
-  default?: unknown;
-  enum?: string[];
-  items?: ParamDef;
-}
-
-export interface Logger {
-  info(msg: string): void;
-  warn(msg: string): void;
-  error(msg: string): void;
-}
-
-export interface AuthInfo {
-  token: string;
-  clientId: string;
-  /**
-   * Human-readable agent name resolved at token-verification time.
-   * For OAuth clients this is `oauth_clients.client_name`; for legacy
-   * bearer tokens it is `access_tokens.name`. Threading this through
-   * AuthInfo eliminates a per-request DB roundtrip in the /mcp handler
-   * (was: SELECT client_name FROM oauth_clients WHERE client_id = ?
-   * on every request — see PR #586 review note D14=B).
-   */
-  clientName?: string;
-  scopes: string[];
-  expiresAt?: number;
-  /**
-   * v0.34.1 (#861, D2): the source the calling OAuth client is scoped
-   * to (write authority). Sourced from `oauth_clients.source_id` at
-   * token-verification time. The HTTP transport ALSO threads this
-   * value into `OperationContext.sourceId` at the same site so op
-   * handlers can consume it via the canonical `ctx.sourceId` (D2
-   * dual-write decision — identity surface symmetric with
-   * `allowedSources` below).
-   *
-   * Undefined for legacy bearer tokens that predate v0.34.1 and for
-   * clients that haven't been scoped yet. Migration v60 backfills
-   * NULL → 'default' for pre-existing rows so this field is populated
-   * on the upgrade path; brand-new public-client registrations may
-   * still leave it null until an operator explicitly scopes via
-   * `gbrain auth scope-client`.
-   */
-  sourceId?: string;
-  /**
-   * v0.34.1 (#876): array of source ids this OAuth client may READ
-   * from (federation). Sourced from `oauth_clients.federated_read`.
-   * Independent of `sourceId` (write authority): a "WeCare L3 dept"
-   * client can write to `source_id='dept-x'` while reading the union
-   * of `['dept-x', 'wecare-parent', 'shared']`.
-   *
-   * Empty array `[]` means "no federated reads beyond `sourceId`".
-   * Undefined means "the post-v60 backfill hasn't populated this row
-   * yet" — engines fall back to scalar `sourceId` filtering in that
-   * case (back-compat).
-   */
-  allowedSources?: string[];
-  /** OAuth-bound MCP tool surface and provenance (Schema 121). */
-  surface?: 'verbs' | 'starter' | 'full' | string;
-  surfaceSetBy?: string;
-}
-
-export interface OperationContext {
-  engine: BrainEngine;
-  config: GBrainConfig;
-  logger: Logger;
-  dryRun: boolean;
-  /**
-   * OAuth auth info (v0.8+). Present when the caller authenticated via OAuth 2.1
-   * through `gbrain serve --http`. Contains clientId and granted scopes for
-   * per-operation scope enforcement.
-   */
-  auth?: AuthInfo;
-  /**
-   * True when the caller is remote/untrusted (MCP over stdio/HTTP, or any agent-facing entry point).
-   * False for local CLI invocations by the owner of the machine.
-   *
-   * Security-sensitive operations (e.g., file_upload) tighten their filesystem
-   * confinement when remote=true and allow unrestricted local-filesystem access
-   * when remote=false.
-   *
-   * REQUIRED as of the F7b hardening — the type system is the first line of defense.
-   * Every transport (CLI / stdio MCP / HTTP MCP / subagent dispatcher) sets this
-   * explicitly. Consumers still treat anything that isn't strictly `false` as
-   * remote/untrusted (defense in depth in case the type is bypassed via cast).
-   */
-  remote: boolean;
-  /** Effective caller surface and hard transport ceiling. */
-  surface?: 'verbs' | 'starter' | 'full';
-  surfaceCeiling?: 'verbs' | 'starter' | 'full';
-  /**
-   * Subagent runtime context (v0.16+). Set by the subagent tool dispatcher when
-   * dispatching an op as a tool call from an LLM loop. Used to enforce per-op
-   * agent policy (e.g. put_page namespace rule).
-   *
-   * `viaSubagent` is the FAIL-CLOSED flag: when true, agent-facing policy MUST
-   * be enforced even if `subagentId` happens to be undefined (a bug in the
-   * dispatcher must not bypass the guard). `subagentId` is the owning subagent
-   * job id; `jobId` is the current Minion job id (aggregator or subagent).
-   */
-  jobId?: number;
-  subagentId?: number;
-  viaSubagent?: boolean;
-  /**
-   * Trusted-workspace allow-list (v0.23 dream cycle). When the cycle's
-   * synthesize/patterns phases dispatch a subagent, they thread an
-   * explicit list of slug-prefix globs (e.g. "wiki/personal/reflections/*")
-   * through this field. put_page enforces it BEFORE the legacy
-   * `wiki/agents/<id>/...` namespace check.
-   *
-   * Trust comes from the SUBMITTER (subagent jobs are gated by
-   * PROTECTED_JOB_NAMES — MCP cannot submit them), not from `remote`.
-   * Every subagent tool call has `remote=true` for auto-link safety,
-   * so basing trust on `remote` is incoherent (would always reject).
-   *
-   * Empty / unset → fall back to the legacy namespace check (existing
-   * v0.15 behavior; pure addition, no regression).
-   */
-  allowedSlugPrefixes?: string[];
-  /**
-   * Resolved global CLI options (--quiet / --progress-json / --progress-interval).
-   * CLI callers populate this from `getCliOptions()`. MCP / library callers
-   * may leave it undefined — consumers default to quiet/no-progress for
-   * background work.
-   */
-  cliOpts?: { quiet: boolean; progressJson: boolean; progressInterval: number };
-  /**
-   * v0.28: per-token allow-list for the holder field on `takes`. Threaded
-   * by the MCP HTTP/stdio dispatch layer from `access_tokens.permissions.takes_holders`.
-   *
-   * When set (i.e., this OperationContext came from an MCP-bound token),
-   * `takes_list`, `takes_search`, proposal-review operations,
-   * `takes_scorecard`, `takes_calibration`,
-   * and `query` (when it returns takes) MUST apply `WHERE holder = ANY($takesHoldersAllowList)`.
-   * This is the server-side filter that backs the v0.28+ visibility model.
-   *
-   * v0.30.0: aggregate ops (`takes_scorecard`, `takes_calibration`) require
-   * the allow-list as a TS-required engine method param (fail-closed by
-   * compiler). Hidden-holder rows contribute zero to aggregates. The CLI
-   * callers (local + trusted) leave it undefined.
-   *
-   * Default behavior when unset: local CLI callers see all holders. v0.28
-   * MCP dispatch sets it to `['world']` for tokens with no permissions row
-   * (default-deny on private hunches).
-   */
-  takesHoldersAllowList?: string[];
-  /**
-   * Connected-gbrains brain id (v0.19+ / v0.26 mounts). Identifies which brain
-   * this op is targeting. 'host' for the default brain configured in
-   * ~/.gbrain/config.json; otherwise a mount id registered in ~/.gbrain/mounts.json.
-   *
-   * `ctx.engine` is the resolved BrainEngine for this id (populated by
-   * BrainRegistry at dispatch time). `brainId` exists alongside for:
-   * - audit logging (mount-ops JSONL carries the id)
-   * - subagent inheritance (child jobs receive the parent's brainId)
-   * - cross-brain citation prefixes in agent output
-   *
-   * Orthogonal to v0.18.0's source_id, which scopes per-repo WITHIN a brain.
-   * See docs/architecture/brains-and-sources.md for the mental model.
-   *
-   * Omitted = 'host' (pre-v0.19 callers + single-brain deployments keep
-   * working without change).
-   */
-  brainId?: string;
-  /**
-   * v0.31 (eD4 / eE2): the in-DB tenancy axis for facts hot memory.
-   * `sources.id` is TEXT (not INTEGER) — keep this as a string.
-   *
-   * Resolved once in the dispatcher from CLI flag (--source) / env
-   * (GBRAIN_SOURCE) / `.gbrain-source` dotfile / per-token sources scope
-   * (HTTP). Defaults to 'default' when nothing else applies.
-   *
-   * Every facts read/write filter starts with `WHERE source_id = $X`
-   * so the trust boundary is part of the index path, not a callback.
-   *
-   * v0.34 D4 — REQUIRED at the TypeScript level. Mirrors v0.26.9 `remote`
-   * REQUIRED pattern that closed the HTTP RCE class. Every transport
-   * (CLI / stdio MCP / HTTP MCP / subagent dispatcher) MUST populate
-   * this field; `buildOperationContext` auto-fills 'default' for callers
-   * who don't pass an explicit sourceId, so the type contract is
-   * satisfied even on single-source brains.
-   */
-  sourceId: string;
-}
-
-/**
- * v0.34.1 (#861, D9 — P0 leak seal): resolve the source-scope filter for a
- * read-side op handler. Returns an opts fragment ready to spread into the
- * engine call.
- *
- * Precedence:
- *  1. `ctx.auth?.allowedSources` (federated read, #876) → emits
- *     `{sourceIds: [...]}`. Federated semantics subsume the scalar case.
- *  2. `ctx.sourceId` (scalar) → emits `{sourceId: '...'}`.
- *  3. Neither set → emits `{}`. Local CLI callers (and tests that don't
- *     populate ctx) keep the pre-v0.34 unscoped behavior.
- *
- * Both fields default to the engine's "no filter" behavior individually,
- * so unset values are safe — the engine sees the same shape it did
- * pre-v0.34. The leak this guards against is an authenticated MCP client
- * whose ctx.sourceId IS set but whose engine call was constructed without
- * threading it (operations.ts:968/1076/1092/935/1469/1471/2241 pre-fix).
- *
- * Helper rather than inline so every read-side handler routes through the
- * same precedence ladder — drift between sites is the bug class.
- */
-export function sourceScopeOpts(ctx: OperationContext): { sourceId?: string; sourceIds?: string[] } {
-  const allowed = ctx.auth?.allowedSources;
-  // Treat an empty `allowedSources: []` as "no federated read scope" — the
-  // op-handler defers to scalar `ctx.sourceId` below. An attacker-controlled
-  // value of `[]` MUST NOT widen scope to "all sources" by being interpreted
-  // as "no filter."
-  if (allowed && allowed.length > 0) return { sourceIds: allowed };
-  if (ctx.sourceId) return { sourceId: ctx.sourceId };
-  return {};
-}
 
 /**
  * Resolve an optional caller-selected source without allowing remote callers
@@ -453,6 +250,37 @@ export function linkReadScopeOpts(ctx: OperationContext): { sourceId?: string; s
     return { sourceIds: [scope.sourceId] };
   }
   return scope;
+}
+
+async function loadIdentityMemberLinks(
+  ctx: OperationContext,
+  memberSlug: string,
+  memberSourceId: string,
+  incoming: boolean,
+  sourceOpts: { sourceId?: string; sourceIds?: string[] },
+  excludePrivate: boolean,
+) {
+  const memberScope = {
+    sourceId: memberSourceId,
+    ...(sourceOpts.sourceIds?.length ? { sourceIds: sourceOpts.sourceIds } : {}),
+    excludePrivate,
+  };
+  if (ctx.remote !== false) {
+    return readLinks(ctx.engine.executeRaw.bind(ctx.engine), memberSlug, incoming, memberScope);
+  }
+  let memberLinks = incoming
+    ? await ctx.engine.getBacklinks(memberSlug, memberScope)
+    : await ctx.engine.getLinks(memberSlug, memberScope);
+  if (excludePrivate) {
+    const hidden = await findPrivateOnlySlugs(
+      ctx.engine,
+      [...new Set(memberLinks.flatMap((link) => [link.from_slug, link.to_slug]))],
+      memberScope,
+      { includeDeleted: true },
+    );
+    memberLinks = memberLinks.filter((link) => !hidden.has(link.from_slug) && !hidden.has(link.to_slug));
+  }
+  return memberLinks;
 }
 
 export function resolvePerCallMode(ctx: OperationContext, raw: unknown): string | undefined {
@@ -520,34 +348,6 @@ function maybeCaptureSearch(
     },
     { scrub_pii: isEvalScrubEnabled(ctx.config) },
   );
-}
-
-export interface Operation {
-  name: string;
-  description: string;
-  params: Record<string, ParamDef>;
-  handler: (ctx: OperationContext, params: Record<string, unknown>) => Promise<unknown>;
-  mutating?: boolean;
-  /**
-   * Capability scope required to invoke this op over an authenticated
-   * transport. v0.28 added `sources_admin` (manage federated sources) and
-   * `users_admin` (reserved). The hierarchy lives in src/core/scope.ts —
-   * `admin` implies all, `write` implies `read`, the two `*_admin` scopes
-   * are siblings (different axes; neither implies the other).
-   *
-   * Local CLI callers (ctx.remote === false) bypass scope enforcement
-   * because the trust boundary there is the OS, not OAuth scopes.
-   */
-  scope?: 'read' | 'write' | 'admin' | 'sources_admin' | 'users_admin';
-  localOnly?: boolean;
-  /** MEMORY_VERBS v1: first-class memory protocol surface. */
-  verb?: boolean;
-  cliHints?: {
-    name?: string;
-    positional?: string[];
-    stdin?: string;
-    hidden?: boolean;
-  };
 }
 
 // --- Page CRUD ---
@@ -934,6 +734,7 @@ const put_page: Operation = {
               date: e.date,
               summary: e.summary,
               detail: e.detail || '',
+              source: e.source || '',
             }));
             // v0.41.18.0: engine self-retries on Supavisor circuit-breaker
             // recovery. auditSite label routes the audit JSONL emission so
@@ -994,6 +795,29 @@ const put_page: Operation = {
       factsQueued = { skipped: 'backstop_error' };
     }
 
+    let chronicleQueued: { queued: boolean } | { skipped: string } | undefined;
+    if (result.status !== 'imported') {
+      chronicleQueued = { skipped: 'not_imported' };
+    } else if (ctx.remote !== false && !trustedWorkspace) {
+      chronicleQueued = { skipped: 'remote' };
+    } else if (result.parsedPage) {
+      try {
+        const { runChronicleBackstop } = await import('./chronicle/backstop.ts');
+        const r = await runChronicleBackstop(
+          {
+            slug,
+            type: result.parsedPage.type,
+            compiled_truth: result.parsedPage.compiled_truth,
+            frontmatter: result.parsedPage.frontmatter,
+          },
+          { engine: ctx.engine, sourceId: ctx.sourceId ?? 'default' },
+        );
+        chronicleQueued = r.enqueued ? { queued: true } : { skipped: r.skipped ?? 'skipped' };
+      } catch {
+        chronicleQueued = { skipped: 'backstop_error' };
+      }
+    }
+
     // Post-write validator lint (PR 2.5): feature-flag-gated, non-blocking.
     // When `writer.lint_on_put_page` is enabled, runs the BrainWriter's
     // validators on the freshly-written page and logs findings to
@@ -1023,6 +847,7 @@ const put_page: Operation = {
       ...(autoTimeline ? { auto_timeline: autoTimeline } : {}),
       ...(writerLint ? { writer_lint: writerLint } : {}),
       ...(factsQueued ? { facts_backstop: factsQueued } : {}),
+      ...(chronicleQueued ? { chronicle_backstop: chronicleQueued } : {}),
       ...(writeThrough ? { write_through: writeThrough } : {}),
     };
   },
@@ -2257,17 +2082,31 @@ const get_links: Operation = {
   handler: async (ctx, p) => {
     const sourceOpts = linkReadScopeOpts(ctx);
     const slug = p.slug as string;
-    if (ctx.remote !== false) return readLinks(ctx.engine.executeRaw.bind(ctx.engine), slug, false, { ...sourceOpts, excludePrivate: await resolveExcludePrivatePages(ctx.engine, ctx.remote) });
-    if (await slugHiddenFromCaller(ctx.engine, ctx.remote, slug, sourceOpts)) return [];
-    const links = await ctx.engine.getLinks(slug, sourceOpts);
-    if (!(await resolveExcludePrivatePages(ctx.engine, ctx.remote))) return links;
-    const hidden = await findPrivateOnlySlugs(
-      ctx.engine,
-      [...new Set(links.flatMap((link) => [link.from_slug, link.to_slug]))],
-      sourceOpts,
-      { includeDeleted: true },
-    );
-    return links.filter((link) => !hidden.has(link.from_slug) && !hidden.has(link.to_slug));
+    const excludePrivate = await resolveExcludePrivatePages(ctx.engine, ctx.remote);
+    let links;
+    if (ctx.remote !== false) {
+      links = await readLinks(ctx.engine.executeRaw.bind(ctx.engine), slug, false, { ...sourceOpts, excludePrivate });
+    } else if (await slugHiddenFromCaller(ctx.engine, ctx.remote, slug, sourceOpts)) {
+      links = [];
+    } else {
+      links = await ctx.engine.getLinks(slug, sourceOpts);
+      if (excludePrivate) {
+        const hidden = await findPrivateOnlySlugs(
+          ctx.engine,
+          [...new Set(links.flatMap((link) => [link.from_slug, link.to_slug]))],
+          sourceOpts,
+          { includeDeleted: true },
+        );
+        links = links.filter((link) => !hidden.has(link.from_slug) && !hidden.has(link.to_slug));
+      }
+    }
+    return unionLinksAcrossIdentity(ctx.engine, slug, links, 'out', {
+      sourceId: sourceOpts.sourceId ?? ctx.sourceId,
+      allowedSources: sourceOpts.sourceIds,
+      excludePrivate,
+      fetchMemberLinks: (memberSlug, memberSourceId) =>
+        loadIdentityMemberLinks(ctx, memberSlug, memberSourceId, false, sourceOpts, excludePrivate),
+    });
   },
   scope: 'read',
 };
@@ -2281,17 +2120,31 @@ const get_backlinks: Operation = {
   handler: async (ctx, p) => {
     const sourceOpts = linkReadScopeOpts(ctx);
     const slug = p.slug as string;
-    if (ctx.remote !== false) return readLinks(ctx.engine.executeRaw.bind(ctx.engine), slug, true, { ...sourceOpts, excludePrivate: await resolveExcludePrivatePages(ctx.engine, ctx.remote) });
-    if (await slugHiddenFromCaller(ctx.engine, ctx.remote, slug, sourceOpts)) return [];
-    const links = await ctx.engine.getBacklinks(slug, sourceOpts);
-    if (!(await resolveExcludePrivatePages(ctx.engine, ctx.remote))) return links;
-    const hidden = await findPrivateOnlySlugs(
-      ctx.engine,
-      [...new Set(links.flatMap((link) => [link.from_slug, link.to_slug]))],
-      sourceOpts,
-      { includeDeleted: true },
-    );
-    return links.filter((link) => !hidden.has(link.from_slug) && !hidden.has(link.to_slug));
+    const excludePrivate = await resolveExcludePrivatePages(ctx.engine, ctx.remote);
+    let links;
+    if (ctx.remote !== false) {
+      links = await readLinks(ctx.engine.executeRaw.bind(ctx.engine), slug, true, { ...sourceOpts, excludePrivate });
+    } else if (await slugHiddenFromCaller(ctx.engine, ctx.remote, slug, sourceOpts)) {
+      links = [];
+    } else {
+      links = await ctx.engine.getBacklinks(slug, sourceOpts);
+      if (excludePrivate) {
+        const hidden = await findPrivateOnlySlugs(
+          ctx.engine,
+          [...new Set(links.flatMap((link) => [link.from_slug, link.to_slug]))],
+          sourceOpts,
+          { includeDeleted: true },
+        );
+        links = links.filter((link) => !hidden.has(link.from_slug) && !hidden.has(link.to_slug));
+      }
+    }
+    return unionLinksAcrossIdentity(ctx.engine, slug, links, 'in', {
+      sourceId: sourceOpts.sourceId ?? ctx.sourceId,
+      allowedSources: sourceOpts.sourceIds,
+      excludePrivate,
+      fetchMemberLinks: (memberSlug, memberSourceId) =>
+        loadIdentityMemberLinks(ctx, memberSlug, memberSourceId, true, sourceOpts, excludePrivate),
+    });
   },
   scope: 'read',
   cliHints: { name: 'backlinks', positional: ['slug'] },
@@ -5276,8 +5129,14 @@ export const operations: Operation[] = [
   whoami, sources_add, sources_list, sources_remove, sources_status,
   // v0.29: Salience + anomalies + recent transcripts
   get_recent_salience, find_anomalies, get_recent_transcripts,
+  ...connectorsOperations,
+  ...loopsOperations,
+  // Cross-source entity identity groups (v1 manual-only) — immediately before facts
+  ...entityIdentityOperations,
   // v0.31: hot memory (facts table)
   extract_facts, recall, forget_fact,
+  // Life Chronicle timeline + ontology ops
+  ...chronicleOperations,
   // MEMORY_VERBS v1 write/delete — registered from an independent module
   ...memoryVerbOperations,
   // Context Engine session restoration + capability discovery

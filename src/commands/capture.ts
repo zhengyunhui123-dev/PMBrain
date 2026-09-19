@@ -49,6 +49,11 @@ interface RunOpts {
   source?: string;
   quiet?: boolean;
   json?: boolean;
+  who?: string;
+  what?: string;
+  where?: string;
+  kind?: string;
+  depth?: string;
 }
 
 function parseArgs(args: string[]): RunOpts | { help: true; positional: string | undefined } {
@@ -80,6 +85,11 @@ function parseArgs(args: string[]): RunOpts | { help: true; positional: string |
       if (v) opts.source = v;
       continue;
     }
+    if (a === '--who') { const v = args[++i]; if (v) opts.who = v; continue; }
+    if (a === '--what') { const v = args[++i]; if (v) opts.what = v; continue; }
+    if (a === '--where') { const v = args[++i]; if (v) opts.where = v; continue; }
+    if (a === '--kind') { const v = args[++i]; if (v) opts.kind = v; continue; }
+    if (a === '--depth') { const v = args[++i]; if (v) opts.depth = v; continue; }
     if (a.startsWith('--')) continue; // unknown flag, ignore
     positional.push(a);
   }
@@ -126,12 +136,30 @@ const HELP = `用法：gbrain capture [内容] [选项]
   JOB=$(gbrain capture "..." --quiet)
 `;
 
-function defaultSlug(content: string, now: Date = new Date()): string {
+function slugPrefixForType(type?: string): string {
+  if (type === 'diary') return 'life/diary';
+  if (type === 'event') return 'life/events';
+  return 'inbox';
+}
+
+function defaultSlug(content: string, now: Date = new Date(), type?: string): string {
   const y = now.getUTCFullYear();
   const m = String(now.getUTCMonth() + 1).padStart(2, '0');
   const d = String(now.getUTCDate()).padStart(2, '0');
   const hashPrefix = computeContentHash(content).slice(0, 8);
-  return `inbox/${y}-${m}-${d}-${hashPrefix}`;
+  return `${slugPrefixForType(type)}/${y}-${m}-${d}-${hashPrefix}`;
+}
+
+function buildEventBlock(opts: RunOpts): Record<string, unknown> | undefined {
+  if (opts.type !== 'event') return undefined;
+  const who = opts.who ? opts.who.split(',').map((s) => s.trim()).filter(Boolean) : [];
+  const block: Record<string, unknown> = {};
+  if (opts.what) block.what = opts.what;
+  if (who.length) block.who = who;
+  if (opts.where) block.where = opts.where;
+  if (opts.kind) block.kind = opts.kind;
+  if (opts.depth) block.depth = opts.depth;
+  return Object.keys(block).length ? block : undefined;
 }
 
 /**
@@ -257,6 +285,8 @@ export function mergeCaptureFrontmatter(rawBody: string, opts: RunOpts): string 
       captured_via: opts.source ?? 'capture-cli',
       captured_at: nowIso,
     };
+    const ev = buildEventBlock(opts);
+    if (ev) fm.event = ev;
     const looksMarkdown = /^#{1,6}\s/.test(rawBody.trimStart());
     const body = looksMarkdown ? rawBody : `# ${title}\n\n${rawBody}`;
     return matter.stringify(body, fm);
@@ -284,6 +314,11 @@ export function mergeCaptureFrontmatter(rawBody: string, opts: RunOpts): string 
     captured_via: userFm.captured_via ?? opts.source ?? 'capture-cli',
     captured_at: userFm.captured_at ?? nowIso,
   };
+  const ev = buildEventBlock(opts);
+  if (ev) {
+    const userEv = (typeof userFm.event === 'object' && userFm.event) ? userFm.event as Record<string, unknown> : {};
+    merged.event = { ...ev, ...userEv };
+  }
   return matter.stringify(parsed.content, merged);
 }
 
@@ -433,7 +468,7 @@ export async function runCapture(engine: BrainEngine | null, args: string[]): Pr
   // The daemon's 24h LRU dedup keys on this hash; identical captures must
   // produce identical hashes. The DB content_hash (importFromContent at
   // src/core/import-file.ts) gets the same treatment in Phase 3d.
-  const slug = parsed.slug ?? defaultSlug(normalizedBody);
+  const slug = parsed.slug ?? defaultSlug(normalizedBody, new Date(), parsed.type);
   const fullContent = buildContent(rawBody, parsed);
   const capturedAt = new Date().toISOString();
   const contentHash = computeContentHash(normalizedBody);

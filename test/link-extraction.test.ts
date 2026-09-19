@@ -450,7 +450,7 @@ describe('parseTimelineEntries', () => {
   test('parses standard format: - **YYYY-MM-DD** | summary', () => {
     const entries = parseTimelineEntries('- **2026-01-15** | Met with Alice');
     expect(entries.length).toBe(1);
-    expect(entries[0]).toEqual({ date: '2026-01-15', summary: 'Met with Alice', detail: '' });
+    expect(entries[0]).toEqual({ date: '2026-01-15', summary: 'Met with Alice', detail: '', source: 'markdown' });
   });
 
   test('parses dash variant: - **YYYY-MM-DD** -- summary', () => {
@@ -486,8 +486,8 @@ describe('parseTimelineEntries', () => {
       '- **2026年8月2日** — 完成知识串联',
     ].join('\n'));
     expect(entries).toEqual([
-      { date: '2026-07-28', summary: '修复中文检索', detail: '' },
-      { date: '2026-08-02', summary: '完成知识串联', detail: '' },
+      { date: '2026-07-28', summary: '修复中文检索', detail: '', source: 'markdown' },
+      { date: '2026-08-02', summary: '完成知识串联', detail: '', source: 'markdown' },
     ]);
   });
 

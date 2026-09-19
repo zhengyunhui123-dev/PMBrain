@@ -11,6 +11,19 @@ import { loadConfig, isThinClient } from '../core/config.ts';
 import { callRemoteTool, unpackToolResult } from '../core/mcp-client.ts';
 import { resolveGbrainCliPath } from './autopilot.ts';
 
+/**
+ * Long-lived workers outlive operator config changes. Re-stamp the AI gateway
+ * from DB-backed model config immediately before queued jobs enter gateway-backed
+ * paths, so a stale process-level default cannot route new work to the wrong
+ * provider. Must NOT call configureGateway(buildGatewayConfig(loadConfig())) —
+ * that would clobber DB-plane-merged fields with file-plane-only values.
+ */
+export async function refreshGatewayForJob(engine: BrainEngine): Promise<void> {
+  const { refreshGatewayEnvFromFilePlane, reconfigureGatewayWithEngine } = await import('../core/ai/gateway.ts');
+  refreshGatewayEnvFromFilePlane();
+  await reconfigureGatewayWithEngine(engine);
+}
+
 function parseFlag(args: string[], flag: string): string | undefined {
   const idx = args.indexOf(flag);
   return idx >= 0 && idx + 1 < args.length ? args[idx + 1] : undefined;
@@ -1741,6 +1754,38 @@ export async function registerBuiltinHandlers(worker: MinionWorker, engine: Brai
     return await makeEmbedBackfillHandler(engine)(job);
   });
 
+  // connector-sync: fetch a chat provider's history and ingest it. Fetch+ingest
+  // needs no LLM, but the PGLite embed kickoff calls runEmbedCore inline, so
+  // refresh the gateway before the handler (a worker booted before `config set`
+  // must see the current embedding model).
+  worker.register('connector-sync', async (job) => {
+    await refreshGatewayForJob(engine);
+    const { makeConnectorSyncHandler } = await import('../core/minions/handlers/connector-sync.ts');
+    return await makeConnectorSyncHandler(engine)(job);
+  });
+
+  worker.register('loops_extract', async (job) => {
+    await refreshGatewayForJob(engine);
+    const slug = typeof job.data.slug === 'string' ? job.data.slug : undefined;
+    const sourceId = typeof job.data.sourceId === 'string' ? job.data.sourceId : undefined;
+    if (!slug || !sourceId) throw new Error('loops_extract job requires data.slug and data.sourceId');
+    const threadId = typeof job.data.threadId === 'string' ? job.data.threadId : undefined;
+    const { runLoopsExtract } = await import('../core/google/loops-extract.ts');
+    return await runLoopsExtract(engine, { slug, sourceId, ...(threadId ? { threadId } : {}) });
+  });
+
+  worker.register('loops_scan_meetings', async (job) => {
+    await refreshGatewayForJob(engine);
+    const laneRaw = typeof job.data.lane === 'string' ? job.data.lane : 'all';
+    const lane =
+      laneRaw === 'meeting' || laneRaw === 'transcript' || laneRaw === 'connector' || laneRaw === 'all'
+        ? laneRaw
+        : 'all';
+    const sourceId = typeof job.data.sourceId === 'string' ? job.data.sourceId : undefined;
+    const { runLoopsScan } = await import('../core/loops/scan.ts');
+    return await runLoopsScan(engine, { lane, sourceId });
+  });
+
   // v0.41.18.0 (A10, T7): extract-ner handler for the gbrain onboard
   // remediation pipeline. Wraps extractNerLinks; emits typed_ner kind
   // alongside the by-mention 'plain' kind. NOT in PROTECTED_JOB_NAMES
@@ -1777,6 +1822,23 @@ export async function registerBuiltinHandlers(worker: MinionWorker, engine: Brai
     const data = (job.data ?? {}) as { sourceId?: string };
     return await extractTimelineFromMeetings(engine, {
       sourceIdFilter: data.sourceId,
+    });
+  });
+
+  worker.register('chronicle_extract', async (job) => {
+    const { reconfigureGatewayWithEngine } = await import('../core/ai/gateway.ts');
+    await reconfigureGatewayWithEngine(engine);
+    const slug = typeof job.data.slug === 'string' ? job.data.slug : undefined;
+    if (!slug) throw new Error('chronicle_extract job requires data.slug');
+    const sourceId = typeof job.data.sourceId === 'string' ? job.data.sourceId : undefined;
+    const { runChronicleExtract } = await import('../core/chronicle/extract-events.ts');
+    const { chronicleTz } = await import('../core/chronicle/config.ts');
+    const tz = await chronicleTz(engine);
+    return await runChronicleExtract(engine, {
+      slug,
+      sourceId,
+      tz,
+      signal: (job as { signal?: AbortSignal }).signal,
     });
   });
 

@@ -19,6 +19,10 @@ import { KnowledgeWorkbenchPage } from './pages/Knowledge';
 import { ConnectionCenterPage } from './pages/Connection';
 import { DocumentationPage } from './pages/Documentation';
 import { ModelConfigPage, SettingsPage, type SettingsSection } from './pages/Settings';
+import { WaitingPage } from './pages/Waiting';
+import { ChroniclePage } from './pages/Chronicle';
+import { ConnectorsPage } from './pages/Connectors';
+import { IdentityPage } from './pages/Identity';
 import { api } from './api';
 import {
   applyThemeMode,
@@ -29,16 +33,17 @@ import {
   type ThemeMode,
 } from './lib/theme';
 import {
-  BookOpenText, Bot, BrainCircuit, Cable,
-  Database, FileClock, FolderKanban, HeartHandshake, LayoutDashboard, ListTodo,
-  MonitorCog, Sparkles, type LucideIcon,
-  Orbit,
+  BookOpenText, Bot, BrainCircuit, Cable, CalendarDays,
+  Database, FileClock, FolderKanban, HeartHandshake, Inbox, LayoutDashboard, ListTodo,
+  MonitorCog, Plug, Sparkles, type LucideIcon,
+  Orbit, Users,
 } from 'lucide-react';
 
 const PAGES = [
   'login', 'dashboard', 'natural',
   'dream', 'dream-execute', 'dream-knowledge', 'dream-takes', 'dream-scoring', 'dream-calibration', 'dream-insights',
   'import', 'data', 'graph', 'docs',
+  'waiting', 'chronicle', 'connectors', 'identity',
   'mcp', 'tasks', 'config', 'agents', 'log', 'calibration',
   'settings', 'settings-general', 'settings-knowledge', 'settings-dream',
 ] as const;
@@ -60,7 +65,8 @@ function getPage(): Page {
 
 type NavIconName =
   | 'overview' | 'workspace' | 'database' | 'organize' | 'mcp' | 'tasks' | 'log' | 'assistant'
-  | 'graph' | 'settings-general' | 'settings-knowledge' | 'settings-dream';
+  | 'graph' | 'waiting' | 'chronicle' | 'connectors' | 'identity'
+  | 'settings-general' | 'settings-knowledge' | 'settings-dream';
 
 const NAV_ICONS: Record<NavIconName, LucideIcon> = {
   overview: LayoutDashboard,
@@ -68,6 +74,10 @@ const NAV_ICONS: Record<NavIconName, LucideIcon> = {
   database: Database,
   graph: Orbit,
   organize: BookOpenText,
+  waiting: Inbox,
+  chronicle: CalendarDays,
+  connectors: Plug,
+  identity: Users,
   mcp: Cable,
   tasks: ListTodo,
   log: FileClock,
@@ -115,6 +125,12 @@ export function App() {
       { page: 'data', label: '知识库', icon: 'database' },
       { page: 'graph', label: '知识图谱', icon: 'graph' },
       { page: 'dream', label: '知识整理', icon: 'organize' },
+    ] },
+    { title: '日常', items: [
+      { page: 'waiting', label: '待我处理', icon: 'waiting' },
+      { page: 'chronicle', label: '生命年表', icon: 'chronicle' },
+      { page: 'connectors', label: '连接器', icon: 'connectors' },
+      { page: 'identity', label: '人物关联', icon: 'identity' },
     ] },
     { title: '集成', items: [
       { page: 'mcp', label: 'MCP 接入', icon: 'mcp' },
@@ -272,6 +288,10 @@ export function App() {
         )}
         {page === 'docs' && <DocumentationPage />}
         {page === 'natural' && <NaturalLanguagePage />}
+        {page === 'waiting' && <WaitingPage />}
+        {page === 'chronicle' && <ChroniclePage />}
+        {page === 'connectors' && <ConnectorsPage />}
+        {page === 'identity' && <IdentityPage />}
         {page === 'mcp' && <ConnectionCenterPage />}
         {page === 'tasks' && <TaskCenterPage />}
         {page === 'config' && <ModelConfigPage />}

@@ -151,6 +151,26 @@ describe('put_page — legacy namespace check (regression guard)', () => {
     });
   });
 
+  test('REJECTS synthesize put_page to life/diary viaSubagent (D6)', async () => {
+    const ctx = makeCtx({
+      allowedSlugPrefixes: [
+        'wiki/personal/reflections/*',
+        'wiki/meetings/*',
+        'wiki/conversations/*',
+        'wiki/originals/*',
+        'wiki/personal/patterns/*',
+        'wiki/people/*',
+        'dream-cycle-summaries/*',
+      ],
+    });
+    await expect(put_page.handler(ctx, {
+      slug: 'life/diary/2026-06-18-private',
+      content: '---\ntitle: diary\ntype: diary\n---\nbody',
+    })).rejects.toMatchObject({
+      code: 'permission_denied',
+    });
+  });
+
   test('REJECTS when viaSubagent=true but subagentId is missing (FAIL-CLOSED)', async () => {
     const ctx = makeCtx({ subagentId: undefined as unknown as number, allowedSlugPrefixes: undefined });
     await expect(put_page.handler(ctx, {

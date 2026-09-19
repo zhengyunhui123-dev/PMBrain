@@ -728,6 +728,10 @@ export async function doctorReportRemote(engine: BrainEngine): Promise<DoctorRep
   //   - Three-state: ok / warn / fail.
   checks.push(await checkFederationHealth(engine));
 
+  // Chat connectors (live ChatGPT/Claude history). name: 'connectors'
+  const { connectorsHealthCheck } = await import('./doctor/checks/connectors.ts');
+  checks.push(await connectorsHealthCheck(engine));
+
   return computeDoctorReport(checks);
 }
 
@@ -4038,6 +4042,21 @@ export async function buildChecks(
     }
   } catch {
     // Filesystem read failure is non-fatal.
+  }
+
+  // Google vault health is filesystem-only (zero-network). Run it on the
+  // local CLI path even when --fast skips DB checks; do not run it on the
+  // remote MCP doctor (vault is local-only).
+  progress.heartbeat('google_oauth');
+  try {
+    const { computeGoogleOauthCheck } = await import('./doctor/checks/google-oauth.ts');
+    checks.push(await computeGoogleOauthCheck());
+  } catch (e) {
+    checks.push({
+      name: 'google_oauth',
+      status: 'warn',
+      message: `credential vault unreadable: ${e instanceof Error ? e.message : String(e)}`,
+    });
   }
 
   // --- DB checks (skip if --fast or no engine) ---

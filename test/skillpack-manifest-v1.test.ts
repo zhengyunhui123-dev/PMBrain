@@ -390,3 +390,19 @@ describe('bundleManifestFromSkillpack — adapter', () => {
     expect(bundle.shared_deps).toEqual([]);
   });
 });
+
+describe('brain-resident pack fields', () => {
+  test('accepts optional brain_resident and schema_pack', () => {
+    const result = validateSkillpackManifest({
+      ...VALID_MANIFEST,
+      brain_resident: true,
+      schema_pack: 'gbrain-base',
+    });
+    expect(result.brain_resident).toBe(true);
+    expect(result.schema_pack).toBe('gbrain-base');
+  });
+
+  test('rejects non-boolean brain_resident', () => {
+    expect(() => validateSkillpackManifest({ ...VALID_MANIFEST, brain_resident: 'yes' })).toThrow(SkillpackManifestError);
+  });
+});

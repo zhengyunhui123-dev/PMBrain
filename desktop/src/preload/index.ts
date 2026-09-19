@@ -82,7 +82,7 @@ export type {
   ManagedPostgresDatabase,
 };
 
-export type DesktopSettingsPanel = 'basic' | 'models' | 'integrations' | 'updates' | 'system' | 'repair';
+export type DesktopSettingsPanel = 'basic' | 'models' | 'integrations' | 'daily' | 'updates' | 'system' | 'repair';
 
 export interface DesktopPgliteUpgradeBackup {
   status: 'verified';
@@ -226,6 +226,26 @@ export interface PMBrainDesktopApi {
   openLogs(): Promise<string>;
   exportDiagnosticBundle(): Promise<DesktopDiagnosticBundleResult | null>;
   quit(): Promise<void>;
+  productConnectors(provider?: string): Promise<unknown>;
+  productConnectorSync(body: { provider: string; full?: boolean; dry_run?: boolean }): Promise<unknown>;
+  productWaiting(): Promise<unknown>;
+  productWaitingClose(body: { id: number; status: 'done' | 'dropped'; note?: string }): Promise<unknown>;
+  productChronicleDay(date?: string): Promise<unknown>;
+  productChronicleOnThisDay(date?: string): Promise<unknown>;
+  productOntology(entity: string): Promise<unknown>;
+  productEntityIdentity(query?: { entity_id?: string; slug?: string }): Promise<unknown>;
+  productEntityIdentityLink(body: { entity_id: string; slug: string; source_id: string; canonical?: boolean }): Promise<unknown>;
+  googleStatus(): Promise<unknown>;
+  googleConnect(input?: { account?: string; paste?: boolean; code?: string; clientJsonPath?: string }): Promise<{
+    ok: boolean;
+    status: string;
+    next_action?: { command?: string; user_message?: string };
+    error?: { code: string; problem?: string; cause?: string; fix?: string };
+    account?: string;
+  }>;
+  googleSource(body: { account: string; id?: string }): Promise<unknown>;
+  chooseFile(filters?: Array<{ name: string; extensions: string[] }>): Promise<string | null>;
+  openExternal(url: string): Promise<void>;
 }
 
 const api: PMBrainDesktopApi = {
@@ -317,6 +337,20 @@ const api: PMBrainDesktopApi = {
   openLogs: () => ipcRenderer.invoke('desktop:open-logs'),
   exportDiagnosticBundle: () => ipcRenderer.invoke('desktop:export-diagnostic-bundle'),
   quit: () => ipcRenderer.invoke('desktop:quit'),
+  productConnectors: (provider) => ipcRenderer.invoke('desktop:product-connectors', provider),
+  productConnectorSync: (body) => ipcRenderer.invoke('desktop:product-connector-sync', body),
+  productWaiting: () => ipcRenderer.invoke('desktop:product-waiting'),
+  productWaitingClose: (body) => ipcRenderer.invoke('desktop:product-waiting-close', body),
+  productChronicleDay: (date) => ipcRenderer.invoke('desktop:product-chronicle-day', date),
+  productChronicleOnThisDay: (date) => ipcRenderer.invoke('desktop:product-chronicle-on-this-day', date),
+  productOntology: (entity) => ipcRenderer.invoke('desktop:product-ontology', entity),
+  productEntityIdentity: (query) => ipcRenderer.invoke('desktop:product-entity-identity', query),
+  productEntityIdentityLink: (body) => ipcRenderer.invoke('desktop:product-entity-identity-link', body),
+  googleStatus: () => ipcRenderer.invoke('desktop:google-status'),
+  googleConnect: (input) => ipcRenderer.invoke('desktop:google-connect', input),
+  googleSource: (body) => ipcRenderer.invoke('desktop:google-source', body),
+  chooseFile: (filters) => ipcRenderer.invoke('desktop:choose-file', filters),
+  openExternal: (url) => ipcRenderer.invoke('desktop:open-external', url),
 };
 
 contextBridge.exposeInMainWorld('pmbrainDesktop', api);

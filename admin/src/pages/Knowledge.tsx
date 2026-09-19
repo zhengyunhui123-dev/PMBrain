@@ -118,12 +118,14 @@ function AdvisorHealthCard({
 }) {
   const scoreLabel = advisor?.score == null ? '--' : `${Math.round(advisor.score)}分`;
   const statusClass = advisor?.status === 'good' ? 'is-good' : advisor?.status === 'needs_attention' ? 'is-alert' : 'is-ok';
+  const productName = advisor?.product_name || '知识库体检';
   return (
-    <section className={`overview-health-card ${statusClass}`} aria-label="知识库健康状态">
+    <section className={`overview-health-card ${statusClass}`} aria-label="知识库体检">
       <div className="overview-panel-head">
         <div>
-          <div className="overview-section-eyebrow">KNOWLEDGE HEALTH</div>
-          <h2>知识库健康状态：{advisor?.status_label ?? '检查中'} {scoreLabel}</h2>
+          <div className="overview-section-eyebrow">知识库体检</div>
+          <h2>{productName}：{advisor?.status_label ?? '检查中'} {scoreLabel}</h2>
+          <p className="overview-health-lead">根据当前知识库状态给出建议，不会另开一套检查引擎。</p>
         </div>
         <span className="overview-panel-note">
           {advisor ? `发现 ${advisor.suggestion_count} 项建议` : '正在检查知识库'}
@@ -136,9 +138,12 @@ function AdvisorHealthCard({
       )}
       {advisor && advisor.suggestions.length > 0 && (
         <ul className="overview-health-list">
-          {advisor.suggestions.slice(0, 5).map((suggestion) => (
+          {advisor.suggestions.map((suggestion) => (
             <li key={suggestion.id}>
-              <span>{suggestion.title}</span>
+              <div className="overview-health-copy">
+                <span>{suggestion.title}</span>
+                {suggestion.detail && <small className="overview-health-detail">{suggestion.detail}</small>}
+              </div>
               {suggestion.action_label && (
                 <button
                   type="button"

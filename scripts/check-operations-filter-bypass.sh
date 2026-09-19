@@ -42,7 +42,7 @@ ALLOWED=(
   "src/cli.ts"                                  # local CLI; user owns the machine, no trust boundary
   "src/mcp/dispatch.ts"                         # shared dispatch; sets ctx.remote from caller, handlers self-gate
   "src/mcp/server.ts"                           # stdio MCP; local-trusted (binary on user's box)
-  "src/mcp/http-transport.ts"                   # superseded by serve-http.ts; kept for back-compat tests
+  "src/mcp/http-transport.ts"                   # HTTP MCP catalog; MUST filter localOnly — verified by grep below
   "src/mcp/tool-defs.ts"                        # pure helper; takes ops as parameter, never exposes them
   "src/core/minions/tools/brain-allowlist.ts"   # subagent registry; has its own opt-in allowlist (separate from localOnly)
   "src/commands/capture.ts"                     # local CLI tool; not network-exposed
@@ -103,6 +103,16 @@ if [ -f "$SERVE_HTTP" ]; then
     echo "      operations.filter(op => !op.localOnly) expression. The HTTP MCP"
     echo "      surface depends on this filter to enforce localOnly. Restore"
     echo "      the filter or refactor the trust boundary explicitly."
+    FAIL=1
+  fi
+fi
+
+HTTP_TRANSPORT="src/mcp/http-transport.ts"
+if [ -f "$HTTP_TRANSPORT" ]; then
+  if ! grep -qE 'operations\.filter\(\s*op\s*=>\s*!op\.localOnly\s*\)' "$HTTP_TRANSPORT"; then
+    echo "FAIL: $HTTP_TRANSPORT no longer contains the canonical"
+    echo "      operations.filter(op => !op.localOnly) expression. The HTTP MCP"
+    echo "      catalog depends on this filter to enforce localOnly."
     FAIL=1
   fi
 fi

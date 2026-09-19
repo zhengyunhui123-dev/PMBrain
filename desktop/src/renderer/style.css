@@ -579,4 +579,21 @@ select { cursor: pointer; appearance: auto; -webkit-appearance: auto; }
   .memory-setup-hint { grid-template-columns: 1fr; }
   .memory-setup-hint button { justify-self: start; }
 }
+.daily-two { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.daily-two article, #daily-connectors, #daily-waiting, #daily-identity-groups, #daily-ontology {
+  white-space: pre-wrap;
+  line-height: 1.55;
+}
+#daily-google-message {
+  white-space: pre-wrap;
+  font-size: 12px;
+  line-height: 1.55;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-soft);
+}
+@media (max-width: 980px) {
+  .daily-two { grid-template-columns: 1fr; }
+}
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; scroll-behavior: auto !important; } }

@@ -62,7 +62,7 @@ describe('desktop diagnostic bundle', () => {
     const zip = await JSZip.loadAsync(bundle.data);
     const names = Object.keys(zip.files).sort();
     expect(names).toEqual(expect.arrayContaining([
-      'version.json', 'doctor.json', 'dream-status.json', 'desktop.log', 'sidecar.log', 'database-status.json',
+      'version.json', 'doctor.json', 'dream-status.json', 'advisor.json', 'desktop.log', 'sidecar.log', 'database-status.json',
       'model-status.json', 'mcp-status.json', 'update-status.json', 'recent-errors.json',
     ]));
     expect(names.some(name => /\.pglite|\.db|knowledge/i.test(name))).toBe(false);

@@ -74,6 +74,11 @@ export interface DispatchOpts {
    * was replaced by dispatchToolCall.
    */
   auth?: AuthInfo;
+  /**
+   * Transport-LOCALITY axis: localOnly ops dispatch only when this is 'stdio'.
+   * HTTP transports pass 'http'; an unset marker is treated as non-local, fail-closed.
+   */
+  transport?: OperationContext['transport'];
 }
 
 /**
@@ -258,6 +263,7 @@ export function buildOperationContext(
     logger: opts.logger || stderrLogger,
     dryRun: !!params.dry_run,
     remote: opts.remote ?? true,
+    transport: opts.transport,
     takesHoldersAllowList: opts.takesHoldersAllowList,
     // v0.34 D4: sourceId is REQUIRED at the type level. Auto-fill 'default'
     // for single-source brains and any caller who didn't resolve a sourceId.
@@ -267,6 +273,13 @@ export function buildOperationContext(
     auth: opts.auth,
     surface: opts.surface,
     surfaceCeiling: opts.surfaceCeiling,
+  };
+}
+
+function unknownToolEnvelope(name: string): ToolResult {
+  return {
+    content: [{ type: 'text', text: JSON.stringify({ error: 'unknown_tool', message: `Unknown tool: ${name}` }, null, 2) }],
+    isError: true,
   };
 }
 
@@ -284,21 +297,13 @@ export async function dispatchToolCall(
 ): Promise<ToolResult> {
   const op = operations.find(o => o.name === name);
   if (!op) {
-    // Always return JSON-shaped error content. v0.31 e2e tests
-    // (sources-remote-mcp.test.ts) parse content via JSON.parse so a
-    // plain `Error: ...` string here breaks the contract on every
-    // unknown-op path and the resulting test failure looked like a
-    // transport bug.
-    return {
-      content: [{ type: 'text', text: JSON.stringify({ error: 'unknown_tool', message: `Unknown tool: ${name}` }, null, 2) }],
-      isError: true,
-    };
+    return unknownToolEnvelope(name);
   }
   if (opts.allowedOps && !opts.allowedOps.has(name)) {
-    return {
-      content: [{ type: 'text', text: JSON.stringify({ error: 'unknown_tool', message: `Unknown tool: ${name}` }, null, 2) }],
-      isError: true,
-    };
+    return unknownToolEnvelope(name);
+  }
+  if (op.localOnly && opts.transport !== 'stdio') {
+    return unknownToolEnvelope(name);
   }
 
   const submittedParams = params || {};

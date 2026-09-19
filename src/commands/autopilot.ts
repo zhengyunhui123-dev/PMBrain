@@ -580,6 +580,7 @@ export async function runAutopilot(engine: BrainEngine, args: string[]) {
             dispatchExtractAtomsDrains,
             dispatchGlobalMaintenance,
             dispatchPerSource,
+            maybeDispatchConnectorSyncs,
             resolveFanoutMax,
           } = await import('./autopilot-fanout.ts');
           const fanoutMax = await resolveFanoutMax(engine);
@@ -617,6 +618,20 @@ export async function runAutopilot(engine: BrainEngine, args: string[]) {
               if (jsonMode) {
                 process.stderr.write(JSON.stringify({
                   event: 'extract_atoms_drain_scan_failed',
+                  error: e instanceof Error ? e.message : String(e),
+                }) + '\n');
+              }
+            }
+            try {
+              await maybeDispatchConnectorSyncs(engine, queue, {
+                slot,
+                timeoutMs: resolveAutopilotDispatchTimeoutMs(baseInterval, true),
+                jsonMode,
+              });
+            } catch (e) {
+              if (jsonMode) {
+                process.stderr.write(JSON.stringify({
+                  event: 'connector_sync_dispatch_failed',
                   error: e instanceof Error ? e.message : String(e),
                 }) + '\n');
               }
