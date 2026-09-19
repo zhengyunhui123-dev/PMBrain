@@ -279,6 +279,37 @@ export function linkReadScopeOpts(ctx: OperationContext): { sourceId?: string; s
   return scope;
 }
 
+async function loadIdentityMemberLinks(
+  ctx: OperationContext,
+  memberSlug: string,
+  memberSourceId: string,
+  incoming: boolean,
+  sourceOpts: { sourceId?: string; sourceIds?: string[] },
+  excludePrivate: boolean,
+) {
+  const memberScope = {
+    sourceId: memberSourceId,
+    ...(sourceOpts.sourceIds?.length ? { sourceIds: sourceOpts.sourceIds } : {}),
+    excludePrivate,
+  };
+  if (ctx.remote !== false) {
+    return readLinks(ctx.engine.executeRaw.bind(ctx.engine), memberSlug, incoming, memberScope);
+  }
+  let memberLinks = incoming
+    ? await ctx.engine.getBacklinks(memberSlug, memberScope)
+    : await ctx.engine.getLinks(memberSlug, memberScope);
+  if (excludePrivate) {
+    const hidden = await findPrivateOnlySlugs(
+      ctx.engine,
+      [...new Set(memberLinks.flatMap((link) => [link.from_slug, link.to_slug]))],
+      memberScope,
+      { includeDeleted: true },
+    );
+    memberLinks = memberLinks.filter((link) => !hidden.has(link.from_slug) && !hidden.has(link.to_slug));
+  }
+  return memberLinks;
+}
+
 export function resolvePerCallMode(ctx: OperationContext, raw: unknown): string | undefined {
   if (typeof raw !== 'string' || raw.length === 0) return undefined;
   if (ctx.remote !== false) return undefined;
@@ -2074,9 +2105,11 @@ const get_links: Operation = {
       }
     }
     return unionLinksAcrossIdentity(ctx.engine, slug, links, 'out', {
-      sourceId: sourceOpts.sourceId,
+      sourceId: sourceOpts.sourceId ?? ctx.sourceId,
       allowedSources: sourceOpts.sourceIds,
       excludePrivate,
+      fetchMemberLinks: (memberSlug, memberSourceId) =>
+        loadIdentityMemberLinks(ctx, memberSlug, memberSourceId, false, sourceOpts, excludePrivate),
     });
   },
   scope: 'read',
@@ -2110,9 +2143,11 @@ const get_backlinks: Operation = {
       }
     }
     return unionLinksAcrossIdentity(ctx.engine, slug, links, 'in', {
-      sourceId: sourceOpts.sourceId,
+      sourceId: sourceOpts.sourceId ?? ctx.sourceId,
       allowedSources: sourceOpts.sourceIds,
       excludePrivate,
+      fetchMemberLinks: (memberSlug, memberSourceId) =>
+        loadIdentityMemberLinks(ctx, memberSlug, memberSourceId, true, sourceOpts, excludePrivate),
     });
   },
   scope: 'read',

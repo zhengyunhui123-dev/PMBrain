@@ -256,7 +256,12 @@ export async function unionLinksAcrossIdentity(
   slug: string,
   links: Link[],
   direction: 'out' | 'in',
-  opts: { sourceId?: string; allowedSources?: string[]; excludePrivate?: boolean } = {},
+  opts: {
+    sourceId?: string;
+    allowedSources?: string[];
+    excludePrivate?: boolean;
+    fetchMemberLinks?: (memberSlug: string, memberSourceId: string) => Promise<Link[]>;
+  } = {},
 ): Promise<Link[]> {
   if (!(await isIdentityUnionEnabled(engine))) return links;
   let members: EntityIdentityMember[];
@@ -285,10 +290,13 @@ export async function unionLinksAcrossIdentity(
       const memberScope = {
         sourceId: m.source_id,
         ...(opts.allowedSources?.length ? { sourceIds: opts.allowedSources } : {}),
+        excludePrivate: opts.excludePrivate,
       };
-      const memberLinks = direction === 'out'
-        ? await engine.getLinks(m.slug, memberScope)
-        : await engine.getBacklinks(m.slug, memberScope);
+      const memberLinks = opts.fetchMemberLinks
+        ? await opts.fetchMemberLinks(m.slug, m.source_id)
+        : direction === 'out'
+          ? await engine.getLinks(m.slug, memberScope)
+          : await engine.getBacklinks(m.slug, memberScope);
       for (const l of memberLinks) {
         const memberSource = direction === 'out' ? l.from_source_id : l.to_source_id;
         if (memberSource !== m.source_id) continue;

@@ -273,9 +273,12 @@ describe('flag-gated retrieval union (link read ops)', () => {
 
   test('flag defaults OFF — get_links returns only the page\'s own edges', async () => {
     expect(await isIdentityUnionEnabled(engine)).toBe(false);
-    const links = await operationsByName.get_links!.handler(localCtx(), { slug: 'people/alice' }) as Array<{ to_slug: string }>;
+    const before = JSON.stringify(await operationsByName.get_links!.handler(localCtx(), { slug: 'people/alice' }));
+    const links = JSON.parse(before) as Array<{ to_slug: string; link_type: string; from_source_id: string; to_source_id: string }>;
     expect(links.some(l => l.to_slug === 'companies/acme')).toBe(true);
     expect(links.some(l => l.to_slug === 'companies/widget-co')).toBe(false);
+    const afterLink = JSON.stringify(await operationsByName.get_links!.handler(localCtx(), { slug: 'people/alice' }));
+    expect(afterLink).toBe(before);
   });
 
   test('default search/page reads stay per-source after a manual link (union OFF)', async () => {
@@ -405,6 +408,24 @@ describe('the identity key is (source_id, slug) in the union too', () => {
       slug: 'people/alice', allowedSources: ['team-brain'],
     })).toHaveLength(1);
   });
+
+  test('remote get_links seeds identity from ctx.sourceId when scope is sourceIds-only', async () => {
+    await engine.putPage('people/alicia', {
+      type: 'person', title: 'Alicia', compiled_truth: 'alicia', timeline: '',
+    }, { sourceId: 'team-brain' });
+    await engine.addLinksBatch([
+      { from_slug: 'people/alicia', to_slug: 'companies/widget-co', link_source: 'manual', from_source_id: 'team-brain', to_source_id: 'team-brain' },
+    ]);
+    await linkEntityIdentity(engine, { entityId: 'alice', slug: 'people/alice', sourceId: 'team-brain' });
+    await linkEntityIdentity(engine, { entityId: 'alice', slug: 'people/alicia', sourceId: 'team-brain' });
+
+    const links = await operationsByName.get_links!.handler(
+      remoteCtx({ sourceId: 'default' }),
+      { slug: 'people/alice' },
+    ) as Array<{ to_slug: string }>;
+    expect(links.some(l => l.to_slug === 'companies/acme')).toBe(true);
+    expect(links.some(l => l.to_slug === 'companies/widget-co')).toBe(false);
+  });
 });
 
 describe('MCP localOnly three gates', () => {
@@ -435,5 +456,10 @@ describe('MCP localOnly three gates', () => {
     expect(stdio.isError).toBeFalsy();
     const parsed = JSON.parse(stdio.content[0]!.text) as { linked: boolean };
     expect(parsed.linked).toBe(true);
+
+    const forged = await dispatchToolCall(engine, 'entity_identity_link', {
+      entity_id: 'alice-chen', slug: 'people/alice-chen', source_id: 'team-brain',
+    }, { remote: true, transport: 'http', sourceId: 'default' });
+    expect(JSON.parse(forged.content[0]!.text).error).toBe('unknown_tool');
   });
 });

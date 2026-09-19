@@ -47,6 +47,8 @@ export interface OperationContext {
    * Transport-LOCALITY axis for localOnly ops: dispatch on 'stdio' (local pipe)
    * and deny on 'http'. Trust decisions MUST NOT key off this field — only
    * `ctx.remote === false` grants trust. Unset is treated as non-local.
+   * stdio MCP sets remote:true with transport:'stdio'; localOnly handlers may
+   * allow that pair because dispatch already refused HTTP.
    */
   transport?: 'stdio' | 'http';
   surface?: 'verbs' | 'starter' | 'full';
