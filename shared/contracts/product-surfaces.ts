@@ -49,9 +49,53 @@ export const EntityIdentityLinkRequestSchema = z.object({
   canonical: z.boolean().optional(),
 });
 
+export const ConnectorAuthRequestSchema = z.object({
+  provider: z.string().min(1),
+  cookie: z.string().optional(),
+  token: z.string().optional(),
+});
+
+export const ConnectorLogoutRequestSchema = z.object({
+  provider: z.string().min(1),
+});
+
+export const WaitingScanRequestSchema = z.object({
+  lanes: z.array(z.enum(['gmail', 'meeting', 'conversation'])).optional(),
+});
+
+export const PeopleMergeRequestSchema = z.object({
+  members: z.array(z.object({
+    source_id: z.string().min(1),
+    slug: z.string().min(1),
+    title: z.string().optional(),
+  })).min(2),
+});
+
+export const PeopleRejectRequestSchema = z.object({
+  left: z.object({ source_id: z.string().min(1), slug: z.string().min(1) }),
+  right: z.object({ source_id: z.string().min(1), slug: z.string().min(1) }),
+});
+
+export const PeopleUnlinkRequestSchema = z.object({
+  entity_id: z.string().min(1),
+  source_id: z.string().min(1),
+  slug: z.string().min(1),
+});
+
+export const ChronicleHideRequestSchema = z.object({
+  slug: z.string().min(1),
+});
+
 export type GoogleConnectEnvelope = z.infer<typeof GoogleConnectEnvelopeSchema>;
 export type GoogleConnectRequest = z.infer<typeof GoogleConnectRequestSchema>;
 export type GoogleSourceAddRequest = z.infer<typeof GoogleSourceAddRequestSchema>;
 export type ConnectorSyncRequest = z.infer<typeof ConnectorSyncRequestSchema>;
 export type WaitingCloseRequest = z.infer<typeof WaitingCloseRequestSchema>;
 export type EntityIdentityLinkRequest = z.infer<typeof EntityIdentityLinkRequestSchema>;
+export type ConnectorAuthRequest = z.infer<typeof ConnectorAuthRequestSchema>;
+export type ConnectorLogoutRequest = z.infer<typeof ConnectorLogoutRequestSchema>;
+export type WaitingScanRequest = z.infer<typeof WaitingScanRequestSchema>;
+export type PeopleMergeRequest = z.infer<typeof PeopleMergeRequestSchema>;
+export type PeopleRejectRequest = z.infer<typeof PeopleRejectRequestSchema>;
+export type PeopleUnlinkRequest = z.infer<typeof PeopleUnlinkRequestSchema>;
+export type ChronicleHideRequest = z.infer<typeof ChronicleHideRequestSchema>;

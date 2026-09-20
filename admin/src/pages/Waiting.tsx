@@ -4,55 +4,44 @@ import { api } from '../api';
 import { InfoIcon } from '../lib/shared';
 import { LoadingBlock } from './console-shared';
 
-const LOOP_TYPE_LABEL: Record<string, string> = {
-  commitment_owed_by_me: '我答应了别人',
-  commitment_owed_to_me: '别人答应了我',
-  unanswered_inbound: '待我回复',
-  unanswered_outbound: '等待对方回复',
-  decision_pending: '待决定',
-};
-
-interface LoopView {
+interface WaitingItem {
   id: number;
-  loop_type: string;
-  summary: string;
-  due_at: string | null;
-  last_activity_at: string;
-  quote?: string;
+  title: string;
+  meta: string;
+  origin_key: 'gmail' | 'meeting' | 'conversation' | 'other';
   deep_link?: string;
+  quote?: string;
 }
 
-interface WaitingGroup {
-  counterparty: string;
-  counterparty_slug: string | null;
-  loop_count: number;
-  nearest_due_at: string | null;
-  loops: LoopView[];
+interface OriginState {
+  ready: boolean;
+  label: string;
 }
 
 interface WaitingSnapshot {
-  groups?: WaitingGroup[];
+  items?: WaitingItem[];
   count?: number;
   stale?: boolean;
   no_google_sources?: boolean;
-  lanes?: {
-    google?: { configured?: boolean; last_sync_at?: string | null };
-    meeting?: { scanned?: number; last_scan_at?: string | null };
+  origins?: {
+    gmail?: OriginState;
+    meeting?: OriginState;
+    conversation?: OriginState;
   };
-  text?: string;
 }
 
-function ageLabel(iso: string): string {
-  const days = Math.max(0, Math.floor((Date.now() - Date.parse(iso)) / 86_400_000));
-  if (!Number.isFinite(days)) return '';
-  if (days === 0) return '今天';
-  return `${days} 天前`;
-}
+const ORIGIN_ORDER = ['gmail', 'meeting', 'conversation'] as const;
 
 export function WaitingPage() {
   const [data, setData] = useState<WaitingSnapshot | null>(null);
   const [error, setError] = useState('');
   const [busyId, setBusyId] = useState<number | null>(null);
+  const [scanning, setScanning] = useState(false);
+  const [enabled, setEnabled] = useState<Record<string, boolean>>({
+    gmail: true,
+    meeting: true,
+    conversation: true,
+  });
 
   const load = useCallback(async () => {
     try {
@@ -77,11 +66,27 @@ export function WaitingPage() {
     }
   };
 
+  const scan = async () => {
+    setScanning(true);
+    setError('');
+    try {
+      const lanes = ORIGIN_ORDER.filter((key) => enabled[key] && data?.origins?.[key]?.ready);
+      await api.scanWaiting(lanes);
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setScanning(false);
+    }
+  };
+
   if (!data && !error) return <LoadingBlock text="正在读取待我处理…" />;
 
-  const groups = data?.groups ?? [];
-  const noGoogle = data?.no_google_sources === true;
-  const empty = groups.length === 0;
+  const items = (data?.items ?? []).filter((item) => {
+    if (item.origin_key === 'other') return true;
+    return enabled[item.origin_key] !== false;
+  });
+  const origins = data?.origins ?? {};
 
   return (
     <div className="pm-page daily-page">
@@ -90,72 +95,82 @@ export function WaitingPage() {
           <h1 className="title-with-info">
             待我处理
             <InfoIcon title="待我处理">
-              显示谁在等你回复、你答应过什么。数据来自同一套 open_loops，不会在页面里重新扫描邮箱。
+              PMBrain 会从邮件、会议和 AI 对话里找出谁在等你、你答应过什么。你可以随时标记完成或忽略。
             </InfoIcon>
           </h1>
-          <p className="pm-page-intro">把该回的邮件和会议上的承诺放在一起，方便随手处理。</p>
+          <p className="pm-page-intro">把该回的消息和答应过的事放在一起处理。</p>
         </div>
-        <button type="button" className="pm-ghost" onClick={() => void load()}>刷新</button>
       </div>
       {error && <div className="pm-card pm-error">{error}</div>}
       {data?.stale && (
-        <div className="pm-card pm-warn">Google 同步有点旧了，下面名单可能不是最新的。请先到「连接器」同步。</div>
+        <div className="pm-card pm-warn">邮件同步有点旧了，下面名单可能不是最新的。可以先到「连接器」同步 Google。</div>
       )}
-      {empty && (
+
+      <article className="pm-card daily-card">
+        <header>
+          <Inbox aria-hidden="true" />
+          <div>
+            <h2>从哪里发现待办</h2>
+            <p>默认会自动查看已连接的来源，也可以先关掉再扫描。</p>
+          </div>
+        </header>
+        <div className="daily-source-pills">
+          {ORIGIN_ORDER.map((key) => {
+            const origin = origins[key];
+            const on = enabled[key] !== false && origin?.ready === true;
+            return (
+              <button
+                type="button"
+                key={key}
+                className={`daily-source-pill${on ? ' is-on' : ''}`}
+                disabled={!origin?.ready}
+                onClick={() => setEnabled((current) => ({ ...current, [key]: !on }))}
+              >
+                <span>{origin?.label ?? key}</span>
+                <b>{origin?.ready ? '✅' : '未连接'}</b>
+              </button>
+            );
+          })}
+        </div>
+        <button type="button" className="pm-primary" disabled={scanning} onClick={() => void scan()}>
+          {scanning ? '正在扫描…' : '立即扫描'}
+        </button>
+      </article>
+
+      {items.length === 0 ? (
         <div className="pm-card daily-empty">
           <Inbox aria-hidden="true" />
-          {noGoogle ? (
-            <div>
-              <b>Google 未配置</b>
-              <p>这不是收件箱已清零。连上 Google 后才能看到邮件里谁在等你。会议事项需要先运行扫描。</p>
-              {data?.lanes?.meeting && (
-                <p className="pm-hint">
-                  会议已扫描 {data.lanes.meeting.scanned ?? 0} 条
-                  {data.lanes.meeting.last_scan_at ? `，最近一次 ${data.lanes.meeting.last_scan_at}` : '，尚未扫描'}。
-                </p>
-              )}
-            </div>
-          ) : (
-            <div>
-              <b>暂时没有待处理事项</b>
-              <p>Gmail 通道当前没有超过一天未回的邮件，也没有跟踪中的承诺。</p>
-            </div>
-          )}
+          <div>
+            <b>暂时没有待处理事项</b>
+            <p>
+              {data?.no_google_sources
+                ? '还没有连接 Gmail。连上后可以扫描邮件里谁在等你；会议和 AI 对话也可以先扫描。'
+                : '当前没有需要回复或跟进的事项。'}
+            </p>
+          </div>
         </div>
-      )}
-      <div className="daily-stack">
-        {groups.map((group) => (
-          <article className="pm-card daily-card" key={`${group.counterparty}-${group.counterparty_slug ?? ''}`}>
-            <header>
+      ) : (
+        <ul className="daily-loop-list">
+          {items.map((item) => (
+            <li key={item.id}>
               <div>
-                <h2>{group.counterparty}</h2>
-                <p>{group.loop_count} 件待处理{group.nearest_due_at ? ` · 最近到期 ${group.nearest_due_at.slice(0, 10)}` : ''}</p>
+                <b>{item.title}</b>
+                {item.meta && <small>{item.meta}</small>}
+                {item.quote && <blockquote>{item.quote}</blockquote>}
+                {item.deep_link && <a href={item.deep_link} target="_blank" rel="noreferrer">打开原件</a>}
               </div>
-            </header>
-            <ul className="daily-loop-list">
-              {group.loops.map((loop) => (
-                <li key={loop.id}>
-                  <div>
-                    <span className="daily-pill">{LOOP_TYPE_LABEL[loop.loop_type] ?? loop.loop_type}</span>
-                    <b>{loop.summary}</b>
-                    <small>{ageLabel(loop.last_activity_at)}{loop.due_at ? ` · 截止 ${loop.due_at.slice(0, 10)}` : ''}</small>
-                    {loop.quote && <blockquote>{loop.quote}</blockquote>}
-                    {loop.deep_link && <a href={loop.deep_link} target="_blank" rel="noreferrer">打开邮件</a>}
-                  </div>
-                  <div className="daily-loop-actions">
-                    <button type="button" className="pm-primary" disabled={busyId === loop.id} onClick={() => void closeLoop(loop.id, 'done')}>
-                      {busyId === loop.id ? '处理中…' : '已处理'}
-                    </button>
-                    <button type="button" className="pm-ghost" disabled={busyId === loop.id} onClick={() => void closeLoop(loop.id, 'dropped')}>
-                      不再跟踪
-                    </button>
-                  </div>
-                </li>
-              ))}
-            </ul>
-          </article>
-        ))}
-      </div>
+              <div className="daily-loop-actions">
+                <button type="button" className="pm-primary" disabled={busyId === item.id} onClick={() => void closeLoop(item.id, 'done')}>
+                  {busyId === item.id ? '处理中…' : '已完成'}
+                </button>
+                <button type="button" className="pm-ghost" disabled={busyId === item.id} onClick={() => void closeLoop(item.id, 'dropped')}>
+                  忽略
+                </button>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }

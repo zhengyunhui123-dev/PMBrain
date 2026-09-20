@@ -7779,6 +7779,68 @@ html[data-theme="dark"] .dream-page .dream-journey-step span { color: var(--text
   background: #f7f9fc;
 }
 .daily-page .daily-date-field { display: grid; gap: 6px; font-size: 13px; }
+.daily-page .daily-account-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: center;
+}
+.daily-page .daily-account-row h2 { margin: 0; }
+.daily-page .daily-connect-panel,
+.daily-page .daily-advanced { display: grid; gap: 12px; }
+.daily-page .daily-connect-panel ol { margin: 0; padding-left: 18px; color: var(--text-secondary); }
+.daily-page .daily-connect-panel textarea,
+.daily-page .daily-advanced input[type="text"],
+.daily-page .daily-advanced input:not([type="checkbox"]):not([type="file"]) {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+}
+.daily-page .daily-advanced summary {
+  cursor: pointer;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+.daily-page .daily-source-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.daily-page .daily-source-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  border-radius: 999px;
+  padding: 6px 12px;
+  cursor: pointer;
+}
+.daily-page .daily-source-pill.is-on { border-color: var(--accent); }
+.daily-page .daily-empty-hero {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+}
+.daily-page .daily-empty-hero b { display: block; margin-bottom: 12px; font-size: 16px; }
+.daily-page .daily-suggest p { margin: 8px 0 12px; }
+.daily-page .daily-check-list { list-style: none; padding: 0; margin: 0 0 12px; display: grid; gap: 8px; }
+.daily-page .daily-person-facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 16px;
+  margin: 12px 0;
+}
+.daily-page .daily-person-facts dt { color: var(--text-secondary); font-size: 12px; }
+.daily-page .daily-person-facts dd { margin: 0; font-weight: 600; }
+.daily-page .daily-person-card h3 { margin: 16px 0 8px; font-size: 14px; }
 @media (max-width: 980px) {
   .daily-page .daily-grid { grid-template-columns: 1fr; }
+  .daily-page .daily-account-row,
+  .daily-page .daily-person-facts { grid-template-columns: 1fr; display: grid; }
 }

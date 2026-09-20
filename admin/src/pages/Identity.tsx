@@ -4,85 +4,144 @@ import { api } from '../api';
 import { InfoIcon } from '../lib/shared';
 import { LoadingBlock } from './console-shared';
 
-interface IdentityMember {
-  entity_id: string;
+interface PersonRecord {
   source_id: string;
   slug: string;
-  canonical?: boolean;
+  title: string;
+  source_label: string;
+  entity_id: string | null;
 }
 
-interface IdentityGroup {
+interface PersonSuggestion {
+  left: PersonRecord;
+  right: PersonRecord;
+  reason: string;
+}
+
+interface PersonGroup {
   entity_id: string;
-  canonical: IdentityMember | null;
-  members: IdentityMember[];
+  name: string;
+  members: PersonRecord[];
 }
 
-interface OntologyValue {
-  dimension: string;
-  value: string;
-  confidence: number;
-  source: string | null;
-  status: string;
-  fact_id?: number;
+interface PersonCard {
+  entity_id: string;
+  name: string;
+  company: string | null;
+  role: string | null;
+  last_contact: string | null;
+  last_contact_label: string | null;
+  open_items: number;
+  recent_meetings: number;
+  members: Array<PersonRecord & { canonical?: boolean }>;
+  timeline: Array<{ date: string; summary: string; page_slug: string; event_slug: string | null }>;
+}
+
+function personKey(person: { source_id: string; slug: string }): string {
+  return `${person.source_id}:${person.slug}`;
 }
 
 export function IdentityPage() {
-  const [entityId, setEntityId] = useState('zhang-san');
-  const [sourceId, setSourceId] = useState('youdao');
-  const [slug, setSlug] = useState('people/zhang-san');
-  const [canonical, setCanonical] = useState(false);
-  const [groups, setGroups] = useState<IdentityGroup[] | null>(null);
-  const [ontologyEntity, setOntologyEntity] = useState('people/zhang-san');
-  const [ontology, setOntology] = useState<OntologyValue[] | null>(null);
-  const [notice, setNotice] = useState('');
+  const [query, setQuery] = useState('');
+  const [people, setPeople] = useState<PersonRecord[] | null>(null);
+  const [suggestions, setSuggestions] = useState<PersonSuggestion[]>([]);
+  const [groups, setGroups] = useState<PersonGroup[]>([]);
+  const [selected, setSelected] = useState<string[]>([]);
+  const [card, setCard] = useState<PersonCard | null>(null);
   const [error, setError] = useState('');
-  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState('');
+  const [busy, setBusy] = useState('');
 
-  const loadGroups = useCallback(async () => {
+  const load = useCallback(async (search: string) => {
     try {
-      const payload = await api.entityIdentity(entityId ? { entity_id: entityId } : undefined) as { identities?: IdentityGroup[] };
-      setGroups(payload.identities ?? []);
+      const payload = await api.people(search) as {
+        people?: PersonRecord[];
+        suggestions?: PersonSuggestion[];
+        groups?: PersonGroup[];
+      };
+      setPeople(payload.people ?? []);
+      setSuggestions(payload.suggestions ?? []);
+      setGroups(payload.groups ?? []);
       setError('');
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
-  }, [entityId]);
+  }, []);
 
-  useEffect(() => { void loadGroups(); }, [loadGroups]);
+  useEffect(() => { void load(''); }, [load]);
 
-  const link = async () => {
-    setBusy(true);
+  const openCard = async (entityId: string) => {
+    setBusy('card');
+    try {
+      setCard(await api.peopleCard(entityId) as PersonCard);
+      setError('');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const toggle = (person: PersonRecord) => {
+    const key = personKey(person);
+    setSelected((current) => current.includes(key) ? current.filter((item) => item !== key) : [...current, key]);
+  };
+
+  const mergeSelected = async (members?: PersonRecord[]) => {
+    const chosen = members ?? (people ?? []).filter((person) => selected.includes(personKey(person)));
+    if (chosen.length < 2) {
+      setError('请至少勾选两条记录');
+      return;
+    }
+    setBusy('merge');
     setNotice('');
     try {
-      await api.linkEntityIdentity({
-        entity_id: entityId.trim(),
-        source_id: sourceId.trim(),
-        slug: slug.trim(),
-        ...(canonical ? { canonical: true } : {}),
-      });
-      setNotice(`已关联 ${sourceId.trim()} / ${slug.trim()}`);
-      await loadGroups();
+      const result = await api.mergePeople(chosen.map((person) => ({
+        source_id: person.source_id,
+        slug: person.slug,
+        title: person.title,
+      }))) as { entity_id: string };
+      setNotice('已把选中的记录视为同一个人');
+      setSelected([]);
+      await load(query);
+      await openCard(result.entity_id);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
-      setBusy(false);
+      setBusy('');
     }
   };
 
-  const loadOntology = async () => {
-    setBusy(true);
+  const reject = async (item: PersonSuggestion) => {
+    setBusy('reject');
     try {
-      const rows = await api.ontology(ontologyEntity.trim()) as OntologyValue[];
-      setOntology(Array.isArray(rows) ? rows : []);
-      setError('');
+      await api.rejectPeople({
+        left: { source_id: item.left.source_id, slug: item.left.slug },
+        right: { source_id: item.right.source_id, slug: item.right.slug },
+      });
+      await load(query);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
-      setBusy(false);
+      setBusy('');
     }
   };
 
-  if (!groups && !error) return <LoadingBlock text="正在读取人物关联…" />;
+  const unlink = async (member: PersonRecord) => {
+    if (!card) return;
+    setBusy('unlink');
+    try {
+      await api.unlinkPeople({ entity_id: card.entity_id, source_id: member.source_id, slug: member.slug });
+      await load(query);
+      await openCard(card.entity_id);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy('');
+    }
+  };
+
+  if (!people && !error) return <LoadingBlock text="正在读取人物关联…" />;
 
   return (
     <div className="pm-page daily-page">
@@ -91,70 +150,127 @@ export function IdentityPage() {
           <h1 className="title-with-info">
             人物关联
             <InfoIcon title="人物关联">
-              手工把不同来源里的同一个人连起来，例如有道笔记的张三和会议纪要里的张总。不会按中文名自动合并。
+              PMBrain 会提示可能是同一个人，但不会直接合并。确认后才会把不同来源的记录当成同一个人。
             </InfoIcon>
           </h1>
-          <p className="pm-page-intro">同一个身份组可以挂多个来源的页面。当前角色等本体值也在这里查看。</p>
+          <p className="pm-page-intro">搜索姓名，勾选后确认。自动判断都可以再改。</p>
         </div>
       </div>
       {error && <div className="pm-card pm-error">{error}</div>}
       {notice && <div className="pm-card pm-ok">{notice}</div>}
-      <div className="daily-grid">
-        <article className="pm-card daily-card">
-          <header>
-            <Users aria-hidden="true" />
-            <div>
-              <h2>手工关联</h2>
-              <p>示例：youdao 的 people/zhang-san 与 meetings 的 people/zhang-zong</p>
-            </div>
-          </header>
-          <div className="daily-form">
-            <label>身份组 ID<input value={entityId} onChange={(event) => setEntityId(event.target.value)} placeholder="zhang-san" /></label>
-            <label>来源 ID<input value={sourceId} onChange={(event) => setSourceId(event.target.value)} placeholder="youdao 或 meetings" /></label>
-            <label>页面 slug<input value={slug} onChange={(event) => setSlug(event.target.value)} placeholder="people/zhang-san" /></label>
-            <label className="daily-check"><input type="checkbox" checked={canonical} onChange={(event) => setCanonical(event.target.checked)} />设为这个人的主页面</label>
-            <button type="button" className="pm-primary" disabled={busy} onClick={() => void link()}>
-              {busy ? '保存中…' : '关联这个页面'}
-            </button>
+
+      {suggestions.length > 0 && (
+        <div className="daily-stack">
+          {suggestions.map((item) => (
+            <article className="pm-card daily-card daily-suggest" key={`${personKey(item.left)}-${personKey(item.right)}`}>
+              <b>{item.reason}</b>
+              <p>{item.left.title}（{item.left.source_label}） ↔ {item.right.title}（{item.right.source_label}）</p>
+              <div className="daily-loop-actions">
+                <button type="button" className="pm-primary" disabled={busy === 'merge'} onClick={() => void mergeSelected([item.left, item.right])}>
+                  确认关联
+                </button>
+                <button type="button" className="pm-ghost" disabled={busy === 'reject'} onClick={() => void reject(item)}>
+                  不是同一个人
+                </button>
+              </div>
+            </article>
+          ))}
+        </div>
+      )}
+
+      <article className="pm-card daily-card">
+        <header>
+          <Users aria-hidden="true" />
+          <div>
+            <h2>搜索人物</h2>
+            <p>例如：张三</p>
           </div>
+        </header>
+        <form className="daily-form" onSubmit={(event) => { event.preventDefault(); void load(query); }}>
+          <label>
+            搜索人物
+            <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="张三" />
+          </label>
+          <button type="submit" className="pm-ghost">搜索</button>
+        </form>
+        <ul className="daily-check-list">
+          {(people ?? []).map((person) => {
+            const key = personKey(person);
+            return (
+              <li key={key}>
+                <label className="daily-check">
+                  <input type="checkbox" checked={selected.includes(key)} onChange={() => toggle(person)} />
+                  {person.source_label} · {person.title}
+                  {person.entity_id && <small>已关联</small>}
+                </label>
+              </li>
+            );
+          })}
+        </ul>
+        {(people ?? []).length === 0 && <p className="pm-hint">没有找到匹配的人物记录。</p>}
+        <button type="button" className="pm-primary" disabled={busy === 'merge' || selected.length < 2} onClick={() => void mergeSelected()}>
+          {busy === 'merge' ? '保存中…' : '把选中的记录视为同一个人'}
+        </button>
+      </article>
+
+      {card && (
+        <article className="pm-card daily-card daily-person-card">
+          <h2>{card.name}</h2>
+          <dl className="daily-person-facts">
+            <div><dt>当前公司</dt><dd>{card.company || '暂无'}</dd></div>
+            <div><dt>当前职位</dt><dd>{card.role || '暂无'}</dd></div>
+            <div><dt>最近联系</dt><dd>{card.last_contact_label || '暂无'}</dd></div>
+            <div><dt>未完成事项</dt><dd>{card.open_items}</dd></div>
+            <div><dt>最近会议</dt><dd>{card.recent_meetings} 次</dd></div>
+          </dl>
+          <div>
+            <h3>已关联记录</h3>
+            <ul className="daily-loop-list">
+              {card.members.map((member) => (
+                <li key={personKey(member)}>
+                  <div>{member.source_label} · {member.title}</div>
+                  <button type="button" className="pm-ghost" disabled={busy === 'unlink'} onClick={() => void unlink(member)}>
+                    取消关联
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+          <div>
+            <h3>时间线</h3>
+            {card.timeline.length === 0 ? <p className="pm-hint">还没有这个人的时间线。</p> : (
+              <ul className="daily-loop-list">
+                {card.timeline.map((row, index) => (
+                  <li key={`${row.page_slug}-${row.date}-${index}`}>
+                    <div>
+                      <span className="daily-pill">{row.date.slice(0, 10)}</span>
+                      <b>{row.summary}</b>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <a className="pm-ghost" href="#chronicle">查看全部</a>
+          </div>
+        </article>
+      )}
+
+      {groups.length > 0 && (
+        <article className="pm-card daily-card">
+          <h2>已确认的人物</h2>
           <ul className="daily-loop-list">
-            {(groups ?? []).map((group) => (
+            {groups.map((group) => (
               <li key={group.entity_id}>
                 <div>
-                  <b>{group.entity_id}</b>
-                  <small>{group.members.map((member) => `${member.source_id}/${member.slug}${member.canonical ? '（主）' : ''}`).join('、') || '还没有成员'}</small>
+                  <b>{group.name}</b>
+                  <small>{group.members.map((member) => `${member.source_label} · ${member.title}`).join('、')}</small>
                 </div>
+                <button type="button" className="pm-ghost" onClick={() => void openCard(group.entity_id)}>打开人物卡</button>
               </li>
             ))}
           </ul>
         </article>
-        <article className="pm-card daily-card">
-          <header>
-            <div>
-              <h2>当前本体</h2>
-              <p>查看某个人现在的角色、职位等当前值</p>
-            </div>
-          </header>
-          <div className="daily-form">
-            <label>实体页面<input value={ontologyEntity} onChange={(event) => setOntologyEntity(event.target.value)} placeholder="people/zhang-san" /></label>
-            <button type="button" className="pm-ghost" disabled={busy} onClick={() => void loadOntology()}>查看当前值</button>
-          </div>
-          {ontology && ontology.length === 0 && <p className="pm-hint">这个人还没有本体当前值。</p>}
-          {ontology && ontology.length > 0 && (
-            <ul className="daily-loop-list">
-              {ontology.map((row) => (
-                <li key={`${row.dimension}-${row.fact_id ?? row.value}`}>
-                  <div>
-                    <span className="daily-pill">{row.dimension}</span>
-                    <b>{row.value}</b>
-                    <small>{row.status}{row.source ? ` · 来源 ${row.source}` : ''}</small>
-                  </div>
-                </li>
-              ))}
-            </ul>
-          )}
-        </article>
-      </div>
+      )}
     </div>
   );
 }

@@ -228,13 +228,25 @@ export interface PMBrainDesktopApi {
   quit(): Promise<void>;
   productConnectors(provider?: string): Promise<unknown>;
   productConnectorSync(body: { provider: string; full?: boolean; dry_run?: boolean }): Promise<unknown>;
+  productConnectorAuth(body: { provider: string; cookie?: string; token?: string }): Promise<unknown>;
+  productConnectorLogout(provider: string): Promise<unknown>;
   productWaiting(): Promise<unknown>;
   productWaitingClose(body: { id: number; status: 'done' | 'dropped'; note?: string }): Promise<unknown>;
+  productWaitingScan(lanes?: Array<'gmail' | 'meeting' | 'conversation'>): Promise<unknown>;
   productChronicleDay(date?: string): Promise<unknown>;
   productChronicleOnThisDay(date?: string): Promise<unknown>;
+  productChronicleStatus(): Promise<unknown>;
+  productEnableChronicle(): Promise<unknown>;
+  productOrganizeChronicleHistory(): Promise<unknown>;
+  productHideChronicleEvent(slug: string): Promise<unknown>;
   productOntology(entity: string): Promise<unknown>;
   productEntityIdentity(query?: { entity_id?: string; slug?: string }): Promise<unknown>;
   productEntityIdentityLink(body: { entity_id: string; slug: string; source_id: string; canonical?: boolean }): Promise<unknown>;
+  productPeople(query?: string): Promise<unknown>;
+  productPeopleCard(entityId: string): Promise<unknown>;
+  productMergePeople(members: Array<{ source_id: string; slug: string; title?: string }>): Promise<unknown>;
+  productRejectPeople(body: { left: { source_id: string; slug: string }; right: { source_id: string; slug: string } }): Promise<unknown>;
+  productUnlinkPeople(body: { entity_id: string; source_id: string; slug: string }): Promise<unknown>;
   googleStatus(): Promise<unknown>;
   googleConnect(input?: { account?: string; paste?: boolean; code?: string; clientJsonPath?: string }): Promise<{
     ok: boolean;
@@ -339,13 +351,25 @@ const api: PMBrainDesktopApi = {
   quit: () => ipcRenderer.invoke('desktop:quit'),
   productConnectors: (provider) => ipcRenderer.invoke('desktop:product-connectors', provider),
   productConnectorSync: (body) => ipcRenderer.invoke('desktop:product-connector-sync', body),
+  productConnectorAuth: (body) => ipcRenderer.invoke('desktop:product-connector-auth', body),
+  productConnectorLogout: (provider) => ipcRenderer.invoke('desktop:product-connector-logout', provider),
   productWaiting: () => ipcRenderer.invoke('desktop:product-waiting'),
   productWaitingClose: (body) => ipcRenderer.invoke('desktop:product-waiting-close', body),
+  productWaitingScan: (lanes) => ipcRenderer.invoke('desktop:product-waiting-scan', lanes),
   productChronicleDay: (date) => ipcRenderer.invoke('desktop:product-chronicle-day', date),
   productChronicleOnThisDay: (date) => ipcRenderer.invoke('desktop:product-chronicle-on-this-day', date),
+  productChronicleStatus: () => ipcRenderer.invoke('desktop:product-chronicle-status'),
+  productEnableChronicle: () => ipcRenderer.invoke('desktop:product-chronicle-enable'),
+  productOrganizeChronicleHistory: () => ipcRenderer.invoke('desktop:product-chronicle-history'),
+  productHideChronicleEvent: (slug) => ipcRenderer.invoke('desktop:product-chronicle-hide', slug),
   productOntology: (entity) => ipcRenderer.invoke('desktop:product-ontology', entity),
   productEntityIdentity: (query) => ipcRenderer.invoke('desktop:product-entity-identity', query),
   productEntityIdentityLink: (body) => ipcRenderer.invoke('desktop:product-entity-identity-link', body),
+  productPeople: (query) => ipcRenderer.invoke('desktop:product-people', query),
+  productPeopleCard: (entityId) => ipcRenderer.invoke('desktop:product-people-card', entityId),
+  productMergePeople: (members) => ipcRenderer.invoke('desktop:product-people-merge', members),
+  productRejectPeople: (body) => ipcRenderer.invoke('desktop:product-people-reject', body),
+  productUnlinkPeople: (body) => ipcRenderer.invoke('desktop:product-people-unlink', body),
   googleStatus: () => ipcRenderer.invoke('desktop:google-status'),
   googleConnect: (input) => ipcRenderer.invoke('desktop:google-connect', input),
   googleSource: (body) => ipcRenderer.invoke('desktop:google-source', body),

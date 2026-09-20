@@ -18,7 +18,10 @@ describe('Admin product surfaces', () => {
     const helper = read('src/commands/admin-product-surfaces.ts');
     expect(routes).toContain("app.get('/admin/api/connectors'");
     expect(routes).toContain("app.post('/admin/api/connectors/sync'");
+    expect(routes).toContain("app.post('/admin/api/connectors/auth'");
     expect(routes).toContain("app.get('/admin/api/waiting'");
+    expect(routes).toContain("app.post('/admin/api/waiting/scan'");
+    expect(routes).toContain("app.get('/admin/api/people'");
     expect(routes).toContain("app.get('/admin/api/chronicle/day'");
     expect(routes).toContain("app.get('/admin/api/chronicle/on-this-day'");
     expect(routes).toContain("app.get('/admin/api/ontology'");
@@ -41,16 +44,19 @@ describe('Admin product surfaces', () => {
     expect(app).toContain("page: 'chronicle', label: '生命年表'");
     expect(app).toContain("page: 'connectors', label: '连接器'");
     expect(app).toContain("page: 'identity', label: '人物关联'");
-    expect(waiting).toContain('Google 未配置');
-    expect(waiting).toContain('这不是收件箱已清零');
+    expect(waiting).toContain('从哪里发现待办');
+    expect(waiting).toContain('立即扫描');
     expect(waiting).not.toContain('你已清零');
-    expect(identity).toContain('youdao');
-    expect(identity).toContain('zhang-zong');
+    expect(waiting).not.toContain('Open Loop');
+    expect(identity).toContain('把选中的记录视为同一个人');
+    expect(identity).toContain('可能是同一个人');
+    expect(identity).not.toContain('身份组 ID');
     expect(connectors).not.toContain('console.log');
     expect(connectors).not.toContain('startLoopback');
     expect(connectors).not.toContain('client_secret');
     expect(connectors).not.toContain('refresh_token');
     expect(connectors).toContain('打不开回跳页？改用粘贴网址');
+    expect(connectors).toContain('高级设置');
   });
 });
 

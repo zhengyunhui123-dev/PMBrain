@@ -82,6 +82,31 @@ describe('desktop settings renderer contracts', () => {
     expect(renderer).not.toContain("populate(next);\n    switchPanel('integrations');");
   });
 
+  test('日常页使用普通用户语言，并让自动结果可见、可确认、可纠正', () => {
+    const daily = html.slice(html.indexOf('id="panel-daily"'), html.indexOf('id="panel-integrations"'));
+    expect(html).toContain('id="daily-connectors-title">连接器');
+    expect(html).toContain('id="daily-connectors-advanced"');
+    expect(html).toContain('高级设置');
+    expect(html).toContain('从哪里发现待办');
+    expect(html).toContain('Gmail');
+    expect(html).toContain('会议');
+    expect(html).toContain('AI 对话');
+    expect(html).toContain('开启时间记忆');
+    expect(html).toContain('整理历史记录');
+    expect(html).toContain('id="daily-chronicle-history-note"');
+    expect(renderer).toContain('条历史知识，可补充过去的时间线');
+    expect(html).toContain('把选中的记录视为同一个人');
+    expect(renderer).toContain("button.textContent = item.connected ? '管理' : '连接'");
+    expect(renderer).toContain("[['done', '已完成'], ['dropped', '忽略']]");
+    expect(renderer).toContain("hide.textContent = '这条不对'");
+    expect(renderer).toContain("open.textContent = '打开人物卡'");
+    expect(renderer).toContain('productPeopleCard');
+    expect(renderer).toContain('productUnlinkPeople');
+    expect(renderer).not.toContain('Open Loops');
+    expect(daily).not.toContain('Chronicle');
+    expect(daily).not.toContain('backfill');
+  });
+
   test('reuses custom chat models in advanced tier and Dream phase selectors', () => {
     expect(renderer).toContain('function syncAdvancedProviderOptions');
     expect(renderer).toContain('customCatalog.chat');

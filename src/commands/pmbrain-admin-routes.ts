@@ -148,22 +148,46 @@ import {
   AdvisorAdminResponseSchema,
   AdvisorApplyRequestSchema,
   AdvisorApplyResponseSchema,
+  ChronicleHideRequestSchema,
+  ConnectorAuthRequestSchema,
+  ConnectorLogoutRequestSchema,
   ConnectorSyncRequestSchema,
   EntityIdentityLinkRequestSchema,
   GoogleConnectEnvelopeSchema,
   GoogleConnectRequestSchema,
   GoogleSourceAddRequestSchema,
+  PeopleMergeRequestSchema,
+  PeopleRejectRequestSchema,
+  PeopleUnlinkRequestSchema,
   ProductSurfacePayloadSchema,
   WaitingCloseRequestSchema,
+  WaitingScanRequestSchema,
 } from '../../shared/contracts/index.ts';
 import { applyAdminAdvisorFinding, getAdminAdvisorReport } from './admin-advisor.ts';
 import {
   addAdminGoogleSource,
   getAdminGoogleStatus,
   localDateKey,
-  runAdminGoogleConnect,
   runAdminProductOp,
 } from './admin-product-surfaces.ts';
+import {
+  authConnector,
+  chronicleStatus,
+  connectGoogleAndLink,
+  enableChronicle,
+  hideChronicleEvent,
+  listPeopleWorkspace,
+  logoutConnector,
+  mergePeople,
+  organizeChronicleHistory,
+  peopleCard,
+  presentChronicleRows,
+  presentConnectors,
+  presentWaiting,
+  rejectPeoplePair,
+  scanWaiting,
+  unlinkPeopleMember,
+} from './admin-daily-product.ts';
 import { OperationError } from '../core/operation-error.ts';
 import { SourceOpError } from '../core/sources-ops.ts';
 
@@ -376,13 +400,35 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
   app.get('/admin/api/connectors', requireAdmin, async (req: Request, res: Response) => {
     try {
       const provider = firstQueryValue(req.query.provider);
-      sendAdminContract(
-        res,
-        ProductSurfacePayloadSchema,
-        await runAdminProductOp(engine, 'connectors_status', provider ? { provider } : {}),
-      );
+      if (provider) {
+        sendAdminContract(
+          res,
+          ProductSurfacePayloadSchema,
+          await runAdminProductOp(engine, 'connectors_status', { provider }),
+        );
+        return;
+      }
+      sendAdminContract(res, ProductSurfacePayloadSchema, await presentConnectors(engine));
     } catch (e) {
       sendProductOpError(res, e, 'connectors_status_failed');
+    }
+  });
+
+  app.post('/admin/api/connectors/auth', requireAdmin, express.json({ limit: '256kb' }), async (req: Request, res: Response) => {
+    try {
+      const input = ConnectorAuthRequestSchema.parse(req.body ?? {});
+      sendAdminContract(res, ProductSurfacePayloadSchema, await authConnector(input));
+    } catch (e) {
+      sendProductOpError(res, e, 'connector_auth_failed');
+    }
+  });
+
+  app.post('/admin/api/connectors/logout', requireAdmin, express.json({ limit: '4kb' }), async (req: Request, res: Response) => {
+    try {
+      const input = ConnectorLogoutRequestSchema.parse(req.body ?? {});
+      sendAdminContract(res, ProductSurfacePayloadSchema, logoutConnector(input.provider));
+    } catch (e) {
+      sendProductOpError(res, e, 'connector_logout_failed');
     }
   });
 
@@ -407,18 +453,32 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
     try {
       const limitRaw = firstQueryValue(req.query.limit);
       const limit = limitRaw ? Number(limitRaw) : 20;
-      sendAdminContract(
-        res,
-        ProductSurfacePayloadSchema,
-        await runAdminProductOp(engine, 'open_loops', {
-          group_by: 'counterparty',
-          include_context: true,
-          all_sources: true,
-          limit: Number.isFinite(limit) ? limit : 20,
-        }),
-      );
+      const payload = await runAdminProductOp(engine, 'open_loops', {
+        group_by: 'counterparty',
+        include_context: true,
+        all_sources: true,
+        limit: Number.isFinite(limit) ? limit : 20,
+      });
+      sendAdminContract(res, ProductSurfacePayloadSchema, await presentWaiting(engine, payload));
     } catch (e) {
       sendProductOpError(res, e, 'waiting_failed');
+    }
+  });
+
+  app.post('/admin/api/waiting/scan', requireAdmin, express.json({ limit: '4kb' }), async (req: Request, res: Response) => {
+    try {
+      const input = WaitingScanRequestSchema.parse(req.body ?? {});
+      const selected = input.lanes ?? ['gmail', 'meeting', 'conversation'];
+      const gmailRun = selected.includes('gmail')
+        ? await startActionRun('sync_all', process.cwd(), runHooks, {})
+        : null;
+      const result = await scanWaiting(engine, selected);
+      sendAdminContract(res, ProductSurfacePayloadSchema, {
+        ...result,
+        ...(gmailRun ? { gmail_run_id: gmailRun.id, gmail_status: gmailRun.status } : {}),
+      });
+    } catch (e) {
+      sendProductOpError(res, e, 'waiting_scan_failed');
     }
   });
 
@@ -445,7 +505,7 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
       sendAdminContract(
         res,
         ProductSurfacePayloadSchema,
-        await runAdminProductOp(engine, 'chronicle_day', { date }),
+        await presentChronicleRows(engine, await runAdminProductOp(engine, 'chronicle_day', { date })),
       );
     } catch (e) {
       sendProductOpError(res, e, 'chronicle_day_failed');
@@ -458,10 +518,43 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
       sendAdminContract(
         res,
         ProductSurfacePayloadSchema,
-        await runAdminProductOp(engine, 'chronicle_on_this_day', date ? { date } : {}),
+        await presentChronicleRows(engine, await runAdminProductOp(engine, 'chronicle_on_this_day', date ? { date } : {})),
       );
     } catch (e) {
       sendProductOpError(res, e, 'chronicle_on_this_day_failed');
+    }
+  });
+
+  app.get('/admin/api/chronicle/status', requireAdmin, async (_req: Request, res: Response) => {
+    try {
+      sendAdminContract(res, ProductSurfacePayloadSchema, await chronicleStatus(engine));
+    } catch (e) {
+      sendProductOpError(res, e, 'chronicle_status_failed');
+    }
+  });
+
+  app.post('/admin/api/chronicle/enable', requireAdmin, async (_req: Request, res: Response) => {
+    try {
+      sendAdminContract(res, ProductSurfacePayloadSchema, await enableChronicle(engine));
+    } catch (e) {
+      sendProductOpError(res, e, 'chronicle_enable_failed');
+    }
+  });
+
+  app.post('/admin/api/chronicle/history', requireAdmin, async (_req: Request, res: Response) => {
+    try {
+      sendAdminContract(res, ProductSurfacePayloadSchema, await organizeChronicleHistory(engine));
+    } catch (e) {
+      sendProductOpError(res, e, 'chronicle_history_failed');
+    }
+  });
+
+  app.post('/admin/api/chronicle/hide', requireAdmin, express.json({ limit: '4kb' }), async (req: Request, res: Response) => {
+    try {
+      const input = ChronicleHideRequestSchema.parse(req.body ?? {});
+      sendAdminContract(res, ProductSurfacePayloadSchema, await hideChronicleEvent(engine, input.slug));
+    } catch (e) {
+      sendProductOpError(res, e, 'chronicle_hide_failed');
     }
   });
 
@@ -517,6 +610,58 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
     }
   });
 
+  app.get('/admin/api/people', requireAdmin, async (req: Request, res: Response) => {
+    try {
+      sendAdminContract(
+        res,
+        ProductSurfacePayloadSchema,
+        await listPeopleWorkspace(engine, firstQueryValue(req.query.q) ?? ''),
+      );
+    } catch (e) {
+      sendProductOpError(res, e, 'people_list_failed');
+    }
+  });
+
+  app.get('/admin/api/people/card', requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const entityId = firstQueryValue(req.query.entity_id);
+      if (!entityId) {
+        res.status(400).json({ error: 'entity_required' });
+        return;
+      }
+      sendAdminContract(res, ProductSurfacePayloadSchema, await peopleCard(engine, entityId));
+    } catch (e) {
+      sendProductOpError(res, e, 'people_card_failed');
+    }
+  });
+
+  app.post('/admin/api/people/merge', requireAdmin, express.json({ limit: '16kb' }), async (req: Request, res: Response) => {
+    try {
+      const input = PeopleMergeRequestSchema.parse(req.body ?? {});
+      sendAdminContract(res, ProductSurfacePayloadSchema, await mergePeople(engine, input.members));
+    } catch (e) {
+      sendProductOpError(res, e, 'people_merge_failed');
+    }
+  });
+
+  app.post('/admin/api/people/reject', requireAdmin, express.json({ limit: '8kb' }), async (req: Request, res: Response) => {
+    try {
+      const input = PeopleRejectRequestSchema.parse(req.body ?? {});
+      sendAdminContract(res, ProductSurfacePayloadSchema, await rejectPeoplePair(engine, input.left, input.right));
+    } catch (e) {
+      sendProductOpError(res, e, 'people_reject_failed');
+    }
+  });
+
+  app.post('/admin/api/people/unlink', requireAdmin, express.json({ limit: '8kb' }), async (req: Request, res: Response) => {
+    try {
+      const input = PeopleUnlinkRequestSchema.parse(req.body ?? {});
+      sendAdminContract(res, ProductSurfacePayloadSchema, await unlinkPeopleMember(engine, input));
+    } catch (e) {
+      sendProductOpError(res, e, 'people_unlink_failed');
+    }
+  });
+
   app.get('/admin/api/google/status', requireAdmin, async (_req: Request, res: Response) => {
     try {
       sendAdminContract(res, ProductSurfacePayloadSchema, await getAdminGoogleStatus(engine));
@@ -528,16 +673,7 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
   app.post('/admin/api/google/connect', requireAdmin, express.json({ limit: '256kb' }), async (req: Request, res: Response) => {
     try {
       const input = GoogleConnectRequestSchema.parse(req.body ?? {});
-      sendAdminContract(
-        res,
-        GoogleConnectEnvelopeSchema,
-        await runAdminGoogleConnect({
-          account: input.account,
-          paste: input.paste,
-          code: input.code,
-          clientJson: input.client_json,
-        }),
-      );
+      sendAdminContract(res, GoogleConnectEnvelopeSchema, await connectGoogleAndLink(engine, input));
     } catch (e) {
       sendProductOpError(res, e, 'google_connect_failed');
     }

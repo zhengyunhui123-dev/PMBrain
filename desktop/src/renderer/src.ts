@@ -2421,6 +2421,7 @@ document.addEventListener('keydown', e => {
 });
 let googleClientJsonPath = '';
 let googleConsentUrl = '';
+let activeDailyConnector = '';
 
 function extractConsentUrl(message?: string): string | null {
   const match = message?.match(/https:\/\/accounts\.google\.com[^\s"'<>]+/i);
@@ -2438,59 +2439,105 @@ function renderList(target: HTMLElement, lines: string[]): void {
   target.textContent = lines.length > 0 ? lines.join('\n') : '暂无';
 }
 
-function chronicleLines(payload: unknown): string[] {
+function chronicleRows(payload: unknown): Array<{ date?: string; summary?: string; page_slug?: string; event_slug?: string | null }> {
   const rows = Array.isArray(payload)
-    ? payload as Array<{ date?: string; summary?: string }>
+    ? payload as Array<{ date?: string; summary?: string; page_slug?: string; event_slug?: string | null }>
     : (payload && typeof payload === 'object' && Array.isArray((payload as { events?: unknown }).events)
-      ? (payload as { events: Array<{ date?: string; summary?: string }> }).events
+      ? (payload as { events: Array<{ date?: string; summary?: string; page_slug?: string; event_slug?: string | null }> }).events
       : []);
-  return rows.map((row) => `${(row.date ?? '').toString().slice(0, 10)} ${row.summary ?? ''}`.trim()).filter(Boolean);
+  return rows;
+}
+
+function renderChronicleRows(target: HTMLElement, payload: unknown): void {
+  const rows = chronicleRows(payload);
+  target.replaceChildren();
+  if (rows.length === 0) {
+    target.textContent = '暂无';
+    return;
+  }
+  for (const row of rows) {
+    const item = document.createElement('div');
+    const text = document.createElement('span');
+    text.textContent = `${(row.date ?? '').toString().slice(0, 10)} ${row.summary ?? ''}`.trim();
+    item.append(text);
+    const slug = row.event_slug || row.page_slug;
+    if (slug) {
+      const hide = document.createElement('button');
+      hide.type = 'button';
+      hide.className = 'ghost';
+      hide.textContent = '这条不对';
+      hide.addEventListener('click', () => {
+        void window.pmbrainDesktop.productHideChronicleEvent(slug)
+          .then(() => refreshDailyPanel())
+          .catch((error) => setNotice('error', error instanceof Error ? error.message : String(error)));
+      });
+      item.append(hide);
+    }
+    target.append(item);
+  }
+}
+
+function selectDailyConnector(id: string, connected: boolean): void {
+  activeDailyConnector = id;
+  const details = $<HTMLDetailsElement>('#daily-connectors-advanced');
+  details.open = true;
+  $('#daily-chat-secret-label').textContent = `${id === 'chatgpt' ? 'ChatGPT' : 'Claude'} 登录信息`;
+  const secret = $<HTMLInputElement>('#daily-chat-secret');
+  secret.value = '';
+  secret.placeholder = connected ? '已连接；如需更新，请粘贴新的登录信息' : '粘贴登录信息';
+  $<HTMLButtonElement>('#daily-chat-sync').disabled = !connected;
+  $<HTMLButtonElement>('#daily-chat-logout').disabled = !connected;
+  secret.focus();
 }
 
 async function refreshDailyPanel(): Promise<void> {
   const waitingEl = $('#daily-waiting');
   const connectorsEl = $('#daily-connectors');
   const googleEl = $('#daily-google-status');
-  const groupsEl = $('#daily-identity-groups');
-  try {
-    const google = await window.pmbrainDesktop.googleStatus() as {
-      status?: string;
-      accounts?: Array<{ account: string }>;
-      linked_sources?: Array<{ id: string; account: string | null }>;
-    };
-    const accounts = google.accounts ?? [];
-    googleEl.textContent = accounts.length > 0
-      ? `已连接：${accounts.map((item) => item.account).join('、')}`
-      : '还没有连接 Google 账号。';
-    if (accounts[0] && !$<HTMLInputElement>('#daily-google-account').value) {
-      $<HTMLInputElement>('#daily-google-account').value = accounts[0].account;
-    }
-  } catch (error) {
-    googleEl.textContent = error instanceof Error ? error.message : String(error);
-  }
   try {
     const payload = await window.pmbrainDesktop.productConnectors() as {
       providers?: Array<{ provider: string; credential?: { present: boolean }; last_sync_at?: string | null }>;
+      google?: { accounts?: Array<{ account: string }> };
+      cards?: Array<{ id: string; name: string; connected: boolean; account: string | null; last_sync_label: string }>;
     };
+    const cards = payload.cards;
     const providers = payload.providers ?? [];
+    const accounts = payload.google?.accounts ?? [];
+    googleEl.textContent = accounts.length > 0 ? `Google 已连接 ${accounts.map((item) => item.account).join('、')}` : 'Google 尚未连接';
+    if (accounts[0] && !$<HTMLInputElement>('#daily-google-account').value) {
+      $<HTMLInputElement>('#daily-google-account').value = accounts[0].account;
+    }
     connectorsEl.replaceChildren();
-    if (providers.length === 0) {
+    const rows = cards ?? providers.map((item) => ({
+      id: item.provider,
+      name: item.provider === 'chatgpt' ? 'ChatGPT' : item.provider === 'claude' ? 'Claude' : item.provider,
+      connected: item.credential?.present === true,
+      account: null,
+      last_sync_label: item.last_sync_at ? `最近同步 ${item.last_sync_at}` : '尚未同步',
+    }));
+    if (rows.length === 0) {
       connectorsEl.textContent = '没有连接器';
     } else {
-    for (const item of providers) {
+    for (const item of rows) {
       const row = document.createElement('div');
-      const name = item.provider === 'chatgpt' ? 'ChatGPT' : item.provider === 'claude' ? 'Claude' : item.provider;
-      const label = document.createElement('span');
-      label.textContent = `${name}：${item.credential?.present ? '已有凭证' : '未配置'} · ${item.last_sync_at ? `最近同步 ${item.last_sync_at}` : '尚未同步'}`;
+      row.className = 'daily-connector-row';
+      const label = document.createElement('div');
+      const state = document.createElement('b');
+      state.textContent = `${item.name}　${item.connected ? (item.account ? `已连接 ${item.account}` : '已连接') : '未连接'}`;
+      const sync = document.createElement('small');
+      sync.textContent = `最近同步：${item.last_sync_label}`;
+      label.append(state, sync);
       const button = document.createElement('button');
       button.type = 'button';
       button.className = 'ghost';
-      button.textContent = '同步对话';
-      button.disabled = !item.credential?.present;
+      button.textContent = item.connected ? '管理' : '连接';
       button.addEventListener('click', () => {
-        void window.pmbrainDesktop.productConnectorSync({ provider: item.provider })
-          .then(() => refreshDailyPanel())
-          .catch((syncError) => setNotice('error', syncError instanceof Error ? syncError.message : String(syncError)));
+        if (item.id === 'google') {
+          $<HTMLDetailsElement>('#daily-connectors-advanced').open = true;
+          if (!item.connected) $<HTMLButtonElement>('#daily-google-connect').click();
+          return;
+        }
+        selectDailyConnector(item.id, item.connected);
       });
       row.append(label, button);
       connectorsEl.append(row);
@@ -2501,38 +2548,197 @@ async function refreshDailyPanel(): Promise<void> {
   }
   try {
     const payload = await window.pmbrainDesktop.productWaiting() as {
+      items?: Array<{ title: string; meta?: string }>;
       groups?: Array<{ counterparty: string; loop_count: number; loops?: Array<{ summary: string }> }>;
       no_google_sources?: boolean;
+      origins?: Record<'gmail' | 'meeting' | 'conversation', { ready: boolean; label: string }>;
     };
-    const groups = payload.groups ?? [];
-    if (groups.length === 0) {
-      waitingEl.textContent = payload.no_google_sources
-        ? 'Google 未配置，这不是收件箱已清零。'
-        : '暂时没有待处理事项。';
+    const items = payload.items ?? [];
+    for (const key of ['gmail', 'meeting', 'conversation'] as const) {
+      const ready = payload.origins?.[key]?.ready === true;
+      const input = $<HTMLInputElement>(`#daily-waiting-${key}`);
+      const state = $(`#daily-waiting-${key}-state`);
+      input.disabled = !ready;
+      if (!ready) input.checked = false;
+      state.textContent = ready ? '✅' : '未连接';
+    }
+    if (items.length > 0) {
+      waitingEl.replaceChildren();
+      for (const item of items as Array<{ id: number; title: string; meta?: string; origin_key?: string }>) {
+        const input = item.origin_key && document.querySelector<HTMLInputElement>(`#daily-waiting-${item.origin_key}`);
+        if (input && !input.checked) continue;
+        const row = document.createElement('div');
+        row.className = 'daily-waiting-row';
+        const copy = document.createElement('div');
+        const title = document.createElement('b');
+        title.textContent = item.title;
+        copy.append(title);
+        if (item.meta) {
+          const meta = document.createElement('small');
+          meta.textContent = item.meta;
+          copy.append(meta);
+        }
+        const actions = document.createElement('div');
+        for (const [status, text] of [['done', '已完成'], ['dropped', '忽略']] as const) {
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.className = status === 'done' ? 'solid' : 'ghost';
+          button.textContent = text;
+          button.addEventListener('click', () => {
+            void window.pmbrainDesktop.productWaitingClose({ id: item.id, status })
+              .then(() => refreshDailyPanel())
+              .catch((error) => setNotice('error', error instanceof Error ? error.message : String(error)));
+          });
+          actions.append(button);
+        }
+        row.append(copy, actions);
+        waitingEl.append(row);
+      }
     } else {
-      waitingEl.textContent = groups.map((group) => `${group.counterparty}（${group.loop_count}）`).join('\n');
+      waitingEl.textContent = payload.no_google_sources
+        ? '还没有连接 Gmail。连上后可以扫描邮件里谁在等你。'
+        : '暂时没有待处理事项。';
     }
   } catch (error) {
     waitingEl.textContent = error instanceof Error ? error.message : String(error);
   }
   const date = $<HTMLInputElement>('#daily-chronicle-date').value;
   try {
-    renderList($('#daily-chronicle-today'), chronicleLines(await window.pmbrainDesktop.productChronicleDay(date || undefined)));
-    renderList($('#daily-chronicle-memory'), chronicleLines(await window.pmbrainDesktop.productChronicleOnThisDay(date || undefined)));
+    const status = await window.pmbrainDesktop.productChronicleStatus() as { event_count?: number; history_count?: number };
+    const empty = (status.event_count ?? 0) === 0;
+    $('#daily-chronicle-empty').hidden = !empty;
+    $('#daily-chronicle-empty-actions').hidden = !empty;
+    $('#daily-chronicle-content').hidden = empty;
+    const historyCount = status.history_count ?? 0;
+    const historyNote = $('#daily-chronicle-history-note');
+    historyNote.hidden = !empty || historyCount === 0;
+    historyNote.textContent = historyCount > 0 ? `已有 ${historyCount} 条历史知识，可补充过去的时间线。` : '';
+    $<HTMLButtonElement>('#daily-chronicle-history').hidden = historyCount === 0;
+    if (!empty) {
+      renderChronicleRows($('#daily-chronicle-today'), await window.pmbrainDesktop.productChronicleDay(date || undefined));
+      renderChronicleRows($('#daily-chronicle-memory'), await window.pmbrainDesktop.productChronicleOnThisDay(date || undefined));
+    } else {
+      $('#daily-chronicle-today').textContent = '还没有时间线。';
+      $('#daily-chronicle-memory').textContent = '还没有时间线。';
+    }
   } catch (error) {
     $('#daily-chronicle-today').textContent = error instanceof Error ? error.message : String(error);
   }
+  await refreshDailyPeople();
+}
+
+async function refreshDailyPeople(query = $<HTMLInputElement>('#daily-identity-query').value.trim()): Promise<void> {
+  const groupsEl = $('#daily-identity-groups');
+  const resultsEl = $('#daily-identity-results');
+  const suggestionsEl = $('#daily-identity-suggestions');
   try {
-    const entityId = $<HTMLInputElement>('#daily-identity-id').value.trim();
-    const payload = await window.pmbrainDesktop.productEntityIdentity(entityId ? { entity_id: entityId } : undefined) as {
-      identities?: Array<{ entity_id: string; members?: Array<{ source_id: string; slug: string }> }>;
+    const payload = await window.pmbrainDesktop.productPeople(query) as {
+      people?: Array<{ source_id: string; slug: string; title: string; source_label: string }>;
+      suggestions?: Array<{ left: { source_id: string; slug: string; title: string; source_label: string }; right: { source_id: string; slug: string; title: string; source_label: string } }>;
+      groups?: Array<{ entity_id: string; name: string; members?: Array<{ source_label: string; title: string }> }>;
     };
-    groupsEl.textContent = (payload.identities ?? []).map((group) => {
-      const members = (group.members ?? []).map((member) => `${member.source_id}/${member.slug}`).join('、');
-      return `${group.entity_id}：${members || '还没有成员'}`;
-    }).join('\n') || '还没有人物关联。';
+    suggestionsEl.replaceChildren();
+    for (const item of payload.suggestions ?? []) {
+      const row = document.createElement('div');
+      row.textContent = `可能是同一个人：${item.left.title}（${item.left.source_label}） ↔ ${item.right.title}（${item.right.source_label}）`;
+      const confirm = document.createElement('button');
+      confirm.type = 'button';
+      confirm.className = 'ghost';
+      confirm.textContent = '确认关联';
+      confirm.addEventListener('click', () => {
+        void window.pmbrainDesktop.productMergePeople([item.left, item.right])
+          .then(() => refreshDailyPanel())
+          .catch((error) => setNotice('error', error instanceof Error ? error.message : String(error)));
+      });
+      const reject = document.createElement('button');
+      reject.type = 'button';
+      reject.className = 'ghost';
+      reject.textContent = '不是同一个人';
+      reject.addEventListener('click', () => {
+        void window.pmbrainDesktop.productRejectPeople({ left: item.left, right: item.right })
+          .then(() => refreshDailyPanel())
+          .catch((error) => setNotice('error', error instanceof Error ? error.message : String(error)));
+      });
+      row.append(confirm, reject);
+      suggestionsEl.append(row);
+    }
+    resultsEl.replaceChildren();
+    for (const person of payload.people ?? []) {
+      const label = document.createElement('label');
+      const box = document.createElement('input');
+      box.type = 'checkbox';
+      box.dataset.sourceId = person.source_id;
+      box.dataset.slug = person.slug;
+      box.dataset.title = person.title;
+      label.append(box, document.createTextNode(` ${person.source_label} · ${person.title}`));
+      resultsEl.append(label);
+    }
+    if ((payload.people ?? []).length === 0) resultsEl.textContent = '没有找到匹配的人物记录。';
+    groupsEl.replaceChildren();
+    for (const group of payload.groups ?? []) {
+      const row = document.createElement('div');
+      const copy = document.createElement('span');
+      const members = (group.members ?? []).map((member) => `${member.source_label} · ${member.title}`).join('、');
+      copy.textContent = `${group.name}：${members || '还没有成员'}`;
+      const open = document.createElement('button');
+      open.type = 'button';
+      open.className = 'ghost';
+      open.textContent = '打开人物卡';
+      open.addEventListener('click', () => void renderDailyPersonCard(group.entity_id));
+      row.append(copy, open);
+      groupsEl.append(row);
+    }
+    if ((payload.groups ?? []).length === 0) groupsEl.textContent = '还没有人物关联。';
   } catch (error) {
     groupsEl.textContent = error instanceof Error ? error.message : String(error);
+  }
+}
+
+async function renderDailyPersonCard(entityId: string): Promise<void> {
+  const target = $('#daily-person-card');
+  try {
+    const card = await window.pmbrainDesktop.productPeopleCard(entityId) as {
+      entity_id: string;
+      name: string;
+      company: string | null;
+      role: string | null;
+      last_contact_label: string | null;
+      open_items: number;
+      recent_meetings: number;
+      members: Array<{ source_id: string; slug: string; source_label: string; title: string }>;
+      timeline: Array<{ date: string; summary: string }>;
+    };
+    target.replaceChildren();
+    const title = document.createElement('h3');
+    title.textContent = card.name;
+    const facts = document.createElement('div');
+    facts.className = 'daily-person-facts';
+    facts.textContent = `当前公司：${card.company || '暂无'}\n当前职位：${card.role || '暂无'}\n最近联系：${card.last_contact_label || '暂无'}\n未完成事项：${card.open_items}\n最近会议：${card.recent_meetings} 次`;
+    const members = document.createElement('div');
+    for (const member of card.members) {
+      const row = document.createElement('div');
+      row.textContent = `${member.source_label} · ${member.title}`;
+      const unlink = document.createElement('button');
+      unlink.type = 'button';
+      unlink.className = 'ghost';
+      unlink.textContent = '取消关联';
+      unlink.addEventListener('click', () => {
+        void window.pmbrainDesktop.productUnlinkPeople({ entity_id: card.entity_id, source_id: member.source_id, slug: member.slug })
+          .then(() => refreshDailyPeople())
+          .then(() => renderDailyPersonCard(card.entity_id))
+          .catch((error) => setNotice('error', error instanceof Error ? error.message : String(error)));
+      });
+      row.append(unlink);
+      members.append(row);
+    }
+    const timeline = document.createElement('p');
+    timeline.textContent = card.timeline.length > 0
+      ? `时间线：${card.timeline.map((row) => `${row.date.slice(0, 10)} ${row.summary}`).join('；')}`
+      : '时间线：暂无';
+    target.append(title, facts, members, timeline);
+    target.hidden = false;
+  } catch (error) {
+    setNotice('error', error instanceof Error ? error.message : String(error));
   }
 }
 
@@ -2867,19 +3073,67 @@ $('#daily-google-source-save').addEventListener('click', async () => {
   setNotice('success', 'Google 知识源已登记');
   void refreshDailyPanel();
 });
-$('#daily-chronicle-date').addEventListener('change', () => void refreshDailyPanel());
-$('#daily-identity-link').addEventListener('click', async () => {
-  await window.pmbrainDesktop.productEntityIdentityLink({
-    entity_id: $<HTMLInputElement>('#daily-identity-id').value.trim(),
-    source_id: $<HTMLInputElement>('#daily-identity-source').value.trim(),
-    slug: $<HTMLInputElement>('#daily-identity-slug').value.trim(),
-  });
-  setNotice('success', '已关联页面');
+$('#daily-chat-save').addEventListener('click', async () => {
+  const secret = $<HTMLInputElement>('#daily-chat-secret').value.trim();
+  if (!activeDailyConnector || !secret) {
+    setNotice('error', '请先选择 ChatGPT 或 Claude，并粘贴登录信息');
+    return;
+  }
+  const result = await window.pmbrainDesktop.productConnectorAuth({ provider: activeDailyConnector, cookie: secret }) as { ok?: boolean; error?: string };
+  if (result.ok === false) {
+    setNotice('error', result.error || '连接失败');
+    return;
+  }
+  $<HTMLInputElement>('#daily-chat-secret').value = '';
+  setNotice('success', `${activeDailyConnector === 'chatgpt' ? 'ChatGPT' : 'Claude'} 已连接`);
   void refreshDailyPanel();
 });
-$('#daily-ontology-load').addEventListener('click', async () => {
-  const rows = await window.pmbrainDesktop.productOntology($<HTMLInputElement>('#daily-ontology-entity').value.trim()) as Array<{ dimension: string; value: string }>;
-  $('#daily-ontology').textContent = Array.isArray(rows) && rows.length > 0
-    ? rows.map((row) => `${row.dimension} = ${row.value}`).join('\n')
-    : '这个人还没有本体当前值。';
+$('#daily-chat-sync').addEventListener('click', async () => {
+  if (!activeDailyConnector) return;
+  await window.pmbrainDesktop.productConnectorSync({ provider: activeDailyConnector });
+  setNotice('success', '已开始同步');
+  void refreshDailyPanel();
+});
+$('#daily-chat-logout').addEventListener('click', async () => {
+  if (!activeDailyConnector) return;
+  await window.pmbrainDesktop.productConnectorLogout(activeDailyConnector);
+  setNotice('success', '已断开连接');
+  activeDailyConnector = '';
+  void refreshDailyPanel();
+});
+$('#daily-chronicle-date').addEventListener('change', () => void refreshDailyPanel());
+$('#daily-waiting-scan').addEventListener('click', async () => {
+  const lanes = (['gmail', 'meeting', 'conversation'] as const)
+    .filter((key) => $<HTMLInputElement>(`#daily-waiting-${key}`).checked);
+  await window.pmbrainDesktop.productWaitingScan(lanes);
+  setNotice('success', '已开始扫描待办');
+  void refreshDailyPanel();
+});
+$('#daily-chronicle-enable').addEventListener('click', async () => {
+  await window.pmbrainDesktop.productEnableChronicle();
+  setNotice('success', '已开启时间记忆');
+  void refreshDailyPanel();
+});
+$('#daily-chronicle-history').addEventListener('click', async () => {
+  await window.pmbrainDesktop.productOrganizeChronicleHistory();
+  setNotice('success', '已开始整理历史记录');
+  void refreshDailyPanel();
+});
+$('#daily-identity-search').addEventListener('click', () => void refreshDailyPeople());
+$('#daily-identity-merge').addEventListener('click', async () => {
+  const members = Array.from($('#daily-identity-results').querySelectorAll<HTMLInputElement>('input[type="checkbox"]:checked'))
+    .map((box) => ({
+      source_id: box.dataset.sourceId ?? '',
+      slug: box.dataset.slug ?? '',
+      title: box.dataset.title,
+    }))
+    .filter((item) => item.source_id && item.slug);
+  if (members.length < 2) {
+    setNotice('error', '请至少勾选两条记录');
+    return;
+  }
+  const result = await window.pmbrainDesktop.productMergePeople(members) as { entity_id?: string };
+  setNotice('success', '已把选中的记录视为同一个人');
+  await refreshDailyPanel();
+  if (result.entity_id) void renderDailyPersonCard(result.entity_id);
 });

@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
-const VALID_PANELS = ['basic', 'models', 'integrations', 'system', 'updates', 'recovery'] as const;
+const VALID_PANELS = ['basic', 'models', 'integrations', 'daily', 'system', 'updates', 'repair', 'recovery'] as const;
 type Panel = (typeof VALID_PANELS)[number];
 const VALID_THEMES = ['dark', 'light'] as const;
 type PreviewTheme = (typeof VALID_THEMES)[number];
@@ -68,8 +68,10 @@ const panelScrollTarget: Record<Panel, string> = {
   basic: '#database-path',
   models: '#chat-provider',
   integrations: '#integration-grid',
+  daily: '#daily-connectors',
   system: '#shared-address',
   updates: '#update-current',
+  repair: '#repair-backup-list',
   recovery: '#recovery-message',
 };
 const scrollTarget = panelScrollTarget[panel];
@@ -261,6 +263,56 @@ window.pmbrainDesktop = {
   },
   copy: async () => {},
   openAdmin: async () => {},
+  productConnectors: async () => ({
+    cards: [
+      { id: 'chatgpt', name: 'ChatGPT', connected: false, account: null, last_sync_label: '尚未同步' },
+      { id: 'claude', name: 'Claude', connected: false, account: null, last_sync_label: '尚未同步' },
+      { id: 'google', name: 'Google', connected: true, account: 'yunhui@example.com', last_sync_label: '今天 10:32' },
+    ],
+    google: { accounts: [{ account: 'yunhui@example.com' }] },
+  }),
+  productConnectorSync: async () => ({ ok: true }),
+  productConnectorAuth: async () => ({ ok: true }),
+  productConnectorLogout: async () => ({ ok: true }),
+  productWaiting: async () => ({
+    items: [
+      { id: 1, title: '张三在等你回复', meta: '3 天前 · 来自会议《项目推进会》', origin_key: 'meeting' },
+      { id: 2, title: '你答应周五发预算方案', meta: '昨天 · 来自 AI 对话', origin_key: 'conversation' },
+    ],
+    origins: {
+      gmail: { ready: true, label: 'Gmail' },
+      meeting: { ready: true, label: '会议' },
+      conversation: { ready: true, label: 'AI 对话' },
+    },
+  }),
+  productWaitingClose: async () => ({ ok: true }),
+  productWaitingScan: async () => ({ opened: 0 }),
+  productChronicleDay: async () => ({ events: [] }),
+  productChronicleOnThisDay: async () => ({ events: [] }),
+  productChronicleStatus: async () => ({ enabled: false, event_count: 0, history_count: 326 }),
+  productEnableChronicle: async () => ({ ok: true }),
+  productOrganizeChronicleHistory: async () => ({ ok: true }),
+  productHideChronicleEvent: async () => ({ ok: true }),
+  productOntology: async () => ([]),
+  productEntityIdentity: async () => ([]),
+  productEntityIdentityLink: async () => ({ ok: true }),
+  productPeople: async () => ({
+    people: [
+      { source_id: 'youdao', slug: 'people/zhang-san', title: '张三', source_label: '有道' },
+      { source_id: 'meetings', slug: 'people/zhang-zong', title: '张总', source_label: '会议' },
+    ],
+    suggestions: [],
+    groups: [],
+  }),
+  productPeopleCard: async () => ({ entity_id: 'zhang-san', name: '张三', company: 'XX 公司', role: '产品经理', last_contact_label: '9 月 18 日', open_items: 2, recent_meetings: 3, members: [], timeline: [] }),
+  productMergePeople: async () => ({ entity_id: 'zhang-san' }),
+  productRejectPeople: async () => ({ ok: true }),
+  productUnlinkPeople: async () => ({ ok: true }),
+  googleStatus: async () => ({ status: 'connected', accounts: [{ account: 'yunhui@example.com' }] }),
+  googleConnect: async () => ({ ok: true, status: 'connected', account: 'yunhui@example.com' }),
+  googleSource: async () => ({ ok: true }),
+  chooseFile: async () => null,
+  openExternal: async () => {},
   checkUpdates: async () => null,
   installUpdate: async () => {},
   listPgliteUpgradeBackups: async () => ({ databasePath: null, backupRoot: null, keep: 2, totalBytes: 0, backups: [] }),
@@ -337,8 +389,10 @@ const panelTitles: Record<Panel, { eyebrow: string; title: string }> = {
   basic:       { eyebrow: 'DESKTOP SETTINGS / 01', title: '配置数据库、原始资料与主源' },
   models:      { eyebrow: 'DESKTOP SETTINGS / 02', title: '配置普通模型与向量模型' },
   integrations:{ eyebrow: 'MCP / 03',               title: '把 PMBrain 接入 AI 客户端' },
+  daily:       { eyebrow: 'DAILY',                  title: '连接器、待我处理、年表和人物关联' },
   system:      { eyebrow: 'SYSTEM / 04',            title: '管理桌面连接与系统行为' },
   updates:     { eyebrow: 'UPDATES / 05',           title: '保持桌面端安全更新' },
+  repair:      { eyebrow: 'REPAIR / 06',            title: '软件修复' },
   recovery:    { eyebrow: 'RECOVERY',               title: '恢复 PMBrain 本地服务' },
 };
 const t = panelTitles[panel];

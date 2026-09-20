@@ -593,6 +593,27 @@ select { cursor: pointer; appearance: auto; -webkit-appearance: auto; }
   border-radius: 10px;
   background: var(--surface-soft);
 }
+.daily-connector-row, .daily-waiting-row, #daily-identity-groups > div, #daily-person-card > div > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 11px 0;
+  border-bottom: 1px solid var(--line);
+}
+.daily-connector-row > div, .daily-waiting-row > div:first-child { display: grid; gap: 3px; }
+.daily-connector-row small, .daily-waiting-row small { color: var(--text-muted); font-size: 11px; }
+.daily-waiting-row > div:last-child { display: flex; gap: 8px; }
+.daily-source-controls { display: flex; flex-wrap: wrap; gap: 10px; margin: 0 0 14px; }
+.daily-source-controls label { display: flex; align-items: center; gap: 7px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-soft); }
+.daily-source-controls b { color: var(--text-muted); font-size: 10px; }
+.daily-source-controls input[type="checkbox"], #daily-identity-results input[type="checkbox"] { width: 16px; height: 16px; margin: 0; flex: 0 0 auto; }
+#daily-identity-results { display: grid; gap: 8px; margin: 12px 0; }
+#daily-identity-results label { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-soft); }
+#daily-person-card { margin-top: 16px; padding: 18px; border: 1px solid var(--line); border-radius: 13px; background: var(--surface-soft); }
+#daily-person-card h3 { margin: 0 0 12px; }
+.daily-person-facts { white-space: pre-line; line-height: 1.8; }
+#daily-chronicle-today > div, #daily-chronicle-memory > div { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 7px 0; }
 @media (max-width: 980px) {
   .daily-two { grid-template-columns: 1fr; }
 }
