@@ -23,6 +23,7 @@ interface WaitingSnapshot {
   count?: number;
   stale?: boolean;
   no_google_sources?: boolean;
+  automation_enabled?: boolean;
   origins?: {
     gmail?: OriginState;
     meeting?: OriginState;
@@ -30,22 +31,36 @@ interface WaitingSnapshot {
   };
 }
 
+interface PersonRecord {
+  source_id: string;
+  slug: string;
+  title: string;
+  source_label: string;
+}
+
+interface PersonSuggestion {
+  left: PersonRecord;
+  right: PersonRecord;
+  reason: string;
+}
+
 const ORIGIN_ORDER = ['gmail', 'meeting', 'conversation'] as const;
 
 export function WaitingPage() {
   const [data, setData] = useState<WaitingSnapshot | null>(null);
+  const [suggestions, setSuggestions] = useState<PersonSuggestion[]>([]);
   const [error, setError] = useState('');
-  const [busyId, setBusyId] = useState<number | null>(null);
+  const [busyId, setBusyId] = useState<number | string | null>(null);
   const [scanning, setScanning] = useState(false);
-  const [enabled, setEnabled] = useState<Record<string, boolean>>({
-    gmail: true,
-    meeting: true,
-    conversation: true,
-  });
 
   const load = useCallback(async () => {
     try {
-      setData(await api.waiting() as WaitingSnapshot);
+      const [waiting, people] = await Promise.all([
+        api.waiting() as Promise<WaitingSnapshot>,
+        api.people('') as Promise<{ suggestions?: PersonSuggestion[] }>,
+      ]);
+      setData(waiting);
+      setSuggestions(people.suggestions ?? []);
       setError('');
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -70,8 +85,7 @@ export function WaitingPage() {
     setScanning(true);
     setError('');
     try {
-      const lanes = ORIGIN_ORDER.filter((key) => enabled[key] && data?.origins?.[key]?.ready);
-      await api.scanWaiting(lanes);
+      await api.scanWaiting();
       await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -80,12 +94,27 @@ export function WaitingPage() {
     }
   };
 
+  const decidePerson = async (suggestion: PersonSuggestion, same: boolean) => {
+    const key = `${suggestion.left.source_id}:${suggestion.left.slug}|${suggestion.right.source_id}:${suggestion.right.slug}`;
+    setBusyId(key);
+    setError('');
+    try {
+      if (same) {
+        await api.mergePeople([suggestion.left, suggestion.right]);
+      } else {
+        await api.rejectPeople({ left: suggestion.left, right: suggestion.right });
+      }
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusyId(null);
+    }
+  };
+
   if (!data && !error) return <LoadingBlock text="正在读取待我处理…" />;
 
-  const items = (data?.items ?? []).filter((item) => {
-    if (item.origin_key === 'other') return true;
-    return enabled[item.origin_key] !== false;
-  });
+  const items = data?.items ?? [];
   const origins = data?.origins ?? {};
 
   return (
@@ -103,39 +132,57 @@ export function WaitingPage() {
       </div>
       {error && <div className="pm-card pm-error">{error}</div>}
       {data?.stale && (
-        <div className="pm-card pm-warn">邮件同步有点旧了，下面名单可能不是最新的。可以先到「连接器」同步 Google。</div>
+        <div className="pm-card pm-warn">邮件同步有点旧了，下面名单可能不是最新的。可以先到「设置 → 数据连接」检查 Google。</div>
       )}
 
       <article className="pm-card daily-card">
         <header>
           <Inbox aria-hidden="true" />
           <div>
-            <h2>从哪里发现待办</h2>
-            <p>默认会自动查看已连接的来源，也可以先关掉再扫描。</p>
+            <h2>{data?.automation_enabled ? '已自动检查' : '自动检查未开启'}</h2>
+            <p>{data?.automation_enabled ? '新数据进入后会自动判断；重新检查只用于异常补救。' : '可在「设置 → 自动维护」开启，以后由后台自动运行。'}</p>
           </div>
         </header>
         <div className="daily-source-pills">
           {ORIGIN_ORDER.map((key) => {
             const origin = origins[key];
-            const on = enabled[key] !== false && origin?.ready === true;
             return (
-              <button
-                type="button"
+              <span
                 key={key}
-                className={`daily-source-pill${on ? ' is-on' : ''}`}
-                disabled={!origin?.ready}
-                onClick={() => setEnabled((current) => ({ ...current, [key]: !on }))}
+                className={`daily-source-pill${origin?.ready ? ' is-on' : ''}`}
               >
                 <span>{origin?.label ?? key}</span>
                 <b>{origin?.ready ? '✅' : '未连接'}</b>
-              </button>
+              </span>
             );
           })}
         </div>
-        <button type="button" className="pm-primary" disabled={scanning} onClick={() => void scan()}>
-          {scanning ? '正在扫描…' : '立即扫描'}
+        <button type="button" className="pm-ghost" disabled={scanning} onClick={() => void scan()}>
+          {scanning ? '正在检查…' : '重新检查'}
         </button>
       </article>
+
+      {suggestions.length > 0 && (
+        <section className="daily-stack" aria-label="需要确认">
+          <div className="pm-section-head"><div><h2>需要确认</h2><p className="pm-hint">PMBrain 只提示可能的关联，不会自动合并人物。</p></div></div>
+          {suggestions.map((suggestion) => {
+            const key = `${suggestion.left.source_id}:${suggestion.left.slug}|${suggestion.right.source_id}:${suggestion.right.slug}`;
+            return (
+              <article className="pm-card daily-card" key={key}>
+                <div>
+                  <span className="daily-pill">可能是同一个人</span>
+                  <h2>{suggestion.left.title} ↔ {suggestion.right.title}</h2>
+                  <p>{suggestion.left.source_label} · {suggestion.left.title} ↔ {suggestion.right.source_label} · {suggestion.right.title}</p>
+                </div>
+                <div className="daily-loop-actions">
+                  <button type="button" className="pm-primary" disabled={busyId === key} onClick={() => void decidePerson(suggestion, true)}>是同一个人</button>
+                  <button type="button" className="pm-ghost" disabled={busyId === key} onClick={() => void decidePerson(suggestion, false)}>不是同一个人</button>
+                </div>
+              </article>
+            );
+          })}
+        </section>
+      )}
 
       {items.length === 0 ? (
         <div className="pm-card daily-empty">
@@ -144,7 +191,7 @@ export function WaitingPage() {
             <b>暂时没有待处理事项</b>
             <p>
               {data?.no_google_sources
-                ? '还没有连接 Gmail。连上后可以扫描邮件里谁在等你；会议和 AI 对话也可以先扫描。'
+                ? '还没有连接 Gmail。连上后，PMBrain 会自动找出需要回复和跟进的事。'
                 : '当前没有需要回复或跟进的事项。'}
             </p>
           </div>

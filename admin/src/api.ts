@@ -268,18 +268,25 @@ export const api = {
     apiFetch('/admin/api/connectors/auth', { method: 'POST', body: JSON.stringify(body) }),
   connectorLogout: (provider: string) =>
     apiFetch('/admin/api/connectors/logout', { method: 'POST', body: JSON.stringify({ provider }) }),
+  setConnectorAutoSync: (provider: string, enabled: boolean) =>
+    apiFetch('/admin/api/connectors/auto-sync', { method: 'POST', body: JSON.stringify({ provider, enabled }) }),
   waiting: (limit = 20) =>
     apiFetch(`/admin/api/waiting?limit=${encodeURIComponent(String(limit))}`),
   closeWaiting: (body: { id: number; status: 'done' | 'dropped'; note?: string }) =>
     apiFetch('/admin/api/waiting/close', { method: 'POST', body: JSON.stringify(body) }),
   scanWaiting: (lanes?: Array<'gmail' | 'meeting' | 'conversation'>) =>
     apiFetch('/admin/api/waiting/scan', { method: 'POST', body: JSON.stringify(lanes ? { lanes } : {}) }),
+  waitingSettings: () => apiFetch('/admin/api/waiting/settings'),
+  setWaitingAutomation: (enabled: boolean) =>
+    apiFetch('/admin/api/waiting/settings', { method: 'POST', body: JSON.stringify({ enabled }) }),
   chronicleDay: (date?: string) =>
     apiFetch(`/admin/api/chronicle/day${date ? `?date=${encodeURIComponent(date)}` : ''}`),
   chronicleOnThisDay: (date?: string) =>
     apiFetch(`/admin/api/chronicle/on-this-day${date ? `?date=${encodeURIComponent(date)}` : ''}`),
   chronicleStatus: () => apiFetch('/admin/api/chronicle/status'),
   enableChronicle: () => apiFetch('/admin/api/chronicle/enable', { method: 'POST' }),
+  setChronicleEnabled: (enabled: boolean) =>
+    apiFetch('/admin/api/chronicle/settings', { method: 'POST', body: JSON.stringify({ enabled }) }),
   organizeChronicleHistory: () => apiFetch('/admin/api/chronicle/history', { method: 'POST' }),
   hideChronicleEvent: (slug: string) =>
     apiFetch('/admin/api/chronicle/hide', { method: 'POST', body: JSON.stringify({ slug }) }),

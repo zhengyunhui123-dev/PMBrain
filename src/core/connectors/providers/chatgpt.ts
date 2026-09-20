@@ -232,7 +232,7 @@ export const chatgptProvider: ChatHistoryProvider = {
       'Connect ChatGPT with your browser session cookie:',
       '  1. Open https://chatgpt.com in a browser where you are logged in.',
       '  2. Open DevTools → Network, refresh, click any request to chatgpt.com.',
-      '  3. Copy the full `Cookie:` request header value.',
+      '  3. Open Headers -> Request Headers and copy the full `Cookie:` line.',
       '  4. Run: pmbrain connectors auth chatgpt --cookie -   (paste, then Ctrl-D)',
       '',
       'Your cookie is stored only on this machine at ~/.pmbrain/connectors/chatgpt.json (0600)',

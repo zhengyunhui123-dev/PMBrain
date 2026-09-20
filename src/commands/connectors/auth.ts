@@ -12,6 +12,7 @@ import type { BrainEngine } from '../../core/engine.ts';
 
 import { ConnectorClient } from '../../core/connectors/client.ts';
 import type { ConnectorFetch } from '../../core/connectors/client.ts';
+import { normalizeConnectorCookieInput } from '../../core/connectors/cookie-input.ts';
 import { deleteCredential, saveCredential } from '../../core/connectors/credentials.ts';
 import { getConnectorProvider, isConnectorProviderName } from '../../core/connectors/registry.ts';
 import type { ChatHistoryProvider, ConnectorCredential } from '../../core/connectors/types.ts';
@@ -125,6 +126,7 @@ export async function runConnectorAuth(_engine: BrainEngine, args: string[]): Pr
     if (pasted.startsWith('token:')) token = pasted.slice('token:'.length).trim();
     else cookie = pasted;
   }
+  cookie = normalizeConnectorCookieInput(cookie);
   if (!cookie && !token) {
     console.error('No credential provided.');
     process.exitCode = 1;

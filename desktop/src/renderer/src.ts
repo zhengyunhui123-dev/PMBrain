@@ -116,13 +116,13 @@ function clearNotices(): void {
   setNotice('success');
 }
 
-type Panel = 'basic' | 'models' | 'integrations' | 'daily' | 'system' | 'updates' | 'repair' | 'recovery';
+type Panel = 'basic' | 'models' | 'integrations' | 'connections' | 'system' | 'updates' | 'repair' | 'recovery';
 
 const PANEL_COPY: Record<Panel, { eyebrow: string; title: string }> = {
   basic: { eyebrow: 'DESKTOP SETTINGS / 01', title: '配置数据库、原始资料与主源' },
   models: { eyebrow: 'DESKTOP SETTINGS / 02', title: '配置普通模型与向量模型' },
   integrations: { eyebrow: 'MCP / 03', title: '把 PMBrain 接入 AI 客户端' },
-  daily: { eyebrow: 'DAILY', title: '连接器、待我处理、年表和人物关联' },
+  connections: { eyebrow: 'SETTINGS', title: '数据连接' },
   system: { eyebrow: 'SYSTEM / 04', title: '管理桌面连接与系统行为' },
   updates: { eyebrow: 'UPDATES / 05', title: '保持桌面端安全更新' },
   repair: { eyebrow: 'REPAIR / 06', title: '软件修复' },
@@ -2439,52 +2439,22 @@ function renderList(target: HTMLElement, lines: string[]): void {
   target.textContent = lines.length > 0 ? lines.join('\n') : '暂无';
 }
 
-function chronicleRows(payload: unknown): Array<{ date?: string; summary?: string; page_slug?: string; event_slug?: string | null }> {
-  const rows = Array.isArray(payload)
-    ? payload as Array<{ date?: string; summary?: string; page_slug?: string; event_slug?: string | null }>
-    : (payload && typeof payload === 'object' && Array.isArray((payload as { events?: unknown }).events)
-      ? (payload as { events: Array<{ date?: string; summary?: string; page_slug?: string; event_slug?: string | null }> }).events
-      : []);
-  return rows;
-}
-
 function renderChronicleRows(target: HTMLElement, payload: unknown): void {
-  const rows = chronicleRows(payload);
-  target.replaceChildren();
-  if (rows.length === 0) {
-    target.textContent = '暂无';
-    return;
-  }
-  for (const row of rows) {
-    const item = document.createElement('div');
-    const text = document.createElement('span');
-    text.textContent = `${(row.date ?? '').toString().slice(0, 10)} ${row.summary ?? ''}`.trim();
-    item.append(text);
-    const slug = row.event_slug || row.page_slug;
-    if (slug) {
-      const hide = document.createElement('button');
-      hide.type = 'button';
-      hide.className = 'ghost';
-      hide.textContent = '这条不对';
-      hide.addEventListener('click', () => {
-        void window.pmbrainDesktop.productHideChronicleEvent(slug)
-          .then(() => refreshDailyPanel())
-          .catch((error) => setNotice('error', error instanceof Error ? error.message : String(error)));
-      });
-      item.append(hide);
-    }
-    target.append(item);
-  }
+  const rows = Array.isArray(payload) ? payload : [];
+  target.textContent = rows.length > 0 ? JSON.stringify(rows) : '暂无';
 }
 
 function selectDailyConnector(id: string, connected: boolean): void {
   activeDailyConnector = id;
   const details = $<HTMLDetailsElement>('#daily-connectors-advanced');
   details.open = true;
-  $('#daily-chat-secret-label').textContent = `${id === 'chatgpt' ? 'ChatGPT' : 'Claude'} 登录信息`;
+  const name = id === 'chatgpt' ? 'ChatGPT' : 'Claude';
+  const host = id === 'chatgpt' ? 'chatgpt.com' : 'claude.ai';
+  $('#daily-chat-secret-label').textContent = `${name} 整行 Cookie:`;
+  $('#daily-chat-secret-help').textContent = `${name} 登录状态下 → F12 → Network → 随便点一条 ${host} 请求 → Headers → Request Headers → 复制整行 Cookie:。只保存在本机，不要发给任何人。`;
   const secret = $<HTMLInputElement>('#daily-chat-secret');
   secret.value = '';
-  secret.placeholder = connected ? '已连接；如需更新，请粘贴新的登录信息' : '粘贴登录信息';
+  secret.placeholder = connected ? '已连接；如需更新，请粘贴新的整行 Cookie:' : '粘贴整行 Cookie:';
   $<HTMLButtonElement>('#daily-chat-sync').disabled = !connected;
   $<HTMLButtonElement>('#daily-chat-logout').disabled = !connected;
   secret.focus();
@@ -2498,7 +2468,7 @@ async function refreshDailyPanel(): Promise<void> {
     const payload = await window.pmbrainDesktop.productConnectors() as {
       providers?: Array<{ provider: string; credential?: { present: boolean }; last_sync_at?: string | null }>;
       google?: { accounts?: Array<{ account: string }> };
-      cards?: Array<{ id: string; name: string; connected: boolean; account: string | null; last_sync_label: string }>;
+      cards?: Array<{ id: string; name: string; connected: boolean; account: string | null; last_sync_label: string; auto_sync?: boolean }>;
     };
     const cards = payload.cards;
     const providers = payload.providers ?? [];
@@ -2514,6 +2484,7 @@ async function refreshDailyPanel(): Promise<void> {
       connected: item.credential?.present === true,
       account: null,
       last_sync_label: item.last_sync_at ? `最近同步 ${item.last_sync_at}` : '尚未同步',
+      auto_sync: false,
     }));
     if (rows.length === 0) {
       connectorsEl.textContent = '没有连接器';
@@ -2527,6 +2498,22 @@ async function refreshDailyPanel(): Promise<void> {
       const sync = document.createElement('small');
       sync.textContent = `最近同步：${item.last_sync_label}`;
       label.append(state, sync);
+      if (item.connected) {
+        const auto = document.createElement('label');
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.checked = item.auto_sync === true;
+        checkbox.addEventListener('change', () => {
+          void window.pmbrainDesktop.productConnectorAutoSync(item.id, checkbox.checked)
+            .then(() => setNotice('success', checkbox.checked ? '已开启每日自动同步' : '已关闭自动同步'))
+            .catch((error) => {
+              checkbox.checked = !checkbox.checked;
+              setNotice('error', error instanceof Error ? error.message : String(error));
+            });
+        });
+        auto.append(checkbox, document.createTextNode(' 自动同步'));
+        label.append(auto);
+      }
       const button = document.createElement('button');
       button.type = 'button';
       button.className = 'ghost';
@@ -2546,6 +2533,7 @@ async function refreshDailyPanel(): Promise<void> {
   } catch (error) {
     connectorsEl.textContent = error instanceof Error ? error.message : String(error);
   }
+  return;
   try {
     const payload = await window.pmbrainDesktop.productWaiting() as {
       items?: Array<{ title: string; meta?: string }>;
@@ -2565,8 +2553,8 @@ async function refreshDailyPanel(): Promise<void> {
     if (items.length > 0) {
       waitingEl.replaceChildren();
       for (const item of items as Array<{ id: number; title: string; meta?: string; origin_key?: string }>) {
-        const input = item.origin_key && document.querySelector<HTMLInputElement>(`#daily-waiting-${item.origin_key}`);
-        if (input && !input.checked) continue;
+        const input = item.origin_key ? document.querySelector<HTMLInputElement>(`#daily-waiting-${item.origin_key}`) : null;
+        if (input?.checked === false) continue;
         const row = document.createElement('div');
         row.className = 'daily-waiting-row';
         const copy = document.createElement('div');
@@ -2575,7 +2563,7 @@ async function refreshDailyPanel(): Promise<void> {
         copy.append(title);
         if (item.meta) {
           const meta = document.createElement('small');
-          meta.textContent = item.meta;
+          meta.textContent = item.meta ?? '';
           copy.append(meta);
         }
         const actions = document.createElement('div');
@@ -2600,7 +2588,7 @@ async function refreshDailyPanel(): Promise<void> {
         : '暂时没有待处理事项。';
     }
   } catch (error) {
-    waitingEl.textContent = error instanceof Error ? error.message : String(error);
+    waitingEl.textContent = (error instanceof Error ? error.message : String(error));
   }
   const date = $<HTMLInputElement>('#daily-chronicle-date').value;
   try {
@@ -2622,7 +2610,7 @@ async function refreshDailyPanel(): Promise<void> {
       $('#daily-chronicle-memory').textContent = '还没有时间线。';
     }
   } catch (error) {
-    $('#daily-chronicle-today').textContent = error instanceof Error ? error.message : String(error);
+    $('#daily-chronicle-today').textContent = (error instanceof Error ? error.message : String(error));
   }
   await refreshDailyPeople();
 }
@@ -2777,7 +2765,7 @@ document.querySelectorAll<HTMLButtonElement>('.rail-item').forEach((button) => b
     void loadAdvancedModels(true);
   }
   if (target === 'integrations') refreshIntegrationPanel();
-  if (target === 'daily') void refreshDailyPanel();
+  if (target === 'connections') void refreshDailyPanel();
   if (target === 'repair') void loadPgliteUpgradeBackups();
 }));
 $('#next-models').addEventListener('click', () => switchPanel('models'));
@@ -3014,7 +3002,7 @@ window.pmbrainDesktop.onShowPanel((panel) => {
     void loadAdvancedModels(true);
   }
   if (panel === 'integrations') refreshIntegrationPanel();
-  if (panel === 'daily') void refreshDailyPanel();
+  if (panel === 'connections') void refreshDailyPanel();
   if (panel === 'repair') void loadPgliteUpgradeBackups();
 });
 if (!$<HTMLInputElement>('#daily-chronicle-date').value) {
@@ -3076,7 +3064,7 @@ $('#daily-google-source-save').addEventListener('click', async () => {
 $('#daily-chat-save').addEventListener('click', async () => {
   const secret = $<HTMLInputElement>('#daily-chat-secret').value.trim();
   if (!activeDailyConnector || !secret) {
-    setNotice('error', '请先选择 ChatGPT 或 Claude，并粘贴登录信息');
+    setNotice('error', '请先选择 ChatGPT 或 Claude，并粘贴整行 Cookie:');
     return;
   }
   const result = await window.pmbrainDesktop.productConnectorAuth({ provider: activeDailyConnector, cookie: secret }) as { ok?: boolean; error?: string };

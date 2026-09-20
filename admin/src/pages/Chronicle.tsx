@@ -70,7 +70,6 @@ export function ChroniclePage() {
   const [onThisDay, setOnThisDay] = useState<ChronicleRow[] | null>(null);
   const [status, setStatus] = useState<ChronicleStatus | null>(null);
   const [error, setError] = useState('');
-  const [busy, setBusy] = useState('');
 
   const load = useCallback(async () => {
     try {
@@ -99,31 +98,7 @@ export function ChroniclePage() {
     }
   };
 
-  const enable = async () => {
-    setBusy('enable');
-    try {
-      await api.enableChronicle();
-      await load();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy('');
-    }
-  };
-
-  const organize = async () => {
-    setBusy('history');
-    try {
-      await api.organizeChronicleHistory();
-      await load();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy('');
-    }
-  };
-
-  if (!today && !onThisDay && !status && !error) return <LoadingBlock text="正在读取生命年表…" />;
+  if (!today && !onThisDay && !status && !error) return <LoadingBlock text="正在读取时间线…" />;
 
   const empty = (status?.event_count ?? 0) === 0 && (today ?? []).length === 0 && (onThisDay ?? []).length === 0;
 
@@ -132,12 +107,12 @@ export function ChroniclePage() {
       <div className="pm-section-head">
         <div>
           <h1 className="title-with-info">
-            生命年表
-            <InfoIcon title="生命年表">
+            时间线
+            <InfoIcon title="时间线">
               PMBrain 可以把会议、对话和重要事件整理成时间线。整理结果可以修改或标成不对。
             </InfoIcon>
           </h1>
-          <p className="pm-page-intro">用日期回顾自己的一天，以及往年同一天留下的事。</p>
+          <p className="pm-page-intro">查看会议、对话和日历中真正发生过的事。</p>
         </div>
         {!empty && (
           <label className="daily-date-field">
@@ -152,21 +127,10 @@ export function ChroniclePage() {
         <div className="pm-card daily-empty-hero">
           <CalendarDays aria-hidden="true" />
           <div>
-            <b>PMBrain 可以把会议、对话和重要事件整理成时间线。</b>
-            <div className="daily-loop-actions">
-              <button type="button" className="pm-primary" disabled={busy === 'enable' || status?.enabled === true} onClick={() => void enable()}>
-                {status?.enabled ? '时间记忆已开启' : busy === 'enable' ? '正在开启…' : '开启时间记忆'}
-              </button>
-            </div>
+            <b>{status?.enabled ? '还没有可显示的事件。' : '时间线自动生成尚未开启。'}</b>
+            <p>{status?.enabled ? 'PMBrain 会在新会议、对话和日历进入后自动整理。' : '请到「设置 → 自动维护」开启。'}</p>
             {(status?.history_count ?? 0) > 0 && (
-              <p>
-                已有 {status?.history_count} 条历史知识，可补充过去的时间线。
-              </p>
-            )}
-            {(status?.history_count ?? 0) > 0 && (
-              <button type="button" className="pm-ghost" disabled={busy === 'history'} onClick={() => void organize()}>
-                {busy === 'history' ? '正在整理…' : '整理历史记录'}
-              </button>
+              <p>已发现 {status?.history_count} 条历史会议或对话，可在自动维护中选择是否整理。</p>
             )}
           </div>
         </div>
@@ -193,14 +157,6 @@ export function ChroniclePage() {
             <EventList rows={onThisDay ?? []} empty="往年今日还没有记录。" onHide={(slug) => void hide(slug)} />
           </article>
         </div>
-      )}
-      {!empty && (status?.history_count ?? 0) > 0 && (
-        <p className="pm-hint">
-          还有 {status?.history_count} 条历史记录可以补充。
-          <button type="button" className="pm-ghost" disabled={busy === 'history'} onClick={() => void organize()}>
-            {busy === 'history' ? '正在整理…' : '整理历史记录'}
-          </button>
-        </p>
       )}
     </div>
   );

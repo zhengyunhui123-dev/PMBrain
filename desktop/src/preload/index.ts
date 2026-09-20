@@ -82,7 +82,7 @@ export type {
   ManagedPostgresDatabase,
 };
 
-export type DesktopSettingsPanel = 'basic' | 'models' | 'integrations' | 'daily' | 'updates' | 'system' | 'repair';
+export type DesktopSettingsPanel = 'basic' | 'models' | 'integrations' | 'connections' | 'updates' | 'system' | 'repair';
 
 export interface DesktopPgliteUpgradeBackup {
   status: 'verified';
@@ -230,6 +230,7 @@ export interface PMBrainDesktopApi {
   productConnectorSync(body: { provider: string; full?: boolean; dry_run?: boolean }): Promise<unknown>;
   productConnectorAuth(body: { provider: string; cookie?: string; token?: string }): Promise<unknown>;
   productConnectorLogout(provider: string): Promise<unknown>;
+  productConnectorAutoSync(provider: string, enabled: boolean): Promise<unknown>;
   productWaiting(): Promise<unknown>;
   productWaitingClose(body: { id: number; status: 'done' | 'dropped'; note?: string }): Promise<unknown>;
   productWaitingScan(lanes?: Array<'gmail' | 'meeting' | 'conversation'>): Promise<unknown>;
@@ -353,6 +354,7 @@ const api: PMBrainDesktopApi = {
   productConnectorSync: (body) => ipcRenderer.invoke('desktop:product-connector-sync', body),
   productConnectorAuth: (body) => ipcRenderer.invoke('desktop:product-connector-auth', body),
   productConnectorLogout: (provider) => ipcRenderer.invoke('desktop:product-connector-logout', provider),
+  productConnectorAutoSync: (provider, enabled) => ipcRenderer.invoke('desktop:product-connector-auto-sync', provider, enabled),
   productWaiting: () => ipcRenderer.invoke('desktop:product-waiting'),
   productWaitingClose: (body) => ipcRenderer.invoke('desktop:product-waiting-close', body),
   productWaitingScan: (lanes) => ipcRenderer.invoke('desktop:product-waiting-scan', lanes),

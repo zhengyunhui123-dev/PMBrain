@@ -269,7 +269,7 @@ PMBrain 本次新增并固定以下行为：
 | Ontology（`facts.dimension` + 中文别名） | 已吸收 | 有，写在 `src/core/chronicle/ontology.ts` 与 `ops/chronicle.ts` |
 | Life Chronicle / 日记脱敏 / `eval-chronicle` | 已吸收 | 有 `src/core/chronicle/`、`src/eval/chronicle/harness.ts` |
 | Advisor chronicle / writeback / brain-pack nag | 已吸收 | 有 `src/core/advisor/collect-chronicle.ts` 等 |
-| Admin / Desktop 日常产品面 | 已吸收 | 有连接器、待我处理、生命年表、人物关联 |
+| Admin / Desktop 自动化产品面 | 已吸收后重构 | 数据连接收入设置，待我处理收入工作台，Chronicle 改名时间线收入知识，实体身份只在需要人工判断时进入待我处理 |
 | Memorable | 已吸收 | 有 `src/core/context/memorable-capture.ts`、`src/commands/doctor/checks/integrations-memorable.ts` |
 | BrainBench + LongMemEval 对齐 | 已吸收 | 有 `src/commands/eval-brainbench.ts`、`evals/brainbench/`、扩容后的 `src/eval/longmemeval/` |
 | SkillOpt | **不移植** | 无 `src/core/skillopt` |
@@ -280,5 +280,5 @@ PMBrain 本次新增并固定以下行为：
 - [连接 ChatGPT / Claude](../guides/chat-connectors.md)
 - [连接 Google](../guides/google-connect.md)
 - [待我处理](../guides/open-loops.md)
-- [生命年表](../guides/chronicle.md)
+- [时间线](../guides/chronicle.md)
 - [Memorable](../guides/memorable.md)

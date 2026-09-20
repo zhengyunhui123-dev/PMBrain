@@ -59,7 +59,7 @@ describe('desktop settings renderer contracts', () => {
   });
 
   test('keeps the six desktop tasks separate and exposes advanced-only controls', () => {
-    for (const panel of ['basic', 'models', 'integrations', 'daily', 'system', 'updates', 'repair']) {
+    for (const panel of ['basic', 'models', 'integrations', 'connections', 'system', 'updates', 'repair']) {
       expect(html).toContain(`data-target="${panel}"`);
       expect(html).toContain(`id="panel-${panel}"`);
     }
@@ -82,29 +82,20 @@ describe('desktop settings renderer contracts', () => {
     expect(renderer).not.toContain("populate(next);\n    switchPanel('integrations');");
   });
 
-  test('日常页使用普通用户语言，并让自动结果可见、可确认、可纠正', () => {
-    const daily = html.slice(html.indexOf('id="panel-daily"'), html.indexOf('id="panel-integrations"'));
-    expect(html).toContain('id="daily-connectors-title">连接器');
+  test('桌面设置只保留数据连接，日常结果回到 Admin 工作台和知识页', () => {
+    const connections = html.slice(html.indexOf('id="panel-connections"'), html.indexOf('id="panel-integrations"'));
+    expect(html).toContain('data-target="connections"');
+    expect(html).not.toContain('data-target="daily"');
+    expect(html).toContain('id="daily-connectors-title">数据连接');
     expect(html).toContain('id="daily-connectors-advanced"');
     expect(html).toContain('高级设置');
-    expect(html).toContain('从哪里发现待办');
-    expect(html).toContain('Gmail');
-    expect(html).toContain('会议');
-    expect(html).toContain('AI 对话');
-    expect(html).toContain('开启时间记忆');
-    expect(html).toContain('整理历史记录');
-    expect(html).toContain('id="daily-chronicle-history-note"');
-    expect(renderer).toContain('条历史知识，可补充过去的时间线');
-    expect(html).toContain('把选中的记录视为同一个人');
+    expect(html).toContain('Request Headers');
+    expect(html).toContain('复制整行 <code>Cookie:</code>');
+    expect(connections).toContain('aria-labelledby="daily-waiting-title" hidden');
+    expect(connections).toContain('aria-labelledby="daily-chronicle-title" hidden');
+    expect(connections).toContain('aria-labelledby="daily-identity-title" hidden');
     expect(renderer).toContain("button.textContent = item.connected ? '管理' : '连接'");
-    expect(renderer).toContain("[['done', '已完成'], ['dropped', '忽略']]");
-    expect(renderer).toContain("hide.textContent = '这条不对'");
-    expect(renderer).toContain("open.textContent = '打开人物卡'");
-    expect(renderer).toContain('productPeopleCard');
-    expect(renderer).toContain('productUnlinkPeople');
-    expect(renderer).not.toContain('Open Loops');
-    expect(daily).not.toContain('Chronicle');
-    expect(daily).not.toContain('backfill');
+    expect(renderer).toContain("if (target === 'connections') void refreshDailyPanel()");
   });
 
   test('reuses custom chat models in advanced tier and Dream phase selectors', () => {

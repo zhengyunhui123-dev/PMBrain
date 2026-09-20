@@ -3000,6 +3000,9 @@ ${renderAdminTokenFooter({ suppressBootstrapPrint, bootstrapFromEnv, bootstrapTo
     const {startWritebackHarvester}=await import('../core/facts/writeback-harvest.ts');
     const stopWriteback=startWritebackHarvester(engine);
     httpServer.once('close',stopWriteback);
+    const {startProductAutomation}=await import('./product-automation.ts');
+    const stopProductAutomation=startProductAutomation(engine);
+    httpServer.once('close',stopProductAutomation);
     const dreamScheduleTimer = setInterval(
       () => void checkScheduledDream(),
       ADMIN_DREAM_SCHEDULE_CHECK_MS,

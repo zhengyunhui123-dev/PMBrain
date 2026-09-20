@@ -23,7 +23,7 @@ pmbrain sync --source gmail-you
 pmbrain waiting
 ```
 
-Admin / 桌面：日常 → 连接器 → 选择 Desktop 应用 JSON → 连接 Google → 登记知识源 → 到任务中心同步。
+Admin / 桌面：设置 → 数据连接 → 选择 Desktop 应用 JSON → 连接 Google → 开启自动同步。成功授权后 PMBrain 会自动登记对应知识源，以后由驻留服务每日检查新邮件、日历和联系人。
 
 ## 一次性 Google Cloud（约 7 分钟）
 

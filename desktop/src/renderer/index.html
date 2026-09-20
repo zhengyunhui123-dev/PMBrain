@@ -18,7 +18,7 @@
           <button class="rail-item active" data-target="basic" title="基础配置"><span>01</span>基础配置</button>
           <button class="rail-item" data-target="models" title="模型配置"><span>02</span>模型配置</button>
           <span class="rail-group separated">日常</span>
-          <button class="rail-item" data-target="daily" title="日常"><span>日</span>日常</button>
+          <button class="rail-item" data-target="connections" title="数据连接"><span>连</span>数据连接</button>
           <span class="rail-group separated">连接与维护</span>
           <button class="rail-item" data-target="integrations" title="MCP 接入"><span>03</span>MCP 接入</button>
           <button class="rail-item" data-target="system" title="系统设置"><span>04</span>系统设置</button>
@@ -333,19 +333,20 @@
           </div>
         </section>
 
-        <section class="panel" id="panel-daily">
+        <section class="panel" id="panel-connections">
           <div class="section-heading">
-            <div><span class="index">日常</span><h2>连接器、待办、年表和人物</h2></div>
-            <p>给不会用命令行的人准备。写入都走本机服务，授权码不会出现在这个窗口的日志里。</p>
+            <div><span class="index">设置</span><h2>数据连接</h2></div>
+            <p>连接一次，以后由 PMBrain 在后台自动同步。授权信息只保留在本机。</p>
           </div>
 
           <section class="system-block" aria-labelledby="daily-connectors-title">
-            <div class="subsection-heading"><div><span>连接</span><h3 id="daily-connectors-title">连接器</h3></div><p>这里只显示连接状态，登录信息和同步方式放在高级设置。</p></div>
+            <div class="subsection-heading"><div><span>连接</span><h3 id="daily-connectors-title">数据连接</h3></div><p>这里只管理账号连接和自动同步设置。</p></div>
             <div id="daily-connectors">尚未读取</div>
             <details id="daily-connectors-advanced">
               <summary>高级设置</summary>
               <div class="field-group">
-                <label for="daily-chat-secret" id="daily-chat-secret-label">ChatGPT / Claude 登录信息</label>
+                <label for="daily-chat-secret" id="daily-chat-secret-label">ChatGPT / Claude 整行 Cookie:</label>
+                <p id="daily-chat-secret-help">登录状态下 → F12 → Network → 点对应网站请求 → Headers → Request Headers → 复制整行 <code>Cookie:</code>。只保存在本机，不要发给任何人。</p>
                 <input id="daily-chat-secret" type="password" autocomplete="off" placeholder="选择上方连接或管理后再填写" />
                 <div class="input-action">
                   <button type="button" class="solid" id="daily-chat-save"><span>保存并验证</span></button>
@@ -376,7 +377,7 @@
             </details>
           </section>
 
-          <section class="system-block" aria-labelledby="daily-waiting-title">
+          <section class="system-block" aria-labelledby="daily-waiting-title" hidden>
             <div class="subsection-heading"><div><span>TODO</span><h3 id="daily-waiting-title">待我处理</h3></div><p>从邮件、会议和 AI 对话里找出待办。</p></div>
             <div class="daily-source-controls" aria-label="从哪里发现待办">
               <label><input type="checkbox" id="daily-waiting-gmail" checked /> Gmail <b id="daily-waiting-gmail-state">未连接</b></label>
@@ -387,7 +388,7 @@
             <div id="daily-waiting">尚未读取</div>
           </section>
 
-          <section class="system-block" aria-labelledby="daily-chronicle-title">
+          <section class="system-block" aria-labelledby="daily-chronicle-title" hidden>
             <div class="subsection-heading"><div><span>DAY</span><h3 id="daily-chronicle-title">生命年表</h3></div></div>
             <p id="daily-chronicle-empty" hidden>PMBrain 可以把会议、对话和重要事件整理成时间线。</p>
             <p id="daily-chronicle-history-note" hidden></p>
@@ -404,7 +405,7 @@
             </div>
           </section>
 
-          <section class="system-block" aria-labelledby="daily-identity-title">
+          <section class="system-block" aria-labelledby="daily-identity-title" hidden>
             <div class="subsection-heading"><div><span>PEOPLE</span><h3 id="daily-identity-title">人物关联</h3></div><p>搜索姓名并确认，不会按中文名自动合并。</p></div>
             <div class="field-group"><label for="daily-identity-query">搜索人物</label><input id="daily-identity-query" placeholder="张三" /></div>
             <button type="button" class="ghost" id="daily-identity-search"><span>搜索</span></button>

@@ -186,7 +186,11 @@ import {
   presentWaiting,
   rejectPeoplePair,
   scanWaiting,
+  setChronicleEnabled,
+  setConnectorAutoSync,
+  setWaitingAutomation,
   unlinkPeopleMember,
+  waitingAutomationStatus,
 } from './admin-daily-product.ts';
 import { OperationError } from '../core/operation-error.ts';
 import { SourceOpError } from '../core/sources-ops.ts';
@@ -482,6 +486,38 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
     }
   });
 
+  app.get('/admin/api/waiting/settings', requireAdmin, async (_req: Request, res: Response) => {
+    try {
+      sendAdminContract(res, ProductSurfacePayloadSchema, await waitingAutomationStatus(engine));
+    } catch (e) {
+      sendProductOpError(res, e, 'waiting_settings_failed');
+    }
+  });
+
+  app.post('/admin/api/waiting/settings', requireAdmin, express.json({ limit: '4kb' }), async (req: Request, res: Response) => {
+    try {
+      const body = req.body && typeof req.body === 'object' ? req.body as Record<string, unknown> : {};
+      if (typeof body.enabled !== 'boolean') {
+        throw new OperationError('invalid_params', '请指定是否自动识别待办');
+      }
+      sendAdminContract(res, ProductSurfacePayloadSchema, await setWaitingAutomation(engine, body.enabled));
+    } catch (e) {
+      sendProductOpError(res, e, 'waiting_settings_failed');
+    }
+  });
+
+  app.post('/admin/api/connectors/auto-sync', requireAdmin, express.json({ limit: '4kb' }), async (req: Request, res: Response) => {
+    try {
+      const body = req.body && typeof req.body === 'object' ? req.body as Record<string, unknown> : {};
+      if (typeof body.provider !== 'string' || typeof body.enabled !== 'boolean') {
+        throw new OperationError('invalid_params', '请选择连接并指定是否自动同步');
+      }
+      sendAdminContract(res, ProductSurfacePayloadSchema, await setConnectorAutoSync(engine, body.provider, body.enabled));
+    } catch (e) {
+      sendProductOpError(res, e, 'connector_auto_sync_failed');
+    }
+  });
+
   app.post('/admin/api/waiting/close', requireAdmin, express.json({ limit: '4kb' }), async (req: Request, res: Response) => {
     try {
       const input = WaitingCloseRequestSchema.parse(req.body);
@@ -538,6 +574,18 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
       sendAdminContract(res, ProductSurfacePayloadSchema, await enableChronicle(engine));
     } catch (e) {
       sendProductOpError(res, e, 'chronicle_enable_failed');
+    }
+  });
+
+  app.post('/admin/api/chronicle/settings', requireAdmin, express.json({ limit: '4kb' }), async (req: Request, res: Response) => {
+    try {
+      const body = req.body && typeof req.body === 'object' ? req.body as Record<string, unknown> : {};
+      if (typeof body.enabled !== 'boolean') {
+        throw new OperationError('invalid_params', '请指定是否自动生成时间线');
+      }
+      sendAdminContract(res, ProductSurfacePayloadSchema, await setChronicleEnabled(engine, body.enabled));
+    } catch (e) {
+      sendProductOpError(res, e, 'chronicle_settings_failed');
     }
   });
 

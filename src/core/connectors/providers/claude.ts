@@ -191,8 +191,8 @@ export const claudeProvider: ChatHistoryProvider = {
     return [
       'Connect Claude with your browser session cookie:',
       '  1. Open https://claude.ai in a browser where you are logged in.',
-      '  2. Open DevTools → Application → Cookies → claude.ai; copy the `sessionKey` value.',
-      '  3. Run: pmbrain connectors auth claude --cookie -   (paste `sessionKey=<value>`, then Ctrl-D)',
+      '  2. Open DevTools -> Network, click any claude.ai request, then open Headers -> Request Headers.',
+      '  3. Copy the full `Cookie:` line and run: pmbrain connectors auth claude --cookie -   (paste, then Ctrl-D)',
       '',
       'Your cookie is stored only on this machine at ~/.pmbrain/connectors/claude.json (0600)',
       'and is sent only to claude.ai. If a sync is blocked, use the official export',

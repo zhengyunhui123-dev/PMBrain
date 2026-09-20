@@ -20,6 +20,7 @@ export interface ProductSurfaceHandlers {
   connectorSync: (body: { provider: string; full?: boolean; dry_run?: boolean }) => Promise<unknown>;
   connectorAuth: (body: { provider: string; cookie?: string; token?: string }) => Promise<unknown>;
   connectorLogout: (provider: string) => Promise<unknown>;
+  connectorAutoSync: (provider: string, enabled: boolean) => Promise<unknown>;
   waiting: () => Promise<unknown>;
   closeWaiting: (body: { id: number; status: 'done' | 'dropped'; note?: string }) => Promise<unknown>;
   waitingScan: (lanes?: Array<'gmail' | 'meeting' | 'conversation'>) => Promise<unknown>;
@@ -57,6 +58,7 @@ export function createProductSurfaceHandlers(deps: {
     connectorSync: (body) => admin('/admin/api/connectors/sync', { method: 'POST', body: JSON.stringify(body) }),
     connectorAuth: (body) => admin('/admin/api/connectors/auth', { method: 'POST', body: JSON.stringify(body) }),
     connectorLogout: (provider) => admin('/admin/api/connectors/logout', { method: 'POST', body: JSON.stringify({ provider }) }),
+    connectorAutoSync: (provider, enabled) => admin('/admin/api/connectors/auto-sync', { method: 'POST', body: JSON.stringify({ provider, enabled }) }),
     waiting: () => admin('/admin/api/waiting?limit=20'),
     closeWaiting: (body) => admin('/admin/api/waiting/close', { method: 'POST', body: JSON.stringify(body) }),
     waitingScan: (lanes) => admin('/admin/api/waiting/scan', { method: 'POST', body: JSON.stringify(lanes ? { lanes } : {}) }),
@@ -81,7 +83,17 @@ export function createProductSurfaceHandlers(deps: {
     rejectPeople: (body) => admin('/admin/api/people/reject', { method: 'POST', body: JSON.stringify(body) }),
     unlinkPeople: (body) => admin('/admin/api/people/unlink', { method: 'POST', body: JSON.stringify(body) }),
     googleStatus: () => admin('/admin/api/google/status'),
-    googleConnect: (input) => runDesktopGoogleConnect(deps.runtime(), input ?? {}),
+    googleConnect: async (input) => {
+      const result = await runDesktopGoogleConnect(deps.runtime(), input ?? {});
+      const account = result.account ?? input?.account;
+      if (result.ok && result.status === 'connected' && account) {
+        const status = await admin<{ linked_sources?: Array<{ account?: string | null }> }>('/admin/api/google/status');
+        if (!(status.linked_sources ?? []).some((item) => item.account === account)) {
+          await admin('/admin/api/google/source', { method: 'POST', body: JSON.stringify({ account }) });
+        }
+      }
+      return result;
+    },
     addGoogleSource: (body) => admin('/admin/api/google/source', { method: 'POST', body: JSON.stringify(body) }),
   };
 }

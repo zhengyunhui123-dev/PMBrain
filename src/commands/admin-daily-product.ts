@@ -2,9 +2,11 @@ import { createHash } from 'node:crypto';
 import type { BrainEngine } from '../core/engine.ts';
 import { OperationError } from '../core/operation-error.ts';
 import { ConnectorClient, type ConnectorFetch } from '../core/connectors/client.ts';
+import { normalizeConnectorCookieInput } from '../core/connectors/cookie-input.ts';
+import { autoSyncKey } from '../core/connectors/config-keys.ts';
 import { deleteCredential, resolveCredential, saveCredential } from '../core/connectors/credentials.ts';
 import { connectorProviders, getConnectorProvider, isConnectorProviderName } from '../core/connectors/registry.ts';
-import type { ConnectorCredential } from '../core/connectors/types.ts';
+import type { ConnectorCredential, ConnectorProviderName, ProbeResult } from '../core/connectors/types.ts';
 import {
   linkEntityIdentity,
   listEntityIdentities,
@@ -43,6 +45,20 @@ export interface WaitingItemView {
   origin_key: 'gmail' | 'meeting' | 'conversation' | 'other';
   deep_link?: string;
   quote?: string;
+}
+
+export function connectorProbeError(provider: ConnectorProviderName, probe: Exclude<ProbeResult, { ok: true }>): string {
+  const name = provider === 'chatgpt' ? 'ChatGPT' : 'Claude';
+  if (probe.kind === 'unauthorized') {
+    return `${name} 登录信息已失效或复制不完整。请在登录状态下重新复制整行 Cookie:。`;
+  }
+  if (probe.kind === 'forbidden_fingerprint') {
+    return `${name} 拒绝了本机请求（Cloudflare 或机器人验证）。登录信息可能没有问题，请稍后重试；持续被拦截时请改用官方导出。`;
+  }
+  if (probe.kind === 'network') {
+    return `无法连接 ${name}。请检查本机网络、代理或防火墙后重试。`;
+  }
+  return `${name} 接口发生了变化，PMBrain 暂时无法识别返回内容。请先改用官方导出。`;
 }
 
 function readString(value: unknown): string {
@@ -268,6 +284,7 @@ export async function presentWaiting(engine: BrainEngine, payload: unknown): Pro
   const lanes = asObject(body.lanes);
   const google = asObject(lanes.google);
   const conversationReady = connectorProviders.some((provider) => resolveCredential(provider.name) !== null);
+  const automation = await waitingAutomationStatus(engine);
   return {
     ...body,
     items,
@@ -276,6 +293,7 @@ export async function presentWaiting(engine: BrainEngine, payload: unknown): Pro
       meeting: { ready: true, label: '会议' },
       conversation: { ready: conversationReady, label: 'AI 对话' },
     },
+    automation_enabled: automation.enabled,
   };
 }
 
@@ -295,6 +313,23 @@ export async function scanWaiting(
     opened: results.reduce((sum, row) => sum + row.opened, 0),
     lanes: scanLanes,
   };
+}
+
+export async function waitingAutomationStatus(engine: BrainEngine): Promise<{ enabled: boolean }> {
+  const raw = await engine.getConfig('loops.meeting_scan_auto');
+  return { enabled: raw === 'true' || raw === '1' || raw === 'on' };
+}
+
+export async function setWaitingAutomation(
+  engine: BrainEngine,
+  enabled: boolean,
+): Promise<{ ok: true; enabled: boolean }> {
+  const value = enabled ? 'true' : 'false';
+  await engine.setConfig('loops.meeting_scan_auto', value);
+  await engine.setConfig('loops.meeting_extraction_enabled', value);
+  await engine.setConfig('loops.transcript_extraction_enabled', value);
+  await engine.setConfig('loops.connector_extraction_enabled', value);
+  return { ok: true, enabled };
 }
 
 export async function presentConnectors(engine: BrainEngine): Promise<Record<string, unknown>> {
@@ -339,7 +374,7 @@ export async function presentConnectors(engine: BrainEngine): Promise<Record<str
       account: googleAccounts[0]?.account ?? null,
       last_sync_at: googleSync,
       last_sync_label: googleSync ? clockLabel(googleSync) : (googleAccounts.length > 0 ? '已连接，尚未同步' : '尚未同步'),
-      auto_sync: false,
+      auto_sync: (await engine.getConfig('connectors.google.auto_sync')) === 'true',
       credential_source: null,
     },
   ];
@@ -356,7 +391,7 @@ export async function authConnector(
   if (!isConnectorProviderName(input.provider)) {
     throw new OperationError('invalid_params', '不支持的连接');
   }
-  const cookie = input.cookie?.trim();
+  const cookie = normalizeConnectorCookieInput(input.cookie);
   const token = input.token?.trim();
   if (!cookie && !token) {
     throw new OperationError('invalid_params', '请粘贴登录信息');
@@ -384,7 +419,7 @@ export async function authConnector(
   });
   const probe = await provider.probe(client);
   if (!probe.ok) {
-    return { ok: false, provider: input.provider, error: '登录信息无效，请重新复制后再试。' };
+    return { ok: false, provider: input.provider, error: connectorProbeError(input.provider, probe) };
   }
   saveCredential(cred);
   return { ok: true, provider: input.provider };
@@ -396,6 +431,19 @@ export function logoutConnector(provider: string): { ok: boolean; provider: stri
   }
   deleteCredential(provider);
   return { ok: true, provider };
+}
+
+export async function setConnectorAutoSync(
+  engine: BrainEngine,
+  provider: string,
+  enabled: boolean,
+): Promise<{ ok: true; provider: ConnectorProviderName | 'google'; enabled: boolean }> {
+  if (provider !== 'google' && !isConnectorProviderName(provider)) {
+    throw new OperationError('invalid_params', '不支持的连接');
+  }
+  const key = provider === 'google' ? 'connectors.google.auto_sync' : autoSyncKey(provider);
+  await engine.setConfig(key, enabled ? 'true' : 'false');
+  return { ok: true, provider, enabled };
 }
 
 export async function connectGoogleAndLink(
@@ -633,9 +681,16 @@ export async function chronicleStatus(engine: BrainEngine): Promise<Record<strin
   };
 }
 
-export async function enableChronicle(engine: BrainEngine): Promise<{ ok: true; enabled: true }> {
-  await engine.setConfig('auto_chronicle', 'true');
-  return { ok: true, enabled: true };
+export async function setChronicleEnabled(
+  engine: BrainEngine,
+  enabled: boolean,
+): Promise<{ ok: true; enabled: boolean }> {
+  await engine.setConfig('auto_chronicle', enabled ? 'true' : 'false');
+  return { ok: true, enabled };
+}
+
+export async function enableChronicle(engine: BrainEngine): Promise<{ ok: true; enabled: boolean }> {
+  return setChronicleEnabled(engine, true);
 }
 
 export async function organizeChronicleHistory(engine: BrainEngine): Promise<unknown> {

@@ -43,17 +43,17 @@ const CONNECT_HINT: Record<string, { title: string; steps: string[] }> = {
   chatgpt: {
     title: '连接 ChatGPT',
     steps: [
-      '用浏览器打开 chatgpt.com 并登录',
-      '按 F12，打开「网络」，点任意一条请求',
-      '复制 Cookie 的值，粘贴到下面',
+      '保持 ChatGPT 登录状态，按 F12 打开开发者工具',
+      '打开 Network（网络），随便点一条 chatgpt.com 请求',
+      '打开 Headers → Request Headers，复制整行 Cookie:',
     ],
   },
   claude: {
     title: '连接 Claude',
     steps: [
-      '用浏览器打开 claude.ai 并登录',
-      '按 F12，打开「应用」→ Cookies',
-      '复制 sessionKey 的值，粘贴到下面',
+      '保持 Claude 登录状态，按 F12 打开开发者工具',
+      '打开 Network（网络），随便点一条 claude.ai 请求',
+      '打开 Headers → Request Headers，复制整行 Cookie:',
     ],
   },
 };
@@ -119,6 +119,7 @@ export function ConnectorsPage() {
       return;
     }
     setBusy(provider);
+    setError('');
     setNotice('');
     try {
       const result = await api.connectorAuth({ provider, cookie: secret.trim() }) as { ok?: boolean; error?: string };
@@ -143,6 +144,21 @@ export function ConnectorsPage() {
       await api.connectorLogout(provider);
       setNotice('已断开连接');
       setManageId('');
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const toggleAutoSync = async (provider: string, enabled: boolean) => {
+    setBusy(`auto-${provider}`);
+    setError('');
+    setNotice('');
+    try {
+      await api.setConnectorAutoSync(provider, enabled);
+      setNotice(enabled ? '已开启每日自动同步' : '已关闭自动同步');
       await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -203,7 +219,7 @@ export function ConnectorsPage() {
     }
   };
 
-  if (!cards && !error) return <LoadingBlock text="正在读取连接器…" />;
+  if (!cards && !error) return <LoadingBlock text="正在读取数据连接…" />;
 
   const consentUrl = extractConsentUrl(envelope?.next_action?.user_message);
   const userMessage = envelope?.next_action?.user_message?.replace('[SHOW USER]', '').replace('[/SHOW USER]', '').trim();
@@ -216,12 +232,12 @@ export function ConnectorsPage() {
       <div className="pm-section-head">
         <div>
           <h1 className="title-with-info">
-            连接器
-            <InfoIcon title="连接器">
+            数据连接
+            <InfoIcon title="数据连接">
               连上常用账号后，PMBrain 会把对话、邮件和日历收进知识库。登录信息只留在这台电脑。
             </InfoIcon>
           </h1>
-          <p className="pm-page-intro">先连账号，再同步。授权都在本机完成。</p>
+          <p className="pm-page-intro">连接一次，以后由 PMBrain 在后台自动同步。授权都在本机完成。</p>
         </div>
         <button type="button" className="pm-ghost" onClick={() => void load()}>刷新</button>
       </div>
@@ -274,8 +290,9 @@ export function ConnectorsPage() {
                     {hint.steps.map((step) => <li key={step}>{step}</li>)}
                   </ol>
                   <label>
-                    登录信息
-                    <textarea value={secret} onChange={(event) => setSecret(event.target.value)} rows={3} autoComplete="off" />
+                    整行 Cookie:
+                    <textarea value={secret} onChange={(event) => setSecret(event.target.value)} rows={3} autoComplete="off" placeholder="Cookie: ..." />
+                    <small>整行或冒号后的内容都可以。只保存在本机，不要发给任何人。</small>
                   </label>
                   <button type="button" className="pm-primary" disabled={busy === item.id} onClick={() => void connectChat(item.id)}>
                     {busy === item.id ? '正在验证…' : '完成连接'}
@@ -284,24 +301,35 @@ export function ConnectorsPage() {
               )}
 
               {managing && item.id !== 'google' && (
-                <div className="daily-loop-actions">
-                  <button type="button" className="pm-primary" disabled={busy === item.id} onClick={() => void syncProvider(item.id)}>
-                    {busy === item.id ? '同步中…' : '立即同步'}
-                  </button>
-                  <button type="button" className="pm-ghost" disabled={busy === `logout-${item.id}`} onClick={() => void disconnectChat(item.id)}>
-                    断开连接
-                  </button>
+                <div className="daily-connect-panel">
+                  <label className="dream-schedule-toggle">
+                    <span><b>自动同步</b><small>默认每天检查一次，只同步新内容。</small></span>
+                    <input
+                      type="checkbox"
+                      checked={item.auto_sync}
+                      disabled={busy === `auto-${item.id}`}
+                      onChange={(event) => void toggleAutoSync(item.id, event.target.checked)}
+                    />
+                  </label>
+                  <div className="daily-loop-actions">
+                    <button type="button" className="pm-ghost" disabled={busy === item.id} onClick={() => void syncProvider(item.id)}>
+                      {busy === item.id ? '同步中…' : '立即同步一次'}
+                    </button>
+                    <button type="button" className="pm-ghost" disabled={busy === `logout-${item.id}`} onClick={() => void disconnectChat(item.id)}>断开连接</button>
+                  </div>
                 </div>
               )}
 
               {managing && item.id === 'google' && (
-                <div className="daily-loop-actions">
-                  <button type="button" className="pm-primary" disabled={busy === 'google'} onClick={() => void syncProvider('google')}>
-                    立即同步
-                  </button>
-                  <button type="button" className="pm-ghost" disabled={busy === 'google'} onClick={() => void connectGoogle()}>
-                    重新授权
-                  </button>
+                <div className="daily-connect-panel">
+                  <label className="dream-schedule-toggle">
+                    <span><b>自动同步</b><small>默认每天检查 Gmail、日历和联系人的新内容。</small></span>
+                    <input type="checkbox" checked={item.auto_sync} disabled={busy === 'auto-google'} onChange={(event) => void toggleAutoSync('google', event.target.checked)} />
+                  </label>
+                  <div className="daily-loop-actions">
+                    <button type="button" className="pm-ghost" disabled={busy === 'google'} onClick={() => void syncProvider('google')}>立即同步一次</button>
+                    <button type="button" className="pm-ghost" disabled={busy === 'google'} onClick={() => void connectGoogle()}>重新授权</button>
+                  </div>
                 </div>
               )}
             </article>

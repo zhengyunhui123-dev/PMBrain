@@ -2,11 +2,11 @@
 
 把你自己的 ChatGPT、Claude 对话历史同步进 PMBrain。用的是本机会话凭证，不是把 Cookie 交给远程 MCP。
 
-本分支已吸收该能力：`src/core/connectors/`。Admin「日常 → 连接器」可以看状态并点同步，**不能在页面里粘贴 Cookie**。首次登录仍走 CLI。
+本分支已吸收该能力：`src/core/connectors/`。Admin / Desktop「设置 → 数据连接」可完成首次连接、开启自动同步和查看最近同步时间。ChatGPT / Claude 支持粘贴浏览器 Network 面板中的整行 `Cookie:`，凭据只保留在本机。
 
 ## 图形界面
 
-1. 打开 Admin 或桌面「日常 → 连接器」。
+1. 打开 Admin 或桌面「设置 → 数据连接」。
 2. 看 ChatGPT / Claude 是否已有本机凭证、上次同步时间。
 3. 已登录时可点「同步」。自动同步默认关，需要时再开。
 

@@ -189,6 +189,130 @@ function GenerativeModelSettings() {
   );
 }
 
+interface ChronicleAutomationStatus {
+  enabled?: boolean;
+  event_count?: number;
+  history_count?: number;
+}
+
+function ChronicleAutomationSettings() {
+  const [value, setValue] = useState<ChronicleAutomationStatus | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    void api.chronicleStatus()
+      .then(next => setValue(next as ChronicleAutomationStatus))
+      .catch(nextError => setError(nextError instanceof Error ? nextError.message : String(nextError)));
+  }, []);
+
+  const toggle = async (enabled: boolean) => {
+    if (!value) return;
+    setSaving(true);
+    setMessage('');
+    setError('');
+    try {
+      await api.setChronicleEnabled(enabled);
+      const next = { ...value, enabled };
+      setValue(next);
+      setMessage(enabled ? '已开启自动生成时间线' : '已关闭自动生成时间线');
+      if (enabled && (value.history_count ?? 0) > 0) {
+        const confirmed = window.confirm(`发现 ${value.history_count} 条历史会议或对话，是否整理历史时间线？`);
+        if (confirmed) {
+          await api.organizeChronicleHistory();
+          setMessage('已开始整理历史时间线');
+        }
+      }
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : String(nextError));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <section className="pm-card settings-panel">
+      <div className="settings-panel-title">
+        <span className="settings-panel-icon"><Clock3 /></span>
+        <div>
+          <h2>时间线</h2>
+          <p>从会议、对话和日历中整理真正发生的事，不会把文件修改时间当作事件。</p>
+        </div>
+      </div>
+      <label className="dream-schedule-toggle" htmlFor="chronicle-auto-enabled">
+        <span>
+          <b>自动生成时间线</b>
+          <small>默认关闭，因为整理事件会调用普通模型。</small>
+        </span>
+        <input
+          id="chronicle-auto-enabled"
+          type="checkbox"
+          checked={value?.enabled === true}
+          onChange={event => void toggle(event.target.checked)}
+          disabled={!value || saving}
+        />
+      </label>
+      {(value?.history_count ?? 0) > 0 && <p className="pm-hint">发现 {value?.history_count} 条历史会议或对话。首次开启时会询问是否整理历史时间线。</p>}
+      {(message || error) && <div className="settings-feedback" aria-live="polite">
+        {message && <span className="pm-ok">{message}</span>}
+        {error && <span className="pm-error-text">{error}</span>}
+      </div>}
+    </section>
+  );
+}
+
+function WaitingAutomationSettings() {
+  const [enabled, setEnabled] = useState<boolean | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    void api.waitingSettings()
+      .then(next => setEnabled((next as { enabled?: boolean }).enabled === true))
+      .catch(nextError => setError(nextError instanceof Error ? nextError.message : String(nextError)));
+  }, []);
+
+  const toggle = async (next: boolean) => {
+    setSaving(true);
+    setMessage('');
+    setError('');
+    try {
+      await api.setWaitingAutomation(next);
+      setEnabled(next);
+      setMessage(next ? '已开启自动识别待办' : '已关闭自动识别待办');
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : String(nextError));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <section className="pm-card settings-panel">
+      <div className="settings-panel-title">
+        <span className="settings-panel-icon"><Sparkles /></span>
+        <div><h2>待我处理</h2><p>新邮件、会议和 AI 对话进入后，自动判断需要回复或跟进的事。</p></div>
+      </div>
+      <label className="dream-schedule-toggle" htmlFor="waiting-auto-enabled">
+        <span><b>自动识别待办</b><small>Gmail 随同步自动识别；会议和 AI 对话由驻留服务定时检查。</small></span>
+        <input
+          id="waiting-auto-enabled"
+          type="checkbox"
+          checked={enabled === true}
+          onChange={event => void toggle(event.target.checked)}
+          disabled={enabled === null || saving}
+        />
+      </label>
+      {(message || error) && <div className="settings-feedback" aria-live="polite">
+        {message && <span className="pm-ok">{message}</span>}
+        {error && <span className="pm-error-text">{error}</span>}
+      </div>}
+    </section>
+  );
+}
+
 function DreamSettings() {
   const [settings, setSettings] = useState<DreamSettingsValue>({
     outputDir: 'output',
@@ -471,9 +595,9 @@ const SETTINGS_SECTIONS: Array<{
   label: string;
   description: string;
 }> = [
-  { key: 'general', label: '常规设置', description: '管理台界面外观' },
+  { key: 'general', label: '其他设置', description: '管理界面外观等其他选项' },
   { key: 'knowledge', label: '知识库设置', description: '主源、数据源与导出' },
-  { key: 'dream', label: '知识整理设置', description: '整理规则与定时任务' },
+  { key: 'dream', label: '自动维护', description: '管理自动时间线、知识整理和定时任务' },
 ];
 
 function AppearanceSettings({
@@ -548,6 +672,8 @@ export function SettingsPage({
         )}
         {section === 'dream' && (
           <div className="settings-section-stack">
+            <WaitingAutomationSettings />
+            <ChronicleAutomationSettings />
             <GenerativeModelSettings />
             <DreamSettings />
             <DreamScheduleSettings />

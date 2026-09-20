@@ -19,6 +19,7 @@ describe('Admin product surfaces', () => {
     expect(routes).toContain("app.get('/admin/api/connectors'");
     expect(routes).toContain("app.post('/admin/api/connectors/sync'");
     expect(routes).toContain("app.post('/admin/api/connectors/auth'");
+    expect(routes).toContain("app.post('/admin/api/connectors/auto-sync'");
     expect(routes).toContain("app.get('/admin/api/waiting'");
     expect(routes).toContain("app.post('/admin/api/waiting/scan'");
     expect(routes).toContain("app.get('/admin/api/people'");
@@ -35,22 +36,19 @@ describe('Admin product surfaces', () => {
     expect(helper).not.toContain('extract_facts');
   });
 
-  test('Chinese 小白 pages exist and do not log OAuth codes', () => {
+  test('面向用户的信息架构不再平铺底层能力', () => {
     const app = read('admin/src/App.tsx');
     const waiting = read('admin/src/pages/Waiting.tsx');
     const connectors = read('admin/src/pages/Connectors.tsx');
-    const identity = read('admin/src/pages/Identity.tsx');
     expect(app).toContain("page: 'waiting', label: '待我处理'");
-    expect(app).toContain("page: 'chronicle', label: '生命年表'");
-    expect(app).toContain("page: 'connectors', label: '连接器'");
-    expect(app).toContain("page: 'identity', label: '人物关联'");
-    expect(waiting).toContain('从哪里发现待办');
-    expect(waiting).toContain('立即扫描');
+    expect(app).toContain("page: 'chronicle', label: '时间线'");
+    expect(app).toContain("page: 'connectors', label: '数据连接'");
+    expect(app).not.toContain("label: '人物关联'");
+    expect(app).not.toContain("title: '日常'");
+    expect(waiting).toContain('重新检查');
+    expect(waiting).not.toContain('立即扫描');
     expect(waiting).not.toContain('你已清零');
     expect(waiting).not.toContain('Open Loop');
-    expect(identity).toContain('把选中的记录视为同一个人');
-    expect(identity).toContain('可能是同一个人');
-    expect(identity).not.toContain('身份组 ID');
     expect(connectors).not.toContain('console.log');
     expect(connectors).not.toContain('startLoopback');
     expect(connectors).not.toContain('client_secret');

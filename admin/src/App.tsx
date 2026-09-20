@@ -22,7 +22,6 @@ import { ModelConfigPage, SettingsPage, type SettingsSection } from './pages/Set
 import { WaitingPage } from './pages/Waiting';
 import { ChroniclePage } from './pages/Chronicle';
 import { ConnectorsPage } from './pages/Connectors';
-import { IdentityPage } from './pages/Identity';
 import { api } from './api';
 import {
   applyThemeMode,
@@ -36,14 +35,14 @@ import {
   BookOpenText, Bot, BrainCircuit, Cable, CalendarDays,
   Database, FileClock, FolderKanban, HeartHandshake, Inbox, LayoutDashboard, ListTodo,
   MonitorCog, Plug, Sparkles, type LucideIcon,
-  Orbit, Users,
+  Orbit,
 } from 'lucide-react';
 
 const PAGES = [
   'login', 'dashboard', 'natural',
   'dream', 'dream-execute', 'dream-knowledge', 'dream-takes', 'dream-scoring', 'dream-calibration', 'dream-insights',
   'import', 'data', 'graph', 'docs',
-  'waiting', 'chronicle', 'connectors', 'identity',
+  'waiting', 'chronicle', 'connectors',
   'mcp', 'tasks', 'config', 'agents', 'log', 'calibration',
   'settings', 'settings-general', 'settings-knowledge', 'settings-dream',
 ] as const;
@@ -65,7 +64,7 @@ function getPage(): Page {
 
 type NavIconName =
   | 'overview' | 'workspace' | 'database' | 'organize' | 'mcp' | 'tasks' | 'log' | 'assistant'
-  | 'graph' | 'waiting' | 'chronicle' | 'connectors' | 'identity'
+  | 'graph' | 'waiting' | 'chronicle' | 'connectors'
   | 'settings-general' | 'settings-knowledge' | 'settings-dream';
 
 const NAV_ICONS: Record<NavIconName, LucideIcon> = {
@@ -77,7 +76,6 @@ const NAV_ICONS: Record<NavIconName, LucideIcon> = {
   waiting: Inbox,
   chronicle: CalendarDays,
   connectors: Plug,
-  identity: Users,
   mcp: Cable,
   tasks: ListTodo,
   log: FileClock,
@@ -89,18 +87,21 @@ const NAV_ICONS: Record<NavIconName, LucideIcon> = {
 
 const SETTINGS_NAV_ITEMS: Array<{
   page: Page;
-  section: SettingsSection;
+  section?: SettingsSection;
   label: string;
   icon: NavIconName;
 }> = [
-  { page: 'settings-general', section: 'general', label: '常规设置', icon: 'settings-general' },
+  { page: 'connectors', label: '数据连接', icon: 'connectors' },
+  { page: 'config', label: '模型', icon: 'settings-dream' },
+  { page: 'mcp', label: 'MCP', icon: 'mcp' },
+  { page: 'settings-dream', section: 'dream', label: '自动维护', icon: 'settings-dream' },
   { page: 'settings-knowledge', section: 'knowledge', label: '知识库设置', icon: 'settings-knowledge' },
-  { page: 'settings-dream', section: 'dream', label: '知识整理设置', icon: 'settings-dream' },
+  { page: 'settings-general', section: 'general', label: '其他设置', icon: 'settings-general' },
 ];
 
 const SETTINGS_PAGE_SECTIONS: Partial<Record<Page, SettingsSection>> = {
   settings: 'general',
-  ...Object.fromEntries(SETTINGS_NAV_ITEMS.map(item => [item.page, item.section])),
+  ...Object.fromEntries(SETTINGS_NAV_ITEMS.filter(item => item.section).map(item => [item.page, item.section])),
 };
 
 function NavIcon({ name }: { name: NavIconName }) {
@@ -120,26 +121,25 @@ export function App() {
   const donationQrSrc = `${import.meta.env.BASE_URL}wechat-donation.jpg`;
   const customerServiceQrSrc = `${import.meta.env.BASE_URL}customer-service-qr.png`;
   const navSections: Array<{ title: string; items: Array<{ page: Page; label: string; icon: NavIconName }> }> = useMemo(() => [
+    { title: '工作台', items: [
+      { page: 'dashboard', label: '工作台', icon: 'overview' },
+      { page: 'waiting', label: '待我处理', icon: 'waiting' },
+    ] },
     { title: '知识', items: [
-      { page: 'import', label: '知识工作台', icon: 'workspace' },
-      { page: 'data', label: '知识库', icon: 'database' },
+      { page: 'import', label: '原始资料', icon: 'workspace' },
+      { page: 'data', label: '结构化知识', icon: 'database' },
       { page: 'graph', label: '知识图谱', icon: 'graph' },
+      { page: 'chronicle', label: '时间线', icon: 'chronicle' },
+    ] },
+    { title: '知识整理', items: [
       { page: 'dream', label: '知识整理', icon: 'organize' },
     ] },
-    { title: '日常', items: [
-      { page: 'waiting', label: '待我处理', icon: 'waiting' },
-      { page: 'chronicle', label: '生命年表', icon: 'chronicle' },
-      { page: 'connectors', label: '连接器', icon: 'connectors' },
-      { page: 'identity', label: '人物关联', icon: 'identity' },
-    ] },
-    { title: '集成', items: [
-      { page: 'mcp', label: 'MCP 接入', icon: 'mcp' },
+    { title: '运行', items: [
       { page: 'tasks', label: '任务中心', icon: 'tasks' },
       { page: 'log', label: '请求日志', icon: 'log' },
     ] },
   ], []);
   const allNavItems = useMemo(() => [
-    { page: 'dashboard' as Page, label: '总体概览' },
     ...navSections.flatMap(section => section.items.map(({ page: itemPage, label }) => ({ page: itemPage, label }))),
     ...SETTINGS_NAV_ITEMS.map(({ page: itemPage, label }) => ({ page: itemPage, label })),
   ], [navSections]);
@@ -216,9 +216,6 @@ export function App() {
           </div>
         </div>
         <div className="sidebar-nav">
-          <button type="button" className={`nav-item nav-item-overview ${page === 'dashboard' ? 'active' : ''}`} onClick={() => navigate('dashboard')}>
-            <NavIcon name="overview" /><span>总体概览</span>
-          </button>
           {navSections.map(section => (
             <section className="nav-section" key={section.title} aria-label={section.title}>
               <div className="nav-section-label">{section.title}</div>
@@ -235,7 +232,7 @@ export function App() {
               <button
                 type="button"
                 key={item.page}
-                className={`nav-item nav-subitem ${SETTINGS_PAGE_SECTIONS[page] === item.section ? 'active' : ''}`}
+                className={`nav-item nav-subitem ${(item.section ? SETTINGS_PAGE_SECTIONS[page] === item.section : page === item.page) ? 'active' : ''}`}
                 onClick={() => navigate(item.page)}
               >
                 <NavIcon name={item.icon} /><span>{item.label}</span>
@@ -264,7 +261,6 @@ export function App() {
           value={page === 'settings' ? 'settings-general' : allNavItems.some(item => item.page === page) ? page : 'dashboard'}
           onChange={event => navigate(event.target.value as Page)}
         >
-          <option value="dashboard">总体概览</option>
           {navSections.map(section => <optgroup key={section.title} label={section.title}>{section.items.map(item => <option key={item.page} value={item.page}>{item.label}</option>)}</optgroup>)}
           <optgroup label="设置">{SETTINGS_NAV_ITEMS.map(item => <option key={item.page} value={item.page}>{item.label}</option>)}</optgroup>
         </select>
@@ -291,7 +287,6 @@ export function App() {
         {page === 'waiting' && <WaitingPage />}
         {page === 'chronicle' && <ChroniclePage />}
         {page === 'connectors' && <ConnectorsPage />}
-        {page === 'identity' && <IdentityPage />}
         {page === 'mcp' && <ConnectionCenterPage />}
         {page === 'tasks' && <TaskCenterPage />}
         {page === 'config' && <ModelConfigPage />}

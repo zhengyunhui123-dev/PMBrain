@@ -183,6 +183,7 @@ export function registerDesktopIpcHandlers(handlers: DesktopIpcHandlers): void {
   registerTrustedHandler('desktop:product-connector-sync', handlers, (_event, body: { provider: string; full?: boolean; dry_run?: boolean }) => handlers.productSurfaces.connectorSync(body));
   registerTrustedHandler('desktop:product-connector-auth', handlers, (_event, body: { provider: string; cookie?: string; token?: string }) => handlers.productSurfaces.connectorAuth(body));
   registerTrustedHandler('desktop:product-connector-logout', handlers, (_event, provider: string) => handlers.productSurfaces.connectorLogout(provider));
+  registerTrustedHandler('desktop:product-connector-auto-sync', handlers, (_event, provider: string, enabled: boolean) => handlers.productSurfaces.connectorAutoSync(provider, enabled));
   registerTrustedHandler('desktop:product-waiting', handlers, () => handlers.productSurfaces.waiting());
   registerTrustedHandler('desktop:product-waiting-close', handlers, (_event, body: { id: number; status: 'done' | 'dropped'; note?: string }) => handlers.productSurfaces.closeWaiting(body));
   registerTrustedHandler('desktop:product-waiting-scan', handlers, (_event, lanes?: Array<'gmail' | 'meeting' | 'conversation'>) => handlers.productSurfaces.waitingScan(lanes));
