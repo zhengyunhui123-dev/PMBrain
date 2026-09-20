@@ -19,9 +19,6 @@ import { KnowledgeWorkbenchPage } from './pages/Knowledge';
 import { ConnectionCenterPage } from './pages/Connection';
 import { DocumentationPage } from './pages/Documentation';
 import { ModelConfigPage, SettingsPage, type SettingsSection } from './pages/Settings';
-import { WaitingPage } from './pages/Waiting';
-import { ChroniclePage } from './pages/Chronicle';
-import { ConnectorsPage } from './pages/Connectors';
 import { api } from './api';
 import {
   applyThemeMode,
@@ -32,9 +29,9 @@ import {
   type ThemeMode,
 } from './lib/theme';
 import {
-  BookOpenText, Bot, BrainCircuit, Cable, CalendarDays,
-  Database, FileClock, FolderKanban, HeartHandshake, Inbox, LayoutDashboard, ListTodo,
-  MonitorCog, Plug, Sparkles, type LucideIcon,
+  BookOpenText, Bot, BrainCircuit, Cable,
+  Database, FileClock, FolderKanban, HeartHandshake, LayoutDashboard, ListTodo,
+  MonitorCog, Sparkles, type LucideIcon,
   Orbit,
 } from 'lucide-react';
 
@@ -42,7 +39,6 @@ const PAGES = [
   'login', 'dashboard', 'natural',
   'dream', 'dream-execute', 'dream-knowledge', 'dream-takes', 'dream-scoring', 'dream-calibration', 'dream-insights',
   'import', 'data', 'graph', 'docs',
-  'waiting', 'chronicle', 'connectors',
   'mcp', 'tasks', 'config', 'agents', 'log', 'calibration',
   'settings', 'settings-general', 'settings-knowledge', 'settings-dream',
 ] as const;
@@ -64,7 +60,7 @@ function getPage(): Page {
 
 type NavIconName =
   | 'overview' | 'workspace' | 'database' | 'organize' | 'mcp' | 'tasks' | 'log' | 'assistant'
-  | 'graph' | 'waiting' | 'chronicle' | 'connectors'
+  | 'graph'
   | 'settings-general' | 'settings-knowledge' | 'settings-dream';
 
 const NAV_ICONS: Record<NavIconName, LucideIcon> = {
@@ -73,9 +69,6 @@ const NAV_ICONS: Record<NavIconName, LucideIcon> = {
   database: Database,
   graph: Orbit,
   organize: BookOpenText,
-  waiting: Inbox,
-  chronicle: CalendarDays,
-  connectors: Plug,
   mcp: Cable,
   tasks: ListTodo,
   log: FileClock,
@@ -91,10 +84,8 @@ const SETTINGS_NAV_ITEMS: Array<{
   label: string;
   icon: NavIconName;
 }> = [
-  { page: 'connectors', label: '数据连接', icon: 'connectors' },
-  { page: 'config', label: '模型', icon: 'settings-dream' },
   { page: 'mcp', label: 'MCP', icon: 'mcp' },
-  { page: 'settings-dream', section: 'dream', label: '自动维护', icon: 'settings-dream' },
+  { page: 'settings-dream', section: 'dream', label: '自动化', icon: 'settings-dream' },
   { page: 'settings-knowledge', section: 'knowledge', label: '知识库设置', icon: 'settings-knowledge' },
   { page: 'settings-general', section: 'general', label: '其他设置', icon: 'settings-general' },
 ];
@@ -123,12 +114,10 @@ export function App() {
   const navSections: Array<{ title: string; items: Array<{ page: Page; label: string; icon: NavIconName }> }> = useMemo(() => [
     { title: '工作台', items: [
       { page: 'import', label: '知识工作台', icon: 'workspace' },
-      { page: 'waiting', label: '待我处理', icon: 'waiting' },
     ] },
     { title: '知识', items: [
       { page: 'data', label: '知识库', icon: 'database' },
       { page: 'graph', label: '知识图谱', icon: 'graph' },
-      { page: 'chronicle', label: '时间线', icon: 'chronicle' },
     ] },
     { title: '知识整理', items: [
       { page: 'dream', label: '知识整理', icon: 'organize' },
@@ -288,9 +277,6 @@ export function App() {
         )}
         {page === 'docs' && <DocumentationPage />}
         {page === 'natural' && <NaturalLanguagePage />}
-        {page === 'waiting' && <WaitingPage />}
-        {page === 'chronicle' && <ChroniclePage />}
-        {page === 'connectors' && <ConnectorsPage />}
         {page === 'mcp' && <ConnectionCenterPage />}
         {page === 'tasks' && <TaskCenterPage />}
         {page === 'config' && <ModelConfigPage />}

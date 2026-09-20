@@ -116,13 +116,12 @@ function clearNotices(): void {
   setNotice('success');
 }
 
-type Panel = 'basic' | 'models' | 'integrations' | 'connections' | 'system' | 'updates' | 'repair' | 'recovery';
+type Panel = 'basic' | 'models' | 'integrations' | 'system' | 'updates' | 'repair' | 'recovery';
 
 const PANEL_COPY: Record<Panel, { eyebrow: string; title: string }> = {
   basic: { eyebrow: 'DESKTOP SETTINGS / 01', title: '配置数据库、原始资料与主源' },
   models: { eyebrow: 'DESKTOP SETTINGS / 02', title: '配置普通模型与向量模型' },
   integrations: { eyebrow: 'MCP / 03', title: '把 PMBrain 接入 AI 客户端' },
-  connections: { eyebrow: 'SETTINGS', title: '数据连接' },
   system: { eyebrow: 'SYSTEM / 04', title: '管理桌面连接与系统行为' },
   updates: { eyebrow: 'UPDATES / 05', title: '保持桌面端安全更新' },
   repair: { eyebrow: 'REPAIR / 06', title: '软件修复' },
@@ -2765,7 +2764,6 @@ document.querySelectorAll<HTMLButtonElement>('.rail-item').forEach((button) => b
     void loadAdvancedModels(true);
   }
   if (target === 'integrations') refreshIntegrationPanel();
-  if (target === 'connections') void refreshDailyPanel();
   if (target === 'repair') void loadPgliteUpgradeBackups();
 }));
 $('#next-models').addEventListener('click', () => switchPanel('models'));
@@ -3002,7 +3000,6 @@ window.pmbrainDesktop.onShowPanel((panel) => {
     void loadAdvancedModels(true);
   }
   if (panel === 'integrations') refreshIntegrationPanel();
-  if (panel === 'connections') void refreshDailyPanel();
   if (panel === 'repair') void loadPgliteUpgradeBackups();
 });
 if (!$<HTMLInputElement>('#daily-chronicle-date').value) {

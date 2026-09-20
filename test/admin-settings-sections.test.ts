@@ -11,9 +11,9 @@ const desktopRenderer = readFileSync(join(process.cwd(), 'desktop/src/renderer/s
 describe('Admin settings information architecture', () => {
   test('Admin settings keep only the three useful service-focused sections', () => {
     for (const label of [
-      '常规设置',
+      '其他设置',
       '知识库设置',
-      '知识整理设置',
+      '自动化',
     ]) {
       expect(settingsSource).toContain(`label: '${label}'`);
     }
@@ -24,6 +24,9 @@ describe('Admin settings information architecture', () => {
     expect(appSource).toContain("'settings-dream'");
     expect(appSource).not.toContain("'settings-import'");
     expect(appSource).not.toContain("'settings-models'");
+    expect(appSource).not.toContain("page: 'connectors', label: '数据连接'");
+    expect(appSource).not.toContain("page: 'config', label: '模型'");
+    expect(appSource).toContain("page: 'settings-dream', section: 'dream', label: '自动化'");
     expect(settingsSource).not.toContain("label: '模型配置'");
     expect(settingsSource).not.toContain('className="settings-menu"');
     expect(settingsSource).toContain("section === 'knowledge'");

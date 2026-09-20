@@ -255,7 +255,7 @@ PMBrain 本次新增并固定以下行为：
 
 ## 11. 2026-09-19 撤销暂缓：本分支诚实清单
 
-产品决定（设计件 `项目管理/GBrain能力吸收底层架构设计.md`，状态 Approved/implemented）：下列能力不再「暂缓」。SkillOpt 与全局 basename Wikilink **从未被吸收**。
+代码吸收记录不再等同于产品成熟。以下内容曾按设计件 `项目管理/GBrain能力吸收底层架构设计.md` 合入代码，但能否进入普通产品必须以 [`项目管理/GBrain能力成熟度台账.md`](../../项目管理/GBrain能力成熟度台账.md) 为准。只有「稳定」能力允许进入普通界面；SkillOpt 与全局 basename Wikilink **从未被吸收**。
 
 当前分支已合入 PR1–PR12，含 Memorable（PR8）与 BrainBench（PR10）。SkillOpt 与全局 basename Wikilink 仍不移植。
 

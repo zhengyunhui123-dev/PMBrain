@@ -82,7 +82,7 @@ export type {
   ManagedPostgresDatabase,
 };
 
-export type DesktopSettingsPanel = 'basic' | 'models' | 'integrations' | 'connections' | 'updates' | 'system' | 'repair';
+export type DesktopSettingsPanel = 'basic' | 'models' | 'integrations' | 'updates' | 'system' | 'repair';
 
 export interface DesktopPgliteUpgradeBackup {
   status: 'verified';

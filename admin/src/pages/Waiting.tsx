@@ -31,36 +31,16 @@ interface WaitingSnapshot {
   };
 }
 
-interface PersonRecord {
-  source_id: string;
-  slug: string;
-  title: string;
-  source_label: string;
-}
-
-interface PersonSuggestion {
-  left: PersonRecord;
-  right: PersonRecord;
-  reason: string;
-}
-
-const ORIGIN_ORDER = ['gmail', 'meeting', 'conversation'] as const;
-
 export function WaitingPage() {
   const [data, setData] = useState<WaitingSnapshot | null>(null);
-  const [suggestions, setSuggestions] = useState<PersonSuggestion[]>([]);
   const [error, setError] = useState('');
   const [busyId, setBusyId] = useState<number | string | null>(null);
-  const [scanning, setScanning] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
 
   const load = useCallback(async () => {
     try {
-      const [waiting, people] = await Promise.all([
-        api.waiting() as Promise<WaitingSnapshot>,
-        api.people('') as Promise<{ suggestions?: PersonSuggestion[] }>,
-      ]);
+      const waiting = await api.waiting() as WaitingSnapshot;
       setData(waiting);
-      setSuggestions(people.suggestions ?? []);
       setError('');
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -81,41 +61,22 @@ export function WaitingPage() {
     }
   };
 
-  const scan = async () => {
-    setScanning(true);
+  const refresh = async () => {
+    setRefreshing(true);
     setError('');
     try {
-      await api.scanWaiting();
       await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
-      setScanning(false);
-    }
-  };
-
-  const decidePerson = async (suggestion: PersonSuggestion, same: boolean) => {
-    const key = `${suggestion.left.source_id}:${suggestion.left.slug}|${suggestion.right.source_id}:${suggestion.right.slug}`;
-    setBusyId(key);
-    setError('');
-    try {
-      if (same) {
-        await api.mergePeople([suggestion.left, suggestion.right]);
-      } else {
-        await api.rejectPeople({ left: suggestion.left, right: suggestion.right });
-      }
-      await load();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusyId(null);
+      setRefreshing(false);
     }
   };
 
   if (!data && !error) return <LoadingBlock text="正在读取待我处理…" />;
 
   const items = data?.items ?? [];
-  const origins = data?.origins ?? {};
+  const gmail = data?.origins?.gmail;
 
   return (
     <div className="pm-page daily-page">
@@ -124,7 +85,7 @@ export function WaitingPage() {
           <h1 className="title-with-info">
             待我处理
             <InfoIcon title="待我处理">
-              PMBrain 会从邮件、会议和 AI 对话里找出谁在等你、你答应过什么。你可以随时标记完成或忽略。
+              PMBrain 会展示 Gmail 同步时识别出的待回复和待跟进事项。你可以随时标记完成或忽略。
             </InfoIcon>
           </h1>
           <p className="pm-page-intro">把该回的消息和答应过的事放在一起处理。</p>
@@ -132,57 +93,27 @@ export function WaitingPage() {
       </div>
       {error && <div className="pm-card pm-error">{error}</div>}
       {data?.stale && (
-        <div className="pm-card pm-warn">邮件同步有点旧了，下面名单可能不是最新的。可以先到「设置 → 数据连接」检查 Google。</div>
+        <div className="pm-card pm-warn">邮件同步有点旧了，下面名单可能不是最新的。请检查 Google 知识源的同步状态。</div>
       )}
 
       <article className="pm-card daily-card">
         <header>
           <Inbox aria-hidden="true" />
           <div>
-            <h2>{data?.automation_enabled ? '已自动检查' : '自动检查未开启'}</h2>
-            <p>{data?.automation_enabled ? '新数据进入后会自动判断；重新检查只用于异常补救。' : '可在「设置 → 自动维护」开启，以后由后台自动运行。'}</p>
+            <h2>随 Gmail 同步自动更新</h2>
+            <p>这里直接展示同步结果，不会从页面启动实验性扫描。</p>
           </div>
         </header>
         <div className="daily-source-pills">
-          {ORIGIN_ORDER.map((key) => {
-            const origin = origins[key];
-            return (
-              <span
-                key={key}
-                className={`daily-source-pill${origin?.ready ? ' is-on' : ''}`}
-              >
-                <span>{origin?.label ?? key}</span>
-                <b>{origin?.ready ? '✅' : '未连接'}</b>
-              </span>
-            );
-          })}
+          <span className={`daily-source-pill${gmail?.ready ? ' is-on' : ''}`}>
+            <span>{gmail?.label ?? 'Gmail'}</span>
+            <b>{gmail?.ready ? '✅' : '未配置'}</b>
+          </span>
         </div>
-        <button type="button" className="pm-ghost" disabled={scanning} onClick={() => void scan()}>
-          {scanning ? '正在检查…' : '重新检查'}
+        <button type="button" className="pm-ghost" disabled={refreshing} onClick={() => void refresh()}>
+          {refreshing ? '正在刷新…' : '刷新结果'}
         </button>
       </article>
-
-      {suggestions.length > 0 && (
-        <section className="daily-stack" aria-label="需要确认">
-          <div className="pm-section-head"><div><h2>需要确认</h2><p className="pm-hint">PMBrain 只提示可能的关联，不会自动合并人物。</p></div></div>
-          {suggestions.map((suggestion) => {
-            const key = `${suggestion.left.source_id}:${suggestion.left.slug}|${suggestion.right.source_id}:${suggestion.right.slug}`;
-            return (
-              <article className="pm-card daily-card" key={key}>
-                <div>
-                  <span className="daily-pill">可能是同一个人</span>
-                  <h2>{suggestion.left.title} ↔ {suggestion.right.title}</h2>
-                  <p>{suggestion.left.source_label} · {suggestion.left.title} ↔ {suggestion.right.source_label} · {suggestion.right.title}</p>
-                </div>
-                <div className="daily-loop-actions">
-                  <button type="button" className="pm-primary" disabled={busyId === key} onClick={() => void decidePerson(suggestion, true)}>是同一个人</button>
-                  <button type="button" className="pm-ghost" disabled={busyId === key} onClick={() => void decidePerson(suggestion, false)}>不是同一个人</button>
-                </div>
-              </article>
-            );
-          })}
-        </section>
-      )}
 
       {items.length === 0 ? (
         <div className="pm-card daily-empty">

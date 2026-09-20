@@ -1,7 +1,7 @@
 import { app, Menu, shell } from 'electron';
 import type { DesktopLogger } from '../logs.js';
 
-export type SettingsPanel = 'basic' | 'models' | 'integrations' | 'connections' | 'updates' | 'system' | 'repair';
+export type SettingsPanel = 'basic' | 'models' | 'integrations' | 'updates' | 'system' | 'repair';
 
 export interface AppMenuDependencies {
   openAdmin: (hash?: string) => Promise<void>;
@@ -24,8 +24,6 @@ export function installAppMenu(dependencies: AppMenuDependencies): void {
           label: '知识库体检',
           click: () => void dependencies.openAdmin().catch(error => dependencies.reportError('无法打开知识库体检', error)),
         },
-        { label: '数据连接', click: () => void dependencies.openPanel('connections') },
-        { label: '待我处理', click: () => void dependencies.openAdmin('#waiting').catch(error => dependencies.reportError('无法打开待我处理', error)) },
         { label: '基础配置', click: () => void dependencies.openPanel('basic') },
         { label: '模型配置', click: () => void dependencies.openPanel('models') },
         { label: 'MCP 接入', click: () => void dependencies.openPanel('integrations') },

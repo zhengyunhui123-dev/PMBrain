@@ -38,7 +38,7 @@ describe('Desktop Google connect IPC', () => {
     expect(renderer).not.toContain('refresh_token');
     expect(renderer).not.toContain('access_token');
     expect(preload).not.toContain('startLoopback');
-    expect(html).toContain('id="panel-connections"');
+    expect(html).toContain('<section class="panel" id="panel-connections" hidden>');
     expect(html).toContain('id="daily-google-redirect"');
     expect(html).toContain('改用粘贴网址');
     expect(renderer).toContain('googleConnect');

@@ -59,7 +59,7 @@ describe('desktop settings renderer contracts', () => {
   });
 
   test('keeps the six desktop tasks separate and exposes advanced-only controls', () => {
-    for (const panel of ['basic', 'models', 'integrations', 'connections', 'system', 'updates', 'repair']) {
+    for (const panel of ['basic', 'models', 'integrations', 'system', 'updates', 'repair']) {
       expect(html).toContain(`data-target="${panel}"`);
       expect(html).toContain(`id="panel-${panel}"`);
     }
@@ -82,20 +82,14 @@ describe('desktop settings renderer contracts', () => {
     expect(renderer).not.toContain("populate(next);\n    switchPanel('integrations');");
   });
 
-  test('桌面设置只保留数据连接，日常结果回到 Admin 工作台和知识页', () => {
-    const connections = html.slice(html.indexOf('id="panel-connections"'), html.indexOf('id="panel-integrations"'));
-    expect(html).toContain('data-target="connections"');
+  test('实验性数据连接不进入桌面普通入口', () => {
+    expect(html).not.toContain('data-target="connections"');
     expect(html).not.toContain('data-target="daily"');
-    expect(html).toContain('id="daily-connectors-title">数据连接');
-    expect(html).toContain('id="daily-connectors-advanced"');
-    expect(html).toContain('高级设置');
-    expect(html).toContain('Request Headers');
-    expect(html).toContain('复制整行 <code>Cookie:</code>');
-    expect(connections).toContain('aria-labelledby="daily-waiting-title" hidden');
-    expect(connections).toContain('aria-labelledby="daily-chronicle-title" hidden');
-    expect(connections).toContain('aria-labelledby="daily-identity-title" hidden');
-    expect(renderer).toContain("button.textContent = item.connected ? '管理' : '连接'");
-    expect(renderer).toContain("if (target === 'connections') void refreshDailyPanel()");
+    expect(html).toContain('<section class="panel" id="panel-connections" hidden>');
+    expect(renderer).not.toContain("if (target === 'connections') void refreshDailyPanel()");
+    expect(main).not.toContain("label: '数据连接'");
+    expect(main).not.toContain("label: '待我处理'");
+    expect(main).not.toContain("openAdmin('#waiting')");
   });
 
   test('reuses custom chat models in advanced tier and Dream phase selectors', () => {

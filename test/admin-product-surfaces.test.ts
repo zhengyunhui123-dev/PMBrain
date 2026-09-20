@@ -38,17 +38,15 @@ describe('Admin product surfaces', () => {
 
   test('面向用户的信息架构不再平铺底层能力', () => {
     const app = read('admin/src/App.tsx');
-    const waiting = read('admin/src/pages/Waiting.tsx');
     const connectors = read('admin/src/pages/Connectors.tsx');
-    expect(app).toContain("page: 'waiting', label: '待我处理'");
-    expect(app).toContain("page: 'chronicle', label: '时间线'");
-    expect(app).toContain("page: 'connectors', label: '数据连接'");
+    expect(app).not.toContain("page: 'waiting', label: '待我处理'");
+    expect(app).not.toContain("import { WaitingPage }");
+    expect(app).not.toContain("page: 'chronicle', label: '时间线'");
+    expect(app).not.toContain("page: 'connectors', label: '数据连接'");
+    expect(app).not.toContain("page: 'config', label: '模型'");
+    expect(app).toContain("page: 'settings-dream', section: 'dream', label: '自动化'");
     expect(app).not.toContain("label: '人物关联'");
     expect(app).not.toContain("title: '日常'");
-    expect(waiting).toContain('重新检查');
-    expect(waiting).not.toContain('立即扫描');
-    expect(waiting).not.toContain('你已清零');
-    expect(waiting).not.toContain('Open Loop');
     expect(connectors).not.toContain('console.log');
     expect(connectors).not.toContain('startLoopback');
     expect(connectors).not.toContain('client_secret');

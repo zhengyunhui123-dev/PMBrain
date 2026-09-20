@@ -25,9 +25,8 @@ const root = join(import.meta.dir, '..');
 const read = (path: string) => readFileSync(join(root, path), 'utf8');
 
 describe('自动化能力按用户任务归位', () => {
-  test('不再展示日常四页，只把需要人工处理的结果放到工作台', () => {
+  test('不再展示日常四页和 Gmail-first 待办', () => {
     const app = read('admin/src/App.tsx');
-    const waiting = read('admin/src/pages/Waiting.tsx');
     const connectors = read('admin/src/pages/Connectors.tsx');
     const chronicle = read('admin/src/pages/Chronicle.tsx');
     const settings = read('admin/src/pages/Settings.tsx');
@@ -35,21 +34,14 @@ describe('自动化能力按用户任务归位', () => {
     expect(app).toContain("{ page: 'dashboard' as Page, label: '总体概览' }");
     expect(app).toContain("title: '工作台'");
     expect(app).toContain("page: 'import', label: '知识工作台'");
-    expect(app).toContain("page: 'waiting', label: '待我处理'");
+    expect(app).not.toContain("page: 'waiting', label: '待我处理'");
+    expect(app).not.toContain("import { WaitingPage }");
     expect(app).toContain("page: 'data', label: '知识库'");
-    expect(app).toContain("page: 'chronicle', label: '时间线'");
-    expect(app).toContain("page: 'connectors', label: '数据连接'");
+    expect(app).not.toContain("page: 'chronicle', label: '时间线'");
+    expect(app).not.toContain("page: 'connectors', label: '数据连接'");
+    expect(app).not.toContain("page: 'config', label: '模型'");
+    expect(app).toContain("page: 'settings-dream', section: 'dream', label: '自动化'");
     expect(app).not.toContain("label: '人物关联'");
-    expect(waiting).toContain('自动检查');
-    expect(waiting).toContain('重新检查');
-    expect(waiting).not.toContain('立即扫描');
-    expect(waiting).toContain('已完成');
-    expect(waiting).toContain('忽略');
-    expect(waiting).toContain('可能是同一个人');
-    expect(waiting).toContain('是同一个人');
-    expect(waiting).toContain('不是同一个人');
-    expect(waiting).not.toContain('Open Loop');
-    expect(waiting).not.toContain('open_loops');
     expect(connectors).toContain('高级设置');
     expect(connectors).toContain('自动同步');
     expect(connectors).toContain('未连接');
@@ -60,14 +52,16 @@ describe('自动化能力按用户任务归位', () => {
     expect(connectors).not.toContain('console.log');
     expect(connectors).not.toContain('client_secret');
     expect(chronicle).toContain('时间线');
-    expect(chronicle).toContain('设置 → 自动维护');
+    expect(app).not.toContain("import { ChroniclePage }");
+    expect(app).not.toContain("import { ConnectorsPage }");
     expect(chronicle).not.toContain('开启时间记忆');
     expect(chronicle).not.toContain('整理历史记录');
     expect(chronicle).not.toContain('Life Chronicle');
     expect(chronicle).not.toContain('backfill');
     expect(chronicle).not.toContain('年表回填');
-    expect(settings).toContain('自动生成时间线');
-    expect(settings).toContain('整理历史时间线');
+    expect(settings).not.toContain('自动生成时间线');
+    expect(settings).not.toContain('自动识别待办');
+    expect(settings).not.toContain('整理历史时间线');
   });
 
   test('Admin 路由继续包现有能力，不另写一套合并逻辑', () => {
