@@ -32,8 +32,11 @@ describe('自动化能力按用户任务归位', () => {
     const chronicle = read('admin/src/pages/Chronicle.tsx');
     const settings = read('admin/src/pages/Settings.tsx');
     expect(app).not.toContain("title: '日常'");
+    expect(app).toContain("{ page: 'dashboard' as Page, label: '总体概览' }");
     expect(app).toContain("title: '工作台'");
+    expect(app).toContain("page: 'import', label: '知识工作台'");
     expect(app).toContain("page: 'waiting', label: '待我处理'");
+    expect(app).toContain("page: 'data', label: '知识库'");
     expect(app).toContain("page: 'chronicle', label: '时间线'");
     expect(app).toContain("page: 'connectors', label: '数据连接'");
     expect(app).not.toContain("label: '人物关联'");

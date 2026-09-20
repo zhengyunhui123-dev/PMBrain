@@ -122,12 +122,11 @@ export function App() {
   const customerServiceQrSrc = `${import.meta.env.BASE_URL}customer-service-qr.png`;
   const navSections: Array<{ title: string; items: Array<{ page: Page; label: string; icon: NavIconName }> }> = useMemo(() => [
     { title: '工作台', items: [
-      { page: 'dashboard', label: '工作台', icon: 'overview' },
+      { page: 'import', label: '知识工作台', icon: 'workspace' },
       { page: 'waiting', label: '待我处理', icon: 'waiting' },
     ] },
     { title: '知识', items: [
-      { page: 'import', label: '原始资料', icon: 'workspace' },
-      { page: 'data', label: '结构化知识', icon: 'database' },
+      { page: 'data', label: '知识库', icon: 'database' },
       { page: 'graph', label: '知识图谱', icon: 'graph' },
       { page: 'chronicle', label: '时间线', icon: 'chronicle' },
     ] },
@@ -140,6 +139,7 @@ export function App() {
     ] },
   ], []);
   const allNavItems = useMemo(() => [
+    { page: 'dashboard' as Page, label: '总体概览' },
     ...navSections.flatMap(section => section.items.map(({ page: itemPage, label }) => ({ page: itemPage, label }))),
     ...SETTINGS_NAV_ITEMS.map(({ page: itemPage, label }) => ({ page: itemPage, label })),
   ], [navSections]);
@@ -216,6 +216,9 @@ export function App() {
           </div>
         </div>
         <div className="sidebar-nav">
+          <button type="button" className={`nav-item nav-item-overview ${page === 'dashboard' ? 'active' : ''}`} onClick={() => navigate('dashboard')}>
+            <NavIcon name="overview" /><span>总体概览</span>
+          </button>
           {navSections.map(section => (
             <section className="nav-section" key={section.title} aria-label={section.title}>
               <div className="nav-section-label">{section.title}</div>
@@ -261,6 +264,7 @@ export function App() {
           value={page === 'settings' ? 'settings-general' : allNavItems.some(item => item.page === page) ? page : 'dashboard'}
           onChange={event => navigate(event.target.value as Page)}
         >
+          <option value="dashboard">总体概览</option>
           {navSections.map(section => <optgroup key={section.title} label={section.title}>{section.items.map(item => <option key={item.page} value={item.page}>{item.label}</option>)}</optgroup>)}
           <optgroup label="设置">{SETTINGS_NAV_ITEMS.map(item => <option key={item.page} value={item.page}>{item.label}</option>)}</optgroup>
         </select>
