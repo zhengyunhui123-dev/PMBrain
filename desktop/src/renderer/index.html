@@ -201,6 +201,33 @@
               <small class="model-load-status" id="embedding-model-load-status" hidden></small>
               <small>未配置时仅保留原文、分块和关键词检索；本地模型不可用时不会回退到云端或其他默认模型。</small>
             </section>
+            <section class="model-card">
+              <div class="model-card-heading">
+                <div><b>图片 / OCR 模型</b></div>
+                <small id="ocr-model-effective">当前未启用</small>
+              </div>
+              <label class="ocr-toggle-field"><span class="ocr-toggle-copy"><input id="ocr-enabled" type="checkbox" /> 导入与维护时自动识别扫描页和图片</span></label>
+              <div class="model-fields ocr-fields">
+                <label>
+                  <span>模型来源</span>
+                  <select id="ocr-model-mode"><option value="chat">复用支持图片的普通模型</option><option value="custom">单独指定模型</option></select>
+                </label>
+                <label>
+                  <span>供应商</span>
+                  <select id="ocr-provider"><option value="">请选择供应商</option><option value="mimo">mimo</option><option value="zhipu">zhipu</option><option value="openai">openai</option><option value="anthropic">anthropic</option><option value="google">google</option><option value="openrouter">openrouter</option><option value="ollama">ollama</option><option value="custom-openai">自定义 OpenAI 接口</option></select>
+                </label>
+                <label>
+                  <span>模型名称</span>
+                  <input id="ocr-model-name" spellcheck="false" placeholder="gpt-4o-mini" autocomplete="off" />
+                </label>
+                <label>
+                  <span>API Key</span>
+                  <span class="secret-input model-connection-field"><input id="ocr-api-key" type="password" autocomplete="off" /><button type="button" class="secret-toggle" data-secret="ocr-api-key" aria-label="显示图片识别模型 API Key">&#128065;</button><button type="button" class="model-test-button" id="test-ocr-model" aria-label="测试图片识别模型" title="测试图片识别模型"><svg class="model-test-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12h4l2-7 4 14 2-7h4" /><path d="M19 8v8M16 11h6" /></svg></button></span>
+                </label>
+              </div>
+              <small class="model-load-status" id="ocr-model-load-status" hidden></small>
+              <small>可选。未配置可用视觉模型时会跳过图片识别并提示，不会导致整次维护失败。</small>
+            </section>
           </div>
           <details class="advanced-block model-advanced" id="advanced-model-settings">
             <summary>高级：按任务层级与 Dream 阶段指定模型</summary>

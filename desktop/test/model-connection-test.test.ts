@@ -96,6 +96,21 @@ describe('desktop model connection test', () => {
     expect(fixture.requests[0]?.body.messages.at(-1).content).toContain('OK');
   });
 
+  test('tests OCR by sending an actual image input', async () => {
+    const fixture = startOpenAICompatServer();
+    const result = await testModelConnection({
+      provider: 'custom-openai',
+      baseUrl: fixture.baseUrl,
+      model: 'vision-model',
+      apiKey: 'vision-key',
+      touchpoint: 'ocr',
+    });
+
+    expect(result.status).toBe('success');
+    expect(fixture.requests[0]?.body.model).toBe('vision-model');
+    expect(JSON.stringify(fixture.requests[0]?.body.messages)).toContain('image_url');
+  });
+
   test('sends the fixed embedding probe and reports the actual vector width', async () => {
     const fixture = startOpenAICompatServer({ embedding: [0.1, 0.2, 0.3, 0.4] });
     const result = await testModelConnection({

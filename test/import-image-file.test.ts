@@ -91,6 +91,14 @@ describe('importImageFile happy path (noEmbed)', () => {
     const result = await importImageFile(engine, target, 'originals/photos/photo.png', { noEmbed: true });
     expect(result.status).toBe('imported');
     expect(result.chunks).toBe(1);
+    expect(result.documentSummary).toMatchObject({
+      parser: 'pmbrain-image-ocr-v1',
+      images: 1,
+      pagesNeedingOcr: 1,
+      ocrAttempted: 0,
+      ocrSkipped: 1,
+    });
+    expect(result.documentSummary?.ocrWarnings?.[0]).toContain('未启用');
 
     const page = await engine.getPage('originals/photos/photo.png');
     expect(page).not.toBeNull();

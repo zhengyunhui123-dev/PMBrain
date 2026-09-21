@@ -1,3 +1,5 @@
+import type { OcrImageResult, OcrReceipt } from '../ocr.ts';
+
 export type DocumentFormat = 'pdf' | 'docx' | 'pptx' | 'xlsx';
 
 export type DocumentSectionType =
@@ -45,6 +47,12 @@ export interface DocumentMetadata {
   pagesNeedingOcr?: number[];
   ocrUsed: boolean;
   ocrProvider?: string;
+  ocrAttempted?: number;
+  ocrSucceeded?: number;
+  ocrFailed?: number;
+  ocrSkipped?: number;
+  ocrWarnings?: string[];
+  ocrReceipt?: OcrReceipt;
 }
 export interface StructuredDocument {
   title: string;
@@ -55,7 +63,7 @@ export interface StructuredDocument {
 
 export interface DocumentParseOptions {
   structured?: boolean;
-  ocrPage?: (page: number, image: Buffer, mime: string) => Promise<string>;
+  ocrPage?: (page: number, image: Buffer, mime: string) => Promise<OcrImageResult>;
 }
 
 export interface DocumentImportSummary {
@@ -69,4 +77,9 @@ export interface DocumentImportSummary {
   pagesNeedingOcr: number;
   ocrUsed: boolean;
   ocrProvider?: string;
+  ocrAttempted: number;
+  ocrSucceeded: number;
+  ocrFailed: number;
+  ocrSkipped: number;
+  ocrWarnings: string[];
 }

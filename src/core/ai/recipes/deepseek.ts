@@ -70,6 +70,7 @@ export const deepseek: Recipe = {
     },
     chat: {
       models: ['deepseek-v4-flash', 'deepseek-v4-pro'],
+      supports_vision: false,
       supports_tools: true,
       supports_subagent_loop: true,
       supports_prompt_cache: false,

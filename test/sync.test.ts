@@ -119,6 +119,11 @@ describe('isSyncable', () => {
     expect(isSyncable('docs/slides.pptx', { includeOffice: true })).toBe(true);
   });
 
+  test('accepts images only when the shared image import lane is enabled', () => {
+    expect(isSyncable('scans/invoice.png')).toBe(false);
+    expect(isSyncable('scans/invoice.png', { includeImages: true })).toBe(true);
+  });
+
   test('rejects Office lock and tmp files even when includeOffice is enabled', () => {
     expect(isOfficeTransientFile('docs/~$proposal.docx')).toBe(true);
     expect(isOfficeTransientFile('E:\\dir\\~$slides.pptx')).toBe(true);

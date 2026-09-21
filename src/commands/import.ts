@@ -82,9 +82,10 @@ export async function runImport(
   const jsonOutput = args.includes('--json');
   const reportFiles = args.includes('--report-files');
   const includeOffice = args.includes('--include-office');
-  const includeImages = args.includes('--include-images');
+  const gateway = await import('../core/ai/gateway.ts');
+  const documentOcr = args.includes('--document-ocr') || gateway.isOcrEnabled();
+  const includeImages = args.includes('--include-images') || documentOcr;
   const structuredDocuments = !args.includes('--legacy-document-parser');
-  const documentOcr = args.includes('--document-ocr');
 
   // T7 (D9): refuse cleanly when init persisted the deferred-setup sentinel,
   // unless the user is explicitly skipping embedding via `--no-embed` (in

@@ -20,6 +20,7 @@ import { parseDocxDocument } from './parsers/docx.ts';
 import { parsePdfDocument } from './parsers/pdf.ts';
 import { parsePptxDocument } from './parsers/pptx.ts';
 import { parseSpreadsheetDocument } from './parsers/spreadsheet.ts';
+import { appendOoxmlImageOcr } from './ooxml-image-ocr.ts';
 
 function yamlScalar(value: string): string {
   return JSON.stringify(value);
@@ -31,10 +32,13 @@ export async function parseDocument(
 ): Promise<StructuredDocument> {
   const ext = extname(filePath).toLowerCase();
   if (ext === '.pdf') return parsePdfDocument(filePath, opts);
-  if (ext === '.docx') return parseDocxDocument(filePath);
-  if (ext === '.pptx') return parsePptxDocument(filePath);
+  if (ext === '.docx') return appendOoxmlImageOcr(filePath, await parseDocxDocument(filePath), opts);
+  if (ext === '.pptx') return appendOoxmlImageOcr(filePath, await parsePptxDocument(filePath), opts);
   if (ext === '.xlsx' || ext === '.xlsm' || ext === '.xls' || ext === '.csv') {
-    return parseSpreadsheetDocument(filePath);
+    const document = parseSpreadsheetDocument(filePath);
+    return ext === '.xlsx' || ext === '.xlsm'
+      ? appendOoxmlImageOcr(filePath, document, opts)
+      : document;
   }
   throw new Error(`Unsupported structured document file type: ${ext}`);
 }
@@ -51,6 +55,11 @@ export function summarizeStructuredDocument(document: StructuredDocument): Docum
     pagesNeedingOcr: document.metadata.pagesNeedingOcr?.length ?? 0,
     ocrUsed: document.metadata.ocrUsed,
     ocrProvider: document.metadata.ocrProvider,
+    ocrAttempted: document.metadata.ocrAttempted ?? 0,
+    ocrSucceeded: document.metadata.ocrSucceeded ?? 0,
+    ocrFailed: document.metadata.ocrFailed ?? 0,
+    ocrSkipped: document.metadata.ocrSkipped ?? 0,
+    ocrWarnings: document.metadata.ocrWarnings ?? [],
   };
 }
 
@@ -100,6 +109,11 @@ export async function importStructuredDocument(
     `document_images: ${summary.images}`,
     `document_pages_needing_ocr: ${summary.pagesNeedingOcr}`,
     `document_ocr_used: ${summary.ocrUsed}`,
+    `document_ocr_attempted: ${summary.ocrAttempted}`,
+    `document_ocr_succeeded: ${summary.ocrSucceeded}`,
+    `document_ocr_failed: ${summary.ocrFailed}`,
+    `document_ocr_skipped: ${summary.ocrSkipped}`,
+    ...(document.metadata.ocrReceipt ? [`ocr_receipt: ${JSON.stringify(document.metadata.ocrReceipt)}`] : []),
     ...(summary.ocrProvider ? [`document_ocr_provider: ${yamlScalar(summary.ocrProvider)}`] : []),
     ...(summary.fallback ? [`document_parser_fallback: ${yamlScalar(summary.fallback)}`] : []),
     'retrieval_mode: office_parent_child',

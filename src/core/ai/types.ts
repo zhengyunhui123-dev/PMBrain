@@ -247,6 +247,8 @@ export interface RerankerTouchpoint {
 
 export interface ChatTouchpoint {
   models: string[];
+  supports_vision?: boolean;
+  vision_models?: string[];
   /** Provider returns native function/tool calling. */
   supports_tools: boolean;
   /**
@@ -409,6 +411,8 @@ export interface AIGatewayConfig {
   expansion_model?: string;
   /** Default chat model for `gateway.chat()` callers (subagent default). */
   chat_model?: string;
+  ocr_enabled?: boolean;
+  ocr_model?: string;
   /**
    * v0.35.0.0+: default reranker model for `gateway.rerank()` callers. As
    * `'provider:model'` (e.g. `'zeroentropyai:zerank-2'`). Resolved at

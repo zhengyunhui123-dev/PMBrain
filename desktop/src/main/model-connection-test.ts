@@ -2,12 +2,14 @@ import {
   chat,
   configureGateway,
   detectEmbeddingDimensions,
+  generateOcrText,
+  getVisionCapability,
   resetGateway,
 } from '../../../src/core/ai/gateway.ts';
 import { getRecipe } from '../../../src/core/ai/recipes/index.ts';
 import type { AIGatewayConfig } from '../../../src/core/ai/types.ts';
 
-export type DesktopModelConnectionTouchpoint = 'chat' | 'embedding';
+export type DesktopModelConnectionTouchpoint = 'chat' | 'embedding' | 'ocr';
 
 export interface DesktopModelConnectionTestInput {
   provider: string;
@@ -73,17 +75,19 @@ function buildGatewayConfig(input: DesktopModelConnectionTestInput): { config: A
   const config: AIGatewayConfig = {
     generative_enabled: true,
     env,
-    ...(input.touchpoint === 'chat'
-      ? { chat_model: model }
-      : { embedding_model: model, embedding_dimensions: 1 }),
+    ...(input.touchpoint === 'embedding'
+      ? { embedding_model: model, embedding_dimensions: 1 }
+      : input.touchpoint === 'ocr'
+        ? { chat_model: model, ocr_enabled: true, ocr_model: model }
+        : { chat_model: model }),
     ...(baseUrl
       ? {
           base_urls: { [provider]: baseUrl },
-          touchpoint_base_urls: { [provider]: { [input.touchpoint]: baseUrl } },
+          touchpoint_base_urls: { [provider]: { [input.touchpoint === 'embedding' ? 'embedding' : 'chat']: baseUrl } },
         }
       : {}),
     ...(apiKey
-      ? { touchpoint_api_keys: { [provider]: { [input.touchpoint]: apiKey } } }
+      ? { touchpoint_api_keys: { [provider]: { [input.touchpoint === 'embedding' ? 'embedding' : 'chat']: apiKey } } }
       : {}),
   };
   return { config, model };
@@ -179,6 +183,15 @@ async function executeModelConnectionTest(
         maxTokens: 8,
         abortSignal: signal,
       }), timeoutMs);
+      return { status: 'success', durationMs: elapsedMs(startedAt) };
+    }
+
+    if (input.touchpoint === 'ocr') {
+      if (getVisionCapability(model) === 'unsupported') {
+        throw new Error(`模型 ${model} 不支持图片输入。`);
+      }
+      const probe = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64');
+      await withTimeout(() => generateOcrText(probe, 'image/png'), timeoutMs);
       return { status: 'success', durationMs: elapsedMs(startedAt) };
     }
 

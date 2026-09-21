@@ -667,7 +667,7 @@ function modelConnectionInput(kind: ModelKind): DesktopModelConnectionTestInput 
 }
 
 function renderModelConnectionResult(
-  kind: ModelKind,
+  kind: ModelKind | 'ocr',
   result: DesktopModelConnectionTestResult,
 ): void {
   const status = $<HTMLElement>(`#${kind}-model-load-status`);
@@ -1661,6 +1661,15 @@ function populate(next: DesktopSetupState): void {
       : `普通模型：${setup.current.chatModel} · 状态：已配置，但全局禁用`)
     : '当前未配置';
   $('#embedding-model-effective').textContent = setup.current.embeddingModel ? `当前生效：${setup.current.embeddingModel}` : '当前未配置';
+  ($<HTMLInputElement>('#ocr-enabled')).checked = setup.current.ocrEnabled === true;
+  ($<HTMLSelectElement>('#ocr-model-mode')).value = setup.current.ocrModel ? 'custom' : 'chat';
+  const ocr = splitModelId(setup.current.ocrModel || setup.current.chatModel);
+  ($<HTMLSelectElement>('#ocr-provider')).value = ocr.provider;
+  ($<HTMLInputElement>('#ocr-model-name')).value = ocr.model;
+  syncOcrFields();
+  $('#ocr-model-effective').textContent = setup.current.ocrEnabled
+    ? `已启用：${setup.current.ocrModel || `复用 ${setup.current.chatModel || '普通模型'}`}`
+    : '当前未启用';
   $('#config-path').textContent = `配置写入：${setup.configPath}`;
   $('#postgres-status').textContent = setup.current.engine === 'postgres' && setup.current.databaseConfigured
     ? '已读取当前 Postgres 连接，正在检查 Docker 中可切换的 PMBrain 数据库。'
@@ -2068,6 +2077,15 @@ async function save(): Promise<void> {
     setNotice('error', '向量模型为可选项；如需启用，请同时填写供应商和模型名称');
     return;
   }
+  const ocrEnabled = ($<HTMLInputElement>('#ocr-enabled')).checked;
+  const ocrMode = ($<HTMLSelectElement>('#ocr-model-mode')).value;
+  const ocrProvider = ($<HTMLSelectElement>('#ocr-provider')).value;
+  const ocrModelName = ($<HTMLInputElement>('#ocr-model-name')).value.trim();
+  const ocrModel = ocrMode === 'custom' ? composeModelId(recipeProvider(ocrProvider), ocrModelName) : '';
+  if (ocrEnabled && ocrMode === 'custom' && (!ocrProvider || !ocrModelName)) {
+    setNotice('error', '请同时填写图片/OCR模型的供应商和模型名称');
+    return;
+  }
 
   let confirmEmbeddingRebuild = false;
   let confirmLegacyEmbeddingRecovery = false;
@@ -2102,6 +2120,7 @@ async function save(): Promise<void> {
   const embeddingModel = composeModelId(recipeProvider(embeddingProvider), embeddingModelName);
   const chatKey = providerKeyId(chatProvider, 'chat');
   const embeddingKey = providerKeyId(embeddingProvider, 'embedding');
+  const ocrKey = providerKeyId(ocrProvider, 'chat');
   // 需要 Key 的供应商才保存 Key
   if (chatKey && chatKey !== '__none__') {
     const chatKeyValue = ($<HTMLInputElement>('#chat-api-key')).value.trim();
@@ -2119,6 +2138,14 @@ async function save(): Promise<void> {
     }
     if (embeddingKeyValue) (keys as Record<string, string>)[embeddingKey] = embeddingKeyValue;
   }
+  if (ocrMode === 'custom' && ocrProvider && ocrKey && ocrKey !== '__none__') {
+    const ocrKeyValue = ($<HTMLInputElement>('#ocr-api-key')).value.trim();
+    if (!ocrKeyValue && !isCustomEndpointId(ocrProvider)) {
+      setNotice('error', `供应商 ${ocrProvider} 需要填写 API Key`);
+      return;
+    }
+    if (ocrKeyValue) (keys as Record<string, string>)[ocrKey] = ocrKeyValue;
+  }
   const knowledgeDirectory = ($<HTMLInputElement>('#knowledge-directory')).value;
   const knowledgeSourceId = ($<HTMLInputElement>('#knowledge-source-id')).value;
   const payload: SetupPayload = {
@@ -2135,6 +2162,8 @@ async function save(): Promise<void> {
     modelConfig: {
       chatModel,
       ...(embeddingModel ? { embeddingModel } : {}),
+      ocrEnabled,
+      ...(ocrModel ? { ocrModel } : {}),
     },
     customProviders: customCatalog,
     customSelection,
@@ -2355,6 +2384,9 @@ $<HTMLButtonElement>('#add-custom-chat-model').addEventListener('click', () => o
 $<HTMLButtonElement>('#add-custom-embedding-model').addEventListener('click', () => openCustomProvider('embedding'));
 $<HTMLButtonElement>('#test-chat-model').addEventListener('click', () => void testConfiguredModel('chat'));
 $<HTMLButtonElement>('#test-embedding-model').addEventListener('click', () => void testConfiguredModel('embedding'));
+$<HTMLButtonElement>('#test-ocr-model').addEventListener('click', () => void testOcrModel());
+$<HTMLSelectElement>('#ocr-model-mode').addEventListener('change', syncOcrFields);
+$<HTMLSelectElement>('#ocr-provider').addEventListener('change', syncOcrProviderKeyField);
 $<HTMLButtonElement>('#custom-provider-close').addEventListener('click', closeCustomProvider);
 $<HTMLButtonElement>('#custom-provider-cancel').addEventListener('click', closeCustomProvider);
 $<HTMLFormElement>('#custom-provider-form').addEventListener('submit', event => {
@@ -2678,6 +2710,78 @@ async function refreshDailyPeople(query = $<HTMLInputElement>('#daily-identity-q
     if ((payload.groups ?? []).length === 0) groupsEl.textContent = '还没有人物关联。';
   } catch (error) {
     groupsEl.textContent = error instanceof Error ? error.message : String(error);
+  }
+}
+
+function effectiveOcrModel(): string {
+  if (($<HTMLSelectElement>('#ocr-model-mode')).value === 'chat') {
+    return composeModelId(
+      recipeProvider(($<HTMLSelectElement>('#chat-provider')).value),
+      ($<HTMLInputElement>('#chat-model-name')).value,
+    );
+  }
+  return composeModelId(
+    recipeProvider(($<HTMLSelectElement>('#ocr-provider')).value),
+    ($<HTMLInputElement>('#ocr-model-name')).value,
+  );
+}
+
+function syncOcrProviderKeyField(): void {
+  const provider = ($<HTMLSelectElement>('#ocr-provider')).value;
+  const keyId = providerKeyId(provider, 'chat');
+  const input = $<HTMLInputElement>('#ocr-api-key');
+  const local = keyId === '__none__';
+  input.disabled = local || ($<HTMLSelectElement>('#ocr-model-mode')).value !== 'custom';
+  input.placeholder = local ? '本地模型无需 API Key' : '';
+  input.value = keyId && keyId !== '__none__' ? state?.setup.current.keyValues[keyId] || '' : '';
+}
+
+function syncOcrFields(): void {
+  const custom = ($<HTMLSelectElement>('#ocr-model-mode')).value === 'custom';
+  const provider = $<HTMLSelectElement>('#ocr-provider');
+  const model = $<HTMLInputElement>('#ocr-model-name');
+  provider.disabled = !custom;
+  model.disabled = !custom;
+  if (!custom) {
+    provider.value = recipeProvider(($<HTMLSelectElement>('#chat-provider')).value);
+    model.value = ($<HTMLInputElement>('#chat-model-name')).value;
+  }
+  syncOcrProviderKeyField();
+}
+
+async function testOcrModel(): Promise<void> {
+  const button = $<HTMLButtonElement>('#test-ocr-model');
+  const status = $<HTMLElement>('#ocr-model-load-status');
+  const modelId = effectiveOcrModel();
+  const parsed = splitModelId(modelId);
+  status.hidden = false;
+  status.classList.remove('ready', 'warning', 'error');
+  if (!parsed.provider || !parsed.model) {
+    status.classList.add('error');
+    status.textContent = '✕ 请先配置普通模型，或单独填写 provider:model';
+    return;
+  }
+  const provider = recipeProvider(parsed.provider);
+  const endpoint = isCustomEndpointId(parsed.provider) ? selectedCustomEndpoint('chat') : undefined;
+  const apiKey = ($<HTMLSelectElement>('#ocr-model-mode')).value === 'chat'
+    ? ($<HTMLInputElement>('#chat-api-key')).value.trim()
+    : ($<HTMLInputElement>('#ocr-api-key')).value.trim();
+  status.textContent = '正在发送一张测试图片…';
+  setBusy(button, true);
+  try {
+    const result = await window.pmbrainDesktop.testModelConnection({
+      provider,
+      model: parsed.model,
+      baseUrl: endpoint?.baseUrl,
+      apiKey,
+      touchpoint: 'ocr',
+    });
+    renderModelConnectionResult('ocr', result);
+  } catch (error) {
+    status.classList.add('error');
+    status.textContent = `✕ ${error instanceof Error ? error.message : String(error)}`;
+  } finally {
+    setBusy(button, false);
   }
 }
 

@@ -205,8 +205,12 @@ select { cursor: pointer; appearance: auto; -webkit-appearance: auto; }
 .model-fields { display: grid; gap: 12px; }
 .model-fields.chat-fields { grid-template-columns: 180px minmax(220px, 1fr) minmax(280px, 1.1fr); }
 .model-fields.embedding-fields { grid-template-columns: 180px minmax(220px, 1fr) minmax(280px, 1.1fr); }
+.model-fields.ocr-fields { grid-template-columns: minmax(240px, 1.15fr) 150px minmax(210px, 1fr) minmax(280px, 1.25fr); }
 .model-fields label { margin: 0; }
 .model-fields label > span:first-child { display: block; margin-bottom: 8px; color: var(--text-secondary); font-size: 12px; font-weight: 700; }
+.ocr-toggle-copy { display: flex; min-height: 40px; align-items: center; gap: 9px; color: var(--text-secondary); font-size: 12px; font-weight: 500; }
+.ocr-toggle-field { display: block; margin: -4px 0 12px; }
+.ocr-toggle-copy #ocr-enabled { width: 16px; height: 16px; flex: 0 0 auto; margin: 0; accent-color: var(--accent); }
 .advanced-copy { padding: 15px 16px 0; color: var(--text-muted); font-size: 12px; line-height: 1.6; }
 .advanced-copy code { padding: 2px 5px; border-radius: 5px; color: var(--accent); background: var(--accent-soft); font: 11px Consolas, monospace; }
 .advanced-model-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; padding: 16px; }
@@ -552,7 +556,7 @@ select { cursor: pointer; appearance: auto; -webkit-appearance: auto; }
   .topbar, .section-heading, .subsection-heading, .form-footer, .finish-bar, .advanced-actions, .help-dialog-foot, .repair-summary, .repair-backup-heading, .diagnostic-export-card, .system-save-bar, .repair-summary-side, .repair-location-actions, .repair-backup-actions { align-items: flex-start; flex-direction: column; }
   .top-actions { flex-wrap: wrap; }
   .section-heading p { text-align: left; }
-  .mode-grid, .network-mode-grid, .model-fields.chat-fields, .model-fields.embedding-fields, .advanced-model-grid, .advanced-task-fields, .key-grid, .integration-grid, .shared-form, .source-check-list { grid-template-columns: 1fr; }
+  .mode-grid, .network-mode-grid, .model-fields.chat-fields, .model-fields.embedding-fields, .model-fields.ocr-fields, .advanced-model-grid, .advanced-task-fields, .key-grid, .integration-grid, .shared-form, .source-check-list { grid-template-columns: 1fr; }
   .workbuddy-integration-card { grid-column: auto; }
   .workbuddy-checks, .workbuddy-meta { grid-template-columns: 1fr; }
   .workbuddy-actions .workbuddy-remove { margin-left: 0; }

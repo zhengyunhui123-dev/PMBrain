@@ -135,6 +135,8 @@ export interface GBrainConfig {
    * Default: "anthropic:claude-sonnet-4-6" (dateless per Anthropic's v0.31.12+ model-ID format).
    */
   chat_model?: string;
+  ocr_enabled?: boolean;
+  ocr_model?: string;
   /**
    * Global generative (chat/reasoning) model usage. Independent of embedding.
    * Missing → treated as open. Only an explicit false disables generative calls.
@@ -520,6 +522,12 @@ export function loadConfig(): GBrainConfig | null {
     ...(envCompat('PMBRAIN_EMBEDDING_DIMENSIONS', 'GBRAIN_EMBEDDING_DIMENSIONS') ? { embedding_dimensions: parseInt(envCompat('PMBRAIN_EMBEDDING_DIMENSIONS', 'GBRAIN_EMBEDDING_DIMENSIONS')!, 10) } : {}),
     ...(envCompat('PMBRAIN_EXPANSION_MODEL', 'GBRAIN_EXPANSION_MODEL') ? { expansion_model: envCompat('PMBRAIN_EXPANSION_MODEL', 'GBRAIN_EXPANSION_MODEL') } : {}),
     ...(envCompat('PMBRAIN_CHAT_MODEL', 'GBRAIN_CHAT_MODEL') ? { chat_model: envCompat('PMBRAIN_CHAT_MODEL', 'GBRAIN_CHAT_MODEL') } : {}),
+    ...(envCompat('PMBRAIN_OCR_ENABLED', 'GBRAIN_OCR_ENABLED')
+      ? { ocr_enabled: envCompat('PMBRAIN_OCR_ENABLED', 'GBRAIN_OCR_ENABLED') === 'true' }
+      : {}),
+    ...(envCompat('PMBRAIN_OCR_MODEL', 'GBRAIN_OCR_MODEL')
+      ? { ocr_model: envCompat('PMBRAIN_OCR_MODEL', 'GBRAIN_OCR_MODEL') }
+      : {}),
     ...(envCompat('PMBRAIN_CHAT_FALLBACK_CHAIN', 'GBRAIN_CHAT_FALLBACK_CHAIN')
       ? { chat_fallback_chain: envCompat('PMBRAIN_CHAT_FALLBACK_CHAIN', 'GBRAIN_CHAT_FALLBACK_CHAIN')!.split(',').map(s => s.trim()).filter(Boolean) }
       : {}),
@@ -661,6 +669,8 @@ export async function loadConfigWithEngine(
   const dbMultimodalModel = await dbStr('embedding_multimodal_model');
   const dbOcr = await dbBool('embedding_image_ocr');
   const dbOcrModel = await dbStr('embedding_image_ocr_model');
+  const dbCanonicalOcr = await dbBool('ocr_enabled');
+  const dbCanonicalOcrModel = await dbStr('ocr_model');
   // v0.36 (D7) — embedding-column registry merge. Stored as JSON string in
   // the config table. Parse + shape-check here; full registry validation
   // (regex on keys, type/dim/provider field shapes) runs in the resolver at
@@ -684,6 +694,8 @@ export async function loadConfigWithEngine(
   if (merged.embedding_image_ocr_model === undefined && dbOcrModel !== undefined) {
     merged.embedding_image_ocr_model = dbOcrModel;
   }
+  if (merged.ocr_enabled === undefined) merged.ocr_enabled = dbCanonicalOcr ?? merged.embedding_image_ocr;
+  if (merged.ocr_model === undefined) merged.ocr_model = dbCanonicalOcrModel ?? merged.embedding_image_ocr_model;
   if (merged.embedding_columns === undefined && dbEmbeddingColumns !== undefined) {
     try {
       const parsed = JSON.parse(dbEmbeddingColumns);
@@ -838,6 +850,8 @@ export const KNOWN_CONFIG_KEYS: readonly string[] = [
   'embedding_disabled',
   'expansion_model',
   'chat_model',
+  'ocr_enabled',
+  'ocr_model',
   'chat_fallback_chain',
   'provider_base_urls',
   'provider_touchpoint_base_urls',
@@ -1095,6 +1109,8 @@ export function isFileBackedModelConfigKey(key: string): boolean {
     || key === 'embedding_dimensions'
     || key === 'embedding_disabled'
     || key === 'chat_model'
+    || key === 'ocr_enabled'
+    || key === 'ocr_model'
     || key === 'expansion_model'
     || key === 'chat_fallback_chain'
     || key === 'facts.extraction_model'

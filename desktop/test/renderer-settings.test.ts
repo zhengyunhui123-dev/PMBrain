@@ -202,6 +202,22 @@ describe('desktop settings renderer contracts', () => {
     expect(preview).toContain('testModelConnection: async (input)');
   });
 
+  test('keeps the optional OCR model, credential check and image test in the model settings flow', () => {
+    for (const id of ['ocr-enabled', 'ocr-model-mode', 'ocr-provider', 'ocr-model-name', 'ocr-api-key', 'test-ocr-model']) {
+      expect(html).toContain(`id="${id}"`);
+    }
+    const saveStart = renderer.indexOf('async function save(): Promise<void>');
+    const saveEnd = renderer.indexOf('function selectedCredential', saveStart);
+    const saveSource = renderer.slice(saveStart, saveEnd);
+    const dailyStart = renderer.indexOf('async function refreshDailyPanel');
+    const dailyEnd = renderer.indexOf('async function refreshDailyPeople', dailyStart);
+    const dailySource = renderer.slice(dailyStart, dailyEnd);
+    expect(saveSource).toContain("providerKeyId(ocrProvider, 'chat')");
+    expect(saveSource).toContain("(keys as Record<string, string>)[ocrKey] = ocrKeyValue");
+    expect(dailySource).not.toContain('ocrKeyValue');
+    expect(renderer).toContain("touchpoint: 'ocr'");
+  });
+
   test('model settings label the embedding model without an optional marker', () => {
     expect(html).toContain('<b>向量化模型</b>');
     expect(html).not.toContain('向量化模型（可选）');

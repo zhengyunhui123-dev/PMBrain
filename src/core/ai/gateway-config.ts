@@ -29,6 +29,8 @@ export function buildGatewayConfig(config: GBrainConfig): AIGatewayConfig {
     embedding_multimodal_model: config.embedding_multimodal_model,
     expansion_model: config.expansion_model,
     chat_model: config.chat_model,
+    ocr_enabled: config.ocr_enabled ?? config.embedding_image_ocr ?? false,
+    ocr_model: config.ocr_model ?? config.embedding_image_ocr_model,
     chat_fallback_chain: config.chat_fallback_chain,
     base_urls: { ...envBaseUrls, ...(config.provider_base_urls ?? {}) },
     touchpoint_base_urls: config.provider_touchpoint_base_urls,

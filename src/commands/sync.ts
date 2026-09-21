@@ -4,7 +4,7 @@ import { join, relative } from 'path';
 import { tmpdir } from 'os';
 import type { BrainEngine } from '../core/engine.ts';
 import { DELETE_BATCH_SIZE } from '../core/engine-constants.ts';
-import { importFile } from '../core/import-file.ts';
+import { importFile, importImageFile, isImageFilePath } from '../core/import-file.ts';
 import { collectSyncableFiles } from './import.ts';
 import { createInterface } from 'readline';
 import {
@@ -29,6 +29,7 @@ import {
 } from '../core/sync-failure-ledger.ts';
 import { repairPgliteBtreeIndexes } from '../core/pglite-btree-repair.ts';
 import { importOfficeFile, isOfficeFilePath } from '../core/office-import.ts';
+import { shouldRefreshOcrReceipt, hashOcrSource, type OcrReceipt } from '../core/ocr.ts';
 import { estimateTokens, CHUNKER_VERSION } from '../core/chunkers/code.ts';
 import { EMBEDDING_MODEL, estimateEmbeddingCostUsd } from '../core/embedding.ts';
 import { errorFor, serializeError } from '../core/errors.ts';
@@ -203,6 +204,8 @@ export interface SyncOpts {
   strategy?: 'markdown' | 'code' | 'auto';
   /** Include document files (Word/PDF/Excel) alongside markdown in import/sync. */
   includeOffice?: boolean;
+  includeImages?: boolean;
+  documentOcr?: boolean;
   /** Glob patterns excluded from indexing; unioned with persisted sync.exclude. */
   exclude?: string[];
   /** Import uncommitted edits/untracked files. Default false; config fallback is sync.include_working_tree. */
@@ -380,6 +383,34 @@ function git(repoPath: string, args: string[], configs: string[] = []): string {
     windowsHide: true,
     env: gitProcessEnv(),
   }).trimEnd();
+}
+
+async function findStaleOcrPaths(
+  engine: BrainEngine,
+  repoPath: string,
+  sourceId: string | undefined,
+  model: string | null,
+  workingTreeManifest: SyncManifest,
+): Promise<string[]> {
+  const dirty = new Set([
+    ...workingTreeManifest.added,
+    ...workingTreeManifest.modified,
+    ...workingTreeManifest.deleted,
+    ...workingTreeManifest.renamed.flatMap(item => [item.from, item.to]),
+  ].map(path => path.replace(/\\/g, '/')));
+  const tracked = new Set(git(repoPath, ['ls-files', '-z']).split('\0').filter(Boolean));
+  const pages = await engine.listPages({ limit: 100_000, ...(sourceId ? { sourceId } : {}) });
+  const stale: string[] = [];
+  for (const page of pages) {
+    const sourcePath = page.source_path?.replace(/\\/g, '/');
+    if (!sourcePath || dirty.has(sourcePath) || !tracked.has(sourcePath)) continue;
+    if (!isOfficeFilePath(sourcePath) && !isImageFilePath(sourcePath)) continue;
+    const absolute = join(repoPath, sourcePath);
+    if (!existsSync(absolute) || !statSync(absolute).isFile()) continue;
+    const receipt = page.frontmatter?.ocr_receipt as OcrReceipt | undefined;
+    if (shouldRefreshOcrReceipt(receipt, hashOcrSource(readFileSync(absolute)), model)) stale.push(sourcePath);
+  }
+  return stale;
 }
 
 function hasOriginRemote(repoPath: string): boolean {
@@ -1297,6 +1328,7 @@ async function performSyncInner(engine: BrainEngine, opts: SyncOpts): Promise<Sy
   const syncOpts = {
     strategy: opts.strategy,
     includeOffice: opts.includeOffice,
+    includeImages: opts.includeImages,
     exclude: opts.exclude,
   };
   // Older Quick Maintenance runs filtered Office/PDF but still advanced the
@@ -1328,6 +1360,16 @@ async function performSyncInner(engine: BrainEngine, opts: SyncOpts): Promise<Sy
     ? workingTreeCounts
     : undefined;
   const hasImportedWorkingTreeChanges = workingTreeEnabled && nonEmptyDrift(workingTreeCounts);
+  let staleOcrPaths: string[] = [];
+  if (opts.documentOcr) {
+    const gateway = await import('../core/ai/gateway.ts');
+    let ocrModel: string | null = null;
+    try { ocrModel = gateway.getImageOcrModel(); } catch { ocrModel = null; }
+    staleOcrPaths = await findStaleOcrPaths(engine, repoPath, opts.sourceId, ocrModel, workingTreeManifest);
+    if (staleOcrPaths.length > 0) {
+      slog(`[sync] refreshing OCR for ${staleOcrPaths.length} unchanged file(s).`);
+    }
+  }
   if (uncommittedDrift) {
     serr(
       `[sync] ${uncommittedDrift.added + uncommittedDrift.modified + uncommittedDrift.deleted} uncommitted file(s) not synced. ` +
@@ -1341,6 +1383,7 @@ async function performSyncInner(engine: BrainEngine, opts: SyncOpts): Promise<Sy
     && !versionNeverSet
     && !hasImportedWorkingTreeChanges
     && missingTrackedOfficeFiles.length === 0
+    && staleOcrPaths.length === 0
   ) {
     return {
       status: 'up_to_date',
@@ -1368,6 +1411,7 @@ async function performSyncInner(engine: BrainEngine, opts: SyncOpts): Promise<Sy
   const diffOutput = git(repoPath, ['diff', '--name-status', '-M', `${lastCommit}..${headCommit}`]);
   const manifest = buildSyncManifest(diffOutput);
   manifest.added = unique([...manifest.added, ...missingTrackedOfficeFiles]);
+  manifest.modified = unique([...manifest.modified, ...staleOcrPaths]);
   if (workingTreeEnabled) {
     manifest.added = unique([...manifest.added, ...workingTreeManifest.added]);
     manifest.modified = unique([...manifest.modified, ...workingTreeManifest.modified]);
@@ -1726,7 +1770,9 @@ async function performSyncInner(engine: BrainEngine, opts: SyncOpts): Promise<Sy
       const filePath = join(syncContentRoot, to);
       if (existsSync(filePath)) {
         const result = opts.includeOffice && isOfficeFilePath(to)
-          ? await importOfficeFile(engine, filePath, to, { noEmbed, sourceId: opts.sourceId, activePack: syncActivePack })
+          ? await importOfficeFile(engine, filePath, to, { noEmbed, sourceId: opts.sourceId, documentOcr: opts.documentOcr, activePack: syncActivePack })
+          : opts.includeImages && isImageFilePath(to)
+            ? await importImageFile(engine, filePath, to, { noEmbed, sourceId: opts.sourceId, forceOcr: opts.documentOcr })
           : await importFile(engine, filePath, to, { noEmbed, sourceId: opts.sourceId, activePack: syncActivePack });
         if (result.status === 'imported') chunksCreated += result.chunks;
         else if (result.status === 'partial') {
@@ -1853,7 +1899,9 @@ async function performSyncInner(engine: BrainEngine, opts: SyncOpts): Promise<Sy
         // 'default' was applied even for non-default sources, fabricating
         // duplicate rows that crashed bare-slug subqueries with Postgres 21000.
         const runImport = () => opts.includeOffice && isOfficeFilePath(path)
-          ? importOfficeFile(eng, filePath, path, { noEmbed, sourceId: opts.sourceId, activePack: syncActivePack })
+          ? importOfficeFile(eng, filePath, path, { noEmbed, sourceId: opts.sourceId, documentOcr: opts.documentOcr, activePack: syncActivePack })
+          : opts.includeImages && isImageFilePath(path)
+            ? importImageFile(eng, filePath, path, { noEmbed, sourceId: opts.sourceId, forceOcr: opts.documentOcr })
           : importFile(eng, filePath, path, { noEmbed, sourceId: opts.sourceId, activePack: syncActivePack });
         const importWithIndexRepair = async () => {
           try {
@@ -2283,6 +2331,8 @@ async function performFullSync(
   const importArgs = [importPath];
   if (opts.noEmbed) importArgs.push('--no-embed');
   if (opts.includeOffice) importArgs.push('--include-office');
+  if (opts.includeImages) importArgs.push('--include-images');
+  if (opts.documentOcr) importArgs.push('--document-ocr');
   if (fullConcurrency > 1) importArgs.push('--workers', String(fullConcurrency));
   // v0.31.2: thread strategy through so code-strategy first sync
   // actually enumerates code files (closes bug 1).
@@ -2657,6 +2707,9 @@ export async function runSync(engine: BrainEngine, args: string[]) {
     }
   }
   const includeOffice = args.includes('--include-office');
+  const gateway = await import('../core/ai/gateway.ts');
+  const documentOcr = args.includes('--document-ocr') || gateway.isOcrEnabled();
+  const includeImages = args.includes('--include-images') || documentOcr;
   const concurrencyStr = args.find((a, i) => args[i - 1] === '--concurrency' || args[i - 1] === '--workers');
   const parallelStr = args.find((a, i) => args[i - 1] === '--parallel');
   // v0.22.13 (PR #490 Q2): parseWorkers throws on '0', '-3', 'foo', '1.5' instead
@@ -2893,6 +2946,8 @@ export async function runSync(engine: BrainEngine, args: string[]) {
         sourceId: src.id,
         strategy: cfg.strategy,
         includeOffice: includeOffice || cfg.includeOffice === true,
+        includeImages,
+        documentOcr,
         exclude: excludePatterns.length > 0 ? excludePatterns : undefined,
         workingTree,
         concurrency,
@@ -3094,7 +3149,7 @@ export async function runSync(engine: BrainEngine, args: string[]) {
   singleSourceTimer?.unref?.();
   const opts: SyncOpts = {
     repoPath, dryRun, full, noPull, noEmbed, skipFailed, retryFailed, sourceId,
-    strategy: strategyArg, includeOffice,
+    strategy: strategyArg, includeOffice, includeImages, documentOcr,
     exclude: excludePatterns.length > 0 ? excludePatterns : undefined,
     workingTree, concurrency,
     signal: singleSourceController?.signal,
@@ -3258,6 +3313,8 @@ export async function syncOneSource(
     concurrency: number | undefined;
   },
 ): Promise<{ result: SyncResult; log: string }> {
+  const gateway = await import('../core/ai/gateway.ts');
+  const documentOcr = gateway.isOcrEnabled();
   const cfg = (src.config || {}) as { strategy?: 'markdown' | 'code' | 'auto'; includeOffice?: boolean };
   const log = `\n--- Syncing source: ${src.name} ---\n`;
   const repoOpts: SyncOpts = {
@@ -3271,6 +3328,8 @@ export async function syncOneSource(
     sourceId: src.id,
     strategy: cfg.strategy,
     includeOffice: shared.includeOffice || cfg.includeOffice === true,
+    includeImages: documentOcr,
+    documentOcr,
     concurrency: shared.concurrency,
     // lockId defaults to `gbrain-sync:${src.id}` via the invariant in
     // performSync (no explicit override needed — sourceId triggers it).

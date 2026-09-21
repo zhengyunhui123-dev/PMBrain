@@ -1,13 +1,14 @@
-import { lstatSync, statSync } from 'node:fs';
+import { lstatSync, readFileSync, statSync } from 'node:fs';
 import { basename, extname } from 'node:path';
 import type { BrainEngine } from './engine.ts';
-import { extractImageOcrText, type ImportResult, type ParentSectionInput } from './import-file.ts';
+import { extractImageOcrResult, type ImportResult, type ParentSectionInput } from './import-file.ts';
 import { isOfficeFilePath, slugifyPath } from './sync.ts';
 import { importStructuredDocument, parseDocument } from './document/document-import.ts';
 import { renderStructuredDocument } from './document/markdown-renderer.ts';
 import { normalizeDocumentText } from './document/normalize.ts';
 import type { StructuredDocument } from './document/types.ts';
 import { parseLegacyPresentationDocument, parseLegacyWordDocument } from './document/parsers/legacy-office.ts';
+import { hashOcrSource, OCR_PROMPT_VERSION, OCR_RECEIPT_VERSION } from './ocr.ts';
 
 export const SUPPORTED_OFFICE_EXTS = ['.docx', '.doc', '.wps', '.pptx', '.ppt', '.pdf', '.xlsx', '.xlsm', '.xls', '.csv'] as const;
 const MAX_OFFICE_BYTES = 50 * 1024 * 1024;
@@ -60,7 +61,7 @@ function flattenDocument(document: StructuredDocument): StructuredDocument {
 
 async function parseOfficeDocument(
   filePath: string,
-  opts: { structured?: boolean; ocrPage?: (page: number, image: Buffer, mime: string) => Promise<string> } = {},
+  opts: { structured?: boolean; ocrPage?: import('./document/types.ts').DocumentParseOptions['ocrPage'] } = {},
 ): Promise<StructuredDocument> {
   const ext = extname(filePath).toLowerCase();
   let document: StructuredDocument;
@@ -100,17 +101,38 @@ export async function importOfficeFile(
     };
   }
 
+  const gateway = await import('./ai/gateway.ts');
+  const ocrEnabled = opts.documentOcr === true || gateway.isOcrEnabled();
   const document = await parseOfficeDocument(filePath, {
     structured: opts.structured !== false,
-    ocrPage: opts.documentOcr
-      ? async (_page, image, mime) => extractImageOcrText(engine, image, mime, { enabled: true })
+    ocrPage: ocrEnabled
+      ? async (_page, image, mime) => extractImageOcrResult(engine, image, mime, { enabled: true })
       : undefined,
   });
   document.title = basename(relativePath, extname(relativePath));
-  if (opts.documentOcr && document.metadata.ocrUsed) {
-    document.metadata.ocrProvider = process.env.PMBRAIN_EMBEDDING_IMAGE_OCR_MODEL
-      ?? process.env.GBRAIN_EMBEDDING_IMAGE_OCR_MODEL
-      ?? 'configured vision model';
+  if (ocrEnabled) {
+    const candidates = document.metadata.pagesNeedingOcr?.length ?? document.metadata.imageCount;
+    const failed = document.metadata.ocrFailed ?? 0;
+    const succeeded = document.metadata.ocrSucceeded ?? 0;
+    const skipped = document.metadata.ocrSkipped ?? 0;
+    let model: string | null = document.metadata.ocrProvider ?? null;
+    if (!model) {
+      try { model = gateway.getImageOcrModel(); } catch { model = null; }
+    }
+    document.metadata.ocrReceipt = {
+      version: OCR_RECEIPT_VERSION,
+      promptVersion: OCR_PROMPT_VERSION,
+      sourceHash: hashOcrSource(readFileSync(filePath)),
+      model,
+      candidates,
+      attempted: document.metadata.ocrAttempted ?? 0,
+      succeeded,
+      failed,
+      failedItems: document.metadata.ocrWarnings ?? [],
+      status: failed > 0 || skipped > 0 ? 'partial' : 'complete',
+      ...(document.metadata.ocrWarnings?.[0] ? { reason: document.metadata.ocrWarnings[0] } : {}),
+      processedAt: new Date().toISOString(),
+    };
   }
   return importStructuredDocument(engine, document, filePath, relativePath, opts);
 }

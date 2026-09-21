@@ -135,4 +135,22 @@ describe('buildGatewayConfig env-baseURL passthrough', () => {
       });
     });
   });
+
+  test('forwards the dedicated OCR model and preserves the legacy OCR key as fallback', () => {
+    expect(buildGatewayConfig({
+      ocr_enabled: true,
+      ocr_model: 'openai:gpt-4o-mini',
+      embedding_image_ocr_model: 'google:gemini-3.5-flash',
+    } as GBrainConfig)).toMatchObject({
+      ocr_enabled: true,
+      ocr_model: 'openai:gpt-4o-mini',
+    });
+    expect(buildGatewayConfig({
+      embedding_image_ocr: true,
+      embedding_image_ocr_model: 'google:gemini-3.5-flash',
+    } as GBrainConfig)).toMatchObject({
+      ocr_enabled: true,
+      ocr_model: 'google:gemini-3.5-flash',
+    });
+  });
 });

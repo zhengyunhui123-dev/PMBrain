@@ -157,6 +157,7 @@ export interface Page {
   ingested_via?: string | null;
   /** Server-stamped first-write audit timestamp; CV12 COALESCE-preserved across edits. */
   ingested_at?: Date | null;
+  source_path?: string | null;
   /**
    * v0.40.3.0 (renumbered from v0.40.3.0 v81 to v90 on master merge):
    * which contextual retrieval tier the page was last embedded under. One
