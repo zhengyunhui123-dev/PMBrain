@@ -4137,6 +4137,7 @@ pre {
 .assistant-pulse::after { transform: translate(29px, 4px) rotate(28deg); }
 
 .import-options { margin-bottom: 18px; padding: 0; overflow: hidden; }
+.import-options-heading { display: flex; align-items: center; gap: 16px; padding: 14px 18px; color: var(--text-primary); }
 .import-options > summary { display: flex; align-items: center; gap: 16px; padding: 14px 18px; cursor: pointer; color: var(--text-primary); list-style: none; }
 .import-options > summary::-webkit-details-marker { display: none; }
 .import-options-copy { display: grid; gap: 2px; }
@@ -4147,7 +4148,7 @@ pre {
 .import-options-action { display: inline-flex; align-items: center; gap: 5px; min-height: 30px; padding: 0 11px; border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border)); border-radius: 8px; color: var(--accent); background: color-mix(in srgb, var(--accent) 9%, transparent); font-size: 12px; font-weight: 700; }
 .import-options-action svg { width: 15px; height: 15px; transition: transform .18s ease; }
 .import-options[open] .import-options-action svg { transform: rotate(180deg); }
-.import-option-grid { display: grid; grid-template-columns: minmax(260px, 1fr) repeat(3, auto); gap: 14px; align-items: end; padding: 4px 18px 18px; border-top: 1px solid var(--border); }
+.import-option-grid { display: grid; grid-template-columns: minmax(260px, 560px); gap: 14px; align-items: end; padding: 14px 18px 18px; border-top: 1px solid var(--border); }
 .import-option-grid label { display: flex; gap: 7px; align-items: center; color: var(--text-secondary); font-size: 12px; }
 .import-option-grid label:first-child { display: grid; align-items: stretch; }
 .import-option-grid label > span { margin-bottom: 5px; font-weight: 700; }
@@ -6644,6 +6645,7 @@ tbody tr:hover td { background: color-mix(in srgb, var(--accent) 4%, var(--conso
 .assistant-pulse i:nth-child(1) { transform: translate(-48px, 18px); }
 .assistant-pulse i:nth-child(3) { transform: translate(48px, 21px); }
 .import-options { margin-bottom: 12px; padding: 0; border-radius: 11px; box-shadow: none; }
+.import-options-heading { min-height: 43px; align-items: center; padding: 0 15px; }
 .import-options > summary { min-height: 43px; align-items: center; padding: 0 15px; }
 .import-option-grid { gap: 12px; padding: 12px 15px 15px; }
 .nl-shell { grid-template-columns: minmax(520px, 1fr) minmax(250px, .42fr); gap: 12px; }

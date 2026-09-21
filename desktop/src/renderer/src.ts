@@ -2614,7 +2614,7 @@ async function refreshDailyPanel(): Promise<void> {
         : '暂时没有待处理事项。';
     }
   } catch (error) {
-    waitingEl.textContent = (error instanceof Error ? error.message : String(error));
+    waitingEl.textContent = String(error);
   }
   const date = $<HTMLInputElement>('#daily-chronicle-date').value;
   try {
@@ -2636,7 +2636,7 @@ async function refreshDailyPanel(): Promise<void> {
       $('#daily-chronicle-memory').textContent = '还没有时间线。';
     }
   } catch (error) {
-    $('#daily-chronicle-today').textContent = (error instanceof Error ? error.message : String(error));
+    $('#daily-chronicle-today').textContent = String(error);
   }
   await refreshDailyPeople();
 }

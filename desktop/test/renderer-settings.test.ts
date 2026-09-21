@@ -226,8 +226,9 @@ describe('desktop settings renderer contracts', () => {
   test('model settings label the embedding model without an optional marker', () => {
     expect(html).toContain('<b>向量化模型</b>');
     expect(html).not.toContain('向量化模型（可选）');
-    expect(html).toContain('向量模型需要配置，且不受该开关影响。');
-    expect(html).not.toContain('向量模型可选，且不受该开关影响。');
+    expect(html).toContain('普通模型用于问答与 AI 深度整理，配置完成后会按任务自动使用。');
+    expect(html).toContain('向量模型用于语义检索和向量化，需要单独配置。');
+    expect(html).not.toContain('不受该开关影响');
   });
 
   test('moves appearance and native desktop behavior into an accessible system panel', () => {

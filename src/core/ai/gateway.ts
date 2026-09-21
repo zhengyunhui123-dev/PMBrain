@@ -667,7 +667,12 @@ export function getChatModel(): string {
 }
 
 export function isOcrEnabled(): boolean {
-  return Boolean(getImageOcrModel());
+  try {
+    const model = getImageOcrModel();
+    return Boolean(model) && isAvailable('chat', model);
+  } catch {
+    return false;
+  }
 }
 
 export function getImageOcrModel(): string {

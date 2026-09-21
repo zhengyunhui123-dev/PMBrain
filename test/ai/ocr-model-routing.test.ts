@@ -40,4 +40,12 @@ describe('OCR model routing', () => {
     expect(isOcrEnabled()).toBe(true);
     expect(getImageOcrModel()).toBe('openai:gpt-4o-mini');
   });
+
+  test('does not start OCR when the inherited model has no usable credentials', () => {
+    configureGateway({
+      chat_model: 'anthropic:claude-sonnet-4-6',
+      env: {},
+    });
+    expect(isOcrEnabled()).toBe(false);
+  });
 });

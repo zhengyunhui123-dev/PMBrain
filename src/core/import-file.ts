@@ -1569,7 +1569,7 @@ async function decodeIfNeeded(ext: string, buf: Buffer): Promise<{ buf: Buffer; 
       data: new Uint8ClampedArray(decoded.data),
       width: decoded.width,
       height: decoded.height,
-    });
+    } as ImageData);
     return { buf: Buffer.from(pngBytes), mime: 'image/png' };
   }
   if (ext === '.avif') {
@@ -1595,7 +1595,7 @@ async function decodeIfNeeded(ext: string, buf: Buffer): Promise<{ buf: Buffer; 
       data: new Uint8ClampedArray(decoded.data),
       width: decoded.width,
       height: decoded.height,
-    });
+    } as ImageData);
     return { buf: Buffer.from(pngBytes), mime: 'image/png' };
   }
   // Universal codecs: pass-through.

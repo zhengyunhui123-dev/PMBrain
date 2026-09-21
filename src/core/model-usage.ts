@@ -1,13 +1,10 @@
 /**
- * Global generative-model usage gate.
- *
- * When disabled, PMBrain must not call chat/reasoning/completion/vision
- * models. Embedding / vector search / keyword search / quick maintenance
- * remain available.
+ * Ordinary-model capability metadata and legacy configuration compatibility.
  *
  * Config (file plane ~/.gbrain/config.json or ~/.pmbrain/config.json):
  *   model_usage.generative_enabled: boolean
- * Missing key → true (open). Only an explicit false disables generative calls.
+ * The legacy key is retained for older clients, but ordinary model use is now
+ * automatic whenever a model is configured.
  */
 
 import type { GBrainConfig } from './config.ts';

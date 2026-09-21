@@ -188,7 +188,7 @@ function NaturalLanguagePanel({
         sourceId: importOptions?.sourceId,
         autoEmbed: importOptions?.autoEmbed ?? true,
         structuredDocuments: importOptions?.structuredDocuments ?? true,
-        documentOcr: importOptions?.documentOcr ?? false,
+        documentOcr: true,
         workers: importOptions?.workers ?? 1,
       }) as { runId: string };
       lastRun = await waitForConsoleRun(response.runId, setRun);
@@ -390,11 +390,11 @@ function NaturalLanguagePanel({
         const response = await api.startImportRun({
           path: value,
           sourceId: importOptions?.sourceId,
-          includeOffice: importOptions?.includeOffice ?? true,
-          includeImages: importOptions?.includeImages ?? false,
-          autoEmbed: importOptions?.autoEmbed ?? true,
-          structuredDocuments: importOptions?.structuredDocuments ?? true,
-          documentOcr: importOptions?.documentOcr ?? false,
+          includeOffice: true,
+          includeImages: true,
+          autoEmbed: true,
+          structuredDocuments: true,
+          documentOcr: true,
           workers: importOptions?.workers ?? 1,
         }) as { runId: string };
         first = await api.run(response.runId) as ConsoleRun;
@@ -788,13 +788,7 @@ function NaturalLanguagePanel({
 
 export function ImportDataPage() {
   const { overview, error } = useOverview();
-  const [importOptionsOpen, setImportOptionsOpen] = useState(false);
   const [sourceId, setSourceId] = useState('');
-  const [includeOffice, setIncludeOffice] = useState(true);
-  const [includeImages, setIncludeImages] = useState(false);
-  const [autoEmbed, setAutoEmbed] = useState(true);
-  const [structuredDocuments, setStructuredDocuments] = useState(true);
-  const [documentOcr, setDocumentOcr] = useState(false);
 
   return (
     <div className="pm-page knowledge-assistant-page">
@@ -807,22 +801,14 @@ export function ImportDataPage() {
         <div className="assistant-pulse" aria-hidden="true"><i /><i /><i /></div>
       </section>
       {error && <div className="pm-card pm-error">{error}</div>}
-      <details
-        className="pm-card import-options"
-        open={importOptionsOpen}
-        onToggle={event => setImportOptionsOpen(event.currentTarget.open)}
-      >
-        <summary>
+      <section className="pm-card import-options">
+        <div className="import-options-heading">
           <span className="import-options-copy">
-            <b>导入选项</b>
-            <small>可选择不同数据源及文件处理方式</small>
+            <b>写入位置</b>
+            <small>文件类型、图片识别、结构化解析和向量化均自动处理</small>
           </span>
           <span className="import-options-current">默认写入 {overview?.main_source_id ?? '主知识库源'}</span>
-          <span className="import-options-action">
-            {importOptionsOpen ? '收起' : '展开'}
-            <ChevronDown aria-hidden="true" />
-          </span>
-        </summary>
+        </div>
         <div className="import-option-grid">
           <label>
             <span>写入位置</span>
@@ -833,26 +819,15 @@ export function ImportDataPage() {
               ))}
             </select>
           </label>
-          <label><input type="checkbox" checked={includeOffice} onChange={event => setIncludeOffice(event.target.checked)} /> Office / PDF / Excel</label>
-          <label><input type="checkbox" checked={includeImages} onChange={event => setIncludeImages(event.target.checked)} /> 导入独立图片文件</label>
-          <label><input type="checkbox" checked={autoEmbed} onChange={event => setAutoEmbed(event.target.checked)} /> 导入后向量化</label>
-          <label className="import-parser-choice">
-            <input type="checkbox" checked={structuredDocuments} onChange={event => setStructuredDocuments(event.target.checked)} />
-            <span><b>结构化解析</b><small>在本机保留标题、章节、表格和来源定位，推荐开启。</small></span>
-          </label>
-          <label className="import-parser-choice">
-            <input type="checkbox" checked={documentOcr} onChange={event => setDocumentOcr(event.target.checked)} />
-            <span><b>图片内容识别</b><small>扫描页没有可用文字时调用已配置的视觉模型，可能联网并产生费用。</small></span>
-          </label>
         </div>
-      </details>
+      </section>
       <NaturalLanguagePanel chatModel={overview?.chat_model} importOptions={{
         sourceId: sourceId || undefined,
-        includeOffice,
-        includeImages,
-        autoEmbed,
-        structuredDocuments,
-        documentOcr,
+        includeOffice: true,
+        includeImages: true,
+        autoEmbed: true,
+        structuredDocuments: true,
+        documentOcr: true,
         workers: 1,
       }} />
     </div>

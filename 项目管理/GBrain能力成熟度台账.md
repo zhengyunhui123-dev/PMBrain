@@ -2,7 +2,7 @@
 
 > 用途：GBrain 能力进入 PMBrain 代码、自动流程和普通用户界面前的唯一准入表。
 >
-> 当前审计基线：GBrain `0.50.0.0`，commit `a6be012a3bcfac42e279630aedec5cda4a450e29`；PMBrain `1.3.79`。
+> 当前审计基线：GBrain `0.50.0.0`，commit `a6be012a3bcfac42e279630aedec5cda4a450e29`；PMBrain `1.3.80`。
 >
 > 核心原则：代码存在、已经合入、测试通过、默认关闭，都不等于产品稳定。
 

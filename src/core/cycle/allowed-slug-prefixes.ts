@@ -3,7 +3,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadConfig } from '../config.ts';
 import { loadActivePack } from '../schema-pack/load-active.ts';
-import filingRulesDoc from '../../../skills/_brain-filing-rules.json';
+import filingRulesDoc from '../../../skills/_brain-filing-rules.json' with { type: 'json' };
 
 type FilingRulesDoc = {
   dream_synthesize_paths?: {

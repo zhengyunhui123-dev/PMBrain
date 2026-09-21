@@ -79,7 +79,7 @@ function taskModelUsageLines(run: ConsoleRun): string[] {
     lines.push('普通模型：未使用');
     lines.push('向量模型：可能使用（embed 阶段）');
   } else if (run.kind.startsWith('dream_')) {
-    lines.push('普通模型：使用（任务需开启全局开关）');
+    lines.push('普通模型：按任务自动使用');
     lines.push('向量模型：可能使用（embed 阶段）');
   } else if (run.kind === 'embed_stale') {
     lines.push('普通模型：未使用');
