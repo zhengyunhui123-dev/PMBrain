@@ -1581,6 +1581,7 @@ export interface EvalCaptureFailure {
  */
 export interface HybridSearchMeta {
   relaxed_dropped?: number;
+  degraded?: Array<{ stage?: string }>;
   /** True iff vector search actually ran. False when OPENAI_API_KEY missing or embed failed. */
   vector_enabled: boolean;
   /** Post-auto-detect detail level. */

@@ -5,8 +5,6 @@ import { join } from 'node:path';
 import { LATEST_VERSION, MIGRATIONS, runMigrations } from '../src/core/migrate.ts';
 import { PGLiteEngine } from '../src/core/pglite-engine.ts';
 
-delete process.env.GBRAIN_PGLITE_SNAPSHOT;
-
 const ADDITIVE_VERSIONS = [125, 126, 127, 128] as const;
 
 let root: string;

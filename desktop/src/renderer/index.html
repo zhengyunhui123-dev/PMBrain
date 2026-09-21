@@ -204,21 +204,16 @@
             <section class="model-card">
               <div class="model-card-heading">
                 <div><b>图片 / OCR 模型</b></div>
-                <small id="ocr-model-effective">当前未启用</small>
+                <small id="ocr-model-effective">自动使用普通模型</small>
               </div>
-              <label class="ocr-toggle-field"><span class="ocr-toggle-copy"><input id="ocr-enabled" type="checkbox" /> 导入与维护时自动识别扫描页和图片</span></label>
               <div class="model-fields ocr-fields">
                 <label>
-                  <span>模型来源</span>
-                  <select id="ocr-model-mode"><option value="chat">复用支持图片的普通模型</option><option value="custom">单独指定模型</option></select>
-                </label>
-                <label>
-                  <span>供应商</span>
+                  <span>供应商（可选）</span>
                   <select id="ocr-provider"><option value="">请选择供应商</option><option value="mimo">mimo</option><option value="zhipu">zhipu</option><option value="openai">openai</option><option value="anthropic">anthropic</option><option value="google">google</option><option value="openrouter">openrouter</option><option value="ollama">ollama</option><option value="custom-openai">自定义 OpenAI 接口</option></select>
                 </label>
                 <label>
-                  <span>模型名称</span>
-                  <input id="ocr-model-name" spellcheck="false" placeholder="gpt-4o-mini" autocomplete="off" />
+                  <span>模型名称（可选）</span>
+                  <input id="ocr-model-name" spellcheck="false" placeholder="留空时使用普通模型" autocomplete="off" />
                 </label>
                 <label>
                   <span>API Key</span>
@@ -226,7 +221,7 @@
                 </label>
               </div>
               <small class="model-load-status" id="ocr-model-load-status" hidden></small>
-              <small>可选。未配置可用视觉模型时会跳过图片识别并提示，不会导致整次维护失败。</small>
+              <small>留空时自动使用上面的普通模型；单独填写后优先使用这里的模型。模型不支持图片时会跳过识别并提示，不会导致整次维护失败。</small>
             </section>
           </div>
           <details class="advanced-block model-advanced" id="advanced-model-settings">

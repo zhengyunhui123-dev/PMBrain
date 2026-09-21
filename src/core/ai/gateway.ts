@@ -667,7 +667,7 @@ export function getChatModel(): string {
 }
 
 export function isOcrEnabled(): boolean {
-  return requireConfig().ocr_enabled === true;
+  return Boolean(getImageOcrModel());
 }
 
 export function getImageOcrModel(): string {

@@ -1,20 +1,24 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { LATEST_VERSION, MIGRATIONS } from '../src/core/migrate.ts';
 import { PGLiteEngine } from '../src/core/pglite-engine.ts';
 
-delete process.env.GBRAIN_PGLITE_SNAPSHOT;
-
 let engine: PGLiteEngine;
+let root: string;
 
 describe('schema 129-130 chronicle timeline repair', () => {
   beforeAll(async () => {
+    root = mkdtempSync(join(tmpdir(), 'pmbrain-schema-129-130-'));
     engine = new PGLiteEngine();
-    await engine.connect({ database_url: '' });
+    await engine.connect({ database_path: join(root, 'brain.pglite') });
     await engine.initSchema();
   }, 120_000);
 
   afterAll(async () => {
     await engine.disconnect();
+    rmSync(root, { recursive: true, force: true });
   });
 
   test('LATEST_VERSION is 130', () => {

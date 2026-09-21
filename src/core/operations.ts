@@ -8,7 +8,7 @@ import { lstatSync, realpathSync } from 'fs';
 import { resolve, relative, sep } from 'path';
 import type { BrainEngine } from './engine.ts';
 import { clampSearchLimit } from './engine.ts';
-import type { PageType, SearchResult } from './types.ts';
+import type { Link, PageType, SearchResult } from './types.ts';
 import { importFromContent } from './import-file.ts';
 import { serializePageToMarkdown } from './markdown.ts';
 import { resolvePolicyPageFilePath, resolveWritePolicyForPath } from './write-policy.ts';
@@ -52,7 +52,6 @@ import { connectorsOperations } from './ops/connectors.ts';
 import { loopsOperations } from './ops/loops.ts';
 import { chronicleOperations } from './ops/chronicle.ts';
 import { unionLinksAcrossIdentity } from './entity-identity.ts';
-export type { ParamDef, Logger, AuthInfo, OperationContext, Operation } from './ops/contract.ts';
 export { sourceScopeOpts } from './ops/context.ts';
 import {
   acceptTakeProposal as acceptAgentPackTakeProposal,
@@ -2083,7 +2082,7 @@ const get_links: Operation = {
     const sourceOpts = linkReadScopeOpts(ctx);
     const slug = p.slug as string;
     const excludePrivate = await resolveExcludePrivatePages(ctx.engine, ctx.remote);
-    let links;
+    let links: Link[];
     if (ctx.remote !== false) {
       links = await readLinks(ctx.engine.executeRaw.bind(ctx.engine), slug, false, { ...sourceOpts, excludePrivate });
     } else if (await slugHiddenFromCaller(ctx.engine, ctx.remote, slug, sourceOpts)) {
@@ -2121,7 +2120,7 @@ const get_backlinks: Operation = {
     const sourceOpts = linkReadScopeOpts(ctx);
     const slug = p.slug as string;
     const excludePrivate = await resolveExcludePrivatePages(ctx.engine, ctx.remote);
-    let links;
+    let links: Link[];
     if (ctx.remote !== false) {
       links = await readLinks(ctx.engine.executeRaw.bind(ctx.engine), slug, true, { ...sourceOpts, excludePrivate });
     } else if (await slugHiddenFromCaller(ctx.engine, ctx.remote, slug, sourceOpts)) {

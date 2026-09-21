@@ -3,6 +3,7 @@ import {
   configureGateway,
   getImageOcrModel,
   getVisionCapability,
+  isOcrEnabled,
   resetGateway,
 } from '../../src/core/ai/gateway.ts';
 
@@ -28,5 +29,15 @@ describe('OCR model routing', () => {
     });
     expect(getImageOcrModel()).toBe('deepseek:deepseek-chat');
     expect(getVisionCapability()).toBe('unsupported');
+  });
+
+  test('does not require a separate OCR enable switch when the ordinary model is configured', () => {
+    configureGateway({
+      chat_model: 'openai:gpt-4o-mini',
+      ocr_enabled: false,
+      env: { OPENAI_API_KEY: 'test' },
+    });
+    expect(isOcrEnabled()).toBe(true);
+    expect(getImageOcrModel()).toBe('openai:gpt-4o-mini');
   });
 });

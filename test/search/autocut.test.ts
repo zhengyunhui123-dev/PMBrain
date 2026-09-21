@@ -128,6 +128,12 @@ describe('applyAutocut — no-op guards', () => {
     expect(r.decision.applied).toBe(false);
   });
 
+  test('top score below the replay floor → no-op', () => {
+    const r = applyAutocut(mk([0.4, 0.05, 0.01]), scoreOf, { ...ON, minTopScore: 0.5 });
+    expect(r.kept).toHaveLength(3);
+    expect(r.decision.applied).toBe(false);
+  });
+
   test('non-finite scores are ignored', () => {
     const items = mk([0.9, Number.NaN, 0.1]);
     const r = applyAutocut(items, scoreOf, ON);

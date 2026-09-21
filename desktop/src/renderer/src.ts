@@ -1661,15 +1661,13 @@ function populate(next: DesktopSetupState): void {
       : `普通模型：${setup.current.chatModel} · 状态：已配置，但全局禁用`)
     : '当前未配置';
   $('#embedding-model-effective').textContent = setup.current.embeddingModel ? `当前生效：${setup.current.embeddingModel}` : '当前未配置';
-  ($<HTMLInputElement>('#ocr-enabled')).checked = setup.current.ocrEnabled === true;
-  ($<HTMLSelectElement>('#ocr-model-mode')).value = setup.current.ocrModel ? 'custom' : 'chat';
-  const ocr = splitModelId(setup.current.ocrModel || setup.current.chatModel);
+  const ocr = splitModelId(setup.current.ocrModel);
   ($<HTMLSelectElement>('#ocr-provider')).value = ocr.provider;
   ($<HTMLInputElement>('#ocr-model-name')).value = ocr.model;
-  syncOcrFields();
-  $('#ocr-model-effective').textContent = setup.current.ocrEnabled
-    ? `已启用：${setup.current.ocrModel || `复用 ${setup.current.chatModel || '普通模型'}`}`
-    : '当前未启用';
+  syncOcrProviderKeyField();
+  $('#ocr-model-effective').textContent = setup.current.ocrModel
+    ? `当前生效：${setup.current.ocrModel}`
+    : `自动使用普通模型：${setup.current.chatModel || '尚未配置'}`;
   $('#config-path').textContent = `配置写入：${setup.configPath}`;
   $('#postgres-status').textContent = setup.current.engine === 'postgres' && setup.current.databaseConfigured
     ? '已读取当前 Postgres 连接，正在检查 Docker 中可切换的 PMBrain 数据库。'
@@ -2077,15 +2075,13 @@ async function save(): Promise<void> {
     setNotice('error', '向量模型为可选项；如需启用，请同时填写供应商和模型名称');
     return;
   }
-  const ocrEnabled = ($<HTMLInputElement>('#ocr-enabled')).checked;
-  const ocrMode = ($<HTMLSelectElement>('#ocr-model-mode')).value;
   const ocrProvider = ($<HTMLSelectElement>('#ocr-provider')).value;
   const ocrModelName = ($<HTMLInputElement>('#ocr-model-name')).value.trim();
-  const ocrModel = ocrMode === 'custom' ? composeModelId(recipeProvider(ocrProvider), ocrModelName) : '';
-  if (ocrEnabled && ocrMode === 'custom' && (!ocrProvider || !ocrModelName)) {
+  if (Boolean(ocrProvider) !== Boolean(ocrModelName)) {
     setNotice('error', '请同时填写图片/OCR模型的供应商和模型名称');
     return;
   }
+  const ocrModel = composeModelId(recipeProvider(ocrProvider), ocrModelName);
 
   let confirmEmbeddingRebuild = false;
   let confirmLegacyEmbeddingRecovery = false;
@@ -2138,7 +2134,7 @@ async function save(): Promise<void> {
     }
     if (embeddingKeyValue) (keys as Record<string, string>)[embeddingKey] = embeddingKeyValue;
   }
-  if (ocrMode === 'custom' && ocrProvider && ocrKey && ocrKey !== '__none__') {
+  if (ocrModel && ocrProvider && ocrKey && ocrKey !== '__none__') {
     const ocrKeyValue = ($<HTMLInputElement>('#ocr-api-key')).value.trim();
     if (!ocrKeyValue && !isCustomEndpointId(ocrProvider)) {
       setNotice('error', `供应商 ${ocrProvider} 需要填写 API Key`);
@@ -2162,7 +2158,7 @@ async function save(): Promise<void> {
     modelConfig: {
       chatModel,
       ...(embeddingModel ? { embeddingModel } : {}),
-      ocrEnabled,
+      ocrEnabled: true,
       ...(ocrModel ? { ocrModel } : {}),
     },
     customProviders: customCatalog,
@@ -2385,7 +2381,6 @@ $<HTMLButtonElement>('#add-custom-embedding-model').addEventListener('click', ()
 $<HTMLButtonElement>('#test-chat-model').addEventListener('click', () => void testConfiguredModel('chat'));
 $<HTMLButtonElement>('#test-embedding-model').addEventListener('click', () => void testConfiguredModel('embedding'));
 $<HTMLButtonElement>('#test-ocr-model').addEventListener('click', () => void testOcrModel());
-$<HTMLSelectElement>('#ocr-model-mode').addEventListener('change', syncOcrFields);
 $<HTMLSelectElement>('#ocr-provider').addEventListener('change', syncOcrProviderKeyField);
 $<HTMLButtonElement>('#custom-provider-close').addEventListener('click', closeCustomProvider);
 $<HTMLButtonElement>('#custom-provider-cancel').addEventListener('click', closeCustomProvider);
@@ -2714,15 +2709,13 @@ async function refreshDailyPeople(query = $<HTMLInputElement>('#daily-identity-q
 }
 
 function effectiveOcrModel(): string {
-  if (($<HTMLSelectElement>('#ocr-model-mode')).value === 'chat') {
-    return composeModelId(
-      recipeProvider(($<HTMLSelectElement>('#chat-provider')).value),
-      ($<HTMLInputElement>('#chat-model-name')).value,
-    );
-  }
-  return composeModelId(
+  const dedicated = composeModelId(
     recipeProvider(($<HTMLSelectElement>('#ocr-provider')).value),
     ($<HTMLInputElement>('#ocr-model-name')).value,
+  );
+  return dedicated || composeModelId(
+    recipeProvider(($<HTMLSelectElement>('#chat-provider')).value),
+    ($<HTMLInputElement>('#chat-model-name')).value,
   );
 }
 
@@ -2731,22 +2724,9 @@ function syncOcrProviderKeyField(): void {
   const keyId = providerKeyId(provider, 'chat');
   const input = $<HTMLInputElement>('#ocr-api-key');
   const local = keyId === '__none__';
-  input.disabled = local || ($<HTMLSelectElement>('#ocr-model-mode')).value !== 'custom';
-  input.placeholder = local ? '本地模型无需 API Key' : '';
+  input.disabled = !provider || local;
+  input.placeholder = !provider ? '留空时使用普通模型的凭据' : local ? '本地模型无需 API Key' : '';
   input.value = keyId && keyId !== '__none__' ? state?.setup.current.keyValues[keyId] || '' : '';
-}
-
-function syncOcrFields(): void {
-  const custom = ($<HTMLSelectElement>('#ocr-model-mode')).value === 'custom';
-  const provider = $<HTMLSelectElement>('#ocr-provider');
-  const model = $<HTMLInputElement>('#ocr-model-name');
-  provider.disabled = !custom;
-  model.disabled = !custom;
-  if (!custom) {
-    provider.value = recipeProvider(($<HTMLSelectElement>('#chat-provider')).value);
-    model.value = ($<HTMLInputElement>('#chat-model-name')).value;
-  }
-  syncOcrProviderKeyField();
 }
 
 async function testOcrModel(): Promise<void> {
@@ -2763,9 +2743,10 @@ async function testOcrModel(): Promise<void> {
   }
   const provider = recipeProvider(parsed.provider);
   const endpoint = isCustomEndpointId(parsed.provider) ? selectedCustomEndpoint('chat') : undefined;
-  const apiKey = ($<HTMLSelectElement>('#ocr-model-mode')).value === 'chat'
-    ? ($<HTMLInputElement>('#chat-api-key')).value.trim()
-    : ($<HTMLInputElement>('#ocr-api-key')).value.trim();
+  const hasDedicatedModel = Boolean(($<HTMLSelectElement>('#ocr-provider')).value && ($<HTMLInputElement>('#ocr-model-name')).value.trim());
+  const apiKey = hasDedicatedModel
+    ? ($<HTMLInputElement>('#ocr-api-key')).value.trim()
+    : ($<HTMLInputElement>('#chat-api-key')).value.trim();
   status.textContent = '正在发送一张测试图片…';
   setBusy(button, true);
   try {

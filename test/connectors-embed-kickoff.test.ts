@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { maybeKickoffEmbed } from '../src/core/connectors/sync.ts';
 import type { BrainEngine } from '../src/core/engine.ts';
+import { withEnv } from './helpers/with-env.ts';
 
 function fakeEngine(kind: 'postgres' | 'pglite', config: Record<string, string> = {}): BrainEngine {
   return {
@@ -98,25 +99,23 @@ describe('maybeKickoffEmbed', () => {
 
   test('no embedding_model + embedding_dimensions → none (no ZeroEntropy fallback)', async () => {
     const tmp = mkdtempSync(join(tmpdir(), 'pm-embed-none-'));
-    const prev = process.env.PMBRAIN_HOME;
-    process.env.PMBRAIN_HOME = tmp;
     let submitCalls = 0;
     let embedCalls = 0;
     try {
-      const out = await maybeKickoffEmbed(
-        fakeEngine('postgres'),
-        'default',
-        30,
-        baseOpts,
-        { submitEmbedBackfill: (async () => { submitCalls++; return { status: 'submitted' }; }) as never, runEmbedCore: (async () => { embedCalls++; return {} as never; }) as never },
-        () => {},
-      );
-      expect(out).toBe('none');
-      expect(submitCalls).toBe(0);
-      expect(embedCalls).toBe(0);
+      await withEnv({ PMBRAIN_HOME: tmp }, async () => {
+        const out = await maybeKickoffEmbed(
+          fakeEngine('postgres'),
+          'default',
+          30,
+          baseOpts,
+          { submitEmbedBackfill: (async () => { submitCalls++; return { status: 'submitted' }; }) as never, runEmbedCore: (async () => { embedCalls++; return {} as never; }) as never },
+          () => {},
+        );
+        expect(out).toBe('none');
+        expect(submitCalls).toBe(0);
+        expect(embedCalls).toBe(0);
+      });
     } finally {
-      if (prev === undefined) delete process.env.PMBRAIN_HOME;
-      else process.env.PMBRAIN_HOME = prev;
       rmSync(tmp, { recursive: true, force: true });
     }
   });

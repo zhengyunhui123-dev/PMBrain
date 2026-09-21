@@ -144,9 +144,9 @@ describe('meeting LLM key default OFF', () => {
     expect(r.scanned).toBe(1);
     const open = await listOpenLoops(engine, { sourceIds: ['default'], status: 'open' });
     expect(open.length).toBeGreaterThan(0);
-    expect(open[0].thread_id.startsWith('meeting:')).toBe(true);
-    expect(open[0].evidence[0].lane).toBe('meeting');
-    expect(open[0].counterparty_slug).toBeNull();
+    expect(open[0]!.thread_id!.startsWith('meeting:')).toBe(true);
+    expect(open[0]!.evidence[0].lane).toBe('meeting');
+    expect(open[0]!.counterparty_slug).toBeNull();
   });
 
   test('mute sender=slug:default:people/zhang blocks new meeting loops for that person', async () => {

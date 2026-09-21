@@ -203,9 +203,13 @@ describe('desktop settings renderer contracts', () => {
   });
 
   test('keeps the optional OCR model, credential check and image test in the model settings flow', () => {
-    for (const id of ['ocr-enabled', 'ocr-model-mode', 'ocr-provider', 'ocr-model-name', 'ocr-api-key', 'test-ocr-model']) {
+    for (const id of ['ocr-provider', 'ocr-model-name', 'ocr-api-key', 'test-ocr-model']) {
       expect(html).toContain(`id="${id}"`);
     }
+    expect(html).not.toContain('id="ocr-enabled"');
+    expect(html).not.toContain('id="ocr-model-mode"');
+    expect(html).toContain('留空时自动使用上面的普通模型');
+    expect(html).toContain('id="ocr-model-name" spellcheck="false" placeholder="留空时使用普通模型"');
     const saveStart = renderer.indexOf('async function save(): Promise<void>');
     const saveEnd = renderer.indexOf('function selectedCredential', saveStart);
     const saveSource = renderer.slice(saveStart, saveEnd);
@@ -214,6 +218,7 @@ describe('desktop settings renderer contracts', () => {
     const dailySource = renderer.slice(dailyStart, dailyEnd);
     expect(saveSource).toContain("providerKeyId(ocrProvider, 'chat')");
     expect(saveSource).toContain("(keys as Record<string, string>)[ocrKey] = ocrKeyValue");
+    expect(saveSource).toContain('ocrEnabled: true');
     expect(dailySource).not.toContain('ocrKeyValue');
     expect(renderer).toContain("touchpoint: 'ocr'");
   });
