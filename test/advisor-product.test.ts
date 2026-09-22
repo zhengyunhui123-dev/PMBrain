@@ -138,7 +138,7 @@ describe('advisor product view', () => {
     expect(resolveAdminAdvisorAction(view.suggestions[0]!)).toEqual({ kind: 'restart_required' });
   });
 
-  test('maps chronicle and writeback findings into Chinese copy without fake apply actions', () => {
+  test('maps chronicle and writeback findings into Chinese copy while keeping backfill explicitly confirmed in the UI', () => {
     const view = buildAdvisorProductView(report([
       finding({
         id: 'chronicle_coverage_gap',
@@ -170,6 +170,7 @@ describe('advisor product view', () => {
       '个人知识库尚未开启环境记忆回写',
     ]);
     expect(view.suggestions.every((item) => item.action_kind === 'none')).toBe(true);
+    expect(view.suggestions[0]?.action_label).toBe('补入年表');
     expect(view.suggestions.every((item) => item.dispatch_id == null)).toBe(true);
     expect(resolveAdminAdvisorAction(view.suggestions[0]!)).toEqual({ kind: 'unsupported' });
   });

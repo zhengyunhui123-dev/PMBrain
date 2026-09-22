@@ -1479,6 +1479,7 @@ const NEEDS_DECODE = new Set(['.heic', '.heif', '.avif']);
  */
 export interface ImportTransactionSpec {
   slug: string;
+  sourceId?: string;
   hadExisting: boolean;
   page: PageInput;
   /** When undefined, no chunk write happens. When [], deletes any prior chunks. */
@@ -1494,22 +1495,24 @@ export async function withImportTransaction(
   spec: ImportTransactionSpec,
 ): Promise<void> {
   await engine.transaction(async (tx) => {
-    if (spec.hadExisting) await tx.createVersion(spec.slug);
-    await tx.putPage(spec.slug, spec.page);
+    const pageOpts = spec.sourceId ? { sourceId: spec.sourceId } : undefined;
+    if (spec.hadExisting) await tx.createVersion(spec.slug, pageOpts);
+    await tx.putPage(spec.slug, spec.page, pageOpts);
     if (spec.file) {
       // page_id resolution after putPage so the new row's id is available.
-      const stored = await tx.getPage(spec.slug);
+      const stored = await tx.getPage(spec.slug, pageOpts);
       await tx.upsertFile({
         ...spec.file,
+        source_id: spec.sourceId,
         page_slug: spec.slug,
         page_id: stored?.id ?? null,
       });
     }
     if (spec.chunks !== undefined) {
       if (spec.chunks.length > 0) {
-        await tx.upsertChunks(spec.slug, spec.chunks);
+        await tx.upsertChunks(spec.slug, spec.chunks, pageOpts);
       } else {
-        await tx.deleteChunks(spec.slug);
+        await tx.deleteChunks(spec.slug, pageOpts);
       }
     }
     if (spec.after) await spec.after(tx);
@@ -1836,6 +1839,7 @@ export async function importImageFile(
 
   await withImportTransaction(engine, {
     slug: imageSlug,
+    sourceId: opts.sourceId,
     hadExisting: !!existing,
     page: {
       type: 'image',
@@ -1854,13 +1858,18 @@ export async function importImageFile(
       // throws when the target doesn't exist; we silently skip for now and
       // let `gbrain reconcile-links` pick up later additions.
       for (const candidate of imageOfCandidates(imageSlug)) {
-        const sibling = await tx.getPage(candidate);
+        const sibling = await tx.getPage(candidate, opts.sourceId ? { sourceId: opts.sourceId } : undefined);
         if (sibling) {
           try {
             await tx.addLink(
               imageSlug, candidate,
               filename,
               'image_of', 'manual', imageSlug, 'frontmatter',
+              opts.sourceId ? {
+                fromSourceId: opts.sourceId,
+                toSourceId: opts.sourceId,
+                originSourceId: opts.sourceId,
+              } : undefined,
             );
           } catch { /* sibling vanished mid-tx; skip */ }
           break; // one canonical link per image

@@ -161,6 +161,31 @@ describe('sync committed Git baseline contract', () => {
     });
   }, 120_000);
 
+  test('successful up-to-date source sync refreshes last_sync_at even when HEAD did not change', async () => {
+    await withEnv({ PMBRAIN_HOME: home, GBRAIN_HOME: home }, async () => {
+      const repo = await reset();
+      await engine.executeRaw(`DELETE FROM sources WHERE id = 'outputs'`);
+      await engine.executeRaw(
+        `INSERT INTO sources (id, name, local_path, config) VALUES ('outputs', 'outputs', $1, '{}'::jsonb)`,
+        [repo],
+      );
+      await performSync(engine, {
+        repoPath: repo, sourceId: 'outputs', noPull: true, noEmbed: true, noExtract: true, skipLock: true,
+      });
+      await engine.executeRaw(`UPDATE sources SET last_sync_at = now() - interval '14 days' WHERE id = 'outputs'`);
+
+      const result = await performSync(engine, {
+        repoPath: repo, sourceId: 'outputs', noPull: true, noEmbed: true, noExtract: true, skipLock: true,
+      });
+      const rows = await engine.executeRaw<{ age_seconds: number }>(
+        `SELECT EXTRACT(EPOCH FROM (now() - last_sync_at))::float AS age_seconds FROM sources WHERE id = 'outputs'`,
+      );
+
+      expect(result.status).toBe('up_to_date');
+      expect(Number(rows[0]?.age_seconds ?? Infinity)).toBeLessThan(30);
+    });
+  }, 120_000);
+
   test('blocked full sync preserves a DB checkpoint and resumes successful files without advancing last_commit', async () => {
     await withEnv({ PMBRAIN_HOME: home, GBRAIN_HOME: home }, async () => {
       const repo = await reset();

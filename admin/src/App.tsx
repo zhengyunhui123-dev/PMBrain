@@ -15,7 +15,7 @@ import {
 } from './pages/Dream';
 import { BrainDataPage } from './pages/BrainData';
 import { ImportDataPage, NaturalLanguagePage } from './pages/Import';
-import { KnowledgeWorkbenchPage } from './pages/Knowledge';
+import { KnowledgeHealthPage, KnowledgeWorkbenchPage } from './pages/Knowledge';
 import { ConnectionCenterPage } from './pages/Connection';
 import { DocumentationPage } from './pages/Documentation';
 import { ModelConfigPage, SettingsPage, type SettingsSection } from './pages/Settings';
@@ -29,7 +29,7 @@ import {
   type ThemeMode,
 } from './lib/theme';
 import {
-  BookOpenText, Bot, BrainCircuit, Cable,
+  Activity, BookOpenText, Bot, BrainCircuit, Cable,
   Database, FileClock, FolderKanban, HeartHandshake, LayoutDashboard, ListTodo,
   MonitorCog, Sparkles, type LucideIcon,
   Orbit,
@@ -39,7 +39,7 @@ const PAGES = [
   'login', 'dashboard', 'natural',
   'dream', 'dream-execute', 'dream-knowledge', 'dream-takes', 'dream-scoring', 'dream-calibration', 'dream-insights',
   'import', 'data', 'graph', 'docs',
-  'mcp', 'tasks', 'config', 'agents', 'log', 'calibration',
+  'mcp', 'tasks', 'health', 'config', 'agents', 'log', 'calibration',
   'settings', 'settings-general', 'settings-knowledge', 'settings-dream',
 ] as const;
 
@@ -60,7 +60,7 @@ function getPage(): Page {
 
 type NavIconName =
   | 'overview' | 'workspace' | 'database' | 'organize' | 'mcp' | 'tasks' | 'log' | 'assistant'
-  | 'graph'
+  | 'graph' | 'health'
   | 'settings-general' | 'settings-knowledge' | 'settings-dream';
 
 const NAV_ICONS: Record<NavIconName, LucideIcon> = {
@@ -72,6 +72,7 @@ const NAV_ICONS: Record<NavIconName, LucideIcon> = {
   mcp: Cable,
   tasks: ListTodo,
   log: FileClock,
+  health: Activity,
   assistant: Bot,
   'settings-general': MonitorCog,
   'settings-knowledge': Database,
@@ -124,6 +125,7 @@ export function App() {
     ] },
     { title: '运行', items: [
       { page: 'tasks', label: '任务中心', icon: 'tasks' },
+      { page: 'health', label: '知识库健康', icon: 'health' },
       { page: 'log', label: '请求日志', icon: 'log' },
     ] },
   ], []);
@@ -279,6 +281,7 @@ export function App() {
         {page === 'natural' && <NaturalLanguagePage />}
         {page === 'mcp' && <ConnectionCenterPage />}
         {page === 'tasks' && <TaskCenterPage />}
+        {page === 'health' && <KnowledgeHealthPage onNavigate={navigate} />}
         {page === 'config' && <ModelConfigPage />}
         {page === 'agents' && <AgentsPage />}
         {page === 'log' && <RequestLogPage />}

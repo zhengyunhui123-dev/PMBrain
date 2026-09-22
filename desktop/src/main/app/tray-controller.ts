@@ -42,7 +42,7 @@ export class TrayController {
       },
       {
         label: '知识库体检',
-        click: () => void this.dependencies.openAdmin()
+        click: () => void this.dependencies.openAdmin('health')
           .catch(error => this.dependencies.reportError('无法打开知识库体检', error)),
       },
       {

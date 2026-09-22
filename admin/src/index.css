@@ -5229,6 +5229,48 @@ html[data-theme="dark"] .pm-ghost.danger { color: #ff8f99; background: #2d171b; 
   background: var(--overview-surface);
 }
 
+.overview-health-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 12px;
+  padding: 11px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--overview-radius);
+  background: var(--overview-surface);
+}
+
+.overview-health-summary > div {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  min-width: 0;
+}
+
+.overview-health-summary span,
+.overview-health-summary small {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.overview-health-summary strong {
+  color: var(--text-primary);
+  font-size: 20px;
+}
+
+.knowledge-health-page .overview-health-card {
+  margin-bottom: 0;
+}
+
+.knowledge-health-page .overview-health-list {
+  gap: 10px;
+}
+
+.knowledge-health-page .overview-health-list li {
+  padding: 14px 16px;
+}
+
 .overview-health-card.is-good {
   border-color: rgba(17, 151, 100, .22);
   background: linear-gradient(180deg, rgba(17, 151, 100, .06), var(--overview-surface) 58%);

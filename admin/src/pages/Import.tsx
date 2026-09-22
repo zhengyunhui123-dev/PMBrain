@@ -787,9 +787,7 @@ function NaturalLanguagePanel({
 }
 
 export function ImportDataPage() {
-  const { overview, error } = useOverview();
-  const [sourceId, setSourceId] = useState('');
-
+  const { overview } = useOverview();
   return (
     <div className="pm-page knowledge-assistant-page">
       <section className="assistant-hero">
@@ -800,29 +798,7 @@ export function ImportDataPage() {
         </div>
         <div className="assistant-pulse" aria-hidden="true"><i /><i /><i /></div>
       </section>
-      {error && <div className="pm-card pm-error">{error}</div>}
-      <section className="pm-card import-options">
-        <div className="import-options-heading">
-          <span className="import-options-copy">
-            <b>写入位置</b>
-            <small>文件类型、图片识别、结构化解析和向量化均自动处理</small>
-          </span>
-          <span className="import-options-current">默认写入 {overview?.main_source_id ?? '主知识库源'}</span>
-        </div>
-        <div className="import-option-grid">
-          <label>
-            <span>写入位置</span>
-            <select value={sourceId} onChange={event => setSourceId(event.target.value)}>
-              <option value="">主知识库源（{overview?.main_source_id ?? '自动'}）</option>
-              {overview?.sources.filter(source => !source.archived && source.id !== overview.main_source_id).map(source => (
-                <option key={source.id} value={source.id}>{sourceLabel(source)}</option>
-              ))}
-            </select>
-          </label>
-        </div>
-      </section>
       <NaturalLanguagePanel chatModel={overview?.chat_model} importOptions={{
-        sourceId: sourceId || undefined,
         includeOffice: true,
         includeImages: true,
         autoEmbed: true,

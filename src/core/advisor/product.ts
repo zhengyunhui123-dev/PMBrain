@@ -161,8 +161,8 @@ export function toProductSuggestion(finding: AdvisorFinding): AdvisorProductSugg
       id: finding.id,
       severity: finding.severity,
       title: `${count} 场近期会议还没进入年表`,
-      detail: '可用 pmbrain chronicle-backfill 补进事件，或打开 auto_chronicle。一键修复不会执行年表回填。',
-      action_label: null,
+      detail: '这些会议已有内容，但尚未生成时间线事件。确认后可补入年表；后续会议可由自动化持续整理。',
+      action_label: '补入年表',
       action_kind: 'none',
     };
   }

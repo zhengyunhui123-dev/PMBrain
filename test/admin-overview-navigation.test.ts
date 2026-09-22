@@ -23,13 +23,24 @@ describe('Admin overview navigation', () => {
     expect(overviewSource).not.toContain('可用于 AI 搜索');
   });
 
-  test('shows a knowledge health card with clickable advisor actions', () => {
+  test('keeps only the compact health score on the overview and moves all actions into Run', () => {
+    const appSource = readFileSync(join(root, 'admin/src/App.tsx'), 'utf8');
     expect(overviewSource).toContain('function AdvisorHealthCard');
+    expect(overviewSource).toContain('function AdvisorHealthSummary');
     expect(overviewSource).toContain('知识库体检');
+    expect(overviewSource).toContain("onNavigate?.('health')");
+    expect(appSource).toContain("{ page: 'health', label: '知识库健康', icon: 'health' }");
+    expect(appSource).toContain("page === 'health' && <KnowledgeHealthPage");
     expect(overviewSource).toContain("api.applyAdvisor(suggestion.dispatch_id)");
     expect(overviewSource).toContain("onNavigate?.('tasks')");
     expect(overviewSource).toContain('advisor.suggestions.map((suggestion)');
     expect(overviewSource).not.toContain('advisor.suggestions.slice(0, 5)');
+  });
+
+  test('offers confirmed timeline backfill from the health page', () => {
+    expect(overviewSource).toContain("suggestion.id === 'chronicle_coverage_gap'");
+    expect(overviewSource).toContain('api.organizeChronicleHistory()');
+    expect(overviewSource).toContain('补入年表');
   });
 
   test('orphan advice opens the isolated graph instead of starting an orphan scan', () => {

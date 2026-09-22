@@ -22,7 +22,7 @@ export function installAppMenu(dependencies: AppMenuDependencies): void {
         },
         {
           label: '知识库体检',
-          click: () => void dependencies.openAdmin().catch(error => dependencies.reportError('无法打开知识库体检', error)),
+          click: () => void dependencies.openAdmin('health').catch(error => dependencies.reportError('无法打开知识库体检', error)),
         },
         { label: '基础配置', click: () => void dependencies.openPanel('basic') },
         { label: '模型配置', click: () => void dependencies.openPanel('models') },

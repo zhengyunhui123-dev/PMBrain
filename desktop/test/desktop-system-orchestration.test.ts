@@ -166,6 +166,8 @@ describe('desktop system orchestration contracts', () => {
     expect(main).toContain("'/admin/api/advisor'");
     expect(trayController).toContain("label: '知识库体检'");
     expect(main).toContain("label: '知识库体检'");
+    expect(trayController).toContain("openAdmin('health')");
+    expect(main).toContain("openAdmin('health')");
     expect(main).not.toContain('collectChronicle');
     expect(main).not.toContain('runAdvisor');
     expect(main).toContain('knowledgeSourceChanged === true');

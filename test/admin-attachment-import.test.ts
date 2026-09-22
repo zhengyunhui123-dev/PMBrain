@@ -179,9 +179,11 @@ describe('Admin local attachment staging safety contract', () => {
     expect(uploadRoute).toContain('await cleanup()');
   });
 
-  test('知识工作台只保留写入位置，文件处理全部自动执行', () => {
+  test('知识工作台不再展示写入与处理选项，默认写入主知识源并自动处理', () => {
     const importPage = readFileSync(join(root, 'admin/src/pages/Import.tsx'), 'utf8');
-    expect(importPage).toContain('文件类型、图片识别、结构化解析和向量化均自动处理');
+    expect(importPage).not.toContain('className="pm-card import-options"');
+    expect(importPage).not.toContain('<b>写入位置</b>');
+    expect(importPage).not.toContain('setSourceId');
     expect(importPage).not.toContain('Office / PDF / Excel</label>');
     expect(importPage).not.toContain('导入独立图片文件</label>');
     expect(importPage).not.toContain('<b>结构化解析</b>');
