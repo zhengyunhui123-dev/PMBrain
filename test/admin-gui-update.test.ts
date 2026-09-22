@@ -74,10 +74,10 @@ describe('Admin GUI update contract', () => {
     expect(adminStyles).toContain('.settings-feedback');
   });
 
-  test('import keeps only the destination choice and automates file processing', () => {
-    expect(consoleSource).toContain('className="pm-card import-destination-card"');
-    expect(consoleSource).toContain('文件类型、图片识别、结构化解析和向量化均自动处理');
-    expect(consoleSource).toContain('sourceId: effectiveSourceId');
+  test('import hides all options and automates file processing', () => {
+    expect(consoleSource).not.toContain('className="pm-card import-destination-card"');
+    expect(consoleSource).not.toContain('sourceId: effectiveSourceId');
+    expect(consoleSource).not.toContain('setSourceId');
     expect(consoleSource).not.toContain('importOptionsOpen');
     expect(consoleSource).not.toContain('className="worker-option"');
     expect(consoleSource).toContain('workers: 1');

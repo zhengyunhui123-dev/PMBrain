@@ -1,7 +1,7 @@
 /**
  * 产品经理可读的测试说明：
- * 近期会议还没投影到年表时，知识库体检必须出现真实的 coverage gap；
- * 干净知识库不能编造建议；--apply 不能跑 chronicle-backfill。
+ * 近期会议还没投影到年表时，高级诊断仍能发现真实的 coverage gap；
+ * 普通知识库健康界面不得展示未成熟的 Chronicle 建议；--apply 不能跑 chronicle-backfill。
  */
 import { describe, test, expect, beforeAll, afterAll, beforeEach } from 'bun:test';
 import { PGLiteEngine } from '../src/core/pglite-engine.ts';
@@ -74,8 +74,8 @@ describe('collectChronicle', () => {
   });
 });
 
-describe('知识库体检 apply contract', () => {
-  test('runAdvisor reports a real coverage gap that --apply cannot execute', async () => {
+describe('知识库健康产品边界', () => {
+  test('advanced advisor keeps the diagnostic while the ordinary product view hides it', async () => {
     await engine.putPage('meetings/recent', { type: 'meeting', title: 'recent', compiled_truth: 'x'.repeat(120) });
     const report = await runAdvisor(ctx());
     const gap = report.findings.find((f) => f.id === 'chronicle_coverage_gap');
@@ -84,6 +84,6 @@ describe('知识库体检 apply contract', () => {
     expect(resolveApplyTarget(report, 'chronicle-backfill').ok).toBe(false);
     const view = buildAdvisorProductView(report, 88);
     expect(view.product_name).toBe('知识库体检');
-    expect(view.suggestions.find((item) => item.id === 'chronicle_coverage_gap')?.action_kind).toBe('none');
+    expect(view.suggestions.find((item) => item.id === 'chronicle_coverage_gap')).toBeUndefined();
   });
 });

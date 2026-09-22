@@ -39,6 +39,12 @@ describe('OCR model routing', () => {
     expect(getVisionCapability()).toBe('supported');
 
     configureGateway({
+      chat_model: 'mimo:mimo-v2.6-pro',
+      env: { MIMO_API_KEY: 'test' },
+    });
+    expect(getVisionCapability()).toBe('supported');
+
+    configureGateway({
       chat_model: 'mimo:mimo-v2.6-flash',
       env: { MIMO_API_KEY: 'test' },
     });

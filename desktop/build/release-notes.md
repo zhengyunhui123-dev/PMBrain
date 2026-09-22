@@ -1,3 +1,10 @@
+## PMBrain 1.2.15
+
+- 知识工作台撤下写入位置及全部处理选项，导入默认写入主知识源，并自动处理 Office、PDF、图片、结构化解析、OCR 和向量化。
+- 普通知识库健康界面不再展示尚未成熟且没有普通用户结果页的 Chronicle 年表与本体建议；底层数据、CLI 和高级诊断能力继续保留。
+- DeepSeek-V4.1-Flash、MiMo-V2.6-Pro、MiMo-V2.6-Flash 均按视觉模型参与图片识别能力检测。
+- 修复 GitHub Test 中工作台产品合同与当前界面不一致的问题；首次配置会按模型探测结果对齐空 PGLite 向量列，Core User Journeys 只接受真实检索命中，不再把查询摘要误判为导入成功。
+
 ## PMBrain 1.2.14
 
 - 模型下拉新增 DeepSeek-V4.1-Flash、MiMo-V2.6-Pro 和 MiMo-V2.6-Flash，并保留旧模型配置兼容。
@@ -22,10 +29,3 @@
 - 一键迁移完成后回显当前 Postgres 地址，并自动扫描 Docker 中连接正常且包含 PMBrain 核心表的数据库。
 - 数据库选择改为下拉切换：当前库优先显示，旧版 `pmbrain-postgres-*` 迁移库继续兼容；选择后沿用“保存修改并重启”安全切换。
 - 新建 PMBrain Postgres 容器写入管理标签，普通 PostgreSQL、空库、初始化失败或不可查询的容器不会混入选择列表。
-
-## PMBrain 1.2.0
-
-- Docker 迁移先扫描完整旧库并展示处理方案；历史备份表按集中规则跳过，旧库重复 Facts 在新库保留并修复主键。
-- 迁移前保留 PGLite 冷备，向全新 Docker Postgres 复制数据并逐表校验；仅在新服务健康后切换，失败则恢复原连接并保存报告。
-- Docker Desktop 自动启动后等待引擎就绪的时间延长，迁移进度显示当前类别和已复制记录数。
-- 新建 PostgreSQL 容器只在 TCP `pg_isready` 和真实 `SELECT 1` 都成功后继续，避免把首次初始化的临时 Unix socket 服务误判为正式数据库；扩展统一由 PMBrain Schema 初始化。

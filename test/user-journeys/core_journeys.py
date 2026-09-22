@@ -389,7 +389,9 @@ def import_search_journey(page: Page, origin: str, markdown: Path, pdf: Path, ar
     page.locator(".search-action-main").click()
     result = page.locator(".knowledge-search-result")
     result.wait_for(state="visible", timeout=90_000)
-    if UNIQUE_MARKER not in result.inner_text():
+    hits = result.locator(".knowledge-search-hits")
+    hits.wait_for(state="visible", timeout=90_000)
+    if UNIQUE_MARKER not in hits.inner_text():
         raise AssertionError("Imported Markdown was not returned by the visible keyword search")
 
 

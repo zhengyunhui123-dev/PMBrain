@@ -37,14 +37,12 @@ describe('Admin overview navigation', () => {
     expect(overviewSource).not.toContain('advisor.suggestions.slice(0, 5)');
   });
 
-  test('offers confirmed timeline backfill from the health page', () => {
+  test('keeps experimental Chronicle outside the ordinary health page', () => {
     const routeSource = readFileSync(join(root, 'src/commands/pmbrain-admin-routes.ts'), 'utf8');
-    expect(overviewSource).toContain("suggestion.id === 'chronicle_coverage_gap'");
-    expect(overviewSource).toContain('api.organizeChronicleHistory()');
-    expect(overviewSource).toContain("item.id === 'chronicle_coverage_gap'");
-    expect(overviewSource).toContain('正在生成年表事件');
-    expect(overviewSource).not.toContain('近期会议已补入年表，体检结果已刷新。');
-    expect(overviewSource).toContain('补入年表');
+    expect(overviewSource).not.toContain("suggestion.id === 'chronicle_coverage_gap'");
+    expect(overviewSource).not.toContain('api.organizeChronicleHistory()');
+    expect(overviewSource).not.toContain('补入年表');
+    expect(overviewSource).not.toContain('年表问题');
     expect(routeSource).toContain('enqueued > 0 ? await ensureAdminWorkerStarted() : null');
   });
 

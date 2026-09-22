@@ -210,7 +210,13 @@ export function toProductSuggestion(finding: AdvisorFinding): AdvisorProductSugg
 
 export function buildAdvisorProductView(report: AdvisorReport, score: number | null): AdvisorProductView {
   const band = score == null ? { status: 'ok' as const, status_label: '待评估' } : healthStatusFromScore(score);
-  const suggestions = report.findings.map(toProductSuggestion);
+  const visibleFindings = report.findings.filter((finding) => finding.collector !== 'chronicle');
+  const suggestions = visibleFindings.map(toProductSuggestion);
+  const worst: AdvisorSeverity | null =
+    visibleFindings.some((finding) => finding.severity === 'critical') ? 'critical'
+      : visibleFindings.some((finding) => finding.severity === 'warn') ? 'warn'
+        : visibleFindings.length > 0 ? 'info'
+          : null;
   return {
     product_name: ADVISOR_PRODUCT_NAME,
     score,
@@ -218,7 +224,7 @@ export function buildAdvisorProductView(report: AdvisorReport, score: number | n
     suggestion_count: suggestions.length,
     suggestions,
     generated_at: report.generated_at,
-    worst: report.worst,
+    worst,
   };
 }
 

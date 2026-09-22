@@ -138,7 +138,7 @@ describe('advisor product view', () => {
     expect(resolveAdminAdvisorAction(view.suggestions[0]!)).toEqual({ kind: 'restart_required' });
   });
 
-  test('maps chronicle and writeback findings into Chinese copy while keeping backfill explicitly confirmed in the UI', () => {
+  test('keeps experimental chronicle findings out of the ordinary product view', () => {
     const view = buildAdvisorProductView(report([
       finding({
         id: 'chronicle_coverage_gap',
@@ -165,13 +165,10 @@ describe('advisor product view', () => {
     ]), 80);
     expect(view.product_name).toBe('知识库体检');
     expect(view.suggestions.map((item) => item.title)).toEqual([
-      '3 场近期会议还没进入年表',
-      '2 个实体维度当前值有冲突',
       '个人知识库尚未开启环境记忆回写',
     ]);
     expect(view.suggestions.every((item) => item.action_kind === 'none')).toBe(true);
-    expect(view.suggestions[0]?.action_label).toBe('补入年表');
     expect(view.suggestions.every((item) => item.dispatch_id == null)).toBe(true);
-    expect(resolveAdminAdvisorAction(view.suggestions[0]!)).toEqual({ kind: 'unsupported' });
+    expect(view.suggestion_count).toBe(1);
   });
 });

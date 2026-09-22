@@ -788,9 +788,6 @@ function NaturalLanguagePanel({
 
 export function ImportDataPage() {
   const { overview } = useOverview();
-  const [sourceId, setSourceId] = useState<string>();
-  const activeSources = overview?.sources.filter(source => !source.archived) ?? [];
-  const effectiveSourceId = sourceId ?? overview?.main_source_id;
   return (
     <div className="pm-page knowledge-assistant-page">
       <section className="assistant-hero">
@@ -801,24 +798,7 @@ export function ImportDataPage() {
         </div>
         <div className="assistant-pulse" aria-hidden="true"><i /><i /><i /></div>
       </section>
-      <section className="pm-card import-destination-card">
-        <div>
-          <h2>写入位置</h2>
-          <p className="pm-hint">文件类型、图片识别、结构化解析和向量化均自动处理。</p>
-        </div>
-        <label>
-          <span>写入位置</span>
-          <select value={effectiveSourceId ?? ''} onChange={event => setSourceId(event.target.value)}>
-            {activeSources.map(source => (
-              <option key={source.id} value={source.id}>
-                {source.id === overview?.main_source_id ? `${sourceLabel(source)}（自动）` : sourceLabel(source)}
-              </option>
-            ))}
-          </select>
-        </label>
-      </section>
       <NaturalLanguagePanel chatModel={overview?.chat_model} importOptions={{
-        sourceId: effectiveSourceId,
         includeOffice: true,
         includeImages: true,
         autoEmbed: true,
