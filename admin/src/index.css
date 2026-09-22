@@ -6686,6 +6686,18 @@ tbody tr:hover td { background: color-mix(in srgb, var(--accent) 4%, var(--conso
 .assistant-pulse { width: 135px; height: 88px; }
 .assistant-pulse i:nth-child(1) { transform: translate(-48px, 18px); }
 .assistant-pulse i:nth-child(3) { transform: translate(48px, 21px); }
+.import-destination-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, .55fr);
+  gap: 24px;
+  align-items: end;
+  margin-bottom: 12px;
+  padding: 16px 20px;
+}
+.import-destination-card h2 { margin: 0 0 4px; font-size: 16px; }
+.import-destination-card p { margin: 0; }
+.import-destination-card label { display: grid; gap: 6px; }
+.import-destination-card label span { color: var(--text-secondary); font-size: 12px; }
 .import-options { margin-bottom: 12px; padding: 0; border-radius: 11px; box-shadow: none; }
 .import-options-heading { min-height: 43px; align-items: center; padding: 0 15px; }
 .import-options > summary { min-height: 43px; align-items: center; padding: 0 15px; }
@@ -7702,6 +7714,7 @@ html[data-theme="dark"] .dream-page .dream-journey-step span { color: var(--text
 }
 
 @media (max-width: 768px) {
+  .import-destination-card { grid-template-columns: 1fr; }
   .main > .pm-page:not(.overview-page) { padding-bottom: 30px; }
   .pm-page > .pm-section-head:first-child,
   .page-command-head { display: grid; min-height: 0; }

@@ -77,9 +77,11 @@ export function BrainDataPage() {
     pageSize: 10,
   });
   const [gotoPage, setGotoPage] = useState('1');
+  const listRequestId = useRef(0);
 
   const isFactsView = filters.view === 'facts';
   const loadRows = useCallback(async () => {
+    const requestId = ++listRequestId.current;
     const qs = new URLSearchParams();
     qs.set('page', String(filters.page));
     qs.set('limit', String(filters.pageSize));
@@ -90,6 +92,7 @@ export function BrainDataPage() {
     setPageError('');
     if (filters.view === 'facts') {
       const data = await api.brainFacts(`?${qs.toString()}`);
+      if (requestId !== listRequestId.current) return;
       setFactRows(data.rows);
       setRows([]);
       setMeta({ total: data.total, page: data.page, pages: data.pages, limit: data.limit ?? filters.pageSize });
@@ -97,6 +100,7 @@ export function BrainDataPage() {
     }
     if (filters.view !== 'all') qs.set('view', filters.view);
     const data = await api.brainPages(`?${qs.toString()}`);
+    if (requestId !== listRequestId.current) return;
     setRows(data.rows);
     setFactRows([]);
     setMeta({ total: data.total, page: data.page, pages: data.pages, limit: data.limit ?? filters.pageSize });

@@ -202,6 +202,13 @@ describe('desktop settings renderer contracts', () => {
     expect(preview).toContain('testModelConnection: async (input)');
   });
 
+  test('shows product names while preserving provider API model IDs', () => {
+    expect(renderer).toContain("model === 'deepseek-flash') return 'DeepSeek-V4.1-Flash'");
+    expect(renderer).toContain("model === 'mimo-v2.6-pro') return 'MiMo-V2.6-Pro'");
+    expect(renderer).toContain("model === 'mimo-v2.6-flash') return 'MiMo-V2.6-Flash'");
+    expect(renderer).toContain('input.value = model');
+  });
+
   test('keeps the optional OCR model, credential check and image test in the model settings flow', () => {
     for (const id of ['ocr-provider', 'ocr-model-name', 'ocr-api-key', 'test-ocr-model']) {
       expect(html).toContain(`id="${id}"`);

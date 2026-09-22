@@ -20,10 +20,6 @@ export function installAppMenu(dependencies: AppMenuDependencies): void {
           label: '打开管理控制台',
           click: () => void dependencies.openAdmin().catch(error => dependencies.reportError('无法打开管理控制台', error)),
         },
-        {
-          label: '知识库体检',
-          click: () => void dependencies.openAdmin('health').catch(error => dependencies.reportError('无法打开知识库体检', error)),
-        },
         { label: '基础配置', click: () => void dependencies.openPanel('basic') },
         { label: '模型配置', click: () => void dependencies.openPanel('models') },
         { label: 'MCP 接入', click: () => void dependencies.openPanel('integrations') },
@@ -42,6 +38,15 @@ export function installAppMenu(dependencies: AppMenuDependencies): void {
         { label: '退出 PMBrain', click: () => app.quit() },
       ],
     },
-    { role: 'viewMenu', label: '视图' },
+    {
+      label: '视图',
+      submenu: [
+        { label: '实际大小', role: 'resetZoom' },
+        { label: '放大', role: 'zoomIn' },
+        { label: '缩小', role: 'zoomOut' },
+        { type: 'separator' },
+        { label: '切换全屏', role: 'togglefullscreen' },
+      ],
+    },
   ]));
 }

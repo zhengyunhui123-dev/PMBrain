@@ -1,8 +1,9 @@
-import { afterEach, expect, test } from 'bun:test';
+import { afterEach, beforeEach, expect, test } from 'bun:test';
 import { listRuns, runs } from '../src/commands/natural-lang/executor.ts';
 import type { ConsoleRun } from '../src/commands/natural-lang/types.ts';
 
 afterEach(() => runs.clear());
+beforeEach(() => runs.clear());
 
 test('recently completed tasks move above newer started tasks with stable ties', () => {
   const now = Date.now();

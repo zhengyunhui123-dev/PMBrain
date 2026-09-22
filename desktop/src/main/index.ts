@@ -6,7 +6,7 @@ import { installAppMenu, type SettingsPanel } from './app/menu-controller.js';
 import { showDesktopNotification as showNotification } from './app/desktop-notifications.js';
 import { TrayController } from './app/tray-controller.js';
 import { WindowController } from './app/window-controller.js';
-import { runCliChecked, preflightCliRuntime, type CliRuntime } from './cli-runner.js';
+import { runCliChecked, type CliRuntime } from './cli-runner.js';
 import {
   getDesktopPreferences,
   getSetupInfo,
@@ -47,9 +47,9 @@ import { SystemSettingsController } from './system/system-settings-controller.js
 import { UpdateController } from './updates/update-controller.js';
 import { updateDesktopVersionHistory, type DesktopVersionHistory } from './version-history.js';
 import { isTrustedDesktopShellUrl } from './window-security.js';
+import { RuntimePreflightController } from './runtime/runtime-preflight-controller.js';
 
 let logger: DesktopLogger | null = null;
-let runtimePreflightPromise: Promise<void> | null = null;
 let desktopVersionHistory: DesktopVersionHistory = { current: '' };
 let quitting = false;
 
@@ -102,28 +102,7 @@ function hideStartupProgress(): void {
   sendStartupProgress({ ...startupProgress, visible: false, canDeferEmbeddingRebuild: false });
 }
 
-async function ensureRuntimeReady(): Promise<void> {
-  if (!app.isPackaged) return;
-  if (runtimePreflightPromise) return runtimePreflightPromise;
-  const pending = preflightCliRuntime(runtime()).then(result => {
-    if (!result) return;
-    logger?.write(
-      'runtime',
-      `Verified ${result.arch}-${result.flavor} Bun ${result.bunRevision} on Windows ${result.windowsRelease}`,
-    );
-  }).catch(error => {
-    const message = error instanceof Error ? error.message : String(error);
-    logger?.write('runtime', `Runtime preflight failed: ${message}`);
-    throw error;
-  });
-  runtimePreflightPromise = pending;
-  try {
-    await pending;
-  } catch (error) {
-    if (runtimePreflightPromise === pending) runtimePreflightPromise = null;
-    throw error;
-  }
-}
+const runtimePreflightController = new RuntimePreflightController(runtime, () => logger);
 
 const pgliteBackupController = new PgliteBackupController({
   appVersion: () => app.getVersion(),
@@ -168,7 +147,7 @@ const sidecarController: SidecarController = new SidecarController({
   getLogger: () => logger,
   getMainWindow: () => windowController.current,
   getSetupInProgress: () => setupController.inProgress,
-  ensureRuntimeReady,
+  ensureRuntimeReady: () => runtimePreflightController.ensureReady(),
   prepareConfiguredDatabase: () => databaseUpgradeController.prepareConfiguredDatabase(),
   migrateConfiguredInstallation: () => databaseUpgradeController.migrateConfiguredInstallation(),
   reconcileConfiguredEmbeddingIndex: () => databaseUpgradeController.reconcileConfiguredEmbeddingIndex(),
@@ -213,7 +192,7 @@ const setupController: SetupController = new SetupController({
   runtime,
   sidecar: sidecarController,
   pgliteBackup: pgliteBackupController,
-  ensureRuntimeReady,
+  ensureRuntimeReady: () => runtimePreflightController.ensureReady(),
   prepareConfiguredDatabase: () => databaseUpgradeController.prepareConfiguredDatabase(),
   syncModelDefaults: options => syncModelDefaultsToConfigFile(runtime(), options),
   sendStartupProgress,

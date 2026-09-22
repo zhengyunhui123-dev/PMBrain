@@ -578,11 +578,12 @@ function confirmCustomProvider(): void {
 function renderModelDropdown(kind: 'chat' | 'embedding'): void {
   const ul = $<HTMLUListElement>(`#${kind}-model-dropdown`);
   const input = $<HTMLInputElement>(`#${kind}-model-name`);
+  const provider = $<HTMLSelectElement>(`#${kind}-provider`).value;
   const currentValue = input.value.trim();
   const models = providerModels[kind];
   ul.replaceChildren(...models.map(model => {
     const li = document.createElement('li');
-    li.textContent = model;
+    li.textContent = modelDisplayName(provider, model);
     if (model === currentValue) li.classList.add('selected');
     li.addEventListener('click', () => {
       input.value = model;
@@ -590,6 +591,13 @@ function renderModelDropdown(kind: 'chat' | 'embedding'): void {
     });
     return li;
   }));
+}
+
+function modelDisplayName(provider: string, model: string): string {
+  if (provider === 'deepseek' && model === 'deepseek-flash') return 'DeepSeek-V4.1-Flash';
+  if (provider === 'mimo' && model === 'mimo-v2.6-pro') return 'MiMo-V2.6-Pro';
+  if (provider === 'mimo' && model === 'mimo-v2.6-flash') return 'MiMo-V2.6-Flash';
+  return model;
 }
 
 async function refreshProviderModels(kind: ModelKind, chooseDefault: boolean): Promise<void> {
@@ -715,10 +723,11 @@ async function testConfiguredModel(kind: ModelKind): Promise<void> {
 function renderAdvancedModelDropdown(tier: AdvancedModelTier): void {
   const ul = $<HTMLUListElement>(`#advanced-${tier}-model-dropdown`);
   const input = $<HTMLInputElement>(`#advanced-${tier}-model-name`);
+  const provider = $<HTMLSelectElement>(`#advanced-${tier}-provider`).value;
   const currentValue = input.value.trim();
   ul.replaceChildren(...advancedProviderModels[tier].map(model => {
     const li = document.createElement('li');
-    li.textContent = model;
+    li.textContent = modelDisplayName(provider, model);
     if (model === currentValue) li.classList.add('selected');
     li.addEventListener('click', () => {
       input.value = model;
@@ -732,10 +741,11 @@ function renderAdvancedPhaseModelDropdown(phase: AdvancedModelPhase): void {
   const prefix = advancedPhaseId(phase);
   const ul = $<HTMLUListElement>(`#${prefix}-model-dropdown`);
   const input = $<HTMLInputElement>(`#${prefix}-model-name`);
+  const provider = $<HTMLSelectElement>(`#${prefix}-provider`).value;
   const currentValue = input.value.trim();
   ul.replaceChildren(...advancedPhaseProviderModels[phase].map(model => {
     const li = document.createElement('li');
-    li.textContent = model;
+    li.textContent = modelDisplayName(provider, model);
     if (model === currentValue) li.classList.add('selected');
     li.addEventListener('click', () => {
       input.value = model;

@@ -591,7 +591,10 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
 
   app.post('/admin/api/chronicle/history', requireAdmin, async (_req: Request, res: Response) => {
     try {
-      sendAdminContract(res, ProductSurfacePayloadSchema, await organizeChronicleHistory(engine));
+      const result = await organizeChronicleHistory(engine) as Record<string, unknown>;
+      const enqueued = Number(result.enqueued ?? 0);
+      const worker = enqueued > 0 ? await ensureAdminWorkerStarted() : null;
+      sendAdminContract(res, ProductSurfacePayloadSchema, { ...result, worker });
     } catch (e) {
       sendProductOpError(res, e, 'chronicle_history_failed');
     }

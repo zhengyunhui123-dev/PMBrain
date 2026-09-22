@@ -45,10 +45,9 @@ describe('PMBrain Agent Capability Pack contract', () => {
   test('stdio and HTTP MCP advertise and dispatch only the filtered surface', () => {
     const stdio = readFileSync(join(import.meta.dir, '..', 'src', 'mcp', 'server.ts'), 'utf8');
     const http = readFileSync(join(import.meta.dir, '..', 'src', 'mcp', 'http-transport.ts'), 'utf8');
-    for (const transport of [stdio, http]) {
-      expect(transport).toContain('filterOpsForSurface(operations, surface)');
-      expect(transport).toContain('buildToolDefs(surfaceOps)');
-    }
+    expect(stdio).toContain('filterOpsForSurface(operations, surface)');
+    expect(http).toContain('filterOpsForSurface(operations.filter(op => !op.localOnly), surface)');
+    for (const transport of [stdio, http]) expect(transport).toContain('buildToolDefs(surfaceOps)');
     expect(stdio).toContain('allowedOps,');
     expect(http).toContain('allowedOps: surfaceAllowedOps');
   });

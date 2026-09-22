@@ -18,6 +18,7 @@ const sidecarController = readFileSync(resolve('src/main/sidecar/sidecar-control
 const lanController = readFileSync(resolve('src/main/network/lan-controller.ts'), 'utf8');
 const sharedAccessController = readFileSync(resolve('src/main/integration/shared-access-controller.ts'), 'utf8');
 const trayController = readFileSync(resolve('src/main/app/tray-controller.ts'), 'utf8');
+const menuController = readFileSync(resolve('src/main/app/menu-controller.ts'), 'utf8');
 
 describe('desktop system orchestration contracts', () => {
   test('keeps the original sidecar private and exposes sharing through the desktop gateway', () => {
@@ -164,10 +165,13 @@ describe('desktop system orchestration contracts', () => {
     expect(trayController).toContain("tray.on('double-click', this.dependencies.openDesktop)");
     expect(main).toContain("'/admin/api/brain/overview'");
     expect(main).toContain("'/admin/api/advisor'");
-    expect(trayController).toContain("label: '知识库体检'");
-    expect(main).toContain("label: '知识库体检'");
-    expect(trayController).toContain("openAdmin('health')");
-    expect(main).toContain("openAdmin('health')");
+    expect(trayController).not.toContain("知识库体检");
+    expect(menuController).not.toContain("知识库体检");
+    expect(menuController).toContain("{ label: '实际大小', role: 'resetZoom' }");
+    expect(menuController).toContain("{ label: '放大', role: 'zoomIn' }");
+    expect(menuController).toContain("{ label: '缩小', role: 'zoomOut' }");
+    expect(menuController).toContain("{ label: '切换全屏', role: 'togglefullscreen' }");
+    expect(menuController).not.toContain("role: 'viewMenu'");
     expect(main).not.toContain('collectChronicle');
     expect(main).not.toContain('runAdvisor');
     expect(main).toContain('knowledgeSourceChanged === true');

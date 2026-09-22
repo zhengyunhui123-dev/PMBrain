@@ -38,9 +38,20 @@ describe('Admin overview navigation', () => {
   });
 
   test('offers confirmed timeline backfill from the health page', () => {
+    const routeSource = readFileSync(join(root, 'src/commands/pmbrain-admin-routes.ts'), 'utf8');
     expect(overviewSource).toContain("suggestion.id === 'chronicle_coverage_gap'");
     expect(overviewSource).toContain('api.organizeChronicleHistory()');
+    expect(overviewSource).toContain("item.id === 'chronicle_coverage_gap'");
+    expect(overviewSource).toContain('正在生成年表事件');
+    expect(overviewSource).not.toContain('近期会议已补入年表，体检结果已刷新。');
     expect(overviewSource).toContain('补入年表');
+    expect(routeSource).toContain('enqueued > 0 ? await ensureAdminWorkerStarted() : null');
+  });
+
+  test('makes a manual health refresh visibly observable', () => {
+    expect(overviewSource).toContain("setAdvisorNotice('正在重新检查…')");
+    expect(overviewSource).toContain("refreshing ? '检查中…' : '重新检查'");
+    expect(overviewSource).toContain('检查完成，当前有');
   });
 
   test('orphan advice opens the isolated graph instead of starting an orphan scan', () => {

@@ -82,13 +82,13 @@ describe('checkTypeProliferation (D16 pack-aware ratio)', () => {
   });
 
   it('warns when distinct types exceed declared+5', async () => {
-    // gbrain-base declares 24 types. warn threshold = 29.
+    // Keep the fixture above the pack-aware declared+5 threshold.
     const types: string[] = [];
-    for (let i = 0; i < 32; i++) types.push(`custom-type-${i}`);
+    for (let i = 0; i < 34; i++) types.push(`custom-type-${i}`);
     await seedPages(types);
     const result = await checkTypeProliferation(engine);
     expect(result.check.status).toBe('warn');
-    expect(result.check.message).toMatch(/32 distinct/);
+    expect(result.check.message).toMatch(/34 distinct/);
   });
 });
 

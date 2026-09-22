@@ -287,14 +287,17 @@ export function KnowledgeHealthPage({ onNavigate }: { onNavigate?: (page: string
   const [advisorError, setAdvisorError] = useState<string | null>(null);
   const [advisorNotice, setAdvisorNotice] = useState<string | null>(null);
   const [applyingId, setApplyingId] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
 
   const loadAdvisor = useCallback(async () => {
     try {
       const next = await api.advisor();
       setAdvisor(next.product);
       setAdvisorError(null);
+      return next.product;
     } catch (loadError) {
       setAdvisorError(loadError instanceof Error ? loadError.message : '健康检查暂时不可用');
+      return null;
     }
   }, []);
 
@@ -312,9 +315,24 @@ export function KnowledgeHealthPage({ onNavigate }: { onNavigate?: (page: string
       setApplyingId(suggestion.id);
       setAdvisorNotice(null);
       try {
-        await api.organizeChronicleHistory();
-        setAdvisorNotice('近期会议已补入年表，体检结果已刷新。');
-        await loadAdvisor();
+        const result = await api.organizeChronicleHistory() as { enqueued?: number };
+        const enqueued = Number(result.enqueued ?? 0);
+        if (enqueued <= 0) {
+          const next = await loadAdvisor();
+          const stillMissing = next?.suggestions.some((item) => item.id === 'chronicle_coverage_gap');
+          setAdvisorNotice(stillMissing ? '没有可执行的年表补录任务，请查看服务日志。' : '年表已是最新状态。');
+          return;
+        }
+        setAdvisorNotice(`已提交 ${enqueued} 场会议，正在生成年表事件…`);
+        for (let attempt = 0; attempt < 45; attempt += 1) {
+          await new Promise(resolve => window.setTimeout(resolve, 2_000));
+          const next = await loadAdvisor();
+          if (next && !next.suggestions.some((item) => item.id === 'chronicle_coverage_gap')) {
+            setAdvisorNotice(`${enqueued} 场会议已补入年表。`);
+            return;
+          }
+        }
+        setAdvisorNotice('年表任务仍在处理，或部分会议识别失败。稍后重新检查；如果这条建议仍在，请查看任务中心。');
       } catch (applyError) {
         setAdvisorNotice(applyError instanceof Error ? applyError.message : '年表补录失败');
       } finally {
@@ -343,6 +361,14 @@ export function KnowledgeHealthPage({ onNavigate }: { onNavigate?: (page: string
     }
   };
 
+  const refreshAdvisor = async () => {
+    setRefreshing(true);
+    setAdvisorNotice('正在重新检查…');
+    const next = await loadAdvisor();
+    if (next) setAdvisorNotice(`检查完成，当前有 ${next.suggestion_count} 项建议。`);
+    setRefreshing(false);
+  };
+
   return (
     <div className="pm-page knowledge-health-page">
       <header className="overview-header">
@@ -351,7 +377,9 @@ export function KnowledgeHealthPage({ onNavigate }: { onNavigate?: (page: string
           <h1>知识库健康</h1>
           <p>集中查看并处理同步、向量、关系和年表问题。</p>
         </div>
-        <button type="button" className="pm-ghost" onClick={() => void loadAdvisor()}><RefreshCw aria-hidden="true" /> 重新检查</button>
+        <button type="button" className="pm-ghost" disabled={refreshing} onClick={() => void refreshAdvisor()}>
+          <RefreshCw aria-hidden="true" /> {refreshing ? '检查中…' : '重新检查'}
+        </button>
       </header>
       <AdvisorHealthCard
         advisor={advisor}

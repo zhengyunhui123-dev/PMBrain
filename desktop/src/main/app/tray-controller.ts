@@ -41,11 +41,6 @@ export class TrayController {
           .catch(error => this.dependencies.reportError('无法打开管理控制台', error)),
       },
       {
-        label: '知识库体检',
-        click: () => void this.dependencies.openAdmin('health')
-          .catch(error => this.dependencies.reportError('无法打开知识库体检', error)),
-      },
-      {
         label: '系统设置',
         click: () => void this.dependencies.openSystemSettings()
           .catch(error => this.dependencies.reportError('无法打开系统设置', error)),

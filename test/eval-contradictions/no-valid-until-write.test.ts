@@ -31,9 +31,13 @@ import { join } from 'node:path';
 //   - consolidate.ts (v0.35.4 — chronological writeback)
 //   - facts/forget.ts (v0.32.2 — user-initiated `gbrain forget`; user is
 //     the supersession authority, not the probe)
+//   - engine ontology writers close the previous value's validity window
+//     when a newer observation supersedes it.
 const VALID_UNTIL_WRITE_ALLOWLIST: ReadonlySet<string> = new Set([
   'src/core/cycle/phases/consolidate.ts',
   'src/core/facts/forget.ts',
+  'src/core/pglite-engine.ts',
+  'src/core/postgres-engine.ts',
 ]);
 
 function walkTs(dir: string, acc: string[] = []): string[] {
