@@ -66,7 +66,7 @@ describe('performSync google-kind dispatch', () => {
       await addSource(engine, { id: 'wiki', localPath: dir });
       let err: unknown;
       try {
-        await performSync(engine, { sourceId: 'wiki', skipLock: true, noPull: true });
+        await performSync(engine, { sourceId: 'wiki', skipLock: true, noPull: true, noEmbed: true });
       } catch (e) {
         err = e;
       }
