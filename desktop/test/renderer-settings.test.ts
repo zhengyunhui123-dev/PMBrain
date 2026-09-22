@@ -298,22 +298,35 @@ describe('desktop settings renderer contracts', () => {
     expect(renderer).toContain('重试连接');
   });
 
-  test('restores Workbuddy to the ordinary MCP card and adds rules and Agent write beside 更新', () => {
+  test('keeps integration actions together, uses unified deep integration copy, and shows launch only for detected apps', () => {
     expect(renderer).not.toContain('renderWorkbuddyIntegration');
     expect(renderer).not.toContain('移除深度接入');
     expect(renderer).not.toContain("if (item.id === 'workbuddy') return renderWorkbuddyIntegration(item)");
     expect(renderer).toContain("item.id === 'workbuddy' && item.configured");
-    expect(renderer).toContain('写入规则与 Agent');
+    expect(renderer).not.toContain('写入规则与 Agent');
+    expect(renderer).toContain("agentButton.textContent = '深度接入'");
     expect(renderer).toContain('writeWorkbuddyUserAgent');
+    expect(renderer).toMatch(/item\.id === 'workbuddy'[\s\S]*?agentButton\.textContent = '深度接入'[\s\S]*?writeWorkbuddyUserAgent\(agentButton\)[\s\S]*?actions\.append\(agentButton\)/);
     expect(renderer).toContain("button.addEventListener('click', () => void configure(item.id, button))");
     expect(renderer).toContain("item.configured ? '更新连接' : '接入'");
     expect(renderer).toContain("['codex','claude','grok'].includes(item.id)");
     expect(renderer).toContain("deep.textContent = '深度接入'");
+    expect(renderer).toMatch(/\['codex','claude','grok'\][\s\S]*?deep\.textContent = '深度接入'[\s\S]*?configure\(item\.id, deep, true\)[\s\S]*?actions\.append\(deep\)/);
+    expect(renderer).toContain('item.launchAvailable');
+    expect(renderer).toContain("launchLabel.textContent = '启动'");
+    expect(renderer).toContain('launchIntegration(item.id, launchButton)');
+    expect(renderer).toContain("launchButton.className = 'integration-launch'");
+    expect(renderer.indexOf('actions.append(deep)')).toBeLessThan(renderer.indexOf('if (item.launchAvailable)'));
     expect(renderer).toContain('更新连接只更新 MCP；深度接入还会安装自动记忆规则');
     expect(styles).toContain('.integration-actions');
+    expect(styles).toContain('.integration-launch');
+    expect(styles).toContain('.integration-launch-icon');
     expect(preview).toContain('writeWorkbuddyUserAgent: async');
+    expect(preview).toContain('launchIntegration: async');
     expect(main).toContain('desktop:write-workbuddy-user-agent');
+    expect(main).toContain('desktop:launch-integration');
     expect(preload).toContain('desktop:write-workbuddy-user-agent');
+    expect(preload).toContain('desktop:launch-integration');
   });
 
   test('shows the migrated database address and discovers switchable PMBrain Docker databases', () => {

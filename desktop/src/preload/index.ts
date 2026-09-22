@@ -202,6 +202,7 @@ export interface PMBrainDesktopApi {
   migrateToDocker(planFingerprint: string, skipUnknown: boolean): Promise<{ backupDirectory: string; configBackup: string | null; containerName: string; volumeName: string; tables: number; rows: number; skippedTables: Array<{ name: string; rows: number; reason: string }>; reportPath: string }>;
   openDockerInstallGuide(): Promise<void>;
   configureIntegration(client: IntegrationClient, kind: CredentialKind, deep?: boolean): Promise<IntegrationResult>;
+  launchIntegration(client: IntegrationClient): Promise<void>;
   writeWorkbuddyUserAgent(): Promise<{ written: string[]; backedUp: string[] }>;
   getWorkbuddyAgentIntegration(): Promise<WorkbuddyAgentIntegrationStatus>;
   installWorkbuddyAgent(workspace: string): Promise<WorkbuddyAgentIntegrationStatus>;
@@ -326,6 +327,7 @@ const api: PMBrainDesktopApi = {
   migrateToDocker: (planFingerprint, skipUnknown) => ipcRenderer.invoke('desktop:migrate-to-docker', planFingerprint, skipUnknown),
   openDockerInstallGuide: () => ipcRenderer.invoke('desktop:open-docker-install-guide'),
   configureIntegration: (client, kind, deep) => ipcRenderer.invoke('desktop:configure-integration', client, kind, deep),
+  launchIntegration: client => ipcRenderer.invoke('desktop:launch-integration', client),
   writeWorkbuddyUserAgent: () => ipcRenderer.invoke('desktop:write-workbuddy-user-agent'),
   getWorkbuddyAgentIntegration: () => ipcRenderer.invoke('desktop:get-workbuddy-agent-integration'),
   installWorkbuddyAgent: (workspace) => ipcRenderer.invoke('desktop:install-workbuddy-agent', workspace),

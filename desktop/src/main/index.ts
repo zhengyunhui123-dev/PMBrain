@@ -23,6 +23,7 @@ import { SharedAccessController } from './integration/shared-access-controller.j
 import { writeWorkbuddyUserAgent } from './integration/user-agent-writer.js';
 import { WorkBuddyAgentController } from './integration/workbuddy-agent-controller.js';
 import { listIntegrations } from './integration-manager.js';
+import { launchIntegration as launchDesktopIntegration } from './integration-launcher.js';
 import { registerDesktopIpcHandlers } from './ipc-handlers.js';
 import { createProductSurfaceHandlers } from './product-surfaces.js';
 import {
@@ -392,6 +393,7 @@ if (!app.requestSingleInstanceLock()) {
       integrations: probe => probe
         ? setupController.integrationStates()
         : Promise.resolve(listIntegrations(sidecarController.current?.port)),
+      launchIntegration: client => launchDesktopIntegration(client, path => shell.openPath(path)),
       inspectKnowledgeSourceDirectory,
       initializeKnowledgeSourceGit,
       providerModels: listDesktopProviderModels,

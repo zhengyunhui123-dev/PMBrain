@@ -286,6 +286,10 @@ select { cursor: pointer; appearance: auto; -webkit-appearance: auto; }
 .integration-card small { display: block; margin-bottom: 16px; color: var(--text-muted); }
 .integration-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .integration-actions button { min-height: 34px; }
+.integration-actions .integration-launch { display: inline-flex; align-items: center; gap: 9px; color: #fff; border-color: #4968df; background: #4968df; box-shadow: 0 6px 14px rgba(73, 104, 223, .24); font-weight: 680; }
+.integration-actions .integration-launch:hover:not(:disabled) { border-color: #5a77e8; background: #5a77e8; box-shadow: 0 8px 18px rgba(73, 104, 223, .32); }
+.integration-launch-icon { position: relative; width: 13px; height: 16px; border: 2px solid currentColor; border-radius: 4px; clip-path: polygon(0 0, 100% 50%, 0 100%); }
+.integration-launch-icon::after { position: absolute; inset: 2px 0 2px 2px; content: ''; background: currentColor; clip-path: polygon(0 0, 100% 50%, 0 100%); }
 .integration-card .integration-action-help { margin: 10px 0 0; font-size: 10px; line-height: 1.5; }
 .badge { float: right; padding: 3px 7px; border: 1px solid var(--line-strong); border-radius: 999px; color: var(--text-muted); background: var(--surface-soft); font: 9px Consolas, monospace; }
 .badge.configured { color: var(--success-text); border-color: var(--success-border); background: var(--success-soft); }

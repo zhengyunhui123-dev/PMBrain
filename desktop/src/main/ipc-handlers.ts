@@ -67,6 +67,7 @@ export interface DesktopIpcHandlers {
   openDockerInstallGuide: () => Promise<unknown>;
   chooseEmbeddingRebuild: (choice: 'wait' | 'defer') => void;
   configureIntegration: (client: IntegrationClient, kind: CredentialKind, deep?: boolean) => Promise<unknown>;
+  launchIntegration: (client: IntegrationClient) => Promise<void>;
   writeWorkbuddyUserAgent: () => Promise<unknown>;
   getWorkbuddyAgentIntegration: () => Promise<unknown>;
   installWorkbuddyAgent: (workspace: string) => Promise<unknown>;
@@ -144,6 +145,7 @@ export function registerDesktopIpcHandlers(handlers: DesktopIpcHandlers): void {
   registerTrustedHandler('desktop:open-docker-install-guide', handlers, () => handlers.openDockerInstallGuide());
   registerTrustedHandler('desktop:choose-embedding-rebuild', handlers, (_event, choice: 'wait' | 'defer') => handlers.chooseEmbeddingRebuild(choice));
   registerTrustedHandler('desktop:configure-integration', handlers, (_event, client: IntegrationClient, kind: CredentialKind, deep?: boolean) => handlers.configureIntegration(client, kind, deep));
+  registerTrustedHandler('desktop:launch-integration', handlers, (_event, client: IntegrationClient) => handlers.launchIntegration(client));
   registerTrustedHandler('desktop:write-workbuddy-user-agent', handlers, () => handlers.writeWorkbuddyUserAgent());
   registerTrustedHandler('desktop:get-workbuddy-agent-integration', handlers, () => handlers.getWorkbuddyAgentIntegration());
   registerTrustedHandler('desktop:install-workbuddy-agent', handlers, (_event, workspace: string) => handlers.installWorkbuddyAgent(workspace));

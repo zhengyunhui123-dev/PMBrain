@@ -1150,21 +1150,36 @@ function renderIntegrations(integrations: IntegrationInfo[]): void {
       button.textContent = item.id === 'claude' ? '生成接入命令' : '生成接入配置';
     }
     button.addEventListener('click', () => void configure(item.id, button));
+    article.append(badge, title, path, note);
+    const actions = document.createElement('div');
+    actions.className = 'integration-actions';
+    actions.append(button);
     if (item.id === 'workbuddy' && item.configured) {
-      const actions = document.createElement('div');
-      actions.className = 'integration-actions';
       const agentButton = document.createElement('button');
-      agentButton.textContent = '写入规则与 Agent';
+      agentButton.textContent = '深度接入';
       agentButton.addEventListener('click', () => void writeWorkbuddyUserAgent(agentButton));
-      actions.append(button, agentButton);
-      article.append(badge, title, path, note, actions);
-    } else {
-      article.append(badge, title, path, note, button);
+      actions.append(agentButton);
     }
     if (['codex','claude','grok'].includes(item.id)) {
       const deep = document.createElement('button'); deep.type = 'button'; deep.textContent = '深度接入';
       deep.addEventListener('click', () => void configure(item.id, deep, true));
-      article.appendChild(deep);
+      actions.append(deep);
+    }
+    if (item.launchAvailable) {
+      const launchButton = document.createElement('button');
+      launchButton.type = 'button';
+      launchButton.className = 'integration-launch';
+      const launchIcon = document.createElement('i');
+      launchIcon.className = 'integration-launch-icon';
+      launchIcon.setAttribute('aria-hidden', 'true');
+      const launchLabel = document.createElement('span');
+      launchLabel.textContent = '启动';
+      launchButton.append(launchIcon, launchLabel);
+      launchButton.addEventListener('click', () => void launchIntegration(item.id, launchButton));
+      actions.append(launchButton);
+    }
+    article.append(actions);
+    if (['codex','claude','grok'].includes(item.id)) {
       const actionHelp = document.createElement('small');
       actionHelp.className = 'integration-action-help';
       actionHelp.textContent = '更新连接只更新 MCP；深度接入还会安装自动记忆规则。';
@@ -2295,7 +2310,20 @@ async function writeWorkbuddyUserAgent(button: HTMLButtonElement): Promise<void>
   } catch (error) {
     setNotice('error', error instanceof Error ? error.message : String(error));
   } finally {
-    setBusy(button, false, '写入规则与 Agent');
+    setBusy(button, false, '深度接入');
+  }
+}
+
+async function launchIntegration(client: IntegrationClient, button: HTMLButtonElement): Promise<void> {
+  clearNotices();
+  setBusy(button, true, '启动中…');
+  try {
+    await window.pmbrainDesktop.launchIntegration(client);
+    setNotice('success', `${integrationClientName(client)} 已启动。`);
+  } catch (error) {
+    setNotice('error', error instanceof Error ? error.message : String(error));
+  } finally {
+    setBusy(button, false, '启动');
   }
 }
 
