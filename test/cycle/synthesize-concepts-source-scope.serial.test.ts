@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
+import { configureGateway, resetGateway } from '../../src/core/ai/gateway.ts';
 import { PGLiteEngine } from '../../src/core/pglite-engine.ts';
 import { runPhaseSynthesizeConcepts } from '../../src/core/cycle/synthesize-concepts.ts';
 import { resetPgliteState } from '../helpers/reset-pglite.ts';
@@ -6,6 +7,11 @@ import { resetPgliteState } from '../helpers/reset-pglite.ts';
 let engine: PGLiteEngine;
 
 beforeAll(async () => {
+  configureGateway({
+    embedding_model: 'openai:text-embedding-3-large',
+    embedding_dimensions: 1536,
+    env: {},
+  });
   engine = new PGLiteEngine();
   await engine.connect({});
   await engine.initSchema();
@@ -13,6 +19,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await engine.disconnect();
+  resetGateway();
 });
 
 beforeEach(async () => {

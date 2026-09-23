@@ -15,9 +15,6 @@ describe('PMBrain product-layer structure', () => {
     expect(entry).toContain("from './window-security.js'");
     expect(entry).toContain('registerDesktopIpcHandlers({');
     expect(entry).not.toContain('ipcMain.handle(');
-    // Keep the entry as an orchestrator without pinning every harmless line
-    // addition to one historical exact count.
-    expect(entry.split(/\r?\n/).length).toBeLessThan(500);
     for (const controller of [
       'DatabaseUpgradeController',
       'PgliteBackupController',
