@@ -6,7 +6,7 @@ import { installAppMenu, type SettingsPanel } from './app/menu-controller.js';
 import { showDesktopNotification as showNotification } from './app/desktop-notifications.js';
 import { TrayController } from './app/tray-controller.js';
 import { WindowController } from './app/window-controller.js';
-import { runCliChecked, preflightCliRuntime, type CliRuntime } from './cli-runner.js';
+import { runCliChecked, type CliRuntime } from './cli-runner.js';
 import {
   getDesktopPreferences,
   getSetupInfo,
@@ -23,7 +23,9 @@ import { SharedAccessController } from './integration/shared-access-controller.j
 import { writeWorkbuddyUserAgent } from './integration/user-agent-writer.js';
 import { WorkBuddyAgentController } from './integration/workbuddy-agent-controller.js';
 import { listIntegrations } from './integration-manager.js';
+import { launchIntegration as launchDesktopIntegration } from './integration-launcher.js';
 import { registerDesktopIpcHandlers } from './ipc-handlers.js';
+import { createProductSurfaceHandlers } from './product-surfaces.js';
 import {
   inspectDesktopPgliteRecovery,
   terminateDesktopPgliteOwnerAndRetry,
@@ -46,9 +48,9 @@ import { SystemSettingsController } from './system/system-settings-controller.js
 import { UpdateController } from './updates/update-controller.js';
 import { updateDesktopVersionHistory, type DesktopVersionHistory } from './version-history.js';
 import { isTrustedDesktopShellUrl } from './window-security.js';
+import { RuntimePreflightController } from './runtime/runtime-preflight-controller.js';
 
 let logger: DesktopLogger | null = null;
-let runtimePreflightPromise: Promise<void> | null = null;
 let desktopVersionHistory: DesktopVersionHistory = { current: '' };
 let quitting = false;
 
@@ -101,28 +103,7 @@ function hideStartupProgress(): void {
   sendStartupProgress({ ...startupProgress, visible: false, canDeferEmbeddingRebuild: false });
 }
 
-async function ensureRuntimeReady(): Promise<void> {
-  if (!app.isPackaged) return;
-  if (runtimePreflightPromise) return runtimePreflightPromise;
-  const pending = preflightCliRuntime(runtime()).then(result => {
-    if (!result) return;
-    logger?.write(
-      'runtime',
-      `Verified ${result.arch}-${result.flavor} Bun ${result.bunRevision} on Windows ${result.windowsRelease}`,
-    );
-  }).catch(error => {
-    const message = error instanceof Error ? error.message : String(error);
-    logger?.write('runtime', `Runtime preflight failed: ${message}`);
-    throw error;
-  });
-  runtimePreflightPromise = pending;
-  try {
-    await pending;
-  } catch (error) {
-    if (runtimePreflightPromise === pending) runtimePreflightPromise = null;
-    throw error;
-  }
-}
+const runtimePreflightController = new RuntimePreflightController(runtime, () => logger);
 
 const pgliteBackupController = new PgliteBackupController({
   appVersion: () => app.getVersion(),
@@ -167,7 +148,7 @@ const sidecarController: SidecarController = new SidecarController({
   getLogger: () => logger,
   getMainWindow: () => windowController.current,
   getSetupInProgress: () => setupController.inProgress,
-  ensureRuntimeReady,
+  ensureRuntimeReady: () => runtimePreflightController.ensureReady(),
   prepareConfiguredDatabase: () => databaseUpgradeController.prepareConfiguredDatabase(),
   migrateConfiguredInstallation: () => databaseUpgradeController.migrateConfiguredInstallation(),
   reconcileConfiguredEmbeddingIndex: () => databaseUpgradeController.reconcileConfiguredEmbeddingIndex(),
@@ -212,7 +193,7 @@ const setupController: SetupController = new SetupController({
   runtime,
   sidecar: sidecarController,
   pgliteBackup: pgliteBackupController,
-  ensureRuntimeReady,
+  ensureRuntimeReady: () => runtimePreflightController.ensureReady(),
   prepareConfiguredDatabase: () => databaseUpgradeController.prepareConfiguredDatabase(),
   syncModelDefaults: options => syncModelDefaultsToConfigFile(runtime(), options),
   sendStartupProgress,
@@ -272,7 +253,7 @@ async function readReleaseManifest(): Promise<unknown> {
 async function exportDiagnosticBundle(): Promise<{ path: string; fileName: string; files: string[] } | null> {
   const setup = getSetupInfo();
   const activeSidecar = sidecarController.current;
-  const [doctor, overview, dreamStatus, releaseManifest] = await Promise.all([
+  const [doctor, overview, dreamStatus, advisor, releaseManifest] = await Promise.all([
     activeSidecar?.adminRequest('/admin/api/doctor').catch(error => ({
       status: 'unavailable', error: error instanceof Error ? error.message : String(error),
     })) ?? Promise.resolve({ status: 'sidecar_not_ready' }),
@@ -280,6 +261,9 @@ async function exportDiagnosticBundle(): Promise<{ path: string; fileName: strin
       status: 'unavailable', error: error instanceof Error ? error.message : String(error),
     })) ?? Promise.resolve({ status: 'sidecar_not_ready' }),
     activeSidecar?.adminRequest('/admin/api/dream/overview').catch(error => ({
+      status: 'unavailable', error: error instanceof Error ? error.message : String(error),
+    })) ?? Promise.resolve({ status: 'sidecar_not_ready' }),
+    activeSidecar?.adminRequest('/admin/api/advisor').catch(error => ({
       status: 'unavailable', error: error instanceof Error ? error.message : String(error),
     })) ?? Promise.resolve({ status: 'sidecar_not_ready' }),
     readReleaseManifest(),
@@ -294,6 +278,7 @@ async function exportDiagnosticBundle(): Promise<{ path: string; fileName: strin
     doctor,
     overview,
     dreamStatus,
+    advisor,
     personalPaths: [app.getPath('home'), app.getPath('userData')],
   });
   const mainWindow = windowController.current;
@@ -316,7 +301,7 @@ async function openSettingsPanel(panel: SettingsPanel): Promise<void> {
   windowController.reveal();
 }
 
-async function openAdmin(): Promise<void> {
+async function openAdmin(hash = ''): Promise<void> {
   const mainWindow = windowController.current;
   if (!mainWindow) return;
   if (getSetupInfo().needsSetup) {
@@ -330,7 +315,9 @@ async function openAdmin(): Promise<void> {
     return;
   }
   const activeSidecar = await sidecarController.ensureReady();
-  await mainWindow.loadURL(await activeSidecar.createAdminLink());
+  const url = await activeSidecar.createAdminLink();
+  const suffix = hash ? (hash.startsWith('#') ? hash : `#${hash}`) : '';
+  await mainWindow.loadURL(`${url}${suffix}`);
   windowController.reveal();
 }
 
@@ -406,6 +393,7 @@ if (!app.requestSingleInstanceLock()) {
       integrations: probe => probe
         ? setupController.integrationStates()
         : Promise.resolve(listIntegrations(sidecarController.current?.port)),
+      launchIntegration: client => launchDesktopIntegration(client, path => shell.openPath(path)),
       inspectKnowledgeSourceDirectory,
       initializeKnowledgeSourceGit,
       providerModels: listDesktopProviderModels,
@@ -467,6 +455,20 @@ if (!app.requestSingleInstanceLock()) {
         if (logger) return shell.showItemInFolder(logger.filePath);
       },
       exportDiagnosticBundle,
+      productSurfaces: createProductSurfaceHandlers({
+        runtime,
+        sidecar: () => sidecarController.current,
+      }),
+      chooseFile: async (filters) => {
+        const window = windowController.current;
+        if (!window) throw new Error('PMBrain 桌面窗口尚未就绪。');
+        const result = await dialog.showOpenDialog(window, {
+          properties: ['openFile'],
+          filters: filters ?? [{ name: 'JSON', extensions: ['json'] }],
+        });
+        return result.canceled ? null : result.filePaths[0] ?? null;
+      },
+      openExternal: (url) => shell.openExternal(url),
     });
     lanController.startMonitor(LAN_MONITOR_INTERVAL_MS);
     await windowController.create();

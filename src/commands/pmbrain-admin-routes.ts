@@ -148,8 +148,52 @@ import {
   AdvisorAdminResponseSchema,
   AdvisorApplyRequestSchema,
   AdvisorApplyResponseSchema,
+  ChronicleHideRequestSchema,
+  ConnectorAuthRequestSchema,
+  ConnectorLogoutRequestSchema,
+  ConnectorSyncRequestSchema,
+  EntityIdentityLinkRequestSchema,
+  GoogleConnectEnvelopeSchema,
+  GoogleConnectRequestSchema,
+  GoogleSourceAddRequestSchema,
+  PeopleMergeRequestSchema,
+  PeopleRejectRequestSchema,
+  PeopleUnlinkRequestSchema,
+  ProductSurfacePayloadSchema,
+  WaitingCloseRequestSchema,
+  WaitingScanRequestSchema,
 } from '../../shared/contracts/index.ts';
 import { applyAdminAdvisorFinding, getAdminAdvisorReport } from './admin-advisor.ts';
+import {
+  addAdminGoogleSource,
+  getAdminGoogleStatus,
+  localDateKey,
+  runAdminProductOp,
+} from './admin-product-surfaces.ts';
+import {
+  authConnector,
+  chronicleStatus,
+  connectGoogleAndLink,
+  enableChronicle,
+  hideChronicleEvent,
+  listPeopleWorkspace,
+  logoutConnector,
+  mergePeople,
+  organizeChronicleHistory,
+  peopleCard,
+  presentChronicleRows,
+  presentConnectors,
+  presentWaiting,
+  rejectPeoplePair,
+  scanWaiting,
+  setChronicleEnabled,
+  setConnectorAutoSync,
+  setWaitingAutomation,
+  unlinkPeopleMember,
+  waitingAutomationStatus,
+} from './admin-daily-product.ts';
+import { OperationError } from '../core/operation-error.ts';
+import { SourceOpError } from '../core/sources-ops.ts';
 
 export interface PmbrainAdminRouteOptions {
   app: express.Express;
@@ -342,6 +386,356 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
       );
     } catch (e) {
       res.status(400).json({ error: e instanceof Error ? e.message : 'advisor_apply_failed' });
+    }
+  });
+
+  const sendProductOpError = (res: Response, e: unknown, fallback: string) => {
+    if (e instanceof OperationError) {
+      res.status(e.code === 'permission_denied' ? 403 : 400).json({ error: e.message, code: e.code });
+      return;
+    }
+    if (e instanceof SourceOpError) {
+      res.status(400).json({ error: e.message, code: e.code });
+      return;
+    }
+    res.status(400).json({ error: e instanceof Error ? e.message : fallback });
+  };
+
+  app.get('/admin/api/connectors', requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const provider = firstQueryValue(req.query.provider);
+      if (provider) {
+        sendAdminContract(
+          res,
+          ProductSurfacePayloadSchema,
+          await runAdminProductOp(engine, 'connectors_status', { provider }),
+        );
+        return;
+      }
+      sendAdminContract(res, ProductSurfacePayloadSchema, await presentConnectors(engine));
+    } catch (e) {
+      sendProductOpError(res, e, 'connectors_status_failed');
+    }
+  });
+
+  app.post('/admin/api/connectors/auth', requireAdmin, express.json({ limit: '256kb' }), async (req: Request, res: Response) => {
+    try {
+      const input = ConnectorAuthRequestSchema.parse(req.body ?? {});
+      sendAdminContract(res, ProductSurfacePayloadSchema, await authConnector(input));
+    } catch (e) {
+      sendProductOpError(res, e, 'connector_auth_failed');
+    }
+  });
+
+  app.post('/admin/api/connectors/logout', requireAdmin, express.json({ limit: '4kb' }), async (req: Request, res: Response) => {
+    try {
+      const input = ConnectorLogoutRequestSchema.parse(req.body ?? {});
+      sendAdminContract(res, ProductSurfacePayloadSchema, logoutConnector(input.provider));
+    } catch (e) {
+      sendProductOpError(res, e, 'connector_logout_failed');
+    }
+  });
+
+  app.post('/admin/api/connectors/sync', requireAdmin, express.json({ limit: '8kb' }), async (req: Request, res: Response) => {
+    try {
+      const input = ConnectorSyncRequestSchema.parse(req.body);
+      sendAdminContract(
+        res,
+        ProductSurfacePayloadSchema,
+        await runAdminProductOp(engine, 'connector_sync', {
+          provider: input.provider,
+          ...(input.full === true ? { full: true } : {}),
+          ...(input.dry_run === true ? { dry_run: true } : {}),
+        }),
+      );
+    } catch (e) {
+      sendProductOpError(res, e, 'connector_sync_failed');
+    }
+  });
+
+  app.get('/admin/api/waiting', requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const limitRaw = firstQueryValue(req.query.limit);
+      const limit = limitRaw ? Number(limitRaw) : 20;
+      const payload = await runAdminProductOp(engine, 'open_loops', {
+        group_by: 'counterparty',
+        include_context: true,
+        all_sources: true,
+        limit: Number.isFinite(limit) ? limit : 20,
+      });
+      sendAdminContract(res, ProductSurfacePayloadSchema, await presentWaiting(engine, payload));
+    } catch (e) {
+      sendProductOpError(res, e, 'waiting_failed');
+    }
+  });
+
+  app.post('/admin/api/waiting/scan', requireAdmin, express.json({ limit: '4kb' }), async (req: Request, res: Response) => {
+    try {
+      const input = WaitingScanRequestSchema.parse(req.body ?? {});
+      const selected = input.lanes ?? ['gmail', 'meeting', 'conversation'];
+      const gmailRun = selected.includes('gmail')
+        ? await startActionRun('sync_all', process.cwd(), runHooks, {})
+        : null;
+      const result = await scanWaiting(engine, selected);
+      sendAdminContract(res, ProductSurfacePayloadSchema, {
+        ...result,
+        ...(gmailRun ? { gmail_run_id: gmailRun.id, gmail_status: gmailRun.status } : {}),
+      });
+    } catch (e) {
+      sendProductOpError(res, e, 'waiting_scan_failed');
+    }
+  });
+
+  app.get('/admin/api/waiting/settings', requireAdmin, async (_req: Request, res: Response) => {
+    try {
+      sendAdminContract(res, ProductSurfacePayloadSchema, await waitingAutomationStatus(engine));
+    } catch (e) {
+      sendProductOpError(res, e, 'waiting_settings_failed');
+    }
+  });
+
+  app.post('/admin/api/waiting/settings', requireAdmin, express.json({ limit: '4kb' }), async (req: Request, res: Response) => {
+    try {
+      const body = req.body && typeof req.body === 'object' ? req.body as Record<string, unknown> : {};
+      if (typeof body.enabled !== 'boolean') {
+        throw new OperationError('invalid_params', '请指定是否自动识别待办');
+      }
+      sendAdminContract(res, ProductSurfacePayloadSchema, await setWaitingAutomation(engine, body.enabled));
+    } catch (e) {
+      sendProductOpError(res, e, 'waiting_settings_failed');
+    }
+  });
+
+  app.post('/admin/api/connectors/auto-sync', requireAdmin, express.json({ limit: '4kb' }), async (req: Request, res: Response) => {
+    try {
+      const body = req.body && typeof req.body === 'object' ? req.body as Record<string, unknown> : {};
+      if (typeof body.provider !== 'string' || typeof body.enabled !== 'boolean') {
+        throw new OperationError('invalid_params', '请选择连接并指定是否自动同步');
+      }
+      sendAdminContract(res, ProductSurfacePayloadSchema, await setConnectorAutoSync(engine, body.provider, body.enabled));
+    } catch (e) {
+      sendProductOpError(res, e, 'connector_auto_sync_failed');
+    }
+  });
+
+  app.post('/admin/api/waiting/close', requireAdmin, express.json({ limit: '4kb' }), async (req: Request, res: Response) => {
+    try {
+      const input = WaitingCloseRequestSchema.parse(req.body);
+      sendAdminContract(
+        res,
+        ProductSurfacePayloadSchema,
+        await runAdminProductOp(engine, 'loops_close', {
+          id: input.id,
+          status: input.status,
+          ...(input.note ? { note: input.note } : {}),
+        }),
+      );
+    } catch (e) {
+      sendProductOpError(res, e, 'waiting_close_failed');
+    }
+  });
+
+  app.get('/admin/api/chronicle/day', requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const date = firstQueryValue(req.query.date) || localDateKey();
+      sendAdminContract(
+        res,
+        ProductSurfacePayloadSchema,
+        await presentChronicleRows(engine, await runAdminProductOp(engine, 'chronicle_day', { date })),
+      );
+    } catch (e) {
+      sendProductOpError(res, e, 'chronicle_day_failed');
+    }
+  });
+
+  app.get('/admin/api/chronicle/on-this-day', requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const date = firstQueryValue(req.query.date);
+      sendAdminContract(
+        res,
+        ProductSurfacePayloadSchema,
+        await presentChronicleRows(engine, await runAdminProductOp(engine, 'chronicle_on_this_day', date ? { date } : {})),
+      );
+    } catch (e) {
+      sendProductOpError(res, e, 'chronicle_on_this_day_failed');
+    }
+  });
+
+  app.get('/admin/api/chronicle/status', requireAdmin, async (_req: Request, res: Response) => {
+    try {
+      sendAdminContract(res, ProductSurfacePayloadSchema, await chronicleStatus(engine));
+    } catch (e) {
+      sendProductOpError(res, e, 'chronicle_status_failed');
+    }
+  });
+
+  app.post('/admin/api/chronicle/enable', requireAdmin, async (_req: Request, res: Response) => {
+    try {
+      sendAdminContract(res, ProductSurfacePayloadSchema, await enableChronicle(engine));
+    } catch (e) {
+      sendProductOpError(res, e, 'chronicle_enable_failed');
+    }
+  });
+
+  app.post('/admin/api/chronicle/settings', requireAdmin, express.json({ limit: '4kb' }), async (req: Request, res: Response) => {
+    try {
+      const body = req.body && typeof req.body === 'object' ? req.body as Record<string, unknown> : {};
+      if (typeof body.enabled !== 'boolean') {
+        throw new OperationError('invalid_params', '请指定是否自动生成时间线');
+      }
+      sendAdminContract(res, ProductSurfacePayloadSchema, await setChronicleEnabled(engine, body.enabled));
+    } catch (e) {
+      sendProductOpError(res, e, 'chronicle_settings_failed');
+    }
+  });
+
+  app.post('/admin/api/chronicle/history', requireAdmin, async (_req: Request, res: Response) => {
+    try {
+      const result = await organizeChronicleHistory(engine) as Record<string, unknown>;
+      const enqueued = Number(result.enqueued ?? 0);
+      const worker = enqueued > 0 ? await ensureAdminWorkerStarted() : null;
+      sendAdminContract(res, ProductSurfacePayloadSchema, { ...result, worker });
+    } catch (e) {
+      sendProductOpError(res, e, 'chronicle_history_failed');
+    }
+  });
+
+  app.post('/admin/api/chronicle/hide', requireAdmin, express.json({ limit: '4kb' }), async (req: Request, res: Response) => {
+    try {
+      const input = ChronicleHideRequestSchema.parse(req.body ?? {});
+      sendAdminContract(res, ProductSurfacePayloadSchema, await hideChronicleEvent(engine, input.slug));
+    } catch (e) {
+      sendProductOpError(res, e, 'chronicle_hide_failed');
+    }
+  });
+
+  app.get('/admin/api/ontology', requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const entity = firstQueryValue(req.query.entity);
+      if (!entity) {
+        res.status(400).json({ error: 'entity_required' });
+        return;
+      }
+      sendAdminContract(
+        res,
+        ProductSurfacePayloadSchema,
+        await runAdminProductOp(engine, 'ontology_get', { entity }),
+      );
+    } catch (e) {
+      sendProductOpError(res, e, 'ontology_failed');
+    }
+  });
+
+  app.get('/admin/api/entity-identity', requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const entityId = firstQueryValue(req.query.entity_id);
+      const slug = firstQueryValue(req.query.slug);
+      sendAdminContract(
+        res,
+        ProductSurfacePayloadSchema,
+        await runAdminProductOp(engine, 'entity_identity_list', {
+          ...(entityId ? { entity_id: entityId } : {}),
+          ...(slug ? { slug } : {}),
+        }),
+      );
+    } catch (e) {
+      sendProductOpError(res, e, 'entity_identity_list_failed');
+    }
+  });
+
+  app.post('/admin/api/entity-identity/link', requireAdmin, express.json({ limit: '8kb' }), async (req: Request, res: Response) => {
+    try {
+      const input = EntityIdentityLinkRequestSchema.parse(req.body);
+      sendAdminContract(
+        res,
+        ProductSurfacePayloadSchema,
+        await runAdminProductOp(engine, 'entity_identity_link', {
+          entity_id: input.entity_id,
+          slug: input.slug,
+          source_id: input.source_id,
+          ...(input.canonical === true ? { canonical: true } : {}),
+        }),
+      );
+    } catch (e) {
+      sendProductOpError(res, e, 'entity_identity_link_failed');
+    }
+  });
+
+  app.get('/admin/api/people', requireAdmin, async (req: Request, res: Response) => {
+    try {
+      sendAdminContract(
+        res,
+        ProductSurfacePayloadSchema,
+        await listPeopleWorkspace(engine, firstQueryValue(req.query.q) ?? ''),
+      );
+    } catch (e) {
+      sendProductOpError(res, e, 'people_list_failed');
+    }
+  });
+
+  app.get('/admin/api/people/card', requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const entityId = firstQueryValue(req.query.entity_id);
+      if (!entityId) {
+        res.status(400).json({ error: 'entity_required' });
+        return;
+      }
+      sendAdminContract(res, ProductSurfacePayloadSchema, await peopleCard(engine, entityId));
+    } catch (e) {
+      sendProductOpError(res, e, 'people_card_failed');
+    }
+  });
+
+  app.post('/admin/api/people/merge', requireAdmin, express.json({ limit: '16kb' }), async (req: Request, res: Response) => {
+    try {
+      const input = PeopleMergeRequestSchema.parse(req.body ?? {});
+      sendAdminContract(res, ProductSurfacePayloadSchema, await mergePeople(engine, input.members));
+    } catch (e) {
+      sendProductOpError(res, e, 'people_merge_failed');
+    }
+  });
+
+  app.post('/admin/api/people/reject', requireAdmin, express.json({ limit: '8kb' }), async (req: Request, res: Response) => {
+    try {
+      const input = PeopleRejectRequestSchema.parse(req.body ?? {});
+      sendAdminContract(res, ProductSurfacePayloadSchema, await rejectPeoplePair(engine, input.left, input.right));
+    } catch (e) {
+      sendProductOpError(res, e, 'people_reject_failed');
+    }
+  });
+
+  app.post('/admin/api/people/unlink', requireAdmin, express.json({ limit: '8kb' }), async (req: Request, res: Response) => {
+    try {
+      const input = PeopleUnlinkRequestSchema.parse(req.body ?? {});
+      sendAdminContract(res, ProductSurfacePayloadSchema, await unlinkPeopleMember(engine, input));
+    } catch (e) {
+      sendProductOpError(res, e, 'people_unlink_failed');
+    }
+  });
+
+  app.get('/admin/api/google/status', requireAdmin, async (_req: Request, res: Response) => {
+    try {
+      sendAdminContract(res, ProductSurfacePayloadSchema, await getAdminGoogleStatus(engine));
+    } catch (e) {
+      sendProductOpError(res, e, 'google_status_failed');
+    }
+  });
+
+  app.post('/admin/api/google/connect', requireAdmin, express.json({ limit: '256kb' }), async (req: Request, res: Response) => {
+    try {
+      const input = GoogleConnectRequestSchema.parse(req.body ?? {});
+      sendAdminContract(res, GoogleConnectEnvelopeSchema, await connectGoogleAndLink(engine, input));
+    } catch (e) {
+      sendProductOpError(res, e, 'google_connect_failed');
+    }
+  });
+
+  app.post('/admin/api/google/source', requireAdmin, express.json({ limit: '8kb' }), async (req: Request, res: Response) => {
+    try {
+      const input = GoogleSourceAddRequestSchema.parse(req.body);
+      sendAdminContract(res, ProductSurfacePayloadSchema, await addAdminGoogleSource(engine, input));
+    } catch (e) {
+      sendProductOpError(res, e, 'google_source_failed');
     }
   });
 
@@ -1117,11 +1511,11 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
       const run = await startImportRun(engine, {
         path: input.path,
         sourceId: input.sourceId,
-        includeOffice: input.includeOffice,
-        includeImages: input.includeImages,
-        noEmbed: !input.autoEmbed,
-        structuredDocuments: input.structuredDocuments,
-        documentOcr: input.documentOcr,
+        includeOffice: true,
+        includeImages: true,
+        noEmbed: false,
+        structuredDocuments: true,
+        documentOcr: true,
         workers: input.workers,
         fresh: true,
         reportFiles: true,
@@ -1203,11 +1597,11 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
         const run = await startImportRun(engine, {
           path: filePath,
           sourceId: firstQueryValue(req.query.sourceId),
-          includeOffice: fileKind === 'office',
-          includeImages: fileKind === 'image',
-          noEmbed: !queryFlag(req.query.autoEmbed, true),
-          structuredDocuments: queryFlag(req.query.structuredDocuments, true),
-          documentOcr: queryFlag(req.query.documentOcr, false),
+          includeOffice: true,
+          includeImages: true,
+          noEmbed: false,
+          structuredDocuments: true,
+          documentOcr: true,
           workers,
           reportFiles: true,
         }, process.cwd(), uploadRunHooks);

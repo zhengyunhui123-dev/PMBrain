@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { applyEdits, modify, parse as parseJsonc, type ParseError } from 'jsonc-parser';
 import { backupFile } from './config-manager.js';
+import { detectIntegrationLaunchTarget } from './integration-launcher.js';
 import type { SidecarManager } from './sidecar-manager.js';
 
 export type IntegrationClient = 'cherry' | 'workbuddy' | 'cursor' | 'trae' | 'qwen' | 'qoder' | 'zcode' | 'mimo' | 'kimi' | 'qwenpaw' | 'codex' | 'claude' | 'grok' | 'hermes' | 'openclaw' | 'codebuddy';
@@ -19,6 +20,7 @@ export interface IntegrationInfo {
   configuredPort?: number;
   portMismatch?: boolean;
   connectionState?: 'connected' | 'saved' | 'invalid';
+  launchAvailable?: boolean;
 }
 
 export interface IntegrationResult {
@@ -902,7 +904,8 @@ export function listIntegrations(currentPort?: number): IntegrationInfo[] {
     const configured = isConfigured(id, path);
     const configuredPort = configured && path ? readConfiguredPort(id, path) : undefined;
     const portMismatch = configured && currentPort !== undefined && configuredPort !== undefined && configuredPort !== currentPort;
-    return { id, name: meta.name, path, automatic: meta.automatic, configured, defaultOrder, configuredPort, portMismatch };
+    const launchAvailable = detectIntegrationLaunchTarget(id) !== null;
+    return { id, name: meta.name, path, automatic: meta.automatic, configured, defaultOrder, configuredPort, portMismatch, launchAvailable };
   });
   return sortIntegrationsByConfigured(integrations);
 }

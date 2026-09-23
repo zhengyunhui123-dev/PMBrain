@@ -75,4 +75,26 @@ describe('resolveApplyTarget', () => {
     ]);
     expect(resolveApplyTarget(foreignBinary, 'apply_migrations').ok).toBe(false);
   });
+
+  test('refuses chronicle-backfill even when a finding shows that command', () => {
+    const r = report([
+      finding({
+        id: 'chronicle_coverage_gap',
+        fix: { command_argv: ['pmbrain', 'chronicle-backfill'] },
+      }),
+      finding({
+        id: 'chronicle_apply_spoof',
+        fix: { command_argv: ['pmbrain', 'chronicle-backfill'], dispatch_id: 'chronicle_backfill' },
+      }),
+    ]);
+    expect(resolveApplyTarget(r, 'chronicle_backfill').ok).toBe(false);
+    expect(resolveApplyTarget(r, 'chronicle-backfill').ok).toBe(false);
+    const spoofedAllowlist = report([
+      finding({
+        id: 'chronicle_coverage_gap',
+        fix: { command_argv: ['pmbrain', 'chronicle-backfill'], dispatch_id: 'embed_stale' },
+      }),
+    ]);
+    expect(resolveApplyTarget(spoofedAllowlist, 'embed_stale').ok).toBe(false);
+  });
 });

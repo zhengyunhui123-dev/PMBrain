@@ -10,7 +10,7 @@ import { chunkCodeText, chunkCodeTextFull, detectCodeLanguage, CHUNKER_VERSION }
 import { findChunkForOffset } from './chunkers/edge-extractor.ts';
 import { extractCodeRefs, imageOfCandidates } from './link-extraction.ts';
 import { embedBatch, embedMultimodal, getEmbeddingDimensions } from './embedding.ts';
-import { getEmbeddingModel } from './ai/gateway.ts';
+import { getEmbeddingModel, isAvailable as isAiAvailable } from './ai/gateway.ts';
 import { slugifyPath, slugifyCodePath, isCodeFilePath } from './sync.ts';
 import type { ChunkInput, PageInput, PageType } from './types.ts';
 import { computeEffectiveDate } from './effective-date.ts';
@@ -47,6 +47,14 @@ import {
   reuseStructuredChunkEmbeddings,
   type LargeDocumentProgress,
 } from './document/trusted-large-document.ts';
+import {
+  OCR_PROMPT_VERSION,
+  OCR_RECEIPT_VERSION,
+  recognizeImageText,
+  shouldRefreshOcrReceipt,
+  type OcrImageResult,
+  type OcrReceipt,
+} from './ocr.ts';
 
 /**
  * v0.20.0 Cathedral II Layer 8 D2 — markdown fence extraction helper.
@@ -1471,6 +1479,7 @@ const NEEDS_DECODE = new Set(['.heic', '.heif', '.avif']);
  */
 export interface ImportTransactionSpec {
   slug: string;
+  sourceId?: string;
   hadExisting: boolean;
   page: PageInput;
   /** When undefined, no chunk write happens. When [], deletes any prior chunks. */
@@ -1486,22 +1495,24 @@ export async function withImportTransaction(
   spec: ImportTransactionSpec,
 ): Promise<void> {
   await engine.transaction(async (tx) => {
-    if (spec.hadExisting) await tx.createVersion(spec.slug);
-    await tx.putPage(spec.slug, spec.page);
+    const pageOpts = spec.sourceId ? { sourceId: spec.sourceId } : undefined;
+    if (spec.hadExisting) await tx.createVersion(spec.slug, pageOpts);
+    await tx.putPage(spec.slug, spec.page, pageOpts);
     if (spec.file) {
       // page_id resolution after putPage so the new row's id is available.
-      const stored = await tx.getPage(spec.slug);
+      const stored = await tx.getPage(spec.slug, pageOpts);
       await tx.upsertFile({
         ...spec.file,
+        source_id: spec.sourceId,
         page_slug: spec.slug,
         page_id: stored?.id ?? null,
       });
     }
     if (spec.chunks !== undefined) {
       if (spec.chunks.length > 0) {
-        await tx.upsertChunks(spec.slug, spec.chunks);
+        await tx.upsertChunks(spec.slug, spec.chunks, pageOpts);
       } else {
-        await tx.deleteChunks(spec.slug);
+        await tx.deleteChunks(spec.slug, pageOpts);
       }
     }
     if (spec.after) await spec.after(tx);
@@ -1561,7 +1572,7 @@ async function decodeIfNeeded(ext: string, buf: Buffer): Promise<{ buf: Buffer; 
       data: new Uint8ClampedArray(decoded.data),
       width: decoded.width,
       height: decoded.height,
-    });
+    } as ImageData);
     return { buf: Buffer.from(pngBytes), mime: 'image/png' };
   }
   if (ext === '.avif') {
@@ -1587,7 +1598,7 @@ async function decodeIfNeeded(ext: string, buf: Buffer): Promise<{ buf: Buffer; 
       data: new Uint8ClampedArray(decoded.data),
       width: decoded.width,
       height: decoded.height,
-    });
+    } as ImageData);
     return { buf: Buffer.from(pngBytes), mime: 'image/png' };
   }
   // Universal codecs: pass-through.
@@ -1642,45 +1653,27 @@ async function readExifSafe(buf: Buffer): Promise<Record<string, unknown>> {
  * embedded in the image (mitigation for the OCR-as-prompt-injection vector).
  */
 let _ocrWarnedThisSession = false;
+export async function extractImageOcrResult(
+  engine: BrainEngine,
+  imgBuf: Buffer,
+  mime: string,
+  opts: { enabled?: boolean } = {},
+): Promise<OcrImageResult> {
+  const result = await recognizeImageText(engine, imgBuf, mime, opts);
+  if ((result.status === 'failed' || result.code === 'model_no_vision' || result.code === 'model_unavailable') && !_ocrWarnedThisSession) {
+    console.warn(`[pmbrain] 图片识别已跳过，导入继续：${result.message ?? result.code ?? '未知原因'}`);
+    _ocrWarnedThisSession = true;
+  }
+  return result;
+}
+
 export async function extractImageOcrText(
   engine: BrainEngine,
   imgBuf: Buffer,
   mime: string,
   opts: { enabled?: boolean } = {},
 ): Promise<string> {
-  const opt = process.env.GBRAIN_EMBEDDING_IMAGE_OCR;
-  if (opts.enabled !== true && opt !== 'true') return '';
-
-  // Counter helpers — quiet failure if config table is unavailable.
-  async function bump(key: string) {
-    try {
-      const cur = parseInt((await engine.getConfig(key)) ?? '0', 10);
-      await engine.setConfig(key, String((Number.isFinite(cur) ? cur : 0) + 1));
-    } catch { /* non-fatal */ }
-  }
-
-  await bump('ocr_attempted');
-  try {
-    const { isAvailable, generateOcrText } = await import('./ai/gateway.ts');
-    if (!isAvailable('expansion')) {
-      if (!_ocrWarnedThisSession) {
-        console.warn('[pmbrain] OCR opt-in is true but expansion model is unavailable; skipping OCR for this session');
-        _ocrWarnedThisSession = true;
-      }
-      await bump('ocr_failed_no_key');
-      return '';
-    }
-    const text = await generateOcrText(imgBuf, mime);
-    await bump('ocr_succeeded');
-    return text;
-  } catch (err) {
-    if (!_ocrWarnedThisSession) {
-      console.warn(`[pmbrain] OCR call failed (continuing without OCR text): ${err instanceof Error ? err.message : String(err)}`);
-      _ocrWarnedThisSession = true;
-    }
-    await bump('ocr_failed_other');
-    return '';
-  }
+  return (await extractImageOcrResult(engine, imgBuf, mime, opts)).text;
 }
 
 export interface ImportImageOptions {
@@ -1696,6 +1689,7 @@ export interface ImportImageOptions {
   sourceId?: string;
   /** Explicit per-import opt-in for OCR; still requires an available vision model. */
   forceOcr?: boolean;
+  forceOcrRefresh?: boolean;
 }
 
 /** Module-level limiter so concurrent imports across files share the budget. */
@@ -1737,8 +1731,17 @@ export async function importImageFile(
   const buf = readFileSync(filePath);
   const hash = createHash('sha256').update(buf).digest('hex');
 
-  const existing = await engine.getPage(imageSlug);
-  if (existing?.content_hash === hash) {
+  const existing = await engine.getPage(imageSlug, { sourceId: opts.sourceId });
+  const gateway = await import('./ai/gateway.ts');
+  const ocrRequested = opts.forceOcr === true || gateway.isOcrEnabled();
+  let ocrModel: string | null = null;
+  if (ocrRequested) {
+    try { ocrModel = gateway.getImageOcrModel(); } catch { ocrModel = null; }
+  }
+  const existingReceipt = existing?.frontmatter?.ocr_receipt as OcrReceipt | undefined;
+  if (existing?.content_hash === hash
+      && !opts.forceOcrRefresh
+      && (!ocrRequested || !shouldRefreshOcrReceipt(existingReceipt, hash, ocrModel))) {
     return { slug: imageSlug, status: 'skipped', chunks: 0 };
   }
 
@@ -1760,13 +1763,26 @@ export async function importImageFile(
 
   // OCR opt-in (cherry-1). Runs through the per-process limiter so 100
   // images first-import doesn't serialize into 200s of OCR latency.
-  const ocrText: string = opts.noEmbed
-    ? ''
-    : await _ocrLimiter(() => extractImageOcrText(engine, decoded.buf, decoded.mime, { enabled: opts.forceOcr }));
+  const ocrResult = await _ocrLimiter(() => extractImageOcrResult(engine, decoded.buf, decoded.mime, { enabled: opts.forceOcr }));
+  const ocrText = ocrResult.text;
+  const receipt: OcrReceipt = {
+    version: OCR_RECEIPT_VERSION,
+    promptVersion: OCR_PROMPT_VERSION,
+    sourceHash: hash,
+    model: ocrResult.model,
+    candidates: 1,
+    attempted: ocrResult.status === 'skipped' ? 0 : 1,
+    succeeded: ocrResult.status === 'success' ? 1 : 0,
+    failed: ocrResult.status === 'failed' ? 1 : 0,
+    failedItems: ocrResult.status === 'failed' ? [filenameForReceipt(relativePath)] : [],
+    status: ocrResult.status === 'success' ? 'complete' : ocrResult.status === 'failed' ? 'partial' : 'skipped',
+    ...(ocrResult.message ? { reason: ocrResult.message } : {}),
+    processedAt: new Date().toISOString(),
+  };
 
   // Multimodal embed.
   let embedding: Float32Array | null = null;
-  if (!opts.noEmbed) {
+  if (!opts.noEmbed && gateway.getMultimodalModel()) {
     try {
       const [vec] = await embedMultimodal([
         { kind: 'image_base64', data: decoded.buf.toString('base64'), mime: decoded.mime },
@@ -1789,18 +1805,29 @@ export async function importImageFile(
     mime_type: decoded.mime,
     bytes: stat.size,
     ...exif,
+    ocr_receipt: receipt,
   };
 
   // Single chunk per image. chunk_text holds OCR text or filename so
   // searchKeyword has something useful to match when image rows are opted in.
   // chunk_source='image_asset' joins the v0.20 chunk_source allowlist.
-  const chunk: ChunkInput & { modality?: string; embedding_image?: Float32Array } = {
-    chunk_index: 0,
-    chunk_text: ocrText || filename,
+  const chunks: Array<ChunkInput & { modality?: string; embedding_image?: Float32Array }> = [];
+  if (ocrText) {
+    chunks.push({ chunk_index: 0, chunk_text: ocrText, chunk_source: 'compiled_truth', modality: 'text' });
+  }
+  chunks.push({
+    chunk_index: chunks.length,
+    chunk_text: filename,
     chunk_source: 'image_asset',
     modality: 'image',
     ...(embedding ? { embedding_image: embedding } : {}),
-  };
+  });
+  if (ocrText && !opts.noEmbed && isAiAvailable('embedding')) {
+    const [textEmbedding] = await embedBatch([ocrText]);
+    chunks[0].embedding = textEmbedding;
+    chunks[0].model = getEmbeddingModel();
+    chunks[0].token_count = Math.ceil(ocrText.length / 4);
+  }
 
   const fileSpec: FileSpec = {
     filename,
@@ -1812,6 +1839,7 @@ export async function importImageFile(
 
   await withImportTransaction(engine, {
     slug: imageSlug,
+    sourceId: opts.sourceId,
     hadExisting: !!existing,
     page: {
       type: 'image',
@@ -1822,7 +1850,7 @@ export async function importImageFile(
       frontmatter,
       content_hash: hash,
     },
-    chunks: [chunk],
+    chunks,
     file: fileSpec,
     after: async (tx) => {
       // Cherry-3: path-proximity auto-link to a sibling text page. The first
@@ -1830,13 +1858,18 @@ export async function importImageFile(
       // throws when the target doesn't exist; we silently skip for now and
       // let `gbrain reconcile-links` pick up later additions.
       for (const candidate of imageOfCandidates(imageSlug)) {
-        const sibling = await tx.getPage(candidate);
+        const sibling = await tx.getPage(candidate, opts.sourceId ? { sourceId: opts.sourceId } : undefined);
         if (sibling) {
           try {
             await tx.addLink(
               imageSlug, candidate,
               filename,
               'image_of', 'manual', imageSlug, 'frontmatter',
+              opts.sourceId ? {
+                fromSourceId: opts.sourceId,
+                toSourceId: opts.sourceId,
+                originSourceId: opts.sourceId,
+              } : undefined,
             );
           } catch { /* sibling vanished mid-tx; skip */ }
           break; // one canonical link per image
@@ -1845,7 +1878,31 @@ export async function importImageFile(
     },
   });
 
-  return { slug: imageSlug, status: 'imported', chunks: 1 };
+  return {
+    slug: imageSlug,
+    status: 'imported',
+    chunks: chunks.length,
+    documentSummary: {
+      parser: 'pmbrain-image-ocr-v1',
+      structured: false,
+      local: true,
+      sections: ocrText ? 1 : 0,
+      tables: 0,
+      images: 1,
+      pagesNeedingOcr: 1,
+      ocrUsed: ocrResult.status === 'success',
+      ocrProvider: ocrResult.model ?? undefined,
+      ocrAttempted: receipt.attempted,
+      ocrSucceeded: receipt.succeeded,
+      ocrFailed: receipt.failed,
+      ocrSkipped: ocrResult.status === 'skipped' ? 1 : 0,
+      ocrWarnings: ocrResult.message ? [ocrResult.message] : [],
+    },
+  };
+}
+
+function filenameForReceipt(relativePath: string): string {
+  return basename(relativePath);
 }
 
 /** Used by sync.isSyncable + import.ts walker. */

@@ -31,6 +31,8 @@ import type {
 } from '../preload/index.js';
 import type { DesktopKnowledgeSourceStatus } from './knowledge-source-git.js';
 import type { PgliteOwnerStatus } from '../../../src/core/pglite-owner-control.js';
+import type { ProductSurfaceHandlers } from './product-surfaces.js';
+import { isSafeGoogleConsentUrl } from '../../../src/core/creds/oauth-envelope.js';
 
 type IpcHandler = (event: IpcMainInvokeEvent, ...args: any[]) => any;
 
@@ -65,6 +67,7 @@ export interface DesktopIpcHandlers {
   openDockerInstallGuide: () => Promise<unknown>;
   chooseEmbeddingRebuild: (choice: 'wait' | 'defer') => void;
   configureIntegration: (client: IntegrationClient, kind: CredentialKind, deep?: boolean) => Promise<unknown>;
+  launchIntegration: (client: IntegrationClient) => Promise<void>;
   writeWorkbuddyUserAgent: () => Promise<unknown>;
   getWorkbuddyAgentIntegration: () => Promise<unknown>;
   installWorkbuddyAgent: (workspace: string) => Promise<unknown>;
@@ -88,6 +91,9 @@ export interface DesktopIpcHandlers {
   retry: () => Promise<string | undefined>;
   openLogs: () => Promise<void> | void;
   exportDiagnosticBundle: () => Promise<unknown>;
+  productSurfaces: ProductSurfaceHandlers;
+  chooseFile: (filters?: Array<{ name: string; extensions: string[] }>) => Promise<string | null>;
+  openExternal: (url: string) => Promise<void>;
 }
 
 function registerTrustedHandler(
@@ -139,6 +145,7 @@ export function registerDesktopIpcHandlers(handlers: DesktopIpcHandlers): void {
   registerTrustedHandler('desktop:open-docker-install-guide', handlers, () => handlers.openDockerInstallGuide());
   registerTrustedHandler('desktop:choose-embedding-rebuild', handlers, (_event, choice: 'wait' | 'defer') => handlers.chooseEmbeddingRebuild(choice));
   registerTrustedHandler('desktop:configure-integration', handlers, (_event, client: IntegrationClient, kind: CredentialKind, deep?: boolean) => handlers.configureIntegration(client, kind, deep));
+  registerTrustedHandler('desktop:launch-integration', handlers, (_event, client: IntegrationClient) => handlers.launchIntegration(client));
   registerTrustedHandler('desktop:write-workbuddy-user-agent', handlers, () => handlers.writeWorkbuddyUserAgent());
   registerTrustedHandler('desktop:get-workbuddy-agent-integration', handlers, () => handlers.getWorkbuddyAgentIntegration());
   registerTrustedHandler('desktop:install-workbuddy-agent', handlers, (_event, workspace: string) => handlers.installWorkbuddyAgent(workspace));
@@ -174,4 +181,34 @@ export function registerDesktopIpcHandlers(handlers: DesktopIpcHandlers): void {
   registerTrustedHandler('desktop:open-logs', handlers, () => handlers.openLogs());
   registerTrustedHandler('desktop:export-diagnostic-bundle', handlers, () => handlers.exportDiagnosticBundle());
   registerTrustedHandler('desktop:quit', handlers, () => app.quit());
+  registerTrustedHandler('desktop:product-connectors', handlers, (_event, provider?: string) => handlers.productSurfaces.connectors(provider));
+  registerTrustedHandler('desktop:product-connector-sync', handlers, (_event, body: { provider: string; full?: boolean; dry_run?: boolean }) => handlers.productSurfaces.connectorSync(body));
+  registerTrustedHandler('desktop:product-connector-auth', handlers, (_event, body: { provider: string; cookie?: string; token?: string }) => handlers.productSurfaces.connectorAuth(body));
+  registerTrustedHandler('desktop:product-connector-logout', handlers, (_event, provider: string) => handlers.productSurfaces.connectorLogout(provider));
+  registerTrustedHandler('desktop:product-connector-auto-sync', handlers, (_event, provider: string, enabled: boolean) => handlers.productSurfaces.connectorAutoSync(provider, enabled));
+  registerTrustedHandler('desktop:product-waiting', handlers, () => handlers.productSurfaces.waiting());
+  registerTrustedHandler('desktop:product-waiting-close', handlers, (_event, body: { id: number; status: 'done' | 'dropped'; note?: string }) => handlers.productSurfaces.closeWaiting(body));
+  registerTrustedHandler('desktop:product-waiting-scan', handlers, (_event, lanes?: Array<'gmail' | 'meeting' | 'conversation'>) => handlers.productSurfaces.waitingScan(lanes));
+  registerTrustedHandler('desktop:product-chronicle-day', handlers, (_event, date?: string) => handlers.productSurfaces.chronicleDay(date));
+  registerTrustedHandler('desktop:product-chronicle-on-this-day', handlers, (_event, date?: string) => handlers.productSurfaces.chronicleOnThisDay(date));
+  registerTrustedHandler('desktop:product-chronicle-status', handlers, () => handlers.productSurfaces.chronicleStatus());
+  registerTrustedHandler('desktop:product-chronicle-enable', handlers, () => handlers.productSurfaces.enableChronicle());
+  registerTrustedHandler('desktop:product-chronicle-history', handlers, () => handlers.productSurfaces.organizeChronicleHistory());
+  registerTrustedHandler('desktop:product-chronicle-hide', handlers, (_event, slug: string) => handlers.productSurfaces.hideChronicleEvent(slug));
+  registerTrustedHandler('desktop:product-ontology', handlers, (_event, entity: string) => handlers.productSurfaces.ontology(entity));
+  registerTrustedHandler('desktop:product-entity-identity', handlers, (_event, query?: { entity_id?: string; slug?: string }) => handlers.productSurfaces.entityIdentity(query));
+  registerTrustedHandler('desktop:product-entity-identity-link', handlers, (_event, body: { entity_id: string; slug: string; source_id: string; canonical?: boolean }) => handlers.productSurfaces.linkEntityIdentity(body));
+  registerTrustedHandler('desktop:product-people', handlers, (_event, query?: string) => handlers.productSurfaces.people(query));
+  registerTrustedHandler('desktop:product-people-card', handlers, (_event, entityId: string) => handlers.productSurfaces.peopleCard(entityId));
+  registerTrustedHandler('desktop:product-people-merge', handlers, (_event, members: Array<{ source_id: string; slug: string; title?: string }>) => handlers.productSurfaces.mergePeople(members));
+  registerTrustedHandler('desktop:product-people-reject', handlers, (_event, body: { left: { source_id: string; slug: string }; right: { source_id: string; slug: string } }) => handlers.productSurfaces.rejectPeople(body));
+  registerTrustedHandler('desktop:product-people-unlink', handlers, (_event, body: { entity_id: string; source_id: string; slug: string }) => handlers.productSurfaces.unlinkPeople(body));
+  registerTrustedHandler('desktop:google-status', handlers, () => handlers.productSurfaces.googleStatus());
+  registerTrustedHandler('desktop:google-connect', handlers, (_event, input?: { account?: string; paste?: boolean; code?: string; clientJsonPath?: string }) => handlers.productSurfaces.googleConnect(input));
+  registerTrustedHandler('desktop:google-source', handlers, (_event, body: { account: string; id?: string }) => handlers.productSurfaces.addGoogleSource(body));
+  registerTrustedHandler('desktop:choose-file', handlers, (_event, filters?: Array<{ name: string; extensions: string[] }>) => handlers.chooseFile(filters));
+  registerTrustedHandler('desktop:open-external', handlers, (_event, url: string) => {
+    if (!isSafeGoogleConsentUrl(url)) throw new Error('拒绝打开未授权的外部地址。');
+    return handlers.openExternal(url);
+  });
 }

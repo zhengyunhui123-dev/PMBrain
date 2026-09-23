@@ -24,6 +24,7 @@ export const google: Recipe = {
     },
     chat: {
       models: ['gemini-3.5-flash', 'gemini-3.1-pro-preview', 'gemini-3.1-flash-lite'],
+      supports_vision: true,
       supports_tools: true,
       supports_subagent_loop: true,
       supports_prompt_cache: false,

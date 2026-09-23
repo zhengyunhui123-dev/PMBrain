@@ -31,6 +31,11 @@ export interface EntityOpenThread {
   kind: 'commitment' | 'recent_event';
   text: string;
   date: string | null;
+  direction?: 'owed_by_me' | 'owed_to_me' | 'their_turn' | 'my_turn';
+  due?: string | null;
+  counterparty?: string | null;
+  status?: string;
+  loop_id?: number;
 }
 
 export interface EntityCard {
@@ -233,10 +238,62 @@ async function assembleCard(
   }
 
   const openThreads: EntityOpenThread[] = [];
+  const loopFactIds = new Set<number>();
+  try {
+    const loopRows = await engine.executeRaw<{
+      id: number;
+      loop_type: string;
+      summary: string;
+      due_at: string | Date | null;
+      last_activity_at: string | Date;
+      fact_id: number | null;
+    }>(
+      `SELECT id, loop_type, summary, due_at, last_activity_at, fact_id
+       FROM open_loops
+       WHERE status = 'open' AND counterparty_slug = $1 AND source_id = $2
+       ORDER BY last_activity_at DESC
+       LIMIT ${OPEN_THREADS_CAP}`,
+      [pageSlug, sourceId],
+    );
+    for (const l of loopRows) {
+      if (l.fact_id !== null) loopFactIds.add(Number(l.fact_id));
+      const direction: EntityOpenThread['direction'] =
+        l.loop_type === 'commitment_owed_by_me'
+          ? 'owed_by_me'
+          : l.loop_type === 'commitment_owed_to_me'
+            ? 'owed_to_me'
+            : l.loop_type === 'unanswered_inbound'
+              ? 'my_turn'
+              : 'their_turn';
+      const last =
+        typeof l.last_activity_at === 'string'
+          ? l.last_activity_at
+          : new Date(l.last_activity_at).toISOString();
+      const due = l.due_at
+        ? typeof l.due_at === 'string'
+          ? l.due_at
+          : new Date(l.due_at).toISOString()
+        : null;
+      openThreads.push({
+        kind: 'commitment',
+        text: l.summary,
+        date: last,
+        direction,
+        due,
+        counterparty: pageSlug,
+        status: 'open',
+        loop_id: Number(l.id),
+      });
+      if (openThreads.length >= OPEN_THREADS_CAP) break;
+    }
+  } catch {
+    /* table missing — facts path below covers it */
+  }
   for (const f of facts) {
-    if (f.kind !== 'commitment') continue;
-    openThreads.push({ kind: 'commitment', text: f.fact, date: f.valid_from?.toISOString() ?? null });
     if (openThreads.length >= OPEN_THREADS_CAP) break;
+    if (f.kind !== 'commitment') continue;
+    if (f.id !== undefined && loopFactIds.has(f.id)) continue;
+    openThreads.push({ kind: 'commitment', text: f.fact, date: f.valid_from?.toISOString() ?? null });
   }
   if (openThreads.length < OPEN_THREADS_CAP) {
     const cutoff = Date.now() - OPEN_THREAD_TIMELINE_WINDOW_DAYS * 24 * 60 * 60 * 1000;

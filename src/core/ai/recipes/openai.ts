@@ -31,6 +31,7 @@ export const openai: Recipe = {
     },
     chat: {
       models: ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.2', 'gpt-4o-mini', 'o3'],
+      supports_vision: true,
       supports_tools: true,
       supports_subagent_loop: true,
       supports_prompt_cache: false,

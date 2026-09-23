@@ -36,6 +36,7 @@ export type SyncStrategy = 'markdown' | 'code' | 'auto';
 interface SyncableOptions {
   strategy?: SyncStrategy;
   includeOffice?: boolean;
+  includeImages?: boolean;
   include?: string[];
   exclude?: string[];
 }
@@ -245,20 +246,21 @@ export function isOfficeTransientFile(path: string): boolean {
 }
 
 function isMultimodalEnabled(): boolean {
-  return process.env.GBRAIN_EMBEDDING_MULTIMODAL === 'true';
+  return (process.env.PMBRAIN_EMBEDDING_MULTIMODAL ?? process.env.GBRAIN_EMBEDDING_MULTIMODAL) === 'true'
+    || (process.env.PMBRAIN_OCR_ENABLED ?? process.env.GBRAIN_OCR_ENABLED) === 'true';
 }
 
-function isAllowedByStrategy(path: string, strategy: SyncStrategy, includeOffice = false): boolean {
+function isAllowedByStrategy(path: string, strategy: SyncStrategy, includeOffice = false, includeImages = false): boolean {
   if (isOfficeTransientFile(path)) return false;
   const officeAllowed = includeOffice && isOfficeFilePath(path);
-  if (strategy === 'markdown') return isMarkdownFilePath(path) || officeAllowed;
+  if (strategy === 'markdown') return isMarkdownFilePath(path) || officeAllowed || (includeImages && isImageFilePath(path));
   if (strategy === 'code') return isCodeFilePath(path);
   // 'auto' / default: markdown + code, plus images when multimodal is on.
   return (
     isMarkdownFilePath(path) ||
     isCodeFilePath(path) ||
     officeAllowed ||
-    (isMultimodalEnabled() && isImageFilePath(path))
+    ((includeImages || isMultimodalEnabled()) && isImageFilePath(path))
   );
 }
 
@@ -415,7 +417,7 @@ export const SYNC_SKIP_FILES = ['schema.md', 'index.md', 'log.md', 'README.md'] 
 function classifySync(path: string, opts: SyncableOptions = {}): SyncableReason | null {
   const strategy = opts.strategy || 'markdown';
 
-  if (!isAllowedByStrategy(path, strategy, opts.includeOffice)) return 'strategy';
+  if (!isAllowedByStrategy(path, strategy, opts.includeOffice, opts.includeImages)) return 'strategy';
 
   if (hasMalformedPathSegment(path)) return 'malformed-path';
 

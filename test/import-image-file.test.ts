@@ -91,6 +91,14 @@ describe('importImageFile happy path (noEmbed)', () => {
     const result = await importImageFile(engine, target, 'originals/photos/photo.png', { noEmbed: true });
     expect(result.status).toBe('imported');
     expect(result.chunks).toBe(1);
+    expect(result.documentSummary).toMatchObject({
+      parser: 'pmbrain-image-ocr-v1',
+      images: 1,
+      pagesNeedingOcr: 1,
+      ocrAttempted: 0,
+      ocrSkipped: 1,
+    });
+    expect(result.documentSummary?.ocrWarnings?.[0]).toContain('未启用');
 
     const page = await engine.getPage('originals/photos/photo.png');
     expect(page).not.toBeNull();
@@ -118,6 +126,23 @@ describe('importImageFile happy path (noEmbed)', () => {
     expect(r1.status).toBe('imported');
     const r2 = await importImageFile(engine, target, 'photos/photo2.png', { noEmbed: true });
     expect(r2.status).toBe('skipped');
+  });
+
+  test('stores image pages, chunks and file rows in the requested source', async () => {
+    await engine.executeRaw(`INSERT INTO sources (id, name, config) VALUES ('outputs', 'outputs', '{}'::jsonb)`);
+    const target = join(tmpDir, 'source-photo.png');
+    writeFileSync(target, Buffer.from('source-scoped-image'));
+
+    const result = await importImageFile(engine, target, 'photos/source-photo.png', {
+      noEmbed: true,
+      sourceId: 'outputs',
+    });
+
+    expect(result.status).toBe('imported');
+    expect(await engine.getPage('photos/source-photo.png', { sourceId: 'outputs' })).not.toBeNull();
+    expect(await engine.getPage('photos/source-photo.png', { sourceId: 'default' })).toBeNull();
+    expect(await engine.getChunks('photos/source-photo.png', { sourceId: 'outputs' })).toHaveLength(1);
+    expect(await engine.getFile('outputs', 'photos/source-photo.png')).not.toBeNull();
   });
 
   test('refuses oversized files (>20MB)', async () => {

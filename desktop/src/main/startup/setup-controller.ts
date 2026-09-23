@@ -1,4 +1,5 @@
 import { app } from 'electron';
+import { existsSync } from 'node:fs';
 import { basename, resolve } from 'node:path';
 import {
   getSetupInfo,
@@ -22,6 +23,7 @@ import {
   isSourcePathConflict,
   type SourceSetupPolicy,
 } from './source-setup-policy.js';
+import { requiresFirstActivationAlignment } from './embedding-activation-policy.js';
 
 const DESKTOP_MIGRATION_ARGS = ['apply-migrations', '--yes', '--non-interactive', '--no-autopilot-install'];
 
@@ -216,6 +218,8 @@ export class SetupController {
   private async applyOnce(payload: SetupPayload, sourcePolicy: SourceSetupPolicy) {
     await this.dependencies.ensureRuntimeReady();
     const setupBeforeSave = getSetupInfo();
+    const databaseExistedBeforeSave = setupBeforeSave.current.engine === 'pglite'
+      && Boolean(setupBeforeSave.current.databasePath && existsSync(setupBeforeSave.current.databasePath));
     const previousEmbeddingModel = setupBeforeSave.current.embeddingModel?.trim();
     const requestedEmbeddingModel = payload.modelConfig?.embeddingModel?.trim();
     const recoveryCandidate = setupBeforeSave.current.legacyEmbeddingRecoveryCandidate;
@@ -324,7 +328,10 @@ export class SetupController {
         await runCliChecked(this.dependencies.runtime(), ['sources', 'default', sourceId]);
       }
       if (migrationRequired && saved.config.engine !== 'pglite') markDesktopMigration(app.getVersion());
-      if (saved.embeddingModelActivated) {
+      if (saved.embeddingModelActivated && requiresFirstActivationAlignment({
+        engine: saved.config.engine === 'postgres' ? 'postgres' : 'pglite',
+        databaseExistedBeforeSave,
+      })) {
         this.dependencies.sendStartupProgress({
           visible: true,
           stage: 'migration',
@@ -334,6 +341,8 @@ export class SetupController {
         await runCliChecked(this.dependencies.runtime(), [
           'models', 'align-embedding-dimension', '--yes', '--json', '--empty-only',
         ]);
+        embeddingSwitchCommitted = true;
+      } else if (saved.embeddingModelActivated) {
         embeddingSwitchCommitted = true;
       } else if (saved.embeddingModelChanged && legacyEmbeddingRecoveryConfirmed) {
         this.dependencies.sendStartupProgress({

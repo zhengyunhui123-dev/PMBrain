@@ -260,6 +260,62 @@ export const api = {
     apiFetch(`/admin/api/sources/${encodeURIComponent(id)}/archive`, { method: 'POST' }),
   restoreSource: (id: string) =>
     apiFetch(`/admin/api/sources/${encodeURIComponent(id)}/restore`, { method: 'POST' }),
+  connectors: (provider?: string) =>
+    apiFetch(`/admin/api/connectors${provider ? `?provider=${encodeURIComponent(provider)}` : ''}`),
+  connectorSync: (body: { provider: string; full?: boolean; dry_run?: boolean }) =>
+    apiFetch('/admin/api/connectors/sync', { method: 'POST', body: JSON.stringify(body) }),
+  connectorAuth: (body: { provider: string; cookie?: string; token?: string }) =>
+    apiFetch('/admin/api/connectors/auth', { method: 'POST', body: JSON.stringify(body) }),
+  connectorLogout: (provider: string) =>
+    apiFetch('/admin/api/connectors/logout', { method: 'POST', body: JSON.stringify({ provider }) }),
+  setConnectorAutoSync: (provider: string, enabled: boolean) =>
+    apiFetch('/admin/api/connectors/auto-sync', { method: 'POST', body: JSON.stringify({ provider, enabled }) }),
+  waiting: (limit = 20) =>
+    apiFetch(`/admin/api/waiting?limit=${encodeURIComponent(String(limit))}`),
+  closeWaiting: (body: { id: number; status: 'done' | 'dropped'; note?: string }) =>
+    apiFetch('/admin/api/waiting/close', { method: 'POST', body: JSON.stringify(body) }),
+  scanWaiting: (lanes?: Array<'gmail' | 'meeting' | 'conversation'>) =>
+    apiFetch('/admin/api/waiting/scan', { method: 'POST', body: JSON.stringify(lanes ? { lanes } : {}) }),
+  waitingSettings: () => apiFetch('/admin/api/waiting/settings'),
+  setWaitingAutomation: (enabled: boolean) =>
+    apiFetch('/admin/api/waiting/settings', { method: 'POST', body: JSON.stringify({ enabled }) }),
+  chronicleDay: (date?: string) =>
+    apiFetch(`/admin/api/chronicle/day${date ? `?date=${encodeURIComponent(date)}` : ''}`),
+  chronicleOnThisDay: (date?: string) =>
+    apiFetch(`/admin/api/chronicle/on-this-day${date ? `?date=${encodeURIComponent(date)}` : ''}`),
+  chronicleStatus: () => apiFetch('/admin/api/chronicle/status'),
+  enableChronicle: () => apiFetch('/admin/api/chronicle/enable', { method: 'POST' }),
+  setChronicleEnabled: (enabled: boolean) =>
+    apiFetch('/admin/api/chronicle/settings', { method: 'POST', body: JSON.stringify({ enabled }) }),
+  organizeChronicleHistory: () => apiFetch('/admin/api/chronicle/history', { method: 'POST' }),
+  hideChronicleEvent: (slug: string) =>
+    apiFetch('/admin/api/chronicle/hide', { method: 'POST', body: JSON.stringify({ slug }) }),
+  ontology: (entity: string) =>
+    apiFetch(`/admin/api/ontology?entity=${encodeURIComponent(entity)}`),
+  entityIdentity: (query?: { entity_id?: string; slug?: string }) => {
+    const params = new URLSearchParams();
+    if (query?.entity_id) params.set('entity_id', query.entity_id);
+    if (query?.slug) params.set('slug', query.slug);
+    const suffix = params.size ? `?${params.toString()}` : '';
+    return apiFetch(`/admin/api/entity-identity${suffix}`);
+  },
+  linkEntityIdentity: (body: { entity_id: string; slug: string; source_id: string; canonical?: boolean }) =>
+    apiFetch('/admin/api/entity-identity/link', { method: 'POST', body: JSON.stringify(body) }),
+  people: (query = '') =>
+    apiFetch(`/admin/api/people${query ? `?q=${encodeURIComponent(query)}` : ''}`),
+  peopleCard: (entityId: string) =>
+    apiFetch(`/admin/api/people/card?entity_id=${encodeURIComponent(entityId)}`),
+  mergePeople: (members: Array<{ source_id: string; slug: string; title?: string }>) =>
+    apiFetch('/admin/api/people/merge', { method: 'POST', body: JSON.stringify({ members }) }),
+  rejectPeople: (body: { left: { source_id: string; slug: string }; right: { source_id: string; slug: string } }) =>
+    apiFetch('/admin/api/people/reject', { method: 'POST', body: JSON.stringify(body) }),
+  unlinkPeople: (body: { entity_id: string; source_id: string; slug: string }) =>
+    apiFetch('/admin/api/people/unlink', { method: 'POST', body: JSON.stringify(body) }),
+  googleStatus: () => apiFetch('/admin/api/google/status'),
+  googleConnect: (body: { account?: string; paste?: boolean; code?: string; client_json?: string }) =>
+    apiFetch('/admin/api/google/connect', { method: 'POST', body: JSON.stringify(body) }),
+  addGoogleSource: (body: { account: string; id?: string }) =>
+    apiFetch('/admin/api/google/source', { method: 'POST', body: JSON.stringify(body) }),
   health: () => apiFetch('/admin/api/health-indicators'),
   agents: () => apiFetch('/admin/api/agents'),
   requests: (page = 1, qs = '') => apiFetch(`/admin/api/requests?page=${page}${qs}`),

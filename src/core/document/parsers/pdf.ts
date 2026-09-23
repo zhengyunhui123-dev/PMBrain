@@ -55,10 +55,20 @@ async function addOcrPages(
     });
     for (const screenshot of screenshots.pages) {
       if (!screenshot.data?.length) continue;
-      const text = normalizeDocumentText(await ocrPage(screenshot.pageNumber, Buffer.from(screenshot.data), 'image/png'));
-      if (!text) continue;
-      document.sections.push(...markdownToSections(text, { page: screenshot.pageNumber }, `pdf-ocr-p${screenshot.pageNumber}`));
-      document.metadata.ocrUsed = true;
+      const result = await ocrPage(screenshot.pageNumber, Buffer.from(screenshot.data), 'image/png');
+      if (result.status !== 'skipped') document.metadata.ocrAttempted = (document.metadata.ocrAttempted ?? 0) + 1;
+      if (result.status === 'success') {
+        const text = normalizeDocumentText(result.text);
+        if (text) document.sections.push(...markdownToSections(text, { page: screenshot.pageNumber }, `pdf-ocr-p${screenshot.pageNumber}`));
+        document.metadata.ocrUsed = true;
+        document.metadata.ocrSucceeded = (document.metadata.ocrSucceeded ?? 0) + 1;
+      } else if (result.status === 'failed') {
+        document.metadata.ocrFailed = (document.metadata.ocrFailed ?? 0) + 1;
+      } else {
+        document.metadata.ocrSkipped = (document.metadata.ocrSkipped ?? 0) + 1;
+      }
+      if (result.model) document.metadata.ocrProvider = result.model;
+      if (result.message) document.metadata.ocrWarnings = [...(document.metadata.ocrWarnings ?? []), `第 ${screenshot.pageNumber} 页：${result.message}`];
     }
   } finally {
     await parser.destroy();
@@ -93,11 +103,19 @@ export async function parsePdfDocument(filePath: string, opts: DocumentParseOpti
     };
     if (opts.ocrPage) await addOcrPages(buffer, document, result.pagesNeedingOcr, opts.ocrPage);
     if (document.sections.length === 0) {
-      return parseWithPdfParse(buffer, title, 'pdf-inspector returned no extractable text');
+      const fallback = await parseWithPdfParse(buffer, title, 'pdf-inspector returned no extractable text');
+      return fallback.sections.length > 0 || !opts.ocrPage ? fallback : document;
     }
     return document;
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
-    return parseWithPdfParse(buffer, title, `pdf-inspector failed: ${reason}`);
+    const fallback = await parseWithPdfParse(buffer, title, `pdf-inspector failed: ${reason}`);
+    if (opts.ocrPage && fallback.sections.length === 0 && (fallback.metadata.pageCount ?? 0) > 0) {
+      const pages = Array.from({ length: fallback.metadata.pageCount ?? 0 }, (_, index) => index + 1);
+      fallback.metadata.pagesNeedingOcr = pages;
+      fallback.metadata.imageCount = pages.length;
+      await addOcrPages(buffer, fallback, pages, opts.ocrPage);
+    }
+    return fallback;
   }
 }

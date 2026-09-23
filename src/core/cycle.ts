@@ -982,6 +982,8 @@ async function runPhaseSync(
 ): Promise<SyncPhaseResult> {
   try {
     const { performSync } = await import('../commands/sync.ts');
+    const gateway = await import('./ai/gateway.ts');
+    const documentOcr = gateway.isOcrEnabled();
     // Resolve the per-source id so sync reads source-scoped last_commit
     // instead of the global config key. The global key can drift out of
     // git history (force push, GC) causing a full reimport of all files.
@@ -996,6 +998,8 @@ async function runPhaseSync(
                                            // If extract isn't scheduled (e.g. `gbrain dream --phase sync`),
                                            // sync's inline extract still runs to preserve prior behavior.
       includeOffice,
+      includeImages: documentOcr,
+      documentOcr,
     });
     const syncedCount = result.added + result.modified;
     const uncommittedCount = result.uncommitted

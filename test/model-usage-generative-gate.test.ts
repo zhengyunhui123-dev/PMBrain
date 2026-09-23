@@ -1,8 +1,7 @@
 /**
  * 产品经理可读的测试说明：
- * 1. 未配置 model_usage.generative_enabled 时，默认开启普通模型调用；用户显式关闭后必须保持关闭。
- * 2. 关闭时禁止 full / meeting 预设，允许 quick。
- * 3. 关闭时禁止 synthesize 等生成式阶段，允许 lint / embed 等本地阶段。
+ * 1. 普通模型配置完成后即可使用；旧版 generative_enabled=false 不再阻断调用。
+ * 2. full / meeting 和生成式阶段不再受已移除的界面开关影响。
  * 4. 阶段能力表覆盖全部 ALL_PHASES，并声明 requiresGenerativeModel。
  * 5. Admin / 服务层路由包含生成式开关 API。
  * 6. 知识整理页把模式命名为快速维护 / AI 深度整理 / AI 会议整理。
@@ -12,7 +11,6 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { ALL_PHASES } from '../src/core/cycle.ts';
 import {
-  GENERATIVE_MODEL_DISABLED_CODE,
   assertDreamPresetAllowGenerative,
   assertPhasesAllowGenerative,
   getPhaseCapabilities,
@@ -22,15 +20,15 @@ import {
 
 const ROOT = join(import.meta.dir, '..');
 
-describe('生成式模型全局开关', () => {
-  test('缺少配置字段时默认开启，但显式关闭永远优先', () => {
+describe('普通模型默认可用', () => {
+  test('缺少配置字段或保留旧版关闭字段时都默认开启', () => {
     expect(isGenerativeModelEnabled(null)).toBe(true);
     expect(isGenerativeModelEnabled({ engine: 'pglite', chat_model: 'deepseek:deepseek-chat' } as any)).toBe(true);
     expect(isGenerativeModelEnabled({
       engine: 'pglite',
       chat_model: 'deepseek:deepseek-chat',
       model_usage: { generative_enabled: false },
-    } as any)).toBe(false);
+    } as any)).toBe(true);
     expect(isGenerativeModelEnabled({
       engine: 'pglite',
       chat_model: 'deepseek:deepseek-chat',
@@ -38,23 +36,18 @@ describe('生成式模型全局开关', () => {
     } as any)).toBe(true);
   });
 
-  test('关闭时禁止 full/meeting，允许 quick', () => {
+  test('旧版关闭字段不再阻断 full/meeting/quick', () => {
     const closed = { engine: 'pglite' as const, model_usage: { generative_enabled: false } };
     expect(() => assertDreamPresetAllowGenerative('quick', closed)).not.toThrow();
-    expect(() => assertDreamPresetAllowGenerative('full', closed)).toThrow();
-    expect(() => assertDreamPresetAllowGenerative('meeting', closed)).toThrow();
-    try {
-      assertDreamPresetAllowGenerative('full', closed);
-    } catch (e) {
-      expect((e as { code?: string }).code).toBe(GENERATIVE_MODEL_DISABLED_CODE);
-    }
+    expect(() => assertDreamPresetAllowGenerative('full', closed)).not.toThrow();
+    expect(() => assertDreamPresetAllowGenerative('meeting', closed)).not.toThrow();
   });
 
-  test('关闭时禁止生成式阶段，允许本地阶段', () => {
+  test('旧版关闭字段不再阻断生成式或本地阶段', () => {
     const closed = { engine: 'pglite' as const, model_usage: { generative_enabled: false } };
     expect(() => assertPhasesAllowGenerative(['lint', 'embed', 'sync'], closed)).not.toThrow();
-    expect(() => assertPhasesAllowGenerative(['synthesize'], closed)).toThrow();
-    expect(() => assertPhasesAllowGenerative(['propose_takes', 'embed'], closed)).toThrow();
+    expect(() => assertPhasesAllowGenerative(['synthesize'], closed)).not.toThrow();
+    expect(() => assertPhasesAllowGenerative(['propose_takes', 'embed'], closed)).not.toThrow();
   });
 
   test('阶段能力表覆盖全部 Dream 阶段', () => {
@@ -75,7 +68,7 @@ describe('生成式模型全局开关', () => {
     expect(phaseRequiresGenerativeModel('consolidate')).toBe(false);
   });
 
-  test('服务端与前端接入生成式开关', () => {
+  test('服务端保留兼容 API，设置页移除普通模型开关', () => {
     const serve = readFileSync(join(ROOT, 'src/commands/pmbrain-admin-routes.ts'), 'utf8');
     const dreamUi = readFileSync(join(ROOT, 'admin/src/pages/Dream.tsx'), 'utf8');
     const settingsUi = readFileSync(join(ROOT, 'admin/src/pages/Settings.tsx'), 'utf8');
@@ -87,9 +80,8 @@ describe('生成式模型全局开关', () => {
     expect(serve).toContain('cancelRun');
     expect(gateway).toContain('assertGenerativeModelEnabled');
     expect(dreamCli).toContain('assertDreamPresetAllowGenerative');
-    expect(settingsUi).toContain('普通模型调用');
-    expect(settingsUi).toContain('允许 PMBrain 调用普通模型');
-    expect(settingsUi).toContain('默认开启');
+    expect(settingsUi).not.toContain('普通模型调用');
+    expect(settingsUi).not.toContain('允许 PMBrain 调用普通模型');
     expect(settingsUi).not.toContain('新用户默认关闭');
     expect(settingsUi).not.toContain('即使已配置普通模型，也需主动打开');
     expect(settingsUi).not.toContain('「发送」的 AI 意图识别与综合回答需要普通模型');
@@ -99,6 +91,11 @@ describe('生成式模型全局开关', () => {
     expect(dreamUi).toContain('不使用普通模型');
     expect(dreamUi).toContain('按 Phase 精细控制');
     expect(dreamUi).toContain('GENERATIVE_DISABLED_HINT');
+  });
+
+  test('深度整理默认同步 Office/PDF/Excel', () => {
+    const dreamCli = readFileSync(join(ROOT, 'src/commands/dream.ts'), 'utf8');
+    expect(dreamCli).toContain('includeOffice: true');
   });
 
   test('定时任务仍只使用 quick 预设', () => {

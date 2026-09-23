@@ -113,6 +113,35 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun test test/entity-resolve-perf.slow.test.ts --timeout=300000
 
+  brainbench:
+    # BrainBench memory-conformance gate. Hermetic: in-memory PGLite, zero
+    # API keys. Compares HEAD's run against MAIN's committed baseline via
+    # `git show origin/master:evals/brainbench/baselines/main.json`.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - name: Fetch origin/master baseline ref (shallow)
+        run: git fetch --no-tags --depth=1 origin +refs/heads/master:refs/remotes/origin/master
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6  # v2
+        with:
+          bun-version: 1.3.13
+      - uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684  # v4.2.3
+        with:
+          path: ~/.bun/install/cache
+          key: bun-cache-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: bun-cache-${{ runner.os }}-
+      - run: bun install --frozen-lockfile
+      - run: bash scripts/ci-brainbench-gate.sh
+        env:
+          BRAINBENCH_OUT: ${{ runner.temp }}/brainbench-result.json
+      - name: BrainBench delta → step summary
+        if: always()
+        run: |
+          if [ -f "${{ runner.temp }}/brainbench-result.json" ]; then
+            bun scripts/render-brainbench-delta.ts "${{ runner.temp }}/brainbench-result.json" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
   test:
     # Pure matrix shard — no verify, no serial. Each shard runs its slice
     # of the unit test set under one `bun test` invocation.
@@ -196,14 +225,14 @@ jobs:
 
   # ──────────────────────────────────────────────────────────────────────
   test-status:
-    needs: [gitleaks, verify, serial-tests, slow-eval-longmemeval, slow-entity-resolve-perf, test, desktop-runtime]
+    needs: [gitleaks, verify, serial-tests, slow-eval-longmemeval, slow-entity-resolve-perf, brainbench, test, desktop-runtime]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - name: Aggregate result
         run: |
-          for result in "${{ needs.gitleaks.result }}" "${{ needs.verify.result }}" "${{ needs.serial-tests.result }}" "${{ needs.slow-eval-longmemeval.result }}" "${{ needs.slow-entity-resolve-perf.result }}" "${{ needs.test.result }}" "${{ needs.desktop-runtime.result }}"; do
+          for result in "${{ needs.gitleaks.result }}" "${{ needs.verify.result }}" "${{ needs.serial-tests.result }}" "${{ needs.slow-eval-longmemeval.result }}" "${{ needs.slow-entity-resolve-perf.result }}" "${{ needs.brainbench.result }}" "${{ needs.test.result }}" "${{ needs.desktop-runtime.result }}"; do
             if [ "$result" != "success" ]; then
               echo "Required execution did not succeed: $result" >&2
               exit 1

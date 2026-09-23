@@ -29,6 +29,37 @@ function isolatedHome(): string {
 }
 
 describe('desktop config manager', () => {
+  test('persists optional OCR settings and allows ordinary-model reuse', () => {
+    const root = isolatedHome();
+    saveSetup({
+      engine: 'pglite',
+      databasePath: join(root, 'brain.pglite'),
+      modelConfig: {
+        chatModel: 'openai:gpt-4o-mini',
+        ocrEnabled: true,
+        ocrModel: 'google:gemini-2.5-flash',
+      },
+    });
+    let config = JSON.parse(readFileSync(desktopConfigPath(), 'utf8'));
+    expect(config).toMatchObject({
+      ocr_enabled: true,
+      ocr_model: 'google:gemini-2.5-flash',
+      embedding_image_ocr: true,
+      embedding_image_ocr_model: 'google:gemini-2.5-flash',
+    });
+    expect(getSetupInfo().current).toMatchObject({ ocrEnabled: true, ocrModel: 'google:gemini-2.5-flash' });
+
+    saveSetup({
+      engine: 'pglite',
+      databasePath: join(root, 'brain.pglite'),
+      modelConfig: { ocrEnabled: true },
+    });
+    config = JSON.parse(readFileSync(desktopConfigPath(), 'utf8'));
+    expect(config.ocr_enabled).toBe(true);
+    expect(config.ocr_model).toBeUndefined();
+    expect(getSetupInfo().current.ocrModel).toBeUndefined();
+  });
+
   test('first launch creates a PMBrain-only PGLite config without reading an existing GBrain config', () => {
     const root = isolatedHome();
     const legacyPath = join(root, '.gbrain', 'config.json');

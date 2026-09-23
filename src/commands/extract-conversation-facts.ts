@@ -69,6 +69,8 @@ import type { Page } from '../core/types.ts';
 import {
   extractFactsFromTurn,
   isFactsExtractionEnabled,
+  type ExtractInput,
+  type ExtractedFact,
 } from '../core/facts/extract.ts';
 import { isAvailable, withBudgetTracker } from '../core/ai/gateway.ts';
 import { BudgetTracker, BudgetExhausted, loadPricingOverrides } from '../core/budget/budget-tracker.ts';
@@ -240,6 +242,7 @@ export interface ExtractConversationFactsCoreOpts {
    * if you need exact-ceiling compliance.
    */
   workers?: number;
+  extractor?: (input: ExtractInput) => Promise<ExtractedFact[]>;
 }
 
 export interface ExtractConversationFactsResult {
@@ -628,6 +631,7 @@ interface ExtractCoreState {
   segmentLimit: number;
   types: AllowedType[];
   signal: AbortSignal | undefined;
+  extractor?: (input: ExtractInput) => Promise<ExtractedFact[]>;
   /**
    * v0.41.15.0 (D11): shared per-(sourceId, slug) checkpoint map mutated
    * in place from processPage callers. Map.set is atomic in JS's single-
@@ -737,14 +741,24 @@ async function processPage(
 
     let extracted: Awaited<ReturnType<typeof extractFactsFromTurn>> = [];
     try {
-      extracted = await extractFactsFromTurn({
-        turnText: text,
-        sessionId,
-        source: PER_SEGMENT_SOURCE_PREFIX,
-        engine: state.engine,
-        ...(state.model ? { model: state.model } : {}),
-        abortSignal: state.signal,
-      });
+      if (state.extractor) {
+        extracted = await state.extractor({
+          turnText: text,
+          sessionId,
+          source: PER_SEGMENT_SOURCE_PREFIX,
+          engine: state.engine,
+          abortSignal: state.signal,
+        });
+      } else {
+        extracted = await extractFactsFromTurn({
+          turnText: text,
+          sessionId,
+          source: PER_SEGMENT_SOURCE_PREFIX,
+          engine: state.engine,
+          ...(state.model ? { model: state.model } : {}),
+          abortSignal: state.signal,
+        });
+      }
     } catch (err) {
       if (isAbortError(err)) throw err;
       if (err instanceof BudgetExhausted) throw err;
@@ -934,6 +948,7 @@ export async function runExtractConversationFactsCore(
     segmentLimit,
     types,
     signal,
+    extractor: opts.extractor,
     cpMap: new Map(),
   };
 

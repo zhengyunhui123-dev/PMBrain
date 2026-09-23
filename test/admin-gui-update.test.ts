@@ -74,14 +74,13 @@ describe('Admin GUI update contract', () => {
     expect(adminStyles).toContain('.settings-feedback');
   });
 
-  test('import options expose a clear data-source action', () => {
-    expect(consoleSource).toContain("{importOptionsOpen ? '收起' : '展开'}");
-    expect(consoleSource).toContain('可选择不同数据源及文件处理方式');
-    expect(consoleSource).toContain('className="import-options-action"');
-    expect(consoleSource).toContain('source.id !== overview.main_source_id');
+  test('import hides all options and automates file processing', () => {
+    expect(consoleSource).not.toContain('className="pm-card import-destination-card"');
+    expect(consoleSource).not.toContain('sourceId: effectiveSourceId');
+    expect(consoleSource).not.toContain('setSourceId');
+    expect(consoleSource).not.toContain('importOptionsOpen');
     expect(consoleSource).not.toContain('className="worker-option"');
     expect(consoleSource).toContain('workers: 1');
-    expect(adminStyles).toContain('.import-options-action');
   });
 
   test('settings no longer exposes the obsolete all-file vectorization threshold', () => {

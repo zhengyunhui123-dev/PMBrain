@@ -1,14 +1,14 @@
 {
   "compilerOptions": {
-    "target": "ES2022",
+    "target": "ES2024",
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "allowImportingTsExtensions": true,
-    "lib": ["ES2022", "DOM"],
+    "lib": ["ES2024", "DOM"],
     "types": ["node"],
     "strict": true,
     "skipLibCheck": true,
     "noEmit": true
   },
-  "include": ["src/**/*.ts", "electron.vite.config.ts"]
+  "include": ["src/**/*.ts", "../src/types/**/*.d.ts", "electron.vite.config.ts"]
 }

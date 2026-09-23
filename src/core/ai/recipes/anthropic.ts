@@ -22,6 +22,7 @@ export const anthropic: Recipe = {
       price_last_verified: '2026-05-10',
     },
     chat: {
+      supports_vision: true,
       models: [
         'claude-sonnet-4-6',
         'claude-opus-4-7',

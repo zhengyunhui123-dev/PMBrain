@@ -120,6 +120,8 @@ export interface SetupPayload {
     chatModel?: string;
     embeddingModel?: string;
     embeddingDimensions?: number;
+    ocrEnabled?: boolean;
+    ocrModel?: string;
   };
   customProvider?: DesktopCustomProvider;
   customProviders?: DesktopCustomProviderCatalog;
@@ -146,6 +148,8 @@ export interface SetupInfo {
     chatModel?: string;
     embeddingModel?: string;
     embeddingDimensions?: number;
+    ocrEnabled?: boolean;
+    ocrModel?: string;
     legacyEmbeddingRecoveryCandidate?: {
       model: string;
       dimensions: number;
@@ -175,6 +179,8 @@ type RawConfig = Record<string, unknown> & {
   database_url?: string;
   embedding_model?: string;
   embedding_dimensions?: number;
+  ocr_enabled?: boolean;
+  ocr_model?: string;
   provider_base_urls?: Record<string, string>;
   provider_touchpoint_base_urls?: Record<string, Partial<Record<'embedding' | 'expansion' | 'chat' | 'reranker', string>>>;
   provider_touchpoint_api_keys?: Record<string, Partial<Record<'embedding' | 'expansion' | 'chat' | 'reranker', string>>>;
@@ -614,6 +620,10 @@ export function getSetupInfo(): SetupInfo {
         ?.model_usage?.generative_enabled === true,
       embeddingModel: typeof config?.embedding_model === 'string' ? config.embedding_model : undefined,
       embeddingDimensions: typeof config?.embedding_dimensions === 'number' ? config.embedding_dimensions : undefined,
+      ocrEnabled: config?.ocr_enabled === true || config?.embedding_image_ocr === true,
+      ocrModel: typeof config?.ocr_model === 'string'
+        ? config.ocr_model
+        : typeof config?.embedding_image_ocr_model === 'string' ? config.embedding_image_ocr_model : undefined,
       legacyEmbeddingRecoveryCandidate: findLegacyEmbeddingRecoveryCandidate(config),
       customProvider: legacyProviderFromCatalog(storedCustom.catalog, storedCustom.selection) ?? legacyCustomProvider,
       customProviders: storedCustom.catalog,
@@ -892,6 +902,18 @@ export function saveSetup(payload: SetupPayload): {
   const embeddingDimensions = payload.modelConfig?.embeddingDimensions;
   if (typeof embeddingDimensions === 'number' && Number.isInteger(embeddingDimensions) && embeddingDimensions > 0) {
     config.embedding_dimensions = embeddingDimensions;
+  }
+  if (typeof payload.modelConfig?.ocrEnabled === 'boolean') {
+    config.ocr_enabled = payload.modelConfig.ocrEnabled;
+    config.embedding_image_ocr = payload.modelConfig.ocrEnabled;
+    const ocrModel = payload.modelConfig.ocrModel?.trim();
+    if (ocrModel) {
+      config.ocr_model = ocrModel;
+      config.embedding_image_ocr_model = ocrModel;
+    } else {
+      delete config.ocr_model;
+      delete config.embedding_image_ocr_model;
+    }
   }
 
   // Dimensions are required only after the user explicitly selects an

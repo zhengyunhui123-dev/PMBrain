@@ -745,6 +745,7 @@ export async function runDream(engine: BrainEngine | null, args: string[]): Prom
     brainDir,
     dryRun: opts.dryRun,
     pull: opts.pull,
+    includeOffice: true,
     phases,
     forcePackPhases: opts.preset === 'meeting' ? ['extract_atoms'] : undefined,
     sourceId: resolvedSourceId, // undefined when --source not set → legacy back-compat

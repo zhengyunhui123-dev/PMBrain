@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
-const VALID_PANELS = ['basic', 'models', 'integrations', 'system', 'updates', 'recovery'] as const;
+const VALID_PANELS = ['basic', 'models', 'integrations', 'daily', 'system', 'updates', 'repair', 'recovery'] as const;
 type Panel = (typeof VALID_PANELS)[number];
 const VALID_THEMES = ['dark', 'light'] as const;
 type PreviewTheme = (typeof VALID_THEMES)[number];
@@ -68,8 +68,10 @@ const panelScrollTarget: Record<Panel, string> = {
   basic: '#database-path',
   models: '#chat-provider',
   integrations: '#integration-grid',
+  daily: '#daily-connectors',
   system: '#shared-address',
   updates: '#update-current',
+  repair: '#repair-backup-list',
   recovery: '#recovery-message',
 };
 const scrollTarget = panelScrollTarget[panel];
@@ -106,18 +108,18 @@ window.pmbrainDesktop = {
     },
     integrations: [
       { id: 'cherry', name: 'CherryStudio', path: null, configured: false, automatic: false },
-      { id: 'workbuddy', name: 'Workbuddy', path: 'C:\\\\Users\\\\zhengyunhui\\\\.workbuddy\\\\mcp.json', configured: false, automatic: true },
-      { id: 'cursor', name: 'Cursor', path: 'C:\\\\Users\\\\zhengyunhui\\\\.cursor\\\\mcp.json', configured: true, automatic: true },
-      { id: 'trae', name: 'Trae Work', path: 'C:\\\\Users\\\\zhengyunhui\\\\AppData\\\\Roaming\\\\TRAE SOLO CN\\\\User\\\\mcp.json', configured: false, automatic: true },
+      { id: 'workbuddy', name: 'Workbuddy', path: 'C:\\\\Users\\\\zhengyunhui\\\\.workbuddy\\\\mcp.json', configured: true, automatic: true, connectionState: 'connected', launchAvailable: true },
+      { id: 'cursor', name: 'Cursor', path: 'C:\\\\Users\\\\zhengyunhui\\\\.cursor\\\\mcp.json', configured: true, automatic: true, launchAvailable: true },
+      { id: 'trae', name: 'Trae Work', path: 'C:\\\\Users\\\\zhengyunhui\\\\AppData\\\\Roaming\\\\TRAE SOLO CN\\\\User\\\\mcp.json', configured: true, automatic: true, connectionState: 'connected', launchAvailable: true },
       { id: 'qwen', name: 'Qwen Code', path: 'C:\\\\Users\\\\zhengyunhui\\\\.qwen\\\\settings.json', configured: false, automatic: true },
       { id: 'qoder', name: 'Qoder CN（通义灵码）', path: 'C:\\\\Users\\\\zhengyunhui\\\\.qoder-cn\\\\settings.json', configured: false, automatic: true },
       { id: 'zcode', name: 'ZCode（智谱）', path: 'C:\\\\Users\\\\zhengyunhui\\\\.zcode\\\\cli\\\\config.json', configured: false, automatic: true },
       { id: 'mimo', name: 'MiMo Code（小米）', path: 'C:\\\\Users\\\\zhengyunhui\\\\AppData\\\\Local\\\\mimocode\\\\mimocode.jsonc', configured: false, automatic: true },
       { id: 'kimi', name: 'Kimi Code（月之暗面）', path: 'C:\\\\Users\\\\zhengyunhui\\\\.kimi-code\\\\mcp.json', configured: false, automatic: true },
-      { id: 'qwenpaw', name: 'QwenPaw', path: 'C:\\\\Users\\\\zhengyunhui\\\\.qwenpaw\\\\workspaces\\\\default\\\\drivers\\\\mcp\\\\pmbrain.yaml', configured: true, automatic: true, connectionState: 'connected' },
-      { id: 'codex', name: 'Codex', path: 'C:\\\\Users\\\\zhengyunhui\\\\.codex\\\\config.toml', configured: false, automatic: true },
-      { id: 'claude', name: 'Claude', path: 'C:\\Users\\zhengyunhui\\.claude.json', configured: false, automatic: false },
-      { id: 'grok', name: 'Grok Build', path: 'C:\\\\Users\\\\zhengyunhui\\\\.grok\\\\config.toml', configured: true, automatic: true, connectionState: 'connected' },
+      { id: 'qwenpaw', name: 'QwenPaw', path: 'C:\\\\Users\\\\zhengyunhui\\\\.qwenpaw\\\\workspaces\\\\default\\\\drivers\\\\mcp\\\\pmbrain.yaml', configured: true, automatic: true, connectionState: 'connected', launchAvailable: true },
+      { id: 'codex', name: 'Codex', path: 'C:\\\\Users\\\\zhengyunhui\\\\.codex\\\\config.toml', configured: true, automatic: true, connectionState: 'connected', launchAvailable: true },
+      { id: 'claude', name: 'Claude', path: 'C:\\Users\\zhengyunhui\\.claude.json', configured: true, automatic: false, connectionState: 'invalid' },
+      { id: 'grok', name: 'Grok Build', path: 'C:\\\\Users\\\\zhengyunhui\\\\.grok\\\\config.toml', configured: true, automatic: true, connectionState: 'connected', launchAvailable: true },
       { id: 'hermes', name: 'Hermes', path: null, configured: false, automatic: false },
       { id: 'openclaw', name: 'OpenClaw', path: null, configured: false, automatic: false },
       { id: 'codebuddy', name: 'CodeBuddy', path: 'C:\\\\Users\\\\zhengyunhui\\\\.codebuddy\\\\mcp.json', configured: true, automatic: true },
@@ -259,8 +261,59 @@ window.pmbrainDesktop = {
       connectionState: 'connected',
     };
   },
+  launchIntegration: async () => {},
   copy: async () => {},
   openAdmin: async () => {},
+  productConnectors: async () => ({
+    cards: [
+      { id: 'chatgpt', name: 'ChatGPT', connected: false, account: null, last_sync_label: '尚未同步' },
+      { id: 'claude', name: 'Claude', connected: false, account: null, last_sync_label: '尚未同步' },
+      { id: 'google', name: 'Google', connected: true, account: 'yunhui@example.com', last_sync_label: '今天 10:32' },
+    ],
+    google: { accounts: [{ account: 'yunhui@example.com' }] },
+  }),
+  productConnectorSync: async () => ({ ok: true }),
+  productConnectorAuth: async () => ({ ok: true }),
+  productConnectorLogout: async () => ({ ok: true }),
+  productWaiting: async () => ({
+    items: [
+      { id: 1, title: '张三在等你回复', meta: '3 天前 · 来自会议《项目推进会》', origin_key: 'meeting' },
+      { id: 2, title: '你答应周五发预算方案', meta: '昨天 · 来自 AI 对话', origin_key: 'conversation' },
+    ],
+    origins: {
+      gmail: { ready: true, label: 'Gmail' },
+      meeting: { ready: true, label: '会议' },
+      conversation: { ready: true, label: 'AI 对话' },
+    },
+  }),
+  productWaitingClose: async () => ({ ok: true }),
+  productWaitingScan: async () => ({ opened: 0 }),
+  productChronicleDay: async () => ({ events: [] }),
+  productChronicleOnThisDay: async () => ({ events: [] }),
+  productChronicleStatus: async () => ({ enabled: false, event_count: 0, history_count: 326 }),
+  productEnableChronicle: async () => ({ ok: true }),
+  productOrganizeChronicleHistory: async () => ({ ok: true }),
+  productHideChronicleEvent: async () => ({ ok: true }),
+  productOntology: async () => ([]),
+  productEntityIdentity: async () => ([]),
+  productEntityIdentityLink: async () => ({ ok: true }),
+  productPeople: async () => ({
+    people: [
+      { source_id: 'youdao', slug: 'people/zhang-san', title: '张三', source_label: '有道' },
+      { source_id: 'meetings', slug: 'people/zhang-zong', title: '张总', source_label: '会议' },
+    ],
+    suggestions: [],
+    groups: [],
+  }),
+  productPeopleCard: async () => ({ entity_id: 'zhang-san', name: '张三', company: 'XX 公司', role: '产品经理', last_contact_label: '9 月 18 日', open_items: 2, recent_meetings: 3, members: [], timeline: [] }),
+  productMergePeople: async () => ({ entity_id: 'zhang-san' }),
+  productRejectPeople: async () => ({ ok: true }),
+  productUnlinkPeople: async () => ({ ok: true }),
+  googleStatus: async () => ({ status: 'connected', accounts: [{ account: 'yunhui@example.com' }] }),
+  googleConnect: async () => ({ ok: true, status: 'connected', account: 'yunhui@example.com' }),
+  googleSource: async () => ({ ok: true }),
+  chooseFile: async () => null,
+  openExternal: async () => {},
   checkUpdates: async () => null,
   installUpdate: async () => {},
   listPgliteUpgradeBackups: async () => ({ databasePath: null, backupRoot: null, keep: 2, totalBytes: 0, backups: [] }),
@@ -337,8 +390,10 @@ const panelTitles: Record<Panel, { eyebrow: string; title: string }> = {
   basic:       { eyebrow: 'DESKTOP SETTINGS / 01', title: '配置数据库、原始资料与主源' },
   models:      { eyebrow: 'DESKTOP SETTINGS / 02', title: '配置普通模型与向量模型' },
   integrations:{ eyebrow: 'MCP / 03',               title: '把 PMBrain 接入 AI 客户端' },
+  daily:       { eyebrow: 'DAILY',                  title: '连接器、待我处理、年表和人物关联' },
   system:      { eyebrow: 'SYSTEM / 04',            title: '管理桌面连接与系统行为' },
   updates:     { eyebrow: 'UPDATES / 05',           title: '保持桌面端安全更新' },
+  repair:      { eyebrow: 'REPAIR / 06',            title: '软件修复' },
   recovery:    { eyebrow: 'RECOVERY',               title: '恢复 PMBrain 本地服务' },
 };
 const t = panelTitles[panel];
@@ -349,21 +404,22 @@ html = html.replace(/(id="page-title">)[^<]+(<\/h1>)/, `$1${t.title}$2`);
 interface MockIntegration {
   id: string; name: string; path: string | null; configured: boolean; automatic: boolean;
   connectionState?: 'connected' | 'saved' | 'invalid';
+  launchAvailable?: boolean;
 }
 const mockIntegrations: MockIntegration[] = [
-  { id: 'cherry', name: 'CherryStudio', path: null, configured: false, automatic: false },
-  { id: 'workbuddy', name: 'Workbuddy', path: 'C:\\Users\\zhengyunhui\\.workbuddy\\mcp.json', configured: true, automatic: true },
-  { id: 'cursor', name: 'Cursor', path: 'C:\\Users\\zhengyunhui\\.cursor\\mcp.json', configured: true, automatic: true },
-  { id: 'trae', name: 'Trae Work', path: 'C:\\Users\\zhengyunhui\\AppData\\Roaming\\TRAE SOLO CN\\User\\mcp.json', configured: false, automatic: true },
+  { id: 'cherry', name: 'CherryStudio', path: null, configured: false, automatic: false, launchAvailable: true },
+  { id: 'workbuddy', name: 'Workbuddy', path: 'C:\\Users\\zhengyunhui\\.workbuddy\\mcp.json', configured: true, automatic: true, connectionState: 'connected', launchAvailable: true },
+  { id: 'cursor', name: 'Cursor', path: 'C:\\Users\\zhengyunhui\\.cursor\\mcp.json', configured: true, automatic: true, launchAvailable: true },
+  { id: 'trae', name: 'Trae Work', path: 'C:\\Users\\zhengyunhui\\AppData\\Roaming\\TRAE SOLO CN\\User\\mcp.json', configured: true, automatic: true, connectionState: 'connected', launchAvailable: true },
   { id: 'qwen', name: 'Qwen Code', path: 'C:\\Users\\zhengyunhui\\.qwen\\settings.json', configured: false, automatic: true },
   { id: 'qoder', name: 'Qoder CN（通义灵码）', path: 'C:\\Users\\zhengyunhui\\.qoder-cn\\settings.json', configured: false, automatic: true },
   { id: 'zcode', name: 'ZCode（智谱）', path: 'C:\\Users\\zhengyunhui\\.zcode\\cli\\config.json', configured: false, automatic: true },
   { id: 'mimo', name: 'MiMo Code（小米）', path: 'C:\\Users\\zhengyunhui\\AppData\\Local\\mimocode\\mimocode.jsonc', configured: false, automatic: true },
   { id: 'kimi', name: 'Kimi Code（月之暗面）', path: 'C:\\Users\\zhengyunhui\\.kimi-code\\mcp.json', configured: false, automatic: true },
-  { id: 'qwenpaw', name: 'QwenPaw', path: 'C:\\Users\\zhengyunhui\\.qwenpaw\\workspaces\\default\\drivers\\mcp\\pmbrain.yaml', configured: true, automatic: true, connectionState: 'connected' },
-  { id: 'codex', name: 'Codex', path: 'C:\\Users\\zhengyunhui\\.codex\\config.toml', configured: false, automatic: true },
-  { id: 'claude', name: 'Claude', path: 'C:\Users\zhengyunhui\.claude.json', configured: false, automatic: false },
-  { id: 'grok', name: 'Grok Build', path: 'C:\\Users\\zhengyunhui\\.grok\\config.toml', configured: true, automatic: true, connectionState: 'connected' },
+  { id: 'qwenpaw', name: 'QwenPaw', path: 'C:\\Users\\zhengyunhui\\.qwenpaw\\workspaces\\default\\drivers\\mcp\\pmbrain.yaml', configured: true, automatic: true, connectionState: 'connected', launchAvailable: true },
+  { id: 'codex', name: 'Codex', path: 'C:\\Users\\zhengyunhui\\.codex\\config.toml', configured: true, automatic: true, connectionState: 'connected', launchAvailable: true },
+  { id: 'claude', name: 'Claude', path: 'C:\Users\zhengyunhui\.claude.json', configured: true, automatic: false, connectionState: 'invalid' },
+  { id: 'grok', name: 'Grok Build', path: 'C:\\Users\\zhengyunhui\\.grok\\config.toml', configured: true, automatic: true, connectionState: 'connected', launchAvailable: true },
   { id: 'hermes', name: 'Hermes', path: null, configured: false, automatic: false },
   { id: 'openclaw', name: 'OpenClaw', path: null, configured: false, automatic: false },
   { id: 'codebuddy', name: 'CodeBuddy', path: 'C:\\Users\\zhengyunhui\\.codebuddy\\mcp.json', configured: true, automatic: true },
@@ -384,11 +440,12 @@ const cardsHtml = mockIntegrations.map((item) => {
   const btnText = item.automatic
     ? item.configured ? '更新连接' : '接入'
     : item.id === 'claude' ? '生成接入命令' : '生成接入配置';
-  const buttons = item.id === 'workbuddy' && item.configured
-    ? `<div class="integration-actions"><button class="solid">${btnText}</button><button>Agent写入</button></div>`
-    : `<button class="solid">${btnText}</button>`;
-  const deep = ['claude', 'codex', 'grok'].includes(item.id) ? '<button type="button">深度接入</button><small class="integration-action-help">更新连接只更新 MCP；深度接入还会安装自动记忆规则。</small>' : '';
-  return `<article class="integration-card"><span class="${badgeClass}">${badgeText}</span><h3>${item.name}</h3><p>${pathText}</p><small>${noteText}</small>${buttons}${deep}</article>`;
+  const workbuddyDeep = item.id === 'workbuddy' && item.configured ? '<button type="button">深度接入</button>' : '';
+  const deep = ['claude', 'codex', 'grok'].includes(item.id) ? '<button type="button">深度接入</button>' : '';
+  const launch = item.launchAvailable ? '<button type="button" class="integration-launch"><i class="integration-launch-icon"></i><span>启动</span></button>' : '';
+  const help = ['claude', 'codex', 'grok'].includes(item.id) ? '<small class="integration-action-help">更新连接只更新 MCP；深度接入还会安装自动记忆规则。</small>' : '';
+  const actions = `<div class="integration-actions"><button class="solid">${btnText}</button>${workbuddyDeep}${deep}${launch}</div>`;
+  return `<article class="integration-card"><span class="${badgeClass}">${badgeText}</span><h3>${item.name}</h3><p>${pathText}</p><small>${noteText}</small>${actions}${help}</article>`;
 }).join('\n          ');
 html = html.replace(
   '<div class="integration-grid" id="integration-grid"></div>',

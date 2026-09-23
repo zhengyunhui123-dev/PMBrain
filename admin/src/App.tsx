@@ -15,7 +15,7 @@ import {
 } from './pages/Dream';
 import { BrainDataPage } from './pages/BrainData';
 import { ImportDataPage, NaturalLanguagePage } from './pages/Import';
-import { KnowledgeWorkbenchPage } from './pages/Knowledge';
+import { KnowledgeHealthPage, KnowledgeWorkbenchPage } from './pages/Knowledge';
 import { ConnectionCenterPage } from './pages/Connection';
 import { DocumentationPage } from './pages/Documentation';
 import { ModelConfigPage, SettingsPage, type SettingsSection } from './pages/Settings';
@@ -29,7 +29,7 @@ import {
   type ThemeMode,
 } from './lib/theme';
 import {
-  BookOpenText, Bot, BrainCircuit, Cable,
+  Activity, BookOpenText, Bot, BrainCircuit, Cable,
   Database, FileClock, FolderKanban, HeartHandshake, LayoutDashboard, ListTodo,
   MonitorCog, Sparkles, type LucideIcon,
   Orbit,
@@ -39,7 +39,7 @@ const PAGES = [
   'login', 'dashboard', 'natural',
   'dream', 'dream-execute', 'dream-knowledge', 'dream-takes', 'dream-scoring', 'dream-calibration', 'dream-insights',
   'import', 'data', 'graph', 'docs',
-  'mcp', 'tasks', 'config', 'agents', 'log', 'calibration',
+  'mcp', 'tasks', 'health', 'config', 'agents', 'log', 'calibration',
   'settings', 'settings-general', 'settings-knowledge', 'settings-dream',
 ] as const;
 
@@ -60,7 +60,8 @@ function getPage(): Page {
 
 type NavIconName =
   | 'overview' | 'workspace' | 'database' | 'organize' | 'mcp' | 'tasks' | 'log' | 'assistant'
-  | 'graph' | 'settings-general' | 'settings-knowledge' | 'settings-dream';
+  | 'graph' | 'health'
+  | 'settings-general' | 'settings-knowledge' | 'settings-dream';
 
 const NAV_ICONS: Record<NavIconName, LucideIcon> = {
   overview: LayoutDashboard,
@@ -71,6 +72,7 @@ const NAV_ICONS: Record<NavIconName, LucideIcon> = {
   mcp: Cable,
   tasks: ListTodo,
   log: FileClock,
+  health: Activity,
   assistant: Bot,
   'settings-general': MonitorCog,
   'settings-knowledge': Database,
@@ -79,18 +81,19 @@ const NAV_ICONS: Record<NavIconName, LucideIcon> = {
 
 const SETTINGS_NAV_ITEMS: Array<{
   page: Page;
-  section: SettingsSection;
+  section?: SettingsSection;
   label: string;
   icon: NavIconName;
 }> = [
-  { page: 'settings-general', section: 'general', label: '常规设置', icon: 'settings-general' },
+  { page: 'mcp', label: 'MCP', icon: 'mcp' },
+  { page: 'settings-dream', section: 'dream', label: '自动化', icon: 'settings-dream' },
   { page: 'settings-knowledge', section: 'knowledge', label: '知识库设置', icon: 'settings-knowledge' },
-  { page: 'settings-dream', section: 'dream', label: '知识整理设置', icon: 'settings-dream' },
+  { page: 'settings-general', section: 'general', label: '其他设置', icon: 'settings-general' },
 ];
 
 const SETTINGS_PAGE_SECTIONS: Partial<Record<Page, SettingsSection>> = {
   settings: 'general',
-  ...Object.fromEntries(SETTINGS_NAV_ITEMS.map(item => [item.page, item.section])),
+  ...Object.fromEntries(SETTINGS_NAV_ITEMS.filter(item => item.section).map(item => [item.page, item.section])),
 };
 
 function NavIcon({ name }: { name: NavIconName }) {
@@ -110,15 +113,19 @@ export function App() {
   const donationQrSrc = `${import.meta.env.BASE_URL}wechat-donation.jpg`;
   const customerServiceQrSrc = `${import.meta.env.BASE_URL}customer-service-qr.png`;
   const navSections: Array<{ title: string; items: Array<{ page: Page; label: string; icon: NavIconName }> }> = useMemo(() => [
-    { title: '知识', items: [
+    { title: '工作台', items: [
       { page: 'import', label: '知识工作台', icon: 'workspace' },
+    ] },
+    { title: '知识', items: [
       { page: 'data', label: '知识库', icon: 'database' },
       { page: 'graph', label: '知识图谱', icon: 'graph' },
+    ] },
+    { title: '知识整理', items: [
       { page: 'dream', label: '知识整理', icon: 'organize' },
     ] },
-    { title: '集成', items: [
-      { page: 'mcp', label: 'MCP 接入', icon: 'mcp' },
+    { title: '运行', items: [
       { page: 'tasks', label: '任务中心', icon: 'tasks' },
+      { page: 'health', label: '知识库健康', icon: 'health' },
       { page: 'log', label: '请求日志', icon: 'log' },
     ] },
   ], []);
@@ -219,7 +226,7 @@ export function App() {
               <button
                 type="button"
                 key={item.page}
-                className={`nav-item nav-subitem ${SETTINGS_PAGE_SECTIONS[page] === item.section ? 'active' : ''}`}
+                className={`nav-item nav-subitem ${(item.section ? SETTINGS_PAGE_SECTIONS[page] === item.section : page === item.page) ? 'active' : ''}`}
                 onClick={() => navigate(item.page)}
               >
                 <NavIcon name={item.icon} /><span>{item.label}</span>
@@ -274,6 +281,7 @@ export function App() {
         {page === 'natural' && <NaturalLanguagePage />}
         {page === 'mcp' && <ConnectionCenterPage />}
         {page === 'tasks' && <TaskCenterPage />}
+        {page === 'health' && <KnowledgeHealthPage onNavigate={navigate} />}
         {page === 'config' && <ModelConfigPage />}
         {page === 'agents' && <AgentsPage />}
         {page === 'log' && <RequestLogPage />}

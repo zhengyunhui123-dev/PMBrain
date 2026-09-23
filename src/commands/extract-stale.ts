@@ -187,6 +187,7 @@ export async function extractStaleFromDB(
           date: entry.date,
           summary: entry.summary,
           detail: entry.detail || '',
+          source: entry.source || '',
           source_id: page.source_id,
         });
       }

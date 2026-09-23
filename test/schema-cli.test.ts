@@ -71,9 +71,9 @@ describe('gbrain schema CLI (Phase C)', () => {
     expect(r.stdout).toContain('gbrain-base v1.0.0');
     // v0.41.11.0: page types extended from 22 to 24 by promoting
     // `conversation` and `atom` into gbrain-base.
-    // v0.41.23.0: extended to 25 by adding `extract_receipt` for the
-    // unified extract receipt-writer surface (D-EXTRACT-19 belt+suspenders).
-    expect(r.stdout).toContain('Page types (25)');
+    // v0.41.23.0 added `extract_receipt`; later compatibility work added
+    // the two current PMBrain document types.
+    expect(r.stdout).toContain('Page types (27)');
     expect(r.stdout).toContain('Link verbs (12)');
     expect(r.stdout).toContain('Takes kinds: fact, take, bet, hunch');
     expect(r.stdout).toContain('person :: entity');

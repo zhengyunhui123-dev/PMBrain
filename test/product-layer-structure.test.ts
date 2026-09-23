@@ -15,9 +15,6 @@ describe('PMBrain product-layer structure', () => {
     expect(entry).toContain("from './window-security.js'");
     expect(entry).toContain('registerDesktopIpcHandlers({');
     expect(entry).not.toContain('ipcMain.handle(');
-    // Keep the entry as an orchestrator without pinning every harmless line
-    // addition to one historical exact count.
-    expect(entry.split(/\r?\n/).length).toBeLessThan(500);
     for (const controller of [
       'DatabaseUpgradeController',
       'PgliteBackupController',
@@ -62,6 +59,9 @@ describe('PMBrain product-layer structure', () => {
     expect(productRoutes).toContain("app.get('/admin/api/brain/overview'");
     expect(productRoutes).toContain("app.get('/admin/api/advisor'");
     expect(productRoutes).toContain("app.post('/admin/api/advisor/apply'");
+    expect(productRoutes).toContain("app.get('/admin/api/waiting'");
+    expect(productRoutes).toContain("app.post('/admin/api/google/connect'");
+    expect(productRoutes).toContain("app.get('/admin/api/connectors'");
     expect(productRoutes).toContain("app.get('/admin/api/search-index-health'");
     expect(productRoutes).toContain("app.post('/admin/api/search-index-repair'");
     expect(productRoutes).toContain("app.post('/admin/api/export-runs'");

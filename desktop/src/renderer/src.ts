@@ -578,11 +578,12 @@ function confirmCustomProvider(): void {
 function renderModelDropdown(kind: 'chat' | 'embedding'): void {
   const ul = $<HTMLUListElement>(`#${kind}-model-dropdown`);
   const input = $<HTMLInputElement>(`#${kind}-model-name`);
+  const provider = $<HTMLSelectElement>(`#${kind}-provider`).value;
   const currentValue = input.value.trim();
   const models = providerModels[kind];
   ul.replaceChildren(...models.map(model => {
     const li = document.createElement('li');
-    li.textContent = model;
+    li.textContent = modelDisplayName(provider, model);
     if (model === currentValue) li.classList.add('selected');
     li.addEventListener('click', () => {
       input.value = model;
@@ -590,6 +591,13 @@ function renderModelDropdown(kind: 'chat' | 'embedding'): void {
     });
     return li;
   }));
+}
+
+function modelDisplayName(provider: string, model: string): string {
+  if (provider === 'deepseek' && model === 'deepseek-flash') return 'DeepSeek-V4.1-Flash';
+  if (provider === 'mimo' && model === 'mimo-v2.6-pro') return 'MiMo-V2.6-Pro';
+  if (provider === 'mimo' && model === 'mimo-v2.6-flash') return 'MiMo-V2.6-Flash';
+  return model;
 }
 
 async function refreshProviderModels(kind: ModelKind, chooseDefault: boolean): Promise<void> {
@@ -667,7 +675,7 @@ function modelConnectionInput(kind: ModelKind): DesktopModelConnectionTestInput 
 }
 
 function renderModelConnectionResult(
-  kind: ModelKind,
+  kind: ModelKind | 'ocr',
   result: DesktopModelConnectionTestResult,
 ): void {
   const status = $<HTMLElement>(`#${kind}-model-load-status`);
@@ -715,10 +723,11 @@ async function testConfiguredModel(kind: ModelKind): Promise<void> {
 function renderAdvancedModelDropdown(tier: AdvancedModelTier): void {
   const ul = $<HTMLUListElement>(`#advanced-${tier}-model-dropdown`);
   const input = $<HTMLInputElement>(`#advanced-${tier}-model-name`);
+  const provider = $<HTMLSelectElement>(`#advanced-${tier}-provider`).value;
   const currentValue = input.value.trim();
   ul.replaceChildren(...advancedProviderModels[tier].map(model => {
     const li = document.createElement('li');
-    li.textContent = model;
+    li.textContent = modelDisplayName(provider, model);
     if (model === currentValue) li.classList.add('selected');
     li.addEventListener('click', () => {
       input.value = model;
@@ -732,10 +741,11 @@ function renderAdvancedPhaseModelDropdown(phase: AdvancedModelPhase): void {
   const prefix = advancedPhaseId(phase);
   const ul = $<HTMLUListElement>(`#${prefix}-model-dropdown`);
   const input = $<HTMLInputElement>(`#${prefix}-model-name`);
+  const provider = $<HTMLSelectElement>(`#${prefix}-provider`).value;
   const currentValue = input.value.trim();
   ul.replaceChildren(...advancedPhaseProviderModels[phase].map(model => {
     const li = document.createElement('li');
-    li.textContent = model;
+    li.textContent = modelDisplayName(provider, model);
     if (model === currentValue) li.classList.add('selected');
     li.addEventListener('click', () => {
       input.value = model;
@@ -1140,21 +1150,36 @@ function renderIntegrations(integrations: IntegrationInfo[]): void {
       button.textContent = item.id === 'claude' ? '生成接入命令' : '生成接入配置';
     }
     button.addEventListener('click', () => void configure(item.id, button));
+    article.append(badge, title, path, note);
+    const actions = document.createElement('div');
+    actions.className = 'integration-actions';
+    actions.append(button);
     if (item.id === 'workbuddy' && item.configured) {
-      const actions = document.createElement('div');
-      actions.className = 'integration-actions';
       const agentButton = document.createElement('button');
-      agentButton.textContent = '写入规则与 Agent';
+      agentButton.textContent = '深度接入';
       agentButton.addEventListener('click', () => void writeWorkbuddyUserAgent(agentButton));
-      actions.append(button, agentButton);
-      article.append(badge, title, path, note, actions);
-    } else {
-      article.append(badge, title, path, note, button);
+      actions.append(agentButton);
     }
     if (['codex','claude','grok'].includes(item.id)) {
       const deep = document.createElement('button'); deep.type = 'button'; deep.textContent = '深度接入';
       deep.addEventListener('click', () => void configure(item.id, deep, true));
-      article.appendChild(deep);
+      actions.append(deep);
+    }
+    if (item.launchAvailable) {
+      const launchButton = document.createElement('button');
+      launchButton.type = 'button';
+      launchButton.className = 'integration-launch';
+      const launchIcon = document.createElement('i');
+      launchIcon.className = 'integration-launch-icon';
+      launchIcon.setAttribute('aria-hidden', 'true');
+      const launchLabel = document.createElement('span');
+      launchLabel.textContent = '启动';
+      launchButton.append(launchIcon, launchLabel);
+      launchButton.addEventListener('click', () => void launchIntegration(item.id, launchButton));
+      actions.append(launchButton);
+    }
+    article.append(actions);
+    if (['codex','claude','grok'].includes(item.id)) {
       const actionHelp = document.createElement('small');
       actionHelp.className = 'integration-action-help';
       actionHelp.textContent = '更新连接只更新 MCP；深度接入还会安装自动记忆规则。';
@@ -1661,6 +1686,13 @@ function populate(next: DesktopSetupState): void {
       : `普通模型：${setup.current.chatModel} · 状态：已配置，但全局禁用`)
     : '当前未配置';
   $('#embedding-model-effective').textContent = setup.current.embeddingModel ? `当前生效：${setup.current.embeddingModel}` : '当前未配置';
+  const ocr = splitModelId(setup.current.ocrModel);
+  ($<HTMLSelectElement>('#ocr-provider')).value = ocr.provider;
+  ($<HTMLInputElement>('#ocr-model-name')).value = ocr.model;
+  syncOcrProviderKeyField();
+  $('#ocr-model-effective').textContent = setup.current.ocrModel
+    ? `当前生效：${setup.current.ocrModel}`
+    : `自动使用普通模型：${setup.current.chatModel || '尚未配置'}`;
   $('#config-path').textContent = `配置写入：${setup.configPath}`;
   $('#postgres-status').textContent = setup.current.engine === 'postgres' && setup.current.databaseConfigured
     ? '已读取当前 Postgres 连接，正在检查 Docker 中可切换的 PMBrain 数据库。'
@@ -2068,6 +2100,13 @@ async function save(): Promise<void> {
     setNotice('error', '向量模型为可选项；如需启用，请同时填写供应商和模型名称');
     return;
   }
+  const ocrProvider = ($<HTMLSelectElement>('#ocr-provider')).value;
+  const ocrModelName = ($<HTMLInputElement>('#ocr-model-name')).value.trim();
+  if (Boolean(ocrProvider) !== Boolean(ocrModelName)) {
+    setNotice('error', '请同时填写图片/OCR模型的供应商和模型名称');
+    return;
+  }
+  const ocrModel = composeModelId(recipeProvider(ocrProvider), ocrModelName);
 
   let confirmEmbeddingRebuild = false;
   let confirmLegacyEmbeddingRecovery = false;
@@ -2102,6 +2141,7 @@ async function save(): Promise<void> {
   const embeddingModel = composeModelId(recipeProvider(embeddingProvider), embeddingModelName);
   const chatKey = providerKeyId(chatProvider, 'chat');
   const embeddingKey = providerKeyId(embeddingProvider, 'embedding');
+  const ocrKey = providerKeyId(ocrProvider, 'chat');
   // 需要 Key 的供应商才保存 Key
   if (chatKey && chatKey !== '__none__') {
     const chatKeyValue = ($<HTMLInputElement>('#chat-api-key')).value.trim();
@@ -2119,6 +2159,14 @@ async function save(): Promise<void> {
     }
     if (embeddingKeyValue) (keys as Record<string, string>)[embeddingKey] = embeddingKeyValue;
   }
+  if (ocrModel && ocrProvider && ocrKey && ocrKey !== '__none__') {
+    const ocrKeyValue = ($<HTMLInputElement>('#ocr-api-key')).value.trim();
+    if (!ocrKeyValue && !isCustomEndpointId(ocrProvider)) {
+      setNotice('error', `供应商 ${ocrProvider} 需要填写 API Key`);
+      return;
+    }
+    if (ocrKeyValue) (keys as Record<string, string>)[ocrKey] = ocrKeyValue;
+  }
   const knowledgeDirectory = ($<HTMLInputElement>('#knowledge-directory')).value;
   const knowledgeSourceId = ($<HTMLInputElement>('#knowledge-source-id')).value;
   const payload: SetupPayload = {
@@ -2135,6 +2183,8 @@ async function save(): Promise<void> {
     modelConfig: {
       chatModel,
       ...(embeddingModel ? { embeddingModel } : {}),
+      ocrEnabled: true,
+      ...(ocrModel ? { ocrModel } : {}),
     },
     customProviders: customCatalog,
     customSelection,
@@ -2260,7 +2310,20 @@ async function writeWorkbuddyUserAgent(button: HTMLButtonElement): Promise<void>
   } catch (error) {
     setNotice('error', error instanceof Error ? error.message : String(error));
   } finally {
-    setBusy(button, false, '写入规则与 Agent');
+    setBusy(button, false, '深度接入');
+  }
+}
+
+async function launchIntegration(client: IntegrationClient, button: HTMLButtonElement): Promise<void> {
+  clearNotices();
+  setBusy(button, true, '启动中…');
+  try {
+    await window.pmbrainDesktop.launchIntegration(client);
+    setNotice('success', `${integrationClientName(client)} 已启动。`);
+  } catch (error) {
+    setNotice('error', error instanceof Error ? error.message : String(error));
+  } finally {
+    setBusy(button, false, '启动');
   }
 }
 
@@ -2355,6 +2418,8 @@ $<HTMLButtonElement>('#add-custom-chat-model').addEventListener('click', () => o
 $<HTMLButtonElement>('#add-custom-embedding-model').addEventListener('click', () => openCustomProvider('embedding'));
 $<HTMLButtonElement>('#test-chat-model').addEventListener('click', () => void testConfiguredModel('chat'));
 $<HTMLButtonElement>('#test-embedding-model').addEventListener('click', () => void testConfiguredModel('embedding'));
+$<HTMLButtonElement>('#test-ocr-model').addEventListener('click', () => void testOcrModel());
+$<HTMLSelectElement>('#ocr-provider').addEventListener('change', syncOcrProviderKeyField);
 $<HTMLButtonElement>('#custom-provider-close').addEventListener('click', closeCustomProvider);
 $<HTMLButtonElement>('#custom-provider-cancel').addEventListener('click', closeCustomProvider);
 $<HTMLFormElement>('#custom-provider-form').addEventListener('submit', event => {
@@ -2418,6 +2483,403 @@ document.addEventListener('keydown', e => {
     document.querySelectorAll<HTMLUListElement>('.provider-dropdown').forEach(dropdown => { dropdown.hidden = true; });
   }
 });
+let googleClientJsonPath = '';
+let googleConsentUrl = '';
+let activeDailyConnector = '';
+
+function extractConsentUrl(message?: string): string | null {
+  const match = message?.match(/https:\/\/accounts\.google\.com[^\s"'<>]+/i);
+  if (!match) return null;
+  try {
+    const parsed = new URL(match[0].replace(/[).,]+$/, ''));
+    if (parsed.protocol !== 'https:' || parsed.searchParams.has('code')) return null;
+    return parsed.hostname.toLowerCase() === 'accounts.google.com' ? parsed.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
+function renderList(target: HTMLElement, lines: string[]): void {
+  target.textContent = lines.length > 0 ? lines.join('\n') : '暂无';
+}
+
+function renderChronicleRows(target: HTMLElement, payload: unknown): void {
+  const rows = Array.isArray(payload) ? payload : [];
+  target.textContent = rows.length > 0 ? JSON.stringify(rows) : '暂无';
+}
+
+function selectDailyConnector(id: string, connected: boolean): void {
+  activeDailyConnector = id;
+  const details = $<HTMLDetailsElement>('#daily-connectors-advanced');
+  details.open = true;
+  const name = id === 'chatgpt' ? 'ChatGPT' : 'Claude';
+  const host = id === 'chatgpt' ? 'chatgpt.com' : 'claude.ai';
+  $('#daily-chat-secret-label').textContent = `${name} 整行 Cookie:`;
+  $('#daily-chat-secret-help').textContent = `${name} 登录状态下 → F12 → Network → 随便点一条 ${host} 请求 → Headers → Request Headers → 复制整行 Cookie:。只保存在本机，不要发给任何人。`;
+  const secret = $<HTMLInputElement>('#daily-chat-secret');
+  secret.value = '';
+  secret.placeholder = connected ? '已连接；如需更新，请粘贴新的整行 Cookie:' : '粘贴整行 Cookie:';
+  $<HTMLButtonElement>('#daily-chat-sync').disabled = !connected;
+  $<HTMLButtonElement>('#daily-chat-logout').disabled = !connected;
+  secret.focus();
+}
+
+async function refreshDailyPanel(): Promise<void> {
+  const waitingEl = $('#daily-waiting');
+  const connectorsEl = $('#daily-connectors');
+  const googleEl = $('#daily-google-status');
+  try {
+    const payload = await window.pmbrainDesktop.productConnectors() as {
+      providers?: Array<{ provider: string; credential?: { present: boolean }; last_sync_at?: string | null }>;
+      google?: { accounts?: Array<{ account: string }> };
+      cards?: Array<{ id: string; name: string; connected: boolean; account: string | null; last_sync_label: string; auto_sync?: boolean }>;
+    };
+    const cards = payload.cards;
+    const providers = payload.providers ?? [];
+    const accounts = payload.google?.accounts ?? [];
+    googleEl.textContent = accounts.length > 0 ? `Google 已连接 ${accounts.map((item) => item.account).join('、')}` : 'Google 尚未连接';
+    if (accounts[0] && !$<HTMLInputElement>('#daily-google-account').value) {
+      $<HTMLInputElement>('#daily-google-account').value = accounts[0].account;
+    }
+    connectorsEl.replaceChildren();
+    const rows = cards ?? providers.map((item) => ({
+      id: item.provider,
+      name: item.provider === 'chatgpt' ? 'ChatGPT' : item.provider === 'claude' ? 'Claude' : item.provider,
+      connected: item.credential?.present === true,
+      account: null,
+      last_sync_label: item.last_sync_at ? `最近同步 ${item.last_sync_at}` : '尚未同步',
+      auto_sync: false,
+    }));
+    if (rows.length === 0) {
+      connectorsEl.textContent = '没有连接器';
+    } else {
+    for (const item of rows) {
+      const row = document.createElement('div');
+      row.className = 'daily-connector-row';
+      const label = document.createElement('div');
+      const state = document.createElement('b');
+      state.textContent = `${item.name}　${item.connected ? (item.account ? `已连接 ${item.account}` : '已连接') : '未连接'}`;
+      const sync = document.createElement('small');
+      sync.textContent = `最近同步：${item.last_sync_label}`;
+      label.append(state, sync);
+      if (item.connected) {
+        const auto = document.createElement('label');
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.checked = item.auto_sync === true;
+        checkbox.addEventListener('change', () => {
+          void window.pmbrainDesktop.productConnectorAutoSync(item.id, checkbox.checked)
+            .then(() => setNotice('success', checkbox.checked ? '已开启每日自动同步' : '已关闭自动同步'))
+            .catch((error) => {
+              checkbox.checked = !checkbox.checked;
+              setNotice('error', error instanceof Error ? error.message : String(error));
+            });
+        });
+        auto.append(checkbox, document.createTextNode(' 自动同步'));
+        label.append(auto);
+      }
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'ghost';
+      button.textContent = item.connected ? '管理' : '连接';
+      button.addEventListener('click', () => {
+        if (item.id === 'google') {
+          $<HTMLDetailsElement>('#daily-connectors-advanced').open = true;
+          if (!item.connected) $<HTMLButtonElement>('#daily-google-connect').click();
+          return;
+        }
+        selectDailyConnector(item.id, item.connected);
+      });
+      row.append(label, button);
+      connectorsEl.append(row);
+    }
+    }
+  } catch (error) {
+    connectorsEl.textContent = error instanceof Error ? error.message : String(error);
+  }
+  return;
+  try {
+    const payload = await window.pmbrainDesktop.productWaiting() as {
+      items?: Array<{ title: string; meta?: string }>;
+      groups?: Array<{ counterparty: string; loop_count: number; loops?: Array<{ summary: string }> }>;
+      no_google_sources?: boolean;
+      origins?: Record<'gmail' | 'meeting' | 'conversation', { ready: boolean; label: string }>;
+    };
+    const items = payload.items ?? [];
+    for (const key of ['gmail', 'meeting', 'conversation'] as const) {
+      const ready = payload.origins?.[key]?.ready === true;
+      const input = $<HTMLInputElement>(`#daily-waiting-${key}`);
+      const state = $(`#daily-waiting-${key}-state`);
+      input.disabled = !ready;
+      if (!ready) input.checked = false;
+      state.textContent = ready ? '✅' : '未连接';
+    }
+    if (items.length > 0) {
+      waitingEl.replaceChildren();
+      for (const item of items as Array<{ id: number; title: string; meta?: string; origin_key?: string }>) {
+        const input = item.origin_key ? document.querySelector<HTMLInputElement>(`#daily-waiting-${item.origin_key}`) : null;
+        if (input?.checked === false) continue;
+        const row = document.createElement('div');
+        row.className = 'daily-waiting-row';
+        const copy = document.createElement('div');
+        const title = document.createElement('b');
+        title.textContent = item.title;
+        copy.append(title);
+        if (item.meta) {
+          const meta = document.createElement('small');
+          meta.textContent = item.meta ?? '';
+          copy.append(meta);
+        }
+        const actions = document.createElement('div');
+        for (const [status, text] of [['done', '已完成'], ['dropped', '忽略']] as const) {
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.className = status === 'done' ? 'solid' : 'ghost';
+          button.textContent = text;
+          button.addEventListener('click', () => {
+            void window.pmbrainDesktop.productWaitingClose({ id: item.id, status })
+              .then(() => refreshDailyPanel())
+              .catch((error) => setNotice('error', error instanceof Error ? error.message : String(error)));
+          });
+          actions.append(button);
+        }
+        row.append(copy, actions);
+        waitingEl.append(row);
+      }
+    } else {
+      waitingEl.textContent = payload.no_google_sources
+        ? '还没有连接 Gmail。连上后可以扫描邮件里谁在等你。'
+        : '暂时没有待处理事项。';
+    }
+  } catch (error) {
+    waitingEl.textContent = String(error);
+  }
+  const date = $<HTMLInputElement>('#daily-chronicle-date').value;
+  try {
+    const status = await window.pmbrainDesktop.productChronicleStatus() as { event_count?: number; history_count?: number };
+    const empty = (status.event_count ?? 0) === 0;
+    $('#daily-chronicle-empty').hidden = !empty;
+    $('#daily-chronicle-empty-actions').hidden = !empty;
+    $('#daily-chronicle-content').hidden = empty;
+    const historyCount = status.history_count ?? 0;
+    const historyNote = $('#daily-chronicle-history-note');
+    historyNote.hidden = !empty || historyCount === 0;
+    historyNote.textContent = historyCount > 0 ? `已有 ${historyCount} 条历史知识，可补充过去的时间线。` : '';
+    $<HTMLButtonElement>('#daily-chronicle-history').hidden = historyCount === 0;
+    if (!empty) {
+      renderChronicleRows($('#daily-chronicle-today'), await window.pmbrainDesktop.productChronicleDay(date || undefined));
+      renderChronicleRows($('#daily-chronicle-memory'), await window.pmbrainDesktop.productChronicleOnThisDay(date || undefined));
+    } else {
+      $('#daily-chronicle-today').textContent = '还没有时间线。';
+      $('#daily-chronicle-memory').textContent = '还没有时间线。';
+    }
+  } catch (error) {
+    $('#daily-chronicle-today').textContent = String(error);
+  }
+  await refreshDailyPeople();
+}
+
+async function refreshDailyPeople(query = $<HTMLInputElement>('#daily-identity-query').value.trim()): Promise<void> {
+  const groupsEl = $('#daily-identity-groups');
+  const resultsEl = $('#daily-identity-results');
+  const suggestionsEl = $('#daily-identity-suggestions');
+  try {
+    const payload = await window.pmbrainDesktop.productPeople(query) as {
+      people?: Array<{ source_id: string; slug: string; title: string; source_label: string }>;
+      suggestions?: Array<{ left: { source_id: string; slug: string; title: string; source_label: string }; right: { source_id: string; slug: string; title: string; source_label: string } }>;
+      groups?: Array<{ entity_id: string; name: string; members?: Array<{ source_label: string; title: string }> }>;
+    };
+    suggestionsEl.replaceChildren();
+    for (const item of payload.suggestions ?? []) {
+      const row = document.createElement('div');
+      row.textContent = `可能是同一个人：${item.left.title}（${item.left.source_label}） ↔ ${item.right.title}（${item.right.source_label}）`;
+      const confirm = document.createElement('button');
+      confirm.type = 'button';
+      confirm.className = 'ghost';
+      confirm.textContent = '确认关联';
+      confirm.addEventListener('click', () => {
+        void window.pmbrainDesktop.productMergePeople([item.left, item.right])
+          .then(() => refreshDailyPanel())
+          .catch((error) => setNotice('error', error instanceof Error ? error.message : String(error)));
+      });
+      const reject = document.createElement('button');
+      reject.type = 'button';
+      reject.className = 'ghost';
+      reject.textContent = '不是同一个人';
+      reject.addEventListener('click', () => {
+        void window.pmbrainDesktop.productRejectPeople({ left: item.left, right: item.right })
+          .then(() => refreshDailyPanel())
+          .catch((error) => setNotice('error', error instanceof Error ? error.message : String(error)));
+      });
+      row.append(confirm, reject);
+      suggestionsEl.append(row);
+    }
+    resultsEl.replaceChildren();
+    for (const person of payload.people ?? []) {
+      const label = document.createElement('label');
+      const box = document.createElement('input');
+      box.type = 'checkbox';
+      box.dataset.sourceId = person.source_id;
+      box.dataset.slug = person.slug;
+      box.dataset.title = person.title;
+      label.append(box, document.createTextNode(` ${person.source_label} · ${person.title}`));
+      resultsEl.append(label);
+    }
+    if ((payload.people ?? []).length === 0) resultsEl.textContent = '没有找到匹配的人物记录。';
+    groupsEl.replaceChildren();
+    for (const group of payload.groups ?? []) {
+      const row = document.createElement('div');
+      const copy = document.createElement('span');
+      const members = (group.members ?? []).map((member) => `${member.source_label} · ${member.title}`).join('、');
+      copy.textContent = `${group.name}：${members || '还没有成员'}`;
+      const open = document.createElement('button');
+      open.type = 'button';
+      open.className = 'ghost';
+      open.textContent = '打开人物卡';
+      open.addEventListener('click', () => void renderDailyPersonCard(group.entity_id));
+      row.append(copy, open);
+      groupsEl.append(row);
+    }
+    if ((payload.groups ?? []).length === 0) groupsEl.textContent = '还没有人物关联。';
+  } catch (error) {
+    groupsEl.textContent = error instanceof Error ? error.message : String(error);
+  }
+}
+
+function effectiveOcrModel(): string {
+  const dedicated = composeModelId(
+    recipeProvider(($<HTMLSelectElement>('#ocr-provider')).value),
+    ($<HTMLInputElement>('#ocr-model-name')).value,
+  );
+  return dedicated || composeModelId(
+    recipeProvider(($<HTMLSelectElement>('#chat-provider')).value),
+    ($<HTMLInputElement>('#chat-model-name')).value,
+  );
+}
+
+function syncOcrProviderKeyField(): void {
+  const provider = ($<HTMLSelectElement>('#ocr-provider')).value;
+  const keyId = providerKeyId(provider, 'chat');
+  const input = $<HTMLInputElement>('#ocr-api-key');
+  const local = keyId === '__none__';
+  input.disabled = !provider || local;
+  input.placeholder = !provider ? '留空时使用普通模型的凭据' : local ? '本地模型无需 API Key' : '';
+  input.value = keyId && keyId !== '__none__' ? state?.setup.current.keyValues[keyId] || '' : '';
+}
+
+async function testOcrModel(): Promise<void> {
+  const button = $<HTMLButtonElement>('#test-ocr-model');
+  const status = $<HTMLElement>('#ocr-model-load-status');
+  const modelId = effectiveOcrModel();
+  const parsed = splitModelId(modelId);
+  status.hidden = false;
+  status.classList.remove('ready', 'warning', 'error');
+  if (!parsed.provider || !parsed.model) {
+    status.classList.add('error');
+    status.textContent = '✕ 请先配置普通模型，或单独填写 provider:model';
+    return;
+  }
+  const provider = recipeProvider(parsed.provider);
+  const endpoint = isCustomEndpointId(parsed.provider) ? selectedCustomEndpoint('chat') : undefined;
+  const hasDedicatedModel = Boolean(($<HTMLSelectElement>('#ocr-provider')).value && ($<HTMLInputElement>('#ocr-model-name')).value.trim());
+  const apiKey = hasDedicatedModel
+    ? ($<HTMLInputElement>('#ocr-api-key')).value.trim()
+    : ($<HTMLInputElement>('#chat-api-key')).value.trim();
+  status.textContent = '正在发送一张测试图片…';
+  setBusy(button, true);
+  try {
+    const result = await window.pmbrainDesktop.testModelConnection({
+      provider,
+      model: parsed.model,
+      baseUrl: endpoint?.baseUrl,
+      apiKey,
+      touchpoint: 'ocr',
+    });
+    renderModelConnectionResult('ocr', result);
+  } catch (error) {
+    status.classList.add('error');
+    status.textContent = `✕ ${error instanceof Error ? error.message : String(error)}`;
+  } finally {
+    setBusy(button, false);
+  }
+}
+
+async function renderDailyPersonCard(entityId: string): Promise<void> {
+  const target = $('#daily-person-card');
+  try {
+    const card = await window.pmbrainDesktop.productPeopleCard(entityId) as {
+      entity_id: string;
+      name: string;
+      company: string | null;
+      role: string | null;
+      last_contact_label: string | null;
+      open_items: number;
+      recent_meetings: number;
+      members: Array<{ source_id: string; slug: string; source_label: string; title: string }>;
+      timeline: Array<{ date: string; summary: string }>;
+    };
+    target.replaceChildren();
+    const title = document.createElement('h3');
+    title.textContent = card.name;
+    const facts = document.createElement('div');
+    facts.className = 'daily-person-facts';
+    facts.textContent = `当前公司：${card.company || '暂无'}\n当前职位：${card.role || '暂无'}\n最近联系：${card.last_contact_label || '暂无'}\n未完成事项：${card.open_items}\n最近会议：${card.recent_meetings} 次`;
+    const members = document.createElement('div');
+    for (const member of card.members) {
+      const row = document.createElement('div');
+      row.textContent = `${member.source_label} · ${member.title}`;
+      const unlink = document.createElement('button');
+      unlink.type = 'button';
+      unlink.className = 'ghost';
+      unlink.textContent = '取消关联';
+      unlink.addEventListener('click', () => {
+        void window.pmbrainDesktop.productUnlinkPeople({ entity_id: card.entity_id, source_id: member.source_id, slug: member.slug })
+          .then(() => refreshDailyPeople())
+          .then(() => renderDailyPersonCard(card.entity_id))
+          .catch((error) => setNotice('error', error instanceof Error ? error.message : String(error)));
+      });
+      row.append(unlink);
+      members.append(row);
+    }
+    const timeline = document.createElement('p');
+    timeline.textContent = card.timeline.length > 0
+      ? `时间线：${card.timeline.map((row) => `${row.date.slice(0, 10)} ${row.summary}`).join('；')}`
+      : '时间线：暂无';
+    target.append(title, facts, members, timeline);
+    target.hidden = false;
+  } catch (error) {
+    setNotice('error', error instanceof Error ? error.message : String(error));
+  }
+}
+
+function applyGoogleEnvelope(result: { ok: boolean; status: string; next_action?: { user_message?: string; command?: string }; error?: { code: string; problem?: string; fix?: string }; account?: string }): void {
+  const message = $('#daily-google-message');
+  const pasteWrap = $('#daily-google-paste-wrap');
+  const openConsent = $<HTMLButtonElement>('#daily-google-open-consent');
+  const userMessage = result.next_action?.user_message?.replace('[SHOW USER]', '').replace('[/SHOW USER]', '').trim() ?? '';
+  message.hidden = !userMessage;
+  message.textContent = userMessage;
+  googleConsentUrl = extractConsentUrl(userMessage) ?? '';
+  openConsent.hidden = !googleConsentUrl;
+  const needsPaste = result.status === 'awaiting_consent' || (result.next_action?.command ?? '').includes('--code');
+  pasteWrap.hidden = !needsPaste;
+  $<HTMLInputElement>('#daily-google-redirect').value = '';
+  if (result.ok && result.status === 'connected') {
+    setNotice('success', `Google 已连接${result.account ? `：${result.account}` : ''}`);
+    void refreshDailyPanel();
+    return;
+  }
+  if (result.status === 'needs_client_credentials') {
+    setNotice('error', '还需要 Google 客户端 JSON。请选择 Desktop 应用下载的文件。');
+    return;
+  }
+  if (needsPaste) {
+    setNotice('success', '如果浏览器打不开 127.0.0.1，把地址栏完整网址粘贴回来。');
+    return;
+  }
+  if (result.error) setNotice('error', result.error.fix || result.error.problem || result.error.code);
+}
+
 document.querySelectorAll<HTMLButtonElement>('.rail-item').forEach((button) => button.addEventListener('click', () => {
   const target = button.dataset.target as Panel;
   switchPanel(target);
@@ -2662,4 +3124,124 @@ window.pmbrainDesktop.onShowPanel((panel) => {
   }
   if (panel === 'integrations') refreshIntegrationPanel();
   if (panel === 'repair') void loadPgliteUpgradeBackups();
+});
+if (!$<HTMLInputElement>('#daily-chronicle-date').value) {
+  const now = new Date();
+  $<HTMLInputElement>('#daily-chronicle-date').value = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+}
+$('#daily-google-client').addEventListener('click', async () => {
+  const path = await window.pmbrainDesktop.chooseFile([{ name: 'JSON', extensions: ['json'] }]);
+  if (!path) return;
+  googleClientJsonPath = path;
+  $('#daily-google-client-name').textContent = path.replace(/^.*[\\/]/, '');
+});
+$('#daily-google-connect').addEventListener('click', async () => {
+  const button = $<HTMLButtonElement>('#daily-google-connect');
+  setBusy(button, true, '请在浏览器完成授权…');
+  try {
+    applyGoogleEnvelope(await window.pmbrainDesktop.googleConnect({
+      account: $<HTMLInputElement>('#daily-google-account').value.trim() || undefined,
+      clientJsonPath: googleClientJsonPath || undefined,
+    }));
+  } catch (error) {
+    setNotice('error', error instanceof Error ? error.message : String(error));
+  } finally {
+    setBusy(button, false, '连接 Google');
+  }
+});
+$('#daily-google-paste-mode').addEventListener('click', async () => {
+  applyGoogleEnvelope(await window.pmbrainDesktop.googleConnect({
+    account: $<HTMLInputElement>('#daily-google-account').value.trim() || undefined,
+    clientJsonPath: googleClientJsonPath || undefined,
+    paste: true,
+  }));
+});
+$('#daily-google-finish').addEventListener('click', async () => {
+  const pasted = $<HTMLInputElement>('#daily-google-redirect').value.trim();
+  if (!pasted) return;
+  applyGoogleEnvelope(await window.pmbrainDesktop.googleConnect({
+    account: $<HTMLInputElement>('#daily-google-account').value.trim() || undefined,
+    clientJsonPath: googleClientJsonPath || undefined,
+    code: pasted,
+  }));
+});
+$('#daily-google-open-consent').addEventListener('click', () => {
+  if (googleConsentUrl) void window.pmbrainDesktop.openExternal(googleConsentUrl);
+});
+$('#daily-google-source-save').addEventListener('click', async () => {
+  const account = $<HTMLInputElement>('#daily-google-account').value.trim();
+  if (!account) {
+    setNotice('error', '请先连接 Google 账号');
+    return;
+  }
+  await window.pmbrainDesktop.googleSource({
+    account,
+    id: $<HTMLInputElement>('#daily-google-source').value.trim() || undefined,
+  });
+  setNotice('success', 'Google 知识源已登记');
+  void refreshDailyPanel();
+});
+$('#daily-chat-save').addEventListener('click', async () => {
+  const secret = $<HTMLInputElement>('#daily-chat-secret').value.trim();
+  if (!activeDailyConnector || !secret) {
+    setNotice('error', '请先选择 ChatGPT 或 Claude，并粘贴整行 Cookie:');
+    return;
+  }
+  const result = await window.pmbrainDesktop.productConnectorAuth({ provider: activeDailyConnector, cookie: secret }) as { ok?: boolean; error?: string };
+  if (result.ok === false) {
+    setNotice('error', result.error || '连接失败');
+    return;
+  }
+  $<HTMLInputElement>('#daily-chat-secret').value = '';
+  setNotice('success', `${activeDailyConnector === 'chatgpt' ? 'ChatGPT' : 'Claude'} 已连接`);
+  void refreshDailyPanel();
+});
+$('#daily-chat-sync').addEventListener('click', async () => {
+  if (!activeDailyConnector) return;
+  await window.pmbrainDesktop.productConnectorSync({ provider: activeDailyConnector });
+  setNotice('success', '已开始同步');
+  void refreshDailyPanel();
+});
+$('#daily-chat-logout').addEventListener('click', async () => {
+  if (!activeDailyConnector) return;
+  await window.pmbrainDesktop.productConnectorLogout(activeDailyConnector);
+  setNotice('success', '已断开连接');
+  activeDailyConnector = '';
+  void refreshDailyPanel();
+});
+$('#daily-chronicle-date').addEventListener('change', () => void refreshDailyPanel());
+$('#daily-waiting-scan').addEventListener('click', async () => {
+  const lanes = (['gmail', 'meeting', 'conversation'] as const)
+    .filter((key) => $<HTMLInputElement>(`#daily-waiting-${key}`).checked);
+  await window.pmbrainDesktop.productWaitingScan(lanes);
+  setNotice('success', '已开始扫描待办');
+  void refreshDailyPanel();
+});
+$('#daily-chronicle-enable').addEventListener('click', async () => {
+  await window.pmbrainDesktop.productEnableChronicle();
+  setNotice('success', '已开启时间记忆');
+  void refreshDailyPanel();
+});
+$('#daily-chronicle-history').addEventListener('click', async () => {
+  await window.pmbrainDesktop.productOrganizeChronicleHistory();
+  setNotice('success', '已开始整理历史记录');
+  void refreshDailyPanel();
+});
+$('#daily-identity-search').addEventListener('click', () => void refreshDailyPeople());
+$('#daily-identity-merge').addEventListener('click', async () => {
+  const members = Array.from($('#daily-identity-results').querySelectorAll<HTMLInputElement>('input[type="checkbox"]:checked'))
+    .map((box) => ({
+      source_id: box.dataset.sourceId ?? '',
+      slug: box.dataset.slug ?? '',
+      title: box.dataset.title,
+    }))
+    .filter((item) => item.source_id && item.slug);
+  if (members.length < 2) {
+    setNotice('error', '请至少勾选两条记录');
+    return;
+  }
+  const result = await window.pmbrainDesktop.productMergePeople(members) as { entity_id?: string };
+  setNotice('success', '已把选中的记录视为同一个人');
+  await refreshDailyPanel();
+  if (result.entity_id) void renderDailyPersonCard(result.entity_id);
 });

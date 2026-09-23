@@ -33,6 +33,7 @@ export interface AutocutConfig {
   jumpRatio: number;
   /** Failsafe: never return fewer than this when candidates exist (≥1). */
   minKeep: number;
+  minTopScore?: number;
 }
 
 /**
@@ -159,6 +160,7 @@ export function applyAutocut<T>(
 
   const top = Math.max(...scores);
   if (!Number.isFinite(top) || top <= 0) return noOp(results);
+  if (cfg.minTopScore !== undefined && top < cfg.minTopScore) return noOp(results);
 
   // Sort a copy descending (A2: don't trust upstream order) and normalize.
   const sorted = [...scores].sort((a, b) => b - a);

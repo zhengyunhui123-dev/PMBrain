@@ -126,7 +126,7 @@
         <section class="panel" id="panel-models">
           <div class="section-heading">
             <div><span class="index">02</span><h2>模型配置</h2></div>
-            <p>普通模型用于问答与 AI 深度整理；受「设置 → 知识整理设置」中的「普通模型调用」开关控制。向量模型需要配置，且不受该开关影响。</p>
+            <p>普通模型用于问答与 AI 深度整理，配置完成后会按任务自动使用。向量模型用于语义检索和向量化，需要单独配置。</p>
           </div>
           <div class="model-stack">
             <section class="model-card">
@@ -200,6 +200,28 @@
               </div>
               <small class="model-load-status" id="embedding-model-load-status" hidden></small>
               <small>未配置时仅保留原文、分块和关键词检索；本地模型不可用时不会回退到云端或其他默认模型。</small>
+            </section>
+            <section class="model-card">
+              <div class="model-card-heading">
+                <div><b>图片 / OCR 模型</b></div>
+                <small id="ocr-model-effective">自动使用普通模型</small>
+              </div>
+              <div class="model-fields ocr-fields">
+                <label>
+                  <span>供应商（可选）</span>
+                  <select id="ocr-provider"><option value="">请选择供应商</option><option value="mimo">mimo</option><option value="zhipu">zhipu</option><option value="openai">openai</option><option value="anthropic">anthropic</option><option value="google">google</option><option value="openrouter">openrouter</option><option value="ollama">ollama</option><option value="custom-openai">自定义 OpenAI 接口</option></select>
+                </label>
+                <label>
+                  <span>模型名称（可选）</span>
+                  <input id="ocr-model-name" spellcheck="false" placeholder="留空时使用普通模型" autocomplete="off" />
+                </label>
+                <label>
+                  <span>API Key</span>
+                  <span class="secret-input model-connection-field"><input id="ocr-api-key" type="password" autocomplete="off" /><button type="button" class="secret-toggle" data-secret="ocr-api-key" aria-label="显示图片识别模型 API Key">&#128065;</button><button type="button" class="model-test-button" id="test-ocr-model" aria-label="测试图片识别模型" title="测试图片识别模型"><svg class="model-test-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12h4l2-7 4 14 2-7h4" /><path d="M19 8v8M16 11h6" /></svg></button></span>
+                </label>
+              </div>
+              <small class="model-load-status" id="ocr-model-load-status" hidden></small>
+              <small>留空时自动使用上面的普通模型；单独填写后优先使用这里的模型。模型不支持图片时会跳过识别并提示，不会导致整次维护失败。</small>
             </section>
           </div>
           <details class="advanced-block model-advanced" id="advanced-model-settings">
@@ -329,6 +351,90 @@
             <p id="config-path"></p>
             <button class="primary" id="save-setup"><span>保存配置并启动</span><i></i></button>
           </div>
+        </section>
+
+        <section class="panel" id="panel-connections" hidden>
+          <div class="section-heading">
+            <div><span class="index">设置</span><h2>数据连接</h2></div>
+            <p>连接一次，以后由 PMBrain 在后台自动同步。授权信息只保留在本机。</p>
+          </div>
+
+          <section class="system-block" aria-labelledby="daily-connectors-title">
+            <div class="subsection-heading"><div><span>连接</span><h3 id="daily-connectors-title">数据连接</h3></div><p>这里只管理账号连接和自动同步设置。</p></div>
+            <div id="daily-connectors">尚未读取</div>
+            <details id="daily-connectors-advanced">
+              <summary>高级设置</summary>
+              <div class="field-group">
+                <label for="daily-chat-secret" id="daily-chat-secret-label">ChatGPT / Claude 整行 Cookie:</label>
+                <p id="daily-chat-secret-help">登录状态下 → F12 → Network → 点对应网站请求 → Headers → Request Headers → 复制整行 <code>Cookie:</code>。只保存在本机，不要发给任何人。</p>
+                <input id="daily-chat-secret" type="password" autocomplete="off" placeholder="选择上方连接或管理后再填写" />
+                <div class="input-action">
+                  <button type="button" class="solid" id="daily-chat-save"><span>保存并验证</span></button>
+                  <button type="button" class="ghost" id="daily-chat-sync"><span>立即同步</span></button>
+                  <button type="button" class="ghost" id="daily-chat-logout"><span>断开连接</span></button>
+                </div>
+              </div>
+              <hr />
+              <p id="daily-google-status">尚未读取</p>
+              <div class="input-action">
+                <button type="button" class="primary" id="daily-google-connect"><span>连接 Google</span><i></i></button>
+              </div>
+              <pre id="daily-google-message" hidden></pre>
+              <button type="button" class="ghost" id="daily-google-open-consent" hidden>打开授权页</button>
+              <div class="field-group"><label for="daily-google-account">账号提示</label><input id="daily-google-account" placeholder="you@gmail.com" autocomplete="off" /></div>
+              <div class="input-action"><button type="button" class="ghost" id="daily-google-client">选择客户端 JSON</button><small id="daily-google-client-name">未选择</small></div>
+              <button type="button" class="ghost" id="daily-google-paste-mode">改用粘贴网址</button>
+              <div class="field-group" id="daily-google-paste-wrap" hidden>
+                <label for="daily-google-redirect">粘贴打不开的页面地址</label>
+                <input id="daily-google-redirect" placeholder="浏览器地址栏里的完整网址" autocomplete="off" />
+                <button type="button" class="solid" id="daily-google-finish"><span>完成授权</span><i></i></button>
+              </div>
+              <div class="field-group">
+                <label for="daily-google-source">知识源 ID</label>
+                <input id="daily-google-source" placeholder="gmail-you" />
+                <button type="button" class="ghost" id="daily-google-source-save">登记为知识源</button>
+              </div>
+            </details>
+          </section>
+
+          <section class="system-block" aria-labelledby="daily-waiting-title" hidden>
+            <div class="subsection-heading"><div><span>TODO</span><h3 id="daily-waiting-title">待我处理</h3></div><p>从邮件、会议和 AI 对话里找出待办。</p></div>
+            <div class="daily-source-controls" aria-label="从哪里发现待办">
+              <label><input type="checkbox" id="daily-waiting-gmail" checked /> Gmail <b id="daily-waiting-gmail-state">未连接</b></label>
+              <label><input type="checkbox" id="daily-waiting-meeting" checked /> 会议 <b id="daily-waiting-meeting-state">✅</b></label>
+              <label><input type="checkbox" id="daily-waiting-conversation" checked /> AI 对话 <b id="daily-waiting-conversation-state">未连接</b></label>
+            </div>
+            <button type="button" class="solid" id="daily-waiting-scan"><span>立即扫描</span></button>
+            <div id="daily-waiting">尚未读取</div>
+          </section>
+
+          <section class="system-block" aria-labelledby="daily-chronicle-title" hidden>
+            <div class="subsection-heading"><div><span>DAY</span><h3 id="daily-chronicle-title">生命年表</h3></div></div>
+            <p id="daily-chronicle-empty" hidden>PMBrain 可以把会议、对话和重要事件整理成时间线。</p>
+            <p id="daily-chronicle-history-note" hidden></p>
+            <div class="input-action" id="daily-chronicle-empty-actions" hidden>
+              <button type="button" class="primary" id="daily-chronicle-enable"><span>开启时间记忆</span></button>
+              <button type="button" class="ghost" id="daily-chronicle-history"><span>整理历史记录</span></button>
+            </div>
+            <div id="daily-chronicle-content">
+              <div class="field-group"><label for="daily-chronicle-date">日期</label><input id="daily-chronicle-date" type="date" /></div>
+              <div class="daily-two">
+                <article><b>这一天</b><div id="daily-chronicle-today">尚未读取</div></article>
+                <article><b>往年今日</b><div id="daily-chronicle-memory">尚未读取</div></article>
+              </div>
+            </div>
+          </section>
+
+          <section class="system-block" aria-labelledby="daily-identity-title" hidden>
+            <div class="subsection-heading"><div><span>PEOPLE</span><h3 id="daily-identity-title">人物关联</h3></div><p>搜索姓名并确认，不会按中文名自动合并。</p></div>
+            <div class="field-group"><label for="daily-identity-query">搜索人物</label><input id="daily-identity-query" placeholder="张三" /></div>
+            <button type="button" class="ghost" id="daily-identity-search"><span>搜索</span></button>
+            <div id="daily-identity-suggestions"></div>
+            <div id="daily-identity-results">尚未读取</div>
+            <button type="button" class="solid" id="daily-identity-merge"><span>把选中的记录视为同一个人</span></button>
+            <div id="daily-identity-groups">尚未读取</div>
+            <div id="daily-person-card" hidden></div>
+          </section>
         </section>
 
         <section class="panel" id="panel-integrations">

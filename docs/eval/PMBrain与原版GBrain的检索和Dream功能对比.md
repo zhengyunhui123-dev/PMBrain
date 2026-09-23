@@ -1,10 +1,12 @@
 # PMBrain 与原版 GBrain 的检索和 Dream 功能对比
 
-维护日期：2026-08-31
+维护日期：2026-09-19
 
-PMBrain 基线：1.3.21，本轮在历史关系回填、Dream/Query cache/Retrieval Reflex/Advisor/P0/P1 基础上，继续完成 GBrain 0.47.7.0 PGLite WAL 自愈链路对齐
+PMBrain 基线：Core **1.3.67**（本分支产品栈至 PR11 / 1.3.66，本文档 PR 递增至 1.3.67）。第 2–10 节仍是 2026-08-31 对 GBrain 0.47.7.0 的 RAG/Dream 复核，未整篇重写。
 
-GBrain 基线：`D:\cursor-claude\gbrain` 的最新本地 `master`，commit `aa820c7f9934f3c23fbf67ff9f3ecd03831cf30f`，VERSION `0.47.7.0`；本地 HEAD 与 `origin/master` 一致且工作区干净。`0.47.6.0 → 0.47.7.0` 仅变更测试基础设施、CI、基准与测试文件，没有新增 Core/Dream 运行行为；P1 实现仍按真实代码差异收口，不重新实现 PMBrain 已有能力。
+GBrain 吸收基线：`0.48.5.0`（本地树 `D:\cursor-claude\gbrain`）。历史 RAG/Dream 对照仍以当时 `master` commit `aa820c7f9934f3c23fbf67ff9f3ecd03831cf30f`、VERSION `0.47.7.0` 为准。`0.47.6.0 → 0.47.7.0` 仅变更测试基础设施、CI、基准与测试文件，没有新增 Core/Dream 运行行为。
+
+**2026-09-19 产品决定：** Chronicle / `event_page_id` / `facts.dimension` / Connectors / Open Loops / Ontology / 实体身份 / Advisor chronicle / Memorable / BrainBench **已吸收，不再暂缓**。SkillOpt 与全局 basename Wikilink **明确不移植**。本分支实际代码见第 11 节，勿把 sibling PR 的文件算进本树。
 
 > 两个项目采用不同版本规则，版本号不能直接比较大小。本对比以实际代码、阶段顺序、配置解析和测试入口为准，不以版本号推断能力。
 
@@ -15,7 +17,7 @@ PMBrain 不是重新实现了一套 RAG 和 Dream：
 - RAG 的混合召回、搜索模式、排序增强、图谱召回、缓存、遥测和评测底座主要沿用 GBrain。
 - Dream 的阶段顺序、锁、Source 作用域、知识抽取、概念合成、观点与校准等主流程主要沿用 GBrain。
 - PMBrain 的新增集中在中文与项目管理检索、普通模型统一兜底、无默认 Embedding 安全契约、桌面与 Admin 产品化、Source 安全实体解析、知识关系回填、孤儿治理和面向真实用户的质量评分。
-- PMBrain 仍有尚未同步的上游更新，不能把这些差异误称为产品创新。查询向量共享 deadline 已确认原本就存在，最新 Query cache 隔离与 Retrieval Reflex 已按当前产品能力对齐；SkillOpt、Chronicle 等继续按产品边界暂缓。
+- PMBrain 仍有尚未同步的上游更新，不能把这些差异误称为产品创新。查询向量共享 deadline 已确认原本就存在，最新 Query cache 隔离与 Retrieval Reflex 已按当前产品能力对齐。Chronicle / 连接器 / 待我处理 / 本体 / 实体身份 / Advisor 年表采集已吸收。SkillOpt 与全局 basename Wikilink 仍不移植。Memorable 与 BrainBench 已作产品吸收，但代码在 sibling 分支，本树未合入。
 
 后续维护原则仍是：
 
@@ -134,7 +136,7 @@ lint → backlinks → sync → synthesize → extract → extract_facts
 
 ## 6. 当前尚未同步或明确暂缓的上游能力
 
-这些项目不能算作 PMBrain 新增能力。
+这些项目不能算作 PMBrain 新增能力。2026-09-19 已撤销的暂缓（Chronicle、连接器、待我处理、本体、身份、Advisor 年表、Memorable、BrainBench）以第 11 节为准；本节历史表只改被推翻的行，其余 0.47.x 对齐记录保持原样。
 
 ### GBrain 0.47.6.0 P0 底层行为复核
 
@@ -153,8 +155,8 @@ lint → backlinks → sync → synthesize → extract → extract_facts
 | Backup coverage | **已按 PMBrain 数据形态对齐**：对有内容的 PGLite 检查 verified cold backup 是否存在及是否超过 30 天；只读 manifest，不打开、恢复、清理或改写数据库，输出不含本机路径 | Work Desktop 已有经过恢复验证的 PGLite 备份体系；直接复用比复制 GBrain 的 bootstrap workspace 缓存更可靠 |
 | MCP client fit | **已做 PMBrain 适配并补齐执行底座**：持续失败检查仍依据 `oauth_clients + mcp_request_log`，远程只给聚合数；Schema 121 已增加 client surface、server ceiling、`request_tools` 自助缩面和 `auth rescope-client` operator pin | 右缩工具面已有真实执行入口；usage-driven starter 集合自动再推导仍未移植，不生成伪建议 |
 | Recommended bundled skills | **已对齐**：post-install 与 recurring Advisor 共用当前推荐集合，补入 `cold-start`；仅本地 workspace 检查，必须征得用户同意后才安装 | PMBrain 已有 bundled skill、安装 receipt 和 `skillpack install`，无需新架构或数据迁移 |
-| Brain-resident pack nag | **暂缓** | PMBrain 尚未移植 GBrain 的 brain-resident locate/nag ledger；直接检查会重复打扰且缺少 dismiss/snooze 上限 |
-| Chronicle conflicts | **暂缓** | 仍依赖 `event_page_id` 与 ontology conflict 数据模型，当前产品边界未批准 |
+| Brain-resident pack nag | **已吸收**（PR9，本分支有 nag ledger） | `collect-uninstalled-brain-pack` + `skillpack/nag-state.ts`；无 ledger / 远程 MCP / 已装同版本 / 非 resident pack 都不出 finding |
+| Chronicle conflicts | **已吸收**（PR7 数据面 + PR9 collector） | 依赖的 `event_page_id`、ontology conflict、`collect-chronicle` 已在本分支；`--apply` 仍拒绝 `chronicle-backfill` |
 | Advisor 公共排序、单 collector 故障隔离、远程 workspace 过滤、历史与 apply 白名单 | **已对齐或 PMBrain 更严格** | 现有实现已覆盖；`--apply` 额外限制 `pmbrain` argv、dispatch allowlist 与 Source id |
 
 ### GBrain 0.47.7.0 P1 底层行为复核
@@ -175,10 +177,14 @@ lint → backlinks → sync → synthesize → extract → extract_facts
 | Dream 全阶段中止、deadline 与私有队列生命周期 | **已对齐**（Schema 117） | 取消和截止时间已贯穿阶段与子任务；owner/token/lease 只用于安全清理与恢复，不重建知识数据 |
 | Query cache 最新隔离 | **已按当前 PMBrain 检索面完成对齐**；本地 GBrain 0.47.5.0 为 `KNOBS_HASH_VERSION=26`，PMBrain 独立 epoch 为 11，版本号不直接照搬 | hard excludes、detail、salience、recency 进入哈希；日期、类型、非零分页及 PMBrain 独有的中文推断日期、精确 slug 排除、代码过滤绕过缓存；候选增加 NFKC/字符 bigram 文本守卫，命中返回量与 mode 一致 |
 | Provider-agnostic embedding migration 命令 | **已对齐（Schema 121）** | PMBrain 保留无默认 Embedding 与显式确认规则，迁移可计划、恢复和检查停滞，不直接清空正文或索引内容 |
-| Global basename Wikilink 解析 | 明确不移植跨目录 basename | 当前 Source-local → default 更符合多 Source 安全边界 |
-| Life Chronicle / 事件页投影 / 本体维度 | 尚未同步 | 知识库已能分类事件页；Chronicle、`event_page_id`、`facts.dimension` 仍暂缓 |
+| Global basename Wikilink 解析 | **明确不移植**跨目录 basename | 当前 Source-local → default 更符合多 Source 安全边界；本轮吸收未改变这条边界 |
+| Life Chronicle / 事件页投影 / 本体维度 | **已吸收**（PR1/PR6/PR7，本分支有代码） | Schema 125 `event_page_id`、126 `facts.dimension`、Chronicle 抽取/时间线/日记脱敏、ops `chronicle_*` / `ontology_*`。`auto_chronicle` 默认关；`life/**` 不进 Dream `dream_synthesize_paths` |
+| Chat Connectors / Google source / Open Loops | **已吸收**（PR3/PR4/PR5，本分支有代码） | `src/core/connectors/`、`src/core/google/`、`src/core/loops/`；凭证只活在 `~/.pmbrain`；无 Google 时不得说「已清零」 |
+| 跨 Source 实体身份 | **已吸收**（PR2，本分支有代码） | 手工 link；身份键 `(source_id, slug)`；`entity_identity.union` 默认关 |
+| Memorable | **已吸收（产品决定）**；**本分支无代码** | 实现在 sibling `execute-plan/dce9287a-pr-8-memorable-opt-in-integration`。本树无 `src/core/memorable`，也无 `integrations.memorable` 接线。不得把 `~/.gbrain` 当捷径 |
+| BrainBench / LongMemEval 对齐 | **已吸收（产品决定）**；**本分支无 BrainBench 语料** | 实现在 sibling `execute-plan/dce9287a-pr-10-brainbench-and-longmemeval`。本树无 `src/eval/brainbench`、`evals/brainbench`、`eval-brainbench.ts`；`src/eval/longmemeval/` 仍是吸收前的 5 个文件 |
 | Retrieval reflex | **已对齐**（Schema 118） | 保留 GBrain 0.47.5.0 的当前 turn/滚动窗口候选提取、标题/别名/姓氏/CJK 解析、最多 3 个 Source 内实体指针、1500ms 硬超时、失败静默和词法臂开关；PMBrain Context Engine 优先使用 host resolver，PGLite 经运行中的 stdio/HTTP Sidecar 本地 IPC，Postgres 使用缓存直连。只在指针真正交付后记录无原始对话文本的确定性遥测，90 天自动清理；Doctor 只读报告开关、心跳与当前可见路径。隔离评测入口仍为 `scripts/eval-ambient-recall-reference.ts`，真实引擎契约为 `test/retrieval-reflex-alignment.test.ts` 与 `test/e2e/retrieval-reflex-postgres.test.ts` |
-| SkillOpt | 明确暂缓 | 缺少专属 benchmark 前不允许自动改 Skill |
+| SkillOpt | **明确不移植** | 缺少专属 benchmark 前不允许自动改 Skill。本树无 `src/core/skillopt` |
 | `extract --stale` 关系抽取水位 | **已移植并补强**（Schema 115） | `pages.links_extracted_at` + 升级后的 extractor 版本会让历史页面重新进入 stale；Quick Maintenance 默认包含 frontmatter，写入失败不推进水位；保留 Source-local → `default`，不采用跨目录 global basename |
 | MEMORY_VERBS `entity` | **已移植** | 零模型实体卡片 |
 | Fact remember/forget | **已移植** | 知识库可列出 facts 表 |
@@ -246,3 +252,33 @@ PMBrain 本次新增并固定以下行为：
 | Full Sync 内容来源 | 当前 GBrain `performFullSync()` 仍把现场目录交给 `runImport()` | PMBrain 按本次产品规则补齐为 `git archive HEAD` 快照；这是相对专项基线的兼容性修复，不宣称原版已具备 |
 
 最终不变量：默认增量与 Full Sync 都只读取 Git HEAD；未提交变化只提示。只有显式开启 working-tree 同步才读取现场目录；任何路径都不会自动执行 `git commit`。
+
+## 11. 2026-09-19 撤销暂缓：本分支诚实清单
+
+代码吸收记录不再等同于产品成熟。以下内容曾按设计件 `项目管理/GBrain能力吸收底层架构设计.md` 合入代码，但能否进入普通产品必须以 [`项目管理/GBrain能力成熟度台账.md`](../../项目管理/GBrain能力成熟度台账.md) 为准。只有「稳定」能力允许进入普通界面；SkillOpt 与全局 basename Wikilink **从未被吸收**。
+
+当前分支已合入 PR1–PR12，含 Memorable（PR8）与 BrainBench（PR10）。SkillOpt 与全局 basename Wikilink 仍不移植。
+
+| 能力 | 产品状态 | 本分支代码 |
+|---|---|---|
+| Schema `event_page_id` / ontology 列 / `entity_identities` / `open_loops` | 已吸收 | 有（PR1，Schema 125–128；后续 129–130） |
+| 实体身份 + MCP `localOnly` 三闸 | 已吸收 | 有 `src/core/entity-identity.ts`、`src/core/ops/entity-identity.ts` |
+| Chat Connectors（ChatGPT / Claude） | 已吸收 | 有 `src/core/connectors/`、`src/core/ops/connectors.ts` |
+| Google source + 凭证保险库 | 已吸收 | 有 `src/core/google/`、`src/core/creds/` |
+| Open Loops / 待我处理 | 已吸收 | 有 `src/core/loops/`、`src/core/ops/loops.ts` |
+| Ontology（`facts.dimension` + 中文别名） | 已吸收 | 有，写在 `src/core/chronicle/ontology.ts` 与 `ops/chronicle.ts` |
+| Life Chronicle / 日记脱敏 / `eval-chronicle` | 已吸收 | 有 `src/core/chronicle/`、`src/eval/chronicle/harness.ts` |
+| Advisor chronicle / writeback / brain-pack nag | 已吸收 | 有 `src/core/advisor/collect-chronicle.ts` 等 |
+| Admin / Desktop 自动化产品面 | 已吸收后重构 | 数据连接收入设置，待我处理收入工作台，Chronicle 改名时间线收入知识，实体身份只在需要人工判断时进入待我处理 |
+| Memorable | 已吸收 | 有 `src/core/context/memorable-capture.ts`、`src/commands/doctor/checks/integrations-memorable.ts` |
+| BrainBench + LongMemEval 对齐 | 已吸收 | 有 `src/commands/eval-brainbench.ts`、`evals/brainbench/`、扩容后的 `src/eval/longmemeval/` |
+| SkillOpt | **不移植** | 无 `src/core/skillopt` |
+| 全局 basename Wikilink | **不移植** | 解析仍是当前 Source → `default` |
+
+用户向说明：
+
+- [连接 ChatGPT / Claude](../guides/chat-connectors.md)
+- [连接 Google](../guides/google-connect.md)
+- [待我处理](../guides/open-loops.md)
+- [时间线](../guides/chronicle.md)
+- [Memorable](../guides/memorable.md)

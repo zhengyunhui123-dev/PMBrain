@@ -41,6 +41,7 @@ async function writeStructuredDocx(path: string): Promise<void> {
         </w:tbl>
       </w:body>
     </w:document>`);
+  zip.file('word/media/image1.png', new Uint8Array([137, 80, 78, 71]));
   writeFileSync(path, await zip.generateAsync({ type: 'uint8array' }));
 }
 
@@ -98,6 +99,30 @@ describe('Structured Document Import V2', () => {
     expect(markdown).toContain('| 指标 | 数值 |');
     expect(parents.some(parent => parent.locator.includes('项目建设背景 > 现状情况'))).toBe(true);
     expect(parents.some(parent => parent.chunkContext?.startsWith('Table columns: '))).toBe(true);
+  });
+
+  test('DOCX embedded images reuse the shared OCR callback and expose traceable counts', async () => {
+    const path = join(fixtureDirectory, '扫描件.docx');
+    await writeStructuredDocx(path);
+    const calls: Array<{ page: number; mime: string }> = [];
+    const document = await parseDocument(path, {
+      ocrPage: async (page, _image, mime) => {
+        calls.push({ page, mime });
+        return { status: 'success', text: '扫描图片中的合同编号', model: 'openai:gpt-4o-mini' };
+      },
+    });
+    const markdown = renderStructuredDocument(document);
+
+    expect(calls).toEqual([{ page: 1, mime: 'image/png' }]);
+    expect(markdown).toContain('扫描图片中的合同编号');
+    expect(document.metadata).toMatchObject({
+      imageCount: 1,
+      ocrUsed: true,
+      ocrProvider: 'openai:gpt-4o-mini',
+      ocrAttempted: 1,
+      ocrSucceeded: 1,
+      ocrFailed: 0,
+    });
   });
 
   test('PPTX keeps title, nested bullets, table, notes and slide locator', async () => {

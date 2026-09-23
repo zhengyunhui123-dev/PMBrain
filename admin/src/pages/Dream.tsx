@@ -1712,7 +1712,7 @@ function DreamBusyRecovery({ runs, onRefresh }: { runs: ConsoleRun[]; onRefresh:
   );
 }
 
-const GENERATIVE_DISABLED_HINT = '当前已关闭普通模型调用，请先前往「设置 → 知识整理设置」开启。';
+const GENERATIVE_DISABLED_HINT = '普通模型当前不可用，请先检查模型配置。';
 
 function DreamRunPanel({
   defaultPhase = 'all',
@@ -1942,7 +1942,7 @@ function DreamRunPanel({
     },
     advanced: {
       title: '自定义本次整理',
-      description: '按来源、日期或内部阶段运行，适合调试和精细维护。需要普通模型的阶段在关闭全局开关时不可用。',
+      description: '按来源、日期或内部阶段运行，适合调试和精细维护。需要普通模型的阶段会按当前模型配置自动调用。',
       action: '运行所选流程',
     },
   };

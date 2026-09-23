@@ -135,6 +135,13 @@ describe('mcpOperations filter — localOnly ops are excluded from the HTTP-expo
     }
   });
 
+  test('HTTP tools/list surface has no chronicle_backfill', () => {
+    const mcpOps = operations.filter(op => !op.localOnly);
+    expect(mcpOps.some(op => op.name === 'chronicle_backfill')).toBe(false);
+    const backfill = operations.find(op => op.name === 'chronicle_backfill');
+    expect(backfill?.localOnly).toBe(true);
+  });
+
   test('known historically-sensitive localOnly ops stay filtered', () => {
     // Pin every localOnly op by name so a refactor that flips localOnly off
     // on any of them fails this test even if the generic contract above
@@ -153,6 +160,11 @@ describe('mcpOperations filter — localOnly ops are excluded from the HTTP-expo
       'purge_deleted_pages',
       'get_recent_transcripts',
       'code_traversal_cache_clear',
+      'entity_identity_link',
+      'entity_identity_unlink',
+      'connectors_status',
+      'connector_sync',
+      'chronicle_backfill',
     ];
     const lookup = new Map(operations.map(op => [op.name, op] as const));
     for (const name of KNOWN_LOCAL_ONLY) {

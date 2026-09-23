@@ -23,11 +23,33 @@ describe('Admin overview navigation', () => {
     expect(overviewSource).not.toContain('可用于 AI 搜索');
   });
 
-  test('shows a knowledge health card with clickable advisor actions', () => {
+  test('keeps only the compact health score on the overview and moves all actions into Run', () => {
+    const appSource = readFileSync(join(root, 'admin/src/App.tsx'), 'utf8');
     expect(overviewSource).toContain('function AdvisorHealthCard');
-    expect(overviewSource).toContain('知识库健康状态');
+    expect(overviewSource).toContain('function AdvisorHealthSummary');
+    expect(overviewSource).toContain('知识库体检');
+    expect(overviewSource).toContain("onNavigate?.('health')");
+    expect(appSource).toContain("{ page: 'health', label: '知识库健康', icon: 'health' }");
+    expect(appSource).toContain("page === 'health' && <KnowledgeHealthPage");
     expect(overviewSource).toContain("api.applyAdvisor(suggestion.dispatch_id)");
     expect(overviewSource).toContain("onNavigate?.('tasks')");
+    expect(overviewSource).toContain('advisor.suggestions.map((suggestion)');
+    expect(overviewSource).not.toContain('advisor.suggestions.slice(0, 5)');
+  });
+
+  test('keeps experimental Chronicle outside the ordinary health page', () => {
+    const routeSource = readFileSync(join(root, 'src/commands/pmbrain-admin-routes.ts'), 'utf8');
+    expect(overviewSource).not.toContain("suggestion.id === 'chronicle_coverage_gap'");
+    expect(overviewSource).not.toContain('api.organizeChronicleHistory()');
+    expect(overviewSource).not.toContain('补入年表');
+    expect(overviewSource).not.toContain('年表问题');
+    expect(routeSource).toContain('enqueued > 0 ? await ensureAdminWorkerStarted() : null');
+  });
+
+  test('makes a manual health refresh visibly observable', () => {
+    expect(overviewSource).toContain("setAdvisorNotice('正在重新检查…')");
+    expect(overviewSource).toContain("refreshing ? '检查中…' : '重新检查'");
+    expect(overviewSource).toContain('检查完成，当前有');
   });
 
   test('orphan advice opens the isolated graph instead of starting an orphan scan', () => {

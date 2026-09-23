@@ -4,7 +4,7 @@ import { join, relative } from 'path';
 import { tmpdir } from 'os';
 import type { BrainEngine } from '../core/engine.ts';
 import { DELETE_BATCH_SIZE } from '../core/engine-constants.ts';
-import { importFile } from '../core/import-file.ts';
+import { importFile, importImageFile, isImageFilePath } from '../core/import-file.ts';
 import { collectSyncableFiles } from './import.ts';
 import { createInterface } from 'readline';
 import {
@@ -29,6 +29,7 @@ import {
 } from '../core/sync-failure-ledger.ts';
 import { repairPgliteBtreeIndexes } from '../core/pglite-btree-repair.ts';
 import { importOfficeFile, isOfficeFilePath } from '../core/office-import.ts';
+import { shouldRefreshOcrReceipt, hashOcrSource, type OcrReceipt } from '../core/ocr.ts';
 import { estimateTokens, CHUNKER_VERSION } from '../core/chunkers/code.ts';
 import { EMBEDDING_MODEL, estimateEmbeddingCostUsd } from '../core/embedding.ts';
 import { errorFor, serializeError } from '../core/errors.ts';
@@ -203,6 +204,8 @@ export interface SyncOpts {
   strategy?: 'markdown' | 'code' | 'auto';
   /** Include document files (Word/PDF/Excel) alongside markdown in import/sync. */
   includeOffice?: boolean;
+  includeImages?: boolean;
+  documentOcr?: boolean;
   /** Glob patterns excluded from indexing; unioned with persisted sync.exclude. */
   exclude?: string[];
   /** Import uncommitted edits/untracked files. Default false; config fallback is sync.include_working_tree. */
@@ -286,6 +289,8 @@ export interface SyncOpts {
    * Precedent: CycleOpts.signal at src/core/cycle.ts (v0.22.1 #403).
    */
   signal?: AbortSignal;
+  /** Skip schema-pack typing during import (google source uses this). */
+  noSchemaPack?: boolean;
 }
 
 /**
@@ -380,6 +385,34 @@ function git(repoPath: string, args: string[], configs: string[] = []): string {
   }).trimEnd();
 }
 
+async function findStaleOcrPaths(
+  engine: BrainEngine,
+  repoPath: string,
+  sourceId: string | undefined,
+  model: string | null,
+  workingTreeManifest: SyncManifest,
+): Promise<string[]> {
+  const dirty = new Set([
+    ...workingTreeManifest.added,
+    ...workingTreeManifest.modified,
+    ...workingTreeManifest.deleted,
+    ...workingTreeManifest.renamed.flatMap(item => [item.from, item.to]),
+  ].map(path => path.replace(/\\/g, '/')));
+  const tracked = new Set(git(repoPath, ['ls-files', '-z']).split('\0').filter(Boolean));
+  const pages = await engine.listPages({ limit: 100_000, ...(sourceId ? { sourceId } : {}) });
+  const stale: string[] = [];
+  for (const page of pages) {
+    const sourcePath = page.source_path?.replace(/\\/g, '/');
+    if (!sourcePath || dirty.has(sourcePath) || !tracked.has(sourcePath)) continue;
+    if (!isOfficeFilePath(sourcePath) && !isImageFilePath(sourcePath)) continue;
+    const absolute = join(repoPath, sourcePath);
+    if (!existsSync(absolute) || !statSync(absolute).isFile()) continue;
+    const receipt = page.frontmatter?.ocr_receipt as OcrReceipt | undefined;
+    if (shouldRefreshOcrReceipt(receipt, hashOcrSource(readFileSync(absolute)), model)) stale.push(sourcePath);
+  }
+  return stale;
+}
+
 function hasOriginRemote(repoPath: string): boolean {
   try {
     execFileSync('git', buildGitInvocation(repoPath, ['remote', 'get-url', 'origin']), {
@@ -452,7 +485,12 @@ async function resolveWorkingTreeMode(engine: BrainEngine, requested: boolean | 
 }
 
 function filteredWorkingTreeCounts(manifest: SyncManifest, opts: SyncOpts): { added: number; modified: number; deleted: number } {
-  const syncOpts = { strategy: opts.strategy, includeOffice: opts.includeOffice, exclude: opts.exclude };
+  const syncOpts = {
+    strategy: opts.strategy,
+    includeOffice: opts.includeOffice,
+    includeImages: opts.includeImages,
+    exclude: opts.exclude,
+  };
   return {
     added: manifest.added.filter((path) => isSyncable(path, syncOpts)).length
       + manifest.renamed.filter((item) => isSyncable(item.to, syncOpts)).length,
@@ -568,6 +606,18 @@ async function writeSyncAnchor(
     return;
   }
   await engine.setConfig(`sync.${which}`, value);
+}
+
+async function markSuccessfulSourceScan(
+  engine: BrainEngine,
+  sourceId: string | undefined,
+): Promise<void> {
+  await engine.setConfig('sync.last_run', new Date().toISOString());
+  if (!sourceId) return;
+  await engine.executeRaw(
+    `UPDATE sources SET last_sync_at = now() WHERE id = $1`,
+    [sourceId],
+  );
 }
 
 /**
@@ -1053,6 +1103,29 @@ async function performSyncInner(engine: BrainEngine, opts: SyncOpts): Promise<Sy
   // report names WHICH phase spun. Doesn't fix #1342 but converts
   // "hung with no output" into actionable diagnostic data.
   serr(`[pmbrain phase] sync.resolve_repo`);
+
+  // Google source kind is API-backed, not git-backed: materialize then import.
+  let remoteUrl: string | null = null;
+  if (opts.sourceId) {
+    const cfgRows = await engine.executeRaw<{ local_path: string | null; config: unknown }>(
+      `SELECT local_path, config FROM sources WHERE id = $1`,
+      [opts.sourceId],
+    );
+    if (cfgRows.length > 0) {
+      const rawCfg = typeof cfgRows[0].config === 'string'
+        ? (JSON.parse(cfgRows[0].config as string) as Record<string, unknown>)
+        : ((cfgRows[0]?.config ?? {}) as Record<string, unknown>);
+      if (rawCfg.kind === 'google') {
+        serr(`[pmbrain phase] sync.google_materialize`);
+        const { parseGoogleSourceConfig, runGoogleSync } = await import('../core/google/google-source.ts');
+        const { defaultCloneDir } = await import('../core/sources-ops.ts');
+        const fallbackDir = cfgRows[0].local_path ?? defaultCloneDir(`${opts.sourceId}-google`);
+        const cfg = parseGoogleSourceConfig(rawCfg, fallbackDir);
+        return await runGoogleSync(engine, opts.sourceId, cfg, opts);
+      }
+    }
+  }
+
   // Resolve repo path
   const repoPath = opts.repoPath || await readSyncAnchor(engine, opts.sourceId, 'repo_path');
   if (!repoPath) {
@@ -1087,7 +1160,6 @@ async function performSyncInner(engine: BrainEngine, opts: SyncOpts): Promise<Sy
   // we recover from missing/no-git/not-a-dir by re-cloning, refuse on
   // url-drift or corruption with structured hints.
   if (opts.sourceId) {
-    serr(`[pmbrain phase] sync.validate_repo_state`);
     const { validateRepoState } = await import('../core/git-remote.ts');
     const { recloneIfMissing } = await import('../core/sources-ops.ts');
     const cfgRows = await engine.executeRaw<{ config: unknown }>(
@@ -1098,8 +1170,9 @@ async function performSyncInner(engine: BrainEngine, opts: SyncOpts): Promise<Sy
       typeof cfgRows[0]?.config === 'string'
         ? (JSON.parse(cfgRows[0].config as string) as Record<string, unknown>)
         : ((cfgRows[0]?.config ?? {}) as Record<string, unknown>);
-    const remoteUrl = typeof cfg.remote_url === 'string' ? cfg.remote_url : null;
+    remoteUrl = typeof cfg.remote_url === 'string' ? cfg.remote_url : null;
     if (remoteUrl) {
+      serr(`[pmbrain phase] sync.validate_repo_state`);
       const state = validateRepoState(repoPath, remoteUrl);
       switch (state) {
         case 'healthy':
@@ -1130,9 +1203,32 @@ async function performSyncInner(engine: BrainEngine, opts: SyncOpts): Promise<Sy
     }
   }
 
+  if (!existsSync(join(repoPath, '.git')) && opts.sourceId && !remoteUrl) {
+    const files = collectSyncableFiles(repoPath, {
+      strategy: opts.strategy ?? 'markdown',
+      includeOffice: opts.includeOffice,
+      includeImages: opts.includeImages,
+    })
+      .map(path => ({
+        path: relative(repoPath, path).replace(/\\/g, '/'),
+        size: statSync(path).size,
+        mtimeMs: statSync(path).mtimeMs,
+      }))
+      .filter(file => isSyncable(file.path, {
+        strategy: opts.strategy,
+        includeOffice: opts.includeOffice,
+        includeImages: opts.includeImages,
+        exclude: opts.exclude,
+      }))
+      .sort((a, b) => a.path.localeCompare(b.path));
+    const snapshot = `directory:${fingerprint({ files })}`;
+    serr(`[pmbrain phase] sync.directory_snapshot files=${files.length}`);
+    return performFullSync(engine, repoPath, snapshot, opts, false);
+  }
+
   // Validate git repo
   if (!existsSync(join(repoPath, '.git'))) {
-    throw new Error(`Not a git repository: ${repoPath}. GBrain sync requires a git-initialized repo.`);
+    throw new Error(`Not a git repository: ${repoPath}. Remote-backed sync requires a git-initialized repo.`);
   }
 
   serr(`[pmbrain phase] sync.detect_head`);
@@ -1273,6 +1369,7 @@ async function performSyncInner(engine: BrainEngine, opts: SyncOpts): Promise<Sy
   const syncOpts = {
     strategy: opts.strategy,
     includeOffice: opts.includeOffice,
+    includeImages: opts.includeImages,
     exclude: opts.exclude,
   };
   // Older Quick Maintenance runs filtered Office/PDF but still advanced the
@@ -1304,6 +1401,16 @@ async function performSyncInner(engine: BrainEngine, opts: SyncOpts): Promise<Sy
     ? workingTreeCounts
     : undefined;
   const hasImportedWorkingTreeChanges = workingTreeEnabled && nonEmptyDrift(workingTreeCounts);
+  let staleOcrPaths: string[] = [];
+  if (opts.documentOcr) {
+    const gateway = await import('../core/ai/gateway.ts');
+    let ocrModel: string | null = null;
+    try { ocrModel = gateway.getImageOcrModel(); } catch { ocrModel = null; }
+    staleOcrPaths = await findStaleOcrPaths(engine, repoPath, opts.sourceId, ocrModel, workingTreeManifest);
+    if (staleOcrPaths.length > 0) {
+      slog(`[sync] refreshing OCR for ${staleOcrPaths.length} unchanged file(s).`);
+    }
+  }
   if (uncommittedDrift) {
     serr(
       `[sync] ${uncommittedDrift.added + uncommittedDrift.modified + uncommittedDrift.deleted} uncommitted file(s) not synced. ` +
@@ -1317,7 +1424,9 @@ async function performSyncInner(engine: BrainEngine, opts: SyncOpts): Promise<Sy
     && !versionNeverSet
     && !hasImportedWorkingTreeChanges
     && missingTrackedOfficeFiles.length === 0
+    && staleOcrPaths.length === 0
   ) {
+    await markSuccessfulSourceScan(engine, opts.sourceId);
     return {
       status: 'up_to_date',
       fromCommit: lastCommit,
@@ -1344,6 +1453,7 @@ async function performSyncInner(engine: BrainEngine, opts: SyncOpts): Promise<Sy
   const diffOutput = git(repoPath, ['diff', '--name-status', '-M', `${lastCommit}..${headCommit}`]);
   const manifest = buildSyncManifest(diffOutput);
   manifest.added = unique([...manifest.added, ...missingTrackedOfficeFiles]);
+  manifest.modified = unique([...manifest.modified, ...staleOcrPaths]);
   if (workingTreeEnabled) {
     manifest.added = unique([...manifest.added, ...workingTreeManifest.added]);
     manifest.modified = unique([...manifest.modified, ...workingTreeManifest.modified]);
@@ -1702,7 +1812,9 @@ async function performSyncInner(engine: BrainEngine, opts: SyncOpts): Promise<Sy
       const filePath = join(syncContentRoot, to);
       if (existsSync(filePath)) {
         const result = opts.includeOffice && isOfficeFilePath(to)
-          ? await importOfficeFile(engine, filePath, to, { noEmbed, sourceId: opts.sourceId, activePack: syncActivePack })
+          ? await importOfficeFile(engine, filePath, to, { noEmbed, sourceId: opts.sourceId, documentOcr: opts.documentOcr, activePack: syncActivePack })
+          : opts.includeImages && isImageFilePath(to)
+            ? await importImageFile(engine, filePath, to, { noEmbed, sourceId: opts.sourceId, forceOcr: opts.documentOcr })
           : await importFile(engine, filePath, to, { noEmbed, sourceId: opts.sourceId, activePack: syncActivePack });
         if (result.status === 'imported') chunksCreated += result.chunks;
         else if (result.status === 'partial') {
@@ -1829,7 +1941,9 @@ async function performSyncInner(engine: BrainEngine, opts: SyncOpts): Promise<Sy
         // 'default' was applied even for non-default sources, fabricating
         // duplicate rows that crashed bare-slug subqueries with Postgres 21000.
         const runImport = () => opts.includeOffice && isOfficeFilePath(path)
-          ? importOfficeFile(eng, filePath, path, { noEmbed, sourceId: opts.sourceId, activePack: syncActivePack })
+          ? importOfficeFile(eng, filePath, path, { noEmbed, sourceId: opts.sourceId, documentOcr: opts.documentOcr, activePack: syncActivePack })
+          : opts.includeImages && isImageFilePath(path)
+            ? importImageFile(eng, filePath, path, { noEmbed, sourceId: opts.sourceId, forceOcr: opts.documentOcr })
           : importFile(eng, filePath, path, { noEmbed, sourceId: opts.sourceId, activePack: syncActivePack });
         const importWithIndexRepair = async () => {
           try {
@@ -2164,18 +2278,23 @@ async function performFullSync(
   repoPath: string,
   headCommit: string,
   opts: SyncOpts,
+  gitBacked = true,
 ): Promise<SyncResult> {
-  const workingTreeEnabled = await resolveWorkingTreeMode(engine, opts.workingTree);
+  const workingTreeEnabled = gitBacked
+    ? await resolveWorkingTreeMode(engine, opts.workingTree)
+    : false;
   let workingTreeManifest: SyncManifest = { added: [], modified: [], deleted: [], renamed: [] };
-  serr(`[pmbrain phase] sync.inspect_worktree`);
-  try {
-    workingTreeManifest = buildDetachedWorkingTreeManifest(
-      repoPath,
-      workingTreeEnabled ? 'all' : 'normal',
-    );
-  } catch (error) {
-    if (workingTreeEnabled) {
-      throw new Error(`Unable to inspect working-tree state: ${error instanceof Error ? error.message : String(error)}`);
+  if (gitBacked) {
+    serr(`[pmbrain phase] sync.inspect_worktree`);
+    try {
+      workingTreeManifest = buildDetachedWorkingTreeManifest(
+        repoPath,
+        workingTreeEnabled ? 'all' : 'normal',
+      );
+    } catch (error) {
+      if (workingTreeEnabled) {
+        throw new Error(`Unable to inspect working-tree state: ${error instanceof Error ? error.message : String(error)}`);
+      }
     }
   }
   const workingTreeCounts = filteredWorkingTreeCounts(workingTreeManifest, opts);
@@ -2188,7 +2307,9 @@ async function performFullSync(
       `${uncommittedDrift.added + uncommittedDrift.modified + uncommittedDrift.deleted} uncommitted file(s) will not be imported.`,
     );
   }
-  const committedSnapshot = workingTreeEnabled ? null : materializeCommittedTree(repoPath, headCommit);
+  const committedSnapshot = !gitBacked || workingTreeEnabled
+    ? null
+    : materializeCommittedTree(repoPath, headCommit);
   const importPath = committedSnapshot?.tree ?? repoPath;
   // Capture the authoritative path set while a materialized Git snapshot is
   // still alive. The snapshot is cleaned immediately after runImport, but
@@ -2197,11 +2318,13 @@ async function performFullSync(
     collectSyncableFiles(importPath, {
       strategy: opts.strategy ?? 'markdown',
       includeOffice: opts.includeOffice,
+      includeImages: opts.includeImages,
     })
       .map(abs => relative(importPath, abs).replace(/\\/g, '/'))
       .filter(path => isSyncable(path, {
         strategy: opts.strategy,
         includeOffice: opts.includeOffice,
+        includeImages: opts.includeImages,
         exclude: opts.exclude,
       })),
   );
@@ -2218,18 +2341,20 @@ async function performFullSync(
     let allFiles = collectSyncableFiles(importPath, {
       strategy: opts.strategy ?? 'markdown',
       includeOffice: opts.includeOffice,
+      includeImages: opts.includeImages,
     });
     if (opts.exclude?.length) {
       allFiles = allFiles.filter(path => isSyncable(relative(importPath, path), {
         strategy: opts.strategy,
         includeOffice: opts.includeOffice,
+        includeImages: opts.includeImages,
         exclude: opts.exclude,
       }));
     }
     slog(
       `Full-sync dry run (strategy=${opts.strategy ?? 'markdown'}): ` +
       `${allFiles.length} file(s) would be imported ` +
-      `from ${repoPath} @ ${headCommit.slice(0, 8)}.`,
+      `from ${repoPath}${gitBacked ? ` @ ${headCommit.slice(0, 8)}` : ''}.`,
     );
     committedSnapshot?.cleanup();
     return {
@@ -2254,11 +2379,17 @@ async function performFullSync(
   // sync and the jobs handler.
   const FULL_SYNC_LARGE_MARKER = Number.MAX_SAFE_INTEGER;
   const fullConcurrency = autoConcurrency(engine, FULL_SYNC_LARGE_MARKER, opts.concurrency);
-  slog(`Running full import of committed Git baseline ${headCommit.slice(0, 8)}${workingTreeEnabled ? ' plus working tree' : ''}${fullConcurrency > 1 ? ` (${fullConcurrency} workers)` : ''}...`);
+  slog(
+    gitBacked
+      ? `Running full import of committed Git baseline ${headCommit.slice(0, 8)}${workingTreeEnabled ? ' plus working tree' : ''}${fullConcurrency > 1 ? ` (${fullConcurrency} workers)` : ''}...`
+      : `Running full import of ordinary folder${fullConcurrency > 1 ? ` (${fullConcurrency} workers)` : ''}...`,
+  );
   const { runImport } = await import('./import.ts');
   const importArgs = [importPath];
   if (opts.noEmbed) importArgs.push('--no-embed');
   if (opts.includeOffice) importArgs.push('--include-office');
+  if (opts.includeImages) importArgs.push('--include-images');
+  if (opts.documentOcr) importArgs.push('--document-ocr');
   if (fullConcurrency > 1) importArgs.push('--workers', String(fullConcurrency));
   // v0.31.2: thread strategy through so code-strategy first sync
   // actually enumerates code files (closes bug 1).
@@ -2307,7 +2438,11 @@ async function performFullSync(
     commit: headCommit,
     skipFailed: opts.skipFailed === true,
     advance: async () => {
-      await writeSyncAnchor(engine, opts.sourceId, 'last_commit', headCommit);
+      if (gitBacked) {
+        await writeSyncAnchor(engine, opts.sourceId, 'last_commit', headCommit);
+      } else {
+        await markSuccessfulSourceScan(engine, opts.sourceId);
+      }
       await engine.setConfig('sync.last_run', new Date().toISOString());
       await writeSyncAnchor(engine, opts.sourceId, 'repo_path', repoPath);
       await writeChunkerVersion(engine, opts.sourceId, String(CHUNKER_VERSION));
@@ -2359,6 +2494,7 @@ async function performFullSync(
       const reason = unsyncableReason(path, {
         strategy: opts.strategy,
         includeOffice: opts.includeOffice,
+        includeImages: opts.includeImages,
         exclude: opts.exclude,
       });
       return reason === null || (reason === 'malformed-path' && isPoisonedPath(path));
@@ -2633,6 +2769,9 @@ export async function runSync(engine: BrainEngine, args: string[]) {
     }
   }
   const includeOffice = args.includes('--include-office');
+  const gateway = await import('../core/ai/gateway.ts');
+  const documentOcr = args.includes('--document-ocr') || gateway.isOcrEnabled();
+  const includeImages = args.includes('--include-images') || documentOcr;
   const concurrencyStr = args.find((a, i) => args[i - 1] === '--concurrency' || args[i - 1] === '--workers');
   const parallelStr = args.find((a, i) => args[i - 1] === '--parallel');
   // v0.22.13 (PR #490 Q2): parseWorkers throws on '0', '-3', 'foo', '1.5' instead
@@ -2869,6 +3008,8 @@ export async function runSync(engine: BrainEngine, args: string[]) {
         sourceId: src.id,
         strategy: cfg.strategy,
         includeOffice: includeOffice || cfg.includeOffice === true,
+        includeImages,
+        documentOcr,
         exclude: excludePatterns.length > 0 ? excludePatterns : undefined,
         workingTree,
         concurrency,
@@ -2893,6 +3034,7 @@ export async function runSync(engine: BrainEngine, args: string[]) {
       // reconciled, so writing .gitignore entries based on it could leave
       // stale or missing entries.
       if (
+        existsSync(join(src.local_path!, '.git')) &&
         result.status !== 'dry_run' &&
         result.status !== 'blocked_by_failures' &&
         result.status !== 'partial'
@@ -3070,7 +3212,7 @@ export async function runSync(engine: BrainEngine, args: string[]) {
   singleSourceTimer?.unref?.();
   const opts: SyncOpts = {
     repoPath, dryRun, full, noPull, noEmbed, skipFailed, retryFailed, sourceId,
-    strategy: strategyArg, includeOffice,
+    strategy: strategyArg, includeOffice, includeImages, documentOcr,
     exclude: excludePatterns.length > 0 ? excludePatterns : undefined,
     workingTree, concurrency,
     signal: singleSourceController?.signal,
@@ -3234,6 +3376,8 @@ export async function syncOneSource(
     concurrency: number | undefined;
   },
 ): Promise<{ result: SyncResult; log: string }> {
+  const gateway = await import('../core/ai/gateway.ts');
+  const documentOcr = gateway.isOcrEnabled();
   const cfg = (src.config || {}) as { strategy?: 'markdown' | 'code' | 'auto'; includeOffice?: boolean };
   const log = `\n--- Syncing source: ${src.name} ---\n`;
   const repoOpts: SyncOpts = {
@@ -3247,6 +3391,8 @@ export async function syncOneSource(
     sourceId: src.id,
     strategy: cfg.strategy,
     includeOffice: shared.includeOffice || cfg.includeOffice === true,
+    includeImages: documentOcr,
+    documentOcr,
     concurrency: shared.concurrency,
     // lockId defaults to `gbrain-sync:${src.id}` via the invariant in
     // performSync (no explicit override needed — sourceId triggers it).

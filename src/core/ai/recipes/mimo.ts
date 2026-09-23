@@ -36,12 +36,14 @@ export const mimo: Recipe = {
       max_batch_tokens: 100_000,
     },
     expansion: {
-      models: ['mimo-v2.5-pro', 'mimo-v2.5'],
+      models: ['mimo-v2.6-pro', 'mimo-v2.6-flash', 'mimo-v2.5-pro', 'mimo-v2.5'],
       cost_per_1m_tokens_usd: 0.15,
       price_last_verified: '2026-06-02',
     },
     chat: {
-      models: ['mimo-v2.5-pro', 'mimo-v2.5'],
+      models: ['mimo-v2.6-pro', 'mimo-v2.6-flash', 'mimo-v2.5-pro', 'mimo-v2.5'],
+      supports_vision: true,
+      vision_models: ['mimo-v2.6-pro', 'mimo-v2.6-flash'],
       supports_tools: true,
       supports_subagent_loop: true,
       supports_prompt_cache: false,

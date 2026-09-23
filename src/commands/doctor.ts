@@ -36,6 +36,8 @@ import { isSourceUnchangedSinceSync } from '../core/git-head.ts';
 import { CHUNKER_VERSION } from '../core/chunkers/code.ts';
 import { DEFAULT_USER_HOLDER } from '../core/cycle/emotional-weight.ts';
 import { buildRetrievalReflexCheck } from './doctor-retrieval-reflex.ts';
+import { buildMemorableRelayCheck } from './doctor/checks/integrations-memorable.ts';
+export { buildMemorableRelayCheck } from './doctor/checks/integrations-memorable.ts';
 
 export interface Check {
   name: string;
@@ -727,6 +729,10 @@ export async function doctorReportRemote(engine: BrainEngine): Promise<DoctorRep
   //   - Single-source brain short-circuits to ok.
   //   - Three-state: ok / warn / fail.
   checks.push(await checkFederationHealth(engine));
+
+  // Chat connectors (live ChatGPT/Claude history). name: 'connectors'
+  const { connectorsHealthCheck } = await import('./doctor/checks/connectors.ts');
+  checks.push(await connectorsHealthCheck(engine));
 
   return computeDoctorReport(checks);
 }
@@ -3291,6 +3297,8 @@ export async function buildChecks(
   const detected = scope === 'all' ? autoDetectSkillsDirReadOnly() : { dir: null, source: 'none' as const };
   const skillsDir = detected.dir;
   checks.push(buildRetrievalReflexCheck());
+  progress.heartbeat('memorable_relay_health');
+  checks.push(await buildMemorableRelayCheck()); // name: 'memorable_relay_health'
   if (scope === 'all' && skillsDir) {
 
     // --fix: run auto-repair BEFORE checkResolvable so the post-fix scan
@@ -4038,6 +4046,21 @@ export async function buildChecks(
     }
   } catch {
     // Filesystem read failure is non-fatal.
+  }
+
+  // Google vault health is filesystem-only (zero-network). Run it on the
+  // local CLI path even when --fast skips DB checks; do not run it on the
+  // remote MCP doctor (vault is local-only).
+  progress.heartbeat('google_oauth');
+  try {
+    const { computeGoogleOauthCheck } = await import('./doctor/checks/google-oauth.ts');
+    checks.push(await computeGoogleOauthCheck());
+  } catch (e) {
+    checks.push({
+      name: 'google_oauth',
+      status: 'warn',
+      message: `credential vault unreadable: ${e instanceof Error ? e.message : String(e)}`,
+    });
   }
 
   // --- DB checks (skip if --fast or no engine) ---

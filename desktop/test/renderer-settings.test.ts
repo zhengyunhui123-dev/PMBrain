@@ -82,6 +82,16 @@ describe('desktop settings renderer contracts', () => {
     expect(renderer).not.toContain("populate(next);\n    switchPanel('integrations');");
   });
 
+  test('实验性数据连接不进入桌面普通入口', () => {
+    expect(html).not.toContain('data-target="connections"');
+    expect(html).not.toContain('data-target="daily"');
+    expect(html).toContain('<section class="panel" id="panel-connections" hidden>');
+    expect(renderer).not.toContain("if (target === 'connections') void refreshDailyPanel()");
+    expect(main).not.toContain("label: '数据连接'");
+    expect(main).not.toContain("label: '待我处理'");
+    expect(main).not.toContain("openAdmin('#waiting')");
+  });
+
   test('reuses custom chat models in advanced tier and Dream phase selectors', () => {
     expect(renderer).toContain('function syncAdvancedProviderOptions');
     expect(renderer).toContain('customCatalog.chat');
@@ -192,11 +202,40 @@ describe('desktop settings renderer contracts', () => {
     expect(preview).toContain('testModelConnection: async (input)');
   });
 
+  test('shows product names while preserving provider API model IDs', () => {
+    expect(renderer).toContain("model === 'deepseek-flash') return 'DeepSeek-V4.1-Flash'");
+    expect(renderer).toContain("model === 'mimo-v2.6-pro') return 'MiMo-V2.6-Pro'");
+    expect(renderer).toContain("model === 'mimo-v2.6-flash') return 'MiMo-V2.6-Flash'");
+    expect(renderer).toContain('input.value = model');
+  });
+
+  test('keeps the optional OCR model, credential check and image test in the model settings flow', () => {
+    for (const id of ['ocr-provider', 'ocr-model-name', 'ocr-api-key', 'test-ocr-model']) {
+      expect(html).toContain(`id="${id}"`);
+    }
+    expect(html).not.toContain('id="ocr-enabled"');
+    expect(html).not.toContain('id="ocr-model-mode"');
+    expect(html).toContain('留空时自动使用上面的普通模型');
+    expect(html).toContain('id="ocr-model-name" spellcheck="false" placeholder="留空时使用普通模型"');
+    const saveStart = renderer.indexOf('async function save(): Promise<void>');
+    const saveEnd = renderer.indexOf('function selectedCredential', saveStart);
+    const saveSource = renderer.slice(saveStart, saveEnd);
+    const dailyStart = renderer.indexOf('async function refreshDailyPanel');
+    const dailyEnd = renderer.indexOf('async function refreshDailyPeople', dailyStart);
+    const dailySource = renderer.slice(dailyStart, dailyEnd);
+    expect(saveSource).toContain("providerKeyId(ocrProvider, 'chat')");
+    expect(saveSource).toContain("(keys as Record<string, string>)[ocrKey] = ocrKeyValue");
+    expect(saveSource).toContain('ocrEnabled: true');
+    expect(dailySource).not.toContain('ocrKeyValue');
+    expect(renderer).toContain("touchpoint: 'ocr'");
+  });
+
   test('model settings label the embedding model without an optional marker', () => {
     expect(html).toContain('<b>向量化模型</b>');
     expect(html).not.toContain('向量化模型（可选）');
-    expect(html).toContain('向量模型需要配置，且不受该开关影响。');
-    expect(html).not.toContain('向量模型可选，且不受该开关影响。');
+    expect(html).toContain('普通模型用于问答与 AI 深度整理，配置完成后会按任务自动使用。');
+    expect(html).toContain('向量模型用于语义检索和向量化，需要单独配置。');
+    expect(html).not.toContain('不受该开关影响');
   });
 
   test('moves appearance and native desktop behavior into an accessible system panel', () => {
@@ -259,22 +298,35 @@ describe('desktop settings renderer contracts', () => {
     expect(renderer).toContain('重试连接');
   });
 
-  test('restores Workbuddy to the ordinary MCP card and adds rules and Agent write beside 更新', () => {
+  test('keeps integration actions together, uses unified deep integration copy, and shows launch only for detected apps', () => {
     expect(renderer).not.toContain('renderWorkbuddyIntegration');
     expect(renderer).not.toContain('移除深度接入');
     expect(renderer).not.toContain("if (item.id === 'workbuddy') return renderWorkbuddyIntegration(item)");
     expect(renderer).toContain("item.id === 'workbuddy' && item.configured");
-    expect(renderer).toContain('写入规则与 Agent');
+    expect(renderer).not.toContain('写入规则与 Agent');
+    expect(renderer).toContain("agentButton.textContent = '深度接入'");
     expect(renderer).toContain('writeWorkbuddyUserAgent');
+    expect(renderer).toMatch(/item\.id === 'workbuddy'[\s\S]*?agentButton\.textContent = '深度接入'[\s\S]*?writeWorkbuddyUserAgent\(agentButton\)[\s\S]*?actions\.append\(agentButton\)/);
     expect(renderer).toContain("button.addEventListener('click', () => void configure(item.id, button))");
     expect(renderer).toContain("item.configured ? '更新连接' : '接入'");
     expect(renderer).toContain("['codex','claude','grok'].includes(item.id)");
     expect(renderer).toContain("deep.textContent = '深度接入'");
+    expect(renderer).toMatch(/\['codex','claude','grok'\][\s\S]*?deep\.textContent = '深度接入'[\s\S]*?configure\(item\.id, deep, true\)[\s\S]*?actions\.append\(deep\)/);
+    expect(renderer).toContain('item.launchAvailable');
+    expect(renderer).toContain("launchLabel.textContent = '启动'");
+    expect(renderer).toContain('launchIntegration(item.id, launchButton)');
+    expect(renderer).toContain("launchButton.className = 'integration-launch'");
+    expect(renderer.indexOf('actions.append(deep)')).toBeLessThan(renderer.indexOf('if (item.launchAvailable)'));
     expect(renderer).toContain('更新连接只更新 MCP；深度接入还会安装自动记忆规则');
     expect(styles).toContain('.integration-actions');
+    expect(styles).toContain('.integration-launch');
+    expect(styles).toContain('.integration-launch-icon');
     expect(preview).toContain('writeWorkbuddyUserAgent: async');
+    expect(preview).toContain('launchIntegration: async');
     expect(main).toContain('desktop:write-workbuddy-user-agent');
+    expect(main).toContain('desktop:launch-integration');
     expect(preload).toContain('desktop:write-workbuddy-user-agent');
+    expect(preload).toContain('desktop:launch-integration');
   });
 
   test('shows the migrated database address and discovers switchable PMBrain Docker databases', () => {

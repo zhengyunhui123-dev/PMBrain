@@ -172,10 +172,26 @@ describe('Admin local attachment staging safety contract', () => {
       "app.post('/admin/api/export-runs'",
     );
     expect(uploadRoute).toContain('await startImportRun(engine, {');
-    expect(uploadRoute).toContain("includeOffice: fileKind === 'office'");
-    expect(uploadRoute).toContain("includeImages: fileKind === 'image'");
+    expect(uploadRoute).toContain('includeOffice: true');
+    expect(uploadRoute).toContain('includeImages: true');
     expect(uploadRoute).toContain('acquireExclusive: runHooks?.acquireExclusive');
     expect(uploadRoute).toContain('afterComplete: async () =>');
     expect(uploadRoute).toContain('await cleanup()');
+  });
+
+  test('知识工作台不再展示写入与处理选项，默认写入主知识源并自动处理', () => {
+    const importPage = readFileSync(join(root, 'admin/src/pages/Import.tsx'), 'utf8');
+    expect(importPage).not.toContain('className="pm-card import-options"');
+    expect(importPage).not.toContain('<b>写入位置</b>');
+    expect(importPage).not.toContain('setSourceId');
+    expect(importPage).not.toContain('Office / PDF / Excel</label>');
+    expect(importPage).not.toContain('导入独立图片文件</label>');
+    expect(importPage).not.toContain('<b>结构化解析</b>');
+    expect(importPage).not.toContain('<b>图片内容识别</b>');
+    expect(importPage).toContain('includeOffice: true');
+    expect(importPage).toContain('includeImages: true');
+    expect(importPage).toContain('autoEmbed: true');
+    expect(importPage).toContain('structuredDocuments: true');
+    expect(importPage).toContain('documentOcr: true');
   });
 });

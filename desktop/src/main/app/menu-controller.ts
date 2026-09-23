@@ -4,7 +4,7 @@ import type { DesktopLogger } from '../logs.js';
 export type SettingsPanel = 'basic' | 'models' | 'integrations' | 'updates' | 'system' | 'repair';
 
 export interface AppMenuDependencies {
-  openAdmin: () => Promise<void>;
+  openAdmin: (hash?: string) => Promise<void>;
   openPanel: (panel: SettingsPanel) => Promise<void>;
   openUpdates: () => Promise<void>;
   getLogger: () => DesktopLogger | null;
@@ -38,6 +38,15 @@ export function installAppMenu(dependencies: AppMenuDependencies): void {
         { label: '退出 PMBrain', click: () => app.quit() },
       ],
     },
-    { role: 'viewMenu', label: '视图' },
+    {
+      label: '视图',
+      submenu: [
+        { label: '实际大小', role: 'resetZoom' },
+        { label: '放大', role: 'zoomIn' },
+        { label: '缩小', role: 'zoomOut' },
+        { type: 'separator' },
+        { label: '切换全屏', role: 'togglefullscreen' },
+      ],
+    },
   ]));
 }

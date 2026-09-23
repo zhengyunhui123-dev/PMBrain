@@ -12,7 +12,7 @@ type Paths = { home?: string; codexHome?: string; claudeHome?: string };
 type Settings = { mode: WritebackMode; ttl: string; visibility: 'world' | 'private' };
 type Registration = { agent: Agent; sourceId: string; serveUrl: string; command: string };
 const MARKER = 'PMBrain ambient writeback';
-const CODEX_HOOK_MARKER = 'pmbrain hook session-end --harness codex';
+export const CODEX_HOOK_MARKER = 'pmbrain hook session-end --harness codex';
 const CODEX_TRUST_BEGIN = '# --- pmbrain:codex-writeback-trust begin ---';
 const CODEX_TRUST_END = '# --- pmbrain:codex-writeback-trust end ---';
 

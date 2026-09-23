@@ -7,7 +7,7 @@ export interface TrayControllerDependencies {
   getPreferences: () => DesktopPreferences;
   getLanStatus: () => LanMcpGatewayStatus | null;
   openDesktop: () => void;
-  openAdmin: () => Promise<void>;
+  openAdmin: (hash?: string) => Promise<void>;
   openSystemSettings: () => Promise<void>;
   reportError: (title: string, error: unknown) => void;
   quit: () => void;

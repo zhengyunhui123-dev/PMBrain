@@ -164,6 +164,7 @@ const REQUIRED_BOOTSTRAP_COVERAGE: ForwardReference[] = [
   { kind: 'column', table: 'minion_jobs', column: 'private_queue_owner_job_id' },
   { kind: 'column', table: 'minion_jobs', column: 'private_queue_owner_token' },
   { kind: 'column', table: 'minion_jobs', column: 'private_queue_lease_until' },
+  { kind: 'column', table: 'timeline_entries', column: 'event_page_id' },
 ];
 
 test('applyForwardReferenceBootstrap covers every forward reference declared in REQUIRED_BOOTSTRAP_COVERAGE', async () => {
@@ -253,6 +254,11 @@ test('applyForwardReferenceBootstrap covers every forward reference declared in 
       ALTER TABLE pages DROP COLUMN IF EXISTS generation;
       ALTER TABLE pages DROP COLUMN IF EXISTS contextual_retrieval_mode;
       ALTER TABLE pages DROP COLUMN IF EXISTS corpus_generation;
+
+      DROP INDEX IF EXISTS idx_timeline_event_dedup;
+      DROP INDEX IF EXISTS idx_timeline_event_page;
+      ALTER TABLE timeline_entries DROP CONSTRAINT IF EXISTS timeline_entries_event_page_id_fkey;
+      ALTER TABLE timeline_entries DROP COLUMN IF EXISTS event_page_id;
     `);
 
     // Note: we don't strip sources.archived* here because they're inline in the
@@ -329,6 +335,11 @@ test('after bootstrap, PGLITE_SCHEMA_SQL replays without crashing on missing for
       ALTER TABLE pages DROP COLUMN IF EXISTS import_filename;
       ALTER TABLE pages DROP COLUMN IF EXISTS salience_touched_at;
       ALTER TABLE pages DROP COLUMN IF EXISTS emotional_weight;
+
+      DROP INDEX IF EXISTS idx_timeline_event_dedup;
+      DROP INDEX IF EXISTS idx_timeline_event_page;
+      ALTER TABLE timeline_entries DROP CONSTRAINT IF EXISTS timeline_entries_event_page_id_fkey;
+      ALTER TABLE timeline_entries DROP COLUMN IF EXISTS event_page_id;
     `);
 
     // Bootstrap, then schema replay. Either step crashing fails the test.
@@ -749,6 +760,12 @@ const COLUMN_EXEMPTIONS = new Set<string>([
   // brains is invisible to them). Migration is column-only, no FK,
   // no index — bootstrap probe would be pure overhead.
   'facts.event_type',
+  // facts is migration-created (absent from PGLITE_SCHEMA_SQL). Ontology
+  // columns ride ALTER in v126; indexes live in the same migration.
+  'facts.dimension',
+  'facts.value',
+  'facts.value_hash',
+  'facts.dim_status',
   // v0.39.1.0 (migration v88) — schema-pack provenance per-source captured as
   // inline canonical closure snapshot on every eval_candidates row. NULL by
   // default; no index in PGLITE_SCHEMA_SQL references it. Migration handles

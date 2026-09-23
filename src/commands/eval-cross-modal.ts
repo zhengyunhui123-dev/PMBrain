@@ -470,7 +470,7 @@ interface BatchRow {
 
 /**
  * v0.40.1.0 Track D (codex CDX-1) — upstream-error row from
- * `gbrain eval longmemeval`. Carries `question`+`question_type` and an
+ * `pmbrain eval longmemeval`. Carries `question`+`question_type` and an
  * `error` field but no usable hypothesis. Counted in the batch summary's
  * `upstream_error_count` so the denominator includes failed rows, never
  * silently dropped (which would let the gate pass on a surviving subset).
@@ -553,7 +553,7 @@ function readBatchRows(path: string): BatchReadResult {
       continue;
     }
     // v0.40.1.0 Track D (codex CDX-1): upstream error rows from
-    // `gbrain eval longmemeval` carry an `error` field and an empty/missing
+    // `pmbrain eval longmemeval` carry an `error` field and an empty/missing
     // hypothesis. Treat them as upstream_error verdicts in the batch summary
     // so they count in the denominator instead of silently disappearing.
     if (typeof obj.error === 'string' && obj.error.length > 0) {

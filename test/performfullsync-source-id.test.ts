@@ -137,3 +137,57 @@ describe('performFullSync threads sourceId end-to-end', () => {
     expect(counts['testsrc-pfs'] ?? 0).toBe(0);
   });
 });
+
+describe('plain-folder source sync', () => {
+  beforeAll(async () => {
+    engine = new PGLiteEngine();
+    await engine.connect({});
+    await engine.initSchema();
+  }, 60_000);
+
+  afterAll(async () => {
+    if (engine) await engine.disconnect();
+  }, 60_000);
+
+  beforeEach(async () => {
+    await resetPgliteState(engine);
+    repoPath = mkdtempSync(join(tmpdir(), 'pmbrain-plain-folder-'));
+    mkdirSync(join(repoPath, 'notes'), { recursive: true });
+    writeFileSync(join(repoPath, 'notes/foo.md'), [
+      '---',
+      'type: note',
+      'title: Plain Folder Note',
+      '---',
+      '',
+      'This source is an ordinary folder, not a Git repository.',
+    ].join('\n'));
+    await runSources(engine, ['add', 'plain-folder', '--path', repoPath, '--no-federated']);
+  });
+
+  afterEach(() => {
+    if (repoPath) rmSync(repoPath, { recursive: true, force: true });
+  });
+
+  test('syncs and reconciles an ordinary folder without requiring Git', async () => {
+    const { performSync } = await import('../src/commands/sync.ts');
+
+    const first = await performSync(engine, {
+      repoPath,
+      sourceId: 'plain-folder',
+      noEmbed: true,
+    });
+    expect(first.status).toBe('first_sync');
+    expect(first.added).toBe(1);
+    expect(await engine.getPage('notes/foo', { sourceId: 'plain-folder' })).not.toBeNull();
+
+    rmSync(join(repoPath, 'notes/foo.md'));
+    const second = await performSync(engine, {
+      repoPath,
+      sourceId: 'plain-folder',
+      noEmbed: true,
+    });
+    expect(second.status).toBe('first_sync');
+    expect(second.deleted).toBe(1);
+    expect(await engine.getPage('notes/foo', { sourceId: 'plain-folder' })).toBeNull();
+  });
+});

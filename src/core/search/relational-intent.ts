@@ -80,6 +80,8 @@ export const KNOWN_LINK_TYPES: ReadonlySet<string> = new Set([
   'source',
   'related_to',
   'wikilink_basename',
+  'owes_to',
+  'awaiting_reply_from',
 ]);
 
 // Seeds that are pronouns / generic nouns, not entities. If a pattern's seed

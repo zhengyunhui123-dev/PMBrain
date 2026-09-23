@@ -27,6 +27,11 @@ export interface ImportFileReport {
     pagesNeedingOcr: number;
     ocrUsed: boolean;
     ocrProvider?: string;
+    ocrAttempted?: number;
+    ocrSucceeded?: number;
+    ocrFailed?: number;
+    ocrSkipped?: number;
+    ocrWarnings?: string[];
   };
 }
 
@@ -115,12 +120,15 @@ function summarizeSingleFile(preview: ImportSummaryPreview, run: ImportSummaryRu
       `- 向量化：${imported.vectorized ? '已完成' : '未执行'}`,
     ];
     if (document.fallback) lines.push(`- 解析回退：${document.fallback}`);
-    if (document.ocrUsed) {
-      lines.push(`- OCR：${document.ocrProvider ?? '已配置视觉模型'}`);
+    if ((document.ocrAttempted ?? 0) > 0 || (document.ocrSkipped ?? 0) > 0) {
+      lines.push(`- 图片识别：成功 ${document.ocrSucceeded ?? 0}，失败 ${document.ocrFailed ?? 0}，跳过 ${document.ocrSkipped ?? 0}；模型 ${document.ocrProvider ?? '未配置'}`);
+      if (document.ocrWarnings?.length) lines.push(`- 图片识别提示：${document.ocrWarnings.slice(0, 3).join('；')}`);
+    } else if (document.ocrUsed) {
+      lines.push(`- 图片识别：${document.ocrProvider ?? '已配置视觉模型'}`);
     } else if (document.pagesNeedingOcr > 0) {
-      lines.push(`- OCR：未使用；有 ${document.pagesNeedingOcr} 页没有可靠文字，可按需开启“图片内容识别”后重试`);
+      lines.push(`- 图片识别：未使用；有 ${document.pagesNeedingOcr} 页没有可靠文字，请到设置中配置图片/OCR模型`);
     } else {
-      lines.push('- OCR：未使用');
+      lines.push('- 图片识别：未使用');
     }
     return { markdown: lines.join('\n'), badge: '已完成', tone: 'success' };
   }

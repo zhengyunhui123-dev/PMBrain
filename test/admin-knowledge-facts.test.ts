@@ -39,6 +39,7 @@ describe('Knowledge data classification and facts inventory', () => {
     expect(brainDataSource).toContain('知识页、热记忆事实');
     expect(brainDataSource).toContain('还没有可显示的热记忆事实');
     expect(brainDataSource).toContain('setPageError(message)');
+    expect(brainDataSource).toContain('if (requestId !== listRequestId.current) return;');
   });
 
   test('page view predicates use provenance before pagination', async () => {

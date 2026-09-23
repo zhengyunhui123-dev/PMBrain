@@ -16,6 +16,15 @@ describe('desktop provider model catalog', () => {
     }
   });
 
+  test('includes the current DeepSeek and MiMo chat models', async () => {
+    const deepseek = await listDesktopProviderModels('deepseek', 'chat');
+    const mimo = await listDesktopProviderModels('mimo', 'chat');
+
+    expect(deepseek.models).toContain('deepseek-flash');
+    expect(mimo.models).toContain('mimo-v2.6-pro');
+    expect(mimo.models).toContain('mimo-v2.6-flash');
+  });
+
   test('shows only installed Ollama models that match the requested capability', async () => {
     const fakeFetch = (async (url: string | URL | Request, init?: RequestInit) => {
       const value = String(url);

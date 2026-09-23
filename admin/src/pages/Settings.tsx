@@ -9,7 +9,6 @@ import { LoadingBlock, useOverview } from './console-shared';
 import type {
   DreamScheduleResponse,
   DreamSettingsResponse,
-  GenerativeUsageResponse,
 } from '../../../shared/contracts/index.ts';
 export function ModelConfigPage() {
   const { overview, reload } = useOverview();
@@ -100,94 +99,6 @@ function MarkdownExportSettings() {
 }
 
 type DreamSettingsValue = DreamSettingsResponse;
-
-type GenerativeUsageValue = GenerativeUsageResponse;
-
-function GenerativeModelSettings() {
-  const [value, setValue] = useState<GenerativeUsageValue | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [message, setMessage] = useState('');
-  const [error, setError] = useState('');
-
-  useEffect(() => {
-    void api.generativeUsage()
-      .then(next => setValue(next))
-      .catch(nextError => setError(nextError instanceof Error ? nextError.message : String(nextError)))
-      .finally(() => setLoading(false));
-  }, []);
-
-  const toggle = async (enabled: boolean) => {
-    if (!value) return;
-    if (!enabled && value.generative_enabled) {
-      const ok = window.confirm(
-        '关闭后，将停止正在运行的 AI 深度整理和会议整理任务。向量化、语义搜索、混合搜索和快速维护不受影响。',
-      );
-      if (!ok) return;
-    }
-    setSaving(true);
-    setMessage('');
-    setError('');
-    try {
-      const next = await api.saveGenerativeUsage(enabled);
-      setValue(next);
-      const stopped = next.stopped_runs?.length ?? 0;
-      setMessage(
-        enabled
-          ? '已允许 PMBrain 调用普通模型'
-          : stopped > 0
-            ? `已关闭普通模型调用，并停止 ${stopped} 个 AI 整理任务`
-            : '已关闭普通模型调用',
-      );
-    } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : String(nextError));
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const caps = value?.capabilities;
-  return (
-    <section className="pm-card generative-model-settings settings-panel">
-      <div className="settings-panel-title">
-        <span className="settings-panel-icon"><Sparkles /></span>
-        <div>
-          <h2>普通模型调用</h2>
-          <p>关闭后，PMBrain 不会调用 DeepSeek 等聊天或推理模型，仅保留向量化、语义搜索、混合搜索和快速维护。向量模型不受此开关影响。</p>
-        </div>
-      </div>
-      <label className="dream-schedule-toggle" htmlFor="generative-model-enabled">
-        <span>
-          <b>允许 PMBrain 调用普通模型</b>
-          <small>默认开启。配置普通模型后即可用于 AI 搜索和知识整理，不需要时可关闭。</small>
-        </span>
-        <input
-          id="generative-model-enabled"
-          type="checkbox"
-          checked={value?.generative_enabled === true}
-          onChange={event => void toggle(event.target.checked)}
-          disabled={loading || saving || !value}
-        />
-      </label>
-      {caps && (
-        <ul className="generative-capability-list">
-          <li className="is-ok">语义搜索：可用</li>
-          <li className="is-ok">混合搜索：可用</li>
-          <li className="is-ok">向量化：可用</li>
-          <li className="is-ok">快速维护：可用</li>
-          <li className={caps.ai_deep_organize ? 'is-ok' : 'is-off'}>AI 深度整理：{caps.ai_deep_organize ? '可用' : '不可用'}</li>
-          <li className={caps.ai_meeting_organize ? 'is-ok' : 'is-off'}>AI 会议整理：{caps.ai_meeting_organize ? '可用' : '不可用'}</li>
-        </ul>
-      )}
-      {(message || error) && (
-        <div className="settings-feedback" aria-live="polite">
-          {message && <span className="pm-ok">{message}</span>}
-          {error && <span className="pm-error-text">{error}</span>}
-        </div>
-      )}
-    </section>
-  );
-}
 
 function DreamSettings() {
   const [settings, setSettings] = useState<DreamSettingsValue>({
@@ -471,9 +382,9 @@ const SETTINGS_SECTIONS: Array<{
   label: string;
   description: string;
 }> = [
-  { key: 'general', label: '常规设置', description: '管理台界面外观' },
+  { key: 'general', label: '其他设置', description: '管理界面外观等其他选项' },
   { key: 'knowledge', label: '知识库设置', description: '主源、数据源与导出' },
-  { key: 'dream', label: '知识整理设置', description: '整理规则与定时任务' },
+  { key: 'dream', label: '自动化', description: '管理稳定的知识整理和定时任务' },
 ];
 
 function AppearanceSettings({
@@ -548,7 +459,6 @@ export function SettingsPage({
         )}
         {section === 'dream' && (
           <div className="settings-section-stack">
-            <GenerativeModelSettings />
             <DreamSettings />
             <DreamScheduleSettings />
           </div>

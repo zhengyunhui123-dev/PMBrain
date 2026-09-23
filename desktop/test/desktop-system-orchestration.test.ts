@@ -18,6 +18,7 @@ const sidecarController = readFileSync(resolve('src/main/sidecar/sidecar-control
 const lanController = readFileSync(resolve('src/main/network/lan-controller.ts'), 'utf8');
 const sharedAccessController = readFileSync(resolve('src/main/integration/shared-access-controller.ts'), 'utf8');
 const trayController = readFileSync(resolve('src/main/app/tray-controller.ts'), 'utf8');
+const menuController = readFileSync(resolve('src/main/app/menu-controller.ts'), 'utf8');
 
 describe('desktop system orchestration contracts', () => {
   test('keeps the original sidecar private and exposes sharing through the desktop gateway', () => {
@@ -102,6 +103,7 @@ describe('desktop system orchestration contracts', () => {
     expect(main).toContain("'repair', 'toast-diagnose'");
     expect(main).toContain("'repair', 'toast-replace'");
     expect(main).not.toContain("from '../../../src/core/pglite-toast-repair");
+    expect(readFileSync(resolve('../src/core/model-usage.ts'), 'utf8')).not.toMatch(/import\s*\{[^}]*ALL_PHASES[^}]*\}\s*from\s*['\"]\.\/cycle\.ts['\"]/);
     expect(backupController).toContain('parseSuccessfulBackupJsonFromError');
     expect(backupController).toContain("recovered?.status !== 'restored'");
     expect(backupController).toContain("'set-root'");
@@ -162,6 +164,16 @@ describe('desktop system orchestration contracts', () => {
     expect(trayController).toContain('click: this.dependencies.openDesktop');
     expect(trayController).toContain("tray.on('double-click', this.dependencies.openDesktop)");
     expect(main).toContain("'/admin/api/brain/overview'");
+    expect(main).toContain("'/admin/api/advisor'");
+    expect(trayController).not.toContain("知识库体检");
+    expect(menuController).not.toContain("知识库体检");
+    expect(menuController).toContain("{ label: '实际大小', role: 'resetZoom' }");
+    expect(menuController).toContain("{ label: '放大', role: 'zoomIn' }");
+    expect(menuController).toContain("{ label: '缩小', role: 'zoomOut' }");
+    expect(menuController).toContain("{ label: '切换全屏', role: 'togglefullscreen' }");
+    expect(menuController).not.toContain("role: 'viewMenu'");
+    expect(main).not.toContain('collectChronicle');
+    expect(main).not.toContain('runAdvisor');
     expect(main).toContain('knowledgeSourceChanged === true');
     expect(setupController).toContain('this.applyOnce(effectivePayload, sourcePolicy');
     expect(setupController).toContain('repairMissingMainSourcePath');
