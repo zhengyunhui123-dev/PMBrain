@@ -8,6 +8,7 @@ import { applyThemeMode, readThemeMode, storeThemeMode, type ThemeMode } from '.
 import { ModelServices } from './ModelServices';
 import { HelpPage } from './HelpPage';
 import { DesktopSettings } from './DesktopSettings';
+import { Workbench } from '../workbench/Workbench';
 import type { SidecarState } from '../../../desktop/src/preload/index';
 
 const settingItems = [
@@ -85,10 +86,11 @@ export function ProductApp() {
           </div></div>
       </section>
       <div hidden={isSettings || page !== 'import'} className="product-workbench">
-        {ready ? <ImportDataPage /> : <div className="product-welcome"><div className="product-knowledge-icon">▱</div><h1>有什么可以帮你的吗？</h1><p>基于你的知识库，进行搜索、分析、总结和创作</p><button onClick={() => navigate('settings-basic')}>配置知识库与模型</button></div>}
+        {ready ? <Workbench /> : <div className="product-welcome"><div className="product-knowledge-icon">▱</div><h1>有什么可以帮你的吗？</h1><p>基于你的知识库，进行搜索、分析、总结和创作</p><button onClick={() => navigate('settings-basic')}>配置知识库与模型</button></div>}
       </div>
       {!isSettings && page === 'docs' && <HelpPage />}
-      {!isSettings && page !== 'import' && page !== 'docs' && ready && <div className="product-existing"><ExistingPages embedded /></div>}
+      {!isSettings && page === 'knowledge-import' && ready && <div className="product-existing"><ImportDataPage /></div>}
+      {!isSettings && page !== 'import' && page !== 'docs' && page !== 'knowledge-import' && ready && <div className="product-existing"><ExistingPages embedded /></div>}
     </main>
   </div>;
 }

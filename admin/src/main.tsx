@@ -18,3 +18,4 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
 );
 
 import './product/model-services.css';
+import './product/product-theme.css';

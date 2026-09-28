@@ -62,7 +62,7 @@ export interface DesktopIpcHandlers {
   initializeKnowledgeSourceGit: (path: string) => DesktopKnowledgeSourceStatus;
   modelServices: () => ModelServicesState;
   saveModelServices: (input: ModelServicesState) => Promise<ModelServicesState>;
-  syncServiceModels: (service: ModelService) => Promise<unknown>;
+  syncServiceModels: (service: ModelService, kind?: 'chat' | 'embedding') => Promise<unknown>;
   providerModels: (provider: string, touchpoint: DesktopModelTouchpoint) => unknown;
   testModelConnection: (input: DesktopModelConnectionTestInput) => Promise<DesktopModelConnectionTestResult>;
   advancedModelConfig: () => Promise<unknown>;
@@ -144,7 +144,7 @@ export function registerDesktopIpcHandlers(handlers: DesktopIpcHandlers): void {
   });
   registerTrustedHandler('desktop:get-model-services', handlers, () => handlers.modelServices());
   registerTrustedHandler('desktop:save-model-services', handlers, (_event, input: ModelServicesState) => handlers.saveModelServices(input));
-  registerTrustedHandler('desktop:sync-service-models', handlers, (_event, service: ModelService) => handlers.syncServiceModels(service));
+  registerTrustedHandler('desktop:sync-service-models', handlers, (_event, service: ModelService, kind?: 'chat' | 'embedding') => handlers.syncServiceModels(service, kind));
   registerTrustedHandler('desktop:get-provider-models', handlers, (_event, provider: string, touchpoint: DesktopModelTouchpoint) => handlers.providerModels(provider, touchpoint));
   registerTrustedHandler('desktop:test-model-connection', handlers, (_event, input: DesktopModelConnectionTestInput) => handlers.testModelConnection(input));
   registerTrustedHandler('desktop:get-advanced-model-config', handlers, () => handlers.advancedModelConfig());

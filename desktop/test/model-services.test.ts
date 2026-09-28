@@ -16,8 +16,8 @@ test('existing model metadata survives synchronization', () => {
   const old = { ...newServiceModel('same-model'), inputPrice: 5, capabilities: ['vision' as const] };
   expect(mergeModelServices([old], [newServiceModel('same-model'), newServiceModel('new')])).toEqual([old, newServiceModel('new')]);
 });
-test('a selected platform cannot be disabled or retargeted silently', () => {
-  const current = projectModelServices({ chat_model: 'service-one:same-model' }, [service('one')]);
+test('a selected platform cannot be disabled and an embedding endpoint cannot be retargeted silently', () => {
+  const current = projectModelServices({ chat_model: 'service-one:same-model', embedding_model: 'service-one:same-model' }, [service('one')]);
   expect(() => projectModelServices(current, [{ ...service('one'), enabled: false }])).toThrow();
   expect(() => projectModelServices(current, [{ ...service('one'), baseUrl: 'https://other.example/v1' }])).toThrow();
 });

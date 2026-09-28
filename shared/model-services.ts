@@ -3,11 +3,13 @@ export interface ServiceModel {
   id: string;
   name: string;
   group: string;
-  kind: 'chat' | 'embedding';
+  kind: 'chat' | 'embedding' | 'unknown';
   capabilities: ModelCapability[];
   contextWindow?: number;
   inputPrice?: number;
   outputPrice?: number;
+  dimensions?: number;
+  typeOverride?: boolean;
 }
 export interface ModelService {
   id: string;
@@ -17,8 +19,22 @@ export interface ModelService {
   apiKey: string;
   enabled: boolean;
   models: ServiceModel[];
+  connections?: Partial<Record<'chat' | 'embedding', { baseUrl: string; apiKey: string }>>;
+  legacy?: { kind: 'chat' | 'embedding'; endpointId: string; selected: boolean };
+}
+export interface ModelSyncResult { models: ServiceModel[]; warnings: string[] }
+export function serviceConnection(service: ModelService, kind: 'chat' | 'embedding' = 'chat') {
+  return service.connections?.[kind] ?? { baseUrl: service.baseUrl, apiKey: service.apiKey };
 }
 export interface ModelServicesState { services: ModelService[]; revision: string }
+export function mergeServiceModels(existing: ServiceModel[], incoming: ServiceModel[]): ServiceModel[] {
+  const models = new Map(existing.map(model => [model.id, model]));
+  for (const model of incoming) {
+    const old = models.get(model.id);
+    models.set(model.id, old ? { ...model, ...old, kind: old.typeOverride || model.kind === 'unknown' ? old.kind : model.kind, capabilities: old.capabilities.length ? old.capabilities : model.capabilities } : model);
+  }
+  return [...models.values()];
+}
 export const SERVICE_PRESETS = [
   ['ollama', 'Ollama', 'http://localhost:11434/v1'],
   ['deepseek', '深度求索', 'https://api.deepseek.com/v1'],
@@ -41,7 +57,7 @@ export function newServiceModel(id: string, kind: ServiceModel['kind'] = 'chat')
   return { id, name: id, kind, group: id.split('/')[0].split(':')[0], capabilities: [] };
 }
 export function serviceModelValue(service: ModelService, model: ServiceModel): string {
-  return `${service.provider}:${model.id}`;
+  return `${service.legacy?.selected && service.legacy.kind === model.kind ? 'custom-openai' : service.provider}:${model.id}`;
 }
 export function availableServiceModels(services: ModelService[], kind: ServiceModel['kind']) {
   return services.filter(service => service.enabled).flatMap(service => service.models.filter(model => model.kind === kind).map(model => ({ value: serviceModelValue(service, model), label: `${model.name} · ${service.name}`, model, service })));

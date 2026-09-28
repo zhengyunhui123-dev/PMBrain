@@ -1,5 +1,5 @@
 import { readModelServices, saveModelServices, syncServiceModels } from './models/model-services.js';
-import { app, dialog, nativeTheme, shell } from 'electron';
+import { app, dialog, nativeTheme, shell, net } from 'electron';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { readAdvancedModelConfig, writeAdvancedModelConfig } from './advanced-model-config.js';
@@ -406,7 +406,7 @@ if (!app.requestSingleInstanceLock()) {
       inspectKnowledgeSourceDirectory,
       initializeKnowledgeSourceGit,
       modelServices: readModelServices,
-      syncServiceModels,
+      syncServiceModels: (service, kind) => syncServiceModels(service, net.fetch.bind(net) as typeof fetch, kind),
       saveModelServices: async input => {
         if (setupController.inProgress || databaseTransferController.inProgress) throw new Error('配置或数据库操作进行中，请稍后再保存');
         const restart = Boolean(sidecarController.current);

@@ -194,6 +194,7 @@ import {
 } from './admin-daily-product.ts';
 import { OperationError } from '../core/operation-error.ts';
 import { SourceOpError } from '../core/sources-ops.ts';
+import { registerWorkbenchRoutes } from '../product/workbench/routes.ts';
 
 export interface PmbrainAdminRouteOptions {
   app: express.Express;
@@ -221,6 +222,7 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
     reconnectPglite,
     ensureAdminWorkerStarted,
   } = options;
+  registerWorkbenchRoutes(app, requireAdmin, engine, config);
   let adminUploadTail: Promise<void> = Promise.resolve();
   app.get('/admin/api/task-center', requireAdmin, async (_req: Request, res: Response) => {
     const runs = listRuns();

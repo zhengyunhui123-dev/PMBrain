@@ -1,4 +1,4 @@
-import type { ModelService, ModelServicesState, ServiceModel } from '../../../shared/model-services.js';
+import type { ModelService, ModelServicesState, ModelSyncResult } from '../../../shared/model-services.js';
 import type { MemoryWritebackStatus, MemoryWritebackUpdate } from '../../../shared/contracts/brain.js';
 import { contextBridge, ipcRenderer } from 'electron';
 import type { SidecarState } from '../main/sidecar-manager.js';
@@ -198,7 +198,7 @@ export interface PMBrainDesktopApi {
   initializeKnowledgeSourceGit(path: string): Promise<DesktopKnowledgeSourceStatus>;
   getModelServices(): Promise<ModelServicesState>;
   saveModelServices(input: ModelServicesState): Promise<ModelServicesState>;
-  syncServiceModels(service: ModelService): Promise<ServiceModel[]>;
+  syncServiceModels(service: ModelService, kind?: 'chat' | 'embedding'): Promise<ModelSyncResult>;
   getProviderModels(provider: string, touchpoint: DesktopModelTouchpoint): Promise<DesktopProviderModels>;
   testModelConnection(input: DesktopModelConnectionTestInput): Promise<DesktopModelConnectionTestResult>;
   getAdvancedModelConfig(): Promise<AdvancedModelConfig>;
@@ -332,7 +332,7 @@ const api: PMBrainDesktopApi = {
   initializeKnowledgeSourceGit: (path) => ipcRenderer.invoke('desktop:initialize-knowledge-source-git', path),
   getModelServices: () => ipcRenderer.invoke('desktop:get-model-services'),
   saveModelServices: input => ipcRenderer.invoke('desktop:save-model-services', input),
-  syncServiceModels: service => ipcRenderer.invoke('desktop:sync-service-models', service),
+  syncServiceModels: (service, kind) => ipcRenderer.invoke('desktop:sync-service-models', service, kind),
   getProviderModels: (provider, touchpoint) => ipcRenderer.invoke('desktop:get-provider-models', provider, touchpoint),
   testModelConnection: input => ipcRenderer.invoke('desktop:test-model-connection', input),
   getAdvancedModelConfig: () => ipcRenderer.invoke('desktop:get-advanced-model-config'),

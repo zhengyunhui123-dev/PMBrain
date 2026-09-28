@@ -82,24 +82,29 @@ const previewServices = SERVICE_PRESETS.map(([provider, name, baseUrl]) => ({ id
   { ...newServiceModel('gemma3:4b'), group: 'ollama', capabilities: ['vision'] },
   { ...newServiceModel('qwen3-embedding:0.6b', 'embedding'), group: 'qwen3' },
 ] : [] }));
+const workbenchApi = process.argv.includes('--workbench-api');
 const mockApi = `
 <script>
 let previewModelServices = ${JSON.stringify({ services: [], revision: 'preview' }).replace('"services":[]', '"services":' + JSON.stringify(previewServices))};
 window.pmbrainDesktop = {
   getModelServices: async () => structuredClone(previewModelServices),
   saveModelServices: async (next) => { previewModelServices = structuredClone(next); return structuredClone(next); },
-  syncServiceModels: async (service) => service.models,
+  syncServiceModels: async (service) => { if (service.provider !== 'ollama' && !service.apiKey) throw new Error('尚未配置 API 密钥，请填写后同步'); return { models: service.models, warnings: [] }; },
 
    onNavigate: () => () => {},
-   productRequest: async ({ path }) => {
+   productRequest: async ({ path, method = 'GET', body }) => {
+     if (${workbenchApi} && path.startsWith('/admin/api/workbench')) {
+       const response = await fetch(path, { method, body, headers: { 'Content-Type': 'application/json' } });
+       return { status: response.status, contentType: 'application/json', body: await response.text() };
+     }
      const overview = {
        version: 'preview', engine: 'pglite', schema_pack: 'preview', chat_model: 'mimo:mimo-v2.5-pro', embedding_model: 'zhipu:embedding-3', embedding_dimensions: 1024, expansion_model: null,
        stats: { page_count: 0, chunk_count: 0, embedded_count: 0, link_count: 0, timeline_entry_count: 0, pages_by_type: {} },
        embedding_coverage: 0, pending_embeddings: 0, recent_write_at: null, sources: [], main_source_id: 'default', federated_source_count: 0,
        provider_status: { providers: { mimo: true, zhipu: true }, chat: { enabled: true, chat_model: 'mimo:mimo-v2.5-pro', provider: 'mimo', missing: [] } }, llm_enabled: true, config: {}
      };
-     const body = path.startsWith('/admin/api/brain/overview') ? overview : path === '/admin/api/theme' ? { source: '${theme}' } : { error: '此预览不连接真实知识服务' };
-     return { status: path.startsWith('/admin/api/brain/overview') || path === '/admin/api/theme' ? 200 : 503, contentType: 'application/json', body: JSON.stringify(body) };
+     const responseBody = path.startsWith('/admin/api/brain/overview') ? overview : path === '/admin/api/theme' ? { source: '${theme}' } : { error: '此预览不连接真实知识服务' };
+     return { status: path.startsWith('/admin/api/brain/overview') || path === '/admin/api/theme' ? 200 : 503, contentType: 'application/json', body: JSON.stringify(responseBody) };
    },
    getSetup: async () => ({
     setup: {

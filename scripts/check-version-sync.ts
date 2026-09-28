@@ -15,6 +15,7 @@ export function validateVersionContract(contract: VersionContract): string[] {
   const errors: string[] = [];
   const rootVersion = contract.versionFile.trim().replace(/^\uFEFF/, '');
 
+  if (contract.desktopPackage !== rootVersion) errors.push(`desktop/package.json=${contract.desktopPackage}, VERSION=${rootVersion}`);
   if (!rootVersion) errors.push('VERSION is empty');
   if (contract.corePackage !== rootVersion) {
     errors.push(`package.json=${contract.corePackage}, VERSION=${rootVersion}`);
@@ -56,7 +57,7 @@ export function checkWorkspaceVersions(root = join(import.meta.dir, '..')): void
       "Synchronize VERSION and package versions, then run 'bun run build:admin'.",
     );
   }
-  console.log(`[check-version-sync] core ${corePackage.version}, desktop ${desktopPackage.version}`);
+  console.log(`[check-version-sync] PMBrain ${desktopPackage.version} (unified)`);
 }
 
 if (import.meta.main) checkWorkspaceVersions();
