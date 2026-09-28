@@ -1,3 +1,4 @@
+import type { ModelService, ModelServicesState, ServiceModel } from '../../../shared/model-services.js';
 import type { MemoryWritebackStatus, MemoryWritebackUpdate } from '../../../shared/contracts/brain.js';
 import { contextBridge, ipcRenderer } from 'electron';
 import type { SidecarState } from '../main/sidecar-manager.js';
@@ -195,6 +196,9 @@ export interface PMBrainDesktopApi {
   chooseDirectory(initialPath?: string): Promise<string | null>;
   inspectKnowledgeSourceDirectory(path: string): Promise<DesktopKnowledgeSourceStatus>;
   initializeKnowledgeSourceGit(path: string): Promise<DesktopKnowledgeSourceStatus>;
+  getModelServices(): Promise<ModelServicesState>;
+  saveModelServices(input: ModelServicesState): Promise<ModelServicesState>;
+  syncServiceModels(service: ModelService): Promise<ServiceModel[]>;
   getProviderModels(provider: string, touchpoint: DesktopModelTouchpoint): Promise<DesktopProviderModels>;
   testModelConnection(input: DesktopModelConnectionTestInput): Promise<DesktopModelConnectionTestResult>;
   getAdvancedModelConfig(): Promise<AdvancedModelConfig>;
@@ -326,6 +330,9 @@ const api: PMBrainDesktopApi = {
   chooseDirectory: (initialPath) => ipcRenderer.invoke('desktop:choose-directory', initialPath),
   inspectKnowledgeSourceDirectory: (path) => ipcRenderer.invoke('desktop:inspect-knowledge-source', path),
   initializeKnowledgeSourceGit: (path) => ipcRenderer.invoke('desktop:initialize-knowledge-source-git', path),
+  getModelServices: () => ipcRenderer.invoke('desktop:get-model-services'),
+  saveModelServices: input => ipcRenderer.invoke('desktop:save-model-services', input),
+  syncServiceModels: service => ipcRenderer.invoke('desktop:sync-service-models', service),
   getProviderModels: (provider, touchpoint) => ipcRenderer.invoke('desktop:get-provider-models', provider, touchpoint),
   testModelConnection: input => ipcRenderer.invoke('desktop:test-model-connection', input),
   getAdvancedModelConfig: () => ipcRenderer.invoke('desktop:get-advanced-model-config'),

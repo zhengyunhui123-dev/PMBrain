@@ -1,3 +1,4 @@
+import { readModelServices, saveModelServices, syncServiceModels } from './models/model-services.js';
 import { app, dialog, nativeTheme, shell } from 'electron';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -404,6 +405,15 @@ if (!app.requestSingleInstanceLock()) {
       launchIntegration: client => launchDesktopIntegration(client, path => shell.openPath(path)),
       inspectKnowledgeSourceDirectory,
       initializeKnowledgeSourceGit,
+      modelServices: readModelServices,
+      syncServiceModels,
+      saveModelServices: async input => {
+        if (setupController.inProgress || databaseTransferController.inProgress) throw new Error('配置或数据库操作进行中，请稍后再保存');
+        const restart = Boolean(sidecarController.current);
+        if (restart) await sidecarController.stop();
+        try { return saveModelServices(input); }
+        finally { if (restart) await sidecarController.start(false); }
+      },
       providerModels: listDesktopProviderModels,
       testModelConnection,
       advancedModelConfig: () => readAdvancedModelConfig(runtime()),

@@ -1,3 +1,4 @@
+import { SERVICE_PRESETS, newServiceModel } from '../../shared/model-services.js';
 import { existsSync, readFileSync, writeFileSync, mkdtempSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -76,9 +77,19 @@ const panelScrollTarget: Record<Panel, string> = {
 };
 const scrollTarget = panelScrollTarget[panel];
 
+const previewServices = SERVICE_PRESETS.map(([provider, name, baseUrl]) => ({ id: provider, provider, name, baseUrl, apiKey: '', enabled: provider === 'ollama', models: provider === 'ollama' ? [
+  { ...newServiceModel('qwen3:4b'), group: 'ollama', capabilities: ['reasoning', 'tools'] },
+  { ...newServiceModel('gemma3:4b'), group: 'ollama', capabilities: ['vision'] },
+  { ...newServiceModel('qwen3-embedding:0.6b', 'embedding'), group: 'qwen3' },
+] : [] }));
 const mockApi = `
 <script>
+let previewModelServices = ${JSON.stringify({ services: [], revision: 'preview' }).replace('"services":[]', '"services":' + JSON.stringify(previewServices))};
 window.pmbrainDesktop = {
+  getModelServices: async () => structuredClone(previewModelServices),
+  saveModelServices: async (next) => { previewModelServices = structuredClone(next); return structuredClone(next); },
+  syncServiceModels: async (service) => service.models,
+
    onNavigate: () => () => {},
    productRequest: async ({ path }) => {
      const overview = {

@@ -3253,3 +3253,19 @@ $('#daily-identity-merge').addEventListener('click', async () => {
   await refreshDailyPanel();
   if (result.entity_id) void renderDailyPersonCard(result.entity_id);
 });
+
+window.addEventListener('pmbrain:models-updated', () => { void window.pmbrainDesktop.getSetup().then(populate).catch(error => setNotice('error', String(error))); });
+
+export async function saveDatabaseSettings(): Promise<void> {
+  const knowledgeDirectory = ($<HTMLInputElement>('#knowledge-directory')).value;
+  const knowledgeSourceId = ($<HTMLInputElement>('#knowledge-source-id')).value;
+  const next = await window.pmbrainDesktop.saveSetup({
+    engine: selectedEngine(),
+    databasePath: ($<HTMLInputElement>('#database-path')).value,
+    databaseUrl: ($<HTMLInputElement>('#database-url')).value,
+    knowledgeDirectory,
+    knowledgeSourceId,
+    knowledgeSourceChanged: knowledgeDirectory.trim() !== loadedKnowledgeDirectory || knowledgeSourceId.trim() !== loadedKnowledgeSourceId,
+  });
+  populate(next);
+}
