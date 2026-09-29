@@ -62,3 +62,19 @@ export function serviceModelValue(service: ModelService, model: ServiceModel): s
 export function availableServiceModels(services: ModelService[], kind: ServiceModel['kind']) {
   return services.filter(service => service.enabled).flatMap(service => service.models.filter(model => model.kind === kind).map(model => ({ value: serviceModelValue(service, model), label: `${model.name} · ${service.name}`, model, service })));
 }
+export type ServiceModelFilter = 'all' | ServiceModel['kind'];
+export function serviceEndpointError(service: { name: string; baseUrl: string }): string | null {
+  try {
+    const url = new URL(service.baseUrl.trim());
+    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) return `${service.name}：API 地址必须为不含账号、查询参数的 HTTP(S) 地址`;
+  } catch { return `${service.name}：请填写完整的 API 地址，例如 http://localhost:1234/v1`; }
+  return null;
+}
+export function listedServiceModels(models: ServiceModel[], query: string, filter: ServiceModelFilter = 'all'): ServiceModel[] {
+  const text = query.trim().toLowerCase();
+  return models.filter(model => (filter === 'all' || model.kind === filter) && (!text || `${model.name} ${model.id}`.toLowerCase().includes(text)));
+}
+export function serviceModelsNotOnRemote(local: ServiceModel[], remote: ServiceModel[]): ServiceModel[] {
+  const ids = new Set(remote.map(model => model.id));
+  return local.filter(model => !ids.has(model.id));
+}

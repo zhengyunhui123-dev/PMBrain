@@ -98,6 +98,15 @@
 .model-role small { font-size: 12px; color: var(--product-muted); margin-top: 8px; display: block; }
 .model-modal-overlay { position: fixed; z-index: 1000; inset: 0; display: grid; place-items: center; background: #0009; padding: 20px; }
 .model-modal { width: 520px; max-width: 100%; max-height: calc(100vh - 40px); overflow: auto; background: var(--product-bg); border: 1px solid var(--product-line); border-radius: 12px; padding: 24px; box-shadow: 0 20px 60px #0006; }
+.model-modal.model-sync { width: min(640px, 100%); display: flex; flex-direction: column; }
+.model-sync header { gap: 12px; align-items: flex-start; }
+.model-sync header h2 { display: flex; align-items: baseline; gap: 8px; }
+.model-sync header h2 small { color: var(--product-muted); font-size: 12px; font-weight: normal; }
+.sync-toolbar { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+.sync-filters { display: flex; flex-wrap: wrap; gap: 6px; margin: 12px 0; }
+.sync-filters button[aria-pressed="true"] { background: var(--product-panel); border-color: var(--product-muted); }
+.sync-list { overflow: auto; max-height: min(52vh, 480px); }
+.sync-kind { color: var(--product-muted); font-size: 11px; flex-shrink: 0; }
 .model-modal header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 18px; }
 .model-modal header h2 { font-size: 16px; margin: 0; }
 .model-modal label { display: block; font-size: 12px; margin: 14px 0 8px; }

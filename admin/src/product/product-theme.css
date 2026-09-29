@@ -19,8 +19,6 @@ html[data-theme="dark"] .product-app :is(.product-nav nav button.active,.product
   --line: #353535; --line-strong: #454545; --text: #e6e6e6; --text-secondary: #aaa;
   background: #191919;
 }
-.connection-tabs { display: flex; gap: 8px; margin-bottom: 20px; }
-.connection-tabs button[aria-pressed="true"] { background: var(--product-panel); border-color: var(--product-muted); }
 .model-services .ocr-enabled { display: flex; gap: 10px; align-items: center; padding: 14px 0; }
 .model-services .ocr-enabled input { width: auto; }
 .model-services .model-notice { white-space: pre-wrap; overflow-wrap: anywhere; }
