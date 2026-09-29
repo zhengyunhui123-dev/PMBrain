@@ -6,10 +6,14 @@ export interface WorkbenchMessage {
   createdAt: string;
   status: 'complete' | 'running' | 'error' | 'cancelled';
   model?: string;
+  modelName?: string;
   error?: string;
   stage?: string;
   citations?: WorkbenchCitation[];
+  knowledge?: 'used' | 'none' | 'off';
   contextMessages?: number;
+  contextNote?: string;
+  stopReason?: 'end' | 'length' | 'other';
 }
 export interface WorkbenchConversation {
   id: string;
@@ -19,5 +23,7 @@ export interface WorkbenchConversation {
   createdAt: string;
   updatedAt: string;
   messages: WorkbenchMessage[];
+  summary?: string;
+  summaryUntil?: string;
 }
 export interface WorkbenchModel { id: string; name: string }

@@ -2393,6 +2393,9 @@ export interface ChatOpts {
    * ignored on providers without `supports_prompt_cache`.
    */
   cacheSystem?: boolean;
+  /** Receives answer text as the provider streams it. Tool calls stay on the buffered path. */
+  onTextDelta?: (delta: string) => void;
+  onTextReset?: (model: string) => void;
 }
 
 /** Stringify a tool result without letting BigInt/circular values kill a job. */
@@ -2582,9 +2585,10 @@ function mapStopReason(
 
 /**
  * Run one chat completion turn. Provider-neutral wrapper over Vercel AI SDK's
- * text generation. Plain Ollama text calls use its native streamed chat API;
- * Ollama tool calls use AI SDK `streamText`. Hosted providers retain
- * `generateText`, so the local compatibility fix cannot alter cloud requests.
+ * text generation. Plain Ollama text calls use its native streamed chat API.
+ * Ollama tool calls use AI SDK `streamText`. Hosted providers use
+ * `generateText` unless the caller supplies `onTextDelta`, which streams
+ * text for a no-tool call. Qwen's JSON envelope is not forwarded as raw deltas.
  * Tool-use blocks are normalized; cache_control markers are applied only on
  * Anthropic when `cacheSystem: true`.
  *
@@ -2739,6 +2743,7 @@ async function chatOnce(opts: ChatOpts): Promise<ChatResult> {
       }
       return messages;
     })();
+    const emitHostedDeltas = Boolean(opts.onTextDelta) && !nativeMessages && (opts.tools?.length ?? 0) === 0;
     const result = nativeMessages
       ? await (async () => {
           const cfg = requireConfig();
@@ -2778,6 +2783,7 @@ async function chatOnce(opts: ChatOpts): Promise<ChatResult> {
             contextWindow: knowledgeSynthesis ? 8192 : undefined,
             apiKey: auth.apiKey,
             headers: auth.headers,
+            onText: qwenAnswerEnvelope ? undefined : opts.onTextDelta,
             format: qwenAnswerEnvelope
               ? {
                   type: 'object',
@@ -2809,18 +2815,38 @@ async function chatOnce(opts: ChatOpts): Promise<ChatResult> {
             content: answer ? [{ type: 'text' as const, text: answer }] : [],
           };
         })()
-      : recipe.id === 'ollama'
+      : recipe.id === 'ollama' || emitHostedDeltas
         ? await (async () => {
           const streamed = streamText(generationOptions);
-          const [content, text, toolCalls, finishReason, usage, providerMetadata] = await Promise.all([
-            streamed.content,
-            streamed.text,
-            streamed.toolCalls,
-            streamed.finishReason,
-            streamed.usage,
-            streamed.providerMetadata,
-          ]);
-          return { content, text, toolCalls, finishReason, usage, providerMetadata };
+          if (!emitHostedDeltas) {
+            const [content, text, toolCalls, finishReason, usage, providerMetadata] = await Promise.all([
+              streamed.content,
+              streamed.text,
+              streamed.toolCalls,
+              streamed.finishReason,
+              streamed.usage,
+              streamed.providerMetadata,
+            ]);
+            return { content, text, toolCalls, finishReason, usage, providerMetadata };
+          }
+          let streamedText = '';
+          let finishReason: string | undefined;
+          let usage: unknown;
+          let providerMetadata: Record<string, any> | undefined;
+          const toolCalls: unknown[] = [];
+          for await (const part of streamed.fullStream as AsyncIterable<{ type?: string; text?: string; finishReason?: string; usage?: unknown; providerMetadata?: Record<string, any>; error?: unknown; toolCallId?: string; toolName?: string; input?: unknown }>) {
+            if (part.type === 'text-delta' && part.text) {
+              streamedText += part.text;
+              opts.onTextDelta?.(part.text);
+            } else if (part.type === 'tool-call') toolCalls.push(part);
+            else if (part.type === 'finish-step') {
+              finishReason = part.finishReason ?? finishReason;
+              usage = part.usage ?? usage;
+              providerMetadata = part.providerMetadata ?? providerMetadata;
+            } else if (part.type === 'finish') finishReason = part.finishReason ?? finishReason;
+            else if (part.type === 'error') throw part.error;
+          }
+          return { content: streamedText ? [{ type: 'text', text: streamedText }] : [], text: streamedText, toolCalls, finishReason, usage, providerMetadata };
         })()
         : await generateText(generationOptions);
 
@@ -2946,16 +2972,18 @@ export async function chat(opts: ChatOpts): Promise<ChatResult> {
   let lastError: unknown;
   for (let index = 0; index < candidates.length; index++) {
     const model = candidates[index]!;
+    let emitted = false;
+    if (index > 0) opts.onTextReset?.(model);
     try {
-      const result = await chatOnce({ ...opts, model });
+      const result = await chatOnce({ ...opts, model, ...(opts.onTextDelta ? { onTextDelta: (delta: string) => { if (delta) emitted = true; opts.onTextDelta!(delta); } } : {}) });
       const shouldFallback = result.stopReason === 'refusal' || result.stopReason === 'content_filter';
-      if (!shouldFallback || index === candidates.length - 1) return result;
+      if (!shouldFallback || index === candidates.length - 1 || (emitted && !opts.onTextReset)) return result;
       process.stderr.write(
         `[models] chat model "${model}" returned ${result.stopReason}; trying fallback "${candidates[index + 1]}".\n`,
       );
     } catch (err) {
       lastError = err;
-      if (index === candidates.length - 1 || !isChatFallbackEligible(err, opts.abortSignal)) {
+      if (index === candidates.length - 1 || (emitted && !opts.onTextReset) || !isChatFallbackEligible(err, opts.abortSignal)) {
         throw err;
       }
       process.stderr.write(

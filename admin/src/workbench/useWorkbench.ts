@@ -43,11 +43,11 @@ export function useWorkbench() {
         const next = await workbenchRequest<WorkbenchConversation>(`/conversations/${id}`);
         if (stopped || active.current !== id) return;
         setConversation(next);
-        if (next.messages.some(m => m.status === 'running')) timer = setTimeout(poll, 700);
+        if (next.messages.some(m => m.status === 'running')) timer = setTimeout(poll, 200);
         else await refresh();
       } catch (reason) { if (!stopped) { setError(reason instanceof Error ? reason.message : String(reason)); timer = setTimeout(poll, 2500); } }
     };
-    timer = setTimeout(poll, 500);
+    timer = setTimeout(poll, 150);
     return () => { stopped = true; clearTimeout(timer); };
   }, [conversation?.id, running]);
   const select = async (id?: string) => {
@@ -58,16 +58,31 @@ export function useWorkbench() {
     catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
     finally { setPending(false); }
   };
-  const send = async (text: string, retry = false) => {
+  const send = async (text: string, retry = false, editMessageId?: string) => {
     if (pending || running) return false;
     setPending(true); setError('');
+    let createdId: string | undefined;
     try {
       let id = conversation?.id;
-      if (!id) { const created = await workbenchRequest<WorkbenchConversation>('/conversations', { model, knowledge }); id = created.id; active.current = id; }
-      const next = await workbenchRequest<WorkbenchConversation>(`/conversations/${id}/messages`, { text, model, knowledge, retry });
+      if (!id) { const created = await workbenchRequest<WorkbenchConversation>('/conversations', { model, knowledge }); id = created.id; createdId = id; active.current = id; setConversation(created); }
+      const next = await workbenchRequest<WorkbenchConversation>(`/conversations/${id}/messages`, { text, model, knowledge, retry, ...(editMessageId ? { editMessageId } : {}) });
       if (active.current === id) setConversation(next);
-      await refresh(); return true;
-    } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); return false; }
+      try { await refresh(); } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
+      return true;
+    } catch (reason) {
+      if (createdId) {
+        try {
+          await workbenchRequest(`/conversations/${createdId}?emptyOnly=true`, undefined, 'DELETE');
+          if (active.current === createdId) { active.current = undefined; setConversation(undefined); }
+        } catch {
+          try {
+            const saved = await workbenchRequest<WorkbenchConversation>(`/conversations/${createdId}`);
+            if (active.current === createdId) setConversation(saved);
+          } catch {}
+        }
+      }
+      setError(reason instanceof Error ? reason.message : String(reason)); return false;
+    }
     finally { setPending(false); }
   };
   const action = async (kind: 'cancel' | 'delete' | 'rename', title?: string) => {

@@ -3,6 +3,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { WorkbenchService, conversationContext } from '../src/product/workbench/service';
+import { knowledgeWorkbenchAnswer } from '../src/product/workbench/routes';
 import { WorkbenchStore } from '../src/product/workbench/store';
 
 const root = () => mkdtempSync(join(tmpdir(), 'pmbrain-workbench-test-'));
@@ -47,4 +48,266 @@ test('retry replaces only the last reply and startup exposes interrupted generat
   saved.messages[1].status = 'running'; store.save(saved);
   const restored = new WorkbenchService(store, () => [], async () => { throw new Error('不应调用'); });
   expect(restored.get(thread.id).messages[1].error).toContain('中断');
+});
+
+test('回答会逐段写进会话，生成结束前就能看到前半段，并记下模型的界面名称', async () => {
+  const dir = root();
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  let started!: () => void;
+  const startedGate = new Promise<void>(resolve => { started = resolve; });
+  const service = new WorkbenchService(new WorkbenchStore(dir), () => [{ id: 'deepseek:deepseek-flash', name: 'DeepSeek Flash · DeepSeek' }], async input => {
+    input.onDelta?.('前半段');
+    started();
+    await gate;
+    input.onDelta?.('后半段');
+    return { text: '前半段后半段', model: 'deepseek:deepseek-flash', citations: [], knowledge: 'off', stopReason: 'end' };
+  });
+  const thread = service.create({ knowledge: false });
+  service.send(thread.id, { text: '你好' });
+  await startedGate;
+  const partial = new WorkbenchStore(dir).get(thread.id).messages.at(-1);
+  expect(partial?.status).toBe('running');
+  expect(partial?.text).toBe('前半段');
+  expect(partial?.modelName).toBe('DeepSeek Flash · DeepSeek');
+  expect(partial?.contextNote).toBeUndefined();
+  release();
+  await service.settled(thread.id);
+  const done = new WorkbenchStore(dir).get(thread.id).messages.at(-1);
+  expect(done?.status).toBe('complete');
+  expect(done?.text).toBe('前半段后半段');
+  expect(done?.modelName).toBe('DeepSeek Flash · DeepSeek');
+});
+
+test('修改已经发送的问题后，从那条问题重新回答，后面的内容被替换', async () => {
+  const seen: string[][] = [];
+  const service = new WorkbenchService(new WorkbenchStore(root()), () => [{ id: 'ollama:local', name: '本地' }], async input => {
+    seen.push(input.messages.map(message => message.text));
+    return { text: `回答：${input.messages.at(-1)?.text}`, model: 'ollama:local', citations: [] };
+  });
+  const thread = service.create({});
+  service.send(thread.id, { text: '原来的问题' }); await service.settled(thread.id);
+  service.send(thread.id, { text: '后面的问题' }); await service.settled(thread.id);
+  const saved = service.get(thread.id);
+  saved.summary = '旧摘要';
+  saved.summaryUntil = saved.messages[2]!.id;
+  (service as unknown as { store: WorkbenchStore }).store.save(saved);
+  expect(() => service.send(thread.id, { text: '改正', editMessageId: saved.messages[1]!.id })).toThrow('只能修改你发送的问题');
+  service.send(thread.id, { text: '改正后的问题', editMessageId: saved.messages[0]!.id });
+  await service.settled(thread.id);
+  const next = service.get(thread.id);
+  expect(next.messages.map(message => message.text)).toEqual(['改正后的问题', '回答：改正后的问题']);
+  expect(next.summary).toBeUndefined();
+  expect(next.summaryUntil).toBeUndefined();
+  expect(next.title).toBe('改正后的问题');
+  expect(seen.at(-1)).toEqual(['改正后的问题']);
+});
+
+test('知识库没有检索到资料时，回答会标明这是一般知识', async () => {
+  let system = '';
+  const answer = knowledgeWorkbenchAnswer({} as any, {
+    search: async () => ({ results: [] } as any),
+    answer: async input => { system = input.system ?? ''; return { text: '一般说法', model: input.model ?? 'm', stopReason: 'end' } as any; },
+  });
+  const result = await answer({ model: 'm', knowledge: true, signal: new AbortController().signal, progress: () => {}, messages: [{ id: '1', role: 'user', text: '库里没有的问题', status: 'complete', createdAt: '' }] });
+  expect(system).toContain('本轮没有检索到相关资料');
+  expect(result.knowledge).toBe('none');
+  const service = new WorkbenchService(new WorkbenchStore(root()), () => [{ id: 'ollama:local', name: '本地' }], async () => result);
+  const thread = service.create({ knowledge: true });
+  service.send(thread.id, { text: '库里没有的问题' });
+  await service.settled(thread.id);
+  expect(service.get(thread.id).messages.at(-1)?.knowledge).toBe('none');
+});
+
+test('对话变长后，更早的轮次压缩成摘要并继续发给模型，而不是直接丢掉', async () => {
+  const seen: Array<{ messages: string[]; summary?: string }> = [];
+  const summaries: Array<{ prior: string; transcript: string }> = [];
+  const service = new WorkbenchService(new WorkbenchStore(root()), () => [{ id: 'ollama:local', name: '本地' }], async input => {
+    seen.push({ messages: input.messages.map(message => message.text), summary: input.summary });
+    return { text: '好', model: 'ollama:local', citations: [], knowledge: 'off', stopReason: 'end' };
+  }, async ({ prior, transcript }) => {
+    summaries.push({ prior, transcript });
+    return `摘要:${prior}|${transcript}`;
+  });
+  const thread = service.create({ model: 'ollama:local', knowledge: false });
+  const seeded = service.get(thread.id);
+  const now = new Date().toISOString();
+  for (let i = 0; i < 30; i++) {
+    seeded.messages.push({ id: `user-${i}`, role: 'user', text: `问题${i}`, createdAt: now, status: 'complete' });
+    seeded.messages.push({ id: `assistant-${i}`, role: 'assistant', text: `回答${i}`, createdAt: now, status: 'complete' });
+  }
+  (service as unknown as { store: WorkbenchStore }).store.save(seeded);
+  expect(conversationContext(service.get(thread.id).messages).length).toBe(60);
+  service.send(thread.id, { text: '最新问题' });
+  await service.settled(thread.id);
+  expect(seen[0]?.messages.length).toBeLessThanOrEqual(24);
+  expect(seen[0]?.messages).not.toContain('问题0');
+  expect(seen[0]?.summary).toContain('问题0');
+  expect(service.get(thread.id).messages.at(-1)?.contextNote).toContain('压缩');
+  const firstTranscript = summaries[0]?.transcript ?? '';
+  expect(firstTranscript).toContain('问题0');
+  service.send(thread.id, { text: '又一个问题' });
+  await service.settled(thread.id);
+  expect(summaries.length).toBeGreaterThan(1);
+  expect(summaries[1]?.prior).toContain('问题0');
+  expect(summaries[1]?.transcript).not.toContain('问题0');
+  expect((summaries[1]?.transcript.length ?? 0)).toBeLessThan(firstTranscript.length);
+  expect(seen[1]?.messages.length).toBeLessThanOrEqual(24);
+});
+
+test('摘要失败时停止回答并保留历史与摘要进度', async () => {
+  const seen: Array<{ messages: string[]; summary?: string }> = [];
+  const service = new WorkbenchService(new WorkbenchStore(root()), () => [{ id: 'ollama:local', name: '本地' }], async input => {
+    seen.push({ messages: input.messages.map(message => message.text), summary: input.summary });
+    return { text: '好', model: 'ollama:local', citations: [] };
+  }, async () => { throw new Error('摘要失败'); });
+  const thread = service.create({ knowledge: false });
+  const seeded = service.get(thread.id);
+  const now = new Date().toISOString();
+  for (let i = 0; i < 30; i++) {
+    seeded.messages.push({ id: `user-${i}`, role: 'user', text: `问题${i}`, createdAt: now, status: 'complete' });
+    seeded.messages.push({ id: `assistant-${i}`, role: 'assistant', text: `回答${i}`, createdAt: now, status: 'complete' });
+  }
+  (service as unknown as { store: WorkbenchStore }).store.save(seeded);
+  service.send(thread.id, { text: '最新问题' });
+  await service.settled(thread.id);
+  expect(seen).toHaveLength(0);
+  expect(service.get(thread.id).messages.at(-1)?.error).toContain('摘要失败');
+  expect(service.get(thread.id).summaryUntil).toBeUndefined();
+  expect(service.get(thread.id).messages[0].text).toBe('问题0');
+});
+
+test('摘要失败后重试不会跳过待摘要内容，长消息末尾也参与摘要', async () => {
+  const store = new WorkbenchStore(root()); let failing = true; const transcripts: string[] = [];
+  const service = new WorkbenchService(store, () => [{ id: 'local', name: '本地' }], async () => ({ text: '好', model: 'local', citations: [] }), async input => {
+    transcripts.push(input.transcript);
+    if (failing) throw new Error('摘要暂时失败');
+    return '包含末尾决定的摘要';
+  });
+  const thread = service.create({ knowledge: false });
+  thread.summary = '旧'.repeat(6000); thread.summaryUntil = 'a0';
+  for (let i = 0; i < 20; i++) thread.messages.push(
+    { id: `u${i}`, role: 'user', text: i === 5 ? '长'.repeat(10000) + '末尾关键决定' : `问题${i}`, status: 'complete', createdAt: '' },
+    { id: `a${i}`, role: 'assistant', text: `回答${i}`, status: 'complete', createdAt: '' },
+  );
+  store.save(thread); service.send(thread.id, { text: '继续' }); await service.settled(thread.id);
+  expect(store.get(thread.id).summaryUntil).toBe('a0');
+  expect(store.get(thread.id).summary).toBe(thread.summary);
+  failing = false; transcripts.length = 0;
+  service.send(thread.id, { retry: true }); await service.settled(thread.id);
+  expect(transcripts.join('')).toContain('末尾关键决定');
+  expect(store.get(thread.id).messages.at(-1)?.status).toBe('complete');
+});
+
+test('自动清理只允许删除空会话', async () => {
+  const service = new WorkbenchService(new WorkbenchStore(root()), () => [{ id: 'local', name: '本地' }], async () => ({ text: '好', model: 'local', citations: [] }));
+  const empty = service.create({}); service.remove(empty.id, true); expect(() => service.get(empty.id)).toThrow();
+  const used = service.create({}); service.send(used.id, { text: '保留' }); await service.settled(used.id);
+  expect(() => service.remove(used.id, true)).toThrow(); expect(service.get(used.id).messages).toHaveLength(2);
+});
+
+test('续写切换模型时替换当前段，保留前一段及停止时的有效文字', async () => {
+  let calls = 0; let visible = ''; const replacements: string[] = [];
+  const answer = knowledgeWorkbenchAnswer({} as any, {
+    search: async () => ({ results: [] } as any),
+    answer: async input => {
+      if (++calls === 1) { input.onTextDelta?.('完整首段'); return { text: '完整首段', model: 'first', stopReason: 'length' } as any; }
+      input.onTextDelta?.('失败段'); input.onTextReset?.('second'); input.onTextDelta?.('有效续写');
+      return { text: '有效续写', model: 'second', stopReason: 'end' } as any;
+    },
+  });
+  const result = await answer({ model: 'first', knowledge: false, messages: [], signal: new AbortController().signal, progress: () => {}, onDelta: text => { visible += text; }, onReplace: text => { visible = text; replacements.push(text); } });
+  expect(replacements).toEqual(['完整首段']); expect(visible).toBe('完整首段有效续写'); expect(result.text).toBe(visible);
+  const service = new WorkbenchService(new WorkbenchStore(root()), () => [{ id: 'first', name: '一' }, { id: 'second', name: '二' }], async input => {
+    input.onDelta?.('失败段'); input.onReplace?.('有效段', 'second');
+    service.cancel(thread.id);
+    return { text: '迟到内容', model: 'second', citations: [] };
+  });
+  const thread = service.create({}); service.send(thread.id, { text: '问题' }); await service.settled(thread.id);
+  const reply = service.get(thread.id).messages.at(-1);
+  expect(reply?.text).toBe('有效段'); expect(reply?.modelName).toBe('二'); expect(reply?.status).toBe('cancelled');
+});
+
+test('模型因为长度停下时会自动续写，检索只做一次', async () => {
+  const sent: any[] = [];
+  let searches = 0;
+  const answer = knowledgeWorkbenchAnswer({} as any, {
+    search: async () => { searches++; return { results: [] } as any; },
+    answer: async input => {
+      sent.push(input);
+      const text = sent.length === 1 ? '甲' : '乙';
+      input.onTextDelta?.(text);
+      return { text, model: input.model, stopReason: sent.length === 1 ? 'length' : 'end' } as any;
+    },
+  });
+  const deltas: string[] = [];
+  const result = await answer({ model: 'm', knowledge: true, signal: new AbortController().signal, progress: () => {}, onDelta: delta => deltas.push(delta), messages: [{ id: '1', role: 'user', text: '写长一点', status: 'complete', createdAt: '' }] });
+  expect(searches).toBe(1);
+  expect(sent).toHaveLength(2);
+  expect(result.text).toBe('甲乙');
+  expect(result.knowledge).toBe('none');
+  expect(result.stopReason).toBe('end');
+  expect(deltas).toEqual(['甲', '乙']);
+  expect(sent[1].messages.at(-2).content).toBe('甲');
+  expect(sent[1].messages.at(-1).content).toContain('接着写完');
+  expect(sent[1].system).toContain('本轮没有检索到相关资料');
+});
+
+test('续写遇到空内容或非长度停止时不再循环，连续八次长度上限会停下来', async () => {
+  const empty = knowledgeWorkbenchAnswer({} as any, {
+    search: async () => { throw new Error('不应检索'); },
+    answer: async input => ({ text: input.messages.some((message: any) => message.content === '请从中断处接着写完，不要重复已经写过的内容。') ? '' : '甲', model: 'm', stopReason: 'length' }) as any,
+  });
+  const stopped = await empty({ model: 'm', knowledge: false, signal: new AbortController().signal, progress: () => {}, messages: [{ id: '1', role: 'user', text: '写', status: 'complete', createdAt: '' }] });
+  expect(stopped.text).toBe('甲');
+  expect(stopped.stopReason).toBe('end');
+  let calls = 0;
+  const capped = knowledgeWorkbenchAnswer({} as any, {
+    search: async () => ({ results: [] } as any),
+    answer: async input => { calls++; input.onTextDelta?.(String(calls)); return { text: String(calls), model: input.model, stopReason: 'length' } as any; },
+  });
+  const limited = await capped({ model: 'm', knowledge: true, signal: new AbortController().signal, progress: () => {}, messages: [{ id: '1', role: 'user', text: '一直写', status: 'complete', createdAt: '' }] });
+  expect(calls).toBe(8);
+  expect(limited.text).toBe('12345678');
+  expect(limited.stopReason).toBe('length');
+  let otherCalls = 0;
+  const other = knowledgeWorkbenchAnswer({} as any, {
+    search: async () => ({ results: [] } as any),
+    answer: async () => { otherCalls++; return { text: '完', model: 'm', stopReason: 'other' } as any; },
+  });
+  const finished = await other({ model: 'm', knowledge: false, signal: new AbortController().signal, progress: () => {}, messages: [{ id: '1', role: 'user', text: '短答', status: 'complete', createdAt: '' }] });
+  expect(otherCalls).toBe(1);
+  expect(finished.text).toBe('完');
+  expect(finished.knowledge).toBe('off');
+});
+
+test('知识检索带上最近几轮问题，并把更早摘要交给模型', async () => {
+  let query = '';
+  let system = '';
+  const long = '预算'.repeat(300);
+  const answer = knowledgeWorkbenchAnswer({} as any, {
+    search: async (_engine, input) => { query = input.query; return { results: [] } as any; },
+    answer: async input => { system = input.system ?? ''; return { text: '好', model: input.model ?? 'm', stopReason: 'end' } as any; },
+  });
+  await answer({
+    model: 'm', knowledge: true, summary: '之前决定用蓝色', signal: new AbortController().signal, progress: () => {},
+    messages: [
+      { id: '1', role: 'user', text: '最早的独特问题', status: 'complete', createdAt: '' },
+      { id: '2', role: 'assistant', text: '好', status: 'complete', createdAt: '' },
+      { id: '3', role: 'user', text: '第二', status: 'complete', createdAt: '' },
+      { id: '4', role: 'assistant', text: '好', status: 'complete', createdAt: '' },
+      { id: '5', role: 'user', text: '第三', status: 'complete', createdAt: '' },
+      { id: '6', role: 'assistant', text: '好', status: 'complete', createdAt: '' },
+      { id: '7', role: 'user', text: '第四', status: 'complete', createdAt: '' },
+      { id: '8', role: 'assistant', text: '好', status: 'complete', createdAt: '' },
+      { id: '9', role: 'user', text: long, status: 'complete', createdAt: '' },
+    ],
+  });
+  expect(query).toContain('第二');
+  expect(query).toContain('第四');
+  expect(query).not.toContain('最早的独特问题');
+  expect(query).toContain(long.slice(0, 500));
+  expect(query).not.toContain(long);
+  expect(system).toContain('之前决定用蓝色');
+  expect(system).toContain('不要向用户复述');
 });

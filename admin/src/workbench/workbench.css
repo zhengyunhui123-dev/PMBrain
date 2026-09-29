@@ -37,6 +37,8 @@
 .wb-message-body > footer small { font-size: 10px; }
 .wb-muted { color: var(--product-muted); font-size: 12px; padding: 8px 0; }
 .wb-error { color: #ef9494; background: #322020; border: 1px solid #694040; padding: 10px 14px; border-radius: 8px; overflow-wrap: anywhere; }
+.wb-notice { color: #d7c48a; background: #2c2818; border: 1px solid #5c5340; padding: 8px 12px; border-radius: 8px; overflow-wrap: anywhere; }
+.wb-notice button { margin-left: 8px; }
 .wb-progress { color: var(--product-muted); display: flex; gap: 10px; align-items: center; }
 .wb-progress i { width: 7px; height: 7px; background: #9ebbea; border-radius: 50%; }
 .wb-citations { border: 1px solid var(--product-line); border-radius: 8px; margin-top: 16px; padding: 10px 13px; }

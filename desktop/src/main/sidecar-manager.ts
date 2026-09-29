@@ -207,14 +207,12 @@ export class SidecarManager {
   }
 
   async adminResponse(path: string, init: RequestInit = {}): Promise<Response> {
-    const request = async (cookie: string) => fetch(`http://127.0.0.1:${this.port}${path}`, {
-      ...init,
-      headers: {
-        'Content-Type': 'application/json',
-        Cookie: cookie,
-        ...(init.headers ?? {}),
-      },
-    });
+    const request = async (cookie: string) => {
+      const headers = new Headers(init.headers);
+      if (!headers.has('content-type')) headers.set('content-type', 'application/json');
+      headers.set('cookie', cookie);
+      return fetch(`http://127.0.0.1:${this.port}${path}`, { ...init, headers });
+    };
 
     let cookie = await this.getAdminCookie();
     let response = await request(cookie);

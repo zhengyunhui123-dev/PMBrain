@@ -14,6 +14,7 @@ export interface OllamaNativeChatInput {
   format?: unknown;
   temperature?: number;
   abortSignal?: AbortSignal;
+  onText?: (delta: string) => void;
 }
 
 export interface OllamaNativeChatResult {
@@ -158,7 +159,10 @@ export async function streamOllamaNativeChat(
       eval_duration?: number;
     };
     if (chunk.error) throw new Error(`Ollama chat failed: ${chunk.error}`);
-    if (typeof chunk.message?.content === 'string') text += chunk.message.content;
+    if (typeof chunk.message?.content === 'string' && chunk.message.content) {
+      text += chunk.message.content;
+      input.onText?.(chunk.message.content);
+    }
     if (typeof chunk.message?.thinking === 'string') thinking += chunk.message.thinking;
     if (typeof chunk.done_reason === 'string' && chunk.done_reason) finishReason = chunk.done_reason;
     if (typeof chunk.prompt_eval_count === 'number') inputTokens = chunk.prompt_eval_count;
