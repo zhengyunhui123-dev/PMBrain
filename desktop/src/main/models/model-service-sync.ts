@@ -15,6 +15,28 @@ function classify(record: any, id: string): ServiceModel['kind'] {
   if (/rerank|image|audio|speech|transcri/i.test(declared ?? '') || /rerank|whisper|tts-|dall-e|stable-diffusion/i.test(id)) return 'unknown';
   return 'chat';
 }
+function enrichRemoteModel(provider: string, id: string, record: any): ServiceModel {
+  const model = newServiceModel(id, classify(record, id));
+  const chat = getRecipe(provider)?.touchpoints.chat;
+  const known = model.kind === 'chat' && chat?.models.includes(id) ? chat : undefined;
+  const modalities = record.input_modalities ?? record.architecture?.input_modalities;
+  const capabilities = Array.isArray(record.capabilities) ? record.capabilities : undefined;
+  const parameters = Array.isArray(record.supported_parameters) ? record.supported_parameters : undefined;
+  const vision = Array.isArray(modalities) ? modalities.includes('image') : capabilities ? capabilities.includes('vision') : Boolean(known?.supports_vision && (!known.vision_models || known.vision_models.includes(id)));
+  const tools = parameters ? parameters.includes('tools') : capabilities ? capabilities.includes('tools') : known?.supports_tools;
+  const reasoning = Array.isArray(record.effort?.supported_levels) ? record.effort.supported_levels.length > 0 : parameters ? parameters.includes('reasoning') : capabilities?.includes('reasoning');
+  if (vision) model.capabilities.push('vision');
+  if (tools) model.capabilities.push('tools');
+  if (reasoning) model.capabilities.push('reasoning');
+  if (capabilities?.includes('web')) model.capabilities.push('web');
+  const dimensions = record.dimensions ?? record.embedding_length;
+  if (Number.isInteger(dimensions) && dimensions > 0) model.dimensions = dimensions;
+  const context = record.context_window ?? record.context_length ?? record.inputTokenLimit ?? known?.max_context_tokens;
+  if (Number.isInteger(context) && context > 0) model.contextWindow = context;
+  if (known?.cost_per_1m_input_usd !== undefined) model.inputPrice = known.cost_per_1m_input_usd;
+  if (known?.cost_per_1m_output_usd !== undefined) model.outputPrice = known.cost_per_1m_output_usd;
+  return model;
+}
 export async function syncServiceModels(service: ModelService, fetchImpl: typeof fetch = fetch, kind: 'chat' | 'embedding' = 'chat'): Promise<ModelSyncResult> {
   const connection = serviceConnection(service, kind);
   let url: URL;
@@ -58,13 +80,16 @@ export async function syncServiceModels(service: ModelService, fetchImpl: typeof
     try { const body = await request(`${root}/embeddings/models`); if (Array.isArray(body.data)) records.push(...body.data.map((r: any) => ({ ...r, type: 'embedding' }))); }
     catch (error) { warnings.push(error instanceof Error ? error.message : String(error)); }
   }
-  const unique = [...new Map(records.filter(r => r && typeof (r.id ?? r.name ?? r.model) === 'string').map(r => [String(r.id ?? r.name ?? r.model).replace(/^models\//, ''), r])).entries()];
+  const unique = [...new Map(records.filter(r => r && typeof (r.id ?? r.name ?? r.model) === 'string').map(r => {
+    const id = String(r.id ?? r.name ?? r.model);
+    return [service.provider === 'google' ? id.replace(/^models\//, '') : id, r];
+  })).entries()];
   const models: ServiceModel[] = new Array(unique.length);
   let cursor = 0;
   await Promise.all(Array.from({ length: Math.min(4, unique.length) }, async () => {
     while (cursor < unique.length) {
       const index = cursor++; const [id, record] = unique[index];
-      const model = newServiceModel(id, classify(record, id));
+      const model = ollama ? newServiceModel(id, classify(record, id)) : enrichRemoteModel(service.provider, id, record);
       model.name = record.displayName ?? record.display_name ?? record.name ?? id;
       if (ollama) {
         try {
@@ -79,14 +104,6 @@ export async function syncServiceModels(service: ModelService, fetchImpl: typeof
             if (field.endsWith('.embedding_length') && model.kind === 'embedding') model.dimensions = value;
           }
         } catch (error) { model.kind = 'unknown'; warnings.push(`${id}：${error instanceof Error ? error.message : String(error)} 请手动确认模型类型。`); }
-      } else {
-        if (record.architecture?.input_modalities?.includes('image') || record.capabilities?.includes('vision')) model.capabilities.push('vision');
-        if (record.supported_parameters?.includes('tools') || record.capabilities?.includes('tools')) model.capabilities.push('tools');
-        if (record.supported_parameters?.includes('reasoning') || record.capabilities?.includes('reasoning')) model.capabilities.push('reasoning');
-        const dimensions = record.dimensions ?? record.embedding_length;
-        if (Number.isInteger(dimensions) && dimensions > 0) model.dimensions = dimensions;
-        const context = record.context_length ?? record.inputTokenLimit;
-        if (Number.isInteger(context) && context > 0) model.contextWindow = context;
       }
       models[index] = model;
     }

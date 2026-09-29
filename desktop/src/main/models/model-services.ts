@@ -23,20 +23,28 @@ export function hydrateModelServices(config: Record<string, any>, setup: SetupIn
   const services = SERVICE_PRESETS.map(([provider, name, baseUrl]): ModelService => {
     const saved = stored.find(service => service.provider === provider);
     if (saved) return structuredClone(saved);
-    const recipe = getRecipe(provider);
-    const models = [...(recipe?.touchpoints.chat?.models ?? [])].map(id => newServiceModel(id));
-    for (const id of recipe?.touchpoints.embedding?.models ?? []) if (!models.some(m => m.id === id)) models.push(newServiceModel(id, 'embedding'));
-    for (const [kind, full] of [['chat', setup.chatModel], ['embedding', setup.embeddingModel], ['chat', setup.ocrModel]] as const) {
-      if (full?.startsWith(`${provider}:`)) {
+    const models: ServiceModel[] = [];
+    const selections: Array<['chat' | 'embedding' | 'unknown', unknown]> = [
+      ['chat', setup.chatModel], ['embedding', setup.embeddingModel], ['chat', setup.ocrModel],
+      ['chat', config.expansion_model], ['unknown', config.reranker_model], ['chat', config.embedding_image_ocr_model],
+      ...(config.chat_fallback_chain ?? []).map((value: string): ['chat', string] => ['chat', value]),
+      ...Object.entries(config).filter(([key]) => key.startsWith('models.')).map(([, value]): ['chat', unknown] => ['chat', value]),
+    ];
+    for (const [kind, full] of selections) {
+      if (typeof full === 'string' && full.startsWith(`${provider}:`)) {
         const id = full.slice(provider.length + 1);
-        if (!models.some(m => m.id === id)) models.push(newServiceModel(id, kind));
+        if (!models.some(m => m.id === id)) {
+          const model = newServiceModel(id, kind);
+          if (kind === 'embedding') model.dimensions = setup.embeddingDimensions;
+          models.push(model);
+        }
       }
     }
     const apiKey = config.provider_touchpoint_api_keys?.[provider]?.chat ?? config.provider_touchpoint_api_keys?.[provider]?.embedding ?? setup.keyValues[provider] ?? '';
     const chatUrl = config.provider_touchpoint_base_urls?.[provider]?.chat ?? config.provider_base_urls?.[provider] ?? baseUrl;
     const embedUrl = config.provider_touchpoint_base_urls?.[provider]?.embedding ?? chatUrl;
     const embedKey = config.provider_touchpoint_api_keys?.[provider]?.embedding ?? apiKey;
-    return { id: provider, provider, name, baseUrl: chatUrl, apiKey, ...(embedUrl !== chatUrl || embedKey !== apiKey ? { connections: { embedding: { baseUrl: embedUrl, apiKey: embedKey } } } : {}), enabled: Boolean(apiKey || [setup.chatModel, setup.embeddingModel, setup.ocrModel].some(m => m?.startsWith(`${provider}:`))), models };
+    return { id: provider, provider, name, baseUrl: chatUrl, apiKey, ...(embedUrl !== chatUrl || embedKey !== apiKey ? { connections: { embedding: { baseUrl: embedUrl, apiKey: embedKey } } } : {}), enabled: Boolean(apiKey || models.length), models };
   });
   for (const service of stored) if (!services.some(item => item.id === service.id)) services.push(structuredClone(service));
   for (const kind of ['chat', 'embedding'] as const) for (const endpoint of setup.customProviders?.[kind] ?? []) {

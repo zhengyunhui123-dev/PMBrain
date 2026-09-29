@@ -27,7 +27,7 @@ test('不完整或带账号的地址不会当作可以保存的 API 地址', () 
 });
 
 test('模型服务页按一份地址获取并挑选模型，切换后自动保存', () => {
-  expect(page).toContain('获取模型列表');
+  expect(page).toContain('同步模型');
   expect(page).toContain('添加所列');
   expect(page).toContain('移除所列');
   expect(page).toContain('清理未返回的模型');
