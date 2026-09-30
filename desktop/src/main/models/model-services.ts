@@ -102,6 +102,17 @@ export function projectModelServices(config: Record<string, any>, services: Mode
     if (active.length && (!service.enabled || active.some(full => !service.models.some(m => serviceModelValue(service, m) === full || `${service.provider}:${m.id}` === full)))) throw new Error(`${service.name} 的模型仍在使用，请先修改知识库模型配置`);
     const old: ModelService | undefined = config.desktop?.model_services?.find((s: ModelService) => s.id === service.id);
     if (old?.apiKey && !service.apiKey && service.enabled) throw new Error('请填写密钥，或先停用该平台');
+    if (old?.apiKey && !service.apiKey) {
+      const chat = serviceConnection(service, 'chat');
+      const embedding = serviceConnection(service, 'embedding');
+      next.provider_touchpoint_api_keys[service.provider] = { ...next.provider_touchpoint_api_keys[service.provider], chat: chat.apiKey, embedding: embedding.apiKey };
+      if (service.legacy) {
+        const { kind, endpointId, selected: isSelected } = service.legacy;
+        if (isSelected) next.provider_touchpoint_api_keys['custom-openai'] = { ...next.provider_touchpoint_api_keys['custom-openai'], [kind]: '' };
+        const endpoints = next.desktop?.custom_endpoints?.[kind];
+        if (endpoints) next.desktop.custom_endpoints[kind] = endpoints.map((entry: { id?: string }) => entry.id === endpointId ? { ...entry, apiKey: '' } : entry);
+      }
+    }
     if (active.includes(config.embedding_model) && old && JSON.stringify(serviceConnection(old, old.legacy?.kind ?? 'embedding')) !== JSON.stringify(serviceConnection(service, service.legacy?.kind ?? 'embedding')) && serviceConnection(old, old.legacy?.kind ?? 'embedding').baseUrl !== serviceConnection(service, service.legacy?.kind ?? 'embedding').baseUrl) throw new Error('该平台仍在使用。请添加新平台后切换用途，避免隐式更换向量空间');
     if (!service.enabled) continue;
     if (old && old.baseUrl === service.baseUrl && old.apiKey === service.apiKey && old.enabled === service.enabled && JSON.stringify(old.connections) === JSON.stringify(service.connections) && (!service.provider.startsWith('service-') || config.provider_base_urls?.[service.provider])) continue;
@@ -139,7 +150,6 @@ export function projectModelServices(config: Record<string, any>, services: Mode
 }
 export function saveModelServices(input: ModelServicesState): ModelServicesState {
   const config = rawConfig();
-  if (revision(config) !== input.revision) throw new Error('配置已变化，请重新加载后保存');
   const baseline = readModelServices();
   const next = projectModelServices({ ...config, desktop: { ...config.desktop, model_services: baseline.services } }, input.services);
   backupFile(desktopConfigPath(), 'config');

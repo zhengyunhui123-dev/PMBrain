@@ -51,15 +51,14 @@ export async function syncServiceModels(service: ModelService, fetchImpl: typeof
   const request = async (target: string, init: RequestInit = {}) => {
     let response: Response;
     try { response = await fetchImpl(target, { ...init, headers: { ...headers, ...init.headers }, redirect: 'error', cache: 'no-store', signal: AbortSignal.timeout(20000) }); }
-    catch (error) { throw new Error(`无法连接 ${url.origin}：请检查模型服务是否启动、API 地址、网络或代理。${error instanceof Error ? error.message : String(error)}`); }
+    catch { throw new Error('拉取模型失败。无法连接到服务，请检查 API 地址和网络'); }
     if (!response.ok) {
-      let detail = '';
-      try { const body = await response.json() as any; detail = String(body.error?.message ?? body.message ?? body.error ?? '').slice(0, 300); } catch {}
-      if (key) detail = detail.split(key).join('[已隐藏]');
-      const hint = response.status === 401 || response.status === 403 ? '请检查 API 密钥是否正确及是否有访问权限。' : response.status === 404 ? '请检查 API 基础地址（通常包含 /v1）；该服务可能不支持模型列表，请手动添加模型。' : response.status === 429 ? '请求过于频繁或额度不足，请检查平台配额后重试。' : '请检查平台服务状态。';
-      throw new Error(`同步失败：HTTP ${response.status}。${hint}${detail ? ` ${detail}` : ''}`);
+      if (response.status === 401 || response.status === 403) throw new Error('拉取模型失败。API 密钥无效，请检查后重新配置');
+      if (response.status === 404) throw new Error('拉取模型失败。请检查 API 地址。这个服务可能不提供模型列表，可以手动添加模型');
+      if (response.status === 429) throw new Error('拉取模型失败。请求过于频繁或额度不足，请稍后再试');
+      throw new Error('拉取模型失败。请检查服务商状态后重试');
     }
-    try { return await response.json() as any; } catch { throw new Error('平台返回的不是有效 JSON，请检查 API 地址是否指向模型接口'); }
+    try { return await response.json() as any; } catch { throw new Error('拉取模型失败。平台返回的内容无法识别，请检查 API 地址'); }
   };
   const warnings: string[] = [];
   const records: any[] = [];

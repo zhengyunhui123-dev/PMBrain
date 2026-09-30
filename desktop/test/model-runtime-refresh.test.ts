@@ -88,6 +88,19 @@ test('移除未使用模型只保存文件，修改密钥才刷新运行中的�
     expect(reloads).toEqual(['reload']);
     const stored = JSON.parse(readFileSync(join(directory, 'config.json'), 'utf8')) as { provider_touchpoint_api_keys?: { ollama?: { chat?: string } } };
     expect(stored.provider_touchpoint_api_keys?.ollama?.chat).toBe('sk-live');
+
+    const loaded = readModelServices();
+    const filePath = join(directory, 'config.json');
+    const unrelated = JSON.parse(readFileSync(filePath, 'utf8')) as { desktop?: Record<string, unknown> };
+    unrelated.desktop = { ...unrelated.desktop, last_migrated_version: '9.9.9' };
+    writeFileSync(filePath, JSON.stringify(unrelated));
+    const savedKey = await saveModelServicesLive({
+      services: loaded.services.map(item => item.id === 'ollama' ? { ...item, apiKey: 'sk-after-unrelated-write' } : item),
+      revision: loaded.revision,
+    }, reload);
+    expect(savedKey.services.find(item => item.id === 'ollama')?.apiKey).toBe('sk-after-unrelated-write');
+    const after = JSON.parse(readFileSync(filePath, 'utf8')) as { desktop?: { last_migrated_version?: string } };
+    expect(after.desktop?.last_migrated_version).toBe('9.9.9');
   } finally {
     if (previous === undefined) delete process.env.PMBRAIN_HOME;
     else process.env.PMBRAIN_HOME = previous;

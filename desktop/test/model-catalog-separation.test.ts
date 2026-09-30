@@ -43,7 +43,7 @@ test('online IDs alone define the catalog; remote metadata wins over registry de
 
 test('empty and failed online responses never fall back to local models', async () => {
   expect((await syncServiceModels(service, async () => Response.json({ data: [] }))).models).toEqual([]);
-  await expect(syncServiceModels(service, async () => Response.json({ error: { message: 'denied' } }, { status: 401 }))).rejects.toThrow('401');
+  await expect(syncServiceModels(service, async () => Response.json({ error: { message: 'denied' } }, { status: 401 }))).rejects.toThrow('拉取模型失败。API 密钥无效，请检查后重新配置');
   expect(service.models.map(model => model.id)).toEqual(['legacy-private']);
 });
 

@@ -22,7 +22,7 @@ test('a selected platform cannot be disabled and an embedding endpoint cannot be
   expect(() => projectModelServices(current, [{ ...service('one'), baseUrl: 'https://other.example/v1' }])).toThrow();
 });
 test('sync surfaces HTTP errors and does not replace them with catalog models', async () => {
-  await expect(syncServiceModels(service('one'), async () => new Response('bad credential', { status: 401 }))).rejects.toThrow('401');
+  await expect(syncServiceModels(service('one'), async () => new Response('bad credential', { status: 401 }))).rejects.toThrow('拉取模型失败。API 密钥无效，请检查后重新配置');
 });
 test('service aliases resolve independently and never inherit another platform key', () => {
   expect(getRecipe('service-one')?.id).toBe('service-one');

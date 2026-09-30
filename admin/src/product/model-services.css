@@ -54,7 +54,7 @@
 .provider-list-scroll button.selected { background: #303030; }
 .provider-list-scroll button > span:nth-child(2) { flex: 1; }
 .provider-list-scroll i { width: 6px; height: 6px; background: #87c979; border-radius: 50%; }
-.provider-mark { width: 26px; height: 26px; flex-shrink: 0; display: grid; place-items: center; border: 1px solid var(--product-line); border-radius: 7px; font-weight: 600; font-size: 11px; letter-spacing: -.5px; }
+.provider-mark { width: 26px; height: 26px; flex-shrink: 0; display: grid; place-items: center; border: 0; border-radius: 8px; font-weight: 600; font-size: 11px; letter-spacing: -.4px; }
 .provider-detail { padding: 27px clamp(24px, 4vw, 65px); overflow: auto; min-width: 0; }
 .provider-detail > header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 27px; }
 .provider-header-actions { display: flex; align-items: center; gap: 8px; }
@@ -77,6 +77,14 @@
 .model-input-row { display: flex; gap: 7px; }
 .model-input-row input { flex: 1; }
 .model-input-row button { flex-shrink: 0; }
+.key-box { position: relative; flex: 1; min-width: 0; }
+.model-services .key-box input { padding-right: 148px; }
+.model-services .key-hover-actions { position: absolute; right: 36px; top: 50%; transform: translateY(-50%); display: flex; gap: 1px; opacity: 0; pointer-events: none; }
+.model-services .key-box:hover .key-hover-actions,
+.model-services .key-box:focus-within .key-hover-actions { opacity: 1; pointer-events: auto; }
+.model-services .key-hover-actions button,
+.model-services .key-eye { border: 0; background: transparent; padding: 4px; color: var(--product-muted); }
+.model-services .key-eye { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); }
 .model-hint { color: var(--product-muted); font-size: 11px; line-height: 1.7; margin: 9px 0 20px; }
 .model-list-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 30px 0 17px; }
 .model-list-heading h3 { font-size: 13px; margin: 0; white-space: nowrap; }
@@ -93,6 +101,20 @@
 .service-model-name b { font-weight: 500; }
 .service-model-name small { display: block; font-size: 10px; color: var(--product-muted); margin-top: 3px; }
 .service-model-row button { border: 0; padding: 5px; color: var(--product-muted); }
+.service-model-row .row-actions { display: flex; gap: 2px; margin-left: auto; opacity: 0; pointer-events: none; }
+.service-model-row:hover .row-actions,
+.service-model-row:focus-within .row-actions { opacity: 1; pointer-events: auto; }
+.service-model-row .row-actions button[title="移除模型"] { color: #d46565; }
+.model-services button.model-danger { background: #b94b4b; border-color: #b94b4b; color: white; }
+.sync-toolbar { display: flex; align-items: center; gap: 8px; }
+.sync-head { display: flex; gap: 8px; align-items: center; }
+.sync-head .model-search { flex: 1; }
+.model-sync-error { color: #8a3b12; background: #fff4e8; border: 1px solid #e3b07a; border-radius: 8px; padding: 10px 12px; line-height: 1.6; }
+.activate-steps { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 14px; }
+.activate-steps li { display: flex; align-items: center; gap: 10px; }
+.activate-steps .done { color: #2f9e62; }
+.group-select { margin-left: auto; }
+.service-model-row input[type="checkbox"], .group-select input { width: 16px; height: 16px; }
 .model-badges { display: flex; gap: 4px; }
 .model-badges span { display: flex; padding: 3px 7px; border-radius: 9px; color: #999be4; background: #272735; }
 .provider-detail > footer, .model-modal footer { display: flex; align-items: center; justify-content: flex-end; gap: 10px; margin-top: 25px; padding-top: 15px; border-top: 1px solid var(--product-line); }

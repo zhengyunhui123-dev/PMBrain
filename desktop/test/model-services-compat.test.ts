@@ -86,6 +86,16 @@ test('删除未使用的自建平台会清掉它的地址和密钥，内置平�
   expect(droppedPreset.provider_base_urls.ollama).toBe('http://localhost:11434/v1');
   expect(modelServiceRuntimeChanged(idle, droppedPreset)).toBe(false);
 });
+test('启用中的平台不能把已有密钥直接清空，停用后清空会抹掉保存的密钥', () => {
+  const svc = platform({ id: 'service-one', provider: 'service-one', name: '云端', baseUrl: 'https://one.example/v1', apiKey: 'secret', enabled: true, connections: { embedding: { baseUrl: 'https://one.example/v1', apiKey: 'embed-secret' } } });
+  const saved = projectModelServices({ desktop: { model_services: [svc] } }, [svc]);
+  expect(saved.provider_touchpoint_api_keys['service-one']).toEqual({ chat: 'secret', embedding: 'embed-secret' });
+  expect(() => projectModelServices(saved, [{ ...svc, apiKey: '', connections: { embedding: { baseUrl: svc.baseUrl, apiKey: '' } } }])).toThrow('请填写密钥，或先停用该平台');
+  const cleared = projectModelServices(saved, [{ ...svc, apiKey: '', enabled: false, connections: { embedding: { baseUrl: svc.baseUrl, apiKey: '' } } }]);
+  expect(cleared.desktop.model_services.find((item: ModelService) => item.id === svc.id)).toMatchObject({ apiKey: '', enabled: false });
+  expect(cleared.provider_touchpoint_api_keys['service-one']).toEqual({ chat: '', embedding: '' });
+  expect(modelServiceRuntimeChanged(saved, cleared)).toBe(true);
+});
 test('models added to a legacy embedding service use its own route for chat', () => {
   const service = platform({ legacy: { kind: 'embedding', endpointId: 'local', selected: true } });
   expect(serviceModelValue(service, newServiceModel('same', 'embedding'))).toBe('custom-openai:same');

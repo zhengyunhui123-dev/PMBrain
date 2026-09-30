@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { isCustomProvider, listedServiceModels, mergeServiceModels, newServiceModel, providerKindLabel, SERVICE_KEY_PAGES, SERVICE_PRESETS, serviceEndpointError, serviceModelSections, serviceModelsNotOnRemote, serviceNeedsApiKey } from '../../shared/model-services';
+import { isCustomProvider, listedServiceModels, mergeServiceModels, newServiceModel, presetBaseUrl, providerKindLabel, SERVICE_KEY_PAGES, SERVICE_PRESETS, serviceEndpointError, serviceModelSections, serviceModelsNotOnRemote, serviceNeedsApiKey } from '../../shared/model-services';
 
 const page = readFileSync(join(import.meta.dir, '../../admin/src/product/ModelServices.tsx'), 'utf8');
 
@@ -28,9 +28,13 @@ test('不完整或带账号的地址不会当作可以保存的 API 地址', () 
 
 test('模型服务页按一份地址获取并挑选模型，切换后自动保存', () => {
   expect(page).toContain('同步模型');
-  expect(page).toContain('添加所列');
-  expect(page).toContain('移除所列');
+  expect(page).toContain('选择模型');
+  expect(page).toContain('添加所选模型');
+  expect(page).toContain('检测并启用');
   expect(page).toContain('清理未返回的模型');
+  expect(page).not.toContain('同步失败：HTTP');
+  const syncSource = readFileSync(join(import.meta.dir, '../src/main/models/model-service-sync.ts'), 'utf8');
+  expect(syncSource).toContain('拉取模型失败。API 密钥无效，请检查后重新配置');
   expect(page).toContain('提供商名称');
   expect(page).toContain('切换后自动保存');
   for (const removed of ['普通模型接口', '向量模型接口', '保存模型服务', '重新加载', '保存知识库模型配置', '请先保存模型服务']) {
@@ -78,4 +82,26 @@ test('单独一个模型不重复显示分组，自定义名称下面保留 API 
   expect(page).toContain('自定义服务商');
   expect(page).toContain('isCustomProvider(service)');
   expect(page).toContain('serviceModelSections');
+});
+
+test('编辑密钥带上已保存的值，复制编辑删除在悬停出现，眼睛一直在', () => {
+  expect(page).toContain('value: current?.apiKey ?? \'\'');
+  expect(page).not.toContain("setKeyEditor({ value: '', show: false, error: '' })");
+  expect(page).toContain('key-hover-actions');
+  expect(page).toContain('className="key-eye"');
+  expect(page).toContain('复制密钥');
+  expect(page).toContain('编辑密钥');
+  expect(page).toContain('删除密钥');
+  expect(page).toContain('删除后将停用');
+  expect(page).toContain('删除并停用');
+  expect(page).toContain('恢复默认');
+  expect(page).toContain('row-actions');
+  expect(presetBaseUrl('service-dmxapi')).toBe('https://www.dmxapi.cn/v1');
+  expect(presetBaseUrl('service-qiniu')).toBe('https://api.qnaigc.com/v1');
+  expect(presetBaseUrl('service-baichuan')).toBe('https://api.baichuan-ai.com/v1');
+  expect(presetBaseUrl('ollama')).toBe('http://localhost:11434/v1');
+  for (const id of ['service-dmxapi', 'service-qiniu', 'service-baichuan']) {
+    expect(isCustomProvider({ id, provider: id })).toBe(false);
+  }
+  expect(SERVICE_PRESETS.map(([id]) => id).slice(0, 9)).toEqual(['ollama', 'deepseek', 'service-siliconflow', 'zhipu', 'service-dmxapi', 'service-qiniu', 'service-lmstudio', 'service-moonshot', 'service-baichuan']);
 });
