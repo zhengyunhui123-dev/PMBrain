@@ -187,6 +187,7 @@ export interface PMBrainDesktopApi {
   onShowPanel(listener: (panel: DesktopSettingsPanel) => void): () => void;
   getSystemSettings(): Promise<DesktopSystemSettingsState>;
   saveSystemSettings(payload: DesktopSystemSettingsPayload): Promise<DesktopSystemSettingsSaveResult>;
+  saveDesktopBehavior(input: { launchAtLogin: boolean; closeBehavior: DesktopCloseBehavior }): Promise<DesktopSystemSettingsSaveResult>;
   getMemoryWriteback(): Promise<MemoryWritebackStatus>;
   saveMemoryWriteback(payload: MemoryWritebackUpdate): Promise<MemoryWritebackStatus>;
   onSystemSettingsState(listener: (state: DesktopSystemSettingsState) => void): () => void;
@@ -317,6 +318,7 @@ const api: PMBrainDesktopApi = {
   },
   getSystemSettings: () => ipcRenderer.invoke('desktop:get-system-settings'),
   saveSystemSettings: (payload) => ipcRenderer.invoke('desktop:save-system-settings', payload),
+  saveDesktopBehavior: (input) => ipcRenderer.invoke('desktop:save-desktop-behavior', input),
   getMemoryWriteback: () => ipcRenderer.invoke('desktop:get-memory-writeback'),
   saveMemoryWriteback: (payload) => ipcRenderer.invoke('desktop:save-memory-writeback', payload),
   onSystemSettingsState: (listener) => {

@@ -1,13 +1,38 @@
 import { useEffect, useRef, useState } from 'react';
 import { defaultAssistant, type KnowledgeAssistantSettings, type WorkbenchConversation, type WorkbenchModel } from '../../../shared/workbench';
+import { filePayload } from './composer-attachments';
 import { productFetch } from '../lib/product-fetch';
 
 type ConversationRow = Omit<WorkbenchConversation, 'messages'> & { messageCount: number; running: boolean };
 export async function workbenchRequest<T>(path: string, body?: unknown, method = body === undefined ? 'GET' : 'POST'): Promise<T> {
   const response = await productFetch(`/admin/api/workbench${path}`, { method, ...(body === undefined ? {} : { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }) });
-  const result = await response.json();
+  let result: { error?: string };
+  try { result = await response.json(); }
+  catch { throw new Error(response.ok ? '服务返回的内容无法解析。' : `请求失败：${response.status}`); }
   if (!response.ok) throw new Error(result.error || `请求失败：${response.status}`);
   return result as T;
+}
+export function mergePolledConversation(current: WorkbenchConversation | undefined, next: WorkbenchConversation): WorkbenchConversation {
+  if (!current || current.id !== next.id) return next;
+  const previous = new Map(current.messages.map(message => [message.id, message]));
+  return {
+    ...next,
+    messages: next.messages.map(message => {
+      const older = previous.get(message.id);
+      if (!older?.attachments?.length || !message.attachments?.length) return message;
+      const saved = new Map(older.attachments.map(item => [item.id, item]));
+      return {
+        ...message,
+        attachments: message.attachments.map(item => {
+          const prior = saved.get(item.id);
+          if (!prior) return item;
+          const preview = item.preview || prior.preview;
+          const text = item.text || prior.text;
+          return { ...item, ...(preview ? { preview } : {}), ...(text ? { text } : {}) };
+        }),
+      };
+    }),
+  };
 }
 export function useWorkbench() {
   const [rows, setRows] = useState<ConversationRow[]>([]);
@@ -43,9 +68,9 @@ export function useWorkbench() {
     const id = conversation.id; let stopped = false; let timer: ReturnType<typeof setTimeout>;
     const poll = async () => {
       try {
-        const next = await workbenchRequest<WorkbenchConversation>(`/conversations/${id}`);
+        const next = await workbenchRequest<WorkbenchConversation>(`/conversations/${id}?lite=1`);
         if (stopped || active.current !== id) return;
-        setConversation(next);
+        setConversation(current => mergePolledConversation(current, next));
         if (next.messages.some(m => m.status === 'running')) timer = setTimeout(poll, 200);
         else await refresh();
       } catch (reason) { if (!stopped) { setError(reason instanceof Error ? reason.message : String(reason)); timer = setTimeout(poll, 2500); } }
@@ -61,14 +86,18 @@ export function useWorkbench() {
     catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
     finally { setPending(false); }
   };
-  const send = async (text: string, retry = false, editMessageId?: string) => {
+  const send = async (text: string, retry = false, editMessageId?: string, files?: { id: string; name: string; file?: File; saved?: boolean; mime?: string }[], attachmentsHydrated = false) => {
     if (pending || running) return false;
     setPending(true); setError('');
     let createdId: string | undefined;
     try {
       let id = conversation?.id;
       if (!id) { const created = await workbenchRequest<WorkbenchConversation>('/conversations', { model, knowledge }); id = created.id; createdId = id; active.current = id; setConversation(created); }
-      const next = await workbenchRequest<WorkbenchConversation>(`/conversations/${id}/messages`, { text, model, knowledge, retry, ...(editMessageId ? { editMessageId } : {}) });
+      const attachments = files ? await Promise.all(files.map(file => filePayload(file))) : undefined;
+      const attachmentFields = editMessageId
+        ? { editMessageId, attachments: attachments ?? [], attachmentsHydrated }
+        : (attachments?.some(item => item.data || item.keep) ? { attachments } : {});
+      const next = await workbenchRequest<WorkbenchConversation>(`/conversations/${id}/messages`, { text, model, knowledge, retry, ...attachmentFields });
       if (active.current === id) setConversation(next);
       try { await refresh(); } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
       return true;

@@ -5,8 +5,10 @@ import {
   getDesktopPreferences,
   getSetupInfo,
   normalizeDesktopTheme,
+  saveDesktopCloseBehavior,
   saveDesktopPreferences,
   saveDesktopTheme,
+  type DesktopCloseBehavior,
   type DesktopTheme,
 } from '../config-manager.js';
 import { listNetworkCandidates } from '../network-manager.js';
@@ -194,6 +196,13 @@ export class SystemSettingsController {
       state: this.currentState(),
       backup: saved.backup ?? themeBackup,
     };
+  }
+
+
+  async saveDesktopBehavior(input: { launchAtLogin: boolean; closeBehavior: DesktopCloseBehavior }): Promise<DesktopSystemSettingsSaveResult> {
+    saveDesktopCloseBehavior(input.closeBehavior);
+    this.setLaunchAtLogin(input.launchAtLogin === true);
+    return { canceled: false, state: this.sendState() };
   }
 
   private loginItemSettingsOptions() {

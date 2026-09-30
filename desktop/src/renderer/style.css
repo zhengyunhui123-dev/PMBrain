@@ -417,7 +417,8 @@ select { cursor: pointer; appearance: auto; -webkit-appearance: auto; }
 .gateway-status.warning small { color: var(--danger-text); }
 .gateway-restart { min-height: 34px; padding: 0 13px; color: var(--danger-text); border-color: var(--danger-border); background: var(--danger-soft); font-size: 11px; font-weight: 650; }
 .gateway-restart:hover:not(:disabled) { color: var(--danger-text); border-color: var(--danger); background: var(--danger-soft); }
-.system-setting-grid { display: grid; grid-template-columns: 1.25fr 1fr 1fr; gap: 12px; }
+.system-setting-grid { display: grid; grid-template-columns: 1.25fr 1fr; gap: 12px; }
+.desktop-behavior-card { margin-top: 12px; }
 .system-setting-grid > label:not(.setting-toggle) > span { display: block; margin-bottom: 8px; color: var(--text-secondary); font-size: 11px; font-weight: 650; }
 .system-save-bar { display: flex; justify-content: space-between; align-items: center; gap: 24px; margin-top: 16px; padding-top: 18px; border-top: 1px solid var(--line); }
 .system-save-bar p { margin: 0; color: var(--text-muted); font-size: 10px; line-height: 1.55; }

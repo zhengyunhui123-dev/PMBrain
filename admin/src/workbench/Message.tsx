@@ -10,7 +10,7 @@ export function Message({ message, assistantName, assistantEmoji, canRetry, onRe
     <div className="wb-avatar">{message.role === 'user' ? <User size={17} /> : <span>{assistantEmoji}</span>}</div>
     <div className="wb-message-body"><header><strong>{message.role === 'user' ? '你' : assistantName}</strong><span>{message.role === 'assistant' ? modelLabel : new Date(message.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span></header>
       {message.knowledge === 'none' && message.status === 'complete' && <p className="wb-notice">这次没有从知识库检索到相关资料。下面的内容是模型基于一般知识的回答，请再核对。</p>}
-      {message.text && <MarkdownArticle markdown={message.text} />}
+      {!!message.attachments?.length && <ul className="wb-attachments">{message.attachments.map(item => <li key={item.id} className={item.preview ? 'wb-thumb' : 'wb-file-card'}>{item.preview ? <img src={item.preview} alt={item.name} /> : <span className="wb-attachment-name">{item.name}</span>}{item.note && <small className="wb-attachment-note">{item.note}</small>}</li>)}</ul>}{message.text && <MarkdownArticle markdown={message.text} />}
       {message.status === 'running' && <p className="wb-progress" role="status"><i />{message.stage || '正在生成回答…'}</p>}
       {message.status === 'error' && <p className="wb-error" role="alert">{message.error}</p>}
       {message.status === 'cancelled' && <p className="wb-muted">已停止生成，可以重试或继续提问。</p>}

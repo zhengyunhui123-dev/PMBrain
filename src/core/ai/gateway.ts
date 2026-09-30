@@ -2256,7 +2256,7 @@ export async function expand(query: string): Promise<string[]> {
  * Eng-1B counter writes happen at the importImageFile site, not here —
  * keeping the gateway focused on the LLM call.
  */
-export async function generateOcrText(imageBytes: Buffer, mime: string): Promise<string> {
+export async function generateOcrText(imageBytes: Buffer, mime: string, abortSignal?: AbortSignal): Promise<string> {
   if (!_config) return '';
   const ocrModel = getImageOcrModel();
   if (getVisionCapability(ocrModel) === 'unsupported' || !isAvailable('chat', ocrModel)) return '';
@@ -2271,6 +2271,7 @@ export async function generateOcrText(imageBytes: Buffer, mime: string): Promise
   const result = await generateText({
     model,
     system,
+    ...(abortSignal ? { abortSignal } : {}),
     messages: [
       {
         role: 'user',
@@ -2340,6 +2341,8 @@ export type ChatRole = 'system' | 'user' | 'assistant' | 'tool';
 
 export type ChatBlock =
   | { type: 'text'; text: string }
+  | { type: 'image'; image: string; mediaType?: string }
+  | { type: 'file'; data: string; mediaType: string; filename?: string }
   | { type: 'tool-call'; toolCallId: string; toolName: string; input: unknown }
   | { type: 'tool-result'; toolCallId: string; toolName: string; output: unknown; isError?: boolean };
 
@@ -2455,6 +2458,8 @@ export function toModelMessages(messages: ChatMessage[]): unknown[] {
         .filter((block) => block.type !== 'text' || typeof block.text === 'string')
         .map((block) => {
           if (block.type === 'text') return { type: 'text' as const, text: block.text };
+          if (block.type === 'image') return { type: 'image' as const, image: block.image, ...(block.mediaType ? { mediaType: block.mediaType } : {}) };
+          if (block.type === 'file') return { type: 'file' as const, data: block.data, mediaType: block.mediaType, ...(block.filename ? { filename: block.filename } : {}) };
           if (block.type === 'tool-call') {
             return {
               type: 'tool-call' as const,

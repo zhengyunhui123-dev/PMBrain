@@ -37,6 +37,7 @@ declare global {
 const $ = <T extends HTMLElement>(selector: string) => document.querySelector<T>(selector)!;
 let state: DesktopSetupState | null = null;
 let latestSystemSettings: DesktopSystemSettingsState | null = null;
+let themeSource: DesktopTheme = 'system';
 let lastResult = '';
 let advancedModelsLoaded = false;
 let advancedOverrides: Partial<Record<AdvancedModelTier, string>> = {};
@@ -116,13 +117,14 @@ function clearNotices(): void {
   setNotice('success');
 }
 
-type Panel = 'basic' | 'models' | 'integrations' | 'system' | 'updates' | 'repair' | 'recovery';
+type Panel = 'basic' | 'models' | 'integrations' | 'system' | 'desktop-behavior' | 'updates' | 'repair' | 'recovery';
 
 const PANEL_COPY: Record<Panel, { eyebrow: string; title: string }> = {
   basic: { eyebrow: 'DESKTOP SETTINGS / 01', title: '配置数据库、原始资料与主源' },
   models: { eyebrow: 'DESKTOP SETTINGS / 02', title: '配置普通模型与向量模型' },
   integrations: { eyebrow: 'MCP / 03', title: '把 PMBrain 接入 AI 客户端' },
   system: { eyebrow: 'SYSTEM / 04', title: '管理桌面连接与系统行为' },
+  'desktop-behavior': { eyebrow: 'PREFERENCES', title: '桌面行为' },
   updates: { eyebrow: 'UPDATES / 05', title: '保持桌面端安全更新' },
   repair: { eyebrow: 'REPAIR / 06', title: '软件修复' },
   recovery: { eyebrow: 'RECOVERY', title: '恢复 PMBrain 本地服务' },
@@ -148,7 +150,7 @@ export function activateSettingsPanel(target: Panel, notify = false): void {
 
 function renderTheme(theme: DesktopThemeState): void {
   document.documentElement.dataset.theme = theme.resolved;
-  ($<HTMLSelectElement>('#system-theme-select')).value = theme.source;
+  themeSource = theme.source;
 }
 
 function renderStartupProgress(progress: StartupProgress): void {
@@ -1426,15 +1428,24 @@ function renderSystemSettings(next: DesktopSystemSettingsState): void {
   updateSystemSettingsAvailability();
 }
 
+const DESKTOP_SETUP_NOTE = '请先在“基础配置”完成数据库与知识目录设置，再保存系统设置。';
+
 function updateSystemSettingsAvailability(): void {
-  const button = $<HTMLButtonElement>('#save-system-settings');
+  const buttons = ['#save-system-settings', '#save-desktop-behavior']
+    .map((selector) => document.querySelector<HTMLButtonElement>(selector))
+    .filter((button): button is HTMLButtonElement => button !== null);
+  const desktopNote = $('#desktop-behavior-note');
   if (state?.setup.needsSetup !== false) {
-    button.disabled = true;
-    $('#system-save-note').textContent = '请先在“基础配置”完成数据库与知识目录设置，再保存系统设置。';
+    for (const button of buttons) button.disabled = true;
+    $('#system-save-note').textContent = DESKTOP_SETUP_NOTE;
+    desktopNote.textContent = DESKTOP_SETUP_NOTE;
     return;
   }
-  if (!button.classList.contains('busy')) button.disabled = false;
+  for (const button of buttons) {
+    if (!button.classList.contains('busy')) button.disabled = false;
+  }
   $('#system-save-note').textContent = latestSystemSettings?.warning || '';
+  if (desktopNote.textContent === DESKTOP_SETUP_NOTE) desktopNote.textContent = '';
 }
 
 function applySystemSettingsState(next: DesktopSystemSettingsState): void {
@@ -1546,7 +1557,7 @@ function currentSystemSettingsPayload(): DesktopSystemSettingsPayload {
   const mode = selectedNetworkMode();
   const address = selectedNetworkAddress();
   return {
-    theme: $<HTMLSelectElement>('#system-theme-select').value as DesktopTheme,
+    theme: themeSource,
     networkMode: mode,
     sharedAdapter: address.adapterName,
     sharedIp: address.address,
@@ -1583,9 +1594,9 @@ async function restartSharedGateway(): Promise<void> {
   }
 }
 
-async function saveSystemSettings(): Promise<void> {
+async function saveSystemSettings(trigger?: HTMLButtonElement): Promise<void> {
   clearNotices();
-  const button = $<HTMLButtonElement>('#save-system-settings');
+  const button = trigger ?? $<HTMLButtonElement>('#save-system-settings');
   const payload = currentSystemSettingsPayload();
   const mode = payload.networkMode;
   const address = { adapterName: payload.sharedAdapter, address: payload.sharedIp };
@@ -1623,6 +1634,30 @@ async function saveSystemSettings(): Promise<void> {
   }
 }
 
+async function saveDesktopBehavior(): Promise<void> {
+  clearNotices();
+  const note = $('#desktop-behavior-note');
+  note.textContent = '';
+  const button = $<HTMLButtonElement>('#save-desktop-behavior');
+  const launchAtLogin = $<HTMLInputElement>('#launch-at-login').checked;
+  const closeBehavior = $<HTMLSelectElement>('#close-behavior').value === 'quit' ? 'quit' : 'tray';
+  setBusy(button, true, '正在保存…');
+  try {
+    const result = await window.pmbrainDesktop.saveDesktopBehavior({ launchAtLogin, closeBehavior });
+    applySystemSettingsState(result.state);
+    if (result.canceled) return;
+    note.textContent = '桌面行为已保存。';
+    setNotice('success', '桌面行为已保存。');
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    note.textContent = message;
+    setNotice('error', message);
+  } finally {
+    setBusy(button, false, '保存');
+    updateSystemSettingsAvailability();
+  }
+}
+
 function populate(next: DesktopSetupState): void {
   const integrations = latestIntegrations.length > 0
     ? latestIntegrations
@@ -1642,7 +1677,7 @@ function populate(next: DesktopSetupState): void {
   const activePanel = (document.querySelector<HTMLElement>('.panel.active')?.id.replace('panel-', '') || 'basic') as Panel;
   switchPanel(activePanel, false);
   $('#existing-config').hidden = setup.needsSetup;
-  ($<HTMLSelectElement>('#system-theme-select')).value = setup.current.theme;
+  themeSource = setup.current.theme;
   const radio = document.querySelector<HTMLInputElement>(`input[name="engine"][value="${setup.current.engine}"]`);
   if (radio) radio.checked = true;
   ($<HTMLInputElement>('#database-path')).value = setup.current.databasePath || setup.defaults.databasePath;
@@ -2958,6 +2993,7 @@ document.querySelectorAll<HTMLButtonElement>('.secret-toggle').forEach((button) 
 }));
 $('#save-setup').addEventListener('click', () => void save());
 $('#save-system-settings').addEventListener('click', () => void saveSystemSettings());
+$('#save-desktop-behavior').addEventListener('click', () => void saveDesktopBehavior());
 $('#restart-shared-gateway').addEventListener('click', () => void restartSharedGateway());
 $('#memory-open-integrations').addEventListener('click', () => {
   switchPanel('integrations');

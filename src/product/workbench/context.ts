@@ -1,4 +1,5 @@
 import { FALLBACK_CONTEXT_TOKENS, type ContextPolicy, type WorkbenchMessage } from '../../../shared/workbench';
+import { ATTACHMENT_PROMPT_CAP } from './attachments';
 
 export { FALLBACK_CONTEXT_TOKENS };
 export const OUTPUT_RESERVE_TOKENS = 4_096;
@@ -11,6 +12,16 @@ export function conversationContext(messages: WorkbenchMessage[]): WorkbenchMess
 
 export function estimateTokens(text: string): number {
   return Math.ceil(text.length / 2);
+}
+
+function messageTokens(message: WorkbenchMessage): number {
+  let chars = message.text.length;
+  for (const item of message.attachments ?? []) {
+    chars += Math.min(item.text?.length ?? 0, ATTACHMENT_PROMPT_CAP) + (item.note?.length ?? 0);
+    if (item.route === 'vision' || item.route === 'pdf-file') chars += 4_000;
+  }
+  chars += message.attachmentSupplement?.length ?? 0;
+  return Math.ceil(chars / 2);
 }
 
 export function contextBudget(contextWindow: number | undefined, threshold: number): number {
@@ -29,7 +40,7 @@ export function planContext(messages: WorkbenchMessage[], policy: ContextPolicy,
   const recent: WorkbenchMessage[] = [];
   let tokens = 0;
   for (const message of [...complete].reverse()) {
-    const cost = estimateTokens(message.text);
+    const cost = messageTokens(message);
     if (recent.length > 0 && (recent.length >= maxMessages || tokens + cost > budget)) break;
     recent.unshift(message);
     tokens += cost;

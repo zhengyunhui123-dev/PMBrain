@@ -1074,6 +1074,16 @@ export function saveDesktopPreferences(patch: Partial<DesktopPreferences>): {
   return { preferences, backup };
 }
 
+export function saveDesktopCloseBehavior(closeBehavior: DesktopCloseBehavior, filePath = desktopConfigPath(), backupRoot = activeConfigDirectory()): void {
+  const config = readConfig(filePath);
+  if (!config) throw new Error('请先完成基础配置，再保存系统设置。');
+  const normalized = normalizeDesktopCloseBehavior(closeBehavior);
+  if (normalizeDesktopCloseBehavior(config.desktop?.close_behavior) === normalized) return;
+  backupFile(filePath, 'config', backupRoot);
+  config.desktop = { ...(config.desktop ?? {}), close_behavior: normalized };
+  writeJsonConfig(filePath, config);
+}
+
 export function saveDetectedDockerContainerName(containerName: string): string | null {
   const normalized = containerName.trim();
   if (!normalized) return null;

@@ -3,19 +3,36 @@ import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { configDir, type GBrainConfig } from '../../core/config';
 import type { BrainEngine } from '../../core/engine';
-import { chat } from '../../core/ai/gateway';
+import { chat, getVisionCapability } from '../../core/ai/gateway';
 import { runAdminKnowledgeSearch } from '../../commands/admin-knowledge-search';
 import { serviceModelValue, type ModelService } from '../../../shared/model-services';
-import type { WorkbenchCitation, WorkbenchModel } from '../../../shared/workbench';
+import type { WorkbenchCitation, WorkbenchConversation, WorkbenchModel } from '../../../shared/workbench';
+import { retrievalText, workbenchModelContent } from './attachments';
 import { WorkbenchService, type WorkbenchAnswer, type WorkbenchSummarizer } from './service';
 import { WorkbenchStore } from './store';
 
 const CONTINUE_PROMPT = '请从中断处接着写完，不要重复已经写过的内容。';
 
+export function workbenchPayloadError(error: unknown): { status: number; error: string } {
+  const status = typeof error === 'object' && error && 'status' in error ? Number(error.status) : 400;
+  const tooLarge = status === 413 || (typeof error === 'object' && error && 'type' in error && error.type === 'entity.too.large');
+  return {
+    status: tooLarge ? 413 : 400,
+    error: tooLarge ? '附件太大。一次最多 8 个，每个不超过 15MB。' : '发送内容无法解析，请重试。',
+  };
+}
+
 export function workbenchModels(config: GBrainConfig): WorkbenchModel[] {
   const services: ModelService[] = (config as any).desktop?.model_services ?? [];
-  const models = services.filter(s => s.enabled).flatMap(s => s.models.filter(m => m.kind === 'chat').map(m => ({ id: serviceModelValue(s, m), name: `${m.name} · ${s.name}`, ...(m.contextWindow ? { contextWindow: m.contextWindow } : {}) })));
-  if (config.chat_model && !models.some(m => m.id === config.chat_model)) models.unshift({ id: config.chat_model, name: `${config.chat_model} · 当前普通模型` });
+    const models = services.filter(s => s.enabled).flatMap(s => s.models.filter(m => m.kind === 'chat').map(m => {
+    const id = serviceModelValue(s, m);
+    const vision = m.capabilities.includes('vision') || getVisionCapability(id) === 'supported';
+    return { id, name: `${m.name} · ${s.name}`, ...(m.contextWindow ? { contextWindow: m.contextWindow } : {}), ...(vision ? { vision: true } : {}) };
+  }));
+if (config.chat_model && !models.some(m => m.id === config.chat_model)) {
+    const vision = getVisionCapability(config.chat_model) === 'supported';
+    models.unshift({ id: config.chat_model, name: `${config.chat_model} · 当前普通模型`, ...(vision ? { vision: true } : {}) });
+  }
   return [...new Map(models.map(m => [m.id, m])).values()];
 }
 
@@ -31,13 +48,16 @@ export async function summarizeConversation(input: { model: string; prior: strin
 }
 
 export function knowledgeWorkbenchAnswer(engine: BrainEngine, dependencies = { search: runAdminKnowledgeSearch, answer: chat }): WorkbenchAnswer {
-  return async ({ messages, summary, model, knowledge, systemPrompt, temperature, signal, progress, onDelta, onReplace }) => {
+  return async ({ messages, summary, model, knowledge, systemPrompt, temperature, signal, attachmentSupplement, progress, onDelta, onReplace }) => {
     let evidence = '';
     const citations: WorkbenchCitation[] = [];
     if (knowledge) {
       progress('正在检索知识库');
-      const questions = messages.filter(item => item.role === 'user').slice(-4).map(item => item.text.slice(0, 500));
-      const result = await dependencies.search(engine, { query: questions.join('\n'), mode: 'semantic', limit: 6 });
+      const questions = messages.filter(item => item.role === 'user').slice(-4).map(item => retrievalText(item)).filter(Boolean);
+      const query = questions.join('\n').trim();
+      const result = query
+        ? await dependencies.search(engine, { query, mode: 'semantic', limit: 6 })
+        : { results: [] };
       for (const hit of result.results) {
         signal.throwIfAborted();
         const page = hit.source_id ? await engine.getPage(hit.slug, { sourceId: hit.source_id }) : null;
@@ -56,7 +76,7 @@ export function knowledgeWorkbenchAnswer(engine: BrainEngine, dependencies = { s
     for (let part = 0; part < 8; part++) {
       signal.throwIfAborted();
       progress(part === 0 ? '正在生成回答' : '回答较长，正在续写');
-      const history = messages.map(item => ({ role: item.role, content: item.text }));
+      const history = messages.map((item, index) => ({ role: item.role, content: workbenchModelContent(item, index === messages.length - 1 ? attachmentSupplement : undefined) }));
       if (composed) {
         history.push({ role: 'assistant', content: composed });
         history.push({ role: 'user', content: CONTINUE_PROMPT });
@@ -83,16 +103,32 @@ export function registerWorkbenchRoutes(app: express.Express, requireAdmin: Requ
   const identity = createHash('sha256').update(JSON.stringify([config.engine, config.database_path, config.database_url])).digest('hex').slice(0, 24);
   const service = new WorkbenchService(new WorkbenchStore(options.storageRoot ?? join(configDir(), 'workbench', identity)), () => workbenchModels(config), options.answer ?? knowledgeWorkbenchAnswer(engine), options.summarize ?? summarizeConversation);
   const base = '/admin/api/workbench';
-  const handler = (action: (req: express.Request) => unknown): RequestHandler => (req, res) => { try { res.json(action(req)); } catch (error) { res.status(400).json({ error: error instanceof Error ? error.message : String(error) }); } };
+  const handler = (action: (req: express.Request) => unknown): RequestHandler => async (req, res) => {
+    try { res.json(await action(req)); }
+    catch (error) { if (!res.headersSent) res.status(400).json({ error: error instanceof Error ? error.message : String(error) }); }
+  };
+  const liteConversation = (conversation: WorkbenchConversation): WorkbenchConversation => ({
+    ...conversation,
+    messages: conversation.messages.map(message => ({
+      ...message,
+      attachments: message.attachments?.map(({ data: _data, preview: _preview, text: _text, ...item }) => item),
+    })),
+  });
   const id = (req: express.Request) => String(req.params.id);
   app.get(`${base}/models`, requireAdmin, handler(() => ({ models: workbenchModels(config) })));
   app.get(`${base}/assistant`, requireAdmin, handler(() => service.assistant()));
   app.put(`${base}/assistant`, requireAdmin, express.json({ limit: '64kb' }), handler(req => service.saveAssistant(req.body ?? {})));
   app.get(`${base}/conversations`, requireAdmin, handler(() => ({ conversations: service.list() })));
   app.post(`${base}/conversations`, requireAdmin, express.json({ limit: '8kb' }), handler(req => service.create(req.body ?? {})));
-  app.get(`${base}/conversations/:id`, requireAdmin, handler(req => service.get(id(req))));
+  app.get(`${base}/conversations/:id`, requireAdmin, handler(req => req.query.lite === '1' ? liteConversation(service.get(id(req))) : service.get(id(req))));
   app.patch(`${base}/conversations/:id`, requireAdmin, express.json({ limit: '8kb' }), handler(req => service.rename(id(req), req.body?.title)));
   app.delete(`${base}/conversations/:id`, requireAdmin, handler(req => { service.remove(id(req), req.query.emptyOnly === 'true'); return { ok: true }; }));
-  app.post(`${base}/conversations/:id/messages`, requireAdmin, express.json({ limit: '128kb' }), handler(req => service.send(id(req), req.body ?? {})));
+  app.post(`${base}/conversations/:id/messages`, requireAdmin, (req, res, next) => {
+    express.json({ limit: '180mb' })(req, res, (error: unknown) => {
+      if (!error) { next(); return; }
+      const failure = workbenchPayloadError(error);
+      res.status(failure.status).json({ error: failure.error });
+    });
+  }, handler(req => { const conversationId = id(req); service.send(conversationId, req.body ?? {}); return service.accepted(conversationId); }));
   app.post(`${base}/conversations/:id/cancel`, requireAdmin, handler(req => service.cancel(id(req))));
 }

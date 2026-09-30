@@ -21,7 +21,7 @@ const settingItems = [
   { key: 'basic', label: '数据库与资料目录', group: '知识库', icon: SlidersHorizontal, desktop: true },
   { key: 'dream', label: '整理设置', group: '知识整理', icon: FileText },
   { key: 'integrations', label: 'MCP 接入', group: '连接与服务', icon: Link, desktop: true },
-  { key: 'system', label: '桌面、网络与启动', group: '系统', icon: Monitor, desktop: true },
+  { key: 'system', label: '网络与连接', group: '系统', icon: Monitor, desktop: true },
   { key: 'updates', label: '软件更新', group: '系统', icon: RefreshCw, desktop: true },
   { key: 'repair', label: '数据备份与修复', group: '系统', icon: ShieldCheck, desktop: true },
 ];
@@ -83,8 +83,8 @@ export function ProductApp() {
         <header className="settings-topbar"><button onClick={() => navigate('import')}><ArrowLeft size={17} />返回</button></header>
         <div className="product-settings-grid"><aside className="product-categories"><h2>设置</h2><label><Search size={20} /><input aria-label="搜索设置" placeholder="搜索设置…" value={filter} onChange={event => setFilter(event.target.value)} /></label>{settingGroups.map(group => <section key={group}><h3>{group}</h3>{visibleSettings.filter(item => item.group === group).map(item => <button className={category === item.key ? 'active' : ''} key={item.key} onClick={() => navigate(`settings-${item.key}`)}><item.icon size={18} />{item.label}</button>)}</section>)}{filter.trim() && !settingGroups.length && <p className="empty-search">没有匹配的设置</p>}</aside>
           <div className={`product-settings-body ${['models', 'model-roles'].includes(category) ? 'has-model-services' : ''}`}>
-            {desktop && <DesktopSettings theme={theme} panel={desktopPanels.includes(category) ? category : 'models'} visible={isSettings && desktopPanels.includes(category)} />}
             {isSettings && category === 'general' && <AppearanceSettings themeMode={theme} onThemeModeChange={changeTheme} />}
+            {desktop && <DesktopSettings theme={theme} panel={category === 'general' ? 'desktop-behavior' : (desktopPanels.includes(category) ? category : 'models')} visible={isSettings && (desktopPanels.includes(category) || category === 'general')} />}
             {isSettings && ['knowledge', 'dream'].includes(category) && ready && <SettingsPage section={category as 'knowledge' | 'dream'} themeMode={theme} onThemeModeChange={changeTheme} />}
             <div className="model-settings-host" hidden={!isSettings || !['models', 'model-roles'].includes(category)}><ModelServices mode={category === 'model-roles' ? 'roles' : 'services'} /></div>
           </div></div>

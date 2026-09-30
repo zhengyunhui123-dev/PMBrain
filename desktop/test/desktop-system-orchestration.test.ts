@@ -125,6 +125,7 @@ describe('desktop system orchestration contracts', () => {
     for (const channel of [
       'desktop:get-system-settings',
       'desktop:save-system-settings',
+      'desktop:save-desktop-behavior',
       'desktop:get-shared-access',
       'desktop:create-shared-integration',
       'desktop:revoke-shared-integration',

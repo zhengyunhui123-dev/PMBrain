@@ -35,4 +35,6 @@ test('左下角版本号和设置搜索都接在当前产品页面上', () => {
   expect(page).toContain('product-version');
   expect(page).toContain('visibleSettingItems');
   expect(page).not.toContain('Array.from(new Set(settingItems.map(item => item.group)))');
+  expect(page).toContain("label: '网络与连接'");
+  expect(page).not.toContain('桌面、网络与启动');
 });

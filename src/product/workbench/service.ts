@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { WorkbenchCitation, WorkbenchConversation, WorkbenchMessage, WorkbenchModel } from '../../../shared/workbench';
+import { advanceStoredReads, attachmentRead, enrichAttachments, incomingAttachments, resolveListedAttachments, summarySource, modelReadsPdfNatively } from './attachments';
 import { planContext } from './context';
 import { WorkbenchStore } from './store';
 
@@ -16,6 +17,7 @@ export interface WorkbenchAnswerInput {
   systemPrompt?: string;
   temperature?: number;
   signal: AbortSignal;
+  attachmentSupplement?: string;
   progress: (stage: string) => void;
   onDelta?: (delta: string) => void;
   onReplace?: (text: string, model: string) => void;
@@ -29,8 +31,9 @@ async function compressOlder(model: string, prior: string, pending: WorkbenchMes
   const batches: string[] = [];
   let batch = '';
   for (const message of pending) {
-    for (let offset = 0; offset < message.text.length; offset += SUMMARY_BATCH) {
-      const line = `${message.role === 'user' ? '用户' : '助手'}${offset ? '（续）' : ''}：${message.text.slice(offset, offset + SUMMARY_BATCH)}`;
+    const body = summarySource(message);
+    for (let offset = 0; offset < body.length; offset += SUMMARY_BATCH) {
+      const line = `${message.role === 'user' ? '用户' : '助手'}${offset ? '（续）' : ''}：${body.slice(offset, offset + SUMMARY_BATCH)}`;
       if (batch && batch.length + line.length > SUMMARY_BATCH) { batches.push(batch); batch = ''; }
       batch += `${line}\n`;
     }
@@ -48,7 +51,11 @@ async function compressOlder(model: string, prior: string, pending: WorkbenchMes
 
 export class WorkbenchService {
   private active = new Map<string, { abort: AbortController; promise: Promise<void> }>();
-  constructor(private store: WorkbenchStore, private models: () => WorkbenchModel[], private answer: WorkbenchAnswer, private summarize?: WorkbenchSummarizer) {
+  private acceptance = new Map<string, Promise<WorkbenchConversation>>();
+  constructor(private store: WorkbenchStore, private models: () => WorkbenchModel[], private answer: WorkbenchAnswer, private summarize?: WorkbenchSummarizer, private attachmentIo?: {
+    ocr?: (bytes: Buffer, mime: string, signal: AbortSignal) => Promise<string>;
+    office?: (bytes: Buffer, name: string, signal: AbortSignal) => Promise<string>;
+  }) {
     for (const conversation of store.list()) {
       let changed = false;
       for (const message of conversation.messages) if (message.status === 'running') { message.status = 'error'; message.error = '上次生成因服务退出而中断，请重试。'; changed = true; }
@@ -79,19 +86,29 @@ export class WorkbenchService {
     if (emptyOnly && this.get(id).messages.length) throw new Error('会话已有消息，不能自动清理');
     this.store.remove(id);
   }
-  send(id: string, input: { text?: string; model?: string; knowledge?: boolean; retry?: boolean; editMessageId?: string }) {
+  send(id: string, input: { text?: string; model?: string; knowledge?: boolean; retry?: boolean; editMessageId?: string; attachments?: unknown; attachmentsHydrated?: boolean }) {
     if (this.active.has(id)) throw new Error('当前会话正在生成，请等待或停止');
     const conversation = this.get(id); const model = this.model(input.model ?? conversation.model);
     const now = new Date().toISOString();
+    const attachmentFlags = { vision: this.models().find(item => item.id === model)?.vision === true, pdfNative: modelReadsPdfNatively() };
+    const snapshot = JSON.stringify(conversation);
+    const previousAttachmentIds = new Set(conversation.messages.flatMap(message => (message.attachments ?? []).map(item => item.id)));
     if (input.editMessageId) {
-      if (typeof input.text !== 'string' || !input.text.trim() || input.text.length > 32000) throw new Error('请输入 1–32000 个字符');
       const index = conversation.messages.findIndex(message => message.id === input.editMessageId);
       const target = conversation.messages[index];
       if (!target || target.role !== 'user') throw new Error('只能修改你发送的问题');
+      const nextAttachments = input.attachments === undefined ? undefined : resolveListedAttachments(input.attachments, target.attachments ?? [], attachmentFlags);
+      const text = typeof input.text === 'string' ? input.text.trim() : '';
+      if (text.length > 32000) throw new Error('请输入 1–32000 个字符');
+      const kept = nextAttachments
+        ? (input.attachmentsHydrated === true ? nextAttachments.length : (target.attachments?.length ?? 0) + nextAttachments.filter(item => !(target.attachments ?? []).some(current => current.id === item.id)).length)
+        : (target.attachments?.length ?? 0);
+      if (!text && !kept) throw new Error('请输入 1–32000 个字符');
       const previous = target.text;
-      target.text = input.text.trim();
+      target.text = text;
+      if (nextAttachments) this.applyEditedAttachments(conversation.id, target, nextAttachments, input.attachmentsHydrated === true);
       conversation.messages.splice(index + 1);
-      if (index === 0 && (conversation.title === '新对话' || conversation.title === previous.slice(0, 40))) conversation.title = target.text.slice(0, 40);
+      if (index === 0 && (conversation.title === '新对话' || conversation.title === previous.slice(0, 40))) conversation.title = (text || nextAttachments?.[0]?.name || previous).slice(0, 40);
       if (conversation.summaryUntil) {
         const anchor = conversation.messages.findIndex(message => message.id === conversation.summaryUntil);
         if (anchor === -1 || anchor >= index) { delete conversation.summary; delete conversation.summaryUntil; }
@@ -100,23 +117,29 @@ export class WorkbenchService {
       if (conversation.messages.at(-1)?.role !== 'assistant') throw new Error('没有可重新生成的回答');
       conversation.messages.pop();
     } else {
-      if (typeof input.text !== 'string' || !input.text.trim() || input.text.length > 32000) throw new Error('请输入 1–32000 个字符');
-      conversation.messages.push({ id: randomUUID(), role: 'user', text: input.text.trim(), createdAt: now, status: 'complete' });
-      if (conversation.messages.length === 1) conversation.title = input.text.trim().slice(0, 40);
+      const nextAttachments = incomingAttachments(input.attachments, attachmentFlags);
+      const text = typeof input.text === 'string' ? input.text.trim() : '';
+      if (text.length > 32000 || (!text && !nextAttachments.length)) throw new Error('请输入 1–32000 个字符');
+      conversation.messages.push({ id: randomUUID(), role: 'user', text, createdAt: now, status: 'complete', ...(nextAttachments.length ? { attachments: nextAttachments } : {}) });
+      if (conversation.messages.length === 1) conversation.title = (text || nextAttachments[0]?.name || '\u9644\u4ef6').slice(0, 40);
     }
     conversation.model = model; conversation.knowledge = input.knowledge ?? conversation.knowledge; conversation.updatedAt = now;
     const assistant = this.store.assistant();
     const contextWindow = this.models().find(item => item.id === model)?.contextWindow;
-    const { recent, older } = planContext(conversation.messages, assistant.context, { contextWindow, summary: conversation.summary });
-    const olderTurns = older.filter(message => message.role === 'user').length;
     const modelName = this.models().find(item => item.id === model)?.name || model;
+    const hasAttachments = conversation.messages.some(message => message.attachments?.length);
     const reply: WorkbenchMessage = {
       id: randomUUID(), role: 'assistant', text: '', createdAt: now, status: 'running', model, modelName,
-      stage: olderTurns ? '正在压缩更早的对话' : '正在准备回答', contextMessages: recent.length,
-      ...(olderTurns ? { contextNote: `正在处理更早的 ${olderTurns} 轮对话` } : {}),
+      stage: hasAttachments ? '正在读取附件' : '正在准备回答',
     };
     conversation.messages.push(reply); this.store.save(conversation);
     const abort = new AbortController();
+    let opened = false;
+    let acceptReady!: (value: WorkbenchConversation) => void;
+    let rejectReady!: (error: unknown) => void;
+    const ready = new Promise<WorkbenchConversation>((resolve, reject) => { acceptReady = resolve; rejectReady = reject; });
+    ready.catch(() => undefined);
+    this.acceptance.set(id, ready);
     let lastSave = 0;
     const saveSoon = (force = false) => {
       if (abort.signal.aborted && !force) return;
@@ -124,8 +147,30 @@ export class WorkbenchService {
       if (!force && lastSave !== 0 && nowMs - lastSave < 80) return;
       lastSave = nowMs; this.store.save(conversation);
     };
-    const promise = Promise.resolve().then(async () => {
+    const promise = (async () => {
       try {
+        const userTurn = [...conversation.messages].reverse().find(message => message.role === 'user');
+        try {
+          await this.prepareTurnAttachments(conversation, attachmentFlags, abort.signal);
+          if (abort.signal.aborted) throw Object.assign(new Error('已停止生成'), { name: 'AbortError' });
+          const moved = input.retry ? [] : advanceStoredReads(conversation.messages, userTurn?.text ?? '');
+          if (moved.length && userTurn) userTurn.attachmentSupplement = moved.map(item => item.excerpt).join('\n\n');
+          this.dropRemovedAttachments(snapshot, conversation);
+          saveSoon(true);
+          opened = true;
+          acceptReady(conversation);
+        } catch (error) {
+          if (!opened) {
+            this.rollback(conversation, snapshot, previousAttachmentIds);
+            const failure = error instanceof Error && error.name === 'AbortError' ? new Error('已停止生成') : error;
+            rejectReady(failure instanceof Error ? failure : new Error(String(failure)));
+            return;
+          }
+          throw error;
+        }
+        let { recent, older } = planContext(conversation.messages, assistant.context, { contextWindow, summary: conversation.summary });
+        const olderTurns = older.filter(message => message.role === 'user').length;
+        reply.contextMessages = recent.length;
         let summary = conversation.summary;
         if (older.length) {
           let prior = conversation.summary ?? '';
@@ -150,7 +195,7 @@ export class WorkbenchService {
           reply.contextNote = `更早的 ${olderTurns} 轮已压缩为摘要，仍会参与这次回答`;
         }
         const result = await this.answer({
-          messages: recent, ...(summary ? { summary } : {}), model, knowledge: conversation.knowledge,
+          messages: this.modelMessages(conversation.id, recent), ...(summary ? { summary } : {}), model, knowledge: conversation.knowledge,
           ...(assistant.systemPrompt.trim() ? { systemPrompt: assistant.systemPrompt } : {}),
           ...(assistant.temperature !== null ? { temperature: assistant.temperature } : {}),
           signal: abort.signal,
@@ -177,9 +222,18 @@ export class WorkbenchService {
           if (result.stopReason) reply.stopReason = result.stopReason;
           reply.status = 'complete';
         }
-      } catch (error) { if (!abort.signal.aborted) { reply.status = 'error'; reply.error = error instanceof Error ? error.message : String(error); } }
-      finally { if (abort.signal.aborted) reply.status = 'cancelled'; delete reply.stage; conversation.updatedAt = new Date().toISOString(); this.store.save(conversation); this.active.delete(id); }
-    });
+      } catch (error) { if (opened && !abort.signal.aborted) { reply.status = 'error'; reply.error = error instanceof Error ? error.message : String(error); } }
+      finally {
+        if (opened) {
+          if (abort.signal.aborted) reply.status = 'cancelled';
+          delete reply.stage;
+          conversation.updatedAt = new Date().toISOString();
+          this.store.save(conversation);
+        }
+        this.active.delete(id);
+        this.acceptance.delete(id);
+      }
+    })();
     this.active.set(id, { abort, promise }); return conversation;
   }
   cancel(id: string) {
@@ -189,4 +243,74 @@ export class WorkbenchService {
     return conversation;
   }
   async settled(id: string) { await this.active.get(id)?.promise; }
+  accepted(id: string): Promise<WorkbenchConversation> {
+    const pending = this.acceptance.get(id);
+    if (!pending) throw new Error('发送还没有开始');
+    return pending;
+  }
+
+  private applyEditedAttachments(_conversationId: string, target: WorkbenchMessage, listed: WorkbenchMessage['attachments'], hydrated: boolean) {
+    const next = listed ?? [];
+    if (hydrated) {
+      if (next.length) target.attachments = next;
+      else delete target.attachments;
+      return;
+    }
+    const have = new Set((target.attachments ?? []).map(item => item.id));
+    const added = next.filter(item => !have.has(item.id));
+    if (!added.length) return;
+    target.attachments = [...(target.attachments ?? []), ...added];
+  }
+  private async prepareTurnAttachments(conversation: WorkbenchConversation, flags: { vision: boolean; pdfNative: boolean }, signal: AbortSignal) {
+    const items = conversation.messages.flatMap(message => message.attachments ?? []);
+    if (!items.length) return;
+    for (const item of items) {
+      const next = attachmentRead({ name: item.name, mime: item.mime, vision: flags.vision, pdfNative: flags.pdfNative });
+      if (item.route === next && (next === 'vision' || next === 'pdf-file' || item.text || item.note)) continue;
+      item.route = next;
+      if (next === 'vision' || !item.text) delete item.note;
+    }
+    await enrichAttachments(items, {
+      signal,
+      read: item => this.store.readAttachment(conversation.id, item.id),
+      ...(this.attachmentIo?.ocr ? { ocr: this.attachmentIo.ocr } : {}),
+      ...(this.attachmentIo?.office ? { office: this.attachmentIo.office } : {}),
+    });
+  }
+  private dropRemovedAttachments(snapshot: string, conversation: WorkbenchConversation) {
+    const previous = JSON.parse(snapshot) as WorkbenchConversation;
+    const keep = new Set(conversation.messages.flatMap(message => (message.attachments ?? []).map(item => item.id)));
+    for (const message of previous.messages) for (const item of message.attachments ?? []) {
+      if (!keep.has(item.id)) this.store.deleteAttachment(conversation.id, item.id);
+    }
+  }
+  private rollback(conversation: WorkbenchConversation, snapshot: string, previousIds: Set<string>) {
+    for (const message of conversation.messages) for (const item of message.attachments ?? []) {
+      if (!previousIds.has(item.id)) this.store.deleteAttachment(conversation.id, item.id);
+    }
+    const restored = JSON.parse(snapshot) as WorkbenchConversation;
+    conversation.messages = restored.messages;
+    conversation.title = restored.title;
+    conversation.model = restored.model;
+    conversation.knowledge = restored.knowledge;
+    conversation.updatedAt = restored.updatedAt;
+    if (restored.summary) conversation.summary = restored.summary;
+    else delete conversation.summary;
+    if (restored.summaryUntil) conversation.summaryUntil = restored.summaryUntil;
+    else delete conversation.summaryUntil;
+    this.store.save(conversation);
+  }
+  private modelMessages(conversationId: string, messages: WorkbenchMessage[]): WorkbenchMessage[] {
+    return messages.map(message => {
+      if (!message.attachments?.length) return message;
+      return {
+        ...message,
+        attachments: message.attachments.map(item => {
+          if (item.data || (item.route !== 'vision' && item.route !== 'pdf-file')) return item;
+          const bytes = this.store.readAttachment(conversationId, item.id);
+          return bytes ? { ...item, data: bytes.toString('base64') } : item;
+        }),
+      };
+    });
+  }
 }

@@ -498,17 +498,21 @@
             <div id="memory-agent-status"><small>已接入 Agent 状态将在本地服务启动后显示。</small></div>
           </section>
 
-          <section class="system-block" aria-labelledby="desktop-behavior-title">
-            <div class="subsection-heading"><div><span>04C / DESKTOP</span><h3 id="desktop-behavior-title">桌面行为</h3></div></div>
-            <div class="system-setting-grid">
-              <label class="setting-toggle" for="launch-at-login"><input id="launch-at-login" type="checkbox" /><span><b>开机自动启动 PMBrain</b><small>登录 Windows 后启动桌面端，并按数据库类型准备本地服务。</small></span></label>
-              <label for="close-behavior"><span>点击窗口 × 时</span><select id="close-behavior"><option value="tray">最小化到托盘（默认）</option><option value="quit">退出 PMBrain</option></select></label>
-              <label for="system-theme-select"><span>界面外观</span><select id="system-theme-select" aria-label="界面主题"><option value="system">跟随系统</option><option value="light">浅色</option><option value="dark">深色</option></select></label>
-            </div>
-          </section>
           <div class="system-save-bar"><p id="system-save-note"></p><button class="primary" id="save-system-settings" disabled><span>保存系统设置</span><i></i></button></div>
         </section>
 
+        <section class="panel" id="panel-desktop-behavior">
+          <section class="pm-card settings-panel appearance-settings desktop-behavior-card" aria-labelledby="desktop-behavior-title">
+            <div class="settings-panel-title">
+              <div><h2 id="desktop-behavior-title">桌面行为</h2><p>开机是否自动启动，以及点击窗口关闭按钮时如何处理。</p></div>
+            </div>
+            <div class="system-setting-grid">
+              <label class="setting-toggle" for="launch-at-login"><input id="launch-at-login" type="checkbox" /><span><b>开机自动启动 PMBrain</b><small>登录 Windows 后启动桌面端，并按数据库类型准备本地服务。</small></span></label>
+              <label for="close-behavior"><span>点击窗口 × 时</span><select id="close-behavior"><option value="tray">最小化到托盘（默认）</option><option value="quit">退出 PMBrain</option></select></label>
+            </div>
+            <div class="system-save-bar"><p id="desktop-behavior-note" role="status"></p><button class="primary" id="save-desktop-behavior" type="button"><span>保存</span><i></i></button></div>
+          </section>
+        </section>
         <section class="panel" id="panel-updates">
           <div class="section-heading">
             <div><span class="index">05</span><h2>软件更新</h2></div>

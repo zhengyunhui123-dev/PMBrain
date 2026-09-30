@@ -1,4 +1,18 @@
 export interface WorkbenchCitation { sourceId: string | null; slug: string; title: string; snippet: string }
+export const ATTACHMENT_MAX_BYTES = 15 * 1024 * 1024;
+export const ATTACHMENT_MAX_COUNT = 8;
+export interface WorkbenchAttachment {
+  id: string;
+  name: string;
+  mime: string;
+  route: 'vision' | 'ocr' | 'pdf-file' | 'office' | 'utf8' | 'skip';
+  included: number;
+  readThrough?: number;
+  preview?: string;
+  text?: string;
+  note?: string;
+  data?: string;
+}
 export interface WorkbenchMessage {
   id: string;
   role: 'user' | 'assistant';
@@ -13,6 +27,8 @@ export interface WorkbenchMessage {
   knowledge?: 'used' | 'none' | 'off';
   contextMessages?: number;
   contextNote?: string;
+  attachments?: WorkbenchAttachment[];
+  attachmentSupplement?: string;
   stopReason?: 'end' | 'length' | 'other';
 }
 export interface WorkbenchConversation {
@@ -26,7 +42,7 @@ export interface WorkbenchConversation {
   summary?: string;
   summaryUntil?: string;
 }
-export interface WorkbenchModel { id: string; name: string; contextWindow?: number }
+export interface WorkbenchModel { id: string; name: string; contextWindow?: number; vision?: boolean }
 export const FALLBACK_CONTEXT_TOKENS = 32_000;
 export interface ContextPolicy { maxMessages: number; threshold: number; summaryModel: string }
 export interface KnowledgeAssistantSettings {

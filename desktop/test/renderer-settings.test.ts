@@ -238,20 +238,52 @@ describe('desktop settings renderer contracts', () => {
     expect(html).not.toContain('不受该开关影响');
   });
 
-  test('moves appearance and native desktop behavior into an accessible system panel', () => {
+  test('moves desktop behavior under general settings and leaves network on the system panel', () => {
     for (const id of [
       'network-mode-local',
       'network-mode-shared',
       'shared-address',
       'launch-at-login',
       'close-behavior',
-      'system-theme-select',
       'save-system-settings',
+      'save-desktop-behavior',
       'restart-shared-gateway',
     ]) {
       expect(html).toContain(`id="${id}"`);
     }
     expect(html).not.toContain('id="theme-select"');
+    expect(html).not.toContain('id="system-theme-select"');
+    expect(html).not.toContain('04C / DESKTOP');
+    const systemStart = html.indexOf('id="panel-system"');
+    const behaviorStart = html.indexOf('id="panel-desktop-behavior"');
+    const updatesStart = html.indexOf('id="panel-updates"');
+    expect(behaviorStart).toBeGreaterThan(systemStart);
+    expect(updatesStart).toBeGreaterThan(behaviorStart);
+    const systemPanel = html.slice(systemStart, behaviorStart);
+    const behaviorPanel = html.slice(behaviorStart, updatesStart);
+    expect(systemPanel).toContain('连接模式');
+    expect(systemPanel).toContain('AI 长期记忆');
+    expect(systemPanel).not.toContain('launch-at-login');
+    expect(systemPanel).not.toContain('桌面行为');
+    expect(behaviorPanel).toContain('id="launch-at-login"');
+    expect(behaviorPanel).toContain('id="close-behavior"');
+    expect(behaviorPanel).toContain('id="desktop-behavior-note"');
+    expect(behaviorPanel).toContain('<span>保存</span>');
+    expect(behaviorPanel).not.toContain('保存系统设置');
+    expect(behaviorPanel).not.toContain('界面外观');
+    const desktopSaveStart = renderer.indexOf('async function saveDesktopBehavior');
+    const desktopSave = renderer.slice(desktopSaveStart, renderer.indexOf('function populate', desktopSaveStart));
+    expect(desktopSave).toContain('saveDesktopBehavior({ launchAtLogin, closeBehavior })');
+    expect(desktopSave).toContain('桌面行为已保存。');
+    expect(desktopSave).toContain("$('#desktop-behavior-note')");
+    expect(desktopSave).not.toContain('saveSystemSettings');
+    expect(desktopSave).not.toContain('系统设置已保存，当前仅本机连接。');
+    expect(preload).toContain('desktop:save-desktop-behavior');
+    expect(main).toContain('saveDesktopBehavior: input => systemSettingsController.saveDesktopBehavior(input)');
+    expect(renderer).toContain("$('#save-desktop-behavior').addEventListener('click', () => void saveDesktopBehavior())");
+    expect(renderer).not.toContain("void saveSystemSettings(event.currentTarget as HTMLButtonElement)");
+    expect(renderer).toContain('theme: themeSource');
+    expect(renderer).toContain("'desktop-behavior'");
     expect(html).toContain('aria-label="选择共享网络适配器和 IPv4 地址"');
     expect(html).toContain('固定局域网入口');
     expect(html).toContain('DHCP 地址保留');

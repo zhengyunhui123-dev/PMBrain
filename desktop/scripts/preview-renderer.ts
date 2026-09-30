@@ -191,6 +191,13 @@ window.pmbrainDesktop = {
     canceled: false,
     state: { ...(await window.pmbrainDesktop.getSystemSettings()), launchAtLogin: payload.launchAtLogin },
   }),
+  saveDesktopBehavior: async (input) => {
+    const state = await window.pmbrainDesktop.getSystemSettings();
+    return {
+      canceled: false,
+      state: { ...state, launchAtLogin: input.launchAtLogin, preferences: { ...state.preferences, closeBehavior: input.closeBehavior } },
+    };
+  },
   onSystemSettingsState: () => () => {},
   getMemoryWriteback: async () => ({
     mode: 'off', enabled: false, ttl: '30d', notice_shown: false, visibility: 'private', agents: [], issues: [],

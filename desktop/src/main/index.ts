@@ -392,6 +392,7 @@ if (!app.requestSingleInstanceLock()) {
       setTheme: value => systemSettingsController.setTheme(value),
       systemSettings: () => systemSettingsController.currentState(),
       saveSystemSettings: payload => systemSettingsController.save(payload),
+      saveDesktopBehavior: input => systemSettingsController.saveDesktopBehavior(input),
       memoryWriteback: () => systemSettingsController.memoryWriteback(),
       saveMemoryWriteback: payload => systemSettingsController.saveMemoryWriteback(payload),
       sharedAccess: () => sharedAccessController.read(),
