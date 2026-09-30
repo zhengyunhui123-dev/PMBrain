@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { defaultAssistant } from '../shared/workbench';
 import { WorkbenchService, conversationContext } from '../src/product/workbench/service';
 import { knowledgeWorkbenchAnswer } from '../src/product/workbench/routes';
 import { WorkbenchStore } from '../src/product/workbench/store';
@@ -310,4 +311,81 @@ test('知识检索带上最近几轮问题，并把更早摘要交给模型', as
   expect(query).not.toContain(long);
   expect(system).toContain('之前决定用蓝色');
   expect(system).toContain('不要向用户复述');
+});
+
+test('会话超过 200 轮仍然可以继续', async () => {
+  const store = new WorkbenchStore(root());
+  const service = new WorkbenchService(store, () => [{ id: 'local', name: '本地' }], async () => ({ text: '还在', model: 'local', citations: [] }), async () => '早期摘要');
+  const thread = service.create({ knowledge: false });
+  const now = new Date().toISOString();
+  for (let i = 0; i < 210; i++) {
+    thread.messages.push({ id: `u${i}`, role: 'user', text: `问${i}`, status: 'complete', createdAt: now });
+    thread.messages.push({ id: `a${i}`, role: 'assistant', text: `答${i}`, status: 'complete', createdAt: now });
+  }
+  store.save(thread);
+  service.send(thread.id, { text: '还在继续' });
+  await service.settled(thread.id);
+  const reply = service.get(thread.id).messages.at(-1);
+  expect(reply?.status).toBe('complete');
+  expect(reply?.error).toBeUndefined();
+  expect(reply?.text).toBe('还在');
+});
+
+test('接近模型上下文窗口的 80% 时就压缩，不必等到 24 条', async () => {
+  const seen: string[][] = [];
+  const store = new WorkbenchStore(root());
+  const service = new WorkbenchService(store, () => [{ id: 'local', name: '本地', contextWindow: 8192 }], async input => {
+    seen.push(input.messages.map(message => message.text));
+    return { text: '好', model: 'local', citations: [] };
+  }, async () => '已压缩早期内容');
+  store.saveAssistant({ ...defaultAssistant(), context: { maxMessages: 100, threshold: 0.8, summaryModel: '' } });
+  const thread = service.create({ knowledge: false });
+  const chunk = '资'.repeat(3000);
+  for (let i = 0; i < 4; i++) {
+    thread.messages.push({ id: `u${i}`, role: 'user', text: `${i}:${chunk}`, status: 'complete', createdAt: '' });
+    thread.messages.push({ id: `a${i}`, role: 'assistant', text: `答${i}`, status: 'complete', createdAt: '' });
+  }
+  store.save(thread);
+  service.send(thread.id, { text: '最新' });
+  await service.settled(thread.id);
+  expect(seen[0]?.length ?? 99).toBeLessThan(8);
+  expect(seen[0]?.join('') ?? '').not.toContain('0:');
+  expect(seen[0]?.at(-1)).toBe('最新');
+  expect(service.get(thread.id).summary).toContain('已压缩');
+});
+
+test('助手可以单独指定摘要模型，系统提示词和温度会传给回答', async () => {
+  let summaryModel = '';
+  let answerInput: { systemPrompt?: string; temperature?: number; messages: Array<{ text: string }> } | undefined;
+  const store = new WorkbenchStore(root());
+  const service = new WorkbenchService(store, () => [{ id: 'chat', name: '对话' }, { id: 'summary', name: '摘要' }], async input => {
+    answerInput = input;
+    return { text: '好', model: 'chat', citations: [] };
+  }, async input => { summaryModel = input.model; return '摘要完成'; });
+  store.saveAssistant({ ...defaultAssistant(), systemPrompt: '只回答项目事实', temperature: 0.2, context: { maxMessages: 2, threshold: 0.8, summaryModel: 'summary' } });
+  const thread = service.create({ knowledge: false, model: 'chat' });
+  const now = new Date().toISOString();
+  thread.messages.push({ id: 'u0', role: 'user', text: '早期问题', status: 'complete', createdAt: now }, { id: 'a0', role: 'assistant', text: '早期回答', status: 'complete', createdAt: now });
+  store.save(thread);
+  service.send(thread.id, { text: '现在', model: 'chat' });
+  await service.settled(thread.id);
+  expect(summaryModel).toBe('summary');
+  expect(answerInput?.systemPrompt).toBe('只回答项目事实');
+  expect(answerInput?.temperature).toBe(0.2);
+  expect(answerInput?.messages.map(message => message.text)).toEqual(['现在']);
+});
+
+test('自定义系统提示词和温度会交给模型，留空时仍用知识库助手提示', async () => {
+  const seen: Array<{ system?: string; temperature?: number }> = [];
+  const answer = knowledgeWorkbenchAnswer({} as any, {
+    search: async () => ({ results: [] } as any),
+    answer: async input => { seen.push({ system: input.system, temperature: input.temperature }); return { text: '好', model: 'm', stopReason: 'end' } as any; },
+  });
+  const signal = new AbortController().signal;
+  await answer({ model: 'm', knowledge: false, systemPrompt: '只回答项目事实', temperature: 0.2, signal, progress: () => {}, messages: [{ id: '1', role: 'user', text: '问', status: 'complete', createdAt: '' }] });
+  await answer({ model: 'm', knowledge: false, signal, progress: () => {}, messages: [{ id: '1', role: 'user', text: '问', status: 'complete', createdAt: '' }] });
+  expect(seen[0]?.system?.startsWith('只回答项目事实')).toBe(true);
+  expect(seen[0]?.temperature).toBe(0.2);
+  expect(seen[1]?.system).toContain('知识工作台助手');
+  expect(seen[1]?.temperature).toBeUndefined();
 });

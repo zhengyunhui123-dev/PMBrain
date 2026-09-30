@@ -3,6 +3,36 @@
 .knowledge-workbench button:hover { background: var(--product-panel); }
 .knowledge-workbench button:disabled { opacity: .45; cursor: default; }
 .wb-history { border-right: 1px solid var(--product-line); padding: 15px 12px; display: flex; flex-direction: column; gap: 12px; min-height: 0; }
+.knowledge-workbench .wb-assistant, .knowledge-workbench .wb-assistant-chip { border: 0; background: transparent; justify-content: flex-start; gap: 10px; text-align: left; }
+.wb-assistant { width: 100%; padding: 8px; }
+.wb-assistant > span:first-child, .wb-assistant-chip > span { width: 28px; height: 28px; display: grid; place-items: center; border-radius: 8px; background: #3d8f93; color: white; flex-shrink: 0; }
+.wb-assistant > span:nth-child(2) { flex: 1; min-width: 0; }
+.wb-assistant b, .wb-assistant small { display: block; }
+.wb-assistant small { color: var(--product-muted); font-size: 10px; margin-top: 2px; }
+.wb-assistant svg { color: var(--product-muted); }
+.wb-modal-overlay { position: fixed; inset: 0; z-index: 30; background: #0008; display: grid; place-items: center; padding: 24px; }
+.wb-assistant-dialog { width: min(760px, 100%); max-height: calc(100vh - 48px); overflow: auto; background: var(--product-panel); color: var(--product-text); border: 1px solid var(--product-line); border-radius: 14px; padding: 18px 18px 14px; }
+.wb-assistant-dialog header, .wb-assistant-dialog footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.wb-assistant-dialog h2 { margin: 0; font-size: 16px; }
+.wb-assistant-dialog header button { border: 0; background: transparent; }
+.wb-assistant-body { display: grid; grid-template-columns: 168px minmax(0, 1fr); gap: 16px; margin-top: 16px; min-height: 320px; }
+.wb-assistant-body nav { display: flex; flex-direction: column; gap: 6px; }
+.wb-assistant-body nav button { justify-content: flex-start; border: 0; background: transparent; }
+.wb-assistant-body nav button[aria-current="step"] { background: color-mix(in srgb, var(--product-text) 8%, transparent); }
+.wb-assistant-body nav span { width: 18px; }
+.wb-assistant-form label { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; font-size: 13px; }
+.wb-assistant-form input, .wb-assistant-form select, .wb-assistant-form textarea { font: inherit; color: inherit; background: var(--product-bg); border: 1px solid var(--product-line); border-radius: 8px; padding: 8px 10px; }
+.wb-assistant-form textarea { min-height: 78px; resize: vertical; }
+.wb-assistant-form .wb-prompt { min-height: 220px; }
+.wb-name-row { display: flex; gap: 8px; }
+.wb-name-row input:first-child { width: 72px; flex: none; text-align: center; }
+.wb-check { flex-direction: row !important; align-items: center; }
+.wb-assistant-form p, .wb-assistant-dialog [role="alert"] { color: var(--product-muted); font-size: 12px; line-height: 1.6; }
+.wb-assistant-dialog [role="alert"] { color: #d66; }
+.wb-assistant-dialog footer { margin-top: 8px; }
+.wb-assistant-dialog footer span { display: flex; gap: 8px; }
+.knowledge-workbench .wb-primary { background: #4c7dff; color: white; border-color: #4c7dff; }
+@media (max-width: 760px) { .wb-assistant-body { grid-template-columns: 1fr; min-height: 0; } }
 .wb-search { display: flex; gap: 8px; padding: 9px; align-items: center; border: 1px solid var(--product-line); border-radius: 7px; color: var(--product-muted); }
 .product-app .wb-search input { width: 100%; min-width: 0; border: 0; padding: 0; background: transparent; color: inherit; font: inherit; outline: none; }
 .wb-history-list { flex: 1; overflow: auto; }

@@ -69,6 +69,9 @@ export function isCustomProvider(service: Pick<ModelService, 'id' | 'provider'>)
 export function providerKindLabel(service: Pick<ModelService, 'id' | 'provider'>): string {
   return isCustomProvider(service) ? '自定义服务商' : '模型服务';
 }
+export function configuredProvidersFirst<T extends { enabled: boolean }>(services: T[]): T[] {
+  return services.map((service, index) => ({ service, index })).sort((left, right) => Number(right.service.enabled) - Number(left.service.enabled) || left.index - right.index).map(item => item.service);
+}
 export function serviceModelSections(models: ServiceModel[]): Array<{ group: string | null; models: ServiceModel[] }> {
   const label = (model: ServiceModel) => model.group || '其他模型';
   const counts = new Map<string, number>();

@@ -1,9 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import type { WorkbenchCitation, WorkbenchConversation, WorkbenchMessage, WorkbenchModel } from '../../../shared/workbench';
+import { planContext } from './context';
 import { WorkbenchStore } from './store';
 
-const RECENT_MESSAGES = 24;
-const RECENT_CHARS = 48_000;
+export { conversationContext } from './context';
+
 const SUMMARY_BATCH = 8_000;
 const SUMMARY_LIMIT = 6_000;
 
@@ -12,6 +13,8 @@ export interface WorkbenchAnswerInput {
   summary?: string;
   model: string;
   knowledge: boolean;
+  systemPrompt?: string;
+  temperature?: number;
   signal: AbortSignal;
   progress: (stage: string) => void;
   onDelta?: (delta: string) => void;
@@ -19,28 +22,6 @@ export interface WorkbenchAnswerInput {
 }
 export type WorkbenchAnswer = (input: WorkbenchAnswerInput) => Promise<{ text: string; model: string; citations: WorkbenchCitation[]; knowledge?: 'used' | 'none' | 'off'; stopReason?: 'end' | 'length' | 'other' }>;
 export type WorkbenchSummarizer = (input: { model: string; prior: string; transcript: string; signal: AbortSignal }) => Promise<string>;
-
-export function conversationContext(messages: WorkbenchMessage[]): WorkbenchMessage[] {
-  const result = messages.filter(message => message.status === 'complete');
-  while (result[0]?.role === 'assistant') result.shift();
-  return result;
-}
-
-function retainedContext(messages: WorkbenchMessage[]): { recent: WorkbenchMessage[]; older: WorkbenchMessage[] } {
-  const complete = conversationContext(messages);
-  const recent: WorkbenchMessage[] = [];
-  let size = 0;
-  for (const message of [...complete].reverse()) {
-    const nextSize = size + message.text.length;
-    if (recent.length > 0 && (recent.length >= RECENT_MESSAGES || nextSize > RECENT_CHARS)) break;
-    recent.unshift(message);
-    size = nextSize;
-    if (recent.length >= RECENT_MESSAGES || size >= RECENT_CHARS) break;
-  }
-  while (recent[0]?.role === 'assistant') recent.shift();
-  const recentIds = new Set(recent.map(message => message.id));
-  return { recent, older: complete.filter(message => !recentIds.has(message.id)) };
-}
 
 async function compressOlder(model: string, prior: string, pending: WorkbenchMessage[], signal: AbortSignal, summarize?: WorkbenchSummarizer): Promise<string> {
   if (!pending.length) return prior;
@@ -76,6 +57,8 @@ export class WorkbenchService {
   }
   list() { return this.store.list().map(({ messages, ...row }) => ({ ...row, messageCount: messages.length, running: this.active.has(row.id) })); }
   get(id: string) { return this.store.get(id); }
+  assistant() { return this.store.assistant(); }
+  saveAssistant(input: unknown) { return this.store.saveAssistant(input); }
   private model(id?: string) {
     const models = this.models(); const model = id || models[0]?.id;
     if (!model || !models.some(item => item.id === model)) throw new Error('请先在模型服务中启用并保存普通模型');
@@ -118,12 +101,13 @@ export class WorkbenchService {
       conversation.messages.pop();
     } else {
       if (typeof input.text !== 'string' || !input.text.trim() || input.text.length > 32000) throw new Error('请输入 1–32000 个字符');
-      if (conversation.messages.length >= 400) throw new Error('本会话已达到 200 轮，请新建对话');
       conversation.messages.push({ id: randomUUID(), role: 'user', text: input.text.trim(), createdAt: now, status: 'complete' });
       if (conversation.messages.length === 1) conversation.title = input.text.trim().slice(0, 40);
     }
     conversation.model = model; conversation.knowledge = input.knowledge ?? conversation.knowledge; conversation.updatedAt = now;
-    const { recent, older } = retainedContext(conversation.messages);
+    const assistant = this.store.assistant();
+    const contextWindow = this.models().find(item => item.id === model)?.contextWindow;
+    const { recent, older } = planContext(conversation.messages, assistant.context, { contextWindow, summary: conversation.summary });
     const olderTurns = older.filter(message => message.role === 'user').length;
     const modelName = this.models().find(item => item.id === model)?.name || model;
     const reply: WorkbenchMessage = {
@@ -154,7 +138,9 @@ export class WorkbenchService {
           if (pending.length || !prior) {
             reply.stage = '正在压缩更早的对话';
             saveSoon(true);
-            const compressed = await compressOlder(model, prior, pending, abort.signal, this.summarize);
+            const summaryModel = assistant.context.summaryModel;
+            const summarizerModel = summaryModel && this.models().some(item => item.id === summaryModel) ? summaryModel : model;
+            const compressed = await compressOlder(summarizerModel, prior, pending, abort.signal, this.summarize);
             if (abort.signal.aborted) return;
             summary = compressed;
             conversation.summary = summary;
@@ -164,7 +150,10 @@ export class WorkbenchService {
           reply.contextNote = `更早的 ${olderTurns} 轮已压缩为摘要，仍会参与这次回答`;
         }
         const result = await this.answer({
-          messages: recent, ...(summary ? { summary } : {}), model, knowledge: conversation.knowledge, signal: abort.signal,
+          messages: recent, ...(summary ? { summary } : {}), model, knowledge: conversation.knowledge,
+          ...(assistant.systemPrompt.trim() ? { systemPrompt: assistant.systemPrompt } : {}),
+          ...(assistant.temperature !== null ? { temperature: assistant.temperature } : {}),
+          signal: abort.signal,
           progress: stage => { if (abort.signal.aborted) return; reply.stage = stage; saveSoon(true); },
           onDelta: delta => {
             if (abort.signal.aborted || !delta) return;

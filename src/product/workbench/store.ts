@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
-import type { WorkbenchConversation } from '../../../shared/workbench';
+import { defaultAssistant, normalizeAssistant, type KnowledgeAssistantSettings, type WorkbenchConversation } from '../../../shared/workbench';
 
 export class WorkbenchStore {
   constructor(private root: string) {}
@@ -25,4 +25,18 @@ export class WorkbenchStore {
     renameSync(temp, target);
   }
   remove(id: string) { unlinkSync(this.path(id)); }
+  assistant(): KnowledgeAssistantSettings {
+    const path = join(this.root, 'assistant.json');
+    if (!existsSync(path)) return defaultAssistant();
+    try { return normalizeAssistant(JSON.parse(readFileSync(path, 'utf8'))); } catch { return defaultAssistant(); }
+  }
+  saveAssistant(input: unknown): KnowledgeAssistantSettings {
+    const settings = normalizeAssistant(input);
+    mkdirSync(this.root, { recursive: true, mode: 0o700 });
+    const target = join(this.root, 'assistant.json');
+    const temp = `${target}.tmp`;
+    writeFileSync(temp, JSON.stringify(settings), { mode: 0o600 });
+    renameSync(temp, target);
+    return settings;
+  }
 }

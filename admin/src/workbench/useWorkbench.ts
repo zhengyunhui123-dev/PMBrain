@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { WorkbenchConversation, WorkbenchModel } from '../../../shared/workbench';
+import { defaultAssistant, type KnowledgeAssistantSettings, type WorkbenchConversation, type WorkbenchModel } from '../../../shared/workbench';
 import { productFetch } from '../lib/product-fetch';
 
 type ConversationRow = Omit<WorkbenchConversation, 'messages'> & { messageCount: number; running: boolean };
@@ -15,6 +15,7 @@ export function useWorkbench() {
   const [conversation, setConversation] = useState<WorkbenchConversation>();
   const [model, setModel] = useState('');
   const [knowledge, setKnowledge] = useState(true);
+  const [assistant, setAssistant] = useState<KnowledgeAssistantSettings>(defaultAssistant);
   const [error, setError] = useState('');
   const [pending, setPending] = useState(false);
   const [loaded, setLoaded] = useState(false);
@@ -26,9 +27,11 @@ export function useWorkbench() {
   };
   useEffect(() => {
     mounted.current = true; let cancelled = false;
-    Promise.all([workbenchRequest<{ conversations: ConversationRow[] }>('/conversations'), workbenchRequest<{ models: WorkbenchModel[] }>('/models')]).then(([history, available]) => {
+    Promise.all([workbenchRequest<{ conversations: ConversationRow[] }>('/conversations'), workbenchRequest<{ models: WorkbenchModel[] }>('/models'), workbenchRequest<KnowledgeAssistantSettings>('/assistant')]).then(([history, available, settings]) => {
       if (cancelled) return;
-      setRows(history.conversations); setModels(available.models); setModel(available.models[0]?.id ?? ''); setLoaded(true);
+      setRows(history.conversations); setModels(available.models); setAssistant(settings);
+      const preferred = settings.model && available.models.some(item => item.id === settings.model) ? settings.model : available.models[0]?.id ?? '';
+      setModel(preferred); setKnowledge(settings.knowledge); setLoaded(true);
     }).catch(reason => { if (!cancelled) { setError(String(reason.message || reason)); setLoaded(true); } });
     const refreshModels = () => { void workbenchRequest<{ models: WorkbenchModel[] }>('/models').then(result => { if (!cancelled) setModels(result.models); }).catch(reason => { if (!cancelled) setError(String(reason.message || reason)); }); };
     window.addEventListener('pmbrain:models-updated', refreshModels);
@@ -95,5 +98,14 @@ export function useWorkbench() {
     } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
     finally { setPending(false); }
   };
-  return { rows, models, conversation, model, setModel, knowledge, setKnowledge, error, setError, loaded, pending, running, select, send, action };
+  const saveAssistant = async (value: KnowledgeAssistantSettings) => {
+    const saved = await workbenchRequest<KnowledgeAssistantSettings>('/assistant', value, 'PUT');
+    setAssistant(saved);
+    if (!conversation) {
+      if (saved.model && models.some(item => item.id === saved.model)) setModel(saved.model);
+      setKnowledge(saved.knowledge);
+    }
+    return saved;
+  };
+  return { rows, models, conversation, model, setModel, knowledge, setKnowledge, assistant, saveAssistant, error, setError, loaded, pending, running, select, send, action };
 }

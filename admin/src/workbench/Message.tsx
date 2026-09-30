@@ -1,14 +1,14 @@
 import React from 'react';
-import { BookOpen, Bot, User } from 'lucide-react';
+import { BookOpen, User } from 'lucide-react';
 import type { WorkbenchMessage } from '../../../shared/workbench';
 import { MarkdownArticle } from '../pages/Documentation';
 import { CopyButton } from '../lib/clipboard';
 
-export function Message({ message, canRetry, onRetry, canEdit, onEdit }: { message: WorkbenchMessage; canRetry: boolean; onRetry: () => void; canEdit?: boolean; onEdit?: () => void }) {
+export function Message({ message, assistantName, assistantEmoji, canRetry, onRetry, canEdit, onEdit }: { message: WorkbenchMessage; assistantName: string; assistantEmoji: string; canRetry: boolean; onRetry: () => void; canEdit?: boolean; onEdit?: () => void }) {
   const modelLabel = message.modelName || message.model;
   return <article className={`wb-message wb-${message.role}`} aria-label={message.role === 'user' ? '你的消息' : '助手回答'}>
-    <div className="wb-avatar">{message.role === 'user' ? <User size={17} /> : <Bot size={17} />}</div>
-    <div className="wb-message-body"><header><strong>{message.role === 'user' ? '你' : 'PMBrain'}</strong><span>{message.role === 'assistant' ? modelLabel : new Date(message.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span></header>
+    <div className="wb-avatar">{message.role === 'user' ? <User size={17} /> : <span>{assistantEmoji}</span>}</div>
+    <div className="wb-message-body"><header><strong>{message.role === 'user' ? '你' : assistantName}</strong><span>{message.role === 'assistant' ? modelLabel : new Date(message.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span></header>
       {message.knowledge === 'none' && message.status === 'complete' && <p className="wb-notice">这次没有从知识库检索到相关资料。下面的内容是模型基于一般知识的回答，请再核对。</p>}
       {message.text && <MarkdownArticle markdown={message.text} />}
       {message.status === 'running' && <p className="wb-progress" role="status"><i />{message.stage || '正在生成回答…'}</p>}

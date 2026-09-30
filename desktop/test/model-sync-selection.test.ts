@@ -1,9 +1,19 @@
 import { expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { isCustomProvider, listedServiceModels, mergeServiceModels, newServiceModel, presetBaseUrl, providerKindLabel, SERVICE_KEY_PAGES, SERVICE_PRESETS, serviceEndpointError, serviceModelSections, serviceModelsNotOnRemote, serviceNeedsApiKey } from '../../shared/model-services';
+import { configuredProvidersFirst, isCustomProvider, listedServiceModels, mergeServiceModels, newServiceModel, presetBaseUrl, providerKindLabel, SERVICE_KEY_PAGES, SERVICE_PRESETS, serviceEndpointError, serviceModelSections, serviceModelsNotOnRemote, serviceNeedsApiKey } from '../../shared/model-services';
 
 const page = readFileSync(join(import.meta.dir, '../../admin/src/product/ModelServices.tsx'), 'utf8');
+
+test('已经启用的服务商排在前面，同一组里仍保持原来的顺序', () => {
+  const sorted = configuredProvidersFirst([
+    { name: 'Ollama', enabled: false },
+    { name: '深度求索', enabled: true },
+    { name: '硅基流动', enabled: false },
+    { name: '智谱开放平台', enabled: true },
+  ]);
+  expect(sorted.map(item => item.name)).toEqual(['深度求索', '智谱开放平台', 'Ollama', '硅基流动']);
+});
 
 test('平台返回的模型先作为候选，只有点选的才会进入已添加列表', () => {
   const remote = [newServiceModel('对话甲'), newServiceModel('向量乙', 'embedding'), newServiceModel('对话丙')];
