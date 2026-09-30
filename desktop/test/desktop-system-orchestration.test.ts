@@ -196,16 +196,16 @@ describe('desktop system orchestration contracts', () => {
     expect(sidecarController).toContain('startupPromise');
   });
 
-  test('only rebuilds embeddings after explicit desktop confirmation', () => {
+  test('only clears embeddings after explicit desktop confirmation, and does it immediately', () => {
     expect(main).toContain('saved.embeddingModelChanged');
     expect(main).toContain('saved.embeddingModelActivated');
     expect(main).toContain("'--empty-only'");
     expect(main).toContain('payload.confirmEmbeddingRebuild !== true');
-    expect(main).toContain('embeddingRebuildQueued');
-    expect(main).toContain('waitEmbeddingRebuildChoice');
-    expect(main).toContain("canDeferEmbeddingRebuild: true");
+    expect(main).toContain('embeddingVectorsCleared');
+    expect(main).toContain("'--force-reembed'");
     expect(main).toContain("'/admin/api/runs/action'");
-    expect(main).toContain('forceReembed: true');
+    expect(main).not.toContain('pauseEmbeddingRebuild');
+    expect(main).not.toContain('forceReembed: true');
     expect(main).toContain('if (!embeddingSwitchCommitted) restoreConfig(saved.snapshot)');
   });
 
@@ -231,10 +231,11 @@ describe('desktop system orchestration contracts', () => {
     expect(main).not.toContain("title: '正在应用数据库迁移'");
   });
 
-  test('向量重建选择只在 Sidecar 就绪后显示，且按钮显示前已经注册等待器', () => {
+  test('切换向量模型时先清旧向量，Sidecar 就绪后再补新向量', () => {
     expect(setupController).toMatch(
-      /await this\.dependencies\.sidecar\.start\(false\)[\s\S]*if \(embeddingRebuildQueued\) \{[\s\S]*const rebuildChoice = this\.dependencies\.waitEmbeddingRebuildChoice\(\);[\s\S]*canDeferEmbeddingRebuild: true/,
+      /saved\.embeddingModelChanged && !legacyEmbeddingRecoveryConfirmed\) \{[\s\S]*'--force-reembed'[\s\S]*await this\.dependencies\.sidecar\.start\(false\)[\s\S]*if \(embeddingVectorsCleared\) \{[\s\S]*action: 'embed_stale', catchUp: true/,
     );
+    expect(setupController).not.toContain('waitEmbeddingRebuildChoice()');
   });
 
   test('allows credential listing and revocation while keeping creation behind the live gateway', () => {

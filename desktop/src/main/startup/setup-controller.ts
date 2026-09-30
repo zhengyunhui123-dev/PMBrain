@@ -242,8 +242,7 @@ export class SetupController {
     await this.dependencies.sidecar.stop();
     let saved: ReturnType<typeof saveSetup>;
     let embeddingSwitchCommitted = false;
-    let embeddingRebuildQueued = false;
-    let embeddingRebuildTotal = 0;
+    let embeddingVectorsCleared = false;
     let reembeddingWarning: string | null = null;
     let migrationRequired = false;
     try {
@@ -356,26 +355,19 @@ export class SetupController {
         ]);
         embeddingSwitchCommitted = true;
       } else if (saved.embeddingModelChanged && !legacyEmbeddingRecoveryConfirmed) {
-        embeddingSwitchCommitted = true;
-        embeddingRebuildQueued = true;
-        try {
-          const statusResult = await runCliChecked(this.dependencies.runtime(), [
-            'models', 'embedding-dimension-status', '--json',
-          ]);
-          const status = JSON.parse(statusResult.stdout.trim().split(/\r?\n/).at(-1) || '{}') as {
-            existing_embeddings?: number | string;
-          };
-          const parsed = Number(status.existing_embeddings ?? 0);
-          if (Number.isFinite(parsed) && parsed >= 0) embeddingRebuildTotal = parsed;
-        } catch {
-          embeddingRebuildTotal = 0;
-        }
-        const { pauseEmbeddingRebuild } = await import('../../../../src/core/embedding-rebuild-state.js');
-        pauseEmbeddingRebuild({
-          model: String(saved.config.embedding_model ?? ''),
-          dimensions: Number(saved.config.embedding_dimensions ?? 0) || 1,
-          total: embeddingRebuildTotal,
+        this.dependencies.sendStartupProgress({
+          visible: true,
+          stage: 'migration',
+          title: '正在准备搜索索引',
+          message: '正在按新向量模型清除旧向量并对齐维度。知识页面、文本分块和原始资料不会被修改。',
         });
+        await runCliChecked(this.dependencies.runtime(), [
+          'models', 'align-embedding-dimension', '--yes', '--json', '--force-reembed',
+        ]);
+        embeddingSwitchCommitted = true;
+        embeddingVectorsCleared = true;
+        const { clearEmbeddingRebuildState, readEmbeddingRebuildState } = await import('../../../../src/core/embedding-rebuild-state.js');
+        if (readEmbeddingRebuildState()) clearEmbeddingRebuildState();
       }
     } catch (error) {
       if (!embeddingSwitchCommitted) restoreConfig(saved.snapshot);
@@ -407,35 +399,19 @@ export class SetupController {
       this.dependencies.sidecar.current?.port,
       this.dependencies.sidecar.current ?? undefined,
     );
-    if (embeddingRebuildQueued) {
-      const { markEmbeddingRebuildRunning } = await import('../../../../src/core/embedding-rebuild-state.js');
-      const rebuildChoice = this.dependencies.waitEmbeddingRebuildChoice();
-      this.dependencies.sendStartupProgress({
-        visible: true,
-        stage: 'migration',
-        title: '正在准备搜索索引',
-        message: embeddingRebuildTotal > 0
-          ? `新模型已生效。向量索引待重建 ${embeddingRebuildTotal} 条。可稍后处理并进入 PMBrain，未完成的条目暂时不能语义搜索。`
-          : '新模型已生效。可稍后在任务中心继续重建向量索引。',
-        canDeferEmbeddingRebuild: true,
-        embeddingRebuildTotal,
-      });
-      const choice = await rebuildChoice;
+    if (embeddingVectorsCleared) {
       const activeSidecar = this.dependencies.sidecar.current;
-      if (choice === 'wait') {
-        if (!activeSidecar || this.dependencies.sidecar.state?.phase !== 'ready') {
-          reembeddingWarning = '新模型已生效，但本地服务尚未就绪。已在任务中心留下暂停的重建任务。';
-        } else {
-          try {
-            await activeSidecar.adminRequest('/admin/api/runs/action', {
-              method: 'POST',
-              body: JSON.stringify({ action: 'embed_stale', catchUp: true, forceReembed: true }),
-            });
-            markEmbeddingRebuildRunning();
-          } catch (error) {
-            reembeddingWarning = '新模型已生效，但未能立即开始重建。请到任务中心点击继续。'
-              + ` 原因：${error instanceof Error ? error.message : String(error)}`;
-          }
+      if (!activeSidecar || this.dependencies.sidecar.state?.phase !== 'ready') {
+        reembeddingWarning = '新模型已生效，旧向量已清除，但本地服务尚未就绪。稍后的向量化会补上新向量。';
+      } else {
+        try {
+          await activeSidecar.adminRequest('/admin/api/runs/action', {
+            method: 'POST',
+            body: JSON.stringify({ action: 'embed_stale', catchUp: true }),
+          });
+        } catch (error) {
+          reembeddingWarning = '新模型已生效，旧向量已清除，但未能立即开始重新向量化。可稍后继续。'
+            + ` 原因：${error instanceof Error ? error.message : String(error)}`;
         }
       }
     }
