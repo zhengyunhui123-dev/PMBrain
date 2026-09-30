@@ -55,6 +55,11 @@
 .provider-list-scroll button > span:nth-child(2) { flex: 1; }
 .provider-list-scroll i { width: 6px; height: 6px; background: #87c979; border-radius: 50%; }
 .provider-mark { width: 26px; height: 26px; flex-shrink: 0; display: grid; place-items: center; border: 0; border-radius: 8px; font-weight: 600; font-size: 11px; letter-spacing: -.4px; }
+.provider-draft-mark { width: 72px; height: 72px; margin: 4px auto 18px; border-radius: 50%; display: grid; place-items: center; background: #3d8f93; color: white; font-size: 28px; font-weight: 600; }
+.model-services .key-box.draft-key input { padding-right: 36px; }
+.endpoint-block { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+.endpoint-block > b { font-weight: 600; }
+.endpoint-block .model-hint { margin: 0; }
 .provider-detail { padding: 27px clamp(24px, 4vw, 65px); overflow: auto; min-width: 0; }
 .provider-detail > header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 27px; }
 .provider-header-actions { display: flex; align-items: center; gap: 8px; }

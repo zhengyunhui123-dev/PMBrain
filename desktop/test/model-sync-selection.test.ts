@@ -58,6 +58,13 @@ test('云端密钥和自定义服务商都要在弹窗里确认后才保存，�
   expect(page).toContain('获取密钥');
   expect(page).toContain('添加端点');
   expect(page).toContain('确认前不会保存');
+  expect(page).toContain('添加自定义提供商');
+  expect(page).toContain('端点设置');
+  expect(page).toContain('例如 OpenAI');
+  expect(page).toContain('实际请求路径');
+  expect(page).toContain('provider-draft-mark');
+  expect(page).toContain('className="key-box draft-key"');
+  expect(page).not.toContain("step: 'address'");
   expect(page).toContain('serviceNeedsApiKey');
   for (const removed of ['修改后自动保存', '添加后立即保存', 'onBlur={blurPrimary}']) {
     expect(page).not.toContain(removed);
