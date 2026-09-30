@@ -57,6 +57,9 @@
 .provider-mark { width: 26px; height: 26px; flex-shrink: 0; display: grid; place-items: center; border: 1px solid var(--product-line); border-radius: 7px; font-weight: 600; font-size: 11px; letter-spacing: -.5px; }
 .provider-detail { padding: 27px clamp(24px, 4vw, 65px); overflow: auto; min-width: 0; }
 .provider-detail > header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 27px; }
+.provider-header-actions { display: flex; align-items: center; gap: 8px; }
+.provider-header-actions > button { border: 0; background: transparent; color: var(--product-muted); padding: 6px; border-radius: 8px; }
+.provider-header-actions > button:hover { color: var(--product-text); background: color-mix(in srgb, var(--product-text) 8%, transparent); }
 .provider-detail h2 { font-size: 17px; font-weight: 600; margin: 0; }
 .model-subtitle { display: block; color: var(--product-muted); font-size: 11px; margin-top: 6px; }
 .service-switch { cursor: pointer; position: relative; }
@@ -67,7 +70,10 @@
 .service-switch input:checked + span:after { transform: translateX(15px); }
 .service-switch input:focus-visible + span { outline: 2px solid var(--product-blue); outline-offset: 3px; }
 .model-field { display: block; font-size: 13px; margin: 0 0 20px; }
+.model-field-head { display: flex; align-items: center; gap: 12px; }
+.model-services button.model-text-button { border: 0; background: none; padding: 0; color: #7aa2ff; font-size: 12px; }
 .model-field > input, .model-input-row { margin-top: 10px; }
+.model-input-row input[readonly] { cursor: pointer; }
 .model-input-row { display: flex; gap: 7px; }
 .model-input-row input { flex: 1; }
 .model-input-row button { flex-shrink: 0; }
@@ -78,7 +84,8 @@
 .model-list-heading > div { display: flex; gap: 6px; min-width: 0; }
 .model-list-heading .model-search { width: 135px; }
 .model-list-heading button { white-space: nowrap; }
-.service-model-groups details { border: 1px solid var(--product-line); border-radius: 8px; margin-bottom: 14px; overflow: hidden; }
+.service-model-groups details, .service-model-flat { border: 1px solid var(--product-line); border-radius: 8px; margin-bottom: 14px; overflow: hidden; }
+.service-model-flat .service-model-row + .service-model-row { border-top: 1px solid var(--product-line); }
 .service-model-groups summary { background: var(--product-panel); padding: 11px 14px; display: flex; gap: 9px; align-items: center; cursor: pointer; font-weight: 500; }
 .service-model-row { display: flex; align-items: center; gap: 10px; padding: 11px 13px; min-width: 0; }
 .service-model-row > svg { color: var(--product-muted); flex-shrink: 0; }
@@ -89,6 +96,8 @@
 .model-badges { display: flex; gap: 4px; }
 .model-badges span { display: flex; padding: 3px 7px; border-radius: 9px; color: #999be4; background: #272735; }
 .provider-detail > footer, .model-modal footer { display: flex; align-items: center; justify-content: flex-end; gap: 10px; margin-top: 25px; padding-top: 15px; border-top: 1px solid var(--product-line); }
+.model-modal footer.spread { justify-content: space-between; }
+.model-modal footer .footer-actions { display: flex; gap: 10px; }
 .provider-detail > footer > span { margin-right: auto; color: var(--product-muted); font-size: 11px; }
 .model-services button.model-primary { background: #487cdd; border-color: #487cdd; color: white; }
 .model-notice { color: var(--product-text); background: var(--product-panel); padding: 11px 13px; border: 1px solid var(--product-line); border-radius: 7px; line-height: 1.7; overflow-wrap: anywhere; }

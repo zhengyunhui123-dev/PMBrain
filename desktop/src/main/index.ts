@@ -1,4 +1,5 @@
-import { readModelServices, saveModelServices, syncServiceModels } from './models/model-services.js';
+import { readModelServices, saveModelServicesLive, syncServiceModels } from './models/model-services.js';
+import { refreshRunningGateway } from './models/model-runtime-refresh.js';
 import { app, dialog, nativeTheme, shell, net } from 'electron';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -201,6 +202,7 @@ const setupController: SetupController = new SetupController({
   hideStartupProgress,
   waitEmbeddingRebuildChoice,
   applyTheme: theme => systemSettingsController.applyTheme(theme),
+  reloadLiveModels: () => refreshRunningGateway(sidecarController),
 });
 
 const windowController: WindowController = new WindowController({
@@ -407,12 +409,9 @@ if (!app.requestSingleInstanceLock()) {
       initializeKnowledgeSourceGit,
       modelServices: readModelServices,
       syncServiceModels: (service, kind) => syncServiceModels(service, net.fetch.bind(net) as typeof fetch, kind),
-      saveModelServices: async input => {
+      saveModelServices: input => {
         if (setupController.inProgress || databaseTransferController.inProgress) throw new Error('配置或数据库操作进行中，请稍后再保存');
-        const restart = Boolean(sidecarController.current);
-        if (restart) await sidecarController.stop();
-        try { return saveModelServices(input); }
-        finally { if (restart) await sidecarController.start(false); }
+        return saveModelServicesLive(input, () => refreshRunningGateway(sidecarController));
       },
       providerModels: listDesktopProviderModels,
       testModelConnection,

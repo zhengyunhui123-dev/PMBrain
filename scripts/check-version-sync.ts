@@ -51,6 +51,8 @@ export function checkWorkspaceVersions(root = join(import.meta.dir, '..')): void
     manifestSidecar: manifest.sidecar?.version,
   });
 
+  const embedded = readFileSync(join(root, 'admin/src/product/product-version.ts'), 'utf8').match(/PRODUCT_VERSION = '([^']+)'/)?.[1];
+  if (embedded !== desktopPackage.version) errors.push(`admin product version=${embedded ?? ''}, desktop/package.json=${desktopPackage.version}`);
   if (errors.length > 0) {
     throw new Error(
       `Version contract mismatch:\n- ${errors.join('\n- ')}\n` +

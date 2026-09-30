@@ -3,7 +3,8 @@ import { createHash } from 'node:crypto';
 import { desktopConfigPath, backupFile, writeJsonConfig, getSetupInfo } from '../config-manager.js';
 import type { SetupInfo } from '../config-manager.js';
 import { getRecipe } from '../../../../src/core/ai/recipes/index.js';
-import { SERVICE_PRESETS, newServiceModel, type ModelService, type ModelServicesState, type ServiceModel, mergeServiceModels, serviceConnection, serviceModelValue } from '../../../../shared/model-services.js';
+import { SERVICE_PRESETS, isCustomProvider, newServiceModel, type ModelService, type ModelServicesState, type ServiceModel, mergeServiceModels, serviceConnection, serviceModelValue } from '../../../../shared/model-services.js';
+import { modelServiceRuntimeChanged } from './model-runtime-refresh.js';
 
 function rawConfig(): Record<string, any> {
   const path = desktopConfigPath();
@@ -118,7 +119,21 @@ export function projectModelServices(config: Record<string, any>, services: Mode
       if (endpoints) next.desktop.custom_endpoints[kind] = endpoints.map((entry: any) => entry.id === endpointId ? { ...entry, displayName: service.name, baseUrl: service.baseUrl, apiKey: service.apiKey } : entry);
     }
   }
-  for (const old of config.desktop?.model_services ?? []) if (!services.some(s => s.id === old.id) && selected.some(m => m.startsWith(`${old.provider}:`))) throw new Error('不能移除正在使用的模型平台');
+  for (const old of (config.desktop?.model_services ?? []) as ModelService[]) {
+    if (services.some(item => item.id === old.id)) continue;
+    const kindValues = old.legacy?.kind === 'embedding'
+      ? [config.embedding_model]
+      : [config.chat_model, config.ocr_model, config.expansion_model, config.embedding_image_ocr_model, ...(config.chat_fallback_chain ?? []), ...Object.entries(config).filter(([key]) => key.startsWith('models.')).map(([, value]) => value)];
+    const legacyInUse = Boolean(old.legacy?.selected) && kindValues.some(value => typeof value === 'string' && value.startsWith('custom-openai:'));
+    const stillUsed = legacyInUse || selected.some(value => value.startsWith(`${old.provider}:`)) || old.models?.some(model => selected.includes(serviceModelValue(old, model)));
+    if (stillUsed) throw new Error('不能移除正在使用的模型平台');
+    if (!isCustomProvider(old)) continue;
+    delete next.provider_base_urls[old.provider];
+    delete next.provider_touchpoint_api_keys[old.provider];
+    delete next.provider_touchpoint_base_urls[old.provider];
+    const endpoints = old.legacy && next.desktop?.custom_endpoints?.[old.legacy.kind];
+    if (old.legacy && endpoints) next.desktop.custom_endpoints[old.legacy.kind] = endpoints.filter((entry: { id?: string }) => entry.id !== old.legacy?.endpointId);
+  }
   next.desktop = { ...next.desktop, model_services: services };
   return next;
 }
@@ -130,5 +145,13 @@ export function saveModelServices(input: ModelServicesState): ModelServicesState
   backupFile(desktopConfigPath(), 'config');
   writeJsonConfig(desktopConfigPath(), next);
   return readModelServices();
+}
+
+/** Persist the model catalog. Reload the running gateway only when keys or addresses changed. */
+export async function saveModelServicesLive(input: ModelServicesState, reloadRuntime: () => Promise<void>): Promise<ModelServicesState> {
+  const before = rawConfig();
+  const saved = saveModelServices(input);
+  if (modelServiceRuntimeChanged(before, rawConfig())) await reloadRuntime();
+  return saved;
 }
 export { syncServiceModels } from './model-service-sync.js';

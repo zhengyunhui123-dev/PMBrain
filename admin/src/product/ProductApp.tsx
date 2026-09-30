@@ -10,6 +10,8 @@ import { HelpPage } from './HelpPage';
 import { DesktopSettings } from './DesktopSettings';
 import { Workbench } from '../workbench/Workbench';
 import type { SidecarState } from '../../../desktop/src/preload/index';
+import { PRODUCT_VERSION } from './product-version';
+import { settingGroupNames, visibleSettingItems } from './settings-nav';
 
 const settingItems = [
   { key: 'models', label: '模型服务', group: 'AI 与模型', icon: Box, desktop: true },
@@ -66,18 +68,20 @@ export function ProductApp() {
     else { storeThemeMode(next); setTheme(next); }
   };
   if (legacyMobile || (page === 'login' && !desktop)) return <ExistingPages />;
+  const visibleSettings = visibleSettingItems(settingItems, filter, Boolean(desktop));
+  const settingGroups = settingGroupNames(visibleSettings);
   const nav = [[MessageCircle, '知识工作台', 'import'], [Database, '知识库', 'data'], [FileText, '知识整理', 'dream'], [Network, '知识图谱', 'graph'], [CalendarCheck, '任务中心', 'tasks']] as const;
   return <div className={`product-app ${isSettings ? 'settings-open' : ''}`}>
     <aside className="product-nav" hidden={isSettings}><div className="product-brand"><span>P</span><b>PMBrain</b></div>
       <nav aria-label="PMBrain 主导航">{nav.map(([Icon, label, target]) => <button key={target} className={page === target ? 'active' : ''} onClick={() => navigate(target)}><Icon /><span>{label}</span></button>)}<hr /><button className={isSettings ? 'active' : ''} onClick={() => navigate('settings-models')}><Settings /><span>设置</span></button><button className={page === 'docs' ? 'active' : ''} onClick={() => navigate('docs')}><Info /><span>使用帮助</span></button></nav>
-      <button className="product-service" onClick={() => navigate(desktop ? 'settings-system' : 'health')}><i className={ready ? 'ready' : 'pending'} /><span>{ready ? '服务运行中' : needsSetup ? '等待配置' : service?.phase === 'failed' ? '服务启动失败' : '服务启动中'}<small>{desktop && service ? `localhost:${service.port}` : desktop ? '本机服务' : '知识库服务'}</small></span><ChevronRight size={17} /></button>
+      <button className="product-service" onClick={() => navigate(desktop ? 'settings-system' : 'health')}><i className={ready ? 'ready' : 'pending'} /><span>{ready ? '服务运行中' : needsSetup ? '等待配置' : service?.phase === 'failed' ? '服务启动失败' : '服务启动中'}<small>{desktop && service ? `localhost:${service.port}` : desktop ? '本机服务' : '知识库服务'}</small><small className="product-version">v{PRODUCT_VERSION}</small></span><ChevronRight size={17} /></button>
     </aside>
     <main className={`product-main ${isSettings ? 'is-settings' : ''}`}>
       {stateError && <div className="product-error" role="alert">{stateError}</div>}
       {!ready && <div className="product-startup" role="status"><span>{needsSetup ? '欢迎使用 PMBrain，请先配置知识库与模型。' : service?.phase === 'failed' ? service.message : '正在准备本机知识服务…'}</span><button onClick={() => navigate(service?.phase === 'failed' ? 'settings-recovery' : 'settings-basic')}>{service?.phase === 'failed' ? '查看与恢复' : '打开设置'}</button></div>}
       <section hidden={!isSettings} className="product-settings">
         <header className="settings-topbar"><button onClick={() => navigate('import')}><ArrowLeft size={17} />返回</button></header>
-        <div className="product-settings-grid"><aside className="product-categories"><h2>设置</h2><label><Search size={20} /><input aria-label="搜索设置" placeholder="搜索设置…" value={filter} onChange={event => setFilter(event.target.value)} /></label>{Array.from(new Set(settingItems.map(item => item.group))).map(group => <section key={group}><h3>{group}</h3>{settingItems.filter(item => item.group === group && item.label.includes(filter) && (desktop || !item.desktop || item.key === 'models')).map(item => <button className={category === item.key ? 'active' : ''} key={item.key} onClick={() => navigate(`settings-${item.key}`)}><item.icon size={18} />{item.label}</button>)}</section>)}</aside>
+        <div className="product-settings-grid"><aside className="product-categories"><h2>设置</h2><label><Search size={20} /><input aria-label="搜索设置" placeholder="搜索设置…" value={filter} onChange={event => setFilter(event.target.value)} /></label>{settingGroups.map(group => <section key={group}><h3>{group}</h3>{visibleSettings.filter(item => item.group === group).map(item => <button className={category === item.key ? 'active' : ''} key={item.key} onClick={() => navigate(`settings-${item.key}`)}><item.icon size={18} />{item.label}</button>)}</section>)}{filter.trim() && !settingGroups.length && <p className="empty-search">没有匹配的设置</p>}</aside>
           <div className={`product-settings-body ${['models', 'model-roles'].includes(category) ? 'has-model-services' : ''}`}>
             {desktop && <DesktopSettings theme={theme} panel={desktopPanels.includes(category) ? category : 'models'} visible={isSettings && desktopPanels.includes(category)} />}
             {isSettings && category === 'general' && <AppearanceSettings themeMode={theme} onThemeModeChange={changeTheme} />}

@@ -56,6 +56,36 @@ export const SERVICE_PRESETS = [
 export function newServiceModel(id: string, kind: ServiceModel['kind'] = 'chat'): ServiceModel {
   return { id, name: id, kind, group: id.split('/')[0].split(':')[0], capabilities: [] };
 }
+const PRESET_PROVIDER_IDS = new Set<string>(SERVICE_PRESETS.map(([id]) => id));
+export function isCustomProvider(service: Pick<ModelService, 'id' | 'provider'>): boolean {
+  return !PRESET_PROVIDER_IDS.has(service.id) && !PRESET_PROVIDER_IDS.has(service.provider);
+}
+export function providerKindLabel(service: Pick<ModelService, 'id' | 'provider'>): string {
+  return isCustomProvider(service) ? '自定义服务商' : '模型服务';
+}
+export function serviceModelSections(models: ServiceModel[]): Array<{ group: string | null; models: ServiceModel[] }> {
+  const label = (model: ServiceModel) => model.group || '其他模型';
+  const counts = new Map<string, number>();
+  for (const model of models) counts.set(label(model), (counts.get(label(model)) ?? 0) + 1);
+  const emitted = new Set<string>();
+  const sections: Array<{ group: string | null; models: ServiceModel[] }> = [];
+  for (const model of models) {
+    const group = label(model);
+    const auto = model.id.split('/')[0].split(':')[0] || model.id;
+    const shared = (counts.get(group) ?? 0) > 1;
+    const namedByUser = group !== model.id && group !== model.name && group !== auto && group !== '其他模型';
+    if (!shared && !namedByUser) {
+      const last = sections.at(-1);
+      if (last?.group === null) last.models.push(model);
+      else sections.push({ group: null, models: [model] });
+      continue;
+    }
+    if (emitted.has(group)) continue;
+    emitted.add(group);
+    sections.push({ group, models: models.filter(item => label(item) === group) });
+  }
+  return sections;
+}
 export function serviceModelValue(service: ModelService, model: ServiceModel): string {
   return `${service.legacy?.selected && service.legacy.kind === model.kind ? 'custom-openai' : service.provider}:${model.id}`;
 }
@@ -63,6 +93,28 @@ export function availableServiceModels(services: ModelService[], kind: ServiceMo
   return services.filter(service => service.enabled).flatMap(service => service.models.filter(model => model.kind === kind).map(model => ({ value: serviceModelValue(service, model), label: `${model.name} · ${service.name}`, model, service })));
 }
 export type ServiceModelFilter = 'all' | ServiceModel['kind'];
+export function serviceNeedsApiKey(provider: string, baseUrl: string): boolean {
+  if (provider === 'ollama') return false;
+  try {
+    const host = new URL(baseUrl.trim()).hostname.toLowerCase();
+    if (host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '[::1]') return false;
+    if (/^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(host)) return false;
+  } catch {
+    return true;
+  }
+  return true;
+}
+export const SERVICE_KEY_PAGES: Record<string, string> = {
+  deepseek: 'https://platform.deepseek.com/api_keys',
+  'service-siliconflow': 'https://cloud.siliconflow.cn/account/ak',
+  zhipu: 'https://open.bigmodel.cn/usercenter/apikeys',
+  openai: 'https://platform.openai.com/api-keys',
+  anthropic: 'https://console.anthropic.com/settings/keys',
+  google: 'https://aistudio.google.com/apikey',
+  openrouter: 'https://openrouter.ai/keys',
+  'service-moonshot': 'https://platform.moonshot.cn/console/api-keys',
+  groq: 'https://console.groq.com/keys',
+};
 export function serviceEndpointError(service: { name: string; baseUrl: string }): string | null {
   try {
     const url = new URL(service.baseUrl.trim());

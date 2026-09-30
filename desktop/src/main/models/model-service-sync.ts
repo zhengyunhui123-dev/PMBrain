@@ -1,12 +1,8 @@
 import { getRecipe } from '../../../../src/core/ai/recipes/index.js';
-import { newServiceModel, serviceConnection, type ModelService, type ModelSyncResult, type ServiceModel } from '../../../../shared/model-services.js';
+import { newServiceModel, serviceConnection, serviceNeedsApiKey, type ModelService, type ModelSyncResult, type ServiceModel } from '../../../../shared/model-services.js';
 
-function localAddress(url: URL) {
-  return ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname) || /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(url.hostname);
-}
 export function requiresServiceKey(service: ModelService, address = service.baseUrl): boolean {
-  const url = new URL(address);
-  return service.provider !== 'ollama' && !localAddress(url);
+  return serviceNeedsApiKey(service.provider, address);
 }
 function classify(record: any, id: string): ServiceModel['kind'] {
   const declared = record.type ?? record.task ?? record.model_type;

@@ -195,6 +195,7 @@ import {
 import { OperationError } from '../core/operation-error.ts';
 import { SourceOpError } from '../core/sources-ops.ts';
 import { registerWorkbenchRoutes } from '../product/workbench/routes.ts';
+import { reloadLiveGateway } from '../core/ai/reload-live-gateway.ts';
 
 export interface PmbrainAdminRouteOptions {
   app: express.Express;
@@ -223,6 +224,15 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
     ensureAdminWorkerStarted,
   } = options;
   registerWorkbenchRoutes(app, requireAdmin, engine, config);
+  app.post('/admin/api/gateway/reload', requireAdmin, async (_req: Request, res: Response) => {
+    try {
+      await reloadLiveGateway(engine);
+      res.json({ ok: true });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: message });
+    }
+  });
   let adminUploadTail: Promise<void> = Promise.resolve();
   app.get('/admin/api/task-center', requireAdmin, async (_req: Request, res: Response) => {
     const runs = listRuns();

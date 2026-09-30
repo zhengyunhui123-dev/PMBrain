@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test';
 import { hydrateModelServices, projectModelServices } from '../src/main/models/model-services';
+import { modelServiceRuntimeChanged } from '../src/main/models/model-runtime-refresh';
 import { syncServiceModels } from '../src/main/models/model-service-sync';
 import { newServiceModel, serviceModelValue, type ModelService } from '../../shared/model-services';
 
@@ -50,6 +51,41 @@ test('native provider separate touchpoints survive editing chat key', () => {
   expect(result.provider_touchpoint_api_keys.ollama).toEqual({ chat: 'new-chat-key', embedding: 'embedding-key' });
 });
 
+test('未使用的自定义服务商可以删除，正在使用的旧接口不能删除', () => {
+  const chatEndpoint = { id: 'custom-endpoint-chat-legacy', displayName: '33', baseUrl: 'https://aigocode.app/v1', modelId: '333', apiKey: 'chat-secret' };
+  const embeddingEndpoint = { id: 'custom-endpoint-embedding-legacy', displayName: '向量接口', baseUrl: 'http://localhost:8001/v1', modelId: 'local-embed' };
+  const config = { chat_model: 'custom-openai:333', embedding_model: 'ollama:nomic', desktop: { custom_endpoints: { chat: [chatEndpoint], embedding: [embeddingEndpoint] } } };
+  const setup: any = { chatModel: config.chat_model, embeddingModel: config.embedding_model, keyValues: { customOpenaiChat: 'chat-secret' }, customProviders: { chat: [chatEndpoint], embedding: [embeddingEndpoint] }, customSelection: { chat: chatEndpoint.id } };
+  const services = hydrateModelServices(config, setup);
+  const saved = projectModelServices({ ...config, desktop: { ...config.desktop, model_services: services } }, services);
+  const chat = saved.desktop.model_services.find((item: ModelService) => item.legacy?.endpointId === chatEndpoint.id);
+  const embedding = saved.desktop.model_services.find((item: ModelService) => item.legacy?.endpointId === embeddingEndpoint.id);
+  expect(() => projectModelServices(saved, saved.desktop.model_services.filter((item: ModelService) => item.id !== chat.id))).toThrow('不能移除正在使用的模型平台');
+  const removed = projectModelServices(saved, saved.desktop.model_services.filter((item: ModelService) => item.id !== embedding.id));
+  expect(removed.desktop.custom_endpoints.embedding.map((item: { id: string }) => item.id)).toEqual([]);
+  expect(removed.desktop.custom_endpoints.chat.map((item: { id: string }) => item.id)).toEqual([chatEndpoint.id]);
+  expect(removed.provider_base_urls[embedding.provider]).toBeUndefined();
+  expect(removed.provider_touchpoint_api_keys[embedding.provider]).toBeUndefined();
+  const again = hydrateModelServices(removed, { ...setup, customProviders: { chat: [chatEndpoint], embedding: [] } });
+  expect(again.some(item => item.legacy?.endpointId === embeddingEndpoint.id)).toBe(false);
+  expect(again.some(item => item.legacy?.endpointId === chatEndpoint.id)).toBe(true);
+});
+test('删除未使用的自建平台会清掉它的地址和密钥，内置平台不会被清掉', () => {
+  const custom = platform({ id: 'service-extra', provider: 'service-extra', name: '自建', baseUrl: 'https://extra.example/v1', apiKey: 'extra-key', models: [newServiceModel('demo')] });
+  const ollama = platform({ id: 'ollama', provider: 'ollama', name: 'Ollama', baseUrl: 'http://localhost:11434/v1', models: [newServiceModel('qwen')] });
+  const saved = projectModelServices({ chat_model: 'ollama:qwen', provider_base_urls: { ollama: 'http://localhost:11434/v1' }, desktop: { model_services: [custom, ollama] } }, [custom, ollama]);
+  expect(saved.provider_base_urls['service-extra']).toBe('https://extra.example/v1');
+  expect(() => projectModelServices({ ...saved, chat_model: 'service-extra:demo' }, [ollama])).toThrow('不能移除正在使用的模型平台');
+  const removed = projectModelServices(saved, [ollama]);
+  expect(removed.provider_base_urls['service-extra']).toBeUndefined();
+  expect(removed.provider_touchpoint_api_keys['service-extra']).toBeUndefined();
+  expect(removed.provider_base_urls.ollama).toBe('http://localhost:11434/v1');
+  expect(modelServiceRuntimeChanged(saved, removed)).toBe(true);
+  const idle = projectModelServices({ provider_base_urls: { ollama: 'http://localhost:11434/v1' }, desktop: { model_services: [ollama] } }, [ollama]);
+  const droppedPreset = projectModelServices(idle, []);
+  expect(droppedPreset.provider_base_urls.ollama).toBe('http://localhost:11434/v1');
+  expect(modelServiceRuntimeChanged(idle, droppedPreset)).toBe(false);
+});
 test('models added to a legacy embedding service use its own route for chat', () => {
   const service = platform({ legacy: { kind: 'embedding', endpointId: 'local', selected: true } });
   expect(serviceModelValue(service, newServiceModel('same', 'embedding'))).toBe('custom-openai:same');

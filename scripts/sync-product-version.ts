@@ -8,4 +8,5 @@ const packagePath = join(root, 'package.json');
 const content = readFileSync(packagePath, 'utf8');
 writeFileSync(packagePath, content.replace(/"version":\s*"[^"]+"/, `"version": "${version}"`));
 writeFileSync(join(root, 'VERSION'), `${version}\n`);
+writeFileSync(join(root, 'admin/src/product/product-version.ts'), `export const PRODUCT_VERSION = '${version}';\n`);
 console.log(`PMBrain ${version}，请运行 build:admin 更新发布清单。`);

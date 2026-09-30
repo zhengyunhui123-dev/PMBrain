@@ -15,6 +15,7 @@
 .product-service i { width: 13px; height: 13px; border-radius: 50%; background: #f5ad4c; flex-shrink: 0; }
 .product-service i.ready { background: #00db80; }
 .product-service small { display: block; color: var(--product-muted); font-size: 12px; margin-top: 4px; }
+.product-service .product-version { margin-top: 2px; }
 .product-service > svg { width: 17px; margin-left: auto; }
 .product-main { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
 .product-main button:focus-visible, .product-nav button:focus-visible { outline: 2px solid #58b5ff; outline-offset: 3px; }
@@ -30,6 +31,7 @@
 .product-categories > label { display: flex; gap: 10px; align-items: center; border: 1px solid var(--product-line); padding: 10px 12px; border-radius: 13px; color: var(--product-muted); }
 .product-categories input { width: 100%; min-width: 0; color: inherit; background: transparent; border: 0; font: inherit; }
 .product-categories h3 { color: var(--product-muted); font-weight: 400; font-size: 14px; margin: 19px 12px 7px; }
+.product-categories .empty-search { margin: 18px 12px; color: var(--product-muted); font-size: 13px; }
 .product-categories button { width: 100%; display: flex; align-items: center; gap: 15px; padding: 11px 14px; border: 0; border-radius: 11px; font: inherit; font-size: 15px; background: transparent; color: inherit; cursor: pointer; text-align: left; }
 .product-categories button.active { background: color-mix(in srgb, var(--product-blue) 24%, transparent); }
 .product-categories button.active svg { color: #39a8ff; }

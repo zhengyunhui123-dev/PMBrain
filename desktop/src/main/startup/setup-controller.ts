@@ -24,6 +24,7 @@ import {
   type SourceSetupPolicy,
 } from './source-setup-policy.js';
 import { requiresFirstActivationAlignment } from './embedding-activation-policy.js';
+import { canHotUpdateRunningModels } from '../models/model-runtime-refresh.js';
 
 const DESKTOP_MIGRATION_ARGS = ['apply-migrations', '--yes', '--non-interactive', '--no-autopilot-install'];
 
@@ -60,6 +61,7 @@ export interface SetupControllerDependencies {
   hideStartupProgress: () => void;
   waitEmbeddingRebuildChoice: () => Promise<'wait' | 'defer'>;
   applyTheme: (theme: DesktopTheme) => unknown;
+  reloadLiveModels: () => Promise<void>;
 }
 
 export class SetupController {
@@ -237,6 +239,36 @@ export class SetupController {
         `向量模型将从 ${previousEmbeddingModel} 更换为 ${requestedEmbeddingModel}。`
         + '必须在桌面端明确确认重新向量化后才能继续。',
       );
+    }
+    if (canHotUpdateRunningModels({
+      sidecarReady: Boolean(this.dependencies.sidecar.current && this.dependencies.sidecar.state?.phase === 'ready'),
+      needsSetup: setupBeforeSave.needsSetup,
+      migrationRequired: needsDesktopMigration(app.getVersion()),
+      applySourceConfiguration: sourcePolicy.applySourceConfiguration,
+      payload,
+      current: setupBeforeSave.current,
+    })) {
+      const saved = saveSetup(payload);
+      try {
+        await this.dependencies.syncModelDefaults({ resetAdvanced: false });
+        await this.dependencies.reloadLiveModels();
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        throw new Error(`模型配置已保存，但运行中的服务没有刷新。${detail}`);
+      }
+      this.dependencies.applyTheme(getSetupInfo().current.theme);
+      const integrations = await listIntegrationsWithConnectionState(
+        this.dependencies.sidecar.current?.port,
+        this.dependencies.sidecar.current ?? undefined,
+      );
+      return {
+        setup: getSetupInfo(),
+        integrations,
+        port: this.dependencies.sidecar.current?.port,
+        mcpUrl: this.dependencies.sidecar.current?.mcpUrl,
+        backup: saved.backup,
+        reembeddingWarning: null,
+      };
     }
     const hadRunningSidecar = Boolean(this.dependencies.sidecar.current);
     await this.dependencies.sidecar.stop();

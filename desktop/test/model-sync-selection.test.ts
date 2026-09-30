@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { listedServiceModels, mergeServiceModels, newServiceModel, serviceEndpointError, serviceModelsNotOnRemote } from '../../shared/model-services';
+import { isCustomProvider, listedServiceModels, mergeServiceModels, newServiceModel, providerKindLabel, SERVICE_KEY_PAGES, SERVICE_PRESETS, serviceEndpointError, serviceModelSections, serviceModelsNotOnRemote, serviceNeedsApiKey } from '../../shared/model-services';
 
 const page = readFileSync(join(import.meta.dir, '../../admin/src/product/ModelServices.tsx'), 'utf8');
 
@@ -36,4 +36,46 @@ test('模型服务页按一份地址获取并挑选模型，切换后自动保�
   for (const removed of ['普通模型接口', '向量模型接口', '保存模型服务', '重新加载', '保存知识库模型配置', '请先保存模型服务']) {
     expect(page).not.toContain(removed);
   }
+});
+
+test('云端密钥和自定义服务商都要在弹窗里确认后才保存，本地服务不要求密钥', () => {
+  expect(serviceNeedsApiKey('ollama', 'http://localhost:11434/v1')).toBe(false);
+  expect(serviceNeedsApiKey('ollama', 'https://example.com/v1')).toBe(false);
+  expect(serviceNeedsApiKey('service-lmstudio', 'http://127.0.0.1:1234/v1')).toBe(false);
+  expect(serviceNeedsApiKey('service-custom', 'http://192.168.1.8:1234/v1')).toBe(false);
+  expect(serviceNeedsApiKey('service-custom', 'http://[::1]:11434/v1')).toBe(false);
+  expect(serviceNeedsApiKey('deepseek', 'https://api.deepseek.com/v1')).toBe(true);
+  expect(serviceNeedsApiKey('service-custom', 'https://api.example.com/v1')).toBe(true);
+  expect(serviceNeedsApiKey('service-custom', '还没写完')).toBe(true);
+  expect(SERVICE_KEY_PAGES.deepseek).toBe('https://platform.deepseek.com/api_keys');
+  expect(SERVICE_KEY_PAGES.mimo).toBeUndefined();
+  expect(page).toContain('添加 API 密钥');
+  expect(page).toContain('保存并关闭');
+  expect(page).toContain('获取密钥');
+  expect(page).toContain('添加端点');
+  expect(page).toContain('确认前不会保存');
+  expect(page).toContain('serviceNeedsApiKey');
+  for (const removed of ['修改后自动保存', '添加后立即保存', 'onBlur={blurPrimary}']) {
+    expect(page).not.toContain(removed);
+  }
+});
+
+test('单独一个模型不重复显示分组，自定义名称下面保留 API 模型 ID', () => {
+  const flash = newServiceModel('mimo-v2.6-flash');
+  const renamed = { ...newServiceModel('mimo-v2.6-pro'), name: '我的专业模型' };
+  const shared = [newServiceModel('openai/gpt-4o'), newServiceModel('openai/gpt-4o-mini')];
+  expect(serviceModelSections([flash, renamed]).map(section => section.group)).toEqual([null]);
+  expect(serviceModelSections([renamed])[0].models[0].name).toBe('我的专业模型');
+  expect(serviceModelSections([renamed])[0].models[0].id).toBe('mimo-v2.6-pro');
+  expect(serviceModelSections(shared).map(section => [section.group, section.models.length])).toEqual([['openai', 2]]);
+  expect(serviceModelSections([{ ...newServiceModel('solo'), group: '我的分组' }])[0].group).toBe('我的分组');
+  expect(providerKindLabel({ id: 'mimo', provider: 'mimo' })).toBe('模型服务');
+  expect(providerKindLabel({ id: 'service-siliconflow', provider: 'service-siliconflow' })).toBe('模型服务');
+  expect(isCustomProvider({ id: 'service-extra', provider: 'service-extra' })).toBe(true);
+  expect(providerKindLabel({ id: 'service-extra', provider: 'service-extra' })).toBe('自定义服务商');
+  expect(SERVICE_PRESETS.some(([id]) => id === 'service-extra')).toBe(false);
+  expect(page).toContain('删除服务商');
+  expect(page).toContain('自定义服务商');
+  expect(page).toContain('isCustomProvider(service)');
+  expect(page).toContain('serviceModelSections');
 });
