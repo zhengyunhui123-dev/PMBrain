@@ -160,7 +160,7 @@ def run(args: argparse.Namespace) -> None:
 
         browser, restarted_page = wait_for_restarted_page(playwright, cdp_port)
         try:
-            origin = journeys.open_admin_from_desktop(restarted_page)
+            origin = journeys.open_admin_from_desktop(restarted_page, home)
             restarted_page.goto(origin + "/admin/#data")
             restarted_page.get_by_role("heading", name="知识数据").wait_for()
             restarted_page.get_by_placeholder("搜索 slug 或标题").fill("Real User Journey Orchid")

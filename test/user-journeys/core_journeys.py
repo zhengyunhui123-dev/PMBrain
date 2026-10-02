@@ -278,20 +278,56 @@ def select_custom_model(page: Page, kind: str, base_url: str, model: str) -> Non
     page.locator("#custom-provider-dialog").wait_for(state="hidden")
 
 
-def open_admin_from_desktop(page: Page) -> str:
-    if "/admin/" in page.url:
+def show_desktop_settings_panel(page: Page, name: str) -> None:
+    page.evaluate(
+        """(name) => {
+          const root = document.querySelector('.desktop-settings');
+          if (!root || root.hidden) throw new Error('desktop settings are not visible');
+          root.querySelectorAll('.panel').forEach((panel) => {
+            panel.classList.toggle('active', panel.id === `panel-${name}`);
+          });
+        }""",
+        name,
+    )
+    page.locator(f"#panel-{name}").wait_for(state="visible")
+
+
+def open_admin_from_desktop(page: Page, home: Path | None = None) -> str:
+    if page.url.startswith("http") and "/admin/" in page.url:
         origin = page.url.split("/admin", 1)[0]
-        page.goto(origin + "/admin/#")
     else:
-        page.wait_for_function("() => !document.querySelector('#open-admin')?.disabled", timeout=120_000)
-        try:
-            page.locator("#open-admin").click(timeout=20_000)
-        except PlaywrightTimeoutError:
-            if "/admin/" not in page.url:
-                raise
-    page.wait_for_load_state("domcontentloaded")
+        if home is None:
+            raise AssertionError(f"Desktop is not on the admin console: {page.url}")
+        page.wait_for_function(
+            """async () => {
+              const state = await window.pmbrainDesktop?.getState?.();
+              return Boolean(state && state.phase === 'ready' && Number(state.port) > 0);
+            }""",
+            timeout=120_000,
+        )
+        port = int(page.evaluate("async () => Number((await window.pmbrainDesktop.getState()).port)"))
+        config = json.loads((home / ".pmbrain" / "config.json").read_text(encoding="utf-8-sig"))
+        token = config.get("admin_bootstrap_token")
+        if not isinstance(token, str) or len(token) < 32:
+            raise AssertionError("Desktop did not create an admin bootstrap token")
+        request = Request(
+            f"http://127.0.0.1:{port}/admin/api/issue-magic-link",
+            data=b"{}",
+            method="POST",
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+        )
+        with urlopen(request, timeout=20) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        link = str(payload.get("url", "")).replace("http://localhost:", "http://127.0.0.1:")
+        if "/admin/auth/" not in link:
+            raise AssertionError(f"Desktop did not mint an admin login link: {payload}")
+        page.goto(link, wait_until="domcontentloaded")
+        if not page.url.startswith("http") or "/admin/" not in page.url:
+            raise AssertionError(f"Admin login did not open the console: {page.url}")
+        origin = page.url.split("/admin", 1)[0]
+    page.goto(origin + "/admin/#dashboard", wait_until="domcontentloaded")
     page.get_by_role("heading", name="总体概览").wait_for(timeout=90_000)
-    return page.url.split("/admin", 1)[0]
+    return origin
 
 
 def first_launch_journey(page: Page, artifacts: Path, provider: LocalOpenAIServer) -> tuple[str, str]:
@@ -318,8 +354,7 @@ def first_launch_journey(page: Page, artifacts: Path, provider: LocalOpenAIServe
     )
     page.locator("#database-path").fill(str(database_path))
     page.locator("#knowledge-directory").fill(str(knowledge_dir))
-    page.locator("#next-models").click()
-    page.locator("#panel-models").wait_for(state="visible")
+    show_desktop_settings_panel(page, "models")
     select_custom_model(page, "chat", provider.base_url, "e2e-chat")
     select_custom_model(page, "embedding", provider.base_url, "e2e-embedding-8")
     page.locator("#save-setup").click()
@@ -351,14 +386,14 @@ def first_launch_journey(page: Page, artifacts: Path, provider: LocalOpenAIServe
     if "配置完成" not in success:
         raise AssertionError(f"First-run setup did not complete: {success}")
     desktop_url = page.url
-    return open_admin_from_desktop(page), desktop_url
+    return open_admin_from_desktop(page, artifacts / "user-home"), desktop_url
 
 
 def import_search_journey(page: Page, origin: str, markdown: Path, pdf: Path, artifacts: Path) -> None:
     print("[journey 2/6] import Markdown/PDF -> visible knowledge -> keyword search", flush=True)
-    response = page.goto(origin + "/admin/#import")
+    response = page.goto(origin + "/admin/#knowledge-import")
     print(f"[admin] import url={page.url} status={response.status if response else 'n/a'} title={page.title()}", flush=True)
-    page.get_by_role("heading", name="知识工作台").wait_for()
+    page.get_by_role("heading", name="导入资料").wait_for()
     page.get_by_label("选择本地文件").set_input_files([str(markdown), str(pdf)])
     page.get_by_role("button", name="导入", exact=True).click()
     try:
@@ -432,7 +467,7 @@ def embedding_switch_journey(
     print("[journey 4/6] change embedding model -> dimension migration -> re-embed", flush=True)
     page.goto(desktop_url or DESKTOP_RENDERER.as_uri())
     page.locator("#panel-basic").wait_for(state="visible")
-    page.locator('.rail-item[data-target="models"]').click()
+    show_desktop_settings_panel(page, "models")
     page.wait_for_function(
         "() => Array.from(document.querySelector('#embedding-provider')?.options ?? []).some(option => option.textContent === 'PMBrain E2E Local Provider')"
     )
@@ -453,7 +488,7 @@ def embedding_switch_journey(
         raise AssertionError(f"Expected a 12-dimensional embedding column, got {config.get('embedding_dimensions')}")
     if page.locator("#global-error").is_visible():
         raise AssertionError(page.locator("#global-error").inner_text())
-    origin = open_admin_from_desktop(page)
+    origin = open_admin_from_desktop(page, artifacts / "user-home")
     page.goto(origin + "/admin/#tasks")
     page.get_by_role("heading", name="任务中心").wait_for(timeout=90_000)
     poll_deadline = time.monotonic() + 180
@@ -545,7 +580,7 @@ def embedding_switch_journey(
 def mcp_key_search_journey(page: Page) -> None:
     print("[journey 5/6] create MCP Key in Admin -> real HTTP MCP search", flush=True)
     origin = open_admin_from_desktop(page)
-    page.goto(origin + "/admin/#mcp")
+    page.goto(origin + "/admin/#settings-integrations")
     page.get_by_role("heading", name="MCP 接入").wait_for()
     page.get_by_role("button", name="+ API Key").click()
     page.get_by_placeholder("例如 claude-code-local").fill("real-e2e-search")
@@ -586,7 +621,7 @@ def restart_persistence_check(
     session = DesktopSession(playwright, artifacts, home, executable=executable, application=application)
     page = session.start()
     try:
-        origin = open_admin_from_desktop(page)
+        origin = open_admin_from_desktop(page, home)
         page.goto(origin + "/admin/#data")
         page.get_by_role("heading", name="知识数据").wait_for()
         page.get_by_placeholder("搜索 slug 或标题").fill("Real User Journey Orchid")
