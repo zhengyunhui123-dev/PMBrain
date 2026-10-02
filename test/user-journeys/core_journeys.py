@@ -299,7 +299,12 @@ def first_launch_journey(page: Page, artifacts: Path, provider: LocalOpenAIServe
     database_path = artifacts / "user-home" / "database" / "brain.pglite"
     knowledge_dir = artifacts / "knowledge-source"
     knowledge_dir.mkdir(parents=True, exist_ok=True)
-    page.locator("#panel-basic").wait_for(state="visible")
+    bring = page.get_by_role("button", name="导入或迁移")
+    panel = page.locator("#panel-basic")
+    bring.or_(panel).first.wait_for(state="visible", timeout=45_000)
+    if bring.is_visible():
+        bring.click()
+    panel.wait_for(state="visible")
     config_path = artifacts / "user-home" / ".pmbrain" / "config.json"
     if not config_path.exists():
         raise AssertionError("Desktop did not create its isolated PMBrain configuration")

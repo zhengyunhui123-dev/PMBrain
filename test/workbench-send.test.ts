@@ -32,9 +32,9 @@ function sendHarness(failMessage = false) {
   return { send, requests, bodies, env, current: () => current };
 }
 
-test('发送已成功而列表刷新失败时，不删除会话并仍返回发送成功', async () => {
+test('发送已成功而列表刷新失败时，不删除会话并返回这个会话', async () => {
   const run = sendHarness();
-  expect(await run.send('问题')).toBe(true);
+  expect(await run.send('问题')).toBe('thread');
   expect(run.requests.some(path => path.startsWith('DELETE'))).toBe(false);
   expect(run.current().messages).toHaveLength(1);
   expect(run.env.active.current).toBe('thread');
@@ -56,7 +56,7 @@ test('按 Enter 发送时，文字和附件一起进入请求体', async () => {
     { id: '11111111-1111-1111-1111-111111111111', name: note.name, file: note },
     { id: '22222222-2222-2222-2222-222222222222', name: image.name, file: image },
   ]);
-  expect(ok).toBe(true);
+  expect(ok).toBe('thread');
   const sent = run.bodies.find(body => Array.isArray(body?.attachments));
   expect(sent.text).toBe('这个能导入知识库吗');
   expect(sent.attachments.map((item: { name: string }) => item.name)).toEqual(['00-note.txt', 'shot.png']);

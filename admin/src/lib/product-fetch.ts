@@ -1,7 +1,14 @@
-import type { PMBrainDesktopApi } from '../../../desktop/src/preload/index';
+interface DesktopProductBridge {
+  productRequest(request: {
+    path: string;
+    method?: string;
+    headers?: Record<string, string>;
+    body?: string | Uint8Array;
+  }): Promise<{ status: number; body: string; contentType: string }>;
+}
 
-export function desktopApi(): PMBrainDesktopApi | undefined {
-  return (window as unknown as { pmbrainDesktop?: PMBrainDesktopApi }).pmbrainDesktop;
+export function desktopApi(): (DesktopProductBridge & Record<string, any>) | undefined {
+  return (window as unknown as { pmbrainDesktop?: DesktopProductBridge & Record<string, any> }).pmbrainDesktop;
 }
 
 export async function productFetch(path: string, options: RequestInit = {}): Promise<Response> {
