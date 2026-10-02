@@ -292,45 +292,60 @@ def show_desktop_settings_panel(page: Page, name: str) -> None:
     page.locator(f"#panel-{name}").wait_for(state="visible")
 
 
-def open_admin_from_desktop(page: Page, home: Path | None = None) -> str:
-    if page.url.startswith("http") and "/admin/" in page.url:
-        origin = page.url.split("/admin", 1)[0]
-    else:
-        if home is None:
-            raise AssertionError(f"Desktop is not on the admin console: {page.url}")
-        page.wait_for_function(
-            """async () => {
-              const state = await window.pmbrainDesktop?.getState?.();
-              return Boolean(state && state.phase === 'ready' && Number(state.port) > 0);
-            }""",
-            timeout=120_000,
-        )
-        port = int(page.evaluate("async () => Number((await window.pmbrainDesktop.getState()).port)"))
-        config = json.loads((home / ".pmbrain" / "config.json").read_text(encoding="utf-8-sig"))
-        token = config.get("admin_bootstrap_token")
-        if not isinstance(token, str) or len(token) < 32:
-            raise AssertionError("Desktop did not create an admin bootstrap token")
-        request = Request(
-            f"http://127.0.0.1:{port}/admin/api/issue-magic-link",
-            data=b"{}",
-            method="POST",
-            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-        )
-        with urlopen(request, timeout=20) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-        link = str(payload.get("url", "")).replace("http://localhost:", "http://127.0.0.1:")
-        if "/admin/auth/" not in link:
-            raise AssertionError(f"Desktop did not mint an admin login link: {payload}")
-        page.goto(link, wait_until="domcontentloaded")
-        if not page.url.startswith("http") or "/admin/" not in page.url:
-            raise AssertionError(f"Admin login did not open the console: {page.url}")
-        origin = page.url.split("/admin", 1)[0]
-    page.goto(origin + "/admin/#dashboard", wait_until="domcontentloaded")
-    page.get_by_role("heading", name="总体概览").wait_for(timeout=90_000)
-    return origin
+def mint_admin_login_link(page: Page, home: Path) -> str:
+    page.wait_for_function(
+        """async () => {
+          const state = await window.pmbrainDesktop?.getState?.();
+          return Boolean(state && state.phase === 'ready' && Number(state.port) > 0);
+        }""",
+        timeout=120_000,
+    )
+    port = int(page.evaluate("async () => Number((await window.pmbrainDesktop.getState()).port)"))
+    config = json.loads((home / ".pmbrain" / "config.json").read_text(encoding="utf-8-sig"))
+    token = config.get("admin_bootstrap_token")
+    if not isinstance(token, str) or len(token) < 32:
+        raise AssertionError("Desktop did not create an admin bootstrap token")
+    request = Request(
+        f"http://127.0.0.1:{port}/admin/api/issue-magic-link",
+        data=b"{}",
+        method="POST",
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+    )
+    with urlopen(request, timeout=20) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+    link = str(payload.get("url", "")).replace("http://localhost:", "http://127.0.0.1:")
+    if "/admin/auth/" not in link:
+        raise AssertionError(f"Desktop did not mint an admin login link: {payload}")
+    return link
 
 
-def first_launch_journey(page: Page, artifacts: Path, provider: LocalOpenAIServer) -> tuple[str, str]:
+def open_admin_browser(playwright: Playwright, link: str) -> tuple[object, Page, str]:
+    last_error: Exception | None = None
+    browser = None
+    for channel in ("msedge", "chrome"):
+        try:
+            browser = playwright.chromium.launch(channel=channel, headless=True)
+            break
+        except Exception as error:
+            last_error = error
+    if browser is None:
+        raise RuntimeError(f"Could not launch the system browser for Admin: {last_error}")
+    admin = browser.new_context(viewport={"width": 1440, "height": 900}).new_page()
+    admin.set_default_timeout(45_000)
+    try:
+        admin.goto(link, wait_until="domcontentloaded")
+        if not admin.url.startswith("http") or "/admin/" not in admin.url:
+            raise AssertionError(f"Admin login did not open the console: {admin.url}")
+        origin = admin.url.split("/admin", 1)[0]
+        admin.goto(origin + "/admin/#dashboard", wait_until="domcontentloaded")
+        admin.get_by_role("heading", name="总体概览").wait_for(timeout=90_000)
+    except Exception:
+        browser.close()
+        raise
+    return browser, admin, origin
+
+
+def first_launch_journey(page: Page, artifacts: Path, provider: LocalOpenAIServer) -> str:
     print("[journey 1/6] fresh Desktop launch -> PGLite -> models -> Admin homepage", flush=True)
     database_path = artifacts / "user-home" / "database" / "brain.pglite"
     knowledge_dir = artifacts / "knowledge-source"
@@ -385,8 +400,7 @@ def first_launch_journey(page: Page, artifacts: Path, provider: LocalOpenAIServe
     success = page.locator("#global-success").inner_text()
     if "配置完成" not in success:
         raise AssertionError(f"First-run setup did not complete: {success}")
-    desktop_url = page.url
-    return open_admin_from_desktop(page, artifacts / "user-home"), desktop_url
+    return page.url
 
 
 def import_search_journey(page: Page, origin: str, markdown: Path, pdf: Path, artifacts: Path) -> None:
@@ -462,6 +476,7 @@ def embedding_switch_journey(
     page: Page,
     artifacts: Path,
     provider: LocalOpenAIServer,
+    playwright: Playwright,
     desktop_url: str | None = None,
 ) -> None:
     print("[journey 4/6] change embedding model -> dimension migration -> re-embed", flush=True)
@@ -488,98 +503,103 @@ def embedding_switch_journey(
         raise AssertionError(f"Expected a 12-dimensional embedding column, got {config.get('embedding_dimensions')}")
     if page.locator("#global-error").is_visible():
         raise AssertionError(page.locator("#global-error").inner_text())
-    origin = open_admin_from_desktop(page, artifacts / "user-home")
-    page.goto(origin + "/admin/#tasks")
-    page.get_by_role("heading", name="任务中心").wait_for(timeout=90_000)
-    poll_deadline = time.monotonic() + 180
-    rebuild_id = None
-    last_runs_response: object = None
-    while time.monotonic() < poll_deadline:
-        try:
-            last_runs_response = page.evaluate(
-                """async () => {
-                  const controller = new AbortController();
-                  const timeout = setTimeout(() => controller.abort(), 5000);
-                  try {
-                    const response = await fetch('/admin/api/runs', {
-                      credentials: 'same-origin',
-                      signal: controller.signal,
-                    });
-                    let body = null;
-                    try { body = await response.json(); } catch (_) {}
-                    return { ok: response.ok, status: response.status, body };
-                  } catch (error) {
-                    return { ok: false, status: 0, error: String(error) };
-                  } finally {
-                    clearTimeout(timeout);
-                  }
-                }"""
+    admin_browser, admin, origin = open_admin_browser(
+        playwright,
+        mint_admin_login_link(page, artifacts / "user-home"),
+    )
+    try:
+        admin.goto(origin + "/admin/#tasks")
+        admin.get_by_role("heading", name="任务中心").wait_for(timeout=90_000)
+        poll_deadline = time.monotonic() + 180
+        rebuild_id = None
+        last_runs_response: object = None
+        while time.monotonic() < poll_deadline:
+            try:
+                last_runs_response = admin.evaluate(
+                    """async () => {
+                      const controller = new AbortController();
+                      const timeout = setTimeout(() => controller.abort(), 5000);
+                      try {
+                        const response = await fetch('/admin/api/runs', {
+                          credentials: 'same-origin',
+                          signal: controller.signal,
+                        });
+                        let body = null;
+                        try { body = await response.json(); } catch (_) {}
+                        return { ok: response.ok, status: response.status, body };
+                      } catch (error) {
+                        return { ok: false, status: 0, error: String(error) };
+                      } finally {
+                        clearTimeout(timeout);
+                      }
+                    }"""
+                )
+                rows = (last_runs_response or {}).get("body", {}).get("rows", [])
+                current = [
+                    run for run in rows
+                    if run.get("kind") == "embed_stale"
+                    and "--catch-up" in (run.get("command") or [])
+                    and isinstance(run.get("id"), str)
+                ]
+                current.sort(key=lambda run: str(run.get("startedAt", "")), reverse=True)
+                if current:
+                    rebuild_id = current[0]["id"]
+                    break
+            except Exception as exc:
+                last_runs_response = {"error": repr(exc)}
+            admin.wait_for_timeout(1000)
+        if not isinstance(rebuild_id, str) or not rebuild_id:
+            raise AssertionError(
+                f"Background embedding rebuild was not submitted: {rebuild_id}; "
+                f"last runs response={last_runs_response}"
             )
-            rows = (last_runs_response or {}).get("body", {}).get("rows", [])
-            current = [
-                run for run in rows
-                if run.get("kind") == "embed_stale"
-                and "--catch-up" in (run.get("command") or [])
-                and isinstance(run.get("id"), str)
-            ]
-            current.sort(key=lambda run: str(run.get("startedAt", "")), reverse=True)
-            if current:
-                rebuild_id = current[0]["id"]
-                break
-        except Exception as exc:
-            last_runs_response = {"error": repr(exc)}
-        page.wait_for_timeout(1000)
-    if not isinstance(rebuild_id, str) or not rebuild_id:
-        raise AssertionError(
-            f"Background embedding rebuild was not submitted: {rebuild_id}; "
-            f"last runs response={last_runs_response}"
-        )
-    poll_deadline = time.monotonic() + 180
-    rebuild: object = None
-    last_rebuild_response: object = None
-    while time.monotonic() < poll_deadline:
-        try:
-            last_rebuild_response = page.evaluate(
-                """async (runId) => {
-                  const controller = new AbortController();
-                  const timeout = setTimeout(() => controller.abort(), 5000);
-                  try {
-                    const response = await fetch(`/admin/api/runs/${encodeURIComponent(runId)}`, {
-                      credentials: 'same-origin',
-                      signal: controller.signal,
-                    });
-                    let body = null;
-                    try { body = await response.json(); } catch (_) {}
-                    return { ok: response.ok, status: response.status, body };
-                  } catch (error) {
-                    return { ok: false, status: 0, error: String(error) };
-                  } finally {
-                    clearTimeout(timeout);
-                  }
-                }""",
-                rebuild_id,
+        poll_deadline = time.monotonic() + 180
+        rebuild: object = None
+        last_rebuild_response: object = None
+        while time.monotonic() < poll_deadline:
+            try:
+                last_rebuild_response = admin.evaluate(
+                    """async (runId) => {
+                      const controller = new AbortController();
+                      const timeout = setTimeout(() => controller.abort(), 5000);
+                      try {
+                        const response = await fetch(`/admin/api/runs/${encodeURIComponent(runId)}`, {
+                          credentials: 'same-origin',
+                          signal: controller.signal,
+                        });
+                        let body = null;
+                        try { body = await response.json(); } catch (_) {}
+                        return { ok: response.ok, status: response.status, body };
+                      } catch (error) {
+                        return { ok: false, status: 0, error: String(error) };
+                      } finally {
+                        clearTimeout(timeout);
+                      }
+                    }""",
+                    rebuild_id,
+                )
+                if last_rebuild_response and last_rebuild_response.get("ok"):
+                    candidate = last_rebuild_response.get("body")
+                    if isinstance(candidate, dict):
+                        rebuild = candidate
+                        if candidate.get("status") in {"completed", "failed", "cancelled"}:
+                            break
+            except Exception as exc:
+                last_rebuild_response = {"error": repr(exc)}
+            admin.wait_for_timeout(1000)
+        if not rebuild or rebuild.get("status") != "completed":
+            raise AssertionError(
+                f"Background embedding rebuild did not complete: {rebuild}; "
+                f"last response={last_rebuild_response}"
             )
-            if (last_rebuild_response and last_rebuild_response.get("ok")):
-                candidate = last_rebuild_response.get("body")
-                if isinstance(candidate, dict):
-                    rebuild = candidate
-                    if candidate.get("status") in {"completed", "failed", "cancelled"}:
-                        break
-        except Exception as exc:
-            last_rebuild_response = {"error": repr(exc)}
-        page.wait_for_timeout(1000)
-    if not rebuild or rebuild.get("status") != "completed":
-        raise AssertionError(
-            f"Background embedding rebuild did not complete: {rebuild}; "
-            f"last response={last_rebuild_response}"
-        )
-    if "--catch-up" not in (rebuild.get("command") or []):
-        raise AssertionError(f"Embedding rebuild was not handed to the catch-up task: {rebuild}")
+        if "--catch-up" not in (rebuild.get("command") or []):
+            raise AssertionError(f"Embedding rebuild was not handed to the catch-up task: {rebuild}")
+    finally:
+        admin_browser.close()
 
 
-def mcp_key_search_journey(page: Page) -> None:
+def mcp_key_search_journey(page: Page, origin: str) -> None:
     print("[journey 5/6] create MCP Key in Admin -> real HTTP MCP search", flush=True)
-    origin = open_admin_from_desktop(page)
     page.goto(origin + "/admin/#settings-integrations")
     page.get_by_role("heading", name="MCP 接入").wait_for()
     page.get_by_role("button", name="+ API Key").click()
@@ -620,13 +640,16 @@ def restart_persistence_check(
     print("[journey 6 precheck] restart current Desktop -> imported data persists", flush=True)
     session = DesktopSession(playwright, artifacts, home, executable=executable, application=application)
     page = session.start()
+    admin_browser = None
     try:
-        origin = open_admin_from_desktop(page, home)
-        page.goto(origin + "/admin/#data")
-        page.get_by_role("heading", name="知识数据").wait_for()
-        page.get_by_placeholder("搜索 slug 或标题").fill("Real User Journey Orchid")
-        page.get_by_role("row", name=re.compile("Real User Journey Orchid")).wait_for(timeout=90_000)
+        admin_browser, admin, origin = open_admin_browser(playwright, mint_admin_login_link(page, home))
+        admin.goto(origin + "/admin/#data")
+        admin.get_by_role("heading", name="知识数据").wait_for()
+        admin.get_by_placeholder("搜索 slug 或标题").fill("Real User Journey Orchid")
+        admin.get_by_role("row", name=re.compile("Real User Journey Orchid")).wait_for(timeout=90_000)
     finally:
+        if admin_browser is not None:
+            admin_browser.close()
         session.stop()
 
 
@@ -645,23 +668,37 @@ def run(args: argparse.Namespace) -> None:
     with LocalOpenAIServer() as provider, sync_playwright() as playwright:
         session = DesktopSession(playwright, artifacts, home, executable=executable, application=application)
         page = session.start()
+        admin_browser = None
+        admin_page = page
         try:
-            origin, desktop_url = first_launch_journey(page, artifacts, provider)
-            import_search_journey(page, origin, markdown, pdf, artifacts)
-            delete_restore_journey(page, origin)
-            embedding_switch_journey(page, artifacts, provider, desktop_url)
-            mcp_key_search_journey(page)
+            desktop_url = first_launch_journey(page, artifacts, provider)
+            admin_browser, admin_page, origin = open_admin_browser(
+                playwright,
+                mint_admin_login_link(page, home),
+            )
+            import_search_journey(admin_page, origin, markdown, pdf, artifacts)
+            delete_restore_journey(admin_page, origin)
+            admin_browser.close()
+            admin_browser = None
+            embedding_switch_journey(page, artifacts, provider, playwright, desktop_url)
+            admin_browser, admin_page, origin = open_admin_browser(
+                playwright,
+                mint_admin_login_link(page, home),
+            )
+            mcp_key_search_journey(admin_page, origin)
         except Exception:
             try:
-                page.screenshot(path=str(artifacts / "failure.png"), full_page=True)
+                admin_page.screenshot(path=str(artifacts / "failure.png"), full_page=True)
                 (artifacts / "failure-page.txt").write_text(
-                    f"url={page.url}\ntitle={page.title()}\n\n{page.locator('body').inner_text()}\n",
+                    f"url={admin_page.url}\ntitle={admin_page.title()}\n\n{admin_page.locator('body').inner_text()}\n",
                     encoding="utf-8",
                 )
             except Exception:
                 pass
             raise
         finally:
+            if admin_browser is not None:
+                admin_browser.close()
             session.stop()
         restart_persistence_check(
             playwright,
