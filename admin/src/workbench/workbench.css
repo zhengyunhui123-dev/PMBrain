@@ -86,6 +86,9 @@
 .knowledge-workbench .wb-send { background: transparent; color: var(--product-muted); border-color: var(--product-line); }
 .knowledge-workbench .wb-send:not(:disabled) { background: #3ecf8e; color: #102117; border-color: #3ecf8e; }
 .knowledge-workbench .wb-send:not(:disabled):hover { background: #34c484; }
+.knowledge-workbench .wb-send.wb-stop,
+.knowledge-workbench .wb-send.wb-stop:not(:disabled) { background: #0874ff; color: #fff; border-color: #0874ff; }
+.knowledge-workbench .wb-send.wb-stop:not(:disabled):hover { background: #398fff; }
 .wb-attachments { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 8px; padding: 0; list-style: none; }
 .wb-attachments li { display: flex; align-items: center; gap: 6px; max-width: 220px; border: 1px solid var(--product-line); border-radius: 8px; padding: 4px; background: var(--product-bg); }
 .wb-attachments img { width: 40px; height: 40px; object-fit: cover; border-radius: 6px; display: block; }

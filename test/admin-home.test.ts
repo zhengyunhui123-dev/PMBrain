@@ -12,6 +12,7 @@ import {
   navActive,
   suggestedChatModel,
 } from '../admin/src/product/home-model.ts';
+import { rememberedChatModel } from '../admin/src/workbench/chat-model.ts';
 
 const root = join(import.meta.dir, '..');
 const read = (path: string) => readFileSync(join(root, path), 'utf8');
@@ -93,5 +94,26 @@ describe('首页按有没有知识库区分，并接上现有能力', () => {
     expect(create).toContain('api.startImportUploadRun');
     expect(create).toContain('选择文件夹');
     expect(read('admin/src/workbench/Workbench.tsx')).toContain('pmbrain:open-conversation');
+  });
+
+  test('菜单默认收起，两个 MCP 页对调，对话模型记住上次选择，停止按钮是蓝色', () => {
+    const app = read('admin/src/product/ProductApp.tsx');
+    const workbench = read('admin/src/workbench/useWorkbench.ts');
+    expect(app).toContain("localStorage.getItem(NAV_COLLAPSED_KEY) !== '0'");
+    expect(app).toContain('menuMcp');
+    expect(app).toContain("menuMcp ? 'integrations'");
+    expect(app).toContain("category === 'integrations'");
+    expect(app).toContain('<ConnectionCenterPage />');
+    expect(rememberedChatModel('ollama:qwen', 'deepseek:v4', ['deepseek:v4', 'ollama:qwen'])).toBe('ollama:qwen');
+    expect(rememberedChatModel('', 'deepseek:v4', ['deepseek:v4', 'ollama:qwen'])).toBe('deepseek:v4');
+    expect(rememberedChatModel('', '', ['ollama:qwen'])).toBe('ollama:qwen');
+    expect(rememberedChatModel('kept-model', 'other', [])).toBe('kept-model');
+    expect(workbench).toContain('rememberedChatModel');
+    expect(workbench).toContain('rememberChatModel');
+    expect(workbench).not.toContain('setModel(next.model)');
+    expect(read('admin/src/workbench/Workbench.tsx')).toContain('className="wb-send wb-stop"');
+    expect(read('admin/src/workbench/workbench.css')).toContain('#0874ff');
+    expect(read('desktop/src/renderer/settings-content.html')).toContain('class="preference-row"');
+    expect(read('admin/src/product/ModelServices.tsx')).toContain('启用图片与文档 OCR');
   });
 });

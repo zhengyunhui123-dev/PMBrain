@@ -1,7 +1,9 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { ArrowLeft, Box, Cable, CircleHelp, Database, FileText, Home, Link, MessageCircle, Monitor, PanelLeftClose, PanelLeftOpen, PenLine, RefreshCw, Search, Settings, ShieldCheck, SlidersHorizontal, Waypoints } from 'lucide-react';
 import { App as ExistingPages } from '../App';
 import { ImportDataPage } from '../pages/Import';
+import { ConnectionCenterPage } from '../pages/Connection';
 import { SettingsPage, AppearanceSettings } from '../pages/Settings';
 import { desktopApi } from '../lib/product-fetch';
 import { applyThemeMode, readThemeMode, storeThemeMode, type ThemeMode } from '../lib/theme';
@@ -55,12 +57,32 @@ export function ProductApp() {
   const [update, setUpdate] = useState<UpdateState | null>(null);
   const [stateError, setStateError] = useState('');
   const [filter, setFilter] = useState('');
-  const [collapsed, setCollapsed] = useState(() => localStorage.getItem(NAV_COLLAPSED_KEY) === '1');
+  const [collapsed, setCollapsed] = useState(() => localStorage.getItem(NAV_COLLAPSED_KEY) !== '0');
   const [maintenanceOpen, setMaintenanceOpen] = useState(false);
   const [healthOpen, setHealthOpen] = useState(false);
   const navigate = (target: string) => { window.location.hash = target; setPage(target.split('?')[0]); };
   const isSettings = page === 'settings' || page.startsWith('settings-') || page === 'config';
   const category = page === 'config' ? 'models' : settingKey(page);
+  const menuMcp = Boolean(desktop) && page === 'mcp' && !isSettings;
+  const settingsDesktop = Boolean(desktop) && isSettings && (category === 'general' || (category !== 'integrations' && desktopPanels.includes(category)));
+  const desktopPanel = menuMcp ? 'integrations' : category === 'general' ? 'desktop-behavior' : (desktopPanels.includes(category) ? category : 'models');
+  const slots = useRef({ park: null as HTMLDivElement | null, menu: null as HTMLDivElement | null, settings: null as HTMLDivElement | null });
+  const host = useRef<HTMLDivElement | null>(null);
+  const [hostReady, setHostReady] = useState(false);
+  const bind = useRef({
+    park: (node: HTMLDivElement | null) => { slots.current.park = node; },
+    menu: (node: HTMLDivElement | null) => { slots.current.menu = node; },
+    settings: (node: HTMLDivElement | null) => { slots.current.settings = node; },
+  }).current;
+  const activeSlot = menuMcp ? 'menu' : settingsDesktop ? 'settings' : 'park';
+  useLayoutEffect(() => {
+    if (!desktop) return;
+    host.current ??= Object.assign(document.createElement('div'), { className: 'desktop-settings-host' });
+    const target = slots.current[activeSlot];
+    if (!target) return;
+    if (host.current.parentElement !== target) target.appendChild(host.current);
+    setHostReady(true);
+  }, [desktop, activeSlot]);
   const ready = !desktop || service?.phase === 'ready';
   const mode = libraryMode(Boolean(desktop), needsSetup);
   const maintenance = maintenanceView({ startup, servicePhase: service?.phase ?? null, updatePhase: update?.phase ?? null, updateMessage: update?.message, needsSetup: needsSetup === true });
@@ -112,7 +134,7 @@ export function ProductApp() {
   if (legacyMobile || (page === 'login' && !desktop)) return <ExistingPages />;
   const visibleSettings = visibleSettingItems(settingItems, filter, Boolean(desktop));
   const settingGroups = settingGroupNames(visibleSettings);
-  const showEmbedded = ready && !isSettings && !shellPages.has(page);
+  const showEmbedded = ready && !isSettings && !shellPages.has(page) && !menuMcp;
   const status = maintenance.visible
     ? <StatusChip kind="busy" label={maintenance.title} onClick={() => setMaintenanceOpen(true)} />
     : Boolean(desktop) && mode === 'ready' && ready
@@ -134,7 +156,8 @@ export function ProductApp() {
         <div className="product-settings-grid"><aside className="product-categories"><h2>设置</h2><label><Search size={20} /><input aria-label="搜索设置" placeholder="搜索设置…" value={filter} onChange={event => setFilter(event.target.value)} /></label>{settingGroups.map(group => <section key={group}><h3>{group}</h3>{visibleSettings.filter(item => item.group === group).map(item => <button className={category === item.key ? 'active' : ''} key={item.key} onClick={() => navigate(`settings-${item.key}`)}><item.icon size={18} />{item.label}</button>)}</section>)}{filter.trim() && !settingGroups.length && <p className="empty-search">没有匹配的设置</p>}</aside>
           <div className={`product-settings-body ${['models', 'model-roles'].includes(category) ? 'has-model-services' : ''}`}>
             {isSettings && category === 'general' && <AppearanceSettings themeMode={theme} onThemeModeChange={changeTheme} />}
-            {desktop && <DesktopSettings theme={theme} panel={category === 'general' ? 'desktop-behavior' : (desktopPanels.includes(category) ? category : 'models')} visible={isSettings && (desktopPanels.includes(category) || category === 'general')} />}
+            {isSettings && category === 'integrations' && <div className="settings-mcp"><ConnectionCenterPage /></div>}
+            <div ref={bind.settings} className="desktop-settings-slot" hidden={!settingsDesktop} />
             {isSettings && ['knowledge', 'dream'].includes(category) && ready && <SettingsPage section={category as 'knowledge' | 'dream'} themeMode={theme} onThemeModeChange={changeTheme} />}
             <div className="model-settings-host" hidden={!isSettings || !['models', 'model-roles'].includes(category)}><ModelServices mode={category === 'model-roles' ? 'roles' : 'services'} /></div>
           </div></div>
@@ -148,6 +171,9 @@ export function ProductApp() {
       {!isSettings && page === 'docs' && <HelpPage />}
       {!isSettings && page === 'knowledge-import' && ready && <div className="product-existing"><ImportDataPage focus="import" /></div>}
       {showEmbedded && <div className="product-existing"><ExistingPages embedded /></div>}
+      <div ref={bind.menu} className="product-mcp-page" hidden={!menuMcp} />
+      <div ref={bind.park} className="desktop-settings-park" hidden />
+      {desktop && hostReady && host.current && createPortal(<DesktopSettings theme={theme} panel={desktopPanel} visible={menuMcp || settingsDesktop} />, host.current)}
     </main>
   </div>;
 }

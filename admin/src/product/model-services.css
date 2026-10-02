@@ -129,9 +129,19 @@
 .model-services button.model-primary { background: #487cdd; border-color: #487cdd; color: white; }
 .model-notice { color: var(--product-text); background: var(--product-panel); padding: 11px 13px; border: 1px solid var(--product-line); border-radius: 7px; line-height: 1.7; overflow-wrap: anywhere; }
 .models-empty, .model-unavailable { color: var(--product-muted); padding: 25px; font-size: 13px; }
-.model-role { display: grid; grid-template-columns: minmax(220px, 1fr) minmax(240px, 1fr); gap: 25px; align-items: center; padding: 25px 0; border-bottom: 1px solid var(--product-line); }
-.model-role b { font-size: 14px; font-weight: 500; display: block; }
-.model-role small { font-size: 12px; color: var(--product-muted); margin-top: 8px; display: block; }
+.model-services.is-roles .provider-detail > header,
+.model-services.is-roles .model-roles,
+.model-services.is-roles .advanced-routes { max-width: 860px; }
+.model-services.is-roles .provider-detail > header { margin-bottom: 18px; }
+.model-services.is-roles .model-roles,
+.model-services.is-roles .advanced-routes { border: 1px solid var(--product-line); border-radius: 12px; background: var(--product-panel); }
+.model-services.is-roles .model-roles { padding: 0 18px; }
+.model-role { display: grid; grid-template-columns: minmax(0, 1fr) minmax(200px, 280px); gap: 20px; align-items: center; margin: 0; padding: 16px 0; border-bottom: 1px solid var(--product-line); }
+.model-services.is-roles .model-roles > .model-role:last-child { border-bottom: 0; }
+.model-role b { font-size: 14px; font-weight: 600; display: block; }
+.model-role small { font-size: 12px; color: var(--product-muted); margin-top: 4px; display: block; line-height: 1.5; }
+.model-services.is-roles .model-role select { height: 36px; padding: 0 12px; border-radius: 8px; }
+.model-services.is-roles .ocr-enabled { grid-template-columns: minmax(0, 1fr) auto; }
 .model-modal-overlay { position: fixed; z-index: 1000; inset: 0; display: grid; place-items: center; background: #0009; padding: 20px; }
 .model-modal { width: 520px; max-width: 100%; max-height: calc(100vh - 40px); overflow: auto; background: var(--product-bg); border: 1px solid var(--product-line); border-radius: 12px; padding: 24px; box-shadow: 0 20px 60px #0006; }
 .model-modal.model-sync { width: min(640px, 100%); display: flex; flex-direction: column; }
@@ -166,7 +176,8 @@
 .help-donate img { width: 260px; max-height: 440px; object-fit: contain; border-radius: 8px; }
 :root[data-theme="light"] .product-categories button.active, :root[data-theme="light"] .provider-list-scroll button.selected, :root[data-theme="light"] .product-nav nav button.active { background: #eaeaea; color: #222; }
 @media (max-width: 1150px) { .product-settings-grid { grid-template-columns: 185px minmax(0, 1fr); } .model-services { grid-template-columns: 205px minmax(0, 1fr); } .provider-detail { padding: 24px; } .model-list-heading .model-search { width: 100px; } .product-nav { width: 166px; } }
-@media (max-width: 900px) { .product-settings-grid { grid-template-columns: 160px minmax(0, 1fr); } .product-categories { padding: 15px 8px; } .model-services { grid-template-columns: 180px minmax(0, 1fr); } .provider-detail { padding: 18px; } .model-list-heading { align-items: start; flex-direction: column; } .model-role { grid-template-columns: 1fr; gap: 12px; } .product-workbench .nl-shell { grid-template-columns: 185px minmax(0, 1fr); } }
+@media (max-width: 900px) { .product-settings-grid { grid-template-columns: 160px minmax(0, 1fr); } .product-categories { padding: 15px 8px; } .model-services { grid-template-columns: 180px minmax(0, 1fr); } .provider-detail { padding: 18px; } .model-list-heading { align-items: start; flex-direction: column; } .product-workbench .nl-shell { grid-template-columns: 185px minmax(0, 1fr); } }
+@media (max-width: 720px) { .model-role { grid-template-columns: 1fr; gap: 12px; } }
 @media (prefers-reduced-motion: reduce) { .service-switch > span:after { transition: none; } }
 
 .database-save { margin-top: 20px; display: flex; align-items: center; gap: 20px; }

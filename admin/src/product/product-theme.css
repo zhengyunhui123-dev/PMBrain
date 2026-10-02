@@ -19,9 +19,30 @@ html[data-theme="dark"] .product-app :is(.product-nav nav button.active,.product
   --line: #353535; --line-strong: #454545; --text: #e6e6e6; --text-secondary: #aaa;
   background: #191919;
 }
-.model-services .ocr-enabled { display: flex; gap: 10px; align-items: center; padding: 14px 0; }
-.model-services .ocr-enabled input { width: auto; }
 .model-services .model-notice { white-space: pre-wrap; overflow-wrap: anywhere; }
-.advanced-routes { margin-top: 28px; border-top: 1px solid var(--product-line); padding-top: 20px; }
-.advanced-routes summary { cursor: pointer; font-weight: 500; }
-.advanced-routes h3 { margin: 24px 0 10px; font-size: 13px; }
+.advanced-routes { margin-top: 16px; padding: 4px 18px 16px; }
+.advanced-routes summary { cursor: pointer; font-weight: 600; padding: 14px 0; }
+.advanced-routes h3 { margin: 8px 0 0; font-size: 12px; font-weight: 600; color: var(--product-muted); }
+.advanced-routes .model-hint { margin-top: 0; }
+:root[data-theme="dark"] .product-app input.settings-switch:not(:checked) { background-color: #3a3f46; }
+.product-app .appearance-settings:not(.desktop-behavior-card) { flex-direction: row; align-items: center; justify-content: space-between; gap: 24px; max-width: 860px; margin: 0 0 12px; border: 1px solid var(--product-line); border-radius: 12px; background: var(--product-panel); }
+.product-app .appearance-settings:not(.desktop-behavior-card) .theme-choice { width: auto; min-width: 260px; flex: none; }
+.product-app .product-settings-body .appearance-settings,
+.product-app .desktop-behavior-card { background: var(--product-panel); }
+.product-app .desktop-behavior-card { display: flex; flex-direction: column; align-items: stretch; max-width: 860px; border: 1px solid var(--product-line); border-radius: 12px; }
+.product-app .desktop-behavior-card .preference-rows,
+.product-app .desktop-behavior-card .system-save-bar { width: 100%; }
+@media (min-width: 721px) {
+  .product-app .preference-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .product-app .preference-row select { width: 240px; }
+}
+.product-mcp-page { flex: 1; min-height: 0; overflow: auto; padding: 28px 36px 40px; }
+.desktop-settings-park { display: none !important; }
+.product-settings-body .settings-mcp { max-width: 980px; }
+.product-app input.settings-switch { appearance: none; width: 40px; height: 22px; margin: 0; padding: 0; border: 0; border-radius: 999px; cursor: pointer; flex: none; justify-self: end; background-color: #c5ccd6; background-image: radial-gradient(circle, #fff 7px, transparent 8px); background-repeat: no-repeat; background-size: 18px 18px; background-position: 2px center; transition: background-position .16s ease, background-color .16s ease; }
+.product-app input.settings-switch:checked { background-color: #0874ff; background-position: 20px center; }
+.product-app input.settings-switch:focus-visible { outline: 2px solid #0874ff; outline-offset: 2px; }
+@media (max-width: 860px) {
+  .product-app .appearance-settings:not(.desktop-behavior-card) { flex-direction: column; align-items: stretch; }
+  .product-app .appearance-settings:not(.desktop-behavior-card) .theme-choice { width: 100%; min-width: 0; }
+}
