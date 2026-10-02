@@ -200,6 +200,7 @@ const setupController: SetupController = new SetupController({
   syncModelDefaults: options => syncModelDefaultsToConfigFile(runtime(), options),
   sendStartupProgress,
   hideStartupProgress,
+  log: message => logger?.write('desktop', message),
   waitEmbeddingRebuildChoice,
   applyTheme: theme => systemSettingsController.applyTheme(theme),
   reloadLiveModels: () => refreshRunningGateway(sidecarController),

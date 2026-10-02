@@ -293,14 +293,18 @@ def show_desktop_settings_panel(page: Page, name: str) -> None:
 
 
 def mint_admin_login_link(page: Page, home: Path) -> str:
-    page.wait_for_function(
+    state = page.evaluate(
         """async () => {
-          const state = await window.pmbrainDesktop?.getState?.();
-          return Boolean(state && state.phase === 'ready' && Number(state.port) > 0);
-        }""",
-        timeout=120_000,
+          const deadline = Date.now() + 120000;
+          while (Date.now() < deadline) {
+            const state = await window.pmbrainDesktop?.getState?.();
+            if (state && state.phase === 'ready' && Number(state.port) > 0) return state;
+            await new Promise(resolve => setTimeout(resolve, 100));
+          }
+          throw new Error('Desktop sidecar did not become ready before the existing startup deadline');
+        }"""
     )
-    port = int(page.evaluate("async () => Number((await window.pmbrainDesktop.getState()).port)"))
+    port = int(state["port"])
     config = json.loads((home / ".pmbrain" / "config.json").read_text(encoding="utf-8-sig"))
     token = config.get("admin_bootstrap_token")
     if not isinstance(token, str) or len(token) < 32:
@@ -691,14 +695,16 @@ def run(args: argparse.Namespace) -> None:
             )
             mcp_key_search_journey(admin_page, origin)
         except Exception:
-            try:
-                admin_page.screenshot(path=str(artifacts / "failure.png"), full_page=True)
-                (artifacts / "failure-page.txt").write_text(
-                    f"url={admin_page.url}\ntitle={admin_page.title()}\n\n{admin_page.locator('body').inner_text()}\n",
-                    encoding="utf-8",
-                )
-            except Exception:
-                pass
+            for label, failure_page in (("desktop", page), ("admin", admin_page)):
+                try:
+                    failure_page.screenshot(path=str(artifacts / f"failure-{label}.png"), full_page=True)
+                    (artifacts / f"failure-{label}-page.txt").write_text(
+                        f"url={failure_page.url}\ntitle={failure_page.title()}\n\n"
+                        f"{failure_page.locator('body').inner_text()}\n",
+                        encoding="utf-8",
+                    )
+                except Exception:
+                    pass
             raise
         finally:
             if admin_browser is not None:
