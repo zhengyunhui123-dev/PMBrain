@@ -480,9 +480,13 @@ def embedding_switch_journey(
     desktop_url: str | None = None,
 ) -> None:
     print("[journey 4/6] change embedding model -> dimension migration -> re-embed", flush=True)
-    page.goto(desktop_url or DESKTOP_RENDERER.as_uri())
-    page.locator("#panel-basic").wait_for(state="visible")
-    show_desktop_settings_panel(page, "models")
+    target = desktop_url or DESKTOP_RENDERER.as_uri()
+    if page.url != target:
+        page.goto(target, wait_until="domcontentloaded")
+    if not page.locator("#panel-models").is_visible():
+        page.evaluate("() => { window.location.hash = 'settings-basic'; }")
+        page.locator(".desktop-settings").wait_for(state="visible")
+        show_desktop_settings_panel(page, "models")
     page.wait_for_function(
         "() => Array.from(document.querySelector('#embedding-provider')?.options ?? []).some(option => option.textContent === 'PMBrain E2E Local Provider')"
     )
