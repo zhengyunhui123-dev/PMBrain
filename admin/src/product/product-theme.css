@@ -29,9 +29,21 @@ html[data-theme="dark"] .product-app :is(.product-nav nav button.active,.product
 .product-app .appearance-settings:not(.desktop-behavior-card) .theme-choice { width: auto; min-width: 260px; flex: none; }
 .product-app .product-settings-body .appearance-settings,
 .product-app .desktop-behavior-card { background: var(--product-panel); }
-.product-app .desktop-behavior-card { display: flex; flex-direction: column; align-items: stretch; max-width: 860px; border: 1px solid var(--product-line); border-radius: 12px; }
+.product-app .desktop-settings-slot,
+.product-app .desktop-settings-host,
+.product-app .desktop-settings-container,
+.product-app .desktop-settings,
+.product-app .desktop-settings .app-shell,
+.product-app .desktop-settings .workspace,
+.product-app .desktop-settings .panel { height: auto; min-height: 0; flex: none; align-self: start; }
+.product-app .desktop-behavior-card { display: flex; flex-direction: column; align-items: stretch; align-self: start; justify-content: flex-start; gap: 0; height: fit-content; min-height: 0; flex: none; max-width: 860px; padding: 4px 18px 8px; border: 1px solid var(--product-line); border-radius: 12px; }
+.product-app .desktop-behavior-card .settings-panel-title { padding: 12px 0 2px; }
 .product-app .desktop-behavior-card .preference-rows,
 .product-app .desktop-behavior-card .system-save-bar { width: 100%; }
+.product-app .desktop-behavior-card .preference-row { min-height: 0; padding: 11px 0; }
+.product-app .desktop-behavior-card .system-save-bar { margin-top: 0; padding: 12px 0 8px; justify-content: flex-end; border-top: 1px solid var(--product-line); }
+.product-app .desktop-behavior-card .system-save-bar p:empty { display: none; }
+.product-app .desktop-behavior-card .system-save-bar p:not(:empty) { margin-right: auto; }
 @media (min-width: 721px) {
   .product-app .preference-row { grid-template-columns: minmax(0, 1fr) auto; }
   .product-app .preference-row select { width: 240px; }
@@ -39,9 +51,11 @@ html[data-theme="dark"] .product-app :is(.product-nav nav button.active,.product
 .product-mcp-page { flex: 1; min-height: 0; overflow: auto; padding: 28px 36px 40px; }
 .desktop-settings-park { display: none !important; }
 .product-settings-body .settings-mcp { max-width: 980px; }
-.product-app input.settings-switch { appearance: none; width: 40px; height: 22px; margin: 0; padding: 0; border: 0; border-radius: 999px; cursor: pointer; flex: none; justify-self: end; background-color: #c5ccd6; background-image: radial-gradient(circle, #fff 7px, transparent 8px); background-repeat: no-repeat; background-size: 18px 18px; background-position: 2px center; transition: background-position .16s ease, background-color .16s ease; }
-.product-app input.settings-switch:checked { background-color: #0874ff; background-position: 20px center; }
-.product-app input.settings-switch:focus-visible { outline: 2px solid #0874ff; outline-offset: 2px; }
+.product-app input.settings-switch { appearance: none; -webkit-appearance: none; box-sizing: border-box; width: 36px; min-width: 36px; max-width: 36px; height: 20px; min-height: 20px; max-height: 20px; margin: 0; padding: 0; border: 0; border-radius: 999px; cursor: pointer; flex: none; align-self: center; justify-self: end; background-color: #d0d5dd; background-image: radial-gradient(circle, #fff 6.5px, transparent 7px); background-repeat: no-repeat; background-size: 16px 16px; background-position: 2px center; box-shadow: none; transition: background-position .16s ease, background-color .16s ease; }
+.product-app input.settings-switch:checked { background-color: #34C759; background-position: 18px center; }
+.product-app input.settings-switch:focus-visible { outline: 2px solid #34C759; outline-offset: 2px; }
+.product-app .preference-row select,
+.product-app .model-services.is-roles .model-role select { height: 32px; min-height: 32px; max-height: 32px; padding: 0 12px; border-radius: 8px; }
 @media (max-width: 860px) {
   .product-app .appearance-settings:not(.desktop-behavior-card) { flex-direction: column; align-items: stretch; }
   .product-app .appearance-settings:not(.desktop-behavior-card) .theme-choice { width: 100%; min-width: 0; }

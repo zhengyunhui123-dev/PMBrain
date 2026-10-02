@@ -135,12 +135,12 @@
 .model-services.is-roles .provider-detail > header { margin-bottom: 18px; }
 .model-services.is-roles .model-roles,
 .model-services.is-roles .advanced-routes { border: 1px solid var(--product-line); border-radius: 12px; background: var(--product-panel); }
-.model-services.is-roles .model-roles { padding: 0 18px; }
-.model-role { display: grid; grid-template-columns: minmax(0, 1fr) minmax(200px, 280px); gap: 20px; align-items: center; margin: 0; padding: 16px 0; border-bottom: 1px solid var(--product-line); }
+.model-services.is-roles .model-roles { align-self: start; height: fit-content; padding: 2px 18px; }
+.model-role { display: grid; grid-template-columns: minmax(0, 1fr) minmax(200px, 280px); gap: 16px; align-items: center; margin: 0; padding: 12px 0; border-bottom: 1px solid var(--product-line); }
 .model-services.is-roles .model-roles > .model-role:last-child { border-bottom: 0; }
 .model-role b { font-size: 14px; font-weight: 600; display: block; }
 .model-role small { font-size: 12px; color: var(--product-muted); margin-top: 4px; display: block; line-height: 1.5; }
-.model-services.is-roles .model-role select { height: 36px; padding: 0 12px; border-radius: 8px; }
+.model-services.is-roles .model-role select { height: 32px; min-height: 32px; padding: 0 12px; border-radius: 8px; }
 .model-services.is-roles .ocr-enabled { grid-template-columns: minmax(0, 1fr) auto; }
 .model-modal-overlay { position: fixed; z-index: 1000; inset: 0; display: grid; place-items: center; background: #0009; padding: 20px; }
 .model-modal { width: 520px; max-width: 100%; max-height: calc(100vh - 40px); overflow: auto; background: var(--product-bg); border: 1px solid var(--product-line); border-radius: 12px; padding: 24px; box-shadow: 0 20px 60px #0006; }
