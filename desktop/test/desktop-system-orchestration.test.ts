@@ -135,6 +135,7 @@ describe('desktop system orchestration contracts', () => {
     }
     expect(main).toContain('new Tray');
     expect(main).toContain("closeBehavior === 'quit'");
+    expect(main).toContain('startMinimized && !getSetupInfo().needsSetup');
     expect(main).toContain('app.setLoginItemSettings');
     expect(main).toContain('dialog.showMessageBox');
   });

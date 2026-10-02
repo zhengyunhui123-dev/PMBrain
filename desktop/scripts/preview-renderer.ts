@@ -169,7 +169,7 @@ window.pmbrainDesktop = {
   onThemeState: () => () => {},
   getSystemSettings: async () => ({
     preferences: {
-      networkMode: 'shared', closeBehavior: 'tray', sharedAdapter: 'Wi-Fi',
+      networkMode: 'shared', closeBehavior: 'tray', startMinimized: false, sharedAdapter: 'Wi-Fi',
       sharedIp: '192.168.1.20', sharedResumeRequired: false,
     },
     theme: { source: '${theme}', resolved: '${theme}' },
@@ -195,7 +195,7 @@ window.pmbrainDesktop = {
     const state = await window.pmbrainDesktop.getSystemSettings();
     return {
       canceled: false,
-      state: { ...state, launchAtLogin: input.launchAtLogin, preferences: { ...state.preferences, closeBehavior: input.closeBehavior } },
+      state: { ...state, launchAtLogin: input.launchAtLogin, preferences: { ...state.preferences, closeBehavior: input.closeBehavior, startMinimized: input.startMinimized === true } },
     };
   },
   onSystemSettingsState: () => () => {},

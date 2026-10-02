@@ -33,6 +33,10 @@ export class WindowController {
     };
   }
 
+  private shouldStartHidden(): boolean {
+    return getDesktopPreferences().startMinimized && !getSetupInfo().needsSetup;
+  }
+
   reveal(): void {
     if (!this.window) {
       void this.create();
@@ -72,7 +76,10 @@ export class WindowController {
       if (/^https?:\/\//i.test(url)) void shell.openExternal(url);
       return { action: 'deny' };
     });
-    window.once('ready-to-show', () => window.show());
+    window.once('ready-to-show', () => {
+      if (this.shouldStartHidden()) return;
+      window.show();
+    });
     window.on('close', event => {
       if (this.dependencies.getQuitting() || getDesktopPreferences().closeBehavior === 'quit') return;
       event.preventDefault();
@@ -103,7 +110,7 @@ export class WindowController {
       if (this.window === window) this.window = null;
     });
     await this.showShell();
-    if (!window.isVisible()) window.show();
+    if (!this.shouldStartHidden() && !window.isVisible()) window.show();
     if (!getSetupInfo().needsSetup) {
       try {
         await this.dependencies.sidecar.ensureReady();

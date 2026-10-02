@@ -38,12 +38,11 @@ html[data-theme="dark"] .product-app :is(.product-nav nav button.active,.product
 .product-app .desktop-settings .panel { height: auto; min-height: 0; flex: none; align-self: start; }
 .product-app .desktop-behavior-card { display: flex; flex-direction: column; align-items: stretch; align-self: start; justify-content: flex-start; gap: 0; height: fit-content; min-height: 0; flex: none; max-width: 860px; padding: 4px 18px 8px; border: 1px solid var(--product-line); border-radius: 12px; }
 .product-app .desktop-behavior-card .settings-panel-title { padding: 12px 0 2px; }
-.product-app .desktop-behavior-card .preference-rows,
-.product-app .desktop-behavior-card .system-save-bar { width: 100%; }
-.product-app .desktop-behavior-card .preference-row { min-height: 0; padding: 11px 0; }
-.product-app .desktop-behavior-card .system-save-bar { margin-top: 0; padding: 12px 0 8px; justify-content: flex-end; border-top: 1px solid var(--product-line); }
-.product-app .desktop-behavior-card .system-save-bar p:empty { display: none; }
-.product-app .desktop-behavior-card .system-save-bar p:not(:empty) { margin-right: auto; }
+.product-app .desktop-behavior-card .preference-rows { width: 100%; }
+.product-app .desktop-behavior-card .preference-row { min-height: 0; padding: 13px 0; }
+.product-app .desktop-behavior-card .preference-row > span small { display: none; }
+.product-app .desktop-behavior-card .desktop-behavior-note { margin: 8px 0 4px; color: #b42318; font-size: 12px; }
+.product-app .desktop-behavior-card .desktop-behavior-note:empty { display: none; }
 @media (min-width: 721px) {
   .product-app .preference-row { grid-template-columns: minmax(0, 1fr) auto; }
   .product-app .preference-row select { width: 240px; }

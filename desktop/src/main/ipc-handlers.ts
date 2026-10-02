@@ -18,11 +18,12 @@ import type {
 } from './model-connection-test.js';
 import type { SidecarState } from './sidecar-manager.js';
 import type {
+  DesktopBehaviorInput,
   DesktopSystemSettingsPayload,
   DesktopSystemSettingsSaveResult,
   DesktopSystemSettingsState,
 } from './system-settings.js';
-import type { DesktopCloseBehavior, DesktopTheme, SetupPayload } from './config-manager.js';
+import type { DesktopTheme, SetupPayload } from './config-manager.js';
 import type { UpdateState } from './update-manager.js';
 import type {
   DesktopPgliteUpgradeBackupMutation,
@@ -48,7 +49,7 @@ export interface DesktopIpcHandlers {
   setTheme: (value: DesktopTheme) => unknown;
   systemSettings: () => DesktopSystemSettingsState;
   saveSystemSettings: (payload: DesktopSystemSettingsPayload) => Promise<DesktopSystemSettingsSaveResult>;
-  saveDesktopBehavior: (input: { launchAtLogin: boolean; closeBehavior: DesktopCloseBehavior }) => Promise<DesktopSystemSettingsSaveResult>;
+  saveDesktopBehavior: (input: DesktopBehaviorInput) => Promise<DesktopSystemSettingsSaveResult>;
   memoryWriteback: () => Promise<unknown>;
   saveMemoryWriteback: (payload: MemoryWritebackUpdate) => Promise<unknown>;
   sharedAccess: () => Promise<unknown>;
@@ -122,7 +123,7 @@ export function registerDesktopIpcHandlers(handlers: DesktopIpcHandlers): void {
   registerTrustedHandler('desktop:set-theme', handlers, (_event, value: DesktopTheme) => handlers.setTheme(value));
   registerTrustedHandler('desktop:get-system-settings', handlers, () => handlers.systemSettings());
   registerTrustedHandler('desktop:save-system-settings', handlers, (_event, payload: DesktopSystemSettingsPayload) => handlers.saveSystemSettings(payload));
-  registerTrustedHandler('desktop:save-desktop-behavior', handlers, (_event, input: { launchAtLogin: boolean; closeBehavior: DesktopCloseBehavior }) => handlers.saveDesktopBehavior(input));
+  registerTrustedHandler('desktop:save-desktop-behavior', handlers, (_event, input: DesktopBehaviorInput) => handlers.saveDesktopBehavior(input));
   registerTrustedHandler('desktop:get-memory-writeback', handlers, () => handlers.memoryWriteback());
   registerTrustedHandler('desktop:save-memory-writeback', handlers, (_event, payload: MemoryWritebackUpdate) => handlers.saveMemoryWriteback(payload));
   registerTrustedHandler('desktop:get-shared-access', handlers, () => handlers.sharedAccess());

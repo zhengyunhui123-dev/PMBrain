@@ -124,7 +124,7 @@ const PANEL_COPY: Record<Panel, { eyebrow: string; title: string }> = {
   models: { eyebrow: 'DESKTOP SETTINGS / 02', title: '配置普通模型与向量模型' },
   integrations: { eyebrow: 'MCP / 03', title: '把 PMBrain 接入 AI 客户端' },
   system: { eyebrow: 'SYSTEM / 04', title: '管理桌面连接与系统行为' },
-  'desktop-behavior': { eyebrow: 'PREFERENCES', title: '桌面行为' },
+  'desktop-behavior': { eyebrow: 'PREFERENCES', title: '启动' },
   updates: { eyebrow: 'UPDATES / 05', title: '保持桌面端安全更新' },
   repair: { eyebrow: 'REPAIR / 06', title: '软件修复' },
   recovery: { eyebrow: 'RECOVERY', title: '恢复 PMBrain 本地服务' },
@@ -1368,7 +1368,8 @@ function renderSystemSettings(next: DesktopSystemSettingsState): void {
   const mode = next.preferences.networkMode;
   $<HTMLInputElement>(`#network-mode-${mode}`).checked = true;
   $<HTMLInputElement>('#launch-at-login').checked = next.launchAtLogin;
-  $<HTMLSelectElement>('#close-behavior').value = next.preferences.closeBehavior;
+  $<HTMLInputElement>('#start-minimized').checked = next.preferences.startMinimized;
+  $<HTMLInputElement>('#close-to-tray').checked = next.preferences.closeBehavior !== 'quit';
 
   const select = $<HTMLSelectElement>('#shared-address');
   const placeholder = document.createElement('option');
@@ -1431,12 +1432,16 @@ function renderSystemSettings(next: DesktopSystemSettingsState): void {
 const DESKTOP_SETUP_NOTE = '请先在“基础配置”完成数据库与知识目录设置，再保存系统设置。';
 
 function updateSystemSettingsAvailability(): void {
-  const buttons = ['#save-system-settings', '#save-desktop-behavior']
+  const buttons = ['#save-system-settings']
     .map((selector) => document.querySelector<HTMLButtonElement>(selector))
     .filter((button): button is HTMLButtonElement => button !== null);
+  const startupSwitches = ['#launch-at-login', '#start-minimized', '#close-to-tray']
+    .map((selector) => document.querySelector<HTMLInputElement>(selector))
+    .filter((input): input is HTMLInputElement => input !== null);
   const desktopNote = $('#desktop-behavior-note');
   if (state?.setup.needsSetup !== false) {
     for (const button of buttons) button.disabled = true;
+    for (const input of startupSwitches) input.disabled = true;
     $('#system-save-note').textContent = DESKTOP_SETUP_NOTE;
     desktopNote.textContent = DESKTOP_SETUP_NOTE;
     return;
@@ -1444,6 +1449,7 @@ function updateSystemSettingsAvailability(): void {
   for (const button of buttons) {
     if (!button.classList.contains('busy')) button.disabled = false;
   }
+  for (const input of startupSwitches) input.disabled = false;
   $('#system-save-note').textContent = latestSystemSettings?.warning || '';
   if (desktopNote.textContent === DESKTOP_SETUP_NOTE) desktopNote.textContent = '';
 }
@@ -1562,7 +1568,7 @@ function currentSystemSettingsPayload(): DesktopSystemSettingsPayload {
     sharedAdapter: address.adapterName,
     sharedIp: address.address,
     launchAtLogin: $<HTMLInputElement>('#launch-at-login').checked,
-    closeBehavior: $<HTMLSelectElement>('#close-behavior').value as 'tray' | 'quit',
+    closeBehavior: $<HTMLInputElement>('#close-to-tray').checked ? 'tray' : 'quit',
   };
 }
 
@@ -1635,26 +1641,19 @@ async function saveSystemSettings(trigger?: HTMLButtonElement): Promise<void> {
 }
 
 async function saveDesktopBehavior(): Promise<void> {
-  clearNotices();
   const note = $('#desktop-behavior-note');
-  note.textContent = '';
-  const button = $<HTMLButtonElement>('#save-desktop-behavior');
+  if (note.textContent === DESKTOP_SETUP_NOTE) return;
   const launchAtLogin = $<HTMLInputElement>('#launch-at-login').checked;
-  const closeBehavior = $<HTMLSelectElement>('#close-behavior').value === 'quit' ? 'quit' : 'tray';
-  setBusy(button, true, '正在保存…');
+  const startMinimized = $<HTMLInputElement>('#start-minimized').checked;
+  const closeBehavior = $<HTMLInputElement>('#close-to-tray').checked ? 'tray' : 'quit';
   try {
-    const result = await window.pmbrainDesktop.saveDesktopBehavior({ launchAtLogin, closeBehavior });
+    const result = await window.pmbrainDesktop.saveDesktopBehavior({ launchAtLogin, startMinimized, closeBehavior });
     applySystemSettingsState(result.state);
-    if (result.canceled) return;
-    note.textContent = '桌面行为已保存。';
-    setNotice('success', '桌面行为已保存。');
+    if (note.textContent !== DESKTOP_SETUP_NOTE) note.textContent = '';
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    if (latestSystemSettings) renderSystemSettings(latestSystemSettings);
     note.textContent = message;
-    setNotice('error', message);
-  } finally {
-    setBusy(button, false, '保存');
-    updateSystemSettingsAvailability();
   }
 }
 
@@ -2993,7 +2992,9 @@ document.querySelectorAll<HTMLButtonElement>('.secret-toggle').forEach((button) 
 }));
 $('#save-setup').addEventListener('click', () => void save());
 $('#save-system-settings').addEventListener('click', () => void saveSystemSettings());
-$('#save-desktop-behavior').addEventListener('click', () => void saveDesktopBehavior());
+for (const id of ['launch-at-login', 'start-minimized', 'close-to-tray']) {
+  $(`#${id}`).addEventListener('change', () => void saveDesktopBehavior());
+}
 $('#restart-shared-gateway').addEventListener('click', () => void restartSharedGateway());
 $('#memory-open-integrations').addEventListener('click', () => {
   switchPanel('integrations');

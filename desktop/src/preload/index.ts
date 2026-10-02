@@ -38,6 +38,7 @@ import type {
   DesktopModelConnectionTestResult,
 } from '../main/model-connection-test.js';
 import type {
+  DesktopBehaviorInput,
   DesktopSystemSettingsPayload,
   DesktopSystemSettingsSaveResult,
   DesktopSystemSettingsState,
@@ -187,7 +188,7 @@ export interface PMBrainDesktopApi {
   onShowPanel(listener: (panel: DesktopSettingsPanel) => void): () => void;
   getSystemSettings(): Promise<DesktopSystemSettingsState>;
   saveSystemSettings(payload: DesktopSystemSettingsPayload): Promise<DesktopSystemSettingsSaveResult>;
-  saveDesktopBehavior(input: { launchAtLogin: boolean; closeBehavior: DesktopCloseBehavior }): Promise<DesktopSystemSettingsSaveResult>;
+  saveDesktopBehavior(input: DesktopBehaviorInput): Promise<DesktopSystemSettingsSaveResult>;
   getMemoryWriteback(): Promise<MemoryWritebackStatus>;
   saveMemoryWriteback(payload: MemoryWritebackUpdate): Promise<MemoryWritebackStatus>;
   onSystemSettingsState(listener: (state: DesktopSystemSettingsState) => void): () => void;

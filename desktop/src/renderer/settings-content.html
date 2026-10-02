@@ -504,13 +504,14 @@
         <section class="panel" id="panel-desktop-behavior">
           <section class="pm-card settings-panel appearance-settings desktop-behavior-card" aria-labelledby="desktop-behavior-title">
             <div class="settings-panel-title">
-              <div><h2 id="desktop-behavior-title">桌面行为</h2><p>开机是否自动启动，以及点击窗口关闭按钮时如何处理。</p></div>
+              <div><h2 id="desktop-behavior-title">启动</h2></div>
             </div>
             <div class="preference-rows">
-              <label class="preference-row" for="launch-at-login"><span><b>开机自动启动 PMBrain</b><small>登录 Windows 后启动桌面端，并按数据库类型准备本地服务。</small></span><input id="launch-at-login" class="settings-switch" type="checkbox" /></label>
-              <label class="preference-row" for="close-behavior"><span><b>点击窗口 × 时</b></span><select id="close-behavior"><option value="tray">最小化到托盘（默认）</option><option value="quit">退出 PMBrain</option></select></label>
+              <label class="preference-row" for="launch-at-login"><span><b>开机自动启动</b></span><input id="launch-at-login" class="settings-switch" type="checkbox" /></label>
+              <label class="preference-row" for="start-minimized"><span><b>启动时最小化到托盘</b></span><input id="start-minimized" class="settings-switch" type="checkbox" /></label>
+              <label class="preference-row" for="close-to-tray"><span><b>关闭时最小化到托盘</b></span><input id="close-to-tray" class="settings-switch" type="checkbox" /></label>
             </div>
-            <div class="system-save-bar"><p id="desktop-behavior-note" role="status"></p><button class="primary" id="save-desktop-behavior" type="button"><span>保存</span><i></i></button></div>
+            <p id="desktop-behavior-note" class="desktop-behavior-note" role="status"></p>
           </section>
         </section>
         <section class="panel" id="panel-updates">

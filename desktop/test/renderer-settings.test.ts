@@ -244,9 +244,9 @@ describe('desktop settings renderer contracts', () => {
       'network-mode-shared',
       'shared-address',
       'launch-at-login',
-      'close-behavior',
+      'start-minimized',
+      'close-to-tray',
       'save-system-settings',
-      'save-desktop-behavior',
       'restart-shared-gateway',
     ]) {
       expect(html).toContain(`id="${id}"`);
@@ -264,23 +264,28 @@ describe('desktop settings renderer contracts', () => {
     expect(systemPanel).toContain('连接模式');
     expect(systemPanel).toContain('AI 长期记忆');
     expect(systemPanel).not.toContain('launch-at-login');
-    expect(systemPanel).not.toContain('桌面行为');
+    expect(systemPanel).not.toContain('开机自动启动');
+    expect(behaviorPanel).toContain('>启动</h2>');
+    expect(behaviorPanel).toContain('开机自动启动');
+    expect(behaviorPanel).toContain('启动时最小化到托盘');
+    expect(behaviorPanel).toContain('关闭时最小化到托盘');
     expect(behaviorPanel).toContain('id="launch-at-login"');
-    expect(behaviorPanel).toContain('id="close-behavior"');
+    expect(behaviorPanel).toContain('id="start-minimized"');
+    expect(behaviorPanel).toContain('id="close-to-tray"');
     expect(behaviorPanel).toContain('id="desktop-behavior-note"');
-    expect(behaviorPanel).toContain('<span>保存</span>');
+    expect(behaviorPanel).not.toContain('<span>保存</span>');
+    expect(behaviorPanel).not.toContain('点击窗口');
     expect(behaviorPanel).not.toContain('保存系统设置');
     expect(behaviorPanel).not.toContain('界面外观');
     const desktopSaveStart = renderer.indexOf('async function saveDesktopBehavior');
     const desktopSave = renderer.slice(desktopSaveStart, renderer.indexOf('function populate', desktopSaveStart));
-    expect(desktopSave).toContain('saveDesktopBehavior({ launchAtLogin, closeBehavior })');
-    expect(desktopSave).toContain('桌面行为已保存。');
+    expect(desktopSave).toContain('saveDesktopBehavior({ launchAtLogin, startMinimized, closeBehavior })');
     expect(desktopSave).toContain("$('#desktop-behavior-note')");
     expect(desktopSave).not.toContain('saveSystemSettings');
     expect(desktopSave).not.toContain('系统设置已保存，当前仅本机连接。');
     expect(preload).toContain('desktop:save-desktop-behavior');
     expect(main).toContain('saveDesktopBehavior: input => systemSettingsController.saveDesktopBehavior(input)');
-    expect(renderer).toContain("$('#save-desktop-behavior').addEventListener('click', () => void saveDesktopBehavior())");
+    expect(renderer).toContain("$(`#${id}`).addEventListener('change', () => void saveDesktopBehavior())");
     expect(renderer).not.toContain("void saveSystemSettings(event.currentTarget as HTMLButtonElement)");
     expect(renderer).toContain('theme: themeSource');
     expect(renderer).toContain("'desktop-behavior'");

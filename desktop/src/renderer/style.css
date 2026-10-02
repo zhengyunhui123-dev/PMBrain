@@ -418,9 +418,9 @@ select { cursor: pointer; appearance: auto; -webkit-appearance: auto; }
 .gateway-restart { min-height: 34px; padding: 0 13px; color: var(--danger-text); border-color: var(--danger-border); background: var(--danger-soft); font-size: 11px; font-weight: 650; }
 .gateway-restart:hover:not(:disabled) { color: var(--danger-text); border-color: var(--danger); background: var(--danger-soft); }
 .desktop-behavior-card { margin-top: 12px; justify-content: flex-start; gap: 0; height: fit-content; align-self: start; }
-.desktop-behavior-card .system-save-bar { margin-top: 0; padding-top: 12px; justify-content: flex-end; }
-.desktop-behavior-card .system-save-bar p:empty { display: none; }
-.desktop-behavior-card .system-save-bar p:not(:empty) { margin-right: auto; }
+.desktop-behavior-card .preference-row { padding: 13px 0; }
+.desktop-behavior-card .desktop-behavior-note { margin: 8px 0 4px; color: var(--danger-text, #b42318); font-size: 12px; }
+.desktop-behavior-card .desktop-behavior-note:empty { display: none; }
 .preference-rows { display: flex; flex-direction: column; }
 .preference-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 24px; align-items: center; min-height: 0; padding: 11px 0; border-top: 1px solid var(--line); cursor: pointer; }
 .preference-row > span b, .preference-row > span small { display: block; }

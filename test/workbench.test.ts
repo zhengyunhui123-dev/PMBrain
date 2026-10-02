@@ -1,4 +1,6 @@
 import { expect, test } from 'bun:test';
+import { readFileSync } from 'node:fs';
+import { inlineCitationIndex } from '../admin/src/pages/Documentation';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -8,6 +10,19 @@ import { knowledgeWorkbenchAnswer } from '../src/product/workbench/routes';
 import { WorkbenchStore } from '../src/product/workbench/store';
 
 const root = () => mkdtempSync(join(tmpdir(), 'pmbrain-workbench-test-'));
+test('知识助手回答里的角标在悬停时显示对应引用', () => {
+  expect(inlineCitationIndex('[1]')).toBe(1);
+  expect(inlineCitationIndex('[12]')).toBe(12);
+  expect(inlineCitationIndex('[0]')).toBeNull();
+  expect(inlineCitationIndex('见 [1]')).toBeNull();
+  const message = readFileSync(new URL('../admin/src/workbench/Message.tsx', import.meta.url), 'utf8');
+  const article = readFileSync(new URL('../admin/src/pages/Documentation.tsx', import.meta.url), 'utf8');
+  const css = readFileSync(new URL('../admin/src/workbench/workbench.css', import.meta.url), 'utf8');
+  expect(message).toContain("citations={message.role === 'assistant' ? message.citations : undefined}");
+  expect(article).toContain('role="tooltip"');
+  expect(article).toContain('citation.snippet');
+  expect(css).toContain('.wb-cite-card');
+});
 test('multi-turn conversation sends prior user and assistant messages and persists across restart', async () => {
   const dir = root(); const seen: any[] = [];
   const service = new WorkbenchService(new WorkbenchStore(dir), () => [{ id: 'ollama:local', name: '本地' }], async input => { seen.push(input.messages); return { text: '记住了：蓝色', model: 'ollama:local', citations: [] }; });

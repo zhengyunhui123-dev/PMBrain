@@ -31,6 +31,7 @@ export type DesktopCloseBehavior = 'tray' | 'quit';
 export interface DesktopPreferences {
   networkMode: DesktopNetworkMode;
   closeBehavior: DesktopCloseBehavior;
+  startMinimized: boolean;
   sharedAdapter?: string;
   sharedIp?: string;
   sharedResumeRequired: boolean;
@@ -196,6 +197,7 @@ type RawConfig = Record<string, unknown> & {
     theme?: DesktopTheme;
     network_mode?: DesktopNetworkMode;
     close_behavior?: DesktopCloseBehavior;
+    start_minimized?: boolean;
     shared_adapter?: string;
     shared_ip?: string;
     shared_resume_required?: boolean;
@@ -477,6 +479,7 @@ function preferencesFromConfig(config: RawConfig | null): DesktopPreferences {
   return {
     networkMode: normalizeDesktopNetworkMode(desktop?.network_mode),
     closeBehavior: normalizeDesktopCloseBehavior(desktop?.close_behavior),
+    startMinimized: desktop?.start_minimized === true,
     sharedAdapter,
     sharedIp,
     sharedResumeRequired: desktop?.shared_resume_required === true,
@@ -1036,6 +1039,7 @@ export function saveDesktopPreferences(patch: Partial<DesktopPreferences>): {
     closeBehavior: patch.closeBehavior === undefined
       ? current.closeBehavior
       : normalizeDesktopCloseBehavior(patch.closeBehavior),
+    startMinimized: patch.startMinimized === undefined ? current.startMinimized : patch.startMinimized === true,
     sharedAdapter: patch.sharedAdapter === undefined ? current.sharedAdapter : patch.sharedAdapter.trim() || undefined,
     sharedIp: patch.sharedIp === undefined ? current.sharedIp : patch.sharedIp.trim() || undefined,
     sharedResumeRequired: patch.sharedResumeRequired === undefined
@@ -1058,6 +1062,8 @@ export function saveDesktopPreferences(patch: Partial<DesktopPreferences>): {
   const desktop = { ...config.desktop };
   desktop.network_mode = preferences.networkMode;
   desktop.close_behavior = preferences.closeBehavior;
+  if (preferences.startMinimized) desktop.start_minimized = true;
+  else delete desktop.start_minimized;
   if (preferences.sharedAdapter) desktop.shared_adapter = preferences.sharedAdapter;
   else delete desktop.shared_adapter;
   if (preferences.sharedIp) desktop.shared_ip = preferences.sharedIp;
