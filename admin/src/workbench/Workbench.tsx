@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Plus, MessageCircle, ArrowUp, Square, BookOpen, FileUp, Pencil, Trash2, Settings, X } from 'lucide-react';
+import { OPEN_CONVERSATION_KEY } from '../product/home-model';
 import { acceptComposerFiles, assignSessionAttachments, composerFromSaved, createAttachment, filesFromClipboard, revokeAttachment, sessionAttachments, type ComposerAttachment } from './composer-attachments';
 import { useWorkbench } from './useWorkbench';
 import { Message } from './Message';
@@ -96,6 +97,18 @@ export function Workbench() {
     }
   };
   const rename = () => { const title = window.prompt('会话名称', wb.conversation?.title); if (title) void wb.action('rename', title); };
+  useEffect(() => {
+    if (!wb.loaded) return;
+    const openSaved = () => {
+      const id = sessionStorage.getItem(OPEN_CONVERSATION_KEY);
+      if (!id) return;
+      sessionStorage.removeItem(OPEN_CONVERSATION_KEY);
+      void wb.select(id);
+    };
+    openSaved();
+    window.addEventListener('pmbrain:open-conversation', openSaved);
+    return () => window.removeEventListener('pmbrain:open-conversation', openSaved);
+  }, [wb.loaded]);
   const assistant = wb.assistant;
   const contextNote = `超过 ${assistant.context.maxMessages} 条，或达到模型上下文约 ${Math.round(assistant.context.threshold * 100)}% 时，更早的对话会压缩成摘要`;
   return <div className="knowledge-workbench">

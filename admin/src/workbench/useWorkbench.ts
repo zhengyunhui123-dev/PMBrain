@@ -100,7 +100,7 @@ export function useWorkbench() {
       const next = await workbenchRequest<WorkbenchConversation>(`/conversations/${id}/messages`, { text, model, knowledge, retry, ...attachmentFields });
       if (active.current === id) setConversation(next);
       try { await refresh(); } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
-      return true;
+      return id;
     } catch (reason) {
       if (createdId) {
         try {

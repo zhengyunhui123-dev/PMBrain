@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { api } from '../api';
+import { desktopApi } from '../lib/product-fetch';
 import { useCallback, useRef } from 'react';
 import { AgentsPage } from './Agents';
 import { ChatGptTunnelPanel } from './ChatGptTunnel';
@@ -14,7 +15,7 @@ import * as Tooltip from '@radix-ui/react-tooltip';
 import {
   Activity, AlertTriangle, Bot, Boxes, Check, CheckCircle2, ChevronDown, Clock3, Cpu, Database,
   Download, FileText, FolderKanban, FolderTree, History, Layers3, Link2,
-  ListTodo, Plus, RefreshCw, Search, Sparkles, Tags, Upload, type LucideIcon,
+  ListTodo, Folder, Plus, RefreshCw, Search, Sparkles, Tags, Upload, type LucideIcon,
 } from 'lucide-react';
 import {
   Area, AreaChart, CartesianGrid, Cell, Pie, PieChart, ResponsiveContainer,
@@ -73,11 +74,13 @@ function NaturalLanguagePanel({
   onNavigate,
   importOptions,
   chatModel,
+  focus,
 }: {
   compact?: boolean;
   onNavigate?: (page: string) => void;
   importOptions?: KnowledgeImportOptions;
   chatModel?: string | null;
+  focus?: 'import';
 }) {
   const [initialWorkspace] = useState(loadNaturalWorkspace);
   const [text, setText] = useState(initialWorkspace.text);
@@ -490,13 +493,12 @@ function NaturalLanguagePanel({
       <div className={`pm-card nl-card ${compact ? 'compact' : ''}`}>
         <div className="pm-section-head">
           <div>
-            <div className="pm-eyebrow">一处完成常用知识工作</div>
-            <h2>知识助手</h2>
+            {focus !== 'import' && <><div className="pm-eyebrow">一处完成常用知识工作</div><h2>知识助手</h2></>}
           </div>
           {compact && <button className="pm-ghost" onClick={() => onNavigate?.('import')}>完整视图</button>}
           {!compact && <span className="pm-muted">{chatModel || '尚未配置模型'}</span>}
         </div>
-        {!compact && !preview && !run && !searchPayload && <div className="product-chat-welcome">
+        {focus !== 'import' && !compact && !preview && !run && !searchPayload && <div className="product-chat-welcome">
           <Layers3 aria-hidden="true" /><h1>有什么可以帮你的吗？</h1><p>基于你的知识库，进行搜索、分析、总结和创作</p>
           <div className="product-quick-actions">
             <button onClick={() => setText('帮我搜索知识库中关于')}><Search /><span><b>搜索我的知识库</b><small>查找相关资料</small></span></button>
@@ -540,7 +542,7 @@ function NaturalLanguagePanel({
               setExecuteClicked(false);
             }}
             onPaste={handleAttachmentPaste}
-            placeholder={pendingContext ? '在这里补充路径、Source 或其他缺少的信息…' : '输入要保存的正文、本地文件路径或知识库问题；也可点击 + 或直接粘贴文件…'}
+            placeholder={pendingContext ? '在这里补充路径、Source 或其他缺少的信息…' : focus === 'import' ? '粘贴文件夹路径，或点 + 添加文件。桌面版还可以直接选择文件夹。' : '输入要保存的正文、本地文件路径或知识库问题；也可点击 + 或直接粘贴文件…'}
             rows={compact ? 4 : 6}
           />
           <div className="assistant-composer-footer">
@@ -567,6 +569,16 @@ function NaturalLanguagePanel({
             >
               <Plus aria-hidden="true" />
             </button>
+            {focus === 'import' && desktopApi() && <button
+              type="button"
+              className="assistant-attach-button"
+              aria-label="选择文件夹"
+              title="选择文件夹"
+              onClick={() => void desktopApi()?.chooseDirectory().then(selected => { if (selected) setText(selected); })}
+              disabled={loading}
+            >
+              <Folder aria-hidden="true" />
+            </button>}
             <span
               className="assistant-attachment-help"
               aria-live="polite"
@@ -761,7 +773,7 @@ function NaturalLanguagePanel({
           <label className="product-history-search"><Search size={18} /><input aria-label="搜索工作记录" placeholder="搜索工作记录…" value={historyQuery} onChange={event => setHistoryQuery(event.target.value)} /></label>
           <button className="product-new-work" disabled={loading} onClick={() => {
             setText(''); setPreview(null); setRun(null); setSearchPayload(null); setError(''); setPendingContext(''); setActiveHistoryId(null); setAttachments([]); setAttachmentError('');
-          }}>＋ 新建对话</button>
+          }}>{focus === 'import' ? '＋ 新的导入' : '＋ 新建对话'}</button>
           <div className="pm-section-head">
             <h2>最近 5 条</h2>
             {history.length > 0 && (
@@ -800,19 +812,25 @@ function NaturalLanguagePanel({
   );
 }
 
-export function ImportDataPage() {
+export function ImportDataPage({ focus }: { focus?: 'import' } = {}) {
   const { overview } = useOverview();
   return (
     <div className="pm-page knowledge-assistant-page">
       <section className="assistant-hero">
         <div>
-          <div className="pm-eyebrow">IMPORT · SEARCH · ASK</div>
-          <h1>知识工作台</h1>
-          <p>输入正文、路径或添加文件；导入直接保存，搜索支持关键词/语义切换，AI搜索才走 AI 意图。</p>
+          {focus === 'import' ? <>
+            <div className="pm-eyebrow">资料进入知识库</div>
+            <h1>导入资料</h1>
+            <p>添加文件，或粘贴文件夹路径，然后点「导入」。没有变化的文件会跳过，改过的文件会重新处理。桌面版还可以直接选择文件夹。</p>
+          </> : <>
+            <div className="pm-eyebrow">IMPORT · SEARCH · ASK</div>
+            <h1>知识工作台</h1>
+            <p>输入正文、路径或添加文件；导入直接保存，搜索支持关键词/语义切换，AI搜索才走 AI 意图。</p>
+          </>}
         </div>
         <div className="assistant-pulse" aria-hidden="true"><i /><i /><i /></div>
       </section>
-      <NaturalLanguagePanel chatModel={overview?.chat_model} importOptions={{
+      <NaturalLanguagePanel focus={focus} chatModel={overview?.chat_model} importOptions={{
         includeOffice: true,
         includeImages: true,
         autoEmbed: true,
