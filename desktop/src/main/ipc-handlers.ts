@@ -56,7 +56,7 @@ export interface DesktopIpcHandlers {
   createSharedIntegration: (payload: SharedIntegrationPayload) => Promise<unknown>;
   revokeSharedIntegration: (credentialName: string) => Promise<unknown>;
   updateState: () => UpdateState | null;
-  setup: () => Promise<unknown>;
+  setup: (configurationOnly?: boolean) => Promise<unknown>;
   listDockerDatabases: () => Promise<unknown>;
   activateDockerDatabase: (containerName: string) => Promise<unknown>;
   integrations: (probe: boolean) => Promise<unknown>;
@@ -130,7 +130,10 @@ export function registerDesktopIpcHandlers(handlers: DesktopIpcHandlers): void {
   registerTrustedHandler('desktop:create-shared-integration', handlers, (_event, payload: SharedIntegrationPayload) => handlers.createSharedIntegration(payload));
   registerTrustedHandler('desktop:revoke-shared-integration', handlers, (_event, credentialName: string) => handlers.revokeSharedIntegration(credentialName));
   registerTrustedHandler('desktop:get-update-state', handlers, () => handlers.updateState());
-  registerTrustedHandler('desktop:get-setup', handlers, () => handlers.setup());
+  registerTrustedHandler('desktop:get-setup', handlers, (_event, configurationOnly = false) => {
+    if (typeof configurationOnly !== 'boolean') throw new Error('Invalid configurationOnly');
+    return handlers.setup(configurationOnly);
+  });
   registerTrustedHandler('desktop:list-docker-databases', handlers, () => handlers.listDockerDatabases());
   registerTrustedHandler('desktop:activate-docker-database', handlers, (_event, containerName: string) => handlers.activateDockerDatabase(containerName));
   registerTrustedHandler('desktop:get-integrations', handlers, (_event, probe?: boolean) => handlers.integrations(probe === true));

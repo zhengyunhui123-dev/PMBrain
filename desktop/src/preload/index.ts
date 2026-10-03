@@ -176,7 +176,7 @@ export interface PMBrainDesktopApi {
   getTheme(): Promise<DesktopThemeState>;
   setTheme(theme: DesktopTheme): Promise<DesktopThemeState>;
   onThemeState(listener: (state: DesktopThemeState) => void): () => void;
-  getSetup(): Promise<DesktopSetupState>;
+  getSetup(configurationOnly?: boolean): Promise<DesktopSetupState>;
   listDockerDatabases(): Promise<ManagedPostgresDatabase[]>;
   activateDockerDatabase(containerName: string): Promise<ManagedPostgresDatabase>;
   getIntegrations(probe?: boolean): Promise<IntegrationInfo[]>;
@@ -291,7 +291,7 @@ const api: PMBrainDesktopApi = {
     ipcRenderer.on('desktop:theme-state', handler);
     return () => ipcRenderer.removeListener('desktop:theme-state', handler);
   },
-  getSetup: () => ipcRenderer.invoke('desktop:get-setup'),
+  getSetup: (configurationOnly = false) => ipcRenderer.invoke('desktop:get-setup', configurationOnly),
   listDockerDatabases: () => ipcRenderer.invoke('desktop:list-docker-databases'),
   activateDockerDatabase: (containerName) => ipcRenderer.invoke('desktop:activate-docker-database', containerName),
   getIntegrations: (probe) => ipcRenderer.invoke('desktop:get-integrations', probe),

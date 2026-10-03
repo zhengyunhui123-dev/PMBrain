@@ -22,6 +22,7 @@ export interface IntentPreview {
 }
 
 export interface ConsoleRun {
+  product?: import('../../../shared/task-progress.ts').TaskProductProgress;
   id: string;
   kind: string;
   trigger?: 'manual' | 'scheduled';

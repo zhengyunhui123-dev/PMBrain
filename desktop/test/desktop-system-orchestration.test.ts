@@ -141,7 +141,7 @@ describe('desktop system orchestration contracts', () => {
   });
 
   test('MCP 卡片快照不等待连接探测，Grok 深度接入复用 Claude 兼容合同', () => {
-    expect(setupController).toMatch(/async currentState\(\)[\s\S]*?integrations: listIntegrations\(/);
+    expect(setupController).toMatch(/async currentState\(configurationOnly = false\)[\s\S]*?integrations: listIntegrations\(/);
     expect(setupController).toMatch(/async integrationStates\(\)[\s\S]*?listIntegrationsWithConnectionState/);
     expect(sharedAccessController).toContain("client === 'grok' ? 'claude' : client");
     expect(integrationManager).toContain("['codex', 'claude', 'grok'].includes(client)");

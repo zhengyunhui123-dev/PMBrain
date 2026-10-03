@@ -1,6 +1,8 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api, isPgliteBusyError } from '../api';
-import { RunOutput, formatDate, pageTypeLabel, pageTypeTitle, type ConsoleRun } from '../lib/shared';
+import { formatDate, pageTypeLabel, pageTypeTitle, type ConsoleRun } from '../lib/shared';
+import { TaskProgressCard, taskLink } from '../product/TaskProgress';
+import { useProductTasks } from '../product/TaskActivity';
 import { describeRunRecovery } from '../lib/run-recovery';
 import { TakeProposalsPage } from './TakeProposals';
 import { CalibrationPage } from './Calibration';
@@ -305,11 +307,11 @@ function useDreamData() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [busyRuns, setBusyRuns] = useState<ConsoleRun[]>([]);
+  const pending = useRef(false);
 
-  const load = async () => {
-    // Keep the current Dream page mounted during background refreshes. Replacing
-    // it with the initial loading screen resets the user's scroll anchor.
-    if (!data) setLoading(true);
+  const load = useCallback(async () => {
+    if (pending.current) return;
+    pending.current = true;
     try {
       setData(await api.dreamOverview());
       setError('');
@@ -329,9 +331,10 @@ function useDreamData() {
         setError(err instanceof Error ? err.message : String(err));
       }
     } finally {
+      pending.current = false;
       setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => { void load(); }, []);
   useEffect(() => {
@@ -564,6 +567,17 @@ export function describeDreamRun(run: ConsoleRun): {
   slugs: string[];
 } {
   const report = parseDreamReport(run);
+  if (run.product) {
+    const view = run.product;
+    return {
+      headline: `${view.name} · ${view.stage}`,
+      diagnosis: view.errorReason ?? (run.status === 'running' || run.status === 'queued' ? '任务在后台继续，离开页面不影响执行。' : '查看任务了解步骤和处理结果。'),
+      actions: view.steps.filter(step => step.status === 'completed').map(step => step.label),
+      outputs: view.metrics.map(metric => `${metric.label} ${metric.value}`),
+      details: run.durationMs !== null ? [`耗时 ${Math.round(run.durationMs / 1000)} 秒`] : [],
+      slugs: asStringArray(report?.phases?.find(phase => phase.phase === 'synthesize')?.details?.written_slugs),
+    };
+  }
   const isQuick = isQuickMaintenanceRun(run);
   const text = `${run.stdout}\n${run.stderr}`;
   const synth = report?.phases?.find(phase => phase.phase === 'synthesize');
@@ -1008,14 +1022,7 @@ function DreamRunResult({ run }: { run: ConsoleRun }) {
           </section>
         </div>
       </details>
-      <details className="dream-execution-log">
-        <summary>执行日志</summary>
-        <DreamTechnicalDetails run={run} />
-        <details className="nl-details">
-          <summary>原始日志与命令</summary>
-          <RunOutput run={run} />
-        </details>
-      </details>
+      <button type="button" className="pm-ghost" onClick={() => taskLink(run)}>查看任务</button>
     </section>
   );
 }
@@ -2127,8 +2134,8 @@ function DreamRunPanel({
       <div className="pm-hint dream-run-persist-note">
         手动整理默认不设外层时限，会在后台继续运行；离开页面不会中断，也可随时中止。
       </div>
-      <KnowledgeJourney run={selectedRun} mode={runMode} />
-      {selectedRun && (
+      {selectedRun?.product ? <TaskProgressCard run={selectedRun} /> : <KnowledgeJourney run={selectedRun} mode={runMode} />}
+      {selectedRun && !selectedRun.product && (
         <DreamRunResult run={selectedRun} />
       )}
       <details className="dream-diagnostics-details">
@@ -2179,6 +2186,17 @@ function RecentRuns({ runs }: { runs: ConsoleRun[] }) {
 
 export function DreamOverviewPage({ product = false }: { product?: boolean } = {}) {
   const { data, error, loading, busy, busyRuns, reload } = useDreamData();
+  const tasks = useProductTasks();
+  const currentTask = tasks.rows.find(run => run.kind.startsWith('dream_') && ['running', 'queued'].includes(run.status));
+  const displayedTask = currentTask ?? tasks.rows.find(run => run.kind.startsWith('dream_') && run.product);
+  const currentProgress = displayedTask ? <TaskProgressCard run={displayedTask} /> : null;
+  const previousTasks = useRef(new Map<string, string>());
+  useEffect(() => {
+    const rows = tasks.rows.filter(run => run.kind.startsWith('dream_'));
+    const finished = rows.some(run => ['running', 'queued'].includes(previousTasks.current.get(run.id) ?? '') && !['running', 'queued'].includes(run.status));
+    previousTasks.current = new Map(rows.map(run => [run.id, run.status]));
+    if (finished) void reload();
+  }, [tasks.rows, reload]);
   const [schedule, setSchedule] = useState<{ enabled: boolean; time: string; timeZone: string } | null>(null);
   const [scheduleError, setScheduleError] = useState('');
   useEffect(() => {
@@ -2187,11 +2205,11 @@ export function DreamOverviewPage({ product = false }: { product?: boolean } = {
     void api.dreamSchedule().then(value => { if (active) setSchedule(value); }).catch(reason => { if (active) setScheduleError(reason instanceof Error ? reason.message : String(reason)); });
     return () => { active = false; };
   }, [product]);
-  if (busy) return <DreamShell title="AI 知识整理"><DreamBusyRecovery runs={busyRuns} onRefresh={() => void reload()} /></DreamShell>;
-  if (error) return <DreamShell title="AI 知识整理"><ErrorBlock message={error} /></DreamShell>;
-  if (loading || !data) return <DreamShell title="AI 知识整理"><Loading text="正在了解你的知识库…" /></DreamShell>;
+  if (busy) return <DreamShell title="知识整理">{currentProgress}<DreamBusyRecovery runs={busyRuns} onRefresh={() => void reload()} /></DreamShell>;
+  if (error) return <DreamShell title="知识整理">{currentProgress}<ErrorBlock message={error} /></DreamShell>;
+  if (loading || !data) return <DreamShell title="知识整理">{currentProgress}<Loading text="正在读取整理状态…" /></DreamShell>;
 
-  const activeLock = data.locks.find(lock => lock.active);
+  const activeLock = currentTask ?? data.locks.find(lock => lock.active);
   const pending = data.embeddings.pending ?? 0;
   const orphanPages = data.health?.orphan_pages ?? 0;
   const deadLinks = data.health?.dead_links ?? 0;
@@ -2235,6 +2253,7 @@ export function DreamOverviewPage({ product = false }: { product?: boolean } = {
         {!product && <div className={`dream-status-orbit ${activeLock ? 'running' : needsAttention ? 'attention' : 'healthy'}`}><div className="dream-orbit-core"><span>{activeLock ? '整理中' : needsAttention ? '待整理' : '清晰'}</span></div><i className="orbit-one" /><i className="orbit-two" /></div>}
       </section>
 
+      {currentProgress}
       {product && <section className="maintenance-schedule">
         <span className={`maintenance-dot ${schedule?.enabled ? 'enabled' : ''}`} aria-hidden="true" />
         <div><b>{schedule ? schedule.enabled ? '自动整理已开启' : '自动整理未开启' : scheduleError ? '无法读取自动整理状态' : '正在读取自动整理设置…'}</b><small>{schedule?.enabled ? `每天 ${schedule.time} · ${schedule.timeZone}` : '在设置中配置自动整理时间。'}{scheduleError && ` ${scheduleError}`}</small></div>

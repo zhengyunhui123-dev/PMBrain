@@ -191,9 +191,9 @@ export class SetupController {
     );
   }
 
-  async currentState() {
+  async currentState(configurationOnly = false) {
     const setup = getSetupInfo();
-    if (!setup.needsSetup) {
+    if (!configurationOnly && !setup.needsSetup) {
       await this.repairLegacyMainSourcePath();
       const canonical = await this.readCanonicalMainSource().catch(() => null);
       if (canonical) {

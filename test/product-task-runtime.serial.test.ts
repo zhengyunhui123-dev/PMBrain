@@ -97,10 +97,12 @@ describe('软件后台任务共用 owner 数据库', () => {
     if (run.status !== 'completed') throw new Error(JSON.stringify(run));
     expect(run.status).toBe('completed');
     expect(run.result).toMatchObject({ imported: 1, errors: 0 });
+    expect(run.product).toMatchObject({ name: '导入资料', percent: 100, stage: '导入完成' });
     expect(readFileSync(path, 'utf8')).toBe(content);
     expect(await engine.getPage('background', { sourceId: 'default' })).not.toBeNull();
     const reader = new ProductTaskRuntime(engine);
     expect((await reader.getRun(accepted.id))?.result).toMatchObject({ imported: 1 });
+    expect((await reader.getRun(accepted.id))?.product).toEqual(run.product);
     expect((await reader.listRuns()).some(row => row.id === accepted.id)).toBe(true);
     await reader.close();
   }, 30_000);
@@ -124,9 +126,28 @@ describe('软件后台任务共用 owner 数据库', () => {
     const failed = await finished(run.id);
     expect(failed.status).toBe('failed');
     expect(failed.error).toBeTruthy();
+    expect(failed.product?.errorReason).toContain('路径');
     expect(await engine.getPage('background', { sourceId: 'default' })).not.toBeNull();
     const next = await runtime.submitDream({ phase: 'orphans', dryRun: true });
     expect((await finished(next.id)).status).toBe('completed');
+  }, 30_000);
+
+  test('真实快速维护等待模型时，任务阶段与知识库查询仍可读取', async () => {
+    configureModels();
+    const accepted = await runtime.submitDream({ preset: 'quick', timeoutMs: 15_000 });
+    try {
+      await modelWaiting();
+      await Bun.sleep(1200);
+      const read = async () => {
+        const run = await runtime.getRun(accepted.id);
+        expect(run?.status).toBe('running');
+        expect(run?.product?.steps.length).toBe(5);
+        expect(run?.product?.stage).toBeTruthy();
+        expect(await engine.getPage('background', { sourceId: 'default' })).not.toBeNull();
+      };
+      await Promise.race([read(), Bun.sleep(2000).then(() => { throw new Error('快速维护等待模型时阻塞了任务或知识库读取'); })]);
+      await runtime.cancel(accepted.id);
+    } finally { release(); configureModels(false); }
   }, 30_000);
 
   test('等待慢模型时知识可查询，重复点击不重复执行，取消后没有迟到写入', async () => {

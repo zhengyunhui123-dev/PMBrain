@@ -43,7 +43,7 @@ class Provider(BaseHTTPRequestHandler):
         if self.path.endswith('/embeddings'):
             if delay and 'Delayed synthetic embedding' in json.dumps(body.get('input')):
                 waiting.set()
-                release.wait(30)
+                release.wait(120)
             inputs = body.get('input', [])
             if not isinstance(inputs, list):
                 inputs = [inputs]
@@ -143,6 +143,8 @@ def run(args):
         assert seed['status'] == 'completed', seed
         assert seed['command'] == [], seed
         assert seed['result']['imported'] == 1
+        assert seed['product']['percent'] == 100
+        assert seed['product']['name'] == '导入资料'
         slow_path = materials / 'slow.md'
         slow_path.write_text('# Slow\n\nDelayed synthetic embedding verifies concurrent application access.', encoding='utf-8')
         delay = True
@@ -188,6 +190,58 @@ def run(args):
             upload = request('/admin/api/import-upload-runs', raw=file.read_bytes(), headers={'Content-Type': 'application/octet-stream', 'x-pmbrain-filename': quote(file.name)})
             result = finished(upload['runId'])
             assert result['status'] == 'completed', result
+        pending_path = materials / 'pending.md'
+        pending_path.write_text('# Pending\n\nDelayed synthetic embedding verifies quick maintenance concurrent access.', encoding='utf-8')
+        request('/admin/api/sources/local-path', {'sourceId': 'default', 'localPath': str(materials)})
+        waiting.clear()
+        release.clear()
+        delay = True
+        live_quick = request('/admin/api/dream-runs', {'preset': 'quick', 'sourceId': 'default'})
+        if not waiting.wait(20):
+            (artifacts / 'quick-wait-failure.json').write_text(json.dumps(request('/admin/api/runs/' + live_quick['runId']), ensure_ascii=False), encoding='utf-8')
+            raise AssertionError('Quick maintenance never reached the delayed model')
+        read_started = time.monotonic()
+        assert request('/admin/api/brain/pages/default/seed')['slug'] == 'seed'
+        live_progress = request('/admin/api/runs/' + live_quick['runId'])
+        assert live_progress['status'] == 'running'
+        assert len(live_progress['product']['steps']) == 5
+        request('/admin/api/dream/overview')
+        assert time.monotonic() - read_started < 5, 'Quick maintenance blocked knowledge and overview reads'
+        if not args.no_browser:
+            with sync_playwright() as playwright:
+                browser = playwright.chromium.launch(channel='msedge', headless=True)
+                context = browser.new_context(viewport={'width': 1440, 'height': 1000})
+                context.add_init_script("localStorage.setItem('pmbrain.admin.theme-mode', 'dark')")
+                context.request.post(origin + '/admin/login', data={'token': TOKEN})
+                page = context.new_page()
+                errors = []
+                page.on('pageerror', lambda error: errors.append(str(error)))
+                page.goto(origin + '/admin/#dream')
+                page.locator('.product-task-progress').first.wait_for()
+                assert '快速维护' in page.locator('.product-task-progress').first.inner_text()
+                assert '正在了解你的知识库' not in page.locator('body').inner_text()
+                assert '[pmbrain phase]' not in page.locator('body').inner_text()
+                page.screenshot(path=str(artifacts / 'quick-running.png'), full_page=True)
+                page.goto(origin + '/admin/#tasks?run=' + live_quick['runId'])
+                page.locator('.task-detail-drawer .product-task-progress').wait_for()
+                assert page.locator('.task-technical-details').get_attribute('open') is None
+                assert '[pmbrain phase]' not in page.locator('body').inner_text()
+                page.get_by_role('button', name='关闭任务详情').click()
+                assert page.locator('.task-table tbody tr').count() > 0
+                page.goto(origin + '/admin/#settings-diagnostics')
+                page.get_by_role('heading', name='诊断与日志', exact=True).wait_for()
+                page.get_by_role('tab', name='后台任务日志', exact=True).click()
+                page.get_by_role('heading', name='后台任务技术日志', exact=True).wait_for()
+                assert page.locator('.diagnostic-card details').get_attribute('open') is None
+                page.screenshot(path=str(artifacts / 'diagnostics-dark.png'), full_page=True)
+                page.evaluate("document.documentElement.setAttribute('data-theme', 'light')")
+                page.set_viewport_size({'width': 1100, 'height': 850})
+                page.screenshot(path=str(artifacts / 'diagnostics-light.png'), full_page=True)
+                assert not errors, errors
+                browser.close()
+        delay = False
+        release.set()
+        assert finished(live_quick['runId'])['status'] == 'completed'
         quick = request('/admin/api/dream-runs', {'preset': 'quick', 'dryRun': True})
         assert finished(quick['runId'])['status'] == 'completed'
         deep = request('/admin/api/dream-runs', {'preset': 'full', 'dryRun': True})
@@ -201,6 +255,7 @@ def run(args):
             with sync_playwright() as playwright:
                 browser = playwright.chromium.launch(channel='msedge', headless=True)
                 context = browser.new_context(viewport={'width': 1440, 'height': 1000})
+                context.add_init_script("localStorage.setItem('pmbrain.admin.theme-mode', 'dark')")
                 context.request.post(origin + '/admin/login', data={'token': TOKEN})
                 page = context.new_page()
                 errors = []
@@ -208,21 +263,104 @@ def run(args):
                 page.goto(origin + '/admin/#tasks')
                 page.wait_for_load_state('networkidle')
                 page.get_by_role('heading', name='任务中心', exact=True).wait_for()
-                page.get_by_text('导入 1 · 跳过 0 · 失败 0', exact=True).first.wait_for()
-                page.get_by_role('button', name='重新执行', exact=True).first.wait_for()
+                page.get_by_text('新增资料 1', exact=False).first.wait_for()
+                page.get_by_role('button', name='重试', exact=True).first.wait_for()
                 page.get_by_role('button', name='查看详情', exact=True).first.click()
-                page.get_by_role('heading', name='执行结果', exact=True).wait_for()
+                page.locator('.task-detail-drawer .product-task-progress').wait_for()
+                assert page.locator('.task-technical-details').get_attribute('open') is None
+                page.get_by_text('技术日志', exact=True).click()
+                page.locator('.task-technical-details .run-output').wait_for()
                 page.screenshot(path=str(artifacts / 'tasks.png'), full_page=True)
                 assert not errors, errors
                 browser.close()
         stop(process, log)
         process, log = start()
         assert finished(seed['id'])['result']['imported'] == 1
+        assert finished(seed['id'])['product'] == seed['product']
         assert request('/admin/api/brain/pages/default/seed')['slug'] == 'seed'
         assert request('/admin/api/workbench/conversations/' + conversation['id'])['messages'][-1]['text'] == '后台导入期间仍可对话'
-        checks = ['native_import', 'slow_model_database_read', 'concurrent_mcp_read_search', 'concurrent_chat', 'cancel_no_late_write', 'PDF', 'DOCX', 'quick', 'full_dry_run', 'explicit_retry', 'restart_history', 'restart_chat']
+        if args.desktop:
+            from core_journeys import DesktopSession
+            stop(process, log)
+            with sync_playwright() as playwright:
+                session = DesktopSession(playwright, artifacts, home)
+                desktop_page = session.start()
+                try:
+                    desktop_page.evaluate("""async () => {
+                      const deadline = Date.now() + 120000;
+                      while (Date.now() < deadline) {
+                        const state = await window.pmbrainDesktop.getState();
+                        if (state?.phase === 'ready') {
+                          const response = await window.pmbrainDesktop.productRequest({path: '/admin/api/runs?summary=1'});
+                          if (response.status === 200) return;
+                        }
+                        if (state?.phase === 'failed') throw new Error(state.message);
+                        await new Promise(resolve => setTimeout(resolve, 100));
+                      }
+                      throw new Error('Desktop service did not become ready');
+                    }""")
+                    desktop_page.locator('.product-nav').wait_for()
+                    def desktop_request(path, body=None):
+                        return desktop_page.evaluate("""async ({path, body}) => {
+                          const response = await window.pmbrainDesktop.productRequest({path, method: body === null ? 'GET' : 'POST', headers: {'Content-Type': 'application/json'}, body: body === null ? undefined : JSON.stringify(body)});
+                          if (response.status >= 400) throw new Error(response.body);
+                          return JSON.parse(response.body);
+                        }""", {'path': path, 'body': body})
+                    (materials / 'desktop-pending.md').write_text('# Desktop pending\n\nDelayed synthetic embedding verifies Desktop settings during quick maintenance.', encoding='utf-8')
+                    waiting.clear()
+                    release.clear()
+                    delay = True
+                    desktop_quick = desktop_request('/admin/api/dream-runs', {'preset': 'quick', 'sourceId': 'default'})
+                    assert waiting.wait(20), 'Desktop quick maintenance did not reach the delayed model'
+                    desktop_page.get_by_role('button', name='设置', exact=True).click()
+                    settings_started = time.monotonic()
+                    desktop_page.locator('.model-services').wait_for(timeout=5000)
+                    assert time.monotonic() - settings_started < 5
+                    desktop_page.get_by_role('button', name='知识库模型配置', exact=True).click()
+                    desktop_page.locator('.model-services.is-roles').wait_for(timeout=5000)
+                    desktop_page.screenshot(path=str(artifacts / 'desktop-model-roles-running.png'), full_page=True)
+                    desktop_page.get_by_role('button', name='返回', exact=True).click()
+                    desktop_page.get_by_role('button', name='知识整理', exact=True).click()
+                    desktop_page.locator('.product-task-progress').first.wait_for()
+                    assert '快速维护' in desktop_page.locator('.product-task-progress').first.inner_text()
+                    assert '[pmbrain phase]' not in desktop_page.locator('body').inner_text()
+                    desktop_page.screenshot(path=str(artifacts / 'desktop-quick-running.png'), full_page=True)
+                    desktop_page.get_by_role('button', name='任务中心', exact=True).click()
+                    desktop_page.locator('.task-table').wait_for()
+                    desktop_page.screenshot(path=str(artifacts / 'desktop-task-center.png'), full_page=True)
+                    desktop_page.get_by_role('button', name='设置', exact=True).click()
+                    desktop_page.get_by_role('button', name='诊断与日志', exact=True).click()
+                    desktop_page.get_by_role('heading', name='诊断与日志', exact=True).wait_for()
+                    desktop_page.get_by_role('button', name='复制诊断信息', exact=True).click()
+                    desktop_page.get_by_text('诊断信息已复制', exact=True).wait_for()
+                    desktop_page.screenshot(path=str(artifacts / 'desktop-diagnostics.png'), full_page=True)
+                    delay = False
+                    release.set()
+                    deadline = time.time() + 45
+                    while time.time() < deadline:
+                        terminal = desktop_request('/admin/api/runs/' + desktop_quick['runId'])
+                        if terminal['status'] not in ['running', 'queued']:
+                            assert terminal['status'] == 'completed', terminal
+                            assert terminal['product']['percent'] == 100
+                            break
+                        time.sleep(.2)
+                    else:
+                        raise AssertionError('Desktop quick maintenance did not finish')
+                    desktop_page.get_by_role('button', name='返回', exact=True).click()
+                    desktop_page.get_by_role('button', name='知识整理', exact=True).click()
+                    desktop_page.locator('.product-task-progress').first.wait_for()
+                    desktop_page.get_by_text('100%', exact=True).first.wait_for(timeout=5000)
+                    assert '快速维护' in desktop_page.locator('.product-task-progress').first.inner_text()
+                    desktop_page.screenshot(path=str(artifacts / 'desktop-quick-completed.png'), full_page=True)
+                finally:
+                    delay = False
+                    release.set()
+                    session.stop()
+        checks = ['native_import', 'slow_model_database_read', 'concurrent_mcp_read_search', 'concurrent_chat', 'cancel_no_late_write', 'PDF', 'DOCX', 'quick', 'quick_model_wait_read_and_overview', 'product_progress_persistence', 'full_dry_run', 'explicit_retry', 'restart_history', 'restart_chat']
+        if args.desktop:
+            checks.append('real_desktop_model_settings_during_quick_maintenance')
         if not args.no_browser:
-            checks.append('task_center_browser')
+            checks.extend(['task_center_browser', 'quick_running_gui', 'diagnostics_dark_light'])
         (artifacts / 'result.json').write_text(json.dumps({'runtime': args.runtime, 'passed': True, 'checks': checks}, ensure_ascii=False), encoding='utf-8')
         print('Background task journey passed: ' + args.runtime)
     finally:
@@ -239,4 +377,5 @@ if __name__ == '__main__':
     parser.add_argument('--artifacts-dir', required=True)
     parser.add_argument('--runtime', choices=['source', 'bundled', 'compiled'], default='source')
     parser.add_argument('--no-browser', action='store_true')
+    parser.add_argument('--desktop', action='store_true')
     run(parser.parse_args())

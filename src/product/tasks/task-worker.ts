@@ -4,9 +4,9 @@ import { loadConfig } from '../../core/config.ts';
 import { reloadLiveGateway } from '../../core/ai/reload-live-gateway.ts';
 import { DEFAULT_CLI_OPTIONS, setCliOptions } from '../../core/cli-options.ts';
 import { runStructuredImport } from '../../commands/import.ts';
-import { runCycle, type CyclePhase } from '../../core/cycle.ts';
+import { ALL_PHASES, runCycle, type CyclePhase } from '../../core/cycle.ts';
 import { resolveDreamPresetPhases, resolveBrainDir } from '../../commands/dream.ts';
-import { runQuickMaintenance, combineQuickMaintenanceReports } from '../../core/quick-maintenance.ts';
+import { runQuickMaintenance, combineQuickMaintenanceReports, resolveQuickMaintenancePhases } from '../../core/quick-maintenance.ts';
 import { fetchSource, loadAllSources, parseSourceConfig } from '../../core/sources-load.ts';
 import { resolveSourceId } from '../../core/source-resolver.ts';
 import { runEmbedCore } from '../../commands/embed.ts';
@@ -22,6 +22,13 @@ let sequence = 0;
 const pending = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void }>();
 const abort = new AbortController();
 const send = (message: TaskWorkerMessage) => parentPort!.postMessage(message);
+let importFile: string | undefined;
+const originalFetch = globalThis.fetch;
+globalThis.fetch = ((...args: Parameters<typeof fetch>) => {
+  const target = args[0] instanceof Request ? args[0].url : String(args[0]);
+  if (importFile && /\/embeddings(?:\?|$)|:embedContent|:batchEmbedContents|\/api\/embed(?:\?|$)/.test(target)) send({ type: 'progress', event: { phase: 'import.vector', file: importFile } });
+  return originalFetch(...args);
+}) as typeof fetch;
 
 function rpcValue(value: unknown): unknown {
   if (value instanceof AbortSignal || typeof value === 'function') return undefined;
@@ -35,6 +42,9 @@ function rpcValue(value: unknown): unknown {
 function rpc(method: string, args: unknown[], scope?: number): Promise<unknown> {
   abort.signal.throwIfAborted();
   const id = ++sequence;
+  if (importFile && ['putPage', 'upsertChunks', 'updateChunkEmbedding', 'setPageAliases'].includes(method)) {
+    send({ type: 'progress', event: { phase: 'import.write', file: importFile } });
+  }
   return new Promise((resolve, reject) => {
     pending.set(id, { resolve, reject });
     send({ type: 'rpc', id, method, args: args.map(rpcValue), scope });
@@ -83,6 +93,10 @@ for (const method of ['log', 'error', 'warn', 'info', 'debug'] as const) {
 setCliOptions({ ...DEFAULT_CLI_OPTIONS, progressJson: true });
 
 async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { type: 'dream' }>['input']) {
+  const phases = input.preset === 'quick' ? resolveQuickMaintenancePhases()
+    : input.phase && input.phase !== 'all' ? [input.phase]
+    : input.preset ? resolveDreamPresetPhases(input.preset) : ALL_PHASES;
+  send({ type: 'progress', phases: [...phases] });
   const sourceId = input.sourceId ? await resolveSourceId(engine, input.sourceId) : undefined;
   if (sourceId && (await fetchSource(engine, sourceId))?.archived) throw new Error(`Source ${sourceId} is archived`);
   const common = {
@@ -101,7 +115,9 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
   if (input.preset === 'quick' && input.allSources) {
     const reports = [];
     const startedAt = new Date();
-    for (const source of (await loadAllSources(engine)).filter(row => parseSourceConfig(row.config).syncEnabled !== false)) {
+    const sources = (await loadAllSources(engine)).filter(row => parseSourceConfig(row.config).syncEnabled !== false);
+    for (const [index, source] of sources.entries()) {
+      send({ type: 'progress', scope: { name: source.name, index, total: sources.length } });
       abort.signal.throwIfAborted();
       const report = await runQuickMaintenance(engine, {
         ...common, sourceId: source.id, brainDir: await resolveBrainDir(engine, null, source.id),
@@ -127,6 +143,8 @@ async function execute(task: ProductTask, kind: BrainEngine['kind']) {
   let result: Record<string, unknown>;
   if (task.type === 'import') {
     const input = task.input;
+    send({ type: 'progress', phases: input.noEmbed ? ['collect', 'process', 'write'] : ['collect', 'process', 'vector', 'write'] });
+    send({ type: 'progress', event: { phase: 'import.collect' } });
     const completedPaths: string[] = [];
     if (input.resumeCheckpointId) {
       for (const file of await readTaskCheckpoint(input.resumeCheckpointId)) {
@@ -151,11 +169,17 @@ async function execute(task: ProductTask, kind: BrainEngine['kind']) {
         signal: abort.signal,
         completedPaths,
         beforeFile: async path => {
+          importFile = path;
+          send({ type: 'progress', event: { phase: 'import.process', file: path } });
           const file = await stat(path);
           fileSnapshot = { absolutePath: path, size: file.size, mtimeMs: file.mtimeMs, modelFingerprint: taskModelFingerprint() };
           await rpc('task.inputFile', [{ path, size: file.size, mtimeMs: file.mtimeMs }]);
         },
-        onFile: async progress => { await rpc('task.checkpoint', [{ ...progress, ...fileSnapshot }]); },
+        onFile: async progress => {
+          send({ type: 'progress', event: { phase: 'import.files', done: Number(progress.processed) } });
+          importFile = undefined;
+          await rpc('task.checkpoint', [{ ...progress, ...fileSnapshot }]);
+        },
       },
     });
     result = { ...imported, resumedFiles: completedPaths.length };

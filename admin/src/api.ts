@@ -211,7 +211,7 @@ export const api = {
     rebuilt: string[];
     message: string;
   }>('/admin/api/search-index-repair', { method: 'POST' }),
-  taskCenter: () => apiFetch('/admin/api/task-center'),
+  taskCenter: (summary = false) => apiFetch(`/admin/api/task-center${summary ? '?summary=1' : ''}`),
   terminatePgliteOwner: (pid: number) => apiFetch('/admin/api/pglite-owner/terminate', {
     method: 'POST',
     body: JSON.stringify({ pid }),

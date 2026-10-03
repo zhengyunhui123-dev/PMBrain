@@ -400,7 +400,7 @@ if (!app.requestSingleInstanceLock()) {
       createSharedIntegration: payload => sharedAccessController.create(payload),
       revokeSharedIntegration: credentialName => sharedAccessController.revoke(credentialName),
       updateState: () => updateController.currentState,
-      setup: () => setupController.currentState(),
+      setup: configurationOnly => setupController.currentState(configurationOnly),
       listDockerDatabases: () => databaseRuntime.listManagedPostgresDatabases(getSetupInfo().current.databaseUrl),
       activateDockerDatabase: containerName => databaseRuntime.activateManagedPostgresDatabase(containerName),
       integrations: probe => probe

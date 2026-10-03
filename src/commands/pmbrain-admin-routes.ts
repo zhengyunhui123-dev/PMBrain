@@ -1,5 +1,6 @@
 
 import express from 'express';
+import { taskRunSummary } from '../product/tasks/progress-adapter.ts';
 import type { Request, Response, NextFunction } from 'express';
 import type { Server as HttpServer } from 'node:http';
 import cookieParser from 'cookie-parser';
@@ -236,7 +237,7 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
       res.status(500).json({ error: message });
     }
   });
-  app.get('/admin/api/task-center', requireAdmin, async (_req: Request, res: Response) => {
+  app.get('/admin/api/task-center', requireAdmin, async (req: Request, res: Response) => {
     const runs = await readRuns();
     const hasActiveRun = runs.some(run => run.status === 'queued' || run.status === 'running');
     let queue: unknown = null;
@@ -268,7 +269,7 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
       mode: config.engine === 'pglite' ? 'pglite' : 'postgres',
       pglite_busy: getPgliteBusy(),
       pglite_owner: pgliteOwner,
-      rows: runs,
+      rows: req.query.summary === '1' ? runs.map(taskRunSummary) : runs,
       queue,
       embedding_rebuild: embeddingRebuild,
       server_time: new Date().toISOString(),
@@ -1473,8 +1474,9 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
     }
   });
 
-  app.get('/admin/api/runs', requireAdmin, async (_req: Request, res: Response) => {
-    res.json({ rows: await readRuns() });
+  app.get('/admin/api/runs', requireAdmin, async (req: Request, res: Response) => {
+    const runs = await readRuns();
+    res.json({ rows: req.query.summary === '1' ? runs.map(taskRunSummary) : runs });
   });
 
   app.get('/admin/api/runs/:id', requireAdmin, async (req: Request, res: Response) => {

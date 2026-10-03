@@ -37,6 +37,7 @@ export type ProductTask =
   | { type: 'embed'; input: { catchUp?: boolean; forceReembed?: boolean; timeoutMs?: number } };
 
 export type TaskWorkerMessage =
+  | { type: 'progress'; event?: { phase: string; file?: string; event?: string; done?: number; total?: number }; phases?: string[]; scope?: { name: string; index: number; total: number } }
   | { type: 'rpc'; id: number; method: string; args: unknown[]; scope?: number }
   | { type: 'log'; text: string }
   | { type: 'result'; result: Record<string, unknown> }

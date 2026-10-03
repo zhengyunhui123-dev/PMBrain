@@ -13,17 +13,22 @@ import { TaskEngineHost } from './engine-host.ts';
 import type { DreamTaskInput, ImportTaskInput, ProductTask, TaskWorkerMessage } from './types.ts';
 import { removeAdminUploadTempDir } from '../../commands/pmbrain-admin-support.ts';
 import { appendTaskCheckpoint } from './checkpoint.ts';
+import { TaskProgressAdapter, finishTaskProgress } from './progress-adapter.ts';
+import type { TaskProductProgress } from '../../../shared/task-progress.ts';
 
 export const PRODUCT_TASK_QUEUE = 'pmbrain-product';
 const TASK_NAME = 'pmbrain-product-task';
-type Progress = { output?: string; result?: Record<string, unknown>; cancelRequested?: boolean; files?: Record<string, unknown>[] };
+type Progress = { product?: TaskProductProgress; output?: string; result?: Record<string, unknown>; cancelRequested?: boolean; files?: Record<string, unknown>[] };
 
 function toRun(job: MinionJob, stopping = false): ConsoleRun {
   const progress = (job.progress ?? {}) as Progress;
   const status: ConsoleRun['status'] = stopping ? 'running' : job.status === 'completed' ? 'completed'
     : job.status === 'cancelled' ? 'cancelled' : ['dead', 'failed', 'paused'].includes(job.status) ? 'failed'
     : job.status === 'active' ? 'running' : 'queued';
+  const adapter = new TaskProgressAdapter(String(job.data.kind), progress.product);
+  if (!progress.product) adapter.write(progress.output ?? '');
   return {
+    product: finishTaskProgress(adapter.view, status, job.result ?? progress.result, job.error_text),
     id: `task-${job.id}`, kind: String(job.data.kind), command: [], status,
     trigger: job.data.trigger === 'scheduled' ? 'scheduled' : 'manual',
     stdout: progress.output ?? '', stderr: '', error: stopping ? '正在停止任务…' : job.error_text,
@@ -165,8 +170,10 @@ export class ProductTaskRuntime {
     if (!record?.lock_token) throw new Error('任务执行租约无效');
     if (record.attempts_started > 1) throw new Error('任务执行曾中断，结果不确定，请查看已完成内容后手动继续');
     let progress = (record.progress ?? {}) as Progress;
+    const adapter = new TaskProgressAdapter(String(record.data.kind), progress.product);
     let progressTail = Promise.resolve();
     const persist = () => {
+      progress.product = adapter.view;
       const snapshot = structuredClone(progress);
       progressTail = progressTail.then(() => context.updateProgress(snapshot));
       return progressTail;
@@ -226,7 +233,12 @@ export class ProductTaskRuntime {
           if (!cancelRequested) thread.postMessage({ type: 'reply', id: message.id, error: error instanceof Error ? error.message : String(error) });
         });
       } else if (message.type === 'log') {
+        adapter.write(message.text);
         progress.output = `${progress.output ?? ''}${message.text}`.slice(-100_000);
+      } else if (message.type === 'progress') {
+        if (message.phases) adapter.plan(message.phases);
+        if (message.scope) adapter.scope(message.scope);
+        if (message.event) adapter.event(message.event);
       } else if (message.type === 'result') {
         completed = true;
         progress.result = message.result;

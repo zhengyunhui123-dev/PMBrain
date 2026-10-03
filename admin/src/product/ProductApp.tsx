@@ -1,6 +1,7 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { ArrowLeft, Box, Cable, CircleHelp, Database, FileText, Home, Link, MessageCircle, Monitor, PanelLeftClose, PanelLeftOpen, PenLine, RefreshCw, Search, Settings, ShieldCheck, SlidersHorizontal, Waypoints } from 'lucide-react';
+import { ArrowLeft, Box, Cable, CircleHelp, Database, FileText, Home, Link, ListTodo, MessageCircle, Monitor, PanelLeftClose, PanelLeftOpen, PenLine, RefreshCw, Search, Settings, ShieldCheck, SlidersHorizontal, Waypoints } from 'lucide-react';
+import { TaskActivityProvider } from './TaskActivity';
 const SettingsPage = React.lazy(() => import('../pages/Settings').then(module => ({ default: module.SettingsPage })));
 const AppearanceSettings = React.lazy(() => import('../pages/Settings').then(module => ({ default: module.AppearanceSettings })));
 import { desktopApi } from '../lib/product-fetch';
@@ -22,6 +23,7 @@ const HelpPage = React.lazy(() => import('./HelpPage').then(module => ({ default
 const DesktopSettings = React.lazy(() => import('./DesktopSettings').then(module => ({ default: module.DesktopSettings })));
 const Workbench = React.lazy(() => import('../workbench/Workbench').then(module => ({ default: module.Workbench })));
 const CreateLibrary = React.lazy(() => import('./CreateLibrary').then(module => ({ default: module.CreateLibrary })));
+const Diagnostics = React.lazy(() => import('./Diagnostics').then(module => ({ default: module.DiagnosticsPage })));
 const settingItems = [
   { key: 'models', label: '模型服务', group: 'AI 与模型', icon: Box, desktop: true },
   { key: 'model-roles', label: '知识库模型配置', group: 'AI 与模型', icon: SlidersHorizontal, desktop: true },
@@ -33,6 +35,7 @@ const settingItems = [
   { key: 'system', label: '网络与连接', group: '系统', icon: Monitor, desktop: true },
   { key: 'updates', label: '软件更新', group: '系统', icon: RefreshCw, desktop: true },
   { key: 'repair', label: '数据备份与修复', group: '系统', icon: ShieldCheck, desktop: true },
+  { key: 'diagnostics', label: '诊断与日志', group: '系统', icon: FileText },
 ];
 const desktopPanels = [ 'basic', 'integrations', 'system', 'updates', 'repair', 'recovery'];
 const currentPage = () => window.location.hash.replace(/^#/, '').split('?')[0] || 'home';
@@ -45,6 +48,7 @@ const primaryNav = [
   [PenLine, '知识整理', 'dream'],
   [MessageCircle, '知识助手', 'assistant'],
   [Cable, 'MCP 接入', 'mcp'],
+  [ListTodo, '任务中心', 'tasks'],
 ] as const;
 
 export function ProductApp() {
@@ -131,7 +135,7 @@ export function ProductApp() {
     if (!desktop) return;
     const fail = (error: unknown) => setStateError(String(error));
     void desktop.getState().then(setService).catch(fail);
-    void desktop.getSetup().then((result: { setup: { needsSetup: boolean } }) => setNeedsSetup(result.setup.needsSetup)).catch(fail);
+    void desktop.getSetup(true).then((result: { setup: { needsSetup: boolean } }) => setNeedsSetup(result.setup.needsSetup)).catch(fail);
     void desktop.getTheme().then((result: { source: ThemeMode }) => setTheme(result.source)).catch(fail);
     void desktop.getStartupProgress().then(setStartup).catch(() => undefined);
     void desktop.getUpdateState().then((state: UpdateState | null) => { if (state) setUpdate(state); }).catch(() => undefined);
@@ -169,7 +173,7 @@ export function ProductApp() {
     : Boolean(desktop) && mode === 'ready' && ready
       ? <span className="home-health-anchor"><StatusChip kind="ready" label="知识库 · 正常" onClick={() => setHealthOpen(open => !open)} />{healthOpen && <div className="home-health-menu" onClick={event => event.stopPropagation()}><p>本机知识库服务正在运行。</p><button type="button" onClick={() => { setHealthOpen(false); navigate('settings-system'); }}>打开系统设置</button></div>}</span>
       : null;
-  return <React.Suspense fallback={<p className="pm-empty" role="status">正在打开页面…</p>}><div className={`product-app ${isSettings ? 'settings-open' : ''} ${collapsed ? 'nav-collapsed' : ''}`}>
+  return <TaskActivityProvider enabled={ready && needsSetup !== true}><React.Suspense fallback={<p className="pm-empty" role="status">正在打开页面…</p>}><div className={`product-app ${isSettings ? 'settings-open' : ''} ${collapsed ? 'nav-collapsed' : ''}`}>
     <aside className="product-nav" hidden={isSettings}>
       <button type="button" className="nav-collapse" aria-expanded={!collapsed} aria-label={collapsed ? '展开菜单' : '收起菜单'} onClick={toggleNav}>{collapsed ? <PanelLeftOpen size={15} /> : <PanelLeftClose size={15} />}</button>
       <div className="product-brand"><span>P</span><b>PMBrain</b></div>
@@ -186,6 +190,7 @@ export function ProductApp() {
           <div className={`product-settings-body ${['models', 'model-roles'].includes(category) ? 'has-model-services' : ''}`}>
             {isSettings && category === 'general' && <AppearanceSettings themeMode={theme} onThemeModeChange={changeTheme} />}
             {isSettings && category === 'integrations' && <div className="settings-mcp"><ConnectionCenterPage /></div>}
+            {isSettings && category === 'diagnostics' && <Diagnostics />}
             <div ref={bind.settings} className="desktop-settings-slot" hidden={!settingsDesktop} />
             {isSettings && ['knowledge', 'dream'].includes(category) && ready && <SettingsPage section={category as 'knowledge' | 'dream'} themeMode={theme} onThemeModeChange={changeTheme} />}
             <div className="model-settings-host" hidden={!isSettings || !['models', 'model-roles'].includes(category)}>{visited.current.models && <ModelServices mode={category === 'model-roles' ? 'roles' : 'services'} />}</div>
@@ -204,5 +209,5 @@ export function ProductApp() {
       <div ref={bind.park} className="desktop-settings-park" hidden />
       {desktop && visited.current.desktop && hostReady && host.current && createPortal(<DesktopSettings theme={theme} panel={desktopPanel} visible={menuMcp || settingsDesktop} />, host.current)}
     </main>
-  </div></React.Suspense>;
+  </div></React.Suspense></TaskActivityProvider>;
 }

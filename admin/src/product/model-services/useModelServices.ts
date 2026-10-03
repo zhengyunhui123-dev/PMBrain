@@ -137,7 +137,7 @@ export function useModelServices({ mode }: { mode: "services" | "roles" }) {
   const load = async () => {
     if (!desktop) return;
     try {
-      const [next, config] = await Promise.all([desktop.getModelServices(), desktop.getSetup()]);
+      const [next, config] = await Promise.all([desktop.getModelServices(), desktop.getSetup(true)]);
       savedRef.current = next;
       replaceState(next);
       conflictRef.current = false;
@@ -361,7 +361,7 @@ export function useModelServices({ mode }: { mode: "services" | "roles" }) {
             "模型服务还没保存成功，请先检查 API 地址",
         );
       }
-      const current = (await desktop.getSetup()).setup.current;
+      const current = (await desktop.getSetup(true)).setup.current;
       const embeddingChanged = nextRoles.embedding !== current.embeddingModel && Boolean(current.embeddingModel);
       const dimension = stateRef.current?.services
         .flatMap((item) =>
@@ -412,7 +412,7 @@ export function useModelServices({ mode }: { mode: "services" | "roles" }) {
           setSaveError(detail);
           throw error;
         }
-        const fresh = await desktop.getSetup();
+        const fresh = await desktop.getSetup(true);
         setSetup(fresh);
         setOcrEnabled(fresh.setup.current.ocrEnabled ?? false);
         setRoles({
