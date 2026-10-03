@@ -15,10 +15,11 @@ describe('core user journeys cover packaged Desktop openability', () => {
     const script = readFileSync(join(ROOT, 'test/user-journeys/core_journeys.py'), 'utf8');
     expect(script).toContain('--packaged');
     expect(script).toContain('win-unpacked');
-    expect(script).toContain("run-pill");
+    expect(script).toContain("materials-result");
     expect(script).toContain('已完成');
-    expect(script).toContain('正在导入');
-    expect(script).toContain('pills.at(-1)');
+    expect(script).toContain('materials-progress');
+    expect(script).toContain('len(outcomes) != 2');
+    expect(script).toContain('desktop-runtime.log');
     expect(script).toContain('build:sidecar');
     expect(script).toContain('build:dir');
     expect(script).not.toContain('importButton?.disabled');

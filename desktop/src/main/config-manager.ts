@@ -4,6 +4,7 @@ import { basename, isAbsolute, join, resolve } from 'node:path';
 import { isIP } from 'node:net';
 import { createHash, randomBytes } from 'node:crypto';
 import { getRecipe } from '../../../src/core/ai/recipes/index.js';
+import { assertModelRevision, modelConfigRevision } from './models/model-config-revision.js';
 
 const DESKTOP_RECOMMENDED_EMBEDDING_DIMENSIONS: Readonly<Record<string, number>> = {
   'zhipu:embedding-3': 1024,
@@ -108,6 +109,7 @@ function hasKnownDesktopEmbeddingDimension(model: string): boolean {
 
 export interface SetupPayload {
   engine: 'pglite' | 'postgres';
+  expectedModelRevision?: string;
   theme?: DesktopTheme;
   resetAdvancedModelRouting?: boolean;
   confirmEmbeddingRebuild?: boolean;
@@ -137,6 +139,7 @@ export interface SetupPayload {
 
 export interface SetupInfo {
   needsSetup: boolean;
+  modelRevision?: string;
   configPath: string;
   defaults: { databasePath: string; knowledgeDirectory: string };
   current: {
@@ -606,6 +609,7 @@ export function getSetupInfo(): SetupInfo {
   );
   return {
     needsSetup: !config || desktop?.setup_completed === false,
+    modelRevision: modelConfigRevision(config ?? {}),
     configPath: path,
     defaults: {
       databasePath: join(pgliteDefaultDir, 'brain.pglite'),
@@ -831,6 +835,7 @@ export function saveSetup(payload: SetupPayload): {
     content: existsSync(path) ? readFileSync(path, 'utf8') : undefined,
   };
   const existing = readConfig(readPath) ?? {};
+  if (payload.expectedModelRevision !== undefined) assertModelRevision(existing, payload.expectedModelRevision);
   const config: RawConfig = { ...existing, engine: payload.engine };
 
   if (payload.engine === 'pglite') {

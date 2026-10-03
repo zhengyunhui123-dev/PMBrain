@@ -108,9 +108,10 @@ export function CreateLibrary({ onDone, onCreated, onOpenSettings }: {
     if (!desktop || !value) { setStep('sources'); return; }
     setBusy(true); setError('');
     try {
-      const current = (await desktop.getSetup()).setup.current;
+      const snapshot = (await desktop.getSetup()).setup;
+      const current = snapshot.current;
       if (current.chatModel !== value) {
-        await desktop.saveSetup({ engine: current.engine, databasePath: current.databasePath, databaseUrl: current.databaseUrl, resetAdvancedModelRouting: false, modelConfig: { chatModel: value } });
+        await desktop.saveSetup({ expectedModelRevision: snapshot.modelRevision, engine: current.engine, databasePath: current.databasePath, databaseUrl: current.databaseUrl, resetAdvancedModelRouting: false, modelConfig: { chatModel: value } });
         await waitUntilReady();
         setChatModel(value);
       }

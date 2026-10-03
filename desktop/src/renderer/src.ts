@@ -2212,6 +2212,7 @@ async function save(): Promise<void> {
   const knowledgeDirectory = ($<HTMLInputElement>('#knowledge-directory')).value;
   const knowledgeSourceId = ($<HTMLInputElement>('#knowledge-source-id')).value;
   const payload: SetupPayload = {
+    expectedModelRevision: state?.setup.modelRevision,
     engine: selectedEngine(),
     resetAdvancedModelRouting: false,
     confirmEmbeddingRebuild,

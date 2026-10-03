@@ -1,26 +1,27 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { ArrowLeft, Box, Cable, CircleHelp, Database, FileText, Home, Link, MessageCircle, Monitor, PanelLeftClose, PanelLeftOpen, PenLine, RefreshCw, Search, Settings, ShieldCheck, SlidersHorizontal, Waypoints } from 'lucide-react';
-import { App as ExistingPages } from '../App';
-import { ImportMaterials } from './ImportMaterials';
-import { ConnectionCenterPage } from '../pages/Connection';
-import { SettingsPage, AppearanceSettings } from '../pages/Settings';
+const SettingsPage = React.lazy(() => import('../pages/Settings').then(module => ({ default: module.SettingsPage })));
+const AppearanceSettings = React.lazy(() => import('../pages/Settings').then(module => ({ default: module.AppearanceSettings })));
 import { desktopApi } from '../lib/product-fetch';
 import { applyThemeMode, readThemeMode, storeThemeMode, type ThemeMode } from '../lib/theme';
-import { ModelServices } from './ModelServices';
-import { HelpPage } from './HelpPage';
-import { DesktopSettings } from './DesktopSettings';
-import { Workbench } from '../workbench/Workbench';
 import type { SidecarState, StartupProgress } from '../../../desktop/src/preload/index';
 import type { UpdateState } from '../../../shared/contracts/updates';
 import { PRODUCT_VERSION } from './product-version';
 import { settingGroupNames, visibleSettingItems } from './settings-nav';
 import { assistantTarget, CREATE_RETURN_KEY, libraryMode, maintenanceView, NAV_COLLAPSED_KEY } from './home-model';
 import { HomePage } from './HomePage';
-import { CreateLibrary } from './CreateLibrary';
 import { MaintenanceDialog, StatusChip } from './MaintenanceStatus';
 import './home.css';
 
+const ExistingPages = React.lazy(() => import('../App').then(module => ({ default: module.App })));
+const ImportMaterials = React.lazy(() => import('./ImportMaterials').then(module => ({ default: module.ImportMaterials })));
+const ConnectionCenterPage = React.lazy(() => import('../pages/Connection').then(module => ({ default: module.ConnectionCenterPage })));
+const ModelServices = React.lazy(() => import('./ModelServices').then(module => ({ default: module.ModelServices })));
+const HelpPage = React.lazy(() => import('./HelpPage').then(module => ({ default: module.HelpPage })));
+const DesktopSettings = React.lazy(() => import('./DesktopSettings').then(module => ({ default: module.DesktopSettings })));
+const Workbench = React.lazy(() => import('../workbench/Workbench').then(module => ({ default: module.Workbench })));
+const CreateLibrary = React.lazy(() => import('./CreateLibrary').then(module => ({ default: module.CreateLibrary })));
 const settingItems = [
   { key: 'models', label: '模型服务', group: 'AI 与模型', icon: Box, desktop: true },
   { key: 'model-roles', label: '知识库模型配置', group: 'AI 与模型', icon: SlidersHorizontal, desktop: true },
@@ -71,15 +72,30 @@ export function ProductApp() {
   const menuMcp = Boolean(desktop) && page === 'mcp' && !isSettings;
   const settingsDesktop = Boolean(desktop) && isSettings && (category === 'general' || (category !== 'integrations' && desktopPanels.includes(category)));
   const desktopPanel = menuMcp ? 'integrations' : category === 'general' ? 'desktop-behavior' : (desktopPanels.includes(category) ? category : 'models');
+  const visited = useRef({ models: false, assistant: false, desktop: false, importing: false });
+  visited.current.models ||= isSettings && ['models', 'model-roles'].includes(category);
+  visited.current.assistant ||= readyForAssistant();
+  visited.current.desktop ||= menuMcp || settingsDesktop;
+  visited.current.importing ||= importOpen;
+  function readyForAssistant() { return (!desktop || service?.phase === 'ready') && !isSettings && assistantTarget(page); }
   const slots = useRef({ park: null as HTMLDivElement | null, menu: null as HTMLDivElement | null, settings: null as HTMLDivElement | null });
   const host = useRef<HTMLDivElement | null>(null);
   const [hostReady, setHostReady] = useState(false);
-  const bind = useRef({
-    park: (node: HTMLDivElement | null) => { slots.current.park = node; },
-    menu: (node: HTMLDivElement | null) => { slots.current.menu = node; },
-    settings: (node: HTMLDivElement | null) => { slots.current.settings = node; },
-  }).current;
   const activeSlot = menuMcp ? 'menu' : settingsDesktop ? 'settings' : 'park';
+  const activeSlotRef = useRef(activeSlot);
+  activeSlotRef.current = activeSlot;
+  const placeHost = (slot: 'park' | 'menu' | 'settings', node: HTMLDivElement | null) => {
+    slots.current[slot] = node;
+    if (!desktop || !node || activeSlotRef.current !== slot) return;
+    host.current ??= Object.assign(document.createElement('div'), { className: 'desktop-settings-host' });
+    node.appendChild(host.current);
+    setHostReady(true);
+  };
+  const bind = useRef({
+    park: (node: HTMLDivElement | null) => placeHost('park', node),
+    menu: (node: HTMLDivElement | null) => placeHost('menu', node),
+    settings: (node: HTMLDivElement | null) => placeHost('settings', node),
+  }).current;
   useLayoutEffect(() => {
     if (!desktop) return;
     host.current ??= Object.assign(document.createElement('div'), { className: 'desktop-settings-host' });
@@ -144,7 +160,7 @@ export function ProductApp() {
     sessionStorage.removeItem(CREATE_RETURN_KEY);
     navigate(target);
   };
-  if (legacyMobile || (page === 'login' && !desktop)) return <ExistingPages />;
+  if (legacyMobile || (page === 'login' && !desktop)) return <React.Suspense fallback={<p role="status">正在打开页面…</p>}><ExistingPages /></React.Suspense>;
   const visibleSettings = visibleSettingItems(settingItems, filter, Boolean(desktop));
   const settingGroups = settingGroupNames(visibleSettings);
   const showEmbedded = ready && !isSettings && !shellPages.has(page) && !menuMcp;
@@ -153,7 +169,7 @@ export function ProductApp() {
     : Boolean(desktop) && mode === 'ready' && ready
       ? <span className="home-health-anchor"><StatusChip kind="ready" label="知识库 · 正常" onClick={() => setHealthOpen(open => !open)} />{healthOpen && <div className="home-health-menu" onClick={event => event.stopPropagation()}><p>本机知识库服务正在运行。</p><button type="button" onClick={() => { setHealthOpen(false); navigate('settings-system'); }}>打开系统设置</button></div>}</span>
       : null;
-  return <div className={`product-app ${isSettings ? 'settings-open' : ''} ${collapsed ? 'nav-collapsed' : ''}`}>
+  return <React.Suspense fallback={<p className="pm-empty" role="status">正在打开页面…</p>}><div className={`product-app ${isSettings ? 'settings-open' : ''} ${collapsed ? 'nav-collapsed' : ''}`}>
     <aside className="product-nav" hidden={isSettings}>
       <button type="button" className="nav-collapse" aria-expanded={!collapsed} aria-label={collapsed ? '展开菜单' : '收起菜单'} onClick={toggleNav}>{collapsed ? <PanelLeftOpen size={15} /> : <PanelLeftClose size={15} />}</button>
       <div className="product-brand"><span>P</span><b>PMBrain</b></div>
@@ -172,21 +188,21 @@ export function ProductApp() {
             {isSettings && category === 'integrations' && <div className="settings-mcp"><ConnectionCenterPage /></div>}
             <div ref={bind.settings} className="desktop-settings-slot" hidden={!settingsDesktop} />
             {isSettings && ['knowledge', 'dream'].includes(category) && ready && <SettingsPage section={category as 'knowledge' | 'dream'} themeMode={theme} onThemeModeChange={changeTheme} />}
-            <div className="model-settings-host" hidden={!isSettings || !['models', 'model-roles'].includes(category)}><ModelServices mode={category === 'model-roles' ? 'roles' : 'services'} /></div>
+            <div className="model-settings-host" hidden={!isSettings || !['models', 'model-roles'].includes(category)}>{visited.current.models && <ModelServices mode={category === 'model-roles' ? 'roles' : 'services'} />}</div>
           </div></div>
       </section>
       {!isSettings && page === 'home' && mode === 'loading' && <section className="home-page"><p>正在打开首页…</p></section>}
       {!isSettings && page === 'home' && mode !== 'loading' && <HomePage mode={mode} ready={ready} status={status} onCreate={intent => navigate(intent ? `create?intent=${intent}` : 'create')} onBring={() => navigate('settings-basic')} onOpen={navigate} />}
       {!isSettings && page === 'create' && <CreateLibrary onDone={navigate} onCreated={() => setNeedsSetup(false)} onOpenSettings={panel => navigate(`settings-${panel}`)} />}
       <div hidden={isSettings || !assistantTarget(page)} className="product-workbench">
-        {ready ? <Workbench /> : <div className="product-welcome"><h1>{needsSetup ? '还没有知识库' : '知识助手暂时不可用'}</h1><p>{needsSetup ? '创建知识库后，就可以基于资料提问。' : service?.phase === 'failed' ? service.message : '知识库服务准备好后会自动打开。'}</p><button onClick={() => navigate(needsSetup ? 'home' : service?.phase === 'failed' ? 'settings-recovery' : 'settings-system')}>{needsSetup ? '返回首页' : '查看服务'}</button></div>}
+        {ready ? visited.current.assistant && <Workbench /> : <div className="product-welcome"><h1>{needsSetup ? '还没有知识库' : '知识助手暂时不可用'}</h1><p>{needsSetup ? '创建知识库后，就可以基于资料提问。' : service?.phase === 'failed' ? service.message : '知识库服务准备好后会自动打开。'}</p><button onClick={() => navigate(needsSetup ? 'home' : service?.phase === 'failed' ? 'settings-recovery' : 'settings-system')}>{needsSetup ? '返回首页' : '查看服务'}</button></div>}
       </div>
       {!isSettings && page === 'docs' && <HelpPage />}
-      {ready && <ImportMaterials open={importOpen} onClose={() => setImportOpen(false)} />}
+      {ready && visited.current.importing && <ImportMaterials open={importOpen} onClose={() => setImportOpen(false)} />}
       {showEmbedded && <div className="product-existing"><ExistingPages embedded /></div>}
       <div ref={bind.menu} className="product-mcp-page" hidden={!menuMcp} />
       <div ref={bind.park} className="desktop-settings-park" hidden />
-      {desktop && hostReady && host.current && createPortal(<DesktopSettings theme={theme} panel={desktopPanel} visible={menuMcp || settingsDesktop} />, host.current)}
+      {desktop && visited.current.desktop && hostReady && host.current && createPortal(<DesktopSettings theme={theme} panel={desktopPanel} visible={menuMcp || settingsDesktop} />, host.current)}
     </main>
-  </div>;
+  </div></React.Suspense>;
 }

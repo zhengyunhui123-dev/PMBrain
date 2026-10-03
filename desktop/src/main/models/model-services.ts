@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { createHash } from 'node:crypto';
+import { assertModelRevision, modelConfigRevision } from './model-config-revision.js';
 import { desktopConfigPath, backupFile, writeJsonConfig, getSetupInfo } from '../config-manager.js';
 import type { SetupInfo } from '../config-manager.js';
 import { getRecipe } from '../../../../src/core/ai/recipes/index.js';
@@ -10,14 +10,13 @@ function rawConfig(): Record<string, any> {
   const path = desktopConfigPath();
   return existsSync(path) ? JSON.parse(readFileSync(path, 'utf8').replace(/^\uFEFF/, '')) : {};
 }
-function revision(config: unknown): string { return createHash('sha256').update(JSON.stringify(config)).digest('hex'); }
 export function mergeModelServices(existing: ServiceModel[], incoming: ServiceModel[]): ServiceModel[] {
   return mergeServiceModels(existing, incoming);
 }
 export function readModelServices(): ModelServicesState {
   const config = rawConfig();
   const setup = getSetupInfo().current;
-  return { services: hydrateModelServices(config, setup), revision: revision(config) };
+  return { services: hydrateModelServices(config, setup), revision: modelConfigRevision(config) };
 }
 export function hydrateModelServices(config: Record<string, any>, setup: SetupInfo['current']): ModelService[] {
   const stored: ModelService[] = config.desktop?.model_services ?? [];
@@ -150,6 +149,7 @@ export function projectModelServices(config: Record<string, any>, services: Mode
 }
 export function saveModelServices(input: ModelServicesState): ModelServicesState {
   const config = rawConfig();
+  assertModelRevision(config, input?.revision);
   const baseline = readModelServices();
   const next = projectModelServices({ ...config, desktop: { ...config.desktop, model_services: baseline.services } }, input.services);
   backupFile(desktopConfigPath(), 'config');

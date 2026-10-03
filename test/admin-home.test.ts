@@ -114,7 +114,7 @@ describe('首页按有没有知识库区分，并接上现有能力', () => {
     expect(read('admin/src/workbench/Workbench.tsx')).toContain('className="wb-send wb-stop"');
     expect(read('admin/src/workbench/workbench.css')).toContain('#0874ff');
     expect(read('desktop/src/renderer/settings-content.html')).toContain('class="preference-row"');
-    expect(read('admin/src/product/ModelServices.tsx')).toContain('启用图片与文档 OCR');
+    expect(read('admin/src/product/model-services/ModelRoles.tsx')).toContain('启用图片与文档 OCR');
     const theme = read('admin/src/product/product-theme.css');
     expect(theme).toContain('min-height: 20px');
     expect(theme).toContain('justify-content: flex-start');

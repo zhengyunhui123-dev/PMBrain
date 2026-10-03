@@ -408,55 +408,41 @@ def first_launch_journey(page: Page, artifacts: Path, provider: LocalOpenAIServe
 
 
 def import_search_journey(page: Page, origin: str, markdown: Path, pdf: Path, artifacts: Path) -> None:
-    print("[journey 2/6] import Markdown/PDF -> visible knowledge -> keyword search", flush=True)
+    print("[journey 2/6] import Markdown/PDF -> visible knowledge -> source text", flush=True)
     response = page.goto(origin + "/admin/#knowledge-import")
     print(f"[admin] import url={page.url} status={response.status if response else 'n/a'} title={page.title()}", flush=True)
-    page.get_by_role("heading", name="导入资料").wait_for()
-    page.get_by_label("选择本地文件").set_input_files([str(markdown), str(pdf)])
-    page.get_by_role("button", name="导入", exact=True).click()
+    page.get_by_role("heading", name="添加资料").wait_for()
+    page.locator(".materials-drawer input[type=file]").set_input_files([str(markdown), str(pdf)])
+    page.get_by_role("button", name="导入 2 项", exact=True).click()
     try:
         page.wait_for_function(
             """() => {
-              const progress = document.querySelector('.assistant-attachment-help')?.textContent || '';
-              if (progress.startsWith('正在导入')) return false;
-              const pills = Array.from(document.querySelectorAll('.nl-result .run-pill'));
-              const last = pills.at(-1);
-              if (!last) return false;
-              return ['已完成', '失败', '部分完成'].includes((last.textContent || '').trim());
-            }""",
-            timeout=240_000,
+              if (document.querySelector('.materials-progress')) return false;
+              return document.querySelectorAll('.materials-result').length >= 2;
+            }""", timeout=240_000,
         )
     except PlaywrightTimeoutError:
-        details = page.locator(".nl-details")
-        if details.count():
-            details.evaluate("element => { element.open = true; }")
-        diagnostic = page.locator(".nl-result").inner_text() if page.locator(".nl-result").count() else page.locator("body").inner_text()
         (artifacts / "import-run-timeout.txt").write_text(
-            f"url={page.url}\nprogress={page.locator('.assistant-attachment-help').inner_text() if page.locator('.assistant-attachment-help').count() else 'n/a'}\n\n{diagnostic}\n",
-            encoding="utf-8",
+            f"url={page.url}\n\n{page.locator('.materials-drawer').inner_text()}", encoding="utf-8",
         )
         raise
-    textarea = page.locator(".assistant-composer textarea")
-    textarea.fill(UNIQUE_MARKER)
-    if page.locator(".pm-error-text").count() and page.locator(".pm-error-text").first.is_visible():
-        raise AssertionError(f"Import UI reported an error: {page.locator('.pm-error-text').first.inner_text()}")
-    run_pill = page.locator(".nl-result .run-pill").last
-    if not run_pill.count() or run_pill.inner_text().strip() != "已完成":
-        details = page.locator(".nl-result").inner_text()
-        raise AssertionError(f"Markdown/PDF import was not fully successful: {details}")
-    page.locator(".search-action-main").click()
-    result = page.locator(".knowledge-search-result")
-    result.wait_for(state="visible", timeout=90_000)
-    hits = result.locator(".knowledge-search-hits")
-    hits.wait_for(state="visible", timeout=90_000)
-    if UNIQUE_MARKER not in hits.inner_text():
-        raise AssertionError("Imported Markdown was not returned by the visible keyword search")
+    outcomes = page.locator(".materials-result").all_inner_texts()
+    if len(outcomes) != 2 or any("已完成" not in outcome or "失败" in outcome for outcome in outcomes):
+        raise AssertionError(f"Markdown/PDF import was not fully successful: {outcomes}")
+    page.get_by_role("button", name="关闭添加资料").click()
+    page.goto(origin + "/admin/#data")
+    page.get_by_placeholder("搜索 slug 或标题").fill("Real User Journey Orchid")
+    row = page.get_by_role("row", name=re.compile("Real User Journey Orchid"))
+    row.wait_for(timeout=90_000)
+    row.click()
+    page.get_by_text(UNIQUE_MARKER, exact=False).first.wait_for(timeout=90_000)
+    page.locator(".knowledge-drawer .drawer-close").click()
 
 
 def delete_restore_journey(page: Page, origin: str) -> None:
     print("[journey 3/6] delete -> recycle bin -> restore", flush=True)
     page.goto(origin + "/admin/#data")
-    page.get_by_role("heading", name="知识数据").wait_for()
+    page.get_by_role("heading", name="知识库", exact=True).wait_for()
     search = page.get_by_placeholder("搜索 slug 或标题")
     search.fill("Real User Journey Orchid")
     row = page.get_by_role("row", name=re.compile("Real User Journey Orchid"))
@@ -652,7 +638,7 @@ def restart_persistence_check(
     try:
         admin_browser, admin, origin = open_admin_browser(playwright, mint_admin_login_link(page, home))
         admin.goto(origin + "/admin/#data")
-        admin.get_by_role("heading", name="知识数据").wait_for()
+        admin.get_by_role("heading", name="知识库", exact=True).wait_for()
         admin.get_by_placeholder("搜索 slug 或标题").fill("Real User Journey Orchid")
         admin.get_by_role("row", name=re.compile("Real User Journey Orchid")).wait_for(timeout=90_000)
     finally:
@@ -710,6 +696,9 @@ def run(args: argparse.Namespace) -> None:
             if admin_browser is not None:
                 admin_browser.close()
             session.stop()
+            logs = home / "electron-user-data" / "logs"
+            if logs.exists():
+                (artifacts / "desktop-runtime.log").write_text("\n".join(log.read_text(encoding="utf-8", errors="replace") for log in sorted(logs.glob("*.log"))), encoding="utf-8")
         restart_persistence_check(
             playwright,
             artifacts,

@@ -8,6 +8,7 @@ from playwright.sync_api import sync_playwright, expect
 ROOT = Path(__file__).resolve().parents[2]
 OUT = Path(os.environ.get('PMBRAIN_UI_OUTPUT', str(Path(tempfile.gettempdir()) / 'pmbrain-product-polish')))
 OUT.mkdir(parents=True, exist_ok=True)
+BASE = os.environ.get('PMBRAIN_UI_URL', 'http://127.0.0.1:5192/admin/')
 DATE = '2026-10-03T08:00:00.000Z'
 STATS = dict(page_count=128, chunk_count=640, embedded_count=600, link_count=320, timeline_entry_count=42, pages_by_type={'document': 128})
 OVERVIEW = dict(version='1.4.13', engine='pglite', schema_pack='default', chat_model='ollama:sample', embedding_model=None,
@@ -58,7 +59,7 @@ with sync_playwright() as p:
         elif nonlocal_path.endswith('/search-index-health'): data = dict(ok=True, engine='pglite')
         route.fulfill(status=status, content_type='application/json', body=json.dumps(data, ensure_ascii=False))
     page.route('**/admin/api/**', mock)
-    page.goto('http://127.0.0.1:5192/admin/#home')
+    page.goto(BASE + '#home')
     page.wait_for_load_state('networkidle')
     for theme in ['dark', 'light']:
         page.evaluate('(theme) => { document.documentElement.dataset.theme = theme; document.documentElement.style.colorScheme = theme; }', theme)
@@ -149,7 +150,7 @@ with sync_playwright() as p:
     page.screenshot(path=str(OUT / 'assistant-tools-error.png'))
     mobile = browser.new_page(viewport={'width': 390, 'height': 844})
     mobile.route('**/admin/api/**', mock)
-    mobile.goto('http://127.0.0.1:5192/admin/#import')
+    mobile.goto(BASE + '#import')
     expect(mobile.locator('textarea')).to_be_visible()
     assert mobile.evaluate('location.hash') == '#import'
     mobile.close()
