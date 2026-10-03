@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { extname } from 'node:path';
 import type { ChatBlock } from '../../core/ai/gateway';
-import { ATTACHMENT_MAX_BYTES, ATTACHMENT_MAX_COUNT } from '../../../shared/workbench';
+import { ATTACHMENT_MAX_BYTES, ATTACHMENT_MAX_COUNT, toolHistoryText } from '../../../shared/workbench';
 import type { WorkbenchAttachment, WorkbenchMessage } from '../../../shared/workbench';
 
 export { ATTACHMENT_MAX_BYTES, ATTACHMENT_MAX_COUNT };
@@ -87,11 +87,12 @@ export function advanceStoredReads(messages: WorkbenchMessage[], requestText: st
   return [];
 }
 
-export function summarySource(message: Pick<WorkbenchMessage, 'text' | 'attachments' | 'attachmentSupplement'>): string {
+export function summarySource(message: Pick<WorkbenchMessage, 'text' | 'attachments' | 'attachmentSupplement' | 'toolCalls'>): string {
   const parts: string[] = [];
   const text = message.text.trim();
   if (text) parts.push(text);
   if (message.attachmentSupplement?.trim()) parts.push(message.attachmentSupplement.trim());
+  if (message.toolCalls?.length) parts.push(toolHistoryText(message));
   for (const item of message.attachments ?? []) {
     const image = item.route === 'vision' || item.route === 'ocr' || item.mime.startsWith('image/');
     if (image) parts.push(`【图片 ${item.name}】${item.text?.trim() || item.note || '图片仍保存在这条消息上'}`);
@@ -111,8 +112,8 @@ export function retrievalText(message: Pick<WorkbenchMessage, 'text' | 'attachme
   return parts.filter(Boolean).join('\n').slice(0, 2000);
 }
 
-export function workbenchModelContent(message: Pick<WorkbenchMessage, 'text' | 'attachments' | 'attachmentSupplement'>, supplement?: string): string | ChatBlock[] {
-  const extra = [...new Set([message.attachmentSupplement, supplement].map(item => item?.trim() || '').filter(Boolean))];
+export function workbenchModelContent(message: Pick<WorkbenchMessage, 'text' | 'attachments' | 'attachmentSupplement' | 'toolCalls'>, supplement?: string): string | ChatBlock[] {
+  const extra = [...new Set([message.attachmentSupplement, supplement, toolHistoryText(message)].map(item => item?.trim() || '').filter(Boolean))];
   if (!message.attachments?.length && !extra.length) return message.text;
   const parts: ChatBlock[] = [];
   const bits = [message.text.trim(), ...extra];

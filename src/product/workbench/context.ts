@@ -1,4 +1,4 @@
-import { FALLBACK_CONTEXT_TOKENS, type ContextPolicy, type WorkbenchMessage } from '../../../shared/workbench';
+import { FALLBACK_CONTEXT_TOKENS, toolHistoryText, type ContextPolicy, type WorkbenchMessage } from '../../../shared/workbench';
 import { ATTACHMENT_PROMPT_CAP } from './attachments';
 import { estimateEmbedTokens } from '../../core/chunkers/token-estimate';
 
@@ -28,6 +28,7 @@ export function messageTokens(message: WorkbenchMessage): number {
     if (item.route === 'vision' || item.route === 'pdf-file') tokens += 4_000;
   }
   tokens += estimateTokens(message.attachmentSupplement ?? '');
+  tokens += estimateTokens(toolHistoryText(message));
   return tokens;
 }
 

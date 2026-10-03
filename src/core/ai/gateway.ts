@@ -2748,7 +2748,7 @@ async function chatOnce(opts: ChatOpts): Promise<ChatResult> {
       }
       return messages;
     })();
-    const emitHostedDeltas = Boolean(opts.onTextDelta) && !nativeMessages && (opts.tools?.length ?? 0) === 0;
+    const emitHostedDeltas = Boolean(opts.onTextDelta) && !nativeMessages;
     const result = nativeMessages
       ? await (async () => {
           const cfg = requireConfig();
@@ -2851,7 +2851,7 @@ async function chatOnce(opts: ChatOpts): Promise<ChatResult> {
             } else if (part.type === 'finish') finishReason = part.finishReason ?? finishReason;
             else if (part.type === 'error') throw part.error;
           }
-          return { content: streamedText ? [{ type: 'text', text: streamedText }] : [], text: streamedText, toolCalls, finishReason, usage, providerMetadata };
+          return { content: [...(streamedText ? [{ type: 'text', text: streamedText }] : []), ...toolCalls], text: streamedText, toolCalls, finishReason, usage, providerMetadata };
         })()
         : await generateText(generationOptions);
 
@@ -3027,6 +3027,12 @@ export interface ToolLoopReplayState {
 }
 
 export interface ToolLoopOpts {
+  temperature?: number;
+  onTextDelta?: (delta: string) => void;
+  onTextReset?: (model: string) => void;
+  beforeModelCall?: (input: { turnIdx: number; messages: readonly ChatMessage[] }) => void | Promise<void>;
+  reportLengthStop?: boolean;
+  recordUnknownTools?: boolean;
   /** "provider:modelId" — defaults to config.chat_model. */
   model?: string;
   /** System prompt (provider-neutral). Cached when caching supported + cacheSystem true. */
@@ -3084,7 +3090,7 @@ export interface ToolLoopOpts {
   onHeartbeat?: (event: string, data: Record<string, unknown>) => void;
 }
 
-export type ToolLoopStopReason = 'end' | 'max_turns' | 'refusal' | 'content_filter' | 'aborted' | 'unrecoverable';
+export type ToolLoopStopReason = 'end' | 'length' | 'max_turns' | 'refusal' | 'content_filter' | 'aborted' | 'unrecoverable';
 
 export interface ToolLoopResult {
   finalText: string;
@@ -3144,6 +3150,8 @@ export async function toolLoop(opts: ToolLoopOpts): Promise<ToolLoopResult> {
 
     let chatResult: ChatResult;
     try {
+      await opts.beforeModelCall?.({ turnIdx, messages });
+      opts.abortSignal?.throwIfAborted();
       chatResult = await chat({
         model: opts.model,
         system: opts.system,
@@ -3152,6 +3160,9 @@ export async function toolLoop(opts: ToolLoopOpts): Promise<ToolLoopResult> {
         maxTokens,
         abortSignal: opts.abortSignal,
         cacheSystem: opts.cacheSystem,
+        ...(opts.temperature !== undefined ? { temperature: opts.temperature } : {}),
+        ...(opts.onTextDelta ? { onTextDelta: opts.onTextDelta } : {}),
+        ...(opts.onTextReset ? { onTextReset: opts.onTextReset } : {}),
       });
     } catch (err) {
       opts.onHeartbeat?.('llm_call_failed', {
@@ -3189,7 +3200,7 @@ export async function toolLoop(opts: ToolLoopOpts): Promise<ToolLoopResult> {
     );
 
     if (toolCalls.length === 0) {
-      stopReason = 'end';
+      stopReason = opts.reportLengthStop && chatResult.stopReason === 'length' ? 'length' : 'end';
       finalText = chatResult.text;
       break;
     }
@@ -3205,12 +3216,17 @@ export async function toolLoop(opts: ToolLoopOpts): Promise<ToolLoopResult> {
 
       const handler = handlers.get(call.toolName);
       if (!handler) {
-        // Tool not registered. Synthesize an error result; don't persist.
+        const error = `tool "${call.toolName}" is not in the registry for this subagent`;
+        if (opts.recordUnknownTools && opts.onToolCallStart) {
+          const { gbrainToolUseId } = await opts.onToolCallStart(turnIdx, assistantMessageIdx, callIdx, call.toolName, call.input, call.toolCallId);
+          if (opts.abortSignal?.aborted) { stopReason = 'aborted'; break; }
+          await opts.onToolCallFailed?.(gbrainToolUseId, error);
+        }
         toolResultBlocks.push({
           type: 'tool-result',
           toolCallId: call.toolCallId,
           toolName: call.toolName,
-          output: `tool "${call.toolName}" is not in the registry for this subagent`,
+          output: error,
           isError: true,
         });
         opts.onHeartbeat?.('tool_failed', { turn_idx: turnIdx, tool_name: call.toolName, error: 'not_registered' });
@@ -3228,6 +3244,8 @@ export async function toolLoop(opts: ToolLoopOpts): Promise<ToolLoopResult> {
         call.input,
         call.toolCallId,
       )) ?? { gbrainToolUseId: `inline-${turnIdx}-${callIdx}` };
+
+      if (opts.abortSignal?.aborted) { stopReason = 'aborted'; break; }
 
       // Replay short-circuit: prior outcome wins, idempotent re-execute allowed.
       const prior = opts.replayState?.priorTools.get(gbrainToolUseId);

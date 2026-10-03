@@ -117,3 +117,22 @@ html[data-theme="dark"] .knowledge-workbench button.wb-cite:hover, html[data-the
 .wb-composer.dropping { outline: 2px dashed var(--product-accent, #6ea8fe); outline-offset: 2px; }
 .wb-file-card { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
 .wb-message .wb-attachments { margin: 0 0 8px; }
+.wb-tools { margin: 12px 0 16px; border: 1px solid var(--product-line, var(--console-line)); border-radius: 10px; font-size: 12px; overflow: hidden; }
+.wb-tools > summary { display: flex; align-items: center; gap: 8px; padding: 10px 12px; cursor: pointer; list-style: none; color: var(--product-muted, var(--muted)); }
+.wb-tools > summary::-webkit-details-marker { display: none; }
+.wb-tools[open] > summary > svg:first-child { transform: rotate(90deg); }
+.wb-tools > summary span { flex: 1; }
+.wb-tools > summary small { font-size: 11px; }
+.wb-tools ol { list-style: none; margin: 0; padding: 0 12px 10px; }
+.wb-tools li { border-top: 1px solid var(--product-line, var(--console-line)); padding: 12px 0 2px; }
+.wb-tool-head { display: flex; align-items: center; gap: 8px; }
+.wb-tool-head b { font-size: 12px; font-weight: 500; flex: 1; }
+.wb-tool-head span { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--product-muted, var(--muted)); }
+.wb-tools li > p { margin: 7px 0; line-height: 1.6; color: var(--product-muted, var(--muted)); overflow-wrap: anywhere; }
+.wb-tools .wb-tool-error, .wb-tool-error .wb-tool-head span { color: #e35f6f; }
+.wb-tools li > details { margin: 8px 0; color: var(--product-muted, var(--muted)); }
+.wb-tools li > details summary { cursor: pointer; }
+.wb-tool-output { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 220px; overflow: auto; font: inherit; line-height: 1.65; margin: 8px 0 0; padding: 10px 12px; background: var(--ui-raised, transparent); border-radius: 6px; }
+.wb-tool-output :is(b, small) { display: block; }
+.wb-tool-output > div + div { border-top: 1px solid var(--product-line, var(--console-line)); padding-top: 8px; margin-top: 8px; }
+.wb-tool-output p { margin: 4px 0; }

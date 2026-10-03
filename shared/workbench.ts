@@ -1,4 +1,17 @@
 export interface WorkbenchCitation { sourceId: string | null; slug: string; title: string; snippet: string }
+export interface WorkbenchToolCall {
+  id: string;
+  name: string;
+  input: string;
+  status: 'running' | 'complete' | 'error' | 'cancelled';
+  startedAt: string;
+  completedAt?: string;
+  output?: string;
+  error?: string;
+}
+export function toolHistoryText(message: { toolCalls?: WorkbenchToolCall[] }): string {
+  return (message.toolCalls ?? []).map(item => `【此前知识工具 ${item.name} · ${item.status}】${item.input}\n${item.output ?? item.error ?? ''}`).join('\n');
+}
 export const ATTACHMENT_MAX_BYTES = 15 * 1024 * 1024;
 export const ATTACHMENT_MAX_COUNT = 8;
 export interface WorkbenchAttachment {
@@ -30,6 +43,7 @@ export interface WorkbenchMessage {
   attachments?: WorkbenchAttachment[];
   attachmentSupplement?: string;
   stopReason?: 'end' | 'length' | 'other';
+  toolCalls?: WorkbenchToolCall[];
 }
 export interface WorkbenchConversation {
   id: string;

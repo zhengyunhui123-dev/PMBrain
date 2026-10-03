@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { WorkbenchCitation, WorkbenchConversation, WorkbenchMessage, WorkbenchModel } from '../../../shared/workbench';
+import type { WorkbenchCitation, WorkbenchConversation, WorkbenchMessage, WorkbenchModel, WorkbenchToolCall } from '../../../shared/workbench';
 import { advanceStoredReads, attachmentRead, enrichAttachments, incomingAttachments, resolveListedAttachments, summarySource, modelReadsPdfNatively } from './attachments';
 import { estimateTokens, knowledgeReserve, planContext, summaryInputBudget } from './context';
 import { WorkbenchStore } from './store';
@@ -23,6 +23,7 @@ export interface WorkbenchAnswerInput {
   progress: (stage: string) => void;
   onDelta?: (delta: string) => void;
   onReplace?: (text: string, model: string) => void;
+  onTool?: (call: WorkbenchToolCall) => void;
 }
 export type WorkbenchAnswer = (input: WorkbenchAnswerInput) => Promise<{ text: string; model: string; citations: WorkbenchCitation[]; knowledge?: 'used' | 'none' | 'off'; stopReason?: 'end' | 'length' | 'other' }>;
 export type WorkbenchSummarizer = (input: { model: string; prior: string; transcript: string; signal: AbortSignal; contextWindow?: number }) => Promise<string>;
@@ -72,7 +73,11 @@ export class WorkbenchService {
   }) {
     for (const conversation of store.list()) {
       let changed = false;
-      for (const message of conversation.messages) if (message.status === 'running') { message.status = 'error'; message.error = '上次生成因服务退出而中断，请重试。'; changed = true; }
+      for (const message of conversation.messages) if (message.status === 'running') {
+        message.status = 'error'; message.error = '上次生成因服务退出而中断，请重试。';
+        for (const call of message.toolCalls ?? []) if (call.status === 'running') { call.status = 'error'; call.error = message.error; call.completedAt = new Date().toISOString(); }
+        changed = true;
+      }
       if (changed) store.save(conversation);
     }
   }
@@ -243,6 +248,13 @@ export class WorkbenchService {
             reply.modelName = this.models().find(item => item.id === nextModel)?.name || nextModel;
             saveSoon(true);
           },
+          onTool: call => {
+            if (abort.signal.aborted) return;
+            reply.toolCalls ??= [];
+            const index = reply.toolCalls.findIndex(item => item.id === call.id);
+            if (index < 0) reply.toolCalls.push({ ...call }); else reply.toolCalls[index] = { ...call };
+            saveSoon(true);
+          },
         });
         if (!abort.signal.aborted) {
           reply.text = result.text;
@@ -257,6 +269,7 @@ export class WorkbenchService {
       finally {
         if (opened) {
           if (abort.signal.aborted) reply.status = 'cancelled';
+          for (const call of reply.toolCalls ?? []) if (call.status === 'running') { call.status = abort.signal.aborted ? 'cancelled' : 'error'; call.error = abort.signal.aborted ? '已停止' : reply.error || '工具执行中断'; call.completedAt = new Date().toISOString(); }
           delete reply.stage;
           conversation.updatedAt = new Date().toISOString();
           this.store.save(conversation);
@@ -270,7 +283,7 @@ export class WorkbenchService {
   cancel(id: string) {
     this.active.get(id)?.abort.abort();
     const conversation = this.get(id); const reply = conversation.messages.at(-1);
-    if (reply?.status === 'running') { reply.status = 'cancelled'; delete reply.stage; this.store.save(conversation); }
+    if (reply?.status === 'running') { reply.status = 'cancelled'; delete reply.stage; for (const call of reply.toolCalls ?? []) if (call.status === 'running') { call.status = 'cancelled'; call.completedAt = new Date().toISOString(); } this.store.save(conversation); }
     return conversation;
   }
   async settled(id: string) { await this.active.get(id)?.promise; }
