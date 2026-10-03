@@ -200,14 +200,19 @@ export class SidecarManager {
   }
 
   async adminRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
-    const request = async (cookie: string) => fetch(`http://127.0.0.1:${this.port}${path}`, {
-      ...init,
-      headers: {
-        'Content-Type': 'application/json',
-        Cookie: cookie,
-        ...(init.headers ?? {}),
-      },
-    });
+    const response = await this.adminResponse(path, init);
+    const body = await response.json().catch(() => ({})) as T & { error?: string; message?: string };
+    if (!response.ok) throw new Error(body.message || body.error || `Admin API 返回 HTTP ${response.status}`);
+    return body;
+  }
+
+  async adminResponse(path: string, init: RequestInit = {}): Promise<Response> {
+    const request = async (cookie: string) => {
+      const headers = new Headers(init.headers);
+      if (!headers.has('content-type')) headers.set('content-type', 'application/json');
+      headers.set('cookie', cookie);
+      return fetch(`http://127.0.0.1:${this.port}${path}`, { ...init, headers });
+    };
 
     let cookie = await this.getAdminCookie();
     let response = await request(cookie);
@@ -217,9 +222,7 @@ export class SidecarManager {
       cookie = await this.getAdminCookie();
       response = await request(cookie);
     }
-    const body = await response.json().catch(() => ({})) as T & { error?: string; message?: string };
-    if (!response.ok) throw new Error(body.message || body.error || `Admin API 返回 HTTP ${response.status}`);
-    return body;
+    return response;
   }
 
   private async getAdminCookie(): Promise<string> {

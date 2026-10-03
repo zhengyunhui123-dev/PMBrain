@@ -1,6 +1,8 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api, isPgliteBusyError } from '../api';
-import { RunOutput, formatDate, pageTypeLabel, pageTypeTitle, type ConsoleRun } from '../lib/shared';
+import { formatDate, pageTypeLabel, pageTypeTitle, type ConsoleRun } from '../lib/shared';
+import { TaskProgressCard, taskLink } from '../product/TaskProgress';
+import { useProductTasks } from '../product/TaskActivity';
 import { describeRunRecovery } from '../lib/run-recovery';
 import { TakeProposalsPage } from './TakeProposals';
 import { CalibrationPage } from './Calibration';
@@ -305,11 +307,11 @@ function useDreamData() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [busyRuns, setBusyRuns] = useState<ConsoleRun[]>([]);
+  const pending = useRef(false);
 
-  const load = async () => {
-    // Keep the current Dream page mounted during background refreshes. Replacing
-    // it with the initial loading screen resets the user's scroll anchor.
-    if (!data) setLoading(true);
+  const load = useCallback(async () => {
+    if (pending.current) return;
+    pending.current = true;
     try {
       setData(await api.dreamOverview());
       setError('');
@@ -329,9 +331,10 @@ function useDreamData() {
         setError(err instanceof Error ? err.message : String(err));
       }
     } finally {
+      pending.current = false;
       setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => { void load(); }, []);
   useEffect(() => {
@@ -564,6 +567,17 @@ export function describeDreamRun(run: ConsoleRun): {
   slugs: string[];
 } {
   const report = parseDreamReport(run);
+  if (run.product) {
+    const view = run.product;
+    return {
+      headline: `${view.name} · ${view.stage}`,
+      diagnosis: view.errorReason ?? (run.status === 'running' || run.status === 'queued' ? '任务在后台继续，离开页面不影响执行。' : '查看任务了解步骤和处理结果。'),
+      actions: view.steps.filter(step => step.status === 'completed').map(step => step.label),
+      outputs: view.metrics.map(metric => `${metric.label} ${metric.value}`),
+      details: run.durationMs !== null ? [`耗时 ${Math.round(run.durationMs / 1000)} 秒`] : [],
+      slugs: asStringArray(report?.phases?.find(phase => phase.phase === 'synthesize')?.details?.written_slugs),
+    };
+  }
   const isQuick = isQuickMaintenanceRun(run);
   const text = `${run.stdout}\n${run.stderr}`;
   const synth = report?.phases?.find(phase => phase.phase === 'synthesize');
@@ -1008,14 +1022,7 @@ function DreamRunResult({ run }: { run: ConsoleRun }) {
           </section>
         </div>
       </details>
-      <details className="dream-execution-log">
-        <summary>执行日志</summary>
-        <DreamTechnicalDetails run={run} />
-        <details className="nl-details">
-          <summary>原始日志与命令</summary>
-          <RunOutput run={run} />
-        </details>
-      </details>
+      <button type="button" className="pm-ghost" onClick={() => taskLink(run)}>查看任务</button>
     </section>
   );
 }
@@ -2127,8 +2134,8 @@ function DreamRunPanel({
       <div className="pm-hint dream-run-persist-note">
         手动整理默认不设外层时限，会在后台继续运行；离开页面不会中断，也可随时中止。
       </div>
-      <KnowledgeJourney run={selectedRun} mode={runMode} />
-      {selectedRun && (
+      {selectedRun?.product ? <TaskProgressCard run={selectedRun} /> : <KnowledgeJourney run={selectedRun} mode={runMode} />}
+      {selectedRun && !selectedRun.product && (
         <DreamRunResult run={selectedRun} />
       )}
       <details className="dream-diagnostics-details">
@@ -2177,13 +2184,32 @@ function RecentRuns({ runs }: { runs: ConsoleRun[] }) {
   );
 }
 
-export function DreamOverviewPage() {
+export function DreamOverviewPage({ product = false }: { product?: boolean } = {}) {
   const { data, error, loading, busy, busyRuns, reload } = useDreamData();
-  if (busy) return <DreamShell title="AI 知识整理"><DreamBusyRecovery runs={busyRuns} onRefresh={() => void reload()} /></DreamShell>;
-  if (error) return <DreamShell title="AI 知识整理"><ErrorBlock message={error} /></DreamShell>;
-  if (loading || !data) return <DreamShell title="AI 知识整理"><Loading text="正在了解你的知识库…" /></DreamShell>;
+  const tasks = useProductTasks();
+  const currentTask = tasks.rows.find(run => run.kind.startsWith('dream_') && ['running', 'queued'].includes(run.status));
+  const displayedTask = currentTask ?? tasks.rows.find(run => run.kind.startsWith('dream_') && run.product);
+  const currentProgress = displayedTask ? <TaskProgressCard run={displayedTask} /> : null;
+  const previousTasks = useRef(new Map<string, string>());
+  useEffect(() => {
+    const rows = tasks.rows.filter(run => run.kind.startsWith('dream_'));
+    const finished = rows.some(run => ['running', 'queued'].includes(previousTasks.current.get(run.id) ?? '') && !['running', 'queued'].includes(run.status));
+    previousTasks.current = new Map(rows.map(run => [run.id, run.status]));
+    if (finished) void reload();
+  }, [tasks.rows, reload]);
+  const [schedule, setSchedule] = useState<{ enabled: boolean; time: string; timeZone: string } | null>(null);
+  const [scheduleError, setScheduleError] = useState('');
+  useEffect(() => {
+    if (!product) return;
+    let active = true;
+    void api.dreamSchedule().then(value => { if (active) setSchedule(value); }).catch(reason => { if (active) setScheduleError(reason instanceof Error ? reason.message : String(reason)); });
+    return () => { active = false; };
+  }, [product]);
+  if (busy) return <DreamShell title="知识整理">{currentProgress}<DreamBusyRecovery runs={busyRuns} onRefresh={() => void reload()} /></DreamShell>;
+  if (error) return <DreamShell title="知识整理">{currentProgress}<ErrorBlock message={error} /></DreamShell>;
+  if (loading || !data) return <DreamShell title="知识整理">{currentProgress}<Loading text="正在读取整理状态…" /></DreamShell>;
 
-  const activeLock = data.locks.find(lock => lock.active);
+  const activeLock = currentTask ?? data.locks.find(lock => lock.active);
   const pending = data.embeddings.pending ?? 0;
   const orphanPages = data.health?.orphan_pages ?? 0;
   const deadLinks = data.health?.dead_links ?? 0;
@@ -2206,29 +2232,33 @@ export function DreamOverviewPage() {
   const statusText = activeLock
     ? '整理会在后台继续，完成后这里会显示结果。'
     : pending > 0
-      ? `有 ${pending} 段内容等待更新搜索索引，建议运行一次整理。`
+      ? product ? `有 ${pending} 段内容等待更新搜索索引。` : `有 ${pending} 段内容等待更新搜索索引，建议运行一次整理。`
       : orphanPages > 0
         ? `发现 ${orphanPages} 个暂时缺少关联的页面，整理后可能建立新的知识连接。`
         : deadLinks > 0
-          ? `发现 ${deadLinks} 条需要检查的知识引用，建议运行一次整理。`
-          : '暂时没有发现需要立即处理的问题。导入新资料或积累一段时间后再运行即可。';
+          ? product ? `发现 ${deadLinks} 条需要检查的知识引用。` : `发现 ${deadLinks} 条需要检查的知识引用，建议运行一次整理。`
+          : product ? '暂时没有需要处理的问题。' : '暂时没有发现需要立即处理的问题。导入新资料或积累一段时间后再运行即可。';
 
   return (
     <div className="pm-page dream-page dream-home">
       <section className="dream-hero">
         <div className="dream-hero-copy">
-          <span className="dream-eyebrow">PMBrain Dream</span>
-          <h1>让知识自己长起来</h1>
-          <p>AI 会阅读最近新增的资料，理解内容、建立联系、形成长期记忆，并更新搜索能力。</p>
+          {!product && <span className="dream-eyebrow">PMBrain Dream</span>}
+          <h1>{product ? '知识整理' : '让知识自己长起来'}</h1>
+          <p>{product ? '查看后台维护状态和最近的整理结果。' : 'AI 会阅读最近新增的资料，理解内容、建立联系、形成长期记忆，并更新搜索能力。'}</p>
           <div className="dream-hero-actions">
             <button className="pm-ghost" onClick={() => void reload()}>刷新状态</button>
           </div>
         </div>
-        <div className={`dream-status-orbit ${activeLock ? 'running' : needsAttention ? 'attention' : 'healthy'}`}>
-          <div className="dream-orbit-core"><span>{activeLock ? '整理中' : needsAttention ? '待整理' : '清晰'}</span></div>
-          <i className="orbit-one" /><i className="orbit-two" />
-        </div>
+        {!product && <div className={`dream-status-orbit ${activeLock ? 'running' : needsAttention ? 'attention' : 'healthy'}`}><div className="dream-orbit-core"><span>{activeLock ? '整理中' : needsAttention ? '待整理' : '清晰'}</span></div><i className="orbit-one" /><i className="orbit-two" /></div>}
       </section>
+
+      {currentProgress}
+      {product && <section className="maintenance-schedule">
+        <span className={`maintenance-dot ${schedule?.enabled ? 'enabled' : ''}`} aria-hidden="true" />
+        <div><b>{schedule ? schedule.enabled ? '自动整理已开启' : '自动整理未开启' : scheduleError ? '无法读取自动整理状态' : '正在读取自动整理设置…'}</b><small>{schedule?.enabled ? `每天 ${schedule.time} · ${schedule.timeZone}` : '在设置中配置自动整理时间。'}{scheduleError && ` ${scheduleError}`}</small></div>
+        <button type="button" className="pm-ghost" onClick={() => { window.location.hash = 'settings-dream'; }}>整理设置</button>
+      </section>}
 
       <section className="dream-recommendation">
         <div className="dream-recommendation-icon">{activeLock ? '↻' : needsAttention ? '↗' : '✓'}</div>
@@ -2239,7 +2269,10 @@ export function DreamOverviewPage() {
         <SearchIndexRepairCard forceShow />
       )}
 
-      <DreamRunPanel engine={data.overview?.engine} defaultSourceId={data.overview?.main_source_id} phaseCatalog={data.phase_catalog} phaseCapabilities={data.phase_capabilities} generativeEnabled={data.generative_enabled === true} sources={data.overview?.sources} locks={data.locks} jobs={data.jobs} supervisor={data.supervisor} onDone={() => void reload()} />
+      {product ? <details className="maintenance-manual" open={Boolean(activeLock)}>
+        <summary>{activeLock ? '查看当前任务' : '手动维护与高级操作'}</summary>
+        <DreamRunPanel engine={data.overview?.engine} defaultSourceId={data.overview?.main_source_id} phaseCatalog={data.phase_catalog} phaseCapabilities={data.phase_capabilities} generativeEnabled={data.generative_enabled === true} sources={data.overview?.sources} locks={data.locks} jobs={data.jobs} supervisor={data.supervisor} onDone={() => void reload()} />
+      </details> : <DreamRunPanel engine={data.overview?.engine} defaultSourceId={data.overview?.main_source_id} phaseCatalog={data.phase_catalog} phaseCapabilities={data.phase_capabilities} generativeEnabled={data.generative_enabled === true} sources={data.overview?.sources} locks={data.locks} jobs={data.jobs} supervisor={data.supervisor} onDone={() => void reload()} />}
 
       <div className="dream-home-grid">
         <section className="dream-summary-card">
@@ -2292,7 +2325,7 @@ export function DreamOverviewPage() {
       <section className="dream-history-card">
         <div className="dream-section-title">
           <div><span className="dream-eyebrow">整理记录</span><h2>最近发生了什么</h2></div>
-          <button className="pm-ghost" onClick={() => { window.location.hash = 'dream-execute'; }}>打开高级执行页</button>
+          {!product && <button className="pm-ghost" onClick={() => { window.location.hash = 'dream-execute'; }}>打开高级执行页</button>}
         </div>
         <RecentRuns runs={data.runs} />
       </section>

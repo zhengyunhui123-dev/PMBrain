@@ -409,4 +409,76 @@ describe('desktop sidecar manager', () => {
       await new Promise<void>(resolve => server.close(() => resolve()));
     }
   });
+  test('preserves upload bytes, text responses and HTTP failures', async () => {
+    const bytes: number[] = [];
+    const server = createServer((req, res) => {
+      if (req.url === '/admin/api/issue-magic-link') {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ url: `http://127.0.0.1:${(server.address() as any).port}/admin/auth/test` }));
+      } else if (req.url === '/admin/auth/test') {
+        res.writeHead(302, { 'set-cookie': 'pmbrain_admin=test; HttpOnly', location: '/admin/' }).end();
+      } else {
+        req.on('data', chunk => bytes.push(...chunk));
+        req.on('end', () => {
+          res.writeHead(422, { 'content-type': 'text/plain; charset=utf-8' });
+          res.end('原始错误');
+        });
+      }
+    });
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    const manager = new SidecarManager({ packaged: false, appPath: '', resourcesPath: '', port: (server.address() as any).port, bootstrapToken: 'test-only', clientVersion: 'test', logger });
+    try {
+      const response = await manager.adminResponse('/admin/api/upload', { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: new Uint8Array([0, 128, 255]) });
+      expect(response.status).toBe(422);
+      expect(response.headers.get('content-type')).toContain('text/plain');
+      expect(await response.text()).toBe('原始错误');
+      expect(bytes).toEqual([0, 128, 255]);
+    } finally {
+      await new Promise<void>(resolve => server.close(() => resolve()));
+    }
+  });
+
+  test('渲染进程用小写 content-type 发送时，正文仍然完整到达', async () => {
+    let contentType: string | string[] | undefined;
+    const chunks: Buffer[] = [];
+    const server = createServer((req, res) => {
+      if (req.url === '/admin/api/issue-magic-link') {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ url: `http://127.0.0.1:${(server.address() as any).port}/admin/auth/test` }));
+      } else if (req.url === '/admin/auth/test') {
+        res.writeHead(302, { 'set-cookie': 'pmbrain_admin=test; HttpOnly', location: '/admin/' }).end();
+      } else {
+        contentType = req.headers['content-type'];
+        req.on('data', chunk => chunks.push(chunk));
+        req.on('end', () => {
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end('{"ok":true}');
+        });
+      }
+    });
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    const manager = new SidecarManager({ packaged: false, appPath: '', resourcesPath: '', port: (server.address() as any).port, bootstrapToken: 'test-only', clientVersion: 'test', logger });
+    try {
+      const response = await manager.adminResponse('/admin/api/workbench/conversations/x/messages', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ text: '你好' }),
+      });
+      expect(response.status).toBe(200);
+      expect(contentType).toBe('application/json');
+      expect(JSON.parse(Buffer.concat(chunks).toString('utf8')).text).toBe('你好');
+      chunks.length = 0;
+      const upload = await manager.adminResponse('/admin/api/upload', {
+        method: 'POST',
+        headers: { 'content-type': 'application/octet-stream' },
+        body: new Uint8Array([9]),
+      });
+      expect(upload.status).toBe(200);
+      expect(contentType).toBe('application/octet-stream');
+      expect(Buffer.concat(chunks)).toEqual(Buffer.from([9]));
+    } finally {
+      await new Promise<void>(resolve => server.close(() => resolve()));
+    }
+  });
+
 });

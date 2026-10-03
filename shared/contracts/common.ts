@@ -1,6 +1,15 @@
 import { z } from 'zod';
 
 export const RunStatusSchema = z.enum(['queued', 'running', 'completed', 'failed', 'cancelled']);
+export const TaskProductProgressSchema = z.object({
+  name: z.string(), stage: z.string(), percent: z.number().min(0).max(100).nullable(),
+  phasePercent: z.number().min(0).max(100).nullable(), completedSteps: z.number().int().nonnegative(),
+  steps: z.array(z.object({ id: z.string(), label: z.string(), status: z.enum(['pending', 'running', 'completed', 'skipped', 'failed']), phases: z.array(z.string()) })),
+  processed: z.number().nullable(), total: z.number().nullable(), file: z.string().nullable(),
+  metrics: z.array(z.object({ label: z.string(), value: z.number() })), errorReason: z.string().nullable(),
+  material: z.object({ name: z.string(), sourceId: z.string(), directory: z.boolean(), page: z.object({ slug: z.string(), title: z.string(), type: z.string() }).optional() }).optional(),
+  scope: z.object({ name: z.string(), index: z.number().int().nonnegative(), total: z.number().int().positive() }).optional(),
+});
 
 export const RunAcceptedResponseSchema = z.object({
   runId: z.string().min(1),
@@ -10,6 +19,7 @@ export const RunAcceptedResponseSchema = z.object({
 export const ConsoleRunSchema = z.object({
   id: z.string(),
   kind: z.string(),
+  trigger: z.enum(['manual', 'scheduled']).optional(),
   status: RunStatusSchema,
   command: z.array(z.string()),
   stdout: z.string(),
@@ -20,6 +30,7 @@ export const ConsoleRunSchema = z.object({
   completedAt: z.string().nullable(),
   durationMs: z.number().nullable(),
   result: z.unknown().optional(),
+  product: TaskProductProgressSchema.optional(),
 }).passthrough();
 
 export type RunAcceptedResponse = z.infer<typeof RunAcceptedResponseSchema>;

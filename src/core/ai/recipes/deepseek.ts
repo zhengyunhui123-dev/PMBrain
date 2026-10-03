@@ -56,7 +56,8 @@ export const deepseek: Recipe = {
   },
   touchpoints: {
     embedding: {
-      models: ['deepseek-embedding'],
+      models: [],
+      user_provided_models: true,
       default_dims: 1536,
       dims_options: [1536],
       cost_per_1m_tokens_usd: 0.001,

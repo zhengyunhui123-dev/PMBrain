@@ -97,8 +97,7 @@ export function RunOutput({ run }: { run: ConsoleRun }) {
       <button className="run-output-copy" type="button" onClick={() => void copyOutput()} disabled={!copyText}>
         {copied ? '已复制' : '复制'}
       </button>
-      <div className="pm-kv"><span>状态</span><b className={`run-${run.status}`}>{run.status}</b></div>
-      <div className="pm-kv"><span>命令</span><b>{run.command.join(' ')}</b></div>
+      {run.command.length > 0 && <div className="pm-kv"><span>执行参数</span><b>{run.command.join(' ')}</b></div>}
       {run.error && <div className="pm-error-text">{run.error}</div>}
       {run.stdout && <pre>{run.stdout}</pre>}
       {run.stderr && <pre className="stderr">{run.stderr}</pre>}

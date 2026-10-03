@@ -167,7 +167,8 @@ describe('Dream GUI product contract', () => {
 
   test('advanced observability remains available behind details', () => {
     expect(dream).toContain('查看阶段、模型与 Token');
-    expect(dream).toContain('原始日志与命令');
+    expect(dream).not.toContain('原始日志与命令');
+    expect(readFileSync('admin/src/product/TaskTechnicalLogs.tsx', 'utf8')).toContain('<summary>技术日志</summary>');
     expect(dream).toContain('查看运行诊断');
   });
 
@@ -675,7 +676,8 @@ describe('Dream GUI product contract', () => {
     expect(outcome.failureItems).toContain('观点提炼：1 个页面未处理成功');
     expect(dream).toContain('本次成果');
     expect(dream).toContain('查看本次整理内容');
-    expect(dream).toContain('<summary>执行日志</summary>');
+    expect(dream).toContain('taskLink(run)');
+    expect(dream).not.toContain('<summary>执行日志</summary>');
   });
 
   test('Dream settings explain relative paths with a resolved directory preview', () => {
@@ -689,7 +691,9 @@ describe('Dream GUI product contract', () => {
   test('selected run mode survives the data reload after a run completes', () => {
     expect(dream).toContain("const DREAM_RUN_MODE_KEY = 'pmbrain.dream.runMode'");
     expect(dream).toContain('window.localStorage.setItem(DREAM_RUN_MODE_KEY, mode)');
-    expect(dream).toContain('if (!data) setLoading(true)');
+    const loadingHook = dream.slice(dream.indexOf('function useDreamData()'), dream.indexOf('function DreamShell('));
+    expect(loadingHook).not.toContain('setLoading(true)');
+    expect(loadingHook).toContain('if (pending.current) return');
   });
 
   test('PGLite can run AI meeting organization inline while Postgres ensures Worker availability', () => {

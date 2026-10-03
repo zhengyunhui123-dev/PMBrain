@@ -63,10 +63,7 @@ export interface RunImportResult {
   importedSlugs: string[];
 }
 
-export async function runImport(
-  engine: BrainEngine,
-  args: string[],
-  opts: {
+export interface ImportOptions {
     commit?: string;
     strategy?: SyncStrategy;
     sourceId?: string;
@@ -75,17 +72,63 @@ export async function runImport(
     managedBookmark?: boolean;
     /** Sync exclusion globs, matched against the import-root-relative path. */
     exclude?: string[];
-  } = {},
+    runtime?: {
+      signal: AbortSignal;
+      onFile: (result: Record<string, unknown>) => Promise<void>;
+      beforeFile?: (path: string) => Promise<void>;
+      completedPaths?: string[];
+    };
+}
+
+export interface StructuredImportInput {
+  path?: string;
+  noEmbed?: boolean;
+  fresh?: boolean;
+  jsonOutput?: boolean;
+  reportFiles?: boolean;
+  includeOffice?: boolean;
+  documentOcr?: boolean;
+  includeImages?: boolean;
+  structuredDocuments?: boolean;
+  sourceId?: string;
+  workers?: string;
+}
+
+export function runImport(engine: BrainEngine, args: string[], opts: ImportOptions = {}): Promise<RunImportResult> {
+  const sourceIdIdx = args.indexOf('--source-id');
+  const workersIdx = args.indexOf('--workers');
+  const flagValues = new Set<number>();
+  if (workersIdx !== -1) flagValues.add(workersIdx + 1);
+  if (sourceIdIdx !== -1) flagValues.add(sourceIdIdx + 1);
+  return runStructuredImport(engine, {
+    path: args.find((a, i) => !a.startsWith('--') && !flagValues.has(i)),
+    noEmbed: args.includes('--no-embed'),
+    fresh: args.includes('--fresh'),
+    jsonOutput: args.includes('--json'),
+    reportFiles: args.includes('--report-files'),
+    includeOffice: args.includes('--include-office'),
+    documentOcr: args.includes('--document-ocr'),
+    includeImages: args.includes('--include-images'),
+    structuredDocuments: !args.includes('--legacy-document-parser'),
+    sourceId: sourceIdIdx !== -1 ? args[sourceIdIdx + 1] : undefined,
+    workers: workersIdx !== -1 ? args[workersIdx + 1] : undefined,
+  }, opts);
+}
+
+export async function runStructuredImport(
+  engine: BrainEngine,
+  input: StructuredImportInput,
+  opts: ImportOptions = {},
 ): Promise<RunImportResult> {
-  const noEmbed = args.includes('--no-embed');
-  const fresh = args.includes('--fresh');
-  const jsonOutput = args.includes('--json');
-  const reportFiles = args.includes('--report-files');
-  const includeOffice = args.includes('--include-office');
+  const noEmbed = input.noEmbed === true;
+  const fresh = input.fresh === true;
+  const jsonOutput = input.jsonOutput === true;
+  const reportFiles = input.reportFiles === true;
+  const includeOffice = input.includeOffice === true;
   const gateway = await import('../core/ai/gateway.ts');
-  const documentOcr = args.includes('--document-ocr') || gateway.isOcrEnabled();
-  const includeImages = args.includes('--include-images') || documentOcr;
-  const structuredDocuments = !args.includes('--legacy-document-parser');
+  const documentOcr = input.documentOcr === true || gateway.isOcrEnabled();
+  const includeImages = input.includeImages === true || documentOcr;
+  const structuredDocuments = input.structuredDocuments !== false;
 
   // T7 (D9): refuse cleanly when init persisted the deferred-setup sentinel,
   // unless the user is explicitly skipping embedding via `--no-embed` (in
@@ -103,6 +146,7 @@ export async function runImport(
     } catch (e) {
       console.error(`\n${e instanceof Error ? e.message : e}`);
       console.error('Tip: run `gbrain import <dir> --no-embed` to import without embedding now.');
+      if (opts.runtime) throw e;
       process.exit(1);
     }
 
@@ -121,6 +165,7 @@ export async function runImport(
           console.error(e.userMessage);
           console.error('');
         }
+        if (opts.runtime) throw e;
         process.exit(1);
       }
       throw e;
@@ -154,9 +199,7 @@ export async function runImport(
   // `--source-id <id>` opt-in routes the import to that source.
   // Programmatic callers continue passing `opts.sourceId` directly;
   // CLI callers' flag wins over opts when both are set.
-  const sourceIdIdx = args.indexOf('--source-id');
-  const flagSourceId = sourceIdIdx !== -1 ? args[sourceIdIdx + 1] : null;
-  let sourceId: string | undefined = flagSourceId ?? opts.sourceId;
+  let sourceId: string | undefined = input.sourceId ?? opts.sourceId;
 
   // v0.41.13 (#1434): when no explicit source / env / opts.sourceId is set,
   // fall through to the resolver so the new sole_non_default tier (5.5) can
@@ -175,26 +218,23 @@ export async function runImport(
     const { resolveMainSourceId } = await import('../core/source-resolver.ts');
     sourceId = await resolveMainSourceId(engine);
   }
-  const workersIdx = args.indexOf('--workers');
-  const workersArg = workersIdx !== -1 ? args[workersIdx + 1] : null;
   // v0.22.13 (PR #490 Q2): shared parseWorkers helper rejects bad input
   // (--workers 0, -3, "foo") with a loud error instead of silently falling
   // through to 1. Mirrors sync.ts's flag handling.
   const { parseWorkers } = await import('../core/sync-concurrency.ts');
   let workerCount: number;
   try {
-    workerCount = parseWorkers(workersArg ?? undefined) ?? 1;
+    workerCount = parseWorkers(input.workers) ?? 1;
   } catch (e) {
     console.error(e instanceof Error ? e.message : String(e));
+    if (opts.runtime) throw e;
     process.exit(1);
   }
   // Find dir: first non-flag arg that isn't a value for --workers
-  const flagValues = new Set<number>();
-  if (workersIdx !== -1) flagValues.add(workersIdx + 1);
-  if (sourceIdIdx !== -1) flagValues.add(sourceIdIdx + 1);
-  const dirArg = args.find((a, i) => !a.startsWith('--') && !flagValues.has(i));
+  const dirArg = input.path;
 
   if (!dirArg) {
+    if (opts.runtime) throw new Error('Import path is required');
     console.error('Usage: gbrain import <dir> [--no-embed] [--workers N] [--fresh] [--source-id <id>] [--include-office] [--include-images] [--document-ocr] [--legacy-document-parser] [--json]');
     process.exit(1);
   }
@@ -227,7 +267,8 @@ export async function runImport(
         strategy, includeOffice, includeImages, includeSessions: strategy !== 'code',
       });
     }
-  } catch {
+  } catch (error) {
+    if (opts.runtime) throw error;
     allFiles = collectSyncableFiles(dir, {
       strategy, includeOffice, includeImages, includeSessions: strategy !== 'code',
     });
@@ -255,7 +296,7 @@ export async function runImport(
   // see src/core/import-checkpoint.ts for the bug-class this fixes
   // (parallel-import silent-skip and failed-file no-retry).
   const checkpointPath = gbrainPath('import-checkpoint.json');
-  const completed = new Set<string>();
+  const completed = new Set<string>(opts.runtime?.completedPaths ?? []);
   if (!fresh) {
     if (opts.checkpointKey) {
       for (const path of await loadOpCheckpoint(engine, opts.checkpointKey)) completed.add(path);
@@ -308,6 +349,8 @@ export async function runImport(
   }
 
   async function processFile(eng: BrainEngine, filePath: string) {
+    opts.runtime?.signal.throwIfAborted();
+    await opts.runtime?.beforeFile?.(filePath);
     const relativePath = relative(importRoot, filePath);
     if (isOfficeTransientFile(filePath) || isOfficeTransientFile(relativePath)) {
       processed++;
@@ -338,6 +381,7 @@ export async function runImport(
             })
         : await importFile(eng, filePath, relativePath, { noEmbed, sourceId, activePack: importActivePack });
       const _fileMs = Date.now() - _fileT0;
+      opts.runtime?.signal.throwIfAborted();
       if (_fileMs > 5000) {
         console.error(`[pmbrain phase] import.process_file slow ${_fileMs}ms ${relativePath}`);
       }
@@ -396,6 +440,7 @@ export async function runImport(
         }
       }
     } catch (e: unknown) {
+      opts.runtime?.signal.throwIfAborted();
       if (eng.kind === 'pglite' && isGinCorruptionError(e)) {
         if (ginRepaired) {
           throw e instanceof GinIndexUnusableError
@@ -423,11 +468,12 @@ export async function runImport(
       failures.push({ path: relativePath, error: msg });
     }
     processed++;
+    await opts.runtime?.onFile({ path: relativePath, completed: completed.has(relativePath), processed, imported, skipped, errors, chunksCreated });
     tickProgress();
     // Save checkpoint every 100 SUCCESSFUL adds (not every 100 processed).
     // Failed files never enter `completed`, so a flaky file can't push the
     // checkpoint past it — the next run will retry it.
-    if (completed.size > 0 && completed.size % 100 === 0) {
+    if (!opts.runtime && completed.size > 0 && completed.size % 100 === 0) {
       if (opts.checkpointKey) {
         await recordOpCompleted(engine, opts.checkpointKey, Array.from(completed));
       } else {
@@ -517,10 +563,10 @@ export async function runImport(
   // Clear checkpoint on clean completion. On error, the path-based checkpoint
   // preserves only the successfully-completed paths, so the next run retries
   // failed files automatically (they never entered `completed`).
-  if (errors === 0) {
+  if (!opts.runtime && errors === 0) {
     if (opts.checkpointKey) await clearOpCheckpoint(engine, opts.checkpointKey);
     else clearCheckpoint(checkpointPath);
-  } else if (opts.checkpointKey || existsSync(checkpointPath)) {
+  } else if (!opts.runtime && (opts.checkpointKey || existsSync(checkpointPath))) {
     if (opts.checkpointKey && completed.size > 0) {
       await recordOpCompleted(engine, opts.checkpointKey, Array.from(completed));
     }
