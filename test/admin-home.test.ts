@@ -107,7 +107,7 @@ describe('首页按有没有知识库区分，并接上现有能力', () => {
     expect(rememberedChatModel('ollama:qwen', 'deepseek:v4', ['deepseek:v4', 'ollama:qwen'])).toBe('ollama:qwen');
     expect(rememberedChatModel('', 'deepseek:v4', ['deepseek:v4', 'ollama:qwen'])).toBe('deepseek:v4');
     expect(rememberedChatModel('', '', ['ollama:qwen'])).toBe('ollama:qwen');
-    expect(rememberedChatModel('kept-model', 'other', [])).toBe('kept-model');
+    expect(rememberedChatModel('kept-model', 'other', [])).toBe('');
     expect(workbench).toContain('rememberedChatModel');
     expect(workbench).toContain('rememberChatModel');
     expect(workbench).not.toContain('setModel(next.model)');

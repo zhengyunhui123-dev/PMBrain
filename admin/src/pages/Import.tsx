@@ -574,7 +574,7 @@ function NaturalLanguagePanel({
               className="assistant-attach-button"
               aria-label="选择文件夹"
               title="选择文件夹"
-              onClick={() => void desktopApi()?.chooseDirectory().then(selected => { if (selected) setText(selected); })}
+              onClick={() => void desktopApi()?.chooseDirectory().then((selected: string | null) => { if (selected) setText(selected); })}
               disabled={loading}
             >
               <Folder aria-hidden="true" />

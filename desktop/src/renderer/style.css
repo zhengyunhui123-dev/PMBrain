@@ -277,8 +277,8 @@ select { cursor: pointer; appearance: auto; -webkit-appearance: auto; }
 .form-footer { justify-content: space-between; margin-top: 34px; padding-top: 24px; border-top: 1px solid var(--line); }
 .form-footer p { max-width: 65%; margin: 0; color: var(--text-muted); font: 10px Consolas, monospace; overflow-wrap: anywhere; }
 .credential-switch { display: flex; gap: 24px; padding: 13px 15px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
-.credential-switch label { color: var(--text-secondary); font-size: 12px; }
-.credential-switch input { width: auto; height: auto; margin-right: 7px; accent-color: var(--accent); }
+.credential-switch label { display: inline-flex; align-items: center; gap: 8px; margin: 0; color: var(--text-secondary); font-size: 12px; }
+.credential-switch input { width: 16px; min-width: 16px; height: 16px; margin: 0; padding: 0; flex: 0 0 16px; accent-color: var(--accent); }
 .integration-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 18px; }
 .integration-card { position: relative; min-width: 0; min-height: 164px; padding: 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); box-shadow: var(--panel-shadow); transition: border-color .16s ease, transform .16s ease; }
 .integration-card:hover { border-color: color-mix(in srgb, var(--accent) 28%, var(--line)); transform: translateY(-1px); }

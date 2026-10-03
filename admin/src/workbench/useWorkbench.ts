@@ -47,26 +47,43 @@ export function useWorkbench() {
   const [loaded, setLoaded] = useState(false);
   const active = useRef<string | undefined>(undefined);
   const mounted = useRef(true);
+  const modelsRef = useRef(models);
+  modelsRef.current = models;
   const refresh = async () => {
     const result = await workbenchRequest<{ conversations: ConversationRow[] }>('/conversations');
     if (mounted.current) setRows(result.conversations);
   };
   useEffect(() => {
     mounted.current = true; let cancelled = false;
+    let revision = 0;
     Promise.all([workbenchRequest<{ conversations: ConversationRow[] }>('/conversations'), workbenchRequest<{ models: WorkbenchModel[] }>('/models'), workbenchRequest<KnowledgeAssistantSettings>('/assistant')]).then(([history, available, settings]) => {
       if (cancelled) return;
-      setRows(history.conversations); setModels(available.models); setAssistant(settings);
+      const currentModels = revision === 0 ? available.models : modelsRef.current;
+      if (revision === 0) { modelsRef.current = currentModels; setModels(currentModels); }
+      setRows(history.conversations); setAssistant(settings);
       const remembered = (() => { try { return localStorage.getItem(CHAT_MODEL_KEY) || ''; } catch { return ''; } })();
-      setModel(rememberedChatModel(remembered, settings.model || '', available.models.map(item => item.id)));
+      setModel(current => rememberedChatModel(revision === 0 ? remembered : current, settings.model || '', currentModels.map(item => item.id)));
       setKnowledge(settings.knowledge); setLoaded(true);
     }).catch(reason => { if (!cancelled) { setError(String(reason.message || reason)); setLoaded(true); } });
-    const refreshModels = () => { void workbenchRequest<{ models: WorkbenchModel[] }>('/models').then(result => { if (!cancelled) setModels(result.models); }).catch(reason => { if (!cancelled) setError(String(reason.message || reason)); }); };
-    const onRemembered = (event: Event) => { const id = (event as CustomEvent<string>).detail; if (id) setModel(id); };
-    const onStorage = (event: StorageEvent) => { if (event.key === CHAT_MODEL_KEY && event.newValue) setModel(event.newValue); };
+    const refreshModels = (preferred: unknown = null) => {
+      const requested = ++revision;
+      void workbenchRequest<{ models: WorkbenchModel[] }>('/models').then(result => {
+        if (cancelled || requested !== revision) return;
+        modelsRef.current = result.models;
+        setModels(result.models);
+        setModel(current => rememberedChatModel(typeof preferred === 'string' ? preferred : current, '', result.models.map(item => item.id)));
+      }).catch(reason => { if (!cancelled && requested === revision) setError(String(reason.message || reason)); });
+    };
+    const onRemembered = (event: Event) => { const id = (event as CustomEvent<string>).detail; if (modelsRef.current.some(item => item.id === id)) setModel(id); };
+    const onStorage = (event: StorageEvent) => { if (event.key === CHAT_MODEL_KEY) refreshModels(event.newValue); };
+    const onVisible = () => { if (document.visibilityState === 'visible') refreshModels(); };
     window.addEventListener('pmbrain:models-updated', refreshModels);
+    window.addEventListener('focus', refreshModels);
+    window.addEventListener('hashchange', refreshModels);
+    document.addEventListener('visibilitychange', onVisible);
     window.addEventListener(CHAT_MODEL_EVENT, onRemembered);
     window.addEventListener('storage', onStorage);
-    return () => { cancelled = true; mounted.current = false; window.removeEventListener('pmbrain:models-updated', refreshModels); window.removeEventListener(CHAT_MODEL_EVENT, onRemembered); window.removeEventListener('storage', onStorage); };
+    return () => { cancelled = true; mounted.current = false; window.removeEventListener('pmbrain:models-updated', refreshModels); window.removeEventListener('focus', refreshModels); window.removeEventListener('hashchange', refreshModels); document.removeEventListener('visibilitychange', onVisible); window.removeEventListener(CHAT_MODEL_EVENT, onRemembered); window.removeEventListener('storage', onStorage); };
   }, []);
   const running = conversation?.messages.some(message => message.status === 'running') ?? false;
   useEffect(() => {

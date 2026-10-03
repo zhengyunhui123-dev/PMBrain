@@ -5,6 +5,7 @@ import { availableServiceModels } from '../../../shared/model-services';
 import type { ConsoleRun } from '../../../shared/contracts/common';
 import { waitForConsoleRun } from '../pages/import/import-support';
 import { createIntent, importBuildDetail, importBuildSteps, suggestedChatModel, type CreateIntent } from './home-model';
+import type { DesktopSetupState, SidecarState } from '../../../desktop/src/preload';
 import './home.css';
 
 const STEPS = [
@@ -27,7 +28,7 @@ async function waitUntilReady(): Promise<void> {
   if (current?.phase === 'ready') return;
   await new Promise<void>((resolve, reject) => {
     const timer = window.setTimeout(() => { stop(); reject(new Error('知识库服务启动超时。可以先回到首页，稍后再试。')); }, 120000);
-    const stop = desktop.onState(state => {
+    const stop = desktop.onState((state: SidecarState) => {
       if (state.phase === 'ready') { window.clearTimeout(timer); stop(); resolve(); }
       if (state.phase === 'failed') { window.clearTimeout(timer); stop(); reject(new Error(state.message || '知识库服务没有启动')); }
     });
@@ -60,7 +61,7 @@ export function CreateLibrary({ onDone, onCreated, onOpenSettings }: {
   const index = STEPS.findIndex(item => item[0] === step);
   useEffect(() => {
     if (!desktop) return;
-    void desktop.getSetup().then(result => {
+    void desktop.getSetup().then((result: DesktopSetupState) => {
       const setup = result.setup;
       setPath(setup.defaults.databasePath);
       setDirectory(setup.defaults.knowledgeDirectory);
@@ -69,7 +70,7 @@ export function CreateLibrary({ onDone, onCreated, onOpenSettings }: {
       setDatabaseUrl(setup.current.databaseUrl ?? '');
       setChatModel(setup.current.chatModel ?? '');
       if (!setup.needsSetup) setStep('sources');
-    }).catch(reason => setError(textOf(reason)));
+    }).catch((reason: unknown) => setError(textOf(reason)));
   }, [desktop]);
   const loadModels = async () => {
     if (!desktop) return;
@@ -84,7 +85,7 @@ export function CreateLibrary({ onDone, onCreated, onOpenSettings }: {
   };
   useEffect(() => {
     if (step !== 'models') return;
-    void loadModels().catch(reason => setError(textOf(reason)));
+    void loadModels().catch((reason: unknown) => setError(textOf(reason)));
   }, [step]);
   const create = async () => {
     if (!desktop) return;
@@ -177,7 +178,7 @@ export function CreateLibrary({ onDone, onCreated, onOpenSettings }: {
         <h1>选择资料来源</h1>
         <p>可以选择一个文件夹，或几个文件。PMBrain 会读取文档、笔记和常见办公文件。这一步可以跳过，以后在首页的「导入资料」里继续。</p>
         <div className="create-actions">
-          <button type="button" onClick={() => void desktop.chooseDirectory().then(selected => { if (selected) setFolder(selected); })}>选择文件夹</button>
+          <button type="button" onClick={() => void desktop.chooseDirectory().then((selected: string | null) => { if (selected) setFolder(selected); })}>选择文件夹</button>
           <label className="create-choice">选择文件<input className="wb-file-input" aria-label="选择文件" type="file" multiple onChange={event => setFiles(Array.from(event.target.files ?? []))} /></label>
         </div>
         {folder && <p className="create-path">文件夹：{folder}</p>}

@@ -45,8 +45,8 @@ function factTtlHint(validUntil: string | null | undefined): string | null {
   return `临时记忆 · 还有 ${days} 天过期`;
 }
 
-export function BrainDataPage() {
-  const { overview } = useOverview();
+export function BrainDataPage({ product = false }: { product?: boolean } = {}) {
+  const { overview, reload: reloadOverview } = useOverview();
   const initialGraphTarget = useRef((() => {
     const [, query = ''] = window.location.hash.replace(/^#/, '').split('?');
     const params = new URLSearchParams(query);
@@ -105,6 +105,12 @@ export function BrainDataPage() {
     setFactRows([]);
     setMeta({ total: data.total, page: data.page, pages: data.pages, limit: data.limit ?? filters.pageSize });
   }, [filters]);
+
+  useEffect(() => {
+    const refresh = () => { void Promise.all([loadRows(), reloadOverview()]).catch(error => setPageError(error instanceof Error ? error.message : String(error))); };
+    window.addEventListener('pmbrain:materials-imported', refresh);
+    return () => window.removeEventListener('pmbrain:materials-imported', refresh);
+  }, [loadRows, reloadOverview]);
 
   useEffect(() => {
     void loadRows().catch(error => {
@@ -272,12 +278,13 @@ export function BrainDataPage() {
       <div className="pm-section-head">
         <div>
           <div className="pm-eyebrow">DATABASE · MARKDOWN · KNOWLEDGE</div>
-          <h1>知识数据</h1>
+          <h1>{product ? '知识库' : '知识数据'}</h1>
           <p className="pm-page-intro">
-            这里展示数据库里的知识页、热记忆事实和观点记录。知识页是 Markdown；事实是 Agent 记住的独立陈述，不是页面。
+            {product ? '查看和管理你的资料、知识与事实。' : '这里展示数据库里的知识页、热记忆事实和观点记录。知识页是 Markdown；事实是 Agent 记住的独立陈述，不是页面。'}
             {overview && ` 当前 ${overview.stats.page_count} 个知识页 · ${overview.stats.active_fact_count ?? 0} 条有效事实 · ${overview.stats.link_count} 条关系。`}
           </p>
         </div>
+        {product && <button type="button" className="pm-primary" onClick={() => window.dispatchEvent(new Event('pmbrain:open-import'))}><Plus size={16} /> 添加资料</button>}
       </div>
       {pageError && <div className="pm-error-text">{pageError}</div>}
       <div className="pm-card">

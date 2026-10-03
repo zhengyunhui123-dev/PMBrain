@@ -1,8 +1,15 @@
 import { FALLBACK_CONTEXT_TOKENS, type ContextPolicy, type WorkbenchMessage } from '../../../shared/workbench';
 import { ATTACHMENT_PROMPT_CAP } from './attachments';
+import { estimateEmbedTokens } from '../../core/chunkers/token-estimate';
 
 export { FALLBACK_CONTEXT_TOKENS };
 export const OUTPUT_RESERVE_TOKENS = 4_096;
+export const SUMMARY_OUTPUT_TOKENS = 1_200;
+
+export function summaryInputBudget(contextWindow?: number): number {
+  const windowTokens = contextWindow && contextWindow >= 2048 ? contextWindow : FALLBACK_CONTEXT_TOKENS;
+  return windowTokens - Math.min(SUMMARY_OUTPUT_TOKENS, Math.floor(windowTokens / 4)) - 256;
+}
 
 export function conversationContext(messages: WorkbenchMessage[]): WorkbenchMessage[] {
   const result = messages.filter(message => message.status === 'complete');
@@ -11,17 +18,21 @@ export function conversationContext(messages: WorkbenchMessage[]): WorkbenchMess
 }
 
 export function estimateTokens(text: string): number {
-  return Math.ceil(text.length / 2);
+  return estimateEmbedTokens(text);
 }
 
-function messageTokens(message: WorkbenchMessage): number {
-  let chars = message.text.length;
+export function messageTokens(message: WorkbenchMessage): number {
+  let tokens = estimateTokens(message.text) + 8;
   for (const item of message.attachments ?? []) {
-    chars += Math.min(item.text?.length ?? 0, ATTACHMENT_PROMPT_CAP) + (item.note?.length ?? 0);
-    if (item.route === 'vision' || item.route === 'pdf-file') chars += 4_000;
+    tokens += estimateTokens(`${item.name}\n${(item.text ?? '').slice(0, ATTACHMENT_PROMPT_CAP)}\n${item.note ?? ''}`) + 64;
+    if (item.route === 'vision' || item.route === 'pdf-file') tokens += 4_000;
   }
-  chars += message.attachmentSupplement?.length ?? 0;
-  return Math.ceil(chars / 2);
+  tokens += estimateTokens(message.attachmentSupplement ?? '');
+  return tokens;
+}
+
+export function knowledgeReserve(contextWindow: number | undefined, threshold: number): number {
+  return Math.min(8_192, Math.floor(contextBudget(contextWindow, threshold) / 3));
 }
 
 export function contextBudget(contextWindow: number | undefined, threshold: number): number {
@@ -32,10 +43,10 @@ export function contextBudget(contextWindow: number | undefined, threshold: numb
   return Math.floor(usable * ratio);
 }
 
-export function planContext(messages: WorkbenchMessage[], policy: ContextPolicy, options: { contextWindow?: number; summary?: string } = {}): { recent: WorkbenchMessage[]; older: WorkbenchMessage[] } {
+export function planContext(messages: WorkbenchMessage[], policy: ContextPolicy, options: { contextWindow?: number; summary?: string; systemPrompt?: string; additionalTokens?: number } = {}): { recent: WorkbenchMessage[]; older: WorkbenchMessage[] } {
   const complete = conversationContext(messages);
   const summaryTokens = options.summary ? estimateTokens(options.summary) : 0;
-  const budget = Math.max(256, contextBudget(options.contextWindow, policy.threshold) - summaryTokens);
+  const budget = Math.max(0, contextBudget(options.contextWindow, policy.threshold) - summaryTokens - estimateTokens(options.systemPrompt ?? '') - (options.additionalTokens ?? 0) - 128);
   const maxMessages = Math.max(2, policy.maxMessages);
   const recent: WorkbenchMessage[] = [];
   let tokens = 0;

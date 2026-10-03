@@ -2,7 +2,7 @@ import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { ArrowLeft, Box, Cable, CircleHelp, Database, FileText, Home, Link, MessageCircle, Monitor, PanelLeftClose, PanelLeftOpen, PenLine, RefreshCw, Search, Settings, ShieldCheck, SlidersHorizontal, Waypoints } from 'lucide-react';
 import { App as ExistingPages } from '../App';
-import { ImportDataPage } from '../pages/Import';
+import { ImportMaterials } from './ImportMaterials';
 import { ConnectionCenterPage } from '../pages/Connection';
 import { SettingsPage, AppearanceSettings } from '../pages/Settings';
 import { desktopApi } from '../lib/product-fetch';
@@ -60,7 +60,12 @@ export function ProductApp() {
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem(NAV_COLLAPSED_KEY) !== '0');
   const [maintenanceOpen, setMaintenanceOpen] = useState(false);
   const [healthOpen, setHealthOpen] = useState(false);
-  const navigate = (target: string) => { window.location.hash = target; setPage(target.split('?')[0]); };
+  const [importOpen, setImportOpen] = useState(false);
+  const previousPage = useRef(['import', 'knowledge-import'].includes(page) ? 'home' : page);
+  const navigate = (target: string) => {
+    if (['import', 'knowledge-import'].includes(target)) { setImportOpen(true); return; }
+    window.location.hash = target; setPage(target.split('?')[0]);
+  };
   const isSettings = page === 'settings' || page.startsWith('settings-') || page === 'config';
   const category = page === 'config' ? 'models' : settingKey(page);
   const menuMcp = Boolean(desktop) && page === 'mcp' && !isSettings;
@@ -87,10 +92,18 @@ export function ProductApp() {
   const mode = libraryMode(Boolean(desktop), needsSetup);
   const maintenance = maintenanceView({ startup, servicePhase: service?.phase ?? null, updatePhase: update?.phase ?? null, updateMessage: update?.message, needsSetup: needsSetup === true });
   useEffect(() => {
-    const updatePage = () => setPage(currentPage());
+    if (legacyMobile) return;
+    const updatePage = () => {
+      const next = currentPage();
+      if (['import', 'knowledge-import'].includes(next)) { setImportOpen(true); window.location.hash = previousPage.current; setPage(previousPage.current); }
+      else { previousPage.current = next; setPage(next); }
+    };
+    const openImport = () => setImportOpen(true);
+    updatePage();
     window.addEventListener('hashchange', updatePage);
-    return () => window.removeEventListener('hashchange', updatePage);
-  }, []);
+    window.addEventListener('pmbrain:open-import', openImport);
+    return () => { window.removeEventListener('hashchange', updatePage); window.removeEventListener('pmbrain:open-import', openImport); };
+  }, [legacyMobile]);
   useEffect(() => applyThemeMode(theme), [theme]);
   useEffect(() => {
     if (!healthOpen) return;
@@ -102,14 +115,14 @@ export function ProductApp() {
     if (!desktop) return;
     const fail = (error: unknown) => setStateError(String(error));
     void desktop.getState().then(setService).catch(fail);
-    void desktop.getSetup().then(result => setNeedsSetup(result.setup.needsSetup)).catch(fail);
-    void desktop.getTheme().then(result => setTheme(result.source)).catch(fail);
+    void desktop.getSetup().then((result: { setup: { needsSetup: boolean } }) => setNeedsSetup(result.setup.needsSetup)).catch(fail);
+    void desktop.getTheme().then((result: { source: ThemeMode }) => setTheme(result.source)).catch(fail);
     void desktop.getStartupProgress().then(setStartup).catch(() => undefined);
-    void desktop.getUpdateState().then(state => { if (state) setUpdate(state); }).catch(() => undefined);
-    const unsubscribe = desktop.onState(next => { setService(next); if (next.phase === 'ready') setNeedsSetup(false); });
-    const unsubscribeTheme = desktop.onThemeState(next => setTheme(next.source));
+    void desktop.getUpdateState().then((state: UpdateState | null) => { if (state) setUpdate(state); }).catch(() => undefined);
+    const unsubscribe = desktop.onState((next: SidecarState) => { setService(next); if (next.phase === 'ready') setNeedsSetup(false); });
+    const unsubscribeTheme = desktop.onThemeState((next: { source: ThemeMode }) => setTheme(next.source));
     const unsubscribeNavigation = desktop.onNavigate(navigate);
-    const unsubscribePanel = desktop.onShowPanel(panel => navigate(`settings-${panel}`));
+    const unsubscribePanel = desktop.onShowPanel((panel: string) => navigate(`settings-${panel}`));
     const unsubscribeUpdates = desktop.onShowUpdates(() => navigate('settings-updates'));
     const unsubscribeStartup = desktop.onStartupProgress(setStartup);
     const unsubscribeUpdateState = desktop.onUpdateState(setUpdate);
@@ -118,7 +131,7 @@ export function ProductApp() {
     return () => { unsubscribe(); unsubscribeTheme(); unsubscribeNavigation(); unsubscribePanel(); unsubscribeUpdates(); unsubscribeStartup(); unsubscribeUpdateState(); window.removeEventListener('pmbrain:settings-panel', showPanel); };
   }, []);
   const changeTheme = (next: ThemeMode) => {
-    if (desktop) void desktop.setTheme(next).then(() => setTheme(next)).catch(error => setStateError(String(error)));
+    if (desktop) void desktop.setTheme(next).then(() => setTheme(next)).catch((error: unknown) => setStateError(String(error)));
     else { storeThemeMode(next); setTheme(next); }
   };
   const toggleNav = () => setCollapsed(current => {
@@ -169,7 +182,7 @@ export function ProductApp() {
         {ready ? <Workbench /> : <div className="product-welcome"><h1>{needsSetup ? '还没有知识库' : '知识助手暂时不可用'}</h1><p>{needsSetup ? '创建知识库后，就可以基于资料提问。' : service?.phase === 'failed' ? service.message : '知识库服务准备好后会自动打开。'}</p><button onClick={() => navigate(needsSetup ? 'home' : service?.phase === 'failed' ? 'settings-recovery' : 'settings-system')}>{needsSetup ? '返回首页' : '查看服务'}</button></div>}
       </div>
       {!isSettings && page === 'docs' && <HelpPage />}
-      {!isSettings && page === 'knowledge-import' && ready && <div className="product-existing"><ImportDataPage focus="import" /></div>}
+      {ready && <ImportMaterials open={importOpen} onClose={() => setImportOpen(false)} />}
       {showEmbedded && <div className="product-existing"><ExistingPages embedded /></div>}
       <div ref={bind.menu} className="product-mcp-page" hidden={!menuMcp} />
       <div ref={bind.park} className="desktop-settings-park" hidden />

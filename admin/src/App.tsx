@@ -263,7 +263,7 @@ export function App({ embedded = false }: { embedded?: boolean } = {}) {
       </header>
       <main className="main">
         {page === 'dashboard' && <KnowledgeWorkbenchPage onNavigate={navigate} />}
-        {page === 'dream' && <DreamOverviewPage />}
+        {page === 'dream' && <DreamOverviewPage product={embedded} />}
         {page === 'dream-execute' && <DreamExecutePage />}
         {page === 'dream-knowledge' && <DreamKnowledgePage />}
         {page === 'dream-takes' && <DreamTakesPage />}
@@ -271,7 +271,7 @@ export function App({ embedded = false }: { embedded?: boolean } = {}) {
         {page === 'dream-calibration' && <DreamCalibrationPage />}
         {page === 'dream-insights' && <DreamInsightsPage />}
         {page === 'import' && <ImportDataPage />}
-        {page === 'data' && <BrainDataPage />}
+        {page === 'data' && <BrainDataPage product={embedded} />}
         {page === 'graph' && (
           <React.Suspense fallback={<div className="pm-empty">正在打开知识星图…</div>}>
             <KnowledgeGraphPage />

@@ -2,7 +2,7 @@ export const CHAT_MODEL_KEY = 'pmbrain.workbench.chatModel';
 export const CHAT_MODEL_EVENT = 'pmbrain:chat-model';
 
 export function rememberedChatModel(remembered: string, settingsModel: string, modelIds: readonly string[]): string {
-  if (remembered) return remembered;
+  if (remembered && modelIds.includes(remembered)) return remembered;
   if (settingsModel && modelIds.includes(settingsModel)) return settingsModel;
   return modelIds[0] ?? '';
 }
