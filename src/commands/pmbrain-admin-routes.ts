@@ -77,8 +77,6 @@ import {
   resolveCliEntry,
   startActionRun,
   startCaptureRun,
-  startDreamRun,
-  startImportRun,
   startMarkdownExportRun,
   startSourceAddRun,
   startSourceGitRun,
@@ -196,6 +194,7 @@ import { OperationError } from '../core/operation-error.ts';
 import { SourceOpError } from '../core/sources-ops.ts';
 import { registerWorkbenchRoutes } from '../product/workbench/routes.ts';
 import { reloadLiveGateway } from '../core/ai/reload-live-gateway.ts';
+import { ProductTaskRuntime } from '../product/tasks/runtime.ts';
 
 export interface PmbrainAdminRouteOptions {
   app: express.Express;
@@ -207,6 +206,7 @@ export interface PmbrainAdminRouteOptions {
   getPgliteConnected?: () => boolean;
   reconnectPglite?: () => Promise<void>;
   ensureAdminWorkerStarted: () => Promise<unknown>;
+  productTasks: ProductTaskRuntime;
 }
 
 export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
@@ -224,6 +224,9 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
     ensureAdminWorkerStarted,
   } = options;
   registerWorkbenchRoutes(app, requireAdmin, engine, config);
+  const productTasks = options.productTasks;
+  const readRuns = async () => [...(getPgliteBusy() ? productTasks.cachedRuns() : await productTasks.listRuns()), ...listRuns()];
+  const readRun = async (id: string) => (getPgliteBusy() ? productTasks.cachedRuns().find(run => run.id === id) : await productTasks.getRun(id)) ?? getRun(id);
   app.post('/admin/api/gateway/reload', requireAdmin, async (_req: Request, res: Response) => {
     try {
       await reloadLiveGateway(engine);
@@ -233,9 +236,8 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
       res.status(500).json({ error: message });
     }
   });
-  let adminUploadTail: Promise<void> = Promise.resolve();
   app.get('/admin/api/task-center', requireAdmin, async (_req: Request, res: Response) => {
-    const runs = listRuns();
+    const runs = await readRuns();
     const hasActiveRun = runs.some(run => run.status === 'queued' || run.status === 'running');
     let queue: unknown = null;
     if (!getPgliteBusy()) {
@@ -486,7 +488,7 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
       const input = WaitingScanRequestSchema.parse(req.body ?? {});
       const selected = input.lanes ?? ['gmail', 'meeting', 'conversation'];
       const gmailRun = selected.includes('gmail')
-        ? await startActionRun('sync_all', process.cwd(), runHooks, {})
+        ? await productTasks.submitSync()
         : null;
       const result = await scanWaiting(engine, selected);
       sendAdminContract(res, ProductSurfacePayloadSchema, {
@@ -867,7 +869,7 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
       return;
     }
     if (!isAdminDreamScheduleDue(settings, now)) return;
-    const hasActiveDream = listRuns().some(run => (
+    const hasActiveDream = (await readRuns()).some(run => (
       run.kind.startsWith('dream_') && (run.status === 'running' || run.status === 'queued')
     ));
     if (hasActiveDream) return;
@@ -878,11 +880,11 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
       // Same entry as Admin「快速维护」: dream --preset quick. No parallel organize pipeline.
       // Unattended runs keep a 120-minute safety timeout; manual quick has no default timeout.
       await engine.setConfig(ADMIN_DREAM_SCHEDULE_LAST_STARTED_DATE_KEY, today);
-      const run = await startDreamRun({
+      const run = await productTasks.submitDream({
         preset: 'quick',
         allSources: true,
         timeoutMs: 120 * 60 * 1000,
-      }, process.cwd(), runHooks);
+      }, 'scheduled');
       if (run.status !== 'running' && run.status !== 'queued') {
         throw new Error(run.error || `dream_schedule_start_${run.status}`);
       }
@@ -1026,8 +1028,7 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
       setGenerativeModelEnabled(enabled);
       let stopped: Array<{ id: string; kind: string; status: string }> = [];
       if (wasEnabled && !enabled) {
-        const { cancelRun, listRuns } = await import('./natural-lang/index.ts');
-        const active = listRuns().filter((run) => {
+        const active = (await readRuns()).filter((run) => {
           if (run.status !== 'running' && run.status !== 'queued') return false;
           if (!run.kind.startsWith('dream_')) return false;
           if (run.kind.includes('quick')) return false;
@@ -1036,7 +1037,7 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
           return phaseRequiresGenerativeModel(phase);
         });
         for (const run of active) {
-          const next = await cancelRun(run.id);
+          const next = await productTasks.cancel(run.id) ?? await cancelRun(run.id);
           if (next) stopped.push({ id: next.id, kind: next.kind, status: next.status });
         }
         console.error(
@@ -1472,13 +1473,13 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
     }
   });
 
-  app.get('/admin/api/runs', requireAdmin, (_req: Request, res: Response) => {
-    res.json({ rows: listRuns() });
+  app.get('/admin/api/runs', requireAdmin, async (_req: Request, res: Response) => {
+    res.json({ rows: await readRuns() });
   });
 
-  app.get('/admin/api/runs/:id', requireAdmin, (req: Request, res: Response) => {
+  app.get('/admin/api/runs/:id', requireAdmin, async (req: Request, res: Response) => {
     const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
-    const run = id ? getRun(id) : null;
+    const run = id ? await readRun(id) : null;
     if (!run) {
       res.status(404).json({ error: 'run_not_found' });
       return;
@@ -1488,12 +1489,23 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
 
   app.post('/admin/api/runs/:id/cancel', requireAdmin, async (req: Request, res: Response) => {
     const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
-    const run = id ? await cancelRun(id) : null;
+    const run = id ? await productTasks.cancel(id) ?? await cancelRun(id) : null;
     if (!run) {
       res.status(404).json({ error: 'run_not_found' });
       return;
     }
     res.json(run);
+  });
+
+  app.post('/admin/api/runs/:id/retry', requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+      const run = id ? await productTasks.retry(id) : null;
+      if (!run) { res.status(404).json({ error: 'run_not_found' }); return; }
+      sendAdminContract(res, RunAcceptedResponseSchema, { runId: run.id, status: run.status }, 202);
+    } catch (error) {
+      res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
+    }
   });
 
   app.post('/admin/api/runs/action', requireAdmin, express.json(), async (req: Request, res: Response) => {
@@ -1503,10 +1515,12 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
         res.status(400).json({ error: 'unsupported_action' });
         return;
       }
-      const run = await startActionRun(action, process.cwd(), runHooks, {
-        embedCatchUp: action === 'embed_stale' && req.body?.catchUp === true,
+      const run = action === 'embed_stale' ? await productTasks.submitEmbed({
+        catchUp: req.body?.catchUp === true,
         forceReembed: action === 'embed_stale' && req.body?.forceReembed === true,
-      });
+      }) : action === 'sync_all'
+        ? await productTasks.submitSync()
+        : await startActionRun(action, process.cwd(), runHooks, {});
       if (action === 'embed_stale' && req.body?.forceReembed === true) {
         const { markEmbeddingRebuildRunning } = await import('../core/embedding-rebuild-state.ts');
         markEmbeddingRebuildRunning();
@@ -1520,7 +1534,7 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
   app.post('/admin/api/import-runs', requireAdmin, express.json({ limit: '16kb' }), async (req: Request, res: Response) => {
     try {
       const input = ImportRunRequestSchema.parse(req.body);
-      const run = await startImportRun(engine, {
+      const run = await productTasks.submitImport({
         path: input.path,
         sourceId: input.sourceId,
         includeOffice: true,
@@ -1529,9 +1543,7 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
         structuredDocuments: true,
         documentOcr: true,
         workers: input.workers,
-        fresh: true,
-        reportFiles: true,
-      }, process.cwd(), runHooks);
+      });
       sendAdminContract(res, ImportRunResponseSchema, { runId: run.id, status: run.status });
     } catch (e) {
       res.status(400).json({ error: e instanceof Error ? e.message : 'import_run_failed' });
@@ -1556,13 +1568,6 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
     },
     async (req: Request, res: Response) => {
       let tempDir: string | null = null;
-      let releaseUploadSlot: (() => void) | null = null;
-      let uploadSlotReleased = false;
-      const releaseUpload = () => {
-        if (uploadSlotReleased) return;
-        uploadSlotReleased = true;
-        releaseUploadSlot?.();
-      };
       try {
         const fileName = normalizeAdminUploadFilename(req.get('x-pmbrain-filename'));
         const fileKind = classifyAdminUploadFilename(fileName);
@@ -1585,28 +1590,7 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
           await writeFile(filePath, req.body, { flag: 'wx', mode: 0o600 });
         }
 
-        const previousUpload = adminUploadTail;
-        adminUploadTail = new Promise<void>((resolve) => {
-          releaseUploadSlot = resolve;
-        });
-        await previousUpload;
-
-        const cleanup = async () => {
-          if (tempDir) await removeAdminUploadTempDir(tempDir);
-        };
-        const uploadRunHooks = {
-          acquireExclusive: runHooks?.acquireExclusive,
-          beforeSpawn: runHooks?.beforeSpawn,
-          afterComplete: async () => {
-            try {
-              await runHooks?.afterComplete?.();
-            } finally {
-              await cleanup();
-              releaseUpload();
-            }
-          },
-        };
-        const run = await startImportRun(engine, {
+        const run = await productTasks.submitImport({
           path: filePath,
           sourceId: firstQueryValue(req.query.sourceId),
           includeOffice: true,
@@ -1615,19 +1599,11 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
           structuredDocuments: true,
           documentOcr: true,
           workers,
-          reportFiles: true,
-        }, process.cwd(), uploadRunHooks);
-
-        // beforeSpawn failures return a terminal run without invoking
-        // afterComplete, so release the staging directory here as well.
-        if (run.status !== 'running' && run.status !== 'queued') {
-          await cleanup();
-          releaseUpload();
-        }
+          stagingDir: tempDir,
+        });
         sendAdminContract(res, ImportUploadRunResponseSchema, { runId: run.id, status: run.status, fileName }, 202);
       } catch (e) {
         if (tempDir) await removeAdminUploadTempDir(tempDir);
-        releaseUpload();
         const message = e instanceof Error ? e.message : 'import_upload_run_failed';
         res.status(message.startsWith('Unsupported file type:') ? 415 : 400).json({ error: message });
       }
@@ -1669,7 +1645,7 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
         engine: configured.engine,
         chatModel: configured.chat_model,
       });
-      const run = await startDreamRun(request, process.cwd(), runHooks);
+      const run = await productTasks.submitDream(request);
       sendAdminContract(res, DreamRunResponseSchema, { runId: run.id, status: run.status });
     } catch (e) {
       const { errorPayloadFromGenerativeDisabled } = await import('../core/model-usage.ts');
@@ -1770,9 +1746,9 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
     }
   });
 
-  app.get('/admin/api/import-runs/:id', requireAdmin, (req: Request, res: Response) => {
+  app.get('/admin/api/import-runs/:id', requireAdmin, async (req: Request, res: Response) => {
     const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
-    const run = id ? getRun(id) : null;
+    const run = id ? await readRun(id) : null;
     if (!run) {
       res.status(404).json({ error: 'run_not_found' });
       return;

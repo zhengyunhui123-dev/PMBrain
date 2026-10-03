@@ -394,6 +394,7 @@ export interface CycleOpts {
   pull?: boolean;
   /** Include committed Office/PDF files in the sync phase. Default false. */
   includeOffice?: boolean;
+  syncConcurrency?: number;
   /**
    * Called between phases AND before runCycle returns. Awaited even
    * after phase failure. Hook exceptions are logged, never fatal.
@@ -979,6 +980,7 @@ async function runPhaseSync(
   pull: boolean,
   willRunExtractPhase: boolean,
   includeOffice: boolean,
+  concurrency?: number,
 ): Promise<SyncPhaseResult> {
   try {
     const { performSync } = await import('../commands/sync.ts');
@@ -1000,6 +1002,7 @@ async function runPhaseSync(
       includeOffice,
       includeImages: documentOcr,
       documentOcr,
+      concurrency,
     });
     const syncedCount = result.added + result.modified;
     const uncommittedCount = result.uncommitted
@@ -1790,6 +1793,7 @@ export async function runCycle(
           pull,
           phases.includes('extract'),
           opts.includeOffice === true,
+          opts.syncConcurrency,
         ));
         result.duration_ms = duration_ms;
         // Capture changed slugs for incremental extract.

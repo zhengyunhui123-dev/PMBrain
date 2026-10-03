@@ -532,8 +532,8 @@ def embedding_switch_journey(
                 current = [
                     run for run in rows
                     if run.get("kind") == "embed_stale"
-                    and "--catch-up" in (run.get("command") or [])
                     and isinstance(run.get("id"), str)
+                    and run['id'].startswith('task-')
                 ]
                 current.sort(key=lambda run: str(run.get("startedAt", "")), reverse=True)
                 if current:
@@ -586,7 +586,7 @@ def embedding_switch_journey(
                 f"Background embedding rebuild did not complete: {rebuild}; "
                 f"last response={last_rebuild_response}"
             )
-        if "--catch-up" not in (rebuild.get("command") or []):
+        if rebuild.get("kind") != 'embed_stale' or not (rebuild.get('result') or {}).get('catchUp'):
             raise AssertionError(f"Embedding rebuild was not handed to the catch-up task: {rebuild}")
     finally:
         admin_browser.close()

@@ -196,6 +196,7 @@ export const api = {
   runs: () => apiFetch('/admin/api/runs'),
   run: (id: string) => apiFetch(`/admin/api/runs/${encodeURIComponent(id)}`),
   cancelRun: (id: string) => apiFetch(`/admin/api/runs/${encodeURIComponent(id)}/cancel`, { method: 'POST' }),
+  retryRun: (id: string) => apiFetch(`/admin/api/runs/${encodeURIComponent(id)}/retry`, { method: 'POST' }),
   startActionRun: (action: string, extra?: { catchUp?: boolean; forceReembed?: boolean }) =>
     apiFetch('/admin/api/runs/action', { method: 'POST', body: JSON.stringify({ action, ...extra }) }),
   searchIndexHealth: () => apiFetch<{

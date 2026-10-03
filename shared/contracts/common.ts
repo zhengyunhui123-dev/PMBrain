@@ -10,6 +10,7 @@ export const RunAcceptedResponseSchema = z.object({
 export const ConsoleRunSchema = z.object({
   id: z.string(),
   kind: z.string(),
+  trigger: z.enum(['manual', 'scheduled']).optional(),
   status: RunStatusSchema,
   command: z.array(z.string()),
   stdout: z.string(),

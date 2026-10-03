@@ -35,7 +35,7 @@ describe('core user journeys cover packaged Desktop openability', () => {
     expect(journey).toContain('page.locator("#save-setup").click()');
     expect(journey).toContain('page.locator("#setup-wait").wait_for(state="hidden"');
     expect(journey).toContain('run.get("kind") == "embed_stale"');
-    expect(journey).toContain('"--catch-up"');
+    expect(journey).toContain(".get('catchUp')");
     expect(journey).not.toContain('#setup-wait-actions');
     expect(journey).not.toContain('#setup-wait-continue');
     expect(journey).not.toContain('#setup-wait-defer');

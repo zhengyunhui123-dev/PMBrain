@@ -119,6 +119,7 @@ import {
   writePrivateFile,
 } from '../core/chatgpt-tunnel.ts';
 import { registerPmbrainAdminRoutes } from './pmbrain-admin-routes.ts';
+import { ProductTaskRuntime } from '../product/tasks/runtime.ts';
 import { ADMIN_DREAM_SCHEDULE_CHECK_MS } from './pmbrain-admin-support.ts';
 import { bindResolveIpcForServe } from '../mcp/resolve-ipc-binding.ts';
 export {
@@ -395,7 +396,7 @@ export async function probeHealth(
   }
 }
 
-function waitForHttpServerClose(server: HttpServer, engine: BrainEngine): Promise<void> {
+function waitForHttpServerClose(server: HttpServer, engine: BrainEngine, beforeDisconnect?: () => Promise<void>): Promise<void> {
   return new Promise((resolve, reject) => {
     let settled = false;
 
@@ -411,6 +412,7 @@ function waitForHttpServerClose(server: HttpServer, engine: BrainEngine): Promis
       settled = true;
       cleanup();
       try {
+        await beforeDisconnect?.();
         const { awaitPendingVolunteerEventWrites } = await import('../core/context/volunteer-events.ts');
         await awaitPendingVolunteerEventWrites();
         await engine.disconnect();
@@ -804,6 +806,7 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
   let pgliteBusy = false;
   let pgliteConnected = true;
   let pgliteReconnectPromise: Promise<void> | null = null;
+  const productTasks = new ProductTaskRuntime(engine);
   const reconnectPglite = engine.kind === 'pglite' && config
     ? async () => {
         if (pgliteConnected) return;
@@ -840,6 +843,7 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
     ? {
         acquireExclusive: () => pgliteRunCoordinator!.acquire(),
         beforeSpawn: async () => {
+          await productTasks.pauseAndDrain();
           pgliteBusy = true;
           pgliteConnected = false;
           try {
@@ -855,6 +859,7 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
           // no database and makes the next user action look corrupted.
           try {
             await reconnectPglite?.();
+            await productTasks.resume();
           } finally {
             // A failed reconnect remains safely unavailable through
             // !pgliteConnected, but must not masquerade as a running child.
@@ -1509,6 +1514,7 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
     getPgliteConnected: () => pgliteConnected,
     reconnectPglite,
     ensureAdminWorkerStarted,
+    productTasks,
   });
 
 
@@ -2942,6 +2948,7 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
 
   let httpServer: HttpServer;
   try {
+    await productTasks.start();
     httpServer = await listenHttpServer(app, port, bind, () => {
     console.error(`
 ╔══════════════════════════════════════════════════════╗
@@ -2987,6 +2994,7 @@ ${renderAdminTokenFooter({ suppressBootstrapPrint, bootstrapFromEnv, bootstrapTo
     }
     });
   } catch (error) {
+    await productTasks.close();
     resolveIpcBinding.close();
     throw error;
   }
@@ -3009,5 +3017,5 @@ ${renderAdminTokenFooter({ suppressBootstrapPrint, bootstrapFromEnv, bootstrapTo
     void checkScheduledDream();
   }
 
-  await waitForHttpServerClose(httpServer, engine);
+  await waitForHttpServerClose(httpServer, engine, () => productTasks.close());
 }

@@ -68,13 +68,12 @@ function taskOrigin(kind: string): string {
   return '后台任务';
 }
 
-function taskTriggerLabel(_kind: string): string {
-  // ConsoleRun currently has no explicit trigger field; Admin ConsoleRun is manual.
-  return '手动';
+function taskTriggerLabel(run: ConsoleRun): string {
+  return run.trigger === 'scheduled' ? '自动' : '手动';
 }
 
 function taskModelUsageLines(run: ConsoleRun): string[] {
-  const lines: string[] = [`触发方式：${taskTriggerLabel(run.kind)}`];
+  const lines: string[] = [`触发方式：${taskTriggerLabel(run)}`];
   if (run.kind.includes('quick')) {
     lines.push('普通模型：未使用');
     lines.push('向量模型：可能使用（embed 阶段）');
@@ -92,6 +91,19 @@ function taskModelUsageLines(run: ConsoleRun): string[] {
   if (run.startedAt) lines.push(`开始：${formatDate(run.startedAt, '-')}`);
   if (run.completedAt) lines.push(`结束：${formatDate(run.completedAt, '-')}`);
   return lines;
+}
+
+function taskResult(run: ConsoleRun): string | null {
+  if (!run.result || typeof run.result !== 'object') return null;
+  const result = run.result as Record<string, unknown>;
+  if (typeof result.imported === 'number') {
+    return `导入 ${result.imported} · 跳过 ${result.skipped ?? 0} · 失败 ${result.errors ?? 0}${Number(result.resumedFiles) > 0 ? ` · 已恢复 ${result.resumedFiles}` : ''}`;
+  }
+  const phases = result.phases;
+  if (Array.isArray(phases)) return `已处理 ${phases.filter(phase => phase.status === 'ok').length} 个阶段${phases.some(phase => phase.status === 'fail') ? ' · 有阶段未完成' : ''}`;
+  if (typeof result.embedded === 'number') return `已向量化 ${result.embedded} 条`;
+  if (Array.isArray(result.results)) return `已处理 ${result.results.length} 个知识源 · 失败 ${result.errors ?? 0}`;
+  return null;
 }
 
 function statusLabel(run: ConsoleRun): string {
@@ -172,11 +184,15 @@ function TaskCard({
   onView,
   onCancel,
   cancelling,
+  onRetry,
+  retrying,
 }: {
   run: ConsoleRun;
   onView: (run: ConsoleRun) => void;
   onCancel: (run: ConsoleRun) => void;
   cancelling: boolean;
+  onRetry: (run: ConsoleRun) => void;
+  retrying: boolean;
 }) {
   const recovery = describeRunRecovery(run);
   const progress = describeDreamRunProgress(run);
@@ -190,12 +206,10 @@ function TaskCard({
         <span className={statusClass(run.status)}>{statusLabel(run)}</span>
       </div>
       <div className="task-run-card-meta">
-        <span>{run.status === 'queued' ? '等待数据库任务空闲后开始' : elapsedLabel(run)}</span>
+        <span>{run.status === 'queued' ? '等待后台执行' : elapsedLabel(run)}</span>
         <span>发起于 {formatDate(run.startedAt, '-')}</span>
       </div>
-      <ul className="task-run-usage">
-        {taskModelUsageLines(run).map(line => <li key={line}>{line}</li>)}
-      </ul>
+      {taskResult(run) && <p className="pm-hint">{taskResult(run)}</p>}
       {progress && (
         <div className="task-run-progress">
           <div><span>当前阶段</span><b>{progress.phaseLabel}</b><strong>{progress.detail}</strong></div>
@@ -217,6 +231,11 @@ function TaskCard({
         {isActive(run) && (
           <button type="button" className="pm-ghost danger" onClick={() => onCancel(run)} disabled={cancelling}>
             <XCircle aria-hidden="true" /> {cancelling ? '正在取消…' : run.status === 'queued' ? '取消等待' : '安全取消'}
+          </button>
+        )}
+        {(run.status === 'failed' || run.status === 'cancelled') && run.id.startsWith('task-') && (
+          <button type="button" className="pm-ghost" onClick={() => onRetry(run)} disabled={retrying}>
+            <RefreshCw aria-hidden="true" /> {retrying ? '正在继续…' : '重新执行'}
           </button>
         )}
       </div>
@@ -272,13 +291,14 @@ function TaskDetailDrawer({
             : recovery?.kind === 'command_not_started_handoff_failed'
               ? '知识整理命令没有启动，可以在数据库连接恢复后重新执行。'
               : run.status === 'completed'
-                ? '任务已完成，可以返回发起页面查看业务结果。'
+                ? taskResult(run) ?? '任务已完成，可以返回发起页面查看业务结果。'
                 : run.status === 'cancelled'
                   ? '任务已取消，已经完成的部分不会自动回滚。'
                   : '任务尚未完成，详细结果会在结束后显示。'}</p>
         </section>
         <details className="task-technical-details">
           <summary>查看技术详情</summary>
+          <ul className="task-run-usage">{taskModelUsageLines(run).map(line => <li key={line}>{line}</li>)}</ul>
           <RunOutput run={run} />
         </details>
       </aside>
@@ -292,6 +312,7 @@ export function TaskCenterPage() {
   const [filter, setFilter] = useState<TaskFilter>('all');
   const [selectedRun, setSelectedRun] = useState<ConsoleRun | null>(null);
   const [cancelling, setCancelling] = useState('');
+  const [retrying, setRetrying] = useState('');
   const [terminatingOwner, setTerminatingOwner] = useState<number | null>(null);
   const [resumingRebuild, setResumingRebuild] = useState(false);
 
@@ -354,6 +375,19 @@ export function TaskCenterPage() {
     }
   };
 
+  const retry = async (run: ConsoleRun) => {
+    if (!window.confirm('将重新执行任务；导入会跳过已确认完成且未改变的文件。中断的模型请求可能已产生费用，重新执行可能再次计费。继续吗？')) return;
+    setRetrying(run.id);
+    try {
+      await api.retryRun(run.id);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setRetrying('');
+    }
+  };
+
   const terminateOwner = async () => {
     const owner = snapshot?.pglite_owner;
     if (!owner?.canTerminate || !owner.pid) return;
@@ -386,14 +420,14 @@ export function TaskCenterPage() {
         <div>
           <span className="pm-eyebrow"><ListTodo aria-hidden="true" /> BACKGROUND TASKS</span>
           <h1>任务中心</h1>
-          <p className="pm-page-intro">各功能页面负责发起任务，任务中心负责查看进度、处理错误、安全取消和恢复残留进程。</p>
+          <p className="pm-page-intro">导入与整理在后台完成。在这里查看结果，或处理未完成的任务。</p>
         </div>
         <button type="button" className="pm-ghost" onClick={() => void load()}><RefreshCw aria-hidden="true" /> 刷新状态</button>
       </div>
 
       {snapshot.pglite_busy && (
         <div className="task-busy-banner">
-          <div><b>个人本地模式正在执行数据库任务</b><span>页面可以继续查看任务；PGLite 会自动排队，避免多个进程同时打开数据库。</span></div>
+          <div><b>数据库正在维护</b><span>维护结束后恢复访问；普通导入与整理不占用整个软件。</span></div>
           <span className="task-busy-dot">运行中</span>
         </div>
       )}
@@ -412,12 +446,12 @@ export function TaskCenterPage() {
         <div className="task-status-card task-status-card-running"><span>运行中</span><strong>{activeRows.filter(run => run.status === 'running').length}</strong><small>后台正在执行</small></div>
         <div className="task-status-card task-status-card-waiting"><span>等待中</span><strong>{waitingRows.length}</strong><small>等待资源空闲</small></div>
         <div className="task-status-card task-status-card-failed"><span>失败</span><strong>{failedRows.length}</strong><small>需要查看错误</small></div>
-        <div className="task-status-card task-status-card-completed"><span>今日完成</span><strong>{completedToday}</strong><small>当前服务记录</small></div>
+        <div className="task-status-card task-status-card-completed"><span>今日完成</span><strong>{completedToday}</strong><small>已保存的任务结果</small></div>
       </div>
 
       <div className="task-mode-strip">
         <div><span className="task-mode-label">当前运行模式</span><b>{snapshot.mode === 'pglite' ? '个人本地模式' : 'PostgreSQL 模式'}</b></div>
-        <p>{snapshot.mode === 'pglite' ? '后台数据库任务将自动排队，优先保证本地知识库安全。' : '后台任务由任务中心统一管理，允许多个任务按资源情况运行。'}</p>
+        <p>后台任务依次执行，等待解析或模型时仍可对话和查询知识。</p>
         {snapshot.queue?.queue_health && <span className="task-queue-summary">队列：等待 {snapshot.queue.queue_health.waiting} · 活跃 {snapshot.queue.queue_health.active} · 停滞 {snapshot.queue.queue_health.stalled}</span>}
       </div>
 
@@ -449,15 +483,15 @@ export function TaskCenterPage() {
 
       <section className="task-section">
         <div className="task-section-head"><div><span className="pm-eyebrow">LIVE QUEUE</span><h2>正在运行和等待</h2></div><span className="pm-hint">{activeRows.length} 个任务</span></div>
-        {activeRows.length > 0 ? <div className="task-run-grid">{activeRows.map(run => <TaskCard key={run.id} run={run} onView={setSelectedRun} onCancel={cancel} cancelling={cancelling === run.id} />)}</div> : <div className="task-empty">当前没有正在运行的后台任务。</div>}
+        {activeRows.length > 0 ? <div className="task-run-grid">{activeRows.map(run => <TaskCard key={run.id} run={run} onView={setSelectedRun} onCancel={cancel} cancelling={cancelling === run.id} onRetry={retry} retrying={retrying === run.id} />)}</div> : <div className="task-empty">当前没有正在运行的后台任务。</div>}
       </section>
 
       <section className="task-section">
         <div className="task-section-head"><div><span className="pm-eyebrow">RECENT HISTORY</span><h2>历史任务</h2></div><div className="task-filter-bar" role="tablist" aria-label="历史任务筛选">
           {([['all', '全部'], ['completed', '已完成'], ['failed', '失败'], ['cancelled', '已取消']] as Array<[TaskFilter, string]>).map(([value, label]) => <button key={value} type="button" className={filter === value ? 'active' : ''} onClick={() => setFilter(value)}>{label}</button>)}
         </div></div>
-        {historyRows.length > 0 ? <div className="task-history-list">{historyRows.map(run => <TaskCard key={run.id} run={run} onView={setSelectedRun} onCancel={cancel} cancelling={cancelling === run.id} />)}</div> : <div className="task-empty">当前筛选下没有任务记录。</div>}
-        <p className="task-retention-note">当前显示 PMBrain 服务进程保留的任务记录；跨重启的历史持久化和断点续跑将在任务中心后续阶段接入。</p>
+        {historyRows.length > 0 ? <div className="task-history-list">{historyRows.map(run => <TaskCard key={run.id} run={run} onView={setSelectedRun} onCancel={cancel} cancelling={cancelling === run.id} onRetry={retry} retrying={retrying === run.id} />)}</div> : <div className="task-empty">当前筛选下没有任务记录。</div>}
+        <p className="task-retention-note">最近的后台任务结果已保存，重启后仍可查看。中断任务由你决定是否继续。</p>
       </section>
 
       {selectedRun && <TaskDetailDrawer run={selectedRun} onClose={() => setSelectedRun(null)} />}
