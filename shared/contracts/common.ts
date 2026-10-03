@@ -7,6 +7,7 @@ export const TaskProductProgressSchema = z.object({
   steps: z.array(z.object({ id: z.string(), label: z.string(), status: z.enum(['pending', 'running', 'completed', 'skipped', 'failed']), phases: z.array(z.string()) })),
   processed: z.number().nullable(), total: z.number().nullable(), file: z.string().nullable(),
   metrics: z.array(z.object({ label: z.string(), value: z.number() })), errorReason: z.string().nullable(),
+  material: z.object({ name: z.string(), sourceId: z.string(), directory: z.boolean(), page: z.object({ slug: z.string(), title: z.string(), type: z.string() }).optional() }).optional(),
   scope: z.object({ name: z.string(), index: z.number().int().nonnegative(), total: z.number().int().positive() }).optional(),
 });
 

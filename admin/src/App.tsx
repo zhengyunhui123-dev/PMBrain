@@ -26,6 +26,7 @@ const DreamExecutePage = React.lazy(() => import('./pages/Dream').then(module =>
 const DreamInsightsPage = React.lazy(() => import('./pages/Dream').then(module => ({ default: module.DreamInsightsPage })));
 const DreamKnowledgePage = React.lazy(() => import('./pages/Dream').then(module => ({ default: module.DreamKnowledgePage })));
 const DreamOverviewPage = React.lazy(() => import('./pages/Dream').then(module => ({ default: module.DreamOverviewPage })));
+const MaintenanceTasksPage = React.lazy(() => import('./product/MaintenanceTasks').then(module => ({ default: module.MaintenanceTasksPage })));
 const DreamScoringPage = React.lazy(() => import('./pages/Dream').then(module => ({ default: module.DreamScoringPage })));
 const DreamTakesPage = React.lazy(() => import('./pages/Dream').then(module => ({ default: module.DreamTakesPage })));
 const BrainDataPage = React.lazy(() => import('./pages/BrainData').then(module => ({ default: module.BrainDataPage })));
@@ -265,7 +266,7 @@ export function App({ embedded = false }: { embedded?: boolean } = {}) {
       </header>
       <main className="main"><React.Suspense fallback={<p className="pm-empty" role="status">正在打开页面…</p>}>
         {page === 'dashboard' && <KnowledgeWorkbenchPage onNavigate={navigate} />}
-        {page === 'dream' && <DreamOverviewPage product={embedded} />}
+        {page === 'dream' && (embedded ? <MaintenanceTasksPage /> : <DreamOverviewPage />)}
         {page === 'dream-execute' && <DreamExecutePage />}
         {page === 'dream-knowledge' && <DreamKnowledgePage />}
         {page === 'dream-takes' && <DreamTakesPage />}

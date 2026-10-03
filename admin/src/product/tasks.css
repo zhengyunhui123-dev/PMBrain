@@ -16,7 +16,8 @@
 .product-task-steps li { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--product-muted, var(--text-muted)); }
 .product-task-steps small { margin-left: auto; font-size: 11px; }
 .product-task-steps .step-running, .product-task-steps .step-completed { color: inherit; }
-.product-task-steps .step-running svg { color: var(--accent); animation: task-spin 2s linear infinite; }
+.product-task-steps .step-running svg { color: var(--accent); }
+.task-is-active .product-task-steps .step-running svg { animation: task-spin 2s linear infinite; }
 .product-task-steps .step-completed svg { color: var(--accent); }
 .product-task-steps .step-failed { color: var(--danger, #db6666); }
 @keyframes task-spin { to { transform: rotate(360deg); } }
@@ -55,4 +56,9 @@
 .diagnostic-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 18px; }
 .diagnostics-page .pm-page { padding: 0; }
 .diagnostics-page select { width: 100%; margin-bottom: 18px; }
+.material-cell-progress { display: inline-flex; align-items: center; color: var(--accent); vertical-align: middle; }
+.material-cell-progress svg { animation: task-spin 1s linear infinite; }
+.material-import-row { background: color-mix(in srgb, var(--accent) 4%, transparent); }
+.material-task-link { margin-left: 10px; padding: 0; border: 0; background: transparent; color: var(--accent); font-size: inherit; }
+@media (prefers-reduced-motion: reduce) { .material-cell-progress svg { animation: none; } }
 @media (prefers-reduced-motion: reduce) { .product-task-bar i, .product-task-steps svg, .product-task-activity svg { animation: none !important; transition: none; } }

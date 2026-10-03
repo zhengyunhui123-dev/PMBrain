@@ -5,11 +5,15 @@ test('file and directory imports reuse existing APIs and only remove completed e
   const calls: any[] = []; const completed: string[] = [];
   const file = new File(['正文'], '文档.md');
   await importMaterials([{ id: 'path', name: '目录', path: 'D:\\资料' }, { id: 'file', name: file.name, file }], {
+    sourceId: 'selected-source',
+    accepted: (item, id) => calls.push({ accepted: item.id, id }),
     api: { startImportRun: async input => { calls.push(input); return { runId: 'path' }; }, startImportUploadRun: async (input, options) => { calls.push([input, options]); return { runId: 'file' }; } },
     wait: async id => ({ id, status: 'completed' }) as any, update: () => {}, starting: () => {}, completed: item => completed.push(item.id),
   });
-  expect(calls[0]).toMatchObject({ path: 'D:\\资料', includeOffice: true, includeImages: true, documentOcr: true });
-  expect(calls[1][0]).toBe(file);
+  expect(calls[0]).toMatchObject({ path: 'D:\\资料', sourceId: 'selected-source', includeOffice: true, includeImages: true, documentOcr: true });
+  expect(calls[1]).toEqual({ accepted: 'path', id: 'path' });
+  expect(calls[2][0]).toBe(file);
+  expect(calls[2][1].sourceId).toBe('selected-source');
   expect(completed).toEqual(['path', 'file']);
 });
 test('failed import keeps that entry and does not start subsequent files', async () => {

@@ -10,6 +10,7 @@ export interface TaskProductProgress {
   file: string | null;
   metrics: Array<{ label: string; value: number }>;
   errorReason: string | null;
+  material?: { name: string; sourceId: string; directory: boolean; page?: { slug: string; title: string; type: string } };
   scope?: { name: string; index: number; total: number };
 }
 

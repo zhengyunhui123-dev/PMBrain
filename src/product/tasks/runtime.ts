@@ -27,6 +27,11 @@ function toRun(job: MinionJob, stopping = false): ConsoleRun {
     : job.status === 'active' ? 'running' : 'queued';
   const adapter = new TaskProgressAdapter(String(job.data.kind), progress.product);
   if (!progress.product) adapter.write(progress.output ?? '');
+  const task = job.data.task as ProductTask;
+  if (task?.type === 'import') adapter.view.material = { ...adapter.view.material,
+    name: task.input.path.split(/[\\/]/).filter(Boolean).at(-1) ?? task.input.path,
+    sourceId: task.input.sourceId ?? 'default', directory: task.input.directory === true,
+  };
   return {
     product: finishTaskProgress(adapter.view, status, job.result ?? progress.result, job.error_text),
     id: `task-${job.id}`, kind: String(job.data.kind), command: [], status,
@@ -96,7 +101,7 @@ export class ProductTaskRuntime {
       `UPDATE minion_jobs SET idempotency_key = NULL WHERE idempotency_key = $1
        AND status IN ('completed', 'dead', 'failed', 'cancelled', 'paused')`, [key],
     );
-    return this.submit({ type: 'import', input: { ...input, path: input.path.trim(), sourceId, timeoutMs: input.timeoutMs ?? 6 * 60 * 60_000 } }, 'import_path', key);
+    return this.submit({ type: 'import', input: { ...input, directory: file?.isDirectory() ?? false, path: input.path.trim(), sourceId, timeoutMs: input.timeoutMs ?? 6 * 60 * 60_000 } }, 'import_path', key);
   }
 
   async submitDream(input: DreamTaskInput, trigger: 'manual' | 'scheduled' = 'manual'): Promise<ConsoleRun> {
@@ -170,7 +175,7 @@ export class ProductTaskRuntime {
     if (!record?.lock_token) throw new Error('任务执行租约无效');
     if (record.attempts_started > 1) throw new Error('任务执行曾中断，结果不确定，请查看已完成内容后手动继续');
     let progress = (record.progress ?? {}) as Progress;
-    const adapter = new TaskProgressAdapter(String(record.data.kind), progress.product);
+    const adapter = new TaskProgressAdapter(String(record.data.kind), toRun(record).product);
     let progressTail = Promise.resolve();
     const persist = () => {
       progress.product = adapter.view;
@@ -239,6 +244,7 @@ export class ProductTaskRuntime {
         if (message.phases) adapter.plan(message.phases);
         if (message.scope) adapter.scope(message.scope);
         if (message.event) adapter.event(message.event);
+        if (message.page && adapter.view.material) adapter.view.material.page = message.page;
       } else if (message.type === 'result') {
         completed = true;
         progress.result = message.result;

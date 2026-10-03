@@ -44,6 +44,10 @@ function rpc(method: string, args: unknown[], scope?: number): Promise<unknown> 
   const id = ++sequence;
   if (importFile && ['putPage', 'upsertChunks', 'updateChunkEmbedding', 'setPageAliases'].includes(method)) {
     send({ type: 'progress', event: { phase: 'import.write', file: importFile } });
+    if (method === 'putPage') {
+      const page = args[1] as { title: string; type: string };
+      send({ type: 'progress', page: { slug: String(args[0]), title: page.title, type: page.type } });
+    }
   }
   return new Promise((resolve, reject) => {
     pending.set(id, { resolve, reject });

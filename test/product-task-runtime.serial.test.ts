@@ -92,12 +92,14 @@ describe('软件后台任务共用 owner 数据库', () => {
     const content = '# 后台导入\n\n软件直接导入这份合成资料，并在任务中心保存结果。';
     writeFileSync(path, content);
     const accepted = await runtime.submitImport({ path, noEmbed: true });
+    expect(accepted.product?.material).toMatchObject({ name: 'background.md', sourceId: 'default', directory: false });
     expect(accepted.command).toEqual([]);
     const run = await finished(accepted.id);
     if (run.status !== 'completed') throw new Error(JSON.stringify(run));
     expect(run.status).toBe('completed');
     expect(run.result).toMatchObject({ imported: 1, errors: 0 });
     expect(run.product).toMatchObject({ name: '导入资料', percent: 100, stage: '导入完成' });
+    expect(run.product?.material?.page).toMatchObject({ slug: 'background', type: 'note' });
     expect(readFileSync(path, 'utf8')).toBe(content);
     expect(await engine.getPage('background', { sourceId: 'default' })).not.toBeNull();
     const reader = new ProductTaskRuntime(engine);
@@ -222,7 +224,10 @@ describe('软件后台任务共用 owner 数据库', () => {
       writeFileSync(path, `# ${id}\n\n这份合成知识只属于 ${id}。`);
       tasks.push(await runtime.submitImport({ path, sourceId: id, noEmbed: true }));
     }
-    for (const task of tasks) expect((await finished(task.id)).status).toBe('completed');
+    for (const [index, task] of tasks.entries()) {
+      expect(task.product?.material?.sourceId).toBe(ids[index]);
+      expect((await finished(task.id)).status).toBe('completed');
+    }
     for (const id of ids) expect((await engine.getPage('same', { sourceId: id }))?.compiled_truth).toContain(id);
     expect(await engine.getPage('same', { sourceId: 'default' })).toBeNull();
   }, 30_000);

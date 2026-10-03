@@ -80,6 +80,7 @@ export class TaskProgressAdapter {
       for (const item of this.view.steps) if (item.id !== 'collect') item.status = 'pending';
       this.currentPhase = '';
       this.currentFile = event.file;
+      if (this.view.material) this.view.material.page = undefined;
     }
     if (event.file) this.view.file = event.file.split(/[\\/]/).at(-1) ?? event.file;
     if (phase !== this.currentPhase) {
