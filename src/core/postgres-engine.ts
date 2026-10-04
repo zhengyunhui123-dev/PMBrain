@@ -1152,15 +1152,17 @@ export class PostgresEngine implements BrainEngine {
     return rows.length > 0;
   }
 
-  async purgeDeletedPages(olderThanHours: number): Promise<{ slugs: string[]; count: number }> {
+  async purgeDeletedPages(olderThanHours: number, options?: { limit?: number }): Promise<{ slugs: string[]; count: number }> {
     const sql = this.sql;
     // Clamp to non-negative integer; runaway purge protection. The DELETE
     // cascades through content_chunks, page_links, chunk_relations via FKs.
     const hours = Math.max(0, Math.floor(olderThanHours));
     const rows = await sql`
       DELETE FROM pages
-      WHERE deleted_at IS NOT NULL
-        AND deleted_at < now() - (${hours} || ' hours')::interval
+      WHERE id IN (SELECT id FROM pages
+        WHERE deleted_at IS NOT NULL
+          AND deleted_at < now() - (${hours} || ' hours')::interval
+        ORDER BY id LIMIT ${options?.limit === undefined ? null : Math.max(1, Math.floor(options.limit))})
       RETURNING slug
     `;
     const slugs = rows.map((r) => r.slug as string);
@@ -1239,6 +1241,14 @@ export class PostgresEngine implements BrainEngine {
   }
 
   async listPages(filters?: PageFilters): Promise<Page[]> {
+    return (await this.readPageRows(filters)).map(rowToPage);
+  }
+
+  async listPageIds(filters?: PageFilters): Promise<number[]> {
+    return (await this.readPageRows(filters, true)).map(row => Number(row.id));
+  }
+
+  private async readPageRows(filters?: PageFilters, idsOnly = false): Promise<Record<string, unknown>[]> {
     const sql = this.sql;
     const limit = filters?.limit || 100;
     const offset = filters?.offset || 0;
@@ -1274,6 +1284,8 @@ export class PostgresEngine implements BrainEngine {
     const privateCondition = filters?.excludePrivate === true
       ? sql.unsafe(`AND ${privatePagesFilterFragment('p')}`)
       : sql``;
+    const idCondition = filters?.pageIds ? sql`AND p.id = ANY(${filters.pageIds}::int[])` : sql``;
+    const projection = sql.unsafe(idsOnly ? 'p.id' : 'p.*');
 
     // v0.29: ORDER BY threading via PAGE_SORT_SQL whitelist (no SQL injection).
     // postgres.js sql.unsafe lets us splice the literal fragment safely.
@@ -1281,13 +1293,13 @@ export class PostgresEngine implements BrainEngine {
     const orderBy = sql.unsafe(PAGE_SORT_SQL[sortKey]);
 
     const rows = await sql`
-      SELECT p.* FROM pages p
+      SELECT ${projection} FROM pages p
       ${tagJoin}
-      WHERE 1=1 ${typeCondition} ${tagCondition} ${updatedCondition} ${slugCondition} ${sourceCondition} ${deletedCondition} ${privateCondition}
+      WHERE 1=1 ${typeCondition} ${tagCondition} ${updatedCondition} ${slugCondition} ${sourceCondition} ${deletedCondition} ${privateCondition} ${idCondition}
       ORDER BY ${orderBy} LIMIT ${limit} OFFSET ${offset}
     `;
 
-    return rows.map(rowToPage);
+    return [...rows] as Record<string, unknown>[];
   }
 
   async getAllSlugs(opts?: { sourceId?: string }): Promise<Set<string>> {

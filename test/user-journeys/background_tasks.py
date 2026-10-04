@@ -86,6 +86,8 @@ def run(args):
     for key in ['DATABASE_URL', 'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY']:
         env.pop(key, None)
     init = 'import {PGLiteEngine} from "./src/core/pglite-engine.ts"; import {configureGateway} from "./src/core/ai/gateway.ts"; import {loadConfig} from "./src/core/config.ts"; configureGateway({embedding_model:"custom-openai:task-test",embedding_dimensions:1024,env:{}}); const e=new PGLiteEngine(); await e.connect(loadConfig()); await e.initSchema(); await e.disconnect();'
+    if args.database_only:
+        init = init.replace('await e.disconnect();', 'await e.putPage("compiled-probe", {type:"note", title:"Compiled probe", compiled_truth:"Synthetic isolated database probe", frontmatter:{}}); await e.disconnect();')
     with (artifacts / 'init.log').open('w', encoding='utf-8') as log:
         subprocess.run([shutil.which('bun'), '--eval', init], cwd=ROOT, env=env, stdout=log, stderr=log, check=True, timeout=60)
     if args.runtime == 'bundled':
@@ -93,6 +95,8 @@ def run(args):
         entry = [str(runtime / 'bun.exe'), str(runtime / 'pmbrain-sidecar.js')]
     elif args.runtime == 'compiled':
         entry = [str(ROOT / 'bin/pmbrain.exe')]
+    elif args.runtime == 'worker-load':
+        entry = [shutil.which('bun'), str(ROOT / 'test/helpers/serve-worker-load.ts')]
     else:
         entry = [shutil.which('bun'), str(ROOT / 'src/cli.ts')]
     service_port = port()
@@ -109,7 +113,7 @@ def run(args):
 
     def start():
         log = (artifacts / f'service-{time.time_ns()}.log').open('w', encoding='utf-8')
-        process = subprocess.Popen(entry + ['serve', '--http', '--port', str(service_port), '--suppress-bootstrap-token'], cwd=ROOT, env=env, stdout=log, stderr=log)
+        process = subprocess.Popen(entry + ['serve', '--http', '--port', str(service_port), '--suppress-bootstrap-token'], cwd=artifacts if args.database_only else ROOT, env=env, stdin=subprocess.PIPE, stdout=log, stderr=log)
         deadline = time.time() + 60
         while time.time() < deadline:
             if process.poll() is not None:
@@ -138,6 +142,15 @@ def run(args):
 
     process, log = start()
     try:
+        if args.database_only:
+            assert request('/admin/api/brain/pages/default/compiled-probe')['title'] == 'Compiled probe'
+            assert request('/admin/api/workbench/models')['models']
+            stop(process, log)
+            process, log = start()
+            assert request('/admin/api/brain/pages/default/compiled-probe')['compiled_truth'] == 'Synthetic isolated database probe'
+            (artifacts / 'result.json').write_text(json.dumps({'runtime': args.runtime, 'passed': True, 'checks': ['standalone_worker_database_read', 'model_configuration', 'database_reopen_preserves_page'], 'cwd': str(artifacts)}, ensure_ascii=False), encoding='utf-8')
+            print('Compiled database worker probe passed')
+            return
         accepted = request('/admin/api/import-runs', {'path': str(materials / 'seed.md')})
         seed = finished(accepted['runId'])
         assert seed['status'] == 'completed', seed
@@ -145,6 +158,26 @@ def run(args):
         assert seed['result']['imported'] == 1
         assert seed['product']['percent'] == 100
         assert seed['product']['name'] == '导入资料'
+        if args.runtime == 'worker-load':
+            process.stdin.write(b'load\n')
+            process.stdin.flush()
+            deadline = time.monotonic() + 15
+            while not (home / 'load-started').exists() and time.monotonic() < deadline:
+                time.sleep(.02)
+            assert (home / 'load-started').exists()
+            assert not (home / 'load-finished').exists()
+            started = time.monotonic()
+            assert request('/admin/api/workbench/models')['models']
+            thread = request('/admin/api/workbench/conversations', {'model': 'custom-openai:task-test', 'knowledge': False})
+            request('/admin/api/workbench/conversations/' + thread['id'] + '/messages', {'text': '数据库忙时仍能普通对话', 'knowledge': False})
+            with opener.open(origin + '/admin/', timeout=2) as response:
+                assert response.status == 200
+            assert time.monotonic() - started < 2
+            assert not (home / 'load-finished').exists(), 'Service checks completed only after the heavy query'
+            deadline = time.monotonic() + 30
+            while not (home / 'load-finished').exists() and time.monotonic() < deadline:
+                time.sleep(.02)
+            assert (home / 'load-finished').exists()
         slow_path = materials / 'slow.md'
         slow_path.write_text('# Slow\n\nDelayed synthetic embedding verifies concurrent application access.', encoding='utf-8')
         delay = True
@@ -218,8 +251,10 @@ def run(args):
                 page.on('pageerror', lambda error: errors.append(str(error)))
                 page.goto(origin + '/admin/#dream')
                 page.locator('.maintenance-run-row').filter(has=page.locator('.maintenance-state-running')).first.click()
-                page.locator('.product-task-progress').first.wait_for()
-                assert '快速维护' in page.locator('.product-task-progress').first.inner_text()
+                progress = page.locator('.maintenance-task-dialog .product-task-progress')
+                progress.wait_for()
+                assert '同步资料' in progress.inner_text() or '更新搜索索引' in progress.inner_text()
+                assert '快速维护' in page.locator('.maintenance-task-dialog').inner_text()
                 assert '正在了解你的知识库' not in page.locator('body').inner_text()
                 assert '[pmbrain phase]' not in page.locator('body').inner_text()
                 page.screenshot(path=str(artifacts / 'quick-running.png'), full_page=True)
@@ -320,11 +355,24 @@ def run(args):
                     desktop_page.get_by_role('button', name='知识库模型配置', exact=True).click()
                     desktop_page.locator('.model-services.is-roles').wait_for(timeout=5000)
                     desktop_page.screenshot(path=str(artifacts / 'desktop-model-roles-running.png'), full_page=True)
+                    desktop_page.get_by_role('button', name='MCP 接入', exact=True).click()
+                    desktop_page.locator('.mcp-endpoint-card').first.wait_for(timeout=5000)
+                    service = desktop_page.evaluate('window.pmbrainDesktop.getState()')
+                    assert f"http://127.0.0.1:{service['port']}/mcp" in desktop_page.locator('.mcp-endpoint-card').first.inner_text()
+                    desktop_page.locator('.agents-section').get_by_text('background-read-only', exact=True).wait_for(timeout=5000)
+                    desktop_page.screenshot(path=str(artifacts / 'desktop-mcp-running.png'), full_page=True)
                     desktop_page.get_by_role('button', name='返回', exact=True).click()
+                    desktop_page.get_by_role('button', name='知识助手', exact=True).click()
+                    desktop_page.get_by_label('对话模型', exact=True).select_option('custom-openai:task-test')
+                    desktop_page.get_by_role('checkbox', name='知识库', exact=True).uncheck()
+                    desktop_page.get_by_label('消息', exact=True).fill('维护期间验证普通对话')
+                    desktop_page.get_by_role('button', name='发送消息', exact=True).click()
+                    desktop_page.get_by_role('article', name='助手回答', exact=True).last.get_by_text('后台导入期间仍可对话', exact=True).wait_for(timeout=5000)
+                    desktop_page.screenshot(path=str(artifacts / 'desktop-chat-running.png'), full_page=True)
                     desktop_page.get_by_role('button', name='知识整理', exact=True).click()
                     desktop_page.locator('.maintenance-run-row').filter(has=desktop_page.locator('.maintenance-state-running')).first.click()
-                    desktop_page.locator('.product-task-progress').first.wait_for()
-                    assert '快速维护' in desktop_page.locator('.product-task-progress').first.inner_text()
+                    desktop_page.locator('.maintenance-task-dialog .product-task-progress').wait_for()
+                    assert '快速维护' in desktop_page.locator('.maintenance-task-dialog').inner_text()
                     assert '[pmbrain phase]' not in desktop_page.locator('body').inner_text()
                     desktop_page.screenshot(path=str(artifacts / 'desktop-quick-running.png'), full_page=True)
                     desktop_page.get_by_role('button', name='关闭整理详情', exact=True).click()
@@ -352,9 +400,9 @@ def run(args):
                     desktop_page.get_by_role('button', name='返回', exact=True).click()
                     desktop_page.get_by_role('button', name='知识整理', exact=True).click()
                     desktop_page.locator('.maintenance-run-row').first.click()
-                    desktop_page.locator('.product-task-progress').first.wait_for()
-                    desktop_page.get_by_text('100%', exact=True).first.wait_for(timeout=5000)
-                    assert '快速维护' in desktop_page.locator('.product-task-progress').first.inner_text()
+                    desktop_page.locator('.maintenance-task-dialog .product-task-progress').wait_for()
+                    desktop_page.locator('.maintenance-task-dialog').get_by_text('100%', exact=True).first.wait_for(timeout=5000)
+                    assert '快速维护' in desktop_page.locator('.maintenance-task-dialog').inner_text()
                     desktop_page.screenshot(path=str(artifacts / 'desktop-quick-completed.png'), full_page=True)
                 finally:
                     delay = False
@@ -362,7 +410,9 @@ def run(args):
                     session.stop()
         checks = ['native_import', 'slow_model_database_read', 'concurrent_mcp_read_search', 'concurrent_chat', 'cancel_no_late_write', 'PDF', 'DOCX', 'quick', 'quick_model_wait_read_and_overview', 'product_progress_persistence', 'full_dry_run', 'explicit_retry', 'restart_history', 'restart_chat']
         if args.desktop:
-            checks.append('real_desktop_model_settings_during_quick_maintenance')
+            checks.extend(['real_desktop_model_settings_during_quick_maintenance', 'real_desktop_mcp_origin_and_credentials', 'real_desktop_model_selection_and_chat_during_quick_maintenance'])
+        if args.runtime == 'worker-load':
+            checks.append('real_http_models_chat_and_static_during_heavy_database_query')
         if not args.no_browser:
             checks.extend(['task_center_browser', 'quick_running_gui', 'diagnostics_dark_light'])
         (artifacts / 'result.json').write_text(json.dumps({'runtime': args.runtime, 'passed': True, 'checks': checks}, ensure_ascii=False), encoding='utf-8')
@@ -379,7 +429,8 @@ def run(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--artifacts-dir', required=True)
-    parser.add_argument('--runtime', choices=['source', 'bundled', 'compiled'], default='source')
+    parser.add_argument('--runtime', choices=['source', 'bundled', 'compiled', 'worker-load'], default='source')
     parser.add_argument('--no-browser', action='store_true')
     parser.add_argument('--desktop', action='store_true')
+    parser.add_argument('--database-only', action='store_true')
     run(parser.parse_args())

@@ -3,6 +3,8 @@ import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PGLiteEngine } from '../src/core/pglite-engine.ts';
+import { WorkerPgliteEngine } from '../src/product/database/worker-engine.ts';
+import { withDatabasePriority } from '../src/product/database/priority.ts';
 import { ProductTaskRuntime } from '../src/product/tasks/runtime.ts';
 import type { ConsoleRun } from '../src/commands/natural-lang/types.ts';
 import { configureGateway, resetGateway } from '../src/core/ai/gateway.ts';
@@ -13,6 +15,9 @@ import type { BrainEngine } from '../src/core/engine.ts';
 import { PostgresEngine } from '../src/core/postgres-engine.ts';
 import { assertSafeE2eDatabaseUrl } from './helpers/db-guard.ts';
 import { configPath } from '../src/core/config.ts';
+import { purgeExpiredSources } from '../src/core/destructive-guard.ts';
+import { purgeStaleCheckpoints } from '../src/core/op-checkpoint.ts';
+import { purgeStaleVolunteerEvents } from '../src/core/context/volunteer-events.ts';
 
 let engine: BrainEngine;
 let runtime: ProductTaskRuntime;
@@ -22,6 +27,7 @@ const taskDatabaseUrl = process.env.PMBRAIN_TASK_TEST_DATABASE_URL;
 const originalEnv = Object.fromEntries(isolatedKeys.map(key => [key, process.env[key]]));
 let slowRequests = 0;
 let releaseModel: (() => void) | null = null;
+const releases = new Set<() => void>();
 let modelServer: ReturnType<typeof Bun.serve>;
 
 function configureModels(enabled = true, model = 'task-test') {
@@ -39,7 +45,7 @@ async function modelWaiting() {
   if (!releaseModel) throw new Error(JSON.stringify(await runtime.listRuns()));
 }
 
-function release() { releaseModel?.(); releaseModel = null; }
+function release() { for (const finish of releases) finish(); releases.clear(); releaseModel = null; }
 
 async function finished(id: string): Promise<ConsoleRun> {
   const deadline = Date.now() + 25_000;
@@ -60,13 +66,16 @@ beforeAll(async () => {
   modelServer = Bun.serve({ port: 0, async fetch(req) {
     const body = await req.json() as { input: string[] };
     slowRequests++;
-    await new Promise<void>(resolve => { releaseModel = resolve; });
+    await new Promise<void>(resolve => {
+      const finish = () => { releases.delete(finish); resolve(); };
+      releases.add(finish); releaseModel = finish;
+    });
     return Response.json({ object: 'list', data: body.input.map((_, index) => ({ object: 'embedding', index, embedding: Array.from({ length: 1024 }, (_, i) => i === 0 ? 1 : 0) })), model: 'task-test', usage: { prompt_tokens: 2, total_tokens: 2 } });
   } });
   configureModels(false);
   configureGateway({ embedding_model: 'custom-openai:task-test', embedding_dimensions: 1024, env: {} });
   if (taskDatabaseUrl) assertSafeE2eDatabaseUrl(taskDatabaseUrl);
-  engine = taskDatabaseUrl ? new PostgresEngine() : new PGLiteEngine();
+  engine = taskDatabaseUrl ? new PostgresEngine() : process.env.PMBRAIN_TASK_TEST_WORKER === '1' ? new WorkerPgliteEngine() as unknown as BrainEngine : new PGLiteEngine();
   await engine.connect(taskDatabaseUrl ? { database_url: taskDatabaseUrl } : {});
   await engine.initSchema();
   runtime = new ProductTaskRuntime(engine);
@@ -87,6 +96,71 @@ afterAll(async () => {
 }, 60_000);
 
 describe('软件后台任务共用 owner 数据库', () => {
+  test('两个任务可同时等待模型，停止立即确认且不依赖数据库队列', async () => {
+    configureModels();
+    const previous = slowRequests;
+    const accepted: ConsoleRun[] = [];
+    try {
+      for (const name of ['parallel-a', 'parallel-b']) {
+        const path = join(root, `${name}.md`);
+        writeFileSync(path, `# ${name}\n\n合成资料验证非数据库阶段并行。`);
+        accepted.push(await runtime.submitImport({ path }));
+      }
+      const deadline = Date.now() + 15_000;
+      while (slowRequests < previous + 2 && Date.now() < deadline) await Bun.sleep(30);
+      expect(slowRequests).toBe(previous + 2);
+      let ready!: () => void;
+      let unlock!: () => void;
+      const started = new Promise<void>(resolve => { ready = resolve; });
+      const gate = new Promise<void>(resolve => { unlock = resolve; });
+      const busy = withDatabasePriority(3, () => engine.transaction(async tx => {
+        await tx.setConfig('stop.batch', 'committed naturally'); ready(); await gate;
+      }));
+      await started;
+      try {
+        const now = performance.now();
+        expect((await runtime.requestCancel(accepted[0].id))?.error).toContain('正在停止');
+        expect((await runtime.listRuns()).find(row => row.id === accepted[0].id)?.status).toBe('running');
+        expect(performance.now() - now).toBeLessThan(1000);
+      } finally { unlock(); await busy; }
+      expect(await engine.getConfig('stop.batch')).toBe('committed naturally');
+      expect((await finished(accepted[0].id)).status).toBe('cancelled');
+      await runtime.cancel(accepted[1].id);
+      release();
+      expect(await engine.getPage('parallel-a', { sourceId: 'default' })).toBeNull();
+      expect(await engine.getPage('parallel-b', { sourceId: 'default' })).toBeNull();
+    } finally {
+      release();
+      for (const run of accepted) await runtime.cancel(run.id);
+      configureModels(false);
+    }
+  }, 30_000);
+
+  test('批量关系每 50 条提交一次，关闭后不启动下一批', async () => {
+    const queue = new MinionQueue(engine);
+    await queue.add('batch-fence-test', {}, { queue: PRODUCT_TASK_QUEUE });
+    const job = await queue.claim('batch-token', 30_000, PRODUCT_TASK_QUEUE, ['batch-fence-test']);
+    let host: TaskEngineHost;
+    const sizes: number[] = [];
+    const owner = new Proxy(engine, { get(target, property) {
+      if (property === 'transaction') return (fn: (tx: BrainEngine) => Promise<unknown>) => target.transaction(tx => fn(new Proxy(tx, {
+        get(current, key) {
+          if (key === 'addLinksBatch') return async (rows: unknown[]) => {
+            sizes.push(rows.length); void host.close(); return rows.length;
+          };
+          const value = Reflect.get(current, key); return typeof value === 'function' ? value.bind(current) : value;
+        },
+      })));
+      const value = Reflect.get(target, property); return typeof value === 'function' ? value.bind(target) : value;
+    } });
+    host = new TaskEngineHost(owner, job!.id, 'batch-token', async () => {});
+    const rejected = await host.dispatch({ type: 'rpc', id: 1, method: 'addLinksBatch', args: [Array.from({ length: 151 }, () => ({ from_slug: 'a', to_slug: 'b' }))] }).catch(error => error);
+    expect(String(rejected)).toContain('任务执行已停止');
+    expect(sizes).toEqual([50]);
+    await host.close();
+    await queue.cancelJob(job!.id);
+  });
+
   test('导入直接执行核心，原始文件保留，结果持久化并可由新运行时读取', async () => {
     const path = join(root, 'background.md');
     const content = '# 后台导入\n\n软件直接导入这份合成资料，并在任务中心保存结果。';
@@ -108,6 +182,72 @@ describe('软件后台任务共用 owner 数据库', () => {
     expect((await reader.listRuns()).some(row => row.id === accepted.id)).toBe(true);
     await reader.close();
   }, 30_000);
+
+  test('大范围扫描保留排序和 Source 过滤，分页读取正文期间可取消', async () => {
+    await engine.executeRaw(`INSERT INTO sources(id, name) VALUES ('scan-source', '扫描测试源')`);
+    await engine.executeRaw(`INSERT INTO pages(slug, source_id, type, title, compiled_truth, frontmatter)
+      SELECT 'scan-' || i, 'scan-source', 'note', '合成扫描页 ' || i, '合成正文', '{}'::jsonb FROM generate_series(1, 205) i`);
+    const host = new TaskEngineHost(engine, 0, '', async () => {});
+    const filters = { sourceId: 'scan-source', limit: 1000, sort: 'slug' as const };
+    const expected = await engine.listPages(filters);
+    const actual = await host.dispatch({ type: 'rpc', id: 1, method: 'listPages', args: [filters] }) as typeof expected;
+    expect(actual.map(page => page.id)).toEqual(expected.map(page => page.id));
+    expect(actual.length).toBe(205);
+    expect(await engine.listPageIds({ ...filters, pageIds: [] })).toEqual([]);
+    await host.close();
+    expect(String(await host.dispatch({ type: 'rpc', id: 2, method: 'listPages', args: [filters] }).catch(error => error))).toContain('任务执行已停止');
+  });
+
+  test('到期回收每次最多 50 页或一个 Source，未到期数据保留', async () => {
+    await engine.executeRaw(`INSERT INTO sources(id, name) VALUES ('purge-batch', '隔离回收测试')`);
+    await engine.executeRaw(`INSERT INTO pages(slug, source_id, type, title, compiled_truth, frontmatter, deleted_at)
+      SELECT 'purge-' || i, 'purge-batch', 'note', '合成待回收页', '合成正文', '{}'::jsonb,
+        CASE WHEN i <= 103 THEN now() - INTERVAL '73 hours' ELSE now() END FROM generate_series(1, 104) i`);
+    const queue = new MinionQueue(engine);
+    await queue.add('purge-batch-test', {}, { queue: PRODUCT_TASK_QUEUE });
+    const job = await queue.claim('purge-token', 30_000, PRODUCT_TASK_QUEUE, ['purge-batch-test']);
+    const host = new TaskEngineHost(engine, job!.id, 'purge-token', async () => {});
+    try {
+      const result = await host.dispatch({ type: 'rpc', id: 1, method: 'purgeDeletedPages', args: [72] }) as { count: number };
+      expect(result.count).toBe(103);
+      expect((await engine.executeRaw<{ count: number }>(`SELECT count(*)::int AS count FROM pages WHERE source_id = 'purge-batch'`))[0].count).toBe(1);
+      await engine.executeRaw(`INSERT INTO op_checkpoints(op, fingerprint, updated_at)
+        SELECT 'batch-gc', 'item-' || i, now() - INTERVAL '10 days' FROM generate_series(1, 203) i`);
+      await engine.executeRaw(`INSERT INTO context_volunteer_events(source_id, slug, confidence, match_arm, volunteered_at)
+        SELECT 'purge-batch', 'seed', 0.8, 'synthetic', now() - INTERVAL '100 days' FROM generate_series(1, 203) i`);
+      await engine.executeRaw(`INSERT INTO op_checkpoints(op, fingerprint) VALUES ('batch-gc', 'keep')`);
+      expect(await purgeStaleCheckpoints(engine, 7, 100)).toBe(203);
+      expect(await purgeStaleVolunteerEvents(engine, 90, 100)).toBe(203);
+      expect((await engine.executeRaw(`SELECT * FROM op_checkpoints WHERE op = 'batch-gc' AND fingerprint = 'keep'`)).length).toBe(1);
+      await engine.executeRaw(`INSERT INTO sources(id, name, archived, archive_expires_at) VALUES
+        ('purge-expired-a', '到期 A', true, now() - INTERVAL '1 hour'),
+        ('purge-expired-b', '到期 B', true, now() - INTERVAL '1 hour'),
+        ('purge-recoverable', '未到期', true, now() + INTERVAL '1 hour')`);
+      expect(await purgeExpiredSources(engine, { batchSize: 1 })).toEqual(['purge-expired-a', 'purge-expired-b']);
+      expect((await engine.executeRaw<{ id: string }>(`SELECT id FROM sources WHERE id = 'purge-recoverable'`))[0].id).toBe('purge-recoverable');
+    } finally { await host.close(); await queue.cancelJob(job!.id); }
+  });
+
+  test('停止等当前显式事务的数据库调用结束，再自然回滚', async () => {
+    const queue = new MinionQueue(engine);
+    await queue.add('cancel-transaction-test', {}, { queue: PRODUCT_TASK_QUEUE });
+    const job = await queue.claim('natural-token', 30_000, PRODUCT_TASK_QUEUE, ['cancel-transaction-test']);
+    const host = new TaskEngineHost(engine, job!.id, 'natural-token', async () => {});
+    const scope = await host.dispatch({ type: 'rpc', id: 1, method: 'transaction.open', args: [] }) as number;
+    await host.dispatch({ type: 'rpc', id: 2, method: 'setConfig', args: ['natural.rollback', 'not committed'], scope });
+    let finished = false;
+    const current = host.dispatch({ type: 'rpc', id: 3, method: 'executeRaw', args: ['SELECT pg_sleep(0.15)'], scope }).finally(() => { finished = true; });
+    await Bun.sleep(20);
+    const closing = host.close();
+    expect(finished).toBe(false);
+    expect(String(await host.dispatch({ type: 'rpc', id: 4, method: 'setConfig', args: ['natural.next', 'bad'], scope }).catch(error => error))).toContain('任务执行已停止');
+    await current;
+    await closing;
+    expect(finished).toBe(true);
+    expect(await engine.getConfig('natural.rollback')).toBeNull();
+    expect(await engine.getConfig('natural.next')).toBeNull();
+    await queue.cancelJob(job!.id);
+  });
 
   test('快速维护和深度整理阶段直接使用同一核心，执行中数据库仍可查询', async () => {
     const quick = await runtime.submitDream({ preset: 'quick', dryRun: true });
@@ -305,12 +445,12 @@ describe('软件后台任务共用 owner 数据库', () => {
       expect(String(rollbackError)).toContain('事务已回滚');
       expect(await engine.getPage('rollback-test', { sourceId: 'default' })).toBeNull();
       await engine.executeRaw(`UPDATE minion_jobs SET lock_token = 'reclaimed-token' WHERE id = $1`, [job!.id]);
-      await expect(rpc('setConfig', ['test.fence', 'invalid'])).rejects.toThrow('执行租约已失效');
+      expect(String(await rpc('setConfig', ['test.fence', 'invalid']).catch(error => error))).toContain('执行租约已失效');
       expect(await engine.getConfig('test.fence')).toBeNull();
       await engine.executeRaw(`UPDATE minion_jobs SET lock_token = $1, lock_until = $2::timestamptz WHERE id = $3`, ['fence-token', new Date(Date.now() - 1000), job!.id]);
-      await expect(rpc('setConfig', ['test.fence', 'expired'])).rejects.toThrow('执行租约已失效');
+      expect(String(await rpc('setConfig', ['test.fence', 'expired']).catch(error => error))).toContain('执行租约已失效');
       await queue.cancelJob(job!.id);
-      await expect(rpc('setConfig', ['test.fence', 'cancelled'])).rejects.toThrow('任务已取消');
+      expect(String(await rpc('setConfig', ['test.fence', 'cancelled']).catch(error => error))).toContain('任务已取消');
     } finally { await host.close(); }
   });
 

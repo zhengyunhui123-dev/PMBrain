@@ -11,6 +11,7 @@
  */
 
 import express from 'express';
+import { withDatabasePriority } from '../product/database/priority';
 import type { Request, Response, NextFunction } from 'express';
 import type { Server as HttpServer } from 'node:http';
 import cookieParser from 'cookie-parser';
@@ -963,6 +964,7 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
 
   // Express 5 app
   const app = express();
+  app.use((req, _res, next) => withDatabasePriority(req.path.startsWith('/mcp') ? 1 : 0, next));
   // v0.41.3 (T8): configurable trust-proxy via GBRAIN_HTTP_TRUST_PROXY env.
   // Default 'loopback' (trust Caddy/Tailscale on the same host) preserves
   // pre-v0.41.3 behavior. Operators behind Fly.io / Render / Vercel / nginx
@@ -3006,15 +3008,15 @@ ${renderAdminTokenFooter({ suppressBootstrapPrint, bootstrapFromEnv, bootstrapTo
     console.error('[serve-http] diagnostic-mode active: Dream schedule timer not started; Supervisor auto-start disabled');
   } else {
     const {startWritebackHarvester}=await import('../core/facts/writeback-harvest.ts');
-    const stopWriteback=startWritebackHarvester(engine);
+    const stopWriteback=withDatabasePriority(3, () => startWritebackHarvester(engine));
     httpServer.once('close',stopWriteback);
     const dreamScheduleTimer = setInterval(
-      () => void checkScheduledDream(),
+      () => void withDatabasePriority(3, checkScheduledDream),
       ADMIN_DREAM_SCHEDULE_CHECK_MS,
     );
     dreamScheduleTimer.unref?.();
     httpServer.once('close', () => clearInterval(dreamScheduleTimer));
-    void checkScheduledDream();
+    void withDatabasePriority(3, checkScheduledDream);
   }
 
   await waitForHttpServerClose(httpServer, engine, () => productTasks.close());

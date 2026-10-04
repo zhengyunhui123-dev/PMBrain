@@ -451,6 +451,7 @@ export interface CycleOpts {
    * until the worker wedges (the 98-waiting-0-active incident on 2026-04-24).
    */
   signal?: AbortSignal;
+  embedBatchSize?: number;
   /** Absolute deadline inherited from the owning Minion job. */
   deadlineAtMs?: number | null;
   /** Owning Minion job id for phase-created dream-inline private queues. */
@@ -1256,6 +1257,7 @@ async function runPhaseEmbed(
   pageLimit?: number,
   reporter?: ProgressReporter,
   signal?: AbortSignal,
+  batchSize?: number,
 ): Promise<PhaseResult> {
   try {
     const { loadConfig } = await import('./config.ts');
@@ -1286,6 +1288,7 @@ async function runPhaseEmbed(
       sourceId,
       pageLimit,
       signal,
+      batchSize,
       quiet: true,
       onProgress: (done, total, embedded) => {
         const safeTotal = Math.max(1, total);
@@ -1401,7 +1404,7 @@ async function runPhasePurge(engine: BrainEngine, dryRun: boolean): Promise<Phas
       };
     }
     const { purgeExpiredSources } = await import('./destructive-guard.ts');
-    const purgedSources = await purgeExpiredSources(engine);
+    const purgedSources = await purgeExpiredSources(engine, { batchSize: 1 });
     const purgedPages = await engine.purgeDeletedPages(SOFT_DELETE_TTL_HOURS_FOR_PURGE);
     const purgedClones = await purgeOrphanClones(SOFT_DELETE_TTL_HOURS_FOR_PURGE);
     // v0.36+ folded scope item +C: GC stale op_checkpoints rows.
@@ -1410,14 +1413,14 @@ async function runPhasePurge(engine: BrainEngine, dryRun: boolean): Promise<Phas
     let purgedCheckpoints = 0;
     try {
       const { purgeStaleCheckpoints } = await import('./op-checkpoint.ts');
-      purgedCheckpoints = await purgeStaleCheckpoints(engine, 7);
+      purgedCheckpoints = await purgeStaleCheckpoints(engine, 7, 100);
     } catch {
       // Non-fatal: op_checkpoints table may not exist yet on pre-v67 brains.
     }
     let purgedVolunteerEvents = 0;
     try {
       const { purgeStaleVolunteerEvents } = await import('./context/volunteer-events.ts');
-      purgedVolunteerEvents = await purgeStaleVolunteerEvents(engine, 90);
+      purgedVolunteerEvents = await purgeStaleVolunteerEvents(engine, 90, 100);
     } catch {
       // Non-fatal: schema 118 may not have been applied yet.
     }
@@ -2516,6 +2519,7 @@ export async function runCycle(
           opts.embedPageLimit,
           progress,
           opts.signal,
+          opts.embedBatchSize,
         ));
         result.duration_ms = duration_ms;
         phaseResults.push(result);

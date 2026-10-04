@@ -38,6 +38,7 @@ export function mergePolledConversation(current: WorkbenchConversation | undefin
 export function useWorkbench() {
   const [rows, setRows] = useState<ConversationRow[]>([]);
   const [models, setModels] = useState<WorkbenchModel[]>([]);
+  const [modelsLoaded, setModelsLoaded] = useState(false);
   const [conversation, setConversation] = useState<WorkbenchConversation>();
   const [model, setModel] = useState('');
   const [knowledge, setKnowledge] = useState(true);
@@ -48,6 +49,7 @@ export function useWorkbench() {
   const active = useRef<string | undefined>(undefined);
   const mounted = useRef(true);
   const modelsRef = useRef(models);
+  const selectionRevision = useRef(0);
   modelsRef.current = models;
   const refresh = async () => {
     const result = await workbenchRequest<{ conversations: ConversationRow[] }>('/conversations');
@@ -56,21 +58,30 @@ export function useWorkbench() {
   useEffect(() => {
     mounted.current = true; let cancelled = false;
     let revision = 0;
-    Promise.all([workbenchRequest<{ conversations: ConversationRow[] }>('/conversations'), workbenchRequest<{ models: WorkbenchModel[] }>('/models'), workbenchRequest<KnowledgeAssistantSettings>('/assistant')]).then(([history, available, settings]) => {
-      if (cancelled) return;
-      const currentModels = revision === 0 ? available.models : modelsRef.current;
-      if (revision === 0) { modelsRef.current = currentModels; setModels(currentModels); }
-      setRows(history.conversations); setAssistant(settings);
-      const remembered = (() => { try { return localStorage.getItem(CHAT_MODEL_KEY) || ''; } catch { return ''; } })();
-      setModel(current => rememberedChatModel(revision === 0 ? remembered : current, settings.model || '', currentModels.map(item => item.id)));
-      setKnowledge(settings.knowledge); setLoaded(true);
-    }).catch(reason => { if (!cancelled) { setError(String(reason.message || reason)); setLoaded(true); } });
+    const initialSelection = selectionRevision.current;
+    let settingsModel = '';
+    const remembered = (() => { try { return localStorage.getItem(CHAT_MODEL_KEY) || ''; } catch { return ''; } })();
+    const fail = (reason: unknown) => { if (!cancelled) setError(reason instanceof Error ? reason.message : String(reason)); };
+    void Promise.allSettled([
+      workbenchRequest<{ conversations: ConversationRow[] }>('/conversations').then(history => { if (!cancelled) setRows(history.conversations); }).catch(fail),
+      workbenchRequest<{ models: WorkbenchModel[] }>('/models').then(available => {
+        if (cancelled || revision !== 0) return;
+        modelsRef.current = available.models; setModels(available.models); setModelsLoaded(true);
+        setModel(current => rememberedChatModel(current || remembered, settingsModel, available.models.map(item => item.id)));
+      }).catch(fail),
+      workbenchRequest<KnowledgeAssistantSettings>('/assistant').then(settings => {
+        if (cancelled) return;
+        setAssistant(settings); setKnowledge(settings.knowledge); settingsModel = settings.model || '';
+        setModel(current => rememberedChatModel(revision === 0 && selectionRevision.current === initialSelection ? remembered : current, settingsModel, modelsRef.current.map(item => item.id)));
+      }).catch(fail),
+    ]).then(() => { if (!cancelled) setLoaded(true); });
     const refreshModels = (preferred: unknown = null) => {
       const requested = ++revision;
       void workbenchRequest<{ models: WorkbenchModel[] }>('/models').then(result => {
         if (cancelled || requested !== revision) return;
         modelsRef.current = result.models;
         setModels(result.models);
+        setModelsLoaded(true);
         setModel(current => rememberedChatModel(typeof preferred === 'string' ? preferred : current, '', result.models.map(item => item.id)));
       }).catch(reason => { if (!cancelled && requested === revision) setError(String(reason.message || reason)); });
     };
@@ -157,6 +168,6 @@ export function useWorkbench() {
     if (!conversation) setKnowledge(saved.knowledge);
     return saved;
   };
-  const chooseModel = (id: string) => { setModel(id); rememberChatModel(id); };
-  return { rows, models, conversation, model, setModel: chooseModel, knowledge, setKnowledge, assistant, saveAssistant, error, setError, loaded, pending, running, select, send, action };
+  const chooseModel = (id: string) => { selectionRevision.current++; setModel(id); rememberChatModel(id); };
+  return { rows, models, modelsLoaded, conversation, model, setModel: chooseModel, knowledge, setKnowledge, assistant, saveAssistant, error, setError, loaded, pending, running, select, send, action };
 }

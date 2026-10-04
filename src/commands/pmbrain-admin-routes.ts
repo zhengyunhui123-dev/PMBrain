@@ -1491,7 +1491,7 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
 
   app.post('/admin/api/runs/:id/cancel', requireAdmin, async (req: Request, res: Response) => {
     const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
-    const run = id ? await productTasks.cancel(id) ?? await cancelRun(id) : null;
+    const run = id ? await productTasks.requestCancel(id) ?? await cancelRun(id) : null;
     if (!run) {
       res.status(404).json({ error: 'run_not_found' });
       return;

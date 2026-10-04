@@ -15,6 +15,7 @@ import { removeAdminUploadTempDir } from '../../commands/pmbrain-admin-support.t
 import { appendTaskCheckpoint } from './checkpoint.ts';
 import { TaskProgressAdapter, finishTaskProgress } from './progress-adapter.ts';
 import type { TaskProductProgress } from '../../../shared/task-progress.ts';
+import { withDatabasePriority } from '../database/priority';
 
 export const PRODUCT_TASK_QUEUE = 'pmbrain-product';
 const TASK_NAME = 'pmbrain-product-task';
@@ -53,16 +54,17 @@ export class ProductTaskRuntime {
   private paused = false;
   private failure: Error | null = null;
   private cached: ConsoleRun[] = [];
-  private executions = new Map<number, { cancel: () => void; done: Promise<unknown> }>();
+  private refreshingRuns: Promise<void> | null = null;
+  private executions = new Map<number, { cancel: () => void; done: Promise<unknown>; run: () => ConsoleRun }>();
 
   constructor(private engine: BrainEngine) {
     this.queue = new MinionQueue(engine);
     this.worker = new MinionWorker(engine, {
-      queue: PRODUCT_TASK_QUEUE, concurrency: 1, pollInterval: 100,
+      queue: PRODUCT_TASK_QUEUE, concurrency: 2, pollInterval: 100,
       healthCheckInterval: 0, lockDuration: 30_000, stalledInterval: 5000,
     });
     this.worker.on('unhealthy', info => console.error('[tasks]', info));
-    this.worker.register(TASK_NAME, job => this.execute(job));
+    this.worker.register(TASK_NAME, job => withDatabasePriority((job.data.task as ProductTask).type === 'import' ? 2 : 3, () => this.execute(job)));
   }
 
   async start(): Promise<void> {
@@ -75,7 +77,8 @@ export class ProductTaskRuntime {
        WHERE queue = $1 AND name = $2 AND status = 'active'
        AND ($3::boolean OR lock_until <= now())`, [PRODUCT_TASK_QUEUE, TASK_NAME, this.engine.kind === 'pglite'],
     );
-    this.loop = this.worker.start().catch(error => {
+    await this.listRuns();
+    this.loop = withDatabasePriority(3, () => this.worker.start()).catch(error => {
       this.failure = error instanceof Error ? error : new Error(String(error));
       console.error('[tasks] worker stopped:', error instanceof Error ? error.message : error);
     });
@@ -89,10 +92,16 @@ export class ProductTaskRuntime {
       timeout_ms: task.input.timeoutMs ?? undefined,
       idempotency_key: idempotencyKey ?? `product:${randomUUID()}`,
     });
-    return toRun(job);
+    const run = toRun(job);
+    this.cached = [run, ...this.cached.filter(row => row.id !== run.id)].slice(0, 100);
+    return run;
   }
 
   async submitImport(input: ImportTaskInput): Promise<ConsoleRun> {
+    return withDatabasePriority(2, () => this.submitImportCore(input));
+  }
+
+  private async submitImportCore(input: ImportTaskInput): Promise<ConsoleRun> {
     if (!input.path.trim()) throw new Error('Path is required');
     const sourceId = await resolveImportSourceIdForPath(this.engine, input.path, input.sourceId);
     const file = await stat(input.path).catch(() => null);
@@ -128,29 +137,55 @@ export class ProductTaskRuntime {
   }
 
   async listRuns(): Promise<ConsoleRun[]> {
+    if (this.executions.size) {
+      if (!this.refreshingRuns) {
+        this.refreshingRuns = withDatabasePriority(3, () => this.queue.getJobs({ queue: PRODUCT_TASK_QUEUE, name: TASK_NAME, limit: 100 }))
+          .then(jobs => { this.cached = jobs.map(job => toRun(job)); })
+          .catch(error => console.error('[tasks] history read failed:', error instanceof Error ? error.message : error))
+          .finally(() => { this.refreshingRuns = null; });
+      }
+      return this.cachedRuns();
+    }
     this.cached = (await this.queue.getJobs({ queue: PRODUCT_TASK_QUEUE, name: TASK_NAME, limit: 100 }))
       .map(job => toRun(job, job.status === 'cancelled' && this.executions.has(job.id)));
     return this.cached;
   }
 
-  cachedRuns(): ConsoleRun[] { return this.cached; }
+  cachedRuns(): ConsoleRun[] {
+    const live = [...this.executions.values()].map(execution => execution.run());
+    return [...live, ...this.cached.filter(row => !live.some(run => run.id === row.id))]
+      .sort((a, b) => b.startedAt.localeCompare(a.startedAt)).slice(0, 100);
+  }
 
   async getRun(id: string): Promise<ConsoleRun | null> {
     if (!/^task-\d+$/.test(id)) return null;
+    const execution = this.executions.get(Number(id.slice(5)));
+    if (execution) return execution.run();
     const job = await this.queue.getJob(Number(id.slice(5)));
-    return job?.queue === PRODUCT_TASK_QUEUE && job.name === TASK_NAME
-      ? toRun(job, job.status === 'cancelled' && this.executions.has(job.id)) : null;
+    if (job?.queue !== PRODUCT_TASK_QUEUE || job.name !== TASK_NAME) return null;
+    const run = toRun(job, job.status === 'cancelled' && this.executions.has(job.id));
+    this.cached = [run, ...this.cached.filter(row => row.id !== run.id)].slice(0, 100);
+    return run;
   }
 
   async cancel(id: string): Promise<ConsoleRun | null> {
     const run = await this.getRun(id);
     if (!run || !['running', 'queued'].includes(run.status)) return run;
     const jobId = Number(id.slice(5));
-    await this.queue.cancelJob(jobId);
     const execution = this.executions.get(jobId);
     execution?.cancel();
+    await withDatabasePriority(0, () => this.queue.cancelJob(jobId));
     await execution?.done;
     return this.getRun(id);
+  }
+
+  async requestCancel(id: string): Promise<ConsoleRun | null> {
+    const execution = /^task-\d+$/.test(id) ? this.executions.get(Number(id.slice(5))) : undefined;
+    if (!execution) return this.cancel(id);
+    execution.cancel();
+    void withDatabasePriority(0, () => this.queue.cancelJob(Number(id.slice(5))))
+      .catch(error => console.error('[tasks] cancel failed:', error instanceof Error ? error.message : error));
+    return execution.run();
   }
 
   async retry(id: string): Promise<ConsoleRun | null> {
@@ -177,10 +212,22 @@ export class ProductTaskRuntime {
     let progress = (record.progress ?? {}) as Progress;
     const adapter = new TaskProgressAdapter(String(record.data.kind), toRun(record).product);
     let progressTail = Promise.resolve();
+    let persisting = false;
+    let progressVersion = 0;
     const persist = () => {
       progress.product = adapter.view;
-      const snapshot = structuredClone(progress);
-      progressTail = progressTail.then(() => context.updateProgress(snapshot));
+      progressVersion++;
+      if (!persisting) {
+        persisting = true;
+        progressTail = (async () => {
+          let saved = 0;
+          while (saved < progressVersion) {
+            const version = progressVersion;
+            await context.updateProgress(structuredClone(progress));
+            saved = version;
+          }
+        })().finally(() => { persisting = false; });
+      }
       return progressTail;
     };
     const host = new TaskEngineHost(this.engine, context.id, record.lock_token, async file => {
@@ -200,6 +247,7 @@ export class ProductTaskRuntime {
     const result = new Promise<unknown>((resolve, reject) => { settleResolve = resolve; settleReject = reject; });
     let cancelRequested = false;
     let completed = false;
+    let flush: ReturnType<typeof setInterval> | undefined;
     const cancel = () => {
       if (cancelRequested) return;
       cancelRequested = true;
@@ -209,6 +257,7 @@ export class ProductTaskRuntime {
     const finished = (async () => {
       try { return await result; }
       finally {
+        clearInterval(flush);
         thread.removeAllListeners('message');
         try { await host.close(); }
         finally {
@@ -224,7 +273,10 @@ export class ProductTaskRuntime {
         }
       }
     })();
-    this.executions.set(context.id, { cancel, done: finished.catch(() => {}) });
+    this.executions.set(context.id, { cancel, done: finished.catch(() => {}), run: () => {
+      progress.product = adapter.view;
+      return toRun({ ...record, progress }, cancelRequested);
+    } });
     context.signal.addEventListener('abort', cancel, { once: true });
     context.shutdownSignal.addEventListener('abort', cancel, { once: true });
     if (context.signal.aborted || context.shutdownSignal.aborted) cancel();
@@ -232,7 +284,7 @@ export class ProductTaskRuntime {
     thread.once('exit', code => settleReject(new Error(`任务 Worker 意外退出（${code}）`)));
     thread.on('message', (message: TaskWorkerMessage) => {
       if (message.type === 'rpc') {
-        void host.dispatch(message).then(value => {
+        void withDatabasePriority((record.data.task as ProductTask).type === 'import' ? 2 : 3, () => host.dispatch(message)).then(value => {
           if (!cancelRequested) thread.postMessage({ type: 'reply', id: message.id, value });
         }, error => {
           if (!cancelRequested) thread.postMessage({ type: 'reply', id: message.id, error: error instanceof Error ? error.message : String(error) });
@@ -254,7 +306,7 @@ export class ProductTaskRuntime {
         void persist().then(() => settleReject(new Error(message.error)), settleReject);
       }
     });
-    const flush = setInterval(() => void persist().catch(settleReject), 1000);
+    flush = setInterval(() => void persist().catch(settleReject), 1000);
     thread.postMessage({ type: 'start', kind: this.engine.kind, task: record.data.task });
     try { return await finished; }
     finally {
@@ -271,6 +323,7 @@ export class ProductTaskRuntime {
     for (const execution of this.executions.values()) execution.cancel();
     await Promise.allSettled([...this.executions.values()].map(execution => execution.done));
     await this.loop;
+    await this.refreshingRuns;
     await Promise.allSettled([...this.executions.values()].map(execution => execution.done));
     if (interrupted.length) {
       await this.engine.executeRaw(

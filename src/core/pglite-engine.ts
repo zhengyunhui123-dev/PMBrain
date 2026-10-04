@@ -3,7 +3,7 @@ import { readRelationalFanout, readTakes } from './search/read-enrichment.ts';
 import { PGlite } from '@electric-sql/pglite';
 import { vector } from '@electric-sql/pglite/vector';
 import { pg_trgm } from '@electric-sql/pglite/contrib/pg_trgm';
-import type { Transaction } from '@electric-sql/pglite';
+import type { Transaction, PGliteOptions } from '@electric-sql/pglite';
 import type {
   BrainEngine,
   BatchOpts,
@@ -388,6 +388,7 @@ export class PGLiteEngine implements BrainEngine {
   private _db: PGLiteDB | null = null;
   private _lock: LockHandle | null = null;
   private _dataDir: string | undefined;
+  private runtimeAssets: Partial<PGliteOptions> = {};
   walRepairReceipt: WalRepairReceipt | null = null;
   // Tier 3: when GBRAIN_PGLITE_SNAPSHOT loaded a post-initSchema state into
   // PGlite.create(loadDataDir), initSchema is a no-op (schema is already
@@ -401,6 +402,9 @@ export class PGLiteEngine implements BrainEngine {
 
   // Lifecycle
   async connect(config: EngineConfig): Promise<void> {
+    if (/~BUN|\$bunfs/i.test(decodeURI(import.meta.url))) {
+      this.runtimeAssets = await (await import('./pglite-embedded-assets.ts')).getEmbeddedPgliteOptions();
+    }
     this.walRepairReceipt = null;
     const dataDir = config.database_path || undefined; // undefined = in-memory
     this._dataDir = dataDir;
@@ -443,11 +447,13 @@ export class PGLiteEngine implements BrainEngine {
         dataDir,
         loadDataDir,
         extensions: { vector, pg_trgm },
+        ...this.runtimeAssets,
       }),
     );
     const openAfterRepair = () => preservingProcessExitCode(() => PGlite.create({
       dataDir,
       extensions: { vector, pg_trgm },
+      ...this.runtimeAssets,
     }));
 
     try {
@@ -590,6 +596,7 @@ export class PGLiteEngine implements BrainEngine {
         () => preservingProcessExitCode(() => PGlite.create({
           dataDir: this._dataDir,
           extensions: { vector, pg_trgm },
+          ...this.runtimeAssets,
         })),
         walRepairOptsFromLock(this._lock),
       );
@@ -1429,16 +1436,18 @@ export class PGLiteEngine implements BrainEngine {
     return rows.length > 0;
   }
 
-  async purgeDeletedPages(olderThanHours: number): Promise<{ slugs: string[]; count: number }> {
+  async purgeDeletedPages(olderThanHours: number, options?: { limit?: number }): Promise<{ slugs: string[]; count: number }> {
     // Clamp to non-negative integer; cascade through FKs (content_chunks,
     // page_links, chunk_relations) on DELETE.
     const hours = Math.max(0, Math.floor(olderThanHours));
     const { rows } = await this.db.query(
       `DELETE FROM pages
-       WHERE deleted_at IS NOT NULL
-         AND deleted_at < now() - ($1 || ' hours')::interval
+       WHERE id IN (SELECT id FROM pages
+         WHERE deleted_at IS NOT NULL
+           AND deleted_at < now() - ($1 || ' hours')::interval
+         ORDER BY id LIMIT $2)
        RETURNING slug`,
-      [hours]
+      [hours, options?.limit === undefined ? null : Math.max(1, Math.floor(options.limit))]
     );
     const slugs = (rows as { slug: string }[]).map((r) => r.slug);
     return { slugs, count: slugs.length };
@@ -1510,12 +1519,24 @@ export class PGLiteEngine implements BrainEngine {
   }
 
   async listPages(filters?: PageFilters): Promise<Page[]> {
+    return (await this.readPageRows(filters)).map(rowToPage);
+  }
+
+  async listPageIds(filters?: PageFilters): Promise<number[]> {
+    return (await this.readPageRows(filters, true)).map(row => Number(row.id));
+  }
+
+  private async readPageRows(filters?: PageFilters, idsOnly = false): Promise<Record<string, unknown>[]> {
     const limit = filters?.limit || 100;
     const offset = filters?.offset || 0;
 
     const where: string[] = [];
     const params: unknown[] = [];
     const tagJoin = filters?.tag ? 'JOIN tags t ON t.page_id = p.id' : '';
+    if (filters?.pageIds) {
+      params.push(filters.pageIds);
+      where.push(`p.id = ANY($${params.length}::int[])`);
+    }
 
     if (filters?.type) {
       params.push(filters.type);
@@ -1562,12 +1583,12 @@ export class PGLiteEngine implements BrainEngine {
     const orderBy = PAGE_SORT_SQL[sortKey];
 
     const { rows } = await this.db.query(
-      `SELECT p.* FROM pages p ${tagJoin} ${whereSql}
+      `SELECT ${idsOnly ? 'p.id' : 'p.*'} FROM pages p ${tagJoin} ${whereSql}
        ORDER BY ${orderBy} ${limitSql}`,
       params
     );
 
-    return (rows as Record<string, unknown>[]).map(rowToPage);
+    return rows as Record<string, unknown>[];
   }
 
   async getAllSlugs(opts?: { sourceId?: string }): Promise<Set<string>> {

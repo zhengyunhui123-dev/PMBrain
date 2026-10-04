@@ -5,6 +5,8 @@ import { estimateEmbedTokens } from '../../core/chunkers/token-estimate';
 export { FALLBACK_CONTEXT_TOKENS };
 export const OUTPUT_RESERVE_TOKENS = 4_096;
 export const SUMMARY_OUTPUT_TOKENS = 1_200;
+const tokenCounts = new Map<string, number>();
+let cachedCharacters = 0;
 
 export function summaryInputBudget(contextWindow?: number): number {
   const windowTokens = contextWindow && contextWindow >= 2048 ? contextWindow : FALLBACK_CONTEXT_TOKENS;
@@ -18,7 +20,20 @@ export function conversationContext(messages: WorkbenchMessage[]): WorkbenchMess
 }
 
 export function estimateTokens(text: string): number {
-  return estimateEmbedTokens(text);
+  const cached = tokenCounts.get(text);
+  if (cached !== undefined) return cached;
+  const tokens = estimateEmbedTokens(text);
+  if (text.length <= 32_768) {
+    while (tokenCounts.size >= 32 || cachedCharacters + text.length > 65_536) {
+      const oldest = tokenCounts.keys().next().value;
+      if (oldest === undefined) break;
+      cachedCharacters -= oldest.length;
+      tokenCounts.delete(oldest);
+    }
+    tokenCounts.set(text, tokens);
+    cachedCharacters += text.length;
+  }
+  return tokens;
 }
 
 export function messageTokens(message: WorkbenchMessage): number {

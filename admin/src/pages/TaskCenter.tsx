@@ -4,7 +4,7 @@ import { api } from '../api';
 import { formatDate, type ConsoleRun } from '../lib/shared';
 import { TaskTechnicalLogs } from '../product/TaskTechnicalLogs';
 import { describeRunRecovery } from '../lib/run-recovery';
-import { TaskProgressCard, taskStatus } from '../product/TaskProgress';
+import { TaskProgressCard, taskStatus, taskStopping } from '../product/TaskProgress';
 import { taskName } from '../../../shared/task-progress';
 
 type TaskFilter = 'all' | 'running' | 'queued' | 'completed' | 'failed' | 'cancelled';
@@ -126,7 +126,7 @@ function TaskDetailDrawer({ run, onClose, onCancel, onRetry, busy }: { run: Cons
     <button type="button" className="drawer-close" aria-label="关闭任务详情" onClick={onClose}>×</button>
     <h2>{run.product?.name ?? taskName(run.kind)}</h2><p className="pm-hint">{formatDate(run.startedAt, '-')} · {taskTriggerLabel(run)}</p>
     <TaskProgressCard run={run} link={false} />
-    <div className="task-run-card-actions">{isActive(run) && <button type="button" className="pm-ghost" disabled={busy} onClick={onCancel}>停止任务</button>}{['failed', 'cancelled'].includes(run.status) && run.id.startsWith('task-') && <button type="button" className="pm-ghost" disabled={busy} onClick={onRetry}>重新执行</button>}</div>
+    <div className="task-run-card-actions">{isActive(run) && <button type="button" className="pm-ghost" disabled={busy || taskStopping(run)} onClick={onCancel}>{taskStopping(run) ? '正在停止…' : '停止任务'}</button>}{['failed', 'cancelled'].includes(run.status) && run.id.startsWith('task-') && <button type="button" className="pm-ghost" disabled={busy} onClick={onRetry}>重新执行</button>}</div>
     <TaskTechnicalLogs key={run.id} run={run} />
   </aside></>;
 }

@@ -4,7 +4,7 @@ import { api } from '../api';
 import { formatDate, type ConsoleRun } from '../lib/shared';
 import { taskName } from '../../../shared/task-progress';
 import { useProductTasks } from './TaskActivity';
-import { TaskProgressCard, taskLink, taskStatus } from './TaskProgress';
+import { TaskProgressCard, taskLink, taskStatus, taskStopping } from './TaskProgress';
 import './maintenance-tasks.css';
 
 const activeTask = (run: ConsoleRun) => run.status === 'running' || run.status === 'queued';
@@ -37,7 +37,7 @@ function MaintenanceTaskDetail({ run, onClose, onChange }: { run: ConsoleRun; on
       {!run.product && <p className="maintenance-muted">此历史任务没有保存步骤进度，可在任务中心查看结果。</p>}
       {error && <p className="product-error" role="alert">{error}</p>}
     </div>
-    <footer>{activeTask(run) && <button type="button" disabled={busy} onClick={() => void act(false)}><CircleStop size={16} />{busy ? '正在停止…' : '停止任务'}</button>}{['failed', 'cancelled'].includes(run.status) && run.id.startsWith('task-') && <button type="button" disabled={busy} onClick={() => void act(true)}>{busy ? '正在提交…' : '重新执行'}</button>}<button type="button" className="maintenance-primary" onClick={() => taskLink(run)}><ArrowUpRight size={16} />查看任务</button></footer>
+    <footer>{activeTask(run) && <button type="button" disabled={busy || taskStopping(run)} onClick={() => void act(false)}><CircleStop size={16} />{busy || taskStopping(run) ? '正在停止…' : '停止任务'}</button>}{['failed', 'cancelled'].includes(run.status) && run.id.startsWith('task-') && <button type="button" disabled={busy} onClick={() => void act(true)}>{busy ? '正在提交…' : '重新执行'}</button>}<button type="button" className="maintenance-primary" onClick={() => taskLink(run)}><ArrowUpRight size={16} />查看任务</button></footer>
   </dialog>;
 }
 

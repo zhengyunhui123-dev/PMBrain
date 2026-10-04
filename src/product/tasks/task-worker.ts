@@ -112,6 +112,7 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
     synthDate: input.date, synthFrom: input.from, synthTo: input.to,
     proposeTakesPageLimit: input.maxPages,
     embedPageLimit: input.maxPages,
+    embedBatchSize: 100,
     proposeTakesRequireChunks: true,
     proposeTakesDrain: input.drainProposals,
     proposeTakesWindowMs: (input.windowSeconds ?? 3600) * 1000,
@@ -207,6 +208,7 @@ async function execute(task: ProductTask, kind: BrainEngine['kind']) {
     result = { ...await runEmbedCore(engine, {
       stale: true, forceReembed: task.input.forceReembed,
       catchUp: task.input.catchUp,
+      batchSize: 100,
       signal: abort.signal,
     }), catchUp: task.input.catchUp === true, forceReembed: task.input.forceReembed === true };
   }

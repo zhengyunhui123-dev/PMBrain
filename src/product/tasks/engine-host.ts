@@ -1,8 +1,9 @@
 import type { BrainEngine, ReservedConnection } from '../../core/engine.ts';
-import type { Page } from '../../core/types.ts';
+import type { Page, PageFilters } from '../../core/types.ts';
 import { taskModelFingerprint } from './checkpoint.ts';
 import type { TaskWorkerMessage } from './types.ts';
 import { stat } from 'node:fs/promises';
+import { withPgliteSavepoints } from '../database/savepoints';
 
 type RpcMessage = Extract<TaskWorkerMessage, { type: 'rpc' }>;
 type Scope = {
@@ -61,6 +62,66 @@ export class TaskEngineHost {
 
   private async perform(message: RpcMessage): Promise<unknown> {
     const { method, args, scope: scopeId } = message;
+    if (scopeId === undefined && method === 'purgeDeletedPages' && !(args[1] as { limit?: number } | undefined)?.limit) {
+      const slugs: string[] = [];
+      while (true) {
+        const result = await this.dispatch({ ...message, args: [args[0], { limit: 50 }] }) as { slugs: string[]; count: number };
+        slugs.push(...result.slugs);
+        if (result.count < 50) return { slugs, count: slugs.length };
+      }
+    }
+    if (scopeId === undefined && method === 'listPages' && Number((args[0] as PageFilters | undefined)?.limit ?? 100) > 200) {
+      const filters = args[0] as PageFilters;
+      const ids = await this.owner.listPageIds(filters);
+      const rows: Page[] = [];
+      for (let offset = 0; offset < ids.length; offset += 200) {
+        if (this.closed) throw new Error('任务执行已停止');
+        const pages = await this.owner.listPages({ ...filters, pageIds: ids.slice(offset, offset + 200), limit: 200, offset: 0 });
+        const byId = new Map(pages.map(page => [page.id, page]));
+        for (const id of ids.slice(offset, offset + 200)) {
+          const page = byId.get(id);
+          if (page) rows.push(page);
+        }
+      }
+      return rows;
+    }
+    if (scopeId === undefined && method === 'batchLoadEmotionalInputs') {
+      const options = args[1] as { sourceId?: string } | undefined;
+      const slugs = args[0] as string[] | undefined;
+      if (slugs && slugs.length <= 50) return this.owner.batchLoadEmotionalInputs(slugs, options);
+      const refs = (await this.owner.listAllPageRefs()).filter(ref => (!options?.sourceId || ref.source_id === options.sourceId) && (!slugs || slugs.includes(ref.slug)));
+      const rows = [];
+      for (let offset = 0; offset < refs.length; offset += 50) {
+        if (this.closed) throw new Error('任务执行已停止');
+        const batch = refs.slice(offset, offset + 50);
+        for (const sourceId of new Set(batch.map(ref => ref.source_id))) {
+          rows.push(...await this.owner.batchLoadEmotionalInputs(batch.filter(ref => ref.source_id === sourceId).map(ref => ref.slug), { sourceId }));
+        }
+      }
+      return rows;
+    }
+    if (scopeId === undefined && ['addLinksBatch', 'addTimelineEntriesBatch', 'addTakesBatch', 'setEmotionalWeightBatch', 'markPagesExtractedBatch', 'deletePages', 'deleteCodeEdgesForChunks'].includes(method)
+      && Array.isArray(args[0]) && args[0].length > 50) {
+      let total = 0;
+      const rows: unknown[] = [];
+      for (let offset = 0; offset < args[0].length; offset += 50) {
+        const value = await this.dispatch({ ...message, args: [args[0].slice(offset, offset + 50), ...args.slice(1)] });
+        if (typeof value === 'number') total += value;
+        if (Array.isArray(value)) rows.push(...value);
+      }
+      return method === 'deletePages' ? rows : ['markPagesExtractedBatch', 'deleteCodeEdgesForChunks'].includes(method) ? undefined : total;
+    }
+    if (scopeId === undefined && method === 'upsertChunks' && Array.isArray(args[1]) && args[1].length > 32) {
+      const options = args[2] as { sourceId?: string; replaceExisting?: boolean } | undefined;
+      for (let offset = 0; offset < args[1].length; offset += 32) {
+        await this.dispatch({ ...message, args: [args[0], args[1].slice(offset, offset + 32), { ...options, replaceExisting: false }] });
+      }
+      if (options?.replaceExisting !== false) await this.dispatch({ ...message, method: 'executeRaw', args: [
+        `DELETE FROM content_chunks WHERE page_id = (SELECT id FROM pages WHERE slug = $1 AND source_id = $2) AND chunk_index != ALL($3::int[])`,
+        [args[0], options?.sourceId ?? 'default', args[1].map(chunk => chunk.chunk_index)],
+      ] });
+      return;
+    }
     if (method === 'task.checkpoint') {
       await this.checkpoint(args[0] as Record<string, unknown>);
       return null;
@@ -94,7 +155,8 @@ export class TaskEngineHost {
         if (this.closed) throw new Error('任务执行已停止');
         if (transactional) await this.fence(connection as BrainEngine);
         if (this.closed) throw new Error('任务执行已停止');
-        this.scopes.set(id, { engine: connection, finish, done, transactional });
+        const scoped = transactional ? withPgliteSavepoints(connection as BrainEngine) : connection;
+        this.scopes.set(id, { engine: scoped, finish, done, transactional });
         readyResolve();
         if (!await completed) throw new Error('任务事务已回滚');
         if (transactional) await this.fence(connection as BrainEngine);
@@ -153,14 +215,19 @@ export class TaskEngineHost {
       throw new Error('数据库索引或连接维护需要独占执行，请使用已有高级维护入口');
     }
     await this.validateFile();
-    return (engine as BrainEngine).transaction(async tx => { await this.fence(tx); return invoke(tx); });
+    return (engine as BrainEngine).transaction(async tx => {
+      await this.fence(tx);
+      const value = await invoke(withPgliteSavepoints(tx));
+      await this.fence(tx);
+      return value;
+    });
   }
 
   async close(): Promise<void> {
     this.closed = true;
+    await Promise.allSettled([...this.pending]);
     for (const scope of this.scopes.values()) scope.finish(false);
     await Promise.allSettled([...this.scopes.values()].map(scope => scope.done));
-    await Promise.allSettled([...this.pending]);
     this.scopes.clear();
     if (this.cycleLocks.size) {
       await this.owner.executeRaw(
