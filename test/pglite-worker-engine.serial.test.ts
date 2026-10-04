@@ -115,3 +115,142 @@ test('同一数据目录只允许一个 Worker 所有者，关闭重开保留内
     else process.env.PMBRAIN_PGLITE_LOCK_FAIL_FAST = previous;
   }
 }, 30000);
+
+const RENEW_LOCK_SQL = `UPDATE minion_jobs SET lock_until = now() + ($1::double precision * interval '1 millisecond'), updated_at = now()
+       WHERE id = $2 AND lock_token = $3 AND status = 'active'
+       RETURNING id`;
+
+async function insertActiveJob(token: string): Promise<number> {
+  const rows = await engine.executeRaw<{ id: number }>(
+    `INSERT INTO minion_jobs (name, queue, status, lock_token, lock_until, data)
+     VALUES ('pmbrain-product-task', 'pmbrain-product', 'active', $1, now() + interval '1 second', '{}'::jsonb)
+     RETURNING id`,
+    [token],
+  );
+  return Number(rows[0].id);
+}
+
+async function remainingLockMs(id: number): Promise<number> {
+  const rows = await engine.executeRaw<{ remaining_ms: string | number }>(
+    `SELECT EXTRACT(EPOCH FROM (lock_until - now())) * 1000 AS remaining_ms FROM minion_jobs WHERE id = $1`,
+    [id],
+  );
+  return Number(rows[0]?.remaining_ms ?? 0);
+}
+
+function startRenewal(id: number, token: string): { renewed: Promise<{ id: number }[]>; finished: Promise<void> } {
+  const renewed = engine.executeRaw<{ id: number }>(RENEW_LOCK_SQL, [30_000, id, token]);
+  const finished = Promise.race([
+    renewed.then(rows => rows.length > 0 ? 'renewed' : 'missed'),
+    Bun.sleep(2000).then(() => 'timeout'),
+  ]).then(winner => { expect(winner).toBe('renewed'); });
+  return { renewed, finished };
+}
+
+test('同步占着事务时，任务锁续期不用等这批提交，普通读取仍然要等', async () => {
+  const token = 'renew-while-open';
+  const id = await insertActiveJob(token);
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  let ready!: () => void;
+  const started = new Promise<void>(resolve => { ready = resolve; });
+  const active = engine.transaction(async tx => {
+    await tx.executeRaw('SELECT 1');
+    ready();
+    await gate;
+    await tx.executeRaw('SELECT 1');
+  });
+  try {
+    await started;
+    let readDone = false;
+    const read = engine.getConfig('lock-renewal-wait').finally(() => { readDone = true; });
+    const renewal = startRenewal(id, token);
+    try {
+      await renewal.finished;
+      expect(readDone).toBe(false);
+      release();
+      await active;
+      await read;
+      expect(await remainingLockMs(id)).toBeGreaterThan(20_000);
+    } finally {
+      release();
+      await renewal.renewed.catch(() => {});
+    }
+  } finally {
+    release();
+    await active.catch(() => {});
+    await engine.executeRaw('DELETE FROM minion_jobs WHERE id = $1', [id]);
+  }
+}, 30000);
+
+test('同步事务回滚后，已经续上的任务锁仍然保留', async () => {
+  const token = 'renew-after-rollback';
+  const id = await insertActiveJob(token);
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  let ready!: () => void;
+  const started = new Promise<void>(resolve => { ready = resolve; });
+  const active = engine.transaction(async tx => {
+    await tx.executeRaw('SELECT 1');
+    ready();
+    await gate;
+    throw new Error('rollback requested');
+  });
+  try {
+    await started;
+    const renewal = startRenewal(id, token);
+    try {
+      await renewal.finished;
+      release();
+      await expect(active).rejects.toThrow('rollback requested');
+      expect(await remainingLockMs(id)).toBeGreaterThan(20_000);
+    } finally {
+      release();
+      await renewal.renewed.catch(() => {});
+    }
+  } finally {
+    release();
+    await active.catch(() => {});
+    await engine.executeRaw('DELETE FROM minion_jobs WHERE id = $1', [id]);
+  }
+}, 30000);
+
+test('内层保存点回滚不会丢掉刚刚续上的任务锁', async () => {
+  const token = 'renew-after-savepoint';
+  const id = await insertActiveJob(token);
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  let ready!: () => void;
+  const started = new Promise<void>(resolve => { ready = resolve; });
+  const active = engine.transaction(async tx => {
+    await tx.transaction(async () => {
+      ready();
+      await gate;
+      throw new Error('savepoint rollback');
+    }).catch(error => {
+      if (!(error instanceof Error) || error.message !== 'savepoint rollback') throw error;
+    });
+    const rows = await tx.executeRaw<{ remaining_ms: string | number }>(
+      `SELECT EXTRACT(EPOCH FROM (lock_until - now())) * 1000 AS remaining_ms FROM minion_jobs WHERE id = $1`,
+      [id],
+    );
+    expect(Number(rows[0]?.remaining_ms ?? 0)).toBeGreaterThan(20_000);
+  });
+  try {
+    await started;
+    const renewal = startRenewal(id, token);
+    try {
+      await renewal.finished;
+      release();
+      await active;
+      expect(await remainingLockMs(id)).toBeGreaterThan(20_000);
+    } finally {
+      release();
+      await renewal.renewed.catch(() => {});
+    }
+  } finally {
+    release();
+    await active.catch(() => {});
+    await engine.executeRaw('DELETE FROM minion_jobs WHERE id = $1', [id]);
+  }
+}, 30000);

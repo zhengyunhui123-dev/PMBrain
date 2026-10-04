@@ -241,7 +241,7 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
     const runs = await readRuns();
     const hasActiveRun = runs.some(run => run.status === 'queued' || run.status === 'running');
     let queue: unknown = null;
-    if (!getPgliteBusy()) {
+    if (!getPgliteBusy() && !hasActiveRun) {
       try {
         const { readSnapshot } = await import('./jobs-watch.ts');
         queue = await readSnapshot(engine);

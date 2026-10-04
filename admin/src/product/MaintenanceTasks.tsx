@@ -68,7 +68,10 @@ export function MaintenanceTasksPage() {
     return () => { live = false; };
   }, [selectedId, Boolean(selected)]);
   const select = (run: ConsoleRun) => { setSelectedId(run.id); window.history.replaceState(null, '', `#dream?run=${encodeURIComponent(run.id)}`); };
-  const close = () => { setSelectedId(''); window.history.replaceState(null, '', '#dream'); };
+  const close = () => {
+    setSelectedId('');
+    if ((window.location.hash.replace(/^#/, '').split('?')[0] || 'home') === 'dream') window.history.replaceState(null, '', '#dream');
+  };
   const start = async (preset: 'quick' | 'full') => {
     if (submitting.current) return;
     submitting.current = true; setStarting(preset); setError('');

@@ -24,6 +24,7 @@ describe('PGLite 后台任务忙碌提示', () => {
     expect(source).toContain('rows: runs');
     expect(source).toContain('requireAdmin(req, res, () => {');
     expect(source).toContain("const hasActiveRun = runs.some(run => run.status === 'queued' || run.status === 'running');");
+    expect(source).toContain('if (!getPgliteBusy() && !hasActiveRun)');
     expect(source).toContain('config.database_path && !hasActiveRun');
   });
 });

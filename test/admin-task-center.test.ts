@@ -10,15 +10,26 @@ const adminCss = readFileSync('admin/src/index.css', 'utf8');
 const progressSource = readFileSync('admin/src/product/TaskProgress.tsx', 'utf8');
 const technicalSource = readFileSync('admin/src/product/TaskTechnicalLogs.tsx', 'utf8');
 const taskNames = readFileSync('shared/task-progress.ts', 'utf8');
+const maintenanceSource = readFileSync('admin/src/product/MaintenanceTasks.tsx', 'utf8');
 
 describe('Admin 任务中心与 Dream 忙碌态', () => {
   test('任务中心位于集成导航并显示现有长任务', () => {
     expect(appSource).toContain("{ page: 'tasks', label: '任务中心', icon: 'tasks' }");
     expect(appSource).toContain('<TaskCenterPage />');
     expect(taskCenterSource).toContain('api.taskCenter(true)');
+    expect(taskCenterSource).toContain('useProductTasks');
+    expect(taskCenterSource).toContain('if (!snapshot) return liveTasks.rows');
     expect(taskCenterSource).toContain('task-table');
     expect(technicalSource).toContain('技术日志');
     expect(taskCenterSource).toContain('停止任务');
+  });
+
+  test('查看任务使用已经拿到的进度，离开整理页时不把地址改回去', () => {
+    expect(taskCenterSource).toContain('preferLiveRun');
+    expect(taskCenterSource).toContain('正在读取后台任务…');
+    expect(taskCenterSource).toContain('!liveTasks.loaded');
+    expect(maintenanceSource).toContain("split('?')[0] || 'home') === 'dream'");
+    expect(maintenanceSource).toContain('查看任务');
   });
 
   test('任务中心展示 PGLite 残留占用进程并提供安全恢复入口', () => {
@@ -29,7 +40,7 @@ describe('Admin 任务中心与 Dream 忙碌态', () => {
   });
 
   test('有实际运行任务时不显示 PGLite 残留占用恢复卡片', () => {
-    expect(taskCenterSource).toContain('activeRows.length === 0 && snapshot.pglite_owner');
+    expect(taskCenterSource).toContain('activeRows.length === 0 && snapshot?.pglite_owner');
     expect(taskCenterSource).toContain("const activeRows = rows.filter(isActive);");
     expect(taskCenterSource).toContain('暂无任务记录');
   });

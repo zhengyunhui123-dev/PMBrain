@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { Worker } from 'node:worker_threads';
 import type { BrainEngine, ReservedConnection } from '../../core/engine.ts';
 import type { EngineConfig } from '../../core/types.ts';
@@ -16,6 +17,8 @@ function transferable(value: unknown): unknown {
 export class WorkerPgliteEngine {
   readonly kind = 'pglite';
   private thread: Worker | null = null;
+  private replies: BroadcastChannel | null = null;
+  private repliesClosed = false;
   private sequence = 0;
   private pending = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void }>();
 
@@ -53,22 +56,30 @@ export class WorkerPgliteEngine {
       const value = await fn(this.proxy(scope) as unknown as BrainEngine);
       await this.rpc('@scope.close', [true], scope);
       return value;
-    } catch (error) { await this.rpc('@scope.close', [false], scope).catch(() => {}); throw error; }
+    } catch (error) {
+      await this.rpc('@scope.close', [false], scope).catch(() => {});
+      throw error;
+    }
   }
 
   async connect(config: EngineConfig): Promise<void> {
     if (!this.thread) {
       const path = /\/(?:~BUN|\$bunfs)\//.test(decodeURIComponent(import.meta.url)) ? './product/database/database-worker.ts' : new URL(import.meta.url.endsWith('.ts') ? './database-worker.ts' : './database-worker.js', import.meta.url);
-      const thread = new Worker(path, { env: { ...process.env } });
+      const channelName = `pmbrain-db-${randomUUID()}`;
+      const replies = new BroadcastChannel(channelName);
+      this.replies = replies;
+      this.repliesClosed = false;
+      const thread = new Worker(path, { env: { ...process.env, PMBRAIN_DB_CHANNEL: channelName } });
       this.thread = thread;
       const failed = (error: Error) => {
         if (this.thread === thread) this.thread = null;
+        this.closeReplies();
         for (const request of this.pending.values()) request.reject(error);
         this.pending.clear();
       };
       thread.on('error', failed);
       thread.on('exit', code => failed(new Error(`数据库 Worker 已退出（${code}）`)));
-      thread.on('message', (reply: Reply) => {
+      const accept = (reply: Reply) => {
         const request = this.pending.get(reply.id);
         this.pending.delete(reply.id);
         if (!reply.error) { request?.resolve(reply.value); return; }
@@ -81,7 +92,9 @@ export class WorkerPgliteEngine {
           : new Error(message);
         Object.assign(error, properties, { name });
         request?.reject(error);
-      });
+      };
+      thread.on('message', accept);
+      replies.onmessage = (event: MessageEvent<Reply>) => accept(event.data);
     }
     await this.rpc('connect', [config]);
   }
@@ -89,8 +102,20 @@ export class WorkerPgliteEngine {
   async disconnect(): Promise<void> {
     const thread = this.thread;
     if (!thread) return;
-    await this.rpc('disconnect', []);
-    await thread.terminate();
-    if (this.thread === thread) this.thread = null;
+    try {
+      await this.rpc('disconnect', []);
+      await thread.terminate();
+    } finally {
+      this.closeReplies();
+      if (this.thread === thread) this.thread = null;
+    }
+  }
+
+  private closeReplies(): void {
+    if (this.repliesClosed) return;
+    this.repliesClosed = true;
+    const replies = this.replies;
+    this.replies = null;
+    try { replies?.close(); } catch { this.repliesClosed = true; }
   }
 }

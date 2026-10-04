@@ -4,6 +4,7 @@ import { api } from '../api';
 import { formatDate, type ConsoleRun } from '../lib/shared';
 import { TaskTechnicalLogs } from '../product/TaskTechnicalLogs';
 import { describeRunRecovery } from '../lib/run-recovery';
+import { useProductTasks } from '../product/TaskActivity';
 import { TaskProgressCard, taskStatus, taskStopping } from '../product/TaskProgress';
 import { taskName } from '../../../shared/task-progress';
 
@@ -72,6 +73,13 @@ function isActive(run: ConsoleRun): boolean {
   return run.status === 'queued' || run.status === 'running';
 }
 
+function preferLiveRun(saved: ConsoleRun, live: ConsoleRun | undefined): ConsoleRun {
+  if (!live) return saved;
+  const moving = ['running', 'queued'].includes(live.status) || ['running', 'queued'].includes(saved.status);
+  if (!moving) return saved;
+  return { ...saved, status: live.status, error: live.error, product: live.product ?? saved.product, completedAt: live.completedAt, durationMs: live.durationMs, result: live.result ?? saved.result };
+}
+
 function isToday(value: string | null): boolean {
   if (!value) return false;
   const date = new Date(value);
@@ -132,6 +140,7 @@ function TaskDetailDrawer({ run, onClose, onCancel, onRetry, busy }: { run: Cons
 }
 
 export function TaskCenterPage() {
+  const liveTasks = useProductTasks();
   const [snapshot, setSnapshot] = useState<TaskCenterSnapshot | null>(null);
   const [error, setError] = useState('');
   const [filter, setFilter] = useState<TaskFilter>('all');
@@ -158,14 +167,19 @@ export function TaskCenterPage() {
     return () => { live = false; clearTimeout(timer); };
   }, []);
 
-  useEffect(() => {
-    if (!snapshot) return;
-    const target = new URLSearchParams(window.location.hash.split('?')[1]).get('run') ?? selectedRun?.id;
-    const latest = snapshot.rows.find(run => run.id === target);
-    if (latest) setSelectedRun(latest);
-  }, [snapshot, selectedRun?.id]);
+  const rows = useMemo(() => {
+    if (!snapshot) return liveTasks.rows;
+    const liveById = new Map(liveTasks.rows.map(run => [run.id, run]));
+    const seen = new Set(snapshot.rows.map(run => run.id));
+    return [...snapshot.rows.map(run => preferLiveRun(run, liveById.get(run.id))), ...liveTasks.rows.filter(run => !seen.has(run.id))];
+  }, [liveTasks.rows, snapshot]);
 
-  const rows = snapshot?.rows ?? [];
+  useEffect(() => {
+    const target = new URLSearchParams(window.location.hash.split('?')[1]).get('run') ?? selectedRun?.id;
+    if (!target) return;
+    const latest = rows.find(run => run.id === target);
+    if (latest) setSelectedRun(latest);
+  }, [rows, selectedRun?.id]);
   const activeRows = rows.filter(isActive);
   const waitingRows = rows.filter(run => run.status === 'queued');
   const failedRows = rows.filter(run => run.status === 'failed');
@@ -233,11 +247,11 @@ export function TaskCenterPage() {
     }
   };
 
-  if (error && !snapshot) {
-    return <div className="pm-page task-center-page"><div className="pm-card pm-error task-state-card"><h2>任务中心暂时不可用</h2><p>{error}</p><button type="button" className="pm-ghost" onClick={() => void load()}><RefreshCw aria-hidden="true" /> 重试</button></div></div>;
+  if ((error || liveTasks.error) && !snapshot && rows.length === 0 && (liveTasks.loaded || error)) {
+    return <div className="pm-page task-center-page"><div className="pm-card pm-error task-state-card"><h2>任务中心暂时不可用</h2><p>{error || liveTasks.error}</p><button type="button" className="pm-ghost" onClick={() => void load()}><RefreshCw aria-hidden="true" /> 重试</button></div></div>;
   }
 
-  if (!snapshot) {
+  if (!snapshot && rows.length === 0 && !liveTasks.loaded) {
     return <div className="pm-page task-center-page"><div className="pm-card pm-empty task-state-card">正在读取后台任务…</div></div>;
   }
 
@@ -251,7 +265,7 @@ export function TaskCenterPage() {
         <button type="button" className="pm-ghost" onClick={() => void load()}><RefreshCw aria-hidden="true" /> 刷新状态</button>
       </div>
 
-      {snapshot.pglite_busy && (
+      {snapshot?.pglite_busy && (
         <div className="task-busy-banner">
           <div><b>数据库正在维护</b><span>维护结束后恢复访问；普通导入与整理不占用整个软件。</span></div>
           <span className="task-busy-dot">运行中</span>
@@ -260,7 +274,7 @@ export function TaskCenterPage() {
 
       {error && <div className="pm-error task-inline-error">{error}</div>}
 
-      {activeRows.length === 0 && snapshot.pglite_owner && snapshot.pglite_owner.state !== 'clear' && snapshot.pglite_owner.state !== 'current' && (
+      {activeRows.length === 0 && snapshot?.pglite_owner && snapshot.pglite_owner.state !== 'clear' && snapshot.pglite_owner.state !== 'current' && (
         <PgliteRecoveryCard
           owner={snapshot.pglite_owner}
           onTerminate={() => void terminateOwner()}
@@ -275,7 +289,7 @@ export function TaskCenterPage() {
         <div className="task-status-card task-status-card-completed"><span>今日完成</span><strong>{completedToday}</strong><small>已保存的任务结果</small></div>
       </div>
 
-      {snapshot.embedding_rebuild?.status === 'paused' && (
+      {snapshot?.embedding_rebuild?.status === 'paused' && (
         <section className="task-section">
           <div className="task-section-head">
             <div><span className="pm-eyebrow">PAUSED INDEX</span><h2>重建向量索引</h2></div>
@@ -286,8 +300,8 @@ export function TaskCenterPage() {
               <div>
                 <h3>新模型已生效，向量索引待重建</h3>
                 <p>
-                  {snapshot.embedding_rebuild.model}
-                  {snapshot.embedding_rebuild.total > 0 ? ` · 待重建 ${snapshot.embedding_rebuild.total} 条` : ''}
+                  {snapshot?.embedding_rebuild?.model}
+                  {(snapshot?.embedding_rebuild?.total ?? 0) > 0 ? ` · 待重建 ${snapshot?.embedding_rebuild?.total} 条` : ''}
                   。未完成的条目暂时不能语义搜索，可随时继续。
                 </p>
               </div>

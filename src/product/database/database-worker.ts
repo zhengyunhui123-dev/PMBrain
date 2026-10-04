@@ -6,17 +6,57 @@ import { buildGatewayConfig } from '../../core/ai/gateway-config.ts';
 import { loadConfig } from '../../core/config.ts';
 import { withPgliteSavepoints } from './savepoints.ts';
 
+const replyChannel = process.env.PMBRAIN_DB_CHANNEL ? new BroadcastChannel(process.env.PMBRAIN_DB_CHANNEL) : null;
+
+function respond(payload: { id: number; value?: unknown; error?: { name: string; message: string; properties: Record<string, unknown> } }): void {
+  try { parentPort!.postMessage(payload); }
+  catch (error) { console.error('[database] 回复数据库调用失败:', error instanceof Error ? error.message : error); }
+  try { replyChannel?.postMessage(payload); }
+  catch (error) { console.error('[database] 广播数据库调用结果失败:', error instanceof Error ? error.message : error); }
+}
+
 const engine = new PGLiteEngine();
 let sequence = 0;
 const scopes = new Map<number, { engine: BrainEngine | ReservedConnection; finish: (commit: boolean) => void; done: Promise<unknown> }>();
+let openRootScope: number | undefined;
+let renewalWhileOpen: any[] | undefined;
+let replayAfterReply: (() => Promise<void>) | undefined;
 
 async function perform(message: { method: string; args: any[]; scope?: number }): Promise<unknown> {
   const { method, args, scope } = message;
   if (method === '@scope.close') {
     const current = scopes.get(scope!);
     if (!current) throw new Error('数据库事务已关闭');
-    current.finish(args[0] === true);
-    try { return await current.done; } finally { scopes.delete(scope!); }
+    const commit = args[0] === true;
+    const rootClose = scope === openRootScope;
+    current.finish(commit);
+    try { return await current.done; }
+    finally {
+      scopes.delete(scope!);
+      if (!commit && !rootClose && openRootScope !== undefined && renewalWhileOpen) {
+        const root = scopes.get(openRootScope)?.engine;
+        const sql = renewalWhileOpen[0];
+        const params = renewalWhileOpen[1];
+        if (root && typeof sql === 'string') {
+          replayAfterReply = async () => {
+            try { await root.executeRaw(sql, params); }
+            catch (error) { console.error('[database] 保存点回滚后续期任务锁失败:', error instanceof Error ? error.message : error); }
+          };
+        }
+      }
+      if (rootClose && renewalWhileOpen) {
+        const sql = renewalWhileOpen[0];
+        const params = renewalWhileOpen[1];
+        renewalWhileOpen = undefined;
+        if (openRootScope === scope) openRootScope = undefined;
+        if (typeof sql === 'string') {
+          replayAfterReply = async () => {
+            try { await engine.executeRaw(sql, params); }
+            catch (error) { console.error('[database] 事务结束后续期任务锁失败:', error instanceof Error ? error.message : error); }
+          };
+        }
+      }
+    }
   }
   const current = scope === undefined ? engine : scopes.get(scope)?.engine;
   if (!current) throw new Error('数据库事务已关闭');
@@ -52,18 +92,54 @@ async function perform(message: { method: string; args: any[]; scope?: number })
 type Request = { id: number; method: string; args: any[]; scope?: number; priority?: number };
 const waiting: Request[] = [];
 let busy = false;
+let chain: Promise<void> = Promise.resolve();
+
+function isLockRenewal(message: Request): boolean {
+  const sql = message.args?.[0];
+  return message.method === 'executeRaw' && typeof sql === 'string' && /^\s*UPDATE\s+minion_jobs\s+SET\s+lock_until\b/i.test(sql);
+}
+
+function enqueue(work: () => Promise<void>): void {
+  chain = chain.then(work, work).then(() => undefined, () => undefined);
+}
+
+async function waitForConnection(): Promise<void> {
+  for (;;) {
+    const current = chain;
+    await current;
+    if (current === chain) return;
+  }
+}
 
 async function reply(message: Request): Promise<void> {
   try {
-    const value = await perform(message);
-    parentPort!.postMessage({ id: message.id, value });
+    const delivered = isLockRenewal(message) && message.scope !== undefined && !scopes.has(message.scope)
+      ? { ...message, scope: undefined }
+      : message;
+    const value = await perform(delivered);
+    respond({ id: message.id, value });
     if (message.scope === undefined && message.method.endsWith('.open')) {
-      await scopes.get(value as number)?.done.catch(() => {});
+      const scopeId = value as number;
+      const settled = scopes.get(scopeId)?.done;
+      openRootScope = scopeId;
+      renewalWhileOpen = undefined;
+      await settled?.catch(() => undefined);
+      await waitForConnection();
+      if (openRootScope === scopeId) openRootScope = undefined;
     }
   } catch (error: any) {
     const properties = Object.fromEntries(Object.entries(error instanceof Error ? error : {}).filter(([, value]) => typeof value !== 'function'));
-    parentPort!.postMessage({ id: message.id, error: { name: error?.name ?? 'Error', message: error instanceof Error ? error.message : String(error), properties } });
+    const failure = { name: error?.name ?? 'Error', message: error instanceof Error ? error.message : String(error), properties };
+    const replay = replayAfterReply;
+    replayAfterReply = undefined;
+    if (replay) await replay();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    respond({ id: message.id, error: failure });
+    return;
   }
+  const replay = replayAfterReply;
+  replayAfterReply = undefined;
+  if (replay) await replay();
 }
 
 function drain(): void {
@@ -78,7 +154,13 @@ function drain(): void {
 }
 
 parentPort!.on('message', (message: Request) => {
-  if (message.scope !== undefined) { void reply(message); return; }
+  if (message.scope !== undefined) { enqueue(() => reply(message)); return; }
+  if (isLockRenewal(message) && openRootScope !== undefined && scopes.has(openRootScope)) {
+    renewalWhileOpen = message.args;
+    const scope = openRootScope;
+    enqueue(() => reply({ ...message, scope }));
+    return;
+  }
   waiting.push(message);
   setImmediate(drain);
 });
