@@ -4,14 +4,14 @@ import { filePayload } from '../admin/src/workbench/composer-attachments';
 import { mergePolledConversation } from '../admin/src/workbench/useWorkbench';
 import type { WorkbenchConversation } from '../shared/workbench';
 
-function sendHarness(failMessage = false) {
+function sendHarness(failMessage = false, serviceReady = true, databaseReady = true, knowledge = false) {
   const source = readFileSync(new URL('../admin/src/workbench/useWorkbench.ts', import.meta.url), 'utf8');
   const code = new Bun.Transpiler({ loader: 'ts' }).transformSync(source.slice(source.indexOf('  const send ='), source.indexOf('  const action =')));
   const requests: string[] = [];
   const bodies: any[] = [];
   let current: any;
   const env = {
-    pending: false, running: false, conversation: undefined, model: 'local', knowledge: false,
+    pending: false, running: false, conversation: undefined, model: 'local', knowledge, serviceReady, databaseReady,
     active: { current: undefined as string | undefined }, setPending: () => {}, setError: () => {},
     setConversation: (value: any) => { current = value; },
     refresh: async () => { throw new Error('列表刷新失败'); },
@@ -38,6 +38,15 @@ test('发送已成功而列表刷新失败时，不删除会话并返回这个�
   expect(run.requests.some(path => path.startsWith('DELETE'))).toBe(false);
   expect(run.current().messages).toHaveLength(1);
   expect(run.env.active.current).toBe('thread');
+});
+
+test('只有 HTTP 不可用才停止发送，数据库准备时明确发送普通对话', async () => {
+  const offline = sendHarness(false, false, false, true);
+  expect(await offline.send('问题')).toBe(false);
+  expect(offline.requests).toHaveLength(0);
+  const preparing = sendHarness(false, true, false, true);
+  expect(await preparing.send('问题')).toBe('thread');
+  expect(preparing.bodies.every(body => body.knowledge === false)).toBe(true);
 });
 
 test('发送响应丢失时只请求清理空会话，已有消息的会话继续保留', async () => {

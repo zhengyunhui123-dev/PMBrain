@@ -78,7 +78,7 @@ describe('首页按有没有知识库区分，并接上现有能力', () => {
     expect(app).toContain("[MessageCircle, '知识助手', 'assistant']");
     expect(app).toContain("[Cable, 'MCP 接入', 'mcp']");
     expect(app).toContain('帮助支持');
-    expect(app).not.toContain('任务中心');
+    expect(app).toContain("[ListTodo, '任务中心', 'tasks']");
     expect(app).not.toContain('知识工作台');
     expect(app).toContain('aria-label={collapsed ? \'展开菜单\' : \'收起菜单\'}');
     expect(home).toContain('创建我的知识库');
@@ -88,6 +88,9 @@ describe('首页按有没有知识库区分，并接上现有能力', () => {
     expect(home).toContain('aria-label="对话模型"');
     expect(home).toContain("onOpen('knowledge-import')");
     expect(home).toContain("onOpen('mcp')");
+    expect(home).toContain('title="总体概览"');
+    expect(home).toContain("onOpen('dashboard')");
+    expect(home).toContain('你好，开始探索你的知识');
     expect(home).not.toContain('最近活动');
     expect(create).toContain('desktop.saveSetup');
     expect(create).toContain('api.startImportRun');

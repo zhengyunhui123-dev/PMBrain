@@ -36,7 +36,9 @@ def run(output):
             def mock(route):
                 path = urlparse(route.request.url).path
                 data, status = {'error': '此隔离测试未提供该服务'}, 503
-                if path.endswith('/workbench/models'):
+                if path.endswith('/workbench/availability'):
+                    status, data = 200, {'serviceReady': True, 'databaseReady': True}
+                elif path.endswith('/workbench/models'):
                     status, data = 200, {'models': [{'id': 'ollama:test', 'name': '测试模型'}]}
                 elif path.endswith('/workbench/assistant'):
                     status, data = 200, {'name': '知识库助手', 'emoji': '知', 'model': '', 'knowledge': False, 'systemPrompt': '', 'temperature': None, 'context': {'maxMessages': 24, 'threshold': .8, 'summaryModel': ''}}

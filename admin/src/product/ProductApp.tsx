@@ -1,6 +1,7 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { ArrowLeft, Box, Cable, CircleHelp, Database, FileText, Home, Link, ListTodo, MessageCircle, Monitor, PanelLeftClose, PanelLeftOpen, PenLine, RefreshCw, Search, Settings, ShieldCheck, SlidersHorizontal, Waypoints } from 'lucide-react';
+import { ArrowLeft, Box, Cable, CircleHelp, Database, FileText, Home, MessageCircle, Link, ListTodo, Monitor, PanelLeftClose, PanelLeftOpen, PenLine, RefreshCw, Search, Settings, ShieldCheck, SlidersHorizontal, Waypoints } from 'lucide-react';
+import { useServiceAvailability } from './useServiceAvailability';
 import { TaskActivityProvider } from './TaskActivity';
 const SettingsPage = React.lazy(() => import('../pages/Settings').then(module => ({ default: module.SettingsPage })));
 const AppearanceSettings = React.lazy(() => import('../pages/Settings').then(module => ({ default: module.AppearanceSettings })));
@@ -57,6 +58,7 @@ export function ProductApp() {
   const [legacyMobile] = useState(() => !desktop && window.matchMedia('(max-width: 767px)').matches);
   const [theme, setTheme] = useState<ThemeMode>(() => desktop ? 'dark' : readThemeMode());
   const [service, setService] = useState<SidecarState | null>(null);
+  const availability = useServiceAvailability(service?.phase);
   const [needsSetup, setNeedsSetup] = useState<boolean | null>(desktop ? null : false);
   const [startup, setStartup] = useState<StartupProgress | null>(null);
   const [update, setUpdate] = useState<UpdateState | null>(null);
@@ -81,7 +83,7 @@ export function ProductApp() {
   visited.current.assistant ||= readyForAssistant();
   visited.current.desktop ||= menuMcp || settingsDesktop;
   visited.current.importing ||= importOpen;
-  function readyForAssistant() { return (!desktop || service?.phase === 'ready') && !isSettings && assistantTarget(page); }
+  function readyForAssistant() { return !isSettings && assistantTarget(page); }
   const slots = useRef({ park: null as HTMLDivElement | null, menu: null as HTMLDivElement | null, settings: null as HTMLDivElement | null });
   const host = useRef<HTMLDivElement | null>(null);
   const [hostReady, setHostReady] = useState(false);
@@ -108,7 +110,7 @@ export function ProductApp() {
     if (host.current.parentElement !== target) target.appendChild(host.current);
     setHostReady(true);
   }, [desktop, activeSlot]);
-  const ready = !desktop || service?.phase === 'ready';
+  const ready = availability.serviceReady;
   const mode = libraryMode(Boolean(desktop), needsSetup);
   const maintenance = maintenanceView({ startup, servicePhase: service?.phase ?? null, updatePhase: update?.phase ?? null, updateMessage: update?.message, needsSetup: needsSetup === true });
   useEffect(() => {
@@ -170,9 +172,9 @@ export function ProductApp() {
   const showEmbedded = ready && !isSettings && !shellPages.has(page) && !menuMcp;
   const status = maintenance.visible
     ? <StatusChip kind="busy" label={maintenance.title} onClick={() => setMaintenanceOpen(true)} />
-    : Boolean(desktop) && mode === 'ready' && ready
+    : Boolean(desktop) && mode === 'ready' && availability.databaseReady
       ? <span className="home-health-anchor"><StatusChip kind="ready" label="知识库 · 正常" onClick={() => setHealthOpen(open => !open)} />{healthOpen && <div className="home-health-menu" onClick={event => event.stopPropagation()}><p>本机知识库服务正在运行。</p><button type="button" onClick={() => { setHealthOpen(false); navigate('settings-system'); }}>打开系统设置</button></div>}</span>
-      : null;
+      : ready && mode === 'ready' ? <StatusChip kind="busy" label="知识库正在准备" onClick={() => setMaintenanceOpen(true)} /> : null;
   return <TaskActivityProvider enabled={ready && needsSetup !== true}><React.Suspense fallback={<p className="pm-empty" role="status">正在打开页面…</p>}><div className={`product-app ${isSettings ? 'settings-open' : ''} ${collapsed ? 'nav-collapsed' : ''}`}>
     <aside className="product-nav" hidden={isSettings}>
       <button type="button" className="nav-collapse" aria-expanded={!collapsed} aria-label={collapsed ? '展开菜单' : '收起菜单'} onClick={toggleNav}>{collapsed ? <PanelLeftOpen size={15} /> : <PanelLeftClose size={15} />}</button>
@@ -197,10 +199,10 @@ export function ProductApp() {
           </div></div>
       </section>
       {!isSettings && page === 'home' && mode === 'loading' && <section className="home-page"><p>正在打开首页…</p></section>}
-      {!isSettings && page === 'home' && mode !== 'loading' && <HomePage mode={mode} ready={ready} status={status} onCreate={intent => navigate(intent ? `create?intent=${intent}` : 'create')} onBring={() => navigate('settings-basic')} onOpen={navigate} />}
+      {!isSettings && page === 'home' && mode !== 'loading' && <HomePage mode={mode} ready={ready} databaseReady={availability.databaseReady} status={status} onCreate={intent => navigate(intent ? `create?intent=${intent}` : 'create')} onBring={() => navigate('settings-basic')} onOpen={navigate} />}
       {!isSettings && page === 'create' && <CreateLibrary onDone={navigate} onCreated={() => setNeedsSetup(false)} onOpenSettings={panel => navigate(`settings-${panel}`)} />}
       <div hidden={isSettings || !assistantTarget(page)} className="product-workbench">
-        {ready ? visited.current.assistant && <Workbench /> : <div className="product-welcome"><h1>{needsSetup ? '还没有知识库' : '知识助手暂时不可用'}</h1><p>{needsSetup ? '创建知识库后，就可以基于资料提问。' : service?.phase === 'failed' ? service.message : '知识库服务准备好后会自动打开。'}</p><button onClick={() => navigate(needsSetup ? 'home' : service?.phase === 'failed' ? 'settings-recovery' : 'settings-system')}>{needsSetup ? '返回首页' : '查看服务'}</button></div>}
+        {visited.current.assistant && <Workbench serviceReady={ready} databaseReady={availability.databaseReady} />}
       </div>
       {!isSettings && page === 'docs' && <HelpPage />}
       {ready && visited.current.importing && <ImportMaterials open={importOpen} onClose={() => setImportOpen(false)} />}

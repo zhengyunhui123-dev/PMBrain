@@ -118,13 +118,27 @@ export function knowledgeWorkbenchAnswer(engine: BrainEngine, dependencies: { se
   };
 }
 
-export function registerWorkbenchRoutes(app: express.Express, requireAdmin: RequestHandler, engine: BrainEngine, config: GBrainConfig, options: { storageRoot?: string; answer?: WorkbenchAnswer; summarize?: WorkbenchSummarizer; readConfig?: () => GBrainConfig | null } = {}) {
+export function registerWorkbenchRoutes(app: express.Express, requireAdmin: RequestHandler, engine: BrainEngine, config: GBrainConfig, options: { storageRoot?: string; answer?: WorkbenchAnswer; summarize?: WorkbenchSummarizer; readConfig?: () => GBrainConfig | null; databaseAvailable?: () => boolean } = {}) {
   const identity = createHash('sha256').update(JSON.stringify([config.engine, config.database_path, config.database_url])).digest('hex').slice(0, 24);
-  const currentModels = () => {
+  const currentConfig = () => {
     const live = (options.readConfig ?? loadConfig)();
     const sameBrain = live && [live.engine, live.database_path, live.database_url].every((value, index) => value === [config.engine, config.database_path, config.database_url][index]);
-    return workbenchModels(sameBrain ? live : config);
+    return sameBrain ? live : config;
   };
+  const currentModels = () => workbenchModels(currentConfig());
+  let databaseReady = false;
+  let probe: Promise<void> | undefined;
+  const availability = () => {
+    if (options.databaseAvailable?.() === false) { databaseReady = false; return { serviceReady: true, databaseReady }; }
+    if (!probe) {
+      const timer = setTimeout(() => { databaseReady = false; }, 1500);
+      probe = Promise.resolve().then(() => engine.executeRaw('SELECT 1'))
+        .then(() => { databaseReady = options.databaseAvailable?.() !== false; }, () => { databaseReady = false; })
+        .finally(() => { clearTimeout(timer); probe = undefined; });
+    }
+    return { serviceReady: true, databaseReady };
+  };
+  if (options.databaseAvailable) availability();
   const service = new WorkbenchService(new WorkbenchStore(options.storageRoot ?? join(configDir(), 'workbench', identity)), currentModels, options.answer ?? knowledgeWorkbenchAnswer(engine), options.summarize ?? summarizeConversation);
   const base = '/admin/api/workbench';
   const handler = (action: (req: express.Request) => unknown): RequestHandler => async (req, res) => {
@@ -139,7 +153,8 @@ export function registerWorkbenchRoutes(app: express.Express, requireAdmin: Requ
     })),
   });
   const id = (req: express.Request) => String(req.params.id);
-  app.get(`${base}/models`, requireAdmin, handler(() => ({ models: currentModels() })));
+  app.get(`${base}/availability`, requireAdmin, handler(availability));
+  app.get(`${base}/models`, requireAdmin, handler(() => ({ models: currentModels(), defaultModel: currentConfig().chat_model || '' })));
   app.get(`${base}/assistant`, requireAdmin, handler(() => service.assistant()));
   app.put(`${base}/assistant`, requireAdmin, express.json({ limit: '64kb' }), handler(req => service.saveAssistant(req.body ?? {})));
   app.get(`${base}/conversations`, requireAdmin, handler(() => ({ conversations: service.list() })));
@@ -153,6 +168,10 @@ export function registerWorkbenchRoutes(app: express.Express, requireAdmin: Requ
       const failure = workbenchPayloadError(error);
       res.status(failure.status).json({ error: failure.error });
     });
-  }, handler(req => { const conversationId = id(req); service.send(conversationId, req.body ?? {}); return service.accepted(conversationId); }));
+  }, handler(req => {
+    const conversationId = id(req);
+    if ((req.body?.knowledge ?? service.get(conversationId).knowledge) && options.databaseAvailable && !availability().databaseReady) throw new Error('知识库正在准备，暂时无法检索。');
+    service.send(conversationId, req.body ?? {}); return service.accepted(conversationId);
+  }));
   app.post(`${base}/conversations/:id/cancel`, requireAdmin, handler(req => service.cancel(id(req))));
 }

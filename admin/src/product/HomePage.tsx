@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ArrowUp, BookOpen, ChevronRight, FileText, Folder, Link2, MessageCircle, PenLine, Plus, Search, Waypoints, X } from 'lucide-react';
+import { ArrowUp, BookOpen, ChevronRight, FileText, Folder, LayoutDashboard, Link2, MessageCircle, PenLine, Plus, Search, Waypoints, X } from 'lucide-react';
 import { acceptComposerFiles, createAttachment, filesFromClipboard, revokeAttachment, type ComposerAttachment } from '../workbench/composer-attachments';
 import { useWorkbench } from '../workbench/useWorkbench';
 import { OPEN_CONVERSATION_KEY, type CreateIntent } from './home-model';
@@ -33,8 +33,8 @@ function FeatureCard({ icon, tone, title, detail, onClick }: {
   return <button type="button" className="home-card" onClick={onClick}><i className={tone}>{icon}</i><span><b>{title}</b><small>{detail}</small></span><em><ChevronRight size={16} /></em></button>;
 }
 
-function HomeAsk({ onOpen }: { onOpen: () => void }) {
-  const wb = useWorkbench();
+function HomeAsk({ onOpen, serviceReady, databaseReady }: { onOpen: () => void; serviceReady: boolean; databaseReady: boolean }) {
+  const wb = useWorkbench({ serviceReady, databaseReady });
   const composer = useRef<HTMLTextAreaElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const [draft, setDraft] = useState('');
@@ -50,7 +50,7 @@ function HomeAsk({ onOpen }: { onOpen: () => void }) {
     if (!accepted.length) return;
     setAttachments(current => [...current, ...accepted.map(file => createAttachment(file, `${Date.now()}-${file.name}-${Math.random().toString(16).slice(2)}`))]);
   };
-  const canSend = Boolean((draft.trim() || attachments.length) && wb.model && !wb.pending && !wb.running);
+  const canSend = Boolean(serviceReady && (draft.trim() || attachments.length) && wb.model && !wb.pending && !wb.running);
   const send = async () => {
     const queued = attachments;
     const id = await wb.send(draft, false, undefined, queued);
@@ -63,20 +63,22 @@ function HomeAsk({ onOpen }: { onOpen: () => void }) {
     onOpen();
   };
   return <div className="home-ask knowledge-workbench">
+    {!serviceReady ? <p className="wb-muted" role="status">本地对话服务暂不可用</p> : !databaseReady && <p className="wb-muted" role="status">知识库正在准备，当前可进行普通对话。</p>}
     {wb.error && <p className="wb-error" role="alert">{wb.error}</p>}
     {wb.loaded && !wb.models.length && !wb.error && <p className="wb-muted">请先在<button type="button" onClick={() => { window.location.hash = 'settings-models'; }}>模型服务</button>中配置并启用普通模型。</p>}
     <div className="wb-compose-area"><div className={dropping ? 'wb-composer dropping' : 'wb-composer'} onDragOver={event => { if (event.dataTransfer.types.includes('Files')) { event.preventDefault(); setDropping(true); } }} onDragLeave={() => setDropping(false)} onDrop={event => { event.preventDefault(); setDropping(false); addFiles(Array.from(event.dataTransfer.files ?? [])); }}>
       {attachments.length > 0 && <ul className="wb-attachments">{attachments.map(item => <li key={item.id}>{item.previewUrl ? <img src={item.previewUrl} alt={item.name} /> : <span className="wb-file-card">{item.name}</span>}<button type="button" aria-label={`移除 ${item.name}`} onClick={() => { revokeAttachment(item); setAttachments(current => current.filter(entry => entry.id !== item.id)); }}><X size={12} /></button></li>)}</ul>}
       <textarea ref={composer} aria-label="消息" placeholder="搜索你的知识，或向知识助手提问。Enter 发送，Shift + Enter 换行" value={draft} maxLength={32000} onPaste={event => { const files = filesFromClipboard(event.clipboardData); if (!files.length) return; event.preventDefault(); addFiles(files); }} onChange={event => { setDraft(event.target.value); if (wb.error) wb.setError(''); }} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); if (canSend) void send(); } }} />
-      <footer><span className="wb-compose-leading"><button type="button" className="wb-attach" aria-label="添加附件" disabled={wb.pending || wb.running} onClick={() => fileInput.current?.click()}><Plus size={16} /></button><select className="wb-model" aria-label="对话模型" value={wb.model} disabled={wb.running || wb.pending} onChange={event => wb.setModel(event.target.value)}><option value="" disabled>选择对话模型</option>{wb.model && !wb.models.some(model => model.id === wb.model) && <option value={wb.model}>{wb.model}</option>}{wb.models.map(model => <option key={model.id} value={model.id}>{model.name}</option>)}</select><label className="wb-knowledge"><input type="checkbox" checked={wb.knowledge} disabled={wb.running || wb.pending} onChange={event => wb.setKnowledge(event.target.checked)} /><BookOpen size={15} />知识库</label></span><button type="button" className="wb-send" aria-label="发送消息" disabled={!canSend} onClick={() => void send()}><ArrowUp size={16} /></button></footer>
+      <footer><span className="wb-compose-leading"><button type="button" className="wb-attach" aria-label="添加附件" disabled={wb.pending || wb.running} onClick={() => fileInput.current?.click()}><Plus size={16} /></button><select className="wb-model" aria-label="对话模型" value={wb.model} disabled={wb.running || wb.pending} onChange={event => wb.setModel(event.target.value)}><option value="" disabled>选择对话模型</option>{wb.model && !wb.models.some(model => model.id === wb.model) && <option value={wb.model}>{wb.model}</option>}{wb.models.map(model => <option key={model.id} value={model.id}>{model.name}</option>)}</select><label className="wb-knowledge"><input type="checkbox" checked={wb.knowledge} disabled={!databaseReady || wb.running || wb.pending} onChange={event => wb.setKnowledge(event.target.checked)} /><BookOpen size={15} />知识库</label></span><button type="button" className="wb-send" aria-label="发送消息" disabled={!canSend} onClick={() => void send()}><ArrowUp size={16} /></button></footer>
       <input ref={fileInput} className="wb-file-input" type="file" multiple onChange={event => { addFiles(Array.from(event.target.files ?? [])); event.target.value = ''; }} />
     </div><small className="wb-compose-note">提问会打开知识助手。勾选知识库时，回答会先查找你的资料。</small></div>
   </div>;
 }
 
-export function HomePage({ mode, ready, status, onCreate, onBring, onOpen }: {
+export function HomePage({ mode, ready, databaseReady, status, onCreate, onBring, onOpen }: {
   mode: 'new' | 'ready';
   ready: boolean;
+  databaseReady: boolean;
   status?: React.ReactNode;
   onCreate: (intent: CreateIntent) => void;
   onBring: () => void;
@@ -99,13 +101,13 @@ export function HomePage({ mode, ready, status, onCreate, onBring, onOpen }: {
     </div>
   </div> : <div className="home-ready">
     <header className="home-ready-head"><div><h1>你好，开始探索你的知识</h1><p className="home-lead">基于你的知识库，搜索、整理或直接提问</p></div><div className="home-ready-side">{status}<HomeArt /></div></header>
-    {ready ? <HomeAsk onOpen={() => onOpen('assistant')} /> : <p className="wb-muted">知识库服务准备好后，就可以在这里提问。</p>}
+    <HomeAsk serviceReady={ready} databaseReady={databaseReady} onOpen={() => onOpen('assistant')} />
     <div className="home-actions">
       <FeatureCard tone="tone-violet" icon={<Folder size={20} />} title="导入资料" detail="添加文件或文件夹" onClick={() => onOpen('knowledge-import')} />
       <FeatureCard tone="tone-blue" icon={<FileText size={20} />} title="知识库" detail="查看和管理所有知识" onClick={() => onOpen('data')} />
       <FeatureCard tone="tone-green" icon={<Waypoints size={20} />} title="知识图谱" detail="发现知识之间的关联" onClick={() => onOpen('graph')} />
       <FeatureCard tone="tone-orange" icon={<PenLine size={20} />} title="知识整理" detail="对知识进行分类、清洗" onClick={() => onOpen('dream')} />
-      <FeatureCard tone="tone-blue" icon={<MessageCircle size={20} />} title="知识助手" detail="基于知识库进行对话" onClick={() => onOpen('assistant')} />
+      <FeatureCard tone="tone-blue" icon={<LayoutDashboard size={20} />} title="总体概览" detail="查看知识库数据与运行情况" onClick={() => onOpen('dashboard')} />
       <FeatureCard tone="tone-teal" icon={<Link2 size={20} />} title="MCP 接入" detail="让外部 AI 使用这些知识" onClick={() => onOpen('mcp')} />
     </div>
   </div>}</section>;

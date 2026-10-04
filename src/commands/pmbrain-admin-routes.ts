@@ -224,7 +224,7 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
     reconnectPglite,
     ensureAdminWorkerStarted,
   } = options;
-  registerWorkbenchRoutes(app, requireAdmin, engine, config);
+  registerWorkbenchRoutes(app, requireAdmin, engine, config, { databaseAvailable: () => !getPgliteBusy() });
   const productTasks = options.productTasks;
   const readRuns = async () => [...(getPgliteBusy() ? productTasks.cachedRuns() : await productTasks.listRuns()), ...listRuns()];
   const readRun = async (id: string) => (getPgliteBusy() ? productTasks.cachedRuns().find(run => run.id === id) : await productTasks.getRun(id)) ?? getRun(id);

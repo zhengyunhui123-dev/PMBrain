@@ -371,7 +371,7 @@ if (!app.requestSingleInstanceLock()) {
     registerDesktopIpcHandlers({
       productRequest: async request => {
         const sidecar = sidecarController.current;
-        if (!sidecar || sidecarController.state?.phase !== 'ready') throw new Error('PMBrain 本地服务尚未就绪');
+        if (!sidecar || !['starting', 'ready'].includes(sidecarController.state?.phase ?? '')) throw new Error('PMBrain 本地服务尚未就绪');
         const response = await sidecar.adminResponse(request.path, {
           method: request.method,
           headers: request.headers,
