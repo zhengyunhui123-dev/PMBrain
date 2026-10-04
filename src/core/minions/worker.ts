@@ -273,7 +273,8 @@ export class MinionWorker extends EventEmitter {
       stalledSweepInFlight = true;
       void (async () => {
         try {
-          const { requeued, dead } = await this.queue.handleStalled();
+          const runningHere = this.engine.kind === 'pglite' ? [...this.inFlight.keys()] : [];
+          const { requeued, dead } = await this.queue.handleStalled(runningHere);
           if (requeued.length > 0) console.log(`Stall detector: requeued ${requeued.length} jobs`);
           if (dead.length > 0) console.log(`Stall detector: dead-lettered ${dead.length} jobs`);
         } catch (e) {
@@ -698,6 +699,7 @@ export class MinionWorker extends EventEmitter {
       lastSuccessfulRenewalAt: Date.now(),
       consecutiveFailures: 0,
       cancelled: () => cancelled,
+      ownsExecution: () => this.engine.kind === 'pglite' && this.inFlight.has(job.id),
     };
     const renewalDeps: LockRenewalDeps = {
       renewLock: (id, tok, dur) => this.queue.renewLock(id, tok, dur),

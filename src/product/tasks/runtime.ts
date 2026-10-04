@@ -19,6 +19,7 @@ import { withDatabasePriority } from '../database/priority';
 
 export const PRODUCT_TASK_QUEUE = 'pmbrain-product';
 const TASK_NAME = 'pmbrain-product-task';
+const DEFAULT_PRODUCT_TASK_TIMEOUT_MS = 6 * 60 * 60 * 1000;
 type Progress = { product?: TaskProductProgress; output?: string; result?: Record<string, unknown>; cancelRequested?: boolean; files?: Record<string, unknown>[] };
 
 function toRun(job: MinionJob, stopping = false): ConsoleRun {
@@ -89,7 +90,7 @@ export class ProductTaskRuntime {
     if (this.failure) throw this.failure;
     const job = await this.queue.add(TASK_NAME, { task, kind, trigger }, {
       queue: PRODUCT_TASK_QUEUE, max_attempts: 1,
-      timeout_ms: task.input.timeoutMs ?? undefined,
+      timeout_ms: task.input.timeoutMs ?? DEFAULT_PRODUCT_TASK_TIMEOUT_MS,
       idempotency_key: idempotencyKey ?? `product:${randomUUID()}`,
     });
     const run = toRun(job);

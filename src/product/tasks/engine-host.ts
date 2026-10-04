@@ -37,8 +37,11 @@ export class TaskEngineHost {
   private async fence(tx: BrainEngine): Promise<void> {
     if (this.closed) throw new Error('任务执行已停止');
     const rows = await tx.executeRaw<{ id: number }>(
-      `SELECT id FROM minion_jobs WHERE id = $1 AND status = 'active'
-       AND lock_token = $2 AND lock_until > now() FOR UPDATE`, [this.jobId, this.token],
+      `UPDATE minion_jobs AS current
+       SET lock_until = now() + ($3::double precision * interval '1 millisecond'), updated_at = now()
+       WHERE current.id = $1 AND current.status = 'active' AND current.lock_token = $2
+       RETURNING current.id`,
+      [this.jobId, this.token, 30_000],
     );
     if (!rows.length) throw new Error('任务已取消或执行租约已失效');
     if (taskModelFingerprint() !== this.initialModel) throw new Error('向量模型配置已改变，请使用当前配置重新执行任务');

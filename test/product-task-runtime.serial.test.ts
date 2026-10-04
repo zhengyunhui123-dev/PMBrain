@@ -430,6 +430,13 @@ describe('软件后台任务共用 owner 数据库', () => {
     } finally { release(); configureModels(false); }
   }, 30_000);
 
+  test('整理任务没有填写超时时按 6 小时执行，不会几分钟就被判死', async () => {
+    const accepted = await runtime.submitDream({ preset: 'quick', dryRun: true });
+    const rows = await engine.executeRaw<{ timeout_ms: string | number }>('SELECT timeout_ms FROM minion_jobs WHERE id = $1', [Number(accepted.id.slice(5))]);
+    expect(Number(rows[0]?.timeout_ms)).toBe(6 * 60 * 60 * 1000);
+    await runtime.requestCancel(accepted.id);
+  });
+
   test('过期租约、取消和事务回滚阻止失效 Worker 写入', async () => {
     const queue = new MinionQueue(engine);
     await queue.add('task-fence-test', {}, { queue: PRODUCT_TASK_QUEUE });
@@ -448,7 +455,10 @@ describe('软件后台任务共用 owner 数据库', () => {
       expect(String(await rpc('setConfig', ['test.fence', 'invalid']).catch(error => error))).toContain('执行租约已失效');
       expect(await engine.getConfig('test.fence')).toBeNull();
       await engine.executeRaw(`UPDATE minion_jobs SET lock_token = $1, lock_until = $2::timestamptz WHERE id = $3`, ['fence-token', new Date(Date.now() - 1000), job!.id]);
-      expect(String(await rpc('setConfig', ['test.fence', 'expired']).catch(error => error))).toContain('执行租约已失效');
+      await rpc('setConfig', ['test.fence', 'kept']);
+      expect(await engine.getConfig('test.fence')).toBe('kept');
+      const fresh = await engine.executeRaw<{ fresh: boolean }>('SELECT lock_until > now() AS fresh FROM minion_jobs WHERE id = $1', [job!.id]);
+      expect(fresh[0]?.fresh).toBe(true);
       await queue.cancelJob(job!.id);
       expect(String(await rpc('setConfig', ['test.fence', 'cancelled']).catch(error => error))).toContain('任务已取消');
     } finally { await host.close(); }

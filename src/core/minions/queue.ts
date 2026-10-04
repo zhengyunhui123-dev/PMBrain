@@ -1284,12 +1284,15 @@ export class MinionQueue {
   }
 
   /** Detect and handle stalled jobs. Single CTE, no off-by-one. Returns affected jobs. */
-  async handleStalled(): Promise<{ requeued: MinionJob[]; dead: MinionJob[] }> {
+  async handleStalled(activeJobIds: readonly number[] = []): Promise<{ requeued: MinionJob[]; dead: MinionJob[] }> {
+    const exclude = activeJobIds.length > 0 ? 'AND id <> ALL($1::int[])' : '';
+    const params = activeJobIds.length > 0 ? [activeJobIds] : [];
     const rows = await this.engine.executeRaw<Record<string, unknown> & { action: string }>(
       `WITH stalled AS (
         SELECT id, stalled_counter, max_stalled
         FROM minion_jobs
         WHERE status = 'active' AND lock_until < now()
+        ${exclude}
         FOR UPDATE SKIP LOCKED
       ),
       requeued AS (
@@ -1307,7 +1310,8 @@ export class MinionQueue {
         WHERE id IN (SELECT id FROM stalled WHERE stalled_counter + 1 >= max_stalled)
         RETURNING *, 'dead' as action
       )
-      SELECT * FROM requeued UNION ALL SELECT * FROM dead_lettered`
+      SELECT * FROM requeued UNION ALL SELECT * FROM dead_lettered`,
+      params,
     );
 
     const requeued: MinionJob[] = [];
