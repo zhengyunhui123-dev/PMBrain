@@ -1,4 +1,26 @@
 import type { CyclePhase } from '../../core/cycle.ts';
+import type { PhaseResult } from '../../core/cycle.ts';
+import type { SyncFileOptions } from '../../core/sync-file-runtime.ts';
+
+export interface SyncFileInput {
+  path: string;
+  relativePath: string;
+  originalPath?: string;
+  originalSize?: number;
+  originalMtime?: number;
+  hash: string;
+  fingerprint: string;
+  modelFingerprint: string;
+  modelMayRun?: boolean;
+  sourceRoot: string;
+  options: SyncFileOptions;
+  timeoutMs?: number;
+}
+
+export interface MaintenanceCheckpoint {
+  phases: Record<string, PhaseResult[]>;
+  reports: Record<string, Record<string, unknown>>;
+}
 
 export interface ImportTaskInput {
   path: string;
@@ -16,6 +38,7 @@ export interface ImportTaskInput {
 }
 
 export interface DreamTaskInput {
+  checkpoint?: MaintenanceCheckpoint;
   preset?: 'quick' | 'full' | 'meeting';
   phase?: CyclePhase | 'all' | string;
   sourceId?: string;
@@ -32,13 +55,15 @@ export interface DreamTaskInput {
 }
 
 export type ProductTask =
+  | { type: 'sync-file'; input: SyncFileInput }
   | { type: 'sync'; input: { timeoutMs?: number } }
   | { type: 'import'; input: ImportTaskInput }
   | { type: 'dream'; input: DreamTaskInput }
   | { type: 'embed'; input: { catchUp?: boolean; forceReembed?: boolean; timeoutMs?: number } };
 
 export type TaskWorkerMessage =
-  | { type: 'progress'; page?: { slug: string; title: string; type: string }; event?: { phase: string; file?: string; event?: string; done?: number; total?: number }; phases?: string[]; scope?: { name: string; index: number; total: number } }
+  | { type: 'deferred' }
+  | { type: 'progress'; syncScan?: { scanned: number; unchanged: number }; page?: { slug: string; title: string; type: string }; event?: { phase: string; file?: string; event?: string; done?: number; total?: number }; phases?: string[]; scope?: { name: string; index: number; total: number } }
   | { type: 'rpc'; id: number; method: string; args: unknown[]; scope?: number }
   | { type: 'log'; text: string }
   | { type: 'result'; result: Record<string, unknown> }

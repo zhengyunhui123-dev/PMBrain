@@ -4,6 +4,8 @@ import { taskModelFingerprint } from './checkpoint.ts';
 import type { TaskWorkerMessage } from './types.ts';
 import { stat } from 'node:fs/promises';
 import { withPgliteSavepoints } from '../database/savepoints';
+import type { SyncFileInput } from './types.ts';
+import { validateSyncFileSnapshot } from './sync-file-queue.ts';
 
 type RpcMessage = Extract<TaskWorkerMessage, { type: 'rpc' }>;
 type Scope = {
@@ -26,13 +28,21 @@ export class TaskEngineHost {
   private pending = new Set<Promise<unknown>>();
   private cycleLocks = new Set<string>();
   private currentFile?: { path: string; size: number; mtimeMs: number };
+  private receipts = new Map<number, { slug: string; status: string; pageHash: string; chunks: number }>();
+  private checkedPages = new Map<number, Set<string>>();
 
   constructor(
     private owner: BrainEngine,
     private jobId: number,
     private token: string,
     private checkpoint: (progress: Record<string, unknown>) => Promise<void>,
+    private saveFileReceipt = false,
+    private syncFile?: SyncFileInput,
   ) {}
+
+  ownsLockedTransaction(): boolean {
+    return !this.closed && [...this.scopes.values()].some(scope => scope.transactional);
+  }
 
   private async fence(tx: BrainEngine): Promise<void> {
     if (this.closed) throw new Error('任务执行已停止');
@@ -48,6 +58,7 @@ export class TaskEngineHost {
   }
 
   private async validateFile(): Promise<void> {
+    if (this.syncFile) await validateSyncFileSnapshot(this.syncFile);
     if (!this.currentFile) return;
     const current = await stat(this.currentFile.path);
     if (current.size !== this.currentFile.size || current.mtimeMs !== this.currentFile.mtimeMs) {
@@ -136,9 +147,16 @@ export class TaskEngineHost {
     if (method === 'scope.close') {
       const scope = scopeId === undefined ? undefined : this.scopes.get(scopeId);
       if (!scope) throw new Error('任务事务已关闭');
+      if (args[0] === true && scope.transactional) await this.validateFile();
+      const receipt = this.receipts.get(scopeId!);
+      if (args[0] === true && scope.transactional && receipt?.pageHash && this.saveFileReceipt) {
+        const rows = await scope.engine.executeRaw(`UPDATE minion_jobs SET result = $3::jsonb, updated_at = now()
+          WHERE id = $1 AND status = 'active' AND lock_token = $2 RETURNING id`, [this.jobId, this.token, JSON.stringify(receipt)]);
+        if (!rows.length) throw new Error('文件任务已停止或租约失效');
+      }
       scope.finish(args[0] === true);
       try { return await scope.done; }
-      finally { this.scopes.delete(scopeId!); }
+      finally { this.scopes.delete(scopeId!); this.receipts.delete(scopeId!); this.checkedPages.delete(scopeId!); }
     }
     const parent = scopeId === undefined ? undefined : this.scopes.get(scopeId);
     if (scopeId !== undefined && !parent) throw new Error('任务事务已关闭');
@@ -162,7 +180,7 @@ export class TaskEngineHost {
         this.scopes.set(id, { engine: scoped, finish, done, transactional });
         readyResolve();
         if (!await completed) throw new Error('任务事务已回滚');
-        if (transactional) await this.fence(connection as BrainEngine);
+        if (transactional) { await this.validateFile(); await this.fence(connection as BrainEngine); }
       };
       const base = engine as BrainEngine;
       const done = transactional ? base.transaction(run) : base.withReservedConnection(run);
@@ -189,14 +207,21 @@ export class TaskEngineHost {
             ?? 'default');
         const slug = String(args[0]);
         key = JSON.stringify([sourceId, slug]);
-        await target.executeRaw(`SELECT pg_advisory_xact_lock(hashtext($1))`, [`pmbrain_task_page:${key}`]);
-        await target.executeRaw(`SELECT id FROM sources WHERE id = $1 AND archived = false FOR SHARE`, [sourceId]).then(rows => {
-          if (!rows.length) throw new Error(`Source ${sourceId} 不存在或已归档`);
-        });
-        const current = await target.getPage(slug, { sourceId, includeDeleted: true });
-        const expected = this.pages.get(key);
-        if (expected !== undefined && pageFingerprint(current) !== expected) {
-          throw new Error(`页面 ${sourceId}:${slug} 在处理期间已改变，请重新执行`);
+        if (scopeId === undefined || !this.checkedPages.get(scopeId)?.has(key)) {
+          await target.executeRaw(`SELECT pg_advisory_xact_lock(hashtext($1))`, [`pmbrain_task_page:${key}`]);
+          await target.executeRaw<{ local_path: string | null; archived: boolean }>(`SELECT local_path, archived FROM sources WHERE id = $1 FOR SHARE`, [sourceId]).then(rows => {
+            if (!rows.length || rows[0].archived) throw new Error(`Source ${sourceId} 不存在或已归档`);
+            if (this.syncFile && rows[0].local_path !== this.syncFile.sourceRoot) throw new Error(`Source ${sourceId} 的资料路径已改变，请继续同步以重新扫描`);
+          });
+          const current = await target.getPage(slug, { sourceId, includeDeleted: true });
+          const expected = this.pages.get(key);
+          if (expected !== undefined && pageFingerprint(current) !== expected) {
+            throw new Error(`页面 ${sourceId}:${slug} 在处理期间已改变，请重新执行`);
+          }
+          if (scopeId !== undefined) {
+            if (!this.checkedPages.has(scopeId)) this.checkedPages.set(scopeId, new Set());
+            this.checkedPages.get(scopeId)!.add(key);
+          }
         }
       }
       const result = await fn.apply(target, args);
@@ -210,6 +235,10 @@ export class TaskEngineHost {
         if (!this.pages.has(readKey)) this.pages.set(readKey, pageFingerprint(page));
       }
       if (method === 'putPage' && key) this.pages.set(key, pageFingerprint(result as Page));
+      if (scopeId !== undefined && this.saveFileReceipt && method === 'putPage') {
+        this.receipts.set(scopeId, { slug: String(args[0]), status: 'imported', pageHash: (result as Page).content_hash ?? '', chunks: 0 });
+      }
+      if (scopeId !== undefined && this.saveFileReceipt && method === 'upsertChunks' && this.receipts.has(scopeId)) this.receipts.get(scopeId)!.chunks += (args[1] as unknown[]).length;
       return result;
     };
     if (parent?.transactional) return invoke(engine);
@@ -232,6 +261,7 @@ export class TaskEngineHost {
     for (const scope of this.scopes.values()) scope.finish(false);
     await Promise.allSettled([...this.scopes.values()].map(scope => scope.done));
     this.scopes.clear();
+    this.checkedPages.clear();
     if (this.cycleLocks.size) {
       await this.owner.executeRaw(
         `DELETE FROM gbrain_cycle_locks WHERE id = ANY($1::text[]) AND holder_pid = $2`,

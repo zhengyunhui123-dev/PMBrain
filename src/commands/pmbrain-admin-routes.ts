@@ -1489,6 +1489,13 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
     res.json(run);
   });
 
+  app.get('/admin/api/runs/:id/files', requireAdmin, async (req: Request, res: Response) => {
+    const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const result = id ? await productTasks.files(id, Number(req.query.after ?? 0)) : null;
+    if (!result) { res.status(404).json({ error: 'run_not_found' }); return; }
+    res.json(result);
+  });
+
   app.post('/admin/api/runs/:id/cancel', requireAdmin, async (req: Request, res: Response) => {
     const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
     const run = id ? await productTasks.requestCancel(id) ?? await cancelRun(id) : null;

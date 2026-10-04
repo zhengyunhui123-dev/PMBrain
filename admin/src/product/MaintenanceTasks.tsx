@@ -6,6 +6,7 @@ import { taskName } from '../../../shared/task-progress';
 import { useProductTasks } from './TaskActivity';
 import { TaskProgressCard, taskLink, taskStatus, taskStopping } from './TaskProgress';
 import './maintenance-tasks.css';
+import type { SyncFileDetails } from '../../../shared/task-progress';
 
 const activeTask = (run: ConsoleRun) => run.status === 'running' || run.status === 'queued';
 const selectedTaskId = () => new URLSearchParams(window.location.hash.split('?')[1]).get('run') ?? '';
@@ -15,11 +16,23 @@ function MaintenanceTaskDetail({ run, onClose, onChange }: { run: ConsoleRun; on
   const dialog = useRef<HTMLDialogElement>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [files, setFiles] = useState<SyncFileDetails | null>(null);
+  const [loadingFiles, setLoadingFiles] = useState(false);
+  const [fileError, setFileError] = useState('');
   const name = run.product?.name ?? taskName(run.kind);
   useEffect(() => { dialog.current?.showModal(); }, []);
+  const readFiles = async (after = 0) => {
+    if (loadingFiles) return;
+    setLoadingFiles(true); setFileError('');
+    try {
+      const value = await api.runFiles(run.id, after);
+      setFiles(current => ({ rows: after && current ? [...current.rows, ...value.rows] : value.rows, next: value.next }));
+    } catch (reason) { setFileError(reason instanceof Error ? reason.message : String(reason)); }
+    finally { setLoadingFiles(false); }
+  };
   const act = async (retry: boolean) => {
     if (busy) return;
-    if (retry && !window.confirm('将重新执行整理任务，中断的模型请求可能已产生费用，继续吗？')) return;
+    if (retry && !window.confirm(run.kind === 'dream_quick' ? '将保留已完成资料，继续未完成的同步和知识增强。中断的模型请求可能已产生费用，继续吗？' : '将重新执行整理任务，中断的模型请求可能已产生费用，继续吗？')) return;
     setBusy(true); setError('');
     try {
       if (retry) {
@@ -34,10 +47,16 @@ function MaintenanceTaskDetail({ run, onClose, onChange }: { run: ConsoleRun; on
     <div className="maintenance-detail-body">
       <div className="maintenance-detail-meta"><span>{run.trigger === 'scheduled' ? '自动任务' : '手动任务'}</span><span>开始于 {formatDate(run.startedAt, '—')}</span></div>
       <TaskProgressCard run={run} link={false} timeline />
+      {run.kind === 'dream_quick' && run.product?.syncFiles && <details onToggle={event => { if (event.currentTarget.open && !files && !loadingFiles) void readFiles(); }}><summary>查看同步文件明细</summary>
+        {files?.rows.map(file => <p key={file.id}><b>{file.path}</b> · {file.sourceId} · {({ completed: '已完成', failed: '失败', running: '处理中', pending: '未处理' })[file.status]}{file.error && <span> · {file.error}</span>}</p>)}
+        {fileError && <p role="alert">{fileError}</p>}
+        <button type="button" disabled={loadingFiles} onClick={() => void readFiles()}>{loadingFiles ? '读取中…' : '刷新文件状态'}</button>
+        {files?.next != null && <button type="button" disabled={loadingFiles} onClick={() => void readFiles(files.next!)}>加载更多</button>}
+      </details>}
       {!run.product && <p className="maintenance-muted">此历史任务没有保存步骤进度，可在任务中心查看结果。</p>}
       {error && <p className="product-error" role="alert">{error}</p>}
     </div>
-    <footer>{activeTask(run) && <button type="button" disabled={busy || taskStopping(run)} onClick={() => void act(false)}><CircleStop size={16} />{busy || taskStopping(run) ? '正在停止…' : '停止任务'}</button>}{['failed', 'cancelled'].includes(run.status) && run.id.startsWith('task-') && <button type="button" disabled={busy} onClick={() => void act(true)}>{busy ? '正在提交…' : '重新执行'}</button>}<button type="button" className="maintenance-primary" onClick={() => taskLink(run)}><ArrowUpRight size={16} />查看任务</button></footer>
+    <footer>{activeTask(run) && <button type="button" disabled={busy || taskStopping(run)} onClick={() => void act(false)}><CircleStop size={16} />{busy || taskStopping(run) ? '正在停止…' : '停止任务'}</button>}{(['failed', 'cancelled'].includes(run.status) || (run.kind === 'dream_quick' && taskStatus(run) === '部分完成')) && run.id.startsWith('task-') && <button type="button" disabled={busy} onClick={() => void act(true)}>{busy ? '正在提交…' : run.kind === 'dream_quick' ? '继续未完成任务' : '重新执行'}</button>}<button type="button" className="maintenance-primary" onClick={() => taskLink(run)}><ArrowUpRight size={16} />查看任务</button></footer>
   </dialog>;
 }
 

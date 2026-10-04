@@ -2,6 +2,8 @@ import { z } from 'zod';
 
 export const RunStatusSchema = z.enum(['queued', 'running', 'completed', 'failed', 'cancelled']);
 export const TaskProductProgressSchema = z.object({
+  syncScan: z.object({ scanned: z.number().int().nonnegative(), unchanged: z.number().int().nonnegative() }).optional(),
+  syncFiles: z.object({ total: z.number().int().nonnegative(), completed: z.number().int().nonnegative(), failed: z.number().int().nonnegative(), remaining: z.number().int().nonnegative() }).optional(),
   name: z.string(), stage: z.string(), percent: z.number().min(0).max(100).nullable(),
   phasePercent: z.number().min(0).max(100).nullable(), completedSteps: z.number().int().nonnegative(),
   steps: z.array(z.object({ id: z.string(), label: z.string(), status: z.enum(['pending', 'running', 'completed', 'skipped', 'failed']), phases: z.array(z.string()) })),

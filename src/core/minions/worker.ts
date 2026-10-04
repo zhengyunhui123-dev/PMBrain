@@ -16,7 +16,7 @@ import type {
   MinionJob, MinionJobContext, MinionHandler, MinionWorkerOpts,
   MinionQueueOpts, TokenUpdate,
 } from './types.ts';
-import { UnrecoverableError } from './types.ts';
+import { UnrecoverableError, MINION_DEFERRED } from './types.ts';
 import { MinionQueue } from './queue.ts';
 import { calculateBackoff } from './backoff.ts';
 import { RateLeaseUnavailableError } from './handlers/subagent.ts';
@@ -179,6 +179,7 @@ export class MinionWorker extends EventEmitter {
       maxAttachmentBytes: opts?.maxAttachmentBytes,
     });
     this.opts = {
+      ownsLockedTransaction: opts?.ownsLockedTransaction ?? (() => false),
       queue: opts?.queue ?? 'default',
       concurrency: opts?.concurrency ?? 1,
       lockDuration: opts?.lockDuration ?? 30000,
@@ -247,8 +248,10 @@ export class MinionWorker extends EventEmitter {
       throw new Error('No handlers registered. Call worker.register(name, handler) before start().');
     }
 
-    await this.queue.ensureSchema();
     this.running = true;
+    try { await this.queue.ensureSchema(); }
+    catch (error) { this.running = false; throw error; }
+    if (!this.running) return;
 
     // Graceful shutdown. Fires shutdownAbort so handlers subscribed to
     // `ctx.shutdownSignal` (currently: shell handler) can run their own cleanup
@@ -699,7 +702,7 @@ export class MinionWorker extends EventEmitter {
       lastSuccessfulRenewalAt: Date.now(),
       consecutiveFailures: 0,
       cancelled: () => cancelled,
-      ownsExecution: () => this.engine.kind === 'pglite' && this.inFlight.has(job.id),
+      ownsExecution: () => (this.engine.kind === 'pglite' && this.inFlight.has(job.id)) || this.opts.ownsLockedTransaction(job.id),
     };
     const renewalDeps: LockRenewalDeps = {
       renewLock: (id, tok, dur) => this.queue.renewLock(id, tok, dur),
@@ -884,6 +887,8 @@ export class MinionWorker extends EventEmitter {
       const result = await withChatPhase(`job:${job.name}`, () => handler(context));
 
       clearInterval(lockTimer);
+
+      if (result === MINION_DEFERRED) return;
 
       // Complete the job (token-fenced)
       const completed = await this.queue.completeJob(

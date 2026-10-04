@@ -4,6 +4,7 @@ import { dirname, join, relative, resolve, isAbsolute } from 'path';
 import { cpus, totalmem } from 'os';
 import type { BrainEngine } from '../core/engine.ts';
 import { importFile, importImageFile, isImageFilePath } from '../core/import-file.ts';
+import type { SyncFileRuntime, SyncFileOptions } from '../core/sync-file-runtime.ts';
 import { importOfficeFile, isOfficeFilePath } from '../core/office-import.ts';
 import { importSessionExport, isSessionExportPath } from '../core/conversation-parser/session-import.ts';
 import { loadConfig, gbrainPath } from '../core/config.ts';
@@ -64,6 +65,7 @@ export interface RunImportResult {
 }
 
 export interface ImportOptions {
+    fileRuntime?: SyncFileRuntime;
     commit?: string;
     strategy?: SyncStrategy;
     sourceId?: string;
@@ -92,6 +94,13 @@ export interface StructuredImportInput {
   structuredDocuments?: boolean;
   sourceId?: string;
   workers?: string;
+}
+
+export async function importSyncFile(engine: BrainEngine, path: string, relativePath: string, options: SyncFileOptions) {
+  if (options.session && isSessionExportPath(relativePath)) return importSessionExport(engine, path, relativePath, options);
+  if (options.includeImages && isImageFilePath(relativePath)) return importImageFile(engine, path, relativePath, { ...options, forceOcr: options.documentOcr });
+  if (options.includeOffice && isOfficeFilePath(relativePath)) return importOfficeFile(engine, path, relativePath, options);
+  return importFile(engine, path, relativePath, options);
 }
 
 export function runImport(engine: BrainEngine, args: string[], opts: ImportOptions = {}): Promise<RunImportResult> {
@@ -367,7 +376,9 @@ export async function runStructuredImport(
       // up images when GBRAIN_EMBEDDING_MULTIMODAL=true so this branch is
       // unreachable when the gate is off; defense-in-depth check anyway.
       const imageImportEnabled = includeImages || (process.env.PMBRAIN_EMBEDDING_MULTIMODAL ?? process.env.GBRAIN_EMBEDDING_MULTIMODAL) === 'true';
-      const result = sourceType === 'file' && strategy !== 'code' && isSessionExportPath(relativePath)
+      const result = opts.fileRuntime
+        ? await opts.fileRuntime.importFile(filePath, relativePath, { noEmbed, sourceId, includeOffice, includeImages: imageImportEnabled, documentOcr, structured: structuredDocuments, session: sourceType === 'file' && strategy !== 'code', activePack: importActivePack })
+        : sourceType === 'file' && strategy !== 'code' && isSessionExportPath(relativePath)
         ? await importSessionExport(eng, filePath, relativePath, { noEmbed, sourceId })
         : isImageFilePath(relativePath) && imageImportEnabled
         ? await importImageFile(eng, filePath, relativePath, { noEmbed, sourceId, forceOcr: documentOcr })
@@ -381,6 +392,7 @@ export async function runStructuredImport(
             })
         : await importFile(eng, filePath, relativePath, { noEmbed, sourceId, activePack: importActivePack });
       const _fileMs = Date.now() - _fileT0;
+      if ('deferred' in result && result.deferred) { processed++; tickProgress(); return; }
       opts.runtime?.signal.throwIfAborted();
       if (_fileMs > 5000) {
         console.error(`[pmbrain phase] import.process_file slow ${_fileMs}ms ${relativePath}`);
@@ -551,6 +563,7 @@ export async function runStructuredImport(
     }
   }
 
+  await opts.fileRuntime?.finish();
   progress.finish();
 
   // Error summary

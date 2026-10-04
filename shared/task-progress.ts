@@ -1,4 +1,11 @@
+export interface SyncFileDetails {
+  rows: Array<{ id: number; sourceId: string; path: string; status: 'completed' | 'failed' | 'running' | 'pending'; error: string | null }>;
+  next: number | null;
+}
+
 export interface TaskProductProgress {
+  syncScan?: { scanned: number; unchanged: number };
+  syncFiles?: { total: number; completed: number; failed: number; remaining: number };
   name: string;
   stage: string;
   percent: number | null;

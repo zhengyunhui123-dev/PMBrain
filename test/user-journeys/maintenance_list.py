@@ -107,6 +107,8 @@ def run(args):
             page.screenshot(path=str(artifacts / 'running-detail.png'), full_page=True)
             page.get_by_role('button', name='关闭整理详情', exact=True).click()
             page.get_by_role('button', name='知识库', exact=True).click()
+            page.screenshot(path=str(artifacts / 'navigated-knowledge.png'), full_page=True)
+            (artifacts / 'navigated-dom.txt').write_text(page.locator('body').inner_text(), encoding='utf-8')
             page.get_by_role('heading', name='知识库', exact=True).wait_for()
             page.get_by_role('button', name='知识整理', exact=True).click()
             page.reload()

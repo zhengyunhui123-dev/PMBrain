@@ -195,6 +195,7 @@ export const api = {
     apiFetch('/admin/api/capture-runs', { method: 'POST', body: JSON.stringify({ content, sourceId }) }),
   runs: () => apiFetch('/admin/api/runs'),
   run: (id: string) => apiFetch(`/admin/api/runs/${encodeURIComponent(id)}`),
+  runFiles: (id: string, after = 0): Promise<import('../../shared/task-progress').SyncFileDetails> => apiFetch(`/admin/api/runs/${encodeURIComponent(id)}/files?after=${after}`),
   cancelRun: (id: string) => apiFetch(`/admin/api/runs/${encodeURIComponent(id)}/cancel`, { method: 'POST' }),
   retryRun: (id: string) => apiFetch(`/admin/api/runs/${encodeURIComponent(id)}/retry`, { method: 'POST' }),
   startActionRun: (action: string, extra?: { catchUp?: boolean; forceReembed?: boolean }) =>

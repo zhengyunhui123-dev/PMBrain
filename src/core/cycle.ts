@@ -48,6 +48,7 @@ import { join } from 'path';
 import { hostname } from 'os';
 import { gbrainPath } from './config.ts';
 import type { BrainEngine } from './engine.ts';
+import { SyncFilesDeferred, type SyncFileRuntime } from './sync-file-runtime.ts';
 import { createProgress, type ProgressReporter } from './progress.ts';
 import { getCliOptions, cliOptsToProgressOptions } from './cli-options.ts';
 import { deleteLockRow, inspectLock, tryAcquireDbLock, type DbLockHandle } from './db-lock.ts';
@@ -373,6 +374,9 @@ export interface CycleReport {
 }
 
 export interface CycleOpts {
+  syncFileRuntime?: SyncFileRuntime;
+  completedPhases?: PhaseResult[];
+  phaseCheckpoint?: (phases: PhaseResult[]) => Promise<void>;
   /** If true, no writes to filesystem or DB. All phases honor this. */
   dryRun?: boolean;
   /** Defaults to ALL_PHASES. Pass a subset for --phase lint etc. */
@@ -982,6 +986,8 @@ async function runPhaseSync(
   willRunExtractPhase: boolean,
   includeOffice: boolean,
   concurrency?: number,
+  fileRuntime?: SyncFileRuntime,
+  signal?: AbortSignal,
 ): Promise<SyncPhaseResult> {
   try {
     const { performSync } = await import('../commands/sync.ts');
@@ -1004,6 +1010,8 @@ async function runPhaseSync(
       includeImages: documentOcr,
       documentOcr,
       concurrency,
+      fileRuntime,
+      signal,
     });
     const syncedCount = result.added + result.modified;
     const uncommittedCount = result.uncommitted
@@ -1031,6 +1039,7 @@ async function runPhaseSync(
       pagesAffected: result.pagesAffected,
     };
   } catch (e) {
+    if (e instanceof SyncFilesDeferred) throw e;
     return {
       phase: 'sync',
       status: 'fail',
@@ -1549,8 +1558,10 @@ export async function runCycle(
 ): Promise<CycleReport> {
   const start = performance.now();
   const requestedPhases = opts.phases ?? ALL_PHASES;
-  const phases = resolveCyclePhases(opts.phases, opts.sourceId);
-  const excludedPhases = requestedPhases.filter(phase => !phases.includes(phase));
+  const resolvedPhases = resolveCyclePhases(opts.phases, opts.sourceId);
+  const restored = (opts.completedPhases ?? []).filter(item => resolvedPhases.includes(item.phase));
+  const phases = resolvedPhases.filter(phase => !restored.some(item => item.phase === phase));
+  const excludedPhases = requestedPhases.filter(phase => !resolvedPhases.includes(phase));
   const dryRun = !!opts.dryRun;
   const pull = !!opts.pull;
   const timestamp = new Date().toISOString();
@@ -1566,6 +1577,11 @@ export async function runCycle(
     },
   }));
   const brainDir = opts.brainDir;
+  phaseResults.push(...restored);
+  const checkpoint = async () => {
+    await opts.phaseCheckpoint?.(phaseResults);
+    await safeYield(opts.yieldBetweenPhases);
+  };
 
   const skipNoBrainDir = (phase: CyclePhase): PhaseResult => ({
     phase,
@@ -1731,7 +1747,7 @@ export async function runCycle(
         phaseResults.push(result);
         progress.finish();
       }
-      await safeYield(opts.yieldBetweenPhases);
+      await checkpoint();
     }
 
     // ── Phase 2: backlinks ──────────────────────────────────────
@@ -1746,15 +1762,15 @@ export async function runCycle(
         phaseResults.push(result);
         progress.finish();
       }
-      await safeYield(opts.yieldBetweenPhases);
+      await checkpoint();
     }
 
     // ── Phase 3: sync ───────────────────────────────────────────
     // Track which slugs sync touched so extract can run incrementally,
     // and which slugs synthesize wrote so recompute_emotional_weight can
     // pick up the union of (sync ∪ synthesize) for v0.29 incremental mode.
-    let syncPagesAffected: string[] | undefined;
-    let syncAttempted = false;
+    let syncPagesAffected: string[] | undefined = (restored.find(item => item.phase === 'sync') as SyncPhaseResult | undefined)?.pagesAffected;
+    let syncAttempted = restored.some(item => item.phase === 'sync');
     let synthesizeWrittenSlugs: string[] | undefined;
     let stopDbWrites = false;
     const noteSearchIndexAbort = (result: PhaseResult) => {
@@ -1797,6 +1813,8 @@ export async function runCycle(
           phases.includes('extract'),
           opts.includeOffice === true,
           opts.syncConcurrency,
+          opts.syncFileRuntime,
+          opts.signal,
         ));
         result.duration_ms = duration_ms;
         // Capture changed slugs for incremental extract.
@@ -1805,7 +1823,7 @@ export async function runCycle(
         noteSearchIndexAbort(result);
         progress.finish();
       }
-      await safeYield(opts.yieldBetweenPhases);
+      await checkpoint();
     }
 
     // ── Phase 4: synthesize (v0.23) ─────────────────────────────
@@ -1847,7 +1865,7 @@ export async function runCycle(
         }
         progress.finish();
       }
-      await safeYield(opts.yieldBetweenPhases);
+      await checkpoint();
     }
 
     // ── Phase 5: extract (now picks up synthesize output) ───────
@@ -1992,7 +2010,7 @@ export async function runCycle(
         noteSearchIndexAbort(result);
         if (progressStarted) progress.finish();
       }
-      await safeYield(opts.yieldBetweenPhases);
+      await checkpoint();
     }
 
     // ── Phase 5b: extract_facts (v0.32.2) ───────────────────────
@@ -2033,7 +2051,7 @@ export async function runCycle(
         noteSearchIndexAbort(result);
         progress.finish();
       }
-      await safeYield(opts.yieldBetweenPhases);
+      await checkpoint();
     }
 
     // ── v0.41 T9: extract_atoms (per-source, pack-gated) ──────────
@@ -2097,7 +2115,7 @@ export async function runCycle(
         phaseResults.push(result);
         progress.finish();
       }
-      await safeYield(opts.yieldBetweenPhases);
+      await checkpoint();
     }
 
     // ── v0.33.3 W0c: resolve_symbol_edges (between extract_facts + patterns) ──
@@ -2126,7 +2144,7 @@ export async function runCycle(
         noteSearchIndexAbort(result);
         progress.finish();
       }
-      await safeYield(opts.yieldBetweenPhases);
+      await checkpoint();
     }
 
     // ── Phase 6: patterns (v0.23) ───────────────────────────────
@@ -2161,7 +2179,7 @@ export async function runCycle(
         phaseResults.push(result);
         progress.finish();
       }
-      await safeYield(opts.yieldBetweenPhases);
+      await checkpoint();
     }
 
     // ── v0.41 T9: synthesize_concepts (global, pack-gated) ───────
@@ -2204,7 +2222,7 @@ export async function runCycle(
         phaseResults.push(result);
         progress.finish();
       }
-      await safeYield(opts.yieldBetweenPhases);
+      await checkpoint();
     }
 
     // ── Phase 7: recompute_emotional_weight (v0.29) ─────────────
@@ -2246,7 +2264,7 @@ export async function runCycle(
         phaseResults.push(result);
         progress.finish();
       }
-      await safeYield(opts.yieldBetweenPhases);
+      await checkpoint();
     }
 
     // ── Phase 8 (v0.31): consolidate facts → takes ──────────────
@@ -2275,7 +2293,7 @@ export async function runCycle(
         phaseResults.push(result);
         progress.finish();
       }
-      await safeYield(opts.yieldBetweenPhases);
+      await checkpoint();
     }
 
     // ── v0.36.1.0 calibration phases (propose_takes → grade_takes →
@@ -2338,7 +2356,7 @@ export async function runCycle(
           };
           result.duration_ms = duration_ms;
           phaseResults.push(result);
-          await safeYield(opts.yieldBetweenPhases);
+          await checkpoint();
         }
 
         if (phases.includes('grade_takes')) {
@@ -2362,7 +2380,7 @@ export async function runCycle(
           result.duration_ms = duration_ms;
           phaseResults.push(result);
           progress.finish();
-          await safeYield(opts.yieldBetweenPhases);
+          await checkpoint();
         }
 
         if (phases.includes('calibration_profile')) {
@@ -2386,7 +2404,7 @@ export async function runCycle(
           result.duration_ms = duration_ms;
           phaseResults.push(result);
           progress.finish();
-          await safeYield(opts.yieldBetweenPhases);
+          await checkpoint();
         }
       } else {
         for (const p of (['propose_takes', 'grade_takes', 'calibration_profile'] as const)) {
@@ -2438,7 +2456,7 @@ export async function runCycle(
         phaseResults.push(result);
         progress.finish();
       }
-      await safeYield(opts.yieldBetweenPhases);
+      await checkpoint();
     }
 
     // ── v0.41.11.0: conversation_facts_backfill ─────────────────
@@ -2468,7 +2486,7 @@ export async function runCycle(
         phaseResults.push(result);
         progress.finish();
       }
-      await safeYield(opts.yieldBetweenPhases);
+      await checkpoint();
     }
 
     // Default OFF. Develops a bounded number of thin pages using only
@@ -2493,7 +2511,7 @@ export async function runCycle(
         phaseResults.push(result);
         progress.finish();
       }
-      await safeYield(opts.yieldBetweenPhases);
+      await checkpoint();
     }
 
     // ── Phase 8: embed ──────────────────────────────────────────
@@ -2526,7 +2544,7 @@ export async function runCycle(
         noteSearchIndexAbort(result);
         progress.finish();
       }
-      await safeYield(opts.yieldBetweenPhases);
+      await checkpoint();
     }
 
     // ── Phase 9: orphans ────────────────────────────────────────
@@ -2547,7 +2565,7 @@ export async function runCycle(
         phaseResults.push(result);
         progress.finish();
       }
-      await safeYield(opts.yieldBetweenPhases);
+      await checkpoint();
     }
 
     // ── v0.39 T12: schema-suggest ───────────────────────────────
@@ -2593,7 +2611,7 @@ export async function runCycle(
         }
         progress.finish();
       }
-      await safeYield(opts.yieldBetweenPhases);
+      await checkpoint();
     }
 
     // ── Phase 9: purge (v0.26.5) ────────────────────────────────
@@ -2617,7 +2635,7 @@ export async function runCycle(
         phaseResults.push(result);
         progress.finish();
       }
-      await safeYield(opts.yieldBetweenPhases);
+      await checkpoint();
     }
 
     // Catch an abort that fired during the final selected phase. Without

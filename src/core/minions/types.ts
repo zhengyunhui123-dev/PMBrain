@@ -27,6 +27,7 @@ export type MinionJobStatus =
   | 'paused';
 
 export type BackoffType = 'fixed' | 'exponential';
+export const MINION_DEFERRED = Symbol('minion-deferred');
 
 export type ChildFailPolicy = 'fail_parent' | 'remove_dep' | 'ignore' | 'continue';
 
@@ -166,6 +167,7 @@ export interface MinionQueueOpts {
 }
 
 export interface MinionWorkerOpts {
+  ownsLockedTransaction?: (jobId: number) => boolean;
   queue?: string;
   concurrency?: number; // default 1
   lockDuration?: number; // ms, default 30000

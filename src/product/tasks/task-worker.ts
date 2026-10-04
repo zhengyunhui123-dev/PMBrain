@@ -3,7 +3,7 @@ import type { ProductTask, TaskWorkerMessage } from './types.ts';
 import { loadConfig } from '../../core/config.ts';
 import { reloadLiveGateway } from '../../core/ai/reload-live-gateway.ts';
 import { DEFAULT_CLI_OPTIONS, setCliOptions } from '../../core/cli-options.ts';
-import { runStructuredImport } from '../../commands/import.ts';
+import { runStructuredImport, importSyncFile } from '../../commands/import.ts';
 import { ALL_PHASES, runCycle, type CyclePhase } from '../../core/cycle.ts';
 import { resolveDreamPresetPhases, resolveBrainDir } from '../../commands/dream.ts';
 import { runQuickMaintenance, combineQuickMaintenanceReports, resolveQuickMaintenancePhases } from '../../core/quick-maintenance.ts';
@@ -12,15 +12,23 @@ import { resolveSourceId } from '../../core/source-resolver.ts';
 import { runEmbedCore } from '../../commands/embed.ts';
 import { parentPort } from 'node:worker_threads';
 import { format } from 'node:util';
-import { stat } from 'node:fs/promises';
+import { stat, readFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { relative, isAbsolute, join } from 'node:path';
+import { SyncFilesDeferred, SYNC_FILE_FORMAT_VERSION, type SyncFileRuntime } from '../../core/sync-file-runtime.ts';
+import { classifyErrorCode, isInfrastructureFailureCode } from '../../core/sync-failure-ledger.ts';
+import { CHUNKER_VERSION } from '../../core/chunkers/code.ts';
+import { MARKDOWN_CHUNKER_VERSION } from '../../core/chunkers/recursive.ts';
 import { performSync } from '../../commands/sync.ts';
 import { readTaskCheckpoint, taskModelFingerprint } from './checkpoint.ts';
 import { isGinRepairAbortText } from '../../core/pglite-gin-repair.ts';
 import type { SyncStrategy } from '../../core/sync.ts';
+import { isOfficeFilePath } from '../../core/sync.ts';
+import { isImageFilePath } from '../../core/import-file.ts';
 
 let sequence = 0;
 const pending = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void }>();
-const abort = new AbortController();
+let abort = new AbortController();
 const send = (message: TaskWorkerMessage) => parentPort!.postMessage(message);
 let importFile: string | undefined;
 const originalFetch = globalThis.fetch;
@@ -97,6 +105,47 @@ for (const method of ['log', 'error', 'warn', 'info', 'debug'] as const) {
 setCliOptions({ ...DEFAULT_CLI_OPTIONS, progressJson: true });
 
 async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { type: 'dream' }>['input']) {
+  const checkpoint = input.checkpoint ?? { phases: {}, reports: {} };
+  let pendingFiles = false;
+  let scanned = 0;
+  let unchanged = 0;
+  const roots = new Map<string, string>();
+  const fileRuntime: SyncFileRuntime | undefined = input.preset === 'quick' && !input.dryRun ? {
+    signal: abort.signal,
+    importFile: async (path, relativePath, options) => {
+      abort.signal.throwIfAborted();
+      const sourceId = options.sourceId ?? 'default';
+      if (!roots.has(sourceId)) roots.set(sourceId, (await fetchSource(engine, sourceId))?.local_path ?? '');
+      const sourceRoot = roots.get(sourceId)!;
+      const local = sourceRoot ? relative(sourceRoot, path) : '..';
+      const originalPath = local.startsWith('..') || isAbsolute(local) ? undefined : path;
+      const snapshot = await stat(path);
+      const hash = createHash('sha256').update(await readFile(path)).digest('hex');
+      const result = await rpc('task.syncFile', [{ path, relativePath, sourceRoot, originalPath,
+        originalSize: snapshot.size, originalMtime: snapshot.mtimeMs, hash,
+        modelFingerprint: taskModelFingerprint(),
+        modelMayRun: options.documentOcr === true && (isOfficeFilePath(relativePath) || isImageFilePath(relativePath)),
+        fingerprint: createHash('sha256').update(JSON.stringify([SYNC_FILE_FORMAT_VERSION, taskModelFingerprint(), CHUNKER_VERSION, MARKDOWN_CHUNKER_VERSION, options])).digest('hex'), options,
+      }]) as import('../../core/import-file.ts').ImportResult & { deferred?: boolean; unchanged?: boolean };
+      if (result.deferred) pendingFiles = true;
+      scanned++;
+      if (result.unchanged) unchanged++;
+      send({ type: 'progress', syncScan: { scanned, unchanged } });
+      return result;
+    },
+    finish: async () => { if (pendingFiles) throw new SyncFilesDeferred(); },
+  } : undefined;
+  const resumeOptions = (sourceId: string) => {
+    for (const phase of checkpoint.phases[sourceId] ?? []) send({ type: 'progress', event: { phase: `cycle.${phase.phase}`, event: 'finish' } });
+    return ({
+    syncFileRuntime: fileRuntime,
+    completedPhases: checkpoint.phases[sourceId],
+    phaseCheckpoint: input.preset === 'quick' ? async (phases: import('../../core/cycle.ts').PhaseResult[]) => {
+      checkpoint.phases[sourceId] = phases;
+      await rpc('task.maintenanceCheckpoint', [checkpoint]);
+    } : undefined,
+    });
+  };
   const phases = input.preset === 'quick' ? resolveQuickMaintenancePhases()
     : input.phase && input.phase !== 'all' ? [input.phase]
     : input.preset ? resolveDreamPresetPhases(input.preset) : ALL_PHASES;
@@ -124,16 +173,23 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
     for (const [index, source] of sources.entries()) {
       send({ type: 'progress', scope: { name: source.name, index, total: sources.length } });
       abort.signal.throwIfAborted();
+      if (checkpoint.reports[source.id]) {
+        reports.push({ sourceId: source.id, report: checkpoint.reports[source.id] as unknown as import('../../core/cycle.ts').CycleReport });
+        continue;
+      }
       const report = await runQuickMaintenance(engine, {
         ...common, sourceId: source.id, brainDir: await resolveBrainDir(engine, null, source.id),
+        ...resumeOptions(source.id),
       });
+      checkpoint.reports[source.id] = { ...report };
+      await rpc('task.maintenanceCheckpoint', [checkpoint]);
       reports.push({ sourceId: source.id, report });
       if (report.phases.some(phase => phase.status === 'fail' && isGinRepairAbortText(`${phase.error?.message ?? ''}\n${phase.summary}\n${JSON.stringify(phase.details ?? {})}`))) break;
     }
     return combineQuickMaintenanceReports(reports, startedAt);
   }
   const brainDir = await resolveBrainDir(engine, null, sourceId);
-  if (input.preset === 'quick') return runQuickMaintenance(engine, { ...common, brainDir });
+  if (input.preset === 'quick') return runQuickMaintenance(engine, { ...common, brainDir, ...resumeOptions(sourceId ?? 'default') });
   return runCycle(engine, {
     ...common, brainDir,
     phases: input.phase && input.phase !== 'all' ? [input.phase as CyclePhase]
@@ -146,7 +202,32 @@ async function execute(task: ProductTask, kind: BrainEngine['kind']) {
   const engine = proxyEngine(kind);
   if (loadConfig()) await reloadLiveGateway(engine);
   let result: Record<string, unknown>;
-  if (task.type === 'import') {
+  if (task.type === 'sync-file') {
+    const input = task.input;
+    if (input.modelFingerprint !== taskModelFingerprint()) throw new Error('模型配置已改变，请继续同步以重新扫描');
+    const source = await fetchSource(engine, input.options.sourceId ?? 'default');
+    if (!source || source.archived || source.local_path !== input.sourceRoot) throw new Error('Source 路径已改变或已归档，请重新扫描');
+    const { SyncFileQueue } = await import('./sync-file-queue.ts');
+    await new SyncFileQueue(engine).validate(input);
+    const snapshot = await stat(input.originalPath ?? input.path);
+    importFile = input.relativePath;
+    await rpc('task.inputFile', [{ path: input.originalPath ?? input.path, size: snapshot.size, mtimeMs: snapshot.mtimeMs }]);
+    try {
+      const imported = await importSyncFile(engine, input.path, input.relativePath, input.options);
+      abort.signal.throwIfAborted();
+      const page = imported.slug ? await engine.getPage(imported.slug, { sourceId: input.options.sourceId }) : null;
+      result = { slug: imported.slug, status: imported.error && imported.error !== 'unchanged' ? 'failed' : imported.status, chunks: imported.chunks,
+        error: imported.error, documentSummary: imported.documentSummary, largeDocument: imported.largeDocument,
+        pageHash: page?.content_hash, file: input.relativePath };
+    } catch (error) {
+      abort.signal.throwIfAborted();
+      const message = error instanceof Error ? error.message : String(error);
+      if (isInfrastructureFailureCode(classifyErrorCode(message)) || /租约|Source|配置|处理期间已改变|快照已改变|SQL|constraint|database/i.test(message)) throw error;
+      result = { slug: '', status: 'failed', chunks: 0, error: message, file: input.relativePath };
+    }
+    send({ type: 'result', result });
+    return;
+  } else if (task.type === 'import') {
     const input = task.input;
     send({ type: 'progress', phases: input.noEmbed ? ['collect', 'process', 'write'] : ['collect', 'process', 'vector', 'write'] });
     send({ type: 'progress', event: { phase: 'import.collect' } });
@@ -234,7 +315,10 @@ parentPort!.on('message', message => {
     for (const waiter of pending.values()) waiter.reject(new Error('任务已取消'));
     pending.clear();
   } else if (message.type === 'start') {
+    abort = new AbortController();
+    importFile = undefined;
     void execute(message.task, message.kind).catch(error => {
+      if (error instanceof SyncFilesDeferred) { send({ type: 'deferred' }); return; }
       send({ type: 'error', error: error instanceof Error ? error.message : String(error) });
     });
   }
