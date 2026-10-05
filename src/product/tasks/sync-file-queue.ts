@@ -47,9 +47,10 @@ export class SyncFileQueue {
       if (job?.result && (job.status === 'completed' || (job.result.pageHash && ['paused','delayed','waiting'].includes(job.status)))) {
         const stored = job.result as unknown as ImportResult & { pageHash?: string };
         if (!stored.pageHash) return stored;
-        const page = await this.completePage(stored.slug,file);
+        const page = await this.completePage(stored.slug,file,stored.status==='skipped');
         if (page && page.content_hash === stored.pageHash && !file.options.forceRechunk && (!stored.chunks || page.chunks===stored.chunks)) {
           if (job.status !== 'completed') await this.engine.executeRaw(`UPDATE minion_jobs SET status = 'completed', finished_at = now(), lock_token = NULL, lock_until = NULL WHERE id = $1 AND status IN ('paused','delayed','waiting')`, [job.id]);
+          if(stored.status==='skipped'){await this.validate(file);await this.remember(file,stored);}
           return stored;
         }
         await this.engine.executeRaw(`UPDATE minion_jobs SET idempotency_key = NULL, data = jsonb_set(data, '{superseded}', 'true'::jsonb) WHERE id = $1`, [job.id]);
@@ -61,7 +62,7 @@ export class SyncFileQueue {
     const rawManifest=await this.engine.getConfig(syncFileManifestKey(file));
     const manifest=rawManifest?JSON.parse(rawManifest) as SyncFileManifest:null;
     if(manifest?.hash===file.hash && manifest.fingerprint===file.fingerprint && !file.options.forceRechunk){
-      const page=await this.completePage(manifest.slug,file);
+      const page=await this.completePage(manifest.slug,file,manifest.contentMatched===true);
       if(page?.content_hash===manifest.pageHash && manifest.chunks!==undefined && manifest.chunks!==page.chunks)file.options={...file.options,forceRechunk:true};
       if(page?.content_hash===manifest.pageHash && (manifest.chunks===undefined || manifest.chunks===page.chunks)){
         await this.validate(file);
@@ -162,17 +163,20 @@ export class SyncFileQueue {
       WHERE id=$1 AND status IN ('paused','delayed','waiting')`,[job.id]);
   }
 
-  private async completePage(slug:string,file:SyncFileInput){
+  private async completePage(slug:string,file:SyncFileInput,contentMatched=false){
     const page=await this.engine.executeRaw<{content_hash:string;source_path:string|null;chunker_version:number;chunks:number;hasBody:boolean}>(
       `SELECT content_hash,source_path,chunker_version,length(compiled_truth)>0 AS "hasBody",(SELECT count(*)::int FROM content_chunks WHERE page_id=p.id) AS chunks
        FROM pages p WHERE slug=$1 AND source_id=$2 AND deleted_at IS NULL`,[slug,file.options.sourceId??'default']);
     const row=page[0];
-    return row && row.chunker_version>=0 && (!row.hasBody||row.chunks>0) && row.source_path===file.relativePath?row:null;
+    return row && row.chunker_version>=0 && (!row.hasBody||row.chunks>0)
+      && (contentMatched || row.source_path?.replace(/\\/g,'/')===file.relativePath.replace(/\\/g,'/'))?row:null;
   }
 
   async remember(file:SyncFileInput,result:ImportResult & {pageHash?:string}){
     if(!result.pageHash)return;
-    await this.engine.setConfig(syncFileManifestKey(file),JSON.stringify(syncFileManifest(file,result.slug,result.pageHash,result.chunks)));
+    const page=await this.completePage(result.slug,file,result.status==='skipped');
+    if(!page || page.content_hash!==result.pageHash)return;
+    await this.engine.setConfig(syncFileManifestKey(file),JSON.stringify(syncFileManifest(file,result.slug,result.pageHash,page.chunks,result.status==='skipped')));
   }
 
   async validate(file: SyncFileInput) {
@@ -208,10 +212,10 @@ export async function validateSyncFileSnapshot(file: SyncFileInput) {
   }
 }
 
-export interface SyncFileManifest {hash:string;fingerprint:string;slug:string;pageHash:string;size?:number;mtime?:number;chunks?:number;}
+export interface SyncFileManifest {hash:string;fingerprint:string;slug:string;pageHash:string;size?:number;mtime?:number;chunks?:number;contentMatched?:boolean;}
 export function syncFileManifestKey(file:Pick<SyncFileInput,'options'|'sourceRoot'|'relativePath'>){
   return 'sync.file.sha256:'+createHash('sha256').update(JSON.stringify([file.options.sourceId??'default',file.sourceRoot,file.relativePath])).digest('hex');
 }
-export function syncFileManifest(file:SyncFileInput,slug:string,pageHash:string,chunks?:number):SyncFileManifest {
-  return {hash:file.hash,fingerprint:file.fingerprint,slug,pageHash,size:file.originalSize,mtime:file.originalMtime,chunks};
+export function syncFileManifest(file:SyncFileInput,slug:string,pageHash:string,chunks?:number,contentMatched=false):SyncFileManifest {
+  return {hash:file.hash,fingerprint:file.fingerprint,slug,pageHash,size:file.originalSize,mtime:file.originalMtime,chunks,...(contentMatched?{contentMatched:true}:{})};
 }

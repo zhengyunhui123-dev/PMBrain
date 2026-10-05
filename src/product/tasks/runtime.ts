@@ -67,6 +67,7 @@ export class ProductTaskRuntime {
   private recoveringOwner: Promise<void> | null = null;
   private dirtyFiles = new Map<number,Set<number>>();
   private idleFileThreads: Worker[] = [];
+  private idleMaintenanceThreads: Worker[] = [];
   private sessionRefresh = new Map<number, { timer: ReturnType<typeof setTimeout>; file?: string }>();
   private loop: Promise<void> | null = null;
   private stopped = false;
@@ -395,7 +396,9 @@ export class ProductTaskRuntime {
     const workerPath = /\/(?:~BUN|\$bunfs)\//.test(decodeURIComponent(import.meta.url))
       ? './product/tasks/task-worker.ts'
       : new URL(import.meta.url.endsWith('.ts') ? './task-worker.ts' : './task-worker.js', import.meta.url);
-    const thread = structuredTask.type === 'sync-file' && this.idleFileThreads.length ? this.idleFileThreads.pop()! : new Worker(workerPath, { env: { ...process.env } });
+    const reusableThreads=structuredTask.type==='sync-file'?this.idleFileThreads
+      :structuredTask.type==='dream'&&structuredTask.input.preset==='quick'?this.idleMaintenanceThreads:undefined;
+    const thread = reusableThreads?.pop() ?? new Worker(workerPath, { env: { ...process.env } });
     let stop!: () => void;
     const stopped = new Promise<void>(resolve => { stop = resolve; });
     thread.once('exit', stop);
@@ -404,6 +407,7 @@ export class ProductTaskRuntime {
     const result = new Promise<unknown>((resolve, reject) => { settleResolve = resolve; settleReject = reject; });
     let cancelRequested = false;
     let completed = false;
+    let deferred = false;
     let flush: ReturnType<typeof setInterval> | undefined;
     const cancel = () => {
       if (cancelRequested) return;
@@ -420,10 +424,10 @@ export class ProductTaskRuntime {
         try { await host.close(); }
         finally {
           try {
-            if (structuredTask.type === 'sync-file' && completed && !cancelRequested && !this.stopped && !this.paused) {
+            if (reusableThreads && (completed || deferred) && !cancelRequested && !this.stopped && !this.paused) {
               thread.removeAllListeners('error');
               thread.removeAllListeners('exit');
-              this.idleFileThreads.push(thread);
+              reusableThreads.push(thread);
             } else {
               await thread.terminate();
               await stopped;
@@ -495,6 +499,7 @@ export class ProductTaskRuntime {
         progress.result = message.result;
         void persist().then(() => settleReject(new Error(message.error)), settleReject);
       } else if (message.type === 'deferred') {
+        deferred = true;
         void persist().then(() => settleResolve(MINION_DEFERRED), settleReject);
       }
     });
@@ -557,7 +562,7 @@ export class ProductTaskRuntime {
     await this.fileProjection.flush();
     await this.loop;
     await this.fileLoop;
-    await Promise.all(this.idleFileThreads.splice(0).map(thread => thread.terminate()));
+    await Promise.all([...this.idleFileThreads.splice(0),...this.idleMaintenanceThreads.splice(0)].map(thread => thread.terminate()));
     await this.refreshingRuns;
     await Promise.allSettled([...this.executions.values()].map(execution => execution.done));
     if (interrupted.length) {
@@ -575,7 +580,7 @@ export class ProductTaskRuntime {
     await Promise.allSettled([...this.executions.values()].map(execution => execution.done));
     await this.loop;
     await this.fileLoop;
-    await Promise.all(this.idleFileThreads.splice(0).map(thread => thread.terminate()));
+    await Promise.all([...this.idleFileThreads.splice(0),...this.idleMaintenanceThreads.splice(0)].map(thread => thread.terminate()));
     await Promise.allSettled([...this.executions.values()].map(execution => execution.done));
     this.loop = null;
   }

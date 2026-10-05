@@ -138,6 +138,35 @@ test('停止发生在领任务请求途中时，退回任务且不开始处理',
   expect((await queue.getJob(job.id))?.attempts_started).toBe(0);
 },60000);
 
+test('旧 Office 内容去重回执不因原页面路径不同重复入队，跳过的零新增分块不能覆盖已有分块数',async()=>{
+  const file=join(home,'office-copy.docx');writeFileSync(file,'isolated original Office bytes');
+  const info=statSync(file);
+  await importFromContent(engine,'office-original','# 旧 Office\n\n保持原页面与来源路径。',{noEmbed:true,sourcePath:'backups\\office-original-v1.docx'});
+  const page=(await engine.getPage('office-original'))!;
+  const chunks=await engine.getChunks('office-original');
+  expect(chunks.length).toBeGreaterThan(0);
+  const options={sourceId:'default',noEmbed:true,includeOffice:true,documentOcr:true};
+  const input={path:file,relativePath:'backups/office-copy.docx',sourceRoot:home,originalPath:file,originalSize:info.size,originalMtime:info.mtimeMs,
+    hash:createHash('sha256').update(readFileSync(file)).digest('hex'),fingerprint:syncFileContentFingerprint(options),modelFingerprint:'isolated-model',options};
+  const queue=new MinionQueue(engine);
+  const parent=await queue.add('office-mapping-parent',{}, {queue:'office-mapping-parent'});
+  await queue.claim('office-mapping-token',3600000,'office-mapping-parent',['office-mapping-parent']);
+  const child=await queue.add('pmbrain-sync-file',{sessionId:parent.id,kind:'sync_file',task:{type:'sync-file',input}},{queue:SYNC_FILE_QUEUE,delay:86400000});
+  await engine.executeRaw(`UPDATE minion_jobs SET parent_job_id=$1,status='completed',result=$3::jsonb WHERE id=$2`,[parent.id,child.id,{slug:page.slug,status:'skipped',chunks:0,pageHash:page.content_hash}]);
+  const files=new SyncFileQueue(engine);
+  expect((await files.enqueue(parent.id,'office-mapping-token',input)).status).toBe('skipped');
+  expect((await files.counts(parent.id)).total).toBe(1);
+  const manifest=JSON.parse((await engine.getConfig(syncFileManifestKey(input)))!);
+  expect(manifest.chunks).toBe(chunks.length);
+  expect(manifest.contentMatched).toBe(true);
+  const next=await queue.add('office-mapping-next',{}, {queue:'office-mapping-next'});
+  await queue.claim('office-mapping-next-token',3600000,'office-mapping-next',['office-mapping-next']);
+  expect((await files.enqueue(next.id,'office-mapping-next-token',input)).unchanged).toBe(true);
+  expect((await files.counts(next.id)).total).toBe(0);
+  expect(await engine.getPage('office-original')).toEqual(page);
+  expect(await engine.getChunks('office-original')).toEqual(chunks);
+},60000);
+
 test('升级后复用旧指纹的未完成任务，已导入的旧排队文件退出队列',async () => {
   const file=join(home,'upgrade-source.md');writeFileSync(file,'# 升级资料\n\n保留旧文件任务，不再重复入队。');
   const info=statSync(file);const options={sourceId:'default',noEmbed:true,activePack:{page_types:[{path_prefixes:[],name:'note'}]}};

@@ -97,6 +97,27 @@ afterAll(async () => {
 }, 60_000);
 
 describe('软件后台任务共用 owner 数据库', () => {
+  test('连续快速维护复用执行线程，内存不随任务次数持续增长，关闭后释放空闲线程',async()=>{
+    configureModels(false);
+    const first=await runtime.submitDream({preset:'quick',dryRun:true});
+    expect((await finished(first.id)).status).toBe('completed');
+    const pool=(runtime as unknown as {idleMaintenanceThreads:import('node:worker_threads').Worker[]}).idleMaintenanceThreads;
+    expect(pool).toHaveLength(1);
+    const thread=pool[0];
+    const baseline=process.memoryUsage().rss;
+    for(let index=0;index<30;index++){
+      const next=await runtime.submitDream({preset:'quick',dryRun:true});
+      expect((await finished(next.id)).status).toBe('completed');
+      expect(pool).toHaveLength(1);
+      expect(pool[0]).toBe(thread);
+    }
+    expect(process.memoryUsage().rss-baseline).toBeLessThan(512*1024*1024);
+    console.log('快速维护线程内存验收',JSON.stringify({runs:31,baselineRss:baseline,finalRss:process.memoryUsage().rss,threads:pool.length}));
+    await runtime.close();
+    expect(pool).toHaveLength(0);
+    runtime=new ProductTaskRuntime(engine);await runtime.start();
+  },120000);
+
   test('旧快速维护继续原任务，跳过完整知识源，接着同步第二个源', async () => {
     configureModels(false);
     const first=join(root,'resume-first');const second=join(root,'resume-second');mkdirSync(first);mkdirSync(second);
