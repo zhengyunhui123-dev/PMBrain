@@ -7,6 +7,9 @@ import { gbrainPath, loadConfig } from '../../core/config.ts';
 import type { SyncFileInput } from './types.ts';
 import type { ImportResult } from '../../core/import-file.ts';
 import { rowToMinionJob, type MinionJob } from '../../core/minions/types.ts';
+import { importFile, isImageFilePath } from '../../core/import-file.ts';
+import { isCodeFilePath, isOfficeFilePath } from '../../core/sync.ts';
+import { isSessionExportPath } from '../../core/conversation-parser/session-import.ts';
 
 export const SYNC_FILE_QUEUE = 'pmbrain-sync-files';
 export const SYNC_FILE_TASK = 'pmbrain-sync-file';
@@ -15,9 +18,10 @@ export class SyncFileQueue {
   private queue: MinionQueue;
   private sessions = new Map<number, { rows: MinionJob[]; complete: boolean }>();
   private caches = new Map<string, { rows: Array<{ input: SyncFileInput; result: ImportResult & { pageHash?: string }; actualHash: string | null }>; complete: boolean }>();
-  constructor(private engine: BrainEngine) { this.queue = new MinionQueue(engine); }
+  constructor(private engine: BrainEngine, private observe?: (job:MinionJob)=>void, private allowed: (id:number)=>boolean = ()=>true) { this.queue = new MinionQueue(engine); }
 
   async enqueue(sessionId: number, token: string, file: SyncFileInput): Promise<ImportResult & { deferred?: boolean; unchanged?: boolean }> {
+    if (!this.allowed(sessionId)) throw new Error('同步任务已停止');
     const parent = await this.queue.getJob(sessionId);
     if (parent?.status !== 'active' || parent.lock_token !== token) throw new Error('同步任务已停止或租约失效');
     const key = createHash('sha256').update(JSON.stringify([sessionId, file.options.sourceId, file.sourceRoot, file.relativePath, file.hash, file.fingerprint])).digest('hex');
@@ -46,6 +50,7 @@ export class SyncFileQueue {
       if (existing.length) job = await this.queue.getJob(existing[0].id) ?? undefined;
     }
     if (job) {
+      this.observe?.(job);
       if (job?.result && (job.status === 'completed' || (job.result.pageHash && ['paused','delayed','waiting'].includes(job.status)))) {
         const stored = job.result as unknown as ImportResult & { pageHash?: string };
         if (!stored.pageHash) return stored;
@@ -90,6 +95,17 @@ export class SyncFileQueue {
       const page = await this.engine.getPage(cached.slug, { sourceId: file.options.sourceId });
       if (page && !page.deleted_at && page.content_hash === cached.pageHash) return { ...cached, status: 'skipped', chunks: 0, unchanged: true };
     }
+    if (file.options.noEmbed && !(file.options.session && isSessionExportPath(file.relativePath)) && !isCodeFilePath(file.relativePath)
+      && !isImageFilePath(file.relativePath) && !isOfficeFilePath(file.relativePath)) {
+      const inspected = await importFile(this.engine, file.path, file.relativePath, { ...file.options, checkOnly: true });
+      if (inspected.error === '同步检查：需要重新切分') file.options = {...file.options,forceRechunk:true};
+      if (inspected.status === 'skipped' && !inspected.error) {
+        await this.validate(file);
+        const current = await this.queue.getJob(sessionId);
+        if (current?.status !== 'active' || current.lock_token !== token) throw new Error('同步任务已停止或租约失效');
+        return { ...inspected, unchanged: true };
+      }
+    }
     const bytes = await readFile(file.path);
     if (createHash('sha256').update(bytes).digest('hex') !== file.hash) throw new Error('原始文件在扫描期间已改变，请继续同步');
     const config = loadConfig();
@@ -99,12 +115,14 @@ export class SyncFileQueue {
     const path = join(dir, `${key}-${basename(file.path)}`);
     await writeFile(path, bytes, { mode: 0o600 });
     const after = await this.queue.getJob(sessionId);
+    if (!this.allowed(sessionId)) throw new Error('同步任务已停止');
     if (after?.status !== 'active' || after.lock_token !== token) throw new Error('同步任务已停止或租约失效');
     const added = await this.queue.add(SYNC_FILE_TASK, { sessionId, kind: 'sync_file', task: { type: 'sync-file', input: { ...file, path } } }, {
       queue: SYNC_FILE_QUEUE, delay: 24 * 60 * 60 * 1000, max_attempts: 1,
       timeout_ms: 6 * 60 * 60 * 1000, idempotency_key: `sync-file:${key}`, on_child_fail: 'continue',
     });
     if (session.rows.length < 5000) session.rows.push(added); else session.complete = false;
+    this.observe?.(added);
     return { slug: '', status: 'skipped', chunks: 0, deferred: true };
   }
 

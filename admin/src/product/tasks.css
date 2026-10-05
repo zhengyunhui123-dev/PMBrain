@@ -62,3 +62,7 @@
 .material-task-link { margin-left: 10px; padding: 0; border: 0; background: transparent; color: var(--accent); font-size: inherit; }
 @media (prefers-reduced-motion: reduce) { .material-cell-progress svg { animation: none; } }
 @media (prefers-reduced-motion: reduce) { .product-task-bar i, .product-task-steps svg, .product-task-activity svg { animation: none !important; transition: none; } }
+.product-active-files { display: grid; gap: 12px; margin: 16px 0; }
+.product-active-files article { padding: 12px; border: 1px solid var(--border); border-radius: 10px; overflow-wrap: anywhere; }
+.product-active-files p { margin: 6px 0; font-size: 13px; color: var(--product-muted, var(--text-muted)); }
+.product-active-files small { color: var(--product-muted, var(--text-muted)); }

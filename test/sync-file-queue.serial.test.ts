@@ -18,6 +18,7 @@ import { createHash } from 'node:crypto';
 import { statSync } from 'node:fs';
 import { PRODUCT_TASK_QUEUE } from '../src/product/tasks/runtime.ts';
 import { taskModelFingerprint } from '../src/product/tasks/checkpoint.ts';
+import { importFile } from '../src/core/import-file.ts';
 
 const keys = ['GBRAIN_HOME', 'PMBRAIN_HOME', 'DATABASE_URL', 'GBRAIN_DATABASE_URL', 'PMBRAIN_DATABASE_URL'];
 const saved = Object.fromEntries(keys.map(key => [key, process.env[key]]));
@@ -44,7 +45,7 @@ beforeAll(async () => {
   writeFileSync(configPath(), JSON.stringify({ engine: database ? 'postgres' : 'pglite', model_usage: { embedding_enabled: false, generative_enabled: false } }));
   if (database) assertSafeE2eDatabaseUrl(database);
   engine = database ? new PostgresEngine() : process.env.PMBRAIN_TASK_TEST_WORKER === '1' ? new WorkerPgliteEngine() as unknown as BrainEngine : new PGLiteEngine();
-  await engine.connect(database ? { database_url: database } : {});
+  await engine.connect(database ? { database_url: database } : process.env.PMBRAIN_TASK_TEST_WORKER==='1'?{database_path:join(root,'brain.pglite')}:{});
   await engine.initSchema();
   runtime = new ProductTaskRuntime(engine);
   await runtime.start();
@@ -60,6 +61,92 @@ afterAll(async () => {
 }, 60000);
 
 describe('快速维护文件任务与恢复', () => {
+  test.skipIf(!database && process.env.PMBRAIN_TASK_TEST_WORKER!=='1')('1MB 与 3MB 正文批次进度真实可见，写入阻塞可停止，未提交正文回滚后继续',async()=>{
+    const dir=join(root,'large-progress');mkdirSync(dir);
+    const content=(sections:number)=>'# 大文件处理验收\n\n'+Array.from({length:sections},(_,i)=>`## 第 ${i} 节\n\n`+'正文保持有意义的中文段落以测试可信结构切分和逐批写入。'.repeat(120)+'\n\n').join('');
+    writeFileSync(join(dir,'large-one.md'),content(140));
+    writeFileSync(join(dir,'large-three.md'),content(420));
+    expect(statSync(join(dir,'large-one.md')).size).toBeGreaterThan(1_000_000);
+    expect(statSync(join(dir,'large-three.md')).size).toBeGreaterThan(3_000_000);
+    await engine.executeRaw("INSERT INTO sources (id,name,local_path,config) VALUES ($1,$2,$3,$4::jsonb)",['large-progress','大文件验收',dir,{syncEnabled:true}]);
+    await engine.executeRaw(`CREATE FUNCTION pmbrain_large_blocked() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
+      IF NEW.chunk_index>=100 AND EXISTS(SELECT 1 FROM pages WHERE id=NEW.page_id AND source_id='large-progress' AND slug='large-three') THEN ${database?'PERFORM pg_sleep(60);':'LOOP PERFORM 1; END LOOP;'} END IF; RETURN NEW; END $$`);
+    await engine.executeRaw('CREATE TRIGGER pmbrain_large_blocked BEFORE INSERT OR UPDATE ON content_chunks FOR EACH ROW EXECUTE FUNCTION pmbrain_large_blocked()');
+    const run=await runtime.submitDream({preset:'quick',sourceId:'large-progress'});
+    let activity;
+    for(let i=0;i<1600;i++){
+      activity=(await runtime.files(run.id))?.rows.find(row=>row.path==='large-three.md')?.activity;
+      if(activity?.bodyWritten===100&&activity.operation==='upsertChunks')break;
+      await Bun.sleep(25);
+    }
+    expect(activity?.bodyWritten).toBe(100);expect(activity?.bodyCommitted).toBe(false);
+    expect(activity?.bytes).toBe(statSync(join(dir,'large-three.md')).size);
+    expect(runtime.cachedRuns().find(row=>row.id===run.id)?.product?.activeFiles?.some(file=>file.bodyWritten===100)).toBe(true);
+    await runtime.cancel(run.id);
+    expect(await engine.getPage('large-three',{sourceId:'large-progress'})).toBeNull();
+    await engine.executeRaw('DROP TRIGGER pmbrain_large_blocked ON content_chunks');await engine.executeRaw('DROP FUNCTION pmbrain_large_blocked()');
+    await runtime.retry(run.id);expect((await finish(run.id)).status).toBe('completed');
+    for(const slug of ['large-one','large-three']){
+      expect((await engine.getChunks(slug,{sourceId:'large-progress'})).length).toBeGreaterThan(100);
+      expect((await importFile(engine,join(dir,slug+'.md'),slug+'.md',{sourceId:'large-progress',noEmbed:true,checkOnly:true})).error).toBeUndefined();
+    }
+  },180000);
+  test.skipIf(!database && process.env.PMBRAIN_TASK_TEST_WORKER!=='1')('真实 SQL 阻塞时文件明细快速返回，停止完成，重开不重跑且旧数据保留',async()=>{
+    const dir=join(root,'blocked');mkdirSync(dir);
+    writeFileSync(join(dir,'blocked.md'),'# 卡住的合成资料\n\n事务未提交前必须能停止。');
+    await engine.executeRaw("INSERT INTO sources (id,name,local_path,config) VALUES ($1,$2,$3,$4::jsonb)",['blocked-source','停止测试',dir,{syncEnabled:true}]);
+    await engine.putPage('retained',{type:'note',title:'保留',compiled_truth:'以前已提交的内容'},{sourceId:'blocked-source'});
+    await engine.executeRaw(`CREATE FUNCTION pmbrain_test_blocked() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
+      IF NEW.source_id='blocked-source' AND NEW.slug='blocked' THEN ${database?'PERFORM pg_sleep(60);':'LOOP PERFORM 1; END LOOP;'} END IF; RETURN NEW; END $$`);
+    await engine.executeRaw('CREATE TRIGGER pmbrain_test_blocked BEFORE INSERT OR UPDATE ON pages FOR EACH ROW EXECUTE FUNCTION pmbrain_test_blocked()');
+    const run=await runtime.submitDream({preset:'quick',sourceId:'blocked-source'});
+    let running=false;
+    for(let i=0;i<1200;i++){
+      const files=await runtime.files(run.id);
+      if(files?.rows.some(row=>row.status==='running'&&row.activity?.operation==='putPage')){running=true;break;}
+      await Bun.sleep(20);
+    }
+    expect(running).toBe(true);
+    const readStart=performance.now();
+    const details=await runtime.files(run.id);
+    expect(performance.now()-readStart).toBeLessThan(1000);
+    expect(details?.rows[0].path).toBe('blocked.md');
+    const stopStart=performance.now();await runtime.cancel(run.id);
+    expect(performance.now()-stopStart).toBeLessThan(20000);
+    expect((await runtime.getRun(run.id))?.status).toBe('cancelled');
+    expect(await engine.getPage('blocked',{sourceId:'blocked-source'})).toBeNull();
+    expect((await engine.getPage('retained',{sourceId:'blocked-source'}))?.compiled_truth).toContain('以前已提交');
+    await engine.executeRaw('DROP TRIGGER pmbrain_test_blocked ON pages');await engine.executeRaw('DROP FUNCTION pmbrain_test_blocked()');
+    await runtime.close();runtime=new ProductTaskRuntime(engine);await runtime.start();
+    expect((await runtime.getRun(run.id))?.status).toBe('cancelled');
+    expect(await engine.getPage('blocked',{sourceId:'blocked-source'})).toBeNull();
+    await runtime.retry(run.id);expect((await finish(run.id)).status).toBe('completed');
+    expect(await engine.getPage('blocked',{sourceId:'blocked-source'})).not.toBeNull();
+  },120000);
+  test('旧版已有页面但没有文件任务回执，未变化资料在入队前跳过，变化与跨 Source 文件仍处理', async () => {
+    const dir = join(root, 'legacy'); mkdirSync(dir);
+    const other = join(root, 'legacy-other'); mkdirSync(other);
+    for (let i = 0; i < 12; i++) writeFileSync(join(dir, `legacy-${i}.md`), `# 旧版资料 ${i}\n\n升级前已经导入的合成资料。`);
+    await engine.executeRaw("INSERT INTO sources (id,name,local_path,config) VALUES ($1,$2,$3,$4::jsonb)", ['legacy-source', '旧版升级', dir, {syncEnabled:true}]);
+    await engine.executeRaw("INSERT INTO sources (id,name,local_path,config) VALUES ($1,$2,$3,$4::jsonb)", ['legacy-other', '另一个知识源', other, {syncEnabled:true}]);
+    for (let i = 0; i < 12; i++) await importFile(engine, join(dir, `legacy-${i}.md`), `legacy-${i}.md`, {noEmbed:true,sourceId:'legacy-source'});
+    await engine.executeRaw("UPDATE pages SET chunker_version=0 WHERE source_id='legacy-source' AND slug='legacy-2'");
+    await engine.executeRaw("DELETE FROM content_chunks WHERE page_id=(SELECT id FROM pages WHERE source_id='legacy-source' AND slug='legacy-3')");
+    writeFileSync(join(dir, 'legacy-0.md'), '# 旧版资料 0\n\n升级后修改了这一份。');
+    writeFileSync(join(other, 'legacy-1.md'), readFileSync(join(dir, 'legacy-1.md')));
+    const before = await engine.executeRaw<{count:string}>("SELECT count(*)::text AS count FROM minion_jobs WHERE queue=$1 AND data->'task'->'input'->'options'->>'sourceId'=$2",[SYNC_FILE_QUEUE,'legacy-source']);
+    expect(Number(before[0].count)).toBe(0);
+    const done = await finish((await runtime.submitDream({preset:'quick',sourceId:'legacy-source'})).id);
+    expect(done.product?.syncScan).toEqual({scanned:12,unchanged:9});
+    expect(done.product?.processed).toBe(3);
+    expect((await runtime.files(done.id))?.rows).toHaveLength(3);
+    expect((await engine.getChunks('legacy-3',{sourceId:'legacy-source'})).length).toBeGreaterThan(0);
+    expect((await engine.executeRaw<{chunker_version:number}>("SELECT chunker_version FROM pages WHERE source_id='legacy-source' AND slug='legacy-2'"))[0].chunker_version).toBeGreaterThan(0);
+    expect((await engine.getPage('legacy-0',{sourceId:'legacy-source'}))?.compiled_truth).toContain('修改');
+    const otherDone = await finish((await runtime.submitDream({preset:'quick',sourceId:'legacy-other'})).id);
+    expect((await runtime.files(otherDone.id))?.rows).toHaveLength(1);
+    expect(await engine.getPage('legacy-1',{sourceId:'legacy-other'})).not.toBeNull();
+  }, 120000);
   test('Git 已提交快照、未提交内容开关与重命名保持原有同步语义', async () => {
     const dir = join(root, 'git-source'); mkdirSync(dir);
     const git = (...args: string[]) => execFileSync('git', args, { cwd: dir, stdio: 'pipe' });

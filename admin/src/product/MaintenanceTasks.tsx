@@ -4,7 +4,7 @@ import { api } from '../api';
 import { formatDate, type ConsoleRun } from '../lib/shared';
 import { taskName } from '../../../shared/task-progress';
 import { useProductTasks } from './TaskActivity';
-import { TaskProgressCard, taskLink, taskStatus, taskStopping } from './TaskProgress';
+import { TaskProgressCard, taskLink, taskStatus, taskStopping, formatFileBytes } from './TaskProgress';
 import './maintenance-tasks.css';
 import type { SyncFileDetails } from '../../../shared/task-progress';
 
@@ -19,6 +19,7 @@ function MaintenanceTaskDetail({ run, onClose, onChange }: { run: ConsoleRun; on
   const [files, setFiles] = useState<SyncFileDetails | null>(null);
   const [loadingFiles, setLoadingFiles] = useState(false);
   const [fileError, setFileError] = useState('');
+  const [filesOpen,setFilesOpen]=useState(false);
   const name = run.product?.name ?? taskName(run.kind);
   useEffect(() => { dialog.current?.showModal(); }, []);
   const readFiles = async (after = 0) => {
@@ -26,10 +27,14 @@ function MaintenanceTaskDetail({ run, onClose, onChange }: { run: ConsoleRun; on
     setLoadingFiles(true); setFileError('');
     try {
       const value = await api.runFiles(run.id, after);
-      setFiles(current => ({ rows: after && current ? [...current.rows, ...value.rows] : value.rows, next: value.next }));
+      setFiles(current => ({...value, rows: after && current ? [...current.rows, ...value.rows] : value.rows }));
     } catch (reason) { setFileError(reason instanceof Error ? reason.message : String(reason)); }
     finally { setLoadingFiles(false); }
   };
+  useEffect(()=>{
+    if(!filesOpen||!activeTask(run)||loadingFiles||(files?.rows.length??0)>50)return;
+    const timer=setTimeout(()=>void readFiles(),2000);return()=>clearTimeout(timer);
+  },[filesOpen,run.id,run.status,files,loadingFiles]);
   const act = async (retry: boolean) => {
     if (busy) return;
     if (retry && !window.confirm(run.kind === 'dream_quick' ? '将保留已完成资料，继续未完成的同步和知识增强。中断的模型请求可能已产生费用，继续吗？' : '将重新执行整理任务，中断的模型请求可能已产生费用，继续吗？')) return;
@@ -47,8 +52,9 @@ function MaintenanceTaskDetail({ run, onClose, onChange }: { run: ConsoleRun; on
     <div className="maintenance-detail-body">
       <div className="maintenance-detail-meta"><span>{run.trigger === 'scheduled' ? '自动任务' : '手动任务'}</span><span>开始于 {formatDate(run.startedAt, '—')}</span></div>
       <TaskProgressCard run={run} link={false} timeline />
-      {run.kind === 'dream_quick' && run.product?.syncFiles && <details onToggle={event => { if (event.currentTarget.open && !files && !loadingFiles) void readFiles(); }}><summary>查看同步文件明细</summary>
-        {files?.rows.map(file => <p key={file.id}><b>{file.path}</b> · {file.sourceId} · {({ completed: '已完成', failed: '失败', running: '处理中', pending: '未处理' })[file.status]}{file.error && <span> · {file.error}</span>}</p>)}
+      {run.kind === 'dream_quick' && run.product?.syncFiles && <details onToggle={event => {setFilesOpen(event.currentTarget.open); if (event.currentTarget.open && !files && !loadingFiles) void readFiles(); }}><summary>查看同步文件明细</summary>
+        {files?.updatedAt && <p className="maintenance-muted">状态更新于 {new Date(files.updatedAt).toLocaleTimeString()}</p>}
+        {files?.rows.map(file => <p key={file.id}><b>{file.path}</b> · {file.sourceId} · {({ completed: '已完成', failed: '失败', running: '处理中', pending: '未处理' })[file.status]}{file.activity && <span> · {formatFileBytes(file.activity.bytes)} · {file.activity.stage}</span>}{file.error && <span> · {file.error}</span>}</p>)}
         {fileError && <p role="alert">{fileError}</p>}
         <button type="button" disabled={loadingFiles} onClick={() => void readFiles()}>{loadingFiles ? '读取中…' : '刷新文件状态'}</button>
         {files?.next != null && <button type="button" disabled={loadingFiles} onClick={() => void readFiles(files.next!)}>加载更多</button>}

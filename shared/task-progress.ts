@@ -1,11 +1,33 @@
 export interface SyncFileDetails {
-  rows: Array<{ id: number; sourceId: string; path: string; status: 'completed' | 'failed' | 'running' | 'pending'; error: string | null }>;
+  rows: Array<{ id: number; sourceId: string; path: string; status: 'completed' | 'failed' | 'running' | 'pending'; error: string | null; activity?: SyncFileActivity }>;
   next: number | null;
+  updatedAt?: string;
+}
+
+export interface SyncFileActivity {
+  id: number;
+  sourceId: string;
+  path: string;
+  bytes: number;
+  stage: string;
+  operation?: string;
+  operationStartedAt?: string;
+  updatedAt: string;
+  chunksTotal?: number;
+  bodyWritten?: number;
+  bodyCommitted?: boolean;
+  generated?: number;
+  embedded?: number;
+  reused?: number;
+  pending?: number;
+  batchesCompleted?: number;
+  noEmbed?: boolean;
 }
 
 export interface TaskProductProgress {
   syncScan?: { scanned: number; unchanged: number };
   syncFiles?: { total: number; completed: number; failed: number; remaining: number };
+  activeFiles?: SyncFileActivity[];
   name: string;
   stage: string;
   percent: number | null;

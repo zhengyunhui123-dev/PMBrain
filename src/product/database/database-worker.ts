@@ -6,13 +6,9 @@ import { buildGatewayConfig } from '../../core/ai/gateway-config.ts';
 import { loadConfig } from '../../core/config.ts';
 import { withPgliteSavepoints } from './savepoints.ts';
 
-const replyChannel = process.env.PMBRAIN_DB_CHANNEL ? new BroadcastChannel(process.env.PMBRAIN_DB_CHANNEL) : null;
-
 function respond(payload: { id: number; value?: unknown; error?: { name: string; message: string; properties: Record<string, unknown> } }): void {
-  try { parentPort!.postMessage(payload); }
+  try { if (parentPort) parentPort.postMessage(payload); else process.send!(payload); }
   catch (error) { console.error('[database] 回复数据库调用失败:', error instanceof Error ? error.message : error); }
-  try { replyChannel?.postMessage(payload); }
-  catch (error) { console.error('[database] 广播数据库调用结果失败:', error instanceof Error ? error.message : error); }
 }
 
 const engine = new PGLiteEngine();
@@ -153,7 +149,7 @@ function drain(): void {
   void reply(message).finally(() => { busy = false; setImmediate(drain); });
 }
 
-parentPort!.on('message', (message: Request) => {
+const receive = (message: Request) => {
   if (message.scope !== undefined) { enqueue(() => reply(message)); return; }
   if (isLockRenewal(message) && openRootScope !== undefined && scopes.has(openRootScope)) {
     renewalWhileOpen = message.args;
@@ -163,4 +159,9 @@ parentPort!.on('message', (message: Request) => {
   }
   waiting.push(message);
   setImmediate(drain);
-});
+};
+if (parentPort) parentPort.on('message', receive);
+else {
+  process.on('message', receive);
+  process.on('disconnect', () => process.exit(0));
+}

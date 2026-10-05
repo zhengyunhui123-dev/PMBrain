@@ -17,7 +17,7 @@ beforeAll(async () => {
   process.env.GBRAIN_HOME = home;
   configureGateway({ env: {} });
   engine = new WorkerPgliteEngine() as unknown as BrainEngine;
-  await engine.connect({});
+  await engine.connect({database_path:join(home,'brain.pglite')});
   await engine.initSchema();
 }, 60000);
 afterAll(async () => {
@@ -40,6 +40,26 @@ test('重数据库计算期间服务线程仍能响应不读数据库的请求',
     expect(finished).toBe(false);
     await query;
   } finally { server.stop(true); }
+}, 30000);
+
+test('数据库同步 SQL 不返回时可结束唯一执行进程，原生重开保留提交并回滚未提交内容', async () => {
+  const owner = engine as unknown as WorkerPgliteEngine;
+  await engine.putPage('recovery/committed', {type:'note',title:'已提交',compiled_truth:'停止不能丢失这份资料'});
+  let entered!: () => void;
+  const started = new Promise<void>(resolve => {entered=resolve;});
+  const active = engine.transaction(async tx => {
+    await tx.putPage('recovery/pending',{type:'note',title:'未提交',compiled_truth:'这个事务必须回滚'});
+    entered();
+    await tx.executeRaw('DO $$ BEGIN LOOP PERFORM 1; END LOOP; END $$');
+  });
+  void active.catch(()=>{});
+  await started; await Bun.sleep(100);
+  const start = performance.now();
+  await owner.interruptAndRecover();
+  expect(performance.now()-start).toBeLessThan(15000);
+  await expect(active).rejects.toThrow();
+  expect((await engine.getPage('recovery/committed'))?.compiled_truth).toContain('不能丢失');
+  expect(await engine.getPage('recovery/pending')).toBeNull();
 }, 30000);
 
 test('同一所有者的事务回滚，嵌套写入使用保存点，时间与 Map 保留类型', async () => {
@@ -196,13 +216,14 @@ test('同步事务回滚后，已经续上的任务锁仍然保留', async () =>
     await gate;
     throw new Error('rollback requested');
   });
+  const rollback = active.then(() => null, error => error);
   try {
     await started;
     const renewal = startRenewal(id, token);
     try {
       await renewal.finished;
       release();
-      await expect(active).rejects.toThrow('rollback requested');
+      expect((await rollback)?.message).toBe('rollback requested');
       expect(await remainingLockMs(id)).toBeGreaterThan(20_000);
     } finally {
       release();

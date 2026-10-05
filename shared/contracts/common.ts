@@ -2,6 +2,13 @@ import { z } from 'zod';
 
 export const RunStatusSchema = z.enum(['queued', 'running', 'completed', 'failed', 'cancelled']);
 export const TaskProductProgressSchema = z.object({
+  activeFiles: z.array(z.object({
+    id:z.number().int().positive(), sourceId:z.string(),path:z.string(),bytes:z.number().nonnegative(),stage:z.string(),updatedAt:z.string(),
+    operation:z.string().optional(),operationStartedAt:z.string().optional(),chunksTotal:z.number().nonnegative().optional(),
+    bodyWritten:z.number().nonnegative().optional(),bodyCommitted:z.boolean().optional(),generated:z.number().nonnegative().optional(),
+    embedded:z.number().nonnegative().optional(),reused:z.number().nonnegative().optional(),pending:z.number().nonnegative().optional(),
+    batchesCompleted:z.number().nonnegative().optional(),noEmbed:z.boolean().optional(),
+  })).optional(),
   syncScan: z.object({ scanned: z.number().int().nonnegative(), unchanged: z.number().int().nonnegative() }).optional(),
   syncFiles: z.object({ total: z.number().int().nonnegative(), completed: z.number().int().nonnegative(), failed: z.number().int().nonnegative(), remaining: z.number().int().nonnegative() }).optional(),
   name: z.string(), stage: z.string(), percent: z.number().min(0).max(100).nullable(),

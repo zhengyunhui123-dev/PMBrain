@@ -11,6 +11,7 @@ export const LARGE_DOCUMENT_COMMIT_WINDOW = 100;
 export type LargeDocumentPhase =
   | 'parsed'
   | 'chunked'
+  | 'writing'
   | 'embedding'
   | 'partial'
   | 'completed'
@@ -28,6 +29,9 @@ export interface LargeDocumentProgress {
   pending: number;
   failed: number;
   batchesCompleted: number;
+  bodyWritten?: number;
+  bodyCommitted?: boolean;
+  generated?: number;
   error?: string;
 }
 

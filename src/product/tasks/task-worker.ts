@@ -35,7 +35,8 @@ const originalFetch = globalThis.fetch;
 globalThis.fetch = ((...args: Parameters<typeof fetch>) => {
   const target = args[0] instanceof Request ? args[0].url : String(args[0]);
   if (importFile && /\/embeddings(?:\?|$)|:embedContent|:batchEmbedContents|\/api\/embed(?:\?|$)/.test(target)) send({ type: 'progress', event: { phase: 'import.vector', file: importFile } });
-  return originalFetch(...args);
+  const requestSignal=args[1]?.signal??(args[0] instanceof Request?args[0].signal:undefined);
+  return originalFetch(args[0],{...args[1],signal:AbortSignal.any([abort.signal,...(requestSignal?[requestSignal]:[])])});
 }) as typeof fetch;
 
 function rpcValue(value: unknown): unknown {
@@ -94,7 +95,13 @@ function proxyEngine(kind: BrainEngine['kind'], scope?: number): BrainEngine {
 }
 
 const writeLog = (chunk: unknown) => {
-  send({ type: 'log', text: String(chunk) });
+  const text=String(chunk);
+  for(const line of text.split('\n')){
+    if(line.startsWith('[pmbrain large-document] ')){
+      try{send({type:'progress',largeDocument:JSON.parse(line.slice('[pmbrain large-document] '.length))});}catch{}
+    }
+  }
+  send({ type: 'log', text });
   return true;
 };
 process.stdout.write = writeLog as typeof process.stdout.write;
@@ -211,6 +218,7 @@ async function execute(task: ProductTask, kind: BrainEngine['kind']) {
     await new SyncFileQueue(engine).validate(input);
     const snapshot = await stat(input.originalPath ?? input.path);
     importFile = input.relativePath;
+    send({type:'progress',event:{phase:'import.process',file:importFile}});
     await rpc('task.inputFile', [{ path: input.originalPath ?? input.path, size: snapshot.size, mtimeMs: snapshot.mtimeMs }]);
     try {
       const imported = await importSyncFile(engine, input.path, input.relativePath, input.options);

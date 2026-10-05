@@ -6,6 +6,7 @@ import { stat } from 'node:fs/promises';
 import { withPgliteSavepoints } from '../database/savepoints';
 import type { SyncFileInput } from './types.ts';
 import { validateSyncFileSnapshot } from './sync-file-queue.ts';
+import { withSqlCancellation } from './sql-cancellation.ts';
 
 type RpcMessage = Extract<TaskWorkerMessage, { type: 'rpc' }>;
 type Scope = {
@@ -30,6 +31,7 @@ export class TaskEngineHost {
   private currentFile?: { path: string; size: number; mtimeMs: number };
   private receipts = new Map<number, { slug: string; status: string; pageHash: string; chunks: number }>();
   private checkedPages = new Map<number, Set<string>>();
+  private abort = new AbortController();
 
   constructor(
     private owner: BrainEngine,
@@ -38,7 +40,7 @@ export class TaskEngineHost {
     private checkpoint: (progress: Record<string, unknown>) => Promise<void>,
     private saveFileReceipt = false,
     private syncFile?: SyncFileInput,
-  ) {}
+  ) {this.owner=withSqlCancellation(owner,this.abort.signal);}
 
   ownsLockedTransaction(): boolean {
     return !this.closed && [...this.scopes.values()].some(scope => scope.transactional);
@@ -268,5 +270,11 @@ export class TaskEngineHost {
         [[...this.cycleLocks], process.pid],
       );
     }
+  }
+
+  cancel(): void {
+    this.closed = true;
+    this.abort.abort(new Error('任务已停止'));
+    for (const scope of this.scopes.values()) scope.finish(false);
   }
 }

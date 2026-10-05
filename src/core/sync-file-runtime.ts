@@ -4,6 +4,7 @@ export const SYNC_FILE_FORMAT_VERSION = 1;
 
 export type SyncFileOptions = {
   noEmbed: boolean;
+  forceRechunk?: boolean;
   sourceId?: string;
   includeOffice?: boolean;
   includeImages?: boolean;

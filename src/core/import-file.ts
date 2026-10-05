@@ -271,6 +271,7 @@ export async function importFromContent(
      * the version bump.
      */
     forceRechunk?: boolean;
+    checkOnly?: boolean;
     /**
      * v0.39.0.0 T1.5: active schema pack for type inference. When set, parseMarkdown
      * uses the pack's path_prefixes instead of the hardcoded gbrain-base table.
@@ -546,8 +547,20 @@ export async function importFromContent(
     tags: parsed.tags,
   };
 
-  const existing = await engine.getPage(slug, sourceId ? { sourceId } : undefined);
+  const checkMetadata=opts.checkOnly?(await engine.executeRaw<{id:number;content_hash:string;chunker_version:number;chunks:number}>(
+    `SELECT p.id,p.content_hash,p.chunker_version,(SELECT count(*)::int FROM content_chunks c WHERE c.page_id=p.id) AS chunks
+     FROM pages p WHERE p.slug=$1 AND p.source_id=$2 AND p.deleted_at IS NULL`,[slug,sourceId??'default']))[0]:undefined;
+  const existing = opts.checkOnly?(checkMetadata as unknown as Awaited<ReturnType<BrainEngine['getPage']>>??null):await engine.getPage(slug, sourceId ? { sourceId } : undefined);
   const contentUnchanged = existing?.content_hash === hash && !opts.forceRechunk;
+  if (opts.checkOnly && (!contentUnchanged || !opts.noEmbed)) {
+    return { slug, status: 'skipped', chunks: 0, error: '同步检查：需要处理', parsedPage };
+  }
+  if (opts.checkOnly) {
+    if (checkMetadata?.chunker_version !== MARKDOWN_CHUNKER_VERSION
+      || (parsed.compiled_truth.length>0 && !pageQuarantined && !isEmbedSkipped(parsed.frontmatter) && checkMetadata.chunks===0)) {
+      return {slug,status:'skipped',chunks:0,error:'同步检查：需要重新切分',parsedPage};
+    }
+  }
   if (contentUnchanged && !trustedLargeDocument) {
     return { slug, status: 'skipped', chunks: 0, parsedPage };
   }
@@ -801,6 +814,8 @@ export async function importFromContent(
     }
   }
 
+  if (opts.checkOnly) return { slug, status: 'skipped', chunks: 0, error: '同步检查：需要处理', parsedPage };
+
   // Transaction wraps all DB writes. Every per-page tx call carries the
   // caller's sourceId so writes target (sourceId, slug) rather than the
   // schema DEFAULT — required for multi-source brains; harmless ('default')
@@ -879,6 +894,7 @@ export async function importFromContent(
 
     if (chunks.length > 0) {
       if (trustedLargeDocument) {
+        if(largeProgress){largeProgress={...largeProgress,phase:'writing',bodyWritten:0,bodyCommitted:false};logLargeDocumentProgress(slug,largeProgress);}
         // Persist the canonical manifest in bounded merge-only batches, then
         // prune stale indices once. This keeps the full page write atomic
         // without constructing one enormous vector INSERT statement.
@@ -887,6 +903,7 @@ export async function importFromContent(
             ...(txOpts ?? {}),
             replaceExisting: false,
           });
+          if(largeProgress){largeProgress={...largeProgress,bodyWritten:(largeProgress.bodyWritten??0)+batch.length};logLargeDocumentProgress(slug,largeProgress);}
         }
         const keepIndices = chunks.map(chunk => chunk.chunk_index);
         await tx.executeRaw(
@@ -962,6 +979,8 @@ export async function importFromContent(
     throw error;
   }
 
+  if(largeProgress){largeProgress={...largeProgress,bodyCommitted:true};logLargeDocumentProgress(slug,largeProgress);}
+
   // T3 — project frontmatter `aliases:` into page_aliases (free-text alias
   // resolution for search). Runs AFTER the page write commits so the slug
   // exists. Fail-soft: a pre-v110 brain has no page_aliases table yet (the
@@ -992,6 +1011,8 @@ export async function importFromContent(
           activeBatchSize = batch.length;
           const inputs = batch.map(chunk => wrappedTexts[chunk.chunk_index]);
           const embeddings = await embedBatch(inputs);
+          largeProgress={...largeProgress,generated:(largeProgress.generated??0)+embeddings.length};
+          logLargeDocumentProgress(slug,largeProgress);
           if (embeddings.length !== batch.length) {
             throw new Error(`Embedding gateway returned ${embeddings.length} vectors for ${batch.length} chunks`);
           }
@@ -1112,6 +1133,7 @@ export async function importFromFile(
     inferFrontmatter?: boolean;
     sourceId?: string;
     forceRechunk?: boolean;
+    checkOnly?: boolean;
     /**
      * v0.39 T1.5: active schema pack threaded through to importFromContent so
      * `parseMarkdown` uses pack-driven type inference. Load ONCE per command;
