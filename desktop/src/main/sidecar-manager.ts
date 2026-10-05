@@ -9,6 +9,7 @@ import {
   type CliRuntime,
 } from './cli-runner.js';
 import { getDesktopRuntimeContract } from './runtime-contract.js';
+import { SidecarResourceMonitor, type ResourceSample } from './sidecar/resource-monitor.js';
 import {
   classifySidecarStartupError,
   SidecarExitedBeforeHealthyError,
@@ -100,6 +101,7 @@ export class SidecarManager {
   private lastExitSignal: string | null = null;
   private lastSidecarPid: number | null = null;
   private lastFailureDetails: SidecarFailureDetails | null = null;
+  private resourceMonitor:SidecarResourceMonitor|null=null;
 
   constructor(options: SidecarManagerOptions) {
     this.options = options;
@@ -284,6 +286,7 @@ export class SidecarManager {
   }
 
   private async terminateChild(): Promise<void> {
+    this.resourceMonitor?.stop();this.resourceMonitor=null;
     const child = this.child;
     this.child = null;
     if (!child || child.exitCode !== null) return;
@@ -361,6 +364,13 @@ export class SidecarManager {
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     this.child = child;
+    if(child.pid){
+      this.resourceMonitor?.stop();
+      this.resourceMonitor=new SidecarResourceMonitor(child.pid,(message,sample)=>this.stopForResourcePressure(child,message,sample),{
+        onError:error=>this.options.logger.write('desktop',`Resource monitor: ${error instanceof Error?error.message:String(error)}`),
+      });
+      this.resourceMonitor.start();
+    }
     this.lastSidecarPid = child.pid ?? null;
     this.options.logger.write(
       'desktop',
@@ -378,6 +388,7 @@ export class SidecarManager {
       this.handleCrash(this.lastExitMessage);
     });
     child.once('exit', (code, signal) => {
+      if(this.child===child){this.resourceMonitor?.stop();this.resourceMonitor=null;}
       const stderr = this.recentStderr.trim();
       this.lastExitCode = code;
       this.lastExitSignal = signal;
@@ -385,6 +396,25 @@ export class SidecarManager {
       if (this.child === child) this.child = null;
       if (!this.stopping) this.handleCrash(this.lastExitMessage);
     });
+  }
+
+  private async stopForResourcePressure(child:ChildProcess,message:string,sample:ResourceSample|null):Promise<void>{
+    if(this.child!==child||child.exitCode!==null||this.stopping)return;
+    this.stopping=true;
+    this.options.logger.write('desktop',`${message} pid=${child.pid} committed=${sample?.bytes??'unavailable'} available=${sample?.availableBytes??'unavailable'} commitHeadroom=${sample?.commitHeadroomBytes??'unavailable'}`);
+    if(sample && sample.bytes>=4*1024**3)this.requestProcessTreeStop(child,true);
+    else {
+      await Promise.race([
+        this.adminRequest('/admin/api/console/resource-stop',{method:'POST',body:JSON.stringify({message}),signal:AbortSignal.timeout(1000)}).catch(error=>this.options.logger.write('desktop',`Resource drain request: ${error instanceof Error?error.message:String(error)}`)),
+        new Promise(resolve=>setTimeout(resolve,1200)),
+      ]);
+    }
+    if(this.child&&this.child!==child)return;
+    try{await this.terminateChild();}
+    finally{
+      this.lastFailureDetails={sidecarPid:child.pid,retryable:false,lastHealthError:message};
+      this.options.onState?.({phase:'failed',port:this.port,message,details:this.lastFailureDetails});
+    }
   }
 
   private handleCrash(message: string): void {

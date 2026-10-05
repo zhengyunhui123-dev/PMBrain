@@ -22,6 +22,7 @@ import { withDatabasePriority } from '../database/priority';
 import { SyncFileQueue, SYNC_FILE_QUEUE, SYNC_FILE_TASK } from './sync-file-queue.ts';
 import type { MaintenanceCheckpoint, SyncFileInput } from './types.ts';
 import { resolveSourceId } from '../../core/source-resolver.ts';
+import { TaskResourceGuard, PRODUCT_MAX_RSS_MB, PRODUCT_QUEUE_CAPACITY, type TaskResourceOptions } from './resource-guard.ts';
 
 export const PRODUCT_TASK_QUEUE = 'pmbrain-product';
 const TASK_NAME = 'pmbrain-product-task';
@@ -75,16 +76,21 @@ export class ProductTaskRuntime {
   private failure: Error | null = null;
   private cached: ConsoleRun[] = [];
   private refreshingRuns: Promise<void> | null = null;
-  private executions = new Map<number, { cancel: () => void; done: Promise<unknown>; run: () => ConsoleRun; ownsLockedTransaction: () => boolean }>();
+  private executions = new Map<number, { cancel: (reason?:string) => void; done: Promise<unknown>; run: () => ConsoleRun; ownsLockedTransaction: () => boolean }>();
+  private resources:TaskResourceGuard;
+  private resourceDrain:Promise<void>|null=null;
 
-  constructor(private engine: BrainEngine) {
+  constructor(private engine: BrainEngine, resourceOptions:TaskResourceOptions={}) {
+    this.resources=new TaskResourceGuard(resourceOptions);
+    this.fileProjection=new FileProjection({resources:this.resources});
+    const memoryOptions={maxRssMb:PRODUCT_MAX_RSS_MB,rssCheckInterval:this.resources.rssCheckIntervalMs,getRss:()=>this.checkMemory()};
     this.queue = new MinionQueue(engine);
-    this.fileQueue = new SyncFileQueue(engine,job=>this.fileProjection.record(job),id=>!this.stopIntents.has(id)&&!this.paused&&!this.stopped);
-    this.fileWorker = new MinionWorker(engine, { queue: SYNC_FILE_QUEUE, concurrency: engine.kind==='pglite'?1:2, pollInterval: 100, healthCheckInterval: 0, lockDuration: 30_000, stalledInterval: 5000, ownsLockedTransaction: id => this.executions.get(id)?.ownsLockedTransaction() === true });
+    this.fileQueue = new SyncFileQueue(engine,job=>this.fileProjection.record(job),id=>!this.stopIntents.has(id)&&!this.paused&&!this.stopped,this.resources);
+    this.fileWorker = new MinionWorker(engine, { ...memoryOptions, queue: SYNC_FILE_QUEUE, concurrency: engine.kind==='pglite'?1:2, pollInterval: 100, healthCheckInterval: 0, lockDuration: 30_000, stalledInterval: 5000, ownsLockedTransaction: id => this.executions.get(id)?.ownsLockedTransaction() === true });
     this.fileWorker.on('job-finished', (job:MinionJob)=>{
       if(this.stopped||this.paused)return;
-      void this.queue.getJob(job.id).then(current=>{
-        if(current)this.fileProjection.record(current);
+      void this.queue.getJob(job.id).then(async current=>{
+        if(current){this.fileProjection.record(current);await this.fileQueue.cleanupCompleted(current);}
         this.scheduleSessionRefresh(Number(job.data.sessionId));
       }).catch(error=>console.error('[tasks] file completion:',error));
     });
@@ -92,6 +98,7 @@ export class ProductTaskRuntime {
       const sessionId = Number(context.data.sessionId);
       if (this.stopIntents.has(sessionId)) throw new Error('同步会话已停止');
       this.fileSessions.set(context.id, sessionId);
+      this.fileProjection.pin(sessionId);
       if(!this.dirtyFiles.has(sessionId))this.dirtyFiles.set(sessionId,new Set());
       this.dirtyFiles.get(sessionId)!.add(context.id);
       try {
@@ -107,11 +114,12 @@ export class ProductTaskRuntime {
         throw error;
       } finally {
         this.fileSessions.delete(context.id);
+        if(![...this.fileSessions.values()].includes(sessionId))this.fileProjection.pin(sessionId,false);
         this.scheduleSessionRefresh(sessionId);
       }
     });
     this.worker = new MinionWorker(engine, {
-      queue: PRODUCT_TASK_QUEUE, concurrency: 2, pollInterval: 100,
+      ...memoryOptions, queue: PRODUCT_TASK_QUEUE, concurrency: 2, pollInterval: 100,
       healthCheckInterval: 0, lockDuration: 30_000, stalledInterval: 5000,
       ownsLockedTransaction: id => this.executions.get(id)?.ownsLockedTransaction() === true,
     });
@@ -154,10 +162,13 @@ export class ProductTaskRuntime {
   }
 
   private async submit(task: ProductTask, kind: string, idempotencyKey?: string, trigger: 'manual' | 'scheduled' = 'manual', queue = this.queue): Promise<ConsoleRun> {
-    if (this.stopped || this.paused) throw new Error('数据库维护期间暂不能提交新任务');
     if (this.failure) throw this.failure;
+    this.checkMemory();
+    if (this.failure) throw this.failure;
+    if (this.stopped || this.paused) throw new Error('数据库维护期间暂不能提交新任务');
+    await this.resources.assertImportDisk();
     const job = await queue.add(TASK_NAME, { task, kind, trigger }, {
-      queue: PRODUCT_TASK_QUEUE, max_attempts: 1,
+      queue: PRODUCT_TASK_QUEUE, max_attempts: 1, maxQueueSize: PRODUCT_QUEUE_CAPACITY,
       timeout_ms: task.input.timeoutMs ?? DEFAULT_PRODUCT_TASK_TIMEOUT_MS,
       idempotency_key: idempotencyKey ?? `product:${randomUUID()}`,
     });
@@ -312,6 +323,10 @@ export class ProductTaskRuntime {
   }
 
   async retry(id: string): Promise<ConsoleRun | null> {
+    if(this.failure)throw this.failure;
+    if(this.paused)throw new Error('后台执行器已暂停，请恢复服务后继续任务');
+    await this.resources.assertImportDisk();
+    await this.fileProjection.recover();
     const run = await this.getRun(id);
     if (!run) return null;
     if (!['failed', 'cancelled'].includes(run.status) && !(run.kind === 'dream_quick' && (run.result as Record<string, unknown> | undefined)?.status === 'partial')) throw new Error('只有失败、中断或已取消的任务可以重新执行');
@@ -322,6 +337,8 @@ export class ProductTaskRuntime {
       await this.stoppingSessions.get(jobId);
       await Promise.allSettled([...this.fileSessions].filter(([, owner]) => owner === jobId).map(([child]) => this.executions.get(child)?.done));
       const checkpoint = task.input.checkpoint;
+      delete record!.data.resourceStopReason;
+      await this.engine.executeRaw('UPDATE minion_jobs SET data=$2::jsonb WHERE id=$1',[jobId,record!.data]);
       if (checkpoint) {
         resumeMaintenanceCheckpoint(checkpoint,run.status==='completed');
         await this.engine.executeRaw(`UPDATE minion_jobs SET data = $2::jsonb WHERE id = $1`, [jobId, { ...record!.data, task }]);
@@ -343,12 +360,20 @@ export class ProductTaskRuntime {
   }
 
   private async execute(context: MinionJobContext): Promise<unknown> {
+    this.checkMemory();
+    if(this.failure)throw this.failure;
     if (this.stopped || this.paused) throw new Error('后台任务执行器已停止，任务未开始，请稍后重试');
     context.signal.throwIfAborted();
     context.shutdownSignal.throwIfAborted();
     const record = await this.queue.getJob(context.id);
     if (!record?.lock_token) throw new Error('任务执行租约无效');
     const structuredTask = record.data.task as ProductTask;
+    if(record.data.resourceStopReason && structuredTask.type==='dream' && structuredTask.input.preset==='quick'){
+      await this.engine.executeRaw(`UPDATE minion_jobs SET status='paused',lock_token=NULL,lock_until=NULL,error_text=$2,
+        data=jsonb_set(data,'{resumeOnRestart}','false'::jsonb),updated_at=now() WHERE id=$1`,[context.id,String(record.data.resourceStopReason)]);
+      this.sessionViews.delete(context.id);
+      return MINION_DEFERRED;
+    }
     if (this.stopIntents.has(context.id) || (structuredTask.type==='sync-file' && this.stopIntents.has(Number(record.data.sessionId)))) throw new Error('任务已停止');
     if (structuredTask.type==='sync-file') this.fileProjection.record(record);
     if (structuredTask.type === 'dream' && structuredTask.input.preset === 'quick' && record.attempts_started > 1) {
@@ -392,7 +417,7 @@ export class ProductTaskRuntime {
       await appendTaskCheckpoint(context.id, file);
       progress.files = [...(progress.files ?? []), file].slice(-100);
       await persist();
-    }, structuredTask.type === 'sync-file', structuredTask.type === 'sync-file' ? structuredTask.input : undefined);
+    }, structuredTask.type === 'sync-file', structuredTask.type === 'sync-file' ? structuredTask.input : undefined,this.resources);
     const workerPath = /\/(?:~BUN|\$bunfs)\//.test(decodeURIComponent(import.meta.url))
       ? './product/tasks/task-worker.ts'
       : new URL(import.meta.url.endsWith('.ts') ? './task-worker.ts' : './task-worker.js', import.meta.url);
@@ -409,12 +434,12 @@ export class ProductTaskRuntime {
     let completed = false;
     let deferred = false;
     let flush: ReturnType<typeof setInterval> | undefined;
-    const cancel = () => {
+    const cancel = (reason?:string) => {
       if (cancelRequested) return;
       cancelRequested = true;
       host.cancel();
       thread.postMessage({ type: 'cancel' });
-      settleReject(new Error('任务已取消'));
+      settleReject(new Error(reason??'任务已取消'));
     };
     const finished = (async () => {
       try { return await result; }
@@ -447,8 +472,9 @@ export class ProductTaskRuntime {
       if (run.product && structuredTask.type==='dream' && structuredTask.input.preset==='quick') run.product.activeFiles=this.fileProjection.active(context.id);
       return run;
     } });
-    context.signal.addEventListener('abort', cancel, { once: true });
-    context.shutdownSignal.addEventListener('abort', cancel, { once: true });
+    const cancelFromSignal=()=>cancel();
+    context.signal.addEventListener('abort', cancelFromSignal, { once: true });
+    context.shutdownSignal.addEventListener('abort', cancelFromSignal, { once: true });
     if (context.signal.aborted || context.shutdownSignal.aborted) cancel();
     thread.once('error', error => settleReject(error instanceof Error ? error : new Error(String(error))));
     thread.once('exit', code => settleReject(new Error(`任务 Worker 意外退出（${code}）`)));
@@ -531,15 +557,57 @@ export class ProductTaskRuntime {
       }
       return outcome;
     }
+    catch(error){
+      if(structuredTask.type==='dream'&&structuredTask.input.preset==='quick' && String(error).includes('资源保护：')){
+        const message=error instanceof Error?error.message:String(error);
+        if(/队列容量|快照容量/.test(message) && !this.stopIntents.has(context.id) && !this.paused){
+          const counts=await this.fileQueue.counts(context.id);
+          if(counts.remaining>0){
+            record.data.resourceStopReason=message;
+            await this.engine.executeRaw('UPDATE minion_jobs SET data=$2::jsonb,error_text=$3 WHERE id=$1',[context.id,record.data,message]);
+            await this.fileQueue.release(context.id,record.lock_token);
+            this.scheduleSessionRefresh(context.id);
+            return MINION_DEFERRED;
+          }
+        }
+        await this.fileQueue.pause(context.id);
+      }
+      throw error;
+    }
     finally {
       clearInterval(flush);
-      context.signal.removeEventListener('abort', cancel);
-      context.shutdownSignal.removeEventListener('abort', cancel);
+      context.signal.removeEventListener('abort', cancelFromSignal);
+      context.shutdownSignal.removeEventListener('abort', cancelFromSignal);
+    }
+  }
+
+  private checkMemory():number{
+    const bytes=this.resources.memoryBytes();
+    if(bytes>=PRODUCT_MAX_RSS_MB*1024*1024){
+      const message=`资源保护：本地服务内存达到 ${Math.ceil(bytes/1024/1024)} MB，已停止后台任务。请释放内存并重启本地服务后手动继续。`;
+      this.stopForResourcePressure(message);
+    }
+    return bytes;
+  }
+
+  stopForResourcePressure(message:string):void{
+    if(!this.resourceDrain&&!this.stopped){
+      this.failure=new Error(message);this.paused=true;this.worker.stop();this.fileWorker.stop();
+      for(const execution of this.executions.values())execution.cancel(message);
+      this.resourceDrain=(async()=>{
+        await Promise.all([...this.idleFileThreads.splice(0),...this.idleMaintenanceThreads.splice(0)].map(thread=>thread.terminate()));
+        await Promise.allSettled([...this.executions.values()].map(execution=>execution.done));
+        await this.loop;await this.fileLoop;
+        await this.engine.executeRaw(`UPDATE minion_jobs SET status='paused',lock_token=NULL,lock_until=NULL,
+          data=jsonb_set(data,'{resumeOnRestart}','false'::jsonb),error_text=$3,updated_at=now()
+          WHERE queue IN ($1,$2) AND status NOT IN ('completed','failed','dead','cancelled')`,[PRODUCT_TASK_QUEUE,SYNC_FILE_QUEUE,message]);
+      })().catch(error=>console.error('[tasks] resource stop:',error));
     }
   }
 
   async close(): Promise<void> {
     this.stopped = true;
+    await this.resourceDrain;
     for (const refresh of this.sessionRefresh.values()) clearTimeout(refresh.timer);
     this.sessionRefresh.clear();
     this.worker.stop();
@@ -586,6 +654,7 @@ export class ProductTaskRuntime {
   }
 
   async resume(): Promise<void> {
+    if(this.resourceDrain)throw this.failure??new Error('资源保护已停止执行器，请重启服务');
     this.paused = false;
     this.failure = null;
     if (!this.stopped) await this.start();
@@ -704,7 +773,8 @@ export class ProductTaskRuntime {
            COALESCE(result->>'error',error_text) AS error,progress->'product'->'activeFiles'->0 AS activity
            FROM minion_jobs WHERE queue=$1 AND (data->>'sessionId')::bigint=$2 AND id>$3
              AND data->>'superseded' IS DISTINCT FROM 'true' AND ($4::bigint[] IS NULL OR id=ANY($4::bigint[])) ORDER BY id LIMIT 200`,[SYNC_FILE_QUEUE,id,after,selected]);
-        this.fileProjection.seed(id,rows);
+          this.fileProjection.seed(id,rows);
+          await this.fileProjection.flush();
         for(const row of rows)if(row.status!=='running')this.dirtyFiles.get(id)?.delete(row.id);
         if(rows.length<200)break;
         after=rows.at(-1)!.id;

@@ -11,7 +11,7 @@ import { parseLegacyPresentationDocument, parseLegacyWordDocument } from './docu
 import { hashOcrSource, OCR_PROMPT_VERSION, OCR_RECEIPT_VERSION } from './ocr.ts';
 
 export const SUPPORTED_OFFICE_EXTS = ['.docx', '.doc', '.wps', '.pptx', '.ppt', '.pdf', '.xlsx', '.xlsm', '.xls', '.csv'] as const;
-const MAX_OFFICE_BYTES = 50 * 1024 * 1024;
+export const MAX_OFFICE_BYTES = 50 * 1024 * 1024;
 export { isOfficeFilePath };
 
 /** Compatibility helper retained for callers that still provide Markdown text. */

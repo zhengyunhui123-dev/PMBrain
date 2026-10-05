@@ -143,6 +143,7 @@ export interface MinionJobInput {
    * still live. Expired active locks do not suppress a fresh submission.
    */
   maxPending?: number;
+  maxQueueSize?: number;
 
   // v12: scheduler polish
   /**

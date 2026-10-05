@@ -12,8 +12,8 @@ import { resolveSourceId } from '../../core/source-resolver.ts';
 import { runEmbedCore } from '../../commands/embed.ts';
 import { parentPort } from 'node:worker_threads';
 import { format } from 'node:util';
-import { stat, readFile } from 'node:fs/promises';
-import { createHash } from 'node:crypto';
+import { stat } from 'node:fs/promises';
+import { streamFileHash, assertImportFileSize } from './resource-guard.ts';
 import { relative, isAbsolute, join } from 'node:path';
 import { SyncFilesDeferred, type SyncFileRuntime } from '../../core/sync-file-runtime.ts';
 import { classifyErrorCode, isInfrastructureFailureCode } from '../../core/sync-failure-ledger.ts';
@@ -125,9 +125,11 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
       const local = sourceRoot ? relative(sourceRoot, path) : '..';
       const originalPath = local.startsWith('..') || isAbsolute(local) ? undefined : path;
       const snapshot = await stat(path);
+      let oversized=false;
+      try{assertImportFileSize(relativePath,snapshot.size);}catch{oversized=true;}
       send({type:'progress',syncScan:{scanned,unchanged,path:relativePath,bytes:snapshot.size,updatedAt:new Date().toISOString(),active:true}});
       const knownHash=await rpc('task.syncFileHash',[{sourceRoot,relativePath,options,originalSize:snapshot.size,originalMtime:snapshot.mtimeMs}]) as string|null;
-      const hash = knownHash ?? createHash('sha256').update(await readFile(path)).digest('hex');
+      const hash = oversized?`oversize:${snapshot.size}:${snapshot.mtimeMs}`:knownHash??await streamFileHash(path,abort.signal);
       const result = await rpc('task.syncFile', [{ path, relativePath, sourceRoot, originalPath,
         originalSize: snapshot.size, originalMtime: snapshot.mtimeMs, hash,
         modelFingerprint: taskModelFingerprint(),
@@ -317,7 +319,10 @@ parentPort!.on('message', message => {
   if (message.type === 'reply') {
     const waiter = pending.get(message.id);
     pending.delete(message.id);
-    if (message.error) waiter?.reject(new Error(message.error));
+    if (message.error) {
+      if(message.error.startsWith('资源保护：'))abort.abort(new Error(message.error));
+      waiter?.reject(new Error(message.error));
+    }
     else waiter?.resolve(message.value);
   } else if (message.type === 'cancel') {
     abort.abort(new Error('任务已取消'));

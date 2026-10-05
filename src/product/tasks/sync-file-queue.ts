@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { readFile, mkdir, writeFile, stat, unlink, rmdir } from 'node:fs/promises';
+import { mkdir, stat, unlink, rmdir } from 'node:fs/promises';
 import { basename, join, dirname, resolve, sep } from 'node:path';
 import type { BrainEngine } from '../../core/engine.ts';
 import { MinionQueue } from '../../core/minions/queue.ts';
@@ -11,21 +11,44 @@ import { importFile, isImageFilePath } from '../../core/import-file.ts';
 import { isCodeFilePath, isOfficeFilePath } from '../../core/sync.ts';
 import { isSessionExportPath } from '../../core/conversation-parser/session-import.ts';
 import { syncFileContentFingerprint } from './checkpoint.ts';
+import { TaskResourceGuard, SYNC_QUEUE_CAPACITY, streamFileHash, copyFileSnapshot, assertImportFileSize } from './resource-guard.ts';
 
 export const SYNC_FILE_QUEUE = 'pmbrain-sync-files';
 export const SYNC_FILE_TASK = 'pmbrain-sync-file';
 
 export class SyncFileQueue {
   private queue: MinionQueue;
-  constructor(private engine: BrainEngine, private observe?: (job:MinionJob)=>void, private allowed: (id:number)=>boolean = ()=>true) { this.queue = new MinionQueue(engine); }
+  private enqueueTail:Promise<unknown>=Promise.resolve();
+  constructor(private engine: BrainEngine, private observe?: (job:MinionJob)=>void, private allowed: (id:number)=>boolean = ()=>true, private resources=new TaskResourceGuard()) { this.queue = new MinionQueue(engine); }
 
   async enqueue(sessionId: number, token: string, file: SyncFileInput): Promise<ImportResult & { deferred?: boolean; unchanged?: boolean }> {
+    const operation=this.enqueueTail.then(()=>this.enqueueCore(sessionId,token,file));
+    this.enqueueTail=operation.catch(()=>{});
+    return operation;
+  }
+
+  private async enqueueCore(sessionId:number,token:string,file:SyncFileInput):Promise<ImportResult & {deferred?:boolean;unchanged?:boolean}>{
+    let sizeError:string|undefined;
+    try{assertImportFileSize(file.relativePath,(await stat(file.path)).size);}catch(error){
+      if(!(error instanceof Error)||!error.message.startsWith('资源保护：文件过大'))throw error;
+      sizeError=error.message;
+    }
     if (!this.allowed(sessionId)) throw new Error('同步任务已停止');
     const parent = await this.queue.getJob(sessionId);
     if (parent?.status !== 'active' || parent.lock_token !== token) throw new Error('同步任务已停止或租约失效');
+    await this.resources.assertImportDisk();
     const key = createHash('sha256').update(JSON.stringify([sessionId, file.options.sourceId, file.sourceRoot, file.relativePath, file.hash, file.fingerprint])).digest('hex');
     const existing=await this.engine.executeRaw<Record<string,unknown>>('SELECT * FROM minion_jobs WHERE idempotency_key=$1',[`sync-file:${key}`]);
     let job=existing.length?rowToMinionJob(existing[0]):undefined;
+    if(sizeError){
+      const result={slug:'',status:'failed',chunks:0,error:sizeError,file:file.relativePath};
+      if(!job){
+        job=await this.queue.add(SYNC_FILE_TASK,{sessionId,kind:'sync_file',task:{type:'sync-file',input:file}},{queue:SYNC_FILE_QUEUE,delay:86400000,max_attempts:1,maxQueueSize:SYNC_QUEUE_CAPACITY,idempotency_key:`sync-file:${key}`,on_child_fail:'continue'});
+        await this.engine.executeRaw("UPDATE minion_jobs SET parent_job_id=$2,status='completed',result=$3::jsonb,finished_at=now(),updated_at=now() WHERE id=$1",[job.id,sessionId,result]);
+      }
+      this.observe?.({...job,parent_job_id:sessionId,status:'completed',result});
+      return {slug:'',status:'error',chunks:0,error:sizeError};
+    }
     if(!job){
       const candidates=await this.engine.executeRaw<Record<string,unknown>>(`SELECT * FROM minion_jobs WHERE queue=$1 AND parent_job_id=$2
         AND data->'task'->'input'->>'relativePath'=$3 AND data->'task'->'input'->>'sourceRoot'=$4
@@ -92,25 +115,35 @@ export class SyncFileQueue {
         WHERE id=$1 AND status IN ('paused','delayed','waiting')`,[job.id,{...file,path:((job.data.task as {input:SyncFileInput}).input).path}]);
       return { slug: '', status: 'skipped', chunks: 0, deferred: true };
     }
-    const bytes = await readFile(file.path);
-    if (createHash('sha256').update(bytes).digest('hex') !== file.hash) throw new Error('原始文件在扫描期间已改变，请继续同步');
+    const pending=await this.engine.executeRaw<{count:string}>("SELECT count(*)::text AS count FROM minion_jobs WHERE queue=$1 AND status NOT IN ('completed','failed','dead','cancelled')",[SYNC_FILE_QUEUE]);
+    if(Number(pending[0].count)>=SYNC_QUEUE_CAPACITY)throw new Error(`资源保护：队列容量已达到 ${SYNC_QUEUE_CAPACITY}，已拒绝新文件。请先完成或停止已有任务。`);
+    const size=(await stat(file.path)).size;
+    await this.resources.assertImportDisk(size*2);
     const config = loadConfig();
     const brain = createHash('sha256').update(JSON.stringify([config?.engine, config?.database_path, config?.database_url])).digest('hex').slice(0, 24);
     const dir = join(gbrainPath('task-artifacts'), 'sync-files', brain, String(sessionId));
     await mkdir(dir, { recursive: true });
     const path = join(dir, `${key}-${basename(file.path)}`);
-    await writeFile(path, bytes, { mode: 0o600 });
+    const releaseReservation=await this.resources.reserveSnapshot(size);
+    let queued=false;
+    try {
+    await copyFileSnapshot(file.path,path,file.hash,async()=>{
+      if(!this.allowed(sessionId))throw new Error('同步任务已停止');
+      await this.resources.assertDisk(dir,Math.min(size,64*1024));
+    });
     const after = await this.queue.getJob(sessionId);
     if (!this.allowed(sessionId)) throw new Error('同步任务已停止');
     if (after?.status !== 'active' || after.lock_token !== token) throw new Error('同步任务已停止或租约失效');
     const added = await this.queue.add(SYNC_FILE_TASK, { sessionId, kind: 'sync_file', task: { type: 'sync-file', input: { ...file, path } } }, {
-      queue: SYNC_FILE_QUEUE, delay: 24 * 60 * 60 * 1000, max_attempts: 1,
+      queue: SYNC_FILE_QUEUE, delay: 24 * 60 * 60 * 1000, max_attempts: 1, maxQueueSize: SYNC_QUEUE_CAPACITY,
       timeout_ms: 6 * 60 * 60 * 1000, idempotency_key: `sync-file:${key}`, on_child_fail: 'continue',
     });
+    queued=true;
     await this.engine.executeRaw('UPDATE minion_jobs SET parent_job_id=$1 WHERE id=$2',[sessionId,added.id]);
     added.parent_job_id=sessionId;
     this.observe?.(added);
     return { slug: '', status: 'skipped', chunks: 0, deferred: true };
+    } catch(error){if(!queued){releaseReservation();await unlink(path).catch(failure=>{if(failure.code!=='ENOENT')throw failure;});}throw error;}
   }
 
   async release(sessionId: number, token: string) {
@@ -184,31 +217,41 @@ export class SyncFileQueue {
   }
 
   async cleanup(sessionId: number) {
-    const root = resolve(gbrainPath('task-artifacts'), 'sync-files');
     let after = 0;
     while (true) {
       const rows = await this.engine.executeRaw<{ id: number; path: string }>(`SELECT id, data->'task'->'input'->>'path' AS path
         FROM minion_jobs WHERE queue = $1 AND (data->>'sessionId')::bigint = $2 AND id > $3 AND status = 'completed'
         AND result->>'status' IN ('imported','skipped') ORDER BY id LIMIT 200`, [SYNC_FILE_QUEUE, sessionId, after]);
       for (const row of rows) {
-        const path = resolve(row.path);
-        if (!path.startsWith(root + sep) || basename(dirname(path)) !== String(sessionId) || !/^[a-f0-9]{64}-/.test(basename(path))) throw new Error('文件任务快照清理路径无效');
-        await unlink(path).catch(error => { if (error.code !== 'ENOENT') throw error; });
-        await rmdir(dirname(path)).catch(error => { if (!['ENOENT','ENOTEMPTY'].includes(error.code)) throw error; });
+        await this.removeSnapshot(sessionId,row.path);
       }
       if (rows.length < 200) return;
       after = rows.at(-1)!.id;
     }
   }
+
+  async cleanupCompleted(job:MinionJob){
+    if(job.status==='completed' && ['imported','skipped'].includes(String(job.result?.status))){
+      const input=(job.data.task as {input:SyncFileInput}).input;
+      await this.removeSnapshot(Number(job.data.sessionId),input.path);
+    }
+  }
+
+  private async removeSnapshot(sessionId:number,value:string){
+    const root=resolve(gbrainPath('task-artifacts'),'sync-files');const path=resolve(value);
+    if(!path.startsWith(root+sep)||basename(dirname(path))!==String(sessionId)||!/^[a-f0-9]{64}-/.test(basename(path)))throw new Error('文件任务快照清理路径无效');
+    const info=await stat(path).catch(error=>{if(error.code==='ENOENT')return null;throw error;});
+    if(info){await unlink(path);this.resources.snapshotRemoved(info.size);}
+    await rmdir(dirname(path)).catch(error=>{if(!['ENOENT','ENOTEMPTY'].includes(error.code))throw error;});
+  }
 }
 
 export async function validateSyncFileSnapshot(file: SyncFileInput) {
-  const bytes = await readFile(file.path);
-  if (createHash('sha256').update(bytes).digest('hex') !== file.hash) throw new Error('文件任务快照已改变');
+  if (await streamFileHash(file.path) !== file.hash) throw new Error('文件任务快照已改变');
   if (file.originalPath) {
     const current = await stat(file.originalPath);
     if (current.size !== file.originalSize || current.mtimeMs !== file.originalMtime
-      || createHash('sha256').update(await readFile(file.originalPath)).digest('hex') !== file.hash) throw new Error('原始文件在处理期间已改变，请继续同步');
+      || await streamFileHash(file.originalPath) !== file.hash) throw new Error('原始文件在处理期间已改变，请继续同步');
   }
 }
 

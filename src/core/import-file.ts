@@ -226,7 +226,7 @@ export interface ImportResult {
   largeDocument?: LargeDocumentProgress;
 }
 
-const MAX_FILE_SIZE = 5_000_000; // 5MB
+export const MAX_FILE_SIZE = 5_000_000; // 5MB
 const TRUSTED_STRUCTURED_IMPORT = Symbol('pmbrain.trusted-structured-import');
 
 /**
@@ -1535,7 +1535,7 @@ export type ImportFileResult = ImportResult;
 export const SUPPORTED_IMAGE_EXTS = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.heic', '.heif', '.avif'] as const;
 
 /** Voyage caps each multimodal input at 20MB. We honor that as the size limit. */
-const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
+export const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 
 /** Extensions that need WASM decode before Voyage embedding. */
 const NEEDS_DECODE = new Set(['.heic', '.heif', '.avif']);

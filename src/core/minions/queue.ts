@@ -148,6 +148,18 @@ export class MinionQueue {
         if (existing.length > 0) return rowToMinionJob(existing[0]);
       }
 
+      if(opts?.maxQueueSize!==undefined){
+        if(!Number.isSafeInteger(opts.maxQueueSize)||opts.maxQueueSize<1)throw new Error('队列容量必须为正整数');
+        const queueName=opts.queue??'default';
+        await tx.executeRaw("SELECT pg_advisory_xact_lock(hashtext('minion_capacity:' || $1))",[queueName]);
+        if(opts.idempotency_key){
+          const existing=await tx.executeRaw<Record<string,unknown>>('SELECT * FROM minion_jobs WHERE idempotency_key=$1',[opts.idempotency_key]);
+          if(existing.length)return rowToMinionJob(existing[0]);
+        }
+        const rows=await tx.executeRaw<{count:string}>("SELECT count(*)::text AS count FROM minion_jobs WHERE queue=$1 AND status NOT IN ('completed','failed','dead','cancelled')",[queueName]);
+        if(Number(rows[0].count)>=opts.maxQueueSize)throw new Error(`资源保护：队列容量已达到 ${opts.maxQueueSize}，已拒绝新任务。请先完成或停止已有任务。`);
+      }
+
       // 1b. Submission-time single-flight for named jobs. Unlike maxWaiting,
       // maxPending also counts active jobs while their worker lock is live.
       // Source scope is exact so one Source never suppresses another.

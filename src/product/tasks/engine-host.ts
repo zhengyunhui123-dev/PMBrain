@@ -7,6 +7,7 @@ import { withPgliteSavepoints } from '../database/savepoints';
 import type { SyncFileInput } from './types.ts';
 import { validateSyncFileSnapshot, syncFileManifest, syncFileManifestKey } from './sync-file-queue.ts';
 import { withSqlCancellation } from './sql-cancellation.ts';
+import { TaskResourceGuard, assertImportFileSize } from './resource-guard.ts';
 
 type RpcMessage = Extract<TaskWorkerMessage, { type: 'rpc' }>;
 type Scope = {
@@ -40,6 +41,7 @@ export class TaskEngineHost {
     private checkpoint: (progress: Record<string, unknown>) => Promise<void>,
     private saveFileReceipt = false,
     private syncFile?: SyncFileInput,
+    private resources=new TaskResourceGuard(),
   ) {this.owner=withSqlCancellation(owner,this.abort.signal);}
 
   ownsLockedTransaction(): boolean {
@@ -143,6 +145,9 @@ export class TaskEngineHost {
       return null;
     }
     if (method === 'task.inputFile') {
+      const file=args[0] as {path:string;size:number};
+      assertImportFileSize(file.path,file.size);
+      await this.resources.assertImportDisk(Number((args[0] as {size?:number})?.size??0)*2);
       this.currentFile = args[0] as typeof this.currentFile;
       return null;
     }
@@ -175,7 +180,7 @@ export class TaskEngineHost {
       let finish!: (commit: boolean) => void;
       const completed = new Promise<boolean>(resolve => { finish = resolve; });
       const transactional = method === 'transaction.open';
-      if (transactional) await this.validateFile();
+      if (transactional) {await this.resources.assertImportDisk();await this.validateFile();}
       const run = async (connection: BrainEngine | ReservedConnection) => {
         await Promise.resolve();
         if (this.closed) throw new Error('任务执行已停止');
@@ -202,6 +207,7 @@ export class TaskEngineHost {
       || (method === 'executeRaw' && /^\s*SELECT\b/i.test(String(args[0])) && !/pg_advisory|FOR\s+UPDATE/i.test(String(args[0])));
     const invoke = async (target: BrainEngine | ReservedConnection) => {
       if (this.closed) throw new Error('任务执行已停止');
+      if(!readOnly)await this.resources.assertImportDisk();
       const fn = (target as unknown as Record<string, (...args: unknown[]) => Promise<unknown>>)[method];
       const pageWrite = ['putPage', 'upsertChunks', 'deleteChunks', 'setPageAliases'].includes(method);
       let key: string | undefined;

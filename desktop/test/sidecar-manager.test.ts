@@ -6,6 +6,19 @@ import { SidecarManager, classifySidecarStartupError } from '../src/main/sidecar
 const logger = { write() {}, close() {}, directory: '', filePath: '' } as any;
 
 describe('desktop sidecar manager', () => {
+  test('独立内存保护只结束自己持有的进程树，报告原因且不自动重启',async()=>{
+    const states:any[]=[];
+    const manager=new SidecarManager({packaged:false,appPath:'',resourcesPath:'',port:3131,bootstrapToken:'isolated-token',clientVersion:'1.4.31',logger,onState:state=>states.push(state)});
+    const child=new EventEmitter() as any;child.pid=12345;child.exitCode=null;
+    (manager as any).child=child;let stops=0;let requests=0;
+    (manager as any).adminRequest=async()=>{requests++;};
+    (manager as any).requestProcessTreeStop=(target:any,force:boolean)=>{expect(target).toBe(child);expect(force).toBe(false);stops++;target.exitCode=0;target.emit('exit',0,null);};
+    await (manager as any).stopForResourcePressure({pid:999,exitCode:null},'不应执行',{bytes:3*1024**3,availableBytes:10*1024**3});
+    expect(stops).toBe(0);
+    await (manager as any).stopForResourcePressure(child,'资源保护：内存不足',{bytes:3*1024**3,availableBytes:10*1024**3});
+    expect(stops).toBe(1);expect(requests).toBe(1);expect((manager as any).stopping).toBe(true);
+    expect(states.at(-1)).toMatchObject({phase:'failed',message:'资源保护：内存不足',details:{retryable:false}});
+  });
   test('PGLite 数据库打开失败时立即停止，不连续重启多个 sidecar', async () => {
     const states: any[] = [];
     const manager = new SidecarManager({
