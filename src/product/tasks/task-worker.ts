@@ -15,12 +15,10 @@ import { format } from 'node:util';
 import { stat, readFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { relative, isAbsolute, join } from 'node:path';
-import { SyncFilesDeferred, SYNC_FILE_FORMAT_VERSION, type SyncFileRuntime } from '../../core/sync-file-runtime.ts';
+import { SyncFilesDeferred, type SyncFileRuntime } from '../../core/sync-file-runtime.ts';
 import { classifyErrorCode, isInfrastructureFailureCode } from '../../core/sync-failure-ledger.ts';
-import { CHUNKER_VERSION } from '../../core/chunkers/code.ts';
-import { MARKDOWN_CHUNKER_VERSION } from '../../core/chunkers/recursive.ts';
 import { performSync } from '../../commands/sync.ts';
-import { readTaskCheckpoint, taskModelFingerprint } from './checkpoint.ts';
+import { readTaskCheckpoint, taskModelFingerprint, syncFileContentFingerprint } from './checkpoint.ts';
 import { isGinRepairAbortText } from '../../core/pglite-gin-repair.ts';
 import type { SyncStrategy } from '../../core/sync.ts';
 import { isOfficeFilePath } from '../../core/sync.ts';
@@ -127,12 +125,13 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
       const local = sourceRoot ? relative(sourceRoot, path) : '..';
       const originalPath = local.startsWith('..') || isAbsolute(local) ? undefined : path;
       const snapshot = await stat(path);
-      const hash = createHash('sha256').update(await readFile(path)).digest('hex');
+      const knownHash=await rpc('task.syncFileHash',[{sourceRoot,relativePath,options,originalSize:snapshot.size,originalMtime:snapshot.mtimeMs}]) as string|null;
+      const hash = knownHash ?? createHash('sha256').update(await readFile(path)).digest('hex');
       const result = await rpc('task.syncFile', [{ path, relativePath, sourceRoot, originalPath,
         originalSize: snapshot.size, originalMtime: snapshot.mtimeMs, hash,
         modelFingerprint: taskModelFingerprint(),
         modelMayRun: options.documentOcr === true && (isOfficeFilePath(relativePath) || isImageFilePath(relativePath)),
-        fingerprint: createHash('sha256').update(JSON.stringify([SYNC_FILE_FORMAT_VERSION, taskModelFingerprint(), CHUNKER_VERSION, MARKDOWN_CHUNKER_VERSION, options])).digest('hex'), options,
+        fingerprint: syncFileContentFingerprint(options), options,
       }]) as import('../../core/import-file.ts').ImportResult & { deferred?: boolean; unchanged?: boolean };
       if (result.deferred) pendingFiles = true;
       scanned++;
@@ -211,7 +210,7 @@ async function execute(task: ProductTask, kind: BrainEngine['kind']) {
   let result: Record<string, unknown>;
   if (task.type === 'sync-file') {
     const input = task.input;
-    if (input.modelFingerprint !== taskModelFingerprint()) throw new Error('模型配置已改变，请继续同步以重新扫描');
+    if ((input.modelMayRun || !input.options.noEmbed) && input.modelFingerprint !== taskModelFingerprint()) throw new Error('模型配置已改变，请继续同步以重新扫描');
     const source = await fetchSource(engine, input.options.sourceId ?? 'default');
     if (!source || source.archived || source.local_path !== input.sourceRoot) throw new Error('Source 路径已改变或已归档，请重新扫描');
     const { SyncFileQueue } = await import('./sync-file-queue.ts');

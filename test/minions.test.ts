@@ -2506,7 +2506,8 @@ function makeProbeEngine(overrides: ProbeOverrides) {
             .executeRaw(sql, params);
         };
       }
-      return Reflect.get(target, prop, receiver);
+      const value=Reflect.get(target, prop, target);
+      return typeof value==='function'?value.bind(target):value;
     },
   }) as unknown as PGLiteEngine;
 }

@@ -1284,15 +1284,18 @@ export class MinionQueue {
   }
 
   /** Detect and handle stalled jobs. Single CTE, no off-by-one. Returns affected jobs. */
-  async handleStalled(activeJobIds: readonly number[] = []): Promise<{ requeued: MinionJob[]; dead: MinionJob[] }> {
+  async handleStalled(activeJobIds: readonly number[] = [], queue?:string): Promise<{ requeued: MinionJob[]; dead: MinionJob[] }> {
+    return this.engine.transaction(async tx => {
     const exclude = activeJobIds.length > 0 ? 'AND id <> ALL($1::int[])' : '';
-    const params = activeJobIds.length > 0 ? [activeJobIds] : [];
-    const rows = await this.engine.executeRaw<Record<string, unknown> & { action: string }>(
+    const params:unknown[] = activeJobIds.length > 0 ? [activeJobIds] : [];
+    const queueFilter=queue===undefined?'':`AND queue=$${params.push(queue)}`;
+    const rows = await tx.executeRaw<Record<string, unknown> & { action: string }>(
       `WITH stalled AS (
         SELECT id, stalled_counter, max_stalled
         FROM minion_jobs
         WHERE status = 'active' AND lock_until < now()
         ${exclude}
+        ${queueFilter}
         FOR UPDATE SKIP LOCKED
       ),
       requeued AS (
@@ -1321,7 +1324,19 @@ export class MinionQueue {
       if (r.action === 'requeued') requeued.push(job);
       else dead.push(job);
     }
+    for(const job of dead){
+      if(job.parent_job_id===null)continue;
+      const parentId=job.parent_job_id;
+        const childDone:ChildDoneMessage={type:'child_done',child_id:job.id,job_name:job.name,result:null,outcome:'dead',error:job.error_text??'max stalled count exceeded'};
+        await tx.executeRaw(`INSERT INTO minion_inbox(job_id,sender,payload) SELECT $1,'minions',$2::jsonb
+          WHERE EXISTS(SELECT 1 FROM minion_jobs WHERE id=$1 AND status NOT IN ('completed','failed','dead','cancelled'))`,[job.parent_job_id,childDone]);
+        const scoped=new MinionQueue(tx);
+        if(job.on_child_fail==='fail_parent')await scoped.failParent(parentId,job.id,job.error_text??'max stalled count exceeded');
+        else if(job.on_child_fail==='remove_dep')await scoped.removeChildDependency(job.id);
+        await scoped.resolveParent(parentId);
+    }
     return { requeued, dead };
+    });
   }
 
   /**

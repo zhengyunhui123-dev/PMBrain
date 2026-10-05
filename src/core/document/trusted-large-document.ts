@@ -18,7 +18,7 @@ export type LargeDocumentPhase =
   | 'failed';
 
 export interface LargeDocumentProgress {
-  mode: 'trusted_structured';
+  mode: 'trusted_structured' | 'batched';
   phase: LargeDocumentPhase;
   documentHash: string;
   bytes: number;
@@ -31,6 +31,8 @@ export interface LargeDocumentProgress {
   batchesCompleted: number;
   bodyWritten?: number;
   bodyCommitted?: boolean;
+  bodyBatchesCompleted?: number;
+  bodyBatchesTotal?: number;
   generated?: number;
   error?: string;
 }

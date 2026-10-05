@@ -84,8 +84,10 @@ await e.disconnect();'''
             page.locator('.maintenance-run-row').first.wait_for()
             page.locator('.maintenance-run-row').first.click()
             detail = page.get_by_role('dialog', name='快速维护详情', exact=True)
-            expect(detail.locator('.product-active-files')).to_contain_text('正文已写入 100 /', timeout=90000)
-            expect(detail.locator('.product-active-files')).to_contain_text('正文事务尚未提交')
+            expect(detail.locator('.product-active-files')).to_contain_text('正文已提交 100 / 3360 块', timeout=90000)
+            expect(detail.locator('.product-active-files')).to_contain_text('已完成 1 / 34 批')
+            expect(detail.locator('.product-active-files')).to_contain_text('正在写入第 2 批')
+            expect(detail.locator('.product-active-files')).to_contain_text('最近活动：')
             expect(detail.locator('.product-active-files')).to_contain_text('large-three.md')
             expect(detail.locator('.product-active-files')).to_contain_text('3.90 MB')
             expect(detail.locator('.product-active-files')).to_contain_text('本轮同步未启用向量化')
@@ -104,7 +106,8 @@ await e.disconnect();'''
             time.sleep(.5)
             remove = init.split('await e.putPage')[0] + '''
 if(!(await e.getPage('retained'))?.compiled_truth.includes('必须保留'))throw new Error('previous content lost');
-if(await e.getPage('large-three'))throw new Error('uncommitted page survived');
+if((await e.getChunks('large-three')).length!==100)throw new Error('committed first batch lost');
+if((await e.executeRaw("SELECT chunker_version FROM pages WHERE slug='large-three'"))[0].chunker_version>=0)throw new Error('incomplete page incorrectly finalized');
 await e.executeRaw('DROP TRIGGER pmbrain_ui_blocked ON content_chunks');await e.executeRaw('DROP FUNCTION pmbrain_ui_blocked()');await e.disconnect();'''
             sql_script(remove, 'rollback.log')
             start(context)
@@ -119,13 +122,14 @@ await e.executeRaw('DROP TRIGGER pmbrain_ui_blocked ON content_chunks');await e.
             stop()
             verify = init.split('await e.putPage')[0] + '''
 if(!(await e.getPage('retained'))?.compiled_truth.includes('必须保留'))throw new Error('previous content lost');
-const chunks=await e.getChunks('large-three');if(chunks.length<100)throw new Error('chunks missing');
+const chunks=await e.getChunks('large-three');if(chunks.length!==3360)throw new Error('final chunks incomplete');
+if((await e.executeRaw("SELECT chunker_version FROM pages WHERE slug='large-three'"))[0].chunker_version<0)throw new Error('page still partial');
 const versions=await e.executeRaw("SELECT count(*)::int AS n FROM page_versions WHERE page_id=(SELECT id FROM pages WHERE slug='large-three')");
 console.log(JSON.stringify({chunks:chunks.length,versions:versions[0].n}));await e.disconnect();'''
             sql_script(verify, 'verified.log')
             assert hashlib.sha256(material.read_bytes()).hexdigest() == original_hash
             assert not errors, errors
-            result = {'passed': True, 'runtime': 'bundled', 'stop_seconds': stop_seconds, 'bytes': material.stat().st_size, 'quick_outcome':quick_outcome,'checks': ['real_body_batch_100', 'uncommitted_status', 'database_wait', 'files_during_sql_block', 'stop_owner_recovery', 'native_reopen_rollback', 'stopped_after_restart', 'manual_continue', 'original_bytes_preserved'], 'browser_errors': errors}
+            result = {'passed': True, 'runtime': 'bundled', 'stop_seconds': stop_seconds, 'bytes': material.stat().st_size, 'quick_outcome':quick_outcome,'checks': ['real_committed_batch_100', 'batch_count_1_of_34', 'activity_seconds', 'database_wait', 'files_during_sql_block', 'stop_owner_recovery', 'native_reopen_preserves_first_batch', 'stopped_after_restart', 'manual_continue', 'original_bytes_preserved'], 'browser_errors': errors}
             (artifacts / 'result.json').write_text(json.dumps(result, ensure_ascii=False), encoding='utf-8')
             print(json.dumps(result, ensure_ascii=False))
             browser.close()

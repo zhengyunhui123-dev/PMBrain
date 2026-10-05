@@ -2,6 +2,14 @@ import { appendFile, mkdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { gbrainPath, loadConfig } from '../../core/config.ts';
 import { createHash } from 'node:crypto';
+import type { SyncFileOptions } from '../../core/sync-file-runtime.ts';
+import { SYNC_FILE_FORMAT_VERSION } from '../../core/sync-file-runtime.ts';
+
+export function syncFileContentFingerprint(options:SyncFileOptions):string {
+  return createHash('sha256').update(JSON.stringify([SYNC_FILE_FORMAT_VERSION,options.sourceId??'default',
+    options.structured!==false,options.session===true,options.includeOffice===true,options.includeImages===true,
+    options.documentOcr===true,options.activePack?.page_types.map(type=>[type.name,type.path_prefixes])])).digest('hex');
+}
 
 export function taskModelFingerprint(): string {
   const config = loadConfig();

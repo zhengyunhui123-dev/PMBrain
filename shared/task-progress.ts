@@ -16,6 +16,8 @@ export interface SyncFileActivity {
   chunksTotal?: number;
   bodyWritten?: number;
   bodyCommitted?: boolean;
+  bodyBatchesCompleted?: number;
+  bodyBatchesTotal?: number;
   generated?: number;
   embedded?: number;
   reused?: number;

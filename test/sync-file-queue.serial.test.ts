@@ -28,7 +28,8 @@ let engine: BrainEngine;
 let runtime: ProductTaskRuntime;
 
 async function finish(id: string) {
-  for (let i = 0; i < 1800; i++) {
+  const deadline=Date.now()+180_000;
+  while(Date.now()<deadline) {
     const run = await runtime.getRun(id);
     if (run && !['queued', 'running'].includes(run.status)) return run;
     await Bun.sleep(50);
@@ -81,9 +82,12 @@ describe('快速维护文件任务与恢复', () => {
     }
     expect(activity?.bodyWritten).toBe(100);expect(activity?.bodyCommitted).toBe(false);
     expect(activity?.bytes).toBe(statSync(join(dir,'large-three.md')).size);
+    if(!database)expect((await runtime.files(run.id))?.rows.filter(row=>row.status==='running')).toHaveLength(1);
     expect(runtime.cachedRuns().find(row=>row.id===run.id)?.product?.activeFiles?.some(file=>file.bodyWritten===100)).toBe(true);
     await runtime.cancel(run.id);
-    expect(await engine.getPage('large-three',{sourceId:'large-progress'})).toBeNull();
+    expect(await engine.getPage('large-three',{sourceId:'large-progress'})).not.toBeNull();
+    expect(await engine.getChunks('large-three',{sourceId:'large-progress'})).toHaveLength(100);
+    expect((await engine.executeRaw<{chunker_version:number}>("SELECT chunker_version FROM pages WHERE slug='large-three' AND source_id='large-progress'"))[0].chunker_version).toBeLessThan(0);
     await engine.executeRaw('DROP TRIGGER pmbrain_large_blocked ON content_chunks');await engine.executeRaw('DROP FUNCTION pmbrain_large_blocked()');
     await runtime.retry(run.id);expect((await finish(run.id)).status).toBe('completed');
     for(const slug of ['large-one','large-three']){
@@ -137,11 +141,11 @@ describe('快速维护文件任务与恢复', () => {
     const before = await engine.executeRaw<{count:string}>("SELECT count(*)::text AS count FROM minion_jobs WHERE queue=$1 AND data->'task'->'input'->'options'->>'sourceId'=$2",[SYNC_FILE_QUEUE,'legacy-source']);
     expect(Number(before[0].count)).toBe(0);
     const done = await finish((await runtime.submitDream({preset:'quick',sourceId:'legacy-source'})).id);
-    expect(done.product?.syncScan).toEqual({scanned:12,unchanged:9});
-    expect(done.product?.processed).toBe(3);
-    expect((await runtime.files(done.id))?.rows).toHaveLength(3);
+    expect(done.product?.syncScan).toEqual({scanned:12,unchanged:10});
+    expect(done.product?.processed).toBe(2);
+    expect((await runtime.files(done.id))?.rows).toHaveLength(2);
     expect((await engine.getChunks('legacy-3',{sourceId:'legacy-source'})).length).toBeGreaterThan(0);
-    expect((await engine.executeRaw<{chunker_version:number}>("SELECT chunker_version FROM pages WHERE source_id='legacy-source' AND slug='legacy-2'"))[0].chunker_version).toBeGreaterThan(0);
+    expect((await engine.executeRaw<{chunker_version:number}>("SELECT chunker_version FROM pages WHERE source_id='legacy-source' AND slug='legacy-2'"))[0].chunker_version).toBe(0);
     expect((await engine.getPage('legacy-0',{sourceId:'legacy-source'}))?.compiled_truth).toContain('修改');
     const otherDone = await finish((await runtime.submitDream({preset:'quick',sourceId:'legacy-other'})).id);
     expect((await runtime.files(otherDone.id))?.rows).toHaveLength(1);

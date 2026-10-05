@@ -5,7 +5,7 @@ export const TaskProductProgressSchema = z.object({
   activeFiles: z.array(z.object({
     id:z.number().int().positive(), sourceId:z.string(),path:z.string(),bytes:z.number().nonnegative(),stage:z.string(),updatedAt:z.string(),
     operation:z.string().optional(),operationStartedAt:z.string().optional(),chunksTotal:z.number().nonnegative().optional(),
-    bodyWritten:z.number().nonnegative().optional(),bodyCommitted:z.boolean().optional(),generated:z.number().nonnegative().optional(),
+    bodyWritten:z.number().nonnegative().optional(),bodyCommitted:z.boolean().optional(),bodyBatchesCompleted:z.number().nonnegative().optional(),bodyBatchesTotal:z.number().nonnegative().optional(),generated:z.number().nonnegative().optional(),
     embedded:z.number().nonnegative().optional(),reused:z.number().nonnegative().optional(),pending:z.number().nonnegative().optional(),
     batchesCompleted:z.number().nonnegative().optional(),noEmbed:z.boolean().optional(),
   })).optional(),

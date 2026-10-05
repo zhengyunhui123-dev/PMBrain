@@ -146,6 +146,8 @@ interface InFlightJob {
 export interface MinionWorker {
   on(event: 'unhealthy', listener: (info: UnhealthyReason) => void): this;
   emit(event: 'unhealthy', info: UnhealthyReason): boolean;
+  on(event: 'job-finished', listener: (job: MinionJob) => void): this;
+  emit(event: 'job-finished', job: MinionJob): boolean;
 }
 
 export class MinionWorker extends EventEmitter {
@@ -252,6 +254,7 @@ export class MinionWorker extends EventEmitter {
     try { await this.queue.ensureSchema(); }
     catch (error) { this.running = false; throw error; }
     if (!this.running) return;
+    await this.queue.handleStalled([],this.opts.queue);
 
     // Graceful shutdown. Fires shutdownAbort so handlers subscribed to
     // `ctx.shutdownSignal` (currently: shell handler) can run their own cleanup
@@ -276,8 +279,8 @@ export class MinionWorker extends EventEmitter {
       stalledSweepInFlight = true;
       void (async () => {
         try {
-          const runningHere = this.engine.kind === 'pglite' ? [...this.inFlight.keys()] : [];
-          const { requeued, dead } = await this.queue.handleStalled(runningHere);
+          const runningHere = [...this.inFlight.keys()].filter(id=>this.opts.ownsLockedTransaction(id));
+          const { requeued, dead } = await this.queue.handleStalled(runningHere,this.opts.queue);
           if (requeued.length > 0) console.log(`Stall detector: requeued ${requeued.length} jobs`);
           if (dead.length > 0) console.log(`Stall detector: dead-lettered ${dead.length} jobs`);
         } catch (e) {
@@ -485,6 +488,11 @@ export class MinionWorker extends EventEmitter {
             this.registeredNames,
           );
 
+          if(job && !this.running){
+            await this.engine.executeRaw(`UPDATE minion_jobs SET status='waiting',lock_token=NULL,lock_until=NULL,timeout_at=NULL,
+              attempts_started=GREATEST(attempts_started-1,0),updated_at=now() WHERE id=$1 AND status='active' AND lock_token=$2`,[job.id,lockToken]);
+            break;
+          }
           if (job) {
             // Quiet-hours gate: evaluated at claim time, not dispatch.
             // Config lives on the job record (jsonb column added in
@@ -812,6 +820,7 @@ export class MinionWorker extends EventEmitter {
         if (timeoutTimer) clearTimeout(timeoutTimer);
         if (graceTimer) clearTimeout(graceTimer);
         this.inFlight.delete(job.id);
+        this.emit('job-finished',job);
         this.jobsCompleted += 1;
         this.checkMemoryLimit('post-job');
       })

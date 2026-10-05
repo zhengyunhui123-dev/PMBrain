@@ -551,13 +551,17 @@ export async function importFromContent(
     `SELECT p.id,p.content_hash,p.chunker_version,(SELECT count(*)::int FROM content_chunks c WHERE c.page_id=p.id) AS chunks
      FROM pages p WHERE p.slug=$1 AND p.source_id=$2 AND p.deleted_at IS NULL`,[slug,sourceId??'default']))[0]:undefined;
   const existing = opts.checkOnly?(checkMetadata as unknown as Awaited<ReturnType<BrainEngine['getPage']>>??null):await engine.getPage(slug, sourceId ? { sourceId } : undefined);
-  const contentUnchanged = existing?.content_hash === hash && !opts.forceRechunk;
-  if (opts.checkOnly && (!contentUnchanged || !opts.noEmbed)) {
+  const existingVersion = existing?.content_hash === hash
+    ? (checkMetadata ?? (await engine.executeRaw<{chunker_version:number}>(
+      'SELECT chunker_version FROM pages WHERE slug=$1 AND source_id=$2 AND deleted_at IS NULL',[slug,sourceId??'default']))[0])?.chunker_version
+    : undefined;
+  const contentUnchanged = existing?.content_hash === hash && (existingVersion === undefined || existingVersion >= 0) && !opts.forceRechunk;
+  if (opts.checkOnly && !contentUnchanged) {
     return { slug, status: 'skipped', chunks: 0, error: '同步检查：需要处理', parsedPage };
   }
   if (opts.checkOnly) {
-    if (checkMetadata?.chunker_version !== MARKDOWN_CHUNKER_VERSION
-      || (parsed.compiled_truth.length>0 && !pageQuarantined && !isEmbedSkipped(parsed.frontmatter) && checkMetadata.chunks===0)) {
+    if ((checkMetadata?.chunker_version ?? 0) < 0
+      || (parsed.compiled_truth.length>0 && !pageQuarantined && !isEmbedSkipped(parsed.frontmatter) && checkMetadata?.chunks===0)) {
       return {slug,status:'skipped',chunks:0,error:'同步检查：需要重新切分',parsedPage};
     }
   }
@@ -816,57 +820,71 @@ export async function importFromContent(
 
   if (opts.checkOnly) return { slug, status: 'skipped', chunks: 0, error: '同步检查：需要处理', parsedPage };
 
-  // Transaction wraps all DB writes. Every per-page tx call carries the
-  // caller's sourceId so writes target (sourceId, slug) rather than the
-  // schema DEFAULT — required for multi-source brains; harmless ('default')
-  // for single-source callers.
   const txOpts = sourceId ? { sourceId } : undefined;
+  const batchedBody = chunks.length > 100;
+  let bodyUpdatedAt:Date|undefined;
+  const guardBody=async(tx:BrainEngine)=>{
+    const current=await tx.executeRaw<{id:number}>(`SELECT id FROM pages WHERE slug=$1 AND source_id=$2
+      AND content_hash=$3 AND date_trunc('milliseconds',updated_at)=$4::timestamptz AND chunker_version=$5 AND deleted_at IS NULL FOR UPDATE`,
+      [slug,sourceId??'default',hash,bodyUpdatedAt,-MARKDOWN_CHUNKER_VERSION]);
+    if(!current.length)throw new Error(`页面 ${slug} 在分批写入期间已改变，请重新同步`);
+  };
+  // v0.29.1 — compute effective_date from frontmatter precedence chain.
+  // Filename comes from importFromFile path (basename) or the slug tail
+  // (put_page MCP op fallback). updatedAt/createdAt use the existing
+  // page's timestamps when present; otherwise NOW() (the row about to
+  // be created). The result drives the recency boost and since/until
+  // filters when callers opt in; nothing in the default search path
+  // consults it.
+  const filenameForChain = opts.filename ?? slug.split('/').pop() ?? slug;
+  const nowDate = new Date();
+  const { date: effectiveDate, source: effectiveDateSource } = computeEffectiveDate({
+    slug,
+    frontmatter: parsed.frontmatter,
+    filename: filenameForChain,
+    updatedAt: existing?.updated_at ?? nowDate,
+    createdAt: existing?.created_at ?? nowDate,
+  });
+
+
+  const pageWrite = {
+    type: parsed.type,
+    title: parsed.title,
+    compiled_truth: parsed.compiled_truth,
+    timeline: parsed.timeline || '',
+    frontmatter: parsed.frontmatter,
+    content_hash: hash,
+    effective_date: effectiveDate,
+    effective_date_source: effectiveDateSource,
+    import_filename: filenameForChain,
+    // v0.32.7 CJK wave: stamp the chunker version so the post-upgrade
+    // reindex sweep can find pre-bump pages via `chunker_version < 2`.
+    // Also capture the repo-relative source path so sync's delete/rename
+    // code can resolve frontmatter-fallback slugs back to their files.
+    chunker_version: MARKDOWN_CHUNKER_VERSION,
+    source_path: opts.sourcePath ?? null,
+    // v0.39.3.0 provenance write-through (WARN-8). Engine layer applies
+    // COALESCE-preserve UPDATE so omitting these on a later put_page
+    // doesn't erase the original ingestion's audit trail.
+    source_kind: opts.source_kind ?? null,
+    source_uri: opts.source_uri ?? null,
+    ingested_via: opts.ingested_via ?? null,
+    // ingested_at is server-stamped at the engine layer when any
+    // provenance write fires; never client-controlled.
+  };
+
+  if (!largeProgress && chunks.length > 0) {
+    largeProgress = {mode:'batched',phase:'chunked',documentHash:hash,bytes:byteLength,sections:opts.parentSections?.length??0,
+      chunksTotal:chunks.length,embedded:opts.noEmbed?0:chunks.length,reused:0,pending:0,failed:0,batchesCompleted:0};
+    logLargeDocumentProgress(slug,largeProgress);
+  }
   try {
+    if(largeProgress&&!batchedBody){largeProgress={...largeProgress,phase:'writing',bodyWritten:0,bodyCommitted:false,bodyBatchesCompleted:0,bodyBatchesTotal:1};logLargeDocumentProgress(slug,largeProgress);}
     await engine.transaction(async (tx) => {
-    if (existing && !contentUnchanged) await tx.createVersion(slug, txOpts);
+    if (existing && existing.content_hash !== hash) await tx.createVersion(slug, txOpts);
 
-    // v0.29.1 — compute effective_date from frontmatter precedence chain.
-    // Filename comes from importFromFile path (basename) or the slug tail
-    // (put_page MCP op fallback). updatedAt/createdAt use the existing
-    // page's timestamps when present; otherwise NOW() (the row about to
-    // be created). The result drives the recency boost and since/until
-    // filters when callers opt in; nothing in the default search path
-    // consults it.
-    const filenameForChain = opts.filename ?? slug.split('/').pop() ?? slug;
-    const nowDate = new Date();
-    const { date: effectiveDate, source: effectiveDateSource } = computeEffectiveDate({
-      slug,
-      frontmatter: parsed.frontmatter,
-      filename: filenameForChain,
-      updatedAt: existing?.updated_at ?? nowDate,
-      createdAt: existing?.created_at ?? nowDate,
-    });
-
-    await tx.putPage(slug, {
-      type: parsed.type,
-      title: parsed.title,
-      compiled_truth: parsed.compiled_truth,
-      timeline: parsed.timeline || '',
-      frontmatter: parsed.frontmatter,
-      content_hash: hash,
-      effective_date: effectiveDate,
-      effective_date_source: effectiveDateSource,
-      import_filename: filenameForChain,
-      // v0.32.7 CJK wave: stamp the chunker version so the post-upgrade
-      // reindex sweep can find pre-bump pages via `chunker_version < 2`.
-      // Also capture the repo-relative source path so sync's delete/rename
-      // code can resolve frontmatter-fallback slugs back to their files.
-      chunker_version: MARKDOWN_CHUNKER_VERSION,
-      source_path: opts.sourcePath ?? null,
-      // v0.39.3.0 provenance write-through (WARN-8). Engine layer applies
-      // COALESCE-preserve UPDATE so omitting these on a later put_page
-      // doesn't erase the original ingestion's audit trail.
-      source_kind: opts.source_kind ?? null,
-      source_uri: opts.source_uri ?? null,
-      ingested_via: opts.ingested_via ?? null,
-      // ingested_at is server-stamped at the engine layer when any
-      // provenance write fires; never client-controlled.
-    }, txOpts);
+    const placed=await tx.putPage(slug, {...pageWrite,chunker_version:batchedBody?-MARKDOWN_CHUNKER_VERSION:MARKDOWN_CHUNKER_VERSION},txOpts);
+    if(batchedBody)bodyUpdatedAt=placed.updated_at;
 
     // v0.40.3.0: stamp the contextual retrieval state columns alongside
     // the page write. updatePageContextualRetrievalState is a narrow
@@ -892,7 +910,7 @@ export async function importFromContent(
       await tx.addTag(slug, tag, txOpts);
     }
 
-    if (chunks.length > 0) {
+    if (chunks.length > 0 && !batchedBody) {
       if (trustedLargeDocument) {
         if(largeProgress){largeProgress={...largeProgress,phase:'writing',bodyWritten:0,bodyCommitted:false};logLargeDocumentProgress(slug,largeProgress);}
         // Persist the canonical manifest in bounded merge-only batches, then
@@ -927,8 +945,9 @@ export async function importFromContent(
         }
       } else {
         await tx.upsertChunks(slug, chunks, txOpts);
+        if(largeProgress){largeProgress={...largeProgress,bodyWritten:chunks.length};logLargeDocumentProgress(slug,largeProgress);}
       }
-    } else {
+    } else if (!batchedBody) {
       // Content is empty — delete stale chunks so they don't ghost in search results
       await tx.deleteChunks(slug, txOpts);
     }
@@ -970,8 +989,39 @@ export async function importFromContent(
       } catch { /* same reason — silent skip */ }
     }
     });
+    if(largeProgress&&!batchedBody){largeProgress={...largeProgress,bodyWritten:chunks.length,bodyCommitted:true,bodyBatchesCompleted:1};logLargeDocumentProgress(slug,largeProgress);}
+    if (batchedBody) {
+      const batches=batchLargeDocumentChunks(chunks);
+      const pendingIndices=new Set(largePendingChunks.map(chunk=>chunk.chunk_index));
+      const committed=opts.noEmbed && existingVersion!==undefined && existingVersion<0
+        ? new Map((await engine.getChunks(slug,txOpts)).map(chunk=>[chunk.chunk_index,chunk.chunk_text]))
+        : new Map<number,string>();
+      let written=0;
+      for (const [index,batch] of batches.entries()) {
+        if(largeProgress){largeProgress={...largeProgress,phase:'writing',bodyWritten:written,bodyCommitted:false,
+          bodyBatchesCompleted:index,bodyBatchesTotal:batches.length};logLargeDocumentProgress(slug,largeProgress);}
+        await engine.transaction(async tx => {
+          await guardBody(tx);
+          const remaining=batch.filter(chunk=>committed.get(chunk.chunk_index)!==chunk.chunk_text);
+          if(remaining.length)await tx.upsertChunks(slug,remaining,{...(txOpts??{}),replaceExisting:false});
+          if(!opts.noEmbed && trustedLargeDocument){
+            const clear=batch.filter(chunk=>pendingIndices.has(chunk.chunk_index)).map(chunk=>chunk.chunk_index);
+            if(clear.length)await tx.executeRaw(
+              'UPDATE content_chunks SET embedding=NULL,model=NULL,embedded_at=NULL WHERE page_id=(SELECT id FROM pages WHERE slug=$1 AND source_id=$2) AND chunk_index=ANY($3::int[]) AND embedding IS NOT NULL',
+              [slug,sourceId??'default',clear]);
+          }
+        });
+        written+=batch.length;
+        if(largeProgress){largeProgress={...largeProgress,bodyWritten:written,bodyCommitted:true,bodyBatchesCompleted:index+1};logLargeDocumentProgress(slug,largeProgress);}
+      }
+      await engine.transaction(async tx => {
+        await guardBody(tx);
+        await tx.executeRaw('DELETE FROM content_chunks WHERE page_id=(SELECT id FROM pages WHERE slug=$1 AND source_id=$2) AND chunk_index != ALL($3::int[])',[slug,sourceId??'default',chunks.map(chunk=>chunk.chunk_index)]);
+        await tx.putPage(slug,pageWrite,txOpts);
+      });
+    }
   } catch (error) {
-    if (trustedLargeDocument && largeProgress) {
+    if (largeProgress) {
       const message = error instanceof Error ? error.message : String(error);
       largeProgress = { ...largeProgress, phase: 'failed', error: message };
       logLargeDocumentProgress(slug, largeProgress);
@@ -1076,7 +1126,7 @@ export async function importFromContent(
     status: 'imported',
     chunks: chunks.length,
     parsedPage,
-    ...(largeProgress ? { largeDocument: largeProgress } : {}),
+    ...(trustedLargeDocument && largeProgress ? { largeDocument: largeProgress } : {}),
     ...(pageQuarantined ? { quarantined: true } : {}),
     ...(pageFlagged ? { flagged: true, flag_reason: pageFlagReason } : {}),
   };

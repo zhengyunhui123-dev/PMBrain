@@ -5,7 +5,7 @@ import type { TaskWorkerMessage } from './types.ts';
 import { stat } from 'node:fs/promises';
 import { withPgliteSavepoints } from '../database/savepoints';
 import type { SyncFileInput } from './types.ts';
-import { validateSyncFileSnapshot } from './sync-file-queue.ts';
+import { validateSyncFileSnapshot, syncFileManifest, syncFileManifestKey } from './sync-file-queue.ts';
 import { withSqlCancellation } from './sql-cancellation.ts';
 
 type RpcMessage = Extract<TaskWorkerMessage, { type: 'rpc' }>;
@@ -29,7 +29,7 @@ export class TaskEngineHost {
   private pending = new Set<Promise<unknown>>();
   private cycleLocks = new Set<string>();
   private currentFile?: { path: string; size: number; mtimeMs: number };
-  private receipts = new Map<number, { slug: string; status: string; pageHash: string; chunks: number }>();
+  private receipts = new Map<number, { slug: string; status: string; pageHash: string; chunks: number; sourceId:string }>();
   private checkedPages = new Map<number, Set<string>>();
   private abort = new AbortController();
 
@@ -56,7 +56,7 @@ export class TaskEngineHost {
       [this.jobId, this.token, 30_000],
     );
     if (!rows.length) throw new Error('任务已取消或执行租约已失效');
-    if (taskModelFingerprint() !== this.initialModel) throw new Error('向量模型配置已改变，请使用当前配置重新执行任务');
+    if ((!this.syncFile || this.syncFile.modelMayRun || !this.syncFile.options.noEmbed) && taskModelFingerprint() !== this.initialModel) throw new Error('向量模型配置已改变，请使用当前配置重新执行任务');
   }
 
   private async validateFile(): Promise<void> {
@@ -152,6 +152,9 @@ export class TaskEngineHost {
       if (args[0] === true && scope.transactional) await this.validateFile();
       const receipt = this.receipts.get(scopeId!);
       if (args[0] === true && scope.transactional && receipt?.pageHash && this.saveFileReceipt) {
+        const counted=await scope.engine.executeRaw<{count:number}>('SELECT count(*)::int AS count FROM content_chunks WHERE page_id=(SELECT id FROM pages WHERE slug=$1 AND source_id=$2)',[receipt.slug,receipt.sourceId]);
+        receipt.chunks=counted[0].count;
+        if(this.syncFile)await (scope.engine as BrainEngine).setConfig(syncFileManifestKey(this.syncFile),JSON.stringify(syncFileManifest(this.syncFile,receipt.slug,receipt.pageHash,receipt.chunks)));
         const rows = await scope.engine.executeRaw(`UPDATE minion_jobs SET result = $3::jsonb, updated_at = now()
           WHERE id = $1 AND status = 'active' AND lock_token = $2 RETURNING id`, [this.jobId, this.token, JSON.stringify(receipt)]);
         if (!rows.length) throw new Error('文件任务已停止或租约失效');
@@ -237,8 +240,8 @@ export class TaskEngineHost {
         if (!this.pages.has(readKey)) this.pages.set(readKey, pageFingerprint(page));
       }
       if (method === 'putPage' && key) this.pages.set(key, pageFingerprint(result as Page));
-      if (scopeId !== undefined && this.saveFileReceipt && method === 'putPage') {
-        this.receipts.set(scopeId, { slug: String(args[0]), status: 'imported', pageHash: (result as Page).content_hash ?? '', chunks: 0 });
+      if (scopeId !== undefined && this.saveFileReceipt && method === 'putPage' && ((args[1] as {chunker_version?:number}).chunker_version ?? 0) >= 0) {
+        this.receipts.set(scopeId, { slug: String(args[0]), status: 'imported', pageHash: (result as Page).content_hash ?? '', chunks: 0,sourceId:(result as Page).source_id??'default' });
       }
       if (scopeId !== undefined && this.saveFileReceipt && method === 'upsertChunks' && this.receipts.has(scopeId)) this.receipts.get(scopeId)!.chunks += (args[1] as unknown[]).length;
       return result;

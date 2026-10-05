@@ -27,10 +27,10 @@ export function TaskProgressCard({ run, link = true, timeline = false }: { run: 
     {view?.syncScan && <p className="product-task-caption">已检查 {view.syncScan.scanned} · 未变化 {view.syncScan.unchanged}</p>}
     {active && view?.activeFiles?.length ? <div className="product-active-files" aria-label="当前处理资料">{view.activeFiles.map(file=><article key={file.id}>
       <b>{file.path}</b><p>{file.sourceId} · {formatFileBytes(file.bytes)} · {file.stage}</p>
-      {file.chunksTotal!=null && <p>已切分 {file.chunksTotal} 块{file.bodyWritten!=null?` · 正文已写入 ${file.bodyWritten} / ${file.chunksTotal} 块`:''}{file.bodyWritten!=null?file.bodyCommitted?' · 正文已提交':' · 正文事务尚未提交':''}</p>}
+      {file.chunksTotal!=null && <p>已切分 {file.chunksTotal} / {file.chunksTotal} 块{file.bodyWritten!=null?` · 正文${(file.bodyBatchesTotal??0)>1||file.bodyCommitted?'已提交':'已写入'} ${file.bodyWritten} / ${file.chunksTotal} 块`:''}{file.bodyBatchesTotal!=null?` · 已完成 ${file.bodyBatchesCompleted??0} / ${file.bodyBatchesTotal} 批${file.bodyCommitted?'':` · 正在写入第 ${Math.min((file.bodyBatchesCompleted??0)+1,file.bodyBatchesTotal)} 批`}`:file.bodyWritten!=null?file.bodyCommitted?' · 正文已提交':' · 当前事务尚未提交':''}</p>}
       {file.noEmbed?<p>本轮同步未启用向量化，搜索索引在后续步骤更新。</p>:file.embedded!=null?<p>向量已生成 {file.generated??0} · 已写入 {file.embedded} · 复用 {file.reused??0} · 待处理 {file.pending??0} · 完成 {file.batchesCompleted??0} 批</p>:null}
       {file.operation && <p role="status">正在等待数据库：{operations[file.operation]??'读取或保存资料'} · {Math.max(0,Math.floor((now-Date.parse(file.operationStartedAt??file.updatedAt))/1000))} 秒</p>}
-      <small>最近进展：{new Date(file.updatedAt).toLocaleTimeString()}</small>
+      <small>最近活动：{Math.max(0,Math.floor((now-Date.parse(file.updatedAt))/1000))} 秒前 · {new Date(file.updatedAt).toLocaleTimeString()}</small>
     </article>)}</div>:null}
     {view?.steps.length ? <ol className="product-task-steps" aria-label={timeline ? '执行步骤' : undefined}>{view.steps.map(step => {
       const Icon = step.status === 'completed' ? Check : step.status === 'running' ? active ? LoaderCircle : Circle : step.status === 'failed' ? X : step.status === 'skipped' ? Minus : Circle;

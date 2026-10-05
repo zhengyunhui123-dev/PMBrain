@@ -81,6 +81,8 @@ export async function importOfficeFile(
   relativePath: string,
   opts: {
     noEmbed?: boolean;
+    checkOnly?: boolean;
+    forceRechunk?: boolean;
     sourceId?: string;
     structured?: boolean;
     documentOcr?: boolean;
@@ -102,7 +104,7 @@ export async function importOfficeFile(
   }
 
   const gateway = await import('./ai/gateway.ts');
-  const ocrEnabled = opts.documentOcr === true || gateway.isOcrEnabled();
+  const ocrEnabled = !opts.checkOnly && (opts.documentOcr === true || gateway.isOcrEnabled());
   const document = await parseOfficeDocument(filePath, {
     structured: opts.structured !== false,
     ocrPage: ocrEnabled
