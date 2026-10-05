@@ -125,6 +125,7 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
       const local = sourceRoot ? relative(sourceRoot, path) : '..';
       const originalPath = local.startsWith('..') || isAbsolute(local) ? undefined : path;
       const snapshot = await stat(path);
+      send({type:'progress',syncScan:{scanned,unchanged,path:relativePath,bytes:snapshot.size,updatedAt:new Date().toISOString(),active:true}});
       const knownHash=await rpc('task.syncFileHash',[{sourceRoot,relativePath,options,originalSize:snapshot.size,originalMtime:snapshot.mtimeMs}]) as string|null;
       const hash = knownHash ?? createHash('sha256').update(await readFile(path)).digest('hex');
       const result = await rpc('task.syncFile', [{ path, relativePath, sourceRoot, originalPath,
@@ -136,7 +137,7 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
       if (result.deferred) pendingFiles = true;
       scanned++;
       if (result.unchanged) unchanged++;
-      send({ type: 'progress', syncScan: { scanned, unchanged } });
+      send({ type: 'progress', syncScan: { scanned, unchanged,path:relativePath,bytes:snapshot.size,updatedAt:new Date().toISOString(),active:true } });
       return result;
     },
     finish: async () => { if (pendingFiles) throw new SyncFilesDeferred(); },
@@ -177,12 +178,13 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
     const startedAt = new Date();
     const sources = (await loadAllSources(engine)).filter(row => parseSourceConfig(row.config).syncEnabled !== false);
     for (const [index, source] of sources.entries()) {
-      send({ type: 'progress', scope: { name: source.name, index, total: sources.length } });
       abort.signal.throwIfAborted();
       if (checkpoint.reports[source.id]) {
         reports.push({ sourceId: source.id, report: checkpoint.reports[source.id] as unknown as import('../../core/cycle.ts').CycleReport });
         continue;
       }
+      scanned=0;unchanged=0;pendingFiles=false;
+      send({ type: 'progress', scope: { name: source.name, index, total: sources.length } });
       const report = await runQuickMaintenance(engine, {
         ...common, sourceId: source.id, brainDir: await resolveBrainDir(engine, null, source.id),
         ...resumeOptions(source.id),

@@ -103,7 +103,7 @@ test('超过 5000 条历史也认领旧页面，源 SHA256 与页面 hash 分开
   await queue.claim('legacy-token',3600000,'legacy-parent',['legacy-parent']);
   await engine.executeRaw(`INSERT INTO minion_jobs(name,queue,status,data,result)
     SELECT 'legacy-history',$1,'completed','{}'::jsonb,'{}'::jsonb FROM generate_series(1,5001)`,[SYNC_FILE_QUEUE]);
-  const info=statSync(file);const options={sourceId:'default',noEmbed:true};
+  const info=statSync(file);const options={sourceId:'default',noEmbed:true,documentOcr:true};
   const input={path:file,relativePath:'legacy-source.md',sourceRoot:home,originalPath:file,originalSize:info.size,originalMtime:info.mtimeMs,
     hash:createHash('sha256').update(content).digest('hex'),fingerprint:syncFileContentFingerprint(options),modelFingerprint:'old-model',options};
   const files=new SyncFileQueue(engine);

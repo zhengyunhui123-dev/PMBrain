@@ -4,6 +4,18 @@ import { gbrainPath, loadConfig } from '../../core/config.ts';
 import { createHash } from 'node:crypto';
 import type { SyncFileOptions } from '../../core/sync-file-runtime.ts';
 import { SYNC_FILE_FORMAT_VERSION } from '../../core/sync-file-runtime.ts';
+import type { MaintenanceCheckpoint } from './types.ts';
+
+export function resumeMaintenanceCheckpoint(checkpoint:MaintenanceCheckpoint,retryCompleted=false):void {
+  for(const [source,report] of Object.entries(checkpoint.reports)) {
+    if(retryCompleted && !['ok','clean'].includes(String(report.status)))delete checkpoint.reports[source];
+  }
+  for(const [source,phases] of Object.entries(checkpoint.phases)) {
+    if(checkpoint.reports[source])continue;
+    const unfinished=phases.findIndex(phase=>phase.status==='fail' || (retryCompleted && phase.status==='warn'));
+    if(unfinished>=0)checkpoint.phases[source]=phases.slice(0,unfinished);
+  }
+}
 
 export function syncFileContentFingerprint(options:SyncFileOptions):string {
   return createHash('sha256').update(JSON.stringify([SYNC_FILE_FORMAT_VERSION,options.sourceId??'default',

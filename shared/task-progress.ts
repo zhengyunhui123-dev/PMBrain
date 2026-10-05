@@ -27,7 +27,7 @@ export interface SyncFileActivity {
 }
 
 export interface TaskProductProgress {
-  syncScan?: { scanned: number; unchanged: number };
+  syncScan?: { scanned: number; unchanged: number; total?:number; path?:string; bytes?:number; updatedAt?:string; active?:boolean };
   syncFiles?: { total: number; completed: number; failed: number; remaining: number };
   activeFiles?: SyncFileActivity[];
   name: string;

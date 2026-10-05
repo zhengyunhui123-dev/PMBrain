@@ -13,7 +13,7 @@ import { assertDreamPresetAllowGenerative, assertPhasesAllowGenerative } from '.
 import { TaskEngineHost } from './engine-host.ts';
 import type { DreamTaskInput, ImportTaskInput, ProductTask, TaskWorkerMessage } from './types.ts';
 import { removeAdminUploadTempDir } from '../../commands/pmbrain-admin-support.ts';
-import { appendTaskCheckpoint, taskArtifactPath } from './checkpoint.ts';
+import { appendTaskCheckpoint, taskArtifactPath, resumeMaintenanceCheckpoint } from './checkpoint.ts';
 import { FileProjection } from './file-projection.ts';
 import { WorkerPgliteEngine } from '../database/worker-engine.ts';
 import { TaskProgressAdapter, finishTaskProgress } from './progress-adapter.ts';
@@ -322,8 +322,7 @@ export class ProductTaskRuntime {
       await Promise.allSettled([...this.fileSessions].filter(([, owner]) => owner === jobId).map(([child]) => this.executions.get(child)?.done));
       const checkpoint = task.input.checkpoint;
       if (checkpoint) {
-        checkpoint.reports = {};
-        for (const key of Object.keys(checkpoint.phases)) checkpoint.phases[key] = checkpoint.phases[key].filter(phase => ['lint','backlinks'].includes(phase.phase));
+        resumeMaintenanceCheckpoint(checkpoint,run.status==='completed');
         await this.engine.executeRaw(`UPDATE minion_jobs SET data = $2::jsonb WHERE id = $1`, [jobId, { ...record!.data, task }]);
       }
       await this.engine.executeRaw(`UPDATE minion_jobs SET status = 'paused', result = NULL WHERE queue = $1 AND (data->>'sessionId')::bigint = $2 AND result->>'status' IN ('failed','error','partial')`, [SYNC_FILE_QUEUE, jobId]);
@@ -479,7 +478,7 @@ export class ProductTaskRuntime {
         if (message.phases) adapter.plan(message.phases);
         if (message.scope) adapter.scope(message.scope);
         if (message.event) adapter.event(message.event);
-        if (message.syncScan) adapter.view.syncScan = message.syncScan;
+        if (message.syncScan) adapter.scan(message.syncScan);
         if (message.page && adapter.view.material) adapter.view.material.page = message.page;
         if(message.event)updateActivity({stage:({'import.process':'解析与切分','import.vector':'生成向量','import.write':'写入知识库'} as Record<string,string>)[message.event.phase]??activity?.stage});
         if(message.largeDocument){
@@ -504,6 +503,7 @@ export class ProductTaskRuntime {
     try {
       const outcome = await finished;
       if (outcome === MINION_DEFERRED && !this.stopIntents.has(context.id)) {
+        if(adapter.view.syncScan)adapter.view.syncScan.active=false;
         const counts = await this.fileQueue.counts(context.id);
         adapter.view.syncFiles = counts;
         adapter.view.processed = counts.completed + counts.failed;

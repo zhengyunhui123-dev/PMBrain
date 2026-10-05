@@ -18,6 +18,7 @@ import { configPath } from '../src/core/config.ts';
 import { purgeExpiredSources } from '../src/core/destructive-guard.ts';
 import { purgeStaleCheckpoints } from '../src/core/op-checkpoint.ts';
 import { purgeStaleVolunteerEvents } from '../src/core/context/volunteer-events.ts';
+import { importFile } from '../src/core/import-file.ts';
 
 let engine: BrainEngine;
 let runtime: ProductTaskRuntime;
@@ -54,7 +55,7 @@ async function finished(id: string): Promise<ConsoleRun> {
     if (run && !['running', 'queued'].includes(run.status)) return run;
     await Bun.sleep(30);
   }
-  throw new Error(`Task ${id} did not finish`);
+  throw new Error(`Task ${id} did not finish: ${JSON.stringify(await runtime.getRun(id))}`);
 }
 
 beforeAll(async () => {
@@ -96,6 +97,36 @@ afterAll(async () => {
 }, 60_000);
 
 describe('软件后台任务共用 owner 数据库', () => {
+  test('旧快速维护继续原任务，跳过完整知识源，接着同步第二个源', async () => {
+    configureModels(false);
+    const first=join(root,'resume-first');const second=join(root,'resume-second');mkdirSync(first);mkdirSync(second);
+    const file=join(first,'resume-done.md');writeFileSync(file,'# 已完成\n\n已完成源的原内容。');
+    await importFile(engine,file,'resume-done.md',{sourceId:'default',noEmbed:true});
+    writeFileSync(file,'# 已完成\n\n本轮继续不能重新同步已完成源。');
+    await engine.executeRaw('UPDATE sources SET local_path=$1 WHERE id=$2',[first,'default']);
+    await engine.executeRaw('INSERT INTO sources(id,name,local_path) VALUES ($1,$2,$3)',['resume-second','续跑第二源',second]);
+    writeFileSync(join(second,'resume-pending.md'),'# 未完成\n\n只继续这个知识源。');
+    const queue=new MinionQueue(engine);
+    const report={schema_version:'1',status:'partial',timestamp:new Date().toISOString(),duration_ms:0,brain_dir:first,phases:[],totals:{}};
+    const checkpoint={phases:{},reports:{default:report}};
+    const job=await queue.add('pmbrain-product-task',{kind:'dream_quick',trigger:'manual',task:{type:'dream',input:{preset:'quick',allSources:true,checkpoint}}},
+      {queue:'resume-held',timeout_ms:3600000});
+    await engine.executeRaw("UPDATE minion_jobs SET queue=$2,status='paused' WHERE id=$1",[job.id,PRODUCT_TASK_QUEUE]);
+    const resumed=await runtime.retry(`task-${job.id}`);
+    expect(resumed?.id).toBe(`task-${job.id}`);
+    const modelTimer=setInterval(release,20);
+    let done:ConsoleRun;
+    try{done=await finished(resumed!.id);}finally{clearInterval(modelTimer);release();}
+    expect(done.status).toBe('completed');
+    expect((await engine.getPage('resume-done',{sourceId:'default'}))?.compiled_truth).toContain('已完成源的原内容');
+    expect(await engine.getPage('resume-pending',{sourceId:'resume-second'})).not.toBeNull();
+    expect(done.product?.scope?.index).toBe(1);
+    expect(done.product?.syncScan?.scanned).toBe(1);
+    const stored=(await queue.getJob(job.id))!.data.task as any;
+    expect(stored.input.checkpoint.reports.default).toEqual(report);
+    await engine.executeRaw("UPDATE sources SET config=jsonb_set(config,'{syncEnabled}','false'::jsonb) WHERE id=$1",['resume-second']);
+    await engine.executeRaw('UPDATE sources SET local_path=$1 WHERE id=$2',[root,'default']);
+  },60000);
   test('两个任务可同时等待模型，停止立即确认且不依赖数据库队列', async () => {
     configureModels();
     const previous = slowRequests;

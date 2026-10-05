@@ -71,7 +71,7 @@ export class SyncFileQueue {
       }
     }
     if (file.options.noEmbed && !(file.options.session && isSessionExportPath(file.relativePath)) && !isCodeFilePath(file.relativePath)
-      && !isImageFilePath(file.relativePath) && !file.options.documentOcr) {
+      && !isImageFilePath(file.relativePath) && !(file.options.documentOcr && isOfficeFilePath(file.relativePath))) {
       const inspected = isOfficeFilePath(file.relativePath)
         ? await (await import('../../core/office-import.ts')).importOfficeFile(this.engine,file.path,file.relativePath,{...file.options,checkOnly:true})
         : await importFile(this.engine, file.path, file.relativePath, { ...file.options, checkOnly: true });

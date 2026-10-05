@@ -141,7 +141,7 @@ describe('快速维护文件任务与恢复', () => {
     const before = await engine.executeRaw<{count:string}>("SELECT count(*)::text AS count FROM minion_jobs WHERE queue=$1 AND data->'task'->'input'->'options'->>'sourceId'=$2",[SYNC_FILE_QUEUE,'legacy-source']);
     expect(Number(before[0].count)).toBe(0);
     const done = await finish((await runtime.submitDream({preset:'quick',sourceId:'legacy-source'})).id);
-    expect(done.product?.syncScan).toEqual({scanned:12,unchanged:10});
+    expect(done.product?.syncScan).toMatchObject({scanned:12,unchanged:10});
     expect(done.product?.processed).toBe(2);
     expect((await runtime.files(done.id))?.rows).toHaveLength(2);
     expect((await engine.getChunks('legacy-3',{sourceId:'legacy-source'})).length).toBeGreaterThan(0);

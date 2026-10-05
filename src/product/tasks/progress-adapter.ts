@@ -62,11 +62,28 @@ export class TaskProgressAdapter {
     this.plan(phases);
     this.view.scope = scope;
     this.view.percent = Math.floor(scope.index / scope.total * 100);
+    this.view.phasePercent=null;this.view.file=null;this.view.processed=null;this.view.total=null;
+    this.view.syncScan=undefined;this.view.activeFiles=[];
+  }
+
+  scan(scan:NonNullable<TaskProductProgress['syncScan']>):void {
+    this.view.syncScan={...this.view.syncScan,...scan};
+    if(!scan.active)return;
+    this.view.stage='检查待同步资料';
+    if(scan.path)this.view.file=scan.path;
+    const total=this.view.syncScan.total;
+    this.view.phasePercent=total?Math.floor(scan.scanned/total*1000)/10:null;
   }
 
   event(event: { phase: string; file?: string; event?: string; done?: number; total?: number }): void {
     const raw = event.phase.replace(/^cycle\./, '').replace(/^import\./, '');
     if (raw === 'files') {
+      if(this.view.name==='快速维护' && this.currentPhase==='sync'){
+        const scan=this.view.syncScan??{scanned:0,unchanged:0};
+        if(typeof event.total==='number')scan.total=event.total;
+        this.scan({...scan,active:event.event!=='finish'});
+        return;
+      }
       if (this.view.name !== '导入资料') return;
       if (typeof event.done === 'number') this.view.processed = event.done;
       if (typeof event.total === 'number') this.view.total = event.total;
@@ -84,6 +101,7 @@ export class TaskProgressAdapter {
     }
     if (event.file) this.view.file = event.file.split(/[\\/]/).at(-1) ?? event.file;
     if (phase !== this.currentPhase) {
+      if(phase!=='sync' && this.view.syncScan)this.view.syncScan.active=false;
       const index = this.view.steps.indexOf(step);
       for (const previous of this.view.steps.slice(0, index)) if (previous.status === 'running') previous.status = 'completed';
       this.currentPhase = phase;

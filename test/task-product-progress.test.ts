@@ -1,7 +1,36 @@
 import { describe, expect, test } from 'bun:test';
 import { TaskProgressAdapter, finishTaskProgress, taskRunSummary } from '../src/product/tasks/progress-adapter.ts';
+import { resumeMaintenanceCheckpoint } from '../src/product/tasks/checkpoint.ts';
+import type { MaintenanceCheckpoint } from '../src/product/tasks/types.ts';
 
 describe('任务的产品进度', () => {
+  test('继续保留完成的知识源和阶段，仅重跑未完成的部分', () => {
+    const phase=(name:string,status='ok')=>({phase:name,status,duration_ms:0,summary:'test',details:{}}) as any;
+    const checkpoint:MaintenanceCheckpoint={phases:{first:[phase('sync'),phase('extract')],second:[phase('lint'),phase('sync'),phase('extract','fail'),phase('embed')]},
+      reports:{first:{status:'clean'},second:{status:'partial'}}};
+    resumeMaintenanceCheckpoint(checkpoint,true);
+    expect(checkpoint.reports).toEqual({first:{status:'clean'}});
+    expect(checkpoint.phases.first.map(item=>item.phase)).toEqual(['sync','extract']);
+    expect(checkpoint.phases.second.map(item=>item.phase)).toEqual(['lint','sync']);
+    const stopped:MaintenanceCheckpoint={phases:{first:[phase('lint','warn')],second:[phase('lint','warn'),phase('sync')]},reports:{first:{status:'partial'}}};
+    resumeMaintenanceCheckpoint(stopped);
+    expect(stopped.reports.first.status).toBe('partial');
+    expect(stopped.phases.second.map(item=>item.phase)).toEqual(['lint','sync']);
+  });
+  test('扫描显示独立计数与当前文件，换知识源清除旧文件和阶段百分比', () => {
+    const adapter=new TaskProgressAdapter('dream_quick');
+    adapter.plan(['lint','sync','extract']);
+    adapter.view.file='旧的大文件.md';adapter.view.processed=20;adapter.view.total=6693;adapter.view.phasePercent=64;
+    adapter.view.syncScan={scanned:6693,unchanged:0};
+    adapter.scope({name:'第二个源',index:1,total:3});
+    expect(adapter.view.file).toBeNull();expect(adapter.view.phasePercent).toBeNull();expect(adapter.view.syncScan).toBeUndefined();
+    expect(adapter.view.processed).toBeNull();expect(adapter.view.total).toBeNull();
+    adapter.event({phase:'cycle.sync',event:'start'});
+    adapter.write('{"event":"start","phase":"import.files","total":6693}\n');
+    adapter.scan({scanned:1862,unchanged:9,path:'正在检查.md',bytes:1000,updatedAt:new Date().toISOString(),active:true});
+    expect(adapter.view.stage).toBe('检查待同步资料');expect(adapter.view.file).toBe('正在检查.md');
+    expect(adapter.view.syncScan?.total).toBe(6693);expect(adapter.view.phasePercent).toBe(27.8);
+  });
   test('分段日志只更新真实事件，不把扫描和未知总量编成百分比', () => {
     const adapter = new TaskProgressAdapter('import_path');
     adapter.write('[pmbrain phase] import.collect_files start target=test\n');
@@ -52,7 +81,7 @@ describe('任务的产品进度', () => {
     adapter.event({ phase: 'cycle.sync' });
     adapter.event({ phase: 'import.files', done: 3, total: 4 });
     expect(adapter.view.total).toBeNull();
-    expect(adapter.view.stage).toBe('同步资料');
+    expect(adapter.view.stage).toBe('检查待同步资料');
     expect(adapter.view.percent).toBe(0);
   });
   test('部分失败和预览不报告实际全部完成', () => {
