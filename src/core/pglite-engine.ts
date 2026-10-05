@@ -2747,12 +2747,12 @@ export class PGLiteEngine implements BrainEngine {
     await this.db.query(
       `UPDATE content_chunks
           SET embedded_text_hash = CASE WHEN embedding IS NULL THEN NULL ELSE md5(chunk_text) END
-        WHERE page_id = $1 AND chunk_index = ANY($2::int[])`,
+        WHERE page_id = $1 AND chunk_index = ANY($2::int[])
+          AND embedded_text_hash IS DISTINCT FROM CASE WHEN embedding IS NULL THEN NULL ELSE md5(chunk_text) END`,
       [pageId, newIndices],
     );
     await this.db.query(
-      `UPDATE pages
-          SET embedding_signature = (
+      `WITH signature AS (
             SELECT CASE
               WHEN COUNT(*) > 0
                AND COUNT(*) FILTER (WHERE embedding IS NULL) = 0
@@ -2760,11 +2760,15 @@ export class PGLiteEngine implements BrainEngine {
                AND COUNT(DISTINCT vector_dims(embedding)) = 1
               THEN MIN(model) || ':' || MIN(vector_dims(embedding))::text
               ELSE NULL
-            END
+            END AS value
             FROM content_chunks
             WHERE page_id = $1
           )
-        WHERE id = $1`,
+       UPDATE pages
+          SET embedding_signature = signature.value
+         FROM signature
+        WHERE pages.id = $1
+          AND pages.embedding_signature IS DISTINCT FROM signature.value`,
       [pageId],
     );
   }
