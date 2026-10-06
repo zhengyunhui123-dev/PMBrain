@@ -7,7 +7,8 @@
  */
 
 import type { BrainEngine, LinkBatchInput, TimelineBatchInput } from '../core/engine.ts';
-import { createHash } from 'node:crypto';
+import { LINKABLE_ENTITY_TYPES } from '../core/by-mention.ts';
+import { normalizeAliasList } from '../core/search/alias-normalize.ts';
 import {
   extractPageLinks,
   parseTimelineEntries,
@@ -57,24 +58,16 @@ export async function extractStaleFromDB(
   const { dryRun, jsonMode, includeFrontmatter, sourceIdFilter, catchUp } = opts;
   const quiet = opts.quiet ?? false;
   opts.signal?.throwIfAborted();
-  let versionTs = LINK_EXTRACTOR_VERSION_TS;
-  if (opts.catalogAware) {
-    const catalog = await engine.executeRaw(
-      `SELECT source_id, slug, title, type, frontmatter->'aliases' AS aliases
-         FROM pages WHERE deleted_at IS NULL ${sourceIdFilter ? "AND source_id IN ($1, 'default')" : ''}
-         ORDER BY source_id, slug`, sourceIdFilter ? [sourceIdFilter] : [],
-    );
-    const hash = createHash('sha256').update(JSON.stringify([LINK_EXTRACTOR_VERSION_TS, catalog])).digest('hex');
-    const key = `extract.relations.catalog.${sourceIdFilter ? `source:${sourceIdFilter}` : 'all'}`;
-    const saved = await engine.getConfig(key);
-    let previous: { hash?: string; versionTs?: string } = {};
-    try { previous = saved ? JSON.parse(saved) : {}; } catch {}
-    versionTs = previous.hash === hash && previous.versionTs && Number.isFinite(Date.parse(previous.versionTs))
-      ? previous.versionTs : new Date(Math.max(Date.now(), (Date.parse(previous.versionTs ?? '') || 0) + 1, Date.parse(LINK_EXTRACTOR_VERSION_TS))).toISOString();
-    if (!dryRun && previous.hash !== hash) await engine.setConfig(key, JSON.stringify({ hash, versionTs }));
-  }
+  // A catalog change must not move versionTs. Ordinary edits stay on the
+  // page watermark. A new entity or alias only reopens historical pages
+  // whose text can mention that new name.
+  const versionTs = LINK_EXTRACTOR_VERSION_TS;
+  const queuedFreshPages = opts.catalogAware
+    ? await queueFreshPagesForNewEntities(engine, { dryRun, sourceIdFilter })
+    : 0;
 
-  const totalStale = await engine.countStalePagesForExtraction({ sourceId: sourceIdFilter, versionTs });
+  const totalStale = await engine.countStalePagesForExtraction({ sourceId: sourceIdFilter, versionTs })
+    + (dryRun ? queuedFreshPages : 0);
   if (dryRun) {
     if (quiet) {
       // Library callers consume the return value.
@@ -302,6 +295,196 @@ export async function extractStaleFromDB(
     skippedCrossSource,
     unresolvedReferences,
   };
+}
+
+const MIN_NAME_LENGTH = 4;
+const MIN_CJK_NAME_LENGTH = 2;
+const CJK_RE = /\p{Script=Han}/gu;
+
+interface EntityCatalogRecord {
+  source_id: string;
+  slug: string;
+  type: string;
+  title: string;
+  aliases: string[];
+}
+
+function cjkCharCount(text: string): number {
+  CJK_RE.lastIndex = 0;
+  return Array.from(text.matchAll(CJK_RE)).length;
+}
+
+function isSearchNeedle(name: string): boolean {
+  const trimmed = name.trim();
+  if (!trimmed) return false;
+  const cjk = cjkCharCount(trimmed);
+  if (cjk === 0) return trimmed.length >= MIN_NAME_LENGTH;
+  return cjk >= MIN_CJK_NAME_LENGTH;
+}
+
+function addNeedle(needles: Set<string>, name: string): void {
+  const trimmed = name.trim();
+  if (isSearchNeedle(trimmed)) needles.add(trimmed);
+}
+
+function normalizedTitle(title: string): string {
+  return title.normalize('NFKC').toLowerCase().replace(/[\s ]+/g, ' ').trim();
+}
+
+function canonicalCatalog(entities: EntityCatalogRecord[]): string {
+  const sorted = [...entities].sort((a, b) =>
+    a.source_id.localeCompare(b.source_id) || a.slug.localeCompare(b.slug));
+  return JSON.stringify({
+    entities: sorted.map(entity => ({
+      source_id: entity.source_id,
+      slug: entity.slug,
+      type: entity.type,
+      title: entity.title,
+      aliases: [...entity.aliases].sort(),
+    })),
+  });
+}
+
+function readCatalog(saved: string | null): EntityCatalogRecord[] | null {
+  if (!saved) return null;
+  try {
+    const parsed = JSON.parse(saved) as { entities?: unknown };
+    if (!Array.isArray(parsed.entities)) return null;
+    return parsed.entities.flatMap(item => {
+      if (!item || typeof item !== 'object') return [];
+      const row = item as Partial<EntityCatalogRecord>;
+      if (typeof row.source_id !== 'string' || typeof row.slug !== 'string') return [];
+      return [{
+        source_id: row.source_id,
+        slug: row.slug,
+        type: typeof row.type === 'string' ? row.type : '',
+        title: typeof row.title === 'string' ? row.title : '',
+        aliases: Array.isArray(row.aliases) ? row.aliases.filter((alias): alias is string => typeof alias === 'string') : [],
+      }];
+    });
+  } catch {
+    return null;
+  }
+}
+
+function readFrontmatter(value: unknown): Record<string, unknown> | null {
+  if (!value) return null;
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value) as unknown;
+      return parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : null;
+    } catch {
+      return null;
+    }
+  }
+  return typeof value === 'object' ? value as Record<string, unknown> : null;
+}
+
+function isLinkableType(type: string): boolean {
+  return (LINKABLE_ENTITY_TYPES as readonly string[]).includes(type);
+}
+
+function newEntityNeedles(previous: EntityCatalogRecord[], current: EntityCatalogRecord[]): string[] {
+  const previousByKey = new Map(previous.map(entity => [`${entity.source_id}\0${entity.slug}`, entity]));
+  const needles = new Set<string>();
+  for (const entity of current) {
+    const old = previousByKey.get(`${entity.source_id}\0${entity.slug}`);
+    const linkable = isLinkableType(entity.type);
+    const becameLinkable = linkable && (!old || !isLinkableType(old.type));
+    if (!old || becameLinkable) {
+      if (linkable) {
+        addNeedle(needles, entity.title);
+        if (entity.slug.includes('/')) needles.add(entity.slug);
+      }
+      for (const alias of entity.aliases) addNeedle(needles, alias);
+      continue;
+    }
+    if (linkable && normalizedTitle(entity.title) !== normalizedTitle(old.title)) {
+      addNeedle(needles, entity.title);
+    }
+    const oldAliases = new Set(old.aliases);
+    for (const alias of entity.aliases) {
+      if (!oldAliases.has(alias)) addNeedle(needles, alias);
+    }
+  }
+  return [...needles];
+}
+
+async function queueFreshPagesForNewEntities(
+  engine: BrainEngine,
+  opts: { dryRun: boolean; sourceIdFilter?: string },
+): Promise<number> {
+  const params: unknown[] = [[...LINKABLE_ENTITY_TYPES]];
+  let sourceSql = '';
+  if (opts.sourceIdFilter) {
+    params.push(opts.sourceIdFilter);
+    sourceSql = `AND source_id IN ($${params.length}, 'default')`;
+  }
+  const rows = await engine.executeRaw<{
+    source_id: string;
+    slug: string;
+    title: string;
+    type: string;
+    frontmatter: unknown;
+  }>(
+    `SELECT source_id, slug, COALESCE(title, '') AS title, type, frontmatter
+       FROM pages
+      WHERE deleted_at IS NULL
+        AND (type = ANY($1::text[]) OR frontmatter ? 'aliases')
+        ${sourceSql}
+      ORDER BY source_id, slug`,
+    params,
+  );
+  const current = rows.flatMap(row => {
+    const frontmatter = readFrontmatter(row.frontmatter);
+    const aliases = normalizeAliasList(frontmatter?.aliases);
+    if (!isLinkableType(row.type) && aliases.length === 0) return [];
+    return [{
+      source_id: row.source_id,
+      slug: row.slug,
+      type: row.type,
+      title: row.title ?? '',
+      aliases,
+    }];
+  });
+  const key = `extract.relations.catalog.${opts.sourceIdFilter ? `source:${opts.sourceIdFilter}` : 'all'}`;
+  const currentJson = canonicalCatalog(current);
+  const previous = readCatalog(await engine.getConfig(key));
+  if (!previous) {
+    if (!opts.dryRun) await engine.setConfig(key, currentJson);
+    return 0;
+  }
+  if (canonicalCatalog(previous) === currentJson) return 0;
+
+  const needles = newEntityNeedles(previous, current);
+  const matchedIds = needles.length === 0
+    ? []
+    : (await engine.executeRaw<{ id: number }>(
+      `SELECT DISTINCT p.id
+         FROM pages p
+        WHERE p.deleted_at IS NULL
+          AND p.links_extracted_at IS NOT NULL
+          AND p.updated_at <= p.links_extracted_at
+          ${opts.sourceIdFilter ? 'AND p.source_id = $2' : ''}
+          AND EXISTS (
+            SELECT 1 FROM unnest($1::text[]) AS n(needle)
+             WHERE strpos(lower(COALESCE(p.compiled_truth, '')), lower(n.needle)) > 0
+                OR strpos(lower(COALESCE(p.timeline, '')), lower(n.needle)) > 0
+          )`,
+      opts.sourceIdFilter ? [needles, opts.sourceIdFilter] : [needles],
+    )).map(row => Number(row.id));
+
+  if (!opts.dryRun) {
+    if (matchedIds.length > 0) {
+      await engine.executeRaw(
+        `UPDATE pages SET links_extracted_at = NULL WHERE id = ANY($1::int[])`,
+        [matchedIds],
+      );
+    }
+    await engine.setConfig(key, currentJson);
+    return 0;
+  }
+  return matchedIds.length;
 }
 
 export async function stampExtractedPages(
