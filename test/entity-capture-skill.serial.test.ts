@@ -18,9 +18,13 @@ import { runCycle, mergeCaptureSlugs, ALL_PHASES } from '../src/core/cycle.ts';
 import {
   ENTITY_CAPTURE_SLUG_PREFIXES,
   ENTITY_CAPTURE_TOOLS,
+  ENTITY_CAPTURE_PAGE_BUDGET,
+  ENTITY_CAPTURE_CHUNK_CHARS,
+  ENTITY_CAPTURE_CHUNK_OVERLAP,
   buildEntityCapturePrompt,
   locateSignalDetectorSkillsDir,
   runPhaseCaptureEntities,
+  splitEntityCaptureCandidate,
   selectEntityCaptureCandidates,
 } from '../src/core/cycle/capture-entities.ts';
 import { makeSubagentHandler, type MessagesClient } from '../src/core/minions/handlers/subagent.ts';
@@ -190,6 +194,70 @@ test('资料选择跳过实体页、过短正文和已经由整理生成的页�
   const candidates = await selectEntityCaptureCandidates(engine, 'vault');
   expect(candidates.map(item => item.slug)).toEqual(['notes/work']);
 });
+
+test('默认每轮处理 100 份资料，长文按重叠分块覆盖全文', () => {
+  expect(ENTITY_CAPTURE_PAGE_BUDGET).toBe(100);
+  expect(ENTITY_CAPTURE_CHUNK_CHARS).toBe(8000);
+  expect(ENTITY_CAPTURE_CHUNK_OVERLAP).toBe(500);
+
+  const prefix = 'A'.repeat(7900);
+  const middle = 'B'.repeat(200);
+  const tailMarker = '尾部实体李四只出现在长文最后';
+  const body = prefix + middle + 'C'.repeat(9000) + tailMarker;
+  const chunks = splitEntityCaptureCandidate({
+    slug: 'notes/long',
+    sourceId: 'vault',
+    title: '长文',
+    body,
+  });
+
+  expect(chunks.length).toBeGreaterThan(1);
+  expect(chunks[0]?.chunkIndex).toBe(0);
+  expect(chunks.at(-1)?.chunkIndex).toBe(chunks.length - 1);
+  expect(chunks.at(-1)?.chunkBody).toContain(tailMarker);
+  expect(chunks.every(chunk => chunk.chunkBody.length <= ENTITY_CAPTURE_CHUNK_CHARS)).toBe(true);
+
+  const first = chunks[0]?.chunkBody ?? '';
+  const second = chunks[1]?.chunkBody ?? '';
+  expect(first.slice(-ENTITY_CAPTURE_CHUNK_OVERLAP)).toBe(second.slice(0, ENTITY_CAPTURE_CHUNK_OVERLAP));
+
+  const prompt = buildEntityCapturePrompt(chunks.at(-1)!);
+  expect(prompt).toContain(`第 ${chunks.length}/${chunks.length} 段`);
+  expect(prompt).toContain(tailMarker);
+  expect(prompt).not.toContain('资料在此处截断');
+});
+
+test('100 篇上限按源文档计算，长文多个分块不会额外占用页面额度', async () => {
+  await useVault();
+  for (let i = 0; i < 101; i++) {
+    const slug = `notes/batch-${String(i).padStart(3, '0')}`;
+    const longBody = i === 0
+      ? '长文'.repeat(5000) + '尾部实体'
+      : `第 ${i} 篇资料包含足够正文用于实体识别。`;
+    await engine.putPage(slug, {
+      type: 'note',
+      title: `批量资料 ${i}`,
+      compiled_truth: longBody,
+      timeline: '',
+      frontmatter: {},
+    }, { sourceId: 'vault' });
+  }
+
+  let calls = 0;
+  const result = await runPhaseCaptureEntities(engine, {
+    sourceId: 'vault',
+    handler: async () => {
+      calls += 1;
+      return { ok: true };
+    },
+  });
+
+  expect(result.status).toBe('ok');
+  expect(result.details.pages_submitted).toBe(100);
+  expect(result.details.pages_remaining).toBe(1);
+  expect(Number(result.details.chunks_submitted)).toBeGreaterThan(100);
+  expect(calls).toBe(Number(result.details.chunks_submitted));
+}, 120_000);
 
 test('预演不创建实体页', async () => {
   await useVault();
