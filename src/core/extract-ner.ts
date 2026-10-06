@@ -42,6 +42,8 @@ export interface ExtractNerOpts {
   gazetteer?: Gazetteer;
   /** Optional progress hook called per processed page. */
   onProgress?: (done: number, total: number, created: number) => void;
+  /** When set, only these page slugs are scanned. */
+  slugs?: readonly string[];
 }
 
 export interface ExtractNerResult {
@@ -140,9 +142,11 @@ export async function extractNerLinks(
   // listAllPageRefs + a single listPages projection.
   const targetTypeMap = await buildTargetTypeMap(engine);
 
-  const allRefs = opts.sourceIdFilter
+  const slugFilter = opts.slugs ? new Set(opts.slugs) : null;
+  const allRefs = (opts.sourceIdFilter
     ? (await engine.listAllPageRefs()).filter((r) => r.source_id === opts.sourceIdFilter)
-    : await engine.listAllPageRefs();
+    : await engine.listAllPageRefs()
+  ).filter((ref) => !slugFilter || slugFilter.has(ref.slug));
 
   let processed = 0;
   let created = 0;

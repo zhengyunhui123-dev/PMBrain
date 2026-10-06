@@ -3,12 +3,16 @@
  * 用脚本代替付费模型，确认深度整理会：
  * 1. 看到已有实体就复用，不另建一页。
  * 2. 新人、公司、项目、概念写成对应类型。
- * 3. 长文尾部的人也能进入最后一块。
- * 4. 100 篇按文档算，不按分块算。
- * 5. 费用到顶、Token 到顶或没有用量时，停得正确，而且不把任务判失败。
- * 6. 本地 Ollama 金额是 0。失败重跑和停止都不会重复写人或继续写。
+ * 3. 长文尾部的人也能进入最后一块。页数不是停止条件。
+ * 4. 费用到顶或 Token 到顶时停下，而且不把任务判失败。没有用量时继续处理完。
+ * 5. 指定的识别模型没启用时，不创建任何子任务，并直接说明模型不可用。
+ * 6. 新实体写入后，只把提到它的旧页面连上，不连无关页面。
+ * 7. 本地 Ollama 金额是 0。失败重跑和停止都不会重复写人或继续写。
  * 这些写入走真实的页面表。脚本只决定模型回复，不跳过数据库。
  */
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterAll, beforeAll, beforeEach, expect, test } from 'bun:test';
 import type { BrainEngine } from '../src/core/engine.ts';
 import { PGLiteEngine } from '../src/core/pglite-engine.ts';
@@ -18,6 +22,8 @@ import { runByMentionCore } from '../src/commands/extract.ts';
 import type { MinionJobContext } from '../src/core/minions/types.ts';
 import { resetPgliteState } from './helpers/reset-pglite.ts';
 import { assertSafeE2eDatabaseUrl } from './helpers/db-guard.ts';
+
+process.env.PMBRAIN_HOME = mkdtempSync(join(tmpdir(), 'pmbrain-capture-home-'));
 
 const databaseUrl = process.env.PMBRAIN_RELATION_TEST_DATABASE_URL;
 let engine: BrainEngine;
@@ -120,9 +126,8 @@ test('新人、公司、项目和概念按类型落库，新别名复用已有�
   expect(Number(companies[0]?.n)).toBe(1);
 }, 60_000);
 
-test('长文尾部和页面额度按源文档计算', async () => {
+test('长文尾部按源文档分块，页数不会让这一篇停在半截', async () => {
   const tail = '尾部实体周舟只出现在最后';
-  await note('notes/next', '第二篇资料不应该在这一轮送给模型。');
   await note('notes/long', `${'甲'.repeat(9000)}${tail}`);
   const prompts: string[] = [];
   const result = await runPhaseCaptureEntities(engine, {
@@ -135,7 +140,9 @@ test('长文尾部和页面额度按源文档计算', async () => {
   });
   expect(result.status).toBe('ok');
   expect(result.details.pages_submitted).toBe(1);
-  expect(result.details.pages_remaining).toBe(1);
+  expect(result.details.pages_remaining).toBe(0);
+  expect(result.details.stop_reason).toBe('completed');
+  expect(result.details.budget_stop).toBeNull();
   expect(Number(result.details.chunks_submitted)).toBeGreaterThan(1);
   expect(prompts.at(-1)).toContain(tail);
   expect(prompts.every(prompt => prompt.includes('notes/long'))).toBe(true);
@@ -174,7 +181,7 @@ test('费用到上限后停止新的模型请求，已完成结果保留，任�
   expect(Number(people[0]?.n)).toBe(1);
 }, 60_000);
 
-test('Ollama 不记人民币，没有价格时改按 Token 停，没有用量时只按页数停', async () => {
+test('Ollama 不记人民币，没有价格时改按 Token 停，没有用量时继续处理完', async () => {
   for (const slug of ['notes/a', 'notes/b', 'notes/c']) {
     await note(slug, `${slug} 的正文足够参与实体识别。`);
   }
@@ -243,11 +250,76 @@ test('Ollama 不记人民币，没有价格时改按 Token 停，没有用量时
     },
   });
   expect(blind.status).toBe('ok');
-  expect(blindCalls).toBe(2);
-  expect(blind.details.budget_stop).toBe('pages');
+  expect(blindCalls).toBe(3);
+  expect(blind.details.budget_stop).toBeNull();
+  expect(blind.details.stop_reason).toBe('completed');
+  expect(blind.details.pages_remaining).toBe(0);
   expect(blind.details.input_tokens).toBe(0);
   expect(blind.details.cost_cny).toBeNull();
   expect(blind.details.usage_missing).toBe(true);
+}, 60_000);
+
+test('识别模型未启用时不创建子任务，并直接说明模型不可用', async () => {
+  await note('notes/work', '张三在这里被提到，正文足够长。');
+  let calls = 0;
+  const result = await runPhaseCaptureEntities(engine, {
+    sourceId: 'vault',
+    model: 'anthropic:claude-sonnet-4-6',
+    modelServices: [{
+      provider: 'anthropic',
+      enabled: false,
+      apiKey: '',
+      baseUrl: 'https://api.anthropic.com/v1',
+    }],
+    handler: async () => {
+      calls += 1;
+      return { tokens: { in: 1, out: 1 } };
+    },
+  });
+  expect(calls).toBe(0);
+  expect(result.status).toBe('fail');
+  expect(result.error?.message).toBe('实体识别模型不可用');
+  expect(result.details.pages_submitted).toBe(0);
+  expect(result.details.stop_reason).toBe('model_unavailable');
+  expect(result.details.report_line).toContain('停止原因：实体识别模型不可用');
+  const jobs = await engine.executeRaw<{ n: number }>(`SELECT count(*)::int AS n FROM minion_jobs`);
+  expect(Number(jobs[0]?.n ?? 0)).toBe(0);
+}, 60_000);
+
+test('新实体落库后只连接提到它的旧页面', async () => {
+  await note('notes/old-liu', '刘慈欣在这部小说里写了地球和三体文明。');
+  await note('notes/weather', '这份资料只讨论明天的天气预报和降雨。');
+  await engine.executeRaw(
+    `UPDATE pages SET links_extracted_at = '2020-01-01T00:00:00.000Z' WHERE source_id = 'vault' AND slug = 'notes/old-liu'`,
+  );
+  await note('notes/new-liu', '这份新资料需要识别实体，正文足够参与这一轮。');
+  const result = await runPhaseCaptureEntities(engine, {
+    sourceId: 'vault',
+    batchSize: 1,
+    handler: async ctx => {
+      if (promptOf(ctx).includes('notes/new-liu')) {
+        await engine.putPage('people/liu', {
+          type: 'person', title: '刘慈欣', compiled_truth: '刘慈欣写了三体。', timeline: '', frontmatter: {},
+        }, { sourceId: 'vault' });
+      }
+      return { ok: true };
+    },
+  });
+  expect(result.status).toBe('ok');
+  expect(result.details.stop_reason).toBe('completed');
+  expect(result.details.pages_remaining).toBe(0);
+  expect(Number(result.details.entities_written)).toBeGreaterThan(0);
+  expect(result.details.relation_slugs).toContain('notes/old-liu');
+  expect(result.details.relation_slugs).not.toContain('notes/weather');
+  const links = await engine.executeRaw<{ from_slug: string; to_slug: string; link_source: string }>(
+    `SELECT f.slug AS from_slug, t.slug AS to_slug, l.link_source
+       FROM links l
+       JOIN pages f ON f.id = l.from_page_id
+       JOIN pages t ON t.id = l.to_page_id
+      WHERE t.slug = 'people/liu' AND l.link_source = 'mentions'`,
+  );
+  expect(links).toContainEqual({ from_slug: 'notes/old-liu', to_slug: 'people/liu', link_source: 'mentions' });
+  expect(links.map(row => row.from_slug)).not.toContain('notes/weather');
 }, 60_000);
 
 test('失败重跑不重复建人，停止后不再写下一份', async () => {

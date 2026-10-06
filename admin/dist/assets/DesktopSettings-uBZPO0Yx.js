@@ -1,5 +1,5 @@
-const __vite__mapDeps=(i,m=__vite__mapDeps,d=(m.f||(m.f=["assets/src-TXghAmkC.js","assets/src-Bi7L9_9h.css"])))=>i.map(i=>d[i]);
-import{d as y,_ as k}from"./index-C39Pwyl4.js";import{r as e,j as n}from"./react-CTwocyy_.js";import"./ui-j-wynEIj.js";const f=`
+const __vite__mapDeps=(i,m=__vite__mapDeps,d=(m.f||(m.f=["assets/src-LuTgMWpU.js","assets/src-Bi7L9_9h.css"])))=>i.map(i=>d[i]);
+import{d as y,_ as k}from"./index-BmX6aHs4.js";import{r as e,j as n}from"./react-CTwocyy_.js";import"./ui-j-wynEIj.js";const f=`
     <main class="app-shell">
       <aside class="rail">
         <div class="brand">
@@ -312,6 +312,14 @@ import{d as y,_ as k}from"./index-C39Pwyl4.js";import{r as e,j as n}from"./react
                   <label><span>模型名称</span><span class="model-picker"><input id="advanced-phase-conversation_facts_backfill-model-name" spellcheck="false" placeholder="先选择供应商，也可输入自定义模型" autocomplete="off" /><button type="button" class="advanced-model-picker-trigger" data-advanced-phase="conversation_facts_backfill" aria-label="展开对话事实回填模型列表">⌄</button><ul class="model-dropdown" id="advanced-phase-conversation_facts_backfill-model-dropdown" hidden></ul></span><small class="advanced-task-status" id="advanced-phase-conversation_facts_backfill-model-status"></small></label>
                 </div>
                 <small class="advanced-task-effective" id="advanced-phase-conversation_facts_backfill-effective">尚未读取</small>
+              </article>
+              <article class="advanced-task-card">
+                <div class="advanced-task-heading"><div><b>识别实体</b><small>Dream capture_entities</small></div><button type="button" class="text-button advanced-phase-inherit" data-advanced-phase="capture_entities">跟随任务层级</button></div>
+                <div class="advanced-task-fields">
+                  <label><span>供应商</span><select id="advanced-phase-capture_entities-provider"><option value="">跟随任务层级</option><option value="mimo">mimo</option><option value="zhipu">zhipu</option><option value="deepseek">deepseek</option><option value="openai">openai</option><option value="anthropic">anthropic</option><option value="google">google</option><option value="openrouter">openrouter</option></select></label>
+                  <label><span>模型名称</span><span class="model-picker"><input id="advanced-phase-capture_entities-model-name" spellcheck="false" placeholder="先选择供应商，也可输入自定义模型" autocomplete="off" /><button type="button" class="advanced-model-picker-trigger" data-advanced-phase="capture_entities" aria-label="展开识别实体模型列表">⌄</button><ul class="model-dropdown" id="advanced-phase-capture_entities-model-dropdown" hidden></ul></span><small class="advanced-task-status" id="advanced-phase-capture_entities-model-status"></small></label>
+                </div>
+                <small class="advanced-task-effective" id="advanced-phase-capture_entities-effective">尚未读取</small>
               </article>
               <article class="advanced-task-card">
                 <div class="advanced-task-heading"><div><b>观点提炼</b><small>Dream propose_takes</small></div><button type="button" class="text-button advanced-phase-inherit" data-advanced-phase="propose_takes">跟随推理任务</button></div>
@@ -647,4 +655,4 @@ import{d as y,_ as k}from"./index-C39Pwyl4.js";import{r as e,j as n}from"./react
       </div>
     </div>
     
-  `;let t;function x({panel:s,visible:o,theme:p}){const i=e.useRef(null),[c,r]=e.useState(""),[v,h]=e.useState(!1),[u,b]=e.useState(!1),[m,l]=e.useState("");e.useEffect(()=>{!y()||!i.current||(i.current.childElementCount||(i.current.innerHTML=f),t??(t=k(()=>import("./src-TXghAmkC.js"),__vite__mapDeps([0,1]))),t.then(()=>h(!0)).catch(a=>r(String(a))))},[]),e.useEffect(()=>{if(!o||!t)return;let a=!0;return t.then(d=>{a&&d.activateSettingsPanel(s)}).catch(d=>r(String(d))),()=>{a=!1}},[s,o]);const g=async()=>{if(t){b(!0),l("");try{await(await t).saveDatabaseSettings(),l("数据库与资料目录已保存")}catch(a){l(String(a))}finally{b(!1)}}};return n.jsxs("div",{className:"desktop-settings-container",hidden:!o,children:[c&&n.jsx("p",{role:"alert",children:c}),n.jsx("div",{className:"desktop-settings",hidden:!v,"data-theme":p==="system"?window.matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light":p,ref:i}),s==="basic"&&v&&n.jsxs("div",{className:"database-save",children:[n.jsx("button",{disabled:u,onClick:g,children:u?"保存中…":"保存数据库与资料目录"}),m&&n.jsx("p",{role:"status",children:m})]})]})}export{x as DesktopSettings};
+  `;let t;function x({panel:s,visible:o,theme:p}){const i=e.useRef(null),[c,r]=e.useState(""),[v,h]=e.useState(!1),[u,b]=e.useState(!1),[m,l]=e.useState("");e.useEffect(()=>{!y()||!i.current||(i.current.childElementCount||(i.current.innerHTML=f),t??(t=k(()=>import("./src-LuTgMWpU.js"),__vite__mapDeps([0,1]))),t.then(()=>h(!0)).catch(a=>r(String(a))))},[]),e.useEffect(()=>{if(!o||!t)return;let a=!0;return t.then(d=>{a&&d.activateSettingsPanel(s)}).catch(d=>r(String(d))),()=>{a=!1}},[s,o]);const g=async()=>{if(t){b(!0),l("");try{await(await t).saveDatabaseSettings(),l("数据库与资料目录已保存")}catch(a){l(String(a))}finally{b(!1)}}};return n.jsxs("div",{className:"desktop-settings-container",hidden:!o,children:[c&&n.jsx("p",{role:"alert",children:c}),n.jsx("div",{className:"desktop-settings",hidden:!v,"data-theme":p==="system"?window.matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light":p,ref:i}),s==="basic"&&v&&n.jsxs("div",{className:"database-save",children:[n.jsx("button",{disabled:u,onClick:g,children:u?"保存中…":"保存数据库与资料目录"}),m&&n.jsx("p",{role:"status",children:m})]})]})}export{x as DesktopSettings};

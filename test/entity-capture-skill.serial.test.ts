@@ -8,6 +8,9 @@
  * 5. 代理不能写到人物、公司、项目、概念以外的页面，也没有 add_link。
  * 这组测试证明工具链和接线。它不证明付费模型的识别质量。
  */
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterAll, beforeAll, beforeEach, expect, test } from 'bun:test';
 import type Anthropic from '@anthropic-ai/sdk';
 import { PGLiteEngine } from '../src/core/pglite-engine.ts';
@@ -33,6 +36,8 @@ import { runByMentionCore } from '../src/commands/extract.ts';
 import { TaskProgressAdapter } from '../src/product/tasks/progress-adapter.ts';
 import { resetPgliteState } from './helpers/reset-pglite.ts';
 import { assertSafeE2eDatabaseUrl } from './helpers/db-guard.ts';
+
+process.env.PMBRAIN_HOME = mkdtempSync(join(tmpdir(), 'pmbrain-capture-skill-home-'));
 
 const databaseUrl = process.env.PMBRAIN_RELATION_TEST_DATABASE_URL;
 let engine: BrainEngine;
@@ -239,7 +244,7 @@ test('默认每轮处理 100 份资料，长文按重叠分块覆盖全文', () 
   expect(prompt).not.toContain('资料在此处截断');
 });
 
-test('100 篇上限按源文档计算，长文多个分块不会额外占用页面额度', async () => {
+test('100 篇只是内部分批，超过 100 篇会自动继续，长文分块不另占篇数', async () => {
   await useVault();
   for (let i = 0; i < 101; i++) {
     const slug = `notes/batch-${String(i).padStart(3, '0')}`;
@@ -268,11 +273,12 @@ test('100 篇上限按源文档计算，长文多个分块不会额外占用页�
   });
 
   expect(result.status).toBe('ok');
-  expect(result.details.pages_submitted).toBe(100);
-  expect(result.details.pages_remaining).toBe(1);
-  expect(Number(result.details.chunks_submitted)).toBeGreaterThan(100);
+  expect(result.details.pages_submitted).toBe(101);
+  expect(result.details.pages_remaining).toBe(0);
+  expect(result.details.stop_reason).toBe('completed');
+  expect(Number(result.details.chunks_submitted)).toBeGreaterThan(101);
   expect(calls).toBe(Number(result.details.chunks_submitted));
-}, 120_000);
+}, 180_000);
 
 test('预演不创建实体页', async () => {
   await useVault();

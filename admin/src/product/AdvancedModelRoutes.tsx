@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { desktopApi } from '../lib/product-fetch';
 import type { AdvancedModelConfig, AdvancedModelWriteInput } from '../../../desktop/src/main/advanced-model-config';
 
-const labels: Record<string, string> = { utility: '轻量任务', reasoning: '推理任务', deep: '深度任务', subagent: '子代理任务', synthesize: '综合整理', synthesize_verdict: '整理判断', patterns: '模式发现', extract_atoms: '知识点提取', synthesize_concepts: '概念综合', consolidate: '知识合并', conversation_facts_backfill: '会话事实整理', propose_takes: '观点生成', grade_takes: '观点评估', calibration_profile: '质量校准' };
+const labels: Record<string, string> = { utility: '轻量任务', reasoning: '推理任务', deep: '深度任务', subagent: '子代理任务', synthesize: '综合整理', synthesize_verdict: '整理判断', patterns: '模式发现', extract_atoms: '知识点提取', synthesize_concepts: '概念综合', consolidate: '知识合并', conversation_facts_backfill: '会话事实整理', capture_entities: '识别实体', propose_takes: '观点生成', grade_takes: '观点评估', calibration_profile: '质量校准' };
 export function AdvancedModelRoutes({ options, onSaved }: { options: Array<{ value: string; label: string }>; onSaved: () => void }) {
   const [config, setConfig] = useState<AdvancedModelConfig>();
   const [changes, setChanges] = useState<AdvancedModelWriteInput>({});

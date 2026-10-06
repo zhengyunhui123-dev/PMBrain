@@ -1,7 +1,12 @@
+import { splitProviderModelId } from '../model-id.ts';
+import { serviceNeedsApiKey } from '../../../shared/model-services.ts';
+
 export const DEFAULT_ENTITY_CAPTURE_COST_CAP_CNY = 5;
 export const DEFAULT_ENTITY_CAPTURE_MAX_INPUT_TOKENS = 1_000_000;
 export const DEFAULT_ENTITY_CAPTURE_MAX_OUTPUT_TOKENS = 200_000;
 export const ENTITY_CAPTURE_CANDIDATE_LIMIT = 60;
+
+export type CaptureStopReason = 'completed' | 'tokens' | 'cost' | 'failure' | 'aborted' | 'model_unavailable';
 
 export const CJK_PLAIN_MENTION_BLOCKLIST = [
   '系统', '项目', '模型', '平台', '方案', '功能', '问题', '数据',
@@ -83,8 +88,6 @@ export function captureChunkCostCny(input: {
 }
 
 export function captureBudgetStop(state: {
-  pagesSubmitted: number;
-  maxPages: number;
   inputTokens: number;
   outputTokens: number;
   maxInputTokens: number;
@@ -92,14 +95,106 @@ export function captureBudgetStop(state: {
   usageKnown: boolean;
   costCny: number | null;
   costCapCny: number | null;
-  checkingPageBudget: boolean;
-}): 'pages' | 'tokens' | 'cost' | null {
-  if (state.checkingPageBudget && state.pagesSubmitted >= state.maxPages) return 'pages';
+}): 'tokens' | 'cost' | null {
   if (state.usageKnown && (
     state.inputTokens >= state.maxInputTokens || state.outputTokens >= state.maxOutputTokens
   )) return 'tokens';
   if (state.costCapCny != null && state.costCny != null && state.costCny >= state.costCapCny) return 'cost';
   return null;
+}
+
+export interface CaptureServiceRecord {
+  id?: string;
+  provider?: string;
+  enabled?: boolean;
+  apiKey?: string;
+  baseUrl?: string;
+}
+
+export interface CaptureModelRef {
+  model: string;
+  source: string;
+}
+
+export type CaptureModelChoice =
+  | { ok: true; model: string; source: string }
+  | { ok: false; model: string | null; source: string | null; reason: 'provider_disabled' | 'missing_key' | 'unconfigured' };
+
+function captureProvider(model: string): string {
+  return (splitProviderModelId(model).provider ?? '').toLowerCase();
+}
+
+function serviceProvider(service: CaptureServiceRecord): string {
+  return (service.provider || service.id || '').toLowerCase();
+}
+
+export function captureServiceReady(
+  services: CaptureServiceRecord[] | null | undefined,
+  model: string,
+): { ready: true } | { ready: false; reason: 'provider_disabled' | 'missing_key' } {
+  if (!services || services.length === 0) return { ready: true };
+  const provider = captureProvider(model);
+  const matched = services.filter(service => serviceProvider(service) === provider);
+  if (matched.length === 0) return { ready: true };
+  const enabled = matched.filter(service => service.enabled === true);
+  if (enabled.length === 0) return { ready: false, reason: 'provider_disabled' };
+  const usable = enabled.find(service => {
+    const baseUrl = service.baseUrl ?? '';
+    if (!serviceNeedsApiKey(provider, baseUrl)) return true;
+    return (service.apiKey ?? '').trim().length > 0;
+  });
+  if (!usable) return { ready: false, reason: 'missing_key' };
+  return { ready: true };
+}
+
+export function selectReadyCaptureModel(input: {
+  explicit: CaptureModelRef | null;
+  candidates: CaptureModelRef[];
+  services: CaptureServiceRecord[] | null | undefined;
+}): CaptureModelChoice {
+  if (input.explicit?.model.trim()) {
+    const model = input.explicit.model.trim();
+    const ready = captureServiceReady(input.services, model);
+    if (!ready.ready) return { ok: false, model, source: input.explicit.source, reason: ready.reason };
+    return { ok: true, model, source: input.explicit.source };
+  }
+  let last: { model: string; source: string; reason: 'provider_disabled' | 'missing_key' } | null = null;
+  for (const candidate of input.candidates) {
+    const model = candidate.model.trim();
+    if (!model) continue;
+    const ready = captureServiceReady(input.services, model);
+    if (ready.ready) return { ok: true, model, source: candidate.source };
+    last = { model, source: candidate.source, reason: ready.reason };
+  }
+  if (last) return { ok: false, model: last.model, source: last.source, reason: last.reason };
+  return { ok: false, model: null, source: null, reason: 'unconfigured' };
+}
+
+const STOP_REASON_TEXT: Record<CaptureStopReason, string> = {
+  completed: '已完成',
+  tokens: 'Token 到上限',
+  cost: '费用到上限',
+  failure: '模型调用失败',
+  aborted: '用户停止',
+  model_unavailable: '实体识别模型不可用',
+};
+
+export function captureReportLine(input: {
+  model: string | null;
+  pagesProcessed: number;
+  pagesRemaining: number;
+  entitiesCreated: number;
+  relationsCreated: number;
+  costCny: number | null;
+  costCapCny: number | null;
+  ollama: boolean;
+  stopReason: CaptureStopReason;
+}): string {
+  const cost = input.ollama
+    ? '0 元（本地模型）'
+    : input.costCny == null ? '未统计' : `${input.costCny} 元`;
+  const cap = input.costCapCny == null ? '不限制' : `${input.costCapCny} 元`;
+  return `使用模型 ${input.model ?? '未选择'}。已处理 ${input.pagesProcessed} 页，剩余 ${input.pagesRemaining} 页。创建实体 ${input.entitiesCreated}。新增关系 ${input.relationsCreated}。费用 ${cost} / ${cap}。停止原因：${STOP_REASON_TEXT[input.stopReason]}。`;
 }
 
 interface PricedModel {
@@ -166,4 +261,38 @@ export function rankCaptureCandidates(
   });
   ranked.sort((a, b) => b.score - a.score || b.sameSource - a.sameSource || a.entity.slug.localeCompare(b.entity.slug));
   return ranked.slice(0, cap).map(item => item.entity);
+}
+
+export function deltaCaptureNeedles(
+  before: CaptureEntityBrief[],
+  after: CaptureEntityBrief[],
+): Array<{ sourceId: string; needle: string }> {
+  const previous = new Map(before.map(entity => [`${entity.sourceId}\0${entity.slug}`, entity]));
+  const needles: Array<{ sourceId: string; needle: string }> = [];
+  const seen = new Set<string>();
+  const add = (sourceId: string, needle: string) => {
+    const normalized = needle.normalize('NFKC').trim();
+    if (!mentionableSurface(normalized)) return;
+    const key = `${sourceId}\0${normalized.toLowerCase()}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    needles.push({ sourceId, needle: normalized });
+  };
+  for (const entity of after) {
+    const old = previous.get(`${entity.sourceId}\0${entity.slug}`);
+    if (!old) {
+      add(entity.sourceId, entity.title);
+      if (entity.slug.includes('/')) add(entity.sourceId, entity.slug);
+      for (const alias of entity.aliases) add(entity.sourceId, alias);
+      continue;
+    }
+    if (entity.title.normalize('NFKC').trim().toLowerCase() !== old.title.normalize('NFKC').trim().toLowerCase()) {
+      add(entity.sourceId, entity.title);
+    }
+    const oldAliases = new Set(old.aliases.map(alias => alias.normalize('NFKC').trim().toLowerCase()));
+    for (const alias of entity.aliases) {
+      if (!oldAliases.has(alias.normalize('NFKC').trim().toLowerCase())) add(entity.sourceId, alias);
+    }
+  }
+  return needles;
 }

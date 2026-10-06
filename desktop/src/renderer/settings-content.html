@@ -313,6 +313,14 @@
                 <small class="advanced-task-effective" id="advanced-phase-conversation_facts_backfill-effective">尚未读取</small>
               </article>
               <article class="advanced-task-card">
+                <div class="advanced-task-heading"><div><b>识别实体</b><small>Dream capture_entities</small></div><button type="button" class="text-button advanced-phase-inherit" data-advanced-phase="capture_entities">跟随任务层级</button></div>
+                <div class="advanced-task-fields">
+                  <label><span>供应商</span><select id="advanced-phase-capture_entities-provider"><option value="">跟随任务层级</option><option value="mimo">mimo</option><option value="zhipu">zhipu</option><option value="deepseek">deepseek</option><option value="openai">openai</option><option value="anthropic">anthropic</option><option value="google">google</option><option value="openrouter">openrouter</option></select></label>
+                  <label><span>模型名称</span><span class="model-picker"><input id="advanced-phase-capture_entities-model-name" spellcheck="false" placeholder="先选择供应商，也可输入自定义模型" autocomplete="off" /><button type="button" class="advanced-model-picker-trigger" data-advanced-phase="capture_entities" aria-label="展开识别实体模型列表">⌄</button><ul class="model-dropdown" id="advanced-phase-capture_entities-model-dropdown" hidden></ul></span><small class="advanced-task-status" id="advanced-phase-capture_entities-model-status"></small></label>
+                </div>
+                <small class="advanced-task-effective" id="advanced-phase-capture_entities-effective">尚未读取</small>
+              </article>
+              <article class="advanced-task-card">
                 <div class="advanced-task-heading"><div><b>观点提炼</b><small>Dream propose_takes</small></div><button type="button" class="text-button advanced-phase-inherit" data-advanced-phase="propose_takes">跟随推理任务</button></div>
                 <div class="advanced-task-fields">
                   <label><span>供应商</span><select id="advanced-phase-propose_takes-provider"><option value="">跟随推理任务</option><option value="mimo">mimo</option><option value="zhipu">zhipu</option><option value="deepseek">deepseek</option><option value="openai">openai</option><option value="anthropic">anthropic</option><option value="google">google</option><option value="openrouter">openrouter</option></select></label>

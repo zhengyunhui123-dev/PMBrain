@@ -179,16 +179,27 @@ export function finishTaskProgress(view: TaskProductProgress, status: string, re
       if (typeof capture.cost_cny === 'number') add('当前费用', capture.cost_cny);
       if (typeof capture.cost_cap_cny === 'number') add('费用上限', capture.cost_cap_cny);
       add('剩余页面', capture.pages_remaining);
+      add('创建实体', capture.entities_written);
+      add('新增关系', capture.relations_created);
+      if (typeof capture.report_line === 'string' && capture.report_line.trim()) next.detail = capture.report_line;
     }
   }
   add('孤立知识', data.totals?.orphans_found);
   if (metrics.length) next.metrics = metrics;
+  const capturePhase = Array.isArray(data.phases)
+    ? data.phases.find((phase: any) => phase.phase === 'capture_entities')
+    : undefined;
   if (Array.isArray(data.phases)) {
     for (const step of next.steps) {
       const matches = data.phases.filter((phase: any) => step.phases.includes(phase.phase));
       if (!matches.length) { step.status = 'skipped'; continue; }
       step.status = matches.some((phase: any) => phase.status === 'fail') ? 'failed'
         : matches.every((phase: any) => phase.status === 'skipped') ? 'skipped' : 'completed';
+    }
+    const captureStop = capturePhase?.details?.stop_reason;
+    if (captureStop === 'failure' || captureStop === 'model_unavailable') {
+      const captureStep = next.steps.find(step => step.phases.includes('capture_entities'));
+      if (captureStep && captureStep.status !== 'skipped') captureStep.status = 'failed';
     }
   }
   if (status === 'completed') {
@@ -201,8 +212,12 @@ export function finishTaskProgress(view: TaskProductProgress, status: string, re
     }
     const failed = next.steps.find(step => step.status === 'failed');
     if (failed) {
-      const failure = data.phases?.find((phase: any) => phase.status === 'fail' && failed.phases.includes(phase.phase));
-      next.errorReason = taskErrorReason(failure?.error?.message) ?? `${failed.label}未完成，请查看技术日志。`;
+      const failure = data.phases?.find((phase: any) => failed.phases.includes(phase.phase) && (
+        phase.status === 'fail' || phase.details?.stop_reason === 'failure' || phase.details?.stop_reason === 'model_unavailable'
+      ));
+      next.errorReason = failure?.details?.stop_reason === 'model_unavailable'
+        ? '实体识别模型不可用'
+        : taskErrorReason(failure?.error?.message) ?? `${failed.label}未完成，请查看技术日志。`;
     }
     if (Array.isArray(data.phases) && data.phases.some((phase: any) => phase.details?.dryRun === true)) {
       next.stage = '预览完成，未写入知识库';

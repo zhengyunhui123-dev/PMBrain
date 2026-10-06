@@ -41,6 +41,7 @@ export function TaskProgressCard({ run, link = true, timeline = false }: { run: 
       return <li key={step.id} className={`step-${step.status}`}><Icon size={16} aria-hidden="true" /><span>{step.label}{timeline && stepDescriptions[step.id] && <span className="task-step-description">{stepDescriptions[step.id]}</span>}{timeline && active && step.status === 'running' && view.phasePercent != null && <span className="task-step-progress"><span className="product-task-bar" role="progressbar" aria-label="当前步骤进度" aria-valuemin={0} aria-valuemax={100} aria-valuenow={view.phasePercent}><i style={{ width: `${view.phasePercent}%` }} /></span><span>{view.phasePercent}%</span></span>}</span><small>{({ completed: '已完成', running: active ? '进行中' : '已停止', skipped: '未执行', failed: '未完成', pending: '待处理' })[step.status]}</small></li>;
     })}</ol> : null}
     {view?.metrics.length ? <dl className="product-task-metrics">{view.metrics.map(metric => <div key={metric.label}><dt>{metric.label}</dt><dd>{metric.value}</dd></div>)}</dl> : null}
+    {view?.detail && <p className="product-task-caption">{view.detail}</p>}
     {view?.errorReason && <p className="product-task-error" role="alert">{view.errorReason}</p>}
     {run.status === 'cancelled' && <p className="product-task-caption">已完成的内容会保留。</p>}
     <footer>{elapsed !== null && <small>耗时 {elapsed < 60 ? `${elapsed} 秒` : `${Math.floor(elapsed / 60)} 分 ${elapsed % 60} 秒`}</small>}{link && <button type="button" onClick={() => taskLink(run)}>查看任务</button>}</footer>

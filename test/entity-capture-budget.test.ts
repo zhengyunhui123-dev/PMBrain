@@ -8,10 +8,14 @@ import { TaskProgressAdapter, finishTaskProgress } from '../src/product/tasks/pr
 import {
   captureBudgetStop,
   captureChunkCostCny,
+  captureReportLine,
+  captureServiceReady,
+  deltaCaptureNeedles,
   parseEntityCaptureCostCapInput,
   rankCaptureCandidates,
   readEntityCaptureCostCap,
   readModelCnyPrices,
+  selectReadyCaptureModel,
   usageFromJobResult,
 } from '../src/core/cycle/entity-capture-budget.ts';
 
@@ -56,32 +60,59 @@ test('未配置费用上限时默认 5 元，不限制和自定义金额可以�
   expect(usageFromJobResult({ tokens: { in: 0, out: 0 } })).toEqual({ present: true, input: 0, output: 0 });
 });
 
-test('页面额度按文档计，费用和 Token 可以在长文中间停住', () => {
+test('页数不是停止条件，费用和 Token 可以在长文中间停住', () => {
   expect(captureBudgetStop({
-    pagesSubmitted: 100, maxPages: 100, inputTokens: 1, outputTokens: 1,
+    inputTokens: 1, outputTokens: 1,
     maxInputTokens: 100, maxOutputTokens: 100, usageKnown: true, costCny: 0, costCapCny: 5,
-    checkingPageBudget: true,
-  })).toBe('pages');
-  expect(captureBudgetStop({
-    pagesSubmitted: 100, maxPages: 100, inputTokens: 1, outputTokens: 1,
-    maxInputTokens: 100, maxOutputTokens: 100, usageKnown: true, costCny: 0, costCapCny: 5,
-    checkingPageBudget: false,
   })).toBeNull();
   expect(captureBudgetStop({
-    pagesSubmitted: 1, maxPages: 100, inputTokens: 10, outputTokens: 1,
+    inputTokens: 10, outputTokens: 1,
     maxInputTokens: 10, maxOutputTokens: 100, usageKnown: false, costCny: null, costCapCny: 5,
-    checkingPageBudget: false,
   })).toBeNull();
   expect(captureBudgetStop({
-    pagesSubmitted: 1, maxPages: 100, inputTokens: 10, outputTokens: 1,
+    inputTokens: 10, outputTokens: 1,
     maxInputTokens: 10, maxOutputTokens: 100, usageKnown: true, costCny: null, costCapCny: 5,
-    checkingPageBudget: false,
   })).toBe('tokens');
   expect(captureBudgetStop({
-    pagesSubmitted: 1, maxPages: 100, inputTokens: 1, outputTokens: 1,
+    inputTokens: 1, outputTokens: 1,
     maxInputTokens: 100, maxOutputTokens: 100, usageKnown: true, costCny: 5, costCapCny: 5,
-    checkingPageBudget: false,
   })).toBe('cost');
+});
+
+test('识别实体单独选可用模型，显式不可用时不改去别的模型', () => {
+  const services = [
+    { provider: 'anthropic', enabled: false, apiKey: '', baseUrl: 'https://api.anthropic.com/v1' },
+    { provider: 'mimo', enabled: true, apiKey: 'sk-test', baseUrl: 'https://api.xiaomimimo.com/v1' },
+  ];
+  expect(captureServiceReady([], 'anthropic:claude-sonnet-4-6')).toEqual({ ready: true });
+  expect(captureServiceReady(undefined, 'anthropic:claude-sonnet-4-6')).toEqual({ ready: true });
+  expect(captureServiceReady(services, 'anthropic:claude-sonnet-4-6')).toEqual({ ready: false, reason: 'provider_disabled' });
+  expect(captureServiceReady([
+    { provider: 'anthropic', enabled: true, apiKey: '', baseUrl: 'https://api.anthropic.com/v1' },
+  ], 'anthropic:claude-sonnet-4-6')).toEqual({ ready: false, reason: 'missing_key' });
+  expect(captureServiceReady([
+    { provider: 'ollama', enabled: true, apiKey: '', baseUrl: 'http://localhost:11434/v1' },
+  ], 'ollama:qwen')).toEqual({ ready: true });
+  expect(selectReadyCaptureModel({
+    explicit: null,
+    candidates: [
+      { model: 'mimo:mimo-v2.6-flash', source: 'config: models.default' },
+      { model: 'anthropic:claude-sonnet-4-6', source: 'config: models.dream.synthesize' },
+    ],
+    services,
+  })).toEqual({ ok: true, model: 'mimo:mimo-v2.6-flash', source: 'config: models.default' });
+  expect(selectReadyCaptureModel({
+    explicit: { model: 'anthropic:claude-sonnet-4-6', source: 'config: models.dream.capture_entities' },
+    candidates: [{ model: 'mimo:mimo-v2.6-flash', source: 'config: models.default' }],
+    services: [
+      { provider: 'anthropic', enabled: true, apiKey: ' ', baseUrl: 'https://api.anthropic.com/v1' },
+      { provider: 'mimo', enabled: true, apiKey: 'sk-test', baseUrl: 'https://api.xiaomimimo.com/v1' },
+    ],
+  })).toMatchObject({ ok: false, model: 'anthropic:claude-sonnet-4-6', reason: 'missing_key' });
+  expect(deltaCaptureNeedles(
+    [],
+    [{ slug: 'people/liu', sourceId: 'vault', type: 'person', title: '刘慈欣', aliases: ['大刘'] }],
+  ).map(item => item.needle)).toEqual(['刘慈欣', 'people/liu', '大刘']);
 });
 
 test('候选只取正文里相关的实体，不把全库塞进去', () => {
@@ -110,6 +141,9 @@ test('任务详情能看到页面、分块、Token、费用和剩余资料', () 
         cost_cny: 1.25,
         cost_cap_cny: 5,
         pages_remaining: 8,
+        entities_written: 3,
+        relations_created: 4,
+        report_line: '使用模型 mimo:mimo-v2.6-flash。已处理 2 页，剩余 8 页。创建实体 3。新增关系 4。费用 1.25 元 / 5 元。停止原因：费用到上限。',
       },
     }],
   }, null);
@@ -121,4 +155,39 @@ test('任务详情能看到页面、分块、Token、费用和剩余资料', () 
   expect(metrics).toContainEqual(['当前费用', 1.25]);
   expect(metrics).toContainEqual(['费用上限', 5]);
   expect(metrics).toContainEqual(['剩余页面', 8]);
+  expect(metrics).toContainEqual(['创建实体', 3]);
+  expect(metrics).toContainEqual(['新增关系', 4]);
+  expect(next.detail).toContain('停止原因：费用到上限');
+
+  const failedAdapter = new TaskProgressAdapter('dream_full');
+  failedAdapter.plan(['capture_entities']);
+  const failed = finishTaskProgress(failedAdapter.view, 'completed', {
+    phases: [{
+      phase: 'capture_entities',
+      status: 'fail',
+      error: { message: '实体识别模型不可用' },
+      details: {
+        stop_reason: 'model_unavailable',
+        report_line: captureReportLine({
+          model: 'anthropic:claude-sonnet-4-6',
+          pagesProcessed: 0,
+          pagesRemaining: 4,
+          entitiesCreated: 0,
+          relationsCreated: 0,
+          costCny: null,
+          costCapCny: 5,
+          ollama: false,
+          stopReason: 'model_unavailable',
+        }),
+        pages_processed: 0,
+        entities_written: 0,
+        relations_created: 0,
+        pages_remaining: 4,
+      },
+    }],
+  }, null);
+  expect(failed.errorReason).toBe('实体识别模型不可用');
+  expect(failed.detail).toContain('使用模型 anthropic:claude-sonnet-4-6');
+  expect(failed.steps.find(step => step.phases.includes('capture_entities'))?.status).toBe('failed');
+  expect(failed.stage.startsWith('部分完成')).toBe(true);
 });

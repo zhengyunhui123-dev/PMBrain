@@ -640,6 +640,37 @@ async function queueFreshPagesForNewEntities(
   return 0;
 }
 
+export async function findPagesContainingNeedles(
+  engine: BrainEngine,
+  needles: Array<{ sourceId: string; needle: string }>,
+  sourceIdFilter?: string,
+): Promise<string[]> {
+  const usable = needles.filter(item => isSearchNeedle(item.needle));
+  if (usable.length === 0) return [];
+  const params: unknown[] = [usable.map(item => item.needle), usable.map(item => item.sourceId)];
+  let sourceSql = '';
+  if (sourceIdFilter) {
+    params.push(sourceIdFilter);
+    sourceSql = `AND p.source_id = $${params.length}`;
+  }
+  const rows = await engine.executeRaw<{ slug: string }>(
+    `SELECT DISTINCT p.slug
+       FROM pages p
+      WHERE p.deleted_at IS NULL
+        ${sourceSql}
+        AND EXISTS (
+          SELECT 1 FROM unnest($1::text[], $2::text[]) AS n(needle, source_id)
+           WHERE (n.source_id = 'default' OR p.source_id = n.source_id)
+             AND (
+               strpos(lower(normalize(COALESCE(p.compiled_truth, ''), NFKC)), lower(n.needle)) > 0
+               OR strpos(lower(normalize(COALESCE(p.timeline, ''), NFKC)), lower(n.needle)) > 0
+             )
+        )`,
+    params,
+  );
+  return rows.map(row => row.slug).filter(slug => slug.length > 0);
+}
+
 export async function stampExtractedPages(
   engine: BrainEngine,
   refs: Array<{ slug: string; source_id: string }>,

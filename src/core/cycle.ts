@@ -1890,7 +1890,12 @@ export async function runCycle(
       await checkpoint();
     }
 
-    const refreshRelations = async (engine: BrainEngine, result: PhaseResult, prioritySlugs?: string[]) => {
+    const refreshRelations = async (
+      engine: BrainEngine,
+      result: PhaseResult,
+      prioritySlugs?: string[],
+      limits?: { maxHistoricalPages?: number; nerSlugs?: string[] },
+    ) => {
       checkAborted(opts.signal);
       if (opts.includeHistoricalMarkdownCatchUp && !dryRun) {
         try {
@@ -1954,7 +1959,9 @@ export async function runCycle(
           const mentionStart = performance.now();
           const mention = await runByMentionCore(engine, {
             prioritySlugs,
-            maxHistoricalPages: opts.byMentionMaxHistorical,
+            maxHistoricalPages: limits && Object.prototype.hasOwnProperty.call(limits, 'maxHistoricalPages')
+              ? limits.maxHistoricalPages
+              : opts.byMentionMaxHistorical,
             historicalTimeBudgetMs: opts.byMentionTimeBudgetMs,
             sourceIdFilter: filesystemSourceId,
             quiet: !getCliOptions().progressJson,
@@ -2012,6 +2019,7 @@ export async function runCycle(
           const ner = await extractNerLinks(engine, {
             sourceIdFilter: filesystemSourceId, signal: opts.signal,
             yieldDuringPhase: buildYieldDuringPhase(lock, opts.yieldDuringPhase),
+            ...(limits?.nerSlugs ? { slugs: limits.nerSlugs } : {}),
           });
           result.details = {
             ...result.details,
@@ -2579,8 +2587,9 @@ export async function runCycle(
         phaseResults.push(result);
         const written = Array.isArray(result.details?.written_slugs) ? result.details.written_slugs as string[] : [];
         const sources = Array.isArray(result.details?.source_slugs) ? result.details.source_slugs as string[] : [];
-        entityCaptureSlugs = [...written, ...sources];
-        progress.finish();
+        const relationSlugs = Array.isArray(result.details?.relation_slugs) ? result.details.relation_slugs as string[] : [];
+        entityCaptureSlugs = [...written, ...sources, ...relationSlugs];
+        progress.finish(result.summary);
       }
       await checkpoint();
     }
@@ -2615,10 +2624,18 @@ export async function runCycle(
       const extract = phaseResults.find(result => result.phase === 'extract');
       if (extract && !skipIfSearchIndexUnusable('extract')) {
         progress.start('cycle.extract');
-        await refreshRelations(engine, extract, resolveIncrementalExtractSlugs(
+        const capturePhase = phaseResults.find(item => item.phase === 'capture_entities');
+        const relationsRefreshed = capturePhase?.details?.relations_refreshed === true;
+        const postCaptureSlugs = resolveIncrementalExtractSlugs(
           syncPagesAffected,
           mergeCaptureSlugs(synthesizeWrittenSlugs, entityCaptureSlugs),
-        ));
+        );
+        await refreshRelations(
+          engine,
+          extract,
+          postCaptureSlugs,
+          relationsRefreshed ? { maxHistoricalPages: 0, nerSlugs: postCaptureSlugs ?? [] } : undefined,
+        );
         extract.details.postGenerationRelations = true;
         noteSearchIndexAbort(extract);
         progress.finish();
