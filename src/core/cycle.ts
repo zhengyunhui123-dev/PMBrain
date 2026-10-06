@@ -482,9 +482,10 @@ export interface CycleOpts {
   /**
    * PMBrain Quick Maintenance: after the extract phase, also run the existing
    * deterministic by-mention linker (entity gazetteer → mentions edges).
-   * Full Dream leaves this unset so upstream phase semantics stay intact.
    */
   includeByMention?: boolean;
+  includeNer?: boolean;
+  refreshRelationsAfterGeneration?: boolean;
   /**
    * Optional compatibility cap for historical (non-priority) pages. Quick
    * Maintenance no longer sets a default page cap; explicit callers may still
@@ -1874,6 +1875,152 @@ export async function runCycle(
       await checkpoint();
     }
 
+    const refreshRelations = async (engine: BrainEngine, result: PhaseResult, prioritySlugs?: string[]) => {
+      checkAborted(opts.signal);
+      if (opts.includeHistoricalMarkdownCatchUp && !dryRun) {
+        try {
+          const { extractStaleFromDB } = await import('../commands/extract-stale.ts');
+          const catchUpStart = performance.now();
+          const catchUp = await extractStaleFromDB(engine, {
+            dryRun: false,
+            jsonMode: false,
+            includeFrontmatter: true,
+            catalogAware: true,
+            sourceIdFilter: filesystemSourceId,
+            catchUp: opts.markdownCatchUpMaxHistorical == null,
+            quiet: !getCliOptions().progressJson,
+            signal: opts.signal,
+            yieldDuringPhase: buildYieldDuringPhase(lock, opts.yieldDuringPhase),
+            maxPages: opts.markdownCatchUpMaxHistorical,
+          });
+          result.details = {
+            ...result.details,
+            linksCreated: Number(result.details.linksCreated ?? 0) + catchUp.linksCreated,
+            timelineCreated: Number(result.details.timelineCreated ?? 0) + catchUp.timelineCreated,
+            relationLinksCreated: Number(result.details.relationLinksCreated ?? 0) + catchUp.linksCreated,
+            relationTimelineCreated: Number(result.details.relationTimelineCreated ?? 0) + catchUp.timelineCreated,
+            relationPagesProcessed: Number(result.details.relationPagesProcessed ?? 0) + catchUp.pagesProcessed,
+            relationHistoricalRemaining: catchUp.staleRemaining,
+            relationUnresolvedReferences: catchUp.unresolvedReferences,
+            relationSkippedMissingTarget: catchUp.skippedMissingTarget,
+            relationSkippedCrossSource: catchUp.skippedCrossSource,
+            historical_relation_backfill: true,
+            // Additive compatibility marker for existing Admin/report readers.
+            historical_markdown_catch_up: true,
+          };
+          result.summary =
+            `${result.summary}; historical relations +${catchUp.linksCreated} link(s) ` +
+            `from ${catchUp.pagesProcessed} page(s) (${catchUp.staleRemaining} stale remaining, ` +
+            `${catchUp.unresolvedReferences + catchUp.skippedMissingTarget + catchUp.skippedCrossSource} unresolved/skipped)`;
+          result.duration_ms += Math.round(performance.now() - catchUpStart);
+          if (result.status === 'skipped' && catchUp.pagesProcessed > 0) {
+            result.status = 'ok';
+          }
+        } catch (e) {
+          checkAborted(opts.signal);
+          const message = e instanceof Error ? e.message : String(e);
+          if (isGinRepairAbortText(e)) {
+            result.status = 'fail';
+            result.error = makeErrorFromException(e);
+            result.details = { ...result.details, relation_backfill_error: message };
+            result.summary = message;
+          } else {
+            result.status = result.status === 'fail' ? 'fail' : 'warn';
+            result.details = { ...result.details, relation_backfill_error: message };
+            result.summary = `${result.summary}; historical relation backfill failed`;
+          }
+        }
+      }
+
+      if (result.error && isGinRepairAbortText(result.error.message)) return;
+      if (opts.includeByMention && !dryRun) {
+        try {
+          const { runByMentionCore } = await import('../commands/extract.ts');
+          const mentionStart = performance.now();
+          const mention = await runByMentionCore(engine, {
+            prioritySlugs,
+            maxHistoricalPages: opts.byMentionMaxHistorical,
+            historicalTimeBudgetMs: opts.byMentionTimeBudgetMs,
+            sourceIdFilter: filesystemSourceId,
+            quiet: !getCliOptions().progressJson,
+            signal: opts.signal,
+            yieldDuringPhase: buildYieldDuringPhase(lock, opts.yieldDuringPhase),
+          });
+          const mentionMs = Math.round(performance.now() - mentionStart);
+          const prevLinks = Number(result.details.linksCreated ?? 0);
+          result.details = {
+            ...result.details,
+            linksCreated: prevLinks + mention.created,
+            mentionLinksCreated: Number(result.details.mentionLinksCreated ?? 0) + mention.created,
+            mentionLinksRemoved: Number(result.details.mentionLinksRemoved ?? 0) + mention.removed,
+            mentionPagesProcessed: Number(result.details.mentionPagesProcessed ?? 0) + mention.pages,
+            mentionPriorityPagesProcessed: Number(result.details.mentionPriorityPagesProcessed ?? 0) + mention.priorityPages,
+            mentionHistoricalPagesProcessed: Number(result.details.mentionHistoricalPagesProcessed ?? 0) + mention.historicalPages,
+            mentionHistoricalRemaining: mention.historicalRemaining,
+            mentionTimeBudgetReached: mention.timeBudgetReached,
+            mentionTimeBudgetMs: opts.byMentionTimeBudgetMs ?? null,
+            mentionAmbiguousNames: mention.ambiguousNames,
+            by_mention: true,
+          };
+          result.summary =
+            `${result.summary}; by-mention +${mention.created}/-${mention.removed} link(s) ` +
+            `(${mention.pages} page(s), ${mention.historicalRemaining} historical remaining)`;
+          result.duration_ms += mentionMs;
+          if (result.status === 'skipped' && mention.pages > 0) {
+            result.status = 'ok';
+          }
+        } catch (e) {
+          checkAborted(opts.signal);
+          const message = e instanceof Error ? e.message : String(e);
+          if (isGinRepairAbortText(e)) {
+            result.status = 'fail';
+            result.error = makeErrorFromException(e);
+            result.details = { ...result.details, by_mention_error: message };
+            result.summary = message;
+          } else {
+            result.status = result.status === 'fail' ? 'fail' : 'warn';
+            result.details = {
+              ...result.details,
+              by_mention_error: message,
+            };
+            result.summary = `${result.summary}; by-mention failed`;
+          }
+        }
+      }
+
+
+      if (result.error && isGinRepairAbortText(result.error.message)) return;
+      if (opts.includeNer && !dryRun) {
+        const started = performance.now();
+        try {
+          const { extractNerLinks } = await import('./extract-ner.ts');
+          const ner = await extractNerLinks(engine, {
+            sourceIdFilter: filesystemSourceId, signal: opts.signal,
+            yieldDuringPhase: buildYieldDuringPhase(lock, opts.yieldDuringPhase),
+          });
+          result.details = {
+            ...result.details,
+            linksCreated: Number(result.details.linksCreated ?? 0) + ner.created,
+            nerLinksCreated: Number(result.details.nerLinksCreated ?? 0) + ner.created,
+            nerPagesProcessed: Number(result.details.nerPagesProcessed ?? 0) + ner.pages,
+            nerPackUnavailable: ner.pack_unavailable,
+            typed_ner: true,
+          };
+          result.summary += `; NER +${ner.created} typed link(s) (${ner.pages} page(s)${ner.pack_unavailable ? ', no applicable pack rules' : ''})`;
+          if (result.status === 'skipped' && ner.pages > 0) result.status = 'ok';
+        } catch (error) {
+          checkAborted(opts.signal);
+          const message = error instanceof Error ? error.message : String(error);
+          result.status = isGinRepairAbortText(error) ? 'fail' : result.status === 'fail' ? 'fail' : 'warn';
+          result.error = makeErrorFromException(error);
+          result.details = { ...result.details, ner_error: message };
+          result.summary += `; NER relation extraction failed: ${message}`;
+        }
+        result.duration_ms += Math.round(performance.now() - started);
+      }
+    };
+
+
     // ── Phase 5: extract (now picks up synthesize output) ───────
     if (phases.includes('extract')) {
       checkAborted(opts.signal);
@@ -1906,111 +2053,7 @@ export async function runCycle(
           result.duration_ms = timed.duration_ms;
         }
 
-        if (opts.includeHistoricalMarkdownCatchUp && !dryRun) {
-          try {
-            const { extractStaleFromDB } = await import('../commands/extract-stale.ts');
-            const catchUpStart = performance.now();
-            const catchUp = await extractStaleFromDB(engine, {
-              dryRun: false,
-              jsonMode: false,
-              includeFrontmatter: true,
-              sourceIdFilter: filesystemSourceId,
-              catchUp: opts.markdownCatchUpMaxHistorical == null,
-              quiet: !getCliOptions().progressJson,
-              maxPages: opts.markdownCatchUpMaxHistorical,
-            });
-            result.details = {
-              ...result.details,
-              linksCreated: Number(result.details.linksCreated ?? 0) + catchUp.linksCreated,
-              timelineCreated: Number(result.details.timelineCreated ?? 0) + catchUp.timelineCreated,
-              relationLinksCreated: catchUp.linksCreated,
-              relationTimelineCreated: catchUp.timelineCreated,
-              relationPagesProcessed: catchUp.pagesProcessed,
-              relationHistoricalRemaining: catchUp.staleRemaining,
-              relationUnresolvedReferences: catchUp.unresolvedReferences,
-              relationSkippedMissingTarget: catchUp.skippedMissingTarget,
-              relationSkippedCrossSource: catchUp.skippedCrossSource,
-              historical_relation_backfill: true,
-              // Additive compatibility marker for existing Admin/report readers.
-              historical_markdown_catch_up: true,
-            };
-            result.summary =
-              `${result.summary}; historical relations +${catchUp.linksCreated} link(s) ` +
-              `from ${catchUp.pagesProcessed} page(s) (${catchUp.staleRemaining} stale remaining, ` +
-              `${catchUp.unresolvedReferences + catchUp.skippedMissingTarget + catchUp.skippedCrossSource} unresolved/skipped)`;
-            result.duration_ms += Math.round(performance.now() - catchUpStart);
-            if (result.status === 'skipped' && catchUp.pagesProcessed > 0) {
-              result.status = 'ok';
-            }
-          } catch (e) {
-            const message = e instanceof Error ? e.message : String(e);
-            if (isGinRepairAbortText(e)) {
-              result.status = 'fail';
-              result.error = makeErrorFromException(e);
-              result.details = { ...result.details, relation_backfill_error: message };
-              result.summary = message;
-            } else {
-              result.status = result.status === 'fail' ? 'fail' : 'warn';
-              result.details = { ...result.details, relation_backfill_error: message };
-              result.summary = `${result.summary}; historical relation backfill failed`;
-            }
-          }
-        }
-
-        // PMBrain Quick: deterministic by-mention after explicit link extract.
-        // Independent of empty syncPagesAffected so historical catch-up and
-        // failed-file isolation still build knowledge relations.
-        if (opts.includeByMention && !dryRun) {
-          try {
-            const { runByMentionCore } = await import('../commands/extract.ts');
-            const mentionStart = performance.now();
-            const mention = await runByMentionCore(engine, {
-              prioritySlugs: syncPagesAffected,
-              maxHistoricalPages: opts.byMentionMaxHistorical,
-              historicalTimeBudgetMs: opts.byMentionTimeBudgetMs,
-              sourceIdFilter: filesystemSourceId,
-              quiet: !getCliOptions().progressJson,
-            });
-            const mentionMs = Math.round(performance.now() - mentionStart);
-            const prevLinks = Number(result.details.linksCreated ?? 0);
-            result.details = {
-              ...result.details,
-              linksCreated: prevLinks + mention.created,
-              mentionLinksCreated: mention.created,
-              mentionLinksRemoved: mention.removed,
-              mentionPagesProcessed: mention.pages,
-              mentionPriorityPagesProcessed: mention.priorityPages,
-              mentionHistoricalPagesProcessed: mention.historicalPages,
-              mentionHistoricalRemaining: mention.historicalRemaining,
-              mentionTimeBudgetReached: mention.timeBudgetReached,
-              mentionTimeBudgetMs: opts.byMentionTimeBudgetMs ?? null,
-              mentionAmbiguousNames: mention.ambiguousNames,
-              by_mention: true,
-            };
-            result.summary =
-              `${result.summary}; by-mention +${mention.created}/-${mention.removed} link(s) ` +
-              `(${mention.pages} page(s), ${mention.historicalRemaining} historical remaining)`;
-            result.duration_ms += mentionMs;
-            if (result.status === 'skipped' && mention.pages > 0) {
-              result.status = 'ok';
-            }
-          } catch (e) {
-            const message = e instanceof Error ? e.message : String(e);
-            if (isGinRepairAbortText(e)) {
-              result.status = 'fail';
-              result.error = makeErrorFromException(e);
-              result.details = { ...result.details, by_mention_error: message };
-              result.summary = message;
-            } else {
-              result.status = result.status === 'fail' ? 'fail' : 'warn';
-              result.details = {
-                ...result.details,
-                by_mention_error: message,
-              };
-              result.summary = `${result.summary}; by-mention failed`;
-            }
-          }
-        }
+        await refreshRelations(engine, result, resolveIncrementalExtractSlugs(syncPagesAffected, synthesizeWrittenSlugs));
 
         phaseResults.push(result);
         noteSearchIndexAbort(result);
@@ -2518,6 +2561,19 @@ export async function runCycle(
         progress.finish();
       }
       await checkpoint();
+    }
+
+    if (opts.refreshRelationsAfterGeneration && engine && !dryRun && resolvedPhases.includes('extract')) {
+      checkAborted(opts.signal);
+      const extract = phaseResults.find(result => result.phase === 'extract');
+      if (extract && !skipIfSearchIndexUnusable('extract')) {
+        progress.start('cycle.extract');
+        await refreshRelations(engine, extract, resolveIncrementalExtractSlugs(syncPagesAffected, synthesizeWrittenSlugs));
+        extract.details.postGenerationRelations = true;
+        noteSearchIndexAbort(extract);
+        progress.finish();
+        await checkpoint();
+      }
     }
 
     // ── Phase 8: embed ──────────────────────────────────────────

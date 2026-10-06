@@ -494,7 +494,7 @@ function quickMaintenancePending(report: DreamCycleReport | null): {
     pendingEmbeddings: Number.isFinite(explicitPending)
       ? Math.max(0, explicitPending)
       : Math.max(0, totalChunks - completedChunks),
-    historicalLinks: phaseDetailNumber(report, 'extract', 'mentionHistoricalRemaining'),
+    historicalLinks: Math.max(phaseDetailNumber(report, 'extract', 'mentionHistoricalRemaining'), phaseDetailNumber(report, 'extract', 'relationHistoricalRemaining')),
     processingErrors: phases.reduce((sum, phase) => sum + Math.max(0, Number(phase.details?.errors_count ?? 0)), 0),
   };
 }
@@ -832,6 +832,12 @@ export function buildDreamOutcome(run: ConsoleRun): DreamOutcomeSummary {
       failureItems.push(`${currentLabel}：${additionalErrors} 项模型或数据处理未成功`);
     }
     const pending = Math.max(0, Number(currentDetails.pending ?? 0));
+    for (const [key, label] of [['relation_backfill_error', '历史关系补扫'], ['by_mention_error', '正文实体关联'], ['ner_error', '关系类型判断']]) {
+      if (currentDetails[key]) {
+        failureCount += 1;
+        failureItems.push(`${label}：${String(currentDetails[key])}`);
+      }
+    }
     if (!isQuick && pending > 0) {
       failureCount += pending;
       failureItems.push(`${currentLabel}：${pending} 个内容块仍待处理`);
@@ -879,6 +885,8 @@ export function buildDreamOutcome(run: ConsoleRun): DreamOutcomeSummary {
   const proposalsInserted = Math.max(0, Number(proposals.proposals_inserted ?? 0));
   const proposalSamples = asArray(proposals.proposal_samples).map(recordOf);
   const extractionItems: string[] = [];
+  const takesWritten=Math.max(0,Number(totals.consolidate_takes_written??0));
+  if(takesWritten>0)extractionItems.push(`长期判断：形成 ${takesWritten} 条，合并 ${Number(totals.facts_consolidated??0)} 条事实。`);
   if (factsInserted > 0) {
     extractionItems.push(
       factSlugs.length > 0
@@ -930,6 +938,43 @@ export function buildDreamOutcome(run: ConsoleRun): DreamOutcomeSummary {
     extractionItems,
     failureItems: uniqueStrings(failureItems),
   };
+}
+
+export function DreamRunContent({run,expanded=false}:{run:ConsoleRun;expanded?:boolean}){
+  const outcome=buildDreamOutcome(run);
+  const summary=describeDreamRun(run);
+  const isQuick=isQuickMaintenanceRun(run);
+  const phases=parseDreamReport(run)?.phases??[];
+  const proposals=phases.find(phase=>phase.phase==='propose_takes')?.details??{};
+  const relations=phases.find(phase=>phase.phase==='extract')?.details??{};
+  const reasons:Record<string,string>={not_configured:'未配置该阶段需要的资料目录',not_in_active_pack:'当前知识类型未启用该阶段',insufficient_evidence:'资料数量不足，未满足执行条件'};
+  return <details className="dream-outcome-content" open={expanded}>
+    <summary>查看本次整理内容</summary>
+    {typeof proposals.model_id==='string'&&<p className="pm-hint">观点提炼模型：{proposals.model_id} · 成功处理 {Number(proposals.pages_processed??0)} 页 · 剩余 {Number(proposals.remaining??0)} 页</p>}
+    <div className="dream-outcome-content-grid">
+      <section><h3>新增与更新的知识</h3>{outcome.knowledgeItems.length>0
+        ?<ul>{outcome.knowledgeItems.map(item=><li key={item}><code>{item}</code></li>)}</ul>
+        :<p>本次没有记录到新增或更新的知识页面。</p>}</section>
+      {!isQuick&&<section><h3>事实、概念和观点</h3>
+        {Number(proposals.proposals_inserted)>0&&<p>本次生成 {Number(proposals.proposals_inserted)} 条候选观点，待确认。以下展示运行记录保留的内容。</p>}
+        {outcome.extractionItems.length>0?<ul>{outcome.extractionItems.map((item,index)=><li key={`${item}:${index}`}>{item}</li>)}</ul>
+          :<p>本次没有提取出新的事实、概念或观点。</p>}
+      </section>}
+      <section><h3>知识关系</h3>
+        <p>{phases.find(phase=>phase.phase==='extract') ? phaseSummaryZh(phases.find(phase=>phase.phase==='extract')!) : '本次运行没有关系处理记录。'}</p>
+        {relations.postGenerationRelations===true&&<p>实体和概念生成后，已再次补扫历史关系。</p>}
+        {relations.nerPackUnavailable===true&&<p>存在未提供关系规则的知识类型，已跳过对应的关系类型判断。</p>}
+        {phases.some(phase=>phase.phase==='orphans')&&<p>孤立页检查统计尚未被其他知识引用的页面；这些页面可能已有向外的链接。</p>}
+      </section>
+      <section className={outcome.failureItems.length>0?'has-warning':''}><h3>{isQuick?'需要检查的异常':'未处理成功的内容'}</h3>
+        {outcome.failureItems.length>0?<ul>{outcome.failureItems.map((item,index)=><li key={`${item}:${index}`}>{item}</li>)}</ul>
+          :<p>{isQuick?'本次没有记录到执行异常。':'没有未处理成功的内容。'}</p>}
+        {Array.isArray(proposals.warnings)&&proposals.warnings.length>0&&<ul>{proposals.warnings.map((item,index)=><li key={index}>{String(item)}</li>)}</ul>}
+      </section>
+      <section><h3>本次执行了什么</h3><ul>{summary.actions.slice(0,12).map((item,index)=><li key={index}>{item}</li>)}</ul></section>
+      {phases.some(phase=>phase.status==='skipped')&&<section><h3>未执行的步骤</h3><ul>{phases.filter(phase=>phase.status==='skipped').map(phase=><li key={phase.phase}>{PHASE_LABELS[phase.phase]??phase.phase}：{reasons[String(phase.details?.reason)]??phase.summary}</li>)}</ul></section>}
+    </div>
+  </details>;
 }
 
 function DreamRunResult({ run }: { run: ConsoleRun }) {
@@ -993,35 +1038,7 @@ function DreamRunResult({ run }: { run: ConsoleRun }) {
       <div className="dream-detail-chips">
         {summary.details.map((item, index) => <span key={index}>{item}</span>)}
       </div>
-      <details className="dream-outcome-content">
-        <summary>查看本次整理内容</summary>
-        <div className="dream-outcome-content-grid">
-          <section>
-            <h3>新增与更新的知识</h3>
-            {outcome.knowledgeItems.length > 0
-              ? <ul>{outcome.knowledgeItems.map(item => <li key={item}><code>{item}</code></li>)}</ul>
-              : <p>本次没有记录到新增或更新的知识页面。</p>}
-          </section>
-          {!isQuick && (
-            <section>
-              <h3>事实、概念和观点</h3>
-              {outcome.extractionItems.length > 0
-                ? <ul>{outcome.extractionItems.map((item, index) => <li key={`${item}:${index}`}>{item}</li>)}</ul>
-                : <p>本次没有提取出新的事实、概念或观点。</p>}
-            </section>
-          )}
-          <section className={outcome.failureItems.length > 0 ? 'has-warning' : ''}>
-            <h3>{isQuick ? '需要检查的异常' : '未处理成功的内容'}</h3>
-            {outcome.failureItems.length > 0
-              ? <ul>{outcome.failureItems.map((item, index) => <li key={`${item}:${index}`}>{item}</li>)}</ul>
-              : <p>{isQuick ? '本次没有记录到执行异常。' : '没有未处理成功的内容。'}</p>}
-          </section>
-          <section>
-            <h3>本次执行了什么</h3>
-            <ul>{summary.actions.slice(0, 12).map((item, index) => <li key={index}>{item}</li>)}</ul>
-          </section>
-        </div>
-      </details>
+      <DreamRunContent run={run} />
       <button type="button" className="pm-ghost" onClick={() => taskLink(run)}>查看任务</button>
     </section>
   );
@@ -1437,8 +1454,13 @@ export function phaseSummaryZh(phase: DreamPhaseReport): string {
         : '本次运行记录未提供实际写入明细';
       return `检测到 ${candidates} 个待同步文件，${result}${failed > 0 ? `，${failed} 个文件解析失败` : ''}。`;
     }
-    case 'extract':
-      return `已建立 ${number('linksCreated')} 条知识链接和 ${number('timelineCreated')} 条时间线记录。`;
+    case 'extract': {
+      const remaining = Math.max(number('relationHistoricalRemaining'), number('mentionHistoricalRemaining'));
+      const breakdown = details.by_mention || details.typed_ner || details.historical_relation_backfill
+        ? `其中历史显式关联 ${number('relationLinksCreated')} 条、正文实体关联 ${number('mentionLinksCreated')} 条、关系类型关联 ${number('nerLinksCreated')} 条。`
+        : '';
+      return `已建立 ${number('linksCreated')} 条知识链接和 ${number('timelineCreated')} 条时间线记录。${breakdown}${remaining > 0 ? `历史仍有 ${remaining} 页待补扫。` : ''}`;
+    }
     case 'extract_facts':
       return `已检查 ${number('pagesScanned')} 个页面，核对并写入 ${number('factsInserted')} 条事实。`;
     case 'propose_takes':
@@ -1450,7 +1472,7 @@ export function phaseSummaryZh(phase: DreamPhaseReport): string {
     case 'embed':
       return `已为 ${number('embedded')} 个内容块更新搜索索引，${number('skipped')} 个内容块已有有效索引。`;
     case 'orphans':
-      return `发现 ${number('total_orphans')} 个暂时缺少关联的页面，共检查 ${number('total_pages')} 个页面。`;
+      return `发现 ${number('total_orphans')} 个尚未被其他知识引用的页面，共检查 ${number('total_pages')} 个页面。`;
   }
 
   if (phase.status === 'warn') return `已完成但有待处理项：${baseAction}`;

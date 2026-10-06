@@ -7,6 +7,7 @@
  */
 
 import type { BrainEngine, LinkBatchInput, TimelineBatchInput } from '../core/engine.ts';
+import { createHash } from 'node:crypto';
 import {
   extractPageLinks,
   parseTimelineEntries,
@@ -40,6 +41,9 @@ export async function extractStaleFromDB(
     quiet?: boolean;
     /** Optional deterministic page cap for advanced/library callers. */
     maxPages?: number;
+    catalogAware?: boolean;
+    signal?: AbortSignal;
+    yieldDuringPhase?: () => Promise<void>;
   },
 ): Promise<{
   linksCreated: number;
@@ -52,7 +56,23 @@ export async function extractStaleFromDB(
 }> {
   const { dryRun, jsonMode, includeFrontmatter, sourceIdFilter, catchUp } = opts;
   const quiet = opts.quiet ?? false;
-  const versionTs = LINK_EXTRACTOR_VERSION_TS;
+  opts.signal?.throwIfAborted();
+  let versionTs = LINK_EXTRACTOR_VERSION_TS;
+  if (opts.catalogAware) {
+    const catalog = await engine.executeRaw(
+      `SELECT source_id, slug, title, type, frontmatter->'aliases' AS aliases
+         FROM pages WHERE deleted_at IS NULL ${sourceIdFilter ? "AND source_id IN ($1, 'default')" : ''}
+         ORDER BY source_id, slug`, sourceIdFilter ? [sourceIdFilter] : [],
+    );
+    const hash = createHash('sha256').update(JSON.stringify([LINK_EXTRACTOR_VERSION_TS, catalog])).digest('hex');
+    const key = `extract.relations.catalog.${sourceIdFilter ? `source:${sourceIdFilter}` : 'all'}`;
+    const saved = await engine.getConfig(key);
+    let previous: { hash?: string; versionTs?: string } = {};
+    try { previous = saved ? JSON.parse(saved) : {}; } catch {}
+    versionTs = previous.hash === hash && previous.versionTs && Number.isFinite(Date.parse(previous.versionTs))
+      ? previous.versionTs : new Date(Math.max(Date.now(), (Date.parse(previous.versionTs ?? '') || 0) + 1, Date.parse(LINK_EXTRACTOR_VERSION_TS))).toISOString();
+    if (!dryRun && previous.hash !== hash) await engine.setConfig(key, JSON.stringify({ hash, versionTs }));
+  }
 
   const totalStale = await engine.countStalePagesForExtraction({ sourceId: sourceIdFilter, versionTs });
   if (dryRun) {
@@ -107,6 +127,7 @@ export async function extractStaleFromDB(
     : null;
 
   for (;;) {
+    opts.signal?.throwIfAborted();
     if (maxPages !== null && pagesProcessed >= maxPages) break;
     const batchSize = maxPages === null
       ? STALE_BATCH_SIZE
@@ -125,6 +146,7 @@ export async function extractStaleFromDB(
     const processedRefs: Array<{ slug: string; source_id: string; extractedAt: string }> = [];
 
     for (const page of rows) {
+      opts.signal?.throwIfAborted();
       const fullContent = page.compiled_truth + '\n' + page.timeline;
       const extracted = await extractPageLinks(
         page.slug,
@@ -198,6 +220,7 @@ export async function extractStaleFromDB(
     }
 
     const persistBatch = async (): Promise<{ links: number; timeline: number }> => {
+      opts.signal?.throwIfAborted();
       let links = 0;
       let timeline = 0;
       for (let i = 0; i < linkRows.length; i += BATCH_SIZE) {
@@ -232,6 +255,7 @@ export async function extractStaleFromDB(
     pagesProcessed += rows.length;
     progress.tick(rows.length);
     afterPageId = rows[rows.length - 1]!.id;
+    await opts.yieldDuringPhase?.();
 
     if (!catchUp && Date.now() - startMs > STALE_TIME_BUDGET_MS) {
       budgetHit = true;

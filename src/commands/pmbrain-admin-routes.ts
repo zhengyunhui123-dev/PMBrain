@@ -253,7 +253,7 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
     // inspect the owner for recovery when there is no actual task record;
     // disconnected state alone must not turn a normal maintenance run into a
     // misleading "残留占用进程" card.
-    const pgliteOwner = config.engine === 'pglite' && config.database_path && !hasActiveRun
+    const pgliteOwner = config.engine === 'pglite' && config.database_path && !hasActiveRun && options.getPgliteConnected?.()!==true
       ? await inspectPgliteOwner(config.database_path, {
           allowTerminate: true,
         })
@@ -280,6 +280,9 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
     if (config.engine !== 'pglite' || !config.database_path) {
       res.status(400).json({ error: 'pglite_owner_control_unavailable' });
       return;
+    }
+    if(options.getPgliteConnected?.()===true){
+      res.status(409).json({error:'pglite_owner_is_current',message:'当前服务正在正常持有数据库，不能结束正常的数据库执行进程。'});return;
     }
     const pgliteDisconnected = getPgliteConnected?.() === false;
     if (getPgliteBusy() && !pgliteDisconnected) {

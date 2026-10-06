@@ -143,6 +143,16 @@ export function finishTaskProgress(view: TaskProductProgress, status: string, re
   const data = result && typeof result === 'object' ? result as Record<string, any> : {};
   const metrics: Array<{ label: string; value: number }> = [];
   const add = (label: string, value: unknown) => { if (typeof value === 'number' && Number.isFinite(value)) metrics.push({ label, value }); };
+  if(next.name!=='快速维护'&&Array.isArray(data.phases)){
+    const proposals=data.phases.find((phase:any)=>phase.phase==='propose_takes');
+    const consolidate=data.phases.find((phase:any)=>phase.phase==='consolidate');
+    add('候选观点',proposals?.details?.proposals_inserted??data.totals?.proposals_inserted);
+    add('长期判断',consolidate?.details?.takes_written??data.totals?.consolidate_takes_written);
+    add('合并事实',consolidate?.details?.facts_consolidated??data.totals?.facts_consolidated);
+    add('观点处理页',proposals?.details?.pages_processed);
+    add('观点失败页',proposals?.details?.pages_failed);
+    add('待提炼页',proposals?.details?.remaining);
+  }
   add('新增资料', data.imported ?? data.totals?.pages_added);
   add('跳过资料', data.skipped);
   add('失败文件', data.errors);
@@ -153,6 +163,11 @@ export function finishTaskProgress(view: TaskProductProgress, status: string, re
     add('异常步骤', data.phases.filter((phase: any) => phase.status === 'fail').length);
     const sync = data.phases.find((phase: any) => phase.phase === 'sync');
     add('更新资料', sync?.details?.modified);
+    const relations = data.phases.find((phase: any) => phase.phase === 'extract')?.details;
+    add('历史显式关联', relations?.relationLinksCreated);
+    add('正文实体关联', relations?.mentionLinksCreated);
+    add('关系类型关联', relations?.nerLinksCreated);
+    add('历史待补关联', Math.max(relations?.relationHistoricalRemaining ?? 0, relations?.mentionHistoricalRemaining ?? 0) || (relations?.historical_relation_backfill ? 0 : undefined));
     const lint = data.phases.find((phase: any) => phase.phase === 'lint');
     add('待检查项', lint?.details?.issues);
   }

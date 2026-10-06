@@ -1531,6 +1531,8 @@ export async function extractTimelineFromDB(
 }
 
 export interface RunByMentionOpts {
+  signal?: AbortSignal;
+  yieldDuringPhase?: () => Promise<void>;
   dryRun?: boolean;
   jsonMode?: boolean;
   typeFilter?: PageType;
@@ -1581,6 +1583,7 @@ export async function runByMentionCore(
   engine: BrainEngine,
   opts: RunByMentionOpts = {},
 ): Promise<RunByMentionResult> {
+  opts.signal?.throwIfAborted();
   const dryRun = !!opts.dryRun;
   const jsonMode = !!opts.jsonMode;
   const typeFilter = opts.typeFilter;
@@ -1742,6 +1745,7 @@ export async function runByMentionCore(
   progress.start('extract.by_mention.scan', walkList.length);
 
   async function flushBatch() {
+    opts.signal?.throwIfAborted();
     if (batch.length === 0) return;
     try {
       created += await engine.addLinksBatch(batch, { auditSite: 'extract.by_mention' }); // gbrain-allow-direct-insert: gbrain extract --by-mention — canonical auto-link write from body-text mention scan
@@ -1752,6 +1756,7 @@ export async function runByMentionCore(
       } else {
         console.error(`  batch error (${batch.length} link rows lost): ${msg}`);
       }
+      throw e;
     } finally {
       batch.length = 0;
     }
@@ -1787,6 +1792,9 @@ export async function runByMentionCore(
   const sinceMs = since ? new Date(since).getTime() : null;
 
   for (const { slug, source_id } of walkList) {
+    opts.signal?.throwIfAborted();
+    if ((priorityPages + historicalPages) % 25 === 0) await opts.yieldDuringPhase?.();
+    opts.signal?.throwIfAborted();
     const isPriority = prioritySlugSet.has(slug);
     if (!isPriority) {
       if (historicalStartedAt === null) historicalStartedAt = Date.now();

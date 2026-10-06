@@ -9,6 +9,7 @@ import { TaskProgressCard, taskStatus, taskStopping } from '../product/TaskProgr
 import { taskName } from '../../../shared/task-progress';
 
 type TaskFilter = 'all' | 'running' | 'queued' | 'completed' | 'failed' | 'cancelled';
+const DreamRunContent=React.lazy(()=>import('./Dream').then(module=>({default:module.DreamRunContent})));
 
 interface EmbeddingRebuildTask {
   status: 'paused' | 'running';
@@ -130,10 +131,27 @@ function PgliteRecoveryCard({
 }
 
 function TaskDetailDrawer({ run, onClose, onCancel, onRetry, busy }: { run: ConsoleRun; onClose: () => void; onCancel: () => void; onRetry: () => void; busy: boolean }) {
+  const dream=run.kind.startsWith('dream_');
+  const [detail,setDetail]=useState<ConsoleRun|null>(null);
+  const [detailError,setDetailError]=useState('');
+  useEffect(()=>{
+    if(!dream)return;
+    let live=true;
+    let timer:ReturnType<typeof setTimeout>;
+    const load=async()=>{
+      try{const next=await api.run(run.id);if(live){setDetail(next);setDetailError('');}}
+      catch(error){if(live)setDetailError(error instanceof Error?error.message:String(error));}
+      finally{if(live&&isActive(run))timer=setTimeout(load,1500);}
+    };
+    setDetail(null);setDetailError('');void load();
+    return()=>{live=false;clearTimeout(timer);};
+  },[dream,run.id,run.status]);
+  const current=dream&&detail?.id===run.id?preferLiveRun(detail,run):run;
   return <><div className="drawer-overlay" onClick={onClose} /><aside className="drawer task-detail-drawer" aria-label="任务详情">
     <button type="button" className="drawer-close" aria-label="关闭任务详情" onClick={onClose}>×</button>
     <h2>{run.product?.name ?? taskName(run.kind)}</h2><p className="pm-hint">{formatDate(run.startedAt, '-')} · {taskTriggerLabel(run)}</p>
-    <TaskProgressCard run={run} link={false} />
+    <TaskProgressCard run={current} link={false} />
+    {dream&&(detailError?<p role="alert">{detailError}</p>:detail?<React.Suspense fallback={<p role="status">正在读取整理内容…</p>}><DreamRunContent run={current} expanded /></React.Suspense>:<p role="status">正在读取整理内容…</p>)}
     <div className="task-run-card-actions">{isActive(run) && <button type="button" className="pm-ghost" disabled={busy || taskStopping(run)} onClick={onCancel}>{taskStopping(run) ? '正在停止…' : '停止任务'}</button>}{['failed', 'cancelled'].includes(run.status) && run.id.startsWith('task-') && <button type="button" className="pm-ghost" disabled={busy} onClick={onRetry}>重新执行</button>}</div>
     <TaskTechnicalLogs key={run.id} run={run} />
   </aside></>;

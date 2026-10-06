@@ -40,7 +40,7 @@ export function resolveQuickMaintenancePhases(): CyclePhase[] {
   return ALL_PHASES.filter((p) => QUICK_PHASE_SET.has(p));
 }
 
-export type QuickMaintenanceOpts = Omit<CycleOpts, 'phases' | 'includeByMention' | 'includeHistoricalMarkdownCatchUp' | 'forcePackPhases'>;
+export type QuickMaintenanceOpts = Omit<CycleOpts, 'phases' | 'includeByMention' | 'includeNer' | 'includeHistoricalMarkdownCatchUp' | 'forcePackPhases'>;
 
 /**
  * Run one Quick Maintenance cycle.
@@ -56,6 +56,7 @@ export async function runQuickMaintenance(
     ...opts,
     phases: resolveQuickMaintenancePhases(),
     includeByMention: true,
+    includeNer: true,
     includeHistoricalMarkdownCatchUp: true,
     // Quick Maintenance is the product's one-click Source sync. Keep the
     // generic cycle default unchanged, but include committed local documents
@@ -124,6 +125,10 @@ export function combineQuickMaintenanceReports(
     const failedSources = sourcePhases.filter(item => item.phase.status === 'fail').length;
     const details = {
       ...mergePhaseDetails(phaseResults),
+      ...Object.fromEntries(['relation_backfill_error', 'by_mention_error', 'ner_error'].flatMap(key => {
+        const errors = sourcePhases.filter(item => item.phase.details[key]).map(item => `${item.sourceId}: ${String(item.phase.details[key])}`);
+        return errors.length ? [[key, errors.join('; ')]] : [];
+      })),
       sources_processed: sourcePhases.length,
       sources_failed: failedSources,
       source_results: sourcePhases.map(({ sourceId, phase }) => ({

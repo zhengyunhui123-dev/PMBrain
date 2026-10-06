@@ -4,6 +4,23 @@ import { resumeMaintenanceCheckpoint } from '../src/product/tasks/checkpoint.ts'
 import type { MaintenanceCheckpoint } from '../src/product/tasks/types.ts';
 
 describe('任务的产品进度', () => {
+  test('深度整理保存观点产出、长期判断和未完成页，旧结果重读仍能显示',()=>{
+    const adapter=new TaskProgressAdapter('dream_full');adapter.plan(['propose_takes','consolidate']);
+    const result={status:'partial',totals:{pages_added:0,proposals_inserted:374,consolidate_takes_written:8,facts_consolidated:16},phases:[
+      {phase:'propose_takes',status:'warn',details:{pages_processed:99,pages_failed:1,remaining:2220,proposals_inserted:374}},
+      {phase:'consolidate',status:'ok',details:{takes_written:8,facts_consolidated:16}},
+    ]};
+    const view=finishTaskProgress(adapter.view,'completed',result,null);
+    expect(view.metrics).toContainEqual({label:'候选观点',value:374});
+    expect(view.metrics).toContainEqual({label:'长期判断',value:8});
+    expect(view.metrics).toContainEqual({label:'合并事实',value:16});
+    expect(view.metrics).toContainEqual({label:'观点失败页',value:1});
+    expect(view.metrics).toContainEqual({label:'待提炼页',value:2220});
+    expect(view.stage).toContain('部分完成');
+    expect(finishTaskProgress({...adapter.view,metrics:[{label:'新增资料',value:0}]},'completed',result,null).metrics).toEqual(view.metrics);
+    const quick=new TaskProgressAdapter('dream_quick');
+    expect(finishTaskProgress(quick.view,'completed',result,null).metrics.some(row=>row.label==='候选观点')).toBe(false);
+  });
   test('继续保留完成的知识源和阶段，仅重跑未完成的部分', () => {
     const phase=(name:string,status='ok')=>({phase:name,status,duration_ms:0,summary:'test',details:{}}) as any;
     const checkpoint:MaintenanceCheckpoint={phases:{first:[phase('sync'),phase('extract')],second:[phase('lint'),phase('sync'),phase('extract','fail'),phase('embed')]},
@@ -126,5 +143,14 @@ describe('任务的产品进度', () => {
     expect(adapter.view.percent).toBe(50);
     expect(adapter.view.steps.find(step => step.id === 'vector')?.status).toBe('pending');
     expect(adapter.view.file).toBe('one.md');
+  });
+  test('快速和深度整理的列表统计都保留关系分项和历史剩余', () => {
+    for (const kind of ['dream_quick','dream_full']) {
+      const result = finishTaskProgress(new TaskProgressAdapter(kind).view,'completed',{phases:[{phase:'extract',status:'ok',details:{relationLinksCreated:2,mentionLinksCreated:4,nerLinksCreated:2,relationHistoricalRemaining:3,mentionHistoricalRemaining:1}}]},null);
+      expect(result.metrics).toContainEqual({label:'历史显式关联',value:2});
+      expect(result.metrics).toContainEqual({label:'正文实体关联',value:4});
+      expect(result.metrics).toContainEqual({label:'关系类型关联',value:2});
+      expect(result.metrics).toContainEqual({label:'历史待补关联',value:3});
+    }
   });
 });

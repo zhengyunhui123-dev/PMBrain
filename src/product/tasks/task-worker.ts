@@ -5,7 +5,7 @@ import { reloadLiveGateway } from '../../core/ai/reload-live-gateway.ts';
 import { DEFAULT_CLI_OPTIONS, setCliOptions } from '../../core/cli-options.ts';
 import { runStructuredImport, importSyncFile } from '../../commands/import.ts';
 import { ALL_PHASES, runCycle, type CyclePhase } from '../../core/cycle.ts';
-import { resolveDreamPresetPhases, resolveBrainDir } from '../../commands/dream.ts';
+import { resolveDreamPresetPhases, resolveDreamRelationOptions, resolveBrainDir } from '../../commands/dream.ts';
 import { runQuickMaintenance, combineQuickMaintenanceReports, resolveQuickMaintenancePhases } from '../../core/quick-maintenance.ts';
 import { fetchSource, loadAllSources, parseSourceConfig } from '../../core/sources-load.ts';
 import { resolveSourceId } from '../../core/source-resolver.ts';
@@ -206,6 +206,7 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
   const brainDir = await resolveBrainDir(engine, null, sourceId);
   if (input.preset === 'quick') return runQuickMaintenance(engine, { ...common, brainDir, ...resumeOptions(sourceId ?? 'default') });
   return runCycle(engine, {
+    ...resolveDreamRelationOptions(input.preset, input.phase),
     ...common, brainDir,
     phases: input.phase && input.phase !== 'all' ? [input.phase as CyclePhase]
       : input.preset ? resolveDreamPresetPhases(input.preset) : undefined,

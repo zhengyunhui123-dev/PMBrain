@@ -19,9 +19,14 @@ import type { BrainEngine } from './engine.ts';
 import type { LinkBatchInput } from './engine.ts';
 import { buildGazetteer, findMentionedEntities, type Gazetteer } from './by-mention.ts';
 import { inferLinkTypeFromPack } from './schema-pack/link-inference.ts';
-import { loadActivePackBestEffort } from './schema-pack/best-effort.ts';
+import { loadActivePack } from './schema-pack/load-active.ts';
+import { loadConfig } from './config.ts';
+import { inferLinkType } from './link-extraction.ts';
+import type { PageType } from './types.ts';
 
 export interface ExtractNerOpts {
+  signal?: AbortSignal;
+  yieldDuringPhase?: () => Promise<void>;
   /** When true: enumerate but don't write. */
   dryRun?: boolean;
   /** Optional source-id filter on the WALK (gazetteer stays brain-wide). */
@@ -81,7 +86,10 @@ export function inferNerLinkType(
 ): string | null {
   if (!targetType) return null;
   try {
-    return inferLinkTypeFromPack(pack, targetType, context);
+    const inferred = inferLinkTypeFromPack(pack, targetType, context);
+    if (inferred) return inferred;
+    const existing = inferLinkType(targetType as PageType, context);
+    return existing !== 'mentions' && pack.link_types.some(rule => rule.name === existing) ? existing : null;
   } catch {
     return null;
   }
@@ -101,10 +109,17 @@ export async function extractNerLinks(
   engine: BrainEngine,
   opts: ExtractNerOpts = {},
 ): Promise<ExtractNerResult> {
+  opts.signal?.throwIfAborted();
   const dryRun = opts.dryRun ?? false;
 
   // Pack best-effort: no pack → no inference → nothing to do.
-  const pack = await loadActivePackBestEffort({ engine } as never);
+  const dbConfig = await engine.getConfig('schema_pack');
+  const sourcePack = opts.sourceIdFilter ? await engine.getConfig(`schema_pack.source.${opts.sourceIdFilter}`) : null;
+  const pack = await loadActivePack({
+    cfg: loadConfig(), remote: true, sourceId: opts.sourceIdFilter,
+    dbConfig: dbConfig ?? undefined,
+    perSourceDb: opts.sourceIdFilter && sourcePack ? new Map([[opts.sourceIdFilter, sourcePack]]) : undefined,
+  }).catch(() => null);
   if (!pack || !pack.manifest?.link_types || pack.manifest.link_types.length === 0) {
     return { pages: 0, created: 0, pack_unavailable: true };
   }
@@ -136,13 +151,10 @@ export async function extractNerLinks(
   const sinceMs = opts.since ? new Date(opts.since).getTime() : null;
 
   async function flush() {
+    opts.signal?.throwIfAborted();
     if (batch.length === 0) return;
     if (!dryRun) {
-      try {
-        created += await engine.addLinksBatch(batch); // gbrain-allow-direct-insert: extract-ner — typed NER link write
-      } catch {
-        // batch error: drop; the per-page progress continues
-      }
+      created += await engine.addLinksBatch(batch); // gbrain-allow-direct-insert: extract-ner — typed NER link write
     } else {
       created += batch.length;
     }
@@ -150,6 +162,9 @@ export async function extractNerLinks(
   }
 
   for (const { slug, source_id } of allRefs) {
+    opts.signal?.throwIfAborted();
+    if (processed % 25 === 0) await opts.yieldDuringPhase?.();
+    opts.signal?.throwIfAborted();
     const page = await engine.getPage(slug, { sourceId: source_id });
     if (!page) continue;
     if (opts.typeFilter && page.type !== opts.typeFilter) continue;
@@ -200,17 +215,13 @@ export async function extractNerLinks(
  */
 async function buildTargetTypeMap(engine: BrainEngine): Promise<Map<string, string>> {
   const map = new Map<string, string>();
-  try {
-    const result = await engine.executeRaw<{ slug: string; source_id: string; type: string }>(
-      `SELECT slug, source_id, type FROM pages
-         WHERE type IN ('person', 'company', 'organization', 'entity')
-           AND deleted_at IS NULL`,
-    );
-    for (const row of result) {
-      map.set(`${row.source_id}::${row.slug}`, row.type);
-    }
-  } catch {
-    // Engine error → empty map; inferNerLinkType returns null for unknown types.
+  const result = await engine.executeRaw<{ slug: string; source_id: string; type: string }>(
+    `SELECT slug, source_id, type FROM pages
+       WHERE type IN ('person', 'company', 'organization', 'entity')
+         AND deleted_at IS NULL`,
+  );
+  for (const row of result) {
+    map.set(`${row.source_id}::${row.slug}`, row.type);
   }
   return map;
 }

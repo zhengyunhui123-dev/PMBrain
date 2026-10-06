@@ -120,6 +120,16 @@ export function resolveDreamPresetPhases(preset: DreamPreset): CyclePhase[] {
   return ALL_PHASES.filter((phase) => selected.has(phase));
 }
 
+export function resolveDreamRelationOptions(preset?: DreamPreset | null, phase?: string | null) {
+  if (preset !== 'full' && (preset || (phase && phase !== 'all'))) return {};
+  return {
+    includeByMention: true,
+    includeHistoricalMarkdownCatchUp: true,
+    includeNer: true,
+    refreshRelationsAfterGeneration: true,
+  };
+}
+
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 /**
@@ -742,6 +752,7 @@ export async function runDream(engine: BrainEngine | null, args: string[]): Prom
       : undefined;
 
   const report = await runCycle(engine, {
+    ...resolveDreamRelationOptions(opts.preset, opts.phase),
     brainDir,
     dryRun: opts.dryRun,
     pull: opts.pull,
