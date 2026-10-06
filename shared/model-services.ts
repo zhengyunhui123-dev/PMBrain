@@ -8,6 +8,8 @@ export interface ServiceModel {
   contextWindow?: number;
   inputPrice?: number;
   outputPrice?: number;
+  inputPriceCny?: number;
+  outputPriceCny?: number;
   dimensions?: number;
   typeOverride?: boolean;
 }

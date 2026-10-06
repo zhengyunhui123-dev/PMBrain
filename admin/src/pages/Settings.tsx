@@ -9,6 +9,7 @@ import { LoadingBlock, useOverview } from './console-shared';
 import type {
   DreamScheduleResponse,
   DreamSettingsResponse,
+  EntityCaptureBudgetResponse,
 } from '../../../shared/contracts/index.ts';
 export function ModelConfigPage() {
   const { overview, reload } = useOverview();
@@ -375,6 +376,99 @@ function DreamScheduleSettings() {
     </section>
   );
 }
+function EntityCaptureBudgetSettings() {
+  const [loaded, setLoaded] = useState<EntityCaptureBudgetResponse | null>(null);
+  const [choice, setChoice] = useState('5');
+  const [custom, setCustom] = useState('8');
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    void api.entityCaptureBudget()
+      .then(next => {
+        setLoaded(next);
+        if (next.costCapCny == null) setChoice('unlimited');
+        else if (next.costCapCny === 1 || next.costCapCny === 5 || next.costCapCny === 20) setChoice(String(next.costCapCny));
+        else {
+          setChoice('custom');
+          setCustom(String(next.costCapCny));
+        }
+      })
+      .catch(nextError => setError(nextError instanceof Error ? nextError.message : String(nextError)));
+  }, []);
+
+  const selected = choice === 'unlimited'
+    ? null
+    : choice === 'custom'
+      ? Number(custom)
+      : Number(choice);
+  const valid = choice === 'unlimited' || (typeof selected === 'number' && Number.isFinite(selected) && selected > 0);
+  const dirty = loaded != null && selected !== loaded.costCapCny;
+
+  const save = async () => {
+    if (!valid || selected === undefined) {
+      setError('请填写大于 0 的金额');
+      return;
+    }
+    setSaving(true);
+    setMessage('');
+    setError('');
+    try {
+      const next = await api.saveEntityCaptureBudget(selected == null ? 'unlimited' : selected);
+      setLoaded(next);
+      setMessage(next.costCapCny == null ? '已取消单次费用上限' : `单次费用上限已设为 ${next.costCapCny} 元`);
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : String(nextError));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <section className="pm-card dream-schedule-settings settings-panel">
+      <div className="settings-panel-title">
+        <span className="settings-panel-icon"><Sparkles /></span>
+        <div>
+          <h2>AI 实体回填</h2>
+          <p>只限制深度整理里的实体识别。达到费用上限后保留已完成结果，剩余资料下次继续，本地 Ollama 不计入金额。</p>
+        </div>
+      </div>
+      <div className="dream-schedule-row">
+        <label htmlFor="entity-capture-cost-cap">单次费用上限</label>
+        <select id="entity-capture-cost-cap" value={choice} onChange={event => setChoice(event.target.value)} disabled={saving || !loaded}>
+          <option value="1">1 元</option>
+          <option value="5">5 元</option>
+          <option value="20">20 元</option>
+          <option value="unlimited">不限制</option>
+          <option value="custom">自定义</option>
+        </select>
+        {choice === 'custom' && (
+          <input
+            aria-label="自定义费用上限"
+            type="number"
+            min="0.01"
+            step="0.01"
+            value={custom}
+            onChange={event => setCustom(event.target.value)}
+            disabled={saving}
+          />
+        )}
+        <button className="pm-primary" onClick={() => void save()} disabled={!loaded || saving || !dirty || !valid}>
+          {saving ? '正在保存…' : '保存'}
+        </button>
+      </div>
+      <p className="pm-hint dream-schedule-note">
+        默认 5 元。未返回用量或模型未填写人民币价格时，只按每轮 100 篇和 Token 上限停止，不估算金额。
+      </p>
+      {(message || error) && <div className="settings-feedback" aria-live="polite">
+        {message && <span className="pm-ok">{message}</span>}
+        {error && <span className="pm-error-text">{error}</span>}
+      </div>}
+    </section>
+  );
+}
+
 export type SettingsSection = 'general' | 'knowledge' | 'dream';
 
 const SETTINGS_SECTIONS: Array<{
@@ -461,6 +555,7 @@ export function SettingsPage({
           <div className="settings-section-stack">
             <DreamSettings />
             <DreamScheduleSettings />
+            <EntityCaptureBudgetSettings />
           </div>
         )}
       </div>

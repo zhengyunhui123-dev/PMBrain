@@ -170,6 +170,16 @@ export function finishTaskProgress(view: TaskProductProgress, status: string, re
     add('历史待补关联', Math.max(relations?.relationHistoricalRemaining ?? 0, relations?.mentionHistoricalRemaining ?? 0) || (relations?.historical_relation_backfill ? 0 : undefined));
     const lint = data.phases.find((phase: any) => phase.phase === 'lint');
     add('待检查项', lint?.details?.issues);
+    const capture = data.phases.find((phase: any) => phase.phase === 'capture_entities')?.details;
+    if (capture) {
+      add('已处理页面', capture.pages_processed);
+      add('已处理分块', capture.chunks_processed);
+      add('输入 Token', capture.input_tokens);
+      add('输出 Token', capture.output_tokens);
+      if (typeof capture.cost_cny === 'number') add('当前费用', capture.cost_cny);
+      if (typeof capture.cost_cap_cny === 'number') add('费用上限', capture.cost_cap_cny);
+      add('剩余页面', capture.pages_remaining);
+    }
   }
   add('孤立知识', data.totals?.orphans_found);
   if (metrics.length) next.metrics = metrics;

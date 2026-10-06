@@ -6,10 +6,27 @@ import type { BrainEngine } from '../engine.ts';
 import type { PhaseResult } from '../cycle.ts';
 import { DEFAULT_PRIVATE_QUEUE_LEASE_MS, MinionQueue } from '../minions/queue.ts';
 import { waitForCompletion, TimeoutError } from '../minions/wait-for-completion.ts';
-import type { MinionHandler, MinionJobInput, SubagentHandlerData } from '../minions/types.ts';
+import type { MinionHandler, SubagentHandlerData } from '../minions/types.ts';
 import { dreamModelDetails, resolveDreamModel, resolveSubagentExecutionMode } from './model-routing.ts';
 import { runSubagentsInline } from './inline-drain.ts';
 import { throwIfAborted } from '../abort-check.ts';
+import { loadConfig } from '../config.ts';
+import { LINKABLE_ENTITY_TYPES } from '../by-mention.ts';
+import { normalizeAliasList } from '../search/alias-normalize.ts';
+import {
+  DEFAULT_ENTITY_CAPTURE_MAX_INPUT_TOKENS,
+  DEFAULT_ENTITY_CAPTURE_MAX_OUTPUT_TOKENS,
+  ENTITY_CAPTURE_CANDIDATE_LIMIT,
+  type CaptureEntityBrief,
+  captureBudgetStop,
+  captureChunkCostCny,
+  isOllamaModel,
+  rankCaptureCandidates,
+  readEntityCaptureCostCap,
+  readModelCnyPrices,
+  readTokenCap,
+  usageFromJobResult,
+} from './entity-capture-budget.ts';
 
 export const ENTITY_CAPTURE_PAGE_BUDGET = 100;
 export const ENTITY_CAPTURE_CHUNK_CHARS = 8000;
@@ -56,6 +73,15 @@ export interface CaptureEntitiesOpts {
   privateQueueOwnerJobId?: number | null;
   maxPages?: number;
   handler?: MinionHandler;
+  budget?: {
+    maxPages?: number;
+    maxInputTokens?: number;
+    maxOutputTokens?: number;
+    costCapCny?: number | null;
+    inputPriceCnyPerMillion?: number | null;
+    outputPriceCnyPerMillion?: number | null;
+    ollama?: boolean;
+  };
 }
 
 export function locateSignalDetectorSkillsDir(): string | null {
@@ -95,11 +121,20 @@ export function splitEntityCaptureCandidate(page: EntityCaptureCandidate): Entit
   }));
 }
 
-export function buildEntityCapturePrompt(page: EntityCaptureCandidate | EntityCaptureChunk): string {
+export function buildEntityCapturePrompt(
+  page: EntityCaptureCandidate | EntityCaptureChunk,
+  candidates: CaptureEntityBrief[] = [],
+): string {
   const isChunk = 'chunkBody' in page;
   const body = isChunk ? page.chunkBody : page.body;
   const chunkIndex = isChunk ? page.chunkIndex : 0;
   const chunkCount = isChunk ? page.chunkCount : 1;
+  const candidateBlock = candidates.length === 0
+    ? '这一段没有检索到相关的已有实体。创建前仍必须 search。'
+    : candidates.map(candidate => {
+      const aliases = candidate.aliases.length > 0 ? candidate.aliases.join('、') : '无';
+      return `- ${candidate.slug} | ${candidate.type} | ${candidate.title} | aliases: ${aliases}`;
+    }).join('\n');
   return `你正在执行用户明确发起的深度整理。这一份资料要按知识整理 Skill 处理，不是按固定的会议或观点模板处理。
 
 开始写任何页面前，必须按顺序调用工具：
@@ -113,10 +148,15 @@ export function buildEntityCapturePrompt(page: EntityCaptureCandidate | EntityCa
 - title: ${page.title}
 - 分块: 第 ${chunkIndex + 1}/${chunkCount} 段
 
+已有相关实体候选（只含 slug、title、type、aliases，不是全库）：
+${candidateBlock}
+
 实体规则以 signal-detector 为准，这里只保留不能跳过的判定：
 - 找出值得记录的人物、公司、项目和概念。一次性的旁述不要建页。
+- 候选里已经有的人、单位、项目或概念必须复用该 slug。新别名写回已有页，不要新建第二页。
 - 每个候选先 search。没有页面且值得记录，用 put_page 创建。
 - 已有页面但内容薄，读取后补充，保留已有事实。内容已经充实就不要覆盖。
+- 类型只能是 person、company、organization、project、concept。无法判断类型时不要 put_page，绝对不能把未知类型写成 concept。
 - 人物写入 people/，公司写入 companies/，概念写入 concepts/，项目写入 projects/。
 - 页面标题使用资料里的原名，并在正文用 Markdown 链接引用当前资料 slug。
 - 只记录资料里出现的事实。不要编造。
@@ -197,6 +237,56 @@ export async function selectEntityCaptureCandidates(
   }));
 }
 
+export async function loadCaptureEntityIndex(
+  engine: BrainEngine,
+  sourceId?: string,
+): Promise<CaptureEntityBrief[]> {
+  const rows = await engine.executeRaw<{
+    slug: string;
+    source_id: string | null;
+    type: string;
+    title: string | null;
+    frontmatter: unknown;
+  }>(
+    `SELECT slug, source_id, type, title, frontmatter
+       FROM pages
+      WHERE deleted_at IS NULL
+        AND type = ANY($1::text[])
+        AND ($2::text IS NULL OR source_id = $2 OR source_id = 'default')
+      ORDER BY source_id, slug`,
+    [[...LINKABLE_ENTITY_TYPES], sourceId ?? null],
+  );
+  return rows.map(row => {
+    const frontmatter = row.frontmatter && typeof row.frontmatter === 'object'
+      ? row.frontmatter as Record<string, unknown>
+      : null;
+    return {
+      slug: row.slug,
+      sourceId: row.source_id ?? 'default',
+      type: row.type,
+      title: row.title?.trim() || row.slug,
+      aliases: normalizeAliasList(frontmatter?.aliases),
+    };
+  });
+}
+
+function configuredCnyPrices(model: string, providerId: string | null): { input: number | null; output: number | null } {
+  try {
+    const config = loadConfig() as { desktop?: { model_services?: unknown } } | null;
+    const services = config?.desktop?.model_services;
+    if (!Array.isArray(services)) return { input: null, output: null };
+    return readModelCnyPrices(services, model, providerId);
+  } catch {
+    return { input: null, output: null };
+  }
+}
+
+function storedPrice(raw: string | null | undefined): number | null | undefined {
+  if (raw == null || raw.trim() === '') return undefined;
+  const amount = Number(raw);
+  return Number.isFinite(amount) && amount >= 0 ? amount : undefined;
+}
+
 async function retryableKey(engine: BrainEngine, baseKey: string, nonce: number): Promise<string> {
   const rows = await engine.executeRaw<{ status: string }>(
     `SELECT status FROM minion_jobs WHERE idempotency_key = $1 LIMIT 1`,
@@ -271,7 +361,25 @@ export async function runPhaseCaptureEntities(
   }
   const executionMode = await resolveSubagentExecutionMode(engine, resolvedModel.model);
   const modelDetails = dreamModelDetails(resolvedModel, executionMode);
-  const budget = Math.max(1, opts.maxPages ?? ENTITY_CAPTURE_PAGE_BUDGET);
+  const budgetOpt = opts.budget;
+  const pageBudget = Math.max(1, budgetOpt?.maxPages ?? opts.maxPages ?? ENTITY_CAPTURE_PAGE_BUDGET);
+  const maxInputTokens = budgetOpt?.maxInputTokens
+    ?? readTokenCap(await engine.getConfig('dream.entity_capture.max_input_tokens'), DEFAULT_ENTITY_CAPTURE_MAX_INPUT_TOKENS);
+  const maxOutputTokens = budgetOpt?.maxOutputTokens
+    ?? readTokenCap(await engine.getConfig('dream.entity_capture.max_output_tokens'), DEFAULT_ENTITY_CAPTURE_MAX_OUTPUT_TOKENS);
+  const costCapCny = budgetOpt && 'costCapCny' in budgetOpt
+    ? budgetOpt.costCapCny ?? null
+    : readEntityCaptureCostCap(await engine.getConfig('dream.entity_capture.cost_cap_cny'));
+  const cardPrices = configuredCnyPrices(resolvedModel.model, resolvedModel.provider_id);
+  const storedInput = storedPrice(await engine.getConfig('dream.entity_capture.price.input_cny_per_million'));
+  const storedOutput = storedPrice(await engine.getConfig('dream.entity_capture.price.output_cny_per_million'));
+  const inputPrice = budgetOpt && 'inputPriceCnyPerMillion' in budgetOpt
+    ? budgetOpt.inputPriceCnyPerMillion ?? null
+    : storedInput ?? cardPrices.input;
+  const outputPrice = budgetOpt && 'outputPriceCnyPerMillion' in budgetOpt
+    ? budgetOpt.outputPriceCnyPerMillion ?? null
+    : storedOutput ?? cardPrices.output;
+  const ollama = budgetOpt?.ollama ?? isOllamaModel(resolvedModel.model, resolvedModel.provider_id);
   const nonce = Date.now();
   const pendingPages: Array<{ page: EntityCaptureCandidate; chunks: EntityCaptureChunk[] }> = [];
   for (const page of candidates) {
@@ -283,97 +391,171 @@ export async function runPhaseCaptureEntities(
     }
     if (pendingChunks.length > 0) pendingPages.push({ page, chunks: pendingChunks });
   }
-  const pageBatch = pendingPages.slice(0, budget);
-  const batch = pageBatch.flatMap(item => item.chunks);
-  const remainingAfterBatch = Math.max(0, pendingPages.length - pageBatch.length);
-  if (batch.length === 0) {
+  if (pendingPages.length === 0) {
     return phaseResult('ok', '这些资料已经按 signal-detector 识别过实体', {
       ...modelDetails,
       pages_seen: candidates.length,
       pages_submitted: 0,
+      pages_processed: 0,
+      chunks_submitted: 0,
+      chunks_processed: 0,
       pages_remaining: 0,
       pages_failed: 0,
+      input_tokens: 0,
+      output_tokens: 0,
+      cost_cny: ollama ? 0 : null,
+      cost_cap_cny: costCapCny,
       entities_written: 0,
       written_slugs: [],
       source_slugs: [],
       skill: 'signal-detector',
       skills_dir: skillsDir,
+      ollama,
     });
   }
 
+  const entityIndex = await loadCaptureEntityIndex(engine, opts.sourceId);
   const queue = new MinionQueue(engine);
   const childQueueName = `dream-inline-${Date.now()}-${randomUUID().slice(0, 8)}`;
   const ownerToken = randomUUID();
   const childIds: number[] = [];
   const sourceSlugs = new Set<string>();
-  const jobSourceSlugs = new Map<number, string>();
+  let pagesSubmitted = 0;
+  let pagesProcessed = 0;
+  let chunksSubmitted = 0;
+  let chunksProcessed = 0;
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let usageKnown = false;
+  let usageMissing = false;
+  let knownCost = ollama ? 0 : 0;
+  let sawPricedUsage = ollama;
+  let failedChunks = 0;
+  let budgetStop: 'pages' | 'tokens' | 'cost' | null = null;
+  const failedPageSlugs = new Set<string>();
+  const stopState = (checkingPageBudget: boolean) => captureBudgetStop({
+    pagesSubmitted,
+    maxPages: pageBudget,
+    inputTokens,
+    outputTokens,
+    maxInputTokens,
+    maxOutputTokens,
+    usageKnown,
+    costCny: ollama ? 0 : (sawPricedUsage ? knownCost : null),
+    costCapCny: ollama ? null : costCapCny,
+    checkingPageBudget,
+  });
   try {
-    for (const chunk of batch) {
+    for (const item of pendingPages) {
       throwIfAborted(opts.signal, '[dream] capture entities');
-      const baseKey = entityCaptureIdempotencyKey(chunk, chunk.chunkIndex, chunk.chunkBody);
-      const idempotencyKey = await retryableKey(engine, baseKey, nonce);
-      const data: SubagentHandlerData = {
-        prompt: buildEntityCapturePrompt(chunk),
-        model: resolvedModel.model,
-        max_turns: 12,
-        allowed_tools: [...ENTITY_CAPTURE_TOOLS],
-        allowed_slug_prefixes: [...ENTITY_CAPTURE_SLUG_PREFIXES],
-        source_id: chunk.sourceId,
-        skills_dir: skillsDir,
-      };
-      const submitOpts: Partial<MinionJobInput> = {
-        max_stalled: 2,
-        idempotency_key: idempotencyKey,
-        timeout_ms: 8 * 60 * 1000,
-        queue: childQueueName,
-        private_queue_owner_job_id: opts.privateQueueOwnerJobId ?? null,
-        private_queue_owner_token: ownerToken,
-        private_queue_lease_ms: DEFAULT_PRIVATE_QUEUE_LEASE_MS,
-      };
-      const child = await queue.add(
-        'subagent',
-        data as unknown as Record<string, unknown>,
-        submitOpts,
-        { allowProtectedSubmit: true },
-      );
-      sourceSlugs.add(chunk.slug);
-      if (child.status === 'completed') continue;
-      childIds.push(child.id);
-      jobSourceSlugs.set(child.id, chunk.slug);
-    }
-
-    await runSubagentsInline(
-      engine,
-      queue,
-      childQueueName,
-      opts.yieldDuringPhase,
-      opts.handler,
-      undefined,
-      opts.signal,
-    );
-
-    let failedChunks = 0;
-    const failedPageSlugs = new Set<string>();
-    for (const jobId of childIds) {
-      try {
-        const job = await waitForCompletion(queue, jobId, {
-          timeoutMs: 8 * 60 * 1000,
-          pollMs: 200,
-          signal: opts.signal,
-          onPoll: opts.yieldDuringPhase,
-        });
+      const pageStop = stopState(true);
+      if (pageStop) {
+        budgetStop = pageStop;
+        break;
+      }
+      let submittedForPage = 0;
+      let completedForPage = 0;
+      for (const chunk of item.chunks) {
+        throwIfAborted(opts.signal, '[dream] capture entities');
+        const chunkStop = stopState(false);
+        if (chunkStop) {
+          budgetStop = chunkStop;
+          break;
+        }
+        const related = rankCaptureCandidates(chunk.chunkBody, entityIndex.filter(entity =>
+          entity.sourceId === chunk.sourceId || entity.sourceId === 'default',
+        ), { limit: ENTITY_CAPTURE_CANDIDATE_LIMIT, sourceId: chunk.sourceId });
+        const baseKey = entityCaptureIdempotencyKey(chunk, chunk.chunkIndex, chunk.chunkBody);
+        const idempotencyKey = await retryableKey(engine, baseKey, nonce);
+        const data: SubagentHandlerData = {
+          prompt: buildEntityCapturePrompt(chunk, related),
+          model: resolvedModel.model,
+          max_turns: 12,
+          allowed_tools: [...ENTITY_CAPTURE_TOOLS],
+          allowed_slug_prefixes: [...ENTITY_CAPTURE_SLUG_PREFIXES],
+          source_id: chunk.sourceId,
+          skills_dir: skillsDir,
+        };
+        const child = await queue.add(
+          'subagent',
+          data as unknown as Record<string, unknown>,
+          {
+            max_stalled: 2,
+            idempotency_key: idempotencyKey,
+            timeout_ms: 8 * 60 * 1000,
+            queue: childQueueName,
+            private_queue_owner_job_id: opts.privateQueueOwnerJobId ?? null,
+            private_queue_owner_token: ownerToken,
+            private_queue_lease_ms: DEFAULT_PRIVATE_QUEUE_LEASE_MS,
+          },
+          { allowProtectedSubmit: true },
+        );
+        sourceSlugs.add(chunk.slug);
+        submittedForPage += 1;
+        chunksSubmitted += 1;
+        if (child.status === 'completed') {
+          completedForPage += 1;
+          chunksProcessed += 1;
+          continue;
+        }
+        childIds.push(child.id);
+        await runSubagentsInline(
+          engine,
+          queue,
+          childQueueName,
+          opts.yieldDuringPhase,
+          opts.handler,
+          undefined,
+          opts.signal,
+        );
+        await opts.yieldDuringPhase?.();
+        let job;
+        try {
+          job = await waitForCompletion(queue, child.id, {
+            timeoutMs: 8 * 60 * 1000,
+            pollMs: 200,
+            signal: opts.signal,
+            onPoll: opts.yieldDuringPhase,
+          });
+        } catch (error) {
+          if (error instanceof TimeoutError) {
+            failedChunks += 1;
+            failedPageSlugs.add(chunk.slug);
+            continue;
+          }
+          throw error;
+        }
         if (job.status !== 'completed') {
           failedChunks += 1;
-          const sourceSlug = jobSourceSlugs.get(jobId);
-          if (sourceSlug) failedPageSlugs.add(sourceSlug);
+          failedPageSlugs.add(chunk.slug);
+          continue;
         }
-      } catch (error) {
-        if (error instanceof TimeoutError) {
-          failedChunks += 1;
-          const sourceSlug = jobSourceSlugs.get(jobId);
-          if (sourceSlug) failedPageSlugs.add(sourceSlug);
-        } else throw error;
+        completedForPage += 1;
+        chunksProcessed += 1;
+        const usage = usageFromJobResult(job.result);
+        const chunkCost = captureChunkCostCny({
+          usage,
+          inputPriceCnyPerMillion: inputPrice,
+          outputPriceCnyPerMillion: outputPrice,
+          ollama,
+        });
+        if (!usage.present) usageMissing = true;
+        else {
+          usageKnown = true;
+          inputTokens += usage.input;
+          outputTokens += usage.output;
+        }
+        if (ollama) {
+          knownCost = 0;
+          sawPricedUsage = true;
+        } else if (chunkCost != null) {
+          knownCost += chunkCost;
+          sawPricedUsage = true;
+        }
       }
+      if (submittedForPage > 0) pagesSubmitted += 1;
+      if (completedForPage === item.chunks.length) pagesProcessed += 1;
+      if (budgetStop) break;
     }
 
     const written = childIds.length === 0
@@ -388,18 +570,35 @@ export async function runPhaseCaptureEntities(
       );
     const writtenSlugs = written.map(row => row.slug).filter(slug => typeof slug === 'string' && slug.length > 0).sort();
     const failedPages = failedPageSlugs.size;
-    const status: PhaseResult['status'] = failedChunks > 0 ? (writtenSlugs.length > 0 ? 'warn' : 'fail') : 'ok';
+    const pagesRemaining = pendingPages.length - pagesProcessed;
+    const status: PhaseResult['status'] = failedChunks > 0 ? (writtenSlugs.length > 0 || pagesProcessed > 0 ? 'warn' : 'fail') : 'ok';
+    const capNote = budgetStop === 'cost'
+      ? '本轮费用已到上限，未继续提交新的模型分块。'
+      : budgetStop === 'tokens'
+        ? '本轮 Token 已到上限，未继续提交新的模型分块。'
+        : budgetStop === 'pages'
+          ? '本轮页面额度已用完，剩余资料保持待处理。'
+          : '';
     const summary = failedChunks > 0
-      ? `实体识别有 ${failedPages} 份资料（${failedChunks} 个分块）失败，已写入 ${writtenSlugs.length} 个实体页，剩余 ${remainingAfterBatch} 份`
-      : `已按 signal-detector 检查 ${pageBatch.length} 份资料（${batch.length} 个分块），写入 ${writtenSlugs.length} 个实体页，剩余 ${remainingAfterBatch} 份`;
+      ? `实体识别有 ${failedPages} 份资料（${failedChunks} 个分块）失败，已写入 ${writtenSlugs.length} 个实体页，剩余 ${pagesRemaining} 份。${capNote}`
+      : `已按 signal-detector 检查 ${pagesProcessed} 份资料（${chunksProcessed} 个分块），写入 ${writtenSlugs.length} 个实体页，剩余 ${pagesRemaining} 份。${capNote}`;
     return phaseResult(status, summary, {
       ...modelDetails,
       pages_seen: candidates.length,
-      pages_submitted: pageBatch.length,
-      chunks_submitted: batch.length,
-      pages_remaining: remainingAfterBatch,
+      pages_submitted: pagesSubmitted,
+      pages_processed: pagesProcessed,
+      chunks_submitted: chunksSubmitted,
+      chunks_processed: chunksProcessed,
+      pages_remaining: pagesRemaining,
       pages_failed: failedPages,
       chunks_failed: failedChunks,
+      input_tokens: inputTokens,
+      output_tokens: outputTokens,
+      usage_missing: usageMissing,
+      cost_cny: ollama ? 0 : (sawPricedUsage ? Number(knownCost.toFixed(6)) : null),
+      cost_cap_cny: costCapCny,
+      budget_stop: budgetStop,
+      ollama,
       entities_written: writtenSlugs.length,
       written_slugs: writtenSlugs,
       source_slugs: [...sourceSlugs],

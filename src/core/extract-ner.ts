@@ -181,6 +181,7 @@ export async function extractNerLinks(
     const mentions = findMentionedEntities(body, gazetteer, {
       fromSlug: slug,
       fromSourceId: source_id,
+      includeBlockedSurfaces: true,
     });
     if (mentions.length === 0) continue;
 

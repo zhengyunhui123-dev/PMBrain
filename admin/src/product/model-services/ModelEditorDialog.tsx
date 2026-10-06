@@ -101,10 +101,12 @@ export function ModelEditorDialog({ model }: { model: ModelServicesController })
               <div className="model-form-grid">
                 {(
                   [
-                    ["inputPrice", "输入价格"],
-                    ["outputPrice", "输出价格"],
+                    ["inputPrice", "输入价格", "美元 / 百万 Token，仅作参考"],
+                    ["outputPrice", "输出价格", "美元 / 百万 Token，仅作参考"],
+                    ["inputPriceCny", "输入价格", "元 / 百万 Token。填写后才统计实体回填费用"],
+                    ["outputPriceCny", "输出价格", "元 / 百万 Token。填写后才统计实体回填费用"],
                   ] as const
-                ).map(([key, label]) => (
+                ).map(([key, label, hint]) => (
                   <label key={key}>
                     {label}
                     <input
@@ -120,7 +122,7 @@ export function ModelEditorDialog({ model }: { model: ModelServicesController })
                         })
                       }
                     />
-                    <small>美元 / 百万 Token，仅作参考</small>
+                    <small>{hint}</small>
                   </label>
                 ))}
               </div>

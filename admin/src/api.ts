@@ -14,6 +14,7 @@ import {
   DreamRunResponseSchema,
   DreamScheduleResponseSchema,
   DreamSettingsResponseSchema,
+  EntityCaptureBudgetResponseSchema,
   GenerativeUsageResponseSchema,
   ImportRunResponseSchema,
   ImportUploadRunResponseSchema,
@@ -41,6 +42,7 @@ import type {
   DreamRunResponse,
   DreamScheduleResponse,
   DreamSettingsResponse,
+  EntityCaptureBudgetResponse,
   GenerativeUsageResponse,
   ImportRunResponse,
   ImportRunRequest,
@@ -238,6 +240,9 @@ export const api = {
   dreamSchedule: () => apiFetch<DreamScheduleResponse>('/admin/api/dream/schedule', undefined, DreamScheduleResponseSchema),
   saveDreamSchedule: (body: { enabled: boolean; time: string }) =>
     apiFetch<DreamScheduleResponse>('/admin/api/dream/schedule', { method: 'POST', body: JSON.stringify(body) }, DreamScheduleResponseSchema),
+  entityCaptureBudget: () => apiFetch<EntityCaptureBudgetResponse>('/admin/api/dream/entity-capture-budget', undefined, EntityCaptureBudgetResponseSchema),
+  saveEntityCaptureBudget: (costCap: number | 'unlimited') =>
+    apiFetch<EntityCaptureBudgetResponse>('/admin/api/dream/entity-capture-budget', { method: 'POST', body: JSON.stringify({ costCap }) }, EntityCaptureBudgetResponseSchema),
   generativeUsage: () => apiFetch<GenerativeUsageResponse>('/admin/api/model-usage/generative', undefined, GenerativeUsageResponseSchema),
   saveGenerativeUsage: (enabled: boolean) =>
     apiFetch<GenerativeUsageResponse>('/admin/api/model-usage/generative', { method: 'POST', body: JSON.stringify({ enabled }) }, GenerativeUsageResponseSchema),

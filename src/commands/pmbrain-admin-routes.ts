@@ -136,6 +136,7 @@ import {
   DreamRunResponseSchema,
   DreamScheduleResponseSchema,
   DreamSettingsResponseSchema,
+  EntityCaptureBudgetResponseSchema,
   GenerativeUsageResponseSchema,
   ImportRunResponseSchema,
   ImportRunRequestSchema,
@@ -941,6 +942,43 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
       }
     } catch (e) {
       res.status(500).json({ error: e instanceof Error ? e.message : 'save_dream_schedule_failed' });
+    }
+  });
+
+  const entityCaptureBudgetView = async () => {
+    const { readEntityCaptureCostCap, readTokenCap, DEFAULT_ENTITY_CAPTURE_MAX_INPUT_TOKENS, DEFAULT_ENTITY_CAPTURE_MAX_OUTPUT_TOKENS } = await import('../core/cycle/entity-capture-budget.ts');
+    const [cap, input, output] = await Promise.all([
+      engine.getConfig('dream.entity_capture.cost_cap_cny'),
+      engine.getConfig('dream.entity_capture.max_input_tokens'),
+      engine.getConfig('dream.entity_capture.max_output_tokens'),
+    ]);
+    return {
+      costCapCny: readEntityCaptureCostCap(cap),
+      maxInputTokens: readTokenCap(input, DEFAULT_ENTITY_CAPTURE_MAX_INPUT_TOKENS),
+      maxOutputTokens: readTokenCap(output, DEFAULT_ENTITY_CAPTURE_MAX_OUTPUT_TOKENS),
+    };
+  };
+
+  app.get('/admin/api/dream/entity-capture-budget', requireAdmin, async (_req: Request, res: Response) => {
+    try {
+      sendAdminContract(res, EntityCaptureBudgetResponseSchema, await entityCaptureBudgetView());
+    } catch (e) {
+      res.status(500).json({ error: e instanceof Error ? e.message : 'entity_capture_budget_failed' });
+    }
+  });
+
+  app.post('/admin/api/dream/entity-capture-budget', requireAdmin, express.json({ limit: '4kb' }), async (req: Request, res: Response) => {
+    const { parseEntityCaptureCostCapInput } = await import('../core/cycle/entity-capture-budget.ts');
+    const cap = parseEntityCaptureCostCapInput(req.body?.costCap);
+    if (cap === undefined) {
+      res.status(400).json({ error: 'entity_capture_cost_cap_invalid' });
+      return;
+    }
+    try {
+      await engine.setConfig('dream.entity_capture.cost_cap_cny', cap == null ? 'unlimited' : String(cap));
+      sendAdminContract(res, EntityCaptureBudgetResponseSchema, await entityCaptureBudgetView());
+    } catch (e) {
+      res.status(500).json({ error: e instanceof Error ? e.message : 'save_entity_capture_budget_failed' });
     }
   });
 

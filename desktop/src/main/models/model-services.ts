@@ -83,7 +83,7 @@ function validateService(service: ModelService): void {
     if (typeof model.name !== 'string' || typeof model.group !== 'string' || model.name.length > 250 || model.group.length > 100) throw new Error('模型名称或分组无效');
     if (!model.id?.trim() || model.id.length > 250 || /[\r\n]/.test(model.id) || !['chat', 'embedding', 'unknown'].includes(model.kind)) throw new Error('请检查模型 ID 和类型');
     if (!Array.isArray(model.capabilities) || model.capabilities.some(c => !['vision', 'reasoning', 'tools', 'web'].includes(c))) throw new Error('模型能力标签无效');
-    for (const value of [model.inputPrice, model.outputPrice, model.contextWindow, model.dimensions]) if (value !== undefined && (!Number.isFinite(value) || value < 0)) throw new Error('价格及上下文长度必须为非负数');
+    for (const value of [model.inputPrice, model.outputPrice, model.inputPriceCny, model.outputPriceCny, model.contextWindow, model.dimensions]) if (value !== undefined && (!Number.isFinite(value) || value < 0)) throw new Error('价格及上下文长度必须为非负数');
     if (model.dimensions !== undefined && (!Number.isInteger(model.dimensions) || model.dimensions < 1)) throw new Error('向量维度必须为正整数，或留空自动检测');
   }
 }

@@ -122,6 +122,18 @@ test('识别实体的提示、工具和可写范围按 signal-detector 收口', 
   expect(prompt).toContain('没有 add_link');
   expect(prompt).toContain('内容已经充实就不要覆盖');
   expect(prompt).toContain('不要写会议页');
+  expect(prompt).toContain('绝对不能把未知类型写成 concept');
+  const withCandidates = buildEntityCapturePrompt({
+    slug: 'notes/work',
+    sourceId: 'vault',
+    title: '工作记录',
+    body: '张三在 OpenAI 工作。',
+  }, [{ slug: 'people/zhang-san', sourceId: 'vault', type: 'person', title: '张三', aliases: ['张老师'] }]);
+  expect(withCandidates).toContain('people/zhang-san');
+  expect(withCandidates).toContain('person');
+  expect(withCandidates).toContain('张三');
+  expect(withCandidates).toContain('张老师');
+  expect(withCandidates).toContain('没有 add_link');
   expect([...ENTITY_CAPTURE_TOOLS]).toEqual([
     'list_skills', 'get_skill', 'search', 'query', 'get_page', 'list_pages', 'put_page', 'add_timeline_entry',
   ]);
@@ -243,6 +255,9 @@ test('100 篇上限按源文档计算，长文多个分块不会额外占用页�
     }, { sourceId: 'vault' });
   }
 
+  await engine.executeRaw(
+    `UPDATE pages SET updated_at = now() + interval '1 day' WHERE source_id = 'vault' AND slug = 'notes/batch-000'`,
+  );
   let calls = 0;
   const result = await runPhaseCaptureEntities(engine, {
     sourceId: 'vault',

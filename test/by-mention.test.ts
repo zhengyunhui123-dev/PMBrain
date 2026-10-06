@@ -283,6 +283,28 @@ describe('findMentionedEntities — pure cases', () => {
     });
     expect(mentions.map(mention => mention.slug)).toEqual(['projects/pmbrain-project']);
   });
+
+  test('one Han character and blocked high-frequency words do not auto-link', () => {
+    const g = gazetteerFromEntries([
+      { slug: 'entities/ma', source_id: 'default', title: '马', plainMentionBlocked: false },
+      { slug: 'concepts/system', source_id: 'default', title: '系统', plainMentionBlocked: true },
+      { slug: 'concepts/knowledge-system', source_id: 'default', title: '知识系统' },
+    ]);
+    const opts = { fromSlug: 'notes/a', fromSourceId: 'default' };
+    expect(findMentionedEntities('马很常见。', g, opts)).toEqual([]);
+    expect(findMentionedEntities('升级系统之后再看。', g, opts)).toEqual([]);
+    expect(findMentionedEntities('知识系统已经上线。', g, opts).map(item => item.slug)).toEqual(['concepts/knowledge-system']);
+    expect(findMentionedEntities('升级系统之后再看。', g, { ...opts, includeBlockedSurfaces: true }).map(item => item.slug)).toEqual(['concepts/system']);
+  });
+
+  test('two same-named Chinese entities in one Source are not guessed', () => {
+    const g = gazetteerFromEntries([
+      { slug: '', source_id: 'vault', title: '张三', ambiguous: true },
+    ]);
+    expect(findMentionedEntities('今天见到张三。', g, {
+      fromSlug: 'notes/a', fromSourceId: 'vault',
+    })).toEqual([]);
+  });
 });
 
 // ============================================================
@@ -479,5 +501,20 @@ describe('buildGazetteer — engine integration', () => {
     expect(findMentionedEntities('OpenAI released a model.', g, {
       fromSlug: 'notes/c', fromSourceId: 'team-c',
     })[0]).toMatchObject({ slug: 'concepts/openai', source_id: 'default' });
+  });
+
+  test('a Chinese high-frequency entity page stays out of plain by-mention', async () => {
+    await engine.putPage('concepts/system', {
+      type: 'concept', title: '系统', compiled_truth: '系统是一个明确概念页。', timeline: '', frontmatter: {},
+    });
+    await engine.putPage('inbox/loose', {
+      type: 'note', title: '未分类', compiled_truth: '这里只是普通笔记。', timeline: '', frontmatter: {},
+    });
+    const g = await buildGazetteer(engine);
+    expect(g.get('系')?.find(entry => entry.slug === 'concepts/system')?.plainMentionBlocked).toBe(true);
+    expect(findMentionedEntities('升级系统之后再看。', g, {
+      fromSlug: 'notes/a', fromSourceId: 'default',
+    })).toEqual([]);
+    expect(g.get('未') ?? []).toEqual([]);
   });
 });

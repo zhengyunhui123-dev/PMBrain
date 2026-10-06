@@ -25,6 +25,23 @@ import {
 
 const BATCH_SIZE = 100;
 const STALE_BATCH_SIZE = Math.max(1, Number(process.env.PMBRAIN_EXTRACT_STALE_BATCH || process.env.GBRAIN_EXTRACT_STALE_BATCH) || 25);
+
+export interface ExtractStaleBatchTiming {
+  range: string;
+  pages: number;
+  readMs: number;
+  parseMs: number;
+  resolveMs: number;
+  writeLinksMs: number;
+  writeTimelineMs: number;
+  markExtractedMs: number;
+  totalMs: number;
+  links: number;
+  timeline: number;
+  unresolved: number;
+  engine: string;
+  pagesProcessed: number;
+}
 export const STALE_TIME_BUDGET_MS = Math.max(
   1000,
   Number(process.env.PMBRAIN_EXTRACT_TIME_BUDGET_MS || process.env.GBRAIN_EXTRACT_TIME_BUDGET_MS) || 30 * 60 * 1000,
@@ -54,6 +71,7 @@ export async function extractStaleFromDB(
   skippedMissingTarget: number;
   skippedCrossSource: number;
   unresolvedReferences: number;
+  batchTimings: ExtractStaleBatchTiming[];
 }> {
   const { dryRun, jsonMode, includeFrontmatter, sourceIdFilter, catchUp } = opts;
   const quiet = opts.quiet ?? false;
@@ -79,6 +97,7 @@ export async function extractStaleFromDB(
     return {
       linksCreated: 0, timelineCreated: 0, pagesProcessed: 0, staleRemaining: totalStale,
       skippedMissingTarget: 0, skippedCrossSource: 0, unresolvedReferences: 0,
+      batchTimings: [],
     };
   }
   if (totalStale === 0) {
@@ -86,10 +105,30 @@ export async function extractStaleFromDB(
     return {
       linksCreated: 0, timelineCreated: 0, pagesProcessed: 0, staleRemaining: 0,
       skippedMissingTarget: 0, skippedCrossSource: 0, unresolvedReferences: 0,
+      batchTimings: [],
     };
   }
 
   const resolver = makeResolver(engine, { mode: 'batch', sourceId: sourceIdFilter });
+  let resolveMs = 0;
+  const timeCall = <T extends (...args: never[]) => Promise<unknown>>(fn: T | undefined): T | undefined => {
+    if (!fn) return fn;
+    const bound = fn.bind(resolver);
+    return (async (...args: never[]) => {
+      const started = performance.now();
+      try { return await bound(...args); }
+      finally { resolveMs += performance.now() - started; }
+    }) as T;
+  };
+  const timedResolve = timeCall(resolver.resolve);
+  const timedResolveTarget = timeCall(resolver.resolveTarget);
+  const timedResolveExact = timeCall(resolver.resolveExact);
+  const timedResolveLocalExact = timeCall(resolver.resolveLocalExact);
+  if (timedResolve) resolver.resolve = timedResolve;
+  if (timedResolveTarget) resolver.resolveTarget = timedResolveTarget;
+  if (timedResolveExact) resolver.resolveExact = timedResolveExact;
+  if (timedResolveLocalExact) resolver.resolveLocalExact = timedResolveLocalExact;
+  const batchTimings: ExtractStaleBatchTiming[] = [];
   const allRefs = await engine.listAllPageRefs();
   const allSlugs = new Set<string>();
   const slugToSources = new Map<string, string[]>();
@@ -126,21 +165,29 @@ export async function extractStaleFromDB(
       ? STALE_BATCH_SIZE
       : Math.min(STALE_BATCH_SIZE, maxPages - pagesProcessed);
     if (batchSize <= 0) break;
+    const batchStarted = performance.now();
+    const readStarted = performance.now();
     const rows = await engine.listStalePagesForExtraction({
       batchSize,
       afterPageId,
       sourceId: sourceIdFilter,
       versionTs,
     });
+    const readMs = performance.now() - readStarted;
     if (rows.length === 0) break;
 
     const linkRows: LinkBatchInput[] = [];
     const timelineRows: TimelineBatchInput[] = [];
     const processedRefs: Array<{ slug: string; source_id: string; extractedAt: string }> = [];
+    let parseMs = 0;
+    let batchUnresolved = 0;
+    const resolveBefore = resolveMs;
 
     for (const page of rows) {
       opts.signal?.throwIfAborted();
       const fullContent = page.compiled_truth + '\n' + page.timeline;
+      const parseStarted = performance.now();
+      const resolveAt = resolveMs;
       const extracted = await extractPageLinks(
         page.slug,
         fullContent,
@@ -149,6 +196,9 @@ export async function extractStaleFromDB(
         resolver,
         { skipFrontmatter: !includeFrontmatter },
       );
+      const parseElapsed = performance.now() - parseStarted;
+      parseMs += Math.max(0, parseElapsed - (resolveMs - resolveAt));
+      batchUnresolved += extracted.unresolved.length;
       unresolvedReferences += extracted.unresolved.length;
       for (const c of extracted.candidates) {
         const fromSlug = c.fromSlug ?? page.slug;
@@ -212,17 +262,26 @@ export async function extractStaleFromDB(
       processedRefs.push({ slug: page.slug, source_id: page.source_id, extractedAt: stampIso });
     }
 
+    let writeLinksMs = 0;
+    let writeTimelineMs = 0;
+    let markExtractedMs = 0;
     const persistBatch = async (): Promise<{ links: number; timeline: number }> => {
       opts.signal?.throwIfAborted();
       let links = 0;
       let timeline = 0;
+      const linksStarted = performance.now();
       for (let i = 0; i < linkRows.length; i += BATCH_SIZE) {
         links += await engine.addLinksBatch(linkRows.slice(i, i + BATCH_SIZE), { auditSite: 'extract.stale' }); // gbrain-allow-direct-insert: extract --stale — canonical link reconciliation from markdown body
       }
+      writeLinksMs += performance.now() - linksStarted;
+      const timelineStarted = performance.now();
       for (let i = 0; i < timelineRows.length; i += BATCH_SIZE) {
         timeline += await engine.addTimelineEntriesBatch(timelineRows.slice(i, i + BATCH_SIZE), { auditSite: 'extract.stale' });
       }
+      writeTimelineMs += performance.now() - timelineStarted;
+      const markStarted = performance.now();
       await engine.markPagesExtractedBatch(processedRefs, new Date().toISOString());
+      markExtractedMs += performance.now() - markStarted;
       return { links, timeline };
     };
     let persisted: { links: number; timeline: number };
@@ -246,6 +305,27 @@ export async function extractStaleFromDB(
     timelineCreated += persisted.timeline;
 
     pagesProcessed += rows.length;
+    const timing: ExtractStaleBatchTiming = {
+      range: `${pagesProcessed - rows.length + 1}-${pagesProcessed}`,
+      pages: rows.length,
+      readMs,
+      parseMs,
+      resolveMs: resolveMs - resolveBefore,
+      writeLinksMs,
+      writeTimelineMs,
+      markExtractedMs,
+      totalMs: performance.now() - batchStarted,
+      links: persisted.links,
+      timeline: persisted.timeline,
+      unresolved: batchUnresolved,
+      engine: engine.kind,
+      pagesProcessed,
+    };
+    batchTimings.push(timing);
+    const roundMs = (value: number) => Math.round(value);
+    console.error(
+      `[extract-stale] ${timing.range} engine=${timing.engine} read=${roundMs(timing.readMs)}ms parse=${roundMs(timing.parseMs)}ms resolve=${roundMs(timing.resolveMs)}ms write_links=${roundMs(timing.writeLinksMs)}ms write_timeline=${roundMs(timing.writeTimelineMs)}ms mark_extracted=${roundMs(timing.markExtractedMs)}ms total=${roundMs(timing.totalMs)}ms links=${timing.links} timeline=${timing.timeline} unresolved=${timing.unresolved} cumulative=${timing.pagesProcessed}`,
+    );
     progress.tick(rows.length);
     afterPageId = rows[rows.length - 1]!.id;
     await opts.yieldDuringPhase?.();
@@ -294,6 +374,7 @@ export async function extractStaleFromDB(
     skippedMissingTarget,
     skippedCrossSource,
     unresolvedReferences,
+    batchTimings,
   };
 }
 
@@ -320,11 +401,6 @@ function isSearchNeedle(name: string): boolean {
   const cjk = cjkCharCount(trimmed);
   if (cjk === 0) return trimmed.length >= MIN_NAME_LENGTH;
   return cjk >= MIN_CJK_NAME_LENGTH;
-}
-
-function addNeedle(needles: Set<string>, name: string): void {
-  const trimmed = name.trim();
-  if (isSearchNeedle(trimmed)) needles.add(trimmed);
 }
 
 function normalizedTitle(title: string): string {
@@ -384,30 +460,81 @@ function isLinkableType(type: string): boolean {
   return (LINKABLE_ENTITY_TYPES as readonly string[]).includes(type);
 }
 
-function newEntityNeedles(previous: EntityCatalogRecord[], current: EntityCatalogRecord[]): string[] {
+interface CatalogNeedle {
+  sourceId: string;
+  needle: string;
+}
+
+interface MentionDrop {
+  sourceId: string;
+  slug: string;
+  surface: string;
+}
+
+function catalogDelta(previous: EntityCatalogRecord[], current: EntityCatalogRecord[]): {
+  reopen: CatalogNeedle[];
+  drop: MentionDrop[];
+} {
   const previousByKey = new Map(previous.map(entity => [`${entity.source_id}\0${entity.slug}`, entity]));
-  const needles = new Set<string>();
+  const currentByKey = new Map(current.map(entity => [`${entity.source_id}\0${entity.slug}`, entity]));
+  const reopen: CatalogNeedle[] = [];
+  const drop: MentionDrop[] = [];
+  const seenReopen = new Set<string>();
+  const seenDrop = new Set<string>();
+  const addReopen = (sourceId: string, needle: string) => {
+    const normalized = needle.normalize('NFKC').trim();
+    if (!isSearchNeedle(normalized)) return;
+    const key = `${sourceId}\0${normalized.toLowerCase()}`;
+    if (seenReopen.has(key)) return;
+    seenReopen.add(key);
+    reopen.push({ sourceId, needle: normalized });
+  };
+  const addDrop = (sourceId: string, slug: string, surface: string) => {
+    const normalized = surface.normalize('NFKC').trim();
+    if (!normalized) return;
+    const key = `${sourceId}\0${slug}\0${normalized.toLowerCase()}`;
+    if (seenDrop.has(key)) return;
+    seenDrop.add(key);
+    drop.push({ sourceId, slug, surface: normalized });
+    addReopen(sourceId, normalized);
+  };
   for (const entity of current) {
     const old = previousByKey.get(`${entity.source_id}\0${entity.slug}`);
     const linkable = isLinkableType(entity.type);
-    const becameLinkable = linkable && (!old || !isLinkableType(old.type));
-    if (!old || becameLinkable) {
+    if (!old) {
       if (linkable) {
-        addNeedle(needles, entity.title);
-        if (entity.slug.includes('/')) needles.add(entity.slug);
+        addReopen(entity.source_id, entity.title);
+        if (entity.slug.includes('/')) addReopen(entity.source_id, entity.slug);
       }
-      for (const alias of entity.aliases) addNeedle(needles, alias);
+      for (const alias of entity.aliases) addReopen(entity.source_id, alias);
       continue;
     }
+    const wasLinkable = isLinkableType(old.type);
+    if (linkable && !wasLinkable) {
+      addReopen(entity.source_id, entity.title);
+      if (entity.slug.includes('/')) addReopen(entity.source_id, entity.slug);
+    }
+    if (linkable && wasLinkable && old.type !== entity.type) addReopen(entity.source_id, entity.title);
     if (linkable && normalizedTitle(entity.title) !== normalizedTitle(old.title)) {
-      addNeedle(needles, entity.title);
+      addReopen(entity.source_id, entity.title);
+      if (wasLinkable) addDrop(entity.source_id, entity.slug, old.title);
     }
     const oldAliases = new Set(old.aliases);
+    const nextAliases = new Set(entity.aliases);
     for (const alias of entity.aliases) {
-      if (!oldAliases.has(alias)) addNeedle(needles, alias);
+      if (!oldAliases.has(alias)) addReopen(entity.source_id, alias);
+    }
+    for (const alias of old.aliases) {
+      if (!nextAliases.has(alias)) addDrop(entity.source_id, entity.slug, alias);
     }
   }
-  return [...needles];
+  for (const old of previous) {
+    if (currentByKey.has(`${old.source_id}\0${old.slug}`)) continue;
+    if (isLinkableType(old.type)) addDrop(old.source_id, old.slug, old.title);
+    for (const alias of old.aliases) addDrop(old.source_id, old.slug, alias);
+    if (old.slug.includes('/')) addReopen(old.source_id, old.slug);
+  }
+  return { reopen, drop };
 }
 
 async function queueFreshPagesForNewEntities(
@@ -456,8 +583,8 @@ async function queueFreshPagesForNewEntities(
   }
   if (canonicalCatalog(previous) === currentJson) return 0;
 
-  const needles = newEntityNeedles(previous, current);
-  const matchedIds = needles.length === 0
+  const delta = catalogDelta(previous, current);
+  const matchedIds = delta.reopen.length === 0
     ? []
     : (await engine.executeRaw<{ id: number }>(
       `SELECT DISTINCT p.id
@@ -465,26 +592,52 @@ async function queueFreshPagesForNewEntities(
         WHERE p.deleted_at IS NULL
           AND p.links_extracted_at IS NOT NULL
           AND p.updated_at <= p.links_extracted_at
-          ${opts.sourceIdFilter ? 'AND p.source_id = $2' : ''}
+          ${opts.sourceIdFilter ? 'AND p.source_id = $3' : ''}
           AND EXISTS (
-            SELECT 1 FROM unnest($1::text[]) AS n(needle)
-             WHERE strpos(lower(COALESCE(p.compiled_truth, '')), lower(n.needle)) > 0
-                OR strpos(lower(COALESCE(p.timeline, '')), lower(n.needle)) > 0
+            SELECT 1 FROM unnest($1::text[], $2::text[]) AS n(needle, source_id)
+             WHERE (n.source_id = 'default' OR p.source_id = n.source_id)
+               AND (
+                 strpos(lower(normalize(COALESCE(p.compiled_truth, ''), NFKC)), lower(n.needle)) > 0
+                 OR strpos(lower(normalize(COALESCE(p.timeline, ''), NFKC)), lower(n.needle)) > 0
+               )
           )`,
-      opts.sourceIdFilter ? [needles, opts.sourceIdFilter] : [needles],
+      opts.sourceIdFilter
+        ? [delta.reopen.map(item => item.needle), delta.reopen.map(item => item.sourceId), opts.sourceIdFilter]
+        : [delta.reopen.map(item => item.needle), delta.reopen.map(item => item.sourceId)],
     )).map(row => Number(row.id));
 
-  if (!opts.dryRun) {
-    if (matchedIds.length > 0) {
-      await engine.executeRaw(
-        `UPDATE pages SET links_extracted_at = NULL WHERE id = ANY($1::int[])`,
-        [matchedIds],
-      );
-    }
-    await engine.setConfig(key, currentJson);
-    return 0;
+  if (opts.dryRun) return matchedIds.length;
+  if (delta.drop.length > 0) {
+    await engine.executeRaw(
+      `DELETE FROM links AS l
+        USING pages AS src, pages AS dst,
+              unnest($1::text[], $2::text[], $3::text[]) AS gone(source_id, slug, surface)
+        WHERE l.from_page_id = src.id
+          AND l.to_page_id = dst.id
+          AND dst.source_id = gone.source_id
+          AND dst.slug = gone.slug
+          AND src.deleted_at IS NULL
+          AND l.link_source = 'mentions'
+          AND l.link_kind IS DISTINCT FROM 'typed_ner'
+          AND lower(normalize(COALESCE(l.context, ''), NFKC)) = lower(normalize(gone.surface, NFKC))
+          AND ($4::text IS NULL OR src.source_id = $4)
+          AND ($4::text IS NOT NULL OR gone.source_id = 'default' OR src.source_id = gone.source_id)`,
+      [
+        delta.drop.map(item => item.sourceId),
+        delta.drop.map(item => item.slug),
+        delta.drop.map(item => item.surface),
+        opts.sourceIdFilter ?? null,
+      ],
+    );
   }
-  return matchedIds.length;
+  if (matchedIds.length > 0) {
+    await engine.executeRaw(
+      `UPDATE pages SET links_extracted_at = NULL WHERE id = ANY($1::int[])`,
+      [matchedIds],
+    );
+  }
+  await engine.setConfig(key, currentJson);
+  return 0;
 }
 
 export async function stampExtractedPages(

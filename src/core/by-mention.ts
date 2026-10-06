@@ -29,6 +29,7 @@
 import type { BrainEngine } from './engine.ts';
 import { stripCodeBlocks } from './link-extraction.ts';
 import { normalizeAliasList } from './search/alias-normalize.ts';
+import { CJK_PLAIN_MENTION_BLOCKLIST } from './cycle/entity-capture-budget.ts';
 
 /** D2: hardcoded entity types for v1. Pack-aware extension is TODO-1. */
 export const LINKABLE_ENTITY_TYPES = ['person', 'company', 'organization', 'entity', 'concept', 'project'] as const;
@@ -58,6 +59,25 @@ const MIN_CJK_NAME_LENGTH = 2;
  */
 const DEFAULT_IGNORE_LIST = ['Apple', 'Amazon', 'Square', 'Stripe', 'Box', 'Meta', 'Target', 'Oracle'];
 
+/**
+ * Chinese high-frequency words stay valid entity pages. They are blocked only
+ * as plain body-text mentions, so a page titled 系统 can exist without being
+ * linked from every document that uses the word. Explicit WikiLinks and NER
+ * typed relations do not consult this list.
+ */
+const CJK_PLAIN_MENTION_BLOCKSET = new Set<string>(CJK_PLAIN_MENTION_BLOCKLIST);
+
+export function isBlockedPlainMentionSurface(name: string): boolean {
+  return CJK_PLAIN_MENTION_BLOCKSET.has(name.normalize('NFKC').trim());
+}
+
+function isSingleHanSurface(name: string): boolean {
+  const surface = name.normalize('NFKC').trim();
+  CJK_RE.lastIndex = 0;
+  const han = Array.from(surface.matchAll(CJK_RE)).length;
+  return han === 1 && !/[A-Za-z0-9]/.test(surface);
+}
+
 export interface GazetteerEntry {
   /** Canonical page slug (e.g. `companies/acme-corp`). */
   slug: string;
@@ -71,6 +91,8 @@ export interface GazetteerEntry {
   tokens: string[];
   /** Collision sentinel: this surface form has multiple owners in one Source. */
   ambiguous?: boolean;
+  /** Plain by-mention must skip this surface. NER can still opt in. */
+  plainMentionBlocked?: boolean;
 }
 
 /** Number of Source-local surface forms that auto-linking must skip. */
@@ -115,6 +137,8 @@ export interface FindMentionsOpts {
   fromSlug: string;
   /** Source id of the page being scanned. Used for cross-source guard. */
   fromSourceId: string;
+  /** NER typed relations may name a blocked surface when the verb is explicit. */
+  includeBlockedSurfaces?: boolean;
 }
 
 // ============================================================
@@ -239,6 +263,7 @@ export async function buildGazetteer(
         title: row.title,
         name,
         tokens,
+        plainMentionBlocked: isBlockedPlainMentionSurface(name),
       });
     }
   }
@@ -363,6 +388,12 @@ export function findMentionedEntities(
     // A Source-local collision blocks the shared-default fallback. Auto-link
     // must not guess which same-named page the author intended.
     if (matched.ambiguous) {
+      i += matchedTokens;
+      continue;
+    }
+
+    const surface = matched.name ?? matched.title;
+    if (!opts.includeBlockedSurfaces && (matched.plainMentionBlocked || isSingleHanSurface(surface))) {
       i += matchedTokens;
       continue;
     }
