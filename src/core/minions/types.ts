@@ -473,6 +473,8 @@ export interface SubagentHandlerData {
   allowed_slug_prefixes?: string[];
   /** Source scope inherited by every brain tool call in this protected job. */
   source_id?: string;
+  /** Skills directory inherited by list_skills and get_skill in this protected job. */
+  skills_dir?: string;
   /**
    * v0.41 Approach C: opt out of the auto-generated tool-usage preamble
    * that `buildSystemPrompt()` splices into `system`. Default behavior

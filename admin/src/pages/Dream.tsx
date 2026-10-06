@@ -200,6 +200,7 @@ const PHASE_LABELS: Record<string, string> = {
   grade_takes: '观点评分：对候选观点进行质量评估',
   calibration_profile: '校准画像：生成用户认知校准分析',
   conversation_facts_backfill: '对话事实回填：将对话中确认的事实写回知识库',
+  capture_entities: '识别实体：按知识整理技能查找并创建或补充人物、公司、项目和概念',
   orphans: '孤儿页面检测：发现没有被任何页面引用的孤立页面',
   'schema-suggest': 'Schema 建议：推荐知识库结构优化方案',
   purge: '清理：删除软删除标记的页面和数据',
@@ -222,6 +223,7 @@ const PHASE_USER_ACTIONS: Record<string, string> = {
   grade_takes: '评估已有观点的可靠程度',
   calibration_profile: '更新 AI 对你的判断习惯的理解',
   conversation_facts_backfill: '把对话中确认的信息补回知识库',
+  capture_entities: '识别值得记录的人物、公司、项目和概念',
   embed: '更新 AI 搜索和理解能力',
   orphans: '发现缺少关联的孤立知识',
   'schema-suggest': '检查知识结构是否需要优化',
@@ -252,6 +254,7 @@ const PHASE_GROUP_BY_PHASE: Record<string, typeof PHASE_GROUPS[number]['key']> =
   synthesize: 'synthesis', patterns: 'synthesis', synthesize_concepts: 'synthesis',
   recompute_emotional_weight: 'synthesis', consolidate: 'synthesis',
   propose_takes: 'takes', grade_takes: 'takes', calibration_profile: 'takes', conversation_facts_backfill: 'takes',
+  capture_entities: 'synthesis',
   embed: 'lifecycle', orphans: 'lifecycle', 'schema-suggest': 'lifecycle', purge: 'lifecycle',
 };
 
@@ -261,7 +264,7 @@ function phasesForGroup(catalog: string[], groupKey: string): string[] {
 
 const DREAM_KNOWLEDGE_STEPS = [
   { key: 'read', title: '阅读新内容', description: '找到最近新增或变化的资料', phases: ['lint', 'backlinks', 'sync'] },
-  { key: 'understand', title: '理解与提炼', description: '提取事实、人物、概念和知识点', phases: ['synthesize', 'extract', 'extract_facts', 'extract_atoms'] },
+  { key: 'understand', title: '理解与提炼', description: '提取事实、人物、概念和知识点', phases: ['synthesize', 'extract', 'extract_facts', 'extract_atoms', 'capture_entities'] },
   { key: 'connect', title: '建立知识连接', description: '补全关系并发现反复出现的主题', phases: ['resolve_symbol_edges', 'patterns', 'synthesize_concepts'] },
   { key: 'remember', title: '形成长期记忆', description: '合并重复信息并沉淀重要判断', phases: ['recompute_emotional_weight', 'consolidate', 'propose_takes', 'grade_takes', 'calibration_profile', 'conversation_facts_backfill'] },
   { key: 'search', title: '更新搜索能力', description: '让最新知识可以被 AI 准确找到', phases: ['embed', 'orphans', 'schema-suggest', 'purge'] },

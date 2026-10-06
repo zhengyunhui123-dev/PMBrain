@@ -31,7 +31,7 @@ import { stripCodeBlocks } from './link-extraction.ts';
 import { normalizeAliasList } from './search/alias-normalize.ts';
 
 /** D2: hardcoded entity types for v1. Pack-aware extension is TODO-1. */
-export const LINKABLE_ENTITY_TYPES = ['person', 'company', 'organization', 'entity', 'concept'] as const;
+export const LINKABLE_ENTITY_TYPES = ['person', 'company', 'organization', 'entity', 'concept', 'project'] as const;
 
 /** Prefixes used by imported/organized knowledge-point titles. */
 const DERIVED_ALIAS_PREFIX_RE = /^(?:知识点|概念)\s*[-—–:：]\s*/iu;

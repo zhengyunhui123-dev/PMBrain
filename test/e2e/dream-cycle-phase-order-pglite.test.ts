@@ -124,6 +124,7 @@ const EXPECTED_PHASES: CyclePhase[] = [
   'calibration_profile',        // v0.36.1.0
   'drift',
   'conversation_facts_backfill', // v0.41.11 — opt-in conversation facts
+  'capture_entities',
   'enrich_thin',
   'embed',
   'orphans',

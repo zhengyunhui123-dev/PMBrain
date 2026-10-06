@@ -246,6 +246,7 @@ export function makeSubagentHandler(deps: SubagentDeps) {
       brainId: data.brain_id,
       allowedSlugPrefixes: data.allowed_slug_prefixes,
       sourceId: data.source_id,
+      skillsDir: data.skills_dir,
     });
     const toolDefs = data.allowed_tools && data.allowed_tools.length > 0
       ? filterAllowedTools(registry, data.allowed_tools)

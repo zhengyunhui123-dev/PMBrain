@@ -58,6 +58,9 @@ export const BRAIN_TOOL_ALLOWLIST: ReadonlySet<string> = new Set([
   'resolve_slugs',
   'get_ingest_log',
   'put_page',
+  'list_skills',
+  'get_skill',
+  'add_timeline_entry',
   // v0.29 — Salience + Anomaly Detection. Both read-only. `get_recent_transcripts`
   // is intentionally NOT included: subagent calls always have ctx.remote=true,
   // and the v0.29 trust gate rejects remote callers — adding it here would be
@@ -93,6 +96,9 @@ export const BRAIN_TOOL_USAGE_HINTS: Readonly<Record<string, string>> = {
   resolve_slugs: 'Resolve free-form entity names to canonical slugs (e.g. "Alice" → `people/alice-example`). Use before any tool that takes a slug if the user gave a name not a slug.',
   get_ingest_log: 'Read the brain ingestion log for diagnostic / verification queries.',
   put_page: 'Write a markdown page to the gbrain DATABASE (NOT the local filesystem). Page becomes searchable + linkable. Slug must match the agent\'s allowed namespace.',
+  list_skills: 'List published skills before choosing one. Deep organization reads signal-detector from this catalog.',
+  get_skill: 'Read one skill by the exact name from list_skills. Call get_skill with name signal-detector before creating entity pages.',
+  add_timeline_entry: 'Add a dated fact to an entity page timeline. The slug must stay inside the allowed people, companies, concepts, or projects prefixes.',
   get_recent_salience: 'Read pages ranked by emotional + activity salience over a recency window. Use for "what\'s been on my mind lately".',
   find_anomalies: 'Read cohort-level activity outliers (e.g. tag-cohort or type-cohort with unusual recent volume). Use for "what\'s unusual lately".',
 };
@@ -192,6 +198,8 @@ export interface BuildBrainToolsOpts {
   allowedSlugPrefixes?: readonly string[];
   /** Source scope inherited from the protected parent job. */
   sourceId?: string;
+  /** Explicit skills directory for list_skills and get_skill in this job. */
+  skillsDir?: string;
 }
 
 interface OpContextDeps {
@@ -203,6 +211,7 @@ interface OpContextDeps {
   brainId?: string;
   allowedSlugPrefixes?: readonly string[];
   sourceId?: string;
+  skillsDir?: string;
 }
 
 function buildOpContext(deps: OpContextDeps): OperationContext {
@@ -224,6 +233,7 @@ function buildOpContext(deps: OpContextDeps): OperationContext {
     allowedSlugPrefixes: deps.allowedSlugPrefixes
       ? [...deps.allowedSlugPrefixes]
       : undefined,
+    skillsDir: deps.skillsDir,
   };
 }
 
@@ -242,7 +252,7 @@ export function buildBrainTools(opts: BuildBrainToolsOpts): ToolDef[] {
   );
 
   return picked.map<ToolDef>(op => {
-    const schema = op.name === 'put_page'
+    const schema = op.name === 'put_page' || op.name === 'add_timeline_entry'
       ? namespacedPutPageSchema(op, opts.subagentId, opts.allowedSlugPrefixes)
       : paramsToInputSchema(op);
 
@@ -271,6 +281,7 @@ export function buildBrainTools(opts: BuildBrainToolsOpts): ToolDef[] {
           brainId: opts.brainId,
           allowedSlugPrefixes: opts.allowedSlugPrefixes,
           sourceId: opts.sourceId,
+          skillsDir: opts.skillsDir,
         });
         const params = (input && typeof input === 'object') ? input as Record<string, unknown> : {};
         return op.handler(opCtx, params);

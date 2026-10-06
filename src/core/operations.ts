@@ -194,6 +194,31 @@ export function matchesSlugAllowList(slug: string, prefixes: readonly string[]):
   return false;
 }
 
+export function assertSubagentWriteSlug(
+  ctx: OperationContext,
+  slug: string,
+  opName: 'put_page' | 'add_timeline_entry' = 'put_page',
+): void {
+  if (ctx.viaSubagent !== true) return;
+  if (typeof ctx.subagentId !== 'number' || Number.isNaN(ctx.subagentId)) {
+    throw new OperationError('permission_denied', `${opName} via subagent requires ctx.subagentId`);
+  }
+  const allowList = ctx.allowedSlugPrefixes;
+  if (allowList && allowList.length > 0) {
+    if (!matchesSlugAllowList(slug, allowList)) {
+      throw new OperationError(
+        'permission_denied',
+        `${opName} slug '${slug}' is not within the trusted-workspace allow-list (${allowList.join(', ')})`,
+      );
+    }
+    return;
+  }
+  const prefix = `wiki/agents/${ctx.subagentId}/`;
+  if (!slug.startsWith(prefix) || slug.length === prefix.length) {
+    throw new OperationError('permission_denied', `${opName} via subagent must write under '${prefix}...'`);
+  }
+}
+
 /**
  * Allowlist validator for uploaded file basenames. Rejects control chars, backslashes,
  * RTL overrides (\u202E), leading dot (hidden files) and leading dash (CLI flag confusion).
@@ -518,29 +543,7 @@ const put_page: Operation = {
     // FAIL-CLOSED: `viaSubagent=true` enforces the check even if the
     // dispatcher forgot to populate `subagentId`. Agent-originated writes
     // without an owning subagent id are rejected outright.
-    if (ctx.viaSubagent === true) {
-      if (typeof ctx.subagentId !== 'number' || Number.isNaN(ctx.subagentId)) {
-        throw new OperationError('permission_denied', 'put_page via subagent requires ctx.subagentId');
-      }
-      const allowList = ctx.allowedSlugPrefixes;
-      if (allowList && allowList.length > 0) {
-        // Trusted-workspace path: explicit allow-list bounds writes.
-        // Set only by cycle.ts (synthesize/patterns) which submits subagent
-        // jobs under PROTECTED_JOB_NAMES — MCP cannot reach this branch.
-        if (!matchesSlugAllowList(slug, allowList)) {
-          throw new OperationError(
-            'permission_denied',
-            `put_page slug '${slug}' is not within the trusted-workspace allow-list (${allowList.join(', ')})`
-          );
-        }
-      } else {
-        // Legacy default: agent-namespace confinement.
-        const prefix = `wiki/agents/${ctx.subagentId}/`;
-        if (!slug.startsWith(prefix) || slug.length === prefix.length) {
-          throw new OperationError('permission_denied', `put_page via subagent must write under '${prefix}...'`);
-        }
-      }
-    }
+    assertSubagentWriteSlug(ctx, slug, 'put_page');
 
     if (ctx.dryRun) return { dry_run: true, action: 'put_page', slug: p.slug };
     // Skip embedding when the AI gateway has no embedding provider configured.
@@ -2236,6 +2239,7 @@ const add_timeline_entry: Operation = {
   mutating: true,
   scope: 'write',
   handler: async (ctx, p) => {
+    assertSubagentWriteSlug(ctx, p.slug as string, 'add_timeline_entry');
     if (ctx.dryRun) return { dry_run: true, action: 'add_timeline_entry', slug: p.slug };
     const date = p.date as string;
     // Reject anything that isn't a strict YYYY-MM-DD with year 1900-2199 and
@@ -2388,9 +2392,11 @@ const list_skills: Operation = {
   },
   handler: async (ctx, params) => {
     const catalog = await import('./skill-catalog.ts');
-    const publish = await catalog.readMcpPublishSkills(ctx);
-    catalog.assertPublishEnabled(ctx, publish);
-    const override = await catalog.readMcpSkillsDir(ctx);
+    if (ctx.viaSubagent !== true) {
+      const publish = await catalog.readMcpPublishSkills(ctx);
+      catalog.assertPublishEnabled(ctx, publish);
+    }
+    const override = ctx.skillsDir ?? await catalog.readMcpSkillsDir(ctx);
     const resolved = catalog.resolveSkillsDir(ctx, override);
     return catalog.buildSkillCatalog(
       resolved.dir,
@@ -2414,9 +2420,11 @@ const get_skill: Operation = {
   },
   handler: async (ctx, params) => {
     const catalog = await import('./skill-catalog.ts');
-    const publish = await catalog.readMcpPublishSkills(ctx);
-    catalog.assertPublishEnabled(ctx, publish);
-    const override = await catalog.readMcpSkillsDir(ctx);
+    if (ctx.viaSubagent !== true) {
+      const publish = await catalog.readMcpPublishSkills(ctx);
+      catalog.assertPublishEnabled(ctx, publish);
+    }
+    const override = ctx.skillsDir ?? await catalog.readMcpSkillsDir(ctx);
     const resolved = catalog.resolveSkillsDir(ctx, override);
     return catalog.getSkillDetail(resolved.dir, String(params.name ?? ''));
   },

@@ -48,6 +48,7 @@ import { join } from 'path';
 import { hostname } from 'os';
 import { gbrainPath } from './config.ts';
 import type { BrainEngine } from './engine.ts';
+import type { MinionHandler } from './minions/types.ts';
 import { SyncFilesDeferred, type SyncFileRuntime } from './sync-file-runtime.ts';
 import { createProgress, type ProgressReporter } from './progress.ts';
 import { getCliOptions, cliOptsToProgressOptions } from './cli-options.ts';
@@ -103,6 +104,7 @@ export type CyclePhase =
   // brain-wide BudgetTracker and passes it through opts.budgetTracker
   // so the core's auto-wrap doesn't REPLACE it.
   | 'conversation_facts_backfill'
+  | 'capture_entities'
   | 'drift' | 'enrich_thin';
 
 export const ALL_PHASES: CyclePhase[] = [
@@ -165,6 +167,7 @@ export const ALL_PHASES: CyclePhase[] = [
   // block placement, which runs between the calibration trio and embed),
   // and BEFORE embed so newly-inserted facts get embedded same-cycle.
   'conversation_facts_backfill',
+  'capture_entities',
   // Default OFF. Enriches thin pages from grounded local evidence before
   // embed so changed content is indexed in the same cycle.
   'enrich_thin',
@@ -264,6 +267,7 @@ const NEEDS_LOCK_PHASES: ReadonlySet<CyclePhase> = new Set([
   'synthesize_concepts',
   // v0.41.11.0 — inserts facts + writes terminal audit rows; needs lock.
   'conversation_facts_backfill',
+  'capture_entities',
   'enrich_thin',
   'embed',
   'purge',
@@ -502,6 +506,8 @@ export interface CycleOpts {
   includeHistoricalMarkdownCatchUp?: boolean;
   /** Optional compatibility cap; Quick leaves this unset and drains all old pages. */
   markdownCatchUpMaxHistorical?: number;
+  /** Replaces the entity-capture child handler. Production leaves this unset. */
+  captureEntitiesHandler?: MinionHandler;
 }
 
 /** Union sync + synthesis writes without turning "no producer ran" into []. */
@@ -511,6 +517,14 @@ export function resolveIncrementalExtractSlugs(
 ): string[] | undefined {
   if (syncSlugs === undefined && synthesizedSlugs === undefined) return undefined;
   return [...new Set([...(syncSlugs ?? []), ...(synthesizedSlugs ?? [])])];
+}
+
+export function mergeCaptureSlugs(
+  synthesized: string[] | undefined,
+  captured: readonly string[],
+): string[] | undefined {
+  if (synthesized === undefined && captured.length === 0) return undefined;
+  return [...new Set([...(synthesized ?? []), ...captured])];
 }
 
 // ─── Lock primitives ───────────────────────────────────────────────
@@ -1779,6 +1793,7 @@ export async function runCycle(
     let syncPagesAffected: string[] | undefined = (restored.find(item => item.phase === 'sync') as SyncPhaseResult | undefined)?.pagesAffected;
     let syncAttempted = restored.some(item => item.phase === 'sync');
     let synthesizeWrittenSlugs: string[] | undefined;
+    let entityCaptureSlugs: string[] = [];
     let stopDbWrites = false;
     const noteSearchIndexAbort = (result: PhaseResult) => {
       if (result.status !== 'fail' || stopDbWrites) return;
@@ -2538,6 +2553,38 @@ export async function runCycle(
       await checkpoint();
     }
 
+    if (phases.includes('capture_entities')) {
+      checkAborted(opts.signal);
+      if (!engine) {
+        phaseResults.push({
+          phase: 'capture_entities',
+          status: 'skipped',
+          duration_ms: 0,
+          summary: 'no database connected',
+          details: { reason: 'no_database' },
+        });
+      } else {
+        progress.start('cycle.capture_entities');
+        const { runPhaseCaptureEntities } = await import('./cycle/capture-entities.ts');
+        const { result, duration_ms } = await timePhase(() => runPhaseCaptureEntities(engine, {
+          sourceId: cycleSourceId,
+          dryRun,
+          signal: opts.signal,
+          yieldDuringPhase: opts.yieldDuringPhase,
+          deadlineAtMs: opts.deadlineAtMs ?? null,
+          privateQueueOwnerJobId: opts.privateQueueOwnerJobId ?? null,
+          handler: opts.captureEntitiesHandler,
+        }));
+        result.duration_ms = duration_ms;
+        phaseResults.push(result);
+        const written = Array.isArray(result.details?.written_slugs) ? result.details.written_slugs as string[] : [];
+        const sources = Array.isArray(result.details?.source_slugs) ? result.details.source_slugs as string[] : [];
+        entityCaptureSlugs = [...written, ...sources];
+        progress.finish();
+      }
+      await checkpoint();
+    }
+
     // Default OFF. Develops a bounded number of thin pages using only
     // brain-internal evidence, then leaves embedding to the next phase.
     if (phases.includes('enrich_thin')) {
@@ -2568,7 +2615,10 @@ export async function runCycle(
       const extract = phaseResults.find(result => result.phase === 'extract');
       if (extract && !skipIfSearchIndexUnusable('extract')) {
         progress.start('cycle.extract');
-        await refreshRelations(engine, extract, resolveIncrementalExtractSlugs(syncPagesAffected, synthesizeWrittenSlugs));
+        await refreshRelations(engine, extract, resolveIncrementalExtractSlugs(
+          syncPagesAffected,
+          mergeCaptureSlugs(synthesizeWrittenSlugs, entityCaptureSlugs),
+        ));
         extract.details.postGenerationRelations = true;
         noteSearchIndexAbort(extract);
         progress.finish();

@@ -409,7 +409,7 @@ describe('buildGazetteer — engine integration', () => {
   test('LINKABLE_ENTITY_TYPES exposes the hardcoded contract', () => {
     // Regression: if anyone changes the hardcoded type list, this test
     // forces a deliberate change (and a corresponding test update).
-    expect(LINKABLE_ENTITY_TYPES).toEqual(['person', 'company', 'organization', 'entity', 'concept']);
+    expect(LINKABLE_ENTITY_TYPES).toEqual(['person', 'company', 'organization', 'entity', 'concept', 'project']);
   });
 
   test('concept titles, explicit aliases, and safe knowledge-point prefixes enter the gazetteer', async () => {

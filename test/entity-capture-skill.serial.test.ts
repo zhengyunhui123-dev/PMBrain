@@ -1,0 +1,356 @@
+/**
+ * 产品经理能看懂的测试说明：
+ * 1. 深度整理读 signal-detector，先查已有页面，没有且值得记录才创建人物、公司、项目、概念。
+ * 2. 已有充实页面时不覆盖。预演不写页面。同一份资料成功识别后，下次不重复交给代理。
+ * 3. 脚本代替真实模型，按这个顺序调用工具并写入 people/张三、companies/openai。
+ *    接着用现有正文关联，把提到这两个名字的文章连上去。
+ * 4. 完整整理把识别实体放在关系补扫之前。快速维护和会议整理不跑这一步。
+ * 5. 代理不能写到人物、公司、项目、概念以外的页面，也没有 add_link。
+ * 这组测试证明工具链和接线。它不证明付费模型的识别质量。
+ */
+import { afterAll, beforeAll, beforeEach, expect, test } from 'bun:test';
+import type Anthropic from '@anthropic-ai/sdk';
+import { PGLiteEngine } from '../src/core/pglite-engine.ts';
+import { PostgresEngine } from '../src/core/postgres-engine.ts';
+import type { BrainEngine } from '../src/core/engine.ts';
+import { operations, type OperationContext } from '../src/core/operations.ts';
+import { runCycle, mergeCaptureSlugs, ALL_PHASES } from '../src/core/cycle.ts';
+import {
+  ENTITY_CAPTURE_SLUG_PREFIXES,
+  ENTITY_CAPTURE_TOOLS,
+  buildEntityCapturePrompt,
+  locateSignalDetectorSkillsDir,
+  runPhaseCaptureEntities,
+  selectEntityCaptureCandidates,
+} from '../src/core/cycle/capture-entities.ts';
+import { makeSubagentHandler, type MessagesClient } from '../src/core/minions/handlers/subagent.ts';
+import { resolveDreamPresetPhases } from '../src/commands/dream.ts';
+import { runByMentionCore } from '../src/commands/extract.ts';
+import { TaskProgressAdapter } from '../src/product/tasks/progress-adapter.ts';
+import { resetPgliteState } from './helpers/reset-pglite.ts';
+import { assertSafeE2eDatabaseUrl } from './helpers/db-guard.ts';
+
+const databaseUrl = process.env.PMBRAIN_RELATION_TEST_DATABASE_URL;
+let engine: BrainEngine;
+
+beforeAll(async () => {
+  if (databaseUrl) assertSafeE2eDatabaseUrl(databaseUrl);
+  engine = databaseUrl ? new PostgresEngine() : new PGLiteEngine();
+  await engine.connect(databaseUrl ? { database_url: databaseUrl } : {});
+  await engine.initSchema();
+}, 60_000);
+
+afterAll(async () => {
+  await engine?.disconnect();
+}, 60_000);
+
+beforeEach(async () => {
+  await resetPgliteState(engine as PGLiteEngine);
+});
+
+type FakeResponse = Partial<Anthropic.Message> & { content: Anthropic.Message['content'] };
+
+class FakeMessagesClient implements MessagesClient {
+  calls: Anthropic.MessageCreateParamsNonStreaming[] = [];
+  constructor(private responses: FakeResponse[]) {}
+  async create(params: Anthropic.MessageCreateParamsNonStreaming): Promise<Anthropic.Message> {
+    this.calls.push(params);
+    const next = this.responses.shift();
+    if (!next) throw new Error('脚本里的模型回复已经用完');
+    return {
+      id: `msg_${this.calls.length}`,
+      type: 'message',
+      role: 'assistant',
+      model: params.model,
+      stop_reason: 'end_turn',
+      stop_sequence: null,
+      usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+      ...next,
+    } as Anthropic.Message;
+  }
+}
+
+function tool(id: string, name: string, input: Record<string, unknown>): FakeResponse {
+  return {
+    content: [{ type: 'tool_use', id, name, input } as Anthropic.ToolUseBlock],
+    stop_reason: 'tool_use',
+  };
+}
+
+function text(value: string): FakeResponse {
+  return { content: [{ type: 'text', text: value } as Anthropic.TextBlock], stop_reason: 'end_turn' };
+}
+
+async function useVault(): Promise<void> {
+  await engine.executeRaw(`INSERT INTO sources (id, name) VALUES ('vault', 'Vault') ON CONFLICT (id) DO NOTHING`);
+  await engine.setConfig('version', '130');
+  await engine.setConfig('models.dream.synthesize', 'anthropic:claude-sonnet-4-6');
+}
+
+async function article(body: string): Promise<void> {
+  await engine.putPage('notes/work', {
+    type: 'note',
+    title: '工作记录',
+    compiled_truth: body,
+    timeline: '',
+    frontmatter: {},
+  }, { sourceId: 'vault' });
+}
+
+async function pageCount(): Promise<number> {
+  const rows = await engine.executeRaw<{ n: number }>(`SELECT count(*)::int AS n FROM pages`);
+  return Number(rows[0]?.n ?? 0);
+}
+
+test('识别实体的提示、工具和可写范围按 signal-detector 收口', () => {
+  const prompt = buildEntityCapturePrompt({
+    slug: 'notes/work',
+    sourceId: 'vault',
+    title: '工作记录',
+    body: '张三在 OpenAI 工作。',
+  });
+  expect(prompt).toContain('list_skills');
+  expect(prompt).toContain('signal-detector');
+  expect(prompt).toContain('people/');
+  expect(prompt).toContain('companies/');
+  expect(prompt).toContain('concepts/');
+  expect(prompt).toContain('projects/');
+  expect(prompt).toContain('没有 add_link');
+  expect(prompt).toContain('内容已经充实就不要覆盖');
+  expect(prompt).toContain('不要写会议页');
+  expect([...ENTITY_CAPTURE_TOOLS]).toEqual([
+    'list_skills', 'get_skill', 'search', 'query', 'get_page', 'list_pages', 'put_page', 'add_timeline_entry',
+  ]);
+  expect(ENTITY_CAPTURE_TOOLS).not.toContain('add_link');
+  expect([...ENTITY_CAPTURE_SLUG_PREFIXES]).toEqual(['people/*', 'companies/*', 'concepts/*', 'projects/*']);
+  const skillsDir = locateSignalDetectorSkillsDir();
+  expect(skillsDir).toBeTruthy();
+  expect(mergeCaptureSlugs(undefined, [])).toBeUndefined();
+  expect(mergeCaptureSlugs(undefined, ['people/张三', 'notes/work'])).toEqual(['people/张三', 'notes/work']);
+  const full = resolveDreamPresetPhases('full');
+  expect(full.indexOf('capture_entities')).toBeGreaterThan(full.indexOf('conversation_facts_backfill'));
+  expect(full.indexOf('capture_entities')).toBeLessThan(full.indexOf('enrich_thin'));
+  expect(resolveDreamPresetPhases('quick')).not.toContain('capture_entities');
+  expect(resolveDreamPresetPhases('meeting')).not.toContain('capture_entities');
+  expect(ALL_PHASES).toContain('capture_entities');
+  const adapter = new TaskProgressAdapter('dream_full');
+  adapter.plan(['capture_entities']);
+  expect(adapter.view.steps[0]?.label).toBe('识别实体');
+});
+
+test('子代理只能写实体前缀，未发布技能时仍能读 signal-detector', async () => {
+  const skillsDir = locateSignalDetectorSkillsDir();
+  if (!skillsDir) throw new Error('找不到 signal-detector');
+  const putPage = operations.find(op => op.name === 'put_page');
+  const timeline = operations.find(op => op.name === 'add_timeline_entry');
+  const getSkill = operations.find(op => op.name === 'get_skill');
+  if (!putPage || !timeline || !getSkill) throw new Error('缺少实体写入或技能工具');
+  const ctx: OperationContext = {
+    engine,
+    config: { engine: databaseUrl ? 'postgres' : 'pglite' },
+    logger: { info() {}, warn() {}, error() {} },
+    dryRun: false,
+    remote: true,
+    sourceId: 'vault',
+    viaSubagent: true,
+    subagentId: 7,
+    allowedSlugPrefixes: [...ENTITY_CAPTURE_SLUG_PREFIXES],
+    skillsDir,
+  };
+  await expect(putPage.handler(ctx, {
+    slug: 'wiki/meetings/secret',
+    content: '---\ntitle: secret\n---\nbody',
+  })).rejects.toThrow(/put_page slug 'wiki\/meetings\/secret' is not within the trusted-workspace allow-list/);
+  await expect(timeline.handler(ctx, {
+    slug: 'wiki/meetings/secret',
+    date: '2026-10-06',
+    summary: '不应写入',
+  })).rejects.toThrow(/add_timeline_entry slug 'wiki\/meetings\/secret' is not within the trusted-workspace allow-list/);
+  await engine.setConfig('mcp.publish_skills', 'false');
+  const detail = await getSkill.handler(ctx, { name: 'signal-detector' }) as { name: string; body: string };
+  expect(detail.name).toBe('signal-detector');
+  expect(detail.body).toContain('Entity Detection');
+  await expect(getSkill.handler({ ...ctx, viaSubagent: false, skillsDir: undefined }, { name: 'signal-detector' }))
+    .rejects.toThrow(/disabled/i);
+});
+
+test('资料选择跳过实体页、过短正文和已经由整理生成的页面', async () => {
+  await useVault();
+  await article('张三在 OpenAI 工作，并提出了新的研究方向。');
+  await engine.putPage('people/已有', {
+    type: 'person', title: '已有', compiled_truth: '这是一个已经存在的人物页面。', timeline: '', frontmatter: {},
+  }, { sourceId: 'vault' });
+  await engine.putPage('notes/short', {
+    type: 'note', title: '短', compiled_truth: '太短', timeline: '', frontmatter: {},
+  }, { sourceId: 'vault' });
+  await engine.putPage('notes/dream', {
+    type: 'note', title: '整理产物', compiled_truth: '这是深度整理已经生成的页面，不应再次识别。', timeline: '',
+    frontmatter: { dream_generated: true },
+  }, { sourceId: 'vault' });
+  const candidates = await selectEntityCaptureCandidates(engine, 'vault');
+  expect(candidates.map(item => item.slug)).toEqual(['notes/work']);
+});
+
+test('预演不创建实体页', async () => {
+  await useVault();
+  await article('张三在 OpenAI 工作，并提出了新的研究方向。');
+  const before = await pageCount();
+  const result = await runPhaseCaptureEntities(engine, { sourceId: 'vault', dryRun: true });
+  expect(result.status).toBe('ok');
+  expect(result.details.dry_run).toBe(true);
+  expect(result.details.pages_submitted).toBe(0);
+  expect(await pageCount()).toBe(before);
+  const jobs = await engine.executeRaw<{ n: number }>(`SELECT count(*)::int AS n FROM minion_jobs`);
+  expect(Number(jobs[0]?.n ?? 0)).toBe(0);
+});
+
+test('脚本按技能搜索并创建人物和公司，正文关联随后连上文章', async () => {
+  await useVault();
+  await article('张三在 OpenAI 工作，并提出了新的研究方向。');
+  const person = [
+    '---',
+    'title: 张三',
+    'type: person',
+    '---',
+    '',
+    '张三在 OpenAI 工作。参见 [工作记录](notes/work)。',
+  ].join('\n');
+  const company = [
+    '---',
+    'title: OpenAI',
+    'type: company',
+    '---',
+    '',
+    'OpenAI 的人员变动见 [工作记录](notes/work)。',
+  ].join('\n');
+  const client = new FakeMessagesClient([
+    tool('skill-list', 'brain_list_skills', {}),
+    tool('skill-read', 'brain_get_skill', { name: 'signal-detector' }),
+    tool('search-person', 'brain_search', { query: '张三' }),
+    tool('search-company', 'brain_search', { query: 'OpenAI' }),
+    tool('write-person', 'brain_put_page', { slug: 'people/张三', content: person }),
+    tool('write-company', 'brain_put_page', { slug: 'companies/openai', content: company }),
+    text('已创建 people/张三、companies/openai'),
+  ]);
+  const result = await runPhaseCaptureEntities(engine, {
+    sourceId: 'vault',
+    handler: makeSubagentHandler({ engine, client }),
+  });
+  expect(result.status).toBe('ok');
+  expect(result.details.written_slugs).toEqual(['companies/openai', 'people/张三']);
+  const toolNames = client.calls.flatMap(call => (call.tools ?? []).map(item => item.name));
+  expect(toolNames).toContain('brain_get_skill');
+  expect(toolNames).toContain('brain_put_page');
+  expect(toolNames).not.toContain('brain_add_link');
+  const pages = await engine.executeRaw<{ slug: string; title: string; type: string }>(
+    `SELECT slug, title, type FROM pages WHERE slug IN ('people/张三', 'companies/openai') ORDER BY slug`,
+  );
+  expect(pages).toEqual([
+    { slug: 'companies/openai', title: 'OpenAI', type: 'company' },
+    { slug: 'people/张三', title: '张三', type: 'person' },
+  ]);
+  await runByMentionCore(engine, { sourceIdFilter: 'vault', quiet: true });
+  const links = await engine.executeRaw<{ from_slug: string; to_slug: string; link_source: string }>(
+    `SELECT f.slug AS from_slug, t.slug AS to_slug, l.link_source
+       FROM links l
+       JOIN pages f ON f.id = l.from_page_id
+       JOIN pages t ON t.id = l.to_page_id
+      WHERE f.slug = 'notes/work' AND f.source_id = 'vault'`,
+  );
+  expect(links).toContainEqual({ from_slug: 'notes/work', to_slug: 'people/张三', link_source: 'mentions' });
+  expect(links).toContainEqual({ from_slug: 'notes/work', to_slug: 'companies/openai', link_source: 'mentions' });
+}, 60_000);
+
+test('已有充实页面时，按指令不覆盖', async () => {
+  await useVault();
+  const rich = '张三长期负责 OpenAI 的研究合作。这段内容已经包含人物、机构和事实，后续整理应保留，不应整页覆盖。';
+  await engine.putPage('people/张三', {
+    type: 'person', title: '张三', compiled_truth: rich, timeline: '', frontmatter: {},
+  }, { sourceId: 'vault' });
+  await article('张三在 OpenAI 工作，并提出了新的研究方向。');
+  const client = new FakeMessagesClient([
+    tool('skill-list', 'brain_list_skills', {}),
+    tool('skill-read', 'brain_get_skill', { name: 'signal-detector' }),
+    tool('search-person', 'brain_search', { query: '张三' }),
+    tool('read-person', 'brain_get_page', { slug: 'people/张三' }),
+    text('people/张三 已经充实，不覆盖。'),
+  ]);
+  const result = await runPhaseCaptureEntities(engine, {
+    sourceId: 'vault',
+    handler: makeSubagentHandler({ engine, client }),
+  });
+  expect(result.status).toBe('ok');
+  expect(result.details.written_slugs).toEqual([]);
+  const saved = await engine.executeRaw<{ compiled_truth: string }>(
+    `SELECT compiled_truth FROM pages WHERE slug = 'people/张三' AND source_id = 'vault'`,
+  );
+  expect(saved[0]?.compiled_truth).toBe(rich);
+}, 60_000);
+
+test('同一份资料成功识别后，下一次不重复交给代理', async () => {
+  await useVault();
+  await article('张三在 OpenAI 工作，并提出了新的研究方向。');
+  let calls = 0;
+  const handler = async () => {
+    calls += 1;
+    return { ok: true };
+  };
+  const first = await runPhaseCaptureEntities(engine, { sourceId: 'vault', handler });
+  expect(first.status).toBe('ok');
+  expect(first.details.pages_submitted).toBe(1);
+  expect(calls).toBe(1);
+  const second = await runPhaseCaptureEntities(engine, { sourceId: 'vault', handler });
+  expect(second.status).toBe('ok');
+  expect(second.details.pages_submitted).toBe(0);
+  expect(calls).toBe(1);
+}, 60_000);
+
+test('完整整理先识别实体，再把新实体补进正文关联', async () => {
+  await useVault();
+  await article('张三在 OpenAI 工作，并提出了新的研究方向。');
+  const report = await runCycle(engine, {
+    brainDir: null,
+    sourceId: 'vault',
+    phases: ['extract', 'capture_entities'],
+    includeByMention: true,
+    refreshRelationsAfterGeneration: true,
+    captureEntitiesHandler: async () => {
+      await engine.putPage('people/张三', {
+        type: 'person', title: '张三', compiled_truth: '张三在 OpenAI 工作。', timeline: '', frontmatter: {},
+      }, { sourceId: 'vault' });
+      return { created: 'people/张三' };
+    },
+  });
+  expect(report.phases.map(phase => phase.phase)).toEqual(['extract', 'capture_entities']);
+  const capture = report.phases.find(phase => phase.phase === 'capture_entities');
+  expect(capture?.status).toBe('ok');
+  expect(capture?.details.source_slugs).toEqual(['notes/work']);
+  expect(report.phases.find(phase => phase.phase === 'extract')?.details.postGenerationRelations).toBe(true);
+  const links = await engine.executeRaw<{ to_slug: string; link_source: string }>(
+    `SELECT t.slug AS to_slug, l.link_source
+       FROM links l
+       JOIN pages f ON f.id = l.from_page_id
+       JOIN pages t ON t.id = l.to_page_id
+      WHERE f.slug = 'notes/work' AND f.source_id = 'vault' AND t.slug = 'people/张三'`,
+  );
+  expect(links).toContainEqual({ to_slug: 'people/张三', link_source: 'mentions' });
+}, 60_000);
+
+test('项目页可以成为正文关联的目标', async () => {
+  await useVault();
+  await engine.putPage('projects/deep-blue', {
+    type: 'project', title: '深蓝计划', compiled_truth: '深蓝计划是一个独立项目。', timeline: '', frontmatter: {},
+  }, { sourceId: 'vault' });
+  await engine.putPage('notes/project', {
+    type: 'note', title: '项目记录', compiled_truth: '本次讨论了深蓝计划的范围。', timeline: '', frontmatter: {},
+  }, { sourceId: 'vault' });
+  await runByMentionCore(engine, { sourceIdFilter: 'vault', quiet: true });
+  const links = await engine.executeRaw<{ to_slug: string }>(
+    `SELECT t.slug AS to_slug
+       FROM links l
+       JOIN pages f ON f.id = l.from_page_id
+       JOIN pages t ON t.id = l.to_page_id
+      WHERE f.slug = 'notes/project' AND l.link_source = 'mentions'`,
+  );
+  expect(links.map(row => row.to_slug)).toContain('projects/deep-blue');
+});
