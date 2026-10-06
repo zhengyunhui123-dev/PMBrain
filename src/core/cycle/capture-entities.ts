@@ -11,7 +11,9 @@ import { dreamModelDetails, resolveDreamModel, resolveSubagentExecutionMode } fr
 import { runSubagentsInline } from './inline-drain.ts';
 import { throwIfAborted } from '../abort-check.ts';
 
-export const ENTITY_CAPTURE_PAGE_BUDGET = 25;
+export const ENTITY_CAPTURE_PAGE_BUDGET = 100;
+export const ENTITY_CAPTURE_CHUNK_CHARS = 8000;
+export const ENTITY_CAPTURE_CHUNK_OVERLAP = 500;
 export const ENTITY_CAPTURE_TOOLS = [
   'list_skills',
   'get_skill',
@@ -30,7 +32,6 @@ export const ENTITY_CAPTURE_SLUG_PREFIXES = [
 ] as const;
 
 const MIN_BODY_CHARS = 8;
-const MAX_BODY_CHARS = 8000;
 const moduleDir = dirname(fileURLToPath(import.meta.url));
 
 export interface EntityCaptureCandidate {
@@ -38,6 +39,12 @@ export interface EntityCaptureCandidate {
   sourceId: string;
   title: string;
   body: string;
+}
+
+export interface EntityCaptureChunk extends EntityCaptureCandidate {
+  chunkIndex: number;
+  chunkCount: number;
+  chunkBody: string;
 }
 
 export interface CaptureEntitiesOpts {
@@ -69,10 +76,30 @@ export function locateSignalDetectorSkillsDir(): string | null {
   return null;
 }
 
-export function buildEntityCapturePrompt(page: EntityCaptureCandidate): string {
-  const body = page.body.length > MAX_BODY_CHARS
-    ? `${page.body.slice(0, MAX_BODY_CHARS)}\n\n[资料在此处截断，只根据上面的原文判断。]`
-    : page.body;
+export function splitEntityCaptureCandidate(page: EntityCaptureCandidate): EntityCaptureChunk[] {
+  if (page.body.length <= ENTITY_CAPTURE_CHUNK_CHARS) {
+    return [{ ...page, chunkIndex: 0, chunkCount: 1, chunkBody: page.body }];
+  }
+  const step = Math.max(1, ENTITY_CAPTURE_CHUNK_CHARS - ENTITY_CAPTURE_CHUNK_OVERLAP);
+  const parts: string[] = [];
+  for (let start = 0; start < page.body.length; start += step) {
+    const end = Math.min(page.body.length, start + ENTITY_CAPTURE_CHUNK_CHARS);
+    parts.push(page.body.slice(start, end));
+    if (end >= page.body.length) break;
+  }
+  return parts.map((chunkBody, chunkIndex) => ({
+    ...page,
+    chunkIndex,
+    chunkCount: parts.length,
+    chunkBody,
+  }));
+}
+
+export function buildEntityCapturePrompt(page: EntityCaptureCandidate | EntityCaptureChunk): string {
+  const isChunk = 'chunkBody' in page;
+  const body = isChunk ? page.chunkBody : page.body;
+  const chunkIndex = isChunk ? page.chunkIndex : 0;
+  const chunkCount = isChunk ? page.chunkCount : 1;
   return `你正在执行用户明确发起的深度整理。这一份资料要按知识整理 Skill 处理，不是按固定的会议或观点模板处理。
 
 开始写任何页面前，必须按顺序调用工具：
@@ -84,6 +111,7 @@ export function buildEntityCapturePrompt(page: EntityCaptureCandidate): string {
 - slug: ${page.slug}
 - source: ${page.sourceId}
 - title: ${page.title}
+- 分块: 第 ${chunkIndex + 1}/${chunkCount} 段
 
 实体规则以 signal-detector 为准，这里只保留不能跳过的判定：
 - 找出值得记录的人物、公司、项目和概念。一次性的旁述不要建页。
@@ -95,6 +123,7 @@ export function buildEntityCapturePrompt(page: EntityCaptureCandidate): string {
 - 这次没有 add_link。关系交给页面里的链接和后续整理。有明确日期的事实可以调用 add_timeline_entry。
 - 不要写会议页、对话页、反思页或原创想法页。
 - 没有值得记录的实体时，不要写页面。
+- 长资料会分成多个重叠片段。跨分块重复出现的实体必须先 search，已有页面只补充新事实，不要重复创建或整页覆盖。
 
 资料正文
 ---
@@ -104,12 +133,35 @@ ${body}
 完成后列出你创建或补充过的 slug。`;
 }
 
-export function entityCaptureIdempotencyKey(page: EntityCaptureCandidate): string {
-  const digest = createHash('sha256')
+export function entityCaptureIdempotencyKey(
+  page: EntityCaptureCandidate,
+  chunkIndex = 0,
+  chunkBody = page.body,
+): string {
+  const fullDigest = createHash('sha256')
     .update(`${page.sourceId}\0${page.slug}\0${page.body}`)
     .digest('hex')
     .slice(0, 32);
-  return `dream:entity-capture:v1:${digest}`;
+  // Keep chunk 0 on the old v1 key so long documents processed by 1.4.35
+  // don't repeat the already-scanned first 8k after this upgrade.
+  if (chunkIndex === 0) return `dream:entity-capture:v1:${fullDigest}`;
+  const digest = createHash('sha256')
+    .update(`${fullDigest}\0chunk:${chunkIndex}\0${chunkBody}`)
+    .digest('hex')
+    .slice(0, 32);
+  return `dream:entity-capture:v2:${digest}`;
+}
+
+async function hasCompletedCaptureJob(engine: BrainEngine, baseKey: string): Promise<boolean> {
+  const rows = await engine.executeRaw<{ done: number }>(
+    `SELECT 1::int AS done
+       FROM minion_jobs
+      WHERE status = 'completed'
+        AND (idempotency_key = $1 OR idempotency_key LIKE $2)
+      LIMIT 1`,
+    [baseKey, `${baseKey}:retry:%`],
+  );
+  return rows.length > 0;
 }
 
 export async function selectEntityCaptureCandidates(
@@ -221,18 +273,19 @@ export async function runPhaseCaptureEntities(
   const modelDetails = dreamModelDetails(resolvedModel, executionMode);
   const budget = Math.max(1, opts.maxPages ?? ENTITY_CAPTURE_PAGE_BUDGET);
   const nonce = Date.now();
-  const pending: EntityCaptureCandidate[] = [];
+  const pendingPages: Array<{ page: EntityCaptureCandidate; chunks: EntityCaptureChunk[] }> = [];
   for (const page of candidates) {
-    const key = await retryableKey(engine, entityCaptureIdempotencyKey(page), nonce);
-    const rows = await engine.executeRaw<{ status: string }>(
-      `SELECT status FROM minion_jobs WHERE idempotency_key = $1 LIMIT 1`,
-      [key],
-    );
-    if (rows[0]?.status === 'completed') continue;
-    pending.push(page);
+    const pendingChunks: EntityCaptureChunk[] = [];
+    for (const chunk of splitEntityCaptureCandidate(page)) {
+      const key = entityCaptureIdempotencyKey(page, chunk.chunkIndex, chunk.chunkBody);
+      if (await hasCompletedCaptureJob(engine, key)) continue;
+      pendingChunks.push(chunk);
+    }
+    if (pendingChunks.length > 0) pendingPages.push({ page, chunks: pendingChunks });
   }
-  const batch = pending.slice(0, budget);
-  const remainingAfterBatch = Math.max(0, pending.length - batch.length);
+  const pageBatch = pendingPages.slice(0, budget);
+  const batch = pageBatch.flatMap(item => item.chunks);
+  const remainingAfterBatch = Math.max(0, pendingPages.length - pageBatch.length);
   if (batch.length === 0) {
     return phaseResult('ok', '这些资料已经按 signal-detector 识别过实体', {
       ...modelDetails,
@@ -252,18 +305,20 @@ export async function runPhaseCaptureEntities(
   const childQueueName = `dream-inline-${Date.now()}-${randomUUID().slice(0, 8)}`;
   const ownerToken = randomUUID();
   const childIds: number[] = [];
-  const sourceSlugs: string[] = [];
+  const sourceSlugs = new Set<string>();
+  const jobSourceSlugs = new Map<number, string>();
   try {
-    for (const page of batch) {
+    for (const chunk of batch) {
       throwIfAborted(opts.signal, '[dream] capture entities');
-      const idempotencyKey = await retryableKey(engine, entityCaptureIdempotencyKey(page), nonce);
+      const baseKey = entityCaptureIdempotencyKey(chunk, chunk.chunkIndex, chunk.chunkBody);
+      const idempotencyKey = await retryableKey(engine, baseKey, nonce);
       const data: SubagentHandlerData = {
-        prompt: buildEntityCapturePrompt(page),
+        prompt: buildEntityCapturePrompt(chunk),
         model: resolvedModel.model,
         max_turns: 12,
         allowed_tools: [...ENTITY_CAPTURE_TOOLS],
         allowed_slug_prefixes: [...ENTITY_CAPTURE_SLUG_PREFIXES],
-        source_id: page.sourceId,
+        source_id: chunk.sourceId,
         skills_dir: skillsDir,
       };
       const submitOpts: Partial<MinionJobInput> = {
@@ -281,9 +336,10 @@ export async function runPhaseCaptureEntities(
         submitOpts,
         { allowProtectedSubmit: true },
       );
+      sourceSlugs.add(chunk.slug);
       if (child.status === 'completed') continue;
       childIds.push(child.id);
-      sourceSlugs.push(page.slug);
+      jobSourceSlugs.set(child.id, chunk.slug);
     }
 
     await runSubagentsInline(
@@ -296,7 +352,8 @@ export async function runPhaseCaptureEntities(
       opts.signal,
     );
 
-    let failed = 0;
+    let failedChunks = 0;
+    const failedPageSlugs = new Set<string>();
     for (const jobId of childIds) {
       try {
         const job = await waitForCompletion(queue, jobId, {
@@ -305,10 +362,17 @@ export async function runPhaseCaptureEntities(
           signal: opts.signal,
           onPoll: opts.yieldDuringPhase,
         });
-        if (job.status !== 'completed') failed += 1;
+        if (job.status !== 'completed') {
+          failedChunks += 1;
+          const sourceSlug = jobSourceSlugs.get(jobId);
+          if (sourceSlug) failedPageSlugs.add(sourceSlug);
+        }
       } catch (error) {
-        if (error instanceof TimeoutError) failed += 1;
-        else throw error;
+        if (error instanceof TimeoutError) {
+          failedChunks += 1;
+          const sourceSlug = jobSourceSlugs.get(jobId);
+          if (sourceSlug) failedPageSlugs.add(sourceSlug);
+        } else throw error;
       }
     }
 
@@ -323,19 +387,22 @@ export async function runPhaseCaptureEntities(
         [childIds],
       );
     const writtenSlugs = written.map(row => row.slug).filter(slug => typeof slug === 'string' && slug.length > 0).sort();
-    const status: PhaseResult['status'] = failed > 0 ? (writtenSlugs.length > 0 ? 'warn' : 'fail') : 'ok';
-    const summary = failed > 0
-      ? `实体识别有 ${failed} 份资料失败，已写入 ${writtenSlugs.length} 个实体页，剩余 ${remainingAfterBatch} 份`
-      : `已按 signal-detector 检查 ${batch.length} 份资料，写入 ${writtenSlugs.length} 个实体页，剩余 ${remainingAfterBatch} 份`;
+    const failedPages = failedPageSlugs.size;
+    const status: PhaseResult['status'] = failedChunks > 0 ? (writtenSlugs.length > 0 ? 'warn' : 'fail') : 'ok';
+    const summary = failedChunks > 0
+      ? `实体识别有 ${failedPages} 份资料（${failedChunks} 个分块）失败，已写入 ${writtenSlugs.length} 个实体页，剩余 ${remainingAfterBatch} 份`
+      : `已按 signal-detector 检查 ${pageBatch.length} 份资料（${batch.length} 个分块），写入 ${writtenSlugs.length} 个实体页，剩余 ${remainingAfterBatch} 份`;
     return phaseResult(status, summary, {
       ...modelDetails,
       pages_seen: candidates.length,
-      pages_submitted: batch.length,
+      pages_submitted: pageBatch.length,
+      chunks_submitted: batch.length,
       pages_remaining: remainingAfterBatch,
-      pages_failed: failed,
+      pages_failed: failedPages,
+      chunks_failed: failedChunks,
       entities_written: writtenSlugs.length,
       written_slugs: writtenSlugs,
-      source_slugs: sourceSlugs,
+      source_slugs: [...sourceSlugs],
       skill: 'signal-detector',
       skills_dir: skillsDir,
     });
