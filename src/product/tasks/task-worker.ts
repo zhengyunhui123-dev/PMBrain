@@ -13,6 +13,7 @@ import { runEmbedCore } from '../../commands/embed.ts';
 import { parentPort } from 'node:worker_threads';
 import { format } from 'node:util';
 import { stat } from 'node:fs/promises';
+import { setImmediate as yieldExecution } from 'node:timers/promises';
 import { streamFileHash, assertImportFileSize } from './resource-guard.ts';
 import { relative, isAbsolute, join } from 'node:path';
 import { SyncFilesDeferred, type SyncFileRuntime } from '../../core/sync-file-runtime.ts';
@@ -29,6 +30,7 @@ const pending = new Map<number, { resolve: (value: unknown) => void; reject: (er
 let abort = new AbortController();
 const send = (message: TaskWorkerMessage) => parentPort!.postMessage(message);
 let importFile: string | undefined;
+let constrained=false;
 const originalFetch = globalThis.fetch;
 globalThis.fetch = ((...args: Parameters<typeof fetch>) => {
   const target = args[0] instanceof Request ? args[0].url : String(args[0]);
@@ -170,10 +172,13 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
     synthDate: input.date, synthFrom: input.from, synthTo: input.to,
     proposeTakesPageLimit: input.maxPages,
     embedPageLimit: input.maxPages,
-    embedBatchSize: 100,
+    embedBatchSize: constrained?32:100,
+    getEmbedBatchSize:()=>constrained?32:100,
     proposeTakesRequireChunks: true,
     proposeTakesDrain: input.drainProposals,
     proposeTakesWindowMs: (input.windowSeconds ?? 3600) * 1000,
+    yieldBetweenPhases:async()=>{await yieldExecution();if(constrained)Bun.gc(false);},
+    yieldDuringPhase:async()=>{abort.signal.throwIfAborted();await yieldExecution();if(constrained)Bun.gc(false);},
   };
   if (input.preset === 'quick' && input.allSources) {
     const reports = [];
@@ -301,6 +306,7 @@ async function execute(task: ProductTask, kind: BrainEngine['kind']) {
       stale: true, forceReembed: task.input.forceReembed,
       catchUp: task.input.catchUp,
       batchSize: 100,
+      getBatchSize:()=>constrained?32:100,
       signal: abort.signal,
     }), catchUp: task.input.catchUp === true, forceReembed: task.input.forceReembed === true };
   }
@@ -316,7 +322,10 @@ async function execute(task: ProductTask, kind: BrainEngine['kind']) {
 }
 
 parentPort!.on('message', message => {
-  if (message.type === 'reply') {
+  if(message.type==='resource-pressure'){
+    constrained=message.constrained===true;
+    if(constrained)Bun.gc(false);
+  }else if (message.type === 'reply') {
     const waiter = pending.get(message.id);
     pending.delete(message.id);
     if (message.error) {
@@ -329,6 +338,7 @@ parentPort!.on('message', message => {
     for (const waiter of pending.values()) waiter.reject(new Error('任务已取消'));
     pending.clear();
   } else if (message.type === 'start') {
+    constrained=message.constrained===true;
     abort = new AbortController();
     importFile = undefined;
     void execute(message.task, message.kind).catch(error => {

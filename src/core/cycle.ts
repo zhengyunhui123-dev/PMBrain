@@ -456,6 +456,7 @@ export interface CycleOpts {
    */
   signal?: AbortSignal;
   embedBatchSize?: number;
+  getEmbedBatchSize?: () => number;
   /** Absolute deadline inherited from the owning Minion job. */
   deadlineAtMs?: number | null;
   /** Owning Minion job id for phase-created dream-inline private queues. */
@@ -813,11 +814,13 @@ export async function runPhaseLint(
   brainDir: string,
   dryRun: boolean,
   engine?: BrainEngine,
+  signal?: AbortSignal,
 ): Promise<PhaseResult> {
   try {
     const { runLintCore, resolveLintContentSanity } = await import('../commands/lint.ts');
     const result = await runLintCore({
       target: brainDir,
+      signal,
       fix: true,
       dryRun,
       contentSanity: await resolveLintContentSanity(engine),
@@ -852,7 +855,7 @@ export async function runPhaseLint(
   }
 }
 
-export async function runPhaseBacklinks(brainDir: string, dryRun: boolean): Promise<PhaseResult> {
+export async function runPhaseBacklinks(brainDir: string, dryRun: boolean, signal?:AbortSignal): Promise<PhaseResult> {
   try {
     // Maintenance cycles must not rewrite tracked brain pages with generated
     // "Referenced in" timeline bullets. The graph extractor/auto-link path is
@@ -862,6 +865,7 @@ export async function runPhaseBacklinks(brainDir: string, dryRun: boolean): Prom
     const { runBacklinksCore } = await import('../commands/backlinks.ts');
     const result = await runBacklinksCore({
       action: 'check',
+      signal,
       dir: brainDir,
       dryRun,
     });
@@ -1267,6 +1271,7 @@ async function runPhaseEmbed(
   reporter?: ProgressReporter,
   signal?: AbortSignal,
   batchSize?: number,
+  getBatchSize?: () => number,
 ): Promise<PhaseResult> {
   try {
     const { loadConfig } = await import('./config.ts');
@@ -1298,6 +1303,7 @@ async function runPhaseEmbed(
       pageLimit,
       signal,
       batchSize,
+      getBatchSize,
       quiet: true,
       onProgress: (done, total, embedded) => {
         const safeTotal = Math.max(1, total);
@@ -1742,7 +1748,7 @@ export async function runCycle(
         phaseResults.push(skipNoBrainDir('lint'));
       } else {
         progress.start('cycle.lint');
-        const { result, duration_ms } = await timePhase(() => runPhaseLint(brainDir, dryRun, engine ?? undefined));
+        const { result, duration_ms } = await timePhase(() => runPhaseLint(brainDir, dryRun, engine ?? undefined, opts.signal));
         result.duration_ms = duration_ms;
         phaseResults.push(result);
         progress.finish();
@@ -1757,7 +1763,7 @@ export async function runCycle(
         phaseResults.push(skipNoBrainDir('backlinks'));
       } else {
         progress.start('cycle.backlinks');
-        const { result, duration_ms } = await timePhase(() => runPhaseBacklinks(brainDir, dryRun));
+        const { result, duration_ms } = await timePhase(() => runPhaseBacklinks(brainDir, dryRun, opts.signal));
         result.duration_ms = duration_ms;
         phaseResults.push(result);
         progress.finish();
@@ -2538,6 +2544,7 @@ export async function runCycle(
           progress,
           opts.signal,
           opts.embedBatchSize,
+          opts.getEmbedBatchSize,
         ));
         result.duration_ms = duration_ms;
         phaseResults.push(result);

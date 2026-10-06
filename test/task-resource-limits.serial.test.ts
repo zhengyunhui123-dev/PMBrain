@@ -121,18 +121,26 @@ test('容量满后拒绝后续文件，已接受文件正常完成释放快照�
   }finally{await runtime.close();}
 },60000);
 
-test('产品两条 Worker 启用 2GB 看门狗，超限后拒绝新任务且没有自动重启',async()=>{
+test('正常 2GB 工作集可以继续，软压力回收闲置线程并降并发，恢复后继续领取任务',async()=>{
   let memory=0;
-  const runtime=new ProductTaskRuntime(engine,{memoryBytes:()=>memory,rssCheckIntervalMs:10});
+  const runtime=new ProductTaskRuntime(engine,{memoryBytes:()=>memory,totalMemoryBytes:()=>32*1024**3,availableMemoryBytes:()=>14*1024**3,rssCheckIntervalMs:10});
   await runtime.start();
   try{
-    expect((runtime as any).worker.opts.maxRssMb).toBe(2048);
-    expect((runtime as any).fileWorker.opts.maxRssMb).toBe(2048);
     memory=3*1024*1024*1024;
-    const deadline=Date.now()+3000;
-    while(!(runtime as any).failure&&Date.now()<deadline)await Bun.sleep(10);
-    await expect(runtime.submitEmbed()).rejects.toThrow('内存');
-    expect((runtime as any).paused).toBe(true);
+    await Bun.sleep(50);
+    expect((runtime as any).failure).toBeNull();expect((runtime as any).paused).toBe(false);
+    expect((runtime as any).worker.opts.concurrency).toBe(2);
+    memory=9*1024**3;await Bun.sleep(50);
+    expect((runtime as any).worker.opts.concurrency).toBe(1);
+    expect((runtime as any).fileWorker.opts.concurrency).toBe(1);
+    const run=await runtime.submitDream({preset:'quick',dryRun:true});
+    const deadline=Date.now()+15000;let status='queued';
+    while(Date.now()<deadline){status=(await runtime.getRun(run.id))!.status;if(!['running','queued'].includes(status))break;await Bun.sleep(30);}
+    expect(status).toBe('completed');expect((runtime as any).idleMaintenanceThreads).toHaveLength(0);
+    memory=0;await Bun.sleep(50);
+    expect((runtime as any).worker.opts.concurrency).toBe(2);
+    await runtime.adjustResourcePressure(true);expect((runtime as any).worker.opts.concurrency).toBe(1);
+    await runtime.adjustResourcePressure(false);expect((runtime as any).worker.opts.concurrency).toBe(2);
   }finally{await runtime.close();}
 },60000);
 

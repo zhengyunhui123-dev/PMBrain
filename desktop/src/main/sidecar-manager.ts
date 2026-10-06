@@ -9,7 +9,8 @@ import {
   type CliRuntime,
 } from './cli-runner.js';
 import { getDesktopRuntimeContract } from './runtime-contract.js';
-import { SidecarResourceMonitor, type ResourceSample } from './sidecar/resource-monitor.js';
+import { SidecarResourceMonitor, type ResourceSample, type ResourceAction } from './sidecar/resource-monitor.js';
+import { memoryPressure } from '../../../shared/memory-budget.js';
 import {
   classifySidecarStartupError,
   SidecarExitedBeforeHealthyError,
@@ -366,7 +367,7 @@ export class SidecarManager {
     this.child = child;
     if(child.pid){
       this.resourceMonitor?.stop();
-      this.resourceMonitor=new SidecarResourceMonitor(child.pid,(message,sample)=>this.stopForResourcePressure(child,message,sample),{
+      this.resourceMonitor=new SidecarResourceMonitor(child.pid,(message,sample,action)=>this.stopForResourcePressure(child,message,sample,action),{
         onError:error=>this.options.logger.write('desktop',`Resource monitor: ${error instanceof Error?error.message:String(error)}`),
       });
       this.resourceMonitor.start();
@@ -398,17 +399,26 @@ export class SidecarManager {
     });
   }
 
-  private async stopForResourcePressure(child:ChildProcess,message:string,sample:ResourceSample|null):Promise<void>{
+  private async stopForResourcePressure(child:ChildProcess,message:string,sample:ResourceSample|null,action:ResourceAction='adjust'):Promise<void>{
     if(this.child!==child||child.exitCode!==null||this.stopping)return;
+    if(!sample)return;
+    if(action==='adjust'){
+      const constrained=memoryPressure(sample).level!=='normal';
+      await this.adminRequest('/admin/api/console/resource-stop',{method:'POST',body:JSON.stringify({action:'adjust',constrained}),signal:AbortSignal.timeout(5000)});
+      this.options.logger.write('desktop',constrained?`资源调节：${message}`:'资源调节：恢复正常后台并发');
+      return;
+    }
+    if(action==='drain'){
+      const reason=`资源保护：${message}，已停止后台任务，普通服务继续运行。`;
+      await this.adminRequest('/admin/api/console/resource-stop',{method:'POST',body:JSON.stringify({message:reason}),signal:AbortSignal.timeout(5000)});
+      this.options.logger.write('desktop',reason);return;
+    }
     this.stopping=true;
     this.options.logger.write('desktop',`${message} pid=${child.pid} committed=${sample?.bytes??'unavailable'} available=${sample?.availableBytes??'unavailable'} commitHeadroom=${sample?.commitHeadroomBytes??'unavailable'}`);
-    if(sample && sample.bytes>=4*1024**3)this.requestProcessTreeStop(child,true);
-    else {
-      await Promise.race([
-        this.adminRequest('/admin/api/console/resource-stop',{method:'POST',body:JSON.stringify({message}),signal:AbortSignal.timeout(1000)}).catch(error=>this.options.logger.write('desktop',`Resource drain request: ${error instanceof Error?error.message:String(error)}`)),
-        new Promise(resolve=>setTimeout(resolve,1200)),
-      ]);
-    }
+    await Promise.race([
+      this.adminRequest('/admin/api/console/resource-stop',{method:'POST',body:JSON.stringify({message}),signal:AbortSignal.timeout(1000)}).catch(error=>this.options.logger.write('desktop',`Resource drain request: ${error instanceof Error?error.message:String(error)}`)),
+      new Promise(resolve=>setTimeout(resolve,1200)),
+    ]);
     if(this.child&&this.child!==child)return;
     try{await this.terminateChild();}
     finally{

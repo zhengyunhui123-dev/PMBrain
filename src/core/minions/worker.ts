@@ -608,6 +608,11 @@ export class MinionWorker extends EventEmitter {
     this.running = false;
   }
 
+  setConcurrency(concurrency:number):void{
+    if(!Number.isSafeInteger(concurrency)||concurrency<1)throw new Error('Worker concurrency must be a positive integer');
+    this.opts.concurrency=concurrency;
+  }
+
   /** RSS watchdog. Called from the per-job finally and the periodic timer.
    *  Idempotent: returns early if already not running or already shut down.
    *  When threshold is exceeded, hands off to gracefulShutdown(). */

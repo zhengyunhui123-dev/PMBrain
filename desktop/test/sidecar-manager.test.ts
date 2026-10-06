@@ -15,9 +15,20 @@ describe('desktop sidecar manager', () => {
     (manager as any).requestProcessTreeStop=(target:any,force:boolean)=>{expect(target).toBe(child);expect(force).toBe(false);stops++;target.exitCode=0;target.emit('exit',0,null);};
     await (manager as any).stopForResourcePressure({pid:999,exitCode:null},'不应执行',{bytes:3*1024**3,availableBytes:10*1024**3});
     expect(stops).toBe(0);
-    await (manager as any).stopForResourcePressure(child,'资源保护：内存不足',{bytes:3*1024**3,availableBytes:10*1024**3});
+    await (manager as any).stopForResourcePressure(child,'资源保护：内存不足',{bytes:3*1024**3,availableBytes:200*1024**2},'emergency');
     expect(stops).toBe(1);expect(requests).toBe(1);expect((manager as any).stopping).toBe(true);
     expect(states.at(-1)).toMatchObject({phase:'failed',message:'资源保护：内存不足',details:{retryable:false}});
+  });
+  test('达到后台预算只请求降并发，服务和数据库进程保持运行',async()=>{
+    const manager=new SidecarManager({packaged:false,appPath:'',resourcesPath:'',port:3131,bootstrapToken:'isolated-token',clientVersion:'1.4.31',logger});
+    const child=new EventEmitter() as any;child.pid=12345;child.exitCode=null;
+    (manager as any).child=child;const requests:any[]=[];
+    (manager as any).adminRequest=async(_path:string,init:RequestInit)=>{requests.push(JSON.parse(String(init.body)));};
+    (manager as any).terminateChild=()=>{throw new Error('正常资源压力不能停服务');};
+    await (manager as any).stopForResourcePressure(child,'降低并发',{bytes:9*1024**3,totalBytes:32*1024**3,availableBytes:10*1024**3},'adjust');
+    await (manager as any).stopForResourcePressure(child,'恢复',{bytes:3*1024**3,totalBytes:32*1024**3,availableBytes:10*1024**3},'adjust');
+    expect(requests).toEqual([{action:'adjust',constrained:true},{action:'adjust',constrained:false}]);
+    expect((manager as any).child).toBe(child);expect((manager as any).stopping).toBe(false);
   });
   test('PGLite 数据库打开失败时立即停止，不连续重启多个 sidecar', async () => {
     const states: any[] = [];

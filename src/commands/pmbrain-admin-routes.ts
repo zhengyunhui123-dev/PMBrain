@@ -1506,7 +1506,12 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
     res.json(run);
   });
 
-  app.post('/admin/api/console/resource-stop',requireAdmin,(req:Request,res:Response)=>{
+  app.post('/admin/api/console/resource-stop',requireAdmin,express.json({limit:'4kb'}),async(req:Request,res:Response)=>{
+    if(req.body?.action==='adjust'){
+      if(typeof req.body.constrained!=='boolean'){res.status(400).json({error:'resource_pressure_must_be_boolean'});return;}
+      await productTasks.adjustResourcePressure(req.body.constrained);
+      res.status(202).json({status:req.body.constrained?'throttled':'normal'});return;
+    }
     const reason=typeof req.body?.message==='string'?req.body.message.slice(0,1024):'资源保护：本地服务内存不足，已停止后台任务，请释放内存后重启服务并手动继续。';
     productTasks.stopForResourcePressure(reason);
     res.status(202).json({status:'stopping'});

@@ -6,8 +6,9 @@ import { getAccurateRss } from '../../core/minions/worker.ts';
 import { MAX_FILE_SIZE, MAX_IMAGE_BYTES, isImageFilePath } from '../../core/import-file.ts';
 import { MAX_OFFICE_BYTES } from '../../core/office-import.ts';
 import { isOfficeFilePath } from '../../core/sync.ts';
+import { freemem, totalmem } from 'node:os';
+import { memoryPressure } from '../../../shared/memory-budget.ts';
 
-export const PRODUCT_MAX_RSS_MB=2048;
 export const PRODUCT_QUEUE_CAPACITY=128;
 export const SYNC_QUEUE_CAPACITY=10000;
 export const SNAPSHOT_QUOTA_BYTES=1024*1024*1024;
@@ -19,6 +20,8 @@ export function assertImportFileSize(path:string,size:number){
 
 export interface TaskResourceOptions {
   memoryBytes?:()=>number;
+  availableMemoryBytes?:()=>number;
+  totalMemoryBytes?:()=>number;
   rssCheckIntervalMs?:number;
   diskReserveBytes?:number;
   freeDiskBytes?:(path:string)=>Promise<number>;
@@ -30,6 +33,7 @@ export class TaskResourceGuard {
   private measuringSnapshots:Promise<void>|null=null;
   constructor(private options:TaskResourceOptions={}){}
   memoryBytes(){return (this.options.memoryBytes??getAccurateRss)();}
+  memoryPressure(){return memoryPressure({bytes:this.memoryBytes(),availableBytes:(this.options.availableMemoryBytes??freemem)(),totalBytes:(this.options.totalMemoryBytes??totalmem)()});}
   get rssCheckIntervalMs(){return this.options.rssCheckIntervalMs??5000;}
   async assertDisk(path:string,additionalBytes=0){
     let target=path;

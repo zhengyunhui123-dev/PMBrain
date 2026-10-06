@@ -112,6 +112,34 @@ describe('软件后台任务共用 owner 数据库', () => {
       expect(pool[0]).toBe(thread);
     }
     expect(process.memoryUsage().rss-baseline).toBeLessThan(512*1024*1024);
+    const deep=await runtime.submitDream({phase:'backlinks',dryRun:true});
+    expect((await finished(deep.id)).status).toBe('completed');
+    expect(pool).toHaveLength(1);expect(pool[0]).toBe(thread);
+    const config=JSON.parse(readFileSync(configPath(),'utf8'));
+    config.model_usage.generative_enabled=true;
+    writeFileSync(configPath(),JSON.stringify(config));
+    await engine.executeRaw('UPDATE sources SET local_path=$1 WHERE id=$2',[root,'default']);
+    for(let index=0;index<3;index++){
+      await runtime.adjustResourcePressure(index===1);
+      const full=await runtime.submitDream({preset:'full',dryRun:true,sourceId:'default'});
+      const done=await finished(full.id);
+      expect(done.status).toBe('completed');
+      const phases=(done.result as {phases:{phase:string;status:string}[]}).phases;
+      expect(phases.some(row=>row.phase==='backlinks')).toBe(true);
+      expect(phases.some(row=>row.phase==='embed')).toBe(true);
+      expect(phases.filter(row=>row.status==='fail')).toEqual([]);
+      expect((await engine.executeRaw('SELECT 1 AS alive'))[0].alive).toBe(1);
+    }
+    configureModels(false);
+    await runtime.adjustResourcePressure(true);
+    expect(pool).toHaveLength(0);
+    for(let index=0;index<3;index++){
+      const next=await runtime.submitDream({preset:'quick',dryRun:true});
+      expect((await finished(next.id)).status).toBe('completed');
+      expect(pool).toHaveLength(0);
+      expect((await engine.executeRaw('SELECT 1 AS alive'))[0].alive).toBe(1);
+    }
+    await runtime.adjustResourcePressure(false);
     console.log('快速维护线程内存验收',JSON.stringify({runs:31,baselineRss:baseline,finalRss:process.memoryUsage().rss,threads:pool.length}));
     await runtime.close();
     expect(pool).toHaveLength(0);
@@ -287,14 +315,26 @@ describe('软件后台任务共用 owner 数据库', () => {
     const host = new TaskEngineHost(engine, job!.id, 'natural-token', async () => {});
     const scope = await host.dispatch({ type: 'rpc', id: 1, method: 'transaction.open', args: [] }) as number;
     await host.dispatch({ type: 'rpc', id: 2, method: 'setConfig', args: ['natural.rollback', 'not committed'], scope });
+    const scoped=(host as unknown as {scopes:Map<number,{engine:BrainEngine}>}).scopes.get(scope)!.engine;
+    const execute=scoped.executeRaw.bind(scoped);
+    let entered!:()=>void;
+    let releaseQuery!:()=>void;
+    const queryEntered=new Promise<void>(resolve=>{entered=resolve;});
+    const queryReleased=new Promise<void>(resolve=>{releaseQuery=resolve;});
+    scoped.executeRaw=async(sql,params)=>{
+      if(sql==='SELECT pg_sleep(0.15)'){entered();await queryReleased;}
+      return execute(sql,params);
+    };
     let finished = false;
     const current = host.dispatch({ type: 'rpc', id: 3, method: 'executeRaw', args: ['SELECT pg_sleep(0.15)'], scope }).finally(() => { finished = true; });
-    await Bun.sleep(20);
+    await queryEntered;
     const closing = host.close();
-    expect(finished).toBe(false);
-    expect(String(await host.dispatch({ type: 'rpc', id: 4, method: 'setConfig', args: ['natural.next', 'bad'], scope }).catch(error => error))).toContain('任务执行已停止');
-    await current;
-    await closing;
+    try{
+      expect(finished).toBe(false);
+      expect(String(await host.dispatch({ type: 'rpc', id: 4, method: 'setConfig', args: ['natural.next', 'bad'], scope }).catch(error => error))).toContain('任务执行已停止');
+    }finally{
+      releaseQuery();await current;await closing;scoped.executeRaw=execute;
+    }
     expect(finished).toBe(true);
     expect(await engine.getConfig('natural.rollback')).toBeNull();
     expect(await engine.getConfig('natural.next')).toBeNull();

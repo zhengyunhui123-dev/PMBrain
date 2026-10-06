@@ -22,7 +22,7 @@ import { withDatabasePriority } from '../database/priority';
 import { SyncFileQueue, SYNC_FILE_QUEUE, SYNC_FILE_TASK } from './sync-file-queue.ts';
 import type { MaintenanceCheckpoint, SyncFileInput } from './types.ts';
 import { resolveSourceId } from '../../core/source-resolver.ts';
-import { TaskResourceGuard, PRODUCT_MAX_RSS_MB, PRODUCT_QUEUE_CAPACITY, type TaskResourceOptions } from './resource-guard.ts';
+import { TaskResourceGuard, PRODUCT_QUEUE_CAPACITY, type TaskResourceOptions } from './resource-guard.ts';
 
 export const PRODUCT_TASK_QUEUE = 'pmbrain-product';
 const TASK_NAME = 'pmbrain-product-task';
@@ -76,14 +76,19 @@ export class ProductTaskRuntime {
   private failure: Error | null = null;
   private cached: ConsoleRun[] = [];
   private refreshingRuns: Promise<void> | null = null;
-  private executions = new Map<number, { cancel: (reason?:string) => void; done: Promise<unknown>; run: () => ConsoleRun; ownsLockedTransaction: () => boolean }>();
+  private executions = new Map<number, { cancel: (reason?:string) => void; done: Promise<unknown>; run: () => ConsoleRun; ownsLockedTransaction: () => boolean; adjust:(constrained:boolean)=>void }>();
   private resources:TaskResourceGuard;
   private resourceDrain:Promise<void>|null=null;
+  private resourceTimer:ReturnType<typeof setInterval>|null=null;
+  private idleTimer:ReturnType<typeof setTimeout>|null=null;
+  private localPressure=false;
+  private externalPressure=false;
+  private reclaiming:Promise<void>|null=null;
 
   constructor(private engine: BrainEngine, resourceOptions:TaskResourceOptions={}) {
     this.resources=new TaskResourceGuard(resourceOptions);
     this.fileProjection=new FileProjection({resources:this.resources});
-    const memoryOptions={maxRssMb:PRODUCT_MAX_RSS_MB,rssCheckInterval:this.resources.rssCheckIntervalMs,getRss:()=>this.checkMemory()};
+    const memoryOptions={maxRssMb:0};
     this.queue = new MinionQueue(engine);
     this.fileQueue = new SyncFileQueue(engine,job=>this.fileProjection.record(job),id=>!this.stopIntents.has(id)&&!this.paused&&!this.stopped,this.resources);
     this.fileWorker = new MinionWorker(engine, { ...memoryOptions, queue: SYNC_FILE_QUEUE, concurrency: engine.kind==='pglite'?1:2, pollInterval: 100, healthCheckInterval: 0, lockDuration: 30_000, stalledInterval: 5000, ownsLockedTransaction: id => this.executions.get(id)?.ownsLockedTransaction() === true });
@@ -159,6 +164,8 @@ export class ProductTaskRuntime {
       this.failure = error instanceof Error ? error : new Error(String(error));
       console.error('[tasks] worker stopped:', error instanceof Error ? error.message : error);
     });
+    this.resourceTimer=setInterval(()=>this.checkMemory(),this.resources.rssCheckIntervalMs);
+    this.resourceTimer.unref();
   }
 
   private async submit(task: ProductTask, kind: string, idempotencyKey?: string, trigger: 'manual' | 'scheduled' = 'manual', queue = this.queue): Promise<ConsoleRun> {
@@ -421,8 +428,10 @@ export class ProductTaskRuntime {
     const workerPath = /\/(?:~BUN|\$bunfs)\//.test(decodeURIComponent(import.meta.url))
       ? './product/tasks/task-worker.ts'
       : new URL(import.meta.url.endsWith('.ts') ? './task-worker.ts' : './task-worker.js', import.meta.url);
+    if(structuredTask.type!=='sync-file')await this.releaseIdleThreads(this.idleFileThreads);
+    if(this.localPressure||this.externalPressure)await this.reclaimIdleThreads();
     const reusableThreads=structuredTask.type==='sync-file'?this.idleFileThreads
-      :structuredTask.type==='dream'&&structuredTask.input.preset==='quick'?this.idleMaintenanceThreads:undefined;
+      :structuredTask.type==='dream'?this.idleMaintenanceThreads:undefined;
     const thread = reusableThreads?.pop() ?? new Worker(workerPath, { env: { ...process.env } });
     let stop!: () => void;
     const stopped = new Promise<void>(resolve => { stop = resolve; });
@@ -449,10 +458,11 @@ export class ProductTaskRuntime {
         try { await host.close(); }
         finally {
           try {
-            if (reusableThreads && (completed || deferred) && !cancelRequested && !this.stopped && !this.paused) {
+            if (reusableThreads && reusableThreads.length<1 && (completed || deferred) && !cancelRequested && !this.stopped && !this.paused && !this.localPressure && !this.externalPressure) {
               thread.removeAllListeners('error');
               thread.removeAllListeners('exit');
               reusableThreads.push(thread);
+              this.scheduleIdleRelease();
             } else {
               await thread.terminate();
               await stopped;
@@ -466,7 +476,7 @@ export class ProductTaskRuntime {
         }
       }
     })();
-    this.executions.set(context.id, { cancel, done: finished.catch(() => {}), ownsLockedTransaction: () => host.ownsLockedTransaction(), run: () => {
+    this.executions.set(context.id, { cancel, done: finished.catch(() => {}), ownsLockedTransaction: () => host.ownsLockedTransaction(), adjust:constrained=>thread.postMessage({type:'resource-pressure',constrained}), run: () => {
       progress.product = adapter.view;
       const run=toRun({ ...record, progress }, cancelRequested);
       if (run.product && structuredTask.type==='dream' && structuredTask.input.preset==='quick') run.product.activeFiles=this.fileProjection.active(context.id);
@@ -530,7 +540,7 @@ export class ProductTaskRuntime {
       }
     });
     flush = setInterval(() => void persist().catch(settleReject), 1000);
-    thread.postMessage({ type: 'start', kind: this.engine.kind, task: record.data.task });
+    thread.postMessage({ type: 'start', kind: this.engine.kind, task: record.data.task, constrained:this.localPressure||this.externalPressure });
     try {
       const outcome = await finished;
       if (outcome === MINION_DEFERRED && !this.stopIntents.has(context.id)) {
@@ -582,12 +592,44 @@ export class ProductTaskRuntime {
   }
 
   private checkMemory():number{
-    const bytes=this.resources.memoryBytes();
-    if(bytes>=PRODUCT_MAX_RSS_MB*1024*1024){
-      const message=`资源保护：本地服务内存达到 ${Math.ceil(bytes/1024/1024)} MB，已停止后台任务。请释放内存并重启本地服务后手动继续。`;
-      this.stopForResourcePressure(message);
+    if(this.stopped)return 0;
+    const pressure=this.resources.memoryPressure();
+    this.localPressure=pressure.level!=='normal';
+    this.applyResourcePressure();
+    if(pressure.level==='critical')this.stopForResourcePressure(`资源保护：${pressure.reason}，已停止后台任务，普通服务继续运行。`);
+    return this.resources.memoryBytes();
+  }
+
+  async adjustResourcePressure(constrained:boolean):Promise<void>{
+    this.externalPressure=constrained;
+    this.applyResourcePressure();
+    if(constrained)await this.reclaimIdleThreads();
+  }
+
+  private applyResourcePressure():void{
+    const constrained=this.localPressure||this.externalPressure;
+    this.worker.setConcurrency(constrained?1:2);
+    this.fileWorker.setConcurrency(constrained||this.engine.kind==='pglite'?1:2);
+    for(const execution of this.executions.values())execution.adjust(constrained);
+    if(constrained)void this.reclaimIdleThreads().catch(error=>console.error('[tasks] resource reclaim:',error));
+  }
+
+  private async releaseIdleThreads(pool:Worker[]):Promise<void>{
+    await Promise.all(pool.splice(0).map(thread=>thread.terminate()));
+  }
+
+  private reclaimIdleThreads():Promise<void>{
+    if(!this.reclaiming){
+      this.reclaiming=Promise.all([this.releaseIdleThreads(this.idleFileThreads),this.releaseIdleThreads(this.idleMaintenanceThreads)])
+        .then(()=>{if(typeof Bun!=='undefined')Bun.gc(false);}).finally(()=>{this.reclaiming=null;});
     }
-    return bytes;
+    return this.reclaiming;
+  }
+
+  private scheduleIdleRelease():void{
+    if(this.idleTimer)clearTimeout(this.idleTimer);
+    this.idleTimer=setTimeout(()=>{this.idleTimer=null;void this.reclaimIdleThreads().catch(error=>console.error('[tasks] idle release:',error));},30000);
+    this.idleTimer.unref();
   }
 
   stopForResourcePressure(message:string):void{
@@ -607,6 +649,9 @@ export class ProductTaskRuntime {
 
   async close(): Promise<void> {
     this.stopped = true;
+    if(this.resourceTimer)clearInterval(this.resourceTimer);
+    if(this.idleTimer)clearTimeout(this.idleTimer);
+    await this.reclaiming;
     await this.resourceDrain;
     for (const refresh of this.sessionRefresh.values()) clearTimeout(refresh.timer);
     this.sessionRefresh.clear();

@@ -1373,7 +1373,8 @@ export async function runServeHttp(engine: BrainEngine, options: ServeHttpOption
       const canCancelRun = req.method === 'POST' && /^\/runs\/[^/]+\/cancel$/.test(req.path);
       const canReadTaskCenter = req.method === 'GET' && req.path === '/task-center';
       const canRecoverPgliteOwner = req.method === 'POST' && req.path === '/pglite-owner/terminate';
-      if (canReadRun || canCancelRun || canReadTaskCenter || canRecoverPgliteOwner) {
+      const canAdjustResources=req.method==='POST'&&req.path==='/console/resource-stop';
+      if (canReadRun || canCancelRun || canReadTaskCenter || canRecoverPgliteOwner || canAdjustResources) {
         next();
         return;
       }
