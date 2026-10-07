@@ -39,6 +39,7 @@ import {
   extractFrontmatterLinks, loadExtractionPack, loadPageTypeMap, pageTypeAt,
   type UnresolvedFrontmatterRef,
 } from '../core/link-extraction.ts';
+import { lineGrammarOptions } from '../core/line-grammar.ts';
 import { createProgress } from '../core/progress.ts';
 import { getCliOptions, cliOptsToProgressOptions } from '../core/cli-options.ts';
 import { pathToSlug, pruneDir, isSyncable } from '../core/sync.ts';
@@ -1229,6 +1230,7 @@ export async function extractLinksFromDB(
 ): Promise<{ created: number; pages: number; unresolved: UnresolvedFrontmatterRef[] }> {
   const includeFrontmatter = opts?.includeFrontmatter ?? false;
   const sourceIdFilter = opts?.sourceIdFilter;
+  const lineGrammar = await lineGrammarOptions(engine);
   // Batch resolver: pg_trgm + exact only, NO search fallback. Dodges the
   // N-thousand API call trap on 46K-page brains. Resolver has a per-run
   // cache so duplicate names (same person appearing on many pages) resolve
@@ -1328,6 +1330,7 @@ export async function extractLinksFromDB(
       {
         skipFrontmatter: !includeFrontmatter,
         pack: linkPacks.get(source_id) ?? null,
+        lineGrammar,
         targetType: (targetSlug, targetSourceId) => pageTypeAt(pageTypes, targetSlug, targetSourceId, source_id),
       },
     );

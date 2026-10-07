@@ -272,6 +272,16 @@ describe('extractPageLinks', () => {
     expect(candidates.find(candidate => candidate.targetSlug === 'companies/acme')?.linkType).toBe('mentions');
   });
 
+  test('显式关系行标出 works_at，关闭行语法后回到普通提及', async () => {
+    const content = '- works_at [Acme](companies/acme)\n';
+    const enabled = await extractPageLinks('people/ann', content, {}, 'person', nullResolver);
+    expect(enabled.candidates.find(candidate => candidate.targetSlug === 'companies/acme')?.linkType).toBe('works_at');
+    const disabled = await extractPageLinks(
+      'people/ann', content, {}, 'person', nullResolver, { lineGrammar: { enabled: false } },
+    );
+    expect(disabled.candidates.find(candidate => candidate.targetSlug === 'companies/acme')?.linkType).toBe('mentions');
+  });
+
   test('时间线里的公司链接不继承正文开头的任职判断', async () => {
     const content = [
       'Alice is an engineer at [Acme](companies/acme).',
@@ -368,6 +378,16 @@ describe('inferLinkType', () => {
     expect(inferLinkType('person', '王五担任顾问。')).toBe('advises');
     expect(inferLinkType('person', '赵六任职于星河科技。')).toBe('works_at');
     expect(inferLinkType('concept', '本文引用了纳瓦尔的观点。')).toBe('cited');
+  });
+
+  test('joined as a role is works_at', () => {
+    expect(inferLinkType('person', 'She joined [Acme](companies/acme) as a senior engineer.')).toBe('works_at');
+  });
+
+  test('相邻两个链接各自保留自己的动词', () => {
+    const text = 'She works at [Acme](companies/acme) and also advises [Beta](companies/beta).';
+    expect(inferLinkType('person', text, undefined, 'companies/acme', 'company', text.indexOf('companies/acme'))).toBe('works_at');
+    expect(inferLinkType('person', text, undefined, 'companies/beta', 'company', text.indexOf('companies/beta'))).toBe('advises');
   });
 
   test('会议链接按目标类型区分参加和提及', () => {

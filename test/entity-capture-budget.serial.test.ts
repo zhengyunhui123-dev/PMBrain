@@ -10,6 +10,7 @@
  * 7. 本地 Ollama 金额是 0。失败重跑和停止都不会重复写人或继续写。
  * 8. 同一批里先写人和公司，页面正文写清任职后，两人之间出现 works_at，不依赖模型直接加边。
  * 9. 一批结束会报出识别、已关联、孤立和未关联提及。该连上的会补上；仍有缺口时不报完全成功。
+ * 10. 同一件带日期的事会写到每个被点名的实体时间线上。叠了两节当前状态时，只留最后一节。
  * 这些写入走真实的页面表。脚本只决定模型回复，不跳过数据库。
  */
 import { mkdtempSync } from 'node:fs';
@@ -472,4 +473,69 @@ test('实体写出来但没有任何关系时，关系检查不报完全成功',
   expect(result.details.stop_reason).toBe('completed');
   expect(result.details.entities_isolated).toBe(1);
   expect(String(result.details.report_line)).toContain('关系检查：识别实体 1，已关联 0，孤立实体 1，未关联提及 0。');
+}, 60_000);
+
+test('同一件事写到每个实体的时间线，叠起来的当前状态只留最后一节', async () => {
+  await note('notes/move', '2026-03-01，张三在星河科技任职，负责智慧水务项目。');
+  const result = await runPhaseCaptureEntities(engine, {
+    sourceId: 'vault',
+    handler: async () => {
+      await engine.putPage('people/张三', {
+        type: 'person',
+        title: '张三',
+        compiled_truth: [
+          '张三在[星河科技](companies/xinghe)任职。参见 [到任记录](notes/move)。',
+          '## 当前状态',
+          '旧职星河科技',
+          '## Timeline',
+          '保留',
+          '## 当前状态',
+          '现任北海数据',
+        ].join('\n'),
+        timeline: '',
+        frontmatter: { company: '星河科技' },
+      }, { sourceId: 'vault' });
+      await engine.putPage('companies/xinghe', {
+        type: 'company',
+        title: '星河科技',
+        compiled_truth: '星河科技。参见 [到任记录](notes/move)。',
+        timeline: '',
+        frontmatter: {},
+      }, { sourceId: 'vault' });
+      await engine.putPage('projects/shuiwu', {
+        type: 'project',
+        title: '智慧水务',
+        compiled_truth: '智慧水务项目。参见 [到任记录](notes/move)。',
+        timeline: '',
+        frontmatter: {},
+      }, { sourceId: 'vault' });
+      return { tokens: { in: 20, out: 8 } };
+    },
+  });
+  expect(result.status).toBe('ok');
+  const person = await engine.getPage('people/张三', { sourceId: 'vault' });
+  expect(person?.compiled_truth.match(/当前状态/g)).toHaveLength(1);
+  expect(person?.compiled_truth).toContain('现任北海数据');
+  expect(person?.compiled_truth).not.toContain('旧职星河科技');
+  expect(person?.compiled_truth).toContain('## Timeline');
+  const rows = [];
+  for (const slug of ['people/张三', 'companies/xinghe', 'projects/shuiwu']) {
+    const entries = await engine.getTimeline(slug, { sourceId: 'vault' });
+    expect(entries.length).toBeGreaterThan(0);
+    rows.push(...entries.map(entry => {
+      const rawDate: unknown = entry.date;
+      const date = rawDate instanceof Date
+        ? `${rawDate.getFullYear()}-${String(rawDate.getMonth() + 1).padStart(2, '0')}-${String(rawDate.getDate()).padStart(2, '0')}`
+        : String(rawDate).slice(0, 10);
+      return {
+        slug,
+        date,
+        summary: entry.summary,
+        source: entry.source,
+      };
+    }));
+  }
+  expect(new Set(rows.map(row => row.date))).toEqual(new Set(['2026-03-01']));
+  expect(new Set(rows.map(row => row.summary)).size).toBe(1);
+  expect(rows.every(row => row.source === 'notes/move')).toBe(true);
 }, 60_000);

@@ -976,6 +976,9 @@ export const KNOWN_CONFIG_KEYS: readonly string[] = [
   'cross_project_learnings',
   'auto_chronicle',
   'chronicle.judge_max_tokens',
+  'line_grammar.enabled',
+  'line_grammar.allow_undeclared_types',
+  'line_grammar.effective_ranges',
 ];
 
 /**

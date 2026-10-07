@@ -15,6 +15,8 @@ import { LINKABLE_ENTITY_TYPES } from '../by-mention.ts';
 import { splitProviderModelId } from '../model-id.ts';
 import { readModelConfigValue, resolveAlias } from '../model-config.ts';
 import { normalizeAliasList } from '../search/alias-normalize.ts';
+import { alignCapturedEntityGraph } from './entity-graph-align.ts';
+import { lineGrammarOptions } from '../line-grammar.ts';
 import {
   DEFAULT_ENTITY_CAPTURE_MAX_INPUT_TOKENS,
   DEFAULT_ENTITY_CAPTURE_MAX_OUTPUT_TOKENS,
@@ -166,16 +168,16 @@ ${candidateBlock}
 - 找出值得记录的人物、公司、项目和概念。一次性的旁述不要建页。
 - 候选里已经有的人、单位、项目或概念必须复用该 slug。新别名写回已有页，不要新建第二页。
 - 每个候选先 search。没有页面且值得记录，用 put_page 创建。
-- 已有页面但内容薄，读取后补充，保留已有事实。内容已经充实就不要覆盖。
+- 已有页面但内容薄，读取后补充，保留已有事实。内容已经充实就不要覆盖整页。只重写「## 当前状态」这一节，不要把新旧现状叠在一起。当前状态只记现在的职务和现状，已经离开的单位不要留在这一节。
 - 类型只能是 person、company、organization、project、concept。无法判断类型时不要 put_page，绝对不能把未知类型写成 concept。
 - 人物写入 people/，公司写入 companies/，概念写入 concepts/，项目写入 projects/。
 - 页面标题使用资料里的原名。正文必须用 Markdown 链接回当前资料 slug。没链回资料的实体是不完整的。
 - 同一份资料里的实体之间，写入时就要写清关系，不要只写回资料。人物页写「在[公司](companies/…)任职」或 frontmatter 的 company、founded。公司页写 key_people。项目、概念用同一句里的 Markdown 链接和资料里的原话（负责、建设、拥有、创立）。put_page 会按这些正文和 frontmatter 建立关系。
 - 只记录资料里出现的事实。不要编造关系。
-- 这次没有 add_link。不要调用它。关系写在页面里，由写入时的自动链接和随后的抽取落库。有明确日期的事实可以调用 add_timeline_entry。
+- 这次没有 add_link。不要调用它。关系写在页面里，由写入时的自动链接和随后的抽取落库。有明确日期的同一件事，要对每个提到的实体各调用一次 add_timeline_entry，日期、摘要和来源相同。时间线只追加，不改写旧条目。每条都要带来源。
 - 不要写会议页、对话页、反思页或原创想法页。
 - 没有值得记录的实体时，不要写页面。
-- 长资料会分成多个重叠片段。跨分块重复出现的实体必须先 search，已有页面只补充新事实，不要重复创建或整页覆盖。
+- 长资料会分成多个重叠片段。跨分块重复出现的实体必须先 search，已有页面只补充新事实，不要重复创建或整页覆盖。更新时先 get_page，写回的正文里「## 当前状态」只能有一节，而且是现在的状态。
 
 资料正文
 ---
@@ -407,6 +409,7 @@ async function materializeExtractedLinks(
     pageTypeAt,
   } = await import('../link-extraction.ts');
   const pack = await loadExtractionPack(engine, opts.sourceId);
+  const lineGrammar = await lineGrammarOptions(engine);
   const types = await loadPageTypeMap(engine);
   const resolver = makeResolver(engine, { mode: 'live', sourceId: opts.sourceId });
   let created = 0;
@@ -424,6 +427,7 @@ async function materializeExtractedLinks(
       resolver,
       {
         pack,
+        lineGrammar,
         targetType: (targetSlug, targetSourceId) => pageTypeAt(types, targetSlug, targetSourceId, pageSource),
       },
     );
@@ -679,6 +683,26 @@ export async function runPhaseCaptureEntities(
   let failureStop = false;
   let budgetStop: 'tokens' | 'cost' | null = null;
   const failedPageSlugs = new Set<string>();
+  const alignSources: Array<{ slug: string; body: string }> = [];
+  const rememberRelationError = (error: unknown) => {
+    if (opts.signal?.aborted) throw error;
+    failureStop = true;
+    const message = error instanceof Error ? error.message : String(error);
+    relationError = relationError ? `${relationError}；${message}` : message;
+  };
+  const alignWrittenGraph = async (extra: string[]) => {
+    const entitySlugs = [...new Set([...createdEntitySlugs, ...extra])];
+    if (entitySlugs.length === 0 || opts.signal?.aborted) return;
+    try {
+      await alignCapturedEntityGraph(engine, {
+        sourceId: opts.sourceId,
+        entitySlugs,
+        sources: alignSources,
+      });
+    } catch (error) {
+      rememberRelationError(error);
+    }
+  };
   const stopState = () => captureBudgetStop({
     inputTokens,
     outputTokens,
@@ -703,6 +727,7 @@ export async function runPhaseCaptureEntities(
         }
         const item = pendingPages[cursor]!;
         cursor += 1;
+        alignSources.push({ slug: item.page.slug, body: item.page.body });
         let submittedForPage = 0;
         let completedForPage = 0;
         const entityIndex = await loadCaptureEntityIndex(engine, opts.sourceId);
@@ -721,7 +746,7 @@ export async function runPhaseCaptureEntities(
           const data: SubagentHandlerData = {
             prompt: buildEntityCapturePrompt(chunk, related),
             model: chosen.model,
-            max_turns: 12,
+            max_turns: 20,
             allowed_tools: [...ENTITY_CAPTURE_TOOLS],
             allowed_slug_prefixes: [...ENTITY_CAPTURE_SLUG_PREFIXES],
             source_id: chunk.sourceId,
@@ -826,11 +851,10 @@ export async function runPhaseCaptureEntities(
           for (const slug of linked.slugs) relationSlugs.add(slug);
           relationsRefreshed = true;
         } catch (error) {
-          if (opts.signal?.aborted) throw error;
-          failureStop = true;
-          relationError = error instanceof Error ? error.message : String(error);
+          rememberRelationError(error);
         }
       }
+      await alignWrittenGraph([]);
       await opts.yieldDuringPhase?.();
       throwIfAborted(opts.signal, '[dream] capture entities');
       if (budgetStop || failureStop) break;
@@ -847,6 +871,7 @@ export async function runPhaseCaptureEntities(
         [childIds],
       );
     const writtenSlugs = written.map(row => row.slug).filter(slug => typeof slug === 'string' && slug.length > 0).sort();
+    await alignWrittenGraph(writtenSlugs);
     const failedPages = failedPageSlugs.size;
     const pagesRemaining = pendingPages.length - pagesProcessed;
     const entitiesCreated = createdEntitySlugs.size;

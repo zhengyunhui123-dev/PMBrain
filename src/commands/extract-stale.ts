@@ -18,6 +18,7 @@ import {
   pageTypeAt,
   LINK_EXTRACTOR_VERSION_TS,
 } from '../core/link-extraction.ts';
+import { lineGrammarOptions } from '../core/line-grammar.ts';
 import { createProgress } from '../core/progress.ts';
 import { getCliOptions, cliOptsToProgressOptions } from '../core/cli-options.ts';
 import {
@@ -114,6 +115,7 @@ export async function extractStaleFromDB(
 
   const resolver = makeResolver(engine, { mode: 'batch', sourceId: sourceIdFilter });
   const pageTypes = await loadPageTypeMap(engine);
+  const lineGrammar = await lineGrammarOptions(engine);
   const linkPacks = new Map<string, Awaited<ReturnType<typeof loadExtractionPack>>>();
   let resolveMs = 0;
   const timeCall = <T extends (...args: never[]) => Promise<unknown>>(fn: T | undefined): T | undefined => {
@@ -203,6 +205,7 @@ export async function extractStaleFromDB(
         {
           skipFrontmatter: !includeFrontmatter,
           pack: linkPacks.get(page.source_id) ?? null,
+          lineGrammar,
           targetType: (targetSlug, targetSourceId) => pageTypeAt(pageTypes, targetSlug, targetSourceId, page.source_id),
         },
       );

@@ -85,6 +85,10 @@ export function inferLinkTypeFromPack(
   return null;
 }
 
+export function ownsAttendanceInference(pack: Pick<SchemaPackManifest, 'link_types'> | null | undefined): boolean {
+  return !!pack?.link_types.some(lt => lt.name === 'attended' && lt.inference?.regex);
+}
+
 /**
  * Frontmatter-field → link-verb resolution from a pack manifest.
  * Mirrors the legacy `FRONTMATTER_LINK_MAP` table; pack-aware variant

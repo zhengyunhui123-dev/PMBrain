@@ -72,9 +72,9 @@ meetings, and concepts. An original without cross-links is a dead original.
 2. For each entity:
    - `gbrain search "name"` — does a page exist?
    - If NO page → check notability. If notable, create page with enrichment.
-   - If page exists but THIN → trigger enrich
-   - If page exists and RICH → no action
-3. For new FACTS with specific dates → call `gbrain timeline-add <slug> <date> "<summary>"`
+   - If page exists but THIN → read it and supplement the missing facts
+   - If page exists and RICH → do not overwrite the whole page. Rewrite only `## 当前状态` when the source changes the current role or status. Keep one current-state section. Do not stack the old state under the new one.
+3. For a dated fact, call `add_timeline_entry` once for every entity that fact mentions. Use the same date, summary, and source on each of those pages. Timeline entries are append-only.
 
 **Auto-link:** When you write or update a page that references a person, company,
 project, or concept, `put_page` extracts the link from that page. Write the
@@ -89,8 +89,18 @@ auto-link uses the active schema pack, the target page type, and the Chinese
 or English context to choose the relationship type. Dream entity capture does
 not have `add_link`; the page text is the write.
 
+**State:** `## 当前状态` is the current understanding only. On every update,
+rewrite that section. Do not append a second one. Someone who has left a
+company stays out of the current state; the departure itself belongs on the
+timeline.
+
+**Timeline merge:** the same dated event goes on every mentioned entity. If
+张三 joins 星河科技 to work on 智慧水务, that one date and summary is added to
+张三, 星河科技, and 智慧水务. Each entry cites its source. Do not edit older
+timeline rows.
+
 Every entity page must also link back to the source page. A mention with no
-link is incomplete. Timeline entries still need `add_timeline_entry`.
+link is incomplete. The Iron Law line is `- **YYYY-MM-DD** | Referenced in [page title](path) — brief context`. Facts written on the page carry a `[Source: ...]` citation.
 
 Ambient capture stays off unless the user explicitly enables it. A user-started
 deep organize is that authorization for the current run only.
@@ -114,6 +124,8 @@ The output is brain pages created/updated and the signal log line.
 - Paraphrasing the user's original thinking instead of capturing exact phrasing
 - Creating pages for non-notable entities (one-off mentions)
 - Skipping back-links after creating/updating pages
+- Appending a second current-state section instead of rewriting `## 当前状态`
+- Writing a dated event onto only one of the entities it names
 - Running on purely operational messages ("ok", "thanks", "do it")
 
 ## Tools Used
