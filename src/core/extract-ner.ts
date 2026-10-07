@@ -85,12 +85,28 @@ export function inferNerLinkType(
   pack: Parameters<typeof inferLinkTypeFromPack>[0],
   targetType: string | undefined,
   context: string,
+  sourcePageType?: string,
 ): string | null {
   if (!targetType) return null;
   try {
-    const inferred = inferLinkTypeFromPack(pack, targetType, context);
+    const inferred = inferLinkTypeFromPack(
+      pack,
+      sourcePageType ?? targetType,
+      context,
+      undefined,
+      sourcePageType ? targetType : undefined,
+    );
     if (inferred) return inferred;
-    const existing = inferLinkType(targetType as PageType, context);
+    const existing = inferLinkType(
+      (sourcePageType ?? targetType) as PageType,
+      context,
+      undefined,
+      undefined,
+      targetType,
+    );
+    if (existing !== 'mentions' && pack.link_types.some(rule => rule.name === existing && (rule.inference?.page_type || rule.inference?.target_type))) {
+      return null;
+    }
     return existing !== 'mentions' && pack.link_types.some(rule => rule.name === existing) ? existing : null;
   } catch {
     return null;
@@ -192,7 +208,7 @@ export async function extractNerLinks(
     for (const m of mentions) {
       const targetType = targetTypeMap.get(`${m.source_id}::${m.slug}`);
       const context = getContextWindow(body, m.offset, m.name.length);
-      const verb = inferNerLinkType(pack.manifest, targetType, context);
+      const verb = inferNerLinkType(pack.manifest, targetType, context, page.type);
       if (!verb) continue;
 
       batch.push({

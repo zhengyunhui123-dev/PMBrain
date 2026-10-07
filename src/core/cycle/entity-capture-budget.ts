@@ -189,12 +189,21 @@ export function captureReportLine(input: {
   costCapCny: number | null;
   ollama: boolean;
   stopReason: CaptureStopReason;
+  integrity?: {
+    recognized: number;
+    linked: number;
+    isolated: number;
+    unlinkedMentions: number;
+  };
 }): string {
   const cost = input.ollama
     ? '0 元（本地模型）'
     : input.costCny == null ? '未统计' : `${input.costCny} 元`;
   const cap = input.costCapCny == null ? '不限制' : `${input.costCapCny} 元`;
-  return `使用模型 ${input.model ?? '未选择'}。已处理 ${input.pagesProcessed} 页，剩余 ${input.pagesRemaining} 页。创建实体 ${input.entitiesCreated}。新增关系 ${input.relationsCreated}。费用 ${cost} / ${cap}。停止原因：${STOP_REASON_TEXT[input.stopReason]}。`;
+  const base = `使用模型 ${input.model ?? '未选择'}。已处理 ${input.pagesProcessed} 页，剩余 ${input.pagesRemaining} 页。创建实体 ${input.entitiesCreated}。新增关系 ${input.relationsCreated}。费用 ${cost} / ${cap}。停止原因：${STOP_REASON_TEXT[input.stopReason]}。`;
+  if (!input.integrity) return base;
+  const gap = input.integrity;
+  return `${base}关系检查：识别实体 ${gap.recognized}，已关联 ${gap.linked}，孤立实体 ${gap.isolated}，未关联提及 ${gap.unlinkedMentions}。`;
 }
 
 interface PricedModel {

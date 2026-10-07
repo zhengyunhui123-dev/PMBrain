@@ -13,6 +13,9 @@ import {
   extractPageLinks,
   parseTimelineEntries,
   makeResolver,
+  loadExtractionPack,
+  loadPageTypeMap,
+  pageTypeAt,
   LINK_EXTRACTOR_VERSION_TS,
 } from '../core/link-extraction.ts';
 import { createProgress } from '../core/progress.ts';
@@ -110,6 +113,8 @@ export async function extractStaleFromDB(
   }
 
   const resolver = makeResolver(engine, { mode: 'batch', sourceId: sourceIdFilter });
+  const pageTypes = await loadPageTypeMap(engine);
+  const linkPacks = new Map<string, Awaited<ReturnType<typeof loadExtractionPack>>>();
   let resolveMs = 0;
   const timeCall = <T extends (...args: never[]) => Promise<unknown>>(fn: T | undefined): T | undefined => {
     if (!fn) return fn;
@@ -188,13 +193,18 @@ export async function extractStaleFromDB(
       const fullContent = page.compiled_truth + '\n' + page.timeline;
       const parseStarted = performance.now();
       const resolveAt = resolveMs;
+      if (!linkPacks.has(page.source_id)) linkPacks.set(page.source_id, await loadExtractionPack(engine, page.source_id));
       const extracted = await extractPageLinks(
         page.slug,
         fullContent,
         page.frontmatter,
         page.type,
         resolver,
-        { skipFrontmatter: !includeFrontmatter },
+        {
+          skipFrontmatter: !includeFrontmatter,
+          pack: linkPacks.get(page.source_id) ?? null,
+          targetType: (targetSlug, targetSourceId) => pageTypeAt(pageTypes, targetSlug, targetSourceId, page.source_id),
+        },
       );
       const parseElapsed = performance.now() - parseStarted;
       parseMs += Math.max(0, parseElapsed - (resolveMs - resolveAt));

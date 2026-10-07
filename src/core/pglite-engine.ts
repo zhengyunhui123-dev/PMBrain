@@ -400,6 +400,16 @@ export class PGLiteEngine implements BrainEngine {
     return this._db;
   }
 
+  // One WASM process cannot fork parallel workers, and JIT can spin that
+  // thread so later queries never return. Both are session settings.
+  private async applyWasmSafeSessionSettings(): Promise<void> {
+    await this.db.exec(`
+      SET max_parallel_workers = 0;
+      SET max_parallel_workers_per_gather = 0;
+      SET jit = off;
+    `);
+  }
+
   // Lifecycle
   async connect(config: EngineConfig): Promise<void> {
     if (/~BUN|\$bunfs/i.test(decodeURI(import.meta.url))) {
@@ -467,10 +477,12 @@ export class PGLiteEngine implements BrainEngine {
           this._db = attempt.db;
           this.walRepairReceipt = attempt.receipt;
           console.warn(buildWalRepairNotice(attempt.receipt));
+          await this.applyWasmSafeSessionSettings();
           return;
         }
       }
       this._db = await openPersistent();
+      await this.applyWasmSafeSessionSettings();
       if (dataDir) closeRepairEpisodeIfOpen(dataDir);
     } catch (err) {
       // v0.13.1: any PGLite.create() failure becomes actionable. v0.41.8.0
@@ -496,6 +508,7 @@ export class PGLiteEngine implements BrainEngine {
             this._db = attempt.db;
             this.walRepairReceipt = attempt.receipt;
             console.warn(buildWalRepairNotice(attempt.receipt));
+            await this.applyWasmSafeSessionSettings();
             return;
           }
           if (attempt.status === 'skipped') {
@@ -604,6 +617,7 @@ export class PGLiteEngine implements BrainEngine {
       this._db = attempt.db;
       this.walRepairReceipt = attempt.receipt;
       console.warn(buildWalRepairNotice(attempt.receipt));
+      await this.applyWasmSafeSessionSettings();
       await this.applySchemaAndMigrations();
     }
   }
@@ -611,6 +625,7 @@ export class PGLiteEngine implements BrainEngine {
   private async applySchemaAndMigrations(): Promise<void> {
     if (this._snapshotLoaded) {
       await this.ensureGinIndexesHealthy();
+      await this.applyWasmSafeSessionSettings();
       return;
     }
     // Pre-schema bootstrap: add forward-referenced state the embedded schema
@@ -653,6 +668,7 @@ export class PGLiteEngine implements BrainEngine {
     }
 
     await this.ensureGinIndexesHealthy();
+    await this.applyWasmSafeSessionSettings();
   }
 
   private async ensureGinIndexesHealthy(): Promise<void> {

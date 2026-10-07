@@ -169,9 +169,10 @@ ${candidateBlock}
 - 已有页面但内容薄，读取后补充，保留已有事实。内容已经充实就不要覆盖。
 - 类型只能是 person、company、organization、project、concept。无法判断类型时不要 put_page，绝对不能把未知类型写成 concept。
 - 人物写入 people/，公司写入 companies/，概念写入 concepts/，项目写入 projects/。
-- 页面标题使用资料里的原名，并在正文用 Markdown 链接引用当前资料 slug。
-- 只记录资料里出现的事实。不要编造。
-- 这次没有 add_link。关系交给页面里的链接和后续整理。有明确日期的事实可以调用 add_timeline_entry。
+- 页面标题使用资料里的原名。正文必须用 Markdown 链接回当前资料 slug。没链回资料的实体是不完整的。
+- 同一份资料里的实体之间，写入时就要写清关系，不要只写回资料。人物页写「在[公司](companies/…)任职」或 frontmatter 的 company、founded。公司页写 key_people。项目、概念用同一句里的 Markdown 链接和资料里的原话（负责、建设、拥有、创立）。put_page 会按这些正文和 frontmatter 建立关系。
+- 只记录资料里出现的事实。不要编造关系。
+- 这次没有 add_link。不要调用它。关系写在页面里，由写入时的自动链接和随后的抽取落库。有明确日期的事实可以调用 add_timeline_entry。
 - 不要写会议页、对话页、反思页或原创想法页。
 - 没有值得记录的实体时，不要写页面。
 - 长资料会分成多个重叠片段。跨分块重复出现的实体必须先 search，已有页面只补充新事实，不要重复创建或整页覆盖。
@@ -366,13 +367,12 @@ async function linkNewCaptureEntities(
   engine: BrainEngine,
   opts: CaptureEntitiesOpts,
   needles: Array<{ sourceId: string; needle: string }>,
-  batchSources: string[],
   writtenSlugs: string[],
-): Promise<{ mention: number; ner: number; slugs: string[] }> {
+): Promise<{ mention: number; ner: number; extracted: number; slugs: string[] }> {
   const { findPagesContainingNeedles } = await import('../../commands/extract-stale.ts');
   const matched = await findPagesContainingNeedles(engine, needles, opts.sourceId);
-  const slugs = [...new Set([...matched, ...batchSources, ...writtenSlugs].map(slug => slug.trim()).filter(Boolean))];
-  if (slugs.length === 0) return { mention: 0, ner: 0, slugs };
+  const slugs = [...new Set([...matched, ...writtenSlugs].map(slug => slug.trim()).filter(Boolean))];
+  if (slugs.length === 0) return { mention: 0, ner: 0, extracted: 0, slugs };
   const { runByMentionCore } = await import('../../commands/extract.ts');
   const mention = await runByMentionCore(engine, {
     prioritySlugs: slugs,
@@ -389,7 +389,125 @@ async function linkNewCaptureEntities(
     signal: opts.signal,
     yieldDuringPhase: opts.yieldDuringPhase,
   });
-  return { mention: mention.created, ner: ner.created, slugs };
+  const extracted = await materializeExtractedLinks(engine, opts, slugs);
+  return { mention: mention.created, ner: ner.created, extracted, slugs };
+}
+
+async function materializeExtractedLinks(
+  engine: BrainEngine,
+  opts: CaptureEntitiesOpts,
+  slugs: string[],
+): Promise<number> {
+  if (slugs.length === 0) return 0;
+  const {
+    extractPageLinks,
+    makeResolver,
+    loadExtractionPack,
+    loadPageTypeMap,
+    pageTypeAt,
+  } = await import('../link-extraction.ts');
+  const pack = await loadExtractionPack(engine, opts.sourceId);
+  const types = await loadPageTypeMap(engine);
+  const resolver = makeResolver(engine, { mode: 'live', sourceId: opts.sourceId });
+  let created = 0;
+  for (const slug of slugs) {
+    opts.signal?.throwIfAborted();
+    const scoped = opts.sourceId ? await engine.getPage(slug, { sourceId: opts.sourceId }) : null;
+    const page = scoped ?? await engine.getPage(slug, { sourceId: 'default' });
+    if (!page) continue;
+    const pageSource = page.source_id || opts.sourceId || 'default';
+    const extracted = await extractPageLinks(
+      slug,
+      `${page.compiled_truth}\n${page.timeline ?? ''}`,
+      page.frontmatter ?? {},
+      page.type,
+      resolver,
+      {
+        pack,
+        targetType: (targetSlug, targetSourceId) => pageTypeAt(types, targetSlug, targetSourceId, pageSource),
+      },
+    );
+    const batch = [];
+    for (const candidate of extracted.candidates) {
+      const fromSlug = candidate.fromSlug ?? slug;
+      const preferredFrom = candidate.fromSourceId ?? pageSource;
+      const fromSource = pageTypeAt(types, fromSlug, preferredFrom) !== undefined
+        ? preferredFrom
+        : pageTypeAt(types, fromSlug, pageSource) !== undefined
+          ? pageSource
+          : pageTypeAt(types, fromSlug, 'default') !== undefined
+            ? 'default'
+            : '';
+      const preferredTo = candidate.targetSourceId;
+      const toSource = preferredTo && pageTypeAt(types, candidate.targetSlug, preferredTo) !== undefined
+        ? preferredTo
+        : pageTypeAt(types, candidate.targetSlug, pageSource) !== undefined
+          ? pageSource
+          : pageTypeAt(types, candidate.targetSlug, 'default') !== undefined
+            ? 'default'
+            : '';
+      if (!fromSource || !toSource) continue;
+      batch.push({
+        from_slug: fromSlug,
+        to_slug: candidate.targetSlug,
+        from_source_id: fromSource,
+        to_source_id: toSource,
+        link_type: candidate.linkType,
+        context: candidate.context,
+        link_source: candidate.linkSource ?? 'markdown',
+        origin_slug: candidate.originSlug,
+        origin_field: candidate.originField,
+      });
+    }
+    if (batch.length > 0) created += await engine.addLinksBatch(batch);
+  }
+  return created;
+}
+
+async function countCaptureLinkGaps(
+  engine: BrainEngine,
+  entitySlugs: string[],
+  sourceSlugs: string[],
+  sourceId?: string,
+): Promise<{ isolated: number; unlinkedMentions: number }> {
+  if (entitySlugs.length === 0) return { isolated: 0, unlinkedMentions: 0 };
+  const isolatedRows = await engine.executeRaw<{ n: number }>(
+    `SELECT count(DISTINCT p.slug)::int AS n
+       FROM pages p
+      WHERE p.deleted_at IS NULL
+        AND p.slug = ANY($1::text[])
+        AND ($2::text IS NULL OR p.source_id = $2 OR p.source_id = 'default')
+        AND NOT EXISTS (
+          SELECT 1 FROM links l
+           WHERE l.from_page_id = p.id OR l.to_page_id = p.id
+        )`,
+    [entitySlugs, sourceId ?? null],
+  );
+  const mentionRows = sourceSlugs.length === 0
+    ? [{ n: 0 }]
+    : await engine.executeRaw<{ n: number }>(
+      `SELECT count(*)::int AS n
+         FROM pages s
+         JOIN pages e
+           ON e.deleted_at IS NULL
+          AND e.slug = ANY($1::text[])
+          AND ($2::text IS NULL OR e.source_id = $2 OR e.source_id = 'default')
+          AND char_length(e.title) >= 2
+          AND strpos(s.compiled_truth, e.title) > 0
+        WHERE s.deleted_at IS NULL
+          AND s.slug = ANY($3::text[])
+          AND ($2::text IS NULL OR s.source_id = $2)
+          AND NOT EXISTS (
+            SELECT 1 FROM links l
+             WHERE (l.from_page_id = s.id AND l.to_page_id = e.id)
+                OR (l.from_page_id = e.id AND l.to_page_id = s.id)
+          )`,
+      [entitySlugs, sourceId ?? null, sourceSlugs],
+    );
+  return {
+    isolated: Number(isolatedRows[0]?.n ?? 0),
+    unlinkedMentions: Number(mentionRows[0]?.n ?? 0),
+  };
 }
 
 export async function runPhaseCaptureEntities(
@@ -554,6 +672,7 @@ export async function runPhaseCaptureEntities(
   let sawPricedUsage = ollama;
   let failedChunks = 0;
   let mentionLinks = 0;
+  let extractLinks = 0;
   let nerLinks = 0;
   let relationsRefreshed = false;
   let relationError = '';
@@ -575,7 +694,6 @@ export async function runPhaseCaptureEntities(
       throwIfAborted(opts.signal, '[dream] capture entities');
       const beforeIndex = await loadCaptureEntityIndex(engine, opts.sourceId);
       const batchEnd = Math.min(pendingPages.length, cursor + batchSize);
-      const batchSources: string[] = [];
       while (cursor < batchEnd) {
         throwIfAborted(opts.signal, '[dream] capture entities');
         const pageStop = stopState();
@@ -585,7 +703,6 @@ export async function runPhaseCaptureEntities(
         }
         const item = pendingPages[cursor]!;
         cursor += 1;
-        batchSources.push(item.page.slug);
         let submittedForPage = 0;
         let completedForPage = 0;
         const entityIndex = await loadCaptureEntityIndex(engine, opts.sourceId);
@@ -702,9 +819,10 @@ export async function runPhaseCaptureEntities(
       const needles = deltaCaptureNeedles(beforeIndex, afterIndex);
       if (needles.length > 0 && !opts.signal?.aborted) {
         try {
-          const linked = await linkNewCaptureEntities(engine, opts, needles, batchSources, [...createdEntitySlugs]);
+          const linked = await linkNewCaptureEntities(engine, opts, needles, [...createdEntitySlugs]);
           mentionLinks += linked.mention;
           nerLinks += linked.ner;
+          extractLinks += linked.extracted;
           for (const slug of linked.slugs) relationSlugs.add(slug);
           relationsRefreshed = true;
         } catch (error) {
@@ -732,7 +850,12 @@ export async function runPhaseCaptureEntities(
     const failedPages = failedPageSlugs.size;
     const pagesRemaining = pendingPages.length - pagesProcessed;
     const entitiesCreated = createdEntitySlugs.size;
-    const relationsCreated = mentionLinks + nerLinks;
+    const relationsCreated = mentionLinks + nerLinks + extractLinks;
+    const recognized = [...createdEntitySlugs];
+    const gaps = opts.dryRun
+      ? { isolated: 0, unlinkedMentions: 0 }
+      : await countCaptureLinkGaps(engine, recognized, [...sourceSlugs], opts.sourceId);
+    const linkedEntities = Math.max(0, recognized.length - gaps.isolated);
     const costCny = ollama ? 0 : (sawPricedUsage ? Number(knownCost.toFixed(6)) : null);
     const stopReason: CaptureStopReason = failureStop
       ? 'failure'
@@ -741,9 +864,12 @@ export async function runPhaseCaptureEntities(
         : budgetStop === 'cost'
           ? 'cost'
           : 'completed';
-    const status: PhaseResult['status'] = stopReason === 'failure'
+    const cleanStatus: PhaseResult['status'] = stopReason === 'failure'
       ? (writtenSlugs.length > 0 || pagesProcessed > 0 ? 'warn' : 'fail')
       : 'ok';
+    const status: PhaseResult['status'] = cleanStatus === 'ok' && (gaps.isolated > 0 || gaps.unlinkedMentions > 0)
+      ? 'warn'
+      : cleanStatus;
     const reportLine = captureReportLine({
       model: chosen.model,
       pagesProcessed,
@@ -754,6 +880,12 @@ export async function runPhaseCaptureEntities(
       costCapCny,
       ollama,
       stopReason,
+      integrity: {
+        recognized: recognized.length,
+        linked: linkedEntities,
+        isolated: gaps.isolated,
+        unlinkedMentions: gaps.unlinkedMentions,
+      },
     });
     const summary = relationError ? `${reportLine}关系补写失败：${relationError}` : reportLine;
     return phaseResult(status, summary, {
@@ -779,6 +911,11 @@ export async function runPhaseCaptureEntities(
       relations_created: relationsCreated,
       mention_links_created: mentionLinks,
       ner_links_created: nerLinks,
+      extract_links_created: extractLinks,
+      entities_recognized: recognized.length,
+      entities_linked: linkedEntities,
+      entities_isolated: gaps.isolated,
+      unlinked_mentions: gaps.unlinkedMentions,
       relation_pages: relationSlugs.size,
       relation_slugs: [...relationSlugs].sort(),
       relations_refreshed: relationsRefreshed,

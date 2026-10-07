@@ -8,6 +8,8 @@
  * 5. 指定的识别模型没启用时，不创建任何子任务，并直接说明模型不可用。
  * 6. 新实体写入后，只把提到它的旧页面连上，不连无关页面。
  * 7. 本地 Ollama 金额是 0。失败重跑和停止都不会重复写人或继续写。
+ * 8. 同一批里先写人和公司，页面正文写清任职后，两人之间出现 works_at，不依赖模型直接加边。
+ * 9. 一批结束会报出识别、已关联、孤立和未关联提及。该连上的会补上；仍有缺口时不报完全成功。
  * 这些写入走真实的页面表。脚本只决定模型回复，不跳过数据库。
  */
 import { mkdtempSync } from 'node:fs';
@@ -164,7 +166,9 @@ test('费用到上限后停止新的模型请求，已完成结果保留，任�
     handler: async () => {
       calls += 1;
       await engine.putPage('people/first-only', {
-        type: 'person', title: '只写一次', compiled_truth: '第一轮已经写好。', timeline: '', frontmatter: {},
+        type: 'person', title: '只写一次',
+        compiled_truth: '第一轮已经写好。参见 [第一篇](notes/a)。',
+        timeline: '', frontmatter: {},
       }, { sourceId: 'vault' });
       return { tokens: { in: 1000, out: 1000 } };
     },
@@ -396,4 +400,76 @@ test('失败重跑不重复建人，停止后不再写下一份', async () => {
   );
   expect(Number(kept[0]?.n)).toBe(1);
   expect(Number(leaked[0]?.n)).toBe(0);
+}, 60_000);
+
+test('同一批先写人再写公司，正文里的任职会变成两人之间的关系', async () => {
+  await note('notes/deal', '张三在星河科技任职，并负责智慧水务项目。');
+  await note('notes/weather', '这份资料只讨论明天的天气预报和降雨。');
+  const result = await runPhaseCaptureEntities(engine, {
+    sourceId: 'vault',
+    handler: async () => {
+      await engine.putPage('people/张三', {
+        type: 'person',
+        title: '张三',
+        compiled_truth: '张三在[星河科技](companies/xinghe)任职。参见 [合作记录](notes/deal)。',
+        timeline: '',
+        frontmatter: { company: '星河科技' },
+      }, { sourceId: 'vault' });
+      await engine.putPage('companies/xinghe', {
+        type: 'company',
+        title: '星河科技',
+        compiled_truth: '星河科技的负责人见 [张三](people/张三)。参见 [合作记录](notes/deal)。',
+        timeline: '',
+        frontmatter: { key_people: ['张三'] },
+      }, { sourceId: 'vault' });
+      return { tokens: { in: 20, out: 8 } };
+    },
+  });
+  expect(result.status).toBe('ok');
+  expect(result.details.stop_reason).toBe('completed');
+  expect(String(result.details.report_line)).toContain('关系检查：识别实体 2，已关联 2，孤立实体 0，未关联提及 0。');
+  expect(result.details.relation_slugs).not.toContain('notes/weather');
+  const links = await engine.executeRaw<{ from_slug: string; to_slug: string; link_type: string; link_source: string }>(
+    `SELECT f.slug AS from_slug, t.slug AS to_slug, l.link_type, l.link_source
+       FROM links l
+       JOIN pages f ON f.id = l.from_page_id
+       JOIN pages t ON t.id = l.to_page_id
+      WHERE l.link_type = 'works_at'
+        AND f.slug = 'people/张三'
+        AND t.slug = 'companies/xinghe'`,
+  );
+  expect(links).toContainEqual({
+    from_slug: 'people/张三',
+    to_slug: 'companies/xinghe',
+    link_type: 'works_at',
+    link_source: 'markdown',
+  });
+  const weather = await engine.executeRaw<{ n: number }>(
+    `SELECT count(*)::int AS n
+       FROM links l
+       JOIN pages f ON f.id = l.from_page_id
+      WHERE f.slug = 'notes/weather'`,
+  );
+  expect(Number(weather[0]?.n ?? 0)).toBe(0);
+}, 60_000);
+
+test('实体写出来但没有任何关系时，关系检查不报完全成功', async () => {
+  await note('notes/plain', '这份资料正文足够长，但没有点名任何实体。');
+  const result = await runPhaseCaptureEntities(engine, {
+    sourceId: 'vault',
+    handler: async () => {
+      await engine.putPage('people/孤岛', {
+        type: 'person',
+        title: '孤岛人',
+        compiled_truth: '这一页没有链回资料，也没有其他实体。',
+        timeline: '',
+        frontmatter: {},
+      }, { sourceId: 'vault' });
+      return { tokens: { in: 8, out: 2 } };
+    },
+  });
+  expect(result.status).toBe('warn');
+  expect(result.details.stop_reason).toBe('completed');
+  expect(result.details.entities_isolated).toBe(1);
+  expect(String(result.details.report_line)).toContain('关系检查：识别实体 1，已关联 0，孤立实体 1，未关联提及 0。');
 }, 60_000);

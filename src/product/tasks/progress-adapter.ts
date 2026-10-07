@@ -181,6 +181,8 @@ export function finishTaskProgress(view: TaskProductProgress, status: string, re
       add('剩余页面', capture.pages_remaining);
       add('创建实体', capture.entities_written);
       add('新增关系', capture.relations_created);
+      if (typeof capture.entities_isolated === 'number') add('孤立实体', capture.entities_isolated);
+      if (typeof capture.unlinked_mentions === 'number') add('未关联提及', capture.unlinked_mentions);
       if (typeof capture.report_line === 'string' && capture.report_line.trim()) next.detail = capture.report_line;
     }
   }

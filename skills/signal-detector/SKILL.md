@@ -1,6 +1,6 @@
 ---
 name: signal-detector
-version: 1.0.0
+version: 1.1.0
 description: |
   Always-on ambient signal capture. Fires on every inbound message to detect
   original thinking and entity mentions. Spawn as a cheap sub-agent in parallel,
@@ -76,10 +76,24 @@ meetings, and concepts. An original without cross-links is a dead original.
    - If page exists and RICH → no action
 3. For new FACTS with specific dates → call `gbrain timeline-add <slug> <date> "<summary>"`
 
-**Auto-link (v0.10.1):** When you write/update an originals or ideas page that
-references a person or company, the auto-link post-hook on `put_page`
-automatically creates the link from the new page to that entity. You don't
-need to call `gbrain link` manually. Timeline entries still need explicit calls.
+**Auto-link:** When you write or update a page that references a person, company,
+project, or concept, `put_page` extracts the link from that page. Write the
+relationship in the page. Do not wait for a later pass.
+
+For entities mentioned together in one source, write the relation at the same
+time as the entity. On the person page, put a Markdown link to the company or
+project in the same sentence as the relationship (`works at`, `任职`, `founded`,
+`负责`), and set frontmatter `company:` or `founded:` when the source says so.
+On the company page, set `key_people:` when the source names the people. The
+auto-link uses the active schema pack, the target page type, and the Chinese
+or English context to choose the relationship type. Dream entity capture does
+not have `add_link`; the page text is the write.
+
+Every entity page must also link back to the source page. A mention with no
+link is incomplete. Timeline entries still need `add_timeline_entry`.
+
+Ambient capture stays off unless the user explicitly enables it. A user-started
+deep organize is that authorization for the current run only.
 
 ### Phase 3: Signal Logging
 

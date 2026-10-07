@@ -36,7 +36,7 @@ import type { PageType } from '../core/types.ts';
 import { parseMarkdown } from '../core/markdown.ts';
 import {
   extractPageLinks, parseTimelineEntries, deriveTimelineAnchor, inferLinkType, makeResolver,
-  extractFrontmatterLinks,
+  extractFrontmatterLinks, loadExtractionPack, loadPageTypeMap, pageTypeAt,
   type UnresolvedFrontmatterRef,
 } from '../core/link-extraction.ts';
 import { createProgress } from '../core/progress.ts';
@@ -1301,6 +1301,8 @@ export async function extractLinksFromDB(
     }
   }
 
+  const pageTypes = await loadPageTypeMap(engine);
+  const linkPacks = new Map<string, Awaited<ReturnType<typeof loadExtractionPack>>>();
   for (const { slug, source_id } of allRefs) {
     const page = await engine.getPage(slug, { sourceId: source_id });
     if (!page) continue;
@@ -1316,13 +1318,18 @@ export async function extractLinksFromDB(
     // Migration orchestrator explicitly enables it for the one-time backfill;
     // user-invoked `gbrain extract links` stays outgoing-only.
     const sourceResolver = resolverForSource(source_id);
+    if (!linkPacks.has(source_id)) linkPacks.set(source_id, await loadExtractionPack(engine, source_id));
     const extracted = await extractPageLinks(
       slug,
       fullContent,
       page.frontmatter,
       page.type,
       sourceResolver,
-      { skipFrontmatter: !includeFrontmatter },
+      {
+        skipFrontmatter: !includeFrontmatter,
+        pack: linkPacks.get(source_id) ?? null,
+        targetType: (targetSlug, targetSourceId) => pageTypeAt(pageTypes, targetSlug, targetSourceId, source_id),
+      },
     );
     unresolved.push(...extracted.unresolved);
 
