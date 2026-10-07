@@ -75,7 +75,7 @@ test('已有实体放进候选，脚本复用原页，不创建第二个人', as
       return { tokens: { in: 20, out: 5 } };
     },
   });
-  expect(result.status).toBe('ok');
+  expect(result.status, result.summary).toBe('ok');
   expect(prompt).toContain('people/张三');
   expect(prompt).toContain('person');
   expect(prompt).toContain('张三');
@@ -105,15 +105,15 @@ test('新人、公司、项目和概念按类型落库，新别名复用已有�
         frontmatter: { aliases: ['星河实验室'] },
       }, { sourceId: 'vault' });
       await engine.putPage('projects/lighthouse', {
-        type: 'project', title: '灯塔项目', compiled_truth: '灯塔项目由李四推进。', timeline: '', frontmatter: {},
+        type: 'project', title: '灯塔项目', compiled_truth: '灯塔项目由 [[people/li-si]] 推进，来源是 [[notes/deal]]。', timeline: '', frontmatter: {},
       }, { sourceId: 'vault' });
       await engine.putPage('concepts/tide', {
-        type: 'concept', title: '潮汐方法', compiled_truth: '潮汐方法来自这次合作。', timeline: '', frontmatter: {},
+        type: 'concept', title: '潮汐方法', compiled_truth: '潮汐方法来自 [[notes/deal]] 的合作。', timeline: '', frontmatter: {},
       }, { sourceId: 'vault' });
       return { tokens: { in: 30, out: 12 } };
     },
   });
-  expect(result.status).toBe('ok');
+  expect(result.status, result.summary).toBe('ok');
   const rows = await engine.executeRaw<{ slug: string; type: string }>(
     `SELECT slug, type FROM pages WHERE source_id = 'vault' AND slug IN ('people/li-si', 'companies/xinghe', 'projects/lighthouse', 'concepts/tide') ORDER BY slug`,
   );
@@ -298,6 +298,7 @@ test('新实体落库后只连接提到它的旧页面', async () => {
     `UPDATE pages SET links_extracted_at = '2020-01-01T00:00:00.000Z' WHERE source_id = 'vault' AND slug = 'notes/old-liu'`,
   );
   await note('notes/new-liu', '这份新资料需要识别实体，正文足够参与这一轮。');
+  await runByMentionCore(engine,{sourceIdFilter:'vault',quiet:true});
   const result = await runPhaseCaptureEntities(engine, {
     sourceId: 'vault',
     batchSize: 1,
@@ -374,7 +375,7 @@ test('失败重跑不重复建人，停止后不再写下一份', async () => {
   await note('notes/later', '这份在停止后不能再送给模型，正文足够长。');
   const controller = new AbortController();
   let stoppedCalls = 0;
-  await expect(runPhaseCaptureEntities(engine, {
+  const stopError=await runPhaseCaptureEntities(engine, {
     sourceId: 'vault',
     signal: controller.signal,
     handler: async () => {
@@ -391,7 +392,8 @@ test('失败重跑不重复建人，停止后不再写下一份', async () => {
       }
       return { tokens: { in: 1, out: 1 } };
     },
-  })).rejects.toThrow();
+  }).catch(error=>error);
+  expect(stopError).toBeInstanceOf(Error);
   expect(stoppedCalls).toBe(1);
   const kept = await engine.executeRaw<{ n: number }>(
     `SELECT count(*)::int AS n FROM pages WHERE slug = 'people/kept'`,
@@ -406,6 +408,7 @@ test('失败重跑不重复建人，停止后不再写下一份', async () => {
 test('同一批先写人再写公司，正文里的任职会变成两人之间的关系', async () => {
   await note('notes/deal', '张三在星河科技任职，并负责智慧水务项目。');
   await note('notes/weather', '这份资料只讨论明天的天气预报和降雨。');
+  await runByMentionCore(engine,{sourceIdFilter:'vault',quiet:true});
   const result = await runPhaseCaptureEntities(engine, {
     sourceId: 'vault',
     handler: async () => {

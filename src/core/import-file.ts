@@ -1,3 +1,4 @@
+import { requestImportedEntityCapture } from './pmbrain-adapters/entity-capture-request.ts';
 import { readFileSync, statSync, lstatSync } from 'fs';
 import { basename, extname } from 'path';
 import { createHash } from 'crypto';
@@ -885,6 +886,7 @@ export async function importFromContent(
 
     const placed=await tx.putPage(slug, {...pageWrite,chunker_version:batchedBody?-MARKDOWN_CHUNKER_VERSION:MARKDOWN_CHUNKER_VERSION},txOpts);
     if(batchedBody)bodyUpdatedAt=placed.updated_at;
+    await requestImportedEntityCapture(tx,sourceId ?? 'default',{slug,type:placed.type,compiled_truth:placed.compiled_truth,frontmatter:placed.frontmatter});
 
     // v0.40.3.0: stamp the contextual retrieval state columns alongside
     // the page write. updatePageContextualRetrievalState is a narrow

@@ -142,9 +142,10 @@ describe('实体变化不再让整个 Source 重新抽关系', () => {
   test('旧的目录哈希记录不会再把已抽过的资料全部标成待扫', async () => {
     await seedBaseline();
     const before = await stamps();
+    const legacy=JSON.stringify({ hash: 'outdated', versionTs: new Date().toISOString() });
     await engine.setConfig(
       'extract.relations.catalog.source:default',
-      JSON.stringify({ hash: 'outdated', versionTs: new Date().toISOString() }),
+      legacy,
     );
 
     const result = await extractStaleFromDB(engine, opts);
@@ -156,7 +157,7 @@ describe('实体变化不再让整个 Source 重新抽关系', () => {
     expect(after.get('notes/history')).toBe(before.get('notes/history'));
     expect(after.get('notes/alias')).toBe(before.get('notes/alias'));
     const saved = await engine.getConfig('extract.relations.catalog.source:default');
-    expect(saved).toContain('companies/openai');
-    expect(saved).not.toContain('"versionTs"');
+    expect(saved).toBe(legacy);
+    expect((await extractStaleFromDB(engine,opts)).pagesProcessed).toBe(0);
   });
 });

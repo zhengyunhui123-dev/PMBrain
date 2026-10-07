@@ -1,6 +1,25 @@
 # PMBrain 与原版 GBrain 的检索和 Dream 功能对比
 
-维护日期：2026-09-19
+维护日期：2026-10-07
+
+## 当前关系专项：1.4.41
+
+本轮按用户批准移植 GBrain `0.60.102.0` / `5b5891069413b28b2fe3a50675116d67d5a1e145` 的关系子系统。来源见 `.upstream/gbrain-subsystems.json` 与《上游能力来源台账》；下文旧版本是历史对照，不代表全项目已升级到本次关系基线。
+
+| 链路 | 当前实现与边界 |
+|---|---|
+| 普通正文提及 | 原版 Pack-aware 策略与匹配器；concept/project 默认不参与，中文停用词在适配层 |
+| 别名 | 原版 subject/declared 派生、长度/通用词/首词歧义/大小写过滤；显式 frontmatter 别名独立保留 |
+| 增量补连 | 原版词表、页面修订状态和 generation；不变的第二轮 0 页，新增实体按上游候选匹配补扫 |
+| 页面并发 | 原版 UUID 修订、Source incarnation、可恢复元数据迁移；旧知识正文不回改 |
+| 显式链接 | 原版 Source-local 名称索引与派生关系对账，PMBrain 当前 Source → default；显式 Source 限定保留 |
+| 后建目标 | wanted_links 保存未解析引用，目标出现后抽取来源页 |
+| 导入识别实体 | 共享导入事务保存请求 → 既有持久产品队列 → PMBrain 现有 capture Agent → GBrain 索引/NER/对账；沿用模型预算 |
+| 尚未移植 | managed canonical filesystem、完整写能力授权、时态关系有效区间、GBrain ingest Agent 替换、实体卡和待建页新 UI；覆盖报告辅助模块尚未产品接线 |
+
+本轮为隔离双引擎与模拟提供商验收，成熟度保持 Beta。历史页面只读分类报告，不自动改类型；真实库 44% 误关联和第 770 页卡顿不作为已验证修复。全项目对齐仍要逐子系统完成。
+
+---
 
 PMBrain 基线：Core **1.3.67**（本分支产品栈至 PR11 / 1.3.66，本文档 PR 递增至 1.3.67）。第 2–10 节仍是 2026-08-31 对 GBrain 0.47.7.0 的 RAG/Dream 复核，未整篇重写。
 

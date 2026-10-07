@@ -1,3 +1,4 @@
+import { enqueueImportedEntityCapture } from './imported-entity-capture.ts';
 import { createHash, randomUUID } from 'node:crypto';
 import { Worker } from 'node:worker_threads';
 import { stat, mkdir, writeFile, rename, unlink, readdir } from 'node:fs/promises';
@@ -79,6 +80,8 @@ export class ProductTaskRuntime {
   private executions = new Map<number, { cancel: (reason?:string) => void; done: Promise<unknown>; run: () => ConsoleRun; ownsLockedTransaction: () => boolean; adjust:(constrained:boolean)=>void }>();
   private resources:TaskResourceGuard;
   private resourceDrain:Promise<void>|null=null;
+  private entityCaptureTimer:ReturnType<typeof setInterval>|null=null;
+  private submittingEntityCapture=false;
   private resourceTimer:ReturnType<typeof setInterval>|null=null;
   private idleTimer:ReturnType<typeof setTimeout>|null=null;
   private localPressure=false;
@@ -166,6 +169,17 @@ export class ProductTaskRuntime {
     });
     this.resourceTimer=setInterval(()=>this.checkMemory(),this.resources.rssCheckIntervalMs);
     this.resourceTimer.unref();
+    const flush=async()=>{
+      if(this.stopped||this.paused||this.submittingEntityCapture)return;
+      this.submittingEntityCapture=true;
+      try{await withDatabasePriority(3,()=>enqueueImportedEntityCapture(this.engine));}
+      catch(error){console.error('[tasks] imported entity capture:',error);}
+      finally{this.submittingEntityCapture=false;}
+    };
+    if(this.entityCaptureTimer)clearInterval(this.entityCaptureTimer);
+    this.entityCaptureTimer=setInterval(()=>void flush(),2000);
+    this.entityCaptureTimer.unref();
+    await flush();
   }
 
   private async submit(task: ProductTask, kind: string, idempotencyKey?: string, trigger: 'manual' | 'scheduled' = 'manual', queue = this.queue): Promise<ConsoleRun> {
@@ -649,6 +663,7 @@ export class ProductTaskRuntime {
 
   async close(): Promise<void> {
     this.stopped = true;
+    if(this.entityCaptureTimer)clearInterval(this.entityCaptureTimer);
     if(this.resourceTimer)clearInterval(this.resourceTimer);
     if(this.idleTimer)clearTimeout(this.idleTimer);
     await this.reclaiming;

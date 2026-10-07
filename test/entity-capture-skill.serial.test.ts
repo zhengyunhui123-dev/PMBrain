@@ -425,7 +425,7 @@ test('完整整理先识别实体，再把新实体补进正文关联', async ()
   expect(links).toContainEqual({ to_slug: 'people/张三', link_source: 'mentions' });
 }, 60_000);
 
-test('项目页可以成为正文关联的目标', async () => {
+test('项目页保留，但普通正文提及不会自动连向项目', async () => {
   await useVault();
   await engine.putPage('projects/deep-blue', {
     type: 'project', title: '深蓝计划', compiled_truth: '深蓝计划是一个独立项目。', timeline: '', frontmatter: {},
@@ -441,5 +441,6 @@ test('项目页可以成为正文关联的目标', async () => {
        JOIN pages t ON t.id = l.to_page_id
       WHERE f.slug = 'notes/project' AND l.link_source = 'mentions'`,
   );
-  expect(links.map(row => row.to_slug)).toContain('projects/deep-blue');
+  expect(links.map(row => row.to_slug)).not.toContain('projects/deep-blue');
+  expect((await engine.getPage('projects/deep-blue',{sourceId:'vault'}))?.type).toBe('project');
 });

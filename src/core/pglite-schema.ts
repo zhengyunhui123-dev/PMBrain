@@ -1,3 +1,6 @@
+import { WANTED_LINKS_SCHEMA_SQL } from './pmbrain-adapters/wanted-links-schema.ts';
+import { PAGE_STATE_SCHEMA_SQL } from './page-state/schema.ts';
+import { MENTION_INDEX_SCHEMA_SQL } from './mentions/schema.ts';
 /**
  * PGLite schema — derived from schema-embedded.ts (Postgres schema).
  *
@@ -1200,7 +1203,7 @@ export function getPGLiteSchema(
     throw new Error(`Invalid embedding dimensions: ${dims}`);
   }
   return applyChunkEmbeddingIndexPolicy(PGLITE_SCHEMA_SQL_TEMPLATE, parsedDims)
-    .replace(/__EMBEDDING_DIMS__/g, String(parsedDims));
+    .replace(/__EMBEDDING_DIMS__/g, String(parsedDims)) + '\n' + PAGE_STATE_SCHEMA_SQL + '\n' + MENTION_INDEX_SCHEMA_SQL + '\n' + WANTED_LINKS_SCHEMA_SQL;
 }
 
 /** Pre-computed schema using the storage-only placeholder dimension. */

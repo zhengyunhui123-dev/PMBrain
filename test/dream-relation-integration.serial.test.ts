@@ -80,7 +80,7 @@ test('生成概念后的收尾重扫旧 WikiLink 与正文，在孤立页检查�
     }});
   const rows=await edges();
   expect(rows).toContainEqual(expect.objectContaining({from_slug:'notes/history',to_slug:'concepts/graph',link_source:'markdown'}));
-  expect(rows).toContainEqual(expect.objectContaining({from_slug:'notes/new-mention',to_slug:'concepts/graph',link_source:'mentions'}));
+  expect(rows.some(row=>row.from_slug==='notes/new-mention'&&row.to_slug==='concepts/graph'&&row.link_source==='mentions')).toBe(false);
   expect(report.phases.find(p=>p.phase==='extract')?.details.postGenerationRelations).toBe(true);
   expect((await engine.getBacklinks('concepts/graph',{sourceId:'vault'})).some(link=>link.from_slug==='notes/history')).toBe(true);
   expect((await engine.findOrphanPages({sourceId:'vault'})).some(row=>row.slug==='concepts/graph')).toBe(false);
@@ -93,17 +93,17 @@ test('历史目标和别名后来出现时，两种入口补齐已扫描页面',
   await engine.putPage('companies/openai',{type:'company',title:'OpenAI',compiled_truth:'新增别名 OpenAI Labs。',frontmatter:{aliases:['OpenAI Labs']}},{sourceId:'vault'});
   await engine.putPage('concepts/graph',{type:'concept',title:'知识图谱',compiled_truth:''},{sourceId:'vault'});
   const report=await runCycle(engine,{brainDir:null,sourceId:'vault',phases:['extract','orphans'],...relations});
-  expect(report.phases.find(p=>p.phase==='extract')?.details.linksCreated).toBeGreaterThan(0);
+  expect(report.phases.find(p=>p.phase==='extract')?.details.relationPagesProcessed).toBeGreaterThan(0);
   expect(await edges()).toContainEqual(expect.objectContaining({from_slug:'notes/history',to_slug:'concepts/graph',link_source:'markdown'}));
   expect(await edges()).toContainEqual(expect.objectContaining({from_slug:'notes/alias',to_slug:'companies/openai',link_source:'mentions'}));
 }),60000);
 
 test('NER 写入失败保留原错误，重新执行能够补齐',()=>scoped(async()=>{
   await seed();
-  const original=engine.addLinksBatch.bind(engine);
-  const failing=spyOn(engine,'addLinksBatch').mockImplementation(async rows=>{
+  const original=engine.addLinksBatch;
+  const failing=spyOn(engine,'addLinksBatch').mockImplementation(async function(this:BrainEngine,rows){
     if(rows.some(row=>row.link_kind==='typed_ner'))throw new Error('Injected NER database failure');
-    return original(rows);
+    return original.call(this,rows);
   });
   try{
     const report=await runQuickMaintenance(engine,{brainDir:null,sourceId:'vault'});
@@ -135,12 +135,13 @@ test('预览不写关系或扫描凭据',()=>scoped(async()=>{
   expect(report.totals.links_created).toBe(0);
 }),60000);
 
-test('Source 自己的 Pack 没有规则时据实跳过 NER，确定性关系继续执行',()=>scoped(async()=>{
+test('Source 配置不存在的 Pack 时保留关系索引与 NER 原生错误',()=>scoped(async()=>{
   await seed();
   await engine.setConfig('schema_pack.source.vault','missing-relations-test-pack');
   const report=await runQuickMaintenance(engine,{brainDir:null,sourceId:'vault'});
-  expect(report.phases.find(p=>p.phase==='extract')?.details.nerPackUnavailable).toBe(true);
-  expect((await edges()).some(row=>row.link_source==='mentions'&&row.link_kind===null)).toBe(true);
+  expect(report.phases.find(p=>p.phase==='extract')?.details.ner_error).toContain('missing-relations-test-pack');
+  expect(report.status).toBe('partial');
+  expect(report.phases.find(p=>p.phase==='extract')?.details.by_mention_error).toContain('missing-relations-test-pack');
   expect((await edges()).some(row=>row.link_kind==='typed_ner')).toBe(false);
 }),60000);
 

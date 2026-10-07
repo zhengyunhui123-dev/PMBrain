@@ -97,7 +97,7 @@ test('显式双链不受中文停用词影响，一字、同名和高频词不�
   await page('vault', 'people/zhang-a', 'person', '张三', '同名人物甲。');
   await page('vault', 'people/zhang-b', 'person', '张三', '同名人物乙。');
   await page('vault', 'concepts/system', 'concept', '系统', '系统可以是一个实体。');
-  await page('vault', 'concepts/knowledge-system', 'concept', '知识系统', '更长的专名。');
+  await page('vault', 'companies/knowledge-system', 'company', '知识系统', '更长的专名。');
   await page('vault', 'notes/loose', 'note', '未分类', '这篇不是实体。');
   await page('vault', 'notes/wiki', 'note', '显式', '参见 [[concepts/system]]。升级系统之后再看。马很常见。张三来了。知识系统已经上线。');
 
@@ -110,7 +110,7 @@ test('显式双链不受中文停用词影响，一字、同名和高频词不�
 
   await runByMentionCore(engine, { sourceIdFilter: 'vault', quiet: true });
   const links = await linkRows('notes/wiki');
-  expect(links.filter(row => row.link_source === 'mentions').map(row => row.to_slug)).toEqual(['concepts/knowledge-system']);
+  expect(links.filter(row => row.link_source === 'mentions').map(row => row.to_slug)).toEqual(['companies/knowledge-system']);
   expect(links.some(row => row.to_slug === 'concepts/system' && row.link_source === 'markdown')).toBe(true);
   expect(links.some(row => row.to_slug === 'people/ma' || row.to_slug === 'people/zhang-a' || row.to_slug === 'people/zhang-b')).toBe(false);
 }, 60_000);
@@ -248,16 +248,17 @@ test('预览不写水位、不删关系、不保存新目录', async () => {
   expect(links).toContainEqual(expect.objectContaining({ to_slug: 'companies/keep', link_source: 'mentions' }));
 }, 60_000);
 
-test('旧目录哈希只建立基线，不把已抽过的页面重新入队', async () => {
+test('旧目录哈希不再参与索引，也不把已抽过的页面重新入队', async () => {
   await page('default', 'notes/keep', 'note', '保持', '普通旧文。');
   await page('default', 'companies/keep', 'company', '保留公司', '基线实体。');
   await extractStaleFromDB(engine, aware);
   await stampFresh();
-  await engine.setConfig('extract.relations.catalog.all', JSON.stringify({ hash: 'outdated', versionTs: new Date().toISOString() }));
+  const legacy=JSON.stringify({ hash: 'outdated', versionTs: new Date().toISOString() });
+  await engine.setConfig('extract.relations.catalog.all', legacy);
   const result = await extractStaleFromDB(engine, aware);
   expect(result.pagesProcessed).toBe(0);
   expect(await stampOf('default', 'notes/keep')).toContain('2099-01-01');
   const saved = await engine.getConfig('extract.relations.catalog.all');
-  expect(saved).toContain('companies/keep');
-  expect(saved).not.toContain('versionTs');
+  expect(saved).toBe(legacy);
+  expect((await runByMentionCore(engine,{quiet:true})).pages).toBe(0);
 }, 60_000);

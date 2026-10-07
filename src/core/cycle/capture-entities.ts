@@ -1,3 +1,4 @@
+import { ENTITY_CAPTURE_MIN_BODY_CHARS } from '../pmbrain-adapters/entity-capture-request.ts';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -11,7 +12,7 @@ import { resolveSubagentExecutionMode } from './model-routing.ts';
 import { runSubagentsInline } from './inline-drain.ts';
 import { throwIfAborted } from '../abort-check.ts';
 import { loadConfig } from '../config.ts';
-import { LINKABLE_ENTITY_TYPES } from '../by-mention.ts';
+const CAPTURE_ENTITY_TYPES=['person','company','organization','entity','concept','project'] as const;
 import { splitProviderModelId } from '../model-id.ts';
 import { readModelConfigValue, resolveAlias } from '../model-config.ts';
 import { normalizeAliasList } from '../search/alias-normalize.ts';
@@ -58,7 +59,7 @@ export const ENTITY_CAPTURE_SLUG_PREFIXES = [
   'projects/*',
 ] as const;
 
-const MIN_BODY_CHARS = 8;
+const MIN_BODY_CHARS = ENTITY_CAPTURE_MIN_BODY_CHARS;
 const moduleDir = dirname(fileURLToPath(import.meta.url));
 
 export interface EntityCaptureCandidate {
@@ -268,7 +269,7 @@ export async function loadCaptureEntityIndex(
         AND type = ANY($1::text[])
         AND ($2::text IS NULL OR source_id = $2 OR source_id = 'default')
       ORDER BY source_id, slug`,
-    [[...LINKABLE_ENTITY_TYPES], sourceId ?? null],
+    [[...CAPTURE_ENTITY_TYPES], sourceId ?? null],
   );
   return rows.map(row => {
     const frontmatter = row.frontmatter && typeof row.frontmatter === 'object'
@@ -341,7 +342,7 @@ function readDesktopModelServices(): CaptureServiceRecord[] {
   }
 }
 
-async function chooseCaptureModel(engine: BrainEngine, opts: CaptureEntitiesOpts): Promise<CaptureModelChoice> {
+export async function chooseCaptureModel(engine: BrainEngine, opts: CaptureEntitiesOpts): Promise<CaptureModelChoice> {
   const services = opts.modelServices !== undefined
     ? opts.modelServices
     : opts.handler ? [] : readDesktopModelServices();
@@ -368,102 +369,53 @@ async function chooseCaptureModel(engine: BrainEngine, opts: CaptureEntitiesOpts
 async function linkNewCaptureEntities(
   engine: BrainEngine,
   opts: CaptureEntitiesOpts,
-  needles: Array<{ sourceId: string; needle: string }>,
   writtenSlugs: string[],
 ): Promise<{ mention: number; ner: number; extracted: number; slugs: string[] }> {
-  const { findPagesContainingNeedles } = await import('../../commands/extract-stale.ts');
-  const matched = await findPagesContainingNeedles(engine, needles, opts.sourceId);
-  const slugs = [...new Set([...matched, ...writtenSlugs].map(slug => slug.trim()).filter(Boolean))];
-  if (slugs.length === 0) return { mention: 0, ner: 0, extracted: 0, slugs };
-  const { runByMentionCore } = await import('../../commands/extract.ts');
-  const mention = await runByMentionCore(engine, {
-    prioritySlugs: slugs,
-    maxHistoricalPages: 0,
-    sourceIdFilter: opts.sourceId,
-    quiet: true,
-    signal: opts.signal,
-    yieldDuringPhase: opts.yieldDuringPhase,
-  });
-  const { extractNerLinks } = await import('../extract-ner.ts');
-  const ner = await extractNerLinks(engine, {
-    sourceIdFilter: opts.sourceId,
-    slugs,
-    signal: opts.signal,
-    yieldDuringPhase: opts.yieldDuringPhase,
-  });
-  const extracted = await materializeExtractedLinks(engine, opts, slugs);
-  return { mention: mention.created, ner: ner.created, extracted, slugs };
+  const { runMentionPass } = await import('../mentions/pass.ts');
+  const mention=await runMentionPass(engine,{sourceId:opts.sourceId,signal:opts.signal,yieldDuringPhase:opts.yieldDuringPhase});
+  if(mention.state==='failed')throw new Error(mention.error);
+  const written=writtenSlugs.length ? await engine.executeRaw<{slug:string;sourceId:string}>(`SELECT slug,source_id AS "sourceId" FROM pages WHERE slug=ANY($1::text[]) AND ($2::text IS NULL OR source_id=$2) AND deleted_at IS NULL`,[writtenSlugs,opts.sourceId ?? null]) : [];
+  const repaired=await repairCaptureRelations(engine,opts,[...mention.processedSlugs,...written]);
+  return {mention:mention.created,...repaired};
 }
 
-async function materializeExtractedLinks(
-  engine: BrainEngine,
-  opts: CaptureEntitiesOpts,
-  slugs: string[],
-): Promise<number> {
-  if (slugs.length === 0) return 0;
-  const {
-    extractPageLinks,
-    makeResolver,
-    loadExtractionPack,
-    loadPageTypeMap,
-    pageTypeAt,
-  } = await import('../link-extraction.ts');
-  const pack = await loadExtractionPack(engine, opts.sourceId);
-  const lineGrammar = await lineGrammarOptions(engine);
-  const types = await loadPageTypeMap(engine);
-  const resolver = makeResolver(engine, { mode: 'live', sourceId: opts.sourceId });
-  let created = 0;
-  for (const slug of slugs) {
-    opts.signal?.throwIfAborted();
-    const scoped = opts.sourceId ? await engine.getPage(slug, { sourceId: opts.sourceId }) : null;
-    const page = scoped ?? await engine.getPage(slug, { sourceId: 'default' });
-    if (!page) continue;
-    const pageSource = page.source_id || opts.sourceId || 'default';
-    const extracted = await extractPageLinks(
-      slug,
-      `${page.compiled_truth}\n${page.timeline ?? ''}`,
-      page.frontmatter ?? {},
-      page.type,
-      resolver,
-      {
-        pack,
-        lineGrammar,
-        targetType: (targetSlug, targetSourceId) => pageTypeAt(types, targetSlug, targetSourceId, pageSource),
-      },
-    );
-    const batch = [];
-    for (const candidate of extracted.candidates) {
-      const fromSlug = candidate.fromSlug ?? slug;
-      const preferredFrom = candidate.fromSourceId ?? pageSource;
-      const fromSource = pageTypeAt(types, fromSlug, preferredFrom) !== undefined
-        ? preferredFrom
-        : pageTypeAt(types, fromSlug, pageSource) !== undefined
-          ? pageSource
-          : pageTypeAt(types, fromSlug, 'default') !== undefined
-            ? 'default'
-            : '';
-      const preferredTo = candidate.targetSourceId;
-      const toSource = preferredTo && pageTypeAt(types, candidate.targetSlug, preferredTo) !== undefined
-        ? preferredTo
-        : pageTypeAt(types, candidate.targetSlug, pageSource) !== undefined
-          ? pageSource
-          : pageTypeAt(types, candidate.targetSlug, 'default') !== undefined
-            ? 'default'
-            : '';
-      if (!fromSource || !toSource) continue;
-      batch.push({
-        from_slug: fromSlug,
-        to_slug: candidate.targetSlug,
-        from_source_id: fromSource,
-        to_source_id: toSource,
-        link_type: candidate.linkType,
-        context: candidate.context,
-        link_source: candidate.linkSource ?? 'markdown',
-        origin_slug: candidate.originSlug,
-        origin_field: candidate.originField,
-      });
+async function repairCaptureRelations(engine:BrainEngine,opts:CaptureEntitiesOpts,refs:Array<{slug:string;sourceId:string}>):Promise<{ner:number;extracted:number;slugs:string[]}>{
+  const groups=new Map<string,Set<string>>();
+  for(const ref of refs){const slugs=groups.get(ref.sourceId)??new Set<string>();slugs.add(ref.slug);groups.set(ref.sourceId,slugs);}
+  const { extractNerLinks } = await import('../extract-ner.ts');
+  let ner=0,extracted=0;
+  for(const [sourceId,set] of groups){
+    const slugs=[...set];
+    try{
+      ner+=(await extractNerLinks(engine,{sourceIdFilter:sourceId,slugs,signal:opts.signal,yieldDuringPhase:opts.yieldDuringPhase})).created;
+      extracted+=await materializeExtractedLinks(engine,{...opts,sourceId},slugs);
+      const { runMentionPass }=await import('../mentions/pass.ts');
+      const settled=await runMentionPass(engine,{sourceId,slugs,signal:opts.signal});
+      if(settled.state==='failed')throw new Error(settled.error);
+    }catch(error){
+      await engine.executeRaw('UPDATE page_mention_state SET mention_revision=NULL WHERE page_id IN (SELECT id FROM pages WHERE source_id=$1 AND slug=ANY($2::text[]))',[sourceId,slugs]);
+      throw error;
     }
-    if (batch.length > 0) created += await engine.addLinksBatch(batch);
+  }
+  return {ner,extracted,slugs:[...new Set(refs.map(ref=>ref.slug))]};
+}
+
+async function materializeExtractedLinks(engine:BrainEngine,opts:CaptureEntitiesOpts,slugs:string[]):Promise<number>{
+  const { prepareLinkReconciliation } = await import('../link-reconciliation.ts');
+  const reconcile=await prepareLinkReconciliation(engine);
+  let created=0;
+  const { parseTimelineEntries }=await import('../link-extraction.ts');
+  for(const slug of slugs){
+    opts.signal?.throwIfAborted();
+    const result=await reconcile(slug,opts.sourceId ?? 'default');
+    created+=result.created;
+    const timeline=parseTimelineEntries(result.page.compiled_truth+'\n'+result.page.timeline).map(entry=>({slug,source_id:result.page.source_id,...entry,detail:entry.detail||'',source:entry.source||''}));
+    if(timeline.length)await engine.transaction(async tx=>{
+      const [current]=await tx.executeRaw<{revision:string}>('SELECT knowledge_revision::text AS revision FROM pages WHERE id=$1 FOR SHARE',[result.page.id]);
+      if(current?.revision!==result.revision)throw new Error('Page changed during timeline extraction');
+      await tx.addTimelineEntriesBatch(timeline);
+    });
+    await opts.yieldDuringPhase?.();
   }
   return created;
 }
@@ -604,6 +556,10 @@ export async function runPhaseCaptureEntities(
     execution_mode: executionMode,
     fallback_used: false,
   };
+  const { runMentionPass } = await import('../mentions/pass.ts');
+  const initialMentions=await runMentionPass(engine,{sourceId:opts.sourceId,signal:opts.signal,yieldDuringPhase:opts.yieldDuringPhase});
+  if(initialMentions.state==='failed')throw new Error(initialMentions.error);
+  const initialRepair=await repairCaptureRelations(engine,opts,initialMentions.processedSlugs);
   const budgetOpt = opts.budget;
   const batchSize = Math.max(1, opts.batchSize ?? ENTITY_CAPTURE_PAGE_BUDGET);
   const maxInputTokens = budgetOpt?.maxInputTokens
@@ -663,7 +619,7 @@ export async function runPhaseCaptureEntities(
   const childIds: number[] = [];
   const sourceSlugs = new Set<string>();
   const createdEntitySlugs = new Set<string>();
-  const relationSlugs = new Set<string>();
+  const relationSlugs = new Set<string>(initialRepair.slugs);
   let pagesSubmitted = 0;
   let pagesProcessed = 0;
   let chunksSubmitted = 0;
@@ -675,9 +631,9 @@ export async function runPhaseCaptureEntities(
   let knownCost = ollama ? 0 : 0;
   let sawPricedUsage = ollama;
   let failedChunks = 0;
-  let mentionLinks = 0;
-  let extractLinks = 0;
-  let nerLinks = 0;
+  let mentionLinks = initialMentions.created;
+  let extractLinks = initialRepair.extracted;
+  let nerLinks = initialRepair.ner;
   let relationsRefreshed = false;
   let relationError = '';
   let failureStop = false;
@@ -844,7 +800,7 @@ export async function runPhaseCaptureEntities(
       const needles = deltaCaptureNeedles(beforeIndex, afterIndex);
       if (needles.length > 0 && !opts.signal?.aborted) {
         try {
-          const linked = await linkNewCaptureEntities(engine, opts, needles, [...createdEntitySlugs]);
+          const linked = await linkNewCaptureEntities(engine, opts, [...createdEntitySlugs]);
           mentionLinks += linked.mention;
           nerLinks += linked.ner;
           extractLinks += linked.extracted;

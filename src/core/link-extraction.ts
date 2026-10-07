@@ -412,6 +412,7 @@ function maskRanges(content: string, ranges: Array<[number, number]>): string {
 // ─── Link candidates (richer than EntityRef) ────────────────────
 
 export interface LinkCandidate {
+  authoredRef?: {key:string;kind:'slug'|'name';target:string;targetSourceId?:string};
   /**
    * Source page slug for the edge. When omitted, callers default to
    * "the page being written" (operations.ts runAutoLink) or "the page
@@ -590,8 +591,9 @@ export async function extractPageLinks(
       }
 
       if (resolvedTargets.length === 0) {
-        if (!wikilinkUnresolvedSeen.has(ref.slug)) {
-          wikilinkUnresolvedSeen.add(ref.slug);
+        const unresolvedKey=JSON.stringify([ref.sourceId ?? null,ref.slug]);
+        if (!wikilinkUnresolvedSeen.has(unresolvedKey)) {
+          wikilinkUnresolvedSeen.add(unresolvedKey);
           wikilinkUnresolved.push({ field: 'wikilink', name: ref.slug });
         }
         continue;
@@ -628,9 +630,10 @@ export async function extractPageLinks(
       (ref.exactPath || ref.sourceId)
       && !exactVerified
     ) {
-      if (!wikilinkUnresolvedSeen.has(ref.slug)) {
-        wikilinkUnresolvedSeen.add(ref.slug);
-        wikilinkUnresolved.push({ field: 'wikilink', name: ref.slug });
+      const unresolvedKey=JSON.stringify([ref.sourceId ?? null,ref.slug]);
+      if (!wikilinkUnresolvedSeen.has(unresolvedKey)) {
+        wikilinkUnresolvedSeen.add(unresolvedKey);
+        wikilinkUnresolved.push({ field: 'wikilink', name: ref.slug, targetSourceId:ref.sourceId ?? undefined });
       }
       continue;
     }
@@ -658,7 +661,7 @@ export async function extractPageLinks(
   while ((m = bareRe.exec(strippedContent)) !== null) {
     // Skip matches that are part of a markdown link (already handled above).
     const charBefore = m.index > 0 ? strippedContent[m.index - 1] : '';
-    if (charBefore === '/' || charBefore === '(') continue;
+    if (charBefore === '/' || charBefore === '(' || charBefore === '[' || charBefore === ':') continue;
     const context = excerpt(strippedContent, m.index, 240);
     candidates.push({
       targetSlug: m[1],
@@ -1209,6 +1212,7 @@ export interface UnresolvedFrontmatterRef {
   /** The name that did not resolve. */
   name: string;
   reason?: 'target_type_mismatch';
+  targetSourceId?: string;
 }
 
 export interface FrontmatterExtractResult {

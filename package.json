@@ -55,6 +55,7 @@
     "check:cli-exec": "bash scripts/check-cli-executable.sh",
     "check:all": "bun run verify",
     "check:version-sync": "bun run scripts/check-version-sync.ts",
+    "check:gbrain-subsystems": "bun run scripts/check-gbrain-subsystems.ts",
     "check:pmbrain-env": "bun run scripts/check-pmbrain-env-prefix.ts",
     "check:gateway-routed": "bash scripts/check-gateway-routed-no-direct-anthropic.sh",
     "check:worker-pool-atomicity": "bash scripts/check-worker-pool-atomicity.sh",
@@ -163,5 +164,5 @@
     "bun": ">=1.3.10"
   },
   "license": "MIT",
-  "version": "1.4.40"
+  "version": "1.4.41"
 }

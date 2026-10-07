@@ -1,3 +1,7 @@
+import { WANTED_LINKS_SCHEMA_SQL } from './pmbrain-adapters/wanted-links-schema.ts';
+import { PAGE_STATE_SCHEMA_SQL } from './page-state/schema.ts';
+import { resumePageRevisionBackfill } from './page-state/revision-backfill-schema.ts';
+import { MENTION_INDEX_SCHEMA_SQL } from './mentions/schema.ts';
 import type { BrainEngine } from './engine.ts';
 import { slugifyPath } from './sync.ts';
 import { repairTimelineDedupIndex, repairLegacyTimelineSourceRows } from './timeline-dedup-repair.ts';
@@ -5521,6 +5525,9 @@ export const MIGRATIONS: Migration[] = [
       }
     },
   },
+  { version: 131, name: 'page_revision_identity', idempotent: true, sql: PAGE_STATE_SCHEMA_SQL, handler: async engine => { await resumePageRevisionBackfill(engine); } },
+  { version: 132, name: 'persistent_mention_index', idempotent: true, sql: MENTION_INDEX_SCHEMA_SQL },
+  {version:133,name:'wanted_links',idempotent:true,sql:WANTED_LINKS_SCHEMA_SQL},
 ];
 
 export const LATEST_VERSION = MIGRATIONS.length > 0
@@ -5873,6 +5880,7 @@ export async function runMigrations(engine: BrainEngine): Promise<{ applied: num
   } catch { /* best-effort; doctor reports the drift if this couldn't run */ }
 
   if (pending.length === 0) {
+    await resumePageRevisionBackfill(engine);
     return { applied: 0, current };
   }
 

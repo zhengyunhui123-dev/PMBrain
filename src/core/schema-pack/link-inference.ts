@@ -58,6 +58,7 @@ export function inferLinkTypeFromPack(
   context: string,
   budget?: PageRegexBudget,
   targetType?: string,
+  opts: { ner?: boolean } = {},
 ): string | null {
   const rules = [
     ...pack.link_types.filter(lt => lt.inference?.page_type),
@@ -66,6 +67,7 @@ export function inferLinkTypeFromPack(
   for (const lt of rules) {
     const rule = lt.inference;
     if (!rule || (!rule.page_type && !rule.target_type && !rule.regex)) continue;
+    if (rule.ner_only && !opts.ner) continue;
     if (rule.page_type && rule.page_type !== pageType) continue;
     if (rule.target_type && rule.target_type !== targetType) continue;
     const pattern = rule.regex;

@@ -1896,6 +1896,7 @@ export async function runCycle(
       prioritySlugs?: string[],
       limits?: { maxHistoricalPages?: number; nerSlugs?: string[] },
     ) => {
+      const relationNerSlugs=new Set([...(prioritySlugs ?? []),...(limits?.nerSlugs ?? [])]);
       checkAborted(opts.signal);
       if (opts.includeHistoricalMarkdownCatchUp && !dryRun) {
         try {
@@ -1913,6 +1914,7 @@ export async function runCycle(
             yieldDuringPhase: buildYieldDuringPhase(lock, opts.yieldDuringPhase),
             maxPages: opts.markdownCatchUpMaxHistorical,
           });
+          for(const ref of catchUp.processedSlugs)relationNerSlugs.add(ref.slug);
           result.details = {
             ...result.details,
             linksCreated: Number(result.details.linksCreated ?? 0) + catchUp.linksCreated,
@@ -1968,6 +1970,7 @@ export async function runCycle(
             signal: opts.signal,
             yieldDuringPhase: buildYieldDuringPhase(lock, opts.yieldDuringPhase),
           });
+          for(const ref of mention.processedSlugs)relationNerSlugs.add(ref.slug);
           const mentionMs = Math.round(performance.now() - mentionStart);
           const prevLinks = Number(result.details.linksCreated ?? 0);
           result.details = {
@@ -2019,8 +2022,11 @@ export async function runCycle(
           const ner = await extractNerLinks(engine, {
             sourceIdFilter: filesystemSourceId, signal: opts.signal,
             yieldDuringPhase: buildYieldDuringPhase(lock, opts.yieldDuringPhase),
-            ...(limits?.nerSlugs ? { slugs: limits.nerSlugs } : {}),
+            slugs: [...relationNerSlugs],
           });
+          const { runMentionPass }=await import('./mentions/pass.ts');
+          const settled=await runMentionPass(engine,{sourceId:filesystemSourceId,slugs:[...relationNerSlugs],signal:opts.signal});
+          if(settled.state==='failed')throw new Error(settled.error);
           result.details = {
             ...result.details,
             linksCreated: Number(result.details.linksCreated ?? 0) + ner.created,
@@ -2036,6 +2042,7 @@ export async function runCycle(
           const message = error instanceof Error ? error.message : String(error);
           result.status = isGinRepairAbortText(error) ? 'fail' : result.status === 'fail' ? 'fail' : 'warn';
           result.error = makeErrorFromException(error);
+          for(const slug of relationNerSlugs)await engine.executeRaw('UPDATE page_mention_state SET mention_revision=NULL WHERE page_id IN (SELECT id FROM pages WHERE slug=$1 AND ($2::text IS NULL OR source_id=$2))',[slug,filesystemSourceId ?? null]);
           result.details = { ...result.details, ner_error: message };
           result.summary += `; NER relation extraction failed: ${message}`;
         }

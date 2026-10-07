@@ -433,7 +433,7 @@ describe('by-mention relations (TEST 3–4)', () => {
     expect(result.historicalRemaining).toBeGreaterThan(0);
     expect(result.timeBudgetReached).toBe(true);
     const checkpointRows = await engine.executeRaw<{ c: number }>(
-      `SELECT COUNT(*)::int AS c FROM op_checkpoints WHERE op = 'extract-by-mention'`,
+      `SELECT COUNT(*)::int AS c FROM page_mention_state s JOIN pages p ON p.id=s.page_id WHERE s.mention_revision=p.knowledge_revision`,
     );
     expect(Number(checkpointRows[0]?.c ?? 0)).toBeGreaterThan(0);
     const links = await engine.executeRaw<{ from_slug: string }>(

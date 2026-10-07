@@ -95,6 +95,7 @@ export function inferNerLinkType(
       context,
       undefined,
       sourcePageType ? targetType : undefined,
+      { ner: true },
     );
     if (inferred) return inferred;
     const existing = inferLinkType(

@@ -8,10 +8,8 @@ export const ENTITY_CAPTURE_CANDIDATE_LIMIT = 60;
 
 export type CaptureStopReason = 'completed' | 'tokens' | 'cost' | 'failure' | 'aborted' | 'model_unavailable';
 
-export const CJK_PLAIN_MENTION_BLOCKLIST = [
-  '系统', '项目', '模型', '平台', '方案', '功能', '问题', '数据',
-  '内容', '工作', '研究', '产品', '用户', '技术', '公司',
-] as const;
+import { CJK_PLAIN_MENTION_BLOCKLIST } from '../pmbrain-adapters/mention-policy.ts';
+export { CJK_PLAIN_MENTION_BLOCKLIST };
 
 const BLOCKED_SURFACES = new Set<string>(CJK_PLAIN_MENTION_BLOCKLIST);
 const HAN_RE = /\p{Script=Han}/gu;
