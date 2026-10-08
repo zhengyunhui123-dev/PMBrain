@@ -637,6 +637,7 @@ export async function runPhaseCaptureEntities(
   let nerLinks = initialRepair.ner;
   let relationsRefreshed = false;
   let relationError = '';
+  let modelError = '';
   let failureStop = false;
   let budgetStop: 'tokens' | 'cost' | null = null;
   const failedPageSlugs = new Set<string>();
@@ -708,6 +709,7 @@ export async function runPhaseCaptureEntities(
             allowed_slug_prefixes: [...ENTITY_CAPTURE_SLUG_PREFIXES],
             source_id: chunk.sourceId,
             skills_dir: skillsDir,
+            discovery_profile: 'entity_capture',
           };
           const child = await queue.add(
             'subagent',
@@ -760,15 +762,12 @@ export async function runPhaseCaptureEntities(
             }
             throw error;
           }
-          if (job.status !== 'completed') {
-            failedChunks += 1;
-            failedPageSlugs.add(chunk.slug);
-            failureStop = true;
-            break;
-          }
-          completedForPage += 1;
-          chunksProcessed += 1;
-          const usage = usageFromJobResult(job.result);
+          const reportedUsage = usageFromJobResult(job.result);
+          const usage = reportedUsage.present ? reportedUsage : {
+            present: job.tokens_input > 0 || job.tokens_output > 0,
+            input: job.tokens_input,
+            output: job.tokens_output,
+          };
           const chunkCost = captureChunkCostCny({
             usage,
             inputPriceCnyPerMillion: inputPrice,
@@ -788,6 +787,15 @@ export async function runPhaseCaptureEntities(
             knownCost += chunkCost;
             sawPricedUsage = true;
           }
+          if (job.status !== 'completed') {
+            failedChunks += 1;
+            failedPageSlugs.add(chunk.slug);
+            failureStop = true;
+            modelError = job.error_text ?? `实体识别子任务 ${job.id} ${job.status}`;
+            break;
+          }
+          completedForPage += 1;
+          chunksProcessed += 1;
         }
         if (submittedForPage > 0) pagesSubmitted += 1;
         if (!failureStop && !budgetStop && completedForPage === item.chunks.length) pagesProcessed += 1;
@@ -869,7 +877,7 @@ export async function runPhaseCaptureEntities(
         unlinkedMentions: gaps.unlinkedMentions,
       },
     });
-    const summary = relationError ? `${reportLine}关系补写失败：${relationError}` : reportLine;
+    const summary = `${reportLine}${modelError ? `具体错误：${modelError}` : ''}${relationError ? `关系补写失败：${relationError}` : ''}`;
     return phaseResult(status, summary, {
       ...modelDetails,
       pages_seen: candidates.length,

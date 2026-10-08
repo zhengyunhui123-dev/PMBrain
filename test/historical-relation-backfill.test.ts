@@ -125,7 +125,7 @@ describe('historical relation backfill — PGLite end to end', () => {
 
     expect(first.pagesProcessed).toBe(7);
     expect(first.staleRemaining).toBe(0);
-    expect(mentions.created).toBeGreaterThanOrEqual(1);
+    expect(mentions.created).toBe(0);
 
     const rows = await engine.executeRaw<{
       to_slug: string;

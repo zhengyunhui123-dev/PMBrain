@@ -87,6 +87,25 @@ test('已有实体放进候选，脚本复用原页，不创建第二个人', as
   expect(people.map(row => row.slug)).toEqual(['people/张三']);
 }, 60_000);
 
+test('失败子任务保留实际用量和原始错误，不让预算和汇总漏掉已发生的调用', async () => {
+  await note('notes/failing', '张三在星河公司讨论合作，识别实体时模型可能返回异常响应。');
+  let calls = 0;
+  const result = await runPhaseCaptureEntities(engine, {
+    sourceId: 'vault',
+    handler: async ctx => {
+      calls += 1;
+      await ctx.updateTokens({ input: 12345, output: 321 });
+      throw new Error('模型响应处理失败：choices 缺失');
+    },
+  });
+  expect(calls).toBeGreaterThan(0);
+  expect(result.details.input_tokens).toBe(12345 * calls);
+  expect(result.details.output_tokens).toBe(321 * calls);
+  expect(result.details.pages_failed).toBe(1);
+  expect(result.error?.message).toContain('choices 缺失');
+  expect(result.summary).toContain('choices 缺失');
+}, 60_000);
+
 test('新人、公司、项目和概念按类型落库，新别名复用已有公司', async () => {
   await engine.putPage('companies/xinghe', {
     type: 'company', title: '星河公司', compiled_truth: '已有公司页。', timeline: '', frontmatter: {},

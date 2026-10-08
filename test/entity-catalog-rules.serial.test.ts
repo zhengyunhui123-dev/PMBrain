@@ -79,15 +79,15 @@ async function stampOf(sourceId: string, slug: string): Promise<string | null> {
   return rows[0]?.extracted ?? null;
 }
 
-async function linkRows(fromSlug: string): Promise<Array<{ to_slug: string; link_source: string; link_kind: string | null; link_type: string }>> {
+async function linkRows(fromSlug: string, sourceId = 'default'): Promise<Array<{ to_slug: string; link_source: string; link_kind: string | null; link_type: string }>> {
   return engine.executeRaw(
     `SELECT t.slug AS to_slug, l.link_source, l.link_kind, l.link_type
        FROM links l
        JOIN pages f ON f.id = l.from_page_id
        JOIN pages t ON t.id = l.to_page_id
-      WHERE f.slug = $1
+      WHERE f.slug = $1 AND f.source_id = $2
       ORDER BY t.slug, l.link_source, l.link_type`,
-    [fromSlug],
+    [fromSlug, sourceId],
   );
 }
 
@@ -103,13 +103,13 @@ test('显式双链不受中文停用词影响，一字、同名和高频词不�
 
   const extracted = await extractStaleFromDB(engine, { ...aware, sourceIdFilter: 'vault' });
   expect(extracted.pagesProcessed).toBeGreaterThan(0);
-  const afterExtract = await linkRows('notes/wiki');
+  const afterExtract = await linkRows('notes/wiki', 'vault');
   expect(afterExtract).toContainEqual(expect.objectContaining({
     to_slug: 'concepts/system', link_source: 'markdown',
   }));
 
   await runByMentionCore(engine, { sourceIdFilter: 'vault', quiet: true });
-  const links = await linkRows('notes/wiki');
+  const links = await linkRows('notes/wiki', 'vault');
   expect(links.filter(row => row.link_source === 'mentions').map(row => row.to_slug)).toEqual(['companies/knowledge-system']);
   expect(links.some(row => row.to_slug === 'concepts/system' && row.link_source === 'markdown')).toBe(true);
   expect(links.some(row => row.to_slug === 'people/ma' || row.to_slug === 'people/zhang-a' || row.to_slug === 'people/zhang-b')).toBe(false);
@@ -127,7 +127,7 @@ test('停用词仍可由 NER 按上下文建立类型关系', async () => {
     PMBRAIN_SCHEMA_PACK: undefined,
   }, () => extractNerLinks(engine, { sourceIdFilter: 'vault' }));
   expect(ner.pack_unavailable).toBe(false);
-  const links = await linkRows('notes/job');
+  const links = await linkRows('notes/job', 'vault');
   expect(links.some(row => row.to_slug === 'companies/generic' && row.link_kind == null)).toBe(false);
   expect(links).toContainEqual(expect.objectContaining({
     to_slug: 'companies/generic',
@@ -149,7 +149,11 @@ test('新名字、类型变化和正文修改只按真实变化唤醒旧页', as
   await page('default', 'companies/xinghe', 'company', '星河公司', '已有公司。', { aliases: ['星河实验室'] });
   const woken = await extractStaleFromDB(engine, aware);
   expect(woken.pagesProcessed).toBeGreaterThan(0);
-  expect(await stampOf('default', 'notes/hit')).not.toContain('2099-01-01');
+  expect(await stampOf('default', 'notes/hit')).toContain('2099-01-01');
+  expect(await linkRows('notes/hit')).toContainEqual(expect.objectContaining({
+    to_slug: 'companies/xinghe', link_source: 'mentions',
+  }));
+  expect((await linkRows('notes/hit')).some(row => row.to_slug === 'projects/lighthouse')).toBe(false);
   expect(await stampOf('default', 'notes/miss')).toContain('2099-01-01');
 
   await stampFresh(['notes/hit', 'notes/miss']);
@@ -174,7 +178,10 @@ test('大小写和全角别名命中旧页，删除别名只清普通正文关�
   await stampFresh();
   await page('default', 'companies/acme', 'company', 'Acme Labs', '新公司。');
   await extractStaleFromDB(engine, aware);
-  expect(await stampOf('default', 'notes/case')).not.toContain('2099-01-01');
+  expect(await stampOf('default', 'notes/case')).toContain('2099-01-01');
+  expect(await linkRows('notes/case')).toContainEqual(expect.objectContaining({
+    to_slug: 'companies/acme', link_source: 'mentions',
+  }));
   expect(await stampOf('default', 'notes/quiet')).toContain('2099-01-01');
 
   await stampFresh();
@@ -195,7 +202,7 @@ test('大小写和全角别名命中旧页，删除别名只清普通正文关�
     },
   ]);
   await extractStaleFromDB(engine, aware);
-  expect(await stampOf('default', 'notes/alias')).not.toContain('2099-01-01');
+  expect(await stampOf('default', 'notes/alias')).toContain('2099-01-01');
   expect(await stampOf('default', 'notes/quiet')).toContain('2099-01-01');
   const links = await linkRows('notes/alias');
   expect(links.some(row => row.link_source === 'mentions' && row.link_kind == null)).toBe(false);
@@ -215,15 +222,25 @@ test('Source 隔离，默认源实体可以唤醒其他源里提到它的旧页'
 
   await page('vault', 'companies/acme', 'company', 'Acme Labs', '库内公司。');
   await extractStaleFromDB(engine, aware);
-  expect(await stampOf('vault', 'notes/local')).not.toContain('2099-01-01');
+  expect(await stampOf('vault', 'notes/local')).toContain('2099-01-01');
+  expect(await linkRows('notes/local', 'vault')).toContainEqual(expect.objectContaining({
+    to_slug: 'companies/acme', link_source: 'mentions',
+  }));
+  expect(await linkRows('notes/foreign', 'other')).toEqual([]);
   expect(await stampOf('other', 'notes/foreign')).toContain('2099-01-01');
   expect(await stampOf('default', 'notes/shared')).toContain('2099-01-01');
 
   await stampFresh();
   await page('default', 'companies/beacon', 'company', 'Beacon Labs', '共享实体。');
   await extractStaleFromDB(engine, aware);
-  expect(await stampOf('default', 'notes/shared')).not.toContain('2099-01-01');
-  expect(await stampOf('vault', 'notes/beacon')).not.toContain('2099-01-01');
+  expect(await stampOf('default', 'notes/shared')).toContain('2099-01-01');
+  expect(await stampOf('vault', 'notes/beacon')).toContain('2099-01-01');
+  expect(await linkRows('notes/shared')).toContainEqual(expect.objectContaining({
+    to_slug: 'companies/beacon', link_source: 'mentions',
+  }));
+  expect(await linkRows('notes/beacon', 'vault')).toContainEqual(expect.objectContaining({
+    to_slug: 'companies/beacon', link_source: 'mentions',
+  }));
   expect(await stampOf('other', 'notes/quiet')).toContain('2099-01-01');
 }, 60_000);
 

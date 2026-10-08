@@ -412,13 +412,15 @@ def import_search_journey(page: Page, origin: str, markdown: Path, pdf: Path, ar
     response = page.goto(origin + "/admin/#knowledge-import")
     print(f"[admin] import url={page.url} status={response.status if response else 'n/a'} title={page.title()}", flush=True)
     page.get_by_role("heading", name="添加资料").wait_for()
+    page.wait_for_function("() => document.querySelector('.materials-source select')?.value && !document.querySelector('.materials-source select')?.disabled")
     page.locator(".materials-drawer input[type=file]").set_input_files([str(markdown), str(pdf)])
     page.get_by_role("button", name="导入 2 项", exact=True).click()
     try:
         page.wait_for_function(
             """() => {
               if (document.querySelector('.materials-progress')) return false;
-              return document.querySelectorAll('.materials-result').length >= 2;
+              const cards = [...document.querySelectorAll('.materials-drawer .product-task-progress')];
+              return cards.length === 2 && cards.every(card => !card.classList.contains('task-is-active'));
             }""", timeout=240_000,
         )
     except PlaywrightTimeoutError:
@@ -426,8 +428,20 @@ def import_search_journey(page: Page, origin: str, markdown: Path, pdf: Path, ar
             f"url={page.url}\n\n{page.locator('.materials-drawer').inner_text()}", encoding="utf-8",
         )
         raise
-    outcomes = page.locator(".materials-result").all_inner_texts()
-    if len(outcomes) != 2 or any("已完成" not in outcome or "失败" in outcome for outcome in outcomes):
+    outcomes = page.locator(".materials-drawer .product-task-progress").evaluate_all(
+        """cards => cards.map(card => ({
+          status: card.querySelector('.product-task-state')?.textContent,
+          metrics: Object.fromEntries([...card.querySelectorAll('.product-task-metrics > div')]
+            .map(metric => [metric.querySelector('dt')?.textContent, metric.querySelector('dd')?.textContent])),
+          error: card.querySelector('.product-task-error')?.textContent,
+        }))"""
+    )
+    if len(outcomes) != 2 or any(
+        outcome.get("status") != "已完成" or outcome.get("error")
+        or outcome.get("metrics", {}).get("失败文件") != "0"
+        or outcome.get("metrics", {}).get("新增资料") != "1"
+        for outcome in outcomes
+    ):
         raise AssertionError(f"Markdown/PDF import was not fully successful: {outcomes}")
     page.get_by_role("button", name="关闭添加资料").click()
     page.goto(origin + "/admin/#data")

@@ -5,7 +5,7 @@ import { desktopApi } from '../lib/product-fetch';
 import { type ConsoleRun } from '../lib/shared';
 import { TaskProgressCard, taskLink } from './TaskProgress';
 import { waitForConsoleRun } from '../pages/import/import-support';
-import { importMaterials, type Material } from './import-materials';
+import { availableImportSources, importMaterials, type Material } from './import-materials';
 import { useProductTasks } from './TaskActivity';
 import { sourceLabel, type BrainOverview } from '../pages/console-shared';
 
@@ -30,7 +30,7 @@ export function ImportMaterials({ open, onClose }: { open: boolean; onClose: () 
     let live = true;
     void api.brainOverview().then(overview => {
       if (!live) return;
-      const available = overview.sources.filter(source => !source.archived && !source.federated);
+      const available = availableImportSources(overview.sources);
       setSources(available); setMainSourceId(overview.main_source_id); setSourceError('');
       setSourceId(current => available.some(source => source.id === current) ? current : overview.main_source_id);
     }).catch(reason => { if (live) setSourceError(String(reason)); });

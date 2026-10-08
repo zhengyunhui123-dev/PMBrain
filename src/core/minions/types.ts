@@ -433,6 +433,7 @@ export interface SubagentHandlerData {
   model?: string;
   /** Max assistant turns before the loop fails with stop_reason='max_turns'. */
   max_turns?: number;
+  discovery_profile?: 'entity_capture';
   /**
    * Whitelist of tool names the agent may call. MUST be a subset of the
    * derived registry names — invalid entries are rejected at tool-dispatch

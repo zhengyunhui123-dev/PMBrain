@@ -20,10 +20,13 @@ import {
 } from '../src/core/cycle/extract-atoms.ts';
 import { resetPgliteState } from './helpers/reset-pglite.ts';
 import type { ChatOpts, ChatResult } from '../src/core/ai/gateway.ts';
+import { configureGateway, resetGateway } from '../src/core/ai/gateway.ts';
 
 let engine: PGLiteEngine;
 
 beforeAll(async () => {
+  resetGateway();
+  configureGateway({ generative_enabled: false, env: {} });
   engine = new PGLiteEngine();
   await engine.connect({});
   await engine.initSchema();
@@ -31,6 +34,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await engine.disconnect();
+  resetGateway();
 });
 
 beforeEach(async () => {
@@ -217,7 +221,7 @@ describe('v0.41.2.1: discoverExtractablePages SQL contract', () => {
   test('executeRaw failure returns [] (fail-soft, transcript path proceeds)', async () => {
     // Inject a SQL error by passing a sourceId that breaks the query —
     // actually easier: temporarily replace executeRaw to throw.
-    const realExecute = engine.executeRaw.bind(engine);
+    const realExecute = engine.executeRaw;
     (engine as unknown as { executeRaw: typeof engine.executeRaw }).executeRaw =
       async () => { throw new Error('synthetic discovery failure'); };
     try {

@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "reviewed_at": "2026-10-08",
-  "product_version": "1.4.42",
+  "product_version": "1.4.43",
   "subsystem": "entity-relations",
   "status": "release-blocked-pending-exact-sha-ci",
   "upstream": {
@@ -52,7 +52,10 @@
     "revision backfill batches of 100 with progress, cancellation and durable restart",
     "successful imports enqueue directly; startup and task completion drain durable pending requests",
     "configurable mentions.chinese_stopwords invalidates index policy fingerprints",
-    "explicit links run before plain mentions in the stale sweep to avoid duplicate edges"
+    "explicit links run before plain mentions in the stale sweep to avoid duplicate edges",
+    "default Dream skips calibration stages and captures entities before patterns; discovery tools return bounded summaries",
+    "optional page_aliases projection rolls back its savepoint and skips only the missing-alias-table error for pre-v110 compatibility",
+    "base pack concept path prefixes remain explicit after PMBrain changes unknown document types to note"
   ],
   "deferred": [
     "whole-repository GBrain upgrade",
@@ -117,7 +120,7 @@
       "path": "src/core/mentions/pass.ts",
       "upstream_path": "src/core/mentions/pass.ts",
       "mode": "adapted",
-      "sha256": "b9d2ac4dd5cd89344bee9a75c3ac30f7c898a901887f9942e330b2bd332eae9d",
+      "sha256": "f0d914c925369bc640aad5221cf0531110f281694c1dd88e557df119bbdcc0cc",
       "upstream_sha256": "fde8f033481a3fa776b235dbf40a899196c09ee6f20b8c3adf66f724a0d3e6e6"
     },
     {
@@ -159,7 +162,7 @@
       "path": "src/core/by-mention.ts",
       "upstream_path": "src/core/by-mention.ts",
       "mode": "adapted",
-      "sha256": "5ca97788ca707d068f418abf733d1d2d4496937b12af749483739f71d73ac9ef",
+      "sha256": "fb89f77da243f1f0e8f389e65b1b14f68dee1512fc33aec922849d6d7242d22a",
       "upstream_sha256": "9c3fa3d8131dca7d28be8338530a2acb3267ced62170c26b790b011f87716f0f"
     },
     {
@@ -256,8 +259,8 @@
     {
       "path": "src/core/schema-pack/base/gbrain-base-v2.yaml",
       "upstream_path": "src/core/schema-pack/base/gbrain-base-v2.yaml",
-      "mode": "copied",
-      "sha256": "da8b690c8f8a3861585f1da463a41bfed4ac209d06dcb867889fbd57a3b08732",
+      "mode": "adapted",
+      "sha256": "c8c6bdf2bf13cef0e0c70c320c8d82799bd9a77df536bf570e21c5b23ceb9239",
       "upstream_sha256": "da8b690c8f8a3861585f1da463a41bfed4ac209d06dcb867889fbd57a3b08732"
     },
     {
@@ -306,7 +309,7 @@
       "path": "test/mentions-pass.test.ts",
       "upstream_path": "test/mentions-pass.test.ts",
       "mode": "adapted",
-      "sha256": "1d996f53daee29ae873c3f2419f9dcd80cee6562fc842462f9fd531bfb7ff8e7",
+      "sha256": "7062672af233072a0c912971c0a9839f56750005d528c896e1af94d6215f084b",
       "upstream_sha256": "2ca208dc79c836569996f42eee0c291914009724a75f1751082b9acae0ebb982"
     },
     {

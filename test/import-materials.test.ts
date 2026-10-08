@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { importMaterials } from '../admin/src/product/import-materials';
+import { availableImportSources, importMaterials } from '../admin/src/product/import-materials';
 
 test('file and directory imports reuse existing APIs and only remove completed entries', async () => {
   const calls: any[] = []; const completed: string[] = [];
@@ -23,4 +23,12 @@ test('failed import keeps that entry and does not start subsequent files', async
     wait: async () => ({ status: 'failed', error: '原生错误' }) as any, update: () => {}, starting: () => {}, completed: item => completed.push(item.id),
   })).rejects.toThrow('原生错误');
   expect(started).toEqual(['one']); expect(completed).toEqual([]);
+});
+test('参与跨源搜索的数据源仍可导入，已归档的数据源不可导入', () => {
+  const sources = [
+    { id: 'main', federated: true },
+    { id: 'local', federated: false },
+    { id: 'archived', federated: true, archived: true },
+  ];
+  expect(availableImportSources(sources).map(source => source.id)).toEqual(['main', 'local']);
 });

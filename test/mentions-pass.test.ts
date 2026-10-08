@@ -249,7 +249,7 @@ describe('upgrade, slot builds and dry runs', () => {
     expect(await engine.countStalePagesForExtraction({ versionTs: '1970-01-01T00:00:00Z' })).toBe(0);
     expect((await previewMentionPass(engine)).due).toBeGreaterThan(0);
     const r = await sweep(engine);
-    expect(r.pagesProcessed).toBe(0);
+    expect(r.pagesProcessed).toBe(2);
     expect(await mentionLinks(engine)).toEqual(['tickets/t1 -> crm/123']);
     expect((await previewMentionPass(engine)).due).toBe(0);
   });

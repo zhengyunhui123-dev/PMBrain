@@ -1,9 +1,10 @@
 import { expect, test } from 'bun:test';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { configuredProvidersFirst, isCustomProvider, listedServiceModels, mergeServiceModels, newServiceModel, presetBaseUrl, providerKindLabel, SERVICE_KEY_PAGES, SERVICE_PRESETS, serviceEndpointError, serviceModelSections, serviceModelsNotOnRemote, serviceNeedsApiKey } from '../../shared/model-services';
 
-const page = readFileSync(join(import.meta.dir, '../../admin/src/product/ModelServices.tsx'), 'utf8');
+const page = ['ModelServices.tsx', ...readdirSync(join(import.meta.dir, '../../admin/src/product/model-services')).filter(file => /\.tsx?$/.test(file)).map(file => `model-services/${file}`)]
+  .map(file => readFileSync(join(import.meta.dir, '../../admin/src/product', file), 'utf8')).join('\n');
 
 test('已经启用的服务商排在前面，同一组里仍保持原来的顺序', () => {
   const sorted = configuredProvidersFirst([
@@ -102,7 +103,7 @@ test('单独一个模型不重复显示分组，自定义名称下面保留 API 
 });
 
 test('编辑密钥带上已保存的值，复制编辑删除在悬停出现，眼睛一直在', () => {
-  expect(page).toContain('value: current?.apiKey ?? \'\'');
+  expect(page).toMatch(/value:\s*current\?\.apiKey\s*\?\?\s*['"]{2}/);
   expect(page).not.toContain("setKeyEditor({ value: '', show: false, error: '' })");
   expect(page).toContain('key-hover-actions');
   expect(page).toContain('className="key-eye"');

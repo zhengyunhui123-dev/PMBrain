@@ -132,6 +132,7 @@ export const ALL_PHASES: CyclePhase[] = [
   // the graph. Quick-cycle compatible: each invocation walks at most
   // BATCH_SIZE*10 chunks where edges_backfilled_at IS NULL or stale.
   'resolve_symbol_edges',
+  'capture_entities',
   'patterns',
   // v0.41 T9 — concept synthesis (global, pack-gated). Runs AFTER patterns
   // so the cluster pass sees fresh cross-session themes. Same pack-gate
@@ -167,7 +168,6 @@ export const ALL_PHASES: CyclePhase[] = [
   // block placement, which runs between the calibration trio and embed),
   // and BEFORE embed so newly-inserted facts get embedded same-cycle.
   'conversation_facts_backfill',
-  'capture_entities',
   // Default OFF. Enriches thin pages from grounded local evidence before
   // embed so changed content is indexed in the same cycle.
   'enrich_thin',
@@ -182,6 +182,10 @@ export const ALL_PHASES: CyclePhase[] = [
   // recoverable set; the purge then drops what's expired.
   'purge',
 ];
+
+export const DEFAULT_PHASES = ALL_PHASES.filter(phase =>
+  !(['propose_takes', 'grade_takes', 'calibration_profile'] as CyclePhase[]).includes(phase),
+);
 
 /** Ordered stage partitions used by Source freshness and global maintenance. */
 export const SOURCE_PHASES: CyclePhase[] = ALL_PHASES.filter(
@@ -210,7 +214,7 @@ export function resolveCyclePhases(
   requested: CyclePhase[] | undefined,
   sourceId: string | undefined,
 ): CyclePhase[] {
-  if (!sourceId || sourceId === 'default') return requested ?? ALL_PHASES;
+  if (!sourceId || sourceId === 'default') return requested ?? DEFAULT_PHASES;
   if (requested === undefined) return SOURCE_FRESHNESS_PHASES;
   return requested;
 }
@@ -383,7 +387,6 @@ export interface CycleOpts {
   phaseCheckpoint?: (phases: PhaseResult[]) => Promise<void>;
   /** If true, no writes to filesystem or DB. All phases honor this. */
   dryRun?: boolean;
-  /** Defaults to ALL_PHASES. Pass a subset for --phase lint etc. */
   phases?: CyclePhase[];
   /**
    * Trusted caller override for pack-gated phases selected by a workflow
@@ -1578,7 +1581,7 @@ export async function runCycle(
   opts: CycleOpts,
 ): Promise<CycleReport> {
   const start = performance.now();
-  const requestedPhases = opts.phases ?? ALL_PHASES;
+  const requestedPhases = opts.phases ?? DEFAULT_PHASES;
   const resolvedPhases = resolveCyclePhases(opts.phases, opts.sourceId);
   const restored = (opts.completedPhases ?? []).filter(item => resolvedPhases.includes(item.phase));
   const phases = resolvedPhases.filter(phase => !restored.some(item => item.phase === phase));
@@ -2226,6 +2229,39 @@ export async function runCycle(
       await checkpoint();
     }
 
+    if (phases.includes('capture_entities')) {
+      checkAborted(opts.signal);
+      if (!engine) {
+        phaseResults.push({
+          phase: 'capture_entities',
+          status: 'skipped',
+          duration_ms: 0,
+          summary: 'no database connected',
+          details: { reason: 'no_database' },
+        });
+      } else {
+        progress.start('cycle.capture_entities');
+        const { runPhaseCaptureEntities } = await import('./cycle/capture-entities.ts');
+        const { result, duration_ms } = await timePhase(() => runPhaseCaptureEntities(engine, {
+          sourceId: cycleSourceId,
+          dryRun,
+          signal: opts.signal,
+          yieldDuringPhase: opts.yieldDuringPhase,
+          deadlineAtMs: opts.deadlineAtMs ?? null,
+          privateQueueOwnerJobId: opts.privateQueueOwnerJobId ?? null,
+          handler: opts.captureEntitiesHandler,
+        }));
+        result.duration_ms = duration_ms;
+        phaseResults.push(result);
+        const written = Array.isArray(result.details?.written_slugs) ? result.details.written_slugs as string[] : [];
+        const sources = Array.isArray(result.details?.source_slugs) ? result.details.source_slugs as string[] : [];
+        const relationSlugs = Array.isArray(result.details?.relation_slugs) ? result.details.relation_slugs as string[] : [];
+        entityCaptureSlugs = [...written, ...sources, ...relationSlugs];
+        progress.finish(result.summary);
+      }
+      await checkpoint();
+    }
+
     // ── Phase 6: patterns (v0.23) ───────────────────────────────
     // MUST run after extract so the graph state reads fresh — subagent
     // put_page calls in synthesize set ctx.remote=true, so auto-link
@@ -2564,39 +2600,6 @@ export async function runCycle(
         result.duration_ms = duration_ms;
         phaseResults.push(result);
         progress.finish();
-      }
-      await checkpoint();
-    }
-
-    if (phases.includes('capture_entities')) {
-      checkAborted(opts.signal);
-      if (!engine) {
-        phaseResults.push({
-          phase: 'capture_entities',
-          status: 'skipped',
-          duration_ms: 0,
-          summary: 'no database connected',
-          details: { reason: 'no_database' },
-        });
-      } else {
-        progress.start('cycle.capture_entities');
-        const { runPhaseCaptureEntities } = await import('./cycle/capture-entities.ts');
-        const { result, duration_ms } = await timePhase(() => runPhaseCaptureEntities(engine, {
-          sourceId: cycleSourceId,
-          dryRun,
-          signal: opts.signal,
-          yieldDuringPhase: opts.yieldDuringPhase,
-          deadlineAtMs: opts.deadlineAtMs ?? null,
-          privateQueueOwnerJobId: opts.privateQueueOwnerJobId ?? null,
-          handler: opts.captureEntitiesHandler,
-        }));
-        result.duration_ms = duration_ms;
-        phaseResults.push(result);
-        const written = Array.isArray(result.details?.written_slugs) ? result.details.written_slugs as string[] : [];
-        const sources = Array.isArray(result.details?.source_slugs) ? result.details.source_slugs as string[] : [];
-        const relationSlugs = Array.isArray(result.details?.relation_slugs) ? result.details.relation_slugs as string[] : [];
-        entityCaptureSlugs = [...written, ...sources, ...relationSlugs];
-        progress.finish(result.summary);
       }
       await checkpoint();
     }

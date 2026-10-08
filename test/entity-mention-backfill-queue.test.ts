@@ -128,7 +128,14 @@ describe('实体变化不再让整个 Source 重新抽关系', () => {
     expect(result.pagesProcessed).toBe(4);
     expect(after.get('notes/keep')).toBe(before.get('notes/keep'));
     expect(after.get('notes/history')).not.toBe(before.get('notes/history'));
-    expect(after.get('notes/alias')).not.toBe(before.get('notes/alias'));
+    expect(after.get('notes/alias')).toBe(before.get('notes/alias'));
+    const mentions = await engine.executeRaw<{ to_slug: string }>(
+      `SELECT t.slug AS to_slug FROM links l
+         JOIN pages f ON f.id = l.from_page_id
+         JOIN pages t ON t.id = l.to_page_id
+        WHERE f.source_id = 'default' AND f.slug = 'notes/alias' AND l.link_source = 'mentions'`,
+    );
+    expect(mentions).toEqual([{ to_slug: 'companies/openai' }]);
     expect(links).toContainEqual({
       from_slug: 'notes/history',
       to_slug: 'concepts/graph',

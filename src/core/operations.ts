@@ -5,7 +5,7 @@ import { readVersions, readLinks, readPageRefs } from './search/read-enrichment.
  */
 
 import { lstatSync, realpathSync } from 'fs';
-import { resolve, relative, sep } from 'path';
+import { resolve, relative, sep, isAbsolute } from 'path';
 import type { BrainEngine } from './engine.ts';
 import { clampSearchLimit } from './engine.ts';
 import type { Link, PageType, SearchResult } from './types.ts';
@@ -141,7 +141,7 @@ export function validateUploadPath(filePath: string, root: string, strict = true
     throw new OperationError('invalid_params', `Confinement root not accessible: ${root}`);
   }
   const rel = relative(realRoot, real);
-  if (rel === '' || rel.startsWith('..') || rel.startsWith(`..${sep}`) || resolve(realRoot, rel) !== real) {
+  if (rel === '' || isAbsolute(rel) || rel.startsWith('..') || rel.startsWith(`..${sep}`) || resolve(realRoot, rel) !== real) {
     throw new OperationError('invalid_params', `Upload path must be within the working directory: ${filePath}`);
   }
   return real;

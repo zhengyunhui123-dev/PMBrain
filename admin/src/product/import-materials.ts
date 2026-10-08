@@ -27,3 +27,6 @@ export async function importMaterials(items: Material[], dependencies: {
     dependencies.completed(item, run);
   }
 }
+export function availableImportSources<T extends { archived?: boolean }>(sources: T[]): T[] {
+  return sources.filter(source => !source.archived);
+}

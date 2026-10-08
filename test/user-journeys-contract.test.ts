@@ -15,7 +15,7 @@ describe('core user journeys cover packaged Desktop openability', () => {
     const script = readFileSync(join(ROOT, 'test/user-journeys/core_journeys.py'), 'utf8');
     expect(script).toContain('--packaged');
     expect(script).toContain('win-unpacked');
-    expect(script).toContain("materials-result");
+    expect(script).toContain(".materials-drawer .product-task-progress");
     expect(script).toContain('已完成');
     expect(script).toContain('materials-progress');
     expect(script).toContain('len(outcomes) != 2');

@@ -174,8 +174,15 @@ export async function writeDerivedAliases(tx: Pick<BrainEngine, 'executeRaw' | '
 export async function writePageAliases(tx: BrainEngine, slug: string, sourceId: string,
   page: { title: string; type: string; compiled_truth: string; timeline: string; frontmatter: Record<string, unknown> }, pack: unknown,
   policy: MentionPolicy | null): Promise<void> {
-  await tx.setPageAliases(slug, sourceId, normalizeAliasList(page.frontmatter.aliases));
-  await writeDerivedAliases(tx, sourceId, { slug, ...page }, { pack: (pack as PackTypes | undefined) ?? null, policy });
+  try {
+    await tx.transaction(async projection => {
+      await projection.setPageAliases(slug, sourceId, normalizeAliasList(page.frontmatter.aliases));
+      await writeDerivedAliases(projection, sourceId, { slug, ...page }, { pack: (pack as PackTypes | undefined) ?? null, policy });
+    });
+  } catch (error) {
+    if ((error as { code?: string }).code !== '42P01'
+      || !/relation "page_aliases" does not exist/.test(String((error as Error).message))) throw error;
+  }
 }
 
 /** Turn the index off for one source: plain mention links, derived aliases, entries and page state go; typed_ner rows stay. */

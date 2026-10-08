@@ -410,7 +410,7 @@ const GBRAIN_BASE_PATH_PREFIXES: ReadonlyArray<{ prefixes: string[]; type: PageT
   { prefixes: ['/wiki/guides/', '/wiki/guide/'], type: 'guide' },
   { prefixes: ['/wiki/hardware/'], type: 'hardware' },
   { prefixes: ['/wiki/architecture/'], type: 'architecture' },
-  { prefixes: ['/wiki/concepts/', '/wiki/concept/'], type: 'concept' },
+  { prefixes: ['/wiki/concepts/', '/wiki/concept/', '/concepts/', '/concept/'], type: 'concept' },
   { prefixes: ['/people/', '/person/'], type: 'person' },
   { prefixes: ['/companies/', '/company/'], type: 'company' },
   { prefixes: ['/deals/', '/deal/'], type: 'deal' },

@@ -820,7 +820,7 @@ export function findMentionedEntities(
       continue;
     }
 
-    if (matched.ambiguous || (!opts.includeBlockedSurfaces && (matched.plainMentionBlocked ?? isBlockedPlainMentionSurface(matched.matchText ?? matched.title)))) { i += matchedTokens; continue; }
+    if (matched.ambiguous || (!opts.includeBlockedSurfaces && (/^\p{Script=Han}$/u.test((matched.matchText ?? matched.title).normalize('NFKC').trim()) || (matched.plainMentionBlocked ?? isBlockedPlainMentionSurface(matched.matchText ?? matched.title))))) { i += matchedTokens; continue; }
     // Guards.
     if (matched.source_id === opts.fromSourceId && matched.slug === opts.fromSlug) {
       i += matchedTokens;

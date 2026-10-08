@@ -239,7 +239,7 @@ export function makeSubagentHandler(deps: SubagentDeps) {
     // allow-list — flows through buildBrainTools → the put_page schema
     // description AND the OperationContext, so the model's tool schema and
     // the server-side check stay in sync).
-    const registry = deps.toolRegistry ?? buildBrainTools({
+    const baseRegistry = deps.toolRegistry ?? buildBrainTools({
       subagentId: ctx.id,
       engine,
       config,
@@ -248,6 +248,9 @@ export function makeSubagentHandler(deps: SubagentDeps) {
       sourceId: data.source_id,
       skillsDir: data.skills_dir,
     });
+    const registry = data.discovery_profile === 'entity_capture'
+      ? (await import('../../cycle/entity-capture-tools.ts')).boundedEntityCaptureTools(baseRegistry)
+      : baseRegistry;
     const toolDefs = data.allowed_tools && data.allowed_tools.length > 0
       ? filterAllowedTools(registry, data.allowed_tools)
       : registry;

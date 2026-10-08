@@ -236,6 +236,8 @@ page_types:
     path_prefixes:
       - wiki/concepts/
       - wiki/concept/
+      - concepts/
+      - concept/
     aliases:
       - concept-stub
       - definition
