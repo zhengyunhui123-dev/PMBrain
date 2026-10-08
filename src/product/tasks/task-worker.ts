@@ -165,6 +165,7 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
   if (sourceId && (await fetchSource(engine, sourceId))?.archived) throw new Error(`Source ${sourceId} is archived`);
   const common = {
     dryRun: input.dryRun, sourceId,
+    captureEntitySlugs:input.slugs,
     signal: abort.signal,
     includeOffice: true,
     syncConcurrency: 1,

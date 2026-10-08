@@ -1,18 +1,3 @@
-/**
- * 产品经理能看懂的测试说明：
- * 用脚本代替付费模型，确认深度整理会：
- * 1. 看到已有实体就复用，不另建一页。
- * 2. 新人、公司、项目、概念写成对应类型。
- * 3. 长文尾部的人也能进入最后一块。页数不是停止条件。
- * 4. 费用到顶或 Token 到顶时停下，而且不把任务判失败。没有用量时继续处理完。
- * 5. 指定的识别模型没启用时，不创建任何子任务，并直接说明模型不可用。
- * 6. 新实体写入后，只把提到它的旧页面连上，不连无关页面。
- * 7. 本地 Ollama 金额是 0。失败重跑和停止都不会重复写人或继续写。
- * 8. 同一批里先写人和公司，页面正文写清任职后，两人之间出现 works_at，不依赖模型直接加边。
- * 9. 一批结束会报出识别、已关联、孤立和未关联提及。该连上的会补上；仍有缺口时不报完全成功。
- * 10. 同一件带日期的事会写到每个被点名的实体时间线上。叠了两节当前状态时，只留最后一节。
- * 这些写入走真实的页面表。脚本只决定模型回复，不跳过数据库。
- */
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -25,6 +10,7 @@ import { runByMentionCore } from '../src/commands/extract.ts';
 import type { MinionJobContext } from '../src/core/minions/types.ts';
 import { resetPgliteState } from './helpers/reset-pglite.ts';
 import { assertSafeE2eDatabaseUrl } from './helpers/db-guard.ts';
+import {finalizeEntityIngest} from '../src/core/pmbrain-adapters/entity-ingest-workflow.ts';
 
 process.env.PMBRAIN_HOME = mkdtempSync(join(tmpdir(), 'pmbrain-capture-home-'));
 
@@ -72,7 +58,7 @@ test('已有实体放进候选，脚本复用原页，不创建第二个人', as
     handler: async ctx => {
       prompt = promptOf(ctx);
       if (!prompt.includes('people/张三')) throw new Error('候选里应该有已有人物');
-      return { tokens: { in: 20, out: 5 } };
+      return { ingest_verified:true, tokens: { in: 20, out: 5 } };
     },
   });
   expect(result.status, result.summary).toBe('ok');
@@ -80,7 +66,7 @@ test('已有实体放进候选，脚本复用原页，不创建第二个人', as
   expect(prompt).toContain('person');
   expect(prompt).toContain('张三');
   expect(prompt).toContain('张老师');
-  expect(prompt).toContain('绝对不能把未知类型写成 concept');
+  expect(prompt).toContain('未知类型不建页');
   const people = await engine.executeRaw<{ slug: string }>(
     `SELECT slug FROM pages WHERE source_id = 'vault' AND type = 'person'`,
   );
@@ -129,7 +115,8 @@ test('新人、公司、项目和概念按类型落库，新别名复用已有�
       await engine.putPage('concepts/tide', {
         type: 'concept', title: '潮汐方法', compiled_truth: '潮汐方法来自 [[notes/deal]] 的合作。', timeline: '', frontmatter: {},
       }, { sourceId: 'vault' });
-      return { tokens: { in: 30, out: 12 } };
+      const verified=await finalizeEntityIngest(engine,(ctx.data as any).ingest_context,JSON.stringify({entities:['people/li-si','companies/xinghe','projects/lighthouse','concepts/tide'],relations:[]}));
+      return {ingest_verified:verified.verified,ingest_entities:verified.entities,ingest_links_created:verified.linksCreated,tokens:{in:30,out:12}};
     },
   });
   expect(result.status, result.summary).toBe('ok');
@@ -157,7 +144,7 @@ test('长文尾部按源文档分块，页数不会让这一篇停在半截', as
     maxPages: 1,
     handler: async ctx => {
       prompts.push(promptOf(ctx));
-      return { tokens: { in: 5, out: 1 } };
+      return { ingest_verified:true, tokens: { in: 5, out: 1 } };
     },
   });
   expect(result.status).toBe('ok');
@@ -190,10 +177,10 @@ test('费用到上限后停止新的模型请求，已完成结果保留，任�
         compiled_truth: '第一轮已经写好。参见 [第一篇](notes/a)。',
         timeline: '', frontmatter: {},
       }, { sourceId: 'vault' });
-      return { tokens: { in: 1000, out: 1000 } };
+      return { ingest_verified:true, tokens: { in: 1000, out: 1000 } };
     },
   });
-  expect(result.status).toBe('ok');
+  expect(result.status).toBe('warn');
   expect(calls).toBe(1);
   expect(result.details.budget_stop).toBe('cost');
   expect(result.details.pages_remaining).toBe(2);
@@ -221,7 +208,7 @@ test('Ollama 不记人民币，没有价格时改按 Token 停，没有用量时
     },
     handler: async () => {
       ollamaCalls += 1;
-      return { tokens: { in: 1000, out: 1000 } };
+      return { ingest_verified:true, tokens: { in: 1000, out: 1000 } };
     },
   });
   expect(ollama.status).toBe('ok');
@@ -249,10 +236,10 @@ test('Ollama 不记人民币，没有价格时改按 Token 停，没有用量时
     },
     handler: async () => {
       tokenCalls += 1;
-      return { tokens: { in: 1000, out: 10 } };
+      return { ingest_verified:true, tokens: { in: 1000, out: 10 } };
     },
   });
-  expect(tokens.status).toBe('ok');
+  expect(tokens.status).toBe('warn');
   expect(tokenCalls).toBe(2);
   expect(tokens.details.budget_stop).toBe('tokens');
   expect(tokens.details.cost_cny).toBeNull();
@@ -270,7 +257,7 @@ test('Ollama 不记人民币，没有价格时改按 Token 停，没有用量时
     budget: { maxPages: 2, maxInputTokens: 1, costCapCny: 0.01, inputPriceCnyPerMillion: 10, outputPriceCnyPerMillion: 10 },
     handler: async () => {
       blindCalls += 1;
-      return { tokens: { missing: true } };
+      return { ingest_verified:true, tokens: { missing: true } };
     },
   });
   expect(blind.status).toBe('ok');
@@ -297,7 +284,7 @@ test('识别模型未启用时不创建子任务，并直接说明模型不可�
     }],
     handler: async () => {
       calls += 1;
-      return { tokens: { in: 1, out: 1 } };
+      return { ingest_verified:true, tokens: { in: 1, out: 1 } };
     },
   });
   expect(calls).toBe(0);
@@ -327,7 +314,7 @@ test('新实体落库后只连接提到它的旧页面', async () => {
           type: 'person', title: '刘慈欣', compiled_truth: '刘慈欣写了三体。', timeline: '', frontmatter: {},
         }, { sourceId: 'vault' });
       }
-      return { ok: true };
+      return { ingest_verified: true };
     },
   });
   expect(result.status).toBe('ok');
@@ -358,7 +345,7 @@ test('失败重跑不重复建人，停止后不再写下一份', async () => {
         type: 'person', title: '张三', compiled_truth: '张三只应有一页。', timeline: '', frontmatter: {},
       }, { sourceId: 'vault' });
       if (calls < 4) throw new Error('模型这次失败');
-      return { tokens: { in: 3, out: 2 } };
+      return { ingest_verified:true, tokens: { in: 3, out: 2 } };
     },
   });
   expect(first.status).toBe('fail');
@@ -370,7 +357,7 @@ test('失败重跑不重复建人，停止后不再写下一份', async () => {
       await engine.putPage('people/张三', {
         type: 'person', title: '张三', compiled_truth: '张三只应有一页。', timeline: '', frontmatter: {},
       }, { sourceId: 'vault' });
-      return { tokens: { in: 3, out: 2 } };
+      return { ingest_verified:true, tokens: { in: 3, out: 2 } };
     },
   });
   expect(second.status).toBe('ok');
@@ -409,7 +396,7 @@ test('失败重跑不重复建人，停止后不再写下一份', async () => {
         }, { sourceId: 'vault' });
         controller.abort();
       }
-      return { tokens: { in: 1, out: 1 } };
+      return { ingest_verified:true, tokens: { in: 1, out: 1 } };
     },
   }).catch(error=>error);
   expect(stopError).toBeInstanceOf(Error);
@@ -445,7 +432,7 @@ test('同一批先写人再写公司，正文里的任职会变成两人之间�
         timeline: '',
         frontmatter: { key_people: ['张三'] },
       }, { sourceId: 'vault' });
-      return { tokens: { in: 20, out: 8 } };
+      return { ingest_verified:true, tokens: { in: 20, out: 8 } };
     },
   });
   expect(result.status).toBe('ok');
@@ -488,7 +475,7 @@ test('实体写出来但没有任何关系时，关系检查不报完全成功',
         timeline: '',
         frontmatter: {},
       }, { sourceId: 'vault' });
-      return { tokens: { in: 8, out: 2 } };
+      return { ingest_verified:true, tokens: { in: 8, out: 2 } };
     },
   });
   expect(result.status).toBe('warn');
@@ -501,7 +488,7 @@ test('同一件事写到每个实体的时间线，叠起来的当前状态只�
   await note('notes/move', '2026-03-01，张三在星河科技任职，负责智慧水务项目。');
   const result = await runPhaseCaptureEntities(engine, {
     sourceId: 'vault',
-    handler: async () => {
+    handler: async ctx => {
       await engine.putPage('people/张三', {
         type: 'person',
         title: '张三',
@@ -531,7 +518,8 @@ test('同一件事写到每个实体的时间线，叠起来的当前状态只�
         timeline: '',
         frontmatter: {},
       }, { sourceId: 'vault' });
-      return { tokens: { in: 20, out: 8 } };
+      const verified=await finalizeEntityIngest(engine,(ctx.data as any).ingest_context,JSON.stringify({entities:['people/张三','companies/xinghe','projects/shuiwu'],relations:[]}));
+      return {ingest_verified:verified.verified,ingest_entities:verified.entities,ingest_links_created:verified.linksCreated,tokens:{in:20,out:8}};
     },
   });
   expect(result.status).toBe('ok');
@@ -559,5 +547,5 @@ test('同一件事写到每个实体的时间线，叠起来的当前状态只�
   }
   expect(new Set(rows.map(row => row.date))).toEqual(new Set(['2026-03-01']));
   expect(new Set(rows.map(row => row.summary)).size).toBe(1);
-  expect(rows.every(row => row.source === 'notes/move')).toBe(true);
+  expect(rows.every(row => row.source === 'vault:notes/move')).toBe(true);
 }, 60_000);

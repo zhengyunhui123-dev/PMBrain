@@ -203,7 +203,7 @@ async function disableSource(engine: BrainEngine, managed: boolean, sourceId: st
 }
 
 interface DuePage { id: number; slug: string; source_id: string; revision: string; title: string | null; type: string | null;
-  compiled_truth: string | null; timeline: string | null; mention_ignore: unknown }
+  compiled_truth: string | null; timeline: string | null; mention_ignore: unknown; frontmatter?:Record<string,unknown> }
 
 /** Refresh derived alias rows of due entity pages in one source; returns pages whose rows changed. */
 async function refreshAliases(engine: BrainEngine, managed: boolean, sourceId: string, types: string[], deadline: number): Promise<number> {
@@ -400,7 +400,7 @@ async function reconcileSource(engine: BrainEngine, sourceId: string, gazetteer:
     if (opts.maxPages !== undefined && result.pages >= opts.maxPages) return;
     const pages = await engine.executeRaw<DuePage>(
       `SELECT p.id, p.slug, p.source_id, p.knowledge_revision::text AS revision, p.title, p.type, p.compiled_truth, p.timeline,
-              p.frontmatter->'mention_ignore' AS mention_ignore
+              p.frontmatter->'mention_ignore' AS mention_ignore,p.frontmatter
          FROM pages p LEFT JOIN page_mention_state s ON s.page_id = p.id
         WHERE p.source_id = $1 AND p.deleted_at IS NULL AND p.id > $3 AND ${DUE_PREDICATE}
           AND ($5::text[] IS NULL OR p.slug=ANY($5))
@@ -412,6 +412,7 @@ async function reconcileSource(engine: BrainEngine, sourceId: string, gazetteer:
           opts.slugs ?? null, opts.excludeSlugs ?? [], opts.typeFilter ?? null, opts.since ?? null]);
     if (!pages.length) return;
     after = pages[pages.length - 1]!.id;
+    for(const page of pages)Object.assign(page,await (await import('../pmbrain-adapters/ingest-provenance.ts')).activeIngestContent(engine,page));
     const found = new Map(pages.map(p => [Number(p.id), (p.title || p.compiled_truth || p.timeline)
       ? findMentionedEntities(`${p.title ?? ''}\n\n${p.compiled_truth ?? ''}\n\n${p.timeline ?? ''}`, gazetteer, {
           fromSlug: p.slug, fromSourceId: p.source_id, allowCrossSource, ignoreNames: parseNameList(p.mention_ignore),

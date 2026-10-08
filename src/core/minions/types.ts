@@ -434,6 +434,14 @@ export interface SubagentHandlerData {
   /** Max assistant turns before the loop fails with stop_reason='max_turns'. */
   max_turns?: number;
   discovery_profile?: 'entity_capture';
+  ingest_context?: import('../pmbrain-adapters/entity-ingest-workflow.ts').EntityIngestContext;
+  usage_limits?: {
+    input: number;
+    output: number;
+    cost_cny?: number | null;
+    input_price?: number | null;
+    output_price?: number | null;
+  };
   /**
    * Whitelist of tool names the agent may call. MUST be a subset of the
    * derived registry names — invalid entries are rejected at tool-dispatch
@@ -598,6 +606,11 @@ export type SubagentStopReason =
 
 /** Terminal result payload emitted by the subagent handler. */
 export interface SubagentResult {
+  ingest_verified?: boolean;
+  graph_reconciled?: boolean;
+  ingest_links_created?: number;
+  ingest_entities?: Array<{ slug: string; sourceId: string; title: string; evidence: string }>;
+  ingest_unresolved?: Array<{ sourcePage: string; sourceId: string; target: string; field?: string; reason: string }>;
   /** Concatenated text from the final assistant message. */
   result: string;
   /** Number of assistant turns consumed. */

@@ -168,6 +168,7 @@ function namespacedPutPageSchema(
 
 /** Args required to build the registry for a given subagent job. */
 export interface BuildBrainToolsOpts {
+  allowEntityLinks?: boolean;
   subagentId: number;
   engine: BrainEngine;
   config: GBrainConfig;
@@ -248,7 +249,7 @@ export function buildBrainTools(opts: BuildBrainToolsOpts): ToolDef[] {
   if (opts.sourceId !== undefined) validateSourceId(opts.sourceId);
   const filter = opts.allowedNames ?? BRAIN_TOOL_ALLOWLIST;
   const picked: Operation[] = operations.filter(
-    op => BRAIN_TOOL_ALLOWLIST.has(op.name) && filter.has(op.name),
+    op => (BRAIN_TOOL_ALLOWLIST.has(op.name) && filter.has(op.name)) || (opts.allowEntityLinks === true && op.name === 'add_link'),
   );
 
   return picked.map<ToolDef>(op => {
@@ -283,7 +284,15 @@ export function buildBrainTools(opts: BuildBrainToolsOpts): ToolDef[] {
           sourceId: opts.sourceId,
           skillsDir: opts.skillsDir,
         });
-        const params = (input && typeof input === 'object') ? input as Record<string, unknown> : {};
+        let params = (input && typeof input === 'object') ? input as Record<string, unknown> : {};
+        if(opts.allowEntityLinks&&['get_page','get_backlinks','traverse_graph','put_page','add_timeline_entry'].includes(op.name)&&typeof params.slug==='string'){
+          const at=params.slug.indexOf(':');
+          if(at>0){
+            const source=params.slug.slice(0,at);
+            if(source!==(opts.sourceId??'default')&&source!=='default')throw new Error('ingest source boundary');
+            opCtx.sourceId=source;params={...params,slug:params.slug.slice(at+1)};
+          }
+        }
         return op.handler(opCtx, params);
       },
     };

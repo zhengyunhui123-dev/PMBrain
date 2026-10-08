@@ -1,6 +1,6 @@
 import type { BrainEngine, TimelineBatchInput } from '../engine.ts';
 
-const STATE_HEADING = /^(#{2})[ \t]+(?:State|当前状态)[ \t]*$/i;
+const STATE_HEADING = /^(#{2})[ \t]+(?:State|当前状态)(?:[ \t]*[（(][^）)]*[）)])?[ \t]*$/i;
 const SECTION_END = /^(#{1,2})[ \t]/;
 const ENTITY_TYPES = new Set(['person', 'company', 'organization', 'project', 'concept', 'entity']);
 

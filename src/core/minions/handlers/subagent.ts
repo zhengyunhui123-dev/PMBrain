@@ -38,6 +38,7 @@ import type { BrainEngine } from '../../engine.ts';
 import type { GBrainConfig } from '../../config.ts';
 import { loadConfig } from '../../config.ts';
 import { buildBrainTools, filterAllowedTools } from '../tools/brain-allowlist.ts';
+import { entityIngestTools, verifyIngestResult, checkIngestCallBudget, ingestFinalPrompt,finalizeBeforeIngestBudget } from '../../pmbrain-adapters/entity-ingest-workflow.ts';
 import {
   acquireLease,
   releaseLease,
@@ -247,10 +248,12 @@ export function makeSubagentHandler(deps: SubagentDeps) {
       allowedSlugPrefixes: data.allowed_slug_prefixes,
       sourceId: data.source_id,
       skillsDir: data.skills_dir,
+      allowEntityLinks: !!data.ingest_context,
     });
+    const scopedRegistry = data.ingest_context ? entityIngestTools(baseRegistry,data.ingest_context) : baseRegistry;
     const registry = data.discovery_profile === 'entity_capture'
-      ? (await import('../../cycle/entity-capture-tools.ts')).boundedEntityCaptureTools(baseRegistry)
-      : baseRegistry;
+      ? (await import('../../cycle/entity-capture-tools.ts')).boundedEntityCaptureTools(scopedRegistry)
+      : scopedRegistry;
     const toolDefs = data.allowed_tools && data.allowed_tools.length > 0
       ? filterAllowedTools(registry, data.allowed_tools)
       : registry;
@@ -295,9 +298,9 @@ export function makeSubagentHandler(deps: SubagentDeps) {
         toolDefs,
         maxTurns,
       });
-      return data.mode === 'oneshot'
+      return verifyIngestResult(engine,data,data.mode === 'oneshot'
         ? { ...result, synth_mode_used: 'agentic_fallback', fallback_reason: oneshotFallbackReason }
-        : { ...result, synth_mode_used: 'agentic' };
+        : { ...result, synth_mode_used: 'agentic' },ctx.id);
     }
 
     // ── Load prior state (replay) ───────────────────────────
@@ -364,12 +367,12 @@ export function makeSubagentHandler(deps: SubagentDeps) {
           )
           .map(b => b.text)
           .join('\n');
-        return {
+        return verifyIngestResult(engine,data,{
           result: finalText,
           turns_count: assistantTurns,
           stop_reason: 'end_turn',
           tokens: tokenTotals,
-        };
+        },ctx.id);
       }
       if (pendingToolUses.length > 0) {
         const synthesizedResults: ContentBlock[] = [];
@@ -479,6 +482,9 @@ export function makeSubagentHandler(deps: SubagentDeps) {
       // ordering is load-bearing: a budget throw must NOT consume a
       // lease slot, because the lease is the rate-limit pacer for the
       // entire fleet.
+      const finalIngestTurn=!!data.ingest_context&&(assistantTurns===maxTurns-1||await finalizeBeforeIngestBudget(engine,ctx.id,data,systemPrompt,anthroMessages,toolDefs.map(t=>t.input_schema)));
+      const callMessages=finalIngestTurn?[{role:'user' as const,content:await ingestFinalPrompt(engine,ctx.id,data)}]:anthroMessages;
+      await checkIngestCallBudget(engine,ctx.id,data,systemPrompt,callMessages,finalIngestTurn?[]:toolDefs.map(t=>t.input_schema),finalIngestTurn);
       const lease = await acquireLease(engine, rateLeaseKey, ctx.id, maxConcurrent, { ttlMs: leaseTtlMs });
       if (!lease.acquired) {
         // No slots — treat as a renewable error so the worker re-claims
@@ -500,12 +506,12 @@ export function makeSubagentHandler(deps: SubagentDeps) {
           // `model` stays qualified everywhere else (persistence, recipe
           // lookup at recipeIdFromModel(), capability gate).
           model: stripProviderPrefix(model),
-          max_tokens: 4096,
+          max_tokens: Math.min(4096,data.usage_limits?.output??4096),
           system: [
-            { type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } },
+            { type: 'text', text: finalIngestTurn?`${systemPrompt}\nThis is the final verification turn. Return the requested JSON receipt. Tools are unavailable.`:systemPrompt, cache_control: { type: 'ephemeral' } },
           ] as any,
-          messages: anthroMessages,
-          ...(toolDefs.length > 0
+          messages: callMessages,
+          ...(toolDefs.length > 0 && !finalIngestTurn
             ? {
                 tools: toolDefs.map((t, i) => {
                   const def: any = {
@@ -601,6 +607,7 @@ export function makeSubagentHandler(deps: SubagentDeps) {
           .join('\n');
         break;
       }
+      if(finalIngestTurn)throw new UnrecoverableError('ingest final receipt attempted more tools; unfinished document is resumable');
 
       // 5. Dispatch each tool_use. Two-phase persist (pending → complete/failed).
       const toolResults: ContentBlock[] = [];
@@ -722,14 +729,14 @@ export function makeSubagentHandler(deps: SubagentDeps) {
       anthroMessages.push({ role: 'user', content: toolResults as any });
     }
 
-    return {
+    return verifyIngestResult(engine,data,{
       result: finalText,
       turns_count: assistantTurns,
       stop_reason: stopReason,
       tokens: tokenTotals,
       synth_mode_used: data.mode === 'oneshot' ? 'agentic_fallback' : 'agentic',
       ...(data.mode === 'oneshot' && oneshotFallbackReason ? { fallback_reason: oneshotFallbackReason } : {}),
-    };
+    },ctx.id);
   };
 }
 
@@ -858,6 +865,13 @@ async function runSubagentViaGateway(args: GatewayRunArgs): Promise<SubagentResu
     tools: chatTools,
     toolHandlers,
     maxTurns,
+    maxTokens: Math.min(4096,data.usage_limits?.output??4096),
+    disableReasoning:!!data.ingest_context,
+    finalizeOnLastTurn:!!data.ingest_context,
+    prepareFinalMessages:data.ingest_context?async()=>[{role:'user',content:await ingestFinalPrompt(engine,ctx.id,data)}]:undefined,
+    shouldFinalize:data.ingest_context?messages=>finalizeBeforeIngestBudget(engine,ctx.id,data,systemPrompt,messages,chatTools):undefined,
+    beforeModelCall: async ({messages,finalTurn})=>checkIngestCallBudget(engine,ctx.id,data,systemPrompt,messages,finalTurn?[]:chatTools,!!finalTurn),
+    reportLengthStop: !!data.ingest_context,
     abortSignal: ctx.signal,
     cacheSystem,
     // ALWAYS pass replayState (even on fresh runs) so the gateway loop's
@@ -961,7 +975,7 @@ async function runSubagentViaGateway(args: GatewayRunArgs): Promise<SubagentResu
   // calls. Treating that as "completed" makes Dream report success while
   // patterns/reflections were never written. Throw a retryable error instead;
   // jobs that executed at least one tool keep their existing completion rules.
-  if (result.totalTurns === 0 && result.finalText.trim() === '') {
+  if (result.totalTurns === 1 && result.stopReason==='end' && result.finalText.trim() === '') {
     throw new Error(
       `subagent returned an empty first turn without calling a tool (${model}); retry with the configured fallback`,
     );
@@ -977,7 +991,7 @@ async function runSubagentViaGateway(args: GatewayRunArgs): Promise<SubagentResu
         ? 'refusal'
         : result.stopReason === 'content_filter'
           ? 'refusal'
-          : result.stopReason === 'aborted'
+          : result.stopReason === 'aborted' || (data.ingest_context && result.stopReason === 'length')
             ? 'error'
             : 'end_turn';
 

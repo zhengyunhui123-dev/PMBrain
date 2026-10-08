@@ -20,7 +20,7 @@ import {
   resolveQuickMaintenancePhases,
   runQuickMaintenance,
 } from '../src/core/quick-maintenance.ts';
-import { ALL_PHASES } from '../src/core/cycle.ts';
+import { ALL_PHASES, DEFAULT_PHASES } from '../src/core/cycle.ts';
 import { runByMentionCore } from '../src/commands/extract.ts';
 import { withEnv } from './helpers/with-env.ts';
 
@@ -128,7 +128,7 @@ describe('Quick Maintenance phase contracts (TEST 6–7)', () => {
   });
 
   test('Full Dream still uses full ALL_PHASES set', () => {
-    expect(resolveDreamPresetPhases('full')).toEqual([...ALL_PHASES]);
+    expect(resolveDreamPresetPhases('full')).toEqual([...DEFAULT_PHASES]);
   });
 
   test('Meeting preset phase order unchanged', () => {

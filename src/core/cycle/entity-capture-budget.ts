@@ -197,7 +197,8 @@ export function captureReportLine(input: {
   const cost = input.ollama
     ? '0 元（本地模型）'
     : input.costCny == null ? '未统计' : `${input.costCny} 元`;
-  const cap = input.costCapCny == null ? '不限制' : `${input.costCapCny} 元`;
+  const cap = input.costCny==null&&!input.ollama&&input.costCapCny!=null ? '金额上限无法核算，未生效；按 Token 限制'
+    : input.costCapCny == null ? '不限制' : `${input.costCapCny} 元`;
   const base = `使用模型 ${input.model ?? '未选择'}。已处理 ${input.pagesProcessed} 页，剩余 ${input.pagesRemaining} 页。创建实体 ${input.entitiesCreated}。新增关系 ${input.relationsCreated}。费用 ${cost} / ${cap}。停止原因：${STOP_REASON_TEXT[input.stopReason]}。`;
   if (!input.integrity) return base;
   const gap = input.integrity;

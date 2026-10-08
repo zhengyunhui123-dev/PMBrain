@@ -7,6 +7,7 @@ import { isValidSourceId } from './source-id.ts';
 import { readRelationSnapshot, replaceDerivedLinks } from './pmbrain-adapters/relation-writer.ts';
 import { collectWantedLinks, isWantedPagesEnabled } from './wanted-links.ts';
 import { normalizeBasename } from './reference-basename.ts';
+import {activeIngestContent} from './pmbrain-adapters/ingest-provenance.ts';
 
 export interface LinkPageMetadata {
   slug: string;
@@ -70,7 +71,8 @@ export async function prepareLinkReconciliation(engine: BrainEngine) {
     if (!resolvers.has(sourceId)) resolvers.set(sourceId, makeIndexedLinkResolver(pages,sourceId));
     if (!packs.has(sourceId)) packs.set(sourceId, await loadExtractionPack(engine,sourceId));
     const page = snapshot.page;
-    const extracted = await extractPageLinks(slug,`${page.compiled_truth}\n${page.timeline}`,page.frontmatter,page.type as PageType,resolvers.get(sourceId)!, {
+    const active=await activeIngestContent(engine,page);
+    const extracted = await extractPageLinks(slug,`${active.compiled_truth}\n${active.timeline}`,page.frontmatter,page.type as PageType,resolvers.get(sourceId)!, {
       pack: opts.pack??packs.get(sourceId), lineGrammar, skipFrontmatter: opts.includeFrontmatter===false,
       targetType: (target,source) => metadata.get(JSON.stringify([source ?? sourceId,target]))?.type,
     });
@@ -101,8 +103,8 @@ export async function prepareLinkReconciliation(engine: BrainEngine) {
     const writeStarted=performance.now();
     const written=opts.dryRun ? {created:rows.length,removed:0} : await replaceDerivedLinks(engine, {
       slug,sourceId,expectedRevision:snapshot.revision,sourceIncarnation:snapshot.sourceIncarnation,
-    }, rows, {includeFrontmatter:opts.includeFrontmatter,preserveExisting:true,expectedEndpoints,
-      wanted:{producers:opts.includeFrontmatter===false?['body']:['body','frontmatter'],rows:wanted}});
+    }, rows, {includeFrontmatter:opts.includeFrontmatter,preserveExisting:true,
+      wanted:{producers:opts.includeFrontmatter===false?['body']:['body','frontmatter'],rows:wanted},expectedEndpoints:[...expectedEndpoints,...active.origins]});
     return {...written, errors:0, unresolved:extracted.unresolved, skippedMissingTarget, revision:snapshot.revision, page,timings:{resolveMs:writeStarted-started,writeMs:performance.now()-writeStarted}};
   };
 }
@@ -152,7 +154,8 @@ export async function reconcileSourceLinks(
         return result;
       }
       const page = snapshot.page;
-      const extracted = await extractPageLinks(page.slug, `${page.compiled_truth}\n${page.timeline}`, page.frontmatter,
+      const active=await activeIngestContent(engine,page);
+      const extracted = await extractPageLinks(page.slug, `${active.compiled_truth}\n${active.timeline}`, page.frontmatter,
         page.type as PageType, resolver, { pack: opts.pack, lineGrammar,
           targetType: (slug, source) => !source || source === sourceId ? index.get(slug)?.type : undefined });
       for (const ref of extracted.unresolved) {
@@ -188,7 +191,7 @@ export async function reconcileSourceLinks(
       const written = await replaceDerivedLinks(engine,{ slug: page.slug, sourceId,
         expectedRevision: snapshot.revision, sourceIncarnation }, rows, { wanted: { producers: ['body', 'frontmatter'], rows: wanted }, expectedEndpoints:
           [...new Set(rows.flatMap(row => [row.from_slug, row.to_slug]))].map(slug => ({ slug, sourceId,
-            revision: index.get(slug)!.knowledge_revision })) });
+            revision: index.get(slug)!.knowledge_revision })).concat(active.origins) });
       result.pagesProcessed++;
       result.linksCreated += written.created;
       result.linksRemoved += written.removed;

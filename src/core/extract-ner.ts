@@ -17,6 +17,7 @@
 
 import type { BrainEngine } from './engine.ts';
 import type { LinkBatchInput } from './engine.ts';
+import {ingestMentionOrigin} from './pmbrain-adapters/ingest-provenance.ts';
 import { buildGazetteer, findMentionedEntities, type Gazetteer } from './by-mention.ts';
 import { inferLinkTypeFromPack } from './schema-pack/link-inference.ts';
 import { loadActivePack } from './schema-pack/load-active.ts';
@@ -196,7 +197,8 @@ export async function extractNerLinks(
     processed++;
     opts.onProgress?.(processed, allRefs.length, created);
 
-    const body = page.compiled_truth + '\n\n' + (page.timeline ?? '');
+    const active=await (await import('./pmbrain-adapters/ingest-provenance.ts')).activeIngestContent(engine,page);
+    const body = active.compiled_truth + '\n\n' + active.timeline;
     if (!body.trim()) continue;
 
     const mentions = findMentionedEntities(body, gazetteer, {
@@ -213,6 +215,7 @@ export async function extractNerLinks(
       if (!verb) continue;
 
       batch.push({
+        ...ingestMentionOrigin(page.frontmatter,body,m.offset),
         from_slug: slug,
         to_slug: m.slug,
         link_type: verb,

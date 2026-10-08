@@ -1,13 +1,3 @@
-/**
- * 产品经理能看懂的测试说明：
- * 1. 深度整理读 signal-detector，先查已有页面，没有且值得记录才创建人物、公司、项目、概念。
- * 2. 已有充实页面时不覆盖。预演不写页面。同一份资料成功识别后，下次不重复交给代理。
- * 3. 脚本代替真实模型，按这个顺序调用工具并写入 people/张三、companies/openai。
- *    接着用现有正文关联，把提到这两个名字的文章连上去。
- * 4. 完整整理把识别实体放在关系补扫之前。快速维护和会议整理不跑这一步。
- * 5. 代理不能写到人物、公司、项目、概念以外的页面，也没有 add_link。
- * 这组测试证明工具链和接线。它不证明付费模型的识别质量。
- */
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -111,23 +101,22 @@ async function pageCount(): Promise<number> {
   return Number(rows[0]?.n ?? 0);
 }
 
-test('识别实体的提示、工具和可写范围按 signal-detector 收口', () => {
+test('识别实体的提示、工具和可写范围按完整 ingest 契约收口', () => {
   const prompt = buildEntityCapturePrompt({
     slug: 'notes/work',
     sourceId: 'vault',
     title: '工作记录',
     body: '张三在 OpenAI 工作。',
   });
-  expect(prompt).toContain('list_skills');
-  expect(prompt).toContain('signal-detector');
+  expect(prompt).toContain('完整 ingest 契约');
   expect(prompt).toContain('people/');
   expect(prompt).toContain('companies/');
   expect(prompt).toContain('concepts/');
   expect(prompt).toContain('projects/');
-  expect(prompt).toContain('没有 add_link');
-  expect(prompt).toContain('内容已经充实就不要覆盖');
-  expect(prompt).toContain('不要写会议页');
-  expect(prompt).toContain('绝对不能把未知类型写成 concept');
+  expect(prompt).toContain('add_link');
+  expect(prompt).toContain('保留已有事实');
+  expect(prompt).toContain('另建原始资料页');
+  expect(prompt).toContain('未知类型不建页');
   const withCandidates = buildEntityCapturePrompt({
     slug: 'notes/work',
     sourceId: 'vault',
@@ -138,18 +127,18 @@ test('识别实体的提示、工具和可写范围按 signal-detector 收口', 
   expect(withCandidates).toContain('person');
   expect(withCandidates).toContain('张三');
   expect(withCandidates).toContain('张老师');
-  expect(withCandidates).toContain('没有 add_link');
+  expect(withCandidates).toContain('add_link');
   expect([...ENTITY_CAPTURE_TOOLS]).toEqual([
-    'list_skills', 'get_skill', 'search', 'query', 'get_page', 'list_pages', 'put_page', 'add_timeline_entry',
+    'search','get_page','put_page','add_timeline_entry','add_link',
   ]);
-  expect(ENTITY_CAPTURE_TOOLS).not.toContain('add_link');
+  expect(ENTITY_CAPTURE_TOOLS).toContain('add_link');
   expect([...ENTITY_CAPTURE_SLUG_PREFIXES]).toEqual(['people/*', 'companies/*', 'concepts/*', 'projects/*']);
   const skillsDir = locateSignalDetectorSkillsDir();
   expect(skillsDir).toBeTruthy();
   expect(mergeCaptureSlugs(undefined, [])).toBeUndefined();
   expect(mergeCaptureSlugs(undefined, ['people/张三', 'notes/work'])).toEqual(['people/张三', 'notes/work']);
   const full = resolveDreamPresetPhases('full');
-  expect(full.indexOf('capture_entities')).toBeGreaterThan(full.indexOf('conversation_facts_backfill'));
+  expect(full.indexOf('capture_entities')).toBeLessThan(full.indexOf('patterns'));
   expect(full.indexOf('capture_entities')).toBeLessThan(full.indexOf('enrich_thin'));
   expect(resolveDreamPresetPhases('quick')).not.toContain('capture_entities');
   expect(resolveDreamPresetPhases('meeting')).not.toContain('capture_entities');
@@ -268,11 +257,11 @@ test('100 篇只是内部分批，超过 100 篇会自动继续，长文分块�
     sourceId: 'vault',
     handler: async () => {
       calls += 1;
-      return { ok: true };
+      return { ingest_verified: true };
     },
   });
 
-  expect(result.status).toBe('ok');
+  expect(result.status,result.summary).toBe('ok');
   expect(result.details.pages_submitted).toBe(101);
   expect(result.details.pages_remaining).toBe(0);
   expect(result.details.stop_reason).toBe('completed');
@@ -302,7 +291,7 @@ test('脚本按技能搜索并创建人物和公司，正文关联随后连上�
     'type: person',
     '---',
     '',
-    '张三在 OpenAI 工作。参见 [工作记录](notes/work)。',
+    '张三在 OpenAI 工作。[Source: notes/work] [[vault:notes/work]]',
   ].join('\n');
   const company = [
     '---',
@@ -310,27 +299,25 @@ test('脚本按技能搜索并创建人物和公司，正文关联随后连上�
     'type: company',
     '---',
     '',
-    'OpenAI 的人员变动见 [工作记录](notes/work)。',
+    'OpenAI 的人员变动。[Source: notes/work] [[vault:notes/work]]',
   ].join('\n');
   const client = new FakeMessagesClient([
-    tool('skill-list', 'brain_list_skills', {}),
-    tool('skill-read', 'brain_get_skill', { name: 'signal-detector' }),
     tool('search-person', 'brain_search', { query: '张三' }),
     tool('search-company', 'brain_search', { query: 'OpenAI' }),
     tool('write-person', 'brain_put_page', { slug: 'people/张三', content: person }),
     tool('write-company', 'brain_put_page', { slug: 'companies/openai', content: company }),
-    text('已创建 people/张三、companies/openai'),
+    text(JSON.stringify({entities:['people/张三','companies/openai'],relations:[{from:'people/张三',to:'companies/openai',link_type:'works_at',evidence:'张三在 OpenAI 工作'}]})),
   ]);
   const result = await runPhaseCaptureEntities(engine, {
     sourceId: 'vault',
     handler: makeSubagentHandler({ engine, client }),
   });
-  expect(result.status).toBe('ok');
-  expect(result.details.written_slugs).toEqual(['companies/openai', 'people/张三']);
+  expect(result.status,result.summary).toBe('ok');
+  expect(result.details.written_slugs).toEqual(['vault:companies/openai', 'vault:people/张三']);
   const toolNames = client.calls.flatMap(call => (call.tools ?? []).map(item => item.name));
-  expect(toolNames).toContain('brain_get_skill');
+  expect(toolNames).toContain('brain_search');
   expect(toolNames).toContain('brain_put_page');
-  expect(toolNames).not.toContain('brain_add_link');
+  expect(toolNames).toContain('brain_add_link');
   const pages = await engine.executeRaw<{ slug: string; title: string; type: string }>(
     `SELECT slug, title, type FROM pages WHERE slug IN ('people/张三', 'companies/openai') ORDER BY slug`,
   );
@@ -346,8 +333,8 @@ test('脚本按技能搜索并创建人物和公司，正文关联随后连上�
        JOIN pages t ON t.id = l.to_page_id
       WHERE f.slug = 'notes/work' AND f.source_id = 'vault'`,
   );
-  expect(links).toContainEqual({ from_slug: 'notes/work', to_slug: 'people/张三', link_source: 'mentions' });
-  expect(links).toContainEqual({ from_slug: 'notes/work', to_slug: 'companies/openai', link_source: 'mentions' });
+  expect(links).toContainEqual({ from_slug: 'notes/work', to_slug: 'people/张三', link_source: 'manual' });
+  expect(links).toContainEqual({ from_slug: 'notes/work', to_slug: 'companies/openai', link_source: 'manual' });
 }, 60_000);
 
 test('已有充实页面时，按指令不覆盖', async () => {
@@ -358,11 +345,9 @@ test('已有充实页面时，按指令不覆盖', async () => {
   }, { sourceId: 'vault' });
   await article('张三在 OpenAI 工作，并提出了新的研究方向。');
   const client = new FakeMessagesClient([
-    tool('skill-list', 'brain_list_skills', {}),
-    tool('skill-read', 'brain_get_skill', { name: 'signal-detector' }),
     tool('search-person', 'brain_search', { query: '张三' }),
     tool('read-person', 'brain_get_page', { slug: 'people/张三' }),
-    text('people/张三 已经充实，不覆盖。'),
+    text(JSON.stringify({entities:['people/张三'],relations:[]})),
   ]);
   const result = await runPhaseCaptureEntities(engine, {
     sourceId: 'vault',
@@ -382,7 +367,7 @@ test('同一份资料成功识别后，下一次不重复交给代理', async ()
   let calls = 0;
   const handler = async () => {
     calls += 1;
-    return { ok: true };
+    return { ingest_verified: true };
   };
   const first = await runPhaseCaptureEntities(engine, { sourceId: 'vault', handler });
   expect(first.status).toBe('ok');
@@ -407,7 +392,7 @@ test('完整整理先识别实体，再把新实体补进正文关联', async ()
       await engine.putPage('people/张三', {
         type: 'person', title: '张三', compiled_truth: '张三在 OpenAI 工作。', timeline: '', frontmatter: {},
       }, { sourceId: 'vault' });
-      return { created: 'people/张三' };
+      return { ingest_verified:true,created: 'people/张三' };
     },
   });
   expect(report.phases.map(phase => phase.phase)).toEqual(['extract', 'capture_entities']);
@@ -444,3 +429,30 @@ test('项目页保留，但普通正文提及不会自动连向项目', async ()
   expect(links.map(row => row.to_slug)).not.toContain('projects/deep-blue');
   expect((await engine.getPage('projects/deep-blue',{sourceId:'vault'}))?.type).toBe('project');
 });
+
+test('实体回执后中断不冒报完成，恢复只补关系并且不重算模型 Token',async()=>{
+  await useVault();await article('张三在 OpenAI 工作，并负责研究合作。');
+  const invalid=new FakeMessagesClient([text('已完成')]);
+  const failed=await runPhaseCaptureEntities(engine,{sourceId:'vault',handler:makeSubagentHandler({engine,client:invalid})});
+  expect(failed.details.pages_processed).toBe(0);
+  const client=new FakeMessagesClient([
+    tool('write-person','brain_put_page',{slug:'people/张三',content:'---\ntitle: 张三\ntype: person\n---\n张三在 OpenAI 工作。[Source: notes/work] [[vault:notes/work]]'}),
+    text(JSON.stringify({entities:['people/张三'],relations:[]})),
+  ]);
+  const controller=new AbortController();
+  let interrupted:unknown;
+  try{await runPhaseCaptureEntities(engine,{sourceId:'vault',signal:controller.signal,handler:makeSubagentHandler({engine,client}),yieldDuringPhase:async()=>{
+    const pending=await engine.executeRaw("SELECT id FROM minion_jobs WHERE status='completed' AND result->>'ingest_verified'='true' AND result->>'graph_reconciled'='false'");
+    if(pending.length)controller.abort(new Error('验收中断'));
+  }});}catch(error){interrupted=error;}
+  expect(interrupted).toBeInstanceOf(Error);expect((interrupted as Error).message).toContain('验收中断');
+  expect(client.calls).toHaveLength(2);
+  const recoveryClient=new FakeMessagesClient([]);
+  const recovered=await runPhaseCaptureEntities(engine,{sourceId:'vault',handler:makeSubagentHandler({engine,client:recoveryClient})});
+  expect(recovered.details.pages_processed).toBe(1);expect(recovered.details.input_tokens).toBe(0);expect(recovered.details.entities_written).toBe(0);
+  expect(recoveryClient.calls).toHaveLength(0);
+  const [job]=await engine.executeRaw<{graph:string}>("SELECT result->>'graph_reconciled' graph FROM minion_jobs WHERE result->>'ingest_verified'='true'");
+  expect(job?.graph).toBe('true');
+  const again=await runPhaseCaptureEntities(engine,{sourceId:'vault',handler:makeSubagentHandler({engine,client:recoveryClient})});
+  expect(again.details.chunks_submitted).toBe(0);
+},60_000);

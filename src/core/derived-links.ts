@@ -82,7 +82,7 @@ export async function replaceDerivedLinks(
   return engine.transaction(async tx => {
     await lockRelationPages(tx, [{ sourceId: origin.sourceId, slug: origin.slug }, ...rows.flatMap(row => [
       { sourceId: row.from_source_id!, slug: row.from_slug }, { sourceId: row.to_source_id!, slug: row.to_slug },
-    ])]);
+    ]),...(opts.expectedEndpoints??[])]);
     const snapshot = await readRelationSnapshot(tx, origin.slug, origin.sourceId);
     assertPageRevision(snapshot, { expectedRevision: origin.expectedRevision });
     if (!snapshot || snapshot.sourceIncarnation !== origin.sourceIncarnation || snapshot.page.deleted_at) {

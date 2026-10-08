@@ -382,6 +382,7 @@ export interface CycleReport {
 }
 
 export interface CycleOpts {
+  captureEntitySlugs?: string[];
   syncFileRuntime?: SyncFileRuntime;
   completedPhases?: PhaseResult[];
   phaseCheckpoint?: (phases: PhaseResult[]) => Promise<void>;
@@ -1097,6 +1098,7 @@ async function runPhaseExtract(
     }
     // Incremental path: if sync told us which slugs changed, only extract those.
     // On a 54K-page brain this turns a 10-minute full walk into a sub-second pass.
+    await (await import('./pmbrain-adapters/entity-ingest-workflow.ts')).pruneEntityIngestLinks(engine,sourceId);
     const result = await runExtractCore(engine, {
       mode: 'all',
       dir: brainDir,
@@ -2244,6 +2246,7 @@ export async function runCycle(
         const { runPhaseCaptureEntities } = await import('./cycle/capture-entities.ts');
         const { result, duration_ms } = await timePhase(() => runPhaseCaptureEntities(engine, {
           sourceId: cycleSourceId,
+          slugs:opts.captureEntitySlugs,
           dryRun,
           signal: opts.signal,
           yieldDuringPhase: opts.yieldDuringPhase,

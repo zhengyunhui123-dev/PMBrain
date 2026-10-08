@@ -835,6 +835,10 @@ export function buildDreamOutcome(run: ConsoleRun): DreamOutcomeSummary {
       failureItems.push(`${currentLabel}：${additionalErrors} 项模型或数据处理未成功`);
     }
     const pending = Math.max(0, Number(currentDetails.pending ?? 0));
+    if(Array.isArray(currentDetails.unresolved_references)&&currentDetails.unresolved_references.length){
+      failureCount+=currentDetails.unresolved_references.length;
+      failureItems.push(`${currentLabel}：${currentDetails.unresolved_references.length} 条引用未关联成功，详见知识关系`);
+    }
     for (const [key, label] of [['relation_backfill_error', '历史关系补扫'], ['by_mention_error', '正文实体关联'], ['ner_error', '关系类型判断']]) {
       if (currentDetails[key]) {
         failureCount += 1;
@@ -950,6 +954,7 @@ export function DreamRunContent({run,expanded=false}:{run:ConsoleRun;expanded?:b
   const phases=parseDreamReport(run)?.phases??[];
   const proposals=phases.find(phase=>phase.phase==='propose_takes')?.details??{};
   const relations=phases.find(phase=>phase.phase==='extract')?.details??{};
+  const unresolved=phases.flatMap(phase=>Array.isArray(phase.details?.unresolved_references)?phase.details.unresolved_references.map(recordOf):[]);
   const reasons:Record<string,string>={not_configured:'未配置该阶段需要的资料目录',not_in_active_pack:'当前知识类型未启用该阶段',insufficient_evidence:'资料数量不足，未满足执行条件'};
   return <details className="dream-outcome-content" open={expanded}>
     <summary>查看本次整理内容</summary>
@@ -968,6 +973,11 @@ export function DreamRunContent({run,expanded=false}:{run:ConsoleRun;expanded?:b
         {relations.postGenerationRelations===true&&<p>实体和概念生成后，已再次补扫历史关系。</p>}
         {relations.nerPackUnavailable===true&&<p>存在未提供关系规则的知识类型，已跳过对应的关系类型判断。</p>}
         {phases.some(phase=>phase.phase==='orphans')&&<p>孤立页检查统计尚未被其他知识引用的页面；这些页面可能已有向外的链接。</p>}
+        {unresolved.length>0&&<details><summary>{unresolved.length} 条引用未关联成功</summary><ul>{unresolved.map((reference,index)=><li key={index}>
+          <p>Source：<code>{String(reference.sourceId??'未记录')}</code> · 来源：<code>{String(reference.sourcePage??'未记录')}</code></p>
+          <p>目标名称或路径：<code>{String(reference.target??'未记录')}</code> · 字段：{String(reference.field??'未记录')}</p>
+          <p>原因：{String(reference.reason??'未记录')}</p>
+        </li>)}</ul></details>}
       </section>
       <section className={outcome.failureItems.length>0?'has-warning':''}><h3>{isQuick?'需要检查的异常':'未处理成功的内容'}</h3>
         {outcome.failureItems.length>0?<ul>{outcome.failureItems.map((item,index)=><li key={`${item}:${index}`}>{item}</li>)}</ul>

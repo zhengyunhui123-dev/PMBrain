@@ -20,8 +20,8 @@ beforeAll(async()=>{
   process.env.PMBRAIN_HOME=root; process.env.GBRAIN_HOME=root; mkdirSync(join(root,'.pmbrain'));
   const dimensions=process.env.PMBRAIN_RELATION_TEST_DATABASE_URL?1536:1024;
   const steps=[
-    ['brain_list_skills',{}],['brain_get_skill',{name:'signal-detector'}],['brain_search',{query:'刘慈欣'}],
-    ['brain_put_page',{slug:'people/liu',content:'---\ntitle: 刘慈欣\ntype: person\n---\n刘慈欣创作了三体。来源见 [导入资料](notes/input)。'}],
+    ['brain_search',{query:'刘慈欣'}],
+    ['brain_put_page',{slug:'people/liu',content:'---\ntitle: 刘慈欣\ntype: person\n---\n刘慈欣创作了三体。[Source: notes/input] [[auto-capture:notes/input]]'}],
   ] as const;
   server=Bun.serve({port:0,async fetch(req){
     const body=await req.json() as {input?:string|string[];tools?:Array<{function:{name:string}}>};
@@ -29,7 +29,7 @@ beforeAll(async()=>{
     const step=steps[calls++];
     const name=step&&body.tools?.find(tool=>tool.function.name===step[0])?.function.name;
     return Response.json({id:`chat-${calls}`,object:'chat.completion',created:1,model:'relation-test',choices:[{
-      index:0,finish_reason:step?'tool_calls':'stop',message:step?{role:'assistant',content:null,tool_calls:[{id:`call-${calls}`,type:'function',function:{name:name??step[0],arguments:JSON.stringify(step[1])}}]}:{role:'assistant',content:'已创建 people/liu。'},
+      index:0,finish_reason:step?'tool_calls':'stop',message:step?{role:'assistant',content:null,tool_calls:[{id:`call-${calls}`,type:'function',function:{name:name??step[0],arguments:JSON.stringify(step[1])}}]}:{role:'assistant',content:JSON.stringify({entities:['people/liu'],relations:[]})},
     }],usage:{prompt_tokens:20,completion_tokens:10,total_tokens:30}});
   }});
   const url=process.env.PMBRAIN_RELATION_TEST_DATABASE_URL;

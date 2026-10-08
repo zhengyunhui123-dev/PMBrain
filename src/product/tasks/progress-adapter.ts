@@ -177,7 +177,8 @@ export function finishTaskProgress(view: TaskProductProgress, status: string, re
       add('输入 Token', capture.input_tokens);
       add('输出 Token', capture.output_tokens);
       if (typeof capture.cost_cny === 'number') add('当前费用', capture.cost_cny);
-      if (typeof capture.cost_cap_cny === 'number') add('费用上限', capture.cost_cap_cny);
+      if (typeof capture.cost_cap_cny === 'number') add(capture.cost_cap_enforced===false?'配置费用上限（无法核算）':'费用上限', capture.cost_cap_cny);
+      if (Array.isArray(capture.unresolved_references)) add('未解析引用',capture.unresolved_references.length);
       add('剩余页面', capture.pages_remaining);
       add('创建实体', capture.entities_written);
       add('新增关系', capture.relations_created);
@@ -199,18 +200,24 @@ export function finishTaskProgress(view: TaskProductProgress, status: string, re
         : matches.every((phase: any) => phase.status === 'skipped') ? 'skipped' : 'completed';
     }
     const captureStop = capturePhase?.details?.stop_reason;
-    if (captureStop === 'failure' || captureStop === 'model_unavailable') {
+    if (captureStop === 'failure' || captureStop === 'model_unavailable' || (capturePhase?.details?.pages_remaining>0)) {
       const captureStep = next.steps.find(step => step.phases.includes('capture_entities'));
-      if (captureStep && captureStep.status !== 'skipped') captureStep.status = 'failed';
+      if (captureStep && captureStep.status !== 'skipped') captureStep.status = ['tokens','cost'].includes(captureStop)?'pending':'failed';
     }
   }
   if (status === 'completed') {
     next.percent = 100;
-    next.stage = data.status === 'partial' || next.steps.some(step => step.status === 'failed') ? '部分完成，请查看未完成步骤'
+    const remaining=Number(capturePhase?.details?.pages_remaining??0);
+    if(remaining>0){
+      next.processed=Number(capturePhase.details.pages_processed??0);
+      next.total=next.processed+remaining;
+      next.percent=Math.floor(next.processed/next.total*100);
+    }
+    next.stage = remaining>0 || data.status === 'partial' || next.steps.some(step => step.status === 'failed') ? '部分完成，请查看未完成步骤'
       : next.name === '导入资料' ? '导入完成' : `${next.name}完成`;
     for (const step of next.steps) {
       if (step.status === 'running') step.status = 'completed';
-      else if (step.status === 'pending') step.status = 'skipped';
+      else if (step.status === 'pending' && !step.phases.includes('capture_entities')) step.status = 'skipped';
     }
     const failed = next.steps.find(step => step.status === 'failed');
     if (failed) {

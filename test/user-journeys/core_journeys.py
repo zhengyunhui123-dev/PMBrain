@@ -647,18 +647,34 @@ def restart_persistence_check(
 ) -> None:
     print("[journey 6 precheck] restart current Desktop -> imported data persists", flush=True)
     session = DesktopSession(playwright, artifacts, home, executable=executable, application=application)
-    page = session.start()
+    page = None
     admin_browser = None
     try:
+        page = session.start()
         admin_browser, admin, origin = open_admin_browser(playwright, mint_admin_login_link(page, home))
         admin.goto(origin + "/admin/#data")
         admin.get_by_role("heading", name="知识库", exact=True).wait_for()
         admin.get_by_placeholder("搜索 slug 或标题").fill("Real User Journey Orchid")
         admin.get_by_role("row", name=re.compile("Real User Journey Orchid")).wait_for(timeout=90_000)
+    except Exception:
+        if page is not None:
+            try:
+                page.screenshot(path=str(artifacts / "failure-restart-desktop.png"), full_page=True)
+                state = page.evaluate("""async () => {
+                  const state = await window.pmbrainDesktop?.getState?.();
+                  return state && {phase: state.phase, port: state.port, message: state.message, error: state.error, startupPhase: state.startupPhase};
+                }""")
+                (artifacts / "failure-restart-state.json").write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+            except Exception:
+                pass
+        raise
     finally:
         if admin_browser is not None:
             admin_browser.close()
         session.stop()
+        logs = home / "electron-user-data" / "logs"
+        if logs.exists():
+            (artifacts / "desktop-restart-runtime.log").write_text("\n".join(log.read_text(encoding="utf-8", errors="replace") for log in sorted(logs.glob("*.log"))), encoding="utf-8")
 
 
 def run(args: argparse.Namespace) -> None:

@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "reviewed_at": "2026-10-08",
-  "product_version": "1.4.43",
+  "reviewed_at": "2026-10-09",
+  "product_version": "1.4.44",
   "subsystem": "entity-relations",
   "status": "release-blocked-pending-exact-sha-ci",
   "upstream": {
@@ -15,7 +15,9 @@
     "revision-conditional relationship publication",
     "indexed source-local reference resolution",
     "producer-scoped derived-link reconciliation",
-    "wanted-link persistence"
+    "wanted-link persistence",
+    "complete ingest, filing and quality contracts; durable shared Minion Agent tools and receipts",
+    "evidence-backed entity/source relationships and final graph reconciliation"
   ],
   "integrations": [
     "src/core/pglite-engine.ts",
@@ -55,18 +57,25 @@
     "explicit links run before plain mentions in the stale sweep to avoid duplicate edges",
     "default Dream skips calibration stages and captures entities before patterns; discovery tools return bounded summaries",
     "optional page_aliases projection rolls back its savepoint and skips only the missing-alias-table error for pre-v110 compatibility",
-    "base pack concept path prefixes remain explicit after PMBrain changes unknown document types to note"
+    "base pack concept path prefixes remain explicit after PMBrain changes unknown document types to note",
+    "pre-ingested original documents retain their raw pages; current Source then shared default is enforced by the same Core resolver",
+    "protected ingest tools validate provenance and page read revisions; target parsing, link publication and SQL readback run deterministically",
+    "per-document six model calls and 120000 input/20000 output tokens; compact persisted-write receipt reserves the last call; unknown CNY prices do not enforce an amount cap",
+    "generated fact-line provenance suppresses stale derived links while preserving original entity text and manual relationships",
+    "only scoped imported-document requests auto-run; legacy unscoped UUID requests remain pending and do not silently rescan a knowledge base",
+    "Minion entity receipts and the subsequent Mention/NER/reconciliation checkpoint are separate so interruption resumes without repeated model extraction"
   ],
   "deferred": [
     "whole-repository GBrain upgrade",
     "managed canonical filesystem and write capability subsystem",
     "temporal relationship validity storage",
-    "GBrain ingest Agent replacement; PMBrain uses its existing approved capture Agent",
     "entity-card and wanted-pages product UI; coverage/referrers modules have no new menu",
     "automatic legacy concept-page retyping",
     "production 44-percent precision and page-770 stall diagnosis",
     "exact pushed-SHA GitHub CI and Windows release package",
-    "upstream attendance evidence gate; existing PMBrain attendance parser retained"
+    "upstream attendance evidence gate; existing PMBrain attendance parser retained",
+    "whole-repository Agent/runtime upgrade and external enrichment; the full ingest contracts run on the existing shared Core Minion runtime",
+    "production repair of task 8989 and its historical 25 unresolved references; production knowledge was read only"
   ],
   "verification": {
     "files": [
@@ -84,7 +93,9 @@
       "test/page-revision-backfill.test.ts",
       "test/page-state-engine.test.ts",
       "test/derived-link-reconciliation.test.ts",
-      "test/wanted-links.test.ts"
+      "test/wanted-links.test.ts",
+      "test/entity-ingest-workflow.serial.test.ts",
+      "test/entity-ingest-gateway.serial.test.ts"
     ],
     "check": "bun run check:gbrain-subsystems",
     "upstream_check": "bun run check:gbrain-subsystems --upstream D:/cursor-claude/gbrain",
@@ -99,7 +110,12 @@
       "13 original table hashes unchanged",
       "new/edit/later-target/delete/recreate lifecycle",
       "six Chinese query before/after regression; top20 may reorder"
-    ]
+    ],
+    "current_dream_copy": "D:/pmbrain-acceptance/dream-1444-final-validation",
+    "current_dream_evidence": ".codex/dream-1444/",
+    "current_dream_boundary": "Real MiMo calls on selected documents in copies; prior v1.4.42 upgrade evidence is historical. Exact pushed SHA CI is pending.",
+    "current_dream_lifecycle_copy": "D:/pmbrain-acceptance/dream-1444-lifecycle",
+    "current_dream_ui_copy": "D:/pmbrain-acceptance/dream-1444-ui"
   },
   "files": [
     {
@@ -120,7 +136,7 @@
       "path": "src/core/mentions/pass.ts",
       "upstream_path": "src/core/mentions/pass.ts",
       "mode": "adapted",
-      "sha256": "f0d914c925369bc640aad5221cf0531110f281694c1dd88e557df119bbdcc0cc",
+      "sha256": "5fa188c028302c7d02a564d16a92f73fef7f8d54bc9cf17f12458acb43983062",
       "upstream_sha256": "fde8f033481a3fa776b235dbf40a899196c09ee6f20b8c3adf66f724a0d3e6e6"
     },
     {
@@ -197,7 +213,7 @@
       "path": "src/core/derived-links.ts",
       "upstream_path": "src/core/derived-links.ts",
       "mode": "adapted",
-      "sha256": "39ed3163b5de685f5feb0d831f5244a576cf26ee2a2a8e6140397572a734a34d",
+      "sha256": "d62082cfd400ef74ddd3aec305b7a43e2bb1ce8518bc579117964ea959c605de",
       "upstream_sha256": "6fd08fe7d6c2a76f9a028515d8367d3a65df5b2e021a488b5115d5ea25331e42"
     },
     {
@@ -295,7 +311,7 @@
       "path": "src/core/link-reconciliation.ts",
       "upstream_path": "src/core/link-reconciliation.ts",
       "mode": "adapted",
-      "sha256": "6363a69565d0707a41fdfcddd81ea7691003e84e1f4ab80609516f3b483fe09a",
+      "sha256": "5be4dd539afc6399cc83bf4c0ae8243565844bb6576db2d1cb6bccb9635be7eb",
       "upstream_sha256": "758f40bb70004f5307abd1a0a94af3ef7b82d8f6abe5aa2b5f95e9f2d0a5cbc8"
     },
     {
@@ -360,6 +376,27 @@
       "mode": "adapted",
       "sha256": "69da8b3b56a4a24a9913cc2cedcdb783b7ff73129390822cdb87e9a0ee7156cc",
       "upstream_sha256": "ff29cad7df86e3b91115eca9858942ed0ff87a56543653fa79ed2395f31c293d"
+    },
+    {
+      "path": "skills/ingest/SKILL.md",
+      "upstream_path": "skills/ingest/SKILL.md",
+      "mode": "copied",
+      "sha256": "887d1dc43d1dd4d541172b40ce64385090813132ef80fc05c4616b5c32087448",
+      "upstream_sha256": "887d1dc43d1dd4d541172b40ce64385090813132ef80fc05c4616b5c32087448"
+    },
+    {
+      "path": "skills/_brain-filing-rules.md",
+      "upstream_path": "skills/_brain-filing-rules.md",
+      "mode": "copied",
+      "sha256": "5a5792a290e7f48e0123744e3460ea02514d7a514113827a9dde462935565d17",
+      "upstream_sha256": "5a5792a290e7f48e0123744e3460ea02514d7a514113827a9dde462935565d17"
+    },
+    {
+      "path": "skills/conventions/quality.md",
+      "upstream_path": "skills/conventions/quality.md",
+      "mode": "copied",
+      "sha256": "8aa681001114689d34268ccadaf0e2ff07b8f68aa5987c093a8c4a7a744f12a6",
+      "upstream_sha256": "8aa681001114689d34268ccadaf0e2ff07b8f68aa5987c093a8c4a7a744f12a6"
     }
   ],
   "migration_namespace": {

@@ -2388,6 +2388,7 @@ export interface ChatOpts {
   messages: ChatMessage[];
   tools?: ChatToolDef[];
   maxTokens?: number;
+  disableReasoning?: boolean;
   /** Sampling temperature. The LongMemEval judge pins 0 (official scorer). */
   temperature?: number;
   abortSignal?: AbortSignal;
@@ -2692,6 +2693,7 @@ async function chatOnce(opts: ChatOpts): Promise<ChatResult> {
   }, {} as Record<string, any>);
 
   const providerOptions: Record<string, any> = {};
+  if(opts.disableReasoning&&recipe.id==='mimo')providerOptions.mimo={thinking:{type:'disabled'}};
   if (useCache) {
     providerOptions.anthropic = { cacheControl: { type: 'ephemeral' } };
   }
@@ -3030,7 +3032,7 @@ export interface ToolLoopOpts {
   temperature?: number;
   onTextDelta?: (delta: string) => void;
   onTextReset?: (model: string) => void;
-  beforeModelCall?: (input: { turnIdx: number; messages: readonly ChatMessage[] }) => void | Promise<void>;
+  beforeModelCall?: (input: { turnIdx: number; messages: readonly ChatMessage[]; finalTurn?: boolean }) => void | Promise<void>;
   reportLengthStop?: boolean;
   recordUnknownTools?: boolean;
   /** "provider:modelId" — defaults to config.chat_model. */
@@ -3049,8 +3051,12 @@ export interface ToolLoopOpts {
   toolHandlers: Map<string, ToolHandler>;
   /** Hard cap on loop iterations. Default 20. */
   maxTurns?: number;
+  finalizeOnLastTurn?: boolean;
+  prepareFinalMessages?: () => Promise<ChatMessage[]>;
+  shouldFinalize?: (messages:readonly ChatMessage[]) => Promise<boolean>;
   /** Per-turn max output tokens. Default 4096. */
   maxTokens?: number;
+  disableReasoning?: boolean;
   abortSignal?: AbortSignal;
   /** Apply Anthropic cache_control to system + last tool. Silently ignored elsewhere. */
   cacheSystem?: boolean;
@@ -3136,6 +3142,7 @@ export async function toolLoop(opts: ToolLoopOpts): Promise<ToolLoopResult> {
     messages.push(...opts.initialMessages);
   }
   let turnIdx = opts.replayState?.nextTurnIdx ?? 0;
+  let completedTurns=turnIdx;
   let messageIdx = opts.replayState?.nextMessageIdx ?? 0;
   let finalText = '';
   let stopReason: ToolLoopStopReason = 'end';
@@ -3149,15 +3156,19 @@ export async function toolLoop(opts: ToolLoopOpts): Promise<ToolLoopResult> {
     opts.onHeartbeat?.('turn_start', { turn_idx: turnIdx });
 
     let chatResult: ChatResult;
+    let finalTurn=false;
     try {
-      await opts.beforeModelCall?.({ turnIdx, messages });
+      finalTurn=!!opts.finalizeOnLastTurn&&(turnIdx===maxTurns-1||!!(await opts.shouldFinalize?.(messages)));
+      const callMessages=finalTurn&&opts.prepareFinalMessages?await opts.prepareFinalMessages():messages;
+      await opts.beforeModelCall?.({ turnIdx, messages:callMessages,...(opts.finalizeOnLastTurn?{finalTurn}:{}) });
       opts.abortSignal?.throwIfAborted();
       chatResult = await chat({
         model: opts.model,
-        system: opts.system,
-        messages,
-        tools: opts.tools,
+        system: finalTurn?`${opts.system??''}\nThis is the reserved final verification turn. Return the requested JSON receipt of persisted entities and evidence-backed relations. Tools are unavailable; do not claim unwritten targets.`:opts.system,
+        messages:callMessages,
+        tools: finalTurn?undefined:opts.tools,
         maxTokens,
+        disableReasoning:opts.disableReasoning,
         abortSignal: opts.abortSignal,
         cacheSystem: opts.cacheSystem,
         ...(opts.temperature !== undefined ? { temperature: opts.temperature } : {}),
@@ -3173,6 +3184,7 @@ export async function toolLoop(opts: ToolLoopOpts): Promise<ToolLoopResult> {
     }
 
     totalUsage.input_tokens += chatResult.usage.input_tokens;
+    completedTurns=turnIdx+1;
     totalUsage.output_tokens += chatResult.usage.output_tokens;
     totalUsage.cache_read_tokens += chatResult.usage.cache_read_tokens;
     totalUsage.cache_creation_tokens += chatResult.usage.cache_creation_tokens;
@@ -3204,6 +3216,8 @@ export async function toolLoop(opts: ToolLoopOpts): Promise<ToolLoopResult> {
       finalText = chatResult.text;
       break;
     }
+
+    if(finalTurn){stopReason='max_turns';break;}
 
     // D11 + write-ordering invariant: persist pending → execute → settle.
     const toolResultBlocks: ChatBlock[] = [];
@@ -3319,7 +3333,7 @@ export async function toolLoop(opts: ToolLoopOpts): Promise<ToolLoopResult> {
     stopReason = 'max_turns';
   }
 
-  return { finalText, totalTurns: turnIdx, totalUsage, stopReason, messages };
+  return { finalText, totalTurns: completedTurns, totalUsage, stopReason, messages };
 }
 
 // ---- Reranker (v0.35.0.0+) ----

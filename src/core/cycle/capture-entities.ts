@@ -1,8 +1,5 @@
 import { ENTITY_CAPTURE_MIN_BODY_CHARS } from '../pmbrain-adapters/entity-capture-request.ts';
 import { createHash, randomUUID } from 'node:crypto';
-import { existsSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import type { BrainEngine } from '../engine.ts';
 import type { PhaseResult } from '../cycle.ts';
 import { DEFAULT_PRIVATE_QUEUE_LEASE_MS, MinionQueue } from '../minions/queue.ts';
@@ -18,6 +15,7 @@ import { readModelConfigValue, resolveAlias } from '../model-config.ts';
 import { normalizeAliasList } from '../search/alias-normalize.ts';
 import { alignCapturedEntityGraph } from './entity-graph-align.ts';
 import { lineGrammarOptions } from '../line-grammar.ts';
+import { locateIngestSkillsDir, readIngestContract, pruneEntityIngestLinks } from '../pmbrain-adapters/entity-ingest-workflow.ts';
 import {
   DEFAULT_ENTITY_CAPTURE_MAX_INPUT_TOKENS,
   DEFAULT_ENTITY_CAPTURE_MAX_OUTPUT_TOKENS,
@@ -43,14 +41,11 @@ export const ENTITY_CAPTURE_PAGE_BUDGET = 100;
 export const ENTITY_CAPTURE_CHUNK_CHARS = 8000;
 export const ENTITY_CAPTURE_CHUNK_OVERLAP = 500;
 export const ENTITY_CAPTURE_TOOLS = [
-  'list_skills',
-  'get_skill',
   'search',
-  'query',
   'get_page',
-  'list_pages',
   'put_page',
   'add_timeline_entry',
+  'add_link',
 ] as const;
 export const ENTITY_CAPTURE_SLUG_PREFIXES = [
   'people/*',
@@ -60,9 +55,10 @@ export const ENTITY_CAPTURE_SLUG_PREFIXES = [
 ] as const;
 
 const MIN_BODY_CHARS = ENTITY_CAPTURE_MIN_BODY_CHARS;
-const moduleDir = dirname(fileURLToPath(import.meta.url));
 
 export interface EntityCaptureCandidate {
+  pageId?: number | string;
+  sourceIncarnation?: string;
   slug: string;
   sourceId: string;
   title: string;
@@ -83,6 +79,7 @@ export interface CaptureEntitiesOpts {
   deadlineAtMs?: number | null;
   privateQueueOwnerJobId?: number | null;
   maxPages?: number;
+  slugs?: string[];
   batchSize?: number;
   model?: string;
   modelServices?: CaptureServiceRecord[];
@@ -99,21 +96,7 @@ export interface CaptureEntitiesOpts {
 }
 
 export function locateSignalDetectorSkillsDir(): string | null {
-  const starts = [process.cwd(), moduleDir, dirname(process.execPath)];
-  const seen = new Set<string>();
-  for (const start of starts) {
-    let dir = start;
-    for (let depth = 0; depth < 8; depth++) {
-      if (seen.has(dir)) break;
-      seen.add(dir);
-      const skill = join(dir, 'skills', 'signal-detector', 'SKILL.md');
-      if (existsSync(skill)) return join(dir, 'skills');
-      const parent = dirname(dir);
-      if (parent === dir) break;
-      dir = parent;
-    }
-  }
-  return null;
+  return locateIngestSkillsDir();
 }
 
 export function splitEntityCaptureCandidate(page: EntityCaptureCandidate): EntityCaptureChunk[] {
@@ -138,6 +121,7 @@ export function splitEntityCaptureCandidate(page: EntityCaptureCandidate): Entit
 export function buildEntityCapturePrompt(
   page: EntityCaptureCandidate | EntityCaptureChunk,
   candidates: CaptureEntityBrief[] = [],
+  acknowledged:CaptureEntityBrief[] = [],
 ): string {
   const isChunk = 'chunkBody' in page;
   const body = isChunk ? page.chunkBody : page.body;
@@ -147,45 +131,31 @@ export function buildEntityCapturePrompt(
     ? '这一段没有检索到相关的已有实体。创建前仍必须 search。'
     : candidates.map(candidate => {
       const aliases = candidate.aliases.length > 0 ? candidate.aliases.join('、') : '无';
-      return `- ${candidate.slug} | ${candidate.type} | ${candidate.title} | aliases: ${aliases}`;
+      return `- ${candidate.sourceId}:${candidate.slug} | ${candidate.type} | ${candidate.title} | aliases: ${aliases}`;
     }).join('\n');
-  return `你正在执行用户明确发起的深度整理。这一份资料要按知识整理 Skill 处理，不是按固定的会议或观点模板处理。
+  return `本次是用户授权的资料整理，原始资料已入库。执行系统提供的完整 ingest 契约，按其中的 Parse、实体复用与写入、关系、回链、时间线传播和读回验证顺序完成这一段；不做付费外部补充、观点采集或另建原始资料页。
 
-开始写任何页面前，必须按顺序调用工具：
-1. list_skills
-2. get_skill，name 必须是 signal-detector
-3. 完整阅读返回的 Skill 正文，并只按其中的 Entity Detection 执行
-
-当前资料
-- slug: ${page.slug}
-- source: ${page.sourceId}
-- title: ${page.title}
-- 分块: 第 ${chunkIndex + 1}/${chunkCount} 段
-
-已有相关实体候选（只含 slug、title、type、aliases，不是全库）：
+资料 slug: ${page.slug}
+Source: ${page.sourceId}
+标题: ${page.title}
+分块: 第 ${chunkIndex + 1}/${chunkCount} 段
+已有相关实体（Source 优先当前，再 default；不得重复建页）：
 ${candidateBlock}
+已写入同一份未变化原文并通过证据检查的实体（中断前已持久化；不要再次 search、get_page 或 put_page；全部列入最终 entities）：
+${acknowledged.length?acknowledged.map(entity=>`${entity.sourceId}:${entity.slug} | ${entity.title}`).join('\n'):'无'}
 
-实体规则以 signal-detector 为准，这里只保留不能跳过的判定：
-- 找出值得记录的人物、公司、项目和概念。一次性的旁述不要建页。
-- 候选里已经有的人、单位、项目或概念必须复用该 slug。新别名写回已有页，不要新建第二页。
-- 每个候选先 search。没有页面且值得记录，用 put_page 创建。
-- 已有页面但内容薄，读取后补充，保留已有事实。内容已经充实就不要覆盖整页。只重写「## 当前状态」这一节，不要把新旧现状叠在一起。当前状态只记现在的职务和现状，已经离开的单位不要留在这一节。
-- 类型只能是 person、company、organization、project、concept。无法判断类型时不要 put_page，绝对不能把未知类型写成 concept。
-- 人物写入 people/，公司写入 companies/，概念写入 concepts/，项目写入 projects/。
-- 页面标题使用资料里的原名。正文必须用 Markdown 链接回当前资料 slug。没链回资料的实体是不完整的。
-- 同一份资料里的实体之间，写入时就要写清关系，不要只写回资料。人物页写「在[公司](companies/…)任职」或 frontmatter 的 company、founded。公司页写 key_people。项目、概念用同一句里的 Markdown 链接和资料里的原话（负责、建设、拥有、创立）。put_page 会按这些正文和 frontmatter 建立关系。
-- 只记录资料里出现的事实。不要编造关系。
-- 这次没有 add_link。不要调用它。关系写在页面里，由写入时的自动链接和随后的抽取落库。有明确日期的同一件事，要对每个提到的实体各调用一次 add_timeline_entry，日期、摘要和来源相同。时间线只追加，不改写旧条目。每条都要带来源。
-- 不要写会议页、对话页、反思页或原创想法页。
-- 没有值得记录的实体时，不要写页面。
-- 长资料会分成多个重叠片段。跨分块重复出现的实体必须先 search，已有页面只补充新事实，不要重复创建或整页覆盖。更新时先 get_page，写回的正文里「## 当前状态」只能有一节，而且是现在的状态。
+读取现有实体后保留已有事实，当前状态只保留一节。put_page 的 content 必须以完整 YAML frontmatter 开头，包含 title 和 type；Markdown 的 # 标题不能设置页面身份。title 使用本段原文名称，复用现有准确 slug，禁止将拼音 slug 当标题。类型是 person、company、organization、project、concept；未知类型不建页。项目和概念只有原文明确信息才建，不作普通关键词互连。
+人物 people/、单位 companies/、项目 projects/、概念 concepts/。已有实体标题不在本段逐字出现时，在 YAML aliases 中记录本段明确使用的名称并保留原身份，禁止臆测别名。原始资料本身就是可用的 brain context，包含明确职责、项目或事件时可满足有意义内容要求；不需外部补充。正文每条事实带 [Source: ${page.slug}]。使用 [[${page.sourceId}:${page.slug}]] 回链资料，禁止猜测或缩写路径。同一明确日期事件传播到每个实际参与实体；add_timeline_entry 的 source 必须包含 ${page.slug}，date 必须为原文明确给出的 YYYY-MM-DD；只有月份或阶段范围的事实留在正文，不得编造某月 1 日。
+第一轮只调用一次 search，query 用逗号分隔本段所有候选名称，一次查重。没有同名实体时第二轮批量写入，禁止反复搜索、resolve_slugs 或整库 list_pages。新实体内容来自本段资料，不要求额外读取其他原始文档；实体已经存在时批量 get_page 读取并复用。只有增加明确新事实才 put_page。add_link 的 from/to 使用准确 slug，context 必须逐字引用本段同时包含两端名称的原文；不得凭共现编造任职、拥有或投资关系，普通引用使用 mentions。
+优先完成资料的主题项目、牵头单位和明确职责关系，再处理有明确身份、职责或事件的人物；只有姓名的名单不单独建实体。一次批量完成查重，不要逐个姓名分轮搜索。最多允许六轮，包括最后的验收回执。
+写入完成后返回唯一 JSON 验收清单（不写额外总结）。页面和关系由程序统一读回验收，不再要求模型反复查询图谱：
+{"entities":["people/姓名","companies/单位","projects/项目"],"relations":[{"from":"companies/单位","to":"projects/项目","link_type":"mentions","evidence":"本段逐字原文，包含两端名称"}]}
+entities 列出本段识别且存在的所有值得记录实体，包括复用的旧页。没有实体时返回 {"entities":[],"relations":[],"no_entities":true}。尚未存在的目标不得填入已完成清单。程序将验证所有目标、原文证据、来源回链和关系，未通过不会标记完成。
 
 资料正文
 ---
 ${body}
----
-
-完成后列出你创建或补充过的 slug。`;
+---`;
 }
 
 export function entityCaptureIdempotencyKey(
@@ -194,29 +164,40 @@ export function entityCaptureIdempotencyKey(
   chunkBody = page.body,
 ): string {
   const fullDigest = createHash('sha256')
-    .update(`${page.sourceId}\0${page.slug}\0${page.body}`)
+    .update(`${page.sourceId}\0${page.slug}\0${page.body}\0${page.pageId??''}\0${page.sourceIncarnation??''}`)
     .digest('hex')
     .slice(0, 32);
-  // Keep chunk 0 on the old v1 key so long documents processed by 1.4.35
-  // don't repeat the already-scanned first 8k after this upgrade.
-  if (chunkIndex === 0) return `dream:entity-capture:v1:${fullDigest}`;
   const digest = createHash('sha256')
     .update(`${fullDigest}\0chunk:${chunkIndex}\0${chunkBody}`)
-    .digest('hex')
-    .slice(0, 32);
-  return `dream:entity-capture:v2:${digest}`;
+    .digest('hex').slice(0,32);
+  return `dream:entity-ingest:v3:${digest}`;
+
 }
 
 async function hasCompletedCaptureJob(engine: BrainEngine, baseKey: string): Promise<boolean> {
   const rows = await engine.executeRaw<{ done: number }>(
     `SELECT 1::int AS done
        FROM minion_jobs
-      WHERE status = 'completed'
+      WHERE status = 'completed' AND result->>'ingest_verified'='true' AND COALESCE(result->>'graph_reconciled','true')='true'
         AND (idempotency_key = $1 OR idempotency_key LIKE $2)
       LIMIT 1`,
     [baseKey, `${baseKey}:retry:%`],
   );
   return rows.length > 0;
+}
+
+async function acknowledgedIngestEntities(engine:BrainEngine,page:EntityCaptureChunk,index:CaptureEntityBrief[]):Promise<CaptureEntityBrief[]>{
+  if(page.pageId==null)return [];
+  const rows=await engine.executeRaw<{slug:string;source_id:string;compiled_truth:string;timeline:string;frontmatter:Record<string,unknown>}>(`SELECT p.slug,p.source_id,p.compiled_truth,p.timeline,p.frontmatter FROM pages p WHERE p.deleted_at IS NULL AND p.source_id=ANY($1::text[]) AND EXISTS
+    (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(p.frontmatter->'pmbrain_ingest_provenance')='array' THEN p.frontmatter->'pmbrain_ingest_provenance' ELSE '[]'::jsonb END) v
+     WHERE v->>'sourceId'=$2 AND v->>'slug'=$3 AND v->>'pageId'=$4 AND v->>'bodyHash'=$5 AND(v->>'chunkHash'=$6 OR($7::boolean AND v->>'chunkHash' IS NULL)))`,
+    [[page.sourceId,'default'],page.sourceId,page.slug,String(page.pageId),createHash('sha256').update(page.body).digest('hex'),createHash('sha256').update(page.chunkBody).digest('hex'),page.chunkCount===1]);
+  const bodyHash=createHash('sha256').update(page.body).digest('hex'),chunkHash=createHash('sha256').update(page.chunkBody).digest('hex');
+  const keys=new Set(rows.filter(row=>{
+    const lines=new Set(`${row.compiled_truth}\n${row.timeline}`.split('\n').map(line=>createHash('sha256').update(line).digest('hex')));
+    return (row.frontmatter.pmbrain_ingest_provenance as Array<Record<string,unknown>>).some(record=>record.sourceId===page.sourceId&&record.slug===page.slug&&record.pageId===String(page.pageId)&&record.bodyHash===bodyHash&&(record.chunkHash===chunkHash||page.chunkCount===1&&record.chunkHash==null)&&lines.has(String(record.line)));
+  }).map(row=>`${row.source_id}:${row.slug}`));const normalize=(value:string)=>value.replace(/[\s"'“”‘’]/gu,'');
+  return index.filter(entity=>keys.has(`${entity.sourceId}:${entity.slug}`)&&[entity.title,...entity.aliases].some(name=>name.trim().length>=2&&normalize(page.chunkBody).includes(normalize(name))));
 }
 
 export async function selectEntityCaptureCandidates(
@@ -228,11 +209,12 @@ export async function selectEntityCaptureCandidates(
     source_id: string | null;
     title: string | null;
     compiled_truth: string | null;
+    page_id: number;
   }>(
-    `SELECT slug, source_id, title, compiled_truth
+    `SELECT slug, source_id, title, compiled_truth,pages.id AS page_id
        FROM pages
       WHERE deleted_at IS NULL
-        AND COALESCE(chunker_version,0)>=0
+        AND COALESCE(pages.chunker_version,0)>=0
         AND ($1::text IS NULL OR source_id = $1)
         AND COALESCE(type, '') NOT IN ('person', 'company', 'organization', 'entity', 'concept', 'project')
         AND slug NOT LIKE 'people/%'
@@ -242,10 +224,15 @@ export async function selectEntityCaptureCandidates(
         AND slug NOT LIKE 'wiki/agents/%'
         AND COALESCE(frontmatter->>'dream_generated', '') <> 'true'
         AND char_length(trim(COALESCE(compiled_truth, ''))) >= $2
-      ORDER BY updated_at DESC, source_id, slug`,
+      ORDER BY pages.updated_at DESC, source_id, slug`,
     [sourceId ?? null, MIN_BODY_CHARS],
   );
+  let sourceRows:Array<{id:string;incarnation:string}>=[];
+  try{sourceRows=await engine.executeRaw('SELECT id,incarnation::text AS incarnation FROM sources');}
+  catch(error){if((error as {code?:string}).code!=='42P01')throw error;}
+  const incarnations=new Map(sourceRows.map(row=>[row.id,row.incarnation]));
   return rows.map(row => ({
+    pageId:row.page_id,sourceIncarnation:incarnations.get(row.source_id??'default'),
     slug: row.slug,
     sourceId: row.source_id ?? 'default',
     title: row.title?.trim() || row.slug,
@@ -304,12 +291,14 @@ function storedPrice(raw: string | null | undefined): number | null | undefined 
 }
 
 async function retryableKey(engine: BrainEngine, baseKey: string, nonce: number): Promise<string> {
-  const rows = await engine.executeRaw<{ status: string }>(
-    `SELECT status FROM minion_jobs WHERE idempotency_key = $1 LIMIT 1`,
+  const completed=await engine.executeRaw<{idempotency_key:string}>(`SELECT idempotency_key FROM minion_jobs WHERE status='completed' AND result->>'ingest_verified'='true' AND (idempotency_key=$1 OR idempotency_key LIKE $2) ORDER BY id DESC LIMIT 1`,[baseKey,`${baseKey}:retry:%`]);
+  if(completed[0])return completed[0].idempotency_key;
+  const rows = await engine.executeRaw<{ status: string; verified:string|null }>(
+    `SELECT status,result->>'ingest_verified' verified FROM minion_jobs WHERE idempotency_key = $1 LIMIT 1`,
     [baseKey],
   );
   const status = rows[0]?.status;
-  if (status === 'failed' || status === 'dead' || status === 'cancelled') {
+  if (status === 'failed' || status === 'dead' || status === 'cancelled' || status==='completed'&&rows[0]?.verified!=='true') {
     return `${baseKey}:retry:${nonce}`;
   }
   return baseKey;
@@ -423,47 +412,39 @@ async function materializeExtractedLinks(engine:BrainEngine,opts:CaptureEntities
 
 async function countCaptureLinkGaps(
   engine: BrainEngine,
-  entitySlugs: string[],
-  sourceSlugs: string[],
-  sourceId?: string,
-): Promise<{ isolated: number; unlinkedMentions: number }> {
-  if (entitySlugs.length === 0) return { isolated: 0, unlinkedMentions: 0 };
+  entities:Array<{slug:string;sourceId:string}>,
+  sources:Array<{slug:string;sourceId:string;body:string}>,
+): Promise<{ isolated: number; unlinkedMentions: number;linked:number }> {
+  if (!entities.length) return { isolated: 0, unlinkedMentions: 0,linked:0 };
   const isolatedRows = await engine.executeRaw<{ n: number }>(
     `SELECT count(DISTINCT p.slug)::int AS n
        FROM pages p
       WHERE p.deleted_at IS NULL
-        AND p.slug = ANY($1::text[])
-        AND ($2::text IS NULL OR p.source_id = $2 OR p.source_id = 'default')
+        AND p.source_id||':'||p.slug = ANY($1::text[])
         AND NOT EXISTS (
           SELECT 1 FROM links l
-           WHERE l.from_page_id = p.id OR l.to_page_id = p.id
+           JOIN pages f ON f.id=l.from_page_id AND f.deleted_at IS NULL
+           WHERE l.to_page_id = p.id
         )`,
-    [entitySlugs, sourceId ?? null],
+    [entities.map(entity=>`${entity.sourceId}:${entity.slug}`)],
   );
-  const mentionRows = sourceSlugs.length === 0
-    ? [{ n: 0 }]
-    : await engine.executeRaw<{ n: number }>(
-      `SELECT count(*)::int AS n
-         FROM pages s
-         JOIN pages e
-           ON e.deleted_at IS NULL
-          AND e.slug = ANY($1::text[])
-          AND ($2::text IS NULL OR e.source_id = $2 OR e.source_id = 'default')
-          AND char_length(e.title) >= 2
-          AND strpos(s.compiled_truth, e.title) > 0
-        WHERE s.deleted_at IS NULL
-          AND s.slug = ANY($3::text[])
-          AND ($2::text IS NULL OR s.source_id = $2)
-          AND NOT EXISTS (
-            SELECT 1 FROM links l
-             WHERE (l.from_page_id = s.id AND l.to_page_id = e.id)
-                OR (l.from_page_id = e.id AND l.to_page_id = s.id)
-          )`,
-      [entitySlugs, sourceId ?? null, sourceSlugs],
-    );
+  let unlinkedMentions=0;const linked=new Set<string>();
+  const normalize=(value:string)=>value.replace(/[\s"'“”‘’]/gu,'');
+  for(const entity of entities){
+    const page=await engine.getPage(entity.slug,{sourceId:entity.sourceId});if(!page)continue;
+    const names=[page.title,...(Array.isArray(page.frontmatter.aliases)?page.frontmatter.aliases.filter((x):x is string=>typeof x==='string'):[])];
+    for(const source of sources){
+      if(entity.sourceId!==source.sourceId&&entity.sourceId!=='default')continue;
+      if(!names.some(name=>name.trim().length>=2&&normalize(source.body).includes(normalize(name))))continue;
+      const rows=await engine.executeRaw(`SELECT 1 FROM links l JOIN pages f ON f.id=l.from_page_id JOIN pages t ON t.id=l.to_page_id
+        WHERE f.deleted_at IS NULL AND t.deleted_at IS NULL AND ((f.slug=$1 AND f.source_id=$2 AND t.slug=$3 AND t.source_id=$4)
+          OR(f.slug=$3 AND f.source_id=$4 AND t.slug=$1 AND t.source_id=$2)) LIMIT 1`,[source.slug,source.sourceId,entity.slug,entity.sourceId]);
+      if(rows.length)linked.add(`${entity.sourceId}:${entity.slug}`);else unlinkedMentions++;
+    }
+  }
   return {
     isolated: Number(isolatedRows[0]?.n ?? 0),
-    unlinkedMentions: Number(mentionRows[0]?.n ?? 0),
+    unlinkedMentions,linked:linked.size,
   };
 }
 
@@ -472,7 +453,8 @@ export async function runPhaseCaptureEntities(
   opts: CaptureEntitiesOpts = {},
 ): Promise<PhaseResult> {
   throwIfAborted(opts.signal, '[dream] capture entities');
-  const candidates = await selectEntityCaptureCandidates(engine, opts.sourceId);
+  const selected = await selectEntityCaptureCandidates(engine, opts.sourceId);
+  const candidates = opts.slugs ? selected.filter(page=>opts.slugs!.includes(page.slug)) : selected;
   if (candidates.length === 0) {
     return phaseResult('ok', '没有需要识别实体的资料', {
       pages_seen: 0,
@@ -482,11 +464,11 @@ export async function runPhaseCaptureEntities(
       entities_written: 0,
       written_slugs: [],
       source_slugs: [],
-      skill: 'signal-detector',
+      skill: 'ingest',
     });
   }
   if (opts.dryRun) {
-    return phaseResult('ok', `将按 signal-detector 检查 ${candidates.length} 份资料`, {
+    return phaseResult('ok', `将按 ingest 检查 ${candidates.length} 份资料`, {
       pages_seen: candidates.length,
       pages_submitted: 0,
       pages_remaining: candidates.length,
@@ -494,14 +476,14 @@ export async function runPhaseCaptureEntities(
       entities_written: 0,
       written_slugs: [],
       source_slugs: [],
-      skill: 'signal-detector',
+      skill: 'ingest',
       dry_run: true,
     });
   }
 
   const skillsDir = locateSignalDetectorSkillsDir();
   if (!skillsDir) {
-    const summary = '找不到 signal-detector Skill，深度整理无法识别实体';
+    const summary = '找不到 ingest Skill，深度整理无法识别实体';
     return phaseResult('fail', summary, {
       pages_seen: candidates.length,
       pages_submitted: 0,
@@ -509,7 +491,7 @@ export async function runPhaseCaptureEntities(
       pages_remaining: candidates.length,
       reason: 'skill_not_found',
       stop_reason: 'failure',
-      skill: 'signal-detector',
+      skill: 'ingest',
     }, { class: 'FilesystemError', code: 'skill_not_found', message: summary });
   }
 
@@ -544,7 +526,7 @@ export async function runPhaseCaptureEntities(
       stop_reason: 'model_unavailable',
       unavailable_reason: chosen.reason,
       report_line: summary,
-      skill: 'signal-detector',
+      skill: 'ingest',
     }, { class: 'ModelUnavailable', code: 'model_unavailable', message: '实体识别模型不可用' });
   }
   const providerId = splitProviderModelId(chosen.model).provider;
@@ -557,6 +539,8 @@ export async function runPhaseCaptureEntities(
     execution_mode: executionMode,
     fallback_used: false,
   };
+  const prunedCounts={created:0};
+  const relationsRemoved=await pruneEntityIngestLinks(engine,opts.sourceId,prunedCounts);
   const { runMentionPass } = await import('../mentions/pass.ts');
   const initialMentions=await runMentionPass(engine,{sourceId:opts.sourceId,signal:opts.signal,yieldDuringPhase:opts.yieldDuringPhase});
   if(initialMentions.state==='failed')throw new Error(initialMentions.error);
@@ -580,6 +564,9 @@ export async function runPhaseCaptureEntities(
     ? budgetOpt.outputPriceCnyPerMillion ?? null
     : storedOutput ?? cardPrices.output;
   const ollama = budgetOpt?.ollama ?? isOllamaModel(chosen.model, providerId);
+  const maxDocumentInput=readTokenCap(await engine.getConfig('dream.entity_capture.document_max_input_tokens'),120_000);
+  const maxDocumentOutput=readTokenCap(await engine.getConfig('dream.entity_capture.document_max_output_tokens'),20_000);
+  const maxDocumentTurns=Math.min(12,readTokenCap(await engine.getConfig('dream.entity_capture.document_max_turns'),6));
   const nonce = Date.now();
   const pendingPages: Array<{ page: EntityCaptureCandidate; chunks: EntityCaptureChunk[] }> = [];
   for (const page of candidates) {
@@ -592,7 +579,7 @@ export async function runPhaseCaptureEntities(
     if (pendingChunks.length > 0) pendingPages.push({ page, chunks: pendingChunks });
   }
   if (pendingPages.length === 0) {
-    return phaseResult('ok', '这些资料已经按 signal-detector 识别过实体', {
+    return phaseResult('ok', '这些资料已经按 ingest 识别过实体', {
       ...modelDetails,
       pages_seen: candidates.length,
       pages_submitted: 0,
@@ -608,7 +595,7 @@ export async function runPhaseCaptureEntities(
       entities_written: 0,
       written_slugs: [],
       source_slugs: [],
-      skill: 'signal-detector',
+      skill: 'ingest',
       skills_dir: skillsDir,
       ollama,
     });
@@ -618,13 +605,19 @@ export async function runPhaseCaptureEntities(
   const childQueueName = `dream-inline-${Date.now()}-${randomUUID().slice(0, 8)}`;
   const ownerToken = randomUUID();
   const childIds: number[] = [];
+  const executedChildIds:number[]=[];
   const sourceSlugs = new Set<string>();
   const createdEntitySlugs = new Set<string>();
+  const createdEntityRefs=new Map<string,{slug:string;sourceId:string}>();
+  const sourceRefs=new Map<string,{slug:string;sourceId:string;body:string}>();
   const relationSlugs = new Set<string>(initialRepair.slugs);
   let pagesSubmitted = 0;
   let pagesProcessed = 0;
   let chunksSubmitted = 0;
   let chunksProcessed = 0;
+  let directLinks = 0;
+  const recognizedEntities=new Map<string,{slug:string;sourceId:string}>();
+  const unresolvedReferences:unknown[]=[];
   let inputTokens = 0;
   let outputTokens = 0;
   let usageKnown = false;
@@ -632,7 +625,7 @@ export async function runPhaseCaptureEntities(
   let knownCost = ollama ? 0 : 0;
   let sawPricedUsage = ollama;
   let failedChunks = 0;
-  let mentionLinks = initialMentions.created;
+  let mentionLinks = initialMentions.created+prunedCounts.created;
   let extractLinks = initialRepair.extracted;
   let nerLinks = initialRepair.ner;
   let relationsRefreshed = false;
@@ -641,7 +634,7 @@ export async function runPhaseCaptureEntities(
   let failureStop = false;
   let budgetStop: 'tokens' | 'cost' | null = null;
   const failedPageSlugs = new Set<string>();
-  const alignSources: Array<{ slug: string; body: string }> = [];
+  const verifiedChildIds:number[]=[];
   const rememberRelationError = (error: unknown) => {
     if (opts.signal?.aborted) throw error;
     failureStop = true;
@@ -649,14 +642,13 @@ export async function runPhaseCaptureEntities(
     relationError = relationError ? `${relationError}；${message}` : message;
   };
   const alignWrittenGraph = async (extra: string[]) => {
-    const entitySlugs = [...new Set([...createdEntitySlugs, ...extra])];
-    if (entitySlugs.length === 0 || opts.signal?.aborted) return;
+    const refs=new Map([...createdEntityRefs,...recognizedEntities]);
+    for(const reference of extra){const colon=reference.indexOf(':'),sourceId=colon<0?opts.sourceId??'default':reference.slice(0,colon),slug=colon<0?reference:reference.slice(colon+1);refs.set(`${sourceId}:${slug}`,{slug,sourceId});}
+    if (refs.size === 0 || opts.signal?.aborted) return;
     try {
-      await alignCapturedEntityGraph(engine, {
-        sourceId: opts.sourceId,
-        entitySlugs,
-        sources: alignSources,
-      });
+      const groups=new Map<string,string[]>();
+      for(const ref of refs.values())groups.set(ref.sourceId,[...(groups.get(ref.sourceId)??[]),ref.slug]);
+      for(const [sourceId,entitySlugs] of groups)await alignCapturedEntityGraph(engine,{sourceId,entitySlugs,sources:[...sourceRefs.values()].filter(source=>source.sourceId===sourceId||sourceId==='default').map(source=>({slug:`${source.sourceId}:${source.slug}`,body:source.body}))});
     } catch (error) {
       rememberRelationError(error);
     }
@@ -685,7 +677,8 @@ export async function runPhaseCaptureEntities(
         }
         const item = pendingPages[cursor]!;
         cursor += 1;
-        alignSources.push({ slug: item.page.slug, body: item.page.body });
+        sourceRefs.set(`${item.page.sourceId}:${item.page.slug}`,item.page);
+        let documentInput=0,documentOutput=0,documentTurns=0;
         let submittedForPage = 0;
         let completedForPage = 0;
         const entityIndex = await loadCaptureEntityIndex(engine, opts.sourceId);
@@ -700,11 +693,22 @@ export async function runPhaseCaptureEntities(
             entity.sourceId === chunk.sourceId || entity.sourceId === 'default',
           ), { limit: ENTITY_CAPTURE_CANDIDATE_LIMIT, sourceId: chunk.sourceId });
           const baseKey = entityCaptureIdempotencyKey(chunk, chunk.chunkIndex, chunk.chunkBody);
+          if(documentTurns>=maxDocumentTurns){budgetStop='tokens';modelError='本资料达到模型轮数上限，未完成分块可续跑';break;}
           const idempotencyKey = await retryableKey(engine, baseKey, nonce);
+          const acknowledged=await acknowledgedIngestEntities(engine,chunk,entityIndex);
           const data: SubagentHandlerData = {
-            prompt: buildEntityCapturePrompt(chunk, related),
+            prompt: buildEntityCapturePrompt(chunk, related,acknowledged),
             model: chosen.model,
-            max_turns: 20,
+            max_turns: maxDocumentTurns-documentTurns,
+            no_self_fix: true,
+            system: readIngestContract(skillsDir),
+            ingest_context: {slug:chunk.slug,sourceId:chunk.sourceId,body:chunk.body,chunkBody:chunk.chunkBody,acknowledged:acknowledged.map(entity=>`${entity.sourceId}:${entity.slug}`)},
+            usage_limits: {
+              input: Math.max(0,Math.min(maxInputTokens-inputTokens,maxDocumentInput-documentInput)),
+              output: Math.max(0,Math.min(maxOutputTokens-outputTokens,maxDocumentOutput-documentOutput)),
+              cost_cny: ollama || costCapCny==null ? null : Math.max(0,costCapCny-knownCost),
+              input_price: inputPrice,output_price:outputPrice,
+            },
             allowed_tools: [...ENTITY_CAPTURE_TOOLS],
             allowed_slug_prefixes: [...ENTITY_CAPTURE_SLUG_PREFIXES],
             source_id: chunk.sourceId,
@@ -715,7 +719,7 @@ export async function runPhaseCaptureEntities(
             'subagent',
             data as unknown as Record<string, unknown>,
             {
-              max_stalled: 2,
+              max_stalled: 0,
               idempotency_key: idempotencyKey,
               timeout_ms: 8 * 60 * 1000,
               queue: childQueueName,
@@ -728,13 +732,10 @@ export async function runPhaseCaptureEntities(
           sourceSlugs.add(chunk.slug);
           submittedForPage += 1;
           chunksSubmitted += 1;
-          if (child.status === 'completed') {
-            completedForPage += 1;
-            chunksProcessed += 1;
-            continue;
-          }
           childIds.push(child.id);
-          await runSubagentsInline(
+          const reused=child.status==='completed';
+          if(!reused)executedChildIds.push(child.id);
+          if(child.status!=='completed')await runSubagentsInline(
             engine,
             queue,
             childQueueName,
@@ -762,7 +763,7 @@ export async function runPhaseCaptureEntities(
             }
             throw error;
           }
-          const reportedUsage = usageFromJobResult(job.result);
+          const reportedUsage = reused?{present:true,input:0,output:0}:usageFromJobResult(job.result);
           const usage = reportedUsage.present ? reportedUsage : {
             present: job.tokens_input > 0 || job.tokens_output > 0,
             input: job.tokens_input,
@@ -779,6 +780,7 @@ export async function runPhaseCaptureEntities(
             usageKnown = true;
             inputTokens += usage.input;
             outputTokens += usage.output;
+            documentInput+=usage.input;documentOutput+=usage.output;
           }
           if (ollama) {
             knownCost = 0;
@@ -787,14 +789,22 @@ export async function runPhaseCaptureEntities(
             knownCost += chunkCost;
             sawPricedUsage = true;
           }
-          if (job.status !== 'completed') {
+          const result=job.result as any;
+          documentTurns+=reused?0:Number(result?.turns_count??0);
+          directLinks+=reused?0:Number(result?.ingest_links_created??0);
+          for(const ref of result?.ingest_entities??[])recognizedEntities.set(JSON.stringify([ref.sourceId,ref.slug]),ref);
+          unresolvedReferences.push(...(result?.ingest_unresolved??[]));
+          if (job.status !== 'completed' || result?.ingest_verified!==true || (result?.stop_reason && result.stop_reason!=='end_turn')) {
             failedChunks += 1;
             failedPageSlugs.add(chunk.slug);
             failureStop = true;
-            modelError = job.error_text ?? `实体识别子任务 ${job.id} ${job.status}`;
+            if(job.error_text?.includes('ingest_budget_tokens')){budgetStop='tokens';failureStop=false;}
+            if(job.error_text?.includes('ingest_budget_cost')){budgetStop='cost';failureStop=false;}
+            modelError = job.error_text ?? `实体识别子任务 ${job.id} 未通过 ingest 读回验收（${result?.stop_reason??job.status}）`;
             break;
           }
           completedForPage += 1;
+          verifiedChildIds.push(child.id);
           chunksProcessed += 1;
         }
         if (submittedForPage > 0) pagesSubmitted += 1;
@@ -804,7 +814,7 @@ export async function runPhaseCaptureEntities(
       const afterIndex = await loadCaptureEntityIndex(engine, opts.sourceId);
       const known = new Set(beforeIndex.map(entity => `${entity.sourceId}\0${entity.slug}`));
       for (const entity of afterIndex) {
-        if (!known.has(`${entity.sourceId}\0${entity.slug}`)) createdEntitySlugs.add(entity.slug);
+        if (!known.has(`${entity.sourceId}\0${entity.slug}`)){createdEntitySlugs.add(entity.slug);createdEntityRefs.set(`${entity.sourceId}:${entity.slug}`,entity);}
       }
       const needles = deltaCaptureNeedles(beforeIndex, afterIndex);
       if (needles.length > 0 && !opts.signal?.aborted) {
@@ -825,27 +835,39 @@ export async function runPhaseCaptureEntities(
       if (budgetStop || failureStop) break;
     }
 
-    const written = childIds.length === 0
+    const written = executedChildIds.length === 0
       ? []
       : await engine.executeRaw<{ slug: string }>(
-        `SELECT DISTINCT COALESCE(input->>'slug', (input #>> '{}')::jsonb->>'slug') AS slug
+        `SELECT DISTINCT COALESCE(output->>'slug',(output #>> '{}')::jsonb->>'slug',input->>'slug', (input #>> '{}')::jsonb->>'slug') AS slug
            FROM subagent_tool_executions
           WHERE job_id = ANY($1::int[])
             AND tool_name = 'brain_put_page'
-            AND status = 'complete'`,
-        [childIds],
+            AND status = 'complete' AND COALESCE(output->>'status',(output #>> '{}')::jsonb->>'status','') NOT IN ('merge_required','unchanged')`,
+        [executedChildIds],
       );
     const writtenSlugs = written.map(row => row.slug).filter(slug => typeof slug === 'string' && slug.length > 0).sort();
     await alignWrittenGraph(writtenSlugs);
+    if(verifiedChildIds.length&&!opts.signal?.aborted){
+      try{
+        const repaired=await repairCaptureRelations(engine,opts,[...recognizedEntities.values()]);
+        nerLinks+=repaired.ner;extractLinks+=repaired.extracted;
+        for(const slug of repaired.slugs)relationSlugs.add(slug);
+      }catch(error){rememberRelationError(error);}
+    }
+    await engine.executeRaw("UPDATE minion_jobs SET result=jsonb_set(result,'{graph_reconciled}',$2::jsonb) WHERE id=ANY($1::int[])",[verifiedChildIds,JSON.stringify(!relationError)]);
+    if(relationError)pagesProcessed=0;
     const failedPages = failedPageSlugs.size;
     const pagesRemaining = pendingPages.length - pagesProcessed;
-    const entitiesCreated = createdEntitySlugs.size;
-    const relationsCreated = mentionLinks + nerLinks + extractLinks;
-    const recognized = [...createdEntitySlugs];
+    const entitiesCreated = createdEntityRefs.size;
+    const [toolLinks]=executedChildIds.length ? await engine.executeRaw<{n:number}>(`SELECT COALESCE(sum((o->>'ingest_links_created')::int),0)::int n FROM
+      (SELECT CASE WHEN jsonb_typeof(output)='string' THEN (output #>> '{}')::jsonb ELSE output END o FROM subagent_tool_executions WHERE job_id=ANY($1::int[]) AND status='complete'
+        AND tool_name IN ('brain_put_page','brain_add_timeline_entry','brain_add_link')) x WHERE o ? 'ingest_links_created'`,[executedChildIds]) : [{n:0}];
+    const relationsCreated = mentionLinks + nerLinks + extractLinks + directLinks + (toolLinks?.n??0);
+    const recognized = [...new Map([...createdEntityRefs,...recognizedEntities].map(([,value])=>[`${value.sourceId}:${value.slug}`,value])).values()];
     const gaps = opts.dryRun
-      ? { isolated: 0, unlinkedMentions: 0 }
-      : await countCaptureLinkGaps(engine, recognized, [...sourceSlugs], opts.sourceId);
-    const linkedEntities = Math.max(0, recognized.length - gaps.isolated);
+      ? { isolated: 0, unlinkedMentions: 0,linked:0 }
+      : await countCaptureLinkGaps(engine, recognized,[...sourceRefs.values()]);
+    const linkedEntities = gaps.linked;
     const costCny = ollama ? 0 : (sawPricedUsage ? Number(knownCost.toFixed(6)) : null);
     const stopReason: CaptureStopReason = failureStop
       ? 'failure'
@@ -856,8 +878,8 @@ export async function runPhaseCaptureEntities(
           : 'completed';
     const cleanStatus: PhaseResult['status'] = stopReason === 'failure'
       ? (writtenSlugs.length > 0 || pagesProcessed > 0 ? 'warn' : 'fail')
-      : 'ok';
-    const status: PhaseResult['status'] = cleanStatus === 'ok' && (gaps.isolated > 0 || gaps.unlinkedMentions > 0)
+      : pagesRemaining>0 ? 'warn' : 'ok';
+    const status: PhaseResult['status'] = cleanStatus === 'ok' && (gaps.isolated > 0 || gaps.unlinkedMentions > 0 || unresolvedReferences.length>0)
       ? 'warn'
       : cleanStatus;
     const reportLine = captureReportLine({
@@ -899,6 +921,12 @@ export async function runPhaseCaptureEntities(
       ollama,
       entities_written: entitiesCreated,
       relations_created: relationsCreated,
+      relations_removed: relationsRemoved,
+      direct_links_created: directLinks+(toolLinks?.n??0),
+      unresolved_references: unresolvedReferences,
+      document_max_turns:maxDocumentTurns,
+      document_max_input_tokens:maxDocumentInput,
+      cost_cap_enforced:ollama||inputPrice!=null&&outputPrice!=null,
       mention_links_created: mentionLinks,
       ner_links_created: nerLinks,
       extract_links_created: extractLinks,
@@ -911,7 +939,7 @@ export async function runPhaseCaptureEntities(
       relations_refreshed: relationsRefreshed,
       written_slugs: writtenSlugs,
       source_slugs: [...sourceSlugs].sort(),
-      skill: 'signal-detector',
+      skill: 'ingest',
       skills_dir: skillsDir,
     }, stopReason === 'failure'
       ? { class: 'LLMError', code: 'failure', message: summary }

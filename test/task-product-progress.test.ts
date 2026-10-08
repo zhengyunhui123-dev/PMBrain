@@ -4,6 +4,14 @@ import { resumeMaintenanceCheckpoint } from '../src/product/tasks/checkpoint.ts'
 import type { MaintenanceCheckpoint } from '../src/product/tasks/types.ts';
 
 describe('任务的产品进度', () => {
+  test('零份资料通过验收时不能显示100%，未知价格明确说明费用上限无法核算',()=>{
+    const adapter=new TaskProgressAdapter('dream_full');adapter.plan(['capture_entities','extract']);
+    const result={status:'partial',phases:[{phase:'capture_entities',status:'warn',details:{pages_processed:0,pages_remaining:1482,stop_reason:'tokens',cost_cny:null,cost_cap_cny:5,cost_cap_enforced:false,unresolved_references:[{target:'missing'}]}}]};
+    const view=finishTaskProgress(adapter.view,'completed',result,null);
+    expect(view.percent).toBe(0);expect(view.processed).toBe(0);expect(view.total).toBe(1482);
+    expect(view.stage).toContain('部分完成');expect(view.metrics).toContainEqual({label:'配置费用上限（无法核算）',value:5});
+    expect(view.metrics).toContainEqual({label:'未解析引用',value:1});
+  });
   test('深度整理保存观点产出、长期判断和未完成页，旧结果重读仍能显示',()=>{
     const adapter=new TaskProgressAdapter('dream_full');adapter.plan(['propose_takes','consolidate']);
     const result={status:'partial',totals:{pages_added:0,proposals_inserted:374,consolidate_takes_written:8,facts_consolidated:16},phases:[

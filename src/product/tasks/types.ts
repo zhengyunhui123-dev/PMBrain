@@ -38,6 +38,7 @@ export interface ImportTaskInput {
 }
 
 export interface DreamTaskInput {
+  slugs?: string[];
   checkpoint?: MaintenanceCheckpoint;
   preset?: 'quick' | 'full' | 'meeting';
   phase?: CyclePhase | 'all' | string;

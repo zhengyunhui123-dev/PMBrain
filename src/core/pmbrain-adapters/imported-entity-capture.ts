@@ -8,6 +8,9 @@ export async function enqueueImportedEntityCapture(engine: BrainEngine, modelRea
   if (!requests.length || !(await modelReady())) return [];
   const submitted:number[]=[];
   for(const request of requests) {
+    let slugs:string[]|undefined;
+    try{const parsed=JSON.parse(request.value);if(Array.isArray(parsed.slugs))slugs=parsed.slugs.filter((x:unknown):x is string=>typeof x==='string');}catch{}
+    if(!slugs?.length)continue;
     const job=await engine.transaction(async tx=>{
       await tx.executeRaw('SELECT pg_advisory_xact_lock(hashtext($1))',[`entity-capture:${request.source_id}`]);
       const [pending]=await tx.executeRaw<{value:string}>('SELECT value FROM config WHERE key=$1 FOR UPDATE',[request.key]);
@@ -17,7 +20,7 @@ export async function enqueueImportedEntityCapture(engine: BrainEngine, modelRea
         AND status IN ('waiting','active','waiting-children') LIMIT 1`,[request.source_id]);
       if(busy.length)return null;
       const queued=await new MinionQueue(tx).add('pmbrain-product-task',{
-        kind:'dream_capture_entities',trigger:'scheduled',task:{type:'dream',input:{phase:'capture_entities',sourceId:request.source_id}},
+        kind:'dream_capture_entities',trigger:'scheduled',task:{type:'dream',input:{phase:'capture_entities',sourceId:request.source_id,slugs}},
       },{queue:'pmbrain-product',idempotency_key:`imported-entities:${request.source_id}:${request.value}`,max_attempts:1,timeout_ms:6*60*60_000});
       await tx.executeRaw('DELETE FROM config WHERE key=$1 AND value=$2',[request.key,request.value]);
       return queued;
