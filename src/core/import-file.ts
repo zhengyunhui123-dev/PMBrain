@@ -1,4 +1,5 @@
 import { requestImportedEntityCapture } from './pmbrain-adapters/entity-capture-request.ts';
+import {enqueueImportedEntityCapture} from './pmbrain-adapters/imported-entity-capture.ts';
 import { readFileSync, statSync, lstatSync } from 'fs';
 import { basename, extname } from 'path';
 import { createHash } from 'crypto';
@@ -1123,6 +1124,8 @@ export async function importFromContent(
     logLargeDocumentProgress(slug, largeProgress);
   }
 
+  await requestImportedEntityCapture(engine,sourceId??'default',{slug,type:pageWrite.type,compiled_truth:pageWrite.compiled_truth,frontmatter:pageWrite.frontmatter??{}});
+  await enqueueImportedEntityCapture(engine);
   return {
     slug,
     status: 'imported',

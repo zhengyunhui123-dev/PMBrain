@@ -37,7 +37,7 @@
 
 import { createHash } from 'node:crypto';
 import type { BrainEngine, LinkBatchInput } from '../engine.ts';
-import { isCrossSourceLinksEnabled, CJK_PLAIN_MENTION_BLOCKLIST } from '../pmbrain-adapters/mention-policy.ts';
+import { isCrossSourceLinksEnabled, readChineseMentionStopwords } from '../pmbrain-adapters/mention-policy.ts';
 import {
   buildGazetteer, findMentionedEntities, gazetteerEntryKeys, tokenizeTitle,
   type Gazetteer, type GazetteerEntry, type GazetteerEntryKey,
@@ -109,9 +109,9 @@ async function sourcesInScope(engine: BrainEngine, sourceId?: string): Promise<s
   return rows.map(r => r.id);
 }
 
-function policyFingerprint(types: string[], crossSource: boolean, policy: MentionPolicy): string {
+function policyFingerprint(types: string[], crossSource: boolean, policy: MentionPolicy, chineseStopwords:string[]): string {
   return createHash('sha256').update(JSON.stringify({
-    types, crossSource, ignore: [...policy.ignore].map(n => n.toLowerCase()).sort(), pmbrainBlocked:CJK_PLAIN_MENTION_BLOCKLIST,
+    types, crossSource, ignore: [...policy.ignore].map(n => n.toLowerCase()).sort(), pmbrainBlocked:chineseStopwords,
   })).digest('hex').slice(0, 16);
 }
 
@@ -493,7 +493,8 @@ export async function runMentionPass(engine: BrainEngine, opts: MentionPassOpts 
     return { ...result, state: 'failed', error: message, remaining: await countMentionDuePages(engine, opts.sourceId) };
   }
   const allSources = await sourcesInScope(engine);
-  const fingerprints = new Map<string, string>(catalogSources.map(s => [s, policyFingerprint(types.get(s)!, allowCrossSource, policy)]));
+  const chineseStopwords=await readChineseMentionStopwords(engine);
+  const fingerprints = new Map<string, string>(catalogSources.map(s => [s, policyFingerprint(types.get(s)!, allowCrossSource, policy,chineseStopwords)]));
   const stored = new Map((await engine.executeRaw<{ source_id: string; policy_fingerprint: string | null }>(
     'SELECT source_id, policy_fingerprint FROM mention_index_status WHERE source_id = ANY($1::text[])', [catalogSources]))
     .map(r => [r.source_id, r.policy_fingerprint]));

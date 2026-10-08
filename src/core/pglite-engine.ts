@@ -2047,11 +2047,8 @@ export class PGLiteEngine implements BrainEngine {
 
     // $1 = qLike (escaped for ILIKE)
     // $2 = qRaw  (raw for position()/replace() ranking arithmetic)
-    // $3 = inner limit (dedup path) OR final limit (chunk-grain path)
-    // $4 = final limit (dedup path only) — see callers
-    // $5 = offset (dedup path)  /  $4 = offset (chunk-grain path)
     const params: unknown[] = dedup
-      ? [qLikePatterns, qRaw, innerLimit, limit, offset]
+      ? [qLikePatterns, qRaw, limit, offset]
       : [qLike, qRaw, limit, offset];
 
     let extraFilter = '';
@@ -2089,7 +2086,7 @@ export class PGLiteEngine implements BrainEngine {
         CASE WHEN p.title ILIKE ANY($1::text[]) THEN 8 ELSE 0 END +
         CASE WHEN p.slug ILIKE ANY($1::text[]) THEN 6 ELSE 0 END +
         CASE WHEN cc.chunk_text ILIKE ANY($1::text[]) THEN 4 ELSE 0 END +
-        CASE WHEN p.compiled_truth ILIKE ANY($1::text[]) THEN 2 ELSE 0 END +
+        CASE WHEN body_match.id IS NOT NULL THEN 2 ELSE 0 END +
         COALESCE((LENGTH(cc.chunk_text) - LENGTH(REPLACE(cc.chunk_text, $2, ''))) / NULLIF(LENGTH($2), 0)::real, 0)
       )
       * ${sourceFactorCase}
@@ -2102,39 +2099,48 @@ export class PGLiteEngine implements BrainEngine {
     if (dedup) {
       const { rows } = await this.db.query(
         `WITH chunk_text_candidates AS MATERIALIZED (
-           SELECT cc.id AS chunk_id
+           SELECT DISTINCT ON (p.id) cc.id AS chunk_id
            FROM content_chunks cc
            JOIN pages p ON p.id = cc.page_id
            JOIN sources s ON s.id = p.source_id
            WHERE cc.chunk_text ILIKE ANY($1::text[]) ${detailFilter}${extraFilter} ${hardExcludeClause} ${visibilityClause}
              AND cc.modality = 'text'
+           ORDER BY p.id, (LENGTH(cc.chunk_text)-LENGTH(REPLACE(cc.chunk_text,$2,''))) DESC, cc.id
            LIMIT ${candidateLimit}
          ),
+         compiled_truth_pages AS MATERIALIZED (
+           SELECT p.id FROM pages p JOIN sources s ON s.id=p.source_id
+           WHERE p.compiled_truth ILIKE ANY($1::text[]) ${hardExcludeClause} ${visibilityClause}
+         ),
          compiled_truth_candidates AS MATERIALIZED (
-           SELECT cc.id AS chunk_id
+           SELECT DISTINCT ON (p.id) cc.id AS chunk_id
            FROM pages p
+           JOIN compiled_truth_pages body_match ON body_match.id=p.id
            JOIN content_chunks cc ON cc.page_id = p.id
            JOIN sources s ON s.id = p.source_id
-           WHERE p.compiled_truth ILIKE ANY($1::text[]) ${detailFilter}${extraFilter} ${hardExcludeClause} ${visibilityClause}
+           WHERE true ${detailFilter}${extraFilter} ${hardExcludeClause} ${visibilityClause}
              AND cc.modality = 'text'
+           ORDER BY p.id, (LENGTH(cc.chunk_text)-LENGTH(REPLACE(cc.chunk_text,$2,''))) DESC, cc.id
            LIMIT ${candidateLimit}
          ),
          title_candidates AS MATERIALIZED (
-           SELECT cc.id AS chunk_id
+           SELECT DISTINCT ON (p.id) cc.id AS chunk_id
            FROM pages p
            JOIN content_chunks cc ON cc.page_id = p.id
            JOIN sources s ON s.id = p.source_id
            WHERE p.title ILIKE ANY($1::text[]) ${detailFilter}${extraFilter} ${hardExcludeClause} ${visibilityClause}
              AND cc.modality = 'text'
+           ORDER BY p.id, (LENGTH(cc.chunk_text)-LENGTH(REPLACE(cc.chunk_text,$2,''))) DESC, cc.id
            LIMIT ${candidateLimit}
          ),
          slug_candidates AS MATERIALIZED (
-           SELECT cc.id AS chunk_id
+           SELECT DISTINCT ON (p.id) cc.id AS chunk_id
            FROM pages p
            JOIN content_chunks cc ON cc.page_id = p.id
            JOIN sources s ON s.id = p.source_id
            WHERE p.slug ILIKE ANY($1::text[]) ${detailFilter}${extraFilter} ${hardExcludeClause} ${visibilityClause}
              AND cc.modality = 'text'
+           ORDER BY p.id, (LENGTH(cc.chunk_text)-LENGTH(REPLACE(cc.chunk_text,$2,''))) DESC, cc.id
            LIMIT ${candidateLimit}
          ),
          candidate_chunks AS (
@@ -2159,13 +2165,12 @@ export class PGLiteEngine implements BrainEngine {
            JOIN content_chunks cc ON cc.id = candidate.chunk_id
            JOIN pages p ON p.id = cc.page_id
            JOIN sources s ON s.id = p.source_id
-           ORDER BY score DESC
-           LIMIT $3
+           LEFT JOIN compiled_truth_pages body_match ON body_match.id=p.id
          ),
          ${buildBestPerPagePoolCte('ranked')}
          SELECT * FROM best_per_page
          ORDER BY score DESC, page_id ASC, chunk_id ASC
-         LIMIT $4 OFFSET $5`,
+         LIMIT $3 OFFSET $4`,
         params,
       );
       return (rows as Record<string, unknown>[]).map(rowToSearchResult);

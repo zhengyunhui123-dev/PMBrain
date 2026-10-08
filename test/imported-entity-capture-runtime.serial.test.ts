@@ -52,7 +52,7 @@ test('an import survives runtime restart, automatically creates an entity and ex
   const file=join(root,'input.md');
   writeFileSync(file,'---\ntitle: 导入资料\ntype: note\n---\n刘慈欣创作了三体，这是导入的中文资料。');
   expect((await importFile(engine,file,'notes/input.md',{sourceId:'auto-capture',noEmbed:true})).status).toBe('imported');
-  expect(await engine.getConfig('dream.entity_capture.pending.auto-capture')).not.toBeNull();
+  expect(await engine.executeRaw("SELECT id FROM minion_jobs WHERE queue='pmbrain-product' AND data->'task'->'input'->>'sourceId'='auto-capture'")).toHaveLength(1);
   runtime=new ProductTaskRuntime(engine); await runtime.start();
   let job:{id:number;status:string;error_text:string|null}|undefined;
   const deadline=Date.now()+45_000;
@@ -67,7 +67,7 @@ test('an import survives runtime restart, automatically creates an entity and ex
   expect(links).toContainEqual({from_slug:'notes/input',to_slug:'people/liu'});
   const count=calls;
   await runtime.close(); runtime=new ProductTaskRuntime(engine); await runtime.start();
-  await Bun.sleep(2100);
+  await Bun.sleep(300);
   expect(calls).toBe(count);
   expect((await runtime.listRuns()).some(run=>run.kind==='dream_capture_entities'&&run.trigger==='scheduled'&&run.status==='completed')).toBe(true);
   expect(await engine.getConfig('dream.entity_capture.pending.auto-capture')).toBeNull();

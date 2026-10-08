@@ -38,7 +38,7 @@ import { stripCodeBlocks } from './link-extraction.ts';
 // #4222: shared generic-token reject list — same list gates enrichEntity
 // minting and drives the junk_entity_hubs doctor check.
 import { isGenericEntityToken } from './entity-name-quality.ts';
-import { isCrossSourceLinksEnabled, isBlockedPlainMentionSurface } from './pmbrain-adapters/mention-policy.ts';
+import { isCrossSourceLinksEnabled, isBlockedPlainMentionSurface, readChineseMentionStopwords } from './pmbrain-adapters/mention-policy.ts';
 import { ALWAYS_LINKABLE_TYPES, linkableTypesFor, loadSourcePack, readMentionPolicy, type MentionPolicy } from './mentions/policy.ts';
 
 /**
@@ -475,6 +475,7 @@ export async function buildGazetteer(
   opts: BuildGazetteerOpts = {},
 ): Promise<Gazetteer> {
   const policy = opts.policy ?? await readMentionPolicy(engine);
+  const chineseStopwords=await readChineseMentionStopwords(engine);
   if (opts.extraIgnore?.length) policy.ignore = [...policy.ignore, ...opts.extraIgnore];
   const dropped = opts.dropped;
   const drop = (d: DroppedName) => { dropped?.push(d); };
@@ -661,6 +662,7 @@ export async function buildGazetteer(
   }
   for (const bucket of gazetteer.values()) for (const entry of bucket) {
     entry.ambiguous = (owners.get(entry.source_id + '\0' + (entry.matchText ?? entry.title).normalize('NFKC').trim().replace(/\s+/g,' ').toLowerCase())?.size ?? 0) > 1;
+    entry.plainMentionBlocked=isBlockedPlainMentionSurface(entry.matchText??entry.title,chineseStopwords);
   }
   return gazetteer;
 }
@@ -818,7 +820,7 @@ export function findMentionedEntities(
       continue;
     }
 
-    if (matched.ambiguous || (!opts.includeBlockedSurfaces && (matched.plainMentionBlocked || isBlockedPlainMentionSurface(matched.matchText ?? matched.title)))) { i += matchedTokens; continue; }
+    if (matched.ambiguous || (!opts.includeBlockedSurfaces && (matched.plainMentionBlocked ?? isBlockedPlainMentionSurface(matched.matchText ?? matched.title)))) { i += matchedTokens; continue; }
     // Guards.
     if (matched.source_id === opts.fromSourceId && matched.slug === opts.fromSlug) {
       i += matchedTokens;

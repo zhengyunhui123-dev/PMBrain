@@ -1,9 +1,9 @@
 {
   "schema_version": 1,
-  "reviewed_at": "2026-10-07",
-  "product_version": "1.4.41",
+  "reviewed_at": "2026-10-08",
+  "product_version": "1.4.42",
   "subsystem": "entity-relations",
-  "status": "implemented-local-verified-beta",
+  "status": "release-blocked-pending-exact-sha-ci",
   "upstream": {
     "version": "0.60.102.0",
     "commit": "5b5891069413b28b2fe3a50675116d67d5a1e145",
@@ -47,7 +47,12 @@
     "existing PMBrain Dream phase order, model routing, token and CNY budget",
     "wanted links use the existing PMBrain markdown parser; qualified Source intent is retained",
     "an established empty entity catalog invalidates only matching pages when its first entity appears",
-    "explicitly linked pairs become due so obsolete plain-mention duplicates are removed"
+    "explicitly linked pairs become due so obsolete plain-mention duplicates are removed",
+    "column-specific search, generation and revision triggers avoid rereading Chinese bodies for metadata writes",
+    "revision backfill batches of 100 with progress, cancellation and durable restart",
+    "successful imports enqueue directly; startup and task completion drain durable pending requests",
+    "configurable mentions.chinese_stopwords invalidates index policy fingerprints",
+    "explicit links run before plain mentions in the stale sweep to avoid duplicate edges"
   ],
   "deferred": [
     "whole-repository GBrain upgrade",
@@ -57,7 +62,8 @@
     "entity-card and wanted-pages product UI; coverage/referrers modules have no new menu",
     "automatic legacy concept-page retyping",
     "production 44-percent precision and page-770 stall diagnosis",
-    "exact pushed-SHA GitHub CI and Windows release package"
+    "exact pushed-SHA GitHub CI and Windows release package",
+    "upstream attendance evidence gate; existing PMBrain attendance parser retained"
   ],
   "verification": {
     "files": [
@@ -67,10 +73,30 @@
       "test/extract-by-mention-resume.test.ts",
       "test/dream-relation-integration.serial.test.ts",
       "test/entity-capture-skill.serial.test.ts",
-      "test/entity-capture-budget.serial.test.ts"
+      "test/entity-capture-budget.serial.test.ts",
+      "test/database-write-amplification.serial.test.ts",
+      "test/cjk-page-candidates.test.ts",
+      "test/mentions-pass.test.ts",
+      "test/mentions-parity.serial.test.ts",
+      "test/page-revision-backfill.test.ts",
+      "test/page-state-engine.test.ts",
+      "test/derived-link-reconciliation.test.ts",
+      "test/wanted-links.test.ts"
     ],
     "check": "bun run check:gbrain-subsystems",
-    "upstream_check": "bun run check:gbrain-subsystems --upstream D:/cursor-claude/gbrain"
+    "upstream_check": "bun run check:gbrain-subsystems --upstream D:/cursor-claude/gbrain",
+    "real_copy": "D:/pmbrain-acceptance/p0-20261008-142",
+    "real_page_count": 3142,
+    "real_interrupt_copy": "D:/pmbrain-acceptance/p0-20261008-interrupt",
+    "real_upgrade_schema": 134,
+    "real_checks": [
+      "3142-page upgrade",
+      "100-page cancel and new-process resume",
+      "100-page process.exit and new-process resume",
+      "13 original table hashes unchanged",
+      "new/edit/later-target/delete/recreate lifecycle",
+      "six Chinese query before/after regression; top20 may reorder"
+    ]
   },
   "files": [
     {
@@ -91,7 +117,7 @@
       "path": "src/core/mentions/pass.ts",
       "upstream_path": "src/core/mentions/pass.ts",
       "mode": "adapted",
-      "sha256": "3d92ab52772f1591b9191e4fdfb56f09a9cdacafbb769bd44cb9fb23e31c197e",
+      "sha256": "b9d2ac4dd5cd89344bee9a75c3ac30f7c898a901887f9942e330b2bd332eae9d",
       "upstream_sha256": "fde8f033481a3fa776b235dbf40a899196c09ee6f20b8c3adf66f724a0d3e6e6"
     },
     {
@@ -133,7 +159,7 @@
       "path": "src/core/by-mention.ts",
       "upstream_path": "src/core/by-mention.ts",
       "mode": "adapted",
-      "sha256": "4664e3669b29bdaa142542c46899f6d921338393ac688260b1a8c772d34b6804",
+      "sha256": "5ca97788ca707d068f418abf733d1d2d4496937b12af749483739f71d73ac9ef",
       "upstream_sha256": "9c3fa3d8131dca7d28be8338530a2acb3267ced62170c26b790b011f87716f0f"
     },
     {
@@ -195,15 +221,15 @@
     {
       "path": "src/core/page-state/schema.ts",
       "upstream_path": "src/core/page-state/schema.ts",
-      "mode": "copied",
-      "sha256": "7b898fa02f943f7bb4688457b33916e784103343abea61d74861490f73b8ca6c",
+      "mode": "adapted",
+      "sha256": "97798c1961075ba55426158ce9a2680863bdf43b5d90c4e7b6d756d5b9963741",
       "upstream_sha256": "7b898fa02f943f7bb4688457b33916e784103343abea61d74861490f73b8ca6c"
     },
     {
       "path": "src/core/page-state/revision-backfill-schema.ts",
       "upstream_path": "src/core/page-state/revision-backfill-schema.ts",
-      "mode": "copied",
-      "sha256": "5827a613bb63c3a3a45c2900eb89545e602752ca32cba1d663063a89553c906a",
+      "mode": "adapted",
+      "sha256": "c0b0a43a35d3c564dfa7c600b114a34b3694f40d4bd506eaa549ecd14e21632b",
       "upstream_sha256": "5827a613bb63c3a3a45c2900eb89545e602752ca32cba1d663063a89553c906a"
     },
     {
@@ -261,6 +287,94 @@
       "mode": "copied",
       "sha256": "a111bcf817c4a41a0c037583b2e65d0ec3353808f5282fc151e7c0dea3bdfedb",
       "upstream_sha256": "a111bcf817c4a41a0c037583b2e65d0ec3353808f5282fc151e7c0dea3bdfedb"
+    },
+    {
+      "path": "src/core/link-reconciliation.ts",
+      "upstream_path": "src/core/link-reconciliation.ts",
+      "mode": "adapted",
+      "sha256": "6363a69565d0707a41fdfcddd81ea7691003e84e1f4ab80609516f3b483fe09a",
+      "upstream_sha256": "758f40bb70004f5307abd1a0a94af3ef7b82d8f6abe5aa2b5f95e9f2d0a5cbc8"
+    },
+    {
+      "path": "src/core/extract-timeline-from-meetings.ts",
+      "upstream_path": "src/core/extract-timeline-from-meetings.ts",
+      "mode": "adapted",
+      "sha256": "d2e24390dd51b8553d8db78d15e8e9bd4f60e3f7929c20c3904770b267bdd6a1",
+      "upstream_sha256": "0760f8e748d83cd9cf092d6113b86b8ad9724d092d629d9a6b6ca1230bd7425b"
+    },
+    {
+      "path": "test/mentions-pass.test.ts",
+      "upstream_path": "test/mentions-pass.test.ts",
+      "mode": "adapted",
+      "sha256": "1d996f53daee29ae873c3f2419f9dcd80cee6562fc842462f9fd531bfb7ff8e7",
+      "upstream_sha256": "2ca208dc79c836569996f42eee0c291914009724a75f1751082b9acae0ebb982"
+    },
+    {
+      "path": "test/page-revision-backfill.test.ts",
+      "upstream_path": "test/page-revision-backfill-5216.test.ts",
+      "mode": "adapted",
+      "sha256": "26874cd78d459b6ae7b6cbd857f9212a2262e6e0d2d8806a8d87c334c81d8aff",
+      "upstream_sha256": "a5a9637ad45452b19cefc3f34cf94c85abec737a38a4a79ed14581875723e300"
+    },
+    {
+      "path": "test/derived-link-reconciliation.test.ts",
+      "upstream_path": "test/derived-link-reconciliation.test.ts",
+      "mode": "adapted",
+      "sha256": "f09f58d8ecd2e2796c07eac1ad4285996314480286647091e9ed8560380b1746",
+      "upstream_sha256": "e2909e2b48f0b2a527ad1aa23ba8e9b6153cefc8d60b817210858ab23cc43fbb"
+    },
+    {
+      "path": "test/page-state-engine.test.ts",
+      "upstream_path": "test/page-state-engine.test.ts",
+      "mode": "adapted",
+      "sha256": "e8dbc10ea4fbf35c645c4d5cd109119d0664a8ec03d0575b1c61dbf51802d9c2",
+      "upstream_sha256": "19dc26de8049d79049112268853fb0d67422a0a576097d0a22be10cfbccac6ef"
+    },
+    {
+      "path": "test/wanted-links.test.ts",
+      "upstream_path": "test/wanted-links.test.ts",
+      "mode": "adapted",
+      "sha256": "f7e3939b887e2d87dbc573aead45a1fcf3331ebdc2f6c91471f8b5c74c9920e8",
+      "upstream_sha256": "bffecc5c7a10a759f1f50b32c96729470e5f06a66d7e7a09307b34a71b30b8d2"
+    },
+    {
+      "path": "test/helpers/mention-brain.ts",
+      "upstream_path": "test/helpers/mention-brain.ts",
+      "mode": "adapted",
+      "sha256": "4cfa3a47d303146be01049f0b836d50e30dcfd3e52821f95004cbe074ef1c6af",
+      "upstream_sha256": "0ac41dcd76fe84cbf63ec4a74fe747cc3ce46322ce70c59a978ce8e0fe697d97"
+    },
+    {
+      "path": "test/helpers/wanted-links-scenarios.ts",
+      "upstream_path": "test/helpers/wanted-links-scenarios.ts",
+      "mode": "adapted",
+      "sha256": "aa7c7cd02c9f21384e3be966b4727753460911a6032d668f7483389993bf8dd3",
+      "upstream_sha256": "4480203fc156b7f15c1d2b4eb2a884de4d2fba8c7fb464091485ad8f05e09b81"
+    },
+    {
+      "path": "test/mentions-parity.serial.test.ts",
+      "upstream_path": "test/e2e/mentions-parity.test.ts",
+      "mode": "adapted",
+      "sha256": "69da8b3b56a4a24a9913cc2cedcdb783b7ff73129390822cdb87e9a0ee7156cc",
+      "upstream_sha256": "ff29cad7df86e3b91115eca9858942ed0ff87a56543653fa79ed2395f31c293d"
     }
-  ]
+  ],
+  "migration_namespace": {
+    "key": "pmbrain.schema.version",
+    "table": "pmbrain_schema_migrations",
+    "legacy_version_mirror": true,
+    "crosswalk": {
+      "131": 150,
+      "132": 206,
+      "133": 214
+    },
+    "latest": 134
+  },
+  "test_adaptations": {
+    "mentions-parity": "index, aliases and links; entity-card UI outside scope",
+    "page-state-engine": "relationship revisions, nested transactions and Source incarnation; full canonical CAS write API deferred",
+    "derived-link-reconciliation": "nine upstream producer replacement cases; PMBrain parser and Source adapters retained",
+    "wanted-links": "six upstream business scenarios through existing PMBrain writer API",
+    "page-revision-backfill": "upstream #5216 rollout cases; interruption uses AbortSignal and native transaction fault adapter"
+  }
 }

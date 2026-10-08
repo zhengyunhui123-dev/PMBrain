@@ -232,6 +232,7 @@ export async function selectEntityCaptureCandidates(
     `SELECT slug, source_id, title, compiled_truth
        FROM pages
       WHERE deleted_at IS NULL
+        AND COALESCE(chunker_version,0)>=0
         AND ($1::text IS NULL OR source_id = $1)
         AND COALESCE(type, '') NOT IN ('person', 'company', 'organization', 'entity', 'concept', 'project')
         AND slug NOT LIKE 'people/%'

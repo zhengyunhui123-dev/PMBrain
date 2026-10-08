@@ -175,7 +175,7 @@ $func$ LANGUAGE plpgsql;
 
 DROP TRIGGER IF EXISTS bump_page_generation_trg ON pages;
 CREATE TRIGGER bump_page_generation_trg
-  BEFORE INSERT OR UPDATE ON pages
+  BEFORE INSERT OR UPDATE OF title,type,page_kind,compiled_truth,timeline,frontmatter,deleted_at,contextual_retrieval_mode,corpus_generation,content_hash ON pages
   FOR EACH ROW
   EXECUTE FUNCTION bump_page_generation_fn();
 
@@ -443,7 +443,7 @@ CREATE TABLE IF NOT EXISTS links (
   -- v0.41.18.0: 'mentions' added for auto-linked body-text mentions
   -- (gbrain extract links --by-mention). Filtered OUT of backlink-count
   -- for search ranking; only counts toward orphan-ratio + graph traversal.
-  link_source    TEXT    CHECK (link_source IS NULL OR link_source IN ('markdown', 'frontmatter', 'manual', 'mentions', 'concept-provenance')),
+  link_source    TEXT    CHECK (link_source IS NULL OR link_source IN ('markdown', 'wikilink-resolved', 'frontmatter', 'manual', 'mentions', 'concept-provenance')),
   -- v0.41.18.0: nullable link_kind distinguishes "plain body mention" from
   -- "verb-pattern-derived typed link" within link_source='mentions'.
   -- Codex finding #12 design: keep link_source stable; add link_kind
@@ -756,6 +756,9 @@ CREATE OR REPLACE FUNCTION update_page_search_vector() RETURNS trigger AS $$
 DECLARE
   timeline_text TEXT;
 BEGIN
+  IF TG_OP = 'UPDATE' AND NEW.title IS NOT DISTINCT FROM OLD.title
+    AND NEW.compiled_truth IS NOT DISTINCT FROM OLD.compiled_truth
+    AND NEW.timeline IS NOT DISTINCT FROM OLD.timeline THEN RETURN NEW; END IF;
   -- Gather timeline_entries text for this page
   SELECT coalesce(string_agg(summary || ' ' || detail, ' '), '')
   INTO timeline_text
@@ -775,7 +778,7 @@ $$ LANGUAGE plpgsql;
 
 DROP TRIGGER IF EXISTS trg_pages_search_vector ON pages;
 CREATE TRIGGER trg_pages_search_vector
-  BEFORE INSERT OR UPDATE ON pages
+  BEFORE INSERT OR UPDATE OF title,compiled_truth,timeline ON pages
   FOR EACH ROW
   EXECUTE FUNCTION update_page_search_vector();
 

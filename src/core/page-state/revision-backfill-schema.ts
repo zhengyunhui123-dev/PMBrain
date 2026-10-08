@@ -84,7 +84,7 @@ async function assignRows(engine: BrainEngine, ids: number[]): Promise<void> {
 
 export async function resumePageRevisionBackfill(
   engine: BrainEngine,
-  opts: { batchSize?: number; log?: (line: string) => void } = {},
+  opts: { batchSize?: number; log?: (line: string) => void; signal?: AbortSignal; onProgress?: (progress:{completed:number;total:number;cursor:number})=>void|Promise<void> } = {},
 ): Promise<RevisionBackfillResult> {
   const log = opts.log ?? ((line: string) => process.stderr.write(line + '\n'));
   const column = await engine.executeRaw<{ notnull: boolean }>(
@@ -92,11 +92,16 @@ export async function resumePageRevisionBackfill(
       WHERE attrelid = to_regclass('pages') AND attname = 'knowledge_revision' AND NOT attisdropped`);
   if (column.length === 0 || column[0]!.notnull) return { status: 'not_needed', backfilled: 0, failed: [] };
 
-  const batchSize = opts.batchSize ?? 1000;
+  const batchSize = opts.batchSize ?? 100;
+  if(!Number.isSafeInteger(batchSize)||batchSize<1||batchSize>1000)throw new Error('Invalid revision backfill batch size');
   const state = await readState(engine);
+  const [pending]=await engine.executeRaw<{n:number}>('SELECT count(*)::int AS n FROM pages WHERE knowledge_revision IS NULL');
+  const total=state.backfilled+Number(pending.n);
+  const check=()=>{if(opts.signal?.aborted)throw opts.signal.reason ?? new DOMException('Migration cancelled','AbortError');};
   const save = () => engine.setConfig(REVISION_BACKFILL_STATE_KEY, JSON.stringify(state));
   let announced = false;
   for (;;) {
+    check();
     const ids = (await engine.executeRaw<{ id: number }>(
       'SELECT id FROM pages WHERE id > $1 AND knowledge_revision IS NULL ORDER BY id LIMIT $2', [state.cursor, batchSize])).map(r => Number(r.id));
     if (ids.length === 0) break;
@@ -105,10 +110,15 @@ export async function resumePageRevisionBackfill(
       announced = true;
     }
     try {
-      await assignRows(engine, ids);
-      state.backfilled += ids.length;
+      await engine.transaction(async tx=>{
+        await assignRows(tx,ids);
+        await tx.setConfig(REVISION_BACKFILL_STATE_KEY,JSON.stringify({...state,cursor:ids[ids.length-1],backfilled:state.backfilled+ids.length}));
+      });
+      state.backfilled+=ids.length;
     } catch {
+      check();
       for (const id of ids) {
+        check();
         try { await assignRows(engine, [id]); state.backfilled++; }
         catch (error) {
           state.failed.push({ id, attempts: 1, error: (error instanceof Error ? error.message : String(error)).slice(0, 200) });
@@ -117,12 +127,16 @@ export async function resumePageRevisionBackfill(
     }
     state.cursor = ids[ids.length - 1]!;
     await save();
-    log(`[migrate] page revision backfill: ${state.backfilled} row(s) done, through page id ${state.cursor}`);
+    log(`[migrate] page revision backfill: ${state.backfilled}/${total} row(s) done, through page id ${state.cursor}`);
+    await opts.onProgress?.({completed:state.backfilled,total,cursor:state.cursor});
+    check();
+    await new Promise(resolve=>setTimeout(resolve,0));
   }
 
   const failed: FailedRow[] = [];
   let retried = false;
   for (const row of state.failed) {
+    check();
     const [still] = await engine.executeRaw<{ id: number }>('SELECT id FROM pages WHERE id = $1 AND knowledge_revision IS NULL', [row.id]);
     if (!still) continue;
     if (row.attempts >= REVISION_BACKFILL_MAX_ATTEMPTS) { failed.push(row); continue; }

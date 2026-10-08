@@ -1,5 +1,6 @@
 import { prepareLinkReconciliation } from '../core/link-reconciliation.ts';
-import { runMentionPass } from '../core/mentions/pass.ts';
+import { runMentionPass, type MentionPassResult } from '../core/mentions/pass.ts';
+import { previewMentionPass } from '../core/mentions/stale.ts';
 /**
  * `pmbrain extract --stale` — incremental link + timeline extraction
  * over pages whose links_extracted_at watermark is stale.
@@ -51,13 +52,14 @@ export async function extractStaleFromDB(
   opts: {
     dryRun: boolean;
     jsonMode: boolean;
-    includeFrontmatter: boolean;
+    includeFrontmatter?: boolean;
     sourceIdFilter?: string;
     catchUp: boolean;
     /** Suppress progress and summaries for Quick Maintenance/library callers. */
     quiet?: boolean;
     /** Optional deterministic page cap for advanced/library callers. */
     maxPages?: number;
+    timeBudgetMs?: number;
     catalogAware?: boolean;
     signal?: AbortSignal;
     yieldDuringPhase?: () => Promise<void>;
@@ -72,6 +74,7 @@ export async function extractStaleFromDB(
   unresolvedReferences: number;
   batchTimings: ExtractStaleBatchTiming[];
   processedSlugs: Array<{slug:string;sourceId:string}>;
+  mentions?: MentionPassResult;
 }> {
   const { dryRun, jsonMode, includeFrontmatter, sourceIdFilter, catchUp } = opts;
   const quiet = opts.quiet ?? false;
@@ -80,11 +83,18 @@ export async function extractStaleFromDB(
   // page watermark. A new entity or alias only reopens historical pages
   // whose text can mention that new name.
   const versionTs = LINK_EXTRACTOR_VERSION_TS;
-  const mention=opts.catalogAware && !dryRun ? await runMentionPass(engine, {sourceId:sourceIdFilter,signal:opts.signal,maxPages:opts.maxPages,yieldDuringPhase:opts.yieldDuringPhase}) : null;
-  if(mention?.state==='failed')throw new Error(mention.error);
-  const processedSlugs: Array<{slug:string;sourceId:string}> = mention?.processedSlugs ?? [];
-  for(const ref of processedSlugs)await engine.executeRaw('UPDATE pages SET links_extracted_at=NULL WHERE slug=$1 AND source_id=$2',[ref.slug,ref.sourceId]);
-  const queuedFreshPages=0;
+  const deadline=catchUp?Infinity:Date.now()+(opts.timeBudgetMs??STALE_TIME_BUDGET_MS);
+  let mention:MentionPassResult|null=null;
+  const mentionCreated=()=>mention?.created??0;
+  const mentionRemaining=()=>mention?.remaining??0;
+  const processedSlugs: Array<{slug:string;sourceId:string}>=[];
+  const finishMentions=async()=>{
+    if(opts.catalogAware===false||dryRun)return;
+    mention=await runMentionPass(engine,{sourceId:sourceIdFilter,deadline,signal:opts.signal,maxPages:opts.maxPages,yieldDuringPhase:opts.yieldDuringPhase});
+    if(mention.state==='failed')throw new Error(mention.error);
+    for(const ref of mention.processedSlugs)if(!processedSlugs.some(p=>p.slug===ref.slug&&p.sourceId===ref.sourceId))processedSlugs.push(ref);
+  };
+  const queuedFreshPages=dryRun && opts.catalogAware !== false ? (await previewMentionPass(engine,sourceIdFilter)).due : 0;
   const totalStale = await engine.countStalePagesForExtraction({ sourceId: sourceIdFilter, versionTs })
     + (dryRun ? queuedFreshPages : 0);
   if (dryRun) {
@@ -102,11 +112,12 @@ export async function extractStaleFromDB(
     };
   }
   if (totalStale === 0) {
+    await finishMentions();
     if (!quiet && !jsonMode) console.log('没有过期页面，关系抽取是最新的。');
     return {
-      linksCreated: mention?.created ?? 0, timelineCreated: 0, pagesProcessed: 0, staleRemaining: 0,
+      linksCreated: mentionCreated(), timelineCreated: 0, pagesProcessed: processedSlugs.length, staleRemaining: mentionRemaining(),
       skippedMissingTarget: 0, skippedCrossSource: 0, unresolvedReferences: 0,
-      batchTimings: [], processedSlugs,
+      batchTimings: [], processedSlugs, mentions:mention??undefined,
     };
   }
 
@@ -118,10 +129,9 @@ export async function extractStaleFromDB(
     : createProgress(cliOptsToProgressOptions(getCliOptions()));
   progress.start('extract.stale', totalStale);
 
-  const startMs = Date.now();
   let ginRepaired = false;
   let afterPageId = 0;
-  let linksCreated = mention?.created ?? 0;
+  let linksCreated = 0;
   let timelineCreated = 0;
   let pagesProcessed = 0;
   let budgetHit = false;
@@ -238,13 +248,15 @@ export async function extractStaleFromDB(
     afterPageId = rows[rows.length - 1]!.id;
     await opts.yieldDuringPhase?.();
 
-    if (!catchUp && Date.now() - startMs > STALE_TIME_BUDGET_MS) {
+    if (!catchUp && Date.now() > deadline) {
       budgetHit = true;
       break;
     }
   }
 
   progress.finish();
+  await finishMentions();
+  linksCreated+=mentionCreated();
   const staleRemaining = await engine.countStalePagesForExtraction({ sourceId: sourceIdFilter, versionTs });
 
   if (!quiet && !jsonMode) {
@@ -277,13 +289,14 @@ export async function extractStaleFromDB(
   return {
     linksCreated,
     timelineCreated,
-    pagesProcessed,
-    staleRemaining,
+    pagesProcessed:processedSlugs.length,
+    staleRemaining:Math.max(staleRemaining,mentionRemaining()),
     skippedMissingTarget,
     skippedCrossSource,
     unresolvedReferences,
     batchTimings,
     processedSlugs,
+    mentions:mention??undefined,
   };
 }
 

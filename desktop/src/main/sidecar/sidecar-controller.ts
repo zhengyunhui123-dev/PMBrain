@@ -1,3 +1,4 @@
+import {readMigrationProgress} from '../startup/post-upgrade-startup.js';
 import { app, type BrowserWindow } from 'electron';
 import { ensureBootstrapToken, getDatabaseRuntimeConfig, getSetupInfo, markDesktopMigration, needsDesktopMigration } from '../config-manager.js';
 import type { CliRuntime } from '../cli-runner.js';
@@ -114,6 +115,8 @@ export class SidecarController {
         logger,
         onStderr: (_chunk, recent) => {
           if (this.manager !== manager) return;
+          const migrationProgress=readMigrationProgress(recent);
+          if(migrationProgress)this.dependencies.sendStartupProgress(migrationProgress);
           if (recent.includes(GIN_REPAIR_DB_UNUSABLE_MESSAGE)) {
             this.dependencies.sendStartupProgress({
               visible: true,
@@ -152,8 +155,8 @@ export class SidecarController {
                 : 'sidecar 已启动，PMBrain 正在检查数据库与 HTTP 服务。';
             this.dependencies.sendStartupProgress({
               visible: true,
-              stage: 'health',
-              title: '正在等待本地服务健康检查',
+              stage: upgradePending&&getDatabaseRuntimeConfig().engine==='pglite'?'migration':'health',
+              title: upgradePending&&getDatabaseRuntimeConfig().engine==='pglite'?'正在打开并升级知识库':'正在等待本地服务健康检查',
               message: waitHint,
             });
           } else if (state.phase === 'ready' || state.phase === 'failed') {
@@ -357,8 +360,8 @@ export class SidecarController {
       if (migrationRequired) {
         this.dependencies.sendStartupProgress({
           visible: true,
-          stage: 'sidecar',
-          title: '升级完成，正在启动本地服务',
+          stage: setup.current.engine==='pglite'?'migration':'sidecar',
+          title: setup.current.engine==='pglite'?'冷备完成，正在打开并升级知识库':'升级完成，正在启动本地服务',
           message: '升级前冷备已完成。PMBrain 正在启动本地服务并自动重试，请稍候，无需手动点击重启。',
         });
         await sleep(POST_UPGRADE_SETTLE_MS);

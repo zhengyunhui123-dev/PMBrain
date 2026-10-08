@@ -80,8 +80,8 @@ export class ProductTaskRuntime {
   private executions = new Map<number, { cancel: (reason?:string) => void; done: Promise<unknown>; run: () => ConsoleRun; ownsLockedTransaction: () => boolean; adjust:(constrained:boolean)=>void }>();
   private resources:TaskResourceGuard;
   private resourceDrain:Promise<void>|null=null;
-  private entityCaptureTimer:ReturnType<typeof setInterval>|null=null;
   private submittingEntityCapture=false;
+  private entityCaptureRequested=false;
   private resourceTimer:ReturnType<typeof setInterval>|null=null;
   private idleTimer:ReturnType<typeof setTimeout>|null=null;
   private localPressure=false;
@@ -97,6 +97,7 @@ export class ProductTaskRuntime {
     this.fileWorker = new MinionWorker(engine, { ...memoryOptions, queue: SYNC_FILE_QUEUE, concurrency: engine.kind==='pglite'?1:2, pollInterval: 100, healthCheckInterval: 0, lockDuration: 30_000, stalledInterval: 5000, ownsLockedTransaction: id => this.executions.get(id)?.ownsLockedTransaction() === true });
     this.fileWorker.on('job-finished', (job:MinionJob)=>{
       if(this.stopped||this.paused)return;
+      void this.flushEntityCapture();
       void this.queue.getJob(job.id).then(async current=>{
         if(current){this.fileProjection.record(current);await this.fileQueue.cleanupCompleted(current);}
         this.scheduleSessionRefresh(Number(job.data.sessionId));
@@ -132,6 +133,7 @@ export class ProductTaskRuntime {
       ownsLockedTransaction: id => this.executions.get(id)?.ownsLockedTransaction() === true,
     });
     this.worker.on('unhealthy', info => console.error('[tasks]', info));
+    this.worker.on('job-finished',()=>void this.flushEntityCapture());
     this.worker.register(TASK_NAME, job => withDatabasePriority((job.data.task as ProductTask).type === 'import' ? 2 : 3, () => this.execute(job)));
   }
 
@@ -169,17 +171,22 @@ export class ProductTaskRuntime {
     });
     this.resourceTimer=setInterval(()=>this.checkMemory(),this.resources.rssCheckIntervalMs);
     this.resourceTimer.unref();
-    const flush=async()=>{
-      if(this.stopped||this.paused||this.submittingEntityCapture)return;
+    await this.flushEntityCapture();
+  }
+
+  private async flushEntityCapture():Promise<void>{
+      if(this.stopped||this.paused)return;
+      this.entityCaptureRequested=true;
+      if(this.submittingEntityCapture)return;
       this.submittingEntityCapture=true;
-      try{await withDatabasePriority(3,()=>enqueueImportedEntityCapture(this.engine));}
+      try{
+        do{
+          this.entityCaptureRequested=false;
+          await withDatabasePriority(3,()=>enqueueImportedEntityCapture(this.engine));
+        }while(this.entityCaptureRequested&&!this.stopped&&!this.paused);
+      }
       catch(error){console.error('[tasks] imported entity capture:',error);}
       finally{this.submittingEntityCapture=false;}
-    };
-    if(this.entityCaptureTimer)clearInterval(this.entityCaptureTimer);
-    this.entityCaptureTimer=setInterval(()=>void flush(),2000);
-    this.entityCaptureTimer.unref();
-    await flush();
   }
 
   private async submit(task: ProductTask, kind: string, idempotencyKey?: string, trigger: 'manual' | 'scheduled' = 'manual', queue = this.queue): Promise<ConsoleRun> {
@@ -663,7 +670,6 @@ export class ProductTaskRuntime {
 
   async close(): Promise<void> {
     this.stopped = true;
-    if(this.entityCaptureTimer)clearInterval(this.entityCaptureTimer);
     if(this.resourceTimer)clearInterval(this.resourceTimer);
     if(this.idleTimer)clearTimeout(this.idleTimer);
     await this.reclaiming;

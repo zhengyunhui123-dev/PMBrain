@@ -76,7 +76,7 @@ export const PAGE_STATE_SCHEMA_STATEMENTS = [
       RETURN NEW;
     END $fn$`,
   `DROP TRIGGER IF EXISTS pages_knowledge_revision ON pages`,
-  `CREATE TRIGGER pages_knowledge_revision BEFORE UPDATE ON pages
+  `CREATE TRIGGER pages_knowledge_revision BEFORE UPDATE OF source_id,slug,type,page_kind,title,compiled_truth,timeline,frontmatter,deleted_at,knowledge_revision ON pages
     FOR EACH ROW EXECUTE FUNCTION gbrain_advance_page_revision()`,
   `CREATE OR REPLACE FUNCTION gbrain_advance_tag_revision() RETURNS trigger LANGUAGE plpgsql SET search_path = pg_catalog, public AS $fn$
     BEGIN

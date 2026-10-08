@@ -543,7 +543,7 @@ export async function extractPageLinks(
   if (typeof resolver.resolveLocalExact === 'function') {
     for (const ref of extractRelativeMarkdownRefs(content, slug)) {
       const resolved = await resolver.resolveLocalExact(ref.slug);
-      if (!resolved) continue;
+      if (!resolved) {wikilinkUnresolved.push({field:'wikilink',name:ref.slug});continue;}
       relativeMarkdownTargetSlugs.add(resolved.slug);
       const idx = ref.index;
       const context = idx >= 0 ? excerpt(content, idx, 240) : ref.name;
@@ -641,6 +641,7 @@ export async function extractPageLinks(
     const context = idx >= 0 ? excerpt(content, idx, 240) : ref.name;
     candidates.push({
       targetSlug: resolvedExact?.slug ?? normalizedRefSlug,
+      authoredRef:{key:JSON.stringify([ref.sourceId??null,ref.slug]),kind:ref.slug.includes('/')?'slug':'name',target:ref.slug,targetSourceId:ref.sourceId??undefined},
       ...(resolvedExact?.sourceId ? { targetSourceId: resolvedExact.sourceId } : {}),
       resolutionType: ref.sourceId ? 'qualified' : 'unqualified',
       linkType: typeFor(context, resolvedExact?.slug ?? normalizedRefSlug, idx, resolvedExact?.sourceId ?? ref.sourceId ?? undefined),
