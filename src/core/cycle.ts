@@ -383,6 +383,7 @@ export interface CycleReport {
 
 export interface CycleOpts {
   captureEntitySlugs?: string[];
+  captureEntityBudget?: import('./cycle/capture-entities.ts').CaptureEntitiesOpts['budget'];
   syncFileRuntime?: SyncFileRuntime;
   afterSync?: (sourceId: string, root: string, result: import('../commands/sync.ts').SyncResult) => Promise<unknown>;
   completedPhases?: PhaseResult[];
@@ -2253,6 +2254,7 @@ export async function runCycle(
         const { result, duration_ms } = await timePhase(() => runPhaseCaptureEntities(engine, {
           sourceId: cycleSourceId,
           slugs:opts.captureEntitySlugs,
+          budget:opts.captureEntityBudget,
           dryRun,
           signal: opts.signal,
           yieldDuringPhase: opts.yieldDuringPhase,

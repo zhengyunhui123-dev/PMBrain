@@ -31,6 +31,7 @@ export class TaskEngineHost {
   private pages = new Map<string, string>();
   private pending = new Set<Promise<unknown>>();
   private cycleLocks = new Set<string>();
+  private cleanupOwner: BrainEngine;
   private currentFile?: { path: string; size: number; mtimeMs: number };
   private receipts = new Map<number, { slug: string; status: string; pageHash: string; chunks: number; sourceId:string }>();
   private checkedPages = new Map<number, Set<string>>();
@@ -47,7 +48,7 @@ export class TaskEngineHost {
     private syncFile?: SyncFileInput,
     private resources=new TaskResourceGuard(),
     private auditJobId = jobId,
-  ) {this.owner=withSqlCancellation(owner,this.abort.signal);}
+  ) {this.cleanupOwner=owner;this.owner=withSqlCancellation(owner,this.abort.signal);}
 
   ownsLockedTransaction(): boolean {
     return !this.closed && [...this.scopes.values()].some(scope => scope.transactional);
@@ -297,7 +298,7 @@ export class TaskEngineHost {
     this.scopes.clear();
     this.checkedPages.clear();
     if (this.cycleLocks.size) {
-      await this.owner.executeRaw(
+      await this.cleanupOwner.executeRaw(
         `DELETE FROM gbrain_cycle_locks WHERE id = ANY($1::text[]) AND holder_pid = $2`,
         [[...this.cycleLocks], process.pid],
       );

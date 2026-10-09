@@ -1,9 +1,10 @@
 import type { ConsoleRun } from '../lib/shared';
 
 export const taskStopping = (run: ConsoleRun) => run.status === 'running' && run.error === '正在停止任务…';
-export const taskRoundCompleted = (run: ConsoleRun) => run.kind.startsWith('dream_') && run.status === 'completed';
+const taskWasSkipped = (run: ConsoleRun) => (run.result as {status?:string}|undefined)?.status === 'skipped' || run.product?.stage === '任务未执行';
+export const taskRoundCompleted = (run: ConsoleRun) => run.kind.startsWith('dream_') && run.status === 'completed' && !taskWasSkipped(run);
 export const taskPercent = (run: ConsoleRun) => taskRoundCompleted(run) ? null : run.product?.percent ?? null;
-export const taskStatus = (run: ConsoleRun) => taskStopping(run) ? '正在停止' : taskRoundCompleted(run) ? '本轮已完成' : ({ queued:'排队中',running:'执行中',completed:'已完成',failed:'失败',cancelled:'已停止' })[run.status];
+export const taskStatus = (run: ConsoleRun) => taskStopping(run) ? '正在停止' : taskWasSkipped(run) ? '未执行' : taskRoundCompleted(run) ? '本轮已完成' : ({ queued:'排队中',running:'执行中',completed:'已完成',failed:'失败',cancelled:'已停止' })[run.status];
 
 const remainingMetric = (label: string) => /^(?:待|剩余|未关联|未解析|孤立|异常)|失败|待补/.test(label);
 const operationalMetric = (label: string) => /Token|费用|预算|上限/.test(label);

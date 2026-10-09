@@ -19,6 +19,7 @@ import { purgeExpiredSources } from '../src/core/destructive-guard.ts';
 import { purgeStaleCheckpoints } from '../src/core/op-checkpoint.ts';
 import { purgeStaleVolunteerEvents } from '../src/core/context/volunteer-events.ts';
 import { importFile } from '../src/core/import-file.ts';
+import { initializeSourceGit, commitSourceGit } from '../src/core/source-git.ts';
 
 let engine: BrainEngine;
 let runtime: ProductTaskRuntime;
@@ -79,6 +80,10 @@ beforeAll(async () => {
   engine = taskDatabaseUrl ? new PostgresEngine() : process.env.PMBRAIN_TASK_TEST_WORKER === '1' ? new WorkerPgliteEngine() as unknown as BrainEngine : new PGLiteEngine();
   await engine.connect(taskDatabaseUrl ? { database_url: taskDatabaseUrl } : {});
   await engine.initSchema();
+  initializeSourceGit(root);
+  writeFileSync(join(root, 'initial.txt'), '任务验收初始版本');
+  commitSourceGit(root, 'isolated task fixture');
+  await engine.executeRaw("UPDATE sources SET config=config-'remote_url',local_path=$1 WHERE id='default'", [root]);
   runtime = new ProductTaskRuntime(engine);
   await runtime.start();
 }, 60_000);

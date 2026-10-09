@@ -1,5 +1,5 @@
 import type { BrainEngine } from '../../core/engine.ts';
-import type { ProductTask, TaskWorkerMessage } from './types.ts';
+import type { ProductTask, TaskWorkerMessage, MaintenanceCheckpoint } from './types.ts';
 import { loadConfig } from '../../core/config.ts';
 import { reloadLiveGateway } from '../../core/ai/reload-live-gateway.ts';
 import { DEFAULT_CLI_OPTIONS, setCliOptions } from '../../core/cli-options.ts';
@@ -7,6 +7,11 @@ import { runStructuredImport, importSyncFile } from '../../commands/import.ts';
 import { runCycle, type CyclePhase } from '../../core/cycle.ts';
 import { resolveDreamPresetPhases, resolveDreamRelationOptions, resolveBrainDir } from '../../commands/dream.ts';
 import { runQuickMaintenance, combineQuickMaintenanceReports, resolveQuickMaintenancePhases } from '../../core/quick-maintenance.ts';
+import { ALL_PHASES } from '../../core/cycle.ts';
+import { chooseCaptureModel, configuredCnyPrices, storedPrice } from '../../core/cycle/capture-entities.ts';
+import { DEFAULT_ENTITY_CAPTURE_MAX_INPUT_TOKENS, DEFAULT_ENTITY_CAPTURE_MAX_OUTPUT_TOKENS, readEntityCaptureCostCap, readTokenCap } from '../../core/cycle/entity-capture-budget.ts';
+import { splitProviderModelId } from '../../core/model-id.ts';
+import { maintenanceFailure } from './maintenance-orchestration.ts';
 import { fetchSource, loadAllSources, parseSourceConfig } from '../../core/sources-load.ts';
 import { resolveSourceId } from '../../core/source-resolver.ts';
 import { runEmbedCore } from '../../commands/embed.ts';
@@ -28,6 +33,7 @@ import { isImageFilePath } from '../../core/import-file.ts';
 let sequence = 0;
 const pending = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void }>();
 let abort = new AbortController();
+let ownerJobId: number | null = null;
 const send = (message: TaskWorkerMessage) => parentPort!.postMessage(message);
 let importFile: string | undefined;
 let constrained=false;
@@ -112,7 +118,8 @@ for (const method of ['log', 'error', 'warn', 'info', 'debug'] as const) {
 setCliOptions({ ...DEFAULT_CLI_OPTIONS, progressJson: true });
 
 async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { type: 'dream' }>['input']) {
-  const checkpoint = input.checkpoint ?? { phases: {}, reports: {} };
+  const checkpoint: MaintenanceCheckpoint = input.checkpoint ?? { phases: {}, reports: {} };
+  const captureModel = input.preset === 'quick' && !input.dryRun ? await chooseCaptureModel(engine, {}) : null;
   let pendingFiles = false;
   let scanned = 0;
   let unchanged = 0;
@@ -146,9 +153,30 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
     },
     finish: async () => { if (pendingFiles) throw new SyncFilesDeferred(); },
   } : undefined;
-  const resumeOptions = (sourceId: string) => {
+  const resumeOptions = async (sourceId: string) => {
+    let captureEntitySlugs: string[] | undefined;
+    let captureEntityBudget: import('../../core/cycle/capture-entities.ts').CaptureEntitiesOpts['budget'];
+    if (captureModel?.ok) {
+      captureEntitySlugs = await rpc('task.captureRequest', [sourceId]) as string[] | undefined;
+      if (captureEntitySlugs?.length) {
+        checkpoint.captureRequests = { ...checkpoint.captureRequests, [sourceId]: captureEntitySlugs };
+        const [usage] = await engine.executeRaw<{ input: string; output: string }>(`SELECT COALESCE(sum(tokens_input),0) AS input,COALESCE(sum(tokens_output),0) AS output FROM minion_jobs WHERE private_queue_owner_job_id=$1`, [ownerJobId]);
+        const inputTokens = Number(usage?.input ?? 0), outputTokens = Number(usage?.output ?? 0);
+        const cardPrices = configuredCnyPrices(captureModel.model, splitProviderModelId(captureModel.model).provider);
+        const inputPrice = storedPrice(await engine.getConfig('dream.entity_capture.price.input_cny_per_million')) ?? cardPrices.input;
+        const outputPrice = storedPrice(await engine.getConfig('dream.entity_capture.price.output_cny_per_million')) ?? cardPrices.output;
+        const costCap = readEntityCaptureCostCap(await engine.getConfig('dream.entity_capture.cost_cap_cny'));
+        captureEntityBudget = {
+          maxInputTokens: Math.max(0, readTokenCap(await engine.getConfig('dream.entity_capture.max_input_tokens'), DEFAULT_ENTITY_CAPTURE_MAX_INPUT_TOKENS) - inputTokens),
+          maxOutputTokens: Math.max(0, readTokenCap(await engine.getConfig('dream.entity_capture.max_output_tokens'), DEFAULT_ENTITY_CAPTURE_MAX_OUTPUT_TOKENS) - outputTokens),
+          costCapCny: costCap === null || inputPrice === null || outputPrice === null ? costCap : Math.max(0, costCap - (inputTokens * inputPrice + outputTokens * outputPrice) / 1_000_000),
+        };
+      }
+    }
     for (const phase of checkpoint.phases[sourceId] ?? []) send({ type: 'progress', event: { phase: `cycle.${phase.phase}`, event: 'finish' } });
     return ({
+    captureEntitySlugs,
+    captureEntityBudget,
     syncFileRuntime: fileRuntime,
     completedPhases: checkpoint.phases[sourceId],
     phaseCheckpoint: input.preset === 'quick' ? async (phases: import('../../core/cycle.ts').PhaseResult[]) => {
@@ -157,7 +185,7 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
     } : undefined,
     });
   };
-  const phases = input.preset === 'quick' ? resolveQuickMaintenancePhases()
+  const phases = input.preset === 'quick' ? ALL_PHASES.filter(phase => resolveQuickMaintenancePhases().includes(phase) || (captureModel?.ok && phase === 'capture_entities'))
     : input.phase && input.phase !== 'all' ? [input.phase]
     : resolveDreamPresetPhases(input.preset ?? 'full');
   send({ type: 'progress', phases: [...phases] });
@@ -167,6 +195,7 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
     afterSync: input.preset === 'quick' && !input.dryRun ? (sourceId: string, root: string, result: import('../../commands/sync.ts').SyncResult) => rpc('task.gitCommit', [sourceId, root, result]) : undefined,
     dryRun: input.dryRun, sourceId,
     captureEntitySlugs:input.slugs,
+    privateQueueOwnerJobId: ownerJobId,
     signal: abort.signal,
     includeOffice: true,
     syncConcurrency: 1,
@@ -196,8 +225,9 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
       send({ type: 'progress', scope: { name: source.name, index, total: sources.length } });
       const report = await runQuickMaintenance(engine, {
         ...common, sourceId: source.id, brainDir: await resolveBrainDir(engine, null, source.id),
-        ...resumeOptions(source.id),
+        ...await resumeOptions(source.id),
       });
+      if (report.reason === 'cycle_already_running') return report;
       checkpoint.reports[source.id] = { ...report };
       await rpc('task.maintenanceCheckpoint', [checkpoint]);
       reports.push({ sourceId: source.id, report });
@@ -206,7 +236,7 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
     return combineQuickMaintenanceReports(reports, startedAt);
   }
   const brainDir = await resolveBrainDir(engine, null, sourceId);
-  if (input.preset === 'quick') return runQuickMaintenance(engine, { ...common, brainDir, ...resumeOptions(sourceId ?? 'default') });
+  if (input.preset === 'quick') return runQuickMaintenance(engine, { ...common, brainDir, ...await resumeOptions(sourceId ?? 'default') });
   return runCycle(engine, {
     ...resolveDreamRelationOptions(input.preset, input.phase),
     ...common, brainDir,
@@ -314,11 +344,13 @@ async function execute(task: ProductTask, kind: BrainEngine['kind']) {
     }), catchUp: task.input.catchUp === true, forceReembed: task.input.forceReembed === true };
   }
   abort.signal.throwIfAborted();
-  if (result.status === 'failed' || Number(result.errors ?? 0) > 0) {
+  const failure = task.type === 'dream' ? maintenanceFailure(result) : null;
+  if (result.reason === 'cycle_already_running') send({ type: 'result', result });
+  else if (failure || result.status === 'failed' || Number(result.errors ?? 0) > 0) {
     const failures = result.failures as Array<{ error: string }> | undefined;
     const phases = result.phases as Array<{ error?: { message?: string }; status?: string; summary?: string }> | undefined;
     const phase = phases?.find(row => row.status === 'fail');
-    send({ type: 'error', error: failures?.[0]?.error ?? phase?.error?.message ?? phase?.summary ?? `任务未全部完成：${result.errors ?? result.status}`, result });
+    send({ type: 'error', error: failure ?? failures?.[0]?.error ?? phase?.error?.message ?? phase?.summary ?? `任务未全部完成：${result.errors ?? result.status}`, result });
   } else {
     send({ type: 'result', result });
   }
@@ -341,6 +373,7 @@ parentPort!.on('message', message => {
     for (const waiter of pending.values()) waiter.reject(new Error('任务已取消'));
     pending.clear();
   } else if (message.type === 'start') {
+    ownerJobId = Number.isSafeInteger(message.ownerJobId) ? message.ownerJobId : null;
     constrained=message.constrained===true;
     abort = new AbortController();
     importFile = undefined;

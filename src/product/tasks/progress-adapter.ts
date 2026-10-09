@@ -141,6 +141,13 @@ export class TaskProgressAdapter {
 export function finishTaskProgress(view: TaskProductProgress, status: string, result: unknown, error: string | null): TaskProductProgress {
   const next = structuredClone(view);
   const data = result && typeof result === 'object' ? result as Record<string, any> : {};
+  if (data.status === 'skipped' && Array.isArray(data.phases)) {
+    next.percent = null; next.phasePercent = null; next.stage = '任务未执行';
+    next.errorReason = data.reason === 'cycle_already_running' ? '未执行：其他整理任务占用数据库，请排队后继续。' : `未执行：${data.reason ?? '整理被跳过'}`;
+    for (const step of next.steps) step.status = 'skipped';
+    next.completedSteps = 0;
+    return next;
+  }
   const metrics: Array<{ label: string; value: number }> = [];
   const add = (label: string, value: unknown) => { if (typeof value === 'number' && Number.isFinite(value)) metrics.push({ label, value }); };
   if(next.name!=='快速维护'&&Array.isArray(data.phases)){
@@ -222,7 +229,7 @@ export function finishTaskProgress(view: TaskProductProgress, status: string, re
     const failed = next.steps.find(step => step.status === 'failed');
     if (failed) {
       const failure = data.phases?.find((phase: any) => failed.phases.includes(phase.phase) && (
-        phase.status === 'fail' || phase.details?.stop_reason === 'failure' || phase.details?.stop_reason === 'model_unavailable'
+        phase.status === 'fail' || ['failure','ingest_validation','relation_failure','model_unavailable'].includes(phase.details?.stop_reason)
       ));
       next.errorReason = failure?.details?.stop_reason === 'model_unavailable'
         ? '实体识别模型不可用'
@@ -235,7 +242,12 @@ export function finishTaskProgress(view: TaskProductProgress, status: string, re
   } else if (status === 'failed' || status === 'cancelled') {
     for (const step of next.steps) if (step.status === 'running') step.status = status === 'failed' ? 'failed' : 'pending';
     next.errorReason = status === 'failed' ? taskErrorReason(error) : null;
-  } else if (status === 'queued') next.stage = '等待执行';
+    if (status === 'failed') {
+      const failed = data.phases?.find((phase: any) => phase.error?.message);
+      if (failed?.error?.message) next.errorReason = failed.error.message;
+      next.stage = '任务未完成';
+    }
+  } else if (status === 'queued' && next.stage !== '等待前面的整理任务完成') next.stage = '等待执行';
   next.completedSteps = next.steps.filter(step => step.status === 'completed').length;
   return next;
 }

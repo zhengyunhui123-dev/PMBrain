@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "reviewed_at": "2026-10-09",
-  "product_version": "1.4.48",
+  "product_version": "1.4.49",
   "subsystem": "entity-relations",
   "status": "release-blocked-pending-exact-sha-ci",
   "upstream": {
@@ -68,7 +68,8 @@
     "PGLite process owner routes nonce-scoped job and cycle lease renewals through the open transaction and reapplies all renewals after rollback; product Host bypasses a new transaction only for its own acquired cycle locks.",
     "Only successful import snapshots are reclaimed on runtime restart through the existing managed artifact path guard; paused and incomplete snapshots and resource limits remain unchanged.",
     "Product Quick Maintenance scans working-tree changes, stores successful raw-file receipts atomically, and defaults to selective local Git commits while preserving user staging and CLI committed-only defaults.",
-    "Product task relation receipts record actual INSERT IDs inside the originating transaction; historical tasks without receipts retain explicit attribution limits."
+    "Product task relation receipts record actual INSERT IDs inside the originating transaction; historical tasks without receipts retain explicit attribution limits.",
+    "Product Quick Maintenance owns scoped post-import entity capture in the same durable task; Dream cycles queue behind earlier maintenance without replacing GBrain locks or Agent phases. Shared owner-linked usage survives Source switches and explicit continuation; skipped and failed verification remain visible."
   ],
   "deferred": [
     "whole-repository GBrain upgrade",
@@ -107,7 +108,9 @@
       "test/source-git-selective.test.ts",
       "test/task-relations.serial.test.ts",
       "test/quick-git-relations.serial.test.ts",
-      "test/e2e/quick-git-relations.test.ts"
+      "test/e2e/quick-git-relations.test.ts",
+      "test/maintenance-task-orchestration.serial.test.ts",
+      "test/e2e/maintenance-task-orchestration.test.ts"
     ],
     "check": "bun run check:gbrain-subsystems",
     "upstream_check": "bun run check:gbrain-subsystems --upstream D:/cursor-claude/gbrain",

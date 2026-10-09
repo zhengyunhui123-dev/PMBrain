@@ -273,7 +273,7 @@ export async function loadCaptureEntityIndex(
   });
 }
 
-function configuredCnyPrices(model: string, providerId: string | null): { input: number | null; output: number | null } {
+export function configuredCnyPrices(model: string, providerId: string | null): { input: number | null; output: number | null } {
   try {
     const config = loadConfig() as { desktop?: { model_services?: unknown } } | null;
     const services = config?.desktop?.model_services;
@@ -284,7 +284,7 @@ function configuredCnyPrices(model: string, providerId: string | null): { input:
   }
 }
 
-function storedPrice(raw: string | null | undefined): number | null | undefined {
+export function storedPrice(raw: string | null | undefined): number | null | undefined {
   if (raw == null || raw.trim() === '') return undefined;
   const amount = Number(raw);
   return Number.isFinite(amount) && amount >= 0 ? amount : undefined;

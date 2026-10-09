@@ -25,6 +25,7 @@ import type { MaintenanceCheckpoint, SyncFileInput } from './types.ts';
 import { resolveSourceId } from '../../core/source-resolver.ts';
 import { recordSyncedGitFile, commitQuickMaintenanceSource } from './synced-git.ts';
 import type { SyncResult } from '../../commands/sync.ts';
+import { claimMaintenanceCapture, maintenanceFailure } from './maintenance-orchestration.ts';
 import { TaskResourceGuard, PRODUCT_QUEUE_CAPACITY, type TaskResourceOptions } from './resource-guard.ts';
 
 export const PRODUCT_TASK_QUEUE = 'pmbrain-product';
@@ -34,7 +35,8 @@ type Progress = { product?: TaskProductProgress; output?: string; result?: Recor
 
 function toRun(job: MinionJob, stopping = false): ConsoleRun {
   const progress = (job.progress ?? {}) as Progress;
-  const status: ConsoleRun['status'] = stopping ? 'running' : job.status === 'completed' ? 'completed'
+  const failure = job.status === 'completed' && String(job.data.kind).startsWith('dream_') ? maintenanceFailure(job.result ?? progress.result) : null;
+  const status: ConsoleRun['status'] = stopping ? 'running' : failure ? 'failed' : job.status === 'completed' ? 'completed'
     : job.status === 'cancelled' ? 'cancelled' : ['dead', 'failed', 'paused'].includes(job.status) ? 'failed'
     : ['active', 'waiting-children'].includes(job.status) ? 'running' : 'queued';
   const adapter = new TaskProgressAdapter(String(job.data.kind), progress.product);
@@ -47,10 +49,10 @@ function toRun(job: MinionJob, stopping = false): ConsoleRun {
     sourceId: task.input.sourceId ?? 'default', directory: task.input.directory === true,
   };
   return {
-    product: finishTaskProgress(adapter.view, status, job.result ?? progress.result, job.error_text),
+    product: finishTaskProgress(adapter.view, status, job.result ?? progress.result, failure ?? job.error_text),
     id: `task-${job.id}`, kind: String(job.data.kind), command: [], status,
     trigger: job.data.trigger === 'scheduled' ? 'scheduled' : 'manual',
-    stdout: progress.output ?? '', stderr: '', error: stopping ? '正在停止任务…' : job.error_text,
+    stdout: progress.output ?? '', stderr: '', error: stopping ? '正在停止任务…' : failure ?? job.error_text,
     exitCode: status === 'completed' ? 0 : ['failed', 'cancelled'].includes(status) ? 1 : null,
     startedAt: (job.started_at ?? job.created_at).toISOString(),
     completedAt: job.finished_at?.toISOString() ?? null,
@@ -245,7 +247,7 @@ export class ProductTaskRuntime {
         await tx.executeRaw(`SELECT pg_advisory_xact_lock(hashtext('pmbrain_quick_submit'))`);
         const existing = await tx.executeRaw<{ id: number }>(`SELECT id FROM minion_jobs WHERE queue = $1 AND name = $2
           AND data->'task'->'input'->>'preset' = 'quick' AND data->'task'->'input'->>'dryRun' IS DISTINCT FROM 'true'
-          AND status IN ('waiting','active','waiting-children') AND ($3::boolean OR data->'task'->'input'->>'allSources' = 'true'
+          AND status IN ('waiting','active','waiting-children','delayed') AND ($3::boolean OR data->'task'->'input'->>'allSources' = 'true'
             OR COALESCE(data->'task'->'input'->>'sourceId', 'default') = $4) LIMIT 1`, [PRODUCT_TASK_QUEUE, TASK_NAME, input.allSources === true, sourceId ?? 'default']);
         if (existing.length) return toRun((await new MinionQueue(tx).getJob(existing[0].id))!);
         const scoped = Object.create(tx) as BrainEngine;
@@ -350,12 +352,12 @@ export class ProductTaskRuntime {
   }
 
   async requestCancel(id: string): Promise<ConsoleRun | null> {
-    const view = await this.getRun(id);
+    const execution = /^task-\d+$/.test(id) ? this.executions.get(Number(id.slice(5))) : undefined;
+    const view = execution?.run() ?? await this.getRun(id);
     if (view?.kind === 'dream_quick' && ['running','queued'].includes(view.status)) {
       void this.cancel(id).catch(error => console.error('[tasks] stop sync:', error));
       return { ...view, status: 'running', error: '正在停止任务…' };
     }
-    const execution = /^task-\d+$/.test(id) ? this.executions.get(Number(id.slice(5))) : undefined;
     if (!execution) return this.cancel(id);
     execution.cancel();
     void withDatabasePriority(0, () => this.queue.cancelJob(Number(id.slice(5))))
@@ -376,12 +378,14 @@ export class ProductTaskRuntime {
     if (task.type === 'dream' && task.input.preset === 'quick' && !task.input.dryRun) {
       const jobId = Number(id.slice(5));
       await this.stoppingSessions.get(jobId);
+      await this.executions.get(jobId)?.done;
       await Promise.allSettled([...this.fileSessions].filter(([, owner]) => owner === jobId).map(([child]) => this.executions.get(child)?.done));
+      await this.reconcileMaintenanceChildren(jobId);
       const checkpoint = task.input.checkpoint;
       delete record!.data.resourceStopReason;
         await this.engine.executeRaw(`UPDATE minion_jobs SET data=data || ($2::jsonb - 'relations' - 'gitFiles' - 'gitResults') WHERE id=$1`,[jobId,record!.data]);
       if (checkpoint) {
-        resumeMaintenanceCheckpoint(checkpoint,run.status==='completed');
+        resumeMaintenanceCheckpoint(checkpoint,run.status==='completed' || maintenanceFailure(run.result)!==null);
         await this.engine.executeRaw(`UPDATE minion_jobs SET data = data || ($2::jsonb - 'relations' - 'gitFiles' - 'gitResults') WHERE id = $1`, [jobId, { ...record!.data, task }]);
       }
       await this.engine.executeRaw(`UPDATE minion_jobs SET status = 'paused', result = NULL WHERE queue = $1 AND (data->>'sessionId')::bigint = $2 AND result->>'status' IN ('failed','error','partial')`, [SYNC_FILE_QUEUE, jobId]);
@@ -409,6 +413,12 @@ export class ProductTaskRuntime {
     const record = await this.queue.getJob(context.id);
     if (!record?.lock_token) throw new Error('任务执行租约无效');
     const structuredTask = record.data.task as ProductTask;
+    if (structuredTask.type === 'dream' && !structuredTask.input.dryRun) {
+      const earlier = await this.engine.executeRaw(`SELECT id FROM minion_jobs WHERE queue=$1 AND id<$2
+        AND data->'task'->>'type'='dream' AND data->'task'->'input'->>'dryRun' IS DISTINCT FROM 'true'
+        AND status IN ('waiting','active','waiting-children','delayed') LIMIT 1`, [PRODUCT_TASK_QUEUE, context.id]);
+      if (earlier.length) return this.deferMaintenance(record);
+    }
     if(record.data.resourceStopReason && structuredTask.type==='dream' && structuredTask.input.preset==='quick'){
       await this.engine.executeRaw(`UPDATE minion_jobs SET status='paused',lock_token=NULL,lock_until=NULL,error_text=$2,
         data=jsonb_set(data,'{resumeOnRestart}','false'::jsonb),updated_at=now() WHERE id=$1`,[context.id,String(record.data.resourceStopReason)]);
@@ -533,6 +543,15 @@ export class ProductTaskRuntime {
         const dispatch = async () => {
           if(cancelRequested) throw new Error('任务已取消');
           if (message.method === 'task.syncFileHash') return this.fileQueue.sourceHash(message.args[0] as SyncFileInput);
+          if (message.method === 'task.captureRequest') {
+            const slugs = await claimMaintenanceCapture(this.engine, context.id, record.lock_token!, String(message.args[0]));
+            if (slugs && structuredTask.type === 'dream') {
+              const checkpoint = structuredTask.input.checkpoint ?? { phases: {}, reports: {} };
+              checkpoint.captureRequests = { ...checkpoint.captureRequests, [String(message.args[0])]: slugs };
+              structuredTask.input.checkpoint = checkpoint;
+            }
+            return slugs;
+          }
           if (message.method === 'task.syncFile') {
             const file = message.args[0] as SyncFileInput;
             const result = await this.fileQueue.enqueue(context.id, record.lock_token!, file);
@@ -601,9 +620,10 @@ export class ProductTaskRuntime {
       }
     });
     flush = setInterval(() => void persist().catch(settleReject), 1000);
-    thread.postMessage({ type: 'start', kind: this.engine.kind, task: record.data.task, constrained:this.localPressure||this.externalPressure });
+    thread.postMessage({ type: 'start', kind: this.engine.kind, task: record.data.task, ownerJobId: context.id, constrained:this.localPressure||this.externalPressure });
     try {
       const outcome = await finished;
+      if (structuredTask.type === 'dream' && outcome !== MINION_DEFERRED && (outcome as { reason?: string })?.reason === 'cycle_already_running') return this.deferMaintenance(record);
       if (outcome === MINION_DEFERRED && !this.stopIntents.has(context.id)) {
         if(adapter.view.syncScan)adapter.view.syncScan.active=false;
         const counts = await this.fileQueue.counts(context.id);
@@ -650,6 +670,20 @@ export class ProductTaskRuntime {
       context.signal.removeEventListener('abort', cancelFromSignal);
       context.shutdownSignal.removeEventListener('abort', cancelFromSignal);
     }
+  }
+
+  private async deferMaintenance(record: MinionJob): Promise<typeof MINION_DEFERRED> {
+    const progress = (record.progress ?? {}) as Progress;
+    delete progress.result;
+    const view = progress.product ?? new TaskProgressAdapter(String(record.data.kind)).view;
+    view.stage = '等待前面的整理任务完成'; view.percent = null; view.errorReason = null;
+    progress.product = view;
+    await this.engine.executeRaw(`UPDATE minion_jobs SET status='delayed',delay_until=now()+interval '1 second',
+      lock_token=NULL,lock_until=NULL,error_text=NULL,result=NULL,progress=$3::jsonb,
+      attempts_started=GREATEST(attempts_started-1,0),updated_at=now()
+      WHERE id=$1 AND status='active' AND lock_token=$2`, [record.id, record.lock_token, progress]);
+    this.sessionViews.delete(record.id);
+    return MINION_DEFERRED;
   }
 
   private checkMemory():number{
@@ -814,9 +848,10 @@ export class ProductTaskRuntime {
     const stopping=withDatabasePriority(0, async () => {
       await this.engine.executeRaw(`UPDATE minion_jobs SET status = 'cancelled', lock_token = NULL, lock_until = NULL,
         data = jsonb_set(data, '{resumeOnRestart}', 'false'::jsonb), finished_at = now(), updated_at = now()
-        WHERE id = $1 AND status IN ('waiting','active','waiting-children')`, [id]);
+        WHERE id = $1 AND status IN ('waiting','active','waiting-children','delayed')`, [id]);
       await this.fileQueue.pause(id);
       await Promise.allSettled([this.executions.get(id)?.done, ...files.map(execution => execution!.done)]);
+      await this.reconcileMaintenanceChildren(id);
     });
     let timer:ReturnType<typeof setTimeout>|undefined;
     const settled=await Promise.race([stopping.then(()=>true),new Promise<boolean>(resolve=>{timer=setTimeout(()=>resolve(false),3000);})]).finally(()=>clearTimeout(timer));
@@ -846,6 +881,14 @@ export class ProductTaskRuntime {
     await this.hydrateFiles([id]);
     await this.fileProjection.flush();
     this.sessionViews.delete(id);
+  }
+
+  private async reconcileMaintenanceChildren(id: number) {
+    const queues = await this.engine.executeRaw<{ queue: string }>(`SELECT DISTINCT child.queue FROM minion_jobs child
+      JOIN minion_jobs owner ON owner.id=child.private_queue_owner_job_id
+      WHERE owner.id=$1 AND owner.status IN ('completed','cancelled','dead','failed','paused')
+      AND child.queue LIKE 'dream-inline-%' AND child.status IN ('waiting','active','delayed','waiting-children','paused')`, [id]);
+    for (const row of queues) await this.queue.reconcilePrivateQueue(row.queue, 'maintenance stopped before continuation');
   }
 
   private async applyStop(id:number){

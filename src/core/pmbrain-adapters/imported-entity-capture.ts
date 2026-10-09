@@ -9,15 +9,22 @@ export async function enqueueImportedEntityCapture(engine: BrainEngine, modelRea
   const submitted:number[]=[];
   for(const request of requests) {
     let slugs:string[]|undefined;
-    try{const parsed=JSON.parse(request.value);if(Array.isArray(parsed.slugs))slugs=parsed.slugs.filter((x:unknown):x is string=>typeof x==='string');}catch{}
+    let ownerJobId:number|undefined;
+    try{const parsed=JSON.parse(request.value);if(Array.isArray(parsed.slugs))slugs=parsed.slugs.filter((x:unknown):x is string=>typeof x==='string');if(Number.isSafeInteger(parsed.ownerJobId))ownerJobId=parsed.ownerJobId;}catch{}
     if(!slugs?.length)continue;
     const job=await engine.transaction(async tx=>{
       await tx.executeRaw('SELECT pg_advisory_xact_lock(hashtext($1))',[`entity-capture:${request.source_id}`]);
       const [pending]=await tx.executeRaw<{value:string}>('SELECT value FROM config WHERE key=$1 FOR UPDATE',[request.key]);
       if(pending?.value!==request.value)return null;
+      if(ownerJobId){
+        const owner=await tx.executeRaw(`SELECT id FROM minion_jobs WHERE id=$1 AND data->'task'->'input'->>'preset'='quick'`,[ownerJobId]);
+        if(owner.length)return null;
+      }
       const busy=await tx.executeRaw(`SELECT 1 FROM minion_jobs WHERE queue='pmbrain-product' AND name='pmbrain-product-task'
-        AND data->'task'->'input'->>'phase'='capture_entities' AND data->'task'->'input'->>'sourceId'=$1
-        AND status IN ('waiting','active','waiting-children') LIMIT 1`,[request.source_id]);
+        AND ((data->'task'->'input'->>'phase'='capture_entities' AND data->'task'->'input'->>'sourceId'=$1)
+          OR (data->'task'->'input'->>'preset'='quick' AND data->'task'->'input'->>'dryRun' IS DISTINCT FROM 'true'
+            AND (data->'task'->'input'->>'allSources'='true' OR COALESCE(data->'task'->'input'->>'sourceId','default')=$1)))
+        AND status IN ('waiting','active','waiting-children','delayed') LIMIT 1`,[request.source_id]);
       if(busy.length)return null;
       const queued=await new MinionQueue(tx).add('pmbrain-product-task',{
         kind:'dream_capture_entities',trigger:'scheduled',task:{type:'dream',input:{phase:'capture_entities',sourceId:request.source_id,slugs}},
