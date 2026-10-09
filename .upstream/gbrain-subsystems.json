@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "reviewed_at": "2026-10-09",
-  "product_version": "1.4.44",
+  "product_version": "1.4.45",
   "subsystem": "entity-relations",
   "status": "release-blocked-pending-exact-sha-ci",
   "upstream": {
@@ -113,9 +113,12 @@
     ],
     "current_dream_copy": "D:/pmbrain-acceptance/dream-1444-final-validation",
     "current_dream_evidence": ".codex/dream-1444/",
-    "current_dream_boundary": "Real MiMo calls on selected documents in copies; prior v1.4.42 upgrade evidence is historical. Exact pushed SHA CI is pending.",
+    "current_dream_boundary": "Real MiMo calls on selected documents in copies; current 3142-page full upgrade separately verified. Commit 395cb4f0 CI: Heavy and E2E passed, Desktop first setup stalled after source persistence. The one-shot sources exit fix needs exact new SHA CI.",
     "current_dream_lifecycle_copy": "D:/pmbrain-acceptance/dream-1444-lifecycle",
-    "current_dream_ui_copy": "D:/pmbrain-acceptance/dream-1444-ui"
+    "current_dream_ui_copy": "D:/pmbrain-acceptance/dream-1444-ui",
+    "latest_real_upgrade_copy": "D:/pmbrain-acceptance/upgrade-1444-20261009",
+    "latest_real_upgrade_baseline": "D:/backups/20261008T063834266Z-1.4.42-cc4c98c6",
+    "latest_real_upgrade_boundary": "Source Schema 130 with nullable revision column; full 3142-page migration, committed batches survive process.exit and cancellation. Migration-owned revision UUIDs are validated separately from all protected columns. Logs: .codex/dream-1444/upgrade-*.log."
   },
   "files": [
     {

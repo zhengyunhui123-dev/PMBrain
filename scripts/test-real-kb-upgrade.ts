@@ -24,10 +24,15 @@ async function inventory(previous?:Record<string,{columns:string[];count:number;
   for(const table of protectedTables){
     const columns=previous?.[table]?.columns??(await engine.executeRaw<{column_name:string}>('SELECT column_name FROM information_schema.columns WHERE table_schema=$1 AND table_name=$2 ORDER BY ordinal_position',['public',table])).map(r=>r.column_name);
     if(!columns.length)continue;
-    const rows=await engine.executeRaw<{hash:string}>(`SELECT md5(to_jsonb(x)::text) AS hash FROM (SELECT ${columns.map(quote).join(',')} FROM ${quote(table)}) x ORDER BY hash`);
+    const projection=columns.map(column=>table==='pages'&&column==='knowledge_revision'?'NULL::uuid AS knowledge_revision':quote(column));
+    const rows=await engine.executeRaw<{hash:string}>(`SELECT md5(to_jsonb(x)::text) AS hash FROM (SELECT ${projection.join(',')} FROM ${quote(table)}) x ORDER BY hash`);
     result[table]={columns,count:rows.length,sha256:createHash('sha256').update(rows.map(r=>r.hash).join('\n')).digest('hex')};
   }
   return result;
+}
+async function revisionInventory(){
+  const columns=await engine.executeRaw<{column_name:string}>("SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='pages' AND column_name='knowledge_revision'");
+  return columns.length?engine.executeRaw<{id:number;revision:string|null}>('SELECT id,knowledge_revision::text AS revision FROM pages ORDER BY id'):[];
 }
 async function footprint(){return engine.executeRaw('SELECT pg_database_size(current_database())::text AS database_bytes,pg_total_relation_size($1::regclass)::text AS pages_bytes,pg_indexes_size($1::regclass)::text AS page_indexes_bytes',['pages']);}
 async function search(){
@@ -58,7 +63,7 @@ try{
     console.log('Measuring Chinese retrieval');
     const searches=await search();
     console.log('Measuring metadata writes with rollback');
-    const result={schema:await engine.getConfig('version'),inventory:data,footprint:await footprint(),search:searches,writes:await writes()};
+    const result={schema:await engine.getConfig('version'),inventory:data,revisions:await revisionInventory(),footprint:await footprint(),search:searches,writes:await writes()};
     await Bun.write(file('before'),JSON.stringify(result,null,2));
     console.log(JSON.stringify({phase:mode,schema:result.schema,counts:Object.fromEntries(Object.entries(result.inventory).map(([t,r])=>[t,r.count])),footprint:result.footprint,writes_ms:result.writes,search_ms:result.search.map(r=>({query:r.query,hits:r.hits.length,ms:r.ms}))}));
   }else if(mode==='interrupt'){
@@ -91,10 +96,13 @@ try{
     const cancelled=await Bun.file(file('cancel')).json();
     const preserved=await engine.executeRaw('SELECT id,knowledge_revision::text AS revision FROM pages WHERE id=ANY($1::int[]) ORDER BY id',[cancelled.assigned.map((r:{id:number})=>r.id)]);
     const pending=await engine.executeRaw('SELECT id FROM pages WHERE knowledge_revision IS NULL');
-    const result={phase:mode,data_unchanged:changed.length===0,changed_tables:changed,search_identical:searchChanged.length===0,search_changed:searchChanged,baseline_hits_retained:lostTop20.length===0,top20_reordered:lostTop20.map(r=>({query:r.query,count:r.lost.length})),unexplained_lost_hits:lostHits,resumed_revisions_unchanged:JSON.stringify(preserved)===JSON.stringify(cancelled.assigned),pending:pending.length,schema:await engine.getConfig('pmbrain.schema.version'),...after};
+    if(!Array.isArray(before.revisions))throw new Error('The baseline must include revision inventory; rerun before on an unupgraded isolated copy');
+    const currentRevisions=new Map((await revisionInventory()).map(row=>[row.id,row.revision]));
+    const originalRevisionsPreserved=before.revisions.every((row:{id:number;revision:string|null})=>currentRevisions.has(row.id)&&(row.revision===null||currentRevisions.get(row.id)===row.revision));
+    const result={phase:mode,data_unchanged:changed.length===0,changed_tables:changed,search_identical:searchChanged.length===0,search_changed:searchChanged,baseline_hits_retained:lostTop20.length===0,top20_reordered:lostTop20.map(r=>({query:r.query,count:r.lost.length})),unexplained_lost_hits:lostHits,original_revisions_preserved:originalRevisionsPreserved,resumed_revisions_unchanged:JSON.stringify(preserved)===JSON.stringify(cancelled.assigned),pending:pending.length,schema:await engine.getConfig('pmbrain.schema.version'),...after};
     await Bun.write(file('verify'),JSON.stringify(result,null,2));
     console.log(JSON.stringify({...result,inventory:undefined,search:result.search.map(r=>({query:r.query,hits:r.hits.length,ms:r.ms}))}));
-    if(changed.length||lostHits.length||pending.length||!result.resumed_revisions_unchanged)throw new Error('Real database acceptance failed');
+    if(changed.length||lostHits.length||pending.length||!originalRevisionsPreserved||!result.resumed_revisions_unchanged)throw new Error('Real database acceptance failed');
   }else if(mode==='maintenance'){
     const {extractStaleFromDB}=await import('../src/commands/extract-stale.ts');
     const {runMentionPass}=await import('../src/core/mentions/pass.ts');
