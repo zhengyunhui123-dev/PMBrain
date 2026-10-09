@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ArrowUpRight, CheckCircle2, CircleAlert, CircleDashed, CircleStop, FileText, LoaderCircle, PenLine, Sparkles, X, XCircle } from 'lucide-react';
+import { ArrowUpRight, CheckCircle2, CircleDashed, CircleStop, FileText, LoaderCircle, PenLine, Sparkles, X, XCircle } from 'lucide-react';
 import { api } from '../api';
 import { formatDate, type ConsoleRun } from '../lib/shared';
 import { taskName } from '../../../shared/task-progress';
@@ -7,6 +7,7 @@ import { useProductTasks } from './TaskActivity';
 import { TaskProgressCard, taskLink, taskStatus, taskStopping, formatFileBytes } from './TaskProgress';
 import './maintenance-tasks.css';
 import type { SyncFileDetails } from '../../../shared/task-progress';
+import { taskHasRemaining, taskPercent, taskRoundCompleted, taskRoundListSummary } from './task-presentation';
 
 const activeTask = (run: ConsoleRun) => run.status === 'running' || run.status === 'queued';
 const selectedTaskId = () => new URLSearchParams(window.location.hash.split('?')[1]).get('run') ?? '';
@@ -47,7 +48,11 @@ function MaintenanceTaskDetail({ run, onClose, onChange }: { run: ConsoleRun; on
     } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
     finally { setBusy(false); }
   };
-  return <dialog ref={dialog} className="maintenance-task-dialog" aria-label={`${name}详情`} onCancel={onClose} onClose={onClose}>
+  return <dialog ref={dialog} className="maintenance-task-dialog" aria-label={`${name}详情`} onCancel={onClose} onClose={onClose} onClick={event=>{
+    if(event.target!==event.currentTarget)return;
+    const bounds=event.currentTarget.getBoundingClientRect();
+    if(event.clientX<bounds.left||event.clientX>bounds.right||event.clientY<bounds.top||event.clientY>bounds.bottom)onClose();
+  }}>
     <header><div><h2>{name}</h2><p>{description(run)}</p></div><button type="button" aria-label="关闭整理详情" onClick={onClose}><X size={20} /></button></header>
     <div className="maintenance-detail-body">
       <div className="maintenance-detail-meta"><span>{run.trigger === 'scheduled' ? '自动任务' : '手动任务'}</span><span>开始于 {formatDate(run.startedAt, '—')}</span></div>
@@ -62,7 +67,7 @@ function MaintenanceTaskDetail({ run, onClose, onChange }: { run: ConsoleRun; on
       {!run.product && <p className="maintenance-muted">此历史任务没有保存步骤进度，可在任务中心查看结果。</p>}
       {error && <p className="product-error" role="alert">{error}</p>}
     </div>
-    <footer>{activeTask(run) && <button type="button" disabled={busy || taskStopping(run)} onClick={() => void act(false)}><CircleStop size={16} />{busy || taskStopping(run) ? '正在停止…' : '停止任务'}</button>}{(['failed', 'cancelled'].includes(run.status) || (run.kind === 'dream_quick' && taskStatus(run) === '部分完成')) && run.id.startsWith('task-') && <button type="button" disabled={busy} onClick={() => void act(true)}>{busy ? '正在提交…' : run.kind === 'dream_quick' ? '继续未完成任务' : '重新执行'}</button>}<button type="button" className="maintenance-primary" onClick={() => taskLink(run)}><ArrowUpRight size={16} />查看任务</button></footer>
+    <footer>{activeTask(run) && <button type="button" disabled={busy || taskStopping(run)} onClick={() => void act(false)}><CircleStop size={16} />{busy || taskStopping(run) ? '正在停止…' : '停止任务'}</button>}{(['failed', 'cancelled'].includes(run.status) || (run.kind === 'dream_quick' && taskRoundCompleted(run) && taskHasRemaining(run))) && run.id.startsWith('task-') && <button type="button" disabled={busy} onClick={() => void act(true)}>{busy ? '正在提交…' : run.kind === 'dream_quick' ? '继续未完成任务' : '重新执行'}</button>}<button type="button" className="maintenance-primary" onClick={() => taskLink(run)}><ArrowUpRight size={16} />查看任务</button></footer>
   </dialog>;
 }
 
@@ -112,7 +117,7 @@ export function MaintenanceTasksPage() {
     setLocalRuns(current => [...current.filter(row => row.id !== run.id), run]);
     if (run.id !== selectedId) select(run);
   };
-  const visible = runs.filter(run => filter === 'all' || (filter === 'active' ? activeTask(run) : filter === 'unfinished' ? ['failed', 'cancelled'].includes(run.status) || taskStatus(run) === '部分完成' : run.status === filter));
+  const visible = runs.filter(run => filter === 'all' || (filter === 'active' ? activeTask(run) : filter === 'unfinished' ? ['failed', 'cancelled'].includes(run.status) || (taskRoundCompleted(run) && taskHasRemaining(run)) : run.status === filter));
   return <div className="pm-page maintenance-tasks-page">
     <header className="maintenance-page-head"><div><h1>知识整理</h1><p>查看整理任务、进度和结果。</p></div><div className="maintenance-launch-actions"><button type="button" disabled={Boolean(starting)} onClick={() => void start('quick')}>{starting === 'quick' ? <LoaderCircle size={16} /> : <PenLine size={16} />}快速维护</button><button type="button" className="maintenance-primary" disabled={Boolean(starting)} onClick={() => void start('full')}>{starting === 'full' ? <LoaderCircle size={16} /> : <Sparkles size={16} />}AI 深度整理</button></div></header>
     <div className="maintenance-automation"><span className={`maintenance-dot ${schedule?.enabled ? 'enabled' : ''}`} /><span>{schedule ? schedule.enabled ? `自动整理已开启 · 每天 ${schedule.time}（${schedule.timeZone}）` : '自动整理未开启' : scheduleError || '正在读取自动整理设置…'}</span><button type="button" onClick={() => { window.location.hash = 'settings-dream'; }}>整理设置</button></div>
@@ -123,11 +128,12 @@ export function MaintenanceTasksPage() {
         {starting && <tr className="maintenance-submitting"><td><span className="maintenance-run-title">{starting === 'quick' ? '快速维护' : 'AI 深度整理'}</span></td><td><span role="status"><LoaderCircle size={16} />正在创建任务…</span></td><td>—</td><td /></tr>}
         {visible.map(run => {
           const name = run.product?.name ?? taskName(run.kind);
-          const state = taskStatus(run) === '部分完成' ? 'partial' : run.status;
-          const Icon = state === 'running' ? LoaderCircle : state === 'queued' ? CircleDashed : state === 'partial' ? CircleAlert : state === 'completed' ? CheckCircle2 : state === 'cancelled' ? CircleStop : XCircle;
+          const state = run.status;
+          const percent=taskPercent(run);
+          const Icon = state === 'running' ? LoaderCircle : state === 'queued' ? CircleDashed : state === 'completed' ? CheckCircle2 : state === 'cancelled' ? CircleStop : XCircle;
           return <tr key={run.id} className="maintenance-run-row" tabIndex={0} aria-label={`查看${name}任务`} onClick={() => select(run)} onKeyDown={event => { if (event.target === event.currentTarget && ['Enter', ' '].includes(event.key)) { event.preventDefault(); select(run); } }}>
             <td><div className="maintenance-run-name"><span className="maintenance-run-icon"><FileText size={20} /></span><div><b>{name}</b><small>{run.trigger === 'scheduled' ? '自动整理 · ' : ''}{description(run)}</small></div></div></td>
-            <td><span className={`maintenance-run-state maintenance-state-${state}`}><Icon size={18} />{taskStatus(run)}{run.product?.percent != null && <small>{run.product.percent}%</small>}</span><small className="maintenance-run-stage">{run.product?.errorReason ?? (activeTask(run) ? run.product?.stage ?? '等待执行' : run.product?.metrics.filter(metric => metric.value > 0).slice(0, 2).map(metric => `${metric.label} ${metric.value}`).join(' · ') || run.product?.stage)}</small></td>
+            <td><span className={`maintenance-run-state maintenance-state-${state}`}><Icon size={18} />{taskStatus(run)}{percent != null && <small>{percent}%</small>}</span><small className="maintenance-run-stage">{taskRoundCompleted(run)?taskRoundListSummary(run):run.product?.errorReason ?? (activeTask(run) ? run.product?.stage ?? '等待执行' : run.product?.metrics.filter(metric => metric.value > 0).slice(0, 2).map(metric => `${metric.label} ${metric.value}`).join(' · ') || run.product?.stage)}</small></td>
             <td><time dateTime={run.completedAt ?? run.startedAt}>{formatDate(run.completedAt ?? run.startedAt, '—')}</time></td><td><button type="button" aria-label={`查看${name}详情`} onClick={event => { event.stopPropagation(); select(run); }}><ArrowUpRight size={17} /></button></td>
           </tr>;
         })}

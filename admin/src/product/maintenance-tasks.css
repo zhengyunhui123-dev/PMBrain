@@ -58,6 +58,7 @@
 .maintenance-task-dialog .product-task-progress header { margin-bottom: 20px; }
 .maintenance-task-dialog .product-task-progress header > div { display: none; }
 .maintenance-task-dialog .product-task-state { padding: 6px 10px; border-radius: 7px; background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.maintenance-task-dialog .product-task-state.state-completed { background: color-mix(in srgb, var(--success, #34a864) 12%, transparent); }
 .maintenance-task-dialog .product-task-current { font-size: 14px; }
 .maintenance-task-dialog .product-task-bar { height: 5px; }
 .maintenance-task-dialog .product-task-metrics { gap: 22px; }

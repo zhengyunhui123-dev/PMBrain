@@ -30,6 +30,8 @@ def run(args):
             status = 200
             if path.endswith('/runs'):
                 data = rows
+            elif path.endswith('/task-center'):
+                data = {'mode': 'pglite', 'pglite_busy': False, 'rows': rows, 'queue': None, 'server_time': date}
             elif path.endswith('/workbench/availability'):
                 data = {'serviceReady': True, 'databaseReady': True}
             elif path.endswith('/dream/schedule'):
@@ -146,8 +148,71 @@ def run(args):
         page.get_by_role('button', name='AI 深度整理', exact=True).click()
         expect(page.get_by_role('alert')).to_contain_text('模型当前不可用')
         assert len(rows) == 2
+        reject = False
+        partial = json.loads(json.dumps(current))
+        partial.update(id='task-3', startedAt='2026-10-09T14:00:00Z')
+        partial['product'].update(stage='部分完成，请查看未完成步骤', percent=0, total=1482, processed=0, completedSteps=1, errorReason='实体落库验收失败：目标未保存', metrics=[{'label': label, 'value': value} for label, value in [('待检查项', 2939), ('长期判断', 5), ('合并事实', 11), ('创建实体', 4), ('剩余页面', 1482)]], steps=[{'id': 'relations', 'label': '建立知识关联', 'status': 'completed', 'phases': ['extract']}, {'id': 'capture', 'label': '识别实体', 'status': 'failed', 'phases': ['capture_entities']}])
+        rows.insert(0, partial)
+        page.reload()
+        page.set_viewport_size({'width': 1440, 'height': 1000})
+        page.evaluate("document.documentElement.setAttribute('data-theme','dark')")
+        partial_row = page.locator('.maintenance-run-row').first
+        expect(partial_row).to_contain_text('本轮已完成')
+        expect(partial_row).to_contain_text('长期判断 5')
+        expect(partial_row).to_contain_text('待处理：待检查项 2939')
+        assert '部分完成' not in partial_row.inner_text() and '0%' not in partial_row.inner_text()
+        assert partial_row.locator('.maintenance-state-completed').count() == 1
+        page.screenshot(path=str(output / 'round-list.png'), full_page=True)
+        partial_row.click()
+        dialog = page.get_by_role('dialog', name='AI 深度整理详情', exact=True)
+        expect(dialog).to_contain_text('本轮成果')
+        expect(dialog).to_contain_text('剩余事项')
+        expect(dialog).to_contain_text('创建实体 4')
+        expect(dialog).to_contain_text('剩余页面 1482')
+        expect(dialog).to_contain_text('目标未保存')
+        badge = dialog.locator('.product-task-state.state-completed')
+        assert badge.evaluate("element => { const values=getComputedStyle(element).color.match(/\\d+/g).map(Number); return values[1]>values[0] && values[1]>values[2]; }")
+        expect(dialog.locator('[role=progressbar]')).to_have_count(0)
+        expect(dialog).to_contain_text('已处理 0 / 1482 份资料')
+        dialog.get_by_role('heading', name='本轮成果', exact=True).click()
+        expect(dialog).to_be_visible()
+        page.screenshot(path=str(output / 'round-detail.png'), full_page=True)
+        page.mouse.click(70, 90)
+        expect(page.locator('.maintenance-task-dialog[open]')).to_have_count(0)
+        assert 'run=' not in page.url
+        page.get_by_label('整理任务状态').select_option('unfinished')
+        expect(page.locator('.maintenance-run-row')).to_have_count(2)
+        page.get_by_label('整理任务状态').select_option('all')
+        rows[-1].update(status='completed', completedAt=date)
+        rows[-1]['product'].update(stage='部分完成，请查看未完成步骤', percent=0)
+        page.reload()
+        page.locator('.maintenance-run-row').filter(has_text='快速维护').click()
+        expect(page.get_by_role('button', name='继续未完成任务', exact=True)).to_be_visible()
+        page.keyboard.press('Escape')
+        failed = json.loads(json.dumps(partial))
+        failed.update(id='task-4', status='failed', startedAt='2026-10-09T15:00:00Z', error='数据库执行失败')
+        failed['product'].update(stage='任务失败', errorReason='数据库执行失败')
+        rows.insert(0, failed)
+        page.reload()
+        failed_row = page.locator('.maintenance-run-row').first
+        expect(failed_row.locator('.maintenance-state-failed')).to_contain_text('失败')
+        assert '本轮已完成' not in failed_row.inner_text()
+        failed_row.click()
+        expect(page.get_by_role('dialog').get_by_role('alert')).to_contain_text('数据库执行失败')
+        page.mouse.click(70, 90)
+        page.get_by_role('button', name='任务中心', exact=True).click()
+        task_row = page.locator('.task-table tbody tr').filter(has_text='长期判断 5').filter(has_text='本轮已完成')
+        expect(task_row).to_have_count(1)
+        expect(task_row).to_contain_text('待检查项 2939')
+        assert '0%' not in task_row.inner_text() and '部分完成' not in task_row.inner_text()
+        page.screenshot(path=str(output / 'round-task-center.png'), full_page=True)
+        task_row.get_by_role('button', name='查看详情', exact=True).click()
+        expect(page.get_by_label('任务详情', exact=True)).to_contain_text('本轮成果')
+        page.mouse.click(70, 90)
+        expect(page.get_by_label('任务详情', exact=True)).to_have_count(0)
+        assert partial['product']['percent'] == 0 and partial['status'] == 'completed'
         assert not errors, errors
-        (output / 'result.json').write_text(json.dumps({'passed': True, 'checks': ['quick_create', 'queued_to_running', 'full_main_source', 'list_spinner', 'click_details', 'keyboard_details', 'reload_details', 'cancel_stops_spinners', 'explicit_retry', 'completed_result', 'reload_history', 'filters', 'native_submit_error', 'dark_light', '1100_layout'], 'browser_errors': errors}), encoding='utf-8')
+        (output / 'result.json').write_text(json.dumps({'passed': True, 'checks': ['quick_create', 'queued_to_running', 'full_main_source', 'list_spinner', 'click_details', 'keyboard_details', 'reload_details', 'cancel_stops_spinners', 'explicit_retry', 'completed_result', 'reload_history', 'filters', 'native_submit_error', 'dark_light', '1100_layout', 'green_round_result', 'outcomes_and_remaining', 'zero_pages_preserved', 'outside_click_close', 'inside_click_stays', 'unfinished_filter_and_retry', 'real_failure_red', 'task_center_round_parity'], 'browser_errors': errors}), encoding='utf-8')
         browser.close()
 
 

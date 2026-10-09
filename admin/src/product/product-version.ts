@@ -1,1 +1,1 @@
-export const PRODUCT_VERSION = '1.4.46';
+export const PRODUCT_VERSION = '1.4.47';
