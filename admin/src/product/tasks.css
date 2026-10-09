@@ -74,3 +74,13 @@
 .product-active-files article { padding: 12px; border: 1px solid var(--border); border-radius: 10px; overflow-wrap: anywhere; }
 .product-active-files p { margin: 6px 0; font-size: 13px; color: var(--product-muted, var(--text-muted)); }
 .product-active-files small { color: var(--product-muted, var(--text-muted)); }
+.product-task-relations { margin: 16px 0; }
+.product-task-relations > button { color: var(--pm-success, #73b77d); }
+.product-task-relation-table { overflow-x: auto; margin-top: 12px; }
+.product-task-relation-table table { width: 100%; border-collapse: collapse; text-align: left; }
+.product-task-relation-table th, .product-task-relation-table td { padding: 10px 8px; border-bottom: 1px solid var(--pm-border, #383838); vertical-align: top; min-width: 110px; }
+.product-task-relation-table td:last-child { min-width: 180px; white-space: pre-wrap; }
+.product-task-relation-table small { display: block; opacity: .7; overflow-wrap: anywhere; }
+.product-task-relation-table tr.is-clickable { cursor: pointer; }
+.product-task-relation-table tr.is-clickable:hover, .product-task-relation-table tr.is-clickable:focus-visible { background: var(--bg-hover); outline: 1px solid var(--accent); }
+.product-task-git { margin: 12px 0; overflow-wrap: anywhere; }

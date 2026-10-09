@@ -27,6 +27,8 @@ export interface SyncFileActivity {
 }
 
 export interface TaskProductProgress {
+  relations?: { total: number; available: boolean };
+  gitResults?: Array<{ sourceId: string; committed: boolean; commit: string | null; files: string[]; pending: Array<{path: string; reason: string}>; error?: string }>;
   syncScan?: { scanned: number; unchanged: number; total?:number; path?:string; bytes?:number; updatedAt?:string; active?:boolean };
   syncFiles?: { total: number; completed: number; failed: number; remaining: number };
   activeFiles?: SyncFileActivity[];
@@ -57,3 +59,9 @@ export function taskName(kind: string): string {
   if (kind === 'sync_all') return '同步资料';
   return ({ doctor_check: '检查知识库', show_stats: '读取知识库状态', source_add: '添加知识源', export_markdown: '导出知识' } as Record<string, string>)[kind] ?? '后台任务';
 }
+export type TaskRelation = {
+  id: number; fromId: number; toId: number; fromSourceId: string; toSourceId: string;
+  fromSlug: string; toSlug: string; fromTitle: string; toTitle: string;
+  type: string; producer: string | null; context: string; phase: string; present: boolean;
+};
+export type TaskRelations = { total: number; available: boolean; rows: TaskRelation[]; next: number | null };

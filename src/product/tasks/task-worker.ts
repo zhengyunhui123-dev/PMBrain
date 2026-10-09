@@ -164,6 +164,7 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
   const sourceId = input.sourceId ? await resolveSourceId(engine, input.sourceId) : undefined;
   if (sourceId && (await fetchSource(engine, sourceId))?.archived) throw new Error(`Source ${sourceId} is archived`);
   const common = {
+    afterSync: input.preset === 'quick' && !input.dryRun ? (sourceId: string, root: string, result: import('../../commands/sync.ts').SyncResult) => rpc('task.gitCommit', [sourceId, root, result]) : undefined,
     dryRun: input.dryRun, sourceId,
     captureEntitySlugs:input.slugs,
     signal: abort.signal,

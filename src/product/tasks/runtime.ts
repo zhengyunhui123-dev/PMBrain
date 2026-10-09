@@ -23,6 +23,8 @@ import { withDatabasePriority } from '../database/priority';
 import { SyncFileQueue, SYNC_FILE_QUEUE, SYNC_FILE_TASK } from './sync-file-queue.ts';
 import type { MaintenanceCheckpoint, SyncFileInput } from './types.ts';
 import { resolveSourceId } from '../../core/source-resolver.ts';
+import { recordSyncedGitFile, commitQuickMaintenanceSource } from './synced-git.ts';
+import type { SyncResult } from '../../commands/sync.ts';
 import { TaskResourceGuard, PRODUCT_QUEUE_CAPACITY, type TaskResourceOptions } from './resource-guard.ts';
 
 export const PRODUCT_TASK_QUEUE = 'pmbrain-product';
@@ -38,6 +40,8 @@ function toRun(job: MinionJob, stopping = false): ConsoleRun {
   const adapter = new TaskProgressAdapter(String(job.data.kind), progress.product);
   if (!progress.product) adapter.write(progress.output ?? '');
   const task = job.data.task as ProductTask;
+  adapter.view.relations = { available: Object.hasOwn(job.data, 'relations'), total: Object.keys((job.data.relations ?? {}) as object).length };
+  adapter.view.gitResults = Object.values(job.data.gitResults ?? {});
   if (task?.type === 'import') adapter.view.material = { ...adapter.view.material,
     name: task.input.path.split(/[\\/]/).filter(Boolean).at(-1) ?? task.input.path,
     sourceId: task.input.sourceId ?? 'default', directory: task.input.directory === true,
@@ -196,7 +200,7 @@ export class ProductTaskRuntime {
     if (this.failure) throw this.failure;
     if (this.stopped || this.paused) throw new Error('数据库维护期间暂不能提交新任务');
     await this.resources.assertImportDisk();
-    const job = await queue.add(TASK_NAME, { task, kind, trigger }, {
+    const job = await queue.add(TASK_NAME, { task, kind, trigger, relations: {} }, {
       queue: PRODUCT_TASK_QUEUE, max_attempts: 1, maxQueueSize: PRODUCT_QUEUE_CAPACITY,
       timeout_ms: task.input.timeoutMs ?? DEFAULT_PRODUCT_TASK_TIMEOUT_MS,
       idempotency_key: idempotencyKey ?? `product:${randomUUID()}`,
@@ -290,6 +294,10 @@ export class ProductTaskRuntime {
     const live = [...this.executions.values()].map(execution => execution.run()).filter(run => run.kind !== 'sync_file');
     live.push(...[...this.sessionViews.values()].filter(run => !live.some(row => row.id === run.id)
       && (this.stoppingSessions.has(Number(run.id.slice(5))) || !this.cached.some(row=>row.id===run.id && ['completed','cancelled'].includes(row.status)))));
+    for (const run of live) {
+      const saved = this.cached.find(item=>item.id===run.id)?.product;
+      if(run.product && saved) {run.product.relations=saved.relations;run.product.gitResults=saved.gitResults;}
+    }
     for (const run of live) if (run.product && run.kind === 'dream_quick') run.product.activeFiles = this.fileProjection.active(Number(run.id.slice(5)));
     return [...live, ...this.cached.filter(row => !live.some(run => run.id === row.id))]
       .sort((a, b) => b.startedAt.localeCompare(a.startedAt)).slice(0, 100);
@@ -298,7 +306,11 @@ export class ProductTaskRuntime {
   async getRun(id: string): Promise<ConsoleRun | null> {
     if (!/^task-\d+$/.test(id)) return null;
     const execution = this.executions.get(Number(id.slice(5)));
-    if (execution) return execution.run();
+    if (execution) {
+      const live = execution.run(), saved = await this.queue.getJob(Number(id.slice(5)));
+      if (saved && live.product) { const fresh = toRun(saved).product!; live.product.relations=fresh.relations; live.product.gitResults=fresh.gitResults; }
+      return live;
+    }
     const session = this.sessionViews.get(Number(id.slice(5)));
     if (session && (this.stoppingSessions.has(Number(id.slice(5))) || session.status==='failed'
       || (['running','queued'].includes(session.status) && [...this.fileSessions.values()].includes(Number(id.slice(5)))))) {
@@ -367,10 +379,10 @@ export class ProductTaskRuntime {
       await Promise.allSettled([...this.fileSessions].filter(([, owner]) => owner === jobId).map(([child]) => this.executions.get(child)?.done));
       const checkpoint = task.input.checkpoint;
       delete record!.data.resourceStopReason;
-      await this.engine.executeRaw('UPDATE minion_jobs SET data=$2::jsonb WHERE id=$1',[jobId,record!.data]);
+        await this.engine.executeRaw(`UPDATE minion_jobs SET data=data || ($2::jsonb - 'relations' - 'gitFiles' - 'gitResults') WHERE id=$1`,[jobId,record!.data]);
       if (checkpoint) {
         resumeMaintenanceCheckpoint(checkpoint,run.status==='completed');
-        await this.engine.executeRaw(`UPDATE minion_jobs SET data = $2::jsonb WHERE id = $1`, [jobId, { ...record!.data, task }]);
+        await this.engine.executeRaw(`UPDATE minion_jobs SET data = data || ($2::jsonb - 'relations' - 'gitFiles' - 'gitResults') WHERE id = $1`, [jobId, { ...record!.data, task }]);
       }
       await this.engine.executeRaw(`UPDATE minion_jobs SET status = 'paused', result = NULL WHERE queue = $1 AND (data->>'sessionId')::bigint = $2 AND result->>'status' IN ('failed','error','partial')`, [SYNC_FILE_QUEUE, jobId]);
       this.sessionViews.delete(jobId);
@@ -446,7 +458,8 @@ export class ProductTaskRuntime {
       await appendTaskCheckpoint(context.id, file);
       progress.files = [...(progress.files ?? []), file].slice(-100);
       await persist();
-    }, structuredTask.type === 'sync-file', structuredTask.type === 'sync-file' ? structuredTask.input : undefined,this.resources);
+    }, structuredTask.type === 'sync-file', structuredTask.type === 'sync-file' ? structuredTask.input : undefined,this.resources,
+    structuredTask.type === 'sync-file' ? Number(record.data.sessionId) : context.id);
     const workerPath = /\/(?:~BUN|\$bunfs)\//.test(decodeURIComponent(import.meta.url))
       ? './product/tasks/task-worker.ts'
       : new URL(import.meta.url.endsWith('.ts') ? './task-worker.ts' : './task-worker.js', import.meta.url);
@@ -462,12 +475,15 @@ export class ProductTaskRuntime {
     let settleReject!: (error: Error) => void;
     const result = new Promise<unknown>((resolve, reject) => { settleResolve = resolve; settleReject = reject; });
     let cancelRequested = false;
+    const gitController = new AbortController();
+    const gitOperations = new Set<Promise<unknown>>();
     let completed = false;
     let deferred = false;
     let flush: ReturnType<typeof setInterval> | undefined;
     const cancel = (reason?:string) => {
       if (cancelRequested) return;
       cancelRequested = true;
+      gitController.abort();
       host.cancel();
       thread.postMessage({ type: 'cancel' });
       settleReject(new Error(reason??'任务已取消'));
@@ -479,6 +495,7 @@ export class ProductTaskRuntime {
         thread.removeAllListeners('message');
         try { await host.close(); }
         finally {
+          await Promise.allSettled([...gitOperations]);
           try {
             if (reusableThreads && reusableThreads.length<1 && (completed || deferred) && !cancelRequested && !this.stopped && !this.paused && !this.localPressure && !this.externalPressure) {
               thread.removeAllListeners('error');
@@ -516,11 +533,33 @@ export class ProductTaskRuntime {
         const dispatch = async () => {
           if(cancelRequested) throw new Error('任务已取消');
           if (message.method === 'task.syncFileHash') return this.fileQueue.sourceHash(message.args[0] as SyncFileInput);
-          if (message.method === 'task.syncFile') return this.fileQueue.enqueue(context.id, record.lock_token!, message.args[0] as SyncFileInput);
+          if (message.method === 'task.syncFile') {
+            const file = message.args[0] as SyncFileInput;
+            const result = await this.fileQueue.enqueue(context.id, record.lock_token!, file);
+            if (!result.deferred && ['imported', 'skipped'].includes(result.status)) await recordSyncedGitFile(this.engine, context.id,
+              file.options.sourceId ?? 'default', { path: file.relativePath, hash: file.hash });
+            return result;
+          }
+          if (message.method === 'task.gitCommit') {
+            if (structuredTask.type !== 'dream' || structuredTask.input.preset !== 'quick' || structuredTask.input.dryRun) throw new Error('无效的自动 Git 提交任务');
+            adapter.view.stage = '保存本地版本'; await persist();
+            const sourceId = String(message.args[0]), root = String(message.args[1]);
+            const operation = commitQuickMaintenanceSource(this.engine, context.id, sourceId, root, message.args[2] as SyncResult, {
+              signal: gitController.signal,
+              beforeCommit: async () => {
+                const valid = await this.engine.executeRaw(`SELECT j.id FROM minion_jobs j JOIN sources s ON s.id=$3
+                  WHERE j.id=$1 AND j.status='active' AND j.lock_token=$2 AND s.local_path=$4 AND NOT s.archived`,
+                [context.id, record.lock_token, sourceId, root]);
+                if (!valid.length) throw new Error('任务租约或 Source 路径已改变，未提交 Git');
+              },
+            });
+            gitOperations.add(operation);
+            try { return await operation; } finally { gitOperations.delete(operation); }
+          }
           if (message.method === 'task.maintenanceCheckpoint') {
             if (structuredTask.type !== 'dream') throw new Error('无效的维护检查点');
             structuredTask.input.checkpoint = message.args[0] as MaintenanceCheckpoint;
-            const rows = await this.engine.executeRaw(`UPDATE minion_jobs SET data = $3::jsonb, updated_at = now() WHERE id = $1 AND status = 'active' AND lock_token = $2 RETURNING id`, [context.id, record.lock_token, record.data]);
+            const rows = await this.engine.executeRaw(`UPDATE minion_jobs SET data = data || ($3::jsonb - 'relations' - 'gitFiles' - 'gitResults'), updated_at = now() WHERE id = $1 AND status = 'active' AND lock_token = $2 RETURNING id`, [context.id, record.lock_token, record.data]);
             if (!rows.length) throw new Error('维护任务已停止或租约失效');
             return null;
           }
@@ -539,7 +578,7 @@ export class ProductTaskRuntime {
       } else if (message.type === 'progress') {
         if (message.phases) adapter.plan(message.phases);
         if (message.scope) adapter.scope(message.scope);
-        if (message.event) adapter.event(message.event);
+        if (message.event) { adapter.event(message.event); host.setRelationPhase(message.event.phase); }
         if (message.syncScan) adapter.scan(message.syncScan);
         if (message.page && adapter.view.material) adapter.view.material.page = message.page;
         if(message.event)updateActivity({stage:({'import.process':'解析与切分','import.vector':'生成向量','import.write':'写入知识库'} as Record<string,string>)[message.event.phase]??activity?.stage});
@@ -596,7 +635,7 @@ export class ProductTaskRuntime {
           const counts=await this.fileQueue.counts(context.id);
           if(counts.remaining>0){
             record.data.resourceStopReason=message;
-            await this.engine.executeRaw('UPDATE minion_jobs SET data=$2::jsonb,error_text=$3 WHERE id=$1',[context.id,record.data,message]);
+            await this.engine.executeRaw(`UPDATE minion_jobs SET data=data || ($2::jsonb - 'relations' - 'gitFiles' - 'gitResults'),error_text=$3 WHERE id=$1`,[context.id,record.data,message]);
             await this.fileQueue.release(context.id,record.lock_token);
             this.scheduleSessionRefresh(context.id);
             return MINION_DEFERRED;

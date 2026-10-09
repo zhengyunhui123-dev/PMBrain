@@ -122,6 +122,7 @@ import type { BatchAuditSite } from './retry.ts';
 export interface BatchOpts {
   auditSite?: BatchAuditSite;
   signal?: AbortSignal;
+  linkAudit?: import('./pmbrain-adapters/task-relations.ts').LinkAudit;
 }
 
 /**
@@ -1091,6 +1092,7 @@ export interface BrainEngine {
       toSourceId?: string;
       originSourceId?: string;
       resolutionType?: 'qualified' | 'unqualified';
+      linkAudit?: import('./pmbrain-adapters/task-relations.ts').LinkAudit;
     },
   ): Promise<void>;
   /**

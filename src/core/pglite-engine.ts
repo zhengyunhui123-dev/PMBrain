@@ -1,4 +1,5 @@
 import { lockRelationPages } from './pmbrain-adapters/relation-writer.ts';
+import { recordCreatedTaskLinks, type LinkAudit } from './pmbrain-adapters/task-relations.ts';
 import { readMentionPolicy } from './mentions/policy.ts';
 import { writePageAliases } from './mentions/pass.ts';
 import { composablePgliteTransaction } from './page-state/transactions.ts';
@@ -3069,6 +3070,7 @@ export class PGLiteEngine implements BrainEngine {
       toSourceId?: string;
       originSourceId?: string;
       resolutionType?: 'qualified' | 'unqualified';
+      linkAudit?: LinkAudit;
     },
   ): Promise<void> {
     const fromSrc = opts?.fromSourceId ?? 'default';
@@ -3089,7 +3091,7 @@ export class PGLiteEngine implements BrainEngine {
     const src = linkSource ?? 'markdown';
     // Mirror addLinksBatch's VALUES + composite JOIN shape. The old cross-
     // product over pages f/t fanned out across sources containing the slugs.
-    await this.db.query(
+    const inserted = await this.db.query<{ id: number; created: boolean }>(
       `INSERT INTO links (from_page_id, to_page_id, link_type, context, link_source, origin_page_id, origin_field, resolution_type)
        SELECT f.id, t.id, v.link_type, v.context, v.link_source, o.id, v.origin_field, v.resolution_type
        FROM (VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11))
@@ -3100,17 +3102,19 @@ export class PGLiteEngine implements BrainEngine {
        ON CONFLICT (from_page_id, to_page_id, link_type, link_source, origin_page_id) DO UPDATE SET
           context = EXCLUDED.context,
           origin_field = EXCLUDED.origin_field,
-          resolution_type = EXCLUDED.resolution_type`,
+          resolution_type = EXCLUDED.resolution_type
+       RETURNING id, (xmax = 0) AS created`,
       [from, to, linkType || '', context || '', src, originSlug ?? null, originField ?? null, fromSrc, toSrc, originSrc, opts?.resolutionType ?? null]
     );
+    await recordCreatedTaskLinks(this, opts?.linkAudit, inserted.rows.filter(row => row.created).map(row => Number(row.id)));
   }
 
   async addLinksBatch(links: LinkBatchInput[], opts?: BatchOpts): Promise<number> {
     if (links.length === 0) return 0;
-    return this.batchRetry(opts?.auditSite ?? 'addLinksBatch', opts?.signal, () => this._addLinksBatchOnce(links), links.length);
+    return this.batchRetry(opts?.auditSite ?? 'addLinksBatch', opts?.signal, () => this._addLinksBatchOnce(links, opts), links.length);
   }
 
-  private async _addLinksBatchOnce(links: LinkBatchInput[]): Promise<number> {
+  private async _addLinksBatchOnce(links: LinkBatchInput[], opts?: BatchOpts): Promise<number> {
     if (links.length === 0) return 0;
     // unnest() pattern: 10 array-typed bound parameters regardless of batch
     // size. Same shape as PostgresEngine (v0.18). Avoids the 65535-parameter
@@ -3142,9 +3146,10 @@ export class PGLiteEngine implements BrainEngine {
        JOIN pages t ON t.slug = v.to_slug AND t.source_id = v.to_source_id
        LEFT JOIN pages o ON o.slug = v.origin_slug AND o.source_id = v.origin_source_id
        ON CONFLICT (from_page_id, to_page_id, link_type, link_source, origin_page_id) DO NOTHING
-       RETURNING 1`,
+       RETURNING id`,
       [fromSlugs, toSlugs, linkTypes, contexts, linkSources, originSlugs, originFields, fromSourceIds, toSourceIds, originSourceIds, linkKinds, resolutionTypes]
     );
+    await recordCreatedTaskLinks(this, opts?.linkAudit, (result.rows as Array<{ id: number }>).map(row => Number(row.id)));
     return result.rows.length;
   }
 

@@ -384,6 +384,7 @@ export interface CycleReport {
 export interface CycleOpts {
   captureEntitySlugs?: string[];
   syncFileRuntime?: SyncFileRuntime;
+  afterSync?: (sourceId: string, root: string, result: import('../commands/sync.ts').SyncResult) => Promise<unknown>;
   completedPhases?: PhaseResult[];
   phaseCheckpoint?: (phases: PhaseResult[]) => Promise<void>;
   /** If true, no writes to filesystem or DB. All phases honor this. */
@@ -1011,6 +1012,7 @@ async function runPhaseSync(
   concurrency?: number,
   fileRuntime?: SyncFileRuntime,
   signal?: AbortSignal,
+  afterSync?: CycleOpts['afterSync'],
 ): Promise<SyncPhaseResult> {
   try {
     const { performSync } = await import('../commands/sync.ts');
@@ -1034,8 +1036,10 @@ async function runPhaseSync(
       documentOcr,
       concurrency,
       fileRuntime,
+      workingTree: fileRuntime ? true : undefined,
       signal,
     });
+    const git = !dryRun && afterSync && sourceId ? await afterSync(sourceId, brainDir, result) : undefined;
     const syncedCount = result.added + result.modified;
     const uncommittedCount = result.uncommitted
       ? result.uncommitted.added + result.uncommitted.modified + result.uncommitted.deleted
@@ -1057,6 +1061,7 @@ async function runPhaseSync(
         failedFiles: result.failedFiles ?? 0,
         syncStatus: result.status,
         dryRun,
+        ...(git ? { git } : {}),
         ...(result.uncommitted ? { uncommitted: result.uncommitted } : {}),
       },
       pagesAffected: result.pagesAffected,
@@ -1842,6 +1847,7 @@ export async function runCycle(
           opts.syncConcurrency,
           opts.syncFileRuntime,
           opts.signal,
+          opts.afterSync,
         ));
         result.duration_ms = duration_ms;
         // Capture changed slugs for incremental extract.

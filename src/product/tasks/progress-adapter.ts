@@ -157,7 +157,7 @@ export function finishTaskProgress(view: TaskProductProgress, status: string, re
   add('跳过资料', data.skipped);
   add('失败文件', data.errors);
   add('知识分块', data.chunksCreated);
-  add('新建关联', data.totals?.links_created);
+  add(next.relations?.available ? '新增关联' : '新建关联', next.relations?.available ? next.relations.total : data.totals?.links_created);
   add('向量化', data.embedded ?? data.totals?.pages_embedded);
   if (Array.isArray(data.phases)) {
     add('异常步骤', data.phases.filter((phase: any) => phase.status === 'fail').length);
@@ -181,7 +181,7 @@ export function finishTaskProgress(view: TaskProductProgress, status: string, re
       if (Array.isArray(capture.unresolved_references)) add('未解析引用',capture.unresolved_references.length);
       add('剩余页面', capture.pages_remaining);
       add('创建实体', capture.entities_written);
-      add('新增关系', capture.relations_created);
+      if (!next.relations?.available) add('新增关系', capture.relations_created);
       if (typeof capture.entities_isolated === 'number') add('孤立实体', capture.entities_isolated);
       if (typeof capture.unlinked_mentions === 'number') add('未关联提及', capture.unlinked_mentions);
       if (typeof capture.report_line === 'string' && capture.report_line.trim()) next.detail = capture.report_line;

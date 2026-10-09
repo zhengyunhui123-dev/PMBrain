@@ -1,3 +1,5 @@
+import { readTaskRelations } from '../product/tasks/relations.ts';
+import { getAdminKnowledgeGraphEdge } from './admin-knowledge-graph.ts';
 
 import express from 'express';
 import { taskRunSummary } from '../product/tasks/progress-adapter.ts';
@@ -997,16 +999,18 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
     }
   });
 
-  const dreamSettingsView = async (overrides?: { outputDir?: string; dualWrite?: boolean; includeUncommitted?: boolean }) => {
-    const [storedOutputDir, storedDualWrite, storedBrainDir, storedIncludeUncommitted] = await Promise.all([
+  const dreamSettingsView = async (overrides?: { outputDir?: string; dualWrite?: boolean; includeUncommitted?: boolean; autoGitCommit?: boolean }) => {
+    const [storedOutputDir, storedDualWrite, storedBrainDir, storedIncludeUncommitted, storedAutoGitCommit] = await Promise.all([
       engine.getConfig('dream.synthesize.output_dir'),
       engine.getConfig('dream.synthesize.dual_write'),
       engine.getConfig('sync.repo_path'),
       engine.getConfig('sync.include_working_tree'),
+      engine.getConfig('sync.auto_git_commit'),
     ]);
     const outputDir = overrides?.outputDir ?? (storedOutputDir?.trim() || 'output');
     const dualWrite = overrides?.dualWrite ?? (storedDualWrite !== 'false');
     const includeUncommitted = overrides?.includeUncommitted ?? (storedIncludeUncommitted === 'true');
+    const autoGitCommit = overrides?.autoGitCommit ?? storedAutoGitCommit !== 'false';
     const defaultBrainDir = storedBrainDir?.trim() || brainDirFromConfig(config);
     const resolvedOutputDir = defaultBrainDir
       ? resolveDreamOutputRoot(defaultBrainDir, outputDir)
@@ -1017,6 +1021,7 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
       outputDir,
       dualWrite,
       includeUncommitted,
+      autoGitCommit,
       defaultBrainDir: defaultBrainDir || null,
       resolvedOutputDir,
       directoryExists: resolvedOutputDir ? existsSync(resolvedOutputDir) : false,
@@ -1096,6 +1101,8 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
     const rawOutputDir = typeof req.body?.outputDir === 'string' ? req.body.outputDir.trim() : '';
     const dualWrite = req.body?.dualWrite;
     const includeUncommitted = req.body?.includeUncommitted;
+    const autoGitCommit = req.body?.autoGitCommit;
+    if (autoGitCommit !== undefined && typeof autoGitCommit !== 'boolean') { res.status(400).json({error:'auto_git_commit_must_be_boolean'}); return; }
     if (!rawOutputDir || rawOutputDir.length > 1024 || rawOutputDir.includes('\0')) {
       res.status(400).json({ error: 'invalid_dream_output_dir' });
       return;
@@ -1110,7 +1117,7 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
     }
     const outputDir = rawOutputDir === '/output' || rawOutputDir === '\\output' ? 'output' : rawOutputDir;
     try {
-      const view = await dreamSettingsView({ outputDir, dualWrite, includeUncommitted });
+      const view = await dreamSettingsView({ outputDir, dualWrite, includeUncommitted, autoGitCommit });
       if (dualWrite && !view.resolvedOutputDir) {
         res.status(400).json({ error: 'dream_default_directory_unavailable' });
         return;
@@ -1122,8 +1129,9 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
         engine.setConfig('dream.synthesize.output_dir', outputDir),
         engine.setConfig('dream.synthesize.dual_write', dualWrite ? 'true' : 'false'),
         engine.setConfig('sync.include_working_tree', includeUncommitted ? 'true' : 'false'),
+        ...(typeof autoGitCommit==='boolean' ? [engine.setConfig('sync.auto_git_commit',autoGitCommit?'true':'false')] : []),
       ]);
-      sendAdminContract(res, DreamSettingsResponseSchema, await dreamSettingsView({ outputDir, dualWrite, includeUncommitted }));
+      sendAdminContract(res, DreamSettingsResponseSchema, await dreamSettingsView({ outputDir, dualWrite, includeUncommitted, autoGitCommit }));
     } catch (e) {
       res.status(500).json({ error: e instanceof Error ? e.message : 'save_dream_settings_failed' });
     }
@@ -1330,6 +1338,11 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
     }
   });
 
+  app.get('/admin/api/knowledge-graph/edge/:id', requireAdmin, async (req: Request, res: Response) => {
+    try { res.json(await getAdminKnowledgeGraphEdge(engine, Number(req.params.id))); }
+    catch (error) { res.status(400).json({error: error instanceof Error ? error.message : String(error)}); }
+  });
+
   app.get('/admin/api/knowledge-graph/meta', requireAdmin, async (req: Request, res: Response) => {
     try {
       sendAdminContract(res, KnowledgeGraphMetaResponseSchema, await getAdminKnowledgeGraphMeta(engine, {
@@ -1528,6 +1541,13 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
       return;
     }
     res.json(run);
+  });
+
+  app.get('/admin/api/runs/:id/relations', requireAdmin, async (req: Request, res: Response) => {
+    const id = String(req.params.id);
+    if (!/^task-\d+$/.test(id) || !await productTasks.getRun(id)) { res.status(404).json({error:'run_not_found'}); return; }
+    try { res.json(await readTaskRelations(engine, Number(id.slice(5)), Math.max(0, Number(req.query.after)||0))); }
+    catch (error) { res.status(500).json({error:error instanceof Error ? error.message : String(error)}); }
   });
 
   app.get('/admin/api/runs/:id/files', requireAdmin, async (req: Request, res: Response) => {

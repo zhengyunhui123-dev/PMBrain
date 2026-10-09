@@ -6,6 +6,7 @@ export const DreamSettingsResponseSchema = z.object({
   outputDir: z.string(),
   dualWrite: z.boolean(),
   includeUncommitted: z.boolean(),
+  autoGitCommit: z.boolean().optional(),
   defaultBrainDir: z.string().nullable(),
   resolvedOutputDir: z.string().nullable(),
   directoryExists: z.boolean(),

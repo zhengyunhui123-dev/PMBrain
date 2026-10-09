@@ -9,6 +9,7 @@ import { validateSyncFileSnapshot, syncFileManifest, syncFileManifestKey } from 
 import { withSqlCancellation } from './sql-cancellation.ts';
 import { TaskResourceGuard, assertImportFileSize } from './resource-guard.ts';
 import { leaseRenewal } from '../database/lease-renewal.ts';
+import { recordSyncedGitFile } from './synced-git.ts';
 
 type RpcMessage = Extract<TaskWorkerMessage, { type: 'rpc' }>;
 type Scope = {
@@ -34,6 +35,8 @@ export class TaskEngineHost {
   private receipts = new Map<number, { slug: string; status: string; pageHash: string; chunks: number; sourceId:string }>();
   private checkedPages = new Map<number, Set<string>>();
   private abort = new AbortController();
+  private relationPhase = 'sync';
+  setRelationPhase(phase: string) { this.relationPhase = phase.replace(/^cycle\./, ''); }
 
   constructor(
     private owner: BrainEngine,
@@ -43,6 +46,7 @@ export class TaskEngineHost {
     private saveFileReceipt = false,
     private syncFile?: SyncFileInput,
     private resources=new TaskResourceGuard(),
+    private auditJobId = jobId,
   ) {this.owner=withSqlCancellation(owner,this.abort.signal);}
 
   ownsLockedTransaction(): boolean {
@@ -165,6 +169,7 @@ export class TaskEngineHost {
         const counted=await scope.engine.executeRaw<{count:number}>('SELECT count(*)::int AS count FROM content_chunks WHERE page_id=(SELECT id FROM pages WHERE slug=$1 AND source_id=$2)',[receipt.slug,receipt.sourceId]);
         receipt.chunks=counted[0].count;
         if(this.syncFile)await (scope.engine as BrainEngine).setConfig(syncFileManifestKey(this.syncFile),JSON.stringify(syncFileManifest(this.syncFile,receipt.slug,receipt.pageHash,receipt.chunks)));
+        if(this.syncFile)await recordSyncedGitFile(scope.engine,this.auditJobId,receipt.sourceId,{path:this.syncFile.relativePath,hash:this.syncFile.hash});
         const rows = await scope.engine.executeRaw(`UPDATE minion_jobs SET result = $3::jsonb, updated_at = now()
           WHERE id = $1 AND status = 'active' AND lock_token = $2 RETURNING id`, [this.jobId, this.token, JSON.stringify(receipt)]);
         if (!rows.length) throw new Error('文件任务已停止或租约失效');
@@ -240,7 +245,20 @@ export class TaskEngineHost {
           }
         }
       }
-      const result = await fn.apply(target, args);
+      const callArgs = [...args];
+      if (method === 'addLink' || method === 'addLinksBatch') {
+        const index = method === 'addLink' ? 7 : 1;
+        callArgs[index] = { ...(args[index] as object | undefined), linkAudit: { taskId: this.auditJobId, phase: this.relationPhase } };
+      }
+      const deletedPages = method === 'softDeletePages' ? await target.executeRaw<{ slug: string; source_path: string }>(
+        'SELECT slug,source_path FROM pages WHERE slug=ANY($1::text[]) AND source_id=$2 AND source_path IS NOT NULL',
+        [args[0], (args[1] as { sourceId: string }).sourceId]) : [];
+      const result = await fn.apply(target, callArgs);
+      if (method === 'softDeletePages') {
+        const deleted = new Set(result as string[]);
+        for (const page of deletedPages) if (deleted.has(page.slug)) await recordSyncedGitFile(target, this.auditJobId,
+          (args[1] as { sourceId: string }).sourceId, { path: page.source_path, deleted: true });
+      }
       if (method === 'executeRaw' && /INSERT\s+INTO\s+gbrain_cycle_locks/i.test(String(args[0]))) {
         for (const row of result as Array<{ id: string }>) this.cycleLocks.add(row.id);
       }

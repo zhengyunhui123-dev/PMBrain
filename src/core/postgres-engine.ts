@@ -1,4 +1,5 @@
 import { lockRelationPages } from './pmbrain-adapters/relation-writer.ts';
+import { recordCreatedTaskLinks, type LinkAudit } from './pmbrain-adapters/task-relations.ts';
 import { readMentionPolicy } from './mentions/policy.ts';
 import { writePageAliases } from './mentions/pass.ts';
 import { composablePostgresTransaction } from './page-state/transactions.ts';
@@ -2751,6 +2752,7 @@ export class PostgresEngine implements BrainEngine {
       toSourceId?: string;
       originSourceId?: string;
       resolutionType?: 'qualified' | 'unqualified';
+      linkAudit?: LinkAudit;
     },
   ): Promise<void> {
     const sql = this.sql;
@@ -2776,7 +2778,7 @@ export class PostgresEngine implements BrainEngine {
     // containing either slug, so a multi-source brain silently created edges
     // pointing at the wrong pages.
     const src = linkSource ?? 'markdown';
-    await sql`
+    const inserted = await sql`
       INSERT INTO links (from_page_id, to_page_id, link_type, context, link_source, origin_page_id, origin_field, resolution_type)
       SELECT f.id, t.id, v.link_type, v.context, v.link_source, o.id, v.origin_field, v.resolution_type
       FROM (VALUES (${from}, ${to}, ${linkType || ''}, ${context || ''}, ${src}, ${originSlug ?? null}, ${originField ?? null}, ${fromSrc}, ${toSrc}, ${originSrc}, ${opts?.resolutionType ?? null}))
@@ -2788,15 +2790,17 @@ export class PostgresEngine implements BrainEngine {
         context = EXCLUDED.context,
         origin_field = EXCLUDED.origin_field,
         resolution_type = EXCLUDED.resolution_type
+      RETURNING id, (xmax = 0) AS created
     `;
+    await recordCreatedTaskLinks(this, opts?.linkAudit, inserted.filter(row => row.created).map(row => Number(row.id)));
   }
 
   async addLinksBatch(links: LinkBatchInput[], opts?: BatchOpts): Promise<number> {
     if (links.length === 0) return 0;
-    return this.batchRetry(opts?.auditSite ?? 'addLinksBatch', opts?.signal, () => this._addLinksBatchOnce(links), links.length);
+    return this.batchRetry(opts?.auditSite ?? 'addLinksBatch', opts?.signal, () => this._addLinksBatchOnce(links, opts), links.length);
   }
 
-  private async _addLinksBatchOnce(links: LinkBatchInput[]): Promise<number> {
+  private async _addLinksBatchOnce(links: LinkBatchInput[], opts?: BatchOpts): Promise<number> {
     const sql = this.sql;
     // unnest() pattern: 7 array-typed bound parameters regardless of batch size.
     // Avoids the 65535-parameter cap and the postgres-js sql(rows, ...) helper's
@@ -2832,8 +2836,9 @@ export class PostgresEngine implements BrainEngine {
       JOIN pages t ON t.slug = v.to_slug AND t.source_id = v.to_source_id
       LEFT JOIN pages o ON o.slug = v.origin_slug AND o.source_id = v.origin_source_id
       ON CONFLICT (from_page_id, to_page_id, link_type, link_source, origin_page_id) DO NOTHING
-      RETURNING 1
+      RETURNING id
     `;
+    await recordCreatedTaskLinks(this, opts?.linkAudit, result.map(row => Number(row.id)));
     return result.length;
   }
 

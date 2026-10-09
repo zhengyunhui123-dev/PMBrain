@@ -3,6 +3,7 @@ import { Check, Circle, LoaderCircle, Minus, X } from 'lucide-react';
 import type { ConsoleRun } from '../lib/shared';
 import { taskName } from '../../../shared/task-progress';
 import './tasks.css';
+import { TaskRelationsDetails } from './TaskRelations';
 import { taskStopping, taskStatus, taskPercent, taskRoundCompleted, taskRoundSummary, taskHasRemaining } from './task-presentation';
 
 export { taskStopping, taskStatus } from './task-presentation';
@@ -46,6 +47,8 @@ export function TaskProgressCard({ run, link = true, timeline = false }: { run: 
       return <li key={step.id} className={`step-${step.status}`}><Icon size={16} aria-hidden="true" /><span>{step.label}{timeline && stepDescriptions[step.id] && <span className="task-step-description">{stepDescriptions[step.id]}</span>}{timeline && active && step.status === 'running' && view.phasePercent != null && <span className="task-step-progress"><span className="product-task-bar" role="progressbar" aria-label="当前步骤进度" aria-valuemin={0} aria-valuemax={100} aria-valuenow={view.phasePercent}><i style={{ width: `${view.phasePercent}%` }} /></span><span>{view.phasePercent}%</span></span>}</span><small>{({ completed: '已完成', running: active ? '进行中' : '已停止', skipped: '未执行', failed: '未完成', pending: '待处理' })[step.status]}</small></li>;
     })}</ol> : null}
     {view?.metrics.length ? roundCompleted?<details className="product-task-round-statistics"><summary>查看统计明细</summary><dl className="product-task-metrics">{view.metrics.map(metric => <div key={metric.label}><dt>{metric.label}</dt><dd>{metric.value}</dd></div>)}</dl></details>:<dl className="product-task-metrics">{view.metrics.map(metric => <div key={metric.label}><dt>{metric.label}</dt><dd>{metric.value}</dd></div>)}</dl> : null}
+    <TaskRelationsDetails key={run.id} run={run} />
+    {view?.gitResults?.map(git => <section className="product-task-git" key={git.sourceId} aria-label="Git 提交结果"><p>{git.sourceId} · {git.committed ? `本地提交 ${git.files.length} 个文件 · ${git.commit?.slice(0,8)}` : git.pending.length ? '仍有文件待提交' : '本轮无需提交'}</p>{git.error && <p role="alert">{git.error}</p>}{!!git.pending.length && <details><summary>待提交 {git.pending.length} 个文件</summary><ul>{git.pending.map(file=><li key={file.path}>{file.path}：{file.reason}</li>)}</ul></details>}</section>)}
     {view?.detail && (!roundCompleted||!/^部分完成[,，]/.test(view.detail)) && <p className="product-task-caption">{view.detail}</p>}
     {view?.errorReason && !roundCompleted && <p className="product-task-error" role="alert">{view.errorReason}</p>}
     {run.status === 'cancelled' && <p className="product-task-caption">已完成的内容会保留。</p>}

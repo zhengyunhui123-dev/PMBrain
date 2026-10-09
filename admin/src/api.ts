@@ -197,6 +197,8 @@ export const api = {
     apiFetch('/admin/api/capture-runs', { method: 'POST', body: JSON.stringify({ content, sourceId }) }),
   runs: () => apiFetch('/admin/api/runs'),
   run: (id: string) => apiFetch(`/admin/api/runs/${encodeURIComponent(id)}`),
+  runRelations: (id: string, after = 0): Promise<import('../../shared/task-progress').TaskRelations> => apiFetch(`/admin/api/runs/${encodeURIComponent(id)}/relations?after=${after}`),
+  knowledgeGraphEdge: (id: number): Promise<import('./lib/knowledge-graph').KnowledgeGraphData> => apiFetch(`/admin/api/knowledge-graph/edge/${id}`),
   runFiles: (id: string, after = 0): Promise<import('../../shared/task-progress').SyncFileDetails> => apiFetch(`/admin/api/runs/${encodeURIComponent(id)}/files?after=${after}`),
   cancelRun: (id: string) => apiFetch(`/admin/api/runs/${encodeURIComponent(id)}/cancel`, { method: 'POST' }),
   retryRun: (id: string) => apiFetch(`/admin/api/runs/${encodeURIComponent(id)}/retry`, { method: 'POST' }),
@@ -235,7 +237,7 @@ export const api = {
     apiFetch('/admin/api/export-runs', { method: 'POST', body: JSON.stringify({ rootPath }) }),
   dreamOverview: () => apiFetch<DreamOverviewResponse>('/admin/api/dream/overview', undefined, DreamOverviewResponseSchema),
   dreamSettings: () => apiFetch<DreamSettingsResponse>('/admin/api/dream/settings', undefined, DreamSettingsResponseSchema),
-  saveDreamSettings: (body: { outputDir: string; dualWrite: boolean; includeUncommitted: boolean }) =>
+  saveDreamSettings: (body: { outputDir: string; dualWrite: boolean; includeUncommitted: boolean; autoGitCommit?: boolean }) =>
     apiFetch<DreamSettingsResponse>('/admin/api/dream/settings', { method: 'POST', body: JSON.stringify(body) }, DreamSettingsResponseSchema),
   dreamSchedule: () => apiFetch<DreamScheduleResponse>('/admin/api/dream/schedule', undefined, DreamScheduleResponseSchema),
   saveDreamSchedule: (body: { enabled: boolean; time: string }) =>

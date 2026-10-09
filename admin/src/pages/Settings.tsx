@@ -106,6 +106,7 @@ function DreamSettings() {
     outputDir: 'output',
     dualWrite: true,
     includeUncommitted: false,
+    autoGitCommit: true,
     defaultBrainDir: null,
     resolvedOutputDir: null,
     directoryExists: false,
@@ -160,7 +161,7 @@ function DreamSettings() {
     setMessage('');
     setError('');
     try {
-      const saved = await api.saveDreamSettings({ outputDir, dualWrite, includeUncommitted: settings.includeUncommitted });
+      const saved = await api.saveDreamSettings({ outputDir, dualWrite, includeUncommitted: settings.includeUncommitted, autoGitCommit:settings.autoGitCommit });
       setSettings(current => ({ ...current, ...saved }));
       setSavedOutputDir(saved.outputDir);
       setMessage(dualWrite ? '已开启本地 Markdown 写入' : '已关闭本地 Markdown 写入');
@@ -172,9 +173,9 @@ function DreamSettings() {
     }
   };
 
-  const saveIncludeUncommitted = async (includeUncommitted: boolean) => {
-    const previousValue = settings.includeUncommitted;
-    setSettings(current => ({ ...current, includeUncommitted }));
+  const saveAutoGitCommit = async (autoGitCommit: boolean) => {
+    const previousValue = settings.autoGitCommit;
+    setSettings(current => ({ ...current, autoGitCommit }));
     setSaving(true);
     setMessage('');
     setError('');
@@ -182,12 +183,13 @@ function DreamSettings() {
       const saved = await api.saveDreamSettings({
         outputDir: settings.outputDir.trim() || 'output',
         dualWrite: settings.dualWrite,
-        includeUncommitted,
+        autoGitCommit,
+        includeUncommitted:settings.includeUncommitted,
       });
       setSettings(current => ({ ...current, ...saved }));
-      setMessage(includeUncommitted ? '快速维护将包含未提交内容' : '快速维护只同步 Git 已提交内容');
+      setMessage(autoGitCommit ? '同步成功后自动提交' : '已关闭自动 Git 提交');
     } catch (nextError) {
-      setSettings(current => ({ ...current, includeUncommitted: previousValue }));
+      setSettings(current => ({ ...current, autoGitCommit: previousValue }));
       setError(nextError instanceof Error ? nextError.message : String(nextError));
     } finally {
       setSaving(false);
@@ -255,19 +257,20 @@ function DreamSettings() {
             disabled={loading || saving}
           />
         </label>
-        <label className="dream-dual-write-setting" htmlFor="sync-include-uncommitted">
+        <label className="dream-dual-write-setting" htmlFor="sync-auto-git-commit">
           <span>
-            <b>包含未提交内容</b>
-            <small>默认关闭。关闭时快速维护只同步 Git 已提交版本，并提示尚未提交的变化；开启后才同步工作区修改和新文件。</small>
+            <b>快速维护时自动 Git 提交</b>
+            <small>将成功同步的文件变更保存为本地版本记录。默认开启，只在本地提交；普通文件夹无需 Git。</small>
           </span>
           <input
-            id="sync-include-uncommitted"
+            id="sync-auto-git-commit"
             type="checkbox"
-            checked={settings.includeUncommitted}
-            onChange={event => void saveIncludeUncommitted(event.target.checked)}
+            checked={settings.autoGitCommit !== false}
+            onChange={event => void saveAutoGitCommit(event.target.checked)}
             disabled={loading || saving}
           />
         </label>
+        <p className="pm-hint">快速维护包含本地新增、修改和删除的文件。{settings.autoGitCommit!==false?'同步成功后自动提交。':'自动提交已关闭。'}</p>
       </div>
       {(message || error) && <div className="settings-feedback" aria-live="polite">
         {message && <span className="pm-ok">{message}</span>}

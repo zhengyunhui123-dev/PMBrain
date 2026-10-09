@@ -2,6 +2,8 @@ import { z } from 'zod';
 
 export const RunStatusSchema = z.enum(['queued', 'running', 'completed', 'failed', 'cancelled']);
 export const TaskProductProgressSchema = z.object({
+  relations: z.object({ total: z.number().int().nonnegative(), available: z.boolean() }).optional(),
+  gitResults: z.array(z.object({ sourceId: z.string(), committed: z.boolean(), commit: z.string().nullable(), files: z.array(z.string()), pending: z.array(z.object({path:z.string(),reason:z.string()})), error:z.string().optional() })).optional(),
   activeFiles: z.array(z.object({
     id:z.number().int().positive(), sourceId:z.string(),path:z.string(),bytes:z.number().nonnegative(),stage:z.string(),updatedAt:z.string(),
     operation:z.string().optional(),operationStartedAt:z.string().optional(),chunksTotal:z.number().nonnegative().optional(),
