@@ -3,7 +3,7 @@
   "reviewed_at": "2026-10-09",
   "product_version": "1.4.49",
   "subsystem": "entity-relations",
-  "status": "release-blocked-pending-exact-sha-ci",
+  "status": "release-blocked-pending-package-acceptance",
   "upstream": {
     "version": "0.60.102.0",
     "commit": "5b5891069413b28b2fe3a50675116d67d5a1e145",
@@ -78,12 +78,19 @@
     "entity-card and wanted-pages product UI; coverage/referrers modules have no new menu",
     "automatic legacy concept-page retyping",
     "production 44-percent precision and page-770 stall diagnosis",
-    "exact pushed-SHA GitHub CI and Windows release package",
+    "Windows release package acceptance",
     "upstream attendance evidence gate; existing PMBrain attendance parser retained",
     "whole-repository Agent/runtime upgrade and external enrichment; the full ingest contracts run on the existing shared Core Minion runtime",
     "production repair of task 8989 and its historical 25 unresolved references; production knowledge was read only"
   ],
   "verification": {
+    "ci_verified_source_commit": "052ae879dc67ed6f21f1b41536bde303f549ebaf",
+    "ci_runs": {
+      "Test": "https://github.com/zhengyunhui123-dev/PMBrain/actions/runs/37954543247",
+      "E2E Tests": "https://github.com/zhengyunhui123-dev/PMBrain/actions/runs/37954542342",
+      "Heavy Tests": "https://github.com/zhengyunhui123-dev/PMBrain/actions/runs/37954542601",
+      "Core User Journeys": "https://github.com/zhengyunhui123-dev/PMBrain/actions/runs/37954542272"
+    },
     "files": [
       "test/gbrain-relation-lifecycle.serial.test.ts",
       "test/relation-schema-upgrade.serial.test.ts",
