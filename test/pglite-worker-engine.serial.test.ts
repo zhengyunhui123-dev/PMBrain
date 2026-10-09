@@ -7,6 +7,8 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseAlreadyOwnedError } from '../src/core/pglite-errors';
+import {tryAcquireDbLock} from '../src/core/db-lock';
+import {TaskEngineHost} from '../src/product/tasks/engine-host';
 
 let engine: BrainEngine;
 const originalHome = [process.env.PMBRAIN_HOME, process.env.GBRAIN_HOME];
@@ -139,6 +141,44 @@ test('同一数据目录只允许一个 Worker 所有者，关闭重开保留内
 const RENEW_LOCK_SQL = `UPDATE minion_jobs SET lock_until = now() + ($1::double precision * interval '1 millisecond'), updated_at = now()
        WHERE id = $2 AND lock_token = $3 AND status = 'active'
        RETURNING id`;
+
+for(const rollback of [false,true])test(`同步锁在长写事务内能及时续期，${rollback?'回滚':'提交'}后续期仍有效`,async()=>{
+  const handles=await Promise.all(['sync-a','sync-b'].map(id=>tryAcquireDbLock(engine,`gbrain-sync:${id}`,0.05)));
+  let ready!:()=>void,release!:()=>void;
+  const opened=new Promise<void>(resolve=>{ready=resolve;}),gate=new Promise<void>(resolve=>{release=resolve;});
+  const active=engine.transaction(async tx=>{await tx.setConfig('cycle-renewal-test','pending');ready();await gate;if(rollback)throw new Error('requested rollback');});
+  const settled=active.then(()=>null,error=>error);
+  try{
+    await opened;
+    const refreshing=Promise.all(handles.map(handle=>handle!.refresh()));
+    const winner=await Promise.race([refreshing.then(values=>({values})),Bun.sleep(1500).then(()=>({values:null}))]);
+    expect(winner.values).toEqual([true,true]);
+    release();await settled;
+    const rows=await engine.executeRaw<{id:string;refreshed:boolean}>("SELECT id,last_refreshed_at>acquired_at AS refreshed FROM gbrain_cycle_locks WHERE id=ANY($1::text[]) ORDER BY id",[handles.map(handle=>handle!.id)]);
+    expect(rows).toHaveLength(2);expect(rows.every(row=>row.refreshed)).toBe(true);
+  }finally{release();await settled;for(const handle of handles)await handle?.release();}
+},30_000);
+
+test('真实后台任务 Host 的同步锁续期不再新开一个等待自身结束的事务',async()=>{
+  const token='cycle-host-token',id=await insertActiveJob(token);
+  const host=new TaskEngineHost(engine,id,token,async()=>{});
+  let scope:number|undefined;
+  const call=(method:string,args:unknown[],scope?:number)=>host.dispatch({type:'rpc',id:1,method,args,scope});
+  try{
+    await call('executeRaw',[`INSERT INTO gbrain_cycle_locks(id,holder_pid,holder_host,acquired_at,ttl_expires_at,last_refreshed_at)
+      VALUES($1,$2,'test',now(),now()+interval '3 seconds',now()) RETURNING id`,['gbrain-sync:host',process.pid]]);
+    scope=await call('transaction.open',[]) as number;
+    await call('setConfig',['cycle-host-pending','uncommitted'],scope);
+    const renew=call('executeRaw',[`UPDATE gbrain_cycle_locks SET ttl_expires_at=now()+$3::interval,last_refreshed_at=now()
+      WHERE id=$1 AND holder_pid=$2 RETURNING id`,['gbrain-sync:host',process.pid,'30 minutes']]);
+    expect(await Promise.race([renew,Bun.sleep(1500).then(()=>null)])).toEqual([{id:'gbrain-sync:host'}]);
+    const rolledBack=await call('scope.close',[false],scope).catch(error=>error);scope=undefined;
+    expect(String(rolledBack)).toContain('任务事务已回滚');
+    expect(await engine.getConfig('cycle-host-pending')).toBeNull();
+    const [lock]=await engine.executeRaw<{remaining:number;holder_pid:number}>("SELECT EXTRACT(EPOCH FROM(ttl_expires_at-now()))::int remaining,holder_pid FROM gbrain_cycle_locks WHERE id=$1",['gbrain-sync:host']);
+    expect(lock!.remaining).toBeGreaterThan(1700);expect(lock!.holder_pid).toBe(process.pid);
+  }finally{if(scope!==undefined)await call('scope.close',[false],scope).catch(()=>{});await host.close();await engine.executeRaw('DELETE FROM minion_jobs WHERE id=$1',[id]);}
+},30_000);
 
 async function insertActiveJob(token: string): Promise<number> {
   const rows = await engine.executeRaw<{ id: number }>(

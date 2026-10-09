@@ -5,6 +5,7 @@ import { configureGateway } from '../../core/ai/gateway.ts';
 import { buildGatewayConfig } from '../../core/ai/gateway-config.ts';
 import { loadConfig } from '../../core/config.ts';
 import { withPgliteSavepoints } from './savepoints.ts';
+import { leaseRenewal } from './lease-renewal.ts';
 
 function respond(payload: { id: number; value?: unknown; error?: { name: string; message: string; properties: Record<string, unknown> } }): void {
   try { if (parentPort) parentPort.postMessage(payload); else process.send!(payload); }
@@ -15,7 +16,7 @@ const engine = new PGLiteEngine();
 let sequence = 0;
 const scopes = new Map<number, { engine: BrainEngine | ReservedConnection; finish: (commit: boolean) => void; done: Promise<unknown> }>();
 let openRootScope: number | undefined;
-let renewalWhileOpen: any[] | undefined;
+const renewalsWhileOpen = new Map<string, any[]>();
 let replayAfterReply: (() => Promise<void>) | undefined;
 
 async function perform(message: { method: string; args: any[]; scope?: number }): Promise<unknown> {
@@ -29,28 +30,28 @@ async function perform(message: { method: string; args: any[]; scope?: number })
     try { return await current.done; }
     finally {
       scopes.delete(scope!);
-      if (!commit && !rootClose && openRootScope !== undefined && renewalWhileOpen) {
+      if (!commit && !rootClose && openRootScope !== undefined && renewalsWhileOpen.size) {
         const root = scopes.get(openRootScope)?.engine;
-        const sql = renewalWhileOpen[0];
-        const params = renewalWhileOpen[1];
-        if (root && typeof sql === 'string') {
+        const renewals=[...renewalsWhileOpen.values()];
+        if (root) {
           replayAfterReply = async () => {
-            try { await root.executeRaw(sql, params); }
-            catch (error) { console.error('[database] 保存点回滚后续期任务锁失败:', error instanceof Error ? error.message : error); }
+            for(const [sql,params] of renewals){
+              try { await root.executeRaw(sql, params); }
+              catch (error) { console.error('[database] 保存点回滚后续期锁失败:', error instanceof Error ? error.message : error); }
+            }
           };
         }
       }
-      if (rootClose && renewalWhileOpen) {
-        const sql = renewalWhileOpen[0];
-        const params = renewalWhileOpen[1];
-        renewalWhileOpen = undefined;
+      if (rootClose && renewalsWhileOpen.size) {
+        const renewals=[...renewalsWhileOpen.values()];
+        renewalsWhileOpen.clear();
         if (openRootScope === scope) openRootScope = undefined;
-        if (typeof sql === 'string') {
-          replayAfterReply = async () => {
+        replayAfterReply = async () => {
+          for(const [sql,params] of renewals){
             try { await engine.executeRaw(sql, params); }
-            catch (error) { console.error('[database] 事务结束后续期任务锁失败:', error instanceof Error ? error.message : error); }
-          };
-        }
+            catch (error) { console.error('[database] 事务结束后续期锁失败:', error instanceof Error ? error.message : error); }
+          }
+        };
       }
     }
   }
@@ -91,8 +92,7 @@ let busy = false;
 let chain: Promise<void> = Promise.resolve();
 
 function isLockRenewal(message: Request): boolean {
-  const sql = message.args?.[0];
-  return message.method === 'executeRaw' && typeof sql === 'string' && /^\s*UPDATE\s+minion_jobs\s+SET\s+lock_until\b/i.test(sql);
+  return leaseRenewal(message.method, message.args) !== undefined;
 }
 
 function enqueue(work: () => Promise<void>): void {
@@ -118,7 +118,7 @@ async function reply(message: Request): Promise<void> {
       const scopeId = value as number;
       const settled = scopes.get(scopeId)?.done;
       openRootScope = scopeId;
-      renewalWhileOpen = undefined;
+      renewalsWhileOpen.clear();
       await settled?.catch(() => undefined);
       await waitForConnection();
       if (openRootScope === scopeId) openRootScope = undefined;
@@ -152,7 +152,7 @@ function drain(): void {
 const receive = (message: Request) => {
   if (message.scope !== undefined) { enqueue(() => reply(message)); return; }
   if (isLockRenewal(message) && openRootScope !== undefined && scopes.has(openRootScope)) {
-    renewalWhileOpen = message.args;
+    renewalsWhileOpen.set(leaseRenewal(message.method, message.args)!.key, message.args);
     const scope = openRootScope;
     enqueue(() => reply({ ...message, scope }));
     return;

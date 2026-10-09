@@ -152,6 +152,7 @@ export class ProductTaskRuntime {
         AND (child.result->>'status'='skipped' OR (SELECT count(*) FROM content_chunks WHERE page_id=p.id)=(child.result->>'chunks')::bigint))
       RETURNING parent_job_id`,[SYNC_FILE_QUEUE,this.engine.kind==='pglite']);
     for(const id of new Set(committed.map(row=>row.parent_job_id).filter((id):id is number=>id!==null)))await this.queue.resolveParent(id);
+    await this.fileQueue.cleanupCompletedSnapshots().catch(error => console.error('[tasks] snapshot recovery cleanup:', error));
     await this.recoverSessions();
     await this.queue.handleStalled([],SYNC_FILE_QUEUE);
     await this.engine.executeRaw(

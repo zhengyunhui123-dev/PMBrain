@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "reviewed_at": "2026-10-09",
-  "product_version": "1.4.45",
+  "product_version": "1.4.46",
   "subsystem": "entity-relations",
   "status": "release-blocked-pending-exact-sha-ci",
   "upstream": {
@@ -63,7 +63,10 @@
     "per-document six model calls and 120000 input/20000 output tokens; compact persisted-write receipt reserves the last call; unknown CNY prices do not enforce an amount cap",
     "generated fact-line provenance suppresses stale derived links while preserving original entity text and manual relationships",
     "only scoped imported-document requests auto-run; legacy unscoped UUID requests remain pending and do not silently rescan a knowledge base",
-    "Minion entity receipts and the subsequent Mention/NER/reconciliation checkpoint are separate so interruption resumes without repeated model extraction"
+    "Minion entity receipts and the subsequent Mention/NER/reconciliation checkpoint are separate so interruption resumes without repeated model extraction",
+    "Early terminal ingest receipts are read-only validated within the original loop and token budget; persisted correction and complete receipts resume without repeated writes. Gateway usage includes prior persisted turns.",
+    "PGLite process owner routes nonce-scoped job and cycle lease renewals through the open transaction and reapplies all renewals after rollback; product Host bypasses a new transaction only for its own acquired cycle locks.",
+    "Only successful import snapshots are reclaimed on runtime restart through the existing managed artifact path guard; paused and incomplete snapshots and resource limits remain unchanged."
   ],
   "deferred": [
     "whole-repository GBrain upgrade",
@@ -95,7 +98,10 @@
       "test/derived-link-reconciliation.test.ts",
       "test/wanted-links.test.ts",
       "test/entity-ingest-workflow.serial.test.ts",
-      "test/entity-ingest-gateway.serial.test.ts"
+      "test/entity-ingest-gateway.serial.test.ts",
+      "test/entity-ingest-completion.serial.test.ts",
+      "test/pglite-worker-engine.serial.test.ts",
+      "test/task-resource-limits.serial.test.ts"
     ],
     "check": "bun run check:gbrain-subsystems",
     "upstream_check": "bun run check:gbrain-subsystems --upstream D:/cursor-claude/gbrain",
@@ -113,12 +119,50 @@
     ],
     "current_dream_copy": "D:/pmbrain-acceptance/dream-1444-final-validation",
     "current_dream_evidence": ".codex/dream-1444/",
-    "current_dream_boundary": "Real MiMo calls on selected documents in copies; current 3142-page full upgrade separately verified. Commit 395cb4f0 CI: Heavy and E2E passed, Desktop first setup stalled after source persistence. The one-shot sources exit fix needs exact new SHA CI.",
+    "current_dream_boundary": "PMBrain 1.4.46 tester errors reproduced with isolated scripted Qwen-compatible and shared SDK paths; real provider Qwen and tester full Sidecar logs pending. Test receipts recorded under .codex/feedback-1446-*.log. Prior real MiMo document/lifecycle and full 3142-page upgrade evidence belongs to 1.4.44/45. Exact new SHA CI and installer remain pending.",
     "current_dream_lifecycle_copy": "D:/pmbrain-acceptance/dream-1444-lifecycle",
     "current_dream_ui_copy": "D:/pmbrain-acceptance/dream-1444-ui",
     "latest_real_upgrade_copy": "D:/pmbrain-acceptance/upgrade-1444-20261009",
     "latest_real_upgrade_baseline": "D:/backups/20261008T063834266Z-1.4.42-cc4c98c6",
-    "latest_real_upgrade_boundary": "Source Schema 130 with nullable revision column; full 3142-page migration, committed batches survive process.exit and cancellation. Migration-owned revision UUIDs are validated separately from all protected columns. Logs: .codex/dream-1444/upgrade-*.log."
+    "latest_real_upgrade_boundary": "Source Schema 130 with nullable revision column; full 3142-page migration, committed batches survive process.exit and cancellation. Migration-owned revision UUIDs are validated separately from all protected columns. Logs: .codex/dream-1444/upgrade-*.log.",
+    "previous_exact_sha_ci": {
+      "sha": "eda3ce7a3a22cb2a4503013260dc72a4a4fc4299",
+      "Test": "success",
+      "E2E": "success",
+      "Core_User_Journeys": "success",
+      "Heavy": "success"
+    },
+    "feedback_1446": {
+      "scripted_provider": "Qwen-compatible and shared SDK; tester endpoint not available",
+      "native_worker_stop_resume": {
+        "files": 120,
+        "assertions": 134,
+        "total_seconds": 210.46,
+        "log": ".codex/feedback-1446-stop-resume-final.log"
+      },
+      "runtime_snapshot_startup": {
+        "pglite": "1 pass / 8 assertions",
+        "postgres": "1 pass / 8 assertions",
+        "logs": [
+          ".codex/feedback-1446-runtime-cleanup.log",
+          ".codex/dream-1446/pg-runtime-cleanup.log"
+        ]
+      },
+      "current_old_copy_startup": "D:/pmbrain-acceptance/upgrade-1444-20261009; three native launches, 15.25-25.63 seconds",
+      "local_ci": {
+        "verify": 40,
+        "tests": 235,
+        "assertions": 564,
+        "exit_code": 0,
+        "log": ".codex/feedback-1446-ci-preview-complete.log"
+      },
+      "limitations": [
+        "exact new SHA Actions and installer pending",
+        "tester full Sidecar logs and actual Qwen endpoint pending",
+        "one compiled Windows WASM gate timeout remains unexplained; final gate passed",
+        "small-file native-worker batch performance remains an optimization boundary"
+      ]
+    }
   },
   "files": [
     {

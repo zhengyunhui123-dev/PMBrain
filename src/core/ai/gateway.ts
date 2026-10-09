@@ -3054,6 +3054,7 @@ export interface ToolLoopOpts {
   finalizeOnLastTurn?: boolean;
   prepareFinalMessages?: () => Promise<ChatMessage[]>;
   shouldFinalize?: (messages:readonly ChatMessage[]) => Promise<boolean>;
+  validateCompletion?: (text:string,canContinue:boolean) => Promise<string|null>;
   /** Per-turn max output tokens. Default 4096. */
   maxTokens?: number;
   disableReasoning?: boolean;
@@ -3214,6 +3215,16 @@ export async function toolLoop(opts: ToolLoopOpts): Promise<ToolLoopResult> {
     if (toolCalls.length === 0) {
       stopReason = opts.reportLengthStop && chatResult.stopReason === 'length' ? 'length' : 'end';
       finalText = chatResult.text;
+      if(stopReason==='end'&&opts.validateCompletion){
+        const correction=await opts.validateCompletion(finalText,!finalTurn&&turnIdx+1<maxTurns);
+        if(correction){
+          const blocks:ChatBlock[]=[{type:'text',text:correction}];
+          await opts.onToolResultTurn?.(turnIdx,messageIdx++,blocks);
+          messages.push({role:'user',content:blocks});
+          turnIdx++;
+          continue;
+        }
+      }
       break;
     }
 

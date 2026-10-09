@@ -8,6 +8,7 @@ import type { SyncFileInput } from './types.ts';
 import { validateSyncFileSnapshot, syncFileManifest, syncFileManifestKey } from './sync-file-queue.ts';
 import { withSqlCancellation } from './sql-cancellation.ts';
 import { TaskResourceGuard, assertImportFileSize } from './resource-guard.ts';
+import { leaseRenewal } from '../database/lease-renewal.ts';
 
 type RpcMessage = Extract<TaskWorkerMessage, { type: 'rpc' }>;
 type Scope = {
@@ -80,6 +81,10 @@ export class TaskEngineHost {
 
   private async perform(message: RpcMessage): Promise<unknown> {
     const { method, args, scope: scopeId } = message;
+    const renewal = leaseRenewal(method, args);
+    if (scopeId === undefined && this.owner.kind === 'pglite' && renewal?.table === 'gbrain_cycle_locks' && this.cycleLocks.has(String(renewal.id))) {
+      return this.owner.executeRaw(String(args[0]), args[1] as unknown[]);
+    }
     if (scopeId === undefined && method === 'purgeDeletedPages' && !(args[1] as { limit?: number } | undefined)?.limit) {
       const slugs: string[] = [];
       while (true) {

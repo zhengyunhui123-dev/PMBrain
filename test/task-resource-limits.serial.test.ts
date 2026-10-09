@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, expect, test } from 'bun:test';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -13,6 +13,8 @@ import { TaskResourceGuard, streamFileHash, copyFileSnapshot, assertImportFileSi
 import { assertSafeE2eDatabaseUrl } from './helpers/db-guard.ts';
 import { FileProjection } from '../src/product/tasks/file-projection.ts';
 import { taskArtifactPath } from '../src/product/tasks/checkpoint.ts';
+import { SyncFileQueue, SYNC_FILE_QUEUE, SYNC_FILE_TASK } from '../src/product/tasks/sync-file-queue.ts';
+import { gbrainPath } from '../src/core/config.ts';
 
 const database=process.env.PMBRAIN_TASK_TEST_DATABASE_URL;
 const keys=['PMBRAIN_HOME','GBRAIN_HOME','DATABASE_URL','PMBRAIN_DATABASE_URL','GBRAIN_DATABASE_URL'];
@@ -97,6 +99,34 @@ test('快照容量拒绝超限并在释放后恢复，不会删除原资料来�
   await expect(guard.reserveSnapshot(100)).resolves.toBeFunction();
 });
 
+test('软件重启回收已完成任务的遗留快照，暂停任务的快照与原资料保留',async()=>{
+  const directory=gbrainPath('task-artifacts','sync-files','77001');mkdirSync(directory,{recursive:true});
+  const completed=join(directory,'a'.repeat(64)+'-completed.md'),paused=join(directory,'b'.repeat(64)+'-paused.md');
+  const original=join(home,'snapshot-original.md');writeFileSync(original,'原始资料必须保留');
+  writeFileSync(completed,Buffer.alloc(60));writeFileSync(paused,Buffer.alloc(30));
+  const queue=new MinionQueue(engine);
+  for(const [path,status] of [[completed,'completed'],[paused,'paused']]){
+    const job=await queue.add(SYNC_FILE_TASK,{sessionId:77001,task:{input:{path}}},{queue:SYNC_FILE_QUEUE});
+    await engine.executeRaw("UPDATE minion_jobs SET status=$2,result=$3::jsonb WHERE id=$1",[job.id,status,{status:'imported'}]);
+  }
+  const resources=new TaskResourceGuard({snapshotQuotaBytes:100});
+  await resources.reserveSnapshot(0);
+  const denied=await resources.reserveSnapshot(40).catch(error=>error);expect(String(denied)).toContain('快照容量');
+  const files=new SyncFileQueue(engine,undefined,()=>true,resources);
+  await files.cleanupCompletedSnapshots();await files.cleanupCompletedSnapshots();
+  expect(existsSync(completed)).toBe(false);expect(existsSync(paused)).toBe(true);
+  expect(readFileSync(original,'utf8')).toBe('原始资料必须保留');
+  expect(await resources.reserveSnapshot(40)).toBeFunction();
+  writeFileSync(completed,Buffer.alloc(60));
+  const runtime=new ProductTaskRuntime(engine,{snapshotQuotaBytes:100});
+  try{
+    await runtime.start();
+    expect(existsSync(completed)).toBe(false);expect(existsSync(paused)).toBe(true);
+    expect(readFileSync(original,'utf8')).toBe('原始资料必须保留');
+  }finally{await runtime.close();}
+  unlinkSync(paused);
+},60000);
+
 test('容量满后拒绝后续文件，已接受文件正常完成释放快照，手动继续认领旧页面',async()=>{
   const dir=join(home,'bounded-scan');mkdirSync(dir);
   const content='# 有界队列\n\n容量不足时保留原文，先完成已经入队的资料。';
@@ -116,7 +146,10 @@ test('容量满后拒绝后续文件，已接受文件正常完成释放快照�
     const files=await runtime.files(run.id);expect(files?.rows).toHaveLength(2);expect(files?.rows.every(row=>row.status==='completed')).toBe(true);
     await runtime.retry(run.id);
     expect((await ended(run.id)).status).toBe('completed');
-    expect((await runtime.files(run.id))?.rows).toHaveLength(3);
+    const resumedFiles=await runtime.files(run.id);
+    const savedPages=await engine.executeRaw<{slug:string}>("SELECT slug FROM pages WHERE source_id='bounded-scan' ORDER BY slug");
+    expect(savedPages.map(page=>page.slug)).toEqual(['first','second','third']);
+    expect(resumedFiles?.rows,JSON.stringify({run:await runtime.getRun(run.id),files:resumedFiles})).toHaveLength(3);
     originals.forEach((bytes,index)=>expect(readFileSync(join(dir,['first.md','second.md','third.md'][index]))).toEqual(bytes));
   }finally{await runtime.close();}
 },60000);

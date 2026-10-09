@@ -92,6 +92,21 @@ test('失败子任务保留实际用量和原始错误，不让预算和汇总�
   expect(result.summary).toContain('choices 缺失');
 }, 60_000);
 
+test('不存在的实体回执显示落库验收失败，不误报为模型连接失败', async () => {
+  await note('notes/unresolved', '团队采用三纪早会体系，早会检查昨日完成事项、今日计划和待处理风险。');
+  const result = await runPhaseCaptureEntities(engine, {
+    sourceId: 'vault',
+    handler: async () => { throw new Error('ingest unresolved target: concepts/san-ji-zao-hui-ti-xi (source vault)'); },
+  });
+  expect(result.details.stop_reason).toBe('ingest_validation');
+  expect(result.details.pages_processed).toBe(0);
+  expect(result.details.pages_remaining).toBe(1);
+  expect(result.error?.class).toBe('IngestValidation');
+  expect(result.summary).toContain('实体落库验收失败');
+  expect(result.summary).not.toContain('模型调用失败');
+  expect(result.summary).toContain('concepts/san-ji-zao-hui-ti-xi');
+}, 60_000);
+
 test('新人、公司、项目和概念按类型落库，新别名复用已有公司', async () => {
   await engine.putPage('companies/xinghe', {
     type: 'company', title: '星河公司', compiled_truth: '已有公司页。', timeline: '', frontmatter: {},

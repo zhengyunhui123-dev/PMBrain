@@ -237,6 +237,18 @@ export class SyncFileQueue {
     }
   }
 
+  async cleanupCompletedSnapshots() {
+    let after = 0;
+    while (true) {
+      const rows = await this.engine.executeRaw<{id:number;session_id:string;path:string}>(`SELECT id,data->>'sessionId' AS session_id,data->'task'->'input'->>'path' AS path
+        FROM minion_jobs WHERE queue=$1 AND id>$2 AND status='completed' AND result->>'status' IN ('imported','skipped')
+        AND data->>'sessionId' IS NOT NULL AND data->'task'->'input'->>'path' IS NOT NULL ORDER BY id LIMIT 200`, [SYNC_FILE_QUEUE,after]);
+      for (const row of rows) await this.removeSnapshot(Number(row.session_id),row.path);
+      if (rows.length < 200) return;
+      after = rows.at(-1)!.id;
+    }
+  }
+
   private async removeSnapshot(sessionId:number,value:string){
     const root=resolve(gbrainPath('task-artifacts'),'sync-files');const path=resolve(value);
     if(!path.startsWith(root+sep)||basename(dirname(path))!==String(sessionId)||!/^[a-f0-9]{64}-/.test(basename(path)))throw new Error('文件任务快照清理路径无效');

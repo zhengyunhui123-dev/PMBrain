@@ -6,7 +6,7 @@ export const DEFAULT_ENTITY_CAPTURE_MAX_INPUT_TOKENS = 1_000_000;
 export const DEFAULT_ENTITY_CAPTURE_MAX_OUTPUT_TOKENS = 200_000;
 export const ENTITY_CAPTURE_CANDIDATE_LIMIT = 60;
 
-export type CaptureStopReason = 'completed' | 'tokens' | 'cost' | 'failure' | 'aborted' | 'model_unavailable';
+export type CaptureStopReason = 'completed' | 'tokens' | 'cost' | 'failure' | 'ingest_validation' | 'relation_failure' | 'aborted' | 'model_unavailable';
 
 import { CJK_PLAIN_MENTION_BLOCKLIST } from '../pmbrain-adapters/mention-policy.ts';
 export { CJK_PLAIN_MENTION_BLOCKLIST };
@@ -173,6 +173,8 @@ const STOP_REASON_TEXT: Record<CaptureStopReason, string> = {
   tokens: 'Token 到上限',
   cost: '费用到上限',
   failure: '模型调用失败',
+  ingest_validation: '实体落库验收失败',
+  relation_failure: '关系对账失败',
   aborted: '用户停止',
   model_unavailable: '实体识别模型不可用',
 };

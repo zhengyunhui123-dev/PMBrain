@@ -38,7 +38,7 @@ import type { BrainEngine } from '../../engine.ts';
 import type { GBrainConfig } from '../../config.ts';
 import { loadConfig } from '../../config.ts';
 import { buildBrainTools, filterAllowedTools } from '../tools/brain-allowlist.ts';
-import { entityIngestTools, verifyIngestResult, checkIngestCallBudget, ingestFinalPrompt,finalizeBeforeIngestBudget } from '../../pmbrain-adapters/entity-ingest-workflow.ts';
+import { entityIngestTools, verifyIngestResult, validateIngestCompletion, checkIngestCallBudget, ingestFinalPrompt,finalizeBeforeIngestBudget } from '../../pmbrain-adapters/entity-ingest-workflow.ts';
 import {
   acquireLease,
   releaseLease,
@@ -367,7 +367,12 @@ export function makeSubagentHandler(deps: SubagentDeps) {
           )
           .map(b => b.text)
           .join('\n');
-        return verifyIngestResult(engine,data,{
+        const correction=await validateIngestCompletion(engine,data,finalText,ctx.id,assistantTurns<maxTurns);
+        if(correction){
+          const blocks=[{type:'text',text:correction}] as ContentBlock[];
+          await persistMessage(engine,ctx.id,{message_idx:nextMessageIdx++,role:'user',content_blocks:blocks,tokens_in:null,tokens_out:null,tokens_cache_read:null,tokens_cache_create:null,model:null});
+          anthroMessages.push({role:'user',content:blocks as any});
+        }else return verifyIngestResult(engine,data,{
           result: finalText,
           turns_count: assistantTurns,
           stop_reason: 'end_turn',
@@ -605,6 +610,13 @@ export function makeSubagentHandler(deps: SubagentDeps) {
           .filter(b => b.type === 'text' && typeof b.text === 'string')
           .map(b => b.text as string)
           .join('\n');
+        const correction=await validateIngestCompletion(engine,data,finalText,ctx.id,!finalIngestTurn&&assistantTurns<maxTurns);
+        if(correction){
+          const blocks=[{type:'text',text:correction}] as ContentBlock[];
+          await persistMessage(engine,ctx.id,{message_idx:nextMessageIdx++,role:'user',content_blocks:blocks,tokens_in:null,tokens_out:null,tokens_cache_read:null,tokens_cache_create:null,model:null});
+          anthroMessages.push({role:'user',content:blocks as any});
+          continue;
+        }
         break;
       }
       if(finalIngestTurn)throw new UnrecoverableError('ingest final receipt attempted more tools; unfinished document is resumable');
@@ -796,6 +808,27 @@ async function runSubagentViaGateway(args: GatewayRunArgs): Promise<SubagentResu
 
   // Load prior state (replay support via D5 shim for legacy v1 rows).
   const priorMessages = await loadPriorMessages(engine, ctx.id);
+  const terminal = priorMessages.at(-1);
+  if (data.ingest_context && terminal?.role === 'assistant') {
+    const adapted = adaptContentBlocksToChatBlocks(terminal.content_blocks);
+    const blocks = typeof adapted === 'string' ? [{type:'text' as const,text:adapted}] : adapted;
+    if (!blocks.some(block => block.type === 'tool-call')) {
+      const text = blocks.filter((block): block is {type:'text';text:string} => block.type === 'text').map(block => block.text).join('\n');
+      const turns = priorMessages.filter(message => message.role === 'assistant').length;
+      const correction = await validateIngestCompletion(engine,data,text,ctx.id,turns < maxTurns);
+      if (!correction) return verifyIngestResult(engine,data,{
+        result:text,turns_count:turns,stop_reason:'end_turn',tokens:{
+          in:priorMessages.reduce((sum,message)=>sum+(message.tokens_in??0),0),
+          out:priorMessages.reduce((sum,message)=>sum+(message.tokens_out??0),0),
+          cache_read:priorMessages.reduce((sum,message)=>sum+(message.tokens_cache_read??0),0),
+          cache_create:priorMessages.reduce((sum,message)=>sum+(message.tokens_cache_create??0),0),
+        },
+      },ctx.id);
+      const feedback: PersistedMessage = {message_idx:priorMessages.length,role:'user',content_blocks:[{type:'text',text:correction}],tokens_in:null,tokens_out:null,tokens_cache_read:null,tokens_cache_create:null,model:null};
+      await persistMessage(engine,ctx.id,feedback);
+      priorMessages.push(feedback);
+    }
+  }
   const priorTools = await loadPriorToolsV2(engine, ctx.id);
   const priorToolsByStableKey = new Map<string, { status: 'pending' | 'complete' | 'failed'; output?: unknown; error?: string }>();
   for (const row of priorTools) {
@@ -870,6 +903,7 @@ async function runSubagentViaGateway(args: GatewayRunArgs): Promise<SubagentResu
     finalizeOnLastTurn:!!data.ingest_context,
     prepareFinalMessages:data.ingest_context?async()=>[{role:'user',content:await ingestFinalPrompt(engine,ctx.id,data)}]:undefined,
     shouldFinalize:data.ingest_context?messages=>finalizeBeforeIngestBudget(engine,ctx.id,data,systemPrompt,messages,chatTools):undefined,
+    validateCompletion:data.ingest_context?(text,canContinue)=>validateIngestCompletion(engine,data,text,ctx.id,canContinue):undefined,
     beforeModelCall: async ({messages,finalTurn})=>checkIngestCallBudget(engine,ctx.id,data,systemPrompt,messages,finalTurn?[]:chatTools,!!finalTurn),
     reportLengthStop: !!data.ingest_context,
     abortSignal: ctx.signal,
@@ -997,13 +1031,13 @@ async function runSubagentViaGateway(args: GatewayRunArgs): Promise<SubagentResu
 
   return {
     result: result.finalText,
-    turns_count: result.totalTurns,
+    turns_count: priorMessages.filter(message => message.role === 'assistant').length + result.totalTurns,
     stop_reason: stopReason,
     tokens: {
-      in: result.totalUsage.input_tokens,
-      out: result.totalUsage.output_tokens,
-      cache_read: result.totalUsage.cache_read_tokens,
-      cache_create: result.totalUsage.cache_creation_tokens,
+      in: priorMessages.reduce((sum, message) => sum + (message.tokens_in ?? 0), 0) + result.totalUsage.input_tokens,
+      out: priorMessages.reduce((sum, message) => sum + (message.tokens_out ?? 0), 0) + result.totalUsage.output_tokens,
+      cache_read: priorMessages.reduce((sum, message) => sum + (message.tokens_cache_read ?? 0), 0) + result.totalUsage.cache_read_tokens,
+      cache_create: priorMessages.reduce((sum, message) => sum + (message.tokens_cache_create ?? 0), 0) + result.totalUsage.cache_creation_tokens,
     },
   };
 }

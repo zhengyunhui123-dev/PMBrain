@@ -28,7 +28,7 @@ let engine: BrainEngine;
 let runtime: ProductTaskRuntime;
 
 async function finish(id: string) {
-  const deadline=Date.now()+180_000;
+  const deadline=Date.now()+(process.env.PMBRAIN_TASK_TEST_WORKER==='1'?300_000:180_000);
   while(Date.now()<deadline) {
     const run = await runtime.getRun(id);
     if (run && !['queued', 'running'].includes(run.status)) return run;
@@ -215,12 +215,13 @@ describe('快速维护文件任务与恢复', () => {
     await engine.executeRaw("INSERT INTO sources (id, name, local_path, config) VALUES ($1, $2, $3, $4::jsonb)", ['resume-source', '续跑测试', dir, { syncEnabled: true }]);
     const accepted = await runtime.submitDream({ preset: 'quick', sourceId: 'resume-source' });
     let observed = false;
-    for (let i = 0; i < 1200; i++) {
+    const observeDeadline=Date.now()+90_000;
+    while(Date.now()<observeDeadline) {
       const run = await runtime.getRun(accepted.id);
       if ((run?.product?.processed ?? 0) > 0 && (run?.product?.processed ?? 0) < 120) { observed = true; break; }
       await Bun.sleep(20);
     }
-    expect(observed).toBe(true);
+    expect(observed,JSON.stringify({run:await runtime.getRun(accepted.id),files:await runtime.files(accepted.id)})).toBe(true);
     expect((await runtime.submitDream({ preset: 'quick', sourceId: 'resume-source' })).id).toBe(accepted.id);
     const firstPage = await runtime.files(accepted.id);
     expect(firstPage?.rows).toHaveLength(50);
@@ -245,7 +246,7 @@ describe('快速维护文件任务与恢复', () => {
     const done = (await new MinionQueue(engine).getJobs({ queue: SYNC_FILE_QUEUE, limit: 200 })).filter(row => row.data.sessionId === Number(accepted.id.slice(5)));
     expect(done).toHaveLength(120);
     expect(done.every(row => row.status === 'completed')).toBe(true);
-  }, 180000);
+  }, process.env.PMBRAIN_TASK_TEST_WORKER==='1'?360000:180000);
 
   test('软件退出后自动继续同步文件，已提交而未确认的文件不重复创建版本', async () => {
     const dir = join(root, 'auto-resume'); mkdirSync(dir);

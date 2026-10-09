@@ -309,16 +309,42 @@ export async function pruneEntityIngestLinks(engine:BrainEngine,sourceId?:string
   return removed;
 }
 
-export async function verifyIngestResult(engine:BrainEngine,data:SubagentHandlerData,result:SubagentResult,jobId?:number):Promise<SubagentResult>{
-  if(!data.ingest_context)return result;
-  if(result.stop_reason!=='end_turn')throw new UnrecoverableError(`ingest incomplete: ${result.stop_reason}`);
+async function ingestRequiredWrites(engine:BrainEngine,data:SubagentHandlerData,jobId?:number):Promise<string[]>{
   const pending=jobId==null?[]:await engine.executeRaw<{slug:string}>(`SELECT i->>'slug' slug FROM
     (SELECT DISTINCT ON(COALESCE(output->>'slug',(output #>> '{}')::jsonb->>'slug',input->>'slug',(input #>> '{}')::jsonb->>'slug')) CASE WHEN jsonb_typeof(input)='string' THEN (input #>> '{}')::jsonb ELSE input END i,
       CASE WHEN jsonb_typeof(output)='string' THEN (output #>> '{}')::jsonb ELSE output END o FROM subagent_tool_executions
       WHERE job_id=$1 AND tool_name='brain_put_page' AND status='complete' ORDER BY COALESCE(output->>'slug',(output #>> '{}')::jsonb->>'slug',input->>'slug',(input #>> '{}')::jsonb->>'slug'),id DESC) x WHERE o->>'status'='merge_required'`,[jobId]);
   if(pending.length)throw new UnrecoverableError(`ingest pending entity merge: ${pending.map(row=>row.slug).join(', ')}`);
   const written=jobId==null?[]:await engine.executeRaw<{slug:string}>("SELECT DISTINCT COALESCE(output->>'slug',(output #>> '{}')::jsonb->>'slug',input->>'slug',(input #>> '{}')::jsonb->>'slug') AS slug FROM subagent_tool_executions WHERE job_id=$1 AND tool_name='brain_put_page' AND status='complete' AND COALESCE(output->>'status',(output #>> '{}')::jsonb->>'status','') NOT IN ('merge_required','unchanged')",[jobId]);
-  const verified=await finalizeEntityIngest(engine,data.ingest_context,result.result,[...written.map(row=>row.slug),...(data.ingest_context.acknowledged??[])]);
+  return [...written.map(row=>row.slug),...(data.ingest_context?.acknowledged??[])];
+}
+
+export async function validateIngestCompletion(engine:BrainEngine,data:SubagentHandlerData,text:string,jobId:number,canContinue:boolean):Promise<string|null>{
+  if(!data.ingest_context)return null;
+  const context=data.ingest_context;
+  try{
+    const required=await ingestRequiredWrites(engine,data,jobId),receipt=parseReceipt(text);
+    const entities=await Promise.all([...new Set(receipt.entities)].map(reference=>resolveEntity(engine,context,reference)));
+    const identities=new Set(entities.map(entity=>`${entity.sourceId}:${entity.slug}`));
+    for(const reference of required){
+      const qualified=reference.includes(':')?reference:`${context.sourceId}:${reference}`;
+      if(!identities.has(qualified))throw new UnrecoverableError(`ingest receipt omits written entity: ${reference}`);
+    }
+    return null;
+  }catch(error){
+    if(!(error instanceof UnrecoverableError)||error.message.includes('source boundary'))throw error;
+    if(!canContinue)throw error;
+    const writes=await engine.executeRaw<{slug:string;status:string}>(`SELECT COALESCE(o->>'slug',i->>'slug') slug,o->>'status' status FROM
+      (SELECT id,CASE WHEN jsonb_typeof(input)='string' THEN (input #>> '{}')::jsonb ELSE input END i,CASE WHEN jsonb_typeof(output)='string' THEN (output #>> '{}')::jsonb ELSE output END o
+       FROM subagent_tool_executions WHERE job_id=$1 AND tool_name='brain_put_page' AND status='complete') x ORDER BY id`,[jobId]);
+    return `Ingest result verification failed: ${error.message}\nPersisted entity writes: ${JSON.stringify(writes)}\nThe document is unfinished. Use the remaining tool turns to save evidence-backed entities or finish required merges, then return the JSON receipt using actual persisted identities. Never claim an unwritten target. If the source has no notable entities, explicitly return no_entities:true with empty entities and relations. Do not repeat discovery or rewrite unchanged persisted pages.`;
+  }
+}
+
+export async function verifyIngestResult(engine:BrainEngine,data:SubagentHandlerData,result:SubagentResult,jobId?:number):Promise<SubagentResult>{
+  if(!data.ingest_context)return result;
+  if(result.stop_reason!=='end_turn')throw new UnrecoverableError(`ingest incomplete: ${result.stop_reason}`);
+  const verified=await finalizeEntityIngest(engine,data.ingest_context,result.result,await ingestRequiredWrites(engine,data,jobId));
   const rejected=jobId==null?[]:await engine.executeRaw<{from:string;to:string;reason:string}>(`SELECT DISTINCT i->>'from' AS "from",i->>'to' AS "to",o->>'reason' AS reason
     FROM (SELECT CASE WHEN jsonb_typeof(input)='string' THEN (input #>> '{}')::jsonb ELSE input END i,CASE WHEN jsonb_typeof(output)='string' THEN (output #>> '{}')::jsonb ELSE output END o FROM subagent_tool_executions WHERE job_id=$1 AND tool_name='brain_add_link') x WHERE o->>'status'='rejected'`,[jobId]);
   for(const row of rejected)verified.unresolved.push({sourcePage:row.from,sourceId:data.ingest_context.sourceId,target:row.to,field:'ingest_relation',reason:row.reason});
@@ -328,7 +354,8 @@ export async function verifyIngestResult(engine:BrainEngine,data:SubagentHandler
 export async function ingestFinalPrompt(engine:BrainEngine,jobId:number,data:SubagentHandlerData):Promise<string>{
   const writes=await engine.executeRaw<{tool_name:string;input:Record<string,unknown>;output:unknown}>(`SELECT tool_name,CASE WHEN jsonb_typeof(input)='string' THEN (input #>> '{}')::jsonb ELSE input END input,CASE WHEN jsonb_typeof(output)='string' THEN (output #>> '{}')::jsonb ELSE output END output FROM subagent_tool_executions WHERE job_id=$1 AND status='complete' AND tool_name IN ('brain_put_page','brain_add_link','brain_add_timeline_entry') ORDER BY id`,[jobId]);
   const persisted=writes.map(row=>row.tool_name==='brain_add_link'?{tool:row.tool_name,...row.output as object}:{tool:row.tool_name,slug:row.input.slug,status:(row.output as any)?.status==='merge_required'?'merge_required':'persisted'});
-  return `${data.prompt}\n\nDurable write ledger (all successful writes must appear in entities; rejected relations must not be reported as valid):\n${JSON.stringify(persisted)}\nReturn the requested JSON receipt now. No tools or further writes are available. Do not invent unwritten targets.`;
+  const [feedback]=await engine.executeRaw<{content_blocks:unknown}>("SELECT content_blocks FROM subagent_messages WHERE job_id=$1 AND role='user' AND content_blocks::text LIKE '%Ingest result verification failed:%' ORDER BY message_idx DESC LIMIT 1",[jobId]);
+  return `${data.prompt}\n\nDurable write ledger (all successful writes must appear in entities; rejected relations must not be reported as valid):\n${JSON.stringify(persisted)}${feedback?`\nLast verification feedback: ${JSON.stringify(feedback.content_blocks)}`:''}\nReturn the requested JSON receipt now. No tools or further writes are available. Do not invent unwritten targets.`;
 }
 
 export async function checkIngestCallBudget(engine:BrainEngine,jobId:number,data:SubagentHandlerData,system:string,messages:unknown,tools:unknown,compact=false):Promise<void>{

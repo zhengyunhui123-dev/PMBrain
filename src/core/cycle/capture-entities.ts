@@ -632,6 +632,7 @@ export async function runPhaseCaptureEntities(
   let relationError = '';
   let modelError = '';
   let failureStop = false;
+  let failureReason: CaptureStopReason = 'failure';
   let budgetStop: 'tokens' | 'cost' | null = null;
   const failedPageSlugs = new Set<string>();
   const verifiedChildIds:number[]=[];
@@ -801,6 +802,7 @@ export async function runPhaseCaptureEntities(
             if(job.error_text?.includes('ingest_budget_tokens')){budgetStop='tokens';failureStop=false;}
             if(job.error_text?.includes('ingest_budget_cost')){budgetStop='cost';failureStop=false;}
             modelError = job.error_text ?? `实体识别子任务 ${job.id} 未通过 ingest 读回验收（${result?.stop_reason??job.status}）`;
+            if (/\bingest[ _]/i.test(modelError) || job.status === 'completed') failureReason = 'ingest_validation';
             break;
           }
           completedForPage += 1;
@@ -870,13 +872,13 @@ export async function runPhaseCaptureEntities(
     const linkedEntities = gaps.linked;
     const costCny = ollama ? 0 : (sawPricedUsage ? Number(knownCost.toFixed(6)) : null);
     const stopReason: CaptureStopReason = failureStop
-      ? 'failure'
+      ? relationError ? 'relation_failure' : failureReason
       : budgetStop === 'tokens'
         ? 'tokens'
         : budgetStop === 'cost'
           ? 'cost'
           : 'completed';
-    const cleanStatus: PhaseResult['status'] = stopReason === 'failure'
+    const cleanStatus: PhaseResult['status'] = failureStop
       ? (writtenSlugs.length > 0 || pagesProcessed > 0 ? 'warn' : 'fail')
       : pagesRemaining>0 ? 'warn' : 'ok';
     const status: PhaseResult['status'] = cleanStatus === 'ok' && (gaps.isolated > 0 || gaps.unlinkedMentions > 0 || unresolvedReferences.length>0)
@@ -941,8 +943,8 @@ export async function runPhaseCaptureEntities(
       source_slugs: [...sourceSlugs].sort(),
       skill: 'ingest',
       skills_dir: skillsDir,
-    }, stopReason === 'failure'
-      ? { class: 'LLMError', code: 'failure', message: summary }
+    }, failureStop
+      ? { class: stopReason === 'ingest_validation' ? 'IngestValidation' : stopReason === 'relation_failure' ? 'RelationReconciliation' : 'LLMError', code: stopReason, message: summary }
       : undefined);
   } finally {
     try {
