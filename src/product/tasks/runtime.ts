@@ -383,7 +383,7 @@ export class ProductTaskRuntime {
       await this.reconcileMaintenanceChildren(jobId);
       const checkpoint = task.input.checkpoint;
       delete record!.data.resourceStopReason;
-        await this.engine.executeRaw(`UPDATE minion_jobs SET data=data || ($2::jsonb - 'relations' - 'gitFiles' - 'gitResults') WHERE id=$1`,[jobId,record!.data]);
+      await this.engine.executeRaw(`UPDATE minion_jobs SET data=(data-'resourceStopReason') || ($2::jsonb - 'relations' - 'gitFiles' - 'gitResults') WHERE id=$1`,[jobId,record!.data]);
       if (checkpoint) {
         resumeMaintenanceCheckpoint(checkpoint,run.status==='completed' || maintenanceFailure(run.result)!==null);
         await this.engine.executeRaw(`UPDATE minion_jobs SET data = data || ($2::jsonb - 'relations' - 'gitFiles' - 'gitResults') WHERE id = $1`, [jobId, { ...record!.data, task }]);
@@ -420,9 +420,9 @@ export class ProductTaskRuntime {
       if (earlier.length) return this.deferMaintenance(record);
     }
     if(record.data.resourceStopReason && structuredTask.type==='dream' && structuredTask.input.preset==='quick'){
-      await this.engine.executeRaw(`UPDATE minion_jobs SET status='paused',lock_token=NULL,lock_until=NULL,error_text=$2,
-        data=jsonb_set(data,'{resumeOnRestart}','false'::jsonb),updated_at=now() WHERE id=$1`,[context.id,String(record.data.resourceStopReason)]);
-      this.sessionViews.delete(context.id);
+      const paused=await this.engine.executeRaw(`UPDATE minion_jobs SET status='paused',lock_token=NULL,lock_until=NULL,error_text=$2,
+        data=jsonb_set(data,'{resumeOnRestart}','false'::jsonb),updated_at=now() WHERE id=$1 AND status='active' AND lock_token=$3 RETURNING id`,[context.id,String(record.data.resourceStopReason),record.lock_token]);
+      if(paused.length)this.sessionViews.delete(context.id);
       return MINION_DEFERRED;
     }
     if (this.stopIntents.has(context.id) || (structuredTask.type==='sync-file' && this.stopIntents.has(Number(record.data.sessionId)))) throw new Error('任务已停止');
@@ -655,7 +655,8 @@ export class ProductTaskRuntime {
           const counts=await this.fileQueue.counts(context.id);
           if(counts.remaining>0){
             record.data.resourceStopReason=message;
-            await this.engine.executeRaw(`UPDATE minion_jobs SET data=data || ($2::jsonb - 'relations' - 'gitFiles' - 'gitResults'),error_text=$3 WHERE id=$1`,[context.id,record.data,message]);
+            const owned=await this.engine.executeRaw(`UPDATE minion_jobs SET data=data || ($2::jsonb - 'relations' - 'gitFiles' - 'gitResults'),error_text=$3 WHERE id=$1 AND status='active' AND lock_token=$4 RETURNING id`,[context.id,record.data,message,record.lock_token]);
+            if(!owned.length)return MINION_DEFERRED;
             await this.fileQueue.release(context.id,record.lock_token);
             this.scheduleSessionRefresh(context.id);
             return MINION_DEFERRED;

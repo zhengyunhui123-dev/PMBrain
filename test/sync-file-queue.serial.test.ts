@@ -151,7 +151,7 @@ describe('快速维护文件任务与恢复', () => {
     expect((await runtime.files(otherDone.id))?.rows).toHaveLength(1);
     expect(await engine.getPage('legacy-1',{sourceId:'legacy-other'})).not.toBeNull();
   }, 120000);
-  test('Git 已提交快照、未提交内容开关与重命名保持原有同步语义', async () => {
+  test('快速维护默认同步未提交变化并本地提交，重复和重命名保留 Source 隔离', async () => {
     const dir = join(root, 'git-source'); mkdirSync(dir);
     const git = (...args: string[]) => execFileSync('git', args, { cwd: dir, stdio: 'pipe' });
     git('init'); git('config', 'user.email', 'synthetic@example.invalid'); git('config', 'user.name', 'Synthetic test');
@@ -160,13 +160,15 @@ describe('快速维护文件任务与恢复', () => {
     await engine.executeRaw("INSERT INTO sources (id, name, local_path, config) VALUES ($1, $2, $3, $4::jsonb)", ['git-queue', 'Git 测试', dir, { syncEnabled: true }]);
     await finish((await runtime.submitDream({ preset: 'quick', sourceId: 'git-queue' })).id);
     writeFileSync(join(dir, 'same.md'), '# Same\n\n未提交的新内容。');
-    await finish((await runtime.submitDream({ preset: 'quick', sourceId: 'git-queue' })).id);
-    expect((await engine.getPage('same', { sourceId: 'git-queue' }))?.compiled_truth).toContain('已提交');
-    await engine.setConfig('sync.include_working_tree', 'true');
+    const previousCommit=git('rev-parse','HEAD').toString().trim();
     await finish((await runtime.submitDream({ preset: 'quick', sourceId: 'git-queue' })).id);
     expect((await engine.getPage('same', { sourceId: 'git-queue' }))?.compiled_truth).toContain('未提交');
-    await engine.setConfig('sync.include_working_tree', 'false');
-    git('add', '.'); git('commit', '-m', 'synthetic update');
+    expect(git('status','--porcelain').toString().trim()).toBe('');
+    const syncedCommit=git('rev-parse','HEAD').toString().trim();
+    expect(syncedCommit).not.toBe(previousCommit);
+    await finish((await runtime.submitDream({ preset: 'quick', sourceId: 'git-queue' })).id);
+    expect((await engine.getPage('same', { sourceId: 'git-queue' }))?.compiled_truth).toContain('未提交');
+    expect(git('rev-parse','HEAD').toString().trim()).toBe(syncedCommit);
     git('mv', 'same.md', 'renamed.md'); git('commit', '-m', 'synthetic rename');
     await finish((await runtime.submitDream({ preset: 'quick', sourceId: 'git-queue' })).id);
     expect(await engine.getPage('same', { sourceId: 'git-queue' })).toBeNull();

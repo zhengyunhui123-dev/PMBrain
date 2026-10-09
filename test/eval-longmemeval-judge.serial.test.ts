@@ -25,7 +25,7 @@
  *   - a resume of a judged file WITHOUT --judge still rebuilds qa_accuracy
  *     from the prior verdicts (anyRowJudged).
  */
-import { describe, test, expect, beforeAll, afterAll, afterEach } from 'bun:test';
+import { describe, test, expect, beforeAll, beforeEach, afterAll, afterEach } from 'bun:test';
 import { mkdtempSync, readFileSync, rmSync, existsSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -66,6 +66,7 @@ afterAll(async () => {
   if (engine) await engine.disconnect();
   rmSync(tmp, { recursive: true, force: true });
 });
+beforeEach(() => { configureGateway({ env: {}, embedding_model: 'openai:text-embedding-3-large', embedding_dimensions: 1536 }); });
 afterEach(() => { resetGateway(); });
 
 function readRows(path: string): any[] {

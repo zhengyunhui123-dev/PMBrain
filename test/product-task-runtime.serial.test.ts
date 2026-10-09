@@ -2,7 +2,6 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { PGLiteEngine } from '../src/core/pglite-engine.ts';
 import { WorkerPgliteEngine } from '../src/product/database/worker-engine.ts';
 import { withDatabasePriority } from '../src/product/database/priority.ts';
 import { ProductTaskRuntime } from '../src/product/tasks/runtime.ts';
@@ -77,7 +76,7 @@ beforeAll(async () => {
   configureModels(false);
   configureGateway({ embedding_model: 'custom-openai:task-test', embedding_dimensions: 1024, env: {} });
   if (taskDatabaseUrl) assertSafeE2eDatabaseUrl(taskDatabaseUrl);
-  engine = taskDatabaseUrl ? new PostgresEngine() : process.env.PMBRAIN_TASK_TEST_WORKER === '1' ? new WorkerPgliteEngine() as unknown as BrainEngine : new PGLiteEngine();
+  engine = taskDatabaseUrl ? new PostgresEngine() : new WorkerPgliteEngine() as unknown as BrainEngine;
   await engine.connect(taskDatabaseUrl ? { database_url: taskDatabaseUrl } : {});
   await engine.initSchema();
   initializeSourceGit(root);

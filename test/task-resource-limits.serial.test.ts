@@ -145,7 +145,9 @@ test('容量满后拒绝后续文件，已接受文件正常完成释放快照�
     expect((await ended(run.id)).error).toContain('快照容量');
     const files=await runtime.files(run.id);expect(files?.rows).toHaveLength(2);expect(files?.rows.every(row=>row.status==='completed')).toBe(true);
     await runtime.retry(run.id);
-    expect((await ended(run.id)).status).toBe('completed');
+    const resumed=await ended(run.id);
+    expect(resumed.status,JSON.stringify(resumed)).toBe('completed');
+    expect((await engine.executeRaw<{stopped:boolean}>("SELECT data ? 'resourceStopReason' AS stopped FROM minion_jobs WHERE id=$1",[Number(run.id.slice(5))]))[0].stopped).toBe(false);
     const resumedFiles=await runtime.files(run.id);
     const savedPages=await engine.executeRaw<{slug:string}>("SELECT slug FROM pages WHERE source_id='bounded-scan' ORDER BY slug");
     expect(savedPages.map(page=>page.slug)).toEqual(['first','second','third']);

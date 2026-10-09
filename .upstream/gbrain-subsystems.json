@@ -110,7 +110,8 @@
       "test/quick-git-relations.serial.test.ts",
       "test/e2e/quick-git-relations.test.ts",
       "test/maintenance-task-orchestration.serial.test.ts",
-      "test/e2e/maintenance-task-orchestration.test.ts"
+      "test/e2e/maintenance-task-orchestration.test.ts",
+      "test/e2e/task-resource-limits.test.ts"
     ],
     "check": "bun run check:gbrain-subsystems",
     "upstream_check": "bun run check:gbrain-subsystems --upstream D:/cursor-claude/gbrain",
