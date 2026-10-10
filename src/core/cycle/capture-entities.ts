@@ -16,7 +16,7 @@ import { readModelConfigValue, resolveAlias } from '../model-config.ts';
 import { normalizeAliasList } from '../search/alias-normalize.ts';
 import { alignCapturedEntityGraph } from './entity-graph-align.ts';
 import { lineGrammarOptions } from '../line-grammar.ts';
-import { locateIngestSkillsDir, readIngestContract, pruneEntityIngestLinks } from '../pmbrain-adapters/entity-ingest-workflow.ts';
+import { locateIngestSkillsDir, readIngestContract, pruneEntityIngestLinks,ingestAbortKind } from '../pmbrain-adapters/entity-ingest-workflow.ts';
 import {
   DEFAULT_ENTITY_CAPTURE_MAX_INPUT_TOKENS,
   DEFAULT_ENTITY_CAPTURE_MAX_OUTPUT_TOKENS,
@@ -568,6 +568,10 @@ export async function runPhaseCaptureEntities(
   const maxDocumentInput=readTokenCap(await engine.getConfig('dream.entity_capture.document_max_input_tokens'),120_000);
   const maxDocumentOutput=readTokenCap(await engine.getConfig('dream.entity_capture.document_max_output_tokens'),isThinkingModel(chosen.model)?defaultMaxOutputTokens(chosen.model)*4:20_000);
   const maxDocumentTurns=Math.min(12,readTokenCap(await engine.getConfig('dream.entity_capture.document_max_turns'),6));
+  const turnTimeoutMs=readTokenCap(await engine.getConfig('dream.entity_capture.turn_timeout_ms'),300_000);
+  const configuredJobTimeout=readTokenCap(await engine.getConfig('dream.entity_capture.job_timeout_ms'),maxDocumentTurns*(turnTimeoutMs*2+30_000));
+  const declaredOutputLimit=await engine.getConfig('dream.entity_capture.model_max_output_tokens');
+  const modelOutputLimit=declaredOutputLimit?readTokenCap(declaredOutputLimit,defaultMaxOutputTokens(chosen.model)):undefined;
   const nonce = Date.now();
   const pendingPages: Array<{ page: EntityCaptureCandidate; chunks: EntityCaptureChunk[] }> = [];
   for (const page of candidates) {
@@ -634,7 +638,7 @@ export async function runPhaseCaptureEntities(
   let modelError = '';
   let failureStop = false;
   let fatalFailure=false;
-  const pageFailures:Array<{slug:string;sourceId:string;reason:string}>=[];
+  const pageFailures:Array<{slug:string;sourceId:string;reason:string;stage:string;kind:CaptureStopReason;input_tokens:number;output_tokens:number;input_limit:number;output_limit:number;model_output_limit:number|null;turn_timeout_ms:number;job_timeout_ms:number}>=[];
   let failureReason: CaptureStopReason = 'failure';
   let budgetStop: 'tokens' | 'cost' | null = null;
   const failedPageSlugs = new Set<string>();
@@ -705,6 +709,8 @@ export async function runPhaseCaptureEntities(
             prompt: buildEntityCapturePrompt(chunk, related,acknowledged),
             model: chosen.model,
             max_turns: maxDocumentTurns-documentTurns,
+            turn_timeout_ms:turnTimeoutMs,
+            model_output_limit:modelOutputLimit,
             no_self_fix: true,
             system: readIngestContract(skillsDir),
             ingest_context: {slug:chunk.slug,sourceId:chunk.sourceId,body:chunk.body,chunkBody:chunk.chunkBody,acknowledged:acknowledged.map(entity=>`${entity.sourceId}:${entity.slug}`)},
@@ -726,7 +732,7 @@ export async function runPhaseCaptureEntities(
             {
               max_stalled: 0,
               idempotency_key: idempotencyKey,
-              timeout_ms: 8 * 60 * 1000,
+              timeout_ms: Math.max(1,Math.min(configuredJobTimeout,opts.deadlineAtMs==null?Infinity:opts.deadlineAtMs-Date.now())),
               queue: childQueueName,
               private_queue_owner_job_id: opts.privateQueueOwnerJobId ?? null,
               private_queue_owner_token: ownerToken,
@@ -740,7 +746,7 @@ export async function runPhaseCaptureEntities(
           childIds.push(child.id);
           const reused=child.status==='completed';
           if(!reused)executedChildIds.push(child.id);
-          if(child.status!=='completed')await runSubagentsInline(
+           if(child.status!=='completed')try{await runSubagentsInline(
             engine,
             queue,
             childQueueName,
@@ -748,28 +754,29 @@ export async function runPhaseCaptureEntities(
             opts.handler,
             undefined,
             opts.signal,
-          );
-          throwIfAborted(opts.signal, '[dream] capture entities');
-          await opts.yieldDuringPhase?.();
+           );}catch(error){if(!opts.signal?.aborted)throw error;}
+           if(!opts.signal?.aborted)await opts.yieldDuringPhase?.();
           let job;
           try {
-            job = await waitForCompletion(queue, child.id, {
-              timeoutMs: 8 * 60 * 1000,
+             job = opts.signal?.aborted?await queue.getJob(child.id):await waitForCompletion(queue, child.id, {
+              timeoutMs: child.timeout_ms??configuredJobTimeout,
               pollMs: 200,
               signal: opts.signal,
               onPoll: opts.yieldDuringPhase,
             });
           } catch (error) {
             if (error instanceof TimeoutError) {
-              failedChunks += 1;
-              failedPageSlugs.add(chunk.slug);
-              failureStop = true;
-              fatalFailure=true;
-              failureReason='timeout';
-              break;
-            }
-            throw error;
-          }
+               modelError=`ingest_provider_timeout: ${error.message}`;
+               job=await queue.getJob(child.id);
+               if(job)job={...job,status:'dead',error_text:modelError};
+             }else if(opts.signal?.aborted){
+               job=await queue.getJob(child.id);
+             }else{
+               throw error;
+             }
+           }
+           if(!job)throw new Error(`实体识别子任务 ${child.id} 不存在`);
+           if(opts.signal?.aborted)job={...job,status:'dead',error_text:`ingest_provider_${ingestAbortKind(opts.signal)}: ${opts.signal.reason instanceof Error?opts.signal.reason.message:String(opts.signal.reason)}`};
           const reportedUsage = reused?{present:true,input:0,output:0}:usageFromJobResult(job.result);
           const usage = reportedUsage.present ? reportedUsage : {
             present: job.tokens_input > 0 || job.tokens_output > 0,
@@ -812,10 +819,10 @@ export async function runPhaseCaptureEntities(
             if (/\bingest[ _]/i.test(modelError) || job.status === 'completed') failureReason = 'ingest_validation';
             if(/ingest_output_truncated/.test(modelError)){failureReason='truncated';fatalFailure=false;}
             else if(/ingest receipt (?:missing|requires)|ingest invalid JSON|ingest_provider_parse/.test(modelError)){failureReason='parse';fatalFailure=false;}
-            else if(/ingest_provider_(timeout|network|rate_limit|provider_5xx)/.test(modelError))failureReason=modelError.match(/ingest_provider_(timeout|network|rate_limit|provider_5xx)/)![1] as CaptureStopReason;
+            else if(/ingest_provider_(timeout|network|rate_limit|provider_5xx|user_stop|service_shutdown|aborted)/.test(modelError))failureReason=modelError.match(/ingest_provider_(timeout|network|rate_limit|provider_5xx|user_stop|service_shutdown|aborted)/)![1] as CaptureStopReason;
             else if(/ingest_provider_(auth|billing|model_not_found)/.test(modelError))failureReason='model_unavailable';
             else if(!budgetStop&&/\bingest /.test(modelError))fatalFailure=false;
-            if(!budgetStop)pageFailures.push({slug:chunk.slug,sourceId:chunk.sourceId,reason:modelError});
+            pageFailures.push({slug:chunk.slug,sourceId:chunk.sourceId,reason:modelError,stage:failureReason==='ingest_validation'?'entity_verification':'entity_ingest',kind:budgetStop??failureReason,input_tokens:usage.input,output_tokens:usage.output,input_limit:data.usage_limits!.input,output_limit:data.usage_limits!.output,model_output_limit:modelOutputLimit??null,turn_timeout_ms:turnTimeoutMs,job_timeout_ms:child.timeout_ms??configuredJobTimeout});
             break;
           }
           completedForPage += 1;
@@ -845,8 +852,8 @@ export async function runPhaseCaptureEntities(
         }
       }
       await alignWrittenGraph([]);
-      await opts.yieldDuringPhase?.();
-      throwIfAborted(opts.signal, '[dream] capture entities');
+       if(!opts.signal?.aborted)await opts.yieldDuringPhase?.();
+       if(opts.signal?.aborted){failureStop=true;fatalFailure=true;failureReason=ingestAbortKind(opts.signal);}
       if (budgetStop || fatalFailure) break;
     }
 
@@ -912,7 +919,9 @@ export async function runPhaseCaptureEntities(
         unlinkedMentions: gaps.unlinkedMentions,
       },
     });
-    const summary = `${reportLine}${modelError ? `具体错误：${modelError}` : ''}${relationError ? `关系补写失败：${relationError}` : ''}`;
+    const lastFailure=pageFailures.at(-1);
+    const failureLine=lastFailure?`失败页：${lastFailure.sourceId}:${lastFailure.slug}；阶段：${lastFailure.stage==='entity_verification'?'落库验收':'实体识别'}；输入 Token ${lastFailure.input_tokens}/${lastFailure.input_limit}，输出 Token ${lastFailure.output_tokens}/${lastFailure.output_limit}；模型最大输出 ${lastFailure.model_output_limit??'未知'}；单次超时 ${turnTimeoutMs/1000} 秒。`:'';
+    const summary = `${reportLine}${failureLine}${modelError ? `具体错误：${modelError}` : ''}${relationError ? `关系补写失败：${relationError}` : ''}`;
     return phaseResult(status, summary, {
       ...modelDetails,
       pages_seen: candidates.length,
@@ -940,6 +949,12 @@ export async function runPhaseCaptureEntities(
       unresolved_references: unresolvedReferences,
       document_max_turns:maxDocumentTurns,
       document_max_input_tokens:maxDocumentInput,
+      document_max_output_tokens:maxDocumentOutput,
+      max_input_tokens:maxInputTokens,
+      max_output_tokens:maxOutputTokens,
+      model_output_limit:modelOutputLimit??null,
+      turn_timeout_ms:turnTimeoutMs,
+      job_timeout_ms:configuredJobTimeout,
       cost_cap_enforced:ollama||inputPrice!=null&&outputPrice!=null,
       mention_links_created: mentionLinks,
       ner_links_created: nerLinks,

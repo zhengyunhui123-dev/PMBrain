@@ -397,15 +397,27 @@ export async function probeHealth(
   }
 }
 
-function waitForHttpServerClose(server: HttpServer, engine: BrainEngine, beforeDisconnect?: () => Promise<void>): Promise<void> {
+export function waitForHttpServerClose(server: HttpServer, engine: BrainEngine, beforeDisconnect?: () => Promise<void>): Promise<void> {
   return new Promise((resolve, reject) => {
     let settled = false;
+    let stopping = false;
+    let desktopShutdown = false;
+    let beforeDisconnectPromise:Promise<void>|undefined;
+    const stopTasks=()=>beforeDisconnectPromise??=(beforeDisconnect?.()??Promise.resolve());
+    const activeResponses=new Set<import('node:http').ServerResponse>();
+    const onRequest=(_request:import('node:http').IncomingMessage,response:import('node:http').ServerResponse)=>{
+      if(response.writableEnded)return;
+      activeResponses.add(response);
+      response.once('close',()=>activeResponses.delete(response));
+    };
 
     const cleanup = () => {
       server.off('error', onError);
       server.off('close', onClose);
       process.off('SIGINT', onSigint);
       process.off('SIGTERM', onSigterm);
+      process.off('message', onMessage);
+      server.off('request',onRequest);
     };
 
     const finish = async (err?: Error) => {
@@ -413,10 +425,14 @@ function waitForHttpServerClose(server: HttpServer, engine: BrainEngine, beforeD
       settled = true;
       cleanup();
       try {
-        await beforeDisconnect?.();
+        await stopTasks();
+        if(stopping)console.error('PMBrain HTTP server: background tasks stopped');
         const { awaitPendingVolunteerEventWrites } = await import('../core/context/volunteer-events.ts');
         await awaitPendingVolunteerEventWrites();
+        if(stopping)console.error('PMBrain HTTP server: pending writes flushed');
         await engine.disconnect();
+        if(stopping)console.error('PMBrain HTTP server: database closed');
+        if(stopping&&process.connected)process.disconnect?.();
       } catch (disconnectErr) {
         if (!err) {
           reject(disconnectErr);
@@ -425,25 +441,41 @@ function waitForHttpServerClose(server: HttpServer, engine: BrainEngine, beforeD
       }
       if (err) reject(err);
       else resolve();
+      if(desktopShutdown)setImmediate(()=>process.exit(err?1:0));
     };
 
     const shutdown = (signal: string) => {
+      if(stopping)return;
+      stopping=true;
+      desktopShutdown=signal==='desktop IPC';
       console.error(`PMBrain HTTP server: graceful shutdown (${signal})`);
       server.close((err) => {
         if (err) void finish(err);
         else void finish();
       });
+      server.closeIdleConnections();
+      void stopTasks().then(()=>{
+        console.error('PMBrain HTTP server: task drain complete; closing HTTP connections');
+        for(const response of activeResponses)response.destroy();
+        server.closeAllConnections();
+        void finish();
+      },error=>finish(error instanceof Error?error:new Error(String(error))));
     };
 
     const onError = (err: Error) => { void finish(err); };
     const onClose = () => { void finish(); };
     const onSigint = () => shutdown('SIGINT');
     const onSigterm = () => shutdown('SIGTERM');
+    const onMessage=(message:unknown)=>{
+      if(process.send&&message&&typeof message==='object'&&(message as {type?:unknown}).type==='pmbrain:shutdown')shutdown('desktop IPC');
+    };
 
     server.on('error', onError);
     server.on('close', onClose);
     process.once('SIGINT', onSigint);
     process.once('SIGTERM', onSigterm);
+    process.on('message',onMessage);
+    server.on('request',onRequest);
   });
 }
 

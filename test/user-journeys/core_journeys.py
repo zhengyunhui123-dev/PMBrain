@@ -729,6 +729,11 @@ def run(args: argparse.Namespace) -> None:
             logs = home / "electron-user-data" / "logs"
             if logs.exists():
                 (artifacts / "desktop-runtime.log").write_text("\n".join(log.read_text(encoding="utf-8", errors="replace") for log in sorted(logs.glob("*.log"))), encoding="utf-8")
+        runtime_log = (artifacts / "desktop-runtime.log").read_text(encoding="utf-8")
+        if "graceful shutdown (desktop IPC)" not in runtime_log:
+            raise RuntimeError("Desktop did not wait for the Sidecar graceful shutdown before restart")
+        if "Sidecar stopped normally" not in runtime_log or "Sidecar graceful shutdown timed out" in runtime_log:
+            raise RuntimeError("Sidecar required forced termination during the normal Desktop journey")
         restart_persistence_check(
             playwright,
             artifacts,

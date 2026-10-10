@@ -369,8 +369,9 @@ parentPort!.on('message', message => {
     }
     else waiter?.resolve(message.value);
   } else if (message.type === 'cancel') {
-    abort.abort(new Error('任务已取消'));
-    for (const waiter of pending.values()) waiter.reject(new Error('任务已取消'));
+    const reason=typeof message.reason==='string'?message.reason:'user_stop: 任务已取消';
+    abort.abort(new Error(reason));
+    for (const waiter of pending.values()) waiter.reject(new Error(reason));
     pending.clear();
   } else if (message.type === 'start') {
     ownerJobId = Number.isSafeInteger(message.ownerJobId) ? message.ownerJobId : null;

@@ -436,6 +436,8 @@ export interface SubagentHandlerData {
   discovery_profile?: 'entity_capture';
   ingest_context?: import('../pmbrain-adapters/entity-ingest-workflow.ts').EntityIngestContext;
   ingest_json_tools?: boolean;
+  turn_timeout_ms?: number;
+  model_output_limit?: number;
   usage_limits?: {
     input: number;
     output: number;
@@ -600,6 +602,7 @@ export type ContentBlock =
 
 /** Stop reason reported to the caller when the subagent loop terminates. */
 export type SubagentStopReason =
+  | 'user_stop' | 'service_shutdown' | 'timeout' | 'aborted'
   | 'length'
   | 'end_turn'    // Anthropic says end_turn and last message has no tool_use
   | 'max_turns'   // hit max_turns budget before end_turn

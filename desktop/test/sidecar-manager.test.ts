@@ -86,6 +86,18 @@ describe('desktop sidecar manager', () => {
     expect(child.exitCode).toBe(0);
   });
 
+  test('受控 Sidecar 先走 IPC 正常关闭，等待退出后再继续',async()=>{
+    const manager=new SidecarManager({packaged:false,appPath:'',resourcesPath:'',port:3131,bootstrapToken:'test-bootstrap-token',clientVersion:'1.4.51',logger});
+    const child=new EventEmitter() as any;
+    child.pid=123;child.exitCode=null;child.connected=true;
+    const requests:unknown[]=[];
+    child.send=(message:unknown)=>{requests.push(message);setTimeout(()=>{child.exitCode=0;child.emit('exit',0,null);},20);};
+    child.kill=()=>{throw new Error('正常关闭不应杀进程');};
+    (manager as any).child=child;
+    await manager.stop();
+    expect(requests).toEqual([{type:'pmbrain:shutdown'}]);expect(child.exitCode).toBe(0);
+  });
+
   test('health timeout writes pid, exit code and complete stderr into desktop logs', async () => {
     const lines: Array<{ source: string; text: string }> = [];
     const capturingLogger = {

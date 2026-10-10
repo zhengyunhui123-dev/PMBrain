@@ -344,14 +344,18 @@ export class SidecarController {
       } = await import('../startup/post-upgrade-startup.js');
 
       await this.dependencies.ensureRuntimeReady();
+      this.dependencies.getLogger()?.write('desktop', 'startup prepare-database started');
       await this.dependencies.prepareConfiguredDatabase();
       const setup = getSetupInfo();
+      this.dependencies.getLogger()?.write('desktop', 'startup migration-check started');
       const migrationRequired = await this.dependencies.migrateConfiguredInstallation();
       // PGLite migrations are intentionally performed by the sidecar's sole
       // database owner. Inspect only after that migration has completed on a
       // later startup; never let the preflight CLI open a pending upgrade DB.
       if (!(migrationRequired && setup.current.engine === 'pglite')) {
+        this.dependencies.getLogger()?.write('desktop', 'startup embedding-preflight started');
         await this.dependencies.reconcileConfiguredEmbeddingIndex();
+        this.dependencies.getLogger()?.write('desktop', 'startup embedding-preflight completed');
       }
       if (migrationRequired && setup.current.engine !== 'pglite') markDesktopMigration(app.getVersion());
 

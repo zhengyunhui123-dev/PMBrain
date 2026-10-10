@@ -38,7 +38,7 @@ import type { BrainEngine } from '../../engine.ts';
 import type { GBrainConfig } from '../../config.ts';
 import { loadConfig } from '../../config.ts';
 import { buildBrainTools, filterAllowedTools } from '../tools/brain-allowlist.ts';
-import { entityIngestTools, verifyIngestResult, validateIngestCompletion, checkIngestCallBudget, ingestFinalPrompt,finalizeBeforeIngestBudget } from '../../pmbrain-adapters/entity-ingest-workflow.ts';
+import { entityIngestTools, verifyIngestResult, validateIngestCompletion, checkIngestCallBudget, ingestFinalPrompt,finalizeBeforeIngestBudget,ingestAbortKind } from '../../pmbrain-adapters/entity-ingest-workflow.ts';
 import {
   acquireLease,
   releaseLease,
@@ -816,7 +816,7 @@ async function runSubagentViaGateway(args: GatewayRunArgs): Promise<SubagentResu
     const blocks = typeof adapted === 'string' ? [{type:'text' as const,text:adapted}] : adapted;
     if (!blocks.some(block => block.type === 'tool-call')) {
       const text = blocks.filter((block): block is {type:'text';text:string} => block.type === 'text').map(block => block.text).join('\n');
-      const turns = priorMessages.filter(message => message.role === 'assistant').length;
+      const turns = priorMessages.filter(message => message.role === 'assistant'&&!message.content_blocks.some(block=>(block as any).truncated)).length;
       const correction = await validateIngestCompletion(engine,data,text,ctx.id,turns < maxTurns);
       if (!correction) return verifyIngestResult(engine,data,{
         result:text,turns_count:turns,stop_reason:'end_turn',tokens:{
@@ -901,6 +901,9 @@ async function runSubagentViaGateway(args: GatewayRunArgs): Promise<SubagentResu
     toolHandlers,
     maxTurns,
     maxTokens: Math.min(defaultMaxOutputTokens(model),data.usage_limits?.output??Infinity),
+    modelOutputLimit:data.model_output_limit,
+    turnTimeoutMs:data.ingest_context?data.turn_timeout_ms??300_000:undefined,
+    lengthRetryLimit:data.ingest_context?({messages,maxTokens,finalTurn})=>checkIngestCallBudget(engine,ctx.id,data,systemPrompt,messages,finalTurn?[]:chatTools,!!finalTurn,maxTokens,true):undefined,
     retryLength:!!data.ingest_context,
     jsonToolCalls:!!data.ingest_context&&(data.ingest_json_tools===true||classifyCapabilities(model)==='unusable:no_tools'),
     disableReasoning:!!data.ingest_context,
@@ -908,9 +911,9 @@ async function runSubagentViaGateway(args: GatewayRunArgs): Promise<SubagentResu
     prepareFinalMessages:data.ingest_context?async()=>[{role:'user',content:await ingestFinalPrompt(engine,ctx.id,data)}]:undefined,
     shouldFinalize:data.ingest_context?messages=>finalizeBeforeIngestBudget(engine,ctx.id,data,systemPrompt,messages,chatTools):undefined,
     validateCompletion:data.ingest_context?(text,canContinue)=>validateIngestCompletion(engine,data,text,ctx.id,canContinue):undefined,
-    beforeModelCall: async ({messages,finalTurn,maxTokens})=>checkIngestCallBudget(engine,ctx.id,data,systemPrompt,messages,finalTurn?[]:chatTools,!!finalTurn,maxTokens),
+    beforeModelCall: async ({messages,finalTurn,maxTokens})=>{await checkIngestCallBudget(engine,ctx.id,data,systemPrompt,messages,finalTurn?[]:chatTools,!!finalTurn,maxTokens);},
     reportLengthStop: !!data.ingest_context,
-    abortSignal: ctx.signal,
+    abortSignal: AbortSignal.any([ctx.signal,ctx.shutdownSignal]),
     cacheSystem,
     // ALWAYS pass replayState (even on fresh runs) so the gateway loop's
     // messageIdx counter starts at `nextMessageIdx` (1 on fresh, after the
@@ -923,7 +926,7 @@ async function runSubagentViaGateway(args: GatewayRunArgs): Promise<SubagentResu
     replayState: {
       priorMessages: priorChatMessages,
       priorTools: priorToolsByStableKey,
-      nextTurnIdx: priorChatMessages.filter(m => m.role === 'assistant').length,
+      nextTurnIdx: priorChatMessages.filter(m => m.role === 'assistant'&&!(Array.isArray(m.content)&&m.content.some(block=>block.type==='text'&&block.truncated))).length,
       nextMessageIdx,
     },
     onAssistantTurn: async (turnIdx, messageIdx, blocks, usage, modelStr) => {
@@ -1002,6 +1005,7 @@ async function runSubagentViaGateway(args: GatewayRunArgs): Promise<SubagentResu
     onHeartbeat: heartbeat,
     });
   } catch (error) {
+    if(data.ingest_context&&(ctx.signal.aborted||ctx.shutdownSignal.aborted))throw new UnrecoverableError(`ingest_provider_${ctx.shutdownSignal.aborted?'service_shutdown':ingestAbortKind(ctx.signal)}: ${error instanceof Error?error.message:String(error)}`);
     if(data.ingest_context&&!data.ingest_json_tools&&isToolCallingRejection(error)){
       await engine.executeRaw("UPDATE minion_jobs SET data=(CASE WHEN jsonb_typeof(data)='string' THEN (data #>> '{}')::jsonb ELSE data END)||'{\"ingest_json_tools\":true}'::jsonb WHERE id=$1",[ctx.id]);
       return runSubagentViaGateway({...args,data:{...data,ingest_json_tools:true}});
@@ -1040,12 +1044,12 @@ async function runSubagentViaGateway(args: GatewayRunArgs): Promise<SubagentResu
           ? 'refusal'
           : result.stopReason === 'length'?'length'
           : result.stopReason === 'aborted'
-            ? 'error'
+            ? ctx.shutdownSignal.aborted?'service_shutdown':ingestAbortKind(ctx.signal)
             : 'end_turn';
 
   return {
     result: result.finalText,
-    turns_count: priorMessages.filter(message => message.role === 'assistant').length + result.totalTurns,
+    turns_count: result.totalTurns,
     stop_reason: stopReason,
     tokens: {
       in: priorMessages.reduce((sum, message) => sum + (message.tokens_in ?? 0), 0) + result.totalUsage.input_tokens,

@@ -40,8 +40,8 @@ function configureModels(enabled = true, model = 'task-test') {
   }));
 }
 
-async function modelWaiting() {
-  const deadline = Date.now() + 15_000;
+async function modelWaiting(timeoutMs=15_000) {
+  const deadline = Date.now() + timeoutMs;
   while (!releaseModel && Date.now() < deadline) await Bun.sleep(30);
   if (!releaseModel) throw new Error(JSON.stringify(await runtime.listRuns()));
 }
@@ -372,9 +372,11 @@ describe('软件后台任务共用 owner 数据库', () => {
 
   test('真实快速维护等待模型时，任务阶段与知识库查询仍可读取', async () => {
     configureModels();
-    const accepted = await runtime.submitDream({ preset: 'quick', timeoutMs: 15_000 });
+    writeFileSync(join(root,'quick-model-wait.md'),'# 模型等待验收\n\n这份新资料确保快速维护实际调用延迟模型，验证任务查询和知识库读取。');
+    if(!await engine.getPage('background',{sourceId:'default'}))await engine.putPage('background',{type:'note',title:'后台查询验收',compiled_truth:'等待模型时仍可以读取已有知识。',timeline:'',frontmatter:{}},{sourceId:'default'});
+    const accepted = await runtime.submitDream({ preset: 'quick', timeoutMs: 60_000 });
     try {
-      await modelWaiting();
+      await modelWaiting(45_000);
       await Bun.sleep(1200);
       const read = async () => {
         const run = await runtime.getRun(accepted.id);
@@ -385,8 +387,8 @@ describe('软件后台任务共用 owner 数据库', () => {
       };
       await Promise.race([read(), Bun.sleep(2000).then(() => { throw new Error('快速维护等待模型时阻塞了任务或知识库读取'); })]);
       await runtime.cancel(accepted.id);
-    } finally { release(); configureModels(false); }
-  }, 30_000);
+    } finally { await runtime.cancel(accepted.id);release(); configureModels(false); }
+  }, 60_000);
 
   test('等待慢模型时知识可查询，重复点击不重复执行，取消后没有迟到写入', async () => {
     configureModels();

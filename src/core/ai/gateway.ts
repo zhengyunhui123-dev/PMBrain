@@ -392,6 +392,7 @@ export function configureGateway(config: AIGatewayConfig): void {
     embedding_multimodal_model: config.embedding_multimodal_model,
     expansion_model: config.expansion_model ?? DEFAULT_EXPANSION_MODEL,
     chat_model: config.chat_model ?? DEFAULT_CHAT_MODEL,
+    chat_output_limits: config.chat_output_limits,
     ocr_enabled: config.ocr_enabled ?? false,
     ocr_model: config.ocr_model,
     chat_fallback_chain: config.chat_fallback_chain,
@@ -2394,6 +2395,8 @@ export interface ChatOpts {
   maxTokens?: number;
   disableReasoning?: boolean;
   timeoutMs?: number;
+  modelOutputLimit?: number;
+  lengthRetryLimit?: (input:{model:string;messages:readonly ChatMessage[];maxTokens:number;finalTurn?:boolean})=>number|Promise<number>;
   responseSchema?: {name:string;schema:Record<string,unknown>};
   retryLength?: boolean;
   /** Sampling temperature. The LongMemEval judge pins 0 (official scorer). */
@@ -2609,19 +2612,35 @@ function mapStopReason(
  * Crash-resumable replay is the caller's responsibility (subagent.ts persists
  * blocks via the provider-neutral schema landing in commit 2a).
  */
-function chatAbortSignal(opts:ChatOpts):AbortSignal{
-  const env=requireConfig().env;
-  const configured=Number(env.PMBRAIN_AI_CHAT_TIMEOUT_MS??env.GBRAIN_AI_CHAT_TIMEOUT_MS);
-  const timeout=opts.timeoutMs??(Number.isFinite(configured)&&configured>0?configured:300_000);
-  const signal=AbortSignal.timeout(timeout);
+function chatAbortSignal(opts:ChatOpts):AbortSignal|undefined{
+  if(opts.timeoutMs==null)return opts.abortSignal;
+  const signal=AbortSignal.timeout(opts.timeoutMs);
   return opts.abortSignal?AbortSignal.any([opts.abortSignal,signal]):signal;
+}
+
+function chatOutputLimit(model:string,explicit?:number):number|undefined{
+  const {recipe,parsed}=resolveRecipe(model);
+  const declared=recipe.touchpoints.chat?.max_output_tokens;
+  const limits=[explicit,requireConfig().chat_output_limits?.[model],typeof declared==='function'?declared(parsed.modelId):declared].filter((value):value is number=>typeof value==='number'&&Number.isSafeInteger(value)&&value>0);
+  return limits.length?Math.min(...limits):undefined;
+}
+
+async function lengthRecoveryLimit(opts:ChatOpts,current:number,finalTurn?:boolean):Promise<number>{
+  const model=opts.model??getChatModel();
+  let limit=Math.min(current*2,chatOutputLimit(model,opts.modelOutputLimit)??current);
+  const context=resolveRecipe(model).recipe.touchpoints.chat?.max_context_tokens;
+  if(context)limit=Math.min(limit,context-Math.max(estimateChatInputTokens(opts),Buffer.byteLength((opts.system??'')+JSON.stringify(opts.messages)+JSON.stringify(opts.tools??[]),'utf8')));
+  const tracker=__budgetStore.getStore();
+  if(tracker)limit=Math.min(limit,tracker.affordableOutputTokens({modelId:model,kind:'chat',estimatedInputTokens:estimateChatInputTokens(opts),maxOutputTokens:limit}));
+  if(opts.lengthRetryLimit)limit=Math.min(limit,await opts.lengthRetryLimit({model,messages:opts.messages,maxTokens:limit,finalTurn}));
+  return Math.max(0,Math.floor(limit));
 }
 
 async function chatOnce(opts: ChatOpts): Promise<ChatResult> {
   const tracker = __budgetStore.getStore() ?? null;
   const modelStrEarly = opts.model ?? getChatModel();
   const estimatedInputTokens = estimateChatInputTokens(opts);
-  const maxOutputTokens = opts.maxTokens ?? defaultMaxOutputTokens(modelStrEarly);
+  const maxOutputTokens = Math.min(opts.maxTokens ?? defaultMaxOutputTokens(modelStrEarly),chatOutputLimit(modelStrEarly,opts.modelOutputLimit)??Infinity);
 
   // TX5: reserve BEFORE the provider call. Throws BudgetExhausted on cost,
   // runtime, or no_pricing (when cap is set). Pre-resolution model id is
@@ -2850,7 +2869,7 @@ async function chatOnce(opts: ChatOpts): Promise<ChatResult> {
               : undefined,
             abortSignal: generationOptions.abortSignal,
           });
-          if (!qwenAnswerEnvelope||nativeResult.finishReason==='length') return nativeResult;
+          if (!qwenAnswerEnvelope||(nativeResult.finishReason==='length'&&!knowledgeSynthesis)) return nativeResult;
           const answer = unwrapOllamaQwenResult(nativeResult.text, qwenJsonResponse);
           return {
             ...nativeResult,
@@ -2860,7 +2879,8 @@ async function chatOnce(opts: ChatOpts): Promise<ChatResult> {
         })()
       : recipe.id === 'ollama' || emitHostedDeltas
         ? await (async () => {
-          const streamed = streamText(generationOptions);
+          let streamError:unknown;
+          const streamed = streamText({...generationOptions,onError:({error}:{error:unknown})=>{streamError=error;}});
           if (!emitHostedDeltas) {
             const [content, text, toolCalls, finishReason, usage, providerMetadata] = await Promise.all([
               streamed.content,
@@ -2869,7 +2889,7 @@ async function chatOnce(opts: ChatOpts): Promise<ChatResult> {
               streamed.finishReason,
               streamed.usage,
               streamed.providerMetadata,
-            ]);
+            ]).catch(error=>{throw streamError??error;});
             return { content, text, toolCalls, finishReason, usage, providerMetadata };
           }
           let streamedText = '';
@@ -3035,8 +3055,11 @@ export async function chat(opts: ChatOpts): Promise<ChatResult> {
       const callOpts={ ...opts, model, ...(opts.onTextDelta ? { onTextDelta: (delta: string) => { if (delta) emitted = true; opts.onTextDelta!(delta); } } : {}) };
       let result = await chatOnce(callOpts);
       if(opts.retryLength&&result.stopReason==='length'){
+        const current=Math.min(opts.maxTokens??defaultMaxOutputTokens(model),chatOutputLimit(model,opts.modelOutputLimit)??Infinity);
+        const maxTokens=await lengthRecoveryLimit(callOpts,current);
+        if(maxTokens<=current)return result;
         opts.onTextReset?.(model);
-        const retried=await chatOnce({...callOpts,maxTokens:(opts.maxTokens??defaultMaxOutputTokens(model))*2});
+        const retried=await chatOnce({...callOpts,maxTokens});
         result={...retried,usage:{
           input_tokens:result.usage.input_tokens+retried.usage.input_tokens,
           output_tokens:result.usage.output_tokens+retried.usage.output_tokens,
@@ -3097,6 +3120,8 @@ export interface ToolLoopOpts {
   retryLength?: boolean;
   jsonToolCalls?: boolean;
   turnTimeoutMs?: number;
+  modelOutputLimit?: number;
+  lengthRetryLimit?: ChatOpts['lengthRetryLimit'];
   reportLengthStop?: boolean;
   recordUnknownTools?: boolean;
   /** "provider:modelId" — defaults to config.chat_model. */
@@ -3190,7 +3215,8 @@ export interface ToolLoopResult {
  */
 export async function toolLoop(opts: ToolLoopOpts): Promise<ToolLoopResult> {
   const maxTurns = opts.maxTurns ?? 20;
-  const maxTokens = opts.maxTokens ?? defaultMaxOutputTokens(opts.model??getChatModel());
+  const model=opts.model??getChatModel();
+  const maxTokens = Math.min(opts.maxTokens ?? defaultMaxOutputTokens(model),chatOutputLimit(model,opts.modelOutputLimit)??Infinity);
   const handlers = opts.toolHandlers;
   const totalUsage: ChatResult['usage'] = {
     input_tokens: 0,
@@ -3216,8 +3242,10 @@ export async function toolLoop(opts: ToolLoopOpts): Promise<ToolLoopResult> {
   const replayTruncation=replayLast?.role==='assistant'&&Array.isArray(replayLast.content)?replayLast.content.find(block=>block.type==='text'&&block.truncated):undefined;
   if(replayTruncation?.type==='text'&&opts.retryLength){
     for(let index=messages.length-1;index>=0;index--){const message=messages[index]!;if(message.role==='assistant'&&Array.isArray(message.content)&&message.content.some(block=>block.type==='text'&&block.truncated))messages.splice(index,1);}
-    if(replayTruncation.lengthRetry||turnIdx>=maxTurns)return {finalText:replayTruncation.text,totalTurns:0,totalUsage,stopReason:'length',messages};
-    retry={messages:[...messages],maxTokens:(replayTruncation.outputLimit??maxTokens)*2,finalTurn:replayTruncation.finalVerification??(opts.finalizeOnLastTurn===true&&turnIdx>=maxTurns-1)};
+    const current=replayTruncation.outputLimit??maxTokens;
+    const cap=await lengthRecoveryLimit({...opts,model,messages},current,replayTruncation.finalVerification);
+    if(replayTruncation.lengthRetry||turnIdx>=maxTurns||cap<=current)return {finalText:replayTruncation.text,totalTurns:0,totalUsage,stopReason:'length',messages};
+    retry={messages:[...messages],maxTokens:cap,finalTurn:replayTruncation.finalVerification??(opts.finalizeOnLastTurn===true&&turnIdx>=maxTurns-1)};
   }
 
   while (turnIdx < maxTurns) {
@@ -3254,7 +3282,7 @@ export async function toolLoop(opts: ToolLoopOpts): Promise<ToolLoopResult> {
       if(chatResult.stopReason==='length'){
         const blocks:ChatBlock[]=[{type:'text',text:chatResult.text,truncated:true,outputLimit:callMaxTokens,lengthRetry:!!retry,finalVerification:finalTurn}];
         chatResult={...chatResult,blocks};
-        if(opts.retryLength&&!retry&&turnIdx+1<maxTurns)retry={messages:[...callMessages],maxTokens:callMaxTokens*2,finalTurn};
+        if(opts.retryLength&&!retry)retry={messages:[...callMessages],maxTokens:callMaxTokens,finalTurn};
         else retry=undefined;
       }else{
         retry=undefined;
@@ -3285,7 +3313,11 @@ export async function toolLoop(opts: ToolLoopOpts): Promise<ToolLoopResult> {
     messages.push({ role: 'assistant', content: chatResult.blocks });
     if(chatResult.stopReason==='length'&&opts.retryLength){
       messages.pop();
-      if(retry){turnIdx++;continue;}
+      if(retry){
+        const cap=await lengthRecoveryLimit({...opts,model,messages:retry.messages},retry.maxTokens,retry.finalTurn);
+        if(cap>retry.maxTokens){retry.maxTokens=cap;continue;}
+        retry=undefined;
+      }
       stopReason='length';finalText=chatResult.text;break;
     }
 

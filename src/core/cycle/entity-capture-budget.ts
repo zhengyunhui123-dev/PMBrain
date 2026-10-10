@@ -6,7 +6,7 @@ export const DEFAULT_ENTITY_CAPTURE_MAX_INPUT_TOKENS = 1_000_000;
 export const DEFAULT_ENTITY_CAPTURE_MAX_OUTPUT_TOKENS = 200_000;
 export const ENTITY_CAPTURE_CANDIDATE_LIMIT = 60;
 
-export type CaptureStopReason = 'completed' | 'tokens' | 'cost' | 'failure' | 'ingest_validation' | 'relation_failure' | 'aborted' | 'model_unavailable'|'truncated'|'parse'|'timeout'|'network'|'rate_limit'|'provider_5xx';
+export type CaptureStopReason = 'completed' | 'tokens' | 'cost' | 'failure' | 'ingest_validation' | 'relation_failure' | 'aborted' | 'user_stop' | 'service_shutdown' | 'model_unavailable'|'truncated'|'parse'|'timeout'|'network'|'rate_limit'|'provider_5xx';
 
 import { CJK_PLAIN_MENTION_BLOCKLIST } from '../pmbrain-adapters/mention-policy.ts';
 export { CJK_PLAIN_MENTION_BLOCKLIST };
@@ -181,7 +181,9 @@ const STOP_REASON_TEXT: Record<CaptureStopReason, string> = {
   failure: '模型调用失败',
   ingest_validation: '实体落库验收失败',
   relation_failure: '关系对账失败',
-  aborted: '用户停止',
+  aborted: '操作已中止',
+  user_stop: '用户停止',
+  service_shutdown: '本地服务关闭，任务可继续',
   model_unavailable: '实体识别模型不可用',
 };
 

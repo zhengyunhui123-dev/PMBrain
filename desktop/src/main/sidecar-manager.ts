@@ -292,9 +292,14 @@ export class SidecarManager {
     this.child = null;
     if (!child || child.exitCode !== null) return;
 
+    const stoppingAt=Date.now();
     this.requestProcessTreeStop(child, false);
-    if (await this.waitForChildExit(child, STOP_TIMEOUT_MS)) return;
+    if (await this.waitForChildExit(child, STOP_TIMEOUT_MS)) {
+      this.options.logger.write('desktop',`Sidecar stopped normally in ${Date.now()-stoppingAt}ms`);
+      return;
+    }
 
+    this.options.logger.write('desktop','Sidecar graceful shutdown timed out; terminating process tree');
     this.requestProcessTreeStop(child, true);
     if (!await this.waitForChildExit(child, FORCE_STOP_TIMEOUT_MS)) {
       throw new Error(`PMBrain sidecar process tree (PID ${child.pid ?? 'unknown'}) did not stop.`);
@@ -302,6 +307,12 @@ export class SidecarManager {
   }
 
   private requestProcessTreeStop(child: ChildProcess, force: boolean): void {
+    if(!force&&child.connected){
+      try{
+        child.send({type:'pmbrain:shutdown'},error=>{if(error)this.options.logger.write('desktop',`Sidecar shutdown IPC failed: ${error.message}`);});
+        return;
+      }catch(error){this.options.logger.write('desktop',`Sidecar shutdown IPC failed: ${error instanceof Error?error.message:String(error)}`);}
+    }
     if (process.platform === 'win32' && child.pid) {
       const args = ['/PID', String(child.pid), '/T'];
       if (force) args.push('/F');
@@ -362,7 +373,7 @@ export class SidecarManager {
         PMBRAIN_PGLITE_LOCK_FAIL_FAST: '1',
       },
       windowsHide: true,
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
     });
     this.child = child;
     if(child.pid){

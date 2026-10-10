@@ -91,7 +91,32 @@ test('失败子任务保留实际用量和原始错误，不让预算和汇总�
   expect(result.details.pages_failed).toBe(1);
   expect(result.error?.message).toContain('choices 缺失');
   expect(result.summary).toContain('choices 缺失');
+  expect(result.summary).toContain('失败页：vault:notes/failing');
+  expect((result.details.page_failures as any[])[0]).toMatchObject({slug:'notes/failing',sourceId:'vault',stage:'entity_ingest',input_tokens:12345*calls,output_tokens:321*calls});
 }, 60_000);
+
+for(const kind of ['user_stop','service_shutdown','timeout'])test(`${kind} 与其他停止原因分开保存，失败页附带消耗及配置上限`,async()=>{
+ await note('notes/stopped','张三在星河公司讨论合作，识别过程中需要记录准确失败原因。');
+ await engine.setConfig('dream.entity_capture.turn_timeout_ms','750000');
+ await engine.setConfig('dream.entity_capture.document_max_turns','3');
+ const result=await runPhaseCaptureEntities(engine,{sourceId:'vault',handler:async ctx=>{
+  expect(ctx.data.turn_timeout_ms).toBe(750000);expect((await engine.executeRaw<{timeout_ms:number}>('SELECT timeout_ms FROM minion_jobs WHERE id=$1',[ctx.id]))[0]?.timeout_ms).toBe(4590000);
+  await ctx.updateTokens({input:23,output:7});throw new UnrecoverableError(`ingest_provider_${kind}: stopped`);
+ }});
+ expect(result.details.stop_reason).toBe(kind);
+ expect((result.details.page_failures as any[])[0]).toMatchObject({kind,input_tokens:23,output_tokens:7,turn_timeout_ms:750000,job_timeout_ms:4590000});
+ expect(result.summary).toContain('输入 Token 23/');expect(result.summary).toContain('输出 Token 7/');
+},60_000);
+
+for(const kind of ['user_stop','service_shutdown','timeout'])test(`${kind} 的真实中止信号仍保留失败页和已消耗 Token`,async()=>{
+ await note('notes/aborted','张三在星河公司讨论合作，中止时仍应保存已经发生的模型用量。');
+ const controller=new AbortController();
+ const result=await runPhaseCaptureEntities(engine,{sourceId:'vault',signal:controller.signal,handler:async ctx=>{
+  await ctx.updateTokens({input:31,output:11});controller.abort(new Error(kind));ctx.signal.throwIfAborted();
+ }});
+ expect(result.details.stop_reason).toBe(kind);expect(result.details.input_tokens).toBe(31);expect(result.details.output_tokens).toBe(11);
+ expect(result.details.pages_failed).toBe(1);expect((result.details.page_failures as any[])[0]).toMatchObject({slug:'notes/aborted',kind,input_tokens:31,output_tokens:11});
+},60_000);
 
 test('不存在的实体回执显示落库验收失败，不误报为模型连接失败', async () => {
   await note('notes/unresolved', '团队采用三纪早会体系，早会检查昨日完成事项、今日计划和待处理风险。');
@@ -417,7 +442,7 @@ test('失败重跑不重复建人，停止后不再写下一份', async () => {
   await note('notes/later', '这份在停止后不能再送给模型，正文足够长。');
   const controller = new AbortController();
   let stoppedCalls = 0;
-  const stopError=await runPhaseCaptureEntities(engine, {
+  const stopped=await runPhaseCaptureEntities(engine, {
     sourceId: 'vault',
     signal: controller.signal,
     handler: async () => {
@@ -434,8 +459,9 @@ test('失败重跑不重复建人，停止后不再写下一份', async () => {
       }
       return { ingest_verified:true, tokens: { in: 1, out: 1 } };
     },
-  }).catch(error=>error);
-  expect(stopError).toBeInstanceOf(Error);
+  });
+  expect(stopped.details.stop_reason).toBe('aborted');
+  expect(stopped.details.pages_failed).toBe(1);
   expect(stoppedCalls).toBe(1);
   const kept = await engine.executeRaw<{ n: number }>(
     `SELECT count(*)::int AS n FROM pages WHERE slug = 'people/kept'`,

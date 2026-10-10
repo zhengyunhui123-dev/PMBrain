@@ -1,13 +1,17 @@
 import {afterEach,expect,test} from 'bun:test';
-import {chat,configureGateway,resetGateway,toolLoop} from '../src/core/ai/gateway.ts';
+import {chat,configureGateway,resetGateway,toolLoop,withBudgetTracker} from '../src/core/ai/gateway.ts';
 import {extractFactsFromTurn} from '../src/core/facts/extract.ts';
+import {BudgetTracker} from '../src/core/budget/budget-tracker.ts';
+import {mkdtempSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
 
 let server:ReturnType<typeof Bun.serve>|undefined;
 afterEach(()=>{server?.stop(true);resetGateway();});
 function setup(handler:(body:any)=>Response|Promise<Response>){
   const requests:any[]=[];
   server=Bun.serve({port:0,async fetch(request){const body=await request.json();requests.push(body);return handler(body);}});
-  configureGateway({generative_enabled:true,chat_model:'custom-openai:Qwen3.6-35B-A3B',base_urls:{'custom-openai':server.url.origin+'/v1'},env:{}});
+  configureGateway({generative_enabled:true,chat_model:'custom-openai:Qwen3.6-35B-A3B',chat_output_limits:{'custom-openai:Qwen3.6-35B-A3B':64000},base_urls:{'custom-openai':server.url.origin+'/v1'},env:{}});
   return requests;
 }
 function answer(text:string,reason='stop',tokens=5){return Response.json({id:'isolated-compat',object:'chat.completion',created:1,model:'Qwen3.6-35B-A3B',choices:[{index:0,finish_reason:reason,message:{role:'assistant',content:text}}],usage:{prompt_tokens:20,completion_tokens:tokens,total_tokens:20+tokens}});}
@@ -29,14 +33,37 @@ test('旧 Qwen3 参数拒绝才使用软开关，Qwen3.6 不使用软开关',asy
   expect(JSON.stringify(requests.at(-1).messages)).not.toContain('/no_think');
 });
 
-test('超时可由配置设置，调用方取消保持独立',async()=>{
+test('超时只由调用方设置，旧全局配置不会影响普通聊天，取消保持独立',async()=>{
   setup(async()=>{await Bun.sleep(100);return answer('{"ok":true}');});
   configureGateway({generative_enabled:true,chat_model:'custom-openai:Qwen3.6-35B-A3B',base_urls:{'custom-openai':server!.url.origin+'/v1'},env:{GBRAIN_AI_CHAT_TIMEOUT_MS:'15'}});
   const {classifyChatError}=await import('../src/core/ai/errors.ts');
-  const timeout=await chat({messages:[{role:'user',content:'JSON'}]}).catch(error=>error);
+  expect((await chat({messages:[{role:'user',content:'JSON'}]})).text).toBe('{"ok":true}');
+  const timeout=await chat({messages:[{role:'user',content:'JSON'}],timeoutMs:15}).catch(error=>error);
   expect(classifyChatError(timeout)).toBe('timeout');
   const controller=new AbortController();controller.abort();
   await expect(chat({messages:[{role:'user',content:'JSON'}],abortSignal:controller.signal,timeoutMs:1000})).rejects.toThrow();
+});
+
+test('截断恢复留住正常工具轮次，并受模型输出上限约束',async()=>{
+  let calls=0;const requests=setup(()=>answer(++calls===1?'partial':'{"ok":true}',calls===1?'length':'stop',2));
+  const result=await toolLoop({initialMessages:[{role:'user',content:'JSON'}],tools:[],toolHandlers:new Map(),maxTurns:1,maxTokens:10,modelOutputLimit:15,retryLength:true});
+  expect(requests.map(body=>body.max_tokens)).toEqual([10,15]);expect(result.totalTurns).toBe(1);expect(result.stopReason).toBe('end');
+});
+
+test('未知模型输出能力时不盲目放大，恢复可按剩余预算缩小',async()=>{
+  const requests=setup(()=>answer('partial','length',10));
+  configureGateway({generative_enabled:true,chat_model:'custom-openai:Qwen3.6-35B-A3B',base_urls:{'custom-openai':server!.url.origin+'/v1'},env:{}});
+  const unknown=await toolLoop({initialMessages:[{role:'user',content:'JSON'}],tools:[],toolHandlers:new Map(),maxTokens:10,retryLength:true});
+  expect(unknown.stopReason).toBe('length');expect(requests).toHaveLength(1);
+  const bounded=await toolLoop({initialMessages:[{role:'user',content:'JSON'}],tools:[],toolHandlers:new Map(),maxTokens:10,modelOutputLimit:30,retryLength:true,lengthRetryLimit:()=>14});
+  expect(bounded.stopReason).toBe('length');expect(requests.map(body=>body.max_tokens)).toEqual([10,10,14]);
+});
+
+test('截断恢复依据已发生费用缩小输出，不能超过剩余金额',async()=>{
+  let calls=0;const requests=setup(()=>answer(++calls===1?'partial':'{"ok":true}',calls===1?'length':'stop',10));
+  const tracker=new BudgetTracker({label:'length-recovery-test',maxCostUsd:0.000025,auditPath:join(mkdtempSync(join(tmpdir(),'pmbrain-budget-test-')),'audit.jsonl'),pricingOverrides:{'custom-openai:qwen3.6-35b-a3b':{input:0,output:1}}});
+  const result=await withBudgetTracker(tracker,()=>toolLoop({initialMessages:[{role:'user',content:'JSON'}],tools:[],toolHandlers:new Map(),maxTokens:10,maxTurns:1,retryLength:true}));
+  expect(requests.map(body=>body.max_tokens)).toEqual([10,15]);expect(result.stopReason).toBe('end');expect(tracker.snapshot().cumulativeCostUsd).toBeLessThanOrEqual(0.000025);
 });
 
 test('截断同一请求加倍一次，逐次记录消耗，截断工具参数不执行',async()=>{
@@ -45,7 +72,7 @@ test('截断同一请求加倍一次，逐次记录消耗，截断工具参数�
   const result=await toolLoop({initialMessages:[{role:'user',content:'原文'}],tools:[],toolHandlers:new Map(),maxTurns:6,retryLength:true,reportLengthStop:true,beforeModelCall:async input=>{reservations.push(input.maxTokens);},onAssistantTurn:async(_turn,_message,_blocks,usage)=>{persisted.push(usage.output_tokens);}});
   expect(requests.map(body=>body.max_tokens)).toEqual([32000,64000]);
   expect(requests[0].messages).toEqual(requests[1].messages);expect(reservations).toEqual([32000,64000]);
-  expect(persisted).toEqual([32000,7]);expect(result.totalUsage.output_tokens).toBe(32007);expect(result.totalTurns).toBe(2);expect(result.stopReason).toBe('end');
+  expect(persisted).toEqual([32000,7]);expect(result.totalUsage.output_tokens).toBe(32007);expect(result.totalTurns).toBe(1);expect(result.stopReason).toBe('end');
 });
 
 test('再次截断保留 length；预算拒绝重试时不再调用模型',async()=>{
@@ -73,7 +100,7 @@ test('普通 JSON 抽取截断只重试一次，并合计两次用量',async()=>
 test('Ollama 截断不被结果信封解析覆盖，仍按32k/64k重试',async()=>{
   let calls=0;
   const requests=setup(()=>new Response(JSON.stringify({message:{role:'assistant',content:++calls===1?'{}':'{"result":[]}'},done:true,done_reason:calls===1?'length':'stop',prompt_eval_count:10,eval_count:5})+'\n'));
-  configureGateway({generative_enabled:true,chat_model:'ollama:Qwen3.6-35B-A3B',base_urls:{ollama:server!.url.origin+'/v1'},env:{}});
+  configureGateway({generative_enabled:true,chat_model:'ollama:Qwen3.6-35B-A3B',chat_output_limits:{'ollama:Qwen3.6-35B-A3B':64000},base_urls:{ollama:server!.url.origin+'/v1'},env:{}});
   const result=await chat({messages:[{role:'user',content:'Return JSON'}],retryLength:true});
   expect(result.stopReason).toBe('end');expect(result.text).toBe('[]');expect(requests.map(body=>body.options.num_predict)).toEqual([32000,64000]);
 });
@@ -101,7 +128,7 @@ test('流式调用同样移除被拒的关思考参数',async()=>{
 
 test('事实抽取再次截断明确报错，不接受看似完整的空 JSON',async()=>{
   const requests=setup(()=>answer('{"facts":[]}','length',32000));
-  configureGateway({generative_enabled:true,chat_model:'custom-openai:Qwen3.6-35B-A3B',base_urls:{'custom-openai':server!.url.origin+'/v1'},env:{CUSTOM_OPENAI_API_KEY:'isolated-test-only'}});
+  configureGateway({generative_enabled:true,chat_model:'custom-openai:Qwen3.6-35B-A3B',chat_output_limits:{'custom-openai:Qwen3.6-35B-A3B':64000},base_urls:{'custom-openai':server!.url.origin+'/v1'},env:{CUSTOM_OPENAI_API_KEY:'isolated-test-only'}});
   await expect(extractFactsFromTurn({model:'custom-openai:Qwen3.6-35B-A3B',turnText:'我决定采用这个工作流程。',source:'test:compatibility',throwOnError:true})).rejects.toThrow('facts_output_truncated');
   expect(requests.map(body=>body.max_tokens)).toEqual([32000,64000]);
 });

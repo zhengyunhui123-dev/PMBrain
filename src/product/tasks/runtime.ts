@@ -345,9 +345,13 @@ export class ProductTaskRuntime {
       return this.getRun(id);
     }
     const execution = this.executions.get(jobId);
+    this.stopIntents.add(jobId);
     execution?.cancel();
     await withDatabasePriority(0, () => this.queue.cancelJob(jobId));
     await execution?.done;
+    const started=this.executions.get(jobId);
+    started?.cancel();
+    await started?.done;
     return this.getRun(id);
   }
 
@@ -495,7 +499,7 @@ export class ProductTaskRuntime {
       cancelRequested = true;
       gitController.abort();
       host.cancel();
-      thread.postMessage({ type: 'cancel' });
+      thread.postMessage({ type: 'cancel',reason:reason??'user_stop: 任务已取消' });
       settleReject(new Error(reason??'任务已取消'));
     };
     const finished = (async () => {
@@ -531,10 +535,10 @@ export class ProductTaskRuntime {
       if (run.product && structuredTask.type==='dream' && structuredTask.input.preset==='quick') run.product.activeFiles=this.fileProjection.active(context.id);
       return run;
     } });
-    const cancelFromSignal=()=>cancel();
+    const cancelFromSignal=()=>cancel(context.shutdownSignal.aborted?'service_shutdown: 本地服务关闭':context.signal.reason instanceof Error?context.signal.reason.message:undefined);
     context.signal.addEventListener('abort', cancelFromSignal, { once: true });
     context.shutdownSignal.addEventListener('abort', cancelFromSignal, { once: true });
-    if (context.signal.aborted || context.shutdownSignal.aborted) cancel();
+    if (context.signal.aborted || context.shutdownSignal.aborted || this.stopIntents.has(context.id)) cancel();
     thread.once('error', error => settleReject(error instanceof Error ? error : new Error(String(error))));
     thread.once('exit', code => settleReject(new Error(`任务 Worker 意外退出（${code}）`)));
     thread.on('message', (message: TaskWorkerMessage) => {
@@ -756,7 +760,7 @@ export class ProductTaskRuntime {
     const resume = this.engine.executeRaw(`UPDATE minion_jobs SET data = jsonb_set(data, '{resumeOnRestart}', 'true'::jsonb)
       WHERE queue = $1 AND data->'task'->'input'->>'preset' = 'quick' AND status IN ('active','waiting-children')`, [PRODUCT_TASK_QUEUE]);
     const interrupted = [...this.executions.keys()];
-    for (const execution of this.executions.values()) execution.cancel();
+    for (const execution of this.executions.values()) execution.cancel('service_shutdown: 本地服务关闭');
     const drained = Promise.all([resume, Promise.allSettled([...this.executions.values()].map(execution => execution.done))]);
     let closeTimer: ReturnType<typeof setTimeout> | undefined;
     const closed = await Promise.race([drained.then(() => true), new Promise<boolean>(resolve => { closeTimer=setTimeout(()=>resolve(false),3000); })]).finally(()=>clearTimeout(closeTimer));

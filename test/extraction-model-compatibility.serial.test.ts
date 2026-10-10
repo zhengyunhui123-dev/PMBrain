@@ -15,7 +15,7 @@ process.env.PMBRAIN_HOME=mkdtempSync(join(tmpdir(),'pmbrain-extraction-compat-')
 const url=process.env.PMBRAIN_RELATION_TEST_DATABASE_URL;
 let engine:BrainEngine;
 beforeAll(async()=>{if(url)assertSafeE2eDatabaseUrl(url);engine=url?new PostgresEngine():new PGLiteEngine();await engine.connect(url?{database_url:url}:{});await engine.initSchema();},60_000);
-beforeEach(async()=>{await resetPgliteState(engine as PGLiteEngine);configureGateway({chat_model:'ollama:Qwen3.6-35B-A3B',generative_enabled:true,env:{}});await engine.setConfig('models.dream.extract_atoms','ollama:Qwen3.6-35B-A3B');});
+beforeEach(async()=>{await resetPgliteState(engine as PGLiteEngine);configureGateway({chat_model:'ollama:Qwen3.6-35B-A3B',chat_output_limits:{'ollama:Qwen3.6-35B-A3B':64000},generative_enabled:true,env:{}});await engine.setConfig('models.dream.extract_atoms','ollama:Qwen3.6-35B-A3B');});
 afterEach(()=>{__setChatTransportForTests(null);resetGateway();});
 afterAll(async()=>{await engine.disconnect();if(previous===undefined)delete process.env.PMBRAIN_HOME;else process.env.PMBRAIN_HOME=previous;},60_000);
 
