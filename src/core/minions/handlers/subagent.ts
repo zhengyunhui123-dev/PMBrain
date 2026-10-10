@@ -56,6 +56,8 @@ import { classifyCapabilities } from '../../ai/capabilities.ts';
 import { randomUUIDv7 } from 'bun';
 import { createHash } from 'node:crypto';
 import { parseLlmJson } from '../../llm-json.ts';
+import {defaultMaxOutputTokens} from '../../ai/model-compatibility.ts';
+import {isToolCallingRejection,classifyChatError} from '../../ai/errors.ts';
 
 // ── Defaults ────────────────────────────────────────────────
 
@@ -195,7 +197,7 @@ export function makeSubagentHandler(deps: SubagentDeps) {
     // invocations and any code path that bypasses the queue's capability check.
     if (data.model) {
       const verdict = classifyCapabilities(data.model);
-      if (verdict === 'unusable:no_tools') {
+      if (verdict === 'unusable:no_tools' && !data.ingest_context) {
         throw new Error(
           `subagent job rejected: data.model "${data.model}" lacks native tool calling. ` +
           `The subagent loop dispatches brain ops via tool calls — without tool support the loop has no way to run.`,
@@ -232,7 +234,7 @@ export function makeSubagentHandler(deps: SubagentDeps) {
     // embedders). Never bypass it because the host's ambient model config
     // happens to name a non-Anthropic provider.
     const useGatewayLoop = !deps.client && !deps.makeAnthropic
-      && (gatewayLoopExplicit || !isAnthropicProvider(model));
+      && (gatewayLoopExplicit || !isAnthropicProvider(model)||!!data.ingest_context);
 
     // Build the tool registry bound to THIS job as the owning subagent.
     // brain_id (per-call brain override; children inherit parent's unless
@@ -809,7 +811,7 @@ async function runSubagentViaGateway(args: GatewayRunArgs): Promise<SubagentResu
   // Load prior state (replay support via D5 shim for legacy v1 rows).
   const priorMessages = await loadPriorMessages(engine, ctx.id);
   const terminal = priorMessages.at(-1);
-  if (data.ingest_context && terminal?.role === 'assistant') {
+  if (data.ingest_context && terminal?.role === 'assistant'&&!terminal.content_blocks.some(block=>(block as any).truncated)) {
     const adapted = adaptContentBlocksToChatBlocks(terminal.content_blocks);
     const blocks = typeof adapted === 'string' ? [{type:'text' as const,text:adapted}] : adapted;
     if (!blocks.some(block => block.type === 'tool-call')) {
@@ -898,13 +900,15 @@ async function runSubagentViaGateway(args: GatewayRunArgs): Promise<SubagentResu
     tools: chatTools,
     toolHandlers,
     maxTurns,
-    maxTokens: Math.min(4096,data.usage_limits?.output??4096),
+    maxTokens: Math.min(defaultMaxOutputTokens(model),data.usage_limits?.output??Infinity),
+    retryLength:!!data.ingest_context,
+    jsonToolCalls:!!data.ingest_context&&(data.ingest_json_tools===true||classifyCapabilities(model)==='unusable:no_tools'),
     disableReasoning:!!data.ingest_context,
     finalizeOnLastTurn:!!data.ingest_context,
     prepareFinalMessages:data.ingest_context?async()=>[{role:'user',content:await ingestFinalPrompt(engine,ctx.id,data)}]:undefined,
     shouldFinalize:data.ingest_context?messages=>finalizeBeforeIngestBudget(engine,ctx.id,data,systemPrompt,messages,chatTools):undefined,
     validateCompletion:data.ingest_context?(text,canContinue)=>validateIngestCompletion(engine,data,text,ctx.id,canContinue):undefined,
-    beforeModelCall: async ({messages,finalTurn})=>checkIngestCallBudget(engine,ctx.id,data,systemPrompt,messages,finalTurn?[]:chatTools,!!finalTurn),
+    beforeModelCall: async ({messages,finalTurn,maxTokens})=>checkIngestCallBudget(engine,ctx.id,data,systemPrompt,messages,finalTurn?[]:chatTools,!!finalTurn,maxTokens),
     reportLengthStop: !!data.ingest_context,
     abortSignal: ctx.signal,
     cacheSystem,
@@ -998,9 +1002,18 @@ async function runSubagentViaGateway(args: GatewayRunArgs): Promise<SubagentResu
     onHeartbeat: heartbeat,
     });
   } catch (error) {
+    if(data.ingest_context&&!data.ingest_json_tools&&isToolCallingRejection(error)){
+      await engine.executeRaw("UPDATE minion_jobs SET data=(CASE WHEN jsonb_typeof(data)='string' THEN (data #>> '{}')::jsonb ELSE data END)||'{\"ingest_json_tools\":true}'::jsonb WHERE id=$1",[ctx.id]);
+      return runSubagentViaGateway({...args,data:{...data,ingest_json_tools:true}});
+    }
     const detail = promptTooLongDetail(error);
     if (detail !== null) {
       throw new UnrecoverableError(`prompt_too_long: ${detail}`);
+    }
+    if(data.ingest_context&&!ctx.signal.aborted){
+      const kind=classifyChatError(error);
+      if(kind==='parse')throw new UnrecoverableError(`ingest_provider_parse: ${error instanceof Error?error.message:String(error)}`);
+      if(kind!=='failure')throw new Error(`ingest_provider_${kind}: ${error instanceof Error?error.message:String(error)}`);
     }
     throw error;
   }
@@ -1025,7 +1038,8 @@ async function runSubagentViaGateway(args: GatewayRunArgs): Promise<SubagentResu
         ? 'refusal'
         : result.stopReason === 'content_filter'
           ? 'refusal'
-          : result.stopReason === 'aborted' || (data.ingest_context && result.stopReason === 'length')
+          : result.stopReason === 'length'?'length'
+          : result.stopReason === 'aborted'
             ? 'error'
             : 'end_turn';
 
@@ -1084,7 +1098,7 @@ function adaptContentBlocksToChatBlocks(blocks: unknown): ChatBlock[] | string {
     const block = b as Record<string, unknown>;
     const t = block.type;
     if (t === 'text' && typeof block.text === 'string') {
-      out.push({ type: 'text', text: block.text });
+      out.push({ type: 'text', text: block.text,...(block.truncated===true?{truncated:true,outputLimit:typeof block.outputLimit==='number'?block.outputLimit:undefined,lengthRetry:block.lengthRetry===true,finalVerification:block.finalVerification===true}:{}) });
     } else if (t === 'tool_use' && typeof block.id === 'string' && typeof block.name === 'string') {
       // v1 Anthropic shape
       out.push({

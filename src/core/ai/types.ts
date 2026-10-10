@@ -247,6 +247,8 @@ export interface RerankerTouchpoint {
 
 export interface ChatTouchpoint {
   models: string[];
+  thinking_by_default?: boolean | ((modelId:string)=>boolean);
+  supports_structured_outputs?: boolean;
   supports_vision?: boolean;
   vision_models?: string[];
   /** Provider returns native function/tool calling. */

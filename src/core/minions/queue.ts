@@ -110,7 +110,7 @@ export class MinionQueue {
       if (typeof submittedModel === 'string' && submittedModel.length > 0) {
         const { classifyCapabilities } = await import('../ai/capabilities.ts');
         const verdict = classifyCapabilities(submittedModel);
-        if (verdict === 'unusable:no_tools') {
+        if (verdict === 'unusable:no_tools' && !data.ingest_context) {
           throw new Error(
             `subagent job rejected: data.model "${submittedModel}" lacks native tool calling. ` +
             `The subagent loop dispatches brain ops via tool calls — without tool support the loop has no way to run. ` +

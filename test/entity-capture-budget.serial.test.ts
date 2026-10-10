@@ -8,6 +8,7 @@ import { PostgresEngine } from '../src/core/postgres-engine.ts';
 import { runPhaseCaptureEntities } from '../src/core/cycle/capture-entities.ts';
 import { runByMentionCore } from '../src/commands/extract.ts';
 import type { MinionJobContext } from '../src/core/minions/types.ts';
+import {UnrecoverableError} from '../src/core/minions/types.ts';
 import { resetPgliteState } from './helpers/reset-pglite.ts';
 import { assertSafeE2eDatabaseUrl } from './helpers/db-guard.ts';
 import {finalizeEntityIngest} from '../src/core/pmbrain-adapters/entity-ingest-workflow.ts';
@@ -106,6 +107,26 @@ test('不存在的实体回执显示落库验收失败，不误报为模型连�
   expect(result.summary).not.toContain('模型调用失败');
   expect(result.summary).toContain('concepts/san-ji-zao-hui-ti-xi');
 }, 60_000);
+
+for(const [errorText,reason] of [
+ ['ingest_output_truncated: output truncated after bounded retry','truncated'],
+ ['ingest receipt missing or invalid JSON','parse'],
+ ['ingest repeated failed write: brain_put_page','ingest_validation'],
+ ['ingest_provider_parse: invalid response JSON','parse'],
+] as const)test(`${reason} 坏页留待重试，后续正常页完成；再次继续只领取坏页`,async()=>{
+ await note('notes/a-bad','这份资料包含三纪早会体系，模拟思考输出持续被截断。');
+ await note('notes/z-good','这份正常资料包含团队例会和风险核对，模拟完成实体识别。');
+ let calls=0;
+ const first=await runPhaseCaptureEntities(engine,{sourceId:'vault',handler:async ctx=>{
+  calls++;if(promptOf(ctx).includes('notes/a-bad'))throw new UnrecoverableError(errorText);
+  return {ingest_verified:true,stop_reason:'end_turn',tokens:{in:10,out:5}};
+ }});
+ expect(calls).toBe(2);expect(first.details.pages_processed).toBe(1);expect(first.details.pages_failed).toBe(1);
+ expect(first.details.stop_reason).toBe(reason);if(reason==='truncated')expect(first.summary).toContain('输出被截断');
+ calls=0;
+ const next=await runPhaseCaptureEntities(engine,{sourceId:'vault',handler:async()=>{calls++;return {ingest_verified:true,stop_reason:'end_turn',tokens:{in:10,out:5}};}});
+ expect(calls).toBe(1);expect(next.status).toBe('ok');
+},60_000);
 
 test('新人、公司、项目和概念按类型落库，新别名复用已有公司', async () => {
   await engine.putPage('companies/xinghe', {

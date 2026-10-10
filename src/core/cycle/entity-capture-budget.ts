@@ -6,7 +6,7 @@ export const DEFAULT_ENTITY_CAPTURE_MAX_INPUT_TOKENS = 1_000_000;
 export const DEFAULT_ENTITY_CAPTURE_MAX_OUTPUT_TOKENS = 200_000;
 export const ENTITY_CAPTURE_CANDIDATE_LIMIT = 60;
 
-export type CaptureStopReason = 'completed' | 'tokens' | 'cost' | 'failure' | 'ingest_validation' | 'relation_failure' | 'aborted' | 'model_unavailable';
+export type CaptureStopReason = 'completed' | 'tokens' | 'cost' | 'failure' | 'ingest_validation' | 'relation_failure' | 'aborted' | 'model_unavailable'|'truncated'|'parse'|'timeout'|'network'|'rate_limit'|'provider_5xx';
 
 import { CJK_PLAIN_MENTION_BLOCKLIST } from '../pmbrain-adapters/mention-policy.ts';
 export { CJK_PLAIN_MENTION_BLOCKLIST };
@@ -169,6 +169,12 @@ export function selectReadyCaptureModel(input: {
 }
 
 const STOP_REASON_TEXT: Record<CaptureStopReason, string> = {
+  truncated:'模型输出被截断，失败页面可继续',
+  parse:'模型输出解析失败，失败页面可继续',
+  timeout:'模型请求超时',
+  network:'模型网络请求失败',
+  rate_limit:'模型服务限流',
+  provider_5xx:'模型服务端故障',
   completed: '已完成',
   tokens: 'Token 到上限',
   cost: '费用到上限',

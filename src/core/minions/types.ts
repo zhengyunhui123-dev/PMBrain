@@ -435,6 +435,7 @@ export interface SubagentHandlerData {
   max_turns?: number;
   discovery_profile?: 'entity_capture';
   ingest_context?: import('../pmbrain-adapters/entity-ingest-workflow.ts').EntityIngestContext;
+  ingest_json_tools?: boolean;
   usage_limits?: {
     input: number;
     output: number;
@@ -599,6 +600,7 @@ export type ContentBlock =
 
 /** Stop reason reported to the caller when the subagent loop terminates. */
 export type SubagentStopReason =
+  | 'length'
   | 'end_turn'    // Anthropic says end_turn and last message has no tool_use
   | 'max_turns'   // hit max_turns budget before end_turn
   | 'refusal'     // detected via stop_reason + content shape

@@ -43,8 +43,36 @@ async function run(replies:(ChatResult|Error)[],direct=false,maxTurns=6,seed?:st
  const client:MessagesClient={async create(request){const value=next(request);return {id:'message-'+calls.length,type:'message',role:'assistant',model:data.model,stop_reason:value.stopReason==='tool_calls'?'tool_use':'end_turn',stop_sequence:null,content:value.blocks.map(block=>block.type==='tool-call'?{type:'tool_use',id:block.toolCallId,name:block.toolName,input:block.input}:{type:'text',text:(block as any).text}),usage:{input_tokens:10,output_tokens:5}} as any;}};
  const ctx={id:job!.id,name:'subagent',data,attempts_made:0,signal:new AbortController().signal,shutdownSignal:new AbortController().signal,updateProgress:async()=>{},updateTokens:async()=>{},log:async()=>{},isActive:async()=>true,readInbox:async()=>[]} as MinionJobContext;
  const handler=makeSubagentHandler({engine,config:{engine:url?'postgres':'pglite'},toolRegistry:tools,...(direct?{client}:{})});
- return {calls,jobId:job!.id,result:handler(ctx),resume:()=>handler(ctx)};
+ return {calls,jobId:job!.id,result:handler(ctx),resume:async()=>{const [stored]=await engine.executeRaw<{data:typeof data|string}>('SELECT data FROM minion_jobs WHERE id=$1',[job!.id]);return handler({...ctx,data:typeof stored!.data==='string'?JSON.parse(stored!.data):stored!.data});}};
 }
+
+test('端点拒绝工具后切换受限 JSON，重启沿用协议且不重复落库',async()=>{
+ const rejected=Object.assign(new Error('tools not supported'),{statusCode:400});
+ const jsonWrite=JSON.stringify({tool_calls:[{name:'brain_put_page',arguments:{slug,content}}]});
+ const attempt=await run([rejected,response(jsonWrite),new Error('模拟软件退出'),response()]);
+ expect(String(await attempt.result.catch(error=>error))).toContain('模拟软件退出');
+ const [stored]=await engine.executeRaw<{enabled:string}> ("SELECT data->>'ingest_json_tools' AS enabled FROM minion_jobs WHERE id=$1",[attempt.jobId]);
+ expect(stored?.enabled).toBe('true');
+ const result=await attempt.resume();expect(result.ingest_verified).toBe(true);expect(result.tokens).toMatchObject({in:20,out:10});
+ expect(attempt.calls[0].tools.length).toBeGreaterThan(0);expect(attempt.calls.slice(1).every(call=>call.tools===undefined)).toBe(true);
+ expect(await engine.executeRaw('SELECT id FROM pages WHERE slug=$1',[slug])).toHaveLength(1);
+ expect(await engine.executeRaw('SELECT id FROM subagent_tool_executions WHERE job_id=$1 AND status=$2',[attempt.jobId,'complete'])).toHaveLength(1);
+});
+
+test('思考草稿带 JSON 时取最终回执，不重复调用模型',async()=>{
+ await engine.putPage(slug,{type:'concept',title:'三纪早会体系',compiled_truth:'真实概念。',frontmatter:{}});
+ const attempt=await run([response(`<think>{"entities":["concepts/draft"]}</think>${receipt}`)]);
+ expect((await attempt.result).ingest_verified).toBe(true);expect(attempt.calls).toHaveLength(1);
+});
+
+test('截断后退出再恢复时沿用64k重试，保存消耗并不执行半截工具',async()=>{
+ const truncated={...response('',true),text:'',stopReason:'length' as const,usage:{input_tokens:10,output_tokens:32000,cache_read_tokens:0,cache_creation_tokens:0}};
+ const attempt=await run([truncated,new Error('模拟软件退出'),response('',true),response()],false,6);
+ expect(String(await attempt.result.catch(error=>error))).toContain('模拟软件退出');expect(await engine.getPage(slug)).toBeNull();
+ const result=await attempt.resume();expect(result.ingest_verified).toBe(true);expect(result.tokens.out).toBe(32010);
+ expect(attempt.calls[1].maxTokens).toBe(64000);expect(attempt.calls[2].maxTokens).toBe(64000);
+ expect(await engine.executeRaw('SELECT id FROM pages WHERE slug=$1',[slug])).toHaveLength(1);
+});
 
 for(const direct of [false,true])test(`${direct?'共享 SDK':'Qwen 兼容接口'}：模型未落库却报完成时，剩余预算内纠正并真实建立来源关联`,async()=>{
  const attempt=await run([response(),response('',true),response()],direct);

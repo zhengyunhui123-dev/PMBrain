@@ -1,4 +1,5 @@
 import { ENTITY_CAPTURE_MIN_BODY_CHARS } from '../pmbrain-adapters/entity-capture-request.ts';
+import {defaultMaxOutputTokens,isThinkingModel} from '../ai/model-compatibility.ts';
 import { createHash, randomUUID } from 'node:crypto';
 import type { BrainEngine } from '../engine.ts';
 import type { PhaseResult } from '../cycle.ts';
@@ -565,7 +566,7 @@ export async function runPhaseCaptureEntities(
     : storedOutput ?? cardPrices.output;
   const ollama = budgetOpt?.ollama ?? isOllamaModel(chosen.model, providerId);
   const maxDocumentInput=readTokenCap(await engine.getConfig('dream.entity_capture.document_max_input_tokens'),120_000);
-  const maxDocumentOutput=readTokenCap(await engine.getConfig('dream.entity_capture.document_max_output_tokens'),20_000);
+  const maxDocumentOutput=readTokenCap(await engine.getConfig('dream.entity_capture.document_max_output_tokens'),isThinkingModel(chosen.model)?defaultMaxOutputTokens(chosen.model)*4:20_000);
   const maxDocumentTurns=Math.min(12,readTokenCap(await engine.getConfig('dream.entity_capture.document_max_turns'),6));
   const nonce = Date.now();
   const pendingPages: Array<{ page: EntityCaptureCandidate; chunks: EntityCaptureChunk[] }> = [];
@@ -632,6 +633,8 @@ export async function runPhaseCaptureEntities(
   let relationError = '';
   let modelError = '';
   let failureStop = false;
+  let fatalFailure=false;
+  const pageFailures:Array<{slug:string;sourceId:string;reason:string}>=[];
   let failureReason: CaptureStopReason = 'failure';
   let budgetStop: 'tokens' | 'cost' | null = null;
   const failedPageSlugs = new Set<string>();
@@ -639,6 +642,7 @@ export async function runPhaseCaptureEntities(
   const rememberRelationError = (error: unknown) => {
     if (opts.signal?.aborted) throw error;
     failureStop = true;
+    fatalFailure=true;
     const message = error instanceof Error ? error.message : String(error);
     relationError = relationError ? `${relationError}；${message}` : message;
   };
@@ -760,6 +764,8 @@ export async function runPhaseCaptureEntities(
               failedChunks += 1;
               failedPageSlugs.add(chunk.slug);
               failureStop = true;
+              fatalFailure=true;
+              failureReason='timeout';
               break;
             }
             throw error;
@@ -799,10 +805,17 @@ export async function runPhaseCaptureEntities(
             failedChunks += 1;
             failedPageSlugs.add(chunk.slug);
             failureStop = true;
-            if(job.error_text?.includes('ingest_budget_tokens')){budgetStop='tokens';failureStop=false;}
-            if(job.error_text?.includes('ingest_budget_cost')){budgetStop='cost';failureStop=false;}
+            fatalFailure=true;
+            if(job.error_text?.includes('ingest_budget_tokens')){budgetStop='tokens';failureStop=pageFailures.length>0;}
+            if(job.error_text?.includes('ingest_budget_cost')){budgetStop='cost';failureStop=pageFailures.length>0;}
             modelError = job.error_text ?? `实体识别子任务 ${job.id} 未通过 ingest 读回验收（${result?.stop_reason??job.status}）`;
             if (/\bingest[ _]/i.test(modelError) || job.status === 'completed') failureReason = 'ingest_validation';
+            if(/ingest_output_truncated/.test(modelError)){failureReason='truncated';fatalFailure=false;}
+            else if(/ingest receipt (?:missing|requires)|ingest invalid JSON|ingest_provider_parse/.test(modelError)){failureReason='parse';fatalFailure=false;}
+            else if(/ingest_provider_(timeout|network|rate_limit|provider_5xx)/.test(modelError))failureReason=modelError.match(/ingest_provider_(timeout|network|rate_limit|provider_5xx)/)![1] as CaptureStopReason;
+            else if(/ingest_provider_(auth|billing|model_not_found)/.test(modelError))failureReason='model_unavailable';
+            else if(!budgetStop&&/\bingest /.test(modelError))fatalFailure=false;
+            if(!budgetStop)pageFailures.push({slug:chunk.slug,sourceId:chunk.sourceId,reason:modelError});
             break;
           }
           completedForPage += 1;
@@ -810,8 +823,8 @@ export async function runPhaseCaptureEntities(
           chunksProcessed += 1;
         }
         if (submittedForPage > 0) pagesSubmitted += 1;
-        if (!failureStop && !budgetStop && completedForPage === item.chunks.length) pagesProcessed += 1;
-        if (budgetStop || failureStop) break;
+        if (!budgetStop && completedForPage === item.chunks.length) pagesProcessed += 1;
+        if (budgetStop || fatalFailure) break;
       }
       const afterIndex = await loadCaptureEntityIndex(engine, opts.sourceId);
       const known = new Set(beforeIndex.map(entity => `${entity.sourceId}\0${entity.slug}`));
@@ -834,7 +847,7 @@ export async function runPhaseCaptureEntities(
       await alignWrittenGraph([]);
       await opts.yieldDuringPhase?.();
       throwIfAborted(opts.signal, '[dream] capture entities');
-      if (budgetStop || failureStop) break;
+      if (budgetStop || fatalFailure) break;
     }
 
     const written = executedChildIds.length === 0
@@ -871,13 +884,11 @@ export async function runPhaseCaptureEntities(
       : await countCaptureLinkGaps(engine, recognized,[...sourceRefs.values()]);
     const linkedEntities = gaps.linked;
     const costCny = ollama ? 0 : (sawPricedUsage ? Number(knownCost.toFixed(6)) : null);
-    const stopReason: CaptureStopReason = failureStop
-      ? relationError ? 'relation_failure' : failureReason
-      : budgetStop === 'tokens'
+    const stopReason: CaptureStopReason = relationError?'relation_failure':budgetStop === 'tokens'
         ? 'tokens'
         : budgetStop === 'cost'
           ? 'cost'
-          : 'completed';
+          : failureStop?failureReason:'completed';
     const cleanStatus: PhaseResult['status'] = failureStop
       ? (writtenSlugs.length > 0 || pagesProcessed > 0 ? 'warn' : 'fail')
       : pagesRemaining>0 ? 'warn' : 'ok';
@@ -911,6 +922,7 @@ export async function runPhaseCaptureEntities(
       chunks_processed: chunksProcessed,
       pages_remaining: pagesRemaining,
       pages_failed: failedPages,
+      page_failures:pageFailures,
       chunks_failed: failedChunks,
       input_tokens: inputTokens,
       output_tokens: outputTokens,

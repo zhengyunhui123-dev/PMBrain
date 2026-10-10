@@ -12,6 +12,8 @@ import { UnrecoverableError } from '../minions/types.ts';
 import type { SubagentHandlerData, SubagentResult } from '../minions/types.ts';
 import {annotateIngestContent} from './ingest-provenance.ts';
 import matter from 'gray-matter';
+import {parseLlmJson} from '../llm-json.ts';
+import {defaultMaxOutputTokens} from '../ai/model-compatibility.ts';
 
 export interface EntityIngestContext {
   slug: string;
@@ -46,10 +48,8 @@ export function ingestOriginField(context:Pick<EntityIngestContext,'sourceId'|'b
 }
 
 function parseReceipt(text:string):IngestReceipt {
-  const fenced=text.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1];
-  const candidate=fenced??text.slice(text.indexOf('{'),text.lastIndexOf('}')+1);
-  let value:IngestReceipt;
-  try{value=JSON.parse(candidate);}catch{throw new UnrecoverableError('ingest receipt missing or invalid JSON');}
+  const value=parseLlmJson<IngestReceipt>(text);
+  if(!value)throw new UnrecoverableError('ingest receipt missing or invalid JSON');
   if(!Array.isArray(value.entities)||!value.entities.every(x=>typeof x==='string')||!Array.isArray(value.relations)
     ||value.relations.some(x=>!x||typeof x.from!=='string'||typeof x.to!=='string'||typeof x.link_type!=='string'||typeof x.evidence!=='string')
     ||(value.entities.length===0&&(value.no_entities!==true||value.relations.length>0))){
@@ -343,7 +343,7 @@ export async function validateIngestCompletion(engine:BrainEngine,data:SubagentH
 
 export async function verifyIngestResult(engine:BrainEngine,data:SubagentHandlerData,result:SubagentResult,jobId?:number):Promise<SubagentResult>{
   if(!data.ingest_context)return result;
-  if(result.stop_reason!=='end_turn')throw new UnrecoverableError(`ingest incomplete: ${result.stop_reason}`);
+  if(result.stop_reason!=='end_turn')throw new UnrecoverableError(result.stop_reason==='length'?'ingest_output_truncated: output truncated after bounded retry':`ingest incomplete: ${result.stop_reason}`);
   const verified=await finalizeEntityIngest(engine,data.ingest_context,result.result,await ingestRequiredWrites(engine,data,jobId));
   const rejected=jobId==null?[]:await engine.executeRaw<{from:string;to:string;reason:string}>(`SELECT DISTINCT i->>'from' AS "from",i->>'to' AS "to",o->>'reason' AS reason
     FROM (SELECT CASE WHEN jsonb_typeof(input)='string' THEN (input #>> '{}')::jsonb ELSE input END i,CASE WHEN jsonb_typeof(output)='string' THEN (output #>> '{}')::jsonb ELSE output END o FROM subagent_tool_executions WHERE job_id=$1 AND tool_name='brain_add_link') x WHERE o->>'status'='rejected'`,[jobId]);
@@ -358,7 +358,7 @@ export async function ingestFinalPrompt(engine:BrainEngine,jobId:number,data:Sub
   return `${data.prompt}\n\nDurable write ledger (all successful writes must appear in entities; rejected relations must not be reported as valid):\n${JSON.stringify(persisted)}${feedback?`\nLast verification feedback: ${JSON.stringify(feedback.content_blocks)}`:''}\nReturn the requested JSON receipt now. No tools or further writes are available. Do not invent unwritten targets.`;
 }
 
-export async function checkIngestCallBudget(engine:BrainEngine,jobId:number,data:SubagentHandlerData,system:string,messages:unknown,tools:unknown,compact=false):Promise<void>{
+export async function checkIngestCallBudget(engine:BrainEngine,jobId:number,data:SubagentHandlerData,system:string,messages:unknown,tools:unknown,compact=false,maxTokens=Math.min(defaultMaxOutputTokens(data.model),data.usage_limits?.output??Infinity)):Promise<void>{
   if(!data.usage_limits)return;
   const repeated=await engine.executeRaw(`SELECT tool_name FROM subagent_tool_executions WHERE job_id=$1 AND status='failed'
     AND tool_name IN ('brain_put_page','brain_add_link','brain_add_timeline_entry') GROUP BY tool_name,input HAVING count(*)>=2 LIMIT 1`,[jobId]);
@@ -372,23 +372,24 @@ export async function checkIngestCallBudget(engine:BrainEngine,jobId:number,data
   const [first]=compact?await engine.executeRaw<{prefix:number}>('SELECT (tokens_in+COALESCE(tokens_cache_read,0)+COALESCE(tokens_cache_create,0))::int prefix FROM subagent_messages WHERE job_id=$1 AND tokens_in IS NOT NULL ORDER BY message_idx LIMIT 1',[jobId]):[];
   const reservation=compact&&first?first.prefix+Math.max(0,Buffer.byteLength(JSON.stringify(messages),'utf8')-Buffer.byteLength(data.prompt,'utf8'))+2048
     :prior&&!compact?prior.tokens_in+prior.added_bytes+2048:Buffer.byteLength(system+JSON.stringify(messages)+JSON.stringify(tools),'utf8')+2048;
-  if(input+reservation>limits.input||output+Math.min(4096,limits.output)>limits.output)throw new UnrecoverableError('ingest_budget_tokens: document token limit; unfinished document is resumable');
+  if(input+reservation>limits.input||output+maxTokens>limits.output)throw new UnrecoverableError('ingest_budget_tokens: document token limit; unfinished document is resumable');
   if(limits.cost_cny!=null&&limits.input_price!=null&&limits.output_price!=null){
-    const reservedCost=((input+reservation)*limits.input_price+(output+Math.min(4096,limits.output))*limits.output_price)/1_000_000;
+    const reservedCost=((input+reservation)*limits.input_price+(output+maxTokens)*limits.output_price)/1_000_000;
     if(reservedCost>limits.cost_cny)throw new UnrecoverableError('ingest_budget_cost: configured cost limit; unfinished document is resumable');
   }
 }
 
 export async function finalizeBeforeIngestBudget(engine:BrainEngine,jobId:number,data:SubagentHandlerData,system:string,messages:unknown,tools:unknown):Promise<boolean>{
+  const cap=Math.min(defaultMaxOutputTokens(data.model),data.usage_limits?.output??Infinity);
   try{
     await checkIngestCallBudget(engine,jobId,data,system,messages,tools);
     const [first]=data.usage_limits?await engine.executeRaw<{prefix:number}>('SELECT (tokens_in+COALESCE(tokens_cache_read,0)+COALESCE(tokens_cache_create,0))::int prefix FROM subagent_messages WHERE job_id=$1 AND tokens_in IS NOT NULL ORDER BY message_idx LIMIT 1',[jobId]):[];
     if(first&&data.usage_limits){
       const finalMessages=[{role:'user',content:await ingestFinalPrompt(engine,jobId,data)}];
-      const reserve=first.prefix+Math.max(0,Buffer.byteLength(JSON.stringify(finalMessages),'utf8')-Buffer.byteLength(data.prompt,'utf8'))+4096;
+      const reserve=first.prefix+Math.max(0,Buffer.byteLength(JSON.stringify(finalMessages),'utf8')-Buffer.byteLength(data.prompt,'utf8'))+cap;
       const limits=data.usage_limits;
-      const cost=limits.cost_cny!=null&&limits.input_price!=null&&limits.output_price!=null?Math.max(0,limits.cost_cny-(reserve*limits.input_price+4096*limits.output_price)/1_000_000):limits.cost_cny;
-      await checkIngestCallBudget(engine,jobId,{...data,usage_limits:{...limits,input:Math.max(0,limits.input-reserve),output:Math.max(0,limits.output-4096),cost_cny:cost}},system,messages,tools);
+      const cost=limits.cost_cny!=null&&limits.input_price!=null&&limits.output_price!=null?Math.max(0,limits.cost_cny-(reserve*limits.input_price+cap*limits.output_price)/1_000_000):limits.cost_cny;
+      await checkIngestCallBudget(engine,jobId,{...data,usage_limits:{...limits,input:Math.max(0,limits.input-reserve),output:Math.max(0,limits.output-cap),cost_cny:cost}},system,messages,tools,false,cap);
     }
     return false;
   }
