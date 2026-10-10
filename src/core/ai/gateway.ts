@@ -2396,6 +2396,7 @@ export interface ChatOpts {
   disableReasoning?: boolean;
   timeoutMs?: number;
   modelOutputLimit?: number;
+  contextWindow?: number;
   lengthRetryLimit?: (input:{model:string;messages:readonly ChatMessage[];maxTokens:number;finalTurn?:boolean})=>number|Promise<number>;
   responseSchema?: {name:string;schema:Record<string,unknown>};
   retryLength?: boolean;
@@ -2618,7 +2619,7 @@ function chatAbortSignal(opts:ChatOpts):AbortSignal|undefined{
   return opts.abortSignal?AbortSignal.any([opts.abortSignal,signal]):signal;
 }
 
-function chatOutputLimit(model:string,explicit?:number):number|undefined{
+export function chatOutputLimit(model:string,explicit?:number):number|undefined{
   const {recipe,parsed}=resolveRecipe(model);
   const declared=recipe.touchpoints.chat?.max_output_tokens;
   const limits=[explicit,requireConfig().chat_output_limits?.[model],typeof declared==='function'?declared(parsed.modelId):declared].filter((value):value is number=>typeof value==='number'&&Number.isSafeInteger(value)&&value>0);
@@ -2785,13 +2786,19 @@ async function chatOnce(opts: ChatOpts): Promise<ChatResult> {
       } as Output.Output<string,string,never>:undefined,
     };
     const nativeMessages: OllamaNativeMessage[] | null = (() => {
-      if (recipe.id !== 'ollama' || (opts.tools?.length ?? 0) > 0) return null;
+      if (recipe.id !== 'ollama' || ((opts.tools?.length ?? 0) > 0 && opts.contextWindow === undefined)) return null;
       const messages: OllamaNativeMessage[] = [];
       if (opts.system) messages.push({ role: 'system', content: opts.system });
       for (const message of repairedMessages) {
         if (message.role !== 'system' && message.role !== 'user' && message.role !== 'assistant') return null;
         if (typeof message.content === 'string') {
           messages.push({ role: message.role, content: message.content });
+          continue;
+        }
+        if (opts.contextWindow !== undefined && message.content.some(block => block.type === 'tool-call' || block.type === 'tool-result')) {
+          const calls = message.content.filter(block => block.type === 'tool-call');
+          if (calls.length) messages.push({role:'assistant',content:message.content.filter(block=>block.type==='text').map(block=>block.type==='text'?block.text:'').join(''),tool_calls:calls.map(call=>({function:{name:call.toolName,arguments:call.input as Record<string,unknown>}}))});
+          for (const block of message.content) if (block.type === 'tool-result') messages.push({role:'tool',tool_name:block.toolName,content:typeof block.output==='string'?block.output:JSON.stringify(block.output)});
           continue;
         }
         if (!message.content.every(block => block.type === 'text')) return null;
@@ -2811,7 +2818,7 @@ async function chatOnce(opts: ChatOpts): Promise<ChatResult> {
           const cfg = requireConfig();
           const compat = applyOpenAICompatConfig(recipe, cfg, 'chat');
           const auth = applyResolveAuth(recipe, cfg, 'chat');
-          const qwenAnswerEnvelope = /^qwen3(?:[.:-]|$)/i.test(modelId);
+          const qwenAnswerEnvelope = /^qwen3(?:[.:-]|$)/i.test(modelId) && !(opts.tools?.length);
           const qwenJsonResponse = qwenAnswerEnvelope
             && nativeMessages.some(message => /\bjson\b/i.test(message.content));
           const knowledgeSynthesis = nativeMessages.some(message => (
@@ -2842,7 +2849,8 @@ async function chatOnce(opts: ChatOpts): Promise<ChatResult> {
             maxTokens: knowledgeSynthesis
               ? Math.min(opts.maxTokens ?? 4096, 1024)
               : maxOutputTokens,
-            contextWindow: knowledgeSynthesis ? 8192 : undefined,
+            contextWindow: opts.contextWindow ?? (knowledgeSynthesis ? 8192 : undefined),
+            tools: opts.tools?.map(tool=>({type:'function',function:{name:tool.name,description:tool.description,parameters:tool.inputSchema as Record<string,unknown>}})),
             apiKey: auth.apiKey,
             headers: auth.headers,
             onText: qwenAnswerEnvelope ? undefined : opts.onTextDelta,
@@ -3094,7 +3102,7 @@ export async function chat(opts: ChatOpts): Promise<ChatResult> {
  */
 export interface ToolHandler {
   idempotent?: boolean;
-  execute(input: unknown, signal: AbortSignal): Promise<unknown>;
+  execute(input: unknown, signal: AbortSignal, context?: { toolCallId: string }): Promise<unknown>;
 }
 
 /**
@@ -3116,7 +3124,8 @@ export interface ToolLoopOpts {
   temperature?: number;
   onTextDelta?: (delta: string) => void;
   onTextReset?: (model: string) => void;
-  beforeModelCall?: (input: { turnIdx: number; messages: readonly ChatMessage[]; finalTurn?: boolean;maxTokens:number }) => void | Promise<void>;
+  beforeModelCall?: (input: { turnIdx: number; messages: readonly ChatMessage[]; finalTurn?: boolean;maxTokens:number }) => void | { messages: ChatMessage[]; maxTokens?: number; contextWindow?: number; system?: string } | Promise<void | { messages: ChatMessage[]; maxTokens?: number; contextWindow?: number; system?: string }>;
+  toolConcurrency?: number;
   retryLength?: boolean;
   jsonToolCalls?: boolean;
   turnTimeoutMs?: number;
@@ -3260,17 +3269,27 @@ export async function toolLoop(opts: ToolLoopOpts): Promise<ToolLoopResult> {
     let finalTurn=false;
     try {
       finalTurn=retry?.finalTurn??(!!opts.finalizeOnLastTurn&&(turnIdx===maxTurns-1||!!(await opts.shouldFinalize?.(messages))));
-      const callMessages=retry?.messages??(finalTurn&&opts.prepareFinalMessages?await opts.prepareFinalMessages():messages);
-      const callMaxTokens=retry?.maxTokens??maxTokens;
-      await opts.beforeModelCall?.({ turnIdx, messages:callMessages,maxTokens:callMaxTokens,...(opts.finalizeOnLastTurn?{finalTurn}:{}) });
+      let callMessages=retry?.messages??(finalTurn&&opts.prepareFinalMessages?await opts.prepareFinalMessages():messages);
+      let callMaxTokens=retry?.maxTokens??maxTokens;
+      let callContextWindow: number | undefined;
+      let callSystem=opts.system??'';
+      const prepared=await opts.beforeModelCall?.({ turnIdx, messages:callMessages,maxTokens:callMaxTokens,...(opts.finalizeOnLastTurn?{finalTurn}:{}) });
+      if(prepared){
+        if(callMessages===messages)messages.splice(0,messages.length,...prepared.messages);
+        callMessages=callMessages===messages?messages:prepared.messages;
+        if(prepared.maxTokens!==undefined)callMaxTokens=Math.max(1,Math.min(callMaxTokens,prepared.maxTokens));
+        callContextWindow=prepared.contextWindow;
+        if(prepared.system!==undefined)callSystem=prepared.system;
+      }
       opts.abortSignal?.throwIfAborted();
       chatResult = await chat({
         model: opts.model,
-        system: (finalTurn?`${opts.system??''}\nThis is the reserved final verification turn. Return the requested JSON receipt of persisted entities and evidence-backed relations. Tools are unavailable; do not claim unwritten targets.`:opts.system??'')+(opts.jsonToolCalls&&!finalTurn?`\nNative tools are unavailable. To request an operation return JSON only: {"tool_calls":[{"name":"allowed tool name","arguments":{}}]}. Use only these definitions: ${JSON.stringify(opts.tools)}. Otherwise return the required final JSON receipt.`:''),
+        system: (finalTurn?`${callSystem}\nThis is the reserved final verification turn. Return the requested JSON receipt of persisted entities and evidence-backed relations. Tools are unavailable; do not claim unwritten targets.`:callSystem)+(opts.jsonToolCalls&&!finalTurn?`\nNative tools are unavailable. To request an operation return JSON only: {"tool_calls":[{"name":"allowed tool name","arguments":{}}]}. Use only these definitions: ${JSON.stringify(opts.tools)}. Otherwise return the required final JSON receipt.`:''),
         messages:opts.jsonToolCalls?callMessages.map(message=>({role:message.role,content:typeof message.content==='string'?message.content:JSON.stringify(message.content)})):callMessages,
         tools: finalTurn||opts.jsonToolCalls?undefined:opts.tools,
         responseSchema:opts.jsonToolCalls?{name:'entity_response',schema:{type:'object',additionalProperties:true}}:undefined,
         maxTokens:callMaxTokens,
+        contextWindow:callContextWindow,
         timeoutMs:opts.turnTimeoutMs,
         disableReasoning:opts.disableReasoning,
         abortSignal: opts.abortSignal,
@@ -3357,12 +3376,12 @@ export async function toolLoop(opts: ToolLoopOpts): Promise<ToolLoopResult> {
     if(finalTurn){stopReason='max_turns';break;}
 
     // D11 + write-ordering invariant: persist pending → execute → settle.
-    const toolResultBlocks: ChatBlock[] = [];
-    for (let callIdx = 0; callIdx < toolCalls.length; callIdx++) {
+    const executeCall = async (callIdx: number): Promise<ChatBlock[]> => {
+      const toolResultBlocks: ChatBlock[] = [];
       const call = toolCalls[callIdx];
       if (opts.abortSignal?.aborted) {
         stopReason = 'aborted';
-        break;
+        return toolResultBlocks;
       }
 
       const handler = handlers.get(call.toolName);
@@ -3370,7 +3389,7 @@ export async function toolLoop(opts: ToolLoopOpts): Promise<ToolLoopResult> {
         const error = `tool "${call.toolName}" is not in the registry for this subagent`;
         if (opts.recordUnknownTools && opts.onToolCallStart) {
           const { gbrainToolUseId } = await opts.onToolCallStart(turnIdx, assistantMessageIdx, callIdx, call.toolName, call.input, call.toolCallId);
-          if (opts.abortSignal?.aborted) { stopReason = 'aborted'; break; }
+          if (opts.abortSignal?.aborted) { stopReason = 'aborted'; return toolResultBlocks; }
           await opts.onToolCallFailed?.(gbrainToolUseId, error);
         }
         toolResultBlocks.push({
@@ -3381,7 +3400,7 @@ export async function toolLoop(opts: ToolLoopOpts): Promise<ToolLoopResult> {
           isError: true,
         });
         opts.onHeartbeat?.('tool_failed', { turn_idx: turnIdx, tool_name: call.toolName, error: 'not_registered' });
-        continue;
+        return toolResultBlocks;
       }
 
       // Step 2: persist pending row + claim gbrainToolUseId. The caller's
@@ -3396,7 +3415,7 @@ export async function toolLoop(opts: ToolLoopOpts): Promise<ToolLoopResult> {
         call.toolCallId,
       )) ?? { gbrainToolUseId: `inline-${turnIdx}-${callIdx}` };
 
-      if (opts.abortSignal?.aborted) { stopReason = 'aborted'; break; }
+      if (opts.abortSignal?.aborted) { stopReason = 'aborted'; return toolResultBlocks; }
 
       // Replay short-circuit: prior outcome wins, idempotent re-execute allowed.
       const prior = opts.replayState?.priorTools.get(gbrainToolUseId);
@@ -3408,7 +3427,7 @@ export async function toolLoop(opts: ToolLoopOpts): Promise<ToolLoopResult> {
           output: prior.output,
         });
         opts.onHeartbeat?.('tool_replay_complete', { turn_idx: turnIdx, tool_name: call.toolName });
-        continue;
+        return toolResultBlocks;
       }
       if (prior?.status === 'failed') {
         toolResultBlocks.push({
@@ -3419,7 +3438,7 @@ export async function toolLoop(opts: ToolLoopOpts): Promise<ToolLoopResult> {
           isError: true,
         });
         opts.onHeartbeat?.('tool_replay_failed', { turn_idx: turnIdx, tool_name: call.toolName });
-        continue;
+        return toolResultBlocks;
       }
       if (prior?.status === 'pending' && !handler.idempotent) {
         // Non-idempotent crash-mid-execute. Surface as unrecoverable.
@@ -3432,7 +3451,7 @@ export async function toolLoop(opts: ToolLoopOpts): Promise<ToolLoopResult> {
       // Step 3: execute (side effect).
       opts.onHeartbeat?.('tool_called', { turn_idx: turnIdx, tool_name: call.toolName });
       try {
-        const output = await handler.execute(call.input, opts.abortSignal ?? new AbortController().signal);
+        const output = await handler.execute(call.input, opts.abortSignal ?? new AbortController().signal, { toolCallId: call.toolCallId });
         // Step 4: settle complete.
         await opts.onToolCallComplete?.(gbrainToolUseId, output);
         toolResultBlocks.push({
@@ -3454,6 +3473,15 @@ export async function toolLoop(opts: ToolLoopOpts): Promise<ToolLoopResult> {
         });
         opts.onHeartbeat?.('tool_failed', { turn_idx: turnIdx, tool_name: call.toolName, error: errMsg });
       }
+      return toolResultBlocks;
+    };
+    const toolResultBlocks: ChatBlock[] = [];
+    const concurrency = !opts.replayState && toolCalls.every(call => handlers.get(call.toolName)?.idempotent === true)
+      ? Math.max(1, Math.min(4, Math.floor(opts.toolConcurrency ?? 1))) : 1;
+    for (let offset = 0; offset < toolCalls.length; offset += concurrency) {
+      const results = await Promise.all(toolCalls.slice(offset, offset + concurrency).map((_call, index) => executeCall(offset + index)));
+      toolResultBlocks.push(...results.flat());
+      if (opts.abortSignal?.aborted) { stopReason = 'aborted'; break; }
     }
 
     if (stopReason === 'aborted') break;

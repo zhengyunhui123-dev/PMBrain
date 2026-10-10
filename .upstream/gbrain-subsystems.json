@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "reviewed_at": "2026-10-10",
-  "product_version": "1.4.52",
+  "product_version": "1.4.53",
   "subsystem": "entity-relations",
   "status": "release-blocked-pending-package-acceptance",
   "upstream": {
@@ -72,7 +72,8 @@
     "Product task relation receipts record actual INSERT IDs inside the originating transaction; historical tasks without receipts retain explicit attribution limits.",
     "Product Quick Maintenance owns scoped post-import entity capture in the same durable task; Dream cycles queue behind earlier maintenance without replacing GBrain locks or Agent phases. Shared owner-linked usage survives Source switches and explicit continuation; skipped and failed verification remain visible.",
     "PMBrain 1.4.50 reuses shared Gateway and ingest validators: thinking defaults to 32000 output tokens; length retries once at double cap within existing calls/token/cost limits and persists both usages. Bad document receipts remain pending while other pages continue. Endpoint-specific Qwen controls and schema are removed once on explicit rejection; tool rejection selects durable restricted JSON tools without changing Source/evidence checks.",
-    "PMBrain 1.4.51 removes the new global default chat timeout. Entity ingest has separate configurable call/job deadlines; truncation recovery respects known output/context ceilings, actual remaining cost/tokens and final verification reserves without consuming normal tool rounds. Abort causes and per-page usage/limits are retained; Ollama stream errors preserve tool rejection for durable JSON fallback."
+    "PMBrain 1.4.51 removes the new global default chat timeout. Entity ingest has separate configurable call/job deadlines; truncation recovery respects known output/context ceilings, actual remaining cost/tokens and final verification reserves without consuming normal tool rounds. Abort causes and per-page usage/limits are retained; Ollama stream errors preserve tool rejection for durable JSON fallback.",
+    "PMBrain 1.4.53 adapts Cherry context-management ideas in the Workbench: per-request budgets, immutable tool shares, structural output trimming and full-exchange compaction. Gateway request shaping is opt-in; readonly concurrency is explicit, capped at four, preserves result order and persist-before-execute for each tool. Default callers, non-idempotent writes and crash replay stay serial. Ollama native tools receive bounded context windows; reasoning-only output is not a tool answer. No knowledge data/schema, Core retrieval, Minion phases or upstream-pinned hashes are changed."
   ],
   "deferred": [
     "whole-repository GBrain upgrade",
@@ -588,7 +589,7 @@
       "path": "src/core/ai/gateway.ts",
       "upstream_path": "src/core/ai/gateway.ts",
       "mode": "adapted",
-      "sha256": "7da3cff0fcf055485f3432b17b8ecb1398ebf80c6227c29fba3fbb2565db063b",
+      "sha256": "45bcd4a7adc0b6648cd2f6f0ba61f61064bf3baf3d0aa79bfa05e09e9f2f8d7b",
       "upstream_sha256": "622b81db5282117c6e2b32b566e2e35c36117400d416051011dbcc0e8e9c565f"
     },
     {

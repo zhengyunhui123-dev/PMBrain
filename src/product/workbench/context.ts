@@ -59,8 +59,12 @@ export function contextBudget(contextWindow: number | undefined, threshold: numb
   return Math.floor(usable * ratio);
 }
 
-export function planContext(messages: WorkbenchMessage[], policy: ContextPolicy, options: { contextWindow?: number; summary?: string; systemPrompt?: string; additionalTokens?: number } = {}): { recent: WorkbenchMessage[]; older: WorkbenchMessage[] } {
-  const complete = conversationContext(messages);
+export function planContext(messages: WorkbenchMessage[], policy: ContextPolicy, options: { contextWindow?: number; summary?: string; summaryUntil?: string; systemPrompt?: string; additionalTokens?: number } = {}): { recent: WorkbenchMessage[]; older: WorkbenchMessage[] } {
+  let complete = conversationContext(messages);
+  if (options.summary && options.summaryUntil) {
+    const anchor = complete.findIndex(message => message.id === options.summaryUntil);
+    if (anchor >= 0) complete = complete.slice(anchor + 1);
+  }
   const summaryTokens = options.summary ? estimateTokens(options.summary) : 0;
   const budget = Math.max(0, contextBudget(options.contextWindow, policy.threshold) - summaryTokens - estimateTokens(options.systemPrompt ?? '') - (options.additionalTokens ?? 0) - 128);
   const maxMessages = Math.max(2, policy.maxMessages);

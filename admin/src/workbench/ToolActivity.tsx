@@ -12,6 +12,7 @@ function ToolResult({ call }: { call: WorkbenchToolCall }) {
   const raw = call.output ?? '';
   try {
     const data = JSON.parse(raw);
+    if (data.budgetLimited && !Array.isArray(data.results) && typeof data.content !== 'string') return <div className="wb-tool-output"><p>本次结果已按剩余空间缩短，助手可以缩小查询范围后继续检索。</p></div>;
     if (call.name === 'knowledge_search' && Array.isArray(data.results)) return <div className="wb-tool-output">{data.results.length ? data.results.map((row: Record<string, unknown>, index: number) => <div key={index}><b>{String(row.title ?? '')}</b><small>{String(row.source_id ?? '')} / {String(row.slug ?? '')}</small>{typeof row.snippet === 'string' && <p>{row.snippet}</p>}</div>) : <p>{data.truncated ? '结果受上下文容量限制，请缩小查询范围。' : '本次没有找到相关资料。'}</p>}{data.truncated && data.results.length > 0 && <small>显示部分查询结果。</small>}</div>;
     if (call.name === 'knowledge_read' && typeof data.content === 'string') return <div className="wb-tool-output"><p>{data.content}</p>{data.truncated && <small>显示部分正文，助手可以继续读取后续内容。</small>}</div>;
   } catch {}

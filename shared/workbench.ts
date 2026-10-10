@@ -36,6 +36,7 @@ export interface WorkbenchMessage {
   modelName?: string;
   error?: string;
   stage?: string;
+  errorCode?: string;
   citations?: WorkbenchCitation[];
   knowledge?: 'used' | 'none' | 'off';
   contextMessages?: number;

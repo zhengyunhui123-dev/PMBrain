@@ -1,13 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import type { WorkbenchCitation, WorkbenchConversation, WorkbenchMessage, WorkbenchModel, WorkbenchToolCall } from '../../../shared/workbench';
 import { advanceStoredReads, attachmentRead, enrichAttachments, incomingAttachments, resolveListedAttachments, summarySource, modelReadsPdfNatively } from './attachments';
-import { estimateTokens, knowledgeReserve, planContext, summaryInputBudget } from './context';
+import { knowledgeReserve, planContext } from './context';
 import { WorkbenchStore } from './store';
+import { compressTranscript, contextFailure } from './context-runtime';
 
 export { conversationContext } from './context';
-
-const SUMMARY_BATCH = 8_000;
-const SUMMARY_LIMIT = 6_000;
 
 export interface WorkbenchAnswerInput {
   messages: WorkbenchMessage[];
@@ -24,6 +22,8 @@ export interface WorkbenchAnswerInput {
   onDelta?: (delta: string) => void;
   onReplace?: (text: string, model: string) => void;
   onTool?: (call: WorkbenchToolCall) => void;
+  onContext?: (note: string) => void;
+  contextSummarizer?: { model: string; contextWindow?: number; summarize: WorkbenchSummarizer };
 }
 export type WorkbenchAnswer = (input: WorkbenchAnswerInput) => Promise<{ text: string; model: string; citations: WorkbenchCitation[]; knowledge?: 'used' | 'none' | 'off'; stopReason?: 'end' | 'length' | 'other' }>;
 export type WorkbenchSummarizer = (input: { model: string; prior: string; transcript: string; signal: AbortSignal; contextWindow?: number }) => Promise<string>;
@@ -31,37 +31,7 @@ export type WorkbenchSummarizer = (input: { model: string; prior: string; transc
 async function compressOlder(model: string, prior: string, pending: WorkbenchMessage[], signal: AbortSignal, summarize?: WorkbenchSummarizer, contextWindow?: number): Promise<string> {
   if (!pending.length) return prior;
   if (!summarize) throw new Error('对话摘要服务不可用，请稍后重试');
-  const budget = summaryInputBudget(contextWindow);
-  let batch = '';
-  let summary = prior;
-  const flush = async () => {
-    if (!batch) return;
-    signal.throwIfAborted();
-    if (estimateTokens(summary) + estimateTokens(batch) > budget) throw new Error('对话摘要超出摘要模型上下文预算，请选择上下文更大的摘要模型。');
-    const next = (await summarize({ model, prior: summary, transcript: batch, signal, contextWindow })).trim();
-    if (!next || next.length > SUMMARY_LIMIT) throw new Error('对话摘要为空或超过长度限制，请重试');
-    summary = next;
-    batch = '';
-  };
-  for (const message of pending) {
-    const body = summarySource(message);
-    let offset = 0;
-    while (offset < body.length) {
-      const room = Math.floor(Math.min(SUMMARY_BATCH - batch.length, budget - estimateTokens(summary) - estimateTokens(batch) - 32));
-      if (room <= 0) {
-        if (!batch) throw new Error('对话摘要超出摘要模型上下文预算，请选择上下文更大的摘要模型。');
-        await flush(); continue;
-      }
-      let part = body.slice(offset, offset + room);
-      while (estimateTokens(part) > room) part = part.slice(0, Math.floor(part.length * .8));
-      if (!part) throw new Error('对话摘要超出摘要模型上下文预算，请选择上下文更大的摘要模型。');
-      batch += `${message.role === 'user' ? '用户' : '助手'}${offset ? '（续）' : ''}：${part}\n`;
-      offset += part.length;
-      if (offset < body.length) await flush();
-    }
-  }
-  await flush();
-  return summary;
+  return compressTranscript({model,prior,transcript:pending.map(message=>`${message.role === 'user' ? '用户' : '助手'}：${summarySource(message)}`).join('\n'),signal,summarize,contextWindow});
 }
 
 export class WorkbenchService {
@@ -187,7 +157,7 @@ export class WorkbenchService {
           }
           throw error;
         }
-        const contextOptions = { contextWindow, systemPrompt: assistant.systemPrompt, additionalTokens: conversation.knowledge ? knowledgeReserve(contextWindow, assistant.context.threshold) : 0 };
+        const contextOptions = { contextWindow, summaryUntil: conversation.summaryUntil, systemPrompt: assistant.systemPrompt, additionalTokens: conversation.knowledge ? knowledgeReserve(contextWindow, assistant.context.threshold) : 0 };
         let { recent, older } = planContext(conversation.messages, assistant.context, { ...contextOptions, summary: conversation.summary });
         const olderTurns = older.filter(message => message.role === 'user').length;
         reply.contextMessages = recent.length;
@@ -197,8 +167,8 @@ export class WorkbenchService {
           let pending = older;
           if (conversation.summaryUntil) {
             const anchor = older.findIndex(message => message.id === conversation.summaryUntil);
-            if (anchor === -1) prior = '';
-            else pending = older.slice(anchor + 1);
+            if (anchor >= 0) pending = older.slice(anchor + 1);
+            else if (!conversation.messages.some(message => message.id === conversation.summaryUntil)) prior = '';
           }
           if (pending.length || !prior) {
             reply.stage = '正在压缩更早的对话';
@@ -210,6 +180,7 @@ export class WorkbenchService {
             summary = compressed;
             conversation.summary = summary;
             conversation.summaryUntil = older[older.length - 1]!.id;
+            contextOptions.summaryUntil = conversation.summaryUntil;
             saveSoon(true);
           } else summary = prior;
           reply.contextNote = `更早的 ${olderTurns} 轮已压缩为摘要，仍会参与这次回答`;
@@ -225,12 +196,15 @@ export class WorkbenchService {
           older = planned.older;
           conversation.summary = summary;
           conversation.summaryUntil = older.at(-1)?.id;
+          contextOptions.summaryUntil = conversation.summaryUntil;
           saveSoon(true);
         }
         reply.contextMessages = recent.length;
         if (older.length) reply.contextNote = `更早的 ${older.filter(message => message.role === 'user').length} 轮已压缩为摘要，仍会参与这次回答`;
+        const compressionModel = assistant.context.summaryModel && this.models().some(item => item.id === assistant.context.summaryModel) ? assistant.context.summaryModel : model;
         const result = await this.answer({
           contextWindow, contextThreshold: assistant.context.threshold,
+          ...(this.summarize ? { contextSummarizer: { model: compressionModel, contextWindow: this.models().find(item => item.id === compressionModel)?.contextWindow, summarize: this.summarize } } : {}),
           messages: this.modelMessages(conversation.id, recent), ...(summary ? { summary } : {}), model, knowledge: conversation.knowledge,
           ...(assistant.systemPrompt.trim() ? { systemPrompt: assistant.systemPrompt } : {}),
           ...(assistant.temperature !== null ? { temperature: assistant.temperature } : {}),
@@ -255,8 +229,10 @@ export class WorkbenchService {
             if (index < 0) reply.toolCalls.push({ ...call }); else reply.toolCalls[index] = { ...call };
             saveSoon(true);
           },
+          onContext: note => { if (!abort.signal.aborted) { reply.contextNote = note; saveSoon(true); } },
         });
         if (!abort.signal.aborted) {
+          if (!result.text.trim()) throw new Error('模型未返回可用回答，已有工具结果和完整会话已保留，请重试。');
           reply.text = result.text;
           reply.model = result.model || model;
           reply.modelName = this.models().find(item => item.id === reply.model)?.name || reply.modelName;
@@ -265,7 +241,7 @@ export class WorkbenchService {
           if (result.stopReason) reply.stopReason = result.stopReason;
           reply.status = 'complete';
         }
-      } catch (error) { if (opened && !abort.signal.aborted) { reply.status = 'error'; reply.error = error instanceof Error ? error.message : String(error); } }
+      } catch (error) { if (opened && !abort.signal.aborted) { const failure = contextFailure(error); reply.status = 'error'; reply.error = failure.message; reply.errorCode = failure.code; } }
       finally {
         if (opened) {
           if (abort.signal.aborted) reply.status = 'cancelled';
