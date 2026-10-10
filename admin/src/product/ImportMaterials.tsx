@@ -8,6 +8,7 @@ import { waitForConsoleRun } from '../pages/import/import-support';
 import { availableImportSources, importMaterials, type Material } from './import-materials';
 import { useProductTasks } from './TaskActivity';
 import { sourceLabel, type BrainOverview } from '../pages/console-shared';
+import { dialogBackdropClick } from '../lib/dialog-backdrop';
 
 export function ImportMaterials({ open, onClose }: { open: boolean; onClose: () => void }) {
   const dialog = useRef<HTMLDialogElement>(null);
@@ -62,7 +63,7 @@ export function ImportMaterials({ open, onClose }: { open: boolean; onClose: () 
     }
     finally { setBusy(false); }
   };
-  return <dialog ref={dialog} className="materials-drawer" onCancel={onClose} onClose={onClose} aria-labelledby="materials-title">
+  return <dialog ref={dialog} className="materials-drawer" onCancel={onClose} onClose={onClose} onClick={event=>dialogBackdropClick(event,onClose)} aria-labelledby="materials-title">
     <header><div><h2 id="materials-title">添加资料</h2><p>文件或目录导入到当前知识库。</p></div><button type="button" aria-label="关闭添加资料" onClick={onClose}><X size={18} /></button></header>
     <div className="materials-body">
       <div className="materials-actions"><button type="button" disabled={busy} onClick={() => files.current?.click()}><FilePlus2 size={20} /><b>本地文件</b><small>文档、图片、Markdown</small></button>{desktop && <button type="button" disabled={busy} onClick={() => void desktop.chooseDirectory().then((value: string | null) => { if (value) addPath(value); }).catch((reason: unknown) => setError(String(reason)))}><FolderPlus size={20} /><b>文件夹</b><small>包含子目录中的资料</small></button>}</div>

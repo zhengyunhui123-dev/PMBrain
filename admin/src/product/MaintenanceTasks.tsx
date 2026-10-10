@@ -8,6 +8,7 @@ import { TaskProgressCard, taskLink, taskStatus, taskStopping, formatFileBytes }
 import './maintenance-tasks.css';
 import type { SyncFileDetails } from '../../../shared/task-progress';
 import { taskHasRemaining, taskPercent, taskRoundCompleted, taskRoundListSummary } from './task-presentation';
+import { dialogBackdropClick } from '../lib/dialog-backdrop';
 
 const activeTask = (run: ConsoleRun) => run.status === 'running' || run.status === 'queued';
 const selectedTaskId = () => new URLSearchParams(window.location.hash.split('?')[1]).get('run') ?? '';
@@ -48,11 +49,7 @@ function MaintenanceTaskDetail({ run, onClose, onChange }: { run: ConsoleRun; on
     } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
     finally { setBusy(false); }
   };
-  return <dialog ref={dialog} className="maintenance-task-dialog" aria-label={`${name}详情`} onCancel={onClose} onClose={onClose} onClick={event=>{
-    if(event.target!==event.currentTarget)return;
-    const bounds=event.currentTarget.getBoundingClientRect();
-    if(event.clientX<bounds.left||event.clientX>bounds.right||event.clientY<bounds.top||event.clientY>bounds.bottom)onClose();
-  }}>
+  return <dialog ref={dialog} className="maintenance-task-dialog" aria-label={`${name}详情`} onCancel={onClose} onClose={onClose} onClick={event=>dialogBackdropClick(event,onClose)}>
     <header><div><h2>{name}</h2><p>{description(run)}</p></div><button type="button" aria-label="关闭整理详情" onClick={onClose}><X size={20} /></button></header>
     <div className="maintenance-detail-body">
       <div className="maintenance-detail-meta"><span>{run.trigger === 'scheduled' ? '自动任务' : '手动任务'}</span><span>开始于 {formatDate(run.startedAt, '—')}</span></div>

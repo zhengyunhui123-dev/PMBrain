@@ -343,8 +343,8 @@ export function BrainDataPage({ product = false }: { product?: boolean } = {}) {
           ))}
         </div>
         {filters.view === 'trash' && <p className="trash-retention-note">移出的内容保留 3 天，之后自动清空。打开详情可以撤销删除。</p>}
-        {filters.view === 'materials' && <p className="trash-retention-note">导入、同步和直接记录的内容。尚无法确认加工来源的旧内容也保留在这里。</p>}
-        {filters.view === 'structured' && <p className="trash-retention-note">经过二次加工生成的人物、项目、概念和整理笔记等知识。</p>}
+        {filters.view === 'materials' && <p className="trash-retention-note">导入、同步和直接记录的资料。实体识别、快速维护或深度整理生成的知识归入「结构化知识」；无法确认加工来源的旧内容暂留在这里。</p>}
+        {filters.view === 'structured' && <p className="trash-retention-note">实体识别、快速维护或深度整理生成的人物、组织机构、项目、概念和整理笔记，按已保存的加工来源分类。</p>}
         {filters.view === 'facts' && <p className="trash-retention-note">事实来自 facts 热记忆表，不是 Markdown 页面。由 remember / extract_facts / Dream 写入，可被 recall 读回。</p>}
         <div className="filter-bar">
           <input value={filters.q} onChange={e => setFilters(f => ({ ...f, q: e.target.value, page: 1 }))} placeholder={isFactsView ? '搜索事实、实体或来源' : '搜索 slug 或标题'} />
