@@ -114,12 +114,18 @@ test('模型回执已验收但关联检查中断时，继续只补关联检查�
     return {result:JSON.stringify({entities:['people/张三'],relations:[]}),ingest_entities:[{slug:'people/张三',sourceId:'vault'}],ingest_verified:true,stop_reason:'end_turn',tokens:{in:1,out:1}};
   }};
   await runPhaseCaptureEntities(engine,options);
+  await engine.executeRaw("UPDATE config SET value=(value::jsonb-'receiptIds')::text WHERE key LIKE 'dream.entity_capture.manifest.%'");
+  calls=0;
+  expect((await runPhaseCaptureEntities(engine,options)).details.pages_cached).toBe(1);
+  expect(calls).toBe(0);
   for(const state of [false,null]){
     await engine.executeRaw("UPDATE minion_jobs SET result=CASE WHEN $1::boolean IS NULL THEN result-'graph_reconciled' ELSE jsonb_set(result,'{graph_reconciled}',$1::text::jsonb) END WHERE status='completed'",[state]);
     calls=0;const result=await runPhaseCaptureEntities(engine,options);
     expect(calls).toBe(0);expect(result.details.pages_remaining).toBe(0);
     const [receipt]=await engine.executeRaw<{done:string}>("SELECT result->>'graph_reconciled' done FROM minion_jobs WHERE status='completed' ORDER BY id DESC LIMIT 1");
     expect(receipt?.done).toBe('true');
+    const cached=await runPhaseCaptureEntities(engine,options);
+    expect(calls).toBe(0);expect(cached.details.pages_cached).toBe(1);
   }
 },60000);
 

@@ -241,7 +241,8 @@ export function registerWorkbenchRoutes(app: express.Express, requireAdmin: Requ
   const agents: WorkbenchAgentTools = { store: agentStore, engine, config: currentConfig, ...(options.productTasks ? { runs: () => options.productTasks!.listRuns() } : {}) };
   const memory = options.productTasks?.attachWorkbenchMemory?.(store);
   const hooks=memory?{capture:async(...args:Parameters<typeof memory.capture>)=>{if(options.databaseAvailable?.()===false)throw new Error('知识库正在准备，记忆提炼暂缓');return memory.capture(...args);},settled:memory.settled}:undefined;
-  const service = new WorkbenchService(store, currentModels, options.answer ?? knowledgeWorkbenchAnswer(engine, undefined, options.productTasks?{tasks:options.productTasks,store}:undefined, agents), options.summarize ?? summarizeConversation, undefined, hooks);
+  const recall = (...args: Parameters<typeof recallWorkbenchMemory>) => options.databaseAvailable?.() === false ? Promise.resolve([]) : recallWorkbenchMemory(...args);
+  const service = new WorkbenchService(store, currentModels, options.answer ?? knowledgeWorkbenchAnswer(engine, { search: workbenchKnowledgeSearch, answer: chat, loop: toolLoop, recall }, options.productTasks?{tasks:options.productTasks,store}:undefined, agents), options.summarize ?? summarizeConversation, undefined, hooks);
   const coordinator = typeof options.productTasks?.attachWorkbenchAssistant === 'function'
     ? new WorkbenchAgentCoordinator(agentStore, service, options.productTasks, engine)
     : undefined;
@@ -307,7 +308,7 @@ export function registerWorkbenchRoutes(app: express.Express, requireAdmin: Requ
     const conversationId = id(req);
     if ((req.body?.knowledge ?? service.get(conversationId).knowledge) && options.databaseAvailable && !availability().databaseReady) throw new Error('知识库正在准备，暂时无法检索。');
     const body = req.body && typeof req.body === 'object' ? req.body : {};
-    service.send(conversationId, { ...body, interrupt: true }); return service.accepted(conversationId);
+    service.send(conversationId, { ...body, interrupt: true, turnId: undefined }); return service.accepted(conversationId);
   }));
   app.post(`${base}/conversations/:id/cancel`, requireAdmin, handler(req => service.cancel(id(req))));
   return { service, agents: agentStore, coordinator };

@@ -16,7 +16,7 @@ export interface SourceSegment {
   href?: string;
 }
 
-const inlineToken = /(`[^`]+`|\*\*[^*]+\*\*|\[\d+\]|\[[^\]]+\]\(https?:\/\/[^)]+\))/g;
+const inlineToken = /(\\\||`[^`]+`|\*\*[^*]+\*\*|\[\d+\]|\[[^\]]+\]\(https?:\/\/[^)]+\))/g;
 
 export function inlineSourceSegments(text: string, base: number, citationCount = 0): SourceSegment[] {
   const segments: SourceSegment[] = [];
@@ -27,7 +27,8 @@ export function inlineSourceSegments(text: string, base: number, citationCount =
     const part = match[0];
     const start = base + index;
     const end = start + part.length;
-    if (part.startsWith('`') && part.endsWith('`') && part.length >= 2) segments.push({ sourceStart: start, sourceEnd: end, visibleStart: start + 1, visibleEnd: end - 1, text: part.slice(1, -1), kind: 'code' });
+    if (part === '\\|') segments.push({ sourceStart: start, sourceEnd: end, visibleStart: start + 1, visibleEnd: end, text: '|', kind: 'plain' });
+    else if (part.startsWith('`') && part.endsWith('`') && part.length >= 2) segments.push({ sourceStart: start, sourceEnd: end, visibleStart: start + 1, visibleEnd: end - 1, text: part.slice(1, -1), kind: 'code' });
     else if (part.startsWith('**') && part.endsWith('**') && part.length >= 4) segments.push({ sourceStart: start, sourceEnd: end, visibleStart: start + 2, visibleEnd: end - 2, text: part.slice(2, -2), kind: 'bold' });
     else if (/^\[\d+\]$/.test(part)) {
       const number = Number(part.slice(1, -1));

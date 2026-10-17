@@ -234,8 +234,16 @@ test('还没发布的私有文件被人改过时，读取会标明冲突，修�
 test('创建助手要明确确认；多份成果时，单独说可以不会改文件', async () => {
   const directory = root();
   const workbench = new WorkbenchStore(join(directory, 'workbench'));
+  const agents = new WorkbenchAgentStore(workbench);
   let calls = 0;
-  const service = new WorkbenchService(workbench, () => [{ id: 'local', name: '本地', contextWindow: 32000 }], async () => { calls += 1; return { text: '先说明方案', model: 'local', citations: [] }; });
+  const service = new WorkbenchService(workbench, () => [{ id: 'local', name: '本地', contextWindow: 32000 }], async input => {
+    calls += 1;
+    if (input.messages.at(-1)?.text === '确认创建') {
+      const created = agents.create({ name: '报销助手' });
+      input.onTool?.({ id: 'create', name: 'assistant_create', input: '{}', status: 'complete', startedAt: '', output: JSON.stringify({ id: created.id, created: true }) });
+    }
+    return { text: '先说明方案', model: 'local', citations: [] };
+  });
   const conversation = service.create({ knowledge: false });
   service.send(conversation.id, { text: '创建一个报销助手，负责整理发票' });
   await service.settled(conversation.id);
@@ -255,7 +263,6 @@ test('创建助手要明确确认；多份成果时，单独说可以不会改�
   await service.settled(conversation.id);
   expect(calls).toBe(2);
   expect(service.get(conversation.id).messages.at(-1)?.text).toContain('已经用过');
-  const agents = new WorkbenchAgentStore(workbench);
   const agent = agents.create({ name: '周报助手', workflow: '先查资料再写周报', skills: ['weekly-report'], deliveryFormat: 'markdown', sourceIds: ['default'] });
   const reports = service.create({ assistantId: agent.id, knowledge: false });
   service.send(reports.id, { text: '生成本周周报' });

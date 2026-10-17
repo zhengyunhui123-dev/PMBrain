@@ -8,7 +8,7 @@ import type { WorkbenchService } from './service';
 import { publishArtifactToSource, saveWorkbenchArtifact } from './files';
 import { TaskProgressAdapter } from '../tasks/progress-adapter';
 
-export interface WorkbenchAssistantTask { root: string; assistantId: string; conversationId: string; prompt: string; timeoutMs?: number }
+export interface WorkbenchAssistantTask { root: string; assistantId: string; conversationId: string; prompt: string; turnId?: string; timeoutMs?: number }
 export class WorkbenchAgentCoordinator {
   private timer?: ReturnType<typeof setInterval>;
   private scanning = false;
@@ -28,7 +28,7 @@ export class WorkbenchAgentCoordinator {
     const conversation = conversationId ? this.service.get(conversationId) : existing ?? this.service.openAssistant(agent.id) ?? this.service.create({ assistantId: agent.id });
     if (!conversation.messages.length && key) { conversation.taskKey = key; conversation.title = `${agent.name}任务`; this.store.workbench.save(conversation); }
     const digest = createHash('sha256').update(JSON.stringify([this.store.workbench.root, assistantId, key ?? randomUUID()])).digest('hex');
-    const run = await this.tasks.submitAssistant({ root: this.store.workbench.root, assistantId, conversationId: conversation.id, prompt: prompt.trim() }, `assistant:${digest}`, scheduled);
+    const run = await this.tasks.submitAssistant({ root: this.store.workbench.root, assistantId, conversationId: conversation.id, prompt: prompt.trim(), turnId: randomUUID() }, `assistant:${digest}`, scheduled);
     return { run, conversationId: conversation.id, assistantId, submitted: true };
   }
   async scan(now = new Date()) {
@@ -61,10 +61,10 @@ export class WorkbenchAgentCoordinator {
     try {
       const tail = initial.messages.at(-1);
       const lastUser = [...initial.messages].reverse().find(message => message.role === 'user');
-      const samePrompt = lastUser?.text === input.prompt && tail?.role === 'assistant' ? tail : undefined;
+      const samePrompt = lastUser?.text === input.prompt && tail?.role === 'assistant' && (!input.turnId || tail.turnId === input.turnId) ? tail : undefined;
       let replyId: string | undefined;
       if (!samePrompt || (samePrompt.status !== 'complete' && samePrompt.status !== 'running')) {
-        this.service.send(initial.id, samePrompt ? { retry: true } : { text: input.prompt });
+        this.service.send(initial.id, { ...(samePrompt ? { retry: true } : { text: input.prompt }), ...(input.turnId ? { turnId: input.turnId } : {}) });
         const started = await this.service.accepted(initial.id);
         replyId = started.messages.at(-1)?.id;
         const adapter = new TaskProgressAdapter('assistant_task');

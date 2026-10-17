@@ -4,6 +4,26 @@ export interface MarkdownTableBlock {
   endIndex: number;
 }
 
+export function markdownTableCellSources(line: string): Array<{ text: string; start: number; end: number }> {
+  const cells: Array<{ text: string; start: number; end: number }> = [];
+  let from = line.length - line.trimStart().length;
+  let end = line.trimEnd().length;
+  if (line[from] === '|') from += 1;
+  if (line[end - 1] === '|' && line[end - 2] !== '\\') end -= 1;
+  const append = (to: number) => {
+    const raw = line.slice(from, to);
+    const start = from + raw.length - raw.trimStart().length;
+    const stop = Math.max(start, to - raw.length + raw.trimEnd().length);
+    cells.push({ text: line.slice(start, stop), start, end: stop });
+  };
+  for (let index = from; index < end; index += 1) {
+    if (line[index] === '\\' && line[index + 1] === '|') index += 1;
+    else if (line[index] === '|') { append(index); from = index + 1; }
+  }
+  append(end);
+  return cells;
+}
+
 function splitTableRow(line: string): string[] {
   const trimmed = line.trim().replace(/^\|/, '').replace(/\|$/, '');
   const cells: string[] = [];

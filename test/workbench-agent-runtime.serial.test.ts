@@ -11,6 +11,7 @@ import { ProductTaskRuntime } from '../src/product/tasks/runtime';
 import { registerWorkbenchRoutes } from '../src/product/workbench/routes';
 import { assertSafeE2eDatabaseUrl } from './helpers/db-guard';
 import { runAdminKnowledgeSearch } from '../src/commands/admin-knowledge-search';
+import { scheduleOccurrence } from '../src/product/workbench/agents';
 
 const root = mkdtempSync(join(tmpdir(), 'pmbrain-agent-runtime-'));
 const keys = ['PMBRAIN_HOME', 'GBRAIN_HOME', 'DATABASE_URL', 'PMBRAIN_DATABASE_URL', 'GBRAIN_DATABASE_URL'];
@@ -88,11 +89,12 @@ test('persistent delegated task delivers a docx and preserves its source file', 
 test('weekly schedule persists across restart and one occurrence submits only one task', async () => {
   const fresh = (await request('/agents')).agents.find((row: any) => row.id === agent.id);
   const next = await request(`/agents/${agent.id}`, { ...fresh, schedule: { enabled: true, weekdays: [5], time: '17:00', timezone: 'Asia/Shanghai', prompt: '生成本周周报并保存 Word' } }, 'PUT');
-  await coordinator.scan(new Date('2026-10-16T09:01:00Z')); await coordinator.scan(new Date('2026-10-16T09:02:00Z'));
+  const occurrence = scheduleOccurrence(next.schedule, new Date(Date.now() + 60000), 'next')!;
+  await coordinator.scan(new Date(occurrence.getTime() + 60000)); await coordinator.scan(new Date(occurrence.getTime() + 120000));
   const runs = (await runtime.listRuns()).filter(run => run.kind === 'assistant_task' && run.trigger === 'scheduled'); expect(runs).toHaveLength(1);
   expect((await finished(runs[0]!.id)).status).toBe('completed');
   await new Promise<void>(resolve => server.close(() => resolve())); await runtime.close(); await open();
-  await coordinator.scan(new Date('2026-10-16T09:03:00Z'));
+  await coordinator.scan(new Date(occurrence.getTime() + 180000));
   expect((await runtime.listRuns()).filter(run => run.kind === 'assistant_task' && run.trigger === 'scheduled')).toHaveLength(1);
   expect((await request('/agents')).agents.find((row: any) => row.id === next.id).schedule.timezone).toBe('Asia/Shanghai');
 }, 60000);

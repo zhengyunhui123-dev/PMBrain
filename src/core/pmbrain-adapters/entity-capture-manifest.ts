@@ -4,10 +4,10 @@ import type { EntityCaptureCandidate } from '../cycle/capture-entities.ts';
 import { captureScopeKey } from './entity-capture-plan.ts';
 
 type Proof = { id: number; revision: string; lines: string[]; title: string; type: string; aliases: string };
-type Options = { model: string; contract: string; proofs?: Proof[]; unresolved?:unknown[]; onCached?:(page:EntityCaptureCandidate,manifest:Manifest)=>void };
+type Options = { model: string; contract: string; proofs?: Proof[]; receiptIds?:number[]; unresolved?:unknown[]; onCached?:(page:EntityCaptureCandidate,manifest:Manifest)=>void };
 type Metadata = { id: number; source_id: string; slug: string; revision: string; incarnation: string };
 type Target = Metadata & { proofs?:Proof[] };
-type Manifest = { version: 1; scope: string; revision: string; graph: string; chunks: number; targets: Target[];unresolved?:unknown[] };
+type Manifest = { version: 1; scope: string; revision: string; graph: string; chunks: number; targets: Target[];receiptIds?:number[];unresolved?:unknown[] };
 const key = (page: EntityCaptureCandidate) => `dream.entity_capture.manifest.${createHash('sha256').update(JSON.stringify([page.sourceId, page.pageId, page.sourceIncarnation])).digest('hex')}`;
 const scope = (page: EntityCaptureCandidate, options: Options) => captureScopeKey({ ...page, ...options,contract:JSON.stringify([options.contract,page.policySignature??null]) });
 
@@ -41,9 +41,22 @@ export async function pendingCaptureCandidates(engine: BrainEngine, pages: Entit
     const batch = pages.slice(offset, offset + 100);
     const rows = await engine.executeRaw<{ key: string; value: string }>('SELECT key,value FROM config WHERE key=ANY($1::text[])', [batch.map(key)]);
     const manifests = new Map(rows.map(row => [row.key, JSON.parse(row.value) as Manifest]));
+    const receiptIds = [...new Set([...manifests.values()].flatMap(manifest => manifest.receiptIds ?? []))];
+    const unfinished = receiptIds.length ? await engine.executeRaw<{id:number}>(`SELECT id FROM minion_jobs WHERE id=ANY($1::int[])
+      AND (status<>'completed' OR result->>'ingest_verified' IS DISTINCT FROM 'true' OR result->>'graph_reconciled' IS DISTINCT FROM 'true')`, [receiptIds]) : [];
+    const unfinishedIds = new Set(unfinished.map(row => row.id));
+    const legacyScopes = batch.filter(page => {
+      const manifest = manifests.get(key(page));
+      return manifest && !Array.isArray(manifest.receiptIds);
+    }).map(page => captureScopeKey({ ...page, ...options }));
+    const unfinishedLegacy = legacyScopes.length ? await engine.executeRaw<{scope:string}>(`SELECT wanted.scope FROM unnest($1::text[]) wanted(scope) WHERE EXISTS (
+      SELECT 1 FROM minion_jobs j WHERE j.status='completed' AND j.result->>'ingest_verified'='true'
+      AND j.idempotency_key >= wanted.scope||':0' AND j.idempotency_key < wanted.scope||':g' AND j.idempotency_key LIKE wanted.scope||':%'
+      AND j.result->>'graph_reconciled' IS DISTINCT FROM 'true')`, [legacyScopes]) : [];
+    const unfinishedLegacyScopes = new Set(unfinishedLegacy.map(row => row.scope));
     const eligible = batch.filter(page => {
       const manifest = manifests.get(key(page));
-      if (!page.revision || manifest?.version !== 1 || manifest.revision !== page.revision || manifest.scope !== scope(page, options) || !Array.isArray(manifest.targets)) {
+      if (!page.revision || manifest?.version !== 1 || manifest.revision !== page.revision || manifest.scope !== scope(page, options) || !Array.isArray(manifest.targets) || manifest.receiptIds?.some(id => unfinishedIds.has(id)) || unfinishedLegacyScopes.has(captureScopeKey({ ...page, ...options }))) {
         pending.push(page); return false;
       }
       return true;
@@ -115,7 +128,7 @@ export async function publishCaptureManifest(engine: BrainEngine, page: EntityCa
     }
     const signatures = await graphs(tx, [Number(page.pageId)]);
     const manifest: Manifest = { version: 1, scope: scope(page, options), revision: page.revision, graph: signatures.get(Number(page.pageId)) ?? '', chunks,
-      targets: targets.map(target => ({ ...target, proofs:options.proofs?.filter(proof=>proof.id===target.id) })),unresolved:options.unresolved??[] };
+      targets: targets.map(target => ({ ...target, proofs:options.proofs?.filter(proof=>proof.id===target.id) })),receiptIds:options.receiptIds??[],unresolved:options.unresolved??[] };
     await tx.setConfig(key(page), JSON.stringify(manifest));
   });
 }

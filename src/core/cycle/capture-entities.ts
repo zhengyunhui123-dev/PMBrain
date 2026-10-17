@@ -638,7 +638,7 @@ export async function runPhaseCaptureEntities(
   const cachedSources=new Map<string,EntityCaptureCandidate>();
   let cachedLinks=0,cachedRepairNeeded=false;
   const cachedJobIds=new Set<number>();
-  const manifestPages=new Map<string,{page:EntityCaptureCandidate;entities:Map<string,{slug:string;sourceId:string}>;proofs:NonNullable<CaptureReceipt['capture_proof']>;chunks:number;complete:boolean;eligible:boolean;unresolved:unknown[]}>();
+  const manifestPages=new Map<string,{page:EntityCaptureCandidate;entities:Map<string,{slug:string;sourceId:string}>;proofs:NonNullable<CaptureReceipt['capture_proof']>;receiptIds:Set<number>;chunks:number;complete:boolean;eligible:boolean;unresolved:unknown[]}>();
   const manifestId=(page:EntityCaptureCandidate)=>JSON.stringify([page.sourceId,page.slug]);
   type PendingPage={ page: EntityCaptureCandidate; scopeKey:string; bodyHash:string; bytes:number; totalChunks:number; chunks:Array<{start:number;length:number;index:number;force:boolean}> };
   let pendingPageCount=0;
@@ -656,7 +656,7 @@ export async function runPhaseCaptureEntities(
       AND position(data->'ingest_context'->>'chunkBody' in $2)>0
       ORDER BY body,id DESC LIMIT $3`,[`${scopeKey}:%`,page.body,Math.ceil(page.body.length/(ENTITY_CAPTURE_CHUNK_CHARS-ENTITY_CAPTURE_CHUNK_OVERLAP))*4+4,`${scopeKey}:0`,`${scopeKey}:g`]);
     const pendingChunks:Array<{start:number;length:number;index:number;force:boolean}>=[];
-    const manifest={page:reference,entities:new Map<string,{slug:string;sourceId:string}>(),proofs:[] as NonNullable<CaptureReceipt['capture_proof']>,chunks:0,complete:false,eligible:true,unresolved:[] as unknown[]};
+    const manifest={page:reference,entities:new Map<string,{slug:string;sourceId:string}>(),proofs:[] as NonNullable<CaptureReceipt['capture_proof']>,receiptIds:new Set<number>(),chunks:0,complete:false,eligible:true,unresolved:[] as unknown[]};
     manifestPages.set(manifestId(reference),manifest);
     let chunkIndex=0;
     for (const fragment of planCaptureBodies(page.body,receipts.map(row=>row.body))) {
@@ -666,6 +666,7 @@ export async function runPhaseCaptureEntities(
         const receipt=receipts.find(row=>row.body===fragment.body)!;
         const reused=await reuseCaptureReceipt(engine,{slug:page.slug,sourceId:page.sourceId,pageId:page.pageId,sourceIncarnation:page.sourceIncarnation,body:page.body,chunkBody:fragment.body},receipt.receipt);
         if(reused){
+          manifest.receiptIds.add(receipt.id);
           for(const entity of reused.entities)manifest.entities.set(`${entity.sourceId}:${entity.slug}`,entity);
           manifest.proofs.push(...(receipt.receipt.capture_proof??[]));
           manifest.unresolved.push(...(reused.unresolved??[]));unresolvedReferences.push(...(reused.unresolved??[]));
@@ -959,6 +960,7 @@ export async function runPhaseCaptureEntities(
           }
           const proof=await withCaptureWrite(engine,executionSignal,()=>captureReceiptProof(engine,data.ingest_context!,result?.ingest_entities??[]));
           const manifest=manifestPages.get(manifestId(item.page))!;
+          manifest.receiptIds.add(job.id);
           manifest.unresolved.push(...(result?.ingest_unresolved??[]));
           for(const entity of result?.ingest_entities??[])manifest.entities.set(`${entity.sourceId}:${entity.slug}`,entity);
           manifest.proofs.push(...proof);
@@ -1048,7 +1050,7 @@ export async function runPhaseCaptureEntities(
     const status: PhaseResult['status'] = cleanStatus === 'ok' && (gaps.isolated > 0 || gaps.unlinkedMentions > 0 || unresolvedReferences.length>0)
       ? 'warn'
       : cleanStatus;
-    if(!relationError&&gaps.isolated===0&&gaps.unlinkedMentions===0&&!opts.signal?.aborted)for(const manifest of manifestPages.values())if(manifest.eligible&&manifest.complete)await publishCaptureManifest(engine,manifest.page,[...manifest.entities.values()],manifest.chunks,{...manifestOptions,proofs:manifest.proofs,unresolved:manifest.unresolved});
+    if(!relationError&&gaps.isolated===0&&gaps.unlinkedMentions===0&&!opts.signal?.aborted)for(const manifest of manifestPages.values())if(manifest.eligible&&manifest.complete)await publishCaptureManifest(engine,manifest.page,[...manifest.entities.values()],manifest.chunks,{...manifestOptions,proofs:manifest.proofs,receiptIds:[...manifest.receiptIds],unresolved:manifest.unresolved});
     const reportLine = captureReportLine({
       model: chosen.model,
       pagesProcessed,

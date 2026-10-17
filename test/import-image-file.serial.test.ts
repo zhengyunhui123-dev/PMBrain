@@ -12,6 +12,7 @@ import { tmpdir } from 'node:os';
 import { PGLiteEngine } from '../src/core/pglite-engine.ts';
 import { importImageFile, isImageFilePath, pLimit, SUPPORTED_IMAGE_EXTS } from '../src/core/import-file.ts';
 import { resetPgliteState } from './helpers/reset-pglite.ts';
+import { configureGateway, resetGateway } from '../src/core/ai/gateway.ts';
 
 let engine: PGLiteEngine;
 let tmpDir: string;
@@ -24,10 +25,13 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  resetGateway();
   await engine.disconnect();
 });
 
 beforeEach(async () => {
+  resetGateway();
+  configureGateway({ generative_enabled: false, env: {} });
   await resetPgliteState(engine);
 });
 

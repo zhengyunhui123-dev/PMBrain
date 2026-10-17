@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { api } from '../api';
-import { parseMarkdownTable } from '../lib/markdown-table';
+import { markdownTableCellSources, parseMarkdownTable } from '../lib/markdown-table';
 import { LoadingBlock } from './console-shared';
 import { inlineSourceSegments, type SourceSegment } from '../../../src/product/workbench/artifact-quote';
 
@@ -109,7 +109,7 @@ export function MarkdownArticle({ markdown, citations, sourceMap = false }: { ma
   let cursor = 0;
   for (const line of lines) { starts.push(cursor); cursor += line.length + 1; }
   let list: Array<{ text: string; base?: number }> = [];
-  let code: string[] = [];
+  let code: Array<{ text: string; base: number }> = [];
   let inCode = false;
 
   const flushList = () => {
@@ -120,7 +120,9 @@ export function MarkdownArticle({ markdown, citations, sourceMap = false }: { ma
 
   const flushCode = () => {
     if (code.length === 0) return;
-    blocks.push(<pre key={`code-${blocks.length}`}>{code.join('\n')}</pre>);
+    const text = code.map(line => line.text).join('\n');
+    const start = code[0]!.base;
+    blocks.push(<pre key={`code-${blocks.length}`}>{sourceMap ? <span data-source-start={start} data-source-end={start + text.length} data-visible-start={start} data-visible-end={start + text.length}>{text}</span> : text}</pre>);
     code = [];
   };
 
@@ -137,18 +139,23 @@ export function MarkdownArticle({ markdown, citations, sourceMap = false }: { ma
       continue;
     }
     if (inCode) {
-      code.push(line);
+      code.push({ text: line, base: starts[index]! });
       continue;
     }
     const table = parseMarkdownTable(lines, index);
     if (table) {
       flushList();
+      const sourceRows = sourceMap ? lines.slice(index, table.endIndex).map(markdownTableCellSources) : [];
+      const mappedCell = (cell: string, lineIndex: number, cellIndex: number) => {
+        const source = sourceRows[lineIndex - index]?.[cellIndex];
+        return <InlineMarkdown text={source?.text ?? cell} citations={citations} sourceBase={source ? starts[lineIndex]! + source.start : undefined} />;
+      };
       blocks.push(
         <div className="markdown-table-wrap" key={`table-${index}`}>
           <table>
-            <thead><tr>{table.headers.map((cell, cellIndex) => <th key={`${cell}-${cellIndex}`}><InlineMarkdown text={cell} citations={citations} /></th>)}</tr></thead>
+            <thead><tr>{table.headers.map((cell, cellIndex) => <th key={`${cell}-${cellIndex}`}>{mappedCell(cell, index, cellIndex)}</th>)}</tr></thead>
             <tbody>{table.rows.map((row, rowIndex) => (
-              <tr key={`row-${rowIndex}`}>{row.map((cell, cellIndex) => <td key={`${cellIndex}-${cell}`}><InlineMarkdown text={cell} citations={citations} /></td>)}</tr>
+              <tr key={`row-${rowIndex}`}>{row.map((cell, cellIndex) => <td key={`${cellIndex}-${cell}`}>{mappedCell(cell, index + 2 + rowIndex, cellIndex)}</td>)}</tr>
             ))}</tbody>
           </table>
         </div>,

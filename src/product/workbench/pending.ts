@@ -57,7 +57,7 @@ export function decidePending(input: {
   if (pending?.kind === 'assistant-create' && proposesAssistant(normalized) === false && /(?:不用|不要|别再|别|取消|停止).{0,6}(?:创建|建立|新增)/.test(normalized)) return { action: 'continue', clearPending: true };
   if (pending?.kind === 'assistant-create' && bareAgreement.test(normalized)) return { action: 'hold', text: '创建助手还需要明确说确认创建、就按这个创建或直接创建。', pending };
   if (!pending && input.usedConfirm && pureCreateConfirm.test(normalized)) return { action: 'hold', text: '刚才的创建确认已经用过。要再创建一个助手，请把新的名称和职责再说一次。', ...dropStale };
-  if (readyToCreateAssistant(text) && pending?.kind === 'assistant-create') return { action: 'continue', clearPending: true, usedConfirm: pending.fingerprint };
+  if (readyToCreateAssistant(text) && pending?.kind === 'assistant-create') return { action: 'continue', usedConfirm: pending.fingerprint };
   if (readyToCreateAssistant(text)) return { action: 'continue', ...dropStale };
   const wantsRevise = reviseCue.test(normalized) && !replacementCue.test(normalized);
   if (wantsRevise && !input.currentArtifactId && !pending && options.length > 1) {

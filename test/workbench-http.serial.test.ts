@@ -35,7 +35,7 @@ test('knowledge evidence reads the exact Source and preserves all conversation t
   expect(sent.system).toContain('十万元'); expect(sent.messages[0].content).toBe('预算是多少');
   expect(result.citations[0].sourceId).toBe('source-a');
 });
-test('HTTP workbench sends two real gateway requests with history and persists the answer', async () => {
+for (const databaseReady of [true, false]) test(`HTTP workbench sends two real gateway requests with history and persists the answer (database ${databaseReady ? 'ready' : 'unavailable'})`, async () => {
   const requests: any[] = [];
   const modelServer = Bun.serve({ port: 0, async fetch(req) {
     const input = await req.json() as any; requests.push(input);
@@ -44,7 +44,8 @@ test('HTTP workbench sends two real gateway requests with history and persists t
     return Response.json(payload);
   } });
   const app = express();
-  registerWorkbenchRoutes(app, (_req, _res, next) => next(), {} as any, { engine: 'pglite', chat_model: 'service-test:local' } as any, { storageRoot: mkdtempSync(join(tmpdir(), 'pmbrain-http-test-')) });
+  const engine = { executeRaw: async () => { if (!databaseReady) throw new Error('测试数据库暂不可用'); return []; } } as any;
+  registerWorkbenchRoutes(app, (_req, _res, next) => next(), engine, { engine: 'pglite', chat_model: 'service-test:local' } as any, { storageRoot: mkdtempSync(join(tmpdir(), 'pmbrain-http-test-')), databaseAvailable: () => databaseReady });
   const server = app.listen(0, '127.0.0.1'); await new Promise<void>(resolve => server.once('listening', resolve));
   const base = `http://127.0.0.1:${(server.address() as any).port}/admin/api/workbench`;
   const request = async (path: string, body?: unknown) => {

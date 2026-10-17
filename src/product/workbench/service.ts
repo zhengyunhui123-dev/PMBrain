@@ -18,6 +18,18 @@ import { compactRule, learnTurn } from './turn-policy';
 function periodCitationCount(citations: WorkbenchCitation[]) {
   return citations.filter(item => item.origin !== 'prior-artifact').length;
 }
+function completeAssistantConfirmation(store: WorkbenchStore, conversation: WorkbenchConversation, fingerprint: string | undefined, calls: WorkbenchToolCall[]) {
+  if (!fingerprint) return;
+  for (const call of calls) {
+    if (call.name !== 'assistant_create' || call.status !== 'complete' || !call.output) continue;
+    let output: { id?: unknown; created?: unknown };
+    try { output = JSON.parse(call.output); } catch { continue; }
+    if (output?.created !== true || typeof output.id !== 'string' || output.id === 'main' || !new WorkbenchAgentStore(store).list().some(agent => agent.id === output.id)) continue;
+    conversation.usedConfirm = fingerprint;
+    if (conversation.pending?.fingerprint === fingerprint) delete conversation.pending;
+    return;
+  }
+}
 function linkedArtifacts(store: WorkbenchStore, agentId: string, conversationId: string, messageId: string, calls: WorkbenchToolCall[]) {
   const rows = new WorkbenchAgentStore(store).artifacts();
   const found = rows.filter(item => item.agentId === agentId && item.conversationId === conversationId && item.messageId === messageId);
@@ -252,7 +264,7 @@ export class WorkbenchService {
     this.acceptance.delete(id);
     current.rejectReady?.(Object.assign(new Error('已停止生成'), { name: 'AbortError' }));
   }
-  send(id: string, input: { text?: string; model?: string; knowledge?: boolean; retry?: boolean; editMessageId?: string; attachments?: unknown; attachmentsHydrated?: boolean; interrupt?: boolean }) {
+  send(id: string, input: { text?: string; model?: string; knowledge?: boolean; retry?: boolean; editMessageId?: string; attachments?: unknown; attachmentsHydrated?: boolean; interrupt?: boolean; turnId?: string }) {
     if (this.active.has(id)) {
       if (input.interrupt !== true) throw new Error('当前会话正在生成，请等待或停止');
       this.releaseTurn(id);
@@ -319,7 +331,7 @@ export class WorkbenchService {
       if (conversation.messages.length === 1) conversation.title = (text || nextAttachments[0]?.name || '\u9644\u4ef6').slice(0, 40);
     }
     conversation.model = model; conversation.knowledge = input.knowledge ?? conversation.knowledge; conversation.updatedAt = now;
-    const turnId = randomUUID();
+    const turnId = input.turnId ?? randomUUID();
     const currentUser = [...conversation.messages].reverse().find(message => message.role === 'user');
     if (currentUser) currentUser.turnId = turnId;
     const agentBefore = structuredClone(new WorkbenchAgentStore(this.store).get(conversation.assistantId ?? 'main'));
@@ -449,9 +461,9 @@ export class WorkbenchService {
           acceptReady(conversation);
           return;
         }
+        const confirmation = decision.usedConfirm ?? (input.retry && conversation.pending?.kind === 'assistant-create' ? conversation.pending.fingerprint : undefined);
         if (decision.pending) conversation.pending = decision.pending;
-        else if (decision.clearPending || openedTask) delete conversation.pending;
-        if (decision.usedConfirm) conversation.usedConfirm = decision.usedConfirm;
+        else if (decision.clearPending || (openedTask && !confirmation)) delete conversation.pending;
         if (decision.currentArtifactId && conversation.task) conversation.task = { ...conversation.task, currentArtifactId: decision.currentArtifactId };
         try {
           await this.prepareTurnAttachments(conversation, attachmentFlags, session.signal);
@@ -463,6 +475,7 @@ export class WorkbenchService {
             catch (error) { userTurn.memory = { sourceId: conversation.sourceId ?? 'default', hash: memoryVersion(userTurn), capturedAt: userTurn.createdAt, mode: 'off', visibility: 'private', ttl: '3d', status: 'held', error: error instanceof Error ? error.message : String(error) }; }
           }
           if (moved.length && userTurn) userTurn.attachmentSupplement = moved.map(item => item.excerpt).join('\n\n');
+          completeAssistantConfirmation(this.store, conversation, confirmation, settledTools ?? []);
           this.dropRemovedAttachments(snapshot, conversation);
           saveSoon(true);
           opened = true;
@@ -578,6 +591,7 @@ export class WorkbenchService {
             reply.toolCalls ??= [];
             const index = reply.toolCalls.findIndex(item => item.id === call.id);
             if (index < 0) reply.toolCalls.push({ ...call }); else reply.toolCalls[index] = { ...call };
+            completeAssistantConfirmation(this.store, conversation, confirmation, [call]);
             saveSoon(true);
           },
           onContext: note => { if (!session.signal.aborted) { reply.contextNote = note; saveSoon(true); } },
@@ -756,8 +770,10 @@ export class WorkbenchService {
       return {
         ...message,
         attachments: message.attachments.map(item => {
+          if (item.route === 'vision' && message.id !== latestUserId && historicalImageIds && !historicalImageIds.has(item.id)) {
+            return { id: item.id, name: item.name, mime: item.mime, route: 'skip' as const, included: 0, note: '原图仍保存在历史附件中，本轮未选入。' };
+          }
           if (item.data || (item.route !== 'vision' && item.route !== 'pdf-file')) return item;
-          if (item.route === 'vision' && message.id !== latestUserId && historicalImageIds && !historicalImageIds.has(item.id)) return item;
           const bytes = this.store.readAttachment(conversationId, item.id);
           return bytes ? { ...item, data: bytes.toString('base64') } : item;
         }),

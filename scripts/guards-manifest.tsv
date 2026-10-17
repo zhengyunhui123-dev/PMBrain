@@ -43,6 +43,7 @@ check-system-of-record.sh	scanner	todo	Scanner guard; add fixtures when its rule
 check-test-isolation.sh	scanner	todo	Uses check-test-isolation.allowlist as input.
 check-test-real-names.sh	scanner	todo	Scanner guard; add fixtures when its rule is changed.
 check-trailing-newline.sh	scanner	todo	Previously reachable only through the drifting check:all chain; now in verify.
+check-trailing-newline.ts	scanner	todo	Bun implementation; tracked-file behavior is covered by test/scripts/check-trailing-newline.test.ts.
 check-version-sync.ts	repostate	exempt	Checks version and generated release metadata consistency.
 check-wasm-embedded.sh	buildfresh	exempt	Binary embed check.
 check-worker-lock-renewal-shape.sh	scanner	todo	Scanner guard; add fixtures when its rule is changed.
