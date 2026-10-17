@@ -27,6 +27,7 @@ import { agentTools, agentInstructions, agentSkillCatalog, validateAgent, type W
 import { CURRENT_EVIDENCE_RULE, needsCurrentEvidence, wantsSavedPlaybook } from './playbook';
 import { WorkbenchAgentCoordinator } from './agent-tasks';
 import { readFileSync } from 'node:fs';
+import { openArtifactCommand } from './files';
 
 const CONTINUE_PROMPT = '请从中断处接着写完，不要重复已经写过的内容。';
 async function workbenchKnowledgeSearch(engine: BrainEngine, input: Parameters<typeof runAdminKnowledgeSearch>[1]) {
@@ -106,13 +107,16 @@ export function knowledgeWorkbenchAnswer(engine: BrainEngine, dependencies: { se
     }
     const questions = messages.filter(item => item.role === 'user').slice(-4).map(item => retrievalText(item)).filter(Boolean);
     const query = retrievalQuery(messages, task).trim();
-    if (sourceId && query && dependencies.recall && !askEvidence) {
+    if (sourceId && query && dependencies.recall) {
       const memories = await dependencies.recall(engine, { sourceId, query: questions.at(-1) || query, sessionId: conversationId, window: messages.filter((item): item is WorkbenchMessage & { role: 'user' | 'assistant' } => item.role === 'user' || item.role === 'assistant').slice(-4).map(item => ({ role: item.role, text: retrievalText(item) })), budget: Math.min(1500, Math.floor(evidenceTokens / 2)) });
-      if (knowledge) for (const memory of memories) {
+      const stable = memories.filter(item => item.kind === 'memory' && /· (偏好|决定)/.test(item.title));
+      if (!knowledge) preferences = memories.map(memory => `- ${memory.title}：${memory.snippet}`).join('\n');
+      else if (askEvidence) preferences = stable.map(memory => `- ${memory.title}：${memory.snippet}`).join('\n');
+      else for (const memory of memories) {
         let index = citations.findIndex(item => item.sourceId === memory.sourceId && (memory.kind === 'memory' ? item.kind === 'memory' && item.factId === memory.factId : item.slug === memory.slug));
         if (index < 0) { index = citations.length; citations.push(memory); }
         evidence += `\n[${index + 1}] ${memory.title}${memory.kind==='memory'?'（用户已明确表达并保存）':` (${memory.sourceId}/${memory.slug})`}：${memory.snippet}\n`;
-      } else preferences = memories.map(memory => `- ${memory.title}：${memory.snippet}`).join('\n');
+      }
     }
     if (knowledge) {
       progress('正在检索知识库');
@@ -266,6 +270,7 @@ export function registerWorkbenchRoutes(app: express.Express, requireAdmin: Requ
   app.get(`${base}/artifacts`, requireAdmin, handler(() => ({ artifacts: agentStore.artifacts().map(({ content: _content, ...item }) => item) })));
   app.get(`${base}/artifacts/:id`, requireAdmin, handler(req => { const item = agentStore.artifact(id(req)); return req.query.download === '1' ? { data: readFileSync(item.path).toString('base64'), mime: item.format === 'docx' ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' : 'text/markdown;charset=utf-8', filename: `${item.title.replace(/[\\/:*?"<>|]/g, '_')}.${item.format === 'docx' ? 'docx' : 'md'}` } : item; }));
   app.get(`${base}/artifacts/:id/download`, requireAdmin, (req, res) => { try { const item = agentStore.artifact(id(req)); res.download(item.path, `${item.title.replace(/[\\/:*?"<>|]/g, '_')}.${item.format === 'docx' ? 'docx' : 'md'}`); } catch (error) { res.status(400).json({ error: String(error) }); } });
+  app.post(`${base}/artifacts/:id/open`, requireAdmin, express.json({ limit: '4kb' }), handler(req => openArtifactCommand(req.body, agentStore, id(req))));
   app.post(`${base}/agents/:id/tasks`, requireAdmin, express.json({ limit: '32kb' }), handler(req => { if (!coordinator) throw new Error('后台任务服务不可用'); return coordinator.submit(id(req), req.body?.prompt, req.body?.key); }));
   app.get(`${base}/memory`, requireAdmin, handler(async () => ({ ...await getWritebackStatus(engine), sources: await engine.executeRaw('SELECT id,name FROM sources WHERE archived=false ORDER BY name,id') })));
   app.put(`${base}/assistant`, requireAdmin, express.json({ limit: '64kb' }), handler(async req => {

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { WorkbenchCitation, WorkbenchConversation, WorkbenchMemory, WorkbenchMessage, WorkbenchModel, WorkbenchTask, WorkbenchToolCall } from '../../../shared/workbench';
-import { advanceStoredReads, attachmentRead, enrichAttachments, incomingAttachments, namedAttachmentSupplement, resolveListedAttachments, summarySource, modelReadsPdfNatively, taskRecognizedSupplement, taskVisualAttachments } from './attachments';
+import { advanceStoredReads, attachmentRead, enrichAttachments, historicalImageReadIds, incomingAttachments, namedAttachmentSupplement, resolveListedAttachments, summarySource, modelReadsPdfNatively, taskRecognizedSupplement, taskVisualAttachments } from './attachments';
 import { contextBudget, knowledgeReserve, planContext,conversationCitations,referenceProjection } from './context';
 import { WorkbenchStore } from './store';
 import { compressTranscript, contextFailure,requestOutputTokens } from './context-runtime';
@@ -10,8 +10,37 @@ import { memoryVersion } from './memory-identity';
 import { WorkbenchAgentStore } from './agents';
 import type { WorkbenchAgent } from '../../../shared/workbench-agents';
 import { activityLine, compilePlaybook, EVIDENCE_GAP_TEXT, needsCurrentEvidence, visibleAssistantText, wantsSavedPlaybook } from './playbook';
-import { advanceTask, noteTask } from './task-context';
+import { advanceTask, noteTask, rememberTaskMaterials } from './task-context';
+import { decidePending } from './pending';
+import { listWorkbenchArtifacts } from './files';
 import { compactRule, learnTurn } from './turn-policy';
+
+function periodCitationCount(citations: WorkbenchCitation[]) {
+  return citations.filter(item => item.origin !== 'prior-artifact').length;
+}
+function linkedArtifacts(store: WorkbenchStore, agentId: string, conversationId: string, messageId: string, calls: WorkbenchToolCall[]) {
+  const rows = new WorkbenchAgentStore(store).artifacts();
+  const found = rows.filter(item => item.agentId === agentId && item.conversationId === conversationId && item.messageId === messageId);
+  for (const call of calls) {
+    if ((call.name !== 'artifact_save' && call.name !== 'artifact_revise') || call.status !== 'complete' || !call.output) continue;
+    let parsed: { id?: unknown } | undefined;
+    try { parsed = JSON.parse(call.output) as { id?: unknown }; } catch { continue; }
+    if (typeof parsed?.id !== 'string') continue;
+    const item = rows.find(row => row.id === parsed.id && row.agentId === agentId && row.conversationId === conversationId);
+    if (item && !found.some(row => row.id === item.id)) found.push(item);
+  }
+  return found;
+}
+function assignArtifactReceipts(store: WorkbenchStore, conversation: WorkbenchConversation, reply: WorkbenchMessage, agentId: string, calls: WorkbenchToolCall[], evidenceGap: boolean, attach: boolean) {
+  const created = linkedArtifacts(store, agentId, conversation.id, reply.id, calls);
+  if (attach) reply.artifacts = evidenceGap ? [] : created.map(({ id: artifactId, title, format, publishedPath, revision }) => ({ id: artifactId, title, format, publishedPath, ...(revision && revision > 1 ? { revision } : {}) }));
+  if (!conversation.task || evidenceGap) return;
+  const revisions = created.filter(item => item.parentId);
+  const newest = [...(revisions.length ? revisions : created)].sort((a, b) => (b.revision ?? 1) - (a.revision ?? 1) || b.createdAt.localeCompare(a.createdAt))[0];
+  const pointed = newest && (revisions.length || !conversation.task.currentArtifactId) ? newest.id : undefined;
+  const delivered = (attach ? reply.artifacts ?? [] : created).map(item => item.publishedPath || item.title).filter((item): item is string => Boolean(item));
+  if (pointed || delivered.length) conversation.task = { ...conversation.task, ...(pointed ? { currentArtifactId: pointed } : {}), ...(delivered.length ? { deliveries: [...new Set([...(conversation.task.deliveries ?? []), ...delivered])].slice(-8) } : {}) };
+}
 
 export { conversationContext } from './context';
 
@@ -350,6 +379,7 @@ export class WorkbenchService {
           const liveIds = new Set(conversation.messages.map(message => message.id));
           conversation.task = { ...conversation.task, sources: conversation.task.sources!.filter(item => liveIds.has(item.messageId)) };
         }
+        if (conversation.task && spoken) conversation.task = rememberTaskMaterials(conversation.task, spoken, advanced.opened);
       }
     }
     const contextWindow = this.models().find(item => item.id === model)?.contextWindow;
@@ -394,6 +424,28 @@ export class WorkbenchService {
     promise = (async () => {
       try {
         const userTurn = [...conversation.messages].reverse().find(message => message.role === 'user');
+        const decision = decidePending({
+          retry: input.retry,
+          text: userTurn?.text ?? '',
+          pending: conversation.pending,
+          usedConfirm: conversation.usedConfirm,
+          currentArtifactId: conversation.task?.currentArtifactId,
+          artifacts: listWorkbenchArtifacts(new WorkbenchAgentStore(this.store), assistant.id, conversation.id).map(item => ({ ...item, createdAt: item.createdAt })),
+          now,
+        });
+        if (decision.action === 'hold') {
+          reply.text = decision.text ?? '';
+          reply.status = 'complete';
+          if (decision.pending) conversation.pending = decision.pending;
+          else delete conversation.pending;
+          opened = true;
+          acceptReady(conversation);
+          return;
+        }
+        if (decision.pending) conversation.pending = decision.pending;
+        else if (decision.clearPending) delete conversation.pending;
+        if (decision.usedConfirm) conversation.usedConfirm = decision.usedConfirm;
+        if (decision.currentArtifactId && conversation.task) conversation.task = { ...conversation.task, currentArtifactId: decision.currentArtifactId };
         try {
           await this.prepareTurnAttachments(conversation, attachmentFlags, session.signal);
           session.signal.throwIfAborted();
@@ -484,7 +536,8 @@ export class WorkbenchService {
           if (named && !spokenTurn.attachmentSupplement?.includes(named)) spokenTurn.attachmentSupplement = [spokenTurn.attachmentSupplement, named].filter(Boolean).join('\n\n');
         }
         const modelSeesImages = this.models().find(item => item.id === model)?.vision === true;
-        const visuals = taskVisualAttachments(this.modelMessages(conversation.id, conversation.messages), conversation.task, recentIds);
+        const imageIds = historicalImageReadIds(conversation.messages, conversation.task, spokenTurn?.text ?? '');
+        const visuals = taskVisualAttachments(this.modelMessages(conversation.id, conversation.messages, imageIds), conversation.task, recentIds, spokenTurn?.text ?? '');
         if (!modelSeesImages) {
           visuals.omitted.unshift(...visuals.kept.map(item => ({ messageId: item.messageId, name: item.name })));
           visuals.kept.length = 0;
@@ -496,7 +549,7 @@ export class WorkbenchService {
           contextWindow, contextThreshold: assistant.context.threshold,
           ...(this.summarize ? { contextSummarizer: { model: compressionModel, contextWindow: this.models().find(item => item.id === compressionModel)?.contextWindow, summarize: this.summarize } } : {}),
           sourceId: conversation.sourceId, conversationId: conversation.id,
-          messages: this.modelMessages(conversation.id, recent), ...(summary ? { summary } : {}), ...(conversation.taskNotes?.length ? { taskNotes: conversation.taskNotes } : {}), ...(conversation.task ? { task: conversation.task } : {}), ...(input.retry ? (retryMethod === undefined ? {} : { taskMethod: retryMethod }) : { taskMethod: taskInherited }), ...(conversation.knowledge?{priorCitations}:{}), ...(visuals.kept.length ? { visualAttachments: visuals.kept.map(({ name, mime, image }) => ({ name, mime, image })) } : {}), ...(settledTools?.length ? { settledTools } : {}), model, knowledge: conversation.knowledge,
+          messages: this.modelMessages(conversation.id, recent, imageIds), ...(summary ? { summary } : {}), ...(conversation.taskNotes?.length ? { taskNotes: conversation.taskNotes } : {}), ...(conversation.task ? { task: conversation.task } : {}), ...(input.retry ? (retryMethod === undefined ? {} : { taskMethod: retryMethod }) : { taskMethod: taskInherited }), ...(conversation.knowledge?{priorCitations}:{}), ...(visuals.kept.length ? { visualAttachments: visuals.kept.map(({ name, mime, image }) => ({ name, mime, image })) } : {}), ...(settledTools?.length ? { settledTools } : {}), model, knowledge: conversation.knowledge,
           ...(assistant.systemPrompt.trim() ? { systemPrompt: assistant.systemPrompt } : {}),
           ...(assistant.temperature !== null ? { temperature: assistant.temperature } : {}),
           signal: session.signal,
@@ -531,7 +584,8 @@ export class WorkbenchService {
           let knowledge = result.knowledge ?? (conversation.knowledge ? (citations.length ? 'used' : 'none') : 'off');
           let text = visibleAssistantText(result.text, reply.toolCalls);
           const evidenceTask = !wantsSavedPlaybook(spoken?.text ?? '') && (needsCurrentEvidence(spoken?.text ?? '') || needsCurrentEvidence(conversation.task?.goal ?? ''));
-          const evidenceGap = evidenceTask && knowledge !== 'off' && citations.length === 0;
+          const citedNow = periodCitationCount(citations);
+          const evidenceGap = evidenceTask && knowledge !== 'off' && citedNow === 0;
           if (evidenceGap) { text = EVIDENCE_GAP_TEXT; knowledge = 'none'; reply.evidenceGap = true; }
           else delete reply.evidenceGap;
           reply.contextManifest = {
@@ -543,7 +597,7 @@ export class WorkbenchService {
             ],
             knowledge: conversation.knowledge,
             evidenceTask,
-            citations: citations.length,
+            citations: citedNow,
             budget: { window: contextWindow ?? 32000, inputBudget: contextBudget(contextWindow, assistant.context.threshold, outputReserve), outputReserve },
             ...(reply.turnId ? { turnId: reply.turnId } : {}),
             ...(reply.contextNote ? { omitted: [reply.contextNote] } : {}),
@@ -556,23 +610,15 @@ export class WorkbenchService {
           reply.knowledge = knowledge;
           if (result.stopReason) reply.stopReason = result.stopReason;
           reply.status = 'complete';
-          const created = new WorkbenchAgentStore(this.store).artifacts().filter(item => item.conversationId === id && item.messageId === reply.id);
-          reply.artifacts = evidenceGap ? [] : created.map(({ id: artifactId, title, format, publishedPath, revision }) => ({ id: artifactId, title, format, publishedPath, ...(revision && revision > 1 ? { revision } : {}) }));
-          if (conversation.task) {
-            if (evidenceGap) conversation.task = { ...conversation.task, openItems: [...new Set([...(conversation.task.openItems ?? []), '本期材料还没齐'])].slice(-8) };
-            else if (citations.length && conversation.task.openItems?.includes('本期材料还没齐')) {
-              const openItems = conversation.task.openItems.filter(item => item !== '本期材料还没齐');
-              const next = { ...conversation.task };
-              if (openItems.length) next.openItems = openItems;
-              else delete next.openItems;
-              conversation.task = next;
-            }
-            const revisions = created.filter(item => item.parentId);
-            const newest = [...(revisions.length ? revisions : created)].sort((a, b) => (b.revision ?? 1) - (a.revision ?? 1) || b.createdAt.localeCompare(a.createdAt))[0];
-            const pointed = !evidenceGap && newest && (revisions.length || !conversation.task.currentArtifactId) ? newest.id : undefined;
-            const delivered = (reply.artifacts ?? []).map(item => item.publishedPath || item.title).filter((item): item is string => Boolean(item));
-            if (pointed || delivered.length) conversation.task = { ...conversation.task, ...(pointed ? { currentArtifactId: pointed } : {}), ...(delivered.length ? { deliveries: [...new Set([...(conversation.task.deliveries ?? []), ...delivered])].slice(-8) } : {}) };
+          if (conversation.task && evidenceGap) conversation.task = { ...conversation.task, openItems: [...new Set([...(conversation.task.openItems ?? []), '本期材料还没齐'])].slice(-8) };
+          else if (conversation.task && citedNow && conversation.task.openItems?.includes('本期材料还没齐')) {
+            const openItems = conversation.task.openItems.filter(item => item !== '本期材料还没齐');
+            const next = { ...conversation.task };
+            if (openItems.length) next.openItems = openItems;
+            else delete next.openItems;
+            conversation.task = next;
           }
+          assignArtifactReceipts(this.store, conversation, reply, assistant.id, [...(settledTools ?? []), ...(reply.toolCalls ?? [])], evidenceGap, true);
         }
       } catch (error) { if (opened && this.owns(id, generation) && !abort.signal.aborted) { const failure = contextFailure(error); reply.status = 'error'; reply.error = failure.message; reply.errorCode = failure.code; } }
       finally {
@@ -581,6 +627,7 @@ export class WorkbenchService {
         if (mine && opened) {
           if (abort.signal.aborted) reply.status = 'cancelled';
           for (const call of reply.toolCalls ?? []) if (call.status === 'running') { call.status = abort.signal.aborted ? 'cancelled' : 'error'; call.error = abort.signal.aborted ? '已停止' : reply.error || '工具执行中断'; call.completedAt = new Date().toISOString(); }
+          if (reply.status !== 'complete') assignArtifactReceipts(this.store, conversation, reply, assistant.id, [...(settledTools ?? []), ...(reply.toolCalls ?? [])], false, false);
           delete reply.stage;
           conversation.updatedAt = new Date().toISOString();
           this.store.save(conversation);
@@ -695,13 +742,15 @@ export class WorkbenchService {
     this.store.save(conversation);
     return this.get(id);
   }
-  private modelMessages(conversationId: string, messages: WorkbenchMessage[]): WorkbenchMessage[] {
+  private modelMessages(conversationId: string, messages: WorkbenchMessage[], historicalImageIds?: Set<string> | null): WorkbenchMessage[] {
+    const latestUserId = [...messages].reverse().find(message => message.role === 'user')?.id;
     return messages.map(message => {
       if (!message.attachments?.length) return message;
       return {
         ...message,
         attachments: message.attachments.map(item => {
           if (item.data || (item.route !== 'vision' && item.route !== 'pdf-file')) return item;
+          if (item.route === 'vision' && message.id !== latestUserId && historicalImageIds && !historicalImageIds.has(item.id)) return item;
           const bytes = this.store.readAttachment(conversationId, item.id);
           return bytes ? { ...item, data: bytes.toString('base64') } : item;
         }),

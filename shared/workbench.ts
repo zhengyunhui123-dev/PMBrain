@@ -1,4 +1,4 @@
-export interface WorkbenchCitation { sourceId: string | null; slug: string; title: string; snippet: string; kind?: 'memory'; factId?: number; conversationId?: string; messageId?: string; memoryHash?: string }
+export interface WorkbenchCitation { sourceId: string | null; slug: string; title: string; snippet: string; kind?: 'memory'; origin?: 'prior-artifact'; factId?: number; conversationId?: string; messageId?: string; memoryHash?: string }
 export interface WorkbenchMemory {
   sourceId: string;
   hash: string;
@@ -86,6 +86,21 @@ export interface WorkbenchMessage {
   artifacts?: Array<{ id: string; title: string; format: 'markdown' | 'docx'; publishedPath?: string; revision?: number }>;
   turnId?: string;
 }
+export interface WorkbenchTaskMaterial {
+  messageId: string;
+  kind: 'attachment' | 'page' | 'file' | 'artifact';
+  ref: string;
+  name: string;
+  hash?: string;
+  range?: string;
+}
+export interface WorkbenchPending {
+  kind: 'artifact-choice' | 'assistant-create';
+  fingerprint: string;
+  prompt: string;
+  options?: Array<{ id: string; title: string; revision: number }>;
+  createdAt: string;
+}
 export interface WorkbenchTask {
   id: string;
   goal: string;
@@ -95,6 +110,7 @@ export interface WorkbenchTask {
   openItems?: string[];
   deliveries?: string[];
   sources?: Array<{ messageId: string; note: string }>;
+  materials?: WorkbenchTaskMaterial[];
   currentArtifactId?: string;
 }
 export interface ContextManifest {
@@ -123,6 +139,8 @@ export interface WorkbenchConversation {
   contextFloor?: string;
   taskNotes?: string[];
   task?: WorkbenchTask;
+  pending?: WorkbenchPending;
+  usedConfirm?: string;
   primary?: boolean;
   sourceId?: string;
   assistantId?: string;

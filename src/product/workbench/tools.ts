@@ -9,6 +9,7 @@ import {assistantRequestPolicy,requestStage} from './request';
 import {normalizeToolText,toolTextPreview,modelAnswerText} from '../../core/ai/tool-text';
 import { workbenchMemoryTools, nativeMemoryHandlers, type WorkbenchNative } from './memory-tools';
 import { agentTools, agentHandlers, type WorkbenchAgentTools } from './agent-tools';
+import { replayArtifactRead } from './files';
 export { chatMessageTokens } from './context-runtime';
 
 export const KNOWLEDGE_TOOLS: ChatToolDef[] = [
@@ -135,6 +136,18 @@ export async function runWorkbenchTools(input: WorkbenchAnswerInput & {
         if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || !sourceId || !slug || index < 0 || !allowed.get(JSON.stringify([sourceId, slug])) || (sourceIds && !sourceIds.includes(sourceId)) || typeof item.revision !== 'string' || !item.revision) return handler.execute(raw, abort, execution);
         reads.set(JSON.stringify([sourceId, slug]), item.revision);
         return { ...parsed, citation: index + 1 };
+      }
+      if (name === 'artifact_read') {
+        const item = parsed as { content?: unknown; citations?: Array<WorkbenchCitation & { citation?: number }> };
+        if (!item || typeof item.content !== 'string' || !Array.isArray(item.citations)) return parsed;
+        const projected = replayArtifactRead(item.content, item.citations, row => {
+          const before = citations.length;
+          const number = citation(row.sourceId, row.slug, row.title, row.snippet);
+          const saved = citations[number - 1];
+          if (saved && citations.length > before) saved.origin = 'prior-artifact';
+          return number;
+        });
+        return { ...item, content: projected.content, citations: projected.citations };
       }
       return parsed;
     } });

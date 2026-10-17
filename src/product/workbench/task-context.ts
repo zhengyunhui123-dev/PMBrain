@@ -1,4 +1,4 @@
-import type { WorkbenchMessage, WorkbenchTask } from '../../../shared/workbench';
+import type { WorkbenchMessage, WorkbenchTask, WorkbenchTaskMaterial } from '../../../shared/workbench';
 import { retrievalText } from './attachments';
 import { classifyTurn, compactRule, taskNeedsSkill } from './turn-policy';
 
@@ -65,7 +65,21 @@ export function noteTask(task: WorkbenchTask, input: { messageId: string; opened
     delete next.openItems;
     delete next.deliveries;
     delete next.currentArtifactId;
+    delete next.materials;
   }
+  return next;
+}
+
+export function rememberTaskMaterials(task: WorkbenchTask, message: { id: string; attachments?: Array<{ id: string; name: string }> } | undefined, opened: boolean): WorkbenchTask {
+  const kept: WorkbenchTaskMaterial[] = opened ? [] : [...(task.materials ?? [])];
+  for (const item of message?.attachments ?? []) {
+    const name = item.name?.trim();
+    if (!item.id || !name || kept.some(row => row.ref === item.id)) continue;
+    kept.push({ messageId: message!.id, kind: 'attachment', ref: item.id, name });
+  }
+  const next = { ...task };
+  if (kept.length) next.materials = kept.slice(-40);
+  else delete next.materials;
   return next;
 }
 
@@ -78,6 +92,7 @@ export function compileTaskBrief(task?: WorkbenchTask, evidence = false, current
   if (task.deliveries?.length) lines.push(`交付：${task.deliveries.join('；')}`);
   if (task.currentArtifactId && current?.id === task.currentArtifactId) lines.push(`当前成果：${current.id}，第 ${current.revision} 版，${current.title}，${current.format}，哈希 ${current.hash}。修改这份时调用 artifact_revise，并带上这个编号和哈希。`);
   else if (task.currentArtifactId) lines.push(`当前成果：${task.currentArtifactId}。修改前先用 artifact_read 读取编号和哈希。`);
+  if (task.materials?.length) lines.push(`任务材料：${task.materials.map(item => `${item.name}（${item.kind} ${item.ref}，消息 ${item.messageId}${item.range ? `，范围 ${item.range}` : ''}）`).join('；')}。这些材料不随最近来源丢掉。按最初那张图核对时用最早一份图片材料。`);
   if (task.sources?.length) lines.push(`来源：${task.sources.map(item => `${item.note}（${item.messageId}）`).join('；')}`);
   const label = evidence
     ? '这是当前任务的结构摘要，权威低于用户原话、当前规则和本期引用。它不是本期工作事实。'

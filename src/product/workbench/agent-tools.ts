@@ -9,7 +9,7 @@ import { compatibleSkill, WorkbenchAgentStore } from './agents';
 import { CURRENT_EVIDENCE_RULE, needsCurrentEvidence, playbookPrompt, wantsSavedPlaybook } from './playbook';
 import { carriesCurrentMethod } from './task-context';
 import { taskNeedsSkill } from './turn-policy';
-import { listLocalFiles, listWorkbenchArtifacts, publishArtifactToSource, readLocalFile, readWorkbenchArtifact, reviseWorkbenchArtifact, saveWorkbenchArtifact } from './files';
+import { listLocalFiles, listWorkbenchArtifacts, projectArtifactCitations, publishArtifactToSource, readLocalFile, readWorkbenchArtifact, reviseWorkbenchArtifact, saveWorkbenchArtifact } from './files';
 
 export interface WorkbenchAgentTools {
   store: WorkbenchAgentStore;
@@ -131,7 +131,17 @@ export function agentHandlers(context: WorkbenchAgentTools, input: { agent: Work
       return { id: artifact.id, familyId: artifact.familyId ?? artifact.id, revision: artifact.revision ?? 1, hash: artifact.hash, title: artifact.title, format: artifact.format, download: `/admin/api/workbench/artifacts/${artifact.id}/download`, saved: true, path: published.ok ? published.path : null, sourceId: published.ok ? published.sourceId : null, note: published.ok ? undefined : published.reason };
     }),
     handler('artifact_list', async raw => page(listWorkbenchArtifacts(context.store, input.agent.id, input.conversationId), raw), true),
-    handler('artifact_read', async raw => readWorkbenchArtifact(context.store, { agentId: input.agent.id, conversationId: input.conversationId, artifactId: String(raw.id), offset: Number(raw.offset ?? 0) }), true),
+    handler('artifact_read', async raw => {
+      const seen = readWorkbenchArtifact(context.store, { agentId: input.agent.id, conversationId: input.conversationId, artifactId: String(raw.id), offset: Number(raw.offset ?? 0) });
+      const projected = projectArtifactCitations(seen.content, seen.citations, item => {
+        const before = input.citations.length;
+        const number = input.cite(item);
+        const row = input.citations[number - 1];
+        if (row && input.citations.length > before) row.origin = 'prior-artifact';
+        return number;
+      });
+      return { ...seen, content: projected.content, citations: projected.citations };
+    }, true),
     handler('artifact_revise', async (raw, signal) => {
       signal.throwIfAborted();
       const agent = context.store.get(input.agent.id);

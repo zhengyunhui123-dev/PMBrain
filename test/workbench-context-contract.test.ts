@@ -279,7 +279,7 @@ test('关掉知识检索仍保留当前任务和上一轮工具回执；周报�
     task: { id: 'task-2', goal: '生成本周周报', constraints: ['这次不要写下周计划'], updatedAt: '' },
     messages: [{ id: 'u2', role: 'user', text: '继续', status: 'complete', createdAt: '' }],
   });
-  expect(recalled).toBe(0);
+  expect(recalled).toBe(1);
   expect(system).toContain('都不是本期事实');
   expect(system).toContain('不是本期工作事实');
   expect(system).not.toContain('可延续此前已核对的事实');

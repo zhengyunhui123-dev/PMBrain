@@ -49,6 +49,7 @@ export interface WorkbenchArtifact {
   parentId?: string;
   revision?: number;
   baseHash?: string;
+  bytesHash?: string;
 }
 export function agentRoleLabel(id: string) {
   return id === 'main' ? '主助手' : '专用助手';

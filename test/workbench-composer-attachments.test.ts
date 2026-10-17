@@ -52,7 +52,8 @@ test('加号、拖入和粘贴都能加入附件，发送成功后清空未发�
   expect(source).toContain('className="wb-attachments"');
   expect(source).toContain('item.previewUrl');
   expect(source).toContain('wb-file-card');
-  expect(source).toContain('wb.send(draft, false, editMessageId, queued, Boolean(editMessageId))');
+  expect(source).toContain('wb.send(snapshotText, false, editMessageId, queued, Boolean(editMessageId))');
+  expect(source).toContain('clearDraftIfUnchanged');
   expect(source).toContain('sentIds');
   expect(source).toContain('assignSessionAttachments');
   expect(source).not.toContain('setAttachments([])');

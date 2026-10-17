@@ -103,29 +103,43 @@ export function summarySource(message: Pick<WorkbenchMessage, 'text' | 'attachme
   return parts.join('\n');
 }
 
-export function taskVisualAttachments(messages: WorkbenchMessage[], task: Pick<WorkbenchTask, 'goal' | 'sources'> | undefined, recentIds: ReadonlySet<string>): { kept: Array<{ messageId: string; name: string; mime: string; image: string }>; omitted: Array<{ messageId: string; name: string }> } {
+export function historicalImageReadIds(messages: Array<Pick<WorkbenchMessage, 'id' | 'role' | 'attachments'>>, task: Pick<WorkbenchTask, 'materials'> | undefined, requestText: string): Set<string> | null {
+  const latest = [...messages].reverse().find(message => message.role === 'user')?.id;
+  const images = messages.flatMap(message => message.id === latest ? [] : (message.attachments ?? []).filter(item => item.route === 'vision'));
+  const normalized = requestText.replace(/\s+/g, '');
+  const named = images.filter(item => item.name && requestText.includes(item.name));
+  const wantFirst = /最初|第一张/.test(normalized);
+  if (images.length <= 4 && !wantFirst && !named.length) return null;
+  const materials = new Set((task?.materials ?? []).map(item => item.ref));
+  const preferred = named.length ? named : wantFirst ? images.slice(0, 1) : images.filter(item => materials.has(item.id));
+  return new Set((preferred.length ? preferred : images).slice(0, wantFirst && !named.length ? 1 : 4).map(item => item.id));
+}
+export function taskVisualAttachments(messages: WorkbenchMessage[], task: Pick<WorkbenchTask, 'goal' | 'sources' | 'materials'> | undefined, recentIds: ReadonlySet<string>, requestText = ''): { kept: Array<{ messageId: string; name: string; mime: string; image: string }>; omitted: Array<{ messageId: string; name: string }> } {
   const kept: Array<{ messageId: string; name: string; mime: string; image: string }> = [];
   const omitted: Array<{ messageId: string; name: string }> = [];
   if (!task) return { kept, omitted };
-  const sources = new Set((task.sources ?? []).map(item => item.messageId));
+  const sources = new Set([...(task.sources ?? []).map(item => item.messageId), ...(task.materials ?? []).map(item => item.messageId)]);
   const goal = task.goal ?? '';
+  const wantFirst = /最初|第一张/.test(requestText.replace(/\s+/g, ''));
+  const limit = wantFirst ? 1 : 4;
   for (const message of messages) {
     if (recentIds.has(message.id)) continue;
     const attachments = message.attachments ?? [];
-    if (!sources.has(message.id) && !attachments.some(item => item.name && goal.includes(item.name))) continue;
+    if (!sources.has(message.id) && !attachments.some(item => item.name && (goal.includes(item.name) || requestText.includes(item.name)))) continue;
     for (const item of attachments) {
       if (item.route !== 'vision') continue;
+      if (wantFirst && requestText.includes(item.name) === false && kept.length) { omitted.push({ messageId: message.id, name: item.name }); continue; }
       const image = item.data ? `data:${item.mime || 'image/png'};base64,${item.data}` : item.preview;
-      if (!image || kept.length >= 4) { omitted.push({ messageId: message.id, name: item.name }); continue; }
+      if (!image || kept.length >= limit) { omitted.push({ messageId: message.id, name: item.name }); continue; }
       kept.push({ messageId: message.id, name: item.name, mime: item.mime || 'image/png', image });
     }
   }
   return { kept, omitted };
 }
 
-export function taskRecognizedSupplement(messages: WorkbenchMessage[], task: Pick<WorkbenchTask, 'goal' | 'sources'> | undefined, recentIds: ReadonlySet<string>): string {
+export function taskRecognizedSupplement(messages: WorkbenchMessage[], task: Pick<WorkbenchTask, 'goal' | 'sources' | 'materials'> | undefined, recentIds: ReadonlySet<string>): string {
   if (!task) return '';
-  const sources = new Set((task.sources ?? []).map(item => item.messageId));
+  const sources = new Set([...(task.sources ?? []).map(item => item.messageId), ...(task.materials ?? []).map(item => item.messageId)]);
   const goal = task.goal ?? '';
   const parts: string[] = [];
   for (const message of messages) {
@@ -284,10 +298,12 @@ export async function enrichAttachments(items: WorkbenchAttachment[], deps?: {
   for (const item of items) {
     signal.throwIfAborted();
     if (item.route === 'vision') {
-      const bytes = attachmentBytes(item, deps?.read);
-      if (!item.preview && bytes) {
-        const preview = smallPreview(bytes, item.mime.startsWith('image/') ? item.mime : 'image/png');
-        if (preview) item.preview = preview;
+      if (!item.preview) {
+        const bytes = attachmentBytes(item, deps?.read);
+        if (bytes) {
+          const preview = smallPreview(bytes, item.mime.startsWith('image/') ? item.mime : 'image/png');
+          if (preview) item.preview = preview;
+        }
       }
       continue;
     }
