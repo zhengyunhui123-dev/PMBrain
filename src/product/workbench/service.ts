@@ -194,6 +194,8 @@ export class WorkbenchService {
     delete conversation.summaryAssistantRevision;
     delete conversation.taskNotes;
     delete conversation.task;
+    delete conversation.pending;
+    delete conversation.usedConfirm;
     conversation.updatedAt = new Date().toISOString();
     this.store.save(conversation);
     return conversation;
@@ -327,6 +329,7 @@ export class WorkbenchService {
     let learnedRules = carriedRules?.filter(Boolean);
     let replacedRules = carriedReplaced?.filter(Boolean);
     let taskInherited = false;
+    let openedTask = false;
     let playbookNotice = carriedPlaybookNotice;
     let savedPlaybook = carriedPlaybook;
     if (!input.retry) {
@@ -337,6 +340,7 @@ export class WorkbenchService {
         const advanced = advanceTask({ task: conversation.task, notes: conversation.taskNotes, text: spoken.text, recentUserTexts, agent: assistant, now, id: () => randomUUID() });
         taskInherited = advanced.inherited;
         if (advanced.task) conversation.task = advanced.task;
+        openedTask = advanced.opened;
         if (advanced.opened) delete conversation.taskNotes;
         if (wantsSavedPlaybook(spoken.text)) {
           const playbook = compilePlaybook({ name: assistant.name, workflow: assistant.workflow, standingRules: assistant.standingRules, deliveryFormat: assistant.deliveryFormat, recentUserTexts });
@@ -432,6 +436,9 @@ export class WorkbenchService {
           currentArtifactId: conversation.task?.currentArtifactId,
           artifacts: listWorkbenchArtifacts(new WorkbenchAgentStore(this.store), assistant.id, conversation.id).map(item => ({ ...item, createdAt: item.createdAt })),
           now,
+          assistantId: assistant.id,
+          assistantRevision: assistant.revision,
+          taskId: conversation.task?.id,
         });
         if (decision.action === 'hold') {
           reply.text = decision.text ?? '';
@@ -443,7 +450,7 @@ export class WorkbenchService {
           return;
         }
         if (decision.pending) conversation.pending = decision.pending;
-        else if (decision.clearPending) delete conversation.pending;
+        else if (decision.clearPending || openedTask) delete conversation.pending;
         if (decision.usedConfirm) conversation.usedConfirm = decision.usedConfirm;
         if (decision.currentArtifactId && conversation.task) conversation.task = { ...conversation.task, currentArtifactId: decision.currentArtifactId };
         try {
@@ -537,7 +544,7 @@ export class WorkbenchService {
         }
         const modelSeesImages = this.models().find(item => item.id === model)?.vision === true;
         const imageIds = historicalImageReadIds(conversation.messages, conversation.task, spokenTurn?.text ?? '');
-        const visuals = taskVisualAttachments(this.modelMessages(conversation.id, conversation.messages, imageIds), conversation.task, recentIds, spokenTurn?.text ?? '');
+        const visuals = taskVisualAttachments(this.modelMessages(conversation.id, conversation.messages, imageIds), conversation.task, recentIds, spokenTurn?.text ?? '', imageIds);
         if (!modelSeesImages) {
           visuals.omitted.unshift(...visuals.kept.map(item => ({ messageId: item.messageId, name: item.name })));
           visuals.kept.length = 0;

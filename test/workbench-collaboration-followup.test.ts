@@ -13,7 +13,7 @@ import { WorkbenchService } from '../src/product/workbench/service';
 import { WorkbenchStore } from '../src/product/workbench/store';
 import { compileTaskBrief } from '../src/product/workbench/task-context';
 import { WorkbenchAgentStore } from '../src/product/workbench/agents';
-import { clearDraftIfUnchanged, readDraftMap, writeDraft } from '../admin/src/workbench/draft-store';
+import { appendDraft, clearDraftIfUnchanged, draftKey, readDraftMap, writeDraft } from '../admin/src/workbench/draft-store';
 import { toolActivityLine } from '../admin/src/workbench/tool-summary';
 
 const root = () => mkdtempSync(join(tmpdir(), 'pmbrain-collab-'));
@@ -348,11 +348,31 @@ test('周报任务只把已保存的偏好带进回答，不把事件当成本�
 
 test('选中的段落和整份成果都能带上编号；草稿按助手分开，发送中改过的字不会被清掉', () => {
   const quote = quoteArtifactSelection({ id: 'artifact-1', revision: 2, title: '本周周报', content: original, selected: '第二节 很长' });
-  expect(quote).toContain('artifact-1');
-  expect(quote).toContain('第 2 版');
-  expect(quote).toContain('第二节 很长');
+  expect(quote.text).toContain('artifact-1');
+  expect(quote.text).toContain('第 2 版');
+  expect(quote.text).toContain('第二节 很长');
+  expect(quote.conversationId).toBe('');
   expect(() => quoteArtifactSelection({ id: 'artifact-1', title: '本周周报', content: original, selected: '这段不在正文里' })).toThrow('选中的文字不在这份成果里');
-  expect(quoteArtifact({ id: 'artifact-1', revision: 2, title: '本周周报' })).toContain('没点名的段落保持原样');
+  expect(quoteArtifact({ id: 'artifact-1', revision: 2, title: '本周周报' }).text).toContain('没点名的段落保持原样');
+  const line = '第二节 **预算 8800** [1]';
+  const formatted = quoteArtifactSelection({ id: 'artifact-1', revision: 3, title: '预算周报', content: line, selected: '第二节 预算 8800 1', citationCount: 1 });
+  expect(formatted.text).toContain('第二节 **预算 8800** [1]');
+  expect(formatted.text).toContain('第 1–19 字');
+  const doubled = `${line}\n\n${line}`;
+  const second = quoteArtifactSelection({ id: 'artifact-1', revision: 3, title: '预算周报', content: doubled, selected: '第二节 预算 8800 1', occurrence: 1, citationCount: 1 });
+  expect(second.text).toContain('第 22–40 字');
+  expect(second.text).toContain(line);
+  const partial = quoteArtifactSelection({ id: 'artifact-1', title: '预算周报', content: line, selected: '预算', citationCount: 1 });
+  expect(partial.text.endsWith('\n预算')).toBe(true);
+  expect(partial.text).not.toContain('**');
+  let owned = writeDraft({}, 'conversation-main', '主助手原来的字', 'main', 'conversation-main', 'token-main');
+  owned = writeDraft(owned, 'conversation-writer', '文稿里已有的字', 'writer', 'conversation-writer', 'token-writer');
+  const target = quoteArtifact({ id: 'artifact-9', revision: 2, title: '产品架构', assistantId: 'writer', conversationId: 'conversation-writer' });
+  owned = appendDraft(owned, draftKey(target.conversationId, target.assistantId), target.text, target.assistantId, target.conversationId);
+  expect(owned['conversation-main']?.text).toBe('主助手原来的字');
+  expect(owned['conversation-writer']?.text.startsWith('文稿里已有的字\n')).toBe(true);
+  expect(owned['conversation-writer']?.text).toContain('artifact-9');
+  expect(owned['conversation-writer']?.token).toBe('token-writer');
   let drafts = writeDraft({}, 'conversation-a', '周报草稿', 'assistant-a', 'conversation-a', 'token-a');
   drafts = writeDraft(drafts, 'conversation-a', '周报草稿已改', 'assistant-a', 'conversation-a');
   expect(clearDraftIfUnchanged(drafts, 'conversation-a', 'token-a', '周报草稿')['conversation-a']?.text).toBe('周报草稿已改');
@@ -385,11 +405,154 @@ test('打开和定位只使用已保存成果的路径，模型传来的路径�
   const message = readFileSync(new URL('../admin/src/workbench/Message.tsx', import.meta.url), 'utf8');
   expect(workbench).toContain('clearDraftIfUnchanged');
   expect(workbench).toContain('DRAFT_STORAGE_KEY');
+  expect(workbench).toContain('appendDraft');
+  expect(workbench).toContain('wb.select(target.conversationId)');
   expect(artifacts).toContain("action: 'reveal'");
   expect(artifacts).toContain('引用选中文字');
+  expect(artifacts).toContain('sourceMap');
+  expect(artifacts).toContain('conversationId: selected.conversationId');
+  expect(message).toContain('quoteArtifact({ id: item.id, revision: item.revision, title: item.title }).text');
   expect(settings).toContain('chooseDirectory');
   expect(settings).toContain('可读取的本地目录');
   expect(activity).toContain('toolActivityLine');
   expect(activity).toContain('搜索知识');
   expect(message).toContain('按这份改');
+});
+
+test('点名靠后的历史图片时，交给模型的就是这张；换任务后最初那张只取当前任务里的图', async () => {
+  const directory = root();
+  const workbench = new WorkbenchStore(join(directory, 'workbench'));
+  const agents = new WorkbenchAgentStore(workbench);
+  const agent = agents.create({ name: '周报助手', workflow: '先查资料再写周报', skills: ['weekly-report'], deliveryFormat: 'markdown', sourceIds: ['default'] });
+  agents.replace({ ...agents.get(agent.id), context: { maxMessages: 2, threshold: 0.8, summaryModel: '' } });
+  const seen: string[] = [];
+  let shown: string[] = [];
+  const service = new WorkbenchService(workbench, () => [{ id: 'local', name: '本地', contextWindow: 32000, vision: true }], async input => {
+    shown = (input.visualAttachments ?? []).map(item => item.name);
+    for (const message of input.messages) for (const item of message.attachments ?? []) if (item.route === 'vision' && (item.data || item.preview)) shown.push(item.name);
+    return { text: '看到了', model: 'local', citations: [] };
+  }, async () => '早期摘要');
+  workbench.readAttachment = (_conversationId, attachmentId) => { seen.push(attachmentId); return Buffer.from('png'); };
+  const conversation = service.create({ assistantId: agent.id, knowledge: false });
+  const images = Array.from({ length: 6 }, (_, index) => {
+    const id = `00000000-0000-4000-8000-${String(101 + index).padStart(12, '0')}`;
+    const attachmentId = `00000000-0000-4000-8000-${String(201 + index).padStart(12, '0')}`;
+    return {
+      id,
+      role: 'user' as const,
+      text: `第 ${index + 1} 张`,
+      createdAt: '2026-10-17T00:00:00.000Z',
+      status: 'complete' as const,
+      attachments: [{ id: attachmentId, name: `图${index + 1}.png`, mime: 'image/png', route: 'vision' as const, included: 0, preview: 'data:image/png;base64,YQ==' }],
+    };
+  });
+  const seeded = service.get(conversation.id);
+  seeded.messages = [...images, { id: '00000000-0000-4000-8000-000000000199', role: 'assistant', text: '先记下这六张', createdAt: '2026-10-17T00:00:00.000Z', status: 'complete' }];
+  seeded.task = {
+    id: 'pics',
+    goal: '核对图片',
+    constraints: [],
+    updatedAt: '2026-10-17T00:00:00.000Z',
+    materials: images.map(message => ({ messageId: message.id, kind: 'attachment' as const, ref: message.attachments[0]!.id, name: message.attachments[0]!.name })),
+  };
+  workbench.save(seeded);
+  service.send(conversation.id, { text: '继续，按图6.png核对' });
+  await service.settled(conversation.id);
+  expect(shown).toEqual(['图6.png']);
+  expect(new Set(seen)).toEqual(new Set([images[5]!.attachments[0]!.id]));
+  service.send(conversation.id, { text: '这次改做报销' });
+  await service.settled(conversation.id);
+  expect(service.get(conversation.id).task?.materials).toBeUndefined();
+  expect(service.get(conversation.id).task?.goal).not.toBe('核对图片');
+  service.send(conversation.id, { text: '看新图', attachments: [{ name: '新图.png', mime: 'image/png', data: Buffer.from('new').toString('base64') }] });
+  await service.settled(conversation.id);
+  expect(service.get(conversation.id).task?.materials?.map(item => item.name)).toEqual(['新图.png']);
+  seen.length = 0;
+  service.send(conversation.id, { text: '按最初那张图核对' });
+  await service.settled(conversation.id);
+  expect(shown).toEqual(['新图.png']);
+  expect(seen.some(id => images.some(message => message.attachments[0]?.id === id))).toBe(false);
+});
+
+test('创建文稿不会变成待确认的助手；取消和清理之后，可以仍会继续回答', async () => {
+  const directory = root();
+  const workbench = new WorkbenchStore(join(directory, 'workbench'));
+  const agents = new WorkbenchAgentStore(workbench);
+  const writer = agents.create({ name: '文稿助手', workflow: '按资料写文稿', skills: ['weekly-report'], deliveryFormat: 'markdown', sourceIds: ['default'] });
+  let calls = 0;
+  const service = new WorkbenchService(workbench, () => [{ id: 'local', name: '本地', contextWindow: 32000 }], async () => { calls += 1; return { text: '继续写文稿', model: 'local', citations: [] }; });
+  const reports = service.create({ assistantId: writer.id, knowledge: false });
+  service.send(reports.id, { text: '创建一份文稿，介绍产品架构' });
+  await service.settled(reports.id);
+  expect(calls).toBe(1);
+  expect(service.get(reports.id).pending).toBeUndefined();
+  service.send(reports.id, { text: '不用创建助手，接着精简文稿' });
+  await service.settled(reports.id);
+  expect(calls).toBe(2);
+  expect(service.get(reports.id).pending).toBeUndefined();
+  service.send(reports.id, { text: '可以' });
+  await service.settled(reports.id);
+  expect(calls).toBe(3);
+  expect(service.get(reports.id).messages.at(-1)?.text).toBe('继续写文稿');
+  const blocked = service.get(reports.id);
+  blocked.pending = { kind: 'assistant-create', fingerprint: 'old', prompt: '创建一个文稿助手', createdAt: '2026-09-01T00:00:00.000Z', assistantRevision: agents.get(writer.id).revision };
+  blocked.usedConfirm = 'old';
+  workbench.save(blocked);
+  const cleared = service.clearTaskContext(reports.id);
+  expect(cleared.pending).toBeUndefined();
+  expect(cleared.usedConfirm).toBeUndefined();
+  service.send(reports.id, { text: '可以' });
+  await service.settled(reports.id);
+  expect(calls).toBe(4);
+  expect(service.get(reports.id).messages.at(-1)?.text).toBe('继续写文稿');
+  const main = service.create({ knowledge: false });
+  service.send(main.id, { text: '创建一个报销助手，负责整理发票' });
+  await service.settled(main.id);
+  expect(calls).toBe(5);
+  expect(service.get(main.id).pending?.kind).toBe('assistant-create');
+  service.send(main.id, { text: '不用创建助手，接着精简文稿' });
+  await service.settled(main.id);
+  expect(calls).toBe(6);
+  expect(service.get(main.id).pending).toBeUndefined();
+  service.send(main.id, { text: '可以' });
+  await service.settled(main.id);
+  expect(calls).toBe(7);
+  expect(service.get(main.id).messages.at(-1)?.text).toBe('继续写文稿');
+});
+
+test('没有方案版本的旧创建确认不会被消费，换任务后也不再拦住回答', async () => {
+  const directory = root();
+  const workbench = new WorkbenchStore(join(directory, 'workbench'));
+  const agents = new WorkbenchAgentStore(workbench);
+  const agent = agents.create({ name: '周报助手', workflow: '先查资料再写周报', skills: ['weekly-report'], deliveryFormat: 'markdown', sourceIds: ['default'] });
+  let calls = 0;
+  const service = new WorkbenchService(workbench, () => [{ id: 'local', name: '本地', contextWindow: 32000 }], async () => { calls += 1; return { text: '继续处理', model: 'local', citations: [] }; });
+  const main = service.create({ knowledge: false });
+  const stale = service.get(main.id);
+  stale.pending = { kind: 'assistant-create', fingerprint: 'stale-fingerprint', prompt: '创建一个报销助手', createdAt: '2026-09-01T00:00:00.000Z' };
+  workbench.save(stale);
+  service.send(main.id, { text: '确认创建' });
+  await service.settled(main.id);
+  expect(calls).toBe(1);
+  expect(service.get(main.id).usedConfirm).toBeUndefined();
+  expect(service.get(main.id).pending).toBeUndefined();
+  expect(service.get(main.id).messages.at(-1)?.text).toBe('继续处理');
+  const mismatched = service.get(main.id);
+  mismatched.pending = { kind: 'assistant-create', fingerprint: 'other', prompt: '创建一个报销助手', createdAt: '2026-09-01T00:00:00.000Z', assistantRevision: 9 };
+  workbench.save(mismatched);
+  service.send(main.id, { text: '确认创建' });
+  await service.settled(main.id);
+  expect(calls).toBe(2);
+  expect(service.get(main.id).usedConfirm).toBeUndefined();
+  const reports = service.create({ assistantId: agent.id, knowledge: false });
+  service.send(reports.id, { text: '生成本周周报' });
+  await service.settled(reports.id);
+  const open = service.get(reports.id);
+  open.pending = { kind: 'assistant-create', fingerprint: 'task', prompt: '创建一个助手', createdAt: '2026-09-01T00:00:00.000Z', assistantRevision: agents.get(agent.id).revision, taskId: open.task?.id };
+  workbench.save(open);
+  service.send(reports.id, { text: '这次改做报销' });
+  await service.settled(reports.id);
+  expect(service.get(reports.id).pending).toBeUndefined();
+  expect(service.get(reports.id).messages.at(-1)?.text).toBe('继续处理');
+  expect(calls).toBe(4);
 });

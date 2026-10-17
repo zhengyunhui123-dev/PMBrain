@@ -100,6 +100,8 @@ export interface WorkbenchPending {
   prompt: string;
   options?: Array<{ id: string; title: string; revision: number }>;
   createdAt: string;
+  assistantRevision?: number;
+  taskId?: string;
 }
 export interface WorkbenchTask {
   id: string;

@@ -210,12 +210,18 @@ test('生成本周周报没有引用时不保留一份看起来完整的稿', as
   expect(service.get(off.id).messages.at(-1)?.text).toContain('全部做完了');
 });
 
-test('写周报时不把旧对话、记忆和上一份成果当成本期事实', async () => {
+test('写周报时稳定偏好进入偏好层，旧对话、事件和上一份成果不成为本期事实', async () => {
   let system = '';
   let recalled = false;
   const answer = knowledgeWorkbenchAnswer({} as never, {
     search: async () => ({ results: [] }) as never,
-    recall: async () => { recalled = true; return []; },
+    recall: async () => {
+      recalled = true;
+      return [
+        { sourceId: 'default', slug: 'pref', title: '对话记忆 · 偏好', snippet: '喜欢短句', kind: 'memory' as const, factId: 1 },
+        { sourceId: 'default', slug: 'event', title: '已保存事实 · 事件', snippet: '上周报销已提交', kind: 'memory' as const, factId: 2 },
+      ];
+    },
     answer: async input => { system = input.system ?? ''; return { text: '# 本周已完成\n全部做完', model: 'm', stopReason: 'end' } as never; },
   });
   const result = await answer({
@@ -224,11 +230,14 @@ test('写周报时不把旧对话、记忆和上一份成果当成本期事实',
     messages: [{ id: '1', role: 'user', text: '生成本周周报', status: 'complete', createdAt: '' }],
   });
   expect(needsCurrentEvidence('生成本周周报')).toBe(true);
+  expect(recalled).toBe(true);
+  expect(system).toContain('喜欢短句');
+  expect(system).toContain('不是知识库里的本期资料');
   expect(system).toContain('都不是本期事实');
   expect(system).toContain('不是本期工作事实');
   expect(system).not.toContain('可延续此前已核对的事实');
   expect(system).not.toContain('上周周报');
-  expect(recalled).toBe(false);
+  expect(system).not.toContain('上周报销已提交');
   expect(result.citations).toEqual([]);
   expect(result.knowledge).toBe('none');
 });

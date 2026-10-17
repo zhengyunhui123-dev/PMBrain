@@ -14,6 +14,12 @@ export function draftKey(conversationId: string | undefined, assistantId: string
   return conversationId || `new:${assistantId}`;
 }
 
+export function appendDraft(map: Record<string, StoredDraft>, key: string, addition: string, assistantId: string, conversationId: string): Record<string, StoredDraft> {
+  const current = map[key]?.text ?? '';
+  const text = current.trim() ? `${current.replace(/\s+$/, '')}\n${addition}` : addition;
+  return writeDraft(map, key, text, assistantId, conversationId);
+}
+
 export function writeDraft(map: Record<string, StoredDraft>, key: string, text: string, assistantId: string, conversationId: string, token = ''): Record<string, StoredDraft> {
   const current = map[key];
   return { ...map, [key]: { text, token: current?.token || token || `${key}:${assistantId}`, assistantId, conversationId } };

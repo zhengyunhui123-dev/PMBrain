@@ -103,20 +103,34 @@ export function summarySource(message: Pick<WorkbenchMessage, 'text' | 'attachme
   return parts.join('\n');
 }
 
-export function historicalImageReadIds(messages: Array<Pick<WorkbenchMessage, 'id' | 'role' | 'attachments'>>, task: Pick<WorkbenchTask, 'materials'> | undefined, requestText: string): Set<string> | null {
+export function historicalImageReadIds(messages: Array<Pick<WorkbenchMessage, 'id' | 'role' | 'attachments'>>, task: Pick<WorkbenchTask, 'materials' | 'sources'> | undefined, requestText: string): Set<string> | null {
   const latest = [...messages].reverse().find(message => message.role === 'user')?.id;
-  const images = messages.flatMap(message => message.id === latest ? [] : (message.attachments ?? []).filter(item => item.route === 'vision'));
+  const images = messages.flatMap(message => message.id === latest ? [] : (message.attachments ?? []).filter(item => item.route === 'vision').map(item => ({ messageId: message.id, item })));
   const normalized = requestText.replace(/\s+/g, '');
-  const named = images.filter(item => item.name && requestText.includes(item.name));
+  const materialRefs = new Set((task?.materials ?? []).map(item => item.ref));
+  const sourceMessages = new Set((task?.sources ?? []).map(item => item.messageId));
+  const scoped = materialRefs.size ? images.filter(image => materialRefs.has(image.item.id)) : task ? images.filter(image => sourceMessages.has(image.messageId)) : images;
+  const named = scoped.filter(image => image.item.name && requestText.includes(image.item.name));
   const wantFirst = /最初|第一张/.test(normalized);
-  if (images.length <= 4 && !wantFirst && !named.length) return null;
-  const materials = new Set((task?.materials ?? []).map(item => item.ref));
-  const preferred = named.length ? named : wantFirst ? images.slice(0, 1) : images.filter(item => materials.has(item.id));
-  return new Set((preferred.length ? preferred : images).slice(0, wantFirst && !named.length ? 1 : 4).map(item => item.id));
+  if (wantFirst || named.length) return new Set((named.length ? named : scoped.slice(0, 1)).slice(0, named.length ? 4 : 1).map(image => image.item.id));
+  if (scoped.length <= 4) return null;
+  return new Set(scoped.slice(0, 4).map(image => image.item.id));
 }
-export function taskVisualAttachments(messages: WorkbenchMessage[], task: Pick<WorkbenchTask, 'goal' | 'sources' | 'materials'> | undefined, recentIds: ReadonlySet<string>, requestText = ''): { kept: Array<{ messageId: string; name: string; mime: string; image: string }>; omitted: Array<{ messageId: string; name: string }> } {
+export function taskVisualAttachments(messages: WorkbenchMessage[], task: Pick<WorkbenchTask, 'goal' | 'sources' | 'materials'> | undefined, recentIds: ReadonlySet<string>, requestText = '', selectedIds?: Set<string> | null): { kept: Array<{ messageId: string; name: string; mime: string; image: string }>; omitted: Array<{ messageId: string; name: string }> } {
   const kept: Array<{ messageId: string; name: string; mime: string; image: string }> = [];
   const omitted: Array<{ messageId: string; name: string }> = [];
+  if (selectedIds) {
+    for (const message of messages) {
+      if (recentIds.has(message.id)) continue;
+      for (const item of message.attachments ?? []) {
+        if (item.route !== 'vision' || !selectedIds.has(item.id)) continue;
+        const image = item.data ? `data:${item.mime || 'image/png'};base64,${item.data}` : item.preview;
+        if (!image) { omitted.push({ messageId: message.id, name: item.name }); continue; }
+        kept.push({ messageId: message.id, name: item.name, mime: item.mime || 'image/png', image });
+      }
+    }
+    return { kept, omitted };
+  }
   if (!task) return { kept, omitted };
   const sources = new Set([...(task.sources ?? []).map(item => item.messageId), ...(task.materials ?? []).map(item => item.messageId)]);
   const goal = task.goal ?? '';

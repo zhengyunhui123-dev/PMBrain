@@ -10,7 +10,8 @@ import { Artifacts } from './Artifacts';
 import { scheduleLabel } from './AgentCards';
 import { agentAvatar, agentRoleLabel, rosterStatus } from '../../../shared/workbench-agents';
 import { followLatestOnUpdate, nearLatest } from './scroll-pin';
-import { DRAFT_STORAGE_KEY, clearDraftIfUnchanged, draftKey, readDraftMap, writeDraft, type StoredDraft } from './draft-store';
+import { DRAFT_STORAGE_KEY, appendDraft, clearDraftIfUnchanged, draftKey, readDraftMap, writeDraft, type StoredDraft } from './draft-store';
+import type { ArtifactQuoteTarget } from '../../../src/product/workbench/artifact-quote';
 import './workbench.css';
 
 export function Workbench({ serviceReady = true, databaseReady = true }: { serviceReady?: boolean; databaseReady?: boolean }) {
@@ -146,6 +147,13 @@ export function Workbench({ serviceReady = true, databaseReady = true }: { servi
   const assistant = wb.assistant;
   const agentProfile = wb.agents.find(agent => agent.id === wb.assistantId);
   const insertDraft = (text: string) => { setDraft(draft.trim() ? `${draft.replace(/\s+$/, '')}\n${text}` : text); composer.current?.focus(); };
+  const quoteIntoConversation = (target: ArtifactQuoteTarget) => {
+    const targetKey = draftKey(target.conversationId, target.assistantId);
+    setDrafts(old => appendDraft(old, targetKey, target.text, target.assistantId, target.conversationId));
+    setArtifactsOpen(false);
+    if (target.conversationId && target.conversationId !== wb.conversation?.id) void wb.select(target.conversationId);
+    composer.current?.focus();
+  };
   const askMain = (text: string) => { void wb.selectAgent('main').then(id => { const nextKey = id ?? 'new:main'; setDrafts(old => writeDraft(old, nextKey, text, 'main', id ?? '')); composer.current?.focus(); }); };
   const adjustAgent = () => { setSettingsOpen(false); askMain(`请调整助手「${assistant.name}」的配置。我的新要求是：`); };
   const suggestions = wb.assistantId === 'main' ? ['创建一个周报助手，按知识库里的实际进展写 Word 周报', '创建一个方案助手，先找项目资料再写方案', '帮我梳理最近关注的项目'] : [agentProfile?.schedule?.prompt || '按你的职责和规则，帮我完成这次工作', '先看看现有资料，告诉我还缺什么'];
@@ -158,6 +166,6 @@ export function Workbench({ serviceReady = true, databaseReady = true }: { servi
     </section>
     {settingsOpen && agentProfile && <AgentSettings key={agentProfile.id} value={agentProfile} models={wb.models} onClose={() => setSettingsOpen(false)} onAdjust={adjustAgent} onSave={async value => { await wb.saveAgent(value); }} onMemory={wb.assistantId === 'main' ? () => { setSettingsOpen(false); setLegacySettings(true); } : undefined} />}
     {legacySettings && <AssistantSettings value={assistant} models={wb.models} onClose={() => setLegacySettings(false)} onSave={async value => { await wb.saveAssistant(value); await wb.refresh(); setLegacySettings(false); }} />}
-    {artifactsOpen && <Artifacts onClose={() => setArtifactsOpen(false)} onConversation={id => void wb.select(id)} onQuote={text => { setArtifactsOpen(false); insertDraft(text); }} />}
+    {artifactsOpen && <Artifacts onClose={() => setArtifactsOpen(false)} onConversation={id => void wb.select(id)} onQuote={quoteIntoConversation} />}
   </div>;
 }
