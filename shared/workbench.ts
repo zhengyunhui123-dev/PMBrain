@@ -114,6 +114,7 @@ export interface WorkbenchTask {
   sources?: Array<{ messageId: string; note: string }>;
   materials?: WorkbenchTaskMaterial[];
   currentArtifactId?: string;
+  directory?: { path: string; sourceId: string };
 }
 export interface ContextManifest {
   assistantRevision?: number;

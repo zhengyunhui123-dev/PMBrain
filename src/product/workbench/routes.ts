@@ -23,6 +23,7 @@ import { normalizeAssistant } from '../../../shared/workbench';
 import { getWritebackStatus, setWritebackMode, stampWritebackNoticeShown } from '../../core/facts/writeback-set';
 import { workbenchMemoryTools, type WorkbenchNative } from './memory-tools';
 import { WorkbenchAgentStore } from './agents';
+import { isDirectoryStep } from './turn-policy';
 import { agentTools, agentInstructions, agentSkillCatalog, validateAgent, type WorkbenchAgentTools } from './agent-tools';
 import { CURRENT_EVIDENCE_RULE, needsCurrentEvidence, wantsSavedPlaybook } from './playbook';
 import { WorkbenchAgentCoordinator } from './agent-tasks';
@@ -92,7 +93,8 @@ export function knowledgeWorkbenchAnswer(engine: BrainEngine, dependencies: { se
     const budget = contextBudget(contextWindow, contextThreshold,outputReserve);
     const historyTokens = messages.reduce((sum, message) => sum + messageTokens(message), 0);
     const latestUser=messages.filter(row=>row.role==='user').at(-1);
-    const askEvidence = !wantsSavedPlaybook(latestUser?.text ?? '') && (needsCurrentEvidence(latestUser?.text ?? '') || needsCurrentEvidence(task?.goal ?? ''));
+    const directoryOnly = isDirectoryStep(latestUser?.text ?? '');
+    const askEvidence = !directoryOnly && !wantsSavedPlaybook(latestUser?.text ?? '') && (needsCurrentEvidence(latestUser?.text ?? '') || needsCurrentEvidence(task?.goal ?? ''));
     const nativeTools=native?workbenchMemoryTools(latestUser?.text??'',knowledge):[];
     const tools=[...(knowledge?KNOWLEDGE_TOOLS:[]),...nativeTools,...(agents && agent ? agentTools(agent, latestUser?.text ?? '', agents) : [])];
     const useTools=!!dependencies.loop&&tools.length>0;
@@ -107,7 +109,7 @@ export function knowledgeWorkbenchAnswer(engine: BrainEngine, dependencies: { se
     }
     const questions = messages.filter(item => item.role === 'user').slice(-4).map(item => retrievalText(item)).filter(Boolean);
     const query = retrievalQuery(messages, task).trim();
-    if (sourceId && query && dependencies.recall) {
+    if (!directoryOnly && sourceId && query && dependencies.recall) {
       const memories = await dependencies.recall(engine, { sourceId, query: questions.at(-1) || query, sessionId: conversationId, window: messages.filter((item): item is WorkbenchMessage & { role: 'user' | 'assistant' } => item.role === 'user' || item.role === 'assistant').slice(-4).map(item => ({ role: item.role, text: retrievalText(item) })), budget: Math.min(1500, Math.floor(evidenceTokens / 2)) });
       const stable = memories.filter(item => item.kind === 'memory' && /· (偏好|决定)/.test(item.title));
       if (!knowledge) preferences = memories.map(memory => `- ${memory.title}：${memory.snippet}`).join('\n');
@@ -181,7 +183,7 @@ export function knowledgeWorkbenchAnswer(engine: BrainEngine, dependencies: { se
       }
     }
     const initial = await context.prepare(modelHistory);
-    if (useTools) return runWorkbenchTools({ native, agents, agent, messageId, sourceId, conversationId, engine, search: dependencies.search, loop: dependencies.loop!, messages, summary, model, knowledge, systemPrompt, temperature, contextWindow, contextThreshold, signal, attachmentSupplement, ...(settledTools?.length ? { settledTools } : {}), progress, onDelta, onReplace, onTool, onRequestEvent, system, budget, citations, context, history: initial.messages });
+    if (useTools) return runWorkbenchTools({ native, agents, agent, messageId, sourceId, conversationId, engine, search: dependencies.search, loop: dependencies.loop!, messages, summary, task, model, knowledge, systemPrompt, temperature, contextWindow, contextThreshold, signal, attachmentSupplement, ...(settledTools?.length ? { settledTools } : {}), progress, onDelta, onReplace, onTool, onRequestEvent, system, budget, citations, context, history: initial.messages });
     let composed = '';
     let stopReason: 'end' | 'length' | 'other' = 'end';
     let answeredModel = model;

@@ -1,6 +1,6 @@
 import type { WorkbenchMessage, WorkbenchTask, WorkbenchTaskMaterial } from '../../../shared/workbench';
 import { retrievalText } from './attachments';
-import { classifyTurn, compactRule, taskNeedsSkill } from './turn-policy';
+import { classifyTurn, compactRule, taskNeedsSkill, wantsDirectoryCreation } from './turn-policy';
 
 const followUp = /^(?:继续|继续做|继续写|接着做|接着写|接着|执行吧|开始吧|就按这个|按这个做|做吧|写吧|可以|好|好的|行|嗯|执行)$/;
 const agreementOnly = /^(?:可以|好|好的|行|嗯|执行)$/;
@@ -29,12 +29,14 @@ export function carriesCurrentMethod(text: string): boolean {
 export function advanceTask(input: { task?: WorkbenchTask; notes?: string[]; text: string; recentUserTexts: string[]; agent: { workflow?: string; skills?: string[] }; now: string; id: () => string }): { task?: WorkbenchTask; inherited: boolean; opened: boolean } {
   const text = input.text.trim();
   const normalized = normalizedWork(text);
+  const directory = /(?:刚才|刚建|新建|这个|当前|本次|该).{0,12}(?:文件夹|目录)/.test(text) ? input.task?.directory : undefined;
   const canReplace = !!input.task && replacementCue.test(normalized) && !!(input.agent.workflow || input.agent.skills?.length);
   if (canReplace && input.task) {
     const goal = compactRule(text);
     if (input.task.goal === goal) return { task: { ...input.task, updatedAt: input.now }, inherited: true, opened: false };
-    return { task: { id: input.id(), goal, constraints: [], updatedAt: input.now }, inherited: false, opened: true };
+    return { task: { id: input.id(), goal, constraints: [], updatedAt: input.now, ...(directory ? { directory } : {}) }, inherited: false, opened: true };
   }
+  if (wantsDirectoryCreation(text)) return { task: input.task ? { ...input.task, updatedAt: input.now } : { id: input.id(), goal: compactRule(text), constraints: [], updatedAt: input.now }, inherited: !!input.task, opened: !input.task };
   if (input.task && parameterCue.test(normalized)) {
     const note = compactRule(text);
     const constraints = [...new Set([...input.task.constraints, note])].slice(-8);
@@ -50,7 +52,7 @@ export function advanceTask(input: { task?: WorkbenchTask; notes?: string[]; tex
   if (classifyTurn(text) === 'chat' && taskNeedsSkill(input.agent, text)) {
     const goal = compactRule(text);
     if (input.task?.goal === goal) return { task: { ...input.task, updatedAt: input.now }, inherited: true, opened: false };
-    return { task: { id: input.id(), goal, constraints: [], updatedAt: input.now }, inherited: false, opened: true };
+    return { task: { id: input.id(), goal, constraints: [], updatedAt: input.now, ...(directory ? { directory } : {}) }, inherited: false, opened: true };
   }
   return { task: input.task, inherited: false, opened: false };
 }
@@ -86,6 +88,7 @@ export function rememberTaskMaterials(task: WorkbenchTask, message: { id: string
 export function compileTaskBrief(task?: WorkbenchTask, evidence = false, current?: { id: string; revision: number; title: string; format: string; hash: string }): string {
   if (!task?.goal?.trim()) return '';
   const lines = [`目标：${task.goal}`];
+  if (task.directory) lines.push(`本次工作文件夹：${task.directory.path}。后续成果保存到此目录。`);
   if (task.constraints.length) lines.push(`这次的限制：${task.constraints.join('；')}`);
   if (task.decisions?.length) lines.push(`已决定：${task.decisions.join('；')}`);
   if (task.openItems?.length) lines.push(`未决：${task.openItems.join('；')}`);

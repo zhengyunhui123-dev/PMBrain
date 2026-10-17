@@ -9,7 +9,8 @@ import {assistantRequestPolicy,requestStage} from './request';
 import {normalizeToolText,toolTextPreview,modelAnswerText} from '../../core/ai/tool-text';
 import { workbenchMemoryTools, nativeMemoryHandlers, type WorkbenchNative } from './memory-tools';
 import { agentTools, agentHandlers, type WorkbenchAgentTools } from './agent-tools';
-import { replayArtifactRead } from './files';
+import { completedDirectories, replayArtifactRead } from './files';
+import { isDirectoryStep } from './turn-policy';
 export { chatMessageTokens } from './context-runtime';
 
 export const KNOWLEDGE_TOOLS: ChatToolDef[] = [
@@ -96,7 +97,7 @@ export async function runWorkbenchTools(input: WorkbenchAnswerInput & {
   const userText = input.messages.filter(row=>row.role==='user').at(-1)?.text ?? '';
   if (input.agents && input.agent && input.conversationId && input.messageId) {
     const current = () => input.agents!.store.workbench.get(input.conversationId!).messages.some(row => row.id === input.messageId && row.status === 'running');
-    for (const [name, handler] of agentHandlers(input.agents, { agent: input.agent, userText, conversationId: input.conversationId, messageId: input.messageId, citations, cite: row => citation(row.sourceId, row.slug, row.title, row.snippet), active: current })) handlers.set(name, handler.idempotent ? { ...handler, execute: async (raw, abort, execution) => {
+    for (const [name, handler] of agentHandlers(input.agents, { agent: input.agent, userText, conversationId: input.conversationId, messageId: input.messageId, citations, cite: row => citation(row.sourceId, row.slug, row.title, row.snippet), active: current, workingDirectory: () => input.task?.directory })) handlers.set(name, handler.idempotent ? { ...handler, execute: async (raw, abort, execution) => {
       const output = await handler.execute(raw, abort, execution);
       const trimmed = trimToolOutput(output, allocation.limit(execution?.toolCallId ?? '')) as Record<string, unknown>;
       if (trimmed && Array.isArray(trimmed.results) && output && typeof output === 'object' && 'results' in output && Array.isArray(output.results) && trimmed.results.length < output.results.length) trimmed.nextOffset = Number('offset' in output ? output.offset : 0) + trimmed.results.length;
@@ -109,6 +110,7 @@ export async function runWorkbenchTools(input: WorkbenchAnswerInput & {
     handlers.set(name, { ...handler, execute: async (raw, abort, execution) => {
       const prior = settled.find(call => sameToolInput(call.input, raw));
       if (!prior?.output) return handler.execute(raw, abort, execution);
+      if (name === 'local_mkdir') return handler.execute(raw, abort, execution);
       let parsed: unknown;
       try { parsed = JSON.parse(prior.output); } catch { return handler.execute(raw, abort, execution); }
       if (name === 'knowledge_search') {
@@ -161,6 +163,7 @@ export async function runWorkbenchTools(input: WorkbenchAnswerInput & {
       preserveHistory:true,disableReasoning:true,finalizeOnLastTurn:true,finalPrompt:'本轮资料收集已结束。现在直接根据已获得的资料给出有引用的中文回答；证据不足的部分明确说明，不再调用工具，不编造资料。',fitRequest:fitProviderRequest,contextWindow:input.contextWindow,
       parseToolText:normalizeToolText,toolTextPreview,
       validateCompletion:async(_text,canContinue)=>{
+        if (isDirectoryStep(userText) && ![...calls.values()].some(call => call.status === 'error') && !completedDirectories([...calls.values(), ...(input.settledTools ?? [])]).length && canContinue) return '本轮只创建文件夹，还没有成功的 local_mkdir 回执。请先执行目录工具；不得声称已建好或改为生成报告。';
         if(!input.knowledge||!canContinue||citations.length||[...calls.values()].some(call=>call.status==='complete'&&!['knowledge_search','knowledge_read'].includes(call.name)))return null;
         const searches=[...calls.values()].filter(call=>call.name==='knowledge_search'&&call.status==='complete');
         const correction=!searches.length?'首次整句预检索为空。请先调用 knowledge_search 检索精炼关键词；不能仅凭首次预检索就断言没有相关资料。':!searches.some(call=>{const query=JSON.parse(call.input).query;return typeof query==='string'&&query.trim().length<=24&&!/\s/.test(query.trim());})?'多词检索均未命中。请先用单独的人物名、项目名或一个主题关键词再调用一次 knowledge_search；query 不含空格，保留用户使用的中文名称，不组合经历、兴趣等多个条件。':null;
@@ -206,14 +209,20 @@ export async function runWorkbenchTools(input: WorkbenchAnswerInput & {
       try { await input.context.prepare(next); } catch (error) { if (error instanceof Error && 'code' in error && error.code === 'pmbrain_context_budget') break; throw error; }
       history = next; continue;
     }
-    if (result.stopReason === 'max_turns') throw new Error('知识工具已达到本轮调用上限，请继续提问。');
+    if (result.stopReason === 'max_turns') { if (isDirectoryStep(userText)) input.onReplace?.('', answeredModel); throw new Error(isDirectoryStep(userText) ? '目录尚未创建：本轮没有成功的创建目录回执。' : '知识工具已达到本轮调用上限，请继续提问。'); }
     stopReason = result.stopReason === 'end' ? 'end' : 'other'; break;
   }
-  for (const name of ['assistant_create', 'assistant_update', 'artifact_save', 'artifact_revise', 'task_submit']) {
+  for (const name of ['assistant_create', 'assistant_update', 'artifact_save', 'artifact_revise', 'task_submit', 'local_mkdir']) {
     const last = [...calls.values()].filter(call => call.name === name).at(-1);
-    if (last?.status === 'error') throw new Error(last.error ?? '助手操作未完成');
+    if (last?.status === 'error') { if (isDirectoryStep(userText)) input.onReplace?.('', answeredModel); throw new Error(last.error ?? '助手操作未完成'); }
   }
-  const text = modelAnswerText(composed + segment);
+  let text = modelAnswerText(composed + segment);
+  if (isDirectoryStep(userText)) {
+    const directories = completedDirectories([...(input.settledTools ?? []), ...calls.values()]);
+    if (!directories.length) { input.onReplace?.('', answeredModel); throw new Error('目录尚未创建：本轮没有成功的创建目录回执。'); }
+    text = directories.map(directory => `${directory.created ? '已创建文件夹' : '文件夹已存在，继续使用'}：${directory.path}`).join('\n');
+    input.onReplace?.(text, answeredModel);
+  }
   if (input.agents) {
     let protocol: { name?: unknown; arguments?: unknown; tool_calls?: Array<{ name?: unknown }> } | undefined;
     try { protocol = JSON.parse(text); } catch {}

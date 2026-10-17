@@ -1,12 +1,12 @@
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, extname, join, relative, isAbsolute, resolve, sep } from 'node:path';
 import JSZip from 'jszip';
 import type { BrainEngine } from '../../core/engine';
 import { resolveMainSourceId } from '../../core/source-resolver';
 import type { WorkbenchAgent, WorkbenchArtifact } from '../../../shared/workbench-agents';
-import type { WorkbenchCitation } from '../../../shared/workbench';
+import type { WorkbenchCitation, WorkbenchTask, WorkbenchToolCall } from '../../../shared/workbench';
 import type { WorkbenchAgentStore } from './agents';
 
 function inside(root: string, path: string) { const rel = relative(root, path); return rel === '' || (!isAbsolute(rel) && rel !== '..' && !rel.startsWith(`..${sep}`)); }
@@ -199,12 +199,51 @@ export async function resolveAgentDeliveryDirectory(engine: BrainEngine, agent: 
   return null;
 }
 export type ArtifactPublishResult = { ok: true; path: string; sourceId: string } | { ok: false; reason: string };
-export async function publishArtifactToSource(engine: BrainEngine, agent: WorkbenchAgent, artifact: WorkbenchArtifact): Promise<ArtifactPublishResult> {
+function deliveryParent(root: string, directory: string) {
+  const parent = realpathSync(directory);
+  if (!statSync(parent).isDirectory() || !inside(realpathSync(root), parent)) throw new Error('目录不在当前助手成果输出范围内');
+  return parent;
+}
+export async function createLocalDirectory(engine: BrainEngine, agent: WorkbenchAgent, name: string, directory?: string) {
+  if (!name || name.length > 160 || name !== name.trim() || /[\\/<>:"|?*\x00-\x1f]/.test(name) || /[. ]$/.test(name) || /^(?:\.{1,2}|con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(name)) throw new Error('文件夹名称无效，请使用单个有效名称');
+  const target = await resolveAgentDeliveryDirectory(engine, agent);
+  if (!target) throw new Error('当前助手知识来源没有绑定可用的成果输出目录');
+  const parent = deliveryParent(target.directory, directory || target.directory);
+  const path = join(parent, name);
+  let created = false;
+  if (existsSync(path)) {
+    if (lstatSync(path).isSymbolicLink() || !statSync(path).isDirectory()) throw new Error('同名位置已被文件或链接占用，未改动已有内容');
+  } else {
+    mkdirSync(path, { mode: 0o700 }); created = true;
+  }
+  const verified = deliveryParent(target.directory, path);
+  return { path: verified, sourceId: target.sourceId, directory: true, created, exists: true };
+}
+export function completedDirectories(calls: WorkbenchToolCall[]) {
+  const directories = new Map<string, { path: string; sourceId: string; created: boolean }>();
+  for (const call of calls) {
+    if (call.name !== 'local_mkdir' || call.status !== 'complete' || !call.output) continue;
+    try {
+      const result = JSON.parse(call.output);
+      if (result.directory === true && typeof result.path === 'string' && typeof result.sourceId === 'string' && typeof result.created === 'boolean' && statSync(result.path).isDirectory()) directories.set(result.path, { path: result.path, sourceId: result.sourceId, created: result.created });
+    } catch {}
+  }
+  return [...directories.values()];
+}
+export function completedDirectory(calls: WorkbenchToolCall[]) {
+  const directories = completedDirectories(calls);
+  return directories.length === 1 ? directories[0] : undefined;
+}
+export async function publishArtifactToSource(engine: BrainEngine, agent: WorkbenchAgent, artifact: WorkbenchArtifact, workingDirectory?: WorkbenchTask['directory']): Promise<ArtifactPublishResult> {
   if (artifact.publishedPath && existsSync(artifact.publishedPath) && readFileSync(artifact.publishedPath).equals(readFileSync(artifact.path))) {
     return { ok: true, path: artifact.publishedPath, sourceId: agent.sourceIds[0] ?? 'default' };
   }
   const target = await resolveAgentDeliveryDirectory(engine, agent);
   if (!target) return { ok: false, reason: '知识来源没有绑定可用的本地目录' };
+  if (workingDirectory) {
+    if (target.sourceId !== workingDirectory.sourceId) throw new Error('当前工作目录的知识来源已改变，请先确认目录');
+    target.directory = deliveryParent(target.directory, workingDirectory.path);
+  }
   const bytes = readFileSync(artifact.path);
   const filename = artifactFilename(artifact.title, artifact.format);
   let destination = join(target.directory, filename);

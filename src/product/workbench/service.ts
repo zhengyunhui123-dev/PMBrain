@@ -12,8 +12,8 @@ import type { WorkbenchAgent } from '../../../shared/workbench-agents';
 import { activityLine, compilePlaybook, EVIDENCE_GAP_TEXT, needsCurrentEvidence, visibleAssistantText, wantsSavedPlaybook } from './playbook';
 import { advanceTask, noteTask, rememberTaskMaterials } from './task-context';
 import { decidePending } from './pending';
-import { listWorkbenchArtifacts } from './files';
-import { compactRule, learnTurn } from './turn-policy';
+import { completedDirectories, completedDirectory, listWorkbenchArtifacts } from './files';
+import { compactRule, isDirectoryStep, learnTurn } from './turn-policy';
 
 function periodCitationCount(citations: WorkbenchCitation[]) {
   return citations.filter(item => item.origin !== 'prior-artifact').length;
@@ -333,6 +333,7 @@ export class WorkbenchService {
     conversation.model = model; conversation.knowledge = input.knowledge ?? conversation.knowledge; conversation.updatedAt = now;
     const turnId = input.turnId ?? randomUUID();
     const currentUser = [...conversation.messages].reverse().find(message => message.role === 'user');
+    const turnKnowledge = conversation.knowledge && !isDirectoryStep(currentUser?.text ?? '');
     if (currentUser) currentUser.turnId = turnId;
     const agentBefore = structuredClone(new WorkbenchAgentStore(this.store).get(conversation.assistantId ?? 'main'));
     let assistant = agentBefore;
@@ -476,6 +477,8 @@ export class WorkbenchService {
           }
           if (moved.length && userTurn) userTurn.attachmentSupplement = moved.map(item => item.excerpt).join('\n\n');
           completeAssistantConfirmation(this.store, conversation, confirmation, settledTools ?? []);
+          const restoredDirectory = completedDirectory(settledTools ?? []);
+          if (restoredDirectory && conversation.task) conversation.task.directory = { path: restoredDirectory.path, sourceId: restoredDirectory.sourceId };
           this.dropRemovedAttachments(snapshot, conversation);
           saveSoon(true);
           opened = true;
@@ -569,7 +572,7 @@ export class WorkbenchService {
           contextWindow, contextThreshold: assistant.context.threshold,
           ...(this.summarize ? { contextSummarizer: { model: compressionModel, contextWindow: this.models().find(item => item.id === compressionModel)?.contextWindow, summarize: this.summarize } } : {}),
           sourceId: conversation.sourceId, conversationId: conversation.id,
-          messages: this.modelMessages(conversation.id, recent, imageIds), ...(summary ? { summary } : {}), ...(conversation.taskNotes?.length ? { taskNotes: conversation.taskNotes } : {}), ...(conversation.task ? { task: conversation.task } : {}), ...(input.retry ? (retryMethod === undefined ? {} : { taskMethod: retryMethod }) : { taskMethod: taskInherited }), ...(conversation.knowledge?{priorCitations}:{}), ...(visuals.kept.length ? { visualAttachments: visuals.kept.map(({ name, mime, image }) => ({ name, mime, image })) } : {}), ...(settledTools?.length ? { settledTools } : {}), model, knowledge: conversation.knowledge,
+          messages: this.modelMessages(conversation.id, recent, imageIds), ...(summary ? { summary } : {}), ...(conversation.taskNotes?.length ? { taskNotes: conversation.taskNotes } : {}), ...(conversation.task ? { task: conversation.task } : {}), ...(input.retry ? (retryMethod === undefined ? {} : { taskMethod: retryMethod }) : { taskMethod: taskInherited }), ...(turnKnowledge?{priorCitations}:{}), ...(visuals.kept.length ? { visualAttachments: visuals.kept.map(({ name, mime, image }) => ({ name, mime, image })) } : {}), ...(settledTools?.length ? { settledTools } : {}), model, knowledge: turnKnowledge,
           ...(assistant.systemPrompt.trim() ? { systemPrompt: assistant.systemPrompt } : {}),
           ...(assistant.temperature !== null ? { temperature: assistant.temperature } : {}),
           signal: session.signal,
@@ -592,6 +595,11 @@ export class WorkbenchService {
             const index = reply.toolCalls.findIndex(item => item.id === call.id);
             if (index < 0) reply.toolCalls.push({ ...call }); else reply.toolCalls[index] = { ...call };
             completeAssistantConfirmation(this.store, conversation, confirmation, [call]);
+            if (call.name === 'local_mkdir' && conversation.task) {
+              const directories = completedDirectories([...(settledTools ?? []), ...(reply.toolCalls ?? [])]);
+              if (directories.length === 1) conversation.task.directory = { path: directories[0]!.path, sourceId: directories[0]!.sourceId };
+              else if (directories.length > 1) delete conversation.task.directory;
+            }
             saveSoon(true);
           },
           onContext: note => { if (!session.signal.aborted) { reply.contextNote = note; saveSoon(true); } },
@@ -602,9 +610,9 @@ export class WorkbenchService {
           if (!result.text.trim()) throw new Error('模型未返回可用回答，已有工具结果和完整会话已保留，请重试。');
           const citations = result.citations ?? [];
           const spoken = [...conversation.messages].reverse().find(message => message.role === 'user');
-          let knowledge = result.knowledge ?? (conversation.knowledge ? (citations.length ? 'used' : 'none') : 'off');
+          let knowledge = result.knowledge ?? (turnKnowledge ? (citations.length ? 'used' : 'none') : 'off');
           let text = visibleAssistantText(result.text, reply.toolCalls);
-          const evidenceTask = !wantsSavedPlaybook(spoken?.text ?? '') && (needsCurrentEvidence(spoken?.text ?? '') || needsCurrentEvidence(conversation.task?.goal ?? ''));
+          const evidenceTask = !isDirectoryStep(spoken?.text ?? '') && !wantsSavedPlaybook(spoken?.text ?? '') && (needsCurrentEvidence(spoken?.text ?? '') || needsCurrentEvidence(conversation.task?.goal ?? ''));
           const citedNow = periodCitationCount(citations);
           const evidenceGap = evidenceTask && knowledge !== 'off' && citedNow === 0;
           if (evidenceGap) { text = EVIDENCE_GAP_TEXT; knowledge = 'none'; reply.evidenceGap = true; }
@@ -616,7 +624,7 @@ export class WorkbenchService {
               ...(assistant.standingRules ?? []).map(rule => ({ text: rule, state: 'active' as const })),
               ...(assistant.retiredRules ?? []).map(rule => ({ text: rule.text, state: 'replaced' as const, replacedBy: rule.replacedBy })),
             ],
-            knowledge: conversation.knowledge,
+            knowledge: turnKnowledge,
             evidenceTask,
             citations: citedNow,
             budget: { window: contextWindow ?? 32000, inputBudget: contextBudget(contextWindow, assistant.context.threshold, outputReserve), outputReserve },

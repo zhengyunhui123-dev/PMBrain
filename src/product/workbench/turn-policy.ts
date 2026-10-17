@@ -1,5 +1,20 @@
 export type TurnScope = 'durable' | 'correction' | 'once' | 'chat';
 
+export function wantsDirectoryCreation(text: string): boolean {
+  const value = text.replace(/\s+/g, '');
+  return /(?:创建|新建|建立|建个|建一个|建).{0,100}(?:文件夹|目录)/.test(value)
+    && !/(?:不要|不用|不想|无需|不必|别|取消|停止|如何|怎么|为什么|为何|教程|以后).{0,30}(?:创建|新建|建立|建)/.test(value);
+}
+export function isDirectoryStep(text: string): boolean {
+  return wantsDirectoryCreation(text) && !/(?:然后|再|并|同时|顺便).{0,30}(?:生成|写|保存|导出|整理|填)/.test(text.replace(/\s+/g, ''));
+}
+export function directoryPeriod(text: string): number[] {
+  if (!isDirectoryStep(text) || /逐日|每天|每日|按天|分别|各建|名为|命名|名称|叫/.test(text)) return [];
+  const range = text.replace(/\s+/g, '').match(/(?:\d{1,2}月)?(\d{1,2})(?:日|号)(?:到|至|[-—~～])(?:\d{1,2}月)?(\d{1,2})(?:日|号)?/);
+  const days = range ? [Number(range[1]), Number(range[2])] : [];
+  return days.every(day => day >= 1 && day <= 31) ? [...new Set(days)] : [];
+}
+
 const durableCue = /以后|今后|从今以后|记住|每次|固定这样|固定按|都这么做|一直按|默认都|从现在开始/;
 const onceCue = /这次|这一次|本次|就这一次|仅此一次/;
 const genericAffirmation = /^(?:以后|今后|记住)?(?:都这么做|照这个做|按这个做|就这样|固定这样)$/;
