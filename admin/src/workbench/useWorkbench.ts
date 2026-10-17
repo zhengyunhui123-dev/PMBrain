@@ -140,7 +140,8 @@ export function useWorkbench({ serviceReady = true, databaseReady = true }: { se
   };
   const send = async (text: string, retry = false, editMessageId?: string, files?: { id: string; name: string; file?: File; saved?: boolean; mime?: string }[], attachmentsHydrated = false) => {
     if (pending || !serviceReady) return false;
-    const useKnowledge = knowledge && databaseReady;
+    const useKnowledge = knowledge;
+    if (useKnowledge && !databaseReady) { setError('知识库正在准备，请取消勾选知识库后进行普通对话。'); return false; }
     setPending(true); setError('');
     let createdId: string | undefined;
     try {
@@ -227,5 +228,5 @@ export function useWorkbench({ serviceReady = true, databaseReady = true }: { se
     const saved = await workbenchRequest<WorkbenchAgent>(`/agents/${value.id}`, value, 'PUT');
     await refresh(); setAssistant(saved); if (saved.model) setModel(saved.model); if (!conversation) setKnowledge(saved.knowledge); return saved;
   };
-  return { rows: rows.filter(row => (row.assistantId ?? 'main') === assistantId), allRows: rows, agents, assistantId, selectAgent, saveAgent, refresh, models, modelsLoaded, conversation, model, setModel: chooseModel, knowledge: knowledge && databaseReady, setKnowledge, assistant, saveAssistant, error, setError, loaded, pending, running, select, send, action, clearContext, undoRules, restoreRevision };
+  return { rows: rows.filter(row => (row.assistantId ?? 'main') === assistantId), allRows: rows, agents, assistantId, selectAgent, saveAgent, refresh, models, modelsLoaded, conversation, model, setModel: chooseModel, knowledge, setKnowledge, assistant, saveAssistant, error, setError, loaded, pending, running, select, send, action, clearContext, undoRules, restoreRevision };
 }
