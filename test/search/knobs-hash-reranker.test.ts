@@ -42,7 +42,7 @@ function baseKnobs(): ResolvedSearchKnobs {
 }
 
 describe('KNOBS_HASH_VERSION + version invariants', () => {
-  test('version is 11 after query-policy cache isolation', () => {
+  test('version advances after Chinese question recall changes', () => {
     // v0.35.0.0: 1→2 to fold reranker fields. v0.35.6.0: 2→3 to fold
     // floor_ratio. v0.36 wave: piggybacks on v=3 with 7 cross-modal knobs
     // (D2) PLUS column + provider context (D8/CDX-2 cross-column isolation).
@@ -56,7 +56,7 @@ describe('KNOBS_HASH_VERSION + version invariants', () => {
     // cannot leak past the new stage. PMBrain 1.2.81: 9→10 isolates local
     // cache rows from remote reads that exclude private pages. PMBrain 1.3.7:
     // 10→11 folds hard excludes, detail, salience, and recency into the key.
-    expect(KNOBS_HASH_VERSION).toBe(13);
+    expect(KNOBS_HASH_VERSION).toBe(14);
   });
 
   test('hash is 16 hex chars regardless of reranker config', () => {

@@ -1,0 +1,65 @@
+{
+  "version": "1.4.95",
+  "date": "2026-10-17",
+  "datasetHash": "96ce971df6abcb1668feb9fe11f8707df71f74e5b39b17a190bed4340d142fcd",
+  "dataset": {
+    "documents": 8,
+    "questions": 34,
+    "realSources": 1,
+    "additionalSourceNegativeControl": "synthetic",
+    "privateDocumentsAndAnswersCommitted": false
+  },
+  "models": {
+    "embedding": "ollama:qwen3-embedding:0.6b",
+    "dimensions": 1024,
+    "embeddedChunks": 126,
+    "answer": "mimo:mimo-v2.6-flash",
+    "judge": "mimo:mimo-v2.6-flash",
+    "fallback": false
+  },
+  "pipeline": {
+    "retrieval": "production chunking, title contextual embeddings, hybridSearch balanced",
+    "answer": "single-shot top 8 retrieved chunks; not the complete product assistant",
+    "expansion": false,
+    "reranker": false
+  },
+  "results": {
+    "questions": 34,
+    "completed": 34,
+    "errors": 0,
+    "pageRecallAt5": 1,
+    "mrr": 0.9166666666666666,
+    "quoteLiteralAccuracy": 1,
+    "checkedSourceScopeAccuracy": 1,
+    "fullQualityGate": "failed"
+  },
+  "semanticReview": {
+    "modelAssistedCorrectAnswers": 28,
+    "total": 34,
+    "humanFullReview": false,
+    "finalHumanAnswerAccuracy": null,
+    "sameAnswerAndJudgeModel": true,
+    "originalJudgeAndGuardErrorsPreserved": true,
+    "finalSupplementalJudgeTimedOut": true,
+    "failureCategories": [
+      "关键原句未进入片段时提前停止",
+      "同日不同版本选择错误",
+      "多资料问题回答不完整"
+    ]
+  },
+  "nativeAssistant": {
+    "pipeline": "knowledgeWorkbenchAnswer",
+    "actualModel": "mimo:mimo-v2.6-flash",
+    "questions": 5,
+    "coreConclusionsManuallyChecked": 5,
+    "actualKnowledgeReadCalls": 0,
+    "full34QuestionProductQualityGate": "not_evaluated"
+  },
+  "boundaries": [
+    "逐字引句存在不等于整段回答事实正确",
+    "没有修改正式知识库、原文或既有向量",
+    "自动评分不代替人工全题验收",
+    "真实 knowledge_read 续读链路尚未验收",
+    "原始私有日志留在忽略目录"
+  ]
+}

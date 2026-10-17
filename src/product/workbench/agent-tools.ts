@@ -77,10 +77,10 @@ export function agentTools(agent: WorkbenchAgent, userText: string, context: Wor
   const tools = [
     schema('skills_list', '查看技能与兼容状态，默认只列可用技能，可按 nextOffset 继续读取；用返回的准确 name 配置。', { offset: { type: 'integer', minimum: 0 }, includeUnsupported: { type: 'boolean' } }),
     schema('skill_read', '分段读取一个共享技能说明，可按 nextOffset 继续。', { name: string, offset: { type: 'integer', minimum: 0 } }, ['name']),
-    schema('artifact_save', '将第一份或另一份新内容保存为可打开的 docx 或 Markdown，并写入知识来源本地目录。使用真实引用编号，保存后用返回的 path 告诉用户文件位置。修改已有成果用 artifact_revise。', { title: string, content: string, format: { type: 'string', enum: ['docx', 'markdown'] } }, ['title', 'content']),
+    schema('artifact_save', '将新内容保存为可打开的 docx 或 Markdown。Word 图片使用 Markdown 图片语法，地址为 attachment:附件编号 或已授权本地绝对路径。template 可指定带独立段落 {{PMBRAIN_CONTENT}} 的 docx 附件引用或授权路径，{{PMBRAIN_TITLE}} 可替换标题；原模板页眉页脚和样式保留。layout 可设置无模板文稿的页面方向。使用真实引用编号，保存后说明返回的 path。修改已有成果用 artifact_revise。', { title: string, content: string, format: { type: 'string', enum: ['docx', 'markdown'] }, template: string, layout: { type: 'string', enum: ['portrait', 'landscape'] } }, ['title', 'content']),
     schema('artifact_list', '列出当前会话里这个助手已经保存的成果，不含正文。修改前先确认编号、版本和哈希。', { offset: { type: 'integer', minimum: 0 } }),
     schema('artifact_read', '按成果编号读取已保存的正文、版本和哈希。只读当前会话的成果，不读取任意路径。', { id: string, offset: { type: 'integer', minimum: 0 } }, ['id']),
-    schema('artifact_revise', '按某一版成果的编号和哈希修改正文或格式，并另存为下一版。不覆盖旧文件。外部改过的发布文件会拒绝。', { baseArtifactId: string, baseHash: string, title: string, content: string, format: { type: 'string', enum: ['docx', 'markdown'] } }, ['baseArtifactId', 'baseHash', 'title', 'content']),
+    schema('artifact_revise', '按成果编号和哈希修改并另存下一版，保留旧文件。Word 默认沿用该版模板、方向及图片备份；新的图片用新附件引用或授权路径。template 指定新模板，default 表示恢复默认版式。外部修改过的文件会拒绝。', { baseArtifactId: string, baseHash: string, title: string, content: string, format: { type: 'string', enum: ['docx', 'markdown'] }, template: string, layout: { type: 'string', enum: ['portrait', 'landscape'] } }, ['baseArtifactId', 'baseHash', 'title', 'content']),
   ];
   if (agent.readDirectories.length) tools.push(schema('local_files', '列出已授权目录中的文件。可进入返回的子目录，可按 nextOffset 分页。', { directory: string, offset: { type: 'integer', minimum: 0 } }), schema('local_read', '读取已授权目录内的文字或 Office/PDF 可提取文字，分段读取并返回引用；不执行 OCR。', { path: string, offset: { type: 'integer', minimum: 0 } }, ['path']));
   tools.push(directoryTool);
@@ -139,7 +139,7 @@ export function agentHandlers(context: WorkbenchAgentTools, input: { agent: Work
       signal.throwIfAborted();
       if (needsCurrentEvidence(input.userText) && !wantsSavedPlaybook(input.userText) && !input.citations.length) throw new Error('没有查到可用材料，不能保存完整稿');
       const agent = context.store.get(input.agent.id);
-      const artifact = await saveWorkbenchArtifact(context.store, { agent, conversationId: input.conversationId, messageId: input.messageId, title: String(raw.title ?? ''), content: String(raw.content ?? ''), citations: input.citations, format: raw.format as any, signal });
+      const artifact = await saveWorkbenchArtifact(context.store, { agent, conversationId: input.conversationId, messageId: input.messageId, title: String(raw.title ?? ''), content: String(raw.content ?? ''), citations: input.citations, format: raw.format as any, template: raw.template as string | undefined, layout: raw.layout as 'portrait' | 'landscape' | undefined, signal });
       const published = await publishArtifactToSource(context.engine, agent, artifact, input.workingDirectory?.());
       if (published.ok) context.store.recordArtifact({ ...artifact, publishedPath: published.path });
       return { id: artifact.id, familyId: artifact.familyId ?? artifact.id, revision: artifact.revision ?? 1, hash: artifact.hash, title: artifact.title, format: artifact.format, download: `/admin/api/workbench/artifacts/${artifact.id}/download`, saved: true, path: published.ok ? published.path : null, sourceId: published.ok ? published.sourceId : null, note: published.ok ? undefined : published.reason };
@@ -159,7 +159,7 @@ export function agentHandlers(context: WorkbenchAgentTools, input: { agent: Work
     handler('artifact_revise', async (raw, signal) => {
       signal.throwIfAborted();
       const agent = context.store.get(input.agent.id);
-      const artifact = await reviseWorkbenchArtifact(context.store, { agent, conversationId: input.conversationId, messageId: input.messageId, baseArtifactId: String(raw.baseArtifactId ?? ''), baseHash: String(raw.baseHash ?? ''), title: String(raw.title ?? ''), content: String(raw.content ?? ''), citations: input.citations, format: raw.format as WorkbenchArtifact['format'] | undefined, signal });
+      const artifact = await reviseWorkbenchArtifact(context.store, { agent, conversationId: input.conversationId, messageId: input.messageId, baseArtifactId: String(raw.baseArtifactId ?? ''), baseHash: String(raw.baseHash ?? ''), title: String(raw.title ?? ''), content: String(raw.content ?? ''), citations: input.citations, format: raw.format as WorkbenchArtifact['format'] | undefined, template: raw.template as string | undefined, layout: raw.layout as 'portrait' | 'landscape' | undefined, signal });
       const published = await publishArtifactToSource(context.engine, agent, artifact, input.workingDirectory?.());
       if (published.ok) context.store.recordArtifact({ ...artifact, publishedPath: published.path });
       return { id: artifact.id, familyId: artifact.familyId, parentId: artifact.parentId, revision: artifact.revision, hash: artifact.hash, title: artifact.title, format: artifact.format, download: `/admin/api/workbench/artifacts/${artifact.id}/download`, saved: true, path: published.ok ? published.path : null, sourceId: published.ok ? published.sourceId : null, note: published.ok ? undefined : published.reason };

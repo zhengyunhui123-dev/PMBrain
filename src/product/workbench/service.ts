@@ -10,10 +10,10 @@ import { memoryVersion } from './memory-identity';
 import { WorkbenchAgentStore } from './agents';
 import type { WorkbenchAgent } from '../../../shared/workbench-agents';
 import { activityLine, compilePlaybook, EVIDENCE_GAP_TEXT, needsCurrentEvidence, visibleAssistantText, wantsSavedPlaybook } from './playbook';
-import { advanceTask, noteTask, rememberTaskMaterials } from './task-context';
+import { advanceTask, noteTask, rememberTaskMaterials, taskUserTexts } from './task-context';
 import { decidePending } from './pending';
 import { completedDirectories, completedDirectory, listWorkbenchArtifacts } from './files';
-import { compactRule, isDirectoryStep, learnTurn } from './turn-policy';
+import { compactRule, isDirectoryStep, learnTurn, mergeTaskRules } from './turn-policy';
 
 function periodCitationCount(citations: WorkbenchCitation[]) {
   return citations.filter(item => item.origin !== 'prior-artifact').length;
@@ -355,29 +355,34 @@ export class WorkbenchService {
         if (advanced.task) conversation.task = advanced.task;
         openedTask = advanced.opened;
         if (advanced.opened) delete conversation.taskNotes;
+        const scopedUserTexts = taskUserTexts(conversation.messages.filter((_, index) => index > floor), conversation.task, spoken.id);
         if (wantsSavedPlaybook(spoken.text)) {
-          const playbook = compilePlaybook({ name: assistant.name, workflow: assistant.workflow, standingRules: assistant.standingRules, deliveryFormat: assistant.deliveryFormat, recentUserTexts });
+          const playbook = compilePlaybook({ name: assistant.name, workflow: assistant.workflow, standingRules: assistant.standingRules, deliveryFormat: assistant.deliveryFormat, recentUserTexts: scopedUserTexts });
           assistant = new WorkbenchAgentStore(this.store).rememberPlaybook(assistant.id, playbook);
           playbookNotice = `已把这次存成「${playbook.name}」的做法`;
           savedPlaybook = playbook.name;
           turnScope = 'once';
         } else {
-          const learning = learnTurn({ name: assistant.name, standingRules: assistant.standingRules, recentUserTexts, text: spoken.text });
+          const learning = learnTurn({ name: assistant.name, standingRules: assistant.standingRules, recentUserTexts: scopedUserTexts, text: spoken.text });
           turnScope = learning.scope;
           ruleNotice = learning.notice;
           learnedRules = learning.added;
           if (learning.replaced.length) replacedRules = learning.replaced.map(item => item.text);
           let onceNote: string | undefined;
-          if (learning.scope === 'once' && learning.taskNote) {
+          if (learning.taskNote) {
             onceNote = learning.taskNote;
-            const constraints = [...new Set([...(conversation.task?.constraints ?? []), learning.taskNote])].slice(-8);
-            conversation.task = conversation.task ? { ...conversation.task, constraints, updatedAt: now } : { id: randomUUID(), goal: compactRule(learning.taskNote), constraints, updatedAt: now };
-            conversation.taskNotes = constraints;
+            taskInherited = !advanced.opened && !!conversation.task;
+            const notes = learning.taskNotes ?? [learning.taskNote];
+            const constraints = mergeTaskRules(conversation.task?.constraints ?? [], learning.scope === 'correction' ? [] : notes);
+            const decisions = learning.scope === 'correction' ? mergeTaskRules(conversation.task?.decisions ?? [], notes) : conversation.task?.decisions;
+            const changed = learning.scope === 'correction' && decisions?.join('\n') !== conversation.task?.decisions?.join('\n');
+            conversation.task = { ...(conversation.task ?? { id: randomUUID(), goal: compactRule(learning.taskNote) }), constraints, ...(decisions?.length ? { decisions } : {}), updatedAt: now };
+            if (constraints.length) conversation.taskNotes = constraints; else delete conversation.taskNotes;
+            if (changed) { delete conversation.summary; delete conversation.summaryUntil; delete conversation.summaryAssistantRevision; }
           } else if (conversation.task) {
             if (conversation.task.constraints.length) conversation.taskNotes = [...conversation.task.constraints];
             else delete conversation.taskNotes;
           }
-          if (learning.scope === 'correction' && conversation.task && learning.added.length) conversation.task = { ...conversation.task, decisions: [...new Set([...(conversation.task.decisions ?? []), ...learning.added])].slice(-8), updatedAt: now };
           if (learning.replaced.length || learning.rules.join('\n') !== (assistant.standingRules ?? []).join('\n')) {
             const retired = [...(assistant.retiredRules ?? []).filter(item => !learning.rules.includes(item.text) && !learning.replaced.some(next => next.text === item.text)), ...learning.replaced];
             assistant = new WorkbenchAgentStore(this.store).rememberRules(assistant.id, learning.rules, retired);

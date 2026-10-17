@@ -333,7 +333,7 @@ test('50、200、500 轮小窗口仍留全文，当前任务的限制还在', as
       expect(corrected.task?.id).toBe(`task-${rounds}`);
       expect(corrected.task?.constraints).toEqual(['这次不要写下周计划']);
       expect(corrected.task?.decisions).toContain('风险不要写那么多');
-      expect(new WorkbenchAgentStore(new WorkbenchStore(dir)).get(agent.id).standingRules).toEqual(['风险不要写那么多']);
+      expect(new WorkbenchAgentStore(new WorkbenchStore(dir)).get(agent.id).standingRules).toEqual(['风险要写完整']);
       expect(priors.every(item => !item.includes('过期摘要标记'))).toBe(true);
     }
     const files = readdirSync(dir).filter(name => name.endsWith('.json') && name !== 'agents.json' && name !== 'assistant.json');

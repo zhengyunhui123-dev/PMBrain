@@ -48,7 +48,7 @@ test('设置里删掉一条已记下的规则后，保存结果不再包含它',
   expect(saved.workflow).toContain('先查知识库');
 });
 
-test('撤销只去掉这一次记下的规则；重新生成后仍可以撤销', async () => {
+test('明确保存的长期规则可逐次撤销；重新生成后仍可以撤销', async () => {
   const dir = root();
   const store = new WorkbenchStore(dir);
   const service = new WorkbenchService(store, () => [{ id: 'ollama:local', name: '本地', contextWindow: 8192 }], async () => ({ text: '已按规则处理', model: 'ollama:local', citations: [] }));
@@ -56,23 +56,23 @@ test('撤销只去掉这一次记下的规则；重新生成后仍可以撤销',
   const conversation = service.create({ assistantId: agent.id, knowledge: false });
   service.send(conversation.id, { text: '先写本周完成事项，再写问题，不要编造' });
   await service.settled(conversation.id);
-  service.send(conversation.id, { text: '标题不要日期' });
+  service.send(conversation.id, { text: '以后标题不要日期' });
   await service.settled(conversation.id);
   service.send(conversation.id, { text: '以后都这么做' });
   await service.settled(conversation.id);
   const beforeRetry = service.get(conversation.id);
-  const correction = beforeRetry.messages.find(item => item.ruleNotice === '已更新周报助手规则：标题不要日期');
-  const durable = beforeRetry.messages.find(item => item.ruleNotice === '已更新「周报助手」工作规则');
-  expect(correction?.learnedRules).toEqual(['标题不要日期']);
+  const correction = beforeRetry.messages.find(item => item.learnedRules?.includes('以后标题不要日期'));
+  const durable = beforeRetry.messages.find(item => item.learnedRules?.includes('先写本周完成事项，再写问题，不要编造'));
+  expect(correction?.learnedRules).toEqual(['以后标题不要日期']);
   expect(durable?.learnedRules).toEqual(['先写本周完成事项，再写问题，不要编造']);
   service.send(conversation.id, { retry: true });
   await service.settled(conversation.id);
   const retried = service.get(conversation.id).messages.at(-1);
   expect(retried?.ruleNotice).toBe('已更新「周报助手」工作规则');
   expect(retried?.learnedRules).toEqual(['先写本周完成事项，再写问题，不要编造']);
-  expect(new WorkbenchAgentStore(store).get(agent.id).standingRules).toEqual(['标题不要日期', '先写本周完成事项，再写问题，不要编造']);
+  expect(new WorkbenchAgentStore(store).get(agent.id).standingRules).toEqual(['以后标题不要日期', '先写本周完成事项，再写问题，不要编造']);
   const undone = service.undoLearnedRules(conversation.id, retried!.id);
-  expect(new WorkbenchAgentStore(store).get(agent.id).standingRules).toEqual(['标题不要日期']);
+  expect(new WorkbenchAgentStore(store).get(agent.id).standingRules).toEqual(['以后标题不要日期']);
   expect(undone.messages.find(item => item.id === retried!.id)?.ruleNotice).toBe('已撤销刚记下的工作规则');
   expect(undone.messages.find(item => item.id === retried!.id)?.learnedRules).toBeUndefined();
   expect(undone.messages).toHaveLength(beforeRetry.messages.length);
@@ -131,7 +131,7 @@ test('一个助手反复交代工作仍用同一条对话；清理任务上下�
   expect(learned.standingRules).toHaveLength(2);
   expect(learned.playbook).toBeUndefined();
   expect(service.get(first.id).messages.at(-1)?.ruleNotice).toBe('已更新「周报助手」工作规则');
-  expect(service.get(first.id).messages.some(item => item.ruleNotice === '已更新周报助手规则：标题不要日期')).toBe(true);
+  expect(service.get(first.id).messages.some(item => item.ruleNotice === '已用于当前任务：标题不要日期')).toBe(true);
   const before = learned.standingRules?.length ?? 0;
   service.send(first.id, { text: '这次不要写下周计划' });
   await service.settled(first.id);

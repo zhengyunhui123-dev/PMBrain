@@ -184,24 +184,24 @@ test('改输出格式仍写原来的周报；这次改做报销会换任务并�
   expect(retry.service.get(retry.conversation.id).messages.at(-1)?.status).toBe('complete');
 });
 
-test('相反的规则用新的替代旧的，撤销后恢复，重新打开仍然一致', async () => {
-  const replaced = learnTurn({ name: '周报助手', standingRules: ['风险要写完整', '标题不要日期'], recentUserTexts: [], text: '风险不要写那么多' });
-  expect(replaced.rules).toEqual(['标题不要日期', '风险不要写那么多']);
-  expect(replaced.replaced).toEqual([{ text: '风险要写完整', replacedBy: '风险不要写那么多' }]);
-  expect(replaced.notice).toBe('已用「风险不要写那么多」替代「风险要写完整」');
+test('明确长期生效的相反规则用新的替代旧的，撤销后恢复，重新打开仍然一致', async () => {
+  const replaced = learnTurn({ name: '周报助手', standingRules: ['风险要写完整', '标题不要日期'], recentUserTexts: [], text: '以后风险不要写那么多' });
+  expect(replaced.rules).toEqual(['标题不要日期', '以后风险不要写那么多']);
+  expect(replaced.replaced).toEqual([{ text: '风险要写完整', replacedBy: '以后风险不要写那么多' }]);
+  expect(replaced.notice).toBe('已用「以后风险不要写那么多」替代「风险要写完整」');
   const dir = root();
   const store = new WorkbenchStore(dir);
   const service = new WorkbenchService(store, () => [{ id: 'ollama:local', name: '本地', contextWindow: 8192 }], async () => ({ text: '好', model: 'ollama:local', citations: [] }));
   const agent = new WorkbenchAgentStore(store).create({ name: '周报助手', systemPrompt: '你是周报助手', standingRules: ['风险要写完整', '标题不要日期'], workflow: '先查知识库', skills: ['weekly-report'] });
   const conversation = service.create({ assistantId: agent.id, knowledge: false });
-  service.send(conversation.id, { text: '风险不要写那么多' });
+  service.send(conversation.id, { text: '以后风险不要写那么多' });
   await service.settled(conversation.id);
   const saved = new WorkbenchAgentStore(new WorkbenchStore(dir)).get(agent.id);
-  expect(saved.standingRules).toEqual(['标题不要日期', '风险不要写那么多']);
-  expect(saved.retiredRules).toEqual([{ text: '风险要写完整', replacedBy: '风险不要写那么多' }]);
+  expect(saved.standingRules).toEqual(['标题不要日期', '以后风险不要写那么多']);
+  expect(saved.retiredRules).toEqual([{ text: '风险要写完整', replacedBy: '以后风险不要写那么多' }]);
   const reply = service.get(conversation.id).messages.at(-1);
   expect(reply?.contextManifest?.rules.some(rule => rule.text === '风险要写完整' && rule.state === 'replaced')).toBe(true);
-  expect(reply?.contextManifest?.rules.some(rule => rule.text === '风险不要写那么多' && rule.state === 'active')).toBe(true);
+  expect(reply?.contextManifest?.rules.some(rule => rule.text === '以后风险不要写那么多' && rule.state === 'active')).toBe(true);
   const undone = service.undoLearnedRules(conversation.id, reply!.id);
   const restored = new WorkbenchAgentStore(new WorkbenchStore(dir)).get(agent.id);
   expect(restored.standingRules).toEqual(['风险要写完整', '标题不要日期']);

@@ -18,5 +18,5 @@
       "@/*": ["src/*"]
     }
   },
-  "include": ["src", "test"]
+  "include": ["src", "test", "eval/pmbrain-zh-project/real.ts"]
 }

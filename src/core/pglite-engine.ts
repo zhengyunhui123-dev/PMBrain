@@ -2076,6 +2076,18 @@ export class PGLiteEngine implements BrainEngine {
       : [qLike, qRaw, limit, offset];
 
     let extraFilter = '';
+    if (opts?.type) {
+      params.push(opts.type);
+      extraFilter += ` AND p.type = $${params.length}`;
+    }
+    if (opts?.types?.length) {
+      params.push(opts.types);
+      extraFilter += ` AND p.type = ANY($${params.length}::text[])`;
+    }
+    if (opts?.exclude_slugs?.length) {
+      params.push(opts.exclude_slugs);
+      extraFilter += ` AND p.slug != ALL($${params.length}::text[])`;
+    }
     if (opts?.language) {
       params.push(opts.language);
       extraFilter += ` AND cc.language = $${params.length}`;

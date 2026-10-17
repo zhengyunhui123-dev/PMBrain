@@ -50,6 +50,7 @@ export interface WorkbenchArtifact {
   revision?: number;
   baseHash?: string;
   bytesHash?: string;
+  word?: { template?: string; layout?: 'portrait' | 'landscape'; assets: Array<{ reference: string; hash: string }> };
 }
 export function agentRoleLabel(id: string) {
   return id === 'main' ? '主助手' : '专用助手';

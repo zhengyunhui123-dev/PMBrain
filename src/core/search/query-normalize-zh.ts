@@ -15,6 +15,20 @@ const PROJECT_TERMS: Array<{ canonical: string; aliases: string[] }> = [
   { canonical: '交付', aliases: ['上线', '发布', '落地'] },
 ];
 
+function chineseQuestionTopic(query: string): string | undefined {
+  const text = query
+    .replace(/^(?:请问|请帮我查(?:一下)?|帮我查(?:一下)?|查一下|关于)\s*/, '')
+    .replace(/[？?！!。\s]+$/, '');
+  const detail = /(?:最(?:大|新|近)(?:的)?(?:风险|隐患|进展|进度)|(?:负责人|责任人)(?:是谁|是哪个|答应|承诺)|需求(?:提出)?(?:的)?日期$|合同(?:金额|总额)(?:是多少|是什么|多少)?$|(?:风险|隐患|进展|进度|状态)(?:是什么|有哪些|怎么样|如何)|为什么|为何)/u;
+  const match = detail.exec(text);
+  if (!match || match.index === 0) return undefined;
+  let topic = text.slice(0, match.index).replace(/的?\s*$/, '').trim();
+  const quoted = topic.match(/^(?:《([^《》]+)》|“([^“”]+)”|「([^「」]+)」|"([^"\n]+)")$/u);
+  if (quoted) topic = quoted.slice(1).find(Boolean)!;
+  if (topic.length < 2 || topic.length > 160 || /[，,。；;！？!?\n]/u.test(topic)) return undefined;
+  return topic;
+}
+
 function startOfDay(value: Date): Date {
   return new Date(value.getFullYear(), value.getMonth(), value.getDate());
 }
@@ -110,6 +124,8 @@ export function normalizeChineseQuery(
   const variants = new Set<string>();
   if (window.query) variants.add(window.query);
   if (canonical) variants.add(canonical);
+  const topic = chineseQuestionTopic(window.query);
+  if (topic) variants.add(topic);
   for (const group of PROJECT_TERMS) {
     if (!canonical.includes(group.canonical)) continue;
     for (const alias of group.aliases.slice(0, 2)) {

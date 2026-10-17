@@ -1,6 +1,6 @@
 import type { WorkbenchMessage, WorkbenchTask, WorkbenchTaskMaterial } from '../../../shared/workbench';
 import { retrievalText } from './attachments';
-import { classifyTurn, compactRule, taskNeedsSkill, wantsDirectoryCreation } from './turn-policy';
+import { classifyTurn, compactRule, isTaskAmendment, isWorkRequest, mergeTaskRules, taskNeedsSkill, wantsDirectoryCreation } from './turn-policy';
 
 const followUp = /^(?:继续|继续做|继续写|接着做|接着写|接着|执行吧|开始吧|就按这个|按这个做|做吧|写吧|可以|好|好的|行|嗯|执行)$/;
 const agreementOnly = /^(?:可以|好|好的|行|嗯|执行)$/;
@@ -30,7 +30,7 @@ export function advanceTask(input: { task?: WorkbenchTask; notes?: string[]; tex
   const text = input.text.trim();
   const normalized = normalizedWork(text);
   const directory = /(?:刚才|刚建|新建|这个|当前|本次|该).{0,12}(?:文件夹|目录)/.test(text) ? input.task?.directory : undefined;
-  const canReplace = !!input.task && replacementCue.test(normalized) && !!(input.agent.workflow || input.agent.skills?.length);
+  const canReplace = !!input.task && replacementCue.test(normalized);
   if (canReplace && input.task) {
     const goal = compactRule(text);
     if (input.task.goal === goal) return { task: { ...input.task, updatedAt: input.now }, inherited: true, opened: false };
@@ -38,9 +38,10 @@ export function advanceTask(input: { task?: WorkbenchTask; notes?: string[]; tex
   }
   if (wantsDirectoryCreation(text)) return { task: input.task ? { ...input.task, updatedAt: input.now } : { id: input.id(), goal: compactRule(text), constraints: [], updatedAt: input.now }, inherited: !!input.task, opened: !input.task };
   if (input.task && parameterCue.test(normalized)) {
-    const note = compactRule(text);
-    const constraints = [...new Set([...input.task.constraints, note])].slice(-8);
-    return { task: { ...input.task, constraints, updatedAt: input.now }, inherited: true, opened: false };
+    return { task: { ...input.task, constraints: mergeTaskRules(input.task.constraints, [compactRule(text)]), updatedAt: input.now }, inherited: true, opened: false };
+  }
+  if (input.task && isTaskAmendment(text)) {
+    return { task: { ...input.task, updatedAt: input.now }, inherited: true, opened: false };
   }
   if (input.task && carriesCurrentMethod(text)) return { task: { ...input.task, updatedAt: input.now }, inherited: true, opened: false };
   if (continuesActiveTask(text)) {
@@ -49,7 +50,7 @@ export function advanceTask(input: { task?: WorkbenchTask; notes?: string[]; tex
     if (!goal) return { inherited: false, opened: false };
     return { task: { id: input.id(), goal: compactRule(goal), constraints: [...(input.notes ?? [])], updatedAt: input.now }, inherited: true, opened: false };
   }
-  if (classifyTurn(text) === 'chat' && taskNeedsSkill(input.agent, text)) {
+  if (classifyTurn(text) === 'chat' && (isWorkRequest(text) || taskNeedsSkill(input.agent, text))) {
     const goal = compactRule(text);
     if (input.task?.goal === goal) return { task: { ...input.task, updatedAt: input.now }, inherited: true, opened: false };
     return { task: { id: input.id(), goal, constraints: [], updatedAt: input.now, ...(directory ? { directory } : {}) }, inherited: false, opened: true };
@@ -61,7 +62,9 @@ export function noteTask(task: WorkbenchTask, input: { messageId: string; opened
   const note = input.constraint || (input.opened ? '提出任务' : input.inherited ? '继续当前任务' : '补充');
   const sources = (input.opened ? [] : [...(task.sources ?? [])]).filter(item => item.messageId !== input.messageId || item.note !== note);
   sources.push({ messageId: input.messageId, note });
-  const next: WorkbenchTask = { ...task, sources: sources.slice(-12), updatedAt: task.updatedAt };
+  const origin = sources.find(item => item.note === '提出任务');
+  const tail = sources.slice(-11);
+  const next: WorkbenchTask = { ...task, sources: origin && !tail.includes(origin) ? [origin, ...tail] : sources.slice(-12), updatedAt: task.updatedAt };
   if (input.opened) {
     delete next.decisions;
     delete next.openItems;
@@ -70,6 +73,17 @@ export function noteTask(task: WorkbenchTask, input: { messageId: string; opened
     delete next.materials;
   }
   return next;
+}
+
+export function taskUserTexts(messages: WorkbenchMessage[], task: WorkbenchTask | undefined, currentMessageId: string): string[] {
+  const origin = task?.sources?.find(item => item.note === '提出任务')?.messageId;
+  let start = origin ? messages.findIndex(message => message.id === origin) : -1;
+  if (start < 0 && task) start = messages.findLastIndex(message => message.role === 'user' && compactRule(message.text) === task.goal);
+  if (task && start < 0) {
+    const ids = new Set(task.sources?.map(item => item.messageId) ?? []);
+    return messages.filter(message => message.role === 'user' && message.id !== currentMessageId && ids.has(message.id)).map(message => message.text);
+  }
+  return messages.slice(Math.max(0, start)).filter(message => message.role === 'user' && message.id !== currentMessageId).map(message => message.text);
 }
 
 export function rememberTaskMaterials(task: WorkbenchTask, message: { id: string; attachments?: Array<{ id: string; name: string }> } | undefined, opened: boolean): WorkbenchTask {
@@ -100,7 +114,7 @@ export function compileTaskBrief(task?: WorkbenchTask, evidence = false, current
   const label = evidence
     ? '这是当前任务的结构摘要，权威低于用户原话、当前规则和本期引用。它不是本期工作事实。'
     : '这是当前任务的结构摘要，权威低于用户原话、当前规则和本期引用。';
-  return `\n<task_brief>\n${label}\n${lines.join('\n')}\n</task_brief>`;
+  return `\n<task_brief>\n${label}\n用户本轮明确的改稿和交付要求可临时调整长期工作规则，仅限当前任务；不能扩大资料来源或工具权限。\n${lines.join('\n')}\n</task_brief>`;
 }
 
 export function retrievalQuery(messages: Array<Pick<WorkbenchMessage, 'role' | 'text' | 'attachments'>>, task?: Pick<WorkbenchTask, 'goal'>): string {

@@ -310,7 +310,7 @@ test('最初那张图在很多轮继续之后仍留在任务材料里，核对�
   }
   const task = service.get(conversation.id).task;
   expect(task?.materials?.some(item => item.name === '最初现场.png' && item.ref === firstAttachmentId)).toBe(true);
-  expect(task?.sources?.some(item => item.messageId === firstMessageId)).toBe(false);
+  expect(task?.sources?.some(item => item.messageId === firstMessageId && item.note === '提出任务')).toBe(true);
   expect(compileTaskBrief(task, false)).toContain('最初现场.png');
   const images = ['图1.png', '图2.png', '图3.png', '图4.png', '图5.png'].map((name, index) => ({
     id: `00000000-0000-4000-8000-${String(50 + index).padStart(12, '0')}`,

@@ -94,6 +94,7 @@ export function summarySource(message: Pick<WorkbenchMessage, 'text' | 'attachme
   if (message.attachmentSupplement?.trim()) parts.push(message.attachmentSupplement.trim());
   if (message.toolCalls?.length) parts.push(toolHistoryText(message));
   for (const item of message.attachments ?? []) {
+    parts.push(`附件引用：attachment:${item.id}（${item.name}）`);
     const image = item.route === 'vision' || item.route === 'ocr' || item.mime.startsWith('image/');
     if (image) parts.push(`【图片 ${item.name}】${item.text?.trim() || item.note || '图片仍保存在这条消息上'}`);
     else if (item.text?.trim()) parts.push(`【附件 ${item.name}】\n${item.text.trim()}`);

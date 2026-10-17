@@ -2,7 +2,8 @@ import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, extname, join, relative, isAbsolute, resolve, sep } from 'node:path';
-import JSZip from 'jszip';
+import { renderWorkbenchDocx } from './docx';
+import { marked } from 'marked';
 import type { BrainEngine } from '../../core/engine';
 import { resolveMainSourceId } from '../../core/source-resolver';
 import type { WorkbenchAgent, WorkbenchArtifact } from '../../../shared/workbench-agents';
@@ -42,16 +43,6 @@ export async function readLocalFile(agent: WorkbenchAgent, path: string, offset 
   if (offset > text.length) throw new Error('读取位置超出正文');
   const content = text.slice(offset, offset + 6000);
   return { path: resolved, title: basename(resolved), content, offset, nextOffset: offset + content.length < text.length ? offset + content.length : null, modifiedAt: info.mtime.toISOString(), notes, note: '文件修改时间不是工作完成时间，请按正文中的事件时间判断。' };
-}
-const xml = (text: string) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, '');
-async function docx(title: string, content: string) {
-  const zip = new JSZip();
-  zip.file('[Content_Types].xml', '<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>');
-  zip.file('_rels/.rels', '<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>');
-  const lines = [title, ...content.split('\n')].map((line, index) => { const heading = index === 0 || /^#{1,3}\s/.test(line); return `<w:p><w:pPr><w:spacing w:after="120"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Calibri" w:eastAsia="Microsoft YaHei"/>${heading ? '<w:b/>' : ''}<w:sz w:val="${heading ? 28 : 22}"/></w:rPr><w:t xml:space="preserve">${xml(line.replace(/^#{1,6}\s+/, ''))}</w:t></w:r></w:p>`; }).join('');
-  zip.file('word/document.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${lines}<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr></w:body></w:document>`);
-  zip.forEach((_path, file) => { file.date = new Date('1980-01-01T00:00:00Z'); });
-  return zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
 }
 function familyIdOf(artifact: WorkbenchArtifact) { return artifact.familyId || artifact.id; }
 function revisionOf(artifact: WorkbenchArtifact) { return artifact.revision ?? 1; }
@@ -100,11 +91,69 @@ function prepareArtifact(input: { title: string; content: string; citations: Wor
   const rendered = `${content}${sources.length ? `\n\n资料依据\n${sources.join('\n')}` : ''}`;
   return { hash, rendered };
 }
-async function writeArtifactFile(store: WorkbenchAgentStore, id: string, format: WorkbenchArtifact['format'], title: string, rendered: string, signal?: AbortSignal) {
+type WordInput = { template?: string; layout?: 'portrait' | 'landscape' };
+async function prepareWord(store: WorkbenchAgentStore, agent: WorkbenchAgent, conversationId: string, content: string, input: WordInput, base?: WorkbenchArtifact) {
+  if (input.layout !== undefined && !['portrait', 'landscape'].includes(input.layout)) throw new Error('Word 页面方向无效');
+  if (input.template !== undefined && (typeof input.template !== 'string' || !input.template.trim())) throw new Error('Word 模板无效');
+  const template = input.template === 'default' ? undefined : input.template ?? base?.word?.template;
+  const layout = input.template && input.template !== 'default' ? input.layout : input.layout ?? (template ? undefined : base?.word?.layout);
+  const refs = new Set<string>();
+  marked.walkTokens(marked.lexer(content, { gfm: true }), token => { if (token.type === 'image') refs.add(token.href); });
+  if (refs.size > 32) throw new Error('单份 Word 最多嵌入 32 张图片');
+  const images = new Map<string, Buffer>(); const resources = new Map<string, Buffer>();
+  const assets: Array<{ reference: string; hash: string }> = [];
+  const load = (reference: string, force = false): Buffer => {
+    const saved = !force && base?.word?.assets.find(asset => asset.reference === reference);
+    if (saved) {
+      if (!/^[a-f0-9]{64}$/.test(saved.hash)) throw new Error('Word 素材备份无效');
+      const path = join(store.workbench.root, 'artifacts', 'resources', saved.hash);
+      if (!existsSync(path) || lstatSync(path).isSymbolicLink()) throw new Error('Word 素材备份缺失');
+      const bytes = readFileSync(path);
+      if (hashBytes(bytes) !== saved.hash) throw new Error('Word 素材备份已改变');
+      return bytes;
+    }
+    if (reference.startsWith('attachment:')) {
+      const id = reference.slice('attachment:'.length);
+      const conversation = store.workbench.get(conversationId);
+      const latest = [...conversation.messages].reverse().find(message => message.role === 'user')?.id;
+      const materialIds = new Set((conversation.task?.materials ?? []).filter(row => row.kind === 'attachment').map(row => row.ref));
+      const sourceMessages = new Set(conversation.task?.sources?.map(row => row.messageId) ?? []);
+      const allowed = conversation.messages.some(message => (message.id === latest || materialIds.has(id) || sourceMessages.has(message.id)) && message.attachments?.some(item => item.id === id));
+      if (!allowed) throw new Error('附件不在当前任务授权范围中');
+      const bytes = store.workbench.readAttachment(conversationId, id);
+      if (!bytes?.length) throw new Error('附件原文件缺失');
+      return bytes;
+    }
+    const path = granted(agent, reference);
+    if (!statSync(path).isFile() || statSync(path).size > 15 * 1024 * 1024) throw new Error('Word 素材必须是不超过 15MB 的文件');
+    return readFileSync(path);
+  };
+  const remember = (reference: string, bytes: Buffer) => { const hash = hashBytes(bytes); assets.push({ reference, hash }); resources.set(hash, bytes); };
+  let imageBytes = 0;
+  for (const reference of refs) {
+    if (/^(?:https?:|data:|file:)/i.test(reference)) throw new Error('图片仅支持当前任务附件或已授权目录中的本地文件');
+    const bytes = load(reference); imageBytes += bytes.length;
+    if (imageBytes > 30 * 1024 * 1024) throw new Error('单份 Word 图片总量超过 30MB');
+    images.set(reference, bytes); remember(reference, bytes);
+  }
+  const templateBytes = template ? load(template, input.template !== undefined) : undefined;
+  if (template && templateBytes) remember(template, templateBytes);
+  const word = template || layout || assets.length ? { ...(template ? { template } : {}), ...(layout ? { layout } : {}), assets } : undefined;
+  return { word, resources, options: { template: templateBytes, images, layout } };
+}
+async function writeArtifactFile(store: WorkbenchAgentStore, id: string, format: WorkbenchArtifact['format'], title: string, rendered: string, signal?: AbortSignal, word?: Awaited<ReturnType<typeof prepareWord>>) {
   const directory = join(store.workbench.root, 'artifacts'); mkdirSync(directory, { recursive: true, mode: 0o700 });
   const path = join(directory, `${id}.${format === 'docx' ? 'docx' : 'md'}`);
-  const bytes = format === 'docx' ? await docx(title, rendered) : Buffer.from(`# ${title}\n\n${rendered}\n`);
+  const bytes = format === 'docx' ? await renderWorkbenchDocx(title, rendered, word?.options) : Buffer.from(`# ${title}\n\n${rendered}\n`);
   signal?.throwIfAborted();
+  if (word?.resources.size) {
+    const resources = join(directory, 'resources'); mkdirSync(resources, { recursive: true, mode: 0o700 });
+    for (const [hash, data] of word.resources) {
+      const target = join(resources, hash);
+      if (existsSync(target)) { if (lstatSync(target).isSymbolicLink() || hashBytes(readFileSync(target)) !== hash) throw new Error('Word 素材备份已改变'); }
+      else writeFileSync(target, data, { flag: 'wx', mode: 0o600 });
+    }
+  }
   if (!existsSync(path)) writeFileSync(path, bytes, { mode: 0o600, flag: 'wx' });
   else if (!readFileSync(path).equals(bytes)) throw new Error('成果文件已改变，保留人工内容');
   return { path, bytesHash: hashBytes(bytes) };
@@ -140,19 +189,25 @@ export function readWorkbenchArtifact(store: WorkbenchAgentStore, input: { agent
   const note = drift.missing ? '已保存成果的文件缺失，不能在这一版上继续改。' : drift.conflict ? (publishedConflict ? '已发布文件和保存的正文不一致，不能在这一版上继续改，也不会覆盖外部修改。' : '私有成果文件和保存时的内容不一致，不能在这一版上继续改，也不会覆盖外部修改。') : undefined;
   return { id: artifact.id, familyId: familyIdOf(artifact), revision: revisionOf(artifact), parentId: artifact.parentId ?? null, title: artifact.title, format: artifact.format, hash: artifact.hash, publishedPath: artifact.publishedPath ?? null, citations: artifact.citations, conflict: drift.conflict, verified: drift.verified, content, offset, nextOffset: offset + content.length < artifact.content.length ? offset + content.length : null, ...(note ? { note } : {}) };
 }
-export async function saveWorkbenchArtifact(store: WorkbenchAgentStore, input: { agent: WorkbenchAgent; conversationId: string; messageId: string; title: string; content: string; citations: WorkbenchCitation[]; format?: WorkbenchArtifact['format']; signal?: AbortSignal }) {
+export async function saveWorkbenchArtifact(store: WorkbenchAgentStore, input: { agent: WorkbenchAgent; conversationId: string; messageId: string; title: string; content: string; citations: WorkbenchCitation[]; format?: WorkbenchArtifact['format']; signal?: AbortSignal } & WordInput) {
   input.signal?.throwIfAborted();
   const { agent, conversationId, messageId, title, content, citations } = input;
   const format = input.format ?? agent.deliveryFormat;
+  const replay = store.artifacts().find(row => row.agentId === agent.id && row.conversationId === conversationId && row.messageId === messageId && row.title === title && row.content === content && row.format === format && JSON.stringify(row.citations) === JSON.stringify(citations) && (row.word?.template ?? 'default') === (input.template ?? 'default') && row.word?.layout === input.layout);
+  if (replay) { const state = privateFileState(replay); if (state.conflict) throw new Error('成果文件缺失或已改变'); return replay; }
   const prepared = prepareArtifact({ title, content, citations, format });
+  if (format !== 'docx' && (input.template || input.layout)) throw new Error('模板和页面方向仅用于 Word 成果');
+  const word = format === 'docx' ? await prepareWord(store, agent, conversationId, content, input) : undefined;
+  if (word?.word) prepared.hash = hashBytes(Buffer.from(JSON.stringify([prepared.hash, word.word])));
   const id = createHash('sha256').update(JSON.stringify([conversationId, messageId, prepared.hash])).digest('hex');
   const existing = store.artifacts().find(row => row.id === id);
   if (existing) { if (!existsSync(existing.path)) throw new Error('已保存成果的文件缺失'); return existing; }
-  const written = await writeArtifactFile(store, id, format, title, prepared.rendered, input.signal);
+  const written = await writeArtifactFile(store, id, format, title, prepared.rendered, input.signal, word);
   const artifact: WorkbenchArtifact = { id, familyId: id, revision: 1, agentId: agent.id, conversationId, messageId, title, content, citations: structuredClone(citations), path: written.path, bytesHash: written.bytesHash, format, createdAt: new Date().toISOString(), hash: prepared.hash };
+  if (word?.word) artifact.word = word.word;
   store.recordArtifact(artifact); return artifact;
 }
-export async function reviseWorkbenchArtifact(store: WorkbenchAgentStore, input: { agent: WorkbenchAgent; conversationId: string; messageId: string; baseArtifactId: string; baseHash: string; title: string; content: string; citations: WorkbenchCitation[]; format?: WorkbenchArtifact['format']; signal?: AbortSignal }) {
+export async function reviseWorkbenchArtifact(store: WorkbenchAgentStore, input: { agent: WorkbenchAgent; conversationId: string; messageId: string; baseArtifactId: string; baseHash: string; title: string; content: string; citations: WorkbenchCitation[]; format?: WorkbenchArtifact['format']; signal?: AbortSignal } & WordInput) {
   input.signal?.throwIfAborted();
   const { agent, conversationId, messageId, title, content, citations } = input;
   const mine = store.artifacts().filter(row => row.agentId === agent.id && row.conversationId === conversationId);
@@ -160,6 +215,9 @@ export async function reviseWorkbenchArtifact(store: WorkbenchAgentStore, input:
   if (!base) throw new Error(mine.length ? `成果不存在。当前可选：${optionText(mine)}` : '成果不存在');
   const format = input.format ?? base.format;
   const prepared = prepareArtifact({ title, content, citations, format });
+  if (format !== 'docx' && (input.template || input.layout)) throw new Error('模板和页面方向仅用于 Word 成果');
+  const word = format === 'docx' ? await prepareWord(store, agent, conversationId, content, input, base) : undefined;
+  if (word?.word) prepared.hash = hashBytes(Buffer.from(JSON.stringify([prepared.hash, word.word])));
   const id = createHash('sha256').update(JSON.stringify([conversationId, messageId, prepared.hash])).digest('hex');
   const existing = store.artifacts().find(row => row.id === id);
   if (existing) {
@@ -175,8 +233,9 @@ export async function reviseWorkbenchArtifact(store: WorkbenchAgentStore, input:
   const drift = publicationDrift(base);
   if (drift.missing) throw new Error('已保存成果的文件缺失');
   if (drift.conflict) throw new Error('成果文件已被外部修改，未覆盖');
-  const written = await writeArtifactFile(store, id, format, title, prepared.rendered, input.signal);
+  const written = await writeArtifactFile(store, id, format, title, prepared.rendered, input.signal, word);
   const artifact: WorkbenchArtifact = { id, familyId: familyIdOf(base), parentId: base.id, revision: revisionOf(base) + 1, baseHash: base.hash, agentId: agent.id, conversationId, messageId, title, content, citations: structuredClone(citations), path: written.path, bytesHash: written.bytesHash, format, createdAt: new Date().toISOString(), hash: prepared.hash };
+  if (word?.word) artifact.word = word.word;
   store.recordArtifact(artifact); return artifact;
 }
 export function artifactFilename(title: string, format: WorkbenchArtifact['format']) {

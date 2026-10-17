@@ -1,0 +1,3441 @@
+{
+  "benchmark": "pmbrain-zh-project-v2",
+  "created_at": "2026-10-17T12:17:39.295Z",
+  "version": "1.4.93",
+  "commit": "5a2f309a63121577cca702c09a2ea32b2e81eab0",
+  "working_tree_dirty": true,
+  "corpus": {
+    "synthetic": true,
+    "pages": 20,
+    "questions": 100,
+    "sources": 2,
+    "same_title_across_sources": true
+  },
+  "configuration": {
+    "engine": "pglite",
+    "mode": "balanced",
+    "embedding": "not_configured",
+    "reranker": "disabled",
+    "expansion": "disabled",
+    "answer_model": "not_run"
+  },
+  "retrieval_gate": "failed",
+  "full_quality_gate": "not_evaluated",
+  "limitations": [
+    "合成中文语料，不代表用户真实知识库质量。",
+    "无向量、查询扩展、重排或回答模型调用；引用事实支持率未测。",
+    "每题使用真实 hybridSearch 和 Source 限定，没有按答案构造查询向量，也不向问题追加内部编号。"
+  ],
+  "fixture_checks": {
+    "page_readback": true,
+    "exact_keyword_hits": [
+      "default:projects/project-01"
+    ]
+  },
+  "exact_name_probe": {
+    "passed": 20,
+    "questions": 20,
+    "per_question": [
+      {
+        "query": "清泉供水",
+        "source_id": "default",
+        "expected": "default:projects/project-01",
+        "ranked_slugs": [
+          "default:projects/project-01"
+        ],
+        "passed": true
+      },
+      {
+        "query": "星河排水",
+        "source_id": "default",
+        "expected": "default:projects/project-02",
+        "ranked_slugs": [
+          "default:projects/project-02"
+        ],
+        "passed": true
+      },
+      {
+        "query": "青禾园区",
+        "source_id": "default",
+        "expected": "default:projects/project-03",
+        "ranked_slugs": [
+          "default:projects/project-03"
+        ],
+        "passed": true
+      },
+      {
+        "query": "远帆物流",
+        "source_id": "default",
+        "expected": "default:projects/project-04",
+        "ranked_slugs": [
+          "default:projects/project-04"
+        ],
+        "passed": true
+      },
+      {
+        "query": "晨光校园",
+        "source_id": "default",
+        "expected": "default:projects/project-05",
+        "ranked_slugs": [
+          "default:projects/project-05"
+        ],
+        "passed": true
+      },
+      {
+        "query": "海风监测",
+        "source_id": "default",
+        "expected": "default:projects/project-06",
+        "ranked_slugs": [
+          "default:projects/project-06"
+        ],
+        "passed": true
+      },
+      {
+        "query": "云杉数据",
+        "source_id": "default",
+        "expected": "default:projects/project-07",
+        "ranked_slugs": [
+          "default:projects/project-07"
+        ],
+        "passed": true
+      },
+      {
+        "query": "山川巡检",
+        "source_id": "default",
+        "expected": "default:projects/project-08",
+        "ranked_slugs": [
+          "default:projects/project-08"
+        ],
+        "passed": true
+      },
+      {
+        "query": "向阳客服",
+        "source_id": "default",
+        "expected": "default:projects/project-09",
+        "ranked_slugs": [
+          "default:projects/project-09"
+        ],
+        "passed": true
+      },
+      {
+        "query": "白鹭仓储",
+        "source_id": "default",
+        "expected": "default:projects/project-10",
+        "ranked_slugs": [
+          "default:projects/project-10"
+        ],
+        "passed": true
+      },
+      {
+        "query": "清泉供水",
+        "source_id": "synthetic-team-b",
+        "expected": "synthetic-team-b:projects/project-11",
+        "ranked_slugs": [
+          "synthetic-team-b:projects/project-11"
+        ],
+        "passed": true
+      },
+      {
+        "query": "星河排水",
+        "source_id": "synthetic-team-b",
+        "expected": "synthetic-team-b:projects/project-12",
+        "ranked_slugs": [
+          "synthetic-team-b:projects/project-12"
+        ],
+        "passed": true
+      },
+      {
+        "query": "青禾园区",
+        "source_id": "synthetic-team-b",
+        "expected": "synthetic-team-b:projects/project-13",
+        "ranked_slugs": [
+          "synthetic-team-b:projects/project-13"
+        ],
+        "passed": true
+      },
+      {
+        "query": "远帆物流",
+        "source_id": "synthetic-team-b",
+        "expected": "synthetic-team-b:projects/project-14",
+        "ranked_slugs": [
+          "synthetic-team-b:projects/project-14"
+        ],
+        "passed": true
+      },
+      {
+        "query": "晨光校园",
+        "source_id": "synthetic-team-b",
+        "expected": "synthetic-team-b:projects/project-15",
+        "ranked_slugs": [
+          "synthetic-team-b:projects/project-15"
+        ],
+        "passed": true
+      },
+      {
+        "query": "海风监测",
+        "source_id": "synthetic-team-b",
+        "expected": "synthetic-team-b:projects/project-16",
+        "ranked_slugs": [
+          "synthetic-team-b:projects/project-16"
+        ],
+        "passed": true
+      },
+      {
+        "query": "云杉数据",
+        "source_id": "synthetic-team-b",
+        "expected": "synthetic-team-b:projects/project-17",
+        "ranked_slugs": [
+          "synthetic-team-b:projects/project-17"
+        ],
+        "passed": true
+      },
+      {
+        "query": "山川巡检",
+        "source_id": "synthetic-team-b",
+        "expected": "synthetic-team-b:projects/project-18",
+        "ranked_slugs": [
+          "synthetic-team-b:projects/project-18"
+        ],
+        "passed": true
+      },
+      {
+        "query": "向阳客服",
+        "source_id": "synthetic-team-b",
+        "expected": "synthetic-team-b:projects/project-19",
+        "ranked_slugs": [
+          "synthetic-team-b:projects/project-19"
+        ],
+        "passed": true
+      },
+      {
+        "query": "白鹭仓储",
+        "source_id": "synthetic-team-b",
+        "expected": "synthetic-team-b:projects/project-20",
+        "ranked_slugs": [
+          "synthetic-team-b:projects/project-20"
+        ],
+        "passed": true
+      }
+    ]
+  },
+  "report": {
+    "schema_version": 2,
+    "questions": 100,
+    "recall_at_5": 0,
+    "mrr": 0,
+    "correct_document_hit_rate": 0,
+    "top_1_hit_rate": 0,
+    "citation_correctness": null,
+    "citation_evaluated_questions": 0,
+    "unobserved_questions": 0,
+    "queries_errored": 0,
+    "source_isolation_accuracy": null,
+    "per_question": [
+      {
+        "id": "project-01-risk",
+        "query": "清泉供水最大的隐患是什么",
+        "family": "risk",
+        "source_id": "default",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 454.0584000000017,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-01-commitment",
+        "query": "清泉供水负责人答应完成什么",
+        "family": "commitment",
+        "source_id": "default",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 291.25360000000364,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-01-date",
+        "query": "清泉供水需求提出的日期",
+        "family": "date",
+        "source_id": "default",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 163.0992999999944,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-01-amount",
+        "query": "清泉供水合同金额是多少",
+        "family": "amount",
+        "source_id": "default",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 167.48969999999827,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-01-decision",
+        "query": "清泉供水为什么换方案，最终决定是什么",
+        "family": "decision",
+        "source_id": "default",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 135.5625,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-02-risk",
+        "query": "星河排水最大的隐患是什么",
+        "family": "risk",
+        "source_id": "default",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 317.6357999999964,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-02-commitment",
+        "query": "星河排水负责人答应完成什么",
+        "family": "commitment",
+        "source_id": "default",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 403.73909999999887,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-02-date",
+        "query": "星河排水需求提出的日期",
+        "family": "date",
+        "source_id": "default",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 562.8872000000047,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-02-amount",
+        "query": "星河排水合同金额是多少",
+        "family": "amount",
+        "source_id": "default",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 348.77410000000236,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-02-decision",
+        "query": "星河排水为什么换方案，最终决定是什么",
+        "family": "decision",
+        "source_id": "default",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 434.5483999999997,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-03-risk",
+        "query": "青禾园区最大的隐患是什么",
+        "family": "risk",
+        "source_id": "default",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 494.9973000000027,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-03-commitment",
+        "query": "青禾园区负责人答应完成什么",
+        "family": "commitment",
+        "source_id": "default",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 382.9163000000044,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-03-date",
+        "query": "青禾园区需求提出的日期",
+        "family": "date",
+        "source_id": "default",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 451.9122999999963,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-03-amount",
+        "query": "青禾园区合同金额是多少",
+        "family": "amount",
+        "source_id": "default",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 304.4109000000026,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-03-decision",
+        "query": "青禾园区为什么换方案，最终决定是什么",
+        "family": "decision",
+        "source_id": "default",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 820.4788999999946,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-04-risk",
+        "query": "远帆物流最大的隐患是什么",
+        "family": "risk",
+        "source_id": "default",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 355.1582999999955,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-04-commitment",
+        "query": "远帆物流负责人答应完成什么",
+        "family": "commitment",
+        "source_id": "default",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 523.0407999999952,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-04-date",
+        "query": "远帆物流需求提出的日期",
+        "family": "date",
+        "source_id": "default",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 469.38930000000255,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-04-amount",
+        "query": "远帆物流合同金额是多少",
+        "family": "amount",
+        "source_id": "default",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 212.0112999999983,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-04-decision",
+        "query": "远帆物流为什么换方案，最终决定是什么",
+        "family": "decision",
+        "source_id": "default",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 271.64280000000144,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-05-risk",
+        "query": "晨光校园最大的隐患是什么",
+        "family": "risk",
+        "source_id": "default",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 1012.285100000001,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-05-commitment",
+        "query": "晨光校园负责人答应完成什么",
+        "family": "commitment",
+        "source_id": "default",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 404.02640000000247,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-05-date",
+        "query": "晨光校园需求提出的日期",
+        "family": "date",
+        "source_id": "default",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 252.45330000000104,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-05-amount",
+        "query": "晨光校园合同金额是多少",
+        "family": "amount",
+        "source_id": "default",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 290.9701999999961,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-05-decision",
+        "query": "晨光校园为什么换方案，最终决定是什么",
+        "family": "decision",
+        "source_id": "default",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 273.93930000000546,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-06-risk",
+        "query": "海风监测最大的隐患是什么",
+        "family": "risk",
+        "source_id": "default",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 257.1078999999954,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-06-commitment",
+        "query": "海风监测负责人答应完成什么",
+        "family": "commitment",
+        "source_id": "default",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 491.0395999999964,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-06-date",
+        "query": "海风监测需求提出的日期",
+        "family": "date",
+        "source_id": "default",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 800.2782000000007,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-06-amount",
+        "query": "海风监测合同金额是多少",
+        "family": "amount",
+        "source_id": "default",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 822.7733000000007,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-06-decision",
+        "query": "海风监测为什么换方案，最终决定是什么",
+        "family": "decision",
+        "source_id": "default",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 413.4922000000006,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-07-risk",
+        "query": "云杉数据最大的隐患是什么",
+        "family": "risk",
+        "source_id": "default",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 399.5428000000029,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-07-commitment",
+        "query": "云杉数据负责人答应完成什么",
+        "family": "commitment",
+        "source_id": "default",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 616.605899999995,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-07-date",
+        "query": "云杉数据需求提出的日期",
+        "family": "date",
+        "source_id": "default",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 420.4170000000013,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-07-amount",
+        "query": "云杉数据合同金额是多少",
+        "family": "amount",
+        "source_id": "default",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 144.64450000000215,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-07-decision",
+        "query": "云杉数据为什么换方案，最终决定是什么",
+        "family": "decision",
+        "source_id": "default",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 364.9082999999955,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-08-risk",
+        "query": "山川巡检最大的隐患是什么",
+        "family": "risk",
+        "source_id": "default",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 493.15200000000186,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-08-commitment",
+        "query": "山川巡检负责人答应完成什么",
+        "family": "commitment",
+        "source_id": "default",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 534.2437999999966,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-08-date",
+        "query": "山川巡检需求提出的日期",
+        "family": "date",
+        "source_id": "default",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 425.5601999999999,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-08-amount",
+        "query": "山川巡检合同金额是多少",
+        "family": "amount",
+        "source_id": "default",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 209.476800000004,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-08-decision",
+        "query": "山川巡检为什么换方案，最终决定是什么",
+        "family": "decision",
+        "source_id": "default",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 158.16440000000148,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-09-risk",
+        "query": "向阳客服最大的隐患是什么",
+        "family": "risk",
+        "source_id": "default",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 334.00970000000234,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-09-commitment",
+        "query": "向阳客服负责人答应完成什么",
+        "family": "commitment",
+        "source_id": "default",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 374.645199999999,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-09-date",
+        "query": "向阳客服需求提出的日期",
+        "family": "date",
+        "source_id": "default",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 369.8119000000006,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-09-amount",
+        "query": "向阳客服合同金额是多少",
+        "family": "amount",
+        "source_id": "default",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 476.77500000000146,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-09-decision",
+        "query": "向阳客服为什么换方案，最终决定是什么",
+        "family": "decision",
+        "source_id": "default",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 213.08980000000156,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-10-risk",
+        "query": "白鹭仓储最大的隐患是什么",
+        "family": "risk",
+        "source_id": "default",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 234.8588000000018,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-10-commitment",
+        "query": "白鹭仓储负责人答应完成什么",
+        "family": "commitment",
+        "source_id": "default",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 343.0849999999991,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-10-date",
+        "query": "白鹭仓储需求提出的日期",
+        "family": "date",
+        "source_id": "default",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 296.23449999999866,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-10-amount",
+        "query": "白鹭仓储合同金额是多少",
+        "family": "amount",
+        "source_id": "default",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 176.52209999999468,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-10-decision",
+        "query": "白鹭仓储为什么换方案，最终决定是什么",
+        "family": "decision",
+        "source_id": "default",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 190.762999999999,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-11-risk",
+        "query": "清泉供水最大的隐患是什么",
+        "family": "risk",
+        "source_id": "synthetic-team-b",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 233.7974000000031,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-11-commitment",
+        "query": "清泉供水负责人答应完成什么",
+        "family": "commitment",
+        "source_id": "synthetic-team-b",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 200.9354999999996,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-11-date",
+        "query": "清泉供水需求提出的日期",
+        "family": "date",
+        "source_id": "synthetic-team-b",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 167.81009999999515,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-11-amount",
+        "query": "清泉供水合同金额是多少",
+        "family": "amount",
+        "source_id": "synthetic-team-b",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 170.28239999999641,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-11-decision",
+        "query": "清泉供水为什么换方案，最终决定是什么",
+        "family": "decision",
+        "source_id": "synthetic-team-b",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 160.6478000000061,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-12-risk",
+        "query": "星河排水最大的隐患是什么",
+        "family": "risk",
+        "source_id": "synthetic-team-b",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 221.08009999999922,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-12-commitment",
+        "query": "星河排水负责人答应完成什么",
+        "family": "commitment",
+        "source_id": "synthetic-team-b",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 274.64130000000296,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-12-date",
+        "query": "星河排水需求提出的日期",
+        "family": "date",
+        "source_id": "synthetic-team-b",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 285.09150000000227,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-12-amount",
+        "query": "星河排水合同金额是多少",
+        "family": "amount",
+        "source_id": "synthetic-team-b",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 144.99949999999808,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-12-decision",
+        "query": "星河排水为什么换方案，最终决定是什么",
+        "family": "decision",
+        "source_id": "synthetic-team-b",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 164.89390000000276,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-13-risk",
+        "query": "青禾园区最大的隐患是什么",
+        "family": "risk",
+        "source_id": "synthetic-team-b",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 216.48249999999825,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-13-commitment",
+        "query": "青禾园区负责人答应完成什么",
+        "family": "commitment",
+        "source_id": "synthetic-team-b",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 214.16670000000158,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-13-date",
+        "query": "青禾园区需求提出的日期",
+        "family": "date",
+        "source_id": "synthetic-team-b",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 175.6409000000058,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-13-amount",
+        "query": "青禾园区合同金额是多少",
+        "family": "amount",
+        "source_id": "synthetic-team-b",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 160.2172999999966,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-13-decision",
+        "query": "青禾园区为什么换方案，最终决定是什么",
+        "family": "decision",
+        "source_id": "synthetic-team-b",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 257.1166000000012,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-14-risk",
+        "query": "远帆物流最大的隐患是什么",
+        "family": "risk",
+        "source_id": "synthetic-team-b",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 251.57560000000376,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-14-commitment",
+        "query": "远帆物流负责人答应完成什么",
+        "family": "commitment",
+        "source_id": "synthetic-team-b",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 317.5262999999977,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-14-date",
+        "query": "远帆物流需求提出的日期",
+        "family": "date",
+        "source_id": "synthetic-team-b",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 169.83959999999934,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-14-amount",
+        "query": "远帆物流合同金额是多少",
+        "family": "amount",
+        "source_id": "synthetic-team-b",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 185.62550000000192,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-14-decision",
+        "query": "远帆物流为什么换方案，最终决定是什么",
+        "family": "decision",
+        "source_id": "synthetic-team-b",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 180.08550000000105,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-15-risk",
+        "query": "晨光校园最大的隐患是什么",
+        "family": "risk",
+        "source_id": "synthetic-team-b",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 207.14590000000317,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-15-commitment",
+        "query": "晨光校园负责人答应完成什么",
+        "family": "commitment",
+        "source_id": "synthetic-team-b",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 198.2216000000044,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-15-date",
+        "query": "晨光校园需求提出的日期",
+        "family": "date",
+        "source_id": "synthetic-team-b",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 133.9771000000037,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-15-amount",
+        "query": "晨光校园合同金额是多少",
+        "family": "amount",
+        "source_id": "synthetic-team-b",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 140.37870000000112,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-15-decision",
+        "query": "晨光校园为什么换方案，最终决定是什么",
+        "family": "decision",
+        "source_id": "synthetic-team-b",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 182.02300000000105,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-16-risk",
+        "query": "海风监测最大的隐患是什么",
+        "family": "risk",
+        "source_id": "synthetic-team-b",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 190.85719999999856,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-16-commitment",
+        "query": "海风监测负责人答应完成什么",
+        "family": "commitment",
+        "source_id": "synthetic-team-b",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 200.85979999999836,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-16-date",
+        "query": "海风监测需求提出的日期",
+        "family": "date",
+        "source_id": "synthetic-team-b",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 150.8732999999993,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-16-amount",
+        "query": "海风监测合同金额是多少",
+        "family": "amount",
+        "source_id": "synthetic-team-b",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 278.1146000000008,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-16-decision",
+        "query": "海风监测为什么换方案，最终决定是什么",
+        "family": "decision",
+        "source_id": "synthetic-team-b",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 354.1756000000023,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-17-risk",
+        "query": "云杉数据最大的隐患是什么",
+        "family": "risk",
+        "source_id": "synthetic-team-b",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 216.68409999999858,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-17-commitment",
+        "query": "云杉数据负责人答应完成什么",
+        "family": "commitment",
+        "source_id": "synthetic-team-b",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 189.2201000000059,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-17-date",
+        "query": "云杉数据需求提出的日期",
+        "family": "date",
+        "source_id": "synthetic-team-b",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 158.50850000000355,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-17-amount",
+        "query": "云杉数据合同金额是多少",
+        "family": "amount",
+        "source_id": "synthetic-team-b",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 129.33759999999893,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-17-decision",
+        "query": "云杉数据为什么换方案，最终决定是什么",
+        "family": "decision",
+        "source_id": "synthetic-team-b",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 189.5248000000065,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-18-risk",
+        "query": "山川巡检最大的隐患是什么",
+        "family": "risk",
+        "source_id": "synthetic-team-b",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 200.50450000000274,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-18-commitment",
+        "query": "山川巡检负责人答应完成什么",
+        "family": "commitment",
+        "source_id": "synthetic-team-b",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 185.31869999999617,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-18-date",
+        "query": "山川巡检需求提出的日期",
+        "family": "date",
+        "source_id": "synthetic-team-b",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 139.29560000000492,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-18-amount",
+        "query": "山川巡检合同金额是多少",
+        "family": "amount",
+        "source_id": "synthetic-team-b",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 138.2708000000057,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-18-decision",
+        "query": "山川巡检为什么换方案，最终决定是什么",
+        "family": "decision",
+        "source_id": "synthetic-team-b",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 248.21190000000206,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-19-risk",
+        "query": "向阳客服最大的隐患是什么",
+        "family": "risk",
+        "source_id": "synthetic-team-b",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 205.9574999999968,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-19-commitment",
+        "query": "向阳客服负责人答应完成什么",
+        "family": "commitment",
+        "source_id": "synthetic-team-b",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 173.48540000000503,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-19-date",
+        "query": "向阳客服需求提出的日期",
+        "family": "date",
+        "source_id": "synthetic-team-b",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 103.98980000000302,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-19-amount",
+        "query": "向阳客服合同金额是多少",
+        "family": "amount",
+        "source_id": "synthetic-team-b",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 115.34670000000187,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-19-decision",
+        "query": "向阳客服为什么换方案，最终决定是什么",
+        "family": "decision",
+        "source_id": "synthetic-team-b",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 155.99380000000383,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-20-risk",
+        "query": "白鹭仓储最大的隐患是什么",
+        "family": "risk",
+        "source_id": "synthetic-team-b",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 209.52180000000226,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-20-commitment",
+        "query": "白鹭仓储负责人答应完成什么",
+        "family": "commitment",
+        "source_id": "synthetic-team-b",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 303.8668000000034,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-20-date",
+        "query": "白鹭仓储需求提出的日期",
+        "family": "date",
+        "source_id": "synthetic-team-b",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 278.89010000000417,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-20-amount",
+        "query": "白鹭仓储合同金额是多少",
+        "family": "amount",
+        "source_id": "synthetic-team-b",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 192.04730000000563,
+        "out_of_scope": []
+      },
+      {
+        "id": "project-20-decision",
+        "query": "白鹭仓储为什么换方案，最终决定是什么",
+        "family": "decision",
+        "source_id": "synthetic-team-b",
+        "status": "complete",
+        "recall_at_5": 0,
+        "reciprocal_rank": 0,
+        "top_1_hit": false,
+        "ranked_slugs": [],
+        "latency_ms": 243.48500000000058,
+        "out_of_scope": []
+      }
+    ],
+    "average_latency_ms": 293.2642610000007,
+    "total_token_usage": 0,
+    "average_token_usage": 0
+  },
+  "execution": [
+    {
+      "question_id": "project-01-risk",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": "low",
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "entity",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-01-commitment",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": null,
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "general",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-01-date",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": null,
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "general",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-01-amount",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": null,
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "general",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-01-decision",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": "low",
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "entity",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-02-risk",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": "low",
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "entity",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-02-commitment",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": null,
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "general",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-02-date",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": null,
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "general",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-02-amount",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": null,
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "general",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-02-decision",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": "low",
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "entity",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-03-risk",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": "low",
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "entity",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-03-commitment",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": null,
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "general",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-03-date",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": null,
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "general",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-03-amount",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": null,
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "general",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-03-decision",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": "low",
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "entity",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-04-risk",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": "low",
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "entity",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-04-commitment",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": null,
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "general",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-04-date",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": null,
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "general",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-04-amount",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": null,
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "general",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-04-decision",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": "low",
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "entity",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-05-risk",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": "low",
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "entity",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-05-commitment",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": null,
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "general",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-05-date",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": null,
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "general",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-05-amount",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": null,
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "general",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-05-decision",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": "low",
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "entity",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-06-risk",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": "low",
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "entity",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-06-commitment",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": null,
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "general",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-06-date",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": null,
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "general",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-06-amount",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": null,
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "general",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-06-decision",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": "low",
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "entity",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-07-risk",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": "low",
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "entity",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-07-commitment",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": null,
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "general",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-07-date",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": null,
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "general",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-07-amount",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": null,
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "general",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-07-decision",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": "low",
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "entity",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-08-risk",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": "low",
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "entity",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-08-commitment",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": null,
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "general",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-08-date",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": null,
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "general",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-08-amount",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": null,
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "general",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-08-decision",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": "low",
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "entity",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-09-risk",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": "low",
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "entity",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-09-commitment",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": null,
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "general",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-09-date",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": null,
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "general",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-09-amount",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": null,
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "general",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-09-decision",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": "low",
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "entity",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-10-risk",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": "low",
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "entity",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-10-commitment",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": null,
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "general",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-10-date",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": null,
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "general",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-10-amount",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": null,
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "general",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-10-decision",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": "low",
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "entity",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-11-risk",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": "low",
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "entity",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-11-commitment",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": null,
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "general",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-11-date",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": null,
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "general",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-11-amount",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": null,
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "general",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-11-decision",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": "low",
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "entity",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-12-risk",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": "low",
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "entity",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-12-commitment",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": null,
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "general",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-12-date",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": null,
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "general",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-12-amount",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": null,
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "general",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-12-decision",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": "low",
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "entity",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-13-risk",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": "low",
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "entity",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-13-commitment",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": null,
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "general",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-13-date",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": null,
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "general",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-13-amount",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": null,
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "general",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-13-decision",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": "low",
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "entity",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-14-risk",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": "low",
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "entity",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-14-commitment",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": null,
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "general",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-14-date",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": null,
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "general",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-14-amount",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": null,
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "general",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-14-decision",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": "low",
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "entity",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-15-risk",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": "low",
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "entity",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-15-commitment",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": null,
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "general",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-15-date",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": null,
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "general",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-15-amount",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": null,
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "general",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-15-decision",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": "low",
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "entity",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-16-risk",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": "low",
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "entity",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-16-commitment",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": null,
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "general",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-16-date",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": null,
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "general",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-16-amount",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": null,
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "general",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-16-decision",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": "low",
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "entity",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-17-risk",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": "low",
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "entity",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-17-commitment",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": null,
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "general",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-17-date",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": null,
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "general",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-17-amount",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": null,
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "general",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-17-decision",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": "low",
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "entity",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-18-risk",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": "low",
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "entity",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-18-commitment",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": null,
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "general",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-18-date",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": null,
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "general",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-18-amount",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": null,
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "general",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-18-decision",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": "low",
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "entity",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-19-risk",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": "low",
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "entity",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-19-commitment",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": null,
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "general",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-19-date",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": null,
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "general",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-19-amount",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": null,
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "general",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-19-decision",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": "low",
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "entity",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-20-risk",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": "low",
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "entity",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-20-commitment",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": null,
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "general",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-20-date",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": null,
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "general",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-20-amount",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": null,
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "general",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    },
+    {
+      "question_id": "project-20-decision",
+      "meta": {
+        "vector_enabled": false,
+        "detail_resolved": "low",
+        "expansion_applied": false,
+        "reranker_requested": false,
+        "reranker_applied": false,
+        "intent": "entity",
+        "mode": "balanced",
+        "embedding_column": "embedding",
+        "token_budget": {
+          "budget": 12000,
+          "used": 0,
+          "dropped": 0,
+          "kept": 0
+        }
+      }
+    }
+  ]
+}
