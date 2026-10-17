@@ -4,11 +4,12 @@ import type { BrainEngine } from '../../core/engine';
 import type { runAdminKnowledgeSearch } from '../../commands/admin-knowledge-search';
 import type { WorkbenchCitation, WorkbenchToolCall } from '../../../shared/workbench';
 import type { WorkbenchAnswerInput } from './service';
-import { RequestContext, ToolResultBudget, trimToolOutput } from './context-runtime';
+import { fitProviderRequest, RequestContext, ToolResultBudget, trimToolOutput } from './context-runtime';
 import {assistantRequestPolicy,requestStage} from './request';
 import {normalizeToolText,toolTextPreview,modelAnswerText} from '../../core/ai/tool-text';
 import { workbenchMemoryTools, nativeMemoryHandlers, type WorkbenchNative } from './memory-tools';
 import { agentTools, agentHandlers, type WorkbenchAgentTools } from './agent-tools';
+import { replayArtifactRead } from './files';
 export { chatMessageTokens } from './context-runtime';
 
 export const KNOWLEDGE_TOOLS: ChatToolDef[] = [
@@ -20,6 +21,18 @@ export const TOOL_INSTRUCTION = '\n你可以自主调用知识工具核对资料
 function params(raw: unknown): Record<string, unknown> {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('工具参数无效');
   return raw as Record<string, unknown>;
+}
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(item => stableJson(item)).join(',')}]`;
+  if (value && typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    return `{${Object.keys(record).sort().map(key => `${JSON.stringify(key)}:${stableJson(record[key])}`).join(',')}}`;
+  }
+  return JSON.stringify(value) ?? 'null';
+}
+function sameToolInput(stored: string, raw: unknown): boolean {
+  try { return stableJson(JSON.parse(stored)) === stableJson(raw ?? null); }
+  catch { return stored === JSON.stringify(raw ?? null); }
 }
 
 export async function runWorkbenchTools(input: WorkbenchAnswerInput & {
@@ -90,13 +103,62 @@ export async function runWorkbenchTools(input: WorkbenchAnswerInput & {
       return trimmed;
     } } : handler);
   }
+  for (const [name, handler] of [...handlers]) {
+    const settled = (input.settledTools ?? []).filter(call => call.name === name && call.status === 'complete' && call.output);
+    if (!settled.length) continue;
+    handlers.set(name, { ...handler, execute: async (raw, abort, execution) => {
+      const prior = settled.find(call => sameToolInput(call.input, raw));
+      if (!prior?.output) return handler.execute(raw, abort, execution);
+      let parsed: unknown;
+      try { parsed = JSON.parse(prior.output); } catch { return handler.execute(raw, abort, execution); }
+      if (name === 'knowledge_search') {
+        const output = parsed as { results?: unknown };
+        if (!output || typeof output !== 'object' || !Array.isArray(output.results)) return handler.execute(raw, abort, execution);
+        const kept: Array<Record<string, unknown>> = [];
+        for (const row of output.results) {
+          if (!row || typeof row !== 'object') continue;
+          const item = row as Record<string, unknown>;
+          if (typeof item.slug !== 'string') continue;
+          const sourceId = typeof item.source_id === 'string' ? item.source_id : null;
+          if (sourceIds && (!sourceId || !sourceIds.includes(sourceId))) continue;
+          item.citation = citation(sourceId, item.slug, String(item.title ?? ''), String(item.snippet ?? ''));
+          if (sourceId) allowed.set(JSON.stringify([sourceId, item.slug]), citations[Number(item.citation) - 1]!);
+          kept.push(item);
+        }
+        output.results = kept;
+        return output;
+      }
+      if (name === 'knowledge_read') {
+        const item = parsed as { source_id?: unknown; slug?: unknown; revision?: unknown };
+        const sourceId = typeof item?.source_id === 'string' ? item.source_id : '';
+        const slug = typeof item?.slug === 'string' ? item.slug : '';
+        const index = citations.findIndex(row => row.sourceId === sourceId && row.slug === slug);
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || !sourceId || !slug || index < 0 || !allowed.get(JSON.stringify([sourceId, slug])) || (sourceIds && !sourceIds.includes(sourceId)) || typeof item.revision !== 'string' || !item.revision) return handler.execute(raw, abort, execution);
+        reads.set(JSON.stringify([sourceId, slug]), item.revision);
+        return { ...parsed, citation: index + 1 };
+      }
+      if (name === 'artifact_read') {
+        const item = parsed as { content?: unknown; citations?: Array<WorkbenchCitation & { citation?: number }> };
+        if (!item || typeof item.content !== 'string' || !Array.isArray(item.citations)) return parsed;
+        const projected = replayArtifactRead(item.content, item.citations, row => {
+          const before = citations.length;
+          const number = citation(row.sourceId, row.slug, row.title, row.snippet);
+          const saved = citations[number - 1];
+          if (saved && citations.length > before) saved.origin = 'prior-artifact';
+          return number;
+        });
+        return { ...item, content: projected.content, citations: projected.citations };
+      }
+      return parsed;
+    } });
+  }
   const tools=[...(input.knowledge?KNOWLEDGE_TOOLS:[]),...(input.native?workbenchMemoryTools(userText,input.knowledge):[]),...(input.agents && input.agent ? agentTools(input.agent,userText,input.agents) : [])];
   let history = input.history;
   let stopReason: 'end' | 'length' | 'other' = 'end';
   while (requestCount < 8) {
     segment = '';
     const result = await input.loop({ model: input.model, system: input.system, initialMessages: history, tools, toolHandlers: handlers, toolConcurrency: 4, maxTurns: 8 - requestCount, maxTokens: input.context.outputTokens, abortSignal: signal, temperature: input.temperature, reportLengthStop: true, recordUnknownTools: true,
-      preserveHistory:true,disableReasoning:true,finalizeOnLastTurn:true,finalPrompt:'本轮资料收集已结束。现在直接根据已获得的资料给出有引用的中文回答；证据不足的部分明确说明，不再调用工具，不编造资料。',
+      preserveHistory:true,disableReasoning:true,finalizeOnLastTurn:true,finalPrompt:'本轮资料收集已结束。现在直接根据已获得的资料给出有引用的中文回答；证据不足的部分明确说明，不再调用工具，不编造资料。',fitRequest:fitProviderRequest,contextWindow:input.contextWindow,
       parseToolText:normalizeToolText,toolTextPreview,
       validateCompletion:async(_text,canContinue)=>{
         if(!input.knowledge||!canContinue||citations.length||[...calls.values()].some(call=>call.status==='complete'&&!['knowledge_search','knowledge_read'].includes(call.name)))return null;
@@ -147,7 +209,7 @@ export async function runWorkbenchTools(input: WorkbenchAnswerInput & {
     if (result.stopReason === 'max_turns') throw new Error('知识工具已达到本轮调用上限，请继续提问。');
     stopReason = result.stopReason === 'end' ? 'end' : 'other'; break;
   }
-  for (const name of ['assistant_create', 'assistant_update', 'artifact_save', 'task_submit']) {
+  for (const name of ['assistant_create', 'assistant_update', 'artifact_save', 'artifact_revise', 'task_submit']) {
     const last = [...calls.values()].filter(call => call.name === name).at(-1);
     if (last?.status === 'error') throw new Error(last.error ?? '助手操作未完成');
   }

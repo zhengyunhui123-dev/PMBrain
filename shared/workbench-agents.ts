@@ -27,6 +27,7 @@ export interface WorkbenchAgent extends KnowledgeAssistantSettings {
   deliveryFormat: 'markdown' | 'docx';
   schedule?: WorkbenchSchedule;
   standingRules?: string[];
+  retiredRules?: Array<{ text: string; replacedBy: string }>;
   playbook?: WorkbenchPlaybook | null;
   createdAt: string;
   updatedAt: string;
@@ -44,6 +45,11 @@ export interface WorkbenchArtifact {
   citations: WorkbenchCitation[];
   createdAt: string;
   hash: string;
+  familyId?: string;
+  parentId?: string;
+  revision?: number;
+  baseHash?: string;
+  bytesHash?: string;
 }
 export function agentRoleLabel(id: string) {
   return id === 'main' ? '主助手' : '专用助手';
