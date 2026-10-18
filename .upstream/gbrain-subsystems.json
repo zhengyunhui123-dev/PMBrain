@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "reviewed_at": "2026-10-16",
-  "product_version": "1.4.76",
+  "reviewed_at": "2026-10-18",
+  "product_version": "1.4.98",
   "subsystem": "entity-relations",
   "status": "release-blocked-pending-package-acceptance",
   "upstream": {
@@ -584,8 +584,8 @@
     {
       "path": "skills/ingest/SKILL.md",
       "upstream_path": "skills/ingest/SKILL.md",
-      "mode": "copied",
-      "sha256": "887d1dc43d1dd4d541172b40ce64385090813132ef80fc05c4616b5c32087448",
+      "mode": "adapted",
+      "sha256": "067426478f76d88155a2af7a02f34f8caf3f12756659b25c6064cce352890e38",
       "upstream_sha256": "887d1dc43d1dd4d541172b40ce64385090813132ef80fc05c4616b5c32087448"
     },
     {
@@ -606,7 +606,7 @@
       "path": "src/core/ai/gateway.ts",
       "upstream_path": "src/core/ai/gateway.ts",
       "mode": "adapted",
-      "sha256": "78ddacd34891ebfcf522147aa0bdb2c61b1fe2c54990640338f363f2830d40e8",
+      "sha256": "de47d0919968a3dd8fdc40c66df7d0add88eb1401eadbc87a53c889fe7a20141",
       "upstream_sha256": "622b81db5282117c6e2b32b566e2e35c36117400d416051011dbcc0e8e9c565f"
     },
     {
@@ -685,6 +685,7 @@
     "latest": 135
   },
   "test_adaptations": {
+    "ingest-semantic-boundaries": "Reviewed six PMBrain quality constraints: subject identity, explicit aliases, software type, subject naming, event dates and relationship evidence; pinned upstream hash and all phase/Source contracts retained",
     "mentions-parity": "index, aliases and links; entity-card UI outside scope",
     "page-state-engine": "relationship revisions, nested transactions and Source incarnation; full canonical CAS write API deferred",
     "derived-link-reconciliation": "nine upstream producer replacement cases; PMBrain parser and Source adapters retained",

@@ -1,0 +1,290 @@
+{
+  "schemaVersion": 1,
+  "productVersion": "1.4.98",
+  "date": "2026-10-18",
+  "baseCommit": "66f0f525",
+  "status": "implementation-and-local-acceptance-complete-with-quality-findings",
+  "fullQualityGate": "not_passed",
+  "scope": "Authorized automatic project alias guard, event/snippet evidence windows and same-provider dense PNG OCR; isolated data only",
+  "developmentSet": {
+    "datasetSha256": "96ce971df6abcb1668feb9fe11f8707df71f74e5b39b17a190bed4340d142fcd",
+    "runtimeSha256": "c4026eb59215c3470fbbe333b51373f0416ef9f7e3a9883c69be1ef7c34c6e89",
+    "answerModel": "mimo:mimo-v2.6-flash",
+    "contextWindow": 32000,
+    "questions": 34,
+    "answers": 34,
+    "apiErrors": 0,
+    "primaryReview": {
+      "reviewer": "Codex source review, not independent human assessment",
+      "correct": 34,
+      "partial": 0,
+      "findings": [
+        {
+          "id": "real-project-05",
+          "scope": "supplementary-fact",
+          "status": "failed",
+          "finding": "Primary nonstandard-product answer is correct, but adds March 13; original item belongs to March 12 (two-digit year heading)."
+        },
+        {
+          "id": "real-project-31",
+          "scope": "supplementary-fact",
+          "status": "failed",
+          "finding": "Correctly rejects claiming completion from a later requirement, but uses another project's March 14, 2024 instead of the requested project's March 14, 2025 record."
+        },
+        {
+          "id": "real-project-21",
+          "scope": "citation",
+          "status": "needs_improvement",
+          "finding": "Correct requested later source and primary answer, but no inline citation marker in the body; reference cards remain available."
+        },
+        {
+          "id": "real-project-33",
+          "scope": "product-expression",
+          "status": "needs_improvement",
+          "finding": "Correctly declines to invent a contract amount, but exposes offsets and internal evidence cursors to the ordinary user instead of doing further reading or giving a concise scope statement."
+        },
+        {
+          "id": "real-project-34",
+          "scope": "citation-and-inference",
+          "status": "needs_improvement",
+          "finding": "Primary meeting difference is correct; no inline citation and adds a general process inference without consistently labeling it as inference."
+        }
+      ]
+    },
+    "automaticJudge": {
+      "model": "mimo:mimo-v2.6-flash",
+      "graded": 33,
+      "correct": 33,
+      "supported": 33,
+      "ungraded": [
+        {
+          "id": "real-project-24",
+          "error": "invalid_judgement_shape"
+        }
+      ],
+      "sameModelBias": true
+    },
+    "bodyCitationQuestions": 32,
+    "usedSourcePairsValid": true,
+    "citationScope": "Source/slug membership only; not proof of fact support or genuine tool execution",
+    "requestAudit": {
+      "captured": 45,
+      "missingCurrentQuestion": 0
+    },
+    "fullQualityGate": "not_passed",
+    "documents": 8,
+    "realSources": 1,
+    "round": 6,
+    "earlierFiveRawRunsRetained": true,
+    "embeddingModel": "ollama:qwen3-embedding:0.6b",
+    "embeddingDimensions": 1024,
+    "reusedRealVectors": 126
+  },
+  "documentHoldout": {
+    "datasetSha256": "fc7b2e5466b55894e5f7178ae219b5fc9181c11ee10db89d04f4d78f9521dd21",
+    "runtimeSha256": "af7b4d32384cb26dcedfde277ff777d792f08ada8b81b70dbf7701ef8d8292a1",
+    "answerModel": "mimo:mimo-v2.6-flash",
+    "contextWindow": 32000,
+    "questions": 16,
+    "answers": 16,
+    "apiErrors": 0,
+    "primaryReview": {
+      "reviewer": "Codex source review, not independent human assessment",
+      "correct": 15,
+      "partial": 1,
+      "findings": [
+        {
+          "id": "holdout-04",
+          "scope": "supplementary-status",
+          "status": "failed",
+          "finding": "Correctly says delivery is not proven, but converts a plan into the stronger unsupported claim that work had not started."
+        },
+        {
+          "id": "holdout-07",
+          "scope": "decision-strength",
+          "status": "needs_improvement",
+          "finding": "Linking to a business system is a suggestion in the original, but the answer groups it into the decided solution."
+        },
+        {
+          "id": "holdout-11",
+          "scope": "supplementary-date",
+          "status": "needs_improvement",
+          "finding": "Expands an ambiguous next-day inspection into a definite date not explicitly stated; should preserve the ambiguity."
+        },
+        {
+          "id": "holdout-13",
+          "scope": "fabricated-tool-receipt",
+          "status": "failed",
+          "finding": "Answer prints invented tool calls and tool results although native tool receipts are empty; the invented excerpt rewrites the strict threshold. Final answer recovers the greater-than wording but does not clearly resolve equality."
+        }
+      ]
+    },
+    "automaticJudge": {
+      "model": "mimo:mimo-v2.6-flash",
+      "graded": 15,
+      "correct": 15,
+      "supported": 15,
+      "ungraded": [
+        {
+          "id": "holdout-02",
+          "error": "invalid_judgement_shape"
+        }
+      ],
+      "sameModelBias": true
+    },
+    "bodyCitationQuestions": 13,
+    "usedSourcePairsValid": true,
+    "citationScope": "Source/slug membership only; not proof of fact support or genuine tool execution",
+    "requestAudit": {
+      "captured": 27,
+      "missingCurrentQuestion": 0
+    },
+    "fullQualityGate": "not_passed",
+    "documents": 4,
+    "realSources": 1,
+    "frozenAt": "2026-10-18T12:25:20.153Z",
+    "independence": "New document split frozen before first model request, labels written by Codex; not third-party human annotation; first run retained; no product tuning after seeing scores",
+    "embeddingModel": "ollama:qwen3-embedding:0.6b",
+    "embeddingDimensions": 1024,
+    "vectors": [
+      {
+        "chunks": 20,
+        "embedded": 20,
+        "model": "ollama:qwen3-embedding:0.6b"
+      }
+    ],
+    "originalFilesUnchanged": true,
+    "sanitizedSnapshots": true
+  },
+  "automaticAliases": {
+    "rule": "Only new automatic project aliases require an explicit same-entity abbreviation declaration from original source; existing/manual aliases preserved; generated content and type/title changes cannot bypass",
+    "pgliteTests": 30,
+    "postgresTests": 30,
+    "assertionsPerEngine": 97,
+    "nativePglite": {
+      "model": "mimo:mimo-v2.6-flash",
+      "status": "partial",
+      "selectedDocuments": 3,
+      "createdEntities": 4,
+      "newLinks": 9,
+      "repeatNewPages": 0,
+      "repeatNewLinks": 0,
+      "originalBodiesUnchanged": true,
+      "projectAliases": 0,
+      "limitations": "Entity type and relation semantics not fully accepted; project-team misclassification observed. Warn includes unavailable monetary cost; no local brain directory, extract file-side work skipped; no embedding in this probe."
+    },
+    "nativePostgres": {
+      "model": "mimo:mimo-v2.6-flash",
+      "status": "partial",
+      "selectedDocuments": 3,
+      "createdEntities": 12,
+      "newLinks": 43,
+      "repeatNewPages": 0,
+      "repeatNewLinks": 0,
+      "originalBodiesUnchanged": true,
+      "projectAliases": 0,
+      "limitations": "Entity type and relation semantics not fully accepted; project-team misclassification observed. Warn includes unavailable monetary cost; no local brain directory, extract file-side work skipped; no embedding in this probe."
+    },
+    "noHistoricalCleanup": true
+  },
+  "ocr": {
+    "model": "mimo:mimo-v2.6-flash",
+    "densePng": {
+      "dimensions": [
+        4864,
+        6632
+      ],
+      "method": "One request with overview and four overlapping regions, literal-label prompt and native bounded length handling",
+      "beforeLabels": 35,
+      "afterLabels": 39,
+      "totalDevelopmentLabels": 39,
+      "beforeFinishReasons": [
+        "stop"
+      ],
+      "afterFinishReasons": [
+        "stop"
+      ],
+      "beforeMs": 199939,
+      "afterMs": 77869,
+      "fullCharacterAccuracyAndHierarchy": "not_scored",
+      "note": "Previous two missing headings also appeared in this old-path diagnostic; no truncation observed. Improvement here concerns four exact labels; not a universal speed/accuracy benchmark."
+    },
+    "realImport": {
+      "cases": 3,
+      "caseTypes": [
+        "dense PNG",
+        "paper bill JPEG",
+        "mixed five-page PDF"
+      ],
+      "foundSelectedFields": 51,
+      "totalSelectedFields": 51,
+      "errors": 0,
+      "reopenedSameBodies": true,
+      "reopenedSameReceipts": true,
+      "originalFilesUnchanged": true,
+      "promptVersion": 2
+    },
+    "limits": "Dense region enhancement only for static PNG within decode bounds; normal JPEG/WebP keep original single input. Label checks are not full-text CER or hierarchy-relation acceptance. Historical OCR not rescanned."
+  },
+  "localValidation": {
+    "entityRegression": {
+      "tests": 53,
+      "assertions": 287
+    },
+    "workbench": {
+      "tests": 40,
+      "assertions": 161
+    },
+    "documents": {
+      "tests": 25,
+      "assertions": 91
+    },
+    "postgresImportedRuntime": {
+      "tests": 1,
+      "assertions": 8
+    },
+    "typecheck": [
+      "root",
+      "admin",
+      "desktop"
+    ],
+    "verifyChecks": 40,
+    "ciPreviewTests": 236,
+    "browser": {
+      "version": "1.4.98",
+      "sourcePreview": true,
+      "settingsRendered": true,
+      "isolated": true,
+      "width": 1368,
+      "pageErrors": []
+    },
+    "runtime": "Bun, Sidecar, Canvas, PGLite passed",
+    "compiledSidecarSmoke": "Isolated Node-controlled five CLI commands, enhanced PNG request/save/read and Chinese PDF import/read passed; initial Bun-controlled probe stalled and was interrupted; initial Node PDF probe omitted include-office and imported no PDF, corrected invocation passed; raw evidence retained",
+    "resourceManifest": {
+      "version": "1.4.98",
+      "adminHash": "c4d4a099885e051b4a3d14fc3dc5ec2ff87f0e7e34e30c12c1cad89993d6c732",
+      "assets": 48,
+      "schema": 135
+    },
+    "initialFailuresRetained": [
+      "Outdated runtime test called removed single-page tool; fixture aligned to existing batch API, production registry unchanged",
+      "GBrain adaptation hash stale after OCR change; pinned-source review and mapping refreshed, gate unchanged",
+      "WASM smoke timed out once at 300s; isolated unchanged check and complete CI preview rerun passed"
+    ]
+  },
+  "safety": {
+    "formalKnowledgeRescanned": false,
+    "formalVectorsRebuilt": false,
+    "formalWikiOrOriginalsModified": false,
+    "schemaChanged": false,
+    "githubCommitOrPush": false,
+    "buildWin": false
+  },
+  "remaining": [
+    "Prevent fabricated tool-result prose and verify every added fact/citation",
+    "Preserve project/date and requirement-versus-completion distinctions in supplementary answers",
+    "Entity types and evidence-backed relation semantics",
+    "Full OCR character and hierarchy benchmark plus wider formats",
+    "User GitHub submission with exact-SHA CI and packaged Windows installation acceptance"
+  ]
+}

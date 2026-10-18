@@ -1,0 +1,294 @@
+{
+  "schemaVersion": 1,
+  "productVersion": "1.4.97",
+  "date": "2026-10-18",
+  "baseCommit": "66f0f525",
+  "status": "partial-quality-acceptance",
+  "fullQualityGate": "not_passed",
+  "scope": "P1/P2 existing production capabilities, isolated test databases and read-only real-document snapshots; no formal data migration or rescan",
+  "nativeKnowledgeAnswer": {
+    "pipeline": "production knowledgeWorkbenchAnswer, frozen 34 questions, full-source judge, private data",
+    "datasetHash": "96ce971df6abcb1668feb9fe11f8707df71f74e5b39b17a190bed4340d142fcd",
+    "documents": 8,
+    "questions": 34,
+    "realSourceCount": 1,
+    "contextWindow": 32000,
+    "answerModel": "mimo:mimo-v2.6-flash",
+    "embeddingModel": "ollama:qwen3-embedding:0.6b",
+    "embeddingDimensions": 1024,
+    "completedAnswers": 34,
+    "apiErrors": 0,
+    "primaryReview": {
+      "reviewer": "Codex source review, not independent human review",
+      "correct": 31,
+      "partial": 0,
+      "incorrect": 3,
+      "findings": [
+        {
+          "id": "real-project-14",
+          "scope": "primary",
+          "status": "failed",
+          "finding": "Unexpected English reply asks for a previous question instead of answering the current explicit question."
+        },
+        {
+          "id": "real-project-20",
+          "scope": "primary",
+          "status": "failed",
+          "finding": "Uses an earlier historical scheme instead of the requested event-date version."
+        },
+        {
+          "id": "real-project-21",
+          "scope": "primary",
+          "status": "failed",
+          "finding": "Claims the requested later record is absent although it exists later in the source."
+        },
+        {
+          "id": "real-project-11",
+          "scope": "supplementary",
+          "status": "needs_review",
+          "finding": "Background paraphrase does not preserve the distinction between a party misunderstanding another party and holding that position itself."
+        },
+        {
+          "id": "real-project-28",
+          "scope": "supplementary",
+          "status": "failed",
+          "finding": "One sentence shifts a requested addition into wording suggesting it has already been added."
+        },
+        {
+          "id": "real-project-29",
+          "scope": "supplementary",
+          "status": "needs_review",
+          "finding": "Adds causal and ordering interpretation between source statements without consistently labeling it as inference."
+        },
+        {
+          "id": "real-project-31",
+          "scope": "supplementary",
+          "status": "failed",
+          "finding": "Says the earlier date contains only one item, overlooking the continuation across a page boundary; adds an unnecessary year extrapolation."
+        },
+        {
+          "id": "real-project-33",
+          "scope": "supplementary",
+          "status": "failed",
+          "finding": "Ancillary source-range summary assigns a later-year record to the earlier year."
+        }
+      ]
+    },
+    "automaticJudge": {
+      "model": "mimo:mimo-v2.6-flash",
+      "graded": 33,
+      "correct": 30,
+      "supported": 31,
+      "ungraded": [
+        {
+          "id": "real-project-08",
+          "kind": "invalid_output"
+        }
+      ],
+      "sameModelBias": true
+    },
+    "actualReadToolQuestions": 15,
+    "actualBodyCitationQuestions": 33,
+    "usedCitationSourcePairsValid": true,
+    "citationCheckBoundary": "Exact Source/page identity of actual body citations, not proof of every factual assertion; unused reference-pool entries are not treated as body citations.",
+    "failedQuestionRetrievalProbe": {
+      "questions": 3,
+      "existingCoreCandidateLimit": 50,
+      "expectedPageWasFirstInAllThree": true,
+      "scope": "Read-only replay of unchanged queries with actual configured embeddings; page-level recall did not establish correct event-section coverage or answer correctness."
+    },
+    "retainedFullRounds": 5,
+    "providerFallback": false,
+    "explicitRefusalsResubmittedWithinFinalRound": false,
+    "limits": [
+      "Frozen reused development set, not an independent holdout.",
+      "One real Source; cross-Source same-slug behavior is covered separately by isolated regression.",
+      "Main answer, all-claim support and page/source identity are separate checks. Prior failed rounds retained.",
+      "HTTP/API success does not mean a relevant answer; unexpected natural-language replies count as incorrect primary conclusions."
+    ]
+  },
+  "realOcr": {
+    "files": 6,
+    "jpegFiles": 2,
+    "pdfFiles": 4,
+    "pdfPages": 14,
+    "model": "mimo:mimo-v2.6-flash",
+    "attempted": 11,
+    "succeeded": 11,
+    "failed": 0,
+    "keyFieldAndTableRowChecks": 34,
+    "keyChecksPassed": true,
+    "originalHashesUnchanged": true,
+    "initialGoldCorrection": {
+      "cases": 1,
+      "reason": "Visual review corrected three assumed labels/date formats; initial checks preserved separately, not counted as model improvement."
+    },
+    "denseMindMap": {
+      "fullFidelity": "failed",
+      "verifiedMissingIntermediateHeadings": 2,
+      "cause": "not established"
+    },
+    "limits": [
+      "Selected key fields and four price-table rows only, not whole-document character accuracy.",
+      "Dense project mind map still omits at least two visually verified intermediate headings; full fidelity did not pass.",
+      "Mixed-page heuristic does not cover every partially searchable image or arbitrary PDF layout."
+    ]
+  },
+  "realImport": {
+    "withoutVectors": {
+      "files": 200,
+      "totalBytes": 2893446,
+      "phases": [
+        {
+          "phase": "cold",
+          "ms": 56430,
+          "imported": 200,
+          "skipped": 0,
+          "chunks": 1182
+        },
+        {
+          "phase": "unchanged",
+          "ms": 6536,
+          "imported": 0,
+          "skipped": 200,
+          "chunks": 0
+        }
+      ],
+      "isolatedSingleEditMs": 164,
+      "originalHashesUnchanged": true
+    },
+    "withRealVectors": {
+      "files": 8,
+      "model": "ollama:qwen3-embedding:0.6b",
+      "dimensions": 1024,
+      "vectors": [
+        {
+          "chunks": 126,
+          "embedded": 126,
+          "model": "ollama:qwen3-embedding:0.6b"
+        }
+      ],
+      "phases": [
+        {
+          "phase": "cold",
+          "ms": 214224,
+          "imported": 8,
+          "skipped": 0,
+          "chunks": 126
+        },
+        {
+          "phase": "unchanged",
+          "ms": 359,
+          "imported": 0,
+          "skipped": 8,
+          "chunks": 0
+        }
+      ],
+      "concurrentWithAnswerEvaluation": true
+    },
+    "limits": [
+      "Observed bounded local sample, not a formal-library scan or isolated-machine performance comparison.",
+      "200-file set is dominated by tutorial material; it is not representative of all project documents or full Dream."
+    ]
+  },
+  "nativeDream": {
+    "selectedDocuments": 3,
+    "model": "mimo:mimo-v2.6-flash",
+    "newPages": 1,
+    "newLinks": 2,
+    "repeatNewPages": 0,
+    "repeatNewLinks": 0,
+    "originalHashesUnchanged": true,
+    "qualityGate": "failed",
+    "finding": "Generic shared module name was still registered as a project alias after prompt constraints.",
+    "coreAliasValidation": "awaiting_user_confirmation",
+    "limits": [
+      "Extract/extract_facts/capture_entities/orphans subset only.",
+      "File-side extract was skipped without a local brain directory.",
+      "No formal backfill or historical-data cleanup; prompt contract does not prove identity correctness."
+    ]
+  },
+  "recovery": {
+    "postgresRuntime": {
+      "passed": 24,
+      "failed": 0,
+      "assertions": 238,
+      "previouslySkippedNativeCancellationCasesNowPassed": 3
+    },
+    "upgradePglite": {
+      "passed": 22,
+      "failed": 0
+    },
+    "upgradePostgres": {
+      "passed": 2,
+      "failed": 0
+    },
+    "historicalColdCopy": {
+      "version": "1.4.40",
+      "commit": "84a448ebb66771094a30976e7f3373d0eed274cf",
+      "fromSchema": 130,
+      "toSchema": 135,
+      "coldCopyIdentical": true,
+      "appliedMigrations": 5,
+      "contentTagsVersionsAndVectorsUnchanged": true,
+      "repeatApplied": 0,
+      "originalColdDatabaseUnchanged": true,
+      "boundary": "Archived historical source using current installed dependencies; not an old installed NSIS binary or updater/restart acceptance."
+    }
+  },
+  "localEngineering": {
+    "workbenchAndEntity": {
+      "passed": 50,
+      "failed": 0
+    },
+    "documents": {
+      "passed": 27,
+      "failed": 0
+    },
+    "desktopResourceContracts": {
+      "passed": 17,
+      "failed": 0
+    },
+    "publicEvaluationContract": {
+      "passed": 5,
+      "failed": 0
+    },
+    "typechecks": [
+      "root",
+      "admin",
+      "desktop"
+    ],
+    "verify": {
+      "passed": 40,
+      "total": 40
+    },
+    "ciPrPreview": {
+      "passed": 236,
+      "failed": 0
+    },
+    "sidecarBuild": "passed",
+    "windowsRuntime": "passed",
+    "compiledSidecarChinesePdf": "passed",
+    "currentSourceUi": {
+      "version": "1.4.97",
+      "width": 1368,
+      "settingsRendered": true,
+      "pageErrors": 0,
+      "apiAndDesktopBridge": "isolated fixtures"
+    },
+    "adminAssets": 48,
+    "adminManifestPrefix": "82b5db3b444d",
+    "fullLocalTestSuiteRun": false
+  },
+  "remaining": [
+    "Approve and implement evidence-based automatic project alias validation, then repeat the same Dream cases on both database engines.",
+    "Improve actual matched-section and event-date coverage; trace unexpected model answers and extend independent holdout. Full factual-support quality gate remains open.",
+    "Diagnose dense-image omission before deciding shared OCR changes.",
+    "User commits/pushes; verify exact-SHA GitHub Actions. User runs build:win; verify NSIS install/update/restart and packaged assets."
+  ],
+  "planDifferences": [
+    "Real tickets exposed missing local PDF.js CMaps/fonts/WASM; added and validated bundled resources.",
+    "Prompt-only Dream changes did not meet identity quality acceptance; required shared-data guard remains unimplemented pending confirmation.",
+    "No automatic fallback, provider substitution, formal-data rebuild or mobile UI work."
+  ]
+}

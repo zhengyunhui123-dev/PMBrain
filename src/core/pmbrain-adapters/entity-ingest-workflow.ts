@@ -82,6 +82,15 @@ function parseReceipt(text:string):IngestReceipt {
 }
 
 function surfaceName(value:string):string{return value.replace(/[\s"'“”‘’]/gu,'');}
+function declaredProjectAlias(body:string,title:string,alias:string):boolean{
+  const escape=(value:string)=>surfaceName(value).replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+  const canonical=escape(title),alternate=escape(alias);
+  if(!canonical||!alternate)return false;
+  const end='(?=$|[，,。；;（）()、：:!?！？])';
+  const forward=`${canonical}[（(，,：:]*(?:以下简称|简称为?|别名为?|又名|又称|亦称|也称)[:：]?${alternate}${end}`;
+  const reverse=`(?:^|[，,。；;（）()、：:!?！？])${alternate}(?:是|为)${canonical}(?:的)?(?:简称|别名|别称)${end}`;
+  return new RegExp(`${forward}|${reverse}`,'iu').test(surfaceName(body));
+}
 function evidenceFor(body:string,names:string[]):string|null {
   const positions:number[]=[];let normalized='';
   for(let i=0;i<body.length;i++){if(!/[\s"'“”‘’]/u.test(body[i]!)){normalized+=body[i];positions.push(i);}}
@@ -142,8 +151,17 @@ export async function validateIngestWrite(engine:BrainEngine,context:EntityInges
     if(!existing&&(!metadata.title||!metadata.type))throw new UnrecoverableError(`ingest new entity requires YAML frontmatter title and type: ${reference}; a Markdown heading does not set the page identity`);
     const title=String(input.title??metadata.title??existing?.title??parsed.title);
     const aliases=parsed.frontmatter.aliases??existing?.frontmatter.aliases;
+    const entityType=String(input.type??metadata.type??existing?.type??parsed.type);
+    if(entityType==='project'||existing?.type==='project'){
+      const prior=new Set([existing?.title,...(Array.isArray(existing?.frontmatter.aliases)?existing.frontmatter.aliases:[])].filter((x):x is string=>typeof x==='string').map(name=>surfaceName(name).toLowerCase()));
+      for(const alias of Array.isArray(aliases)?aliases:[]){
+        if(typeof alias!=='string'||prior.has(surfaceName(alias).toLowerCase())||surfaceName(alias).toLowerCase()===surfaceName(title).toLowerCase())continue;
+        const canonical=existing?.title??title;
+        if(!declaredProjectAlias(context.body,canonical,alias))throw new UnrecoverableError(`ingest project alias lacks explicit same-entity source evidence: '${alias}' for '${canonical}'; omit unsupported aliases, do not invent one to bypass identity evidence`);
+      }
+    }
     const evidence=evidenceFor(context.chunkBody,[title,...(Array.isArray(aliases)?aliases.filter((x):x is string=>typeof x==='string'):[])]);
-    if(!evidence)throw new UnrecoverableError(`ingest entity evidence missing: ${slug}; title '${title}' is not present in this source chunk. Keep the existing identity and add an aliases entry containing the exact name stated in the original source, or correct the title. Do not repeat this unchanged write.`);
+    if(!evidence)throw new UnrecoverableError(`ingest entity evidence missing: ${slug}; title '${title}' or an established alias is not present in this source chunk. Keep the supported identity or omit this unsupported capture; do not invent an alias. Do not repeat this unchanged write.`);
     if(!content.includes('[Source:')||!content.includes(context.slug))throw new UnrecoverableError(`ingest provenance missing: ${slug}`);
     if(!['person','company','organization','entity','project','concept'].includes(String(input.type??metadata.type??existing?.type??parsed.type)))throw new UnrecoverableError(`ingest invalid entity type: ${slug}`);
     const pages=await loadLinkPageMetadata(engine);
@@ -154,7 +172,7 @@ export async function validateIngestWrite(engine:BrainEngine,context:EntityInges
     if(!existing){
       const name=surfaceName(title);
       const nearby=pages.filter(p=>[context.sourceId,'default'].includes(p.source_id)&&p.type===String(metadata.type)&&surfaceName(p.title)!==name&&(surfaceName(p.title).includes(name)||name.includes(surfaceName(p.title))));
-      if(nearby.length)throw new UnrecoverableError(`ingest verify existing entity before creating a name variant: ${nearby.map(p=>`${p.source_id}:${p.slug} (${p.title})`).join(', ')}. Read these pages, reuse the confirmed identity and add the original-source name as an explicit alias. No automatic fuzzy merge is permitted.`);
+      if(nearby.length)throw new UnrecoverableError(`ingest verify existing entity before creating a name variant: ${nearby.map(p=>`${p.source_id}:${p.slug} (${p.title})`).join(', ')}. Read these pages and reuse only a confirmed identity. New project aliases require an explicit same-entity declaration in the original source. No automatic fuzzy merge is permitted.`);
     }
   }else if(name==='add_timeline_entry'){
     await resolveEntity(engine,context,String(input.slug??''));

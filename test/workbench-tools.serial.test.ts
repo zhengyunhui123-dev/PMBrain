@@ -17,6 +17,97 @@ const call = (name: string, input: unknown, id = 'call'): ChatResult => ({ ...te
 const question = { id: 'q', text: '核对项目预算', role: 'user' as const, status: 'complete' as const, createdAt: '' };
 const hit = { source_id: 'a', slug: 'project', title: '项目预算', snippet: '初步预算' };
 const search = async () => ({ results: [hit] } as any);
+
+test('event-date questions receive that dated record across page breaks instead of the document prefix',async()=>{
+  const body='2024年10月21日\n旧方案：基础、监管。\n'+'旧讨论。'.repeat(1600)+'\n2025年5月27日专家建议\n一、前置赋能\n二、精准匹配\n\n## 第 8 页\n三、风险处置\n四、复盘提升\n2025年6月1日\n另一版方案。';
+  __setChatTransportForTests(async opts=>{
+    expect(opts.system).toContain('前置赋能');expect(opts.system).toContain('复盘提升');expect(opts.system).not.toContain('旧方案：基础、监管');expect(opts.system).not.toContain('另一版方案');
+    const range=JSON.parse(/<excerpt_range>(.*?)<\/excerpt_range>/.exec(opts.system??'')![1]);
+    expect(range.offset).toBe(body.indexOf('2025年5月27日'));expect(range.nextOffset).toBe(body.indexOf('2025年6月1日'));return text('四个方向 [1]');
+  });
+  await knowledgeWorkbenchAnswer({getPage:async()=>({compiled_truth:body,timeline:''})} as any,{search,answer:chat,loop:toolLoop})({messages:[{...question,text:'截至2025年5月27日的四个方向是什么？'}],model:'service-test:chat',knowledge:true,signal:new AbortController().signal,progress:()=>{}});
+});
+
+test('a normalized search snippet focuses later original text with a true cursor and retains preceding user turns',async()=>{
+  const body='较早材料。'.repeat(1800)+'\n实际命中的\n后文记录：每两周汇报。\n还有其他记录。';
+  __setChatTransportForTests(async opts=>{
+    expect(opts.system).toContain('每两周汇报');expect(JSON.stringify(opts.messages)).toContain('汇报节奏是什么');
+    const range=JSON.parse(/<excerpt_range>(.*?)<\/excerpt_range>/.exec(opts.system??'')![1]);expect(range.offset).toBeGreaterThan(0);return text('每两周 [1]');
+  });
+  await knowledgeWorkbenchAnswer({getPage:async()=>({compiled_truth:body,timeline:''})} as any,{search:async()=>({results:[{...hit,snippet:'实际命中的 后文记录：每两周汇报。'}]} as any),answer:chat,loop:toolLoop})({messages:[{...question,text:'汇报节奏是什么？'}],model:'service-test:chat',knowledge:true,signal:new AbortController().signal,progress:()=>{}});
+});
+
+test('later wording of the same dated event stays at the tail when evidence is budgeted',async()=>{
+  const body='2025年5月26日\n较早文案：第二板块为企业服务。\n'+'讨论细节。'.repeat(1800)+'\n较后文案：第二板块为供需服务。\n2025年5月27日\n其他讨论。';
+  __setChatTransportForTests(async opts=>{expect(opts.system).toContain('第二板块为供需服务');expect(opts.system).not.toContain('第二板块为企业服务');return text('供需服务 [1]');});
+  await knowledgeWorkbenchAnswer({getPage:async()=>({compiled_truth:body,timeline:''})} as any,{search,answer:chat,loop:toolLoop})({messages:[{...question,text:'2025年5月26日较后的一段文案第二板块叫什么？'}],model:'service-test:chat',knowledge:true,contextWindow:8192,signal:new AbortController().signal,progress:()=>{}});
+});
+
+test('initial excerpt exposes its actual continuation cursor and native tools can read the omitted fact',async()=>{
+  const body='旧记录。'.repeat(1600)+'最新记录：已核准金额18750.60元。';let continued=false;
+  __setChatTransportForTests(async opts=>{
+    const request=JSON.stringify(opts.messages);
+    if(!continued){
+      const range=/<excerpt_range>(.*?)<\/excerpt_range>/.exec(opts.system??'');
+      expect(range).not.toBeNull();const cursor=JSON.parse(range![1]);
+      expect(cursor.source_id).toBe('a');expect(cursor.slug).toBe('project');expect(cursor.offset).toBe(0);
+      expect(cursor.nextOffset).toBeGreaterThan(0);expect(cursor.nextOffset).toBeLessThan(cursor.totalChars);
+      continued=true;return call('knowledge_read',{source_id:cursor.source_id,slug:cursor.slug,offset:cursor.nextOffset});
+    }
+    expect(request).toContain('18750.60');return text('已核准金额18750.60元 [1]');
+  });
+  const answer=knowledgeWorkbenchAnswer({getPage:async()=>({source_id:'a',compiled_truth:body,timeline:''})} as any,{search,answer:chat,loop:toolLoop});
+  const result=await answer({messages:[question],model:'service-test:chat',knowledge:true,contextWindow:32768,signal:new AbortController().signal,progress:()=>{}});
+  expect(result.text).toContain('18750.60');
+});
+
+test('complete evidence marks its end and keeps event attribution and multi-part coverage in the answer policy',async()=>{
+  __setChatTransportForTests(async opts=>{
+    const range=/<excerpt_range>(.*?)<\/excerpt_range>/.exec(opts.system??'');expect(range).not.toBeNull();
+    const cursor=JSON.parse(range![1]);expect(cursor.nextOffset).toBeNull();expect(cursor.totalChars).toBe('预算十万元\n'.length);
+    expect(opts.system).toContain('逐项');expect(opts.system).toContain('同一天');expect(opts.system).toContain('归属');
+    return text('预算十万元 [1]');
+  });
+  await knowledgeWorkbenchAnswer({getPage:async()=>({compiled_truth:'预算十万元',timeline:''})} as any,{search,answer:chat,loop:toolLoop})({messages:[question],model:'service-test:chat',knowledge:true,signal:new AbortController().signal,progress:()=>{}});
+});
+
+test('repeated chunks from long documents do not crowd a later short primary source out of initial evidence',async()=>{
+  const reads:string[]=[];
+  const hits=[...Array.from({length:4},()=>hit),{...hit,slug:'another',title:'另一个长资料'},{...hit,slug:'primary',title:'原始需求'}];
+  __setChatTransportForTests(async opts=>{expect(opts.system).toContain('平时只供企业自用，政府不参与');return text('平时政府不参与 [3]');});
+  const answer=knowledgeWorkbenchAnswer({getPage:async(slug:string)=>{reads.push(slug);return {compiled_truth:slug==='primary'?'平时只供企业自用，政府不参与。':'长会议记录。'.repeat(3000),timeline:''};}} as any,{search:async()=>({results:hits} as any),answer:chat,loop:toolLoop});
+  const result=await answer({messages:[question],model:'service-test:chat',knowledge:true,contextWindow:32768,signal:new AbortController().signal,progress:()=>{}});
+  expect(reads).toEqual(['project','another','primary']);expect(result.citations.map(row=>row.slug)).toEqual(['project','another','primary']);
+});
+
+test.each(['没有找到汇报频率的记录。','我在当前节选中未直接看到汇报频率的原文。','未见汇报频率的记录。',"I don't see any prior conversation history, so there's no previous question for me to reference."])('absence claim %s on unread excerpts is withdrawn and verified through the existing read tool',async(claim)=>{
+  let requests=0;const replacements:string[]=[];
+  __setChatTransportForTests(async opts=>{
+    requests++;
+    if(requests===1)return text(claim);
+    if(requests===2){expect(JSON.stringify(opts.messages)).toContain('knowledge_read');return call('knowledge_read',{source_id:'a',slug:'project',offset:6000});}
+    expect(JSON.stringify(opts.messages)).toContain('每两周汇报进度');return text('每两周汇报进度。[1]');
+  });
+  const answer=knowledgeWorkbenchAnswer({getPage:async()=>({compiled_truth:'前期记录。'.repeat(1600)+'每两周汇报进度。',timeline:''})} as any,{search,answer:chat,loop:toolLoop});
+  const result=await answer({messages:[{...question,text:'每月还是每两周汇报？'}],model:'service-test:chat',knowledge:true,contextWindow:32768,signal:new AbortController().signal,progress:()=>{},onReplace:value=>replacements.push(value)});
+  expect(requests).toBe(3);expect(result.text).toContain('每两周汇报');expect(result.text).not.toContain(claim);expect(replacements.length).toBeGreaterThan(0);
+});
+
+test('supported negative facts and explicit provider refusals do not trigger the unread-excerpt check',async()=>{
+  for(const output of ['购进量不需要设置预警值。[1]','The request was rejected because it was considered high risk']){
+    let requests=0;__setChatTransportForTests(async()=>{requests++;return text(output);});
+    const answer=knowledgeWorkbenchAnswer({getPage:async()=>({compiled_truth:'购进量不需要设置预警值。'+'其余记录。'.repeat(2000),timeline:''})} as any,{search,answer:chat,loop:toolLoop});
+    const result=await answer({messages:[question],model:'service-test:chat',knowledge:true,contextWindow:32768,signal:new AbortController().signal,progress:()=>{}});
+    expect(requests).toBe(1);expect(result.text).toBe(output);
+  }
+});
+
+test('a completed delivery receipt is not reopened by an unrelated missing-evidence phrase',async()=>{
+  let requests=0;__setChatTransportForTests(async()=>{requests++;return text('报告已保存。额外背景没有找到相关记录。');});
+  const answer=knowledgeWorkbenchAnswer({getPage:async()=>({compiled_truth:'资料正文。'.repeat(2000),timeline:''})} as any,{search,answer:chat,loop:toolLoop});
+  const result=await answer({messages:[question],model:'service-test:chat',knowledge:true,contextWindow:32768,settledTools:[{id:'saved',name:'artifact_save',input:'{}',output:'已保存',status:'complete'} as any],signal:new AbortController().signal,progress:()=>{}});
+  expect(requests).toBe(1);expect(result.text).toContain('报告已保存');
+});
 test('several empty multiword searches require one single-keyword check before declaring no evidence',async()=>{
   let requests=0;const queries:string[]=[];
   __setChatTransportForTests(async()=>{requests++;return requests===1?call('knowledge_search',{query:'人物 经历 兴趣'}):requests===2?text('没有找到资料'):requests===3?call('knowledge_search',{query:'人物'}):text('核对到资料 [1]');});

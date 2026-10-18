@@ -204,6 +204,9 @@ await cp(
   join(projectRoot, 'node_modules', 'pdf-parse', 'dist', 'worker', 'pdf.worker.mjs'),
   join(outputDirectory, 'pdf.worker.mjs'),
 );
+for (const name of ['cmaps', 'standard_fonts', 'wasm', 'LICENSE']) {
+  await cp(join(projectRoot, 'node_modules', 'pdfjs-dist', name), join(outputDirectory, 'pdfjs', name), { recursive: true });
+}
 await cp(
   join(projectRoot, 'skills', '_brain-filing-rules.json'),
   join(outputDirectory, 'skills', '_brain-filing-rules.json'),

@@ -58,3 +58,15 @@ test('时间线候选只包含原文中的真实完整日期，不把月份补�
   expect(sourceTimelineDates('2026年1月9日确认，2026-01-09重复，2024年2月29日完成。')).toEqual(['2024-02-29','2026-01-09']);
   expect(sourceTimelineDates('1789年7月14日，0004-02-29，2400-02-29，2500-02-29。')).toEqual(['0004-02-29','1789-07-14','2400-02-29']);
 });
+
+test('实体契约区分共同功能与实体身份，资料元数据不成为事件日期',()=>{
+  const directory=locateIngestSkillsDir()!;
+  const sources=['ingest/SKILL.md','_brain-filing-rules.md','conventions/quality.md'].map(path=>readFileSync(join(directory,path),'utf8'));
+  const contract=compileCaptureContract(sources);
+  expect(contract).toContain('Shared features are not entity identity');
+  expect(contract).toContain('Do not register a generic feature');
+  expect(contract).toContain('Software systems are not companies');
+  expect(contract).toContain('Do not use a document-format title');
+  expect(contract).toContain('Source-document back-links are provenance');
+  expect(contract).toContain('Document creation, export, import, and modification dates are not event dates');
+});

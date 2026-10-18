@@ -1,5 +1,9 @@
 # Third-Party Notices
 
+## PDF.js
+
+PMBrain uses `pdfjs-dist` to read and render PDF documents. The Sidecar includes its CMaps, standard fonts, and WebAssembly resources. PDF.js is licensed under Apache License 2.0; the complete license is distributed at `pdfjs/LICENSE`, with the resource-specific notices retained in their directories.
+
 ## react-force-graph-2d
 
 PMBrain Admin includes `react-force-graph-2d` 1.29.1.

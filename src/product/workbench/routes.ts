@@ -29,17 +29,20 @@ import { CURRENT_EVIDENCE_RULE, needsCurrentEvidence, wantsSavedPlaybook } from 
 import { WorkbenchAgentCoordinator } from './agent-tasks';
 import { readFileSync } from 'node:fs';
 import { openArtifactCommand } from './files';
+import {workbenchEvidenceWindow} from './evidence';
 
 const CONTINUE_PROMPT = '请从中断处接着写完，不要重复已经写过的内容。';
 async function workbenchKnowledgeSearch(engine: BrainEngine, input: Parameters<typeof runAdminKnowledgeSearch>[1]) {
   const limit=Number(input.limit??6);
-  const result=await runAdminKnowledgeSearch(engine,{...input,limit:Math.min(50,limit*2)});
+  const result=await runAdminKnowledgeSearch(engine,{...input,limit:50});
   const results=[];
+  const pages=new Set<string>();
   for(const hit of result.results){
+    const key=JSON.stringify([hit.source_id,hit.slug]);if(pages.has(key))continue;pages.add(key);
     if(hit.slug.startsWith('conversations/pmbrain/')&&hit.source_id){const page=await engine.getPage(hit.slug,{sourceId:hit.source_id});if(page?.frontmatter.pmbrain_memory===true)continue;}
     results.push(hit);if(results.length>=limit)break;
   }
-  return {...result,results};
+  return {...result,results,result_count:results.length};
 }
 
 export function workbenchPayloadError(error: unknown): { status: number; error: string } {
@@ -102,6 +105,7 @@ export function knowledgeWorkbenchAnswer(engine: BrainEngine, dependencies: { se
     const fixedTokens = estimateTokens(systemPrompt ?? '') + estimateTokens(summary ?? '') + historyTokens + 256 + toolTokens;
     const evidenceTokens = Math.max(0, Math.min(knowledgeReserve(contextWindow, contextThreshold,outputReserve), budget - fixedTokens));
     let evidence = '';
+    const unreadEvidence: Array<{ source_id: string; slug: string; offset: number }> = [];
     let preferences = '';
     const citations: WorkbenchCitation[] = knowledge && !askEvidence ? (priorCitations ?? []).map(item => ({ ...item })) : [];
     if (knowledge && !askEvidence) for (const message of messages) {
@@ -126,21 +130,36 @@ export function knowledgeWorkbenchAnswer(engine: BrainEngine, dependencies: { se
       const result = query
         ? await dependencies.search(engine, { query, mode: 'semantic', limit: 6, ...(sourceIds ? { sourceIds } : {}) })
         : { results: [] };
-      for (const hit of result.results) {
-        if (sourceIds && (!hit.source_id || !sourceIds.includes(hit.source_id))) continue;
+      const pages = new Set<string>();
+      const hits = result.results.filter(hit => {
+        if (sourceIds && (!hit.source_id || !sourceIds.includes(hit.source_id))) return false;
+        const key = JSON.stringify([hit.source_id, hit.slug]);
+        if (pages.has(key)) return false;
+        pages.add(key); return true;
+      });
+      for (const [position, hit] of hits.entries()) {
         signal.throwIfAborted();
         const remaining = evidenceTokens - estimateTokens(evidence);
         if (remaining < 128) break;
+        const allowance = Math.floor(remaining / (hits.length - position));
         const page = hit.source_id ? await engine.getPage(hit.slug, { sourceId: hit.source_id }) : null;
         const content = page ? `${page.compiled_truth}\n${page.timeline}` : hit.snippet;
         const known=citations.findIndex(item=>item.sourceId===hit.source_id&&item.slug===hit.slug);
         const index=known<0?citations.length:known;
         const header = `\n[${index + 1}] ${hit.title} (${hit.source_id}/${hit.slug})\n`;
-        let excerpt = String(content).slice(0, 6000);
-        while (excerpt && estimateTokens(header + excerpt + '\n（节选）\n') > remaining) excerpt = excerpt.slice(0, Math.floor(excerpt.length * .8));
+        const window=workbenchEvidenceWindow(String(content),latestUser?.text??query,hit.snippet);
+        let excerpt=window.fromEnd?String(content).slice(Math.max(window.start,window.end-6000),window.end):String(content).slice(window.start,Math.min(window.end,window.start+6000));
+        const offset=()=>window.fromEnd?window.end-excerpt.length:window.start;
+        const nextOffset=()=>offset()+excerpt.length<String(content).length?offset()+excerpt.length:null;
+        const excerptRange = () => `\n<excerpt_range>${JSON.stringify({ source_id: hit.source_id, slug: hit.slug, offset: offset(), nextOffset:nextOffset(), totalChars: String(content).length,...(window.eventDate?{eventDate:window.eventDate,eventOffset:window.eventOffset}:{} )})}</excerpt_range>\n`;
+        while (excerpt && estimateTokens(header + excerptRange() + excerpt + '\n（节选）\n') > allowance) {
+          const length=Math.floor(excerpt.length*.8);
+          excerpt=length?(window.fromEnd?excerpt.slice(-length):excerpt.slice(0,length)):'';
+        }
         if (!excerpt) continue;
+        if (hit.source_id && (nextOffset()!==null||offset()>0)) unreadEvidence.push({ source_id: hit.source_id, slug: hit.slug, offset:nextOffset()??0 });
         citations[index]={ sourceId: hit.source_id, slug: hit.slug, title: hit.title, snippet: excerpt.slice(0, 240) };
-        evidence += `${header}${excerpt}${excerpt.length < String(content).length ? '\n（节选）' : ''}\n`;
+        evidence += `${header}${excerptRange()}${excerpt}${offset()>0||nextOffset()!==null?'\n（节选）':''}\n`;
       }
     }
     const summaryBlock = summary?.trim() ? (askEvidence ? `\n更早对话的摘要只说明以前说过什么，不是本期工作事实，不要据此写完成项。\n<summary>\n${summary.trim()}\n</summary>` : `\n更早对话的摘要如下，请延续其中的事实，不要向用户复述这份摘要。\n<summary>\n${summary.trim()}\n</summary>`) : '';
@@ -183,7 +202,7 @@ export function knowledgeWorkbenchAnswer(engine: BrainEngine, dependencies: { se
       }
     }
     const initial = await context.prepare(modelHistory);
-    if (useTools) return runWorkbenchTools({ native, agents, agent, messageId, sourceId, conversationId, engine, search: dependencies.search, loop: dependencies.loop!, messages, summary, task, model, knowledge, systemPrompt, temperature, contextWindow, contextThreshold, signal, attachmentSupplement, ...(settledTools?.length ? { settledTools } : {}), progress, onDelta, onReplace, onTool, onRequestEvent, system, budget, citations, context, history: initial.messages });
+    if (useTools) return runWorkbenchTools({ native, agents, agent, messageId, sourceId, conversationId, engine, search: dependencies.search, loop: dependencies.loop!, messages, summary, task, model, knowledge, systemPrompt, temperature, contextWindow, contextThreshold, signal, attachmentSupplement, ...(settledTools?.length ? { settledTools } : {}), progress, onDelta, onReplace, onTool, onRequestEvent, system, budget, citations, unreadEvidence, context, history: initial.messages });
     let composed = '';
     let stopReason: 'end' | 'length' | 'other' = 'end';
     let answeredModel = model;

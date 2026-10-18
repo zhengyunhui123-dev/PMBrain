@@ -3,10 +3,11 @@ import { basename, extname } from 'node:path';
 import { normalizeDocumentText } from '../normalize.ts';
 import type { DocumentParseOptions, DocumentSection, StructuredDocument } from '../types.ts';
 import { markdownToSections } from './markdown-sections.ts';
+import { pdfRuntimeOptions } from '../pdf-runtime.ts';
 
 async function parseWithPdfParse(buffer: Buffer, title: string, fallback?: string): Promise<StructuredDocument> {
   const { PDFParse } = await import('pdf-parse');
-  const parser = new PDFParse({ data: buffer });
+  const parser = new PDFParse({ data: buffer, ...pdfRuntimeOptions() });
   try {
     const result = await parser.getText({ pageJoiner: '\n<!-- PMBRAIN_PAGE page_number -->\n' });
     const pages = result.text.split(/<!-- PMBRAIN_PAGE (\d+) -->/);
@@ -47,7 +48,7 @@ async function addOcrPages(
 ): Promise<void> {
   if (pagesNeedingOcr.length === 0) return;
   const { PDFParse } = await import('pdf-parse');
-  const parser = new PDFParse({ data: buffer });
+  const parser = new PDFParse({ data: buffer, ...pdfRuntimeOptions() });
   try {
     const screenshots = await parser.getScreenshot({
       partial: pagesNeedingOcr,
@@ -82,7 +83,7 @@ export async function parsePdfDocument(filePath: string, opts: DocumentParseOpti
   if (opts.structured === false) return parseWithPdfParse(buffer, title);
 
   try {
-    const { extractPagesMarkdown } = await import('@firecrawl/pdf-inspector');
+    const { extractPagesMarkdown, extractTextWithPositions } = await import('@firecrawl/pdf-inspector');
     const result = extractPagesMarkdown(buffer);
     const sections = result.pages.flatMap(page =>
       markdownToSections(page.markdown, { page: page.page + 1 }, `pdf-p${page.page + 1}`),
@@ -102,7 +103,18 @@ export async function parsePdfDocument(filePath: string, opts: DocumentParseOpti
         ocrUsed: false,
       },
     };
-    if (opts.ocrPage) await addOcrPages(buffer, document, result.pagesNeedingOcr, opts.ocrPage);
+    if (opts.ocrPage) {
+      const items = extractTextWithPositions(buffer);
+      const embeddedImagePages = [...new Set(items.filter(image =>
+        image.itemType === 'Image' && image.width >= 72 && image.height >= 72 && !result.pagesNeedingOcr.includes(image.page) &&
+        !items.some(text => text.page === image.page && text.itemType === 'Text' && text.text.trim() &&
+          text.x + text.width / 2 >= image.x && text.x + text.width / 2 <= image.x + image.width &&
+          text.y + text.height / 2 >= image.y && text.y + text.height / 2 <= image.y + image.height),
+      ).map(image => image.page))];
+      document.metadata.pagesNeedingOcr = [...new Set([...result.pagesNeedingOcr, ...embeddedImagePages])].sort((a, b) => a - b);
+      document.metadata.imageCount = document.metadata.pagesNeedingOcr.length;
+      await addOcrPages(buffer, document, document.metadata.pagesNeedingOcr, opts.ocrPage);
+    }
     if (document.sections.length === 0) {
       const fallback = await parseWithPdfParse(buffer, title, 'pdf-inspector returned no extractable text');
       return fallback.sections.length > 0 || !opts.ocrPage ? fallback : document;

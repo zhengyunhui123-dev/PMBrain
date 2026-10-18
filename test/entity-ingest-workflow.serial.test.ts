@@ -66,6 +66,41 @@ test('更新没有重复 frontmatter 时继承实体身份，不能把英文 slu
   expect(parseMarkdown(content,'projects/川商出海').title).toBe('川商出海');
 });
 
+test.each([
+  '晨星平台（简称“晨星”）发布新版。',
+  '晨星平台，以下简称晨星。',
+  '晨星是晨星平台的简称。',
+])('自动项目别名接受原文明确的同名说明：%s',async body=>{
+  await validateIngestWrite(engine,{...context,body,chunkBody:'晨星平台发布新版。'},'put_page',{slug:'projects/morning',content:'---\ntitle: 晨星平台\ntype: project\naliases: [晨星]\n---\n发布新版。[Source: 申报.xlsx]'});
+});
+
+test.each([
+  '晨星平台包含驾驶舱模块。',
+  '晨星平台包含驾驶舱，模块简称驾驶舱。',
+  '晨星平台（简称驾驶舱管理系统）已启动。',
+  '另一个平台简称驾驶舱。晨星平台启动。',
+  '驾驶舱完成升级。',
+])('自动项目别名不能用模块词或局部匹配绕过身份依据：%s',async body=>{
+  await expectRejection(validateIngestWrite(engine,{...context,body,chunkBody:body},'put_page',{slug:'projects/morning',content:'---\ntitle: 晨星平台\ntype: project\naliases: [驾驶舱]\n---\n晨星平台简称驾驶舱。[Source: 申报.xlsx]'}),'alias');
+});
+
+test('自动补充保留已有手动别名，拒绝新增泛称且不落库，改类型也不能绕过',async()=>{
+  const old=(await engine.getPage('projects/川商出海',{sourceId:'vault'}))!;
+  await engine.putPage(old.slug,{...old,frontmatter:{aliases:['驾驶舱']}},{sourceId:'vault'});
+  const onlyAlias={...context,body:'驾驶舱已启用。',chunkBody:'驾驶舱已启用。'};
+  await validateIngestWrite(engine,onlyAlias,'put_page',{slug:old.slug,content:'新增事实。[Source: 申报.xlsx]'});
+  await validateIngestWrite(engine,onlyAlias,'put_page',{slug:old.slug,content:'---\ntitle: 川商出海\ntype: project\naliases: [驾驶舱]\n---\n新增事实。[Source: 申报.xlsx]'});
+  const before=await engine.getPage(old.slug,{sourceId:'vault'});let executed=false;
+  const [tool]=entityIngestTools([{name:'put_page',description:'write',input_schema:{},idempotent:true,async execute(){executed=true;return {};}}],context);
+  await expectRejection(tool!.execute({slug:old.slug,content:'---\ntitle: 川商出海\ntype: concept\naliases: [驾驶舱, 广交会]\n---\n新增事实。[Source: 申报.xlsx]'},{engine,jobId:1} as ToolCtx),'alias');
+  expect(executed).toBe(false);expect(await engine.getPage(old.slug,{sourceId:'vault'})).toEqual(before);
+});
+
+test('新增别名的证据必须对应已有项目身份，不能先改标题再借用模块简称',async()=>{
+  const body='川商出海包含驾驶舱模块。驾驶舱（简称看板）已经启用。';
+  await expectRejection(validateIngestWrite(engine,{...context,body,chunkBody:body},'put_page',{slug:'projects/川商出海',content:'---\ntitle: 驾驶舱\ntype: project\naliases: [看板]\n---\n新增事实。[Source: 申报.xlsx]'}),'alias');
+});
+
 test('更新保留既有事实与时间线，只有当前状态被当前状态取代',async()=>{
   const old=await engine.getPage('projects/川商出海',{sourceId:'vault'});
   await engine.putPage('projects/川商出海',{...old!,compiled_truth:'人工事实，不能丢失。\n\n## State\n\n旧状态。',timeline:'2026-01-01 历史事项。'},{sourceId:'vault'});

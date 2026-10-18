@@ -21,7 +21,7 @@ beforeAll(async()=>{
   const dimensions=process.env.PMBRAIN_RELATION_TEST_DATABASE_URL?1536:1024;
   const steps=[
     ['brain_search',{query:'刘慈欣'}],
-    ['brain_put_page',{slug:'people/liu',content:'---\ntitle: 刘慈欣\ntype: person\n---\n刘慈欣创作了三体。[Source: notes/input] [[auto-capture:notes/input]]'}],
+    ['brain_capture_entities',{entities:[{slug:'people/liu',content:'---\ntitle: 刘慈欣\ntype: person\n---\n刘慈欣创作了三体。[Source: notes/input] [[auto-capture:notes/input]]'}],relations:[]}],
   ] as const;
   server=Bun.serve({port:0,async fetch(req){
     const body=await req.json() as {input?:string|string[];tools?:Array<{function:{name:string}}>};

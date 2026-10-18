@@ -64,10 +64,16 @@ Every fact written to a brain page must carry an inline `[Source: ...]` citation
 1. **Parse the source.** Extract people, companies, dates, and events from the input.
 2. **For each entity mentioned:**
    - Read the entity's page from gbrain to check if it exists
+   - Shared features are not entity identity. Before reusing an entity, verify that the source and existing page describe the same named subject, project, organization, or person. A common module, role, technology, or topic does not establish this; keep different projects separate even when they use the same features. If identity remains uncertain, do not merge their facts.
+   - Do not register a generic feature, module, role, or topic as a project's alias. An alias must be an actual alternative name for that same entity, supported by the source. Preserve each fact's subject when adding context or cross-links.
+   - Software systems are not companies. Use company or organization only when the source identifies an organizational actor; keep technical components under their parent subject unless they independently pass the notability gate.
+   - Do not use a document-format title (such as meeting notes or requirements log) as a project's name. Use a subject name supported by the source and its explicit context; if no project identity is established, do not invent one.
    - If exists: update compiled_truth (rewrite State section with new info, don't append)
    - If new: check notability gate, then store the page in gbrain with the appropriate type and slug
 3. **Append to timeline.** Add a timeline entry in gbrain for each event, with date, summary, and source citation.
+   - Document creation, export, import, and modification dates are not event dates. Use a date only when the source associates it with that event; otherwise keep the fact undated and do not substitute a metadata date.
 4. **Create cross-reference links.** Link entities in gbrain for every entity pair mentioned together, using the appropriate relationship type.
+   - Source-document back-links are provenance, not entity-to-entity relationships. For a semantic relationship, both endpoints must be entities and a verbatim source passage must establish their relationship; do not substitute co-occurrence or an invented quotation for evidence.
 5. **Back-link all entities.** Update EVERY mentioned entity's page with a back-link to this page (Iron Law).
 6. **Timeline merge.** The same event appears on ALL mentioned entities' timelines. If Alice met Bob at Acme Corp, the event goes on Alice's page, Bob's page, and Acme Corp's page.
 

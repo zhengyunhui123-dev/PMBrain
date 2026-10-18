@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import type { BrainEngine } from './engine.ts';
 
 export const OCR_RECEIPT_VERSION = 1;
-export const OCR_PROMPT_VERSION = 1;
+export const OCR_PROMPT_VERSION = 2;
 
 export type OcrSkipCode =
   | 'disabled'

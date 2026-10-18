@@ -8,6 +8,10 @@ const desktopRoot = resolve(import.meta.dir, '..');
 const projectRoot = resolve(desktopRoot, '..');
 const runtimeRoot = join(desktopRoot, 'build', 'extraResources', 'pmbrain-runtime');
 const contract = getDesktopRuntimeContract();
+for (const asset of ['cmaps/GBK-EUC-H.bcmap', 'standard_fonts/LiberationSans-Regular.ttf', 'wasm/openjpeg.wasm', 'LICENSE']) {
+  const path = join(runtimeRoot, 'pdfjs', asset);
+  if (!existsSync(path) || statSync(path).size === 0) throw new Error(`Sidecar runtime is missing PDF resource: ${asset}`);
+}
 const bunPath = join(runtimeRoot, contract.runtimeExecutableName);
 if (!existsSync(join(runtimeRoot, 'task-worker.js')) || statSync(join(runtimeRoot, 'task-worker.js')).size === 0) throw new Error('Sidecar runtime is missing task-worker.js');
 if (!existsSync(join(runtimeRoot, 'database-worker.js')) || statSync(join(runtimeRoot, 'database-worker.js')).size === 0) throw new Error('Sidecar runtime is missing database-worker.js');
