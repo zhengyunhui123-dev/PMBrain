@@ -45,7 +45,10 @@ function MaintenanceTaskDetail({ run, onClose, onChange }: { run: ConsoleRun; on
       if (retry) {
         const accepted = await api.retryRun(run.id);
         onChange(await api.run(accepted.runId));
-      } else onChange(await api.cancelRun(run.id) as ConsoleRun);
+      } else {
+        await api.cancelRun(run.id);
+        onChange(await api.run(run.id));
+      }
     } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
     finally { setBusy(false); }
   };

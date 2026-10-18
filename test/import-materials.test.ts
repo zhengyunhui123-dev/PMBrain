@@ -32,3 +32,37 @@ test('参与跨源搜索的数据源仍可导入，已归档的数据源不可�
   ];
   expect(availableImportSources(sources).map(source => source.id)).toEqual(['main', 'local']);
 });
+
+test('已受理的任务遇到轮询错误后继续原任务，不重复上传或启动导入', async () => {
+  const calls: string[] = [];
+  await importMaterials([{ id: 'one', name: '一', runId: 'task-12', taskSourceId: 'a' }], {
+    sourceId: 'a', api: { startImportRun: async () => { throw new Error('重复导入'); }, startImportUploadRun: async () => { throw new Error('重复上传'); }, run: async id => { calls.push(id); return { id, status: 'running' } as any; }, retryRun: async () => { throw new Error('重复重试'); } },
+    wait: async id => ({ id, status: 'completed' }) as any, update: () => {}, starting: () => {}, completed: () => calls.push('完成'),
+  });
+  expect(calls).toEqual(['task-12', '完成']);
+});
+
+test('停止或失败后通过原生重试接口继续，不重新提交资料', async () => {
+  const calls: string[] = [];
+  await importMaterials([{ id: 'one', name: '扫描件', runId: 'task-15', taskSourceId: 'a' }], {
+    sourceId: 'a', api: { startImportRun: async () => { throw new Error('重复导入'); }, startImportUploadRun: async () => { throw new Error('重复上传'); }, run: async id => ({ id, status: 'cancelled' }) as any, retryRun: async id => { calls.push(id); return { runId: id }; } },
+    wait: async id => { calls.push(id); return { id, status: 'completed' } as any; }, update: () => {}, starting: () => {}, completed: () => {},
+  });
+  expect(calls).toEqual(['task-15', 'task-15']);
+});
+
+test('轮询中断但后台已经完成时，保留结果且不重复执行', async () => {
+  let waited = false; let completed = false;
+  await importMaterials([{ id: 'one', name: '一', runId: 'task-12' }], {
+    api: { startImportRun: async () => { throw new Error('重复'); }, startImportUploadRun: async () => { throw new Error('重复'); }, run: async id => ({ id, status: 'completed' }) as any },
+    wait: async () => { waited = true; throw new Error('不应等待'); }, update: () => {}, starting: () => {}, completed: () => { completed = true; },
+  });
+  expect(completed).toBe(true); expect(waited).toBe(false);
+});
+
+test('已受理的导入不能在重试时静默切到另一个 Source', async () => {
+  await expect(importMaterials([{ id: 'one', name: '一', runId: 'task-12', taskSourceId: 'a' }], {
+    sourceId: 'b', api: { startImportRun: async () => { throw new Error('重复'); }, startImportUploadRun: async () => { throw new Error('重复'); } },
+    wait: async () => { throw new Error('跨源'); }, update: () => {}, starting: () => {}, completed: () => {},
+  })).rejects.toThrow('数据源');
+});

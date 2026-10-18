@@ -65,11 +65,25 @@ export function ProductApp() {
   const [startup, setStartup] = useState<StartupProgress | null>(null);
   const [update, setUpdate] = useState<UpdateState | null>(null);
   const [stateError, setStateError] = useState('');
+  const [setupError, setSetupError] = useState('');
+  const [setupLoading, setSetupLoading] = useState(false);
+  const setupRequest = useRef(0);
   const [filter, setFilter] = useState('');
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem(NAV_COLLAPSED_KEY) === '1');
   const [maintenanceOpen, setMaintenanceOpen] = useState(false);
   const [healthOpen, setHealthOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
+  const readSetup = async () => {
+    if (!desktop) return;
+    const request = ++setupRequest.current;
+    setSetupLoading(true); setSetupError('');
+    try {
+      const result = await desktop.getSetup(true);
+      if (request === setupRequest.current) setNeedsSetup(result.setup.needsSetup);
+    } catch (error) {
+      if (request === setupRequest.current) setSetupError(error instanceof Error ? error.message : String(error));
+    } finally { if (request === setupRequest.current) setSetupLoading(false); }
+  };
   const previousPage = useRef(['import', 'knowledge-import'].includes(page) ? 'home' : page);
   const navigate = (target: string) => {
     if (['import', 'knowledge-import'].includes(target)) { setImportOpen(true); return; }
@@ -148,7 +162,7 @@ export function ProductApp() {
     if (!desktop) return;
     const fail = (error: unknown) => setStateError(String(error));
     void desktop.getState().then(setService).catch(fail);
-    void desktop.getSetup(true).then((result: { setup: { needsSetup: boolean } }) => setNeedsSetup(result.setup.needsSetup)).catch(fail);
+    void readSetup();
     void desktop.getTheme().then((result: { source: ThemeMode }) => setTheme(result.source)).catch(fail);
     void desktop.getStartupProgress().then(setStartup).catch(() => undefined);
     void desktop.getUpdateState().then((state: UpdateState | null) => { if (state) setUpdate(state); }).catch(() => undefined);
@@ -161,7 +175,7 @@ export function ProductApp() {
     const unsubscribeUpdateState = desktop.onUpdateState(setUpdate);
     const showPanel = (event: Event) => navigate(`settings-${(event as CustomEvent<string>).detail}`);
     window.addEventListener('pmbrain:settings-panel', showPanel);
-    return () => { unsubscribe(); unsubscribeTheme(); unsubscribeNavigation(); unsubscribePanel(); unsubscribeUpdates(); unsubscribeStartup(); unsubscribeUpdateState(); window.removeEventListener('pmbrain:settings-panel', showPanel); };
+    return () => { setupRequest.current++; unsubscribe(); unsubscribeTheme(); unsubscribeNavigation(); unsubscribePanel(); unsubscribeUpdates(); unsubscribeStartup(); unsubscribeUpdateState(); window.removeEventListener('pmbrain:settings-panel', showPanel); };
   }, []);
   const changeTheme = (next: ThemeMode) => {
     if (desktop) void desktop.setTheme(next).then(() => setTheme(next)).catch((error: unknown) => setStateError(String(error)));
@@ -195,6 +209,7 @@ export function ProductApp() {
     </aside>
     <main className={`product-main ${isSettings ? 'is-settings' : ''}`}>
       {stateError && <div className="product-error" role="alert">{stateError}</div>}
+      {setupError && <div className="product-error" role="alert">{setupError}<button type="button" className="pm-ghost" disabled={setupLoading} onClick={() => void readSetup()}>重试读取配置</button></div>}
       <MaintenanceDialog view={maintenance} open={maintenanceOpen} onClose={() => setMaintenanceOpen(false)} onRecover={() => { setMaintenanceOpen(false); navigate(service?.phase === 'failed' ? 'settings-recovery' : 'settings-updates'); }} />
       {page !== 'home' && maintenance.visible && <div className="maintenance-banner"><StatusChip kind="busy" label={maintenance.title} onClick={() => setMaintenanceOpen(true)} /></div>}
       <section hidden={!isSettings} className="product-settings">
@@ -209,7 +224,7 @@ export function ProductApp() {
             <div className="model-settings-host" hidden={!isSettings || !['models', 'model-roles'].includes(category)}>{visited.current.models && <ModelServices mode={category === 'model-roles' ? 'roles' : 'services'} />}</div>
           </div></div>
       </section>
-      {!isSettings && page === 'home' && mode === 'loading' && <section className="home-page"><p>正在打开首页…</p></section>}
+      {!isSettings && page === 'home' && mode === 'loading' && <section className="home-page"><p>{setupError ? '还不能确认知识库配置，请重试读取。' : '正在打开首页…'}</p></section>}
       {!isSettings && page === 'home' && mode !== 'loading' && <HomePage mode={mode} ready={ready} databaseReady={availability.databaseReady} status={status} onCreate={intent => navigate(intent ? `create?intent=${intent}` : 'create')} onBring={() => navigate('settings-basic')} onOpen={navigate} />}
       {!isSettings && page === 'create' && <CreateLibrary onDone={navigate} onCreated={() => setNeedsSetup(false)} onOpenSettings={panel => navigate(`settings-${panel}`)} />}
       <div hidden={isSettings || !assistantTarget(page)} className="product-workbench">

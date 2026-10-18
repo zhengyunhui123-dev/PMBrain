@@ -1,4 +1,5 @@
 import './style.css';
+import { createDesktopBehaviorSaver } from './desktop-behavior-save.js';
 import type {
   AdvancedModelConfig,
   AdvancedModelPhase,
@@ -1458,8 +1459,25 @@ function updateSystemSettingsAvailability(): void {
 }
 
 function applySystemSettingsState(next: DesktopSystemSettingsState): void {
+  const mode = selectedNetworkMode();
+  const address = selectedNetworkAddress();
+  const keepNetwork = latestSystemSettings && (mode !== latestSystemSettings.preferences.networkMode
+    || address.adapterName !== (latestSystemSettings.preferences.sharedAdapter || undefined)
+    || address.address !== (latestSystemSettings.preferences.sharedIp || undefined));
+  const selected = keepNetwork ? $<HTMLSelectElement>('#shared-address').selectedOptions[0]?.cloneNode(true) as HTMLOptionElement | undefined : undefined;
+  const keepBehavior = desktopBehaviorSaver.busy || !$<HTMLButtonElement>('#desktop-behavior-retry').hidden;
+  const behavior = keepBehavior ? currentDesktopBehavior() : null;
   latestSystemSettings = next;
   renderSystemSettings(next);
+  if (keepNetwork) {
+    $<HTMLInputElement>(`#network-mode-${mode}`).checked = true;
+    const select = $<HTMLSelectElement>('#shared-address');
+    const option = Array.from(select.options).find(item => item.dataset.adapter === address.adapterName && item.dataset.address === address.address);
+    if (option) select.value = option.value;
+    else if (selected) { selected.value = 'network-draft'; select.append(selected); select.value = selected.value; }
+    renderNetworkMode(); renderSelectedAddressNote();
+  }
+  if (behavior) renderDesktopBehavior(behavior);
   void refreshMemoryWriteback();
 }
 
@@ -1643,21 +1661,32 @@ async function saveSystemSettings(trigger?: HTMLButtonElement): Promise<void> {
   }
 }
 
-async function saveDesktopBehavior(): Promise<void> {
-  const note = $('#desktop-behavior-note');
-  if (note.textContent === DESKTOP_SETUP_NOTE) return;
+function currentDesktopBehavior() {
   const launchAtLogin = $<HTMLInputElement>('#launch-at-login').checked;
   const startMinimized = $<HTMLInputElement>('#start-minimized').checked;
-  const closeBehavior = $<HTMLInputElement>('#close-to-tray').checked ? 'tray' : 'quit';
-  try {
-    const result = await window.pmbrainDesktop.saveDesktopBehavior({ launchAtLogin, startMinimized, closeBehavior });
-    applySystemSettingsState(result.state);
-    if (note.textContent !== DESKTOP_SETUP_NOTE) note.textContent = '';
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (latestSystemSettings) renderSystemSettings(latestSystemSettings);
-    note.textContent = message;
-  }
+  const closeBehavior = $<HTMLInputElement>('#close-to-tray').checked ? 'tray' as const : 'quit' as const;
+  return { launchAtLogin, startMinimized, closeBehavior };
+}
+
+function renderDesktopBehavior(input: ReturnType<typeof currentDesktopBehavior>): void {
+  $<HTMLInputElement>('#launch-at-login').checked = input.launchAtLogin;
+  $<HTMLInputElement>('#start-minimized').checked = input.startMinimized;
+  $<HTMLInputElement>('#close-to-tray').checked = input.closeBehavior !== 'quit';
+}
+
+const desktopBehaviorSaver = createDesktopBehaviorSaver({
+  read: currentDesktopBehavior,
+  persist: input => window.pmbrainDesktop.saveDesktopBehavior(input),
+  saved: result => renderDesktopBehavior({ launchAtLogin: result.state.launchAtLogin, startMinimized: result.state.preferences.startMinimized, closeBehavior: result.state.preferences.closeBehavior }),
+  feedback: (status, error) => {
+    $('#desktop-behavior-note').textContent = status === 'saving' ? '正在保存…' : status === 'saved' ? '已保存' : error!;
+    $<HTMLButtonElement>('#desktop-behavior-retry').hidden = status !== 'error';
+  },
+});
+
+async function saveDesktopBehavior(): Promise<void> {
+  if (state?.setup.needsSetup !== false) return;
+  await desktopBehaviorSaver.save();
 }
 
 function populate(next: DesktopSetupState): void {
@@ -2999,6 +3028,7 @@ $('#save-system-settings').addEventListener('click', () => void saveSystemSettin
 for (const id of ['launch-at-login', 'start-minimized', 'close-to-tray']) {
   $(`#${id}`).addEventListener('change', () => void saveDesktopBehavior());
 }
+$('#desktop-behavior-retry').addEventListener('click', () => void saveDesktopBehavior());
 $('#restart-shared-gateway').addEventListener('click', () => void restartSharedGateway());
 $('#memory-open-integrations').addEventListener('click', () => {
   switchPanel('integrations');

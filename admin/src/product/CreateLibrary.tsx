@@ -1,11 +1,14 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { api } from '../api';
 import { desktopApi } from '../lib/product-fetch';
 import { availableServiceModels } from '../../../shared/model-services';
 import type { ConsoleRun } from '../../../shared/contracts/common';
 import { waitForConsoleRun } from '../pages/import/import-support';
 import { createIntent, importBuildDetail, importBuildSteps, suggestedChatModel, type CreateIntent } from './home-model';
-import type { DesktopSetupState, SidecarState } from '../../../desktop/src/preload';
+import type { DesktopSetupState } from '../../../desktop/src/preload';
+import { waitForDesktopService } from './desktop-startup-wait';
+import { importMaterials, type Material } from './import-materials';
+import { TaskProgressCard } from './TaskProgress';
 import './home.css';
 
 const STEPS = [
@@ -19,20 +22,6 @@ type StepId = typeof STEPS[number][0];
 
 function textOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-async function waitUntilReady(): Promise<void> {
-  const desktop = desktopApi();
-  if (!desktop) return;
-  const current = await desktop.getState();
-  if (current?.phase === 'ready') return;
-  await new Promise<void>((resolve, reject) => {
-    const timer = window.setTimeout(() => { stop(); reject(new Error('知识库服务启动超时。可以先回到首页，稍后再试。')); }, 120000);
-    const stop = desktop.onState((state: SidecarState) => {
-      if (state.phase === 'ready') { window.clearTimeout(timer); stop(); resolve(); }
-      if (state.phase === 'failed') { window.clearTimeout(timer); stop(); reject(new Error(state.message || '知识库服务没有启动')); }
-    });
-  });
 }
 
 export function CreateLibrary({ onDone, onCreated, onOpenSettings }: {
@@ -58,10 +47,19 @@ export function CreateLibrary({ onDone, onCreated, onOpenSettings }: {
   const [files, setFiles] = useState<File[]>([]);
   const [run, setRun] = useState<ConsoleRun | null>(null);
   const [detail, setDetail] = useState('');
+  const [setupLoaded, setSetupLoaded] = useState(false);
+  const [setupLoading, setSetupLoading] = useState(false);
+  const setupRequest = useRef(0);
+  const lifecycle = useRef(new AbortController());
+  const pendingMaterials = useRef<Material[] | null>(null);
   const index = STEPS.findIndex(item => item[0] === step);
-  useEffect(() => {
+  const loadSetup = async () => {
     if (!desktop) return;
-    void desktop.getSetup().then((result: DesktopSetupState) => {
+    const request = ++setupRequest.current;
+    setSetupLoading(true); setError('');
+    try {
+      const result: DesktopSetupState = await desktop.getSetup();
+      if (request !== setupRequest.current || lifecycle.current.signal.aborted) return;
       const setup = result.setup;
       setPath(setup.defaults.databasePath);
       setDirectory(setup.defaults.knowledgeDirectory);
@@ -70,7 +68,14 @@ export function CreateLibrary({ onDone, onCreated, onOpenSettings }: {
       setDatabaseUrl(setup.current.databaseUrl ?? '');
       setChatModel(setup.current.chatModel ?? '');
       if (!setup.needsSetup) setStep('sources');
-    }).catch((reason: unknown) => setError(textOf(reason)));
+      setSetupLoaded(true);
+    } catch (reason) { if (request === setupRequest.current && !lifecycle.current.signal.aborted) setError(textOf(reason)); }
+    finally { if (request === setupRequest.current && !lifecycle.current.signal.aborted) setSetupLoading(false); }
+  };
+  useEffect(() => {
+    lifecycle.current = new AbortController();
+    void loadSetup();
+    return () => { setupRequest.current++; lifecycle.current.abort(); };
   }, [desktop]);
   const loadModels = async () => {
     if (!desktop) return;
@@ -98,11 +103,12 @@ export function CreateLibrary({ onDone, onCreated, onOpenSettings }: {
         ...(engine === 'pglite' ? { databasePath: customPath.trim() || setup.defaults.databasePath } : { databaseUrl: databaseUrl.trim() }),
         knowledgeDirectory: setup.defaults.knowledgeDirectory,
       });
-      await waitUntilReady();
+      await waitForDesktopService({ getState: () => desktop.getState(), onState: listener => desktop.onState(listener) }, { signal: lifecycle.current.signal });
+      if (lifecycle.current.signal.aborted) return;
       onCreated();
       setStep('models');
-    } catch (reason) { setError(textOf(reason)); }
-    finally { setBusy(false); }
+    } catch (reason) { if (!lifecycle.current.signal.aborted) setError(textOf(reason)); }
+    finally { if (!lifecycle.current.signal.aborted) setBusy(false); }
   };
   const applyChat = async (value: string) => {
     if (!desktop || !value) { setStep('sources'); return; }
@@ -112,7 +118,8 @@ export function CreateLibrary({ onDone, onCreated, onOpenSettings }: {
       const current = snapshot.current;
       if (current.chatModel !== value) {
         await desktop.saveSetup({ expectedModelRevision: snapshot.modelRevision, engine: current.engine, databasePath: current.databasePath, databaseUrl: current.databaseUrl, resetAdvancedModelRouting: false, modelConfig: { chatModel: value } });
-        await waitUntilReady();
+        await waitForDesktopService({ getState: () => desktop.getState(), onState: listener => desktop.onState(listener) }, { signal: lifecycle.current.signal });
+        if (lifecycle.current.signal.aborted) return;
         setChatModel(value);
       }
       setStep('sources');
@@ -124,22 +131,20 @@ export function CreateLibrary({ onDone, onCreated, onOpenSettings }: {
     onOpenSettings(panel);
   };
   const startBuild = async () => {
+    if (busy) return;
     if (!folder && !files.length) { setStep('done'); return; }
     setStep('build'); setBusy(true); setError(''); setRun(null);
+    pendingMaterials.current ??= [...(folder ? [{ id: crypto.randomUUID(), name: folder.split(/[\\/]/).at(-1) || folder, path: folder }] : []), ...files.map(file => ({ id: crypto.randomUUID(), name: file.name, file }))];
     try {
-      if (folder) {
-        setDetail(`正在导入文件夹`);
-        const accepted = await api.startImportRun({ path: folder, includeOffice: true, includeImages: true, autoEmbed: true, structuredDocuments: true, documentOcr: true, workers: 1 });
-        const finished = await waitForConsoleRun(accepted.runId, setRun);
-        if (finished.status !== 'completed') throw new Error(finished.error || finished.stderr || '文件夹导入没有完成');
-      }
-      for (let position = 0; position < files.length; position += 1) {
-        const file = files[position];
-        setDetail(`正在导入 ${position + 1}/${files.length}：${file.name}`);
-        const accepted = await api.startImportUploadRun(file, { autoEmbed: true, structuredDocuments: true, documentOcr: true, workers: 1 });
-        const finished = await waitForConsoleRun(accepted.runId, setRun);
-        if (finished.status !== 'completed') throw new Error(finished.error || finished.stderr || `${file.name} 导入没有完成`);
-      }
+      await importMaterials(pendingMaterials.current, { api, wait: waitForConsoleRun, update: setRun,
+        starting: item => setDetail(`正在导入：${item.name}`),
+        accepted: (item, runId) => { item.runId = runId; },
+        completed: item => {
+          pendingMaterials.current = pendingMaterials.current!.filter(entry => entry.id !== item.id);
+          if (item.file) setFiles(current => current.filter(file => file !== item.file)); else setFolder('');
+          window.dispatchEvent(new Event('pmbrain:materials-imported'));
+        },
+      });
       setStep('done');
     } catch (reason) { setError(textOf(reason)); }
     finally { setBusy(false); }
@@ -148,6 +153,7 @@ export function CreateLibrary({ onDone, onCreated, onOpenSettings }: {
   if (!desktop) {
     return <section className="create-page"><div className="create-wrap"><h1>创建知识库</h1><p>创建本地知识库是在 PMBrain 桌面版里完成的。浏览器里打开的是已经启动的知识库。</p><button type="button" className="home-primary" onClick={() => onDone('home')}>返回首页</button></div></section>;
   }
+  if (!setupLoaded) return <section className="create-page"><div className="create-wrap"><h1>读取知识库配置</h1><p role="status">{setupLoading ? '正在读取已有配置…' : '还不能确认知识库配置，请重试读取。'}</p>{error && <p className="product-error" role="alert">{error}</p>}<div className="create-actions"><button type="button" className="home-primary" disabled={setupLoading} onClick={() => void loadSetup()}>重试读取配置</button><button type="button" onClick={() => onDone('home')}>返回首页</button></div></div></section>;
   return <section className="create-page"><div className="create-wrap">
     <button type="button" className="home-secondary" onClick={() => onDone('home')}>返回首页</button>
     <ol className="create-steps">{STEPS.map(([id, label], position) => <li key={id}><button type="button" data-state={position === index ? 'current' : position < index ? 'done' : 'pending'} disabled={position > index} onClick={() => { if (position < index) setStep(id); }}>{label}</button></li>)}</ol>
@@ -189,9 +195,9 @@ export function CreateLibrary({ onDone, onCreated, onOpenSettings }: {
       {step === 'build' && <>
         <h1>开始构建</h1>
         <p>{detail || importBuildDetail(run)}</p>
-        <div className="build-steps">{importBuildSteps(run).map(item => <div key={item.id} data-state={item.state}><i />{item.label}</div>)}</div>
+        {run?.product ? <TaskProgressCard run={run} /> : <div className="build-steps">{importBuildSteps(run).map(item => <div key={item.id} data-state={item.state}><i />{item.label}</div>)}</div>}
         <p className="create-path">{importBuildDetail(run)}</p>
-        {!busy && error && <div className="create-actions"><button type="button" className="home-primary" onClick={() => void startBuild()}>重新导入</button><button type="button" onClick={() => setStep('done')}>先完成</button></div>}
+        {!busy && error && <div className="create-actions"><button type="button" className="home-primary" onClick={() => void startBuild()}>继续未完成项</button><button type="button" onClick={() => setStep('done')}>先完成</button></div>}
       </>}
       {step === 'done' && <>
         <h1>知识库已经可以使用</h1>

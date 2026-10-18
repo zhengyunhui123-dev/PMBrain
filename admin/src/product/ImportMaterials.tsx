@@ -52,7 +52,10 @@ export function ImportMaterials({ open, onClose }: { open: boolean; onClose: () 
     let activeItem = queued[0];
     try {
       await importMaterials(queued, { api, sourceId, wait: waitForConsoleRun, update: setRun,
-        accepted: (item, runId) => setImports(current => current.map(entry => entry.id === item.id ? { ...entry, runId } : entry)),
+        accepted: (item, runId) => {
+          setItems(current => current.map(entry => entry.id === item.id ? { ...entry, runId, taskSourceId: sourceId } : entry));
+          setImports(current => current.map(entry => entry.id === item.id ? { ...entry, runId, error: undefined } : entry));
+        },
         starting: item => { activeItem = item; setActive(item.name); setRun(null); },
         completed: (item, completedRun) => { setResults(current => [...current, { id: item.id, name: item.name, run: completedRun, path: item.path ?? item.name }]); setItems(current => current.filter(entry => entry.id !== item.id)); window.dispatchEvent(new Event('pmbrain:materials-imported')); },
       });
@@ -68,7 +71,7 @@ export function ImportMaterials({ open, onClose }: { open: boolean; onClose: () 
     <div className="materials-body">
       <div className="materials-actions"><button type="button" disabled={busy} onClick={() => files.current?.click()}><FilePlus2 size={20} /><b>本地文件</b><small>文档、图片、Markdown</small></button>{desktop && <button type="button" disabled={busy} onClick={() => void desktop.chooseDirectory().then((value: string | null) => { if (value) addPath(value); }).catch((reason: unknown) => setError(String(reason)))}><FolderPlus size={20} /><b>文件夹</b><small>包含子目录中的资料</small></button>}</div>
       <input ref={files} type="file" multiple hidden onChange={event => { const selected = Array.from(event.target.files ?? []); setItems(current => [...current, ...selected.map(file => ({ id: crypto.randomUUID(), name: file.name, file }))]); event.target.value = ''; }} />
-      <label className="materials-source">导入到数据源<select aria-label="导入到数据源" value={sourceId} disabled={busy || !sources.length} onChange={event => setSourceId(event.target.value)}>{!sources.length && <option value="">{sourceError ? '数据源读取失败' : '正在读取数据源…'}</option>}{sources.map(source => <option key={source.id} value={source.id}>{sourceLabel(source)}{source.id === mainSourceId ? ' · 主源' : ''}</option>)}</select></label>
+      <label className="materials-source">导入到数据源<select aria-label="导入到数据源" value={sourceId} disabled={busy || !sources.length || items.some(item => item.runId)} onChange={event => setSourceId(event.target.value)}>{!sources.length && <option value="">{sourceError ? '数据源读取失败' : '正在读取数据源…'}</option>}{sources.map(source => <option key={source.id} value={source.id}>{sourceLabel(source)}{source.id === mainSourceId ? ' · 主源' : ''}</option>)}</select></label>
       {sourceError && <p className="product-error" role="alert">{sourceError}</p>}
       {items.length > 0 ? <ul className="materials-list">{items.map(item => <li key={item.id}>{item.file ? <FileText size={18} /> : <Folder size={18} />}<span><b>{item.name}</b><small title={item.path}>{item.path || `${Math.ceil((item.file?.size ?? 0) / 1024)} KB`}</small></span><button type="button" disabled={busy} aria-label={`移除 ${item.name}`} onClick={() => setItems(current => current.filter(entry => entry.id !== item.id))}><X size={16} /></button></li>)}</ul> : !run && <p className="materials-empty">选择本地文件或文件夹开始添加。</p>}
       {busy && <p className="materials-progress" role="status">正在导入 · {active}</p>}
@@ -76,6 +79,6 @@ export function ImportMaterials({ open, onClose }: { open: boolean; onClose: () 
       {results.filter(result => result.run.id !== run?.id).map(result => <TaskProgressCard key={result.id} run={result.run} />)}
       {run && <><TaskProgressCard run={run} link={false} /><button type="button" className="pm-ghost" onClick={() => { taskLink(run); onClose(); }}>查看任务</button></>}
     </div>
-    <footer><small>{busy ? '关闭面板后，导入继续在后台运行。' : '已导入的文件会跳过，更新过的文件会重新处理。'}</small>{busy && run ? <button type="button" onClick={() => void api.cancelRun(run.id).catch(reason => setError(String(reason)))}>停止</button> : <button type="button" className="materials-primary" disabled={busy || !items.length || !sourceId || Boolean(sourceError)} onClick={() => void start()}><Upload size={16} />导入{items.length > 0 ? ` ${items.length} 项` : ''}</button>}</footer>
+    <footer><small>{busy ? '关闭面板后，导入继续在后台运行。' : '已导入的文件会跳过，更新过的文件会重新处理。'}</small>{busy && run ? <button type="button" onClick={() => void api.cancelRun(run.id).catch(reason => setError(String(reason)))}>停止</button> : <button type="button" className="materials-primary" disabled={busy || !items.length || !sourceId || Boolean(sourceError)} onClick={() => void start()}><Upload size={16} />{items.some(item => item.runId) ? '继续未完成项' : `导入${items.length > 0 ? ` ${items.length} 项` : ''}`}</button>}</footer>
   </dialog>;
 }

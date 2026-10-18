@@ -279,8 +279,9 @@ describe('desktop settings renderer contracts', () => {
     expect(behaviorPanel).not.toContain('界面外观');
     const desktopSaveStart = renderer.indexOf('async function saveDesktopBehavior');
     const desktopSave = renderer.slice(desktopSaveStart, renderer.indexOf('function populate', desktopSaveStart));
-    expect(desktopSave).toContain('saveDesktopBehavior({ launchAtLogin, startMinimized, closeBehavior })');
-    expect(desktopSave).toContain("$('#desktop-behavior-note')");
+    expect(desktopSave).toContain('desktopBehaviorSaver.save()');
+    expect(renderer).toContain('persist: input => window.pmbrainDesktop.saveDesktopBehavior(input)');
+    expect(renderer).toContain("$('#desktop-behavior-note')");
     expect(desktopSave).not.toContain('saveSystemSettings');
     expect(desktopSave).not.toContain('系统设置已保存，当前仅本机连接。');
     expect(preload).toContain('desktop:save-desktop-behavior');

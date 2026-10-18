@@ -1,5 +1,5 @@
-const __vite__mapDeps=(i,m=__vite__mapDeps,d=(m.f||(m.f=["assets/src-LuTgMWpU.js","assets/src-Bi7L9_9h.css"])))=>i.map(i=>d[i]);
-import{d as y,_ as k}from"./index-Cy9GXrBN.js";import{r as e,j as n}from"./react-CTwocyy_.js";import"./ui-wZVs8ERq.js";const f=`
+const __vite__mapDeps=(i,m=__vite__mapDeps,d=(m.f||(m.f=["assets/src-78e4A-OV.js","assets/src-Bi7L9_9h.css"])))=>i.map(i=>d[i]);
+import{d as y,_ as k}from"./index-_qr9bLPz.js";import{r as e,j as n}from"./react-CTwocyy_.js";import"./ui-wZVs8ERq.js";const f=`
     <main class="app-shell">
       <aside class="rail">
         <div class="brand">
@@ -521,6 +521,7 @@ import{d as y,_ as k}from"./index-Cy9GXrBN.js";import{r as e,j as n}from"./react
               <label class="preference-row" for="close-to-tray"><span><b>关闭时最小化到托盘</b></span><input id="close-to-tray" class="settings-switch" type="checkbox" /></label>
             </div>
             <p id="desktop-behavior-note" class="desktop-behavior-note" role="status"></p>
+            <button type="button" class="ghost" id="desktop-behavior-retry" hidden>重试保存</button>
           </section>
         </section>
         <section class="panel" id="panel-updates">
@@ -655,4 +656,4 @@ import{d as y,_ as k}from"./index-Cy9GXrBN.js";import{r as e,j as n}from"./react
       </div>
     </div>
     
-  `;let t;function x({panel:s,visible:o,theme:p}){const i=e.useRef(null),[c,r]=e.useState(""),[v,h]=e.useState(!1),[u,b]=e.useState(!1),[m,l]=e.useState("");e.useEffect(()=>{!y()||!i.current||(i.current.childElementCount||(i.current.innerHTML=f),t??(t=k(()=>import("./src-LuTgMWpU.js"),__vite__mapDeps([0,1]))),t.then(()=>h(!0)).catch(a=>r(String(a))))},[]),e.useEffect(()=>{if(!o||!t)return;let a=!0;return t.then(d=>{a&&d.activateSettingsPanel(s)}).catch(d=>r(String(d))),()=>{a=!1}},[s,o]);const g=async()=>{if(t){b(!0),l("");try{await(await t).saveDatabaseSettings(),l("数据库与资料目录已保存")}catch(a){l(String(a))}finally{b(!1)}}};return n.jsxs("div",{className:"desktop-settings-container",hidden:!o,children:[c&&n.jsx("p",{role:"alert",children:c}),n.jsx("div",{className:"desktop-settings",hidden:!v,"data-theme":p==="system"?window.matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light":p,ref:i}),s==="basic"&&v&&n.jsxs("div",{className:"database-save",children:[n.jsx("button",{disabled:u,onClick:g,children:u?"保存中…":"保存数据库与资料目录"}),m&&n.jsx("p",{role:"status",children:m})]})]})}export{x as DesktopSettings};
+  `;let t;function x({panel:s,visible:o,theme:p}){const i=e.useRef(null),[c,r]=e.useState(""),[v,h]=e.useState(!1),[u,b]=e.useState(!1),[m,l]=e.useState("");e.useEffect(()=>{!y()||!i.current||(i.current.childElementCount||(i.current.innerHTML=f),t??(t=k(()=>import("./src-78e4A-OV.js"),__vite__mapDeps([0,1]))),t.then(()=>h(!0)).catch(a=>r(String(a))))},[]),e.useEffect(()=>{if(!o||!t)return;let a=!0;return t.then(d=>{a&&d.activateSettingsPanel(s)}).catch(d=>r(String(d))),()=>{a=!1}},[s,o]);const g=async()=>{if(t){b(!0),l("");try{await(await t).saveDatabaseSettings(),l("数据库与资料目录已保存")}catch(a){l(String(a))}finally{b(!1)}}};return n.jsxs("div",{className:"desktop-settings-container",hidden:!o,children:[c&&n.jsx("p",{role:"alert",children:c}),n.jsx("div",{className:"desktop-settings",hidden:!v,"data-theme":p==="system"?window.matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light":p,ref:i}),s==="basic"&&v&&n.jsxs("div",{className:"database-save",children:[n.jsx("button",{disabled:u,onClick:g,children:u?"保存中…":"保存数据库与资料目录"}),m&&n.jsx("p",{role:"status",children:m})]})]})}export{x as DesktopSettings};

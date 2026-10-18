@@ -67,7 +67,7 @@ def run(args):
                 elif path.endswith('/cancel'):
                     task.update(status='cancelled', completedAt=date)
                     task['product']['stage'] = '任务已停止'
-                    data = task
+                    data = {'status': 'stopping'}
                 else:
                     data = task
             route.fulfill(status=status, content_type='application/json', body=json.dumps(data, ensure_ascii=False))

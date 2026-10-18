@@ -93,8 +93,10 @@ describe('首页按有没有知识库区分，并接上现有能力', () => {
     expect(home).toContain('你好，开始探索你的知识');
     expect(home).not.toContain('最近活动');
     expect(create).toContain('desktop.saveSetup');
-    expect(create).toContain('api.startImportRun');
-    expect(create).toContain('api.startImportUploadRun');
+    expect(create).toContain('await importMaterials(pendingMaterials.current');
+    const imports = read('admin/src/product/import-materials.ts');
+    expect(imports).toContain('dependencies.api.startImportRun');
+    expect(imports).toContain('dependencies.api.startImportUploadRun');
     expect(create).toContain('选择文件夹');
     expect(read('admin/src/workbench/Workbench.tsx')).toContain('pmbrain:open-conversation');
   });
