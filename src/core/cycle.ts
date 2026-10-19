@@ -184,7 +184,7 @@ export const ALL_PHASES: CyclePhase[] = [
 ];
 
 export const DEFAULT_PHASES = ALL_PHASES.filter(phase =>
-  !(['propose_takes', 'grade_takes', 'calibration_profile'] as CyclePhase[]).includes(phase),
+  !(['propose_takes', 'grade_takes', 'calibration_profile', 'capture_entities'] as CyclePhase[]).includes(phase),
 );
 
 /** Ordered stage partitions used by Source freshness and global maintenance. */

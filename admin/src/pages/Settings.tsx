@@ -114,6 +114,8 @@ function DreamSettings() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [savedOutputDir, setSavedOutputDir] = useState('output');
+  const [timeoutMinutes, setTimeoutMinutes] = useState('');
+  const [savedTimeoutMinutes, setSavedTimeoutMinutes] = useState('');
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
 
@@ -123,6 +125,9 @@ function DreamSettings() {
         const loaded = value;
         setSettings(loaded);
         setSavedOutputDir(loaded.outputDir);
+        const minutes = loaded.timeoutMs == null ? '' : String(loaded.timeoutMs / 60000);
+        setTimeoutMinutes(minutes);
+        setSavedTimeoutMinutes(minutes);
       })
       .catch(nextError => setError(nextError instanceof Error ? nextError.message : String(nextError)))
       .finally(() => setLoading(false));
@@ -134,13 +139,19 @@ function DreamSettings() {
       setError('请填写 Dream 输出目录');
       return;
     }
+    const timeoutMs = timeoutMinutes.trim() ? Number(timeoutMinutes) * 60000 : null;
+    if (timeoutMs !== null && (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > 2_147_483_647)) {
+      setError('请填写有效的最长运行分钟数，或留空恢复默认');
+      return;
+    }
     setSaving(true);
     setMessage('');
     setError('');
     try {
-      const saved = await api.saveDreamSettings({ ...settings, outputDir });
+      const saved = await api.saveDreamSettings({ ...settings, outputDir, timeoutMs });
       setSettings(current => ({ ...current, ...saved }));
       setSavedOutputDir(saved.outputDir);
+      setSavedTimeoutMinutes(timeoutMinutes);
       setMessage('知识整理设置已保存');
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : String(nextError));
@@ -196,7 +207,7 @@ function DreamSettings() {
     }
   };
 
-  const outputDirDirty = settings.outputDir.trim() !== savedOutputDir.trim();
+  const outputDirDirty = settings.outputDir.trim() !== savedOutputDir.trim() || timeoutMinutes !== savedTimeoutMinutes;
   const outputIsAbsolute = /^[A-Za-z]:[\\/]/.test(settings.outputDir)
     || /^\\\\/.test(settings.outputDir)
     || settings.outputDir.startsWith('/');
@@ -214,11 +225,18 @@ function DreamSettings() {
           <span className="settings-panel-icon"><Sparkles /></span>
           <div>
             <h2>知识整理设置</h2>
-            <p className="pm-hint">设置 Dream 生成内容的本地保存位置，以及是否同时保留 Markdown 文件。</p>
+            <p className="pm-hint">设置整理任务的运行时间和 Dream 生成内容的保存位置。</p>
           </div>
         </div>
       </div>
       <div className="dream-settings-grid">
+        <div className="dream-output-setting">
+          <label htmlFor="dream-timeout-minutes">整理任务单次执行上限（分钟）</label>
+          <input id="dream-timeout-minutes" type="number" min="1" value={timeoutMinutes}
+            onChange={event => setTimeoutMinutes(event.target.value)} disabled={loading || saving}
+            placeholder={settings.effectiveTimeoutMs ? String(settings.effectiveTimeoutMs / 60000) : ''} />
+          <p className="pm-hint">当前生效上限：{settings.effectiveTimeoutMs ? settings.effectiveTimeoutMs / 60000 : '—'} 分钟；留空并保存可恢复默认。用于新建快速维护和深度整理的每次后台执行，继续旧任务保留原上限。排队、等待资料批次和手动继续的时间不累计扣减。这不是执行间隔，也不是整轮完成时间保证。</p>
+        </div>
         <div className="dream-output-setting">
           <label htmlFor="dream-output-dir">Dream 输出目录（相对目录或完整路径）</label>
           <div className="dream-output-action-row">
@@ -433,8 +451,8 @@ function EntityCaptureBudgetSettings() {
       <div className="settings-panel-title">
         <span className="settings-panel-icon"><Sparkles /></span>
         <div>
-          <h2>AI 实体回填</h2>
-          <p>费用上限用于深度整理里的实体识别。Token 用量仅作统计，不限制整轮累计数量。达到费用上限后保留已完成结果，剩余资料下次继续，本地 Ollama 不计入金额。</p>
+          <h2>显式实体摄入费用</h2>
+          <p>仅用于明确指定资料的实体摄入及旧任务手动继续。普通导入、快速维护和默认 Dream 不自动执行此阶段。达到费用上限后保留已完成结果，本地 Ollama 不计入金额。</p>
         </div>
       </div>
       <div className="dream-schedule-row">
@@ -558,7 +576,7 @@ export function SettingsPage({
           <div className="settings-section-stack">
             <DreamSettings />
             <DreamScheduleSettings />
-            <EntityCaptureBudgetSettings />
+            <details><summary>高级：显式实体摄入费用</summary><EntityCaptureBudgetSettings /></details>
           </div>
         )}
       </div>

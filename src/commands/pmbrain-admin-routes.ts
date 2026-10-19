@@ -1,4 +1,5 @@
 import { readTaskRelations } from '../product/tasks/relations.ts';
+import { DEFAULT_PRODUCT_TASK_TIMEOUT_MS, DREAM_TASK_TIMEOUT_KEY, parseTaskTimeout } from '../product/tasks/timeout.ts';
 import { getAdminKnowledgeGraphEdge } from './admin-knowledge-graph.ts';
 
 import express from 'express';
@@ -884,13 +885,10 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
     scheduledDreamStarting = true;
     const today = adminDreamScheduleDateKey(now);
     try {
-      // Same entry as Admin「快速维护」: dream --preset quick. No parallel organize pipeline.
-      // Unattended runs keep a 120-minute safety timeout; manual quick has no default timeout.
       await engine.setConfig(ADMIN_DREAM_SCHEDULE_LAST_STARTED_DATE_KEY, today);
       const run = await productTasks.submitDream({
         preset: 'quick',
         allSources: true,
-        timeoutMs: 120 * 60 * 1000,
       }, 'scheduled');
       if (run.status !== 'running' && run.status !== 'queued') {
         throw new Error(run.error || `dream_schedule_start_${run.status}`);
@@ -1007,6 +1005,7 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
     const dualWrite = overrides?.dualWrite ?? (storedDualWrite !== 'false');
     const includeUncommitted = overrides?.includeUncommitted ?? (storedIncludeUncommitted === 'true');
     const autoGitCommit = overrides?.autoGitCommit ?? storedAutoGitCommit !== 'false';
+    const timeoutMs = parseTaskTimeout(await engine.getConfig(DREAM_TASK_TIMEOUT_KEY));
     const defaultBrainDir = storedBrainDir?.trim() || brainDirFromConfig(config);
     const resolvedOutputDir = defaultBrainDir
       ? resolveDreamOutputRoot(defaultBrainDir, outputDir)
@@ -1018,6 +1017,8 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
       dualWrite,
       includeUncommitted,
       autoGitCommit,
+      timeoutMs,
+      effectiveTimeoutMs: timeoutMs ?? DEFAULT_PRODUCT_TASK_TIMEOUT_MS,
       defaultBrainDir: defaultBrainDir || null,
       resolvedOutputDir,
       directoryExists: resolvedOutputDir ? existsSync(resolvedOutputDir) : false,
@@ -1098,6 +1099,8 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
     const dualWrite = req.body?.dualWrite;
     const includeUncommitted = req.body?.includeUncommitted;
     const autoGitCommit = req.body?.autoGitCommit;
+    const timeoutMs = req.body?.timeoutMs;
+    if (timeoutMs !== undefined && timeoutMs !== null && (typeof timeoutMs !== 'number' || parseTaskTimeout(timeoutMs) === null)) { res.status(400).json({error:'invalid_dream_task_timeout'}); return; }
     if (autoGitCommit !== undefined && typeof autoGitCommit !== 'boolean') { res.status(400).json({error:'auto_git_commit_must_be_boolean'}); return; }
     if (!rawOutputDir || rawOutputDir.length > 1024 || rawOutputDir.includes('\0')) {
       res.status(400).json({ error: 'invalid_dream_output_dir' });
@@ -1126,6 +1129,7 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
         engine.setConfig('dream.synthesize.dual_write', dualWrite ? 'true' : 'false'),
         engine.setConfig('sync.include_working_tree', includeUncommitted ? 'true' : 'false'),
         ...(typeof autoGitCommit==='boolean' ? [engine.setConfig('sync.auto_git_commit',autoGitCommit?'true':'false')] : []),
+        ...(timeoutMs !== undefined ? [engine.setConfig(DREAM_TASK_TIMEOUT_KEY,timeoutMs === null ? '' : String(timeoutMs))] : []),
       ]);
       sendAdminContract(res, DreamSettingsResponseSchema, await dreamSettingsView({ outputDir, dualWrite, includeUncommitted, autoGitCommit }));
     } catch (e) {

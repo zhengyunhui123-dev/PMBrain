@@ -18,6 +18,7 @@ export interface SyncFileInput {
 }
 
 export interface MaintenanceCheckpoint {
+  retiredCapture?: Record<string, { phases: PhaseResult[]; report?: Record<string, unknown> }>;
   captureWindows?:Record<string,PhaseResult>;
   captureRequests?: Record<string, string[]>;
   phases: Record<string, PhaseResult[]>;

@@ -1,4 +1,3 @@
-import { enqueueImportedEntityCapture } from './imported-entity-capture.ts';
 import { createHash, randomUUID } from 'node:crypto';
 import { Worker } from 'node:worker_threads';
 import { stat, mkdir, open, readFile, rename, unlink, readdir } from 'node:fs/promises';
@@ -14,7 +13,8 @@ import { assertDreamPresetAllowGenerative, assertPhasesAllowGenerative } from '.
 import { TaskEngineHost } from './engine-host.ts';
 import type { DreamTaskInput, ImportTaskInput, ProductTask, TaskWorkerMessage } from './types.ts';
 import { removeAdminUploadTempDir } from '../../commands/pmbrain-admin-support.ts';
-import { appendTaskCheckpoint, taskArtifactPath, resumeMaintenanceCheckpoint } from './checkpoint.ts';
+import { appendTaskCheckpoint, taskArtifactPath, resumeMaintenanceCheckpoint, retireAutomaticCapture } from './checkpoint.ts';
+import { DEFAULT_PRODUCT_TASK_TIMEOUT_MS, DREAM_TASK_TIMEOUT_KEY, parseTaskTimeout } from './timeout.ts';
 import { FileProjection } from './file-projection.ts';
 import { WorkerPgliteEngine } from '../database/worker-engine.ts';
 import { TaskProgressAdapter, finishTaskProgress } from './progress-adapter.ts';
@@ -25,7 +25,7 @@ import type { MaintenanceCheckpoint, SyncFileInput } from './types.ts';
 import { resolveSourceId } from '../../core/source-resolver.ts';
 import { recordSyncedGitFile, commitQuickMaintenanceSource } from './synced-git.ts';
 import type { SyncResult } from '../../commands/sync.ts';
-import { claimMaintenanceCapture, maintenanceFailure } from './maintenance-orchestration.ts';
+import { maintenanceFailure } from './maintenance-orchestration.ts';
 import { TaskResourceGuard, PRODUCT_QUEUE_CAPACITY, isSyncCapacityError, type TaskResourceOptions } from './resource-guard.ts';
 import { WorkbenchMemoryCoordinator, memoryVersion, type WorkbenchMemoryTask } from '../workbench/memory';
 import { WorkbenchStore } from '../workbench/store';
@@ -36,7 +36,6 @@ import { withDeadline } from '../deadline.ts';
 
 export const PRODUCT_TASK_QUEUE = 'pmbrain-product';
 const TASK_NAME = 'pmbrain-product-task';
-const DEFAULT_PRODUCT_TASK_TIMEOUT_MS = 6 * 60 * 60 * 1000;
 type Progress = { product?: TaskProductProgress; output?: string; result?: Record<string, unknown>; cancelRequested?: boolean; files?: Record<string, unknown>[] };
 
 function toRun(job: MinionJob, stopping = false): ConsoleRun {
@@ -93,8 +92,6 @@ export class ProductTaskRuntime {
   private executions = new Map<number, { cancel: (reason?:string) => void; done: Promise<unknown>; run: () => ConsoleRun; ownsLockedTransaction: () => boolean; adjust:(constrained:boolean)=>void }>();
   private resources:TaskResourceGuard;
   private resourceDrain:Promise<void>|null=null;
-  private submittingEntityCapture=false;
-  private entityCaptureRequested=false;
   private resourceTimer:ReturnType<typeof setInterval>|null=null;
   private idleTimer:ReturnType<typeof setTimeout>|null=null;
   private localPressure=false;
@@ -128,7 +125,6 @@ export class ProductTaskRuntime {
     this.fileWorker = new MinionWorker(engine, { ...memoryOptions, queue: SYNC_FILE_QUEUE, concurrency: engine.kind==='pglite'?1:2, pollInterval: 100, healthCheckInterval: 0, lockDuration: 30_000, stalledInterval: 5000, ownsLockedTransaction: id => this.executions.get(id)?.ownsLockedTransaction() === true });
     this.fileWorker.on('job-finished', (job:MinionJob)=>{
       if(this.stopped||this.paused)return;
-      void this.flushEntityCapture();
       void this.queue.getJob(job.id).then(async current=>{
         if(current){this.fileProjection.record(current);await this.fileQueue.cleanupCompleted(current);}
         this.scheduleSessionRefresh(Number(job.data.sessionId));
@@ -164,13 +160,17 @@ export class ProductTaskRuntime {
       ownsLockedTransaction: id => this.executions.get(id)?.ownsLockedTransaction() === true,
     });
     this.worker.on('unhealthy', info => console.error('[tasks]', info));
-    this.worker.on('job-finished',()=>void this.flushEntityCapture());
     this.worker.register(TASK_NAME, job => withDatabasePriority((job.data.task as ProductTask).type === 'import' ? 2 : 3, () => this.execute(job)));
   }
 
   async start(): Promise<void> {
     if (this.loop) return;
     await this.queue.ensureSchema();
+    await this.engine.executeRaw(`UPDATE minion_jobs SET status='paused',lock_token=NULL,lock_until=NULL,updated_at=now(),
+      error_text='旧版自动实体识别已停用，已保存结果保留；可明确范围后手动继续。'
+      WHERE queue=$1 AND data->'task'->>'type'='dream' AND data->'task'->'input'->>'phase'='capture_entities'
+      AND data->>'trigger' IS DISTINCT FROM 'manual' AND status IN ('waiting','active','waiting-children','delayed')
+      AND (status<>'active' OR $2::boolean OR lock_until IS NULL OR lock_until<=now())`, [PRODUCT_TASK_QUEUE,this.engine.kind==='pglite']);
     await this.engine.executeRaw(`UPDATE minion_jobs SET status='waiting',lock_token=NULL,lock_until=NULL,error_text=NULL,updated_at=now()
       WHERE queue=$1 AND data->'task'->>'type'='memory' AND ((status='paused' AND data->>'resumeOnRestart'='true') OR (status='active' AND ($2::boolean OR lock_until<=now())))`, [PRODUCT_TASK_QUEUE,this.engine.kind==='pglite']);
     await this.engine.executeRaw(`UPDATE minion_jobs AS child SET parent_job_id=parent.id
@@ -208,22 +208,6 @@ export class ProductTaskRuntime {
     if(this.resourceTimer)clearInterval(this.resourceTimer);
     this.resourceTimer=setInterval(()=>this.checkMemory(),this.resources.rssCheckIntervalMs);
     this.resourceTimer.unref();
-    await this.flushEntityCapture();
-  }
-
-  private async flushEntityCapture():Promise<void>{
-      if(this.stopped||this.paused)return;
-      this.entityCaptureRequested=true;
-      if(this.submittingEntityCapture)return;
-      this.submittingEntityCapture=true;
-      try{
-        do{
-          this.entityCaptureRequested=false;
-          await withDatabasePriority(3,()=>enqueueImportedEntityCapture(this.engine));
-        }while(this.entityCaptureRequested&&!this.stopped&&!this.paused);
-      }
-      catch(error){console.error('[tasks] imported entity capture:',error);}
-      finally{this.submittingEntityCapture=false;}
   }
 
   private async submit(task: ProductTask, kind: string, idempotencyKey?: string, trigger: 'manual' | 'scheduled' = 'manual', queue = this.queue): Promise<ConsoleRun> {
@@ -260,6 +244,8 @@ export class ProductTaskRuntime {
   }
 
   async submitDream(input: DreamTaskInput, trigger: 'manual' | 'scheduled' = 'manual'): Promise<ConsoleRun> {
+    if (input.timeoutMs !== undefined && parseTaskTimeout(input.timeoutMs) === null) throw new Error('任务超时必须是有效的正整数毫秒数');
+    input = { ...input, timeoutMs: input.timeoutMs ?? parseTaskTimeout(await this.engine.getConfig(DREAM_TASK_TIMEOUT_KEY)) ?? DEFAULT_PRODUCT_TASK_TIMEOUT_MS };
     if (input.phase && input.preset) throw new Error('Dream phase and preset are mutually exclusive');
     if (input.phase && input.phase !== 'all' && !(ALL_PHASES as readonly string[]).includes(input.phase)) throw new Error(`Unsupported dream phase: ${input.phase}`);
     if (input.allSources && (input.sourceId || input.preset !== 'quick')) throw new Error('Dream allSources requires quick preset without sourceId');
@@ -412,9 +398,13 @@ export class ProductTaskRuntime {
     await this.fileProjection.recover();
     const run = await this.getRun(id);
     if (!run) return null;
-    if (!['failed', 'cancelled'].includes(run.status) && !(taskUsesFileQueue(run.kind) && (run.result as Record<string, unknown> | undefined)?.status === 'partial')) throw new Error('只有失败、中断或已取消的任务可以重新执行');
+    if (!['failed', 'cancelled'].includes(run.status) && !((taskUsesFileQueue(run.kind) || run.kind === 'dream_capture_entities') && (run.result as Record<string, unknown> | undefined)?.status === 'partial')) throw new Error('只有失败、中断或已取消的任务可以重新执行');
     const record = await this.queue.getJob(Number(id.slice(5)));
     const task = record!.data.task as ProductTask;
+    if (task.type === 'dream') {
+      if (task.input.phase === 'capture_entities') record!.data.trigger = 'manual';
+      else if (task.input.checkpoint) retireAutomaticCapture(task.input.checkpoint);
+    }
     const resumedId = Number(id.slice(5));
     await this.stoppingSessions.get(resumedId);
     await this.executions.get(resumedId)?.done;
@@ -432,7 +422,7 @@ export class ProductTaskRuntime {
       if(progress.product)progress.product.errorReason=null;
       await this.engine.executeRaw(`UPDATE minion_jobs SET data=(data-'resourceStopReason') || ($2::jsonb - 'relations' - 'gitFiles' - 'gitResults'),progress=$3::jsonb WHERE id=$1`,[jobId,record!.data,progress]);
       if (checkpoint) {
-        resumeMaintenanceCheckpoint(checkpoint,run.status==='completed' || maintenanceFailure(run.result)!==null);
+        resumeMaintenanceCheckpoint(checkpoint,run.status==='completed' || maintenanceFailure(run.result)!==null,true);
         await this.engine.executeRaw(`UPDATE minion_jobs SET data = data || ($2::jsonb - 'relations' - 'gitFiles' - 'gitResults') WHERE id = $1`, [jobId, { ...record!.data, task }]);
       }
       await this.engine.executeRaw(`UPDATE minion_jobs SET status = 'paused', result = NULL WHERE queue = $1 AND (data->>'sessionId')::bigint = $2 AND result->>'status' IN ('failed','error','partial')`, [SYNC_FILE_QUEUE, jobId]);
@@ -443,7 +433,7 @@ export class ProductTaskRuntime {
     if (task.type !== 'sync-file') {
       await this.reconcileMaintenanceChildren(resumedId);
       if (task.type === 'import') task.input.resumeCheckpointId = resumedId;
-      if (task.type === 'dream' && task.input.checkpoint) resumeMaintenanceCheckpoint(task.input.checkpoint, true);
+      if (task.type === 'dream' && task.input.checkpoint) resumeMaintenanceCheckpoint(task.input.checkpoint, true, task.input.phase !== 'capture_entities');
       const progress = (record!.progress ?? {}) as Progress;
       delete progress.result;
       if (progress.product) progress.product.errorReason = null;
@@ -452,7 +442,7 @@ export class ProductTaskRuntime {
       await this.clearStopIntent(resumedId);
       await this.engine.executeRaw(`UPDATE minion_jobs SET status='waiting',result=NULL,error_text=NULL,lock_token=NULL,lock_until=NULL,delay_until=NULL,finished_at=NULL,
         data=(data-'resourceStopReason') || ($2::jsonb - 'relations' - 'gitFiles' - 'gitResults'),progress=$3::jsonb,updated_at=now()
-        WHERE id=$1 AND queue=$4 AND status IN ('paused','cancelled','failed','dead')`, [resumedId, record!.data, progress, PRODUCT_TASK_QUEUE]);
+        WHERE id=$1 AND queue=$4 AND status IN ('paused','cancelled','failed','dead','completed')`, [resumedId, record!.data, progress, PRODUCT_TASK_QUEUE]);
       return this.getRun(id);
     }
     throw new Error('文件任务请通过快速维护继续');
@@ -467,6 +457,12 @@ export class ProductTaskRuntime {
     const record = await this.queue.getJob(context.id);
     if (!record?.lock_token) throw new Error('任务执行租约无效');
     const structuredTask = record.data.task as ProductTask;
+    if (structuredTask.type === 'dream' && structuredTask.input.phase === 'capture_entities' && record.data.trigger !== 'manual') {
+      await this.engine.executeRaw(`UPDATE minion_jobs SET status='paused',lock_token=NULL,lock_until=NULL,updated_at=now(),
+        error_text='旧版自动实体识别已停用，已保存结果保留；可明确范围后手动继续。'
+        WHERE id=$1 AND status='active' AND lock_token=$2`,[context.id,record.lock_token]);
+      return MINION_DEFERRED;
+    }
     if (structuredTask.type === 'assistant') {
       if (!this.workbenchAssistant) return this.deferMaintenance(record, '等待助手服务启动');
       const abort = new AbortController();
@@ -642,15 +638,6 @@ export class ProductTaskRuntime {
         const dispatch = async () => {
           if(cancelRequested) throw new Error('任务已取消');
           if (message.method === 'task.syncFileHash') return this.fileQueue.sourceHash(message.args[0] as SyncFileInput);
-          if (message.method === 'task.captureRequest') {
-            const slugs = await claimMaintenanceCapture(this.engine, context.id, record.lock_token!, String(message.args[0]));
-            if (slugs && structuredTask.type === 'dream') {
-              const checkpoint = structuredTask.input.checkpoint ?? { phases: {}, reports: {} };
-              checkpoint.captureRequests = { ...checkpoint.captureRequests, [String(message.args[0])]: slugs };
-              structuredTask.input.checkpoint = checkpoint;
-            }
-            return slugs;
-          }
           if (message.method === 'task.syncFile') {
             const file = message.args[0] as SyncFileInput;
             const result = await this.fileQueue.enqueue(context.id, record.lock_token!, file).catch(async error=>{

@@ -13,11 +13,13 @@ import { recordSyncedGitFile } from './synced-git.ts';
 import { withDeadline } from '../deadline.ts';
 
 type RpcMessage = Extract<TaskWorkerMessage, { type: 'rpc' }>;
+type PageSnapshot = { pages: Map<string, string>; parent?: PageSnapshot };
 type Scope = {
   engine: BrainEngine | ReservedConnection;
   finish: (commit: boolean) => void;
   done: Promise<unknown>;
   transactional: boolean;
+  snapshot: PageSnapshot;
 };
 
 function pageFingerprint(page: Page | null): string {
@@ -54,6 +56,18 @@ export class TaskEngineHost {
 
   ownsLockedTransaction(): boolean {
     return !this.closed && [...this.scopes.values()].some(scope => scope.transactional);
+  }
+
+  private pageVersion(key: string, snapshot?: PageSnapshot): string | undefined {
+    for (let current = snapshot; current; current = current.parent) {
+      if (current.pages.has(key)) return current.pages.get(key);
+    }
+    return this.pages.get(key);
+  }
+
+  private commitPageSnapshot(snapshot: PageSnapshot): void {
+    const target = snapshot.parent?.pages ?? this.pages;
+    for (const [key, version] of snapshot.pages) target.set(key, version);
   }
 
   private async fence(tx: BrainEngine): Promise<void> {
@@ -195,6 +209,7 @@ export class TaskEngineHost {
       let finish!: (commit: boolean) => void;
       const completed = new Promise<boolean>(resolve => { finish = resolve; });
       const transactional = method === 'transaction.open';
+      const snapshot: PageSnapshot = { pages: new Map(), parent: parent?.snapshot };
       if (transactional) {await this.resources.assertImportDisk();await this.validateFile();}
       const run = async (connection: BrainEngine | ReservedConnection) => {
         await Promise.resolve();
@@ -202,7 +217,7 @@ export class TaskEngineHost {
         if (transactional) await this.fence(connection as BrainEngine);
         if (this.closed) throw new Error('任务执行已停止');
         const scoped = transactional ? withPgliteSavepoints(connection as BrainEngine) : connection;
-        this.scopes.set(id, { engine: scoped, finish, done, transactional });
+        this.scopes.set(id, { engine: scoped, finish, done, transactional, snapshot });
         readyResolve();
         if (!await completed) throw new Error('任务事务已回滚');
         if (transactional) { await this.validateFile(); await this.fence(connection as BrainEngine); }
@@ -210,7 +225,7 @@ export class TaskEngineHost {
       const base = engine as BrainEngine;
       const done = transactional ? base.transaction(run) : base.withReservedConnection(run);
       const clear=()=>{this.scopes.delete(id);this.receipts.delete(id);this.checkedPages.delete(id);};
-      void done.then(clear,error=>{clear();readyReject(error);});
+      void done.then(()=>{this.commitPageSnapshot(snapshot);clear();},error=>{clear();readyReject(error);});
       await ready;
       return id;
     }
@@ -221,7 +236,7 @@ export class TaskEngineHost {
     if (typeof call !== 'function') throw new Error(`不支持的数据库调用：${method}`);
     const readOnly = /^(get|list|find|search|count|resolve|traverse|is|has|inspect)/.test(method)
       || (method === 'executeRaw' && /^\s*SELECT\b/i.test(String(args[0])) && !/pg_advisory|FOR\s+UPDATE/i.test(String(args[0])));
-    const invoke = async (target: BrainEngine | ReservedConnection) => {
+    const invoke = async (target: BrainEngine | ReservedConnection, snapshot = parent?.snapshot) => {
       if (this.closed) throw new Error('任务执行已停止');
       if(!readOnly)await this.resources.assertImportDisk();
       const fn = (target as unknown as Record<string, (...args: unknown[]) => Promise<unknown>>)[method];
@@ -241,7 +256,7 @@ export class TaskEngineHost {
             if (this.syncFile && rows[0].local_path !== this.syncFile.sourceRoot) throw new Error(`Source ${sourceId} 的资料路径已改变，请继续同步以重新扫描`);
           });
           const current = await target.getPage(slug, { sourceId, includeDeleted: true });
-          const expected = this.pages.get(key);
+          const expected = this.pageVersion(key, snapshot);
           if (expected !== undefined && pageFingerprint(current) !== expected) {
             throw new Error(`页面 ${sourceId}:${slug} 在处理期间已改变，请重新执行`);
           }
@@ -280,9 +295,9 @@ export class TaskEngineHost {
         const page = result as Page | null;
         const sourceId = page?.source_id ?? (args[1] as { sourceId?: string } | undefined)?.sourceId ?? 'default';
         const readKey = JSON.stringify([sourceId, String(args[0])]);
-        if (!this.pages.has(readKey)) this.pages.set(readKey, pageFingerprint(page));
+        if (this.pageVersion(readKey, snapshot) === undefined) (snapshot?.pages ?? this.pages).set(readKey, pageFingerprint(page));
       }
-      if (method === 'putPage' && key) this.pages.set(key, pageFingerprint(result as Page));
+      if (method === 'putPage' && key) (snapshot?.pages ?? this.pages).set(key, pageFingerprint(result as Page));
       if (scopeId !== undefined && this.saveFileReceipt && method === 'putPage' && ((args[1] as {chunker_version?:number}).chunker_version ?? 0) >= 0) {
         this.receipts.set(scopeId, { slug: String(args[0]), status: 'imported', pageHash: (result as Page).content_hash ?? '', chunks: 0,sourceId:(result as Page).source_id??'default' });
       }
@@ -295,12 +310,15 @@ export class TaskEngineHost {
       throw new Error('数据库索引或连接维护需要独占执行，请使用已有高级维护入口');
     }
     await this.validateFile();
-    return (engine as BrainEngine).transaction(async tx => {
+    const snapshot: PageSnapshot = { pages: new Map(), parent: parent?.snapshot };
+    const result = await (engine as BrainEngine).transaction(async tx => {
       await this.fence(tx);
-      const value = await invoke(withPgliteSavepoints(tx));
+      const value = await invoke(withPgliteSavepoints(tx), snapshot);
       await this.fence(tx);
       return value;
     });
+    this.commitPageSnapshot(snapshot);
+    return result;
   }
 
   async close(): Promise<void> {

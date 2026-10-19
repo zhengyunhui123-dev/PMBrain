@@ -567,6 +567,53 @@ describe('软件后台任务共用 owner 数据库', () => {
     } finally { await host.close(); }
   });
 
+  test('页面写入回滚后同一任务可以重新读取并继续，外部修改仍被保护', async () => {
+    const queue = new MinionQueue(engine);
+    await queue.add('page-rollback-test', {}, { queue: PRODUCT_TASK_QUEUE });
+    const job = await queue.claim('page-rollback', 30_000, PRODUCT_TASK_QUEUE, ['page-rollback-test']);
+    const host = new TaskEngineHost(engine, job!.id, 'page-rollback', async () => {});
+    const rpc = (method: string, args: unknown[], scope?: number) => host.dispatch({ type: 'rpc', id: 1, method, args, scope });
+    const slug = 'projects/page-rollback';
+    const page = (body: string) => ({ type: 'project', title: '回滚重试', compiled_truth: body, content_hash: body });
+    await engine.putPage(slug, page('original'), { sourceId: 'default' });
+    try {
+      await rpc('getPage', [slug, { sourceId: 'default' }]);
+      const scope = await rpc('transaction.open', []) as number;
+      await rpc('putPage', [slug, page('rolled-back'), { sourceId: 'default' }], scope);
+      await expectRejection(rpc('scope.close', [false], scope), '事务已回滚');
+      expect((await engine.getPage(slug))?.compiled_truth).toBe('original');
+      await rpc('getPage', [slug, { sourceId: 'default' }]);
+      await rpc('putPage', [slug, page('retried'), { sourceId: 'default' }]);
+      expect((await engine.getPage(slug))?.compiled_truth).toBe('retried');
+      const outer = await rpc('transaction.open', []) as number;
+      await rpc('putPage', [slug, page('outer'), { sourceId: 'default' }], outer);
+      const inner = await rpc('transaction.open', [], outer) as number;
+      await rpc('putPage', [slug, page('inner'), { sourceId: 'default' }], inner);
+      await expectRejection(rpc('scope.close', [false], inner), '事务已回滚');
+      await rpc('putPage', [slug, page('after-inner'), { sourceId: 'default' }], outer);
+      await rpc('scope.close', [true], outer);
+      expect((await engine.getPage(slug))?.compiled_truth).toBe('after-inner');
+      const rollbackOuter = await rpc('transaction.open', []) as number;
+      const commitInner = await rpc('transaction.open', [], rollbackOuter) as number;
+      await rpc('putPage', [slug, page('inner-commit'), { sourceId: 'default' }], commitInner);
+      await rpc('scope.close', [true], commitInner);
+      await expectRejection(rpc('scope.close', [false], rollbackOuter), '事务已回滚');
+      expect((await engine.getPage(slug))?.compiled_truth).toBe('after-inner');
+      await rpc('putPage', [slug, page('after-outer-rollback'), { sourceId: 'default' }]);
+      expect((await engine.getPage(slug))?.compiled_truth).toBe('after-outer-rollback');
+      const create = await rpc('transaction.open', []) as number;
+      await rpc('putPage', ['projects/new-rollback', page('new'), { sourceId: 'default' }], create);
+      await expectRejection(rpc('scope.close', [false], create), '事务已回滚');
+      expect(await engine.getPage('projects/new-rollback')).toBeNull();
+      await rpc('putPage', ['projects/new-rollback', page('recreated'), { sourceId: 'default' }]);
+      expect((await engine.getPage('projects/new-rollback'))?.compiled_truth).toBe('recreated');
+      await engine.putPage(slug, page('external'), { sourceId: 'default' });
+      await rpc('getPage', [slug, { sourceId: 'default' }]);
+      await expectRejection(rpc('putPage', [slug, page('overwrite'), { sourceId: 'default' }]), '在处理期间已改变');
+      expect((await engine.getPage(slug))?.compiled_truth).toBe('external');
+    } finally { await host.close(); await queue.cancelJob(job!.id); }
+  });
+
   test('关闭任务时等待数据库的事务不能迟到打开或挂住取消', async () => {
     let releaseTransaction!: () => void;
     let transactionStarted!: () => void;

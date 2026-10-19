@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "reviewed_at": "2026-10-19",
-  "product_version": "1.5.0",
+  "product_version": "1.5.4",
   "subsystem": "entity-relations",
   "status": "release-blocked-pending-package-acceptance",
   "upstream": {
@@ -21,7 +21,8 @@
     "Reasoning output headroom, bounded truncation retry, endpoint option rejection and durable restricted JSON ingest",
     "Authorized native Workbench memory adapter; optional transient classification, source-bound exact dedup and DB-only fact write preserving original materials",
     "Authorized world-only Dream consolidation; private Facts remain local and are not promoted to public entity takes",
-    "Authorized native memory lifecycle: source-bound live projection guards, refresh, TTL-safe takes and verified contribution retirement"
+    "Authorized native memory lifecycle: source-bound live projection guards, refresh, TTL-safe takes and verified contribution retirement",
+    "Default Dream, Quick Maintenance and ordinary import retire extra automatic capture_entities; explicit legacy ingest and historical receipts retained"
   ],
   "integrations": [
     "src/core/pglite-engine.ts",

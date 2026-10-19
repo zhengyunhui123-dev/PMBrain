@@ -26,7 +26,7 @@ import {EntityCaptureWindowDeferred} from '../../core/pmbrain-adapters/entity-ca
 import {mergeCaptureWindow} from './capture-window.ts';
 import { classifyErrorCode, isInfrastructureFailureCode } from '../../core/sync-failure-ledger.ts';
 import { performSync } from '../../commands/sync.ts';
-import { readTaskCheckpoint, taskModelFingerprint, syncFileContentFingerprint } from './checkpoint.ts';
+import { readTaskCheckpoint, taskModelFingerprint, syncFileContentFingerprint, retireAutomaticCapture } from './checkpoint.ts';
 import { usesSyncFileQueue } from '../../../shared/task-progress.ts';
 import { isGinRepairAbortText } from '../../core/pglite-gin-repair.ts';
 import type { SyncStrategy } from '../../core/sync.ts';
@@ -123,7 +123,14 @@ setCliOptions({ ...DEFAULT_CLI_OPTIONS, progressJson: true });
 
 async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { type: 'dream' }>['input']) {
   const checkpoint: MaintenanceCheckpoint = input.checkpoint ?? { phases: {}, reports: {} };
-  const captureModel = (usesSyncFileQueue(input) || input.phase==='capture_entities') && input.phase !== 'sync' ? await chooseCaptureModel(engine, {}) : null;
+  if (input.phase !== 'capture_entities') {
+    retireAutomaticCapture(checkpoint);
+    if (Object.keys(checkpoint.retiredCapture ?? {}).length) {
+      console.log('旧版自动实体识别阶段已退出本次整理，历史结果和失败记录保留在原任务检查点。');
+      await rpc('task.maintenanceCheckpoint', [checkpoint]);
+    }
+  }
+  const captureModel = input.phase === 'capture_entities' ? await chooseCaptureModel(engine, {}) : null;
   let pendingFiles = false;
   let capacityReached = false;
   let scanned = 0;
@@ -165,9 +172,7 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
     let captureEntitySlugs: string[] | undefined;
     let captureEntityBudget: import('../../core/cycle/capture-entities.ts').CaptureEntitiesOpts['budget'];
     if (captureModel?.ok) {
-      const requested = usesSyncFileQueue(input)?await rpc('task.captureRequest', [sourceId]) as string[] | undefined:undefined;
-      captureEntitySlugs = input.preset === 'quick' ? requested : input.slugs;
-      if (requested?.length) checkpoint.captureRequests = { ...checkpoint.captureRequests, [sourceId]: requested };
+      captureEntitySlugs = input.slugs;
       if (input.preset!=='quick'||captureEntitySlugs?.length) {
         const [usage] = await engine.executeRaw<{ input: string; output: string }>(`SELECT COALESCE(sum(tokens_input),0) AS input,COALESCE(sum(tokens_output),0) AS output FROM minion_jobs WHERE private_queue_owner_job_id=$1 AND data ? 'ingest_context'`, [ownerJobId]);
         const inputTokens = Number(usage?.input ?? 0), outputTokens = Number(usage?.output ?? 0);
@@ -199,7 +204,7 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
     },
     });
   };
-  const phases = input.preset === 'quick' ? ALL_PHASES.filter(phase => resolveQuickMaintenancePhases().includes(phase) || (captureModel?.ok && phase === 'capture_entities'))
+  const phases = input.preset === 'quick' ? resolveQuickMaintenancePhases()
     : input.phase && input.phase !== 'all' ? [input.phase]
     : resolveDreamPresetPhases(input.preset ?? 'full');
   send({ type: 'progress', phases: [...phases] });
@@ -210,7 +215,6 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
     dryRun: input.dryRun, sourceId,
     captureEntitySlugs:input.slugs,
     captureEntitiesConcurrency:()=>constrained||engine.kind==='pglite'?1:2,
-    captureEntityWindow:{maxChunks:32,maxDurationMs:300000},
     privateQueueOwnerJobId: ownerJobId,
     signal: abort.signal,
     includeOffice: true,

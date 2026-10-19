@@ -6,13 +6,30 @@ import type { SyncFileOptions } from '../../core/sync-file-runtime.ts';
 import { SYNC_FILE_FORMAT_VERSION } from '../../core/sync-file-runtime.ts';
 import type { MaintenanceCheckpoint } from './types.ts';
 
-export function resumeMaintenanceCheckpoint(checkpoint:MaintenanceCheckpoint,retryCompleted=false):void {
+export function retireAutomaticCapture(checkpoint: MaintenanceCheckpoint): void {
+  const sources = new Set([...Object.keys(checkpoint.phases), ...Object.keys(checkpoint.reports), ...Object.keys(checkpoint.captureWindows ?? {})]);
+  for (const source of sources) {
+    const phases = checkpoint.phases[source] ?? [];
+    const capture = phases.filter(phase => phase.phase === 'capture_entities');
+    const window = checkpoint.captureWindows?.[source];
+    const report = checkpoint.reports[source];
+    const reportHasCapture = Array.isArray(report?.phases) && report.phases.some(phase => phase?.phase === 'capture_entities');
+    if (!capture.length && !window && !reportHasCapture) continue;
+    checkpoint.retiredCapture ??= {};
+    checkpoint.retiredCapture[source] = { phases: [...capture, ...(window ? [window] : [])], ...(report ? { report } : {}) };
+    checkpoint.phases[source] = phases.filter(phase => phase.phase !== 'capture_entities');
+    if (reportHasCapture) delete checkpoint.reports[source];
+    if (checkpoint.captureWindows) delete checkpoint.captureWindows[source];
+  }
+}
+
+export function resumeMaintenanceCheckpoint(checkpoint:MaintenanceCheckpoint,retryCompleted=false,preserveWarnings=false):void {
   for(const [source,report] of Object.entries(checkpoint.reports)) {
     if(retryCompleted && !['ok','clean'].includes(String(report.status)))delete checkpoint.reports[source];
   }
   for(const [source,phases] of Object.entries(checkpoint.phases)) {
     if(checkpoint.reports[source])continue;
-    const unfinished=phases.findIndex(phase=>phase.status==='fail' || (retryCompleted && phase.status==='warn'));
+    const unfinished=phases.findIndex(phase=>phase.status==='fail' || (retryCompleted && !preserveWarnings && phase.status==='warn'));
     if(unfinished>=0)checkpoint.phases[source]=phases.slice(0,unfinished);
   }
 }
