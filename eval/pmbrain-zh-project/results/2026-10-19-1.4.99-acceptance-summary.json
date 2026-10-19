@@ -1,0 +1,292 @@
+{
+  "product": "PMBrain",
+  "version": "1.4.99",
+  "reviewedAt": "2026-10-19T01:40:02.241Z",
+  "schema": 135,
+  "overallContentQuality": "not_passed",
+  "implemented": [
+    "Bounded answer integrity correction for fake body tool receipts and missing/invalid inline citations",
+    "Two-digit year, explicit same-day time and full matched event evidence",
+    "Approved automatic entity type and affirmative same-sentence relationship guards, preserving historical/manual data",
+    "Connector-defined OCR hierarchy and verbatim leaf explanations, receipt promptVersion 3"
+  ],
+  "nativeQa": {
+    "model": "MiMo V2.6 Flash",
+    "embeddings": "Reused isolated real Qwen3 Embedding vectors, no new embedding calls",
+    "splits": [
+      {
+        "documents": 8,
+        "questions": 34,
+        "kind": "development-regression"
+      },
+      {
+        "documents": 4,
+        "questions": 16,
+        "kind": "former-holdout-now-development-regression"
+      }
+    ],
+    "answers": 50,
+    "answerErrors": 0,
+    "codexPrimaryCorrect": 50,
+    "inlineCitationAnswers": 50,
+    "usedCitationSourcePairsValid": true,
+    "noNewlyObservedKnownFailures": true,
+    "auxiliaryJudge": {
+      "correctAndSupported": 49,
+      "ungradedProviderRefusal": 1,
+      "retriedRefusedJudge": false
+    },
+    "reviewScope": "Codex source review, not independent human review or proof of generalization; citation pair validity alone does not prove every claim"
+  },
+  "ocr": {
+    "model": "MiMo V2.6 Flash",
+    "gold": "Codex visual transcription frozen before this OCR run; not independent human annotation; previously used real development image",
+    "goldSha256": "356a0dacbf59af5cb2d6f0891400ebb4c404dc3560142193fc3d48ab7ce9b0d2",
+    "before": {
+      "namedNodes": 125,
+      "explanations": 87,
+      "exactLabels": 125,
+      "fullPaths": 1,
+      "correctEdges": 0,
+      "alignedCorrectEdges": 0,
+      "expectedEdges": 124,
+      "predictedEdges": 0,
+      "edgePrecision": 0,
+      "edgeRecall": 0,
+      "normalizedCharacters": 4106,
+      "edits": 0,
+      "characterErrorRate": 0,
+      "extraNodes": 0,
+      "missingNodes": 0,
+      "normalization": "NFKC and whitespace only; order ignored by label alignment with <=25% label edit-distance; exact path and description resolve duplicate labels; errors include missing/extra text; hierarchy independently read from output indentation/headings; aligned edges distinguish label errors from wrong parents"
+    },
+    "real": {
+      "namedNodes": 125,
+      "explanations": 87,
+      "exactLabels": 124,
+      "fullPaths": 124,
+      "correctEdges": 123,
+      "alignedCorrectEdges": 124,
+      "expectedEdges": 124,
+      "predictedEdges": 124,
+      "edgePrecision": 0.9919354838709677,
+      "edgeRecall": 0.9919354838709677,
+      "normalizedCharacters": 4106,
+      "edits": 2,
+      "characterErrorRate": 0.0004870920603994155,
+      "extraNodes": 0,
+      "missingNodes": 0,
+      "normalization": "NFKC and whitespace only; order ignored by label alignment with <=25% label edit-distance; exact path and description resolve duplicate labels; errors include missing/extra text; hierarchy independently read from output indentation/headings; aligned edges distinguish label errors from wrong parents"
+    },
+    "synthetic": {
+      "namedNodes": 15,
+      "explanations": 8,
+      "exactLabels": 15,
+      "fullPaths": 15,
+      "correctEdges": 14,
+      "alignedCorrectEdges": 14,
+      "expectedEdges": 14,
+      "predictedEdges": 14,
+      "edgePrecision": 1,
+      "edgeRecall": 1,
+      "normalizedCharacters": 121,
+      "edits": 0,
+      "characterErrorRate": 0,
+      "extraNodes": 0,
+      "missingNodes": 0,
+      "normalization": "NFKC and whitespace only; order ignored by label alignment with <=25% label edit-distance; exact path and description resolve duplicate labels; errors include missing/extra text; hierarchy independently read from output indentation/headings; aligned edges distinguish label errors from wrong parents"
+    },
+    "productionFormatExpansion": false,
+    "whiteMarginExperiment": "No character improvement, removed from product; retained raw experiment",
+    "fullTextQuality": "not_passed",
+    "importReadback": [
+      {
+        "case": "dense-real-png",
+        "status": "imported",
+        "selectedFieldsCorrect": 39,
+        "selectedFieldsTotal": 39,
+        "ocrAttempted": 1,
+        "ocrSucceeded": 1,
+        "ocrFailed": 0
+      },
+      {
+        "case": "real-paper-hotel-receipt",
+        "status": "imported",
+        "selectedFieldsCorrect": 6,
+        "selectedFieldsTotal": 6,
+        "ocrAttempted": 1,
+        "ocrSucceeded": 1,
+        "ocrFailed": 0
+      },
+      {
+        "case": "real-mixed-five-page-pdf",
+        "status": "imported",
+        "selectedFieldsCorrect": 6,
+        "selectedFieldsTotal": 6,
+        "ocrAttempted": 4,
+        "ocrSucceeded": 4,
+        "ocrFailed": 0
+      }
+    ],
+    "reopenedBodiesAndReceiptsUnchanged": true,
+    "originalFilesUnchanged": true
+  },
+  "dream": [
+    {
+      "engine": "pglite",
+      "status": "partial",
+      "selectedDocuments": 3,
+      "newPages": 1,
+      "newLinks": 3,
+      "repeatNewPages": 0,
+      "repeatNewLinks": 0,
+      "originalSourceBodiesUnchanged": true,
+      "scope": "Native extract/extract_facts/capture_entities/orphans only, no brain directory, no embedding calls; partial budget/file-side status retained",
+      "noObservedTeamOrDocumentProject": true,
+      "noObservedSelfOrListEdges": true,
+      "acceptedEntityToEntitySemanticEdges": 0,
+      "semanticRecall": "not_accepted",
+      "namingQuality": "not_passed"
+    },
+    {
+      "engine": "postgres",
+      "status": "partial",
+      "selectedDocuments": 3,
+      "newPages": 1,
+      "newLinks": 3,
+      "repeatNewPages": 0,
+      "repeatNewLinks": 0,
+      "originalSourceBodiesUnchanged": true,
+      "scope": "Native extract/extract_facts/capture_entities/orphans only, no brain directory, no embedding calls; partial budget/file-side status retained",
+      "noObservedTeamOrDocumentProject": true,
+      "noObservedSelfOrListEdges": true,
+      "acceptedEntityToEntitySemanticEdges": 0,
+      "semanticRecall": "not_accepted",
+      "namingQuality": "not_passed"
+    }
+  ],
+  "localValidation": {
+    "workbench": {
+      "tests": 51,
+      "assertions": 220
+    },
+    "ingestPglite": {
+      "tests": 64,
+      "assertions": 318
+    },
+    "ingestPostgres": {
+      "tests": 41,
+      "assertions": 128
+    },
+    "documents": {
+      "tests": 25,
+      "assertions": 91
+    },
+    "types": [
+      "root",
+      "admin",
+      "desktop"
+    ],
+    "verify": {
+      "passed": 40,
+      "failed": 0
+    },
+    "ciPreview": {
+      "tests": 236,
+      "assertions": 569,
+      "remoteEquivalent": false
+    },
+    "pinnedUpstreamMappings": 50,
+    "windowsRuntime": "passed",
+    "currentSourceBrowser": "passed, v1.4.99 settings rendered, no page errors, isolated API fixture",
+    "compiledSidecar": "5 CLI commands, 5-image OCR input and budget8192, promptVersion3, PNG save/read and native Chinese PDF; model fixture, not real model acceptance",
+    "sidecarInitialProbe": "All 5 commands succeeded; receipt assertion expected JSON but actual CLI returns YAML. Failure retained; corrected test on fresh home passed.",
+    "ownedPostgresContainerRemoved": true
+  },
+  "resources": {
+    "adminAssets": 48,
+    "adminBuildSha256": "f547baedadf322380f913e844fc11a416c117f39bfe2d184803018c99f3d783d",
+    "sidecarRebuilt": true,
+    "versionsSynchronized": true,
+    "lastFiveReleaseNotes": true
+  },
+  "planDifferences": [
+    "Also rejected generic document-format project titles, self relationships and list co-occurrence found in the same native source run",
+    "White-margin crop experiment withdrawn after unchanged OCR errors; scorer separately distinguishes label errors from parent mapping and checks reversed sibling order",
+    "No new independent holdout this round; original first-run and failed experiment evidence retained"
+  ],
+  "remaining": [
+    "Source-grounded project naming and negated identity, plus extraction coverage and semantic relationship recall",
+    "Two OCR character errors, more dense formats/layouts and independent image labels",
+    "New unseen projects/questions and independent human factual review",
+    "Exact pushed SHA GitHub CI and Windows package/old-user upgrade acceptance"
+  ],
+  "boundaries": {
+    "formalKnowledgeModified": false,
+    "originalMaterialsModified": false,
+    "existingVectorsRebuilt": false,
+    "modelConfigModified": false,
+    "schemaChanged": false,
+    "committed": false,
+    "pushed": false,
+    "buildWinRun": false
+  },
+  "evidence": [
+    {
+      "privateArtifact": ".codex/product-1499/native-full.json",
+      "sha256": "b9ec89e6cc6515233eb603d649eeed8495b693c57375a2ebf7b8399a47467016"
+    },
+    {
+      "privateArtifact": ".codex/product-1499/native-full-audit.json",
+      "sha256": "9bc03bf601921faadd31e75405c2778f1df98e213b1cec81a67acd5a24a7271b"
+    },
+    {
+      "privateArtifact": ".codex/product-1499/native-holdout.json",
+      "sha256": "e2eb90c24fa111cdf38ffaaf9dfb922870bf1b32fbc666ae591a219a8ffc568c"
+    },
+    {
+      "privateArtifact": ".codex/product-1499/native-holdout-audit.json",
+      "sha256": "7a578a281261e8e640735c14b8529cb36c6fe8f09c4a43197850a7084091d0d8"
+    },
+    {
+      "privateArtifact": ".codex/product-1499/ocr-gold.json",
+      "sha256": "356a0dacbf59af5cb2d6f0891400ebb4c404dc3560142193fc3d48ab7ce9b0d2"
+    },
+    {
+      "privateArtifact": ".codex/product-1499/synthetic-gold.json",
+      "sha256": "de4ba1557e49e67e3ca57ee10d646319a23d63171ca1b3c3f58fecf05e9dd88c"
+    },
+    {
+      "privateArtifact": ".codex/product-1499/ocr-benchmark.json",
+      "sha256": "07bfe21a5f84b07fc82d9a4b4e8641b28c034fb5826419041626b2a7f3b167e9"
+    },
+    {
+      "privateArtifact": ".codex/product-1499/ocr-benchmark-final.json",
+      "sha256": "ab571426e8f825d79815a055f3d95896ace50a063a850abec3d6b2e7edf03d34"
+    },
+    {
+      "privateArtifact": ".codex/product-1499/ocr-final-audit.json",
+      "sha256": "9454c0d3e388ca7622bdf168e67ca511dcfa9de333519a8706f21566fc1bef09"
+    },
+    {
+      "privateArtifact": ".codex/product-1499/ocr-import-final.json",
+      "sha256": "2fede307333efabe89b08c032111d2ce9ffaffcff3dace292afa391bacf89163"
+    },
+    {
+      "privateArtifact": ".codex/product-1499/dream-live-final.json",
+      "sha256": "61b6c5aaadd50ccc19cfdf60f60cce9916ab814e07fba78e97f52bcd89872a16"
+    },
+    {
+      "privateArtifact": ".codex/product-1499/dream-live-postgres-final.json",
+      "sha256": "6ebb1c9ca623f1da29e8d17db7d3b0400b6d8d0e59fe302e5b48b2001a058c50"
+    },
+    {
+      "privateArtifact": ".codex/product-1499/sidecar-node-accepted.json",
+      "sha256": "9713834e722e0b51ad9cf14cf60513fe1ab2984d17c8c1f18a854cd13f6d2952"
+    },
+    {
+      "privateArtifact": ".codex/product-1499/ci-pr-preview.log",
+      "sha256": "c14f7182fdf50f81aa0c444465bc8c5fee0da76470bee44d7bc480f76beb667d"
+    }
+  ]
+}

@@ -119,16 +119,26 @@ async function resolveEntity(engine:BrainEngine,context:EntityIngestContext,refe
 }
 
 async function relationEvidence(engine:BrainEngine,context:EntityIngestContext,relation:IngestRelation,from:EntityRef,to:EntityRef):Promise<void> {
+  if(from.sourceId===to.sourceId&&from.slug===to.slug)throw new UnrecoverableError('ingest self relation is not an entity-to-entity relationship');
   const evidence=relation.evidence.trim();
   if(evidence.length<4||!context.chunkBody.includes(evidence)||!from.names.some(name=>surfaceName(evidence).includes(surfaceName(name)))||!to.names.some(name=>surfaceName(evidence).includes(surfaceName(name)))){
     throw new UnrecoverableError(`ingest relation evidence missing: ${relation.from} -> ${relation.to}`);
   }
   if(!/^[a-z][a-z0-9_-]{0,63}$/.test(relation.link_type))throw new UnrecoverableError('ingest invalid relation type');
+  const paired=(text:string)=>from.names.some(name=>surfaceName(text).includes(surfaceName(name)))&&to.names.some(name=>surfaceName(text).includes(surfaceName(name)));
+  const segmenter=new Intl.Segmenter('zh',{granularity:'sentence'});
+  const sentences=evidence.split(/[\n；;]/u).flatMap(line=>[...segmenter.segment(line)].map(part=>part.segment)).filter(paired);
+  if(!sentences.length)throw new UnrecoverableError('ingest relation unsupported by same-sentence source evidence; lists and paragraph co-occurrence do not establish a relationship');
   if(relation.link_type!=='mentions'){
     const pack=await loadExtractionPack(engine,context.sourceId);
-    const inferred=(pack&&inferLinkTypeFromPack(pack,from.type,evidence,undefined,to.type,{ner:true}))
-      ||inferLinkType(from.type as import('../types.ts').PageType,evidence,evidence,to.slug);
-    if(inferred!==relation.link_type)throw new UnrecoverableError(`ingest relation type unsupported by source evidence: ${relation.link_type}; inferred ${inferred}`);
+    const uncertain=/(?:[?？]|是否|能否|待确认|未确认|待核实|尚待|暂不确定)|(?:未|不|没有|并非|尚未|拟|计划|可能|预计|将|希望)[^,，。；;!?？\n]{0,12}(?:任职|就职|担任|供职|工作|上班|负责|创办|创立|创建|成立|投资|顾问|咨询)|\b(?:not|never|may|might|will|plans? to|planned to|intends? to)\b[^,，。；;!?？\n]{0,32}\b(?:work|works|working|worked|join|joined|found|founded|founder|invest|invested|advise|advises|advisor|employed)\b/iu;
+    const candidates=sentences.flatMap(sentence=>{
+      const clauses=sentence.split(/[，,]/u).filter(paired);
+      return clauses.length?clauses:[sentence];
+    });
+    const supported=candidates.some(candidate=>!uncertain.test(candidate)&&((pack&&inferLinkTypeFromPack(pack,from.type,candidate,undefined,to.type,{ner:true}))
+      ||inferLinkType(from.type as import('../types.ts').PageType,candidate,candidate,to.slug))===relation.link_type);
+    if(!supported)throw new UnrecoverableError(`ingest relation type unsupported by affirmative same-sentence source evidence: ${relation.link_type}`);
   }
 }
 
@@ -152,6 +162,12 @@ export async function validateIngestWrite(engine:BrainEngine,context:EntityInges
     const title=String(input.title??metadata.title??existing?.title??parsed.title);
     const aliases=parsed.frontmatter.aliases??existing?.frontmatter.aliases;
     const entityType=String(input.type??metadata.type??existing?.type??parsed.type);
+    if(!existing&&entityType==='project'){
+      const escaped=surfaceName(title).replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+      const declared=new RegExp(`(?:项目|系统)(?:名称为|名称是|名为|正式命名为|命名为)[:：]?${escaped}(?=$|[，,。；;（）()、：:!?！？])`,'u').test(surfaceName(context.body));
+      if(!declared&&/(?:项目组|工作组|团队|project\s*team|working\s*group)$/iu.test(surfaceName(title)))throw new UnrecoverableError(`ingest entity type contradicts a named team/group: '${title}' is not supported as a project; retain the source identity and choose an evidenced organization type or omit the capture`);
+      if(!declared&&/^(?:需求|会议|工作|沟通|项目|内部决策)(?:记录|纪要|分析|收集|会议)$/u.test(surfaceName(title)))throw new UnrecoverableError(`ingest project identity missing: '${title}' is a document-format name, not an evidenced project identity; retain the original document and omit this project capture`);
+    }
     if(entityType==='project'||existing?.type==='project'){
       const prior=new Set([existing?.title,...(Array.isArray(existing?.frontmatter.aliases)?existing.frontmatter.aliases:[])].filter((x):x is string=>typeof x==='string').map(name=>surfaceName(name).toLowerCase()));
       for(const alias of Array.isArray(aliases)?aliases:[]){

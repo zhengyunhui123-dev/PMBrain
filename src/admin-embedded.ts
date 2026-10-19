@@ -7,59 +7,59 @@
 // the request path the express handler sees to (resolved-path, mime).
 
 // @ts-ignore — type: 'file' is Bun ESM, not in lib.d.ts
-import A_0_assets_Agents_ObJx8318_js from '../admin/dist/assets/Agents-ObJx8318.js' with { type: 'file' };
+import A_0_assets_Agents_DUcXiK1q_js from '../admin/dist/assets/Agents-DUcXiK1q.js' with { type: 'file' };
 // @ts-ignore — type: 'file' is Bun ESM, not in lib.d.ts
-import A_1_assets_App_DkntiMAp_js from '../admin/dist/assets/App-DkntiMAp.js' with { type: 'file' };
+import A_1_assets_App_BvgLkh1R_js from '../admin/dist/assets/App-BvgLkh1R.js' with { type: 'file' };
 // @ts-ignore — type: 'file' is Bun ESM, not in lib.d.ts
-import A_2_assets_BrainData_6HgpCF_8_js from '../admin/dist/assets/BrainData-6HgpCF-8.js' with { type: 'file' };
+import A_2_assets_BrainData_BuTD1VvN_js from '../admin/dist/assets/BrainData-BuTD1VvN.js' with { type: 'file' };
 // @ts-ignore — type: 'file' is Bun ESM, not in lib.d.ts
-import A_3_assets_Calibration_COl5r3gd_js from '../admin/dist/assets/Calibration-COl5r3gd.js' with { type: 'file' };
+import A_3_assets_Calibration_rZ7CLDoe_js from '../admin/dist/assets/Calibration-rZ7CLDoe.js' with { type: 'file' };
 // @ts-ignore — type: 'file' is Bun ESM, not in lib.d.ts
-import A_4_assets_Connection_Cty0UbaH_js from '../admin/dist/assets/Connection-Cty0UbaH.js' with { type: 'file' };
+import A_4_assets_Connection_D1fGpgkf_js from '../admin/dist/assets/Connection-D1fGpgkf.js' with { type: 'file' };
 // @ts-ignore — type: 'file' is Bun ESM, not in lib.d.ts
-import A_5_assets_CreateLibrary_D7d_DrRh_js from '../admin/dist/assets/CreateLibrary-D7d_DrRh.js' with { type: 'file' };
+import A_5_assets_CreateLibrary_CzPkX0XK_js from '../admin/dist/assets/CreateLibrary-CzPkX0XK.js' with { type: 'file' };
 // @ts-ignore — type: 'file' is Bun ESM, not in lib.d.ts
-import A_6_assets_DesktopSettings__lUR_xpe_js from '../admin/dist/assets/DesktopSettings-_lUR-xpe.js' with { type: 'file' };
+import A_6_assets_DesktopSettings_B0dkR2Ey_js from '../admin/dist/assets/DesktopSettings-B0dkR2Ey.js' with { type: 'file' };
 // @ts-ignore — type: 'file' is Bun ESM, not in lib.d.ts
-import A_7_assets_Diagnostics_DVq9gjRT_js from '../admin/dist/assets/Diagnostics-DVq9gjRT.js' with { type: 'file' };
+import A_7_assets_Diagnostics_Begxbw6I_js from '../admin/dist/assets/Diagnostics-Begxbw6I.js' with { type: 'file' };
 // @ts-ignore — type: 'file' is Bun ESM, not in lib.d.ts
-import A_8_assets_Documentation_DXyqV8Z3_js from '../admin/dist/assets/Documentation-DXyqV8Z3.js' with { type: 'file' };
+import A_8_assets_Documentation_BlA2PZKd_js from '../admin/dist/assets/Documentation-BlA2PZKd.js' with { type: 'file' };
 // @ts-ignore — type: 'file' is Bun ESM, not in lib.d.ts
-import A_9_assets_Dream_DaAbGesT_js from '../admin/dist/assets/Dream-DaAbGesT.js' with { type: 'file' };
+import A_9_assets_Dream_Di4HGMN0_js from '../admin/dist/assets/Dream-Di4HGMN0.js' with { type: 'file' };
 // @ts-ignore — type: 'file' is Bun ESM, not in lib.d.ts
 import A_10_assets_HelpPage_e9DilG6s_js from '../admin/dist/assets/HelpPage-e9DilG6s.js' with { type: 'file' };
 // @ts-ignore — type: 'file' is Bun ESM, not in lib.d.ts
-import A_11_assets_Import_1m_aMDp__js from '../admin/dist/assets/Import-1m_aMDp_.js' with { type: 'file' };
+import A_11_assets_Import_DpO61WPy_js from '../admin/dist/assets/Import-DpO61WPy.js' with { type: 'file' };
 // @ts-ignore — type: 'file' is Bun ESM, not in lib.d.ts
-import A_12_assets_ImportMaterials_CpP82mUx_js from '../admin/dist/assets/ImportMaterials-CpP82mUx.js' with { type: 'file' };
+import A_12_assets_ImportMaterials_OZRW2zPd_js from '../admin/dist/assets/ImportMaterials-OZRW2zPd.js' with { type: 'file' };
 // @ts-ignore — type: 'file' is Bun ESM, not in lib.d.ts
-import A_13_assets_Knowledge_CntQwMpS_js from '../admin/dist/assets/Knowledge-CntQwMpS.js' with { type: 'file' };
+import A_13_assets_Knowledge_Duvvddtt_js from '../admin/dist/assets/Knowledge-Duvvddtt.js' with { type: 'file' };
 // @ts-ignore — type: 'file' is Bun ESM, not in lib.d.ts
-import A_14_assets_KnowledgeGraph_CThMyrXB_js from '../admin/dist/assets/KnowledgeGraph-CThMyrXB.js' with { type: 'file' };
+import A_14_assets_KnowledgeGraph_hd1hxRed_js from '../admin/dist/assets/KnowledgeGraph-hd1hxRed.js' with { type: 'file' };
 // @ts-ignore — type: 'file' is Bun ESM, not in lib.d.ts
-import A_15_assets_Login_xBuki1r7_js from '../admin/dist/assets/Login-xBuki1r7.js' with { type: 'file' };
+import A_15_assets_Login_4qL_msjM_js from '../admin/dist/assets/Login-4qL-msjM.js' with { type: 'file' };
 // @ts-ignore — type: 'file' is Bun ESM, not in lib.d.ts
 import A_16_assets_MaintenanceTasks_CqyYVxgw_css from '../admin/dist/assets/MaintenanceTasks-CqyYVxgw.css' with { type: 'file' };
 // @ts-ignore — type: 'file' is Bun ESM, not in lib.d.ts
-import A_17_assets_MaintenanceTasks_Dtc1QzcO_js from '../admin/dist/assets/MaintenanceTasks-Dtc1QzcO.js' with { type: 'file' };
+import A_17_assets_MaintenanceTasks_XZ45A6Pd_js from '../admin/dist/assets/MaintenanceTasks-XZ45A6Pd.js' with { type: 'file' };
 // @ts-ignore — type: 'file' is Bun ESM, not in lib.d.ts
-import A_18_assets_ModelServices_Dx0NjPSl_js from '../admin/dist/assets/ModelServices-Dx0NjPSl.js' with { type: 'file' };
+import A_18_assets_ModelServices_CtAnqYlK_js from '../admin/dist/assets/ModelServices-CtAnqYlK.js' with { type: 'file' };
 // @ts-ignore — type: 'file' is Bun ESM, not in lib.d.ts
-import A_19_assets_RequestLog_D0Zz3WlF_js from '../admin/dist/assets/RequestLog-D0Zz3WlF.js' with { type: 'file' };
+import A_19_assets_RequestLog_2Ur1lpD__js from '../admin/dist/assets/RequestLog-2Ur1lpD-.js' with { type: 'file' };
 // @ts-ignore — type: 'file' is Bun ESM, not in lib.d.ts
-import A_20_assets_Settings_BhWfASAT_js from '../admin/dist/assets/Settings-BhWfASAT.js' with { type: 'file' };
+import A_20_assets_Settings_BfYHBm6f_js from '../admin/dist/assets/Settings-BfYHBm6f.js' with { type: 'file' };
 // @ts-ignore — type: 'file' is Bun ESM, not in lib.d.ts
-import A_21_assets_TaskCenter_DYzNnSAf_js from '../admin/dist/assets/TaskCenter-DYzNnSAf.js' with { type: 'file' };
+import A_21_assets_TaskCenter_I_SG21hG_js from '../admin/dist/assets/TaskCenter-I_SG21hG.js' with { type: 'file' };
 // @ts-ignore — type: 'file' is Bun ESM, not in lib.d.ts
-import A_22_assets_TaskTechnicalLogs_CPIIFHbo_js from '../admin/dist/assets/TaskTechnicalLogs-CPIIFHbo.js' with { type: 'file' };
+import A_22_assets_TaskTechnicalLogs_CDczkfH2_js from '../admin/dist/assets/TaskTechnicalLogs-CDczkfH2.js' with { type: 'file' };
 // @ts-ignore — type: 'file' is Bun ESM, not in lib.d.ts
-import A_23_assets_Workbench_DwhUhSgq_js from '../admin/dist/assets/Workbench-DwhUhSgq.js' with { type: 'file' };
+import A_23_assets_Workbench_BAAUVnRQ_js from '../admin/dist/assets/Workbench-BAAUVnRQ.js' with { type: 'file' };
 // @ts-ignore — type: 'file' is Bun ESM, not in lib.d.ts
 import A_24_assets_charts_DVozmnPF_js from '../admin/dist/assets/charts-DVozmnPF.js' with { type: 'file' };
 // @ts-ignore — type: 'file' is Bun ESM, not in lib.d.ts
 import A_25_assets_clipboard_DBsuhhdg_js from '../admin/dist/assets/clipboard-DBsuhhdg.js' with { type: 'file' };
 // @ts-ignore — type: 'file' is Bun ESM, not in lib.d.ts
-import A_26_assets_console_shared_CTvrxKFf_js from '../admin/dist/assets/console-shared-CTvrxKFf.js' with { type: 'file' };
+import A_26_assets_console_shared_C2wfZOle_js from '../admin/dist/assets/console-shared-C2wfZOle.js' with { type: 'file' };
 // @ts-ignore — type: 'file' is Bun ESM, not in lib.d.ts
 import A_27_assets_customer_service_qr_BASWujnf_png from '../admin/dist/assets/customer-service-qr-BASWujnf.png' with { type: 'file' };
 // @ts-ignore — type: 'file' is Bun ESM, not in lib.d.ts
@@ -67,11 +67,11 @@ import A_28_assets_dialog_backdrop_DnzOaU1Q_js from '../admin/dist/assets/dialog
 // @ts-ignore — type: 'file' is Bun ESM, not in lib.d.ts
 import A_29_assets_import_materials_WEU5HI7s_js from '../admin/dist/assets/import-materials-WEU5HI7s.js' with { type: 'file' };
 // @ts-ignore — type: 'file' is Bun ESM, not in lib.d.ts
-import A_30_assets_import_support_Dz4YvHQX_js from '../admin/dist/assets/import-support-Dz4YvHQX.js' with { type: 'file' };
+import A_30_assets_import_support_BkqDofkj_js from '../admin/dist/assets/import-support-BkqDofkj.js' with { type: 'file' };
 // @ts-ignore — type: 'file' is Bun ESM, not in lib.d.ts
-import A_31_assets_index_Dx_NIT6Q_css from '../admin/dist/assets/index-Dx-NIT6Q.css' with { type: 'file' };
+import A_31_assets_index_CcTKYTTB_js from '../admin/dist/assets/index-CcTKYTTB.js' with { type: 'file' };
 // @ts-ignore — type: 'file' is Bun ESM, not in lib.d.ts
-import A_32_assets_index_KIbtds5I_js from '../admin/dist/assets/index-KIbtds5I.js' with { type: 'file' };
+import A_32_assets_index_Dx_NIT6Q_css from '../admin/dist/assets/index-Dx-NIT6Q.css' with { type: 'file' };
 // @ts-ignore — type: 'file' is Bun ESM, not in lib.d.ts
 import A_33_assets_knowledge_graph_LvcWT1vl_js from '../admin/dist/assets/knowledge-graph-LvcWT1vl.js' with { type: 'file' };
 // @ts-ignore — type: 'file' is Bun ESM, not in lib.d.ts
@@ -81,7 +81,7 @@ import A_35_assets_react_CTwocyy__js from '../admin/dist/assets/react-CTwocyy_.j
 // @ts-ignore — type: 'file' is Bun ESM, not in lib.d.ts
 import A_36_assets_run_recovery_C2wKIofr_js from '../admin/dist/assets/run-recovery-C2wKIofr.js' with { type: 'file' };
 // @ts-ignore — type: 'file' is Bun ESM, not in lib.d.ts
-import A_37_assets_search_index_repair_2iUUkrfq_js from '../admin/dist/assets/search-index-repair-2iUUkrfq.js' with { type: 'file' };
+import A_37_assets_search_index_repair_B4LJ7lyu_js from '../admin/dist/assets/search-index-repair-B4LJ7lyu.js' with { type: 'file' };
 // @ts-ignore — type: 'file' is Bun ESM, not in lib.d.ts
 import A_38_assets_shared_490x4S37_js from '../admin/dist/assets/shared-490x4S37.js' with { type: 'file' };
 // @ts-ignore — type: 'file' is Bun ESM, not in lib.d.ts
@@ -109,44 +109,44 @@ export interface AdminAsset {
 }
 
 export const ADMIN_ASSETS: Record<string, AdminAsset> = {
-  "/admin/assets/Agents-ObJx8318.js": { path: A_0_assets_Agents_ObJx8318_js as unknown as string, mime: "application/javascript; charset=utf-8" },
-  "/admin/assets/App-DkntiMAp.js": { path: A_1_assets_App_DkntiMAp_js as unknown as string, mime: "application/javascript; charset=utf-8" },
-  "/admin/assets/BrainData-6HgpCF-8.js": { path: A_2_assets_BrainData_6HgpCF_8_js as unknown as string, mime: "application/javascript; charset=utf-8" },
-  "/admin/assets/Calibration-COl5r3gd.js": { path: A_3_assets_Calibration_COl5r3gd_js as unknown as string, mime: "application/javascript; charset=utf-8" },
-  "/admin/assets/Connection-Cty0UbaH.js": { path: A_4_assets_Connection_Cty0UbaH_js as unknown as string, mime: "application/javascript; charset=utf-8" },
-  "/admin/assets/CreateLibrary-D7d_DrRh.js": { path: A_5_assets_CreateLibrary_D7d_DrRh_js as unknown as string, mime: "application/javascript; charset=utf-8" },
-  "/admin/assets/DesktopSettings-_lUR-xpe.js": { path: A_6_assets_DesktopSettings__lUR_xpe_js as unknown as string, mime: "application/javascript; charset=utf-8" },
-  "/admin/assets/Diagnostics-DVq9gjRT.js": { path: A_7_assets_Diagnostics_DVq9gjRT_js as unknown as string, mime: "application/javascript; charset=utf-8" },
-  "/admin/assets/Documentation-DXyqV8Z3.js": { path: A_8_assets_Documentation_DXyqV8Z3_js as unknown as string, mime: "application/javascript; charset=utf-8" },
-  "/admin/assets/Dream-DaAbGesT.js": { path: A_9_assets_Dream_DaAbGesT_js as unknown as string, mime: "application/javascript; charset=utf-8" },
+  "/admin/assets/Agents-DUcXiK1q.js": { path: A_0_assets_Agents_DUcXiK1q_js as unknown as string, mime: "application/javascript; charset=utf-8" },
+  "/admin/assets/App-BvgLkh1R.js": { path: A_1_assets_App_BvgLkh1R_js as unknown as string, mime: "application/javascript; charset=utf-8" },
+  "/admin/assets/BrainData-BuTD1VvN.js": { path: A_2_assets_BrainData_BuTD1VvN_js as unknown as string, mime: "application/javascript; charset=utf-8" },
+  "/admin/assets/Calibration-rZ7CLDoe.js": { path: A_3_assets_Calibration_rZ7CLDoe_js as unknown as string, mime: "application/javascript; charset=utf-8" },
+  "/admin/assets/Connection-D1fGpgkf.js": { path: A_4_assets_Connection_D1fGpgkf_js as unknown as string, mime: "application/javascript; charset=utf-8" },
+  "/admin/assets/CreateLibrary-CzPkX0XK.js": { path: A_5_assets_CreateLibrary_CzPkX0XK_js as unknown as string, mime: "application/javascript; charset=utf-8" },
+  "/admin/assets/DesktopSettings-B0dkR2Ey.js": { path: A_6_assets_DesktopSettings_B0dkR2Ey_js as unknown as string, mime: "application/javascript; charset=utf-8" },
+  "/admin/assets/Diagnostics-Begxbw6I.js": { path: A_7_assets_Diagnostics_Begxbw6I_js as unknown as string, mime: "application/javascript; charset=utf-8" },
+  "/admin/assets/Documentation-BlA2PZKd.js": { path: A_8_assets_Documentation_BlA2PZKd_js as unknown as string, mime: "application/javascript; charset=utf-8" },
+  "/admin/assets/Dream-Di4HGMN0.js": { path: A_9_assets_Dream_Di4HGMN0_js as unknown as string, mime: "application/javascript; charset=utf-8" },
   "/admin/assets/HelpPage-e9DilG6s.js": { path: A_10_assets_HelpPage_e9DilG6s_js as unknown as string, mime: "application/javascript; charset=utf-8" },
-  "/admin/assets/Import-1m_aMDp_.js": { path: A_11_assets_Import_1m_aMDp__js as unknown as string, mime: "application/javascript; charset=utf-8" },
-  "/admin/assets/ImportMaterials-CpP82mUx.js": { path: A_12_assets_ImportMaterials_CpP82mUx_js as unknown as string, mime: "application/javascript; charset=utf-8" },
-  "/admin/assets/Knowledge-CntQwMpS.js": { path: A_13_assets_Knowledge_CntQwMpS_js as unknown as string, mime: "application/javascript; charset=utf-8" },
-  "/admin/assets/KnowledgeGraph-CThMyrXB.js": { path: A_14_assets_KnowledgeGraph_CThMyrXB_js as unknown as string, mime: "application/javascript; charset=utf-8" },
-  "/admin/assets/Login-xBuki1r7.js": { path: A_15_assets_Login_xBuki1r7_js as unknown as string, mime: "application/javascript; charset=utf-8" },
+  "/admin/assets/Import-DpO61WPy.js": { path: A_11_assets_Import_DpO61WPy_js as unknown as string, mime: "application/javascript; charset=utf-8" },
+  "/admin/assets/ImportMaterials-OZRW2zPd.js": { path: A_12_assets_ImportMaterials_OZRW2zPd_js as unknown as string, mime: "application/javascript; charset=utf-8" },
+  "/admin/assets/Knowledge-Duvvddtt.js": { path: A_13_assets_Knowledge_Duvvddtt_js as unknown as string, mime: "application/javascript; charset=utf-8" },
+  "/admin/assets/KnowledgeGraph-hd1hxRed.js": { path: A_14_assets_KnowledgeGraph_hd1hxRed_js as unknown as string, mime: "application/javascript; charset=utf-8" },
+  "/admin/assets/Login-4qL-msjM.js": { path: A_15_assets_Login_4qL_msjM_js as unknown as string, mime: "application/javascript; charset=utf-8" },
   "/admin/assets/MaintenanceTasks-CqyYVxgw.css": { path: A_16_assets_MaintenanceTasks_CqyYVxgw_css as unknown as string, mime: "text/css; charset=utf-8" },
-  "/admin/assets/MaintenanceTasks-Dtc1QzcO.js": { path: A_17_assets_MaintenanceTasks_Dtc1QzcO_js as unknown as string, mime: "application/javascript; charset=utf-8" },
-  "/admin/assets/ModelServices-Dx0NjPSl.js": { path: A_18_assets_ModelServices_Dx0NjPSl_js as unknown as string, mime: "application/javascript; charset=utf-8" },
-  "/admin/assets/RequestLog-D0Zz3WlF.js": { path: A_19_assets_RequestLog_D0Zz3WlF_js as unknown as string, mime: "application/javascript; charset=utf-8" },
-  "/admin/assets/Settings-BhWfASAT.js": { path: A_20_assets_Settings_BhWfASAT_js as unknown as string, mime: "application/javascript; charset=utf-8" },
-  "/admin/assets/TaskCenter-DYzNnSAf.js": { path: A_21_assets_TaskCenter_DYzNnSAf_js as unknown as string, mime: "application/javascript; charset=utf-8" },
-  "/admin/assets/TaskTechnicalLogs-CPIIFHbo.js": { path: A_22_assets_TaskTechnicalLogs_CPIIFHbo_js as unknown as string, mime: "application/javascript; charset=utf-8" },
-  "/admin/assets/Workbench-DwhUhSgq.js": { path: A_23_assets_Workbench_DwhUhSgq_js as unknown as string, mime: "application/javascript; charset=utf-8" },
+  "/admin/assets/MaintenanceTasks-XZ45A6Pd.js": { path: A_17_assets_MaintenanceTasks_XZ45A6Pd_js as unknown as string, mime: "application/javascript; charset=utf-8" },
+  "/admin/assets/ModelServices-CtAnqYlK.js": { path: A_18_assets_ModelServices_CtAnqYlK_js as unknown as string, mime: "application/javascript; charset=utf-8" },
+  "/admin/assets/RequestLog-2Ur1lpD-.js": { path: A_19_assets_RequestLog_2Ur1lpD__js as unknown as string, mime: "application/javascript; charset=utf-8" },
+  "/admin/assets/Settings-BfYHBm6f.js": { path: A_20_assets_Settings_BfYHBm6f_js as unknown as string, mime: "application/javascript; charset=utf-8" },
+  "/admin/assets/TaskCenter-I_SG21hG.js": { path: A_21_assets_TaskCenter_I_SG21hG_js as unknown as string, mime: "application/javascript; charset=utf-8" },
+  "/admin/assets/TaskTechnicalLogs-CDczkfH2.js": { path: A_22_assets_TaskTechnicalLogs_CDczkfH2_js as unknown as string, mime: "application/javascript; charset=utf-8" },
+  "/admin/assets/Workbench-BAAUVnRQ.js": { path: A_23_assets_Workbench_BAAUVnRQ_js as unknown as string, mime: "application/javascript; charset=utf-8" },
   "/admin/assets/charts-DVozmnPF.js": { path: A_24_assets_charts_DVozmnPF_js as unknown as string, mime: "application/javascript; charset=utf-8" },
   "/admin/assets/clipboard-DBsuhhdg.js": { path: A_25_assets_clipboard_DBsuhhdg_js as unknown as string, mime: "application/javascript; charset=utf-8" },
-  "/admin/assets/console-shared-CTvrxKFf.js": { path: A_26_assets_console_shared_CTvrxKFf_js as unknown as string, mime: "application/javascript; charset=utf-8" },
+  "/admin/assets/console-shared-C2wfZOle.js": { path: A_26_assets_console_shared_C2wfZOle_js as unknown as string, mime: "application/javascript; charset=utf-8" },
   "/admin/assets/customer-service-qr-BASWujnf.png": { path: A_27_assets_customer_service_qr_BASWujnf_png as unknown as string, mime: "image/png" },
   "/admin/assets/dialog-backdrop-DnzOaU1Q.js": { path: A_28_assets_dialog_backdrop_DnzOaU1Q_js as unknown as string, mime: "application/javascript; charset=utf-8" },
   "/admin/assets/import-materials-WEU5HI7s.js": { path: A_29_assets_import_materials_WEU5HI7s_js as unknown as string, mime: "application/javascript; charset=utf-8" },
-  "/admin/assets/import-support-Dz4YvHQX.js": { path: A_30_assets_import_support_Dz4YvHQX_js as unknown as string, mime: "application/javascript; charset=utf-8" },
-  "/admin/assets/index-Dx-NIT6Q.css": { path: A_31_assets_index_Dx_NIT6Q_css as unknown as string, mime: "text/css; charset=utf-8" },
-  "/admin/assets/index-KIbtds5I.js": { path: A_32_assets_index_KIbtds5I_js as unknown as string, mime: "application/javascript; charset=utf-8" },
+  "/admin/assets/import-support-BkqDofkj.js": { path: A_30_assets_import_support_BkqDofkj_js as unknown as string, mime: "application/javascript; charset=utf-8" },
+  "/admin/assets/index-CcTKYTTB.js": { path: A_31_assets_index_CcTKYTTB_js as unknown as string, mime: "application/javascript; charset=utf-8" },
+  "/admin/assets/index-Dx-NIT6Q.css": { path: A_32_assets_index_Dx_NIT6Q_css as unknown as string, mime: "text/css; charset=utf-8" },
   "/admin/assets/knowledge-graph-LvcWT1vl.js": { path: A_33_assets_knowledge_graph_LvcWT1vl_js as unknown as string, mime: "application/javascript; charset=utf-8" },
   "/admin/assets/model-services-WZ3OcWdP.js": { path: A_34_assets_model_services_WZ3OcWdP_js as unknown as string, mime: "application/javascript; charset=utf-8" },
   "/admin/assets/react-CTwocyy_.js": { path: A_35_assets_react_CTwocyy__js as unknown as string, mime: "application/javascript; charset=utf-8" },
   "/admin/assets/run-recovery-C2wKIofr.js": { path: A_36_assets_run_recovery_C2wKIofr_js as unknown as string, mime: "application/javascript; charset=utf-8" },
-  "/admin/assets/search-index-repair-2iUUkrfq.js": { path: A_37_assets_search_index_repair_2iUUkrfq_js as unknown as string, mime: "application/javascript; charset=utf-8" },
+  "/admin/assets/search-index-repair-B4LJ7lyu.js": { path: A_37_assets_search_index_repair_B4LJ7lyu_js as unknown as string, mime: "application/javascript; charset=utf-8" },
   "/admin/assets/shared-490x4S37.js": { path: A_38_assets_shared_490x4S37_js as unknown as string, mime: "application/javascript; charset=utf-8" },
   "/admin/assets/src-78e4A-OV.js": { path: A_39_assets_src_78e4A_OV_js as unknown as string, mime: "application/javascript; charset=utf-8" },
   "/admin/assets/src-Bi7L9_9h.css": { path: A_40_assets_src_Bi7L9_9h_css as unknown as string, mime: "text/css; charset=utf-8" },

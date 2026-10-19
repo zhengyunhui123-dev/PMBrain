@@ -20,6 +20,54 @@ let engine:BrainEngine;
 const url=process.env.PMBRAIN_RELATION_TEST_DATABASE_URL;
 const context={slug:'申报.xlsx',sourceId:'vault',body:'四川省商务厅牵头川商出海项目，并组织企业参加广交会。张三负责川商出海项目。',chunkBody:'四川省商务厅牵头川商出海项目，并组织企业参加广交会。张三负责川商出海项目。'};
 const receipt={entities:['companies/四川省商务厅','projects/川商出海','concepts/广交会'],relations:[{from:'companies/四川省商务厅',to:'projects/川商出海',link_type:'mentions',evidence:'四川省商务厅牵头川商出海项目'}]};
+
+test('自动新建项目不能直接使用文档格式名，原文明示软件正式名称时允许',async()=>{
+  const body='驾驶舱的需求记录。';const input={...context,body,chunkBody:body};
+  const content='---\ntitle: 需求记录\ntype: project\n---\n需求记录。[Source: 申报.xlsx]';
+  await expectRejection(validateIngestWrite(engine,input,'put_page',{slug:'projects/需求记录',content}),'identity');
+  const declared='软件项目正式命名为“需求记录”，用于归集需求。';
+  await validateIngestWrite(engine,{...context,body:declared,chunkBody:declared},'put_page',{slug:'projects/需求记录',content});
+});
+
+test('已有人工项目组页面继续保留，校验不改写历史类型',async()=>{
+  const body='旧项目组本周补充了一项交付说明。';await page('projects/旧项目组','project','旧项目组','人工保留事实。');
+  const before=await engine.getPage('projects/旧项目组',{sourceId:'vault'});
+  await validateIngestWrite(engine,{...context,body,chunkBody:body},'put_page',{slug:'projects/旧项目组',content:'---\ntitle: 旧项目组\ntype: project\n---\n旧项目组补充交付说明。[Source: 申报.xlsx]'});
+  expect(await engine.getPage('projects/旧项目组',{sourceId:'vault'})).toEqual(before);
+});
+
+test('同名实体自连与列表共现不形成语义边，真实来源回链继续保留',async()=>{
+  for(const [body,from,to] of [['从驾驶舱出发，驾驶舱需要什么。','concepts/驾驶舱','concepts/驾驶舱'],['合同建设相关\na.站务系统\nb.中央数据库','projects/站务系统','projects/中央数据库']]){
+    const input={...context,body:body!,chunkBody:body!};await page(input.slug,'note','原文',body!);
+    for(const slug of new Set([from!,to!]))await page(slug,slug.startsWith('concepts/')?'concept':'project',slug.split('/').at(-1)!,`${slug.split('/').at(-1)} 原有说明。`);
+    const result=await finalizeEntityIngest(engine,input,JSON.stringify({entities:[...new Set([from,to])],relations:[{from,to,link_type:'mentions',evidence:body}]}));
+    expect(result.unresolved).toHaveLength(1);
+    const rows=await engine.executeRaw<{from_slug:string;to_slug:string}>('SELECT f.slug AS from_slug,t.slug AS to_slug FROM links l JOIN pages f ON f.id=l.from_page_id JOIN pages t ON t.id=l.to_page_id');
+    expect(rows.some(row=>row.from_slug===from&&row.to_slug===to)).toBe(false);expect(rows.some(row=>row.from_slug===input.slug&&row.to_slug===from)).toBe(true);
+  }
+});
+
+test('自动新建实体不能把明确的项目组记成项目，组织类型和软件项目名称继续接受',async()=>{
+  const body='家政项目组负责提供业务字段。项目组协作系统是待建设的软件项目。';const input={...context,body,chunkBody:body};
+  await expectRejection(validateIngestWrite(engine,input,'put_page',{slug:'projects/家政项目组',content:'---\ntitle: 家政项目组\ntype: project\n---\n家政项目组负责提供业务字段。[Source: 申报.xlsx]'}),'entity type');
+  await validateIngestWrite(engine,input,'put_page',{slug:'companies/家政项目组',content:'---\ntitle: 家政项目组\ntype: organization\n---\n家政项目组负责提供业务字段。[Source: 申报.xlsx]'});
+  await validateIngestWrite(engine,input,'put_page',{slug:'projects/项目组协作系统',content:'---\ntitle: 项目组协作系统\ntype: project\n---\n项目组协作系统是待建设的软件项目。[Source: 申报.xlsx]'});
+});
+
+for(const evidence of ['张三未就职于甲公司。','张三可能就职于甲公司。','张三计划任职于甲公司。','张三是否就职于甲公司？','张三 never worked at 甲公司.','张三就职于乙公司。李四就职于甲公司。'])test(`具体任职关系不能由否定、猜测或跨句主体拼接得到：${evidence}`,async()=>{
+  const input={...context,body:evidence,chunkBody:evidence};
+  await page(input.slug,'note','任职原文',evidence);await page('people/张三','person','张三','张三。');await page('companies/甲公司','company','甲公司','甲公司。');
+  const result=await finalizeEntityIngest(engine,input,JSON.stringify({entities:['people/张三','companies/甲公司'],relations:[{from:'people/张三',to:'companies/甲公司',link_type:'works_at',evidence}]}));
+  expect(result.unresolved).toHaveLength(1);expect(await engine.executeRaw("SELECT id FROM links WHERE link_type='works_at'")).toHaveLength(0);
+  expect(await engine.executeRaw("SELECT id FROM links WHERE link_type='mentions'")).toHaveLength(4);
+});
+
+test('肯定任职事实继续形成关系，另一分句的否定不影响该事实',async()=>{
+  const evidence='张三就职于甲公司，但不负责预算。';const input={...context,body:evidence,chunkBody:evidence};
+  await page(input.slug,'note','任职原文',evidence);await page('people/张三','person','张三','张三。');await page('companies/甲公司','company','甲公司','甲公司。');
+  const result=await finalizeEntityIngest(engine,input,JSON.stringify({entities:['people/张三','companies/甲公司'],relations:[{from:'people/张三',to:'companies/甲公司',link_type:'works_at',evidence}]}));
+  expect(result.unresolved).toHaveLength(0);expect(await engine.executeRaw("SELECT id FROM links WHERE link_type='works_at'")).toHaveLength(1);
+});
 async function page(slug:string,type:string,title:string,body:string,sourceId='vault'){
   await engine.putPage(slug,{type:type as any,title,compiled_truth:body,timeline:'',frontmatter:{}},{sourceId});
 }
