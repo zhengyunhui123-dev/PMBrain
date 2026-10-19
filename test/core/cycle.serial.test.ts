@@ -559,7 +559,7 @@ describe('runCycle — sourceId resolution (regression #475)', () => {
     await fresh.initSchema();
     await (fresh as any).db.query('DROP TABLE IF EXISTS sources CASCADE');
     try {
-      await runCycle(fresh, { brainDir: '/tmp/brain-475-d' });
+      await runCycle(fresh, { brainDir: '/tmp/brain-475-d', phases: ['sync'] });
       expect(syncCalls.at(-1)?.sourceId).toBeUndefined();
     } finally {
       await fresh.disconnect();

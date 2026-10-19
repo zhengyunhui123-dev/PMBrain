@@ -50,13 +50,13 @@ test('截断恢复留住正常工具轮次，并受模型输出上限约束',asy
   expect(requests.map(body=>body.max_tokens)).toEqual([10,15]);expect(result.totalTurns).toBe(1);expect(result.stopReason).toBe('end');
 });
 
-test('未知模型输出能力时不盲目放大，恢复可按剩余预算缩小',async()=>{
+test('未知模型输出能力只扩大一次，显式上限和剩余预算约束恢复',async()=>{
   const requests=setup(()=>answer('partial','length',10));
   configureGateway({generative_enabled:true,chat_model:'custom-openai:Qwen3.6-35B-A3B',base_urls:{'custom-openai':server!.url.origin+'/v1'},env:{}});
   const unknown=await toolLoop({initialMessages:[{role:'user',content:'JSON'}],tools:[],toolHandlers:new Map(),maxTokens:10,retryLength:true});
-  expect(unknown.stopReason).toBe('length');expect(requests).toHaveLength(1);
+  expect(unknown.stopReason).toBe('length');expect(requests.map(body=>body.max_tokens)).toEqual([10,20]);
   const bounded=await toolLoop({initialMessages:[{role:'user',content:'JSON'}],tools:[],toolHandlers:new Map(),maxTokens:10,modelOutputLimit:30,retryLength:true,lengthRetryLimit:()=>14});
-  expect(bounded.stopReason).toBe('length');expect(requests.map(body=>body.max_tokens)).toEqual([10,10,14]);
+  expect(bounded.stopReason).toBe('length');expect(requests.map(body=>body.max_tokens)).toEqual([10,20,10,14]);
 });
 
 test('截断恢复依据已发生费用缩小输出，不能超过剩余金额',async()=>{
