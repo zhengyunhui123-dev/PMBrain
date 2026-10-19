@@ -332,7 +332,7 @@ test('压缩更早对话时会带上附件正文和图片占位，只有附件�
   await send('', [{ name: '合同.txt', mime: 'text/plain', data: b64('合同金额是 8800') }]);
   await send('金额是多少');
   expect(transcript).toContain('【图片 shot.png】图片仍保存在这条消息上');
-  expect(transcript).toContain('用户：【附件 合同.txt】');
+  expect(transcript).toMatch(/用户：附件引用：attachment:[0-9a-f-]{36}（合同\.txt）\n【附件 合同\.txt】\n合同金额是 8800/);
   expect(transcript).toContain('合同金额是 8800');
   for (const line of transcript.split('\n')) {
     if (line.startsWith('用户：')) expect(line.length).toBeGreaterThan('用户：'.length);

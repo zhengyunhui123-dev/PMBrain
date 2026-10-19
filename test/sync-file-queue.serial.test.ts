@@ -216,24 +216,24 @@ describe('快速维护文件任务与恢复', () => {
     for (let i = 0; i < 120; i++) writeFileSync(join(dir, `resume-${i}.md`), `# Resume ${i}\n\n合成资料用于测试文件队列停止和恢复。`);
     await engine.executeRaw("INSERT INTO sources (id, name, local_path, config) VALUES ($1, $2, $3, $4::jsonb)", ['resume-source', '续跑测试', dir, { syncEnabled: true }]);
     const accepted = await runtime.submitDream({ preset: 'quick', sourceId: 'resume-source' });
+    expect((await runtime.submitDream({ preset: 'quick', sourceId: 'resume-source' })).id).toBe(accepted.id);
     let observed = false;
     const observeDeadline=Date.now()+90_000;
     while(Date.now()<observeDeadline) {
       const run = await runtime.getRun(accepted.id);
       if ((run?.product?.processed ?? 0) > 0 && (run?.product?.processed ?? 0) < 120) { observed = true; break; }
-      await Bun.sleep(20);
+      await Bun.sleep(250);
     }
-    expect(observed,JSON.stringify({run:await runtime.getRun(accepted.id),files:await runtime.files(accepted.id)})).toBe(true);
-    expect((await runtime.submitDream({ preset: 'quick', sourceId: 'resume-source' })).id).toBe(accepted.id);
+    expect(observed,observed?undefined:JSON.stringify({run:await runtime.getRun(accepted.id),files:await runtime.files(accepted.id)})).toBe(true);
+    await runtime.cancel(accepted.id);
+    const stopped = await finish(accepted.id);
+    expect(stopped.status).toBe('cancelled');
     const firstPage = await runtime.files(accepted.id);
     expect(firstPage?.rows).toHaveLength(50);
     expect(firstPage?.next).not.toBeNull();
     const nextPage = await runtime.files(accepted.id, firstPage!.next!);
     expect(nextPage?.rows).toHaveLength(50);
     expect(nextPage?.rows.some(row => firstPage?.rows.some(previous => previous.id === row.id))).toBe(false);
-    await runtime.cancel(accepted.id);
-    const stopped = await finish(accepted.id);
-    expect(stopped.status).toBe('cancelled');
     const files = await new MinionQueue(engine).getJobs({ queue: SYNC_FILE_QUEUE, limit: 200 });
     const own = files.filter(row => row.data.sessionId === Number(accepted.id.slice(5)));
     expect(own.some(row => row.status === 'paused')).toBe(true);

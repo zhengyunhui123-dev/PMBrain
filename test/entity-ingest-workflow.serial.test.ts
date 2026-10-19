@@ -21,6 +21,29 @@ const url=process.env.PMBRAIN_RELATION_TEST_DATABASE_URL;
 const context={slug:'申报.xlsx',sourceId:'vault',body:'四川省商务厅牵头川商出海项目，并组织企业参加广交会。张三负责川商出海项目。',chunkBody:'四川省商务厅牵头川商出海项目，并组织企业参加广交会。张三负责川商出海项目。'};
 const receipt={entities:['companies/四川省商务厅','projects/川商出海','concepts/广交会'],relations:[{from:'companies/四川省商务厅',to:'projects/川商出海',link_type:'mentions',evidence:'四川省商务厅牵头川商出海项目'}]};
 
+test('新项目名不能采用原文明确否定的建设对象，肯定对象继续保留',async()=>{
+  const body='与赵经理中转站管理系统沟通结果：不是做中转站管理系统，是做一个应急时期的供销存管理系统。';
+  const input={...context,body,chunkBody:body};
+  const content=(title:string)=>`---\ntitle: ${title}\ntype: project\n---\n${title}。[Source: 申报.xlsx]`;
+  await expectRejection(validateIngestWrite(engine,input,'put_page',{slug:'projects/中转站管理系统',content:content('中转站管理系统')}),'identity');
+  await expectRejection(validateIngestWrite(engine,input,'put_page',{slug:'projects/赵经理中转站管理系统',content:content('赵经理中转站管理系统')}),'identity');
+  await validateIngestWrite(engine,input,'put_page',{slug:'projects/供销存管理系统',content:content('供销存管理系统')});
+});
+
+test('否定的不是对象身份时仍保留项目，后文明确命名可确立同名项目',async()=>{
+  const content='---\ntitle: 甲系统\ntype: project\n---\n甲系统。[Source: 申报.xlsx]';
+  for(const body of ['甲系统尚未上线，计划六月启动。','甲系统不是乙系统。','此前不是做甲系统，本次确定建设甲系统。','甲系统已立项，本次不是做甲系统的财务模块。'])await validateIngestWrite(engine,{...context,body,chunkBody:body},'put_page',{slug:'projects/甲系统',content});
+});
+
+test('被否定的名称不能靠伪造正式命名说明放行，旧项目身份不被清理',async()=>{
+  const body='本项目名称不是需求记录，而是需求归集系统。';
+  await expectRejection(validateIngestWrite(engine,{...context,body,chunkBody:body},'put_page',{slug:'projects/需求记录',content:'---\ntitle: 需求记录\ntype: project\n---\n需求记录。[Source: 申报.xlsx]'}),'identity');
+  await page('projects/中转站管理系统','project','中转站管理系统','人工保留的历史项目。');
+  const negative='不是做中转站管理系统，是做供销存管理系统。';
+  await validateIngestWrite(engine,{...context,body:negative,chunkBody:negative},'put_page',{slug:'projects/中转站管理系统',content:'---\ntitle: 中转站管理系统\ntype: project\n---\n否定说明。[Source: 申报.xlsx]'});
+  expect((await engine.getPage('projects/中转站管理系统',{sourceId:'vault'}))?.compiled_truth).toBe('人工保留的历史项目。');
+});
+
 test('自动新建项目不能直接使用文档格式名，原文明示软件正式名称时允许',async()=>{
   const body='驾驶舱的需求记录。';const input={...context,body,chunkBody:body};
   const content='---\ntitle: 需求记录\ntype: project\n---\n需求记录。[Source: 申报.xlsx]';

@@ -10,9 +10,10 @@ function sendHarness(failMessage = false, serviceReady = true, databaseReady = t
   const requests: string[] = [];
   const bodies: any[] = [];
   let current: any;
+  let lastError = '';
   const env = {
     pending: false, running, conversation: undefined, model: 'local', knowledge, serviceReady, databaseReady,
-    active: { current: undefined as string | undefined }, setPending: () => {}, setError: () => {},
+    active: { current: undefined as string | undefined }, setPending: () => {}, setError: (value: string) => { lastError = value; },
     assistantRef: { current: assistantId },
     setConversation: (value: any) => { current = value; },
     refresh: async () => { throw new Error('列表刷新失败'); },
@@ -30,7 +31,7 @@ function sendHarness(failMessage = false, serviceReady = true, databaseReady = t
     },
   };
   const send = new Function(...Object.keys(env), `${code}; return send;`)(...Object.values(env));
-  return { send, requests, bodies, env, current: () => current };
+  return { send, requests, bodies, env, current: () => current, error: () => lastError };
 }
 
 test('新对话绑定选中的助手，发送完成后列表失败仍保留这段对话', async () => {
@@ -67,13 +68,17 @@ test('正在生成时仍可以把新要求发出去', async () => {
   expect(run.requests).toContain('POST /conversations/thread/messages');
 });
 
-test('只有 HTTP 不可用才停止发送，数据库准备时明确发送普通对话', async () => {
+test('HTTP 不可用时停止发送，数据库准备时由用户取消知识库后发送普通对话', async () => {
   const offline = sendHarness(false, false, false, true);
   expect(await offline.send('问题')).toBe(false);
   expect(offline.requests).toHaveLength(0);
   const preparing = sendHarness(false, true, false, true);
-  expect(await preparing.send('问题')).toBe('thread');
-  const sent = preparing.bodies.find(body => body.text === '问题');
+  expect(await preparing.send('问题')).toBe(false);
+  expect(preparing.requests).toHaveLength(0);
+  expect(preparing.error()).toContain('请取消勾选知识库');
+  const plain = sendHarness(false, true, false, false);
+  expect(await plain.send('问题')).toBe('thread');
+  const sent = plain.bodies.find(body => body.text === '问题');
   expect(sent.knowledge).toBe(false);
 });
 

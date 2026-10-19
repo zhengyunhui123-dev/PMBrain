@@ -82,6 +82,16 @@ function parseReceipt(text:string):IngestReceipt {
 }
 
 function surfaceName(value:string):string{return value.replace(/[\s"'“”‘’]/gu,'');}
+function rejectedProjectIdentity(body:string,title:string):boolean{
+  const name=surfaceName(title).replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+  const negative=new RegExp(`(?:不是(?:要|在)?(?:做|建设|开发)|不(?:做|建设|开发|叫|名为|称为)|(?:本项目|本系统|项目名称|系统名称)(?:不是|并非))[^，,。；;!?！？]{0,8}${name}(?=$|而是|而非|但是|但)`,'u');
+  const clauses=body.split(/[\n，,。；;!?！？]/u).map(surfaceName);
+  const targetPattern=/(?:不是(?:要|在)?(?:做|建设|开发)|不(?:做|建设|开发|叫|名为|称为)|(?:本项目|本系统|项目名称|系统名称)(?:不是|并非))([^，,。；;!?！？]{4,64}?)(?=$|而是|而非|但是|但)/gu;
+  const rejected=clauses.flatMap(clause=>[...clause.matchAll(targetPattern)].map(match=>match[1]!));
+  if(!clauses.some(clause=>negative.test(clause))&&!rejected.some(target=>surfaceName(title).endsWith(target)))return false;
+  const affirmative=new RegExp(`(?:确定建设|决定建设|明确建设|建设|开发|正式命名为|名称为|名称是|命名为|名为|是做)[^，,。；;!?！？]{0,16}${name}|${name}(?:是|为)[^，,。；;!?！？]{0,12}(?:软件项目|建设项目|本项目)`,'u');
+  return !clauses.some(clause=>!negative.test(clause)&&!/(?:不|未|没有|并非|是否|可能|待确认)[^，,。；;!?！？]{0,8}(?:建设|开发|命名|名为|名称)/u.test(clause)&&affirmative.test(clause));
+}
 function declaredProjectAlias(body:string,title:string,alias:string):boolean{
   const escape=(value:string)=>surfaceName(value).replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
   const canonical=escape(title),alternate=escape(alias);
@@ -163,6 +173,7 @@ export async function validateIngestWrite(engine:BrainEngine,context:EntityInges
     const aliases=parsed.frontmatter.aliases??existing?.frontmatter.aliases;
     const entityType=String(input.type??metadata.type??existing?.type??parsed.type);
     if(!existing&&entityType==='project'){
+      if(rejectedProjectIdentity(context.body,title))throw new UnrecoverableError(`ingest project identity rejected by the source: '${title}' is explicitly excluded as the project name or construction target; keep the affirmative identity and other evidenced entities, without changing historical pages`);
       const escaped=surfaceName(title).replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
       const declared=new RegExp(`(?:项目|系统)(?:名称为|名称是|名为|正式命名为|命名为)[:：]?${escaped}(?=$|[，,。；;（）()、：:!?！？])`,'u').test(surfaceName(context.body));
       if(!declared&&/(?:项目组|工作组|团队|project\s*team|working\s*group)$/iu.test(surfaceName(title)))throw new UnrecoverableError(`ingest entity type contradicts a named team/group: '${title}' is not supported as a project; retain the source identity and choose an evidenced organization type or omit the capture`);

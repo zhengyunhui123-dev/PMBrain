@@ -168,8 +168,8 @@ export class SyncFileQueue {
   }
 
   async pause(sessionId: number) {
-    await this.engine.executeRaw(`UPDATE minion_jobs SET status = 'paused', lock_token = NULL, lock_until = NULL, updated_at = now()
-      WHERE queue = $1 AND (data->>'sessionId')::bigint = $2 AND status IN ('waiting','delayed','active')`, [SYNC_FILE_QUEUE, sessionId]);
+    await this.engine.executeRaw(`UPDATE minion_jobs SET status = 'paused', lock_token = NULL, lock_until = NULL, finished_at = NULL, updated_at = now()
+      WHERE queue = $1 AND (data->>'sessionId')::bigint = $2 AND status IN ('waiting','delayed','active','cancelled')`, [SYNC_FILE_QUEUE, sessionId]);
   }
 
   async resume(sessionId: number) {

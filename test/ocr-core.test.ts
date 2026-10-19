@@ -23,6 +23,13 @@ describe('OCR maintenance receipt', () => {
     expect(shouldRefreshOcrReceipt(receipt(), 'hash-a', 'openai:gpt-4o-mini')).toBe(false);
   });
 
+  test('a completed receipt from the previous image strategy is refreshed only when checked', () => {
+    const previous=receipt({promptVersion:3});
+    expect(shouldRefreshOcrReceipt(previous,'hash-a','openai:gpt-4o-mini')).toBe(true);
+    expect(previous.promptVersion).toBe(3);
+    expect(previous.status).toBe('complete');
+  });
+
   test('refreshes unchanged files after failure or model replacement', () => {
     expect(shouldRefreshOcrReceipt(receipt({ status: 'partial', failed: 1, failedItems: [2] }), 'hash-a', 'openai:gpt-4o-mini')).toBe(true);
     expect(shouldRefreshOcrReceipt(receipt(), 'hash-a', 'google:gemini-3.5-flash')).toBe(true);

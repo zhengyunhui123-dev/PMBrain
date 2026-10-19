@@ -69,9 +69,10 @@ test('停止后马上可以再发，生成中追加的新要求不会被旧回�
       input.onDelta?.('不应写入');
       return { text: '迟到的旧回答', model: 'ollama:local', citations: [] };
     }
+    expect(input.knowledge).toBe(false);
     return { text: '只写川商出海', model: 'ollama:local', citations: [] };
   });
-  const thread = service.create({});
+  const thread = service.create({ knowledge: false });
   service.send(thread.id, { text: '生成本周周报' });
   await firstStartedGate;
   expect(() => service.send(thread.id, { text: '任务不要打断' })).toThrow('当前会话正在生成');

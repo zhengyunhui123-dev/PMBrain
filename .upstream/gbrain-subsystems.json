@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "reviewed_at": "2026-10-19",
-  "product_version": "1.4.99",
+  "product_version": "1.5.0",
   "subsystem": "entity-relations",
   "status": "release-blocked-pending-package-acceptance",
   "upstream": {
@@ -585,7 +585,7 @@
       "path": "skills/ingest/SKILL.md",
       "upstream_path": "skills/ingest/SKILL.md",
       "mode": "adapted",
-      "sha256": "c6da9079d2a6b3f2659b2b88dbd8a136d48fba19dfa9ebbe538f0309cfa67989",
+      "sha256": "624bc62f7a5bcf0be67040740f048e1d2cf32db0a06228687f01abe53a2109e8",
       "upstream_sha256": "887d1dc43d1dd4d541172b40ce64385090813132ef80fc05c4616b5c32087448"
     },
     {

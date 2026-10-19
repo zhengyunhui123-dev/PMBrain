@@ -1,0 +1,512 @@
+{
+  "product": "PMBrain",
+  "version": "1.5.0",
+  "reviewedAt": "2026-10-19T02:48:23.964Z",
+  "schema": 135,
+  "overallContentQuality": "not_passed",
+  "implemented": [
+    "Approved rejection of explicitly negated new project identities and source-derived prefix variants, retaining affirmative and historical identities",
+    "Bounded static JPEG/WebP metadata preflight and existing overview/four-zoom OCR path; ordinary, animated, unknown and over-cap inputs keep original path",
+    "Product-only restoration of cascaded-cancelled unfinished file jobs to resumable paused state, preserving completed/foreign jobs and generic Core cancellation",
+    "Correction of three stale Workbench test contracts, plus deterministic stop-test ordering without weakening its original resume assertions"
+  ],
+  "nativeQa": {
+    "split": "First native run on four documents / three projects absent from prior 12-document development sets; not third-party human annotation; no knowledge-answer tuning after observing answers",
+    "questions": 18,
+    "answers": 18,
+    "answerErrors": 0,
+    "primaryConclusionsCorrect": 18,
+    "fullAnswerQuality": {
+      "passed": 15,
+      "failed": 2,
+      "needsImprovement": 1
+    },
+    "inlineCitations": 18,
+    "usedCitationSourcePairsValid": true,
+    "questionInputPreserved": true,
+    "auxiliaryJudge": {
+      "passed": 17,
+      "timeoutUngraded": 1,
+      "retried": false
+    },
+    "findings": [
+      {
+        "id": "unseen-06",
+        "kind": "unsolicited-speculation",
+        "severity": "needs_improvement",
+        "finding": "Correctly declines to supply an unnamed fourth department, then volunteers specific hypothetical departments. Marked as speculation but not requested or grounded."
+      },
+      {
+        "id": "unseen-07",
+        "kind": "unsupported-status-strength",
+        "severity": "failed",
+        "finding": "Correctly places full integration in the next phase, but says not yet integrated; a future full-integration plan does not prove zero current integration."
+      },
+      {
+        "id": "unseen-18",
+        "kind": "false-global-absence",
+        "severity": "failed",
+        "finding": "Correctly declines to invent a total contract amount, but says the whole source has no specific numbers. An earlier section explicitly has two person-month prices; the later section alone lacks amounts."
+      }
+    ],
+    "datasetSha256": "99370e12d6d9f562ce49823243718cbc615e502abf0bce57731815094739a40d",
+    "originalFilesUnchanged": true,
+    "embedding": {
+      "model": "ollama:qwen3-embedding:0.6b",
+      "dimensions": 1024,
+      "chunks": 37,
+      "embedded": 37,
+      "scope": "New isolated real vectors only, no formal vectors rebuilt"
+    }
+  },
+  "entities": {
+    "gold": "Two predeclared primary project identities, not exhaustive entity gold",
+    "runs": [
+      {
+        "engine": "pglite",
+        "newPages": 7,
+        "netNewLinks": 23,
+        "phaseReportedRelations": 24,
+        "primaryMatched": 1,
+        "primaryTotal": 2,
+        "wrongNegativeProjects": 0,
+        "repeatNewPages": 0,
+        "repeatNewLinks": 0,
+        "originalSourceBodiesUnchanged": true,
+        "unresolvedReferences": 5,
+        "status": "partial",
+        "captureStopReason": "completed",
+        "quality": "not_passed"
+      },
+      {
+        "engine": "postgres",
+        "newPages": 4,
+        "netNewLinks": 15,
+        "phaseReportedRelations": 15,
+        "primaryMatched": 1,
+        "primaryTotal": 2,
+        "wrongNegativeProjects": 0,
+        "repeatNewPages": 0,
+        "repeatNewLinks": 0,
+        "originalSourceBodiesUnchanged": true,
+        "unresolvedReferences": 5,
+        "status": "partial",
+        "captureStopReason": "completed",
+        "quality": "not_passed"
+      }
+    ],
+    "quality": "not_passed",
+    "remaining": [
+      "Primary named-project omissions",
+      "Generic document title emitted as concept; cross-type notability and identity still need work"
+    ],
+    "scope": "Native extract/extract_facts/capture_entities/orphans on the same three documents; no brain directory/file-side work or embedding"
+  },
+  "ocr": {
+    "model": "mimo:mimo-v2.6-flash",
+    "receiptStrategyVersion": 4,
+    "source": "Same previously used real development diagram, privately transcoded to quality95 JPEG/WebP, not three independent images",
+    "goldSha256": "356a0dacbf59af5cb2d6f0891400ebb4c404dc3560142193fc3d48ab7ce9b0d2",
+    "runs": [
+      {
+        "format": "png",
+        "score": {
+          "namedNodes": 125,
+          "explanations": 87,
+          "exactLabels": 124,
+          "fullPaths": 124,
+          "correctEdges": 123,
+          "alignedCorrectEdges": 124,
+          "expectedEdges": 124,
+          "predictedEdges": 124,
+          "edgePrecision": 0.9919354838709677,
+          "edgeRecall": 0.9919354838709677,
+          "normalizedCharacters": 4106,
+          "edits": 2,
+          "characterErrorRate": 0.0004870920603994155,
+          "extraNodes": 0,
+          "missingNodes": 0,
+          "normalization": "NFKC and whitespace only; order ignored by label alignment with <=25% label edit-distance; exact path and description resolve duplicate labels; errors include missing/extra text; hierarchy independently read from output indentation/headings; aligned edges distinguish label errors from wrong parents"
+        },
+        "sourceUnchanged": true
+      },
+      {
+        "format": "jpeg",
+        "score": {
+          "namedNodes": 125,
+          "explanations": 87,
+          "exactLabels": 124,
+          "fullPaths": 124,
+          "correctEdges": 123,
+          "alignedCorrectEdges": 124,
+          "expectedEdges": 124,
+          "predictedEdges": 124,
+          "edgePrecision": 0.9919354838709677,
+          "edgeRecall": 0.9919354838709677,
+          "normalizedCharacters": 4106,
+          "edits": 2,
+          "characterErrorRate": 0.0004870920603994155,
+          "extraNodes": 0,
+          "missingNodes": 0,
+          "normalization": "NFKC and whitespace only; order ignored by label alignment with <=25% label edit-distance; exact path and description resolve duplicate labels; errors include missing/extra text; hierarchy independently read from output indentation/headings; aligned edges distinguish label errors from wrong parents"
+        },
+        "sourceUnchanged": true
+      },
+      {
+        "format": "webp",
+        "score": {
+          "namedNodes": 125,
+          "explanations": 87,
+          "exactLabels": 124,
+          "fullPaths": 124,
+          "correctEdges": 123,
+          "alignedCorrectEdges": 124,
+          "expectedEdges": 124,
+          "predictedEdges": 124,
+          "edgePrecision": 0.9919354838709677,
+          "edgeRecall": 0.9919354838709677,
+          "normalizedCharacters": 4106,
+          "edits": 2,
+          "characterErrorRate": 0.0004870920603994155,
+          "extraNodes": 0,
+          "missingNodes": 0,
+          "normalization": "NFKC and whitespace only; order ignored by label alignment with <=25% label edit-distance; exact path and description resolve duplicate labels; errors include missing/extra text; hierarchy independently read from output indentation/headings; aligned edges distinguish label errors from wrong parents"
+        },
+        "sourceUnchanged": true
+      }
+    ],
+    "glyphPromptExperiment": {
+      "retained": false,
+      "reason": "No improvement in any of three formats; prompt removed, all raw results preserved",
+      "runs": [
+        {
+          "format": "png",
+          "edits": 2
+        },
+        {
+          "format": "jpeg",
+          "edits": 2
+        },
+        {
+          "format": "webp",
+          "edits": 2
+        }
+      ]
+    },
+    "importedCases": [
+      {
+        "case": "dense-jpeg",
+        "status": "imported",
+        "selectedFieldsCorrect": 39,
+        "selectedFieldsTotal": 39,
+        "edits": 2,
+        "ocrAttempted": 1,
+        "ocrSucceeded": 1,
+        "ocrFailed": 0
+      },
+      {
+        "case": "dense-webp",
+        "status": "imported",
+        "selectedFieldsCorrect": 39,
+        "selectedFieldsTotal": 39,
+        "edits": 2,
+        "ocrAttempted": 1,
+        "ocrSucceeded": 1,
+        "ocrFailed": 0
+      },
+      {
+        "case": "dense-real-png",
+        "status": "imported",
+        "selectedFieldsCorrect": 39,
+        "selectedFieldsTotal": 39,
+        "edits": 2,
+        "ocrAttempted": 1,
+        "ocrSucceeded": 1,
+        "ocrFailed": 0
+      },
+      {
+        "case": "real-paper-hotel-receipt",
+        "status": "imported",
+        "selectedFieldsCorrect": 0,
+        "selectedFieldsTotal": 6,
+        "ocrAttempted": 1,
+        "ocrSucceeded": 0,
+        "ocrFailed": 1
+      },
+      {
+        "case": "real-mixed-five-page-pdf",
+        "status": "imported",
+        "selectedFieldsCorrect": 6,
+        "selectedFieldsTotal": 6,
+        "ocrAttempted": 4,
+        "ocrSucceeded": 4,
+        "ocrFailed": 0
+      }
+    ],
+    "reopenedBodiesAndReceiptsUnchanged": true,
+    "originalFilesUnchanged": true,
+    "fullTextQuality": "not_passed",
+    "formatLimits": "Detail enhancement only for bounded large static PNG/JPEG/WebP; no animated/full-format quality claim"
+  },
+  "localValidation": {
+    "ingestPglite": {
+      "regressionPass": 66,
+      "regressionFailed": 1,
+      "failedReason": "Import-runtime deadline reached while other checks ran; original failure retained",
+      "isolatedImportRuntimeReplay": {
+        "passed": 1,
+        "assertions": 8
+      },
+      "all67CasesHavePassingEvidence": true
+    },
+    "identityPostgres": {
+      "passed": 44,
+      "assertions": 135
+    },
+    "documents": {
+      "passed": 29,
+      "assertions": 109
+    },
+    "workbenchCiRegressions": {
+      "passed": 43,
+      "assertions": 274
+    },
+    "cancelMicroRegression": {
+      "pglite": {
+        "passed": 1,
+        "assertions": 10
+      },
+      "postgres": {
+        "passed": 1,
+        "assertions": 10
+      }
+    },
+    "stopRestartResume120Files": {
+      "pglite": {
+        "passed": 1,
+        "assertions": 134
+      },
+      "postgres": {
+        "passed": 1,
+        "assertions": 134
+      },
+      "originalTaskIdsPreserved": true,
+      "completedAndForeignWorkPreserved": true
+    },
+    "typechecks": [
+      "root",
+      "admin",
+      "desktop"
+    ],
+    "verify": {
+      "passed": 40,
+      "failed": 0
+    },
+    "ciPreview": {
+      "passed": 236,
+      "assertions": 569
+    },
+    "windowsRuntime": "passed",
+    "currentSourceBrowser": "v1.5.0 homepage/version and appearance settings, isolated fixture, zero page errors",
+    "compiledSidecar": {
+      "commands": 9,
+      "modelCalls": 3,
+      "imagesPerCall": 5,
+      "minOutputBudget": 8192,
+      "receiptVersion": 4,
+      "scope": "PNG/JPEG/WebP import/get and native Chinese PDF, loopback model fixture; real model acceptance separately recorded"
+    },
+    "legacyUpgrade": {
+      "from": "1.4.99",
+      "to": "1.5.0",
+      "schemaFrom": 135,
+      "schemaTo": 135,
+      "source": "Cold copy of prior isolated real OCR acceptance DB, not a real installed-user database",
+      "oldRuntimeCommands": 4,
+      "newRuntimeCommands": 4,
+      "bodiesAndReceiptsUnchanged": true,
+      "oldPromptVersion3Preserved": true,
+      "installedPackageAcceptance": false
+    },
+    "ownedPostgresContainerRemoved": true
+  },
+  "github": {
+    "baselineSha": "15d22f3d44188b53ef140dcd706defbe51e31833",
+    "baselineRuns": [
+      {
+        "conclusion": "failure",
+        "databaseId": 39186796626,
+        "headSha": "15d22f3d44188b53ef140dcd706defbe51e31833",
+        "name": "Core User Journeys",
+        "status": "completed",
+        "url": "https://github.com/zhengyunhui123-dev/PMBrain/actions/runs/39186796626",
+        "workflowName": "Core User Journeys"
+      },
+      {
+        "conclusion": "success",
+        "databaseId": 39186796577,
+        "headSha": "15d22f3d44188b53ef140dcd706defbe51e31833",
+        "name": "Heavy Tests",
+        "status": "completed",
+        "url": "https://github.com/zhengyunhui123-dev/PMBrain/actions/runs/39186796577",
+        "workflowName": "Heavy Tests"
+      },
+      {
+        "conclusion": "success",
+        "databaseId": 39186796612,
+        "headSha": "15d22f3d44188b53ef140dcd706defbe51e31833",
+        "name": "E2E Tests",
+        "status": "completed",
+        "url": "https://github.com/zhengyunhui123-dev/PMBrain/actions/runs/39186796612",
+        "workflowName": "E2E Tests"
+      },
+      {
+        "conclusion": "failure",
+        "databaseId": 39186796738,
+        "headSha": "15d22f3d44188b53ef140dcd706defbe51e31833",
+        "name": "Test",
+        "status": "completed",
+        "url": "https://github.com/zhengyunhui123-dev/PMBrain/actions/runs/39186796738",
+        "workflowName": "Test"
+      }
+    ],
+    "testFailures": "Three Workbench stale contracts and actual cancelled-file resume defect addressed locally; new exact SHA rerun pending",
+    "coreUserJourneys": {
+      "status": "failure_not_resolved",
+      "observedStage": "set-main-source during fresh setup, 300s timeout",
+      "freshSameVersionCliProbe": "passed, three commands",
+      "failedArtifactColdCopyCliProbe": "passed, three commands after reconstructing archive-omitted empty PostgreSQL directories in an owned copy",
+      "rootCause": "not_confirmed",
+      "productionFallbackAdded": false
+    },
+    "currentChangesPushed": false,
+    "currentChangesRemoteAccepted": false
+  },
+  "resources": {
+    "adminAssets": 48,
+    "adminBuildSha256": "ed0dd6c35da8a521e438186a0363b7e1e428b3fa856bda4add93ddc6743db9db",
+    "sidecarRebuilt": true,
+    "lastFiveReleaseNotes": true
+  },
+  "planDifferences": [
+    "Included an actual product task-resume defect and stale test fixes found in the already-pushed baseline Actions",
+    "One generic glyph-recheck prompt experiment and a diagnostic crop did not remove the two character errors; experimental prompt not retained",
+    "Independent new-answer run exposed three issues; kept its first results and did not tune knowledge-answer code on this cohort",
+    "Installation remains pending the user-built package; isolated old-DB readback is narrower evidence"
+  ],
+  "remaining": [
+    "Primary entity coverage and identity/notability across types",
+    "Two persistent OCR character errors and more independent images",
+    "New-answer speculation, status-strength and over-broad negative claims",
+    "Core User Journeys setup stall, new exact pushed SHA CI and actual Windows installation/upgrade"
+  ],
+  "boundaries": {
+    "formalKnowledgeModified": false,
+    "wikiOverwritten": false,
+    "originalMaterialsModified": false,
+    "formalVectorsRebuilt": false,
+    "modelConfigModified": false,
+    "schemaChanged": false,
+    "committed": false,
+    "pushed": false,
+    "buildWinRun": false
+  },
+  "evidence": [
+    {
+      "privateArtifact": ".codex/product-1500/unseen-dataset-final.json",
+      "sha256": "99370e12d6d9f562ce49823243718cbc615e502abf0bce57731815094739a40d"
+    },
+    {
+      "privateArtifact": ".codex/product-1500/unseen-native.json",
+      "sha256": "f6917fc78f9e642d18933ecb68e290bddfdf870e358d0c8dd9387ffd52968f79"
+    },
+    {
+      "privateArtifact": ".codex/product-1500/unseen-audit.json",
+      "sha256": "3a590c1536119c27ace1c8191cb443cf92511b538029e566af530fd91d243937"
+    },
+    {
+      "privateArtifact": ".codex/product-1500/unseen-import.json",
+      "sha256": "b2177f2fd5c82e5806f73de9dbb61d7fc1e7cda99796b68970a0dc5662193baa"
+    },
+    {
+      "privateArtifact": ".codex/product-1500/dream-gold.json",
+      "sha256": "998cad843335e632922ebd7c660b77a7d764c214791363a9d2515499fc126e23"
+    },
+    {
+      "privateArtifact": ".codex/product-1500/dream-live.json",
+      "sha256": "fe92529300aebcb838e3cd8f9f63ec31f031f58c4377407b51008b74b3887a86"
+    },
+    {
+      "privateArtifact": ".codex/product-1500/dream-live-postgres.json",
+      "sha256": "3379a7766c8374e0f8c2cc06184f0db67966651bad0f9b7c2a8002cb7b941838"
+    },
+    {
+      "privateArtifact": ".codex/product-1500/dream-live-accepted.json",
+      "sha256": "998e51eb35a9c01a5a427318bcda25b03a98b358c5f260a217e09c5bd9b93349"
+    },
+    {
+      "privateArtifact": ".codex/product-1500/dream-live-postgres-accepted.json",
+      "sha256": "2738699d028e95ae605012f70a31c88fbb1ecb4d98b0dc05ebc4a9d00ee66e1c"
+    },
+    {
+      "privateArtifact": ".codex/product-1500/dream-audit.json",
+      "sha256": "d16781bb7dee3608bce6baa161377e91eed3807152b185eee61c2dfd604b73af"
+    },
+    {
+      "privateArtifact": ".codex/product-1500/ocr-baseline.json",
+      "sha256": "fc09b5b95471bd6634d4bd76858512bf1d78f3e96ce0b0232794e5bc5f2a58d4"
+    },
+    {
+      "privateArtifact": ".codex/product-1500/ocr-glyph-check.json",
+      "sha256": "befdcacb99309364bf08e9146c78802d7c6ada99928faa13ee53159887f5bcb9"
+    },
+    {
+      "privateArtifact": ".codex/product-1500/ocr-glyph-probe.json",
+      "sha256": "9a4f5d972226efbddf958ac86b017a6d59409f7be6151121babf05a961112018"
+    },
+    {
+      "privateArtifact": ".codex/product-1500/ocr-import-final.json",
+      "sha256": "70f92497759bbabf45d3fba0c21e96ae5142d32d840cc1c7664a0d650faab4c0"
+    },
+    {
+      "privateArtifact": ".codex/product-1500/legacy-before.json",
+      "sha256": "bb413a536998a95888c3d890b9b858a52e746f54a43231621dda0b59959d9fb9"
+    },
+    {
+      "privateArtifact": ".codex/product-1500/legacy-final-after.json",
+      "sha256": "318332c909cece449f8a20b338e13c8e513f511dd70608ee373fd2fd84b723f3"
+    },
+    {
+      "privateArtifact": ".codex/product-1500/sidecar-node-final-accepted.json",
+      "sha256": "d21dd8c6f05c7977cd03089e2c1045df5210d26da84d0918b95f3818e06e53e5"
+    },
+    {
+      "privateArtifact": ".codex/product-1500/ci-pr-preview-final.log",
+      "sha256": "af0510e05c463e781a13815b73ade7e9f7eebd5c6379aae1c1789a6132520bdd"
+    },
+    {
+      "privateArtifact": ".codex/product-1500/file-cancel-before.log",
+      "sha256": "434856b77e47dacbf6f1f9354e0388e0fc87f7c11af450a3f74e4ee40409c68a"
+    },
+    {
+      "privateArtifact": ".codex/product-1500/file-cancel-pglite.log",
+      "sha256": "48d3fbfc39c5e33c6bc3c6433efc725cf8d236d5583270ae4f9bcca1a746d12a"
+    },
+    {
+      "privateArtifact": ".codex/product-1500/file-cancel-postgres.log",
+      "sha256": "1379a1c64394634c3f86f9909cd8417813f68d2354f4d4c10f32d6646a68244d"
+    },
+    {
+      "privateArtifact": ".codex/product-1500/sync-stop-pglite-accepted.log",
+      "sha256": "66b8444d355c18a707f856719a46e3d625985698d3fdb0c974c099bf863bdacc"
+    },
+    {
+      "privateArtifact": ".codex/product-1500/sync-stop-postgres-after-fix.log",
+      "sha256": "f67b933ab5050b323fa35d4dce2b10c6a647f96ca885c2d8b0b279f25960b003"
+    },
+    {
+      "privateArtifact": ".codex/product-1500/ci-artifact-probe-reconstructed.json",
+      "sha256": "5fdcc1b456078bee0042c764a55cdd9c647326c0734204d353a61169243fd797"
+    }
+  ]
+}
