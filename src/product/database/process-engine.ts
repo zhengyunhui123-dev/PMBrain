@@ -27,7 +27,7 @@ export class WorkerPgliteEngine {
   private recovering: Promise<void> | null = null;
   private failure: Error | null = null;
   private pending = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void; dispose: () => void;
-    observation: { id:number;taskId?:number;method:string;scope?:number;generation:number;enqueuedAt:number;startedAt?:number;sqlFingerprint?:string } }>();
+    observation: { id:number;taskId?:number;method:string;scope?:number;generation:number;enqueuedAt:number;startedAt?:number;sqlFingerprint?:string;chunkWrite?:{slug:string;sourceId:string;chunks:number} } }>();
 
   constructor() { return this.proxy(); }
 
@@ -61,6 +61,7 @@ export class WorkerPgliteEngine {
       let timer: ReturnType<typeof setTimeout> | undefined;
       const dispose = () => { clearTimeout(timer); context?.signal.removeEventListener('abort', cancel); };
       const observation={id,taskId:context?.taskId,method,scope,generation:this.generation,enqueuedAt:Date.now(),
+        chunkWrite:method==='upsertChunks'?{slug:String(args[0]),sourceId:String((args[2] as {sourceId?:string}|undefined)?.sourceId??'default'),chunks:Array.isArray(args[1])?args[1].length:0}:undefined,
         sqlFingerprint:method==='executeRaw'||method==='@db.query'?createHash('sha256').update(String(args[0])).digest('hex'):undefined};
       this.pending.set(id, { resolve, reject, dispose, observation });
       try {

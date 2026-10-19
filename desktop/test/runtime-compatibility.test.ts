@@ -85,7 +85,7 @@ describe('desktop Windows runtime compatibility', () => {
     for (const contract of DESKTOP_RUNTIME_CONTRACTS) {
       expect(contract.archiveSha256).toMatch(/^[a-f0-9]{64}$/);
       expect(contract.executableSha256).toMatch(/^[a-f0-9]{64}$/);
-      expect(contract.bunRevision).toBe('1.3.14+0d9b296af');
+      expect(contract.bunRevision).toBe(contract.platform === 'win32' ? '1.4.2+744846f84' : '1.3.14+0d9b296af');
     }
     expect(buildSource).toContain('ensureRuntimeArchive');
     expect(buildSource).toContain('extractRuntimeExecutable');

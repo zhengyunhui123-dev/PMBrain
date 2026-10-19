@@ -15,3 +15,5 @@ export function databaseRequestContext(): DatabaseRequestContext | undefined { r
 export function withDatabaseRequest<T>(context: DatabaseRequestContext, operation: () => T): T {
   return requests.run(context, operation);
 }
+
+export function withoutDatabaseRequest<T>(operation: () => T): T { return requests.exit(operation); }

@@ -31,7 +31,7 @@ import { WorkbenchMemoryCoordinator, memoryVersion, type WorkbenchMemoryTask } f
 import { WorkbenchStore } from '../workbench/store';
 import { resolveWritebackConfig } from '../../core/facts/writeback-config';
 import { loadConfigFileOnly } from '../../core/config';
-import { withDatabaseRequest } from '../database/request-context.ts';
+import { withDatabaseRequest, withoutDatabaseRequest } from '../database/request-context.ts';
 import { withDeadline } from '../deadline.ts';
 
 export const PRODUCT_TASK_QUEUE = 'pmbrain-product';
@@ -205,6 +205,7 @@ export class ProductTaskRuntime {
       this.failure = error instanceof Error ? error : new Error(String(error));
       console.error('[tasks] worker stopped:', error instanceof Error ? error.message : error);
     });
+    if(this.resourceTimer)clearInterval(this.resourceTimer);
     this.resourceTimer=setInterval(()=>this.checkMemory(),this.resources.rssCheckIntervalMs);
     this.resourceTimer.unref();
     await this.flushEntityCapture();
@@ -307,6 +308,7 @@ export class ProductTaskRuntime {
   }
 
   async listRuns(): Promise<ConsoleRun[]> {
+    if (this.recoveringOwner) return this.cachedRuns();
     if (this.executions.size) {
       if (!this.refreshingRuns) {
         this.refreshingRuns = withDatabasePriority(3, () => this.queue.getJobs({ queue: PRODUCT_TASK_QUEUE, name: TASK_NAME, limit: 100 }))
@@ -340,8 +342,15 @@ export class ProductTaskRuntime {
     if (stopping && this.stopIntents.has(Number(id.slice(5)))) return stopping;
     const execution = this.executions.get(Number(id.slice(5)));
     if (execution) {
-      const live = execution.run(), saved = await this.queue.getJob(Number(id.slice(5)));
-      if (saved && live.product) { const fresh = toRun(saved).product!; live.product.relations=fresh.relations; live.product.gitResults=fresh.gitResults; }
+      const live = execution.run();
+      if (!this.refreshingRuns) {
+        this.refreshingRuns = withDatabasePriority(3, () => this.queue.getJob(Number(id.slice(5))))
+          .then(job => { if (job) this.cached = [toRun(job), ...this.cached.filter(run => run.id !== id)].slice(0,100); })
+          .catch(error => console.error('[tasks] status read failed:', error instanceof Error ? error.message : error))
+          .finally(() => { this.refreshingRuns = null; });
+      }
+      const saved = this.cached.find(run => run.id === id)?.product;
+      if (saved && live.product) { live.product.relations=saved.relations; live.product.gitResults=saved.gitResults; }
       return live;
     }
     const session = this.sessionViews.get(Number(id.slice(5)));
@@ -350,6 +359,7 @@ export class ProductTaskRuntime {
       if(session.product)session.product.activeFiles=this.fileProjection.active(Number(id.slice(5)));
       return session;
     }
+    if (this.recoveringOwner) return this.cachedRuns().find(run => run.id === id) ?? null;
     const job = await this.queue.getJob(Number(id.slice(5)));
     if (job?.queue !== PRODUCT_TASK_QUEUE || job.name !== TASK_NAME) return null;
     const run = toRun(job, job.status === 'cancelled' && this.executions.has(job.id));
@@ -549,13 +559,26 @@ export class ProductTaskRuntime {
     if(this.localPressure||this.externalPressure)await this.reclaimIdleThreads();
     const reusableThreads=structuredTask.type==='sync-file'?this.idleFileThreads
       :structuredTask.type==='dream'?this.idleMaintenanceThreads:undefined;
-    const thread = reusableThreads?.pop() ?? new Worker(workerPath, { env: { ...process.env } });
+    const cachedThread = reusableThreads?.pop();
+    const thread = cachedThread && cachedThread.threadId !== -1 ? cachedThread : new Worker(workerPath, { env: { ...process.env } });
+    let threadExited = false;
+    let threadClosing = false;
+    let threadFailed = false;
     let stop!: () => void;
     const stopped = new Promise<void>(resolve => { stop = resolve; });
-    thread.once('exit', stop);
+    thread.once('exit', () => { threadExited = true; stop(); });
     let settleResolve!: (value: unknown) => void;
     let settleReject!: (error: Error) => void;
     const result = new Promise<unknown>((resolve, reject) => { settleResolve = resolve; settleReject = reject; });
+    const send = (message: unknown) => {
+      if (threadExited || threadClosing) return;
+      try { thread.postMessage(message); }
+      catch (error) {
+        threadFailed = true;
+        threadClosing = true;
+        settleReject(error instanceof Error ? error : new Error(String(error)));
+      }
+    };
     let cancelRequested = false;
     const gitController = new AbortController();
     const gitOperations = new Set<Promise<unknown>>();
@@ -568,24 +591,25 @@ export class ProductTaskRuntime {
       cancelRequested = true;
       gitController.abort();
       host.cancel();
-      thread.postMessage({ type: 'cancel',reason:reason??'user_stop: 任务已取消' });
+      send({ type: 'cancel',reason:reason??'user_stop: 任务已取消' });
       settleReject(new Error(reason??'任务已取消'));
     };
     const finished = (async () => {
       try { return await result; }
       finally {
+        threadClosing = true;
         clearInterval(flush);
         thread.removeAllListeners('message');
         try { await host.close(); }
         finally {
           await Promise.allSettled([...gitOperations]);
           try {
-            if (reusableThreads && reusableThreads.length<1 && (completed || deferred) && !cancelRequested && !this.stopped && !this.paused && !this.localPressure && !this.externalPressure) {
+            if (!threadExited && !threadFailed && reusableThreads && reusableThreads.length<1 && (completed || deferred) && !cancelRequested && !this.stopped && !this.paused && !this.localPressure && !this.externalPressure) {
               thread.removeAllListeners('error');
               thread.removeAllListeners('exit');
               reusableThreads.push(thread);
               this.scheduleIdleRelease();
-            } else {
+            } else if (!threadExited) {
               await thread.terminate();
               await stopped;
             }
@@ -598,7 +622,7 @@ export class ProductTaskRuntime {
         }
       }
     })();
-    this.executions.set(context.id, { cancel, done: finished.catch(() => {}), ownsLockedTransaction: () => host.ownsLockedTransaction(), adjust:constrained=>thread.postMessage({type:'resource-pressure',constrained}), run: () => {
+    this.executions.set(context.id, { cancel, done: finished.catch(() => {}), ownsLockedTransaction: () => host.ownsLockedTransaction(), adjust:constrained=>send({type:'resource-pressure',constrained}), run: () => {
       progress.product = adapter.view;
       const run=toRun({ ...record, progress }, cancelRequested);
       if (run.product && structuredTask.type==='dream' && usesSyncFileQueue(structuredTask.input)) run.product.activeFiles=this.fileProjection.active(context.id);
@@ -608,7 +632,7 @@ export class ProductTaskRuntime {
     context.signal.addEventListener('abort', cancelFromSignal, { once: true });
     context.shutdownSignal.addEventListener('abort', cancelFromSignal, { once: true });
     if (context.signal.aborted || context.shutdownSignal.aborted || this.stopIntents.has(context.id)) cancel();
-    thread.once('error', error => settleReject(error instanceof Error ? error : new Error(String(error))));
+    thread.once('error', error => { threadFailed = true; settleReject(error instanceof Error ? error : new Error(String(error))); });
     thread.once('exit', code => settleReject(new Error(`任务 Worker 意外退出（${code}）`)));
     thread.on('message', (message: TaskWorkerMessage) => {
       if (message.type === 'rpc') {
@@ -664,17 +688,17 @@ export class ProductTaskRuntime {
             return null;
           }
           return withDatabaseRequest({ taskId: context.id, token: record.lock_token!, signal: gitController.signal,
-            onTimeout: error => { void this.requestCancel(`task-${context.id}`, error.message).catch(reason => console.error('[tasks] database timeout:', reason)); },
+            onTimeout: error => { withoutDatabaseRequest(() => { void this.requestCancel(`task-${context.id}`, error.message).catch(reason => console.error('[tasks] database timeout:', reason)); }); },
           }, () => host.dispatch(message));
         };
         void withDatabasePriority(['import','sync-file'].includes(structuredTask.type) ? 2 : 3, dispatch).then(value => {
           databaseOperations.delete(message.id);updateExecutionActivity();
           if(activity?.operation===message.method)updateActivity({operation:undefined,operationStartedAt:undefined});
-          if (!cancelRequested) thread.postMessage({ type: 'reply', id: message.id, value });
+          if (!cancelRequested) send({ type: 'reply', id: message.id, value });
         }, error => {
           databaseOperations.delete(message.id);updateExecutionActivity();
           if(activity?.operation===message.method)updateActivity({operation:undefined,operationStartedAt:undefined});
-          if (!cancelRequested) thread.postMessage({ type: 'reply', id: message.id, error: error instanceof Error ? error.message : String(error) });
+          if (!cancelRequested) send({ type: 'reply', id: message.id, error: error instanceof Error ? error.message : String(error) });
         });
       } else if (message.type === 'log') {
         progressDirty=true;
@@ -712,7 +736,7 @@ export class ProductTaskRuntime {
       }
     });
     flush = setInterval(() => {if(progressDirty&&Date.now()-lastPersistedAt>=5000)void persist().catch(settleReject);}, 1000);
-    thread.postMessage({ type: 'start', kind: this.engine.kind, task: record.data.task, ownerJobId: context.id, ownerToken:record.lock_token, constrained:this.localPressure||this.externalPressure });
+    send({ type: 'start', kind: this.engine.kind, task: record.data.task, ownerJobId: context.id, ownerToken:record.lock_token, constrained:this.localPressure||this.externalPressure });
     try {
       const outcome = await finished;
       if (structuredTask.type === 'dream' && outcome !== MINION_DEFERRED && (outcome as { reason?: string })?.reason === 'cycle_already_running') return this.deferMaintenance(record);

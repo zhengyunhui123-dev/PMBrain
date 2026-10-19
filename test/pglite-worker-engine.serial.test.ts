@@ -31,6 +31,19 @@ afterAll(async () => {
   if (home) rmSync(home, { recursive: true, force: true });
 }, 60000);
 
+test('分块请求诊断保留目标和批量大小，不包含正文、向量和执行凭据',async()=>{
+  await engine.putPage('request-observation',{type:'note',title:'请求诊断',compiled_truth:'隔离测试'});
+  const pending=withDatabaseRequest({taskId:987,token:'private-observation-token',signal:new AbortController().signal,onTimeout:()=>{}},()=>engine.upsertChunks('request-observation',[
+    {chunk_index:0,chunk_text:'private-observation-body',chunk_source:'compiled_truth'},
+  ],{sourceId:'default'}));
+  const request=(engine as unknown as WorkerPgliteEngine).inspectRequests().find(row=>row.method==='upsertChunks');
+  expect(request?.chunkWrite).toEqual({slug:'request-observation',sourceId:'default',chunks:1});
+  expect(request?.taskId).toBe(987);
+  expect(JSON.stringify(request)).not.toContain('private-observation-body');
+  expect(JSON.stringify(request)).not.toContain('private-observation-token');
+  await pending;
+});
+
 test('重数据库计算期间服务线程仍能响应不读数据库的请求', async () => {
   const server = Bun.serve({ port: 0, fetch: () => Response.json({ models: ['test-model'] }) });
   try {

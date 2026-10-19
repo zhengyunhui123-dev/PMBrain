@@ -1,5 +1,7 @@
 import { expectRejection } from './helpers/await-rejection.ts';
-import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import { afterAll, beforeAll, describe, expect, test, spyOn } from 'bun:test';
+import { Worker } from 'node:worker_threads';
+import { databaseRequestContext, withDatabaseRequest } from '../src/product/database/request-context.ts';
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -660,4 +662,126 @@ describe('软件后台任务共用 owner 数据库', () => {
       expect(await engine.executeRaw('SELECT 1 AS available')).toEqual([{available:1}]);
     }finally{host.cancel();await host.close();await queue.cancelJob(job.id);}
   },15000);
+  test('执行线程提前退出后，资源采样和停止不影响服务，原任务可以重试', async () => {
+    configureModels();
+    const path=join(root,'thread-exit.md');
+    writeFileSync(path,'# 线程提前退出\n\n停止与资源检查必须保留服务和原任务。');
+    let thread:Worker|undefined;
+    let ownerId=0;
+    let releaseClose!:()=>void;
+    let enteredClose!:()=>void;
+    const closing=new Promise<void>(resolve=>{enteredClose=resolve;});
+    const gate=new Promise<void>(resolve=>{releaseClose=resolve;});
+    const post=Worker.prototype.postMessage;
+    const close=TaskEngineHost.prototype.close;
+    const postSpy=spyOn(Worker.prototype,'postMessage').mockImplementation(function(this:Worker,message:any,...args:any[]){
+      if(message.type==='start'&&message.task?.input?.path===path){thread=this;ownerId=message.ownerJobId;}
+      return post.call(this,message,...args as []);
+    });
+    const closeSpy=spyOn(TaskEngineHost.prototype,'close').mockImplementation(async function(this:TaskEngineHost){
+      if((this as unknown as {jobId:number}).jobId===ownerId){enteredClose();await gate;}
+      return close.call(this);
+    });
+    let accepted:ConsoleRun|undefined;
+    try {
+      accepted=await runtime.submitImport({path});
+      await modelWaiting();
+      const historySpy=spyOn(MinionQueue.prototype,'getJobs');
+      try {
+        expect((await runtime.getRun(accepted.id))?.status).toBe('running');
+        expect(historySpy).not.toHaveBeenCalled();
+      } finally {historySpy.mockRestore();}
+      expect(thread).toBeDefined();
+      await thread!.terminate();
+      await closing;
+      await expect(runtime.adjustResourcePressure(false)).resolves.toBeUndefined();
+      expect((await runtime.requestCancel(accepted.id,'任务 Worker 意外退出'))?.id).toBe(accepted.id);
+      expect((await engine.executeRaw('SELECT 1 AS alive'))[0].alive).toBe(1);
+    } finally {
+      releaseClose();postSpy.mockRestore();closeSpy.mockRestore();release();configureModels(false);
+      if(accepted)await runtime.cancel(accepted.id);
+    }
+    const resumed=await runtime.retry(accepted!.id);
+    expect(resumed?.id).toBe(accepted!.id);
+    const modelTimer=setInterval(release,20);
+    try {expect((await finished(accepted!.id)).status).toBe('completed');}
+    finally {clearInterval(modelTimer);release();await runtime.cancel(accepted!.id);}
+    expect((await engine.getPage('thread-exit'))?.compiled_truth).toContain('保留服务和原任务');
+    expect(readFileSync(path,'utf8')).toContain('保留服务和原任务');
+  },40000);
+
+  test('空闲线程退出后，新维护任务使用存活线程完成',async()=>{
+    configureModels(false);
+    const first=await runtime.submitDream({preset:'quick',dryRun:true});
+    expect((await finished(first.id)).status).toBe('completed');
+    const pool=(runtime as unknown as {idleMaintenanceThreads:Worker[]}).idleMaintenanceThreads;
+    expect(pool).toHaveLength(1);
+    const exited=pool[0];await exited.terminate();
+    const next=await runtime.submitDream({preset:'quick',dryRun:true});
+    expect((await finished(next.id)).status).toBe('completed');
+    expect(pool).toHaveLength(1);expect(pool[0]).not.toBe(exited);
+    expect((await engine.executeRaw('SELECT 1 AS alive'))[0].alive).toBe(1);
+  },40000);
+
+  test('存活线程发送失败保留原始错误，服务和原任务重试仍可用',async()=>{
+    configureModels(false);
+    const path=join(root,'thread-send-failure.md');
+    writeFileSync(path,'# 消息失败\n\n线程消息发送失败不能伪装为任务完成。');
+    const post=Worker.prototype.postMessage;
+    const postSpy=spyOn(Worker.prototype,'postMessage').mockImplementation(function(this:Worker,message:any,...args:any[]){
+      if(message.type==='start'&&message.task?.input?.path===path)throw new Error('isolated worker send failure');
+      return post.call(this,message,...args as []);
+    });
+    let accepted:ConsoleRun|undefined;
+    try {
+      accepted=await runtime.submitImport({path,noEmbed:true});
+      const failed=await finished(accepted.id);
+      expect(failed.status).toBe('failed');expect(failed.error).toContain('isolated worker send failure');
+      expect((await engine.executeRaw('SELECT 1 AS alive'))[0].alive).toBe(1);
+    } finally {postSpy.mockRestore();}
+    expect((await runtime.retry(accepted!.id))?.id).toBe(accepted!.id);
+    expect((await finished(accepted!.id)).status).toBe('completed');
+    expect((await engine.getPage('thread-send-failure'))?.compiled_truth).toContain('不能伪装');
+  },30000);
+
+  test('数据库分块写入卡住超时后服务恢复，保留已提交资料并继续原任务', async () => {
+    configureModels(false);
+    if(!taskDatabaseUrl){
+      await runtime.close();await engine.disconnect();
+      engine=new WorkerPgliteEngine() as unknown as BrainEngine;
+      await engine.connect({database_path:join(root,'.pmbrain','timeout-test.pglite')});await engine.initSchema();
+      await engine.executeRaw('UPDATE sources SET local_path=$1 WHERE id=$2',[root,'default']);
+      runtime=new ProductTaskRuntime(engine);await runtime.start();
+    }
+    const path=join(root,'write-timeout.md');
+    writeFileSync(path,'# 写入超时\n\n失败后继续原任务，不丢失已经提交的其他资料。');
+    await engine.putPage('timeout-kept',{type:'note',title:'已提交资料',compiled_truth:'已完成内容必须保留'});
+    const dispatch=TaskEngineHost.prototype.dispatch;
+    let injected=false;
+    const dispatchSpy=spyOn(TaskEngineHost.prototype,'dispatch').mockImplementation(function(this:TaskEngineHost,message){
+      const context=databaseRequestContext();
+      if(!injected&&message.method==='upsertChunks'&&message.args[0]==='write-timeout'&&context){
+        injected=true;
+        return withDatabaseRequest({...context,timeoutMs:150},()=>dispatch.call(this,{...message,method:'executeRaw',args:['DO $$ BEGIN LOOP PERFORM 1; END LOOP; END $$']}));
+      }
+      return dispatch.call(this,message);
+    });
+    let accepted:ConsoleRun|undefined;
+    try {
+      accepted=await runtime.submitImport({path,noEmbed:true});
+      const failed=await finished(accepted.id);
+      expect(injected).toBe(true);
+      expect(failed.status).toBe('failed');
+      expect(failed.error).toContain('数据库请求超时');
+      expect((await engine.executeRaw('SELECT 1 AS alive'))[0].alive).toBe(1);
+      expect((await engine.getPage('timeout-kept'))?.compiled_truth).toBe('已完成内容必须保留');
+      expect(await engine.getPage('write-timeout')).toBeNull();
+    } finally {dispatchSpy.mockRestore();if(accepted)await runtime.cancel(accepted.id);}
+    const resumed=await runtime.retry(accepted!.id);
+    expect(resumed?.id).toBe(accepted!.id);
+    expect((await finished(accepted!.id)).status).toBe('completed');
+    expect((await engine.getPage('write-timeout'))?.compiled_truth).toContain('继续原任务');
+    expect(readFileSync(path,'utf8')).toContain('继续原任务');
+  },60000);
+
 });
