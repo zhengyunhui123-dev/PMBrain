@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test';
+import {maintenanceFailure} from '../src/product/tasks/maintenance-orchestration.ts';
 import { retireAutomaticCapture, resumeMaintenanceCheckpoint } from '../src/product/tasks/checkpoint.ts';
 import type { MaintenanceCheckpoint } from '../src/product/tasks/types.ts';
 import type { PhaseResult } from '../src/core/cycle.ts';
@@ -25,4 +26,17 @@ test('legacy capture failure is archived while native completed phases survive r
 test('task timeout rejects invalid and overflowing timer values',()=>{
   for(const value of [null,undefined,'',0,-1,1.5,NaN,Infinity,2147483648,'wrong'])expect(parseTaskTimeout(value)).toBeNull();
   expect(parseTaskTimeout('420000')).toBe(420000);
+});
+
+test('retry preserves informational warnings but reruns errors and incomplete stages',()=>{
+  const lint:PhaseResult={phase:'lint',status:'warn',summary:'格式提示',duration_ms:1,details:{issues:1}};
+  const sync:PhaseResult={phase:'sync',status:'ok',summary:'已同步',duration_ms:1,details:{}};
+  for(const details of [{ner_error:'temporary error'},{by_mention_error:'temporary error'},{relation_backfill_error:'temporary error'},{pages_remaining:2}]){
+    const extract:PhaseResult={phase:'extract',status:'warn',summary:'未完成',duration_ms:1,details};
+    if(!('pages_remaining' in details))expect(maintenanceFailure({status:'partial',phases:[lint,sync,extract]})).toBe('temporary error');
+    expect(maintenanceFailure({status:'partial',phases:[lint,sync]})).toBeNull();
+    const checkpoint:MaintenanceCheckpoint={phases:{one:[lint,sync,extract]},reports:{one:{status:'partial'}}};
+    resumeMaintenanceCheckpoint(checkpoint,true,true);
+    expect(checkpoint.phases.one).toEqual([lint,sync]);
+  }
 });

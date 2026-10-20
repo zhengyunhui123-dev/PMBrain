@@ -273,7 +273,7 @@ const DREAM_KNOWLEDGE_STEPS = [
 const QUICK_MAINTENANCE_STEPS = [
   { key: 'check', title: '检查知识', description: '检查页面与内容规范', phases: ['lint', 'backlinks'] },
   { key: 'sync', title: '同步内容', description: '同步新增和变化内容', phases: ['sync'] },
-  { key: 'connect', title: '建立关联', description: '补全确定性引用关系', phases: ['extract', 'extract_facts', 'resolve_symbol_edges'] },
+  { key: 'connect', title: '建立关联', description: '增量整理实体与来源关联', phases: ['extract', 'extract_facts', 'resolve_symbol_edges', 'capture_entities'] },
   { key: 'index', title: '更新索引', description: '向量化待处理内容', phases: ['embed'] },
   { key: 'verify', title: '完成检查', description: '汇总孤立知识与异常', phases: ['orphans'] },
 ] as const;
@@ -1232,7 +1232,7 @@ function quickStageState(
     .filter((phase): phase is DreamPhaseReport => !!phase);
   if (reports.some(phase => phase.status === 'fail' || phase.status === 'error')) return 'error';
   if (progress.active && phases.includes(progress.active)) return 'active';
-  if (phases.every(phase => progress.completed.has(phase))) {
+  if (phases.filter(phase=>phase!=='capture_entities'||!progress.report||reports.some(item=>item.phase===phase)).every(phase => progress.completed.has(phase))) {
     return partialWhen ? 'partial' : 'done';
   }
   return 'idle';
@@ -1293,11 +1293,15 @@ export function buildQuickMaintenanceStages(run: ConsoleRun | null): QuickMainte
     },
     {
       ...QUICK_MAINTENANCE_STEPS[2],
-      state: quickStageState(progress, QUICK_MAINTENANCE_STEPS[2].phases, false),
+      state: quickStageState(progress, QUICK_MAINTENANCE_STEPS[2].phases, number(details('capture_entities').pages_remaining)>0),
       results: [
         { label: '新增关联', value: number(totals.links_created) },
         { label: '扫描历史页面', value: historicalScanned },
         { label: '历史待补关联', value: pending.historicalLinks },
+        ...(phase('capture_entities')?[
+          { label: '识别实体', value: number(details('capture_entities').entities_recognized) },
+          { label: '待整理资料', value: number(details('capture_entities').pages_remaining) },
+        ]:[]),
       ],
     },
     {
@@ -1970,7 +1974,7 @@ function DreamRunPanel({
   }> = {
     quick: {
       title: '先做一次轻量维护',
-      description: '依次检查全部已注册 Source、同步内容、建立确定性关联、更新向量索引并检查异常。不使用普通模型。',
+      description: '同步全部已注册 Source 的变更资料，增量更新重要人物、组织、项目和概念，补充来源关联及向量索引。实体整理使用普通模型，未变化资料复用成果。',
       action: '开始快速维护',
     },
     cycle: {

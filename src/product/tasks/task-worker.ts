@@ -15,6 +15,7 @@ import { maintenanceFailure } from './maintenance-orchestration.ts';
 import { fetchSource, loadAllSources, parseSourceConfig } from '../../core/sources-load.ts';
 import { resolveSourceId } from '../../core/source-resolver.ts';
 import { runEmbedCore } from '../../commands/embed.ts';
+import { isEmbeddingConfigured } from '../../core/embedding-dim-check.ts';
 import { parentPort } from 'node:worker_threads';
 import { format } from 'node:util';
 import { stat } from 'node:fs/promises';
@@ -121,16 +122,19 @@ for (const method of ['log', 'error', 'warn', 'info', 'debug'] as const) {
 }
 setCliOptions({ ...DEFAULT_CLI_OPTIONS, progressJson: true });
 
-async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { type: 'dream' }>['input']) {
+async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { type: 'dream' }>['input'], progressPrefix:string[] = []) {
   const checkpoint: MaintenanceCheckpoint = input.checkpoint ?? { phases: {}, reports: {} };
-  if (input.phase !== 'capture_entities') {
+  if (input.phase !== 'capture_entities' && !input.incrementalIngest) {
     retireAutomaticCapture(checkpoint);
     if (Object.keys(checkpoint.retiredCapture ?? {}).length) {
       console.log('旧版自动实体识别阶段已退出本次整理，历史结果和失败记录保留在原任务检查点。');
       await rpc('task.maintenanceCheckpoint', [checkpoint]);
     }
   }
-  const captureModel = input.phase === 'capture_entities' ? await chooseCaptureModel(engine, {}) : null;
+  const capturesImported = !input.phase || input.phase==='all' || !!input.preset;
+  const automaticEnabled=await engine.getConfig('dream.entity_capture.enabled')!=='false';
+  const captureModel = input.phase === 'capture_entities' || (capturesImported && automaticEnabled) ? await chooseCaptureModel(engine, {}) : null;
+  const ingestEnabled=automaticEnabled&&captureModel?.ok===true;
   let pendingFiles = false;
   let capacityReached = false;
   let scanned = 0;
@@ -171,8 +175,17 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
   const resumeOptions = async (sourceId: string) => {
     let captureEntitySlugs: string[] | undefined;
     let captureEntityBudget: import('../../core/cycle/capture-entities.ts').CaptureEntitiesOpts['budget'];
+    if(capturesImported && ingestEnabled && !input.dryRun){
+      captureEntitySlugs=await rpc('task.captureRequest',[sourceId]) as string[]|undefined;
+      if(captureEntitySlugs)checkpoint.captureRequests={...checkpoint.captureRequests,[sourceId]:captureEntitySlugs};
+    }else if(input.phase==='capture_entities'){
+      captureEntitySlugs=input.slugs;
+      if(input.slugs?.length&&!input.dryRun){
+        captureEntitySlugs=await rpc('task.captureRequest',[sourceId,input.slugs]) as string[]|undefined??input.slugs;
+        checkpoint.captureRequests={...checkpoint.captureRequests,[sourceId]:captureEntitySlugs};
+      }
+    }
     if (captureModel?.ok) {
-      captureEntitySlugs = input.slugs;
       if (input.preset!=='quick'||captureEntitySlugs?.length) {
         const [usage] = await engine.executeRaw<{ input: string; output: string }>(`SELECT COALESCE(sum(tokens_input),0) AS input,COALESCE(sum(tokens_output),0) AS output FROM minion_jobs WHERE private_queue_owner_job_id=$1 AND data ? 'ingest_context'`, [ownerJobId]);
         const inputTokens = Number(usage?.input ?? 0), outputTokens = Number(usage?.output ?? 0);
@@ -207,7 +220,20 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
   const phases = input.preset === 'quick' ? resolveQuickMaintenancePhases()
     : input.phase && input.phase !== 'all' ? [input.phase]
     : resolveDreamPresetPhases(input.preset ?? 'full');
-  send({ type: 'progress', phases: [...phases] });
+  send({ type: 'progress', phases: [...progressPrefix,...phases] });
+  const phaseOptions=async(sourceId:string)=>{
+    const options=await resumeOptions(sourceId);
+    const selected=ALL_PHASES.filter(phase=>phases.includes(phase)||(!!options.captureEntitySlugs?.length&&phase==='capture_entities'));
+    const prepareEntityCapture=capturesImported&&ingestEnabled&&!input.dryRun?async()=>{
+      const slugs=await rpc('task.captureRequest',[sourceId]) as string[]|undefined;
+      if(slugs)checkpoint.captureRequests={...checkpoint.captureRequests,[sourceId]:slugs};
+      return slugs??[];
+    }:undefined;
+    if(prepareEntityCapture&&!selected.includes('capture_entities'))selected.splice(ALL_PHASES.filter(phase=>selected.includes(phase)&&ALL_PHASES.indexOf(phase)<ALL_PHASES.indexOf('capture_entities')).length,0,'capture_entities');
+    send({type:'progress',phases:[...progressPrefix,...selected]});
+    for (const phase of checkpoint.phases[sourceId] ?? []) send({ type: 'progress', event: { phase: `cycle.${phase.phase}`, event: 'finish' } });
+    return {...options,phases:selected,prepareEntityCapture};
+  };
   const sourceId = input.sourceId ? await resolveSourceId(engine, input.sourceId) : undefined;
   if (sourceId && (await fetchSource(engine, sourceId))?.archived) throw new Error(`Source ${sourceId} is archived`);
   const common = {
@@ -245,7 +271,7 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
       send({ type: 'progress', scope: { name: source.name, index, total: sources.length } });
       const report = await runQuickMaintenance(engine, {
         ...common, sourceId: source.id, brainDir: await resolveBrainDir(engine, null, source.id),
-        ...await resumeOptions(source.id),
+        ...await phaseOptions(source.id),
       });
       if (report.reason === 'cycle_already_running') return report;
       checkpoint.reports[source.id] = { ...report };
@@ -256,15 +282,29 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
     return combineQuickMaintenanceReports(reports, startedAt);
   }
   const brainDir = await resolveBrainDir(engine, null, sourceId);
-  if (input.preset === 'quick') return runQuickMaintenance(engine, { ...common, brainDir, ...await resumeOptions(sourceId ?? 'default') });
-  return runCycle(engine, {
+  if (input.preset === 'quick') return runQuickMaintenance(engine, { ...common, brainDir, ...await phaseOptions(sourceId ?? 'default') });
+  const report=await runCycle(engine, {
     ...resolveDreamRelationOptions(input.preset, input.phase),
     ...common, brainDir,
-    ...await resumeOptions(sourceId ?? 'default'),
-    phases: input.phase && input.phase !== 'all' ? [input.phase as CyclePhase]
-      : input.preset ? resolveDreamPresetPhases(input.preset) : undefined,
+    ...await phaseOptions(sourceId ?? 'default'),
     forcePackPhases: input.preset === 'meeting' ? ['extract_atoms'] : undefined,
   });
+  if(input.phase==='capture_entities'&&input.incrementalIngest&&!progressPrefix.length&&!input.dryRun)await embedCapturedKnowledge(engine,report,sourceId??'default');
+  return report;
+}
+
+async function embedCapturedKnowledge(engine:BrainEngine,knowledge:Awaited<ReturnType<typeof runCycle>>,sourceId:string){
+  if(!isEmbeddingConfigured(loadConfig()))return;
+  const details=knowledge.phases.find(phase=>phase.phase==='capture_entities')?.details;
+  const changed=[...new Set(['written_slugs','source_slugs','relation_slugs'].flatMap(key=>Array.isArray(details?.[key])?details[key] as string[]:[]).map(slug=>slug.startsWith(sourceId+':')?slug.slice(sourceId.length+1):slug).filter(slug=>!slug.includes(':')))];
+  if(!changed.length)return;
+  send({type:'progress',event:{phase:'embed',event:'start'}});
+  const started=performance.now();
+  const embedded=await runEmbedCore(engine,{slugs:changed,sourceId,batchSize:constrained?32:100,signal:abort.signal});
+  knowledge.phases.push({phase:'embed',status:embedded.failedPages?'fail':'ok',duration_ms:performance.now()-started,summary:embedded.failedPages?'实体向量更新未完成':'实体向量已更新',details:{...embedded}});
+  if(embedded.failedPages)knowledge.status='failed';
+  send({type:'progress',event:{phase:'embed',event:'finish'}});
+  return embedded;
 }
 
 async function execute(task: ProductTask, kind: BrainEngine['kind']) {
@@ -352,6 +392,25 @@ async function execute(task: ProductTask, kind: BrainEngine['kind']) {
       },
     });
     result = { ...imported, resumedFiles: completedPaths.length };
+    if(imported.errors===0){
+      const sourceId=input.sourceId??'default';
+      const rawPhases=(input.noEmbed?['collect','process','write']:['collect','process','vector','write']).map(phase=>({phase,status:'ok',duration_ms:0,summary:'原文已入库',details:{}}));
+      const automaticEnabled=await engine.getConfig('dream.entity_capture.enabled')!=='false';
+      if(automaticEnabled&&(await chooseCaptureModel(engine,{})).ok){
+        const slugs=await rpc('task.captureRequest',[sourceId,imported.importedSlugs]) as string[]|undefined;
+        if(slugs?.length){
+          const checkpoint=input.knowledgeCheckpoint??{phases:{},reports:{}};
+          checkpoint.captureRequests={...checkpoint.captureRequests,[sourceId]:slugs};
+          send({type:'progress',phases:[...rawPhases.map(phase=>phase.phase),'capture_entities']});
+          for(const phase of rawPhases)send({type:'progress',event:{phase:phase.phase,event:'finish'}});
+          const knowledge=await runDreamTask(engine,{phase:'capture_entities',sourceId,slugs,checkpoint,incrementalIngest:true},rawPhases.map(phase=>phase.phase));
+          if(!input.noEmbed)result.knowledgeEmbedded=await embedCapturedKnowledge(engine,knowledge,sourceId);
+          result={...result,status:knowledge.status,phases:[...rawPhases,...knowledge.phases],knowledge};
+        }
+      }else{
+        result={...result,knowledgeStatus:automaticEnabled?'model_unavailable':'disabled'};
+      }
+    }
   } else if (task.type === 'dream') {
     result = { ...await runDreamTask(engine, task.input) };
   } else if (task.type === 'sync') {
@@ -380,7 +439,7 @@ async function execute(task: ProductTask, kind: BrainEngine['kind']) {
     }), catchUp: task.input.catchUp === true, forceReembed: task.input.forceReembed === true };
   }
   abort.signal.throwIfAborted();
-  const failure = task.type === 'dream' ? maintenanceFailure(result) : null;
+  const failure = task.type === 'dream' || task.type==='import' ? maintenanceFailure(result) : null;
   if (result.reason === 'cycle_already_running') send({ type: 'result', result });
   else if (failure || result.status === 'failed' || Number(result.errors ?? 0) > 0) {
     const failures = result.failures as Array<{ error: string }> | undefined;

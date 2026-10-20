@@ -7,6 +7,7 @@ export const DreamSettingsResponseSchema = z.object({
   dualWrite: z.boolean(),
   includeUncommitted: z.boolean(),
   autoGitCommit: z.boolean().optional(),
+  entityCaptureEnabled: z.boolean().optional(),
   timeoutMs: z.number().int().positive().nullable().optional(),
   effectiveTimeoutMs: z.number().int().positive().optional(),
   defaultBrainDir: z.string().nullable(),

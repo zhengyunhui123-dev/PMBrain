@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "reviewed_at": "2026-10-19",
-  "product_version": "1.5.4",
+  "reviewed_at": "2026-10-20",
+  "product_version": "1.5.5",
   "subsystem": "entity-relations",
   "status": "release-blocked-pending-package-acceptance",
   "upstream": {
@@ -22,7 +22,7 @@
     "Authorized native Workbench memory adapter; optional transient classification, source-bound exact dedup and DB-only fact write preserving original materials",
     "Authorized world-only Dream consolidation; private Facts remain local and are not promoted to public entity takes",
     "Authorized native memory lifecycle: source-bound live projection guards, refresh, TTL-safe takes and verified contribution retirement",
-    "Default Dream, Quick Maintenance and ordinary import retire extra automatic capture_entities; explicit legacy ingest and historical receipts retained"
+    "Approved incremental ingest contract wiring within original import/maintenance tasks; native DEFAULT_PHASES and disabled take phases remain unchanged"
   ],
   "integrations": [
     "src/core/pglite-engine.ts",
@@ -91,7 +91,8 @@
     "Entity extraction uses a durable bounded batch tool with atomic per-entity receipts, paginated planning and revision/policy/graph-validated metadata manifests; unchanged pages do not reread bodies or call models",
     "Completion from persisted tools retains source evidence, required-write validation and final graph reconciliation; output truncation recovery remains budget bounded",
     "Product entity capture returns its existing task lease after at most 32 admitted chunks or a cooperative five-minute window; checkpoints retain completed phases, receipts and cumulative token/cost accounting",
-    "Postgres connection-loss scopes are revoked and native pool shutdown has a finite five-second grace period; native cancellation, rollback, locks and server-side disconnection are tested separately"
+    "Postgres connection-loss scopes are revoked and native pool shutdown has a finite five-second grace period; native cancellation, rollback, locks and server-side disconnection are tested separately",
+    "PMBrain 1.5.5 atomically marks changed original materials, claims bounded ingestion after sync within the original product task, excludes generated backups, and reuses native receipts and affected-page embeddings. Failed/incomplete warn phases rerun; informational warnings remain. Saved execution timeout and existing cost controls apply. No new schema, core agent, implicit production backfill or upstream phase is introduced."
   ],
   "deferred": [
     "whole-repository GBrain upgrade",
@@ -320,6 +321,73 @@
         "original_windows_ci": "Restart stalled before Sidecar spawn; improved preflight logs and reproduced shutdown fixes do not prove the unique initiating cause of that historic run"
       },
       "boundary": "Exact new SHA Actions, real user models and Windows installer acceptance remain pending user submission and package. Endpoint capability registry and model diagnostics are phase two."
+    },
+    "automatic_knowledge_ingestion_155": {
+      "evidence": ".codex/knowledge-ingestion-155/",
+      "model": "mimo:mimo-v2.6-flash",
+      "isolated_entities": [
+        "person",
+        "company",
+        "project"
+      ],
+      "unchanged_new_model_jobs": 0,
+      "production_data_modified": false,
+      "boundary": "isolated current source acceptance; production-scale latency, exact new SHA Actions and installer pending",
+      "checks": {
+        "pgliteIncrementalAndCheckpoint": {
+          "pass": 14,
+          "fail": 0
+        },
+        "postgresWholeJourney": {
+          "pass": 47,
+          "fail": 0
+        },
+        "entityCompatibility": {
+          "pass": 77,
+          "fail": 0
+        },
+        "presentation": {
+          "pass": 53,
+          "fail": 0
+        },
+        "sidecarManager": {
+          "pass": 20,
+          "fail": 0
+        },
+        "pgliteWriteTimeoutRecovery": {
+          "pass": 1,
+          "fail": 0
+        },
+        "staticGates": {
+          "pass": 40,
+          "fail": 0
+        },
+        "ciPreview": {
+          "pass": 236,
+          "fail": 0
+        },
+        "upstreamSourceMappings": 50
+      },
+      "native_postgres_cancel": "underlying native cancellation promise observed in product adapter; primary SQL errors and rollback retained",
+      "ui": {
+        "version": "1.5.5",
+        "toggleSaveReload": true,
+        "oldClientPreservesToggle": true,
+        "invalidToggleRejected": true,
+        "timeoutSaveReloadMs": 420000,
+        "originalTaskRetry": "task-8",
+        "finalStatus": "completed",
+        "healthAfterFailure": 200,
+        "pageErrors": []
+      },
+      "packageResourcesVerified": true,
+      "installedVersion": "1.5.0",
+      "productionRelationshipTyping": "context heuristics retained; ambiguous document/project typed edges are not factual triples",
+      "deliveryTargeted": {
+        "pass": 72,
+        "emptyIncrementalHistoricalQueries": 0,
+        "partialTaskContinueUi": "latest compiled UI with isolated receipts and original-ID POST"
+      }
     }
   },
   "files": [

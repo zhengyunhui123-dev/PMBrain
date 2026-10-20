@@ -259,7 +259,7 @@ export function classifySidecarStartupError(error: unknown): SidecarErrorClassif
     };
   }
 
-  if (/ENOENT|runtime missing|bun.*not found|Cannot find module|pmbrain-sidecar/i.test(text)) {
+  if (/ENOENT|runtime missing|bun.*not found|Cannot find module|Cannot find script|Script not found/i.test(text)) {
     return {
       category: 'runtime_missing',
       retryable: false,
@@ -268,7 +268,7 @@ export function classifySidecarStartupError(error: unknown): SidecarErrorClassif
   }
 
   if (
-    /ECONNREFUSED|ECONNRESET|fetch failed|network|socket hang up|timed out|timeout|Health check returned/i.test(text)
+    /ECONNREFUSED|ECONNRESET|fetch failed|network|socket hang up|timed out|timeout|Health check returned|Worker has been terminated|worker.*(?:already terminated|not running)/i.test(text)
   ) {
     return {
       category: 'transient',

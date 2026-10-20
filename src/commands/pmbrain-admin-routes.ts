@@ -1017,6 +1017,7 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
       dualWrite,
       includeUncommitted,
       autoGitCommit,
+      entityCaptureEnabled: await engine.getConfig('dream.entity_capture.enabled') !== 'false',
       timeoutMs,
       effectiveTimeoutMs: timeoutMs ?? DEFAULT_PRODUCT_TASK_TIMEOUT_MS,
       defaultBrainDir: defaultBrainDir || null,
@@ -1099,6 +1100,8 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
     const dualWrite = req.body?.dualWrite;
     const includeUncommitted = req.body?.includeUncommitted;
     const autoGitCommit = req.body?.autoGitCommit;
+    const entityCaptureEnabled=req.body?.entityCaptureEnabled;
+    if(entityCaptureEnabled!==undefined&&typeof entityCaptureEnabled!=='boolean'){res.status(400).json({error:'entity_capture_enabled_must_be_boolean'});return;}
     const timeoutMs = req.body?.timeoutMs;
     if (timeoutMs !== undefined && timeoutMs !== null && (typeof timeoutMs !== 'number' || parseTaskTimeout(timeoutMs) === null)) { res.status(400).json({error:'invalid_dream_task_timeout'}); return; }
     if (autoGitCommit !== undefined && typeof autoGitCommit !== 'boolean') { res.status(400).json({error:'auto_git_commit_must_be_boolean'}); return; }
@@ -1129,6 +1132,7 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
         engine.setConfig('dream.synthesize.dual_write', dualWrite ? 'true' : 'false'),
         engine.setConfig('sync.include_working_tree', includeUncommitted ? 'true' : 'false'),
         ...(typeof autoGitCommit==='boolean' ? [engine.setConfig('sync.auto_git_commit',autoGitCommit?'true':'false')] : []),
+        ...(typeof entityCaptureEnabled==='boolean' ? [engine.setConfig('dream.entity_capture.enabled',entityCaptureEnabled?'true':'false')] : []),
         ...(timeoutMs !== undefined ? [engine.setConfig(DREAM_TASK_TIMEOUT_KEY,timeoutMs === null ? '' : String(timeoutMs))] : []),
       ]);
       sendAdminContract(res, DreamSettingsResponseSchema, await dreamSettingsView({ outputDir, dualWrite, includeUncommitted, autoGitCommit }));

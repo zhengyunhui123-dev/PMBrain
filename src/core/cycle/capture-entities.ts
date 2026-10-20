@@ -21,6 +21,7 @@ import { captureScopeKey,captureChunkKey,planCaptureBodies,sourceTimelineDates }
 import { captureReceiptProof,reuseCaptureReceipt,type CaptureReceipt } from '../pmbrain-adapters/entity-capture-receipts.ts';
 import { runCaptureWindow,CaptureAdmission,withCaptureWrite } from '../pmbrain-adapters/entity-capture-window.ts';
 import { pendingCaptureCandidates, publishCaptureManifest } from '../pmbrain-adapters/entity-capture-manifest.ts';
+import { excludedCapturePath } from '../pmbrain-adapters/entity-capture-request.ts';
 import {
   ENTITY_CAPTURE_CANDIDATE_LIMIT,
   type CaptureEntityBrief,
@@ -491,8 +492,9 @@ export async function runPhaseCaptureEntities(
   let afterPageId = 0;
   for (;;) {
     throwIfAborted(opts.signal, '[dream] capture candidate planning');
+    if(opts.slugs?.length===0)break;
     const batch = await selectEntityCaptureCandidates(engine, opts.sourceId, { metadataOnly: true, slugs: opts.slugs, afterPageId, limit: 100 });
-    selected.push(...batch);
+    selected.push(...batch.filter(page=>!excludedCapturePath(page.slug)));
     if (batch.length < 100) break;
     afterPageId = Number(batch.at(-1)!.pageId);
     await opts.yieldDuringPhase?.();

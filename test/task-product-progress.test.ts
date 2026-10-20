@@ -1,9 +1,22 @@
 import { describe, expect, test } from 'bun:test';
 import { TaskProgressAdapter, finishTaskProgress, taskRunSummary } from '../src/product/tasks/progress-adapter.ts';
 import { resumeMaintenanceCheckpoint } from '../src/product/tasks/checkpoint.ts';
+import {taskCanRetry,taskStatus} from '../admin/src/product/task-presentation.ts';
+import type {ConsoleRun} from '../shared/contracts/common.ts';
 import type { MaintenanceCheckpoint } from '../src/product/tasks/types.ts';
 
 describe('任务的产品进度', () => {
+  test('费用停止的导入和实体任务仍可继续原任务，完成的导入不可重复继续',()=>{
+    for(const kind of ['import_path','dream_capture_entities','dream_quick']){
+      const run={id:'task-155',kind,status:'completed',result:{status:'partial'}} as ConsoleRun;
+      expect(taskCanRetry(run)).toBe(true);
+      expect(taskCanRetry({...run,result:undefined,product:{stage:'部分完成，请查看未完成步骤'}} as ConsoleRun)).toBe(true);
+      if(kind==='import_path')expect(taskStatus(run)).toBe('部分完成');
+      expect(taskCanRetry({...run,result:{status:'clean'}})).toBe(false);
+      expect(taskCanRetry({...run,status:'running'})).toBe(false);
+      expect(taskCanRetry({...run,status:'failed'})).toBe(true);
+    }
+  });
   test('零份资料通过验收时不能显示100%，未知价格明确说明费用上限无法核算',()=>{
     const adapter=new TaskProgressAdapter('dream_full');adapter.plan(['capture_entities','extract']);
     const result={status:'partial',phases:[{phase:'capture_entities',status:'warn',details:{pages_processed:0,pages_remaining:1482,stop_reason:'tokens',cost_cny:null,cost_cap_cny:5,cost_cap_enforced:false,unresolved_references:[{target:'missing'}]}}]};

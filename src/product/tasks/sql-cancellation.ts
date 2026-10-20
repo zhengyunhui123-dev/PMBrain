@@ -6,6 +6,14 @@ export function withSqlCancellation(engine:BrainEngine,signal:AbortSignal):Brain
   const wrapped=new WeakMap<object,any>();
   const track=(pending:any)=>{
     if(typeof pending?.cancel!=='function')return pending;
+    if(typeof pending.canceller==='function'){
+      const nativeCancel=pending.canceller;
+      pending.canceller=(...args:unknown[])=>{
+        const cancelling=nativeCancel.apply(pending,args);
+        void Promise.resolve(cancelling).catch(()=>{});
+        return cancelling;
+      };
+    }
     const cancel=()=>{try{void Promise.resolve(pending.cancel()).catch(()=>{});}catch{}};
     const context=databaseRequestContext();
     let timer:ReturnType<typeof setTimeout>|undefined;

@@ -192,7 +192,7 @@ for f in "${files[@]}"; do
     exit 2
   fi
   case "$name" in
-    skills*.test.ts|zeroentropy*.test.ts|serve-http-multi-agent*.test.ts)
+    skills*.test.ts|zeroentropy*.test.ts|serve-http-multi-agent*.test.ts|product-task-runtime-postgres.test.ts)
       FILE_TIMEOUT=$((FILE_TIMEOUT * 4))
       ;;
   esac

@@ -26,6 +26,7 @@ export interface MaintenanceCheckpoint {
 }
 
 export interface ImportTaskInput {
+  knowledgeCheckpoint?: MaintenanceCheckpoint;
   path: string;
   sourceId?: string;
   noEmbed?: boolean;
@@ -41,6 +42,7 @@ export interface ImportTaskInput {
 }
 
 export interface DreamTaskInput {
+  incrementalIngest?: boolean;
   slugs?: string[];
   checkpoint?: MaintenanceCheckpoint;
   preset?: 'quick' | 'full' | 'meeting';

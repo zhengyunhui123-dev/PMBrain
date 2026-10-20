@@ -60,10 +60,10 @@ afterAll(async()=>{
   if(root&&resolve(root).startsWith(resolve(tmpdir())+sep)&&root.includes('pmbrain-imported-entities-'))rmSync(root,{recursive:true,force:true});
 },60_000);
 
-test('default Dream and quick maintenance do not add the entity ingestion stage',async()=>{
+test('native Dream stays unchanged while explicitly scoped quick maintenance includes ingestion',async()=>{
   expect(DEFAULT_PHASES).not.toContain('capture_entities');
   const report=await runQuickMaintenance(engine,{brainDir:root,dryRun:true,sourceId:'auto-capture',captureEntitySlugs:['notes/input']});
-  expect(report.phases.map(phase=>phase.phase)).not.toContain('capture_entities');
+  expect(report.phases.map(phase=>phase.phase)).toContain('capture_entities');
   expect(calls).toBe(0);
 });
 
@@ -114,20 +114,13 @@ test('legacy quick task resumes with its original ID, native receipts and archiv
   await runtime.close();await engine.executeRaw("DELETE FROM minion_jobs WHERE queue='pmbrain-product'");
 },30000);
 
-test('ordinary import and runtime restart do not capture entities; explicit ingestion still persists results',async()=>{
+test('ordinary core import persists bounded ingestion and runtime restart completes it once',async()=>{
   const file=join(root,'input.md');
   writeFileSync(file,'---\ntitle: 导入资料\ntype: note\n---\n刘慈欣创作了三体，这是导入的中文资料。');
   expect((await importFile(engine,file,'notes/input.md',{sourceId:'auto-capture',noEmbed:true})).status).toBe('imported');
   expect(await engine.executeRaw("SELECT id FROM minion_jobs WHERE queue='pmbrain-product' AND data->'task'->'input'->>'sourceId'='auto-capture'")).toHaveLength(0);
-  expect(await engine.getConfig('dream.entity_capture.pending.auto-capture')).toBeNull();
+  expect(await engine.getConfig('dream.entity_capture.pending.auto-capture')).toContain('notes/input');
   runtime=new ProductTaskRuntime(engine); await runtime.start();
-  await Bun.sleep(300);
-  expect(calls).toBe(0);
-  expect(await engine.getPage('people/liu',{sourceId:'auto-capture'})).toBeNull();
-  await runtime.close(); runtime=new ProductTaskRuntime(engine); await runtime.start();
-  await Bun.sleep(300);
-  expect(calls).toBe(0);
-  await runtime.submitDream({phase:'capture_entities',sourceId:'auto-capture',slugs:['notes/input']});
   let job:{id:number;status:string;error_text:string|null}|undefined;
   const deadline=Date.now()+45_000;
   while(Date.now()<deadline){
@@ -143,14 +136,14 @@ test('ordinary import and runtime restart do not capture entities; explicit inge
   await runtime.close(); runtime=new ProductTaskRuntime(engine); await runtime.start();
   await Bun.sleep(300);
   expect(calls).toBe(count);
-  expect((await runtime.listRuns()).some(run=>run.kind==='dream_capture_entities'&&run.trigger==='manual'&&run.status==='completed')).toBe(true);
+  expect((await runtime.listRuns()).some(run=>run.kind==='dream_capture_entities'&&run.trigger==='scheduled'&&run.status==='completed')).toBe(true);
   expect(await engine.getConfig('dream.entity_capture.pending.auto-capture')).toBeNull();
 },60_000);
 
 test('saved execution timeout aborts an in-flight model call; retry keeps original timeout and saved knowledge',async()=>{
   timeoutMode=true;holdTimeout=true;
   await engine.putPage('notes/timer',{type:'note',title:'超时原文',compiled_truth:'这是超时测试原文，停止后必须保留。',timeline:'',frontmatter:{}},{sourceId:'auto-capture'});
-  await engine.setConfig(DREAM_TASK_TIMEOUT_KEY,'2000');
+  await engine.setConfig(DREAM_TASK_TIMEOUT_KEY,'5000');
   const run=await runtime.submitDream({phase:'capture_entities',sourceId:'auto-capture',slugs:['notes/timer']});
   const deadline=Date.now()+15000;
   while(Date.now()<deadline){if(['failed','cancelled'].includes((await runtime.getRun(run.id))?.status??''))break;await Bun.sleep(50);}
@@ -164,6 +157,6 @@ test('saved execution timeout aborts an in-flight model call; retry keeps origin
   const resumedDeadline=Date.now()+15000;
   while(Date.now()<resumedDeadline){if(['completed','failed'].includes((await runtime.getRun(run.id))?.status??''))break;await Bun.sleep(50);}
   expect((await runtime.getRun(run.id))?.status).toBe('completed');
-  expect((await new MinionQueue(engine).getJob(Number(run.id.slice(5))))?.timeout_ms).toBe(2000);
+  expect((await new MinionQueue(engine).getJob(Number(run.id.slice(5))))?.timeout_ms).toBe(5000);
   await engine.setConfig(DREAM_TASK_TIMEOUT_KEY,'');timeoutMode=false;
 },35000);

@@ -26,6 +26,8 @@ import { resolveSourceId } from '../../core/source-resolver.ts';
 import { recordSyncedGitFile, commitQuickMaintenanceSource } from './synced-git.ts';
 import type { SyncResult } from '../../commands/sync.ts';
 import { maintenanceFailure } from './maintenance-orchestration.ts';
+import { claimMaintenanceCapture } from './maintenance-orchestration.ts';
+import { enqueueImportedEntityCapture } from './imported-entity-capture.ts';
 import { TaskResourceGuard, PRODUCT_QUEUE_CAPACITY, isSyncCapacityError, type TaskResourceOptions } from './resource-guard.ts';
 import { WorkbenchMemoryCoordinator, memoryVersion, type WorkbenchMemoryTask } from '../workbench/memory';
 import { WorkbenchStore } from '../workbench/store';
@@ -91,6 +93,7 @@ export class ProductTaskRuntime {
   private refreshingRuns: Promise<void> | null = null;
   private executions = new Map<number, { cancel: (reason?:string) => void; done: Promise<unknown>; run: () => ConsoleRun; ownsLockedTransaction: () => boolean; adjust:(constrained:boolean)=>void }>();
   private resources:TaskResourceGuard;
+  private submittingEntityCapture=false;
   private resourceDrain:Promise<void>|null=null;
   private resourceTimer:ReturnType<typeof setInterval>|null=null;
   private idleTimer:ReturnType<typeof setTimeout>|null=null;
@@ -160,6 +163,7 @@ export class ProductTaskRuntime {
       ownsLockedTransaction: id => this.executions.get(id)?.ownsLockedTransaction() === true,
     });
     this.worker.on('unhealthy', info => console.error('[tasks]', info));
+    this.worker.on('job-finished',()=>void this.flushEntityCapture());
     this.worker.register(TASK_NAME, job => withDatabasePriority((job.data.task as ProductTask).type === 'import' ? 2 : 3, () => this.execute(job)));
   }
 
@@ -169,6 +173,7 @@ export class ProductTaskRuntime {
     await this.engine.executeRaw(`UPDATE minion_jobs SET status='paused',lock_token=NULL,lock_until=NULL,updated_at=now(),
       error_text='旧版自动实体识别已停用，已保存结果保留；可明确范围后手动继续。'
       WHERE queue=$1 AND data->'task'->>'type'='dream' AND data->'task'->'input'->>'phase'='capture_entities'
+      AND data->'task'->'input'->>'incrementalIngest' IS DISTINCT FROM 'true'
       AND data->>'trigger' IS DISTINCT FROM 'manual' AND status IN ('waiting','active','waiting-children','delayed')
       AND (status<>'active' OR $2::boolean OR lock_until IS NULL OR lock_until<=now())`, [PRODUCT_TASK_QUEUE,this.engine.kind==='pglite']);
     await this.engine.executeRaw(`UPDATE minion_jobs SET status='waiting',lock_token=NULL,lock_until=NULL,error_text=NULL,updated_at=now()
@@ -206,8 +211,17 @@ export class ProductTaskRuntime {
       console.error('[tasks] worker stopped:', error instanceof Error ? error.message : error);
     });
     if(this.resourceTimer)clearInterval(this.resourceTimer);
-    this.resourceTimer=setInterval(()=>this.checkMemory(),this.resources.rssCheckIntervalMs);
+    this.resourceTimer=setInterval(()=>{this.checkMemory();void this.flushEntityCapture();},this.resources.rssCheckIntervalMs);
     this.resourceTimer.unref();
+    await this.flushEntityCapture();
+  }
+
+  private async flushEntityCapture():Promise<void>{
+    if(this.stopped||this.paused||this.failure||this.submittingEntityCapture||this.executions.size)return;
+    this.submittingEntityCapture=true;
+    try{await withDatabasePriority(3,async()=>enqueueImportedEntityCapture(this.engine,undefined,parseTaskTimeout(await this.engine.getConfig(DREAM_TASK_TIMEOUT_KEY))??DEFAULT_PRODUCT_TASK_TIMEOUT_MS));}
+    catch(error){console.error('[tasks] pending knowledge ingestion:',error);}
+    finally{this.submittingEntityCapture=false;}
   }
 
   private async submit(task: ProductTask, kind: string, idempotencyKey?: string, trigger: 'manual' | 'scheduled' = 'manual', queue = this.queue): Promise<ConsoleRun> {
@@ -240,12 +254,14 @@ export class ProductTaskRuntime {
       `UPDATE minion_jobs SET idempotency_key = NULL WHERE idempotency_key = $1
        AND status IN ('completed', 'dead', 'failed', 'cancelled', 'paused')`, [key],
     );
-    return this.submit({ type: 'import', input: { ...input, directory: file?.isDirectory() ?? false, path: input.path.trim(), sourceId, timeoutMs: input.timeoutMs ?? 6 * 60 * 60_000 } }, 'import_path', key);
+    if(input.timeoutMs!==undefined&&parseTaskTimeout(input.timeoutMs)===null)throw new Error('任务超时必须是有效的正整数毫秒数');
+    const timeoutMs=input.timeoutMs??parseTaskTimeout(await this.engine.getConfig(DREAM_TASK_TIMEOUT_KEY))??DEFAULT_PRODUCT_TASK_TIMEOUT_MS;
+    return this.submit({ type: 'import', input: { ...input, directory: file?.isDirectory() ?? false, path: input.path.trim(), sourceId, timeoutMs } }, 'import_path', key);
   }
 
   async submitDream(input: DreamTaskInput, trigger: 'manual' | 'scheduled' = 'manual'): Promise<ConsoleRun> {
     if (input.timeoutMs !== undefined && parseTaskTimeout(input.timeoutMs) === null) throw new Error('任务超时必须是有效的正整数毫秒数');
-    input = { ...input, timeoutMs: input.timeoutMs ?? parseTaskTimeout(await this.engine.getConfig(DREAM_TASK_TIMEOUT_KEY)) ?? DEFAULT_PRODUCT_TASK_TIMEOUT_MS };
+    input = { ...input, incrementalIngest:true, timeoutMs: input.timeoutMs ?? parseTaskTimeout(await this.engine.getConfig(DREAM_TASK_TIMEOUT_KEY)) ?? DEFAULT_PRODUCT_TASK_TIMEOUT_MS };
     if (input.phase && input.preset) throw new Error('Dream phase and preset are mutually exclusive');
     if (input.phase && input.phase !== 'all' && !(ALL_PHASES as readonly string[]).includes(input.phase)) throw new Error(`Unsupported dream phase: ${input.phase}`);
     if (input.allSources && (input.sourceId || input.preset !== 'quick')) throw new Error('Dream allSources requires quick preset without sourceId');
@@ -398,12 +414,12 @@ export class ProductTaskRuntime {
     await this.fileProjection.recover();
     const run = await this.getRun(id);
     if (!run) return null;
-    if (!['failed', 'cancelled'].includes(run.status) && !((taskUsesFileQueue(run.kind) || run.kind === 'dream_capture_entities') && (run.result as Record<string, unknown> | undefined)?.status === 'partial')) throw new Error('只有失败、中断或已取消的任务可以重新执行');
+    if (!['failed', 'cancelled'].includes(run.status) && !((taskUsesFileQueue(run.kind) || run.kind === 'dream_capture_entities' || run.kind==='import_path') && (run.result as Record<string, unknown> | undefined)?.status === 'partial')) throw new Error('只有失败、中断或已取消的任务可以重新执行');
     const record = await this.queue.getJob(Number(id.slice(5)));
     const task = record!.data.task as ProductTask;
     if (task.type === 'dream') {
       if (task.input.phase === 'capture_entities') record!.data.trigger = 'manual';
-      else if (task.input.checkpoint) retireAutomaticCapture(task.input.checkpoint);
+      else if (task.input.checkpoint && !task.input.incrementalIngest) {retireAutomaticCapture(task.input.checkpoint);task.input.incrementalIngest=true;}
     }
     const resumedId = Number(id.slice(5));
     await this.stoppingSessions.get(resumedId);
@@ -432,7 +448,7 @@ export class ProductTaskRuntime {
     }
     if (task.type !== 'sync-file') {
       await this.reconcileMaintenanceChildren(resumedId);
-      if (task.type === 'import') task.input.resumeCheckpointId = resumedId;
+      if (task.type === 'import') {task.input.resumeCheckpointId = resumedId;if(task.input.knowledgeCheckpoint)resumeMaintenanceCheckpoint(task.input.knowledgeCheckpoint,true,true);}
       if (task.type === 'dream' && task.input.checkpoint) resumeMaintenanceCheckpoint(task.input.checkpoint, true, task.input.phase !== 'capture_entities');
       const progress = (record!.progress ?? {}) as Progress;
       delete progress.result;
@@ -457,7 +473,7 @@ export class ProductTaskRuntime {
     const record = await this.queue.getJob(context.id);
     if (!record?.lock_token) throw new Error('任务执行租约无效');
     const structuredTask = record.data.task as ProductTask;
-    if (structuredTask.type === 'dream' && structuredTask.input.phase === 'capture_entities' && record.data.trigger !== 'manual') {
+    if (structuredTask.type === 'dream' && structuredTask.input.phase === 'capture_entities' && !structuredTask.input.incrementalIngest && record.data.trigger !== 'manual') {
       await this.engine.executeRaw(`UPDATE minion_jobs SET status='paused',lock_token=NULL,lock_until=NULL,updated_at=now(),
         error_text='旧版自动实体识别已停用，已保存结果保留；可明确范围后手动继续。'
         WHERE id=$1 AND status='active' AND lock_token=$2`,[context.id,record.lock_token]);
@@ -638,6 +654,15 @@ export class ProductTaskRuntime {
         const dispatch = async () => {
           if(cancelRequested) throw new Error('任务已取消');
           if (message.method === 'task.syncFileHash') return this.fileQueue.sourceHash(message.args[0] as SyncFileInput);
+          if(message.method==='task.captureRequest'){
+            const slugs=await claimMaintenanceCapture(this.engine,context.id,record.lock_token!,String(message.args[0]),message.args[1] as string[]|undefined);
+            if(slugs&&(structuredTask.type==='dream'||structuredTask.type==='import')){
+              const checkpoint=(structuredTask.type==='import'?structuredTask.input.knowledgeCheckpoint:structuredTask.input.checkpoint)??{phases:{},reports:{}};
+              checkpoint.captureRequests={...checkpoint.captureRequests,[String(message.args[0])]:slugs};
+              if(structuredTask.type==='import')structuredTask.input.knowledgeCheckpoint=checkpoint;else structuredTask.input.checkpoint=checkpoint;
+            }
+            return slugs;
+          }
           if (message.method === 'task.syncFile') {
             const file = message.args[0] as SyncFileInput;
             const result = await this.fileQueue.enqueue(context.id, record.lock_token!, file).catch(async error=>{
@@ -668,8 +693,9 @@ export class ProductTaskRuntime {
             try { return await operation; } finally { gitOperations.delete(operation); }
           }
           if (message.method === 'task.maintenanceCheckpoint') {
-            if (structuredTask.type !== 'dream') throw new Error('无效的维护检查点');
-            structuredTask.input.checkpoint = message.args[0] as MaintenanceCheckpoint;
+            if (structuredTask.type !== 'dream' && structuredTask.type !== 'import') throw new Error('无效的维护检查点');
+            if(structuredTask.type==='import')structuredTask.input.knowledgeCheckpoint=message.args[0] as MaintenanceCheckpoint;
+            else structuredTask.input.checkpoint = message.args[0] as MaintenanceCheckpoint;
             const rows = await this.engine.executeRaw(`UPDATE minion_jobs SET data = data || ($3::jsonb - 'relations' - 'gitFiles' - 'gitResults'), updated_at = now() WHERE id = $1 AND status = 'active' AND lock_token = $2 RETURNING id`, [context.id, record.lock_token, record.data]);
             if (!rows.length) throw new Error('维护任务已停止或租约失效');
             return null;

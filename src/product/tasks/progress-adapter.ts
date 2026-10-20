@@ -273,7 +273,7 @@ export function finishTaskProgress(view: TaskProductProgress, status: string, re
       next.percent=Math.floor(next.processed/next.total*100);
     }
     next.stage = remaining>0 || data.status === 'partial' || next.steps.some(step => step.status === 'failed') ? '部分完成，请查看未完成步骤'
-      : next.name === '导入资料' ? '导入完成' : `${next.name}完成`;
+      : next.name === '导入资料' ? data.knowledgeStatus==='disabled'?'原文已入库，自动实体整理未启用':data.knowledgeStatus==='model_unavailable'?'原文已入库，实体模型未配置':'导入完成' : `${next.name}完成`;
     for (const step of next.steps) {
       if (step.status === 'running') step.status = 'completed';
       else if (step.status === 'pending' && !step.phases.includes('capture_entities')) step.status = 'skipped';

@@ -1,4 +1,5 @@
 import { readFileSync, statSync, lstatSync } from 'fs';
+import { requestImportedEntityCapture } from './pmbrain-adapters/entity-capture-request.ts';
 import { basename, extname } from 'path';
 import { createHash } from 'crypto';
 import { marked } from 'marked';
@@ -1033,6 +1034,7 @@ export async function importFromContent(
         );
       } catch { /* same reason — silent skip */ }
     }
+    if(!batchedBody)await requestImportedEntityCapture(tx,sourceId??'default',{slug,type:pageWrite.type,compiled_truth:pageWrite.compiled_truth??'',frontmatter:pageWrite.frontmatter??{}});
     });
     if(largeProgress&&!batchedBody){largeProgress={...largeProgress,bodyWritten:chunks.length,bodyCommitted:true,bodyBatchesCompleted:1};logLargeDocumentProgress(slug,largeProgress);}
     if (batchedBody) {
@@ -1064,6 +1066,7 @@ export async function importFromContent(
         await guardBody(tx);
         await tx.executeRaw('DELETE FROM content_chunks WHERE page_id=(SELECT id FROM pages WHERE slug=$1 AND source_id=$2) AND chunk_index != ALL($3::int[])',[slug,sourceId??'default',chunks.map(chunk=>chunk.chunk_index)]);
         await tx.putPage(slug,pageWrite,txOpts);
+        await requestImportedEntityCapture(tx,sourceId??'default',{slug,type:pageWrite.type,compiled_truth:pageWrite.compiled_truth??'',frontmatter:pageWrite.frontmatter??{}});
       });
     }
   } catch (error) {
@@ -1636,6 +1639,7 @@ export async function withImportTransaction(
       }
     }
     if (spec.after) await spec.after(tx);
+    await requestImportedEntityCapture(tx,spec.sourceId??'default',{slug:spec.slug,type:spec.page.type,compiled_truth:spec.page.compiled_truth??'',frontmatter:spec.page.frontmatter??{}});
   });
 }
 

@@ -71,6 +71,15 @@ export function ProductApp() {
   const [filter, setFilter] = useState('');
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem(NAV_COLLAPSED_KEY) === '1');
   const [maintenanceOpen, setMaintenanceOpen] = useState(false);
+  const [restarting,setRestarting]=useState(false);
+  const [restartError,setRestartError]=useState('');
+  const restartService=async()=>{
+    if(!desktop)return;
+    setRestarting(true);setRestartError('');
+    try{await desktop.retry();setService(await desktop.getState());}
+    catch(error){setRestartError(error instanceof Error?error.message:String(error));}
+    finally{setRestarting(false);}
+  };
   const [healthOpen, setHealthOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const readSetup = async () => {
@@ -210,7 +219,7 @@ export function ProductApp() {
     <main className={`product-main ${isSettings ? 'is-settings' : ''}`}>
       {stateError && <div className="product-error" role="alert">{stateError}</div>}
       {setupError && <div className="product-error" role="alert">{setupError}<button type="button" className="pm-ghost" disabled={setupLoading} onClick={() => void readSetup()}>重试读取配置</button></div>}
-      <MaintenanceDialog view={maintenance} open={maintenanceOpen} onClose={() => setMaintenanceOpen(false)} onRecover={() => { setMaintenanceOpen(false); navigate(service?.phase === 'failed' ? 'settings-recovery' : 'settings-updates'); }} />
+      <MaintenanceDialog view={maintenance} open={maintenanceOpen} onClose={() => setMaintenanceOpen(false)} onRecover={() => { setMaintenanceOpen(false); navigate(service?.phase === 'failed' ? 'settings-recovery' : 'settings-updates'); }} onRestart={desktop&&service?.phase==='failed'&&service.category==='transient'?()=>void restartService():undefined} restarting={restarting} restartError={restartError} />
       {page !== 'home' && maintenance.visible && <div className="maintenance-banner"><StatusChip kind="busy" label={maintenance.title} onClick={() => setMaintenanceOpen(true)} /></div>}
       <section hidden={!isSettings} className="product-settings">
         <header className="settings-topbar"><button onClick={leaveSettings}><ArrowLeft size={17} />返回</button></header>

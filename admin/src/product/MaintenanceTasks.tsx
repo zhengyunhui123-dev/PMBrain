@@ -7,7 +7,7 @@ import { useProductTasks } from './TaskActivity';
 import { TaskProgressCard, taskLink, taskStatus, taskStopping, formatFileBytes } from './TaskProgress';
 import './maintenance-tasks.css';
 import type { SyncFileDetails } from '../../../shared/task-progress';
-import { taskHasRemaining, taskPercent, taskRoundCompleted, taskRoundListSummary } from './task-presentation';
+import { taskCanRetry, taskHasRemaining, taskPercent, taskRoundCompleted, taskRoundListSummary } from './task-presentation';
 import { dialogBackdropClick } from '../lib/dialog-backdrop';
 
 const activeTask = (run: ConsoleRun) => run.status === 'running' || run.status === 'queued';
@@ -67,7 +67,7 @@ function MaintenanceTaskDetail({ run, onClose, onChange }: { run: ConsoleRun; on
       {!run.product && <p className="maintenance-muted">此历史任务没有保存步骤进度，可在任务中心查看结果。</p>}
       {error && <p className="product-error" role="alert">{error}</p>}
     </div>
-    <footer>{activeTask(run) && <button type="button" disabled={busy || taskStopping(run)} onClick={() => void act(false)}><CircleStop size={16} />{busy || taskStopping(run) ? '正在停止…' : '停止任务'}</button>}{(['failed', 'cancelled'].includes(run.status) || (taskUsesFileQueue(run.kind) && taskRoundCompleted(run) && taskHasRemaining(run))) && run.id.startsWith('task-') && <button type="button" disabled={busy} onClick={() => void act(true)}>{busy ? '正在提交…' : taskUsesFileQueue(run.kind) ? '继续未完成任务' : '重新执行'}</button>}<button type="button" className="maintenance-primary" onClick={() => taskLink(run)}><ArrowUpRight size={16} />查看任务</button></footer>
+    <footer>{activeTask(run) && <button type="button" disabled={busy || taskStopping(run)} onClick={() => void act(false)}><CircleStop size={16} />{busy || taskStopping(run) ? '正在停止…' : '停止任务'}</button>}{taskCanRetry(run) && <button type="button" disabled={busy} onClick={() => void act(true)}>{busy ? '正在提交…' : taskUsesFileQueue(run.kind)||run.status==='completed' ? '继续未完成任务' : '重新执行'}</button>}<button type="button" className="maintenance-primary" onClick={() => taskLink(run)}><ArrowUpRight size={16} />查看任务</button></footer>
   </dialog>;
 }
 
@@ -117,7 +117,7 @@ export function MaintenanceTasksPage() {
     setLocalRuns(current => [...current.filter(row => row.id !== run.id), run]);
     if (run.id !== selectedId) select(run);
   };
-  const visible = runs.filter(run => filter === 'all' || (filter === 'active' ? activeTask(run) : filter === 'unfinished' ? ['failed', 'cancelled'].includes(run.status) || (taskRoundCompleted(run) && taskHasRemaining(run)) : run.status === filter));
+  const visible = runs.filter(run => filter === 'all' || (filter === 'active' ? activeTask(run) : filter === 'unfinished' ? ['failed', 'cancelled'].includes(run.status) || taskCanRetry(run) || (taskRoundCompleted(run) && taskHasRemaining(run)) : run.status === filter));
   return <div className="pm-page maintenance-tasks-page">
     <header className="maintenance-page-head"><div><h1>知识整理</h1><p>查看整理任务、进度和结果。</p></div><div className="maintenance-launch-actions"><button type="button" disabled={Boolean(starting)} onClick={() => void start('quick')}>{starting === 'quick' ? <LoaderCircle size={16} /> : <PenLine size={16} />}快速维护</button><button type="button" className="maintenance-primary" disabled={Boolean(starting)} onClick={() => void start('full')}>{starting === 'full' ? <LoaderCircle size={16} /> : <Sparkles size={16} />}AI 深度整理</button></div></header>
     <div className="maintenance-automation"><span className={`maintenance-dot ${schedule?.enabled ? 'enabled' : ''}`} /><span>{schedule ? schedule.enabled ? `自动整理已开启 · 每天 ${schedule.time}（${schedule.timeZone}）` : '自动整理未开启' : scheduleError || '正在读取自动整理设置…'}</span><button type="button" onClick={() => { window.location.hash = 'settings-dream'; }}>整理设置</button></div>

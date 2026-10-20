@@ -207,6 +207,16 @@ function DreamSettings() {
     }
   };
 
+  const saveEntityCapture = async (entityCaptureEnabled:boolean) => {
+    setSaving(true);setError('');setMessage('');
+    try {
+      const saved=await api.saveDreamSettings({...settings,entityCaptureEnabled});
+      setSettings(saved);
+      setMessage(entityCaptureEnabled?'已开启新增资料的实体与关联整理':'已关闭自动实体整理，原文和已有成果保留');
+    } catch(nextError){setError(nextError instanceof Error?nextError.message:String(nextError));}
+    finally{setSaving(false);}
+  };
+
   const outputDirDirty = settings.outputDir.trim() !== savedOutputDir.trim() || timeoutMinutes !== savedTimeoutMinutes;
   const outputIsAbsolute = /^[A-Za-z]:[\\/]/.test(settings.outputDir)
     || /^\\\\/.test(settings.outputDir)
@@ -230,12 +240,16 @@ function DreamSettings() {
         </div>
       </div>
       <div className="dream-settings-grid">
+        <label className="dream-dual-write-setting" htmlFor="dream-entity-capture">
+          <span><b>自动整理实体与关联</b><small>默认开启。导入或同步新增、变更资料后，使用普通模型更新人物、组织、项目、概念及来源关联；未变化资料复用成果。需要先在模型设置中配置普通模型。关闭后仍保存原文，待处理资料可在重新开启后由维护继续。</small></span>
+          <input id="dream-entity-capture" type="checkbox" checked={settings.entityCaptureEnabled!==false} disabled={loading||saving} onChange={event=>void saveEntityCapture(event.target.checked)}/>
+        </label>
         <div className="dream-output-setting">
           <label htmlFor="dream-timeout-minutes">整理任务单次执行上限（分钟）</label>
           <input id="dream-timeout-minutes" type="number" min="1" value={timeoutMinutes}
             onChange={event => setTimeoutMinutes(event.target.value)} disabled={loading || saving}
             placeholder={settings.effectiveTimeoutMs ? String(settings.effectiveTimeoutMs / 60000) : ''} />
-          <p className="pm-hint">当前生效上限：{settings.effectiveTimeoutMs ? settings.effectiveTimeoutMs / 60000 : '—'} 分钟；留空并保存可恢复默认。用于新建快速维护和深度整理的每次后台执行，继续旧任务保留原上限。排队、等待资料批次和手动继续的时间不累计扣减。这不是执行间隔，也不是整轮完成时间保证。</p>
+          <p className="pm-hint">当前生效上限：{settings.effectiveTimeoutMs ? settings.effectiveTimeoutMs / 60000 : '—'} 分钟；留空并保存可恢复默认。用于新建导入、快速维护和深度整理的每次后台执行，继续旧任务保留原上限。排队、等待资料批次和手动继续的时间不累计扣减。这不是执行间隔，也不是整轮完成时间保证。</p>
         </div>
         <div className="dream-output-setting">
           <label htmlFor="dream-output-dir">Dream 输出目录（相对目录或完整路径）</label>
@@ -451,8 +465,8 @@ function EntityCaptureBudgetSettings() {
       <div className="settings-panel-title">
         <span className="settings-panel-icon"><Sparkles /></span>
         <div>
-          <h2>显式实体摄入费用</h2>
-          <p>仅用于明确指定资料的实体摄入及旧任务手动继续。普通导入、快速维护和默认 Dream 不自动执行此阶段。达到费用上限后保留已完成结果，本地 Ollama 不计入金额。</p>
+          <h2>实体与关联整理费用</h2>
+          <p>用于导入、快速维护和深度整理中的增量实体摄入。达到上限保留已完成结果，任务显示剩余资料；调高费用上限后可继续原任务。本地 Ollama 不计入金额。</p>
         </div>
       </div>
       <div className="dream-schedule-row">
@@ -576,7 +590,7 @@ export function SettingsPage({
           <div className="settings-section-stack">
             <DreamSettings />
             <DreamScheduleSettings />
-            <details><summary>高级：显式实体摄入费用</summary><EntityCaptureBudgetSettings /></details>
+            <details><summary>高级：实体整理费用上限</summary><EntityCaptureBudgetSettings /></details>
           </div>
         )}
       </div>

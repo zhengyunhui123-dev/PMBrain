@@ -29,6 +29,7 @@ let runtime: ProductTaskRuntime;
 let root: string;
 const isolatedKeys = ['GBRAIN_HOME', 'PMBRAIN_HOME', 'DATABASE_URL', 'PMBRAIN_DATABASE_URL', 'GBRAIN_DATABASE_URL', 'PMBRAIN_EMBEDDING_MODEL', 'GBRAIN_EMBEDDING_MODEL', 'PMBRAIN_EMBEDDING_DIMENSIONS', 'GBRAIN_EMBEDDING_DIMENSIONS'];
 const taskDatabaseUrl = process.env.PMBRAIN_TASK_TEST_DATABASE_URL;
+const embeddingDimensions=taskDatabaseUrl?1536:1024;
 const originalEnv = Object.fromEntries(isolatedKeys.map(key => [key, process.env[key]]));
 let slowRequests = 0;
 let releaseModel: (() => void) | null = null;
@@ -37,7 +38,7 @@ let modelServer: ReturnType<typeof Bun.serve>;
 
 function configureModels(enabled = true, model = 'task-test') {
   writeFileSync(configPath(), JSON.stringify({
-    engine: taskDatabaseUrl ? 'postgres' : 'pglite', embedding_model: `custom-openai:${model}`, embedding_dimensions: 1024,
+    engine: taskDatabaseUrl ? 'postgres' : 'pglite', embedding_model: `custom-openai:${model}`, embedding_dimensions: embeddingDimensions,
     custom_openai_api_key: 'task-test-only', provider_base_urls: { 'custom-openai': modelServer.url.origin + '/v1' },
     model_usage: { embedding_enabled: enabled, generative_enabled: false },
     desktop: { knowledge_directory: root },
@@ -75,10 +76,10 @@ beforeAll(async () => {
       const finish = () => { releases.delete(finish); resolve(); };
       releases.add(finish); releaseModel = finish;
     });
-    return Response.json({ object: 'list', data: body.input.map((_, index) => ({ object: 'embedding', index, embedding: Array.from({ length: 1024 }, (_, i) => i === 0 ? 1 : 0) })), model: 'task-test', usage: { prompt_tokens: 2, total_tokens: 2 } });
+    return Response.json({ object: 'list', data: body.input.map((_, index) => ({ object: 'embedding', index, embedding: Array.from({ length: embeddingDimensions }, (_, i) => i === 0 ? 1 : 0) })), model: 'task-test', usage: { prompt_tokens: 2, total_tokens: 2 } });
   } });
   configureModels(false);
-  configureGateway({ embedding_model: 'custom-openai:task-test', embedding_dimensions: 1024, env: {} });
+  configureGateway({ embedding_model: 'custom-openai:task-test', embedding_dimensions: embeddingDimensions, env: {} });
   if (taskDatabaseUrl) assertSafeE2eDatabaseUrl(taskDatabaseUrl);
   engine = taskDatabaseUrl ? new PostgresEngine() : new WorkerPgliteEngine() as unknown as BrainEngine;
   await engine.connect(taskDatabaseUrl ? { database_url: taskDatabaseUrl } : {});
@@ -261,7 +262,8 @@ describe('软件后台任务共用 owner 数据库', () => {
     if (run.status !== 'completed') throw new Error(JSON.stringify(run));
     expect(run.status).toBe('completed');
     expect(run.result).toMatchObject({ imported: 1, errors: 0 });
-    expect(run.product).toMatchObject({ name: '导入资料', percent: 100, stage: '导入完成' });
+    expect(run.product).toMatchObject({ name: '导入资料', percent: 100, stage: '原文已入库，实体模型未配置' });
+    expect(run.result).toMatchObject({knowledgeStatus:'model_unavailable'});
     expect(run.product?.material?.page).toMatchObject({ slug: 'background', type: 'note' });
     expect(readFileSync(path, 'utf8')).toBe(content);
     expect(await engine.getPage('background', { sourceId: 'default' })).not.toBeNull();

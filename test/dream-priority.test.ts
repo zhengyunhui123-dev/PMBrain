@@ -4,7 +4,7 @@ import { resolveDreamPresetPhases } from '../src/commands/dream.ts';
 
 test('默认和完整整理暂停候选观点，保留显式高级入口', () => {
   for (const phases of [DEFAULT_PHASES, resolveCyclePhases(undefined, undefined), resolveDreamPresetPhases('full')]) {
-    expect(phases).toContain('capture_entities');
+    expect(phases).not.toContain('capture_entities');
     expect(phases).toContain('extract');
     expect(phases).toContain('embed');
     expect(phases).not.toContain('propose_takes');

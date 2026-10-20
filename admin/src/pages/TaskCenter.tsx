@@ -7,7 +7,7 @@ import { describeRunRecovery } from '../lib/run-recovery';
 import { useProductTasks } from '../product/TaskActivity';
 import { TaskProgressCard, taskStatus, taskStopping } from '../product/TaskProgress';
 import { taskName, taskUsesFileQueue } from '../../../shared/task-progress';
-import { taskRoundCompleted, taskRoundListSummary, taskPhaseSummary, taskPercent } from '../product/task-presentation';
+import { taskCanRetry, taskRoundCompleted, taskRoundListSummary, taskPhaseSummary, taskPercent } from '../product/task-presentation';
 
 type TaskFilter = 'all' | 'running' | 'queued' | 'completed' | 'failed' | 'cancelled';
 const DreamRunContent=React.lazy(()=>import('./Dream').then(module=>({default:module.DreamRunContent})));
@@ -153,7 +153,7 @@ function TaskDetailDrawer({ run, onClose, onCancel, onRetry, busy }: { run: Cons
     <h2>{run.product?.name ?? taskName(run.kind)}</h2><p className="pm-hint">{formatDate(run.startedAt, '-')} · {taskTriggerLabel(run)}</p>
     <TaskProgressCard run={current} link={false} />
     {dream&&(detailError?<p role="alert">{detailError}</p>:detail?<React.Suspense fallback={<p role="status">正在读取整理内容…</p>}><DreamRunContent run={current} expanded /></React.Suspense>:<p role="status">正在读取整理内容…</p>)}
-    <div className="task-run-card-actions">{isActive(run) && <button type="button" className="pm-ghost" disabled={busy || taskStopping(run)} onClick={onCancel}>{taskStopping(run) ? '正在停止…' : '停止任务'}</button>}{['failed', 'cancelled'].includes(run.status) && run.id.startsWith('task-') && <button type="button" className="pm-ghost" disabled={busy} onClick={onRetry}>{taskUsesFileQueue(run.kind)?'继续未完成任务':'重新执行'}</button>}</div>
+    <div className="task-run-card-actions">{isActive(run) && <button type="button" className="pm-ghost" disabled={busy || taskStopping(run)} onClick={onCancel}>{taskStopping(run) ? '正在停止…' : '停止任务'}</button>}{taskCanRetry(run) && <button type="button" className="pm-ghost" disabled={busy} onClick={onRetry}>{taskUsesFileQueue(run.kind)||run.status==='completed'?'继续未完成任务':'重新执行'}</button>}</div>
     <TaskTechnicalLogs key={run.id} run={run} />
   </aside></>;
 }
@@ -345,7 +345,7 @@ export function TaskCenterPage() {
           <td>{taskRoundCompleted(run)?taskRoundListSummary(run):run.product?.errorReason ?? (isActive(run) ? run.product?.stage ?? '等待执行' : taskResult(run) ?? run.product?.stage ?? statusLabel(run))}</td>
           <td>{taskPhaseSummary(run).duration}</td>
           <td>{taskPhaseSummary(run).remaining}</td>
-          <td><div className="task-table-actions"><button type="button" className="pm-ghost" onClick={() => { setSelectedRun(run); window.history.replaceState(null, '', `#tasks?run=${encodeURIComponent(run.id)}`); }}>查看详情</button>{isActive(run) && <button type="button" className="pm-ghost" disabled={cancelling === run.id} onClick={() => void cancel(run)}>停止</button>}{['failed', 'cancelled'].includes(run.status) && run.id.startsWith('task-') && <button type="button" className="pm-ghost" disabled={retrying === run.id} onClick={() => void retry(run)}>重试</button>}</div></td>
+          <td><div className="task-table-actions"><button type="button" className="pm-ghost" onClick={() => { setSelectedRun(run); window.history.replaceState(null, '', `#tasks?run=${encodeURIComponent(run.id)}`); }}>查看详情</button>{isActive(run) && <button type="button" className="pm-ghost" disabled={cancelling === run.id} onClick={() => void cancel(run)}>停止</button>}{taskCanRetry(run) && <button type="button" className="pm-ghost" disabled={retrying === run.id} onClick={() => void retry(run)}>重试</button>}</div></td>
         </tr>)}</tbody></table>{historyRows.length === 0 && <div className="task-empty">暂无任务记录</div>}</div>
         <p className="task-retention-note">关闭页面不影响后台任务。最近的结果已保存，重启后仍可查看。</p>
       </section>

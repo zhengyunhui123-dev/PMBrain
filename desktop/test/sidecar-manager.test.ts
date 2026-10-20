@@ -2,6 +2,13 @@ import { describe, expect, test } from 'bun:test';
 import { EventEmitter } from 'node:events';
 import { createServer } from 'node:http';
 import { SidecarManager, classifySidecarStartupError } from '../src/main/sidecar-manager.js';
+
+test('打包脚本栈不等于运行时缺失，超时可恢复而数据库错误不自动重启',()=>{
+  expect(classifySidecarStartupError('request timeout\n at D:/PMBrain/pmbrain-sidecar.js:123:9')).toMatchObject({category:'transient',retryable:true});
+  expect(classifySidecarStartupError('Worker has been terminated\n at postMessage (D:/PMBrain/pmbrain-sidecar.js:123:9)')).toMatchObject({category:'transient',retryable:true});
+  expect(classifySidecarStartupError("Cannot find module 'D:/PMBrain/pmbrain-sidecar.js'")).toMatchObject({category:'runtime_missing',retryable:false});
+  expect(classifySidecarStartupError('DatabaseAlreadyOwnedError\n at D:/PMBrain/pmbrain-sidecar.js:123:9')).toMatchObject({category:'database_owned',retryable:false});
+});
 import { memoryPressure } from '../../shared/memory-budget.js';
 
 const logger = { write() {}, close() {}, directory: '', filePath: '' } as any;
