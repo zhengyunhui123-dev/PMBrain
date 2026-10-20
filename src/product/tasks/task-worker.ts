@@ -283,10 +283,16 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
   }
   const brainDir = await resolveBrainDir(engine, null, sourceId);
   if (input.preset === 'quick') return runQuickMaintenance(engine, { ...common, brainDir, ...await phaseOptions(sourceId ?? 'default') });
+  const knowledgeEnabled=input.preset==='full'&&await engine.getConfig('dream.knowledge.enabled')==='true';
+  const knowledgeSince=knowledgeEnabled?await engine.getConfig('dream.knowledge.since')??undefined:undefined;
+  const currentPack=loadConfig()?.schema_pack??'gbrain-base';
+  const knowledgePack=knowledgeEnabled?(currentPack==='gbrain-base-v2'?'pmbrain-knowledge':currentPack==='gbrain-base'?'gbrain-creator':undefined):undefined;
   const report=await runCycle(engine, {
     ...resolveDreamRelationOptions(input.preset, input.phase),
     ...common, brainDir,
     ...await phaseOptions(sourceId ?? 'default'),
+    schemaPack:knowledgePack,
+    knowledgeSince,
     forcePackPhases: input.preset === 'meeting' ? ['extract_atoms'] : undefined,
   });
   if(input.phase==='capture_entities'&&input.incrementalIngest&&!progressPrefix.length&&!input.dryRun)await embedCapturedKnowledge(engine,report,sourceId??'default');

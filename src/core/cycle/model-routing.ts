@@ -2,6 +2,7 @@ import type { BrainEngine } from '../engine.ts';
 import {
   isAnthropicProvider,
   resolveModelDetailed,
+  readModelConfigValue,
   type ModelTier,
   type ResolvedModel,
 } from '../model-config.ts';
@@ -57,6 +58,10 @@ export async function resolveDreamModel(
   opts: { phase: DreamModelPhase; cliFlag?: string },
 ): Promise<ResolvedModel> {
   const spec = DREAM_MODEL_SPECS[opts.phase];
+  if(!opts.cliFlag&&['synthesize','synthesize_verdict','patterns','extract_atoms','synthesize_concepts'].includes(opts.phase)&&await engine.getConfig('dream.knowledge.enabled')==='true'&&await engine.getConfig('dream.knowledge.use_ordinary_model')!=='false'){
+    const model=await readModelConfigValue(engine,'models.default')??await readModelConfigValue(engine,'chat_model');
+    if(model){const resolved=await resolveModelDetailed(engine,{cliFlag:model,tier:spec.tier,fallback:spec.fallback});return {...resolved,source:'dream.knowledge.use_ordinary_model'};}
+  }
   return resolveModelDetailed(engine, {
     cliFlag: opts.cliFlag,
     configKey: `models.dream.${opts.phase}`,

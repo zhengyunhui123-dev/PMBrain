@@ -112,12 +112,12 @@ async function seedPage(opts: {
 }
 
 describe('v0.41.2.1: discoverExtractablePages SQL contract', () => {
-  test('filters by all 6 extractable types', async () => {
+  test('retains legacy types and includes pack-declared notes', async () => {
     for (const type of ['meeting', 'source', 'article', 'video', 'book', 'original']) {
       await seedPage({ slug: `${type}/x`, type });
     }
-    // Add a non-extractable page that should NOT appear
-    await seedPage({ slug: 'notes/skip-me', type: 'note' });
+    await seedPage({ slug: 'notes/new-note', type: 'note' });
+    await seedPage({ slug: 'concepts/skip-me', type: 'concept' });
 
     const discovered = await discoverExtractablePages(engine, 'default');
     const slugs = discovered.map((d) => d.slug).sort();
@@ -125,6 +125,7 @@ describe('v0.41.2.1: discoverExtractablePages SQL contract', () => {
       'article/x',
       'book/x',
       'meeting/x',
+      'notes/new-note',
       'original/x',
       'source/x',
       'video/x',

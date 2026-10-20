@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "reviewed_at": "2026-10-20",
-  "product_version": "1.5.5",
+  "product_version": "1.5.6",
   "subsystem": "entity-relations",
   "status": "release-blocked-pending-package-acceptance",
   "upstream": {
@@ -22,7 +22,8 @@
     "Authorized native Workbench memory adapter; optional transient classification, source-bound exact dedup and DB-only fact write preserving original materials",
     "Authorized world-only Dream consolidation; private Facts remain local and are not promoted to public entity takes",
     "Authorized native memory lifecycle: source-bound live projection guards, refresh, TTL-safe takes and verified contribution retirement",
-    "Approved incremental ingest contract wiring within original import/maintenance tasks; native DEFAULT_PHASES and disabled take phases remain unchanged"
+    "Approved incremental ingest contract wiring within original import/maintenance tasks; native DEFAULT_PHASES and disabled take phases remain unchanged",
+    "Approved source discovery, native schema inheritance, atom/concept evidence receipts and Chinese product routing; opinion phases remain disabled"
   ],
   "integrations": [
     "src/core/pglite-engine.ts",
@@ -696,7 +697,7 @@
       "path": "src/core/cycle/extract-atoms.ts",
       "upstream_path": "src/core/cycle/extract-atoms.ts",
       "mode": "adapted",
-      "sha256": "050256b42b7fb49452be6606cd0f4f7996a8b0c919de4d02d16a39e74f73d047",
+      "sha256": "13e3809a3986a41fb3862932abd5eeef033f89d1d5aaaebb28bcee37954832eb",
       "upstream_sha256": "d0f3a747b615808b92be26486b7842e7cbc509724f273484d25de78a4c85127a"
     },
     {
@@ -740,6 +741,48 @@
       "mode": "adapted",
       "sha256": "8455eed5ffd94c79048cda6302edbbf54b127a81aae3b3ff55a62cab701ed560",
       "upstream_sha256": "808abf46b9effbcfe4927888686ce8cb91864aef077ef2f91214dbe93cc15f71"
+    },
+    {
+      "path": "src/core/cycle/synthesize.ts",
+      "upstream_path": "src/core/cycle/synthesize.ts",
+      "mode": "adapted",
+      "sha256": "16fe50b3d2217438b506dc3c391e384946d3a59dbcc1590675fd3abec679ef27",
+      "upstream_sha256": "6ec1e0b7e59714e5f2fe078b1956b20218486c89fdccf9982e8b129ba2c03fda"
+    },
+    {
+      "path": "src/core/cycle/synthesize-concepts.ts",
+      "upstream_path": "src/core/cycle/synthesize-concepts.ts",
+      "mode": "adapted",
+      "sha256": "147f80a3f2599074d5b4c39db11cf0ce4c8fa8e03d39008983cb15ea907a17d4",
+      "upstream_sha256": "7146c5c44544059ca135f9df65f39bd1af480eff87c401b4845d0f9fe6df621e"
+    },
+    {
+      "path": "src/core/cycle/transcript-discovery.ts",
+      "upstream_path": "src/core/cycle/transcript-discovery.ts",
+      "mode": "adapted",
+      "sha256": "eb3692b74c928fd400fd5b271b1263841cf0e04be8597d8a0fe648bd0272c744",
+      "upstream_sha256": "debfbe0ef26ab625c5671e0145083361e436867bc236cb7784f70bb13c206f11"
+    },
+    {
+      "path": "src/core/schema-pack/merge.ts",
+      "upstream_path": "src/core/schema-pack/merge.ts",
+      "mode": "adapted",
+      "sha256": "4d7dd32bc52a2f12a7501786ad65aa5838202ecc7671b4c70bdff74cec34595d",
+      "upstream_sha256": "41e381c539b3fcd59ba6ed5190f036995e3f5a407fae1423de1f6bce78eceeb7"
+    },
+    {
+      "path": "src/core/schema-pack/registry.ts",
+      "upstream_path": "src/core/schema-pack/registry.ts",
+      "mode": "adapted",
+      "sha256": "51ddbeb8609a776587a4c0dc4e72eb6b802428d3d3fbe30766666914ffbcb784",
+      "upstream_sha256": "b10bb9b94c50b4f8decd06676671185d333e22db0e62cbe5212f6e7afb665ecd"
+    },
+    {
+      "path": "src/core/cycle/patterns.ts",
+      "upstream_path": "src/core/cycle/patterns.ts",
+      "mode": "adapted",
+      "sha256": "245128be9208dceae4ec84e5d8a7032db8827824e30f383ae0c6129926be976a",
+      "upstream_sha256": "3d8808d2795e11354aeec3a3e24d889010c481c2e1e2d557a661730acbee9a0b"
     }
   ],
   "migration_namespace": {

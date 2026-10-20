@@ -19,6 +19,9 @@
 //   5. Write concept-typed pages.
 
 import type { BrainEngine } from '../engine.ts';
+import { createHash } from 'node:crypto';
+import { readPhaseBudget } from './phase-budget.ts';
+import { BudgetTracker, BudgetExhausted, loadPricingOverrides } from '../budget/budget-tracker.ts';
 import type { PhaseResult } from '../cycle.ts';
 import type { ProgressReporter } from '../progress.ts';
 import { writeReceipt } from '../extract/receipt-writer.ts';
@@ -49,6 +52,8 @@ export interface SynthesizeConceptsOpts {
   progress?: ProgressReporter;
   /** Cooperative stop from the owning Dream job. */
   signal?: AbortSignal;
+  deferEmbedding?:boolean;
+  since?:string;
   /** Test seam: alternative chat function. */
   _chat?: typeof gatewayChat;
   /** Test seam: skip DB query; cluster these atoms directly. */
@@ -67,7 +72,7 @@ const SYNTH_PROMPT = `You write a 1-paragraph executive summary of a concept
 based on multiple atom-shaped insights that reference it.
 
 Output ONLY the summary paragraph (3-5 sentences). No headers, no JSON,
-no preamble. Write in plain English, present-tense voice. Synthesize what
+no preamble. Use the language of the source evidence. Synthesize what
 the atoms collectively SAY about the concept; don't enumerate the atoms.`;
 
 export async function runPhaseSynthesizeConcepts(
@@ -78,6 +83,8 @@ export async function runPhaseSynthesizeConcepts(
   const chat = opts._chat ?? gatewayChat;
   const resolvedModel = await resolveDreamModel(engine, { phase: 'synthesize_concepts' });
   const modelDetails = dreamModelDetails(resolvedModel, 'single_chat');
+  const evidenceSnapshots=new Map<string,string>();
+  const touchedConcepts=new Set<string>();
 
   // 1. Get atom pages (test seam OR DB query)
   let atoms = opts._atoms ?? [];
@@ -89,15 +96,28 @@ export async function runPhaseSynthesizeConcepts(
         title: string;
         compiled_truth: string;
         frontmatter: { concepts?: string[]; imported_from?: string };
+        id:number;
+        knowledge_revision:string;
+        updated_at:string|Date;
       }>(
-        `SELECT slug, source_id, title, compiled_truth, frontmatter
+        `SELECT id, knowledge_revision, updated_at, slug, source_id, title, compiled_truth, frontmatter
            FROM pages
           WHERE type = 'atom'
             AND deleted_at IS NULL
             AND (frontmatter->>'imported_from') IS NULL
+            AND COALESCE(frontmatter->>'visibility','world')<>'private' AND COALESCE(frontmatter->>'private','false')<>'true'
+            AND EXISTS (SELECT 1 FROM sources s WHERE s.id=pages.source_id AND s.archived=false)
+            AND (frontmatter->>'source_slug' IS NULL OR EXISTS (
+              SELECT 1 FROM pages origin WHERE origin.source_id=pages.source_id AND origin.slug=pages.frontmatter->>'source_slug'
+                AND origin.deleted_at IS NULL AND COALESCE(origin.frontmatter->>'visibility','world')<>'private'
+                AND COALESCE(origin.frontmatter->>'private','false')<>'true'
+                AND (pages.frontmatter->>'source_hash' IS NULL OR substring(origin.content_hash from 1 for 16)=pages.frontmatter->>'source_hash')
+            ))
             AND ($1::text IS NULL OR source_id = $1)`,
         [opts.sourceId ?? null],
       );
+      for(const row of rows)evidenceSnapshots.set(`${row.source_id}:${row.slug}`,JSON.stringify([row.id,row.knowledge_revision,row.title,row.compiled_truth,row.frontmatter]));
+      for(const row of rows)if(!opts.since||new Date(row.updated_at).getTime()>=Date.parse(opts.since))for(const concept of Array.isArray(row.frontmatter.concepts)?row.frontmatter.concepts:[])touchedConcepts.add(concept);
       atoms = rows
         .filter((r) => Array.isArray(r.frontmatter?.concepts) && r.frontmatter.concepts.length > 0)
         .map((r) => ({
@@ -107,8 +127,8 @@ export async function runPhaseSynthesizeConcepts(
           body: r.compiled_truth,
           concept_refs: r.frontmatter!.concepts!,
         }));
-    } catch {
-      // No atoms table or query failed — phase no-ops cleanly.
+    } catch(error) {
+      throw error;
     }
   }
 
@@ -141,6 +161,7 @@ export async function runPhaseSynthesizeConcepts(
   // 3. Filter to count ≥2, assign tier
   const atomGroups: AtomGroup[] = [];
   for (const [conceptSlug, data] of groups) {
+    if(opts.since&&opts._atoms===undefined&&!touchedConcepts.has(conceptSlug))continue;
     const count = data.titles.length;
     if (count < TIER_T3_MIN) continue;
     const tier: AtomGroup['tier'] =
@@ -168,9 +189,12 @@ export async function runPhaseSynthesizeConcepts(
   let conceptsWritten = 0;
   const conceptSlugs: string[] = [];
   let estimatedSpendUsd = 0;
-  const budgetCap = DEFAULT_BUDGET_USD;
+  const budgetCap = await readPhaseBudget(engine,'cycle.synthesize_concepts.budget_usd',DEFAULT_BUDGET_USD);
   const failures: Array<{ concept: string; error: string }> = [];
   const tierCounts = { T1: 0, T2: 0, T3: 0, T4: 0 };
+  let cachedConcepts=0;
+  let llmConcepts=0,deterministicConcepts=0,deferredConcepts=0;
+  const budgetTracker=new BudgetTracker({maxCostUsd:budgetCap,label:'cycle.synthesize_concepts',pricingOverrides:await loadPricingOverrides(engine)});
 
   // v0.41.19.0 (T3): throttled yield helper. Fires `opts.yieldDuringPhase`
   // every 30s — cycle.ts threads `buildYieldDuringPhase(lock, outer)` so
@@ -194,13 +218,22 @@ export async function runPhaseSynthesizeConcepts(
 
   for (const group of atomGroups) {
     throwIfAborted(opts.signal, '[dream] synthesize_concepts');
+    const title=group.conceptSlug.split('/').pop()??group.conceptSlug;
+    const outputSlug=`concepts/${title}`;
+    const outputSourceId=opts.sourceId??'default';
+    const baseline=await engine.getPage(outputSlug,{sourceId:outputSourceId});
+    const membersHash=createHash('sha256').update(JSON.stringify(['dream-concept-v1',group.tier,group.atomRefs.map((ref,i)=>[ref.source_id,ref.slug,group.atomTitles[i],group.atomBodies[i]]).sort((a,b)=>JSON.stringify(a).localeCompare(JSON.stringify(b)))])).digest('hex');
+    if(baseline?.frontmatter.pmbrain_concept_members_hash===membersHash&&baseline.frontmatter.pmbrain_concept_complete!==false){cachedConcepts++;continue;}
     tierCounts[group.tier]++;
     let narrative: string;
+    let complete=true;
     if (group.tier === 'T1' || group.tier === 'T2') {
       if (estimatedSpendUsd >= budgetCap) {
         narrative = deterministicNarrative(group);
+        complete=false;deferredConcepts++;
       } else {
         try {
+          budgetTracker.reserve({modelId:resolvedModel.model,estimatedInputTokens:Math.ceil(group.atomBodies.slice(0,5).join('').length/3)+300,maxOutputTokens:500,kind:'chat'});
           const result = await chat({
             model: resolvedModel.model,
             system: SYNTH_PROMPT,
@@ -224,13 +257,15 @@ export async function runPhaseSynthesizeConcepts(
           // codex flagged. Throttle inside maybeYield bounds the actual
           // refresh rate.
           await maybeYield();
-          // Sonnet at ~$3/M input + $15/M output
-          estimatedSpendUsd +=
-            (result.usage.input_tokens * 3.0 + result.usage.output_tokens * 15.0) / 1_000_000;
+          budgetTracker.record({modelId:result.model??resolvedModel.model,inputTokens:result.usage.input_tokens,outputTokens:result.usage.output_tokens});
+          estimatedSpendUsd=budgetTracker.totalSpent;
           narrative = result.text.trim() || deterministicNarrative(group);
+          if(result.text.trim())llmConcepts++;else{complete=false;failures.push({concept:group.conceptSlug,error:'empty_concept_response'});}
         } catch (err) {
           throwIfAborted(opts.signal, '[dream] synthesize_concepts');
-          failures.push({
+          complete=false;
+          if(err instanceof BudgetExhausted)deferredConcepts++;
+          else failures.push({
             concept: group.conceptSlug,
             error: err instanceof Error ? err.message : String(err),
           });
@@ -239,34 +274,56 @@ export async function runPhaseSynthesizeConcepts(
       }
     } else {
       narrative = deterministicNarrative(group);
+      deterministicConcepts++;
     }
 
-    const title = group.conceptSlug.split('/').pop() ?? group.conceptSlug;
-    const outputSlug = `concepts/${title}`;
-    const outputSourceId = opts.sourceId ?? 'default';
     if (!opts.dryRun) {
+      const section='\n\n## 知识综合\n\n';
+      const previousNarrative=baseline?.frontmatter.pmbrain_concept_narrative;
+      let original=baseline?.compiled_truth??'';
+      if(typeof previousNarrative==='string'){
+        if(original===previousNarrative)original='';
+        else if(original.endsWith(section+previousNarrative))original=original.slice(0,-(section+previousNarrative).length);
+        else{failures.push({concept:group.conceptSlug,error:'concept_preservation_hold: generated section was edited; existing page preserved'});continue;}
+      }
+      const compiled=original?original+section+narrative:narrative;
       // Concept pages are user-facing Dream output and must participate in
       // the same chunk/search pipeline as imported knowledge. A bare putPage
       // only wrote the pages row, so reuse the canonical import path while
       // retaining the existing global-source and relationship semantics.
       const markdown = serializeMarkdown(
         {
+          ...baseline?.frontmatter,
+          ...(!baseline?{dream_generated:true}:{}),
           tier: group.tier,
           mention_count: group.atomTitles.length,
           composite_score: group.atomTitles.length,
           synthesized_at: new Date().toISOString(),
           synthesized_by: 'synthesize_concepts-v0.41',
+          pmbrain_concept_members_hash:membersHash,
+          pmbrain_concept_narrative:narrative,
+          pmbrain_concept_complete:complete,
           derives_from: group.atomRefs.map(ref => ({
             slug: ref.slug,
             source_id: ref.source_id,
           })),
         },
-        narrative,
-        '',
-        { type: 'concept', title: title.replace(/-/g, ' '), tags: [] },
+        compiled,
+        baseline?.timeline??'',
+        { type: 'concept', title: baseline?.title??title.replace(/-/g, ' '), tags: baseline?await engine.getTags(outputSlug,{sourceId:outputSourceId}):[] },
       );
-      await importFromContent(engine, outputSlug, markdown, {
-        noEmbed: !isAvailable('embedding'),
+      await engine.transaction(async tx=>{
+      for(const ref of group.atomRefs){
+        const snapshot=evidenceSnapshots.get(`${ref.source_id}:${ref.slug}`);
+        if(snapshot===undefined)continue;
+        const [currentAtom]=await tx.executeRaw<{id:number;knowledge_revision:string;title:string;compiled_truth:string;frontmatter:unknown}>("SELECT id,knowledge_revision,title,compiled_truth,frontmatter FROM pages WHERE source_id=$1 AND slug=$2 AND deleted_at IS NULL FOR SHARE",[ref.source_id,ref.slug]);
+        if(!currentAtom||JSON.stringify([currentAtom.id,currentAtom.knowledge_revision,currentAtom.title,currentAtom.compiled_truth,currentAtom.frontmatter])!==snapshot)throw new Error('concept_evidence_conflict: atom changed during synthesis');
+      }
+      await tx.executeRaw('SELECT id FROM pages WHERE source_id=$1 AND slug=$2 FOR UPDATE',[outputSourceId,outputSlug]);
+      const current=await tx.getPage(outputSlug,{sourceId:outputSourceId});
+      if(JSON.stringify(current&&[current.compiled_truth,current.timeline,current.frontmatter])!==JSON.stringify(baseline&&[baseline.compiled_truth,baseline.timeline,baseline.frontmatter]))throw new Error('concept_revision_conflict: page changed during synthesis');
+      await importFromContent(tx, outputSlug, markdown, {
+        noEmbed: opts.deferEmbedding||!isAvailable('embedding'),
         sourceId: outputSourceId,
       });
       const relationshipRows = group.atomRefs.flatMap(ref => [
@@ -317,13 +374,9 @@ export async function runPhaseSynthesizeConcepts(
           to_source_id: outputSourceId,
         },
       ]);
-      await engine.addLinksBatch(relationshipRows, { auditSite: 'extract.links_db' }); // gbrain-allow-direct-insert: Dream concept evidence is written inside the cycle reconcile path.
-      try {
-        await engine.addLinksBatch(provenanceLinks, { auditSite: 'cycle.synthesize_concepts.provenance' }); // gbrain-allow-direct-insert: Dream concept provenance is written inside the cycle reconcile path.
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        console.error(`[synthesize_concepts] provenance links failed for ${outputSlug} (non-fatal): ${msg}`);
-      }
+      await tx.addLinksBatch(relationshipRows, { auditSite: 'extract.links_db' }); // gbrain-allow-direct-insert: Dream concept evidence is written inside the cycle reconcile path.
+        await tx.addLinksBatch(provenanceLinks, { auditSite: 'cycle.synthesize_concepts.provenance' }); // gbrain-allow-direct-insert: Dream concept provenance is written inside the cycle reconcile path.
+      });
       conceptSlugs.push(outputSlug);
     }
     conceptsWritten++;
@@ -372,7 +425,7 @@ export async function runPhaseSynthesizeConcepts(
 
   return {
     phase: 'synthesize_concepts',
-    status: failures.length > 0 ? 'warn' : 'ok',
+    status: failures.length > 0||deferredConcepts>0 ? 'warn' : 'ok',
     duration_ms: 0,
     summary:
       `synthesize_concepts: ${conceptsWritten} concepts ` +
@@ -381,6 +434,10 @@ export async function runPhaseSynthesizeConcepts(
     details: {
       ...modelDetails,
       concepts_written: conceptsWritten,
+      concepts_cached:cachedConcepts,
+      concepts_llm:llmConcepts,
+      concepts_deterministic:deterministicConcepts,
+      concepts_remaining:deferredConcepts+failures.filter(row=>!row.error.includes('budget')).length,
       concept_slugs: conceptSlugs,
       tier_counts: tierCounts,
       groups_found: atomGroups.length,

@@ -4,6 +4,7 @@ import { gbrainPath, loadConfig } from '../../core/config.ts';
 import { createHash } from 'node:crypto';
 import type { SyncFileOptions } from '../../core/sync-file-runtime.ts';
 import { SYNC_FILE_FORMAT_VERSION } from '../../core/sync-file-runtime.ts';
+import { phaseHasPendingWork } from '../../../shared/dream-phase-state.ts';
 import type { MaintenanceCheckpoint } from './types.ts';
 
 export function retireAutomaticCapture(checkpoint: MaintenanceCheckpoint): void {
@@ -30,7 +31,7 @@ export function resumeMaintenanceCheckpoint(checkpoint:MaintenanceCheckpoint,ret
   for(const [source,phases] of Object.entries(checkpoint.phases)) {
     if(checkpoint.reports[source])continue;
     const unfinished=phases.findIndex(phase=>phase.status==='fail' || (phase.status==='warn' && (
-      !!phase.error || ['ner_error','by_mention_error','relation_backfill_error','pages_remaining','remaining'].some(key=>!!phase.details[key])
+      phaseHasPendingWork(phase)
       || (retryCompleted && !preserveWarnings))));
     if(unfinished>=0)checkpoint.phases[source]=phases.slice(0,unfinished);
   }

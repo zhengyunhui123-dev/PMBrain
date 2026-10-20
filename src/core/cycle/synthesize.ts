@@ -32,9 +32,11 @@ import { resolveCycleDate } from './cycle-date.ts';
 import { verifyAndRepairDreamPages } from './synthesize-verify.ts';
 import { writeFileSync, mkdirSync, statSync } from 'node:fs';
 import { chat as gatewayChat, type ChatResult } from '../ai/gateway.ts';
+import {defaultMaxOutputTokens,isThinkingModel} from '../ai/model-compatibility.ts';
 import { resolveRecipe } from '../ai/model-resolver.ts';
 import { AIConfigError } from '../ai/errors.ts';
 import { loadConfig } from '../config.ts';
+import { conversationPagesOptedIn, withConversationPages } from './transcript-discovery.ts';
 import { basename, join, dirname, isAbsolute, resolve } from 'node:path';
 import { resolveDreamOutputRoot } from './dream-output.ts';
 export { resolveDreamOutputRoot } from './dream-output.ts';
@@ -273,6 +275,7 @@ export function rewriteChunkedSlug(slug: string, hash6: string, idx: number): st
 // ── Public entry ──────────────────────────────────────────────────────
 
 export interface SynthesizePhaseOpts {
+  since?:string;
   brainDir: string;
   dryRun: boolean;
   /** Generic in-cycle keepalive for cycle-lock TTL renewal during long waits. */
@@ -354,7 +357,7 @@ export async function runPhaseSynthesize(
     };
 
     // Allow ad-hoc --input to run even when config is disabled.
-    if (!opts.inputFile && !config.corpusDir) {
+    if (!opts.inputFile && !config.corpusDir && !(await conversationPagesOptedIn(engine))) {
       return skipped('not_configured',
         'dream.synthesize.session_corpus_dir is unset', modelDetails);
     }
@@ -390,10 +393,11 @@ export async function runPhaseSynthesize(
     const explicitInputIsDirectory = opts.inputFile ? statSync(opts.inputFile).isDirectory() : false;
 
     // Discover.
-    const rawTranscripts = opts.inputFile
+    const rawTranscripts = await withConversationPages(engine,opts,config,opts.inputFile
       ? loadAdHocTranscript(opts.inputFile, config.minChars, config.excludePatterns, opts.bypassDreamGuard)
-      : discoverTranscripts({
+      : !config.corpusDir ? [] : discoverTranscripts({
           corpusDir: config.corpusDir!,
+          since:opts.since,
           meetingTranscriptsDir: config.meetingTranscriptsDir ?? undefined,
           minChars: config.minChars,
           excludePatterns: config.excludePatterns,
@@ -401,7 +405,7 @@ export async function runPhaseSynthesize(
           from: opts.from,
           to: opts.to,
           bypassGuard: opts.bypassDreamGuard,
-        });
+        }));
     const { transcripts, duplicateInputSkips } = explicitInputIsDirectory
       ? dedupeExplicitInputTranscripts(rawTranscripts)
       : { transcripts: rawTranscripts, duplicateInputSkips: [] };
@@ -471,7 +475,7 @@ export async function runPhaseSynthesize(
         rescue: await engine.getConfig('dream.synthesize.triage_rescue') === 'true' ? undefined : { floor: 0.30, minSegments: 0, contentTypes: [] },
         concurrency: config.triage.concurrency,
         maxMs: config.triage.maxMs,
-        judge: makeJudgeClient(config.verdictModel, opts.signal),
+        judge: makeJudgeClient(config.verdictModel, opts.signal,{timeoutMs:config.triage.requestTimeoutMs}),
       }, opts.yieldDuringPhase);
       verdicts = triage.reports;
       triage.byPath.forEach((verdict, path) => structuredVerdicts.set(path, verdict));
@@ -870,6 +874,7 @@ interface SynthConfig {
   /** Pre-resolved, Source-scoped wikilink candidates; default enabled. */
   linkManifest: boolean;
   triage: {
+    requestTimeoutMs:number;
     threshold: number;
     maxChars: number;
     maxTokens: number;
@@ -883,7 +888,7 @@ async function loadSynthConfig(engine: BrainEngine): Promise<SynthConfig> {
   const corpusDir = await engine.getConfig('dream.synthesize.session_corpus_dir');
   // v2: enabled defaults to true when corpus dir is configured, false otherwise.
   // Explicit enabled=false still wins for pausing synthesis without removing corpus config.
-  const enabled = enabledRaw === 'false' ? false : (enabledRaw === 'true' || !!corpusDir);
+  const enabled = enabledRaw === 'false' ? false : (enabledRaw === 'true' || !!corpusDir || await conversationPagesOptedIn(engine));
   const meetingTranscriptsDir = await engine.getConfig('dream.synthesize.meeting_transcripts_dir');
   const minCharsStr = await engine.getConfig('dream.synthesize.min_chars');
   const excludeStr = await engine.getConfig('dream.synthesize.exclude_patterns');
@@ -902,6 +907,9 @@ async function loadSynthConfig(engine: BrainEngine): Promise<SynthConfig> {
   const triageMaxTokensRaw = await engine.getConfig('dream.synthesize.triage_max_tokens');
   const triageMaxMsRaw = await engine.getConfig('dream.synthesize.triage_max_ms');
   const triageConcurrencyRaw = await engine.getConfig('dream.synthesize.triage_concurrency');
+  const verdictTimeoutRaw=await engine.getConfig('dream.synthesize.verdict_timeout_ms');
+  const verdictTimeout=verdictTimeoutRaw===null?(await engine.getConfig('dream.knowledge.enabled')==='true'?120_000:VERDICT_TIMEOUT_MS):Number(verdictTimeoutRaw);
+  if(!Number.isSafeInteger(verdictTimeout)||verdictTimeout<=0||verdictTimeout>2_147_483_647)throw new Error('invalid_verdict_timeout: expected a positive request timeout');
 
   const finiteNumber = (raw: string | null, fallback: number): number => {
     if (raw === null || raw.trim() === '') return fallback;
@@ -953,6 +961,7 @@ async function loadSynthConfig(engine: BrainEngine): Promise<SynthConfig> {
       linkManifestRaw === 'off'
     ),
     triage: {
+      requestTimeoutMs:verdictTimeout,
       threshold: Math.max(0, Math.min(1, finiteNumber(triageThresholdRaw, DEFAULT_TRIAGE_THRESHOLD))),
       maxChars: Math.max(1000, Math.floor(finiteNumber(triageMaxCharsRaw, 24_000))),
       maxTokens: Math.max(128, Math.floor(finiteNumber(triageMaxTokensRaw, 2048))),
@@ -1011,7 +1020,7 @@ export interface JudgeClient {
  * recipe `auth_env.required` machinery — AIConfigError at gateway.chat()
  * time is caught by the verdict loop and surfaced per-transcript.
  */
-export function makeJudgeClient(verdictModel: string, signal?: AbortSignal): JudgeClient | null {
+export function makeJudgeClient(verdictModel: string, signal?: AbortSignal,options?:{timeoutMs?:number}): JudgeClient | null {
   // Normalize: ensure provider:model shape. resolveModel returns bare
   // anthropic ids (e.g. `claude-haiku-4-5-20251001`); gateway.chat needs
   // `anthropic:...`.
@@ -1056,16 +1065,22 @@ export function makeJudgeClient(verdictModel: string, signal?: AbortSignal): Jud
             : undefined);
 
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(new Error('verdict timed out')), VERDICT_TIMEOUT_MS);
+      const timeoutMs=options?.timeoutMs??VERDICT_TIMEOUT_MS;
+      const timeout = setTimeout(() => controller.abort(new Error('verdict timed out')), timeoutMs);
       let result: ChatResult;
       try {
         result = await gatewayChat({
           model: modelStr,
           system,
           messages,
-          maxTokens: params.max_tokens,
+          maxTokens: isThinkingModel(modelStr)?defaultMaxOutputTokens(modelStr):params.max_tokens,
+          disableReasoning:true,
+          retryLength:true,
           abortSignal: combineAbortSignals(controller.signal, signal),
         });
+      }catch(error){
+        if(controller.signal.aborted&&!signal?.aborted)throw new Error(`verdict_timeout: conversation triage exceeded ${timeoutMs}ms`,{cause:error});
+        throw error;
       } finally {
         clearTimeout(timeout);
       }

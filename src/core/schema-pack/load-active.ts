@@ -112,6 +112,7 @@ function defaultPackLocator(name: string): string | null {
     // Ships as install default (Lane E T17) + via gbrain onboard pack
     // upgrade flow (the unify-types Minion handler).
     'gbrain-base-v2',
+    'pmbrain-knowledge',
     'company-brain',
   ];
   if (BUNDLED.includes(name)) {

@@ -234,12 +234,13 @@ async function gatherReflections(
   const rows = await engine.executeRaw<{ slug: string; title: string | null; compiled_truth: string | null }>(
     `SELECT slug, title, compiled_truth
        FROM pages
-      WHERE slug LIKE 'wiki/personal/reflections/%'
+      WHERE slug LIKE $3
+        AND deleted_at IS NULL AND COALESCE(frontmatter->>'visibility','world') <> 'private' AND COALESCE(frontmatter->>'private','false')<>'true'
         AND updated_at >= $1::timestamptz
         AND ($2::text IS NULL OR source_id = $2)
       ORDER BY updated_at DESC
       LIMIT 100`,
-    [since, sourceId ?? null],
+    [since, sourceId ?? null,`${(await engine.getConfig('dream.patterns.source_slug_prefix'))?.replace(/\/+$/,'')||'wiki/personal/reflections'}/%`],
   );
   return rows.map(r => ({
     slug: r.slug,

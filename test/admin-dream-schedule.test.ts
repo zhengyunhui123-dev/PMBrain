@@ -6,6 +6,7 @@ import {
   adminDreamScheduleDateKey,
   isAdminDreamScheduleDue,
   isValidAdminDreamScheduleTime,
+  scheduledDreamInput,
 } from '../src/commands/admin-dream-schedule.ts';
 
 const ROOT = join(import.meta.dir, '..');
@@ -41,12 +42,11 @@ describe('Admin scheduled one-click organization', () => {
     expect(serveSource).toContain("app.get('/admin/api/dream/schedule'");
     expect(serveSource).toContain("app.post('/admin/api/dream/schedule'");
     expect(serveSource).toContain("engine.setConfig(ADMIN_DREAM_SCHEDULE_ENABLED_KEY");
-    // Must match manual「快速维护」: startDreamRun({ preset: 'quick', ... }), not full/depth.
-    expect(serveSource).toContain("preset: 'quick'");
-    expect(serveSource).toContain('allSources: true');
     expect(dreamSource).toContain("runMode === 'quick'");
     expect(dreamSource).toContain("? 'quick'");
-    expect(serveSource).not.toMatch(/checkScheduledDream[\s\S]*?preset:\s*'full'/);
+    expect(scheduledDreamInput(undefined,'chosen')).toEqual({preset:'quick',allSources:true});
+    expect(scheduledDreamInput('full','chosen')).toEqual({preset:'full',sourceId:'chosen'});
+    expect(serveSource).toContain('scheduledDreamInput(settings.mode');
     expect(serveSource).not.toMatch(/checkScheduledDream[\s\S]*?drainProposals:\s*true/);
     expect(serveSource).toContain('const dreamScheduleTimer = setInterval(');
   });

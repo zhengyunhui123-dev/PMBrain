@@ -2,6 +2,11 @@ export interface AdminDreamScheduleSettings {
   enabled: boolean;
   time: string;
   lastStartedDate: string | null;
+  mode?: 'quick' | 'full';
+}
+
+export function scheduledDreamInput(mode:'quick'|'full'|undefined,sourceId:string){
+  return mode==='full'?{preset:'full' as const,sourceId}:{preset:'quick' as const,allSources:true};
 }
 
 export const DEFAULT_ADMIN_DREAM_SCHEDULE_TIME = '02:00';

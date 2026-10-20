@@ -49,6 +49,7 @@ import {
   adminDreamScheduleDateKey,
   isAdminDreamScheduleDue,
   isValidAdminDreamScheduleTime,
+  scheduledDreamInput,
   type AdminDreamScheduleSettings,
 } from './admin-dream-schedule.ts';
 import {
@@ -845,14 +846,16 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
   });
 
   const dreamScheduleView = async (overrides?: { enabled?: boolean; time?: string; lastStartedDate?: string | null }) => {
-    const [storedEnabled, storedTime, storedLastStartedDate] = await Promise.all([
+    const [storedEnabled, storedTime, storedLastStartedDate, storedMode] = await Promise.all([
       engine.getConfig(ADMIN_DREAM_SCHEDULE_ENABLED_KEY),
       engine.getConfig(ADMIN_DREAM_SCHEDULE_TIME_KEY),
       engine.getConfig(ADMIN_DREAM_SCHEDULE_LAST_STARTED_DATE_KEY),
+      engine.getConfig('dream.schedule.mode'),
     ]);
     const storedTimeValue = storedTime?.trim() ?? '';
     return {
       enabled: overrides?.enabled ?? storedEnabled === 'true',
+      mode:storedMode==='full'?'full' as const:'quick' as const,
       time: overrides?.time ?? (isValidAdminDreamScheduleTime(storedTimeValue)
         ? storedTimeValue
         : DEFAULT_ADMIN_DREAM_SCHEDULE_TIME),
@@ -886,14 +889,11 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
     const today = adminDreamScheduleDateKey(now);
     try {
       await engine.setConfig(ADMIN_DREAM_SCHEDULE_LAST_STARTED_DATE_KEY, today);
-      const run = await productTasks.submitDream({
-        preset: 'quick',
-        allSources: true,
-      }, 'scheduled');
+      const run = await productTasks.submitDream(scheduledDreamInput(settings.mode,await engine.getConfig('sources.default')||'default'), 'scheduled');
       if (run.status !== 'running' && run.status !== 'queued') {
         throw new Error(run.error || `dream_schedule_start_${run.status}`);
       }
-      console.error(`[admin dream schedule] Started quick organization for ${today} at ${settings.time} (run ${run.id}).`);
+      console.error(`[admin dream schedule] Started ${settings.mode??'quick'} organization for ${today} at ${settings.time} (run ${run.id}).`);
     } catch (e) {
       scheduledDreamRetryAfter = Date.now() + 5 * 60 * 1000;
       try {
@@ -920,6 +920,8 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
 
   app.post('/admin/api/dream/schedule', requireAdmin, express.json({ limit: '4kb' }), async (req: Request, res: Response) => {
     const enabled = req.body?.enabled;
+    const mode=req.body?.mode;
+    if(mode!==undefined&&mode!=='quick'&&mode!=='full'){res.status(400).json({error:'invalid_dream_schedule_mode'});return;}
     const time = typeof req.body?.time === 'string' ? req.body.time.trim() : '';
     if (typeof enabled !== 'boolean') {
       res.status(400).json({ error: 'dream_schedule_enabled_must_be_boolean' });
@@ -933,6 +935,7 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
       await Promise.all([
         engine.setConfig(ADMIN_DREAM_SCHEDULE_ENABLED_KEY, enabled ? 'true' : 'false'),
         engine.setConfig(ADMIN_DREAM_SCHEDULE_TIME_KEY, time),
+        ...(mode!==undefined?[engine.setConfig('dream.schedule.mode',mode)]:[]),
       ]);
       const view = await dreamScheduleView({ enabled, time });
       sendAdminContract(res, DreamScheduleResponseSchema, view);
@@ -1018,6 +1021,12 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
       includeUncommitted,
       autoGitCommit,
       entityCaptureEnabled: await engine.getConfig('dream.entity_capture.enabled') !== 'false',
+      knowledgeEnabled:await engine.getConfig('dream.knowledge.enabled')==='true',
+      knowledgeSince:await engine.getConfig('dream.knowledge.since')??null,
+      knowledgeUseOrdinaryModel:await engine.getConfig('dream.knowledge.use_ordinary_model')!=='false',
+      atomBudgetUsd:Number(await engine.getConfig('cycle.extract_atoms.budget_usd')??0.3),
+      conceptBudgetUsd:Number(await engine.getConfig('cycle.synthesize_concepts.budget_usd')??1.5),
+      verdictTimeoutMs:Number(await engine.getConfig('dream.synthesize.verdict_timeout_ms')??120_000),
       timeoutMs,
       effectiveTimeoutMs: timeoutMs ?? DEFAULT_PRODUCT_TASK_TIMEOUT_MS,
       defaultBrainDir: defaultBrainDir || null,
@@ -1101,6 +1110,13 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
     const includeUncommitted = req.body?.includeUncommitted;
     const autoGitCommit = req.body?.autoGitCommit;
     const entityCaptureEnabled=req.body?.entityCaptureEnabled;
+    const knowledgeEnabled=req.body?.knowledgeEnabled;
+    const knowledgeUseOrdinaryModel=req.body?.knowledgeUseOrdinaryModel;
+    const atomBudgetUsd=req.body?.atomBudgetUsd,conceptBudgetUsd=req.body?.conceptBudgetUsd;
+    const verdictTimeoutMs=req.body?.verdictTimeoutMs;
+    if(verdictTimeoutMs!==undefined&&parseTaskTimeout(verdictTimeoutMs)===null){res.status(400).json({error:'invalid_verdict_timeout'});return;}
+    if([knowledgeEnabled,knowledgeUseOrdinaryModel].some(value=>value!==undefined&&typeof value!=='boolean')){res.status(400).json({error:'knowledge_settings_must_be_boolean'});return;}
+    if([atomBudgetUsd,conceptBudgetUsd].some(value=>value!==undefined&&(typeof value!=='number'||!Number.isFinite(value)||value<=0))){res.status(400).json({error:'invalid_knowledge_budget'});return;}
     if(entityCaptureEnabled!==undefined&&typeof entityCaptureEnabled!=='boolean'){res.status(400).json({error:'entity_capture_enabled_must_be_boolean'});return;}
     const timeoutMs = req.body?.timeoutMs;
     if (timeoutMs !== undefined && timeoutMs !== null && (typeof timeoutMs !== 'number' || parseTaskTimeout(timeoutMs) === null)) { res.status(400).json({error:'invalid_dream_task_timeout'}); return; }
@@ -1127,14 +1143,24 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
       if (dualWrite && view.resolvedOutputDir) {
         await ensureDreamOutputDirectory(view.resolvedOutputDir);
       }
-      await Promise.all([
-        engine.setConfig('dream.synthesize.output_dir', outputDir),
-        engine.setConfig('dream.synthesize.dual_write', dualWrite ? 'true' : 'false'),
-        engine.setConfig('sync.include_working_tree', includeUncommitted ? 'true' : 'false'),
-        ...(typeof autoGitCommit==='boolean' ? [engine.setConfig('sync.auto_git_commit',autoGitCommit?'true':'false')] : []),
-        ...(typeof entityCaptureEnabled==='boolean' ? [engine.setConfig('dream.entity_capture.enabled',entityCaptureEnabled?'true':'false')] : []),
-        ...(timeoutMs !== undefined ? [engine.setConfig(DREAM_TASK_TIMEOUT_KEY,timeoutMs === null ? '' : String(timeoutMs))] : []),
-      ]);
+      await engine.transaction(async tx=>{
+        const changed=typeof knowledgeEnabled==='boolean'&&knowledgeEnabled!==((await tx.getConfig('dream.knowledge.enabled'))==='true');
+        const since=await tx.getConfig('dream.knowledge.since');
+        await Promise.all([
+          tx.setConfig('dream.synthesize.output_dir', outputDir),
+          tx.setConfig('dream.synthesize.dual_write', dualWrite ? 'true' : 'false'),
+          tx.setConfig('sync.include_working_tree', includeUncommitted ? 'true' : 'false'),
+          ...(typeof autoGitCommit==='boolean' ? [tx.setConfig('sync.auto_git_commit',autoGitCommit?'true':'false')] : []),
+          ...(typeof entityCaptureEnabled==='boolean' ? [tx.setConfig('dream.entity_capture.enabled',entityCaptureEnabled?'true':'false')] : []),
+          ...(changed?[tx.setConfig('dream.knowledge.enabled',String(knowledgeEnabled)),tx.setConfig('dream.synthesize.conversation_pages',String(knowledgeEnabled)),tx.setConfig('dream.synthesize.enabled',String(knowledgeEnabled))]:[]),
+          ...(knowledgeEnabled&&!since?[tx.setConfig('dream.knowledge.since',new Date().toISOString())]:[]),
+          ...(typeof knowledgeUseOrdinaryModel==='boolean'?[tx.setConfig('dream.knowledge.use_ordinary_model',String(knowledgeUseOrdinaryModel))]:[]),
+          ...(atomBudgetUsd!==undefined?[tx.setConfig('cycle.extract_atoms.budget_usd',String(atomBudgetUsd))]:[]),
+          ...(conceptBudgetUsd!==undefined?[tx.setConfig('cycle.synthesize_concepts.budget_usd',String(conceptBudgetUsd))]:[]),
+          ...(verdictTimeoutMs!==undefined?[tx.setConfig('dream.synthesize.verdict_timeout_ms',String(verdictTimeoutMs))]:[]),
+          ...(timeoutMs !== undefined ? [tx.setConfig(DREAM_TASK_TIMEOUT_KEY,timeoutMs === null ? '' : String(timeoutMs))] : []),
+        ]);
+      });
       sendAdminContract(res, DreamSettingsResponseSchema, await dreamSettingsView({ outputDir, dualWrite, includeUncommitted, autoGitCommit }));
     } catch (e) {
       res.status(500).json({ error: e instanceof Error ? e.message : 'save_dream_settings_failed' });

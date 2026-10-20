@@ -101,7 +101,7 @@ describe('v0.41 T9 R-GATE: orchestrator dispatch wires the pack-gate', () => {
   // phase. Future refactors that accidentally drop the gate would still
   // pass happy-path runtime tests; this assertion catches the drop.
   test('cycle.ts dispatch for extract_atoms calls packDeclaresPhase', () => {
-    expect(cycleTsSrc).toContain("packDeclaresPhase(engine, 'extract_atoms')");
+    expect(cycleTsSrc).toContain("packDeclaresPhase(engine, 'extract_atoms', opts.schemaPack)");
   });
 
   test('trusted meeting preset can force extract_atoms without weakening the default pack gate', () => {
@@ -109,7 +109,7 @@ describe('v0.41 T9 R-GATE: orchestrator dispatch wires the pack-gate', () => {
   });
 
   test('cycle.ts dispatch for synthesize_concepts calls packDeclaresPhase', () => {
-    expect(cycleTsSrc).toContain("packDeclaresPhase(engine, 'synthesize_concepts')");
+    expect(cycleTsSrc).toContain("packDeclaresPhase(engine, 'synthesize_concepts', opts.schemaPack)");
   });
 
   test('packDeclaresPhase helper function exists in cycle.ts', () => {
@@ -145,9 +145,9 @@ describe('v0.41 T9 R-GATE: pre-existing 17 core phases always run', () => {
   // assertion: only the 2 new lens-pack phases reference packDeclaresPhase
   // in the dispatch.
   test('only extract_atoms + synthesize_concepts dispatch sites reference packDeclaresPhase', () => {
-    const matches = cycleTsSrc.match(/packDeclaresPhase\(engine, '[^']+'\)/g) ?? [];
+    const matches = cycleTsSrc.match(/packDeclaresPhase\(engine, '[^']+', opts\.schemaPack\)/g) ?? [];
     const phaseNames = matches.map((m) => {
-      const inner = /packDeclaresPhase\(engine, '([^']+)'\)/.exec(m);
+      const inner = /packDeclaresPhase\(engine, '([^']+)', opts\.schemaPack\)/.exec(m);
       return inner ? inner[1] : '';
     });
     // Should be EXACTLY two phases gated.

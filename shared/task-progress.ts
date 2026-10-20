@@ -52,7 +52,7 @@ export interface TaskProductProgress {
   percent: number | null;
   phasePercent: number | null;
   completedSteps: number;
-  steps: Array<{ id: string; label: string; status: 'pending' | 'running' | 'completed' | 'skipped' | 'failed'; phases: string[] }>;
+  steps: Array<{ id: string; label: string; status: 'pending' | 'running' | 'completed' | 'skipped' | 'failed'; phases: string[];detail?:string }>;
   processed: number | null;
   total: number | null;
   file: string | null;

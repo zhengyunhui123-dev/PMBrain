@@ -1,0 +1,24 @@
+api_version: gbrain-schema-pack-v1
+name: pmbrain-knowledge
+version: 1.0.0
+description: 中文知识提炼，沿用基础分类与原版原子和概念阶段。
+gbrain_min_version: 0.42.0
+extends: gbrain-base-v2
+borrow_from: []
+page_types:
+  - name: atom
+    primitive: concept
+    path_prefixes:
+      - atoms/
+    aliases: []
+    extractable: false
+    expert_routing: false
+phases:
+  - extract_atoms
+  - synthesize_concepts
+filing_rules:
+  - kind: atom
+    directory: atoms/
+    examples:
+      - atoms/2026-10-20/发布证据
+    description: 有原文证据和来源关联的知识点。

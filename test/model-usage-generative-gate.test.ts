@@ -99,9 +99,9 @@ describe('普通模型默认可用', () => {
     expect(dreamCli).toContain('includeOffice: true');
   });
 
-  test('定时任务仍只使用 quick 预设', () => {
+  test('定时任务复用所选预设且不绕过生成模型门禁', () => {
     const serve = readFileSync(join(ROOT, 'src/commands/pmbrain-admin-routes.ts'), 'utf8');
-    expect(serve).toContain("preset: 'quick'");
-    expect(serve).not.toMatch(/checkScheduledDream[\s\S]{0,800}preset:\s*'full'/);
+    expect(serve).toContain('productTasks.submitDream(scheduledDreamInput(settings.mode');
+    expect(serve).not.toContain('drainProposals: true');
   });
 });

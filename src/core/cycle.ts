@@ -400,6 +400,8 @@ export interface CycleOpts {
    * `extract_atoms` so the advertised pipeline cannot silently lose a step.
    */
   forcePackPhases?: CyclePhase[];
+  schemaPack?: string;
+  knowledgeSince?: string;
   /**
    * Brain directory (git repo). Required for filesystem phases. `null` means
    * the selected Source has no usable checkout, so filesystem phases skip
@@ -993,12 +995,13 @@ export async function resolveSourceForDir(
 async function packDeclaresPhase(
   engine: BrainEngine,
   phase: CyclePhase,
+  schemaPack?:string,
 ): Promise<boolean> {
   try {
     const { loadActivePack } = await import('./schema-pack/load-active.ts');
     const { loadConfig } = await import('./config.ts');
     const cfg = loadConfig();
-    const resolved = await loadActivePack({ cfg, remote: false });
+    const resolved = await loadActivePack({ cfg, remote: false,perCall:schemaPack });
     const phases = resolved.manifest.phases ?? [];
     return phases.includes(phase);
   } catch {
@@ -1885,6 +1888,7 @@ export async function runCycle(
           dryRun,
           yieldDuringPhase: opts.yieldDuringPhase,
           inputFile: opts.synthInputFile,
+          since:opts.knowledgeSince,
           date: opts.synthDate,
           from: opts.synthFrom,
           to: opts.synthTo,
@@ -2172,7 +2176,7 @@ export async function runCycle(
           details: { reason: 'no_database' },
         });
       } else if (!opts.forcePackPhases?.includes('extract_atoms') &&
-                 !(await packDeclaresPhase(engine, 'extract_atoms'))) {
+                 !(await packDeclaresPhase(engine, 'extract_atoms', opts.schemaPack))) {
         phaseResults.push({
           phase: 'extract_atoms',
           status: 'skipped',
@@ -2198,7 +2202,10 @@ export async function runCycle(
           brainDir: brainDir ?? undefined,
           sourceId: xaSourceId,
           dryRun,
-          affectedSlugs: xaAffectedSlugs,
+          affectedSlugs: opts.knowledgeSince?undefined:xaAffectedSlugs,
+          schemaPack:opts.schemaPack,
+          since:opts.knowledgeSince,
+          deferEmbedding:phases.includes('embed'),
           // v0.41.19.0 (T3): closure refreshes cycle lock + fires outer hook.
           yieldDuringPhase: buildYieldDuringPhase(lock, opts.yieldDuringPhase),
           // v0.41.19.0 (T4): pass same reporter (not a child — cycle.ts
@@ -2347,7 +2354,7 @@ export async function runCycle(
           details: { reason: 'no_database' },
         });
       } else if (!opts.forcePackPhases?.includes('synthesize_concepts') &&
-                 !(await packDeclaresPhase(engine, 'synthesize_concepts'))) {
+                 !(await packDeclaresPhase(engine, 'synthesize_concepts', opts.schemaPack))) {
         phaseResults.push({
           phase: 'synthesize_concepts',
           status: 'skipped',
@@ -2362,6 +2369,8 @@ export async function runCycle(
           brainDir: brainDir ?? undefined,
           sourceId: cycleSourceId ?? undefined,
           dryRun,
+          deferEmbedding:phases.includes('embed'),
+          since:opts.knowledgeSince,
           // v0.41.19.0 (T3): closure refreshes cycle lock + fires outer hook.
           yieldDuringPhase: buildYieldDuringPhase(lock, opts.yieldDuringPhase),
           // v0.41.19.0 (T4): pass same reporter (not a child).

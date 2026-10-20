@@ -8,6 +8,12 @@ export const DreamSettingsResponseSchema = z.object({
   includeUncommitted: z.boolean(),
   autoGitCommit: z.boolean().optional(),
   entityCaptureEnabled: z.boolean().optional(),
+  knowledgeEnabled:z.boolean().optional(),
+  knowledgeSince:z.string().nullable().optional(),
+  knowledgeUseOrdinaryModel:z.boolean().optional(),
+  atomBudgetUsd:z.number().positive().optional(),
+  conceptBudgetUsd:z.number().positive().optional(),
+  verdictTimeoutMs:z.number().int().positive().optional(),
   timeoutMs: z.number().int().positive().nullable().optional(),
   effectiveTimeoutMs: z.number().int().positive().optional(),
   defaultBrainDir: z.string().nullable(),
@@ -17,6 +23,7 @@ export const DreamSettingsResponseSchema = z.object({
 
 export const DreamScheduleResponseSchema = z.object({
   enabled: z.boolean(),
+  mode:z.enum(['quick','full']).optional(),
   time: z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/),
   lastStartedDate: z.string().nullable(),
   timeZone: z.string(),

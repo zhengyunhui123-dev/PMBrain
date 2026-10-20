@@ -23,7 +23,7 @@ export const TaskProductProgressSchema = z.object({
   syncFiles: z.object({ total: z.number().int().nonnegative(), completed: z.number().int().nonnegative(), failed: z.number().int().nonnegative(), remaining: z.number().int().nonnegative() }).optional(),
   name: z.string(), stage: z.string(), percent: z.number().min(0).max(100).nullable(),
   phasePercent: z.number().min(0).max(100).nullable(), completedSteps: z.number().int().nonnegative(),
-  steps: z.array(z.object({ id: z.string(), label: z.string(), status: z.enum(['pending', 'running', 'completed', 'skipped', 'failed']), phases: z.array(z.string()) })),
+  steps: z.array(z.object({ id: z.string(), label: z.string(), status: z.enum(['pending', 'running', 'completed', 'skipped', 'failed']), phases: z.array(z.string()),detail:z.string().optional() })),
   processed: z.number().nullable(), total: z.number().nullable(), file: z.string().nullable(),
   metrics: z.array(z.object({ label: z.string(), value: z.number() })), errorReason: z.string().nullable(),
   detail: z.string().nullable().optional(),

@@ -13,6 +13,8 @@ import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, basename, extname } from 'node:path';
 import { createHash } from 'node:crypto';
 import { pruneDir } from '../sync.ts';
+import type { BrainEngine } from '../engine.ts';
+import { excludedCapturePath } from '../pmbrain-adapters/entity-capture-request.ts';
 
 export interface DiscoveredTranscript {
   /** Absolute path to the transcript file. */
@@ -28,6 +30,7 @@ export interface DiscoveredTranscript {
 }
 
 export interface DiscoverOpts {
+  since?:string;
   /** Source directory. Required. */
   corpusDir: string;
   /** Optional second source. */
@@ -144,6 +147,42 @@ export function compileExcludePatterns(patterns: string[] | undefined): RegExp[]
 
 function hashContent(text: string): string {
   return createHash('sha256').update(text, 'utf8').digest('hex');
+}
+
+export async function conversationPagesOptedIn(engine: Pick<BrainEngine,'getConfig'>):Promise<boolean> {
+  return (await engine.getConfig('dream.synthesize.conversation_pages'))?.trim()==='true';
+}
+export const CONVERSATION_PAGE_URI_PREFIX='gbrain-page://';
+
+export async function withConversationPages(
+  engine:BrainEngine,
+  opts:{inputFile?:string;sourceId?:string;date?:string;from?:string;to?:string;bypassDreamGuard?:boolean;since?:string},
+  config:{corpusDir:string|null;minChars:number;excludePatterns:string[]},
+  corpus:DiscoveredTranscript[],
+):Promise<DiscoveredTranscript[]> {
+  if(opts.inputFile)return corpus;
+  const setting=await engine.getConfig('dream.synthesize.conversation_pages');
+  if(setting==='false'||(setting!=='true'&&!config.corpusDir))return corpus;
+  const sourceId=opts.sourceId??'default';
+  const rows=await engine.executeRaw<{slug:string;compiled_truth:string;frontmatter:Record<string,unknown>}>(
+    `SELECT slug,compiled_truth,frontmatter FROM pages WHERE source_id=$1 AND type='conversation'
+      AND deleted_at IS NULL AND length(compiled_truth)>=$2
+      AND COALESCE(frontmatter->>'visibility','world')<>'private' AND COALESCE(frontmatter->>'private','false')<>'true'
+      AND ($3::timestamptz IS NULL OR updated_at >= $3::timestamptz) ORDER BY slug`,
+    [sourceId,config.minChars,opts.since??null]);
+  const seen=new Set(corpus.map(t=>t.contentHash));
+  const excludes=compileExcludePatterns(config.excludePatterns);
+  const extra:DiscoveredTranscript[]=[];
+  for(const row of rows){
+    const fm=row.frontmatter??{};
+    if(excludedCapturePath(row.slug)||fm.mode==='lsd'||(!opts.bypassDreamGuard&&(fm.dream_generated===true||fm.dream_generated==='true'))||fm.pmbrain_memory===true||matchesAnyExclude(row.compiled_truth,excludes))continue;
+    const datePattern=/^(\d{4}-\d{2}-\d{2})/;
+    const inferredDate=datePattern.exec(String(fm.date??''))?.[1]??datePattern.exec(row.slug.split('/').pop()??'')?.[1]??null;
+    if((opts.date||opts.from||opts.to)&&(!inferredDate||(opts.date&&inferredDate!==opts.date)||(opts.from&&inferredDate<opts.from)||(opts.to&&inferredDate>opts.to)))continue;
+    const contentHash=hashContent(row.compiled_truth);if(seen.has(contentHash))continue;seen.add(contentHash);
+    extra.push({filePath:`${CONVERSATION_PAGE_URI_PREFIX}${sourceId}/${row.slug}`,content:row.compiled_truth,contentHash,basename:row.slug.split('/').pop()??row.slug,inferredDate});
+  }
+  return [...corpus,...extra];
 }
 
 function isInDateRange(date: string | null, opts: DiscoverOpts): boolean {
@@ -293,6 +332,7 @@ export function discoverTranscripts(opts: DiscoverOpts): DiscoveredTranscript[] 
   const results: DiscoveredTranscript[] = [];
   for (const dir of dirs) {
     for (const filePath of listTextFiles(dir)) {
+      if(opts.since&&statSync(filePath).mtimeMs<Date.parse(opts.since))continue;
       const ext = extname(filePath).toLowerCase();
       const baseName = basename(filePath, ext);
       const inferredDate = inferDateFromBasename(baseName);

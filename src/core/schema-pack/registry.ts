@@ -55,6 +55,7 @@ import { statSync } from 'node:fs';
 import type { SchemaPackManifest } from './manifest-v1.ts';
 import { computeManifestSha8, packIdentity } from './manifest-v1.ts';
 import { computeAliasClosureHash, buildAliasGraph, type AliasGraph } from './closure.ts';
+import { mergeInheritedManifest,type BorrowedTypes } from './merge.ts';
 
 export const EXTENDS_DEPTH_WARN = 4 as const;
 export const EXTENDS_DEPTH_HARD_CAP = 8 as const;
@@ -258,6 +259,7 @@ export async function resolvePack(
   // cache snapshot (codex C6 — child cache entry must remember every
   // parent so invalidatePackCache(parentName) can cascade).
   const chain: string[] = [manifest.name];
+  const ancestorsNearestFirst:SchemaPackManifest[]=[];
   let cursor: SchemaPackManifest | null = manifest;
   while (cursor?.extends) {
     const parentName = cursor.extends;
@@ -271,16 +273,23 @@ export async function resolvePack(
     if (chain.length > EXTENDS_DEPTH_WARN) {
       opts.onDepthWarn?.(chain.length, chain);
     }
-    cursor = await loadByName(parentName);
+    const parent=await loadByName(parentName);ancestorsNearestFirst.push(parent);cursor=parent;
   }
 
-  // For v0.38 skeleton: closure is computed on the manifest itself.
-  // Full extends-merging (child-wins) is the v0.41+ T20 follow-up.
-  const alias_graph = buildAliasGraph(manifest);
-  const alias_closure_hash = await computeAliasClosureHash(manifest);
+  const borrowed:BorrowedTypes={page_types:[],link_types:[]};
+  const borrowedNames:string[]=[];
+  for(const entry of manifest.borrow_from){
+    const source=await loadByName(entry.pack);borrowedNames.push(entry.pack);
+    const types=new Set(entry.types??[]),links=new Set(entry.link_types??[]);
+    for(const type of source.page_types)if(types.has(type.name))borrowed.page_types.push(type);
+    for(const link of source.link_types)if(links.has(link.name))borrowed.link_types.push(link);
+  }
+  const merged=mergeInheritedManifest([...ancestorsNearestFirst].reverse(),manifest,borrowed);
+  const alias_graph = buildAliasGraph(merged);
+  const alias_closure_hash = await computeAliasClosureHash(merged);
 
   const resolved: ResolvedPack = {
-    manifest,
+    manifest:merged,
     identity: id,
     manifest_sha8: sha8,
     alias_closure_hash,
@@ -291,7 +300,7 @@ export async function resolvePack(
   // the locator can't resolve (synthetic manifests in tests).
   const files: Array<{ name: string; path: string; mtimeMs: number }> = [];
   if (opts.loadByPath) {
-    for (const n of chain) {
+    for (const n of [...new Set([...chain,...borrowedNames])]) {
       const path = opts.loadByPath(n);
       if (path === null) continue;
       files.push({ name: n, path, mtimeMs: safeMtimeMs(path) });
@@ -300,7 +309,7 @@ export async function resolvePack(
 
   _byName.set(manifest.name, {
     resolved,
-    chain: [...chain],
+    chain: [...new Set([...chain,...borrowedNames])],
     files,
     lastStatMs: Date.now(),
   });

@@ -1,4 +1,5 @@
 import { taskName, type TaskProductProgress } from '../../../shared/task-progress.ts';
+import { phaseHasPendingWork,dreamPhaseDetail } from '../../../shared/dream-phase-state.ts';
 
 const labels: Record<string, string> = {
   memory: '提炼对话记忆',
@@ -219,6 +220,17 @@ export function finishTaskProgress(view: TaskProductProgress, status: string, re
   add(next.relations?.available ? '新增关联' : '新建关联', next.relations?.available ? next.relations.total : data.totals?.links_created);
   add('向量化', data.embedded ?? data.totals?.pages_embedded);
   if (Array.isArray(data.phases)) {
+    const atoms=data.phases.find((phase:any)=>phase.phase==='extract_atoms')?.details;
+    const concepts=data.phases.find((phase:any)=>phase.phase==='synthesize_concepts')?.details;
+    const embed=data.phases.find((phase:any)=>phase.phase==='embed')?.details;
+    add('提炼知识点',atoms?.atoms_extracted);
+    add('待提炼资料',atoms?.pages_remaining);
+    add('综合概念',concepts?.concepts_written);
+    add('AI 综合概念',concepts?.concepts_llm);
+    add('证据归组',concepts?.concepts_deterministic);
+    add('复用概念',concepts?.concepts_cached);
+    add('待综合概念',concepts?.concepts_remaining);
+    add('剩余向量分块',embed?.remainingChunks);
     add('异常步骤', data.phases.filter((phase: any) => phase.status === 'fail').length);
     const sync = data.phases.find((phase: any) => phase.phase === 'sync');
     add('更新资料', sync?.details?.modified);
@@ -256,7 +268,8 @@ export function finishTaskProgress(view: TaskProductProgress, status: string, re
       const matches = data.phases.filter((phase: any) => step.phases.includes(phase.phase));
       if (!matches.length) { step.status = 'skipped'; continue; }
       step.status = matches.some((phase: any) => phase.status === 'fail') ? 'failed'
-        : matches.every((phase: any) => phase.status === 'skipped') ? 'skipped' : 'completed';
+        : matches.some(phaseHasPendingWork)?'pending':matches.every((phase: any) => phase.status === 'skipped') ? 'skipped' : 'completed';
+      const details=matches.map(dreamPhaseDetail).filter(Boolean);step.detail=details.length?[...new Set(details)].join('；'):undefined;
     }
     const captureStop = capturePhase?.details?.stop_reason;
     if (captureStop === 'failure' || captureStop === 'model_unavailable' || (capturePhase?.details?.pages_remaining>0)) {
@@ -276,7 +289,7 @@ export function finishTaskProgress(view: TaskProductProgress, status: string, re
       : next.name === '导入资料' ? data.knowledgeStatus==='disabled'?'原文已入库，自动实体整理未启用':data.knowledgeStatus==='model_unavailable'?'原文已入库，实体模型未配置':'导入完成' : `${next.name}完成`;
     for (const step of next.steps) {
       if (step.status === 'running') step.status = 'completed';
-      else if (step.status === 'pending' && !step.phases.includes('capture_entities')) step.status = 'skipped';
+      else if (step.status === 'pending' && !Array.isArray(data.phases)&&!step.phases.includes('capture_entities')) step.status = 'skipped';
     }
     const failed = next.steps.find(step => step.status === 'failed');
     if (failed) {
@@ -290,6 +303,10 @@ export function finishTaskProgress(view: TaskProductProgress, status: string, re
     if (Array.isArray(data.phases) && data.phases.some((phase: any) => phase.details?.dryRun === true)) {
       next.stage = '预览完成，未写入知识库';
       next.metrics = next.metrics.map(metric => ({ ...metric, label: `预计${metric.label}` }));
+    }
+    if(next.name==='AI 深度整理'&&Array.isArray(data.phases)){
+      const ai=data.phases.filter((phase:any)=>['synthesize','extract_atoms','synthesize_concepts','patterns'].includes(phase.phase));
+      if(ai.length&&ai.every((phase:any)=>phase.status==='skipped'))next.stage='维护完成，AI 提炼未执行';
     }
   } else if (status === 'failed' || status === 'cancelled') {
     for (const step of next.steps) if (step.status === 'running') step.status = status === 'failed' ? 'failed' : 'pending';

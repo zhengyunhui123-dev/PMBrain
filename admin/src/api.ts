@@ -237,10 +237,10 @@ export const api = {
     apiFetch('/admin/api/export-runs', { method: 'POST', body: JSON.stringify({ rootPath }) }),
   dreamOverview: () => apiFetch<DreamOverviewResponse>('/admin/api/dream/overview', undefined, DreamOverviewResponseSchema),
   dreamSettings: () => apiFetch<DreamSettingsResponse>('/admin/api/dream/settings', undefined, DreamSettingsResponseSchema),
-  saveDreamSettings: (body: { outputDir: string; dualWrite: boolean; includeUncommitted: boolean; autoGitCommit?: boolean; entityCaptureEnabled?: boolean; timeoutMs?: number | null }) =>
+  saveDreamSettings: (body: { outputDir: string; dualWrite: boolean; includeUncommitted: boolean; autoGitCommit?: boolean; entityCaptureEnabled?: boolean; knowledgeEnabled?:boolean;knowledgeUseOrdinaryModel?:boolean;atomBudgetUsd?:number;conceptBudgetUsd?:number;verdictTimeoutMs?:number;timeoutMs?: number | null }) =>
     apiFetch<DreamSettingsResponse>('/admin/api/dream/settings', { method: 'POST', body: JSON.stringify(body) }, DreamSettingsResponseSchema),
   dreamSchedule: () => apiFetch<DreamScheduleResponse>('/admin/api/dream/schedule', undefined, DreamScheduleResponseSchema),
-  saveDreamSchedule: (body: { enabled: boolean; time: string }) =>
+  saveDreamSchedule: (body: { enabled: boolean; time: string;mode?:'quick'|'full' }) =>
     apiFetch<DreamScheduleResponse>('/admin/api/dream/schedule', { method: 'POST', body: JSON.stringify(body) }, DreamScheduleResponseSchema),
   entityCaptureBudget: () => apiFetch<EntityCaptureBudgetResponse>('/admin/api/dream/entity-capture-budget', undefined, EntityCaptureBudgetResponseSchema),
   saveEntityCaptureBudget: (costCap: number | 'unlimited') =>

@@ -51,6 +51,18 @@ const FIXTURE_TRANSCRIPT: DiscoveredTranscript = {
 };
 
 describe('makeJudgeClient — construction-time provider probe', () => {
+  test('reasoning-model triage has output headroom, bounded length retry and an explicit timeout',async()=>{
+    await withEnv({MIMO_API_KEY:'isolated-test-key'},async()=>{
+      let request:any;
+      __setChatTransportForTests(async opts=>{request=opts;return {text:'{}',blocks:[],stopReason:'end',usage:{input_tokens:1,output_tokens:1,cache_read_tokens:0,cache_creation_tokens:0},model:'mimo:mimo-v2.6-flash',providerId:'mimo'};});
+      await makeJudgeClient('ollama:qwen3.6:27b',undefined,{timeoutMs:90_000})!.create({model:'ollama:qwen3.6:27b',max_tokens:2048,messages:[{role:'user',content:'classify source'}]});
+      expect(request.maxTokens).toBeGreaterThan(2048);expect(request.retryLength).toBe(true);expect(request.disableReasoning).toBe(true);
+    });
+  });
+  test('configured triage timeout keeps the timeout reason visible',async()=>{
+    __setChatTransportForTests(async opts=>{await new Promise((_,reject)=>opts.abortSignal!.addEventListener('abort',()=>reject(new Error('wrapped transport failure'))));throw new Error('unreachable');});
+    await expect(makeJudgeClient('ollama:qwen3.6:27b',undefined,{timeoutMs:10})!.create({model:'ollama:qwen3.6:27b',max_tokens:2048,messages:[{role:'user',content:'classify source'}]})).rejects.toThrow('verdict_timeout');
+  });
   test('A1: returns null when verdict model is anthropic and no API key is configured', async () => {
     await withEnv({ ANTHROPIC_API_KEY: undefined }, async () => {
       // Use a synthetic config path to avoid surfacing a stored anthropic_api_key.

@@ -2,8 +2,9 @@ import { randomUUID } from 'node:crypto';
 import type { BrainEngine } from '../engine.ts';
 export const ENTITY_CAPTURE_PENDING_PREFIX = 'dream.entity_capture.pending.';
 export const ENTITY_CAPTURE_MIN_BODY_CHARS = 8;
+export const EXCLUDED_CAPTURE_PATH=/((^|\/)(\.pmbrain|\.gbrain|\.git|node_modules|backups?)(\/|$))|(^output\/(agent-notes|wiki-compile|wiki-health|qa)(\/|$))|(\.(bak|backup)(\.|$))/i;
 export function excludedCapturePath(slug:string):boolean {
-  return /(?:^|\/)(?:\.pmbrain|\.gbrain|\.git|node_modules|backups?)(?:\/|$)|^output\/(?:agent-notes|wiki-compile|wiki-health|qa)(?:\/|$)|\.(?:bak|backup)(?:\.|$)/i.test(slug.replace(/\\/g,'/'));
+  return EXCLUDED_CAPTURE_PATH.test(slug.replace(/\\/g,'/'));
 }
 export async function requestImportedEntityCapture(engine: BrainEngine, sourceId: string, page: {slug:string;type:string;compiled_truth:string;frontmatter:Record<string,unknown>}): Promise<void> {
   if (excludedCapturePath(page.slug) || ['person','company','organization','entity','concept','project'].includes(page.type) || /^(?:people|companies|concepts|projects|wiki\/agents)\//.test(page.slug) || page.frontmatter.dream_generated===true || page.frontmatter.pmbrain_ingest_provenance || page.compiled_truth.trim().length<ENTITY_CAPTURE_MIN_BODY_CHARS) return;

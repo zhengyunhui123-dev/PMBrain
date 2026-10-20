@@ -116,6 +116,7 @@ function DreamSettings() {
   const [savedOutputDir, setSavedOutputDir] = useState('output');
   const [timeoutMinutes, setTimeoutMinutes] = useState('');
   const [savedTimeoutMinutes, setSavedTimeoutMinutes] = useState('');
+  const [knowledgeDirty,setKnowledgeDirty]=useState(false);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
 
@@ -152,6 +153,7 @@ function DreamSettings() {
       setSettings(current => ({ ...current, ...saved }));
       setSavedOutputDir(saved.outputDir);
       setSavedTimeoutMinutes(timeoutMinutes);
+      setKnowledgeDirty(false);
       setMessage('知识整理设置已保存');
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : String(nextError));
@@ -217,7 +219,7 @@ function DreamSettings() {
     finally{setSaving(false);}
   };
 
-  const outputDirDirty = settings.outputDir.trim() !== savedOutputDir.trim() || timeoutMinutes !== savedTimeoutMinutes;
+  const outputDirDirty = settings.outputDir.trim() !== savedOutputDir.trim() || timeoutMinutes !== savedTimeoutMinutes||knowledgeDirty;
   const outputIsAbsolute = /^[A-Za-z]:[\\/]/.test(settings.outputDir)
     || /^\\\\/.test(settings.outputDir)
     || settings.outputDir.startsWith('/');
@@ -240,6 +242,23 @@ function DreamSettings() {
         </div>
       </div>
       <div className="dream-settings-grid">
+        <label className="dream-dual-write-setting" htmlFor="dream-knowledge-enabled">
+          <span><b>深度提炼知识与概念</b><small>在 AI 深度整理中提取有原文证据的知识点、综合相关概念，并处理符合条件的原始对话。首次开启只处理之后新增或修改的资料，历史内容不自动重扫；实体整理已有成果继续复用，观点生成保持关闭。</small></span>
+          <input id="dream-knowledge-enabled" type="checkbox" checked={settings.knowledgeEnabled===true} disabled={loading||saving} onChange={event=>{setSettings(current=>({...current,knowledgeEnabled:event.target.checked}));setKnowledgeDirty(true);}}/>
+        </label>
+        <label className="dream-dual-write-setting" htmlFor="dream-knowledge-ordinary">
+          <span><b>知识提炼使用普通模型</b><small>默认沿用已配置的普通模型。关闭后使用模型设置中各 Dream 阶段的高级配置。</small></span>
+          <input id="dream-knowledge-ordinary" type="checkbox" checked={settings.knowledgeUseOrdinaryModel!==false} disabled={loading||saving} onChange={event=>{setSettings(current=>({...current,knowledgeUseOrdinaryModel:event.target.checked}));setKnowledgeDirty(true);}}/>
+        </label>
+        <div className="dream-output-setting">
+          <label htmlFor="dream-atom-budget">知识点提取费用预算（美元 / 来源 / 次）</label>
+          <input id="dream-atom-budget" type="number" min="0.001" step="0.01" value={settings.atomBudgetUsd??0.3} disabled={loading||saving} onChange={event=>{setSettings(current=>({...current,atomBudgetUsd:Number(event.target.value)}));setKnowledgeDirty(true);}}/>
+          <label htmlFor="dream-concept-budget">概念综合费用预算（美元 / 次）</label>
+          <input id="dream-concept-budget" type="number" min="0.001" step="0.01" value={settings.conceptBudgetUsd??1.5} disabled={loading||saving} onChange={event=>{setSettings(current=>({...current,conceptBudgetUsd:Number(event.target.value)}));setKnowledgeDirty(true);}}/>
+          <label htmlFor="dream-verdict-timeout">原始对话判读等待上限（秒 / 请求）</label>
+          <input id="dream-verdict-timeout" type="number" min="1" step="1" value={(settings.verdictTimeoutMs??120000)/1000} disabled={loading||saving} onChange={event=>{setSettings(current=>({...current,verdictTimeoutMs:Number(event.target.value)*1000}));setKnowledgeDirty(true);}}/>
+          <p className="pm-hint">采用原版阶段预算，按实际提供商价格核算；价格不可用时停止付费调用并保留待处理内容。启用时间：{settings.knowledgeSince?new Date(settings.knowledgeSince).toLocaleString():'尚未启用'}。修改后点击保存。</p>
+        </div>
         <label className="dream-dual-write-setting" htmlFor="dream-entity-capture">
           <span><b>自动整理实体与关联</b><small>默认开启。导入或同步新增、变更资料后，使用普通模型更新人物、组织、项目、概念及来源关联；未变化资料复用成果。需要先在模型设置中配置普通模型。关闭后仍保存原文，待处理资料可在重新开启后由维护继续。</small></span>
           <input id="dream-entity-capture" type="checkbox" checked={settings.entityCaptureEnabled!==false} disabled={loading||saving} onChange={event=>void saveEntityCapture(event.target.checked)}/>
@@ -279,7 +298,7 @@ function DreamSettings() {
         <label className="dream-dual-write-setting" htmlFor="dream-dual-write">
           <span>
             <b>写入本地 Markdown</b>
-            <small>开启后，Dream 会同时写入数据库和本地文件，相当于持续维护一套 LLM Wiki。默认开启，不建议关闭。</small>
+            <small>对话综合和模式发现同时写入数据库和本地文件。知识点与概念保存在知识库中，可搜索并查看来源关联。</small>
           </span>
           <input
             id="dream-dual-write"
@@ -340,7 +359,7 @@ function DreamScheduleSettings() {
       .finally(() => setLoading(false));
   }, []);
 
-  const dirty = value.enabled !== saved.enabled || value.time !== saved.time;
+  const dirty = value.enabled !== saved.enabled || value.time !== saved.time||value.mode!==saved.mode;
   const validTime = /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value.time);
 
   const save = async () => {
@@ -352,7 +371,7 @@ function DreamScheduleSettings() {
     setMessage('');
     setError('');
     try {
-      const next = await api.saveDreamSchedule({ enabled: value.enabled, time: value.time });
+      const next = await api.saveDreamSchedule({ enabled: value.enabled, time: value.time,mode:value.mode??'quick' });
       setValue(next);
       setSaved(next);
       setMessage(next.enabled ? `已设置每天 ${next.time} 自动整理` : '已关闭定时一键整理');
@@ -369,7 +388,7 @@ function DreamScheduleSettings() {
         <span className="settings-panel-icon"><Clock3 /></span>
         <div>
           <h2>定时一键整理</h2>
-          <p>每天到设定时间后，自动执行一次与“知识整理”页面「快速维护」相同的整理（同一套 quick 入口，不另起流程）。</p>
+          <p>每天到设定时间后，执行所选整理任务。快速维护同步全部来源；AI 深度整理处理主知识库，并沿用上面的知识提炼设置。</p>
         </div>
       </div>
       <div className="dream-schedule-row">
@@ -386,6 +405,12 @@ function DreamScheduleSettings() {
             disabled={loading || saving}
           />
         </label>
+        <div className="dream-schedule-time">
+          <label htmlFor="dream-schedule-mode">整理方式</label>
+          <select id="dream-schedule-mode" value={value.mode??'quick'} disabled={loading||saving} onChange={event=>setValue(current=>({...current,mode:event.target.value as 'quick'|'full'}))}>
+            <option value="quick">快速维护</option><option value="full">AI 深度整理</option>
+          </select>
+        </div>
         <div className="dream-schedule-time">
           <label htmlFor="dream-schedule-time">每日执行时间</label>
           <input
