@@ -104,6 +104,65 @@ class LocalOpenAIHandler(BaseHTTPRequestHandler):
             self._json(200, {"object": "list", "model": model, "data": data, "usage": {"prompt_tokens": 1, "total_tokens": 1}})
             return
         if route in {"/chat/completions", "/v1/chat/completions"}:
+            tools = body.get("tools", []) or []
+            native_tool_names = {
+                tool.get("function", {}).get("name")
+                for tool in tools
+                if isinstance(tool, dict) and isinstance(tool.get("function"), dict)
+            }
+            request_text = json.dumps(body, ensure_ascii=False)
+            ingest_tool = next((
+                name for name in ("brain_capture_entities", "brain_complete_ingest")
+                if name in native_tool_names
+            ), None)
+            if ingest_tool is None and "Use only these definitions:" in request_text:
+                ingest_tool = next((
+                    name for name in ("brain_capture_entities", "brain_complete_ingest")
+                    if name in request_text
+                ), None)
+            if ingest_tool:
+                arguments = {"entities": [], "relations": [], "no_entities": True}
+                if ingest_tool not in native_tool_names:
+                    self._json(200, {
+                        "id": f"chatcmpl-pmbrain-e2e-{time.time_ns()}",
+                        "object": "chat.completion",
+                        "created": int(time.time()),
+                        "model": body.get("model", "e2e-chat"),
+                        "choices": [{
+                            "index": 0,
+                            "finish_reason": "stop",
+                            "message": {
+                                "role": "assistant",
+                                "content": json.dumps({"tool_calls": [{"name": ingest_tool, "arguments": arguments}]}),
+                            },
+                        }],
+                        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+                    })
+                    return
+                self._json(200, {
+                    "id": f"chatcmpl-pmbrain-e2e-{time.time_ns()}",
+                    "object": "chat.completion",
+                    "created": int(time.time()),
+                    "model": body.get("model", "e2e-chat"),
+                    "choices": [{
+                        "index": 0,
+                        "finish_reason": "tool_calls",
+                        "message": {
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": [{
+                                "id": f"call-pmbrain-e2e-{time.time_ns()}",
+                                "type": "function",
+                                "function": {
+                                    "name": ingest_tool,
+                                    "arguments": json.dumps(arguments),
+                                },
+                            }],
+                        },
+                    }],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+                })
+                return
             self._json(200, {
                 "id": "chatcmpl-pmbrain-e2e",
                 "object": "chat.completion",

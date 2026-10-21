@@ -21,9 +21,27 @@ beforeAll(async()=>{
   home=mkdtempSync(join(tmpdir(),'pmbrain-task-window-'));
   for(const key of keys)delete process.env[key];process.env.PMBRAIN_HOME=home;process.env.GBRAIN_HOME=home;
   mkdirSync(join(home,'.pmbrain'));
-  server=Bun.serve({port:0,async fetch(req){const body:any=await req.json();requests++;
+  server=Bun.serve({port:0,async fetch(req){const body:any=await req.json(),route=new URL(req.url).pathname;
+    if(route.endsWith('/embeddings')){
+      const inputs=Array.isArray(body.input)?body.input:[body.input??''];
+      const dimensions=Number(body.dimensions??1024);
+      return Response.json({object:'list',model:body.model,data:inputs.map((value:any,index:number)=>({object:'embedding',index,embedding:Array.from({length:dimensions},(_,offset)=>((String(value).length+index+offset)%97)/100)})),usage:{prompt_tokens:1,total_tokens:1}});
+    }
+    if(!route.endsWith('/chat/completions'))throw new Error(`unexpected model endpoint: ${route}`);
+    requests++;
     if(held)await new Promise<void>(resolve=>releases.add(resolve));
-    return Response.json({id:'window-'+requests,object:'chat.completion',created:1,model:body.model,choices:[{index:0,finish_reason:'tool_calls',message:{role:'assistant',content:null,tool_calls:[{id:'finish-'+requests,type:'function',function:{name:'brain_capture_entities',arguments:JSON.stringify({entities:[],relations:[],no_entities:true})}}]}}],usage:{prompt_tokens:10,completion_tokens:5,total_tokens:15}});
+    const nativeTools=(body.tools??[]).map((tool:any)=>tool.function?.name).filter((name:any)=>typeof name==='string');
+    const requestText=JSON.stringify(body);
+    const nativeToolName=['brain_capture_entities','brain_complete_ingest'].find(name=>nativeTools.includes(name));
+    const toolName=nativeToolName??(requestText.includes('Use only these definitions:')
+      ?['brain_capture_entities','brain_complete_ingest'].find(name=>requestText.includes(name))
+      :undefined);
+    if(!toolName)throw new Error(`entity capture request did not expose a completion tool: ${requestText.slice(0,500)}`);
+    const args={entities:[],relations:[],no_entities:true};
+    const choice=nativeTools.includes(toolName)
+      ?{index:0,finish_reason:'tool_calls',message:{role:'assistant',content:null,tool_calls:[{id:'finish-'+requests,type:'function',function:{name:toolName,arguments:JSON.stringify(args)}}]}}
+      :{index:0,finish_reason:'stop',message:{role:'assistant',content:JSON.stringify({tool_calls:[{name:toolName,arguments:args}]})}};
+    return Response.json({id:'window-'+requests,object:'chat.completion',created:1,model:body.model,choices:[choice],usage:{prompt_tokens:10,completion_tokens:5,total_tokens:15}});
   }});
   const config={engine:url?'postgres' as const:'pglite' as const,database_path:join(home,'test.pglite'),embedding_model:'custom-openai:window-test',embedding_dimensions:1024,custom_openai_api_key:'isolated-window-test',provider_base_urls:{'custom-openai':server.url.origin+'/v1'},'models.dream.synthesize':'custom-openai:window-test',model_usage:{generative_enabled:true,embedding_enabled:false},desktop:{knowledge_directory:home}};
   writeFileSync(configPath(),JSON.stringify(config));configureGateway(buildGatewayConfig(config));

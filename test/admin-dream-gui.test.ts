@@ -686,9 +686,8 @@ describe('Dream GUI product contract', () => {
   test('Dream settings explain relative paths with a resolved directory preview', () => {
     expect(settingsPage).toContain('默认 Dream 目录');
     expect(settingsPage).toContain('当前实际输出目录');
-    expect(settingsPage).toContain('填写 <code>output</code> 不需要盘符');
-    expect(settingsPage).toContain('高级设置选择其他 Source 时');
-    expect(settingsPage).toContain('目录不存在会自动创建；已经存在则直接复用，不会清空目录');
+    expect(settingsPage).toContain('相对目录保存到当前 Source 的本地知识库目录下');
+    expect(settingsPage).toContain('保存时创建缺少的目录，已有目录继续复用');
   });
 
   test('selected run mode survives the data reload after a run completes', () => {

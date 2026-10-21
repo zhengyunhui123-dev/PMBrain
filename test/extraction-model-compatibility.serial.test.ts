@@ -23,7 +23,12 @@ function reply(stopReason:ChatResult['stopReason'],text='[]'):ChatResult{return 
 
 for(const mode of ['length','parse'] as const)test(`Atom ${mode} 失败不写完成标记，下一页继续并保留再次处理入口`,async()=>{
   const pages=[{slug:'notes/bad',content:'待抽取正文',contentHash:'bad-hash-12345678'},{slug:'notes/good',content:'正常正文',contentHash:'good-hash-1234567'}];
-  for(const page of pages)await engine.putPage(page.slug,{type:'note',title:page.slug,compiled_truth:page.content,frontmatter:{}});
+  for(const page of pages){
+    await engine.putPage(page.slug,{type:'note',title:page.slug,compiled_truth:page.content,frontmatter:{}});
+    const [stored]=await engine.executeRaw<{content_hash:string}>('SELECT content_hash FROM pages WHERE source_id=$1 AND slug=$2',['default',page.slug]);
+    if(!stored?.content_hash)throw new Error(`fixture page was not persisted: ${page.slug}`);
+    page.contentHash=stored.content_hash;
+  }
   const requests:number[]=[];
   __setChatTransportForTests(async opts=>{requests.push(opts.maxTokens!);return opts.messages.some(message=>JSON.stringify(message.content).includes('notes/bad'))?reply(mode==='length'?'length':'end',mode==='length'?'[]':'invalid JSON'):reply('end');});
   const result=await runPhaseExtractAtoms(engine,{sourceId:'default',_pages:pages,_transcripts:[]});

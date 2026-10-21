@@ -69,8 +69,10 @@ describe('patterns phase wiring', () => {
 });
 
 describe('patterns scope filter', () => {
-  test('filters reflections by slug LIKE wiki/personal/reflections/%', () => {
-    expect(patternsSrc).toContain("slug LIKE 'wiki/personal/reflections/%'");
+  test('uses the configured reflection prefix as a SQL parameter', () => {
+    expect(patternsSrc).toContain('WHERE slug LIKE $3');
+    expect(patternsSrc).toContain("getConfig('dream.patterns.source_slug_prefix')");
+    expect(patternsSrc).toContain("'wiki/personal/reflections'");
   });
 
   test('orders by updated_at DESC for recency-bias', () => {
