@@ -44,6 +44,7 @@ beforeAll(async()=>{
   engine=database?new PostgresEngine():new WorkerPgliteEngine() as unknown as BrainEngine;
   await engine.connect(database?{database_url:database}:{});await engine.initSchema();
   await resetPgliteState(engine as any);await engine.setConfig('version','135');await engine.setConfig('pmbrain.schema.version','135');
+  await engine.setConfig('pricing.overrides',JSON.stringify({'custom-openai:isolated-capture':{input:1,output:1},'custom-openai:isolated-embedding':{input:1,output:0}}));
   for(const source of ['knowledge-auto','knowledge-other']){
     await engine.executeRaw('DELETE FROM pages WHERE source_id=$1',[source]);
     await engine.executeRaw('INSERT INTO sources(id,name) VALUES($1,$1) ON CONFLICT(id) DO NOTHING',[source]);

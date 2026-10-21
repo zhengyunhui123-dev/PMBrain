@@ -49,6 +49,7 @@ beforeAll(async()=>{
   engine=url?new PostgresEngine():new WorkerPgliteEngine() as unknown as BrainEngine;
   await engine.connect(url?{database_url:url}:{database_path:config.database_path});await engine.initSchema();
   if(url){await resetPgliteState(engine as any);await engine.setConfig('version','133');}
+  await engine.setConfig('pricing.overrides',JSON.stringify({'custom-openai:window-test':{input:1,output:1}}));
   await engine.setConfig('dream.entity_capture.cost_cap_cny','1000');
   await engine.setConfig('dream.entity_capture.price.input_cny_per_million','1');
   await engine.setConfig('dream.entity_capture.price.output_cny_per_million','1');

@@ -65,9 +65,7 @@ describe('estimateMaxCostUsd', () => {
     }
   });
 
-  test('recipe-priced provider model hits chat pricing', () => {
-    // MIMO recipe: $1.25 input / $10 output per MTok.
-    const cost = estimateMaxCostUsd('mimo:mimo-v2.5-pro', 100_000, 50_000);
-    expect(cost).toBeCloseTo(0.625, 5);
+  test('MiMo pricing is not inferred without service billing context', () => {
+    expect(estimateMaxCostUsd('mimo:mimo-v2.6-pro', 100_000, 50_000)).toBeNull();
   });
 });

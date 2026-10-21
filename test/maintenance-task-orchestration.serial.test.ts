@@ -52,6 +52,7 @@ beforeAll(async () => {
   writeFileSync(configPath(), JSON.stringify({ engine: databaseUrl ? 'postgres' : 'pglite', custom_openai_api_key: 'isolated-only', embedding_model: 'custom-openai:isolated-embedding', embedding_dimensions: dimensions, provider_base_urls: { 'custom-openai': server.url.origin + '/v1' }, models: { default: 'custom-openai:isolated-capture' }, model_usage: { generative_enabled: true, embedding_enabled: true }, desktop: { knowledge_directory: root } }));
   engine = databaseUrl ? new PostgresEngine() : new WorkerPgliteEngine() as unknown as BrainEngine;
   await engine.connect(databaseUrl ? { database_url: databaseUrl } : {}); await engine.initSchema();
+  await engine.setConfig('pricing.overrides', JSON.stringify({ 'custom-openai:isolated-capture': { input: 1, output: 1 }, 'custom-openai:isolated-embedding': { input: 1, output: 0 } }));
 }, 60_000);
 
 beforeEach(async () => {

@@ -47,6 +47,7 @@ beforeAll(async()=>{
 beforeEach(async()=>{
   await resetPgliteState(engine as any);extractionCalls=0;conceptCalls=0;unsupported=false;
   await engine.setConfig('version','135');await engine.setConfig('pmbrain.schema.version','135');
+  await engine.setConfig('pricing.overrides',JSON.stringify({'mimo:mimo-v2.6-flash':{input:1,output:1}}));
   await engine.executeRaw("UPDATE sources SET local_path=$1,config=config-'remote_url' WHERE id='default'",[sourceRoot]);
   for(const [key,value]of Object.entries({'dream.knowledge.enabled':'true','dream.knowledge.since':'2026-10-20T09:28:19.328Z','dream.knowledge.use_ordinary_model':'true','dream.synthesize.conversation_pages':'true','dream.synthesize.enabled':'true','dream.synthesize.dual_write':'false','dream.entity_capture.enabled':'false','sync.auto_git_commit':'false','sync.include_working_tree':'true','sync.repo_path':sourceRoot,'models.default':'mimo:mimo-v2.6-flash'}))await engine.setConfig(key,value);
   runtime=new ProductTaskRuntime(engine);await runtime.start();

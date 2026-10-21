@@ -60,21 +60,21 @@ describe('BudgetMeter', () => {
     expect(meter.unpricedSubmits).toBe(2);
   });
 
-  test('recipe-priced chat provider uses real cost instead of unpriced bypass', () => {
+  test('MiMo price is not inferred from provider id when endpoint is unknown', () => {
     const meter = new BudgetMeter({ budgetUsd: 1.0, phase: 'propose_takes', auditPath });
     const r = meter.check({
-      modelId: 'mimo:mimo-v2.5-pro',
+      modelId: 'mimo:mimo-v2.6-pro',
       estimatedInputTokens: 1500,
       maxOutputTokens: 500,
       label: 'extractor',
     });
     expect(r.allowed).toBe(true);
-    expect(r.unpriced).toBeUndefined();
-    expect(r.estimatedCostUsd).toBeCloseTo(0.006875, 8);
-    expect(meter.unpricedSubmits).toBe(0);
+    expect(r.unpriced).toBe(true);
+    expect(r.estimatedCostUsd).toBe(0);
+    expect(meter.unpricedSubmits).toBe(1);
     const lines = readLedger();
-    expect(lines[0].event).toBe('submit');
-    expect(lines[0].estimated_cost_usd).toBeCloseTo(0.006875, 8);
+    expect(lines[0].event).toBe('submit_unpriced');
+    expect(lines[0].model).toBe('mimo:mimo-v2.6-pro');
   });
 
   test('ledger captures every submit (allowed + denied + unpriced)', () => {

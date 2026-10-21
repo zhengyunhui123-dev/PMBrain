@@ -49,6 +49,7 @@ beforeAll(async()=>{
     model_usage:{generative_enabled:true,embedding_enabled:true},desktop:{knowledge_directory:root}}));
   engine=url?new PostgresEngine():new WorkerPgliteEngine() as unknown as BrainEngine;
   await engine.connect(url?{database_url:url}:{}); await engine.initSchema();
+  await engine.setConfig('pricing.overrides',JSON.stringify({'custom-openai:relation-test':{input:1,output:1},'custom-openai:relation-embedding':{input:1,output:0}}));
   await engine.executeRaw("DELETE FROM pages WHERE source_id='auto-capture'");
   await engine.executeRaw("DELETE FROM minion_jobs WHERE data->'task'->'input'->>'sourceId'='auto-capture' OR data->>'source_id'='auto-capture'");
   await engine.executeRaw("INSERT INTO sources(id,name,local_path) VALUES('auto-capture','Auto', $1) ON CONFLICT(id) DO UPDATE SET local_path=EXCLUDED.local_path",[root]);

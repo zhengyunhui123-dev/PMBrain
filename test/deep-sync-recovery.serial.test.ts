@@ -29,6 +29,7 @@ beforeAll(async () => {
   if (database) assertSafeE2eDatabaseUrl(database);
   engine = database ? new PostgresEngine() : new WorkerPgliteEngine() as unknown as BrainEngine;
   await engine.connect(database ? { database_url: database } : {}); await engine.initSchema();
+  await engine.setConfig('pricing.overrides', JSON.stringify({ 'custom-openai:isolated-capture': { input: 1, output: 1 } }));
 }, 60000);
 
 afterAll(async () => {
