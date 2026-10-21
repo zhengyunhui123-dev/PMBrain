@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { availableImportSources, importMaterials } from '../admin/src/product/import-materials';
+import { availableImportSources, importMaterials, importNeedsEmbedding } from '../admin/src/product/import-materials';
 
 test('file and directory imports reuse existing APIs and only remove completed entries', async () => {
   const calls: any[] = []; const completed: string[] = [];
@@ -65,4 +65,41 @@ test('已受理的导入不能在重试时静默切到另一个 Source', async (
     sourceId: 'b', api: { startImportRun: async () => { throw new Error('重复'); }, startImportUploadRun: async () => { throw new Error('重复'); } },
     wait: async () => { throw new Error('跨源'); }, update: () => {}, starting: () => {}, completed: () => {},
   })).rejects.toThrow('数据源');
+});
+
+test('用户明确选择仅导入时，文件和目录都传递现有的跳过向量化选项', async () => {
+  const options: boolean[] = [];
+  await importMaterials([{ id: 'dir', name: '目录', path: 'D:\\资料' }, { id: 'file', name: '笔记.md', file: new File(['正文'], '笔记.md') }], {
+    autoEmbed: false,
+    api: {
+      startImportRun: async input => { options.push(input.autoEmbed); return { runId: 'dir' }; },
+      startImportUploadRun: async (_file, input) => { options.push(input.autoEmbed); return { runId: 'file' }; },
+    },
+    wait: async id => ({ id, status: 'completed' }) as any, update: () => {}, starting: () => {}, completed: () => {},
+  });
+  expect(options).toEqual([false, false]);
+});
+
+test('默认仍启用向量化，已有任务继续时不改写其导入模式', async () => {
+  let autoEmbed: boolean | undefined;
+  const dependencies = {
+    api: {
+      startImportRun: async (input: any) => { autoEmbed = input.autoEmbed; return { runId: 'new' }; },
+      startImportUploadRun: async () => { throw new Error('重复上传'); },
+      run: async (id: string) => ({ id, status: 'failed' }) as any,
+      retryRun: async (id: string) => ({ runId: id }),
+    },
+    wait: async (id: string) => ({ id, status: 'completed' }) as any, update: () => {}, starting: () => {}, completed: () => {},
+  };
+  await importMaterials([{ id: 'new', name: '新资料', path: 'new' }], dependencies);
+  expect(autoEmbed).toBe(true);
+  autoEmbed = undefined;
+  await importMaterials([{ id: 'old', name: '已有任务', runId: 'old' }], { ...dependencies, autoEmbed: false });
+  expect(autoEmbed).toBeUndefined();
+});
+
+test('仅导入的失败任务继续不要求向量模型，有向量的原任务仍须保留原模式', () => {
+  expect(importNeedsEmbedding([{ id: 'one', name: '一', runId: 'old', autoEmbed: false }], true)).toBe(false);
+  expect(importNeedsEmbedding([{ id: 'one', name: '一', runId: 'old', autoEmbed: true }], false)).toBe(true);
+  expect(importNeedsEmbedding([{ id: 'one', name: '一' }], false)).toBe(false);
 });

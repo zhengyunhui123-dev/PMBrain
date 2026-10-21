@@ -1,5 +1,6 @@
 export const OPEN_CONVERSATION_KEY = 'pmbrain.openConversation';
 export const CREATE_RETURN_KEY = 'pmbrain.createReturn';
+export const IMPORT_RETURN_KEY = 'pmbrain.importReturn';
 export const NAV_COLLAPSED_KEY = 'pmbrain.navCollapsed';
 
 export type LibraryMode = 'new' | 'ready';

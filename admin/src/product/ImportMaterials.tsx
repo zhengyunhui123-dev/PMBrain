@@ -5,12 +5,14 @@ import { desktopApi } from '../lib/product-fetch';
 import { type ConsoleRun } from '../lib/shared';
 import { TaskProgressCard, taskLink } from './TaskProgress';
 import { waitForConsoleRun } from '../pages/import/import-support';
-import { availableImportSources, importMaterials, type Material } from './import-materials';
+import { availableImportSources, importMaterials, importNeedsEmbedding, type Material } from './import-materials';
 import { useProductTasks } from './TaskActivity';
 import { sourceLabel, type BrainOverview } from '../pages/console-shared';
 import { dialogBackdropClick } from '../lib/dialog-backdrop';
+import { useModelReadiness } from './useModelReadiness';
+import { modelReadiness, modelSetupIssue } from './model-readiness';
 
-export function ImportMaterials({ open, onClose }: { open: boolean; onClose: () => void }) {
+export function ImportMaterials({ open, onClose, onConfigureModels }: { open: boolean; onClose: () => void; onConfigureModels: () => void }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const files = useRef<HTMLInputElement>(null);
   const [items, setItems] = useState<Material[]>([]);
@@ -25,6 +27,10 @@ export function ImportMaterials({ open, onClose }: { open: boolean; onClose: () 
   const [run, setRun] = useState<ConsoleRun | null>(null);
   const [results, setResults] = useState<Array<{ id: string; name: string; run: ConsoleRun; path: string }>>([]);
   const desktop = desktopApi();
+  const models = useModelReadiness(open);
+  const [keywordOnly, setKeywordOnly] = useState(false);
+  const existingTask = items.some(item => item.runId);
+  const needsEmbedding = importNeedsEmbedding(items, !keywordOnly);
   useEffect(() => { if (open && !dialog.current?.open) dialog.current?.showModal(); else if (!open) dialog.current?.close(); }, [open]);
   useEffect(() => {
     if (!open) return;
@@ -47,13 +53,16 @@ export function ImportMaterials({ open, onClose }: { open: boolean; onClose: () 
     if (busy) return;
     const queued = [...items];
     if (!queued.length || !sources.some(source => source.id === sourceId) || sourceError) return;
+    const snapshot = await models.reload();
+    if (!snapshot) return;
+    if (needsEmbedding && !modelReadiness(snapshot).embedding) { setError('还没有配置完整的向量模型。请先配置，或选择仅导入资料。'); return; }
     setItems(queued); setBusy(true); setError(''); setResults([]);
     setImports(current => [...current.filter(entry => !queued.some(item => item.id === entry.id)), ...queued.map(item => ({ id: item.id, name: item.name, sourceId }))]);
     let activeItem = queued[0];
     try {
-      await importMaterials(queued, { api, sourceId, wait: waitForConsoleRun, update: setRun,
+      await importMaterials(queued, { api, sourceId, autoEmbed: !keywordOnly, wait: waitForConsoleRun, update: setRun,
         accepted: (item, runId) => {
-          setItems(current => current.map(entry => entry.id === item.id ? { ...entry, runId, taskSourceId: sourceId } : entry));
+          setItems(current => current.map(entry => entry.id === item.id ? { ...entry, runId, taskSourceId: sourceId, autoEmbed: !keywordOnly } : entry));
           setImports(current => current.map(entry => entry.id === item.id ? { ...entry, runId, error: undefined } : entry));
         },
         starting: item => { activeItem = item; setActive(item.name); setRun(null); },
@@ -73,12 +82,21 @@ export function ImportMaterials({ open, onClose }: { open: boolean; onClose: () 
       <input ref={files} type="file" multiple hidden onChange={event => { const selected = Array.from(event.target.files ?? []); setItems(current => [...current, ...selected.map(file => ({ id: crypto.randomUUID(), name: file.name, file }))]); event.target.value = ''; }} />
       <label className="materials-source">导入到数据源<select aria-label="导入到数据源" value={sourceId} disabled={busy || !sources.length || items.some(item => item.runId)} onChange={event => setSourceId(event.target.value)}>{!sources.length && <option value="">{sourceError ? '数据源读取失败' : '正在读取数据源…'}</option>}{sources.map(source => <option key={source.id} value={source.id}>{sourceLabel(source)}{source.id === mainSourceId ? ' · 主源' : ''}</option>)}</select></label>
       {sourceError && <p className="product-error" role="alert">{sourceError}</p>}
+      {models.loading && <p role="status">正在检查模型配置…</p>}
+      {models.error && <p className="product-error" role="alert">模型配置读取失败：{models.error}<button type="button" onClick={() => void models.reload()}>重试读取</button></p>}
+      {models.readiness && !models.readiness.embedding && <section className="model-setup-notice" aria-label="导入前准备">
+        <b>还没有配置完整的向量模型</b><p>配置后可以按含义搜索资料。仅导入不会生成向量。</p>
+        {desktop ? <button type="button" disabled={busy} onClick={onConfigureModels}>去配置模型</button> : <p>请在桌面端打开「设置 → 知识库模型配置」。</p>}
+      </section>}
+      {models.readiness && !models.readiness.chat && <p className="pm-hint">未配置普通模型，本次不能进行 AI 整理和问答。图片、扫描件还需要配置并开启图片识别。</p>}
+      {models.setup && <label className="materials-import-only"><input type="checkbox" checked={keywordOnly} disabled={busy || existingTask} onChange={event => setKeywordOnly(event.target.checked)} />仅导入资料，使用关键词搜索</label>}
+      {existingTask && <p className="pm-hint">已有任务将按原模式继续。{needsEmbedding ? '请先完成向量模型配置。' : '本次仍不生成向量。'}</p>}
       {items.length > 0 ? <ul className="materials-list">{items.map(item => <li key={item.id}>{item.file ? <FileText size={18} /> : <Folder size={18} />}<span><b>{item.name}</b><small title={item.path}>{item.path || `${Math.ceil((item.file?.size ?? 0) / 1024)} KB`}</small></span><button type="button" disabled={busy} aria-label={`移除 ${item.name}`} onClick={() => setItems(current => current.filter(entry => entry.id !== item.id))}><X size={16} /></button></li>)}</ul> : !run && <p className="materials-empty">选择本地文件或文件夹开始添加。</p>}
       {busy && <p className="materials-progress" role="status">正在导入 · {active}</p>}
-      {error && <p className="product-error" role="alert">{run?.product?.errorReason ?? error}</p>}
+      {error && <p className="product-error" role="alert">{modelSetupIssue(run?.product?.errorReason ?? error)?.title ?? run?.product?.errorReason ?? error}</p>}
       {results.filter(result => result.run.id !== run?.id).map(result => <TaskProgressCard key={result.id} run={result.run} />)}
       {run && <><TaskProgressCard run={run} link={false} /><button type="button" className="pm-ghost" onClick={() => { taskLink(run); onClose(); }}>查看任务</button></>}
     </div>
-    <footer><small>{busy ? '关闭面板后，导入继续在后台运行。' : '已导入的文件会跳过，更新过的文件会重新处理。'}</small>{busy && run ? <button type="button" onClick={() => void api.cancelRun(run.id).catch(reason => setError(String(reason)))}>停止</button> : <button type="button" className="materials-primary" disabled={busy || !items.length || !sourceId || Boolean(sourceError)} onClick={() => void start()}><Upload size={16} />{items.some(item => item.runId) ? '继续未完成项' : `导入${items.length > 0 ? ` ${items.length} 项` : ''}`}</button>}</footer>
+    <footer><small>{busy ? '关闭面板后，导入继续在后台运行。' : keywordOnly ? '本次不生成向量，已导入的资料仍可按关键词搜索。' : '已导入的文件会跳过，更新过的文件会重新处理。'}</small>{busy && run ? <button type="button" onClick={() => void api.cancelRun(run.id).catch(reason => setError(String(reason)))}>停止</button> : <button type="button" className="materials-primary" disabled={busy || models.loading || !models.readiness || (!models.readiness.embedding && needsEmbedding) || !items.length || !sourceId || Boolean(sourceError)} onClick={() => void start()}><Upload size={16} />{items.some(item => item.runId) ? '继续未完成项' : `导入${items.length > 0 ? ` ${items.length} 项` : ''}`}</button>}</footer>
   </dialog>;
 }

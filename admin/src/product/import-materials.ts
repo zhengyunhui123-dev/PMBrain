@@ -1,7 +1,10 @@
 import type { ConsoleRun } from '../lib/shared';
 import type { ImportRunRequest, ImportUploadOptions } from '../../../shared/contracts/import';
 
-export interface Material { id: string; name: string; path?: string; file?: File; runId?: string; taskSourceId?: string }
+export interface Material { id: string; name: string; path?: string; file?: File; runId?: string; taskSourceId?: string; autoEmbed?: boolean }
+export function importNeedsEmbedding(items: Material[], autoEmbed: boolean) {
+  return items.some(item => item.runId ? item.autoEmbed !== false : autoEmbed);
+}
 export interface ImportApi {
   startImportRun: (body: ImportRunRequest) => Promise<{ runId: string }>;
   startImportUploadRun: (file: File, body: ImportUploadOptions) => Promise<{ runId: string }>;
@@ -15,11 +18,12 @@ export async function importMaterials(items: Material[], dependencies: {
   completed: (item: Material, run: ConsoleRun) => void;
   starting: (item: Material) => void;
   sourceId?: string;
+  autoEmbed?: boolean;
   accepted?: (item: Material, id: string) => void;
 }) {
   for (const item of items) {
     dependencies.starting(item);
-    const options = { autoEmbed: true, structuredDocuments: true, documentOcr: true, workers: 1, sourceId: dependencies.sourceId };
+    const options = { autoEmbed: dependencies.autoEmbed ?? true, structuredDocuments: true, documentOcr: true, workers: 1, sourceId: dependencies.sourceId };
     let accepted: { runId: string };
     if (item.runId) {
       if (item.taskSourceId !== dependencies.sourceId) throw new Error('此资料已有导入任务，不能更换数据源后继续；请先完成原任务，或移除后重新添加资料。');

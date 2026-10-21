@@ -12,7 +12,7 @@ import type { SidecarState, StartupProgress } from '../../../desktop/src/preload
 import type { UpdateState } from '../../../shared/contracts/updates';
 import { PRODUCT_VERSION } from './product-version';
 import { settingGroupNames, visibleSettingItems, SETTINGS_RETURN_KEY, nextSettingsOrigin, settingsReturnTarget } from './settings-nav';
-import { assistantTarget, CREATE_RETURN_KEY, libraryMode, maintenanceView, NAV_COLLAPSED_KEY } from './home-model';
+import { assistantTarget, CREATE_RETURN_KEY, IMPORT_RETURN_KEY, libraryMode, maintenanceView, NAV_COLLAPSED_KEY } from './home-model';
 import { HomePage } from './HomePage';
 import { MaintenanceDialog, StatusChip } from './MaintenanceStatus';
 import './home.css';
@@ -137,6 +137,13 @@ export function ProductApp() {
     setHostReady(true);
   }, [desktop, activeSlot]);
   const ready = availability.serviceReady;
+  useEffect(() => {
+    const target = sessionStorage.getItem(IMPORT_RETURN_KEY);
+    if (!isSettings && target && currentPage() === target.split('?')[0]) {
+      sessionStorage.removeItem(IMPORT_RETURN_KEY);
+      setImportOpen(true);
+    }
+  }, [page, isSettings]);
   const mode = libraryMode(Boolean(desktop), needsSetup);
   const maintenance = maintenanceView({ startup, servicePhase: service?.phase ?? null, updatePhase: update?.phase ?? null, updateMessage: update?.message, needsSetup: needsSetup === true });
   useEffect(() => {
@@ -241,12 +248,12 @@ export function ProductApp() {
       </section>
       {!isSettings && page === 'home' && mode === 'loading' && <section className="home-page"><p>{setupError ? '还不能确认知识库配置，请重试读取。' : '正在打开首页…'}</p></section>}
       {!isSettings && page === 'home' && mode !== 'loading' && <HomePage mode={mode} ready={ready} databaseReady={availability.databaseReady} status={status} onCreate={intent => navigate(intent ? `create?intent=${intent}` : 'create')} onBring={() => navigate('settings-basic')} onOpen={navigate} />}
-      {!isSettings && page === 'create' && <CreateLibrary onDone={navigate} onCreated={() => setNeedsSetup(false)} onOpenSettings={panel => navigate(`settings-${panel}`)} />}
+      {(page === 'create' || (isSettings && sessionStorage.getItem(CREATE_RETURN_KEY))) && <div className="product-create-host" hidden={page !== 'create'}><CreateLibrary visible={page === 'create'} onDone={navigate} onCreated={() => setNeedsSetup(false)} onOpenSettings={panel => navigate(`settings-${panel}`)} /></div>}
       <div hidden={isSettings || !assistantTarget(page)} className="product-workbench">
         {visited.current.assistant && <Workbench serviceReady={ready} databaseReady={availability.databaseReady} />}
       </div>
       {!isSettings && page === 'docs' && <HelpPage />}
-      {ready && visited.current.importing && <ImportMaterials open={importOpen} onClose={() => setImportOpen(false)} />}
+      {ready && visited.current.importing && <ImportMaterials open={importOpen} onClose={() => setImportOpen(false)} onConfigureModels={() => { sessionStorage.setItem(IMPORT_RETURN_KEY, window.location.hash.slice(1) || 'home'); setImportOpen(false); navigate('settings-model-roles'); }} />}
       {showEmbedded && <div className="product-existing"><ExistingPages embedded /></div>}
       <div ref={bind.menu} className="product-mcp-page" hidden={!menuMcp} />
       <div ref={bind.park} className="desktop-settings-park" hidden />

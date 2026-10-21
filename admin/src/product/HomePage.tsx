@@ -5,6 +5,23 @@ import { useWorkbench } from '../workbench/useWorkbench';
 import { OPEN_CONVERSATION_KEY, type CreateIntent } from './home-model';
 import '../workbench/workbench.css';
 import './home.css';
+import { desktopApi } from '../lib/product-fetch';
+import { api } from '../api';
+import { useModelReadiness } from './useModelReadiness';
+import { onboardingAction, type modelReadiness } from './model-readiness';
+
+function GettingStarted({ needsSetup, readiness, firstImport = needsSetup, onContinue }: { needsSetup: boolean; readiness: ReturnType<typeof modelReadiness>; firstImport?: boolean; onContinue: () => void }) {
+  const action = onboardingAction(needsSetup, readiness);
+  return <section className="home-getting-started" aria-label="开始使用">
+    <h2>{needsSetup ? '完成以下准备，开始使用 PMBrain' : readiness.complete ? '导入第一份资料，开始提问' : '补齐模型配置，开始整理和提问'}</h2>
+    <ol>
+      <li data-state={readiness.complete ? 'done' : 'current'}><i>{readiness.complete ? '✓' : '1'}</i><div><b>配置模型</b><small>普通模型 · {readiness.chat ? '已配置' : '待配置'}　向量模型 · {readiness.embedding ? '已配置' : '待配置'}</small></div></li>
+      <li data-state={needsSetup ? action === 'create' ? 'current' : 'pending' : 'done'}><i>{needsSetup ? '2' : '✓'}</i><div><b>创建知识库</b><small>{needsSetup ? '资料和知识保存在你的电脑上' : '知识库已创建'}</small></div></li>
+      <li data-state={action === 'import' ? 'current' : 'pending'}><i>3</i><div><b>{firstImport ? '导入第一份资料' : '继续使用知识库'}</b><small>{firstImport ? '从一份文档开始，再试着提问' : '完成配置后继续搜索、整理和提问'}</small></div></li>
+    </ol>
+    <button type="button" className="home-primary" onClick={onContinue}>{action === 'models' ? '开始配置模型' : action === 'create' ? '创建我的知识库' : '导入资料'} →</button>
+  </section>;
+}
 
 function HomeArt() {
   return <svg className="home-art" width="360" height="280" viewBox="0 0 360 280" aria-hidden="true">
@@ -84,12 +101,30 @@ export function HomePage({ mode, ready, databaseReady, status, onCreate, onBring
   onBring: () => void;
   onOpen: (target: string) => void;
 }) {
+  const models = useModelReadiness();
+  const [hasMaterials, setHasMaterials] = useState<boolean | null>(null);
+  useEffect(() => {
+    if (!databaseReady || mode !== 'ready') return;
+    let live = true;
+    const load = () => { void api.brainOverview().then(overview => { if (live) setHasMaterials(overview.stats.chunk_count > 0); }).catch(() => { if (live) setHasMaterials(null); }); };
+    load();
+    window.addEventListener('pmbrain:materials-imported', load);
+    return () => { live = false; window.removeEventListener('pmbrain:materials-imported', load); };
+  }, [databaseReady, mode]);
+  const canConfigure = Boolean(desktopApi());
+  const continueSetup = () => {
+    if (models.readiness?.complete && mode === 'ready') onOpen('knowledge-import');
+    else onCreate('');
+  };
+  const setupError = models.error && <p className="product-error" role="alert">模型配置读取失败：{models.error}<button type="button" onClick={() => void models.reload()}>重试读取</button></p>;
   return <section className="home-page">{mode === 'new' && status && <div className="home-status">{status}</div>}{mode === 'new' ? <div className="home-welcome">
     <div className="home-copy">
       <h1>欢迎使用 <span>PMBrain</span></h1>
-      <h2>创建一个属于你的本地知识库</h2>
+      <h2>先配置模型，再创建你的本地知识库</h2>
       <p>导入你的资料，让 PMBrain 帮你整理、搜索和对话，把零散的资料变成可用的知识。</p>
-      <button type="button" className="home-primary" onClick={() => onCreate('')}>+ 创建我的知识库 →</button>
+      {models.loading && !models.setup && <p role="status">正在读取模型配置…</p>}
+      {setupError}
+      {models.readiness && <GettingStarted needsSetup readiness={models.readiness} onContinue={continueSetup} />}
       <div className="home-or"><i /><span>或</span><i /></div>
       <button type="button" className="home-secondary" onClick={onBring}><Folder size={18} />已有知识库？<b>导入或迁移 →</b></button>
     </div>
@@ -101,6 +136,8 @@ export function HomePage({ mode, ready, databaseReady, status, onCreate, onBring
     </div>
   </div> : <div className="home-ready">
     <header className="home-ready-head"><div><h1>你好，开始探索你的知识</h1><p className="home-lead">基于你的知识库，搜索、整理或直接提问</p></div><div className="home-ready-side">{status}<HomeArt /></div></header>
+    {setupError}
+    {canConfigure && models.readiness && (!models.readiness.complete || hasMaterials === false) && <GettingStarted needsSetup={false} firstImport={hasMaterials === false} readiness={models.readiness} onContinue={continueSetup} />}
     <HomeAsk serviceReady={ready} databaseReady={databaseReady} onOpen={() => onOpen('assistant')} />
     <div className="home-actions">
       <FeatureCard tone="tone-violet" icon={<Folder size={20} />} title="导入资料" detail="添加文件或文件夹" onClick={() => onOpen('knowledge-import')} />

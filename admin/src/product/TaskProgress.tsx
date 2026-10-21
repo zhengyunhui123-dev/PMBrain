@@ -5,6 +5,8 @@ import { taskName } from '../../../shared/task-progress';
 import './tasks.css';
 import { TaskRelationsDetails } from './TaskRelations';
 import { OPEN_CONVERSATION_KEY } from './home-model';
+import { ModelSetupNotice } from './ModelSetupNotice';
+import { modelSetupIssue, taskModelSetupIssue } from './model-readiness';
 import { taskStopping, taskStatus, taskPercent, taskRoundCompleted, taskRoundSummary, taskHasRemaining, taskPhaseSummary } from './task-presentation';
 
 export { taskStopping, taskStatus } from './task-presentation';
@@ -63,8 +65,9 @@ export function TaskProgressCard({ run, link = true, timeline = false }: { run: 
     {view?.metrics.length ? roundCompleted?<details className="product-task-round-statistics"><summary>查看统计明细</summary><dl className="product-task-metrics">{view.metrics.map(metric => <div key={metric.label}><dt>{metric.label}</dt><dd>{metric.value}</dd></div>)}</dl></details>:<dl className="product-task-metrics">{view.metrics.map(metric => <div key={metric.label}><dt>{metric.label}</dt><dd>{metric.value}</dd></div>)}</dl> : null}
     <TaskRelationsDetails key={run.id} run={run} />
     {view?.gitResults?.map(git => <section className="product-task-git" key={git.sourceId} aria-label="Git 提交结果"><p>{git.sourceId} · {git.committed ? `本地提交 ${git.files.length} 个文件 · ${git.commit?.slice(0,8)}` : git.pending.length ? '仍有文件待提交' : '本轮无需提交'}</p>{git.error && <p role="alert">{git.error}</p>}{!!git.pending.length && <details><summary>待提交 {git.pending.length} 个文件</summary><ul>{git.pending.map(file=><li key={file.path}>{file.path}：{file.reason}</li>)}</ul></details>}</section>)}
-    {view?.detail && (!roundCompleted||!/^部分完成[,，]/.test(view.detail)) && <p className="product-task-caption">{view.detail}</p>}
-    {view?.errorReason && !roundCompleted && <p className="product-task-error" role="alert">{view.errorReason}</p>}
+    {view?.detail && !modelSetupIssue(view.detail) && (!roundCompleted||!/^部分完成[,，]/.test(view.detail)) && <p className="product-task-caption">{view.detail}</p>}
+    {view?.errorReason && !roundCompleted && !taskModelSetupIssue(run) && <p className="product-task-error" role="alert">{view.errorReason}</p>}
+    <ModelSetupNotice run={run} />
     {run.status === 'cancelled' && <p className="product-task-caption">已完成的内容会保留。</p>}
     <footer>{elapsed !== null && <small>耗时 {elapsed < 60 ? `${elapsed} 秒` : `${Math.floor(elapsed / 60)} 分 ${elapsed % 60} 秒`}</small>}{assistantConversation && <button type="button" onClick={() => { sessionStorage.setItem(OPEN_CONVERSATION_KEY, assistantConversation); window.location.hash = 'assistant'; }}>打开任务对话</button>}{link && <button type="button" onClick={() => taskLink(run)}>查看任务</button>}</footer>
   </section>;
