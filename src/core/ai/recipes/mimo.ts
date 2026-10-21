@@ -49,8 +49,6 @@ export const mimo: Recipe = {
       supports_prompt_cache: false,
       max_output_tokens: model => /^mimo-v2\.6-(?:flash|pro(?:-ultraspeed)?)$/.test(model) || model === 'mimo-v2.5-pro' ? 131072 : model === 'mimo-v2.5' ? 32768 : undefined,
       max_context_tokens: 128000,
-      cost_per_1m_input_usd: 1.25,
-      cost_per_1m_output_usd: 10.0,
       price_last_verified: '2026-06-02',
     },
   },

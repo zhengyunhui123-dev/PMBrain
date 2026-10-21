@@ -17,7 +17,7 @@ import { appendTaskCheckpoint, taskArtifactPath, resumeMaintenanceCheckpoint, re
 import { DEFAULT_PRODUCT_TASK_TIMEOUT_MS, DREAM_TASK_TIMEOUT_KEY, parseTaskTimeout } from './timeout.ts';
 import { FileProjection } from './file-projection.ts';
 import { WorkerPgliteEngine } from '../database/worker-engine.ts';
-import { TaskProgressAdapter, finishTaskProgress } from './progress-adapter.ts';
+import { TaskProgressAdapter, finishTaskProgress,applyTaskBudget } from './progress-adapter.ts';
 import { taskUsesFileQueue, usesSyncFileQueue, type TaskProductProgress } from '../../../shared/task-progress.ts';
 import { withDatabasePriority } from '../database/priority';
 import { SyncFileQueue, SYNC_FILE_QUEUE, SYNC_FILE_TASK } from './sync-file-queue.ts';
@@ -35,6 +35,7 @@ import { resolveWritebackConfig } from '../../core/facts/writeback-config';
 import { loadConfigFileOnly } from '../../core/config';
 import { withDatabaseRequest, withoutDatabaseRequest } from '../database/request-context.ts';
 import { withDeadline } from '../deadline.ts';
+import {handleTaskBudget,type TaskBudgetRequest,type TaskBudgetState} from './task-budget';
 
 export const PRODUCT_TASK_QUEUE = 'pmbrain-product';
 const TASK_NAME = 'pmbrain-product-task';
@@ -51,6 +52,7 @@ function toRun(job: MinionJob, stopping = false): ConsoleRun {
   const task = job.data.task as ProductTask;
   adapter.view.relations = { available: Object.hasOwn(job.data, 'relations'), total: Object.keys((job.data.relations ?? {}) as object).length };
   adapter.view.gitResults = Object.values(job.data.gitResults ?? {});
+  if(job.data.taskBudget){const {reservations,pendingPricing,...budget}=job.data.taskBudget as TaskBudgetState;adapter.view.budget=budget;}
   if (task?.type === 'import') adapter.view.material = { ...adapter.view.material,
     name: task.input.path.split(/[\\/]/).filter(Boolean).at(-1) ?? task.input.path,
     sourceId: task.input.sourceId ?? 'default', directory: task.input.directory === true,
@@ -331,7 +333,7 @@ export class ProductTaskRuntime {
       && (this.stoppingSessions.has(Number(run.id.slice(5))) || !this.cached.some(row=>row.id===run.id && ['completed','cancelled'].includes(row.status)))));
     for (const run of live) {
       const saved = this.cached.find(item=>item.id===run.id)?.product;
-      if(run.product && saved) {run.product.relations=saved.relations;run.product.gitResults=saved.gitResults;}
+      if(run.product && saved) {run.product.relations=saved.relations;run.product.gitResults=saved.gitResults;if(saved.budget&&(saved.budget.revision??0)>(run.product.budget?.revision??0))applyTaskBudget(run.product,saved.budget);}
     }
     for (const run of live) if (run.product && taskUsesFileQueue(run.kind)) run.product.activeFiles = this.fileProjection.active(Number(run.id.slice(5)));
     return [...live, ...this.cached.filter(row => !live.some(run => run.id === row.id))]
@@ -352,7 +354,7 @@ export class ProductTaskRuntime {
           .finally(() => { this.refreshingRuns = null; });
       }
       const saved = this.cached.find(run => run.id === id)?.product;
-      if (saved && live.product) { live.product.relations=saved.relations; live.product.gitResults=saved.gitResults; }
+      if (saved && live.product) { live.product.relations=saved.relations; live.product.gitResults=saved.gitResults;if(saved.budget&&(saved.budget.revision??0)>(live.product.budget?.revision??0))applyTaskBudget(live.product,saved.budget); }
       return live;
     }
     const session = this.sessionViews.get(Number(id.slice(5)));
@@ -436,10 +438,10 @@ export class ProductTaskRuntime {
       const progress=(record!.progress??{}) as Progress;
       delete progress.result;
       if(progress.product)progress.product.errorReason=null;
-      await this.engine.executeRaw(`UPDATE minion_jobs SET data=(data-'resourceStopReason') || ($2::jsonb - 'relations' - 'gitFiles' - 'gitResults'),progress=$3::jsonb WHERE id=$1`,[jobId,record!.data,progress]);
+      await this.engine.executeRaw(`UPDATE minion_jobs SET data=(data-'resourceStopReason') || ($2::jsonb - 'relations' - 'gitFiles' - 'gitResults' - 'taskBudget'),progress=$3::jsonb WHERE id=$1`,[jobId,record!.data,progress]);
       if (checkpoint) {
         resumeMaintenanceCheckpoint(checkpoint,run.status==='completed' || maintenanceFailure(run.result)!==null,true);
-        await this.engine.executeRaw(`UPDATE minion_jobs SET data = data || ($2::jsonb - 'relations' - 'gitFiles' - 'gitResults') WHERE id = $1`, [jobId, { ...record!.data, task }]);
+        await this.engine.executeRaw(`UPDATE minion_jobs SET data = data || ($2::jsonb - 'relations' - 'gitFiles' - 'gitResults' - 'taskBudget') WHERE id = $1`, [jobId, { ...record!.data, task }]);
       }
       await this.engine.executeRaw(`UPDATE minion_jobs SET status = 'paused', result = NULL WHERE queue = $1 AND (data->>'sessionId')::bigint = $2 AND result->>'status' IN ('failed','error','partial')`, [SYNC_FILE_QUEUE, jobId]);
       await this.clearStopIntent(jobId);
@@ -457,7 +459,7 @@ export class ProductTaskRuntime {
       record!.data.authorizedAttempt = record!.attempts_started + 1;
       await this.clearStopIntent(resumedId);
       await this.engine.executeRaw(`UPDATE minion_jobs SET status='waiting',result=NULL,error_text=NULL,lock_token=NULL,lock_until=NULL,delay_until=NULL,finished_at=NULL,
-        data=(data-'resourceStopReason') || ($2::jsonb - 'relations' - 'gitFiles' - 'gitResults'),progress=$3::jsonb,updated_at=now()
+        data=(data-'resourceStopReason') || ($2::jsonb - 'relations' - 'gitFiles' - 'gitResults' - 'taskBudget'),progress=$3::jsonb,updated_at=now()
         WHERE id=$1 AND queue=$4 AND status IN ('paused','cancelled','failed','dead','completed')`, [resumedId, record!.data, progress, PRODUCT_TASK_QUEUE]);
       return this.getRun(id);
     }
@@ -692,11 +694,16 @@ export class ProductTaskRuntime {
             gitOperations.add(operation);
             try { return await operation; } finally { gitOperations.delete(operation); }
           }
+          if(message.method==='task.budget'){
+            const reply=await handleTaskBudget(this.engine,context.id,record.lock_token!,message.args[0] as TaskBudgetRequest);
+            if(structuredTask.type==='dream'){record.data.taskBudget=reply.state;const {reservations,pendingPricing,...budget}=reply.state;adapter.view.budget=budget;}
+            return reply;
+          }
           if (message.method === 'task.maintenanceCheckpoint') {
             if (structuredTask.type !== 'dream' && structuredTask.type !== 'import') throw new Error('无效的维护检查点');
             if(structuredTask.type==='import')structuredTask.input.knowledgeCheckpoint=message.args[0] as MaintenanceCheckpoint;
             else structuredTask.input.checkpoint = message.args[0] as MaintenanceCheckpoint;
-            const rows = await this.engine.executeRaw(`UPDATE minion_jobs SET data = data || ($3::jsonb - 'relations' - 'gitFiles' - 'gitResults'), updated_at = now() WHERE id = $1 AND status = 'active' AND lock_token = $2 RETURNING id`, [context.id, record.lock_token, record.data]);
+            const rows = await this.engine.executeRaw(`UPDATE minion_jobs SET data = data || ($3::jsonb - 'relations' - 'gitFiles' - 'gitResults' - 'taskBudget'), updated_at = now() WHERE id = $1 AND status = 'active' AND lock_token = $2 RETURNING id`, [context.id, record.lock_token, record.data]);
             if (!rows.length) throw new Error('维护任务已停止或租约失效');
             return null;
           }
@@ -788,7 +795,7 @@ export class ProductTaskRuntime {
           const counts=await this.fileQueue.counts(context.id);
           if(counts.remaining>0){
             delete record.data.resourceStopReason;
-            const owned=await this.engine.executeRaw(`UPDATE minion_jobs SET data=(data-'resourceStopReason') || ($2::jsonb - 'relations' - 'gitFiles' - 'gitResults'),error_text=NULL WHERE id=$1 AND status='active' AND lock_token=$3 RETURNING id`,[context.id,record.data,record.lock_token]);
+            const owned=await this.engine.executeRaw(`UPDATE minion_jobs SET data=(data-'resourceStopReason') || ($2::jsonb - 'relations' - 'gitFiles' - 'gitResults' - 'taskBudget'),error_text=NULL WHERE id=$1 AND status='active' AND lock_token=$3 RETURNING id`,[context.id,record.data,record.lock_token]);
             if(!owned.length)return MINION_DEFERRED;
             await this.fileQueue.release(context.id,record.lock_token);
             this.scheduleSessionRefresh(context.id);

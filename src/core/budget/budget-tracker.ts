@@ -30,8 +30,11 @@
 
 import { mkdirSync, appendFileSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { gbrainPath } from '../config.ts';
-import { ANTHROPIC_PRICING, type ModelPricing } from '../anthropic-pricing.ts';
+import { gbrainPath,loadConfig } from '../config.ts';
+import {DEFAULT_USD_TO_CNY,modelBilling,MIMO_OFFICIAL_PRICES} from '../../../shared/model-billing.ts';
+import {serviceModelValue,newServiceModel,type ModelService} from '../../../shared/model-services.ts';
+import { ANTHROPIC_PRICING } from '../anthropic-pricing.ts';
+import {canonicalLookup,type ModelPricing} from '../model-pricing.ts';
 import { EMBEDDING_PRICING, lookupEmbeddingPrice } from '../embedding-pricing.ts';
 import { splitProviderModelId } from '../model-id.ts';
 import { isoWeekFilename, resolveAuditDir } from '../audit-week-file.ts';
@@ -42,6 +45,7 @@ export type BudgetKind = 'chat' | 'embed' | 'rerank';
 export type BudgetReason = 'cost' | 'runtime' | 'no_pricing';
 
 export interface BudgetEstimate {
+  reservationId?:string;
   modelId: string;
   estimatedInputTokens: number;
   maxOutputTokens: number;
@@ -51,6 +55,10 @@ export interface BudgetEstimate {
 }
 
 export interface BudgetActualUsage {
+  usageMissing?:boolean;
+  reservationId?:string;
+  cacheReadTokens?:number;
+  cacheWriteTokens?:number;
   modelId: string;
   inputTokens: number;
   outputTokens?: number;
@@ -61,6 +69,8 @@ export interface BudgetActualUsage {
 }
 
 export interface BudgetSnapshot {
+  reservedCostUsd?:number;
+  stopReason?:BudgetReason;
   cumulativeCostUsd: number;
   startedAt: number;
   elapsedMs: number;
@@ -70,6 +80,10 @@ export interface BudgetSnapshot {
 }
 
 export interface BudgetTrackerOpts {
+  initialCostUsd?:number;
+  reserveInFlight?:boolean;
+  initialReservations?:Record<string,number>;
+  strictModelPricing?:boolean;
   /** USD cap. When undefined, cost gate disabled; pricing misses warn-once. */
   maxCostUsd?: number;
   /** Wall-clock cap in milliseconds. When undefined, runtime gate disabled. */
@@ -98,18 +112,34 @@ export function parsePricingOverrides(raw: unknown): PricingOverrides | undefine
     if (!key) continue;
     if (valid(entry)) out[key] = { input: entry, output: entry };
     else if (entry && typeof entry === 'object' && !Array.isArray(entry)) {
-      const row = entry as { input?: unknown; output?: unknown; pricePerMTok?: unknown };
+      const row = entry as { input?: unknown; output?: unknown; pricePerMTok?: unknown;cache_read?:unknown;cache_write?:unknown };
       const input = row.input ?? row.pricePerMTok;
       if (valid(input) && (row.output === undefined || valid(row.output))) {
-        out[key] = { input, output: row.output === undefined ? input : row.output };
+        out[key] = { input, output: row.output === undefined ? input : row.output,...(valid(row.cache_read)?{cache_read:row.cache_read}:{}),...(valid(row.cache_write)?{cache_write:row.cache_write}:{}) };
       }
     }
   }
   return Object.keys(out).length > 0 ? out : undefined;
 }
 
-export async function loadPricingOverrides(engine: { getConfig(key: string): Promise<string | null> }): Promise<PricingOverrides | undefined> {
-  try { return parsePricingOverrides(await engine.getConfig('pricing.overrides')); } catch { return undefined; }
+export async function loadPricingOverrides(engine: { getConfig(key: string): Promise<string | null> },rateOverride?:number): Promise<PricingOverrides | undefined> {
+  const out:PricingOverrides={};
+  const storedRate=rateOverride??Number(await engine.getConfig('pricing.usd_to_cny')??DEFAULT_USD_TO_CNY);
+  const rate=Number.isFinite(storedRate)&&storedRate>0?storedRate:DEFAULT_USD_TO_CNY;
+  const config=loadConfig();
+  const directMiMo={provider:'mimo',baseUrl:config?.provider_touchpoint_base_urls?.mimo?.chat??config?.provider_base_urls?.mimo??'https://api.xiaomimimo.com/v1'};
+  for(const id of Object.keys(MIMO_OFFICIAL_PRICES)){const price=modelBilling(directMiMo,newServiceModel(id),rate);if(price)out[`mimo:${id}`]={input:price.inputCny/rate,output:price.outputCny/rate,cache_read:price.cacheReadCny===undefined?undefined:price.cacheReadCny/rate};}
+  for(const service of ((config?.desktop as {model_services?:ModelService[]}|undefined)?.model_services??[])){
+    if(!service.enabled)continue;
+    for(const model of service.models??[]){
+      const price=modelBilling(service,model,rate);
+      if(!price)continue;
+      const value={input:price.inputCny/rate,output:price.outputCny/rate,...(price.cacheReadCny!==undefined?{cache_read:price.cacheReadCny/rate}:{}),...(price.cacheWriteCny!==undefined?{cache_write:price.cacheWriteCny/rate}:{})};
+      out[`${service.provider}:${model.id}`.toLowerCase()]=value;
+      out[serviceModelValue(service,model).toLowerCase()]=value;
+    }
+  }
+  return {...out,...parsePricingOverrides(await engine.getConfig('pricing.overrides'))};
 }
 
 export class BudgetExhausted extends Error {
@@ -203,9 +233,11 @@ const FREE_LOCAL_EMBED_PROVIDERS: ReadonlySet<string> = new Set([
  *     return zero pricing so `--max-cost` callers don't TX2 hard-fail on
  *     local inference recipes (electricity, not tokens); else unknown.
  */
-function lookupPricing(modelId: string, kind: BudgetKind, overrides?: PricingOverrides): ModelPricing | null {
+function lookupPricing(modelId: string, kind: BudgetKind, overrides?: PricingOverrides,strict=false): ModelPricing | null {
   const override = overrides?.[modelId.trim().toLowerCase()];
   if (override) return override;
+  const canonical=canonicalLookup(modelId);
+  if(kind==='chat'&&canonical&&(!strict||splitProviderModelId(modelId).provider!=='mimo'))return canonical;
   if (kind === 'embed') {
     const hit = lookupEmbeddingPrice(modelId);
     if (hit.kind === 'known') {
@@ -227,9 +259,10 @@ function lookupPricing(modelId: string, kind: BudgetKind, overrides?: PricingOve
   const { provider: providerId, model: modelTail } = splitProviderModelId(modelId);
   if (modelTail) {
     const tailHit = ANTHROPIC_PRICING[modelTail];
-    if (tailHit) return tailHit;
+    if (tailHit&&(!strict||providerId==='anthropic')) return tailHit;
   }
-  if (kind === 'chat' && providerId) {
+  if(kind==='chat'&&providerId&&['ollama','llama-server'].includes(providerId))return {input:0,output:0};
+  if (kind === 'chat' && providerId&&!strict) {
     const chat = getRecipe(providerId)?.touchpoints.chat;
     if (
       typeof chat?.cost_per_1m_input_usd === 'number' &&
@@ -251,13 +284,15 @@ function lookupPricing(modelId: string, kind: BudgetKind, overrides?: PricingOve
   return null;
 }
 
-function costForUsage(modelId: string, inputTokens: number, outputTokens: number, kind: BudgetKind, overrides?: PricingOverrides): number | null {
-  const p = lookupPricing(modelId, kind, overrides);
+function costForUsage(modelId: string, inputTokens: number, outputTokens: number, kind: BudgetKind, overrides?: PricingOverrides,strict=false): number | null {
+  const p = lookupPricing(modelId, kind, overrides,strict);
   if (!p) return null;
   return (inputTokens / 1_000_000) * p.input + (outputTokens / 1_000_000) * p.output;
 }
 
 export class BudgetTracker {
+  private readonly reservations=new Map<string,number>();
+  private stopped?:BudgetReason;
   private cumulativeUsd = 0;
   private callsRecorded = 0;
   private readonly startedAt: number;
@@ -266,6 +301,8 @@ export class BudgetTracker {
   private exhaustedFired = false;
 
   constructor(private readonly opts: BudgetTrackerOpts) {
+    for(const [id,amount] of Object.entries(opts.initialReservations??{}))this.reservations.set(id,amount);
+    this.cumulativeUsd=opts.initialCostUsd??0;
     this.startedAt = Date.now();
     this.auditPath = opts.auditPath ?? defaultAuditPath();
   }
@@ -274,6 +311,10 @@ export class BudgetTracker {
   get totalSpent(): number {
     return this.cumulativeUsd;
   }
+  get stopReason():BudgetReason|undefined{return this.stopped;}
+  pricingFor(modelId:string,kind:BudgetKind):ModelPricing|null{return lookupPricing(modelId,kind,this.opts.pricingOverrides,this.opts.strictModelPricing);}
+  pendingReservations():Record<string,number>{return Object.fromEntries(this.reservations);}
+  flush():Promise<void>{return Promise.resolve();}
 
   /**
    * The configured cost ceiling (USD), or undefined when uncapped. Read-only.
@@ -288,9 +329,9 @@ export class BudgetTracker {
   affordableOutputTokens(estimate:BudgetEstimate):number{
     this.assertRuntime(estimate.modelId);
     if(this.opts.maxCostUsd===undefined)return estimate.maxOutputTokens;
-    const pricing=lookupPricing(estimate.modelId,estimate.kind,this.opts.pricingOverrides);
+    const pricing=lookupPricing(estimate.modelId,estimate.kind,this.opts.pricingOverrides,this.opts.strictModelPricing);
     if(!pricing)return 0;
-    const remaining=this.opts.maxCostUsd-this.cumulativeUsd-estimate.estimatedInputTokens*pricing.input/1_000_000;
+    const remaining=this.opts.maxCostUsd-this.cumulativeUsd-[...this.reservations.values()].reduce((a,b)=>a+b,0)-estimate.estimatedInputTokens*pricing.input/1_000_000;
     if(remaining<0)return 0;
     return pricing.output>0?Math.max(0,Math.min(estimate.maxOutputTokens,Math.floor(remaining*1_000_000/pricing.output))):estimate.maxOutputTokens;
   }
@@ -325,6 +366,7 @@ export class BudgetTracker {
       estimate.maxOutputTokens,
       estimate.kind,
       this.opts.pricingOverrides,
+      this.opts.strictModelPricing,
     );
 
     if (projected === null) {
@@ -334,7 +376,7 @@ export class BudgetTracker {
         // void the contract.
         const msg = `${this.opts.label}: no pricing entry for model "${estimate.modelId}" (kind=${estimate.kind}). ` +
           `Set pricing.overrides for this model or drop --max-cost. The cap stays fail-closed while pricing is unknown.`;
-        this.fireExhausted();
+        this.fireExhausted('no_pricing');
         throw new BudgetExhausted(msg, {
           reason: 'no_pricing',
           spent: this.cumulativeUsd,
@@ -366,7 +408,7 @@ export class BudgetTracker {
     }
 
     if (this.opts.maxCostUsd !== undefined) {
-      const after = this.cumulativeUsd + projected;
+      const after = this.cumulativeUsd + projected+[...this.reservations.values()].reduce((a,b)=>a+b,0);
       if (after > this.opts.maxCostUsd) {
         appendAuditLine(this.auditPath, {
           schema_version: 1,
@@ -388,6 +430,8 @@ export class BudgetTracker {
         );
       }
     }
+
+    if(this.opts.reserveInFlight&&estimate.reservationId)this.reservations.set(estimate.reservationId,projected);
 
     appendAuditLine(this.auditPath, {
       schema_version: 1,
@@ -414,8 +458,16 @@ export class BudgetTracker {
    */
   record(actual: BudgetActualUsage & { kind?: BudgetKind }): void {
     this.callsRecorded++;
+    if(actual.usageMissing&&this.opts.reserveInFlight){appendAuditLine(this.auditPath,{schema_version:1,ts:new Date().toISOString(),event:'record_usage_unconfirmed',label:this.opts.label,model:actual.modelId,reserved_cost_usd:[...this.reservations.values()].reduce((a,b)=>a+b,0)});return;}
     const kind: BudgetKind = actual.kind ?? 'chat';
-    const cost = costForUsage(actual.modelId, actual.inputTokens, actual.outputTokens ?? 0, kind, this.opts.pricingOverrides);
+    let cost = costForUsage(actual.modelId, actual.inputTokens, actual.outputTokens ?? 0, kind, this.opts.pricingOverrides,this.opts.strictModelPricing);
+    const pricing=lookupPricing(actual.modelId,kind,this.opts.pricingOverrides,this.opts.strictModelPricing);
+    if(cost!==null&&pricing){
+      const read=Math.min(actual.inputTokens,Math.max(0,actual.cacheReadTokens??0));
+      const write=Math.min(Math.max(0,actual.inputTokens-read),Math.max(0,actual.cacheWriteTokens??0));
+      cost+=(read*((pricing.cache_read??pricing.input)-pricing.input)+write*((pricing.cache_write??pricing.input)-pricing.input))/1_000_000;
+    }
+    if(actual.reservationId)this.reservations.delete(actual.reservationId);
 
     if (cost === null) {
       // Unpriced model: record audit but skip cumulative math. Cap (if set)
@@ -451,6 +503,11 @@ export class BudgetTracker {
       actual_cost_usd: cost,
       cumulative_cost_usd: this.cumulativeUsd,
       max_cost_usd: this.opts.maxCostUsd ?? null,
+      cache_read_tokens:actual.cacheReadTokens??0,
+      cache_write_tokens:actual.cacheWriteTokens??0,
+      input_price_usd:pricing?.input,
+      output_price_usd:pricing?.output,
+      cache_read_price_usd:pricing?.cache_read,
     });
 
     if (this.opts.maxCostUsd !== undefined && this.cumulativeUsd > this.opts.maxCostUsd) {
@@ -471,6 +528,8 @@ export class BudgetTracker {
       maxCostUsd: this.opts.maxCostUsd,
       maxRuntimeMs: this.opts.maxRuntimeMs,
       callsRecorded: this.callsRecorded,
+      ...(this.opts.reserveInFlight?{reservedCostUsd:[...this.reservations.values()].reduce((a,b)=>a+b,0)}:{}),
+      ...(this.stopped?{stopReason:this.stopped}:{}),
     };
   }
 
@@ -496,7 +555,8 @@ export class BudgetTracker {
     }
   }
 
-  private fireExhausted(): void {
+  private fireExhausted(reason:BudgetReason='cost'): void {
+    this.stopped=reason;
     if (this.exhaustedFired) return;
     this.exhaustedFired = true;
     for (const cb of this.onExhaustedCbs) {

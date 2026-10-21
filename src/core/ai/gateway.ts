@@ -1349,7 +1349,7 @@ export async function embed(texts: string[], opts?: EmbedOpts): Promise<Float32A
   // global default. resolveEmbeddingProvider validates the override at the
   // recipe layer — bad model strings throw AIConfigError with a clear hint.
   const resolveTarget = opts?.embeddingModel ?? getEmbeddingModel();
-  const tracker = __budgetStore.getStore() ?? null;
+  const tracker = gatewayBudgetTracker();
   const { model, recipe, modelId } = await resolveEmbeddingProvider(resolveTarget);
   const truncated = texts.map(t => (t ?? '').slice(0, MAX_CHARS));
 
@@ -1359,7 +1359,7 @@ export async function embed(texts: string[], opts?: EmbedOpts): Promise<Float32A
   if (tracker) {
     const charsPerToken = recipe.touchpoints?.embedding?.chars_per_token ?? DEFAULT_CHARS_PER_TOKEN;
     const totalChars = truncated.reduce((s, t) => s + t.length, 0);
-    const estimatedInputTokens = Math.ceil(totalChars / Math.max(charsPerToken, 1));
+    const estimatedInputTokens = getTaskBudgetTracker()?truncated.reduce((total,text)=>total+Buffer.byteLength(text,'utf8')+128,0):Math.ceil(totalChars / Math.max(charsPerToken, 1));
     tracker.reserve({
       modelId: `${recipe.id}:${modelId}`,
       estimatedInputTokens,
@@ -1367,6 +1367,7 @@ export async function embed(texts: string[], opts?: EmbedOpts): Promise<Float32A
       kind: 'embed',
       label: 'gateway.embed',
     });
+    await tracker.flush();
   }
   // Dim override (D10) — when caller passes `dimensions`, use it. Otherwise
   // fall back to the global cfg default. dimsProviderOptions throws a
@@ -1398,9 +1399,10 @@ export async function embed(texts: string[], opts?: EmbedOpts): Promise<Float32A
 
   const allEmbeddings: Float32Array[] = [];
   let _embedThrew = false;
+  let reportedTokens=0,usageComplete=true;
   try {
     for (const batch of batches) {
-      const result = await embedSubBatch(batch, model, providerOpts, expected, recipe, modelId, opts);
+      const result = await embedSubBatch(batch, model, providerOpts, expected, recipe, modelId, opts,tokens=>{if(tokens===undefined)usageComplete=false;else reportedTokens+=tokens;});
       allEmbeddings.push(...result);
     }
     return allEmbeddings;
@@ -1409,18 +1411,14 @@ export async function embed(texts: string[], opts?: EmbedOpts): Promise<Float32A
     throw err;
   } finally {
     if (tracker) {
-      // Embed token usage is not surfaced by the AI SDK shape we use; charge
-      // based on the truncated input character count using the recipe's
-      // chars-per-token. On failure, A3 amended says charge the pessimistic
-      // estimate too — embed has no output side, so the input estimate IS
-      // the worst case.
       const charsPerToken = recipe.touchpoints?.embedding?.chars_per_token ?? DEFAULT_CHARS_PER_TOKEN;
       const totalChars = truncated.reduce((s, t) => s + t.length, 0);
       const inputTokens = Math.ceil(totalChars / Math.max(charsPerToken, 1));
       try {
         tracker.record({
           modelId: `${recipe.id}:${modelId}`,
-          inputTokens,
+          inputTokens:usageComplete&&!_embedThrew?reportedTokens:inputTokens,
+          usageMissing:!usageComplete||_embedThrew,
           outputTokens: 0,
           embeddingDims: expected,
           kind: 'embed',
@@ -1430,6 +1428,7 @@ export async function embed(texts: string[], opts?: EmbedOpts): Promise<Float32A
         // BudgetExhausted (TX1) — original throw (if any) wins.
       }
     }
+    await tracker?.flush();
   }
 }
 
@@ -1596,6 +1595,7 @@ async function embedSubBatch(
   recipe: Recipe,
   modelId: string,
   opts?: EmbedOpts,
+  onUsage?:(tokens:number|undefined)=>void,
 ): Promise<Float32Array[]> {
   try {
     const result = await _embedTransport({
@@ -1606,8 +1606,9 @@ async function embedSubBatch(
       // Undefined fields are ignored by the AI SDK so the call shape stays
       // identical for production callers that don't opt in.
       ...(opts?.abortSignal !== undefined && { abortSignal: opts.abortSignal }),
-      ...(opts?.maxRetries !== undefined && { maxRetries: opts.maxRetries }),
+      ...(getTaskBudgetTracker()?{maxRetries:0}:opts?.maxRetries !== undefined?{maxRetries:opts.maxRetries}:{}),
     });
+    onUsage?.(Number.isFinite(result.usage?.tokens)&&result.usage.tokens>=0?result.usage.tokens:undefined);
 
     if (!Array.isArray(result.embeddings) || result.embeddings.length !== texts.length) {
       throw new AIConfigError(
@@ -1634,8 +1635,8 @@ async function embedSubBatch(
     if (isTokenLimitError(err) && texts.length > MIN_SUB_BATCH) {
       shrinkOnMiss(recipe);
       const mid = Math.ceil(texts.length / 2);
-      const left = await embedSubBatch(texts.slice(0, mid), model, providerOpts, expectedDims, recipe, modelId, opts);
-      const right = await embedSubBatch(texts.slice(mid), model, providerOpts, expectedDims, recipe, modelId, opts);
+      const left = await embedSubBatch(texts.slice(0, mid), model, providerOpts, expectedDims, recipe, modelId, opts,onUsage);
+      const right = await embedSubBatch(texts.slice(mid), model, providerOpts, expectedDims, recipe, modelId, opts,onUsage);
       return [...left, ...right];
     }
     throw normalizeAIError(err, `embed(${recipe.id}:${modelId})`);
@@ -2319,6 +2320,24 @@ export async function generateOcrText(imageBytes: Buffer, mime: string, abortSig
 // budget throw → no lease attempted, no rate-lease window held.
 
 const __budgetStore = new AsyncLocalStorage<BudgetTracker>();
+const __taskBudgetStore=new AsyncLocalStorage<BudgetTracker>();
+let budgetReservationSequence=0;
+export function getTaskBudgetTracker():BudgetTracker|null{return __taskBudgetStore.getStore()??null;}
+export async function withTaskBudgetTracker<T>(tracker:BudgetTracker,fn:()=>Promise<T>):Promise<T>{
+  try{return await __taskBudgetStore.run(tracker,fn);}finally{await tracker.flush();}
+}
+function gatewayBudgetTracker():Pick<BudgetTracker,'reserve'|'record'|'flush'|'affordableOutputTokens'>|null{
+  const phase=__budgetStore.getStore(),root=__taskBudgetStore.getStore();
+  if(!root)return phase??null;
+  const trackers=[...new Set([phase,root].filter((item):item is BudgetTracker=>!!item))];
+  const reservationId=`gateway-${++budgetReservationSequence}`;
+  return {
+    reserve:estimate=>{for(const tracker of trackers)tracker.reserve({...estimate,reservationId});},
+    record:usage=>{let failure:unknown;for(const tracker of [...trackers].reverse()){try{tracker.record({...usage,reservationId});}catch(error){failure??=error;}}if(failure)throw failure;},
+    flush:async()=>{await Promise.all(trackers.map(tracker=>tracker.flush()));},
+    affordableOutputTokens:estimate=>Math.min(...trackers.map(tracker=>tracker.affordableOutputTokens(estimate))),
+  };
+}
 
 export function withBudgetTracker<T>(tracker: BudgetTracker, fn: () => Promise<T>): Promise<T> {
   return __budgetStore.run(tracker, fn);
@@ -2331,7 +2350,8 @@ export function getCurrentBudgetTracker(): BudgetTracker | null {
 /** Internal helper: estimate input tokens from messages + system. Heuristic only
  * (~4 chars/token); cap math is best-effort because we pre-flight reservation
  * before the SDK has counted anything. */
-function estimateChatInputTokens(opts: { system?: string; messages?: Array<{ content?: unknown }> }): number {
+function estimateChatInputTokens(opts: { system?: string; messages?: Array<{ content?: unknown }>;tools?:unknown }): number {
+  if(getTaskBudgetTracker())return Buffer.byteLength(JSON.stringify({system:opts.system,messages:opts.messages,tools:opts.tools}),'utf8')+128;
   let chars = (opts.system ?? '').length;
   for (const m of opts.messages ?? []) {
     if (typeof m.content === 'string') chars += m.content.length;
@@ -2654,14 +2674,14 @@ async function lengthRecoveryLimit(opts:ChatOpts,current:number,finalTurn?:boole
   let limit=Math.min(current*2,chatOutputLimit(model,opts.modelOutputLimit)??current*2);
   const context=resolveRecipe(model).recipe.touchpoints.chat?.max_context_tokens;
   if(context)limit=Math.min(limit,context-Math.max(estimateChatInputTokens(opts),Buffer.byteLength((opts.system??'')+JSON.stringify(opts.messages)+JSON.stringify(opts.tools??[]),'utf8')));
-  const tracker=__budgetStore.getStore();
+  const tracker=gatewayBudgetTracker();
   if(tracker)limit=Math.min(limit,tracker.affordableOutputTokens({modelId:model,kind:'chat',estimatedInputTokens:estimateChatInputTokens(opts),maxOutputTokens:limit}));
   if(opts.lengthRetryLimit)limit=Math.min(limit,await opts.lengthRetryLimit({model,messages:opts.messages,maxTokens:limit,finalTurn}));
   return Math.max(0,Math.floor(limit));
 }
 
 async function chatOnce(opts: ChatOpts): Promise<ChatResult> {
-  const tracker = __budgetStore.getStore() ?? null;
+  const tracker = gatewayBudgetTracker();
   const modelStrEarly = opts.model ?? getChatModel();
   const estimatedInputTokens = estimateChatInputTokens(opts);
   const maxOutputTokens = Math.min(opts.maxTokens ?? defaultMaxOutputTokens(modelStrEarly),chatOutputLimit(modelStrEarly,opts.modelOutputLimit)??Infinity);
@@ -2678,6 +2698,7 @@ async function chatOnce(opts: ChatOpts): Promise<ChatResult> {
       kind: 'chat' as BudgetKind,
       label: 'gateway.chat',
     });
+    await tracker.flush();
   }
 
   // Test seam: when a test transport is installed, route through it without
@@ -2710,6 +2731,8 @@ async function chatOnce(opts: ChatOpts): Promise<ChatResult> {
               modelId: res.model ?? modelStrEarly,
               inputTokens: res.usage.input_tokens,
               outputTokens: res.usage.output_tokens,
+              cacheReadTokens:res.usage.cache_read_tokens,
+              cacheWriteTokens:res.usage.cache_creation_tokens,
               label: 'gateway.chat',
             });
           } else {
@@ -2731,6 +2754,7 @@ async function chatOnce(opts: ChatOpts): Promise<ChatResult> {
           // is rare in practice.
         }
       }
+      await tracker?.flush();
     }
   }
 
@@ -2767,7 +2791,7 @@ async function chatOnce(opts: ChatOpts): Promise<ChatResult> {
   }
 
   let _budgetRecorded = false;
-  const _recordBudget = (modelLabel: string, inputTokens: number, outputTokens: number): void => {
+  const _recordBudget = (modelLabel: string, inputTokens: number, outputTokens: number,cacheReadTokens=0,cacheWriteTokens=0,usageMissing=false): void => {
     if (!tracker || _budgetRecorded) return;
     _budgetRecorded = true;
     try {
@@ -2775,6 +2799,8 @@ async function chatOnce(opts: ChatOpts): Promise<ChatResult> {
         modelId: modelLabel,
         inputTokens,
         outputTokens,
+        cacheReadTokens,cacheWriteTokens,
+        usageMissing,
         label: 'gateway.chat',
       });
     } catch {
@@ -2798,7 +2824,7 @@ async function chatOnce(opts: ChatOpts): Promise<ChatResult> {
       messages: toModelMessages(repairedMessages) as any,
       tools: opts.tools && opts.tools.length > 0 ? tools : undefined,
       maxOutputTokens,
-      ...(opts.maxRetries===undefined?{}:{maxRetries:opts.maxRetries}),
+      ...(getTaskBudgetTracker()?{maxRetries:0}:opts.maxRetries===undefined?{}:{maxRetries:opts.maxRetries}),
       ...(opts.temperature !== undefined ? { temperature: opts.temperature } : {}),
       abortSignal: chatAbortSignal(opts),
       providerOptions: Object.keys(providerOptions).length > 0 ? providerOptions : undefined,
@@ -2996,7 +3022,9 @@ async function chatOnce(opts: ChatOpts): Promise<ChatResult> {
 
     const inTok = Number(usage.inputTokens ?? usage.promptTokens ?? 0);
     const outTok = Number(usage.outputTokens ?? usage.completionTokens ?? 0);
-    _recordBudget(`${recipe.id}:${modelId}`, inTok, outTok);
+    const cacheReadTokens=Number(usage.inputTokenDetails?.cacheReadTokens??usage.cachedInputTokens??anthropicCache.cacheReadInputTokens??anthropicCache.cache_read_input_tokens??0);
+    const cacheWriteTokens=Number(usage.inputTokenDetails?.cacheWriteTokens??anthropicCache.cacheCreationInputTokens??anthropicCache.cache_creation_input_tokens??0);
+    _recordBudget(`${recipe.id}:${modelId}`, inTok, outTok,cacheReadTokens,cacheWriteTokens,!Number.isFinite(usage.inputTokens??usage.promptTokens)||!Number.isFinite(usage.outputTokens??usage.completionTokens));
 
     const chatResult: ChatResult = {
       text: blocks.filter(b => b.type === 'text').map(b => (b as { type: 'text'; text: string }).text).join(''),
@@ -3005,8 +3033,8 @@ async function chatOnce(opts: ChatOpts): Promise<ChatResult> {
       usage: {
         input_tokens: inTok,
         output_tokens: outTok,
-        cache_read_tokens: Number(anthropicCache.cacheReadInputTokens ?? anthropicCache.cache_read_input_tokens ?? 0),
-        cache_creation_tokens: Number(anthropicCache.cacheCreationInputTokens ?? anthropicCache.cache_creation_input_tokens ?? 0),
+        cache_read_tokens: cacheReadTokens,
+        cache_creation_tokens: cacheWriteTokens,
       },
       model: `${recipe.id}:${modelId}`,
       providerId: recipe.id,
@@ -3030,9 +3058,9 @@ async function chatOnce(opts: ChatOpts): Promise<ChatResult> {
       inputTokens: estimatedInputTokens,
       outputTokens: maxOutputTokens,
     });
-    _recordBudget(`${recipe.id}:${modelId}`, fallback.inputTokens, fallback.outputTokens);
+    _recordBudget(`${recipe.id}:${modelId}`, fallback.inputTokens, fallback.outputTokens,0,0,!(err&&typeof err==='object'&&('usage' in err||'response' in err&&(err as any).response?.usage)));
     throw normalizeAIError(err, `chat(${recipe.id}:${modelId})`);
-  }
+  }finally{await tracker?.flush();}
 }
 
 function isChatFallbackEligible(err: unknown, signal?: AbortSignal): boolean {
@@ -3664,7 +3692,7 @@ export async function rerank(input: RerankInput): Promise<RerankResult[]> {
     getRerankerModel() ??
     DEFAULT_RERANKER_MODEL;
 
-  const tracker = __budgetStore.getStore() ?? null;
+  const tracker = gatewayBudgetTracker();
   if (tracker) {
     // Reranker pricing isn't in the canonical pricing map today — when no
     // cap is set this fires the warn-once path; when a cap IS set TX2 hard-
@@ -3672,11 +3700,12 @@ export async function rerank(input: RerankInput): Promise<RerankResult[]> {
     const totalChars = input.query.length + input.documents.reduce((s, d) => s + d.length, 0);
     tracker.reserve({
       modelId: modelStr,
-      estimatedInputTokens: Math.ceil(totalChars / 4),
+      estimatedInputTokens: getTaskBudgetTracker()?Buffer.byteLength(JSON.stringify(input),'utf8')+128*input.documents.length:Math.ceil(totalChars / 4),
       maxOutputTokens: 0,
       kind: 'rerank',
       label: 'gateway.rerank',
     });
+    await tracker.flush();
   }
   const { parsed, recipe } = resolveRecipe(modelStr);
   const tp = recipe.touchpoints.reranker;
@@ -3755,14 +3784,15 @@ export async function rerank(input: RerankInput): Promise<RerankResult[]> {
   }
 
   let _rerankRecorded = false;
-  const _rerankRecord = (): void => {
+  const _rerankRecord = (reportedTokens?:number): void => {
     if (!tracker || _rerankRecorded) return;
     _rerankRecorded = true;
     try {
       const totalChars = input.query.length + input.documents.reduce((s, d) => s + d.length, 0);
       tracker.record({
         modelId: modelStr,
-        inputTokens: Math.ceil(totalChars / 4),
+        inputTokens: reportedTokens??Math.ceil(totalChars / 4),
+        usageMissing:reportedTokens===undefined,
         outputTokens: 0,
         kind: 'rerank',
         label: 'gateway.rerank',
@@ -3805,7 +3835,8 @@ export async function rerank(input: RerankInput): Promise<RerankResult[]> {
       index: typeof r.index === 'number' ? r.index : 0,
       relevanceScore: typeof r.relevance_score === 'number' ? r.relevance_score : 0,
     }));
-    _rerankRecord();
+    const tokenUsage=json.usage?.total_tokens??json.usage?.prompt_tokens;
+    _rerankRecord(Number.isFinite(tokenUsage)&&tokenUsage>=0?tokenUsage:undefined);
     return mapped;
   } catch (err) {
     _rerankRecord();
@@ -3820,6 +3851,7 @@ export async function rerank(input: RerankInput): Promise<RerankResult[]> {
     throw new RerankError(`rerank: ${msg}`, 'network');
   } finally {
     clearTimeout(t);
+    await tracker?.flush();
   }
 }
 

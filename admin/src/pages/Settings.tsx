@@ -1,3 +1,4 @@
+import {DEFAULT_USD_TO_CNY,DEFAULT_DREAM_BUDGET_CNY} from '../../../shared/model-billing';
 import React, { useEffect, useState } from 'react';
 import { Clock3, Download, MonitorCog, Sparkles } from 'lucide-react';
 import { api } from '../api';
@@ -150,11 +151,12 @@ function DreamSettings() {
       <span className="dream-toggle-control"><small>{savingKey===key?'正在保存…':checked?'已开启':'已关闭'}</small><input id={id} className="settings-switch" type="checkbox" role="switch" aria-label={title} checked={checked} disabled={loading||saving} onChange={event=>toggle(key,event.target.checked)}/></span>
     </label>;
   };
-  const budgetDirty=(settings.atomBudgetUsd??0.3)!==(persisted.atomBudgetUsd??0.3)||(settings.conceptBudgetUsd??1.5)!==(persisted.conceptBudgetUsd??1.5)||(settings.verdictTimeoutMs??120000)!==(persisted.verdictTimeoutMs??120000);
+  const budgetFields=["atomBudgetCny","conceptBudgetCny","taskBudgetCny","usdToCny","verdictTimeoutMs"] as const;
+  const budgetDirty=budgetFields.some(field=>settings[field]!==persisted[field]);
   const saveBudget=()=>{
-    const atomBudgetUsd=settings.atomBudgetUsd??0.3,conceptBudgetUsd=settings.conceptBudgetUsd??1.5,verdictTimeoutMs=settings.verdictTimeoutMs??120000;
-    if([atomBudgetUsd,conceptBudgetUsd].some(value=>!Number.isFinite(value)||value<=0)||!Number.isSafeInteger(verdictTimeoutMs)||verdictTimeoutMs<=0||verdictTimeoutMs>2147483647){setError('请填写大于零的费用预算和有效的等待秒数');return;}
-    void savePatch({atomBudgetUsd,conceptBudgetUsd,verdictTimeoutMs},'费用与等待上限已保存');
+    const usdToCny=settings.usdToCny??DEFAULT_USD_TO_CNY,atomBudgetCny=settings.atomBudgetCny??(settings.atomBudgetUsd??0.3)*usdToCny,conceptBudgetCny=settings.conceptBudgetCny??(settings.conceptBudgetUsd??1.5)*usdToCny,taskBudgetCny=settings.taskBudgetCny??DEFAULT_DREAM_BUDGET_CNY,verdictTimeoutMs=settings.verdictTimeoutMs??120000;
+    if([atomBudgetCny,conceptBudgetCny,taskBudgetCny,usdToCny].some(value=>!Number.isFinite(value)||value<=0)||!Number.isSafeInteger(verdictTimeoutMs)||verdictTimeoutMs<=0||verdictTimeoutMs>2147483647){setError('请填写大于零的费用预算和有效的等待秒数');return;}
+    void savePatch({atomBudgetCny,conceptBudgetCny,taskBudgetCny,usdToCny,verdictTimeoutMs},'费用与等待上限已保存');
   };
   const saveTimeout=()=>{
     const timeoutMs=timeoutMinutes.trim()?Number(timeoutMinutes)*60000:null;
@@ -184,13 +186,19 @@ function DreamSettings() {
     <div className="dream-settings-grid">
       <div className="dream-output-setting">
         <h3>费用与等待上限</h3>
-        <label htmlFor="dream-atom-budget">知识点提取费用预算（美元 / 来源 / 次）</label>
-        <input id="dream-atom-budget" type="number" min="0.001" step="0.01" value={settings.atomBudgetUsd??0.3} disabled={loading||saving} onChange={event=>setSettings(current=>({...current,atomBudgetUsd:Number(event.target.value)}))}/>
-        <label htmlFor="dream-concept-budget">概念综合费用预算（美元 / 次）</label>
-        <input id="dream-concept-budget" type="number" min="0.001" step="0.01" value={settings.conceptBudgetUsd??1.5} disabled={loading||saving} onChange={event=>setSettings(current=>({...current,conceptBudgetUsd:Number(event.target.value)}))}/>
+        <label htmlFor="dream-task-budget">整次整理费用上限（元）</label>
+        <input id="dream-task-budget" type="number" min="0.01" step="0.1" value={settings.taskBudgetCny??DEFAULT_DREAM_BUDGET_CNY} disabled={loading||saving} onChange={event=>setSettings(current=>({...current,taskBudgetCny:Number(event.target.value)}))}/>
+        <p className="pm-hint">覆盖对话判读、内容综合、知识提炼、实体整理及其他模型调用。已完成成果保留，继续同一任务累计费用不清零。</p>
+        <label htmlFor="dream-atom-budget">知识点提取预算（元 / 来源 / 次）</label>
+        <input id="dream-atom-budget" type="number" min="0.001" step="0.01" value={settings.atomBudgetCny??(settings.atomBudgetUsd??0.3)*(settings.usdToCny??DEFAULT_USD_TO_CNY)} disabled={loading||saving} onChange={event=>setSettings(current=>({...current,atomBudgetCny:Number(event.target.value)}))}/>
+        <label htmlFor="dream-concept-budget">概念综合预算（元 / 次）</label>
+        <input id="dream-concept-budget" type="number" min="0.001" step="0.01" value={settings.conceptBudgetCny??(settings.conceptBudgetUsd??1.5)*(settings.usdToCny??DEFAULT_USD_TO_CNY)} disabled={loading||saving} onChange={event=>setSettings(current=>({...current,conceptBudgetCny:Number(event.target.value)}))}/>
         <label htmlFor="dream-verdict-timeout">原始对话判读等待上限（秒 / 请求）</label>
         <input id="dream-verdict-timeout" type="number" min="1" step="1" value={(settings.verdictTimeoutMs??120000)/1000} disabled={loading||saving} onChange={event=>setSettings(current=>({...current,verdictTimeoutMs:Number(event.target.value)*1000}))}/>
-        <p className="pm-hint">按已配置的模型价格核算；达到上限时保留已完成成果和待处理内容。</p>
+        <p className="pm-hint">按模型服务中的价格核算；缺少价格时停止付费请求。发起请求前预留费用，返回后按 Token 用量结算；中断且用量不明的请求保留预留额。</p>
+        <label htmlFor="dream-usd-cny">美元报价折算汇率（元 / 美元）</label>
+        <input id="dream-usd-cny" type="number" min="0.01" step="0.01" value={settings.usdToCny??DEFAULT_USD_TO_CNY} disabled={loading||saving} onChange={event=>setSettings(current=>({...current,usdToCny:Number(event.target.value)}))}/>
+        <p className="pm-hint">人民币报价直接计费；美元报价按此汇率估算，同一任务沿用首次记录的汇率，默认值不是实时汇率。平台账单可能包含折扣、分档或额外服务费。</p>
         <button className="pm-primary dream-local-save" onClick={saveBudget} disabled={loading||saving||!budgetDirty}>保存费用设置</button>
       </div>
       <div className="dream-output-setting">

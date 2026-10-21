@@ -3,7 +3,7 @@ export interface DreamPhaseState {
 }
 export function phaseHasPendingWork(phase:DreamPhaseState):boolean{
   const d=phase.details??{};
-  return ['pages_remaining','concepts_remaining','remainingChunks','remaining','transcripts_skipped_budget','pages_skipped_budget','failedPages','failedChunks'].some(key=>Number(d[key])>0)
+  return d.task_budget_stopped===true||['pages_remaining','concepts_remaining','remainingChunks','remaining','transcripts_skipped_budget','pages_skipped_budget','failedPages','failedChunks'].some(key=>Number(d[key])>0)
     ||Array.isArray(d.failures)&&d.failures.length>0||!!phase.error
     ||['ner_error','by_mention_error','relation_backfill_error'].some(key=>!!d[key]);
 }

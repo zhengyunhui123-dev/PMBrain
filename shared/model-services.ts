@@ -1,3 +1,4 @@
+import {mergeModelBilling} from './model-billing.js';
 export type ModelCapability = 'vision' | 'reasoning' | 'tools' | 'web';
 export interface ServiceModel {
   id: string;
@@ -10,6 +11,12 @@ export interface ServiceModel {
   outputPrice?: number;
   inputPriceCny?: number;
   outputPriceCny?: number;
+  cacheReadPrice?:number;
+  cacheReadPriceCny?:number;
+  cacheWritePriceCny?:number;
+  pricingSource?:'official'|'provider'|'manual';
+  pricingUrl?:string;
+  pricingUpdatedAt?:string;
   dimensions?: number;
   typeOverride?: boolean;
 }
@@ -33,7 +40,7 @@ export function mergeServiceModels(existing: ServiceModel[], incoming: ServiceMo
   const models = new Map(existing.map(model => [model.id, model]));
   for (const model of incoming) {
     const old = models.get(model.id);
-    models.set(model.id, old ? { ...model, ...old, kind: old.typeOverride || model.kind === 'unknown' ? old.kind : model.kind, capabilities: old.capabilities.length ? old.capabilities : model.capabilities } : model);
+    models.set(model.id, old ? { ...mergeModelBilling(old,model), kind: old.typeOverride || model.kind === 'unknown' ? old.kind : model.kind, capabilities: old.capabilities.length ? old.capabilities : model.capabilities } : model);
   }
   return [...models.values()];
 }

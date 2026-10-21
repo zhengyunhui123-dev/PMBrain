@@ -10,6 +10,10 @@ import { runQuickMaintenance, combineQuickMaintenanceReports, resolveQuickMainte
 import { ALL_PHASES } from '../../core/cycle.ts';
 import { chooseCaptureModel, configuredCnyPrices, storedPrice } from '../../core/cycle/capture-entities.ts';
 import { readEntityCaptureCostCap } from '../../core/cycle/entity-capture-budget.ts';
+import {runWithDreamBudget,checkDreamBudget} from './dream-budget';
+import {openTaskBudget,type TaskBudgetReply} from './task-budget';
+import {withTaskBudgetTracker} from '../../core/ai/gateway';
+import {DEFAULT_USD_TO_CNY} from '../../../shared/model-billing';
 import { splitProviderModelId } from '../../core/model-id.ts';
 import { maintenanceFailure } from './maintenance-orchestration.ts';
 import { fetchSource, loadAllSources, parseSourceConfig } from '../../core/sources-load.ts';
@@ -129,6 +133,7 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
     if (Object.keys(checkpoint.retiredCapture ?? {}).length) {
       console.log('旧版自动实体识别阶段已退出本次整理，历史结果和失败记录保留在原任务检查点。');
       await rpc('task.maintenanceCheckpoint', [checkpoint]);
+      await checkDreamBudget();
     }
   }
   const capturesImported = !input.phase || input.phase==='all' || !!input.preset;
@@ -189,7 +194,7 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
       if (input.preset!=='quick'||captureEntitySlugs?.length) {
         const [usage] = await engine.executeRaw<{ input: string; output: string }>(`SELECT COALESCE(sum(tokens_input),0) AS input,COALESCE(sum(tokens_output),0) AS output FROM minion_jobs WHERE private_queue_owner_job_id=$1 AND data ? 'ingest_context'`, [ownerJobId]);
         const inputTokens = Number(usage?.input ?? 0), outputTokens = Number(usage?.output ?? 0);
-        const cardPrices = configuredCnyPrices(captureModel.model, splitProviderModelId(captureModel.model).provider);
+        const cardPrices = configuredCnyPrices(captureModel.model, splitProviderModelId(captureModel.model).provider,Number(await engine.getConfig('pricing.usd_to_cny')??DEFAULT_USD_TO_CNY));
         const inputPrice = storedPrice(await engine.getConfig('dream.entity_capture.price.input_cny_per_million')) ?? cardPrices.input;
         const outputPrice = storedPrice(await engine.getConfig('dream.entity_capture.price.output_cny_per_million')) ?? cardPrices.output;
         const costCap = readEntityCaptureCostCap(await engine.getConfig('dream.entity_capture.cost_cap_cny'));
@@ -213,7 +218,10 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
         else if(checkpoint.captureWindows)delete checkpoint.captureWindows[sourceId];
       }
       checkpoint.phases[sourceId] = phases.filter(phase=>!phase.details.window_deferred);
+      const budget=(await import('../../core/ai/gateway')).getTaskBudgetTracker();
+      if(budget?.stopReason&&checkpoint.phases[sourceId]?.length){const last=checkpoint.phases[sourceId]!.at(-1)!;last.status='warn';last.details={...last.details,task_budget_stopped:true};}
       await rpc('task.maintenanceCheckpoint', [checkpoint]);
+      await checkDreamBudget();
     },
     });
   };
@@ -312,7 +320,12 @@ async function embedCapturedKnowledge(engine:BrainEngine,knowledge:Awaited<Retur
   return embedded;
 }
 
-async function execute(task: ProductTask, kind: BrainEngine['kind']) {
+async function execute(task:ProductTask,kind:BrainEngine['kind']){
+  if(task.type!=='sync-file')return executeTask(task,kind);
+  const tracker=await openTaskBudget(request=>rpc('task.budget',[request]) as Promise<TaskBudgetReply>);
+  return tracker?withTaskBudgetTracker(tracker,()=>executeTask(task,kind)):executeTask(task,kind);
+}
+async function executeTask(task: ProductTask, kind: BrainEngine['kind']) {
   const engine = proxyEngine(kind);
   if (loadConfig()) await reloadLiveGateway(engine);
   let result: Record<string, unknown>;
@@ -417,7 +430,7 @@ async function execute(task: ProductTask, kind: BrainEngine['kind']) {
       }
     }
   } else if (task.type === 'dream') {
-    result = { ...await runDreamTask(engine, task.input) };
+    result = await runWithDreamBudget(task.input,async()=>({...await runDreamTask(engine,task.input)}),request=>rpc('task.budget',[request]) as Promise<TaskBudgetReply>);
   } else if (task.type === 'sync') {
     const results = [];
     const gateway = await import('../../core/ai/gateway.ts');
@@ -450,7 +463,7 @@ async function execute(task: ProductTask, kind: BrainEngine['kind']) {
     const failures = result.failures as Array<{ error: string }> | undefined;
     const phases = result.phases as Array<{ error?: { message?: string }; status?: string; summary?: string }> | undefined;
     const phase = phases?.find(row => row.status === 'fail');
-    send({ type: 'error', error: failure ?? failures?.[0]?.error ?? phase?.error?.message ?? phase?.summary ?? `任务未全部完成：${result.errors ?? result.status}`, result });
+    send({ type: 'error', error: result.reason==='task_budget'?String(result.summary):failure ?? failures?.[0]?.error ?? phase?.error?.message ?? phase?.summary ?? `任务未全部完成：${result.errors ?? result.status}`, result });
   } else {
     send({ type: 'result', result });
   }

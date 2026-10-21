@@ -194,6 +194,7 @@ export function finishTaskProgress(view: TaskProductProgress, status: string, re
     next.phaseProgress.active = 0;
   }
   const data = result && typeof result === 'object' ? result as Record<string, any> : {};
+  if(data.budget)next.budget=data.budget;
   if (data.status === 'skipped' && Array.isArray(data.phases)) {
     next.percent = null; next.phasePercent = null; next.stage = '任务未执行';
     next.errorReason = data.reason === 'cycle_already_running' ? '未执行：其他整理任务占用数据库，请排队后继续。' : `未执行：${data.reason ?? '整理被跳过'}`;
@@ -318,7 +319,16 @@ export function finishTaskProgress(view: TaskProductProgress, status: string, re
     }
   } else if (status === 'queued' && next.stage !== '等待前面的整理任务完成') next.stage = '等待执行';
   next.completedSteps = next.steps.filter(step => step.status === 'completed').length;
+  if(next.budget)applyTaskBudget(next,next.budget);
+  if(next.budget?.historicalCostUnknown)next.detail='旧版任务此前的总费用无法完整核算；此处总预算从升级后的首次继续起累计，旧版历史费用未计入。';
+  if(next.budget?.reason&&['failed','cancelled'].includes(status)){next.stage=next.budget.reason==='no_pricing'?'缺少模型价格，待继续':'费用预算不足，待继续';next.errorReason=next.budget.reason==='no_pricing'?'请同步模型价格或填写单价后继续；已完成成果保留。':'请提高整次费用上限后继续；同一任务的累计费用不会清零。';}
   return next;
+}
+
+export function applyTaskBudget(view:TaskProductProgress,budget:NonNullable<TaskProductProgress['budget']>):void{
+ view.budget=budget;
+ const labels=['已核算费用（元）','请求预留（元）','整次上限（元）'];
+ view.metrics=[...view.metrics.filter(metric=>!labels.includes(metric.label)),{label:labels[0]!,value:Number(budget.spentCny.toFixed(6))},{label:labels[1]!,value:Number(budget.reservedCny.toFixed(6))},{label:labels[2]!,value:budget.capCny}];
 }
 
 export function taskRunSummary(run: import('../../commands/natural-lang/types.ts').ConsoleRun) {

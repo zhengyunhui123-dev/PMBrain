@@ -36,6 +36,7 @@ export interface SyncFileActivity {
 }
 
 export interface TaskProductProgress {
+  budget?:{capCny:number;spentCny:number;reservedCny:number;usdToCny:number;calls:number;reason?:string;historicalCostUnknown?:boolean;revision?:number};
   heartbeatAt?: string;
   lastProgressAt?: string;
   failedUnits?: number;

@@ -1,3 +1,5 @@
+import {DEFAULT_USD_TO_CNY,DEFAULT_DREAM_BUDGET_CNY} from '../../shared/model-billing';
+import {readPhaseBudget} from '../core/cycle/phase-budget';
 import { readTaskRelations } from '../product/tasks/relations.ts';
 import { DEFAULT_PRODUCT_TASK_TIMEOUT_MS, DREAM_TASK_TIMEOUT_KEY, parseTaskTimeout } from '../product/tasks/timeout.ts';
 import { getAdminKnowledgeGraphEdge } from './admin-knowledge-graph.ts';
@@ -1024,8 +1026,12 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
       knowledgeEnabled:await engine.getConfig('dream.knowledge.enabled')!=='false',
       knowledgeSince:await engine.getConfig('dream.knowledge.since')??null,
       knowledgeUseOrdinaryModel:await engine.getConfig('dream.knowledge.use_ordinary_model')!=='false',
-      atomBudgetUsd:Number(await engine.getConfig('cycle.extract_atoms.budget_usd')??0.3),
-      conceptBudgetUsd:Number(await engine.getConfig('cycle.synthesize_concepts.budget_usd')??1.5),
+      atomBudgetUsd:await readPhaseBudget(engine,'cycle.extract_atoms.budget_usd',0.3),
+      conceptBudgetUsd:await readPhaseBudget(engine,'cycle.synthesize_concepts.budget_usd',1.5),
+      atomBudgetCny:(await readPhaseBudget(engine,'cycle.extract_atoms.budget_usd',0.3))*Number(await engine.getConfig('pricing.usd_to_cny')??DEFAULT_USD_TO_CNY),
+      conceptBudgetCny:(await readPhaseBudget(engine,'cycle.synthesize_concepts.budget_usd',1.5))*Number(await engine.getConfig('pricing.usd_to_cny')??DEFAULT_USD_TO_CNY),
+      taskBudgetCny:Number(await engine.getConfig('dream.task_budget_cny')??DEFAULT_DREAM_BUDGET_CNY),
+      usdToCny:Number(await engine.getConfig('pricing.usd_to_cny')??DEFAULT_USD_TO_CNY),
       verdictTimeoutMs:Number(await engine.getConfig('dream.synthesize.verdict_timeout_ms')??120_000),
       timeoutMs,
       effectiveTimeoutMs: timeoutMs ?? DEFAULT_PRODUCT_TASK_TIMEOUT_MS,
@@ -1114,6 +1120,8 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
     const knowledgeUseOrdinaryModel=req.body?.knowledgeUseOrdinaryModel;
     const atomBudgetUsd=req.body?.atomBudgetUsd,conceptBudgetUsd=req.body?.conceptBudgetUsd;
     const verdictTimeoutMs=req.body?.verdictTimeoutMs;
+    const {atomBudgetCny,conceptBudgetCny,taskBudgetCny,usdToCny}=req.body??{};
+    if([atomBudgetCny,conceptBudgetCny,taskBudgetCny,usdToCny].some(value=>value!==undefined&&(typeof value!=='number'||!Number.isFinite(value)||value<=0))){res.status(400).json({error:'invalid_knowledge_budget'});return;}
     if(verdictTimeoutMs!==undefined&&parseTaskTimeout(verdictTimeoutMs)===null){res.status(400).json({error:'invalid_verdict_timeout'});return;}
     if([knowledgeEnabled,knowledgeUseOrdinaryModel].some(value=>value!==undefined&&typeof value!=='boolean')){res.status(400).json({error:'knowledge_settings_must_be_boolean'});return;}
     if([atomBudgetUsd,conceptBudgetUsd].some(value=>value!==undefined&&(typeof value!=='number'||!Number.isFinite(value)||value<=0))){res.status(400).json({error:'invalid_knowledge_budget'});return;}
@@ -1145,6 +1153,9 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
       }
       await engine.transaction(async tx=>{
         const changed=typeof knowledgeEnabled==='boolean'&&String(knowledgeEnabled)!==await tx.getConfig('dream.knowledge.enabled');
+        const rate=Number(usdToCny??await tx.getConfig('pricing.usd_to_cny')??DEFAULT_USD_TO_CNY);
+        const effectiveAtomCny=atomBudgetCny??(atomBudgetUsd===undefined?undefined:atomBudgetUsd*rate);
+        const effectiveConceptCny=conceptBudgetCny??(conceptBudgetUsd===undefined?undefined:conceptBudgetUsd*rate);
         await Promise.all([
           tx.setConfig('dream.synthesize.output_dir', outputDir),
           tx.setConfig('dream.synthesize.dual_write', dualWrite ? 'true' : 'false'),
@@ -1154,7 +1165,11 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
           ...(changed?[tx.setConfig('dream.knowledge.enabled',String(knowledgeEnabled)),tx.setConfig('dream.synthesize.conversation_pages',String(knowledgeEnabled)),tx.setConfig('dream.synthesize.enabled',String(knowledgeEnabled))]:[]),
           ...(typeof knowledgeUseOrdinaryModel==='boolean'?[tx.setConfig('dream.knowledge.use_ordinary_model',String(knowledgeUseOrdinaryModel))]:[]),
           ...(atomBudgetUsd!==undefined?[tx.setConfig('cycle.extract_atoms.budget_usd',String(atomBudgetUsd))]:[]),
+          ...(effectiveAtomCny!==undefined?[tx.setConfig('cycle.extract_atoms.budget_cny',String(effectiveAtomCny))]:[]),
           ...(conceptBudgetUsd!==undefined?[tx.setConfig('cycle.synthesize_concepts.budget_usd',String(conceptBudgetUsd))]:[]),
+          ...(effectiveConceptCny!==undefined?[tx.setConfig('cycle.synthesize_concepts.budget_cny',String(effectiveConceptCny))]:[]),
+          ...(taskBudgetCny!==undefined?[tx.setConfig('dream.task_budget_cny',String(taskBudgetCny))]:[]),
+          ...(usdToCny!==undefined?[tx.setConfig('pricing.usd_to_cny',String(usdToCny))]:[]),
           ...(verdictTimeoutMs!==undefined?[tx.setConfig('dream.synthesize.verdict_timeout_ms',String(verdictTimeoutMs))]:[]),
           ...(timeoutMs !== undefined ? [tx.setConfig(DREAM_TASK_TIMEOUT_KEY,timeoutMs === null ? '' : String(timeoutMs))] : []),
         ]);

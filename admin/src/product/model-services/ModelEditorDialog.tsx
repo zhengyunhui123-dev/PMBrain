@@ -1,4 +1,7 @@
 import { X } from "lucide-react";
+import {useEffect,useState} from 'react';
+import {api} from '../../api';
+import {modelBilling,DEFAULT_USD_TO_CNY} from '../../../../shared/model-billing';
 import { type ModelCapability, type ServiceModel } from "../../../../shared/model-services";
 
 import { capabilityItems } from "./support";
@@ -8,6 +11,9 @@ export function ModelEditorDialog({ model }: { model: ModelServicesController })
   const { originalId, editor, setEditor, editorError, setEditorError, commit } = model;
   const desktop = model.desktop!;
   const service = model.service!;
+  const [usdToCny,setUsdToCny]=useState(DEFAULT_USD_TO_CNY);
+  useEffect(()=>{void api.dreamSettings().then(value=>setUsdToCny(value.usdToCny??DEFAULT_USD_TO_CNY)).catch(()=>{});},[]);
+  const billing=editor&&service?modelBilling(service,editor,usdToCny):null;
   return (
     <>
       {editor && (
@@ -101,10 +107,9 @@ export function ModelEditorDialog({ model }: { model: ModelServicesController })
               <div className="model-form-grid">
                 {(
                   [
-                    ["inputPrice", "输入价格", "美元 / 百万 Token，仅作参考"],
-                    ["outputPrice", "输出价格", "美元 / 百万 Token，仅作参考"],
-                    ["inputPriceCny", "输入价格", "元 / 百万 Token。填写后才统计实体回填费用"],
-                    ["outputPriceCny", "输出价格", "元 / 百万 Token。填写后才统计实体回填费用"],
+                    ["inputPriceCny", "输入价格", "元 / 百万 Token，缓存未命中"],
+                    ["outputPriceCny", "输出价格", "元 / 百万 Token，包含模型计费的思考输出"],
+                    ["cacheReadPriceCny", "缓存命中输入价格", "元 / 百万 Token，留空时按普通输入价保守估算"],
                   ] as const
                 ).map(([key, label, hint]) => (
                   <label key={key}>
@@ -112,13 +117,17 @@ export function ModelEditorDialog({ model }: { model: ModelServicesController })
                     <input
                       type="number"
                       min="0"
-                      step="0.01"
+                      step="any"
                       placeholder="未设置"
-                      value={editor[key] ?? ""}
+                      value={editor[key] ?? (key==='inputPriceCny'?billing?.inputCny:key==='outputPriceCny'?billing?.outputCny:billing?.cacheReadCny) ?? ""}
                       onChange={(event) =>
                         setEditor({
                           ...editor,
                           [key]: event.target.value === "" ? undefined : Number(event.target.value),
+                          ...(key!=='outputPriceCny'&&editor.outputPriceCny===undefined&&billing?{outputPriceCny:billing.outputCny}:{}),
+                          ...(key!=='inputPriceCny'&&editor.inputPriceCny===undefined&&billing?{inputPriceCny:billing.inputCny}:{}),
+                          pricingSource:'manual',
+                          pricingUpdatedAt:new Date().toISOString(),
                         })
                       }
                     />
@@ -126,6 +135,7 @@ export function ModelEditorDialog({ model }: { model: ModelServicesController })
                   </label>
                 ))}
               </div>
+              <p className="model-hint">{editor.pricingSource==='manual'?'使用人工单价，同步模型会保留。':billing?.source.startsWith('https://mimo.mi.com')||editor.pricingUrl?.startsWith('https://mimo.mi.com')?'使用小米官方人民币按量价格，同步模型时更新。':editor.pricingSource==='official'?'使用已核对的官方参考价，美元报价按整理设置汇率折算。':editor.pricingSource==='provider'?'使用服务商模型接口返回的价格。':billing?'美元报价已按整理设置中的汇率折算为人民币。':'尚无可核对的价格，请同步模型或填写单价；有费用上限的整理不会跳过价格检查。'}{editor.pricingUpdatedAt?` 更新于 ${new Date(editor.pricingUpdatedAt).toLocaleDateString()}`:''}</p>
               <label>
                 上下文长度（Token）
                 <input

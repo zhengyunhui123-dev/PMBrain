@@ -1,5 +1,7 @@
 import { getRecipe } from '../../../../src/core/ai/recipes/index.js';
 import { newServiceModel, serviceConnection, serviceNeedsApiKey, type ModelService, type ModelSyncResult, type ServiceModel } from '../../../../shared/model-services.js';
+import {isDirectMiMo,officialMiMoModel,parseMiMoPricing} from '../../../../shared/model-billing.js';
+import {canonicalLookup} from '../../../../src/core/model-pricing.js';
 
 export function requiresServiceKey(service: ModelService, address = service.baseUrl): boolean {
   return serviceNeedsApiKey(service.provider, address);
@@ -29,8 +31,8 @@ function enrichRemoteModel(provider: string, id: string, record: any): ServiceMo
   if (Number.isInteger(dimensions) && dimensions > 0) model.dimensions = dimensions;
   const context = record.context_window ?? record.context_length ?? record.inputTokenLimit ?? known?.max_context_tokens;
   if (Number.isInteger(context) && context > 0) model.contextWindow = context;
-  if (known?.cost_per_1m_input_usd !== undefined) model.inputPrice = known.cost_per_1m_input_usd;
-  if (known?.cost_per_1m_output_usd !== undefined) model.outputPrice = known.cost_per_1m_output_usd;
+  const pricing=canonicalLookup(`${provider}:${id}`);
+  if(pricing){model.inputPrice=pricing.input;model.outputPrice=pricing.output;model.cacheReadPrice=pricing.cache_read;model.pricingSource='official';}
   return model;
 }
 export async function syncServiceModels(service: ModelService, fetchImpl: typeof fetch = fetch, kind: 'chat' | 'embedding' = 'chat'): Promise<ModelSyncResult> {
@@ -80,12 +82,25 @@ export async function syncServiceModels(service: ModelService, fetchImpl: typeof
     return [service.provider === 'google' ? id.replace(/^models\//, '') : id, r];
   })).entries()];
   const models: ServiceModel[] = new Array(unique.length);
+  let miMoPrices:Promise<string>|undefined;
   let cursor = 0;
   await Promise.all(Array.from({ length: Math.min(4, unique.length) }, async () => {
     while (cursor < unique.length) {
       const index = cursor++; const [id, record] = unique[index];
       const model = ollama ? newServiceModel(id, classify(record, id)) : enrichRemoteModel(service.provider, id, record);
       model.name = record.displayName ?? record.display_name ?? record.name ?? id;
+      const pricing=record.pricing;
+      if(pricing&&service.provider==='openrouter'){
+        const input=Number(pricing.prompt),output=Number(pricing.completion??0);
+        if(Number.isFinite(input)&&input>=0&&Number.isFinite(output)&&output>=0){model.inputPrice=input*1_000_000;model.outputPrice=output*1_000_000;model.pricingSource='provider';model.pricingUpdatedAt=new Date().toISOString();}
+      }
+      if(isDirectMiMo({...service,baseUrl:connection.baseUrl})&&officialMiMoModel(id)){
+        try{
+          const url='https://mimo.mi.com/docs/zh-CN/price/pay-as-you-go';
+          miMoPrices??=(async()=>{const response=await fetchImpl(url,{redirect:'error',cache:'no-store',signal:AbortSignal.timeout(15000)});if(!response.ok)throw new Error(`官方价格页 HTTP ${response.status}`);return response.text();})();
+          Object.assign(model,parseMiMoPricing(await miMoPrices,id));
+        }catch(error){warnings.push(`${id} 价格同步失败：${error instanceof Error?error.message:String(error)}。保留已有价格，请核对后再使用。`);}
+      }
       if (ollama) {
         try {
           const detail = await request(`${root}/api/show`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: id }) });

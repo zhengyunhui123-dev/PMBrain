@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 export const RunStatusSchema = z.enum(['queued', 'running', 'completed', 'failed', 'cancelled']);
 export const TaskProductProgressSchema = z.object({
+  budget:z.object({capCny:z.number(),spentCny:z.number(),reservedCny:z.number(),usdToCny:z.number(),calls:z.number(),reason:z.string().optional(),historicalCostUnknown:z.boolean().optional(),revision:z.number().optional()}).optional(),
   heartbeatAt: z.string().optional(),
   lastProgressAt: z.string().optional(),
   failedUnits: z.number().int().nonnegative().optional(),

@@ -1,5 +1,7 @@
 import { splitProviderModelId } from '../model-id.ts';
 import { serviceNeedsApiKey } from '../../../shared/model-services.ts';
+import {modelBilling,DEFAULT_USD_TO_CNY} from '../../../shared/model-billing.ts';
+import type {ServiceModel} from '../../../shared/model-services.ts';
 
 export const DEFAULT_ENTITY_CAPTURE_COST_CAP_CNY = 5;
 export const ENTITY_CAPTURE_CANDIDATE_LIMIT = 60;
@@ -217,9 +219,10 @@ interface PricedModel {
 }
 
 export function readModelCnyPrices(
-  services: Array<{ provider?: string; models?: PricedModel[] }>,
+  services: Array<{ provider?: string; baseUrl?:string;models?: PricedModel[] }>,
   model: string,
   providerId: string | null | undefined,
+  usdToCny=DEFAULT_USD_TO_CNY,
 ): { input: number | null; output: number | null } {
   const colon = model.indexOf(':');
   const bare = colon > 0 ? model.slice(colon + 1) : model;
@@ -228,6 +231,7 @@ export function readModelCnyPrices(
     if (provider && (service.provider ?? '').toLowerCase() !== provider) continue;
     for (const item of service.models ?? []) {
       if (item.id !== bare && item.id !== model) continue;
+      if(service.baseUrl&&service.provider&&item.id){const price=modelBilling({provider:service.provider,baseUrl:service.baseUrl},item as ServiceModel,usdToCny);if(price)return {input:price.inputCny,output:price.outputCny};}
       return { input: finitePrice(item.inputPriceCny), output: finitePrice(item.outputPriceCny) };
     }
   }

@@ -35,6 +35,7 @@
  */
 
 import { splitProviderModelId } from './model-id.ts';
+import {MIMO_OFFICIAL_PRICES} from '../../shared/model-billing.ts';
 
 export interface ModelPricing {
   /** USD per 1M input tokens. */
@@ -90,6 +91,7 @@ export const ANTHROPIC_CACHE_READ_MULT_OVERRIDES: Record<string, number> = {
  * keep aliases in lockstep; the drift guard asserts they agree.
  */
 export const CANONICAL_PRICING: Record<string, ModelPricing> = {
+  ...Object.fromEntries(Object.entries(MIMO_OFFICIAL_PRICES).map(([model,price])=>[`mimo:${model}`,{input:price.inputUsd,output:price.outputUsd,cache_read:price.cacheReadUsd}])),
   // ── Anthropic ──────────────────────────────────────────────────────────
   // All Anthropic rows carry derived cache_read/cache_write fields (#4218);
   // see the anthro() helper + multiplier constants above.

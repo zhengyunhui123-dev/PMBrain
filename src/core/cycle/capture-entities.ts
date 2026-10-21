@@ -12,6 +12,7 @@ import { throwIfAborted } from '../abort-check.ts';
 import { loadConfig } from '../config.ts';
 const CAPTURE_ENTITY_TYPES=['person','company','organization','entity','concept','project'] as const;
 import { splitProviderModelId } from '../model-id.ts';
+import {DEFAULT_USD_TO_CNY} from '../../../shared/model-billing.ts';
 import { readModelConfigValue, resolveAlias } from '../model-config.ts';
 import { normalizeAliasList } from '../search/alias-normalize.ts';
 import { alignCapturedEntityGraph } from './entity-graph-align.ts';
@@ -300,12 +301,12 @@ export async function loadCaptureEntityIndex(
   });
 }
 
-export function configuredCnyPrices(model: string, providerId: string | null): { input: number | null; output: number | null } {
+export function configuredCnyPrices(model: string, providerId: string | null,usdToCny?:number): { input: number | null; output: number | null } {
   try {
     const config = loadConfig() as { desktop?: { model_services?: unknown } } | null;
     const services = config?.desktop?.model_services;
     if (!Array.isArray(services)) return { input: null, output: null };
-    return readModelCnyPrices(services, model, providerId);
+    return readModelCnyPrices(services, model, providerId,usdToCny);
   } catch {
     return { input: null, output: null };
   }
@@ -616,7 +617,7 @@ export async function runPhaseCaptureEntities(
   const costCapCny = budgetOpt && 'costCapCny' in budgetOpt
     ? budgetOpt.costCapCny ?? null
     : readEntityCaptureCostCap(await engine.getConfig('dream.entity_capture.cost_cap_cny'));
-  const cardPrices = configuredCnyPrices(chosen.model, providerId);
+  const cardPrices = configuredCnyPrices(chosen.model, providerId,Number(await engine.getConfig('pricing.usd_to_cny')??DEFAULT_USD_TO_CNY));
   const storedInput = storedPrice(await engine.getConfig('dream.entity_capture.price.input_cny_per_million'));
   const storedOutput = storedPrice(await engine.getConfig('dream.entity_capture.price.output_cny_per_million'));
   const inputPrice = budgetOpt && 'inputPriceCnyPerMillion' in budgetOpt

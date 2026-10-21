@@ -41,7 +41,7 @@ function configureModels(enabled = true, model = 'task-test') {
     engine: taskDatabaseUrl ? 'postgres' : 'pglite', embedding_model: `custom-openai:${model}`, embedding_dimensions: embeddingDimensions,
     custom_openai_api_key: 'task-test-only', provider_base_urls: { 'custom-openai': modelServer.url.origin + '/v1' },
     model_usage: { embedding_enabled: enabled, generative_enabled: false },
-    desktop: { knowledge_directory: root },
+    desktop: { knowledge_directory: root,model_services:[{id:'task-test',provider:'custom-openai',name:'本地验收模型',baseUrl:modelServer.url.origin+'/v1',apiKey:'task-test-only',enabled:true,models:[{id:model,name:model,group:'test',kind:'embedding',capabilities:[],inputPriceCny:0,outputPriceCny:0,pricingSource:'manual'}]}] },
   }));
 }
 

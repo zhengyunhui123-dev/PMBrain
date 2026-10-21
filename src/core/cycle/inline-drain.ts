@@ -14,6 +14,7 @@ import { makeSubagentHandler, RateLeaseUnavailableError } from '../minions/handl
 import type { MinionHandler, MinionJobContext } from '../minions/types.ts';
 import { UnrecoverableError } from '../minions/types.ts';
 import { combineAbortSignals, throwIfAborted } from '../abort-check.ts';
+import {BudgetExhausted} from '../budget/budget-tracker.ts';
 
 export const INLINE_LOCK_MS = 30_000;
 
@@ -112,6 +113,7 @@ export async function runSubagentsInline(
           : undefined,
       );
     } catch (error) {
+      if(error instanceof BudgetExhausted)throw error;
       if (error instanceof RateLeaseUnavailableError) {
         await queue.releaseLeaseFullJob(
           job.id,

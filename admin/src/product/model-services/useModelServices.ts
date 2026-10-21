@@ -311,6 +311,9 @@ export function useModelServices({ mode }: { mode: "services" | "roles" }) {
       setActivating(null);
       try {
         const result = await desktop.syncServiceModels(current);
+        const existingIds=new Set(current.models.map(item=>item.id));
+        const updates=result.models.filter((item:ServiceModel)=>existingIds.has(item.id));
+        if(updates.length)await commit(item=>({...item,models:mergeServiceModels(item.models,updates)}),true);
         setSyncWarnings(result.warnings);
         setSyncError("");
         setCatalog(result.models);
