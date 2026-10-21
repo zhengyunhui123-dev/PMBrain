@@ -106,19 +106,18 @@ describe('Admin GUI update contract', () => {
   });
 
   test('Dream local Markdown toggle persists immediately and rolls back on failure', () => {
-    expect(settingsSource).toContain('const saveDualWrite = async (dualWrite: boolean)');
-    expect(settingsSource).toContain('onChange={event => void saveDualWrite(event.target.checked)}');
-    expect(settingsSource).toContain("setMessage(dualWrite ? '已开启本地 Markdown 写入' : '已关闭本地 Markdown 写入')");
-    expect(settingsSource).toContain('dualWrite: previousValue');
+    expect(settingsSource).toContain("toggleRow('dualWrite','dream-dual-write'");
+    expect(settingsSource).toContain('onChange={event=>toggle(key,event.target.checked)}');
+    expect(settingsSource).toContain('void savePatch({[key]:value}');
+    expect(settingsSource).toContain('[key]:persisted[key]');
   });
 
   test('knowledge organization syncs local changes and exposes enabled local Git commits', () => {
-    expect(settingsSource).toContain('快速维护包含本地新增、修改和删除的文件');
     expect(settingsSource).toContain('快速维护时自动 Git 提交');
-    expect(settingsSource).toContain('checked={settings.autoGitCommit !== false}');
-    expect(settingsSource).toContain('saveAutoGitCommit(event.target.checked)');
-    expect(settingsSource).toContain('autoGitCommit: previousValue');
-    expect(settingsSource).toContain('默认开启，只在本地提交；普通文件夹无需 Git');
+    expect(settingsSource).toContain("toggleRow('autoGitCommit','sync-auto-git-commit'");
+    expect(settingsSource).toContain('const checked=settings[key]!==false');
+    expect(settingsSource).toContain('[key]:persisted[key]');
+    expect(settingsSource).toContain('不推送远端；普通文件夹无需 Git');
   });
 
   test('dark mode covers code blocks and Dream contrast-sensitive content', () => {

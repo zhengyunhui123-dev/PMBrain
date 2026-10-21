@@ -102,233 +102,113 @@ function MarkdownExportSettings() {
 type DreamSettingsValue = DreamSettingsResponse;
 
 function DreamSettings() {
-  const [settings, setSettings] = useState<DreamSettingsValue>({
-    outputDir: 'output',
-    dualWrite: true,
-    includeUncommitted: false,
-    autoGitCommit: true,
-    defaultBrainDir: null,
-    resolvedOutputDir: null,
-    directoryExists: false,
-  });
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [savedOutputDir, setSavedOutputDir] = useState('output');
-  const [timeoutMinutes, setTimeoutMinutes] = useState('');
-  const [savedTimeoutMinutes, setSavedTimeoutMinutes] = useState('');
-  const [knowledgeDirty,setKnowledgeDirty]=useState(false);
-  const [message, setMessage] = useState('');
-  const [error, setError] = useState('');
+  const initial:DreamSettingsValue={outputDir:'output',dualWrite:true,includeUncommitted:false,autoGitCommit:true,knowledgeEnabled:true,defaultBrainDir:null,resolvedOutputDir:null,directoryExists:false};
+  const [settings,setSettings]=useState<DreamSettingsValue>(initial);
+  const [persisted,setPersisted]=useState<DreamSettingsValue>(initial);
+  const [loading,setLoading]=useState(true);
+  const [saving,setSaving]=useState(false);
+  const [savingKey,setSavingKey]=useState('');
+  const [timeoutMinutes,setTimeoutMinutes]=useState('');
+  const [message,setMessage]=useState('');
+  const [error,setError]=useState('');
+  type ToggleKey='knowledgeEnabled'|'knowledgeUseOrdinaryModel'|'entityCaptureEnabled'|'dualWrite'|'autoGitCommit';
 
-  useEffect(() => {
-    void api.dreamSettings()
-      .then(value => {
-        const loaded = value;
-        setSettings(loaded);
-        setSavedOutputDir(loaded.outputDir);
-        const minutes = loaded.timeoutMs == null ? '' : String(loaded.timeoutMs / 60000);
-        setTimeoutMinutes(minutes);
-        setSavedTimeoutMinutes(minutes);
-      })
-      .catch(nextError => setError(nextError instanceof Error ? nextError.message : String(nextError)))
-      .finally(() => setLoading(false));
-  }, []);
+  useEffect(()=>{
+    void api.dreamSettings().then(value=>{
+      setSettings(value);setPersisted(value);
+      setTimeoutMinutes(value.timeoutMs==null?'':String(value.timeoutMs/60000));
+      setLoading(false);
+    }).catch(reason=>setError(reason instanceof Error?reason.message:String(reason)));
+  },[]);
 
-  const save = async () => {
-    const outputDir = settings.outputDir.trim();
-    if (!outputDir) {
-      setError('请填写 Dream 输出目录');
-      return;
-    }
-    const timeoutMs = timeoutMinutes.trim() ? Number(timeoutMinutes) * 60000 : null;
-    if (timeoutMs !== null && (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > 2_147_483_647)) {
-      setError('请填写有效的最长运行分钟数，或留空恢复默认');
-      return;
-    }
-    setSaving(true);
-    setMessage('');
-    setError('');
-    try {
-      const saved = await api.saveDreamSettings({ ...settings, outputDir, timeoutMs });
-      setSettings(current => ({ ...current, ...saved }));
-      setSavedOutputDir(saved.outputDir);
-      setSavedTimeoutMinutes(timeoutMinutes);
-      setKnowledgeDirty(false);
-      setMessage('知识整理设置已保存');
-    } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : String(nextError));
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const saveDualWrite = async (dualWrite: boolean) => {
-    const outputDir = settings.outputDir.trim();
-    if (!outputDir) {
-      setError('请先填写 Dream 输出目录');
-      return;
-    }
-    const previousValue = settings.dualWrite;
-    setSettings(current => ({ ...current, dualWrite }));
-    setSaving(true);
-    setMessage('');
-    setError('');
-    try {
-      const saved = await api.saveDreamSettings({ outputDir, dualWrite, includeUncommitted: settings.includeUncommitted, autoGitCommit:settings.autoGitCommit });
-      setSettings(current => ({ ...current, ...saved }));
-      setSavedOutputDir(saved.outputDir);
-      setMessage(dualWrite ? '已开启本地 Markdown 写入' : '已关闭本地 Markdown 写入');
-    } catch (nextError) {
-      setSettings(current => ({ ...current, dualWrite: previousValue }));
-      setError(nextError instanceof Error ? nextError.message : String(nextError));
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const saveAutoGitCommit = async (autoGitCommit: boolean) => {
-    const previousValue = settings.autoGitCommit;
-    setSettings(current => ({ ...current, autoGitCommit }));
-    setSaving(true);
-    setMessage('');
-    setError('');
-    try {
-      const saved = await api.saveDreamSettings({
-        outputDir: settings.outputDir.trim() || 'output',
-        dualWrite: settings.dualWrite,
-        autoGitCommit,
-        includeUncommitted:settings.includeUncommitted,
+  const savePatch=async(patch:Partial<DreamSettingsValue>,success:string,key?:ToggleKey)=>{
+    if(loading||saving)return;
+    setSaving(true);setSavingKey(key??'');setError('');setMessage('');
+    try{
+      const saved=await api.saveDreamSettings({outputDir:persisted.outputDir,dualWrite:persisted.dualWrite,includeUncommitted:persisted.includeUncommitted,...patch});
+      setPersisted(saved);
+      setSettings(current=>{
+        const next={...current,knowledgeSince:saved.knowledgeSince};
+        for(const field of Object.keys(patch) as Array<keyof DreamSettingsValue>)Object.assign(next,{[field]:saved[field]});
+        if(patch.outputDir!==undefined)Object.assign(next,{defaultBrainDir:saved.defaultBrainDir,resolvedOutputDir:saved.resolvedOutputDir,directoryExists:saved.directoryExists});
+        return next;
       });
-      setSettings(current => ({ ...current, ...saved }));
-      setMessage(autoGitCommit ? '同步成功后自动提交' : '已关闭自动 Git 提交');
-    } catch (nextError) {
-      setSettings(current => ({ ...current, autoGitCommit: previousValue }));
-      setError(nextError instanceof Error ? nextError.message : String(nextError));
-    } finally {
-      setSaving(false);
-    }
+      setMessage(success);
+    }catch(reason){
+      if(key)setSettings(current=>({...current,[key]:persisted[key]}));
+      setError(reason instanceof Error?reason.message:String(reason));
+    }finally{setSaving(false);setSavingKey('');}
   };
-
-  const saveEntityCapture = async (entityCaptureEnabled:boolean) => {
-    setSaving(true);setError('');setMessage('');
-    try {
-      const saved=await api.saveDreamSettings({...settings,entityCaptureEnabled});
-      setSettings(saved);
-      setMessage(entityCaptureEnabled?'已开启新增资料的实体与关联整理':'已关闭自动实体整理，原文和已有成果保留');
-    } catch(nextError){setError(nextError instanceof Error?nextError.message:String(nextError));}
-    finally{setSaving(false);}
+  const toggle=(key:ToggleKey,value:boolean)=>{
+    setSettings(current=>({...current,[key]:value}));
+    void savePatch({[key]:value},value?'已开启，设置已保存':'已关闭，设置已保存',key);
   };
+  const toggleRow=(key:ToggleKey,id:string,title:string,description:string)=>{
+    const checked=settings[key]!==false;
+    return <label className="dream-dual-write-setting" htmlFor={id}>
+      <span className="dream-toggle-copy"><b>{title}</b><small>{description}</small></span>
+      <span className="dream-toggle-control"><small>{savingKey===key?'正在保存…':checked?'已开启':'已关闭'}</small><input id={id} className="settings-switch" type="checkbox" role="switch" aria-label={title} checked={checked} disabled={loading||saving} onChange={event=>toggle(key,event.target.checked)}/></span>
+    </label>;
+  };
+  const budgetDirty=(settings.atomBudgetUsd??0.3)!==(persisted.atomBudgetUsd??0.3)||(settings.conceptBudgetUsd??1.5)!==(persisted.conceptBudgetUsd??1.5)||(settings.verdictTimeoutMs??120000)!==(persisted.verdictTimeoutMs??120000);
+  const saveBudget=()=>{
+    const atomBudgetUsd=settings.atomBudgetUsd??0.3,conceptBudgetUsd=settings.conceptBudgetUsd??1.5,verdictTimeoutMs=settings.verdictTimeoutMs??120000;
+    if([atomBudgetUsd,conceptBudgetUsd].some(value=>!Number.isFinite(value)||value<=0)||!Number.isSafeInteger(verdictTimeoutMs)||verdictTimeoutMs<=0||verdictTimeoutMs>2147483647){setError('请填写大于零的费用预算和有效的等待秒数');return;}
+    void savePatch({atomBudgetUsd,conceptBudgetUsd,verdictTimeoutMs},'费用与等待上限已保存');
+  };
+  const saveTimeout=()=>{
+    const timeoutMs=timeoutMinutes.trim()?Number(timeoutMinutes)*60000:null;
+    if(timeoutMs!==null&&(!Number.isSafeInteger(timeoutMs)||timeoutMs<=0||timeoutMs>2147483647)){setError('请填写有效的最长运行分钟数，或留空恢复默认');return;}
+    void savePatch({timeoutMs},'任务执行上限已保存');
+  };
+  const saveDirectory=()=>{
+    const outputDir=settings.outputDir.trim();
+    if(!outputDir){setError('请填写 Dream 输出目录');return;}
+    void savePatch({outputDir},'Dream 输出目录已保存');
+  };
+  const outputIsAbsolute=/^[A-Za-z]:[\\/]/.test(settings.outputDir)||/^\\\\/.test(settings.outputDir)||settings.outputDir.startsWith('/');
+  const separator=settings.defaultBrainDir?.includes('\\')?'\\':'/';
+  const liveResolvedOutputDir=outputIsAbsolute?settings.outputDir:settings.defaultBrainDir?settings.defaultBrainDir.replace(/[\\/]+$/,'')+separator+settings.outputDir.replace(/^[\\/]+/,''):null;
+  const timeoutDirty=timeoutMinutes!==(persisted.timeoutMs==null?'':String(persisted.timeoutMs/60000));
 
-  const outputDirDirty = settings.outputDir.trim() !== savedOutputDir.trim() || timeoutMinutes !== savedTimeoutMinutes||knowledgeDirty;
-  const outputIsAbsolute = /^[A-Za-z]:[\\/]/.test(settings.outputDir)
-    || /^\\\\/.test(settings.outputDir)
-    || settings.outputDir.startsWith('/');
-  const separator = settings.defaultBrainDir?.includes('\\') ? '\\' : '/';
-  const liveResolvedOutputDir = outputIsAbsolute
-    ? settings.outputDir
-    : settings.defaultBrainDir
-      ? `${settings.defaultBrainDir.replace(/[\\/]+$/, '')}${separator}${settings.outputDir.replace(/^[\\/]+/, '')}`
-      : null;
-
-  return (
-    <section className="pm-card dream-settings-card settings-panel">
-      <div className="pm-section-head settings-panel-head">
-        <div className="settings-panel-title">
-          <span className="settings-panel-icon"><Sparkles /></span>
-          <div>
-            <h2>知识整理设置</h2>
-            <p className="pm-hint">设置整理任务的运行时间和 Dream 生成内容的保存位置。</p>
-          </div>
-        </div>
+  return <section className="pm-card dream-settings-card settings-panel">
+    <div className="pm-section-head settings-panel-head"><div className="settings-panel-title"><span className="settings-panel-icon"><Sparkles /></span><div><h2>知识整理设置</h2><p className="pm-hint">开关即时保存，修改后自动生效。</p></div></div></div>
+    {(message||error)&&<div className="settings-feedback" aria-live="polite">{error?<span className="pm-error-text" role="alert">{error}</span>:<span className="pm-ok">{message}</span>}</div>}
+    <div className="dream-settings-toggles">
+      {toggleRow('knowledgeEnabled','dream-knowledge-enabled','深度提炼知识与概念','默认开启。在 AI 深度整理中提炼有原文依据的知识点、综合概念并处理原始对话。未变化资料复用成果，观点生成保持关闭。')}
+      {toggleRow('knowledgeUseOrdinaryModel','dream-knowledge-ordinary','知识提炼使用普通模型','沿用已配置的普通模型。关闭后使用知识库模型配置中的 Dream 阶段模型。')}
+      {toggleRow('entityCaptureEnabled','dream-entity-capture','自动整理实体与关联','导入或同步新增、变更资料后，更新人物、组织、项目及来源关联。关闭后仍保存原文和已有成果。')}
+      {toggleRow('dualWrite','dream-dual-write','写入本地 Markdown','对话综合和模式发现同时写入数据库和本地文件。知识点与概念保存在知识库中，可搜索并查看来源关联。')}
+      {toggleRow('autoGitCommit','sync-auto-git-commit','快速维护时自动 Git 提交','将成功同步的文件变更保存为本地版本记录，不推送远端；普通文件夹无需 Git。')}
+    </div>
+    <div className="dream-settings-grid">
+      <div className="dream-output-setting">
+        <h3>费用与等待上限</h3>
+        <label htmlFor="dream-atom-budget">知识点提取费用预算（美元 / 来源 / 次）</label>
+        <input id="dream-atom-budget" type="number" min="0.001" step="0.01" value={settings.atomBudgetUsd??0.3} disabled={loading||saving} onChange={event=>setSettings(current=>({...current,atomBudgetUsd:Number(event.target.value)}))}/>
+        <label htmlFor="dream-concept-budget">概念综合费用预算（美元 / 次）</label>
+        <input id="dream-concept-budget" type="number" min="0.001" step="0.01" value={settings.conceptBudgetUsd??1.5} disabled={loading||saving} onChange={event=>setSettings(current=>({...current,conceptBudgetUsd:Number(event.target.value)}))}/>
+        <label htmlFor="dream-verdict-timeout">原始对话判读等待上限（秒 / 请求）</label>
+        <input id="dream-verdict-timeout" type="number" min="1" step="1" value={(settings.verdictTimeoutMs??120000)/1000} disabled={loading||saving} onChange={event=>setSettings(current=>({...current,verdictTimeoutMs:Number(event.target.value)*1000}))}/>
+        <p className="pm-hint">按已配置的模型价格核算；达到上限时保留已完成成果和待处理内容。</p>
+        <button className="pm-primary dream-local-save" onClick={saveBudget} disabled={loading||saving||!budgetDirty}>保存费用设置</button>
       </div>
-      <div className="dream-settings-grid">
-        <label className="dream-dual-write-setting" htmlFor="dream-knowledge-enabled">
-          <span><b>深度提炼知识与概念</b><small>在 AI 深度整理中提取有原文证据的知识点、综合相关概念，并处理符合条件的原始对话。首次开启只处理之后新增或修改的资料，历史内容不自动重扫；实体整理已有成果继续复用，观点生成保持关闭。</small></span>
-          <input id="dream-knowledge-enabled" type="checkbox" checked={settings.knowledgeEnabled===true} disabled={loading||saving} onChange={event=>{setSettings(current=>({...current,knowledgeEnabled:event.target.checked}));setKnowledgeDirty(true);}}/>
-        </label>
-        <label className="dream-dual-write-setting" htmlFor="dream-knowledge-ordinary">
-          <span><b>知识提炼使用普通模型</b><small>默认沿用已配置的普通模型。关闭后使用模型设置中各 Dream 阶段的高级配置。</small></span>
-          <input id="dream-knowledge-ordinary" type="checkbox" checked={settings.knowledgeUseOrdinaryModel!==false} disabled={loading||saving} onChange={event=>{setSettings(current=>({...current,knowledgeUseOrdinaryModel:event.target.checked}));setKnowledgeDirty(true);}}/>
-        </label>
-        <div className="dream-output-setting">
-          <label htmlFor="dream-atom-budget">知识点提取费用预算（美元 / 来源 / 次）</label>
-          <input id="dream-atom-budget" type="number" min="0.001" step="0.01" value={settings.atomBudgetUsd??0.3} disabled={loading||saving} onChange={event=>{setSettings(current=>({...current,atomBudgetUsd:Number(event.target.value)}));setKnowledgeDirty(true);}}/>
-          <label htmlFor="dream-concept-budget">概念综合费用预算（美元 / 次）</label>
-          <input id="dream-concept-budget" type="number" min="0.001" step="0.01" value={settings.conceptBudgetUsd??1.5} disabled={loading||saving} onChange={event=>{setSettings(current=>({...current,conceptBudgetUsd:Number(event.target.value)}));setKnowledgeDirty(true);}}/>
-          <label htmlFor="dream-verdict-timeout">原始对话判读等待上限（秒 / 请求）</label>
-          <input id="dream-verdict-timeout" type="number" min="1" step="1" value={(settings.verdictTimeoutMs??120000)/1000} disabled={loading||saving} onChange={event=>{setSettings(current=>({...current,verdictTimeoutMs:Number(event.target.value)*1000}));setKnowledgeDirty(true);}}/>
-          <p className="pm-hint">采用原版阶段预算，按实际提供商价格核算；价格不可用时停止付费调用并保留待处理内容。启用时间：{settings.knowledgeSince?new Date(settings.knowledgeSince).toLocaleString():'尚未启用'}。修改后点击保存。</p>
-        </div>
-        <label className="dream-dual-write-setting" htmlFor="dream-entity-capture">
-          <span><b>自动整理实体与关联</b><small>默认开启。导入或同步新增、变更资料后，使用普通模型更新人物、组织、项目、概念及来源关联；未变化资料复用成果。需要先在模型设置中配置普通模型。关闭后仍保存原文，待处理资料可在重新开启后由维护继续。</small></span>
-          <input id="dream-entity-capture" type="checkbox" checked={settings.entityCaptureEnabled!==false} disabled={loading||saving} onChange={event=>void saveEntityCapture(event.target.checked)}/>
-        </label>
-        <div className="dream-output-setting">
-          <label htmlFor="dream-timeout-minutes">整理任务单次执行上限（分钟）</label>
-          <input id="dream-timeout-minutes" type="number" min="1" value={timeoutMinutes}
-            onChange={event => setTimeoutMinutes(event.target.value)} disabled={loading || saving}
-            placeholder={settings.effectiveTimeoutMs ? String(settings.effectiveTimeoutMs / 60000) : ''} />
-          <p className="pm-hint">当前生效上限：{settings.effectiveTimeoutMs ? settings.effectiveTimeoutMs / 60000 : '—'} 分钟；留空并保存可恢复默认。用于新建导入、快速维护和深度整理的每次后台执行，继续旧任务保留原上限。排队、等待资料批次和手动继续的时间不累计扣减。这不是执行间隔，也不是整轮完成时间保证。</p>
-        </div>
-        <div className="dream-output-setting">
-          <label htmlFor="dream-output-dir">Dream 输出目录（相对目录或完整路径）</label>
-          <div className="dream-output-action-row">
-            <input
-              id="dream-output-dir"
-              value={settings.outputDir}
-              onChange={event => setSettings(current => ({ ...current, outputDir: event.target.value }))}
-              placeholder="output"
-              disabled={loading || saving}
-            />
-            <button className="pm-primary" onClick={() => void save()} disabled={loading || saving || !outputDirDirty || !settings.outputDir.trim()}>
-              {saving ? '正在保存…' : '保存'}
-            </button>
-          </div>
-          <div className="dream-output-preview">
-            <span>默认 Dream 目录</span>
-            <code>{settings.defaultBrainDir ?? '尚未配置本地知识库目录'}</code>
-            <span>当前实际输出目录</span>
-            <code>{liveResolvedOutputDir ?? '请先配置本地知识库目录，或填写带盘符的完整路径'}</code>
-          </div>
-          <p className="pm-hint">
-            填写 <code>output</code> 不需要盘符，它会保存到上面的默认 Dream 目录中。高级设置选择其他 Source 时，会改为该 Source 的本地目录下的同名文件夹。
-            保存设置时，目录不存在会自动创建；已经存在则直接复用，不会清空目录。
-          </p>
-        </div>
-        <label className="dream-dual-write-setting" htmlFor="dream-dual-write">
-          <span>
-            <b>写入本地 Markdown</b>
-            <small>对话综合和模式发现同时写入数据库和本地文件。知识点与概念保存在知识库中，可搜索并查看来源关联。</small>
-          </span>
-          <input
-            id="dream-dual-write"
-            type="checkbox"
-            checked={settings.dualWrite}
-            onChange={event => void saveDualWrite(event.target.checked)}
-            disabled={loading || saving}
-          />
-        </label>
-        <label className="dream-dual-write-setting" htmlFor="sync-auto-git-commit">
-          <span>
-            <b>快速维护时自动 Git 提交</b>
-            <small>将成功同步的文件变更保存为本地版本记录。默认开启，只在本地提交；普通文件夹无需 Git。</small>
-          </span>
-          <input
-            id="sync-auto-git-commit"
-            type="checkbox"
-            checked={settings.autoGitCommit !== false}
-            onChange={event => void saveAutoGitCommit(event.target.checked)}
-            disabled={loading || saving}
-          />
-        </label>
-        <p className="pm-hint">快速维护包含本地新增、修改和删除的文件。{settings.autoGitCommit!==false?'同步成功后自动提交。':'自动提交已关闭。'}</p>
+      <div className="dream-output-setting">
+        <h3>任务运行时间</h3>
+        <label htmlFor="dream-timeout-minutes">单次执行上限（分钟）</label>
+        <input id="dream-timeout-minutes" type="number" min="1" value={timeoutMinutes} disabled={loading||saving} onChange={event=>setTimeoutMinutes(event.target.value)} placeholder={settings.effectiveTimeoutMs?String(settings.effectiveTimeoutMs/60000):''}/>
+        <p className="pm-hint">当前生效上限：{persisted.effectiveTimeoutMs?persisted.effectiveTimeoutMs/60000:'—'} 分钟。留空保存可恢复默认，新任务按此执行；继续旧任务保留原上限。这不是自动整理的执行间隔。</p>
+        <button className="pm-primary dream-local-save" onClick={saveTimeout} disabled={loading||saving||!timeoutDirty}>保存执行上限</button>
       </div>
-      {(message || error) && <div className="settings-feedback" aria-live="polite">
-        {message && <span className="pm-ok">{message}</span>}
-        {error && <span className="pm-error-text">{error}</span>}
-      </div>}
-    </section>
-  );
+      <div className="dream-output-setting dream-output-directory">
+        <h3>本地文件保存位置</h3>
+        <label htmlFor="dream-output-dir">Dream 输出目录（相对目录或完整路径）</label>
+        <div className="dream-output-action-row"><input id="dream-output-dir" value={settings.outputDir} disabled={loading||saving} onChange={event=>setSettings(current=>({...current,outputDir:event.target.value}))} placeholder="output"/><button className="pm-primary" onClick={saveDirectory} disabled={loading||saving||settings.outputDir.trim()===persisted.outputDir.trim()||!settings.outputDir.trim()}>保存目录</button></div>
+        <div className="dream-output-preview"><span>默认 Dream 目录</span><code>{settings.defaultBrainDir??'尚未配置本地知识库目录'}</code><span>当前实际输出目录</span><code>{liveResolvedOutputDir??'请先配置本地知识库目录，或填写完整路径'}</code></div>
+        <p className="pm-hint">相对目录保存到当前 Source 的本地知识库目录下。保存时创建缺少的目录，已有目录继续复用。</p>
+      </div>
+    </div>
+  </section>;
 }
 
 type DreamScheduleSettingsValue = DreamScheduleResponse;
@@ -361,6 +241,15 @@ function DreamScheduleSettings() {
 
   const dirty = value.enabled !== saved.enabled || value.time !== saved.time||value.mode!==saved.mode;
   const validTime = /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value.time);
+  const saveEnabled=async(enabled:boolean)=>{
+    setValue(current=>({...current,enabled}));setSaving(true);setError('');setMessage('');
+    try{
+      const next=await api.saveDreamSchedule({enabled,time:saved.time,mode:saved.mode??'quick'});
+      setSaved(next);setValue(current=>({...current,enabled:next.enabled}));
+      setMessage(enabled?'已开启每天自动整理':'已关闭每天自动整理');
+    }catch(reason){setValue(current=>({...current,enabled:saved.enabled}));setError(reason instanceof Error?reason.message:String(reason));}
+    finally{setSaving(false);}
+  };
 
   const save = async () => {
     if (!validTime) {
@@ -395,13 +284,16 @@ function DreamScheduleSettings() {
         <label className="dream-schedule-toggle" htmlFor="dream-schedule-enabled">
           <span>
             <b>每天自动整理</b>
-            <small>默认关闭。开启后按本机时间运行。</small>
+            <small>默认关闭。开关即时保存，按本机时间运行。</small>
           </span>
           <input
             id="dream-schedule-enabled"
+            className="settings-switch"
             type="checkbox"
+            role="switch"
+            aria-label="每天自动整理"
             checked={value.enabled}
-            onChange={event => setValue(current => ({ ...current, enabled: event.target.checked }))}
+            onChange={event => void saveEnabled(event.target.checked)}
             disabled={loading || saving}
           />
         </label>

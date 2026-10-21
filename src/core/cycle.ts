@@ -402,6 +402,7 @@ export interface CycleOpts {
   forcePackPhases?: CyclePhase[];
   schemaPack?: string;
   knowledgeSince?: string;
+  includePendingKnowledge?: boolean;
   /**
    * Brain directory (git repo). Required for filesystem phases. `null` means
    * the selected Source has no usable checkout, so filesystem phases skip
@@ -2202,9 +2203,10 @@ export async function runCycle(
           brainDir: brainDir ?? undefined,
           sourceId: xaSourceId,
           dryRun,
-          affectedSlugs: opts.knowledgeSince?undefined:xaAffectedSlugs,
+          affectedSlugs: opts.includePendingKnowledge||opts.knowledgeSince?undefined:xaAffectedSlugs,
           schemaPack:opts.schemaPack,
           since:opts.knowledgeSince,
+          requireSourceQuotes:opts.includePendingKnowledge,
           deferEmbedding:phases.includes('embed'),
           // v0.41.19.0 (T3): closure refreshes cycle lock + fires outer hook.
           yieldDuringPhase: buildYieldDuringPhase(lock, opts.yieldDuringPhase),

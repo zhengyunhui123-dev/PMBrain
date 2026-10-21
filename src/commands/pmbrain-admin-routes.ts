@@ -1021,7 +1021,7 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
       includeUncommitted,
       autoGitCommit,
       entityCaptureEnabled: await engine.getConfig('dream.entity_capture.enabled') !== 'false',
-      knowledgeEnabled:await engine.getConfig('dream.knowledge.enabled')==='true',
+      knowledgeEnabled:await engine.getConfig('dream.knowledge.enabled')!=='false',
       knowledgeSince:await engine.getConfig('dream.knowledge.since')??null,
       knowledgeUseOrdinaryModel:await engine.getConfig('dream.knowledge.use_ordinary_model')!=='false',
       atomBudgetUsd:Number(await engine.getConfig('cycle.extract_atoms.budget_usd')??0.3),
@@ -1144,8 +1144,7 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
         await ensureDreamOutputDirectory(view.resolvedOutputDir);
       }
       await engine.transaction(async tx=>{
-        const changed=typeof knowledgeEnabled==='boolean'&&knowledgeEnabled!==((await tx.getConfig('dream.knowledge.enabled'))==='true');
-        const since=await tx.getConfig('dream.knowledge.since');
+        const changed=typeof knowledgeEnabled==='boolean'&&String(knowledgeEnabled)!==await tx.getConfig('dream.knowledge.enabled');
         await Promise.all([
           tx.setConfig('dream.synthesize.output_dir', outputDir),
           tx.setConfig('dream.synthesize.dual_write', dualWrite ? 'true' : 'false'),
@@ -1153,7 +1152,6 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
           ...(typeof autoGitCommit==='boolean' ? [tx.setConfig('sync.auto_git_commit',autoGitCommit?'true':'false')] : []),
           ...(typeof entityCaptureEnabled==='boolean' ? [tx.setConfig('dream.entity_capture.enabled',entityCaptureEnabled?'true':'false')] : []),
           ...(changed?[tx.setConfig('dream.knowledge.enabled',String(knowledgeEnabled)),tx.setConfig('dream.synthesize.conversation_pages',String(knowledgeEnabled)),tx.setConfig('dream.synthesize.enabled',String(knowledgeEnabled))]:[]),
-          ...(knowledgeEnabled&&!since?[tx.setConfig('dream.knowledge.since',new Date().toISOString())]:[]),
           ...(typeof knowledgeUseOrdinaryModel==='boolean'?[tx.setConfig('dream.knowledge.use_ordinary_model',String(knowledgeUseOrdinaryModel))]:[]),
           ...(atomBudgetUsd!==undefined?[tx.setConfig('cycle.extract_atoms.budget_usd',String(atomBudgetUsd))]:[]),
           ...(conceptBudgetUsd!==undefined?[tx.setConfig('cycle.synthesize_concepts.budget_usd',String(conceptBudgetUsd))]:[]),

@@ -12,6 +12,7 @@ import { loadActivePack } from '../src/core/schema-pack/load-active.ts';
 import { BudgetExhausted } from '../src/core/budget/budget-tracker.ts';
 import type { BrainEngine } from '../src/core/engine.ts';
 import { assertSafeE2eDatabaseUrl } from './helpers/db-guard.ts';
+import {prepareDreamKnowledge} from '../src/product/tasks/dream-knowledge';
 
 let engine: BrainEngine;
 let home: string;
@@ -45,6 +46,14 @@ test('ordinary note pages participate in native pack-declared atom discovery',as
   await seed('notes/release','note');await seed('concepts/output','concept');
   const pages=await discoverExtractablePages(engine,'default');
   expect(pages.map(p=>p.slug)).toEqual(['notes/release']);
+});
+
+test('default deep knowledge is persisted by execution and explicit disabling remains effective',async()=>{
+  expect(await prepareDreamKnowledge(engine)).toBe(true);
+  expect(await engine.getConfig('dream.synthesize.conversation_pages')).toBe('true');
+  expect(await engine.getConfig('dream.knowledge.since')).toBeNull();
+  await engine.setConfig('dream.knowledge.enabled','false');
+  expect(await prepareDreamKnowledge(engine)).toBe(false);
 });
 
 test('compatible knowledge pack preserves the active taxonomy and explicit model mode wins over stale stage overrides',async()=>{

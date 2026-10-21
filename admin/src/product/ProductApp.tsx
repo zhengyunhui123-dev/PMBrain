@@ -11,7 +11,7 @@ import { useDesktopTheme } from '../lib/use-desktop-theme';
 import type { SidecarState, StartupProgress } from '../../../desktop/src/preload/index';
 import type { UpdateState } from '../../../shared/contracts/updates';
 import { PRODUCT_VERSION } from './product-version';
-import { settingGroupNames, visibleSettingItems } from './settings-nav';
+import { settingGroupNames, visibleSettingItems, SETTINGS_RETURN_KEY, nextSettingsOrigin, settingsReturnTarget } from './settings-nav';
 import { assistantTarget, CREATE_RETURN_KEY, libraryMode, maintenanceView, NAV_COLLAPSED_KEY } from './home-model';
 import { HomePage } from './HomePage';
 import { MaintenanceDialog, StatusChip } from './MaintenanceStatus';
@@ -94,6 +94,7 @@ export function ProductApp() {
     } finally { if (request === setupRequest.current) setSetupLoading(false); }
   };
   const previousPage = useRef(['import', 'knowledge-import'].includes(page) ? 'home' : page);
+  const previousTarget=useRef(window.location.hash.slice(1)||'home');
   const navigate = (target: string) => {
     if (['import', 'knowledge-import'].includes(target)) { setImportOpen(true); return; }
     window.location.hash = target; setPage(target.split('?')[0]);
@@ -150,6 +151,10 @@ export function ProductApp() {
     if (legacyMobile) return;
     const updatePage = () => {
       const next = currentPage();
+      const target=window.location.hash.slice(1)||'home';
+      const origin=nextSettingsOrigin(previousTarget.current,target,sessionStorage.getItem(SETTINGS_RETURN_KEY));
+      if(origin!==null)sessionStorage.setItem(SETTINGS_RETURN_KEY,origin);
+      previousTarget.current=target;
       if (['import', 'knowledge-import'].includes(next)) { setImportOpen(true); window.location.hash = previousPage.current; setPage(previousPage.current); }
       else { previousPage.current = next; setPage(next); }
     };
@@ -196,7 +201,8 @@ export function ProductApp() {
     return next;
   });
   const leaveSettings = () => {
-    const target = sessionStorage.getItem(CREATE_RETURN_KEY) || 'home';
+    const target = settingsReturnTarget(sessionStorage.getItem(SETTINGS_RETURN_KEY),sessionStorage.getItem(CREATE_RETURN_KEY));
+    sessionStorage.removeItem(SETTINGS_RETURN_KEY);
     sessionStorage.removeItem(CREATE_RETURN_KEY);
     navigate(target);
   };

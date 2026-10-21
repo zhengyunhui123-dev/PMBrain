@@ -30,7 +30,7 @@ export function TaskProgressCard({ run, link = true, timeline = false }: { run: 
     <dl className="product-task-phase-summary" aria-label="当前阶段进度">
       <div><dt>当前阶段</dt><dd>{view?.stage ?? (active ? '等待执行' : '暂未记录')}</dd></div>
       <div><dt>已完成 / 总数</dt><dd>{stageSummary.count}</dd></div>
-      <div><dt>阶段耗时</dt><dd>{stageSummary.duration}</dd></div>
+      <div><dt>{stageSummary.durationLabel}</dt><dd>{stageSummary.duration}</dd></div>
       <div><dt>剩余子任务</dt><dd>{stageSummary.remaining}{stageSummary.active != null && stageSummary.active > 0 ? <small> · 执行中 {stageSummary.active}</small> : null}{stageSummary.failed>0?<small> · 失败 {stageSummary.failed}</small>:null}</dd></div>
     </dl>
     {!roundCompleted && <><div className="product-task-current" role="status"><b>{taskStopping(run) ? view?.stage==='停止当前操作并恢复数据库'?view.stage:'正在停止并回滚当前操作' : run.status === 'failed' ? '任务未完成' : run.status === 'cancelled' ? '任务已停止' : view?.stage ?? (active ? '正在处理' : '任务完成')}</b><span>{percent != null ? `${percent}%` : active ? '进行中' : ''}</span></div>

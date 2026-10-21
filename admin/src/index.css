@@ -7346,46 +7346,41 @@ tbody tr:hover td { background: color-mix(in srgb, var(--accent) 4%, var(--conso
   accent-color: var(--accent);
 }
 
-.dream-dual-write-setting input[type="checkbox"] {
-  position: relative;
-  width: 42px;
-  height: 23px;
-  min-height: 23px;
-  flex-basis: 42px;
+.settings-page input.settings-switch {
   appearance: none;
-  border: 1px solid var(--console-line);
-  border-radius: 99px;
-  background: color-mix(in srgb, var(--text-muted) 22%, var(--console-surface-soft));
+  -webkit-appearance: none;
+  box-sizing: border-box;
+  width: 36px;
+  min-width: 36px;
+  max-width: 36px;
+  height: 20px;
+  min-height: 20px;
+  max-height: 20px;
+  flex: 0 0 36px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: #d0d5dd radial-gradient(circle, #fff 6.5px, transparent 7px) no-repeat 2px center / 16px 16px;
   cursor: pointer;
-  transition: border-color .16s ease, background .16s ease;
+  transition: background-position .16s ease, background-color .16s ease;
 }
-
-.dream-dual-write-setting input[type="checkbox"]::before {
-  position: absolute;
-  top: 3px;
-  left: 3px;
-  width: 15px;
-  height: 15px;
-  border-radius: 50%;
-  background: #fff;
-  box-shadow: 0 2px 6px rgba(28, 34, 55, .22);
-  content: '';
-  transition: transform .16s ease;
-}
-
-.dream-dual-write-setting input[type="checkbox"]:checked {
-  border-color: var(--accent);
-  background: var(--accent);
-}
-
-.dream-dual-write-setting input[type="checkbox"]:checked::before {
-  transform: translateX(19px);
-}
-
-.dream-dual-write-setting input[type="checkbox"]:disabled {
+.settings-page input.settings-switch:checked { background-color: #34c759; background-position: 18px center; }
+.settings-page input.settings-switch:focus-visible { outline: 2px solid #34c759; outline-offset: 3px; }
+.settings-page input.settings-switch:disabled {
   cursor: default;
   opacity: .62;
 }
+.dream-settings-toggles { display: grid; margin-bottom: 18px; border: 1px solid var(--console-line); border-radius: 10px; overflow: hidden; }
+.dream-settings-toggles .dream-dual-write-setting { min-width: 0; border: 0; border-bottom: 1px solid var(--console-line); border-radius: 0; background: transparent; padding: 16px 18px; }
+.dream-settings-toggles .dream-dual-write-setting:last-child { border-bottom: 0; }
+.dream-settings-toggles .dream-toggle-copy { min-width: 0; }
+.dream-settings-toggles .dream-toggle-control { display: flex; flex: none; align-items: center; gap: 10px; white-space: nowrap; }
+.dream-toggle-control small { min-width: 36px; text-align: right; }
+.dream-output-setting h3 { margin: 0 0 4px; color: var(--text-primary); font-size: 14px; }
+.dream-local-save { justify-self: start; margin-top: 4px; }
+.dream-output-directory { grid-column: 1 / -1; }
+.dream-settings-card > .settings-feedback { margin: 0 0 14px; padding: 0; border: 0; }
 
 .settings-panel-group {
   padding: 18px 20px 20px;

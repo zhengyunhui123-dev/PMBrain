@@ -91,6 +91,7 @@ export const MAX_DETERMINISTIC_FAILURES = 3;
 export interface ExtractAtomsOpts {
   schemaPack?:string;
   since?:string;
+  requireSourceQuotes?:boolean;
   brainDir?: string;
   sourceId?: string;
   dryRun?: boolean;
@@ -578,7 +579,7 @@ export async function runPhaseExtractAtoms(
 
       const atoms = parseAtomsResponse(result.text).slice(0,3);
       if(atoms.length===0&&(parseLlmJson<unknown[]>(result.text,{array:true})?.length??0)>0)throw new Error('atoms_schema_failed: no valid atoms in model output');
-      if(opts.since&&atoms.some(atom=>!locateQuote(promptContent,atom.source_quote??'')))throw new Error('atom_evidence_unverified: source quote is missing or cannot be located unambiguously');
+      if((opts.requireSourceQuotes||opts.since)&&atoms.some(atom=>!locateQuote(promptContent,atom.source_quote??'')))throw new Error('atom_evidence_unverified: source quote is missing or cannot be located unambiguously');
       if (atoms.length === 0) {
         if (!opts.dryRun && item.kind === 'page') {
             const updated=await engine.executeRaw(

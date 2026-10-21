@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import type { ConsoleRun } from '../shared/contracts/common.ts';
-import { taskHasRemaining, taskPercent, taskRoundCompleted, taskRoundSummary, taskStatus } from '../admin/src/product/task-presentation.ts';
+import { taskHasRemaining, taskPercent, taskRoundCompleted, taskRoundSummary, taskStatus, taskPhaseSummary } from '../admin/src/product/task-presentation.ts';
 
 const sample = (): ConsoleRun => ({ id:'task-7',kind:'dream_full',status:'completed',command:[],stdout:'',stderr:'',error:null,exitCode:0,startedAt:'2026-10-09T01:00:00Z',completedAt:'2026-10-09T01:01:00Z',durationMs:60000,
   product:{name:'AI 深度整理',stage:'部分完成，请查看未完成步骤',percent:0,phasePercent:null,completedSteps:1,processed:0,total:1482,file:null,
@@ -8,6 +8,17 @@ const sample = (): ConsoleRun => ({ id:'task-7',kind:'dream_full',status:'comple
     metrics:[{label:'待检查项',value:2939},{label:'长期判断',value:5},{label:'合并事实',value:11},{label:'创建实体',value:4},{label:'新增关系',value:0},{label:'剩余页面',value:1482},{label:'输入 Token',value:120000},{label:'费用上限',value:5}],errorReason:'实体落库验收失败：目标未保存'} });
 
 describe('整理按本轮成果展示',()=>{
+  test('结束任务显示实际总耗时，执行中继续显示阶段耗时，缺少记录不显示虚假零秒',()=>{
+    const run=sample();run.durationMs=46100;
+    run.product!.phaseProgress={id:'purge',startedAt:null,elapsedMs:0,completed:null,total:null,remaining:null,active:0,unit:'项'};
+    for(const status of ['completed','failed','cancelled'] as const){
+      run.status=status;expect(taskPhaseSummary(run).duration).toBe('46 秒');expect(taskPhaseSummary(run).durationLabel).toBe('任务耗时');
+    }
+    run.durationMs=null;expect(taskPhaseSummary(run).duration).toBe('暂未记录');
+    run.status='running';run.product!.phaseProgress.startedAt='2026-10-20T09:28:00Z';run.product!.phaseProgress.elapsedMs=5000;
+    const live=taskPhaseSummary(run,Date.parse('2026-10-20T09:28:02Z'));
+    expect(live.duration).toBe('7 秒');expect(live.durationLabel).toBe('阶段耗时');
+  });
   test('结束的部分整理显示本轮完成，不把原始0页进度改成100%',()=>{
     const run=sample(),before=JSON.stringify(run);
     expect(taskStatus(run)).toBe('本轮已完成');expect(taskRoundCompleted(run)).toBe(true);expect(taskPercent(run)).toBeNull();

@@ -152,8 +152,10 @@ describe('Admin import behavior contracts', () => {
   });
 
   test('save buttons are concise and disabled until their values change', () => {
-    expect(settingsSource).toContain("const [savedOutputDir, setSavedOutputDir] = useState('output')");
-    expect(settingsSource).toContain('!outputDirDirty');
+    expect(settingsSource).toContain('const [persisted,setPersisted]=useState<DreamSettingsValue>(initial)');
+    expect(settingsSource).toContain('settings.outputDir.trim()===persisted.outputDir.trim()');
+    expect(settingsSource).toContain('保存目录');
+    expect(settingsSource).toContain('保存费用设置');
     expect(settingsSource).toContain("saving ? '正在保存…' : '保存'");
     expect(settingsSource).not.toContain("saving ? '正在保存…' : '保存设置'");
   });
