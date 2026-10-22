@@ -201,6 +201,8 @@ export const api = {
   knowledgeGraphEdge: (id: number): Promise<import('./lib/knowledge-graph').KnowledgeGraphData> => apiFetch(`/admin/api/knowledge-graph/edge/${id}`),
   runFiles: (id: string, after = 0): Promise<import('../../shared/task-progress').SyncFileDetails> => apiFetch(`/admin/api/runs/${encodeURIComponent(id)}/files?after=${after}`),
   cancelRun: (id: string) => apiFetch(`/admin/api/runs/${encodeURIComponent(id)}/cancel`, { method: 'POST' }),
+  pauseRun: (id: string) => apiFetch(`/admin/api/runs/${encodeURIComponent(id)}/pause`, { method: 'POST' }),
+  continueRun: (id: string) => apiFetch(`/admin/api/runs/${encodeURIComponent(id)}/continue`, { method: 'POST' }),
   retryRun: (id: string) => apiFetch(`/admin/api/runs/${encodeURIComponent(id)}/retry`, { method: 'POST' }),
   startActionRun: (action: string, extra?: { catchUp?: boolean; forceReembed?: boolean }) =>
     apiFetch('/admin/api/runs/action', { method: 'POST', body: JSON.stringify({ action, ...extra }) }),

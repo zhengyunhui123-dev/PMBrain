@@ -1630,6 +1630,27 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
     res.status(202).json({status:'stopping'});
   });
 
+  app.post('/admin/api/runs/:id/pause', requireAdmin, async (req: Request, res: Response) => {
+    const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const run = id ? await productTasks.pauseSearchOptimize(id) : null;
+    if (!run) {
+      res.status(404).json({ error: 'run_not_found' });
+      return;
+    }
+    res.json(run);
+  });
+
+  app.post('/admin/api/runs/:id/continue', requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+      const run = id ? await productTasks.continueSearchOptimize(id) : null;
+      if (!run) { res.status(404).json({ error: 'run_not_found' }); return; }
+      sendAdminContract(res, RunAcceptedResponseSchema, { runId: run.id, status: run.status }, 202);
+    } catch (error) {
+      res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
   app.post('/admin/api/runs/:id/retry', requireAdmin, async (req: Request, res: Response) => {
     try {
       const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;

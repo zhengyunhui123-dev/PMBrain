@@ -111,7 +111,29 @@ describe('任务的产品进度', () => {
     const completed = finishTaskProgress(adapter.view, 'completed', { imported: 4, errors: 0 }, null);
     expect(completed.percent).toBe(100);
     expect(completed.stage).toBe('导入完成');
-    expect(finishTaskProgress(adapter.view, 'completed', { imported: 4, errors: 0, vectorsPending: true }, null).stage).toBe('原文已入库，向量化在后台继续');
+    expect(finishTaskProgress(adapter.view, 'completed', { imported: 4, errors: 0, vectorsPending: true }, null).stage).toBe('已导入 4 份资料，可以开始使用。正在后台优化搜索。');
+  });
+  test('优化搜索是独立任务，暂停后保留已完成部分并可继续', () => {
+    const adapter = new TaskProgressAdapter('embed_stale');
+    expect(adapter.view.name).toBe('优化搜索');
+    expect(adapter.view.steps[0]?.label).toBe('优化搜索');
+    adapter.event({ phase: 'embed', event: 'start', stage: '正在调用向量模型', unit: '段' });
+    expect(adapter.view.stage).toBe('优化搜索 · 正在调用向量模型');
+    const paused = finishTaskProgress(adapter.view, 'cancelled', { embedded: 2, skipped: 1 }, null);
+    expect(paused.stage).toBe('已暂停，已完成的部分保留');
+    expect(paused.errorReason).toBeNull();
+    const held = finishTaskProgress(adapter.view, 'paused', { embedded: 2 }, null);
+    expect(held.stage).toBe('已暂停，已完成的部分保留');
+    expect(held.errorReason).toBe('已暂停。新导入的资料会记入待优化，不会自动开始。');
+    expect(held.errorCode).not.toBe('user_cancel');
+    const run = { id: 'task-9', kind: 'embed_stale', status: 'cancelled' } as ConsoleRun;
+    expect(taskStatus(run)).toBe('已暂停');
+    expect(taskCanRetry(run)).toBe(true);
+    expect(taskStatus({ ...run, status: 'paused', searchOptimize: true })).toBe('已暂停');
+    expect(taskCanRetry({ ...run, status: 'paused', searchOptimize: true })).toBe(true);
+    expect(taskCanRetry({ ...run, status: 'paused' })).toBe(false);
+    expect(taskStatus({ ...run, status: 'failed' })).toBe('失败');
+    expect(taskCanRetry({ ...run, status: 'running' })).toBe(false);
   });
   test('整理结果中的 skipped 不显示为实际完成，未知日志不显示在普通进度', () => {
     const adapter = new TaskProgressAdapter('dream_full');

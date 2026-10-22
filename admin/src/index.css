@@ -6900,6 +6900,7 @@ tbody tr:hover td { background: color-mix(in srgb, var(--accent) 4%, var(--conso
 .task-status { display: inline-flex; align-items: center; padding: 4px 8px; border-radius: 999px; font-size: 11px; font-weight: 700; white-space: nowrap; }
 .task-status-running { color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
 .task-status-queued { color: var(--info, #4784ed); background: color-mix(in srgb, var(--info, #4784ed) 12%, transparent); }
+.task-status-paused { color: var(--info, #4784ed); background: color-mix(in srgb, var(--info, #4784ed) 12%, transparent); }
 .task-status-completed { color: var(--success); background: color-mix(in srgb, var(--success) 12%, transparent); }
 .task-status-failed { color: var(--error); background: color-mix(in srgb, var(--error) 10%, transparent); }
 .task-status-cancelled { color: var(--text-secondary); background: color-mix(in srgb, var(--text-muted) 12%, transparent); }

@@ -21,10 +21,10 @@ export function taskPhaseSummary(run: ConsoleRun, now = Date.now()) {
 export const taskStopping = (run: ConsoleRun) => run.status === 'running' && run.error === '正在停止任务…';
 const taskWasSkipped = (run: ConsoleRun) => (run.result as {status?:string}|undefined)?.status === 'skipped' || run.product?.stage === '任务未执行';
 const taskIsPartial=(run:ConsoleRun)=>(run.result as {status?:string}|undefined)?.status==='partial'||run.product?.stage.startsWith('部分完成')===true;
-export const taskCanRetry=(run:ConsoleRun)=>run.id.startsWith('task-')&&(['failed','cancelled'].includes(run.status)||(run.status==='completed'&&['import_path','dream_capture_entities','dream_quick','dream_full','dream_cycle','dream_sync'].includes(run.kind)&&taskIsPartial(run)));
+export const taskCanRetry=(run:ConsoleRun)=>run.id.startsWith('task-')&&(['failed','cancelled'].includes(run.status)||(run.searchOptimize===true&&run.status==='paused')||(run.status==='completed'&&['import_path','dream_capture_entities','dream_quick','dream_full','dream_cycle','dream_sync'].includes(run.kind)&&taskIsPartial(run)));
 export const taskRoundCompleted = (run: ConsoleRun) => run.kind.startsWith('dream_') && run.status === 'completed' && !taskWasSkipped(run);
 export const taskPercent = (run: ConsoleRun) => taskRoundCompleted(run) ? null : run.status==='running'&&run.kind.startsWith('dream_')&&run.product?.phaseProgress ? run.product.phasePercent : run.product?.percent ?? null;
-export const taskStatus = (run: ConsoleRun) => taskStopping(run) ? '正在停止' : taskWasSkipped(run) ? '未执行' : run.product?.stage.includes('AI 提炼未执行')?'AI 提炼未执行':run.kind==='import_path'&&taskIsPartial(run)?'部分完成':taskRoundCompleted(run) ? '本轮已完成' : ({ queued:'排队中',running:'执行中',completed:'已完成',failed:'失败',cancelled:'已停止' })[run.status];
+export const taskStatus = (run: ConsoleRun) => taskStopping(run) ? '正在停止' : run.searchOptimize&&run.status==='paused' ? '已暂停' : run.kind==='embed_stale'&&run.status==='cancelled' ? '已暂停' : taskWasSkipped(run) ? '未执行' : run.product?.stage.includes('AI 提炼未执行')?'AI 提炼未执行':run.kind==='import_path'&&taskIsPartial(run)?'部分完成':taskRoundCompleted(run) ? '本轮已完成' : ({ queued:'排队中',running:'执行中',completed:'已完成',failed:'失败',cancelled:'已停止',paused:'已暂停' })[run.status];
 
 const remainingMetric = (label: string) => /^(?:待|剩余|未关联|未解析|孤立|异常)|失败|待补/.test(label);
 const operationalMetric = (label: string) => /Token|费用|预算|上限/.test(label);

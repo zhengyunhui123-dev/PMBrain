@@ -84,6 +84,10 @@ export interface EmbedOpts {
   pageLimit?: number;
   /** Cooperative cancellation from Dream/Minions into provider requests. */
   signal?: AbortSignal;
+  /** Return true to stop before the next provider batch without aborting the current request. */
+  pauseCheck?: () => Promise<boolean> | boolean;
+  /** Test seam for committing one provider batch at a time. */
+  providerBatchSize?: number;
   /** Suppress human stdout summaries for structured/background callers. */
   quiet?: boolean;
 }
@@ -127,9 +131,15 @@ export interface EmbedResult {
   reason?: 'stall_timeout';
   /** First page failure, so a background run can show the cause. */
   error?: string;
+  /** True when a pause or abort stopped before this page was fully written. */
+  incomplete?: boolean;
 }
 
 function finalizeEmbedResult(result: EmbedResult): EmbedResult {
+  if (result.incomplete) {
+    result.status = 'partial';
+    return result;
+  }
   if (result.budgetExceeded) {
     result.status = 'partial';
   } else if (result.failedPages > 0 || result.failedChunks > 0) {
@@ -302,11 +312,18 @@ export async function runEmbedCore(engine: BrainEngine, opts: EmbedOpts): Promis
 
   if (opts.slugs && opts.slugs.length > 0) {
     for (const s of opts.slugs) {
-      if (opts.signal?.aborted) break;
+      if (opts.signal?.aborted || await opts.pauseCheck?.()) {
+        result.incomplete = true;
+        break;
+      }
       try {
-        await embedPage(engine, s, !!opts.dryRun, result, opts.sourceId, opts.signal, opts.quiet);
+        await embedPage(engine, s, !!opts.dryRun, result, opts.sourceId, opts.signal, opts.quiet, opts.pauseCheck, opts.providerBatchSize);
+        if (result.incomplete) break;
       } catch (e: unknown) {
-        if (opts.signal?.aborted) break;
+        if (opts.signal?.aborted) {
+          result.incomplete = true;
+          break;
+        }
         result.failedPages++;
         result.failedChunks += e instanceof PageEmbeddingFailure ? e.failedChunks : 0;
         const message = e instanceof Error ? e.message : String(e);
@@ -372,8 +389,14 @@ export async function runEmbedCore(engine: BrainEngine, opts: EmbedOpts): Promis
     return finalizeEmbedResult(result);
   }
   if (opts.slug) {
-    if (!opts.signal?.aborted) {
-      await embedPage(engine, opts.slug, !!opts.dryRun, result, opts.sourceId, opts.signal, opts.quiet);
+    if (opts.signal?.aborted || await opts.pauseCheck?.()) result.incomplete = true;
+    else {
+      try {
+        await embedPage(engine, opts.slug, !!opts.dryRun, result, opts.sourceId, opts.signal, opts.quiet, opts.pauseCheck, opts.providerBatchSize);
+      } catch (e: unknown) {
+        if (opts.signal?.aborted) result.incomplete = true;
+        else throw e;
+      }
     }
     return finalizeEmbedResult(result);
   }
@@ -493,6 +516,8 @@ async function embedPage(
   sourceId?: string,
   signal?: AbortSignal,
   quiet?: boolean,
+  pauseCheck?: () => Promise<boolean> | boolean,
+  providerBatchSize?: number,
 ) {
   const opts = sourceId ? { sourceId } : undefined;
   const page = await engine.getPage(slug, opts);
@@ -558,34 +583,54 @@ async function embedPage(
     return;
   }
 
+  const embeddingModel = getEmbeddingModel();
+  let offset = 0;
   try {
-    const embeddings = await embedBatch(
-      toEmbed.map(c => c.chunk_text),
-      signal ? { abortSignal: signal } : {},
-    );
-    const embeddingModel = getEmbeddingModel();
-    const embeddingMap = new Map<number, Float32Array>();
-    for (let j = 0; j < toEmbed.length; j++) {
-      embeddingMap.set(toEmbed[j].chunk_index, embeddings[j]);
+    while (offset < toEmbed.length) {
+      if (signal?.aborted || (offset > 0 && await pauseCheck?.())) {
+        result.incomplete = true;
+        return;
+      }
+      const batchSize = Math.max(1, providerBatchSize ?? getEmbeddingExecutionProfile().batchSize);
+      const staleBatch = toEmbed.slice(offset, offset + batchSize);
+      const embeddings = await embedBatchWithBackoff(
+        staleBatch.map(chunk => chunk.chunk_text),
+        signal ? { abortSignal: signal } : {},
+      );
+      const checkpoint: ChunkInput[] = staleBatch.map((row, index) => ({
+        chunk_index: row.chunk_index,
+        chunk_text: row.chunk_text,
+        chunk_source: row.chunk_source,
+        embedding: embeddings[index],
+        model: embeddingModel,
+        token_count: row.token_count || Math.ceil(row.chunk_text.length / 4),
+        ...(row.language && { language: row.language }),
+        ...(row.symbol_name && { symbol_name: row.symbol_name }),
+        ...(row.symbol_type && { symbol_type: row.symbol_type }),
+        ...(row.start_line != null && { start_line: row.start_line }),
+        ...(row.end_line != null && { end_line: row.end_line }),
+        ...(row.parent_symbol_path && { parent_symbol_path: row.parent_symbol_path }),
+        ...(row.doc_comment && { doc_comment: row.doc_comment }),
+        ...(row.symbol_name_qualified && { symbol_name_qualified: row.symbol_name_qualified }),
+      }));
+      await engine.upsertChunks(slug, checkpoint, {
+        ...(opts ?? {}),
+        replaceExisting: false,
+        ...(signal && { signal }),
+        auditSite: 'upsertChunks',
+      });
+      offset += staleBatch.length;
+      result.embedded += staleBatch.length;
+      result.committedBatches++;
     }
-    const updated: ChunkInput[] = chunks.map(c => ({
-      chunk_index: c.chunk_index,
-      chunk_text: c.chunk_text,
-      chunk_source: c.chunk_source,
-      embedding: embeddingMap.get(c.chunk_index),
-      model: embeddingModel,
-      token_count: c.token_count || Math.ceil(c.chunk_text.length / 4),
-    }));
-
-    await engine.upsertChunks(slug, updated, {
-      ...(opts ?? {}),
-      ...(signal && { signal }),
-    });
-    result.embedded += toEmbed.length;
     result.pages_processed++;
     if (!quiet) slog(`${slug}: embedded ${toEmbed.length} chunks`);
   } catch (error) {
-    throw new PageEmbeddingFailure(toEmbed.length, error);
+    if (signal?.aborted) {
+      result.incomplete = true;
+      return;
+    }
+    throw new PageEmbeddingFailure(toEmbed.length - offset, error);
   }
 }
 

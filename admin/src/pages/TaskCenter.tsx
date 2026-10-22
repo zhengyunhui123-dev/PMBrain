@@ -11,7 +11,7 @@ import { taskCanRetry, taskRoundCompleted, taskRoundListSummary, taskPhaseSummar
 import { taskModelSetupIssue } from '../product/model-readiness';
 import { desktopApi } from '../lib/product-fetch';
 
-type TaskFilter = 'all' | 'running' | 'queued' | 'completed' | 'failed' | 'cancelled';
+type TaskFilter = 'all' | 'running' | 'queued' | 'completed' | 'failed' | 'cancelled' | 'paused';
 const DreamRunContent=React.lazy(()=>import('./Dream').then(module=>({default:module.DreamRunContent})));
 
 interface EmbeddingRebuildTask {
@@ -75,6 +75,10 @@ function statusClass(status: ConsoleRun['status']): string {
 
 function isActive(run: ConsoleRun): boolean {
   return run.status === 'queued' || run.status === 'running';
+}
+
+function isSearchOptimize(run: ConsoleRun): boolean {
+  return run.searchOptimize === true;
 }
 
 function preferLiveRun(saved: ConsoleRun, live: ConsoleRun | undefined): ConsoleRun {
@@ -155,7 +159,7 @@ function TaskDetailDrawer({ run, onClose, onCancel, onRetry, busy }: { run: Cons
     <h2>{run.product?.name ?? taskName(run.kind)}</h2><p className="pm-hint">{formatDate(run.startedAt, '-')} · {taskTriggerLabel(run)}</p>
     <TaskProgressCard run={current} link={false} />
     {dream&&(detailError?<p role="alert">{detailError}</p>:detail?<React.Suspense fallback={<p role="status">正在读取整理内容…</p>}><DreamRunContent run={current} expanded /></React.Suspense>:<p role="status">正在读取整理内容…</p>)}
-    <div className="task-run-card-actions">{isActive(run) && <button type="button" className="pm-ghost" disabled={busy || taskStopping(run)} onClick={onCancel}>{taskStopping(run) ? '正在停止…' : '停止任务'}</button>}{taskCanRetry(run) && <button type="button" className="pm-ghost" disabled={busy} onClick={onRetry}>{taskUsesFileQueue(run.kind)||run.status==='completed'?'继续未完成任务':'重新执行'}</button>}</div>
+    <div className="task-run-card-actions">{isActive(run) && <button type="button" className="pm-ghost" disabled={busy || taskStopping(run)} onClick={onCancel}>{taskStopping(run) ? '正在停止…' : isSearchOptimize(run) ? '暂停' : '停止任务'}</button>}{taskCanRetry(run) && <button type="button" className="pm-ghost" disabled={busy} onClick={onRetry}>{isSearchOptimize(run) ? '继续' : taskUsesFileQueue(run.kind)||run.status==='completed'?'继续未完成任务':'重新执行'}</button>}</div>
     <TaskTechnicalLogs key={run.id} run={run} />
   </aside></>;
 }
@@ -210,12 +214,16 @@ export function TaskCenterPage() {
     .slice(0, 100), [filter, rows]);
 
   const cancel = async (run: ConsoleRun) => {
-    if (!window.confirm(run.status === 'queued'
+    const optimize = isSearchOptimize(run);
+    if (!window.confirm(optimize
+      ? '暂停后，正在处理的这一批会保存。之后不会继续优化，新导入的资料会记入待优化，直到你继续。确定暂停吗？'
+      : run.status === 'queued'
       ? '取消等待后，本次任务不会再启动。确定取消吗？'
       : '取消任务不会删除已经完成的成果，下次可以从未完成部分继续。确定取消吗？')) return;
     setCancelling(run.id);
     try {
-      await api.cancelRun(run.id);
+      if (optimize) await api.pauseRun(run.id);
+      else await api.cancelRun(run.id);
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -238,10 +246,14 @@ export function TaskCenterPage() {
   };
 
   const retry = async (run: ConsoleRun) => {
-    if (!window.confirm(taskUsesFileQueue(run.kind)?'将保留已完成资料，继续原任务未完成的同步和整理。中断的模型请求可能已产生费用，继续吗？':'将重新执行任务；导入会跳过已确认完成且未改变的文件。中断的模型请求可能已产生费用，重新执行可能再次计费。继续吗？')) return;
+    const optimize = isSearchOptimize(run);
+    if (!window.confirm(optimize
+      ? '继续后，只优化还没有完成的资料。确定继续吗？'
+      : taskUsesFileQueue(run.kind)?'将保留已完成资料，继续原任务未完成的同步和整理。中断的模型请求可能已产生费用，继续吗？':'将重新执行任务；导入会跳过已确认完成且未改变的文件。中断的模型请求可能已产生费用，重新执行可能再次计费。继续吗？')) return;
     setRetrying(run.id);
     try {
-      await api.retryRun(run.id);
+      if (optimize) await api.continueRun(run.id);
+      else await api.retryRun(run.id);
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -281,7 +293,7 @@ export function TaskCenterPage() {
       <div className="pm-section-head">
         <div>
           <h1>任务中心</h1>
-          <p className="pm-page-intro">导入与整理在后台完成。在这里查看结果，或处理未完成的任务。</p>
+          <p className="pm-page-intro">导入完成后就可以使用。搜索优化在后台进行，可以暂停，也可以继续。</p>
         </div>
         <button type="button" className="pm-ghost" onClick={() => void load()}><RefreshCw aria-hidden="true" /> 刷新状态</button>
       </div>
@@ -338,7 +350,7 @@ export function TaskCenterPage() {
 
       <section className="task-section">
         <div className="task-section-head"><h2>后台任务</h2><div className="task-filter-bar" role="tablist" aria-label="任务筛选">
-          {([['all', '全部'], ['running', '执行中'], ['queued', '排队中'], ['completed', '已完成'], ['failed', '失败'], ['cancelled', '已停止']] as Array<[TaskFilter, string]>).map(([value, label]) => <button role="tab" aria-selected={filter === value} key={value} type="button" className={filter === value ? 'active' : ''} onClick={() => setFilter(value)}>{label}</button>)}
+          {([['all', '全部'], ['running', '执行中'], ['queued', '排队中'], ['paused', '已暂停'], ['completed', '已完成'], ['failed', '失败'], ['cancelled', '已停止']] as Array<[TaskFilter, string]>).map(([value, label]) => <button role="tab" aria-selected={filter === value} key={value} type="button" className={filter === value ? 'active' : ''} onClick={() => setFilter(value)}>{label}</button>)}
         </div></div>
         <div className="task-table-wrap"><table className="task-table"><thead><tr><th>任务</th><th>状态</th><th>已完成 / 总数</th><th>当前阶段</th><th>耗时</th><th>剩余子任务</th><th>操作</th></tr></thead><tbody>{historyRows.map(run => <tr key={run.id}>
           <td><button type="button" onClick={() => { setSelectedRun(run); window.history.replaceState(null, '', `#tasks?run=${encodeURIComponent(run.id)}`); }}>{run.product?.name ?? taskName(run.kind)}</button><small>{run.product?.file ?? formatDate(run.startedAt, '-')}</small></td>
@@ -347,7 +359,7 @@ export function TaskCenterPage() {
           <td>{taskModelSetupIssue(run)?.title ?? (taskRoundCompleted(run)?taskRoundListSummary(run):run.product?.errorReason ?? (isActive(run) ? run.product?.stage ?? '等待执行' : taskResult(run) ?? run.product?.stage ?? statusLabel(run)))}</td>
           <td title={taskPhaseSummary(run).durationLabel}>{taskPhaseSummary(run).duration}</td>
           <td>{taskPhaseSummary(run).remaining}</td>
-          <td><div className="task-table-actions"><button type="button" className="pm-ghost" onClick={() => { setSelectedRun(run); window.history.replaceState(null, '', `#tasks?run=${encodeURIComponent(run.id)}`); }}>查看详情</button>{taskModelSetupIssue(run) && desktopApi() && <button type="button" className="pm-ghost" onClick={() => { window.location.hash = 'settings-model-roles'; }}>去配置模型</button>}{isActive(run) && <button type="button" className="pm-ghost" disabled={cancelling === run.id} onClick={() => void cancel(run)}>停止</button>}{taskCanRetry(run) && <button type="button" className="pm-ghost" disabled={retrying === run.id} onClick={() => void retry(run)}>重试</button>}</div></td>
+          <td><div className="task-table-actions"><button type="button" className="pm-ghost" onClick={() => { setSelectedRun(run); window.history.replaceState(null, '', `#tasks?run=${encodeURIComponent(run.id)}`); }}>查看详情</button>{taskModelSetupIssue(run) && desktopApi() && <button type="button" className="pm-ghost" onClick={() => { window.location.hash = 'settings-model-roles'; }}>去配置模型</button>}{isActive(run) && <button type="button" className="pm-ghost" disabled={cancelling === run.id} onClick={() => void cancel(run)}>{isSearchOptimize(run) ? '暂停' : '停止'}</button>}{taskCanRetry(run) && <button type="button" className="pm-ghost" disabled={retrying === run.id} onClick={() => void retry(run)}>{isSearchOptimize(run) ? '继续' : '重试'}</button>}</div></td>
         </tr>)}</tbody></table>{historyRows.length === 0 && <div className="task-empty">暂无任务记录</div>}</div>
         <p className="task-retention-note">关闭页面不影响后台任务。最近的结果已保存，重启后仍可查看。</p>
       </section>

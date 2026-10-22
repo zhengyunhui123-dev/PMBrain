@@ -74,7 +74,7 @@ export function taskName(kind: string): string {
   if (kind === 'dream_propose_takes') return '观点提炼';
   if (['dream_full', 'dream_cycle'].includes(kind)) return 'AI 深度整理';
   if (kind.startsWith('dream_')) return '知识整理';
-  if (kind === 'embed_stale') return '更新搜索索引';
+  if (kind === 'embed_stale') return '优化搜索';
   if (kind === 'sync_all') return '同步资料';
   return ({ doctor_check: '检查知识库', show_stats: '读取知识库状态', source_add: '添加知识源', export_markdown: '导出知识' } as Record<string, string>)[kind] ?? '后台任务';
 }

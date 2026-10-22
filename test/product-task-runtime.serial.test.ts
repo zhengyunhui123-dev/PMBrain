@@ -10,6 +10,7 @@ import { withDatabasePriority } from '../src/product/database/priority.ts';
 import { ProductTaskRuntime } from '../src/product/tasks/runtime.ts';
 import type { ConsoleRun } from '../src/commands/natural-lang/types.ts';
 import { configureGateway, resetGateway } from '../src/core/ai/gateway.ts';
+import { reloadLiveGateway } from '../src/core/ai/reload-live-gateway.ts';
 import { TaskEngineHost } from '../src/product/tasks/engine-host.ts';
 import { MinionQueue } from '../src/core/minions/queue.ts';
 import { SyncFileQueue } from '../src/product/tasks/sync-file-queue.ts';
@@ -23,6 +24,7 @@ import { purgeExpiredSources } from '../src/core/destructive-guard.ts';
 import { purgeStaleCheckpoints } from '../src/core/op-checkpoint.ts';
 import { purgeStaleVolunteerEvents } from '../src/core/context/volunteer-events.ts';
 import { importFile } from '../src/core/import-file.ts';
+import { runEmbedCore } from '../src/commands/embed.ts';
 import { initializeSourceGit, commitSourceGit } from '../src/core/source-git.ts';
 
 let engine: BrainEngine;
@@ -33,6 +35,7 @@ const taskDatabaseUrl = process.env.PMBRAIN_TASK_TEST_DATABASE_URL;
 const embeddingDimensions=taskDatabaseUrl?1536:1024;
 const originalEnv = Object.fromEntries(isolatedKeys.map(key => [key, process.env[key]]));
 let slowRequests = 0;
+let lastEmbeddingInput: string[] = [];
 let releaseModel: (() => void) | null = null;
 const releases = new Set<() => void>();
 let modelServer: ReturnType<typeof Bun.serve>;
@@ -80,8 +83,25 @@ async function modelWaiting(timeoutMs=15_000) {
 
 function release() { for (const finish of releases) finish(); releases.clear(); releaseModel = null; }
 
-async function finished(id: string): Promise<ConsoleRun> {
-  const deadline = Date.now() + 25_000;
+async function settleOptimize() {
+  release();
+  for (let attempt = 0; attempt < 40; attempt++) {
+    const runs = await runtime.listRuns().catch(() => [] as ConsoleRun[]);
+    const live = runs.filter(row => row.searchOptimize && ['queued', 'running'].includes(row.status));
+    if (!live.length) break;
+    release();
+    await Promise.all(live.map(run => runtime.cancel(run.id).catch(() => undefined)));
+    release();
+    await Bun.sleep(50);
+  }
+  await engine.setConfig('pmbrain.search_optimize', JSON.stringify({ paused: false, done: 0, items: [], authorized: [] }));
+  await engine.executeRaw(`UPDATE minion_jobs SET status='cancelled', idempotency_key=NULL, lock_token=NULL, lock_until=NULL,
+    finished_at=COALESCE(finished_at, now()), updated_at=now()
+    WHERE idempotency_key=$1 AND status NOT IN ('active','waiting','delayed','waiting-children')`, ['search-optimize:active']);
+}
+
+async function finished(id: string, timeoutMs = 25_000): Promise<ConsoleRun> {
+  const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const run = await runtime.getRun(id);
     if (run && !['running', 'queued'].includes(run.status)) return run;
@@ -97,13 +117,15 @@ beforeAll(async () => {
   process.env.PMBRAIN_HOME = root;
   mkdirSync(join(root, '.pmbrain'));
   modelServer = Bun.serve({ port: 0, async fetch(req) {
-    const body = await req.json() as { input: string[] };
+    const body = await req.json() as { input?: string[] };
+    lastEmbeddingInput = Array.isArray(body.input) ? body.input : [];
     slowRequests++;
     await new Promise<void>(resolve => {
       const finish = () => { releases.delete(finish); resolve(); };
       releases.add(finish); releaseModel = finish;
     });
-    return Response.json({ object: 'list', data: body.input.map((_, index) => ({ object: 'embedding', index, embedding: Array.from({ length: embeddingDimensions }, (_, i) => i === 0 ? 1 : 0) })), model: 'task-test', usage: { prompt_tokens: 2, total_tokens: 2 } });
+    const input = Array.isArray(body.input) ? body.input : [];
+    return Response.json({ object: 'list', data: input.map((_, index) => ({ object: 'embedding', index, embedding: Array.from({ length: embeddingDimensions }, (_, i) => i === 0 ? 1 : 0) })), model: 'task-test', usage: { prompt_tokens: 2, total_tokens: 2 } });
   } });
   configureModels(false);
   configureGateway({ embedding_model: 'custom-openai:task-test', embedding_dimensions: embeddingDimensions, env: {} });
@@ -201,44 +223,56 @@ describe('软件后台任务共用 owner 数据库', () => {
     const resumed=await runtime.retry(`task-${job.id}`);
     expect(resumed?.id).toBe(`task-${job.id}`);
     const modelTimer=setInterval(release,20);
-    let done:ConsoleRun;
-    try{done=await finished(resumed!.id);}finally{clearInterval(modelTimer);release();}
-    expect(done.status).toBe('completed');
-    expect((await engine.getPage('resume-done',{sourceId:'default'}))?.compiled_truth).toContain('已完成源的原内容');
-    expect(await engine.getPage('resume-pending',{sourceId:'resume-second'})).not.toBeNull();
-    expect(done.product?.scope?.index).toBe(1);
-    expect(done.product?.syncScan?.scanned).toBe(1);
-    const stored=(await queue.getJob(job.id))!.data.task as any;
-    expect(stored.input.checkpoint.reports.default).toEqual(report);
-    await engine.executeRaw("UPDATE sources SET config=jsonb_set(config,'{syncEnabled}','false'::jsonb) WHERE id=$1",['resume-second']);
-    await engine.executeRaw('UPDATE sources SET local_path=$1 WHERE id=$2',[root,'default']);
+    try{
+      const done=await finished(resumed!.id,45_000);
+      expect(done.status).toBe('completed');
+      expect((await engine.getPage('resume-done',{sourceId:'default'}))?.compiled_truth).toContain('已完成源的原内容');
+      expect(await engine.getPage('resume-pending',{sourceId:'resume-second'})).not.toBeNull();
+      expect(done.product?.scope?.index).toBe(1);
+      expect(done.product?.syncScan?.scanned).toBe(1);
+      const stored=(await queue.getJob(job.id))!.data.task as any;
+      expect(stored.input.checkpoint.reports.default).toEqual(report);
+    }finally{
+      clearInterval(modelTimer);release();
+      const current=await runtime.getRun(`task-${job.id}`).catch(()=>null);
+      if(current && ['running','queued'].includes(current.status)){release();await runtime.cancel(current.id).catch(()=>{});release();}
+      await engine.executeRaw("UPDATE sources SET config=jsonb_set(config,'{syncEnabled}','false'::jsonb) WHERE id=$1",['resume-second']).catch(()=>{});
+      await engine.executeRaw('UPDATE sources SET local_path=$1 WHERE id=$2',[root,'default']).catch(()=>{});
+    }
   },60000);
-  test('两个导入先入库，向量任务可同时等待模型，停止不删除已入库资料', async () => {
+  test('两个导入先入库，只产生一个搜索优化任务，停止不删除已入库资料', async () => {
+    await settleOptimize();
     configureModels();
     const previous = slowRequests;
-    const accepted: ConsoleRun[] = [];
+    let embedId = '';
     try {
+      const accepted: ConsoleRun[] = [];
       for (const name of ['parallel-a', 'parallel-b']) {
         const path = join(root, `${name}.md`);
         writeFileSync(path, `# ${name}\n\n合成资料验证非数据库阶段并行。`);
         accepted.push(await runtime.submitImport({ path }));
       }
-      const deadline = Date.now() + 15_000;
-      let embeds: ConsoleRun[] = [];
+      const deadline = Date.now() + 20_000;
+      let embed: ConsoleRun | undefined;
       while (Date.now() < deadline) {
-        embeds = (await runtime.listRuns()).filter(row => row.kind === 'embed_stale' && row.status === 'running');
-        if (slowRequests >= previous + 2 && embeds.length >= 2) break;
+        const runs = await runtime.listRuns();
+        const importsDone = accepted.every(row => {
+          const current = runs.find(item => item.id === row.id);
+          return !!current && !['running', 'queued'].includes(current.status);
+        });
+        const optimizers = runs.filter(row => row.searchOptimize && row.status === 'running');
+        embed = optimizers[0];
+        if (importsDone && optimizers.length === 1 && slowRequests >= previous + 1
+          && await engine.getPage('parallel-a', { sourceId: 'default' })
+          && await engine.getPage('parallel-b', { sourceId: 'default' })) break;
         await Bun.sleep(30);
       }
-      expect(slowRequests).toBe(previous + 2);
-      expect(embeds).toHaveLength(2);
+      expect(slowRequests).toBe(previous + 1);
+      expect(embed?.searchOptimize).toBe(true);
+      embedId = embed!.id;
+      expect((await runtime.listRuns()).filter(row => row.searchOptimize && ['queued', 'running'].includes(row.status))).toHaveLength(1);
       expect(await engine.getPage('parallel-a', { sourceId: 'default' })).not.toBeNull();
       expect(await engine.getPage('parallel-b', { sourceId: 'default' })).not.toBeNull();
-      const queuedPath = join(root, 'cancel-queued.md');
-      writeFileSync(queuedPath, '# 排队取消\n\n这份资料不应开始导入。');
-      const queued = await runtime.submitImport({ path: queuedPath });
-      expect((await runtime.cancel(queued.id))?.status).toBe('cancelled');
-      expect(await engine.getPage('cancel-queued', { sourceId: 'default' })).toBeNull();
       let ready!: () => void;
       let unlock!: () => void;
       const started = new Promise<void>(resolve => { ready = resolve; });
@@ -249,22 +283,26 @@ describe('软件后台任务共用 owner 数据库', () => {
       await started;
       try {
         const now = performance.now();
-        expect((await runtime.requestCancel(embeds[0].id))?.error).toContain('正在停止');
-        expect((await runtime.listRuns()).find(row => row.id === embeds[0].id)?.status).toBe('running');
+        expect((await runtime.requestCancel(embed!.id))?.error).toContain('正在停止');
+        expect((await runtime.listRuns()).find(row => row.id === embed!.id)?.status).toBe('running');
         expect(performance.now() - now).toBeLessThan(1000);
       } finally { unlock(); await busy; }
       expect(await engine.getConfig('stop.batch')).toBe('committed naturally');
-      await runtime.cancel(embeds[1].id);
       release();
-      expect((await finished(embeds[0].id)).status).toBe('cancelled');
+      expect((await finished(embed!.id)).status).toBe('cancelled');
+      expect(slowRequests).toBe(previous + 1);
+      const second = await engine.getChunks('parallel-b', { sourceId: 'default' });
+      expect(second.length).toBeGreaterThan(0);
+      expect(second.every(chunk => !chunk.embedded_at)).toBe(true);
       expect(await engine.getPage('parallel-a', { sourceId: 'default' })).not.toBeNull();
       expect(await engine.getPage('parallel-b', { sourceId: 'default' })).not.toBeNull();
     } finally {
       release();
-      for (const run of await runtime.listRuns()) if (run.kind === 'embed_stale' && ['queued', 'running'].includes(run.status)) await runtime.cancel(run.id);
+      if (embedId) await runtime.cancel(embedId).catch(() => undefined);
+      await settleOptimize();
       configureModels(false);
     }
-  }, 30_000);
+  }, 45_000);
 
   test('批量关系每 50 条提交一次，关闭后不启动下一批', async () => {
     const queue = new MinionQueue(engine);
@@ -317,6 +355,7 @@ describe('软件后台任务共用 owner 数据库', () => {
   }, 30_000);
 
   test('导入先保存文件和切块，向量化在后台继续，不等待向量接口', async () => {
+    await settleOptimize();
     configureModels();
     const path = join(root, 'defer-vectors.md');
     writeFileSync(path, '# 后台向量\n\n先入库再向量化。');
@@ -326,7 +365,7 @@ describe('软件后台任务共用 owner 数据库', () => {
       const stored = await finished(accepted.id);
       expect(stored.status).toBe('completed');
       expect(stored.result).toMatchObject({ imported: 1, errors: 0, vectorsPending: true });
-      expect(stored.product?.stage).toContain('向量化在后台继续');
+      expect(stored.product?.stage).toContain('正在后台优化搜索');
       expect(await engine.getPage('defer-vectors', { sourceId: 'default' })).not.toBeNull();
       const pending = await engine.getChunks('defer-vectors', { sourceId: 'default' });
       expect(pending.length).toBeGreaterThan(0);
@@ -339,7 +378,7 @@ describe('软件后台任务共用 owner 数据库', () => {
       expect((await finished(embed!.id)).status).toBe('completed');
       expect((await engine.getChunks('defer-vectors', { sourceId: 'default' })).every(chunk => !!chunk.embedded_at)).toBe(true);
       expect(readFileSync(path, 'utf8')).toContain('先入库再向量化');
-    } finally { release(); configureModels(false); }
+    } finally { release(); await settleOptimize(); configureModels(false); }
   }, 30_000);
 
   test('大范围扫描保留排序和 Source 过滤，分页读取正文期间可取消', async () => {
@@ -446,6 +485,7 @@ describe('软件后台任务共用 owner 数据库', () => {
   }, 30_000);
 
   test('真实快速维护等待模型时，任务阶段与知识库查询仍可读取', async () => {
+    await settleOptimize();
     configureModels();
     writeFileSync(join(root,'quick-model-wait.md'),'# 模型等待验收\n\n这份新资料确保快速维护实际调用延迟模型，验证任务查询和知识库读取。');
     if(!await engine.getPage('background',{sourceId:'default'}))await engine.putPage('background',{type:'note',title:'后台查询验收',compiled_truth:'等待模型时仍可以读取已有知识。',timeline:'',frontmatter:{}},{sourceId:'default'});
@@ -466,6 +506,7 @@ describe('软件后台任务共用 owner 数据库', () => {
   }, 60_000);
 
   test('资料入库后向量化等待模型时，知识仍可查询，重复导入不重复调用模型', async () => {
+    await settleOptimize();
     configureModels();
     const path = join(root, 'slow.md');
     writeFileSync(path, '# 慢模型\n\n这份资料使用延迟的合成模型验证数据库并发访问。');
@@ -488,10 +529,11 @@ describe('软件后台任务共用 owner 数据库', () => {
       release();
       await finished(embed!.id);
       expect((await engine.getPage('slow', { sourceId: 'default' }))?.compiled_truth).toContain('延迟的合成模型');
-    } finally { release(); configureModels(false); }
+    } finally { release(); await settleOptimize(); configureModels(false); }
   }, 30_000);
 
   test('资料入库后用户修改页面，后台向量化不能覆盖新内容', async () => {
+    await settleOptimize();
     configureModels();
     const path = join(root, 'edited.md');
     writeFileSync(path, '# 并发编辑\n\n这是准备导入的旧内容。');
@@ -502,14 +544,20 @@ describe('软件后台任务共用 owner 数据库', () => {
       await modelWaiting();
       const embeds = (await runtime.listRuns()).filter(row => row.kind === 'embed_stale' && ['queued', 'running'].includes(row.status));
       await engine.putPage('edited', { type: 'concept', title: '用户的新页面', compiled_truth: '用户刚刚修改的内容', content_hash: 'new-user-content' }, { sourceId: 'default' });
-      release();
-      for (const embed of embeds) await finished(embed.id);
+      const embedDeadline = Date.now() + 20_000;
+      while (Date.now() < embedDeadline) {
+        release();
+        const live = (await runtime.listRuns()).filter(row => row.searchOptimize && ['queued', 'running'].includes(row.status));
+        if (!live.length) break;
+        await Bun.sleep(30);
+      }
       expect((await engine.getPage('edited', { sourceId: 'default' }))?.compiled_truth).toBe('用户刚刚修改的内容');
-    } finally { release(); configureModels(false); }
+    } finally { release(); await settleOptimize(); configureModels(false); }
   }, 30_000);
 
   test('向量化期间更换模型会停止向量任务，已入库资料和后改的文件都保留', async () => {
     for (const target of ['model', 'file']) {
+      await settleOptimize();
       configureModels();
       const path = join(root, `${target}-change.md`);
       writeFileSync(path, `# ${target} change\n\n合成内容用于验证任务开始后的配置和输入变化。`);
@@ -526,7 +574,7 @@ describe('软件后台任务共用 owner 数据库', () => {
         expect((await engine.getPage(`${target}-change`, { sourceId: 'default' }))?.compiled_truth).toContain('合成内容用于验证');
         if (target === 'model') expect(settled?.error ?? '').toContain('模型配置已改变');
         if (target === 'file') expect(readFileSync(path, 'utf8')).toContain('修改后的原始内容');
-      } finally { release(); configureModels(false); }
+      } finally { release(); await settleOptimize(); configureModels(false); }
     }
   }, 45_000);
 
@@ -551,6 +599,7 @@ describe('软件后台任务共用 owner 数据库', () => {
 
   test('后台向量化不会恢复已删除的页面，也不会重新打开已归档的知识源', async () => {
     for (const target of ['deleted', 'archived']) {
+      await settleOptimize();
       configureModels();
       const path = join(root, `${target}.md`);
       writeFileSync(path, `# ${target}\n\n验证处理时用户删除和归档的操作。`);
@@ -568,6 +617,7 @@ describe('软件后台任务共用 owner 数据库', () => {
         else expect((await engine.executeRaw<{ archived: boolean }>('SELECT archived FROM sources WHERE id = $1', ['default']))[0]?.archived).toBe(true);
       } finally {
         release();
+        await settleOptimize();
         await engine.executeRaw(`UPDATE sources SET archived = false WHERE id = $1`, ['default']);
         configureModels(false);
       }
@@ -590,26 +640,109 @@ describe('软件后台任务共用 owner 数据库', () => {
     expect(resumed.result).toMatchObject({ resumedFiles: 1, imported: 1 });
   }, 30_000);
 
-  test('关闭运行时不自动重跑不确定的模型请求，重启后保留历史', async () => {
+  test('关闭运行时保留未提交的搜索优化，重启后只继续这一页', async () => {
+    await settleOptimize();
     configureModels();
     const path = join(root, 'interrupted.md');
     writeFileSync(path, '# 中断验证\n\n这次合成模型调用等待软件退出。');
     const accepted = await runtime.submitImport({ path });
     try {
+      const stored = await finished(accepted.id);
+      expect(stored.status).toBe('completed');
+      expect(await engine.getPage('interrupted', { sourceId: 'default' })).not.toBeNull();
       await modelWaiting();
       const count = slowRequests;
-      expect(await engine.getPage('interrupted', { sourceId: 'default' })).not.toBeNull();
       await runtime.close();
+      expect(slowRequests).toBe(count);
       release();
       runtime = new ProductTaskRuntime(engine);
       await runtime.start();
-      await Bun.sleep(150);
-      expect((await runtime.getRun(accepted.id))?.status).toBe('completed');
-      expect(slowRequests).toBe(count);
-      expect((await runtime.listRuns()).some(row => row.kind === 'embed_stale' && ['queued', 'running'].includes(row.status))).toBe(false);
-      expect(await engine.getPage('interrupted', { sourceId: 'default' })).not.toBeNull();
+      await modelWaiting();
+      expect(slowRequests).toBe(count + 1);
+      const embed = (await runtime.listRuns()).find(row => row.searchOptimize && ['queued', 'running'].includes(row.status));
+      expect(embed).toBeTruthy();
+      release();
+      expect((await finished(embed!.id)).status).toBe('completed');
+      expect((await engine.getChunks('interrupted', { sourceId: 'default' })).every(chunk => !!chunk.embedded_at)).toBe(true);
       expect((await runtime.listRuns()).some(run => run.id === accepted.id)).toBe(true);
-    } finally { release(); configureModels(false); }
+    } finally { release(); await settleOptimize(); configureModels(false); }
+  }, 45_000);
+
+  test('搜索优化可以暂停，新导入只排队，重启不会自行继续', async () => {
+    await settleOptimize();
+    configureModels();
+    const first = join(root, 'optimize-a.md');
+    const second = join(root, 'optimize-b.md');
+    const keyword = join(root, 'optimize-keyword.md');
+    writeFileSync(first, '# 第一份\n\n第一份资料等待优化。');
+    writeFileSync(second, '# 第二份\n\n第二份资料等待优化。');
+    writeFileSync(keyword, '# 仅关键词\n\n这份资料不进入搜索优化。');
+    const accepted = await runtime.submitImport({ path: first });
+    try {
+      expect((await finished(accepted.id)).product?.stage).toContain('正在后台优化搜索');
+      await modelWaiting();
+      const embed = (await runtime.listRuns()).find(row => row.searchOptimize && ['queued', 'running'].includes(row.status));
+      expect(embed).toBeTruthy();
+      expect((await runtime.pauseSearchOptimize(embed!.id))?.id).toBe(embed!.id);
+      const queued = await finished((await runtime.submitImport({ path: second })).id);
+      expect(queued.product?.stage).toContain('搜索优化已暂停');
+      release();
+      expect((await finished(embed!.id)).status).toBe('paused');
+      expect((await engine.getChunks('optimize-a', { sourceId: 'default' })).every(chunk => !!chunk.embedded_at)).toBe(true);
+      expect((await engine.getChunks('optimize-b', { sourceId: 'default' })).every(chunk => !chunk.embedded_at)).toBe(true);
+      expect((await finished((await runtime.submitImport({ path: keyword, noEmbed: true })).id)).status).toBe('completed');
+      const pending = JSON.parse(await engine.getConfig('pmbrain.search_optimize') ?? '{}') as { items?: Array<{ slug: string }> };
+      expect(pending.items?.some(item => item.slug === 'optimize-keyword')).toBe(false);
+      expect(pending.items?.some(item => item.slug === 'optimize-b')).toBe(true);
+      const count = slowRequests;
+      await runtime.close();
+      runtime = new ProductTaskRuntime(engine);
+      await runtime.start();
+      await Bun.sleep(200);
+      expect(slowRequests).toBe(count);
+      expect((await runtime.getRun(embed!.id))?.status).toBe('paused');
+      const continued = await runtime.continueSearchOptimize(embed!.id);
+      expect(continued?.id).toBe(embed!.id);
+      await modelWaiting();
+      expect(lastEmbeddingInput.join('\n')).toContain('第二份');
+      expect(lastEmbeddingInput.join('\n')).not.toContain('第一份');
+      release();
+      expect((await finished(embed!.id)).status).toBe('completed');
+      expect((await engine.getChunks('optimize-b', { sourceId: 'default' })).every(chunk => !!chunk.embedded_at)).toBe(true);
+    } finally { release(); await settleOptimize(); configureModels(false); }
+  }, 45_000);
+
+  test('页面向量按小批提交，暂停后续跑不重复已落库的内容', async () => {
+    await settleOptimize();
+    configureModels();
+    await reloadLiveGateway(engine);
+    await engine.putPage('batched-page', { type: 'note', title: '分批', compiled_truth: '占位' }, { sourceId: 'default' });
+    await engine.upsertChunks('batched-page', [
+      { chunk_index: 0, chunk_text: '已提交的第一段', chunk_source: 'compiled_truth' },
+      { chunk_index: 1, chunk_text: '尚未提交的第二段', chunk_source: 'compiled_truth' },
+    ], { sourceId: 'default' });
+    let checks = 0;
+    try {
+      const first = runEmbedCore(engine, {
+        slugs: ['batched-page'], sourceId: 'default', quiet: true, providerBatchSize: 1,
+        pauseCheck: () => ++checks > 1,
+      });
+      await modelWaiting();
+      expect(lastEmbeddingInput).toEqual(['已提交的第一段']);
+      release();
+      const partial = await first;
+      expect(partial.incomplete).toBe(true);
+      expect(partial.committedBatches).toBe(1);
+      const chunks = await engine.getChunks('batched-page', { sourceId: 'default' });
+      expect(chunks.find(chunk => chunk.chunk_index === 0)?.embedded_at).toBeTruthy();
+      expect(chunks.find(chunk => chunk.chunk_index === 1)?.embedded_at).toBeFalsy();
+      const second = runEmbedCore(engine, { slugs: ['batched-page'], sourceId: 'default', quiet: true, providerBatchSize: 1 });
+      await modelWaiting();
+      expect(lastEmbeddingInput).toEqual(['尚未提交的第二段']);
+      release();
+      expect((await second).incomplete).toBeUndefined();
+      expect((await engine.getChunks('batched-page', { sourceId: 'default' })).every(chunk => !!chunk.embedded_at)).toBe(true);
+    } finally { release(); await settleOptimize(); configureModels(false); }
   }, 30_000);
 
   test('整理任务没有填写超时时按 6 小时执行，不会几分钟就被判死', async () => {

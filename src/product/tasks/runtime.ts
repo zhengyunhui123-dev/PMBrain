@@ -28,6 +28,11 @@ import type { SyncResult } from '../../commands/sync.ts';
 import { maintenanceFailure } from './maintenance-orchestration.ts';
 import { claimMaintenanceCapture } from './maintenance-orchestration.ts';
 import { enqueueImportedEntityCapture } from './imported-entity-capture.ts';
+import {
+  SEARCH_OPTIMIZE_JOB_KEY, SEARCH_OPTIMIZE_NOTICE, SEARCH_OPTIMIZE_PAUSED, assignSearchOptimizeAcceptance,
+  addCapturedSearchOptimize, addSearchOptimize, finishSearchOptimize, loadSearchOptimize, mutateSearchOptimize,
+  type SearchOptimizeAcceptance,
+} from './search-optimize.ts';
 import { TaskResourceGuard, PRODUCT_QUEUE_CAPACITY, isSyncCapacityError, type TaskResourceOptions } from './resource-guard.ts';
 import { WorkbenchMemoryCoordinator, memoryVersion, type WorkbenchMemoryTask } from '../workbench/memory';
 import { WorkbenchStore } from '../workbench/store';
@@ -44,12 +49,14 @@ type Progress = { product?: TaskProductProgress; output?: string; result?: Recor
 function toRun(job: MinionJob, stopping = false): ConsoleRun {
   const progress = (job.progress ?? {}) as Progress;
   const failure = job.status === 'completed' && String(job.data.kind).startsWith('dream_') ? maintenanceFailure(job.result ?? progress.result) : null;
-  const status: ConsoleRun['status'] = stopping ? 'running' : failure ? 'failed' : job.status === 'completed' ? 'completed'
-    : job.status === 'cancelled' ? 'cancelled' : ['dead', 'failed', 'paused'].includes(job.status) ? 'failed'
-    : ['active', 'waiting-children'].includes(job.status) ? 'running' : 'queued';
   const adapter = new TaskProgressAdapter(String(job.data.kind), progress.product);
   if (!progress.product) adapter.write(progress.output ?? '');
   const task = job.data.task as ProductTask;
+  const searchOptimize = task?.type === 'embed' && task.input.searchOptimize === true;
+  const status: ConsoleRun['status'] = stopping ? 'running' : failure ? 'failed' : job.status === 'completed' ? 'completed'
+    : job.status === 'cancelled' ? 'cancelled' : searchOptimize && job.status === 'paused' ? 'paused'
+    : ['dead', 'failed', 'paused'].includes(job.status) ? 'failed'
+    : ['active', 'waiting-children'].includes(job.status) ? 'running' : 'queued';
   adapter.view.relations = { available: Object.hasOwn(job.data, 'relations'), total: Object.keys((job.data.relations ?? {}) as object).length };
   adapter.view.gitResults = Object.values(job.data.gitResults ?? {});
   if(job.data.taskBudget){const {reservations,pendingPricing,...budget}=job.data.taskBudget as TaskBudgetState;adapter.view.budget=budget;}
@@ -60,6 +67,7 @@ function toRun(job: MinionJob, stopping = false): ConsoleRun {
   return {
     product: finishTaskProgress(adapter.view, status, job.result ?? progress.result, failure ?? job.error_text, (job.finished_at ?? job.updated_at).getTime()),
     id: `task-${job.id}`, kind: String(job.data.kind), command: [], status,
+    ...(searchOptimize ? { searchOptimize: true } : {}),
     trigger: job.data.trigger === 'scheduled' ? 'scheduled' : 'manual',
     stdout: progress.output ?? '', stderr: '', error: stopping ? '正在停止任务…' : failure ?? job.error_text,
     exitCode: status === 'completed' ? 0 : ['failed', 'cancelled'].includes(status) ? 1 : null,
@@ -202,8 +210,10 @@ export class ProductTaskRuntime {
        error_text = '软件已退出，任务结果可能不完整。请查看已完成结果后手动继续；模型请求可能已产生费用。',
        finished_at = now(), updated_at = now()
        WHERE queue = $1 AND name = $2 AND status = 'active' AND data->'task'->'input'->>'preset' IS DISTINCT FROM 'quick' AND data->>'fileSession' IS DISTINCT FROM 'true'
+       AND NOT (data->'task'->>'type' = 'embed' AND data->'task'->'input'->>'searchOptimize' = 'true')
        AND ($3::boolean OR lock_until <= now())`, [PRODUCT_TASK_QUEUE, TASK_NAME, this.engine.kind === 'pglite'],
     );
+    await this.recoverSearchOptimize();
     await this.listRuns();
     for (const run of this.cached.filter(run=>taskUsesFileQueue(run.kind))) await this.fileProjection.load(Number(run.id.slice(5)));
     await this.hydrateFiles(this.cached.filter(run=>taskUsesFileQueue(run.kind)).map(run=>Number(run.id.slice(5))));
@@ -298,14 +308,144 @@ export class ProductTaskRuntime {
   }
 
   private async queueDeferredImportVectors(task: ProductTask, payload: Record<string, unknown> | undefined, cancelled: boolean): Promise<void> {
-    if (cancelled || task.type !== 'import' || task.input.noEmbed === true || payload?.vectorsPending !== true) return;
-    const slugs = Array.isArray(payload.embedSlugs) ? payload.embedSlugs.filter((slug): slug is string => typeof slug === 'string' && slug.length > 0) : [];
+    if (cancelled || task.type !== 'import' || task.input.noEmbed === true || !payload || payload.searchOptimizeAccepted === true) return;
+    const slugs = Array.isArray(payload.embedSlugs) ? payload.embedSlugs.filter((slug): slug is string => typeof slug === 'string' && slug.length > 0 && !slug.includes(':')) : [];
     if (!slugs.length) return;
+    const sourceId = typeof payload.embedSourceId === 'string' ? payload.embedSourceId : task.input.sourceId ?? 'default';
     try {
-      await this.submitEmbed({ catchUp: true, sourceId: typeof payload.embedSourceId === 'string' ? payload.embedSourceId : task.input.sourceId, slugs });
+      assignSearchOptimizeAcceptance(payload, await this.acceptSearchOptimize(sourceId, slugs));
     } catch (error) {
       console.error('[tasks] deferred embed:', error);
+      payload.searchOptimizeError = true;
+      delete payload.vectorsPending;
+      delete payload.searchOptimizeAccepted;
     }
+  }
+
+  private searchOptimizeTask(job: MinionJob | null | undefined): boolean {
+    const task = job?.data.task as ProductTask | undefined;
+    return job?.queue === PRODUCT_TASK_QUEUE && job.name === TASK_NAME && task?.type === 'embed' && task.input.searchOptimize === true;
+  }
+
+  private async findSearchOptimizeJob(): Promise<MinionJob | null> {
+    const rows = await this.engine.executeRaw<{ id: number }>(`SELECT id FROM minion_jobs WHERE idempotency_key = $1 ORDER BY id DESC LIMIT 1`, [SEARCH_OPTIMIZE_JOB_KEY]);
+    return rows.length ? this.queue.getJob(rows[0].id) : null;
+  }
+
+  private async parkSearchOptimize(id: number): Promise<void> {
+    await this.engine.executeRaw(`UPDATE minion_jobs SET status='paused', lock_token=NULL, lock_until=NULL,
+      error_text=$2, finished_at=COALESCE(finished_at, now()), updated_at=now(),
+      data=jsonb_set(data, '{searchOptimizePause}', '"manual"'::jsonb)
+      WHERE id=$1 AND status IN ('waiting','delayed')`, [id, SEARCH_OPTIMIZE_PAUSED]);
+  }
+
+  private async ensureSearchOptimizeJob(): Promise<{ job: MinionJob | null; queued: boolean; error?: string; notice?: string }> {
+    const state = await loadSearchOptimize(this.engine);
+    let job = await this.findSearchOptimizeJob();
+    if (job && ['completed', 'cancelled'].includes(job.status)) {
+      await this.engine.executeRaw(`UPDATE minion_jobs SET idempotency_key = NULL WHERE id = $1 AND idempotency_key = $2`, [job.id, SEARCH_OPTIMIZE_JOB_KEY]);
+      job = null;
+    }
+    if (state.paused) {
+      if (!state.items.length) return { job, queued: false };
+      if (job && ['waiting', 'active', 'paused', 'delayed', 'waiting-children'].includes(job.status)) {
+        if (['waiting', 'delayed'].includes(job.status)) await this.parkSearchOptimize(job.id);
+        return { job: await this.queue.getJob(job.id), queued: false };
+      }
+      if (job && ['failed', 'dead'].includes(job.status)) return { job, queued: false, notice: SEARCH_OPTIMIZE_NOTICE };
+      try {
+        const run = await this.submit({ type: 'embed', input: { searchOptimize: true, catchUp: true } }, 'embed_stale', SEARCH_OPTIMIZE_JOB_KEY);
+        const created = Number(run.id.slice(5));
+        await this.parkSearchOptimize(created);
+        return { job: await this.queue.getJob(created), queued: false };
+      } catch (error) {
+        return { job, queued: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    }
+    if (!state.items.length) return { job, queued: false };
+    if (job && ['waiting', 'active', 'delayed', 'waiting-children'].includes(job.status)) return { job, queued: true };
+    const interrupted = job?.error_text ?? '';
+    const shutdown = /service_shutdown|本地服务关闭|软件退出|软件已退出/.test(interrupted);
+    if (job && (job.status === 'paused' || (['failed', 'dead'].includes(job.status) && shutdown))) {
+      try {
+        await this.retry(`task-${job.id}`);
+        return { job: await this.queue.getJob(job.id), queued: true };
+      } catch (error) {
+        return { job, queued: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    }
+    if (job && ['failed', 'dead'].includes(job.status)) return { job, queued: false, notice: SEARCH_OPTIMIZE_NOTICE };
+    try {
+      const run = await this.submit({ type: 'embed', input: { searchOptimize: true, catchUp: true } }, 'embed_stale', SEARCH_OPTIMIZE_JOB_KEY);
+      return { job: await this.queue.getJob(Number(run.id.slice(5))), queued: true };
+    } catch (error) {
+      return { job: null, queued: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  }
+
+  private async recoverSearchOptimize(): Promise<void> {
+    const state = await loadSearchOptimize(this.engine);
+    const pglite = this.engine.kind === 'pglite';
+    const shutdown = `(COALESCE(error_text, '') LIKE '%service_shutdown%' OR COALESCE(error_text, '') LIKE '%本地服务关闭%' OR COALESCE(error_text, '') LIKE '%软件退出%' OR COALESCE(error_text, '') LIKE '%软件已退出%')`;
+    if (state.paused) {
+      await this.engine.executeRaw(`UPDATE minion_jobs SET status='paused', lock_token=NULL, lock_until=NULL,
+        error_text=$2, finished_at=COALESCE(finished_at, now()), updated_at=now(),
+        data=jsonb_set(data, '{searchOptimizePause}', '"manual"'::jsonb)
+        WHERE queue=$1 AND name=$3 AND data->'task'->>'type'='embed' AND data->'task'->'input'->>'searchOptimize'='true'
+        AND (status IN ('waiting','delayed','waiting-children')
+          OR (status='active' AND ($4::boolean OR lock_until IS NULL OR lock_until<=now()))
+          OR (status IN ('failed','dead') AND ${shutdown}))`, [PRODUCT_TASK_QUEUE, SEARCH_OPTIMIZE_PAUSED, TASK_NAME, pglite]);
+      if (state.items.length) await this.ensureSearchOptimizeJob().catch(error => console.error('[tasks] search optimize:', error));
+      return;
+    }
+    await this.engine.executeRaw(`UPDATE minion_jobs SET status='waiting', lock_token=NULL, lock_until=NULL,
+      error_text=NULL, finished_at=NULL, updated_at=now(), data=data-'searchOptimizePause'
+      WHERE queue=$1 AND name=$2 AND data->'task'->>'type'='embed' AND data->'task'->'input'->>'searchOptimize'='true'
+      AND (status='paused' OR (status='active' AND ($3::boolean OR lock_until IS NULL OR lock_until<=now()))
+        OR (status IN ('failed','dead') AND ${shutdown}))`, [PRODUCT_TASK_QUEUE, TASK_NAME, pglite]);
+    if (state.items.length) await this.ensureSearchOptimizeJob().catch(error => console.error('[tasks] search optimize:', error));
+  }
+
+  async acceptSearchOptimize(sourceId: string, slugs: string[]): Promise<SearchOptimizeAcceptance> {
+    const state = await mutateSearchOptimize(this.engine, current => addSearchOptimize(current, sourceId, slugs, true));
+    const ensured = await this.ensureSearchOptimizeJob().catch(error => ({ job: null, queued: false, error: error instanceof Error ? error.message : String(error) }));
+    return {
+      paused: state.paused,
+      queued: ensured.queued && !state.paused,
+      jobId: ensured.job?.id ?? null,
+      pending: state.items.length,
+      done: state.done,
+      total: state.done + state.items.length,
+      ...(ensured.error ? { error: ensured.error } : {}),
+      ...(ensured.notice ? { notice: ensured.notice } : {}),
+    };
+  }
+
+  async pauseSearchOptimize(id: string): Promise<ConsoleRun | null> {
+    if (!/^task-\d+$/.test(id)) return null;
+    const record = await this.queue.getJob(Number(id.slice(5)));
+    if (!this.searchOptimizeTask(record)) return null;
+    await mutateSearchOptimize(this.engine, state => ({ ...state, paused: true }));
+    if (record && ['waiting', 'delayed'].includes(record.status)) await this.parkSearchOptimize(record.id);
+    return this.getRun(id);
+  }
+
+  async continueSearchOptimize(id: string): Promise<ConsoleRun | null> {
+    if (!/^task-\d+$/.test(id)) return null;
+    const record = await this.queue.getJob(Number(id.slice(5)));
+    if (!this.searchOptimizeTask(record)) return null;
+    await mutateSearchOptimize(this.engine, state => ({ ...state, paused: false }));
+    await this.engine.executeRaw(`UPDATE minion_jobs SET data = data - 'searchOptimizePause' WHERE id = $1`, [record!.id]);
+    if (['paused', 'failed', 'dead', 'cancelled'].includes(record!.status)) return this.retry(id);
+    if (['waiting', 'active', 'delayed', 'waiting-children'].includes(record!.status)) return this.getRun(id);
+    await this.ensureSearchOptimizeJob();
+    const current = await this.findSearchOptimizeJob();
+    return this.getRun(current ? `task-${current.id}` : id);
+  }
+
+  private async searchOptimizeView() {
+    const state = await loadSearchOptimize(this.engine);
+    return { paused: state.paused, done: state.done, items: state.items, total: state.done + state.items.length };
   }
 
   async submitSync(): Promise<ConsoleRun> {
@@ -428,9 +568,10 @@ export class ProductTaskRuntime {
     await this.fileProjection.recover();
     const run = await this.getRun(id);
     if (!run) return null;
-    if (!['failed', 'cancelled'].includes(run.status) && !((taskUsesFileQueue(run.kind) || run.kind === 'dream_capture_entities' || run.kind==='import_path') && (run.result as Record<string, unknown> | undefined)?.status === 'partial')) throw new Error('只有失败、中断或已取消的任务可以重新执行');
     const record = await this.queue.getJob(Number(id.slice(5)));
     const task = record!.data.task as ProductTask;
+    const searchOptimize = task?.type === 'embed' && task.input.searchOptimize === true;
+    if (!['failed', 'cancelled'].includes(run.status) && !(searchOptimize && ['paused', 'failed', 'dead'].includes(record!.status)) && !((taskUsesFileQueue(run.kind) || run.kind === 'dream_capture_entities' || run.kind==='import_path') && (run.result as Record<string, unknown> | undefined)?.status === 'partial')) throw new Error('只有失败、中断或已取消的任务可以重新执行');
     if (task.type === 'dream') {
       if (task.input.phase === 'capture_entities') record!.data.trigger = 'manual';
       else if (task.input.checkpoint && !task.input.incrementalIngest) {retireAutomaticCapture(task.input.checkpoint);task.input.incrementalIngest=true;}
@@ -526,7 +667,8 @@ export class ProductTaskRuntime {
       const counts = await this.fileQueue.counts(context.id);
       if (counts.total > 0) record.progress = { ...(record.progress as Progress ?? {}), product: { ...toRun(record).product!, syncFiles: counts } };
     }
-    if (record.attempts_started > 1 && record.data.authorizedAttempt !== record.attempts_started && structuredTask.type !== 'sync-file' && structuredTask.type !== 'memory' && !(structuredTask.type === 'dream' && usesSyncFileQueue(structuredTask.input))) throw new Error('任务执行曾中断，结果不确定，请查看已完成内容后手动继续');
+    const searchOptimize = structuredTask.type === 'embed' && structuredTask.input.searchOptimize === true;
+    if (record.attempts_started > 1 && record.data.authorizedAttempt !== record.attempts_started && !searchOptimize && structuredTask.type !== 'sync-file' && structuredTask.type !== 'memory' && !(structuredTask.type === 'dream' && usesSyncFileQueue(structuredTask.input))) throw new Error('任务执行曾中断，结果不确定，请查看已完成内容后手动继续');
     let progress = (record.progress ?? {}) as Progress;
     const adapter = new TaskProgressAdapter(String(record.data.kind), toRun(record).product);
     let progressDirty=true,lastPersistedAt=0;
@@ -668,6 +810,21 @@ export class ProductTaskRuntime {
         const dispatch = async () => {
           if(cancelRequested) throw new Error('任务已取消');
           if (message.method === 'task.syncFileHash') return this.fileQueue.sourceHash(message.args[0] as SyncFileInput);
+          if (message.method === 'task.searchOptimize') return this.acceptSearchOptimize(String(message.args[0] ?? 'default'), Array.isArray(message.args[1]) ? message.args[1].filter((slug): slug is string => typeof slug === 'string') : []);
+          if (message.method === 'task.searchOptimizeState') return this.searchOptimizeView();
+          if (message.method === 'task.searchOptimizeDone') return mutateSearchOptimize(this.engine, state => finishSearchOptimize(state, String(message.args[0] ?? ''), String(message.args[1] ?? '')));
+          if (message.method === 'task.searchOptimizeCaptured') {
+            const sourceId = String(message.args[0] ?? 'default');
+            const written = Array.isArray(message.args[1]) ? message.args[1].filter((slug): slug is string => typeof slug === 'string') : [];
+            const sources = Array.isArray(message.args[2]) ? message.args[2].filter((slug): slug is string => typeof slug === 'string') : [];
+            const state = await mutateSearchOptimize(this.engine, current => addCapturedSearchOptimize(current, sourceId, written, sources));
+            if (!state.paused && state.items.length) await this.ensureSearchOptimizeJob();
+            return { paused: state.paused, pending: state.items.length };
+          }
+          if (message.method === 'task.searchOptimizeRelease') {
+            await this.engine.executeRaw(`UPDATE minion_jobs SET idempotency_key = NULL WHERE id = $1 AND idempotency_key = $2 AND status = 'active' AND lock_token = $3`, [context.id, SEARCH_OPTIMIZE_JOB_KEY, record.lock_token]);
+            return null;
+          }
           if(message.method==='task.captureRequest'){
             const slugs=await claimMaintenanceCapture(this.engine,context.id,record.lock_token!,String(message.args[0]),message.args[1] as string[]|undefined);
             if(slugs&&(structuredTask.type==='dream'||structuredTask.type==='import')){
@@ -779,6 +936,17 @@ export class ProductTaskRuntime {
     try {
       const outcome = await finished;
       await queueImportVectors();
+      if (structuredTask.type === 'import') await persist();
+      if (structuredTask.type === 'embed' && structuredTask.input.searchOptimize === true && outcome !== MINION_DEFERRED && !cancelRequested) {
+        const embedded = outcome as { status?: string; error?: string };
+        if (!embedded?.error && (embedded?.status === 'ok' || embedded?.status === 'clean')) {
+          await this.ensureSearchOptimizeJob().catch(error => console.error('[tasks] search optimize:', error));
+        }
+      }
+      if (outcome === MINION_DEFERRED && deferredPhase === 'search_optimize') {
+        if (!this.stopIntents.has(context.id)) await this.settleSearchOptimize(record, adapter, progress);
+        return MINION_DEFERRED;
+      }
       if (structuredTask.type === 'dream' && outcome !== MINION_DEFERRED && (outcome as { reason?: string })?.reason === 'cycle_already_running') return this.deferMaintenance(record);
       if (outcome === MINION_DEFERRED && !this.stopIntents.has(context.id)) {
         if(deferredPhase==='capture_entities'){
@@ -810,6 +978,7 @@ export class ProductTaskRuntime {
     }
     catch(error){
       await queueImportVectors();
+      if (structuredTask.type === 'import') await persist().catch(reason => console.error('[tasks] deferred embed:', reason));
       if(structuredTask.type==='dream'&&usesSyncFileQueue(structuredTask.input) && String(error).includes('资源保护：')){
         const message=error instanceof Error?error.message:String(error);
         if(isSyncCapacityError(error) && !this.stopIntents.has(context.id) && !this.paused){
@@ -832,6 +1001,24 @@ export class ProductTaskRuntime {
       context.signal.removeEventListener('abort', cancelFromSignal);
       context.shutdownSignal.removeEventListener('abort', cancelFromSignal);
     }
+  }
+
+  private async settleSearchOptimize(record: MinionJob, adapter: TaskProgressAdapter, progress: Progress): Promise<void> {
+    const state = await loadSearchOptimize(this.engine);
+    adapter.view.stage = state.paused ? '已暂停，已完成的部分保留' : '等待继续优化搜索';
+    adapter.view.errorReason = state.paused ? SEARCH_OPTIMIZE_PAUSED : null;
+    progress.product = adapter.view;
+    if (state.paused) {
+      await this.engine.executeRaw(`UPDATE minion_jobs SET status='paused', lock_token=NULL, lock_until=NULL,
+        error_text=$3, finished_at=COALESCE(finished_at, now()), updated_at=now(), progress=$4::jsonb,
+        data=jsonb_set(data, '{searchOptimizePause}', '"manual"'::jsonb)
+        WHERE id=$1 AND status='active' AND lock_token=$2`, [record.id, record.lock_token, SEARCH_OPTIMIZE_PAUSED, progress]);
+    } else {
+      await this.engine.executeRaw(`UPDATE minion_jobs SET status='waiting', lock_token=NULL, lock_until=NULL,
+        error_text=NULL, finished_at=NULL, updated_at=now(), progress=$3::jsonb, data=data-'searchOptimizePause'
+        WHERE id=$1 AND status='active' AND lock_token=$2`, [record.id, record.lock_token, progress]);
+    }
+    this.sessionViews.delete(record.id);
   }
 
   private async deferMaintenance(record: MinionJob, stage = '等待前面的整理任务完成'): Promise<typeof MINION_DEFERRED> {
