@@ -58,6 +58,10 @@ export class TaskEngineHost {
     return !this.closed && [...this.scopes.values()].some(scope => scope.transactional);
   }
 
+  forgetPage(sourceId: string, slug: string): void {
+    this.pages.delete(JSON.stringify([sourceId, slug]));
+  }
+
   private pageVersion(key: string, snapshot?: PageSnapshot): string | undefined {
     for (let current = snapshot; current; current = current.parent) {
       if (current.pages.has(key)) return current.pages.get(key);

@@ -30,7 +30,7 @@ import { claimMaintenanceCapture } from './maintenance-orchestration.ts';
 import { enqueueImportedEntityCapture } from './imported-entity-capture.ts';
 import {
   SEARCH_OPTIMIZE_JOB_KEY, SEARCH_OPTIMIZE_NOTICE, SEARCH_OPTIMIZE_PAUSED, assignSearchOptimizeAcceptance,
-  addCapturedSearchOptimize, addSearchOptimize, finishSearchOptimize, loadSearchOptimize, mutateSearchOptimize,
+  addCapturedSearchOptimize, addSearchOptimize, finishSearchOptimize, loadSearchOptimize, mutateSearchOptimize, searchOptimizeRevisions,
   type SearchOptimizeAcceptance,
 } from './search-optimize.ts';
 import { TaskResourceGuard, PRODUCT_QUEUE_CAPACITY, isSyncCapacityError, type TaskResourceOptions } from './resource-guard.ts';
@@ -407,7 +407,7 @@ export class ProductTaskRuntime {
   }
 
   async acceptSearchOptimize(sourceId: string, slugs: string[]): Promise<SearchOptimizeAcceptance> {
-    const state = await mutateSearchOptimize(this.engine, current => addSearchOptimize(current, sourceId, slugs, true));
+    const state = await mutateSearchOptimize(this.engine, async (current, tx) => addSearchOptimize(current, sourceId, slugs, true, await searchOptimizeRevisions(tx, sourceId, slugs)));
     const ensured = await this.ensureSearchOptimizeJob().catch(error => ({ job: null, queued: false, error: error instanceof Error ? error.message : String(error) }));
     return {
       paused: state.paused,
@@ -812,12 +812,16 @@ export class ProductTaskRuntime {
           if (message.method === 'task.syncFileHash') return this.fileQueue.sourceHash(message.args[0] as SyncFileInput);
           if (message.method === 'task.searchOptimize') return this.acceptSearchOptimize(String(message.args[0] ?? 'default'), Array.isArray(message.args[1]) ? message.args[1].filter((slug): slug is string => typeof slug === 'string') : []);
           if (message.method === 'task.searchOptimizeState') return this.searchOptimizeView();
-          if (message.method === 'task.searchOptimizeDone') return mutateSearchOptimize(this.engine, state => finishSearchOptimize(state, String(message.args[0] ?? ''), String(message.args[1] ?? '')));
+          if (message.method === 'task.searchOptimizeDone') return mutateSearchOptimize(this.engine, state => finishSearchOptimize(state, String(message.args[0] ?? ''), String(message.args[1] ?? ''), typeof message.args[2] === 'string' ? message.args[2] : undefined));
+          if (message.method === 'task.searchOptimizeForgetPage') {
+            host.forgetPage(String(message.args[0] ?? ''), String(message.args[1] ?? ''));
+            return null;
+          }
           if (message.method === 'task.searchOptimizeCaptured') {
             const sourceId = String(message.args[0] ?? 'default');
             const written = Array.isArray(message.args[1]) ? message.args[1].filter((slug): slug is string => typeof slug === 'string') : [];
             const sources = Array.isArray(message.args[2]) ? message.args[2].filter((slug): slug is string => typeof slug === 'string') : [];
-            const state = await mutateSearchOptimize(this.engine, current => addCapturedSearchOptimize(current, sourceId, written, sources));
+            const state = await mutateSearchOptimize(this.engine, async (current, tx) => addCapturedSearchOptimize(current, sourceId, written, sources, await searchOptimizeRevisions(tx, sourceId, written)));
             if (!state.paused && state.items.length) await this.ensureSearchOptimizeJob();
             return { paused: state.paused, pending: state.items.length };
           }

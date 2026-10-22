@@ -8,6 +8,7 @@ export const SEARCH_OPTIMIZE_NOTICE = '搜索优化此前未完成，可在任�
 export interface SearchOptimizeItem {
   sourceId: string;
   slug: string;
+  revision?: string;
 }
 
 export interface SearchOptimizeState {
@@ -44,8 +45,9 @@ export function readSearchOptimize(raw: string | null | undefined): SearchOptimi
       if (!item || typeof item !== 'object') return [];
       const sourceId = typeof item.sourceId === 'string' ? item.sourceId : '';
       const slug = typeof item.slug === 'string' ? item.slug : '';
+      const revision = typeof item.revision === 'string' && item.revision.length > 0 ? item.revision : undefined;
       if (!sourceId || !slug || slug.includes(':')) return [];
-      return [{ sourceId, slug }];
+      return [revision ? { sourceId, slug, revision } : { sourceId, slug }];
     }) : [];
     const seen = new Set<string>();
     const unique = items.filter(item => {
@@ -64,7 +66,12 @@ export function readSearchOptimize(raw: string | null | undefined): SearchOptimi
   }
 }
 
-export function addSearchOptimize(state: SearchOptimizeState, sourceId: string, slugs: string[], authorize: boolean): SearchOptimizeState {
+function searchOptimizeRevision(revisions: Readonly<Record<string, string>> | undefined, slug: string): string | undefined {
+  const revision = revisions?.[slug];
+  return typeof revision === 'string' && revision.length > 0 ? revision : undefined;
+}
+
+export function addSearchOptimize(state: SearchOptimizeState, sourceId: string, slugs: string[], authorize: boolean, revisions?: Readonly<Record<string, string>>): SearchOptimizeState {
   if (!authorize) return state;
   const clean = [...new Set(slugs.filter(slug => slug.length > 0 && !slug.includes(':')))];
   if (!clean.length) return state;
@@ -74,12 +81,17 @@ export function addSearchOptimize(state: SearchOptimizeState, sourceId: string, 
   let changed = done !== state.done;
   for (const slug of clean) {
     const key = searchOptimizeKey(sourceId, slug);
+    const revision = searchOptimizeRevision(revisions, slug);
     if (!authorized.includes(key)) {
       authorized.push(key);
       changed = true;
     }
-    if (!items.some(item => item.sourceId === sourceId && item.slug === slug)) {
-      items.push({ sourceId, slug });
+    const existing = items.find(item => item.sourceId === sourceId && item.slug === slug);
+    if (!existing) {
+      items.push(revision ? { sourceId, slug, revision } : { sourceId, slug });
+      changed = true;
+    } else if (revision && existing.revision !== revision) {
+      existing.revision = revision;
       changed = true;
     }
   }
@@ -87,9 +99,11 @@ export function addSearchOptimize(state: SearchOptimizeState, sourceId: string, 
   return { paused: state.paused, done, items, authorized };
 }
 
-export function finishSearchOptimize(state: SearchOptimizeState, sourceId: string, slug: string): SearchOptimizeState {
+export function finishSearchOptimize(state: SearchOptimizeState, sourceId: string, slug: string, revision?: string): SearchOptimizeState {
   const index = state.items.findIndex(item => item.sourceId === sourceId && item.slug === slug);
   if (index < 0) return state;
+  const current = state.items[index]!;
+  if (revision && current.revision && current.revision !== revision) return state;
   return {
     paused: state.paused,
     done: state.done + 1,
@@ -98,10 +112,20 @@ export function finishSearchOptimize(state: SearchOptimizeState, sourceId: strin
   };
 }
 
-export function addCapturedSearchOptimize(state: SearchOptimizeState, sourceId: string, writtenSlugs: string[], sourceSlugs: string[]): SearchOptimizeState {
+export function addCapturedSearchOptimize(state: SearchOptimizeState, sourceId: string, writtenSlugs: string[], sourceSlugs: string[], revisions?: Readonly<Record<string, string>>): SearchOptimizeState {
   const sources = sourceSlugs.filter(slug => slug.length > 0 && !slug.includes(':'));
   if (!sources.length || !sources.every(slug => state.authorized.includes(searchOptimizeKey(sourceId, slug)))) return state;
-  return addSearchOptimize(state, sourceId, writtenSlugs, true);
+  return addSearchOptimize(state, sourceId, writtenSlugs, true, revisions);
+}
+
+export async function searchOptimizeRevisions(tx: BrainEngine, sourceId: string, slugs: string[]): Promise<Record<string, string>> {
+  const revisions: Record<string, string> = {};
+  for (const slug of slugs) {
+    if (!slug || slug.includes(':')) continue;
+    const revision = (await tx.getPage(slug, { sourceId }))?.content_hash;
+    if (typeof revision === 'string' && revision.length > 0) revisions[slug] = revision;
+  }
+  return revisions;
 }
 
 export function assignSearchOptimizeAcceptance(result: Record<string, unknown>, accepted: SearchOptimizeAcceptance): void {
@@ -138,10 +162,10 @@ export async function loadSearchOptimize(engine: BrainEngine): Promise<SearchOpt
   return readSearchOptimize(await engine.getConfig(SEARCH_OPTIMIZE_CONFIG));
 }
 
-export async function mutateSearchOptimize(engine: BrainEngine, update: (state: SearchOptimizeState) => SearchOptimizeState): Promise<SearchOptimizeState> {
+export async function mutateSearchOptimize(engine: BrainEngine, update: (state: SearchOptimizeState, tx: BrainEngine) => SearchOptimizeState | Promise<SearchOptimizeState>): Promise<SearchOptimizeState> {
   return engine.transaction(async tx => {
     await tx.executeRaw('SELECT pg_advisory_xact_lock(hashtext($1))', [SEARCH_OPTIMIZE_CONFIG]);
-    const next = update(readSearchOptimize(await tx.getConfig(SEARCH_OPTIMIZE_CONFIG)));
+    const next = await update(readSearchOptimize(await tx.getConfig(SEARCH_OPTIMIZE_CONFIG)), tx);
     await tx.setConfig(SEARCH_OPTIMIZE_CONFIG, JSON.stringify(next));
     return next;
   });

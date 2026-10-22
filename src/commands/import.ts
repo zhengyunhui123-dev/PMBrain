@@ -372,6 +372,8 @@ export async function runStructuredImport(
       tickProgress();
       return;
     }
+    let savedSlug = '';
+    let vectorize = false;
     // v0.31.2 (D5): per-file slow-path log. Fires only when a single
     // file takes >5s. The user's hang surfaces as one file taking
     // forever — without this, the agent can't see which file.
@@ -407,6 +409,8 @@ export async function runStructuredImport(
         imported++;
         chunksCreated += result.chunks;
         importedSlugs.push(result.slug);
+        savedSlug = result.slug;
+        vectorize = true;
         const embedSkip = result.parsedPage?.frontmatter?.embed_skip;
         const embedSkipBytes = embedSkip && typeof embedSkip === 'object' && typeof (embedSkip as { bytes?: unknown }).bytes === 'number'
           ? (embedSkip as { bytes: number }).bytes
@@ -429,6 +433,8 @@ export async function runStructuredImport(
         partialFiles++;
         chunksCreated += result.chunks;
         importedSlugs.push(result.slug);
+        savedSlug = result.slug;
+        vectorize = true;
         const reason = result.error ?? 'Large document embedding is partially complete';
         reportFile({
           status: 'partial',
@@ -488,7 +494,7 @@ export async function runStructuredImport(
       failures.push({ path: relativePath, error: msg });
     }
     processed++;
-    await opts.runtime?.onFile({ path: relativePath, completed: completed.has(relativePath), processed, imported, skipped, errors, chunksCreated });
+    await opts.runtime?.onFile({ path: relativePath, completed: completed.has(relativePath), processed, imported, skipped, errors, chunksCreated, slug: savedSlug, vectorize });
     tickProgress();
     // Save checkpoint every 100 SUCCESSFUL adds (not every 100 processed).
     // Failed files never enter `completed`, so a flaky file can't push the

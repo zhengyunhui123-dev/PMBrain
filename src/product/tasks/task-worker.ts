@@ -312,16 +312,17 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
 }
 
 async function runSearchOptimize(engine: BrainEngine): Promise<void> {
+  let stalePageAttempts = 0;
   for (;;) {
     abort.signal.throwIfAborted();
     const state = await rpc('task.searchOptimizeState', []) as {
       paused?: boolean;
       done?: number;
       total?: number;
-      items?: Array<{ sourceId?: string; slug?: string }>;
+      items?: Array<{ sourceId?: string; slug?: string; revision?: string }>;
     };
     const items = Array.isArray(state.items)
-      ? state.items.filter((item): item is { sourceId: string; slug: string } => Boolean(item?.sourceId && item.slug && !item.slug.includes(':')))
+      ? state.items.filter((item): item is { sourceId: string; slug: string; revision?: string } => Boolean(item?.sourceId && item.slug && !item.slug.includes(':')))
       : [];
     const done = Number.isFinite(state.done) ? Number(state.done) : 0;
     if (!items.length) {
@@ -336,14 +337,31 @@ async function runSearchOptimize(engine: BrainEngine): Promise<void> {
       return;
     }
     const next = items[0]!;
+    const revision = next.revision;
     send({ type: 'progress', event: { phase: 'embed', done, total: done + items.length, unit: '份资料' } });
-    const embedded = await runEmbedCore(engine, {
-      slugs: [next.slug],
-      sourceId: next.sourceId,
-      quiet: true,
-      signal: abort.signal,
-      pauseCheck: async () => Boolean((await rpc('task.searchOptimizeState', []) as { paused?: boolean }).paused),
-    });
+    await rpc('task.searchOptimizeForgetPage', [next.sourceId, next.slug]);
+    let embedded: Awaited<ReturnType<typeof runEmbedCore>>;
+    try {
+      embedded = await runEmbedCore(engine, {
+        slugs: [next.slug],
+        sourceId: next.sourceId,
+        quiet: true,
+        signal: abort.signal,
+        pauseCheck: async () => Boolean((await rpc('task.searchOptimizeState', []) as { paused?: boolean }).paused),
+      });
+    } catch (error) {
+      if (abort.signal.aborted) {
+        const reason = abort.signal.reason;
+        throw reason instanceof Error ? reason : new Error(typeof reason === 'string' ? reason : 'service_shutdown: 本地服务关闭');
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      if (message.includes('在处理期间已改变') && stalePageAttempts < 3) {
+        stalePageAttempts += 1;
+        continue;
+      }
+      throw error;
+    }
+    stalePageAttempts = 0;
     if (abort.signal.aborted) {
       const reason = abort.signal.reason;
       throw reason instanceof Error ? reason : new Error(typeof reason === 'string' ? reason : 'service_shutdown: 本地服务关闭');
@@ -357,7 +375,7 @@ async function runSearchOptimize(engine: BrainEngine): Promise<void> {
       send({ type: 'error', error: message, result: { searchOptimize: true, status: 'failed', failures: [{ error: message }] } });
       return;
     }
-    await rpc('task.searchOptimizeDone', [next.sourceId, next.slug]);
+    await rpc('task.searchOptimizeDone', revision ? [next.sourceId, next.slug, revision] : [next.sourceId, next.slug]);
   }
 }
 
@@ -412,20 +430,25 @@ async function executeTask(task: ProductTask, kind: BrainEngine['kind']) {
   } else if (task.type === 'import') {
     const input = task.input;
     const vectorsRequested = input.noEmbed !== true;
+    const sourceId = input.sourceId ?? 'default';
     const filePhases = ['collect', 'process', 'write'];
     send({ type: 'progress', phases: filePhases });
     send({ type: 'progress', event: { phase: 'import.collect' } });
     const completedPaths: string[] = [];
+    const resumedVectorSlugs: string[] = [];
     if (input.resumeCheckpointId) {
       for (const file of await readTaskCheckpoint(input.resumeCheckpointId)) {
         if (file.completed !== true || file.modelFingerprint !== taskModelFingerprint()) continue;
         const current = await stat(String(file.absolutePath)).catch(() => null);
         if (current?.size === file.size && current?.mtimeMs === file.mtimeMs) {
           completedPaths.push(String(file.path));
+          const slug = typeof file.slug === 'string' ? file.slug : '';
+          if (vectorsRequested && file.vectorize === true && slug.length > 0 && !slug.includes(':')) resumedVectorSlugs.push(slug);
           await rpc('task.checkpoint', [file]);
         }
       }
     }
+    if (vectorsRequested && resumedVectorSlugs.length) await rpc('task.searchOptimize', [sourceId, [...new Set(resumedVectorSlugs)]]);
     let fileSnapshot: Record<string, unknown> = {};
     const imported = await runStructuredImport(engine, {
       path: input.path, noEmbed: true, fresh: true, jsonOutput: true, reportFiles: true,
@@ -448,11 +471,14 @@ async function executeTask(task: ProductTask, kind: BrainEngine['kind']) {
         onFile: async progress => {
           send({ type: 'progress', event: { phase: 'import.files', done: Number(progress.processed) } });
           importFile = undefined;
+          const slug = typeof progress.slug === 'string' ? progress.slug : '';
+          if (vectorsRequested && progress.vectorize === true && slug.length > 0 && !slug.includes(':')) {
+            await rpc('task.searchOptimize', [sourceId, [slug]]);
+          }
           await rpc('task.checkpoint', [{ ...progress, ...fileSnapshot }]);
         },
       },
     });
-    const sourceId=input.sourceId??'default';
     const embedSlugs=[...new Set((imported.importedSlugs??[]).filter(slug=>slug.length>0&&!slug.includes(':')))];
     result = { ...imported, resumedFiles: completedPaths.length };
     if(vectorsRequested&&embedSlugs.length){

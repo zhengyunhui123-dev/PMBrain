@@ -50,6 +50,23 @@ test('未授权或混合来源的整理结果不进入待优化', () => {
   expect(captured.authorized).toContain(searchOptimizeKey('library', 'people/liu'));
 });
 
+test('处理期间换了内容版本，旧的完成回执留着新的待优化记录', () => {
+  const first = addSearchOptimize(emptySearchOptimize(), 'library', ['notes/a'], true, { 'notes/a': 'h1' });
+  expect(first.items).toEqual([{ sourceId: 'library', slug: 'notes/a', revision: 'h1' }]);
+  expect(addSearchOptimize(first, 'library', ['notes/a'], true, { 'notes/a': 'h1' })).toBe(first);
+  const updated = addSearchOptimize(first, 'library', ['notes/a'], true, { 'notes/a': 'h2' });
+  expect(updated.items).toEqual([{ sourceId: 'library', slug: 'notes/a', revision: 'h2' }]);
+  expect(updated.done).toBe(0);
+  expect(finishSearchOptimize(updated, 'library', 'notes/a', 'h1')).toBe(updated);
+  const done = finishSearchOptimize(updated, 'library', 'notes/a', 'h2');
+  expect(done.done).toBe(1);
+  expect(done.items).toEqual([]);
+  expect(readSearchOptimize(JSON.stringify(updated)).items).toEqual(updated.items);
+  const legacy = addSearchOptimize(emptySearchOptimize(), 'library', ['notes/b'], true);
+  expect(finishSearchOptimize(legacy, 'library', 'notes/b').items).toEqual([]);
+  expect(finishSearchOptimize(legacy, 'library', 'notes/b', 'h9').done).toBe(1);
+});
+
 test('损坏的进度读成空集合，带冒号的路径被忽略', () => {
   expect(readSearchOptimize('not-json')).toEqual(emptySearchOptimize());
   expect(readSearchOptimize(null).items).toEqual([]);
