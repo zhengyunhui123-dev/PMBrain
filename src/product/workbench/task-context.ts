@@ -13,6 +13,10 @@ function normalizedWork(text: string): string {
   return text.replace(/\s+/g, '').replace(/[。！!？?，,]/g, '');
 }
 
+function carriedPaths(task?: WorkbenchTask): Pick<WorkbenchTask, 'managedPaths'> {
+  return task?.managedPaths?.length ? { managedPaths: [...task.managedPaths] } : {};
+}
+
 export function continuesActiveTask(text: string): boolean {
   return followUp.test(normalizedWork(text));
 }
@@ -34,7 +38,7 @@ export function advanceTask(input: { task?: WorkbenchTask; notes?: string[]; tex
   if (canReplace && input.task) {
     const goal = compactRule(text);
     if (input.task.goal === goal) return { task: { ...input.task, updatedAt: input.now }, inherited: true, opened: false };
-    return { task: { id: input.id(), goal, constraints: [], updatedAt: input.now, ...(directory ? { directory } : {}) }, inherited: false, opened: true };
+    return { task: { id: input.id(), goal, constraints: [], updatedAt: input.now, ...(directory ? { directory } : {}), ...carriedPaths(input.task) }, inherited: false, opened: true };
   }
   if (wantsDirectoryCreation(text)) return { task: input.task ? { ...input.task, updatedAt: input.now } : { id: input.id(), goal: compactRule(text), constraints: [], updatedAt: input.now }, inherited: !!input.task, opened: !input.task };
   if (input.task && parameterCue.test(normalized)) {
@@ -48,12 +52,12 @@ export function advanceTask(input: { task?: WorkbenchTask; notes?: string[]; tex
     if (agreementOnly.test(normalized)) return { inherited: false, opened: false };
     const goal = [...input.recentUserTexts].reverse().find(item => classifyTurn(item) === 'chat' && taskNeedsSkill(input.agent, item));
     if (!goal) return { inherited: false, opened: false };
-    return { task: { id: input.id(), goal: compactRule(goal), constraints: [...(input.notes ?? [])], updatedAt: input.now }, inherited: true, opened: false };
+    return { task: { id: input.id(), goal: compactRule(goal), constraints: [...(input.notes ?? [])], updatedAt: input.now, ...carriedPaths(input.task) }, inherited: true, opened: false };
   }
   if (classifyTurn(text) === 'chat' && (isWorkRequest(text) || taskNeedsSkill(input.agent, text))) {
     const goal = compactRule(text);
     if (input.task?.goal === goal) return { task: { ...input.task, updatedAt: input.now }, inherited: true, opened: false };
-    return { task: { id: input.id(), goal, constraints: [], updatedAt: input.now, ...(directory ? { directory } : {}) }, inherited: false, opened: true };
+    return { task: { id: input.id(), goal, constraints: [], updatedAt: input.now, ...(directory ? { directory } : {}), ...carriedPaths(input.task) }, inherited: false, opened: true };
   }
   return { task: input.task, inherited: false, opened: false };
 }

@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from 'node:fs';
+import { constants as fsConstants, copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, extname, join, relative, isAbsolute, resolve, sep } from 'node:path';
 import { renderWorkbenchDocx } from './docx';
 import { marked } from 'marked';
@@ -263,11 +263,42 @@ function deliveryParent(root: string, directory: string) {
   if (!statSync(parent).isDirectory() || !inside(realpathSync(root), parent)) throw new Error('目录不在当前助手成果输出范围内');
   return parent;
 }
-export async function createLocalDirectory(engine: BrainEngine, agent: WorkbenchAgent, name: string, directory?: string) {
+function singleName(name: string) {
   if (!name || name.length > 160 || name !== name.trim() || /[\\/<>:"|?*\x00-\x1f]/.test(name) || /[. ]$/.test(name) || /^(?:\.{1,2}|con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(name)) throw new Error('文件夹名称无效，请使用单个有效名称');
+}
+function readRootOf(agent: WorkbenchAgent, path: string) {
+  return agent.readDirectories.map(root => {
+    try { return existsSync(root) && !lstatSync(root).isSymbolicLink() ? realpathSync(root) : ''; } catch { return ''; }
+  }).find(root => root && inside(root, path)) ?? '';
+}
+export async function createLocalDirectory(engine: BrainEngine, agent: WorkbenchAgent, name: string, directory?: string) {
+  singleName(name);
   const target = await resolveAgentDeliveryDirectory(engine, agent);
-  if (!target) throw new Error('当前助手知识来源没有绑定可用的成果输出目录');
-  const parent = deliveryParent(target.directory, directory || target.directory);
+  let parent: string;
+  let sourceId: string;
+  let root: string;
+  if (!directory) {
+    if (!target) throw new Error('当前助手知识来源没有绑定可用的成果输出目录');
+    parent = deliveryParent(target.directory, target.directory);
+    sourceId = target.sourceId;
+    root = realpathSync(target.directory);
+  } else {
+    if (!existsSync(directory)) throw new Error('目录不在已授权的工作目录内');
+    if (lstatSync(directory).isSymbolicLink()) throw new Error('不能通过链接访问目录');
+    const real = realpathSync(directory);
+    if (!statSync(real).isDirectory()) throw new Error('目标不是文件夹');
+    if (target && inside(realpathSync(target.directory), real)) {
+      parent = deliveryParent(target.directory, real);
+      sourceId = target.sourceId;
+      root = realpathSync(target.directory);
+    } else {
+      const readRoot = readRootOf(agent, real);
+      if (!readRoot) throw new Error('目录不在已授权的工作目录内');
+      parent = real;
+      sourceId = target?.sourceId ?? 'local';
+      root = readRoot;
+    }
+  }
   const path = join(parent, name);
   let created = false;
   if (existsSync(path)) {
@@ -275,8 +306,49 @@ export async function createLocalDirectory(engine: BrainEngine, agent: Workbench
   } else {
     mkdirSync(path, { mode: 0o700 }); created = true;
   }
-  const verified = deliveryParent(target.directory, path);
-  return { path: verified, sourceId: target.sourceId, directory: true, created, exists: true };
+  const verified = realpathSync(path);
+  if (lstatSync(path).isSymbolicLink() || !statSync(verified).isDirectory() || !inside(root, verified)) throw new Error('目录不在已授权的工作目录内');
+  return { path: verified, sourceId, directory: true, created, exists: true };
+}
+export async function copyLocalFile(engine: BrainEngine, agent: WorkbenchAgent, source: string, directory: string) {
+  const target = await resolveAgentDeliveryDirectory(engine, agent);
+  const delivery = target ? realpathSync(target.directory) : null;
+  if (!isAbsolute(source) || !existsSync(source) || lstatSync(source).isSymbolicLink()) throw new Error('文件不存在或未授权');
+  const from = realpathSync(source);
+  const info = statSync(from);
+  if (!info.isFile()) throw new Error('只能复制文件');
+  if (info.size > 32 * 1024 * 1024) throw new Error('只复制不超过 32MB 的文件');
+  const readable = Boolean(readRootOf(agent, from)) || (delivery !== null && inside(delivery, from));
+  if (!readable) throw new Error('文件不在助手授权目录中');
+  if (!directory || !existsSync(directory) || lstatSync(directory).isSymbolicLink()) throw new Error('不能通过链接写入文件');
+  const destRoot = realpathSync(directory);
+  if (!statSync(destRoot).isDirectory()) throw new Error('复制目标不是文件夹');
+  const inDelivery = delivery !== null && inside(delivery, destRoot);
+  const readRoot = readRootOf(agent, destRoot);
+  const inReadChild = Boolean(readRoot) && relative(readRoot, destRoot) !== '';
+  if (!inDelivery && !inReadChild) throw new Error('复制目标必须在成果目录内，或在授权目录里新建的文件夹中');
+  const destination = join(destRoot, basename(from));
+  if (existsSync(destination)) throw new Error('目标已有同名文件，未覆盖原始文件');
+  const before = readFileSync(from);
+  copyFileSync(from, destination, fsConstants.COPYFILE_EXCL);
+  if (!readFileSync(from).equals(before)) throw new Error('原始文件被改动，已停止');
+  const copied = realpathSync(destination);
+  if (lstatSync(destination).isSymbolicLink() || !inside(destRoot, copied)) throw new Error('复制结果不在目标文件夹内');
+  return { path: copied, source: from, bytes: before.length, copied: true, sourceId: target?.sourceId ?? 'local' };
+}
+export function renameManagedFile(path: string, name: string, managed: string[]) {
+  singleName(name);
+  if (!isAbsolute(path) || !existsSync(path) || lstatSync(path).isSymbolicLink()) throw new Error('只能重命名本次已经复制或新建的文件');
+  const real = realpathSync(path);
+  if (!statSync(real).isFile()) throw new Error('只能重命名文件');
+  const allowed = new Set(managed.flatMap(item => {
+    try { return existsSync(item) && !lstatSync(item).isSymbolicLink() ? [realpathSync(item)] : []; } catch { return []; }
+  }));
+  if (!allowed.has(real)) throw new Error('只能重命名本次已经复制或新建的文件');
+  const next = join(dirname(real), name);
+  if (existsSync(next)) throw new Error('目标已有同名文件，未改动已有内容');
+  renameSync(real, next);
+  return { path: realpathSync(next), from: real, renamed: true };
 }
 export function completedDirectories(calls: WorkbenchToolCall[]) {
   const directories = new Map<string, { path: string; sourceId: string; created: boolean }>();

@@ -5,6 +5,8 @@ export interface DatabaseRequestContext {
   token: string;
   signal: AbortSignal;
   timeoutMs?: number;
+  stage?: string;
+  file?: string;
   onTimeout: (error: Error) => void;
 }
 

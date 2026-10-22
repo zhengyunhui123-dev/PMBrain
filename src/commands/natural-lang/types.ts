@@ -26,7 +26,8 @@ export interface ConsoleRun {
   id: string;
   kind: string;
   trigger?: 'manual' | 'scheduled';
-  status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
+  status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
+  searchOptimize?: boolean;
   command: string[];
   stdout: string;
   stderr: string;

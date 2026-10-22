@@ -8,6 +8,8 @@ import './home.css';
 import { desktopApi } from '../lib/product-fetch';
 import { api } from '../api';
 import { useModelReadiness } from './useModelReadiness';
+import { useProductTasks } from './TaskActivity';
+import { homeOrganizeDigest } from './organize-digest';
 import { onboardingAction, type modelReadiness } from './model-readiness';
 
 function GettingStarted({ needsSetup, readiness, firstImport = needsSetup, onContinue }: { needsSetup: boolean; readiness: ReturnType<typeof modelReadiness>; firstImport?: boolean; onContinue: () => void }) {
@@ -51,7 +53,7 @@ function FeatureCard({ icon, tone, title, detail, onClick }: {
 }
 
 function HomeAsk({ onOpen, serviceReady, databaseReady }: { onOpen: () => void; serviceReady: boolean; databaseReady: boolean }) {
-  const wb = useWorkbench({ serviceReady, databaseReady });
+  const wb = useWorkbench({ serviceReady, databaseReady, surface: 'home' });
   const composer = useRef<HTMLTextAreaElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const [draft, setDraft] = useState('');
@@ -117,6 +119,8 @@ export function HomePage({ mode, ready, databaseReady, status, onCreate, onBring
     else onCreate('');
   };
   const setupError = models.error && <p className="product-error" role="alert">模型配置读取失败：{models.error}<button type="button" onClick={() => void models.reload()}>重试读取</button></p>;
+  const organize = homeOrganizeDigest(useProductTasks().rows);
+  const organizeTime = organize.when ? new Date(organize.when).toLocaleString() : '';
   return <section className="home-page">{mode === 'new' && status && <div className="home-status">{status}</div>}{mode === 'new' ? <div className="home-welcome">
     <div className="home-copy">
       <h1>欢迎使用 <span>PMBrain</span></h1>
@@ -138,6 +142,15 @@ export function HomePage({ mode, ready, databaseReady, status, onCreate, onBring
     <header className="home-ready-head"><div><h1>你好，开始探索你的知识</h1><p className="home-lead">基于你的知识库，搜索、整理或直接提问</p></div><div className="home-ready-side">{status}<HomeArt /></div></header>
     {setupError}
     {canConfigure && models.readiness && (!models.readiness.complete || hasMaterials === false) && <GettingStarted needsSetup={false} firstImport={hasMaterials === false} readiness={models.readiness} onContinue={continueSetup} />}
+    <section className="home-organize" aria-label="最近整理">
+      <header><h2>最近整理</h2><button type="button" onClick={() => onOpen('tasks')}>查看任务</button></header>
+      {organize.empty ? <p>还没有完成过整理</p> : <>
+        <p>{organizeTime} · {organize.scope}</p>
+        {organize.updated.length > 0 && <ul>{organize.updated.map(item => <li key={item}>新增或更新：{item}</li>)}</ul>}
+        {organize.failed.length > 0 && <ul>{organize.failed.map(item => <li key={item}>失败：{item}</li>)}</ul>}
+        {organize.judgment.length > 0 && <ul>{organize.judgment.map(item => <li key={item}>需要判断：{item}</li>)}</ul>}
+      </>}
+    </section>
     <HomeAsk serviceReady={ready} databaseReady={databaseReady} onOpen={() => onOpen('assistant')} />
     <div className="home-actions">
       <FeatureCard tone="tone-violet" icon={<Folder size={20} />} title="导入资料" detail="添加文件或文件夹" onClick={() => onOpen('knowledge-import')} />

@@ -1571,6 +1571,15 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
     }
   });
 
+  app.get('/admin/api/database-occupancy', requireAdmin, (_req: Request, res: Response) => {
+    const inspect = (engine as { inspectOccupancy?: () => { holder: unknown; waiting: unknown[]; active: unknown[]; recent: unknown[] } }).inspectOccupancy;
+    if (typeof inspect !== 'function') {
+      res.json({ supported: false, holder: null, waiting: [], active: [], recent: [] });
+      return;
+    }
+    res.json({ supported: true, ...inspect.call(engine) });
+  });
+
   app.get('/admin/api/runs', requireAdmin, async (req: Request, res: Response) => {
     const runs = await readRuns();
     res.json({ rows: req.query.summary === '1' ? runs.map(taskRunSummary) : runs });
@@ -1619,6 +1628,27 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
     const reason=typeof req.body?.message==='string'?req.body.message.slice(0,1024):'资源保护：本地服务内存不足，已停止后台任务，请释放内存后重启服务并手动继续。';
     productTasks.stopForResourcePressure(reason);
     res.status(202).json({status:'stopping'});
+  });
+
+  app.post('/admin/api/runs/:id/pause', requireAdmin, async (req: Request, res: Response) => {
+    const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const run = id ? await productTasks.pauseSearchOptimize(id) : null;
+    if (!run) {
+      res.status(404).json({ error: 'run_not_found' });
+      return;
+    }
+    res.json(run);
+  });
+
+  app.post('/admin/api/runs/:id/continue', requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+      const run = id ? await productTasks.continueSearchOptimize(id) : null;
+      if (!run) { res.status(404).json({ error: 'run_not_found' }); return; }
+      sendAdminContract(res, RunAcceptedResponseSchema, { runId: run.id, status: run.status }, 202);
+    } catch (error) {
+      res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
+    }
   });
 
   app.post('/admin/api/runs/:id/retry', requireAdmin, async (req: Request, res: Response) => {

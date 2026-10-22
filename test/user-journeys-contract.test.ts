@@ -42,4 +42,23 @@ describe('core user journeys cover packaged Desktop openability', () => {
     expect(script).not.toContain('page.locator("#setup-wait-actions").wait_for');
     expect(script).not.toContain('page.locator("#setup-wait-continue").click()');
   });
+
+  test('产品层和共享契约会触发旅程，Bun 版本矩阵保持明确', () => {
+    const read = (name: string) => readFileSync(join(ROOT, '.github/workflows', name), 'utf8');
+    const journeys = read('core-user-journeys.yml');
+    expect(journeys.match(/- 'src\/product\/\*\*'/g)).toHaveLength(2);
+    expect(journeys.match(/- 'shared\/\*\*'/g)).toHaveLength(2);
+    expect(journeys).toContain('runs-on: windows-latest');
+    expect(journeys).toContain('bun-version: 1.3.14');
+    const testWorkflow = read('test.yml');
+    expect(testWorkflow.match(/bun-version: 1\.4\.2/g)).toHaveLength(1);
+    expect(testWorkflow).toContain('serial-tests');
+    for (const name of ['e2e.yml', 'heavy-tests.yml', 'core-user-journeys.yml', 'release.yml']) {
+      const body = read(name);
+      expect(body).not.toContain('bun-version: 1.4.2');
+      expect(body).toContain('bun-version: 1.3.14');
+    }
+    expect(read('e2e.yml')).toContain('ubuntu-latest');
+    expect(read('heavy-tests.yml')).toContain('ubuntu-latest');
+  });
 });

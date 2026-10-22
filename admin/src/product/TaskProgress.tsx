@@ -2,6 +2,8 @@ import React, { useEffect, useState } from 'react';
 import { Check, Circle, LoaderCircle, Minus, X } from 'lucide-react';
 import type { ConsoleRun } from '../lib/shared';
 import { taskName } from '../../../shared/task-progress';
+import { formatDatabaseOccupancy, type DatabaseOccupancy } from '../../../shared/database-occupancy';
+import { productFetch } from '../lib/product-fetch';
 import './tasks.css';
 import { TaskRelationsDetails } from './TaskRelations';
 import { OPEN_CONVERSATION_KEY } from './home-model';
@@ -17,6 +19,30 @@ export const taskLink = (run: ConsoleRun) => { window.location.hash = `tasks?run
 const stepDescriptions: Record<string, string> = { check: '检查知识内容与引用', sync: '将新增和更新的资料同步到知识库', relations: '分析内容并建立知识之间的联系', embed: '更新向量与关键词搜索索引', finish: '检查整理后的知识状态', synthesize: '阅读并理解资料中的新增内容', extract_atoms: '从资料中提炼长期知识', patterns: '识别知识中重复出现的模式', synthesize_concepts: '归纳相关知识与概念', propose_takes: '整理资料中的观点', consolidate: '整理重复的知识内容' };
 export const formatFileBytes=(bytes:number)=>bytes>=1024*1024?`${(bytes/1024/1024).toFixed(2)} MB`:`${(bytes/1024).toFixed(1)} KB`;
 const operations:Record<string,string>={putPage:'保存知识正文',upsertChunks:'写入分块',updateChunkEmbedding:'写入向量',setPageAliases:'保存检索名称',getPage:'读取知识状态',getChunks:'读取已有分块','transaction.open':'开始正文事务','scope.close':'提交或回滚事务',executeRaw:'更新数据库记录'};
+
+function DatabaseWait({ active }: { active: boolean }) {
+  const [text, setText] = useState<string | null>(null);
+  useEffect(() => {
+    if (!active) { setText(null); return; }
+    let live = true;
+    let timer: ReturnType<typeof setTimeout>;
+    const load = async () => {
+      try {
+        const response = await productFetch('/admin/api/database-occupancy');
+        if (!response.ok) throw new Error('occupancy');
+        const report = await response.json() as DatabaseOccupancy & { supported?: boolean };
+        if (live) setText(report.supported === false ? null : formatDatabaseOccupancy(report));
+      } catch { if (live) setText(null); }
+      finally { if (live) timer = setTimeout(load, document.visibilityState === 'hidden' ? 8000 : 2000); }
+    };
+    const onVisible = () => { if (document.visibilityState === 'visible') { clearTimeout(timer); void load(); } };
+    document.addEventListener('visibilitychange', onVisible);
+    void load();
+    return () => { live = false; clearTimeout(timer); document.removeEventListener('visibilitychange', onVisible); };
+  }, [active]);
+  if (!text) return null;
+  return <p className="product-task-caption" role="status">数据库占用：{text}</p>;
+}
 
 export function TaskProgressCard({ run, link = true, timeline = false }: { run: ConsoleRun; link?: boolean; timeline?: boolean }) {
   const view = run.product;
@@ -39,18 +65,19 @@ export function TaskProgressCard({ run, link = true, timeline = false }: { run: 
       <div><dt>{stageSummary.durationLabel}</dt><dd>{stageSummary.duration}</dd></div>
       <div><dt>{importResult ? '待重试文件' : '剩余子任务'}</dt><dd>{importResult ? `${importResult.failed + importResult.partial} 份` : stageSummary.remaining}{stageSummary.active != null && stageSummary.active > 0 ? <small> · 执行中 {stageSummary.active}</small> : null}{stageSummary.failed>0?<small> · 失败 {stageSummary.failed}</small>:null}</dd></div>
     </dl>
-    {!roundCompleted && !batchFinished && <><div className="product-task-current" role="status"><b>{taskStopping(run) ? view?.stage==='停止当前操作并恢复数据库'?view.stage:'正在停止并回滚当前操作' : taskStatus(run)==='部分完成' ? '部分完成' : run.status === 'failed' ? '任务未完成' : run.status === 'cancelled' ? '任务已停止' : view?.stage ?? (active ? '正在处理' : '任务完成')}</b><span>{percent != null ? `${percent}%` : active ? '进行中' : ''}</span></div>
+    {!roundCompleted && !batchFinished && <><div className="product-task-current" role="status"><b>{taskStopping(run) ? view?.stage==='停止当前操作并恢复数据库'?view.stage:'正在停止并回滚当前操作' : taskStatus(run)==='部分完成' ? '部分完成' : run.status === 'failed' ? '任务未完成' : run.status === 'paused' ? '已暂停，已完成的部分保留' : run.status === 'cancelled' ? (run.kind === 'embed_stale' ? '已暂停，已完成的部分保留' : '任务已停止') : view?.stage ?? (active ? '正在处理' : '任务完成')}</b><span>{percent != null ? `${percent}%` : active ? '进行中' : ''}</span></div>
     <div className={`product-task-bar ${active && percent == null ? 'indeterminate' : ''}`} role="progressbar" aria-label={phaseBar?'当前阶段进度':'任务进度'} aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent ?? undefined}><i style={{ width: `${percent ?? (active ? 35 : 0)}%` }} /></div></>}
     {roundCompleted && <section className="product-task-round" aria-label="本轮整理结果">
       <div><h4>本轮成果</h4>{summary.completed.length?<ul>{summary.completed.map(item=><li key={item}>{item}</li>)}</ul>:<p>{view?'本轮没有新增知识成果。':'此历史任务未保存成果统计，可查看任务详情。'}</p>}</div>
       <div><h4>剩余事项</h4>{summary.remaining.length?<ul>{summary.remaining.map(item=><li key={item}>{item}</li>)}</ul>:<p>{taskHasRemaining(run)?'还有未完成事项，详见本轮说明。':'本轮没有待处理事项。'}</p>}{summary.reason&&<p className="product-task-round-reason">未完成原因：{summary.reason}</p>}</div>
     </section>}
     {importResult && <ImportTaskResult run={run} />}
-    {view && <p className="product-task-caption">{view.scope && active ? `知识源 ${view.scope.index + 1} / ${view.scope.total} · ${view.scope.name} · ` : ''}{active && view.syncScan?.active ? `正在检查 ${view.syncScan.scanned}${view.syncScan.total!=null?` / ${view.syncScan.total}`:''} 份资料` : view.total != null ? `已处理 ${view.processed ?? 0} / ${view.total} ${phase?.unit ?? '份资料'}` : view.steps.length ? `已完成 ${view.completedSteps} / ${view.steps.length} 个步骤 · 按步骤计进度` : '等待处理结果'}{active && view.phasePercent != null ? ` · 当前阶段 ${view.phasePercent}%` : ''}</p>}
+    {view && <p className="product-task-caption">{view.scope && active ? `知识源 ${view.scope.index + 1} / ${view.scope.total} · ${view.scope.name} · ` : ''}{active && view.syncScan?.active ? `正在检查 ${view.syncScan.scanned}${view.syncScan.total!=null?` / ${view.syncScan.total}`:''} 份资料` : view.total != null ? `${run.searchOptimize ? '已完成' : '已处理'} ${view.processed ?? 0} / ${view.total} ${run.searchOptimize ? '份资料' : phase?.unit ?? '份资料'}` : view.steps.length ? `已完成 ${view.completedSteps} / ${view.steps.length} 个步骤 · 按步骤计进度` : '等待处理结果'}{active && view.phasePercent != null ? ` · 当前阶段 ${view.phasePercent}%` : ''}</p>}
     {view?.syncFiles && <p className="product-task-caption" aria-label="同步文件统计">本任务文件队列 · 待同步 {view.syncFiles.total} · 已完成 {view.syncFiles.completed} · 失败 {view.syncFiles.failed} · 未处理 {view.syncFiles.remaining}</p>}
     {view?.syncScan && <p className="product-task-caption">已检查 {view.syncScan.scanned} · 未变化 {view.syncScan.unchanged}</p>}
     {active&&view?.steps.length?<p className="product-task-caption">已完成 {view.completedSteps} / {view.steps.length} 个阶段{phaseBar?' · 进度条表示当前阶段':''}</p>:null}
     {active&&view?.activity?<p className="product-task-caption" role="status">{({database:'等待数据库响应',model:'等待模型响应',processing:'正在处理',recovery:'正在回滚并恢复数据库'})[view.activity.kind]} · {Math.max(0,Math.floor((now-Date.parse(view.activity.since))/1000))} 秒</p>:null}
+    <DatabaseWait active={active} />
     {active&&view?.lastProgressAt?<p className="product-task-caption">最近推进：{Math.max(0,Math.floor((now-Date.parse(view.lastProgressAt))/1000))} 秒前{view.heartbeatAt&&now-Date.parse(view.heartbeatAt)>=30000?' · 等待状态更新':''}</p>:null}
     {active && view?.syncScan?.active && <div className="product-active-files" aria-label="当前检查资料"><article><b>{view.syncScan.path}</b>
       <p>{view.syncScan.bytes!=null?`${formatFileBytes(view.syncScan.bytes)} · `:''}核对文件变化与已有知识；检查完成后继续处理文件队列。</p>

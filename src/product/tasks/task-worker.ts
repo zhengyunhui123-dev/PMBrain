@@ -19,7 +19,7 @@ import { maintenanceFailure } from './maintenance-orchestration.ts';
 import { fetchSource, loadAllSources, parseSourceConfig } from '../../core/sources-load.ts';
 import { resolveSourceId } from '../../core/source-resolver.ts';
 import { runEmbedCore } from '../../commands/embed.ts';
-import { isEmbeddingConfigured } from '../../core/embedding-dim-check.ts';
+import { assignSearchOptimizeAcceptance, type SearchOptimizeAcceptance } from './search-optimize.ts';
 import { parentPort } from 'node:worker_threads';
 import { format } from 'node:util';
 import { stat } from 'node:fs/promises';
@@ -302,22 +302,63 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
     includePendingKnowledge:knowledgeEnabled,
     forcePackPhases: input.preset === 'meeting' ? ['extract_atoms'] : undefined,
   });
-  if(input.phase==='capture_entities'&&input.incrementalIngest&&!progressPrefix.length&&!input.dryRun)await embedCapturedKnowledge(engine,report,sourceId??'default');
+  if(input.phase==='capture_entities'&&input.incrementalIngest&&!progressPrefix.length&&!input.dryRun){
+    const details=report.phases.find(phase=>phase.phase==='capture_entities')?.details;
+    const strip=(slug:string)=>slug.startsWith((sourceId??'default')+':')?slug.slice((sourceId??'default').length+1):slug;
+    const slugs=(key:string)=>[...new Set((Array.isArray(details?.[key])?details[key] as string[]:[]).map(strip).filter(slug=>slug.length>0&&!slug.includes(':')))];
+    await rpc('task.searchOptimizeCaptured',[sourceId??'default',slugs('written_slugs'),slugs('source_slugs')]);
+  }
   return report;
 }
 
-async function embedCapturedKnowledge(engine:BrainEngine,knowledge:Awaited<ReturnType<typeof runCycle>>,sourceId:string){
-  if(!isEmbeddingConfigured(loadConfig()))return;
-  const details=knowledge.phases.find(phase=>phase.phase==='capture_entities')?.details;
-  const changed=[...new Set(['written_slugs','source_slugs','relation_slugs'].flatMap(key=>Array.isArray(details?.[key])?details[key] as string[]:[]).map(slug=>slug.startsWith(sourceId+':')?slug.slice(sourceId.length+1):slug).filter(slug=>!slug.includes(':')))];
-  if(!changed.length)return;
-  send({type:'progress',event:{phase:'embed',event:'start'}});
-  const started=performance.now();
-  const embedded=await runEmbedCore(engine,{slugs:changed,sourceId,batchSize:constrained?32:100,signal:abort.signal});
-  knowledge.phases.push({phase:'embed',status:embedded.failedPages?'fail':'ok',duration_ms:performance.now()-started,summary:embedded.failedPages?'实体向量更新未完成':'实体向量已更新',details:{...embedded}});
-  if(embedded.failedPages)knowledge.status='failed';
-  send({type:'progress',event:{phase:'embed',event:'finish'}});
-  return embedded;
+async function runSearchOptimize(engine: BrainEngine): Promise<void> {
+  for (;;) {
+    abort.signal.throwIfAborted();
+    const state = await rpc('task.searchOptimizeState', []) as {
+      paused?: boolean;
+      done?: number;
+      total?: number;
+      items?: Array<{ sourceId?: string; slug?: string }>;
+    };
+    const items = Array.isArray(state.items)
+      ? state.items.filter((item): item is { sourceId: string; slug: string } => Boolean(item?.sourceId && item.slug && !item.slug.includes(':')))
+      : [];
+    const done = Number.isFinite(state.done) ? Number(state.done) : 0;
+    if (!items.length) {
+      await rpc('task.searchOptimizeRelease', []);
+      const total = Math.max(done, Number.isFinite(state.total) ? Number(state.total) : done);
+      send({ type: 'progress', event: { phase: 'embed', event: 'finish', done, total, unit: '份资料' } });
+      send({ type: 'result', result: { searchOptimize: true, status: 'ok' } });
+      return;
+    }
+    if (state.paused) {
+      send({ type: 'deferred', phase: 'search_optimize' });
+      return;
+    }
+    const next = items[0]!;
+    send({ type: 'progress', event: { phase: 'embed', done, total: done + items.length, unit: '份资料' } });
+    const embedded = await runEmbedCore(engine, {
+      slugs: [next.slug],
+      sourceId: next.sourceId,
+      quiet: true,
+      signal: abort.signal,
+      pauseCheck: async () => Boolean((await rpc('task.searchOptimizeState', []) as { paused?: boolean }).paused),
+    });
+    if (abort.signal.aborted) {
+      const reason = abort.signal.reason;
+      throw reason instanceof Error ? reason : new Error(typeof reason === 'string' ? reason : 'service_shutdown: 本地服务关闭');
+    }
+    if (embedded.incomplete) {
+      send({ type: 'deferred', phase: 'search_optimize' });
+      return;
+    }
+    if (embedded.error || embedded.failedPages > 0 || embedded.status === 'failed') {
+      const message = embedded.error || '搜索优化未完成';
+      send({ type: 'error', error: message, result: { searchOptimize: true, status: 'failed', failures: [{ error: message }] } });
+      return;
+    }
+    await rpc('task.searchOptimizeDone', [next.sourceId, next.slug]);
+  }
 }
 
 async function execute(task:ProductTask,kind:BrainEngine['kind']){
@@ -370,7 +411,9 @@ async function executeTask(task: ProductTask, kind: BrainEngine['kind']) {
     send({type:'progress',event:{phase:'memory',event:'finish'}});
   } else if (task.type === 'import') {
     const input = task.input;
-    send({ type: 'progress', phases: input.noEmbed ? ['collect', 'process', 'write'] : ['collect', 'process', 'vector', 'write'] });
+    const vectorsRequested = input.noEmbed !== true;
+    const filePhases = ['collect', 'process', 'write'];
+    send({ type: 'progress', phases: filePhases });
     send({ type: 'progress', event: { phase: 'import.collect' } });
     const completedPaths: string[] = [];
     if (input.resumeCheckpointId) {
@@ -385,7 +428,7 @@ async function executeTask(task: ProductTask, kind: BrainEngine['kind']) {
     }
     let fileSnapshot: Record<string, unknown> = {};
     const imported = await runStructuredImport(engine, {
-      path: input.path, noEmbed: input.noEmbed, fresh: true, jsonOutput: true, reportFiles: true,
+      path: input.path, noEmbed: true, fresh: true, jsonOutput: true, reportFiles: true,
       includeOffice: input.includeOffice !== false,
       includeImages: input.includeImages !== false,
       documentOcr: input.documentOcr !== false,
@@ -409,24 +452,27 @@ async function executeTask(task: ProductTask, kind: BrainEngine['kind']) {
         },
       },
     });
+    const sourceId=input.sourceId??'default';
+    const embedSlugs=[...new Set((imported.importedSlugs??[]).filter(slug=>slug.length>0&&!slug.includes(':')))];
     result = { ...imported, resumedFiles: completedPaths.length };
+    if(vectorsRequested&&embedSlugs.length){
+      result.embedSlugs=embedSlugs;
+      result.embedSourceId=sourceId;
+      try{
+        assignSearchOptimizeAcceptance(result, await rpc('task.searchOptimize',[sourceId,embedSlugs]) as SearchOptimizeAcceptance);
+      }catch(error){
+        if(abort.signal.aborted)throw error;
+        result.searchOptimizeError=true;
+      }
+    }
     if(imported.errors===0){
-      const sourceId=input.sourceId??'default';
-      const rawPhases=(input.noEmbed?['collect','process','write']:['collect','process','vector','write']).map(phase=>({phase,status:'ok',duration_ms:0,summary:'原文已入库',details:{}}));
       const automaticEnabled=await engine.getConfig('dream.entity_capture.enabled')!=='false';
-      if(automaticEnabled&&(await chooseCaptureModel(engine,{})).ok){
-        const slugs=await rpc('task.captureRequest',[sourceId,imported.importedSlugs]) as string[]|undefined;
-        if(slugs?.length){
-          const checkpoint=input.knowledgeCheckpoint??{phases:{},reports:{}};
-          checkpoint.captureRequests={...checkpoint.captureRequests,[sourceId]:slugs};
-          send({type:'progress',phases:[...rawPhases.map(phase=>phase.phase),'capture_entities']});
-          for(const phase of rawPhases)send({type:'progress',event:{phase:phase.phase,event:'finish'}});
-          const knowledge=await runDreamTask(engine,{phase:'capture_entities',sourceId,slugs,checkpoint,incrementalIngest:true},rawPhases.map(phase=>phase.phase));
-          if(!input.noEmbed)result.knowledgeEmbedded=await embedCapturedKnowledge(engine,knowledge,sourceId);
-          result={...result,status:knowledge.status,phases:[...rawPhases,...knowledge.phases],knowledge};
-        }
-      }else{
-        result={...result,knowledgeStatus:automaticEnabled?'model_unavailable':'disabled'};
+      if(!automaticEnabled)result.knowledgeStatus='disabled';
+      else if(!(await chooseCaptureModel(engine,{})).ok)result.knowledgeStatus='model_unavailable';
+      else{
+        let pending:string[]=[];
+        try{const parsed=JSON.parse(await engine.getConfig('dream.entity_capture.pending.'+sourceId)??'null');if(Array.isArray(parsed?.slugs))pending=parsed.slugs.filter((slug:unknown):slug is string=>typeof slug==='string');}catch{}
+        if(embedSlugs.some(slug=>pending.includes(slug)))result.knowledgeStatus='queued';
       }
     }
   } else if (task.type === 'dream') {
@@ -447,14 +493,21 @@ async function executeTask(task: ProductTask, kind: BrainEngine['kind']) {
     result = { results, errors: results.filter(row => ['blocked_by_failures', 'partial'].includes(row.status)).length };
   } else if (task.type === 'assistant') {
     throw new Error('助手任务由工作台执行器处理');
+  } else if (task.input.searchOptimize === true) {
+    await runSearchOptimize(engine);
+    return;
   } else {
-    result = { ...await runEmbedCore(engine, {
-      stale: true, forceReembed: task.input.forceReembed,
-      catchUp: task.input.catchUp,
+    const embed=task.input;
+    send({ type: 'progress', event: { phase: 'embed', event: 'start', stage: '正在调用向量模型', unit: '段' } });
+    const embedded=await runEmbedCore(engine, {
+      stale: !embed.slugs?.length, slugs: embed.slugs, sourceId: embed.sourceId,
+      forceReembed: embed.forceReembed,
+      catchUp: embed.catchUp,
       batchSize: 100,
       getBatchSize:()=>constrained?32:100,
       signal: abort.signal,
-    }), catchUp: task.input.catchUp === true, forceReembed: task.input.forceReembed === true };
+    });
+    result = { ...embedded, catchUp: embed.catchUp === true, forceReembed: embed.forceReembed === true, ...(embedded.error ? { failures: [{ error: embedded.error }] } : {}) };
   }
   abort.signal.throwIfAborted();
   const failure = task.type === 'dream' || task.type==='import' ? maintenanceFailure(result) : null;

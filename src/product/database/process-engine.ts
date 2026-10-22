@@ -7,6 +7,9 @@ import { databasePriority } from './priority.ts';
 import { databaseRequestContext } from './request-context.ts';
 import { withDeadline } from '../deadline.ts';
 import { createHash } from 'node:crypto';
+import { databaseOccupancy, sqlPreview, type DatabaseObservation } from '../../../shared/database-occupancy.ts';
+
+type RequestObservation = DatabaseObservation & { generation: number; sqlFingerprint?: string; chunkWrite?: { slug: string; sourceId: string; chunks: number } };
 
 type Reply = { id: number; event?: 'started'; value?: unknown; error?: { name: string; message: string; properties: Record<string, unknown> } };
 type Owner = { send: (value: unknown) => void; kill: () => void; exited: Promise<unknown> };
@@ -26,14 +29,15 @@ export class WorkerPgliteEngine {
   private config?: EngineConfig;
   private recovering: Promise<void> | null = null;
   private failure: Error | null = null;
-  private pending = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void; dispose: () => void; start: () => void;
-    observation: { id:number;taskId?:number;method:string;scope?:number;generation:number;enqueuedAt:number;startedAt?:number;sqlFingerprint?:string;chunkWrite?:{slug:string;sourceId:string;chunks:number} } }>();
+  private pending = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void; dispose: () => void; start: () => void; observation: RequestObservation }>();
+  private holding = new Map<number, RequestObservation>();
+  private recent: RequestObservation[] = [];
 
   constructor() { return this.proxy(); }
 
   private proxy(scope?: number, generation?: number): this {
     return new Proxy(this, { has: (target, property) => ['transaction', 'withReservedConnection', 'getPage', 'db'].includes(String(property)) || Reflect.has(target, property), get: (target, property) => {
-      if (['kind', 'connect', 'disconnect', 'interruptAndRecover', 'inspectRequests'].includes(String(property))) {
+      if (['kind', 'connect', 'disconnect', 'interruptAndRecover', 'inspectRequests', 'inspectOccupancy'].includes(String(property))) {
         const value = Reflect.get(target, property);
         return typeof value === 'function' ? value.bind(target) : value;
       }
@@ -60,14 +64,16 @@ export class WorkerPgliteEngine {
       const cancel = () => { try { owner.send({ type: 'cancel', id }); } catch {} };
       let timer: ReturnType<typeof setTimeout> | undefined;
       const dispose = () => { clearTimeout(timer); context?.signal.removeEventListener('abort', cancel); };
-      const observation={id,taskId:context?.taskId,method,scope,generation:this.generation,enqueuedAt:Date.now(),
-        chunkWrite:method==='upsertChunks'?{slug:String(args[0]),sourceId:String((args[2] as {sourceId?:string}|undefined)?.sourceId??'default'),chunks:Array.isArray(args[1])?args[1].length:0}:undefined,
-        sqlFingerprint:method==='executeRaw'||method==='@db.query'?createHash('sha256').update(String(args[0])).digest('hex'):undefined};
+      const preview = method === 'executeRaw' || method === '@db.query' ? sqlPreview(String(args[0] ?? '')) : undefined;
+      const observation: RequestObservation = { id, taskId: context?.taskId, method, scope, generation: this.generation, enqueuedAt: Date.now(),
+        ...(context?.stage ? { stage: context.stage } : {}), ...(context?.file ? { file: context.file } : {}), ...(preview ? { sqlPreview: preview } : {}),
+        chunkWrite: method === 'upsertChunks' ? { slug: String(args[0]), sourceId: String((args[2] as { sourceId?: string } | undefined)?.sourceId ?? 'default'), chunks: Array.isArray(args[1]) ? args[1].length : 0 } : undefined,
+        sqlFingerprint: preview ? createHash('sha256').update(String(args[0])).digest('hex') : undefined };
       const start = () => {
         if (!context || rollback || timer !== undefined) return;
         timer = setTimeout(() => {
           cancel();
-          console.error('[database request timeout]',JSON.stringify(this.inspectRequests().find(request=>request.id===id)));
+          console.error('[database request timeout]', JSON.stringify(this.inspectOccupancy()));
           context.onTimeout(new Error(`数据库请求超时：${method}，${context.timeoutMs ?? 60000} 毫秒内未完成`));
         }, context.timeoutMs ?? 60000);
         timer.unref();
@@ -98,14 +104,42 @@ export class WorkerPgliteEngine {
     }
   }
 
+  private remember(observation: RequestObservation): void {
+    this.recent.push(observation);
+    if (this.recent.length > 40) this.recent.splice(0, this.recent.length - 40);
+  }
+
+  private finishHeld(scope: number | undefined): void {
+    if (scope == null) return;
+    const held = this.holding.get(scope);
+    if (!held) return;
+    this.holding.delete(scope);
+    this.remember({ ...held, finishedAt: Date.now() });
+  }
+
   private rejectPending(error: Error): void {
     for (const request of this.pending.values()) { request.dispose(); request.reject(error); }
     this.pending.clear();
+    const finishedAt = Date.now();
+    for (const held of this.holding.values()) this.remember({ ...held, finishedAt });
+    this.holding.clear();
   }
 
   private accept(reply: Reply): void {
     const request = this.pending.get(reply.id);
     if(reply.event==='started'){if(request){request.observation.startedAt=Date.now();request.start();}return;}
+    if (request && !reply.error && request.observation.scope == null && request.observation.method.endsWith('.open') && typeof reply.value === 'number') {
+      request.observation.startedAt ??= Date.now();
+      this.holding.set(reply.value, request.observation);
+      this.pending.delete(reply.id);
+      request.dispose();
+      request.resolve(reply.value);
+      return;
+    }
+    if (request) {
+      this.remember({ ...request.observation, finishedAt: Date.now() });
+      if (request.observation.method === '@scope.close') this.finishHeld(request.observation.scope);
+    }
     this.pending.delete(reply.id);
     request?.dispose();
     if (!reply.error) { request?.resolve(reply.value); return; }
@@ -121,6 +155,7 @@ export class WorkerPgliteEngine {
   }
 
   inspectRequests() { return [...this.pending.values()].map(request=>({...request.observation})); }
+  inspectOccupancy() { return databaseOccupancy([...this.pending.values()].map(request => request.observation).concat([...this.holding.values()]), this.recent, Date.now()); }
 
   private spawnOwner(recovery = false): void {
     const compiled = /\/(?:~BUN|\$bunfs)\//.test(decodeURIComponent(import.meta.url));

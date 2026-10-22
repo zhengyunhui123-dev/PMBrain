@@ -37,8 +37,12 @@ test('目录工具实际创建并读回，重复使用原目录，拒绝越界�
   expect(statSync(created.path).isDirectory()).toBe(true);
   expect((await execute({ name: '项目甲' }) as any).created).toBe(false);
   for (const name of ['../越界', '..', 'a/b', 'a\\b', 'CON', '结尾.']) await expect(execute({ name })).rejects.toThrow();
-  await expect(execute({ directory: readOnly, name: '越权写入' })).rejects.toThrow();
-  expect(existsSync(join(readOnly, '越权写入'))).toBe(false);
+  const insideRead = await execute({ directory: readOnly, name: '授权新建' }) as any;
+  expect(insideRead.created).toBe(true);
+  expect(statSync(join(readOnly, '授权新建')).isDirectory()).toBe(true);
+  const outside = join(f.root, 'outside-root');
+  await expect(execute({ directory: outside, name: '越权写入' })).rejects.toThrow();
+  expect(existsSync(join(outside, '越权写入'))).toBe(false);
   writeFileSync(join(f.output, '已有文件'), '原文');
   await expect(execute({ name: '已有文件' })).rejects.toThrow();
   expect(readFileSync(join(f.output, '已有文件'), 'utf8')).toBe('原文');

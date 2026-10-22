@@ -22,6 +22,24 @@ async function finished(id:string){
   while(Date.now()<deadline){const run=await runtime.getRun(id);if(run&&!['queued','running'].includes(run.status))return run;await Bun.sleep(40);}
   throw new Error(JSON.stringify(await runtime.getRun(id)));
 }
+async function settledVectors(){
+  const deadline=Date.now()+45000;
+  while(Date.now()<deadline){if(!(await runtime.listRuns()).some(run=>run.kind==='embed_stale'&&['queued','running'].includes(run.status)))return;await Bun.sleep(40);}
+  throw new Error(JSON.stringify(await runtime.listRuns()));
+}
+async function settledKnowledge(){
+  const deadline=Date.now()+45000;
+  while(Date.now()<deadline){
+    const runs=await runtime.listRuns();
+    const busy=runs.some(run=>(run.kind==='embed_stale'||run.kind==='dream_capture_entities')&&['queued','running','paused'].includes(run.status));
+    const pending=await engine.executeRaw<{key:string}>(`SELECT key FROM config WHERE key LIKE 'dream.entity_capture.pending.%'`);
+    const raw=await engine.getConfig('pmbrain.search_optimize');
+    const items=raw?JSON.parse(raw).items:[];
+    if(!busy&&pending.length===0&&(!Array.isArray(items)||items.length===0))return;
+    await Bun.sleep(40);
+  }
+  throw new Error(JSON.stringify({runs:await runtime.listRuns(),pending:await engine.executeRaw(`SELECT key FROM config WHERE key LIKE 'dream.entity_capture.pending.%'`),optimize:await engine.getConfig('pmbrain.search_optimize')}));
+}
 
 beforeAll(async()=>{
   root=mkdtempSync(join(tmpdir(),'pmbrain-auto-knowledge-'));
@@ -58,10 +76,12 @@ test('new source material synchronized by quick maintenance is captured in that 
   await engine.executeRaw("INSERT INTO sources(id,name,local_path) VALUES('knowledge-sync','同步验收',$1) ON CONFLICT(id) DO UPDATE SET local_path=EXCLUDED.local_path",[directory]);
   const run=await runtime.submitDream({preset:'quick',sourceId:'knowledge-sync'}),done=await finished(run.id);
   expect(done.status,JSON.stringify(done.result)).toBe('completed');
+  await settledKnowledge();
   expect(await engine.getPage('people/liu',{sourceId:'knowledge-sync'})).not.toBeNull();
   expect((await engine.getChunks('people/liu',{sourceId:'knowledge-sync'})).every(chunk=>!!chunk.embedded_at)).toBe(true);
   const count=calls,vectors=embeddingCalls;
   expect((await finished((await runtime.submitDream({preset:'quick',sourceId:'knowledge-sync'})).id)).status).toBe('completed');
+  await settledKnowledge();
   expect(calls).toBe(count);expect(embeddingCalls).toBe(vectors);
 },60000);
 
@@ -96,12 +116,18 @@ test('ordinary import embeds the new entity and appending to the same file updat
   const file=join(root,'append.md');writeFileSync(file,'# 追加资料\n\n刘慈欣创作了三体。');
   const first=await finished((await runtime.submitImport({path:file,sourceId:'knowledge-other'})).id);
   expect(first.status,JSON.stringify(first.result)).toBe('completed');
+  expect(first.result).toMatchObject({vectorsPending:true});
+  await settledKnowledge();
   const chunks=await engine.getChunks('people/liu',{sourceId:'knowledge-other'});expect(chunks.length).toBeGreaterThan(0);expect(chunks.every(chunk=>!!chunk.embedded_at)).toBe(true);
   const count=calls;writeFileSync(file,'# 追加资料\n\n刘慈欣创作了三体。\n\n刘慈欣参与了科幻讨论。');
-  expect((await finished((await runtime.submitImport({path:file,sourceId:'knowledge-other'})).id)).status).toBe('completed');expect(calls).toBe(count+1);
+  expect((await finished((await runtime.submitImport({path:file,sourceId:'knowledge-other'})).id)).status).toBe('completed');
+  await settledKnowledge();
+  expect(calls).toBe(count+1);
   const entity=await engine.getPage('people/liu',{sourceId:'knowledge-other'});expect(entity?.compiled_truth).toContain('创作了三体');expect(entity?.compiled_truth).toContain('参与了科幻讨论');
   const vectors=embeddingCalls,after=calls;
-  expect((await finished((await runtime.submitImport({path:file,sourceId:'knowledge-other'})).id)).status).toBe('completed');expect(calls).toBe(after);expect(embeddingCalls).toBe(vectors);
+  expect((await finished((await runtime.submitImport({path:file,sourceId:'knowledge-other'})).id)).status).toBe('completed');
+  await settledKnowledge();
+  expect(calls).toBe(after);expect(embeddingCalls).toBe(vectors);
 },60000);
 
 afterAll(async()=>{
@@ -114,12 +140,13 @@ test('import automatically creates an evidenced entity and source graph within t
   const file=join(root,'first.md');writeFileSync(file,'# 科幻资料\n\n刘慈欣创作了三体。');
   const run=await runtime.submitImport({path:file,sourceId:'knowledge-auto',noEmbed:true});
   const done=await finished(run.id);expect(done.status,JSON.stringify(done.result)).toBe('completed');
+  expect((done.result as {phases?:Array<{phase:string}>}).phases?.some(phase=>phase.phase==='capture_entities')??false).toBe(false);
+  await settledKnowledge();
   expect((await engine.getPage('people/liu',{sourceId:'knowledge-auto'}))?.compiled_truth).toContain('创作了三体');
-  expect((done.result as {phases:Array<{phase:string}>}).phases.some(phase=>phase.phase==='capture_entities')).toBe(true);
   const edges=await engine.executeRaw<{from_slug:string;to_slug:string}>('SELECT f.slug from_slug,t.slug to_slug FROM links l JOIN pages f ON f.id=l.from_page_id JOIN pages t ON t.id=l.to_page_id WHERE f.source_id=$1',['knowledge-auto']);
   expect(edges).toContainEqual({from_slug:'first',to_slug:'people/liu'});
   expect(edges).toContainEqual({from_slug:'people/liu',to_slug:'first'});
-  expect(await engine.executeRaw("SELECT id FROM minion_jobs WHERE queue='pmbrain-product' AND data->>'kind'='dream_capture_entities' AND data->'task'->'input'->'slugs' ? 'first'")).toHaveLength(0);
+  expect((await engine.executeRaw("SELECT id FROM minion_jobs WHERE queue='pmbrain-product' AND data->>'kind'='dream_capture_entities' AND data->'task'->'input'->'slugs' ? 'first'")).length).toBeGreaterThan(0);
 },60000);
 
 test('unchanged import and maintenance reuse receipts; new evidence updates the same entity without losing facts',async()=>{
@@ -127,6 +154,7 @@ test('unchanged import and maintenance reuse receipts; new evidence updates the 
   const again=await runtime.submitImport({path:join(root,'first.md'),sourceId:'knowledge-auto',noEmbed:true});expect((await finished(again.id)).status).toBe('completed');expect(calls).toBe(count);
   const file=join(root,'second.md');writeFileSync(file,'# 新增资料\n\n刘慈欣参与了科幻讨论。');
   expect((await finished((await runtime.submitImport({path:file,sourceId:'knowledge-auto',noEmbed:true})).id)).status).toBe('completed');
+  await settledKnowledge();
   const entity=await engine.getPage('people/liu',{sourceId:'knowledge-auto'});
   expect(entity?.compiled_truth).toContain('创作了三体');expect(entity?.compiled_truth).toContain('参与了科幻讨论');
   const after=calls;
@@ -136,9 +164,19 @@ test('unchanged import and maintenance reuse receipts; new evidence updates the 
 test('invalid ingestion leaves raw material and live database available; retry uses the original task',async()=>{
   invalid=true;
   const file=join(root,'retry.md');writeFileSync(file,'# 重试资料\n\n刘慈欣参与了科幻讨论。');
-  const run=await runtime.submitImport({path:file,sourceId:'knowledge-other',noEmbed:true}),failed=await finished(run.id);
-  expect(failed.status).toBe('failed');expect(await engine.getPage('retry',{sourceId:'knowledge-other'})).not.toBeNull();expect((await engine.executeRaw('SELECT 1 AS alive'))[0].alive).toBe(1);
-  invalid=false;expect((await runtime.retry(run.id))?.id).toBe(run.id);expect((await finished(run.id)).status).toBe('completed');
+  const run=await runtime.submitImport({path:file,sourceId:'knowledge-other',noEmbed:true}),stored=await finished(run.id);
+  expect(stored.status).toBe('completed');expect(await engine.getPage('retry',{sourceId:'knowledge-other'})).not.toBeNull();expect((await engine.executeRaw('SELECT 1 AS alive'))[0].alive).toBe(1);
+  let captureId='';
+  const deadline=Date.now()+45000;
+  while(Date.now()<deadline){
+    const rows=await engine.executeRaw<{id:number;status:string}>(`SELECT id,status FROM minion_jobs WHERE queue='pmbrain-product' AND data->>'kind'='dream_capture_entities' AND data->'task'->'input'->'slugs' ? 'retry'`);
+    const failed=rows.find(row=>row.status==='failed'||row.status==='dead');
+    if(failed){captureId=`task-${failed.id}`;break;}
+    await Bun.sleep(40);
+  }
+  if(!captureId)throw new Error(JSON.stringify(await engine.executeRaw(`SELECT id,status,error_text FROM minion_jobs WHERE data->>'kind'='dream_capture_entities'`)));
+  invalid=false;expect((await runtime.retry(captureId))?.id).toBe(captureId);expect((await finished(captureId)).status).toBe('completed');
+  await settledKnowledge();
   expect((await engine.getPage('people/liu',{sourceId:'knowledge-other'}))?.compiled_truth).toContain('参与了科幻讨论');
   expect((await engine.getPage('people/liu',{sourceId:'knowledge-auto'}))?.compiled_truth).toContain('创作了三体');
 },60000);
@@ -149,10 +187,14 @@ test('retrying a partially failed directory also ingests the earlier successful 
   writeFileSync(join(directory,'z-good.md'),'# 成功资料\n\n刘慈欣创作了三体。这是独立目录恢复记录，编号 A-155-RESUME。');
   const run=await runtime.submitImport({path:directory,sourceId:'knowledge-other',noEmbed:true});
   const initial=await finished(run.id);expect(initial.status,JSON.stringify(initial.result)).toBe('failed');
-  expect(await engine.getConfig('dream.entity_capture.pending.knowledge-other')).toContain('z-good');
+  expect(await engine.getPage('z-good',{sourceId:'knowledge-other'})).not.toBeNull();
   writeFileSync(bad,'# 修复资料\n\n刘慈欣参与了科幻讨论。这是独立目录恢复记录，编号 B-155-RESUME。');
   const count=calls;expect((await runtime.retry(run.id))?.id).toBe(run.id);
-  const done=await finished(run.id);expect(done.status,JSON.stringify(done.result)).toBe('completed');expect(calls).toBe(count+2);
+  const done=await finished(run.id);expect(done.status,JSON.stringify(done.result)).toBe('completed');
+  await settledKnowledge();
+  expect(calls).toBeGreaterThanOrEqual(count+1);
   expect(await engine.getConfig('dream.entity_capture.pending.knowledge-other')).toBeNull();
+  expect((await engine.getPage('z-good',{sourceId:'knowledge-other'}))?.compiled_truth).toContain('A-155-RESUME');
+  expect((await engine.getPage('a-bad',{sourceId:'knowledge-other'}))?.compiled_truth).toContain('B-155-RESUME');
   expect((await engine.getPage('people/liu',{sourceId:'knowledge-other'}))?.compiled_truth).toContain('[Source: z-good]');
 },90000);

@@ -182,7 +182,7 @@ export function importBuildDetail(run: ImportRunSnapshot | null): string {
   if (run.status === 'cancelled') return '导入已取消。已经写入的资料会保留。';
   if (run.status === 'failed') return '导入没有完成。';
   if (run.status === 'queued') return '正在等待开始导入。';
-  return '正在读取资料并写入知识库。配置了向量模型时会一并写入向量。';
+  return '正在把资料写入知识库。完成后可以先搜索，搜索优化会在后台继续。';
 }
 
 export function suggestedChatModel(current: string | undefined, choices: Array<{ value: string }>): string | null {

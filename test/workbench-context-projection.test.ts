@@ -337,7 +337,7 @@ test('50、200、500 轮小窗口仍留全文，当前任务的限制还在', as
       expect(priors.every(item => !item.includes('过期摘要标记'))).toBe(true);
     }
     const files = readdirSync(dir).filter(name => name.endsWith('.json') && name !== 'agents.json' && name !== 'assistant.json');
-    expect(files).toEqual([`${conversation.id}.json`]);
+    expect(files.sort()).toEqual([`${conversation.id}.json`, 'conversation-index.json'].sort());
     expect(existsSync(join(dir, `${conversation.id}.sqlite`))).toBe(false);
   }
 }, 30000);

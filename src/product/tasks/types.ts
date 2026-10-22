@@ -67,10 +67,10 @@ export type ProductTask =
   | { type: 'sync'; input: { timeoutMs?: number } }
   | { type: 'import'; input: ImportTaskInput }
   | { type: 'dream'; input: DreamTaskInput }
-  | { type: 'embed'; input: { catchUp?: boolean; forceReembed?: boolean; timeoutMs?: number } };
+  | { type: 'embed'; input: { catchUp?: boolean; forceReembed?: boolean; timeoutMs?: number; sourceId?: string; slugs?: string[]; searchOptimize?: boolean } };
 
 export type TaskWorkerMessage =
-  | { type: 'deferred'; phase?:'capture_entities' }
+  | { type: 'deferred'; phase?: 'capture_entities' | 'search_optimize' }
   | { type: 'progress'; largeDocument?: import('../../core/document/trusted-large-document.ts').LargeDocumentProgress; syncScan?: import('../../../shared/task-progress.ts').TaskProductProgress['syncScan']; page?: { slug: string; title: string; type: string }; event?: Parameters<import('./progress-adapter').TaskProgressAdapter['event']>[0]; phases?: string[]; scope?: { name: string; index: number; total: number } }
   | { type: 'rpc'; id: number; method: string; args: unknown[]; scope?: number }
   | { type: 'log'; text: string }

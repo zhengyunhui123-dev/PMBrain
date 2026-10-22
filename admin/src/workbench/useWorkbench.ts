@@ -3,6 +3,7 @@ import { defaultAssistant, type KnowledgeAssistantSettings, type WorkbenchConver
 import { filePayload } from './composer-attachments';
 import { CHAT_MODEL_DEFAULT_KEY, CHAT_MODEL_EVENT, CHAT_MODEL_KEY, rememberChatModel, rememberedChatModel } from './chat-model';
 import { productFetch } from '../lib/product-fetch';
+import { applyConversationDelta, watchConversation } from './conversation-sync';
 import {useProductTasks} from '../product/TaskActivity';
 import type { WorkbenchAgent } from '../../../shared/workbench-agents';
 
@@ -37,7 +38,7 @@ export function mergePolledConversation(current: WorkbenchConversation | undefin
     }),
   };
 }
-export function useWorkbench({ serviceReady = true, databaseReady = true }: { serviceReady?: boolean; databaseReady?: boolean } = {}) {
+export function useWorkbench({ serviceReady = true, databaseReady = true, surface = 'workbench' }: { serviceReady?: boolean; databaseReady?: boolean; surface?: 'home' | 'workbench' } = {}) {
   const [rows, setRows] = useState<ConversationRow[]>([]);
   const [models, setModels] = useState<WorkbenchModel[]>([]);
   const [modelsLoaded, setModelsLoaded] = useState(false);
@@ -115,21 +116,35 @@ export function useWorkbench({ serviceReady = true, databaseReady = true }: { se
   const memoryPending=conversation?.messages.some(message=>message.memory&&['pending','queued','running'].includes(message.memory.status))??false;
   useEffect(() => {
     if ((!running&&!memoryPending&&!memoryTaskActive) || !conversation) return;
-    const id = conversation.id; let stopped = false; let timer: ReturnType<typeof setTimeout>;
-    const poll = async () => {
-      try {
-        const next = await workbenchRequest<WorkbenchConversation>(`/conversations/${id}?lite=1`);
-        const edits = next.messages.flatMap(message => message.toolCalls ?? []).filter(call => (call.name === 'assistant_create' || call.name === 'assistant_update') && call.status === 'complete' && !seenAgentEdits.current.has(call.id));
-        if (edits.length) { for (const call of edits) seenAgentEdits.current.add(call.id); void refresh(); }
-        if (stopped || active.current !== id) return;
-        setConversation(current => mergePolledConversation(current, next));
-        if (memoryTaskActive||next.messages.some(m => m.status === 'running'||(m.memory&&['pending','queued','running'].includes(m.memory.status)))) timer = setTimeout(poll, next.messages.some(m=>m.status==='running')?200:1000);
-        else await refresh();
-      } catch (reason) { if (!stopped) { setError(reason instanceof Error ? reason.message : String(reason)); timer = setTimeout(poll, 2500); } }
+    const id = conversation.id;
+    const hidden = () => {
+      if (document.visibilityState === 'hidden') return true;
+      if (surface === 'home') return document.querySelector('.home-page') == null;
+      return document.querySelector('.product-workbench')?.hasAttribute('hidden') === true;
     };
-    timer = setTimeout(poll, 150);
-    return () => { stopped = true; clearTimeout(timer); };
-  }, [conversation?.id, running, memoryPending,memoryTaskActive]);
+    return watchConversation({
+      id,
+      path: since => `/conversations/${id}?lite=1${since ? `&since=${encodeURIComponent(since)}` : ''}`,
+      request: workbenchRequest,
+      hidden,
+      onUpdate: next => {
+        if (next.error) { setError(next.error); return; }
+        if (active.current !== id || next.unchanged) return;
+        const calls = next.message?.toolCalls ?? next.conversation?.messages.flatMap(message => message.toolCalls ?? []) ?? [];
+        const edits = calls.filter(call => (call.name === 'assistant_create' || call.name === 'assistant_update') && call.status === 'complete' && !seenAgentEdits.current.has(call.id));
+        if (edits.length) { for (const call of edits) seenAgentEdits.current.add(call.id); void refresh(); }
+        let settled = false;
+        setConversation(current => {
+          const applied = applyConversationDelta(current, next);
+          const merged = applied ? mergePolledConversation(current, applied) : current;
+          const messages = merged?.messages ?? [];
+          settled = !messages.some(message => message.status === 'running' || (message.memory && ['pending', 'queued', 'running'].includes(message.memory.status)));
+          return merged;
+        });
+        if (settled && !memoryTaskActive) void refresh();
+      },
+    });
+  }, [conversation?.id, running, memoryPending, memoryTaskActive, surface]);
   const select = async (id?: string) => {
     active.current = id; setConversation(undefined); setError('');
     if (!id) return;

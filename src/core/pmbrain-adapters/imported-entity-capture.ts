@@ -17,7 +17,8 @@ export async function enqueueImportedEntityCapture(engine: BrainEngine, modelRea
       const [pending]=await tx.executeRaw<{value:string}>('SELECT value FROM config WHERE key=$1 FOR UPDATE',[request.key]);
       if(pending?.value!==request.value)return null;
       if(ownerJobId){
-        const owner=await tx.executeRaw(`SELECT id FROM minion_jobs WHERE id=$1 AND (data->'task'->>'type'='import' OR data->'task'->'input'->>'preset' IN ('quick','full')
+        const owner=await tx.executeRaw(`SELECT id FROM minion_jobs WHERE id=$1 AND status IN ('waiting','active','waiting-children','delayed')
+          AND (data->'task'->>'type'='import' OR data->'task'->'input'->>'preset' IN ('quick','full')
           OR (data->>'fileSession'='true' AND data->'task'->'input'->>'phase' IS DISTINCT FROM 'sync'))`,[ownerJobId]);
         if(owner.length)return null;
       }

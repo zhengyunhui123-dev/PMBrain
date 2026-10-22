@@ -2,6 +2,7 @@ import type {ChatBlock,ChatMessage,ChatOpts,ChatToolDef} from '../../core/ai/gat
 import {chatOutputLimit} from '../../core/ai/gateway';
 import {defaultMaxOutputTokens} from '../../core/ai/model-compatibility';
 import {classifyChatError} from '../../core/ai/errors';
+import {classifyProductError} from '../errors';
 import {contextBudget,estimateTokens,summaryInputBudget} from './context';
 import type {WorkbenchSummarizer} from './service';
 
@@ -18,6 +19,8 @@ export function contextFailure(error:unknown):{code:string;message:string}{
   const kind=classifyChatError(error);
   if(kind==='network')return {code:'model_connection_lost',message:`模型连接中断，自动恢复未能完成。已有资料和对话已保存，可重新生成。服务返回：${raw}`};
   if(kind==='timeout')return {code:'model_request_timeout',message:`模型等待超时，已有资料和对话已保存。${raw}`};
+  const identity=classifyProductError(error);
+  if(identity.code!=='unknown'&&identity.code!=='model_error')return {code:identity.code,message:raw};
   return {code:'request_failed',message:raw};
 }
 export function chatMessageTokens(messages:readonly ChatMessage[]):number{

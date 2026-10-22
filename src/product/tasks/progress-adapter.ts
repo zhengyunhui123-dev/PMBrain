@@ -1,4 +1,5 @@
 import { taskName, type TaskProductProgress } from '../../../shared/task-progress.ts';
+import { classifyProductError } from '../errors.ts';
 import { phaseHasPendingWork,dreamPhaseDetail } from '../../../shared/dream-phase-state.ts';
 import { importOutcome } from '../../../shared/import-outcome.ts';
 
@@ -47,7 +48,7 @@ export class TaskProgressAdapter {
     if (saved?.phaseProgress) this.resumedPhase = { id: saved.phaseProgress.id, elapsedMs: saved.phaseProgress.elapsedMs };
     if (!saved) {
       if (kind === 'import_path') this.plan(['collect', 'process', 'vector', 'write']);
-      else if (kind === 'embed_stale') this.plan(['embed']);
+      else if (kind === 'embed_stale') { this.plan(['embed']); const step = this.view.steps[0]; if (step) step.label = '优化搜索'; }
       else if (kind === 'sync_all') this.plan(['sync']);
     }
   }
@@ -289,8 +290,19 @@ export function finishTaskProgress(view: TaskProductProgress, status: string, re
       next.total=next.processed+remaining;
       next.percent=Math.floor(next.processed/next.total*100);
     }
+    const importedCount = Number(data.imported ?? 0);
+    const lead = importedCount > 0 ? `已导入 ${importedCount} 份资料，可以开始使用` : '导入完成';
+    const tail = data.searchOptimizeError ? '搜索优化未能开始'
+      : data.searchOptimizePaused ? '搜索优化已暂停，新资料已记入待优化'
+      : typeof data.searchOptimizeNotice === 'string' && data.searchOptimizeNotice ? data.searchOptimizeNotice
+      : data.vectorsPending === true ? '正在后台优化搜索。'
+      : '';
+    const knowledgeBase = tail ? ''
+      : data.knowledgeStatus === 'disabled' ? '原文已入库，自动实体整理未启用'
+      : data.knowledgeStatus === 'model_unavailable' ? '原文已入库，实体模型未配置'
+      : '';
     next.stage = remaining>0 || data.status === 'partial' || next.steps.some(step => step.status === 'failed') ? '部分完成，请查看未完成步骤'
-      : next.name === '导入资料' ? data.knowledgeStatus==='disabled'?'原文已入库，自动实体整理未启用':data.knowledgeStatus==='model_unavailable'?'原文已入库，实体模型未配置':'导入完成' : `${next.name}完成`;
+      : next.name === '导入资料' ? (tail ? `${lead}。${tail}` : knowledgeBase || '导入完成') : `${next.name}完成`;
     for (const step of next.steps) {
       if (step.status === 'running') step.status = 'completed';
       else if (step.status === 'pending' && !Array.isArray(data.phases)&&!step.phases.includes('capture_entities')) step.status = 'skipped';
@@ -312,6 +324,10 @@ export function finishTaskProgress(view: TaskProductProgress, status: string, re
       const ai=data.phases.filter((phase:any)=>['synthesize','extract_atoms','synthesize_concepts','patterns'].includes(phase.phase));
       if(ai.length&&ai.every((phase:any)=>phase.status==='skipped'))next.stage='维护完成，AI 提炼未执行';
     }
+  } else if (status === 'paused') {
+    for (const step of next.steps) if (step.status === 'running') step.status = 'pending';
+    next.stage = '已暂停，已完成的部分保留';
+    next.errorReason = '已暂停。新导入的资料会记入待优化，不会自动开始。';
   } else if (status === 'failed' || status === 'cancelled') {
     for (const step of next.steps) if (step.status === 'running') step.status = status === 'failed' ? 'failed' : 'pending';
     next.errorReason = status === 'failed' ? taskErrorReason(error) : null;
@@ -319,6 +335,9 @@ export function finishTaskProgress(view: TaskProductProgress, status: string, re
       const failed = data.phases?.find((phase: any) => phase.error?.message);
       if (failed?.error?.message) next.errorReason = failed.error.message;
       next.stage = '任务未完成';
+    } else if (next.name === '优化搜索' || next.name === '向量化') {
+      next.stage = '已暂停，已完成的部分保留';
+      next.errorReason = null;
     }
   } else if (status === 'queued' && next.stage !== '等待前面的整理任务完成') next.stage = '等待执行';
   next.completedSteps = next.steps.filter(step => step.status === 'completed').length;
@@ -345,7 +364,9 @@ export function finishTaskProgress(view: TaskProductProgress, status: string, re
   }
   if(next.budget)applyTaskBudget(next,next.budget);
   if(next.budget?.historicalCostUnknown)next.detail='旧版任务此前的总费用无法完整核算；此处总预算从升级后的首次继续起累计，旧版历史费用未计入。';
-  if(next.budget?.reason&&['failed','cancelled'].includes(status)){next.stage=next.budget.reason==='no_pricing'?'缺少模型价格，待继续':'费用预算不足，待继续';next.errorReason=next.budget.reason==='no_pricing'?'请同步模型价格或填写单价后继续；已完成成果保留。':'请提高整次费用上限后继续；同一任务的累计费用不会清零。';}
+  if(next.budget?.reason&&['failed','cancelled'].includes(status)){next.stage=next.budget.reason==='no_pricing'?'缺少模型价格，待继续':'费用预算不足，待继续';next.errorReason=next.budget.reason==='no_pricing'?'请同步模型价格或填写单价后继续；已完成成果保留。':'请提高整次费用上限后继续；同一任务的累计费用不会清零。';next.errorCode='budget_stop';}
+  else if(status==='cancelled')next.errorCode='user_cancel';
+  else { const identity=classifyProductError(next.errorReason??error??''); if(identity.code!=='unknown')next.errorCode=identity.code; }
   return next;
 }
 

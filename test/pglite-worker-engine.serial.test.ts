@@ -105,6 +105,37 @@ for (const transaction of [false, true]) test(`排队等待不消耗 SQL 执行�
   } finally { release(); await held; await settled; }
 });
 
+test('打开的事务能说明占用者和等待时长，完成的语句只保留预览', async () => {
+  let entered!: () => void;
+  let release!: () => void;
+  const started = new Promise<void>(resolve => { entered = resolve; });
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const held = withDatabaseRequest({ taskId: 771, token: 'holder-secret', signal: new AbortController().signal, onTimeout: () => {}, stage: '写入知识库', file: '资料/规模验收.md' }, () => engine.transaction(async tx => {
+    await tx.executeRaw('SELECT 1 /* occupancy-marker */');
+    entered();
+    await gate;
+  }));
+  await started;
+  const pending = withDatabaseRequest({ taskId: 772, token: 'waiter-secret', signal: new AbortController().signal, onTimeout: () => {} }, () => engine.executeRaw('SELECT $1', ['secret-body']));
+  void pending.catch(() => {});
+  try {
+    await Bun.sleep(40);
+    const report = (engine as unknown as WorkerPgliteEngine).inspectOccupancy();
+    expect(report.holder?.taskId).toBe(771);
+    expect(report.holder?.method).toContain('.open');
+    expect(report.holder?.stage).toBe('写入知识库');
+    expect(report.holder?.file).toBe('资料/规模验收.md');
+    expect(report.holder?.heldMs ?? 0).toBeGreaterThan(0);
+    expect(report.waiting.find(row => row.taskId === 772)?.waitedMs ?? 0).toBeGreaterThan(0);
+    expect(JSON.stringify(report)).not.toContain('holder-secret');
+    expect(JSON.stringify(report)).not.toContain('waiter-secret');
+    expect(JSON.stringify(report)).not.toContain('secret-body');
+    expect(report.recent.some(row => row.sqlPreview?.includes('occupancy-marker'))).toBe(true);
+  } finally { release(); await held; await pending; }
+  const after = (engine as unknown as WorkerPgliteEngine).inspectOccupancy();
+  expect(after.recent.find(row => row.taskId === 772)?.sqlPreview).toBe('SELECT $1');
+});
+
 test('数据库同步 SQL 不返回时可结束唯一执行进程，原生重开保留提交并回滚未提交内容', async () => {
   const owner = engine as unknown as WorkerPgliteEngine;
   await engine.putPage('recovery/committed', {type:'note',title:'已提交',compiled_truth:'停止不能丢失这份资料'});

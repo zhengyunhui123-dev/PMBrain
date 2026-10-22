@@ -265,7 +265,7 @@ export function CreateLibrary({ onDone, onCreated, onOpenSettings, visible = tru
       </>}
       {step === 'done' && <>
         <h1>知识库已经可以使用</h1>
-        <p>{keywordOnly ? '本次选择了仅导入，可先用关键词搜索资料。配置模型后再使用 AI 整理、语义搜索和问答。' : '现在可以打开知识助手，试着问：“这份资料主要讲了什么？”'}</p>
+        <p>{keywordOnly ? '本次选择了仅导入，可先用关键词搜索资料。配置模型后再使用 AI 整理、语义搜索和问答。' : '资料已经入库，可以开始使用。正在后台优化搜索。'}</p>
         <div className="create-actions">
           <button type="button" className="home-primary" onClick={() => onDone(finishTarget)}>{intent === 'organize' ? '去知识整理' : intent === 'ask' ? '去知识助手' : intent === 'import' ? '继续导入' : '进入首页'}</button>
           <button type="button" onClick={() => onDone('home')}>进入首页</button>
