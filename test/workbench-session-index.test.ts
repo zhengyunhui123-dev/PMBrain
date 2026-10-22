@@ -41,7 +41,7 @@ test('会话列表只记摘要，正在生成的回答先记增量，完整历�
 
 test('当前回答增量不重复发送整段历史，隐藏页面降低刷新频率', () => {
   const now = '2026-10-22T00:00:00.000Z';
-  const thread: WorkbenchConversation = { id: '11111111-1111-4111-8111-111111111111', title: '增量', model: 'local', knowledge: false, createdAt: now, updatedAt: now, revision: 3, messages: [{ id: '22222222-2222-4222-8222-222222222222', role: 'assistant', text: '正在写', status: 'running', createdAt: now, toolCalls: [{ id: 'tool', name: 'local_copy', status: 'running', input: {} }] }] };
+  const thread: WorkbenchConversation = { id: '11111111-1111-4111-8111-111111111111', title: '增量', model: 'local', knowledge: false, createdAt: now, updatedAt: now, revision: 3, messages: [{ id: '22222222-2222-4222-8222-222222222222', role: 'assistant', text: '正在写', status: 'running', createdAt: now, toolCalls: [{ id: 'tool', name: 'local_copy', status: 'running', input: '{}', startedAt: now }] }] };
   const cursor = conversationDelta(thread).cursor;
   expect(conversationDelta(thread, cursor).unchanged).toBe(true);
   thread.messages[0]!.text = '正在写更多';

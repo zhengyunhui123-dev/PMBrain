@@ -24,7 +24,7 @@ import { parentPort } from 'node:worker_threads';
 import { format } from 'node:util';
 import { stat } from 'node:fs/promises';
 import { setImmediate as yieldExecution } from 'node:timers/promises';
-import { streamFileHash, assertImportFileSize } from './resource-guard.ts';
+import { streamFileHash, assertImportFileSize, isOversizedImportError, resourceProtectionAbortsTask } from './resource-guard.ts';
 import { relative, isAbsolute, join } from 'node:path';
 import { SyncFilesDeferred, type SyncFileRuntime } from '../../core/sync-file-runtime.ts';
 import {EntityCaptureWindowDeferred} from '../../core/pmbrain-adapters/entity-capture-window.ts';
@@ -338,13 +338,15 @@ async function runSearchOptimize(engine: BrainEngine): Promise<void> {
     }
     const next = items[0]!;
     const revision = next.revision;
-    send({ type: 'progress', event: { phase: 'embed', done, total: done + items.length, unit: '份资料' } });
+    send({ type: 'progress', event: { phase: 'embed', done, total: Number.isFinite(state.total) ? Number(state.total) : done + items.length, unit: '份资料' } });
     await rpc('task.searchOptimizeForgetPage', [next.sourceId, next.slug]);
     let embedded: Awaited<ReturnType<typeof runEmbedCore>>;
     try {
       embedded = await runEmbedCore(engine, {
         slugs: [next.slug],
         sourceId: next.sourceId,
+        batchSize: 32,
+        getBatchSize: () => constrained ? 8 : 32,
         quiet: true,
         signal: abort.signal,
         pauseCheck: async () => Boolean((await rpc('task.searchOptimizeState', []) as { paused?: boolean }).paused),
@@ -466,7 +468,12 @@ async function executeTask(task: ProductTask, kind: BrainEngine['kind']) {
           send({ type: 'progress', event: { phase: 'import.process', file: path } });
           const file = await stat(path);
           fileSnapshot = { absolutePath: path, size: file.size, mtimeMs: file.mtimeMs, modelFingerprint: taskModelFingerprint() };
-          await rpc('task.inputFile', [{ path, size: file.size, mtimeMs: file.mtimeMs }]);
+          try {
+            await rpc('task.inputFile', [{ path, size: file.size, mtimeMs: file.mtimeMs }]);
+          } catch (error) {
+            if (!isOversizedImportError(error)) throw error;
+            return error instanceof Error ? error.message : String(error);
+          }
         },
         onFile: async progress => {
           send({ type: 'progress', event: { phase: 'import.files', done: Number(progress.processed) } });
@@ -556,7 +563,7 @@ parentPort!.on('message', message => {
     const waiter = pending.get(message.id);
     pending.delete(message.id);
     if (message.error) {
-      if(message.error.startsWith('资源保护：'))abort.abort(new Error(message.error));
+      if(resourceProtectionAbortsTask(message.error))abort.abort(new Error(message.error));
       waiter?.reject(new Error(message.error));
     }
     else waiter?.resolve(message.value);

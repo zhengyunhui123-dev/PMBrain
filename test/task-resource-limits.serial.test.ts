@@ -10,6 +10,7 @@ import { MinionQueue } from '../src/core/minions/queue.ts';
 import { ProductTaskRuntime } from '../src/product/tasks/runtime.ts';
 import { TaskEngineHost } from '../src/product/tasks/engine-host.ts';
 import { TaskResourceGuard, streamFileHash, copyFileSnapshot, assertImportFileSize } from '../src/product/tasks/resource-guard.ts';
+import { runStructuredImport } from '../src/commands/import.ts';
 import { assertSafeE2eDatabaseUrl } from './helpers/db-guard.ts';
 import { FileProjection } from '../src/product/tasks/file-projection.ts';
 import { taskArtifactPath } from '../src/product/tasks/checkpoint.ts';
@@ -369,3 +370,53 @@ test('明细日志合并重复活动并压缩，流式重载保留最新状态�
   const restored=new FileProjection();await restored.load(900023);
   expect(restored.details(900023)?.rows[0].error).toBe('原错误保留');
 });
+
+test('一份资料超过大小上限时，这一份记为失败，后面的资料继续导入', async () => {
+  const dir = join(home, 'oversized-import');
+  mkdirSync(dir);
+  writeFileSync(join(dir, '3-keep.md'), '# 后面继续\n\n这一份必须入库。');
+  writeFileSync(join(dir, '2-huge.pptx'), 'not a presentation');
+  writeFileSync(join(dir, '1-first.md'), '# 前面先到\n\n这一份先入库。');
+  const seen: string[] = [];
+  const result = await runStructuredImport(engine, {
+    path: dir, noEmbed: true, fresh: true, jsonOutput: true, includeOffice: true,
+  }, {
+    runtime: {
+      signal: new AbortController().signal,
+      beforeFile: async path => {
+        if (path.endsWith('2-huge.pptx')) return '资源保护：文件过大（9 bytes，当前格式上限 8 bytes）：2-huge.pptx。请拆分后继续。';
+      },
+      onFile: async progress => { seen.push(String(progress.path)); },
+    },
+  });
+  const hugeAt = seen.findIndex(path => path.endsWith('2-huge.pptx'));
+  const laterAt = seen.findIndex(path => path.endsWith('1-first.md'));
+  expect(hugeAt).toBeGreaterThanOrEqual(0);
+  expect(laterAt).toBeGreaterThan(hugeAt);
+  expect(result.imported).toBe(2);
+  expect(result.errors).toBe(1);
+  expect(result.failures).toEqual([{ path: '2-huge.pptx', error: '资源保护：文件过大（9 bytes，当前格式上限 8 bytes）：2-huge.pptx。请拆分后继续。' }]);
+  expect((await engine.getPage('3-keep'))?.title).toBe('后面继续');
+  expect((await engine.getPage('1-first'))?.title).toBe('前面先到');
+  expect(await engine.getPage('2-huge')).toBeNull();
+}, 60000);
+
+test('磁盘空间不足仍然停止整批，不会把后面的资料记成已处理', async () => {
+  const dir = join(home, 'disk-stop-import');
+  mkdirSync(dir);
+  writeFileSync(join(dir, 'disk-b.md'), '# 磁盘乙\n\n不应入库。');
+  writeFileSync(join(dir, 'disk-a.md'), '# 磁盘甲\n\n不应在磁盘失败后继续。');
+  const seen: string[] = [];
+  await expect(runStructuredImport(engine, {
+    path: dir, noEmbed: true, fresh: true, jsonOutput: true,
+  }, {
+    runtime: {
+      signal: new AbortController().signal,
+      beforeFile: async () => { throw new Error('资源保护：磁盘空间不足，已停止导入。'); },
+      onFile: async progress => { seen.push(String(progress.path)); },
+    },
+  })).rejects.toThrow('磁盘空间不足');
+  expect(seen).toEqual([]);
+  expect(await engine.getPage('disk-a')).toBeNull();
+  expect(await engine.getPage('disk-b')).toBeNull();
+}, 60000);

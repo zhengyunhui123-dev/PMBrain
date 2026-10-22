@@ -1,4 +1,4 @@
-import type { BrainEngine, ReservedConnection } from '../../core/engine.ts';
+import type { BrainEngine, ReservedConnection, PageIdentity } from '../../core/engine.ts';
 import type { Page, PageFilters } from '../../core/types.ts';
 import { taskModelFingerprint } from './checkpoint.ts';
 import type { TaskWorkerMessage } from './types.ts';
@@ -22,7 +22,7 @@ type Scope = {
   snapshot: PageSnapshot;
 };
 
-function pageFingerprint(page: Page | null): string {
+function pageFingerprint(page: PageIdentity | null): string {
   return JSON.stringify(page ? [page.id, page.content_hash, page.updated_at, page.deleted_at] : null);
 }
 
@@ -259,7 +259,7 @@ export class TaskEngineHost {
             if (!rows.length || rows[0].archived) throw new Error(`Source ${sourceId} 不存在或已归档`);
             if (this.syncFile && rows[0].local_path !== this.syncFile.sourceRoot) throw new Error(`Source ${sourceId} 的资料路径已改变，请继续同步以重新扫描`);
           });
-          const current = await target.getPage(slug, { sourceId, includeDeleted: true });
+          const current = await target.getPageIdentity(slug, { sourceId, includeDeleted: true });
           const expected = this.pageVersion(key, snapshot);
           if (expected !== undefined && pageFingerprint(current) !== expected) {
             throw new Error(`页面 ${sourceId}:${slug} 在处理期间已改变，请重新执行`);
@@ -295,8 +295,8 @@ export class TaskEngineHost {
       if (method === 'executeRaw' && /INSERT\s+INTO\s+gbrain_cycle_locks/i.test(String(args[0]))) {
         for (const row of result as Array<{ id: string }>) this.cycleLocks.add(row.id);
       }
-      if (method === 'getPage') {
-        const page = result as Page | null;
+      if (method === 'getPage' || method === 'getPageIdentity') {
+        const page = result as PageIdentity | null;
         const sourceId = page?.source_id ?? (args[1] as { sourceId?: string } | undefined)?.sourceId ?? 'default';
         const readKey = JSON.stringify([sourceId, String(args[0])]);
         if (this.pageVersion(readKey, snapshot) === undefined) (snapshot?.pages ?? this.pages).set(readKey, pageFingerprint(page));

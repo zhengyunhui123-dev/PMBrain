@@ -125,6 +125,16 @@ export interface BatchOpts {
   linkAudit?: import('./pmbrain-adapters/task-relations.ts').LinkAudit;
 }
 
+export type PageIdentity = Pick<Page, 'id' | 'source_id' | 'slug' | 'content_hash' | 'updated_at' | 'deleted_at'>;
+
+export interface ChunkReadOpts {
+  sourceId?: string;
+  limit?: number;
+  afterChunkIndex?: number;
+  maxBytes?: number;
+  staleOnly?: boolean;
+}
+
 /**
  * Chunk writes replace the page's complete chunk manifest by default.
  * Trusted structured-document imports opt into merge-only batches so a
@@ -708,6 +718,7 @@ export interface BrainEngine {
    * by `restore_page` flow, and by operator diagnostics.
    */
   getPage(slug: string, opts?: GetPageOpts): Promise<Page | null>;
+  getPageIdentity(slug: string, opts?: { sourceId?: string; includeDeleted?: boolean }): Promise<PageIdentity | null>;
   /**
    * Insert or update a page. When `opts.sourceId` is omitted, the row is
    * written under the schema DEFAULT ('default'). When provided, `source_id`
@@ -1016,7 +1027,7 @@ export interface BrainEngine {
    * same-slug source (importCodeFile uses this for incremental embedding
    * reuse, which would then attach the wrong source's embeddings).
    */
-  getChunks(slug: string, opts?: { sourceId?: string }): Promise<Chunk[]>;
+  getChunks(slug: string, opts?: ChunkReadOpts): Promise<Chunk[]>;
   /**
    * Count chunks across the brain where embedding IS NULL.
    * Pre-flight short-circuit for `embed --stale` so a 100%-embedded brain

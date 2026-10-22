@@ -10,6 +10,7 @@ import {configPath} from '../src/core/config.ts';
 import {assertSafeE2eDatabaseUrl} from './helpers/db-guard.ts';
 import {importFile} from '../src/core/import-file.ts';
 import {resetPgliteState} from './helpers/reset-pglite.ts';
+import {loadSearchOptimize} from '../src/product/tasks/search-optimize-store.ts';
 
 let root:string,engine:BrainEngine,runtime:ProductTaskRuntime,server:ReturnType<typeof Bun.serve>;
 let calls=0,embeddingCalls=0,invalid=false;
@@ -33,9 +34,8 @@ async function settledKnowledge(){
     const runs=await runtime.listRuns();
     const busy=runs.some(run=>(run.kind==='embed_stale'||run.kind==='dream_capture_entities')&&['queued','running','paused'].includes(run.status));
     const pending=await engine.executeRaw<{key:string}>(`SELECT key FROM config WHERE key LIKE 'dream.entity_capture.pending.%'`);
-    const raw=await engine.getConfig('pmbrain.search_optimize');
-    const items=raw?JSON.parse(raw).items:[];
-    if(!busy&&pending.length===0&&(!Array.isArray(items)||items.length===0))return;
+    const optimize=await loadSearchOptimize(engine);
+    if(!busy&&pending.length===0&&optimize.pending===0)return;
     await Bun.sleep(40);
   }
   throw new Error(JSON.stringify({runs:await runtime.listRuns(),pending:await engine.executeRaw(`SELECT key FROM config WHERE key LIKE 'dream.entity_capture.pending.%'`),optimize:await engine.getConfig('pmbrain.search_optimize')}));

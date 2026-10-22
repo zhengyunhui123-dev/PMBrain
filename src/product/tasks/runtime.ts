@@ -30,9 +30,9 @@ import { claimMaintenanceCapture } from './maintenance-orchestration.ts';
 import { enqueueImportedEntityCapture } from './imported-entity-capture.ts';
 import {
   SEARCH_OPTIMIZE_JOB_KEY, SEARCH_OPTIMIZE_NOTICE, SEARCH_OPTIMIZE_PAUSED, assignSearchOptimizeAcceptance,
-  addCapturedSearchOptimize, addSearchOptimize, finishSearchOptimize, loadSearchOptimize, mutateSearchOptimize, searchOptimizeRevisions,
   type SearchOptimizeAcceptance,
 } from './search-optimize.ts';
+import { enqueueCapturedSearchOptimize, enqueueSearchOptimize, completeSearchOptimize, loadSearchOptimize, pauseSearchOptimize } from './search-optimize-store.ts';
 import { TaskResourceGuard, PRODUCT_QUEUE_CAPACITY, isSyncCapacityError, type TaskResourceOptions } from './resource-guard.ts';
 import { WorkbenchMemoryCoordinator, memoryVersion, type WorkbenchMemoryTask } from '../workbench/memory';
 import { WorkbenchStore } from '../workbench/store';
@@ -407,15 +407,15 @@ export class ProductTaskRuntime {
   }
 
   async acceptSearchOptimize(sourceId: string, slugs: string[]): Promise<SearchOptimizeAcceptance> {
-    const state = await mutateSearchOptimize(this.engine, async (current, tx) => addSearchOptimize(current, sourceId, slugs, true, await searchOptimizeRevisions(tx, sourceId, slugs)));
-    const ensured = await this.ensureSearchOptimizeJob().catch(error => ({ job: null, queued: false, error: error instanceof Error ? error.message : String(error) }));
+    const state = await enqueueSearchOptimize(this.engine, sourceId, slugs);
+    const ensured = await this.ensureSearchOptimizeJob().catch(error => ({ job: null, queued: false, error: error instanceof Error ? error.message : String(error), notice: undefined }));
     return {
       paused: state.paused,
       queued: ensured.queued && !state.paused,
       jobId: ensured.job?.id ?? null,
-      pending: state.items.length,
+      pending: state.pending,
       done: state.done,
-      total: state.done + state.items.length,
+      total: state.done + state.pending,
       ...(ensured.error ? { error: ensured.error } : {}),
       ...(ensured.notice ? { notice: ensured.notice } : {}),
     };
@@ -425,7 +425,7 @@ export class ProductTaskRuntime {
     if (!/^task-\d+$/.test(id)) return null;
     const record = await this.queue.getJob(Number(id.slice(5)));
     if (!this.searchOptimizeTask(record)) return null;
-    await mutateSearchOptimize(this.engine, state => ({ ...state, paused: true }));
+    await pauseSearchOptimize(this.engine, true);
     if (record && ['waiting', 'delayed'].includes(record.status)) await this.parkSearchOptimize(record.id);
     return this.getRun(id);
   }
@@ -434,7 +434,7 @@ export class ProductTaskRuntime {
     if (!/^task-\d+$/.test(id)) return null;
     const record = await this.queue.getJob(Number(id.slice(5)));
     if (!this.searchOptimizeTask(record)) return null;
-    await mutateSearchOptimize(this.engine, state => ({ ...state, paused: false }));
+    await pauseSearchOptimize(this.engine, false);
     await this.engine.executeRaw(`UPDATE minion_jobs SET data = data - 'searchOptimizePause' WHERE id = $1`, [record!.id]);
     if (['paused', 'failed', 'dead', 'cancelled'].includes(record!.status)) return this.retry(id);
     if (['waiting', 'active', 'delayed', 'waiting-children'].includes(record!.status)) return this.getRun(id);
@@ -445,7 +445,7 @@ export class ProductTaskRuntime {
 
   private async searchOptimizeView() {
     const state = await loadSearchOptimize(this.engine);
-    return { paused: state.paused, done: state.done, items: state.items, total: state.done + state.items.length };
+    return { paused: state.paused, done: state.done, items: state.items, total: state.done + state.pending };
   }
 
   async submitSync(): Promise<ConsoleRun> {
@@ -812,7 +812,7 @@ export class ProductTaskRuntime {
           if (message.method === 'task.syncFileHash') return this.fileQueue.sourceHash(message.args[0] as SyncFileInput);
           if (message.method === 'task.searchOptimize') return this.acceptSearchOptimize(String(message.args[0] ?? 'default'), Array.isArray(message.args[1]) ? message.args[1].filter((slug): slug is string => typeof slug === 'string') : []);
           if (message.method === 'task.searchOptimizeState') return this.searchOptimizeView();
-          if (message.method === 'task.searchOptimizeDone') return mutateSearchOptimize(this.engine, state => finishSearchOptimize(state, String(message.args[0] ?? ''), String(message.args[1] ?? ''), typeof message.args[2] === 'string' ? message.args[2] : undefined));
+          if (message.method === 'task.searchOptimizeDone') return completeSearchOptimize(this.engine, String(message.args[0] ?? ''), String(message.args[1] ?? ''), typeof message.args[2] === 'string' ? message.args[2] : undefined);
           if (message.method === 'task.searchOptimizeForgetPage') {
             host.forgetPage(String(message.args[0] ?? ''), String(message.args[1] ?? ''));
             return null;
@@ -821,9 +821,9 @@ export class ProductTaskRuntime {
             const sourceId = String(message.args[0] ?? 'default');
             const written = Array.isArray(message.args[1]) ? message.args[1].filter((slug): slug is string => typeof slug === 'string') : [];
             const sources = Array.isArray(message.args[2]) ? message.args[2].filter((slug): slug is string => typeof slug === 'string') : [];
-            const state = await mutateSearchOptimize(this.engine, async (current, tx) => addCapturedSearchOptimize(current, sourceId, written, sources, await searchOptimizeRevisions(tx, sourceId, written)));
+            const state = await enqueueCapturedSearchOptimize(this.engine, sourceId, written, sources);
             if (!state.paused && state.items.length) await this.ensureSearchOptimizeJob();
-            return { paused: state.paused, pending: state.items.length };
+            return { paused: state.paused, pending: state.pending };
           }
           if (message.method === 'task.searchOptimizeRelease') {
             await this.engine.executeRaw(`UPDATE minion_jobs SET idempotency_key = NULL WHERE id = $1 AND idempotency_key = $2 AND status = 'active' AND lock_token = $3`, [context.id, SEARCH_OPTIMIZE_JOB_KEY, record.lock_token]);
@@ -881,7 +881,7 @@ export class ProductTaskRuntime {
             return null;
           }
           return withDatabaseRequest({ taskId: context.id, token: record.lock_token!, signal: gitController.signal,
-            stage: activity?.stage ?? adapter.view.stage, file: activity?.path ?? adapter.view.file,
+            stage: activity?.stage ?? adapter.view.stage, file: activity?.path ?? adapter.view.file ?? undefined,
             onTimeout: error => { withoutDatabaseRequest(() => { void this.requestCancel(`task-${context.id}`, error.message).catch(reason => console.error('[tasks] database timeout:', reason)); }); },
           }, () => host.dispatch(message));
         };

@@ -81,7 +81,7 @@ export interface ImportOptions {
     runtime?: {
       signal: AbortSignal;
       onFile: (result: Record<string, unknown>) => Promise<void>;
-      beforeFile?: (path: string) => Promise<void>;
+      beforeFile?: (path: string) => Promise<void | string>;
       completedPaths?: string[];
     };
 }
@@ -365,8 +365,18 @@ export async function runStructuredImport(
 
   async function processFile(eng: BrainEngine, filePath: string) {
     opts.runtime?.signal.throwIfAborted();
-    await opts.runtime?.beforeFile?.(filePath);
+    const skipReason = await opts.runtime?.beforeFile?.(filePath);
     const relativePath = relative(importRoot, filePath);
+    if (typeof skipReason === 'string' && skipReason) {
+      errors++;
+      skipped++;
+      reportFile({ status: 'failed', path: relativePath, reason: skipReason });
+      failures.push({ path: relativePath, error: skipReason });
+      processed++;
+      await opts.runtime?.onFile({ path: relativePath, completed: false, processed, imported, skipped, errors, chunksCreated, slug: '', vectorize: false });
+      tickProgress();
+      return;
+    }
     if (isOfficeTransientFile(filePath) || isOfficeTransientFile(relativePath)) {
       processed++;
       tickProgress();

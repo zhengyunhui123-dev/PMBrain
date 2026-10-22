@@ -94,7 +94,7 @@ async function settleOptimize() {
     release();
     await Bun.sleep(50);
   }
-  await engine.setConfig('pmbrain.search_optimize', JSON.stringify({ paused: false, done: 0, items: [], authorized: [] }));
+  await engine.executeRaw('DELETE FROM config WHERE key LIKE $1', ['pmbrain.search_optimize%']);
   await engine.executeRaw(`UPDATE minion_jobs SET status='cancelled', idempotency_key=NULL, lock_token=NULL, lock_until=NULL,
     finished_at=COALESCE(finished_at, now()), updated_at=now()
     WHERE idempotency_key=$1 AND status NOT IN ('active','waiting','delayed','waiting-children')`, ['search-optimize:active']);
@@ -717,7 +717,8 @@ describe('软件后台任务共用 owner 数据库', () => {
       expect((await engine.getChunks('optimize-a', { sourceId: 'default' })).every(chunk => !!chunk.embedded_at)).toBe(true);
       expect((await engine.getChunks('optimize-b', { sourceId: 'default' })).every(chunk => !chunk.embedded_at)).toBe(true);
       expect((await finished((await runtime.submitImport({ path: keyword, noEmbed: true })).id)).status).toBe('completed');
-      const pending = JSON.parse(await engine.getConfig('pmbrain.search_optimize') ?? '{}') as { items?: Array<{ slug: string }> };
+      const { loadSearchOptimize } = await import('../src/product/tasks/search-optimize-store.ts');
+      const pending = await loadSearchOptimize(engine);
       expect(pending.items?.some(item => item.slug === 'optimize-keyword')).toBe(false);
       expect(pending.items?.some(item => item.slug === 'optimize-b')).toBe(true);
       const count = slowRequests;

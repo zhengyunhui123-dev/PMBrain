@@ -122,7 +122,7 @@ export async function searchOptimizeRevisions(tx: BrainEngine, sourceId: string,
   const revisions: Record<string, string> = {};
   for (const slug of slugs) {
     if (!slug || slug.includes(':')) continue;
-    const revision = (await tx.getPage(slug, { sourceId }))?.content_hash;
+    const revision = (await tx.getPageIdentity(slug, { sourceId }))?.content_hash;
     if (typeof revision === 'string' && revision.length > 0) revisions[slug] = revision;
   }
   return revisions;
@@ -156,17 +156,4 @@ export function assignSearchOptimizeAcceptance(result: Record<string, unknown>, 
     return;
   }
   delete result.vectorsPending;
-}
-
-export async function loadSearchOptimize(engine: BrainEngine): Promise<SearchOptimizeState> {
-  return readSearchOptimize(await engine.getConfig(SEARCH_OPTIMIZE_CONFIG));
-}
-
-export async function mutateSearchOptimize(engine: BrainEngine, update: (state: SearchOptimizeState, tx: BrainEngine) => SearchOptimizeState | Promise<SearchOptimizeState>): Promise<SearchOptimizeState> {
-  return engine.transaction(async tx => {
-    await tx.executeRaw('SELECT pg_advisory_xact_lock(hashtext($1))', [SEARCH_OPTIMIZE_CONFIG]);
-    const next = await update(readSearchOptimize(await tx.getConfig(SEARCH_OPTIMIZE_CONFIG)), tx);
-    await tx.setConfig(SEARCH_OPTIMIZE_CONFIG, JSON.stringify(next));
-    return next;
-  });
 }

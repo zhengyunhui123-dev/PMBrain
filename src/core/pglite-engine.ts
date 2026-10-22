@@ -1,4 +1,6 @@
 import { lockRelationPages } from './pmbrain-adapters/relation-writer.ts';
+import { readPageChunks, readPageIdentity } from './pmbrain-adapters/bounded-reads.ts';
+import type { ChunkReadOpts } from './engine.ts';
 import { requireExistingPgliteDatabase } from './pmbrain-adapters/pglite-database-path.ts';
 import { recordCreatedTaskLinks, type LinkAudit } from './pmbrain-adapters/task-relations.ts';
 import { readMentionPolicy } from './mentions/policy.ts';
@@ -1278,6 +1280,10 @@ export class PGLiteEngine implements BrainEngine {
   }
 
   // Pages CRUD
+  getPageIdentity(slug: string, opts?: { sourceId?: string; includeDeleted?: boolean }) {
+    return readPageIdentity(this, slug, opts);
+  }
+
   async getPage(slug: string, opts?: { sourceId?: string; sourceIds?: string[]; includeDeleted?: boolean }): Promise<Page | null> {
     // v0.26.5: hide soft-deleted by default; opt-in via opts.includeDeleted.
     const includeDeleted = opts?.includeDeleted === true;
@@ -2850,16 +2856,8 @@ export class PGLiteEngine implements BrainEngine {
     );
   }
 
-  async getChunks(slug: string, opts?: { sourceId?: string }): Promise<Chunk[]> {
-    const sourceId = opts?.sourceId ?? 'default';
-    const { rows } = await this.db.query(
-      `SELECT cc.*, (cc.embedding IS NULL) AS embedding_is_null FROM content_chunks cc
-       JOIN pages p ON p.id = cc.page_id
-       WHERE p.slug = $1 AND p.source_id = $2
-       ORDER BY cc.chunk_index`,
-      [slug, sourceId]
-    );
-    return (rows as Record<string, unknown>[]).map(r => rowToChunk(r));
+  async getChunks(slug: string, opts?: ChunkReadOpts): Promise<Chunk[]> {
+    return readPageChunks(this, slug, opts);
   }
 
   async countStaleChunks(opts?: { sourceId?: string }): Promise<number> {

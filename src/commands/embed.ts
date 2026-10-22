@@ -1,6 +1,7 @@
 import type { BrainEngine } from '../core/engine.ts';
 import { embedBatch } from '../core/embedding.ts';
-import type { ChunkInput } from '../core/types.ts';
+import type { Chunk, ChunkInput } from '../core/types.ts';
+import { estimateEmbedTokens } from '../core/chunkers/token-estimate.ts';
 import { chunkText } from '../core/chunkers/recursive.ts';
 import { resolveMaxChunkTokens } from '../core/embedding-input-limit.ts';
 import { healOversizedPageChunks, healedChunksToStaleRows } from '../core/embed-oversize-heal.ts';
@@ -317,7 +318,7 @@ export async function runEmbedCore(engine: BrainEngine, opts: EmbedOpts): Promis
         break;
       }
       try {
-        await embedPage(engine, s, !!opts.dryRun, result, opts.sourceId, opts.signal, opts.quiet, opts.pauseCheck, opts.providerBatchSize);
+        await embedPage(engine, s, !!opts.dryRun, result, opts.sourceId, opts.signal, opts.quiet, opts.pauseCheck, opts.providerBatchSize, opts);
         if (result.incomplete) break;
       } catch (e: unknown) {
         if (opts.signal?.aborted) {
@@ -392,7 +393,7 @@ export async function runEmbedCore(engine: BrainEngine, opts: EmbedOpts): Promis
     if (opts.signal?.aborted || await opts.pauseCheck?.()) result.incomplete = true;
     else {
       try {
-        await embedPage(engine, opts.slug, !!opts.dryRun, result, opts.sourceId, opts.signal, opts.quiet, opts.pauseCheck, opts.providerBatchSize);
+        await embedPage(engine, opts.slug, !!opts.dryRun, result, opts.sourceId, opts.signal, opts.quiet, opts.pauseCheck, opts.providerBatchSize, opts);
       } catch (e: unknown) {
         if (opts.signal?.aborted) result.incomplete = true;
         else throw e;
@@ -508,6 +509,88 @@ export async function runEmbed(engine: BrainEngine, args: string[]): Promise<Emb
   }
 }
 
+async function commitPageEmbeddingBatch(engine: BrainEngine, slug: string, staleBatch: Chunk[], sourceId?: string, signal?: AbortSignal): Promise<void> {
+  const embeddings = await embedBatchWithBackoff(staleBatch.map(chunk => chunk.chunk_text), signal ? { abortSignal: signal } : {});
+  const checkpoint: ChunkInput[] = staleBatch.map((row, index) => ({
+    chunk_index: row.chunk_index,
+    chunk_text: row.chunk_text,
+    chunk_source: row.chunk_source,
+    embedding: embeddings[index],
+    model: getEmbeddingModel(),
+    token_count: row.token_count || Math.ceil(row.chunk_text.length / 4),
+    ...(row.language && { language: row.language }),
+    ...(row.symbol_name && { symbol_name: row.symbol_name }),
+    ...(row.symbol_type && { symbol_type: row.symbol_type }),
+    ...(row.start_line != null && { start_line: row.start_line }),
+    ...(row.end_line != null && { end_line: row.end_line }),
+    ...(row.parent_symbol_path && { parent_symbol_path: row.parent_symbol_path }),
+    ...(row.doc_comment && { doc_comment: row.doc_comment }),
+    ...(row.symbol_name_qualified && { symbol_name_qualified: row.symbol_name_qualified }),
+  }));
+  await engine.upsertChunks(slug, checkpoint, { sourceId, replaceExisting: false, ...(signal && { signal }), auditSite: 'upsertChunks' });
+}
+
+async function embedPageBounded(engine: BrainEngine, slug: string, result: EmbedResult, opts: EmbedOpts): Promise<void> {
+  const sourceId = opts.sourceId ?? 'default';
+  if (!await engine.getPageIdentity(slug, { sourceId })) throw new Error(`Page not found: ${slug}`);
+  const counts = async () => {
+    const [row] = await engine.executeRaw<{ total: number; stale: number }>(`SELECT COUNT(*)::int AS total,
+      COUNT(*) FILTER (WHERE cc.embedding IS NULL OR cc.embedded_at IS NULL)::int AS stale
+      FROM content_chunks cc JOIN pages p ON p.id=cc.page_id WHERE p.slug=$1 AND p.source_id=$2`, [slug, sourceId]);
+    return row;
+  };
+  let remaining = await counts();
+  if (!remaining.total) {
+    await embedPage(engine, slug, !!opts.dryRun, result, sourceId, opts.signal, opts.quiet, opts.pauseCheck, opts.providerBatchSize);
+    return;
+  }
+  const initialTotal = result.total_chunks;
+  const initialSkipped = result.skipped;
+  let embedded = 0;
+  let afterChunkIndex = -1;
+  result.total_chunks += remaining.total;
+  result.skipped += remaining.total - remaining.stale;
+  if (opts.dryRun) {
+    result.would_embed += remaining.stale;
+    result.pages_processed++;
+    return;
+  }
+  try {
+    while (remaining.stale > 0) {
+      if (opts.signal?.aborted || await opts.pauseCheck?.()) {
+        result.incomplete = true;
+        return;
+      }
+      const limit = Math.max(1, Math.min(100, opts.getBatchSize?.() ?? opts.batchSize ?? 32,
+        opts.providerBatchSize ?? getEmbeddingExecutionProfile().batchSize));
+      const batch = await engine.getChunks(slug, { sourceId, limit, afterChunkIndex, maxBytes: 256 * 1024, staleOnly: true });
+      if (!batch.length) throw new Error(`页面 ${sourceId}:${slug} 在处理期间已改变，请重新执行`);
+      if (batch.some(chunk => estimateEmbedTokens(chunk.chunk_text) > resolveMaxChunkTokens())) {
+        const healed = await healOversizedPageChunks(engine, slug, { sourceId, onSplit: count => {
+          result.healed_splits = (result.healed_splits ?? 0) + count;
+        } });
+        if (!healed.changed) throw new Error(`页面 ${sourceId}:${slug} 在处理期间已改变，请重新执行`);
+        remaining = await counts();
+        result.total_chunks = initialTotal + remaining.total;
+        result.skipped = initialSkipped + remaining.total - remaining.stale - embedded;
+        afterChunkIndex = -1;
+        continue;
+      }
+      await commitPageEmbeddingBatch(engine, slug, batch, sourceId, opts.signal);
+      embedded += batch.length;
+      remaining.stale -= batch.length;
+      result.embedded += batch.length;
+      result.committedBatches++;
+      afterChunkIndex = batch.at(-1)!.chunk_index;
+    }
+    result.pages_processed++;
+    if (!opts.quiet) slog(`${slug}: embedded ${embedded} chunks`);
+  } catch (error) {
+    if (opts.signal?.aborted) { result.incomplete = true; return; }
+    throw new PageEmbeddingFailure(remaining.stale, error);
+  }
+}
+
 async function embedPage(
   engine: BrainEngine,
   slug: string,
@@ -518,7 +601,9 @@ async function embedPage(
   quiet?: boolean,
   pauseCheck?: () => Promise<boolean> | boolean,
   providerBatchSize?: number,
+  batchOpts?: EmbedOpts,
 ) {
+  if (batchOpts?.batchSize !== undefined || batchOpts?.getBatchSize) return embedPageBounded(engine, slug, result, batchOpts);
   const opts = sourceId ? { sourceId } : undefined;
   const page = await engine.getPage(slug, opts);
   if (!page) {
@@ -583,7 +668,6 @@ async function embedPage(
     return;
   }
 
-  const embeddingModel = getEmbeddingModel();
   let offset = 0;
   try {
     while (offset < toEmbed.length) {
@@ -593,32 +677,7 @@ async function embedPage(
       }
       const batchSize = Math.max(1, providerBatchSize ?? getEmbeddingExecutionProfile().batchSize);
       const staleBatch = toEmbed.slice(offset, offset + batchSize);
-      const embeddings = await embedBatchWithBackoff(
-        staleBatch.map(chunk => chunk.chunk_text),
-        signal ? { abortSignal: signal } : {},
-      );
-      const checkpoint: ChunkInput[] = staleBatch.map((row, index) => ({
-        chunk_index: row.chunk_index,
-        chunk_text: row.chunk_text,
-        chunk_source: row.chunk_source,
-        embedding: embeddings[index],
-        model: embeddingModel,
-        token_count: row.token_count || Math.ceil(row.chunk_text.length / 4),
-        ...(row.language && { language: row.language }),
-        ...(row.symbol_name && { symbol_name: row.symbol_name }),
-        ...(row.symbol_type && { symbol_type: row.symbol_type }),
-        ...(row.start_line != null && { start_line: row.start_line }),
-        ...(row.end_line != null && { end_line: row.end_line }),
-        ...(row.parent_symbol_path && { parent_symbol_path: row.parent_symbol_path }),
-        ...(row.doc_comment && { doc_comment: row.doc_comment }),
-        ...(row.symbol_name_qualified && { symbol_name_qualified: row.symbol_name_qualified }),
-      }));
-      await engine.upsertChunks(slug, checkpoint, {
-        ...(opts ?? {}),
-        replaceExisting: false,
-        ...(signal && { signal }),
-        auditSite: 'upsertChunks',
-      });
+      await commitPageEmbeddingBatch(engine, slug, staleBatch, sourceId, signal);
       offset += staleBatch.length;
       result.embedded += staleBatch.length;
       result.committedBatches++;

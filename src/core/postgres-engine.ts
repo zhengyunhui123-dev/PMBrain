@@ -1,4 +1,6 @@
 import { lockRelationPages } from './pmbrain-adapters/relation-writer.ts';
+import { readPageChunks, readPageIdentity } from './pmbrain-adapters/bounded-reads.ts';
+import type { ChunkReadOpts } from './engine.ts';
 import { recordCreatedTaskLinks, type LinkAudit } from './pmbrain-adapters/task-relations.ts';
 import { readMentionPolicy } from './mentions/policy.ts';
 import { writePageAliases } from './mentions/pass.ts';
@@ -956,6 +958,10 @@ export class PostgresEngine implements BrainEngine {
   }
 
   // Pages CRUD
+  getPageIdentity(slug: string, opts?: { sourceId?: string; includeDeleted?: boolean }) {
+    return readPageIdentity(this, slug, opts);
+  }
+
   async getPage(slug: string, opts?: { sourceId?: string; sourceIds?: string[]; includeDeleted?: boolean }): Promise<Page | null> {
     const sql = this.sql;
     const includeDeleted = opts?.includeDeleted === true;
@@ -2489,16 +2495,8 @@ export class PostgresEngine implements BrainEngine {
     `;
   }
 
-  async getChunks(slug: string, opts?: { sourceId?: string }): Promise<Chunk[]> {
-    const sql = this.sql;
-    const sourceId = opts?.sourceId ?? 'default';
-    const rows = await sql`
-      SELECT cc.*, (cc.embedding IS NULL) AS embedding_is_null FROM content_chunks cc
-      JOIN pages p ON p.id = cc.page_id
-      WHERE p.slug = ${slug} AND p.source_id = ${sourceId}
-      ORDER BY cc.chunk_index
-    `;
-    return rows.map((r) => rowToChunk(r as Record<string, unknown>));
+  async getChunks(slug: string, opts?: ChunkReadOpts): Promise<Chunk[]> {
+    return readPageChunks(this, slug, opts);
   }
 
   async countStaleChunks(opts?: { sourceId?: string }): Promise<number> {

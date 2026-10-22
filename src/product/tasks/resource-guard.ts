@@ -13,6 +13,14 @@ export const PRODUCT_QUEUE_CAPACITY=128;
 export const SYNC_QUEUE_CAPACITY=10000;
 export const SNAPSHOT_QUOTA_BYTES=1024*1024*1024;
 export const TASK_LOG_MAX_BYTES=32*1024*1024;
+const OVERSIZED_IMPORT_PREFIX='资源保护：文件过大';
+export function isOversizedImportError(error:unknown):boolean {
+  const message=error instanceof Error?error.message:String(error);
+  return message.startsWith(OVERSIZED_IMPORT_PREFIX);
+}
+export function resourceProtectionAbortsTask(message:string):boolean {
+  return message.startsWith('资源保护：') && !message.startsWith(OVERSIZED_IMPORT_PREFIX);
+}
 export function isSyncCapacityError(error:unknown):boolean {
   const message=error instanceof Error?error.message:String(error);
   return message.startsWith('资源保护：') && /队列容量|快照容量/.test(message);

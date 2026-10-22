@@ -12,8 +12,6 @@ import {
   navActive,
   suggestedChatModel,
 } from '../admin/src/product/home-model.ts';
-import { homeOrganizeDigest } from '../admin/src/product/organize-digest.ts';
-import type { ConsoleRun } from '../admin/src/lib/shared.tsx';
 import { rememberedChatModel } from '../admin/src/workbench/chat-model.ts';
 
 const root = join(import.meta.dir, '..');
@@ -94,11 +92,9 @@ describe('首页按有没有知识库区分，并接上现有能力', () => {
     expect(home).toContain("onOpen('dashboard')");
     expect(home).toContain('你好，开始探索你的知识');
     expect(home).not.toContain('最近活动');
-    expect(home).toContain('最近整理');
-    expect(home).toContain("onOpen('tasks')");
-    expect(home).toContain('还没有完成过整理');
-    const welcome = home.slice(home.indexOf('home-welcome'), home.indexOf('home-ready'));
-    expect(welcome).not.toContain('最近整理');
+    expect(home).not.toContain('最近整理');
+    expect(home).not.toContain('home-organize');
+    expect(home).not.toContain('homeOrganizeDigest');
     expect(create).toContain('desktop.saveSetup');
     expect(create).toContain('await importMaterials(pendingMaterials.current');
     const imports = read('admin/src/product/import-materials.ts');
@@ -106,21 +102,6 @@ describe('首页按有没有知识库区分，并接上现有能力', () => {
     expect(imports).toContain('dependencies.api.startImportUploadRun');
     expect(create).toContain('选择文件夹');
     expect(read('admin/src/workbench/Workbench.tsx')).toContain('pmbrain:open-conversation');
-  });
-
-  test('首页整理摘要复用任务结果，区分成果、失败和需要判断的事项', () => {
-    const base = { command: [], stdout: '', stderr: '', exitCode: 0, error: null, startedAt: '2026-10-22T00:00:00.000Z', durationMs: 10, product: { name: '知识整理', stage: '知识整理完成', percent: 100, phasePercent: null, completedSteps: 1, steps: [{ id: 'check', label: '确认资料范围', status: 'pending', phases: [] }], processed: 1, total: 1, file: null, metrics: [{ label: '新增知识', value: 2 }, { label: '同步失败', value: 1 }], errorReason: null, scope: { name: '项目资料', index: 0, total: 1 } } };
-    const done = { ...base, id: 'task-1', kind: 'dream_cycle', status: 'completed', completedAt: '2026-10-22T01:00:00.000Z' } as ConsoleRun;
-    const failed = { ...base, id: 'task-2', kind: 'import_path', status: 'failed', completedAt: '2026-10-22T02:00:00.000Z', product: { ...base.product, errorReason: '这份资料打不开' } } as ConsoleRun;
-    const skipped = { ...base, id: 'task-3', kind: 'dream_quick', status: 'completed', completedAt: '2026-10-22T03:00:00.000Z', product: { ...base.product, stage: '任务未执行' } } as ConsoleRun;
-    expect(homeOrganizeDigest([]).empty).toBe(true);
-    const digest = homeOrganizeDigest([skipped, failed, done]);
-    expect(digest.empty).toBe(false);
-    expect(digest.when).toBe(done.completedAt);
-    expect(digest.scope).toBe('项目资料');
-    expect(digest.updated.some(item => item.includes('新增知识'))).toBe(true);
-    expect(digest.failed.some(item => item.includes('失败') || item.includes('打不开'))).toBe(true);
-    expect(digest.judgment.some(item => item.includes('确认资料范围'))).toBe(true);
   });
 
   test('知识助手能看出当前是谁在写，成果卡片显示知识库路径', () => {
