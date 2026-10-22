@@ -306,10 +306,13 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
   return report;
 }
 
+function capturedKnowledgeSlugs(knowledge:Awaited<ReturnType<typeof runCycle>>,sourceId:string){
+  const details=knowledge.phases.find(phase=>phase.phase==='capture_entities')?.details;
+  return [...new Set(['written_slugs','source_slugs','relation_slugs'].flatMap(key=>Array.isArray(details?.[key])?details[key] as string[]:[]).map(slug=>slug.startsWith(sourceId+':')?slug.slice(sourceId.length+1):slug).filter(slug=>!slug.includes(':')))];
+}
 async function embedCapturedKnowledge(engine:BrainEngine,knowledge:Awaited<ReturnType<typeof runCycle>>,sourceId:string){
   if(!isEmbeddingConfigured(loadConfig()))return;
-  const details=knowledge.phases.find(phase=>phase.phase==='capture_entities')?.details;
-  const changed=[...new Set(['written_slugs','source_slugs','relation_slugs'].flatMap(key=>Array.isArray(details?.[key])?details[key] as string[]:[]).map(slug=>slug.startsWith(sourceId+':')?slug.slice(sourceId.length+1):slug).filter(slug=>!slug.includes(':')))];
+  const changed=capturedKnowledgeSlugs(knowledge,sourceId);
   if(!changed.length)return;
   send({type:'progress',event:{phase:'embed',event:'start'}});
   const started=performance.now();
@@ -370,7 +373,9 @@ async function executeTask(task: ProductTask, kind: BrainEngine['kind']) {
     send({type:'progress',event:{phase:'memory',event:'finish'}});
   } else if (task.type === 'import') {
     const input = task.input;
-    send({ type: 'progress', phases: input.noEmbed ? ['collect', 'process', 'write'] : ['collect', 'process', 'vector', 'write'] });
+    const vectorsRequested = input.noEmbed !== true;
+    const filePhases = ['collect', 'process', 'write'];
+    send({ type: 'progress', phases: filePhases });
     send({ type: 'progress', event: { phase: 'import.collect' } });
     const completedPaths: string[] = [];
     if (input.resumeCheckpointId) {
@@ -385,7 +390,7 @@ async function executeTask(task: ProductTask, kind: BrainEngine['kind']) {
     }
     let fileSnapshot: Record<string, unknown> = {};
     const imported = await runStructuredImport(engine, {
-      path: input.path, noEmbed: input.noEmbed, fresh: true, jsonOutput: true, reportFiles: true,
+      path: input.path, noEmbed: true, fresh: true, jsonOutput: true, reportFiles: true,
       includeOffice: input.includeOffice !== false,
       includeImages: input.includeImages !== false,
       documentOcr: input.documentOcr !== false,
@@ -409,25 +414,43 @@ async function executeTask(task: ProductTask, kind: BrainEngine['kind']) {
         },
       },
     });
+    const sourceId=input.sourceId??'default';
+    const embedSlugs=new Set<string>(imported.importedSlugs??[]);
+    const rememberVectors=()=>{
+      if(!vectorsRequested||!embedSlugs.size)return;
+      result.vectorsPending=true;
+      result.embedSlugs=[...embedSlugs];
+      result.embedSourceId=sourceId;
+    };
     result = { ...imported, resumedFiles: completedPaths.length };
-    if(imported.errors===0){
-      const sourceId=input.sourceId??'default';
-      const rawPhases=(input.noEmbed?['collect','process','write']:['collect','process','vector','write']).map(phase=>({phase,status:'ok',duration_ms:0,summary:'原文已入库',details:{}}));
-      const automaticEnabled=await engine.getConfig('dream.entity_capture.enabled')!=='false';
-      if(automaticEnabled&&(await chooseCaptureModel(engine,{})).ok){
-        const slugs=await rpc('task.captureRequest',[sourceId,imported.importedSlugs]) as string[]|undefined;
-        if(slugs?.length){
-          const checkpoint=input.knowledgeCheckpoint??{phases:{},reports:{}};
-          checkpoint.captureRequests={...checkpoint.captureRequests,[sourceId]:slugs};
-          send({type:'progress',phases:[...rawPhases.map(phase=>phase.phase),'capture_entities']});
-          for(const phase of rawPhases)send({type:'progress',event:{phase:phase.phase,event:'finish'}});
-          const knowledge=await runDreamTask(engine,{phase:'capture_entities',sourceId,slugs,checkpoint,incrementalIngest:true},rawPhases.map(phase=>phase.phase));
-          if(!input.noEmbed)result.knowledgeEmbedded=await embedCapturedKnowledge(engine,knowledge,sourceId);
-          result={...result,status:knowledge.status,phases:[...rawPhases,...knowledge.phases],knowledge};
+    rememberVectors();
+    try{
+      if(imported.errors===0){
+        const rawPhases=filePhases.map(phase=>({phase,status:'ok',duration_ms:0,summary:'原文已入库',details:{}}));
+        const automaticEnabled=await engine.getConfig('dream.entity_capture.enabled')!=='false';
+        if(automaticEnabled&&(await chooseCaptureModel(engine,{})).ok){
+          const slugs=await rpc('task.captureRequest',[sourceId,imported.importedSlugs]) as string[]|undefined;
+          if(slugs?.length){
+            const checkpoint=input.knowledgeCheckpoint??{phases:{},reports:{}};
+            checkpoint.captureRequests={...checkpoint.captureRequests,[sourceId]:slugs};
+            send({type:'progress',phases:[...filePhases,'capture_entities']});
+            for(const phase of rawPhases)send({type:'progress',event:{phase:phase.phase,event:'finish'}});
+            const knowledge=await runDreamTask(engine,{phase:'capture_entities',sourceId,slugs,checkpoint,incrementalIngest:true},filePhases);
+            for(const slug of capturedKnowledgeSlugs(knowledge,sourceId))embedSlugs.add(slug);
+            result={...result,status:knowledge.status,phases:[...rawPhases,...knowledge.phases],knowledge};
+            rememberVectors();
+          }
+        }else{
+          result={...result,knowledgeStatus:automaticEnabled?'model_unavailable':'disabled'};
+          rememberVectors();
         }
-      }else{
-        result={...result,knowledgeStatus:automaticEnabled?'model_unavailable':'disabled'};
       }
+    }catch(error){
+      if(abort.signal.aborted)throw error;
+      result={...result,status:'failed'};
+      rememberVectors();
+      send({type:'error',error:error instanceof Error?error.message:String(error),result});
+      return;
     }
   } else if (task.type === 'dream') {
     result = await runWithDreamBudget(task.input,async()=>({...await runDreamTask(engine,task.input)}),request=>rpc('task.budget',[request]) as Promise<TaskBudgetReply>);
@@ -448,13 +471,16 @@ async function executeTask(task: ProductTask, kind: BrainEngine['kind']) {
   } else if (task.type === 'assistant') {
     throw new Error('助手任务由工作台执行器处理');
   } else {
-    result = { ...await runEmbedCore(engine, {
-      stale: true, forceReembed: task.input.forceReembed,
-      catchUp: task.input.catchUp,
+    const embed=task.input;
+    const embedded=await runEmbedCore(engine, {
+      stale: !embed.slugs?.length, slugs: embed.slugs, sourceId: embed.sourceId,
+      forceReembed: embed.forceReembed,
+      catchUp: embed.catchUp,
       batchSize: 100,
       getBatchSize:()=>constrained?32:100,
       signal: abort.signal,
-    }), catchUp: task.input.catchUp === true, forceReembed: task.input.forceReembed === true };
+    });
+    result = { ...embedded, catchUp: embed.catchUp === true, forceReembed: embed.forceReembed === true, ...(embedded.error ? { failures: [{ error: embedded.error }] } : {}) };
   }
   abort.signal.throwIfAborted();
   const failure = task.type === 'dream' || task.type==='import' ? maintenanceFailure(result) : null;

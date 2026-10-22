@@ -213,7 +213,7 @@ describe('软件后台任务共用 owner 数据库', () => {
     await engine.executeRaw("UPDATE sources SET config=jsonb_set(config,'{syncEnabled}','false'::jsonb) WHERE id=$1",['resume-second']);
     await engine.executeRaw('UPDATE sources SET local_path=$1 WHERE id=$2',[root,'default']);
   },60000);
-  test('两个任务可同时等待模型，停止立即确认且不依赖数据库队列', async () => {
+  test('两个导入先入库，向量任务可同时等待模型，停止不删除已入库资料', async () => {
     configureModels();
     const previous = slowRequests;
     const accepted: ConsoleRun[] = [];
@@ -224,8 +224,21 @@ describe('软件后台任务共用 owner 数据库', () => {
         accepted.push(await runtime.submitImport({ path }));
       }
       const deadline = Date.now() + 15_000;
-      while (slowRequests < previous + 2 && Date.now() < deadline) await Bun.sleep(30);
+      let embeds: ConsoleRun[] = [];
+      while (Date.now() < deadline) {
+        embeds = (await runtime.listRuns()).filter(row => row.kind === 'embed_stale' && row.status === 'running');
+        if (slowRequests >= previous + 2 && embeds.length >= 2) break;
+        await Bun.sleep(30);
+      }
       expect(slowRequests).toBe(previous + 2);
+      expect(embeds).toHaveLength(2);
+      expect(await engine.getPage('parallel-a', { sourceId: 'default' })).not.toBeNull();
+      expect(await engine.getPage('parallel-b', { sourceId: 'default' })).not.toBeNull();
+      const queuedPath = join(root, 'cancel-queued.md');
+      writeFileSync(queuedPath, '# 排队取消\n\n这份资料不应开始导入。');
+      const queued = await runtime.submitImport({ path: queuedPath });
+      expect((await runtime.cancel(queued.id))?.status).toBe('cancelled');
+      expect(await engine.getPage('cancel-queued', { sourceId: 'default' })).toBeNull();
       let ready!: () => void;
       let unlock!: () => void;
       const started = new Promise<void>(resolve => { ready = resolve; });
@@ -236,19 +249,19 @@ describe('软件后台任务共用 owner 数据库', () => {
       await started;
       try {
         const now = performance.now();
-        expect((await runtime.requestCancel(accepted[0].id))?.error).toContain('正在停止');
-        expect((await runtime.listRuns()).find(row => row.id === accepted[0].id)?.status).toBe('running');
+        expect((await runtime.requestCancel(embeds[0].id))?.error).toContain('正在停止');
+        expect((await runtime.listRuns()).find(row => row.id === embeds[0].id)?.status).toBe('running');
         expect(performance.now() - now).toBeLessThan(1000);
       } finally { unlock(); await busy; }
       expect(await engine.getConfig('stop.batch')).toBe('committed naturally');
-      expect((await finished(accepted[0].id)).status).toBe('cancelled');
-      await runtime.cancel(accepted[1].id);
+      await runtime.cancel(embeds[1].id);
       release();
-      expect(await engine.getPage('parallel-a', { sourceId: 'default' })).toBeNull();
-      expect(await engine.getPage('parallel-b', { sourceId: 'default' })).toBeNull();
+      expect((await finished(embeds[0].id)).status).toBe('cancelled');
+      expect(await engine.getPage('parallel-a', { sourceId: 'default' })).not.toBeNull();
+      expect(await engine.getPage('parallel-b', { sourceId: 'default' })).not.toBeNull();
     } finally {
       release();
-      for (const run of accepted) await runtime.cancel(run.id);
+      for (const run of await runtime.listRuns()) if (run.kind === 'embed_stale' && ['queued', 'running'].includes(run.status)) await runtime.cancel(run.id);
       configureModels(false);
     }
   }, 30_000);
@@ -289,6 +302,8 @@ describe('软件后台任务共用 owner 数据库', () => {
     if (run.status !== 'completed') throw new Error(JSON.stringify(run));
     expect(run.status).toBe('completed');
     expect(run.result).toMatchObject({ imported: 1, errors: 0 });
+    expect(run.result).not.toMatchObject({ vectorsPending: true });
+    expect((await runtime.listRuns()).some(row => row.kind === 'embed_stale' && ['queued', 'running'].includes(row.status))).toBe(false);
     expect(run.product).toMatchObject({ name: '导入资料', percent: 100, stage: '原文已入库，实体模型未配置' });
     expect(run.result).toMatchObject({knowledgeStatus:'model_unavailable'});
     expect(run.product?.material?.page).toMatchObject({ slug: 'background', type: 'note' });
@@ -299,6 +314,32 @@ describe('软件后台任务共用 owner 数据库', () => {
     expect((await reader.getRun(accepted.id))?.product).toEqual(run.product);
     expect((await reader.listRuns()).some(row => row.id === accepted.id)).toBe(true);
     await reader.close();
+  }, 30_000);
+
+  test('导入先保存文件和切块，向量化在后台继续，不等待向量接口', async () => {
+    configureModels();
+    const path = join(root, 'defer-vectors.md');
+    writeFileSync(path, '# 后台向量\n\n先入库再向量化。');
+    const before = slowRequests;
+    const accepted = await runtime.submitImport({ path });
+    try {
+      const stored = await finished(accepted.id);
+      expect(stored.status).toBe('completed');
+      expect(stored.result).toMatchObject({ imported: 1, errors: 0, vectorsPending: true });
+      expect(stored.product?.stage).toContain('向量化在后台继续');
+      expect(await engine.getPage('defer-vectors', { sourceId: 'default' })).not.toBeNull();
+      const pending = await engine.getChunks('defer-vectors', { sourceId: 'default' });
+      expect(pending.length).toBeGreaterThan(0);
+      expect(pending.every(chunk => !chunk.embedded_at)).toBe(true);
+      await modelWaiting();
+      expect(slowRequests).toBe(before + 1);
+      const embed = (await runtime.listRuns()).find(row => row.kind === 'embed_stale' && ['queued', 'running'].includes(row.status));
+      expect(embed).toBeTruthy();
+      release();
+      expect((await finished(embed!.id)).status).toBe('completed');
+      expect((await engine.getChunks('defer-vectors', { sourceId: 'default' })).every(chunk => !!chunk.embedded_at)).toBe(true);
+      expect(readFileSync(path, 'utf8')).toContain('先入库再向量化');
+    } finally { release(); configureModels(false); }
   }, 30_000);
 
   test('大范围扫描保留排序和 Source 过滤，分页读取正文期间可取消', async () => {
@@ -424,63 +465,67 @@ describe('软件后台任务共用 owner 数据库', () => {
     } finally { await runtime.cancel(accepted.id);release(); configureModels(false); }
   }, 60_000);
 
-  test('等待慢模型时知识可查询，重复点击不重复执行，取消后没有迟到写入', async () => {
+  test('资料入库后向量化等待模型时，知识仍可查询，重复导入不重复调用模型', async () => {
     configureModels();
     const path = join(root, 'slow.md');
     writeFileSync(path, '# 慢模型\n\n这份资料使用延迟的合成模型验证数据库并发访问。');
     const accepted = await runtime.submitImport({ path });
     try {
+      expect((await finished(accepted.id)).status).toBe('completed');
       await modelWaiting();
-      expect((await runtime.submitImport({ path })).id).toBe(accepted.id);
-      const queuedPath = join(root, 'cancel-queued.md');
-      writeFileSync(queuedPath, '# 排队取消\n\n这份资料不应开始导入。');
-      const queued = await runtime.submitImport({ path: queuedPath });
-      expect((await runtime.cancel(queued.id))?.status).toBe('cancelled');
-      expect(await engine.getPage('cancel-queued', { sourceId: 'default' })).toBeNull();
+      const before = slowRequests;
+      const again = await runtime.submitImport({ path });
+      expect(again.id).not.toBe(accepted.id);
+      expect((await finished(again.id)).status).toBe('completed');
+      expect(slowRequests).toBe(before);
       const started = Date.now();
+      expect((await engine.getPage('slow', { sourceId: 'default' }))?.compiled_truth).toContain('延迟的合成模型');
       expect(await engine.getPage('background', { sourceId: 'default' })).not.toBeNull();
       expect(Date.now() - started).toBeLessThan(1500);
-      const cancelled = await runtime.cancel(accepted.id);
-      expect(cancelled?.status).toBe('cancelled');
+      const embed = (await runtime.listRuns()).find(row => row.kind === 'embed_stale' && row.status === 'running');
+      expect(embed).toBeTruthy();
+      await runtime.cancel(embed!.id);
       release();
-      await Bun.sleep(150);
-      expect(await engine.getPage('slow', { sourceId: 'default' })).toBeNull();
-      expect((await finished(accepted.id)).status).toBe('cancelled');
+      await finished(embed!.id);
+      expect((await engine.getPage('slow', { sourceId: 'default' }))?.compiled_truth).toContain('延迟的合成模型');
     } finally { release(); configureModels(false); }
   }, 30_000);
 
-  test('用户编辑页面后，迟到的导入不能覆盖新版本', async () => {
+  test('资料入库后用户修改页面，后台向量化不能覆盖新内容', async () => {
     configureModels();
     const path = join(root, 'edited.md');
     writeFileSync(path, '# 并发编辑\n\n这是准备导入的旧内容。');
     await engine.putPage('edited', { type: 'concept', title: '旧页面', compiled_truth: '初始内容' }, { sourceId: 'default' });
     const accepted = await runtime.submitImport({ path });
     try {
+      expect((await finished(accepted.id)).status).toBe('completed');
       await modelWaiting();
+      const embeds = (await runtime.listRuns()).filter(row => row.kind === 'embed_stale' && ['queued', 'running'].includes(row.status));
       await engine.putPage('edited', { type: 'concept', title: '用户的新页面', compiled_truth: '用户刚刚修改的内容', content_hash: 'new-user-content' }, { sourceId: 'default' });
       release();
-      const run = await finished(accepted.id);
-      expect(run.status).toBe('failed');
-      expect(run.error).toContain('在处理期间已改变');
+      for (const embed of embeds) await finished(embed.id);
       expect((await engine.getPage('edited', { sourceId: 'default' }))?.compiled_truth).toBe('用户刚刚修改的内容');
     } finally { release(); configureModels(false); }
   }, 30_000);
 
-  test('处理期间模型配置或原始文件发生变化时拒绝提交', async () => {
+  test('向量化期间更换模型会停止向量任务，已入库资料和后改的文件都保留', async () => {
     for (const target of ['model', 'file']) {
       configureModels();
       const path = join(root, `${target}-change.md`);
       writeFileSync(path, `# ${target} change\n\n合成内容用于验证任务开始后的配置和输入变化。`);
       const accepted = await runtime.submitImport({ path });
       try {
+        expect((await finished(accepted.id)).status).toBe('completed');
         await modelWaiting();
+        const embed = (await runtime.listRuns()).find(row => row.kind === 'embed_stale' && row.status === 'running');
+        expect(embed).toBeTruthy();
         if (target === 'model') configureModels(true, 'updated-test');
         else writeFileSync(path, '# 修改后的原始内容\n\n用户已经保存了新的资料，不能写入旧的结果。');
         release();
-        const run = await finished(accepted.id);
-        expect(run.status).toBe('failed');
-        expect(run.error).toContain(target === 'model' ? '模型配置已改变' : '原始文件在处理期间已改变');
-        expect(await engine.getPage(`${target}-change`, { sourceId: 'default' })).toBeNull();
+        const settled = await finished(embed!.id);
+        expect((await engine.getPage(`${target}-change`, { sourceId: 'default' }))?.compiled_truth).toContain('合成内容用于验证');
+        if (target === 'model') expect(settled?.error ?? '').toContain('模型配置已改变');
+        if (target === 'file') expect(readFileSync(path, 'utf8')).toContain('修改后的原始内容');
       } finally { release(); configureModels(false); }
     }
   }, 45_000);
@@ -504,7 +549,7 @@ describe('软件后台任务共用 owner 数据库', () => {
     expect(await engine.getPage('same', { sourceId: 'default' })).toBeNull();
   }, 30_000);
 
-  test('已删除的页面和已归档的知识源不会被迟到结果恢复', async () => {
+  test('后台向量化不会恢复已删除的页面，也不会重新打开已归档的知识源', async () => {
     for (const target of ['deleted', 'archived']) {
       configureModels();
       const path = join(root, `${target}.md`);
@@ -512,12 +557,15 @@ describe('软件后台任务共用 owner 数据库', () => {
       if (target === 'deleted') await engine.putPage(target, { type: 'concept', title: target, compiled_truth: '删除前的页面' }, { sourceId: 'default' });
       const accepted = await runtime.submitImport({ path });
       try {
+        expect((await finished(accepted.id)).status).toBe('completed');
         await modelWaiting();
+        const embeds = (await runtime.listRuns()).filter(row => row.kind === 'embed_stale' && ['queued', 'running'].includes(row.status));
         if (target === 'deleted') await engine.softDeletePage(target, { sourceId: 'default' });
         else await engine.executeRaw(`UPDATE sources SET archived = true WHERE id = $1`, ['default']);
         release();
-        expect((await finished(accepted.id)).status).toBe('failed');
-        expect(await engine.getPage(target, { sourceId: 'default' })).toBeNull();
+        for (const embed of embeds) await finished(embed.id);
+        if (target === 'deleted') expect(await engine.getPage(target, { sourceId: 'default' })).toBeNull();
+        else expect((await engine.executeRaw<{ archived: boolean }>('SELECT archived FROM sources WHERE id = $1', ['default']))[0]?.archived).toBe(true);
       } finally {
         release();
         await engine.executeRaw(`UPDATE sources SET archived = false WHERE id = $1`, ['default']);
@@ -550,14 +598,16 @@ describe('软件后台任务共用 owner 数据库', () => {
     try {
       await modelWaiting();
       const count = slowRequests;
+      expect(await engine.getPage('interrupted', { sourceId: 'default' })).not.toBeNull();
       await runtime.close();
       release();
       runtime = new ProductTaskRuntime(engine);
       await runtime.start();
       await Bun.sleep(150);
-      expect((await runtime.getRun(accepted.id))?.status).toBe('failed');
+      expect((await runtime.getRun(accepted.id))?.status).toBe('completed');
       expect(slowRequests).toBe(count);
-      expect(await engine.getPage('interrupted', { sourceId: 'default' })).toBeNull();
+      expect((await runtime.listRuns()).some(row => row.kind === 'embed_stale' && ['queued', 'running'].includes(row.status))).toBe(false);
+      expect(await engine.getPage('interrupted', { sourceId: 'default' })).not.toBeNull();
       expect((await runtime.listRuns()).some(run => run.id === accepted.id)).toBe(true);
     } finally { release(); configureModels(false); }
   }, 30_000);
@@ -751,7 +801,7 @@ describe('软件后台任务共用 owner 数据库', () => {
     const post=Worker.prototype.postMessage;
     const close=TaskEngineHost.prototype.close;
     const postSpy=spyOn(Worker.prototype,'postMessage').mockImplementation(function(this:Worker,message:any,...args:any[]){
-      if(message.type==='start'&&message.task?.input?.path===path){thread=this;ownerId=message.ownerJobId;}
+      if(message.type==='start'&&message.task?.type==='embed'){thread=this;ownerId=message.ownerJobId;}
       return post.call(this,message,...args as []);
     });
     const closeSpy=spyOn(TaskEngineHost.prototype,'close').mockImplementation(async function(this:TaskEngineHost){
@@ -764,24 +814,25 @@ describe('软件后台任务共用 owner 数据库', () => {
       await modelWaiting();
       const historySpy=spyOn(MinionQueue.prototype,'getJobs');
       try {
-        expect((await runtime.getRun(accepted.id))?.status).toBe('running');
+        expect((await runtime.getRun(accepted.id))?.status).toBe('completed');
+        expect((await runtime.getRun(`task-${ownerId}`))?.status).toBe('running');
         expect(historySpy).not.toHaveBeenCalled();
       } finally {historySpy.mockRestore();}
       expect(thread).toBeDefined();
       await thread!.terminate();
       await closing;
       await expect(runtime.adjustResourcePressure(false)).resolves.toBeUndefined();
-      expect((await runtime.requestCancel(accepted.id,'任务 Worker 意外退出'))?.id).toBe(accepted.id);
+      expect((await runtime.requestCancel(`task-${ownerId}`,'任务 Worker 意外退出'))?.id).toBe(`task-${ownerId}`);
       expect((await engine.executeRaw('SELECT 1 AS alive'))[0].alive).toBe(1);
     } finally {
       releaseClose();postSpy.mockRestore();closeSpy.mockRestore();release();configureModels(false);
-      if(accepted)await runtime.cancel(accepted.id);
+      if(ownerId)await runtime.cancel(`task-${ownerId}`);
     }
-    const resumed=await runtime.retry(accepted!.id);
-    expect(resumed?.id).toBe(accepted!.id);
+    const resumed=await runtime.retry(`task-${ownerId}`);
+    expect(resumed?.id).toBe(`task-${ownerId}`);
     const modelTimer=setInterval(release,20);
-    try {expect((await finished(accepted!.id)).status).toBe('completed');}
-    finally {clearInterval(modelTimer);release();await runtime.cancel(accepted!.id);}
+    try {expect((await finished(`task-${ownerId}`)).status).toBe('completed');}
+    finally {clearInterval(modelTimer);release();await runtime.cancel(`task-${ownerId}`);}
     expect((await engine.getPage('thread-exit'))?.compiled_truth).toContain('保留服务和原任务');
     expect(readFileSync(path,'utf8')).toContain('保留服务和原任务');
   },40000);

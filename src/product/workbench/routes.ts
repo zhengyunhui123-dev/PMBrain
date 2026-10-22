@@ -7,6 +7,7 @@ import { chat, getVisionCapability, toolLoop } from '../../core/ai/gateway';
 import { runAdminKnowledgeSearch } from '../../commands/admin-knowledge-search';
 import { serviceModelValue, type ModelService } from '../../../shared/model-services';
 import {toolContextHistory,type WorkbenchCitation,type WorkbenchConversation,type WorkbenchModel,type WorkbenchMessage} from '../../../shared/workbench';
+import { conversationCursor, conversationDelta } from '../../../shared/workbench-sync';
 import { retrievalText, workbenchModelContent } from './attachments';
 import { compileTaskBrief, retrievalQuery } from './task-context';
 import { revisionListing, WorkbenchService, type WorkbenchAnswer, type WorkbenchSummarizer } from './service';
@@ -273,13 +274,14 @@ export function registerWorkbenchRoutes(app: express.Express, requireAdmin: Requ
     try { res.json(await action(req)); }
     catch (error) { if (!res.headersSent) res.status(400).json({ error: error instanceof Error ? error.message : String(error) }); }
   };
+  const liteMessage = (message: WorkbenchMessage): WorkbenchMessage => ({
+    ...message,
+    attachments: message.attachments?.map(({ data: _data, preview: _preview, text: _text, ...item }) => item),
+  });
   const liteConversation = (conversation: WorkbenchConversation): WorkbenchConversation => ({
     ...conversation,
     revisions: revisionListing(conversation),
-    messages: conversation.messages.map(message => ({
-      ...message,
-      attachments: message.attachments?.map(({ data: _data, preview: _preview, text: _text, ...item }) => item),
-    })),
+    messages: conversation.messages.map(liteMessage),
   });
   const id = (req: express.Request) => String(req.params.id);
   app.get(`${base}/availability`, requireAdmin, handler(availability));
@@ -316,7 +318,17 @@ export function registerWorkbenchRoutes(app: express.Express, requireAdmin: Requ
     if (!message) throw new Error('原始消息已不存在');
     return { title: conversation.title, text: message.text, createdAt: message.memory?.capturedAt ?? message.createdAt, memory: message.memory };
   }));
-  app.get(`${base}/conversations/:id`, requireAdmin, handler(req => req.query.lite === '1' ? liteConversation(service.get(id(req))) : service.get(id(req))));
+  app.get(`${base}/conversations/:id`, requireAdmin, handler(req => {
+    const conversation = service.get(id(req));
+    if (req.query.lite !== '1') return conversation;
+    const lite = liteConversation(conversation);
+    const since = typeof req.query.since === 'string' ? req.query.since : '';
+    if (!since) return { ...lite, cursor: conversationCursor(lite) };
+    const delta = conversationDelta(lite, since);
+    if (delta.unchanged) return { revision: delta.revision, cursor: delta.cursor, unchanged: true };
+    if (delta.message) return { revision: delta.revision, cursor: delta.cursor, message: liteMessage(delta.message) };
+    return { revision: delta.revision, cursor: delta.cursor, conversation: lite };
+  }));
   app.patch(`${base}/conversations/:id`, requireAdmin, express.json({ limit: '8kb' }), handler(req => service.rename(id(req), req.body?.title)));
   app.delete(`${base}/conversations/:id`, requireAdmin, handler(req => { service.remove(id(req), req.query.emptyOnly === 'true'); return { ok: true }; }));
   app.post(`${base}/conversations/:id/messages`, requireAdmin, (req, res, next) => {

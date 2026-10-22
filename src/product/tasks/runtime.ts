@@ -292,8 +292,20 @@ export class ProductTaskRuntime {
     return this.submit({ type: 'dream', input }, `dream_${input.preset ?? (input.phase && input.phase !== 'all' ? input.phase : 'cycle')}`, undefined, trigger);
   }
 
-  async submitEmbed(input: { catchUp?: boolean; forceReembed?: boolean } = {}): Promise<ConsoleRun> {
-    return this.submit({ type: 'embed', input }, 'embed_stale');
+  async submitEmbed(input: { catchUp?: boolean; forceReembed?: boolean; sourceId?: string; slugs?: string[] } = {}): Promise<ConsoleRun> {
+    const slugs = input.slugs?.map(slug => slug.trim()).filter(slug => slug.length > 0 && !slug.includes(':'));
+    return this.submit({ type: 'embed', input: { ...input, slugs: slugs?.length ? slugs : undefined } }, 'embed_stale');
+  }
+
+  private async queueDeferredImportVectors(task: ProductTask, payload: Record<string, unknown> | undefined, cancelled: boolean): Promise<void> {
+    if (cancelled || task.type !== 'import' || task.input.noEmbed === true || payload?.vectorsPending !== true) return;
+    const slugs = Array.isArray(payload.embedSlugs) ? payload.embedSlugs.filter((slug): slug is string => typeof slug === 'string' && slug.length > 0) : [];
+    if (!slugs.length) return;
+    try {
+      await this.submitEmbed({ catchUp: true, sourceId: typeof payload.embedSourceId === 'string' ? payload.embedSourceId : task.input.sourceId, slugs });
+    } catch (error) {
+      console.error('[tasks] deferred embed:', error);
+    }
   }
 
   async submitSync(): Promise<ConsoleRun> {
@@ -708,6 +720,7 @@ export class ProductTaskRuntime {
             return null;
           }
           return withDatabaseRequest({ taskId: context.id, token: record.lock_token!, signal: gitController.signal,
+            stage: activity?.stage ?? adapter.view.stage, file: activity?.path ?? adapter.view.file,
             onTimeout: error => { withoutDatabaseRequest(() => { void this.requestCancel(`task-${context.id}`, error.message).catch(reason => console.error('[tasks] database timeout:', reason)); }); },
           }, () => host.dispatch(message));
         };
@@ -757,8 +770,15 @@ export class ProductTaskRuntime {
     });
     flush = setInterval(() => {if(progressDirty&&Date.now()-lastPersistedAt>=5000)void persist().catch(settleReject);}, 1000);
     send({ type: 'start', kind: this.engine.kind, task: record.data.task, ownerJobId: context.id, ownerToken:record.lock_token, constrained:this.localPressure||this.externalPressure });
+    let importVectorsQueued = false;
+    const queueImportVectors = async () => {
+      if (importVectorsQueued) return;
+      importVectorsQueued = true;
+      await this.queueDeferredImportVectors(structuredTask, progress.result, cancelRequested);
+    };
     try {
       const outcome = await finished;
+      await queueImportVectors();
       if (structuredTask.type === 'dream' && outcome !== MINION_DEFERRED && (outcome as { reason?: string })?.reason === 'cycle_already_running') return this.deferMaintenance(record);
       if (outcome === MINION_DEFERRED && !this.stopIntents.has(context.id)) {
         if(deferredPhase==='capture_entities'){
@@ -789,6 +809,7 @@ export class ProductTaskRuntime {
       return outcome;
     }
     catch(error){
+      await queueImportVectors();
       if(structuredTask.type==='dream'&&usesSyncFileQueue(structuredTask.input) && String(error).includes('资源保护：')){
         const message=error instanceof Error?error.message:String(error);
         if(isSyncCapacityError(error) && !this.stopIntents.has(context.id) && !this.paused){

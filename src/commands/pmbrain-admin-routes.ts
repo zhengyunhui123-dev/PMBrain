@@ -1571,6 +1571,15 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
     }
   });
 
+  app.get('/admin/api/database-occupancy', requireAdmin, (_req: Request, res: Response) => {
+    const inspect = (engine as { inspectOccupancy?: () => { holder: unknown; waiting: unknown[]; active: unknown[]; recent: unknown[] } }).inspectOccupancy;
+    if (typeof inspect !== 'function') {
+      res.json({ supported: false, holder: null, waiting: [], active: [], recent: [] });
+      return;
+    }
+    res.json({ supported: true, ...inspect.call(engine) });
+  });
+
   app.get('/admin/api/runs', requireAdmin, async (req: Request, res: Response) => {
     const runs = await readRuns();
     res.json({ rows: req.query.summary === '1' ? runs.map(taskRunSummary) : runs });

@@ -125,6 +125,8 @@ export interface EmbedResult {
   healed_splits?: number;
   /** Resumable error classification emitted by the progress watchdog. */
   reason?: 'stall_timeout';
+  /** First page failure, so a background run can show the cause. */
+  error?: string;
 }
 
 function finalizeEmbedResult(result: EmbedResult): EmbedResult {
@@ -307,7 +309,9 @@ export async function runEmbedCore(engine: BrainEngine, opts: EmbedOpts): Promis
         if (opts.signal?.aborted) break;
         result.failedPages++;
         result.failedChunks += e instanceof PageEmbeddingFailure ? e.failedChunks : 0;
-        serr(`  Error embedding ${s}: ${e instanceof Error ? e.message : e}`);
+        const message = e instanceof Error ? e.message : String(e);
+        if (!result.error) result.error = message;
+        serr(`  Error embedding ${s}: ${message}`);
       }
     }
     return finalizeEmbedResult(result);

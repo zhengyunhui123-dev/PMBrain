@@ -1,4 +1,5 @@
 import { taskName, type TaskProductProgress } from '../../../shared/task-progress.ts';
+import { classifyProductError } from '../errors.ts';
 import { phaseHasPendingWork,dreamPhaseDetail } from '../../../shared/dream-phase-state.ts';
 
 const labels: Record<string, string> = {
@@ -288,8 +289,11 @@ export function finishTaskProgress(view: TaskProductProgress, status: string, re
       next.total=next.processed+remaining;
       next.percent=Math.floor(next.processed/next.total*100);
     }
+    const importBase = data.knowledgeStatus === 'disabled' ? '原文已入库，自动实体整理未启用'
+      : data.knowledgeStatus === 'model_unavailable' ? '原文已入库，实体模型未配置'
+      : data.vectorsPending === true ? '原文已入库' : '导入完成';
     next.stage = remaining>0 || data.status === 'partial' || next.steps.some(step => step.status === 'failed') ? '部分完成，请查看未完成步骤'
-      : next.name === '导入资料' ? data.knowledgeStatus==='disabled'?'原文已入库，自动实体整理未启用':data.knowledgeStatus==='model_unavailable'?'原文已入库，实体模型未配置':'导入完成' : `${next.name}完成`;
+      : next.name === '导入资料' ? (data.vectorsPending === true ? `${importBase}，向量化在后台继续` : importBase) : `${next.name}完成`;
     for (const step of next.steps) {
       if (step.status === 'running') step.status = 'completed';
       else if (step.status === 'pending' && !Array.isArray(data.phases)&&!step.phases.includes('capture_entities')) step.status = 'skipped';
@@ -323,7 +327,9 @@ export function finishTaskProgress(view: TaskProductProgress, status: string, re
   next.completedSteps = next.steps.filter(step => step.status === 'completed').length;
   if(next.budget)applyTaskBudget(next,next.budget);
   if(next.budget?.historicalCostUnknown)next.detail='旧版任务此前的总费用无法完整核算；此处总预算从升级后的首次继续起累计，旧版历史费用未计入。';
-  if(next.budget?.reason&&['failed','cancelled'].includes(status)){next.stage=next.budget.reason==='no_pricing'?'缺少模型价格，待继续':'费用预算不足，待继续';next.errorReason=next.budget.reason==='no_pricing'?'请同步模型价格或填写单价后继续；已完成成果保留。':'请提高整次费用上限后继续；同一任务的累计费用不会清零。';}
+  if(next.budget?.reason&&['failed','cancelled'].includes(status)){next.stage=next.budget.reason==='no_pricing'?'缺少模型价格，待继续':'费用预算不足，待继续';next.errorReason=next.budget.reason==='no_pricing'?'请同步模型价格或填写单价后继续；已完成成果保留。':'请提高整次费用上限后继续；同一任务的累计费用不会清零。';next.errorCode='budget_stop';}
+  else if(status==='cancelled')next.errorCode='user_cancel';
+  else { const identity=classifyProductError(next.errorReason??error??''); if(identity.code!=='unknown')next.errorCode=identity.code; }
   return next;
 }
 

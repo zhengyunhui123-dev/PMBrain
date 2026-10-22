@@ -22,6 +22,11 @@ async function finished(id:string){
   while(Date.now()<deadline){const run=await runtime.getRun(id);if(run&&!['queued','running'].includes(run.status))return run;await Bun.sleep(40);}
   throw new Error(JSON.stringify(await runtime.getRun(id)));
 }
+async function settledVectors(){
+  const deadline=Date.now()+45000;
+  while(Date.now()<deadline){if(!(await runtime.listRuns()).some(run=>run.kind==='embed_stale'&&['queued','running'].includes(run.status)))return;await Bun.sleep(40);}
+  throw new Error(JSON.stringify(await runtime.listRuns()));
+}
 
 beforeAll(async()=>{
   root=mkdtempSync(join(tmpdir(),'pmbrain-auto-knowledge-'));
@@ -96,9 +101,12 @@ test('ordinary import embeds the new entity and appending to the same file updat
   const file=join(root,'append.md');writeFileSync(file,'# 追加资料\n\n刘慈欣创作了三体。');
   const first=await finished((await runtime.submitImport({path:file,sourceId:'knowledge-other'})).id);
   expect(first.status,JSON.stringify(first.result)).toBe('completed');
+  expect(first.result).toMatchObject({vectorsPending:true});
+  await settledVectors();
   const chunks=await engine.getChunks('people/liu',{sourceId:'knowledge-other'});expect(chunks.length).toBeGreaterThan(0);expect(chunks.every(chunk=>!!chunk.embedded_at)).toBe(true);
   const count=calls;writeFileSync(file,'# 追加资料\n\n刘慈欣创作了三体。\n\n刘慈欣参与了科幻讨论。');
   expect((await finished((await runtime.submitImport({path:file,sourceId:'knowledge-other'})).id)).status).toBe('completed');expect(calls).toBe(count+1);
+  await settledVectors();
   const entity=await engine.getPage('people/liu',{sourceId:'knowledge-other'});expect(entity?.compiled_truth).toContain('创作了三体');expect(entity?.compiled_truth).toContain('参与了科幻讨论');
   const vectors=embeddingCalls,after=calls;
   expect((await finished((await runtime.submitImport({path:file,sourceId:'knowledge-other'})).id)).status).toBe('completed');expect(calls).toBe(after);expect(embeddingCalls).toBe(vectors);

@@ -111,6 +111,7 @@ describe('任务的产品进度', () => {
     const completed = finishTaskProgress(adapter.view, 'completed', { imported: 4, errors: 0 }, null);
     expect(completed.percent).toBe(100);
     expect(completed.stage).toBe('导入完成');
+    expect(finishTaskProgress(adapter.view, 'completed', { imported: 4, errors: 0, vectorsPending: true }, null).stage).toBe('原文已入库，向量化在后台继续');
   });
   test('整理结果中的 skipped 不显示为实际完成，未知日志不显示在普通进度', () => {
     const adapter = new TaskProgressAdapter('dream_full');

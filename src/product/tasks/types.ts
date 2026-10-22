@@ -67,7 +67,7 @@ export type ProductTask =
   | { type: 'sync'; input: { timeoutMs?: number } }
   | { type: 'import'; input: ImportTaskInput }
   | { type: 'dream'; input: DreamTaskInput }
-  | { type: 'embed'; input: { catchUp?: boolean; forceReembed?: boolean; timeoutMs?: number } };
+  | { type: 'embed'; input: { catchUp?: boolean; forceReembed?: boolean; timeoutMs?: number; sourceId?: string; slugs?: string[] } };
 
 export type TaskWorkerMessage =
   | { type: 'deferred'; phase?:'capture_entities' }

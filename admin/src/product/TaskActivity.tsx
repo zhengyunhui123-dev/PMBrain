@@ -34,10 +34,12 @@ export function TaskActivityProvider({ enabled, children }: { enabled: boolean; 
         setSnapshot({ rows, error: '', loaded: true });
         setImports(current => current.filter(item => !item.runId || !rows.some(run => run.id === item.runId)));
       } catch (reason) { if (live) setSnapshot(current => ({ ...current, error: String(reason), loaded: true })); }
-      finally { if (live) timer = setTimeout(load, 1500); }
+      finally { if (live) timer = setTimeout(load, document.visibilityState === 'hidden' ? 8000 : 1500); }
     };
+    const onVisible = () => { if (document.visibilityState === 'visible') { clearTimeout(timer); void load(); } };
+    document.addEventListener('visibilitychange', onVisible);
     void load();
-    return () => { live = false; clearTimeout(timer); };
+    return () => { live = false; clearTimeout(timer); document.removeEventListener('visibilitychange', onVisible); };
   }, [enabled]);
   const running = snapshot.rows.find(run => run.kind!=='conversation_memory'&&run.status === 'running') ?? snapshot.rows.find(run => run.kind!=='conversation_memory'&&run.status === 'queued');
   return <TasksContext.Provider value={{ ...snapshot, imports, setImports }}>{children}

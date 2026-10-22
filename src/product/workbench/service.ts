@@ -9,7 +9,7 @@ import {assistantSession} from './request';
 import { memoryVersion } from './memory-identity';
 import { WorkbenchAgentStore } from './agents';
 import type { WorkbenchAgent } from '../../../shared/workbench-agents';
-import { activityLine, compilePlaybook, EVIDENCE_GAP_TEXT, needsCurrentEvidence, visibleAssistantText, wantsSavedPlaybook } from './playbook';
+import { compilePlaybook, EVIDENCE_GAP_TEXT, needsCurrentEvidence, visibleAssistantText, wantsSavedPlaybook } from './playbook';
 import { advanceTask, noteTask, rememberTaskMaterials, taskUserTexts } from './task-context';
 import { decidePending } from './pending';
 import { completedDirectories, completedDirectory, listWorkbenchArtifacts } from './files';
@@ -151,7 +151,9 @@ export class WorkbenchService {
     ocr?: (bytes: Buffer, mime: string, signal: AbortSignal) => Promise<string>;
     office?: (bytes: Buffer, name: string, signal: AbortSignal) => Promise<string>;
   }, private memoryHooks?: WorkbenchMemoryHooks) {
-    for (const conversation of store.list()) {
+    for (const row of store.summaries()) {
+      if (!row.generating) continue;
+      const conversation = store.get(row.id);
       let changed = false;
       for (const message of conversation.messages) if (message.status === 'running') {
         message.status = 'error'; message.error = '上次生成因服务退出而中断。这只是界面恢复，模型没有接着写；已经完成的工具不会自动再执行。请重试。'; message.errorCode='service_interrupted';
@@ -161,8 +163,10 @@ export class WorkbenchService {
       if (changed) store.save(conversation);
     }
   }
-  list() { return this.store.list().map(({ messages, ...row }) => ({ ...row, messageCount: messages.length, running: this.active.has(row.id), activity: activityLine(messages, this.active.has(row.id)) })); }
-  get(id: string) { return this.store.get(id); }
+  list() {
+    return this.store.summaries().map(({ generating: _generating, ...row }) => ({ ...row, running: this.active.has(row.id), activity: this.active.has(row.id) ? '正在处理' : row.activity }));
+  }
+  get(id: string) { return this.active.get(id)?.live ?? this.store.get(id); }
   assistant() { return this.store.assistant(); }
   saveAssistant(input: unknown) { return this.store.saveAssistant(input); }
   private model(id?: string) {
@@ -173,24 +177,25 @@ export class WorkbenchService {
   create(input: { model?: string; knowledge?: boolean; sourceId?: string; assistantId?: string }): WorkbenchConversation {
     const now = new Date().toISOString();
     const agent = new WorkbenchAgentStore(this.store).get(input.assistantId ?? 'main');
-    const primary = !this.store.list().some(row => (row.assistantId ?? 'main') === agent.id && row.primary);
+    const primary = !this.store.summaries().some(row => (row.assistantId ?? 'main') === agent.id && row.primary);
     const conversation = { id: randomUUID(), title: '新对话', assistantId: agent.id, model: input.model || agent.model || this.models()[0]?.id || '', knowledge: input.knowledge ?? agent.knowledge, sourceId: input.sourceId ?? agent.memorySourceId ?? 'default', createdAt: now, updatedAt: now, messages: [], ...(primary ? { primary: true } : {}) };
     this.store.save(conversation); return conversation;
   }
   openAssistant(assistantId = 'main'): WorkbenchConversation | null {
     const agent = new WorkbenchAgentStore(this.store).get(assistantId);
-    const mine = this.store.list().filter(row => (row.assistantId ?? 'main') === agent.id);
+    const mine = this.store.summaries().filter(row => (row.assistantId ?? 'main') === agent.id);
     if (!mine.length) return null;
-    const chosen = [...mine].sort((a, b) => Number(b.messages.length > 0) - Number(a.messages.length > 0) || Number(Boolean(b.primary)) - Number(Boolean(a.primary)) || b.updatedAt.localeCompare(a.updatedAt))[0]!;
+    const chosen = [...mine].sort((a, b) => Number(b.messageCount > 0) - Number(a.messageCount > 0) || Number(Boolean(b.primary)) - Number(Boolean(a.primary)) || b.updatedAt.localeCompare(a.updatedAt))[0]!;
     return this.adopt(chosen.id);
   }
   private adopt(id: string): WorkbenchConversation {
     const chosen = this.get(id);
     const assistantId = chosen.assistantId ?? 'main';
-    for (const row of this.store.list()) {
+    for (const row of this.store.summaries()) {
       if ((row.assistantId ?? 'main') === assistantId && row.id !== id && row.primary) {
-        delete row.primary;
-        this.store.save(row);
+        const other = this.store.get(row.id);
+        delete other.primary;
+        this.store.save(other);
       }
     }
     if (!chosen.primary) { chosen.primary = true; chosen.updatedAt = new Date().toISOString(); this.store.save(chosen); }
@@ -424,13 +429,21 @@ export class WorkbenchService {
     const turn = { abort, promise: Promise.resolve(), generation, live: conversation, replyId: reply.id, rejectReady };
     this.acceptance.set(id, ready);
     this.active.set(id, turn);
-    let lastSave = 0;
+    let lastLive = 0;
+    let lastFull = 0;
     const saveSoon = (force = false) => {
       if (!this.owns(id, generation)) return;
       if (abort.signal.aborted && !force) return;
       const nowMs = Date.now();
-      if (!force && lastSave !== 0 && nowMs - lastSave < 80) return;
-      lastSave = nowMs; this.store.save(conversation);
+      if (!force && lastFull !== 0 && nowMs - lastFull < 800) {
+        if (lastLive !== 0 && nowMs - lastLive < 80) return;
+        lastLive = nowMs;
+        this.store.noteLive(conversation);
+        return;
+      }
+      lastFull = nowMs;
+      lastLive = nowMs;
+      this.store.save(conversation);
     };
     const reportRequest=(event:ChatRequestEvent)=>{
       if(abort.signal.aborted||reply.status!=='running'||(session.signal.aborted&&event.phase!=='failed'))return;
@@ -604,6 +617,14 @@ export class WorkbenchService {
               const directories = completedDirectories([...(settledTools ?? []), ...(reply.toolCalls ?? [])]);
               if (directories.length === 1) conversation.task.directory = { path: directories[0]!.path, sourceId: directories[0]!.sourceId };
               else if (directories.length > 1) delete conversation.task.directory;
+            }
+            if (conversation.task && call.status === 'complete' && call.output) {
+              try {
+                const result = JSON.parse(call.output) as { path?: unknown; from?: unknown };
+                const paths = conversation.task.managedPaths ?? [];
+                if ((call.name === 'local_copy' || call.name === 'artifact_save' || call.name === 'artifact_revise') && typeof result.path === 'string') conversation.task.managedPaths = [...new Set([...paths, result.path])];
+                if (call.name === 'local_rename' && typeof result.path === 'string') conversation.task.managedPaths = [...new Set([...paths.filter(item => item !== result.from), result.path])];
+              } catch {}
             }
             saveSoon(true);
           },

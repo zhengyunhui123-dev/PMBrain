@@ -1,4 +1,10 @@
 .home-page { position: relative; flex: 1; min-height: 0; overflow: auto; padding: 28px 36px 40px; background: radial-gradient(880px 380px at 82% 8%, color-mix(in srgb, var(--accent) 14%, transparent), transparent 68%), radial-gradient(640px 320px at 8% 92%, color-mix(in srgb, #8eb4ff 12%, transparent), transparent 70%), var(--product-bg); }
+.home-organize { margin: 8px 0 18px; padding: 18px 20px; border: 1px solid var(--product-line); border-radius: 16px; background: var(--product-panel); }
+.home-organize header { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.home-organize h2 { margin: 0; font-size: 16px; }
+.home-organize header button { border: 0; background: transparent; color: var(--accent); font: inherit; cursor: pointer; }
+.home-organize p, .home-organize li { color: var(--product-muted); font-size: 13px; line-height: 1.6; }
+.home-organize ul { margin: 8px 0 0; padding-left: 18px; }
 .home-status { position: absolute; top: 22px; right: 28px; z-index: 2; }
 .home-health-anchor { position: relative; display: inline-block; }
 .home-health, .home-maintenance { display: inline-flex; align-items: center; gap: 8px; border: 1px solid var(--product-line); border-radius: 999px; background: color-mix(in srgb, var(--product-panel) 88%, transparent); color: inherit; font: inherit; font-size: 13px; padding: 7px 12px; cursor: pointer; }
