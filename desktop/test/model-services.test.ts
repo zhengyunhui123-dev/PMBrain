@@ -16,6 +16,17 @@ test('existing model metadata survives synchronization', () => {
   const old = { ...newServiceModel('same-model'), inputPrice: 5, capabilities: ['vision' as const] };
   expect(mergeModelServices([old], [newServiceModel('same-model'), newServiceModel('new')])).toEqual([old, newServiceModel('new')]);
 });
+
+test('remote image declarations distinguish text-only models from unknown capabilities', async () => {
+  const result = await syncServiceModels(service('one'), async () => Response.json({ data: [
+    { id: 'text-only', input_modalities: ['text'] },
+    { id: 'image-model', input_modalities: ['text', 'image'] },
+    { id: 'unknown' },
+  ] }));
+  expect(result.models.find(model => model.id === 'text-only')?.vision).toBe(false);
+  expect(result.models.find(model => model.id === 'image-model')?.vision).toBe(true);
+  expect(result.models.find(model => model.id === 'unknown')?.vision).toBeUndefined();
+});
 test('a selected platform cannot be disabled and an embedding endpoint cannot be retargeted silently', () => {
   const current = projectModelServices({ chat_model: 'service-one:same-model', embedding_model: 'service-one:same-model' }, [service('one')]);
   expect(() => projectModelServices(current, [{ ...service('one'), enabled: false }])).toThrow();

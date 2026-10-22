@@ -4,7 +4,9 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import JSZip from 'jszip';
 import * as XLSX from 'xlsx';
-import { parseDocument } from '../src/core/document/document-import.ts';
+import { importStructuredDocument, parseDocument } from '../src/core/document/document-import.ts';
+import type { BrainEngine } from '../src/core/engine.ts';
+import type { StructuredDocument } from '../src/core/document/types.ts';
 import { renderStructuredDocument } from '../src/core/document/markdown-renderer.ts';
 import { buildStructuredParentSections } from '../src/core/document/section-builder.ts';
 
@@ -84,6 +86,13 @@ async function writeStructuredPptx(path: string): Promise<void> {
 }
 
 describe('Structured Document Import V2', () => {
+  test('空文档保留逐页 OCR 拒绝原因且不执行数据库写入', async () => {
+    const document = { title: '', format: 'pdf', sections: [], metadata: { parser: 'fixture', local: true, structured: true, tableCount: 0, imageCount: 1, pagesNeedingOcr: [1], ocrUsed: false, ocrFailed: 1, ocrWarnings: ['第 1 页：当前模型不支持图片'] } } as StructuredDocument;
+    const result = await importStructuredDocument({} as BrainEngine, document, 'not-read.pdf', '扫描件.pdf');
+    expect(result.error).toContain('未提取到文字');
+    expect(result.error).toContain('第 1 页：当前模型不支持图片');
+    expect(result.documentSummary?.ocrFailed).toBe(1);
+  });
   test('DOCX preserves heading path, list, table and hyperlink locally', async () => {
     const path = join(fixtureDirectory, '方案.docx');
     await writeStructuredDocx(path);

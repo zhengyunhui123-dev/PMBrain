@@ -21,6 +21,7 @@ function enrichRemoteModel(provider: string, id: string, record: any): ServiceMo
   const capabilities = Array.isArray(record.capabilities) ? record.capabilities : undefined;
   const parameters = Array.isArray(record.supported_parameters) ? record.supported_parameters : undefined;
   const vision = Array.isArray(modalities) ? modalities.includes('image') : capabilities ? capabilities.includes('vision') : Boolean(known?.supports_vision && (!known.vision_models || known.vision_models.includes(id)));
+  if (Array.isArray(modalities) || capabilities || known?.supports_vision !== undefined) model.vision = vision;
   const tools = parameters ? parameters.includes('tools') : capabilities ? capabilities.includes('tools') : known?.supports_tools;
   const reasoning = Array.isArray(record.effort?.supported_levels) ? record.effort.supported_levels.length > 0 : parameters ? parameters.includes('reasoning') : capabilities?.includes('reasoning');
   if (vision) model.capabilities.push('vision');

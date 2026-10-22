@@ -1,4 +1,5 @@
 import type { ConsoleRun } from '../lib/shared';
+import { importOutcome } from '../../../shared/import-outcome';
 
 export function taskPhaseSummary(run: ConsoleRun, now = Date.now()) {
   const view=run.product,phase=view?.phaseProgress;
@@ -20,7 +21,8 @@ export function taskPhaseSummary(run: ConsoleRun, now = Date.now()) {
 
 export const taskStopping = (run: ConsoleRun) => run.status === 'running' && run.error === '正在停止任务…';
 const taskWasSkipped = (run: ConsoleRun) => (run.result as {status?:string}|undefined)?.status === 'skipped' || run.product?.stage === '任务未执行';
-const taskIsPartial=(run:ConsoleRun)=>(run.result as {status?:string}|undefined)?.status==='partial'||run.product?.stage.startsWith('部分完成')===true;
+const taskIsPartial=(run:ConsoleRun)=>(run.result as {status?:string}|undefined)?.status==='partial'||run.product?.stage.startsWith('部分完成')===true
+  || (run.kind==='import_path' && !['running','queued','cancelled'].includes(run.status) && importOutcome(run.result)?.outcome==='partial');
 export const taskCanRetry=(run:ConsoleRun)=>run.id.startsWith('task-')&&(['failed','cancelled'].includes(run.status)||(run.status==='completed'&&['import_path','dream_capture_entities','dream_quick','dream_full','dream_cycle','dream_sync'].includes(run.kind)&&taskIsPartial(run)));
 export const taskRoundCompleted = (run: ConsoleRun) => run.kind.startsWith('dream_') && run.status === 'completed' && !taskWasSkipped(run);
 export const taskPercent = (run: ConsoleRun) => taskRoundCompleted(run) ? null : run.status==='running'&&run.kind.startsWith('dream_')&&run.product?.phaseProgress ? run.product.phasePercent : run.product?.percent ?? null;

@@ -542,6 +542,32 @@ describe('软件后台任务共用 owner 数据库', () => {
     expect(resumed.result).toMatchObject({ resumedFiles: 1, imported: 1 });
   }, 30_000);
 
+  test('混合文件解析失败显示部分完成，修复后继续同一任务并保留成功正文', async () => {
+    const directory = join(root, 'mixed-import');
+    mkdirSync(directory);
+    writeFileSync(join(directory, 'good.md'), '# 混合资料导入验收\n\n有效正文独立保存，其他文件解析失败不回滚。');
+    writeFileSync(join(directory, 'bad.docx'), 'invalid office archive');
+    const accepted = await runtime.submitImport({ path: directory, noEmbed: true });
+    const initial = await finished(accepted.id);
+    if (!initial.result) throw new Error(JSON.stringify(initial));
+    expect(initial.status).toBe('failed');
+    expect(initial.result).toMatchObject({ imported: 1, unchanged: 0, partialFiles: 0, errors: 1, processed: 2, total: 2 });
+    expect(initial.product?.stage).toBe('部分完成');
+    expect(initial.product?.steps).toEqual([]);
+    const stored = await engine.getPage('mixed-import/good', { sourceId: 'default' });
+    expect(stored).not.toBeNull();
+    const { default: JSZip } = await import('jszip');
+    const zip = new JSZip();
+    zip.file('word/document.xml', '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>修复后的独立资料，可以成功解析。</w:t></w:r></w:p></w:body></w:document>');
+    writeFileSync(join(directory, 'bad.docx'), await zip.generateAsync({ type: 'nodebuffer' }));
+    const retry = await runtime.retry(accepted.id);
+    expect(retry?.id).toBe(accepted.id);
+    const resumed = await finished(accepted.id);
+    expect(resumed.status).toBe('completed');
+    expect(resumed.result).toMatchObject({ resumedFiles: 1, imported: 1, errors: 0 });
+    expect((await engine.getPage('mixed-import/good', { sourceId: 'default' }))?.content_hash).toBe(stored?.content_hash);
+  }, 45_000);
+
   test('关闭运行时不自动重跑不确定的模型请求，重启后保留历史', async () => {
     configureModels();
     const path = join(root, 'interrupted.md');

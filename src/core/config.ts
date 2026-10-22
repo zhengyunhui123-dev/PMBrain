@@ -87,6 +87,7 @@ export interface GBrainConfig {
   admin_bootstrap_token?: string;
   /** Desktop-only preferences. Core runtime ignores these fields. */
   desktop?: {
+    model_services?: import('../../shared/model-services.ts').ModelService[];
     knowledge_directory?: string;
     knowledge_source_id?: string;
     last_migrated_version?: string;

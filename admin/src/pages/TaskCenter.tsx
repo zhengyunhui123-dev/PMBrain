@@ -11,7 +11,7 @@ import { taskCanRetry, taskRoundCompleted, taskRoundListSummary, taskPhaseSummar
 import { taskModelSetupIssue } from '../product/model-readiness';
 import { desktopApi } from '../lib/product-fetch';
 
-type TaskFilter = 'all' | 'running' | 'queued' | 'completed' | 'failed' | 'cancelled';
+type TaskFilter = 'all' | 'running' | 'queued' | 'completed' | 'partial' | 'failed' | 'cancelled';
 const DreamRunContent=React.lazy(()=>import('./Dream').then(module=>({default:module.DreamRunContent})));
 
 interface EmbeddingRebuildTask {
@@ -69,7 +69,7 @@ function statusLabel(run: ConsoleRun): string {
     ?? taskStatus(run);
 }
 
-function statusClass(status: ConsoleRun['status']): string {
+function statusClass(status: ConsoleRun['status'] | 'partial'): string {
   return `task-status task-status-${status}`;
 }
 
@@ -135,10 +135,11 @@ function PgliteRecoveryCard({
 
 function TaskDetailDrawer({ run, onClose, onCancel, onRetry, busy }: { run: ConsoleRun; onClose: () => void; onCancel: () => void; onRetry: () => void; busy: boolean }) {
   const dream=run.kind.startsWith('dream_');
+  const needsDetail = dream || run.kind === 'import_path';
   const [detail,setDetail]=useState<ConsoleRun|null>(null);
   const [detailError,setDetailError]=useState('');
   useEffect(()=>{
-    if(!dream)return;
+    if(!needsDetail)return;
     let live=true;
     let timer:ReturnType<typeof setTimeout>;
     const load=async()=>{
@@ -148,14 +149,15 @@ function TaskDetailDrawer({ run, onClose, onCancel, onRetry, busy }: { run: Cons
     };
     setDetail(null);setDetailError('');void load();
     return()=>{live=false;clearTimeout(timer);};
-  },[dream,run.id,run.status]);
-  const current=dream&&detail?.id===run.id?preferLiveRun(detail,run):run;
+  },[needsDetail,run.id,run.status]);
+  const current=needsDetail&&detail?.id===run.id?preferLiveRun(detail,run):run;
   return <><div className="drawer-overlay" onClick={onClose} /><aside className="drawer task-detail-drawer" aria-label="任务详情">
     <button type="button" className="drawer-close" aria-label="关闭任务详情" onClick={onClose}>×</button>
     <h2>{run.product?.name ?? taskName(run.kind)}</h2><p className="pm-hint">{formatDate(run.startedAt, '-')} · {taskTriggerLabel(run)}</p>
     <TaskProgressCard run={current} link={false} />
+    {!dream && detailError && <p role="alert">{detailError}</p>}
     {dream&&(detailError?<p role="alert">{detailError}</p>:detail?<React.Suspense fallback={<p role="status">正在读取整理内容…</p>}><DreamRunContent run={current} expanded /></React.Suspense>:<p role="status">正在读取整理内容…</p>)}
-    <div className="task-run-card-actions">{isActive(run) && <button type="button" className="pm-ghost" disabled={busy || taskStopping(run)} onClick={onCancel}>{taskStopping(run) ? '正在停止…' : '停止任务'}</button>}{taskCanRetry(run) && <button type="button" className="pm-ghost" disabled={busy} onClick={onRetry}>{taskUsesFileQueue(run.kind)||run.status==='completed'?'继续未完成任务':'重新执行'}</button>}</div>
+    <div className="task-run-card-actions">{isActive(run) && <button type="button" className="pm-ghost" disabled={busy || taskStopping(run)} onClick={onCancel}>{taskStopping(run) ? '正在停止…' : '停止任务'}</button>}{taskCanRetry(run) && <button type="button" className="pm-ghost" disabled={busy} onClick={onRetry}>{taskUsesFileQueue(run.kind)||run.kind==='import_path'||run.status==='completed'?'继续未完成任务':'重新执行'}</button>}</div>
     <TaskTechnicalLogs key={run.id} run={run} />
   </aside></>;
 }
@@ -203,10 +205,10 @@ export function TaskCenterPage() {
   }, [rows, selectedRun?.id]);
   const activeRows = rows.filter(isActive);
   const waitingRows = rows.filter(run => run.status === 'queued');
-  const failedRows = rows.filter(run => run.status === 'failed');
-  const completedToday = rows.filter(run => run.status === 'completed' && isToday(run.completedAt)).length;
+  const failedRows = rows.filter(run => run.status === 'failed' || taskStatus(run) === '部分完成');
+  const completedToday = rows.filter(run => run.status === 'completed' && taskStatus(run) !== '部分完成' && isToday(run.completedAt)).length;
   const historyRows = useMemo(() => rows
-    .filter(run => filter === 'all' || run.status === filter)
+    .filter(run => filter === 'all' || (filter === 'partial' ? taskStatus(run) === '部分完成' : run.status === filter && (!['failed', 'completed'].includes(filter) || taskStatus(run) !== '部分完成')))
     .slice(0, 100), [filter, rows]);
 
   const cancel = async (run: ConsoleRun) => {
@@ -306,7 +308,7 @@ export function TaskCenterPage() {
       <div className="task-status-grid">
         <div className="task-status-card task-status-card-running"><span>运行中</span><strong>{activeRows.filter(run => run.status === 'running').length}</strong><small>后台正在执行</small></div>
         <div className="task-status-card task-status-card-waiting"><span>等待中</span><strong>{waitingRows.length}</strong><small>等待资源空闲</small></div>
-        <div className="task-status-card task-status-card-failed"><span>失败</span><strong>{failedRows.length}</strong><small>需要查看错误</small></div>
+        <div className="task-status-card task-status-card-failed"><span>待处理</span><strong>{failedRows.length}</strong><small>部分完成或失败，需查看原因</small></div>
         <div className="task-status-card task-status-card-completed"><span>今日完成</span><strong>{completedToday}</strong><small>已保存的任务结果</small></div>
       </div>
 
@@ -338,13 +340,13 @@ export function TaskCenterPage() {
 
       <section className="task-section">
         <div className="task-section-head"><h2>后台任务</h2><div className="task-filter-bar" role="tablist" aria-label="任务筛选">
-          {([['all', '全部'], ['running', '执行中'], ['queued', '排队中'], ['completed', '已完成'], ['failed', '失败'], ['cancelled', '已停止']] as Array<[TaskFilter, string]>).map(([value, label]) => <button role="tab" aria-selected={filter === value} key={value} type="button" className={filter === value ? 'active' : ''} onClick={() => setFilter(value)}>{label}</button>)}
+          {([['all', '全部'], ['running', '执行中'], ['queued', '排队中'], ['completed', '已完成'], ['partial', '部分完成'], ['failed', '失败'], ['cancelled', '已停止']] as Array<[TaskFilter, string]>).map(([value, label]) => <button role="tab" aria-selected={filter === value} key={value} type="button" className={filter === value ? 'active' : ''} onClick={() => setFilter(value)}>{label}</button>)}
         </div></div>
-        <div className="task-table-wrap"><table className="task-table"><thead><tr><th>任务</th><th>状态</th><th>已完成 / 总数</th><th>当前阶段</th><th>耗时</th><th>剩余子任务</th><th>操作</th></tr></thead><tbody>{historyRows.map(run => <tr key={run.id}>
+        <div className="task-table-wrap"><table className="task-table"><thead><tr><th>任务</th><th>状态</th><th>处理进度</th><th>当前阶段</th><th>耗时</th><th>剩余子任务</th><th>操作</th></tr></thead><tbody>{historyRows.map(run => <tr key={run.id}>
           <td><button type="button" onClick={() => { setSelectedRun(run); window.history.replaceState(null, '', `#tasks?run=${encodeURIComponent(run.id)}`); }}>{run.product?.name ?? taskName(run.kind)}</button><small>{run.product?.file ?? formatDate(run.startedAt, '-')}</small></td>
-          <td><span className={statusClass(run.status)}>{statusLabel(run)}</span></td>
+          <td><span className={statusClass(taskStatus(run)==='部分完成'?'partial':run.status)}>{statusLabel(run)}</span></td>
           <td>{taskPhaseSummary(run).count}{!taskRoundCompleted(run)&&taskPercent(run) != null && <div className="product-task-bar" aria-label={`当前进度 ${taskPercent(run)}%`}><i style={{ width: `${taskPercent(run)}%` }} /></div>}</td>
-          <td>{taskModelSetupIssue(run)?.title ?? (taskRoundCompleted(run)?taskRoundListSummary(run):run.product?.errorReason ?? (isActive(run) ? run.product?.stage ?? '等待执行' : taskResult(run) ?? run.product?.stage ?? statusLabel(run)))}</td>
+          <td>{taskModelSetupIssue(run)?.title ?? (taskStatus(run)==='部分完成'?run.product?.stage??'部分完成':taskRoundCompleted(run)?taskRoundListSummary(run):run.product?.errorReason ?? (isActive(run) ? run.product?.stage ?? '等待执行' : taskResult(run) ?? run.product?.stage ?? statusLabel(run)))}</td>
           <td title={taskPhaseSummary(run).durationLabel}>{taskPhaseSummary(run).duration}</td>
           <td>{taskPhaseSummary(run).remaining}</td>
           <td><div className="task-table-actions"><button type="button" className="pm-ghost" onClick={() => { setSelectedRun(run); window.history.replaceState(null, '', `#tasks?run=${encodeURIComponent(run.id)}`); }}>查看详情</button>{taskModelSetupIssue(run) && desktopApi() && <button type="button" className="pm-ghost" onClick={() => { window.location.hash = 'settings-model-roles'; }}>去配置模型</button>}{isActive(run) && <button type="button" className="pm-ghost" disabled={cancelling === run.id} onClick={() => void cancel(run)}>停止</button>}{taskCanRetry(run) && <button type="button" className="pm-ghost" disabled={retrying === run.id} onClick={() => void retry(run)}>重试</button>}</div></td>

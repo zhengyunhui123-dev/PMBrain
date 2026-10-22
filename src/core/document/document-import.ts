@@ -78,13 +78,17 @@ export async function importStructuredDocument(
 ): Promise<ImportResult> {
   const document = normalizeStructuredDocument(inputDocument);
   const text = renderStructuredDocument(document);
+  const summary = summarizeStructuredDocument(document);
   if (!text.trim()) {
+    const reason = summary.ocrWarnings.length ? summary.ocrWarnings.join('；')
+      : summary.pagesNeedingOcr > 0 ? '文档需要图片识别，请在模型设置中配置支持图片输入的 OCR 模型。' : '文档中没有可读取的文字。';
+    console.error(`[pmbrain document-import] ${JSON.stringify({ path: relativePath, ...summary })}`);
     return {
       slug: slugifyPath(relativePath),
       status: 'skipped',
       chunks: 0,
-      error: `No extractable text found in document file: ${relativePath}`,
-      documentSummary: summarizeStructuredDocument(document),
+      error: `未提取到文字：${relativePath}。${reason}`,
+      documentSummary: summary,
     };
   }
 
@@ -92,7 +96,6 @@ export async function importStructuredDocument(
   const rawHash = createHash('sha256').update(readFileSync(sourceFilePath)).digest('hex');
   const title = basename(relativePath, extname(relativePath));
   const ext = extname(relativePath).toLowerCase().slice(1);
-  const summary = summarizeStructuredDocument(document);
   const parentSections = buildStructuredParentSections(document);
   const content = [
     '---',

@@ -48,6 +48,34 @@ test('原生请求错误原样返回失败回执',async()=>{
   expect(result).toMatchObject({status:'failed',text:'',message:'OCR 原生服务错误'});expect(calls).toBe(1);
 });
 
+test('图片请求被拒绝时保留服务商具体原因，不只显示 Bad Request', async () => {
+  setup();
+  __setChatTransportForTests(async () => { throw Object.assign(new Error('Bad Request'), { cause: { responseBody: JSON.stringify({ error: { message: 'This model does not support image inputs' } }) } }); });
+  const result = await recognizeImageText(engine, createCanvas(64,64).toBuffer('image/png'), 'image/png', { enabled: true });
+  expect(result.status).toBe('failed');
+  expect(result.message).toContain('This model does not support image inputs');
+});
+
+test('真实兼容 SDK 的 HTTP 400 响应保留图片拒绝原因且不重试其他模型', async () => {
+  let requests = 0;
+  server = Bun.serve({ port: 0, fetch: () => { requests++; return Response.json({ error: { message: 'Image inputs are not supported by this model', type: 'invalid_request_error' } }, { status: 400 }); } });
+  configureGateway({ chat_model: 'service-ocr:fixture', base_urls: { 'service-ocr': server.url.origin + '/v1' }, touchpoint_api_keys: { 'service-ocr': { chat: 'fixture-only' } }, env: {} });
+  const result = await recognizeImageText(engine, createCanvas(64,64).toBuffer('image/png'), 'image/png', { enabled: true });
+  expect(result.status).toBe('failed');
+  expect(result.message).toContain('Image inputs are not supported by this model');
+  expect(requests).toBe(1);
+});
+
+test('已知不支持图片的硅基流动型号在发起模型请求前说明原因', async () => {
+  configureGateway({ chat_model: 'service-siliconflow:deepseek-ai/DeepSeek-V4-Flash', base_urls: { 'service-siliconflow': 'https://api.siliconflow.cn/v1' }, touchpoint_api_keys: { 'service-siliconflow': { chat: 'fixture-only' } }, env: {} });
+  let calls = 0;
+  __setChatTransportForTests(async () => { calls++; return reply('unexpected'); });
+  const result = await recognizeImageText(engine, createCanvas(64,64).toBuffer('image/png'), 'image/png', { enabled: true });
+  expect(result).toMatchObject({ status: 'skipped', code: 'model_no_vision' });
+  expect(result.message).toContain('不支持图片输入');
+  expect(calls).toBe(0);
+});
+
 test('模型原生拒绝不保存为 OCR 正文，也不切换模型重试',async()=>{
   setup();let calls=0;
   __setChatTransportForTests(async()=>{calls++;return reply('原生服务拒绝内容','refusal');});

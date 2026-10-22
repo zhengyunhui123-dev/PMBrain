@@ -54,6 +54,10 @@ export interface RunImportResult {
   imported: number;
   skipped: number;
   errors: number;
+  unchanged?: number;
+  partialFiles?: number;
+  processed?: number;
+  total?: number;
   chunksCreated: number;
   failures: Array<{ path: string; error: string }>;
   /**
@@ -328,6 +332,8 @@ export async function runStructuredImport(
   let imported = 0;
   let skipped = 0;
   let errors = 0;
+  let unchanged = 0;
+  let partialFiles = 0;
   let processed = 0;
   let chunksCreated = 0;
   const importedSlugs: string[] = [];
@@ -420,6 +426,7 @@ export async function runStructuredImport(
       } else if (result.status === 'partial') {
         imported++;
         errors++;
+        partialFiles++;
         chunksCreated += result.chunks;
         importedSlugs.push(result.slug);
         const reason = result.error ?? 'Large document embedding is partially complete';
@@ -441,10 +448,11 @@ export async function runStructuredImport(
         if (result.error && result.error !== 'unchanged') {
           errors++;
           console.error(`  Skipped ${relativePath}: ${result.error}`);
-          reportFile({ status: 'failed', path: relativePath, reason: result.error });
+          reportFile({ status: 'failed', path: relativePath, reason: result.error, document: result.documentSummary });
           // Bug 9 — non-"unchanged" skips carry a real error reason.
           failures.push({ path: relativePath, error: result.error });
         } else {
+          unchanged++;
           reportFile({ status: 'unchanged', path: relativePath, reason: '内容未变化或知识库已有相同资料' });
           // 'unchanged' or no-error skip: content_hash matched a prior
           // successful import, so this file IS done for checkpoint purposes.
@@ -674,7 +682,7 @@ export async function runStructuredImport(
     await engine.setConfig('sync.repo_path', importRoot);
   }
 
-  return { imported, skipped, errors, chunksCreated, failures, importedSlugs };
+  return { imported, skipped, errors, unchanged, partialFiles, processed, total: files.length, chunksCreated, failures, importedSlugs };
 }
 
 /**

@@ -23,6 +23,7 @@
 
 import { embed as aiEmbed, embedMany, generateObject, generateText, jsonSchema, streamText, type Output } from 'ai';
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { modelVisionCapability } from '../../../shared/model-vision.ts';
 import { listRecipes } from './recipes/index.ts';
 import { createOpenAI } from '@ai-sdk/openai';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
@@ -690,6 +691,10 @@ export type VisionCapability = 'supported' | 'unsupported' | 'unknown';
 export function getVisionCapability(model = getImageOcrModel()): VisionCapability {
   try {
     const { parsed, recipe } = resolveRecipe(model);
+    const endpointCapability = modelVisionCapability(parsed.modelId, configuredBaseURL(requireConfig(), recipe.id, 'chat'));
+    if (endpointCapability !== 'unknown') return endpointCapability;
+    const declaredCapability = requireConfig().model_vision?.[model];
+    if (declaredCapability) return declaredCapability;
     const chat = recipe.touchpoints.chat;
     if (!chat) return 'unsupported';
     if (chat.vision_models) return chat.vision_models.includes(parsed.modelId) ? 'supported' : 'unsupported';

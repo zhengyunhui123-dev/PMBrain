@@ -1,5 +1,6 @@
 import { taskName, type TaskProductProgress } from '../../../shared/task-progress.ts';
 import { phaseHasPendingWork,dreamPhaseDetail } from '../../../shared/dream-phase-state.ts';
+import { importOutcome } from '../../../shared/import-outcome.ts';
 
 const labels: Record<string, string> = {
   memory: '提炼对话记忆',
@@ -321,6 +322,27 @@ export function finishTaskProgress(view: TaskProductProgress, status: string, re
     }
   } else if (status === 'queued' && next.stage !== '等待前面的整理任务完成') next.stage = '等待执行';
   next.completedSteps = next.steps.filter(step => step.status === 'completed').length;
+  const imported = next.name === '导入资料' ? importOutcome(data) : null;
+  if (imported && ['completed', 'failed'].includes(status)) {
+    next.metrics = next.metrics.map(metric => metric.label === '跳过资料' ? { ...metric, value: imported.unchanged }
+      : metric.label === '新增资料' ? { ...metric, value: imported.imported }
+      : metric.label === '失败文件' ? { ...metric, value: imported.failed } : metric);
+    if (imported.partial) next.metrics.push({ label: '部分导入', value: imported.partial });
+    if (!Array.isArray(data.phases)) {
+      next.stage = imported.outcome === 'partial' ? '部分完成' : imported.outcome === 'failed' ? '导入失败' : next.stage;
+      const total = imported.total ?? next.total;
+      const processed = imported.processed;
+      if (total != null && processed >= total) {
+        next.percent = 100;
+        next.processed = processed;
+        next.total = total;
+        next.steps = [];
+        next.completedSteps = 0;
+        next.phaseProgress = undefined;
+        next.file = null;
+      }
+    }
+  }
   if(next.budget)applyTaskBudget(next,next.budget);
   if(next.budget?.historicalCostUnknown)next.detail='旧版任务此前的总费用无法完整核算；此处总预算从升级后的首次继续起累计，旧版历史费用未计入。';
   if(next.budget?.reason&&['failed','cancelled'].includes(status)){next.stage=next.budget.reason==='no_pricing'?'缺少模型价格，待继续':'费用预算不足，待继续';next.errorReason=next.budget.reason==='no_pricing'?'请同步模型价格或填写单价后继续；已完成成果保留。':'请提高整次费用上限后继续；同一任务的累计费用不会清零。';}

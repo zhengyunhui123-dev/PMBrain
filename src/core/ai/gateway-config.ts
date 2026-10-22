@@ -1,6 +1,7 @@
 import type { GBrainConfig } from '../config.ts';
 import type { AIGatewayConfig } from './types.ts';
 import { isGenerativeModelEnabled } from '../model-usage.ts';
+import { availableServiceModels, serviceModelVision } from '../../../shared/model-services.ts';
 
 /** Build the process-local AI gateway config from PMBrain's canonical file config. */
 export function buildGatewayConfig(config: GBrainConfig): AIGatewayConfig {
@@ -31,6 +32,10 @@ export function buildGatewayConfig(config: GBrainConfig): AIGatewayConfig {
     chat_model: config.chat_model,
     ocr_enabled: config.ocr_enabled ?? config.embedding_image_ocr ?? false,
     ocr_model: config.ocr_model ?? config.embedding_image_ocr_model,
+    model_vision: Object.fromEntries(availableServiceModels(config.desktop?.model_services ?? [], 'chat').flatMap(item => {
+      const capability = serviceModelVision(item.service, item.model);
+      return capability === 'unknown' ? [] : [[item.value, capability]];
+    })),
     chat_fallback_chain: config.chat_fallback_chain,
     base_urls: { ...envBaseUrls, ...(config.provider_base_urls ?? {}) },
     touchpoint_base_urls: config.provider_touchpoint_base_urls,

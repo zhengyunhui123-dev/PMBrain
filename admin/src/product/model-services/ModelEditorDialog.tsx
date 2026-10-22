@@ -90,6 +90,7 @@ export function ModelEditorDialog({ model }: { model: ModelServicesController })
                   onClick={() =>
                     setEditor({
                       ...editor,
+                      ...(value === 'vision' ? { vision: !editor.capabilities.includes(value) } : {}),
                       capabilities: editor.capabilities.includes(value)
                         ? editor.capabilities.filter((item) => item !== value)
                         : [...editor.capabilities, value as ModelCapability],

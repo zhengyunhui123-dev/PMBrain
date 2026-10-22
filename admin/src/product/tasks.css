@@ -10,6 +10,8 @@
 .product-task-state { font-size: 12px; color: var(--product-muted, var(--text-muted)); white-space: nowrap; }
 .product-task-state.state-running, .product-task-state.state-queued { color: var(--accent); }
 .product-task-state.state-completed { color: var(--success, #34a864); }
+.product-task-state.state-partial { color: var(--warning, #b78024); }
+.task-status-partial { color: var(--warning, #b78024); background: color-mix(in srgb, var(--warning, #b78024) 10%, transparent); }
 .product-task-state.state-failed, .product-task-error { color: var(--danger, #db6666); }
 .product-task-current { display: flex; justify-content: space-between; gap: 16px; font-size: 13px; margin-bottom: 10px; }
 .product-task-current b { font-weight: 500; }

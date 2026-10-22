@@ -4,6 +4,24 @@ import type { BrainEngine } from './engine.ts';
 export const OCR_RECEIPT_VERSION = 1;
 export const OCR_PROMPT_VERSION = 4;
 
+function ocrRequestError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  const seen = new Set<unknown>();
+  for (let current = error, depth = 0; current && typeof current === 'object' && depth < 5 && !seen.has(current); depth++) {
+    seen.add(current);
+    const entry = current as { responseBody?: unknown; cause?: unknown; lastError?: unknown };
+    if (typeof entry.responseBody === 'string') {
+      try {
+        const body = JSON.parse(entry.responseBody);
+        const detail = body?.error?.message ?? body?.message ?? (typeof body?.error === 'string' ? body.error : undefined);
+        if (typeof detail === 'string' && detail.trim() && !message.includes(detail)) return `${message}：${detail.slice(0, 1000)}`;
+      } catch {}
+    }
+    current = entry.cause ?? entry.lastError;
+  }
+  return message;
+}
+
 export type OcrSkipCode =
   | 'disabled'
   | 'model_unconfigured'
@@ -100,7 +118,7 @@ export async function recognizeImageText(
       text: '',
       model,
       code: 'request_failed',
-      message: error instanceof Error ? error.message : String(error),
+      message: ocrRequestError(error),
     };
   }
 }

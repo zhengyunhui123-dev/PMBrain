@@ -10,6 +10,14 @@ import {
 afterEach(() => resetGateway());
 
 describe('OCR model routing', () => {
+  test('checks the selected SiliconFlow endpoint rather than inheriting official DeepSeek aliases', () => {
+    configureGateway({ chat_model: 'service-siliconflow:deepseek-ai/DeepSeek-V4-Flash', base_urls: { 'service-siliconflow': 'https://api.siliconflow.cn/v1' }, env: {} });
+    expect(getVisionCapability()).toBe('unsupported');
+    configureGateway({ chat_model: 'service-siliconflow:deepseek-ai/DeepSeek-V4.1-Flash', base_urls: { 'service-siliconflow': 'https://api.siliconflow.cn/v1' }, env: {} });
+    expect(getVisionCapability()).toBe('supported');
+    configureGateway({ chat_model: 'service-custom:deepseek-ai/DeepSeek-V4-Flash', base_urls: { 'service-custom': 'https://custom.example/v1' }, env: {} });
+    expect(getVisionCapability()).toBe('unknown');
+  });
   test('uses the dedicated OCR model when configured', () => {
     configureGateway({
       chat_model: 'deepseek:deepseek-chat',

@@ -1,4 +1,5 @@
 import {mergeModelBilling} from './model-billing.js';
+import { modelVisionCapability } from './model-vision.js';
 export type ModelCapability = 'vision' | 'reasoning' | 'tools' | 'web';
 export interface ServiceModel {
   id: string;
@@ -6,6 +7,7 @@ export interface ServiceModel {
   group: string;
   kind: 'chat' | 'embedding' | 'unknown';
   capabilities: ModelCapability[];
+  vision?: boolean;
   contextWindow?: number;
   inputPrice?: number;
   outputPrice?: number;
@@ -109,6 +111,9 @@ export function serviceModelValue(service: ModelService, model: ServiceModel): s
 }
 export function availableServiceModels(services: ModelService[], kind: ServiceModel['kind']) {
   return services.filter(service => service.enabled).flatMap(service => service.models.filter(model => model.kind === kind).map(model => ({ value: serviceModelValue(service, model), label: `${model.name} · ${service.name}`, model, service })));
+}
+export function serviceModelVision(service: ModelService, model: ServiceModel) {
+  return modelVisionCapability(model.id, serviceConnection(service, 'chat').baseUrl, model.capabilities, model.vision);
 }
 export type ServiceModelFilter = 'all' | ServiceModel['kind'];
 export function serviceNeedsApiKey(provider: string, baseUrl: string): boolean {

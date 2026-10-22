@@ -417,6 +417,7 @@ export interface AIGatewayConfig {
   chat_output_limits?: Record<string,number>;
   ocr_enabled?: boolean;
   ocr_model?: string;
+  model_vision?: Record<string, 'supported' | 'unsupported'>;
   /**
    * v0.35.0.0+: default reranker model for `gateway.rerank()` callers. As
    * `'provider:model'` (e.g. `'zeroentropyai:zerank-2'`). Resolved at

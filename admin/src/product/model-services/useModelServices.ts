@@ -12,6 +12,7 @@ import {
   serviceModelValue,
   serviceModelsNotOnRemote,
   serviceNeedsApiKey,
+  serviceModelVision,
   type ModelService,
   type ModelServicesState,
   type ServiceModel,
@@ -431,6 +432,13 @@ export function useModelServices({ mode }: { mode: "services" | "roles" }) {
     value: string,
     choices: Array<{ value: string; label: string }>,
   ) => {
+    if (key === 'image' && value) {
+      const selected = availableServiceModels(stateRef.current?.services ?? [], 'chat').find(item => item.value === value);
+      if (selected && serviceModelVision(selected.service, selected.model) === 'unsupported') {
+        setNotice('该模型不支持图片输入，请选择支持图片的 OCR 模型。');
+        return;
+      }
+    }
     if (key === "chat" && !value) {
       setNotice("请选择普通模型");
       return;
@@ -674,6 +682,11 @@ export function useModelServices({ mode }: { mode: "services" | "roles" }) {
   const disableOnClear = service?.enabled && keyRequired;
   const matches = listedServiceModels(service?.models ?? [], modelQuery);
   const options = availableServiceModels(state?.services ?? [], "chat");
+  const ocrOptions = options.map(item => ({ ...item, vision: serviceModelVision(item.service, item.model) }));
+  const ocrSelection = ocrOptions.find(item => item.value === (roles.image || roles.chat));
+  const ocrWarning = !ocrEnabled ? '' : !ocrSelection ? '请配置支持图片输入的 OCR 模型；扫描件需要图片识别。'
+    : ocrSelection.vision === 'unsupported' ? '当前 OCR 模型不支持图片输入，扫描 PDF 和图片无法识别。请选择支持图片输入的模型。'
+    : ocrSelection.vision === 'unknown' ? '此模型的图片能力尚未确认。普通对话连接成功不代表 OCR 可用，请用扫描件验证。' : '';
   const embeddingOptions = availableServiceModels(state?.services ?? [], "embedding");
   const pickerListed = catalog
     ? listedServiceModels(catalog, syncQuery).filter((model) =>
@@ -773,6 +786,8 @@ export function useModelServices({ mode }: { mode: "services" | "roles" }) {
     disableOnClear,
     matches,
     options,
+    ocrOptions,
+    ocrWarning,
     embeddingOptions,
     pickerListed,
     stale,

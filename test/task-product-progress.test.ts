@@ -6,6 +6,30 @@ import type {ConsoleRun} from '../shared/contracts/common.ts';
 import type { MaintenanceCheckpoint } from '../src/product/tasks/types.ts';
 
 describe('任务的产品进度', () => {
+  test('整批处理结束但三份失败时显示部分完成，不把最后的写入步骤标成整批故障', () => {
+    const adapter = new TaskProgressAdapter('import_path');
+    adapter.event({ phase: 'import.files', done: 9, total: 9 });
+    adapter.event({ phase: 'import.write', file: '最后成功.docx' });
+    const result = { imported: 5, skipped: 4, errors: 3, chunksCreated: 683, processed: 9, total: 9, failures: [{ path: '扫描件.pdf', error: 'OCR 请求被拒绝' }] };
+    const view = finishTaskProgress(adapter.view, 'failed', result, 'OCR 请求被拒绝');
+    expect(view.stage).toBe('部分完成');
+    expect(view.percent).toBe(100);
+    expect(view.steps).toEqual([]);
+    expect(view.file).toBeNull();
+    expect(view.metrics).toContainEqual({ label: '跳过资料', value: 1 });
+    expect(view.metrics).toContainEqual({ label: '失败文件', value: 3 });
+    expect(taskStatus({ id: 'task-1', kind: 'import_path', status: 'failed', result, product: view } as ConsoleRun)).toBe('部分完成');
+    expect(taskCanRetry({ id: 'task-1', kind: 'import_path', status: 'failed', result, product: view } as ConsoleRun)).toBe(true);
+  });
+
+  test('全部文档失败时仍然显示失败，处理数完成不代表导入成功', () => {
+    const adapter = new TaskProgressAdapter('import_path');
+    adapter.event({ phase: 'import.files', done: 3, total: 3 });
+    const view = finishTaskProgress(adapter.view, 'failed', { imported: 0, skipped: 3, errors: 3, processed: 3, total: 3 }, '未提取到文字');
+    expect(view.stage).toBe('导入失败');
+    expect(view.percent).toBe(100);
+    expect(view.steps).toEqual([]);
+  });
   test('任务时长和数据库等待超时分别说明原因，模型网络超时保留模型提示', () => {
     expect(taskErrorReason('wall-clock timeout exceeded')).toBe('本次任务执行超时，已保留完成结果，可继续未完成任务。');
     expect(taskErrorReason('timeout exceeded')).toBe('本次任务执行超时，已保留完成结果，可继续未完成任务。');
