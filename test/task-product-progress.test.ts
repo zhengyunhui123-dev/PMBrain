@@ -1,11 +1,19 @@
 import { describe, expect, test } from 'bun:test';
-import { TaskProgressAdapter, finishTaskProgress, taskRunSummary } from '../src/product/tasks/progress-adapter.ts';
+import { TaskProgressAdapter, finishTaskProgress, taskRunSummary, taskErrorReason } from '../src/product/tasks/progress-adapter.ts';
 import { resumeMaintenanceCheckpoint } from '../src/product/tasks/checkpoint.ts';
 import {taskCanRetry,taskStatus} from '../admin/src/product/task-presentation.ts';
 import type {ConsoleRun} from '../shared/contracts/common.ts';
 import type { MaintenanceCheckpoint } from '../src/product/tasks/types.ts';
 
 describe('任务的产品进度', () => {
+  test('任务时长和数据库等待超时分别说明原因，模型网络超时保留模型提示', () => {
+    expect(taskErrorReason('wall-clock timeout exceeded')).toBe('本次任务执行超时，已保留完成结果，可继续未完成任务。');
+    expect(taskErrorReason('timeout exceeded')).toBe('本次任务执行超时，已保留完成结果，可继续未完成任务。');
+    expect(taskErrorReason('aborted: timeout')).toBe('本次任务执行超时，已保留完成结果，可继续未完成任务。');
+    expect(taskErrorReason('数据库请求超时：@transaction.open，60000 毫秒内未完成')).toContain('数据库');
+    expect(taskErrorReason('database request timeout')).toContain('数据库');
+    expect(taskErrorReason('fetch failed: timed out')).toContain('模型调用失败');
+  });
   test('费用停止的导入和实体任务仍可继续原任务，完成的导入不可重复继续',()=>{
     for(const kind of ['import_path','dream_capture_entities','dream_quick']){
       const run={id:'task-155',kind,status:'completed',result:{status:'partial'}} as ConsoleRun;

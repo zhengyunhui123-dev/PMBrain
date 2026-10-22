@@ -76,6 +76,35 @@ test('取消尚未执行的数据库请求立即返回，不打断其他任务�
   expect(await engine.getConfig('other-task')).toBe('kept');
 });
 
+for (const transaction of [false, true]) test(`排队等待不消耗 SQL 执行时限，持有事务提交后${transaction ? '新事务' : '读取'}仍能完成`, async () => {
+  let entered!: () => void;
+  let release!: () => void;
+  const started = new Promise<void>(resolve => { entered = resolve; });
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const held = engine.transaction(async tx => {
+    await tx.setConfig('queued-deadline', 'committed');
+    entered();
+    await gate;
+  });
+  await started;
+  const controller = new AbortController();
+  const timeouts: Error[] = [];
+  const pending = withDatabaseRequest({ taskId: 998, token: 'queued-deadline', signal: controller.signal, timeoutMs: 80,
+    onTimeout: error => { timeouts.push(error); controller.abort(error); },
+  }, () => transaction ? engine.transaction(tx => tx.getConfig('queued-deadline')) : engine.getConfig('queued-deadline'));
+  const settled = pending.then(value => ({ value }), error => ({ error }));
+  try {
+    await Bun.sleep(200);
+    expect(timeouts).toHaveLength(0);
+    const request = (engine as unknown as WorkerPgliteEngine).inspectRequests().find(row => row.taskId === 998);
+    expect(request?.startedAt).toBeUndefined();
+    release();
+    await held;
+    expect(await settled).toEqual({ value: 'committed' });
+    expect(timeouts).toHaveLength(0);
+  } finally { release(); await held; await settled; }
+});
+
 test('数据库同步 SQL 不返回时可结束唯一执行进程，原生重开保留提交并回滚未提交内容', async () => {
   const owner = engine as unknown as WorkerPgliteEngine;
   await engine.putPage('recovery/committed', {type:'note',title:'已提交',compiled_truth:'停止不能丢失这份资料'});

@@ -924,7 +924,8 @@ export class MinionQueue {
           updated_at = now()
          WHERE status = 'active'
            AND started_at IS NOT NULL
-           AND EXTRACT(EPOCH FROM (now() - started_at)) * 1000 >
+           AND EXTRACT(EPOCH FROM (now() - COALESCE(
+             timeout_at - (timeout_ms::double precision * interval '1 millisecond'), started_at))) * 1000 >
              CASE
                WHEN timeout_ms IS NOT NULL THEN timeout_ms * 2
                ELSE $1::double precision * 2 * GREATEST(max_stalled, 1)

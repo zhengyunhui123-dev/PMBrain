@@ -22,6 +22,8 @@ export function taskErrorReason(error: string | null | undefined): string | null
   if (!error) return null;
   if (/ENOENT|no such file/i.test(error)) return '找不到资料文件，请检查路径后重试。';
   if (/too large/i.test(error)) return '资料超过支持的大小，请拆分后重试。';
+  if (/^(?:(?:wall-clock )?timeout exceeded|aborted:\s*timeout)$/i.test(error)) return '本次任务执行超时，已保留完成结果，可继续未完成任务。';
+  if (/数据库请求超时|database request timeout/i.test(error)) return '数据库执行超时，已保留完成结果，请查看技术日志后继续任务。';
   if (/fetch failed|ECONN|timeout|timed out|401|403|429|API.?key|credentials|balance/i.test(error)) return '模型调用失败，请检查模型连接、密钥或额度。';
   if (/SQL|syntax error|constraint|database/i.test(error)) return '数据库操作未成功，请在技术日志中查看原因。';
   return /[\u4e00-\u9fff]/.test(error) ? error.replace(/^Error:\s*/, '').slice(0, 500) : '任务未完成，请在技术日志中查看原因后重试。';

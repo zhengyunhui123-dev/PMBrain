@@ -12,6 +12,7 @@ import type { ConsoleRun } from '../src/commands/natural-lang/types.ts';
 import { configureGateway, resetGateway } from '../src/core/ai/gateway.ts';
 import { TaskEngineHost } from '../src/product/tasks/engine-host.ts';
 import { MinionQueue } from '../src/core/minions/queue.ts';
+import { SyncFileQueue } from '../src/product/tasks/sync-file-queue.ts';
 import { PRODUCT_TASK_QUEUE } from '../src/product/tasks/runtime.ts';
 import type { BrainEngine } from '../src/core/engine.ts';
 import { PostgresEngine } from '../src/core/postgres-engine.ts';
@@ -44,6 +45,32 @@ function configureModels(enabled = true, model = 'task-test') {
     desktop: { knowledge_directory: root,model_services:[{id:'task-test',provider:'custom-openai',name:'本地验收模型',baseUrl:modelServer.url.origin+'/v1',apiKey:'task-test-only',enabled:true,models:[{id:model,name:model,group:'test',kind:'embedding',capabilities:[],inputPriceCny:0,outputPriceCny:0,pricingSource:'manual'}]}] },
   }));
 }
+
+test('隔夜继续按本次领取计时，首次时间和累计费用保留，真正超时仍会终止', async () => {
+  const queue = new MinionQueue(engine);
+  const files = new SyncFileQueue(engine);
+  const name = 'resume-timing-test';
+  const timeout = 6 * 60 * 60 * 1000;
+  const added = await queue.add(name, { taskBudget: { spentCny: 0.6 }, receipts: ['saved'] }, { queue: name, timeout_ms: timeout });
+  await engine.executeRaw("UPDATE minion_jobs SET status='paused',started_at=now()-interval '13 hours' WHERE id=$1", [added.id]);
+  const original = (await queue.getJob(added.id))!.started_at;
+  try {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await files.resume(added.id);
+      const claimed = await queue.claim(`timing-${attempt}`, 30000, name, [name]);
+      expect(claimed?.id).toBe(added.id);
+      expect(claimed?.started_at).toEqual(original);
+      expect(claimed!.timeout_at!.getTime()).toBeGreaterThan(Date.now());
+      expect((await queue.handleWallClockTimeouts(30000)).some(job => job.id === added.id)).toBe(false);
+      const preserved = await queue.getJob(added.id);
+      expect(preserved?.status).toBe('active');
+      expect(preserved?.data).toMatchObject({ taskBudget: { spentCny: 0.6 }, receipts: ['saved'] });
+    }
+    await engine.executeRaw("UPDATE minion_jobs SET timeout_at=now()-interval '7 hours' WHERE id=$1", [added.id]);
+    expect((await queue.handleWallClockTimeouts(30000)).some(job => job.id === added.id)).toBe(true);
+    expect((await queue.getJob(added.id))?.error_text).toBe('wall-clock timeout exceeded');
+  } finally { await queue.cancelJob(added.id); }
+});
 
 async function modelWaiting(timeoutMs=15_000) {
   const deadline = Date.now() + timeoutMs;

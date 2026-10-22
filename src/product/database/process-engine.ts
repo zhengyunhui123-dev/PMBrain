@@ -26,7 +26,7 @@ export class WorkerPgliteEngine {
   private config?: EngineConfig;
   private recovering: Promise<void> | null = null;
   private failure: Error | null = null;
-  private pending = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void; dispose: () => void;
+  private pending = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void; dispose: () => void; start: () => void;
     observation: { id:number;taskId?:number;method:string;scope?:number;generation:number;enqueuedAt:number;startedAt?:number;sqlFingerprint?:string;chunkWrite?:{slug:string;sourceId:string;chunks:number} } }>();
 
   constructor() { return this.proxy(); }
@@ -63,19 +63,22 @@ export class WorkerPgliteEngine {
       const observation={id,taskId:context?.taskId,method,scope,generation:this.generation,enqueuedAt:Date.now(),
         chunkWrite:method==='upsertChunks'?{slug:String(args[0]),sourceId:String((args[2] as {sourceId?:string}|undefined)?.sourceId??'default'),chunks:Array.isArray(args[1])?args[1].length:0}:undefined,
         sqlFingerprint:method==='executeRaw'||method==='@db.query'?createHash('sha256').update(String(args[0])).digest('hex'):undefined};
-      this.pending.set(id, { resolve, reject, dispose, observation });
+      const start = () => {
+        if (!context || rollback || timer !== undefined) return;
+        timer = setTimeout(() => {
+          cancel();
+          console.error('[database request timeout]',JSON.stringify(this.inspectRequests().find(request=>request.id===id)));
+          context.onTimeout(new Error(`数据库请求超时：${method}，${context.timeoutMs ?? 60000} 毫秒内未完成`));
+        }, context.timeoutMs ?? 60000);
+        timer.unref();
+      };
+      this.pending.set(id, { resolve, reject, dispose, observation, start });
       try {
         owner.send({ id, method, args: args.map(transferable), scope, priority: databasePriority(),
           taskId: context?.taskId, token: context?.token, generation: this.generation, enqueuedAt: Date.now() });
         if (context && !rollback) {
           context.signal.addEventListener('abort', cancel, { once: true });
           if (context.signal.aborted) cancel();
-          timer = setTimeout(() => {
-            cancel();
-            console.error('[database request timeout]',JSON.stringify(this.inspectRequests().find(request=>request.id===id)));
-            context.onTimeout(new Error(`数据库请求超时：${method}，${context.timeoutMs ?? 60000} 毫秒内未完成`));
-          }, context.timeoutMs ?? 60000);
-          timer.unref();
         }
       } catch (error) { this.pending.delete(id); dispose(); reject(error); }
     });
@@ -102,7 +105,7 @@ export class WorkerPgliteEngine {
 
   private accept(reply: Reply): void {
     const request = this.pending.get(reply.id);
-    if(reply.event==='started'){if(request)request.observation.startedAt=Date.now();return;}
+    if(reply.event==='started'){if(request){request.observation.startedAt=Date.now();request.start();}return;}
     this.pending.delete(reply.id);
     request?.dispose();
     if (!reply.error) { request?.resolve(reply.value); return; }
