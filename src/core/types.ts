@@ -1662,6 +1662,7 @@ export interface HybridSearchMeta {
 
 // Config
 export interface EngineConfig {
+  require_existing_database?: boolean;
   database_url?: string;
   database_path?: string;
   engine?: 'postgres' | 'pglite';

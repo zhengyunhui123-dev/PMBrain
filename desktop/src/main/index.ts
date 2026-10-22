@@ -492,6 +492,11 @@ if (!app.requestSingleInstanceLock()) {
     lanController.startMonitor(LAN_MONITOR_INTERVAL_MS);
     await windowController.create();
     updateController.initialize();
+  }).catch(error => {
+    const message = error instanceof Error ? error.message : String(error);
+    logger?.write('desktop', `Startup stopped: ${message}`);
+    dialog.showErrorBox('PMBrain 无法安全启动', message);
+    app.quit();
   });
 
   app.on('before-quit', event => {

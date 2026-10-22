@@ -1,5 +1,5 @@
 import { mkdirSync, statSync, type Stats } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { PgliteOpenError, PglitePermissionError } from '../pglite-errors.js';
 
 function filesystemFailure(databasePath: string, cause: unknown): Error {
@@ -62,4 +62,22 @@ export function createPgliteDatabaseDirectory(databasePath: string): void {
     }
     throw filesystemFailure(databasePath, cause);
   }
+}
+
+export function requireExistingPgliteDatabase(databasePath: string | null | undefined): void {
+  if (!databasePath || validatePgliteDatabasePath(databasePath) !== 'directory') {
+    throw new PgliteOpenError(
+      `未找到原有 PGLite 知识库：${databasePath || '未配置路径'}。已停止启动，不会自动创建空库。请检查磁盘连接，并在「修改配置」中选择原有数据库文件夹；无需重新导入资料。`,
+      { databasePath: databasePath || undefined },
+    );
+  }
+  try {
+    if (statSync(join(databasePath, 'PG_VERSION')).isFile()) return;
+  } catch (cause) {
+    if ((cause as NodeJS.ErrnoException)?.code !== 'ENOENT') throw filesystemFailure(databasePath, cause);
+  }
+  throw new PgliteOpenError(
+    `原有 PGLite 知识库缺少 PG_VERSION：${databasePath}。已停止启动，不会初始化或覆盖该目录。请保留目录并选择原有有效数据库，或从已验证备份恢复。`,
+    { databasePath },
+  );
 }

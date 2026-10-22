@@ -70,9 +70,9 @@ export function CreateLibrary({ onDone, onCreated, onOpenSettings, visible = tru
       const result: DesktopSetupState = await desktop.getSetup(true);
       if (request !== setupRequest.current || lifecycle.current.signal.aborted) return;
       const setup = result.setup;
-      setPath(setup.defaults.databasePath);
-      setDirectory(setup.defaults.knowledgeDirectory);
-      setCustomPath(setup.defaults.databasePath);
+      setPath(setup.current.databasePath || setup.defaults.databasePath);
+      setDirectory(setup.current.knowledgeDirectory || setup.defaults.knowledgeDirectory);
+      setCustomPath(setup.current.databasePath || setup.defaults.databasePath);
       setEngine(setup.current.engine);
       setDatabaseUrl(setup.current.databaseUrl ?? '');
       setNeedsCreation(setup.needsSetup);
@@ -124,6 +124,7 @@ export function CreateLibrary({ onDone, onCreated, onOpenSettings, visible = tru
     setBusy(true); setError('');
     try {
       const setup = (await desktop.getSetup()).setup;
+      if (!setup.needsSetup) { setNeedsCreation(false); setStep('sources'); return; }
       await desktop.saveSetup({
         expectedModelRevision: setup.modelRevision,
         engine,
@@ -209,7 +210,7 @@ export function CreateLibrary({ onDone, onCreated, onOpenSettings, visible = tru
   if (!setupLoaded) return <section className="create-page"><div className="create-wrap"><h1>读取知识库配置</h1><p role="status">{setupLoading ? '正在读取已有配置…' : '还不能确认知识库配置，请重试读取。'}</p>{error && <p className="product-error" role="alert">{error}</p>}<div className="create-actions"><button type="button" className="home-primary" disabled={setupLoading} onClick={() => void loadSetup()}>重试读取配置</button><button type="button" onClick={() => onDone('home')}>返回首页</button></div></div></section>;
   return <section className="create-page"><div className="create-wrap">
     <button type="button" className="home-secondary" onClick={() => onDone('home')}>返回首页</button>
-    <ol className="create-steps">{STEPS.map(([id, label], position) => <li key={id}><button type="button" data-state={position === index ? 'current' : position < index ? 'done' : 'pending'} disabled={position > index} onClick={() => { if (position < index) setStep(id); }}>{label}</button></li>)}</ol>
+    <ol className="create-steps">{STEPS.map(([id, label], position) => <li key={id}><button type="button" data-state={position === index ? 'current' : position < index ? 'done' : 'pending'} disabled={position > index || (id === 'create' && !needsCreation)} onClick={() => { if (position < index) setStep(id); }}>{label}</button></li>)}</ol>
     <div className="create-panel">
       {error && <p className="wb-error" role="alert">{modelSetupIssue(error)?.title ?? error}</p>}
       {step === 'create' && <>

@@ -4,6 +4,7 @@ import { runCliChecked, type CliRuntime } from '../cli-runner.js';
 import type { DesktopLogger } from '../logs.js';
 import { DatabaseRuntimeManager } from '../database-runtime-manager.js';
 import type { PgliteBackupController } from './pglite-backup.js';
+import { requireExistingPgliteDatabase } from '../../../../src/core/pmbrain-adapters/pglite-database-path.js';
 
 const DESKTOP_MIGRATION_ARGS = ['apply-migrations', '--yes', '--non-interactive', '--no-autopilot-install'];
 
@@ -46,7 +47,11 @@ export class DatabaseUpgradeController {
 
   async prepareConfiguredDatabase(): Promise<void> {
     const setup = getSetupInfo();
-    if (setup.needsSetup || setup.current.engine === 'pglite') return;
+    if (setup.needsSetup) return;
+    if (setup.current.engine === 'pglite') {
+      requireExistingPgliteDatabase(setup.current.databasePath);
+      return;
+    }
     const database = getDatabaseRuntimeConfig();
     this.dependencies.sendStartupProgress({
       visible: true,
@@ -70,6 +75,7 @@ export class DatabaseUpgradeController {
   async migrateConfiguredInstallation(): Promise<boolean> {
     if (!needsDesktopMigration(app.getVersion())) return false;
     const setup = getSetupInfo();
+    if (setup.needsSetup) return false;
     this.dependencies.sendStartupProgress({
       visible: true,
       stage: 'migration',
@@ -79,7 +85,8 @@ export class DatabaseUpgradeController {
         : '检测到桌面版本更新，正在执行兼容迁移。不会删除知识库或原始资料，请不要关闭窗口。',
     });
     if (setup.current.engine === 'pglite') {
-      await this.dependencies.pgliteBackup.ensureUpgradeBackup(setup.current.databasePath);
+      const backup = await this.dependencies.pgliteBackup.ensureUpgradeBackup(setup.current.databasePath);
+      if (!backup) throw new Error('原有知识库没有完成可恢复冷备，已停止升级。请检查原数据库路径。');
       this.dependencies.getLogger()?.write('desktop', `PGLite migrations delegated to sidecar for desktop ${app.getVersion()}`);
       await this.dependencies.syncModelDefaults();
       return true;

@@ -4,7 +4,7 @@ import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { getRecipe } from '../../src/core/ai/recipes/index.js';
 import {
-  activeConfigDirectory, desktopConfigPath, ensureFreshDesktopSetup, getSetupInfo, markDesktopMigration, markMainSourcePathRepairCompleted, needsDesktopMigration,
+  activeConfigDirectory, desktopConfigPath, ensureFreshDesktopSetup, getSetupInfo, markDesktopMigration, markDesktopSetupCompleted, markMainSourcePathRepairCompleted, needsDesktopMigration,
   getDatabaseRuntimeConfig, getDesktopPreferences, normalizeDesktopTheme, normalizePgliteDatabasePath, preferredConfigDirectory, restoreConfig,
   isTrayHintShown, markTrayHintShown, saveDesktopPreferences, saveDesktopTheme, saveSetup, syncChatModelDefaultsInConfig, writeJsonConfig,
 } from '../src/main/config-manager.js';
@@ -29,6 +29,38 @@ function isolatedHome(): string {
 }
 
 describe('desktop config manager', () => {
+  test('首次建库待健康检查完成才记录已设置，失败可重试且不误判为旧库升级', () => {
+    const root = isolatedHome();ensureFreshDesktopSetup();
+    const saved = saveSetup({ engine: 'pglite', databasePath: join(root, 'brain.pglite') }, { deferCompletion: true });
+    expect(getSetupInfo().needsSetup).toBe(true);
+    expect(() => markDesktopSetupCompleted()).toThrow('原有');
+    expect(getSetupInfo().needsSetup).toBe(true);
+    mkdirSync(saved.config.database_path!);writeFileSync(join(saved.config.database_path!, 'PG_VERSION'), '17\n');
+    markDesktopSetupCompleted();
+    expect(getSetupInfo().needsSetup).toBe(false);
+    expect(getSetupInfo().current.databasePath).toBe(saved.config.database_path);
+  });
+
+  test('老用户配置不得切换到不存在的默认空库，原路径及配置内容保留', () => {
+    const root = isolatedHome(), valid = join(root, 'custom.pglite');
+    mkdirSync(valid);writeFileSync(join(valid, 'PG_VERSION'), '17\n');
+    writeJsonConfig(desktopConfigPath(), { engine: 'pglite', database_path: valid, desktop: { setup_completed: true } });
+    const before = readFileSync(desktopConfigPath(), 'utf8');
+    expect(() => saveSetup({ engine: 'pglite', databasePath: join(root, 'empty.pglite') })).toThrow('原有');
+    expect(readFileSync(desktopConfigPath(), 'utf8')).toBe(before);
+    expect(existsSync(join(root, 'empty.pglite'))).toBe(false);
+  });
+
+  test('首次关联已有无后缀数据库仍按旧库保护，修改配置可选择原始数据目录', () => {
+    const root = isolatedHome(), original = join(root, 'original-custom-data');ensureFreshDesktopSetup();
+    mkdirSync(original);writeFileSync(join(original, 'PG_VERSION'), '17\n');
+    expect(normalizePgliteDatabasePath(original)).toBe(original);
+    saveSetup({ engine: 'pglite', databasePath: original }, { deferCompletion: true });
+    expect(getSetupInfo().needsSetup).toBe(false);
+    expect(getSetupInfo().current.databasePath).toBe(original);
+    expect(existsSync(join(original, 'brain.pglite'))).toBe(false);
+  });
+
   test('已有自定义目录不因保存同一配置而追加 brain.pglite 或改用空库', () => {
     const root = isolatedHome(), valid = join(root, 'custom-pgdata');
     mkdirSync(valid);writeFileSync(join(valid, 'PG_VERSION'), '17\n');

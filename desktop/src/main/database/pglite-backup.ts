@@ -1,5 +1,5 @@
 import { resolve } from 'node:path';
-import { validatePgliteDatabasePath } from '../../../../src/core/pmbrain-adapters/pglite-database-path.js';
+import { requireExistingPgliteDatabase, validatePgliteDatabasePath } from '../../../../src/core/pmbrain-adapters/pglite-database-path.js';
 import type { CliRuntime } from '../cli-runner.js';
 import type { SetupInfo } from '../config-manager.js';
 import type {
@@ -59,6 +59,9 @@ export class PgliteBackupController {
   async ensureUpgradeBackup(databasePath: string | null | undefined): Promise<string | null> {
     if (!databasePath) throw new Error('PGLite 升级前无法确定数据库路径，已停止迁移。');
     validatePgliteDatabasePath(databasePath);
+    const setup = this.dependencies.setupInfo();
+    const firstSetup = setup.needsSetup && !setup.current?.lastMigratedVersion;
+    if (!firstSetup) requireExistingPgliteDatabase(databasePath);
     const pathKey = process.platform === 'win32' ? databasePath.toLowerCase() : databasePath;
     const key = `${pathKey}::${this.dependencies.appVersion()}`;
     if (this.backupByVersion.has(key)) {
@@ -106,7 +109,7 @@ export class PgliteBackupController {
       result = recovered;
     }
     if (result.status === 'not_required' && result.reason === 'database_missing') {
-      this.backupByVersion.set(key, null);
+      if (!firstSetup) throw new Error(`原有 PGLite 知识库在备份时不可用：${databasePath}。已停止升级，不会创建空库。`);
       this.dependencies.log(`PGLite upgrade backup not required; database does not exist yet: ${databasePath}`);
       return null;
     }

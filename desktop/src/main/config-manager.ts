@@ -5,7 +5,8 @@ import { isIP } from 'node:net';
 import { createHash, randomBytes } from 'node:crypto';
 import { getRecipe } from '../../../src/core/ai/recipes/index.js';
 import { assertModelRevision, modelConfigRevision } from './models/model-config-revision.js';
-import { validatePgliteDatabasePath } from '../../../src/core/pmbrain-adapters/pglite-database-path.js';
+import { requireExistingPgliteDatabase, validatePgliteDatabasePath } from '../../../src/core/pmbrain-adapters/pglite-database-path.js';
+import { resolvePmbrainConfigDirectory } from '../../../shared/pmbrain-config-home.js';
 
 const DESKTOP_RECOMMENDED_EMBEDDING_DIMENSIONS: Readonly<Record<string, number>> = {
   'zhipu:embedding-3': 1024,
@@ -398,21 +399,8 @@ function legacyProviderFromCatalog(
   };
 }
 
-/**
- * Resolve the user home directory for config discovery.
- * Prefer HOME / USERPROFILE so tests and sandboxed CI runners can isolate
- * config roots without fighting os.homedir() passwd-entry caching.
- */
-function resolveUserHome(): string {
-  const fromEnv = (process.env.HOME || process.env.USERPROFILE || '').trim();
-  if (fromEnv) return resolve(fromEnv);
-  return homedir();
-}
-
 function preferredHome(): string {
-  const override = process.env.PMBRAIN_HOME?.trim();
-  if (override) return join(resolve(override), '.pmbrain');
-  return join(resolveUserHome(), '.pmbrain');
+  return resolvePmbrainConfigDirectory();
 }
 
 export function preferredConfigDirectory(): string {
@@ -447,7 +435,7 @@ export function ensureFreshDesktopSetup(): boolean {
 export function normalizePgliteDatabasePath(input: string): string {
   const trimmed = input.trim();
   if (!trimmed) return trimmed;
-  return basename(trimmed).toLowerCase().endsWith('.pglite')
+  return basename(trimmed).toLowerCase().endsWith('.pglite') || existsSync(join(trimmed, 'PG_VERSION'))
     ? trimmed
     : join(trimmed, 'brain.pglite');
 }
@@ -695,6 +683,16 @@ export function markDesktopMigration(version: string): string | null {
   return backup;
 }
 
+export function markDesktopSetupCompleted(): void {
+  const path = desktopConfigPath();
+  const config = readConfig(path);
+  if (!config) throw new Error('PMBrain 配置不存在。');
+  if (config.engine === 'pglite') requireExistingPgliteDatabase(config.database_path);
+  config.desktop = { ...config.desktop, setup_completed: true };
+  backupFile(path, 'config');
+  writeJsonConfig(path, config);
+}
+
 /**
  * Keep the Desktop's simple ordinary-model aliases in sync without starting
  * the Core CLI. This path is used during Desktop upgrades, where opening the
@@ -819,7 +817,7 @@ function selectModelDefaults(config: RawConfig): void {
   else config.embedding_disabled = true;
 }
 
-export function saveSetup(payload: SetupPayload): {
+export function saveSetup(payload: SetupPayload, options: { deferCompletion?: boolean } = {}): {
   config: RawConfig;
   snapshot: ConfigSnapshot;
   backup: string | null;
@@ -847,6 +845,7 @@ export function saveSetup(payload: SetupPayload): {
     const databasePath = chosen === configured ? chosen : normalizePgliteDatabasePath(chosen);
     if (!isAbsolute(databasePath)) throw new Error('PGLite 数据库路径必须是绝对路径。');
     validatePgliteDatabasePath(databasePath);
+    if (existing.desktop?.setup_completed !== false && configured && databasePath !== configured) requireExistingPgliteDatabase(databasePath);
     config.database_path = databasePath;
     delete config.database_url;
   } else {
@@ -946,7 +945,7 @@ export function saveSetup(payload: SetupPayload): {
     : existing.desktop?.knowledge_source_id);
   config.desktop = {
     ...existing.desktop,
-    setup_completed: true,
+    setup_completed: options.deferCompletion && !(config.engine === 'pglite' && config.database_path && existsSync(join(config.database_path, 'PG_VERSION'))) ? false : true,
     theme: normalizeDesktopTheme(payload.theme ?? existing.desktop?.theme),
     ...(knowledgeDirectory ? { knowledge_directory: knowledgeDirectory, knowledge_source_id: sourceId } : {}),
   };

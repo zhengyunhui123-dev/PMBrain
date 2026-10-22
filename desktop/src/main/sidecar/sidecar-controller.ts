@@ -1,6 +1,7 @@
 import {readSidecarMigrationProgress, runUpgradeRetryGate, startupFailureAllowsRetry} from '../startup/post-upgrade-startup.js';
 import { app, type BrowserWindow } from 'electron';
 import { ensureBootstrapToken, getDatabaseRuntimeConfig, getSetupInfo, markDesktopMigration, needsDesktopMigration } from '../config-manager.js';
+import { requireExistingPgliteDatabase } from '../../../../src/core/pmbrain-adapters/pglite-database-path.js';
 import type { CliRuntime } from '../cli-runner.js';
 import { findAvailablePort } from '../port-manager.js';
 import { precheckPgliteLock } from '../pglite-lock-precheck.js';
@@ -75,6 +76,8 @@ export class SidecarController {
     const logger = this.dependencies.getLogger();
     if (!mainWindow || !logger) return;
     await this.dependencies.ensureRuntimeReady();
+    const configured = getSetupInfo();
+    if (!configured.needsSetup && configured.current.engine === 'pglite') requireExistingPgliteDatabase(configured.current.databasePath);
     const existing = this.manager;
     if (existing) {
       await existing.start();

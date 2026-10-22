@@ -1,8 +1,8 @@
 ﻿import { readFileSync, writeFileSync, mkdirSync, chmodSync, existsSync } from 'fs';
 import { isAbsolute, join } from 'path';
-import { homedir } from 'os';
 import type { EngineConfig, EmbeddingColumnConfig } from './types.ts';
 import { readCompatEnv } from './env-compat.ts';
+import { resolvePmbrainConfigDirectory } from '../../shared/pmbrain-config-home.ts';
 
 /**
  * Where is the active DB URL coming from? Pure introspection, no connection
@@ -85,8 +85,8 @@ export interface GBrainConfig {
   pglite_upgrade_backup_dir?: string;
   /** Stable local-admin secret used by the desktop shell and direct HTTP serve. */
   admin_bootstrap_token?: string;
-  /** Desktop-only preferences. Core runtime ignores these fields. */
   desktop?: {
+    setup_completed?: boolean;
     model_services?: import('../../shared/model-services.ts').ModelService[];
     knowledge_directory?: string;
     knowledge_source_id?: string;
@@ -1182,6 +1182,8 @@ export function toEngineConfig(config: GBrainConfig): EngineConfig {
     engine: config.engine,
     database_url: config.database_url,
     database_path: config.database_path,
+    ...(config.engine === 'pglite' && config.desktop && (config.desktop.setup_completed !== false || config.desktop.last_migrated_version)
+      ? { require_existing_database: true } : {}),
   };
 }
 
@@ -1203,7 +1205,7 @@ export function configDir(): string {
   const legacyOverride = process.env.GBRAIN_HOME;
   if (legacyOverride && legacyOverride.trim()) return validateHomeOverride('GBRAIN_HOME', legacyOverride, '.gbrain');
 
-  const pmbrainDir = join(homedir(), '.pmbrain');
+  const pmbrainDir = resolvePmbrainConfigDirectory();
   return pmbrainDir;
 }
 

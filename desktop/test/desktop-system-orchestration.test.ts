@@ -43,8 +43,9 @@ describe('desktop system orchestration contracts', () => {
   });
 
   test('Postgres 用户升级时仍先准备数据库并执行原有迁移流程', () => {
-    expect(setupController).toMatch(/async applyOnce[\s\S]*?ensureRuntimeReady\(\)[\s\S]*?hadRunningSidecar[\s\S]*?saveSetup\(payload\)/);
-    expect(setupController).toMatch(/saveSetup\(payload\)[\s\S]*?prepareConfiguredDatabase\(\)[\s\S]*?needsDesktopMigration/);
+    expect(main).toContain("dialog.showErrorBox('PMBrain 无法安全启动', message)");
+    expect(setupController).toMatch(/async applyOnce[\s\S]*?ensureRuntimeReady\(\)[\s\S]*?hadRunningSidecar[\s\S]*?saveSetup\(payload, \{ deferCompletion: setupBeforeSave.needsSetup \}\)/);
+    expect(setupController).toMatch(/saveSetup\(payload, [\s\S]*?prepareConfiguredDatabase\(\)[\s\S]*?needsDesktopMigration/);
     expect(databaseController).toContain('saveDetectedDockerContainerName');
     expect(databaseController).toContain('runCliChecked(this.dependencies.runtime(), DESKTOP_MIGRATION_ARGS)');
   });
@@ -87,7 +88,7 @@ describe('desktop system orchestration contracts', () => {
     expect(backupController).toContain("'create',");
     expect(backupController).toContain("'--target-version', this.dependencies.appVersion()");
     expect(databaseController).toContain('pgliteBackup.ensureUpgradeBackup(setup.current.databasePath)');
-    expect(setupController).toMatch(/migrationRequired = needsDesktopMigration[\s\S]*?engine === 'pglite'[\s\S]*?pgliteBackup\.ensureUpgradeBackup[\s\S]*?needsEmbeddingDimensionProbe/);
+    expect(setupController).toMatch(/migrationRequired = !initializingNewPglite && needsDesktopMigration[\s\S]*?engine === 'pglite'[\s\S]*?pgliteBackup\.ensureUpgradeBackup[\s\S]*?needsEmbeddingDimensionProbe/);
     expect(main).toContain('升级前冷备已验证并保留');
     expect(main).toContain('PMBrain 不会自动覆盖当前数据库');
     expect(backupController).toContain("process.platform === 'win32' ? databasePath.toLowerCase() : databasePath");
@@ -238,7 +239,7 @@ describe('desktop system orchestration contracts', () => {
     expect(main).toContain("title: '正在保存模型配置'");
     expect(setupController).toContain("title: '正在准备搜索索引'");
     expect(setupController).toContain('canDeferEmbeddingRebuild');
-    expect(setupController).toContain('migrationRequired = needsDesktopMigration(app.getVersion())');
+    expect(setupController).toContain('migrationRequired = !initializingNewPglite && needsDesktopMigration(app.getVersion())');
     expect(setupController).toMatch(/if \(migrationRequired && saved\.config\.engine !== 'pglite'\) \{[\s\S]*?runCliChecked\(this\.dependencies\.runtime\(\), DESKTOP_MIGRATION_ARGS\)/);
     expect(setupController).toMatch(/this\.dependencies\.sidecar\.start\(false\)[\s\S]*?if \(migrationRequired && saved\.config\.engine === 'pglite'\)/);
     expect(main).not.toContain("title: '正在应用数据库迁移'");

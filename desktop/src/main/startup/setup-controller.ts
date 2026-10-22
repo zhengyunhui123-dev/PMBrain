@@ -1,11 +1,13 @@
 import { app } from 'electron';
 import { existsSync } from 'node:fs';
-import { basename, resolve } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 import {
   getSetupInfo,
   markDesktopMigration,
+  markDesktopSetupCompleted,
   markMainSourcePathRepairCompleted,
   needsDesktopMigration,
+  normalizePgliteDatabasePath,
   restoreConfig,
   saveSetup,
   updateSavedEmbeddingDimension,
@@ -243,8 +245,10 @@ export class SetupController {
   private async applyOnce(payload: SetupPayload, sourcePolicy: SourceSetupPolicy) {
     await this.runLogged('ensure-runtime-ready', () => this.dependencies.ensureRuntimeReady());
     const setupBeforeSave = getSetupInfo();
-    const databaseExistedBeforeSave = setupBeforeSave.current.engine === 'pglite'
-      && Boolean(setupBeforeSave.current.databasePath && existsSync(setupBeforeSave.current.databasePath));
+    const requestedPath = payload.databasePath?.trim();
+    const selectedPath = requestedPath ? normalizePgliteDatabasePath(requestedPath) : setupBeforeSave.current.databasePath;
+    const databaseExistedBeforeSave = payload.engine === 'pglite'
+      && Boolean(selectedPath && existsSync(join(selectedPath, 'PG_VERSION')));
     const previousEmbeddingModel = setupBeforeSave.current.embeddingModel?.trim();
     const requestedEmbeddingModel = payload.modelConfig?.embeddingModel?.trim();
     const recoveryCandidate = setupBeforeSave.current.legacyEmbeddingRecoveryCandidate;
@@ -301,7 +305,7 @@ export class SetupController {
     let reembeddingWarning: string | null = null;
     let migrationRequired = false;
     try {
-      saved = saveSetup(payload);
+      saved = saveSetup(payload, { deferCompletion: setupBeforeSave.needsSetup });
     } catch (error) {
       if (hadRunningSidecar) await this.dependencies.sidecar.start(false).catch(() => undefined);
       else this.dependencies.hideStartupProgress();
@@ -309,7 +313,8 @@ export class SetupController {
     }
     try {
       await this.runLogged('prepare-database', () => this.dependencies.prepareConfiguredDatabase());
-      migrationRequired = needsDesktopMigration(app.getVersion());
+      const initializingNewPglite = saved.config.engine === 'pglite' && saved.config.desktop?.setup_completed === false && !saved.config.desktop?.last_migrated_version;
+      migrationRequired = !initializingNewPglite && needsDesktopMigration(app.getVersion());
       if (migrationRequired && saved.config.engine === 'pglite') {
         await this.runLogged('backup-before-migration', () =>
           this.dependencies.pgliteBackup.ensureUpgradeBackup(saved.config.database_path));
@@ -445,12 +450,13 @@ export class SetupController {
         this.verifyConfiguredMainSource(savedSourceId, savedKnowledgeDirectory));
     }
     if (sourcePolicy.applySourceConfiguration) await this.markMainSourcePathRepairComplete();
-    if (migrationRequired && saved.config.engine === 'pglite') {
+    if ((migrationRequired || setupBeforeSave.needsSetup) && saved.config.engine === 'pglite') {
       if (!this.dependencies.sidecar.current || this.dependencies.sidecar.state?.phase !== 'ready') {
         throw new Error('PGLite sidecar 尚未完成数据库迁移和健康检查。');
       }
       markDesktopMigration(app.getVersion());
     }
+    markDesktopSetupCompleted();
     this.dependencies.applyTheme(getSetupInfo().current.theme);
     // Read all sidecar-backed setup state before submitting the background
     // task. The task coordinator will briefly disconnect PGLite before its

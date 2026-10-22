@@ -1,4 +1,5 @@
 import { lockRelationPages } from './pmbrain-adapters/relation-writer.ts';
+import { requireExistingPgliteDatabase } from './pmbrain-adapters/pglite-database-path.ts';
 import { recordCreatedTaskLinks, type LinkAudit } from './pmbrain-adapters/task-relations.ts';
 import { readMentionPolicy } from './mentions/policy.ts';
 import { writePageAliases } from './mentions/pass.ts';
@@ -443,6 +444,7 @@ export class PGLiteEngine implements BrainEngine {
     }
     this.walRepairReceipt = null;
     const dataDir = config.database_path || undefined; // undefined = in-memory
+    if (config.require_existing_database) requireExistingPgliteDatabase(dataDir);
     this._dataDir = dataDir;
 
     // Acquire file lock to prevent concurrent PGLite access (crashes with Aborted())
