@@ -29,7 +29,7 @@ import { maintenanceFailure } from './maintenance-orchestration.ts';
 import { claimMaintenanceCapture } from './maintenance-orchestration.ts';
 import { enqueueImportedEntityCapture } from './imported-entity-capture.ts';
 import {
-  SEARCH_OPTIMIZE_JOB_KEY, SEARCH_OPTIMIZE_NOTICE, SEARCH_OPTIMIZE_PAUSED, assignSearchOptimizeAcceptance, vectorizationRetryDelay,
+  SEARCH_OPTIMIZE_JOB_KEY, SEARCH_OPTIMIZE_NOTICE, SEARCH_OPTIMIZE_PAUSED, assignSearchOptimizeAcceptance, vectorizationInterrupted, vectorizationRetryDelay,
   type SearchOptimizeAcceptance,
 } from './search-optimize.ts';
 import { enqueueCapturedSearchOptimize, enqueueSearchOptimize, completeSearchOptimize, loadSearchOptimize, pauseSearchOptimize } from './search-optimize-store.ts';
@@ -232,7 +232,7 @@ export class ProductTaskRuntime {
       console.error('[tasks] worker stopped:', error instanceof Error ? error.message : error);
     });
     if(this.resourceTimer)clearInterval(this.resourceTimer);
-    this.resourceTimer=setInterval(()=>{this.checkMemory();void this.flushEntityCapture();},this.resources.rssCheckIntervalMs);
+    this.resourceTimer=setInterval(()=>{this.checkMemory();void this.flushEntityCapture();void this.resumeInterruptedSearchOptimize();},this.resources.rssCheckIntervalMs);
     this.resourceTimer.unref();
     await this.flushEntityCapture();
   }
@@ -386,18 +386,20 @@ export class ProductTaskRuntime {
     if (job && ['failed', 'dead'].includes(job.status)) {
       const count = Number(job.data.vectorRetryCount ?? 0);
       const delay = vectorizationRetryDelay(job.error_text ?? '', count);
-      if (delay !== null) {
+      if (delay !== null || vectorizationInterrupted(job.error_text ?? '')) {
+        await this.clearStopIntent(job.id);
         const progress = (job.progress ?? {}) as Progress;
         delete progress.result;
         const adapter = new TaskProgressAdapter('embed_stale', progress.product);
-        adapter.view.background = { mode: 'waiting', reason: '向量服务暂时不可用，稍后自动重试' };
+        const retrying = delay !== null;
+        adapter.view.background = { mode: 'waiting', reason: retrying ? '向量服务暂时不可用，稍后自动重试' : '等待空闲后继续知识向量化' };
         adapter.view.stage = adapter.view.background.reason;
         adapter.view.errorReason = null;
-        adapter.view.detail = job.error_text;
+        adapter.view.detail = retrying ? job.error_text : null;
         progress.product = adapter.view;
         await this.engine.executeRaw(`UPDATE minion_jobs SET status='delayed',result=NULL,error_text=NULL,finished_at=NULL,
           lock_token=NULL,lock_until=NULL,delay_until=now()+($2::double precision * interval '1 millisecond'),progress=$3::jsonb,
-          data=jsonb_set(data,'{vectorRetryCount}',$4::jsonb),updated_at=now() WHERE id=$1 AND status IN ('failed','dead')`, [job.id, delay, progress, count + 1]);
+          data=jsonb_set(data,'{vectorRetryCount}',$4::jsonb),updated_at=now() WHERE id=$1 AND status IN ('failed','dead')`, [job.id, delay ?? 250, progress, retrying ? count + 1 : count]);
         return { job: await this.queue.getJob(job.id), queued: true };
       }
       return { job, queued: false, notice: SEARCH_OPTIMIZE_NOTICE };
@@ -408,6 +410,15 @@ export class ProductTaskRuntime {
     } catch (error) {
       return { job: null, queued: false, error: error instanceof Error ? error.message : String(error) };
     }
+  }
+
+  private async resumeInterruptedSearchOptimize(): Promise<void> {
+    if (this.stopped || this.paused || this.failure) return;
+    const state = await loadSearchOptimize(this.engine);
+    if (state.paused || !state.items.length) return;
+    const job = await this.findSearchOptimizeJob();
+    if (!job || !['failed', 'dead'].includes(job.status) || !vectorizationInterrupted(job.error_text ?? '')) return;
+    await this.ensureSearchOptimizeJob();
   }
 
   private async recoverSearchOptimize(): Promise<void> {
@@ -727,6 +738,11 @@ export class ProductTaskRuntime {
       if(paused.length)this.sessionViews.delete(context.id);
       return MINION_DEFERRED;
     }
+    const searchOptimize = structuredTask.type === 'embed' && structuredTask.input.searchOptimize === true;
+    if (searchOptimize && this.stopIntents.has(context.id) && !this.stoppingSessions.has(context.id) && record.data.searchOptimizePause !== 'manual') {
+      const paused = (await loadSearchOptimize(this.engine)).paused;
+      if (!paused) await this.clearStopIntent(context.id);
+    }
     if (this.stopIntents.has(context.id) || (structuredTask.type==='sync-file' && this.stopIntents.has(Number(record.data.sessionId)))) throw new Error('任务已停止');
     if(structuredTask.type==='dream' && usesSyncFileQueue(structuredTask.input))await this.fileQueue.cleanup(context.id);
     if (structuredTask.type==='sync-file') this.fileProjection.record(record);
@@ -734,7 +750,6 @@ export class ProductTaskRuntime {
       const counts = await this.fileQueue.counts(context.id);
       if (counts.total > 0) record.progress = { ...(record.progress as Progress ?? {}), product: { ...toRun(record).product!, syncFiles: counts } };
     }
-    const searchOptimize = structuredTask.type === 'embed' && structuredTask.input.searchOptimize === true;
     if (record.attempts_started > 1 && record.data.authorizedAttempt !== record.attempts_started && !searchOptimize && structuredTask.type !== 'sync-file' && structuredTask.type !== 'memory' && !(structuredTask.type === 'dream' && usesSyncFileQueue(structuredTask.input))) throw new Error('任务执行曾中断，结果不确定，请查看已完成内容后手动继续');
     let progress = (record.progress ?? {}) as Progress;
     const adapter = new TaskProgressAdapter(String(record.data.kind), toRun(record).product);
@@ -1059,6 +1074,14 @@ export class ProductTaskRuntime {
       return outcome;
     }
     catch(error){
+      if (searchOptimize && !this.stoppingSessions.has(context.id) && record.data.searchOptimizePause !== 'manual') {
+        const message = error instanceof Error ? error.message : String(error);
+        if (vectorizationInterrupted(message) && !(await loadSearchOptimize(this.engine)).paused) {
+          await this.clearStopIntent(context.id);
+          await this.settleSearchOptimize(record, adapter, progress);
+          return MINION_DEFERRED;
+        }
+      }
       await queueImportVectors();
       if (structuredTask.type === 'import') await persist().catch(reason => console.error('[tasks] deferred embed:', reason));
       if(structuredTask.type==='dream'&&usesSyncFileQueue(structuredTask.input) && String(error).includes('资源保护：')){

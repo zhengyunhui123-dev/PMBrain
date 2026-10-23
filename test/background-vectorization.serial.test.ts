@@ -227,3 +227,47 @@ test('旧版数据库中断的导入从保存点继续，停止过的任务不�
     expect((await ctx.runtime.getRun(vectors.id))!.status).toBe('paused');
   });
 }, 90000);
+
+test('导入失败不会停掉知识向量化；被停止的向量任务空闲后继续，手动暂停仍然保留', async () => {
+  await fixture(async ctx => {
+    const { engine, directory, calls, state } = ctx;
+    state.cpu = 0.95;
+    writeFileSync(join(directory, 'kept.md'), '# 已保存\n\n导入失败不能带走向量化。');
+    const imported = await ctx.runtime.submitImport({ path: join(directory, 'kept.md') });
+    await until(() => ctx.runtime.getRun(imported.id), row => row?.status === 'completed', '导入未完成');
+    const vectors = (await ctx.runtime.listRuns()).find(row => row.searchOptimize)!;
+    await engine.executeRaw(`UPDATE minion_jobs SET status='dead', error_text='任务已停止', lock_token=NULL, lock_until=NULL, finished_at=now() WHERE id=$1`, [Number(vectors.id.slice(5))]);
+    writeFileSync(join(directory, 'huge.md'), Buffer.alloc(5_000_001, 0x61));
+    const failed = await ctx.runtime.submitImport({ path: join(directory, 'huge.md') });
+    let failedRun = await ctx.runtime.getRun(failed.id);
+    const failedDeadline = Date.now() + 25000;
+    while (failedRun?.status !== 'failed' && Date.now() < failedDeadline) {
+      await Bun.sleep(40);
+      failedRun = await ctx.runtime.getRun(failed.id);
+    }
+    if (failedRun?.status !== 'failed') throw new Error(`超限导入没有按导入失败结束：${failedRun?.status ?? 'missing'} ${failedRun?.error ?? ''}`);
+    expect(String(failedRun?.error)).toContain('文件过大');
+    expect((await engine.getPage('kept'))?.compiled_truth).toContain('导入失败不能带走');
+    state.cpu = 0.1;
+    state.now += 20000;
+    await until(() => ctx.runtime.getRun(vectors.id), row => row?.status === 'completed', '空闲后没有继续被停止的知识向量化');
+    expect((await engine.getChunks('kept')).every(chunk => !!chunk.embedded_at)).toBe(true);
+    expect((await ctx.runtime.getRun(failed.id))?.status).toBe('failed');
+    state.cpu = 0.95;
+    await engine.putPage('paused-page', { title: '暂停', type: 'note', compiled_truth: '手动暂停不能被空闲解除' });
+    await engine.upsertChunks('paused-page', [{ chunk_index: 0, chunk_text: '手动暂停不能被空闲解除', chunk_source: 'compiled_truth' }]);
+    const paused = await ctx.runtime.acceptSearchOptimize('default', ['paused-page']);
+    await ctx.runtime.pauseSearchOptimize(`task-${paused.jobId}`);
+    await engine.executeRaw(`UPDATE minion_jobs SET status='dead', error_text='任务已停止', lock_token=NULL, lock_until=NULL, finished_at=now() WHERE id=$1`, [paused.jobId]);
+    const seen = calls.length;
+    state.cpu = 0.1;
+    state.now += 20000;
+    await Bun.sleep(1200);
+    await ctx.restart();
+    state.cpu = 0.1;
+    state.now += 20000;
+    await Bun.sleep(300);
+    expect(calls.length).toBe(seen);
+    expect((await engine.getChunks('paused-page')).every(chunk => !chunk.embedded_at)).toBe(true);
+  });
+}, 90000);

@@ -11,6 +11,10 @@ export function vectorizationRetryDelay(error: string, attempts: number): number
     ? Math.min(15 * 60000, 30000 * 2 ** attempts) : null;
 }
 
+export function vectorizationInterrupted(error: string): boolean {
+  return /任务已停止|任务已取消|user_stop|\baborted\b|service_shutdown|本地服务关闭|软件已?退出|handler ignored abort signal/.test(error);
+}
+
 export interface SearchOptimizeItem {
   sourceId: string;
   slug: string;

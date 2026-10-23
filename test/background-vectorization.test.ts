@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test';
 import { vectorizationSchedule, type BackgroundResourceSample } from '../shared/background-vectorization';
 import { BackgroundVectorizationScheduler } from '../src/product/tasks/background-vectorization';
 import { TaskProgressAdapter, finishTaskProgress } from '../src/product/tasks/progress-adapter';
-import { vectorizationRetryDelay } from '../src/product/tasks/search-optimize';
+import { vectorizationInterrupted, vectorizationRetryDelay } from '../src/product/tasks/search-optimize';
 import { TaskProductProgressSchema } from '../shared/contracts/common';
 
 const gib = 1024 ** 3;
@@ -68,4 +68,8 @@ test('仅对暂时故障有限重试，不重复调用配置错误或无权限�
   expect(vectorizationRetryDelay('fetch failed', 2)).toBe(120000);
   expect(vectorizationRetryDelay('503 Service Unavailable', 5)).toBeNull();
   for (const message of ['401 Unauthorized', '未配置完整的向量模型', 'embedding dimensions mismatch', 'insufficient_quota']) expect(vectorizationRetryDelay(message, 0)).toBeNull();
+  expect(vectorizationInterrupted('任务已停止')).toBe(true);
+  expect(vectorizationInterrupted('user_stop: 任务已取消')).toBe(true);
+  expect(vectorizationInterrupted('401 Unauthorized')).toBe(false);
+  expect(vectorizationInterrupted('未配置完整的向量模型')).toBe(false);
 });
