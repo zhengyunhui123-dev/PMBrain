@@ -7,6 +7,7 @@ import { readRelationSnapshot, replaceDerivedLinks } from '../src/core/pmbrain-a
 import { assertSafeE2eDatabaseUrl } from './helpers/db-guard.ts';
 import { requestImportedEntityCapture, ENTITY_CAPTURE_PENDING_PREFIX } from '../src/core/pmbrain-adapters/entity-capture-request.ts';
 import { enqueueImportedEntityCapture } from '../src/product/tasks/imported-entity-capture.ts';
+import { importedEntityCaptureIdempotencyKey } from '../src/core/pmbrain-adapters/imported-entity-capture.ts';
 import { prepareLinkReconciliation } from '../src/core/link-reconciliation.ts';
 import { reportLegacyPageTypes } from '../src/core/pmbrain-adapters/legacy-page-type-report.ts';
 
@@ -28,6 +29,26 @@ beforeEach(async () => {
   await engine.executeRaw("DELETE FROM minion_jobs");
   await engine.executeRaw("DELETE FROM config WHERE key LIKE 'dream.entity_capture.pending.%'");
   for (const key of ['auto_link', 'mentions.auto_link', 'mentions.entity_types', 'mentions.ignore', 'mentions.exclude_slugs']) await engine.unsetConfig(key);
+});
+
+test('待识别资料很多时仍能排队，不会因为任务标识太长而失败', async () => {
+  const slugs = Array.from({ length: 180 }, (_, index) => `笔记/待识别资料-${'说明'.repeat(12)}-${index}`);
+  const value = JSON.stringify({ nonce: 'long-batch', incremental: true, slugs });
+  expect(Buffer.byteLength(`imported-entities:default:${value}`)).toBeGreaterThan(2704);
+  await engine.setConfig(ENTITY_CAPTURE_PENDING_PREFIX + 'default', value);
+  const ids = await enqueueImportedEntityCapture(engine, async () => true);
+  expect(ids).toHaveLength(1);
+  expect(await engine.getConfig(ENTITY_CAPTURE_PENDING_PREFIX + 'default')).toBeNull();
+  const [row] = await engine.executeRaw<{ idempotency_key: string; slugs: string[] | string }>('SELECT idempotency_key, data->\'task\'->\'input\'->\'slugs\' AS slugs FROM minion_jobs WHERE id=$1', [ids[0]]);
+  const key = importedEntityCaptureIdempotencyKey('default', value);
+  expect(row.idempotency_key).toBe(key);
+  expect(Buffer.byteLength(row.idempotency_key)).toBeLessThan(200);
+  expect(typeof row.slugs === 'string' ? JSON.parse(row.slugs) : row.slugs).toEqual(slugs);
+  await engine.setConfig(ENTITY_CAPTURE_PENDING_PREFIX + 'default', value);
+  expect(await enqueueImportedEntityCapture(engine, async () => true)).toEqual([]);
+  const [count] = await engine.executeRaw<{ count: number }>('SELECT count(*)::int AS count FROM minion_jobs WHERE idempotency_key=$1', [key]);
+  expect(count.count).toBe(1);
+  expect(await engine.getConfig(ENTITY_CAPTURE_PENDING_PREFIX + 'default')).toBe(value);
 });
 
 test('import requests persist, coalesce, and wait for a configured model', async () => {

@@ -1,7 +1,12 @@
+import { createHash } from 'node:crypto';
 import type { BrainEngine } from '../engine.ts';
 import { MinionQueue } from '../minions/queue.ts';
 import { ENTITY_CAPTURE_PENDING_PREFIX } from './entity-capture-request.ts';
 import { chooseCaptureModel } from '../cycle/capture-entities.ts';
+
+export function importedEntityCaptureIdempotencyKey(sourceId: string, value: string): string {
+  return `imported-entities:${createHash('sha256').update(`${sourceId}\0${value}`).digest('hex')}`;
+}
 
 export async function enqueueImportedEntityCapture(engine: BrainEngine, modelReady: () => Promise<boolean> = async () => (await chooseCaptureModel(engine, {})).ok,timeoutMs=6*60*60_000): Promise<number[]> {
   const requests=await engine.executeRaw<{key:string;value:string;source_id:string}>(`SELECT c.key,c.value,s.id AS source_id FROM config c JOIN sources s ON c.key=$1||s.id WHERE NOT s.archived`,[ENTITY_CAPTURE_PENDING_PREFIX]);
@@ -30,7 +35,7 @@ export async function enqueueImportedEntityCapture(engine: BrainEngine, modelRea
       if(busy.length)return null;
       const queued=await new MinionQueue(tx).add('pmbrain-product-task',{
         kind:'dream_capture_entities',trigger:'scheduled',task:{type:'dream',input:{phase:'capture_entities',incrementalIngest:true,sourceId:request.source_id,slugs}},
-      },{queue:'pmbrain-product',idempotency_key:`imported-entities:${request.source_id}:${request.value}`,max_attempts:1,timeout_ms:timeoutMs});
+      },{queue:'pmbrain-product',idempotency_key:importedEntityCaptureIdempotencyKey(request.source_id,request.value),max_attempts:1,timeout_ms:timeoutMs});
       await tx.executeRaw('DELETE FROM config WHERE key=$1 AND value=$2',[request.key,request.value]);
       return queued;
     });
