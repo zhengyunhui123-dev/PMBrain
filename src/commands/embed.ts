@@ -527,7 +527,10 @@ async function commitPageEmbeddingBatch(engine: BrainEngine, slug: string, stale
     ...(row.doc_comment && { doc_comment: row.doc_comment }),
     ...(row.symbol_name_qualified && { symbol_name_qualified: row.symbol_name_qualified }),
   }));
-  await engine.upsertChunks(slug, checkpoint, { sourceId, replaceExisting: false, ...(signal && { signal }), auditSite: 'upsertChunks' });
+  for (let offset = 0; offset < checkpoint.length; offset += 4) {
+    if (signal?.aborted) throw signal.reason instanceof Error ? signal.reason : new Error('aborted');
+    await engine.upsertChunks(slug, checkpoint.slice(offset, offset + 4), { sourceId, replaceExisting: false, ...(signal && { signal }), auditSite: 'upsertChunks' });
+  }
 }
 
 async function embedPageBounded(engine: BrainEngine, slug: string, result: EmbedResult, opts: EmbedOpts): Promise<void> {

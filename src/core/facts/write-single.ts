@@ -48,16 +48,25 @@ export interface SingleFactResult {
   degraded_dedup: boolean;
 }
 
+async function prepareFactEmbedding(input: SingleFactInput): Promise<SingleFactInput> {
+  if (input.embedding !== undefined) return input;
+  const { isAvailable, embedOne } = await import('../ai/gateway.ts');
+  if (!isAvailable('embedding')) return input;
+  try { return { ...input, embedding: await embedOne(input.fact.trim()) }; }
+  catch { return { ...input, embedding: null }; }
+}
+
 export async function writeSingleFact(
   engine: BrainEngine,
   sourceId: string,
   input: SingleFactInput,
 ): Promise<SingleFactResult> {
-  if (!input.exactDedup) return writeSingleFactCore(engine, sourceId, input);
+  const prepared = await prepareFactEmbedding(input);
+  if (!prepared.exactDedup) return writeSingleFactCore(engine, sourceId, prepared);
   return engine.transaction(async tx => {
-    await tx.executeRaw('SELECT pg_advisory_xact_lock(hashtext($1))', [`native-fact:${sourceId}:${input.kind ?? 'fact'}:${input.visibility ?? 'private'}:${collapse(input.fact)}`]);
-    const result=await writeSingleFactCore(tx, sourceId, input);
-    if(input.canWrite&&!await input.canWrite(tx))throw new Error('记忆写入已停止：配置关闭、会话版本改变或任务已中断');
+    await tx.executeRaw('SELECT pg_advisory_xact_lock(hashtext($1))', [`native-fact:${sourceId}:${prepared.kind ?? 'fact'}:${prepared.visibility ?? 'private'}:${collapse(prepared.fact)}`]);
+    const result=await writeSingleFactCore(tx, sourceId, prepared);
+    if(prepared.canWrite&&!await prepared.canWrite(tx))throw new Error('记忆写入已停止：配置关闭、会话版本改变或任务已中断');
     return result;
   });
 }

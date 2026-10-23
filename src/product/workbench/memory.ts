@@ -103,13 +103,15 @@ async function repairWorkbenchArchiveVisibility(engine: BrainEngine, conversatio
   });
 }
 
-export async function recallWorkbenchMemory(engine: BrainEngine, opts: { sourceId: string; query: string; sessionId?: string; budget?: number; window?: WindowTurn[] }): Promise<WorkbenchCitation[]> {
+export async function recallWorkbenchMemory(engine: BrainEngine, opts: { sourceId: string; query: string; sessionId?: string; budget?: number; window?: WindowTurn[]; lexicalOnly?: boolean }): Promise<WorkbenchCitation[]> {
   if (!opts.query.trim() || !(await engine.executeRaw('SELECT id FROM sources WHERE id=$1 AND archived=false', [opts.sourceId])).length) return [];
   const ctx: OperationContext = { engine, sourceId: opts.sourceId, remote: false, config: loadConfigFileOnly() ?? { engine: engine.kind }, auth: { token: '', clientId: 'pmbrain:workbench', scopes: ['read'] }, dryRun: false, logger: { info: console.info, warn: console.warn, error: console.error } };
   const entities = extractCandidatesFromWindow(opts.window ?? [{ role: 'user', text: opts.query }]).map(item => item.query);
   const pack = opts.sessionId ? await operationsByName.context_pack.handler(ctx, { session_id: opts.sessionId, entities }) as ContextPackResult : undefined;
   const pointers = pack?.pointers ?? (await resolveEntitiesToPointers(engine, opts.sourceId, entities.map(query => ({ display: query, query })), { maxPointers: 8, suppression: 'slug-only' }))?.pointers ?? [];
-  const matches = await hybridSearch(engine, opts.query, { sourceId: opts.sourceId, limit: 12, expansion: false });
+  const matches = opts.lexicalOnly
+    ? await engine.searchKeyword(opts.query, { sourceId: opts.sourceId, limit: 12, orFallback: true })
+    : await hybridSearch(engine, opts.query, { sourceId: opts.sourceId, limit: 12, expansion: false });
   const words = [...new Set([...new Intl.Segmenter('zh', { granularity: 'word' }).segment(opts.query)].filter(item => item.isWordLike && item.segment.length >= 2).map(item => item.segment))].slice(0, 8);
   if (!matches.length) for (const word of words) matches.push(...await engine.searchKeyword(word, { sourceId: opts.sourceId, limit: 12 }));
   const slugs = [...new Set([...(pack?.checkpoints.map(item => item.slug) ?? []), ...matches.filter(row => row.source_id === opts.sourceId).map(row => row.slug)])].slice(0, 22);

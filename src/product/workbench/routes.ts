@@ -33,6 +33,17 @@ import { openArtifactCommand } from './files';
 import {workbenchEvidenceWindow} from './evidence';
 
 const CONTINUE_PROMPT = '请从中断处接着写完，不要重复已经写过的内容。';
+export function backgroundVectorizingBlocksSemantic(runs: ReadonlyArray<{ searchOptimize?: boolean; status?: string }> | undefined): boolean {
+  return (runs ?? []).some(run => run.searchOptimize === true && (run.status === 'running' || run.status === 'queued'));
+}
+
+export function workbenchSearchDuringTasks(
+  tasks: { cachedRuns?: () => Array<{ searchOptimize?: boolean; status?: string }> } | undefined,
+  search: typeof workbenchKnowledgeSearch,
+): typeof workbenchKnowledgeSearch {
+  return (engine, input) => search(engine, backgroundVectorizingBlocksSemantic(tasks?.cachedRuns?.()) ? { ...input, mode: 'keyword' } : input);
+}
+
 async function workbenchKnowledgeSearch(engine: BrainEngine, input: Parameters<typeof runAdminKnowledgeSearch>[1]) {
   const limit=Number(input.limit??6);
   const result=await runAdminKnowledgeSearch(engine,{...input,limit:50});
@@ -246,13 +257,14 @@ export function registerWorkbenchRoutes(app: express.Express, requireAdmin: Requ
   };
   const currentModels = () => workbenchModels(currentConfig());
   let databaseReady = false;
+  let confirmed = false;
   let probe: Promise<void> | undefined;
   const availability = () => {
-    if (options.databaseAvailable?.() === false) { databaseReady = false; return { serviceReady: true, databaseReady }; }
+    if (options.databaseAvailable?.() === false) { databaseReady = false; confirmed = false; return { serviceReady: true, databaseReady }; }
     if (!probe) {
-      const timer = setTimeout(() => { databaseReady = false; }, 1500);
+      const timer = setTimeout(() => { if (!confirmed) databaseReady = false; }, 1500);
       probe = Promise.resolve().then(() => engine.executeRaw('SELECT 1'))
-        .then(() => { databaseReady = options.databaseAvailable?.() !== false; }, () => { databaseReady = false; })
+        .then(() => { databaseReady = options.databaseAvailable?.() !== false; confirmed = databaseReady; }, () => { databaseReady = false; confirmed = false; })
         .finally(() => { clearTimeout(timer); probe = undefined; });
     }
     return { serviceReady: true, databaseReady };
@@ -263,8 +275,10 @@ export function registerWorkbenchRoutes(app: express.Express, requireAdmin: Requ
   const agents: WorkbenchAgentTools = { store: agentStore, engine, config: currentConfig, ...(options.productTasks ? { runs: () => options.productTasks!.listRuns() } : {}) };
   const memory = options.productTasks?.attachWorkbenchMemory?.(store);
   const hooks=memory?{capture:async(...args:Parameters<typeof memory.capture>)=>{if(options.databaseAvailable?.()===false)throw new Error('知识库正在准备，记忆提炼暂缓');return memory.capture(...args);},settled:memory.settled}:undefined;
-  const recall = (...args: Parameters<typeof recallWorkbenchMemory>) => options.databaseAvailable?.() === false ? Promise.resolve([]) : recallWorkbenchMemory(...args);
-  const service = new WorkbenchService(store, currentModels, options.answer ?? knowledgeWorkbenchAnswer(engine, { search: workbenchKnowledgeSearch, answer: chat, loop: toolLoop, recall }, options.productTasks?{tasks:options.productTasks,store}:undefined, agents), options.summarize ?? summarizeConversation, undefined, hooks);
+  const vectorizing = () => backgroundVectorizingBlocksSemantic(options.productTasks?.cachedRuns());
+  const search = workbenchSearchDuringTasks(options.productTasks, workbenchKnowledgeSearch);
+  const recall = (...args: Parameters<typeof recallWorkbenchMemory>) => options.databaseAvailable?.() === false ? Promise.resolve([]) : recallWorkbenchMemory(args[0], vectorizing() ? { ...args[1], lexicalOnly: true } : args[1]);
+  const service = new WorkbenchService(store, currentModels, options.answer ?? knowledgeWorkbenchAnswer(engine, { search, answer: chat, loop: toolLoop, recall }, options.productTasks?{tasks:options.productTasks,store}:undefined, agents), options.summarize ?? summarizeConversation, undefined, hooks);
   const coordinator = typeof options.productTasks?.attachWorkbenchAssistant === 'function'
     ? new WorkbenchAgentCoordinator(agentStore, service, options.productTasks, engine)
     : undefined;

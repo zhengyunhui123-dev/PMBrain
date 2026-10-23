@@ -1113,3 +1113,24 @@ describe('embed stale stall watchdog', () => {
     expect(() => assertEmbedNotStalled(result)).toThrow(/stall_timeout/);
   }, 20_000);
 });
+
+describe('embed writes yield between vector batches', () => {
+  test('一份资料的向量最多 4 条写一次，写完即可让对话查询继续', async () => {
+    const sizes: number[] = [];
+    const chunks = Array.from({ length: 6 }, (_, index) => ({
+      chunk_index: index, chunk_text: `切片 ${index}`, chunk_source: 'compiled_truth' as const, token_count: 1, embedded_at: null,
+    }));
+    const engine = mockEngine({
+      getPageIdentity: async () => ({ slug: 'note', content_hash: 'h' }),
+      executeRaw: async () => [{ total: 6, stale: 6 }],
+      getChunks: async (_slug: string, opts: { afterChunkIndex?: number; limit?: number }) => chunks.filter(chunk => chunk.chunk_index > (opts?.afterChunkIndex ?? -1)).slice(0, opts?.limit ?? chunks.length),
+      upsertChunks: async (_slug: string, batch: unknown[]) => { sizes.push(batch.length); },
+    });
+    const result = await runEmbedCore(engine, { slugs: ['note'], sourceId: 'default', batchSize: 6, getBatchSize: () => 6, quiet: true });
+    expect(result.embedded).toBe(6);
+    expect(result.failedPages).toBe(0);
+    expect(sizes.length).toBeGreaterThan(1);
+    expect(sizes.every(size => size <= 4)).toBe(true);
+    expect(sizes.reduce((sum, size) => sum + size, 0)).toBe(6);
+  });
+});
