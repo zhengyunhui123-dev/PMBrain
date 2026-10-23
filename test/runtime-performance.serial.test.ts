@@ -10,6 +10,7 @@ import { runEmbedCore } from '../src/commands/embed.ts';
 import { loadSearchOptimize, enqueueSearchOptimize, completeSearchOptimize, pauseSearchOptimize, enqueueCapturedSearchOptimize } from '../src/product/tasks/search-optimize-store.ts';
 import { assertSafeE2eDatabaseUrl } from './helpers/db-guard.ts';
 import { resetPgliteState } from './helpers/reset-pglite.ts';
+import { LATEST_VERSION } from '../src/core/migrate.ts';
 
 async function fixture(run: (engine: BrainEngine, calls: string[][]) => Promise<void>) {
   const database = process.env.PMBRAIN_TASK_TEST_DATABASE_URL;
@@ -32,7 +33,11 @@ async function fixture(run: (engine: BrainEngine, calls: string[][]) => Promise<
     });
     await engine.connect(database ? { database_url: database } : {});
     await engine.initSchema();
-    if (database) await resetPgliteState(engine as PGLiteEngine);
+    if (database) {
+      await resetPgliteState(engine as PGLiteEngine);
+      await engine.setConfig('version', String(LATEST_VERSION));
+      await engine.setConfig('pmbrain.schema.version', String(LATEST_VERSION));
+    }
     await engine.executeRaw('DELETE FROM config WHERE key LIKE $1', ['pmbrain.search_optimize%']);
     await run(engine, calls);
   } finally {

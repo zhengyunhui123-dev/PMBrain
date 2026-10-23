@@ -109,8 +109,8 @@ async function ready(engine: BrainEngine): Promise<void> {
 export async function loadSearchOptimize(engine: BrainEngine): Promise<SearchOptimizeView> {
   await ready(engine);
   const [row] = await engine.executeRaw<{ meta: string; item: string | null }>(`SELECT value AS meta,
-    (SELECT value FROM config WHERE key>=$2 AND key<$3 ORDER BY key LIMIT 1) AS item FROM config WHERE key=$1`,
-  [SEARCH_OPTIMIZE_CONFIG, pendingPrefix, `${pendingPrefix}~`]);
+    (SELECT value FROM config WHERE key>=$2 AND key<=$3 AND left(key,length($4))=$4 ORDER BY key LIMIT 1) AS item FROM config WHERE key=$1`,
+  [SEARCH_OPTIMIZE_CONFIG, `${pendingPrefix}0000000000000000`, `${pendingPrefix}9999999999999999`, pendingPrefix]);
   const meta = decode<QueueMeta>(row.meta)!;
   const item = decode<SearchOptimizeItem>(row.item);
   return { paused: meta.paused, done: meta.done, pending: meta.pending, items: item ? [item] : [] };

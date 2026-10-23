@@ -2,8 +2,10 @@ import { expect, test } from 'bun:test';
 import { basename, dirname, join, resolve } from 'node:path';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { PGLiteEngine } from '../src/core/pglite-engine.ts';
+import { withEnv } from './helpers/with-env.ts';
 
-test('Admin 文件和目录仅导入可在无模型时完成，默认导入仍要求向量模型', async () => {
+test('Admin 无模型时保留已导入资料，仅关键词不排队，默认导入的搜索优化明确报错', async () => {
   const workspace = mkdtempSync(join(tmpdir(), 'pmbrain-admin-import-mode-'));
   const source = join(workspace, 'sources');
   mkdirSync(join(workspace, '.pmbrain'));
@@ -14,6 +16,13 @@ test('Admin 文件和目录仅导入可在无模型时完成，默认导入仍�
     embedding_disabled: true, model_usage: { generative_enabled: false, embedding_enabled: false },
     memory: { auto_writeback: 'off' }, desktop: { knowledge_directory: source },
   }));
+  await withEnv({ PMBRAIN_HOME: workspace, GBRAIN_HOME: workspace, DATABASE_URL: undefined, GBRAIN_DATABASE_URL: undefined, PMBRAIN_DATABASE_URL: undefined }, async () => {
+    const engine = new PGLiteEngine();
+    try {
+      await engine.connect({ database_path: join(workspace, 'database') });
+      await engine.initSchema();
+    } finally { await engine.disconnect(); }
+  });
   const probe = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: () => new Response('probe') });
   const origin = `http://127.0.0.1:${probe.port}`;
   const port = probe.port;
@@ -34,7 +43,7 @@ test('Admin 文件和目录仅导入可在无模型时完成，默认导入仍�
       if (healthy) break;
       await Bun.sleep(100);
     }
-    expect(healthy).toBe(true);
+    expect(healthy, processHandle.exitCode !== null ? await stderr : '服务未在时限内就绪').toBe(true);
     const login = await fetch(origin + '/admin/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ token }) });
     expect(login.status).toBe(200);
     const cookie = login.headers.get('set-cookie')!.split(';')[0];
@@ -72,11 +81,23 @@ test('Admin 文件和目录仅导入可在无模型时完成，默认导入仍�
     expect(after.stats.page_count).toBeGreaterThanOrEqual(before.stats.page_count + 3);
     expect(after.stats.chunk_count).toBeGreaterThan(before.stats.chunk_count);
     expect(after.stats.embedded_count).toBe(0);
-    for (const query of ['', '?autoEmbed=1']) {
-      const run = await finish(await upload(query, 'requires-vector.md'));
-      expect(run.status).toBe('failed');
-      expect(run.error).toContain('未配置完整的向量模型');
+    expect((await get('/admin/api/runs')).rows.some((run: any) => run.searchOptimize)).toBe(false);
+    for (const [query, name] of [['', 'requires-vector-default.md'], ['?autoEmbed=1', 'requires-vector-explicit.md']]) {
+      const run = await finish(await upload(query, name));
+      expect(run.status).toBe('completed');
+      expect(run.result.searchOptimizeAccepted).toBe(true);
+      let optimization: any;
+      for (let attempt = 0; attempt < 250; attempt++) {
+        optimization = (await get('/admin/api/runs')).rows.find((row: any) => row.searchOptimize);
+        if (optimization && !['queued','running'].includes(optimization.status)) break;
+        await Bun.sleep(100);
+      }
+      expect(optimization?.status).toBe('failed');
+      expect(optimization?.error).toContain('未配置完整的向量模型');
     }
+    const final = await get('/admin/api/brain/overview');
+    expect(final.stats.page_count).toBeGreaterThanOrEqual(after.stats.page_count + 2);
+    expect(final.stats.embedded_count).toBe(0);
     expect((await fetch(origin + '/health')).ok).toBe(true);
   } finally {
     if (process.platform === 'win32' && processHandle.exitCode === null) {

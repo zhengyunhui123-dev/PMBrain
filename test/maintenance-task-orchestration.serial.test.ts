@@ -200,8 +200,16 @@ test('旧版显式排队兼容函数保留Source归属且不抢占同步父任�
   expect((job?.data.task as { input: { sourceId: string } }).input.sourceId).toBe('other');
   expect(await engine.getConfig('dream.entity_capture.pending.default')).not.toBeNull();
   expect(await engine.getConfig('dream.entity_capture.pending.other')).toBeNull();
-  await engine.executeRaw("UPDATE minion_jobs SET status='cancelled' WHERE id=$1",[parent.id]);
-  expect(await enqueueImportedEntityCapture(engine,async()=>true)).toEqual([]);
+  for (const status of ['paused','cancelled']) {
+    await engine.executeRaw('UPDATE minion_jobs SET status=$2 WHERE id=$1',[parent.id,status]);
+    expect(await enqueueImportedEntityCapture(engine,async()=>true)).toEqual([]);
+    expect(await engine.getConfig('dream.entity_capture.pending.default')).not.toBeNull();
+  }
+  await engine.executeRaw("UPDATE minion_jobs SET status='completed' WHERE id=$1",[parent.id]);
+  const resumed = await enqueueImportedEntityCapture(engine,async()=>true);
+  expect(resumed).toHaveLength(1);
+  expect(((await queue.getJob(resumed[0]))?.data.task as {input:{sourceId:string}}).input.sourceId).toBe('default');
+  expect(await engine.getConfig('dream.entity_capture.pending.default')).toBeNull();
 });
 
 test('历史跳过记录读成未执行失败，不能绿色完成，也不改写历史记录', async () => {
