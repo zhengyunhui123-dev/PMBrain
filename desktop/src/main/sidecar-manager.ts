@@ -71,6 +71,7 @@ interface SidecarManagerOptions extends CliRuntime {
   bootstrapToken: string;
   clientVersion: string;
   adminRequestTimeoutMs?: number;
+  systemIdleSeconds?: () => number;
   /** Override /health wait. PGLite upgrades need minutes, not 45s. */
   healthTimeoutMs?: number;
   /** Extra argv after `serve` (e.g. --diagnostic-mode). */
@@ -103,6 +104,7 @@ export class SidecarManager {
   private lastSidecarPid: number | null = null;
   private lastFailureDetails: SidecarFailureDetails | null = null;
   private resourceMonitor:SidecarResourceMonitor|null=null;
+  private resourceReady=false;
 
   constructor(options: SidecarManagerOptions) {
     this.options = options;
@@ -376,9 +378,15 @@ export class SidecarManager {
       stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
     });
     this.child = child;
+    this.resourceReady=false;
     if(child.pid){
       this.resourceMonitor?.stop();
       this.resourceMonitor=new SidecarResourceMonitor(child.pid,(message,sample,action)=>this.stopForResourcePressure(child,message,sample,action),{
+        onSample: async sample => {
+          if (!this.resourceReady || this.child !== child || this.stopping) return;
+          await this.adminRequest('/admin/api/console/background-resources', { method: 'POST',
+            body: JSON.stringify({ ...sample, systemIdleSeconds: this.options.systemIdleSeconds?.() }), signal: AbortSignal.timeout(2000) });
+        },
         onError:error=>this.options.logger.write('desktop',`Resource monitor: ${error instanceof Error?error.message:String(error)}`),
       });
       this.resourceMonitor.start();
@@ -610,7 +618,7 @@ export class SidecarManager {
           'desktop',
           `health check url=${healthUrl} status=${response.status} ms=${observation.durationMs} pid=${observation.sidecarPid}`,
         );
-        if (response.ok) return;
+        if (response.ok) { this.resourceReady=true; return; }
         lastError = `Health check returned HTTP ${response.status}. body=${observation.bodySummary}`;
       } catch (error) {
         lastError = error instanceof Error ? error.message : String(error);

@@ -39,7 +39,7 @@ export class TaskProgressAdapter {
   private resumedPhase?: { id: string; elapsedMs: number };
   view: TaskProductProgress;
 
-  constructor(kind: string, saved?: TaskProductProgress) {
+  constructor(private readonly kind: string, saved?: TaskProductProgress) {
     this.view = saved ? structuredClone(saved) : {
       name: taskName(kind), stage: '准备执行', percent: null, phasePercent: null, completedSteps: 0,
       steps: [], processed: null, total: null, file: null, metrics: [], errorReason: null,
@@ -48,8 +48,12 @@ export class TaskProgressAdapter {
     if (saved?.phaseProgress) this.resumedPhase = { id: saved.phaseProgress.id, elapsedMs: saved.phaseProgress.elapsedMs };
     if (!saved) {
       if (kind === 'import_path') this.plan(['collect', 'process', 'vector', 'write']);
-      else if (kind === 'embed_stale') { this.plan(['embed']); const step = this.view.steps[0]; if (step) step.label = '优化搜索'; }
+      else if (kind === 'embed_stale') { this.plan(['embed']); const step = this.view.steps[0]; if (step) step.label = '知识向量化'; }
       else if (kind === 'sync_all') this.plan(['sync']);
+    }
+    if (kind === 'embed_stale') {
+      this.view.name = taskName(kind);
+      for (const step of this.view.steps) if (step.id === 'embed') step.label = taskName(kind);
     }
   }
 
@@ -163,7 +167,7 @@ export class TaskProgressAdapter {
       this.completed.add(phase);
       if (step.phases.every(item => this.completed.has(item))) step.status = 'completed';
     } else step.status = 'running';
-    this.view.stage = event.stage ? `${step.label} · ${event.stage}` : step.label;
+    this.view.stage = event.stage ? this.kind === 'embed_stale' ? event.stage : `${step.label} · ${event.stage}` : step.label;
     if (event.totalKnown !== false && typeof event.total === 'number' && event.total > 0 && typeof event.done === 'number') {
       this.view.phasePercent = Math.min(100, Math.floor(event.done / event.total * 100));
     }
@@ -291,11 +295,11 @@ export function finishTaskProgress(view: TaskProductProgress, status: string, re
       next.percent=Math.floor(next.processed/next.total*100);
     }
     const importedCount = Number(data.imported ?? 0);
-    const lead = importedCount > 0 ? `已导入 ${importedCount} 份资料，可以开始使用` : '导入完成';
-    const tail = data.searchOptimizeError ? '搜索优化未能开始'
-      : data.searchOptimizePaused ? '搜索优化已暂停，新资料已记入待优化'
+    const lead = importedCount > 0 ? `导入成功，已保存 ${importedCount} 份资料` : '导入成功';
+    const tail = data.searchOptimizeError ? '知识向量化未能开始'
+      : data.searchOptimizePaused ? '知识向量化已暂停，新资料已记入待向量化'
       : typeof data.searchOptimizeNotice === 'string' && data.searchOptimizeNotice ? data.searchOptimizeNotice
-      : data.vectorsPending === true ? '正在后台优化搜索。'
+      : data.vectorsPending === true ? '知识向量化将在空闲时自动进行，可在任务中心暂停或继续。'
       : '';
     const knowledgeBase = tail ? ''
       : data.knowledgeStatus === 'disabled' ? '原文已入库，自动实体整理未启用'
@@ -327,7 +331,7 @@ export function finishTaskProgress(view: TaskProductProgress, status: string, re
   } else if (status === 'paused') {
     for (const step of next.steps) if (step.status === 'running') step.status = 'pending';
     next.stage = '已暂停，已完成的部分保留';
-    next.errorReason = '已暂停。新导入的资料会记入待优化，不会自动开始。';
+    next.errorReason = '已暂停。新导入的资料会记入待向量化，不会自动开始。';
   } else if (status === 'failed' || status === 'cancelled') {
     for (const step of next.steps) if (step.status === 'running') step.status = status === 'failed' ? 'failed' : 'pending';
     next.errorReason = status === 'failed' ? taskErrorReason(error) : null;
@@ -335,11 +339,11 @@ export function finishTaskProgress(view: TaskProductProgress, status: string, re
       const failed = data.phases?.find((phase: any) => phase.error?.message);
       if (failed?.error?.message) next.errorReason = failed.error.message;
       next.stage = '任务未完成';
-    } else if (next.name === '优化搜索' || next.name === '向量化') {
+    } else if (next.name === '知识向量化' || next.name === '向量化') {
       next.stage = '已暂停，已完成的部分保留';
       next.errorReason = null;
     }
-  } else if (status === 'queued' && next.stage !== '等待前面的整理任务完成') next.stage = '等待执行';
+  } else if (status === 'queued' && next.stage !== '等待前面的整理任务完成') next.stage = next.background?.reason ?? '等待执行';
   next.completedSteps = next.steps.filter(step => step.status === 'completed').length;
   const imported = next.name === '导入资料' ? importOutcome(data) : null;
   if (imported && ['completed', 'failed'].includes(status)) {

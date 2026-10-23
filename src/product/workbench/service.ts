@@ -167,6 +167,7 @@ export class WorkbenchService {
     return this.store.summaries().map(({ generating: _generating, ...row }) => ({ ...row, running: this.active.has(row.id), activity: this.active.has(row.id) ? '正在处理' : row.activity }));
   }
   get(id: string) { return this.active.get(id)?.live ?? this.store.get(id); }
+  hasActiveTurns() { return this.active.size > 0; }
   assistant() { return this.store.assistant(); }
   saveAssistant(input: unknown) { return this.store.saveAssistant(input); }
   private model(id?: string) {

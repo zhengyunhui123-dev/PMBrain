@@ -37,6 +37,7 @@
 .product-task-activity, .product-task-notice { position: fixed; bottom: 18px; right: 24px; z-index: 80; display: flex; align-items: center; gap: 8px; border: 1px solid var(--product-line); border-radius: 10px; background: var(--product-panel); color: inherit; padding: 10px 14px; font: inherit; font-size: 12px; box-shadow: 0 4px 18px #0002; }
 .product-task-activity { cursor: pointer; }
 .product-task-activity svg { color: var(--accent); animation: task-spin 2s linear infinite; }
+.product-task-activity.is-waiting svg { animation: none; }
 .product-task-notice { bottom: 65px; }
 .product-task-notice button { background: none; border: 0; color: inherit; font: inherit; cursor: pointer; }
 .task-table-wrap { overflow-x: auto; border: 1px solid var(--product-line, var(--border)); border-radius: 12px; background: var(--product-panel, var(--bg-card)); }

@@ -1,3 +1,4 @@
+import { idleBackground } from './helpers/background-resources';
 import {afterAll,beforeAll,expect,test} from 'bun:test';
 import {mkdtempSync,mkdirSync,writeFileSync,rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
@@ -31,10 +32,10 @@ async function settledVectors(){
 async function settledKnowledge(){
   const deadline=Date.now()+45000;
   while(Date.now()<deadline){
-    const runs=await runtime.listRuns();
-    const busy=runs.some(run=>(run.kind==='embed_stale'||run.kind==='dream_capture_entities')&&['queued','running','paused'].includes(run.status));
     const pending=await engine.executeRaw<{key:string}>(`SELECT key FROM config WHERE key LIKE 'dream.entity_capture.pending.%'`);
     const optimize=await loadSearchOptimize(engine);
+    const runs=await runtime.listRuns();
+    const busy=runs.some(run=>(run.kind==='embed_stale'||run.kind==='dream_capture_entities')&&['queued','running','paused'].includes(run.status));
     if(!busy&&pending.length===0&&optimize.pending===0)return;
     await Bun.sleep(40);
   }
@@ -67,7 +68,7 @@ beforeAll(async()=>{
     await engine.executeRaw('DELETE FROM pages WHERE source_id=$1',[source]);
     await engine.executeRaw('INSERT INTO sources(id,name) VALUES($1,$1) ON CONFLICT(id) DO NOTHING',[source]);
   }
-  runtime=new ProductTaskRuntime(engine);await runtime.start();
+  runtime=new ProductTaskRuntime(engine, { background: idleBackground });await runtime.start();
 },60000);
 
 test('new source material synchronized by quick maintenance is captured in that task and unchanged vectors are reused',async()=>{
@@ -105,7 +106,7 @@ test('direct core import survives runtime restart and generated output does not 
   await importFile(engine,file,'output/agent-notes/copy.md',{sourceId:'knowledge-auto',noEmbed:true});
   const pending=JSON.parse((await engine.getConfig('dream.entity_capture.pending.knowledge-auto'))!);
   expect(pending.slugs).toEqual(['direct']);
-  runtime=new ProductTaskRuntime(engine);await runtime.start();
+  runtime=new ProductTaskRuntime(engine, { background: idleBackground });await runtime.start();
   const deadline=Date.now()+45000;
   while(Date.now()<deadline){if((await runtime.listRuns()).some(run=>run.kind==='dream_capture_entities'&&run.trigger==='scheduled'&&run.status==='completed'))break;await Bun.sleep(50);}
   expect(await engine.getConfig('dream.entity_capture.pending.knowledge-auto')).toBeNull();

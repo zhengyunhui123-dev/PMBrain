@@ -47,7 +47,7 @@ export class SidecarResourceMonitor {
   private level:'normal'|'constrained'|'critical'='normal';
   private criticalSince:number|null=null;
   private normalSince:number|null=null;
-  constructor(private pid:number,private halt:(message:string,sample:ResourceSample|null,action:ResourceAction)=>Promise<void>,private options:{intervalMs?:number;read?:(pid:number)=>Promise<ResourceSample|null>;onError?:(error:unknown)=>void;now?:()=>number}={}){}
+  constructor(private pid:number,private halt:(message:string,sample:ResourceSample|null,action:ResourceAction)=>Promise<void>,private options:{intervalMs?:number;read?:(pid:number)=>Promise<ResourceSample|null>;onSample?:(sample:ResourceSample)=>Promise<void>;onError?:(error:unknown)=>void;now?:()=>number}={}){}
   start(){if(this.timer||this.stopped)return;this.timer=setTimeout(()=>void this.tick(),this.options.intervalMs??2000);this.timer.unref();}
   stop(){this.stopped=true;if(this.timer)clearTimeout(this.timer);this.timer=null;if(!this.options.read)closeWindowsResourceReader();}
   private async tick(){
@@ -60,6 +60,8 @@ export class SidecarResourceMonitor {
         if(!this.startedAt && Date.parse(sample.startedAt)<this.createdAt-10000){this.stop();return;}
         this.startedAt=sample.startedAt;
       }
+      try { await this.options.onSample?.(sample); } catch (error) { this.options.onError?.(error); }
+      if (this.stopped) return;
       const pressure=memoryPressure(sample);
       const now=(this.options.now??Date.now)();
       if(pressure.level==='critical'){

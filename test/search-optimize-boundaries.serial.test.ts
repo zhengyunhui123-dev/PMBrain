@@ -1,3 +1,4 @@
+import { idleBackground } from './helpers/background-resources';
 import { expect, spyOn, test } from 'bun:test';
 import { Worker } from 'node:worker_threads';
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
@@ -49,7 +50,7 @@ async function fixture(run: (ctx: { engine: BrainEngine; runtime: ProductTaskRun
     await engine.executeRaw('UPDATE sources SET local_path=$1 WHERE id=$2', [directory, 'default']);
     await engine.setConfig('dream.entity_capture.enabled', 'false');
     await reloadLiveGateway(engine);
-    runtime = new ProductTaskRuntime(engine);
+    runtime = new ProductTaskRuntime(engine, { background: idleBackground });
     await runtime.start();
     await run({ engine, runtime, directory });
   } finally {

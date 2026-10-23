@@ -19,11 +19,12 @@ import { maintenanceFailure } from './maintenance-orchestration.ts';
 import { fetchSource, loadAllSources, parseSourceConfig } from '../../core/sources-load.ts';
 import { resolveSourceId } from '../../core/source-resolver.ts';
 import { runEmbedCore } from '../../commands/embed.ts';
-import { assignSearchOptimizeAcceptance, type SearchOptimizeAcceptance } from './search-optimize.ts';
+import { assignSearchOptimizeAcceptance, vectorizationRetryDelay, type SearchOptimizeAcceptance } from './search-optimize.ts';
 import { parentPort } from 'node:worker_threads';
 import { format } from 'node:util';
 import { stat } from 'node:fs/promises';
-import { setImmediate as yieldExecution } from 'node:timers/promises';
+import { setImmediate as yieldExecution, setTimeout as waitForBatch } from 'node:timers/promises';
+import type { VectorizationSchedule } from '../../../shared/background-vectorization';
 import { streamFileHash, assertImportFileSize, isOversizedImportError, resourceProtectionAbortsTask } from './resource-guard.ts';
 import { relative, isAbsolute, join } from 'node:path';
 import { SyncFilesDeferred, type SyncFileRuntime } from '../../core/sync-file-runtime.ts';
@@ -313,6 +314,9 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
 
 async function runSearchOptimize(engine: BrainEngine): Promise<void> {
   let stalePageAttempts = 0;
+  let schedule: VectorizationSchedule | undefined;
+  let lastBatchAt = 0;
+  const windowEndsAt = Date.now() + 60000;
   for (;;) {
     abort.signal.throwIfAborted();
     const state = await rpc('task.searchOptimizeState', []) as {
@@ -320,7 +324,9 @@ async function runSearchOptimize(engine: BrainEngine): Promise<void> {
       done?: number;
       total?: number;
       items?: Array<{ sourceId?: string; slug?: string; revision?: string }>;
+      schedule?: VectorizationSchedule;
     };
+    schedule = state.schedule;
     const items = Array.isArray(state.items)
       ? state.items.filter((item): item is { sourceId: string; slug: string; revision?: string } => Boolean(item?.sourceId && item.slug && !item.slug.includes(':')))
       : [];
@@ -332,13 +338,14 @@ async function runSearchOptimize(engine: BrainEngine): Promise<void> {
       send({ type: 'result', result: { searchOptimize: true, status: 'ok' } });
       return;
     }
-    if (state.paused) {
+    if (state.paused || schedule?.mode === 'waiting' || Date.now() >= windowEndsAt) {
       send({ type: 'deferred', phase: 'search_optimize' });
       return;
     }
     const next = items[0]!;
     const revision = next.revision;
-    send({ type: 'progress', event: { phase: 'embed', done, total: Number.isFinite(state.total) ? Number(state.total) : done + items.length, unit: '份资料' } });
+    const total = Number.isFinite(state.total) ? Number(state.total) : done + items.length;
+    send({ type: 'progress', background: schedule, event: { phase: 'embed', done, total, unit: '份资料', stage: schedule?.reason, file: next.slug } });
     await rpc('task.searchOptimizeForgetPage', [next.sourceId, next.slug]);
     let embedded: Awaited<ReturnType<typeof runEmbedCore>>;
     try {
@@ -346,10 +353,21 @@ async function runSearchOptimize(engine: BrainEngine): Promise<void> {
         slugs: [next.slug],
         sourceId: next.sourceId,
         batchSize: 32,
-        getBatchSize: () => constrained ? 8 : 32,
+        getBatchSize: () => Math.min(constrained ? 4 : 32, schedule?.batchSize || 4),
+        writeBatchSize: engine.kind === 'pglite' ? 1 : 4,
         quiet: true,
         signal: abort.signal,
-        pauseCheck: async () => Boolean((await rpc('task.searchOptimizeState', []) as { paused?: boolean }).paused),
+        pauseCheck: async () => {
+          const delay = (schedule?.delayMs ?? 0) - (Date.now() - lastBatchAt);
+          if (delay > 0) await waitForBatch(delay, undefined, { signal: abort.signal });
+          const current = await rpc('task.searchOptimizeState', []) as { paused?: boolean; schedule?: VectorizationSchedule };
+          schedule = current.schedule;
+          return Boolean(current.paused || schedule?.mode === 'waiting' || Date.now() >= windowEndsAt);
+        },
+        onProgress: (processed, chunks) => {
+          lastBatchAt = Date.now();
+          send({ type: 'progress', background: schedule, event: { phase: 'embed', done, total, unit: '份资料', file: next.slug, stage: `${schedule?.reason ?? '正在向量化'} · 当前资料 ${processed}/${chunks} 段已保存` } });
+        },
       });
     } catch (error) {
       if (abort.signal.aborted) {
@@ -360,6 +378,10 @@ async function runSearchOptimize(engine: BrainEngine): Promise<void> {
       if (message.includes('在处理期间已改变') && stalePageAttempts < 3) {
         stalePageAttempts += 1;
         continue;
+      }
+      if (vectorizationRetryDelay(message, 0) !== null) {
+        send({ type: 'deferred', phase: 'search_optimize', error: message });
+        return;
       }
       throw error;
     }
@@ -373,7 +395,11 @@ async function runSearchOptimize(engine: BrainEngine): Promise<void> {
       return;
     }
     if (embedded.error || embedded.failedPages > 0 || embedded.status === 'failed') {
-      const message = embedded.error || '搜索优化未完成';
+      const message = embedded.error || '知识向量化未完成';
+      if (vectorizationRetryDelay(message, 0) !== null) {
+        send({ type: 'deferred', phase: 'search_optimize', error: message });
+        return;
+      }
       send({ type: 'error', error: message, result: { searchOptimize: true, status: 'failed', failures: [{ error: message }] } });
       return;
     }

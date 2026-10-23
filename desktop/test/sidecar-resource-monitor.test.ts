@@ -5,6 +5,21 @@ import { closeWindowsResourceReader } from '../src/main/sidecar/windows-resource
 const rawSample={bytes:100*1024**2,availableBytes:12*1024**3,commitLimitBytes:32*1024**3,committedBytes:16*1024**3,startedAt:new Date().toISOString()};
 function parseSample(value:unknown){return parseWindowsResourceSample(JSON.stringify(value));}
 
+test('资源正常时持续提供空闲调度样本，通知失败不触发错误的内存保护', async () => {
+  const actions: string[] = [];
+  let samples = 0;
+  let errors = 0;
+  const monitor = new SidecarResourceMonitor(12345, async (_message, _sample, action) => { actions.push(action); }, {
+    intervalMs: 60000, read: async () => parseSample(rawSample),
+    onSample: async () => { samples++; if (samples === 1) throw new Error('telemetry unavailable'); },
+    onError: () => { errors++; },
+  });
+  try { await (monitor as any).tick(); await (monitor as any).tick(); } finally { monitor.stop(); }
+  expect(samples).toBe(2);
+  expect(errors).toBe(1);
+  expect(actions).toEqual([]);
+});
+
 test('内存余量在阈值附近波动时维持降速，持续恢复十五秒后只恢复一次',async()=>{
   const actions:string[]=[];let now=0;let available=500*1024**2;
   const monitor=new SidecarResourceMonitor(12345,async(_message,_sample,action)=>{actions.push(action);},{
@@ -19,6 +34,16 @@ test('内存余量在阈值附近波动时维持降速，持续恢复十五秒�
     now+=1;await (monitor as any).tick();expect(actions).toEqual(['adjust','adjust']);
     available=0;now+=1;await (monitor as any).tick();expect(actions.at(-1)).toBe('drain');
   }finally{monitor.stop();}
+});
+
+test('停止后迟到的调度通知不会触发资源动作', async () => {
+  const actions: string[] = [];
+  const monitor = new SidecarResourceMonitor(12345, async (_message, _sample, action) => { actions.push(action); }, {
+    intervalMs: 60000, read: async () => ({ bytes: 100 * 1024 ** 2, availableBytes: 0, totalBytes: 8 * 1024 ** 3 }),
+    onSample: async () => { monitor.stop(); },
+  });
+  await (monitor as any).tick();
+  expect(actions).toEqual([]);
 });
 
 test('缺失或异常的 Windows 计数器不能作为零余量，真实零余量仍触发保护',()=>{

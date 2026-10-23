@@ -11,7 +11,7 @@ test('后台优化搜索进行时，对话检索改走关键词', async () => {
   );
   await search({} as never, { query: '导入过程能搜索吗', mode: 'semantic', limit: 6 });
   expect(modes).toEqual(['keyword']);
-  expect(backgroundVectorizingBlocksSemantic([{ searchOptimize: true, status: 'queued' }])).toBe(true);
+  expect(backgroundVectorizingBlocksSemantic([{ searchOptimize: true, status: 'queued' }])).toBe(false);
   expect(backgroundVectorizingBlocksSemantic([{ searchOptimize: true, status: 'paused' }])).toBe(false);
   expect(backgroundVectorizingBlocksSemantic([{ searchOptimize: true, status: 'completed' }])).toBe(false);
 });

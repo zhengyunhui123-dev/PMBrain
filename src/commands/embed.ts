@@ -64,6 +64,7 @@ export interface EmbedOpts {
    */
   batchSize?: number;
   getBatchSize?: () => number;
+  writeBatchSize?: number;
   /**
    * v0.41.18.0 (A13): when 'recent', walks the stale-chunk pool in
    * page.updated_at DESC order (recent-modified pages first) instead
@@ -509,7 +510,7 @@ export async function runEmbed(engine: BrainEngine, args: string[]): Promise<Emb
   }
 }
 
-async function commitPageEmbeddingBatch(engine: BrainEngine, slug: string, staleBatch: Chunk[], sourceId?: string, signal?: AbortSignal): Promise<void> {
+async function commitPageEmbeddingBatch(engine: BrainEngine, slug: string, staleBatch: Chunk[], sourceId?: string, signal?: AbortSignal, writeBatchSize = 4): Promise<void> {
   const embeddings = await embedBatchWithBackoff(staleBatch.map(chunk => chunk.chunk_text), signal ? { abortSignal: signal } : {});
   const checkpoint: ChunkInput[] = staleBatch.map((row, index) => ({
     chunk_index: row.chunk_index,
@@ -527,9 +528,10 @@ async function commitPageEmbeddingBatch(engine: BrainEngine, slug: string, stale
     ...(row.doc_comment && { doc_comment: row.doc_comment }),
     ...(row.symbol_name_qualified && { symbol_name_qualified: row.symbol_name_qualified }),
   }));
-  for (let offset = 0; offset < checkpoint.length; offset += 4) {
+  const writeSize = Math.max(1, Math.min(4, writeBatchSize));
+  for (let offset = 0; offset < checkpoint.length; offset += writeSize) {
     if (signal?.aborted) throw signal.reason instanceof Error ? signal.reason : new Error('aborted');
-    await engine.upsertChunks(slug, checkpoint.slice(offset, offset + 4), { sourceId, replaceExisting: false, ...(signal && { signal }), auditSite: 'upsertChunks' });
+    await engine.upsertChunks(slug, checkpoint.slice(offset, offset + writeSize), { sourceId, replaceExisting: false, ...(signal && { signal }), auditSite: 'upsertChunks' });
   }
 }
 
@@ -579,12 +581,13 @@ async function embedPageBounded(engine: BrainEngine, slug: string, result: Embed
         afterChunkIndex = -1;
         continue;
       }
-      await commitPageEmbeddingBatch(engine, slug, batch, sourceId, opts.signal);
+      await commitPageEmbeddingBatch(engine, slug, batch, sourceId, opts.signal, opts.writeBatchSize);
       embedded += batch.length;
       remaining.stale -= batch.length;
       result.embedded += batch.length;
       result.committedBatches++;
       afterChunkIndex = batch.at(-1)!.chunk_index;
+      opts.onProgress?.(remaining.total - remaining.stale, remaining.total, embedded);
     }
     result.pages_processed++;
     if (!opts.quiet) slog(`${slug}: embedded ${embedded} chunks`);

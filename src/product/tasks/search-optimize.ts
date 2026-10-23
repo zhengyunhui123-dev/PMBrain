@@ -2,8 +2,14 @@ import type { BrainEngine } from '../../core/engine.ts';
 
 export const SEARCH_OPTIMIZE_CONFIG = 'pmbrain.search_optimize';
 export const SEARCH_OPTIMIZE_JOB_KEY = 'search-optimize:active';
-export const SEARCH_OPTIMIZE_PAUSED = '已暂停。新导入的资料会记入待优化，不会自动开始。';
-export const SEARCH_OPTIMIZE_NOTICE = '搜索优化此前未完成，可在任务中心继续';
+export const SEARCH_OPTIMIZE_PAUSED = '已暂停。新导入的资料会记入待向量化，不会自动开始。';
+export const SEARCH_OPTIMIZE_NOTICE = '知识向量化此前未完成，可在任务中心继续';
+
+export function vectorizationRetryDelay(error: string, attempts: number): number | null {
+  if (attempts >= 5 || /401|403|API.?key|credentials|quota|billing|余额|额度|配置|维度|dimensions/i.test(error)) return null;
+  return /\b(?:408|429|500|502|503|504)\b|timeout|timed out|fetch failed|ECONN|EPIPE|EAI_AGAIN|socket hang up|temporar(?:y|ily)|数据库.*(?:中断|恢复|超时)/i.test(error)
+    ? Math.min(15 * 60000, 30000 * 2 ** attempts) : null;
+}
 
 export interface SearchOptimizeItem {
   sourceId: string;

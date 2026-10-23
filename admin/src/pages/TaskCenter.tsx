@@ -217,9 +217,7 @@ export function TaskCenterPage() {
 
   const cancel = async (run: ConsoleRun) => {
     const optimize = isSearchOptimize(run);
-    if (!window.confirm(optimize
-      ? '暂停后，正在处理的这一批会保存。之后不会继续优化，新导入的资料会记入待优化，直到你继续。确定暂停吗？'
-      : run.status === 'queued'
+    if (!optimize && !window.confirm(run.status === 'queued'
       ? '取消等待后，本次任务不会再启动。确定取消吗？'
       : '取消任务不会删除已经完成的成果，下次可以从未完成部分继续。确定取消吗？')) return;
     setCancelling(run.id);
@@ -249,9 +247,7 @@ export function TaskCenterPage() {
 
   const retry = async (run: ConsoleRun) => {
     const optimize = isSearchOptimize(run);
-    if (!window.confirm(optimize
-      ? '继续后，只优化还没有完成的资料。确定继续吗？'
-      : taskUsesFileQueue(run.kind)?'将保留已完成资料，继续原任务未完成的同步和整理。中断的模型请求可能已产生费用，继续吗？':'将重新执行任务；导入会跳过已确认完成且未改变的文件。中断的模型请求可能已产生费用，重新执行可能再次计费。继续吗？')) return;
+    if (!optimize && !window.confirm(taskUsesFileQueue(run.kind)?'将保留已完成资料，继续原任务未完成的同步和整理。中断的模型请求可能已产生费用，继续吗？':'将重新执行任务；导入会跳过已确认完成且未改变的文件。中断的模型请求可能已产生费用，重新执行可能再次计费。继续吗？')) return;
     setRetrying(run.id);
     try {
       if (optimize) await api.continueRun(run.id);
@@ -295,7 +291,7 @@ export function TaskCenterPage() {
       <div className="pm-section-head">
         <div>
           <h1>任务中心</h1>
-          <p className="pm-page-intro">导入完成后就可以使用。搜索优化在后台进行，可以暂停，也可以继续。</p>
+          <p className="pm-page-intro">资料保存后即导入成功。知识向量化在空闲时自动进行，忙时等待；可以暂停和继续。</p>
         </div>
         <button type="button" className="pm-ghost" onClick={() => void load()}><RefreshCw aria-hidden="true" /> 刷新状态</button>
       </div>

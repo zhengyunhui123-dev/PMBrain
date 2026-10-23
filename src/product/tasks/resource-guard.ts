@@ -31,6 +31,7 @@ export function assertImportFileSize(path:string,size:number){
 }
 
 export interface TaskResourceOptions {
+  background?: import('./background-vectorization').BackgroundVectorizationOptions;
   memoryBytes?:()=>number;
   availableMemoryBytes?:()=>number;
   totalMemoryBytes?:()=>number;

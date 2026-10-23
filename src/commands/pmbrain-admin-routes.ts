@@ -232,6 +232,20 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
     ensureAdminWorkerStarted,
   } = options;
   const productTasks = options.productTasks;
+  app.post('/admin/api/console/activity', requireAdmin, (_req: Request, res: Response) => {
+    productTasks.noteActivity();
+    res.status(204).end();
+  });
+  app.post('/admin/api/console/background-resources', requireAdmin, express.json({ limit: '4kb' }), (req: Request, res: Response) => {
+    const sample = req.body;
+    if (!sample || ['bytes', 'availableBytes', 'totalBytes'].some(key => typeof sample[key] !== 'number' || !Number.isFinite(sample[key]) || sample[key] < 0)
+      || sample.totalBytes <= 0 || ['commitHeadroomBytes', 'systemIdleSeconds'].some(key => sample[key] !== undefined && (typeof sample[key] !== 'number' || !Number.isFinite(sample[key]) || sample[key] < 0))) {
+      res.status(400).json({ error: 'invalid_background_resource_sample' }); return;
+    }
+    productTasks.updateBackgroundResources({ bytes: sample.bytes, availableBytes: sample.availableBytes, totalBytes: sample.totalBytes,
+      commitHeadroomBytes: sample.commitHeadroomBytes, systemIdleSeconds: sample.systemIdleSeconds });
+    res.status(204).end();
+  });
   registerWorkbenchRoutes(app, requireAdmin, engine, config, { databaseAvailable: () => !getPgliteBusy(), productTasks });
   const readRuns = async () => [...(getPgliteBusy() ? productTasks.cachedRuns() : await productTasks.listRuns()), ...listRuns()];
   const readRun = async (id: string) => (getPgliteBusy() ? productTasks.cachedRuns().find(run => run.id === id) : await productTasks.getRun(id)) ?? getRun(id);
@@ -1548,6 +1562,7 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
   // Knowledge workbench search: keyword (full-text) or semantic (hybrid, no chat expand).
   // Does not call think / ordinary chat models.
   app.post('/admin/api/knowledge-search', requireAdmin, express.json({ limit: '16kb' }), async (req: Request, res: Response) => {
+    const finish = productTasks.beginForeground();
     try {
       const payload = await runAdminKnowledgeSearch(engine, {
         query: typeof req.body?.query === 'string' ? req.body.query : '',
@@ -1557,7 +1572,7 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
       res.json(payload);
     } catch (e) {
       res.status(400).json({ error: e instanceof Error ? e.message : 'knowledge_search_failed' });
-    }
+    } finally { finish(); }
   });
 
   app.post('/admin/api/capture-runs', requireAdmin, express.json({ limit: '64kb' }), async (req: Request, res: Response) => {

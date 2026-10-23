@@ -1,5 +1,5 @@
 import {readSidecarMigrationProgress, runUpgradeRetryGate, startupFailureAllowsRetry} from '../startup/post-upgrade-startup.js';
-import { app, type BrowserWindow } from 'electron';
+import { app, powerMonitor, type BrowserWindow } from 'electron';
 import { ensureBootstrapToken, getDatabaseRuntimeConfig, getSetupInfo, markDesktopMigration, needsDesktopMigration } from '../config-manager.js';
 import { requireExistingPgliteDatabase } from '../../../../src/core/pmbrain-adapters/pglite-database-path.js';
 import type { CliRuntime } from '../cli-runner.js';
@@ -114,6 +114,7 @@ export class SidecarController {
         port,
         bootstrapToken,
         clientVersion: app.getVersion(),
+        systemIdleSeconds: () => powerMonitor.getSystemIdleTime(),
         healthTimeoutMs,
         logger,
         onStderr: (_chunk, recent) => {

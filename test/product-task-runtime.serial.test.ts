@@ -1,3 +1,4 @@
+import { idleBackground } from './helpers/background-resources';
 import { expectRejection } from './helpers/await-rejection.ts';
 import { afterAll, beforeAll, describe, expect, test, spyOn } from 'bun:test';
 import { Worker } from 'node:worker_threads';
@@ -138,7 +139,7 @@ beforeAll(async () => {
   writeFileSync(join(root, 'initial.txt'), '任务验收初始版本');
   commitSourceGit(root, 'isolated task fixture');
   await engine.executeRaw("UPDATE sources SET config=config-'remote_url',local_path=$1 WHERE id='default'", [root]);
-  runtime = new ProductTaskRuntime(engine);
+  runtime = new ProductTaskRuntime(engine, { background: idleBackground });
   await runtime.start();
 }, 60_000);
 
@@ -202,7 +203,7 @@ describe('软件后台任务共用 owner 数据库', () => {
     console.log('快速维护线程内存验收',JSON.stringify({runs:31,baselineRss:baseline,finalRss:process.memoryUsage().rss,threads:pool.length}));
     await runtime.close();
     expect(pool).toHaveLength(0);
-    runtime=new ProductTaskRuntime(engine);await runtime.start();
+    runtime=new ProductTaskRuntime(engine, { background: idleBackground });await runtime.start();
   },120000);
 
   test('旧快速维护继续原任务，跳过完整知识源，接着同步第二个源', async () => {
@@ -347,7 +348,7 @@ describe('软件后台任务共用 owner 数据库', () => {
     expect(run.product?.material?.page).toMatchObject({ slug: 'background', type: 'note' });
     expect(readFileSync(path, 'utf8')).toBe(content);
     expect(await engine.getPage('background', { sourceId: 'default' })).not.toBeNull();
-    const reader = new ProductTaskRuntime(engine);
+    const reader = new ProductTaskRuntime(engine, { background: idleBackground });
     expect((await reader.getRun(accepted.id))?.result).toMatchObject({ imported: 1 });
     expect((await reader.getRun(accepted.id))?.product).toEqual(run.product);
     expect((await reader.listRuns()).some(row => row.id === accepted.id)).toBe(true);
@@ -365,7 +366,7 @@ describe('软件后台任务共用 owner 数据库', () => {
       const stored = await finished(accepted.id);
       expect(stored.status).toBe('completed');
       expect(stored.result).toMatchObject({ imported: 1, errors: 0, vectorsPending: true });
-      expect(stored.product?.stage).toContain('正在后台优化搜索');
+      expect(stored.product?.stage).toContain('知识向量化将在空闲时自动进行');
       expect(await engine.getPage('defer-vectors', { sourceId: 'default' })).not.toBeNull();
       const pending = await engine.getChunks('defer-vectors', { sourceId: 'default' });
       expect(pending.length).toBeGreaterThan(0);
@@ -681,7 +682,7 @@ describe('软件后台任务共用 owner 数据库', () => {
       await runtime.close();
       expect(slowRequests).toBe(count);
       release();
-      runtime = new ProductTaskRuntime(engine);
+      runtime = new ProductTaskRuntime(engine, { background: idleBackground });
       await runtime.start();
       await modelWaiting();
       expect(slowRequests).toBe(count + 1);
@@ -705,13 +706,13 @@ describe('软件后台任务共用 owner 数据库', () => {
     writeFileSync(keyword, '# 仅关键词\n\n这份资料不进入搜索优化。');
     const accepted = await runtime.submitImport({ path: first });
     try {
-      expect((await finished(accepted.id)).product?.stage).toContain('正在后台优化搜索');
+      expect((await finished(accepted.id)).product?.stage).toContain('知识向量化将在空闲时自动进行');
       await modelWaiting();
       const embed = (await runtime.listRuns()).find(row => row.searchOptimize && ['queued', 'running'].includes(row.status));
       expect(embed).toBeTruthy();
       expect((await runtime.pauseSearchOptimize(embed!.id))?.id).toBe(embed!.id);
       const queued = await finished((await runtime.submitImport({ path: second })).id);
-      expect(queued.product?.stage).toContain('搜索优化已暂停');
+      expect(queued.product?.stage).toContain('知识向量化已暂停');
       release();
       expect((await finished(embed!.id)).status).toBe('paused');
       expect((await engine.getChunks('optimize-a', { sourceId: 'default' })).every(chunk => !!chunk.embedded_at)).toBe(true);
@@ -723,7 +724,7 @@ describe('软件后台任务共用 owner 数据库', () => {
       expect(pending.items?.some(item => item.slug === 'optimize-b')).toBe(true);
       const count = slowRequests;
       await runtime.close();
-      runtime = new ProductTaskRuntime(engine);
+      runtime = new ProductTaskRuntime(engine, { background: idleBackground });
       await runtime.start();
       await Bun.sleep(200);
       expect(slowRequests).toBe(count);
@@ -1038,7 +1039,7 @@ describe('软件后台任务共用 owner 数据库', () => {
       engine=new WorkerPgliteEngine() as unknown as BrainEngine;
       await engine.connect({database_path:join(root,'.pmbrain','timeout-test.pglite')});await engine.initSchema();
       await engine.executeRaw('UPDATE sources SET local_path=$1 WHERE id=$2',[root,'default']);
-      runtime=new ProductTaskRuntime(engine);await runtime.start();
+      runtime=new ProductTaskRuntime(engine, { background: idleBackground });await runtime.start();
     }
     const path=join(root,'write-timeout.md');
     writeFileSync(path,'# 写入超时\n\n失败后继续原任务，不丢失已经提交的其他资料。');
