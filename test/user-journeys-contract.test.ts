@@ -13,12 +13,17 @@ describe('core user journeys cover packaged Desktop openability', () => {
 
   test('the journey waits for import completion instead of a stale progress prefix', () => {
     const script = readFileSync(join(ROOT, 'test/user-journeys/core_journeys.py'), 'utf8');
+    const start = script.indexOf('def import_search_journey');
+    const next = script.indexOf('\ndef ', start + 1);
+    const journey = script.slice(start, next === -1 ? undefined : next);
+    expect(start).toBeGreaterThanOrEqual(0);
     expect(script).toContain('--packaged');
     expect(script).toContain('win-unpacked');
-    expect(script).toContain(".materials-drawer .product-task-progress");
-    expect(script).toContain('已完成');
-    expect(script).toContain('materials-progress');
-    expect(script).toContain('len(outcomes) != 2');
+    expect(journey).toContain(".materials-drawer .product-task-progress");
+    expect(journey).toContain('outcome.get("status") != "导入成功"');
+    expect(journey).toContain('task-is-active');
+    expect(journey).toContain('materials-progress');
+    expect(journey).toContain('len(outcomes) != 2');
     expect(script).toContain('desktop-runtime.log');
     expect(script).toContain('build:sidecar');
     expect(script).toContain('build:dir');
