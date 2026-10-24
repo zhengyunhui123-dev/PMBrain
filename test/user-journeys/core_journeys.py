@@ -496,7 +496,7 @@ def import_search_journey(page: Page, origin: str, markdown: Path, pdf: Path, ar
         }))"""
     )
     if len(outcomes) != 2 or any(
-        outcome.get("status") != "已完成" or outcome.get("error")
+        outcome.get("status") != "导入成功" or outcome.get("error")
         or outcome.get("metrics", {}).get("失败文件") != "0"
         or outcome.get("metrics", {}).get("新增资料") != "1"
         for outcome in outcomes

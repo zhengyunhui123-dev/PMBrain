@@ -626,6 +626,54 @@ describe('desktop LAN MCP gateway', () => {
     expect(gateway.getStatus().running).toBe(false);
   });
 
+  test('stop returns and frees the port after fetch keep-alive', async () => {
+    const target = createServer((_req, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end('{"jsonrpc":"2.0","id":1,"result":{}}');
+    });
+    const targetPort = await listen(target);
+    const gateway = createGateway({
+      bindAddress: '127.0.0.1',
+      sidecarPort: targetPort,
+      listenPort: 0,
+    });
+    const status = await gateway.start();
+    const response = await fetch(status.mcpUrl, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer test-token',
+        'Content-Type': 'application/json',
+        Accept: 'application/json, text/event-stream',
+      },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} }),
+    });
+    expect(response.status).toBe(200);
+    await response.text();
+    for (let n = 0; n < 6; n++) {
+      const again = await fetch(status.mcpUrl, {
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer test-token',
+          'Content-Type': 'application/json',
+          Accept: 'application/json, text/event-stream',
+        },
+        body: JSON.stringify({ jsonrpc: '2.0', id: n + 2, method: 'tools/call', params: { name: 'remember', arguments: {} } }),
+      });
+      await again.text();
+    }
+    const stopped = await Promise.race([
+      gateway.stop().then(() => 'stopped'),
+      new Promise(resolve => setTimeout(() => resolve('hung'), 3000)),
+    ]);
+    expect(stopped).toBe('stopped');
+    const rebound = createServer();
+    await new Promise<void>((resolve, reject) => {
+      rebound.once('error', reject);
+      rebound.listen(status.port, '127.0.0.1', resolve);
+    });
+    await new Promise<void>((resolve) => rebound.close(() => resolve()));
+  });
+
   test('cancels a pending listen without leaving an orphan server', async () => {
     const reserved = createServer();
     const listenPort = await listen(reserved);

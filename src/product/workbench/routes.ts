@@ -279,7 +279,7 @@ export function registerWorkbenchRoutes(app: express.Express, requireAdmin: Requ
   const search = workbenchSearchDuringTasks(options.productTasks, workbenchKnowledgeSearch);
   const recall = (...args: Parameters<typeof recallWorkbenchMemory>) => options.databaseAvailable?.() === false ? Promise.resolve([]) : recallWorkbenchMemory(args[0], vectorizing() ? { ...args[1], lexicalOnly: true } : args[1]);
   const service = new WorkbenchService(store, currentModels, options.answer ?? knowledgeWorkbenchAnswer(engine, { search, answer: chat, loop: toolLoop, recall }, options.productTasks?{tasks:options.productTasks,store}:undefined, agents), options.summarize ?? summarizeConversation, undefined, hooks);
-  options.productTasks?.attachForegroundCheck(() => service.hasActiveTurns());
+  options.productTasks?.attachForegroundCheck?.(() => service.hasActiveTurns());
   const coordinator = typeof options.productTasks?.attachWorkbenchAssistant === 'function'
     ? new WorkbenchAgentCoordinator(agentStore, service, options.productTasks, engine)
     : undefined;

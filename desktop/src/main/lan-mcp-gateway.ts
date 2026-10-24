@@ -7,7 +7,7 @@ import {
   type Server,
   type ServerResponse,
 } from 'node:http';
-import { isIP } from 'node:net';
+import { isIP, type Socket } from 'node:net';
 
 export const DEFAULT_LAN_MCP_PORT = 3131;
 export const LAN_MCP_MAX_BODY_BYTES = 4 * 1024 * 1024;
@@ -241,6 +241,7 @@ export class LanMcpGateway {
   private readonly sidecarPort: number;
   private readonly verifyBearerToken: (authorizationHeader: string) => Promise<boolean>;
   private server?: Server;
+  private readonly openSockets = new Set<Socket>();
   private pendingStart?: { server: Server; cancel: () => void };
   private activeRequests = new Set<ClientRequest>();
   private activeInboundRequests = 0;
@@ -287,6 +288,10 @@ export class LanMcpGateway {
       void this.handleRequest(request, response).catch(() => {
         jsonError(response, 400, '局域网 MCP 请求未能完整读取。');
       });
+    });
+    server.on('connection', (socket) => {
+      this.openSockets.add(socket);
+      socket.on('close', () => this.openSockets.delete(socket));
     });
     server.maxConnections = LAN_MCP_MAX_CONCURRENT_REQUESTS;
     server.headersTimeout = 10_000;
@@ -348,32 +353,34 @@ export class LanMcpGateway {
     this.activeRequests.clear();
     if (!server) return;
     if (this.pendingStart?.server === server) this.pendingStart.cancel();
+    this.destroyOpenSockets(server);
 
     await new Promise<void>((resolve) => {
       let settled = false;
       const finish = () => {
         if (settled) return;
         settled = true;
+        clearTimeout(forceClose);
         server.off('close', finish);
         server.off('error', finish);
         resolve();
       };
+      const forceClose = setTimeout(() => {
+        this.destroyOpenSockets(server);
+        if (!server.listening) finish();
+      }, 250);
       server.once('close', finish);
       server.once('error', finish);
-      if (server.listening) {
-        server.close(finish);
-        server.closeAllConnections?.();
-      } else {
-        server.once('listening', () => {
-          if (server.listening) {
-            server.close(finish);
-            server.closeAllConnections?.();
-          } else {
-            finish();
-          }
-        });
-      }
+      if (server.listening) server.close(finish);
+      else finish();
     });
+  }
+
+  private destroyOpenSockets(server: Server): void {
+    for (const socket of this.openSockets) socket.destroy();
+    this.openSockets.clear();
+    server.closeIdleConnections?.();
+    server.closeAllConnections?.();
   }
 
   getStatus(): LanMcpGatewayStatus {
