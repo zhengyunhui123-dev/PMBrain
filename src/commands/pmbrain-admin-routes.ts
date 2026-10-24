@@ -1354,6 +1354,16 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
       if (parsed.data.notice_shown || parsed.data.mode) {
         await stampWritebackNoticeShown(engine);
       }
+      if (parsed.data.core_enabled !== undefined) {
+        const { setCoreMemoryEnabled } = await import('../core/core-memory.ts');
+        await setCoreMemoryEnabled(engine, parsed.data.core_enabled);
+      }
+      if (parsed.data.core_slug) {
+        const { setPageCore } = await import('../core/core-memory.ts');
+        const { resolveMainSourceId } = await import('../core/source-resolver.ts');
+        const sourceId = parsed.data.source_id ?? await resolveMainSourceId(engine);
+        await setPageCore(engine, parsed.data.core_slug, parsed.data.core_slug_enabled !== false, sourceId);
+      }
       sendAdminContract(res, MemoryWritebackStatusSchema, await getWritebackStatus(engine));
     } catch (e) {
       res.status(400).json({ error: e instanceof Error ? e.message : 'memory_writeback_update_failed' });

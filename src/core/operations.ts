@@ -4726,15 +4726,18 @@ const context_pack: Operation = {
   },
   scope: 'read',
   verb: true,
-  handler: async (ctx, p) => ({
-    ...(await buildContextPack(ctx.engine, {
+  handler: async (ctx, p) => {
+    const pack = await buildContextPack(ctx.engine, {
       sourceId: ctx.sourceId,
       clientId: ctx.auth?.clientId,
       sessionId: p.session_id as string,
       entities: Array.isArray(p.entities) ? p.entities.filter((v): v is string => typeof v === 'string') : undefined,
-    })),
-    protocol_version: MEMORY_VERBS_VERSION,
-  }),
+    });
+    const { loadCoreBlock } = await import('./core-memory.ts');
+    const core = await loadCoreBlock(ctx.engine, { sessionSourceId: ctx.sourceId, excludePrivate: ctx.remote !== false });
+    const text = [core.text, pack.text].filter(Boolean).join('\n\n');
+    return { ...pack, text, core_enabled: core.enabled, protocol_version: MEMORY_VERBS_VERSION };
+  },
 };
 
 const delta: Operation = {

@@ -163,13 +163,18 @@ export const MemoryWritebackStatusSchema = z.object({
   visibility: z.enum(['world', 'private']),
   agents: z.array(z.object({agent:z.enum(['codex','claude']),registered:z.boolean(),block:z.string(),hook:z.string(),issue:z.string().nullable()})),
   issues: z.array(z.string()),
+  core_enabled: z.boolean().default(false),
 });
 
 export const MemoryWritebackUpdateRequestSchema = z.object({
   mode: MemoryWritebackModeSchema.optional(),
   ttl: z.string().optional(),
   notice_shown: z.boolean().optional(),
-}).refine(value=>value.mode!==undefined||value.notice_shown===true,'请选择记忆方式或以后再说');
+  core_enabled: z.boolean().optional(),
+  core_slug: z.string().trim().min(1).max(300).optional(),
+  core_slug_enabled: z.boolean().optional(),
+  source_id: z.string().trim().min(1).max(200).optional(),
+}).refine(value=>value.mode!==undefined||value.notice_shown===true||value.core_enabled!==undefined||value.core_slug!==undefined,'请选择记忆方式、常驻背景或以后再说');
 
 export const BrainFactDetailResponseSchema = BrainFactRowSchema.extend({
   context: z.string().nullable().optional(),

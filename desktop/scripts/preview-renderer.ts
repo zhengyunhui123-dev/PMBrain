@@ -200,10 +200,10 @@ window.pmbrainDesktop = {
   },
   onSystemSettingsState: () => () => {},
   getMemoryWriteback: async () => ({
-    mode: 'off', enabled: false, ttl: '30d', notice_shown: false, visibility: 'private', agents: [], issues: [],
+    mode: 'off', enabled: false, ttl: '30d', notice_shown: false, visibility: 'private', agents: [], issues: [], core_enabled: false,
   }),
   saveMemoryWriteback: async (payload) => ({
-    mode: payload.mode ?? 'off', enabled: payload.mode !== undefined && payload.mode !== 'off', ttl: '30d', notice_shown: true, visibility: 'private', agents: [], issues: [],
+    mode: payload.mode ?? 'off', enabled: payload.mode !== undefined && payload.mode !== 'off', ttl: '30d', notice_shown: true, visibility: 'private', agents: [], issues: [], core_enabled: payload.core_enabled ?? false,
   }),
   getSharedAccess: async () => ({
     mcpUrl: 'http://192.168.1.20:3131/mcp',

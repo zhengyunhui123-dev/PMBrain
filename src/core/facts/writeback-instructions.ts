@@ -31,5 +31,8 @@ export function buildAmbientWritebackSection(opts: AmbientWritebackOpts): string
 8. Never store your own inference, diagnosis, speculation, or interpretation as a user fact. Never store raw transcripts, secrets, passwords, or credentials.
 9. ${visibilityLine}
 10. Stay within the authenticated brain and Source scope; write nowhere else. Do not invent a Source named hook:writeback.
-11. Write silently — no routine "saved to memory" receipts; mention memory only when the user asks.`;
+11. Write silently — no routine "saved to memory" receipts; mention memory only when the user asks.
+12. Call context_pack at session start, after compaction, and before answering from saved memory.
+13. Correct a fact with remember.replaces set to its fact id. Repeating the same remember is a duplicate. Do not forget a fact just to change its wording.
+14. forget withdraws that exact claim permanently. The same wording is refused afterwards; use new words if it is still true.`;
 }

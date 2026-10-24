@@ -50,6 +50,7 @@ afterAll(async () => {
 
 beforeEach(async () => {
   await engine.executeRaw(`DELETE FROM facts`);
+  await engine.executeRaw(`DELETE FROM fact_withdrawals`);
 });
 
 describe('Gbrain-aligned memory verbs', () => {

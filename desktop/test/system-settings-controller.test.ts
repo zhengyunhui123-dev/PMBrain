@@ -31,7 +31,7 @@ function fixture() {
   let restarts = 0;
   let updates = 0;
   let convergeError = false;
-  const memory = { mode: 'off', enabled: false, ttl: '3d', notice_shown: true, visibility: 'world', agents: [], issues: [] };
+  const memory = { mode: 'off', enabled: false, ttl: '3d', notice_shown: true, visibility: 'world', agents: [], issues: [], core_enabled: false };
   const lan: any = { status: null, warning: undefined, selectedAddressWasUnavailable: false, resetAfterSettingsSave: () => {}, reconcile: async () => {
     lan.status = getDesktopPreferences().networkMode === 'shared' ? { running: true, mcpUrl: 'http://192.168.10.20:3131/mcp' } : null;
     return lan.status;

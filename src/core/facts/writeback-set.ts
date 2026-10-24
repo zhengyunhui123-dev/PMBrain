@@ -16,6 +16,7 @@ import {
 } from './writeback-config.ts';
 import { isValidTransientTtl } from './ttl-parse.ts';
 import { reconcileWritebackAgents, inspectWritebackAgents } from '../bootstrap/writeback-agents.ts';
+import { readCoreSettings } from '../core-memory.ts';
 
 export async function stampWritebackNoticeShown(engine: BrainEngine): Promise<void> {
   await engine.setConfig(AUTO_WRITEBACK_NOTICE_KEY, 'true');
@@ -78,6 +79,7 @@ async function saveWritebackMode(
 export async function getWritebackStatus(engine: BrainEngine) {
   const wb = await resolveWritebackConfig(engine, loadConfigFileOnly());
   const notice = await engine.getConfig(AUTO_WRITEBACK_NOTICE_KEY);
+  const core = await readCoreSettings(engine);
   const agents=inspectWritebackAgents();
   const issues=agents.flatMap(a=>a.issue&&(a.registered||a.block==='present'||a.block==='damaged')?[`${a.agent}: ${a.issue}`]:[]);
   if(wb.plane_drift)issues.push('文件与数据库的长期记忆开关不一致');
@@ -94,6 +96,7 @@ export async function getWritebackStatus(engine: BrainEngine) {
     visibility: wb.visibility,
     agents,
     issues,
+    core_enabled: core.enabled,
   };
 }
 

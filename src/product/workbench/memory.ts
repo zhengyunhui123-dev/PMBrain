@@ -248,7 +248,14 @@ export async function runWorkbenchMemoryTask(engine: BrainEngine, input: Workben
         if ((state.mode === 'salient' || wb.mode === 'salient') && fact.notability === 'low') continue;
         if (scanText(fact.fact).length) continue;
         const supersedeId = corrects && known.some(row => row.id === fact.supersedes) ? fact.supersedes : undefined;
-        const written = await writeSingleFact(engine, input.sourceId, { databaseOnly:true, fact: fact.fact, kind: fact.kind, entity: fact.entity_slug, provenance: `PMBrain 知识助手 / ${conversation.id} / ${message.id} / ${input.hash} / ${state.capturedAt}`, sessionId: conversation.id, context: JSON.stringify({ conversationId: conversation.id, messageId: message.id, hash: input.hash, sourceSlug: archiveSlug }), visibility: state.visibility, confidence: fact.confidence, notability: fact.notability, validFrom: fact.valid_from ?? new Date(state.capturedAt), validUntil: fact.valid_until, embedding: fact.embedding, exactDedup: true, supersedeId, canWrite });
+        let written;
+        try {
+          written = await writeSingleFact(engine, input.sourceId, { databaseOnly:true, fact: fact.fact, kind: fact.kind, entity: fact.entity_slug, provenance: `PMBrain 知识助手 / ${conversation.id} / ${message.id} / ${input.hash} / ${state.capturedAt}`, sessionId: conversation.id, context: JSON.stringify({ conversationId: conversation.id, messageId: message.id, hash: input.hash, sourceSlug: archiveSlug }), visibility: state.visibility, confidence: fact.confidence, notability: fact.notability, validFrom: fact.valid_from ?? new Date(state.capturedAt), validUntil: fact.valid_until, embedding: fact.embedding, exactDedup: true, supersedeId, canWrite });
+        } catch (error) {
+          const { FactWithdrawnError, MemoryRuleError } = await import('../../core/facts/withdrawal.ts');
+          if (error instanceof FactWithdrawnError || error instanceof MemoryRuleError) continue;
+          throw error;
+        }
         if (!state.factIds!.includes(written.id)) state.factIds!.push(written.id);
         store.saveMemory(input.conversationId, message.id, state);
       }

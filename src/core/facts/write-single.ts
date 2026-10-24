@@ -35,6 +35,7 @@ export interface SingleFactInput {
   embedding?: Float32Array | null;
   exactDedup?: boolean;
   supersedeId?: number;
+  remote?: boolean;
   canWrite?: (engine?: BrainEngine) => Promise<boolean>;
   databaseOnly?: boolean;
 }
@@ -89,6 +90,19 @@ async function writeSingleFactCore(
   const resolvedSlug = input.entity
     ? ((await resolveEntitySlug(engine, sourceId, input.entity)) ?? input.entity)
     : null;
+  const { assertFactWritable, decideCallerReplacement } = await import('./withdrawal.ts');
+  await assertFactWritable(engine, sourceId, visibility, factText, resolvedSlug);
+  if (input.supersedeId != null) {
+    const decision = await decideCallerReplacement(engine, sourceId, input.supersedeId, {
+      fact: factText,
+      visibility,
+      entitySlug: resolvedSlug,
+      remote: input.remote,
+    });
+    if (decision.status === 'duplicate') {
+      return { id: decision.id, status: 'duplicate', entity_slug: resolvedSlug, valid_until: validUntil, degraded_dedup: !isAvailable('embedding') };
+    }
+  }
   if (input.exactDedup) {
     const rows = await engine.executeRaw<{ id: number; valid_until: Date | null }>(
       `SELECT id, valid_until FROM facts WHERE source_id=$1 AND entity_slug IS NOT DISTINCT FROM $2 AND kind=$3 AND visibility=$4
@@ -113,7 +127,7 @@ async function writeSingleFactCore(
   }
 
   let supersedeId: number | null = input.supersedeId ?? null;
-  if (resolvedSlug && embedding) {
+  if (input.supersedeId == null && resolvedSlug && embedding) {
     const candidates = await engine.findCandidateDuplicates(sourceId, resolvedSlug, factText, {
       embedding,
       k: DEDUP_CANDIDATE_LIMIT,

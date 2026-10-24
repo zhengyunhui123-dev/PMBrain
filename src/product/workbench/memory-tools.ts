@@ -42,10 +42,10 @@ export function nativeMemoryHandlers(engine: BrainEngine, sourceId: string, conv
       const ttl=parseTtlShorthand(p.ttl); if(!ttl.ok)throw new Error('记忆有效期无效');
       const message=user();const {resolveWritebackConfig}=await import('../../core/facts/writeback-config');const wb=await resolveWritebackConfig(engine,loadConfigFileOnly());signal.throwIfAborted();
       if(wb.read_error)throw new Error('无法读取记忆可见性配置');
-      const result=await writeSingleFact(engine,sourceId,{databaseOnly:true,fact:p.fact,kind:p.kind as any,entity:typeof p.entity==='string'?p.entity:undefined,validUntil:ttl.validUntil,visibility:wb.visibility,exactDedup:true,sessionId:conversationId,provenance:`PMBrain 知识助手 / ${conversationId} / ${message.id} / 明确记忆 / ${new Date().toISOString()}`,context:JSON.stringify({conversationId,messageId:message.id,hash:message.memory?.hash}),canWrite:async(scoped=engine)=>{
+      let result;try{result=await writeSingleFact(engine,sourceId,{databaseOnly:true,fact:p.fact,kind:p.kind as any,entity:typeof p.entity==='string'?p.entity:undefined,validUntil:ttl.validUntil,visibility:wb.visibility,exactDedup:true,sessionId:conversationId,provenance:`PMBrain 知识助手 / ${conversationId} / ${message.id} / 明确记忆 / ${new Date().toISOString()}`,context:JSON.stringify({conversationId,messageId:message.id,hash:message.memory?.hash}),canWrite:async(scoped=engine)=>{
         signal.throwIfAborted();await scoped.executeRaw("SELECT key FROM config WHERE key='facts.default_visibility' FOR SHARE");const current=await resolveWritebackConfig(scoped,loadConfigFileOnly());
         return !current.read_error&&!(current.visibility==='private'&&wb.visibility==='world')&&(await scoped.executeRaw('SELECT id FROM sources WHERE id=$1 AND archived=false FOR SHARE',[sourceId])).length>0;
-      }});
+      }});}catch(error){const {FactWithdrawnError}=await import('../../core/facts/withdrawal.ts');if(error instanceof FactWithdrawnError)throw new Error('这句话曾经被明确忘掉，不能按原样再记住。若仍然成立，请换一种说法。');throw error;}
       return {...result,citation:cite({sourceId,slug:`memory/fact-${result.id}`,title:'对话记忆',snippet:p.fact,kind:'memory',factId:result.id,conversationId,messageId:message.id,memoryHash:message.memory?.hash})};
     }}],
     ['memory_forget', { execute: async (raw,signal) => {

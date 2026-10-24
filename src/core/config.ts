@@ -920,6 +920,8 @@ export const KNOWN_CONFIG_KEYS: readonly string[] = [
   'memory.auto_writeback',
   'memory.auto_writeback_transient_ttl',
   'memory.auto_writeback_notice_shown',
+  'memory.core.enabled',
+  'memory.core.max_chars',
   // Dream cycle config
   'dream.synthesize.session_corpus_dir',
   'dream.synthesize.meeting_transcripts_dir',

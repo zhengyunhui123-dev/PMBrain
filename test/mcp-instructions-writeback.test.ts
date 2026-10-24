@@ -10,7 +10,7 @@ const BASE_OPTS = {
 };
 
 describe('MCP 长期记忆合同', () => {
-  test('关闭时与原来的五条合同完全一样', () => {
+  test('关闭时只返回基础合同', () => {
     expect(buildMcpInstructions()).toBe(PMBRAIN_MCP_INSTRUCTIONS);
     expect(buildMcpInstructions({ writeback: null })).toBe(PMBRAIN_MCP_INSTRUCTIONS);
   });

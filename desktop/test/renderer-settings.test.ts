@@ -401,6 +401,8 @@ describe('desktop settings renderer contracts', () => {
     expect(renderer).not.toContain('memoryIntegrationReady');
     expect(renderer).toContain('handleMemoryModeChange');
     expect(renderer).toContain('await window.pmbrainDesktop.saveMemoryWriteback({ mode, notice_shown: true })');
+    expect(html).toContain('id="memory-core-enabled"');
+    expect(renderer).toContain('core_enabled: $<HTMLInputElement>(\'#memory-core-enabled\').checked');
     expect(renderer).toContain("switchPanel('integrations')");
   });
 

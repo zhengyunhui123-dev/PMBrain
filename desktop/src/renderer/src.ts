@@ -1443,6 +1443,11 @@ function updateSystemSettingsAvailability(): void {
   const ready = state?.setup.needsSetup === false;
   document.querySelectorAll<HTMLInputElement>('input[name="network-mode"]').forEach(input => { input.disabled = !ready || networkSaving; });
   document.querySelectorAll<HTMLInputElement>('input[name="memory-writeback"]').forEach(input => { input.disabled = !ready || memorySaving || loadedMemoryMode === null; });
+  const coreLocked = !ready || memorySaving || loadedMemoryMode === null;
+  $<HTMLInputElement>('#memory-core-enabled').disabled = coreLocked;
+  $<HTMLInputElement>('#memory-core-slug').disabled = coreLocked;
+  $<HTMLButtonElement>('#memory-core-add').disabled = coreLocked;
+  $<HTMLButtonElement>('#memory-core-remove').disabled = coreLocked;
   $<HTMLSelectElement>('#shared-address').disabled = !ready || networkSaving;
   $<HTMLButtonElement>('#restart-shared-gateway').disabled = !ready || networkSaving;
   const startupSwitches = ['#launch-at-login', '#start-minimized', '#close-to-tray']
@@ -1531,6 +1536,7 @@ async function refreshMemoryWriteback(): Promise<void> {
     if (request !== memoryRefreshRequest || memorySaving) return;
     loadedMemoryMode = state.mode;
     selectMemoryMode(state.mode);
+    $<HTMLInputElement>('#memory-core-enabled').checked = state.core_enabled === true;
     sharedWarn.hidden = !state.enabled || state.visibility === 'private' || latestSystemSettings?.preferences.networkMode !== 'shared';
     $('#memory-assistant-status').textContent = state.enabled
       ? '知识助手：已开启。对话后自动提炼，保存进度显示在对话中；新对话会按需使用已有记忆。'
@@ -2411,6 +2417,38 @@ $<HTMLInputElement>('#database-url').addEventListener('input', () => {
 });
 document.querySelectorAll<HTMLInputElement>('input[name="network-mode"]').forEach((input) => input.addEventListener('change', () => void saveNetworkSettings()));
 document.querySelectorAll<HTMLInputElement>('input[name="memory-writeback"]').forEach((input) => input.addEventListener('change', () => void handleMemoryModeChange(input)));
+
+async function saveCoreMemory(payload: { core_enabled?: boolean; core_slug?: string; core_slug_enabled?: boolean }): Promise<void> {
+  if (memorySaving || loadedMemoryMode === null) return;
+  memorySaving = true;
+  memoryRefreshRequest++;
+  updateSystemSettingsAvailability();
+  const note = $('#memory-save-note');
+  note.textContent = '正在保存…';
+  try {
+    const result = await window.pmbrainDesktop.saveMemoryWriteback(payload);
+    $<HTMLInputElement>('#memory-core-enabled').checked = result.core_enabled === true;
+    note.textContent = result.issues.length ? `设置已保存。${result.issues.join('；')}` : '已保存，下次回答会按新的常驻背景生效。';
+  } catch (error) {
+    note.textContent = error instanceof Error ? error.message : String(error);
+  } finally {
+    memorySaving = false;
+    await refreshMemoryWriteback();
+    updateSystemSettingsAvailability();
+  }
+}
+
+$<HTMLInputElement>('#memory-core-enabled').addEventListener('change', () => void saveCoreMemory({ core_enabled: $<HTMLInputElement>('#memory-core-enabled').checked }));
+$<HTMLButtonElement>('#memory-core-add').addEventListener('click', () => {
+  const slug = $<HTMLInputElement>('#memory-core-slug').value.trim();
+  if (!slug) { $('#memory-save-note').textContent = '请填写知识页路径。'; return; }
+  void saveCoreMemory({ core_slug: slug, core_slug_enabled: true });
+});
+$<HTMLButtonElement>('#memory-core-remove').addEventListener('click', () => {
+  const slug = $<HTMLInputElement>('#memory-core-slug').value.trim();
+  if (!slug) { $('#memory-save-note').textContent = '请填写知识页路径。'; return; }
+  void saveCoreMemory({ core_slug: slug, core_slug_enabled: false });
+});
 $<HTMLSelectElement>('#shared-address').addEventListener('change', () => void saveNetworkSettings());
 (['chat', 'embedding'] as const).forEach(kind => {
   const select = $<HTMLSelectElement>(`#${kind}-provider`);

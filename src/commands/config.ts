@@ -529,6 +529,15 @@ export async function runConfig(engine: BrainEngine, args: string[]) {
       }
     }
 
+    if (key === 'memory.core.enabled' || key === 'memory.core.max_chars') {
+      const { validateCoreConfigValue } = await import('../core/core-memory.ts');
+      const problem = validateCoreConfigValue(key, value);
+      if (problem) {
+        console.error(`[config] ${problem}`);
+        process.exit(1);
+      }
+    }
+
     if (MEMORY_DUAL_PLANE_KEYS.has(key)) {
       const { setWritebackMode, getWritebackStatus } = await import('../core/facts/writeback-set.ts');
       const current = await getWritebackStatus(engine);

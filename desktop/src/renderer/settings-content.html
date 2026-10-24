@@ -506,6 +506,10 @@
             <p id="memory-assistant-status" role="status">正在读取知识助手记忆设置…</p>
             <p class="engine-usage-hint" id="memory-shared-warning" hidden>共享模式开启自动记忆后，保存的事实可能被同一知识范围内获授权的成员读取。</p>
             <p id="memory-storage-note">记忆保存在当前知识库；原始对话保留在历史记录中。</p>
+            <label class="preference-row" for="memory-core-enabled"><span><b>会话开始时载入常驻背景</b><small>默认关闭。只载入标记为每次都读的知识页，不另建一套记忆。</small></span><input id="memory-core-enabled" class="settings-switch" type="checkbox" /></label>
+            <label for="memory-core-slug"><span>知识页路径</span><input id="memory-core-slug" type="text" placeholder="例如 notes/工作约定" /></label>
+            <button type="button" id="memory-core-add">设为常驻</button>
+            <button type="button" id="memory-core-remove">取消常驻</button>
             <details><summary>外部 AI 接入状态</summary><div id="memory-agent-status"></div><button type="button" id="memory-open-integrations">管理 MCP 接入</button></details>
           </section>
         </section>

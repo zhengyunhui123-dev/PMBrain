@@ -93,6 +93,10 @@ const remember: Operation = {
       enum: ['world', 'private'],
       description: 'world (default) is shared with connected Agents; private is local-only.',
     },
+    replaces: {
+      type: 'string',
+      description: 'Fact id this claim replaces. The old fact stays in history and is not withdrawn.',
+    },
   },
   mutating: true,
   scope: 'write',
@@ -138,6 +142,18 @@ const remember: Operation = {
       );
     }
     const validUntil = parseTtlParam(p.ttl);
+    let replacesId: number | undefined;
+    if (p.replaces !== undefined && p.replaces !== null && String(p.replaces).trim() !== '') {
+      const parsed = Number(typeof p.replaces === 'number' ? p.replaces : String(p.replaces).trim());
+      if (!Number.isInteger(parsed) || parsed <= 0) {
+        throw verbError(
+          'not_found',
+          `No fact with id "${String(p.replaces)}" to replace.`,
+          'Pass the opaque string id returned by remember or recall.',
+        );
+      }
+      replacesId = parsed;
+    }
 
     if (ctx.dryRun) {
       return {
@@ -149,21 +165,35 @@ const remember: Operation = {
     }
 
     const { writeSingleFact } = await import('./facts/write-single.ts');
-    const result = await writeSingleFact(ctx.engine, ctx.sourceId ?? 'default', {
-      fact,
-      provenance,
-      kind: kind as (typeof FACT_KINDS)[number],
-      entity: typeof p.entity === 'string' && p.entity.trim() ? p.entity.trim() : null,
-      visibility,
-      validUntil,
-    });
+    const { FactWithdrawnError, MemoryRuleError } = await import('./facts/withdrawal.ts');
+    let result;
+    try {
+      result = await writeSingleFact(ctx.engine, ctx.sourceId ?? 'default', {
+        fact,
+        provenance,
+        kind: kind as (typeof FACT_KINDS)[number],
+        entity: typeof p.entity === 'string' && p.entity.trim() ? p.entity.trim() : null,
+        visibility,
+        validUntil,
+        exactDedup: true,
+        remote: ctx.remote !== false,
+        ...(replacesId !== undefined ? { supersedeId: replacesId } : {}),
+      });
+    } catch (error) {
+      if (error instanceof FactWithdrawnError || error instanceof MemoryRuleError) {
+        throw verbError(error instanceof MemoryRuleError && error.rule === 'not_found' ? 'not_found' : 'invalid_params', error.message, error.suggestion);
+      }
+      throw error;
+    }
 
     const statusText =
       result.status === 'inserted'
         ? `remembered as fact #${result.id}`
         : result.status === 'duplicate'
           ? `already knew this — kept fact #${result.id}`
-          : `updated — fact #${result.id} supersedes the previous version`;
+          : replacesId !== undefined
+            ? `updated — fact #${result.id} supersedes fact #${replacesId}`
+            : `updated — fact #${result.id} supersedes the previous version`;
 
     return {
       id: String(result.id),
@@ -172,6 +202,7 @@ const remember: Operation = {
       entity_slug: result.entity_slug ?? null,
       valid_until: result.valid_until ? result.valid_until.toISOString() : null,
       ...(result.degraded_dedup ? { degraded_dedup: true } : {}),
+      ...(replacesId !== undefined && result.status === 'superseded' ? { replaced_by_caller: true } : {}),
       protocol_version: MEMORY_VERBS_VERSION,
     };
   },

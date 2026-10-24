@@ -1,3 +1,4 @@
+import { FACT_WITHDRAWAL_BACKFILL_SQL, FACT_WITHDRAWAL_SCHEMA_SQL } from './facts/withdrawal-schema.ts';
 import { WANTED_LINKS_SCHEMA_SQL } from './pmbrain-adapters/wanted-links-schema.ts';
 import {SEARCH_WRITE_SCHEMA_SQL,repairSearchWriteAmplification} from './pmbrain-adapters/search-write-schema.ts';
 import {readPmbrainSchemaVersion,preparePmbrainMigrationLedger,recordPmbrainMigration,PMBRAIN_SCHEMA_VERSION_KEY} from './pmbrain-adapters/migration-ledger.ts';
@@ -5531,6 +5532,8 @@ export const MIGRATIONS: Migration[] = [
   {version:134,name:'search_write_amplification',idempotent:true,sql:SEARCH_WRITE_SCHEMA_SQL},
   {version:135,name:'markdown_embedding_input_provenance',idempotent:true,
     sql:'ALTER TABLE content_chunks ADD COLUMN IF NOT EXISTS embedding_input_hash TEXT;'},
+  {version:136,name:'fact_withdrawals',idempotent:true,
+    sql:FACT_WITHDRAWAL_SCHEMA_SQL+FACT_WITHDRAWAL_BACKFILL_SQL},
 ];
 
 export const LATEST_VERSION = MIGRATIONS.length > 0

@@ -1,5 +1,5 @@
-const __vite__mapDeps=(i,m=__vite__mapDeps,d=(m.f||(m.f=["assets/src-Dz2KyOAj.js","assets/src-Bi7L9_9h.css"])))=>i.map(i=>d[i]);
-import{e as y,_ as k}from"./index-DtOW8tuX.js";import{r as e,j as n}from"./react-CTwocyy_.js";import"./ui-CHXAwXsU.js";const f=`
+const __vite__mapDeps=(i,m=__vite__mapDeps,d=(m.f||(m.f=["assets/src-Dc37i99a.js","assets/src-Bi7L9_9h.css"])))=>i.map(i=>d[i]);
+import{e as y,_ as k}from"./index-BD81dVCG.js";import{r as e,j as n}from"./react-CTwocyy_.js";import"./ui-CHXAwXsU.js";const f=`
     <main class="app-shell">
       <aside class="rail">
         <div class="brand">
@@ -507,6 +507,10 @@ import{e as y,_ as k}from"./index-DtOW8tuX.js";import{r as e,j as n}from"./react
             <p id="memory-assistant-status" role="status">正在读取知识助手记忆设置…</p>
             <p class="engine-usage-hint" id="memory-shared-warning" hidden>共享模式开启自动记忆后，保存的事实可能被同一知识范围内获授权的成员读取。</p>
             <p id="memory-storage-note">记忆保存在当前知识库；原始对话保留在历史记录中。</p>
+            <label class="preference-row" for="memory-core-enabled"><span><b>会话开始时载入常驻背景</b><small>默认关闭。只载入标记为每次都读的知识页，不另建一套记忆。</small></span><input id="memory-core-enabled" class="settings-switch" type="checkbox" /></label>
+            <label for="memory-core-slug"><span>知识页路径</span><input id="memory-core-slug" type="text" placeholder="例如 notes/工作约定" /></label>
+            <button type="button" id="memory-core-add">设为常驻</button>
+            <button type="button" id="memory-core-remove">取消常驻</button>
             <details><summary>外部 AI 接入状态</summary><div id="memory-agent-status"></div><button type="button" id="memory-open-integrations">管理 MCP 接入</button></details>
           </section>
         </section>
@@ -656,4 +660,4 @@ import{e as y,_ as k}from"./index-DtOW8tuX.js";import{r as e,j as n}from"./react
         </div>
       </div>
     </div>
-`;let t;function x({panel:s,visible:o,theme:p}){const i=e.useRef(null),[c,r]=e.useState(""),[v,h]=e.useState(!1),[u,b]=e.useState(!1),[m,l]=e.useState("");e.useEffect(()=>{!y()||!i.current||(i.current.childElementCount||(i.current.innerHTML=f),t??(t=k(()=>import("./src-Dz2KyOAj.js"),__vite__mapDeps([0,1]))),t.then(()=>h(!0)).catch(a=>r(String(a))))},[]),e.useEffect(()=>{if(!o||!t)return;let a=!0;return t.then(d=>{a&&d.activateSettingsPanel(s)}).catch(d=>r(String(d))),()=>{a=!1}},[s,o]);const g=async()=>{if(t){b(!0),l("");try{await(await t).saveDatabaseSettings(),l("数据库与资料目录已保存")}catch(a){l(String(a))}finally{b(!1)}}};return n.jsxs("div",{className:"desktop-settings-container",hidden:!o,children:[c&&n.jsx("p",{role:"alert",children:c}),n.jsx("div",{className:"desktop-settings",hidden:!v,"data-theme":p==="system"?window.matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light":p,ref:i}),s==="basic"&&v&&n.jsxs("div",{className:"database-save",children:[n.jsx("button",{disabled:u,onClick:g,children:u?"保存中…":"保存数据库与资料目录"}),m&&n.jsx("p",{role:"status",children:m})]})]})}export{x as DesktopSettings};
+`;let t;function x({panel:s,visible:o,theme:p}){const i=e.useRef(null),[c,r]=e.useState(""),[v,h]=e.useState(!1),[u,b]=e.useState(!1),[m,l]=e.useState("");e.useEffect(()=>{!y()||!i.current||(i.current.childElementCount||(i.current.innerHTML=f),t??(t=k(()=>import("./src-Dc37i99a.js"),__vite__mapDeps([0,1]))),t.then(()=>h(!0)).catch(a=>r(String(a))))},[]),e.useEffect(()=>{if(!o||!t)return;let a=!0;return t.then(d=>{a&&d.activateSettingsPanel(s)}).catch(d=>r(String(d))),()=>{a=!1}},[s,o]);const g=async()=>{if(t){b(!0),l("");try{await(await t).saveDatabaseSettings(),l("数据库与资料目录已保存")}catch(a){l(String(a))}finally{b(!1)}}};return n.jsxs("div",{className:"desktop-settings-container",hidden:!o,children:[c&&n.jsx("p",{role:"alert",children:c}),n.jsx("div",{className:"desktop-settings",hidden:!v,"data-theme":p==="system"?window.matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light":p,ref:i}),s==="basic"&&v&&n.jsxs("div",{className:"database-save",children:[n.jsx("button",{disabled:u,onClick:g,children:u?"保存中…":"保存数据库与资料目录"}),m&&n.jsx("p",{role:"status",children:m})]})]})}export{x as DesktopSettings};
