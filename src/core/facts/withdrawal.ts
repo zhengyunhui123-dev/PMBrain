@@ -94,7 +94,7 @@ export async function decideCallerReplacement(
                  AND w.fact_hash IN (gbrain_fact_fingerprint(f.fact), gbrain_fact_fingerprint_v1(f.fact))
                  AND (w.subject = '*' OR w.subject = COALESCE(f.entity_slug, '*'))
             ) AS withdrawn
-       FROM facts f WHERE f.id = $1 AND f.source_id = $2`,
+       FROM facts f WHERE f.id = $1 AND f.source_id = $2 FOR UPDATE OF f`,
     [targetId, sourceId],
   );
   if (!target || (input.remote && target.visibility !== 'world') || target.visibility !== input.visibility) throw notFound();
@@ -108,6 +108,16 @@ export async function decideCallerReplacement(
   }
   const expired = target.expired_at != null || (target.valid_until != null && new Date(target.valid_until).getTime() <= Date.now());
   if (expired) {
+    if (target.superseded_by != null) {
+      const [replacement] = await engine.executeRaw<{ id: number }>(
+        `SELECT id FROM facts WHERE id=$1 AND source_id=$2 AND visibility=$3
+          AND entity_slug IS NOT DISTINCT FROM $4
+          AND expired_at IS NULL AND (valid_until IS NULL OR valid_until>now())
+          AND gbrain_fact_fingerprint(fact)=gbrain_fact_fingerprint($5)`,
+        [target.superseded_by, sourceId, input.visibility, input.entitySlug, input.fact],
+      );
+      if (replacement) return { status: 'duplicate', id: Number(replacement.id) };
+    }
     if (target.superseded_by != null || (target.context ?? '').includes('superseded by fact #')) {
       throw new MemoryRuleError(
         'target_superseded',

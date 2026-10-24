@@ -213,7 +213,7 @@ test('生成本周周报没有引用时不保留一份看起来完整的稿', as
 test('写周报时稳定偏好进入偏好层，旧对话、事件和上一份成果不成为本期事实', async () => {
   let system = '';
   let recalled = false;
-  const answer = knowledgeWorkbenchAnswer({} as never, {
+  const answer = knowledgeWorkbenchAnswer({ getConfig: async () => null } as never, {
     search: async () => ({ results: [] }) as never,
     recall: async () => {
       recalled = true;
@@ -247,7 +247,7 @@ test('询问报告偏好可以引用已有记忆，生成报告仍要求本期�
   for (const text of ['请按我的偏好生成本周报告', '我的报告偏好是什么？然后生成本周报告', '生成报告，并说明我的写作偏好是什么？']) expect(needsCurrentEvidence(text)).toBe(true);
   let system = '';
   const memory = { sourceId: 'default', slug: 'memory/fact-1', title: '对话记忆 · 偏好', snippet: '报告先写结论，再写依据', kind: 'memory' as const, factId: 1 };
-  const answer = knowledgeWorkbenchAnswer({} as any, {
+  const answer = knowledgeWorkbenchAnswer({ getConfig: async () => null } as any, {
     search: async () => ({ results: [] }) as any,
     recall: async () => [memory],
     answer: async input => { system = input.system ?? ''; return { text: '报告先写结论，再写依据。[1]', stopReason: 'end' } as any; },

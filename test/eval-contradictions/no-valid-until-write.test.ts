@@ -36,6 +36,8 @@ import { join } from 'node:path';
 const VALID_UNTIL_WRITE_ALLOWLIST: ReadonlySet<string> = new Set([
   'src/core/cycle/phases/consolidate.ts',
   'src/core/facts/forget.ts',
+  'src/core/facts/withdrawal.ts',
+  'src/core/facts/withdrawal-schema.ts',
   'src/core/pglite-engine.ts',
   'src/core/postgres-engine.ts',
 ]);

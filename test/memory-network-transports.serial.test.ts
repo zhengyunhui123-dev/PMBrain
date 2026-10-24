@@ -42,6 +42,9 @@ beforeAll(async () => {
   const engine = new PGLiteEngine();
   await engine.connect(config);
   await engine.initSchema();
+  await engine.executeRaw("INSERT INTO sources(id,name) VALUES ('network-core-other','隔离共享来源')");
+  await engine.putPage('notes/network-core', { type: 'concept', title: '共享背景', compiled_truth: '默认来源的常驻约定', timeline: '', frontmatter: { always_load: true } }, { sourceId: 'default' });
+  await engine.putPage('notes/network-core', { type: 'concept', title: '独立背景', compiled_truth: '独立来源的常驻约定', timeline: '', frontmatter: { always_load: true } }, { sourceId: 'network-core-other' });
   await engine.disconnect();
   const port = await new Promise<number>(done => { const server = createServer(); server.listen(0, '127.0.0.1', () => { const { port } = server.address() as { port: number }; server.close(() => done(port)); }); });
   origin = `http://127.0.0.1:${port}`;
@@ -77,6 +80,17 @@ test('真实共享链路按权限实时读取记忆模式，拒绝未授权请�
   expect(frame(await (await rpc(endpoint, writeKey.token, 'initialize', initialize)).text()).result.instructions).toContain('mode: all');
 }, 30000);
 
+test('真实 HTTP 上下文包按凭证来源载入常驻背景', async () => {
+  await admin('memory/writeback', { core_enabled: true });
+  const restricted = await admin('api-keys', { name: 'shared:restricted-core', scopes: 'read', sourceId: 'network-core-other', federatedRead: ['network-core-other'] });
+  const pack = async (token: string) => frame(await (await rpc(endpoint, token, 'tools/call', { name: 'context_pack', arguments: { session_id: 'network-core-session' } })).text());
+  const result = await pack(restricted.token);
+  expect(result.result?.isError).not.toBe(true);
+  expect(JSON.stringify(result)).toContain('独立来源的常驻约定');
+  expect(JSON.stringify(result)).not.toContain('默认来源的常驻约定');
+  expect(JSON.stringify(await pack(writeKey.token))).toContain('默认来源的常驻约定');
+}, 30000);
+
 test('共享成员写入记忆，本机和共享均可召回；遗忘和撤销凭证立即生效', async () => {
   const call = async (url: string, token: string, name: string, args: unknown) => frame(await (await rpc(url, token, 'tools/call', { name, arguments: args })).text());
   const denied = await call(endpoint, readKey.token, 'remember', { fact: '只读凭证不能写入', provenance: 'test', visibility: 'world' });
@@ -89,10 +103,22 @@ test('共享成员写入记忆，本机和共享均可召回；遗忘和撤销�
     expect(JSON.stringify(recalled.result)).toContain('网络验收项目采用中文报告');
   }
   const remembered = JSON.parse(stored.result.content.find((entry: any) => entry.type === 'text').text);
-  const forgotten = await call(endpoint, writeKey.token, 'forget', { id: String(remembered.id) });
+  const replacement = { fact: '网络验收项目改用双语报告', kind: 'preference', provenance: 'memory network correction', visibility: 'world', replaces: String(remembered.id) };
+  const changed = await call(origin + '/mcp', writeKey.token, 'remember', replacement);
+  expect(changed.result?.isError).not.toBe(true);
+  const current = JSON.parse(changed.result.content.find((entry: any) => entry.type === 'text').text);
+  const repeated = await call(endpoint, writeKey.token, 'remember', replacement);
+  expect(JSON.parse(repeated.result.content.find((entry: any) => entry.type === 'text').text)).toMatchObject({ id: current.id, status: 'duplicate' });
+  for (const url of [origin + '/mcp', endpoint]) {
+    const recalled = await call(url, writeKey.token, 'recall', { grep: '网络验收项目' });
+    expect(JSON.stringify(recalled.result)).toContain('网络验收项目改用双语报告');
+    expect(JSON.stringify(recalled.result)).not.toContain('网络验收项目采用中文报告');
+  }
+  const forgotten = await call(endpoint, writeKey.token, 'forget', { id: String(current.id) });
   expect(forgotten.result?.isError).not.toBe(true);
   const recalled = await call(endpoint, writeKey.token, 'recall', { grep: '网络验收项目' });
   expect(JSON.stringify(recalled.result)).not.toContain('网络验收项目采用中文报告');
+  expect(JSON.stringify(recalled.result)).not.toContain('网络验收项目改用双语报告');
   await admin('api-keys/revoke', { name: writeKey.name });
   expect((await rpc(endpoint, writeKey.token, 'initialize', initialize)).status).toBe(401);
   await gateway.stop();

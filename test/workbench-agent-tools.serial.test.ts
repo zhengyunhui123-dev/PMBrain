@@ -92,7 +92,10 @@ test('a project skill named weekly-report stays distinct from the built-in repor
   writeFileSync(join(library, 'weekly-report', 'SKILL.md'), '---\nname: weekly-report\ntools: [search]\n---\n用户自己的周报技能。');
   f.context.engine.getConfig = async (key: string) => key === 'mcp.skills_dir' ? library : null;
   const catalog = await agentSkillCatalog(f.context);
-  expect(catalog.map(row => row.name)).toEqual(['weekly-report', 'library__weekly-report']);
+  const names = catalog.map(row => row.name);
+  expect(names).toContain('weekly-report');
+  expect(names).toContain('library__weekly-report');
+  expect(names.filter(name => name === 'weekly-report')).toHaveLength(1);
   expect((await agentSkill(f.context, 'library__weekly-report')).body).toContain('用户自己的周报技能');
   expect((await agentSkill(f.context, 'weekly-report')).body).toContain('文件更新时间仅供参考');
 });

@@ -4734,7 +4734,12 @@ const context_pack: Operation = {
       entities: Array.isArray(p.entities) ? p.entities.filter((v): v is string => typeof v === 'string') : undefined,
     });
     const { loadCoreBlock } = await import('./core-memory.ts');
-    const core = await loadCoreBlock(ctx.engine, { sessionSourceId: ctx.sourceId, excludePrivate: ctx.remote !== false });
+    const scope = sourceScopeOpts(ctx);
+    const core = await loadCoreBlock(ctx.engine, {
+      sessionSourceId: ctx.sourceId,
+      allowedSources: scope.sourceIds ?? (scope.sourceId ? [scope.sourceId] : ctx.remote !== false ? [] : undefined),
+      excludePrivate: ctx.remote !== false,
+    });
     const text = [core.text, pack.text].filter(Boolean).join('\n\n');
     return { ...pack, text, core_enabled: core.enabled, protocol_version: MEMORY_VERBS_VERSION };
   },

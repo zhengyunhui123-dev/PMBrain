@@ -115,7 +115,7 @@ test('接着把剩下的做完仍沿用这件任务的做法；不要继续并�
 
 test('改输出格式仍写原来的周报；这次改做报销会换任务并只留下这次的要求；重新生成续做回答仍带做法', async () => {
   let turn: { taskMethod?: boolean; system: string } | undefined;
-  const runner = knowledgeWorkbenchAnswer({} as never, {
+  const runner = knowledgeWorkbenchAnswer({ getConfig: async () => null } as never, {
     search: async () => ({ results: [] }) as never,
     answer: async (options: { system?: string }) => {
       if (turn) turn.system = options.system ?? '';
@@ -252,7 +252,7 @@ test('关掉知识检索仍保留当前任务和上一轮工具回执；周报�
   let system = '';
   let packed = '';
   const agent = { ...defaultAssistant(), id: 'weekly', revision: 2, name: '周报助手', skills: ['weekly-report'], workflow: '先查知识库，再写完成事项', sourceIds: ['default'], readDirectories: [], deliveryFormat: 'docx' as const, standingRules: ['不要编造'], createdAt: '', updatedAt: '' };
-  const answer = knowledgeWorkbenchAnswer({} as never, {
+  const answer = knowledgeWorkbenchAnswer({ getConfig: async () => null } as never, {
     search: async () => { searched += 1; return { results: [] } as never; },
     recall: async () => { recalled += 1; return [{ sourceId: 'default', slug: 'pref', title: '偏好短句', snippet: '喜欢短句', kind: 'memory' as const, factId: 1 }]; },
     answer: async input => { system = input.system ?? ''; packed = JSON.stringify(input.messages); return { text: '继续处理', model: 'm', stopReason: 'end' } as never; },

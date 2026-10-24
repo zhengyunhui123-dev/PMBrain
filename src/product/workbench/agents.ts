@@ -8,13 +8,12 @@ import { compactRule } from './turn-policy';
 import { isValidSourceId } from '../../core/source-id';
 import type { WorkbenchAgent, WorkbenchArtifact, WorkbenchSchedule } from '../../../shared/workbench-agents';
 import type { WorkbenchStore } from './store';
+import { classifySkillTools } from './skill-center';
 
 type AgentState = { agents: WorkbenchAgent[]; artifacts: WorkbenchArtifact[]; schedules: Record<string, { slot: string; conversationId: string; runId?: string }> };
-const supportedTools = new Set(['search', 'query', 'get_page', 'knowledge_search', 'knowledge_read', 'memory_recall', 'local_files', 'local_read', 'local_mkdir', 'artifact_save', 'artifact_list', 'artifact_read', 'artifact_revise']);
 export function compatibleSkill(detail: { frontmatter?: Record<string, unknown> }) {
   const tools = Array.isArray(detail.frontmatter?.tools) ? detail.frontmatter!.tools as string[] : [];
-  const missingTools = tools.filter(tool => !supportedTools.has(tool));
-  return { supported: !detail.frontmatter?.mutating && !detail.frontmatter?.writes_pages && !missingTools.length, missingTools };
+  return classifySkillTools(tools, { mutating: Boolean(detail.frontmatter?.mutating), writesPages: Boolean(detail.frontmatter?.writes_pages) });
 }
 function schedule(input: unknown): WorkbenchSchedule | undefined {
   if (input === undefined || input === null) return undefined;

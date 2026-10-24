@@ -704,7 +704,7 @@
       "path": "src/core/facts/write-single.ts",
       "upstream_path": "src/core/facts/write-single.ts",
       "mode": "adapted",
-      "sha256": "2ed541233dcdb704b822613bda48be1a4a17afd0b7342b80f9d7a0a74bb3e662",
+      "sha256": "faafb431262fe7f3a9916e5764d580d2667b82c09819223bf9aeebac55affabd",
       "upstream_sha256": "1ed9011cecaab1354fe8e0968374f7b02dba9040b5741bccf9c499c2437791dc"
     },
     {
@@ -725,7 +725,7 @@
       "path": "src/core/facts/forget.ts",
       "upstream_path": "src/core/facts/forget.ts",
       "mode": "adapted",
-      "sha256": "7fec04f6db59dcec374ef7901f744f65269960833363166fa66457f350256033",
+      "sha256": "7c035fb4a24ca24500c115cc6290c31418ba7565b1acb2ef4be94d11a50a669e",
       "upstream_sha256": "b057026b83a8acb2d43339e6801f4da6b494f65dbaf6d5d7ce0d3a0eb4144a2e"
     },
     {

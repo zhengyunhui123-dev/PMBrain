@@ -39,6 +39,7 @@ beforeEach(async () => {
   brainDir = mkdtempSync(join(tmpdir(), 'privacy-test-'));
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   await (engine as any).db.query('DELETE FROM facts');
+  await engine.executeRaw('DELETE FROM fact_withdrawals');
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   await (engine as any).db.query(`UPDATE sources SET local_path = $1 WHERE id = 'default'`, [brainDir]);
 });

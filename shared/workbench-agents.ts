@@ -71,4 +71,7 @@ export interface WorkbenchSkill {
   description: string;
   supported: boolean;
   missingTools: string[];
+  permission?: 'read' | 'write' | 'external';
+  origin?: 'builtin' | 'custom';
+  enabled?: boolean;
 }

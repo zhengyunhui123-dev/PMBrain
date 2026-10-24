@@ -67,6 +67,20 @@ export function Workbench({ serviceReady = true, databaseReady = true }: { servi
     });
   };
   const setDraft = (value: string) => setDrafts(old => writeDraft(old, key, value, wb.assistantId, wb.conversation?.id ?? ''));
+  useEffect(() => {
+    const apply = () => {
+      const raw = sessionStorage.getItem('pmbrain.pendingSkillUse');
+      if (!raw) return;
+      sessionStorage.removeItem('pmbrain.pendingSkillUse');
+      try {
+        const prompt = JSON.parse(raw).prompt;
+        if (typeof prompt === 'string' && prompt.trim()) setDraft(prompt);
+      } catch { return; }
+    };
+    apply();
+    window.addEventListener('hashchange', apply);
+    return () => window.removeEventListener('hashchange', apply);
+  }, [key, wb.assistantId, wb.conversation?.id]);
   useEffect(() => { try { localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(drafts)); } catch { return; } }, [drafts]);
   const messages = wb.conversation?.messages ?? [];
   const tailLength = messages.at(-1)?.text.length ?? 0;

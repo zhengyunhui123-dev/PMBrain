@@ -1,6 +1,6 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { ArrowLeft, Box, Cable, CircleHelp, Database, FileText, Home, MessageCircle, Link, ListTodo, Monitor, PanelLeftClose, PanelLeftOpen, PenLine, RefreshCw, Search, Settings, ShieldCheck, SlidersHorizontal, Waypoints } from 'lucide-react';
+import { ArrowLeft, Box, Cable, CircleHelp, Database, FileText, Home, Library, MessageCircle, Link, ListTodo, Monitor, PanelLeftClose, PanelLeftOpen, PenLine, RefreshCw, Search, Settings, ShieldCheck, SlidersHorizontal, Waypoints } from 'lucide-react';
 import { useServiceAvailability } from './useServiceAvailability';
 import { TaskActivityProvider } from './TaskActivity';
 const SettingsPage = React.lazy(() => import('../pages/Settings').then(module => ({ default: module.SettingsPage })));
@@ -21,6 +21,7 @@ const ExistingPages = React.lazy(() => import('../App').then(module => ({ defaul
 const ImportMaterials = React.lazy(() => import('./ImportMaterials').then(module => ({ default: module.ImportMaterials })));
 const ConnectionCenterPage = React.lazy(() => import('../pages/Connection').then(module => ({ default: module.ConnectionCenterPage })));
 const ModelServices = React.lazy(() => import('./ModelServices').then(module => ({ default: module.ModelServices })));
+const SkillCenter = React.lazy(() => import('./SkillCenter').then(module => ({ default: module.SkillCenter })));
 const HelpPage = React.lazy(() => import('./HelpPage').then(module => ({ default: module.HelpPage })));
 const DesktopSettings = React.lazy(() => import('./DesktopSettings').then(module => ({ default: module.DesktopSettings })));
 const Workbench = React.lazy(() => import('../workbench/Workbench').then(module => ({ default: module.Workbench })));
@@ -29,6 +30,7 @@ const Diagnostics = React.lazy(() => import('./Diagnostics').then(module => ({ d
 const settingItems = [
   { key: 'models', label: '模型服务', group: 'AI 与模型', icon: Box, desktop: true },
   { key: 'model-roles', label: '知识库模型配置', group: 'AI 与模型', icon: SlidersHorizontal, desktop: true },
+  { key: 'skills', label: '技能管理', group: 'AI 与模型', icon: Library },
   { key: 'general', label: '通用设置', group: '偏好', icon: Settings },
   { key: 'knowledge', label: '知识库设置', group: '知识库', icon: Database },
   { key: 'basic', label: '数据库与资料目录', group: '知识库', icon: SlidersHorizontal, desktop: true },
@@ -247,6 +249,7 @@ export function ProductApp() {
             {isSettings && category === 'general' && <AppearanceSettings themeMode={theme} onThemeModeChange={changeTheme} />}
             {isSettings && category === 'integrations' && <div className="settings-mcp"><ConnectionCenterPage /></div>}
             {isSettings && category === 'diagnostics' && <Diagnostics />}
+            {isSettings && category === 'skills' && <React.Suspense fallback={<p role="status">正在打开技能管理…</p>}><SkillCenter /></React.Suspense>}
             <div ref={bind.settings} className="desktop-settings-slot" hidden={!settingsDesktop} />
             {isSettings && ['knowledge', 'dream'].includes(category) && ready && <SettingsPage section={category as 'knowledge' | 'dream'} themeMode={theme} onThemeModeChange={changeTheme} />}
             <div className="model-settings-host" hidden={!isSettings || !['models', 'model-roles'].includes(category)}>{visited.current.models && <ModelServices mode={category === 'model-roles' ? 'roles' : 'services'} />}</div>

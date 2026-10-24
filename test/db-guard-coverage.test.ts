@@ -79,7 +79,7 @@ function scan(): { unguarded: string[]; guarded: string[] } {
   for (const file of walk(REPO_ROOT)) {
     const source = readFileSync(file, 'utf-8');
     if (!connectsToAmbientDatabaseUrl(source) || !runsDestructiveSql(source)) continue;
-    (isGuarded(source) ? guarded : unguarded).push(relative(REPO_ROOT, file));
+    (isGuarded(source) ? guarded : unguarded).push(relative(REPO_ROOT, file).replace(/\\/g, '/'));
   }
   return { unguarded, guarded };
 }

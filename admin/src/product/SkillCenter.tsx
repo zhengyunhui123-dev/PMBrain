@@ -1,0 +1,117 @@
+import React, { useEffect, useState } from 'react';
+import { workbenchRequest } from '../workbench/useWorkbench';
+
+interface SkillCard {
+  name: string;
+  displayName: string;
+  description: string;
+  triggers: string[];
+  tools: string[];
+  supported: boolean;
+  missingTools: string[];
+  permission: 'read' | 'write' | 'external';
+  origin: 'builtin' | 'custom';
+  kind: 'product' | 'library' | 'custom';
+  enabled: boolean;
+  manual: boolean;
+  body?: string;
+}
+interface SkillRun { at: string; displayName: string; excerpt: string; status: 'loaded' | 'blocked' | 'choice' }
+interface Draft { displayName: string; description: string; triggers: string; tools: string[]; steps: string; manual: boolean }
+
+const toolChoices = [['knowledge_search', '搜索知识'], ['knowledge_read', '读取资料'], ['artifact_save', '保存文件'], ['local_files', '查看本地文件'], ['local_read', '读取本地文件'], ['memory_recall', '回忆']];
+const emptyDraft = (): Draft => ({ displayName: '', description: '', triggers: '', tools: ['knowledge_search', 'knowledge_read', 'artifact_save'], steps: '', manual: false });
+const statusText: Record<SkillRun['status'], string> = { loaded: '已调用', blocked: '未执行', choice: '等待选择' };
+
+function reason(skill: SkillCard): string {
+  if (skill.missingTools.length) return `缺少工具：${skill.missingTools.join('、')}`;
+  if (!skill.supported || skill.permission !== 'read') return '会修改知识库或执行外部操作，不能自动调用';
+  return skill.manual ? '仅手动使用' : '可自动选择';
+}
+
+export function SkillCenter() {
+  const [skills, setSkills] = useState<SkillCard[]>([]);
+  const [query, setQuery] = useState('');
+  const [filter, setFilter] = useState<'all' | 'builtin' | 'custom'>('all');
+  const [selected, setSelected] = useState('');
+  const [detail, setDetail] = useState<{ skill: SkillCard; runs: SkillRun[] } | null>(null);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState<Draft>(emptyDraft);
+  const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
+  const [busy, setBusy] = useState(false);
+  const load = async () => {
+    const result = await workbenchRequest<{ skills: SkillCard[] }>('/skill-center');
+    setSkills(result.skills);
+    return result.skills;
+  };
+  useEffect(() => { let active = true; load().catch(reason => { if (active) setError(reason instanceof Error ? reason.message : String(reason)); }); return () => { active = false; }; }, []);
+  const open = async (name: string) => {
+    setSelected(name); setEditing(false); setError('');
+    const result = await workbenchRequest<{ skill: SkillCard; runs: SkillRun[] }>(`/skill-center/${encodeURIComponent(name)}`);
+    setDetail(result);
+    setDraft({ displayName: result.skill.displayName, description: result.skill.description, triggers: result.skill.triggers.join('\n'), tools: result.skill.tools.length ? result.skill.tools : ['knowledge_search'], steps: result.skill.body ?? '', manual: result.skill.manual });
+  };
+  const run = async (action: () => Promise<void>) => {
+    setBusy(true); setError(''); setNotice('');
+    try { await action(); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
+    finally { setBusy(false); }
+  };
+  const save = () => run(async () => {
+    const body = { displayName: draft.displayName, description: draft.description, triggers: draft.triggers.split(/\n+/).map(item => item.trim()).filter(Boolean), tools: draft.tools, steps: draft.steps, manual: draft.manual };
+    const result = editing && selected ? await workbenchRequest<{ skill: SkillCard }>(`/skill-center/${encodeURIComponent(selected)}`, body, 'PUT') : await workbenchRequest<{ skill: SkillCard }>('/skill-center', body, 'POST');
+    await load(); setEditing(false); setNotice(editing ? '已保存技能' : '已创建技能，下一句对话即可使用'); await open(result.skill.name);
+  });
+  const shown = skills.filter(skill => (filter === 'all' || skill.origin === filter) && (!query.trim() || `${skill.displayName} ${skill.description}`.includes(query.trim())));
+  const counts = { all: skills.length, builtin: skills.filter(skill => skill.origin === 'builtin').length, custom: skills.filter(skill => skill.origin === 'custom').length };
+  return <div className="skill-center">
+    <header><div><h2>技能管理</h2><p>管理知识助手可以使用的技能和工作方法。说出任务后，助手只加载匹配的技能。</p></div><button type="button" className="skill-primary" disabled={busy} onClick={() => { setEditing(true); setSelected(''); setDetail(null); setDraft(emptyDraft()); }}>创建技能</button></header>
+    <p className="skill-count">{counts.all} 个技能 · 内置 {counts.builtin} · 我的 {counts.custom}</p>
+    {error && <p role="alert">{error}</p>}
+    {notice && <p role="status">{notice}</p>}
+    <div className="skill-layout">
+      <section>
+        <input aria-label="搜索技能" placeholder="搜索技能" value={query} onChange={event => setQuery(event.target.value)} />
+        <div className="skill-filters" role="tablist" aria-label="技能分类">{([['all', '全部'], ['builtin', '内置技能'], ['custom', '我的技能']] as const).map(([key, label]) => <button type="button" key={key} aria-selected={filter === key} onClick={() => setFilter(key)}>{label}</button>)}</div>
+        <ul>{shown.map(skill => <li key={skill.name}><button type="button" className={selected === skill.name ? 'active' : ''} onClick={() => void open(skill.name).catch(reason => setError(reason instanceof Error ? reason.message : String(reason)))}><b>{skill.displayName}</b><small>{skill.origin === 'custom' ? '自定义' : '内置'} · {reason(skill)}</small><span>{skill.description}</span></button><label><input type="checkbox" aria-label={`${skill.enabled && skill.supported ? '停用' : '启用'}${skill.displayName}`} checked={skill.supported && skill.enabled} disabled={!skill.supported || busy} onChange={event => void run(async () => { await workbenchRequest(`/skill-center/${encodeURIComponent(skill.name)}/enabled`, { enabled: event.target.checked }, 'POST'); await load(); if (selected === skill.name) await open(skill.name); })} /></label></li>)}</ul>
+        {!shown.length && <p>没有匹配的技能</p>}
+      </section>
+      <article>
+        {editing && <form onSubmit={event => { event.preventDefault(); void save(); }}>
+          <h3>{selected ? '编辑技能' : '创建技能'}</h3>
+          <label>名称<input aria-label="技能名称" value={draft.displayName} onChange={event => setDraft({ ...draft, displayName: event.target.value })} /></label>
+          <label>说明<input aria-label="技能说明" value={draft.description} onChange={event => setDraft({ ...draft, description: event.target.value })} /></label>
+          <label>触发条件<textarea aria-label="触发条件" value={draft.triggers} onChange={event => setDraft({ ...draft, triggers: event.target.value })} placeholder="一行一条，例如：产品需求分析" /></label>
+          <fieldset><legend>可用工具</legend>{toolChoices.map(([name, label]) => <label key={name}><input type="checkbox" checked={draft.tools.includes(name)} onChange={event => setDraft({ ...draft, tools: event.target.checked ? [...draft.tools, name] : draft.tools.filter(item => item !== name) })} />{label}</label>)}</fieldset>
+          <label>工作步骤<textarea aria-label="工作步骤" value={draft.steps} onChange={event => setDraft({ ...draft, steps: event.target.value })} /></label>
+          <label><input type="checkbox" checked={!draft.manual} onChange={event => setDraft({ ...draft, manual: !event.target.checked })} />对话时自动选择。关闭后只能手动使用。</label>
+          <div className="skill-actions"><button type="submit" className="skill-primary" disabled={busy}>保存</button><button type="button" disabled={busy} onClick={() => setEditing(false)}>取消</button></div>
+        </form>}
+        {!editing && detail && <div>
+          <h3>{detail.skill.displayName}</h3>
+          <p>{detail.skill.description}</p>
+          <p>{detail.skill.origin === 'custom' ? '自定义技能' : '内置技能'} · {reason(detail.skill)} · {detail.skill.manual ? '手动使用' : '自动选择'}</p>
+          <h4>触发条件</h4>
+          <p>{detail.skill.triggers.join('、') || '没有'}</p>
+          <h4>工作步骤</h4>
+          <pre>{detail.skill.body || '这个技能不会自动展开步骤。'}</pre>
+          <h4>执行记录</h4>
+          {detail.runs.length ? <ul className="skill-runs">{detail.runs.map(run => <li key={`${run.at}-${run.excerpt}`}>{new Date(run.at).toLocaleString()} · {statusText[run.status]} · {run.excerpt || '没有原话'}</li>)}</ul> : <p>还没有调用记录</p>}
+          <div className="skill-actions">
+            <button type="button" className="skill-primary" onClick={() => { sessionStorage.setItem('pmbrain.pendingSkillUse', JSON.stringify({ prompt: `请使用技能「${detail.skill.displayName}」完成这项工作：` })); window.location.hash = 'assistant'; }}>立即使用</button>
+            <button type="button" disabled={busy} onClick={() => void run(async () => { const result = await workbenchRequest<{ skill: SkillCard }>(`/skill-center/${encodeURIComponent(detail.skill.name)}/copy`, {}, 'POST'); await load(); setNotice('已复制为我的技能，升级软件不会覆盖它'); await open(result.skill.name); })}>复制为我的技能</button>
+            {detail.skill.origin === 'custom' && <button type="button" disabled={busy} onClick={() => setEditing(true)}>编辑</button>}
+            {detail.skill.origin === 'custom' && <button type="button" disabled={busy} onClick={() => void run(async () => { await workbenchRequest(`/skill-center/${encodeURIComponent(detail.skill.name)}`, undefined, 'DELETE'); setDetail(null); setSelected(''); await load(); setNotice('已删除这个技能'); })}>删除</button>}
+          </div>
+          <p>定时执行仍用助手自己的定时任务，技能不会另建调度。修改知识库、发送邮件或执行外部命令前，助手会先停下来说明原因。</p>
+        </div>}
+        {!editing && !detail && <div>
+          <h3>选择一个技能</h3>
+          <p>内置技能保持原件。要改步骤时，先复制成自己的技能。也可以导入 SKILL.md。</p>
+          <label className="skill-import">导入 SKILL.md<input aria-label="导入技能文件" type="file" accept=".md,text/markdown" onChange={event => { const file = event.target.files?.[0]; event.target.value = ''; if (!file) return; void run(async () => { const content = await file.text(); const result = await workbenchRequest<{ skill: SkillCard }>('/skill-center/import', { content }, 'POST'); await load(); setNotice('已导入技能'); await open(result.skill.name); }); }} /></label>
+        </div>}
+      </article>
+    </div>
+  </div>;
+}

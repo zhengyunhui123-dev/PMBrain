@@ -85,7 +85,7 @@ export interface WorkbenchAnswerInput {
   onRequestEvent?: (event:ChatRequestEvent)=>void;
   contextSummarizer?: { model: string; contextWindow?: number; summarize: WorkbenchSummarizer };
 }
-export type WorkbenchAnswer = (input: WorkbenchAnswerInput) => Promise<{ text: string; model: string; citations: WorkbenchCitation[]; knowledge?: 'used' | 'none' | 'off'; stopReason?: 'end' | 'length' | 'other' }>;
+export type WorkbenchAnswer = (input: WorkbenchAnswerInput) => Promise<{ text: string; model: string; citations: WorkbenchCitation[]; knowledge?: 'used' | 'none' | 'off'; stopReason?: 'end' | 'length' | 'other'; skills?: Array<{ name: string; displayName: string }>; skillNote?: string }>;
 export type WorkbenchSummarizer = (input: { model: string; prior: string; transcript: string; signal: AbortSignal; contextWindow?: number; onRequestEvent?:(event:ChatRequestEvent)=>void }) => Promise<string>;
 export interface WorkbenchMemoryHooks {
   capture: (conversation: WorkbenchConversation, message: WorkbenchMessage) => Promise<WorkbenchMemory>;
@@ -658,6 +658,8 @@ export class WorkbenchService {
             ...(reply.turnId ? { turnId: reply.turnId } : {}),
             ...(reply.contextNote ? { omitted: [reply.contextNote] } : {}),
             ...(visualItems.length ? { items: visualItems } : {}),
+            ...(result.skills?.length ? { skills: result.skills } : {}),
+            ...(result.skillNote ? { skillNote: result.skillNote } : {}),
           };
           reply.text = text;
           reply.model = result.model || model;

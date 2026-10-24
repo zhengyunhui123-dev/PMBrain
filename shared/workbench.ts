@@ -1,4 +1,4 @@
-export interface WorkbenchCitation { sourceId: string | null; slug: string; title: string; snippet: string; kind?: 'memory'; origin?: 'prior-artifact'; factId?: number; conversationId?: string; messageId?: string; memoryHash?: string }
+export interface WorkbenchCitation { sourceId: string | null; slug: string; title: string; snippet: string; kind?: 'memory'; origin?: 'prior-artifact'; factId?: number; entitySlug?: string | null; conversationId?: string; messageId?: string; memoryHash?: string }
 export interface WorkbenchMemory {
   sourceId: string;
   hash: string;
@@ -128,6 +128,8 @@ export interface ContextManifest {
   omitted?: string[];
   turnId?: string;
   items?: Array<{ kind: string; ref: string; state: 'kept' | 'omitted' }>;
+  skills?: Array<{ name: string; displayName: string }>;
+  skillNote?: string;
 }
 export interface WorkbenchConversation {
   id: string;

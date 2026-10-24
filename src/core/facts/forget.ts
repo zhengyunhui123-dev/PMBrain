@@ -235,7 +235,7 @@ async function applyForgetFactInFence(
 
 export async function forgetFactInFence(engine: BrainEngine, factId: number, opts: { reason?: string; sourceId?: string; worldOnly?: boolean } = {}): Promise<ForgetFactResult> {
   const result = await applyForgetFactInFence(engine, factId, opts);
-  if (result.ok && !(result.reason ?? '').startsWith('superseded by')) {
+  if ((result.ok || result.path === 'already_expired') && !(result.reason ?? '').startsWith('superseded by')) {
     const { recordFactWithdrawal } = await import('./withdrawal.ts');
     await recordFactWithdrawal(engine, factId);
   }

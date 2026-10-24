@@ -159,7 +159,7 @@ export async function recallWorkbenchMemory(engine: BrainEngine, opts: { sourceI
     if (row.context) { try { origin = JSON.parse(row.context); } catch {} }
     origin = origins.get(Number(row.id)) ?? origin;
     const kinds:Record<string,string>={event:'事件',preference:'偏好',commitment:'决定',belief:'观点',fact:'事实',idea:'想法'};
-    result.push({ sourceId: opts.sourceId, slug: `memory/fact-${row.id}`, title: `${origin.conversationId?'对话记忆':'已保存事实'} · ${kinds[row.kind]??'事实'}`, snippet: row.fact, kind: 'memory', factId: Number(row.id), conversationId:origin.conversationId, messageId:origin.messageId, memoryHash:origin.hash });
+    result.push({ sourceId: opts.sourceId, slug: `memory/fact-${row.id}`, title: `${origin.conversationId?'对话记忆':'已保存事实'} · ${kinds[row.kind]??'事实'}`, snippet: row.fact, kind: 'memory', factId: Number(row.id), entitySlug: row.entity_slug, conversationId:origin.conversationId, messageId:origin.messageId, memoryHash:origin.hash });
     used += cost;
   }
   for (const page of restoredPages) {
