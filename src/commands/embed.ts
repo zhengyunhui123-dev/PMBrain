@@ -81,6 +81,7 @@ export interface EmbedOpts {
    * remediation submits on big stale backlogs.
    */
   catchUp?: boolean;
+  timeBudgetMs?: number;
   forceReembed?: boolean;
   /** Limit distinct stale pages handled by this invocation. */
   pageLimit?: number;
@@ -355,6 +356,7 @@ export async function runEmbedCore(engine: BrainEngine, opts: EmbedOpts): Promis
       getBatchSize: opts.getBatchSize,
       priority: opts.priority,
       catchUp: opts.catchUp,
+      timeBudgetMs: opts.timeBudgetMs,
       pageLimit: opts.pageLimit,
       quiet: opts.quiet,
     }, stallAbort.signal).catch((error) => { drainError = error; });
@@ -711,6 +713,7 @@ async function embedAll(
     getBatchSize?: () => number;
     priority?: 'recent';
     catchUp?: boolean;
+    timeBudgetMs?: number;
     pageLimit?: number;
     quiet?: boolean;
   },
@@ -889,6 +892,7 @@ async function embedAllStale(
     getBatchSize?: () => number;
     priority?: 'recent';
     catchUp?: boolean;
+    timeBudgetMs?: number;
     pageLimit?: number;
     quiet?: boolean;
   } | undefined,
@@ -932,9 +936,12 @@ async function embedAllStale(
   // handler runs until countStaleChunks() returns 0. Do not emulate infinity
   // with Number.MAX_SAFE_INTEGER: Windows/Bun timers clamp it to 1ms and abort
   // the run immediately. A null budget means no timer is installed.
+  const requestedBudget = staleOpts?.timeBudgetMs;
   const budgetMs = staleOpts?.catchUp
     ? null
-    : parseInt(process.env.GBRAIN_EMBED_TIME_BUDGET_MS || `${30 * 60 * 1000}`, 10);
+    : typeof requestedBudget === 'number' && Number.isFinite(requestedBudget)
+      ? requestedBudget
+      : parseInt(process.env.GBRAIN_EMBED_TIME_BUDGET_MS || `${30 * 60 * 1000}`, 10);
   const budgetController = new AbortController();
   let budgetExpired = false;
   const budgetTimer = budgetMs === null

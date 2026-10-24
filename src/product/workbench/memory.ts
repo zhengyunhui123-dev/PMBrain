@@ -43,7 +43,10 @@ export class WorkbenchMemoryCoordinator {
     const state: WorkbenchMemory = { sourceId, hash: memoryVersion(message), capturedAt: message.memory?.capturedAt ?? message.createdAt, mode: wb.mode, visibility: wb.visibility, ttl: wb.transient_ttl, status: 'held' };
     try {
     const sources = await this.engine.executeRaw('SELECT id FROM sources WHERE id=$1 AND archived=false', [sourceId]);
-    if(wb.enabled&&sources.length)await resolveModel(this.engine,{configKey:'facts.extraction_model',tier:'reasoning',fallback:conversation.model});
+    if (wb.enabled && !wb.read_error && !wb.plane_drift && wb.mode_valid && sources.length) {
+      if (!gateWritebackTurn(message.text, { minChars: 2, maxChars: 32000, maxBytes: 128000, excludeOperationalRequests: true }).ok) return { ...state, status: 'complete', factIds: [] };
+      await resolveModel(this.engine,{configKey:'facts.extraction_model',tier:'reasoning',fallback:conversation.model});
+    }
     return { ...state,
       status: wb.read_error || !sources.length || wb.plane_drift || !wb.mode_valid ? 'held' : wb.enabled ? 'pending' : 'off',
       ...(!sources.length ? { error: '记忆知识来源不存在或已归档' } : wb.read_error ? { error: '无法读取记忆配置' } : wb.plane_drift ? { error: '文件与数据库的记忆开关不一致' } : {}) };

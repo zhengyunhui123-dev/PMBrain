@@ -59,6 +59,7 @@ export function ProductApp() {
   const [page, setPage] = useState(currentPage);
   const [legacyMobile, setLegacyMobile] = useState(() => !desktop && window.matchMedia(legacyMobileQuery).matches);
   const [theme, setTheme] = useState<ThemeMode>(readThemeMode);
+  const [desktopTheme, setDesktopTheme] = useState<'light' | 'dark'>();
   const [service, setService] = useState<SidecarState | null>(null);
   const availability = useServiceAvailability(service?.phase);
   const [needsSetup, setNeedsSetup] = useState<boolean | null>(desktop ? null : false);
@@ -171,7 +172,11 @@ export function ProductApp() {
     window.addEventListener('pmbrain:open-import', openImport);
     return () => { window.removeEventListener('hashchange', updatePage); window.removeEventListener('pmbrain:open-import', openImport); };
   }, [legacyMobile]);
-  useEffect(() => applyThemeMode(theme), [theme]);
+  useEffect(() => {
+    const stop = applyThemeMode(desktopTheme ?? theme);
+    if (desktopTheme) document.documentElement.dataset.themeMode = theme;
+    return stop;
+  }, [theme, desktopTheme]);
   useDesktopTheme(!desktop && !legacyMobile && page !== 'login', setTheme, page);
   useEffect(() => {
     if (!healthOpen) return;
@@ -184,11 +189,12 @@ export function ProductApp() {
     const fail = (error: unknown) => setStateError(String(error));
     void desktop.getState().then(setService).catch(fail);
     void readSetup();
-    void desktop.getTheme().then((result: { source: ThemeMode }) => setTheme(result.source)).catch(fail);
+    const syncTheme = (next: { source: ThemeMode; resolved: 'light' | 'dark' }) => { setTheme(next.source); setDesktopTheme(next.resolved); };
+    void desktop.getTheme().then(syncTheme).catch(fail);
     void desktop.getStartupProgress().then(setStartup).catch(() => undefined);
     void desktop.getUpdateState().then((state: UpdateState | null) => { if (state) setUpdate(state); }).catch(() => undefined);
     const unsubscribe = desktop.onState((next: SidecarState) => { setService(next); if (next.phase === 'ready') setNeedsSetup(false); });
-    const unsubscribeTheme = desktop.onThemeState((next: { source: ThemeMode }) => setTheme(next.source));
+    const unsubscribeTheme = desktop.onThemeState(syncTheme);
     const unsubscribeNavigation = desktop.onNavigate(navigate);
     const unsubscribePanel = desktop.onShowPanel((panel: string) => navigate(`settings-${panel}`));
     const unsubscribeUpdates = desktop.onShowUpdates(() => navigate('settings-updates'));
@@ -257,7 +263,7 @@ export function ProductApp() {
       {showEmbedded && <div className="product-existing"><ExistingPages embedded /></div>}
       <div ref={bind.menu} className="product-mcp-page" hidden={!menuMcp} />
       <div ref={bind.park} className="desktop-settings-park" hidden />
-      {desktop && visited.current.desktop && hostReady && host.current && createPortal(<DesktopSettings theme={theme} panel={desktopPanel} visible={menuMcp || settingsDesktop} />, host.current)}
+      {desktop && visited.current.desktop && hostReady && host.current && createPortal(<DesktopSettings theme={desktopTheme ?? theme} panel={desktopPanel} visible={menuMcp || settingsDesktop} />, host.current)}
     </main>
   </div></React.Suspense></TaskActivityProvider>;
 }

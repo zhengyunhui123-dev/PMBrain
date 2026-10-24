@@ -242,6 +242,22 @@ test('写周报时稳定偏好进入偏好层，旧对话、事件和上一份�
   expect(result.knowledge).toBe('none');
 });
 
+test('询问报告偏好可以引用已有记忆，生成报告仍要求本期材料', async () => {
+  for (const text of ['星河项目的报告偏好是什么？', '我写周报的习惯有哪些？', '报告的格式要求是什么']) expect(needsCurrentEvidence(text)).toBe(false);
+  for (const text of ['请按我的偏好生成本周报告', '我的报告偏好是什么？然后生成本周报告', '生成报告，并说明我的写作偏好是什么？']) expect(needsCurrentEvidence(text)).toBe(true);
+  let system = '';
+  const memory = { sourceId: 'default', slug: 'memory/fact-1', title: '对话记忆 · 偏好', snippet: '报告先写结论，再写依据', kind: 'memory' as const, factId: 1 };
+  const answer = knowledgeWorkbenchAnswer({} as any, {
+    search: async () => ({ results: [] }) as any,
+    recall: async () => [memory],
+    answer: async input => { system = input.system ?? ''; return { text: '报告先写结论，再写依据。[1]', stopReason: 'end' } as any; },
+  });
+  const result = await answer({ model: 'm', knowledge: true, sourceId: 'default', signal: new AbortController().signal, progress: () => {}, messages: [message('1', 'user', '星河项目的报告偏好是什么？')] });
+  expect(system).toContain('用户已明确表达并保存');
+  expect(system).not.toContain('都不是本期事实');
+  expect(result.citations).toEqual([memory]);
+});
+
 test('定时任务带上已存做法，并在没有本期材料时停止', () => {
   const prompt = scheduledTaskPrompt({
     schedule: { enabled: true, weekdays: [5], time: '17:00', timezone: 'Asia/Shanghai', prompt: '生成本周周报' },

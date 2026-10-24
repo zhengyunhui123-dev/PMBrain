@@ -241,6 +241,7 @@ export class LanMcpGateway {
   private readonly sidecarPort: number;
   private readonly verifyBearerToken: (authorizationHeader: string) => Promise<boolean>;
   private server?: Server;
+  private pendingStart?: { server: Server; cancel: () => void };
   private activeRequests = new Set<ClientRequest>();
   private activeInboundRequests = 0;
   private activeAuthChecks = 0;
@@ -300,10 +301,12 @@ export class LanMcpGateway {
       await new Promise<void>((resolve, reject) => {
         const onError = (error: NodeJS.ErrnoException) => {
           server.off('listening', onListening);
+          if (this.pendingStart?.server === server) this.pendingStart = undefined;
           reject(bindError(error, this.bindAddress, this.configuredPort));
         };
         const onListening = () => {
           server.off('error', onError);
+          if (this.pendingStart?.server === server) this.pendingStart = undefined;
           if (this.server !== server) {
             server.close(() => reject(new Error('局域网 MCP 启动已取消。')));
             return;
@@ -312,6 +315,12 @@ export class LanMcpGateway {
         };
         server.once('error', onError);
         server.once('listening', onListening);
+        this.pendingStart = { server, cancel: () => {
+          server.off('error', onError);
+          server.off('listening', onListening);
+          this.pendingStart = undefined;
+          reject(new Error('局域网 MCP 启动已取消。'));
+        } };
         server.listen(this.configuredPort, this.bindAddress);
       });
     } catch (error) {
@@ -338,6 +347,7 @@ export class LanMcpGateway {
     for (const request of this.activeRequests) request.destroy();
     this.activeRequests.clear();
     if (!server) return;
+    if (this.pendingStart?.server === server) this.pendingStart.cancel();
 
     await new Promise<void>((resolve) => {
       let settled = false;

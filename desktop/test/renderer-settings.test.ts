@@ -53,7 +53,7 @@ describe('desktop settings renderer contracts', () => {
     expect(renderer).toContain('renderDatabaseEngineHint');
     expect(renderer).toContain('renderPgliteSharedWarning');
     expect(renderer).toContain('configuredEngine');
-    expect(renderer).toContain('多人同时使用可能卡顿或不稳定');
+    expect(html).toContain('多人同时调用时');
     expect(styles).toContain('.engine-usage-hint');
     expect(styles).toContain('.engine-usage-hint.warning');
   });
@@ -246,7 +246,7 @@ describe('desktop settings renderer contracts', () => {
       'launch-at-login',
       'start-minimized',
       'close-to-tray',
-      'save-system-settings',
+      'system-save-note',
       'restart-shared-gateway',
     ]) {
       expect(html).toContain(`id="${id}"`);
@@ -288,7 +288,9 @@ describe('desktop settings renderer contracts', () => {
     expect(main).toContain('saveDesktopBehavior: input => systemSettingsController.saveDesktopBehavior(input)');
     expect(renderer).toContain("$(`#${id}`).addEventListener('change', () => void saveDesktopBehavior())");
     expect(renderer).not.toContain("void saveSystemSettings(event.currentTarget as HTMLButtonElement)");
-    expect(renderer).toContain('theme: themeSource');
+    const networkPayload = renderer.slice(renderer.indexOf('function currentSystemSettingsPayload'), renderer.indexOf('async function restartSharedGateway'));
+    expect(networkPayload).not.toContain('theme:');
+    expect(networkPayload).not.toContain('launchAtLogin:');
     expect(renderer).toContain("'desktop-behavior'");
     expect(html).toContain('aria-label="选择共享网络适配器和 IPv4 地址"');
     expect(html).toContain('固定局域网入口');
@@ -392,13 +394,13 @@ describe('desktop settings renderer contracts', () => {
     expect(renderer).toMatch(/refreshIntegrations\(false\)[\s\S]*?refreshIntegrations\(true\)/);
   });
 
-  test('长期记忆首次点击保留用户选择，未接入时给出就地引导', () => {
-    expect(html).toContain('id="memory-setup-hint"');
+  test('长期记忆选择即保存，知识助手不依赖外部 MCP 接入', () => {
+    expect(html).toContain('id="memory-assistant-status"');
     expect(html).toContain('id="memory-open-integrations"');
-    expect(html).toContain('请先到“MCP 接入”更新至少一个 AI 客户端');
-    expect(renderer).toContain('memoryModeUserChanged');
+    expect(html).not.toContain('请先到“MCP 接入”更新至少一个 AI 客户端');
+    expect(renderer).not.toContain('memoryIntegrationReady');
     expect(renderer).toContain('handleMemoryModeChange');
-    expect(renderer).toContain('showMemorySetupHint');
+    expect(renderer).toContain('await window.pmbrainDesktop.saveMemoryWriteback({ mode, notice_shown: true })');
     expect(renderer).toContain("switchPanel('integrations')");
   });
 
@@ -441,7 +443,7 @@ describe('desktop settings renderer contracts', () => {
     expect(renderer).toContain('applySystemSettingsState');
     expect(renderer).toContain('共享不会自动恢复');
     expect(renderer).toContain("unavailable.value = 'network-unavailable'");
-    expect(renderer).toContain('局域网共享仍保持停止');
+    expect(renderer).toContain('共享尚未启动');
     expect(renderer).toContain('result.state.gateway?.running');
   });
 
@@ -475,7 +477,8 @@ describe('desktop settings renderer contracts', () => {
   });
 
   test('disables premature system saves and exposes accessible global notices', () => {
-    expect(html).toContain('id="save-system-settings" disabled');
+    expect(html).not.toContain('id="save-system-settings"');
+    expect(renderer).toContain('input.disabled = !ready || memorySaving || loadedMemoryMode === null');
     expect(renderer).toContain('state?.setup.needsSetup !== false');
     expect(renderer).toContain('请先在“基础配置”完成数据库与知识目录设置');
     expect(html).toContain('id="global-error" role="alert" aria-live="assertive"');
@@ -531,10 +534,10 @@ describe('desktop settings renderer contracts', () => {
     expect(preload).not.toContain('openPreviousRelease');
   });
 
-  test('memory writeback selection is not reset by settings polling before save', () => {
+  test('memory writeback selection is not reset by stale polling while saving', () => {
     expect(renderer).toContain("input[name=\"memory-writeback\"]");
     expect(renderer).toContain("addEventListener('change', () => void handleMemoryModeChange(input))");
-    expect(renderer).toContain('memoryModeUserChanged && pending !== undefined && pending !== state.mode');
+    expect(renderer).toContain('request !== memoryRefreshRequest || memorySaving');
     expect(renderer).toContain('loadedMemoryMode = state.mode');
     expect(html).toContain('id="memory-mode-salient-card"');
     expect(html).toContain('id="memory-agent-status"');

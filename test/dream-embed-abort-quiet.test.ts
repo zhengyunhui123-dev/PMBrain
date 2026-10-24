@@ -15,7 +15,7 @@ describe('Dream embed AbortSignal + quiet wiring', () => {
 
     expect(start).toBeGreaterThanOrEqual(0);
     expect(body).toContain('signal?: AbortSignal');
-    expect(body).toMatch(/runEmbedCore\(engine,\s*\{[\s\S]*?signal[\s\S]*?quiet:\s*true/);
+    expect(body).toMatch(/runEmbedCore\(engine,\s*\{[\s\S]*?signal[\s\S]*?timeBudgetMs[\s\S]*?quiet:\s*true/);
   });
 
   test('the cycle passes its worker-owned signal into runPhaseEmbed', () => {
@@ -23,5 +23,6 @@ describe('Dream embed AbortSignal + quiet wiring', () => {
       value.includes('opts.embedPageLimit'),
     );
     expect(call).toContain('opts.signal');
+    expect(call).toContain('opts.embedTimeBudgetMs');
   });
 });

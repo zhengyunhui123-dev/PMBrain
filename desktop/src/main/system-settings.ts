@@ -14,12 +14,12 @@ export interface DesktopBehaviorInput {
 }
 
 export interface DesktopSystemSettingsPayload {
-  theme: DesktopTheme;
+  theme?: DesktopTheme;
   networkMode: DesktopNetworkMode;
   sharedAdapter?: string;
   sharedIp?: string;
-  launchAtLogin: boolean;
-  closeBehavior: DesktopCloseBehavior;
+  launchAtLogin?: boolean;
+  closeBehavior?: DesktopCloseBehavior;
 }
 
 export interface DesktopSystemSettingsState {

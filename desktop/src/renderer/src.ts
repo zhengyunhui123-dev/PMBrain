@@ -147,6 +147,7 @@ export function activateSettingsPanel(target: Panel, notify = false): void {
   switchPanel(target, notify);
   if (target === 'models' && ($<HTMLDetailsElement>('#advanced-model-settings')).open) void loadAdvancedModels(true);
   if (target === 'integrations') refreshIntegrationPanel();
+  if (target === 'system') void refreshMemoryWriteback();
   if (target === 'repair') void loadPgliteUpgradeBackups();
 }
 
@@ -1400,7 +1401,7 @@ function renderSystemSettings(next: DesktopSystemSettingsState): void {
     unavailable.dataset.adapter = next.preferences.sharedAdapter;
     unavailable.dataset.address = next.preferences.sharedIp;
     unavailable.dataset.recommended = 'false';
-    unavailable.dataset.warning = '上次保存的固定网卡或 IPv4 当前不可用。该选择会保留，但共享不会自动恢复；地址恢复后请重新确认并保存。';
+    unavailable.dataset.warning = '上次保存的固定网卡或 IPv4 当前不可用，共享不会自动恢复。地址恢复后请点击“重启共享”确认。';
     unavailable.textContent = `${next.preferences.sharedAdapter} · ${next.preferences.sharedIp} · 当前不可用（已保留）`;
     unavailable.disabled = true;
     unavailable.selected = true;
@@ -1429,45 +1430,45 @@ function renderSystemSettings(next: DesktopSystemSettingsState): void {
     statusDetail.textContent = '共享网关未启动，本机 Agent 仍可正常调用。';
   }
   restartButton.hidden = next.preferences.networkMode !== 'shared' || gatewayReady || !next.selectedAddressAvailable;
-  $('#system-save-note').textContent = next.warning || '';
+  $('#network-open-integrations').hidden = !gatewayReady;
   updateSystemSettingsAvailability();
 }
 
-const DESKTOP_SETUP_NOTE = '请先在“基础配置”完成数据库与知识目录设置，再保存系统设置。';
+const DESKTOP_SETUP_NOTE = '请先在“基础配置”完成数据库与知识目录设置。';
+let networkSaving = false;
+let networkDraft = false;
+let memorySaving = false;
 
 function updateSystemSettingsAvailability(): void {
-  const buttons = ['#save-system-settings']
-    .map((selector) => document.querySelector<HTMLButtonElement>(selector))
-    .filter((button): button is HTMLButtonElement => button !== null);
+  const ready = state?.setup.needsSetup === false;
+  document.querySelectorAll<HTMLInputElement>('input[name="network-mode"]').forEach(input => { input.disabled = !ready || networkSaving; });
+  document.querySelectorAll<HTMLInputElement>('input[name="memory-writeback"]').forEach(input => { input.disabled = !ready || memorySaving || loadedMemoryMode === null; });
+  $<HTMLSelectElement>('#shared-address').disabled = !ready || networkSaving;
+  $<HTMLButtonElement>('#restart-shared-gateway').disabled = !ready || networkSaving;
   const startupSwitches = ['#launch-at-login', '#start-minimized', '#close-to-tray']
     .map((selector) => document.querySelector<HTMLInputElement>(selector))
     .filter((input): input is HTMLInputElement => input !== null);
   const desktopNote = $('#desktop-behavior-note');
   if (state?.setup.needsSetup !== false) {
-    for (const button of buttons) button.disabled = true;
     for (const input of startupSwitches) input.disabled = true;
     $('#system-save-note').textContent = DESKTOP_SETUP_NOTE;
     desktopNote.textContent = DESKTOP_SETUP_NOTE;
     return;
   }
-  for (const button of buttons) {
-    if (!button.classList.contains('busy')) button.disabled = false;
-  }
   for (const input of startupSwitches) input.disabled = false;
-  $('#system-save-note').textContent = latestSystemSettings?.warning || '';
+  if ($('#system-save-note').textContent === DESKTOP_SETUP_NOTE) $('#system-save-note').textContent = '';
   if (desktopNote.textContent === DESKTOP_SETUP_NOTE) desktopNote.textContent = '';
 }
 
-function applySystemSettingsState(next: DesktopSystemSettingsState): void {
+function applySystemSettingsState(next: DesktopSystemSettingsState, acceptNetwork = false): void {
   const mode = selectedNetworkMode();
   const address = selectedNetworkAddress();
-  const keepNetwork = latestSystemSettings && (mode !== latestSystemSettings.preferences.networkMode
-    || address.adapterName !== (latestSystemSettings.preferences.sharedAdapter || undefined)
-    || address.address !== (latestSystemSettings.preferences.sharedIp || undefined));
+  const keepNetwork = !acceptNetwork && latestSystemSettings && (networkSaving || networkDraft);
   const selected = keepNetwork ? $<HTMLSelectElement>('#shared-address').selectedOptions[0]?.cloneNode(true) as HTMLOptionElement | undefined : undefined;
   const keepBehavior = desktopBehaviorSaver.busy || !$<HTMLButtonElement>('#desktop-behavior-retry').hidden;
   const behavior = keepBehavior ? currentDesktopBehavior() : null;
   latestSystemSettings = next;
+  if (acceptNetwork) networkDraft = false;
   renderSystemSettings(next);
   if (keepNetwork) {
     $<HTMLInputElement>(`#network-mode-${mode}`).checked = true;
@@ -1482,12 +1483,7 @@ function applySystemSettingsState(next: DesktopSystemSettingsState): void {
 }
 
 let loadedMemoryMode: 'off' | 'salient' | 'all' | null = null;
-let memoryModeUserChanged = false;
-let memoryModeChangeRequest = 0;
-
-function selectedMemoryMode(): 'off' | 'salient' | 'all' | undefined {
-  return document.querySelector<HTMLInputElement>('input[name="memory-writeback"]:checked')?.value as 'off' | 'salient' | 'all' | undefined;
-}
+let memoryRefreshRequest = 0;
 
 function renderMemoryMode(): void {
   document.querySelectorAll<HTMLLabelElement>('#memory-mode-off-card, #memory-mode-salient-card, #memory-mode-all-card').forEach((card) => {
@@ -1501,82 +1497,55 @@ function selectMemoryMode(mode: 'off' | 'salient' | 'all'): void {
   renderMemoryMode();
 }
 
-function showMemorySetupHint(title: string, detail: string): void {
-  $('#memory-setup-title').textContent = title;
-  $('#memory-setup-detail').textContent = detail;
-  $('#memory-setup-hint').hidden = false;
-}
-
-function hideMemorySetupHint(): void {
-  $('#memory-setup-hint').hidden = true;
-}
-
-function memoryIntegrationReady(): boolean {
-  return latestIntegrations.some(item => (
-    ['workbuddy', 'codex', 'claude', 'grok'].includes(item.id)
-    && item.configured
-    && !item.portMismatch
-    && item.connectionState === 'connected'
-  ));
-}
-
 async function handleMemoryModeChange(input: HTMLInputElement): Promise<void> {
-  const request = ++memoryModeChangeRequest;
+  if (memorySaving || loadedMemoryMode === null) return;
   const mode = input.value as 'off' | 'salient' | 'all';
-  memoryModeUserChanged = true;
+  memorySaving = true;
+  memoryRefreshRequest++;
   renderMemoryMode();
-  if (mode === 'off') {
-    hideMemorySetupHint();
-    return;
+  updateSystemSettingsAvailability();
+  const note = $('#memory-save-note');
+  note.textContent = '正在保存…';
+  try {
+    const result = await window.pmbrainDesktop.saveMemoryWriteback({ mode, notice_shown: true });
+    loadedMemoryMode = result.mode;
+    selectMemoryMode(result.mode);
+    note.textContent = result.issues.length ? `设置已保存。${result.issues.join('；')}` : '已保存，知识助手立即生效。';
+  } catch (error) {
+    selectMemoryMode(loadedMemoryMode);
+    note.textContent = error instanceof Error ? error.message : String(error);
+  } finally {
+    memorySaving = false;
+    await refreshMemoryWriteback();
+    updateSystemSettingsAvailability();
   }
-  if (!integrationChecksComplete) {
-    showMemorySetupHint('正在检查 MCP 接入', '正在验证 WorkBuddy、Codex、Claude Code 和 Grok Build 的本机连接。');
-    try {
-      await refreshIntegrations(true);
-    } catch {
-      integrationChecksComplete = false;
-    }
-    if (request !== memoryModeChangeRequest) return;
-  }
-  if (!memoryIntegrationReady()) {
-    memoryModeUserChanged = false;
-    selectMemoryMode(loadedMemoryMode ?? 'off');
-    showMemorySetupHint(
-      '请先完成 MCP 接入',
-      '请先到“MCP 接入”更新至少一个 AI 客户端，验证连接后再开启长期记忆。',
-    );
-    return;
-  }
-  hideMemorySetupHint();
-}
-
-function memoryModeDirty(): boolean {
-  const pending = selectedMemoryMode();
-  return pending !== undefined && loadedMemoryMode !== null && pending !== loadedMemoryMode;
 }
 
 async function refreshMemoryWriteback(): Promise<void> {
+  if (memorySaving) return;
+  const request = ++memoryRefreshRequest;
   const statusEl = $('#memory-agent-status');
   const sharedWarn = $('#memory-shared-warning');
   try {
     const state = await window.pmbrainDesktop.getMemoryWriteback();
-    const pending = selectedMemoryMode();
-    const unsaved = memoryModeUserChanged && pending !== undefined && pending !== state.mode;
-    if (!unsaved) {
-      loadedMemoryMode = state.mode;
-      memoryModeUserChanged = false;
-      selectMemoryMode(state.mode);
-    } else if (loadedMemoryMode === null) {
-      loadedMemoryMode = state.mode;
-    }
-    sharedWarn.hidden = latestSystemSettings?.preferences.networkMode !== 'shared';
+    if (request !== memoryRefreshRequest || memorySaving) return;
+    loadedMemoryMode = state.mode;
+    selectMemoryMode(state.mode);
+    sharedWarn.hidden = !state.enabled || state.visibility === 'private' || latestSystemSettings?.preferences.networkMode !== 'shared';
+    $('#memory-assistant-status').textContent = state.enabled
+      ? '知识助手：已开启。对话后自动提炼，保存进度显示在对话中；新对话会按需使用已有记忆。'
+      : '知识助手：自动记忆已关闭，已有记忆保留。';
+    $('#memory-storage-note').textContent = `记忆保存在当前知识库；临时记忆默认 ${state.ttl} 后过期。原始对话保留在历史记录中。`;
     statusEl.textContent = [
-      state.enabled ? 'WorkBuddy：长期记忆合同将在重新连接时下发。' : 'WorkBuddy：自动记忆合同未启用。',
-      ...state.agents.map(agent => `${agent.agent === 'claude' ? 'Claude Code / Grok Build' : 'Codex'}：${agent.block === 'present' ? '托管指令已安装' : '未安装托管指令'}${agent.agent === 'claude' ? `；Stop Hook ${agent.hook === 'installed' ? '已安装' : '未安装'}` : ''}`),
+      state.enabled ? '已接入的外部 AI 重新连接后使用新设置。知识助手无需 MCP 接入。' : '外部 AI 自动记忆已关闭。',
+      ...state.agents.filter(agent => agent.registered || agent.block === 'present').map(agent => `${agent.agent === 'claude' ? 'Claude Code / Grok Build' : 'Codex'}：${agent.block === 'present' ? '记忆指令已安装' : '记忆指令待修复'}；${agent.hook === 'installed' ? '对话保存已接入' : '对话保存待接入'}`),
       ...state.issues,
     ].join('；');
   } catch (error) {
-    statusEl.textContent = error instanceof Error ? error.message : String(error);
+    if (request !== memoryRefreshRequest || memorySaving) return;
+    $('#memory-assistant-status').textContent = error instanceof Error ? error.message : String(error);
+  } finally {
+    updateSystemSettingsAvailability();
   }
 }
 
@@ -1584,79 +1553,49 @@ function currentSystemSettingsPayload(): DesktopSystemSettingsPayload {
   const mode = selectedNetworkMode();
   const address = selectedNetworkAddress();
   return {
-    theme: themeSource,
     networkMode: mode,
     sharedAdapter: address.adapterName,
     sharedIp: address.address,
-    launchAtLogin: $<HTMLInputElement>('#launch-at-login').checked,
-    closeBehavior: $<HTMLInputElement>('#close-to-tray').checked ? 'tray' : 'quit',
   };
 }
 
 async function restartSharedGateway(): Promise<void> {
-  clearNotices();
-  const button = $<HTMLButtonElement>('#restart-shared-gateway');
-  const payload = currentSystemSettingsPayload();
-  if (payload.networkMode !== 'shared' || !payload.sharedAdapter || !payload.sharedIp) {
-    setNotice('error', '请先选择可用的固定局域网地址。');
-    return;
-  }
-  setBusy(button, true, '正在重启…');
-  try {
-    const memoryMode = selectedMemoryMode();
-    const saveMemory = memoryMode !== undefined && loadedMemoryMode !== null && memoryMode !== loadedMemoryMode;
-    const result = await window.pmbrainDesktop.saveSystemSettings(payload);
-    applySystemSettingsState(result.state);
-    if (result.canceled) return;
-    if (saveMemory && memoryMode) {
-      await window.pmbrainDesktop.saveMemoryWriteback({ mode: memoryMode, notice_shown: true });
-      await refreshMemoryWriteback();
-    }
-    if (!result.state.gateway?.running) throw new Error('共享入口仍未启动，请检查固定 IP 与 3131 端口。');
-    setNotice('success', `局域网共享已恢复：${result.state.sharedMcpUrl || payload.sharedIp}`);
-  } catch (error) {
-    setNotice('error', error instanceof Error ? error.message : String(error));
-  } finally {
-    setBusy(button, false, '重启共享');
-  }
+  await saveNetworkSettings();
 }
 
-async function saveSystemSettings(trigger?: HTMLButtonElement): Promise<void> {
-  clearNotices();
-  const button = trigger ?? $<HTMLButtonElement>('#save-system-settings');
+async function saveNetworkSettings(): Promise<void> {
+  if (networkSaving) return;
+  networkDraft = true;
+  renderNetworkMode();
+  renderSelectedAddressNote();
+  const note = $('#system-save-note');
   const payload = currentSystemSettingsPayload();
   const mode = payload.networkMode;
   const address = { adapterName: payload.sharedAdapter, address: payload.sharedIp };
   if (mode === 'shared' && (!address.adapterName || !address.address)) {
-    setNotice('error', '共享模式需要选择固定的网卡和 IPv4 地址。');
+    note.textContent = '请选择要共享的网卡和 IPv4 地址，选好后会自动应用。';
     return;
   }
-  setBusy(button, true, '正在保存…');
+  networkSaving = true;
+  note.textContent = '正在应用连接模式…';
+  updateSystemSettingsAvailability();
   try {
-    const memoryMode = selectedMemoryMode();
-    const saveMemory = memoryModeDirty();
     const result = await window.pmbrainDesktop.saveSystemSettings(payload);
-    applySystemSettingsState(result.state);
-    if (result.canceled) return;
-    if (saveMemory && memoryMode) {
-      await window.pmbrainDesktop.saveMemoryWriteback({ mode: memoryMode, notice_shown: true });
-      await refreshMemoryWriteback();
-    }
-    if (result.canceled) return;
-    if (mode === 'local') {
-      setNotice('success', '系统设置已保存，当前仅本机连接。');
+    applySystemSettingsState(result.state, true);
+    if (result.canceled) {
+      note.textContent = '已取消，连接模式保持原设置。';
+    } else if (mode === 'local') {
+      note.textContent = '已保存，当前仅本机连接。';
     } else if (result.state.gateway?.running) {
-      const pgliteNote = configuredEngine() === 'pglite'
-        ? ' 注意：当前是 PGLite，多人同时使用可能卡顿或不稳定，多用户请改用 Docker Postgres。'
-        : '';
-      setNotice('success', `共享入口已保存：${result.state.sharedMcpUrl || address.address}.${pgliteNote}`);
+      note.textContent = '已保存，共享已开启。请为成员创建独立凭证。';
     } else {
-      setNotice('success', '系统设置已保存；局域网共享仍保持停止，请按页面提示恢复固定网卡或 IPv4 后重新确认。');
+      note.textContent = result.state.warning || '设置已保存，共享尚未启动。请检查地址后重启共享。';
     }
   } catch (error) {
-    setNotice('error', error instanceof Error ? error.message : String(error));
+    note.textContent = error instanceof Error ? error.message : String(error);
+    try { applySystemSettingsState(await window.pmbrainDesktop.getSystemSettings(), true); } catch {}
   } finally {
-    setBusy(button, false, '保存系统设置');
+    networkSaving = false;
     updateSystemSettingsAvailability();
   }
 }
@@ -2470,9 +2409,9 @@ $<HTMLSelectElement>('#database-instance').addEventListener('change', (event) =>
 $<HTMLInputElement>('#database-url').addEventListener('input', () => {
   $<HTMLSelectElement>('#database-instance').value = '__manual__';
 });
-document.querySelectorAll<HTMLInputElement>('input[name="network-mode"]').forEach((input) => input.addEventListener('change', renderNetworkMode));
+document.querySelectorAll<HTMLInputElement>('input[name="network-mode"]').forEach((input) => input.addEventListener('change', () => void saveNetworkSettings()));
 document.querySelectorAll<HTMLInputElement>('input[name="memory-writeback"]').forEach((input) => input.addEventListener('change', () => void handleMemoryModeChange(input)));
-$<HTMLSelectElement>('#shared-address').addEventListener('change', renderSelectedAddressNote);
+$<HTMLSelectElement>('#shared-address').addEventListener('change', () => void saveNetworkSettings());
 (['chat', 'embedding'] as const).forEach(kind => {
   const select = $<HTMLSelectElement>(`#${kind}-provider`);
   select.addEventListener('mousedown', event => {
@@ -3024,7 +2963,6 @@ document.querySelectorAll<HTMLButtonElement>('.secret-toggle').forEach((button) 
   button.setAttribute('aria-label', shouldShow ? '隐藏 API Key' : '显示 API Key');
 }));
 $('#save-setup').addEventListener('click', () => void save());
-$('#save-system-settings').addEventListener('click', () => void saveSystemSettings());
 for (const id of ['launch-at-login', 'start-minimized', 'close-to-tray']) {
   $(`#${id}`).addEventListener('change', () => void saveDesktopBehavior());
 }
@@ -3034,6 +2972,7 @@ $('#memory-open-integrations').addEventListener('click', () => {
   switchPanel('integrations');
   refreshIntegrationPanel();
 });
+$('#network-open-integrations').addEventListener('click', () => { window.location.hash = 'mcp'; });
 $('#shared-open-admin').addEventListener('click', () => void window.pmbrainDesktop.openAdmin());
 $('#open-logs').addEventListener('click', () => void window.pmbrainDesktop.openLogs());
 $('#repair-prune-backups').addEventListener('click', () => void prunePgliteUpgradeBackups());

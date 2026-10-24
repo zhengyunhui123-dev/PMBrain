@@ -12,7 +12,10 @@ export function wantsSavedPlaybook(text: string): boolean {
 }
 
 export function needsCurrentEvidence(text: string): boolean {
-  return evidenceCue.test(text.replace(/\s+/g, ''));
+  const value = text.replace(/\s+/g, '');
+  const preferenceQuestion = /(?:偏好|习惯|风格|格式要求|长期规则)(?:是什么|有哪些|是怎样的|是什么样的)[？?。.]?$/.test(value)
+    && !/[，,；;\n]/.test(text) && !/生成|撰写|制作|输出|写一|帮我写|替我写|给我写/.test(value);
+  return evidenceCue.test(value) && !preferenceQuestion;
 }
 
 function pieces(text: string): string[] {

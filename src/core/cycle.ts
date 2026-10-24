@@ -472,6 +472,7 @@ export interface CycleOpts {
   signal?: AbortSignal;
   embedBatchSize?: number;
   getEmbedBatchSize?: () => number;
+  embedTimeBudgetMs?: number;
   /** Absolute deadline inherited from the owning Minion job. */
   deadlineAtMs?: number | null;
   /** Owning Minion job id for phase-created dream-inline private queues. */
@@ -1305,6 +1306,7 @@ async function runPhaseEmbed(
   signal?: AbortSignal,
   batchSize?: number,
   getBatchSize?: () => number,
+  timeBudgetMs?: number,
 ): Promise<PhaseResult> {
   try {
     const { loadConfig } = await import('./config.ts');
@@ -1337,6 +1339,7 @@ async function runPhaseEmbed(
       signal,
       batchSize,
       getBatchSize,
+      timeBudgetMs,
       quiet: true,
       onProgress: (done, total, embedded) => {
         const safeTotal = Math.max(1, total);
@@ -2724,6 +2727,7 @@ export async function runCycle(
           opts.signal,
           opts.embedBatchSize,
           opts.getEmbedBatchSize,
+          opts.embedTimeBudgetMs,
         ));
         result.duration_ms = duration_ms;
         phaseResults.push(result);

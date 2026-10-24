@@ -865,6 +865,53 @@ describe('embedAllStale wall-clock budget end-to-end (D3 + D3a)', () => {
     expect(writes.every(write => write.opts.replaceExisting === false)).toBe(true);
   });
 
+  test('an explicit stale time budget overrides the environment default', async () => {
+    const { runEmbedCore } = await import('../src/commands/embed.ts');
+    process.env.GBRAIN_EMBED_TIME_BUDGET_MS = '600000';
+    process.env.GBRAIN_EMBED_CONCURRENCY = '1';
+    const stale = Array.from({ length: 20 }, (_, chunk_index) => ({
+      slug: 'large-local-page',
+      chunk_index,
+      chunk_text: `chunk ${chunk_index}`,
+      chunk_source: 'compiled_truth' as const,
+      model: null,
+      token_count: 2,
+      source_id: 'default',
+      page_id: 1,
+    }));
+    const committed: number[] = [];
+    embedBatchBehavior = async (texts, rawOpts) => {
+      if (texts.length <= 12 && totalEmbedCalls === 1) {
+        return texts.map(() => new Float32Array(1536));
+      }
+      const signal = (rawOpts as { abortSignal?: AbortSignal } | undefined)?.abortSignal;
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(resolve, 5_000);
+        signal?.addEventListener('abort', () => {
+          clearTimeout(timer);
+          reject(new Error('embed budget aborted'));
+        }, { once: true });
+      });
+      return texts.map(() => new Float32Array(1536));
+    };
+    const engine = mockEngine({
+      countStaleChunks: async () => stale.length,
+      listStaleChunks: async () => stale,
+      getChunks: async () => stale.map(row => ({ ...row, embedded_at: null })),
+      upsertChunks: async (_slug: string, chunks: Array<{ chunk_index: number }>) => {
+        committed.push(...chunks.map(chunk => chunk.chunk_index));
+      },
+    });
+
+    const result = await runEmbedCore(engine, { stale: true, timeBudgetMs: 80 });
+
+    expect(committed).toEqual(Array.from({ length: 12 }, (_, i) => i));
+    expect(result.embedded).toBe(12);
+    expect(result.budgetExceeded).toBe(true);
+    expect(result.remainingChunks).toBe(8);
+    expect(result.status).toBe('partial');
+  });
+
   test('budget abort keeps completed local batches and reports a partial run', async () => {
     const { runEmbedCore } = await import('../src/commands/embed.ts');
     process.env.GBRAIN_EMBED_TIME_BUDGET_MS = '80';

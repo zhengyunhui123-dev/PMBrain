@@ -1,5 +1,5 @@
-const __vite__mapDeps=(i,m=__vite__mapDeps,d=(m.f||(m.f=["assets/src-78e4A-OV.js","assets/src-Bi7L9_9h.css"])))=>i.map(i=>d[i]);
-import{e as y,_ as k}from"./index-DGLMFpg9.js";import{r as e,j as n}from"./react-CTwocyy_.js";import"./ui-CHXAwXsU.js";const f=`
+const __vite__mapDeps=(i,m=__vite__mapDeps,d=(m.f||(m.f=["assets/src-Dz2KyOAj.js","assets/src-Bi7L9_9h.css"])))=>i.map(i=>d[i]);
+import{e as y,_ as k}from"./index-CP5umVqw.js";import{r as e,j as n}from"./react-CTwocyy_.js";import"./ui-CHXAwXsU.js";const f=`
     <main class="app-shell">
       <aside class="rail">
         <div class="brand">
@@ -464,7 +464,7 @@ import{e as y,_ as k}from"./index-DGLMFpg9.js";import{r as e,j as n}from"./react
 
         <section class="panel" id="panel-system">
           <div class="section-heading">
-            <div><span class="index">04</span><h2>系统设置</h2></div>
+            <div><span class="index">04</span><h2>网络与连接</h2></div><p>选择后自动保存并生效。</p>
           </div>
 
           <section class="system-block" aria-labelledby="network-mode-title">
@@ -491,23 +491,24 @@ import{e as y,_ as k}from"./index-DGLMFpg9.js";import{r as e,j as n}from"./react
               <article><span>03</span><b>员工 Agent</b><small>Bearer 凭证 · 独立权限</small></article>
             </div>
             <div class="gateway-status" id="gateway-status" role="status"><i></i><div><b>仅本机连接</b><small>共享网关未启动。</small></div><button type="button" class="gateway-restart" id="restart-shared-gateway" hidden><span>重启共享</span><i></i></button></div>
+            <p id="system-save-note" role="status" aria-live="polite"></p>
+            <button type="button" id="network-open-integrations" hidden>管理共享成员</button>
           </section>
 
           <section class="system-block" aria-labelledby="memory-writeback-title">
             <div class="subsection-heading"><div><span>04B / AGENT</span><h3 id="memory-writeback-title">AI 长期记忆</h3></div></div>
-            <p>让连接 PMBrain 的 AI 跨会话记住你的重要信息。内容保存在本地 Facts。默认关闭。</p>
+            <p>知识助手和已接入的 AI 共用这项设置。开启后，每轮对话结束会在后台保存值得记住的信息，下次对话按需使用。</p>
             <div class="network-mode-grid" role="radiogroup" aria-label="AI 长期记忆">
-              <label class="network-mode-card selected" id="memory-mode-off-card"><input id="memory-mode-off" type="radio" name="memory-writeback" value="off" checked /><span><b>关闭</b><small>不主动写 Facts。你说“记住”时仍可手动保存。</small></span></label>
+              <label class="network-mode-card selected" id="memory-mode-off-card"><input id="memory-mode-off" type="radio" name="memory-writeback" value="off" checked /><span><b>关闭</b><small>不自动保存新记忆。你说“记住”时仍可保存。</small></span></label>
               <label class="network-mode-card" id="memory-mode-salient-card"><input id="memory-mode-salient" type="radio" name="memory-writeback" value="salient" /><span><b>重要内容</b><small>只记偏好、决定、承诺和项目状态。推荐。</small></span><em>推荐</em></label>
               <label class="network-mode-card" id="memory-mode-all-card"><input id="memory-mode-all" type="radio" name="memory-writeback" value="all" /><span><b>全部事实</b><small>更积极保存你直接说的事实，仍排除寒暄和推测。</small></span></label>
             </div>
-            <div class="memory-setup-hint" id="memory-setup-hint" role="alert" hidden><div><b id="memory-setup-title">请先完成 MCP 接入</b><small id="memory-setup-detail">请先到“MCP 接入”更新至少一个 AI 客户端，验证连接后再开启长期记忆。</small></div><button type="button" id="memory-open-integrations">去 MCP 接入</button></div>
+            <p id="memory-save-note" role="status" aria-live="polite"></p>
+            <p id="memory-assistant-status" role="status">正在读取知识助手记忆设置…</p>
             <p class="engine-usage-hint" id="memory-shared-warning" hidden>共享模式开启自动记忆后，保存的事实可能被同一知识范围内获授权的成员读取。</p>
-            <p>临时记忆：按保存时设置的有效期过期　保存位置：本地 PMBrain Facts</p>
-            <div id="memory-agent-status"><small>已接入 Agent 状态将在本地服务启动后显示。</small></div>
+            <p id="memory-storage-note">记忆保存在当前知识库；原始对话保留在历史记录中。</p>
+            <details><summary>外部 AI 接入状态</summary><div id="memory-agent-status"></div><button type="button" id="memory-open-integrations">管理 MCP 接入</button></details>
           </section>
-
-          <div class="system-save-bar"><p id="system-save-note"></p><button class="primary" id="save-system-settings" disabled><span>保存系统设置</span><i></i></button></div>
         </section>
 
         <section class="panel" id="panel-desktop-behavior">
@@ -655,5 +656,4 @@ import{e as y,_ as k}from"./index-DGLMFpg9.js";import{r as e,j as n}from"./react
         </div>
       </div>
     </div>
-    
-  `;let t;function x({panel:s,visible:o,theme:p}){const i=e.useRef(null),[c,r]=e.useState(""),[v,h]=e.useState(!1),[u,b]=e.useState(!1),[m,l]=e.useState("");e.useEffect(()=>{!y()||!i.current||(i.current.childElementCount||(i.current.innerHTML=f),t??(t=k(()=>import("./src-78e4A-OV.js"),__vite__mapDeps([0,1]))),t.then(()=>h(!0)).catch(a=>r(String(a))))},[]),e.useEffect(()=>{if(!o||!t)return;let a=!0;return t.then(d=>{a&&d.activateSettingsPanel(s)}).catch(d=>r(String(d))),()=>{a=!1}},[s,o]);const g=async()=>{if(t){b(!0),l("");try{await(await t).saveDatabaseSettings(),l("数据库与资料目录已保存")}catch(a){l(String(a))}finally{b(!1)}}};return n.jsxs("div",{className:"desktop-settings-container",hidden:!o,children:[c&&n.jsx("p",{role:"alert",children:c}),n.jsx("div",{className:"desktop-settings",hidden:!v,"data-theme":p==="system"?window.matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light":p,ref:i}),s==="basic"&&v&&n.jsxs("div",{className:"database-save",children:[n.jsx("button",{disabled:u,onClick:g,children:u?"保存中…":"保存数据库与资料目录"}),m&&n.jsx("p",{role:"status",children:m})]})]})}export{x as DesktopSettings};
+`;let t;function x({panel:s,visible:o,theme:p}){const i=e.useRef(null),[c,r]=e.useState(""),[v,h]=e.useState(!1),[u,b]=e.useState(!1),[m,l]=e.useState("");e.useEffect(()=>{!y()||!i.current||(i.current.childElementCount||(i.current.innerHTML=f),t??(t=k(()=>import("./src-Dz2KyOAj.js"),__vite__mapDeps([0,1]))),t.then(()=>h(!0)).catch(a=>r(String(a))))},[]),e.useEffect(()=>{if(!o||!t)return;let a=!0;return t.then(d=>{a&&d.activateSettingsPanel(s)}).catch(d=>r(String(d))),()=>{a=!1}},[s,o]);const g=async()=>{if(t){b(!0),l("");try{await(await t).saveDatabaseSettings(),l("数据库与资料目录已保存")}catch(a){l(String(a))}finally{b(!1)}}};return n.jsxs("div",{className:"desktop-settings-container",hidden:!o,children:[c&&n.jsx("p",{role:"alert",children:c}),n.jsx("div",{className:"desktop-settings",hidden:!v,"data-theme":p==="system"?window.matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light":p,ref:i}),s==="basic"&&v&&n.jsxs("div",{className:"database-save",children:[n.jsx("button",{disabled:u,onClick:g,children:u?"保存中…":"保存数据库与资料目录"}),m&&n.jsx("p",{role:"status",children:m})]})]})}export{x as DesktopSettings};

@@ -27,6 +27,24 @@ const engine:BrainEngine = postgresUrl?new PostgresEngine():new PGLiteEngine();
 const store = new WorkbenchStore(join(root, 'sessions'));
 const coordinator = new WorkbenchMemoryCoordinator(engine, store, async () => ({ id: 'task-1', status: 'queued' } as any), async () => null);
 
+test('寒暄、纯指令和引用不创建记忆任务，也不要求提炼模型', async () => {
+  const getConfig = engine.getConfig;
+  let submissions = 0;
+  const capture = new WorkbenchMemoryCoordinator(engine, store, async () => { submissions++; return { id: 'task-skip', status: 'queued' } as any; }, async () => null);
+  try {
+    engine.getConfig = async function (key) { if (key === 'facts.extraction_model') throw new Error('不应读取提炼模型'); return getConfig.call(this, key); };
+    for (const text of ['谢谢', '请帮我生成一份报告', '> 项目计划下个月上线', '这个按钮怎么用？']) {
+      const f = await turn(text);
+      f.message.memory = await capture.capture(f.conversation, f.message);
+      store.save(f.conversation);
+      expect(f.message.memory.status).toBe('complete');
+      expect(f.message.memory.factIds).toEqual([]);
+      await capture.scan(f.conversation.id);
+    }
+    expect(submissions).toBe(0);
+  } finally { engine.getConfig = getConfig; capture.close(); }
+}, 60000);
+
 test('模型解析失败保留可恢复身份，修复配置自动提交同一回合且不补写关闭消息', async () => {
   const file = join(root, '.pmbrain', 'config.json');
   const previousConfig = readFileSync(file, 'utf8');

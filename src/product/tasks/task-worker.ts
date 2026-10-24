@@ -260,6 +260,7 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
     embedPageLimit: input.maxPages,
     embedBatchSize: constrained?32:100,
     getEmbedBatchSize:()=>constrained?32:100,
+    embedTimeBudgetMs: 10 * 60 * 1000,
     proposeTakesRequireChunks: true,
     proposeTakesDrain: input.drainProposals,
     proposeTakesWindowMs: (input.windowSeconds ?? 3600) * 1000,

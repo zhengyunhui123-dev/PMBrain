@@ -30,6 +30,7 @@ export interface SystemSettingsControllerDependencies {
   getMainWindow: () => BrowserWindow | null;
   refreshTray: () => void;
   convergeMemoryRules: () => Promise<void>;
+  listNetworkCandidates?: typeof listNetworkCandidates;
 }
 
 export class SystemSettingsController {
@@ -56,7 +57,7 @@ export class SystemSettingsController {
 
   currentState(): DesktopSystemSettingsState {
     const preferences = getDesktopPreferences();
-    const candidates = listNetworkCandidates();
+    const candidates = (this.dependencies.listNetworkCandidates ?? listNetworkCandidates)();
     const selectedCandidate = candidates.find(candidate => (
       candidate.adapterName === preferences.sharedAdapter && candidate.address === preferences.sharedIp
     ));
@@ -89,10 +90,7 @@ export class SystemSettingsController {
       method: 'POST',
       body: JSON.stringify(payload),
     });
-    if(payload.mode){
-      try { await this.dependencies.convergeMemoryRules(); }
-      finally { await sidecar.restart(); }
-    }
+    if (payload.mode) await this.dependencies.convergeMemoryRules();
     return state;
   }
 
@@ -121,7 +119,7 @@ export class SystemSettingsController {
 
   async save(payload: DesktopSystemSettingsPayload): Promise<DesktopSystemSettingsSaveResult> {
     const current = getDesktopPreferences();
-    const candidates = listNetworkCandidates();
+    const candidates = (this.dependencies.listNetworkCandidates ?? listNetworkCandidates)();
     const selected = payload.networkMode === 'shared'
       ? candidates.find(candidate => (
         candidate.adapterName === payload.sharedAdapter
@@ -182,9 +180,9 @@ export class SystemSettingsController {
         ? false
         : current.sharedResumeRequired,
     });
-    const themeBackup = saveDesktopTheme(payload.theme);
-    this.applyTheme(payload.theme);
-    this.setLaunchAtLogin(payload.launchAtLogin === true);
+    const themeBackup = payload.theme === undefined ? null : saveDesktopTheme(payload.theme);
+    if (payload.theme !== undefined) this.applyTheme(payload.theme);
+    if (payload.launchAtLogin !== undefined) this.setLaunchAtLogin(payload.launchAtLogin === true);
     this.dependencies.lan.resetAfterSettingsSave(saved.preferences.sharedResumeRequired);
     const gateway = await this.dependencies.lan.reconcile();
     if (payload.networkMode === 'shared' && networkApplyRequested && !gateway) {
