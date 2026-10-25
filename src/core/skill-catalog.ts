@@ -28,6 +28,55 @@ import {
 const MAX_SKILL_MD_BYTES = 256 * 1024;
 type CatalogSource = SkillsDirSource | 'config';
 
+export interface SharedSkillRecord {
+  name: string;
+  description: string;
+  triggers: string[];
+  tools: string[];
+  body: string;
+}
+
+let readSharedSkills: (() => Promise<SharedSkillRecord[]>) | undefined;
+
+export function setSharedSkillReader(reader: (() => Promise<SharedSkillRecord[]>) | undefined): void {
+  readSharedSkills = reader;
+}
+
+export async function readSharedSkillsSafe(): Promise<SharedSkillRecord[]> {
+  if (!readSharedSkills) return [];
+  try {
+    const skills = await readSharedSkills();
+    return skills.filter(skill => skill.name.startsWith('user__') && !/[/\\]|\.\.|\0/.test(skill.name));
+  } catch {
+    return [];
+  }
+}
+
+export function appendSharedSkills<T extends { count: number; skills: Array<Record<string, unknown>> }>(catalog: T, shared: SharedSkillRecord[], section?: string): T {
+  if (section && section !== 'skill_frontmatter') return catalog;
+  for (const skill of shared) {
+    if (catalog.skills.some(row => row.name === skill.name)) continue;
+    catalog.skills.push({ name: skill.name, description: skill.description, section: 'skill_frontmatter', triggers: skill.triggers, tools: skill.tools, writes_pages: false, mutating: false });
+  }
+  catalog.skills.sort((left, right) => String(left.name).localeCompare(String(right.name)));
+  catalog.count = catalog.skills.length;
+  return catalog;
+}
+
+export function sharedSkillDetail(skill: SharedSkillRecord): Record<string, unknown> {
+  return {
+    schema_version: 1,
+    name: skill.name,
+    frontmatter: { name: skill.name, description: skill.description, triggers: skill.triggers, tools: skill.tools, writes_pages: false, mutating: false },
+    body: skill.body,
+    client_guidance: {
+      nature: SKILL_CLIENT_GUIDANCE.nature,
+      protocol: [...SKILL_CLIENT_GUIDANCE.protocol, 'This custom skill was explicitly shared by the owner. Reading it does not grant new tools or write permission.'],
+      mutating: false,
+    },
+  };
+}
+
 /**
  * New installs and local sidecar should publish the skill catalog, matching
  * GBrain init. Explicit `false` on either config plane is left alone.

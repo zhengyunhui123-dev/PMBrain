@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync } from 'node:f
 import { join, relative, resolve } from 'node:path';
 import { atomicWriteFileSync } from '../../core/atomic-write';
 import { parseSkillFrontmatter } from '../../core/skill-frontmatter';
+import { confirmsSkillDraft, skillDraftFromRequest, wantsSavedSkill, wantsSkillDraft } from './playbook';
 
 const READ_TOOLS = ['search', 'query', 'get_page', 'knowledge_search', 'knowledge_read', 'memory_recall', 'local_files', 'local_read', 'local_mkdir', 'artifact_save', 'artifact_list', 'artifact_read', 'artifact_revise'];
 const WRITE_TOOLS = ['knowledge_append', 'knowledge_organize', 'memory_remember', 'memory_forget', 'put_page', 'add_link', 'add_timeline_entry'];
@@ -23,6 +24,18 @@ export interface SkillCard {
   enabled: boolean;
   manual: boolean;
   body?: string;
+  assistants: string[];
+  shared: boolean;
+  schedule?: SkillSchedule;
+}
+
+export interface SkillSchedule {
+  enabled: boolean;
+  weekdays: number[];
+  time: string;
+  timezone: string;
+  prompt: string;
+  assistantId: string;
 }
 
 export interface SkillRun {
@@ -40,10 +53,17 @@ export interface SkillPlan {
   skills: Array<{ name: string; displayName: string }>;
 }
 
+interface PendingSkill extends SkillDraft { at: string }
+
 interface SkillState {
   disabled: string[];
   manual: string[];
   runs: SkillRun[];
+  shared: string[];
+  audiences: Record<string, string[]>;
+  schedules: Record<string, SkillSchedule>;
+  scheduleMarks: Record<string, { slot: string; runId?: string }>;
+  pending: Record<string, PendingSkill>;
 }
 
 export interface SkillDraft {
@@ -60,10 +80,10 @@ const lookup = '先调用 knowledge_search 检索已授权知识来源。query �
 const meeting = '从用户给出的会议材料、已授权知识和本地文件中提取决定、责任人和行动项。缺的信息集中列出。整理成会议纪要后调用 artifact_save 保存，不要改写知识库页面，也不要调用会议入库类写入工具。';
 
 export const PRODUCT_SKILLS: SkillCard[] = [
-  { name: 'knowledge-search', displayName: '知识库检索', description: '检索资料、事实和关系，生成有来源的回答', triggers: ['检索资料', '查知识库', '我们知道', '查找资料'], tools: ['knowledge_search', 'knowledge_read'], supported: true, missingTools: [], permission: 'read', origin: 'builtin', kind: 'product', enabled: true, manual: false, body: lookup },
-  { name: 'knowledge-organize', displayName: '深度知识整理', description: '调用现有知识整理流程，不另写一套整理步骤', triggers: ['深度整理', '整理知识库', '开始整理知识'], tools: ['knowledge_organize'], supported: false, missingTools: [], permission: 'write', origin: 'builtin', kind: 'product', enabled: true, manual: false },
-  { name: 'weekly-report', displayName: '周报写作', description: '依据真实工作记录写周报并交付文件', triggers: ['周报', '写周报', '项目周报', '本周工作'], tools: ['knowledge_search', 'knowledge_read', 'artifact_save'], supported: true, missingTools: [], permission: 'read', origin: 'builtin', kind: 'product', enabled: true, manual: false, body: weekly },
-  { name: 'meeting-notes', displayName: '会议纪要', description: '整理会议记录、决定和行动项，并保存成文件', triggers: ['会议纪要', '会议记录', '整理会议'], tools: ['knowledge_search', 'knowledge_read', 'artifact_save'], supported: true, missingTools: [], permission: 'read', origin: 'builtin', kind: 'product', enabled: true, manual: false, body: meeting },
+  { name: 'knowledge-search', displayName: '知识库检索', description: '检索资料、事实和关系，生成有来源的回答', triggers: ['检索资料', '查知识库', '我们知道', '查找资料'], tools: ['knowledge_search', 'knowledge_read'], supported: true, missingTools: [], permission: 'read', origin: 'builtin', kind: 'product', enabled: true, manual: false, assistants: [], shared: false, body: lookup },
+  { name: 'knowledge-organize', displayName: '深度知识整理', description: '调用现有知识整理流程，不另写一套整理步骤', triggers: ['深度整理', '整理知识库', '开始整理知识'], tools: ['knowledge_organize'], supported: false, missingTools: [], permission: 'write', origin: 'builtin', kind: 'product', enabled: true, manual: false, assistants: [], shared: false },
+  { name: 'weekly-report', displayName: '周报写作', description: '依据真实工作记录写周报并交付文件', triggers: ['周报', '写周报', '项目周报', '本周工作'], tools: ['knowledge_search', 'knowledge_read', 'artifact_save'], supported: true, missingTools: [], permission: 'read', origin: 'builtin', kind: 'product', enabled: true, manual: false, assistants: [], shared: false, body: weekly },
+  { name: 'meeting-notes', displayName: '会议纪要', description: '整理会议记录、决定和行动项，并保存成文件', triggers: ['会议纪要', '会议记录', '整理会议'], tools: ['knowledge_search', 'knowledge_read', 'artifact_save'], supported: true, missingTools: [], permission: 'read', origin: 'builtin', kind: 'product', enabled: true, manual: false, assistants: [], shared: false, body: meeting },
 ];
 
 export function productSkillBody(name: string): string | undefined {
@@ -71,7 +91,7 @@ export function productSkillBody(name: string): string | undefined {
 }
 
 function emptyState(): SkillState {
-  return { disabled: [], manual: [], runs: [] };
+  return { disabled: [], manual: [], runs: [], shared: [], audiences: {}, schedules: {}, scheduleMarks: {}, pending: {} };
 }
 
 function yamlQuote(value: string): string {
@@ -122,11 +142,18 @@ function mentions(card: SkillCard, text: string): boolean {
   });
 }
 
-export function planTurnSkills(input: { text: string; notes?: string; pinned: string[]; follow: boolean; cards: SkillCard[] }): SkillPlan {
+function allowed(card: SkillCard, agentId: string | undefined, text: string): boolean {
+  if (!card.assistants?.length) return true;
+  if (agentId && card.assistants.includes(agentId)) return true;
+  const display = normalized(card.displayName);
+  return display.length >= 2 && normalized(text).includes(display);
+}
+
+export function planTurnSkills(input: { text: string; notes?: string; pinned: string[]; follow: boolean; cards: SkillCard[]; agentId?: string }): SkillPlan {
   const text = `${input.text}\n${input.notes ?? ''}`;
   const named = input.cards.find(card => !card.enabled && mentions(card, text));
   const pool = input.cards.filter(card => {
-    if (!card.enabled) return false;
+    if (!card.enabled || !allowed(card, input.agentId, text)) return false;
     if (card.kind === 'library') return input.pinned.includes(card.name);
     return true;
   });
@@ -135,7 +162,7 @@ export function planTurnSkills(input: { text: string; notes?: string; pinned: st
   if (!scored.length) {
     if (named) return finish([], `技能「${named.displayName}」已停用，不会自动调用。`);
     if (input.follow) {
-      const pinned = input.cards.filter(card => input.pinned.includes(card.name) && card.enabled && card.supported && card.permission === 'read' && card.kind !== 'library');
+      const pinned = input.cards.filter(card => input.pinned.includes(card.name) && card.enabled && card.supported && card.permission === 'read' && card.kind !== 'library' && allowed(card, input.agentId, text));
       if (pinned.length > 0 && pinned.length <= 2) return finish(pinned);
     }
     return finish([]);
@@ -160,7 +187,7 @@ function assertSlug(slug: string): string {
 }
 
 export class SkillCenter {
-  constructor(readonly root: string, private builtins: () => Promise<SkillCard[]>, private readLibrary?: (name: string) => Promise<string>) {}
+  constructor(readonly root: string, private builtins: () => SkillCard[] | Promise<SkillCard[]>, private readLibrary?: (name: string) => Promise<string>) {}
 
   private statePath(): string {
     return join(this.root, 'skill-center.json');
@@ -171,7 +198,10 @@ export class SkillCenter {
     if (!existsSync(path)) return emptyState();
     try {
       const value = JSON.parse(readFileSync(path, 'utf8')) as SkillState;
-      return { disabled: Array.isArray(value.disabled) ? value.disabled.filter(item => typeof item === 'string') : [], manual: Array.isArray(value.manual) ? value.manual.filter(item => typeof item === 'string') : [], runs: Array.isArray(value.runs) ? value.runs.filter(item => item && typeof item.name === 'string').slice(0, MAX_RUNS) : [] };
+      const ids = (items: unknown) => Array.isArray(items) ? items.filter(item => typeof item === 'string' && /^[A-Za-z0-9_-]{1,80}$/.test(item)).slice(0, 40) : [];
+      const audiences: SkillState['audiences'] = {};
+      for (const [name, agents] of Object.entries(value.audiences ?? {})) if (typeof name === 'string') audiences[name] = ids(agents);
+      return { disabled: ids(value.disabled), manual: ids(value.manual), runs: Array.isArray(value.runs) ? value.runs.filter(item => item && typeof item.name === 'string').slice(0, MAX_RUNS) : [], shared: ids(value.shared), audiences, schedules: value.schedules && typeof value.schedules === 'object' ? value.schedules : {}, scheduleMarks: value.scheduleMarks && typeof value.scheduleMarks === 'object' ? value.scheduleMarks : {}, pending: value.pending && typeof value.pending === 'object' ? value.pending : {} };
     } catch {
       return emptyState();
     }
@@ -204,7 +234,7 @@ export class SkillCenter {
         const content = readFileSync(file, 'utf8');
         return [this.cardFromMarkdown(`user__${entry.name}`, content)];
       } catch {
-        return [{ name: `user__${entry.name}`, displayName: entry.name, description: '这个技能文件无法读取', triggers: [], tools: [], supported: false, missingTools: [], permission: 'read' as const, origin: 'custom' as const, kind: 'custom' as const, enabled: false, manual: false }];
+        return [{ name: `user__${entry.name}`, displayName: entry.name, description: '这个技能文件无法读取', triggers: [], tools: [], supported: false, missingTools: [], permission: 'read' as const, origin: 'custom' as const, kind: 'custom' as const, enabled: false, manual: false, assistants: [], shared: false }];
       }
     });
   }
@@ -215,7 +245,7 @@ export class SkillCenter {
     const classified = classifySkillTools(tools, { mutating: frontmatter?.mutating, writesPages: frontmatter?.writes_pages });
     const heading = content.match(/^#\s+(.+)$/m)?.[1]?.trim();
     const description = content.match(/^description:\s*(\[[^\]]*\]|"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|.+)$/m)?.[1]?.trim().replace(/^["']|["']$/g, '') ?? '';
-    return { name, displayName: heading || frontmatter?.name || name.replace(/^user__/, ''), description: description === '|' || description === '>' ? '' : description, triggers: frontmatter?.triggers ?? [], tools, ...classified, origin: 'custom', kind: 'custom', enabled: true, manual: false, body: content.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, '').replace(/^#\s+.+\r?\n?/, '').trim() };
+    return { name, displayName: heading || frontmatter?.name || name.replace(/^user__/, ''), description: description === '|' || description === '>' ? '' : description, triggers: frontmatter?.triggers ?? [], tools, ...classified, origin: 'custom', kind: 'custom', enabled: true, manual: false, assistants: [], shared: false, body: content.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, '').replace(/^#\s+.+\r?\n?/, '').trim() };
   }
 
   private render(slug: string, draft: SkillDraft): string {
@@ -251,16 +281,25 @@ export class SkillCenter {
     return { displayName, description, triggers, tools, steps, manual: input.manual === true };
   }
 
-  async list(): Promise<SkillCard[]> {
+  private overlay(builtin: SkillCard[]): SkillCard[] {
     const state = this.readState();
-    const builtin = await this.builtins();
     const cards = [...builtin, ...this.readCustom()];
     const seen = new Set<string>();
     return cards.filter(card => {
       if (seen.has(card.name)) return false;
       seen.add(card.name);
       return true;
-    }).map(card => ({ ...card, enabled: !state.disabled.includes(card.name), manual: state.manual.includes(card.name) })).sort((left, right) => Number(left.kind !== 'product') - Number(right.kind !== 'product') || Number(left.kind === 'library') - Number(right.kind === 'library') || left.displayName.localeCompare(right.displayName, 'zh'));
+    }).map(card => ({ ...card, enabled: !state.disabled.includes(card.name), manual: state.manual.includes(card.name), shared: state.shared.includes(card.name), assistants: state.audiences[card.name] ?? [], ...(state.schedules[card.name] ? { schedule: state.schedules[card.name] } : {}) })).sort((left, right) => Number(left.kind !== 'product') - Number(right.kind !== 'product') || Number(left.kind === 'library') - Number(right.kind === 'library') || left.displayName.localeCompare(right.displayName, 'zh'));
+  }
+
+  private listed(): SkillCard[] {
+    const builtin = this.builtins();
+    if (typeof (builtin as Promise<SkillCard[]>).then === 'function') throw new Error('技能目录还在读取');
+    return this.overlay(builtin as SkillCard[]);
+  }
+
+  async list(): Promise<SkillCard[]> {
+    return this.overlay(await this.builtins());
   }
 
   async detail(name: string): Promise<{ skill: SkillCard; runs: SkillRun[] }> {
@@ -278,14 +317,23 @@ export class SkillCenter {
     return { skill, runs: this.readState().runs.filter(run => run.name === name).slice(0, 20) };
   }
 
-  async create(input: SkillDraft): Promise<SkillCard> {
+  private insert(input: SkillDraft, cards: SkillCard[]): string {
     const draft = this.draft(input);
-    const cards = await this.list();
     if (cards.some(card => card.displayName === draft.displayName)) throw new Error('已有同名技能');
     const slug = this.allocate(draft.displayName, cards);
     this.writeSkill(slug, draft);
     if (draft.manual) this.setManual(`user__${slug}`, true);
+    return slug;
+  }
+
+  async create(input: SkillDraft): Promise<SkillCard> {
+    const slug = this.insert(input, await this.list());
     return (await this.list()).find(card => card.name === `user__${slug}`)!;
+  }
+
+  private createNow(input: SkillDraft): SkillCard {
+    const slug = this.insert(input, this.listed());
+    return this.listed().find(card => card.name === `user__${slug}`)!;
   }
 
   async update(name: string, input: SkillDraft): Promise<SkillCard> {
@@ -347,8 +395,120 @@ export class SkillCenter {
     const state = this.readState();
     state.disabled = state.disabled.filter(item => item !== name);
     state.manual = state.manual.filter(item => item !== name);
+    state.shared = state.shared.filter(item => item !== name);
+    delete state.audiences[name];
+    delete state.schedules[name];
+    delete state.scheduleMarks[name];
     this.writeState(state);
     return { removed: true };
+  }
+
+  private playbookDraft(playbook: { name: string; when: string; inputs: string; steps: string[]; checks: string; output: string; approval: string }): SkillDraft {
+    const steps = [`需要的资料：${playbook.inputs}`, ...playbook.steps, `核对：${playbook.checks}`, `交付：${playbook.output}`, `确认：${playbook.approval}`].join('\n');
+    return { displayName: playbook.name.slice(0, 40), description: playbook.when.slice(0, 240), triggers: [playbook.name.slice(0, 40)], tools: ['knowledge_search', 'knowledge_read', 'artifact_save'], steps };
+  }
+
+  async createFromPlaybook(playbook: { name: string; when: string; inputs: string; steps: string[]; checks: string; output: string; approval: string }): Promise<SkillCard> {
+    return this.create(this.playbookDraft(playbook));
+  }
+
+  propose(conversationId: string, draft: SkillDraft): SkillDraft {
+    const next = this.draft(draft);
+    const state = this.readState();
+    const entries = Object.entries(state.pending);
+    if (entries.length >= 20 && !state.pending[conversationId]) {
+      entries.sort((left, right) => left[1].at.localeCompare(right[1].at));
+      delete state.pending[entries[0]![0]];
+    }
+    state.pending[conversationId] = { ...next, at: new Date().toISOString() };
+    this.writeState(state);
+    return next;
+  }
+
+  private takePending(conversationId: string): SkillDraft {
+    const state = this.readState();
+    const draft = state.pending[conversationId];
+    if (!draft) throw new Error('这个对话里没有待确认的技能');
+    delete state.pending[conversationId];
+    this.writeState(state);
+    return draft;
+  }
+
+  async confirm(conversationId: string): Promise<SkillCard> {
+    return this.create(this.takePending(conversationId));
+  }
+
+  applyConversation(input: { conversationId: string; text: string; playbook?: { name: string; when: string; inputs: string; steps: string[]; checks: string; output: string; approval: string } | null; compile: () => { name: string; when: string; inputs: string; steps: string[]; checks: string; output: string; approval: string } }): { handled: boolean; notice?: string; saved?: string } {
+    try {
+      if (wantsSavedSkill(input.text)) {
+        const skill = this.createNow(this.playbookDraft(input.playbook ?? input.compile()));
+        return { handled: true, saved: skill.displayName, notice: `已把这次的做法存成技能「${skill.displayName}」。其他助手也可以使用。` };
+      }
+      if (confirmsSkillDraft(input.text)) {
+        const skill = this.createNow(this.takePending(input.conversationId));
+        return { handled: true, saved: skill.displayName, notice: `已创建技能「${skill.displayName}」，下一句就能使用。` };
+      }
+      if (wantsSkillDraft(input.text)) {
+        const draft = skillDraftFromRequest(input.text);
+        if (!draft) return { handled: true, notice: '请说清技能名称，例如：创建一个产品需求分析技能。' };
+        this.propose(input.conversationId, draft);
+        return { handled: true, notice: `准备创建技能「${draft.displayName}」。触发条件是「${draft.triggers[0]}」。回复「确认创建这个技能」后才会保存。` };
+      }
+      return { handled: false };
+    } catch (error) {
+      return { handled: true, notice: error instanceof Error ? error.message : String(error) };
+    }
+  }
+
+  async setShared(name: string, shared: boolean): Promise<SkillCard> {
+    const card = (await this.list()).find(item => item.name === name);
+    if (!card) throw new Error('技能不存在');
+    if (shared && (card.kind !== 'custom' || !card.supported)) throw new Error('只有自己创建、且可以自动执行的技能才能分享给外部 AI');
+    const state = this.readState();
+    state.shared = shared ? [...new Set([...state.shared, name])] : state.shared.filter(item => item !== name);
+    this.writeState(state);
+    return (await this.list()).find(item => item.name === name)!;
+  }
+
+  async setAudience(name: string, assistants: string[]): Promise<SkillCard> {
+    const card = (await this.list()).find(item => item.name === name);
+    if (!card) throw new Error('技能不存在');
+    if (!Array.isArray(assistants) || assistants.length > 40 || assistants.some(id => !/^[A-Za-z0-9_-]{1,80}$/.test(id))) throw new Error('请选择有效的助手');
+    const state = this.readState();
+    if (assistants.length) state.audiences[name] = [...new Set(assistants)];
+    else delete state.audiences[name];
+    this.writeState(state);
+    return (await this.list()).find(item => item.name === name)!;
+  }
+
+  async setSchedule(name: string, schedule: SkillSchedule | null): Promise<SkillCard> {
+    const card = (await this.list()).find(item => item.name === name);
+    if (!card) throw new Error('技能不存在');
+    const state = this.readState();
+    if (!schedule) {
+      delete state.schedules[name];
+      delete state.scheduleMarks[name];
+    } else {
+      if (!card.supported) throw new Error('这个技能不能自动执行，不能定时');
+      if (!Array.isArray(schedule.weekdays) || !schedule.weekdays.length || schedule.weekdays.some(day => !Number.isInteger(day) || day < 0 || day > 6)) throw new Error('请选择有效的执行日期');
+      if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(schedule.time)) throw new Error('执行时间需为 HH:mm');
+      new Intl.DateTimeFormat('en', { timeZone: schedule.timezone }).format();
+      if (!schedule.prompt.trim() || schedule.prompt.length > 8000) throw new Error('请填写定时任务要求');
+      if (!/^[A-Za-z0-9_-]{1,80}$/.test(schedule.assistantId)) throw new Error('请选择执行这个技能的助手');
+      state.schedules[name] = { enabled: schedule.enabled !== false, weekdays: [...new Set(schedule.weekdays)], time: schedule.time, timezone: schedule.timezone, prompt: schedule.prompt.trim(), assistantId: schedule.assistantId };
+    }
+    this.writeState(state);
+    return (await this.list()).find(item => item.name === name)!;
+  }
+
+  markSchedule(name: string, slot: string, runId?: string) {
+    const state = this.readState();
+    state.scheduleMarks[name] = { slot, ...(runId ? { runId } : {}) };
+    this.writeState(state);
+  }
+
+  scheduleMarks(): Record<string, { slot: string; runId?: string }> {
+    return this.readState().scheduleMarks;
   }
 
   record(run: SkillRun) {
@@ -356,6 +516,17 @@ export class SkillCenter {
     state.runs = [{ ...run, excerpt: run.excerpt.replace(/\s+/g, ' ').trim().slice(0, 80), at: run.at || new Date().toISOString() }, ...state.runs].slice(0, MAX_RUNS);
     this.writeState(state);
   }
+}
+
+export async function sharedMcpSkills(root: string): Promise<Array<{ name: string; description: string; triggers: string[]; tools: string[]; body: string }>> {
+  const center = new SkillCenter(root, async () => []);
+  const shared = [];
+  for (const card of await center.list()) {
+    if (!card.shared || !card.supported || card.kind !== 'custom') continue;
+    const detail = await center.detail(card.name);
+    shared.push({ name: card.name, description: card.description, triggers: card.triggers, tools: card.tools, body: detail.skill.body ?? '' });
+  }
+  return shared;
 }
 
 

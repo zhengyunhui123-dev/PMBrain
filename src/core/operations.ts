@@ -2229,11 +2229,8 @@ const list_skills: Operation = {
     }
     const override = ctx.skillsDir ?? await catalog.readMcpSkillsDir(ctx);
     const resolved = catalog.resolveSkillsDir(ctx, override);
-    return catalog.buildSkillCatalog(
-      resolved.dir,
-      resolved.source,
-      typeof params.section === 'string' ? params.section : undefined,
-    );
+    const section = typeof params.section === 'string' ? params.section : undefined;
+    return catalog.appendSharedSkills(catalog.buildSkillCatalog(resolved.dir, resolved.source, section), await catalog.readSharedSkillsSafe(), section);
   },
   scope: 'read',
   cliHints: { name: 'skills' },
@@ -2255,9 +2252,15 @@ const get_skill: Operation = {
       const publish = await catalog.readMcpPublishSkills(ctx);
       catalog.assertPublishEnabled(ctx, publish);
     }
+    const name = String(params.name ?? '');
+    if (name.startsWith('user__')) {
+      const skill = (await catalog.readSharedSkillsSafe()).find(item => item.name === name);
+      if (!skill) throw new OperationError('page_not_found', `Skill not found: ${name}`, 'Call list_skills first.');
+      return catalog.sharedSkillDetail(skill);
+    }
     const override = ctx.skillsDir ?? await catalog.readMcpSkillsDir(ctx);
     const resolved = catalog.resolveSkillsDir(ctx, override);
-    return catalog.getSkillDetail(resolved.dir, String(params.name ?? ''));
+    return catalog.getSkillDetail(resolved.dir, name);
   },
   scope: 'read',
   cliHints: { name: 'skill', positional: ['name'] },

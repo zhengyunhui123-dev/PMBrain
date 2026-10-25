@@ -4,11 +4,36 @@ import { compactRule, instructional } from './turn-policy';
 export const EVIDENCE_GAP_TEXT = '这次没有查到可用材料。没有写完整稿，也没有沿用以前的成果。';
 export const CURRENT_EVIDENCE_RULE = '这一次的事实只来自这次检索和用户这次给出的材料。更早的对话、已保存的记忆和上一份成果都不是本期事实。回答先说明查到了什么。没有查到材料时，只说明没有材料并停止，不要写完整稿，也不要沿用以前的成果。';
 export const SCHEDULE_STOP = '只使用这次查到的本期资料。没有查到材料时说明没有材料并停止，不要沿用上一份成果。';
-const saveCue = /就按这次的存下来|按这次的存下来|按这次存下来|存成做法|保存为技能|存成技能|以后按这次/;
+const saveCue = /就按这次的存下来|按这次的存下来|按这次存下来|存成做法|以后按这次/;
+const skillSaveCue = /保存为技能|存成技能|存为技能|转成技能|转为技能/;
+const skillConfirmCue = /确认创建这个技能|确认保存技能|就按这个创建技能|就按这个保存技能|可以创建这个技能/;
 const evidenceCue = /周报|报销|报告|本周|本期|做法|还是按|生成本/;
 
 export function wantsSavedPlaybook(text: string): boolean {
   return saveCue.test(text.replace(/\s+/g, ''));
+}
+
+export function wantsSavedSkill(text: string): boolean {
+  return skillSaveCue.test(text.replace(/\s+/g, ''));
+}
+
+export function confirmsSkillDraft(text: string): boolean {
+  return skillConfirmCue.test(text.replace(/\s+/g, ''));
+}
+
+export function wantsSkillDraft(text: string): boolean {
+  const value = text.replace(/\s+/g, '');
+  if (skillSaveCue.test(value) || skillConfirmCue.test(value)) return false;
+  return /技能/.test(value) && /创建|新建|生成|做一个|建一个|建个/.test(value);
+}
+
+export function skillDraftFromRequest(text: string): { displayName: string; description: string; triggers: string[]; tools: string[]; steps: string } | undefined {
+  const named = text.replace(/\s+/g, '').match(/(?:创建|新建|生成|做|建)(?:一个|个)?([^，。,；;]{2,30}?)技能/);
+  const displayName = named?.[1]?.replace(/^(?:帮我|请你|请|给我|为我)/, '').replace(/^(?:一个|个)/, '') ?? '';
+  if (displayName.length < 2 || displayName.length > 40) return undefined;
+  const tail = text.split(/技能/).slice(1).join('技能').replace(/^[\s，,：:]+/, '').trim();
+  const steps = (tail.length >= 4 ? tail : `按「${displayName}」的要求完成。先检索已授权资料，再整理结果并保存文件。缺少材料就说明，不要编造。`).slice(0, 16000);
+  return { displayName, description: `${displayName}。按用户确认的步骤完成并保存结果。`.slice(0, 240), triggers: [displayName], tools: ['knowledge_search', 'knowledge_read', 'artifact_save'], steps };
 }
 
 export function needsCurrentEvidence(text: string): boolean {
@@ -87,13 +112,14 @@ function clip(text: string): string {
   return chars.length <= 28 ? chars.join('') : `${chars.slice(0, 28).join('')}…`;
 }
 
-export function activityLine(messages: Array<{ role: string; text?: string; status?: string; evidenceGap?: boolean; artifacts?: Array<{ title?: string }>; savedPlaybook?: string; ruleNotice?: string; toolCalls?: Array<{ name: string; status: string; output?: string }> }>, running: boolean): string {
+export function activityLine(messages: Array<{ role: string; text?: string; status?: string; evidenceGap?: boolean; artifacts?: Array<{ title?: string }>; savedPlaybook?: string; savedSkill?: string; ruleNotice?: string; toolCalls?: Array<{ name: string; status: string; output?: string }> }>, running: boolean): string {
   if (running) return '正在处理';
   const assistant = [...messages].reverse().find(message => message.role === 'assistant' && message.status !== 'running' && message.status !== 'error' && message.status !== 'cancelled');
   if (!assistant) return '';
   if (assistant.evidenceGap) return '没有查到本期材料';
   const title = assistant.artifacts?.find(item => item.title)?.title;
   if (title) return clip(`已保存${title}`);
+  if (assistant.savedSkill) return '已存成技能';
   if (assistant.savedPlaybook) return '已存成做法';
   for (const call of [...(assistant.toolCalls ?? [])].reverse()) {
     if (call.status !== 'complete' || (call.name !== 'assistant_create' && call.name !== 'assistant_update') || !call.output) continue;

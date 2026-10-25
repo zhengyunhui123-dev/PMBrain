@@ -10,6 +10,7 @@ import { memoryVersion } from './memory-identity';
 import { WorkbenchAgentStore } from './agents';
 import type { WorkbenchAgent } from '../../../shared/workbench-agents';
 import { compilePlaybook, EVIDENCE_GAP_TEXT, needsCurrentEvidence, visibleAssistantText, wantsSavedPlaybook } from './playbook';
+import { PRODUCT_SKILLS, SkillCenter } from './skill-center';
 import { advanceTask, noteTask, rememberTaskMaterials, taskUserTexts } from './task-context';
 import { decidePending } from './pending';
 import { completedDirectories, completedDirectory, listWorkbenchArtifacts } from './files';
@@ -287,6 +288,8 @@ export class WorkbenchService {
     let carriedReplaced: string[] | undefined;
     let carriedPlaybookNotice: string | undefined;
     let carriedPlaybook: string | undefined;
+    let carriedSkillNotice: string | undefined;
+    let carriedSkill: string | undefined;
     let retryMethod: boolean | undefined;
     if (input.editMessageId) {
       const index = conversation.messages.findIndex(message => message.id === input.editMessageId);
@@ -322,6 +325,8 @@ export class WorkbenchService {
       carriedReplaced = previousReply.replacedRules;
       carriedPlaybookNotice = previousReply.playbookNotice;
       carriedPlaybook = previousReply.savedPlaybook;
+      carriedSkillNotice = previousReply.skillNotice;
+      carriedSkill = previousReply.savedSkill;
       if (typeof previousReply.contextManifest?.task?.inherited === 'boolean') retryMethod = previousReply.contextManifest.task.inherited;
       settledTools = previousReply.toolCalls?.filter(call => call.status === 'complete');
       conversation.revisions ??= [];
@@ -351,6 +356,8 @@ export class WorkbenchService {
     let openedTask = false;
     let playbookNotice = carriedPlaybookNotice;
     let savedPlaybook = carriedPlaybook;
+    let skillNotice = carriedSkillNotice;
+    let savedSkill = carriedSkill;
     if (!input.retry) {
       const spoken = [...conversation.messages].reverse().find(message => message.role === 'user');
       if (spoken?.text) {
@@ -362,7 +369,12 @@ export class WorkbenchService {
         openedTask = advanced.opened;
         if (advanced.opened) delete conversation.taskNotes;
         const scopedUserTexts = taskUserTexts(conversation.messages.filter((_, index) => index > floor), conversation.task, spoken.id);
-        if (wantsSavedPlaybook(spoken.text)) {
+        const skillTurn = new SkillCenter(this.store.root, () => PRODUCT_SKILLS.map(skill => ({ ...skill }))).applyConversation({ conversationId: conversation.id, text: spoken.text, playbook: assistant.playbook, compile: () => compilePlaybook({ name: assistant.name, workflow: assistant.workflow, standingRules: assistant.standingRules, deliveryFormat: assistant.deliveryFormat, recentUserTexts: scopedUserTexts }) });
+        if (skillTurn.handled) {
+          skillNotice = skillTurn.notice;
+          savedSkill = skillTurn.saved;
+          turnScope = 'once';
+        } else if (wantsSavedPlaybook(spoken.text)) {
           const playbook = compilePlaybook({ name: assistant.name, workflow: assistant.workflow, standingRules: assistant.standingRules, deliveryFormat: assistant.deliveryFormat, recentUserTexts: scopedUserTexts });
           assistant = new WorkbenchAgentStore(this.store).rememberPlaybook(assistant.id, playbook);
           playbookNotice = `已把这次存成「${playbook.name}」的做法`;
@@ -415,7 +427,7 @@ export class WorkbenchService {
     const hasAttachments = conversation.messages.some(message => message.attachments?.length);
     const reply: WorkbenchMessage = {
       id: randomUUID(), role: 'assistant', text: '', createdAt: now, status: 'running', model, modelName, turnId,
-      stage: hasAttachments ? '正在读取附件' : '正在准备回答', ...(ruleNotice ? { ruleNotice } : {}), ...(learnedRules?.length ? { learnedRules } : {}), ...(replacedRules?.length ? { replacedRules } : {}), ...(playbookNotice ? { playbookNotice } : {}), ...(savedPlaybook ? { savedPlaybook } : {}),
+      stage: hasAttachments ? '正在读取附件' : '正在准备回答', ...(ruleNotice ? { ruleNotice } : {}), ...(learnedRules?.length ? { learnedRules } : {}), ...(replacedRules?.length ? { replacedRules } : {}), ...(playbookNotice ? { playbookNotice } : {}), ...(savedPlaybook ? { savedPlaybook } : {}), ...(skillNotice ? { skillNotice } : {}), ...(savedSkill ? { savedSkill } : {}),
     };
     conversation.messages.push(reply); this.store.save(conversation);
     const generation = (this.turnSerial.get(id) ?? 0) + 1;

@@ -6,6 +6,7 @@ import express from 'express';
 import { agentInstructions } from '../src/product/workbench/agent-tools';
 import { WorkbenchAgentStore } from '../src/product/workbench/agents';
 import { registerWorkbenchRoutes } from '../src/product/workbench/routes';
+import { setSharedSkillReader } from '../src/core/skill-catalog';
 import { SkillCenter, planTurnSkills, PRODUCT_SKILLS, type SkillCard } from '../src/product/workbench/skill-center';
 import { WorkbenchStore } from '../src/product/workbench/store';
 import { defaultAssistant } from '../shared/workbench';
@@ -95,11 +96,21 @@ test('技能管理接口可以创建、停用和删除，不依赖重启', async
     const created = await fetch(`${base}/skill-center`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ displayName: '行业信息整理', description: '整理资料并提取行业观点', triggers: ['行业信息整理'], tools: ['knowledge_search'], steps: '先检索，再列出观点和来源。' }) });
     expect(created.status).toBe(200);
     const skill = (await created.json() as { skill: { name: string } }).skill;
+    const shared = await fetch(`${base}/skill-center/${encodeURIComponent(skill.name)}/share`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ shared: true }) });
+    expect((await shared.json() as { skill: { shared: boolean } }).skill.shared).toBe(true);
+    const audience = await fetch(`${base}/skill-center/${encodeURIComponent(skill.name)}/audience`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ assistants: ['main'] }) });
+    expect((await audience.json() as { skill: { assistants: string[] } }).skill.assistants).toEqual(['main']);
+    const schedule = await fetch(`${base}/skill-center/${encodeURIComponent(skill.name)}/schedule`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ schedule: { enabled: true, weekdays: [1], time: '09:00', timezone: 'UTC', prompt: '整理行业信息', assistantId: 'main' } }) });
+    expect((await schedule.json() as { skill: { schedule?: { enabled: boolean } } }).skill.schedule?.enabled).toBe(true);
+    const missingPlaybook = await fetch(`${base}/skill-center/from-playbook`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ agentId: 'main' }) });
+    expect(missingPlaybook.status).toBe(400);
+    expect(await missingPlaybook.json()).toEqual({ error: '还没有可转换的做法' });
     const disabled = await fetch(`${base}/skill-center/${encodeURIComponent(skill.name)}/enabled`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: false }) });
     expect((await disabled.json() as { skill: { enabled: boolean } }).skill.enabled).toBe(false);
     const removed = await fetch(`${base}/skill-center/${encodeURIComponent(skill.name)}`, { method: 'DELETE' });
     expect((await removed.json() as { removed: boolean }).removed).toBe(true);
   } finally {
+    setSharedSkillReader(undefined);
     server.close();
   }
 });

@@ -27,6 +27,8 @@ import { workbenchMemoryTools, type WorkbenchNative } from './memory-tools';
 import { WorkbenchAgentStore } from './agents';
 import { isDirectoryStep } from './turn-policy';
 import { agentTools, agentInstructions, agentSkillCatalog, validateAgent, workbenchSkillCenter, type WorkbenchAgentTools } from './agent-tools';
+import { setSharedSkillReader } from '../../core/skill-catalog';
+import { sharedMcpSkills } from './skill-center';
 import { CURRENT_EVIDENCE_RULE, needsCurrentEvidence, wantsSavedPlaybook } from './playbook';
 import { WorkbenchAgentCoordinator } from './agent-tasks';
 import { readFileSync } from 'node:fs';
@@ -275,6 +277,7 @@ export function registerWorkbenchRoutes(app: express.Express, requireAdmin: Requ
   };
   if (options.databaseAvailable) availability();
   const store = new WorkbenchStore(options.storageRoot ?? join(configDir(), 'workbench', identity));
+  setSharedSkillReader(() => sharedMcpSkills(store.root));
   const agentStore = new WorkbenchAgentStore(store);
   const agents: WorkbenchAgentTools = { store: agentStore, engine, config: currentConfig, ...(options.productTasks ? { runs: () => options.productTasks!.listRuns() } : {}) };
   const memory = options.productTasks?.attachWorkbenchMemory?.(store);
@@ -312,6 +315,14 @@ export function registerWorkbenchRoutes(app: express.Express, requireAdmin: Requ
   app.get(`${base}/skill-center`, requireAdmin, handler(async () => ({ skills: await workbenchSkillCenter(agents).list() })));
   app.post(`${base}/skill-center`, requireAdmin, express.json({ limit: '64kb' }), handler(async req => ({ skill: await workbenchSkillCenter(agents).create(req.body ?? {}) })));
   app.post(`${base}/skill-center/import`, requireAdmin, express.json({ limit: '512kb' }), handler(async req => ({ skill: await workbenchSkillCenter(agents).importMarkdown(String(req.body?.content ?? '')) })));
+  app.post(`${base}/skill-center/from-playbook`, requireAdmin, express.json({ limit: '8kb' }), handler(async req => {
+    const playbook = agentStore.get(String(req.body?.agentId ?? '')).playbook;
+    if (!playbook) throw new Error('还没有可转换的做法');
+    return { skill: await workbenchSkillCenter(agents).createFromPlaybook(playbook) };
+  }));
+  app.post(`${base}/skill-center/:name/share`, requireAdmin, express.json({ limit: '4kb' }), handler(async req => ({ skill: await workbenchSkillCenter(agents).setShared(skillName(req), req.body?.shared === true) })));
+  app.post(`${base}/skill-center/:name/audience`, requireAdmin, express.json({ limit: '8kb' }), handler(async req => ({ skill: await workbenchSkillCenter(agents).setAudience(skillName(req), Array.isArray(req.body?.assistants) ? req.body.assistants : []) })));
+  app.post(`${base}/skill-center/:name/schedule`, requireAdmin, express.json({ limit: '16kb' }), handler(async req => ({ skill: await workbenchSkillCenter(agents).setSchedule(skillName(req), req.body?.schedule ?? null) })));
   app.get(`${base}/skill-center/:name`, requireAdmin, handler(async req => workbenchSkillCenter(agents).detail(skillName(req))));
   app.put(`${base}/skill-center/:name`, requireAdmin, express.json({ limit: '64kb' }), handler(async req => ({ skill: await workbenchSkillCenter(agents).update(skillName(req), req.body ?? {}) })));
   app.post(`${base}/skill-center/:name/copy`, requireAdmin, express.json({ limit: '4kb' }), handler(async req => ({ skill: await workbenchSkillCenter(agents).copy(skillName(req)) })));

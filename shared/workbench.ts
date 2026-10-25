@@ -77,6 +77,8 @@ export interface WorkbenchMessage {
   replacedRules?: string[];
   playbookNotice?: string;
   savedPlaybook?: string;
+  skillNotice?: string;
+  savedSkill?: string;
   evidenceGap?: boolean;
   attachments?: WorkbenchAttachment[];
   attachmentSupplement?: string;

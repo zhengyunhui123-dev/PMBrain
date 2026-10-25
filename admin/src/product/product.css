@@ -93,7 +93,7 @@
 .skill-center p, .skill-center small, .skill-center span { color: var(--product-muted); }
 .skill-count { margin: 8px 0 16px; }
 .skill-layout { display: grid; grid-template-columns: minmax(280px, 360px) minmax(0, 1fr); gap: 18px; }
-.skill-center input, .skill-center textarea { width: 100%; box-sizing: border-box; color: inherit; background: transparent; border: 1px solid var(--product-line); border-radius: 10px; padding: 8px 10px; font: inherit; }
+.skill-center input, .skill-center textarea, .skill-center select { width: 100%; box-sizing: border-box; color: inherit; background: transparent; border: 1px solid var(--product-line); border-radius: 10px; padding: 8px 10px; font: inherit; }
 .skill-center textarea { min-height: 88px; }
 .skill-center label { display: grid; gap: 6px; margin: 10px 0; }
 .skill-center fieldset { border: 1px solid var(--product-line); border-radius: 10px; display: flex; flex-wrap: wrap; gap: 8px 14px; }

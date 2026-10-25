@@ -1,11 +1,11 @@
 import { expect, test } from 'bun:test';
-import { mkdtempSync } from 'node:fs';
+import { existsSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { agentInstructions, readyToCreateAssistant } from '../src/product/workbench/agent-tools';
 import { WorkbenchAgentStore } from '../src/product/workbench/agents';
 import { planContext } from '../src/product/workbench/context';
-import { activityLine, EVIDENCE_GAP_TEXT, needsCurrentEvidence, scheduledTaskPrompt, visibleAssistantText, wantsSavedPlaybook } from '../src/product/workbench/playbook';
+import { activityLine, EVIDENCE_GAP_TEXT, needsCurrentEvidence, scheduledTaskPrompt, visibleAssistantText, wantsSavedPlaybook, wantsSavedSkill } from '../src/product/workbench/playbook';
 import { knowledgeWorkbenchAnswer } from '../src/product/workbench/routes';
 import { WorkbenchService } from '../src/product/workbench/service';
 import { WorkbenchStore } from '../src/product/workbench/store';
@@ -155,7 +155,9 @@ test('就按这次的存下来会留下可复核的做法，不会变成每次�
   expect(classifyTurn('就按这次的存下来')).toBe('once');
   expect(wantsSavedPlaybook('就按这次的存下来')).toBe(true);
   expect(wantsSavedPlaybook('存成做法')).toBe(true);
-  expect(wantsSavedPlaybook('保存为技能')).toBe(true);
+  expect(wantsSavedPlaybook('保存为技能')).toBe(false);
+  expect(wantsSavedSkill('保存为技能')).toBe(true);
+  expect(wantsSavedSkill('把这次的方法保存为技能')).toBe(true);
   expect(wantsSavedPlaybook('以后按这次的做法')).toBe(true);
   expect(wantsSavedPlaybook('这次不要写下周计划')).toBe(false);
   const dir = root();
@@ -177,6 +179,7 @@ test('就按这次的存下来会留下可复核的做法，不会变成每次�
   expect(JSON.stringify(saved.playbook)).not.toContain('就按这次的存下来');
   expect(saved.standingRules).toEqual(['不要编造']);
   expect(service.get(conversation.id).taskNotes).toBeUndefined();
+  expect(existsSync(join(dir, 'user-skills'))).toBe(false);
   expect(service.get(conversation.id).messages.at(-1)?.playbookNotice).toBe('已把这次存成「周报助手」的做法');
   expect(captured.some(text => text.includes('就按这次'))).toBe(false);
   const { playbook: _playbook, ...rest } = saved;

@@ -4,6 +4,8 @@ import type { ProductTaskRuntime } from '../tasks/runtime';
 import type { BrainEngine } from '../../core/engine';
 import { WorkbenchAgentStore, scheduleOccurrence } from './agents';
 import { scheduledTaskPrompt } from './playbook';
+import { PRODUCT_SKILLS, SkillCenter } from './skill-center';
+import { nextSkillRuns } from './skill-schedule';
 import type { WorkbenchService } from './service';
 import { publishArtifactToSource, saveWorkbenchArtifact } from './files';
 import { TaskProgressAdapter } from '../tasks/progress-adapter';
@@ -45,6 +47,17 @@ export class WorkbenchAgentCoordinator {
         this.store.recordSchedule(agent.id, { slot, conversationId: conversation.id });
         const result = await this.submit(agent.id, scheduledTaskPrompt(agent, slot), `${agent.id}:${slot}`, true, conversation.id);
         this.store.recordSchedule(agent.id, { slot, conversationId: conversation.id, runId: result.run.id });
+      }
+      const skills = new SkillCenter(this.store.workbench.root, async () => PRODUCT_SKILLS.map(skill => ({ ...skill })));
+      for (const run of nextSkillRuns(await skills.list(), skills.scheduleMarks(), now)) {
+        try {
+          const result = await this.submit(run.assistantId, run.prompt, `skill:${run.name}:${run.slot}`, true);
+          skills.markSchedule(run.name, run.slot, result.run.id);
+          skills.record({ at: now.toISOString(), name: run.name, displayName: run.displayName, agentId: run.assistantId, excerpt: run.prompt, status: 'loaded' });
+        } catch (error) {
+          skills.markSchedule(run.name, run.slot, 'failed');
+          skills.record({ at: now.toISOString(), name: run.name, displayName: run.displayName, agentId: run.assistantId, excerpt: error instanceof Error ? error.message : String(error), status: 'blocked' });
+        }
       }
     } finally { this.scanning = false; }
   }
