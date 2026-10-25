@@ -23,7 +23,7 @@ export const MEMORY_TOOLS: ChatToolDef[] = [
   { name: 'memory_remember', description: '用户明确要求记住或更正记忆时保存一条用户陈述。更正先用 memory_recall 查原事实，将其 fact_id 填入 replaces，并沿用原 entity；不要先遗忘。普通对话由后台沉淀。临时状态填写 ttl，如 3d；不保存自己的推测。', inputSchema: { type: 'object', properties: { fact: { type: 'string', minLength: 1, maxLength: 500 }, kind: { type: 'string', enum: ['event','preference','commitment','belief','fact','idea'] }, entity: { type: 'string' }, ttl: { type: 'string' }, replaces: { type: 'string', pattern: '^[1-9][0-9]*$' } }, required: ['fact','kind'], additionalProperties: false } },
   { name: 'memory_forget', description: '用户明确要求忘记时，遗忘 memory_recall 返回的 fact_id；保留历史。', inputSchema: { type: 'object', properties: { fact_id: { type: 'integer', minimum: 1 } }, required: ['fact_id'], additionalProperties: false } },
   { name: 'knowledge_append', description: '用户明确要求补充知识时，追加到已 knowledge_read 核对的页面。原样填写 source_id、slug、revision，不替换原文。', inputSchema: { type: 'object', properties: { source_id: { type: 'string' }, slug: { type: 'string' }, revision: { type: 'string' }, content: { type: 'string', minLength: 1, maxLength: 32000 } }, required: ['source_id','slug','revision','content'], additionalProperties: false } },
-  { name: 'knowledge_organize', description: '用户明确要求整理时，提交当前记忆来源的后台快速维护。返回任务状态，提交不表示完成。', inputSchema: { type: 'object', properties: {}, additionalProperties: false } },
+  { name: 'knowledge_organize', description: '用户确认深度知识整理时，提交当前来源的 AI 深度整理。只要求整理时，提交快速维护。返回任务状态，提交不表示完成。', inputSchema: { type: 'object', properties: {}, additionalProperties: false } },
 ];
 
 export function nativeMemoryHandlers(engine: BrainEngine, sourceId: string, conversationId: string, native: WorkbenchNative, cite: (row: WorkbenchCitation) => number, reads: Map<string,string>, granted: string[] = []): Map<string,ToolHandler> {
@@ -67,7 +67,7 @@ export function nativeMemoryHandlers(engine: BrainEngine, sourceId: string, conv
         const ctx:OperationContext={engine:tx,sourceId:p.source_id as string,remote:false,config:loadConfigFileOnly()??{engine:engine.kind},dryRun:false,logger:{info:console.info,warn:console.warn,error:console.error}};const result=await operationsByName.put_page.handler(ctx,{slug:p.slug,content,source_kind:'workbench-user-edit',source_uri:`pmbrain://conversations/${conversationId}/${user().id}`,ingested_via:'workbench:knowledge-append'});signal.throwIfAborted();return result;});
     }}],
     ['knowledge_organize', { execute: async (raw,signal) => {
-      params(raw,[]);if(!allowed('knowledge_organize'))throw new Error('请明确要求启动知识整理');signal.throwIfAborted();const run=await native.tasks.submitDream({preset:'quick',sourceId});return {task_id:run.id,status:run.status,message:'已提交后台整理，请在任务中心查看实际结果'};
+      params(raw,[]);if(!allowed('knowledge_organize'))throw new Error('请明确要求启动知识整理');signal.throwIfAborted();const deep=/深度整理|深度知识整理/.test(user().text);const run=await native.tasks.submitDream({preset:deep?'full':'quick',sourceId});return {task_id:run.id,status:run.status,message:deep?'已提交 AI 深度整理，请在任务中心查看实际结果':'已提交后台整理，请在任务中心查看实际结果'};
     }}],
   ]);
 }

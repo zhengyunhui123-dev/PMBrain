@@ -157,7 +157,7 @@ export async function runWorkbenchTools(input: WorkbenchAnswerInput & {
       return parsed;
     } });
   }
-  const tools=[...(input.knowledge?KNOWLEDGE_TOOLS:[]),...(input.native?workbenchMemoryTools(userText,input.knowledge):[]),...(input.agents && input.agent ? agentTools(input.agent,userText,input.agents) : [])];
+  const tools=[...(input.knowledge?KNOWLEDGE_TOOLS:[]),...(input.native?workbenchMemoryTools(userText,input.knowledge,input.grantedMemoryTools??[]):[]),...(input.agents && input.agent ? agentTools(input.agent,userText,input.agents) : [])];
   let history = input.history;
   let checkedCompletion = false;
   let visibleSegment = '';

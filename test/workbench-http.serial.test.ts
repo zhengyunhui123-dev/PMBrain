@@ -61,9 +61,12 @@ for (const databaseReady of [true, false]) test(`HTTP workbench sends two real g
       for (let i = 0; i < 100; i++) { result = await request(`/conversations/${thread.id}`); if (result.messages.at(-1).status !== 'running') break; await Bun.sleep(10); }
       expect(result.messages.at(-1).status).toBe('complete');
     }
-    expect(requests).toHaveLength(2);
-    expect(requests.every((item: any) => item.stream === true)).toBe(true);
-    expect(requests[1].messages.filter((m: any) => m.role !== 'system').map((m: any) => m.content)).toEqual(['我喜欢蓝色', '你喜欢蓝色', '我喜欢什么颜色？']);
+    const judged = requests.filter((item: any) => item.messages?.some((message: any) => String(message.content).includes('只输出一个 name')));
+    const answered = requests.filter((item: any) => !judged.includes(item));
+    expect(judged).toHaveLength(1);
+    expect(answered).toHaveLength(2);
+    expect(answered.every((item: any) => item.stream === true)).toBe(true);
+    expect(answered[1].messages.filter((m: any) => m.role !== 'system').map((m: any) => m.content)).toEqual(['我喜欢蓝色', '你喜欢蓝色', '我喜欢什么颜色？']);
     expect(result.messages.at(-1).text).toBe('你喜欢蓝色');
     expect(result.messages.at(-1).modelName).toBe('service-test:local · 当前普通模型');
     expect(result.messages.at(-1).knowledge).toBe('off');

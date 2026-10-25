@@ -26,7 +26,7 @@ import { getWritebackStatus, setWritebackMode, stampWritebackNoticeShown } from 
 import { workbenchMemoryTools, type WorkbenchNative } from './memory-tools';
 import { WorkbenchAgentStore } from './agents';
 import { isDirectoryStep } from './turn-policy';
-import { agentTools, agentInstructions, agentRoutingCards, agentSkillCatalog, draftSkillWithModel, judgeSkillWithModel, validateAgent, workbenchSkillCenter, type WorkbenchAgentTools } from './agent-tools';
+import { agentTools, agentInstructions, agentRoutingCards, agentSkillCatalog, draftSkillWithModel, judgeSkillWithModel, skillModelEligible, validateAgent, workbenchSkillCenter, type WorkbenchAgentTools } from './agent-tools';
 import { setSharedSkillReader } from '../../core/skill-catalog';
 import { applyModelSkillDraft, authorizedWriteTools, PRODUCT_SKILLS, sharedMcpSkills, SkillCenter, skillDraftFromModel } from './skill-center';
 import { CURRENT_EVIDENCE_RULE, needsCurrentEvidence, skillDraftFromRequest, wantsSavedPlaybook, wantsSkillDraft } from './playbook';
@@ -189,7 +189,7 @@ export function knowledgeWorkbenchAnswer(engine: BrainEngine, dependencies: { se
     let skillNote: string | undefined;
     let draftedNotice: string | undefined;
     let draftPreview = '';
-    const judge = agents && agent && dependencies.answer === chat && model && !model.startsWith('service-') ? (request: { text: string; catalog: string }) => judgeSkillWithModel(dependencies.answer, model, signal, request) : undefined;
+    const judge = agents && agent && dependencies.answer === chat && skillModelEligible(model) ? (request: { text: string; catalog: string }) => judgeSkillWithModel(dependencies.answer, model, signal, request) : undefined;
     if (judge && wantsSkillDraft(latestUser?.text ?? '') && conversationId && agents?.store?.workbench?.root) {
       const base = skillDraftFromRequest(latestUser?.text ?? '');
       const center = new SkillCenter(agents.store.workbench.root, () => PRODUCT_SKILLS.map(skill => ({ ...skill })));

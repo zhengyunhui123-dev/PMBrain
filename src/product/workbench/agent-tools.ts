@@ -1,4 +1,4 @@
-import type { ChatOpts, ChatToolDef, ToolHandler } from '../../core/ai/gateway';
+import { chatModelEndpointReady, type ChatOpts, type ChatToolDef, type ToolHandler } from '../../core/ai/gateway';
 import type { BrainEngine } from '../../core/engine';
 import type { GBrainConfig } from '../../core/config';
 import { buildSkillCatalog, getSkillDetail, readMcpSkillsDir, resolveSkillsDir } from '../../core/skill-catalog';
@@ -80,8 +80,16 @@ export async function validateAgent(context: WorkbenchAgentTools, input: Record<
     if (!rows.length) throw new Error(`知识来源不存在或已归档：${source}`);
   }
 }
+export function skillModelEligible(model: string): boolean {
+  const trimmed = model.trim();
+  if (!trimmed) return false;
+  const colon = trimmed.indexOf(':');
+  const provider = (colon < 0 ? trimmed : trimmed.slice(0, colon)).toLowerCase();
+  if (!provider.startsWith('service-')) return true;
+  return chatModelEndpointReady(trimmed);
+}
 export async function judgeSkillWithModel(answer: (opts: ChatOpts) => Promise<{ text?: string }>, model: string, signal: AbortSignal, input: { text: string; catalog: string }): Promise<string | undefined> {
-  if (!model.trim() || model.startsWith('service-') || signal.aborted) return undefined;
+  if (!skillModelEligible(model) || signal.aborted) return undefined;
   const judgeSignal = AbortSignal.any([signal, AbortSignal.timeout(8000)]);
   try {
     const result = await answer({ model, allowFallback: false, maxTokens: 32, temperature: 0, disableReasoning: true, timeoutMs: 8000, abortSignal: judgeSignal, system: '你只负责从给定技能里选一个。只输出技能 name。没有把握就输出 NONE。', messages: [{ role: 'user', content: `用户原话：${input.text.slice(0, 500)}\n\n${input.catalog}\n\n只输出一个 name 或 NONE。` }] });
@@ -91,7 +99,7 @@ export async function judgeSkillWithModel(answer: (opts: ChatOpts) => Promise<{ 
   }
 }
 export async function draftSkillWithModel(answer: (opts: ChatOpts) => Promise<{ text?: string }>, model: string, signal: AbortSignal, input: { text: string; catalog: string }): Promise<string | undefined> {
-  if (!model.trim() || model.startsWith('service-') || signal.aborted) return undefined;
+  if (!skillModelEligible(model) || signal.aborted) return undefined;
   const draftSignal = AbortSignal.any([signal, AbortSignal.timeout(8000)]);
   try {
     const result = await answer({ model, allowFallback: false, maxTokens: 700, temperature: 0, disableReasoning: true, timeoutMs: 8000, abortSignal: draftSignal, system: '你只负责编写一个技能草稿。只输出一个 JSON 对象，不要解释。字段是 description、triggers、tools、steps、checks。steps 要写出工作步骤。checks 写怎样才算做对。tools 只能从 knowledge_search、knowledge_read、artifact_save、local_files、local_read、knowledge_organize、knowledge_append 里选。不要发明新工具。名称以用户原话为准，不要改名。如果目录里已有同样的技能，在 description 里说明应该扩展它。', messages: [{ role: 'user', content: `用户原话：${input.text.slice(0, 800)}\n\n已有技能：\n${input.catalog.slice(0, 2000)}` }] });

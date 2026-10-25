@@ -872,6 +872,18 @@ export function isAvailable(touchpoint: TouchpointKind, modelOverride?: string):
   }
 }
 
+export function chatModelEndpointReady(model: string): boolean {
+  if (!_config || !model.trim()) return false;
+  try {
+    const { recipe } = resolveRecipe(model.trim());
+    if (!recipe.touchpoints.chat) return false;
+    const base = configuredBaseURL(_config, recipe.id, 'chat') ?? recipe.base_url_default;
+    return Boolean(base?.trim());
+  } catch {
+    return false;
+  }
+}
+
 // ---- Embedding ----
 
 /**

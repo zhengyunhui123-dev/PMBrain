@@ -84,7 +84,7 @@ export interface SkillDraft {
 const weekly = '读取用户授权的知识与本地工作记录，按正文中的事件日期判断报告周期，文件更新时间仅供参考。分为已完成、推进中、待处理和下周计划；计划不能写成已完成。事实附引用，缺材料集中列出，不能编造。遵循用户模板和明确要求。完成后调用 artifact_save 保存文件，用返回的 path 说明已写入知识来源本地目录，不要让用户再下载后手动归档。';
 const lookup = '先调用 knowledge_search 检索已授权知识来源。query 使用人名、项目名或主题关键词，不要整句照抄。命中后再用 knowledge_read 核对原文。回答用引用编号，没有依据就说明知识库里没查到，不要编造。';
 const meeting = '从用户给出的会议材料、已授权知识和本地文件中提取决定、责任人和行动项。缺的信息集中列出。整理成会议纪要后调用 artifact_save 保存，不要改写知识库页面，也不要调用会议入库类写入工具。';
-const organize = '用户已经明确确认。调用 knowledge_organize 提交现有快速维护，不要另写实体识别、观点提炼或知识关联。提交后说明任务已进入任务中心，不要声称整理已经完成。';
+const organize = '用户已经明确确认。调用 knowledge_organize 提交现有 AI 深度整理，不要另写实体识别、观点提炼或知识关联。提交后说明任务已进入任务中心，不要声称整理已经完成。';
 
 export const PRODUCT_SKILLS: SkillCard[] = [
   { name: 'knowledge-search', displayName: '知识库检索', description: '检索资料、事实和关系，生成有来源的回答', triggers: ['检索资料', '查知识库', '我们知道', '查找资料'], tools: ['knowledge_search', 'knowledge_read'], supported: true, missingTools: [], permission: 'read', origin: 'builtin', kind: 'product', enabled: true, manual: false, assistants: [], shared: false, body: lookup },

@@ -4,13 +4,16 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { indexResolverTriggers, lintRoutingFixtures, runRoutingEval } from '../src/core/routing-eval';
 import { entriesToResolverContent, FRONTMATTER_SECTION } from '../src/core/skill-trigger-index';
-import { agentInstructions, draftSkillWithModel } from '../src/product/workbench/agent-tools';
+import { configureGateway, resetGateway } from '../src/core/ai/gateway';
+import { agentInstructions, draftSkillWithModel, judgeSkillWithModel } from '../src/product/workbench/agent-tools';
 import { WorkbenchAgentStore } from '../src/product/workbench/agents';
+import { RequestContext } from '../src/product/workbench/context-runtime';
 import { skillDraftFromRequest } from '../src/product/workbench/playbook';
 import { applyModelSkillDraft, authorizedWriteTools, PRODUCT_SKILLS, planTurnSkills, SkillCenter, skillDraftFromModel } from '../src/product/workbench/skill-center';
-import { workbenchMemoryTools } from '../src/product/workbench/memory-tools';
+import { nativeMemoryHandlers, workbenchMemoryTools } from '../src/product/workbench/memory-tools';
 import { WorkbenchService } from '../src/product/workbench/service';
 import { WorkbenchStore } from '../src/product/workbench/store';
+import { runWorkbenchTools } from '../src/product/workbench/tools';
 
 const root = () => mkdtempSync(join(tmpdir(), 'pmbrain-skill-loop-'));
 const resolver = entriesToResolverContent([
@@ -67,8 +70,52 @@ test('两个技能同样贴切时仍然不加载，确认后才执行写入技�
   expect(authorizedWriteTools('确认执行外部命令', [shell])).toEqual([]);
   const instructions = await agentInstructions({ engine: {}, config: () => ({}) } as never, { id: 'main', name: '主助手', skills: [], sourceIds: ['default'], readDirectories: [], deliveryFormat: 'docx' } as never, { userText: '确认执行深度知识整理' });
   expect(instructions).toContain('调用 knowledge_organize');
+  expect(instructions).toContain('AI 深度整理');
   expect(instructions).toContain('不要另写');
+  expect(instructions).not.toContain('快速维护');
   expect(instructions).not.toContain('不会自动执行');
+});
+
+test('确认后的整理工具进入模型列表，深度整理提交完整整理，普通整理仍是快速维护', async () => {
+  const signal = new AbortController().signal;
+  const listed = async (text: string, granted: string[]) => {
+    const names: string[] = [];
+    const context = new RequestContext({ contextWindow: 8192, system: '测试', tools: [], signal, model: 'deepseek:chat' });
+    await runWorkbenchTools({
+      engine: {} as never,
+      search: async () => ({ results: [] } as never),
+      loop: async options => { names.push(...(options.tools ?? []).map(tool => tool.name)); return { stopReason: 'end', messages: [] } as never; },
+      system: '测试',
+      history: [{ role: 'user', content: text }],
+      budget: 1000,
+      citations: [],
+      context,
+      signal,
+      model: 'deepseek:chat',
+      knowledge: true,
+      messages: [{ id: 'q', role: 'user', text, status: 'complete', createdAt: '' }],
+      progress: () => {},
+      native: {} as never,
+      ...(granted.length ? { grantedMemoryTools: granted } : {}),
+    });
+    return names;
+  };
+  expect(await listed('请开始整理知识', [])).toContain('knowledge_organize');
+  expect(await listed('确认执行深度知识整理', [])).not.toContain('knowledge_organize');
+  expect(await listed('确认执行深度知识整理', ['knowledge_organize'])).toContain('knowledge_organize');
+  const submitted: Array<{ preset?: string; sourceId?: string }> = [];
+  const organize = async (text: string, granted: string[]) => {
+    const handlers = nativeMemoryHandlers({} as never, 'default', 'conversation', { store: { get: () => ({ messages: [{ id: 'q', role: 'user', text }] }) }, tasks: { submitDream: async (input: { preset?: string; sourceId?: string }) => { submitted.push(input); return { id: `dream-${submitted.length}`, status: 'queued' }; } } } as never, () => 1, new Map(), granted);
+    return handlers.get('knowledge_organize')!.execute({}, signal);
+  };
+  const deep = await organize('确认执行深度知识整理', ['knowledge_organize']) as { task_id: string; message: string };
+  const quick = await organize('请开始整理知识', []) as { message: string };
+  expect(submitted).toEqual([{ preset: 'full', sourceId: 'default' }, { preset: 'quick', sourceId: 'default' }]);
+  expect(deep.task_id).toBe('dream-1');
+  expect(deep.message).toContain('AI 深度整理');
+  expect(deep.message).not.toContain('已经完成');
+  expect(quick.message).toContain('已提交后台整理');
+  expect(quick.message).not.toContain('AI 深度整理');
 });
 
 test('模型草稿保留步骤和检查，并去掉不能使用的工具', () => {
@@ -92,7 +139,18 @@ test('测试模型不负责写技能，正式草稿确认前不落文件', async
   let calls = 0;
   const answer = async () => { calls += 1; return { text: '{"steps":"先检索"}' }; };
   expect(await draftSkillWithModel(answer, 'service-agent:chat', new AbortController().signal, { text: '创建一个技能', catalog: '' })).toBeUndefined();
+  expect(await judgeSkillWithModel(answer, 'service-directory:chat', new AbortController().signal, { text: '整理一下', catalog: 'x' })).toBeUndefined();
   expect(calls).toBe(0);
+  configureGateway({ generative_enabled: true, chat_model: 'service-siliconflow:deepseek-ai/DeepSeek-V4-Flash', base_urls: { 'service-siliconflow': 'https://api.siliconflow.cn/v1' }, env: {} });
+  try {
+    expect(await judgeSkillWithModel(answer, 'service-siliconflow:deepseek-ai/DeepSeek-V4-Flash', new AbortController().signal, { text: '整理一下', catalog: 'weekly-report' })).toBe('{"steps":"先检索"}');
+    expect(await draftSkillWithModel(answer, 'mimo:mimo-v2-flash', new AbortController().signal, { text: '创建一个技能', catalog: '' })).toBe('{"steps":"先检索"}');
+    expect(await judgeSkillWithModel(answer, 'ollama:qwen2.5', new AbortController().signal, { text: '整理一下', catalog: 'x' })).toBe('{"steps":"先检索"}');
+    expect(await draftSkillWithModel(answer, 'service-agent:chat', new AbortController().signal, { text: '创建一个技能', catalog: '' })).toBeUndefined();
+    expect(calls).toBe(3);
+  } finally {
+    resetGateway();
+  }
   const dir = root();
   const skills = new SkillCenter(dir, async () => PRODUCT_SKILLS.map(skill => ({ ...skill })));
   const base = skillDraftFromRequest('帮我创建一个产品需求分析技能')!;
