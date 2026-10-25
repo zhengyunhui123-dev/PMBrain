@@ -88,6 +88,13 @@
 .skill-center { max-width: 1080px; }
 .skill-center header, .skill-actions, .skill-center li, .skill-filters { display: flex; gap: 12px; align-items: center; }
 .skill-center header { justify-content: space-between; align-items: flex-start; }
+.skill-header-actions { display: flex; gap: 8px; align-items: flex-start; flex-shrink: 0; }
+.skill-secondary { background: transparent; color: inherit; border: 1px solid var(--product-line); border-radius: 999px; padding: 8px 14px; cursor: pointer; }
+.skill-import-menu { position: relative; }
+.skill-import-menu [role="menu"] { position: absolute; right: 0; top: calc(100% + 6px); z-index: 6; min-width: 196px; display: grid; gap: 2px; padding: 6px; background: var(--product-panel); border: 1px solid var(--product-line); border-radius: 12px; }
+.skill-import-menu [role="menuitem"] { text-align: left; background: transparent; color: inherit; border: 0; border-radius: 8px; padding: 8px 10px; cursor: pointer; }
+.skill-import-menu [role="menuitem"]:hover { background: color-mix(in srgb, var(--product-blue) 18%, transparent); }
+.skill-center input[type="file"] { display: none; }
 .skill-center h2, .skill-center h3 { margin: 0 0 6px; }
 .skill-center h2 { font-size: 28px; font-weight: 560; }
 .skill-center p, .skill-center small, .skill-center span { color: var(--product-muted); }
@@ -99,7 +106,7 @@
 .skill-center fieldset { border: 1px solid var(--product-line); border-radius: 10px; display: flex; flex-wrap: wrap; gap: 8px 14px; }
 .skill-center fieldset label { display: flex; gap: 6px; align-items: center; margin: 0; }
 .skill-filters { margin: 10px 0; }
-.skill-filters button, .skill-actions button, .skill-import { border: 1px solid var(--product-line); background: transparent; color: inherit; border-radius: 999px; padding: 6px 12px; cursor: pointer; }
+.skill-filters button, .skill-actions button { border: 1px solid var(--product-line); background: transparent; color: inherit; border-radius: 999px; padding: 6px 12px; cursor: pointer; }
 .skill-filters button[aria-selected="true"], .skill-center li button.active { background: color-mix(in srgb, var(--product-blue) 18%, transparent); }
 .skill-center ul { list-style: none; margin: 0; padding: 0; }
 .skill-center li { justify-content: space-between; border-bottom: 1px solid var(--product-line); }

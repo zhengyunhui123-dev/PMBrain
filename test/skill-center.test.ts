@@ -107,6 +107,11 @@ test('技能管理接口可以创建、停用和删除，不依赖重启', async
     expect(await missingPlaybook.json()).toEqual({ error: '还没有可转换的做法' });
     const disabled = await fetch(`${base}/skill-center/${encodeURIComponent(skill.name)}/enabled`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: false }) });
     expect((await disabled.json() as { skill: { enabled: boolean } }).skill.enabled).toBe(false);
+    const folder = await fetch(`${base}/skill-center/import-folder`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ files: [{ path: 'SKILL.md', content: '---\nname: pack-demo\ndescription: "带模板的会议技能"\ntriggers:\n  - "资料包演示"\ntools:\n  - knowledge_search\n---\n\n# 资料包演示\n\n先看模板。\n' }, { path: 'references/template.md', content: '模板正文' }] }) });
+    expect(folder.status).toBe(200);
+    const imported = (await folder.json() as { skill: { name: string } }).skill;
+    expect(readFileSync(join(root, 'user-skills', imported.name.replace(/^user__/, ''), 'references/template.md'), 'utf8')).toBe('模板正文');
+    expect(readFileSync(join(root, 'user-skills', imported.name.replace(/^user__/, ''), 'SKILL.md'), 'utf8')).toContain('先看模板。');
     const removed = await fetch(`${base}/skill-center/${encodeURIComponent(skill.name)}`, { method: 'DELETE' });
     expect((await removed.json() as { removed: boolean }).removed).toBe(true);
   } finally {

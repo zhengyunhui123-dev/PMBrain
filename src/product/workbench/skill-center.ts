@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync } from 'node:fs';
-import { join, relative, resolve } from 'node:path';
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { atomicWriteFileSync } from '../../core/atomic-write';
 import { parseSkillFrontmatter } from '../../core/skill-frontmatter';
 import { FRONTMATTER_SECTION, entriesToResolverContent, type SkillTriggerEntry } from '../../core/skill-trigger-index';
@@ -10,6 +10,10 @@ const READ_TOOLS = ['search', 'query', 'get_page', 'knowledge_search', 'knowledg
 const WRITE_TOOLS = ['knowledge_append', 'knowledge_organize', 'memory_remember', 'memory_forget', 'put_page', 'add_link', 'add_timeline_entry'];
 const MAX_BODY = 16000;
 const MAX_RUNS = 40;
+const MAX_SKILL_FILES = 80;
+const MAX_SKILL_FILE_BYTES = 512 * 1024;
+const MAX_SKILL_FOLDER_BYTES = 4 * 1024 * 1024;
+const SKIP_PARTS = new Set(['.git', 'node_modules', '__pycache__', '.svn', '.hg']);
 
 export interface SkillCard {
   name: string;
@@ -319,6 +323,21 @@ function assertSlug(slug: string): string {
   return slug;
 }
 
+function classifySkillPath(input: string): { path: string } | { skip: true } {
+  const raw = input.replace(/\\/g, '/').trim();
+  if (!raw || raw.length > 180 || raw.includes('\0') || raw.startsWith('/') || /^[a-zA-Z]:/.test(raw)) throw new Error('技能文件路径无效');
+  const parts = raw.split('/');
+  if (parts.some(part => !part || part === '.' || part === '..' || /[:*?"<>|\u0000-\u001f]/.test(part))) throw new Error('技能文件路径无效');
+  if (parts.some(part => part.startsWith('.') || SKIP_PARTS.has(part))) return { skip: true };
+  return { path: parts.join('/') };
+}
+
+function skillRelativePath(input: string): string {
+  const classified = classifySkillPath(input);
+  if (!('path' in classified)) throw new Error('技能文件路径无效');
+  return classified.path;
+}
+
 export class SkillCenter {
   constructor(readonly root: string, private builtins: () => SkillCard[] | Promise<SkillCard[]>, private readLibrary?: (name: string) => Promise<string>) {}
 
@@ -354,6 +373,56 @@ export class SkillCenter {
     const rel = relative(resolve(this.userRoot()), dir);
     if (rel.startsWith('..') || rel === '') throw new Error('技能标识无效');
     return dir;
+  }
+
+  private containedFile(dir: string, resourcePath: string): string {
+    const rel = skillRelativePath(resourcePath);
+    const root = resolve(dir);
+    const target = resolve(root, ...rel.split('/'));
+    const inside = relative(root, target);
+    if (!inside || inside.startsWith('..') || isAbsolute(inside)) throw new Error('技能文件路径无效');
+    return target;
+  }
+
+  private listSkillFiles(slug: string, limit: number): { files: string[]; truncated: boolean } {
+    const dir = this.userDir(slug);
+    if (!existsSync(dir)) return { files: [], truncated: false };
+    const files: string[] = [];
+    let truncated = false;
+    const walk = (current: string, prefix: string) => {
+      if (truncated) return;
+      for (const entry of readdirSync(current, { withFileTypes: true })) {
+        if (truncated) return;
+        if (entry.isSymbolicLink() || entry.name.startsWith('.') || SKIP_PARTS.has(entry.name)) continue;
+        const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
+        if (entry.isDirectory()) walk(join(current, entry.name), rel);
+        else if (entry.isFile() && rel !== 'SKILL.md') {
+          if (files.length >= limit) { truncated = true; return; }
+          files.push(rel);
+        }
+      }
+    };
+    walk(dir, '');
+    return { files, truncated };
+  }
+
+  resourcePaths(name: string): { files: string[]; truncated: boolean } {
+    if (!name.startsWith('user__')) return { files: [], truncated: false };
+    try { return this.listSkillFiles(name.replace(/^user__/, ''), 40); }
+    catch { return { files: [], truncated: false }; }
+  }
+
+  readResource(name: string, resourcePath: string): string {
+    if (!name.startsWith('user__')) throw new Error('这个技能没有可读取的附带文件');
+    const rel = skillRelativePath(resourcePath);
+    if (rel === 'SKILL.md') throw new Error('技能说明请直接读取技能正文');
+    const target = this.containedFile(this.userDir(name.replace(/^user__/, '')), rel);
+    if (!existsSync(target)) throw new Error('技能里没有这个文件');
+    const stat = lstatSync(target);
+    if (!stat.isFile() || stat.size > MAX_SKILL_FILE_BYTES) throw new Error(stat.isFile() ? '这个文件超过 512KB，不能按文本读取' : '技能里没有这个文件');
+    const bytes = readFileSync(target);
+    if (bytes.includes(0)) return '这是二进制资源，已保留在技能目录中。只读取，不执行。';
+    return bytes.toString('utf8');
   }
 
   private readCustom(): SkillCard[] {
@@ -513,7 +582,48 @@ export class SkillCenter {
     let index = 2;
     while (cards.some(card => card.displayName === displayName)) displayName = `${source.skill.displayName} 副本${index++}`.slice(0, 40);
     const tools = source.skill.supported && source.skill.tools.length ? source.skill.tools : ['knowledge_search', 'knowledge_read', 'artifact_save'];
-    return this.create({ displayName, description: source.skill.description || displayName, triggers: source.skill.triggers.length ? source.skill.triggers : [source.skill.displayName], tools, steps: source.skill.body?.trim() || source.skill.description || '按这个技能的说明完成任务，并保存结果。' });
+    const extras = name.startsWith('user__') ? this.listSkillFiles(name.replace(/^user__/, ''), MAX_SKILL_FILES) : { files: [], truncated: false };
+    if (extras.truncated) throw new Error('附带文件过多，没有完整复制');
+    const created = await this.create({ displayName, description: source.skill.description || displayName, triggers: source.skill.triggers.length ? source.skill.triggers : [source.skill.displayName], tools, steps: source.skill.body?.trim() || source.skill.description || '按这个技能的说明完成任务，并保存结果。' });
+    if (!extras.files.length) return created;
+    const toSlug = created.name.replace(/^user__/, '');
+    try { this.copySkillFiles(name.replace(/^user__/, ''), toSlug, extras.files); }
+    catch (error) {
+      rmSync(this.userDir(toSlug), { recursive: true, force: true });
+      throw error;
+    }
+    return created;
+  }
+
+  private copySkillFiles(fromSlug: string, toSlug: string, files: string[]) {
+    const from = this.userDir(fromSlug);
+    const to = this.userDir(toSlug);
+    let total = 0;
+    for (const rel of files) {
+      const source = this.containedFile(from, rel);
+      const stat = lstatSync(source);
+      if (!stat.isFile()) continue;
+      if (stat.size > MAX_SKILL_FILE_BYTES || total + stat.size > MAX_SKILL_FOLDER_BYTES) throw new Error('附带文件过大，没有完整复制');
+      total += stat.size;
+      const target = this.containedFile(to, rel);
+      mkdirSync(dirname(target), { recursive: true, mode: 0o700 });
+      writeFileSync(target, readFileSync(source));
+    }
+  }
+
+  private folderSlug(frontName: string | undefined, displayName: string, cards: SkillCard[]): string {
+    const taken = this.taken(cards);
+    const free = (slug: string) => /^[a-z0-9][a-z0-9-]{0,62}$/.test(slug) && !taken.has(slug) && !PRODUCT_SKILLS.some(skill => skill.name === slug) && !existsSync(join(this.userRoot(), slug));
+    const candidate = (frontName ?? '').trim().toLowerCase();
+    if (free(candidate)) return candidate;
+    const base = slugPart(displayName || candidate || 'imported-skill');
+    let slug = assertSlug(base.slice(0, 40));
+    let index = 2;
+    while (!free(slug)) {
+      if (index > 100) throw new Error('技能标识无效');
+      slug = assertSlug(`${base.slice(0, 36)}-${index++}`);
+    }
+    return slug;
   }
 
   async importMarkdown(content: string): Promise<SkillCard> {
@@ -525,6 +635,58 @@ export class SkillCenter {
     const steps = parsed.body?.trim() ?? '';
     const tools = parsed.tools.length || mutating || writesPages ? parsed.tools : ['knowledge_search'];
     return this.create({ displayName: parsed.displayName, description: parsed.description || parsed.displayName, triggers: parsed.triggers.length ? parsed.triggers : [parsed.displayName], tools, steps: steps || parsed.description || parsed.displayName, mutating, writesPages });
+  }
+
+  async importFolder(files: Array<{ path?: unknown; content?: unknown; encoding?: unknown }>): Promise<SkillCard> {
+    if (!Array.isArray(files) || files.length < 1 || files.length > 200) throw new Error('请选择一个技能文件夹');
+    const kept: Array<{ path: string; bytes: Buffer }> = [];
+    const seen = new Set<string>();
+    let total = 0;
+    for (const file of files) {
+      if (!file || typeof file.path !== 'string' || typeof file.content !== 'string') throw new Error('技能文件无效');
+      const encoding = file.encoding ?? 'utf8';
+      if (encoding !== 'utf8' && encoding !== 'base64') throw new Error('技能文件无效');
+      const classified = classifySkillPath(file.path);
+      if (!('path' in classified)) continue;
+      if (seen.has(classified.path)) throw new Error('技能文件路径重复');
+      seen.add(classified.path);
+      if (classified.path === 'SKILL.md' && encoding !== 'utf8') throw new Error('SKILL.md 需要是文本');
+      const bytes = encoding === 'base64' ? Buffer.from(file.content, 'base64') : Buffer.from(file.content, 'utf8');
+      if (bytes.length > MAX_SKILL_FILE_BYTES) throw new Error(`「${classified.path}」超过 512KB，没有导入`);
+      total += bytes.length;
+      if (total > MAX_SKILL_FOLDER_BYTES) throw new Error('技能文件夹超过 4MB，没有导入');
+      kept.push({ path: classified.path, bytes });
+    }
+    if (kept.length > MAX_SKILL_FILES) throw new Error('技能文件夹里的文件超过 80 个，没有导入');
+    const skillFile = kept.find(file => file.path === 'SKILL.md');
+    if (!skillFile) throw new Error('这个文件夹里没有 SKILL.md');
+    const text = skillFile.bytes.toString('utf8');
+    if (!text.trim() || text.length > 256 * 1024) throw new Error('请提供一份不超过 256KB 的 SKILL.md');
+    const front = parseSkillFrontmatter(text);
+    const heading = text.match(/^#\s+(.+)$/m)?.[1]?.trim();
+    const displayName = (heading || front?.name || '').trim();
+    if (displayName.length < 2 || displayName.length > 80) throw new Error('SKILL.md 里需要有 2–80 个字符的技能名称');
+    const cards = await this.list();
+    if (cards.some(card => card.displayName === displayName)) throw new Error('已有同名技能');
+    const slug = this.folderSlug(front?.name, displayName, cards);
+    const dir = this.userDir(slug);
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    try {
+      for (const file of kept) {
+        const target = this.containedFile(dir, file.path);
+        mkdirSync(dirname(target), { recursive: true, mode: 0o700 });
+        writeFileSync(target, file.bytes);
+      }
+    } catch (error) {
+      rmSync(dir, { recursive: true, force: true });
+      throw error;
+    }
+    const skill = (await this.list()).find(card => card.name === `user__${slug}`);
+    if (!skill) {
+      rmSync(dir, { recursive: true, force: true });
+      throw new Error('技能没有导入成功');
+    }
+    return skill;
   }
 
   async remove(name: string): Promise<{ removed: true }> {

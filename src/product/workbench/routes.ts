@@ -332,6 +332,7 @@ export function registerWorkbenchRoutes(app: express.Express, requireAdmin: Requ
   app.get(`${base}/skill-center`, requireAdmin, handler(async () => ({ skills: await workbenchSkillCenter(agents).list() })));
   app.post(`${base}/skill-center`, requireAdmin, express.json({ limit: '64kb' }), handler(async req => ({ skill: await workbenchSkillCenter(agents).create(req.body ?? {}) })));
   app.post(`${base}/skill-center/import`, requireAdmin, express.json({ limit: '512kb' }), handler(async req => ({ skill: await workbenchSkillCenter(agents).importMarkdown(String(req.body?.content ?? '')) })));
+  app.post(`${base}/skill-center/import-folder`, requireAdmin, express.json({ limit: '8mb' }), handler(async req => ({ skill: await workbenchSkillCenter(agents).importFolder(Array.isArray(req.body?.files) ? req.body.files : []) })));
   app.post(`${base}/skill-center/from-playbook`, requireAdmin, express.json({ limit: '8kb' }), handler(async req => {
     const playbook = agentStore.get(String(req.body?.agentId ?? '')).playbook;
     if (!playbook) throw new Error('还没有可转换的做法');

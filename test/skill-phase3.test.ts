@@ -2,7 +2,7 @@ import { afterEach, expect, test } from 'bun:test';
 import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { agentInstructions, judgeSkillWithModel } from '../src/product/workbench/agent-tools';
+import { agentHandlers, agentInstructions, judgeSkillWithModel } from '../src/product/workbench/agent-tools';
 import { WorkbenchAgentStore } from '../src/product/workbench/agents';
 import { activityLine, skillDraftFromRequest, wantsSavedPlaybook, wantsSavedSkill } from '../src/product/workbench/playbook';
 import { nextSkillRuns } from '../src/product/workbench/skill-schedule';
@@ -157,6 +157,19 @@ test('到点的技能只提交一次，失败标记后同一时刻不再重复',
 });
 
 const skillFile = (frontmatter: string, title: string) => `---\n${frontmatter.trim()}\n---\n\n# ${title}\n\n按声明完成，不要改权限。\n`;
+const packMarkdown = `---
+name: meeting-pack
+description: "整理会议并套用模板"
+triggers:
+  - "会议资料包"
+tools:
+  - knowledge_search
+---
+
+# 会议资料包
+
+先读 references/template.md，再检索。
+`;
 
 test('停用后外部 AI 读不到已分享技能，重新启用后恢复', async () => {
   const { dir, skills } = center();
@@ -297,9 +310,115 @@ test('技能管理可以分享、限定助手和定时，助手设置可以把�
   expect(page).toContain('允许外部 AI 读取这个技能');
   expect(page).toContain('适用助手');
   expect(page).toContain('定时执行交给所选助手，走原来的任务中心');
+  expect(page).toContain('导入文件夹（推荐）');
+  expect(page).toContain('导入 SKILL.md');
+  expect(page).toContain('/skill-center/import-folder');
+  expect(page).not.toContain('className="skill-import"');
   expect(page).toContain('/skill-center/');
   const settings = readSkill('admin/src/workbench/AgentSettings.tsx');
   expect(settings).toContain('存成技能');
   expect(settings).toContain('/skill-center/from-playbook');
   expect(settings).toContain('role="status"');
+});
+
+test('导入技能文件夹会原样保留脚本、模板和资源，缺少工具的技能可以导入但不能自动执行', async () => {
+  const { dir, skills } = center();
+  const logo = Buffer.from([0, 1, 2, 255, 10]);
+  const script = 'open("ran-by-import.txt","w").write("ran")\n';
+  const imported = await skills.importFolder([
+    { path: 'SKILL.md', content: packMarkdown },
+    { path: 'scripts/export.py', content: script },
+    { path: 'references/template.md', content: '模板正文' },
+    { path: 'assets/logo.bin', content: logo.toString('base64'), encoding: 'base64' },
+    { path: 'node_modules/left-behind/index.js', content: 'do-not-keep' },
+    { path: '.git/config', content: 'do-not-keep' },
+  ]);
+  const folder = join(dir, 'user-skills', 'meeting-pack');
+  expect(imported.name).toBe('user__meeting-pack');
+  expect(imported.supported).toBe(true);
+  expect(readFileSync(join(folder, 'SKILL.md'), 'utf8')).toBe(packMarkdown);
+  expect(readFileSync(join(folder, 'scripts/export.py'), 'utf8')).toBe(script);
+  expect(readFileSync(join(folder, 'references/template.md'), 'utf8')).toBe('模板正文');
+  expect(readFileSync(join(folder, 'assets/logo.bin'))).toEqual(logo);
+  expect(existsSync(join(folder, 'node_modules'))).toBe(false);
+  expect(existsSync(join(folder, '.git'))).toBe(false);
+  expect(existsSync(join(dir, 'ran-by-import.txt'))).toBe(false);
+  expect(existsSync(join(folder, 'ran-by-import.txt'))).toBe(false);
+  const blocked = await skills.importFolder([{
+    path: 'SKILL.md',
+    content: `---
+name: shell-pack
+description: "需要外部脚本"
+triggers:
+  - "外部脚本技能"
+tools:
+  - bash
+---
+
+# 外部脚本技能
+
+先看 scripts/export.py。
+`,
+  }, { path: 'scripts/export.py', content: script }]);
+  expect(blocked.supported).toBe(false);
+  expect(blocked.missingTools).toEqual(['bash']);
+  expect(existsSync(join(dir, 'user-skills', 'shell-pack', 'scripts/export.py'))).toBe(true);
+  await expect(skills.setEnabled(blocked.name, true)).rejects.toThrow(/缺少工具/);
+  const copy = await skills.copy(imported.name);
+  const copied = join(dir, 'user-skills', copy.name.replace(/^user__/, ''));
+  expect(readFileSync(join(copied, 'references/template.md'), 'utf8')).toBe('模板正文');
+  expect(readFileSync(join(copied, 'assets/logo.bin'))).toEqual(logo);
+  expect(readFileSync(join(folder, 'SKILL.md'), 'utf8')).toBe(packMarkdown);
+});
+
+test('技能文件夹不能写出目录，同名技能不会留下半个目录', async () => {
+  const { dir, skills } = center();
+  await expect(skills.importFolder([{ path: 'SKILL.md', content: packMarkdown }, { path: 'scripts/../../outside.txt', content: 'no' }])).rejects.toThrow('技能文件路径无效');
+  await expect(skills.importFolder([{ path: 'C:/Windows/note.txt', content: 'no' }, { path: 'SKILL.md', content: packMarkdown }])).rejects.toThrow('技能文件路径无效');
+  expect(existsSync(join(dir, 'user-skills'))).toBe(false);
+  expect(existsSync(join(dir, 'outside.txt'))).toBe(false);
+  await skills.importFolder([{ path: 'SKILL.md', content: packMarkdown }]);
+  await expect(skills.importFolder([{ path: 'SKILL.md', content: packMarkdown }, { path: 'references/template.md', content: '另一份' }])).rejects.toThrow('已有同名技能');
+  expect(readdirSync(join(dir, 'user-skills'))).toEqual(['meeting-pack']);
+  expect(existsSync(join(dir, 'user-skills', 'meeting-pack', 'references'))).toBe(false);
+  await expect(skills.importFolder([{ path: 'references/template.md', content: '只有模板' }])).rejects.toThrow('这个文件夹里没有 SKILL.md');
+  await expect(skills.importFolder([{ path: 'SKILL.md', content: '---\nname: meeting-notes\ndescription: "同名"\n---\n\n# 会议纪要\n\n另一份说明。\n' }])).rejects.toThrow('已有同名技能');
+  expect(readdirSync(join(dir, 'user-skills'))).toEqual(['meeting-pack']);
+});
+
+test('助手按需读取技能附带文件，不执行脚本；单独的 SKILL.md 仍可导入', async () => {
+  const { dir, skills } = center();
+  const imported = await skills.importFolder([
+    { path: 'SKILL.md', content: packMarkdown },
+    { path: 'scripts/export.py', content: 'print("do not run")\n' },
+    { path: 'references/template.md', content: '模板正文' },
+    { path: 'assets/logo.bin', content: Buffer.from([0, 8]).toString('base64'), encoding: 'base64' },
+  ]);
+  const plain = await skills.importFolder([{ path: 'SKILL.md', content: '---\nname: notes-only\ndescription: "只有说明的技能"\n---\n\n# 只有说明的技能\n\n按说明阅读，不调用外部工具。\n' }]);
+  expect(plain.supported).toBe(true);
+  expect(plain.tools).toEqual([]);
+  expect(readFileSync(join(dir, 'user-skills', 'notes-only', 'SKILL.md'), 'utf8')).not.toContain('knowledge_search');
+  const agents = new WorkbenchAgentStore(new WorkbenchStore(dir));
+  const assistant = { id: 'main', name: '主助手', skills: [], workflow: '', sourceIds: ['default'], standingRules: [], readDirectories: [] } as never;
+  const instructions = await agentInstructions({ store: agents, engine: { getConfig: async () => null }, config: () => ({}) } as never, assistant, { userText: '请使用会议资料包' });
+  expect(instructions).toContain('references/template.md');
+  expect(instructions).toContain('scripts/export.py');
+  expect(instructions).toContain('不要执行');
+  expect(instructions).not.toContain('print("do not run")');
+  const handlers = agentHandlers({ store: agents, engine: { getConfig: async () => null, executeRaw: async () => [] }, config: () => ({}) } as never, { agent: assistant, userText: '请使用会议资料包', conversationId: 'c', messageId: 'm', cite: () => 1, citations: [], active: () => true });
+  const signal = new AbortController().signal;
+  const file = await handlers.get('skill_read')!.execute({ name: imported.name, path: 'references/template.md' }, signal) as { content: string; executed: boolean; note: string };
+  expect(file.content).toBe('模板正文');
+  expect(file.executed).toBe(false);
+  expect(file.note).toContain('不执行');
+  const binary = await handlers.get('skill_read')!.execute({ name: imported.name, path: 'assets/logo.bin' }, signal) as { content: string };
+  expect(binary.content).toContain('二进制');
+  await expect(handlers.get('skill_read')!.execute({ name: imported.name, path: '../SKILL.md' }, signal)).rejects.toThrow('技能文件路径无效');
+  const body = await handlers.get('skill_read')!.execute({ name: imported.name }, signal) as { content: string };
+  expect(body.content).toContain('先读 references/template.md');
+  await expect(handlers.get('skill_read')!.execute({ name: 'weekly-report', path: 'references/template.md' }, signal)).rejects.toThrow('没有可读取的附带文件');
+  const single = await skills.importMarkdown(skillFile('name: plain-note\ndescription: "只有说明"\ntriggers:\n  - "只有说明"\ntools:\n  - knowledge_search\n', '只有说明'));
+  expect(single.supported).toBe(true);
+  expect(readFileSync(join(dir, 'user-skills', single.name.replace(/^user__/, ''), 'SKILL.md'), 'utf8')).toContain('mutating: false');
+  expect(existsSync(join(dir, 'user-skills', single.name.replace(/^user__/, ''), 'scripts'))).toBe(false);
 });

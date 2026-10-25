@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { workbenchRequest } from '../workbench/useWorkbench';
 
 interface SkillCard {
@@ -26,6 +26,21 @@ interface Draft { displayName: string; description: string; triggers: string; to
 const toolChoices = [['knowledge_search', '搜索知识'], ['knowledge_read', '读取资料'], ['artifact_save', '保存文件'], ['local_files', '查看本地文件'], ['local_read', '读取本地文件'], ['memory_recall', '回忆']];
 const emptyDraft = (): Draft => ({ displayName: '', description: '', triggers: '', tools: ['knowledge_search', 'knowledge_read', 'artifact_save'], steps: '', manual: false });
 const statusText: Record<string, string> = { matched: '已匹配', loaded: '已加载', running: '执行中', success: '成功', failed: '失败', cancelled: '取消', blocked: '未执行', choice: '等待选择' };
+const textResource = (path: string) => /\.(md|markdown|txt|json|ya?ml|csv|tsv|py|js|mjs|cjs|ts|tsx|jsx|sh|ps1|bat|html|css|xml|toml|ini|svg|sql)$/i.test(path);
+const skippedResource = (path: string) => path.split('/').some(part => !part || part === '.' || part === '..' || part.startsWith('.') || part === 'node_modules' || part === '__pycache__' || part === '.git');
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let text = '';
+  for (let index = 0; index < bytes.length; index += 0x8000) text += String.fromCharCode(...bytes.subarray(index, index + 0x8000));
+  return btoa(text);
+}
+
+function skillImportNotice(skill: SkillCard, folder: boolean): string {
+  const kept = folder ? '技能目录已原样保留，脚本不会自动运行。' : '';
+  if (!skill.supported && skill.missingTools.length) return `已导入「${skill.displayName}」，但缺少工具：${skill.missingTools.join('、')}。暂时不能自动执行。${kept}`;
+  if (!skill.supported) return `已导入「${skill.displayName}」。它会修改知识库或执行外部操作，暂时不能自动执行。${kept}`;
+  return `已导入「${skill.displayName}」。${kept}`;
+}
 
 function reason(skill: SkillCard): string {
   if (skill.missingTools.length) return `缺少工具：${skill.missingTools.join('、')}`;
@@ -46,6 +61,10 @@ export function SkillCenter() {
   const [busy, setBusy] = useState(false);
   const [agents, setAgents] = useState<Array<{ id: string; name: string }>>([]);
   const [scheduleDraft, setScheduleDraft] = useState<SkillSchedule>({ enabled: false, weekdays: [1, 2, 3, 4, 5], time: '09:00', timezone: 'Asia/Shanghai', prompt: '', assistantId: 'main' });
+  const [importOpen, setImportOpen] = useState(false);
+  const folderInput = useRef<HTMLInputElement>(null);
+  const fileInput = useRef<HTMLInputElement>(null);
+  useEffect(() => { if (!importOpen) return; const close = () => setImportOpen(false); window.addEventListener('click', close); return () => window.removeEventListener('click', close); }, [importOpen]);
   const load = async () => {
     const result = await workbenchRequest<{ skills: SkillCard[] }>('/skill-center');
     setSkills(result.skills);
@@ -70,10 +89,45 @@ export function SkillCenter() {
     const result = editing && selected ? await workbenchRequest<{ skill: SkillCard }>(`/skill-center/${encodeURIComponent(selected)}`, body, 'PUT') : await workbenchRequest<{ skill: SkillCard }>('/skill-center', body, 'POST');
     await load(); setEditing(false); setNotice(editing ? '已保存技能' : '已创建技能，下一句对话即可使用'); await open(result.skill.name);
   });
+  const importFile = (file: File | undefined) => {
+    if (!file) return;
+    void run(async () => {
+      const content = await file.text();
+      const result = await workbenchRequest<{ skill: SkillCard }>('/skill-center/import', { content }, 'POST');
+      await load(); setNotice(skillImportNotice(result.skill, false)); await open(result.skill.name);
+    });
+  };
+  const importDirectory = (list: FileList | null) => {
+    const selected = [...(list ?? [])];
+    if (!selected.length) return;
+    void run(async () => {
+      const rooted = selected.map(file => ({ file, path: (file.webkitRelativePath || file.name).replace(/\\/g, '/') }));
+      const roots = rooted.filter(item => item.path.split('/').pop() === 'SKILL.md');
+      if (roots.length !== 1) throw new Error(roots.length ? '请只选择一个包含 SKILL.md 的技能文件夹' : '这个文件夹里没有 SKILL.md');
+      const prefix = roots[0]!.path.slice(0, roots[0]!.path.length - 'SKILL.md'.length);
+      const packed = [];
+      let total = 0;
+      for (const item of rooted) {
+        if (!item.path.startsWith(prefix)) continue;
+        const path = item.path.slice(prefix.length);
+        if (!path || skippedResource(path)) continue;
+        if (item.file.size > 512 * 1024) throw new Error(`「${path}」超过 512KB，没有导入`);
+        total += item.file.size;
+        if (total > 4 * 1024 * 1024) throw new Error('技能文件夹超过 4MB，没有导入');
+        const binary = path !== 'SKILL.md' && !textResource(path);
+        const content = binary ? bytesToBase64(new Uint8Array(await item.file.arrayBuffer())) : await item.file.text();
+        packed.push({ path, content, encoding: binary ? 'base64' as const : 'utf8' as const });
+      }
+      if (!packed.some(item => item.path === 'SKILL.md')) throw new Error('这个文件夹里没有 SKILL.md');
+      if (packed.length > 80) throw new Error('技能文件夹里的文件超过 80 个，没有导入');
+      const result = await workbenchRequest<{ skill: SkillCard }>('/skill-center/import-folder', { files: packed }, 'POST');
+      await load(); setNotice(skillImportNotice(result.skill, true)); await open(result.skill.name);
+    });
+  };
   const shown = skills.filter(skill => (filter === 'all' || skill.origin === filter) && (!query.trim() || `${skill.displayName} ${skill.description}`.includes(query.trim())));
   const counts = { all: skills.length, builtin: skills.filter(skill => skill.origin === 'builtin').length, custom: skills.filter(skill => skill.origin === 'custom').length };
   return <div className="skill-center">
-    <header><div><h2>技能管理</h2><p>管理知识助手可以使用的技能和工作方法。说出任务后，助手只加载匹配的技能。</p></div><button type="button" className="skill-primary" disabled={busy} onClick={() => { setEditing(true); setSelected(''); setDetail(null); setDraft(emptyDraft()); }}>创建技能</button></header>
+    <header><div><h2>技能管理</h2><p>管理知识助手可以使用的技能和工作方法。说出任务后，助手只加载匹配的技能。</p></div><div className="skill-header-actions"><div className="skill-import-menu" onClick={event => event.stopPropagation()}><button type="button" className="skill-secondary" aria-expanded={importOpen} aria-haspopup="menu" disabled={busy} onClick={() => setImportOpen(open => !open)}>导入技能</button>{importOpen && <div role="menu" aria-label="导入技能"><button type="button" role="menuitem" onClick={() => { setImportOpen(false); folderInput.current?.click(); }}>导入文件夹（推荐）</button><button type="button" role="menuitem" onClick={() => { setImportOpen(false); fileInput.current?.click(); }}>导入 SKILL.md</button></div>}<input ref={node => { folderInput.current = node; node?.setAttribute('webkitdirectory', ''); node?.setAttribute('directory', ''); }} type="file" multiple hidden aria-label="导入技能文件夹" onChange={event => { const list = event.target.files; event.target.value = ''; importDirectory(list); }} /><input ref={fileInput} type="file" hidden aria-label="导入技能文件" accept=".md,text/markdown" onChange={event => { const file = event.target.files?.[0]; event.target.value = ''; importFile(file); }} /></div><button type="button" className="skill-primary" disabled={busy} onClick={() => { setEditing(true); setSelected(''); setDetail(null); setDraft(emptyDraft()); }}>创建技能</button></div></header>
     <p className="skill-count">{counts.all} 个技能 · 内置 {counts.builtin} · 我的 {counts.custom}</p>
     {error && <p role="alert">{error}</p>}
     {notice && <p role="status">{notice}</p>}
@@ -123,8 +177,7 @@ export function SkillCenter() {
         </div>}
         {!editing && !detail && <div>
           <h3>选择一个技能</h3>
-          <p>内置技能保持原件。要改步骤时，先复制成自己的技能。也可以导入 SKILL.md。</p>
-          <label className="skill-import">导入 SKILL.md<input aria-label="导入技能文件" type="file" accept=".md,text/markdown" onChange={event => { const file = event.target.files?.[0]; event.target.value = ''; if (!file) return; void run(async () => { const content = await file.text(); const result = await workbenchRequest<{ skill: SkillCard }>('/skill-center/import', { content }, 'POST'); await load(); setNotice('已导入技能'); await open(result.skill.name); }); }} /></label>
+          <p>内置技能保持原件。要改步骤时，先复制成自己的技能。导入完整技能时，用右上角的「导入技能」选择文件夹。</p>
         </div>}
       </article>
     </div>

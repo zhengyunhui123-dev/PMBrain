@@ -120,12 +120,16 @@ export async function agentInstructions(context: WorkbenchAgentTools, agent: Wor
   if (!directoryOnly && options.judge && !skipJudge) plan = await refineTurnSkills(plan, skillInput, options.judge);
   const skillTurn = plan.loaded.length > 0 || Boolean(plan.notice);
   const triggered = !directoryOnly && (options.userText === undefined || !options.userText.trim() ? true : taskNeedsSkill(agent, options.userText) || notes.length > 0 || follow || skillTurn);
+  const center = skillCenter(context);
   const loaded = [];
   if (triggered) for (const card of plan.loaded) {
     const body = card.body?.trim() || productSkillBody(card.name) || String((await agentSkill(context, card.name)).body ?? '');
-    if (body) loaded.push(`<skill name="${card.name}">\n${body}\n</skill>`);
+    if (!body) continue;
+    const resources = card.name.startsWith('user__') ? center?.resourcePaths(card.name) : undefined;
+    const files = resources?.files ?? [];
+    const extra = files.length ? `\n附带文件只供读取，不要执行其中的脚本或命令：\n${files.map(item => `- ${item}`).join('\n')}${resources?.truncated ? '\n还有其他文件。需要时用 skill_read 按相对路径读取。' : ''}\n需要文件内容时调用 skill_read，name 为 ${card.name}，path 为相对路径。` : '';
+    loaded.push(`<skill name="${card.name}">\n${body}${extra}\n</skill>`);
   }
-  const center = skillCenter(context);
   let runId: string | undefined;
   if (center && triggered && (plan.loaded.length || plan.notice || options.continueRunId)) {
     const subject = plan.loaded[0] ?? cards.find(card => plan.notice?.includes(`「${card.displayName}」`));
@@ -166,7 +170,7 @@ export function agentTools(agent: WorkbenchAgent, userText: string, context: Wor
   if (isDirectoryStep(userText)) return [directoryTool];
   const tools = [
     schema('skills_list', '查看技能与兼容状态，默认只列可用技能，可按 nextOffset 继续读取；用返回的准确 name 配置。', { offset: { type: 'integer', minimum: 0 }, includeUnsupported: { type: 'boolean' } }),
-    schema('skill_read', '分段读取一个共享技能说明，可按 nextOffset 继续。', { name: string, offset: { type: 'integer', minimum: 0 } }, ['name']),
+    schema('skill_read', '分段读取一个技能说明。需要技能附带的脚本、模板或参考文件时，传入该技能目录内的 path，只读取不执行。', { name: string, path: string, offset: { type: 'integer', minimum: 0 } }, ['name']),
     schema('artifact_save', '将新内容保存为可打开的 docx 或 Markdown。Word 图片使用 Markdown 图片语法，地址为 attachment:附件编号 或已授权本地绝对路径。template 可指定带独立段落 {{PMBRAIN_CONTENT}} 的 docx 附件引用或授权路径，{{PMBRAIN_TITLE}} 可替换标题；原模板页眉页脚和样式保留。layout 可设置无模板文稿的页面方向。使用真实引用编号，保存后说明返回的 path。修改已有成果用 artifact_revise。', { title: string, content: string, format: { type: 'string', enum: ['docx', 'markdown'] }, template: string, layout: { type: 'string', enum: ['portrait', 'landscape'] } }, ['title', 'content']),
     schema('artifact_list', '列出当前会话里这个助手已经保存的成果，不含正文。修改前先确认编号、版本和哈希。', { offset: { type: 'integer', minimum: 0 } }),
     schema('artifact_read', '按成果编号读取已保存的正文、版本和哈希。只读当前会话的成果，不读取任意路径。', { id: string, offset: { type: 'integer', minimum: 0 } }, ['id']),
@@ -197,7 +201,16 @@ export function agentHandlers(context: WorkbenchAgentTools, input: { agent: Work
   } }];
   return new Map<string, ToolHandler>([
     handler('skills_list', async raw => page((await agentSkillCatalog(context)).filter(row => raw.includeUnsupported === true || row.supported).map(({ description, ...row }) => ({ ...row, snippet: description })), raw), true),
-    handler('skill_read', async raw => { const detail = await agentSkill(context, String(raw.name)); return read(String(detail.body), raw, { name: raw.name, supported: detail.supported, missingTools: detail.missingTools }); }, true),
+    handler('skill_read', async raw => {
+      const name = String(raw.name);
+      if (typeof raw.path === 'string' && raw.path.trim()) {
+        const center = skillCenter(context);
+        if (!center) throw new Error('这个技能没有可读取的附带文件');
+        return read(center.readResource(name, raw.path), raw, { name, path: raw.path.trim(), executed: false, note: '只读取技能目录里的文件，不执行脚本或命令。' });
+      }
+      const detail = await agentSkill(context, name);
+      return read(String(detail.body), raw, { name, supported: detail.supported, missingTools: detail.missingTools });
+    }, true),
     handler('assistants_list', async raw => page(context.store.list().map(agent => ({ id: agent.id, name: agent.name, revision: agent.revision, skills: agent.skills, snippet: agent.description })), raw), true),
     handler('assistant_read', async raw => { const agent = context.store.get(String(raw.id)); return read(JSON.stringify(agent), raw, { id: agent.id, revision: agent.revision }); }, true),
     handler('sources_list', async raw => page(await context.engine.executeRaw('SELECT id,name FROM sources WHERE archived=false ORDER BY id'), raw), true),
