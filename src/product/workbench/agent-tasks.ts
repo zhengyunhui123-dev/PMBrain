@@ -4,13 +4,13 @@ import type { ProductTaskRuntime } from '../tasks/runtime';
 import type { BrainEngine } from '../../core/engine';
 import { WorkbenchAgentStore, scheduleOccurrence } from './agents';
 import { scheduledTaskPrompt } from './playbook';
-import { PRODUCT_SKILLS, SkillCenter } from './skill-center';
+import { concludeSkillRun, PRODUCT_SKILLS, SkillCenter } from './skill-center';
 import { nextSkillRuns } from './skill-schedule';
 import type { WorkbenchService } from './service';
 import { publishArtifactToSource, saveWorkbenchArtifact } from './files';
 import { TaskProgressAdapter } from '../tasks/progress-adapter';
 
-export interface WorkbenchAssistantTask { root: string; assistantId: string; conversationId: string; prompt: string; turnId?: string; timeoutMs?: number }
+export interface WorkbenchAssistantTask { root: string; assistantId: string; conversationId: string; prompt: string; turnId?: string; timeoutMs?: number; skillRunId?: string }
 export class WorkbenchAgentCoordinator {
   private timer?: ReturnType<typeof setInterval>;
   private scanning = false;
@@ -23,14 +23,14 @@ export class WorkbenchAgentCoordinator {
     void this.scan().catch(error => console.error('[assistant schedule]', error));
   }
   close() { clearInterval(this.timer); this.timer = undefined; }
-  async submit(assistantId: string, prompt: string, key?: string, scheduled = false, conversationId?: string) {
+  async submit(assistantId: string, prompt: string, key?: string, scheduled = false, conversationId?: string, skillRunId?: string) {
     if (typeof prompt !== 'string' || !prompt.trim() || prompt.length > 8000) throw new Error('请填写 1–8000 字的任务要求');
     const agent = this.store.get(assistantId);
     const existing = key ? this.store.workbench.list().find(row => row.taskKey === key && row.assistantId === assistantId) : undefined;
     const conversation = conversationId ? this.service.get(conversationId) : existing ?? this.service.openAssistant(agent.id) ?? this.service.create({ assistantId: agent.id });
     if (!conversation.messages.length && key) { conversation.taskKey = key; conversation.title = `${agent.name}任务`; this.store.workbench.save(conversation); }
     const digest = createHash('sha256').update(JSON.stringify([this.store.workbench.root, assistantId, key ?? randomUUID()])).digest('hex');
-    const run = await this.tasks.submitAssistant({ root: this.store.workbench.root, assistantId, conversationId: conversation.id, prompt: prompt.trim(), turnId: randomUUID() }, `assistant:${digest}`, scheduled);
+    const run = await this.tasks.submitAssistant({ root: this.store.workbench.root, assistantId, conversationId: conversation.id, prompt: prompt.trim(), turnId: randomUUID(), ...(skillRunId ? { skillRunId } : {}) }, `assistant:${digest}`, scheduled);
     return { run, conversationId: conversation.id, assistantId, submitted: true };
   }
   async scan(now = new Date()) {
@@ -50,13 +50,13 @@ export class WorkbenchAgentCoordinator {
       }
       const skills = new SkillCenter(this.store.workbench.root, async () => PRODUCT_SKILLS.map(skill => ({ ...skill })));
       for (const run of nextSkillRuns(await skills.list(), skills.scheduleMarks(), now)) {
+        const recorded = skills.record({ at: now.toISOString(), name: run.name, displayName: run.displayName, agentId: run.assistantId, excerpt: run.prompt, status: 'matched' });
         try {
-          const result = await this.submit(run.assistantId, run.prompt, `skill:${run.name}:${run.slot}`, true);
+          const result = await this.submit(run.assistantId, run.prompt, `skill:${run.name}:${run.slot}`, true, undefined, recorded.id);
           skills.markSchedule(run.name, run.slot, result.run.id);
-          skills.record({ at: now.toISOString(), name: run.name, displayName: run.displayName, agentId: run.assistantId, excerpt: run.prompt, status: 'loaded' });
         } catch (error) {
           skills.markSchedule(run.name, run.slot, 'failed');
-          skills.record({ at: now.toISOString(), name: run.name, displayName: run.displayName, agentId: run.assistantId, excerpt: error instanceof Error ? error.message : String(error), status: 'blocked' });
+          skills.settle(recorded.id, { status: 'failed', result: error instanceof Error ? error.message : String(error) });
         }
       }
     } finally { this.scanning = false; }
@@ -77,7 +77,7 @@ export class WorkbenchAgentCoordinator {
       const samePrompt = lastUser?.text === input.prompt && tail?.role === 'assistant' && (!input.turnId || tail.turnId === input.turnId) ? tail : undefined;
       let replyId: string | undefined;
       if (!samePrompt || (samePrompt.status !== 'complete' && samePrompt.status !== 'running')) {
-        this.service.send(initial.id, { ...(samePrompt ? { retry: true } : { text: input.prompt }), ...(input.turnId ? { turnId: input.turnId } : {}) });
+        this.service.send(initial.id, { ...(samePrompt ? { retry: true } : { text: input.prompt }), ...(input.turnId ? { turnId: input.turnId } : {}), ...(input.skillRunId ? { skillRunId: input.skillRunId } : {}) });
         const started = await this.service.accepted(initial.id);
         replyId = started.messages.at(-1)?.id;
         const adapter = new TaskProgressAdapter('assistant_task');
@@ -95,7 +95,10 @@ export class WorkbenchAgentCoordinator {
       const conversation = this.service.get(initial.id); const reply = (replyId ? conversation.messages.find(message => message.id === replyId) : undefined) ?? conversation.messages.at(-1);
       if (!reply || reply.role !== 'assistant' || reply.status !== 'complete') throw new Error(reply?.error ?? '助手未完成任务');
       if (reply.stopReason === 'length') throw new Error('助手输出尚未完整，已保存对话，请继续后再交付');
-      if (reply.evidenceGap) return { assistantId: agent.id, assistantName: agent.name, conversationId: conversation.id, artifacts: [], status: 'completed' };
+      if (reply.evidenceGap) {
+        if (input.skillRunId) new SkillCenter(this.store.workbench.root, () => []).settle(input.skillRunId, { status: 'failed', result: '本期材料还没齐' });
+        return { assistantId: agent.id, assistantName: agent.name, conversationId: conversation.id, artifacts: [], status: 'completed' };
+      }
       let artifacts = this.store.artifacts().filter(row => row.conversationId === initial.id && row.messageId === reply.id);
       if (agent.skills.includes('weekly-report') && !reply.citations?.length) throw new Error('缺少可核对的工作材料，请在任务对话补充资料后继续');
       if (!artifacts.length) {
@@ -111,7 +114,11 @@ export class WorkbenchAgentCoordinator {
       reply.artifacts = artifacts.map(({ id, title, format, publishedPath, revision }) => ({ id, title, format, publishedPath, ...(revision && revision > 1 ? { revision } : {}) }));
       if (conversation.task && !conversation.task.currentArtifactId && artifacts.length === 1) conversation.task = { ...conversation.task, currentArtifactId: artifacts[0]!.id };
       this.store.workbench.save(conversation);
+      if (input.skillRunId) new SkillCenter(this.store.workbench.root, () => []).settle(input.skillRunId, concludeSkillRun({ status: reply.status, error: reply.error, toolCalls: reply.toolCalls }));
       return { assistantId: agent.id, assistantName: agent.name, conversationId: conversation.id, artifacts: artifacts.map(({ id, title, format, publishedPath }) => ({ id, title, format, publishedPath })), status: 'completed' };
+    } catch (error) {
+      if (input.skillRunId) new SkillCenter(this.store.workbench.root, () => []).settle(input.skillRunId, { status: signal.aborted ? 'cancelled' : 'failed', result: error instanceof Error ? error.message : String(error) });
+      throw error;
     } finally { clearInterval(progressTimer); await progressPending; signal.removeEventListener('abort', cancel); }
   }
 }

@@ -20,12 +20,12 @@ interface SkillCard {
   schedule?: SkillSchedule;
 }
 interface SkillSchedule { enabled: boolean; weekdays: number[]; time: string; timezone: string; prompt: string; assistantId: string }
-interface SkillRun { at: string; displayName: string; excerpt: string; status: 'loaded' | 'blocked' | 'choice' }
+interface SkillRun { at: string; displayName: string; excerpt: string; status: string; tools?: string[]; result?: string }
 interface Draft { displayName: string; description: string; triggers: string; tools: string[]; steps: string; manual: boolean }
 
 const toolChoices = [['knowledge_search', '搜索知识'], ['knowledge_read', '读取资料'], ['artifact_save', '保存文件'], ['local_files', '查看本地文件'], ['local_read', '读取本地文件'], ['memory_recall', '回忆']];
 const emptyDraft = (): Draft => ({ displayName: '', description: '', triggers: '', tools: ['knowledge_search', 'knowledge_read', 'artifact_save'], steps: '', manual: false });
-const statusText: Record<SkillRun['status'], string> = { loaded: '已调用', blocked: '未执行', choice: '等待选择' };
+const statusText: Record<string, string> = { matched: '已匹配', loaded: '已加载', running: '执行中', success: '成功', failed: '失败', cancelled: '取消', blocked: '未执行', choice: '等待选择' };
 
 function reason(skill: SkillCard): string {
   if (skill.missingTools.length) return `缺少工具：${skill.missingTools.join('、')}`;
@@ -56,7 +56,7 @@ export function SkillCenter() {
     setSelected(name); setEditing(false); setError('');
     const result = await workbenchRequest<{ skill: SkillCard; runs: SkillRun[] }>(`/skill-center/${encodeURIComponent(name)}`);
     setDetail(result);
-    setDraft({ displayName: result.skill.displayName, description: result.skill.description, triggers: result.skill.triggers.join('\n'), tools: result.skill.tools.length ? result.skill.tools : ['knowledge_search'], steps: result.skill.body ?? '', manual: result.skill.manual });
+    setDraft({ displayName: result.skill.displayName, description: result.skill.description, triggers: result.skill.triggers.join('\n'), tools: result.skill.tools.length ? result.skill.tools : (result.skill.permission === 'read' ? ['knowledge_search'] : []), steps: result.skill.body ?? '', manual: result.skill.manual });
     setScheduleDraft(result.skill.schedule ?? { enabled: false, weekdays: [1, 2, 3, 4, 5], time: '09:00', timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Shanghai', prompt: '', assistantId: 'main' });
   };
   const run = async (action: () => Promise<void>) => {
@@ -112,7 +112,7 @@ export function SkillCenter() {
           {detail.skill.kind === 'custom' && !detail.skill.supported && <p>会修改知识库或缺少工具的技能不能分享，也不能定时。</p>}
           {detail.skill.supported && <><h4>定时执行</h4><p>定时执行交给所选助手，走原来的任务中心。</p><label><input type="checkbox" aria-label="启用技能定时" checked={scheduleDraft.enabled} onChange={event => setScheduleDraft({ ...scheduleDraft, enabled: event.target.checked })} />到点后自动执行</label><fieldset><legend>执行日期</legend>{['日', '一', '二', '三', '四', '五', '六'].map((day, index) => <label key={day}><input type="checkbox" checked={scheduleDraft.weekdays.includes(index)} onChange={event => setScheduleDraft({ ...scheduleDraft, weekdays: event.target.checked ? [...scheduleDraft.weekdays, index] : scheduleDraft.weekdays.filter(item => item !== index) })} />周{day}</label>)}</fieldset><label>时间<input type="time" aria-label="技能执行时间" value={scheduleDraft.time} onChange={event => setScheduleDraft({ ...scheduleDraft, time: event.target.value })} /></label><label>交给哪个助手<select aria-label="执行技能的助手" value={scheduleDraft.assistantId} onChange={event => setScheduleDraft({ ...scheduleDraft, assistantId: event.target.value })}>{(agents.some(agent => agent.id === scheduleDraft.assistantId) ? agents : [...agents, { id: scheduleDraft.assistantId, name: scheduleDraft.assistantId }]).map(agent => <option key={agent.id} value={agent.id}>{agent.name}</option>)}</select></label><label>时区<input aria-label="技能执行时区" value={scheduleDraft.timezone} onChange={event => setScheduleDraft({ ...scheduleDraft, timezone: event.target.value })} /></label><label>任务要求<textarea aria-label="技能定时要求" value={scheduleDraft.prompt} onChange={event => setScheduleDraft({ ...scheduleDraft, prompt: event.target.value })} placeholder="到点后让助手完成这个技能" /></label><div className="skill-actions"><button type="button" className="skill-primary" disabled={busy} onClick={() => void run(async () => { await workbenchRequest(`/skill-center/${encodeURIComponent(detail.skill.name)}/schedule`, { schedule: scheduleDraft }, 'POST'); setNotice('已保存定时。到点后由所选助手执行。'); await open(detail.skill.name); })}>保存定时</button>{detail.skill.schedule && <button type="button" disabled={busy} onClick={() => void run(async () => { await workbenchRequest(`/skill-center/${encodeURIComponent(detail.skill.name)}/schedule`, { schedule: null }, 'POST'); setNotice('已取消这个技能的定时'); await open(detail.skill.name); })}>取消定时</button>}</div></>}
           <h4>执行记录</h4>
-          {detail.runs.length ? <ul className="skill-runs">{detail.runs.map(run => <li key={`${run.at}-${run.excerpt}`}>{new Date(run.at).toLocaleString()} · {statusText[run.status]} · {run.excerpt || '没有原话'}</li>)}</ul> : <p>还没有调用记录</p>}
+          {detail.runs.length ? <ul className="skill-runs">{detail.runs.map(run => <li key={`${run.at}-${run.excerpt}-${run.status}`}>{new Date(run.at).toLocaleString()} · {statusText[run.status] ?? '已加载'} · {run.excerpt || '没有原话'}{run.tools?.length ? ` · ${run.tools.join('、')}` : ''}{run.result ? ` · ${run.result}` : ''}</li>)}</ul> : <p>还没有执行记录</p>}
           <div className="skill-actions">
             <button type="button" className="skill-primary" onClick={() => { sessionStorage.setItem('pmbrain.pendingSkillUse', JSON.stringify({ prompt: `请使用技能「${detail.skill.displayName}」完成这项工作：` })); window.location.hash = 'assistant'; }}>立即使用</button>
             <button type="button" disabled={busy} onClick={() => void run(async () => { const result = await workbenchRequest<{ skill: SkillCard }>(`/skill-center/${encodeURIComponent(detail.skill.name)}/copy`, {}, 'POST'); await load(); setNotice('已复制为我的技能，升级软件不会覆盖它'); await open(result.skill.name); })}>复制为我的技能</button>

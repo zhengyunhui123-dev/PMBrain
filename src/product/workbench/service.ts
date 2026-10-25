@@ -10,7 +10,7 @@ import { memoryVersion } from './memory-identity';
 import { WorkbenchAgentStore } from './agents';
 import type { WorkbenchAgent } from '../../../shared/workbench-agents';
 import { compilePlaybook, EVIDENCE_GAP_TEXT, needsCurrentEvidence, visibleAssistantText, wantsSavedPlaybook } from './playbook';
-import { PRODUCT_SKILLS, SkillCenter } from './skill-center';
+import { concludeSkillRun, PRODUCT_SKILLS, SkillCenter } from './skill-center';
 import { advanceTask, noteTask, rememberTaskMaterials, taskUserTexts } from './task-context';
 import { decidePending } from './pending';
 import { completedDirectories, completedDirectory, listWorkbenchArtifacts } from './files';
@@ -84,9 +84,11 @@ export interface WorkbenchAnswerInput {
   onTool?: (call: WorkbenchToolCall) => void;
   onContext?: (note: string) => void;
   onRequestEvent?: (event:ChatRequestEvent)=>void;
+  onSkillRun?: (runId: string) => void;
+  continueSkillRunId?: string;
   contextSummarizer?: { model: string; contextWindow?: number; summarize: WorkbenchSummarizer };
 }
-export type WorkbenchAnswer = (input: WorkbenchAnswerInput) => Promise<{ text: string; model: string; citations: WorkbenchCitation[]; knowledge?: 'used' | 'none' | 'off'; stopReason?: 'end' | 'length' | 'other'; skills?: Array<{ name: string; displayName: string }>; skillNote?: string }>;
+export type WorkbenchAnswer = (input: WorkbenchAnswerInput) => Promise<{ text: string; model: string; citations: WorkbenchCitation[]; knowledge?: 'used' | 'none' | 'off'; stopReason?: 'end' | 'length' | 'other'; skills?: Array<{ name: string; displayName: string }>; skillNote?: string; skillNotice?: string }>;
 export type WorkbenchSummarizer = (input: { model: string; prior: string; transcript: string; signal: AbortSignal; contextWindow?: number; onRequestEvent?:(event:ChatRequestEvent)=>void }) => Promise<string>;
 export interface WorkbenchMemoryHooks {
   capture: (conversation: WorkbenchConversation, message: WorkbenchMessage) => Promise<WorkbenchMemory>;
@@ -271,7 +273,7 @@ export class WorkbenchService {
     this.acceptance.delete(id);
     current.rejectReady?.(Object.assign(new Error('已停止生成'), { name: 'AbortError' }));
   }
-  send(id: string, input: { text?: string; model?: string; knowledge?: boolean; retry?: boolean; editMessageId?: string; attachments?: unknown; attachmentsHydrated?: boolean; interrupt?: boolean; turnId?: string }) {
+  send(id: string, input: { text?: string; model?: string; knowledge?: boolean; retry?: boolean; editMessageId?: string; attachments?: unknown; attachmentsHydrated?: boolean; interrupt?: boolean; turnId?: string; skillRunId?: string }) {
     if (this.active.has(id)) {
       if (input.interrupt !== true) throw new Error('当前会话正在生成，请等待或停止');
       this.releaseTurn(id);
@@ -369,7 +371,7 @@ export class WorkbenchService {
         openedTask = advanced.opened;
         if (advanced.opened) delete conversation.taskNotes;
         const scopedUserTexts = taskUserTexts(conversation.messages.filter((_, index) => index > floor), conversation.task, spoken.id);
-        const skillTurn = new SkillCenter(this.store.root, () => PRODUCT_SKILLS.map(skill => ({ ...skill }))).applyConversation({ conversationId: conversation.id, text: spoken.text, playbook: assistant.playbook, compile: () => compilePlaybook({ name: assistant.name, workflow: assistant.workflow, standingRules: assistant.standingRules, deliveryFormat: assistant.deliveryFormat, recentUserTexts: scopedUserTexts }) });
+        const skillTurn = new SkillCenter(this.store.root, () => PRODUCT_SKILLS.map(skill => ({ ...skill }))).applyConversation({ conversationId: conversation.id, agentId: assistant.id, text: spoken.text, playbook: assistant.playbook, compile: () => compilePlaybook({ name: assistant.name, workflow: assistant.workflow, standingRules: assistant.standingRules, deliveryFormat: assistant.deliveryFormat, recentUserTexts: scopedUserTexts }) });
         if (skillTurn.handled) {
           skillNotice = skillTurn.notice;
           savedSkill = skillTurn.saved;
@@ -470,6 +472,7 @@ export class WorkbenchService {
     const summarizer=this.summarize?async(value:Parameters<WorkbenchSummarizer>[0])=>this.summarize!({...value,onRequestEvent:reportRequest}):undefined;
     let promise!: Promise<void>;
     promise = (async () => {
+      let skillRunId = input.skillRunId;
       try {
         const userTurn = [...conversation.messages].reverse().find(message => message.role === 'user');
         const decision = decidePending({
@@ -607,6 +610,8 @@ export class WorkbenchService {
           ...(assistant.systemPrompt.trim() ? { systemPrompt: assistant.systemPrompt } : {}),
           ...(assistant.temperature !== null ? { temperature: assistant.temperature } : {}),
           signal: session.signal,
+          ...(input.skillRunId ? { continueSkillRunId: input.skillRunId } : {}),
+          onSkillRun: runId => { skillRunId = runId; },
           progress: stage => { if (session.signal.aborted) return; reply.stage = stage; saveSoon(true); },
           onDelta: delta => {
             if (session.signal.aborted || !delta) return;
@@ -679,6 +684,7 @@ export class WorkbenchService {
           reply.citations = citations;
           reply.knowledge = knowledge;
           if (result.stopReason) reply.stopReason = result.stopReason;
+          if (result.skillNotice) reply.skillNotice = result.skillNotice;
           reply.status = 'complete';
           if (conversation.task && evidenceGap) conversation.task = { ...conversation.task, openItems: [...new Set([...(conversation.task.openItems ?? []), '本期材料还没齐'])].slice(-8) };
           else if (conversation.task && citedNow && conversation.task.openItems?.includes('本期材料还没齐')) {
@@ -698,6 +704,10 @@ export class WorkbenchService {
           if (abort.signal.aborted) reply.status = 'cancelled';
           for (const call of reply.toolCalls ?? []) if (call.status === 'running') { call.status = abort.signal.aborted ? 'cancelled' : 'error'; call.error = abort.signal.aborted ? '已停止' : reply.error || '工具执行中断'; call.completedAt = new Date().toISOString(); }
           if (reply.status !== 'complete') assignArtifactReceipts(this.store, conversation, reply, assistant.id, [...(settledTools ?? []), ...(reply.toolCalls ?? [])], false, false);
+          if (skillRunId) {
+            const outcome = concludeSkillRun({ status: reply.status, error: reply.error, toolCalls: reply.toolCalls });
+            if (outcome.status !== 'running') new SkillCenter(this.store.root, () => []).settle(skillRunId, outcome);
+          }
           delete reply.stage;
           conversation.updatedAt = new Date().toISOString();
           this.store.save(conversation);

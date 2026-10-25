@@ -27,13 +27,49 @@ export function wantsSkillDraft(text: string): boolean {
   return /技能/.test(value) && /创建|新建|生成|做一个|建一个|建个/.test(value);
 }
 
+export function wantsMethodSkill(text: string): boolean {
+  const value = text.replace(/\s+/g, '');
+  if (skillSaveCue.test(value) || skillConfirmCue.test(value) || wantsSkillDraft(text)) return false;
+  return /按照?这次的方法.*以后都这么做|以后都按这次的方法|按照这次的方法以后/.test(value);
+}
+
+export function wantsSkillFix(text: string): boolean {
+  const value = text.replace(/\s+/g, '');
+  if (skillSaveCue.test(value) || skillConfirmCue.test(value) || wantsSkillDraft(text) || wantsMethodSkill(text)) return false;
+  return /改进这个技能|纠正这个技能|更新这个技能|技能改成|按这次的纠正/.test(value);
+}
+
+export function confirmsNamedSkill(text: string, displayName: string): boolean {
+  const value = text.replace(/\s+/g, '');
+  const name = displayName.replace(/\s+/g, '');
+  if (name.length < 2 || !/确认执行/.test(value)) return false;
+  return value.includes(`确认执行${name}`) || value.includes(`确认执行技能${name}`) || value.includes(`确认执行「${name}」`);
+}
+
+function skillMethod(displayName: string, detail: string): string {
+  return [
+    '## 要保证的结果',
+    `- 按「${displayName}」完成，并保存可以再次打开的结果。`,
+    '## 工作步骤',
+    `1. ${detail}`,
+    '2. 只使用已授权的检索、阅读和文件保存。知识整理仍调用原来的整理任务，不另写一套。',
+    '## 交付',
+    '- 说明做了什么、依据是什么、文件保存在哪里。',
+    '## 不要这样做',
+    '- 不要编造资料。没有确认时不要修改知识库。',
+    '## 怎么检查',
+    `- 用户再说「${displayName}」时应命中这个技能。`,
+    '- 步骤里的工具必须是当前助手真能调用的工具。',
+  ].join('\n').slice(0, 16000);
+}
+
 export function skillDraftFromRequest(text: string): { displayName: string; description: string; triggers: string[]; tools: string[]; steps: string } | undefined {
   const named = text.replace(/\s+/g, '').match(/(?:创建|新建|生成|做|建)(?:一个|个)?([^，。,；;]{2,30}?)技能/);
   const displayName = named?.[1]?.replace(/^(?:帮我|请你|请|给我|为我)/, '').replace(/^(?:一个|个)/, '') ?? '';
   if (displayName.length < 2 || displayName.length > 40) return undefined;
   const tail = text.split(/技能/).slice(1).join('技能').replace(/^[\s，,：:]+/, '').trim();
-  const steps = (tail.length >= 4 ? tail : `按「${displayName}」的要求完成。先检索已授权资料，再整理结果并保存文件。缺少材料就说明，不要编造。`).slice(0, 16000);
-  return { displayName, description: `${displayName}。按用户确认的步骤完成并保存结果。`.slice(0, 240), triggers: [displayName], tools: ['knowledge_search', 'knowledge_read', 'artifact_save'], steps };
+  const detail = tail.length >= 4 ? tail : `按「${displayName}」的要求完成。先检索已授权资料，再整理结果并保存文件。缺少材料就说明，不要编造。`;
+  return { displayName, description: `${displayName}。按用户确认的步骤完成并保存结果。`.slice(0, 240), triggers: [displayName], tools: ['knowledge_search', 'knowledge_read', 'artifact_save'], steps: skillMethod(displayName, detail) };
 }
 
 export function needsCurrentEvidence(text: string): boolean {

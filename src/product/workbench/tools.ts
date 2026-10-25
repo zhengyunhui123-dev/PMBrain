@@ -49,6 +49,7 @@ export async function runWorkbenchTools(input: WorkbenchAnswerInput & {
   context: RequestContext;
   native?: WorkbenchNative;
   agents?: WorkbenchAgentTools;
+  grantedMemoryTools?: string[];
 }) {
   const { signal, citations } = input;
   const sourceIds = input.agent?.id !== 'main' ? input.agent?.sourceIds : undefined;
@@ -95,7 +96,7 @@ export async function runWorkbenchTools(input: WorkbenchAnswerInput & {
       return trimToolOutput({ citation: citations.findIndex(item => item.sourceId === sourceId && item.slug === slug) + 1, source_id: sourceId, slug, title: known.title, revision:page.content_hash, content: excerpt, offset: from, nextOffset: from + excerpt.length < body.length ? from + excerpt.length : null, truncated: from + excerpt.length < body.length }, cap);
     } }],
   ]);
-  if(input.native&&input.sourceId&&input.conversationId)for(const [name,handler] of nativeMemoryHandlers(input.engine,input.sourceId,input.conversationId,input.native,row=>{let index=citations.findIndex(item=>item.kind==='memory'&&item.factId===row.factId&&item.sourceId===row.sourceId);if(index<0){index=citations.length;citations.push(row);}return index+1;},reads))handlers.set(name,handler);
+  if(input.native&&input.sourceId&&input.conversationId)for(const [name,handler] of nativeMemoryHandlers(input.engine,input.sourceId,input.conversationId,input.native,row=>{let index=citations.findIndex(item=>item.kind==='memory'&&item.factId===row.factId&&item.sourceId===row.sourceId);if(index<0){index=citations.length;citations.push(row);}return index+1;},reads,input.grantedMemoryTools??[]))handlers.set(name,handler);
   const userText = input.messages.filter(row=>row.role==='user').at(-1)?.text ?? '';
   if (input.agents && input.agent && input.conversationId && input.messageId) {
     const current = () => input.agents!.store.workbench.get(input.conversationId!).messages.some(row => row.id === input.messageId && row.status === 'running');
