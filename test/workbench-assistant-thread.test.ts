@@ -10,7 +10,7 @@ import { knowledgeWorkbenchAnswer } from '../src/product/workbench/routes';
 import { WorkbenchService } from '../src/product/workbench/service';
 import { WorkbenchStore } from '../src/product/workbench/store';
 import { classifyTurn, learnTurn, taskNeedsSkill } from '../src/product/workbench/turn-policy';
-import { rosterStatus } from '../shared/workbench-agents';
+import { mergeRosterFromTools, rosterStatus } from '../shared/workbench-agents';
 import { defaultAssistant, type WorkbenchMessage } from '../shared/workbench';
 
 const root = () => mkdtempSync(join(tmpdir(), 'pmbrain-assistant-thread-'));
@@ -297,6 +297,46 @@ test('助手列表显示最近工作，创建回执不露出编号', () => {
   expect(rosterStatus('weekly', [{ assistantId: 'weekly', running: false, activity: '已存成做法', updatedAt: '2026-10-16T00:00:00.000Z' }])).toBe('已存成做法');
   const id = '57f56b87-eb96-4137-b2f8-a1dd562a6250';
   expect(visibleAssistantText(`已创建 ${id}，revision: 1`, [{ name: 'assistant_create', status: 'complete', output: JSON.stringify({ id, name: '报销助手', revision: 1, created: true }) }])).toBe('');
+});
+
+test('模型空报创建成功时不露出编号，并提示确认', () => {
+  const dump = '写作助手已创建成功，可用于日常写作任务。\n\n**创建结果**\n- 名称：写作助手\n- ID：`1387cc99-e12e-498a-a80c-43a0006966f3`（revision 1）\n- 知识来源：default、outputs\n- 交付格式：docx';
+  const text = visibleAssistantText(dump);
+  expect(text).toContain('确认创建');
+  expect(text).toContain('写作助手');
+  expect(text).toContain('还没有真正创建');
+  expect(text).not.toContain('1387cc99');
+  expect(activityLine([{ role: 'assistant', text: dump, status: 'complete' }], false)).toContain('还没有真正创建');
+  expect(activityLine([{ role: 'assistant', text: dump, status: 'complete' }], false)).not.toContain('1387cc99');
+  expect(visibleAssistantText('可以按这个创建写作助手，要按这个创建吗？')).toBe('可以按这个创建写作助手，要按这个创建吗？');
+});
+
+test('空报保存、改助手、建技能、交任务和整理完成时，没有回执就不算做成', () => {
+  const hash = '26befafca55b0bf0a2b5228ec643710999d4f944aed5c0078e8e4cdb95a3fc10';
+  const saved = visibleAssistantText(`周报已生成并保存为 Word 文件。\n**下载**：/admin/api/workbench/artifacts/${hash}/download\n本周完成了评审。`);
+  expect(saved).toContain('还没有真正保存');
+  expect(saved).toContain('本周完成了评审');
+  expect(saved).not.toContain(hash);
+  expect(visibleAssistantText('周报已写好，有两处没有依据')).toBe('周报已写好，有两处没有依据');
+  const realSave = visibleAssistantText(`周报已生成并保存为 Word 文件。\n下载：/admin/api/workbench/artifacts/${hash}/download`, [{ name: 'artifact_save', status: 'complete', output: JSON.stringify({ id: hash, title: '本周周报', saved: true, path: 'D:\\\\week.docx', download: `/admin/api/workbench/artifacts/${hash}/download` }) }]);
+  expect(realSave).toContain('保存为 Word');
+  expect(realSave).toContain(hash);
+  expect(visibleAssistantText('周报助手已更新成功，配置已写入。')).toContain('还没有真正改掉');
+  expect(visibleAssistantText('已创建技能「周报写作」，下一句就能使用。')).toContain('还没有真正保存');
+  expect(visibleAssistantText('已创建技能「周报写作」。', undefined, { savedSkill: '周报写作' })).toContain('已创建技能');
+  expect(visibleAssistantText('已把任务交给报销助手，请稍后查看。')).toContain('还没有真正交给');
+  expect(visibleAssistantText('知识整理已经完成，可以去看结果。')).toContain('还没有提交到任务中心');
+  expect(visibleAssistantText('知识整理已经完成。', [{ name: 'knowledge_organize', status: 'complete', output: JSON.stringify({ task_id: 'run-1', status: 'queued', message: '已提交后台整理' }) }])).toContain('已提交到任务中心');
+  expect(visibleAssistantText(`我刚才保存的已经是 docx 实体文件，链接 /admin/api/workbench/artifacts/${hash}/download`, undefined, { recap: true })).toContain(hash);
+});
+
+test('工具真正创建后，左侧列表可以立刻补上助手', () => {
+  const created = mergeRosterFromTools([], [{ name: 'assistant_create', status: 'complete', output: JSON.stringify({ id: '1387cc99-e12e-498a-a80c-43a0006966f3', name: '写作助手', revision: 1, created: true, sourceIds: ['default', 'outputs'], deliveryFormat: 'docx' }) }], '2026-10-26T08:50:00.000Z');
+  expect(created).toHaveLength(1);
+  expect(created[0]?.id).toBe('1387cc99-e12e-498a-a80c-43a0006966f3');
+  expect(created[0]?.name).toBe('写作助手');
+  expect(created[0]?.emoji).toBe('写');
+  expect(mergeRosterFromTools(created, [{ name: 'assistant_create', status: 'complete', output: JSON.stringify({ id: created[0]!.id, name: '写作助手', created: true }) }])).toHaveLength(1);
 });
 
 test('已保存做法每轮可用，生成本周周报才要求本期核对', async () => {

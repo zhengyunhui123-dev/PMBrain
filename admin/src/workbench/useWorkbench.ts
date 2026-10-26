@@ -5,7 +5,7 @@ import { CHAT_MODEL_DEFAULT_KEY, CHAT_MODEL_EVENT, CHAT_MODEL_KEY, rememberChatM
 import { productFetch } from '../lib/product-fetch';
 import { applyConversationDelta, watchConversation } from './conversation-sync';
 import {useProductTasks} from '../product/TaskActivity';
-import type { WorkbenchAgent } from '../../../shared/workbench-agents';
+import { mergeRosterFromTools, type WorkbenchAgent } from '../../../shared/workbench-agents';
 
 type ConversationRow = Omit<WorkbenchConversation, 'messages'> & { messageCount: number; running: boolean; activity?: string };
 export async function workbenchRequest<T>(path: string, body?: unknown, method = body === undefined ? 'GET' : 'POST'): Promise<T> {
@@ -132,7 +132,11 @@ export function useWorkbench({ serviceReady = true, databaseReady = true, surfac
         if (active.current !== id || next.unchanged) return;
         const calls = next.message?.toolCalls ?? next.conversation?.messages.flatMap(message => message.toolCalls ?? []) ?? [];
         const edits = calls.filter(call => (call.name === 'assistant_create' || call.name === 'assistant_update') && call.status === 'complete' && !seenAgentEdits.current.has(call.id));
-        if (edits.length) { for (const call of edits) seenAgentEdits.current.add(call.id); void refresh(); }
+        if (edits.length) {
+          for (const call of edits) seenAgentEdits.current.add(call.id);
+          setAgents(current => mergeRosterFromTools(current, edits));
+          void refresh();
+        }
         setConversation(current => {
           const applied = applyConversationDelta(current, next);
           const merged = applied ? mergePolledConversation(current, applied) : current;

@@ -639,7 +639,9 @@ export class WorkbenchService {
           },
           onReplace: (text, nextModel) => {
             if (session.signal.aborted) return;
-            reply.text = text; reply.model = nextModel;
+            const mutating = (reply.toolCalls ?? []).some(call => ['assistant_create', 'assistant_update', 'artifact_save', 'artifact_revise', 'task_submit', 'knowledge_organize', 'local_mkdir'].includes(call.name) && call.status === 'running');
+            reply.text = mutating ? text : visibleAssistantText(text, reply.toolCalls, { savedSkill: reply.savedSkill });
+            reply.model = nextModel;
             reply.modelName = this.models().find(item => item.id === nextModel)?.name || nextModel;
             saveSoon(true);
           },
@@ -673,7 +675,7 @@ export class WorkbenchService {
           const citations = result.citations ?? [];
           const spoken = [...conversation.messages].reverse().find(message => message.role === 'user');
           let knowledge = result.knowledge ?? (turnKnowledge ? (citations.length ? 'used' : 'none') : 'off');
-          let text = visibleAssistantText(result.text, reply.toolCalls);
+          let text = visibleAssistantText(result.text, reply.toolCalls, { savedSkill: reply.savedSkill });
           const evidenceTask = taskRequiresEvidence(spoken?.text ?? '', conversation.task);
           const citedNow = periodCitationCount(citations);
           const evidenceGap = evidenceTask && knowledge !== 'off' && citedNow === 0;

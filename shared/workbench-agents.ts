@@ -67,6 +67,50 @@ export function rosterStatus(agentId: string, rows: Array<{ assistantId?: string
   if (active?.activity) return active.activity;
   return [...mine].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0]?.activity ?? '';
 }
+export function mergeRosterFromTools(agents: WorkbenchAgent[], calls: Array<{ name: string; status: string; output?: string }>, now = new Date().toISOString()): WorkbenchAgent[] {
+  let next = agents;
+  for (const call of calls) {
+    if (call.status !== 'complete' || !call.output || (call.name !== 'assistant_create' && call.name !== 'assistant_update')) continue;
+    let output: { id?: unknown; name?: unknown; created?: unknown; updated?: unknown; revision?: unknown; skills?: unknown; sourceIds?: unknown; readDirectories?: unknown; workspaceDirectory?: unknown; deliveryFormat?: unknown };
+    try { output = JSON.parse(call.output); } catch { continue; }
+    if (typeof output.id !== 'string' || typeof output.name !== 'string' || !(output.created || output.updated)) continue;
+    const deliveryFormat = output.deliveryFormat === 'markdown' || output.deliveryFormat === 'docx' ? output.deliveryFormat : undefined;
+    const patch: Partial<WorkbenchAgent> = {
+      name: output.name,
+      emoji: [...output.name][0] || '助',
+      ...(typeof output.revision === 'number' ? { revision: output.revision } : {}),
+      ...(Array.isArray(output.skills) ? { skills: output.skills.filter((item): item is string => typeof item === 'string') } : {}),
+      ...(Array.isArray(output.sourceIds) ? { sourceIds: output.sourceIds.filter((item): item is string => typeof item === 'string') } : {}),
+      ...(Array.isArray(output.readDirectories) ? { readDirectories: output.readDirectories.filter((item): item is string => typeof item === 'string') } : {}),
+      ...(typeof output.workspaceDirectory === 'string' ? { workspaceDirectory: output.workspaceDirectory } : {}),
+      ...(deliveryFormat ? { deliveryFormat } : {}),
+      updatedAt: now,
+    };
+    const index = next.findIndex(agent => agent.id === output.id);
+    if (index >= 0) next = next.map((agent, at) => at === index ? { ...agent, ...patch } : agent);
+    else next = [...next, {
+      name: output.name,
+      emoji: [...output.name][0] || '助',
+      description: '',
+      systemPrompt: '',
+      model: '',
+      knowledge: true,
+      temperature: null,
+      context: { maxMessages: 24, threshold: 0.8, summaryModel: '' },
+      id: output.id,
+      revision: typeof output.revision === 'number' ? output.revision : 1,
+      skills: Array.isArray(output.skills) ? output.skills.filter((item): item is string => typeof item === 'string') : [],
+      workflow: '',
+      sourceIds: Array.isArray(output.sourceIds) ? output.sourceIds.filter((item): item is string => typeof item === 'string') : ['default'],
+      readDirectories: Array.isArray(output.readDirectories) ? output.readDirectories.filter((item): item is string => typeof item === 'string') : [],
+      deliveryFormat: deliveryFormat ?? 'docx',
+      createdAt: now,
+      updatedAt: now,
+      ...patch,
+    }];
+  }
+  return next;
+}
 export interface WorkbenchSkill {
   name: string;
   displayName?: string;

@@ -19,9 +19,11 @@ export function AgentCards({ calls, agents, onAgent, onConversation }: { calls: 
       const output = JSON.parse(call.output);
       if (['assistant_create', 'assistant_update'].includes(call.name) && (output.created || output.updated)) {
         const agent = agents.find(item => item.id === output.id);
-        if (!agent || seen.has(agent.id)) return [];
-        seen.add(agent.id);
-        return [<section key={call.id} className="wb-result-card" aria-label="已配置的助手"><Bot size={22} /><div><strong>{agent.name}</strong><p>已准备好「{agent.name}」。在左侧可以直接找它说话。</p></div><button onClick={() => onAgent(agent.id)}>开始对话<ArrowRight size={14} /></button></section>];
+        const id = agent?.id || (typeof output.id === 'string' ? output.id : '');
+        const name = agent?.name || (typeof output.name === 'string' ? output.name : '');
+        if (!id || !name || seen.has(id)) return [];
+        seen.add(id);
+        return [<section key={call.id} className="wb-result-card" aria-label="已配置的助手"><Bot size={22} /><div><strong>{name}</strong><p>已准备好「{name}」。在左侧可以直接找它说话。</p></div><button onClick={() => onAgent(id)}>开始对话<ArrowRight size={14} /></button></section>];
       }
       if (call.name === 'task_submit' && output.submitted && typeof output.conversationId === 'string') {
         return [<section key={call.id} className="wb-result-card" aria-label="已提交的任务"><Bot size={22} /><div><strong>已交给{agents.find(item => item.id === output.assistantId)?.name || '专用助手'}</strong><p>任务已交给这个助手，进展和成果会留在它的对话里。</p></div><button onClick={() => onConversation(output.conversationId)}>查看进展<ArrowRight size={14} /></button></section>];

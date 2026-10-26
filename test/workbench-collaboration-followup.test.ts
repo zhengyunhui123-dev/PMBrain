@@ -292,6 +292,52 @@ test('创建助手要明确确认；多份成果时，单独说可以不会改�
   expect(service.get(reports.id).pending).toBeUndefined();
 });
 
+test('空报创建成功不会写入助手，并提示确认后才出现在列表', async () => {
+  const directory = root();
+  const workbench = new WorkbenchStore(join(directory, 'workbench'));
+  const agents = new WorkbenchAgentStore(workbench);
+  const dump = '写作助手已创建成功，可用于日常写作任务。\n\n**创建结果**\n- 名称：写作助手\n- ID：`1387cc99-e12e-498a-a80c-43a0006966f3`（revision 1）\n- 知识来源：default、outputs';
+  const service = new WorkbenchService(workbench, () => [{ id: 'local', name: '本地', contextWindow: 32000 }], async () => ({ text: dump, model: 'local', citations: [] }));
+  const conversation = service.create({ knowledge: false });
+  service.send(conversation.id, { text: '创建一个写作的助手，用于写作。' });
+  await service.settled(conversation.id);
+  const reply = service.get(conversation.id).messages.at(-1);
+  expect(agents.list().some(agent => agent.name === '写作助手')).toBe(false);
+  expect(reply?.text).toContain('确认创建');
+  expect(reply?.text).toContain('还没有真正创建');
+  expect(reply?.text).not.toContain('1387cc99');
+  expect(service.get(conversation.id).pending?.kind).toBe('assistant-create');
+  expect(service.list().find(row => row.id === conversation.id)?.activity).toContain('还没有真正创建');
+});
+
+test('空报保存文件、交任务和整理完成时不会留下假回执', async () => {
+  const directory = root();
+  const workbench = new WorkbenchStore(join(directory, 'workbench'));
+  const agents = new WorkbenchAgentStore(workbench);
+  const hash = '26befafca55b0bf0a2b5228ec643710999d4f944aed5c0078e8e4cdb95a3fc10';
+  const replies = [
+    `周报已生成并保存为 Word 文件。\n**下载**：/admin/api/workbench/artifacts/${hash}/download\n本周完成了评审。`,
+    '已把任务交给报销助手，请在它的对话里看进展。',
+    '知识整理已经完成，可以去知识库查看。',
+  ];
+  const service = new WorkbenchService(workbench, () => [{ id: 'local', name: '本地', contextWindow: 32000 }], async () => ({ text: replies.shift() ?? '', model: 'local', citations: [] }));
+  const conversation = service.create({ knowledge: false });
+  service.send(conversation.id, { text: '把这周周报存成 Word' });
+  await service.settled(conversation.id);
+  const saved = service.get(conversation.id).messages.at(-1);
+  expect(agents.artifacts()).toHaveLength(0);
+  expect(saved?.text).toContain('还没有真正保存');
+  expect(saved?.text).toContain('本周完成了评审');
+  expect(saved?.text).not.toContain(hash);
+  expect(saved?.artifacts ?? []).toHaveLength(0);
+  service.send(conversation.id, { text: '把这件事交给报销助手' });
+  await service.settled(conversation.id);
+  expect(service.get(conversation.id).messages.at(-1)?.text).toContain('还没有真正交给');
+  service.send(conversation.id, { text: '现在知识库里有什么进展' });
+  await service.settled(conversation.id);
+  expect(service.get(conversation.id).messages.at(-1)?.text).toContain('还没有提交到任务中心');
+});
+
 test('最初那张图在很多轮继续之后仍留在任务材料里，核对时不会把后面的图都读一遍', async () => {
   const directory = root();
   const workbench = new WorkbenchStore(join(directory, 'workbench'));

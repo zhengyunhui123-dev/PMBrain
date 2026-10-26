@@ -165,10 +165,118 @@ export function activityLine(messages: Array<{ role: string; text?: string; stat
     } catch { continue; }
   }
   if (assistant.ruleNotice && !assistant.ruleNotice.startsWith('已撤销')) return clip(assistant.ruleNotice);
-  return clip(assistant.text ?? '');
+  return clip(visibleAssistantText(assistant.text ?? '', assistant.toolCalls, { savedSkill: assistant.savedSkill, recap: true }));
 }
 
-export function visibleAssistantText(text: string, calls?: Array<{ name: string; status: string; output?: string }>): string {
+export type WorkbenchHonesty = { savedSkill?: string; recap?: boolean };
+type HonestyCall = { name: string; status: string; output?: string };
+
+function compactText(text: string): string {
+  return text.replace(/\s+/g, '');
+}
+
+function parseOutputs(calls: HonestyCall[] | undefined, names: string[]): Record<string, unknown>[] {
+  const rows: Record<string, unknown>[] = [];
+  for (const call of calls ?? []) {
+    if (call.status !== 'complete' || !call.output || !names.includes(call.name)) continue;
+    try {
+      const output = JSON.parse(call.output);
+      if (output && typeof output === 'object') rows.push(output as Record<string, unknown>);
+    } catch {}
+  }
+  return rows;
+}
+
+function assistantPersisted(calls: HonestyCall[] | undefined, kind?: 'created' | 'updated'): boolean {
+  for (const output of parseOutputs(calls, ['assistant_create', 'assistant_update'])) {
+    if (typeof output.name !== 'string') continue;
+    if (kind === 'created' && output.created) return true;
+    if (kind === 'updated' && output.updated) return true;
+    if (!kind && (output.created || output.updated)) return true;
+  }
+  return false;
+}
+
+function artifactReceipts(calls?: HonestyCall[]) {
+  return parseOutputs(calls, ['artifact_save', 'artifact_revise']).filter(output => output.saved === true || typeof output.path === 'string' || typeof output.id === 'string');
+}
+
+function submitReceipt(calls?: HonestyCall[]) {
+  return parseOutputs(calls, ['task_submit']).some(output => output.submitted === true);
+}
+
+function organizeReceipt(calls?: HonestyCall[]) {
+  return parseOutputs(calls, ['knowledge_organize']).some(output => typeof output.task_id === 'string' || typeof output.message === 'string');
+}
+
+function unverifiedCreateName(text: string): string | undefined {
+  const named = /(?:^|\n)\s*(?:[-*•]\s*)?名称[:：]\s*([^\n]{1,40})/.exec(text);
+  if (named?.[1]) {
+    const value = named[1].replace(/[`*_]/g, '').trim();
+    if (value) return value;
+  }
+  const compact = compactText(text);
+  const success = /「?([\u4e00-\u9fffA-Za-z0-9]{1,20}助手)」?已创建成功/.exec(compact);
+  return success?.[1] || undefined;
+}
+
+function claimsUnverifiedAssistantCreate(text: string): boolean {
+  const compact = compactText(text);
+  if (/(?:已创建成功|创建成功|创建结果)/.test(compact) && /助手/.test(compact)) return true;
+  return /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i.test(text) && /(?:revision|版本)/.test(compact) && /名称/.test(compact);
+}
+
+function claimsUnverifiedAssistantUpdate(text: string): boolean {
+  return /(?:助手)?(?:已更新成功|已调整成功)|配置已更新|已更新配置/.test(compactText(text));
+}
+
+function claimsUnverifiedSkill(text: string): boolean {
+  return /(?:已创建技能|技能已创建成功|已保存为技能|已把.{0,30}存成技能)/.test(compactText(text));
+}
+
+function claimsUnverifiedSubmit(text: string): boolean {
+  return /(?:已交给|已经交给).{0,20}助手|任务已提交|已把任务交给/.test(compactText(text));
+}
+
+function claimsOrganizeComplete(text: string): boolean {
+  return /(?:知识|深度|AI)?整理已经完成|已经完成(?:知识|深度)?整理|整理任务已经完成/.test(compactText(text));
+}
+
+export function claimsUnverifiedFileSave(text: string): boolean {
+  const compact = compactText(text);
+  if (/\/admin\/api\/workbench\/artifacts\/[a-f0-9]{16,}\/download/i.test(text)) return true;
+  if (/(?:已生成并)?已保存为(?:Word|docx|Markdown|md)(?:文件|文稿)?/i.test(compact)) return true;
+  if (/文件已(?:成功)?(?:保存|落地|写入)/.test(compact)) return true;
+  if (/已保存到/.test(compact) && /(?:\.docx|\.md|docx|Word|工作成果|本地)/i.test(compact)) return true;
+  if (/(?:可以直接下载|保存的已经是docx)/i.test(compact)) return true;
+  return false;
+}
+
+export function retryableUnverifiedActions(text: string, calls?: HonestyCall[]): Array<'save' | 'update' | 'submit' | 'organize'> {
+  const missing: Array<'save' | 'update' | 'submit' | 'organize'> = [];
+  if (claimsUnverifiedFileSave(text) && !artifactReceipts(calls).length) missing.push('save');
+  if (claimsUnverifiedAssistantUpdate(text) && !assistantPersisted(calls, 'updated')) missing.push('update');
+  if (claimsUnverifiedSubmit(text) && !submitReceipt(calls)) missing.push('submit');
+  if (claimsOrganizeComplete(text) && !organizeReceipt(calls)) missing.push('organize');
+  return missing;
+}
+
+function rewriteUnverifiedSave(text: string, calls?: HonestyCall[]): string {
+  if (!claimsUnverifiedFileSave(text) || artifactReceipts(calls).length) return text;
+  const allowed = new Set(artifactReceipts(calls).flatMap(row => [row.id, row.path, row.download].filter((item): item is string => typeof item === 'string')));
+  let next = text.replace(/\/admin\/api\/workbench\/artifacts\/[a-f0-9]+\/download/gi, url => {
+    const id = /artifacts\/([a-f0-9]+)\//i.exec(url)?.[1];
+    return id && allowed.has(id) ? url : '';
+  });
+  next = next.replace(/(?:^|\n)\s*(?:\*\*)?(?:文件|下载|路径)[:：][^\n]*/g, '');
+  next = next.replace(/[^\n。！？]*已保存为(?:Word|docx|Markdown)[^\n。！？]*[。！？]?/gi, '');
+  next = next.replace(/[^\n。！？]*文件已(?:成功)?(?:保存|落地|写入)[^\n。！？]*[。！？]?/g, '');
+  next = next.replace(/\n{3,}/g, '\n\n').trim();
+  const notice = '文件还没有真正保存到「工作成果」里。请再发送一次保存要求，或先选定工作目录。';
+  return next ? `${next}\n\n${notice}` : notice;
+}
+
+export function visibleAssistantText(text: string, calls?: HonestyCall[], honesty?: WorkbenchHonesty): string {
   for (const call of calls ?? []) {
     if (call.status !== 'complete' || !call.output || (call.name !== 'assistant_create' && call.name !== 'assistant_update')) continue;
     try {
@@ -178,5 +286,27 @@ export function visibleAssistantText(text: string, calls?: Array<{ name: string;
       if (leaked) return '';
     } catch { continue; }
   }
-  return text;
+  if (!assistantPersisted(calls, 'created') && claimsUnverifiedAssistantCreate(text)) {
+    const name = unverifiedCreateName(text);
+    const who = name && name.length <= 40 ? name : '这个助手';
+    return `${who}还没有真正创建，所以左侧列表里还看不到它。请回复「确认创建」，创建完成后就会出现在「我的助手」。`;
+  }
+  if (!honesty?.savedSkill && claimsUnverifiedSkill(text)) {
+    return '技能还没有真正保存。请回复「确认创建这个技能」后才会出现在技能列表里。';
+  }
+  if (honesty?.recap) return text;
+  if (!assistantPersisted(calls, 'updated') && claimsUnverifiedAssistantUpdate(text)) {
+    return '助手配置还没有真正改掉。请说明要改什么，确认后再保存。';
+  }
+  if (!submitReceipt(calls) && claimsUnverifiedSubmit(text)) {
+    return '任务还没有真正交给专用助手。任务中心里看不到这次提交。';
+  }
+  if (claimsOrganizeComplete(text)) {
+    if (organizeReceipt(calls)) {
+      const next = text.replace(/(?:知识|深度|AI)?整理已经完成|已经完成(?:知识|深度)?整理|整理任务已经完成/g, '已提交到任务中心');
+      return /任务中心/.test(next) ? next : `${next}\n请在任务中心查看实际结果。`;
+    }
+    return '知识整理还没有提交到任务中心。请明确说「开始整理知识」或「确认执行深度知识整理」。';
+  }
+  return rewriteUnverifiedSave(text, calls);
 }

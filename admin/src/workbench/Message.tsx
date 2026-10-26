@@ -8,6 +8,7 @@ import { ToolActivity } from './ToolActivity';
 import { workbenchRequest } from './useWorkbench';
 import { downloadArtifact, ArtifactPreview } from './Artifacts';
 import { quoteArtifact } from '../../../src/product/workbench/artifact-quote';
+import { visibleAssistantText } from '../../../src/product/workbench/playbook';
 import { AgentCards } from './AgentCards';
 
 export function Message({ message, assistantName, assistantEmoji, assistantRole, canRetry, onRetry, canEdit, onEdit, onUndoRules, agents, onAgent, onConversation, onReviseArtifact }: { message: WorkbenchMessage; assistantName: string; assistantEmoji: string; assistantRole?: string; canRetry: boolean; onRetry: () => void; canEdit?: boolean; onEdit?: () => void; onUndoRules?: () => void; agents?: WorkbenchAgent[]; onAgent?: (id: string) => void; onConversation?: (id: string) => void; onReviseArtifact?: (text: string) => void }) {
@@ -18,6 +19,7 @@ export function Message({ message, assistantName, assistantEmoji, assistantRole,
   const [artifactError, setArtifactError] = useState('');
   useEffect(()=>{if(message.status!=='running')return;const timer=setInterval(()=>setNow(Date.now()),1000);return()=>clearInterval(timer);},[message.status]);
   const waitingSeconds=message.request?Math.max(0,Math.floor((now-Date.parse(message.request.startedAt))/1000)):0;
+  const visibleText = message.role === 'assistant' ? visibleAssistantText(message.text ?? '', message.toolCalls, { savedSkill: message.savedSkill, recap: true }) : message.text;
   return <article className={`wb-message wb-${message.role}`} data-kind={message.role === 'assistant' ? (assistantRole === '主助手' ? 'main' : 'specialist') : undefined} aria-label={message.role === 'user' ? '你的消息' : '助手回答'}>
     <div className="wb-avatar">{message.role === 'user' ? <User size={17} /> : <span>{assistantEmoji}</span>}</div>
     <div className="wb-message-body"><header><strong>{message.role === 'user' ? '你' : assistantName}</strong><span>{message.role === 'assistant' ? `${assistantRole ? `${assistantRole} · ` : ''}${modelLabel}` : new Date(message.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span></header>
@@ -25,7 +27,7 @@ export function Message({ message, assistantName, assistantEmoji, assistantRole,
       {message.playbookNotice ? <p className="wb-notice" role="status">{message.playbookNotice}</p> : null}
       {message.skillNotice ? <p className="wb-notice" role="status">{message.skillNotice}</p> : null}
       {message.knowledge === 'none' && message.status === 'complete' && !message.evidenceGap ? <p className="wb-notice">这次没有从知识库检索到相关资料。下面的内容是模型基于一般知识的回答，请再核对。</p> : null}
-      {!!message.attachments?.length && <ul className="wb-attachments">{message.attachments.map(item => <li key={item.id} className={item.preview ? 'wb-thumb' : 'wb-file-card'}>{item.preview ? <img src={item.preview} alt={item.name} /> : <span className="wb-attachment-name">{item.name}</span>}{item.note && <small className="wb-attachment-note">{item.note}</small>}</li>)}</ul>}{!!message.toolCalls?.length && <ToolActivity calls={message.toolCalls} />}{message.text && <MarkdownArticle markdown={message.text} citations={message.role === 'assistant' ? message.citations : undefined} />}
+      {!!message.attachments?.length && <ul className="wb-attachments">{message.attachments.map(item => <li key={item.id} className={item.preview ? 'wb-thumb' : 'wb-file-card'}>{item.preview ? <img src={item.preview} alt={item.name} /> : <span className="wb-attachment-name">{item.name}</span>}{item.note && <small className="wb-attachment-note">{item.note}</small>}</li>)}</ul>}{!!message.toolCalls?.length && <ToolActivity calls={message.toolCalls} />}{visibleText && <MarkdownArticle markdown={visibleText} citations={message.role === 'assistant' ? message.citations : undefined} />}
       {message.status === 'running' && <p className="wb-progress" role="status"><i />{message.stage || '正在生成回答…'}{message.request&&waitingSeconds>=5?` · 已等待 ${waitingSeconds} 秒`:''}</p>}
       {message.status === 'error' && <p className="wb-error" role="alert">{/引用|未通过核对/.test(message.error || "") ? "这次回答的资料引用有误，请重试。" : /SQL|checkpoint|检查点|database|TypeError|undefined|ECONN/i.test(message.error || "") ? "这次处理未完成，可以重试。具体原因保留在对话详情中。" : message.error}</p>}
       {message.status === 'cancelled' && <p className="wb-muted">已停止生成，可以重试或继续提问。</p>}
@@ -43,7 +45,7 @@ export function Message({ message, assistantName, assistantEmoji, assistantRole,
       {!!message.requestHistory?.length&&message.status==='error'&&<details className="wb-citations"><summary>模型请求</summary>{message.requestHistory.map((request,index)=><small key={index}>{request.model} · 尝试 {request.attempt} · {Math.round(request.elapsedMs/1000)} 秒 · {request.errorKind||'完成'} · 输入 {request.inputTokens??'未返回'} / 输出 {request.outputTokens??'未返回'} Token · 输出上限 {request.outputLimit??'未返回'}{request.usageUnknown?' · 失败请求消耗未知':''}</small>)}</details>}
       {message.error && <p>{message.error}</p>}
       </details> : null}
-      {message.status !== 'running' && <footer>{message.text && <CopyButton value={message.text} />}{canEdit && <button onClick={onEdit}>修改问题</button>}{canRetry && <button onClick={onRetry}>重新生成</button>}</footer>}
+      {message.status !== 'running' && <footer>{visibleText && <CopyButton value={visibleText} />}{canEdit && <button onClick={onEdit}>修改问题</button>}{canRetry && <button onClick={onRetry}>重新生成</button>}</footer>}
     </div>
   </article>;
 }
