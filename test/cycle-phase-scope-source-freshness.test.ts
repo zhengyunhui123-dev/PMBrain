@@ -28,6 +28,11 @@ describe('two-stage Dream organization', () => {
     expect(SOURCE_FRESHNESS_PHASES).not.toContain('synthesize');
     expect(SOURCE_FRESHNESS_PHASES).not.toContain('patterns');
     expect(SOURCE_FRESHNESS_PHASES).not.toContain('extract_atoms');
+    expect(SOURCE_FRESHNESS_PHASES).not.toContain('fence_repair');
+    expect(SOURCE_FRESHNESS_PHASES).not.toContain('content_repair');
+    expect(SOURCE_FRESHNESS_PHASES).not.toContain('edge_contradictions');
+    expect(SOURCE_FRESHNESS_PHASES).not.toContain('standing_questions');
+    expect(SOURCE_FRESHNESS_PHASES).not.toContain('enrich_thin');
   });
 
   test('default Source keeps the full maintenance-capable cycle', () => {

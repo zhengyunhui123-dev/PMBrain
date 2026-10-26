@@ -9,12 +9,14 @@ import {assistantSession} from './request';
 import { memoryVersion } from './memory-identity';
 import { WorkbenchAgentStore } from './agents';
 import type { WorkbenchAgent } from '../../../shared/workbench-agents';
-import { compilePlaybook, EVIDENCE_GAP_TEXT, needsCurrentEvidence, visibleAssistantText, wantsSavedPlaybook } from './playbook';
+import { activityLine, compilePlaybook, EVIDENCE_GAP_TEXT, needsCurrentEvidence, visibleAssistantText, wantsSavedPlaybook } from './playbook';
 import { concludeSkillRun, PRODUCT_SKILLS, SkillCenter } from './skill-center';
 import { advanceTask, noteTask, rememberTaskMaterials, taskUserTexts } from './task-context';
 import { decidePending } from './pending';
 import { completedDirectories, completedDirectory, listWorkbenchArtifacts } from './files';
 import { compactRule, isDirectoryStep, learnTurn, mergeTaskRules } from './turn-policy';
+import { buildTurnEnvironment, selectedDirectory, type TurnEnvironment } from './agent-runtime';
+import { taskRequiresEvidence } from './task-context';
 
 function periodCitationCount(citations: WorkbenchCitation[]) {
   return citations.filter(item => item.origin !== 'prior-artifact').length;
@@ -58,6 +60,7 @@ function assignArtifactReceipts(store: WorkbenchStore, conversation: WorkbenchCo
 export { conversationContext } from './context';
 
 export interface WorkbenchAnswerInput {
+  environment?: TurnEnvironment;
   agent?: WorkbenchAgent;
   messageId?: string;
   sourceId?: string;
@@ -167,7 +170,11 @@ export class WorkbenchService {
     }
   }
   list() {
-    return this.store.summaries().map(({ generating: _generating, ...row }) => ({ ...row, running: this.active.has(row.id), activity: this.active.has(row.id) ? '正在处理' : row.activity }));
+    return this.store.summaries().map(({ generating: _generating, ...row }) => {
+      const live = this.active.get(row.id)?.live;
+      const running = live?.messages.some(message => message.status === 'running') ?? false;
+      return { ...row, running, activity: live ? activityLine(live.messages, running) : row.activity };
+    });
   }
   get(id: string) { return this.active.get(id)?.live ?? this.store.get(id); }
   hasActiveTurns() { return this.active.size > 0; }
@@ -273,13 +280,18 @@ export class WorkbenchService {
     this.acceptance.delete(id);
     current.rejectReady?.(Object.assign(new Error('已停止生成'), { name: 'AbortError' }));
   }
-  send(id: string, input: { text?: string; model?: string; knowledge?: boolean; retry?: boolean; editMessageId?: string; attachments?: unknown; attachmentsHydrated?: boolean; interrupt?: boolean; turnId?: string; skillRunId?: string }) {
+  send(id: string, input: { text?: string; model?: string; timeZone?: string; knowledge?: boolean; retry?: boolean; editMessageId?: string; attachments?: unknown; attachmentsHydrated?: boolean; interrupt?: boolean; turnId?: string; skillRunId?: string }) {
     if (this.active.has(id)) {
       if (input.interrupt !== true) throw new Error('当前会话正在生成，请等待或停止');
       this.releaseTurn(id);
     }
     const conversation = this.get(id); const model = this.model(input.model ?? conversation.model);
     if(this.memoryHooks&&!conversation.sourceId)conversation.sourceId='default';
+    if (input.timeZone !== undefined) {
+      if (typeof input.timeZone !== 'string' || input.timeZone.length > 80) throw new Error('时区无效');
+      try { new Intl.DateTimeFormat('en', { timeZone: input.timeZone }).format(); } catch { throw new Error('时区无效'); }
+      conversation.timeZone = input.timeZone;
+    }
     const now = new Date().toISOString();
     const attachmentFlags = { vision: this.models().find(item => item.id === model)?.vision === true, pdfNative: modelReadsPdfNatively() };
     const snapshot = JSON.stringify(conversation);
@@ -346,6 +358,7 @@ export class WorkbenchService {
     conversation.model = model; conversation.knowledge = input.knowledge ?? conversation.knowledge; conversation.updatedAt = now;
     const turnId = input.turnId ?? randomUUID();
     const currentUser = [...conversation.messages].reverse().find(message => message.role === 'user');
+    const floor = conversation.contextFloor ? conversation.messages.findIndex(message => message.id === conversation.contextFloor) : -1;
     const turnKnowledge = conversation.knowledge && !isDirectoryStep(currentUser?.text ?? '');
     if (currentUser) currentUser.turnId = turnId;
     const agentBefore = structuredClone(new WorkbenchAgentStore(this.store).get(conversation.assistantId ?? 'main'));
@@ -363,7 +376,6 @@ export class WorkbenchService {
     if (!input.retry) {
       const spoken = [...conversation.messages].reverse().find(message => message.role === 'user');
       if (spoken?.text) {
-        const floor = conversation.contextFloor ? conversation.messages.findIndex(message => message.id === conversation.contextFloor) : -1;
         const recentUserTexts = conversation.messages.filter((message, index) => message.role === 'user' && message.id !== spoken.id && index > floor).map(message => message.text);
         const advanced = advanceTask({ task: conversation.task, notes: conversation.taskNotes, text: spoken.text, recentUserTexts, agent: assistant, now, id: () => randomUUID() });
         taskInherited = advanced.inherited;
@@ -600,12 +612,18 @@ export class WorkbenchService {
           visuals.kept.length = 0;
         }
         const visualItems = [...visuals.kept.map(item => ({ kind: 'image', ref: item.name, state: 'kept' as const })), ...visuals.omitted.map(item => ({ kind: 'image', ref: item.name, state: 'omitted' as const }))];
+        const environment = buildTurnEnvironment({ agent: assistant, messages: conversation.messages.filter((_, index) => index > floor), now, timeZone: conversation.timeZone ?? assistant.schedule?.timezone });
+        if (environment.workspace && conversation.task?.directory) {
+          try { selectedDirectory(environment, conversation.task.directory.path); }
+          catch { delete conversation.task.directory; }
+        }
         const compressionModel = assistant.context.summaryModel && this.models().some(item => item.id === assistant.context.summaryModel) ? assistant.context.summaryModel : model;
         const result = await this.answer({
           agent: assistant, messageId: reply.id,
           contextWindow, contextThreshold: assistant.context.threshold,
           ...(this.summarize ? { contextSummarizer: { model: compressionModel, contextWindow: this.models().find(item => item.id === compressionModel)?.contextWindow, summarize: this.summarize } } : {}),
           sourceId: conversation.sourceId, conversationId: conversation.id,
+          environment,
           messages: this.modelMessages(conversation.id, recent, imageIds), ...(summary ? { summary } : {}), ...(conversation.taskNotes?.length ? { taskNotes: conversation.taskNotes } : {}), ...(conversation.task ? { task: conversation.task } : {}), ...(input.retry ? (retryMethod === undefined ? {} : { taskMethod: retryMethod }) : { taskMethod: taskInherited }), ...(turnKnowledge?{priorCitations}:{}), ...(visuals.kept.length ? { visualAttachments: visuals.kept.map(({ name, mime, image }) => ({ name, mime, image })) } : {}), ...(settledTools?.length ? { settledTools } : {}), model, knowledge: turnKnowledge,
           ...(assistant.systemPrompt.trim() ? { systemPrompt: assistant.systemPrompt } : {}),
           ...(assistant.temperature !== null ? { temperature: assistant.temperature } : {}),
@@ -656,7 +674,7 @@ export class WorkbenchService {
           const spoken = [...conversation.messages].reverse().find(message => message.role === 'user');
           let knowledge = result.knowledge ?? (turnKnowledge ? (citations.length ? 'used' : 'none') : 'off');
           let text = visibleAssistantText(result.text, reply.toolCalls);
-          const evidenceTask = !isDirectoryStep(spoken?.text ?? '') && !wantsSavedPlaybook(spoken?.text ?? '') && (needsCurrentEvidence(spoken?.text ?? '') || needsCurrentEvidence(conversation.task?.goal ?? ''));
+          const evidenceTask = taskRequiresEvidence(spoken?.text ?? '', conversation.task);
           const citedNow = periodCitationCount(citations);
           const evidenceGap = evidenceTask && knowledge !== 'off' && citedNow === 0;
           if (evidenceGap) { text = EVIDENCE_GAP_TEXT; knowledge = 'none'; reply.evidenceGap = true; }

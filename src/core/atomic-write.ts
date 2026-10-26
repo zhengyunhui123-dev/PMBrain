@@ -79,7 +79,13 @@ export function atomicWriteFileSync(filePath: string, content: string, opts?: At
     if (opts?.verify) {
       opts.verify(readFileSync(tmpPath, 'utf-8'));
     }
-    renameSync(tmpPath, filePath);
+    for (let attempt = 0; ; attempt++) {
+      try { renameSync(tmpPath, filePath); break; }
+      catch (error) {
+        if (process.platform !== 'win32' || attempt >= 3 || !['EPERM', 'EACCES', 'EBUSY'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error;
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25 * (attempt + 1));
+      }
+    }
     // Durability of the RENAME itself: fsync the parent directory so a power
     // loss can't silently drop the new directory entry (the target is never
     // corrupt either way — this closes the write-vanished window). Dir fsync

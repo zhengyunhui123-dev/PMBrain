@@ -18,6 +18,48 @@ const question = { id: 'q', text: '核对项目预算', role: 'user' as const, s
 const hit = { source_id: 'a', slug: 'project', title: '项目预算', snippet: '初步预算' };
 const search = async () => ({ results: [hit] } as any);
 
+test('历史工具读到的资料继续进入来源表，旧回答的错引不覆盖本轮来源编号', async () => {
+  const citations = [
+    { sourceId: 'a', slug: 'memory/fact-1', kind: 'memory' as const, factId: 1, title: '清单偏好', snippet: '先写合计再写明细' },
+    { sourceId: 'a', slug: 'expense', title: '报销记录', snippet: '交通120元，住宿300元，合计420元' },
+  ];
+  __setChatTransportForTests(async input => {
+    const catalog = input.system?.match(/<reference_catalog>([\s\S]*?)<\/reference_catalog>/)?.[1] ?? '';
+    expect(catalog).toContain('[1] 清单偏好');
+    expect(catalog).toContain('[2] 报销记录');
+    expect(JSON.stringify(input.messages)).toContain('合计420元');
+    expect(input.system).toContain('先提取人物名、项目名或主题关键词调用 knowledge_search');
+    return text('合计420元 [2]；先写合计，再写明细 [1]。');
+  });
+  const result = await knowledgeWorkbenchAnswer({ getConfig: async () => null } as any, { search: async () => ({ results: [] } as any), answer: chat, loop: toolLoop })({
+    messages: [
+      { ...question, id: 'older', text: '查下报销金额' },
+      { id: 'a', role: 'assistant', status: 'complete', createdAt: '', text: '合计420元 [1]', citations, toolCalls: [{ id: 'read', name: 'knowledge_read', input: '{}', status: 'complete', output: JSON.stringify({ citation: 2, source_id: 'a', slug: 'expense', content: '交通120元，住宿300元，合计420元' }), startedAt: '' }] },
+      { ...question, text: '金额和清单顺序是什么？' },
+    ], model: 'service-test:chat', knowledge: true, signal: AbortSignal.timeout(5000), progress: () => {},
+  });
+  expect(result.text).toContain('420元 [2]');
+  expect(result.citations[1]?.slug).toBe('expense');
+});
+
+test('模型自行重编来源编号时按真实来源表纠正一次', async () => {
+  let requests = 0;
+  __setChatTransportForTests(async () => ++requests === 1 ? text('合计420元 [1]。\n[1] 报销规定（expense）') : text('合计420元 [2]，清单先写合计 [1]。'));
+  const result = await knowledgeWorkbenchAnswer({ getConfig: async () => null } as any, { search: async () => ({ results: [] } as any), answer: chat, loop: toolLoop })({ messages: [question], priorCitations: [
+    { sourceId: 'a', slug: 'memory/fact-1', kind: 'memory', factId: 1, title: '清单偏好', snippet: '先写合计' },
+    { sourceId: 'a', slug: 'expense', title: '报销规定', snippet: '合计420元' },
+  ], model: 'service-test:chat', knowledge: true, signal: AbortSignal.timeout(5000), progress: () => {} });
+  expect(requests).toBe(2);
+  expect(result.text).toContain('420元 [2]');
+});
+
+test('偏好记忆命中不能代替知识库事实检索，也不能据此声称金额无法确认', async () => {
+  let requests = 0; const queries: string[] = [];
+  __setChatTransportForTests(async () => ++requests === 1 ? text('清单先写合计再写明细 [1]，金额目前无法确认。') : requests === 2 ? call('knowledge_search', { query: '报销' }) : text('报销合计 420 元 [2]，清单先写合计再写明细 [1]。'));
+  const result = await knowledgeWorkbenchAnswer({ getPage: async () => null } as any, { answer: chat, loop: toolLoop, recall: async () => [{ sourceId: 'a', slug: 'memory/fact-1', kind: 'memory', factId: 1, title: '偏好', snippet: '先写合计再写明细' }], search: async (_engine, input) => { queries.push(input.query); return { results: input.query === '报销' ? [{ source_id: 'a', slug: 'expense', title: '报销金额', snippet: '报销合计420元' }] : [] } as any; } })({ messages: [{ ...question, text: '报销金额是多少，清单按什么顺序？' }], sourceId: 'a', model: 'service-test:chat', knowledge: true, signal: AbortSignal.timeout(5000), progress: () => {} });
+  expect(queries).toContain('报销'); expect(result.text).toContain('420'); expect(result.citations).toHaveLength(2);
+});
+
 test('正文中的伪造工具调用和回执须先纠正，不能执行或作为最终答案交付',async()=>{
   let requests=0;const events:WorkbenchToolCall[]=[];const rendered:string[]=[];
   __setChatTransportForTests(async()=>++requests===1?text('<tool_call: knowledge_search(query="预算")>\n<tool_result>预算九十万元</tool_result>\n预算十万元 [1]'):text('预算十万元 [1]'));

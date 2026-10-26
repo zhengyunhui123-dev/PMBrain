@@ -625,4 +625,25 @@ describe('classifySidecarStartupError', () => {
     expect(c.category).toBe('toast_corrupt');
     expect(c.labelZh).toContain('不会继续自动重置 WAL');
   });
+
+  test('导入超时占用转储里的 wall-clock 不是 WAL 损坏，允许自动重启', () => {
+    const occupancy = `[database request timeout] {"holder":{"taskId":1,"method":"@transaction.open","stage":"写入知识库","file":"PortableChangingPads品类review原声.xlsx","heldMs":60294},"waiting":[{"method":"executeRaw","sqlPreview":"UPDATE minion_jobs SET status = 'dead', error_text = 'wall-clock timeout exceeded'","waitedMs":61152}]}`;
+    const c = classifySidecarStartupError(`Sidecar exited (code 1). ${occupancy}`);
+    expect(c.category).toBe('transient');
+    expect(c.retryable).toBe(true);
+    expect(c.labelZh).not.toBe('数据库恢复失败');
+  });
+
+  test('真实 WAL 或数据库恢复失败仍不自动重启', () => {
+    expect(classifySidecarStartupError(new Error('database recovery failed: WAL replay aborted'))).toMatchObject({
+      category: 'database_corrupt',
+      retryable: false,
+      labelZh: '数据库恢复失败',
+    });
+    expect(classifySidecarStartupError(new Error('数据库恢复失败：原生打开和检查数据库未在 30 秒内完成'))).toMatchObject({
+      category: 'database_corrupt',
+      retryable: false,
+      labelZh: '数据库恢复失败',
+    });
+  });
 });

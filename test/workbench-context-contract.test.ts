@@ -53,9 +53,9 @@ test('先交代周报后再说继续或执行吧，仍沿用这件任务；换�
   expect(follow).toContain('计划不能写成已完成');
   expect(follow).toContain('这次不要写下周计划');
   const bare = await agentInstructions(context, weekly, { userText: '继续' });
-  expect(bare).not.toContain('<workflow>');
+  expect(bare).toContain('<workflow>');
   const hello = await agentInstructions(context, weekly, { userText: '你好', taskActive: true });
-  expect(hello).not.toContain('<workflow>');
+  expect(hello).toContain('<workflow>');
 });
 
 test('接着把剩下的做完仍沿用这件任务的做法；不要继续并改做别的，就不再带上旧目标和这次的限制', async () => {
@@ -96,7 +96,7 @@ test('接着把剩下的做完仍沿用这件任务的做法；不要继续并�
   expect(follow).toContain('<skill name="weekly-report">');
   expect(follow).toContain('计划不能写成已完成');
   const explicitStop = await agentInstructions(context, weekly, { userText: '接着把剩下的做完', taskActive: true, taskMethod: false });
-  expect(explicitStop).not.toContain('<workflow>');
+  expect(explicitStop).toContain('<workflow>');
   expect(explicitStop).not.toContain('<skill name=');
   const inheritedHello = await agentInstructions(context, weekly, { userText: '你好', taskActive: true, taskMethod: true });
   expect(inheritedHello).toContain('<workflow>');

@@ -23,6 +23,7 @@ import {
   registerCleanup,
   triggerCleanupAndExit,
   installSignalHandlers,
+  isExpectedDatabaseInterruptReason,
   _registeredCleanupCountForTests,
   _resetForTests,
 } from '../src/core/process-cleanup.ts';
@@ -197,5 +198,15 @@ describe('installSignalHandlers', () => {
     expect(process.listenerCount('SIGTERM')).toBe(before.sigterm + 1);
     expect(process.listenerCount('SIGHUP')).toBe(before.sighup + 1);
     expect(process.listenerCount('SIGPIPE')).toBe(before.sigpipe + 1);
+  });
+});
+
+describe('isExpectedDatabaseInterruptReason', () => {
+  test('导入超时恢复产生的中断拒绝不按致命错误退出', () => {
+    expect(isExpectedDatabaseInterruptReason(new Error('数据库执行已中断，未提交事务已取消'))).toBe(true);
+    expect(isExpectedDatabaseInterruptReason(new Error('数据库正在停止并恢复，请等待恢复完成'))).toBe(true);
+    expect(isExpectedDatabaseInterruptReason(new Error('数据库执行已中断，旧事务已关闭'))).toBe(true);
+    expect(isExpectedDatabaseInterruptReason(new Error('数据库连接已关闭'))).toBe(true);
+    expect(isExpectedDatabaseInterruptReason(new Error('模型服务不可用'))).toBe(false);
   });
 });

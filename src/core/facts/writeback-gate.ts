@@ -74,7 +74,7 @@ export function gateWritebackTurn(text: unknown, opts: { minChars?: number; maxC
     .map((s) => s.trim())
     .filter((s) => s.length > 0);
   if (sentences.length > 0 && sentences.every((s) => /[?？]$/.test(s))) {
-    const hasClaim=opts.excludeOperationalRequests&&sentences.flatMap(part=>part.split(/[，,；;]/)).some(part=>part.trim().length>=minChars&&!/[?？]$|吗|是否|怎么|如何|多少|能否|what|how|why|where/i.test(part)&&!/^(请|帮我|你能|能不能|可以|并|please|can you|could you)/i.test(part.trim()));
+    const hasClaim=opts.excludeOperationalRequests&&sentences.flatMap(part=>part.split(/[，,；;]/)).some(part=>part.trim().length>=minChars&&!/[?？]$|吗|是否|怎么|如何|多少|什么|哪[里儿个些种]|谁|何时|多久|能否|what|how|why|where/i.test(part)&&!/^(请|帮我|你能|能不能|可以|并|please|can you|could you)/i.test(part.trim()));
     if(!hasClaim)return { ok: false, reason: 'question_only' };
   }
   const residue = stripQuotedAndToolOutput(trimmed).trim();

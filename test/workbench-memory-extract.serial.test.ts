@@ -10,6 +10,8 @@ test('事实与问句用逗号混在一起仍保留，纯一次性操作不沉�
   expect(gateWritebackTurn('我不喝咖啡，能推荐其他饮品吗？',options).ok).toBe(true);
   expect(gateWritebackTurn('请给Atlas写一份方案，并说明我的写法偏好。',options).ok).toBe(false);
   expect(gateWritebackTurn('请以后每次先写结论，再写依据。',options).ok).toBe(true);
+  expect(gateWritebackTurn('这个项目的金额合计是多少？我希望清单先写什么，再写什么？',options)).toEqual({ok:false,reason:'question_only'});
+  expect(gateWritebackTurn('清单顺序我已经决定先写合计，能告诉我明细有哪些吗？',options).ok).toBe(true);
 });
 test('普通陈述只开放读取记忆，明确记住或遗忘才开放写工具',()=>{
   expect(workbenchMemoryTools('以后方案先写结论').map(row=>row.name)).toEqual(['memory_recall']);

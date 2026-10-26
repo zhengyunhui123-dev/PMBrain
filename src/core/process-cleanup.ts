@@ -122,6 +122,11 @@ async function runCleanupPass(): Promise<void> {
  * AbortController at cli.ts:254 — we don't listen to SIGINT here, but
  * documenting the install order keeps future maintainers aware).
  */
+export function isExpectedDatabaseInterruptReason(reason: unknown): boolean {
+  const message = reason instanceof Error ? reason.message : String(reason);
+  return /数据库执行已中断|数据库正在停止并恢复|数据库连接已关闭|旧事务已关闭|未提交事务已取消/.test(message);
+}
+
 export function installSignalHandlers(): void {
   if (installed) return;
   installed = true;
@@ -152,6 +157,7 @@ export function installSignalHandlers(): void {
   process.on('unhandledRejection', (reason) => {
     try { process.stderr.write(`[unhandledRejection] ${reason instanceof Error ? reason.stack ?? reason.message : reason}\n`); }
     catch { /* stderr might be broken */ }
+    if (isExpectedDatabaseInterruptReason(reason)) return;
     void runCleanupPass().finally(() => process.exit(1));
   });
 

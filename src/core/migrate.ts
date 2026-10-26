@@ -1,3 +1,4 @@
+import { DREAM_MAINTENANCE_SCHEMA_SQL } from './cycle/dream-maintenance-schema.ts';
 import { FACT_WITHDRAWAL_BACKFILL_SQL, FACT_WITHDRAWAL_SCHEMA_SQL } from './facts/withdrawal-schema.ts';
 import { WANTED_LINKS_SCHEMA_SQL } from './pmbrain-adapters/wanted-links-schema.ts';
 import {SEARCH_WRITE_SCHEMA_SQL,repairSearchWriteAmplification} from './pmbrain-adapters/search-write-schema.ts';
@@ -5534,6 +5535,7 @@ export const MIGRATIONS: Migration[] = [
     sql:'ALTER TABLE content_chunks ADD COLUMN IF NOT EXISTS embedding_input_hash TEXT;'},
   {version:136,name:'fact_withdrawals',idempotent:true,
     sql:FACT_WITHDRAWAL_SCHEMA_SQL+FACT_WITHDRAWAL_BACKFILL_SQL},
+  {version:137,name:'dream_maintenance_gaps',idempotent:true,sql:DREAM_MAINTENANCE_SCHEMA_SQL},
 ];
 
 export const LATEST_VERSION = MIGRATIONS.length > 0

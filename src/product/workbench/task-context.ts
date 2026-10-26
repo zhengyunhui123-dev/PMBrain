@@ -1,6 +1,8 @@
 import type { WorkbenchMessage, WorkbenchTask, WorkbenchTaskMaterial } from '../../../shared/workbench';
 import { retrievalText } from './attachments';
 import { classifyTurn, compactRule, isTaskAmendment, isWorkRequest, mergeTaskRules, taskNeedsSkill, wantsDirectoryCreation } from './turn-policy';
+import { needsCurrentEvidence, wantsSavedPlaybook } from './playbook';
+import { isDirectoryStep } from './turn-policy';
 
 const followUp = /^(?:继续|继续做|继续写|接着做|接着写|接着|执行吧|开始吧|就按这个|按这个做|做吧|写吧|可以|好|好的|行|嗯|执行)$/;
 const agreementOnly = /^(?:可以|好|好的|行|嗯|执行)$/;
@@ -30,6 +32,10 @@ export function carriesCurrentMethod(text: string): boolean {
   return continuesCurrentWork(text) && !leavesCurrentTaskCue.test(normalizedWork(text));
 }
 
+export function taskRequiresEvidence(text: string, task?: WorkbenchTask): boolean {
+  return !isDirectoryStep(text) && !wantsSavedPlaybook(text) && (carriesCurrentMethod(text) || isWorkRequest(text) || isTaskAmendment(text)) && (needsCurrentEvidence(text) || needsCurrentEvidence(task?.goal ?? ''));
+}
+
 export function advanceTask(input: { task?: WorkbenchTask; notes?: string[]; text: string; recentUserTexts: string[]; agent: { workflow?: string; skills?: string[] }; now: string; id: () => string }): { task?: WorkbenchTask; inherited: boolean; opened: boolean } {
   const text = input.text.trim();
   const normalized = normalizedWork(text);
@@ -40,7 +46,7 @@ export function advanceTask(input: { task?: WorkbenchTask; notes?: string[]; tex
     if (input.task.goal === goal) return { task: { ...input.task, updatedAt: input.now }, inherited: true, opened: false };
     return { task: { id: input.id(), goal, constraints: [], updatedAt: input.now, ...(directory ? { directory } : {}), ...carriedPaths(input.task) }, inherited: false, opened: true };
   }
-  if (wantsDirectoryCreation(text)) return { task: input.task ? { ...input.task, updatedAt: input.now } : { id: input.id(), goal: compactRule(text), constraints: [], updatedAt: input.now }, inherited: !!input.task, opened: !input.task };
+  if (wantsDirectoryCreation(text)) return { task: input.task ? { ...input.task, goal: compactRule(text), updatedAt: input.now } : { id: input.id(), goal: compactRule(text), constraints: [], updatedAt: input.now }, inherited: !!input.task, opened: !input.task };
   if (input.task && parameterCue.test(normalized)) {
     return { task: { ...input.task, constraints: mergeTaskRules(input.task.constraints, [compactRule(text)]), updatedAt: input.now }, inherited: true, opened: false };
   }

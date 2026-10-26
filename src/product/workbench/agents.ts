@@ -48,8 +48,16 @@ function normalizeProfile(input: Record<string, unknown>, previous?: WorkbenchAg
   const standingRules = ruleSource === undefined ? undefined : [...new Set(ruleSource.map(rule => compactRule(rule)))];
   const playbook = Object.hasOwn(input, 'playbook') ? (input.playbook == null ? undefined : normalizePlaybook(input.playbook)) : previous?.playbook ?? undefined;
   const now = new Date().toISOString();
+  const workspaceInput = Object.hasOwn(input, 'workspaceDirectory') ? input.workspaceDirectory : previous?.workspaceDirectory;
+  let workspaceDirectory: string | undefined;
+  if (workspaceInput !== undefined && workspaceInput !== null && workspaceInput !== '') {
+    if (typeof workspaceInput !== 'string' || !isAbsolute(workspaceInput) || !existsSync(workspaceInput) || !statSync(workspaceInput).isDirectory()) throw new Error('工作目录需为存在的绝对目录');
+    workspaceDirectory = realpathSync(workspaceInput);
+  }
+  const selectedAgain = Object.hasOwn(input, 'workspaceDirectory') && Object.hasOwn(input, 'workspaceUpdatedAt') && input.workspaceUpdatedAt !== previous?.workspaceUpdatedAt;
+  const workspaceUpdatedAt = workspaceDirectory === previous?.workspaceDirectory && !selectedAgain ? previous?.workspaceUpdatedAt : now;
   const retiredRules = previous?.retiredRules?.filter(item => item && typeof item.text === 'string' && typeof item.replacedBy === 'string');
-  return { ...base, id: previous?.id ?? randomUUID(), revision: (previous?.revision ?? 0) + 1, sourceIds: [...new Set(sourceIds)], skills: [...new Set(skills)], workflow, readDirectories: [...new Set(readDirectories)], deliveryFormat, ...(standingRules ? { standingRules } : {}), ...(retiredRules?.length ? { retiredRules } : {}), ...(playbook ? { playbook } : {}), schedule: schedule(Object.hasOwn(input, 'schedule') ? input.schedule : previous?.schedule), createdAt: previous?.createdAt ?? now, updatedAt: now };
+  return { ...base, id: previous?.id ?? randomUUID(), revision: (previous?.revision ?? 0) + 1, sourceIds: [...new Set(sourceIds)], skills: [...new Set(skills)], workflow, readDirectories: [...new Set(readDirectories)], workspaceDirectory, workspaceUpdatedAt, deliveryFormat, ...(standingRules ? { standingRules } : {}), ...(retiredRules?.length ? { retiredRules } : {}), ...(playbook ? { playbook } : {}), schedule: schedule(Object.hasOwn(input, 'schedule') ? input.schedule : previous?.schedule), createdAt: previous?.createdAt ?? now, updatedAt: now };
 }
 export class WorkbenchAgentStore {
   constructor(readonly workbench: WorkbenchStore) {}

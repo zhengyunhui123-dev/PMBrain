@@ -110,6 +110,8 @@ const EXPECTED_PHASES: CyclePhase[] = [
   'lint',
   'backlinks',
   'sync',
+  'fence_repair',
+  'content_repair',
   'synthesize',
   'extract',
   'extract_facts',               // v0.32.2 — reconcile fence → DB facts index
@@ -123,7 +125,9 @@ const EXPECTED_PHASES: CyclePhase[] = [
   'propose_takes',              // v0.36.1.0 — hindsight calibration wave
   'grade_takes',                // v0.36.1.0
   'calibration_profile',        // v0.36.1.0
+  'edge_contradictions',
   'drift',
+  'standing_questions',
   'conversation_facts_backfill', // v0.41.11 — opt-in conversation facts
   'enrich_thin',
   'embed',

@@ -13,7 +13,7 @@ import { assertDreamPresetAllowGenerative, assertPhasesAllowGenerative } from '.
 import { TaskEngineHost } from './engine-host.ts';
 import type { DreamTaskInput, ImportTaskInput, ProductTask, TaskWorkerMessage } from './types.ts';
 import { removeAdminUploadTempDir } from '../../commands/pmbrain-admin-support.ts';
-import { appendTaskCheckpoint, taskArtifactPath, resumeMaintenanceCheckpoint, retireAutomaticCapture } from './checkpoint.ts';
+import { appendTaskCheckpoint, taskArtifactPath, resumeMaintenanceCheckpoint, retireAutomaticCapture, setMaintenanceCheckpoint } from './checkpoint.ts';
 import { DEFAULT_PRODUCT_TASK_TIMEOUT_MS, DREAM_TASK_TIMEOUT_KEY, parseTaskTimeout } from './timeout.ts';
 import { FileProjection } from './file-projection.ts';
 import { WorkerPgliteEngine } from '../database/worker-engine.ts';
@@ -176,7 +176,7 @@ export class ProductTaskRuntime {
       }
     });
     this.worker = new MinionWorker(engine, {
-      ...memoryOptions, queue: PRODUCT_TASK_QUEUE, concurrency: 2, pollInterval: 100,
+      ...memoryOptions, queue: PRODUCT_TASK_QUEUE, concurrency: engine.kind==='pglite'?1:2, pollInterval: 100,
       healthCheckInterval: 0, lockDuration: 30_000, stalledInterval: 5000,
       ownsLockedTransaction: id => this.executions.get(id)?.ownsLockedTransaction() === true,
     });
@@ -673,6 +673,7 @@ export class ProductTaskRuntime {
       await this.reconcileMaintenanceChildren(resumedId);
       if (task.type === 'import') {task.input.resumeCheckpointId = resumedId;if(task.input.knowledgeCheckpoint)resumeMaintenanceCheckpoint(task.input.knowledgeCheckpoint,true,true);}
       if (task.type === 'dream' && task.input.checkpoint) resumeMaintenanceCheckpoint(task.input.checkpoint, true, task.input.phase !== 'capture_entities');
+      if (task.type === 'memory' && task.input.knowledgeCheckpoint) resumeMaintenanceCheckpoint(task.input.knowledgeCheckpoint, true);
       const progress = (record!.progress ?? {}) as Progress;
       delete progress.result;
       if (progress.product) progress.product.errorReason = null;
@@ -780,14 +781,17 @@ export class ProductTaskRuntime {
       progressVersion++;
       if (!persisting) {
         persisting = true;
-        progressTail = (async () => {
+        const writing = (async () => {
           let saved = 0;
           while (saved < progressVersion) {
             const version = progressVersion;
             await context.updateProgress(structuredClone(progress));
             saved = version;
           }
-        })().finally(() => { persisting = false; });
+        })();
+        void writing.catch(() => {});
+        progressTail = writing.finally(() => { persisting = false; });
+        void progressTail.catch(() => {});
       }
       return progressTail;
     };
@@ -964,9 +968,7 @@ export class ProductTaskRuntime {
             return reply;
           }
           if (message.method === 'task.maintenanceCheckpoint') {
-            if (structuredTask.type !== 'dream' && structuredTask.type !== 'import') throw new Error('无效的维护检查点');
-            if(structuredTask.type==='import')structuredTask.input.knowledgeCheckpoint=message.args[0] as MaintenanceCheckpoint;
-            else structuredTask.input.checkpoint = message.args[0] as MaintenanceCheckpoint;
+            setMaintenanceCheckpoint(structuredTask, message.args[0] as MaintenanceCheckpoint);
             const rows = await this.engine.executeRaw(`UPDATE minion_jobs SET data = data || ($3::jsonb - 'relations' - 'gitFiles' - 'gitResults' - 'taskBudget'), updated_at = now() WHERE id = $1 AND status = 'active' AND lock_token = $2 RETURNING id`, [context.id, record.lock_token, record.data]);
             if (!rows.length) throw new Error('维护任务已停止或租约失效');
             return null;
@@ -1227,7 +1229,7 @@ export class ProductTaskRuntime {
   }
 
   async close(): Promise<void> {
-    this.workbenchMemory?.close();
+    await this.workbenchMemory?.close();
     this.closeWorkbenchAssistant?.();
     this.stopped = true;
     if(this.resourceTimer)clearInterval(this.resourceTimer);

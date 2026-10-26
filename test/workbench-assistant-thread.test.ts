@@ -16,6 +16,23 @@ import { defaultAssistant, type WorkbenchMessage } from '../shared/workbench';
 const root = () => mkdtempSync(join(tmpdir(), 'pmbrain-assistant-thread-'));
 const message = (id: string, role: 'user' | 'assistant', text: string): WorkbenchMessage => ({ id, role, text, status: 'complete', createdAt: '' });
 
+test.each(['complete', 'error'])('终态保存期间助手列表不再显示正在处理：%s', async status => {
+  const store = new WorkbenchStore(root());
+  const service = new WorkbenchService(store, () => [{ id: 'ollama:local', name: '本地' }], async () => {
+    if (status === 'error') throw new Error('模拟回答失败');
+    return { text: '已完成', model: 'ollama:local', citations: [] };
+  });
+  const originalSave = store.save.bind(store); const observed: boolean[] = [];
+  store.save = conversation => {
+    originalSave(conversation);
+    if (conversation.messages.at(-1)?.status === status) observed.push(service.list().find(row => row.id === conversation.id)!.running);
+  };
+  const conversation = service.create({ knowledge: false });
+  service.send(conversation.id, { text: '你好' }); await service.settled(conversation.id);
+  expect(observed.length).toBeGreaterThan(0);
+  expect(observed.every(running => !running)).toBe(true);
+});
+
 test('明确要求长期生效、连续的做法纠正、以及只说这次，会分成三档', () => {
   expect(classifyTurn('以后周报都按知识库里的实际进展写')).toBe('durable');
   expect(classifyTurn('记住，没有依据就不写')).toBe('durable');
@@ -91,12 +108,12 @@ test('只说创建一个助手时还不能创建，明确确认后才可以', ()
   expect(readyToCreateAssistant('直接创建报销助手')).toBe(true);
 });
 
-test('打招呼不带工作步骤，说生成本周周报或还是按上周的来才带上', async () => {
+test('助手定义每轮可用，是否开展工作仍由当前请求决定', async () => {
   const agent = { ...defaultAssistant(), id: 'weekly', revision: 1, name: '周报助手', skills: ['weekly-report'], workflow: '先查知识库，再写完成事项、问题和计划', sourceIds: ['default'], readDirectories: [], deliveryFormat: 'docx' as const, standingRules: ['不要编造'], createdAt: '', updatedAt: '' };
   const context = { engine: {}, config: () => ({}) } as any;
   const hello = await agentInstructions(context, agent, { userText: '你好' });
   expect(hello).toContain('不要编造');
-  expect(hello).not.toContain('<workflow>');
+  expect(hello).toContain('<workflow>');
   expect(hello).not.toContain('<skill');
   const report = await agentInstructions(context, agent, { userText: '生成本周周报' });
   expect(report).toContain('<workflow>');
@@ -282,11 +299,11 @@ test('助手列表显示最近工作，创建回执不露出编号', () => {
   expect(visibleAssistantText(`已创建 ${id}，revision: 1`, [{ name: 'assistant_create', status: 'complete', output: JSON.stringify({ id, name: '报销助手', revision: 1, created: true }) }])).toBe('');
 });
 
-test('打招呼不带做法，生成本周周报才带上做法和本期核对', async () => {
+test('已保存做法每轮可用，生成本周周报才要求本期核对', async () => {
   const agent = { ...defaultAssistant(), id: 'weekly', revision: 1, name: '周报助手', skills: ['weekly-report'], workflow: '先查知识库，再写完成事项、问题和计划', sourceIds: ['default'], readDirectories: [], deliveryFormat: 'docx' as const, standingRules: ['不要编造'], playbook: { name: '周报助手', when: '用户让周报助手写周报时', inputs: '本期资料', steps: ['先查知识库'], checks: '没有依据就不写', output: 'Word 文档', approval: '资料不足时只说明没有材料', updatedAt: '' }, createdAt: '', updatedAt: '' };
   const context = { engine: {}, config: () => ({}) } as never;
   const hello = await agentInstructions(context, agent, { userText: '你好' });
-  expect(hello).not.toContain('<playbook>');
+  expect(hello).toContain('<playbook>');
   expect(hello).not.toContain('都不是本期事实');
   const report = await agentInstructions(context, agent, { userText: '生成本周周报' });
   expect(report).toContain('<playbook>');

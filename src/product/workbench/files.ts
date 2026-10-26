@@ -11,15 +11,16 @@ import type { WorkbenchCitation, WorkbenchTask, WorkbenchToolCall } from '../../
 import type { WorkbenchAgentStore } from './agents';
 
 function inside(root: string, path: string) { const rel = relative(root, path); return rel === '' || (!isAbsolute(rel) && rel !== '..' && !rel.startsWith(`..${sep}`)); }
+function readRoots(agent: WorkbenchAgent) { return [...new Set([...agent.readDirectories, ...(agent.workspaceDirectory ? [agent.workspaceDirectory] : [])])]; }
 function granted(agent: WorkbenchAgent, path: string) {
   if (!isAbsolute(path) || !existsSync(path)) throw new Error('文件不存在或未授权');
   const resolved = realpathSync(path);
-  if (!agent.readDirectories.some(root => inside(realpathSync(root), resolved))) throw new Error('文件不在助手授权目录中');
+  if (!readRoots(agent).some(root => inside(realpathSync(root), resolved))) throw new Error('文件不在助手授权目录中');
   return resolved;
 }
 export async function listLocalFiles(agent: WorkbenchAgent, directory?: string, offset = 0) {
   if (!Number.isInteger(offset) || offset < 0) throw new Error('读取位置无效');
-  const roots = directory ? [granted(agent, directory)] : agent.readDirectories;
+  const roots = directory ? [granted(agent, directory)] : readRoots(agent);
   const files = roots.flatMap(root => readdirSync(root, { withFileTypes: true }).map(item => {
     const path = join(root, item.name);
     if (item.isSymbolicLink()) return null;
@@ -243,6 +244,10 @@ export function artifactFilename(title: string, format: WorkbenchArtifact['forma
   return `${stem}.${format === 'docx' ? 'docx' : 'md'}`;
 }
 export async function resolveAgentDeliveryDirectory(engine: BrainEngine, agent: WorkbenchAgent) {
+  if (agent.workspaceDirectory) {
+    if (!existsSync(agent.workspaceDirectory) || !statSync(agent.workspaceDirectory).isDirectory()) throw new Error(`工作目录不存在：${agent.workspaceDirectory}`);
+    return { sourceId: agent.sourceIds[0] ?? 'default', directory: realpathSync(agent.workspaceDirectory) };
+  }
   let mainId: string | null = null;
   try { mainId = await resolveMainSourceId(engine); } catch { mainId = null; }
   const requested = agent.sourceIds.map(id => id === 'default' && mainId ? mainId : id);
@@ -267,7 +272,7 @@ function singleName(name: string) {
   if (!name || name.length > 160 || name !== name.trim() || /[\\/<>:"|?*\x00-\x1f]/.test(name) || /[. ]$/.test(name) || /^(?:\.{1,2}|con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(name)) throw new Error('文件夹名称无效，请使用单个有效名称');
 }
 function readRootOf(agent: WorkbenchAgent, path: string) {
-  return agent.readDirectories.map(root => {
+  return readRoots(agent).map(root => {
     try { return existsSync(root) && !lstatSync(root).isSymbolicLink() ? realpathSync(root) : ''; } catch { return ''; }
   }).find(root => root && inside(root, path)) ?? '';
 }
@@ -278,7 +283,7 @@ export async function createLocalDirectory(engine: BrainEngine, agent: Workbench
   let sourceId: string;
   let root: string;
   if (!directory) {
-    if (!target) throw new Error('当前助手知识来源没有绑定可用的成果输出目录');
+    if (!agent.workspaceDirectory || !target) throw new Error('请先确认工作目录，再创建文件夹');
     parent = deliveryParent(target.directory, target.directory);
     sourceId = target.sourceId;
     root = realpathSync(target.directory);
@@ -370,11 +375,16 @@ export async function publishArtifactToSource(engine: BrainEngine, agent: Workbe
     return { ok: true, path: artifact.publishedPath, sourceId: agent.sourceIds[0] ?? 'default' };
   }
   const target = await resolveAgentDeliveryDirectory(engine, agent);
-  if (!target) return { ok: false, reason: '知识来源没有绑定可用的本地目录' };
+  if (!workingDirectory && !agent.workspaceDirectory) return { ok: false, reason: '请先选择这个助手的工作目录' };
+  if (!target && !workingDirectory) return { ok: false, reason: '工作目录尚未确定' };
   if (workingDirectory) {
-    if (target.sourceId !== workingDirectory.sourceId) throw new Error('当前工作目录的知识来源已改变，请先确认目录');
-    target.directory = deliveryParent(target.directory, workingDirectory.path);
+    if (!agent.sourceIds.includes(workingDirectory.sourceId)) throw new Error('当前工作目录的知识来源已改变，请先确认目录');
+    const root = target && inside(realpathSync(target.directory), realpathSync(workingDirectory.path)) ? target.directory : readRootOf(agent, realpathSync(workingDirectory.path));
+    if (!root) throw new Error('工作目录尚未授权，请在助手设置中选择目录');
+    if (target) target.directory = deliveryParent(root, workingDirectory.path);
+    else return publishArtifactToSource(engine, { ...agent, workspaceDirectory: deliveryParent(root, workingDirectory.path) }, artifact);
   }
+  if (!target) return { ok: false, reason: '工作目录尚未确定' };
   const bytes = readFileSync(artifact.path);
   const filename = artifactFilename(artifact.title, artifact.format);
   let destination = join(target.directory, filename);

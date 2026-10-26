@@ -59,10 +59,20 @@ import { resolveAtomSlug } from './atom-identity.ts';
 import { resolveCycleDate } from './cycle-date.ts';
 import {
   recordTranscriptFailureCount,
+  recordTranscriptPartial,
+  skippedTranscriptKeys,
   stampTranscriptTombstone,
-  tombstonedTranscriptsForHashes,
   transcriptStateKey,
 } from './extract-atoms-transcript-state.ts';
+import {
+  atomTextHash16,
+  partialAtomSourceHash,
+  planAtomWindow,
+  resolveExtractAtomsInputCap,
+  utf8SafeEnd,
+  type AtomWatermark,
+  type AtomWindowPlan,
+} from './extract-atoms-window.ts';
 
 const DEFAULT_BUDGET_USD = 0.3;
 
@@ -110,7 +120,7 @@ export interface ExtractAtomsOpts {
    * Mirrors _transcripts shape. `undefined` triggers discovery; `[]`
    * explicitly suppresses page discovery (for transcript-only tests).
    */
-  _pages?: Array<{ slug: string; content: string; contentHash: string }>;
+  _pages?: Array<{ slug: string; content: string; contentHash: string; prior?: AtomWatermark | null }>;
   /**
    * v0.41.19.0 (T3): cooperative yield hook fired from inside the work
    * loop on a 30s throttle AND immediately after every `await chat()`
@@ -188,6 +198,7 @@ interface DiscoveredPage {
   slug: string;
   content: string;
   contentHash: string;
+  prior?: AtomWatermark | null;
 }
 
 /**
@@ -214,11 +225,14 @@ export async function discoverExtractablePages(
   scope?:{schemaPack?:string;since?:string;strict?:boolean},
 ): Promise<DiscoveredPage[]> {
   const hasFilter = Array.isArray(affectedSlugs) && affectedSlugs.length > 0;
+  const capSlot = hasFilter ? '$8' : '$7';
   const sql = `
     SELECT p.slug,
            p.id,p.knowledge_revision,(SELECT incarnation FROM sources WHERE id=p.source_id) AS source_incarnation,
            p.compiled_truth,
-           p.content_hash
+           p.content_hash,
+           p.frontmatter->>'atoms_read_chars' AS atoms_read_chars,
+           p.frontmatter->>'atoms_read_prefix_hash' AS atoms_read_prefix_hash
     FROM pages p
     WHERE p.source_id = $1
       AND p.type = ANY($2::text[])
@@ -232,6 +246,14 @@ export async function discoverExtractablePages(
       AND COALESCE(p.frontmatter->>'pmbrain_memory','false') <> 'true'
       AND COALESCE(p.frontmatter->>'raw','') = ''
       AND COALESCE(p.frontmatter->>'atoms_scan_hash', '') <> substring(p.content_hash from 1 for 16)
+      AND NOT (
+        COALESCE(p.frontmatter->>'atoms_window_hash', '') = substring(p.content_hash from 1 for 16)
+        AND CASE
+          WHEN COALESCE(p.frontmatter->>'atoms_partial_cap', '') ~ '^[0-9]+$'
+          THEN (p.frontmatter->>'atoms_partial_cap')::int >= ${capSlot}::int
+          ELSE false
+        END
+      )
       AND ($5::timestamptz IS NULL OR p.updated_at >= $5::timestamptz)
       AND p.slug !~* $6
       ${hasFilter ? "AND p.slug = ANY($7::text[])" : ''}
@@ -255,6 +277,7 @@ export async function discoverExtractablePages(
     EXCLUDED_CAPTURE_PATH.source,
   ];
   if (hasFilter) params.push(affectedSlugs);
+  params.push(await resolveExtractAtomsInputCap(engine));
 
   try {
     const rows = await engine.executeRaw<{
@@ -262,13 +285,21 @@ export async function discoverExtractablePages(
       compiled_truth: string;
       content_hash: string;
       id:number;knowledge_revision:string;source_incarnation:string;
+      atoms_read_chars: string | null;
+      atoms_read_prefix_hash: string | null;
     }>(sql, params);
-    return rows.filter(r=>!excludedCapturePath(r.slug)).map((r) => ({
+    return rows.filter(r=>!excludedCapturePath(r.slug)).map((r) => {
+      const readChars = Number(r.atoms_read_chars);
+      const prior = Number.isInteger(readChars) && readChars >= 0 && r.atoms_read_prefix_hash
+        ? { readChars, prefixHash: r.atoms_read_prefix_hash }
+        : null;
+      return {
       slug: r.slug,
       content: r.compiled_truth,
       contentHash: r.content_hash,
+      prior,
       identity:{pageId:r.id,revision:r.knowledge_revision,sourceIncarnation:r.source_incarnation},
-    }));
+    };});
   } catch (err) {
     if(scope?.strict)throw err;
     const msg = err instanceof Error ? err.message : String(err);
@@ -305,6 +336,14 @@ export async function countExtractAtomsBacklog(
           AND ($4::timestamptz IS NULL OR p.updated_at >= $4::timestamptz)
           AND p.slug !~* $5
           AND COALESCE(p.frontmatter->>'atoms_scan_hash', '') <> substring(p.content_hash from 1 for 16)
+          AND NOT (
+            COALESCE(p.frontmatter->>'atoms_window_hash', '') = substring(p.content_hash from 1 for 16)
+            AND CASE
+              WHEN COALESCE(p.frontmatter->>'atoms_partial_cap', '') ~ '^[0-9]+$'
+              THEN (p.frontmatter->>'atoms_partial_cap')::int >= $6::int
+              ELSE false
+            END
+          )
           AND NOT EXISTS (
             SELECT 1
               FROM pages atom
@@ -313,7 +352,7 @@ export async function countExtractAtomsBacklog(
                AND atom.frontmatter->>'source_hash' = substring(p.content_hash from 1 for 16)
                AND atom.deleted_at IS NULL
           )`,
-      [sourceId, await resolveExtractableTypes(scope?.schemaPack), MIN_PAGE_CHARS_FOR_EXTRACTION,scope?.since??null,EXCLUDED_CAPTURE_PATH.source],
+      [sourceId, await resolveExtractableTypes(scope?.schemaPack), MIN_PAGE_CHARS_FOR_EXTRACTION,scope?.since??null,EXCLUDED_CAPTURE_PATH.source, await resolveExtractAtomsInputCap(engine)],
     );
     return Number(rows[0]?.cnt ?? 0);
   } catch (error) {
@@ -432,8 +471,9 @@ export async function runPhaseExtractAtoms(
   // Surface a heartbeat before the batch query so even an instant
   // short-circuit shows a sign of life (closes Issue 2 silent-phase pain).
   opts.progress?.heartbeat(`checking existing atoms for ${allHashes16.length} transcripts`);
+  const inputCap = await resolveExtractAtomsInputCap(engine);
   const existingHashes = await atomsExistingForHashes(engine, sourceId, allHashes16);
-  const tombstoned = await tombstonedTranscriptsForHashes(engine, sourceId, allHashes16);
+  const tombstoned = await skippedTranscriptKeys(engine, sourceId, allHashes16, inputCap);
   for (const t of transcripts) {
     const hash16 = t.contentHash.slice(0, 16);
     if (existingHashes.has(hash16) || tombstoned.has(transcriptStateKey(t.filePath, hash16))) {
@@ -551,7 +591,45 @@ export async function runPhaseExtractAtoms(
 
     const originLabel = item.kind === 'transcript' ? item.filePath : item.slug;
     try {
-      const promptContent = item.content.slice(0, 50_000);
+      const windowPlan: AtomWindowPlan = item.kind === 'page'
+        ? planAtomWindow(item.content, inputCap, item.prior ?? null)
+        : (() => {
+            const end = utf8SafeEnd(item.content, Math.min(item.content.length, inputCap));
+            return {
+              promptContent: item.content.slice(0, end),
+              truncated: end < item.content.length,
+              inputChars: end,
+              readStart: 0,
+              readEnd: end,
+              restart: false,
+              complete: end >= item.content.length,
+            };
+          })();
+      const promptContent = windowPlan.promptContent;
+      const contentHash16 = item.contentHash.slice(0, 16);
+      const stampPageWindow = async (tx: { executeRaw: BrainEngine['executeRaw'] }) => {
+        if (item.kind !== 'page') return;
+        if (windowPlan.complete) {
+          const updated = await tx.executeRaw(
+            `UPDATE pages SET frontmatter = frontmatter || jsonb_build_object('atoms_scan_hash', $1::text)
+              WHERE source_id = $2 AND slug = $3 AND deleted_at IS NULL AND content_hash = $4 RETURNING slug`,
+            [contentHash16, sourceId, item.slug, item.contentHash],
+          );
+          if (!updated.length) throw new Error('atom_revision_conflict: source changed during extraction');
+          return;
+        }
+        const updated = await tx.executeRaw(
+          `UPDATE pages SET frontmatter = frontmatter || jsonb_build_object(
+              'atoms_read_chars', $1::int,
+              'atoms_read_prefix_hash', $2::text,
+              'atoms_window_hash', $3::text,
+              'atoms_partial_cap', $4::int
+            )
+            WHERE source_id = $5 AND slug = $6 AND deleted_at IS NULL AND content_hash = $7 RETURNING slug`,
+          [windowPlan.readEnd, atomTextHash16(item.content.slice(0, windowPlan.readEnd)), contentHash16, inputCap, sourceId, item.slug, item.contentHash],
+        );
+        if (!updated.length) throw new Error('atom_revision_conflict: source changed during extraction');
+      };
       const result = await chat({
         model: resolvedModel.model,
         system: EXTRACT_PROMPT,
@@ -582,16 +660,11 @@ export async function runPhaseExtractAtoms(
       if((opts.requireSourceQuotes||opts.since)&&atoms.some(atom=>!locateQuote(promptContent,atom.source_quote??'')))throw new Error('atom_evidence_unverified: source quote is missing or cannot be located unambiguously');
       if (atoms.length === 0) {
         if (!opts.dryRun && item.kind === 'page') {
-            const updated=await engine.executeRaw(
-              `UPDATE pages
-                  SET frontmatter = frontmatter || jsonb_build_object('atoms_scan_hash', $1::text)
-                WHERE source_id = $2 AND slug = $3 AND deleted_at IS NULL AND content_hash=$4 RETURNING slug`,
-              [item.contentHash.slice(0, 16), sourceId, item.slug,item.contentHash],
-            );
-            if(!updated.length)throw new Error('atom_revision_conflict: source changed during extraction');
+            await stampPageWindow(engine);
         }
         if (!opts.dryRun && item.kind === 'transcript') {
-          await stampTranscriptTombstone(engine, sourceId, item.filePath, item.contentHash);
+          if (windowPlan.truncated) await recordTranscriptPartial(engine, sourceId, item.filePath, item.contentHash, inputCap);
+          else await stampTranscriptTombstone(engine, sourceId, item.filePath, item.contentHash);
         }
         if (item.kind === 'transcript') transcriptsProcessed++;
         else pagesProcessed++;
@@ -628,7 +701,7 @@ export async function runPhaseExtractAtoms(
             {
               atom_type: atom.atom_type,
               ...originFrontmatter,
-              source_hash: item.contentHash.slice(0, 16),
+              source_hash: partialAtomSourceHash(contentHash16, windowPlan.truncated, windowPlan.readStart),
               ...quoteFields,
               ...(atom.lesson && { lesson: atom.lesson }),
               ...(atom.concepts && atom.concepts.length > 0 && { concepts: atom.concepts }),
@@ -653,7 +726,8 @@ export async function runPhaseExtractAtoms(
           ],{auditSite:'extract.links_db'});
           written++;
         }
-        if(item.kind==='page')await tx.executeRaw("UPDATE pages SET frontmatter=frontmatter||jsonb_build_object('atoms_scan_hash',$1::text) WHERE source_id=$2 AND slug=$3 AND content_hash=$4",[item.contentHash.slice(0,16),sourceId,item.slug,item.contentHash]);
+        if(item.kind==='page')await stampPageWindow(tx);
+        if(item.kind==='transcript'&&windowPlan.truncated)await recordTranscriptPartial(tx,sourceId,item.filePath,item.contentHash,inputCap);
         });
         totalAtomsExtracted+=written;
         for(const atom of atoms)for(const label of atom.concepts??[])knownLabels.add(label);

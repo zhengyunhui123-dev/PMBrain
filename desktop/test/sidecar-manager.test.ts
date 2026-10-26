@@ -8,6 +8,7 @@ test('打包脚本栈不等于运行时缺失，超时可恢复而数据库错�
   expect(classifySidecarStartupError('Worker has been terminated\n at postMessage (D:/PMBrain/pmbrain-sidecar.js:123:9)')).toMatchObject({category:'transient',retryable:true});
   expect(classifySidecarStartupError("Cannot find module 'D:/PMBrain/pmbrain-sidecar.js'")).toMatchObject({category:'runtime_missing',retryable:false});
   expect(classifySidecarStartupError('DatabaseAlreadyOwnedError\n at D:/PMBrain/pmbrain-sidecar.js:123:9')).toMatchObject({category:'database_owned',retryable:false});
+  expect(classifySidecarStartupError(`Sidecar exited (code 1). [database request timeout] {"waiting":[{"sqlPreview":"error_text = 'wall-clock timeout exceeded'"}]}`)).toMatchObject({category:'transient',retryable:true});
 });
 import { memoryPressure } from '../../shared/memory-budget.js';
 

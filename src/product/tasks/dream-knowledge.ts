@@ -11,3 +11,10 @@ export async function prepareDreamKnowledge(engine:BrainEngine):Promise<boolean>
     return true;
   });
 }
+
+export async function prepareProductEnrichThin(engine:BrainEngine):Promise<void>{
+  await engine.transaction(async tx=>{
+    if(await tx.getConfig('cycle.enrich_thin.enabled')===null)await tx.setConfig('cycle.enrich_thin.enabled','true');
+    if(await tx.getConfig('cycle.enrich_thin.types')===null)await tx.setConfig('cycle.enrich_thin.types',JSON.stringify(['person','company','project']));
+  });
+}

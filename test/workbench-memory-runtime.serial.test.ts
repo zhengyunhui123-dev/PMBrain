@@ -21,6 +21,7 @@ let engine:BrainEngine,runtime:ProductTaskRuntime,modelServer:ReturnType<typeof 
 let failExtraction=false;let extractionCalls=0;let delayExtraction=false;
 let failModelResolution=false;
 let first:any;
+let coordinator: ReturnType<typeof registerWorkbenchRoutes>['coordinator'];
 
 beforeAll(async()=>{
   for(const key of keys)delete process.env[key];process.env.PMBRAIN_HOME=root;process.env.GBRAIN_HOME=root;mkdirSync(join(root,'.pmbrain'));
@@ -29,7 +30,7 @@ beforeAll(async()=>{
     const text=body.messages.filter((message:any)=>message.role==='user').at(-1)?.content??'';
     const extract=String(system).includes('extract personal-knowledge claims');
     if(extract){extractionCalls++;if(delayExtraction)await Bun.sleep(1500);if(failExtraction&&String(text).includes('失败夹具'))return Response.json({error:{message:'fixture extraction unavailable'}},{status:503});}
-    const content=extract?JSON.stringify({facts:String(text).includes('项目方案')?[{fact:'项目方案先写结论，再写依据',kind:'preference',entity:null,confidence:1,notability:'high',transient:false}]:String(text).includes('失败夹具')?[{fact:'失败夹具报告采用中文',kind:'preference',entity:null,confidence:1,notability:'high',transient:false}]:[]}):String(system).includes('项目方案先写结论')?'按你的偏好，项目方案先写结论，再写依据。[1]':'已收到你的表达；记忆将按设置在后台沉淀。';
+    const content=String(system).includes('You triage a conversation transcript')?JSON.stringify({score:0.05,content_type:'routine',segments:[],entities:[],reasons:['fixture routine preference']}):extract?JSON.stringify({facts:String(text).includes('项目方案')?[{fact:'项目方案先写结论，再写依据',kind:'preference',entity:null,confidence:1,notability:'high',transient:false}]:String(text).includes('失败夹具')?[{fact:'失败夹具报告采用中文',kind:'preference',entity:null,confidence:1,notability:'high',transient:false}]:[]}):String(system).includes('项目方案先写结论')?'按你的偏好，项目方案先写结论，再写依据。[1]':'已收到你的表达；记忆将按设置在后台沉淀。';
     const choice={index:0,...(body.stream?{delta:{role:'assistant',content}}:{message:{role:'assistant',content}}),finish_reason:'stop'};
     const result={id:'fixture',object:body.stream?'chat.completion.chunk':'chat.completion',created:1,model:body.model,choices:[choice],usage:{prompt_tokens:100,completion_tokens:20,total_tokens:120}};
     return body.stream?new Response(`data: ${JSON.stringify(result)}\n\ndata: [DONE]\n\n`,{headers:{'content-type':'text/event-stream'}}):Response.json(result);
@@ -44,10 +45,11 @@ beforeAll(async()=>{
   await reloadLiveGateway(engine);
   await open();
 },60000);
-async function open(){const fixtureEngine=new Proxy(engine,{get(target,key){if(key==='getConfig')return async(name:string)=>{if(failModelResolution&&name.startsWith('models.aliases.'))throw new Error('fixture model resolution unavailable');return target.getConfig(name);};const value=Reflect.get(target,key,target);return typeof value==='function'?value.bind(target):value;}});runtime=new ProductTaskRuntime(fixtureEngine);await runtime.start();const app=express();registerWorkbenchRoutes(app,(req,res,next)=>{if(req.get('x-test-owner')!=='fixture-owner'){res.status(401).json({error:'unauthorized'});return;}next();},fixtureEngine,config,{storageRoot:join(root,'sessions'),productTasks:runtime});server=app.listen(0,'127.0.0.1');await new Promise<void>(resolve=>server.once('listening',resolve));base=`http://127.0.0.1:${(server.address() as any).port}/admin/api/workbench`;}
+async function open(){const fixtureEngine=new Proxy(engine,{get(target,key){if(key==='getConfig')return async(name:string)=>{if(failModelResolution&&name.startsWith('models.aliases.'))throw new Error('fixture model resolution unavailable');return target.getConfig(name);};const value=Reflect.get(target,key,target);return typeof value==='function'?value.bind(target):value;}});runtime=new ProductTaskRuntime(fixtureEngine);await runtime.start();const app=express();coordinator=registerWorkbenchRoutes(app,(req,res,next)=>{if(req.get('x-test-owner')!=='fixture-owner'){res.status(401).json({error:'unauthorized'});return;}next();},fixtureEngine,config,{storageRoot:join(root,'sessions'),productTasks:runtime}).coordinator;server=app.listen(0,'127.0.0.1');await new Promise<void>(resolve=>server.once('listening',resolve));base=`http://127.0.0.1:${(server.address() as any).port}/admin/api/workbench`;}
 async function request(path:string,body?:unknown,method?:string){const response=await fetch(base+path,{method:method??(body===undefined?'GET':'POST'),headers:{'Content-Type':'application/json','x-test-owner':'fixture-owner'},...(body===undefined?{}:{body:JSON.stringify(body)})});const result:any=await response.json();if(!response.ok)throw new Error(JSON.stringify(result));return result;}
 async function completed(id:string,status='complete'){const until=Date.now()+35000;while(Date.now()<until){const value=await request(`/conversations/${id}`);const memory=value.messages[0]?.memory;if(value.messages.at(-1)?.status!=='running'&&memory?.status===status){const run=memory.taskId?await runtime.getRun(memory.taskId):null;if(status==='failed'?run?.status==='failed':run?.status==='completed'||!memory.taskId&&memory.factIds?.length===0)return value;}await Bun.sleep(50);}throw new Error(JSON.stringify({conversation:await request(`/conversations/${id}`),tasks:await runtime.listRuns()}));}
-afterAll(async()=>{if(server)await new Promise<void>(resolve=>server.close(()=>resolve()));await runtime?.close();await engine?.disconnect();modelServer?.stop(true);resetGateway();for(const key of keys){if(previous[key]===undefined)delete process.env[key];else process.env[key]=previous[key];}},60000);
+async function closeCoordinator(){coordinator?.close();const deadline=Date.now()+10000;while((coordinator as unknown as {scanning:boolean})?.scanning&&Date.now()<deadline)await Bun.sleep(20);}
+afterAll(async()=>{await closeCoordinator();await new Promise<void>(resolve=>server.close(()=>resolve()));await runtime?.close();await engine?.disconnect();modelServer?.stop(true);resetGateway();for(const key of keys){if(previous[key]===undefined)delete process.env[key];else process.env[key]=previous[key];}},60000);
 
 test('实际 HTTP 对话由持久任务自动提炼，工具和模型调用不写入用户事实',async()=>{
   first=await request('/conversations',{knowledge:false});await request(`/conversations/${first.id}/messages`,{text:'以后项目方案先写结论，再写依据',knowledge:false});
@@ -60,7 +62,7 @@ test('新建会话自动使用已保存偏好，出处接口和服务重启保�
   const next=await request('/conversations',{knowledge:true});await request(`/conversations/${next.id}/messages`,{text:'请按偏好写一份项目方案',knowledge:true});const value=await completed(next.id);
   expect(value.messages[1].text).toContain('先写结论');expect(value.messages[1].citations.some((row:any)=>row.kind==='memory'&&row.conversationId===first.id)).toBe(true);
   const original=await request(`/conversations/${first.id}/memory/${first.messages[0].id}?hash=${first.messages[0].memory.hash}`);expect(original.text).toBe('以后项目方案先写结论，再写依据');
-  const before=extractionCalls;await new Promise<void>(resolve=>server.close(()=>resolve()));await runtime.close();await open();
+  const before=extractionCalls;await closeCoordinator();await new Promise<void>(resolve=>server.close(()=>resolve()));await runtime.close();await open();
   const reloaded=await request(`/conversations/${first.id}`);expect(reloaded.messages[0].memory.factIds).toEqual(first.messages[0].memory.factIds);await Bun.sleep(300);expect(extractionCalls).toBe(before);
   const unauthorized=await fetch(base+'/conversations');expect(unauthorized.status).toBe(401);
 },60000);
@@ -75,7 +77,7 @@ test('模型提炼失败不影响回答，任务中心沿用原任务继续',asy
 test('正在沉淀时服务退出，重启继续同一回合且不重复事实',async()=>{
   delayExtraction=true;const before=extractionCalls;const thread=await request('/conversations',{knowledge:false});await request(`/conversations/${thread.id}/messages`,{text:'以后项目方案先写结论，再写依据',knowledge:false});
   const until=Date.now()+20000;while(extractionCalls===before&&Date.now()<until)await Bun.sleep(50);expect(extractionCalls).toBeGreaterThan(before);
-  await new Promise<void>(resolve=>server.close(()=>resolve()));await runtime.close();delayExtraction=false;await open();
+  await closeCoordinator();await new Promise<void>(resolve=>server.close(()=>resolve()));await runtime.close();delayExtraction=false;await open();
   const value=await completed(thread.id);expect(value.messages[0].memory.factIds).toHaveLength(1);expect(await engine.executeRaw("SELECT id FROM facts WHERE fact='项目方案先写结论，再写依据' AND source_id='default' AND expired_at IS NULL")).toHaveLength(1);
 },60000);
 
@@ -97,4 +99,27 @@ test('实际登记模型失败后修好配置，扫描自动恢复同一回合',
     expect(recovered.messages[0].memory.capturedAt).toBe(held.messages[0].memory.capturedAt);
     expect(recovered.messages[0].memory.factIds).toHaveLength(1);
   } finally { failModelResolution=false; }
+}, 60000);
+
+
+test('开启记忆后的知识整理时，真实任务工作进程保存检查点，重启后回执仍可读', async () => {
+  await engine.setConfig('dream.synthesize.enabled', 'true');
+  await engine.setConfig('dream.synthesize.min_chars', '1');
+  await engine.setConfig('models.dream.synthesize', config.chat_model);
+  await engine.setConfig('models.dream.synthesize_verdict', config.chat_model);
+  await reloadLiveGateway(engine);
+  try {
+    const thread = await request('/conversations', { knowledge: false });
+    await request(`/conversations/${thread.id}/messages`, { text: '以后项目方案先写结论，再写依据', knowledge: false });
+    const finished = await completed(thread.id);
+    const memory = finished.messages[0].memory;
+    expect(memory.factIds).toHaveLength(1);
+    const jobId = Number(memory.taskId.replace('task-', ''));
+    const rows = await engine.executeRaw<{ data: { task: { input: { knowledgeCheckpoint?: { phases: Record<string, unknown[]> } } } } }>('SELECT data FROM minion_jobs WHERE id=$1', [jobId]);
+    expect(rows[0]?.data.task.input.knowledgeCheckpoint?.phases.default?.length).toBeGreaterThan(0);
+    await closeCoordinator(); await new Promise<void>(resolve => server.close(() => resolve())); await runtime.close(); await open();
+    const restored = await request(`/conversations/${thread.id}`);
+    expect(restored.messages[0].memory.status).toBe('complete');
+    expect(restored.messages[0].memory.factIds).toEqual(memory.factIds);
+  } finally { await engine.setConfig('dream.synthesize.enabled', 'false'); }
 }, 60000);

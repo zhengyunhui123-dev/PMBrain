@@ -25,6 +25,8 @@ export const QUICK_MAINTENANCE_PHASES: readonly CyclePhase[] = [
   'lint',
   'backlinks',
   'sync',
+  'fence_repair',
+  'content_repair',
   'extract',
   'extract_facts',
   'resolve_symbol_edges',

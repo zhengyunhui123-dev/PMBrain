@@ -112,7 +112,7 @@ function DreamSettings() {
   const [timeoutMinutes,setTimeoutMinutes]=useState('');
   const [message,setMessage]=useState('');
   const [error,setError]=useState('');
-  type ToggleKey='knowledgeEnabled'|'knowledgeUseOrdinaryModel'|'entityCaptureEnabled'|'dualWrite'|'autoGitCommit';
+  type ToggleKey='knowledgeEnabled'|'knowledgeUseOrdinaryModel'|'entityCaptureEnabled'|'enrichThinEnabled'|'fenceRepairEnabled'|'edgeContradictionsEnabled'|'dualWrite'|'autoGitCommit';
 
   useEffect(()=>{
     void api.dreamSettings().then(value=>{
@@ -172,6 +172,13 @@ function DreamSettings() {
   const separator=settings.defaultBrainDir?.includes('\\')?'\\':'/';
   const liveResolvedOutputDir=outputIsAbsolute?settings.outputDir:settings.defaultBrainDir?settings.defaultBrainDir.replace(/[\\/]+$/,'')+separator+settings.outputDir.replace(/^[\\/]+/,''):null;
   const timeoutDirty=timeoutMinutes!==(persisted.timeoutMs==null?'':String(persisted.timeoutMs/60000));
+  const standingDirty=(settings.standingQuestions??'')!==(persisted.standingQuestions??'');
+  const saveStandingQuestions=()=>{
+    const standingQuestions=settings.standingQuestions??'';
+    const lines=standingQuestions.split(/\r?\n/).map(line=>line.trim()).filter(line=>line.length>0);
+    if(lines.length>20||lines.some(line=>line.length>200)){setError('固定问题最多 20 条，每条不超过 200 字');return;}
+    void savePatch({standingQuestions},'固定问题已保存');
+  };
 
   return <section className="pm-card dream-settings-card settings-panel">
     <div className="pm-section-head settings-panel-head"><div className="settings-panel-title"><span className="settings-panel-icon"><Sparkles /></span><div><h2>知识整理设置</h2><p className="pm-hint">开关即时保存，修改后自动生效。</p></div></div></div>
@@ -180,8 +187,18 @@ function DreamSettings() {
       {toggleRow('knowledgeEnabled','dream-knowledge-enabled','深度提炼知识与概念','默认开启。在 AI 深度整理中提炼有原文依据的知识点、综合概念并处理原始对话。未变化资料复用成果，观点生成保持关闭。')}
       {toggleRow('knowledgeUseOrdinaryModel','dream-knowledge-ordinary','知识提炼使用普通模型','沿用已配置的普通模型。关闭后使用知识库模型配置中的 Dream 阶段模型。')}
       {toggleRow('entityCaptureEnabled','dream-entity-capture','自动整理实体与关联','导入或同步新增、变更资料后，更新人物、组织、项目及来源关联。关闭后仍保存原文和已有成果。')}
+      {toggleRow('enrichThinEnabled','dream-enrich-thin','补充薄弱页面','给人物、公司和项目补上已有资料里能核对的内容。第一次 AI 深度整理会记下开启；在这里关闭后，深度整理和命令行都不再补充。')}
+      {toggleRow('fenceRepairEnabled','dream-fence-repair','整理事实栏和页面标记','合并同一段里重复的事实表，补上没写完的表格边界，并去掉指错的页面标记。默认开启，快速维护和深度整理都会做，不改原始文件。')}
+      {toggleRow('edgeContradictionsEnabled','dream-edge-contradictions','检查关系矛盾','发现同一主体互相冲突的关系后只记下待确认项，不自动改页面或已有关系。')}
       {toggleRow('dualWrite','dream-dual-write','写入本地 Markdown','对话综合和模式发现同时写入数据库和本地文件。知识点与概念保存在知识库中，可搜索并查看来源关联。')}
       {toggleRow('autoGitCommit','sync-auto-git-commit','快速维护时自动 Git 提交','将成功同步的文件变更保存为本地版本记录，不推送远端；普通文件夹无需 Git。')}
+    </div>
+    <div className="dream-output-setting">
+      <h3>固定问题</h3>
+      <label htmlFor="dream-standing-questions">每行一个问题。深度整理时用现有页面摘录刷新答案，不会凭空编造。</label>
+      <textarea id="dream-standing-questions" rows={5} value={settings.standingQuestions??''} disabled={loading||saving} onChange={event=>setSettings(current=>({...current,standingQuestions:event.target.value}))} placeholder="例如：这个项目目前的负责人和下一步是什么"/>
+      <p className="pm-hint">最多 20 条，每条不超过 200 字。留空保存会清掉从这里写入的问题，手工固定的问题仍保留。观点生成保持关闭。</p>
+      <button className="pm-primary dream-local-save" onClick={saveStandingQuestions} disabled={loading||saving||!standingDirty}>保存固定问题</button>
     </div>
     <div className="dream-settings-grid">
       <div className="dream-output-setting">

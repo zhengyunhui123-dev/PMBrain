@@ -45,6 +45,24 @@ import {
 export interface EnrichThinPhaseOpts {
   dryRun?: boolean;
   signal?: AbortSignal;
+  enabledWhenUnset?: boolean;
+  typesWhenUnset?: PageType[];
+}
+
+export function enrichThinTypesFromConfig(typesRaw: string | null, whenUnset?: readonly string[]): PageType[] {
+  if (typesRaw) {
+    try {
+      const parsed = JSON.parse(typesRaw);
+      if (Array.isArray(parsed)) {
+        const filtered = parsed.filter((item): item is string => typeof item === 'string' && item.length > 0);
+        if (filtered.length > 0) return filtered as PageType[];
+      }
+    } catch {
+      // Keep the caller default when the stored list is not JSON.
+    }
+  }
+  if (whenUnset && whenUnset.length > 0) return [...whenUnset] as PageType[];
+  return [...DEFAULT_TYPES];
 }
 
 export interface EnrichThinPhaseResult {
@@ -69,7 +87,7 @@ interface ResolvedConfig {
   model?: string;
 }
 
-async function loadCfg(engine: BrainEngine): Promise<ResolvedConfig> {
+async function loadCfg(engine: BrainEngine, opts: EnrichThinPhaseOpts): Promise<ResolvedConfig> {
   const get = (k: string) => engine.getConfig(`${CFG_PREFIX}.${k}`);
   const [enabled, maxCost, maxTotalCost, maxTotalWall, maxPages, typesRaw, orderRaw, workersRaw, model] =
     await Promise.all([
@@ -85,7 +103,7 @@ async function loadCfg(engine: BrainEngine): Promise<ResolvedConfig> {
     ]);
 
   const enabledFlag = (() => {
-    if (enabled == null) return false;
+    if (enabled == null) return opts.enabledWhenUnset === true;
     const v = enabled.trim().toLowerCase();
     return !['false', '0', 'no', 'off', ''].includes(v);
   })();
@@ -101,18 +119,7 @@ async function loadCfg(engine: BrainEngine): Promise<ResolvedConfig> {
     return Number.isFinite(n) && n >= 1 ? n : fallback;
   };
 
-  let types: PageType[] = [...DEFAULT_TYPES];
-  if (typesRaw) {
-    try {
-      const parsed = JSON.parse(typesRaw);
-      if (Array.isArray(parsed)) {
-        const filtered = parsed.filter((t): t is string => typeof t === 'string' && t.length > 0);
-        if (filtered.length > 0) types = filtered as PageType[];
-      }
-    } catch {
-      // fall through to default
-    }
-  }
+  const types = enrichThinTypesFromConfig(typesRaw, opts.typesWhenUnset);
 
   const order: EnrichOrder =
     orderRaw && (ENRICH_ORDERS as readonly string[]).includes(orderRaw.trim())
@@ -136,7 +143,7 @@ export async function runPhaseEnrichThin(
   engine: BrainEngine,
   opts: EnrichThinPhaseOpts = {},
 ): Promise<EnrichThinPhaseResult> {
-  const cfg = await loadCfg(engine);
+  const cfg = await loadCfg(engine, opts);
 
   if (!cfg.enabled) {
     return {

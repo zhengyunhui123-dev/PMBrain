@@ -10,7 +10,9 @@ const labels: Record<string, string> = {
   synthesize: '理解新增知识', extract_atoms: '提炼长期知识', patterns: '发现知识模式',
   synthesize_concepts: '整理概念', recompute_emotional_weight: '更新知识权重', consolidate: '合并重复知识',
   propose_takes: '整理观点', grade_takes: '检查观点', calibration_profile: '检查整理质量', drift: '检查知识变化',
-  conversation_facts_backfill: '整理会话事实', capture_entities: '识别实体', enrich_thin: '补充知识内容', 'schema-suggest': '检查知识结构', purge: '完成维护',
+  conversation_facts_backfill: '整理会话事实', capture_entities: '识别实体', enrich_thin: '补充知识内容',
+  fence_repair: '整理事实栏', content_repair: '核对页面标记', edge_contradictions: '检查关系矛盾', standing_questions: '刷新固定问题',
+  'schema-suggest': '检查知识结构', purge: '完成维护',
 };
 
 function group(phase: string): string {

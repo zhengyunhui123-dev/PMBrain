@@ -51,15 +51,21 @@ export class WorkerPgliteEngine {
     } });
   }
 
+  private rejectAsPromise(error: unknown): Promise<never> {
+    const promise = Promise.reject(error);
+    void promise.catch(() => {});
+    return promise;
+  }
+
   private rpc(method: string, args: unknown[], scope?: number, generation?: number, lifecycle = false): Promise<unknown> {
-    if (generation !== undefined && generation !== this.generation) return Promise.reject(new Error('数据库执行已中断，旧事务已关闭'));
-    if (!lifecycle && this.recovering) return Promise.reject(new Error('数据库正在停止并恢复，请等待恢复完成'));
-    if (!this.owner) return Promise.reject(this.failure ?? new Error('PGLite not connected. Call connect() first.'));
+    if (generation !== undefined && generation !== this.generation) return this.rejectAsPromise(new Error('数据库执行已中断，旧事务已关闭'));
+    if (!lifecycle && this.recovering) return this.rejectAsPromise(new Error('数据库正在停止并恢复，请等待恢复完成'));
+    if (!this.owner) return this.rejectAsPromise(this.failure ?? new Error('PGLite not connected. Call connect() first.'));
     const context = databaseRequestContext();
     const rollback = method === '@scope.close' && args[0] === false;
-    if (!rollback && context?.signal.aborted) return Promise.reject(context.signal.reason ?? new Error('任务已停止'));
+    if (!rollback && context?.signal.aborted) return this.rejectAsPromise(context.signal.reason ?? new Error('任务已停止'));
     const id = ++this.sequence;
-    return new Promise((resolve, reject) => {
+    const promise = new Promise((resolve, reject) => {
       const owner = this.owner!;
       const cancel = () => { try { owner.send({ type: 'cancel', id }); } catch {} };
       let timer: ReturnType<typeof setTimeout> | undefined;
@@ -88,9 +94,17 @@ export class WorkerPgliteEngine {
         }
       } catch (error) { this.pending.delete(id); dispose(); reject(error); }
     });
+    void promise.catch(() => {});
+    return promise;
   }
 
-  private async scoped(method: string, fn: (engine: BrainEngine | ReservedConnection) => Promise<unknown>, parent?: number, generation = this.generation): Promise<unknown> {
+  private scoped(method: string, fn: (engine: BrainEngine | ReservedConnection) => Promise<unknown>, parent?: number, generation = this.generation): Promise<unknown> {
+    const operation = this.runScoped(method, fn, parent, generation);
+    void operation.catch(() => {});
+    return operation;
+  }
+
+  private async runScoped(method: string, fn: (engine: BrainEngine | ReservedConnection) => Promise<unknown>, parent?: number, generation = this.generation): Promise<unknown> {
     const scope = await this.rpc(`@${method}.open`, [], parent, generation) as number;
     try {
       databaseRequestContext()?.signal.throwIfAborted();

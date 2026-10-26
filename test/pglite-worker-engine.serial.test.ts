@@ -156,6 +156,42 @@ test('数据库同步 SQL 不返回时可结束唯一执行进程，原生重开
   expect(await engine.getPage('recovery/pending')).toBeNull();
 }, 30000);
 
+test('中断恢复时排队请求不会变成进程级未处理拒绝，恢复后仍能读写', async () => {
+  const owner = engine as unknown as WorkerPgliteEngine;
+  await engine.setConfig('interrupt.committed', 'kept');
+  let entered!: () => void;
+  const started = new Promise<void>(resolve => { entered = resolve; });
+  const held = engine.transaction(async tx => {
+    await tx.setConfig('interrupt.held', 'uncommitted');
+    entered();
+    await tx.executeRaw('DO $$ BEGIN LOOP PERFORM 1; END LOOP; END $$');
+  });
+  await started;
+  const waiters = [
+    engine.getConfig('interrupt.held'),
+    engine.executeRaw('SELECT 1'),
+    engine.transaction(async tx => tx.getConfig('interrupt.held')),
+  ];
+  await Bun.sleep(40);
+  const rejections: unknown[] = [];
+  const listener = (reason: unknown) => { rejections.push(reason); };
+  process.on('unhandledRejection', listener);
+  try {
+    await owner.interruptAndRecover();
+    await Bun.sleep(30);
+    expect(rejections).toEqual([]);
+    await expect(held).rejects.toThrow();
+    const waiterResults = await Promise.allSettled(waiters);
+    expect(waiterResults.every(result => result.status === 'rejected')).toBe(true);
+    await engine.setConfig('interrupt.recovered', 'ok');
+    expect(await engine.getConfig('interrupt.recovered')).toBe('ok');
+    expect(await engine.getConfig('interrupt.committed')).toBe('kept');
+    expect(await engine.getConfig('interrupt.held')).toBeNull();
+  } finally {
+    process.off('unhandledRejection', listener);
+  }
+}, 30000);
+
 test('同一所有者的事务回滚，嵌套写入使用保存点，时间与 Map 保留类型', async () => {
   await expect(engine.transaction(async tx => {
     await tx.setConfig('worker.rollback', 'bad');

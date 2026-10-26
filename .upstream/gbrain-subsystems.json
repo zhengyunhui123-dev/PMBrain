@@ -711,7 +711,7 @@
       "path": "src/core/facts/writeback-gate.ts",
       "upstream_path": "src/core/facts/writeback-gate.ts",
       "mode": "adapted",
-      "sha256": "477c11ff0e8e674a9b4857125a59ab80b95b7ab01387fc859b0616df67255d89",
+      "sha256": "f3f693424a79df0e36f4e272efec4c73c469fe18dec19a3957ba2026738c6563",
       "upstream_sha256": "8974e3585d8f9fece557b8724b4a621259bbe18e121f7b6855d61c7dafd1bd6d"
     },
     {

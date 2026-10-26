@@ -65,6 +65,10 @@ describe('普通模型默认可用', () => {
     expect(phaseRequiresGenerativeModel('drift')).toBe(true);
     expect(phaseRequiresGenerativeModel('capture_entities')).toBe(true);
     expect(phaseRequiresGenerativeModel('enrich_thin')).toBe(true);
+    expect(phaseRequiresGenerativeModel('fence_repair')).toBe(false);
+    expect(phaseRequiresGenerativeModel('content_repair')).toBe(false);
+    expect(phaseRequiresGenerativeModel('edge_contradictions')).toBe(true);
+    expect(phaseRequiresGenerativeModel('standing_questions')).toBe(true);
     expect(phaseRequiresGenerativeModel('schema-suggest')).toBe(false);
     expect(phaseRequiresGenerativeModel('consolidate')).toBe(false);
   });

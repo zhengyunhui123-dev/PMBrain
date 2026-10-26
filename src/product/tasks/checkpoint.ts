@@ -5,7 +5,13 @@ import { createHash } from 'node:crypto';
 import type { SyncFileOptions } from '../../core/sync-file-runtime.ts';
 import { SYNC_FILE_FORMAT_VERSION } from '../../core/sync-file-runtime.ts';
 import { phaseHasPendingWork } from '../../../shared/dream-phase-state.ts';
-import type { MaintenanceCheckpoint } from './types.ts';
+import type { MaintenanceCheckpoint, ProductTask } from './types.ts';
+
+export function setMaintenanceCheckpoint(task: ProductTask, checkpoint: MaintenanceCheckpoint): void {
+  if (task.type === 'dream') task.input.checkpoint = checkpoint;
+  else if (task.type === 'import' || task.type === 'memory') task.input.knowledgeCheckpoint = checkpoint;
+  else throw new Error('该任务不能保存知识整理检查点');
+}
 
 export function retireAutomaticCapture(checkpoint: MaintenanceCheckpoint): void {
   const sources = new Set([...Object.keys(checkpoint.phases), ...Object.keys(checkpoint.reports), ...Object.keys(checkpoint.captureWindows ?? {})]);

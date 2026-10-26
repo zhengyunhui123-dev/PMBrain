@@ -105,12 +105,16 @@ export type CyclePhase =
   // so the core's auto-wrap doesn't REPLACE it.
   | 'conversation_facts_backfill'
   | 'capture_entities'
+  | 'fence_repair' | 'content_repair'
+  | 'edge_contradictions' | 'standing_questions'
   | 'drift' | 'enrich_thin';
 
 export const ALL_PHASES: CyclePhase[] = [
   'lint',
   'backlinks',
   'sync',
+  'fence_repair',
+  'content_repair',
   'synthesize',
   'extract',
   // v0.32.2 — reconcile DB facts index from the `## Facts` fence on
@@ -161,7 +165,9 @@ export const ALL_PHASES: CyclePhase[] = [
   'propose_takes',
   'grade_takes',
   'calibration_profile',
+  'edge_contradictions',
   'drift',
+  'standing_questions',
   // v0.41.11.0 — opt-in conversation-facts backfill. Default OFF; reads
   // cycle.conversation_facts_backfill.enabled gate inside the wrapper.
   // Ordered AFTER calibration_profile (matches the runCycle dispatch
@@ -273,6 +279,10 @@ const NEEDS_LOCK_PHASES: ReadonlySet<CyclePhase> = new Set([
   'conversation_facts_backfill',
   'capture_entities',
   'enrich_thin',
+  'fence_repair',
+  'content_repair',
+  'edge_contradictions',
+  'standing_questions',
   'embed',
   'purge',
 ]);
@@ -392,6 +402,8 @@ export interface CycleOpts {
   phaseCheckpoint?: (phases: PhaseResult[]) => Promise<void>;
   /** If true, no writes to filesystem or DB. All phases honor this. */
   dryRun?: boolean;
+  enrichThinWhenUnset?: boolean;
+  enrichThinTypesWhenUnset?: string[];
   phases?: CyclePhase[];
   /**
    * Trusted caller override for pack-gated phases selected by a workflow
@@ -1871,6 +1883,29 @@ export async function runCycle(
       await checkpoint();
     }
 
+    for (const repairPhase of ['fence_repair', 'content_repair'] as const) {
+      if (!phases.includes(repairPhase)) continue;
+      checkAborted(opts.signal);
+      if (!engine) {
+        phaseResults.push({
+          phase: repairPhase,
+          status: 'skipped',
+          duration_ms: 0,
+          summary: 'no database connected',
+          details: { reason: 'no_database' },
+        });
+      } else {
+        progress.start(`cycle.${repairPhase}`);
+        const repair = await import('./cycle/maintenance-repair.ts');
+        const runRepair = repairPhase === 'fence_repair' ? repair.runPhaseFenceRepair : repair.runPhaseContentRepair;
+        const { result, duration_ms } = await timePhase(() => runRepair(engine, { dryRun, sourceId: cycleSourceId }));
+        result.duration_ms = duration_ms;
+        phaseResults.push(result);
+        progress.finish();
+      }
+      await checkpoint();
+    }
+
     // ── Phase 4: synthesize (v0.23) ─────────────────────────────
     if (phases.includes('synthesize')) {
       if (!engine) {
@@ -2585,6 +2620,31 @@ export async function runCycle(
       }
     }
 
+    if (phases.includes('edge_contradictions')) {
+      checkAborted(opts.signal);
+      if (!engine) {
+        phaseResults.push({
+          phase: 'edge_contradictions',
+          status: 'skipped',
+          duration_ms: 0,
+          summary: 'no database connected',
+          details: { reason: 'no_database' },
+        });
+      } else {
+        progress.start('cycle.edge_contradictions');
+        const { runPhaseEdgeContradictions } = await import('./cycle/edge-contradictions.ts');
+        const { result, duration_ms } = await timePhase(() => runPhaseEdgeContradictions(engine, {
+          dryRun,
+          signal: opts.signal,
+          sourceId: cycleSourceId,
+        }));
+        result.duration_ms = duration_ms;
+        phaseResults.push(result);
+        progress.finish();
+      }
+      await checkpoint();
+    }
+
     // Default OFF. Report-only drift detection; never mutates take weights.
     if (phases.includes('drift')) {
       checkAborted(opts.signal);
@@ -2616,6 +2676,31 @@ export async function runCycle(
             details: { ...(driftResult.totals ?? {}) },
           };
         });
+        result.duration_ms = duration_ms;
+        phaseResults.push(result);
+        progress.finish();
+      }
+      await checkpoint();
+    }
+
+    if (phases.includes('standing_questions')) {
+      checkAborted(opts.signal);
+      if (!engine) {
+        phaseResults.push({
+          phase: 'standing_questions',
+          status: 'skipped',
+          duration_ms: 0,
+          summary: 'no database connected',
+          details: { reason: 'no_database' },
+        });
+      } else {
+        progress.start('cycle.standing_questions');
+        const { runPhaseStandingQuestions } = await import('./cycle/standing-questions.ts');
+        const { result, duration_ms } = await timePhase(() => runPhaseStandingQuestions(engine, {
+          dryRun,
+          signal: opts.signal,
+          sourceId: cycleSourceId,
+        }));
         result.duration_ms = duration_ms;
         phaseResults.push(result);
         progress.finish();
@@ -2669,7 +2754,12 @@ export async function runCycle(
         progress.start('cycle.enrich_thin');
         const { runPhaseEnrichThin } = await import('./cycle/enrich-thin.ts');
         const { result, duration_ms } = await timePhase(() =>
-          runPhaseEnrichThin(engine, { dryRun, signal: opts.signal }),
+          runPhaseEnrichThin(engine, {
+            dryRun,
+            signal: opts.signal,
+            enabledWhenUnset: opts.enrichThinWhenUnset,
+            typesWhenUnset: opts.enrichThinTypesWhenUnset as import('./types.ts').PageType[] | undefined,
+          }),
         );
         result.duration_ms = duration_ms;
         phaseResults.push(result);

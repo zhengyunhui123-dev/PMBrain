@@ -10,8 +10,10 @@ import {normalizeToolText,toolTextPreview,modelAnswerText} from '../../core/ai/t
 import { workbenchMemoryTools, nativeMemoryHandlers, type WorkbenchNative } from './memory-tools';
 import { agentTools, agentHandlers, type WorkbenchAgentTools } from './agent-tools';
 import { completedDirectories, replayArtifactRead } from './files';
-import { isDirectoryStep } from './turn-policy';
-import { answerIntegrityIssue, answerPreview, answerProtocolOffset } from './answer-integrity';
+import { classifyTurn, isDirectoryStep } from './turn-policy';
+import { answerIntegrityIssue, answerPreview, answerProtocolOffset, isClarificationAnswer } from './answer-integrity';
+import { taskRequiresEvidence } from './task-context';
+import { workspaceSelectionContext } from './agent-runtime';
 export { chatMessageTokens } from './context-runtime';
 
 export const KNOWLEDGE_TOOLS: ChatToolDef[] = [
@@ -98,9 +100,10 @@ export async function runWorkbenchTools(input: WorkbenchAnswerInput & {
   ]);
   if(input.native&&input.sourceId&&input.conversationId)for(const [name,handler] of nativeMemoryHandlers(input.engine,input.sourceId,input.conversationId,input.native,row=>{let index=citations.findIndex(item=>item.kind==='memory'&&item.factId===row.factId&&item.sourceId===row.sourceId);if(index<0){index=citations.length;citations.push(row);}return index+1;},reads,input.grantedMemoryTools??[]))handlers.set(name,handler);
   const userText = input.messages.filter(row=>row.role==='user').at(-1)?.text ?? '';
+  const requireCitation = !isDirectoryStep(userText) && (classifyTurn(userText) === 'chat' || taskRequiresEvidence(userText, input.task));
   if (input.agents && input.agent && input.conversationId && input.messageId) {
     const current = () => input.agents!.store.workbench.get(input.conversationId!).messages.some(row => row.id === input.messageId && row.status === 'running');
-    for (const [name, handler] of agentHandlers(input.agents, { agent: input.agent, userText, conversationId: input.conversationId, messageId: input.messageId, citations, cite: row => citation(row.sourceId, row.slug, row.title, row.snippet), active: current, workingDirectory: () => input.task?.directory, managedPaths: () => input.task?.managedPaths ?? [], rememberManaged: (path, from) => { if (!input.task) return; const current = input.task.managedPaths ?? []; input.task.managedPaths = [...new Set([...(from ? current.filter(item => item !== from) : current), path])]; } })) handlers.set(name, handler.idempotent ? { ...handler, execute: async (raw, abort, execution) => {
+    for (const [name, handler] of agentHandlers(input.agents, { environment: input.environment, agent: input.agent, userText, conversationId: input.conversationId, messageId: input.messageId, citations, cite: row => citation(row.sourceId, row.slug, row.title, row.snippet), active: current, workingDirectory: () => input.task?.directory, managedPaths: () => input.task?.managedPaths ?? [], rememberManaged: (path, from) => { if (!input.task) return; const current = input.task.managedPaths ?? []; input.task.managedPaths = [...new Set([...(from ? current.filter(item => item !== from) : current), path])]; } })) handlers.set(name, handler.idempotent ? { ...handler, execute: async (raw, abort, execution) => {
       const output = await handler.execute(raw, abort, execution);
       const trimmed = trimToolOutput(output, allocation.limit(execution?.toolCallId ?? '')) as Record<string, unknown>;
       if (trimmed && Array.isArray(trimmed.results) && output && typeof output === 'object' && 'results' in output && Array.isArray(output.results) && trimmed.results.length < output.results.length) trimmed.nextOffset = Number('offset' in output ? output.offset : 0) + trimmed.results.length;
@@ -157,11 +160,13 @@ export async function runWorkbenchTools(input: WorkbenchAnswerInput & {
       return parsed;
     } });
   }
-  const tools=[...(input.knowledge?KNOWLEDGE_TOOLS:[]),...(input.native?workbenchMemoryTools(userText,input.knowledge,input.grantedMemoryTools??[]):[]),...(input.agents && input.agent ? agentTools(input.agent,userText,input.agents) : [])];
+  const tools=[...(input.knowledge?KNOWLEDGE_TOOLS:[]),...(input.native?workbenchMemoryTools(userText,input.knowledge,input.grantedMemoryTools??[]):[]),...(input.agents && input.agent ? agentTools(input.agent,userText,input.agents,input.environment) : [])];
   let history = input.history;
   let checkedCompletion = false;
+  let checkedDirectory = false;
   let visibleSegment = '';
   let finalIntegrity: string | null = null;
+  const directoryNeedsExecution = (text: string) => isDirectoryStep(userText) && !completedDirectories([...calls.values(), ...(input.settledTools ?? [])]).length && !isClarificationAnswer(text) && !([...calls.values()].some(call => call.status === 'error') && /^(?:抱歉[，,。]?\s*)?(?:无法|未能|不能|尚未|没有|目录不存在|目标目录不存在)/.test(text.trim()));
   const evidenceCitationCount = (answer='') => {
     const receipts=[...calls.values(),...(input.settledTools??[])];
     if(receipts.some(call=>call.status==='error')&&/^\s*(?:无法|未能|未成功)(?:读取|检索)(?:指定的?|相关的?)?(?:资料|页面|文件)?[。.!]?\s*$/.test(answer))return undefined;
@@ -174,21 +179,31 @@ export async function runWorkbenchTools(input: WorkbenchAnswerInput & {
       preserveHistory:true,disableReasoning:true,finalizeOnLastTurn:true,finalPrompt:'本轮资料收集已结束。现在直接根据已获得的资料给出有引用的中文回答；证据不足的部分明确说明，不再调用工具，不编造资料。',fitRequest:fitProviderRequest,contextWindow:input.contextWindow,
       parseToolText:normalizeToolText,toolTextPreview,
       validateCompletion:async(answer,canContinue)=>{
-        if (isDirectoryStep(userText) && ![...calls.values()].some(call => call.status === 'error') && !completedDirectories([...calls.values(), ...(input.settledTools ?? [])]).length && canContinue) return '本轮只创建文件夹，还没有成功的 local_mkdir 回执。请先执行目录工具；不得声称已建好或改为生成报告。';
+        if (directoryNeedsExecution(answer) && canContinue) {
+          composed = turnPrefix; segment = ''; visibleSegment = ''; input.onReplace?.(composed, answeredModel);
+          if (checkedDirectory) throw new Error('目录尚未创建：模型未按本轮要求完成操作，请重试。');
+          checkedDirectory = true;
+          const errors = [...calls.values()].filter(call => call.status === 'error').slice(-2).map(call => `${call.name}: ${call.error}`).join('\n');
+          return `${input.environment ? workspaceSelectionContext(input.environment) : ''}本轮失败回执：${errors || '尚未调用目录工具'}。\n没有本轮成功的目录回执，历史回执不能证明这次已完成。根据上面的当前日期和实际错误修正参数后调用目录工具；缺少信息时直接询问用户，不要猜测位置、日期或重复旧成功声明。`;
+        }
         const missingEvidence=/(?:没有|未能|未)(?:直接)?(?:找到|查到|检索到|查询到|看到)|未见|无法确认|(?:could not|cannot|can't|did not|don't|do not)\s+(?:find|locate)|no\s+(?:relevant\s+|supporting\s+)?(?:records|evidence|information)|not found/i.test(answer);
         const missingQuestion=/[?？]/.test(userText)&&/(?:don't|do not|didn't|did not)\s+see.{0,32}(?:question|request)|no (?:previous|prior) question|(?:don't|do not)\s+see.{0,32}(?:prior |previous )?conversation history|没有(?:看到|收到).{0,12}(?:问题|请求)/i.test(answer);
         const refusal=/request (?:was|is|has been) rejected|considered high risk|safety policy|请求被拒绝|无法协助/i.test(answer);
-        const issue=answerIntegrityIssue(answer,evidenceCitationCount(answer));
+        const issue=answerIntegrityIssue(answer,evidenceCitationCount(answer),requireCitation,citations);
         finalIntegrity=issue;
         if(issue&&canContinue&&!checkedCompletion){
           checkedCompletion=true;composed=turnPrefix;segment='';visibleSegment='';input.onReplace?.(composed,answeredModel);input.progress('正在核对回答与引用');
-          return `${issue} 只依据真正提供的资料及工具回执重新回答当前问题，不复制工具协议、伪造工具结果或自动补造来源。需要操作时使用真正的工具调用；不需要操作时直接回答。引用只能选本轮已有编号：${citations.map((_item,index)=>`[${index+1}]`).join(' ')}。每项结论就近标注实际支持它的来源，证据不足则说明不能确认，不把计划说成已经完成或尚未开始。${(missingEvidence||missingQuestion)&&input.unreadEvidence?.length?`否定前请用 knowledge_read 实际续读相关资料：${JSON.stringify(input.unreadEvidence)}`:''}`;
+          return `${issue} 只依据真正提供的资料及工具回执重新回答当前问题，不复制工具协议、伪造工具结果或自动补造来源。需要操作时使用真正的工具调用；不需要操作时直接回答。引用只能选本轮已有编号：${citations.map((item,index)=>`[${index+1}] ${item.title} (${item.sourceId}/${item.slug})`).join('；')}。每项结论就近标注实际支持它的来源，证据不足则说明不能确认，不把计划说成已经完成或尚未开始。${(missingEvidence||missingQuestion)&&input.unreadEvidence?.length?`否定前请用 knowledge_read 实际续读相关资料：${JSON.stringify(input.unreadEvidence)}`:''}`;
         }
         if(input.knowledge&&canContinue&&!checkedCompletion&&input.unreadEvidence?.length&&!refusal&&(missingEvidence||missingQuestion)&&![...calls.values(),...(input.settledTools??[])].some(call=>call.status==='complete'&&(call.name==='knowledge_read'||!['knowledge_search','knowledge_read'].includes(call.name)))){
           checkedCompletion=true;composed=turnPrefix;segment='';visibleSegment='';input.onReplace?.(composed,answeredModel);
           return `用户已经提出当前问题。参考资料仍有未读正文，不能仅凭节选就说没有相关记录。请先选择与问题相关的资料，按以下精确参数调用 knowledge_read 核对，再回答；确实未查到时说明已核对范围，不断言整份原文不存在。${JSON.stringify(input.unreadEvidence)}`;
         }
-        if(!input.knowledge||!canContinue||citations.length||[...calls.values()].some(call=>call.status==='complete'&&!['knowledge_search','knowledge_read'].includes(call.name)))return null;
+        if(requireCitation&&input.knowledge&&canContinue&&!checkedCompletion&&!refusal&&missingEvidence&&!citations.some(item=>item.kind!=='memory')&&![...calls.values(),...(input.settledTools??[])].some(call=>call.status==='complete'&&call.name==='knowledge_search')){
+          checkedCompletion=true;composed=turnPrefix;segment='';visibleSegment='';input.onReplace?.(composed,answeredModel);
+          return '当前只有用户记忆，还没有核对知识库中的资料。请先使用 knowledge_search 检索当前问题的一个主题关键词，再判断所问信息是否有依据。记忆命中或本地目录为空，都不能证明知识库没有相关资料。';
+        }
+        if(!requireCitation||!input.knowledge||!canContinue||citations.length||[...calls.values()].some(call=>call.status==='complete'&&!['knowledge_search','knowledge_read'].includes(call.name)))return null;
         const searches=[...calls.values()].filter(call=>call.name==='knowledge_search'&&call.status==='complete');
         const correction=!searches.length?'首次整句预检索为空。请先调用 knowledge_search 检索精炼关键词；不能仅凭首次预检索就断言没有相关资料。':!searches.some(call=>{const query=JSON.parse(call.input).query;return typeof query==='string'&&query.trim().length<=24&&!/\s/.test(query.trim());})?'多词检索均未命中。请先用单独的人物名、项目名或一个主题关键词再调用一次 knowledge_search；query 不含空格，保留用户使用的中文名称，不组合经历、兴趣等多个条件。':null;
         if(correction){composed=turnPrefix;segment='';input.onReplace?.(composed,answeredModel);}
@@ -244,17 +259,19 @@ export async function runWorkbenchTools(input: WorkbenchAnswerInput & {
   }
   for (const name of ['assistant_create', 'assistant_update', 'artifact_save', 'artifact_revise', 'task_submit', 'local_mkdir']) {
     const last = [...calls.values()].filter(call => call.name === name).at(-1);
-    if (last?.status === 'error') { if (isDirectoryStep(userText)) input.onReplace?.('', answeredModel); throw new Error(last.error ?? '助手操作未完成'); }
+    if (last?.status === 'error' && !modelAnswerText(composed + segment).trim()) throw new Error(last.error ?? '助手操作未完成');
   }
   let text = modelAnswerText(composed + segment);
   if (isDirectoryStep(userText)) {
     const directories = completedDirectories([...(input.settledTools ?? []), ...calls.values()]);
-    if (!directories.length) { input.onReplace?.('', answeredModel); throw new Error('目录尚未创建：本轮没有成功的创建目录回执。'); }
-    text = directories.map(directory => `${directory.created ? '已创建文件夹' : '文件夹已存在，继续使用'}：${directory.path}`).join('\n');
-    finalIntegrity = null;
-    input.onReplace?.(text, answeredModel);
+      if (directoryNeedsExecution(text)) { input.onReplace?.('', answeredModel); throw new Error('目录尚未创建：本轮没有成功的创建目录回执。'); }
+    if (directories.length) {
+      text = directories.map(directory => `${directory.created ? '已创建文件夹' : '文件夹已存在，继续使用'}：${directory.path}`).join('\n');
+      finalIntegrity = null;
+      input.onReplace?.(text, answeredModel);
+    }
   }
-  const integrity=finalIntegrity??answerIntegrityIssue(text,evidenceCitationCount(text));
+  const integrity=finalIntegrity??answerIntegrityIssue(text,evidenceCitationCount(text),requireCitation,citations);
   if(integrity){input.onReplace?.('',answeredModel);throw new Error(`${integrity} 本轮回答未通过核对，已完成的操作和原始资料保留，请重试。`);}
   if (input.agents) {
     let protocol: { name?: unknown; arguments?: unknown; tool_calls?: Array<{ name?: unknown }> } | undefined;

@@ -480,37 +480,47 @@ export class MinionWorker extends EventEmitter {
 
         // Claim jobs up to concurrency limit
         if (this.inFlight.size < this.opts.concurrency) {
-          const lockToken = `${this.workerId}:${Date.now()}`;
-          const job = await this.queue.claim(
-            lockToken,
-            this.opts.lockDuration,
-            this.opts.queue,
-            this.registeredNames,
-          );
+          try {
+            const lockToken = `${this.workerId}:${Date.now()}`;
+            const job = await this.queue.claim(
+              lockToken,
+              this.opts.lockDuration,
+              this.opts.queue,
+              this.registeredNames,
+            );
 
-          if(job && !this.running){
-            await this.engine.executeRaw(`UPDATE minion_jobs SET status='waiting',lock_token=NULL,lock_until=NULL,timeout_at=NULL,
-              attempts_started=GREATEST(attempts_started-1,0),updated_at=now() WHERE id=$1 AND status='active' AND lock_token=$2`,[job.id,lockToken]);
-            break;
-          }
-          if (job) {
-            // Quiet-hours gate: evaluated at claim time, not dispatch.
-            // Config lives on the job record (jsonb column added in
-            // schema migration v12). Worker releases the job back to the
-            // queue on 'defer' or marks it cancelled on 'skip'.
-            const quietCfg = readQuietHoursConfig(job);
-            const verdict = evaluateQuietHours(quietCfg);
-            if (verdict !== 'allow') {
-              await this.handleQuietHoursDefer(job, lockToken, verdict);
-            } else {
-              this.launchJob(job, lockToken);
+            if(job && !this.running){
+              try {
+                await this.engine.executeRaw(`UPDATE minion_jobs SET status='waiting',lock_token=NULL,lock_until=NULL,timeout_at=NULL,
+                  attempts_started=GREATEST(attempts_started-1,0),updated_at=now() WHERE id=$1 AND status='active' AND lock_token=$2`,[job.id,lockToken]);
+              } catch (e) {
+                console.error('Claim release error:', e instanceof Error ? e.message : String(e));
+              }
+              break;
             }
-          } else if (this.inFlight.size === 0) {
-            // No jobs and nothing in flight, poll
+            if (job) {
+              // Quiet-hours gate: evaluated at claim time, not dispatch.
+              // Config lives on the job record (jsonb column added in
+              // schema migration v12). Worker releases the job back to the
+              // queue on 'defer' or marks it cancelled on 'skip'.
+              const quietCfg = readQuietHoursConfig(job);
+              const verdict = evaluateQuietHours(quietCfg);
+              if (verdict !== 'allow') {
+                await this.handleQuietHoursDefer(job, lockToken, verdict);
+              } else {
+                this.launchJob(job, lockToken);
+              }
+            } else if (this.inFlight.size === 0) {
+              // No jobs and nothing in flight, poll
+              await new Promise(resolve => setTimeout(resolve, this.opts.pollInterval));
+            } else {
+              // Jobs are running but no new ones available, brief pause before re-checking
+              await new Promise(resolve => setTimeout(resolve, 100));
+            }
+          } catch (e) {
+            console.error('Claim error:', e instanceof Error ? e.message : String(e));
+            if (!this.running) break;
             await new Promise(resolve => setTimeout(resolve, this.opts.pollInterval));
-          } else {
-            // Jobs are running but no new ones available, brief pause before re-checking
-            await new Promise(resolve => setTimeout(resolve, 100));
           }
         } else {
           // At concurrency limit, wait briefly before re-checking for free slots

@@ -133,23 +133,22 @@ export function useWorkbench({ serviceReady = true, databaseReady = true, surfac
         const calls = next.message?.toolCalls ?? next.conversation?.messages.flatMap(message => message.toolCalls ?? []) ?? [];
         const edits = calls.filter(call => (call.name === 'assistant_create' || call.name === 'assistant_update') && call.status === 'complete' && !seenAgentEdits.current.has(call.id));
         if (edits.length) { for (const call of edits) seenAgentEdits.current.add(call.id); void refresh(); }
-        let settled = false;
         setConversation(current => {
           const applied = applyConversationDelta(current, next);
           const merged = applied ? mergePolledConversation(current, applied) : current;
-          const messages = merged?.messages ?? [];
-          settled = !messages.some(message => message.status === 'running' || (message.memory && ['pending', 'queued', 'running'].includes(message.memory.status)));
           return merged;
         });
-        if (settled && !memoryTaskActive) void refresh();
       },
     });
   }, [conversation?.id, running, memoryPending, memoryTaskActive, surface]);
+  useEffect(() => {
+    if (conversation && !running && !memoryPending && !memoryTaskActive) void refresh().catch(reason => setError(reason instanceof Error ? reason.message : String(reason)));
+  }, [conversation?.id, running, memoryPending, memoryTaskActive]);
   const select = async (id?: string) => {
     active.current = id; setConversation(undefined); setError('');
     if (!id) return;
     setPending(true);
-    try { const next = await workbenchRequest<WorkbenchConversation>(`/conversations/${id}`); if (active.current === id) { setConversation(next); setKnowledge(next.knowledge); const agentId = next.assistantId ?? 'main'; assistantRef.current = agentId; setAssistantId(agentId); const profile = agents.find(agent => agent.id === agentId); if (profile) { setAssistant(profile); settingsModel.current = profile.model; } setModel(rememberedChatModel(next.model, settingsModel.current || defaultModel.current, modelsRef.current.map(model => model.id))); } }
+    try { const next = await workbenchRequest<WorkbenchConversation>(`/conversations/${id}`); if (active.current === id) { setConversation(next); setKnowledge(next.knowledge); const agentId = next.assistantId ?? 'main'; if (surface === 'workbench') { try { localStorage.setItem('pmbrain.workbench.agent', agentId); } catch {} } assistantRef.current = agentId; setAssistantId(agentId); const profile = agents.find(agent => agent.id === agentId); if (profile) { setAssistant(profile); settingsModel.current = profile.model; } setModel(rememberedChatModel(next.model, settingsModel.current || defaultModel.current, modelsRef.current.map(model => model.id))); } }
     catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
     finally { setPending(false); }
   };
@@ -170,7 +169,7 @@ export function useWorkbench({ serviceReady = true, databaseReady = true, surfac
       const attachmentFields = editMessageId
         ? { editMessageId, attachments: attachments ?? [], attachmentsHydrated }
         : (attachments?.some(item => item.data || item.keep) ? { attachments } : {});
-      const next = await workbenchRequest<WorkbenchConversation>(`/conversations/${id}/messages`, { text, model, knowledge: useKnowledge, retry, ...attachmentFields });
+      const next = await workbenchRequest<WorkbenchConversation>(`/conversations/${id}/messages`, { text, model, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone, knowledge: useKnowledge, retry, ...attachmentFields });
       if (active.current === id) setConversation(next);
       try { await refresh(); } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
       return id;
@@ -211,6 +210,7 @@ export function useWorkbench({ serviceReady = true, databaseReady = true, surfac
   const chooseModel = (id: string) => { selectionRevision.current++; setModel(id); rememberChatModel(id, defaultModel.current); };
   const selectAgent = async (id: string) => {
     const chosen = agents.find(agent => agent.id === id); if (!chosen) return;
+    if (surface === 'workbench') { try { localStorage.setItem('pmbrain.workbench.agent', id); } catch {} }
     assistantRef.current = id; setAssistantId(id); setAssistant(chosen); settingsModel.current = chosen.model;
     if (chosen.model) setModel(chosen.model); setKnowledge(chosen.knowledge);
     const opened = await workbenchRequest<{ conversation: WorkbenchConversation | null }>('/conversations/open', { assistantId: id });

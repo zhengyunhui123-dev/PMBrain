@@ -24,6 +24,8 @@ export interface WorkbenchAgent extends KnowledgeAssistantSettings {
   workflow: string;
   sourceIds: string[];
   readDirectories: string[];
+  workspaceDirectory?: string;
+  workspaceUpdatedAt?: string;
   deliveryFormat: 'markdown' | 'docx';
   schedule?: WorkbenchSchedule;
   standingRules?: string[];

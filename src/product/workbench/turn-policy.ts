@@ -27,13 +27,19 @@ export function isTaskAmendment(text: string): boolean {
   const value = text.replace(/\s+/g, '');
   if (quotedOrQuestion.test(value)) return false;
   return /^(?:请)?(?:只|仅)(?:改|修改|调整|补|删|保留)/.test(value)
-    || /(?:刚才|原稿|这份|这一版|上面|第[一二三四五六七八九十\d]+[节章段]).{0,24}(?:改|修改|调整|简短|补充|保留)/.test(value);
+    || /(?:刚才|原稿|这份|这一版|上面|第[一二三四五六七八九十\d]+[节章段]).{0,24}(?:改|修改|调整|简短|短一点|缩短|补充|保留)/.test(value);
 }
 
 export function isWorkRequest(text: string): boolean {
   const value = text.replace(/\s+/g, '');
   if (!value || quotedOrQuestion.test(value) || greeting.test(value)) return false;
   return /^(?:(?:请|帮我|替我|麻烦)(?:先|再)?)*(?:生成|整理|写|制作|做|分析|核对|导出|汇总|起草)/.test(value);
+}
+
+export function isInformationRequest(text: string): boolean {
+  if (isWorkRequest(text) || isTaskAmendment(text) || wantsDirectoryCreation(text)) return false;
+  if (/(?:请|帮我|替我|给我|麻烦你|请你|继续|开始|直接)(?:先|再)?(?:创建|新建|生成|制作|写|保存|导出|复制|重命名|修改|整理)/.test(text)) return false;
+  return /(?:什么|多少|哪[里儿个些种]|是否|为何|为什么|怎么|如何|何时|多久|谁|[?？])/.test(text);
 }
 
 export function compactRule(text: string): string {

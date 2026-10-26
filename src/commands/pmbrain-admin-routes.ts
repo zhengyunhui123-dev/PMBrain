@@ -1,5 +1,6 @@
 import {DEFAULT_USD_TO_CNY,DEFAULT_DREAM_BUDGET_CNY} from '../../shared/model-billing';
 import {readPhaseBudget} from '../core/cycle/phase-budget';
+import { parseStandingQuestionLines } from '../core/cycle/standing-questions.ts';
 import { readTaskRelations } from '../product/tasks/relations.ts';
 import { DEFAULT_PRODUCT_TASK_TIMEOUT_MS, DREAM_TASK_TIMEOUT_KEY, parseTaskTimeout } from '../product/tasks/timeout.ts';
 import { getAdminKnowledgeGraphEdge } from './admin-knowledge-graph.ts';
@@ -1012,6 +1013,17 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
     }
   });
 
+  const standingQuestionsText = (raw: string | null): string => {
+    if (!raw) return '';
+    try {
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) return '';
+      return parsed.filter((item): item is string => typeof item === 'string').join('\n');
+    } catch {
+      return '';
+    }
+  };
+
   const dreamSettingsView = async (overrides?: { outputDir?: string; dualWrite?: boolean; includeUncommitted?: boolean; autoGitCommit?: boolean }) => {
     const [storedOutputDir, storedDualWrite, storedBrainDir, storedIncludeUncommitted, storedAutoGitCommit] = await Promise.all([
       engine.getConfig('dream.synthesize.output_dir'),
@@ -1040,6 +1052,10 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
       knowledgeEnabled:await engine.getConfig('dream.knowledge.enabled')!=='false',
       knowledgeSince:await engine.getConfig('dream.knowledge.since')??null,
       knowledgeUseOrdinaryModel:await engine.getConfig('dream.knowledge.use_ordinary_model')!=='false',
+      enrichThinEnabled: await engine.getConfig('cycle.enrich_thin.enabled') !== 'false',
+      fenceRepairEnabled: await engine.getConfig('fences.repair.enabled') !== 'false',
+      edgeContradictionsEnabled: await engine.getConfig('dream.edge_contradictions.mode') !== 'off',
+      standingQuestions: standingQuestionsText(await engine.getConfig('cycle.standing_questions.questions')),
       atomBudgetUsd:await readPhaseBudget(engine,'cycle.extract_atoms.budget_usd',0.3),
       conceptBudgetUsd:await readPhaseBudget(engine,'cycle.synthesize_concepts.budget_usd',1.5),
       atomBudgetCny:(await readPhaseBudget(engine,'cycle.extract_atoms.budget_usd',0.3))*Number(await engine.getConfig('pricing.usd_to_cny')??DEFAULT_USD_TO_CNY),
@@ -1140,6 +1156,13 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
     if([knowledgeEnabled,knowledgeUseOrdinaryModel].some(value=>value!==undefined&&typeof value!=='boolean')){res.status(400).json({error:'knowledge_settings_must_be_boolean'});return;}
     if([atomBudgetUsd,conceptBudgetUsd].some(value=>value!==undefined&&(typeof value!=='number'||!Number.isFinite(value)||value<=0))){res.status(400).json({error:'invalid_knowledge_budget'});return;}
     if(entityCaptureEnabled!==undefined&&typeof entityCaptureEnabled!=='boolean'){res.status(400).json({error:'entity_capture_enabled_must_be_boolean'});return;}
+    const enrichThinEnabled=req.body?.enrichThinEnabled;
+    const fenceRepairEnabled=req.body?.fenceRepairEnabled;
+    const edgeContradictionsEnabled=req.body?.edgeContradictionsEnabled;
+    const standingQuestions=req.body?.standingQuestions;
+    if([enrichThinEnabled,fenceRepairEnabled,edgeContradictionsEnabled].some(value=>value!==undefined&&typeof value!=='boolean')){res.status(400).json({error:'dream_maintenance_settings_must_be_boolean'});return;}
+    const standingQuestionLines=standingQuestions===undefined?undefined:typeof standingQuestions==='string'?parseStandingQuestionLines(standingQuestions):null;
+    if(standingQuestionLines===null){res.status(400).json({error:'invalid_standing_questions'});return;}
     const timeoutMs = req.body?.timeoutMs;
     if (timeoutMs !== undefined && timeoutMs !== null && (typeof timeoutMs !== 'number' || parseTaskTimeout(timeoutMs) === null)) { res.status(400).json({error:'invalid_dream_task_timeout'}); return; }
     if (autoGitCommit !== undefined && typeof autoGitCommit !== 'boolean') { res.status(400).json({error:'auto_git_commit_must_be_boolean'}); return; }
@@ -1176,6 +1199,10 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
           tx.setConfig('sync.include_working_tree', includeUncommitted ? 'true' : 'false'),
           ...(typeof autoGitCommit==='boolean' ? [tx.setConfig('sync.auto_git_commit',autoGitCommit?'true':'false')] : []),
           ...(typeof entityCaptureEnabled==='boolean' ? [tx.setConfig('dream.entity_capture.enabled',entityCaptureEnabled?'true':'false')] : []),
+          ...(typeof enrichThinEnabled==='boolean' ? [tx.setConfig('cycle.enrich_thin.enabled',enrichThinEnabled?'true':'false')] : []),
+          ...(typeof fenceRepairEnabled==='boolean' ? [tx.setConfig('fences.repair.enabled',fenceRepairEnabled?'true':'false')] : []),
+          ...(typeof edgeContradictionsEnabled==='boolean' ? [tx.setConfig('dream.edge_contradictions.mode',edgeContradictionsEnabled?'propose':'off')] : []),
+          ...(standingQuestionLines!==undefined ? [tx.setConfig('cycle.standing_questions.questions',JSON.stringify(standingQuestionLines))] : []),
           ...(changed?[tx.setConfig('dream.knowledge.enabled',String(knowledgeEnabled)),tx.setConfig('dream.synthesize.conversation_pages',String(knowledgeEnabled)),tx.setConfig('dream.synthesize.enabled',String(knowledgeEnabled))]:[]),
           ...(typeof knowledgeUseOrdinaryModel==='boolean'?[tx.setConfig('dream.knowledge.use_ordinary_model',String(knowledgeUseOrdinaryModel))]:[]),
           ...(atomBudgetUsd!==undefined?[tx.setConfig('cycle.extract_atoms.budget_usd',String(atomBudgetUsd))]:[]),

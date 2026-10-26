@@ -35,6 +35,55 @@ export async function tombstonedTranscriptsForHashes(
   }
 }
 
+export async function skippedTranscriptKeys(
+  engine: BrainEngine,
+  sourceId: string,
+  contentHash16s: string[],
+  cap: number,
+): Promise<Set<string>> {
+  if (contentHash16s.length === 0) return new Set();
+  try {
+    const rows = await engine.executeRaw<{ file_path: string; content_hash: string }>(
+      `SELECT file_path, content_hash
+         FROM extract_atoms_transcript_state
+        WHERE source_id = $1
+          AND content_hash = ANY($2::text[])
+          AND (tombstoned OR (partial_input_chars IS NOT NULL AND partial_input_chars >= $3))`,
+      [sourceId, contentHash16s, cap],
+    );
+    return new Set(rows.map(row => transcriptStateKey(row.file_path, row.content_hash)));
+  } catch (err) {
+    if (isUndefinedTableError(err) || (err instanceof Error && /partial_input_chars|42703/i.test(err.message))) {
+      return tombstonedTranscriptsForHashes(engine, sourceId, contentHash16s);
+    }
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[extract_atoms] transcript partial check failed (assuming none skipped): ${msg}`);
+    return new Set();
+  }
+}
+
+export async function recordTranscriptPartial(
+  engine: BrainEngine,
+  sourceId: string,
+  filePath: string,
+  contentHash: string,
+  inputChars: number,
+): Promise<void> {
+  try {
+    await engine.executeRaw(
+      `INSERT INTO extract_atoms_transcript_state
+         (source_id, file_path, content_hash, fail_count, tombstoned, partial_input_chars, updated_at)
+       VALUES ($1, $2, $3, 0, FALSE, $4, now())
+       ON CONFLICT (source_id, file_path, content_hash)
+       DO UPDATE SET partial_input_chars = EXCLUDED.partial_input_chars, updated_at = now()
+        WHERE extract_atoms_transcript_state.tombstoned = FALSE`,
+      [sourceId, filePath, contentHash.slice(0, 16), inputChars],
+    );
+  } catch {
+    // A missing column leaves the transcript retryable.
+  }
+}
+
 export async function stampTranscriptTombstone(
   engine: BrainEngine,
   sourceId: string,

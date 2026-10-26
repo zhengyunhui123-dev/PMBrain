@@ -239,7 +239,7 @@ export const api = {
     apiFetch('/admin/api/export-runs', { method: 'POST', body: JSON.stringify({ rootPath }) }),
   dreamOverview: () => apiFetch<DreamOverviewResponse>('/admin/api/dream/overview', undefined, DreamOverviewResponseSchema),
   dreamSettings: () => apiFetch<DreamSettingsResponse>('/admin/api/dream/settings', undefined, DreamSettingsResponseSchema),
-  saveDreamSettings: (body: { outputDir: string; dualWrite: boolean; includeUncommitted: boolean; autoGitCommit?: boolean; entityCaptureEnabled?: boolean; knowledgeEnabled?:boolean;knowledgeUseOrdinaryModel?:boolean;atomBudgetUsd?:number;conceptBudgetUsd?:number;atomBudgetCny?:number;conceptBudgetCny?:number;taskBudgetCny?:number;usdToCny?:number;verdictTimeoutMs?:number;timeoutMs?: number | null }) =>
+  saveDreamSettings: (body: { outputDir: string; dualWrite: boolean; includeUncommitted: boolean; autoGitCommit?: boolean; entityCaptureEnabled?: boolean; knowledgeEnabled?:boolean;knowledgeUseOrdinaryModel?:boolean;enrichThinEnabled?:boolean;fenceRepairEnabled?:boolean;edgeContradictionsEnabled?:boolean;standingQuestions?:string;atomBudgetUsd?:number;conceptBudgetUsd?:number;atomBudgetCny?:number;conceptBudgetCny?:number;taskBudgetCny?:number;usdToCny?:number;verdictTimeoutMs?:number;timeoutMs?: number | null }) =>
     apiFetch<DreamSettingsResponse>('/admin/api/dream/settings', { method: 'POST', body: JSON.stringify(body) }, DreamSettingsResponseSchema),
   dreamSchedule: () => apiFetch<DreamScheduleResponse>('/admin/api/dream/schedule', undefined, DreamScheduleResponseSchema),
   saveDreamSchedule: (body: { enabled: boolean; time: string;mode?:'quick'|'full' }) =>

@@ -222,7 +222,17 @@ export function classifySidecarStartupError(error: unknown): SidecarErrorClassif
     };
   }
 
-  if (/corrupt|database recovery failed|WAL|checksum|invalid page/i.test(text)) {
+  if (/\[database request timeout\]|数据库请求超时/.test(text)) {
+    return {
+      category: 'transient',
+      retryable: true,
+      labelZh: '数据库执行超时',
+    };
+  }
+
+  if (
+    /数据库恢复失败|database recovery failed|corrupt|checksum|invalid page|(?<![A-Za-z])WAL(?![A-Za-z])/i.test(text)
+  ) {
     return {
       category: 'database_corrupt',
       retryable: false,

@@ -201,6 +201,12 @@ const PHASE_LABELS: Record<string, string> = {
   calibration_profile: '校准画像：生成用户认知校准分析',
   conversation_facts_backfill: '对话事实回填：将对话中确认的事实写回知识库',
   capture_entities: '识别实体：按知识整理技能查找并创建或补充人物、公司、项目和概念',
+  fence_repair: '整理事实栏：合并同一段里重复的事实表，并补上没写完的表格边界',
+  content_repair: '核对页面标记：去掉指向不存在页面、且标题对不上的标记',
+  edge_contradictions: '检查关系矛盾：记下互相冲突的关系，不自动改页面',
+  standing_questions: '刷新固定问题：用现有页面摘录更新你留下的问题',
+  drift: '检查知识变化：查看观点是否出现漂移',
+  enrich_thin: '补充薄弱页面：给人物、公司和项目补上已有资料能核对的内容',
   orphans: '孤儿页面检测：发现没有被任何页面引用的孤立页面',
   'schema-suggest': 'Schema 建议：推荐知识库结构优化方案',
   purge: '清理：删除软删除标记的页面和数据',
@@ -224,6 +230,12 @@ const PHASE_USER_ACTIONS: Record<string, string> = {
   calibration_profile: '更新 AI 对你的判断习惯的理解',
   conversation_facts_backfill: '把对话中确认的信息补回知识库',
   capture_entities: '识别值得记录的人物、公司、项目和概念',
+  fence_repair: '整理重复的事实栏',
+  content_repair: '核对指错的页面标记',
+  edge_contradictions: '记下互相冲突的关系',
+  standing_questions: '用现有资料刷新固定问题',
+  drift: '检查知识是否出现变化',
+  enrich_thin: '给薄弱的人物、公司和项目补内容',
   embed: '更新 AI 搜索和理解能力',
   orphans: '发现缺少关联的孤立知识',
   'schema-suggest': '检查知识结构是否需要优化',
@@ -234,6 +246,8 @@ const QUICK_PHASE_USER_ACTIONS: Record<string, string> = {
   lint: '检查知识',
   backlinks: '检查反向引用',
   sync: '同步内容',
+  fence_repair: '整理事实栏',
+  content_repair: '核对页面标记',
   extract: '建立确定性关联',
   extract_facts: '校验事实索引',
   resolve_symbol_edges: '解析确定性关联',
@@ -249,11 +263,11 @@ const PHASE_GROUPS = [
 ] as const;
 
 const PHASE_GROUP_BY_PHASE: Record<string, typeof PHASE_GROUPS[number]['key']> = {
-  lint: 'prepare', backlinks: 'prepare', sync: 'prepare', extract: 'prepare', extract_facts: 'prepare',
+  lint: 'prepare', backlinks: 'prepare', sync: 'prepare', fence_repair: 'prepare', content_repair: 'prepare', extract: 'prepare', extract_facts: 'prepare',
   extract_atoms: 'prepare', resolve_symbol_edges: 'prepare',
   synthesize: 'synthesis', patterns: 'synthesis', synthesize_concepts: 'synthesis',
-  recompute_emotional_weight: 'synthesis', consolidate: 'synthesis',
-  propose_takes: 'takes', grade_takes: 'takes', calibration_profile: 'takes', conversation_facts_backfill: 'takes',
+  recompute_emotional_weight: 'synthesis', consolidate: 'synthesis', enrich_thin: 'synthesis',
+  propose_takes: 'takes', grade_takes: 'takes', calibration_profile: 'takes', drift: 'takes', edge_contradictions: 'takes', standing_questions: 'takes', conversation_facts_backfill: 'takes',
   capture_entities: 'synthesis',
   embed: 'lifecycle', orphans: 'lifecycle', 'schema-suggest': 'lifecycle', purge: 'lifecycle',
 };
@@ -263,16 +277,16 @@ function phasesForGroup(catalog: string[], groupKey: string): string[] {
 }
 
 const DREAM_KNOWLEDGE_STEPS = [
-  { key: 'read', title: '阅读新内容', description: '找到最近新增或变化的资料', phases: ['lint', 'backlinks', 'sync'] },
+  { key: 'read', title: '阅读新内容', description: '找到最近新增或变化的资料，并整理事实栏和页面标记', phases: ['lint', 'backlinks', 'sync', 'fence_repair', 'content_repair'] },
   { key: 'understand', title: '理解与提炼', description: '提取事实、人物、概念和知识点', phases: ['synthesize', 'extract', 'extract_facts', 'extract_atoms', 'capture_entities'] },
   { key: 'connect', title: '建立知识连接', description: '补全关系并发现反复出现的主题', phases: ['resolve_symbol_edges', 'patterns', 'synthesize_concepts'] },
-  { key: 'remember', title: '形成长期记忆', description: '合并重复信息并沉淀重要判断', phases: ['recompute_emotional_weight', 'consolidate', 'propose_takes', 'grade_takes', 'calibration_profile', 'conversation_facts_backfill'] },
+  { key: 'remember', title: '形成长期记忆', description: '合并重复信息并沉淀重要判断', phases: ['recompute_emotional_weight', 'consolidate', 'propose_takes', 'grade_takes', 'calibration_profile', 'drift', 'edge_contradictions', 'standing_questions', 'conversation_facts_backfill', 'enrich_thin'] },
   { key: 'search', title: '更新搜索能力', description: '让最新知识可以被 AI 准确找到', phases: ['embed', 'orphans', 'schema-suggest', 'purge'] },
 ] as const;
 
 const QUICK_MAINTENANCE_STEPS = [
   { key: 'check', title: '检查知识', description: '检查页面与内容规范', phases: ['lint', 'backlinks'] },
-  { key: 'sync', title: '同步内容', description: '同步新增和变化内容', phases: ['sync'] },
+  { key: 'sync', title: '同步内容', description: '同步新增和变化内容，并整理事实栏和页面标记', phases: ['sync', 'fence_repair', 'content_repair'] },
   { key: 'connect', title: '建立关联', description: '增量整理实体与来源关联', phases: ['extract', 'extract_facts', 'resolve_symbol_edges', 'capture_entities'] },
   { key: 'index', title: '更新索引', description: '向量化待处理内容', phases: ['embed'] },
   { key: 'verify', title: '完成检查', description: '汇总孤立知识与异常', phases: ['orphans'] },

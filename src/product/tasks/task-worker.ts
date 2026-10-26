@@ -293,7 +293,9 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
   }
   const brainDir = await resolveBrainDir(engine, null, sourceId);
   if (input.preset === 'quick') return runQuickMaintenance(engine, { ...common, brainDir, ...await phaseOptions(sourceId ?? 'default') });
-  const knowledgeEnabled=input.preset==='full'&&await (await import('./dream-knowledge')).prepareDreamKnowledge(engine);
+  const dreamKnowledge=await import('./dream-knowledge');
+  const knowledgeEnabled=input.preset==='full'&&await dreamKnowledge.prepareDreamKnowledge(engine);
+  if(input.preset==='full'&&!input.dryRun)await dreamKnowledge.prepareProductEnrichThin(engine);
   const currentPack=loadConfig()?.schema_pack??'gbrain-base';
   const knowledgePack=knowledgeEnabled?(currentPack==='gbrain-base-v2'?'pmbrain-knowledge':currentPack==='gbrain-base'?'gbrain-creator':undefined):undefined;
   const report=await runCycle(engine, {
@@ -303,6 +305,7 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
     schemaPack:knowledgePack,
     includePendingKnowledge:knowledgeEnabled,
     forcePackPhases: input.preset === 'meeting' ? ['extract_atoms'] : undefined,
+    ...(input.preset==='full'?{enrichThinWhenUnset:true,enrichThinTypesWhenUnset:['person','company','project']}:{}),
   });
   if(input.phase==='capture_entities'&&input.incrementalIngest&&!progressPrefix.length&&!input.dryRun){
     const details=report.phases.find(phase=>phase.phase==='capture_entities')?.details;
@@ -449,7 +452,7 @@ async function executeTask(task: ProductTask, kind: BrainEngine['kind']) {
     const synthEnabled=await engine.getConfig('dream.synthesize.enabled');
     const synthConfigured=synthEnabled==='true'||synthEnabled!=='false'&&!!await engine.getConfig('dream.synthesize.session_corpus_dir');
     result = await runWorkbenchMemoryTask(engine, task.input, abort.signal, { ownerJobId,ownerToken,organize:synthConfigured?async(path,sourceId)=>{
-      const report=await runDreamTask(engine,{phase:'synthesize',input:path,sourceId});
+      const report=await runDreamTask(engine,{phase:'synthesize',input:path,sourceId,checkpoint:task.input.knowledgeCheckpoint});
       const failure=maintenanceFailure(report);
       if(failure)throw new Error(failure);
       if(report.reason==='cycle_already_running')throw new Error('当前 Source 正在整理，记忆事实已保留，请稍后继续整理');

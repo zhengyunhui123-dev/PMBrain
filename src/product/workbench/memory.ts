@@ -27,16 +27,19 @@ import type { ContextPackResult } from '../../core/context/context-pack';
 import { appendCheckpointManifest } from '../../core/context/session-state';
 import { hybridSearch } from '../../core/search/hybrid';
 import { refreshWorkbenchMemoryArchives } from './memory-lifecycle';
+import type { MaintenanceCheckpoint } from '../tasks/types';
 export { memoryVersion } from './memory-identity';
 
-export interface WorkbenchMemoryTask { root: string; conversationId: string; messageId: string; hash: string; sourceId: string; retire?: boolean; timeoutMs?: number }
+export interface WorkbenchMemoryTask { root: string; conversationId: string; messageId: string; hash: string; sourceId: string; retire?: boolean; timeoutMs?: number; knowledgeCheckpoint?: MaintenanceCheckpoint }
 
 export class WorkbenchMemoryCoordinator {
   private scanning = false;
+  private closed = false;
+  private scanningDone = Promise.resolve();
   private timer?: ReturnType<typeof setInterval>;
   constructor(private engine: BrainEngine, private store: WorkbenchStore, private submit: (input: WorkbenchMemoryTask, key: string) => Promise<ConsoleRun>, private getRun: (id: string) => Promise<ConsoleRun | null>) {}
-  start() { if (!this.timer) { this.timer = setInterval(() => void this.scan().catch(error => console.error('[workbench memory]', error)), 15000); this.timer.unref?.(); void this.scan().catch(error => console.error('[workbench memory]', error)); } }
-  close() { if (this.timer) clearInterval(this.timer); this.timer = undefined; }
+  start() { this.closed = false; if (!this.timer) { this.timer = setInterval(() => void this.scan().catch(error => console.error('[workbench memory]', error)), 15000); this.timer.unref?.(); void this.scan().catch(error => console.error('[workbench memory]', error)); } }
+  close() { this.closed = true; if (this.timer) clearInterval(this.timer); this.timer = undefined; return this.scanningDone; }
   async capture(conversation: WorkbenchConversation, message: WorkbenchMessage): Promise<WorkbenchMemory> {
     const sourceId = conversation.sourceId ?? 'default';
     const wb = await resolveWritebackConfig(this.engine, loadConfigFileOnly());
@@ -54,16 +57,20 @@ export class WorkbenchMemoryCoordinator {
   }
   settled = async (id: string) => { await this.scan(id); };
   async scan(id?: string) {
-    if (this.scanning) return;
+    if (this.scanning || this.closed) return;
     this.scanning = true;
+    let finish!: () => void;
+    this.scanningDone = new Promise<void>(resolve => { finish = resolve; });
     try {
       const conversations = id ? [this.store.get(id)] : this.store.list();
       await refreshWorkbenchMemoryArchives(this.engine, this.store, conversations.filter(row => !row.messages.some(message => message.status==='running')));
       for (const conversation of conversations) {
+        if (this.closed) return;
         if (conversation.messages.some(message => message.status === 'running')) continue;
         const active = new Set(conversation.messages.filter(message => message.memory).map(message => `${message.id}:${message.memory!.hash}`));
         const retired = (conversation.revisions ?? []).flatMap(revision => revision.messages).filter(message => message.role === 'user' && message.memory?.hash && !active.has(`${message.id}:${message.memory.hash}`));
         for (const message of [...retired, ...conversation.messages]) {
+          if (this.closed) return;
           let memory = message.memory;
           if (memory?.status === 'held' && message.role === 'user' && !retired.includes(message)) {
             const captured = await this.capture(conversation, message);
@@ -92,7 +99,7 @@ export class WorkbenchMemoryCoordinator {
           if (current?.memory && !['complete', 'superseded'].includes(current.memory.status)) this.store.saveMemory(conversation.id, message.id, { ...current.memory, taskId: task.id, status: 'queued' });
         }
       }
-    } finally { this.scanning = false; }
+    } finally { this.scanning = false; finish(); }
   }
 }
 

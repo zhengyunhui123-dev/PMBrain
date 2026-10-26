@@ -29,12 +29,24 @@ export function answerPreview(text: string): string {
   return partial ? text.slice(0, partial.index) : text;
 }
 
-export function answerIntegrityIssue(text: string, citationCount?: number): string | null {
+export function isClarificationAnswer(text: string): boolean {
+  if (/(?:已|已经)(?:成功)?(?:创建|新建|建立|生成|保存|写入|复制|修改|完成)|(?:创建|保存|写入|复制|修改)(?:成功|完成)/.test(text)) return false;
+  const sentences = text.trim().match(/[^。！？.!?\n]+[。！？.!?]?/g) ?? [];
+  return sentences.length > 0 && sentences.every(sentence => /[?？]$/.test(sentence.trim()) || /^(?:请|麻烦)(?:先)?(?:提供|补充|确认|选择|告诉我)/.test(sentence.trim()));
+}
+
+export function answerIntegrityIssue(text: string, citationCount?: number, requireCitation = true, citations?: ReadonlyArray<{ title: string; slug: string }>): string | null {
   if (/request (?:was|is|has been) rejected|considered high risk|safety policy|请求被拒绝|无法协助/i.test(text)) return null;
   if (answerProtocolOffset(text) >= 0) return '模型把工具指令或工具回执写进了正文；这些文字不能证明工具已执行。';
   if (citationCount === undefined) return null;
   const references = [...outsideExamples(text, false).matchAll(/\[(\d+)\]/g)].map(match => Number(match[1]));
   if (references.some(number => number < 1 || number > citationCount)) return '回答引用了本轮来源中不存在的编号。';
-  if (citationCount > 0 && !references.length) return '回答缺少对应资料的正文引用编号。';
+  for (const match of outsideExamples(text, true).matchAll(/^\s*\[(\d+)\]\s*[:：]?\s*(.+)$/gm)) {
+    const declared = Number(match[1]);
+    const label = match[2]!;
+    const matches = citations?.flatMap((item, index) => label.includes(item.slug) || label.startsWith(item.title) ? [index + 1] : []) ?? [];
+    if (matches.length === 1 && matches[0] !== declared) return `引用 [${declared}] 的来源名称与本轮编号不符，该来源实际编号是 [${matches[0]}]。请沿用本轮来源表的编号，不自行重新编号。`;
+  }
+  if (requireCitation && !isClarificationAnswer(text) && citationCount > 0 && !references.length) return '回答缺少对应资料的正文引用编号。';
   return null;
 }

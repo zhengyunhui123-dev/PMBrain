@@ -1,3 +1,4 @@
+import { DREAM_MAINTENANCE_SCHEMA_SQL } from './cycle/dream-maintenance-schema.ts';
 import { WANTED_LINKS_SCHEMA_SQL } from './pmbrain-adapters/wanted-links-schema.ts';
 import { PAGE_STATE_SCHEMA_SQL } from './page-state/schema.ts';
 import { MENTION_INDEX_SCHEMA_SQL } from './mentions/schema.ts';
@@ -468,6 +469,7 @@ CREATE TABLE IF NOT EXISTS extract_atoms_transcript_state (
   content_hash TEXT NOT NULL,
   fail_count INTEGER NOT NULL DEFAULT 0,
   tombstoned BOOLEAN NOT NULL DEFAULT FALSE,
+  partial_input_chars INTEGER,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (source_id, file_path, content_hash)
 );
@@ -1205,7 +1207,7 @@ export function getPGLiteSchema(
     throw new Error(`Invalid embedding dimensions: ${dims}`);
   }
   return applyChunkEmbeddingIndexPolicy(PGLITE_SCHEMA_SQL_TEMPLATE, parsedDims)
-    .replace(/__EMBEDDING_DIMS__/g, String(parsedDims)) + '\n' + PAGE_STATE_SCHEMA_SQL + '\n' + MENTION_INDEX_SCHEMA_SQL + '\n' + WANTED_LINKS_SCHEMA_SQL;
+    .replace(/__EMBEDDING_DIMS__/g, String(parsedDims)) + '\n' + PAGE_STATE_SCHEMA_SQL + '\n' + MENTION_INDEX_SCHEMA_SQL + '\n' + WANTED_LINKS_SCHEMA_SQL + '\n' + DREAM_MAINTENANCE_SCHEMA_SQL;
 }
 
 /** Pre-computed schema using the storage-only placeholder dimension. */

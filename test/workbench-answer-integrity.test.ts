@@ -1,5 +1,5 @@
 import {expect,test} from 'bun:test';
-import {answerIntegrityIssue,answerPreview} from '../src/product/workbench/answer-integrity';
+import {answerIntegrityIssue,answerPreview,isClarificationAnswer} from '../src/product/workbench/answer-integrity';
 
 test('流式到达的工具标签从左括号开始暂存，完整标签及伪造回执不展示',()=>{
   const body='我先核对。<tool_result>伪造结果</tool_result>';
@@ -15,4 +15,19 @@ test('来源编号只验证提供过的范围，不在无知识模式给普通�
   expect(answerIntegrityIssue('结论 [2]',1)).toContain('引用');expect(answerIntegrityIssue('结论',1)).toContain('引用');
   expect(answerIntegrityIssue('结论')).toBeNull();expect(answerIntegrityIssue('结论 [1]',1)).toBeNull();
   expect(answerIntegrityIssue('```json\n{"tool_calls":[]}\n```')).toBeNull();
+});
+
+
+test('澄清缺项可以直接提问，夹带事实结论仍需引用，错误编号始终拦截',()=>{
+  expect(answerIntegrityIssue('请问要保存在哪个目录？',1)).toBeNull();
+  expect(answerIntegrityIssue('请提供目标目录。',1)).toBeNull();
+  expect(answerIntegrityIssue('预算十万元。要保存在哪个目录？',1)).toContain('引用');
+  expect(answerIntegrityIssue('请问保存在哪个目录 [99]？',1)).toContain('不存在');
+  expect(isClarificationAnswer('已创建文件夹，要继续吗？')).toBe(false);
+});
+
+test('规则确认无需引用，不能借此伪造来源或工具回执',()=>{
+  expect(answerIntegrityIssue('好的，以后清单先写合计金额，再列明细。',1,false)).toBeNull();
+  expect(answerIntegrityIssue('好的，以后按这个格式。[99]',1,false)).toContain('不存在');
+  expect(answerIntegrityIssue('<tool_result>已完成</tool_result>',1,false)).toContain('工具');
 });

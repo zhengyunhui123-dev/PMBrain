@@ -134,6 +134,7 @@ export interface ContextManifest {
   skillNote?: string;
 }
 export interface WorkbenchConversation {
+  timeZone?: string;
   id: string;
   title: string;
   model: string;
