@@ -29,6 +29,12 @@ export function answerPreview(text: string): string {
   return partial ? text.slice(0, partial.index) : text;
 }
 
+export function salvageWorkbenchAnswer(text: string): { text: string; leaked: boolean } {
+  const leaked = answerProtocolOffset(text) >= 0;
+  if (!leaked) return { text, leaked: false };
+  return { text: answerPreview(text).trim(), leaked: true };
+}
+
 export function isClarificationAnswer(text: string): boolean {
   if (/(?:已|已经)(?:成功)?(?:创建|新建|建立|生成|保存|写入|复制|修改|完成)|(?:创建|保存|写入|复制|修改)(?:成功|完成)/.test(text)) return false;
   const sentences = text.trim().match(/[^。！？.!?\n]+[。！？.!?]?/g) ?? [];

@@ -71,13 +71,41 @@ test('the main assistant configures file access before it can use local reading 
   const granted = f.agents.create({ name: '周报助手', readDirectories: [f.root] });
   expect(agentTools(granted, '写周报', f.context).map(tool => tool.name)).toContain('local_read');
 });
+test('检索完成后模型仍输出工具指令时，会根据已查资料写出回答', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'pmbrain-agent-writeback-'));
+  const store = new WorkbenchStore(root);
+  const agents = new WorkbenchAgentStore(store);
+  const engine = { executeRaw: async () => [{ id: 'default' }], getConfig: async () => null, getPage: async () => null } as any;
+  const context: WorkbenchAgentTools = { store: agents, engine, config: () => ({ engine: 'pglite' }) };
+  const service = new WorkbenchService(store, () => [{ id: 'service-agent:chat', name: '测试模型', contextWindow: 32768 }], knowledgeWorkbenchAnswer(engine, {
+    search: async () => ({ results: [{ source_id: 'default', slug: 'topics', title: '待写选题池', snippet: 'DeepSeek 与个人写作' }] } as any),
+    answer: chat,
+    loop: toolLoop,
+  }, undefined, context));
+  let searched = false;
+  __setChatTransportForTests(async options => {
+    if (options.tools?.length) {
+      if (!searched) { searched = true; return call('knowledge_search', { query: '选题' }); }
+      return answer('<tool_call><function=knowledge_search></function></tool_call>');
+    }
+    return answer('按选题池写一篇关于 DeepSeek 的短文。[1]');
+  });
+  const conversation = service.create({ knowledge: true });
+  service.send(conversation.id, { text: '从知识库选一个主题写一篇文章' });
+  await service.settled(conversation.id);
+  const reply = service.get(conversation.id).messages.at(-1)!;
+  expect(reply.status).toBe('complete');
+  expect(reply.text).toContain('DeepSeek');
+  expect(reply.text).not.toContain('tool_call');
+  expect(reply.error).toBeUndefined();
+});
 test('unfinished tool protocol is reported as an error instead of a completed assistant reply', async () => {
   const f = fixture(); let requests = 0;
   __setChatTransportForTests(async () => ++requests < 8 ? call('skills_list', {}) : answer('{"name":"knowledge_search","arguments":{"query":"周报"}}'));
   const conversation = f.service.create({ knowledge: false });
   f.service.send(conversation.id, { text: '创建一个周报助手，按实际进展写周报' }); await f.service.settled(conversation.id);
   const reply = f.service.get(conversation.id).messages.at(-1)!;
-  expect(reply.status).toBe('error'); expect(reply.error).toContain('工具指令');
+  expect(reply.status).toBe('error'); expect(reply.error).toMatch(/工具指令|没有写出正文/);
   expect(reply.text).toBe(''); expect(f.agents.list()).toHaveLength(1);
 });
 test('specialist searches send the allowed Source scope and suppress mismatched results', async () => {

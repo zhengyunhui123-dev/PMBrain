@@ -11,7 +11,7 @@ import { workbenchMemoryTools, nativeMemoryHandlers, type WorkbenchNative } from
 import { agentTools, agentHandlers, type WorkbenchAgentTools } from './agent-tools';
 import { completedDirectories, replayArtifactRead } from './files';
 import { classifyTurn, isDirectoryStep } from './turn-policy';
-import { answerIntegrityIssue, answerPreview, answerProtocolOffset, isClarificationAnswer } from './answer-integrity';
+import { answerIntegrityIssue, answerPreview, answerProtocolOffset, isClarificationAnswer, salvageWorkbenchAnswer } from './answer-integrity';
 import { taskRequiresEvidence } from './task-context';
 import { workspaceSelectionContext } from './agent-runtime';
 export { chatMessageTokens } from './context-runtime';
@@ -173,6 +173,9 @@ export async function runWorkbenchTools(input: WorkbenchAnswerInput & {
     return input.knowledge&&!receipts.some(call=>call.status==='complete'&&!['knowledge_search','knowledge_read'].includes(call.name))?citations.length:undefined;
   };
   let stopReason: 'end' | 'length' | 'other' = 'end';
+  let lastMessages = history;
+  const evidenceWritePrompt = () => `不要再调用工具，不要输出工具指令、标签或 JSON。已经查到的资料：${citations.map((item, index) => `[${index + 1}] ${item.title}`).join('；') || '本轮检索结果'}。现在直接写出完整中文回答，事实处标注对应编号。`;
+  const gatheredEvidence = () => citations.length > 0 || [...calls.values(), ...(input.settledTools ?? [])].some(call => call.status === 'complete' && ['knowledge_search', 'knowledge_read', 'memory_recall'].includes(call.name));
   while (requestCount < 8) {
     segment = '';
     const result = await input.loop({ model: input.model, system: input.system, initialMessages: history, tools, toolHandlers: handlers, toolConcurrency: 4, maxTurns: 8 - requestCount, maxTokens: input.context.outputTokens, abortSignal: signal, temperature: input.temperature, reportLengthStop: true, recordUnknownTools: true,
@@ -189,7 +192,8 @@ export async function runWorkbenchTools(input: WorkbenchAnswerInput & {
         const missingEvidence=/(?:没有|未能|未)(?:直接)?(?:找到|查到|检索到|查询到|看到)|未见|无法确认|(?:could not|cannot|can't|did not|don't|do not)\s+(?:find|locate)|no\s+(?:relevant\s+|supporting\s+)?(?:records|evidence|information)|not found/i.test(answer);
         const missingQuestion=/[?？]/.test(userText)&&/(?:don't|do not|didn't|did not)\s+see.{0,32}(?:question|request)|no (?:previous|prior) question|(?:don't|do not)\s+see.{0,32}(?:prior |previous )?conversation history|没有(?:看到|收到).{0,12}(?:问题|请求)/i.test(answer);
         const refusal=/request (?:was|is|has been) rejected|considered high risk|safety policy|请求被拒绝|无法协助/i.test(answer);
-        const issue=answerIntegrityIssue(answer,evidenceCitationCount(answer),requireCitation,citations);
+        const salvaged=salvageWorkbenchAnswer(answer);
+        const issue=answerIntegrityIssue(salvaged.leaked?salvaged.text:answer,salvaged.leaked&&!salvaged.text?undefined:evidenceCitationCount(salvaged.leaked?salvaged.text:answer),requireCitation,citations)??(salvaged.leaked&&!salvaged.text?'助手还在调用工具，没有写出正文。':null);
         finalIntegrity=issue;
         if(issue&&canContinue&&!checkedCompletion){
           checkedCompletion=true;composed=turnPrefix;segment='';visibleSegment='';input.onReplace?.(composed,answeredModel);input.progress('正在核对回答与引用');
@@ -247,6 +251,7 @@ export async function runWorkbenchTools(input: WorkbenchAnswerInput & {
       onToolCallFailed: async (id, error) => { signal.throwIfAborted(); const call = calls.get(id)!; call.status = 'error'; call.error = error; call.completedAt = new Date().toISOString(); publish(call); },
     });
     signal.throwIfAborted();
+    lastMessages = result.messages ?? lastMessages;
     if (result.stopReason === 'length') {
       stopReason = 'length';
       const next: ChatMessage[] = [...result.messages, { role: 'user', content: '请从中断处接着写完，不要重复已经写过的内容。' }];
@@ -254,7 +259,14 @@ export async function runWorkbenchTools(input: WorkbenchAnswerInput & {
       try { await input.context.prepare(next); } catch (error) { if (error instanceof Error && 'code' in error && error.code === 'pmbrain_context_budget') break; throw error; }
       history = next; continue;
     }
-    if (result.stopReason === 'max_turns') { if (isDirectoryStep(userText)) input.onReplace?.('', answeredModel); throw new Error(isDirectoryStep(userText) ? '目录尚未创建：本轮没有成功的创建目录回执。' : '知识工具已达到本轮调用上限，请继续提问。'); }
+    if (result.stopReason === 'max_turns') {
+      if (isDirectoryStep(userText) || !gatheredEvidence()) {
+        if (isDirectoryStep(userText)) input.onReplace?.('', answeredModel);
+        throw new Error(isDirectoryStep(userText) ? '目录尚未创建：本轮没有成功的创建目录回执。' : '知识工具已达到本轮调用上限，请继续提问。');
+      }
+      stopReason = 'other';
+      break;
+    }
     stopReason = result.stopReason === 'end' ? 'end' : 'other'; break;
   }
   for (const name of ['assistant_create', 'assistant_update', 'artifact_save', 'artifact_revise', 'task_submit', 'local_mkdir']) {
@@ -262,6 +274,54 @@ export async function runWorkbenchTools(input: WorkbenchAnswerInput & {
     if (last?.status === 'error' && !modelAnswerText(composed + segment).trim()) throw new Error(last.error ?? '助手操作未完成');
   }
   let text = modelAnswerText(composed + segment);
+  const salvaged = salvageWorkbenchAnswer(text);
+  if (salvaged.leaked) text = salvaged.text;
+  if (!text.trim() && gatheredEvidence() && requestCount < 8 && !isDirectoryStep(userText)) {
+    input.progress('正在根据已查到的资料写回答');
+    segment = ''; visibleSegment = '';
+    const writePrompt = evidenceWritePrompt();
+    const written = await input.loop({ model: input.model, system: input.system, initialMessages: [...lastMessages, { role: 'user', content: writePrompt }], tools: [], toolHandlers: handlers, toolConcurrency: 1, maxTurns: 1, maxTokens: input.context.outputTokens, abortSignal: signal, temperature: input.temperature, reportLengthStop: true, recordUnknownTools: true,
+      preserveHistory:true,disableReasoning:true,finalizeOnLastTurn:true,finalPrompt:writePrompt,fitRequest:fitProviderRequest,contextWindow:input.contextWindow,
+      parseToolText:normalizeToolText,toolTextPreview,
+      jsonToolFallback:false,jsonFinalAnswer:false,
+      requestPolicy:assistantRequestPolicy(input.model),onRequestEvent:event=>{input.onRequestEvent?.(event);const stage=requestStage(event);if(stage)input.progress(stage);},
+      beforeModelCall: async ({ messages, maxTokens,finalTurn }) => {
+        const prepared = await input.context.prepare(messages, maxTokens,finalTurn);
+        signal.throwIfAborted(); requestTokens = input.context.tokens(prepared.messages);
+        requestCount++; segment = ''; visibleSegment = ''; input.progress('正在根据已查到的资料写回答');
+        return prepared;
+      },
+      onTextDelta: delta => {
+        segment += delta;
+        const preview=answerPreview(toolTextPreview(segment));
+        if(preview.startsWith(visibleSegment))input.onDelta?.(preview.slice(visibleSegment.length));
+        else input.onReplace?.(composed+preview,answeredModel);
+        visibleSegment=preview;
+      },
+      onTextReset: model => { segment = ''; visibleSegment = ''; answeredModel = model; input.onReplace?.(composed, model); },
+      onAssistantTurn: async (_turn, _message, blocks, usage, model) => {
+        signal.throwIfAborted(); answeredModel = model;
+        const next = blocks.filter((block): block is Extract<ChatBlock, { type: 'text' }> => block.type === 'text').map(block => block.text).join('');
+        const kept = salvageWorkbenchAnswer(next);
+        if (kept.text) composed += kept.text;
+        segment = ''; visibleSegment = ''; input.onReplace?.(composed, model);
+        input.context.observeUsage(usage.input_tokens);
+      },
+    });
+    void written;
+    text = salvageWorkbenchAnswer(modelAnswerText(composed + segment)).text;
+    if (text) {
+      finalIntegrity = answerIntegrityIssue(text, evidenceCitationCount(text), false, citations);
+      input.onReplace?.(text, answeredModel);
+    }
+  } else if (salvaged.leaked && text) {
+    finalIntegrity = answerIntegrityIssue(text, evidenceCitationCount(text), requireCitation, citations);
+    input.onReplace?.(text, answeredModel);
+  }
+  if (!text.trim() && salvaged.leaked) {
+    input.onReplace?.('', answeredModel);
+    throw new Error('助手还在调用工具，没有写出正文。已检索的资料还在，请重新生成。');
+  }
   if (isDirectoryStep(userText)) {
     const directories = completedDirectories([...(input.settledTools ?? []), ...calls.values()]);
       if (directoryNeedsExecution(text)) { input.onReplace?.('', answeredModel); throw new Error('目录尚未创建：本轮没有成功的创建目录回执。'); }

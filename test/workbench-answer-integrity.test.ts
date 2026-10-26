@@ -1,5 +1,5 @@
 import {expect,test} from 'bun:test';
-import {answerIntegrityIssue,answerPreview,isClarificationAnswer} from '../src/product/workbench/answer-integrity';
+import {answerIntegrityIssue,answerPreview,isClarificationAnswer,salvageWorkbenchAnswer} from '../src/product/workbench/answer-integrity';
 
 test('流式到达的工具标签从左括号开始暂存，完整标签及伪造回执不展示',()=>{
   const body='我先核对。<tool_result>伪造结果</tool_result>';
@@ -24,6 +24,14 @@ test('澄清缺项可以直接提问，夹带事实结论仍需引用，错误�
   expect(answerIntegrityIssue('预算十万元。要保存在哪个目录？',1)).toContain('引用');
   expect(answerIntegrityIssue('请问保存在哪个目录 [99]？',1)).toContain('不存在');
   expect(isClarificationAnswer('已创建文件夹，要继续吗？')).toBe(false);
+});
+
+test('正文后面粘上工具标签时保留正文，整段工具指令则没有正文',()=>{
+  const body='选题是待写文章与选题池。先写结构。[1]\n<tool_call><function=knowledge_search>';
+  expect(salvageWorkbenchAnswer(body)).toEqual({text:'选题是待写文章与选题池。先写结构。[1]',leaked:true});
+  expect(answerIntegrityIssue(salvageWorkbenchAnswer(body).text,1)).toBeNull();
+  expect(salvageWorkbenchAnswer('<tool_call><function=knowledge_search></function></tool_call>')).toEqual({text:'',leaked:true});
+  expect(salvageWorkbenchAnswer('依据原文 [1]')).toEqual({text:'依据原文 [1]',leaked:false});
 });
 
 test('规则确认无需引用，不能借此伪造来源或工具回执',()=>{
