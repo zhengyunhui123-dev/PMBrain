@@ -6,8 +6,8 @@ import { parseSkillFrontmatter } from '../../core/skill-frontmatter';
 import { FRONTMATTER_SECTION, entriesToResolverContent, type SkillTriggerEntry } from '../../core/skill-trigger-index';
 import { confirmsNamedSkill, confirmsSkillDraft, skillDraftFromRequest, wantsMethodSkill, wantsSavedSkill, wantsSkillDraft, wantsSkillFix } from './playbook';
 
-const READ_TOOLS = ['search', 'query', 'get_page', 'knowledge_search', 'knowledge_read', 'memory_recall', 'local_files', 'local_read', 'local_mkdir', 'artifact_save', 'artifact_list', 'artifact_read', 'artifact_revise'];
-const WRITE_TOOLS = ['knowledge_append', 'knowledge_organize', 'memory_remember', 'memory_forget', 'put_page', 'add_link', 'add_timeline_entry'];
+const READ_TOOLS = ['search', 'query', 'get_page', 'knowledge_search', 'knowledge_read', 'memory_recall', 'local_files', 'local_read', 'local_stat', 'local_mkdir', 'artifact_save', 'artifact_list', 'artifact_read', 'artifact_revise'];
+const WRITE_TOOLS = ['knowledge_append', 'knowledge_organize', 'memory_remember', 'memory_forget', 'put_page', 'add_link', 'add_timeline_entry', 'local_write', 'local_edit', 'local_delete', 'local_move', 'local_restore', 'local_copy', 'local_rename'];
 const MAX_BODY = 16000;
 const MAX_RUNS = 40;
 const MAX_SKILL_FILES = 80;

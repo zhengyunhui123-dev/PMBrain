@@ -1,5 +1,6 @@
 import type { WorkbenchPlaybook, WorkbenchSchedule } from '../../../shared/workbench-agents';
 import { compactRule, instructional } from './turn-policy';
+import { fileActionIssue } from './file-receipts';
 
 export const EVIDENCE_GAP_TEXT = '这次没有查到可用材料。没有写完整稿，也没有沿用以前的成果。';
 export const CURRENT_EVIDENCE_RULE = '这一次的事实只来自这次检索和用户这次给出的材料。更早的对话、已保存的记忆和上一份成果都不是本期事实。回答先说明查到了什么。没有查到材料时，只说明没有材料并停止，不要写完整稿，也不要沿用以前的成果。';
@@ -277,6 +278,7 @@ function rewriteUnverifiedSave(text: string, calls?: HonestyCall[]): string {
 }
 
 export function visibleAssistantText(text: string, calls?: HonestyCall[], honesty?: WorkbenchHonesty): string {
+  if (!honesty?.recap && fileActionIssue(text, calls)) return '本轮没有对应的文件操作成功回执，不能确认文件已改动。请查看工作过程中的实际结果。';
   for (const call of calls ?? []) {
     if (call.status !== 'complete' || !call.output || (call.name !== 'assistant_create' && call.name !== 'assistant_update')) continue;
     try {

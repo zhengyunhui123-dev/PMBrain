@@ -81,14 +81,14 @@ test('deliverables are real docx files, preserve citation provenance and are ide
   await expect(saveWorkbenchArtifact(store, { ...input, content: '错误引用 [9]' })).rejects.toThrow('引用');
 });
 
-test('周报成果写入主数据源本地目录，不覆盖已有不同文件，也不改原始资料', async () => {
+test('周报成果写入选定工作目录，不覆盖已有不同文件，也不改原始资料', async () => {
   const root = fixture();
   const sourceDir = join(root, 'knowledge');
   mkdirSync(sourceDir);
   const original = join(sourceDir, '项目笔记.md');
   writeFileSync(original, '原始资料保持不动');
   const store = new WorkbenchAgentStore(new WorkbenchStore(join(root, 'store')));
-  const agent = store.create({ name: '周报助手', deliveryFormat: 'markdown', sourceIds: ['default'] });
+  const agent = store.create({ name: '周报助手', workspaceDirectory: sourceDir, deliveryFormat: 'markdown', sourceIds: ['default'] });
   const engine = {
     getConfig: async () => null,
     executeRaw: async (sql: string) => sql.includes('local_path') ? [{ id: 'default', local_path: sourceDir }] : [{ id: 'default' }],
@@ -124,8 +124,8 @@ test('周报成果写入主数据源本地目录，不覆盖已有不同文件�
     getConfig: async () => null,
     executeRaw: async () => [{ id: 'default' }],
   } as any;
-  const skipped = await publishArtifactToSource(missing, agent, artifact);
-  expect(skipped).toEqual({ ok: false, reason: '知识来源没有绑定可用的本地目录' });
+  const skipped = await publishArtifactToSource(missing, { ...agent, workspaceDirectory: undefined }, artifact);
+  expect(skipped).toEqual({ ok: false, reason: '请先选择这个助手的工作目录' });
 });
 
 test('local spreadsheet reads reuse the native parser and keep budget rows intact', async () => {

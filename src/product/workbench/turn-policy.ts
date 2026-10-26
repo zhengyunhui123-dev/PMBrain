@@ -6,7 +6,7 @@ export function wantsDirectoryCreation(text: string): boolean {
     && !/(?:不要|不用|不想|无需|不必|别|取消|停止|如何|怎么|为什么|为何|教程|以后).{0,30}(?:创建|新建|建立|建)/.test(value);
 }
 export function isDirectoryStep(text: string): boolean {
-  return wantsDirectoryCreation(text) && !/(?:然后|再|并|同时|顺便).{0,30}(?:生成|写|保存|导出|整理|填)/.test(text.replace(/\s+/g, ''));
+  return wantsDirectoryCreation(text) && !/(?:然后|再|并|同时|顺便).{0,30}(?:生成|写|保存|导出|整理|填|复制|移动|重命名|删除|追加|修改|编辑|恢复)/.test(text.replace(/\s+/g, ''));
 }
 export function directoryPeriod(text: string): number[] {
   if (!isDirectoryStep(text) || /逐日|每天|每日|按天|分别|各建|名为|命名|名称|叫/.test(text)) return [];
@@ -38,7 +38,7 @@ export function isWorkRequest(text: string): boolean {
 
 export function isInformationRequest(text: string): boolean {
   if (isWorkRequest(text) || isTaskAmendment(text) || wantsDirectoryCreation(text)) return false;
-  if (/(?:请|帮我|替我|给我|麻烦你|请你|继续|开始|直接)(?:先|再)?(?:创建|新建|生成|制作|写|保存|导出|复制|重命名|修改|整理)/.test(text)) return false;
+  if (/(?:请|帮我|替我|给我|麻烦你|请你|继续|开始|直接)(?:先|再)?(?:创建|新建|生成|制作|写|保存|导出|复制|重命名|修改|整理|删除|删掉|追加|编辑|移动|恢复)/.test(text)) return false;
   return /(?:什么|多少|哪[里儿个些种]|是否|为何|为什么|怎么|如何|何时|多久|谁|[?？])/.test(text);
 }
 

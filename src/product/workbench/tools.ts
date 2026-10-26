@@ -14,6 +14,8 @@ import { classifyTurn, isDirectoryStep } from './turn-policy';
 import { answerIntegrityIssue, answerPreview, answerProtocolOffset, isClarificationAnswer, salvageWorkbenchAnswer } from './answer-integrity';
 import { taskRequiresEvidence } from './task-context';
 import { workspaceSelectionContext } from './agent-runtime';
+import { fileActionIssue, fileExecutionInstruction, fileRequestAction, fileRequestCompleted } from './file-receipts';
+import { WORKSPACE_MUTATIONS, workspaceFileHandlers } from './workspace-files';
 export { chatMessageTokens } from './context-runtime';
 
 export const KNOWLEDGE_TOOLS: ChatToolDef[] = [
@@ -116,9 +118,10 @@ export async function runWorkbenchTools(input: WorkbenchAnswerInput & {
     handlers.set(name, { ...handler, execute: async (raw, abort, execution) => {
       const prior = settled.find(call => sameToolInput(call.input, raw));
       if (!prior?.output) return handler.execute(raw, abort, execution);
-      if (name === 'local_mkdir') return handler.execute(raw, abort, execution);
+      if (['local_mkdir', 'local_read', 'local_stat', 'local_files'].includes(name)) return handler.execute(raw, abort, execution);
       let parsed: unknown;
       try { parsed = JSON.parse(prior.output); } catch { return handler.execute(raw, abort, execution); }
+      if (WORKSPACE_MUTATIONS.includes(name) && input.agents && input.agent && input.environment) return workspaceFileHandlers(input.agents, { agentId: input.agent.id, environment: input.environment }).verify(parsed as Record<string, unknown>);
       if (name === 'knowledge_search') {
         const output = parsed as { results?: unknown };
         if (!output || typeof output !== 'object' || !Array.isArray(output.results)) return handler.execute(raw, abort, execution);
@@ -164,6 +167,15 @@ export async function runWorkbenchTools(input: WorkbenchAnswerInput & {
   let history = input.history;
   let checkedCompletion = false;
   let checkedDirectory = false;
+  let checkedFile = false;
+  const fileReceipts = () => [...calls.values(), ...(input.settledTools ?? []).filter(prior => ![...calls.values()].some(current => current.name === prior.name && current.status === 'error'))];
+  const requestedFileAction = fileRequestAction(userText);
+  const fileNeedsExecution = (answer: string) => {
+    if (!requestedFileAction || fileRequestCompleted(requestedFileAction, fileReceipts()) || isClarificationAnswer(answer)) return false;
+    if (input.agent?.workspaceAccess !== 'read-write' && /权限|读写文件/.test(answer) && /开启|设置|选择/.test(answer)) return false;
+    if (!input.environment?.workspace && /(?:选择|确认|提供).{0,12}(?:工作目录|路径)/.test(answer)) return false;
+    return !([...calls.values()].some(call => call.status === 'error') && /(?:无法|未能|不能|没有|尚未|失败|权限|不存在)/.test(answer) && !/(?:已经|已)(?:成功)?(?:修改|编辑|删除|追加|恢复|移动|重命名|复制|写入)/.test(answer));
+  };
   let visibleSegment = '';
   let finalIntegrity: string | null = null;
   const directoryNeedsExecution = (text: string) => isDirectoryStep(userText) && !completedDirectories([...calls.values(), ...(input.settledTools ?? [])]).length && !isClarificationAnswer(text) && !([...calls.values()].some(call => call.status === 'error') && /^(?:抱歉[，,。]?\s*)?(?:无法|未能|不能|尚未|没有|目录不存在|目标目录不存在)/.test(text.trim()));
@@ -182,6 +194,13 @@ export async function runWorkbenchTools(input: WorkbenchAnswerInput & {
       preserveHistory:true,disableReasoning:true,finalizeOnLastTurn:true,finalPrompt:'本轮资料收集已结束。现在直接根据已获得的资料给出有引用的中文回答；证据不足的部分明确说明，不再调用工具，不编造资料。',fitRequest:fitProviderRequest,contextWindow:input.contextWindow,
       parseToolText:normalizeToolText,toolTextPreview,
       validateCompletion:async(answer,canContinue)=>{
+        const fileIssue = fileActionIssue(answer, fileReceipts()) ?? (fileNeedsExecution(answer) ? '本轮没有用户要求的文件操作成功回执，文件操作尚未完成。' : null);
+        if (fileIssue) {
+          if (!canContinue || checkedFile) { input.onReplace?.('', answeredModel); throw new Error(fileIssue); }
+          checkedFile = true; composed = turnPrefix; segment = ''; visibleSegment = ''; input.onReplace?.(composed, answeredModel);
+          const errors = [...calls.values()].filter(call => call.status === 'error').map(call => `${call.name}: ${call.error}`).join('\n');
+          return `${fileIssue} ${errors ? `实际失败原因：${errors}。` : ''}${fileExecutionInstruction(userText)}现在开始调用真正的工具，不要模拟回执或直接输出完成声明。缺少权限、参数或工具失败时如实说明。`;
+        }
         if (directoryNeedsExecution(answer) && canContinue) {
           composed = turnPrefix; segment = ''; visibleSegment = ''; input.onReplace?.(composed, answeredModel);
           if (checkedDirectory) throw new Error('目录尚未创建：模型未按本轮要求完成操作，请重试。');
@@ -213,7 +232,7 @@ export async function runWorkbenchTools(input: WorkbenchAnswerInput & {
         if(correction){composed=turnPrefix;segment='';input.onReplace?.(composed,answeredModel);}
         return correction;
       },
-      jsonToolFallback:true,jsonFinalAnswer:true,jsonToolPrompt:'原生工具协议不可用。需要检索或读取时仅输出 JSON：{"tool_calls":[{"name":"工具名称","arguments":{}}]}。资料充足时仅输出 {"answer":"完整的中文回答，使用提供的引用编号"}。不要输出其他字段或复制工具协议；最后回答回合只输出 answer。',
+      jsonToolFallback:true,jsonFinalAnswer:true,jsonToolPrompt:'本轮使用结构化执行协议。需要执行任何操作时仅输出 JSON：{"tool_calls":[{"name":"工具名称","arguments":{}}]}。工具会由应用真正执行，随后返回实际结果。未执行的文件操作不能输出成功回答。只有操作已完成或确有阻碍时才输出 {"answer":"给用户的中文回答"}。不要输出自造的工具回执或 verified；最后回答回合只输出 answer。',
       requestPolicy:assistantRequestPolicy(input.model),onRequestEvent:event=>{input.onRequestEvent?.(event);const stage=requestStage(event);if(stage)input.progress(stage);},
       beforeModelCall: async ({ messages, maxTokens,finalTurn }) => {
         const prepared = await input.context.prepare(messages, maxTokens,finalTurn);
@@ -224,7 +243,8 @@ export async function runWorkbenchTools(input: WorkbenchAnswerInput & {
         });
         signal.throwIfAborted(); requestTokens = input.context.tokens(prepared.messages);
         requestCount++; segment = ''; visibleSegment = ''; finalIntegrity = null; input.progress('正在分析资料');
-        return prepared;
+        const requireFileTool = checkedFile && requestedFileAction && !fileRequestCompleted(requestedFileAction, fileReceipts()) && input.agent?.workspaceAccess === 'read-write' && input.environment?.workspace && ![...calls.values()].some(call => call.status === 'error');
+        return { ...prepared, ...(requireFileTool && !finalTurn ? { toolChoice: 'required' as const } : {}) };
       },
       onTextDelta: delta => {
         segment += delta;
@@ -269,11 +289,13 @@ export async function runWorkbenchTools(input: WorkbenchAnswerInput & {
     }
     stopReason = result.stopReason === 'end' ? 'end' : 'other'; break;
   }
-  for (const name of ['assistant_create', 'assistant_update', 'artifact_save', 'artifact_revise', 'task_submit', 'local_mkdir']) {
+  for (const name of ['assistant_create', 'assistant_update', 'artifact_save', 'artifact_revise', 'task_submit', 'local_mkdir', ...WORKSPACE_MUTATIONS]) {
     const last = [...calls.values()].filter(call => call.name === name).at(-1);
     if (last?.status === 'error' && !modelAnswerText(composed + segment).trim()) throw new Error(last.error ?? '助手操作未完成');
   }
   let text = modelAnswerText(composed + segment);
+  const fileIssue = fileActionIssue(text, fileReceipts()) ?? (fileNeedsExecution(text) ? '本轮没有用户要求的文件操作成功回执，文件操作尚未完成。' : null);
+  if (fileIssue) { input.onReplace?.('', answeredModel); throw new Error(fileIssue); }
   const salvaged = salvageWorkbenchAnswer(text);
   if (salvaged.leaked) text = salvaged.text;
   if (!text.trim() && gatheredEvidence() && requestCount < 8 && !isDirectoryStep(userText)) {

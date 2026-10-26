@@ -33,8 +33,9 @@ export async function readLocalFile(agent: WorkbenchAgent, path: string, offset 
   const resolved = granted(agent, path); const info = statSync(resolved);
   if (!info.isFile() || info.size > 15 * 1024 * 1024) throw new Error('只支持不超过 15MB 的文件');
   if (!Number.isInteger(offset) || offset < 0) throw new Error('读取位置无效');
+  const snapshot = readFileSync(resolved);
   const extension = extname(resolved).toLowerCase(); let text: string; let notes: string[] = [];
-  if (['.md', '.txt', '.csv', '.json', '.log', '.html', '.xml', '.tsv'].includes(extension)) text = readFileSync(resolved, 'utf8');
+  if (['.md', '.markdown', '.txt', '.csv', '.json', '.jsonl', '.log', '.html', '.xml', '.tsv', '.yaml', '.yml', '.css', '.js', '.ts', '.tsx', '.jsx', '.py', '.sh', '.ps1', '.toml', '.ini'].includes(extension)) text = snapshot.toString('utf8');
   else if (['.docx', '.pdf', '.pptx', '.xlsx', '.xlsm', '.xls'].includes(extension)) {
     const { parseDocument } = await import('../../core/document/document-import');
     const { renderStructuredDocument } = await import('../../core/document/markdown-renderer');
@@ -42,8 +43,9 @@ export async function readLocalFile(agent: WorkbenchAgent, path: string, offset 
     notes = [...(doc.metadata.ocrWarnings ?? []), ...(doc.metadata.pagesNeedingOcr?.length ? ['存在需要 OCR 的页面，本地文件读取没有执行 OCR，不能将未读出的内容当作已核对。'] : [])];
   } else throw new Error('文件格式不受当前原生解析器支持');
   if (offset > text.length) throw new Error('读取位置超出正文');
+  if (!readFileSync(resolved).equals(snapshot)) throw new Error('读取期间文件已改变，请重新读取');
   const content = text.slice(offset, offset + 6000);
-  return { path: resolved, title: basename(resolved), content, offset, nextOffset: offset + content.length < text.length ? offset + content.length : null, modifiedAt: info.mtime.toISOString(), notes, note: '文件修改时间不是工作完成时间，请按正文中的事件时间判断。' };
+  return { path: resolved, title: basename(resolved), hash: hashBytes(snapshot), content, offset, nextOffset: offset + content.length < text.length ? offset + content.length : null, modifiedAt: info.mtime.toISOString(), notes, note: '文件修改时间不是工作完成时间，请按正文中的事件时间判断。' };
 }
 function familyIdOf(artifact: WorkbenchArtifact) { return artifact.familyId || artifact.id; }
 function revisionOf(artifact: WorkbenchArtifact) { return artifact.revision ?? 1; }
@@ -339,7 +341,8 @@ export async function copyLocalFile(engine: BrainEngine, agent: WorkbenchAgent, 
   if (!readFileSync(from).equals(before)) throw new Error('原始文件被改动，已停止');
   const copied = realpathSync(destination);
   if (lstatSync(destination).isSymbolicLink() || !inside(destRoot, copied)) throw new Error('复制结果不在目标文件夹内');
-  return { path: copied, source: from, bytes: before.length, copied: true, sourceId: target?.sourceId ?? 'local' };
+  if (!readFileSync(copied).equals(before)) throw new Error('复制内容读回不一致，原始文件保留');
+  return { path: copied, source: from, hash: hashBytes(before), verified: true, bytes: before.length, copied: true, sourceId: target?.sourceId ?? 'local' };
 }
 export function renameManagedFile(path: string, name: string, managed: string[]) {
   singleName(name);

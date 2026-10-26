@@ -215,6 +215,7 @@ html[data-theme="dark"] .knowledge-workbench button.wb-cite:hover, html[data-the
 .wb-workspace-choice { display: inline-flex; align-items: center; gap: 8px; max-width: min(100%, 620px); border: 0; background: transparent; color: inherit; padding: 4px 0; cursor: pointer; text-align: left; }
 .wb-workspace-choice span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wb-workspace-choice svg { flex: none; }
+.wb-workspace > select { width: auto; min-width: 0; flex: 0 0 auto; padding: 6px 10px; }
 .wb-workspace small, .wb-memory-status { color: var(--product-muted); font-size: 12px; }
 .wb-workspace-form { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; width: 100%; padding: 8px 0; }
 .wb-workspace-form input { flex: 1; min-width: 240px; padding: 8px 10px; border: 1px solid var(--product-line); border-radius: 6px; color: inherit; background: var(--product-bg); }

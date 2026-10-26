@@ -21,7 +21,7 @@ function world() {
   const sourceDir = join(root, 'knowledge');
   mkdirSync(sourceDir);
   const store = new WorkbenchAgentStore(new WorkbenchStore(join(root, 'store')));
-  const agent = store.create({ name: '周报助手', workflow: '先查资料再写周报', skills: ['weekly-report'], deliveryFormat: 'markdown', sourceIds: ['default'] });
+  const agent = store.create({ name: '周报助手', workspaceDirectory: sourceDir, workflow: '先查资料再写周报', skills: ['weekly-report'], deliveryFormat: 'markdown', sourceIds: ['default'] });
   const engine = { executeRaw: async (sql: string) => sql.includes('local_path') ? [{ id: 'default', local_path: sourceDir }] : [{ id: 'default' }] } as never;
   return { root, sourceDir, store, agent, engine };
 }
@@ -95,7 +95,7 @@ test('当前成果会跟着修改走；换任务后不再指向旧周报，另�
   mkdirSync(sourceDir);
   const store = new WorkbenchStore(join(root, 'workbench'));
   const agents = new WorkbenchAgentStore(store);
-  const agent = agents.create({ name: '周报助手', workflow: '先查资料再写周报', skills: ['weekly-report'], deliveryFormat: 'markdown', sourceIds: ['default'], systemPrompt: '你是周报助手' });
+  const agent = agents.create({ name: '周报助手', workspaceDirectory: sourceDir, workflow: '先查资料再写周报', skills: ['weekly-report'], deliveryFormat: 'markdown', sourceIds: ['default'], systemPrompt: '你是周报助手' });
   const engine = { executeRaw: async (sql: string) => sql.includes('local_path') ? [{ id: 'default', local_path: sourceDir }] : [{ id: 'default' }] } as never;
   let step = 0;
   let firstId = '';

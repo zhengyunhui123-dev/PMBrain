@@ -676,7 +676,7 @@
       "path": "src/core/ai/gateway.ts",
       "upstream_path": "src/core/ai/gateway.ts",
       "mode": "adapted",
-      "sha256": "6f3ee27864cbbefa092954832677082b5916d809bea75513b56e13c0983a735c",
+      "sha256": "8a77141cc5e4908f4ad6ae3ac1e325fd4fb462078bb6342b6142e338c79109f1",
       "upstream_sha256": "622b81db5282117c6e2b32b566e2e35c36117400d416051011dbcc0e8e9c565f"
     },
     {
@@ -697,7 +697,7 @@
       "path": "src/core/cycle/extract-atoms.ts",
       "upstream_path": "src/core/cycle/extract-atoms.ts",
       "mode": "adapted",
-      "sha256": "77a04cb6aa061c6d72ef59dfddce65b5142f013246d26e4e483350918a6bc126",
+      "sha256": "19e2dc9223ef45f3d54bff65ee29f7630834e135baa00ce6196a58096a82d3a4",
       "upstream_sha256": "d0f3a747b615808b92be26486b7842e7cbc509724f273484d25de78a4c85127a"
     },
     {

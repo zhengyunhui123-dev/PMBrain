@@ -55,9 +55,11 @@ function normalizeProfile(input: Record<string, unknown>, previous?: WorkbenchAg
     workspaceDirectory = realpathSync(workspaceInput);
   }
   const selectedAgain = Object.hasOwn(input, 'workspaceDirectory') && Object.hasOwn(input, 'workspaceUpdatedAt') && input.workspaceUpdatedAt !== previous?.workspaceUpdatedAt;
+  const workspaceAccess = input.workspaceAccess ?? previous?.workspaceAccess ?? 'new-files';
+  if (workspaceAccess !== 'new-files' && workspaceAccess !== 'read-write') throw new Error('工作目录文件权限无效');
   const workspaceUpdatedAt = workspaceDirectory === previous?.workspaceDirectory && !selectedAgain ? previous?.workspaceUpdatedAt : now;
   const retiredRules = previous?.retiredRules?.filter(item => item && typeof item.text === 'string' && typeof item.replacedBy === 'string');
-  return { ...base, id: previous?.id ?? randomUUID(), revision: (previous?.revision ?? 0) + 1, sourceIds: [...new Set(sourceIds)], skills: [...new Set(skills)], workflow, readDirectories: [...new Set(readDirectories)], workspaceDirectory, workspaceUpdatedAt, deliveryFormat, ...(standingRules ? { standingRules } : {}), ...(retiredRules?.length ? { retiredRules } : {}), ...(playbook ? { playbook } : {}), schedule: schedule(Object.hasOwn(input, 'schedule') ? input.schedule : previous?.schedule), createdAt: previous?.createdAt ?? now, updatedAt: now };
+  return { ...base, id: previous?.id ?? randomUUID(), revision: (previous?.revision ?? 0) + 1, sourceIds: [...new Set(sourceIds)], skills: [...new Set(skills)], workflow, readDirectories: [...new Set(readDirectories)], workspaceDirectory, workspaceAccess, workspaceUpdatedAt, deliveryFormat, ...(standingRules ? { standingRules } : {}), ...(retiredRules?.length ? { retiredRules } : {}), ...(playbook ? { playbook } : {}), schedule: schedule(Object.hasOwn(input, 'schedule') ? input.schedule : previous?.schedule), createdAt: previous?.createdAt ?? now, updatedAt: now };
 }
 export class WorkbenchAgentStore {
   constructor(readonly workbench: WorkbenchStore) {}

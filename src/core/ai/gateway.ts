@@ -2440,6 +2440,7 @@ export interface ChatOpts {
   system?: string;
   messages: ChatMessage[];
   tools?: ChatToolDef[];
+  toolChoice?: 'auto' | 'required';
   maxTokens?: number;
   disableReasoning?: boolean;
   timeoutMs?: number;
@@ -2840,6 +2841,7 @@ async function chatOnce(opts: ChatOpts): Promise<ChatResult> {
       system: opts.system,
       messages: toModelMessages(repairedMessages) as any,
       tools: opts.tools && opts.tools.length > 0 ? tools : undefined,
+      ...(opts.tools?.length && opts.toolChoice ? { toolChoice: opts.toolChoice } : {}),
       maxOutputTokens,
       ...(getTaskBudgetTracker()?{maxRetries:0}:opts.maxRetries===undefined?{}:{maxRetries:opts.maxRetries}),
       ...(opts.temperature !== undefined ? { temperature: opts.temperature } : {}),
@@ -3201,6 +3203,7 @@ export interface ToolLoopReplayState {
 }
 
 export interface ToolLoopOpts {
+  toolChoice?: ChatOpts['toolChoice'];
   requestPolicy?: ChatRequestPolicy;
   onRequestEvent?: (event:ChatRequestEvent)=>void;
   preserveHistory?: boolean;
@@ -3208,7 +3211,7 @@ export interface ToolLoopOpts {
   temperature?: number;
   onTextDelta?: (delta: string) => void;
   onTextReset?: (model: string) => void;
-  beforeModelCall?: (input: { turnIdx: number; messages: readonly ChatMessage[]; finalTurn?: boolean;maxTokens:number }) => void | { messages: ChatMessage[]; maxTokens?: number; contextWindow?: number; system?: string } | Promise<void | { messages: ChatMessage[]; maxTokens?: number; contextWindow?: number; system?: string }>;
+  beforeModelCall?: (input: { turnIdx: number; messages: readonly ChatMessage[]; finalTurn?: boolean;maxTokens:number }) => void | { messages: ChatMessage[]; maxTokens?: number; contextWindow?: number; system?: string; toolChoice?: ChatOpts['toolChoice'] } | Promise<void | { messages: ChatMessage[]; maxTokens?: number; contextWindow?: number; system?: string; toolChoice?: ChatOpts['toolChoice'] }>;
   toolConcurrency?: number;
   parallelReadOnlyTools?: boolean;
   retryLength?: boolean;
@@ -3374,6 +3377,7 @@ export async function toolLoop(opts: ToolLoopOpts): Promise<ToolLoopResult> {
       let callMaxTokens=retry?.maxTokens??maxTokens;
       let callContextWindow: number | undefined = opts.contextWindow;
       let callSystem=opts.system??'';
+      let callToolChoice=opts.toolChoice;
       const prepared=await opts.beforeModelCall?.({ turnIdx, messages:callMessages,maxTokens:callMaxTokens,...(opts.finalizeOnLastTurn?{finalTurn}:{}) });
       if(prepared){
         if(callMessages===messages&&!opts.preserveHistory)messages.splice(0,messages.length,...prepared.messages);
@@ -3381,6 +3385,7 @@ export async function toolLoop(opts: ToolLoopOpts): Promise<ToolLoopResult> {
         if(prepared.maxTokens!==undefined)callMaxTokens=Math.max(1,Math.min(callMaxTokens,prepared.maxTokens));
         callContextWindow=prepared.contextWindow;
         if(prepared.system!==undefined)callSystem=prepared.system;
+        if(prepared.toolChoice!==undefined)callToolChoice=prepared.toolChoice;
       }
       opts.abortSignal?.throwIfAborted();
       let rawText='',visibleText='';
@@ -3389,6 +3394,7 @@ export async function toolLoop(opts: ToolLoopOpts): Promise<ToolLoopResult> {
         system: (finalTurn?`${callSystem}\n${opts.finalPrompt??'This is the reserved final verification turn. Return the requested JSON receipt of persisted entities and evidence-backed relations. Tools are unavailable; do not claim unwritten targets.'}`:callSystem)+(jsonToolCalls?`\n${opts.jsonToolPrompt??'Native tools are unavailable. To request an operation return JSON only: {"tool_calls":[{"name":"allowed tool name","arguments":{}}]}. Otherwise return the required final JSON receipt.'}${finalTurn?'':`\nUse only these definitions: ${JSON.stringify(opts.tools)}`}`:''),
         messages:jsonToolCalls?callMessages.map(message=>({role:message.role,content:typeof message.content==='string'?message.content:JSON.stringify(message.content)})):callMessages,
         tools: finalTurn||jsonToolCalls?undefined:opts.tools,
+        ...(finalTurn||jsonToolCalls||!callToolChoice?{}:{toolChoice:callToolChoice}),
         responseSchema:jsonToolCalls?{name:'entity_response',schema:{type:'object',additionalProperties:true}}:undefined,
         maxTokens:callMaxTokens,
         contextWindow:callContextWindow,

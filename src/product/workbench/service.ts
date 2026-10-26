@@ -13,6 +13,7 @@ import { activityLine, compilePlaybook, EVIDENCE_GAP_TEXT, needsCurrentEvidence,
 import { concludeSkillRun, PRODUCT_SKILLS, SkillCenter } from './skill-center';
 import { advanceTask, noteTask, rememberTaskMaterials, taskUserTexts } from './task-context';
 import { decidePending } from './pending';
+import { WORKSPACE_MUTATIONS } from './workspace-files';
 import { completedDirectories, completedDirectory, listWorkbenchArtifacts } from './files';
 import { compactRule, isDirectoryStep, learnTurn, mergeTaskRules } from './turn-policy';
 import { buildTurnEnvironment, selectedDirectory, type TurnEnvironment } from './agent-runtime';
@@ -639,7 +640,7 @@ export class WorkbenchService {
           },
           onReplace: (text, nextModel) => {
             if (session.signal.aborted) return;
-            const mutating = (reply.toolCalls ?? []).some(call => ['assistant_create', 'assistant_update', 'artifact_save', 'artifact_revise', 'task_submit', 'knowledge_organize', 'local_mkdir'].includes(call.name) && call.status === 'running');
+            const mutating = (reply.toolCalls ?? []).some(call => ['assistant_create', 'assistant_update', 'artifact_save', 'artifact_revise', 'task_submit', 'knowledge_organize', 'local_mkdir', ...WORKSPACE_MUTATIONS].includes(call.name) && call.status === 'running');
             reply.text = mutating ? text : visibleAssistantText(text, reply.toolCalls, { savedSkill: reply.savedSkill });
             reply.model = nextModel;
             reply.modelName = this.models().find(item => item.id === nextModel)?.name || nextModel;
@@ -660,8 +661,9 @@ export class WorkbenchService {
               try {
                 const result = JSON.parse(call.output) as { path?: unknown; from?: unknown };
                 const paths = conversation.task.managedPaths ?? [];
-                if ((call.name === 'local_copy' || call.name === 'artifact_save' || call.name === 'artifact_revise') && typeof result.path === 'string') conversation.task.managedPaths = [...new Set([...paths, result.path])];
-                if (call.name === 'local_rename' && typeof result.path === 'string') conversation.task.managedPaths = [...new Set([...paths.filter(item => item !== result.from), result.path])];
+                if ((call.name === 'local_copy' || call.name === 'artifact_save' || call.name === 'artifact_revise' || ['local_write', 'local_edit', 'local_restore'].includes(call.name)) && typeof result.path === 'string') conversation.task.managedPaths = [...new Set([...paths, result.path])];
+                if (call.name === 'local_delete' && typeof result.path === 'string') conversation.task.managedPaths = paths.filter(item => item !== result.path);
+                if ((call.name === 'local_rename' || call.name === 'local_move') && typeof result.path === 'string') conversation.task.managedPaths = [...new Set([...paths.filter(item => item !== result.from), result.path])];
               } catch {}
             }
             saveSoon(true);

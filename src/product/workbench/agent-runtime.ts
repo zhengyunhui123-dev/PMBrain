@@ -1,5 +1,5 @@
 import { existsSync, realpathSync, statSync } from 'node:fs';
-import { isAbsolute, relative, resolve, sep } from 'node:path';
+import { extname, isAbsolute, relative, resolve, sep } from 'node:path';
 import type { WorkbenchAgent } from '../../../shared/workbench-agents';
 import type { WorkbenchMessage, WorkbenchTask } from '../../../shared/workbench';
 
@@ -18,7 +18,7 @@ function userDirectories(text: string): string[] {
   const quoted = [...text.matchAll(/["“‘'`]((?:[A-Za-z]:[\\/]|\/)[^"”’'`\r\n]+)["”’'`]/g)].map(match => match[1]!);
   const plain = [...text.matchAll(/(?:^|[\s（(：:])((?:[A-Za-z]:[\\/]|\/)[^\s"”’'`，,。；;！？?<>]+)(?=$|[\s"”’'`，,。；;！？?<>])/g)].map(match => match[1]!);
   return [...new Set([...quoted, ...plain].filter(path => isAbsolute(path)).flatMap(path => {
-    try { return existsSync(path) ? statSync(path).isDirectory() ? [realpathSync(path)] : [] : [resolve(path)]; }
+    try { return existsSync(path) ? statSync(path).isDirectory() ? [realpathSync(path)] : [] : extname(path) ? [] : [resolve(path)]; }
     catch { return [resolve(path)]; }
   }))];
 }
