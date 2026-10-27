@@ -20,6 +20,7 @@ export interface SyncFileInput {
 export interface MaintenanceCheckpoint {
   retiredCapture?: Record<string, { phases: PhaseResult[]; report?: Record<string, unknown> }>;
   captureWindows?:Record<string,PhaseResult>;
+  embeddingWindows?:Record<string,PhaseResult>;
   captureRequests?: Record<string, string[]>;
   phases: Record<string, PhaseResult[]>;
   reports: Record<string, Record<string, unknown>>;
@@ -70,7 +71,7 @@ export type ProductTask =
   | { type: 'embed'; input: { catchUp?: boolean; forceReembed?: boolean; timeoutMs?: number; sourceId?: string; slugs?: string[]; searchOptimize?: boolean } };
 
 export type TaskWorkerMessage =
-  | { type: 'deferred'; phase?: 'capture_entities' | 'search_optimize'; error?: string }
+  | { type: 'deferred'; phase?: 'capture_entities' | 'search_optimize' | 'maintenance_embed'; error?: string }
   | { type: 'progress'; background?: import('../../../shared/task-progress.ts').TaskProductProgress['background']; largeDocument?: import('../../core/document/trusted-large-document.ts').LargeDocumentProgress; syncScan?: import('../../../shared/task-progress.ts').TaskProductProgress['syncScan']; page?: { slug: string; title: string; type: string }; event?: Parameters<import('./progress-adapter').TaskProgressAdapter['event']>[0]; phases?: string[]; scope?: { name: string; index: number; total: number } }
   | { type: 'rpc'; id: number; method: string; args: unknown[]; scope?: number }
   | { type: 'log'; text: string }

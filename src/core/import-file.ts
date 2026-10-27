@@ -2,6 +2,8 @@ import { readFileSync, statSync, lstatSync } from 'fs';
 import { requestImportedEntityCapture } from './pmbrain-adapters/entity-capture-request.ts';
 import { basename, extname } from 'path';
 import { createHash } from 'crypto';
+import {DocumentRuntime,documentResourcePlan,sampleDocumentResources} from './document/resource-policy.ts';
+import {isDeepStrictEqual} from 'node:util';
 import { marked } from 'marked';
 import type { BrainEngine, FileSpec } from './engine.ts';
 import { parseMarkdown } from './markdown.ts';
@@ -16,6 +18,7 @@ import { slugifyPath, slugifyCodePath, isCodeFilePath } from './sync.ts';
 import type { Chunk, ChunkInput, PageInput, PageType } from './types.ts';
 import { computeEffectiveDate } from './effective-date.ts';
 import { MARKDOWN_CHUNKER_VERSION } from './chunkers/recursive.ts';
+import {documentChunkManifest} from './document/chunk-manifest.ts';
 import { logSlugFallback } from './audit-slug-fallback.ts';
 import { resolveContextualRetrievalMode } from './contextual-retrieval-resolver.ts';
 import { assessContentSanity, ContentSanityBlockError, DEFAULT_BYTES_BLOCK } from './content-sanity.ts';
@@ -212,6 +215,7 @@ export interface ImportResult {
   status: 'imported' | 'partial' | 'skipped' | 'error';
   chunks: number;
   error?: string;
+  embeddingPending?: boolean;
   /**
    * Parsed page content. Present for status='imported' AND status='skipped'
    * (skip happens when content is identical to existing page; auto-link still
@@ -299,6 +303,7 @@ export async function importFromContent(
     remote?: boolean;
     /** Optional structural child sections whose chunks inherit parent context. */
     parentSections?: ParentSectionInput[];
+    documentRuntime?:DocumentRuntime;
   } = {},
   trustedStructuredToken?: symbol,
 ): Promise<ImportResult> {
@@ -324,12 +329,13 @@ export async function importFromContent(
   // Uses Buffer.byteLength to count UTF-8 bytes the same way disk size would,
   // so the network path behaves identically to the file path.
   const byteLength = Buffer.byteLength(content, 'utf-8');
-  if (byteLength > MAX_FILE_SIZE) {
+  const sizeLimit=trustedStructuredRequested?documentResourcePlan(sampleDocumentResources()).maxTextBytes:MAX_FILE_SIZE;
+  if (byteLength > sizeLimit) {
     return {
       slug,
       status: 'skipped',
       chunks: 0,
-      error: `Content too large (${byteLength} bytes, max ${MAX_FILE_SIZE}). Split the content into smaller files or remove large embedded assets.`,
+      error: `Content too large (${byteLength} bytes, max ${sizeLimit}). Split the content into smaller files or remove large embedded assets.`,
     };
   }
 
@@ -568,7 +574,7 @@ export async function importFromContent(
       return {slug,status:'skipped',chunks:0,error:'同步检查：需要重新切分',parsedPage};
     }
   }
-  if (contentUnchanged && !trustedLargeDocument) {
+  if (contentUnchanged && !trustedLargeDocument && opts.source_kind!=='document_file') {
     const skipped: ImportResult = { slug, status: 'skipped', chunks: 0, parsedPage };
     return opts.prepareCommit ? opts.prepareCommit(async () => skipped) : skipped;
   }
@@ -610,9 +616,12 @@ export async function importFromContent(
         `${(err as Error).message}. Re-run import after DB recovery.`
       );
     }
-    if (dup && dup.slug !== slug) {
+    if (!existing && dup && dup.slug !== slug) {
       // Look up the duplicate page so we can compare frontmatter.id.
       const dupPage = await engine.getPage(dup.slug, sourceId ? { sourceId } : undefined);
+      if(opts.source_kind==='document_file' && dupPage && !dupPage.frontmatter.document_chunk_hash){
+        return importFromContent(engine,dup.slug,content,opts,trustedStructuredToken);
+      }
       const dupFmId = (dupPage?.frontmatter as Record<string, unknown> | undefined)?.id;
       const dupFmIdStr = typeof dupFmId === 'string' && dupFmId.length > 0 ? dupFmId : null;
       const sameExternalId = fmIdStr !== null && dupFmIdStr === fmIdStr;
@@ -643,9 +652,9 @@ export async function importFromContent(
         for (const child of chunkText(section.text, chunkOpts)) {
           const parentContext = [
             `Parent document: ${parsed.title}`,
-            `Section: ${section.title}`,
-            `Locator: ${section.locator}`,
-            ...(section.chunkContext ? [section.chunkContext] : []),
+            `Section: ${section.title.slice(0,2048)}`,
+            `Locator: ${section.locator.slice(0,2048)}`,
+            ...(section.chunkContext ? [section.chunkContext.slice(0,4096)] : []),
           ].join('\n');
           chunks.push({
             chunk_index: chunks.length,
@@ -671,6 +680,12 @@ export async function importFromContent(
       const fenceChunks = await extractFencedChunks(parsed.compiled_truth, chunks.length);
       chunks.push(...fenceChunks);
     }
+  }
+
+  if(opts.source_kind==='document_file'){
+    const manifest=documentChunkManifest(chunks);
+    parsed.frontmatter.document_chunk_count=manifest.count;
+    parsed.frontmatter.document_chunk_hash=manifest.hash;
   }
 
   // Embed BEFORE the transaction (external API call).
@@ -836,7 +851,10 @@ export async function importFromContent(
 
     // Same content + complete canonical manifest is a true no-op. A prior
     // partial run has NULL/mismatched vectors and therefore falls through.
-    if (contentUnchanged && exactManifest) {
+    if (contentUnchanged && exactManifest && (opts.source_kind!=='document_file'||(
+      existing?.frontmatter.document_chunk_hash===parsed.frontmatter.document_chunk_hash
+      && existing?.frontmatter.document_chunk_count===parsed.frontmatter.document_chunk_count
+      && isDeepStrictEqual(existing?.frontmatter.ocr_receipt,parsed.frontmatter.ocr_receipt)))) {
       largeProgress = {
         ...largeProgress,
         phase: 'completed',
@@ -1038,15 +1056,18 @@ export async function importFromContent(
     });
     if(largeProgress&&!batchedBody){largeProgress={...largeProgress,bodyWritten:chunks.length,bodyCommitted:true,bodyBatchesCompleted:1};logLargeDocumentProgress(slug,largeProgress);}
     if (batchedBody) {
-      const batches=batchLargeDocumentChunks(chunks);
       const pendingIndices=new Set(largePendingChunks.map(chunk=>chunk.chunk_index));
       const committed=opts.noEmbed && existingVersion!==undefined && existingVersion<0
         ? new Map((await engine.getChunks(slug,txOpts)).map(chunk=>[chunk.chunk_index,chunk.chunk_text]))
         : new Map<number,string>();
-      let written=0;
-      for (const [index,batch] of batches.entries()) {
+      let written=0,index=0;
+      while(written<chunks.length){
+        await opts.documentRuntime?.checkpoint(true);
+        const batchSize=opts.documentRuntime?.plan.batchSize??100;
+        const batch=chunks.slice(written,written+batchSize);
+        const batchesTotal=index+Math.ceil((chunks.length-written)/batchSize);
         if(largeProgress){largeProgress={...largeProgress,phase:'writing',bodyWritten:written,bodyCommitted:false,
-          bodyBatchesCompleted:index,bodyBatchesTotal:batches.length};logLargeDocumentProgress(slug,largeProgress);}
+          bodyBatchesCompleted:index,bodyBatchesTotal:batchesTotal};logLargeDocumentProgress(slug,largeProgress);}
         const remaining=batch.filter(chunk=>trustedLargeDocument
           ? committed.get(chunk.chunk_index)!==chunk.chunk_text : needsMarkdownWrite(chunk));
         if(trustedLargeDocument||remaining.length)await engine.transaction(async tx => {
@@ -1060,7 +1081,8 @@ export async function importFromContent(
           }
         });
         written+=batch.length;
-        if(largeProgress){largeProgress={...largeProgress,bodyWritten:written,bodyCommitted:true,bodyBatchesCompleted:index+1};logLargeDocumentProgress(slug,largeProgress);}
+        index++;
+        if(largeProgress){largeProgress={...largeProgress,bodyWritten:written,bodyCommitted:true,bodyBatchesCompleted:index};logLargeDocumentProgress(slug,largeProgress);}
       }
       await engine.transaction(async tx => {
         await guardBody(tx);
@@ -1857,7 +1879,7 @@ export async function importImageFile(
 
   const existing = await engine.getPage(imageSlug, { sourceId: opts.sourceId });
   const gateway = await import('./ai/gateway.ts');
-  const ocrRequested = opts.forceOcr === true || gateway.isOcrEnabled();
+  const ocrRequested = opts.forceOcr ?? gateway.isOcrEnabled();
   let ocrModel: string | null = null;
   if (ocrRequested) {
     try { ocrModel = gateway.getImageOcrModel(); } catch { ocrModel = null; }

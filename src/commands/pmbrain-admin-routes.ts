@@ -116,7 +116,7 @@ import {
   ADMIN_DREAM_SCHEDULE_ENABLED_KEY,
   ADMIN_DREAM_SCHEDULE_LAST_STARTED_DATE_KEY,
   ADMIN_DREAM_SCHEDULE_TIME_KEY,
-  ADMIN_UPLOAD_MAX_BYTES,
+  writeAdminUpload,AdminUploadSizeError,
   classifyAdminUploadFilename,
   firstQueryValue,
   loadAdminReadmeMarkdown,
@@ -1743,11 +1743,11 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
       const run = await productTasks.submitImport({
         path: input.path,
         sourceId: input.sourceId,
-        includeOffice: true,
-        includeImages: true,
+        includeOffice: input.includeOffice,
+        includeImages: input.includeImages,
         noEmbed: !input.autoEmbed,
-        structuredDocuments: true,
-        documentOcr: true,
+        structuredDocuments: input.structuredDocuments,
+        documentOcr: input.documentOcr,
         workers: input.workers,
       });
       sendAdminContract(res, ImportRunResponseSchema, { runId: run.id, status: run.status });
@@ -1766,7 +1766,8 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
           next();
           return;
         }
-        express.raw({ type: 'application/octet-stream', limit: ADMIN_UPLOAD_MAX_BYTES })(req, res, next);
+        if(!req.is('application/octet-stream'))throw new Error('Upload body is required');
+        next();
       } catch (error) {
         const message = error instanceof Error ? error.message : 'import_upload_run_failed';
         res.status(message.startsWith('Unsupported file type:') ? 415 : 400).json({ error: message });
@@ -1777,10 +1778,6 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
       try {
         const fileName = normalizeAdminUploadFilename(req.get('x-pmbrain-filename'));
         const fileKind = classifyAdminUploadFilename(fileName);
-        if (fileKind !== 'session' && (!Buffer.isBuffer(req.body) || req.body.length === 0)) {
-          res.status(400).json({ error: 'Upload body is required' });
-          return;
-        }
         const workersRaw = firstQueryValue(req.query.workers);
         const workers = workersRaw ? Number(workersRaw) : 1;
         if (!Number.isInteger(workers) || workers < 1 || workers > 8) {
@@ -1789,12 +1786,7 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
 
         tempDir = await mkdtemp(joinPath(tmpdir(), 'pmbrain-admin-upload-'));
         const filePath = joinPath(tempDir, fileName);
-        if (fileKind === 'session') {
-          await pipeline(req, createWriteStream(filePath, { flags: 'wx', mode: 0o600 }));
-          if ((await stat(filePath)).size === 0) throw new Error('Upload body is required');
-        } else {
-          await writeFile(filePath, req.body, { flag: 'wx', mode: 0o600 });
-        }
+        await writeAdminUpload(req,filePath,fileKind);
 
         const run = await productTasks.submitImport({
           path: filePath,
@@ -1802,8 +1794,8 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
           includeOffice: true,
           includeImages: true,
           noEmbed: ['0', 'false'].includes(firstQueryValue(req.query.autoEmbed) ?? ''),
-          structuredDocuments: true,
-          documentOcr: true,
+          structuredDocuments: !['0','false'].includes(firstQueryValue(req.query.structuredDocuments)??''),
+          documentOcr: !['0','false'].includes(firstQueryValue(req.query.documentOcr)??''),
           workers,
           stagingDir: tempDir,
         });
@@ -1811,7 +1803,7 @@ export function registerPmbrainAdminRoutes(options: PmbrainAdminRouteOptions): {
       } catch (e) {
         if (tempDir) await removeAdminUploadTempDir(tempDir);
         const message = e instanceof Error ? e.message : 'import_upload_run_failed';
-        res.status(message.startsWith('Unsupported file type:') ? 415 : 400).json({ error: message });
+        res.status(e instanceof AdminUploadSizeError?413:message.startsWith('Unsupported file type:') ? 415 : 400).json({ error: message });
       }
     },
   );

@@ -1,11 +1,32 @@
 import { describe, expect, test } from 'bun:test';
 import { TaskProgressAdapter, finishTaskProgress, taskRunSummary, taskErrorReason } from '../src/product/tasks/progress-adapter.ts';
 import { resumeMaintenanceCheckpoint } from '../src/product/tasks/checkpoint.ts';
-import {taskCanRetry,taskStatus} from '../admin/src/product/task-presentation.ts';
+import {taskCanRetry,taskStatus,taskPhaseSummary} from '../admin/src/product/task-presentation.ts';
 import type {ConsoleRun} from '../shared/contracts/common.ts';
 import type { MaintenanceCheckpoint } from '../src/product/tasks/types.ts';
 
 describe('任务的产品进度', () => {
+  test('导入切换文件及逐图识别时保留整批文件计数，识图进度单独更新', () => {
+    const adapter = new TaskProgressAdapter('import_path');
+    adapter.plan(['collect', 'process', 'write']);
+    adapter.write('{"event":"start","phase":"import.files","total":177}\n');
+    expect(adapter.view.processed).toBe(0); expect(adapter.view.total).toBe(177);
+    adapter.event({ phase: 'import.process', file: 'one.docx' });
+    adapter.event({ phase: 'import.files', done: 17 });
+    adapter.event({ phase: 'import.write', file: 'one.docx' });
+    adapter.event({ phase: 'import.process', file: 'two.docx' });
+    expect(adapter.view.total).toBe(177); expect(adapter.view.processed).toBe(17);
+    adapter.event({ phase: 'import.process.ocr', event: 'tick', done: 2, total: 34, unit: '张图片', stage: '图片识别' });
+    expect(adapter.view.processed).toBe(17); expect(adapter.view.total).toBe(177);
+    expect(adapter.view.phaseProgress?.completed).toBe(2); expect(adapter.view.phaseProgress?.total).toBe(34);
+    expect(adapter.view.stage).toContain('图片识别');
+    const run = {kind: 'import_path', status: 'running', product: adapter.view} as ConsoleRun;
+    expect(taskPhaseSummary(run).count).toBe('17 / 177 份资料');
+    expect(taskPhaseSummary(run).remaining).toBe('160 个');
+    adapter.event({ phase: 'import.process', file: 'three.docx' });
+    expect(adapter.view.phaseProgress?.completed).toBeNull();
+    expect(adapter.view.phaseProgress?.total).toBeNull();
+  });
   test('整批处理结束但三份失败时显示部分完成，不把最后的写入步骤标成整批故障', () => {
     const adapter = new TaskProgressAdapter('import_path');
     adapter.event({ phase: 'import.files', done: 9, total: 9 });
@@ -227,6 +248,14 @@ describe('任务的产品进度', () => {
       expect(result.metrics).toContainEqual({label:'正文实体关联',value:4});
       expect(result.metrics).toContainEqual({label:'关系类型关联',value:2});
       expect(result.metrics).toContainEqual({label:'历史待补关联',value:3});
+    }
+  });
+  test('维护向量阶段有待处理分块时保留可见剩余数量',()=>{
+    for(const kind of ['dream_quick','dream_full']){
+      const adapter=new TaskProgressAdapter(kind);adapter.plan(['embed']);
+      const result=finishTaskProgress(adapter.view,'completed',{phases:[{phase:'embed',status:'warn',details:{vectorizationDeferred:true,remainingChunks:2,embedded:3}}]},null);
+      expect(result.steps.find(step=>step.phases.includes('embed'))?.detail).toContain('向量化等待继续');
+      expect(result.steps.find(step=>step.phases.includes('embed'))?.detail).toContain('已保存 3 个向量，剩余 2 个分块');
     }
   });
 });

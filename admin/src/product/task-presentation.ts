@@ -9,11 +9,12 @@ export function taskPhaseSummary(run: ConsoleRun, now = Date.now()) {
     :phase?phase.elapsedMs+(run.status==='running'&&phase.startedAt?Math.max(0,now-Date.parse(phase.startedAt)):0):null;
   const seconds=elapsed==null?null:Math.floor(elapsed/1000);
   const sync=phase?.id==='sync'&&!view?.syncScan?.active?view?.syncFiles:undefined;
-  const completed=sync?.completed??phase?.completed??(phase?null:view?.processed??null);
-  const total=sync?.total??phase?.total??(phase?null:view?.total??null);
-  const remaining=sync?.remaining??phase?.remaining;
+  const importing=run.kind==='import_path';
+  const completed=importing?view?.processed??null:sync?.completed??phase?.completed??(phase?null:view?.processed??null);
+  const total=importing?view?.total??null:sync?.total??phase?.total??(phase?null:view?.total??null);
+  const remaining=importing?(total!=null&&completed!=null?Math.max(0,total-completed):null):sync?.remaining??phase?.remaining;
   const fresh=view?.heartbeatAt!=null&&now-Date.parse(view.heartbeatAt)<30000;
-  return {count:completed==null?'待统计':`${completed} / ${total??'待统计'} ${sync?'份资料':phase?.unit??'项'}`,
+  return {count:completed==null?'待统计':`${completed} / ${total??'待统计'} ${importing||sync?'份资料':phase?.unit??'项'}`,
     durationLabel:terminal?'任务耗时':'阶段耗时',
     duration:seconds==null?'暂未记录':seconds<60?`${seconds} 秒`:`${Math.floor(seconds/60)} 分 ${seconds%60} 秒`,
     remaining:remaining==null?'待统计':`${remaining} 个`,active:run.status==='running'&&fresh?phase?.active:null,failed:view?.failedUnits??0};

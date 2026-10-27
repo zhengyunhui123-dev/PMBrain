@@ -6,6 +6,7 @@ import { stat } from 'node:fs/promises';
 import { withPgliteSavepoints } from '../database/savepoints';
 import type { SyncFileInput } from './types.ts';
 import { validateSyncFileSnapshot, syncFileManifest, syncFileManifestKey } from './sync-file-queue.ts';
+import {readDocumentChunkManifest} from '../../core/document/chunk-manifest.ts';
 import { withSqlCancellation } from './sql-cancellation.ts';
 import { TaskResourceGuard, assertImportFileSize } from './resource-guard.ts';
 import { leaseRenewal } from '../database/lease-renewal.ts';
@@ -36,7 +37,7 @@ export class TaskEngineHost {
   private cycleLocks = new Set<string>();
   private cleanupOwner: BrainEngine;
   private currentFile?: { path: string; size: number; mtimeMs: number };
-  private receipts = new Map<number, { slug: string; status: string; pageHash: string; chunks: number; sourceId:string }>();
+  private receipts = new Map<number, { slug: string; status: string; pageHash: string; chunks: number; sourceId:string;chunkHash?:string }>();
   private checkedPages = new Map<number, Set<string>>();
   private abort = new AbortController();
   private relationPhase = 'sync';
@@ -189,9 +190,10 @@ export class TaskEngineHost {
       if (args[0] === true && scope.transactional) await this.validateFile();
       const receipt = this.receipts.get(scopeId!);
       if (args[0] === true && scope.transactional && receipt?.pageHash && this.saveFileReceipt) {
-        const counted=await scope.engine.executeRaw<{count:number}>('SELECT count(*)::int AS count FROM content_chunks WHERE page_id=(SELECT id FROM pages WHERE slug=$1 AND source_id=$2)',[receipt.slug,receipt.sourceId]);
-        receipt.chunks=counted[0].count;
-        if(this.syncFile)await (scope.engine as BrainEngine).setConfig(syncFileManifestKey(this.syncFile),JSON.stringify(syncFileManifest(this.syncFile,receipt.slug,receipt.pageHash,receipt.chunks)));
+        const [page]=await scope.engine.executeRaw<{id:number}>('SELECT id FROM pages WHERE slug=$1 AND source_id=$2',[receipt.slug,receipt.sourceId]);
+        const manifest=await readDocumentChunkManifest(scope.engine,page.id);
+        receipt.chunks=manifest.chunks;receipt.chunkHash=manifest.chunk_hash;
+        if(this.syncFile)await (scope.engine as BrainEngine).setConfig(syncFileManifestKey(this.syncFile),JSON.stringify(syncFileManifest(this.syncFile,receipt.slug,receipt.pageHash,receipt.chunks,false,receipt.chunkHash)));
         if(this.syncFile)await recordSyncedGitFile(scope.engine,this.auditJobId,receipt.sourceId,{path:this.syncFile.relativePath,hash:this.syncFile.hash});
         const rows = await scope.engine.executeRaw(`UPDATE minion_jobs SET result = $3::jsonb, updated_at = now()
           WHERE id = $1 AND status = 'active' AND lock_token = $2 RETURNING id`, [this.jobId, this.token, JSON.stringify(receipt)]);

@@ -9,6 +9,7 @@ export function phaseHasPendingWork(phase:DreamPhaseState):boolean{
 }
 export function dreamPhaseDetail(phase:DreamPhaseState):string|undefined{
   const d=phase.details??{};
+  if(d.vectorizationDeferred)return `向量化等待继续，已保存 ${d.embedded??0} 个向量，剩余 ${d.remainingChunks??0} 个分块`;
   if(d.reason==='not_configured')return '未配置本阶段所需的原始对话输入';
   if(d.reason==='not_in_active_pack')return '当前知识包未启用本阶段';
   if(d.reason==='disabled'||phase.summary?.includes('enabled=false')||phase.summary?.includes('enabled is false'))return '本阶段已关闭';

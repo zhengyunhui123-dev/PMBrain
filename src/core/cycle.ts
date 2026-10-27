@@ -485,6 +485,7 @@ export interface CycleOpts {
   embedBatchSize?: number;
   getEmbedBatchSize?: () => number;
   embedTimeBudgetMs?: number;
+  embedRuntime?: (sourceId?:string)=>Promise<PhaseResult>;
   /** Absolute deadline inherited from the owning Minion job. */
   deadlineAtMs?: number | null;
   /** Owning Minion job id for phase-created dream-inline private queues. */
@@ -1319,6 +1320,7 @@ async function runPhaseEmbed(
   batchSize?: number,
   getBatchSize?: () => number,
   timeBudgetMs?: number,
+  embedRuntime?: CycleOpts['embedRuntime'],
 ): Promise<PhaseResult> {
   try {
     const { loadConfig } = await import('./config.ts');
@@ -1342,6 +1344,7 @@ async function runPhaseEmbed(
         },
       };
     }
+    if(embedRuntime&&!dryRun)return await embedRuntime(sourceId);
     const { runEmbedCore } = await import('../commands/embed.ts');
     const result = await runEmbedCore(engine, {
       stale: true,
@@ -2818,6 +2821,7 @@ export async function runCycle(
           opts.embedBatchSize,
           opts.getEmbedBatchSize,
           opts.embedTimeBudgetMs,
+          opts.embedRuntime,
         ));
         result.duration_ms = duration_ms;
         phaseResults.push(result);

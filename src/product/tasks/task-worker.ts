@@ -25,11 +25,14 @@ import { format } from 'node:util';
 import { stat } from 'node:fs/promises';
 import { setImmediate as yieldExecution, setTimeout as waitForBatch } from 'node:timers/promises';
 import type { VectorizationSchedule } from '../../../shared/background-vectorization';
+import {DocumentRuntime,type DocumentResourceSample} from '../../core/document/resource-policy.ts';
 import { streamFileHash, assertImportFileSize, isOversizedImportError, resourceProtectionAbortsTask } from './resource-guard.ts';
 import { relative, isAbsolute, join } from 'node:path';
 import { SyncFilesDeferred, type SyncFileRuntime } from '../../core/sync-file-runtime.ts';
 import {EntityCaptureWindowDeferred} from '../../core/pmbrain-adapters/entity-capture-window.ts';
 import {mergeCaptureWindow} from './capture-window.ts';
+import {runMaintenanceVectorization,mergeEmbeddingWindow,MaintenanceVectorizationDeferred,type MaintenanceVectorizationState} from './maintenance-vectorization.ts';
+import {readDocumentChunkManifest} from '../../core/document/chunk-manifest.ts';
 import { classifyErrorCode, isInfrastructureFailureCode } from '../../core/sync-failure-ledger.ts';
 import { performSync } from '../../commands/sync.ts';
 import { readTaskCheckpoint, taskModelFingerprint, syncFileContentFingerprint, retireAutomaticCapture } from './checkpoint.ts';
@@ -161,8 +164,7 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
       let oversized=false;
       try{assertImportFileSize(relativePath,snapshot.size);}catch{oversized=true;}
       send({type:'progress',syncScan:{scanned,unchanged,path:relativePath,bytes:snapshot.size,updatedAt:new Date().toISOString(),active:true}});
-      const knownHash=await rpc('task.syncFileHash',[{sourceRoot,relativePath,options,originalSize:snapshot.size,originalMtime:snapshot.mtimeMs}]) as string|null;
-      const hash = oversized?`oversize:${snapshot.size}:${snapshot.mtimeMs}`:knownHash??await streamFileHash(path,abort.signal);
+      const hash = oversized?`oversize:${snapshot.size}:${snapshot.mtimeMs}`:await streamFileHash(path,abort.signal);
       const result = await rpc('task.syncFile', [{ path, relativePath, sourceRoot, originalPath,
         originalSize: snapshot.size, originalMtime: snapshot.mtimeMs, hash,
         modelFingerprint: taskModelFingerprint(),
@@ -218,11 +220,18 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
         if(capture.details.window_deferred)checkpoint.captureWindows={...checkpoint.captureWindows,[sourceId]:combined};
         else if(checkpoint.captureWindows)delete checkpoint.captureWindows[sourceId];
       }
-      checkpoint.phases[sourceId] = phases.filter(phase=>!phase.details.window_deferred);
+      const embed=phases.find(phase=>phase.phase==='embed');
+      if(embed&&!checkpoint.phases[sourceId]?.some(phase=>phase.phase==='embed')){
+        Object.assign(embed,mergeEmbeddingWindow(checkpoint.embeddingWindows?.[sourceId],embed));
+        if(embed.details.vectorizationDeferred)checkpoint.embeddingWindows={...checkpoint.embeddingWindows,[sourceId]:embed};
+        else if(checkpoint.embeddingWindows)delete checkpoint.embeddingWindows[sourceId];
+      }
+      checkpoint.phases[sourceId] = phases.filter(phase=>!phase.details.window_deferred&&!phase.details.vectorizationDeferred);
       const budget=(await import('../../core/ai/gateway')).getTaskBudgetTracker();
       if(budget?.stopReason&&checkpoint.phases[sourceId]?.length){const last=checkpoint.phases[sourceId]!.at(-1)!;last.status='warn';last.details={...last.details,task_budget_stopped:true};}
       await rpc('task.maintenanceCheckpoint', [checkpoint]);
       await checkDreamBudget();
+      if(embed?.details.vectorizationDeferred)throw new MaintenanceVectorizationDeferred();
     },
     });
   };
@@ -261,6 +270,10 @@ async function runDreamTask(engine: BrainEngine, input: Extract<ProductTask, { t
     embedBatchSize: constrained?32:100,
     getEmbedBatchSize:()=>constrained?32:100,
     embedTimeBudgetMs: 10 * 60 * 1000,
+    embedRuntime:!input.dryRun?async(sourceId?:string)=>runMaintenanceVectorization(engine,sourceId,()=>rpc('task.maintenanceVectorizationState',[]) as Promise<MaintenanceVectorizationState>,{
+      pageLimit:input.maxPages,signal:abort.signal,
+      onProgress:(schedule,slug,done,total)=>send({type:'progress',background:schedule,event:{phase:'embed',file:slug,stage:`${schedule.reason} · 当前资料 ${done}/${total} 段已保存`}}),
+    }):undefined,
     proposeTakesRequireChunks: true,
     proposeTakesDrain: input.drainProposals,
     proposeTakesWindowMs: (input.windowSeconds ?? 3600) * 1000,
@@ -432,12 +445,13 @@ async function executeTask(task: ProductTask, kind: BrainEngine['kind']) {
     send({type:'progress',event:{phase:'import.process',file:importFile}});
     await rpc('task.inputFile', [{ path: input.originalPath ?? input.path, size: snapshot.size, mtimeMs: snapshot.mtimeMs }]);
     try {
-      const imported = await importSyncFile(engine, input.path, input.relativePath, input.options);
+      const imported = await importSyncFile(engine, input.path, input.relativePath, input.options,new DocumentRuntime({signal:abort.signal,sample:()=>rpc('task.documentResources',[]) as Promise<DocumentResourceSample>}));
       abort.signal.throwIfAborted();
       const page = imported.slug ? await engine.getPage(imported.slug, { sourceId: input.options.sourceId }) : null;
+      const manifest=page?await readDocumentChunkManifest(engine,page.id):undefined;
       result = { slug: imported.slug, status: imported.error && imported.error !== 'unchanged' ? 'failed' : imported.status, chunks: imported.chunks,
         error: imported.error, documentSummary: imported.documentSummary, largeDocument: imported.largeDocument,
-        pageHash: page?.content_hash, file: input.relativePath };
+        pageHash: page?.content_hash, chunkHash:manifest?.chunk_hash, file: input.relativePath };
     } catch (error) {
       abort.signal.throwIfAborted();
       const message = error instanceof Error ? error.message : String(error);
@@ -472,7 +486,7 @@ async function executeTask(task: ProductTask, kind: BrainEngine['kind']) {
       for (const file of await readTaskCheckpoint(input.resumeCheckpointId)) {
         if (file.completed !== true || file.modelFingerprint !== taskModelFingerprint()) continue;
         const current = await stat(String(file.absolutePath)).catch(() => null);
-        if (current?.size === file.size && current?.mtimeMs === file.mtimeMs) {
+        if (current?.size === file.size && typeof file.hash==='string' && await streamFileHash(String(file.absolutePath),abort.signal)===file.hash) {
           completedPaths.push(String(file.path));
           const slug = typeof file.slug === 'string' ? file.slug : '';
           if (vectorsRequested && file.vectorize === true && slug.length > 0 && !slug.includes(':')) resumedVectorSlugs.push(slug);
@@ -490,6 +504,7 @@ async function executeTask(task: ProductTask, kind: BrainEngine['kind']) {
       structuredDocuments: input.structuredDocuments,
     }, {
       sourceId: input.sourceId,
+      documentRuntime:new DocumentRuntime({signal:abort.signal,sample:()=>rpc('task.documentResources',[]) as Promise<DocumentResourceSample>}),
       runtime: {
         signal: abort.signal,
         completedPaths,
@@ -497,7 +512,7 @@ async function executeTask(task: ProductTask, kind: BrainEngine['kind']) {
           importFile = path;
           send({ type: 'progress', event: { phase: 'import.process', file: path } });
           const file = await stat(path);
-          fileSnapshot = { absolutePath: path, size: file.size, mtimeMs: file.mtimeMs, modelFingerprint: taskModelFingerprint() };
+          fileSnapshot = { absolutePath: path, size: file.size, mtimeMs: file.mtimeMs, hash:await streamFileHash(path,abort.signal), modelFingerprint: taskModelFingerprint() };
           try {
             await rpc('task.inputFile', [{ path, size: file.size, mtimeMs: file.mtimeMs }]);
           } catch (error) {
@@ -609,6 +624,7 @@ parentPort!.on('message', message => {
     abort = new AbortController();
     importFile = undefined;
     void execute(message.task, message.kind).catch(error => {
+      if(error instanceof MaintenanceVectorizationDeferred){send({type:'deferred',phase:'maintenance_embed'});return;}
       if(error instanceof EntityCaptureWindowDeferred){send({type:'deferred',phase:'capture_entities'});return;}
       if (error instanceof SyncFilesDeferred) { send({ type: 'deferred' }); return; }
       send({ type: 'error', error: error instanceof Error ? error.message : String(error) });

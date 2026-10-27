@@ -49,7 +49,7 @@ import {
   knowledgeSearchModeLabel,
   summarizeKnowledgeSearch,
   MAX_KNOWLEDGE_ATTACHMENTS,
-  MAX_KNOWLEDGE_ATTACHMENT_BYTES,
+  knowledgeAttachmentByteLimit,
   KNOWLEDGE_ATTACHMENT_EXTENSIONS,
   KNOWLEDGE_ATTACHMENT_ACCEPT,
   KnowledgeAttachment,
@@ -148,8 +148,8 @@ function NaturalLanguagePanel({
         warnings.add(`${file.name} 是空文件`);
         continue;
       }
-      if (extension !== '.jsonl' && file.size > MAX_KNOWLEDGE_ATTACHMENT_BYTES) {
-        warnings.add(`${file.name} 超过 ${attachmentSizeLabel(MAX_KNOWLEDGE_ATTACHMENT_BYTES)} 限制`);
+      if (extension !== '.jsonl' && file.size > knowledgeAttachmentByteLimit(file.name)) {
+        warnings.add(`${file.name} 超过 ${attachmentSizeLabel(knowledgeAttachmentByteLimit(file.name))} 限制`);
         continue;
       }
       if (existing.has(id)) continue;
@@ -192,7 +192,7 @@ function NaturalLanguagePanel({
         sourceId: importOptions?.sourceId,
         autoEmbed: importOptions?.autoEmbed ?? true,
         structuredDocuments: importOptions?.structuredDocuments ?? true,
-        documentOcr: true,
+        documentOcr: importOptions?.documentOcr??true,
         workers: importOptions?.workers ?? 1,
       }) as { runId: string };
       lastRun = await waitForConsoleRun(response.runId, setRun);
@@ -394,11 +394,11 @@ function NaturalLanguagePanel({
         const response = await api.startImportRun({
           path: value,
           sourceId: importOptions?.sourceId,
-          includeOffice: true,
-          includeImages: true,
-          autoEmbed: true,
-          structuredDocuments: true,
-          documentOcr: true,
+          includeOffice: importOptions?.includeOffice??true,
+          includeImages: importOptions?.includeImages??true,
+          autoEmbed: importOptions?.autoEmbed??true,
+          structuredDocuments: importOptions?.structuredDocuments??true,
+          documentOcr: importOptions?.documentOcr??true,
           workers: importOptions?.workers ?? 1,
         }) as { runId: string };
         first = await api.run(response.runId) as ConsoleRun;

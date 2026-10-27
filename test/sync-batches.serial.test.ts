@@ -14,6 +14,8 @@ import { MinionQueue } from '../src/core/minions/queue.ts';
 import { MinionWorker } from '../src/core/minions/worker.ts';
 import { SYNC_FILE_QUEUE, SyncFileQueue } from '../src/product/tasks/sync-file-queue.ts';
 import { assertSafeE2eDatabaseUrl } from './helpers/db-guard.ts';
+import JSZip from 'jszip';
+import {importOfficeFile} from '../src/core/office-import.ts';
 
 const database = process.env.PMBRAIN_TASK_TEST_DATABASE_URL;
 const keys = ['PMBRAIN_HOME','GBRAIN_HOME','DATABASE_URL','PMBRAIN_DATABASE_URL','GBRAIN_DATABASE_URL'];
@@ -95,7 +97,7 @@ test('文件统计只统计 parent_job_id，过期子任务被回收后父任务
   expect((await queue.getJob(parent.id))?.status).toBe('waiting');
 },60000);
 
-test('超过 5000 条历史也认领旧页面，源 SHA256 与页面 hash 分开保存，换模型不重复同步',async () => {
+test('超过 5000 条历史的旧页面先核验一次，源 SHA256 与分块回执分开保存，换模型不重复同步',async () => {
   const file=join(home,'legacy-source.md');const content='# 老页面\n\n已导入的资料应当认领，而不是重新生成任务。';writeFileSync(file,content);
   await importFile(engine,file,'legacy-source.md',{noEmbed:true});
   const queue=new MinionQueue(engine);
@@ -107,12 +109,12 @@ test('超过 5000 条历史也认领旧页面，源 SHA256 与页面 hash 分开
   const input={path:file,relativePath:'legacy-source.md',sourceRoot:home,originalPath:file,originalSize:info.size,originalMtime:info.mtimeMs,
     hash:createHash('sha256').update(content).digest('hex'),fingerprint:syncFileContentFingerprint(options),modelFingerprint:'old-model',options};
   const files=new SyncFileQueue(engine);
-  expect(await files.sourceHash(input)).toBeNull();
-  expect((await files.enqueue(parent.id,'legacy-token',input)).unchanged).toBe(true);
+  expect((await files.enqueue(parent.id,'legacy-token',input)).deferred).toBe(true);
+  const verified=await importFile(engine,file,'legacy-source.md',{noEmbed:true,forceRechunk:true});
+  const current=await engine.getPage(verified.slug);await files.remember(input,{...verified,pageHash:current!.content_hash??''});
   const receipt=JSON.parse((await engine.getConfig(syncFileManifestKey(input)))!);
   expect(receipt.hash).toBe(input.hash);expect(receipt.pageHash).not.toBe(receipt.hash);
-  expect(await files.sourceHash(input)).toBe(input.hash);
-  expect(await files.sourceHash({...input,originalMtime:info.mtimeMs+1})).toBeNull();
+  expect(receipt.chunkHash).toBeString();
   expect((await files.enqueue(parent.id,'legacy-token',{...input,modelFingerprint:'different-model-and-api-key'})).unchanged).toBe(true);
   expect((await files.counts(parent.id)).total).toBe(0);
   expect(await engine.getConfig(syncFileManifestKey({...input,options:{...options,sourceId:'another-source'}}))).toBeNull();
@@ -138,12 +140,30 @@ test('停止发生在领任务请求途中时，退回任务且不开始处理',
   expect((await queue.getJob(job.id))?.attempts_started).toBe(0);
 },60000);
 
+test('旧文件完成回执缺少页面指纹时不能跳过损坏分块的核验',async()=>{
+  const file=join(home,'unverified.md');writeFileSync(file,'# Receipt\n\n缺少指纹的旧回执不能证明分块完整。');
+  const result=await importFile(engine,file,'unverified.md',{noEmbed:true});
+  const page=(await engine.getPage(result.slug))!;
+  await engine.executeRaw('UPDATE content_chunks SET chunk_text=$2 WHERE page_id=$1',[page.id,'CORRUPTED SAME COUNT']);
+  const info=statSync(file),options={sourceId:'default',noEmbed:true};
+  const input={path:file,relativePath:'unverified.md',sourceRoot:home,originalPath:file,originalSize:info.size,originalMtime:info.mtimeMs,
+    hash:createHash('sha256').update(readFileSync(file)).digest('hex'),fingerprint:syncFileContentFingerprint(options),modelFingerprint:'isolated',options};
+  const queue=new MinionQueue(engine),parent=await queue.add('unverified-parent',{},{queue:'unverified-parent'});
+  await queue.claim('unverified-token',3600000,'unverified-parent',['unverified-parent']);
+  const child=await queue.add('pmbrain-sync-file',{sessionId:parent.id,task:{type:'sync-file',input}},{queue:SYNC_FILE_QUEUE,delay:86400000});
+  await engine.executeRaw("UPDATE minion_jobs SET parent_job_id=$1,status='completed',result=$3::jsonb WHERE id=$2",[parent.id,child.id,{slug:result.slug,status:'imported',chunks:result.chunks}]);
+  const files=new SyncFileQueue(engine),checked=await files.enqueue(parent.id,'unverified-token',input);
+  expect(checked.deferred).toBe(true);expect(checked.unchanged).toBeUndefined();expect((await files.counts(parent.id)).remaining).toBe(1);
+},60000);
+
 test('旧 Office 内容去重回执不因原页面路径不同重复入队，跳过的零新增分块不能覆盖已有分块数',async()=>{
-  const file=join(home,'office-copy.docx');writeFileSync(file,'isolated original Office bytes');
+  const file=join(home,'office-copy.docx');const zip=new JSZip();
+  zip.file('word/document.xml','<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>旧 Office 保持原页面与来源路径。</w:t></w:r></w:p></w:body></w:document>');
+  writeFileSync(file,await zip.generateAsync({type:'uint8array'}));
   const info=statSync(file);
-  await importFromContent(engine,'office-original','# 旧 Office\n\n保持原页面与来源路径。',{noEmbed:true,sourcePath:'backups\\office-original-v1.docx'});
-  const page=(await engine.getPage('office-original'))!;
-  const chunks=await engine.getChunks('office-original');
+  const original=await importOfficeFile(engine,file,'backups/office-original-v1.docx',{noEmbed:true,documentOcr:true});
+  const page=(await engine.getPage(original.slug))!;
+  const chunks=await engine.getChunks(original.slug);
   expect(chunks.length).toBeGreaterThan(0);
   const options={sourceId:'default',noEmbed:true,includeOffice:true,documentOcr:true};
   const input={path:file,relativePath:'backups/office-copy.docx',sourceRoot:home,originalPath:file,originalSize:info.size,originalMtime:info.mtimeMs,
@@ -163,8 +183,8 @@ test('旧 Office 内容去重回执不因原页面路径不同重复入队，跳
   await queue.claim('office-mapping-next-token',3600000,'office-mapping-next',['office-mapping-next']);
   expect((await files.enqueue(next.id,'office-mapping-next-token',input)).unchanged).toBe(true);
   expect((await files.counts(next.id)).total).toBe(0);
-  expect(await engine.getPage('office-original')).toEqual(page);
-  expect(await engine.getChunks('office-original')).toEqual(chunks);
+  expect(await engine.getPage(original.slug)).toEqual(page);
+  expect(await engine.getChunks(original.slug)).toEqual(chunks);
 },60000);
 
 test('升级后复用旧指纹的未完成任务，已导入的旧排队文件退出队列',async () => {
@@ -181,7 +201,8 @@ test('升级后复用旧指纹的未完成任务，已导入的旧排队文件�
   expect((await files.enqueue(parent.id,'upgrade-token',input)).deferred).toBe(true);
   expect((await files.counts(parent.id)).total).toBe(1);
   expect((((await queue.getJob(old.id))!.data.task as {input:typeof input}).input).fingerprint).toBe(input.fingerprint);
-  await importFile(engine,file,input.relativePath,options);
+  const verified=await importFile(engine,file,input.relativePath,{...options,forceRechunk:true});
+  await files.remember(input,{...verified,pageHash:(await engine.getPage(verified.slug))!.content_hash??''});
   expect((await files.enqueue(parent.id,'upgrade-token',input)).unchanged).toBe(true);
   expect((await files.counts(parent.id)).total).toBe(0);
   expect((await queue.getJob(old.id))?.status).toBe('cancelled');

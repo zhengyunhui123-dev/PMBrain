@@ -4,21 +4,21 @@ import { normalizeDocumentText } from '../normalize.ts';
 import type { DocumentParseOptions, DocumentSection, StructuredDocument } from '../types.ts';
 import { markdownToSections } from './markdown-sections.ts';
 import { pdfRuntimeOptions } from '../pdf-runtime.ts';
+import {DocumentRuntime} from '../resource-policy.ts';
+import {renderDocumentSection} from '../markdown-renderer.ts';
 
-async function parseWithPdfParse(buffer: Buffer, title: string, fallback?: string): Promise<StructuredDocument> {
+async function parseWithPdfParse(buffer: Buffer, title: string, fallback?: string,runtime=new DocumentRuntime()): Promise<StructuredDocument> {
   const { PDFParse } = await import('pdf-parse');
   const parser = new PDFParse({ data: buffer, ...pdfRuntimeOptions() });
   try {
-    const result = await parser.getText({ pageJoiner: '\n<!-- PMBRAIN_PAGE page_number -->\n' });
-    const pages = result.text.split(/<!-- PMBRAIN_PAGE (\d+) -->/);
+    const info=await parser.getInfo();
     const sections: DocumentSection[] = [];
-    let page = 1;
-    for (let i = 0; i < pages.length; i++) {
-      if (i % 2 === 1) {
-        page = Number(pages[i]) + 1;
-        continue;
-      }
-      const text = normalizeDocumentText(pages[i]);
+    let bytes=0;
+    for(let page=1;page<=info.total;page++){
+      await runtime.checkpoint(true);
+      const result=await parser.getText({partial:[page],pageJoiner:''});
+      const text = normalizeDocumentText(result.pages.map(item=>item.text).join('\n'));
+      bytes+=Buffer.byteLength(text);runtime.assertText(bytes);
       if (text) sections.push(...markdownToSections(text, { page }, `pdf-fallback-p${page}`));
     }
     return {
@@ -30,7 +30,7 @@ async function parseWithPdfParse(buffer: Buffer, title: string, fallback?: strin
         local: true,
         structured: false,
         fallback,
-        pageCount: result.total,
+        pageCount: info.total,
         tableCount: 0,
         imageCount: 0,
         ocrUsed: false,
@@ -45,22 +45,32 @@ async function addOcrPages(
   document: StructuredDocument,
   pagesNeedingOcr: number[],
   ocrPage: NonNullable<DocumentParseOptions['ocrPage']>,
+  runtime=new DocumentRuntime(),
 ): Promise<void> {
   if (pagesNeedingOcr.length === 0) return;
   const { PDFParse } = await import('pdf-parse');
   const parser = new PDFParse({ data: buffer, ...pdfRuntimeOptions() });
   try {
+    let completed=0,textBytes=document.sections.reduce((sum,section)=>sum+Buffer.byteLength(renderDocumentSection(section))+2,0);
+    runtime.assertText(textBytes);
+    for(const requestedPage of pagesNeedingOcr){
+    await runtime.checkpoint(true);
     const screenshots = await parser.getScreenshot({
-      partial: pagesNeedingOcr,
+      partial: [requestedPage],
       desiredWidth: 1800,
       imageBuffer: true,
     });
-    for (const screenshot of screenshots.pages) {
+    const pages = screenshots.pages.filter(screenshot => screenshot.data?.length);
+    if(!completed)process.stderr.write(`${JSON.stringify({ event: 'start', phase: 'import.process.ocr', done: 0, total: pagesNeedingOcr.length, unit: '页', stage: '图片识别' })}\n`);
+    for (const [index, screenshot] of pages.entries()) {
       if (!screenshot.data?.length) continue;
       const result = await ocrPage(screenshot.pageNumber, Buffer.from(screenshot.data), 'image/png');
-      if (result.status !== 'skipped') document.metadata.ocrAttempted = (document.metadata.ocrAttempted ?? 0) + 1;
+      if (result.status !== 'skipped'&&!result.reused) document.metadata.ocrAttempted = (document.metadata.ocrAttempted ?? 0) + 1;
+      if(result.reused)document.metadata.ocrReused=(document.metadata.ocrReused??0)+1;
+      if(result.recognizedAt && (!document.metadata.ocrProcessedAt || result.recognizedAt>document.metadata.ocrProcessedAt))document.metadata.ocrProcessedAt=result.recognizedAt;
       if (result.status === 'success') {
         const text = normalizeDocumentText(result.text);
+        textBytes+=Buffer.byteLength(text)+2;runtime.assertText(textBytes);
         if (text) document.sections.push(...markdownToSections(text, { page: screenshot.pageNumber }, `pdf-ocr-p${screenshot.pageNumber}`));
         document.metadata.ocrUsed = true;
         document.metadata.ocrSucceeded = (document.metadata.ocrSucceeded ?? 0) + 1;
@@ -71,6 +81,8 @@ async function addOcrPages(
       }
       if (result.model) document.metadata.ocrProvider = result.model;
       if (result.message) document.metadata.ocrWarnings = [...(document.metadata.ocrWarnings ?? []), `第 ${screenshot.pageNumber} 页：${result.message}`];
+      completed++;process.stderr.write(`${JSON.stringify({ event: 'tick', phase: 'import.process.ocr', done: completed, total: pagesNeedingOcr.length, unit: '页', stage: '图片识别' })}\n`);
+    }
     }
   } finally {
     await parser.destroy();
@@ -78,16 +90,30 @@ async function addOcrPages(
 }
 
 export async function parsePdfDocument(filePath: string, opts: DocumentParseOptions = {}): Promise<StructuredDocument> {
+  const runtime=opts.runtime??new DocumentRuntime();await runtime.checkpoint(true);
   const buffer = readFileSync(filePath);
   const title = basename(filePath, extname(filePath));
-  if (opts.structured === false) return parseWithPdfParse(buffer, title);
+  if (opts.structured === false) return parseWithPdfParse(buffer, title,undefined,runtime);
 
+  let processingOcr=false;
   try {
-    const { extractPagesMarkdown, extractTextWithPositions } = await import('@firecrawl/pdf-inspector');
-    const result = extractPagesMarkdown(buffer);
-    const sections = result.pages.flatMap(page =>
-      markdownToSections(page.markdown, { page: page.page + 1 }, `pdf-p${page.page + 1}`),
-    );
+    const { classifyPdf,extractPagesMarkdown, extractTextWithPositions } = await import('@firecrawl/pdf-inspector');
+    const classification=classifyPdf(buffer);
+    const sections:DocumentSection[]=[];const pagesWithTables:number[]=[],pagesNeedingOcr:number[]=[];
+    let textBytes=0;
+    for(let page=0;page<classification.pageCount;){
+      await runtime.checkpoint(true);
+      const count=Math.min(Math.max(1,Math.floor(runtime.plan.rows/12)),16,classification.pageCount-page);
+      const requested=Array.from({length:count},(_,i)=>page+i);
+      const extracted=extractPagesMarkdown(buffer,requested);
+      for(const item of extracted.pages){textBytes+=Buffer.byteLength(item.markdown);runtime.assertText(textBytes);sections.push(...markdownToSections(item.markdown,{page:item.page+1},`pdf-p${item.page+1}`));}
+      pagesWithTables.push(...extracted.pagesWithTables);pagesNeedingOcr.push(...extracted.pagesNeedingOcr);
+      if(opts.ocrPage){
+        const items=extractTextWithPositions(buffer,requested.map(page=>page+1));
+        for(const image of items)if(image.itemType==='Image'&&image.width>=72&&image.height>=72&&!pagesNeedingOcr.includes(image.page)&&!items.some(text=>text.page===image.page&&text.itemType==='Text'&&text.text.trim()&&text.x+text.width/2>=image.x&&text.x+text.width/2<=image.x+image.width&&text.y+text.height/2>=image.y&&text.y+text.height/2<=image.y+image.height))pagesNeedingOcr.push(image.page);
+      }
+      page+=count;
+    }
     const document: StructuredDocument = {
       title,
       format: 'pdf',
@@ -96,38 +122,32 @@ export async function parsePdfDocument(filePath: string, opts: DocumentParseOpti
         parser: '@firecrawl/pdf-inspector@1.12.0',
         local: true,
         structured: true,
-        pageCount: result.pages.length,
-        tableCount: result.pagesWithTables.length,
-        imageCount: result.pagesNeedingOcr.length,
-        pagesNeedingOcr: result.pagesNeedingOcr,
+        pageCount: classification.pageCount,
+        tableCount: pagesWithTables.length,
+        imageCount: pagesNeedingOcr.length,
+        pagesNeedingOcr: [...new Set(pagesNeedingOcr)].sort((a,b)=>a-b),
         ocrUsed: false,
       },
     };
     if (opts.ocrPage) {
-      const items = extractTextWithPositions(buffer);
-      const embeddedImagePages = [...new Set(items.filter(image =>
-        image.itemType === 'Image' && image.width >= 72 && image.height >= 72 && !result.pagesNeedingOcr.includes(image.page) &&
-        !items.some(text => text.page === image.page && text.itemType === 'Text' && text.text.trim() &&
-          text.x + text.width / 2 >= image.x && text.x + text.width / 2 <= image.x + image.width &&
-          text.y + text.height / 2 >= image.y && text.y + text.height / 2 <= image.y + image.height),
-      ).map(image => image.page))];
-      document.metadata.pagesNeedingOcr = [...new Set([...result.pagesNeedingOcr, ...embeddedImagePages])].sort((a, b) => a - b);
-      document.metadata.imageCount = document.metadata.pagesNeedingOcr.length;
-      await addOcrPages(buffer, document, document.metadata.pagesNeedingOcr, opts.ocrPage);
+      processingOcr=true;
+      await addOcrPages(buffer, document, document.metadata.pagesNeedingOcr??[], opts.ocrPage,runtime);
+      processingOcr=false;
     }
     if (document.sections.length === 0) {
-      const fallback = await parseWithPdfParse(buffer, title, 'pdf-inspector returned no extractable text');
+      const fallback = await parseWithPdfParse(buffer, title, 'pdf-inspector returned no extractable text',runtime);
       return fallback.sections.length > 0 || !opts.ocrPage ? fallback : document;
     }
     return document;
   } catch (error) {
+    if(processingOcr||runtime.signal?.aborted||String(error).includes('资源保护：'))throw error;
     const reason = error instanceof Error ? error.message : String(error);
-    const fallback = await parseWithPdfParse(buffer, title, `pdf-inspector failed: ${reason}`);
+    const fallback = await parseWithPdfParse(buffer, title, `pdf-inspector failed: ${reason}`,runtime);
     if (opts.ocrPage && fallback.sections.length === 0 && (fallback.metadata.pageCount ?? 0) > 0) {
       const pages = Array.from({ length: fallback.metadata.pageCount ?? 0 }, (_, index) => index + 1);
       fallback.metadata.pagesNeedingOcr = pages;
       fallback.metadata.imageCount = pages.length;
-      await addOcrPages(buffer, fallback, pages, opts.ocrPage);
+      await addOcrPages(buffer, fallback, pages, opts.ocrPage,runtime);
     }
     return fallback;
   }

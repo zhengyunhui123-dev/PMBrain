@@ -6,6 +6,7 @@ import type { BrainEngine } from '../core/engine.ts';
 import { importFile, importImageFile, isImageFilePath } from '../core/import-file.ts';
 import type { SyncFileRuntime, SyncFileOptions } from '../core/sync-file-runtime.ts';
 import { importOfficeFile, isOfficeFilePath } from '../core/office-import.ts';
+import type {DocumentRuntime} from '../core/document/resource-policy.ts';
 import { importSessionExport, isSessionExportPath } from '../core/conversation-parser/session-import.ts';
 import { loadConfig, gbrainPath } from '../core/config.ts';
 import { createProgress } from '../core/progress.ts';
@@ -23,10 +24,8 @@ import {
   loadCheckpoint,
   saveCheckpoint,
   clearCheckpoint,
-  resumeFilter,
 } from '../core/import-checkpoint.ts';
 import {
-  loadOpCheckpoint,
   recordCompleted as recordOpCompleted,
   clearOpCheckpoint,
   type OpCheckpointKey,
@@ -69,6 +68,7 @@ export interface RunImportResult {
 }
 
 export interface ImportOptions {
+    documentRuntime?:DocumentRuntime;
     fileRuntime?: SyncFileRuntime;
     commit?: string;
     strategy?: SyncStrategy;
@@ -100,10 +100,10 @@ export interface StructuredImportInput {
   workers?: string;
 }
 
-export async function importSyncFile(engine: BrainEngine, path: string, relativePath: string, options: SyncFileOptions) {
+export async function importSyncFile(engine: BrainEngine, path: string, relativePath: string, options: SyncFileOptions,documentRuntime?:DocumentRuntime) {
   if (options.session && isSessionExportPath(relativePath)) return importSessionExport(engine, path, relativePath, options);
   if (options.includeImages && isImageFilePath(relativePath)) return importImageFile(engine, path, relativePath, { ...options, forceOcr: options.documentOcr });
-  if (options.includeOffice && isOfficeFilePath(relativePath)) return importOfficeFile(engine, path, relativePath, options);
+  if (options.includeOffice && isOfficeFilePath(relativePath)) return importOfficeFile(engine, path, relativePath, {...options,runtime:documentRuntime});
   return importFile(engine, path, relativePath, options);
 }
 
@@ -139,8 +139,8 @@ export async function runStructuredImport(
   const reportFiles = input.reportFiles === true;
   const includeOffice = input.includeOffice === true;
   const gateway = await import('../core/ai/gateway.ts');
-  const documentOcr = input.documentOcr === true || gateway.isOcrEnabled();
-  const includeImages = input.includeImages === true || documentOcr;
+  const documentOcr = input.documentOcr ?? gateway.isOcrEnabled();
+  const includeImages = input.includeImages ?? documentOcr;
   const structuredDocuments = input.structuredDocuments !== false;
 
   // T7 (D9): refuse cleanly when init persisted the deferred-setup sentinel,
@@ -309,19 +309,12 @@ export async function runStructuredImport(
   // see src/core/import-checkpoint.ts for the bug-class this fixes
   // (parallel-import silent-skip and failed-file no-retry).
   const checkpointPath = gbrainPath('import-checkpoint.json');
-  const completed = new Set<string>(opts.runtime?.completedPaths ?? []);
-  if (!fresh) {
-    if (opts.checkpointKey) {
-      for (const path of await loadOpCheckpoint(engine, opts.checkpointKey)) completed.add(path);
-    } else {
-      const cp = loadCheckpoint(checkpointPath, importRoot);
-      if (cp) for (const path of cp.completedPaths) completed.add(path);
-    }
-    if (completed.size > 0) {
-      console.log(`Resuming from checkpoint: skipping ${completed.size} already-processed files`);
-    }
+  const completed = new Set<string>();
+  if (!fresh && !opts.checkpointKey) {
+    const cp = loadCheckpoint(checkpointPath, importRoot);
+    if (cp?.completedPaths.length) console.log('恢复导入：重新核对文件内容，未变化资料将跳过');
   }
-  const files = resumeFilter(allFiles, importRoot, completed);
+  const files = allFiles;
 
   // Determine actual worker count
   const actualWorkers = workerCount > 1 ? workerCount : 1;
@@ -393,7 +386,7 @@ export async function runStructuredImport(
       // multimodal is enabled. The walker (collectMarkdownFiles) only picks
       // up images when GBRAIN_EMBEDDING_MULTIMODAL=true so this branch is
       // unreachable when the gate is off; defense-in-depth check anyway.
-      const imageImportEnabled = includeImages || (process.env.PMBRAIN_EMBEDDING_MULTIMODAL ?? process.env.GBRAIN_EMBEDDING_MULTIMODAL) === 'true';
+      const imageImportEnabled = input.includeImages===false?false:includeImages || (process.env.PMBRAIN_EMBEDDING_MULTIMODAL ?? process.env.GBRAIN_EMBEDDING_MULTIMODAL) === 'true';
       const result = opts.fileRuntime
         ? await opts.fileRuntime.importFile(filePath, relativePath, { noEmbed, sourceId, includeOffice, includeImages: imageImportEnabled, documentOcr, structured: structuredDocuments, session: sourceType === 'file' && strategy !== 'code', activePack: importActivePack })
         : sourceType === 'file' && strategy !== 'code' && isSessionExportPath(relativePath)
@@ -402,6 +395,7 @@ export async function runStructuredImport(
         ? await importImageFile(eng, filePath, relativePath, { noEmbed, sourceId, forceOcr: documentOcr })
         : includeOffice && isOfficeFilePath(relativePath)
           ? await importOfficeFile(eng, filePath, relativePath, {
+              runtime:opts.documentRuntime,
               noEmbed,
               sourceId,
               structured: structuredDocuments,
@@ -457,7 +451,7 @@ export async function runStructuredImport(
         });
         failures.push({ path: relativePath, error: reason });
         console.error(
-          `  Partial ${relativePath}: ${result.largeDocument?.embedded ?? 0}/${result.largeDocument?.chunksTotal ?? result.chunks} chunks embedded; retry will resume`,
+          `  Partial ${relativePath}: ${reason}`,
         );
       } else {
         skipped++;
@@ -469,7 +463,8 @@ export async function runStructuredImport(
           failures.push({ path: relativePath, error: result.error });
         } else {
           unchanged++;
-          reportFile({ status: 'unchanged', path: relativePath, reason: '内容未变化或知识库已有相同资料' });
+          reportFile({ status: 'unchanged', path: relativePath, reason: '内容未变化或知识库已有相同资料', document: result.documentSummary });
+          if (result.embeddingPending) { savedSlug = result.slug; vectorize = true; }
           // 'unchanged' or no-error skip: content_hash matched a prior
           // successful import, so this file IS done for checkpoint purposes.
           completed.add(relativePath);
@@ -777,8 +772,8 @@ export function collectSyncableFiles(dir: string, opts: CollectOpts = {}): strin
   const strategy: SyncStrategy = opts.strategy ?? 'markdown';
   const includeOffice = opts.includeOffice === true;
   const includeSessions = opts.includeSessions === true;
-  const multimodalOn = opts.includeImages === true
-    || (process.env.PMBRAIN_EMBEDDING_MULTIMODAL ?? process.env.GBRAIN_EMBEDDING_MULTIMODAL) === 'true';
+  const multimodalOn = opts.includeImages
+    ?? (process.env.PMBRAIN_EMBEDDING_MULTIMODAL ?? process.env.GBRAIN_EMBEDDING_MULTIMODAL) === 'true';
   const maxDepth = resolveMaxWalkDepth();
   const visitedInodes = new Map<string, true>();
   const files: string[] = [];

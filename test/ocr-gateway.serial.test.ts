@@ -25,6 +25,11 @@ test('普通图片沿用一个原始输入，经已有 Gateway 保留模型、�
   const parts=options!.messages[0]!.content as any[];
   const images=parts.filter(item=>item.type==='image');expect(images).toHaveLength(1);expect(images[0].image).toBe(`data:image/png;base64,${bytes.toString('base64')}`);
 });
+test('显式关闭识图优先于全局已有模型配置，不发请求',async()=>{
+  setup();let calls=0;__setChatTransportForTests(async()=>{calls++;return reply('不应调用');});
+  const result=await recognizeImageText(engine,createCanvas(64,64).toBuffer('image/png'),'image/png',{enabled:false});
+  expect(result).toMatchObject({status:'skipped',code:'disabled'});expect(calls).toBe(0);
+});
 
 test('超大 PNG 同一次请求携带总览及四块重叠细节，不修改原字节',async()=>{
   setup();let images:any[]=[];

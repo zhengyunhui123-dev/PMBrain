@@ -1,4 +1,6 @@
-import { readFile, rm } from 'node:fs/promises';
+import { readFile, rm,open } from 'node:fs/promises';
+import type {Request} from 'express';
+import {officeFileSizeLimit} from '../core/document/resource-policy.ts';
 import { extname } from 'node:path';
 import { isImageFilePath, isMarkdownFilePath, isOfficeFilePath } from '../core/sync.ts';
 
@@ -11,6 +13,20 @@ const ADMIN_README_CANDIDATES = [
 export const ADMIN_DOCS_EMPTY_MARKDOWN = '暂无';
 
 export const ADMIN_UPLOAD_MAX_BYTES = 50 * 1024 * 1024;
+export class AdminUploadSizeError extends Error {}
+export async function writeAdminUpload(req:Request,path:string,kind:AdminUploadFileKind){
+  const limit=kind==='session'?Infinity:kind==='office'?officeFileSizeLimit(path):ADMIN_UPLOAD_MAX_BYTES;
+  if(Number(req.get('content-length')??0)>limit){req.resume();throw new AdminUploadSizeError(`资料超过本机当前上传额度 ${limit} bytes`);}
+  const output=await open(path,'wx',0o600);let size=0;
+  try{
+    for await(const value of req.iterator({destroyOnReturn:false})){
+      const chunk=Buffer.isBuffer(value)?value:Buffer.from(value);size+=chunk.length;
+      if(size>limit){req.resume();throw new AdminUploadSizeError(`资料超过本机当前上传额度 ${limit} bytes`);}
+      let offset=0;while(offset<chunk.length)offset+=(await output.write(chunk,offset,chunk.length-offset,null)).bytesWritten;
+    }
+    if(!size)throw new Error('Upload body is required');
+  }finally{await output.close();}
+}
 export const ADMIN_DREAM_SCHEDULE_CHECK_MS = 30_000;
 export const ADMIN_DREAM_SCHEDULE_ENABLED_KEY = 'dream.schedule.enabled';
 export const ADMIN_DREAM_SCHEDULE_TIME_KEY = 'dream.schedule.time';

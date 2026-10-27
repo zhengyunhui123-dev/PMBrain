@@ -1,4 +1,5 @@
 import type { BrainEngine } from '../engine.ts';
+import {BOUNDED_PAGE_SEARCH_SQL} from './bounded-search-schema.ts';
 
 export const SEARCH_WRITE_SCHEMA_SQL = `
 DROP INDEX IF EXISTS idx_pages_compiled_truth_trgm;
@@ -39,6 +40,7 @@ DO $do$ BEGIN
       FOR EACH ROW EXECUTE FUNCTION bump_page_generation_fn();
   END IF;
 END $do$;
+${BOUNDED_PAGE_SEARCH_SQL}
 `;
 
 export async function repairSearchWriteAmplification(engine: BrainEngine): Promise<void> {

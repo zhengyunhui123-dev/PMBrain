@@ -148,6 +148,7 @@ export function summarizeKnowledgeSearch(payload: KnowledgeSearchPayload): strin
   return `${modeLabel}「${payload.query}」找到 ${payload.result_count} 条${vectorNote}。`;
 }
 
+export {officeUploadCeiling as knowledgeAttachmentByteLimit} from '../../../../shared/document-limits';
 export const MAX_KNOWLEDGE_ATTACHMENTS = 10;
 export const MAX_KNOWLEDGE_ATTACHMENT_BYTES = 50 * 1024 * 1024;
 export const KNOWLEDGE_ATTACHMENT_EXTENSIONS = new Set([

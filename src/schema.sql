@@ -768,10 +768,10 @@ BEGIN
 
   -- Build weighted tsvector
   NEW.search_vector :=
-    setweight(to_tsvector('english', coalesce(NEW.title, '')), 'A') ||
-    setweight(to_tsvector('english', coalesce(NEW.compiled_truth, '')), 'B') ||
-    setweight(to_tsvector('english', coalesce(NEW.timeline, '')), 'C') ||
-    setweight(to_tsvector('english', coalesce(timeline_text, '')), 'C');
+    setweight(to_tsvector('english', left(coalesce(NEW.title, ''), 2048)), 'A') ||
+    setweight(to_tsvector('english', left(coalesce(NEW.compiled_truth, ''), 49152)), 'B') ||
+    setweight(to_tsvector('english', left(coalesce(NEW.timeline, ''), 4096)), 'C') ||
+    setweight(to_tsvector('english', left(coalesce(timeline_text, ''), 8192)), 'C');
 
   RETURN NEW;
 END;

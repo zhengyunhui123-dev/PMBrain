@@ -1,6 +1,7 @@
-import { readFileSync } from 'node:fs';
 import { basename, extname, posix } from 'node:path';
-import JSZip from 'jszip';
+import {DocumentZip} from '../zip-reader.ts';
+import {DocumentRuntime} from '../resource-policy.ts';
+import {renderDocumentSection} from '../markdown-renderer.ts';
 import { normalizeDocumentText } from '../normalize.ts';
 import type { DocumentSection, StructuredDocument } from '../types.ts';
 import {
@@ -34,13 +35,13 @@ function shapeParagraphs(shape: unknown[]): Array<{ text: string; level: number;
   });
 }
 
-async function presentationSlideFiles(zip: JSZip): Promise<string[]> {
+async function presentationSlideFiles(zip: DocumentZip): Promise<string[]> {
   const presentation = zip.file('ppt/presentation.xml');
   const relationships = zip.file('ppt/_rels/presentation.xml.rels');
   if (presentation && relationships) {
     const [document, relationshipDocument] = await Promise.all([
-      presentation.async('text').then(text => objectXmlParser.parse(text) as any),
-      relationships.async('text').then(text => objectXmlParser.parse(text) as any),
+      zip.text('ppt/presentation.xml').then(text => objectXmlParser.parse(text) as any),
+      zip.text('ppt/_rels/presentation.xml.rels').then(text => objectXmlParser.parse(text) as any),
     ]);
     const targets = new Map<string, string>();
     for (const relationship of asArray(relationshipDocument?.Relationships?.Relationship)) {
@@ -53,18 +54,18 @@ async function presentationSlideFiles(zip: JSZip): Promise<string[]> {
       .filter((name): name is string => Boolean(name && zip.file(name)));
     if (ordered.length > 0) return ordered;
   }
-  return Object.keys(zip.files)
+  return zip.names()
     .map(name => ({ name, match: name.match(/^ppt\/slides\/slide(\d+)\.xml$/i) }))
     .filter((item): item is { name: string; match: RegExpMatchArray } => Boolean(item.match))
     .sort((left, right) => Number(left.match[1]) - Number(right.match[1]))
     .map(item => item.name);
 }
 
-async function relatedNotesPath(zip: JSZip, slideFile: string): Promise<string | null> {
+async function relatedNotesPath(zip: DocumentZip, slideFile: string): Promise<string | null> {
   const relationshipPath = posix.join(posix.dirname(slideFile), '_rels', `${posix.basename(slideFile)}.rels`);
   const entry = zip.file(relationshipPath);
   if (!entry) return null;
-  const parsed = objectXmlParser.parse(await entry.async('text')) as any;
+  const parsed = objectXmlParser.parse(await zip.text(relationshipPath)) as any;
   const relationship = asArray(parsed?.Relationships?.Relationship).find(item =>
     String(item?.Type ?? '').endsWith('/notesSlide') && item?.Target,
   );
@@ -73,12 +74,12 @@ async function relatedNotesPath(zip: JSZip, slideFile: string): Promise<string |
     : null;
 }
 
-async function notesText(zip: JSZip, slideFile: string, fallbackNumber: number): Promise<string> {
+async function notesText(zip: DocumentZip, slideFile: string, fallbackNumber: number): Promise<string> {
   const relatedPath = await relatedNotesPath(zip, slideFile);
   const entry = (relatedPath ? zip.file(relatedPath) : null)
     ?? zip.file(`ppt/notesSlides/notesSlide${fallbackNumber}.xml`);
   if (!entry) return '';
-  const parsed = orderedXmlParser.parse(await entry.async('text'));
+  const parsed = orderedXmlParser.parse(String(await entry.async('text')));
   const shapes = descendants(parsed, 'p:sp');
   const text = shapes.flatMap(shape => {
     const placeholder = String(firstDescendantAttributes(shape, 'p:ph').type ?? '');
@@ -88,8 +89,9 @@ async function notesText(zip: JSZip, slideFile: string, fallbackNumber: number):
   return normalizeDocumentText(text.join('\n'));
 }
 
-export async function parsePptxDocument(filePath: string): Promise<StructuredDocument> {
-  const zip = await JSZip.loadAsync(readFileSync(filePath));
+export async function parsePptxDocument(filePath: string,runtime=new DocumentRuntime()): Promise<StructuredDocument> {
+  const zip = await DocumentZip.open(filePath,runtime);
+  try{
   const slideFiles = await presentationSlideFiles(zip);
   if (slideFiles.length === 0) throw new Error('PPTX contains no slides.');
 
@@ -97,11 +99,14 @@ export async function parsePptxDocument(filePath: string): Promise<StructuredDoc
   let index = 0;
   let tableCount = 0;
   let imageCount = 0;
+  let textBytes=0;
   for (const [slideIndex, slideFile] of slideFiles.entries()) {
+    await runtime.checkpoint(true);
+    const firstSection=sections.length;
     const entry = zip.file(slideFile);
     if (!entry) continue;
     const slideNumber = slideIndex + 1;
-    const parsed = orderedXmlParser.parse(await entry.async('text'));
+    const parsed = orderedXmlParser.parse(await zip.text(slideFile));
     const spTree = descendants(parsed, 'p:spTree')[0] ?? parsed;
     const shapes = childElements(spTree, 'p:sp');
     let slideTitle = '';
@@ -176,6 +181,8 @@ export async function parsePptxDocument(filePath: string): Promise<StructuredDoc
         locator: { slide: slideNumber, headingPath: [...headingPath, '演讲者备注'] },
       });
     }
+    for(const section of sections.slice(firstSection))textBytes+=Buffer.byteLength(renderDocumentSection(section))+2;
+    runtime.assertText(textBytes);
   }
 
   return {
@@ -192,4 +199,5 @@ export async function parsePptxDocument(filePath: string): Promise<StructuredDoc
       ocrUsed: false,
     },
   };
+  }finally{await zip.close();}
 }

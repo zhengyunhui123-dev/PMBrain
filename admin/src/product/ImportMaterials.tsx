@@ -29,6 +29,7 @@ export function ImportMaterials({ open, onClose, onConfigureModels }: { open: bo
   const desktop = desktopApi();
   const models = useModelReadiness(open);
   const [keywordOnly, setKeywordOnly] = useState(false);
+  const [documentOcr,setDocumentOcr]=useState(true);
   const existingTask = items.some(item => item.runId);
   const needsEmbedding = importNeedsEmbedding(items, !keywordOnly);
   useEffect(() => { if (open && !dialog.current?.open) dialog.current?.showModal(); else if (!open) dialog.current?.close(); }, [open]);
@@ -60,7 +61,7 @@ export function ImportMaterials({ open, onClose, onConfigureModels }: { open: bo
     setImports(current => [...current.filter(entry => !queued.some(item => item.id === entry.id)), ...queued.map(item => ({ id: item.id, name: item.name, sourceId }))]);
     let activeItem = queued[0];
     try {
-      await importMaterials(queued, { api, sourceId, autoEmbed: !keywordOnly, wait: waitForConsoleRun, update: setRun,
+      await importMaterials(queued, { api, sourceId, autoEmbed: !keywordOnly, documentOcr, wait: waitForConsoleRun, update: setRun,
         accepted: (item, runId) => {
           setItems(current => current.map(entry => entry.id === item.id ? { ...entry, runId, taskSourceId: sourceId, autoEmbed: !keywordOnly } : entry));
           setImports(current => current.map(entry => entry.id === item.id ? { ...entry, runId, error: undefined } : entry));
@@ -90,6 +91,8 @@ export function ImportMaterials({ open, onClose, onConfigureModels }: { open: bo
       </section>}
       {models.readiness && !models.readiness.chat && <p className="pm-hint">未配置普通模型，本次不能进行 AI 整理和问答。图片、扫描件还需要配置并开启图片识别。</p>}
       {models.setup && <label className="materials-import-only"><input type="checkbox" checked={keywordOnly} disabled={busy || existingTask} onChange={event => setKeywordOnly(event.target.checked)} />仅导入资料，使用关键词搜索</label>}
+      <label className="materials-import-only"><input type="checkbox" checked={documentOcr} disabled={busy||existingTask} onChange={event=>setDocumentOcr(event.target.checked)} />识别文档中的图片文字</label>
+      {!documentOcr&&<p className="pm-hint">不发起新的图片识别，已有识别结果会复用；未识别的扫描页和图片文字暂不处理。</p>}
       {existingTask && <p className="pm-hint">已有任务将按原模式继续。{needsEmbedding ? '请先完成向量模型配置。' : '本次仍不生成向量。'}</p>}
       {items.length > 0 ? <ul className="materials-list">{items.map(item => <li key={item.id}>{item.file ? <FileText size={18} /> : <Folder size={18} />}<span><b>{item.name}</b><small title={item.path}>{item.path || `${Math.ceil((item.file?.size ?? 0) / 1024)} KB`}</small></span><button type="button" disabled={busy} aria-label={`移除 ${item.name}`} onClick={() => setItems(current => current.filter(entry => entry.id !== item.id))}><X size={16} /></button></li>)}</ul> : !run && <p className="materials-empty">选择本地文件或文件夹开始添加。</p>}
       {busy && <p className="materials-progress" role="status">{keywordOnly ? `正在导入 · ${active}` : `正在入库 · ${active}`}</p>}

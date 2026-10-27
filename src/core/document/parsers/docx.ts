@@ -1,8 +1,8 @@
-import { readFileSync } from 'node:fs';
 import { basename, extname } from 'node:path';
-import JSZip from 'jszip';
-import { normalizeDocumentText } from '../normalize.ts';
-import type { DocumentLocator, DocumentSection, StructuredDocument } from '../types.ts';
+import {DocumentZip,xmlElements} from '../zip-reader.ts';
+import {DocumentRuntime} from '../resource-policy.ts';
+import { normalizeDocumentText,sectionPlainText } from '../normalize.ts';
+import type { DocumentSection, StructuredDocument } from '../types.ts';
 import {
   asArray,
   attributes,
@@ -20,11 +20,10 @@ function headingLevel(styleId: string, styleNames: Map<string, string>): number 
   return match ? Number(match[1]) : null;
 }
 
-async function readStyleNames(zip: JSZip): Promise<Map<string, string>> {
+async function readStyleNames(zip: DocumentZip): Promise<Map<string, string>> {
   const map = new Map<string, string>();
-  const entry = zip.file('word/styles.xml');
-  if (!entry) return map;
-  const parsed = objectXmlParser.parse(await entry.async('text')) as any;
+  if (!zip.has('word/styles.xml')) return map;
+  const parsed = objectXmlParser.parse(await zip.text('word/styles.xml')) as any;
   for (const style of asArray(parsed?.['w:styles']?.['w:style'])) {
     const id = String(style?.['w:styleId'] ?? '');
     const name = String(style?.['w:name']?.['w:val'] ?? id);
@@ -33,11 +32,10 @@ async function readStyleNames(zip: JSZip): Promise<Map<string, string>> {
   return map;
 }
 
-async function readHyperlinks(zip: JSZip): Promise<Map<string, string>> {
+async function readHyperlinks(zip: DocumentZip): Promise<Map<string, string>> {
   const map = new Map<string, string>();
-  const entry = zip.file('word/_rels/document.xml.rels');
-  if (!entry) return map;
-  const parsed = objectXmlParser.parse(await entry.async('text')) as any;
+  if (!zip.has('word/_rels/document.xml.rels')) return map;
+  const parsed = objectXmlParser.parse(await zip.text('word/_rels/document.xml.rels')) as any;
   for (const rel of asArray(parsed?.Relationships?.Relationship)) {
     const id = String(rel?.Id ?? '');
     const target = String(rel?.Target ?? '');
@@ -46,33 +44,28 @@ async function readHyperlinks(zip: JSZip): Promise<Map<string, string>> {
   return map;
 }
 
-function tableFromNodes(nodes: unknown[]): { headers: string[]; rows: string[][] } | null {
-  const rows = childElements(nodes, 'w:tr').map(row =>
-    childElements(row, 'w:tc').map(cell => normalizeDocumentText(orderedText(cell))),
-  ).filter(row => row.some(Boolean));
-  if (rows.length === 0) return null;
-  return { headers: rows[0], rows: rows.slice(1) };
-}
-
-export async function parseDocxDocument(filePath: string): Promise<StructuredDocument> {
-  const zip = await JSZip.loadAsync(readFileSync(filePath));
-  const documentXml = zip.file('word/document.xml');
-  if (!documentXml) throw new Error('DOCX is missing word/document.xml');
+export async function parseDocxDocument(filePath: string,runtime=new DocumentRuntime()): Promise<StructuredDocument> {
+  const zip = await DocumentZip.open(filePath,runtime);
+  try{
+  if (!zip.has('word/document.xml')) throw new Error('DOCX is missing word/document.xml');
   const [styleNames, hyperlinkTargets] = await Promise.all([readStyleNames(zip), readHyperlinks(zip)]);
-  const parsed = orderedXmlParser.parse(await documentXml.async('text'));
-  const body = descendants(parsed, 'w:body')[0];
-  if (!body) throw new Error('DOCX is missing w:body');
 
   const title = basename(filePath, extname(filePath));
   const sections: DocumentSection[] = [];
   const headingPath: string[] = [];
   let index = 0;
   let tableIndex = 0;
+  let tableId=-1,tableRows:string[][]=[],tableBytes=0,totalBytes=0;
+  const appendSection=(section:DocumentSection)=>{totalBytes+=Buffer.byteLength(sectionPlainText(section));runtime.assertText(totalBytes);sections.push(section);};
+  const flushTable=()=>{if(!tableRows.length)return;appendSection({id:`docx-${++index}`,type:'table',heading:`Table ${tableIndex}`,table:{headers:tableRows[0],rows:tableRows.slice(1)},locator:{headingPath:[...headingPath],table:tableIndex,range:`rows-${sections.length}`}});tableRows=[];tableBytes=0;};
 
-  for (const node of body) {
+  for await (const fragment of xmlElements(zip,'word/document.xml',new Set(['w:p','w:tr']))) {
+    if(!fragment.ancestors.some(item=>item.name==='w:body'))continue;
+    const node=orderedXmlParser.parse(fragment.xml)[0];
     if (!node || typeof node !== 'object') continue;
     const record = node as Record<string, unknown>;
     if (Array.isArray(record['w:p'])) {
+      flushTable();
       const paragraph = record['w:p'];
       const text = normalizeDocumentText(orderedText(paragraph, hyperlinkTargets));
       const styleAttrs = firstDescendantAttributes(paragraph, 'w:pStyle');
@@ -82,14 +75,14 @@ export async function parseDocxDocument(filePath: string): Promise<StructuredDoc
       if (level && text) {
         headingPath.splice(level - 1);
         headingPath[level - 1] = text;
-        sections.push({ id: `docx-${++index}`, type: 'heading', heading: text, level, locator: { headingPath: [...headingPath] } });
+        appendSection({ id: `docx-${++index}`, type: 'heading', heading: text, level, locator: { headingPath: [...headingPath] } });
         continue;
       }
       if (text) {
         const numbered = descendants(paragraph, 'w:numPr').length > 0;
         const levelAttrs = firstDescendantAttributes(paragraph, 'w:ilvl');
         const listLevel = Number(levelAttrs['w:val'] ?? 0);
-        sections.push({
+        appendSection({
           id: `docx-${++index}`,
           type: numbered ? 'list' : 'paragraph',
           text: numbered ? `${'  '.repeat(Math.max(0, listLevel))}- ${text}` : text,
@@ -97,7 +90,7 @@ export async function parseDocxDocument(filePath: string): Promise<StructuredDoc
         });
       }
       if (hasImage) {
-        sections.push({
+        appendSection({
           id: `docx-${++index}`,
           type: 'image',
           text: text ? `[image: ${text}]` : '[image]',
@@ -106,14 +99,16 @@ export async function parseDocxDocument(filePath: string): Promise<StructuredDoc
       }
       continue;
     }
-    if (Array.isArray(record['w:tbl'])) {
-      const table = tableFromNodes(record['w:tbl']);
-      if (!table) continue;
-      tableIndex++;
-      const locator: DocumentLocator = { headingPath: [...headingPath], table: tableIndex };
-      sections.push({ id: `docx-${++index}`, type: 'table', heading: `Table ${tableIndex}`, table, locator });
+    if (Array.isArray(record['w:tr'])) {
+      const identity=fragment.ancestors.findLast(item=>item.name==='w:tbl')?.id??0;
+      if(identity!==tableId){flushTable();tableId=identity;tableIndex++;}
+      const row=childElements(record['w:tr'],'w:tc').map(cell=>normalizeDocumentText(orderedText(cell)));
+      const bytes=Buffer.byteLength(row.join(' | '));
+      if(tableRows.length>=200||tableBytes+bytes>30000)flushTable();
+      tableRows.push(row);tableBytes+=bytes;
     }
   }
+  flushTable();
 
   return {
     title,
@@ -128,4 +123,5 @@ export async function parseDocxDocument(filePath: string): Promise<StructuredDoc
       ocrUsed: false,
     },
   };
+  }finally{await zip.close();}
 }

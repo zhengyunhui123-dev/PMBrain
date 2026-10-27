@@ -127,7 +127,7 @@ describe('快速维护文件任务与恢复', () => {
     await runtime.retry(run.id);expect((await finish(run.id)).status).toBe('completed');
     expect(await engine.getPage('blocked',{sourceId:'blocked-source'})).not.toBeNull();
   },120000);
-  test('旧版已有页面但没有文件任务回执，未变化资料在入队前跳过，变化与跨 Source 文件仍处理', async () => {
+  test('旧版已有页面但没有分块回执时核验一次，之后跳过未变化资料，跨 Source 仍独立处理', async () => {
     const dir = join(root, 'legacy'); mkdirSync(dir);
     const other = join(root, 'legacy-other'); mkdirSync(other);
     for (let i = 0; i < 12; i++) writeFileSync(join(dir, `legacy-${i}.md`), `# 旧版资料 ${i}\n\n升级前已经导入的合成资料。`);
@@ -141,12 +141,14 @@ describe('快速维护文件任务与恢复', () => {
     const before = await engine.executeRaw<{count:string}>("SELECT count(*)::text AS count FROM minion_jobs WHERE queue=$1 AND data->'task'->'input'->'options'->>'sourceId'=$2",[SYNC_FILE_QUEUE,'legacy-source']);
     expect(Number(before[0].count)).toBe(0);
     const done = await finish((await runtime.submitDream({preset:'quick',sourceId:'legacy-source'})).id);
-    expect(done.product?.syncScan).toMatchObject({scanned:12,unchanged:10});
-    expect(done.product?.processed).toBe(2);
-    expect((await runtime.files(done.id))?.rows).toHaveLength(2);
+    expect(done.product?.syncScan).toMatchObject({scanned:12});
+    expect(done.product?.processed).toBe(12);
+    expect((await runtime.files(done.id))?.rows).toHaveLength(12);
     expect((await engine.getChunks('legacy-3',{sourceId:'legacy-source'})).length).toBeGreaterThan(0);
-    expect((await engine.executeRaw<{chunker_version:number}>("SELECT chunker_version FROM pages WHERE source_id='legacy-source' AND slug='legacy-2'"))[0].chunker_version).toBe(0);
+    expect((await engine.executeRaw<{chunker_version:number}>("SELECT chunker_version FROM pages WHERE source_id='legacy-source' AND slug='legacy-2'"))[0].chunker_version).toBeGreaterThan(0);
     expect((await engine.getPage('legacy-0',{sourceId:'legacy-source'}))?.compiled_truth).toContain('修改');
+    const repeated=await finish((await runtime.submitDream({preset:'quick',sourceId:'legacy-source'})).id);
+    expect(repeated.product?.syncScan).toMatchObject({scanned:12,unchanged:12});expect((await runtime.files(repeated.id))?.rows).toHaveLength(0);
     const otherDone = await finish((await runtime.submitDream({preset:'quick',sourceId:'legacy-other'})).id);
     expect((await runtime.files(otherDone.id))?.rows).toHaveLength(1);
     expect(await engine.getPage('legacy-1',{sourceId:'legacy-other'})).not.toBeNull();

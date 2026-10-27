@@ -52,4 +52,8 @@ export class BackgroundVectorizationScheduler {
       ? { mode: 'waiting', reason: '等待电脑资源稳定', batchSize: 0, delayMs: 5000 }
       : decision;
   }
+  resourceSample():BackgroundResourceSample{
+    const sample=this.sample();
+    return this.desktop&&this.now()-this.desktop.at<=15000?{...sample,...this.desktop.sample,availableBytes:Math.min(sample.availableBytes,this.desktop.sample.availableBytes)}:sample;
+  }
 }

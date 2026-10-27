@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { mkdir, stat, unlink, rmdir, lstat, realpath } from 'node:fs/promises';
 import { basename, join, dirname, resolve, sep } from 'node:path';
+import {setTimeout as waitForCleanup} from 'node:timers/promises';
 import type { BrainEngine } from '../../core/engine.ts';
 import { MinionQueue } from '../../core/minions/queue.ts';
 import { gbrainPath, loadConfig } from '../../core/config.ts';
@@ -12,6 +13,7 @@ import { isCodeFilePath, isOfficeFilePath } from '../../core/sync.ts';
 import { isSessionExportPath } from '../../core/conversation-parser/session-import.ts';
 import { syncFileContentFingerprint } from './checkpoint.ts';
 import { TaskResourceGuard, SYNC_QUEUE_CAPACITY, streamFileHash, copyFileSnapshot, assertImportFileSize, isSyncCapacityError } from './resource-guard.ts';
+import {readDocumentChunkManifest} from '../../core/document/chunk-manifest.ts';
 
 export const SYNC_FILE_QUEUE = 'pmbrain-sync-files';
 export const SYNC_FILE_TASK = 'pmbrain-sync-file';
@@ -28,6 +30,7 @@ export class SyncFileQueue {
   }
 
   private async enqueueCore(sessionId:number,token:string,file:SyncFileInput):Promise<ImportResult & {deferred?:boolean;unchanged?:boolean}>{
+    file={...file,options:{...file.options}};
     let sizeError:string|undefined;
     try{assertImportFileSize(file.relativePath,(await stat(file.path)).size);}catch(error){
       if(!(error instanceof Error)||!error.message.startsWith('资源保护：文件过大'))throw error;
@@ -68,15 +71,19 @@ export class SyncFileQueue {
     if (job) {
       this.observe?.(job);
       if (job?.result && (job.status === 'completed' || (job.result.pageHash && ['paused','delayed','waiting'].includes(job.status)))) {
-        const stored = job.result as unknown as ImportResult & { pageHash?: string };
-        if (!stored.pageHash) return stored;
+        const stored = job.result as unknown as ImportResult & { pageHash?: string;chunkHash?:string };
+        if (!stored.pageHash&&(!stored.slug||!['imported','skipped'].includes(stored.status))) return stored;
         const page = await this.completePage(stored.slug,file,stored.status==='skipped');
-        if (page && page.content_hash === stored.pageHash && !file.options.forceRechunk && (!stored.chunks || page.chunks===stored.chunks)) {
+        if (page && ['imported','skipped'].includes(stored.status) && page.content_hash === stored.pageHash && !file.options.forceRechunk
+          && (stored.chunkHash===page.chunkHash || (!stored.chunkHash&&isOfficeFilePath(file.relativePath)))
+          && (stored.chunks===page.chunks || (stored.status==='skipped'&&stored.chunks===0))) {
+          await this.validate(file);
           if (job.status !== 'completed') await this.engine.executeRaw(`UPDATE minion_jobs SET status = 'completed', finished_at = now(), lock_token = NULL, lock_until = NULL WHERE id = $1 AND status IN ('paused','delayed','waiting')`, [job.id]);
           if(stored.status==='skipped'){await this.validate(file);await this.remember(file,stored);}
           return stored;
         }
         await this.engine.executeRaw(`UPDATE minion_jobs SET idempotency_key = NULL, data = jsonb_set(data, '{superseded}', 'true'::jsonb) WHERE id = $1`, [job.id]);
+        job=undefined;
       } else {
         if (['dead', 'failed'].includes(job.status)) throw new Error(job.error_text ?? '文件任务执行失败');
         if(job.status==='active')return { slug: '', status: 'skipped', chunks: 0, deferred: true };
@@ -86,14 +93,15 @@ export class SyncFileQueue {
     const manifest=rawManifest?JSON.parse(rawManifest) as SyncFileManifest:null;
     if(manifest?.hash===file.hash && manifest.fingerprint===file.fingerprint && !file.options.forceRechunk){
       const page=await this.completePage(manifest.slug,file,manifest.contentMatched===true);
-      if(page?.content_hash===manifest.pageHash && manifest.chunks!==undefined && manifest.chunks!==page.chunks)file.options={...file.options,forceRechunk:true};
-      if(page?.content_hash===manifest.pageHash && (manifest.chunks===undefined || manifest.chunks===page.chunks)){
+      if(page?.content_hash===manifest.pageHash && (manifest.chunks!==page.chunks || manifest.chunkHash!==page.chunkHash))file.options={...file.options,forceRechunk:true};
+      if(page?.content_hash===manifest.pageHash && manifest.chunks===page.chunks && manifest.chunkHash===page.chunkHash){
         await this.validate(file);
         if(manifest.size!==file.originalSize||manifest.mtime!==file.originalMtime||manifest.chunks===undefined)await this.remember(file,{slug:manifest.slug,status:'skipped',chunks:page.chunks,pageHash:manifest.pageHash});
         await this.retireUnchanged(job);
         return {slug:manifest.slug,status:'skipped',chunks:0,unchanged:true};
       }
     }
+    if(!manifest?.chunkHash)file.options={...file.options,forceRechunk:true};
     if (file.options.noEmbed && !(file.options.session && isSessionExportPath(file.relativePath)) && !isCodeFilePath(file.relativePath)
       && !isImageFilePath(file.relativePath) && !(file.options.documentOcr && isOfficeFilePath(file.relativePath))) {
       const inspected = isOfficeFilePath(file.relativePath)
@@ -192,13 +200,6 @@ export class SyncFileQueue {
     return { total: Number(total), completed: Number(completed), failed: Number(failed), remaining: Number(total) - Number(completed) - Number(failed) };
   }
 
-  async sourceHash(file: Pick<SyncFileInput,'sourceRoot'|'relativePath'|'options'|'originalSize'|'originalMtime'>): Promise<string|null> {
-    const raw=await this.engine.getConfig(syncFileManifestKey(file));
-    if(!raw)return null;
-    const saved=JSON.parse(raw) as SyncFileManifest;
-    return saved.size===file.originalSize && saved.mtime===file.originalMtime?saved.hash:null;
-  }
-
   private async retireUnchanged(job:MinionJob|undefined){
     if(!job)return;
     await this.engine.executeRaw(`UPDATE minion_jobs SET status='cancelled',data=jsonb_set(data,'{superseded}','true'::jsonb),updated_at=now()
@@ -206,19 +207,25 @@ export class SyncFileQueue {
   }
 
   private async completePage(slug:string,file:SyncFileInput,contentMatched=false){
-    const page=await this.engine.executeRaw<{content_hash:string;source_path:string|null;chunker_version:number;chunks:number;hasBody:boolean}>(
-      `SELECT content_hash,source_path,chunker_version,length(compiled_truth)>0 AS "hasBody",(SELECT count(*)::int FROM content_chunks WHERE page_id=p.id) AS chunks
+    const page=await this.engine.executeRaw<{id:number;content_hash:string;source_path:string|null;chunker_version:number;hasBody:boolean}>(
+      `SELECT id,content_hash,source_path,chunker_version,length(compiled_truth)>0 AS "hasBody"
        FROM pages p WHERE slug=$1 AND source_id=$2 AND deleted_at IS NULL`,[slug,file.options.sourceId??'default']);
     const row=page[0];
-    return row && row.chunker_version>=0 && (!row.hasBody||row.chunks>0)
-      && (contentMatched || row.source_path?.replace(/\\/g,'/')===file.relativePath.replace(/\\/g,'/'))?row:null;
+    if(!row || row.chunker_version<0 || !(contentMatched || row.source_path?.replace(/\\/g,'/')===file.relativePath.replace(/\\/g,'/')))return null;
+    const manifest=await readDocumentChunkManifest(this.engine,row.id);
+    if(row.hasBody&&!manifest.chunks)return null;
+    if(isOfficeFilePath(file.relativePath)){
+      const checked=await (await import('../../core/office-import.ts')).importOfficeFile(this.engine,file.path,file.relativePath,{...file.options,forceRechunk:false,checkOnly:true});
+      if(checked.status!=='skipped'||checked.error)return null;
+    }
+    return {...row,chunks:manifest.chunks,chunkHash:manifest.chunk_hash};
   }
 
   async remember(file:SyncFileInput,result:ImportResult & {pageHash?:string}){
     if(!result.pageHash)return;
     const page=await this.completePage(result.slug,file,result.status==='skipped');
     if(!page || page.content_hash!==result.pageHash)return;
-    await this.engine.setConfig(syncFileManifestKey(file),JSON.stringify(syncFileManifest(file,result.slug,result.pageHash,page.chunks,result.status==='skipped')));
+    await this.engine.setConfig(syncFileManifestKey(file),JSON.stringify(syncFileManifest(file,result.slug,result.pageHash,page.chunks,result.status==='skipped',page.chunkHash)));
   }
 
   async validate(file: SyncFileInput) {
@@ -314,12 +321,20 @@ export class SyncFileQueue {
 
   private async removeSnapshot(sessionId:number,value:string){
     const path=this.snapshotPath(sessionId,value);
+    for(let attempt=0;attempt<4;attempt++){
+    try{
     const info=await stat(path).catch(error=>{if(error.code==='ENOENT')return null;throw error;});
     if(info){
       const removed=await unlink(path).then(()=>true,error=>{if(error.code==='ENOENT')return false;throw error;});
       if(removed)this.resources.snapshotRemoved(info.size);
     }
     await rmdir(dirname(path)).catch(error=>{if(!['ENOENT','ENOTEMPTY'].includes(error.code))throw error;});
+    return;
+    }catch(error){
+      if(!['EPERM','EACCES'].includes((error as NodeJS.ErrnoException).code??'')||attempt===3)throw error;
+      await waitForCleanup(25*(attempt+1));
+    }
+    }
   }
 }
 
@@ -332,10 +347,10 @@ export async function validateSyncFileSnapshot(file: SyncFileInput) {
   }
 }
 
-export interface SyncFileManifest {hash:string;fingerprint:string;slug:string;pageHash:string;size?:number;mtime?:number;chunks?:number;contentMatched?:boolean;}
+export interface SyncFileManifest {hash:string;fingerprint:string;slug:string;pageHash:string;size?:number;mtime?:number;chunks?:number;chunkHash?:string;contentMatched?:boolean;}
 export function syncFileManifestKey(file:Pick<SyncFileInput,'options'|'sourceRoot'|'relativePath'>){
   return 'sync.file.sha256:'+createHash('sha256').update(JSON.stringify([file.options.sourceId??'default',file.sourceRoot,file.relativePath])).digest('hex');
 }
-export function syncFileManifest(file:SyncFileInput,slug:string,pageHash:string,chunks?:number,contentMatched=false):SyncFileManifest {
-  return {hash:file.hash,fingerprint:file.fingerprint,slug,pageHash,size:file.originalSize,mtime:file.originalMtime,chunks,...(contentMatched?{contentMatched:true}:{})};
+export function syncFileManifest(file:SyncFileInput,slug:string,pageHash:string,chunks?:number,contentMatched=false,chunkHash?:string):SyncFileManifest {
+  return {hash:file.hash,fingerprint:file.fingerprint,slug,pageHash,size:file.originalSize,mtime:file.originalMtime,chunks,...(chunkHash?{chunkHash}:{}),...(contentMatched?{contentMatched:true}:{})};
 }

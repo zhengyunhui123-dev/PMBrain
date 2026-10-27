@@ -107,6 +107,7 @@ export class TaskProgressAdapter {
         return;
       }
       if (this.view.name !== '导入资料' && this.currentPhase !== 'sync') return;
+      if (this.kind === 'import_path' && event.event === 'start' && this.view.processed === null) this.view.processed = 0;
       if (typeof event.done === 'number') this.view.processed = event.done;
       if (typeof event.total === 'number') this.view.total = event.total;
       if (this.view.total && this.view.processed !== null) {
@@ -119,6 +120,7 @@ export class TaskProgressAdapter {
     const phase = raw.split('.')[0]!;
     const step = this.view.steps.find(item => item.phases.includes(phase));
     if (!step) return;
+    if (event.file && phase === 'process' && event.file !== this.currentFile) this.view.phaseProgress = undefined;
     const timestamp = event.ts && Number.isFinite(Date.parse(event.ts)) ? event.ts : new Date().toISOString();
     const prior = this.view.phaseProgress;
     const same = prior?.id === phase;
@@ -147,10 +149,12 @@ export class TaskProgressAdapter {
     if (event.unit) phaseProgress.unit = event.unit;
     if (event.totalKnown === false) { phaseProgress.total = null; phaseProgress.remaining = null; this.view.phasePercent = null; }
     this.view.phaseProgress = phaseProgress;
-    if (!same) { this.view.processed = null; this.view.total = null; }
-    if (typeof event.done === 'number') this.view.processed = event.done;
-    if (typeof event.total === 'number') this.view.total = event.total;
-    if (event.totalKnown === false) this.view.total = null;
+    if (this.kind !== 'import_path') {
+      if (!same) { this.view.processed = null; this.view.total = null; }
+      if (typeof event.done === 'number') this.view.processed = event.done;
+      if (typeof event.total === 'number') this.view.total = event.total;
+      if (event.totalKnown === false) this.view.total = null;
+    }
     if (event.file && phase === 'process' && event.file !== this.currentFile) {
       for (const item of this.view.steps) if (item.id !== 'collect') item.status = 'pending';
       this.currentPhase = '';

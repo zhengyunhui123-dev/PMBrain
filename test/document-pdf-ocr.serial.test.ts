@@ -1,10 +1,11 @@
 import {afterAll,beforeAll,expect,test} from 'bun:test';
-import {mkdtempSync,rmSync,writeFileSync} from 'node:fs';
+import {mkdtempSync,rmSync,writeFileSync,readFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {createCanvas} from '@napi-rs/canvas';
 import {parsePdfDocument} from '../src/core/document/parsers/pdf';
 import {renderStructuredDocument} from '../src/core/document/markdown-renderer';
+import {DocumentRuntime} from '../src/core/document/resource-policy';
 
 let root:string;let path:string;
 beforeAll(()=>{
@@ -34,4 +35,22 @@ test('mixed image recognition failures keep native text and a failed receipt wit
 });
 test('without OCR callback the native parser makes no image recognition attempt',async()=>{
   const document=await parsePdfDocument(path);expect(document.metadata.ocrUsed).toBe(false);expect(document.metadata.ocrAttempted).toBeUndefined();expect(renderStructuredDocument(document)).toContain('Native header');
+});
+test('分页提取保留末页文字，并按实际原始页码返回定位',async()=>{
+  const document=await parsePdfDocument(path);
+  expect(renderStructuredDocument(document)).toContain('Native document with a small logo');expect(document.sections.some(section=>section.locator?.page===4&&(section.text??section.heading)?.includes('Native document'))).toBe(true);
+});
+test('分页批次切换后末页的混合图片仍识别，页码与原文一致',async()=>{
+  const tailPath=join(root,'tail-image.pdf'),bytes=readFileSync(path);const marker=bytes.indexOf('20 0 0 20 40 600');expect(marker).toBeGreaterThan(0);bytes.write('99 0 0 99 40 600',marker,'ascii');writeFileSync(tailPath,bytes);
+  const pages:number[]=[];const document=await parsePdfDocument(tailPath,{runtime:new DocumentRuntime({sample:()=>({bytes:1024**3,availableBytes:3*1024**3,totalBytes:8*1024**3,cpuBusyRatio:0.95})}),ocrPage:async page=>{pages.push(page);return {status:'success',text:`image-evidence-${page}`,model:'fixture'};}});
+  expect(pages).toEqual([1,2,4]);expect(document.sections.some(section=>section.locator?.page===4&&section.text?.includes('image-evidence-4'))).toBe(true);
+});
+test('OCR 回调的中断和存储错误保留原错误，不伪装成解析降级成功',async()=>{
+  await expect(parsePdfDocument(path,{ocrPage:async()=>{throw new Error('OCR storage interrupted');}})).rejects.toThrow('OCR storage interrupted');
+});
+
+test('PDF识图文字达到当前内存额度后停止，不再识别后续页面',async()=>{
+  let calls=0;const runtime=new DocumentRuntime({sample:()=>({bytes:0,availableBytes:512*1024**2,totalBytes:32*1024**3})});
+  await expect(parsePdfDocument(path,{runtime,ocrPage:async()=>{calls++;return {status:'success',text:'X'.repeat(9*1024**2),model:'fixture'};}})).rejects.toThrow('解析正文超过本机处理额度');
+  expect(calls).toBe(1);
 });

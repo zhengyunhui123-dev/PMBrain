@@ -21,6 +21,8 @@ import { parsePdfDocument } from './parsers/pdf.ts';
 import { parsePptxDocument } from './parsers/pptx.ts';
 import { parseSpreadsheetDocument } from './parsers/spreadsheet.ts';
 import { appendOoxmlImageOcr } from './ooxml-image-ocr.ts';
+import {parseSpreadsheetStream,parseDelimitedStream} from './parsers/spreadsheet-stream.ts';
+import {DocumentRuntime} from './resource-policy.ts';
 
 function yamlScalar(value: string): string {
   return JSON.stringify(value);
@@ -32,10 +34,10 @@ export async function parseDocument(
 ): Promise<StructuredDocument> {
   const ext = extname(filePath).toLowerCase();
   if (ext === '.pdf') return parsePdfDocument(filePath, opts);
-  if (ext === '.docx') return appendOoxmlImageOcr(filePath, await parseDocxDocument(filePath), opts);
-  if (ext === '.pptx') return appendOoxmlImageOcr(filePath, await parsePptxDocument(filePath), opts);
+  if (ext === '.docx') return appendOoxmlImageOcr(filePath, await parseDocxDocument(filePath,opts.runtime), opts);
+  if (ext === '.pptx') return appendOoxmlImageOcr(filePath, await parsePptxDocument(filePath,opts.runtime), opts);
   if (ext === '.xlsx' || ext === '.xlsm' || ext === '.xls' || ext === '.csv') {
-    const document = parseSpreadsheetDocument(filePath);
+    const document = ext==='.xlsx'||ext==='.xlsm'?await parseSpreadsheetStream(filePath,opts.runtime):ext==='.csv'?await parseDelimitedStream(filePath,opts.runtime):parseSpreadsheetDocument(filePath);
     return ext === '.xlsx' || ext === '.xlsm'
       ? appendOoxmlImageOcr(filePath, document, opts)
       : document;
@@ -60,6 +62,7 @@ export function summarizeStructuredDocument(document: StructuredDocument): Docum
     ocrFailed: document.metadata.ocrFailed ?? 0,
     ocrSkipped: document.metadata.ocrSkipped ?? 0,
     ocrWarnings: document.metadata.ocrWarnings ?? [],
+    ocrReused: document.metadata.ocrReused ?? 0,
   };
 }
 
@@ -72,6 +75,9 @@ export async function importStructuredDocument(
     noEmbed?: boolean;
     checkOnly?: boolean;
     forceRechunk?: boolean;
+    documentOcr?: boolean;
+    runtime?:DocumentRuntime;
+    snapshot?: {hash:string;size:number;validate:()=>void|Promise<void>};
     sourceId?: string;
     activePack?: { page_types: ReadonlyArray<{ name: string; path_prefixes: ReadonlyArray<string> }> };
   } = {},
@@ -92,8 +98,20 @@ export async function importStructuredDocument(
     };
   }
 
-  const stat = statSync(sourceFilePath);
-  const rawHash = createHash('sha256').update(readFileSync(sourceFilePath)).digest('hex');
+  await opts.snapshot?.validate();
+  opts.runtime?.assertText(Buffer.byteLength(text));
+  const stat = opts.snapshot??statSync(sourceFilePath);
+  const rawHash = opts.snapshot?.hash??createHash('sha256').update(readFileSync(sourceFilePath)).digest('hex');
+  if(!opts.checkOnly){
+    const prior=await engine.executeRaw<{slug:string;succeeded:number;raw_hash:string}>(`SELECT slug,(frontmatter->>'document_ocr_succeeded')::int AS succeeded,frontmatter->>'raw_sha256' AS raw_hash FROM pages
+      WHERE source_id=$1 AND deleted_at IS NULL AND (slug=$3 OR frontmatter->>'raw_sha256'=$2) ORDER BY (slug=$3) DESC LIMIT 1`,[opts.sourceId??'default',rawHash,slugifyPath(relativePath)]);
+    const previous=prior[0]?.raw_hash===rawHash?Number(prior[0]?.succeeded??0):0;
+    if(previous>0 && summary.ocrFailed+summary.ocrSkipped>0 && (summary.ocrReused??0)<previous){
+      if(opts.documentOcr===false)throw new Error('已有图片文字缺少可复用回执，请开启图片识别后重新核验；已有内容未覆盖。');
+      return {slug:prior[0].slug,status:'partial',chunks:0,error:`图片识别尚未全部完成，已有正文保留：${summary.ocrWarnings.join('；')}`,documentSummary:summary};
+    }
+    if(previous>summary.ocrSucceeded)throw new Error('当前解析未包含已有图片文字，已有内容未覆盖；请开启图片识别后重新核验。');
+  }
   const title = basename(relativePath, extname(relativePath));
   const ext = extname(relativePath).toLowerCase().slice(1);
   const parentSections = buildStructuredParentSections(document);
@@ -114,7 +132,7 @@ export async function importStructuredDocument(
     `document_images: ${summary.images}`,
     `document_pages_needing_ocr: ${summary.pagesNeedingOcr}`,
     `document_ocr_used: ${summary.ocrUsed}`,
-    `document_ocr_attempted: ${summary.ocrAttempted}`,
+    `document_ocr_attempted: ${summary.ocrAttempted+(summary.ocrReused??0)}`,
     `document_ocr_succeeded: ${summary.ocrSucceeded}`,
     `document_ocr_failed: ${summary.ocrFailed}`,
     `document_ocr_skipped: ${summary.ocrSkipped}`,
@@ -143,9 +161,12 @@ export async function importStructuredDocument(
     source_uri: relativePath.replace(/\\/g, '/'),
     ingested_via: 'pmbrain:import',
     parentSections,
+    documentRuntime:opts.runtime,
+    ...(opts.snapshot?{prepareCommit:async(apply:(engine:BrainEngine)=>Promise<ImportResult>)=>{await opts.snapshot!.validate();return apply(engine);}}:{}),
   };
   const result = summary.structured && parentSections.length > 0
     ? await importTrustedStructuredContent(engine, slugifyPath(relativePath), content, importOptions)
     : await importFromContent(engine, slugifyPath(relativePath), content, importOptions);
-  return { ...result, documentSummary: summary };
+  const incomplete=opts.documentOcr!==false&&summary.ocrFailed+summary.ocrSkipped>0;
+  return { ...result, ...(incomplete&&['imported','skipped'].includes(result.status)?{status:'partial' as const,error:`原文已保存，图片识别未完成：${summary.ocrWarnings.join('；')||`${summary.ocrFailed+summary.ocrSkipped} 项待重试`}`} :{}), documentSummary: summary };
 }

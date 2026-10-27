@@ -30,6 +30,8 @@ export type OcrSkipCode =
   | 'no_text';
 
 export interface OcrImageResult {
+  reused?: boolean;
+  recognizedAt?: string;
   status: 'success' | 'failed' | 'skipped';
   text: string;
   model: string | null;
@@ -82,7 +84,7 @@ export async function recognizeImageText(
   opts: { enabled?: boolean } = {},
 ): Promise<OcrImageResult> {
   const gateway = await import('./ai/gateway.ts');
-  if (opts.enabled !== true && !gateway.isOcrEnabled()) {
+  if (!(opts.enabled ?? gateway.isOcrEnabled())) {
     return { status: 'skipped', text: '', model: null, code: 'disabled', message: '图片识别未启用' };
   }
 

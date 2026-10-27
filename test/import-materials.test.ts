@@ -103,3 +103,12 @@ test('仅导入的失败任务继续不要求向量模型，有向量的原任�
   expect(importNeedsEmbedding([{ id: 'one', name: '一', runId: 'old', autoEmbed: true }], false)).toBe(true);
   expect(importNeedsEmbedding([{ id: 'one', name: '一' }], false)).toBe(false);
 });
+test('关闭图片识别同时传到文件上传和目录导入，部分完成的旧任务继续而非移除',async()=>{
+  const flags:boolean[]=[];const retried:string[]=[];const completed:string[]=[];
+  await importMaterials([{id:'dir',name:'目录',path:'isolated'},{id:'file',name:'文件',file:new File(['body'],'a.md')},{id:'old',name:'旧任务',runId:'task-10'}],{
+    documentOcr:false,
+    api:{startImportRun:async input=>{flags.push(input.documentOcr);return {runId:'dir'};},startImportUploadRun:async(_file,input)=>{flags.push(input.documentOcr);return {runId:'file'};},run:async id=>({id,status:'completed',result:{imported:1,skipped:0,errors:1,partialFiles:1}}) as any,retryRun:async id=>{retried.push(id);return {runId:id};}},
+    wait:async id=>({id,status:'completed'}) as any,update:()=>{},starting:()=>{},completed:item=>completed.push(item.id),
+  });
+  expect(flags).toEqual([false,false]);expect(retried).toEqual(['task-10']);expect(completed).toEqual(['dir','file','old']);
+});

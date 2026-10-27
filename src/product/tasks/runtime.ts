@@ -42,6 +42,7 @@ import { withDatabaseRequest, withoutDatabaseRequest } from '../database/request
 import { withDeadline } from '../deadline.ts';
 import {handleTaskBudget,type TaskBudgetRequest,type TaskBudgetState} from './task-budget';
 import { BackgroundVectorizationScheduler } from './background-vectorization';
+import { documentResourcePlan } from '../../core/document/resource-policy';
 import type { BackgroundResourceSample, VectorizationSchedule } from '../../../shared/background-vectorization';
 
 export const PRODUCT_TASK_QUEUE = 'pmbrain-product';
@@ -147,8 +148,8 @@ export class ProductTaskRuntime {
     this.fileWorker.on('job-finished', (job:MinionJob)=>{
       if(this.stopped||this.paused)return;
       void this.queue.getJob(job.id).then(async current=>{
-        if(current){this.fileProjection.record(current);await this.fileQueue.cleanupCompleted(current);}
-        this.scheduleSessionRefresh(Number(job.data.sessionId));
+        try{if(current){this.fileProjection.record(current);await this.fileQueue.cleanupCompleted(current);}}
+        finally{this.scheduleSessionRefresh(Number(job.data.sessionId));}
       }).catch(error=>console.error('[tasks] file completion:',error));
     });
     this.fileWorker.register(SYNC_FILE_TASK, async context => {
@@ -507,12 +508,13 @@ export class ProductTaskRuntime {
   attachForegroundCheck(check: () => boolean) { this.foregroundCheck = check; }
   updateBackgroundResources(sample: Omit<BackgroundResourceSample, 'cpuBusyRatio'>) { this.background.updateDesktopSample(sample); }
 
-  private async vectorizationDecision(): Promise<VectorizationSchedule> {
+  private async vectorizationDecision(maintenanceId?:number): Promise<VectorizationSchedule> {
     const decision = this.background.decision(this.foregroundCheck?.() === true, this.localPressure || this.externalPressure);
     if (decision.mode === 'waiting') return decision;
     const busy = await this.engine.executeRaw(`SELECT id FROM minion_jobs WHERE queue IN ($1,$2)
       AND status IN ('waiting','active','waiting-children')
-      AND data->'task'->>'type' IN ('import','sync','sync-file','dream','assistant') LIMIT 1`, [PRODUCT_TASK_QUEUE, SYNC_FILE_QUEUE]);
+      AND data->'task'->>'type' IN ('import','sync','sync-file','dream','assistant')
+      AND ($3::bigint IS NULL OR (id<>$3 AND (data->'task'->>'type'<>'dream' OR id<$3))) LIMIT 1`, [PRODUCT_TASK_QUEUE, SYNC_FILE_QUEUE,maintenanceId??null]);
     return this.background.decision(busy.length > 0, this.localPressure || this.externalPressure);
   }
 
@@ -897,8 +899,13 @@ export class ProductTaskRuntime {
         updateActivity({operation:message.method,operationStartedAt:new Date().toISOString()});
         const dispatch = async () => {
           if(cancelRequested) throw new Error('任务已取消');
-          if (message.method === 'task.syncFileHash') return this.fileQueue.sourceHash(message.args[0] as SyncFileInput);
           if (message.method === 'task.searchOptimize') return this.acceptSearchOptimize(String(message.args[0] ?? 'default'), Array.isArray(message.args[1]) ? message.args[1].filter((slug): slug is string => typeof slug === 'string') : []);
+          if(message.method==='task.documentResources')return this.background.resourceSample();
+          if(message.method==='task.maintenanceVectorizationState'){
+            if(structuredTask.type!=='dream')throw new Error('当前任务不能执行维护向量化');
+            const state=await loadSearchOptimize(this.engine);
+            return {paused:state.paused,schedule:await this.vectorizationDecision(context.id)};
+          }
           if (message.method === 'task.searchOptimizeState') return this.searchOptimizeView();
           if (message.method === 'task.searchOptimizeDone') {
             const state = await completeSearchOptimize(this.engine, String(message.args[0] ?? ''), String(message.args[1] ?? ''), typeof message.args[2] === 'string' ? message.args[2] : undefined);
@@ -1048,6 +1055,13 @@ export class ProductTaskRuntime {
       }
       if (structuredTask.type === 'dream' && outcome !== MINION_DEFERRED && (outcome as { reason?: string })?.reason === 'cycle_already_running') return this.deferMaintenance(record);
       if (outcome === MINION_DEFERRED && !this.stopIntents.has(context.id)) {
+        if(deferredPhase==='maintenance_embed'){
+          const state=await loadSearchOptimize(this.engine),schedule=await this.vectorizationDecision(context.id);
+          for(const step of adapter.view.steps)if(step.phases.includes('embed'))step.status='pending';
+          adapter.view.background={mode:'waiting',reason:state.paused?'知识向量化已暂停':schedule.reason};
+          await persist();record.progress=progress;
+          return this.deferMaintenance(record,state.paused?'知识向量化已暂停，维护成果已保存':`${schedule.reason}，维护成果已保存`,Math.max(1000,schedule.delayMs));
+        }
         if(deferredPhase==='capture_entities'){
           await persist();record.progress=progress;
           return this.deferMaintenance(record,'本批已保存，等待继续识别实体');
@@ -1136,16 +1150,16 @@ export class ProductTaskRuntime {
     this.sessionViews.delete(record.id);
   }
 
-  private async deferMaintenance(record: MinionJob, stage = '等待前面的整理任务完成'): Promise<typeof MINION_DEFERRED> {
+  private async deferMaintenance(record: MinionJob, stage = '等待前面的整理任务完成',delayMs=1000): Promise<typeof MINION_DEFERRED> {
     const progress = (record.progress ?? {}) as Progress;
     delete progress.result;
     const view = progress.product ?? new TaskProgressAdapter(String(record.data.kind)).view;
     view.stage = stage; view.percent = null; view.errorReason = null;
     progress.product = view;
-    await this.engine.executeRaw(`UPDATE minion_jobs SET status='delayed',delay_until=now()+interval '1 second',
+    await this.engine.executeRaw(`UPDATE minion_jobs SET status='delayed',delay_until=now()+($4::double precision * interval '1 millisecond'),
       lock_token=NULL,lock_until=NULL,error_text=NULL,result=NULL,progress=$3::jsonb,
       attempts_started=GREATEST(attempts_started-1,0),updated_at=now()
-      WHERE id=$1 AND status='active' AND lock_token=$2`, [record.id, record.lock_token, progress]);
+      WHERE id=$1 AND status='active' AND lock_token=$2`, [record.id, record.lock_token, progress,delayMs]);
     this.sessionViews.delete(record.id);
     return MINION_DEFERRED;
   }
@@ -1189,7 +1203,7 @@ export class ProductTaskRuntime {
     const constrained=this.localPressure||this.externalPressure;
     const backgroundActive = [...this.executions.values()].some(execution => execution.background);
     this.worker.setConcurrency(constrained && !backgroundActive ? 1 : 2);
-    this.fileWorker.setConcurrency(constrained||this.engine.kind==='pglite'?1:2);
+    this.fileWorker.setConcurrency(constrained||this.engine.kind==='pglite'?1:documentResourcePlan(this.background.resourceSample()).concurrency);
     for(const execution of this.executions.values())execution.adjust(constrained);
     if(constrained)void this.reclaimIdleThreads().catch(error=>console.error('[tasks] resource reclaim:',error));
   }

@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path';
 import { gbrainPath, loadConfig } from '../../core/config.ts';
 import { getAccurateRss } from '../../core/minions/worker.ts';
 import { MAX_FILE_SIZE, MAX_IMAGE_BYTES, isImageFilePath } from '../../core/import-file.ts';
-import { MAX_OFFICE_BYTES } from '../../core/office-import.ts';
+import {officeFileSizeLimit} from '../../core/document/resource-policy.ts';
 import { isOfficeFilePath } from '../../core/sync.ts';
 import { freemem, totalmem } from 'node:os';
 import { memoryPressure } from '../../../shared/memory-budget.ts';
@@ -26,7 +26,7 @@ export function isSyncCapacityError(error:unknown):boolean {
   return message.startsWith('资源保护：') && /队列容量|快照容量/.test(message);
 }
 export function assertImportFileSize(path:string,size:number){
-  const limit=isImageFilePath(path)?MAX_IMAGE_BYTES:isOfficeFilePath(path)?MAX_OFFICE_BYTES:MAX_FILE_SIZE;
+  const limit=isImageFilePath(path)?MAX_IMAGE_BYTES:isOfficeFilePath(path)?officeFileSizeLimit(path):MAX_FILE_SIZE;
   if(size>limit)throw new Error(`资源保护：文件过大（${size} bytes，当前格式上限 ${limit} bytes）：${path}。请拆分后继续。`);
 }
 

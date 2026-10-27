@@ -53,6 +53,8 @@ export interface DocumentMetadata {
   ocrSkipped?: number;
   ocrWarnings?: string[];
   ocrReceipt?: OcrReceipt;
+  ocrReused?: number;
+  ocrProcessedAt?: string;
 }
 export interface StructuredDocument {
   title: string;
@@ -62,6 +64,7 @@ export interface StructuredDocument {
 }
 
 export interface DocumentParseOptions {
+  runtime?:import('./resource-policy.ts').DocumentRuntime;
   structured?: boolean;
   ocrPage?: (page: number, image: Buffer, mime: string) => Promise<OcrImageResult>;
 }
@@ -82,4 +85,5 @@ export interface DocumentImportSummary {
   ocrFailed: number;
   ocrSkipped: number;
   ocrWarnings: string[];
+  ocrReused?: number;
 }

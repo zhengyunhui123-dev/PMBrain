@@ -21,7 +21,6 @@ export function buildStructuredParentSections(document: StructuredDocument): Par
   for (const section of document.sections) {
     if (section.type === 'heading' && section.heading) {
       activeHeading = section.heading;
-      continue;
     }
     if (section.type === 'slide' && section.heading) activeHeading = section.heading;
     const text = sectionPlainText(section);
