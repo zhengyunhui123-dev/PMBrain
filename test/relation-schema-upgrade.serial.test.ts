@@ -2,7 +2,7 @@ import { afterAll, beforeAll, expect, test } from 'bun:test';
 import { PGLiteEngine } from '../src/core/pglite-engine.ts';
 import { PostgresEngine } from '../src/core/postgres-engine.ts';
 import type { BrainEngine } from '../src/core/engine.ts';
-import { runMigrations } from '../src/core/migrate.ts';
+import { LATEST_VERSION, MIGRATIONS, runMigrations } from '../src/core/migrate.ts';
 import { assertSafeE2eDatabaseUrl } from './helpers/db-guard.ts';
 
 let engine:BrainEngine;
@@ -27,7 +27,10 @@ test('schema 130 upgrades metadata while preserving legacy content, types, versi
   await engine.setConfig('version','130');
   await engine.unsetConfig('pmbrain.schema.version');
   await engine.executeRaw('DROP TABLE pmbrain_schema_migrations');
-  expect(await runMigrations(engine)).toEqual({applied:6,current:136});
+  expect(await runMigrations(engine)).toEqual({
+    applied:MIGRATIONS.filter(migration=>migration.version>130).length,
+    current:LATEST_VERSION,
+  });
   const after=await engine.executeRaw('SELECT p.compiled_truth,p.timeline,p.frontmatter,p.type,p.title,p.content_hash,p.updated_at,(SELECT jsonb_agg(tag ORDER BY tag) FROM tags WHERE page_id=p.id) AS tags FROM pages p WHERE slug=$1',['notes/legacy-upgrade']);
   expect(after).toEqual(before);
   expect(await engine.executeRaw('SELECT chunk_text,embedding::text FROM content_chunks')).toEqual(chunks);
@@ -43,7 +46,7 @@ test('legacy 133 adopts the PMBrain migration namespace and resumes an unfinishe
  await engine.executeRaw("UPDATE pages SET knowledge_revision=NULL WHERE slug='notes/legacy-upgrade'");
  await engine.unsetConfig('pmbrain.schema.version');await engine.unsetConfig('page_state.revision_backfill');await engine.setConfig('version','133');
  await runMigrations(engine);
- expect(await engine.getConfig('pmbrain.schema.version')).toBe('136');
+ expect(await engine.getConfig('pmbrain.schema.version')).toBe(String(LATEST_VERSION));
  expect(await engine.executeRaw('SELECT id FROM pages WHERE knowledge_revision IS NULL')).toHaveLength(0);
  expect(await engine.executeRaw<{version:number;upstream_version:number}>("SELECT version,upstream_version FROM pmbrain_schema_migrations WHERE namespace='pmbrain' AND upstream_version IS NOT NULL ORDER BY version")).toEqual([{version:131,upstream_version:150},{version:132,upstream_version:206},{version:133,upstream_version:214}]);
 },60_000);

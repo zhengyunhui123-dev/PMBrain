@@ -126,7 +126,7 @@ describe('首页按有没有知识库区分，并接上现有能力', () => {
     expect(css).toContain('.wb-assistant-chip[data-kind="specialist"]');
     expect(css).toContain('.wb-message[data-kind="specialist"] .wb-avatar');
     const settings = read('admin/src/workbench/AgentSettings.tsx');
-    expect(settings).toContain('周报等成果会写入所选知识来源的本地目录，优先主数据源路径');
+    expect(settings).toContain('成果保存在已选择的工作目录');
     expect(settings).toContain('从对话记下的工作规则');
     expect(settings).toContain('已存的做法');
     expect(settings).toContain('就按这次的存下来');
@@ -136,7 +136,7 @@ describe('首页按有没有知识库区分，并接上现有能力', () => {
     expect(workbench).toContain('rosterStatus');
     expect(message).toContain('evidenceGap');
     expect(message).toContain('playbookNotice');
-    expect(read('admin/src/workbench/AgentCards.tsx')).toContain('已准备好「{agent.name}」');
+    expect(read('admin/src/workbench/AgentCards.tsx')).toContain('已准备好「{name}」');
   });
 
   test('菜单默认展开且保留手动折叠，两个 MCP 页对调，对话模型记住上次选择，停止按钮是蓝色', () => {

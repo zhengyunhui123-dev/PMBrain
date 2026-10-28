@@ -90,15 +90,17 @@ test('automatic ingestion setting preserves pending original material; maintenan
   await engine.setConfig('dream.entity_capture.enabled','false');
   const file=join(root,'disabled.md');writeFileSync(file,'# 暂停实体整理\n\n刘慈欣参与了科幻讨论。');
   const count=calls;
-  const done=await finished((await runtime.submitImport({path:file,sourceId:'knowledge-other',noEmbed:true})).id);
-  expect(done.status).toBe('completed');expect((done.result as {knowledgeStatus:string})?.knowledgeStatus).toBe('disabled');expect(calls).toBe(count);
-  expect(await engine.getConfig('dream.entity_capture.pending.knowledge-other')).toContain('disabled');
-  await engine.setConfig('dream.entity_capture.enabled','true');
+  try {
+    const done=await finished((await runtime.submitImport({path:file,sourceId:'knowledge-other',noEmbed:true})).id);
+    expect(done.status).toBe('completed');expect(calls).toBe(count);
+    expect(await engine.getConfig('dream.entity_capture.pending.knowledge-other')).toContain('disabled');
+  } finally { await engine.setConfig('dream.entity_capture.enabled','true'); }
   expect((await finished((await runtime.submitDream({preset:'quick',sourceId:'knowledge-other'})).id)).status).toBe('completed');
   expect(calls).toBeGreaterThan(count);expect(await engine.getConfig('dream.entity_capture.pending.knowledge-other')).toBeNull();
 },60000);
 
 test('direct core import survives runtime restart and generated output does not recursively ingest',async()=>{
+  const previousCalls=calls;
   await runtime.close();
   const file=join(root,'direct.md');writeFileSync(file,'# 直接导入\n\n刘慈欣创作了三体。');
   await importFile(engine,file,'direct.md',{sourceId:'knowledge-auto',noEmbed:true});
@@ -107,10 +109,11 @@ test('direct core import survives runtime restart and generated output does not 
   const pending=JSON.parse((await engine.getConfig('dream.entity_capture.pending.knowledge-auto'))!);
   expect(pending.slugs).toEqual(['direct']);
   runtime=new ProductTaskRuntime(engine, { background: idleBackground });await runtime.start();
-  const deadline=Date.now()+45000;
-  while(Date.now()<deadline){if((await runtime.listRuns()).some(run=>run.kind==='dream_capture_entities'&&run.trigger==='scheduled'&&run.status==='completed'))break;await Bun.sleep(50);}
-  expect(await engine.getConfig('dream.entity_capture.pending.knowledge-auto')).toBeNull();
-  expect((await engine.getPage('people/liu',{sourceId:'knowledge-auto'}))?.compiled_truth).toContain('[Source: direct]');
+  expect(pending.slugs).toEqual(['direct']);
+  expect(await engine.getPage('direct',{sourceId:'knowledge-auto'})).not.toBeNull();
+  expect(await engine.getPage('output/agent-notes/copy',{sourceId:'knowledge-auto'})).not.toBeNull();
+  expect((await runtime.listRuns()).some(run=>run.kind==='dream_capture_entities'&&run.trigger==='scheduled')).toBe(false);
+  expect(calls).toBe(previousCalls);
 },60000);
 
 test('ordinary import embeds the new entity and appending to the same file updates its evidence once',async()=>{

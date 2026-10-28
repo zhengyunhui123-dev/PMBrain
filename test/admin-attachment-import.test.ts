@@ -15,6 +15,7 @@ const consoleSource = [
 const apiSource = readFileSync(join(root, 'admin/src/api.ts'), 'utf8');
 const stylesSource = readFileSync(join(root, 'admin/src/index.css'), 'utf8');
 const serveHttpSource = readFileSync(join(root, 'src/commands/pmbrain-admin-routes.ts'), 'utf8');
+const adminSupportSource = readFileSync(join(root, 'src/commands/pmbrain-admin-support.ts'), 'utf8');
 
 function sourceBetween(source: string, start: string, end: string): string {
   const from = source.indexOf(start);
@@ -115,10 +116,12 @@ describe('Admin knowledge assistant attachment contract', () => {
 describe('Admin local attachment staging safety contract', () => {
   test('keeps the 50 MiB cap for ordinary files while streaming session JSONL without that cap', () => {
     expect(ADMIN_UPLOAD_MAX_BYTES).toBe(50 * 1024 * 1024);
-    expect(serveHttpSource).toContain("express.raw({ type: 'application/octet-stream', limit: ADMIN_UPLOAD_MAX_BYTES })");
-    expect(serveHttpSource).toContain("classifyAdminUploadFilename(fileName) === 'session'");
-    expect(serveHttpSource).toContain("pipeline(req, createWriteStream(filePath");
-    expect(consoleSource).toContain("extension !== '.jsonl' && file.size > MAX_KNOWLEDGE_ATTACHMENT_BYTES");
+    expect(adminSupportSource).toContain("const limit=kind==='session'?Infinity:kind==='office'?officeFileSizeLimit(path):ADMIN_UPLOAD_MAX_BYTES;");
+    expect(adminSupportSource).toContain("if(Number(req.get('content-length')??0)>limit)");
+    expect(adminSupportSource).toContain('req.iterator({destroyOnReturn:false})');
+    expect(adminSupportSource).toContain('if(size>limit)');
+    expect(adminSupportSource).toContain("await open(path,'wx',0o600)");
+    expect(consoleSource).toContain("extension !== '.jsonl' && file.size > knowledgeAttachmentByteLimit(file.name)");
     expect(consoleSource).toContain('会话 JSONL 不限制原始文件大小');
   });
 
@@ -161,8 +164,9 @@ describe('Admin local attachment staging safety contract', () => {
     expect(serveHttpSource).toContain("normalizeAdminUploadFilename(req.get('x-pmbrain-filename'))");
     expect(serveHttpSource).toContain("mkdtemp(joinPath(tmpdir(), 'pmbrain-admin-upload-'))");
     expect(serveHttpSource).toContain('joinPath(tempDir, fileName)');
-    expect(serveHttpSource).toContain("writeFile(filePath, req.body, { flag: 'wx', mode: 0o600 })");
-    expect(serveHttpSource).toContain("createWriteStream(filePath, { flags: 'wx', mode: 0o600 })");
+    expect(serveHttpSource).toContain('await writeAdminUpload(req,filePath,fileKind)');
+    expect(adminSupportSource).toContain("await open(path,'wx',0o600)");
+    expect(adminSupportSource).toContain('await output.write(chunk,offset,chunk.length-offset,null)');
   });
 
   test('submits a structured background task and delegates staged-file cleanup to its runtime', () => {

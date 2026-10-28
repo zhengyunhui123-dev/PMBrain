@@ -20,7 +20,7 @@ const postgresUrl = process.env.PMBRAIN_AGENT_TEST_DATABASE_URL;
 if (postgresUrl) assertSafeE2eDatabaseUrl(postgresUrl);
 let engine: BrainEngine, runtime: ProductTaskRuntime, server: ReturnType<express.Express['listen']>, base: string, modelServer: ReturnType<typeof Bun.serve>;
 let coordinator: NonNullable<ReturnType<typeof registerWorkbenchRoutes>['coordinator']>;
-let slow = false, requested = false;
+let slow = false, requested = false, assistantCreateSent = false, delegatedTaskSent = false, assistantTaskStep = 0, fixtureToolCall = 0;
 let agent: any;
 const directory = join(root, 'materials'); const path = join(directory, 'week.md');
 const work = '2026-10-14：完成需求评审。下周计划上线。';
@@ -51,12 +51,23 @@ beforeAll(async () => {
   modelServer = Bun.serve({ port: 0, async fetch(req) {
     const input: any = await req.json(); requested = true;
     if (slow) { while (!req.signal.aborted && slow) await Bun.sleep(30); }
-    const observations = input.messages.flatMap((message: any) => message.role === 'tool' ? [String(message.content)] : []);
     const create = input.messages.some((message: any) => message.role === 'user' && String(message.content).includes('创建周报助手'));
     const delegate = input.messages.some((message: any) => message.role === 'user' && String(message.content).includes('交给周报助手'));
-    const last = observations.at(-1) ?? '';
-    const tool = delegate ? !observations.length ? { name: 'task_submit', arguments: { assistantId: agent.id, prompt: '读取工作记录，写周报并保存 Word' } } : undefined : create && !observations.length ? { name: 'assistant_create', arguments: { name: '周报助手', systemPrompt: '只写有依据的工作', workflow: '读取工作记录，按完成和推进中写周报', readDirectories: [path.slice(0, path.lastIndexOf(process.platform === 'win32' ? '\\' : '/'))], skills: ['weekly-report'], sourceIds: ['default'] } } : !create && !observations.some((text: string) => text.includes(work)) ? { name: 'local_read', arguments: { path } } : !create && !observations.some((text: string) => text.includes('"saved":true')) ? { name: 'artifact_save', arguments: { title: '周报', content: '# 已完成\n完成需求评审 [1]\n# 下周计划\n计划上线 [1]' } } : undefined;
-    const delta = tool ? { tool_calls: [{ index: 0, id: `tool-${observations.length}`, type: 'function', function: { name: tool.name, arguments: JSON.stringify(tool.arguments) } }] } : { content: delegate ? '任务已提交，请到任务对话查看进展。' : create ? '周报助手已经创建。' : '周报文件已经保存。' };
+    let tool: { name: string; arguments: Record<string, unknown> } | undefined;
+    if (create && !assistantCreateSent) {
+      assistantCreateSent = true;
+      tool = { name: 'assistant_create', arguments: { name: '周报助手', systemPrompt: '只写有依据的工作', workflow: '读取工作记录，按完成和推进中写周报', readDirectories: [directory], skills: ['weekly-report'], sourceIds: ['default'] } };
+    } else if (delegate && !delegatedTaskSent) {
+      delegatedTaskSent = true;
+      tool = { name: 'task_submit', arguments: { assistantId: agent.id, prompt: '读取工作记录，写周报并保存 Word' } };
+    } else if (!create && !delegate && assistantTaskStep === 0) {
+      assistantTaskStep = 1;
+      tool = { name: 'local_read', arguments: { path } };
+    } else if (!create && !delegate && assistantTaskStep === 1) {
+      assistantTaskStep = 2;
+      tool = { name: 'artifact_save', arguments: { title: '周报', content: '# 已完成\n完成需求评审 [1]\n# 下周计划\n计划上线 [1]' } };
+    }
+    const delta = tool ? { tool_calls: [{ index: 0, id: `tool-${fixtureToolCall++}`, type: 'function', function: { name: tool.name, arguments: JSON.stringify(tool.arguments) } }] } : { content: delegate ? '任务已提交，请到任务对话查看进展。' : create ? '周报助手已经创建。' : '周报文件已经保存。' };
     const payload = { id: 'fixture', object: 'chat.completion.chunk', created: 1, model: 'chat', choices: [{ index: 0, delta, finish_reason: tool ? 'tool_calls' : 'stop' }], usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 } };
     return new Response(`data: ${JSON.stringify(payload)}\n\ndata: [DONE]\n\n`, { headers: { 'content-type': 'text/event-stream' } });
   } });
@@ -71,12 +82,15 @@ test('authenticated conversation creation configures rules, skill and file acces
   for (let count = 0; count < 200; count++) { const value = await request(`/conversations/${conversation.id}`); if (value.messages.at(-1)?.status !== 'running') break; await Bun.sleep(30); }
   agent = (await request('/agents')).agents.find((row: any) => row.name === '周报助手');
   expect(agent.skills).toEqual(['weekly-report']); expect(agent.readDirectories).toEqual([directory]);
+  agent = await request(`/agents/${agent.id}`, { ...agent, workspaceDirectory: directory }, 'PUT');
+  expect(agent.workspaceDirectory).toBe(directory);
   expect((await fetch(base + '/agents')).status).toBe(401);
   await new Promise<void>(resolve => server.close(() => resolve())); await runtime.close(); await open();
   expect((await request('/agents')).agents.find((row: any) => row.id === agent.id).workflow).toContain('读取');
 }, 60000);
 
 test('persistent delegated task delivers a docx and preserves its source file', async () => {
+  assistantTaskStep = 0;
   const submitted = await request(`/agents/${agent.id}/tasks`, { prompt: '读取工作记录，写周报并保存 Word', key: 'first-report' });
   const run = await finished(submitted.run.id); expect(run.status).toBe('completed'); expect((run.result as any)?.artifacts).toHaveLength(1);
   const artifactId = ((run.result as any).artifacts as any[])[0].id;
@@ -87,6 +101,7 @@ test('persistent delegated task delivers a docx and preserves its source file', 
 }, 60000);
 
 test('weekly schedule persists across restart and one occurrence submits only one task', async () => {
+  assistantTaskStep = 0;
   const fresh = (await request('/agents')).agents.find((row: any) => row.id === agent.id);
   const next = await request(`/agents/${agent.id}`, { ...fresh, schedule: { enabled: true, weekdays: [5], time: '17:00', timezone: 'Asia/Shanghai', prompt: '生成本周周报并保存 Word' } }, 'PUT');
   const occurrence = scheduleOccurrence(next.schedule, new Date(Date.now() + 60000), 'next')!;
@@ -100,6 +115,7 @@ test('weekly schedule persists across restart and one occurrence submits only on
 }, 60000);
 
 test('a main assistant conversation hands work to a specialist and links its real task conversation', async () => {
+  assistantTaskStep = 0; delegatedTaskSent = false;
   const conversation = await request('/conversations', { knowledge: false });
   await request(`/conversations/${conversation.id}/messages`, { text: '把写周报的任务交给周报助手', knowledge: false });
   let reply: any;
@@ -111,11 +127,12 @@ test('a main assistant conversation hands work to a specialist and links its rea
 }, 60000);
 
 test('stopping an assistant task preserves its conversation and retry resumes the same task', async () => {
-  slow = true; requested = false;
+  assistantTaskStep = 0; slow = true; requested = false;
   const submitted = await request(`/agents/${agent.id}/tasks`, { prompt: '读取工作记录，写周报并保存 Word', key: 'cancel-report' });
   const deadline = Date.now() + 15000; while (!requested && Date.now() < deadline) await Bun.sleep(20); expect(requested).toBe(true);
   const stopped = await runtime.cancel(submitted.run.id); expect(stopped?.status).toBe('cancelled'); slow = false;
   const conversation = await request(`/conversations/${submitted.conversationId}`); expect(conversation.messages[0].text).toContain('工作记录');
+  assistantTaskStep = 0;
   const retried = await runtime.retry(submitted.run.id); expect(retried?.id).toBe(submitted.run.id);
   expect((await finished(submitted.run.id)).status).toBe('completed'); expect(readFileSync(path, 'utf8')).toBe(work);
 }, 60000);

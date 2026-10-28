@@ -25,7 +25,7 @@ describe('schema 125-128 additive foundation', () => {
   }, 30_000);
 
   test('LATEST_VERSION includes the current compatibility migrations', () => {
-    expect(LATEST_VERSION).toBe(136);
+    expect(LATEST_VERSION).toBeGreaterThanOrEqual(Math.max(...ADDITIVE_VERSIONS));
   });
 
   test('migrations 125-128 are SQL-only and do not rewrite pages/facts/timeline content', () => {
@@ -142,7 +142,7 @@ describe('schema 125-128 additive foundation', () => {
     });
     await setTestSchemaVersion(engine, '124');
     await runMigrations(engine);
-    expect(await engine.getConfig('version')).toBe('136');
+    expect(await engine.getConfig('version')).toBe(String(LATEST_VERSION));
     const rows = await engine.executeRaw<{ event_page_id: number | null; summary: string }>(`
       SELECT te.event_page_id, te.summary
         FROM timeline_entries te

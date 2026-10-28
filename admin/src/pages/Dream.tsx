@@ -1110,6 +1110,7 @@ interface PhaseProgressFromRun {
   completed: Set<string>;
   active: string | null;
   report: DreamCycleReport | null;
+  settled: boolean;
   currentSource: string | null;
   completedSources: number;
   sourceIndex: number | null;
@@ -1122,6 +1123,7 @@ function phaseProgressFromRun(run: ConsoleRun | null): PhaseProgressFromRun {
       completed: new Set(),
       active: null,
       report: null,
+      settled: false,
       currentSource: null,
       completedSources: 0,
       sourceIndex: null,
@@ -1200,6 +1202,7 @@ function phaseProgressFromRun(run: ConsoleRun | null): PhaseProgressFromRun {
     completed,
     active,
     report,
+    settled: !running,
     currentSource,
     completedSources: completedSourceIds.size,
     sourceIndex,
@@ -1246,7 +1249,10 @@ function quickStageState(
     .filter((phase): phase is DreamPhaseReport => !!phase);
   if (reports.some(phase => phase.status === 'fail' || phase.status === 'error')) return 'error';
   if (progress.active && phases.includes(progress.active)) return 'active';
-  if (phases.filter(phase=>phase!=='capture_entities'||!progress.report||reports.some(item=>item.phase===phase)).every(phase => progress.completed.has(phase))) {
+  const expectedPhases = progress.settled
+    ? phases.filter(phase => reports.some(item => item.phase === phase))
+    : phases.filter(phase => phase !== 'capture_entities' || !progress.report || reports.some(item => item.phase === phase));
+  if (expectedPhases.length > 0 && expectedPhases.every(phase => progress.completed.has(phase))) {
     return partialWhen ? 'partial' : 'done';
   }
   return 'idle';

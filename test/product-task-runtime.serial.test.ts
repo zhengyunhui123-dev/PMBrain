@@ -496,7 +496,7 @@ describe('软件后台任务共用 owner 数据库', () => {
       const read = async () => {
         const run = await runtime.getRun(accepted.id);
         expect(run?.status).toBe('running');
-        expect(run?.product?.steps.length).toBe(5);
+        expect(run?.product?.steps.length).toBe(7);
         expect(run?.product?.stage).toBeTruthy();
         expect(await engine.getPage('background', { sourceId: 'default' })).not.toBeNull();
       };

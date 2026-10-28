@@ -22,6 +22,7 @@ import {
 import { sortNewestFirst } from '../core/sort-newest-first.ts';
 import {
   loadCheckpoint,
+  resumeFilter,
   saveCheckpoint,
   clearCheckpoint,
 } from '../core/import-checkpoint.ts';
@@ -317,9 +318,12 @@ export async function runStructuredImport(
   const completed = new Set<string>();
   if (!fresh && !opts.checkpointKey) {
     const cp = loadCheckpoint(checkpointPath, importRoot);
-    if (cp?.completedPaths.length) console.log('恢复导入：重新核对文件内容，未变化资料将跳过');
+    if (cp?.completedPaths.length) {
+      for (const path of cp.completedPaths) completed.add(path);
+      console.log('恢复导入：重新核对文件内容，未变化资料将跳过');
+    }
   }
-  const files = allFiles;
+  const files = resumeFilter(allFiles, importRoot, completed);
 
   // Determine actual worker count
   const actualWorkers = workerCount > 1 ? workerCount : 1;
