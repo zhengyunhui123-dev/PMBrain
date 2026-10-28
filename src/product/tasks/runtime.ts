@@ -113,6 +113,7 @@ export class ProductTaskRuntime {
   private ocrOverviewAt = 0;
   private ocrOverviewError: string | null = null;
   private executions = new Map<number, { background?: boolean; pause?: () => void; cancel: (reason?:string) => void; done: Promise<unknown>; run: () => ConsoleRun; ownsLockedTransaction: () => boolean; adjust:(constrained:boolean)=>void }>();
+  private cancelledExecutions = new WeakSet<object>();
   private resources:TaskResourceGuard;
   private background: BackgroundVectorizationScheduler;
   private foregroundCheck?: () => boolean;
@@ -649,12 +650,19 @@ export class ProductTaskRuntime {
     return this.sessionViews.get(jobId) ?? this.getRun(id);
   }
 
+  private cancelTracked(id: number, reason?: string) {
+    const execution = this.executions.get(id);
+    if (!execution || this.cancelledExecutions.has(execution)) return;
+    this.cancelledExecutions.add(execution);
+    execution.cancel(reason);
+  }
+
   async requestCancel(id: string, reason?: string): Promise<ConsoleRun | null> {
     if (!/^task-\d+$/.test(id)) return null;
     const jobId = Number(id.slice(5));
     if (this.stopAcknowledgements.has(jobId)) {
-      this.executions.get(jobId)?.cancel(reason);
-      for (const [child, owner] of this.fileSessions) if (owner === jobId) this.executions.get(child)?.cancel(reason);
+      this.cancelTracked(jobId, reason);
+      for (const [child, owner] of this.fileSessions) if (owner === jobId) this.cancelTracked(child, reason);
       await this.stopAcknowledgements.get(jobId);
       return this.sessionViews.get(jobId) ?? this.cached.find(run => run.id === id) ?? null;
     }
@@ -663,8 +671,8 @@ export class ProductTaskRuntime {
       ?? await withDeadline(this.getRun(id), 1000, '数据库未及时响应，无法确认该任务的状态');
     if (!view || !['running','queued'].includes(view.status)) return view;
     this.stopIntents.add(jobId);
-    this.executions.get(jobId)?.cancel(reason);
-    for (const [child, owner] of this.fileSessions) if (owner === jobId) this.executions.get(child)?.cancel(reason);
+    this.cancelTracked(jobId, reason);
+    for (const [child, owner] of this.fileSessions) if (owner === jobId) this.cancelTracked(child, reason);
     this.sessionViews.set(jobId, { ...view, status: 'running', error: '正在停止任务…' });
     const acknowledgement = this.persistStopIntent(jobId, reason);
     this.stopAcknowledgements.set(jobId, acknowledgement);
@@ -731,10 +739,12 @@ export class ProductTaskRuntime {
       delete record!.data.resourceStopReason;
       record!.data.authorizedAttempt = record!.attempts_started + 1;
       await this.clearStopIntent(resumedId);
-      await this.engine.executeRaw(`UPDATE minion_jobs SET status='waiting',result=NULL,error_text=NULL,lock_token=NULL,lock_until=NULL,delay_until=NULL,finished_at=NULL,
+      const updated = await this.engine.executeRaw(`UPDATE minion_jobs SET status='waiting',result=NULL,error_text=NULL,lock_token=NULL,lock_until=NULL,delay_until=NULL,finished_at=NULL,
         data=(data-'resourceStopReason') || ($2::jsonb - 'relations' - 'gitFiles' - 'gitResults' - 'taskBudget'),progress=$3::jsonb,updated_at=now()
-        WHERE id=$1 AND queue=$4 AND status IN ('paused','cancelled','failed','dead','completed')`, [resumedId, record!.data, progress,record!.queue]);
-      return this.getRun(id);
+        WHERE id=$1 AND queue=$4 AND status IN ('paused','cancelled','failed','dead','completed') RETURNING id`, [resumedId, record!.data, progress,record!.queue]);
+      const current = await this.getRun(id);
+      if (current && updated.length) return { ...current, status: 'queued' };
+      return current;
     }
     throw new Error('文件任务请通过快速维护继续');
   }
