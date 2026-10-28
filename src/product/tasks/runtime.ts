@@ -3,6 +3,7 @@ import { Worker } from 'node:worker_threads';
 import { stat, mkdir, open, readFile, rename, unlink, readdir } from 'node:fs/promises';
 import { dirname, basename } from 'node:path';
 import type { BrainEngine } from '../../core/engine.ts';
+import { isExpectedDatabaseInterruptReason } from '../../core/process-cleanup.ts';
 import { MinionQueue } from '../../core/minions/queue.ts';
 import { MinionWorker } from '../../core/minions/worker.ts';
 import { MINION_DEFERRED, rowToMinionJob, type MinionJob, type MinionJobContext } from '../../core/minions/types.ts';
@@ -238,7 +239,7 @@ export class ProductTaskRuntime {
       console.error('[tasks] worker stopped:', error instanceof Error ? error.message : error);
     });
     if(this.resourceTimer)clearInterval(this.resourceTimer);
-    this.resourceTimer=setInterval(()=>{this.checkMemory();void this.resumeInterruptedSearchOptimize();},this.resources.rssCheckIntervalMs);
+    this.resourceTimer=setInterval(()=>{this.checkMemory();void this.resumeInterruptedSearchOptimize().catch(error=>console.error('[tasks] search optimize resume:',error instanceof Error?error.message:error));},this.resources.rssCheckIntervalMs);
     this.resourceTimer.unref();
   }
 
@@ -652,6 +653,8 @@ export class ProductTaskRuntime {
     if (!/^task-\d+$/.test(id)) return null;
     const jobId = Number(id.slice(5));
     if (this.stopAcknowledgements.has(jobId)) {
+      this.executions.get(jobId)?.cancel(reason);
+      for (const [child, owner] of this.fileSessions) if (owner === jobId) this.executions.get(child)?.cancel(reason);
       await this.stopAcknowledgements.get(jobId);
       return this.sessionViews.get(jobId) ?? this.cached.find(run => run.id === id) ?? null;
     }
@@ -660,8 +663,6 @@ export class ProductTaskRuntime {
       ?? await withDeadline(this.getRun(id), 1000, '数据库未及时响应，无法确认该任务的状态');
     if (!view || !['running','queued'].includes(view.status)) return view;
     this.stopIntents.add(jobId);
-    const dependentOcr=await this.engine.executeRaw<{id:number}>(`SELECT id FROM minion_jobs WHERE name=$1 AND data->'task'->'input'->'ocrOnly'->>'maintenanceOwnerId'=$2 AND status IN ('waiting','active','delayed')`,[DOCUMENT_OCR_TASK,String(jobId)]);
-    for(const child of dependentOcr){this.executions.get(child.id)?.cancel(reason);await this.engine.executeRaw("UPDATE minion_jobs SET data=jsonb_set(data,'{ocrOwnerCancelled}','true'::jsonb) WHERE id=$1",[child.id]);await this.queue.cancelJob(child.id);}
     this.executions.get(jobId)?.cancel(reason);
     for (const [child, owner] of this.fileSessions) if (owner === jobId) this.executions.get(child)?.cancel(reason);
     this.sessionViews.set(jobId, { ...view, status: 'running', error: '正在停止任务…' });
@@ -1158,8 +1159,10 @@ export class ProductTaskRuntime {
           return MINION_DEFERRED;
         }
       }
-      await queueImportVectors();
-      if (structuredTask.type === 'import') await persist().catch(reason => console.error('[tasks] deferred embed:', reason));
+      if (!this.recoveringOwner && !isExpectedDatabaseInterruptReason(error)) {
+        await queueImportVectors().catch(reason => console.error('[tasks] deferred embed:', reason));
+        if (structuredTask.type === 'import') await persist().catch(reason => console.error('[tasks] deferred embed:', reason));
+      }
       if(structuredTask.type==='dream'&&usesSyncFileQueue(structuredTask.input) && String(error).includes('资源保护：')){
         const message=error instanceof Error?error.message:String(error);
         if(isSyncCapacityError(error) && !this.stopIntents.has(context.id) && !this.paused){
@@ -1308,6 +1311,7 @@ export class ProductTaskRuntime {
     await this.workbenchMemory?.close();
     this.closeWorkbenchAssistant?.();
     this.stopped = true;
+    await this.recoveringOwner?.catch(error => console.error('[tasks] database recovery:', error instanceof Error ? error.message : error));
     if(this.resourceTimer)clearInterval(this.resourceTimer);
     if(this.idleTimer)clearTimeout(this.idleTimer);
     await this.reclaiming;
@@ -1426,6 +1430,7 @@ export class ProductTaskRuntime {
     let failure: unknown;
     let saved:MinionJob|null=null;
     const stopping = withDatabasePriority(0, async () => {
+      await this.cancelDependentOcr(id, reason);
       saved=await this.queue.cancelJob(id);
       await this.applyStop(id, reason);
       await Promise.allSettled([this.executions.get(id)?.done, ...files.map(execution => execution!.done)]);
@@ -1442,9 +1447,11 @@ export class ProductTaskRuntime {
       if (view?.product) view.product.activity = { kind:'recovery',since:new Date().toISOString() };
       await this.recoverStoppedDatabase();
       await stopping.catch(() => {});
+      await this.cancelDependentOcr(id, reason);
       saved=await this.queue.cancelJob(id);
       await this.applyStop(id, reason);
       await this.reconcileMaintenanceChildren(id);
+      if (!this.stopped && !this.paused && this.loop === null) await this.start();
     } else if (failure) throw failure;
     if (taskUsesFileQueue(original.kind)) {
       await this.hydrateFiles([id]);
@@ -1480,7 +1487,7 @@ export class ProductTaskRuntime {
     catch (error) { this.failure = error instanceof Error ? error : new Error(String(error)); throw error; }
     finally { this.recoveringOwner = null; }
     this.paused = wasPaused;
-    if (wasRunning && !this.stopped && !this.paused) await this.start();
+    if (wasRunning && !this.stopped && !this.paused && this.stopIntents.size === 0) await this.start();
   }
 
   private async reconcileMaintenanceChildren(id: number) {
@@ -1489,6 +1496,15 @@ export class ProductTaskRuntime {
       WHERE owner.id=$1 AND owner.status IN ('completed','cancelled','dead','failed','paused')
       AND child.queue LIKE 'dream-inline-%' AND child.status IN ('waiting','active','delayed','waiting-children','paused')`, [id]);
     for (const row of queues) await this.queue.reconcilePrivateQueue(row.queue, 'maintenance stopped before continuation');
+  }
+
+  private async cancelDependentOcr(jobId: number, reason?: string) {
+    const dependentOcr = await this.engine.executeRaw<{ id: number }>(`SELECT id FROM minion_jobs WHERE name=$1 AND data->'task'->'input'->'ocrOnly'->>'maintenanceOwnerId'=$2 AND status IN ('waiting','active','delayed')`, [DOCUMENT_OCR_TASK, String(jobId)]);
+    for (const child of dependentOcr) {
+      this.executions.get(child.id)?.cancel(reason);
+      await this.engine.executeRaw("UPDATE minion_jobs SET data=jsonb_set(data,'{ocrOwnerCancelled}','true'::jsonb) WHERE id=$1", [child.id]);
+      await this.queue.cancelJob(child.id);
+    }
   }
 
   private async applyStop(id:number, reason?:string){

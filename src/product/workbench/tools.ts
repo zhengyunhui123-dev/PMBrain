@@ -214,6 +214,10 @@ export async function runWorkbenchTools(input: WorkbenchAnswerInput & {
         const salvaged=salvageWorkbenchAnswer(answer);
         const issue=answerIntegrityIssue(salvaged.leaked?salvaged.text:answer,salvaged.leaked&&!salvaged.text?undefined:evidenceCitationCount(salvaged.leaked?salvaged.text:answer),requireCitation,citations)??(salvaged.leaked&&!salvaged.text?'助手还在调用工具，没有写出正文。':null);
         finalIntegrity=issue;
+        if(issue&&checkedCompletion&&answerProtocolOffset(answer)>=0){
+          input.onReplace?.('',answeredModel);
+          throw new Error(issue);
+        }
         if(issue&&canContinue&&!checkedCompletion){
           checkedCompletion=true;composed=turnPrefix;segment='';visibleSegment='';input.onReplace?.(composed,answeredModel);input.progress('正在核对回答与引用');
           return `${issue} 只依据真正提供的资料及工具回执重新回答当前问题，不复制工具协议、伪造工具结果或自动补造来源。需要操作时使用真正的工具调用；不需要操作时直接回答。引用只能选本轮已有编号：${citations.map((item,index)=>`[${index+1}] ${item.title} (${item.sourceId}/${item.slug})`).join('；')}。每项结论就近标注实际支持它的来源，证据不足则说明不能确认，不把计划说成已经完成或尚未开始。${(missingEvidence||missingQuestion)&&input.unreadEvidence?.length?`否定前请用 knowledge_read 实际续读相关资料：${JSON.stringify(input.unreadEvidence)}`:''}`;
@@ -298,6 +302,10 @@ export async function runWorkbenchTools(input: WorkbenchAnswerInput & {
   if (fileIssue) { input.onReplace?.('', answeredModel); throw new Error(fileIssue); }
   const salvaged = salvageWorkbenchAnswer(text);
   if (salvaged.leaked) text = salvaged.text;
+  if (!text.trim() && (salvaged.leaked || finalIntegrity?.includes('工具'))) {
+    input.onReplace?.('', answeredModel);
+    throw new Error(salvaged.leaked ? '助手还在调用工具，没有写出正文。已检索的资料还在，请重新生成。' : finalIntegrity!);
+  }
   if (!text.trim() && gatheredEvidence() && requestCount < 8 && !isDirectoryStep(userText)) {
     input.progress('正在根据已查到的资料写回答');
     segment = ''; visibleSegment = '';
@@ -339,10 +347,6 @@ export async function runWorkbenchTools(input: WorkbenchAnswerInput & {
   } else if (salvaged.leaked && text) {
     finalIntegrity = answerIntegrityIssue(text, evidenceCitationCount(text), requireCitation, citations);
     input.onReplace?.(text, answeredModel);
-  }
-  if (!text.trim() && salvaged.leaked) {
-    input.onReplace?.('', answeredModel);
-    throw new Error('助手还在调用工具，没有写出正文。已检索的资料还在，请重新生成。');
   }
   if (isDirectoryStep(userText)) {
     const directories = completedDirectories([...(input.settledTools ?? []), ...calls.values()]);

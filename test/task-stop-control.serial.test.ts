@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, expect, test } from 'bun:test';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { ProductTaskRuntime } from '../src/product/tasks/runtime';
 import { taskArtifactPath } from '../src/product/tasks/checkpoint';
 import { configPath } from '../src/core/config';
@@ -70,6 +70,11 @@ test('启动恢复读取所有任务类型的停止命令，不让主动停止�
   const seen: unknown[][] = [];
   const runtime = new ProductTaskRuntime({ kind: 'pglite', executeRaw: async (...args: unknown[]) => { seen.push(args); return []; } } as unknown as BrainEngine) as any;
   runtime.fileQueue = { pause: async () => {} };
+  for (const id of [1, 2, 3]) {
+    const path = taskArtifactPath(id, 'stop.json');
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, JSON.stringify({ id, requestedAt: '2026-10-28T00:00:00.000Z' }));
+  }
   await runtime.loadStopIntents();
   expect([...runtime.stopIntents].sort()).toEqual([1, 2, 3]);
   expect(seen).toHaveLength(3);

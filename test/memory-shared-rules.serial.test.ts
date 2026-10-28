@@ -18,7 +18,7 @@ import { configureGateway, resetGateway } from '../src/core/ai/gateway.ts';
 import { loadCoreBlock, sessionMemoryPreface, setPageCore } from '../src/core/core-memory.ts';
 import { OperationError } from '../src/core/operation-error.ts';
 import { operationsByName } from '../src/core/operations.ts';
-import { runMigrations } from '../src/core/migrate.ts';
+import { LATEST_VERSION, runMigrations } from '../src/core/migrate.ts';
 import { PGLiteEngine } from '../src/core/pglite-engine.ts';
 import type { OperationContext } from '../src/core/operations.ts';
 import { MemoryWritebackUpdateRequestSchema } from '../shared/contracts/brain.ts';
@@ -174,7 +174,7 @@ test('升级时，已经忘掉的句子会让仍有效的同文失效，被替�
   );
   await engine.setConfig('version', '135');
   await engine.setConfig('pmbrain.schema.version', '135');
-  expect(await runMigrations(engine)).toMatchObject({ current: 136 });
+  expect(await runMigrations(engine)).toMatchObject({ current: LATEST_VERSION });
   expect(await activeFacts('weekly title stays in chinese')).toBe(0);
   expect(await activeFacts(superseded)).toBe(1);
 });

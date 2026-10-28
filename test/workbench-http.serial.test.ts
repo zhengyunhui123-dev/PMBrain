@@ -66,7 +66,10 @@ for (const databaseReady of [true, false]) test(`HTTP workbench sends two real g
     expect(judged).toHaveLength(1);
     expect(answered).toHaveLength(2);
     expect(answered.every((item: any) => item.stream === true)).toBe(true);
-    expect(answered[1].messages.filter((m: any) => m.role !== 'system').map((m: any) => m.content)).toEqual(['我喜欢蓝色', '你喜欢蓝色', '我喜欢什么颜色？']);
+    const visible = answered[1].messages.filter((m: any) => m.role !== 'system').map((m: any) => String(m.content));
+    expect(visible).toHaveLength(3);
+    expect(visible.slice(0, 2)).toEqual(['我喜欢蓝色', '你喜欢蓝色']);
+    expect(visible[2]).toContain('我喜欢什么颜色？');
     expect(result.messages.at(-1).text).toBe('你喜欢蓝色');
     expect(result.messages.at(-1).modelName).toBe('service-test:local · 当前普通模型');
     expect(result.messages.at(-1).knowledge).toBe('off');
